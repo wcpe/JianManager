@@ -104,6 +104,10 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		GroupID:      req.GroupID,
 	})
 	if err != nil {
+		if errors.Is(err, service.ErrQuotaExceeded) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "QUOTA_EXCEEDED", "message": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "创建实例失败"})
 		return
 	}

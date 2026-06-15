@@ -47,6 +47,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.AlertEvent{},
 		&model.Schedule{},
 		&model.Backup{},
+		&model.Template{},
 		&model.AuditLog{},
 	)
 }

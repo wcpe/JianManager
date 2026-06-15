@@ -15,6 +15,7 @@ var (
 	ErrInvalidTransition = errors.New("无效的状态转换")
 	ErrInstanceRunning   = errors.New("实例正在运行，需先停止")
 	ErrInstanceStopped   = errors.New("实例已停止")
+	ErrQuotaExceeded     = errors.New("组配额已满")
 )
 
 // validTransitions 合法的状态转换。
@@ -65,6 +66,20 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 	}
 
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// 配额检查
+		if req.GroupID > 0 {
+			var quota model.GroupQuota
+			if err := tx.Where("group_id = ?", req.GroupID).First(&quota).Error; err != nil {
+				return fmt.Errorf("查询组配额失败: %w", err)
+			}
+
+			var currentCount int64
+			tx.Model(&model.GroupInstance{}).Where("group_id = ?", req.GroupID).Count(&currentCount)
+			if int(currentCount) >= quota.MaxInstances {
+				return fmt.Errorf("%w: 当前 %d/%d", ErrQuotaExceeded, currentCount, quota.MaxInstances)
+			}
+		}
+
 		if err := tx.Create(instance).Error; err != nil {
 			return fmt.Errorf("创建实例失败: %w", err)
 		}

@@ -52,6 +52,8 @@ func main() {
 	alertSvc := service.NewAlertService(db)
 	scheduleSvc := service.NewScheduleService(db)
 	backupSvc := service.NewBackupService(db)
+	templateSvc := service.NewTemplateService(db)
+	auditSvc := service.NewAuditService(db)
 
 	r := router.Setup(&router.Services{
 		Auth:     authSvc,
@@ -65,6 +67,8 @@ func main() {
 		Alert:    alertSvc,
 		Schedule: scheduleSvc,
 		Backup:   backupSvc,
+		Template: templateSvc,
+		Audit:    auditSvc,
 	}, cfg.JWT.Secret)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

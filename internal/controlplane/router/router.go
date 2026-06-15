@@ -21,6 +21,8 @@ type Services struct {
 	Alert    *service.AlertService
 	Schedule *service.ScheduleService
 	Backup   *service.BackupService
+	Template *service.TemplateService
+	Audit    *service.AuditService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -62,6 +64,9 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		backupHandler := NewBackupHandler(svcs.Backup)
 		backupHandler.RegisterRoutes(protected)
+
+		templateHandler := NewTemplateHandler(svcs.Template)
+		templateHandler.RegisterRoutes(protected)
 	}
 
 	// 仅平台管理员
@@ -73,6 +78,9 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		groupHandler := NewGroupHandler(svcs.Group)
 		groupHandler.RegisterRoutes(admin)
+
+		auditHandler := NewAuditHandler(svcs.Audit)
+		auditHandler.RegisterRoutes(admin)
 	}
 
 	return r
