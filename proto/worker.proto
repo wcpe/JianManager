@@ -1,0 +1,234 @@
+syntax = "proto3";
+
+package worker;
+
+option go_package = "github.com/wxys233/JianManager/proto;workerpb";
+
+// WorkerService 定义 Control Plane 与 Worker Node 之间的 gRPC 服务。
+service WorkerService {
+  // Register Worker Node 首次启动时注册到 Control Plane。
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  // Heartbeat 双向心跳流，Worker 上报资源指标。
+  rpc Heartbeat(stream HeartbeatRequest) returns (stream HeartbeatResponse);
+  // CreateInstance 在指定 Worker 上创建实例。
+  rpc CreateInstance(CreateInstanceRequest) returns (CreateInstanceResponse);
+  // StartInstance 启动实例。
+  rpc StartInstance(InstanceActionRequest) returns (InstanceActionResponse);
+  // StopInstance 停止实例。
+  rpc StopInstance(InstanceActionRequest) returns (InstanceActionResponse);
+  // RestartInstance 重启实例。
+  rpc RestartInstance(InstanceActionRequest) returns (InstanceActionResponse);
+  // KillInstance 强制终止实例。
+  rpc KillInstance(InstanceActionRequest) returns (InstanceActionResponse);
+  // SendCommand 向实例发送命令。
+  rpc SendCommand(SendCommandRequest) returns (SendCommandResponse);
+  // GetInstanceStatus 获取实例状态。
+  rpc GetInstanceStatus(InstanceActionRequest) returns (GetInstanceStatusResponse);
+  // ListInstances 列出 Worker 上所有实例。
+  rpc ListInstances(ListInstancesRequest) returns (ListInstancesResponse);
+  // StreamInstanceEvents 订阅实例事件流。
+  rpc StreamInstanceEvents(StreamInstanceEventsRequest) returns (stream InstanceEvent);
+  // IssueTerminalToken 签发一次性终端连接 token。
+  rpc IssueTerminalToken(IssueTerminalTokenRequest) returns (IssueTerminalTokenResponse);
+  // ListFiles 列出实例工作目录下的文件。
+  rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
+  // ReadFile 读取文件内容。
+  rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
+  // WriteFile 写入文件内容。
+  rpc WriteFile(WriteFileRequest) returns (WriteFileResponse);
+  // DeleteFile 删除文件。
+  rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
+  // GetNodeMetrics 获取节点指标。
+  rpc GetNodeMetrics(GetNodeMetricsRequest) returns (GetNodeMetricsResponse);
+  // GetInstanceMetrics 获取实例指标。
+  rpc GetInstanceMetrics(GetInstanceMetricsRequest) returns (GetInstanceMetricsResponse);
+}
+
+// === 注册 ===
+
+message RegisterRequest {
+  string name = 1;
+  string host = 2;
+  int32 grpc_port = 3;
+  int32 ws_port = 4;
+  string os = 5;
+  string arch = 6;
+  int32 cpu_cores = 7;
+  int64 memory_mb = 8;
+  int64 disk_total_mb = 9;
+}
+
+message RegisterResponse {
+  string node_uuid = 1;
+  string node_secret = 2;
+}
+
+// === 心跳 ===
+
+message HeartbeatRequest {
+  string node_uuid = 1;
+  float cpu_usage = 2;
+  float memory_usage = 3;
+  float disk_usage = 4;
+  int64 memory_used_mb = 5;
+  int64 disk_used_mb = 6;
+}
+
+message HeartbeatResponse {
+  int64 timestamp = 1;
+}
+
+// === 实例操作 ===
+
+message CreateInstanceRequest {
+  string instance_uuid = 1;
+  string name = 2;
+  string type = 3;
+  string process_type = 4;
+  string start_command = 5;
+  string work_dir = 6;
+  map<string, string> env_vars = 7;
+  bool auto_restart = 8;
+}
+
+message CreateInstanceResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message InstanceActionRequest {
+  string instance_uuid = 1;
+}
+
+message InstanceActionResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message SendCommandRequest {
+  string instance_uuid = 1;
+  string command = 2;
+}
+
+message SendCommandResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message GetInstanceStatusResponse {
+  string instance_uuid = 1;
+  string state = 2; // STOPPED, STARTING, RUNNING, STOPPING, CRASHED
+}
+
+message ListInstancesRequest {}
+
+message ListInstancesResponse {
+  repeated InstanceInfo instances = 1;
+}
+
+message InstanceInfo {
+  string instance_uuid = 1;
+  string name = 2;
+  string state = 3;
+  string type = 4;
+  int64 started_at = 5;
+  int32 pid = 6;
+}
+
+// === 实例事件流 ===
+
+message StreamInstanceEventsRequest {
+  string instance_uuid = 1; // 空表示所有实例
+}
+
+message InstanceEvent {
+  string instance_uuid = 1;
+  string type = 2; // stdout, stderr, state_change
+  string data = 3;
+  int64 timestamp = 4;
+}
+
+// === 终端 ===
+
+message IssueTerminalTokenRequest {
+  string instance_uuid = 1;
+  string permission = 2; // read, write
+}
+
+message IssueTerminalTokenResponse {
+  string token = 1;
+  string ws_url = 2;
+  int32 expires_in = 3;
+}
+
+// === 文件操作 ===
+
+message ListFilesRequest {
+  string instance_uuid = 1;
+  string path = 2;
+}
+
+message ListFilesResponse {
+  repeated FileInfo files = 1;
+}
+
+message FileInfo {
+  string name = 1;
+  bool is_dir = 2;
+  int64 size = 3;
+  int64 mod_time = 4;
+}
+
+message ReadFileRequest {
+  string instance_uuid = 1;
+  string path = 2;
+}
+
+message ReadFileResponse {
+  bytes content = 1;
+}
+
+message WriteFileRequest {
+  string instance_uuid = 1;
+  string path = 2;
+  bytes content = 3;
+}
+
+message WriteFileResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message DeleteFileRequest {
+  string instance_uuid = 1;
+  string path = 2;
+}
+
+message DeleteFileResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// === 指标 ===
+
+message GetNodeMetricsRequest {}
+
+message GetNodeMetricsResponse {
+  float cpu_usage = 1;
+  float memory_usage = 2;
+  float disk_usage = 3;
+  int64 memory_used_mb = 4;
+  int64 memory_total_mb = 5;
+  int64 disk_used_mb = 6;
+  int64 disk_total_mb = 7;
+}
+
+message GetInstanceMetricsRequest {
+  string instance_uuid = 1;
+}
+
+message GetInstanceMetricsResponse {
+  float tps = 1;
+  int32 online_players = 2;
+  int64 memory_mb = 3;
+}

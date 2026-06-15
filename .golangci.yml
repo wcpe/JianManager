@@ -1,0 +1,19 @@
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - gosimple
+    - ineffassign
+    - misspell
+    - gocritic
+
+linters-settings:
+  errcheck:
+    check-blank: true
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters: [errcheck]

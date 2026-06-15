@@ -1,0 +1,16 @@
+# JianManager — worker 配置样例
+name: node-01
+control_plane: localhost:9100
+node_secret: ${JIANMANAGER_NODE_SECRET}
+
+grpc:
+  port: 9101
+
+ws:
+  port: 9102
+
+servers_dir: ./servers
+
+log:
+  level: debug
+  format: text
