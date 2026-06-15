@@ -1,0 +1,44 @@
+# 架构不变量
+
+> 任何代码变更都不得违反以下架构约束。违反即拒绝合并。
+
+## 三进程模型
+
+- Control Plane 是唯一面向浏览器的 HTTP 入口
+- Worker Node 不直接暴露 HTTP API 给浏览器（仅暴露 WS 终端端口）
+- Bot Worker 是 Node.js 子进程，由 Worker Node spawn，不由 Control Plane 直接管理
+
+## 进程边界
+
+- Control Plane 不得直接操作游戏服进程，必须通过 gRPC 委托给 Worker Node
+- Worker Node 不得直接访问数据库，所有持久化通过 Control Plane API 或 gRPC
+- Bot Worker 不得直接访问数据库或 gRPC，仅通过 stdin/stdout IPC 和 Worker Node 通信
+
+## 通信协议
+
+- Control Plane ↔ Worker Node：gRPC（唯一允许的 RPC 协议）
+- 浏览器 ↔ Worker Node：WebSocket（仅终端/日志流，需一次性 token 鉴权）
+- Worker Node ↔ Bot Worker：stdin/stdout JSON 行协议
+- 守护进程 ↔ Worker Node：Unix Socket 二进制帧协议
+
+## 数据所有权
+
+- 数据库（SQLite/MySQL）仅 Control Plane 可读写
+- 本地实例配置文件仅 Worker Node 可读写
+- Bot 配置仅 Bot Worker 可读写
+
+## 前端嵌入
+
+- 前端通过 `go:embed` 嵌入 Control Plane 二进制
+- 前端不得直接连接 Worker Node 的 gRPC 端口
+- 前端连接 Worker Node WS 端口必须携带 Control Plane 签发的一次性 token
+
+## 依赖方向
+
+```
+Control Plane → (gRPC) → Worker Node → (exec + IPC) → Bot Worker
+浏览器 → (HTTP/WS) → Control Plane
+浏览器 → (WS, 需 token) → Worker Node
+```
+
+反向依赖（Worker → Control Plane 的 gRPC 回调除外）不得存在。
