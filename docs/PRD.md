@@ -81,9 +81,9 @@
 - **描述**: 平台进程重启不杀游戏服，通过 Daemon Wrapper 子进程实现进程隔离
 - **验收标准**:
   - [ ] 启动方式为 daemon 时，spawn 独立子进程管理游戏服
-  - [ ] 二进制帧协议通信（Unix Socket / Named Pipe）
+  - [x] 二进制帧协议通信（Unix Socket / Named Pipe）
   - [ ] 平台重启后恢复守护进程连接
-  - [ ] 崩溃自动重启 + PID 文件恢复
+  - [x] 崩溃自动重启 + PID 文件恢复
 - **关联 ADR**: ADR-003
 
 ### FR-007: 终端实时
@@ -92,10 +92,10 @@
 - **描述**: xterm.js 浏览器终端，直连 Worker Node WebSocket，支持多人同时查看
 - **验收标准**:
   - [x] Control Plane 签发一次性 30s token
-  - [ ] 浏览器持 token 直连 Worker Node WS
+  - [x] 浏览器持 token 直连 Worker Node WS
   - [ ] stdin/stderr 双向流
-  - [ ] 多人同时查看（读写分离）
-  - [ ] 环形缓冲区回放最近输出
+  - [x] 多人同时查看（读写分离）
+  - [x] 环形缓冲区回放最近输出
 - **关联 API**: `GET /instances/:id/terminal-token`
 
 ### FR-008: 文件管理
