@@ -10,10 +10,11 @@ import (
 
 // Services 聚合所有服务依赖。
 type Services struct {
-	Auth  *service.AuthService
-	User  *service.UserService
-	Group *service.GroupService
-	Node  *service.NodeService
+	Auth     *service.AuthService
+	User     *service.UserService
+	Group    *service.GroupService
+	Node     *service.NodeService
+	Instance *service.InstanceService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -34,6 +35,9 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	{
 		nodeHandler := NewNodeHandler(svcs.Node)
 		nodeHandler.RegisterRoutes(protected)
+
+		instanceHandler := NewInstanceHandler(svcs.Instance)
+		instanceHandler.RegisterRoutes(protected)
 	}
 
 	// 仅平台管理员
