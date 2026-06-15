@@ -1,3 +1,4 @@
+import { Link } from 'react-router'
 import { useInstances, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance } from '@/api/instances'
 
 const statusConfig: Record<string, { text: string; color: string }> = {
@@ -40,7 +41,11 @@ export default function InstancesPage() {
                 const st = statusConfig[inst.status] || statusConfig.STOPPED
                 return (
                   <tr key={inst.id} className="border-t hover:bg-muted/30">
-                    <td className="p-3 font-medium">{inst.name}</td>
+                    <td className="p-3 font-medium">
+                      <Link to={`/instances/${inst.id}`} className="hover:underline text-primary">
+                        {inst.name}
+                      </Link>
+                    </td>
                     <td className="p-3 text-muted-foreground">{inst.type}</td>
                     <td className="p-3 text-muted-foreground">{inst.processType}</td>
                     <td className="p-3">

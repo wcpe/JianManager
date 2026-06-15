@@ -135,27 +135,3 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 func (s *Server) IssueTerminalToken(ctx context.Context, req *workerpb.IssueTerminalTokenRequest) (*workerpb.IssueTerminalTokenResponse, error) {
 	return nil, fmt.Errorf("终端 token 由 Control Plane 签发")
 }
-
-// ListFiles 列出文件。
-func (s *Server) ListFiles(ctx context.Context, req *workerpb.ListFilesRequest) (*workerpb.ListFilesResponse, error) {
-	// TODO: 实现实际文件操作
-	return &workerpb.ListFilesResponse{}, nil
-}
-
-// ReadFile 读取文件。
-func (s *Server) ReadFile(ctx context.Context, req *workerpb.ReadFileRequest) (*workerpb.ReadFileResponse, error) {
-	// TODO: 实现实际文件操作
-	return nil, fmt.Errorf("文件读取待实现")
-}
-
-// WriteFile 写入文件。
-func (s *Server) WriteFile(ctx context.Context, req *workerpb.WriteFileRequest) (*workerpb.WriteFileResponse, error) {
-	// TODO: 实现实际文件操作
-	return nil, fmt.Errorf("文件写入待实现")
-}
-
-// DeleteFile 删除文件。
-func (s *Server) DeleteFile(ctx context.Context, req *workerpb.DeleteFileRequest) (*workerpb.DeleteFileResponse, error) {
-	// TODO: 实现实际文件操作
-	return nil, fmt.Errorf("文件删除待实现")
-}

@@ -217,6 +217,15 @@ func (m *Manager) ListInstances() []string {
 	return uuids
 }
 
+// GetInstance 获取实例信息。
+func (m *Manager) GetInstance(uuid string) (*Instance, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	inst, exists := m.instances[uuid]
+	return inst, exists
+}
+
 // SendCommand 向实例发送命令（通过 stdin）。
 func (m *Manager) SendCommand(uuid, command string) error {
 	m.mu.RLock()

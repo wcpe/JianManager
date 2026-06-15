@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/auth'
 const OverviewPage = lazy(() => import('./OverviewPage'))
 const NodesPage = lazy(() => import('./NodesPage'))
 const InstancesPage = lazy(() => import('./InstancesPage'))
+const InstanceDetailPage = lazy(() => import('./InstanceDetailPage'))
 const UsersPage = lazy(() => import('./UsersPage'))
 const GroupsPage = lazy(() => import('./GroupsPage'))
 const SchedulesPage = lazy(() => import('./SchedulesPage'))
@@ -77,6 +78,7 @@ export default function DashboardPage() {
             <Route index element={<OverviewPage />} />
             <Route path="nodes" element={<NodesPage />} />
             <Route path="instances" element={<InstancesPage />} />
+            <Route path="instances/:id" element={<InstanceDetailPage />} />
             <Route path="bots" element={<BotsPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="groups" element={<GroupsPage />} />
