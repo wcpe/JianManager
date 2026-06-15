@@ -205,6 +205,18 @@ func (m *Manager) GetState(uuid string) (InstanceState, error) {
 	return inst.State, nil
 }
 
+// ListInstances 返回所有实例的 UUID 列表。
+func (m *Manager) ListInstances() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	uuids := make([]string, 0, len(m.instances))
+	for uuid := range m.instances {
+		uuids = append(uuids, uuid)
+	}
+	return uuids
+}
+
 // SendCommand 向实例发送命令（通过 stdin）。
 func (m *Manager) SendCommand(uuid, command string) error {
 	m.mu.RLock()
