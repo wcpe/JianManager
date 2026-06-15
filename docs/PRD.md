@@ -53,13 +53,13 @@
 - **关联 API**: `POST /groups`, `POST /groups/:id/instances`, `GET /groups/:id/quota`
 
 ### FR-004: 节点注册与心跳
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: Worker Node 启动时 gRPC 注册到 Control Plane，30s 心跳上报资源指标
 - **验收标准**:
-  - [ ] Worker 首次启动自动注册，获得 node_uuid + node_secret
-  - [ ] 30s 心跳间隔，上报 CPU/内存/磁盘
-  - [ ] Control Plane 检测离线（超 90s 无心跳）
+  - [x] Worker 首次启动自动注册，获得 node_uuid + node_secret
+  - [x] 30s 心跳间隔，上报 CPU/内存/磁盘
+  - [x] Control Plane 检测离线（超 90s 无心跳）
   - [ ] 前端节点列表实时显示在线状态
 - **关联 API**: `GET /nodes`, `GET /nodes/:id`
 
