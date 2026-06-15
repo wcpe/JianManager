@@ -64,15 +64,15 @@
 - **关联 API**: `GET /nodes`, `GET /nodes/:id`
 
 ### FR-005: 实例生命周期管理
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 实例创建/启动/停止/重启/销毁，状态机驱动，支持四种启动方式
 - **验收标准**:
-  - [ ] 创建实例：选择节点、类型、启动方式、启动命令
-  - [ ] 启动/停止/重启/强制终止操作
-  - [ ] 状态机：STOPPED → STARTING → RUNNING → STOPPING → STOPPED / CRASHED
+  - [x] 创建实例：选择节点、类型、启动方式、启动命令
+  - [x] 启动/停止/重启/强制终止操作
+  - [x] 状态机：STOPPED → STARTING → RUNNING → STOPPING → STOPPED / CRASHED
   - [ ] 崩溃自动重启（指数退避）
-  - [ ] 实例分配给用户组
+  - [x] 实例分配给用户组
 - **关联 API**: `POST /instances`, `POST /instances/:id/start`, `POST /instances/:id/stop`
 
 ### FR-006: 守护进程（Daemon Wrapper）
