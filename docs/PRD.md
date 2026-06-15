@@ -19,14 +19,14 @@
 ## P0 — 核心功能
 
 ### FR-001: 用户认证
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: JWT 双 Token 认证（15min access + 7d refresh），支持注册/登录/Token 刷新
 - **验收标准**:
-  - [ ] 注册接口，密码 bcrypt 加密存储
-  - [ ] 登录返回 accessToken + refreshToken
-  - [ ] accessToken 过期后用 refreshToken 自动刷新
-  - [ ] 前端 401 时自动跳转登录页
+  - [x] 注册接口，密码 bcrypt 加密存储
+  - [x] 登录返回 accessToken + refreshToken
+  - [x] accessToken 过期后用 refreshToken 自动刷新
+  - [x] 前端 401 时自动跳转登录页
 - **关联 ADR**: 无
 - **关联 API**: `POST /auth/login`, `POST /auth/register`, `POST /auth/refresh`
 
