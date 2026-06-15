@@ -46,6 +46,8 @@ func main() {
 	groupSvc := service.NewGroupService(db)
 	nodeSvc := service.NewNodeService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc)
+	terminalSvc := service.NewTerminalService(db, cfg.JWT.Secret)
+	fileSvc := service.NewFileService(db)
 
 	r := router.Setup(&router.Services{
 		Auth:     authSvc,
@@ -53,6 +55,8 @@ func main() {
 		Group:    groupSvc,
 		Node:     nodeSvc,
 		Instance: instanceSvc,
+		Terminal: terminalSvc,
+		File:     fileSvc,
 	}, cfg.JWT.Secret)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

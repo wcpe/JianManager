@@ -15,6 +15,8 @@ type Services struct {
 	Group    *service.GroupService
 	Node     *service.NodeService
 	Instance *service.InstanceService
+	Terminal *service.TerminalService
+	File     *service.FileService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -38,6 +40,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		instanceHandler := NewInstanceHandler(svcs.Instance)
 		instanceHandler.RegisterRoutes(protected)
+
+		terminalHandler := NewTerminalHandler(svcs.Terminal)
+		terminalHandler.RegisterRoutes(protected)
+
+		fileHandler := NewFileHandler(svcs.File)
+		fileHandler.RegisterRoutes(protected)
 	}
 
 	// 仅平台管理员
