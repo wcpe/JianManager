@@ -5,6 +5,13 @@ import { useAuthStore } from '@/stores/auth'
 const OverviewPage = lazy(() => import('./OverviewPage'))
 const NodesPage = lazy(() => import('./NodesPage'))
 const InstancesPage = lazy(() => import('./InstancesPage'))
+const UsersPage = lazy(() => import('./UsersPage'))
+const GroupsPage = lazy(() => import('./GroupsPage'))
+const SchedulesPage = lazy(() => import('./SchedulesPage'))
+const BackupsPage = lazy(() => import('./BackupsPage'))
+const BotsPage = lazy(() => import('./BotsPage'))
+const AuditPage = lazy(() => import('./AuditPage'))
+const TemplatesPage = lazy(() => import('./TemplatesPage'))
 
 interface NavItem {
   to?: string
@@ -20,6 +27,7 @@ const navItems: NavItem[] = [
   { divider: true },
   { to: '/users', label: '用户' },
   { to: '/groups', label: '用户组' },
+  { to: '/templates', label: '模板' },
   { divider: true },
   { to: '/schedules', label: '定时任务' },
   { to: '/backups', label: '备份' },
@@ -69,6 +77,13 @@ export default function DashboardPage() {
             <Route index element={<OverviewPage />} />
             <Route path="nodes" element={<NodesPage />} />
             <Route path="instances" element={<InstancesPage />} />
+            <Route path="bots" element={<BotsPage />} />
+            <Route path="users" element={<UsersPage />} />
+            <Route path="groups" element={<GroupsPage />} />
+            <Route path="templates" element={<TemplatesPage />} />
+            <Route path="schedules" element={<SchedulesPage />} />
+            <Route path="backups" element={<BackupsPage />} />
+            <Route path="audit" element={<AuditPage />} />
             <Route path="*" element={<div className="text-muted-foreground">页面开发中...</div>} />
           </Routes>
         </Suspense>
