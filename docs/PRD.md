@@ -114,12 +114,12 @@
 ## P1 — 重要功能
 
 ### FR-009: Bot 平台
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: Mineflayer Bot 管理，行为引擎、寻路、脚本执行、压测、预热池
 - **验收标准**:
-  - [ ] 创建/删除 Bot（选择目标 MC 服务器）
-  - [ ] 行为模式切换（follow/guard/patrol/idle/custom）
+  - [x] 创建/删除 Bot（选择目标 MC 服务器）
+  - [x] 行为模式切换（follow/guard/patrol/idle/custom）
   - [ ] 寻路（mineflayer-pathfinder）
   - [ ] 脚本执行 + 进度上报
   - [ ] 压测会话（批量上线/下线）
@@ -128,7 +128,7 @@
 - **关联 API**: `POST /bots`, `POST /bots/:id/behavior`, `GET /bots/:id/state`
 
 ### FR-010: 监控指标
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 节点和实例指标采集，Recharts 仪表盘展示
 - **验收标准**:
@@ -138,33 +138,33 @@
 - **关联 API**: `GET /nodes/:id/metrics`, `GET /instances/:id/metrics`
 
 ### FR-011: 告警规则
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 阈值触发告警，Webhook 通知
 - **验收标准**:
-  - [ ] 创建告警规则（metric + operator + threshold + duration）
+  - [x] 创建告警规则（metric + operator + threshold + duration）
   - [ ] 触发后发送 Webhook
-  - [ ] 告警事件列表
+  - [x] 告警事件列表
 - **关联 API**: `POST /alerts/rules`, `GET /alerts/events`
 
 ### FR-012: 定时任务
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: Cron 表达式调度，支持实例启停/命令执行/备份
 - **验收标准**:
-  - [ ] 创建/编辑/删除定时任务
+  - [x] 创建/编辑/删除定时任务
   - [ ] Cron 表达式解析
-  - [ ] 支持 action: start/stop/restart/command/backup
+  - [x] 支持 action: start/stop/restart/command/backup
   - [ ] 执行日志
 - **关联 API**: `POST /schedules`, `GET /schedules`
 
 ### FR-013: 备份恢复
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 手动/自动备份，压缩存储，一键恢复
 - **验收标准**:
-  - [ ] 手动创建备份
-  - [ ] 备份列表（大小/时间/类型）
+  - [x] 手动创建备份
+  - [x] 备份列表（大小/时间/类型）
   - [ ] 一键恢复到指定备份
   - [ ] 自动备份（通过定时任务）
 - **关联 API**: `POST /instances/:id/backups`, `POST /backups/:id/restore`
