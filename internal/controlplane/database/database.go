@@ -39,5 +39,6 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Group{},
 		&model.GroupMember{},
 		&model.GroupQuota{},
+		&model.Node{},
 	)
 }

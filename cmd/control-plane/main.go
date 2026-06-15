@@ -44,11 +44,13 @@ func main() {
 	authSvc := service.NewAuthService(db, cfg.JWT)
 	userSvc := service.NewUserService(db)
 	groupSvc := service.NewGroupService(db)
+	nodeSvc := service.NewNodeService(db)
 
 	r := router.Setup(&router.Services{
 		Auth:  authSvc,
 		User:  userSvc,
 		Group: groupSvc,
+		Node:  nodeSvc,
 	}, cfg.JWT.Secret)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

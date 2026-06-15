@@ -13,6 +13,7 @@ type Services struct {
 	Auth  *service.AuthService
 	User  *service.UserService
 	Group *service.GroupService
+	Node  *service.NodeService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -29,7 +30,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	protected := api.Group("")
 	protected.Use(middleware.JWTAuth(jwtSecret))
 
-	// 用户和用户组管理（仅平台管理员）
+	// 所有认证用户可访问
+	{
+		nodeHandler := NewNodeHandler(svcs.Node)
+		nodeHandler.RegisterRoutes(protected)
+	}
+
+	// 仅平台管理员
 	admin := protected.Group("")
 	admin.Use(middleware.RequireRole(model.RolePlatformAdmin))
 	{
