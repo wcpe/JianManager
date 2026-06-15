@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 )
 
 // InstanceState 实例运行状态。
@@ -21,13 +22,15 @@ const (
 
 // Instance 运行中的实例。
 type Instance struct {
-	UUID        string
-	Name        string
+	UUID         string
+	Name         string
 	StartCommand string
-	WorkDir     string
-	EnvVars     map[string]string
-	State       InstanceState
-	Cmd         *exec.Cmd
+	WorkDir      string
+	EnvVars      map[string]string
+	State        InstanceState
+	Cmd          *exec.Cmd
+	AutoRestart  bool
+	CrashCount   int
 }
 
 // Manager 进程管理器。
@@ -46,7 +49,7 @@ func NewManager(serversDir string) *Manager {
 }
 
 // Create 创建实例（但不启动）。
-func (m *Manager) Create(uuid, name, startCommand, workDir string, envVars map[string]string) error {
+func (m *Manager) Create(uuid, name, startCommand, workDir string, envVars map[string]string, autoRestart bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -61,9 +64,10 @@ func (m *Manager) Create(uuid, name, startCommand, workDir string, envVars map[s
 		WorkDir:      workDir,
 		EnvVars:      envVars,
 		State:        StateStopped,
+		AutoRestart:  autoRestart,
 	}
 
-	slog.Info("实例已创建", "instanceId", uuid, "name", name)
+	slog.Info("实例已创建", "instanceId", uuid, "name", name, "autoRestart", autoRestart)
 	return nil
 }
 
@@ -110,16 +114,40 @@ func (m *Manager) Start(uuid string) error {
 	go func() {
 		err := cmd.Wait()
 		m.mu.Lock()
-		defer m.mu.Unlock()
 
 		if inst.State == StateStopping {
 			inst.State = StateStopped
+			inst.CrashCount = 0
+			m.mu.Unlock()
 			slog.Info("实例已停止", "instanceId", uuid)
-		} else {
-			inst.State = StateCrashed
-			slog.Warn("实例崩溃", "instanceId", uuid, "err", err)
+			return
 		}
+
+		inst.State = StateCrashed
 		inst.Cmd = nil
+		inst.CrashCount++
+		crashCount := inst.CrashCount
+		autoRestart := inst.AutoRestart
+		m.mu.Unlock()
+
+		slog.Warn("实例崩溃", "instanceId", uuid, "err", err, "crashCount", crashCount)
+
+		// 指数退避自动重启
+		if autoRestart {
+			delay := backoffDelay(crashCount)
+			slog.Info("将在延迟后自动重启", "instanceId", uuid, "delay", delay, "crashCount", crashCount)
+			time.Sleep(delay)
+
+			m.mu.RLock()
+			currentState := inst.State
+			m.mu.RUnlock()
+
+			if currentState == StateCrashed {
+				if restartErr := m.Start(uuid); restartErr != nil {
+					slog.Error("自动重启失败", "instanceId", uuid, "error", restartErr)
+				}
+			}
+		}
 	}()
 
 	return nil
@@ -212,4 +240,15 @@ func (m *Manager) Remove(uuid string) error {
 
 	delete(m.instances, uuid)
 	return nil
+}
+
+// backoffDelay 计算指数退避延迟。
+// 1s → 2s → 4s → 8s → 16s → 30s (上限)。
+func backoffDelay(crashCount int) time.Duration {
+	delay := time.Second * time.Duration(1<<uint(crashCount-1))
+	maxDelay := 30 * time.Second
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	return delay
 }

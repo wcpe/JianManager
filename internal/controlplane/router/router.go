@@ -38,6 +38,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	// 需要认证的路由
 	protected := api.Group("")
 	protected.Use(middleware.JWTAuth(jwtSecret))
+	protected.Use(middleware.Audit(middleware.AuditConfig{
+		RecordFunc: func(userID uint, action, targetType, targetID, detail, ip string) {
+			_ = svcs.Audit.Record(userID, action, targetType, targetID, detail, ip)
+		},
+	}))
 
 	// 所有认证用户可访问
 	{
