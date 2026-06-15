@@ -72,15 +72,15 @@ Worker Node (Go) × 20~100
 cmd/control-plane/main.go
 internal/controlplane/
   config/config.go
-  database/{database,migrate}.go
-  middleware/{auth,context,audit,ratelimit}.go
-  model/{user,group,node,instance,bot,backup,schedule,audit_log}.go
-  router/{router,auth,user,group,node,instance,terminal,bot,file,schedule,backup,monitor,template}.go
-  service/{auth,user,group,node,instance,terminal,bot}.go
-  grpc/{pool,client}.go
-  event/bus.go
-  ws/gateway.go
-  embed/static.go
+  database/database.go
+  middleware/auth.go
+  model/{user,group,node,instance,bot,alert,schedule,backup,template,audit}.go
+  router/{router,auth,user,group,node,instance,terminal,bot,file,schedule,backup,alert,template,audit}.go
+  service/{auth,user,group,node,instance,terminal,bot,schedule,backup,alert,template,audit,file}.go
+  grpc/{pool,client}.go          # TODO: gRPC 客户端池
+  event/bus.go                   # TODO: 事件总线
+  ws/gateway.go                  # TODO: WebSocket 网关
+  embed/static.go                # TODO: 前端嵌入
 ```
 
 ## 5. Worker Node 架构
