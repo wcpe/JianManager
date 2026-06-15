@@ -42,7 +42,12 @@ func main() {
 	}
 
 	authSvc := service.NewAuthService(db, cfg.JWT)
-	r := router.Setup(authSvc, cfg.JWT.Secret)
+	userSvc := service.NewUserService(db)
+
+	r := router.Setup(&router.Services{
+		Auth: authSvc,
+		User: userSvc,
+	}, cfg.JWT.Secret)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	slog.Info("Control Plane 启动", "addr", addr)
