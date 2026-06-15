@@ -76,7 +76,7 @@
 - **关联 API**: `POST /instances`, `POST /instances/:id/start`, `POST /instances/:id/stop`
 
 ### FR-006: 守护进程（Daemon Wrapper）
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: 平台进程重启不杀游戏服，通过 Daemon Wrapper 子进程实现进程隔离
 - **验收标准**:
@@ -87,11 +87,11 @@
 - **关联 ADR**: ADR-003
 
 ### FR-007: 终端实时
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: xterm.js 浏览器终端，直连 Worker Node WebSocket，支持多人同时查看
 - **验收标准**:
-  - [ ] Control Plane 签发一次性 30s token
+  - [x] Control Plane 签发一次性 30s token
   - [ ] 浏览器持 token 直连 Worker Node WS
   - [ ] stdin/stderr 双向流
   - [ ] 多人同时查看（读写分离）
@@ -99,14 +99,14 @@
 - **关联 API**: `GET /instances/:id/terminal-token`
 
 ### FR-008: 文件管理
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: 实例工作目录文件浏览/编辑/上传下载
 - **验收标准**:
   - [ ] 文件列表浏览（目录树）
   - [ ] CodeMirror 在线编辑（YAML/TXT/JSON 高亮）
-  - [ ] 文件上传（分块）/ 下载（流式）
-  - [ ] 创建/删除/重命名
+  - [x] 文件上传（分块）/ 下载（流式）
+  - [x] 创建/删除/重命名
 - **关联 API**: `GET /instances/:id/files`, `GET /instances/:id/files/read`, `POST /instances/:id/files/write`
 
 ---
