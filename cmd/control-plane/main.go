@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/wxys233/JianManager/internal/controlplane/config"
+	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
 	"github.com/wxys233/JianManager/internal/controlplane/database"
 	"github.com/wxys233/JianManager/internal/controlplane/model"
 	"github.com/wxys233/JianManager/internal/controlplane/router"
@@ -47,7 +48,8 @@ func main() {
 	nodeSvc := service.NewNodeService(db)
 	instanceSvc := service.NewInstanceService(db, groupSvc)
 	terminalSvc := service.NewTerminalService(db, cfg.JWT.Secret)
-	fileSvc := service.NewFileService(db)
+	pool := cpgrpc.NewClientPool()
+	fileSvc := service.NewFileService(db, pool)
 	botSvc := service.NewBotService(db)
 	alertSvc := service.NewAlertService(db)
 	scheduleSvc := service.NewScheduleService(db)
