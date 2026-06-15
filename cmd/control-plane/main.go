@@ -48,6 +48,10 @@ func main() {
 	instanceSvc := service.NewInstanceService(db, groupSvc)
 	terminalSvc := service.NewTerminalService(db, cfg.JWT.Secret)
 	fileSvc := service.NewFileService(db)
+	botSvc := service.NewBotService(db)
+	alertSvc := service.NewAlertService(db)
+	scheduleSvc := service.NewScheduleService(db)
+	backupSvc := service.NewBackupService(db)
 
 	r := router.Setup(&router.Services{
 		Auth:     authSvc,
@@ -57,6 +61,10 @@ func main() {
 		Instance: instanceSvc,
 		Terminal: terminalSvc,
 		File:     fileSvc,
+		Bot:      botSvc,
+		Alert:    alertSvc,
+		Schedule: scheduleSvc,
+		Backup:   backupSvc,
 	}, cfg.JWT.Secret)
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

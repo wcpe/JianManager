@@ -42,5 +42,11 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Node{},
 		&model.Instance{},
 		&model.GroupInstance{},
+		&model.Bot{},
+		&model.AlertRule{},
+		&model.AlertEvent{},
+		&model.Schedule{},
+		&model.Backup{},
+		&model.AuditLog{},
 	)
 }
