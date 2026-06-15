@@ -42,12 +42,12 @@
 - **关联 API**: `GET/POST /users`, `GET/POST /groups`, `POST /groups/:id/members`
 
 ### FR-003: 用户组与配额
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 用户组管理，实例分配给组，配额限制（最大实例数、Bot 数、存储空间）
 - **验收标准**:
-  - [ ] 创建/编辑/删除用户组
-  - [ ] 组内添加/移除成员
+  - [x] 创建/编辑/删除用户组
+  - [x] 组内添加/移除成员
   - [ ] 实例分配给组（一个实例只属于一个组）
   - [ ] 配额检查：创建实例时校验组配额
 - **关联 API**: `POST /groups`, `POST /groups/:id/instances`, `GET /groups/:id/quota`
