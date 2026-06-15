@@ -71,7 +71,7 @@
   - [x] 创建实例：选择节点、类型、启动方式、启动命令
   - [x] 启动/停止/重启/强制终止操作
   - [x] 状态机：STOPPED → STARTING → RUNNING → STOPPING → STOPPED / CRASHED
-  - [ ] 崩溃自动重启（指数退避）
+  - [x] 崩溃自动重启（指数退避）
   - [x] 实例分配给用户组
 - **关联 API**: `POST /instances`, `POST /instances/:id/start`, `POST /instances/:id/stop`
 
@@ -138,24 +138,24 @@
 - **关联 API**: `GET /nodes/:id/metrics`, `GET /instances/:id/metrics`
 
 ### FR-011: 告警规则
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: 阈值触发告警，Webhook 通知
 - **验收标准**:
   - [x] 创建告警规则（metric + operator + threshold + duration）
-  - [ ] 触发后发送 Webhook
+  - [x] 触发后发送 Webhook
   - [x] 告警事件列表
 - **关联 API**: `POST /alerts/rules`, `GET /alerts/events`
 
 ### FR-012: 定时任务
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: Cron 表达式调度，支持实例启停/命令执行/备份
 - **验收标准**:
   - [x] 创建/编辑/删除定时任务
-  - [ ] Cron 表达式解析
+  - [x] Cron 表达式解析
   - [x] 支持 action: start/stop/restart/command/backup
-  - [ ] 执行日志
+  - [x] 执行日志
 - **关联 API**: `POST /schedules`, `GET /schedules`
 
 ### FR-013: 备份恢复
@@ -182,20 +182,20 @@
   - [ ] 从模板创建实例（自动填充启动命令和配置）
 
 ### FR-015: 审计日志
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P2
 - **描述**: 操作审计（谁/什么时间/对什么/做了什么）
 - **验收标准**:
-  - [ ] 关键操作自动记录（实例启停/文件修改/用户管理）
+  - [x] 关键操作自动记录（实例启停/文件修改/用户管理）
   - [x] 审计日志查询（按用户/操作/时间筛选）
 
 ### FR-016: i18n
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P2
 - **描述**: 中文 + 英文国际化
 - **验收标准**:
-  - [ ] 前端 i18next 切换
-  - [ ] 所有 UI 文本可翻译
+  - [x] 前端 i18next 切换
+  - [x] 所有 UI 文本可翻译
 
 ---
 
