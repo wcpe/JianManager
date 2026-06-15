@@ -36,5 +36,8 @@ func New(cfg config.DatabaseConfig) (*gorm.DB, error) {
 func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&model.User{},
+		&model.Group{},
+		&model.GroupMember{},
+		&model.GroupQuota{},
 	)
 }

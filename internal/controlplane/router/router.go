@@ -10,8 +10,9 @@ import (
 
 // Services 聚合所有服务依赖。
 type Services struct {
-	Auth *service.AuthService
-	User *service.UserService
+	Auth  *service.AuthService
+	User  *service.UserService
+	Group *service.GroupService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -28,12 +29,15 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	protected := api.Group("")
 	protected.Use(middleware.JWTAuth(jwtSecret))
 
-	// 用户管理（仅平台管理员）
+	// 用户和用户组管理（仅平台管理员）
 	admin := protected.Group("")
 	admin.Use(middleware.RequireRole(model.RolePlatformAdmin))
 	{
 		userHandler := NewUserHandler(svcs.User)
 		userHandler.RegisterRoutes(admin)
+
+		groupHandler := NewGroupHandler(svcs.Group)
+		groupHandler.RegisterRoutes(admin)
 	}
 
 	return r
