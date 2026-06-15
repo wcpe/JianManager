@@ -1,0 +1,79 @@
+{
+  "common": {
+    "loading": "加载中...",
+    "confirm": "确认",
+    "cancel": "取消",
+    "delete": "删除",
+    "edit": "编辑",
+    "create": "创建",
+    "save": "保存",
+    "search": "搜索",
+    "back": "返回",
+    "logout": "退出登录"
+  },
+  "nav": {
+    "dashboard": "仪表盘",
+    "nodes": "节点",
+    "instances": "实例",
+    "bots": "Bot",
+    "users": "用户",
+    "groups": "用户组",
+    "schedules": "定时任务",
+    "backups": "备份",
+    "audit": "审计日志",
+    "templates": "模板",
+    "settings": "设置"
+  },
+  "login": {
+    "title": "JianManager",
+    "subtitle": "登录到管理平台",
+    "username": "用户名",
+    "password": "密码",
+    "submit": "登录",
+    "register": "注册",
+    "switchToRegister": "没有账号？去注册",
+    "switchToLogin": "已有账号？去登录",
+    "registerSuccess": "注册成功，请登录"
+  },
+  "dashboard": {
+    "title": "仪表盘",
+    "nodesOnline": "{{count}} 在线",
+    "nodesTotal": "{{count}} 总计",
+    "instancesTotal": "{{count}} 总计",
+    "instancesRunning": "{{count}} 运行中",
+    "nodeStatus": "节点状态",
+    "recentInstances": "最近实例"
+  },
+  "nodes": {
+    "title": "节点管理",
+    "name": "名称",
+    "ip": "IP",
+    "status": "状态",
+    "cpu": "CPU",
+    "memory": "内存",
+    "system": "系统",
+    "online": "在线",
+    "offline": "离线",
+    "starting": "启动中",
+    "empty": "暂无节点"
+  },
+  "instances": {
+    "title": "实例管理",
+    "name": "名称",
+    "type": "类型",
+    "processType": "启动方式",
+    "status": "状态",
+    "actions": "操作",
+    "start": "启动",
+    "stop": "停止",
+    "restart": "重启",
+    "kill": "强制终止",
+    "deleteConfirm": "确定删除？",
+    "empty": "暂无实例",
+    "stopped": "停止",
+    "starting": "启动中",
+    "running": "运行",
+    "stopping": "停止中",
+    "crashed": "崩溃"
+  }
+}

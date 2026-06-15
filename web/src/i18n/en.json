@@ -1,0 +1,79 @@
+{
+  "common": {
+    "loading": "Loading...",
+    "confirm": "Confirm",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "edit": "Edit",
+    "create": "Create",
+    "save": "Save",
+    "search": "Search",
+    "back": "Back",
+    "logout": "Logout"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "nodes": "Nodes",
+    "instances": "Instances",
+    "bots": "Bots",
+    "users": "Users",
+    "groups": "Groups",
+    "schedules": "Schedules",
+    "backups": "Backups",
+    "audit": "Audit Log",
+    "templates": "Templates",
+    "settings": "Settings"
+  },
+  "login": {
+    "title": "JianManager",
+    "subtitle": "Sign in to the management platform",
+    "username": "Username",
+    "password": "Password",
+    "submit": "Sign In",
+    "register": "Register",
+    "switchToRegister": "Don't have an account? Register",
+    "switchToLogin": "Already have an account? Sign in",
+    "registerSuccess": "Registration successful, please sign in"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "nodesOnline": "{{count}} Online",
+    "nodesTotal": "{{count}} Total",
+    "instancesTotal": "{{count}} Total",
+    "instancesRunning": "{{count}} Running",
+    "nodeStatus": "Node Status",
+    "recentInstances": "Recent Instances"
+  },
+  "nodes": {
+    "title": "Node Management",
+    "name": "Name",
+    "ip": "IP",
+    "status": "Status",
+    "cpu": "CPU",
+    "memory": "Memory",
+    "system": "System",
+    "online": "Online",
+    "offline": "Offline",
+    "starting": "Starting",
+    "empty": "No nodes"
+  },
+  "instances": {
+    "title": "Instance Management",
+    "name": "Name",
+    "type": "Type",
+    "processType": "Process Type",
+    "status": "Status",
+    "actions": "Actions",
+    "start": "Start",
+    "stop": "Stop",
+    "restart": "Restart",
+    "kill": "Force Kill",
+    "deleteConfirm": "Are you sure to delete?",
+    "empty": "No instances",
+    "stopped": "Stopped",
+    "starting": "Starting",
+    "running": "Running",
+    "stopping": "Stopping",
+    "crashed": "Crashed"
+  }
+}
