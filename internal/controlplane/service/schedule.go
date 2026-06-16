@@ -86,3 +86,29 @@ func (s *ScheduleService) Update(id uint, cronExpr *string, enabled *bool, actio
 func (s *ScheduleService) Delete(id uint) error {
 	return s.db.Delete(&model.Schedule{}, id).Error
 }
+
+// ListExecutionLogs 返回指定定时任务的执行日志列表。
+func (s *ScheduleService) ListExecutionLogs(scheduleID uint, page, pageSize int) ([]model.ScheduleExecutionLog, int64, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	var total int64
+	if err := s.db.Model(&model.ScheduleExecutionLog{}).Where("schedule_id = ?", scheduleID).Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("查询执行日志总数失败: %w", err)
+	}
+
+	var logs []model.ScheduleExecutionLog
+	offset := (page - 1) * pageSize
+	if err := s.db.Where("schedule_id = ?", scheduleID).
+		Order("started_at DESC").
+		Offset(offset).Limit(pageSize).
+		Find(&logs).Error; err != nil {
+		return nil, 0, fmt.Errorf("查询执行日志失败: %w", err)
+	}
+
+	return logs, total, nil
+}

@@ -81,6 +81,28 @@ func (h *ScheduleHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
 }
 
+// ListExecutionLogs 查询定时任务执行日志。
+func (h *ScheduleHandler) ListExecutionLogs(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+
+	logs, total, err := h.scheduleSvc.ListExecutionLogs(id, page, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"items": logs,
+		"total": total,
+		"page":  page,
+		"pageSize": pageSize,
+	})
+}
+
 func (h *ScheduleHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	schedules := rg.Group("/schedules")
 	{
@@ -88,5 +110,6 @@ func (h *ScheduleHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		schedules.POST("", h.Create)
 		schedules.PUT("/:id", h.Update)
 		schedules.DELETE("/:id", h.Delete)
+		schedules.GET("/:id/logs", h.ListExecutionLogs)
 	}
 }

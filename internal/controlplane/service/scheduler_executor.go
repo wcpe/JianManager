@@ -31,23 +31,47 @@ func NewScheduleExecutorImpl(db *gorm.DB, instanceSvc *InstanceService, backupSv
 	}
 }
 
-// ExecuteSchedule 执行定时任务。
+// ExecuteSchedule 执行定时任务并记录执行日志。
 func (e *ScheduleExecutorImpl) ExecuteSchedule(schedule *model.Schedule) error {
+	startedAt := time.Now()
+
+	var execErr error
 	switch schedule.Action {
 	case "start":
-		return e.instanceSvc.Start(schedule.InstanceID)
+		execErr = e.instanceSvc.Start(schedule.InstanceID)
 	case "stop":
-		return e.instanceSvc.Stop(schedule.InstanceID)
+		execErr = e.instanceSvc.Stop(schedule.InstanceID)
 	case "restart":
-		return e.instanceSvc.Restart(schedule.InstanceID)
+		execErr = e.instanceSvc.Restart(schedule.InstanceID)
 	case "backup":
-		_, err := e.backupSvc.Create(schedule.InstanceID, fmt.Sprintf("定时备份-%s", schedule.Name))
-		return err
+		_, execErr = e.backupSvc.Create(schedule.InstanceID, fmt.Sprintf("定时备份-%s", schedule.Name))
 	case "command":
-		return e.executeCommand(schedule)
+		execErr = e.executeCommand(schedule)
 	default:
-		return fmt.Errorf("未知的定时任务操作: %s", schedule.Action)
+		execErr = fmt.Errorf("未知的定时任务操作: %s", schedule.Action)
 	}
+
+	// 写入执行日志
+	finishedAt := time.Now()
+	logStatus := model.ScheduleLogStatusSuccess
+	errMsg := ""
+	if execErr != nil {
+		logStatus = model.ScheduleLogStatusFailed
+		errMsg = execErr.Error()
+	}
+	log := &model.ScheduleExecutionLog{
+		ScheduleID: schedule.ID,
+		Action:     schedule.Action,
+		Status:     logStatus,
+		Error:      errMsg,
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+	}
+	if err := e.db.Create(log).Error; err != nil {
+		slog.Error("写入定时任务执行日志失败", "scheduleId", schedule.UUID, "error", err)
+	}
+
+	return execErr
 }
 
 // executeCommand 通过 gRPC 向实例发送命令。
