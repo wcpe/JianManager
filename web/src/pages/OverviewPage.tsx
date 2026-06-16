@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
@@ -5,6 +6,7 @@ import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
 const COLORS = ['#22c55e', '#ef4444', '#f59e0b', '#3b82f6']
 
 export default function OverviewPage() {
+  const { t } = useTranslation()
   const { data: nodes } = useNodes()
   const { data: instances } = useInstances()
 
@@ -17,26 +19,25 @@ export default function OverviewPage() {
   const crashedInstances = instances?.filter((i) => i.status === 'CRASHED').length ?? 0
 
   const nodeData = [
-    { name: '在线', value: onlineNodes },
-    { name: '离线', value: offlineNodes },
+    { name: t('nodes.online'), value: onlineNodes },
+    { name: t('nodes.offline'), value: offlineNodes },
   ].filter((d) => d.value > 0)
 
   const instanceData = [
-    { name: '运行中', value: runningInstances },
-    { name: '已停止', value: stoppedInstances },
-    { name: '崩溃', value: crashedInstances },
+    { name: t('instances.running'), value: runningInstances },
+    { name: t('instances.stopped'), value: stoppedInstances },
+    { name: t('instances.crashed'), value: crashedInstances },
   ].filter((d) => d.value > 0)
 
   const cards = [
-    { label: '节点', value: `${onlineNodes} 在线`, sub: `${totalNodes} 总计` },
-    { label: '实例', value: `${totalInstances} 总计`, sub: `${runningInstances} 运行中` },
+    { label: t('dashboard.nodes'), value: t('dashboard.nodesOnline', { count: onlineNodes }), sub: t('dashboard.nodesTotal', { count: totalNodes }) },
+    { label: t('dashboard.instances'), value: t('dashboard.instancesTotal', { count: totalInstances }), sub: t('dashboard.instancesRunning', { count: runningInstances }) },
   ]
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-4">仪表盘</h1>
+      <h1 className="text-2xl font-bold mb-4">{t('dashboard.title')}</h1>
 
-      {/* 概览卡片 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         {cards.map((card) => (
           <div key={card.label} className="border rounded-lg p-4">
@@ -47,10 +48,9 @@ export default function OverviewPage() {
         ))}
       </div>
 
-      {/* 图表区域 */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
         <div className="border rounded-lg p-4">
-          <h3 className="font-medium mb-3">节点状态</h3>
+          <h3 className="font-medium mb-3">{t('dashboard.nodeStatus')}</h3>
           <div className="h-48">
             {nodeData.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
@@ -73,13 +73,13 @@ export default function OverviewPage() {
                 </PieChart>
               </ResponsiveContainer>
             ) : (
-              <p className="text-muted-foreground text-sm text-center py-8">暂无节点数据</p>
+              <p className="text-muted-foreground text-sm text-center py-8">{t('dashboard.noNodes')}</p>
             )}
           </div>
         </div>
 
         <div className="border rounded-lg p-4">
-          <h3 className="font-medium mb-3">实例状态</h3>
+          <h3 className="font-medium mb-3">{t('instances.status')}</h3>
           <div className="h-48">
             {instanceData.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
@@ -102,16 +102,15 @@ export default function OverviewPage() {
                 </PieChart>
               </ResponsiveContainer>
             ) : (
-              <p className="text-muted-foreground text-sm text-center py-8">暂无实例数据</p>
+              <p className="text-muted-foreground text-sm text-center py-8">{t('dashboard.noInstances')}</p>
             )}
           </div>
         </div>
       </div>
 
-      {/* 节点和实例列表 */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="border rounded-lg p-4">
-          <h3 className="font-medium mb-3">节点状态</h3>
+          <h3 className="font-medium mb-3">{t('dashboard.nodeStatus')}</h3>
           <div className="space-y-2">
             {nodes?.map((node) => (
               <div key={node.id} className="flex items-center justify-between text-sm">
@@ -121,19 +120,19 @@ export default function OverviewPage() {
                     <span className="text-xs text-muted-foreground">CPU {(node.cpuUsage * 100).toFixed(0)}%</span>
                   )}
                   <span className={node.status === 1 ? 'text-green-500' : 'text-red-500'}>
-                    {node.status === 1 ? '● 在线' : '○ 离线'}
+                    {node.status === 1 ? `● ${t('nodes.online')}` : `○ ${t('nodes.offline')}`}
                   </span>
                 </div>
               </div>
             ))}
             {(!nodes || nodes.length === 0) && (
-              <p className="text-muted-foreground text-sm">暂无节点</p>
+              <p className="text-muted-foreground text-sm">{t('nodes.empty')}</p>
             )}
           </div>
         </div>
 
         <div className="border rounded-lg p-4">
-          <h3 className="font-medium mb-3">最近实例</h3>
+          <h3 className="font-medium mb-3">{t('dashboard.recentInstances')}</h3>
           <div className="space-y-2">
             {instances?.slice(0, 5).map((inst) => (
               <div key={inst.id} className="flex items-center justify-between text-sm">
@@ -152,7 +151,7 @@ export default function OverviewPage() {
               </div>
             ))}
             {(!instances || instances.length === 0) && (
-              <p className="text-muted-foreground text-sm">暂无实例</p>
+              <p className="text-muted-foreground text-sm">{t('instances.empty')}</p>
             )}
           </div>
         </div>

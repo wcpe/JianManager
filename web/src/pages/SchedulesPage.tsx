@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useSchedules } from '@/api/schedules'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -10,24 +11,25 @@ import {
 } from '@/components/ui/table'
 
 export default function SchedulesPage() {
+  const { t } = useTranslation()
   const { data: schedules, isLoading } = useSchedules()
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-4">定时任务</h1>
+      <h1 className="text-2xl font-bold mb-4">{t('schedules.title')}</h1>
       {isLoading ? (
-        <p className="text-muted-foreground">加载中...</p>
+        <p className="text-muted-foreground">{t('common.loading')}</p>
       ) : (
         <div className="border rounded-lg">
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow>
-                <TableHead>名称</TableHead>
-                <TableHead>实例 ID</TableHead>
-                <TableHead>Cron</TableHead>
-                <TableHead>操作</TableHead>
-                <TableHead>启用</TableHead>
-                <TableHead>上次执行</TableHead>
+                <TableHead>{t('schedules.name')}</TableHead>
+                <TableHead>{t('schedules.instanceId')}</TableHead>
+                <TableHead>{t('schedules.cron')}</TableHead>
+                <TableHead>{t('schedules.action')}</TableHead>
+                <TableHead>{t('schedules.enabled')}</TableHead>
+                <TableHead>{t('schedules.lastRun')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -39,16 +41,16 @@ export default function SchedulesPage() {
                   <TableCell>{s.action}</TableCell>
                   <TableCell>
                     <Badge variant={s.enabled ? 'default' : 'secondary'}>
-                      {s.enabled ? '启用' : '禁用'}
+                      {s.enabled ? t('common.enabled') : t('common.disabled')}
                     </Badge>
                   </TableCell>
                   <TableCell className="text-muted-foreground">
-                    {s.lastRun ? new Date(s.lastRun).toLocaleString() : '未执行'}
+                    {s.lastRun ? new Date(s.lastRun).toLocaleString() : t('schedules.neverRun')}
                   </TableCell>
                 </TableRow>
               ))}
               {(!schedules || schedules.length === 0) && (
-                <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">暂无定时任务</TableCell></TableRow>
+                <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">{t('schedules.empty')}</TableCell></TableRow>
               )}
             </TableBody>
           </Table>

@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Navigate } from 'react-router'
+import { useTranslation } from 'react-i18next'
 import { useLogin } from '@/api/auth'
 import { useSetupStatus } from '@/api/setup'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -8,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 
 export default function LoginPage() {
+  const { t } = useTranslation()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -15,7 +17,6 @@ export default function LoginPage() {
   const login = useLogin()
   const { data: setupStatus, isLoading } = useSetupStatus()
 
-  // 需要初始化则跳转到 /setup
   if (!isLoading && setupStatus?.setupRequired) {
     return <Navigate to="/setup" replace />
   }
@@ -28,7 +29,7 @@ export default function LoginPage() {
       { username, password },
       {
         onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-          setError(err.response?.data?.message || '登录失败')
+          setError(err.response?.data?.message || t('login.loginFailed'))
         },
       },
     )
@@ -37,7 +38,7 @@ export default function LoginPage() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-screen">
-        <p className="text-muted-foreground">加载中...</p>
+        <p className="text-muted-foreground">{t('common.loading')}</p>
       </div>
     )
   }
@@ -46,8 +47,8 @@ export default function LoginPage() {
     <div className="flex items-center justify-center h-screen">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">JianManager</CardTitle>
-          <CardDescription>登录到管理平台</CardDescription>
+          <CardTitle className="text-2xl">{t('login.title')}</CardTitle>
+          <CardDescription>{t('login.subtitle')}</CardDescription>
         </CardHeader>
         <CardContent>
           {error && (
@@ -58,7 +59,7 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="username">用户名</Label>
+              <Label htmlFor="username">{t('login.username')}</Label>
               <Input
                 id="username"
                 value={username}
@@ -67,7 +68,7 @@ export default function LoginPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">密码</Label>
+              <Label htmlFor="password">{t('login.password')}</Label>
               <Input
                 id="password"
                 type="password"
@@ -77,7 +78,7 @@ export default function LoginPage() {
               />
             </div>
             <Button type="submit" className="w-full" disabled={login.isPending}>
-              {login.isPending ? '登录中...' : '登录'}
+              {login.isPending ? `${t('login.submit')}...` : t('login.submit')}
             </Button>
           </form>
         </CardContent>

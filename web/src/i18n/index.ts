@@ -17,4 +17,9 @@ i18n.use(initReactI18next).init({
   },
 })
 
+export function changeLanguage(lng: 'zh' | 'en') {
+  localStorage.setItem('language', lng)
+  void i18n.changeLanguage(lng)
+}
+
 export default i18n

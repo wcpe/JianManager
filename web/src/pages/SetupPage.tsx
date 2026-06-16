@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Navigate } from 'react-router'
+import { useTranslation } from 'react-i18next'
 import { useSetupStatus, useSetup } from '@/api/setup'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -7,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 
 export default function SetupPage() {
+  const { t } = useTranslation()
   const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -15,7 +17,6 @@ export default function SetupPage() {
   const { data: status, isLoading } = useSetupStatus()
   const setup = useSetup()
 
-  // 已有管理员则跳转登录页
   if (!isLoading && status && !status.setupRequired) {
     return <Navigate to="/login" replace />
   }
@@ -25,12 +26,12 @@ export default function SetupPage() {
     setError('')
 
     if (password !== confirm) {
-      setError('两次输入的密码不一致')
+      setError(t('setup.passwordMismatch'))
       return
     }
 
     if (password.length < 8) {
-      setError('密码长度至少 8 个字符')
+      setError(t('setup.passwordTooShort'))
       return
     }
 
@@ -38,7 +39,7 @@ export default function SetupPage() {
       { username, password },
       {
         onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-          setError(err.response?.data?.message || '创建失败')
+          setError(err.response?.data?.message || t('setup.createFailed'))
         },
       },
     )
@@ -47,7 +48,7 @@ export default function SetupPage() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-screen">
-        <p className="text-muted-foreground">加载中...</p>
+        <p className="text-muted-foreground">{t('setup.loading')}</p>
       </div>
     )
   }
@@ -56,8 +57,8 @@ export default function SetupPage() {
     <div className="flex items-center justify-center h-screen">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">🎮 JianManager</CardTitle>
-          <CardDescription>首次使用，请设置管理员账号</CardDescription>
+          <CardTitle className="text-2xl">{t('setup.title')}</CardTitle>
+          <CardDescription>{t('setup.subtitle')}</CardDescription>
         </CardHeader>
         <CardContent>
           {error && (
@@ -68,7 +69,7 @@ export default function SetupPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="username">用户名</Label>
+              <Label htmlFor="username">{t('setup.username')}</Label>
               <Input
                 id="username"
                 value={username}
@@ -79,11 +80,10 @@ export default function SetupPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">密码</Label>
+              <Label htmlFor="password">{t('setup.password')}</Label>
               <Input
                 id="password"
                 type="password"
-                placeholder="至少 8 个字符"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -92,7 +92,7 @@ export default function SetupPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="confirm">确认密码</Label>
+              <Label htmlFor="confirm">{t('setup.confirm')}</Label>
               <Input
                 id="confirm"
                 type="password"
@@ -104,7 +104,7 @@ export default function SetupPage() {
               />
             </div>
             <Button type="submit" className="w-full" disabled={setup.isPending}>
-              {setup.isPending ? '创建中...' : '开始使用'}
+              {setup.isPending ? t('setup.creating') : t('setup.submit')}
             </Button>
           </form>
         </CardContent>

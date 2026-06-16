@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next'
 import { useNodes } from '@/api/nodes'
 import {
   Table,
@@ -8,35 +9,36 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-const statusLabel: Record<number, { text: string; color: string }> = {
-  0: { text: '离线', color: 'text-red-500' },
-  1: { text: '在线', color: 'text-green-500' },
-  2: { text: '启动中', color: 'text-yellow-500' },
-}
-
 export default function NodesPage() {
+  const { t } = useTranslation()
   const { data: nodes, isLoading } = useNodes({ refetchInterval: 30_000 })
+
+  const statusLabel: Record<number, { text: string; color: string }> = {
+    0: { text: t('nodes.offline'), color: 'text-red-500' },
+    1: { text: t('nodes.online'), color: 'text-green-500' },
+    2: { text: t('nodes.starting'), color: 'text-yellow-500' },
+  }
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">节点管理</h1>
+        <h1 className="text-2xl font-bold">{t('nodes.title')}</h1>
       </div>
 
       {isLoading ? (
-        <p className="text-muted-foreground">加载中...</p>
+        <p className="text-muted-foreground">{t('common.loading')}</p>
       ) : (
         <div className="border rounded-lg">
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow>
-                <TableHead>名称</TableHead>
-                <TableHead>IP</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>CPU</TableHead>
-                <TableHead>内存</TableHead>
-                <TableHead>磁盘</TableHead>
-                <TableHead>系统</TableHead>
+                <TableHead>{t('nodes.name')}</TableHead>
+                <TableHead>{t('nodes.ip')}</TableHead>
+                <TableHead>{t('nodes.status')}</TableHead>
+                <TableHead>{t('nodes.cpu')}</TableHead>
+                <TableHead>{t('nodes.memory')}</TableHead>
+                <TableHead>{t('nodes.disk')}</TableHead>
+                <TableHead>{t('nodes.system')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -59,7 +61,7 @@ export default function NodesPage() {
               {(!nodes || nodes.length === 0) && (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground">
-                    暂无节点
+                    {t('nodes.empty')}
                   </TableCell>
                 </TableRow>
               )}

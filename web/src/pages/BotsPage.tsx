@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useBots, useCreateBot, useDeleteBot, useSetBotBehavior, type BotInfo } from '@/api/bots'
 import { useInstances } from '@/api/instances'
 import { Button } from '@/components/ui/button'
@@ -27,47 +28,41 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-const statusConfig: Record<string, { text: string; color: string }> = {
-  connected: { text: '已连接', color: 'text-green-500' },
-  disconnected: { text: '断开', color: 'text-gray-500' },
-  connecting: { text: '连接中', color: 'text-yellow-500' },
-  error: { text: '错误', color: 'text-red-500' },
-}
-
-const behaviorOptions = [
-  { value: 'idle', label: '待机' },
-  { value: 'guard', label: '警戒' },
-  { value: 'follow', label: '跟随' },
-  { value: 'patrol', label: '巡逻' },
-]
-
 export default function BotsPage() {
+  const { t } = useTranslation()
   const [showCreate, setShowCreate] = useState(false)
   const { data: bots, isLoading } = useBots()
   const del = useDeleteBot()
 
+  const statusConfig: Record<string, { text: string; color: string }> = {
+    connected: { text: t('bots.connected'), color: 'text-green-500' },
+    disconnected: { text: t('bots.disconnected'), color: 'text-gray-500' },
+    connecting: { text: t('bots.connecting'), color: 'text-yellow-500' },
+    error: { text: t('bots.error'), color: 'text-red-500' },
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">Bot 管理</h1>
-        <Button onClick={() => setShowCreate(true)}>+ 创建 Bot</Button>
+        <h1 className="text-2xl font-bold">{t('bots.title')}</h1>
+        <Button onClick={() => setShowCreate(true)}>+ {t('bots.createBot')}</Button>
       </div>
 
       <CreateBotDialog open={showCreate} onOpenChange={setShowCreate} />
 
       {isLoading ? (
-        <p className="text-muted-foreground">加载中...</p>
+        <p className="text-muted-foreground">{t('common.loading')}</p>
       ) : (
         <div className="border rounded-lg">
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow>
-                <TableHead>名称</TableHead>
-                <TableHead>实例</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>行为</TableHead>
-                <TableHead>服务器</TableHead>
-                <TableHead>操作</TableHead>
+                <TableHead>{t('bots.name')}</TableHead>
+                <TableHead>{t('bots.instance')}</TableHead>
+                <TableHead>{t('bots.status')}</TableHead>
+                <TableHead>{t('bots.behavior')}</TableHead>
+                <TableHead>{t('bots.server')}</TableHead>
+                <TableHead>{t('bots.actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -75,15 +70,16 @@ export default function BotsPage() {
                 <BotRow
                   key={bot.id}
                   bot={bot}
+                  statusConfig={statusConfig}
                   onDelete={(id) => {
-                    if (confirm('确定删除此 Bot？')) del.mutate(id)
+                    if (confirm(t('bots.deleteConfirm'))) del.mutate(id)
                   }}
                 />
               ))}
               {(!bots || bots.length === 0) && (
                 <TableRow>
                   <TableCell colSpan={6} className="text-center text-muted-foreground">
-                    暂无 Bot
+                    {t('bots.empty')}
                   </TableCell>
                 </TableRow>
               )}
@@ -95,9 +91,17 @@ export default function BotsPage() {
   )
 }
 
-function BotRow({ bot, onDelete }: { bot: BotInfo; onDelete: (id: number) => void }) {
+function BotRow({ bot, statusConfig, onDelete }: { bot: BotInfo; statusConfig: Record<string, { text: string; color: string }>; onDelete: (id: number) => void }) {
+  const { t } = useTranslation()
   const setBehavior = useSetBotBehavior()
   const st = statusConfig[bot.status] || statusConfig.disconnected
+
+  const behaviorOptions = [
+    { value: 'idle', label: t('bots.idle') },
+    { value: 'guard', label: t('bots.guard') },
+    { value: 'follow', label: t('bots.follow') },
+    { value: 'patrol', label: t('bots.patrol') },
+  ]
 
   return (
     <TableRow>
@@ -133,7 +137,7 @@ function BotRow({ bot, onDelete }: { bot: BotInfo; onDelete: (id: number) => voi
           onClick={() => onDelete(bot.id)}
           className="text-red-600 hover:text-red-700"
         >
-          删除
+          {t('common.delete')}
         </Button>
       </TableCell>
     </TableRow>
@@ -146,6 +150,7 @@ interface CreateBotDialogProps {
 }
 
 function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
+  const { t } = useTranslation()
   const { data: instances } = useInstances()
   const create = useCreateBot()
 
@@ -156,6 +161,13 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
   const [auth, setAuth] = useState('offline')
   const [behavior, setBehavior] = useState('idle')
   const [error, setError] = useState('')
+
+  const behaviorOptions = [
+    { value: 'idle', label: t('bots.idle') },
+    { value: 'guard', label: t('bots.guard') },
+    { value: 'follow', label: t('bots.follow') },
+    { value: 'patrol', label: t('bots.patrol') },
+  ]
 
   const resetForm = () => {
     setName('')
@@ -187,7 +199,7 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
             err instanceof Error && 'response' in err
               ? (err as { response?: { data?: { message?: string } } }).response?.data?.message
               : undefined
-          setError(msg || '创建失败')
+          setError(msg || t('bots.createFailed'))
         },
       },
     )
@@ -197,7 +209,7 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>创建 Bot</DialogTitle>
+          <DialogTitle>{t('bots.createBot')}</DialogTitle>
         </DialogHeader>
 
         {error && (
@@ -208,7 +220,7 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1">
-            <Label>名称</Label>
+            <Label>{t('bots.name')}</Label>
             <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -218,10 +230,10 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
           </div>
 
           <div className="space-y-1">
-            <Label>实例</Label>
+            <Label>{t('bots.instance')}</Label>
             <Select value={instanceId} onValueChange={setInstanceId} required>
               <SelectTrigger className="w-full">
-                <SelectValue placeholder="选择实例" />
+                <SelectValue placeholder={t('bots.selectInstance')} />
               </SelectTrigger>
               <SelectContent>
                 {instances?.map((inst) => (
@@ -235,7 +247,7 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
 
           <div className="grid grid-cols-3 gap-3">
             <div className="col-span-2 space-y-1">
-              <Label>服务器地址</Label>
+              <Label>{t('bots.serverAddr')}</Label>
               <Input
                 value={server}
                 onChange={(e) => setServer(e.target.value)}
@@ -244,7 +256,7 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
               />
             </div>
             <div className="space-y-1">
-              <Label>端口</Label>
+              <Label>{t('bots.port')}</Label>
               <Input
                 value={port}
                 onChange={(e) => setPort(e.target.value)}
@@ -256,19 +268,19 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <Label>认证方式</Label>
+              <Label>{t('bots.authMethod')}</Label>
               <Select value={auth} onValueChange={setAuth}>
                 <SelectTrigger className="w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="offline">离线</SelectItem>
-                  <SelectItem value="microsoft">Microsoft</SelectItem>
+                  <SelectItem value="offline">{t('bots.offline')}</SelectItem>
+                  <SelectItem value="microsoft">{t('bots.microsoft')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1">
-              <Label>初始行为</Label>
+              <Label>{t('bots.initialBehavior')}</Label>
               <Select value={behavior} onValueChange={setBehavior}>
                 <SelectTrigger className="w-full">
                   <SelectValue />
@@ -293,10 +305,10 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
                 resetForm()
               }}
             >
-              取消
+              {t('common.cancel')}
             </Button>
             <Button type="submit" disabled={create.isPending}>
-              {create.isPending ? '创建中...' : '创建'}
+              {create.isPending ? t('common.creating') : t('common.create')}
             </Button>
           </DialogFooter>
         </form>

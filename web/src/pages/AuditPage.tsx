@@ -1,46 +1,56 @@
+import { useTranslation } from 'react-i18next'
 import { useAuditLogs } from '@/api/audit'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 
 export default function AuditPage() {
+  const { t } = useTranslation()
   const { data: logs, isLoading } = useAuditLogs({ limit: 100 })
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-4">审计日志</h1>
+      <h1 className="text-2xl font-bold mb-4">{t('audit.title')}</h1>
       {isLoading ? (
-        <p className="text-muted-foreground">加载中...</p>
+        <p className="text-muted-foreground">{t('common.loading')}</p>
       ) : (
         <div className="border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50">
-              <tr>
-                <th className="text-left p-3 font-medium">时间</th>
-                <th className="text-left p-3 font-medium">用户</th>
-                <th className="text-left p-3 font-medium">操作</th>
-                <th className="text-left p-3 font-medium">目标</th>
-                <th className="text-left p-3 font-medium">IP</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table>
+            <TableHeader className="bg-muted/50">
+              <TableRow>
+                <TableHead>{t('audit.time')}</TableHead>
+                <TableHead>{t('audit.user')}</TableHead>
+                <TableHead>{t('audit.action')}</TableHead>
+                <TableHead>{t('audit.target')}</TableHead>
+                <TableHead>{t('audit.ip')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {logs?.map((log) => (
-                <tr key={log.id} className="border-t hover:bg-muted/30">
-                  <td className="p-3 text-muted-foreground whitespace-nowrap">
+                <TableRow key={log.id}>
+                  <TableCell className="text-muted-foreground whitespace-nowrap">
                     {new Date(log.createdAt).toLocaleString()}
-                  </td>
-                  <td className="p-3">{log.user?.username ?? `#${log.userId}`}</td>
-                  <td className="p-3">
+                  </TableCell>
+                  <TableCell>{log.user?.username ?? `#${log.userId}`}</TableCell>
+                  <TableCell>
                     <span className="px-2 py-0.5 text-xs bg-muted rounded font-mono">{log.action}</span>
-                  </td>
-                  <td className="p-3 text-muted-foreground">
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
                     {log.targetType && `${log.targetType}#${log.targetId}`}
-                  </td>
-                  <td className="p-3 text-muted-foreground">{log.ip}</td>
-                </tr>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{log.ip}</TableCell>
+                </TableRow>
               ))}
               {(!logs || logs.length === 0) && (
-                <tr><td colSpan={5} className="p-6 text-center text-muted-foreground">暂无审计日志</td></tr>
+                <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground">{t('audit.empty')}</TableCell></TableRow>
               )}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       )}
     </div>
