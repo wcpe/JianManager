@@ -14,11 +14,13 @@ import (
 type TerminalService struct {
 	db        *gorm.DB
 	jwtSecret string
+	baseURL   string // CP 自身地址（用于代理 WS URL）
 }
 
 // NewTerminalService 创建终端服务。
-func NewTerminalService(db *gorm.DB, jwtSecret string) *TerminalService {
-	return &TerminalService{db: db, jwtSecret: jwtSecret}
+// baseURL 为 CP 的外部可访问地址（如 http://localhost:8080），用于构造代理 WS URL。
+func NewTerminalService(db *gorm.DB, jwtSecret, baseURL string) *TerminalService {
+	return &TerminalService{db: db, jwtSecret: jwtSecret, baseURL: baseURL}
 }
 
 // TerminalToken 终端连接 token 响应。
@@ -57,11 +59,28 @@ func (s *TerminalService) IssueToken(instanceID uint, permission string) (*Termi
 		return nil, fmt.Errorf("签发终端 token 失败: %w", err)
 	}
 
-	wsURL := fmt.Sprintf("ws://%s:%d/ws/terminal?token=%s", node.Host, node.WSPort, tokenStr)
+	// WS URL 指向 CP 代理端点（浏览器 → CP → Worker）
+	// 不含 token 参数，由前端拼接
+	wsURL := fmt.Sprintf("%s/ws/terminal", s.baseURL)
 
 	return &TerminalToken{
 		Token:     tokenStr,
 		WSURL:     wsURL,
 		ExpiresIn: 30,
 	}, nil
+}
+
+// GetWorkerAddr 返回实例所在 Worker 的 WS 地址（供代理使用）。
+func (s *TerminalService) GetWorkerAddr(instanceUUID string) (string, error) {
+	var instance model.Instance
+	if err := s.db.Where("uuid = ?", instanceUUID).First(&instance).Error; err != nil {
+		return "", ErrInstanceNotFound
+	}
+
+	var node model.Node
+	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
+		return "", ErrNodeNotFound
+	}
+
+	return fmt.Sprintf("ws://%s:%d/ws/terminal", node.Host, node.WSPort), nil
 }

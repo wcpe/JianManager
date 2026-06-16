@@ -22,7 +22,7 @@ type Node struct {
 	UUID          string         `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
 	Name          string         `gorm:"type:varchar(128);not null" json:"name"`
 	Host          string         `gorm:"type:varchar(256);not null" json:"host"`
-	GRPCPort      int            `gorm:"not null" json:"grpcPort"`
+	GRPCPort      int            `gorm:"column:grpc_port;not null" json:"grpcPort"`
 	WSPort        int            `gorm:"not null" json:"wsPort"`
 	Secret        string         `gorm:"type:varchar(128);not null" json:"-"`
 	Status        NodeStatus     `gorm:"default:0" json:"status"`

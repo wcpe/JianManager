@@ -8,9 +8,15 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/wxys233/JianManager/internal/worker/process"
 	"github.com/wxys233/JianManager/internal/worker/register"
 	"github.com/wxys233/JianManager/proto/workerpb"
 )
+
+// InstanceStateProvider 提供所有实例的状态快照。
+type InstanceStateProvider interface {
+	GetAllInstanceStates() []process.InstanceSnapshot
+}
 
 // Heartbeat 心跳上报器。
 type Heartbeat struct {
@@ -18,15 +24,17 @@ type Heartbeat struct {
 	nodeUUID         string
 	interval         time.Duration
 	stopCh           chan struct{}
+	instanceProvider InstanceStateProvider
 }
 
 // New 创建心跳上报器。
-func New(controlPlaneAddr, nodeUUID string, interval time.Duration) *Heartbeat {
+func New(controlPlaneAddr, nodeUUID string, interval time.Duration, provider InstanceStateProvider) *Heartbeat {
 	return &Heartbeat{
 		controlPlaneAddr: controlPlaneAddr,
 		nodeUUID:         nodeUUID,
 		interval:         interval,
 		stopCh:           make(chan struct{}),
+		instanceProvider: provider,
 	}
 }
 
@@ -70,6 +78,17 @@ func (h *Heartbeat) sendHeartbeat() {
 
 	// 采集心跳数据
 	req := register.CollectHeartbeatData(h.nodeUUID)
+
+	// 附加实例状态快照
+	if h.instanceProvider != nil {
+		states := h.instanceProvider.GetAllInstanceStates()
+		for _, s := range states {
+			req.Instances = append(req.Instances, &workerpb.InstanceState{
+				InstanceUuid: s.UUID,
+				State:        s.State,
+			})
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

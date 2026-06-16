@@ -30,7 +30,6 @@ type TerminalMessage struct {
 type TerminalSession struct {
 	InstanceID string
 	Permission string
-	Output     *daemon.RingBuffer
 	Conn       *websocket.Conn
 }
 
@@ -40,6 +39,7 @@ type TerminalServer struct {
 	upgrader  websocket.Upgrader
 	mu        sync.RWMutex
 	sessions  map[string][]*TerminalSession
+	buffers   map[string]*daemon.RingBuffer // per-instance 环形缓冲区
 	onStdin   StdinHandler
 	onResize  ResizeHandler
 }
@@ -52,6 +52,7 @@ func NewTerminalServer(jwtSecret string) *TerminalServer {
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
 		sessions: make(map[string][]*TerminalSession),
+		buffers:  make(map[string]*daemon.RingBuffer),
 	}
 }
 
@@ -100,9 +101,11 @@ func (s *TerminalServer) Handler() http.HandlerFunc {
 		session := &TerminalSession{
 			InstanceID: instanceID,
 			Permission: permission,
-			Output:     daemon.NewRingBuffer(64 * 1024),
 			Conn:       conn,
 		}
+
+		// 获取或创建该实例的共享环形缓冲区
+		buf := s.getOrCreateBuffer(instanceID)
 
 		s.addSession(instanceID, session)
 		slog.Info("终端已连接", "instanceId", instanceID, "permission", permission, "remote", r.RemoteAddr)
@@ -113,6 +116,15 @@ func (s *TerminalServer) Handler() http.HandlerFunc {
 			InstanceID: instanceID,
 			Data:       "已连接到实例 " + instanceID + "\r\n",
 		})
+
+		// 回放环形缓冲区中的历史输出
+		if history := buf.ReadAll(); len(history) > 0 {
+			conn.WriteJSON(TerminalMessage{
+				Type:       "stdout",
+				InstanceID: instanceID,
+				Data:       string(history),
+			})
+		}
 
 		// 处理消息循环
 		go s.handleSession(session)
@@ -154,7 +166,7 @@ func (s *TerminalServer) handleSession(session *TerminalSession) {
 	}
 }
 
-// Broadcast 向指定实例的所有观察者广播消息。
+// Broadcast 向指定实例的所有观察者广播消息，同时写入共享环形缓冲区。
 func (s *TerminalServer) Broadcast(instanceID string, msgType, data string) {
 	s.mu.RLock()
 	sessions := s.sessions[instanceID]
@@ -170,11 +182,11 @@ func (s *TerminalServer) Broadcast(instanceID string, msgType, data string) {
 		if err := session.Conn.WriteJSON(msg); err != nil {
 			slog.Warn("广播消息失败", "instanceId", instanceID, "error", err)
 		}
-		// 同时写入环形缓冲区
-		if session.Output != nil {
-			session.Output.Write([]byte(data))
-		}
 	}
+
+	// 写入共享环形缓冲区（无论是否有连接）
+	buf := s.getOrCreateBuffer(instanceID)
+	buf.Write([]byte(data))
 }
 
 func (s *TerminalServer) addSession(instanceID string, session *TerminalSession) {
@@ -197,6 +209,19 @@ func (s *TerminalServer) removeSession(instanceID string, session *TerminalSessi
 	if len(s.sessions[instanceID]) == 0 {
 		delete(s.sessions, instanceID)
 	}
+}
+
+// getOrCreateBuffer 获取或创建实例的共享环形缓冲区。
+func (s *TerminalServer) getOrCreateBuffer(instanceID string) *daemon.RingBuffer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	buf, ok := s.buffers[instanceID]
+	if !ok {
+		buf = daemon.NewRingBuffer(64 * 1024)
+		s.buffers[instanceID] = buf
+	}
+	return buf
 }
 
 // GetSessionCount 获取指定实例的终端会话数。

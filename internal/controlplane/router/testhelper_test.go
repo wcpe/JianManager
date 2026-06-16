@@ -57,7 +57,7 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 		Group:    groupSvc,
 		Node:     service.NewNodeService(db),
 		Instance: service.NewInstanceService(db, groupSvc, pool),
-		Terminal: service.NewTerminalService(db, jwtCfg.Secret),
+		Terminal: service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),
 		File:     service.NewFileService(db, pool),
 		Bot:      service.NewBotService(db),
 		Alert:    service.NewAlertService(db),

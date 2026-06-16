@@ -34,6 +34,11 @@ func New(cfg config.DatabaseConfig) (*gorm.DB, error) {
 
 // AutoMigrate 自动迁移所有模型。
 func AutoMigrate(db *gorm.DB) error {
+	// 迁移 g_rpc_port → grpc_port（修复 GORM snake_case 对全大写缩写的错误转换）
+	if err := migrateGRPCPortColumn(db); err != nil {
+		return err
+	}
+
 	return db.AutoMigrate(
 		&model.User{},
 		&model.Group{},
@@ -50,4 +55,26 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Template{},
 		&model.AuditLog{},
 	)
+}
+
+// migrateGRPCPortColumn 将旧的 g_rpc_port 列迁移为 grpc_port。
+// GORM 对 GRPCPort 的默认 snake_case 转换是 g_r_p_c_port，
+// 显式 column tag 修正为 grpc_port，这里处理已有数据库的列重命名。
+func migrateGRPCPortColumn(db *gorm.DB) error {
+	// 检查 nodes 表是否存在
+	if !db.Migrator().HasTable("nodes") {
+		return nil
+	}
+
+	// 检查旧列是否存在
+	if !db.Migrator().HasColumn("nodes", "g_rpc_port") {
+		return nil
+	}
+
+	// 重命名列：g_rpc_port → grpc_port
+	if err := db.Exec("ALTER TABLE nodes RENAME COLUMN g_rpc_port TO grpc_port").Error; err != nil {
+		return fmt.Errorf("迁移 g_rpc_port 列失败: %w", err)
+	}
+
+	return nil
 }

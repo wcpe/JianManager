@@ -1,9 +1,11 @@
 package grpc
 
 import (
+	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/net/context"
 	"gorm.io/gorm"
 
@@ -15,12 +17,13 @@ import (
 // 处理来自 Worker Node 的 Register 和 Heartbeat 请求。
 type ControlPlaneHandler struct {
 	workerpb.WorkerServiceServer
-	db *gorm.DB
+	db   *gorm.DB
+	pool *ClientPool
 }
 
 // NewControlPlaneHandler 创建处理器。
-func NewControlPlaneHandler(db *gorm.DB) *ControlPlaneHandler {
-	return &ControlPlaneHandler{db: db}
+func NewControlPlaneHandler(db *gorm.DB, pool *ClientPool) *ControlPlaneHandler {
+	return &ControlPlaneHandler{db: db, pool: pool}
 }
 
 // Register 处理 Worker Node 注册。
@@ -37,6 +40,7 @@ func (h *ControlPlaneHandler) Register(ctx context.Context, req *workerpb.Regist
 			Host:     req.Host,
 			GRPCPort: int(req.GrpcPort),
 			WSPort:   int(req.WsPort),
+			Secret:   uuid.New().String(),
 			Status:   model.NodeStatusOnline,
 			OS:       req.Os,
 			Arch:     req.Arch,
@@ -77,6 +81,14 @@ func (h *ControlPlaneHandler) Register(ctx context.Context, req *workerpb.Regist
 		slog.Info("节点已重新注册", "name", req.Name, "uuid", node.UUID)
 	}
 
+	// 建立到 Worker Node 的反向 gRPC 连接
+	if req.GrpcPort > 0 {
+		addr := fmt.Sprintf("%s:%d", req.Host, req.GrpcPort)
+		if err := h.pool.Connect(node.UUID, addr); err != nil {
+			slog.Warn("连接 Worker Node 失败，稍后重试", "nodeUUID", node.UUID, "addr", addr, "error", err)
+		}
+	}
+
 	return &workerpb.RegisterResponse{
 		NodeUuid:   node.UUID,
 		NodeSecret: node.Secret,
@@ -105,6 +117,11 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 
 		if err := h.db.Model(&model.Node{}).Where("uuid = ?", req.NodeUuid).Updates(updates).Error; err != nil {
 			slog.Warn("更新心跳数据失败", "nodeUUID", req.NodeUuid, "error", err)
+		}
+
+		// 同步实例状态
+		if len(req.Instances) > 0 {
+			h.syncInstanceStates(req.Instances)
 		}
 
 		// 返回响应
@@ -136,4 +153,16 @@ func StartOfflineDetector(db *gorm.DB) {
 	}()
 
 	slog.Info("离线检测器已启动", "threshold", "90s")
+}
+
+// syncInstanceStates 从心跳数据同步实例状态到数据库。
+func (h *ControlPlaneHandler) syncInstanceStates(states []*workerpb.InstanceState) {
+	for _, s := range states {
+		status := model.InstanceStatus(s.State)
+		if err := h.db.Model(&model.Instance{}).
+			Where("uuid = ?", s.InstanceUuid).
+			Update("status", status).Error; err != nil {
+			slog.Warn("同步实例状态失败", "instanceUUID", s.InstanceUuid, "state", s.State, "error", err)
+		}
+	}
 }

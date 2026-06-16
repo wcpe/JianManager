@@ -227,6 +227,22 @@ func (h *InstanceHandler) Kill(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已终止"})
 }
 
+// Metrics 获取实例指标。
+func (h *InstanceHandler) Metrics(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+
+	metrics, err := h.instanceSvc.GetMetrics(id)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "METRICS_UNAVAILABLE", "message": "无法获取指标"})
+		return
+	}
+
+	c.JSON(http.StatusOK, metrics)
+}
+
 // RegisterRoutes 注册实例路由。
 func (h *InstanceHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	instances := rg.Group("/instances")
@@ -240,5 +256,6 @@ func (h *InstanceHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		instances.POST("/:id/stop", h.Stop)
 		instances.POST("/:id/restart", h.Restart)
 		instances.POST("/:id/kill", h.Kill)
+		instances.GET("/:id/metrics", h.Metrics)
 	}
 }

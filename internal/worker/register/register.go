@@ -3,7 +3,7 @@ package register
 import (
 	"fmt"
 	"log/slog"
-	"os"
+	"net"
 	"runtime"
 	"time"
 
@@ -22,6 +22,8 @@ type Config struct {
 	ControlPlaneAddr string // Control Plane gRPC 地址
 	NodeName         string // 节点名称
 	WsPort           int    // WebSocket 端口
+	GrpcPort         int    // gRPC 端口（供 Control Plane 反向连接）
+	Host             string // 本机 IP（留空自动检测，优先 127.0.0.1）
 }
 
 // Result 注册结果。
@@ -61,9 +63,15 @@ func Register(ctx context.Context, cfg Config) (*Result, error) {
 
 // collectSystemInfo 采集系统信息用于注册。
 func collectSystemInfo(cfg Config) *workerpb.RegisterRequest {
+	host := cfg.Host
+	if host == "" {
+		host = getOutboundIP()
+	}
+
 	info := &workerpb.RegisterRequest{
 		Name:     cfg.NodeName,
-		Host:     getOutboundIP(),
+		Host:     host,
+		GrpcPort: int32(cfg.GrpcPort),
 		WsPort:   int32(cfg.WsPort),
 		Os:       runtime.GOOS,
 		Arch:     runtime.GOARCH,
@@ -81,13 +89,15 @@ func collectSystemInfo(cfg Config) *workerpb.RegisterRequest {
 	return info
 }
 
-// getOutboundIP 获取本机出口 IP。
+// getOutboundIP 获取本机出口 IP（通过 UDP 探测，不实际发送数据）。
+// 失败时回退到 127.0.0.1。
 func getOutboundIP() string {
-	hostname, err := os.Hostname()
+	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
 		return "127.0.0.1"
 	}
-	return hostname
+	defer conn.Close()
+	return conn.LocalAddr().(*net.UDPAddr).IP.String()
 }
 
 // WaitForControlPlane 等待 Control Plane 可用。

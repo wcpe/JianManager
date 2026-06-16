@@ -39,6 +39,8 @@ func main() {
 		fmt.Sscanf(v, "%d", &wsPort)
 	}
 
+	host := os.Getenv("JIANMANAGER_HOST") // 留空自动检测本机 IP
+
 	jwtSecret := os.Getenv("JIANMANAGER_JWT_SECRET")
 	if jwtSecret == "" {
 		jwtSecret = "dev-secret-change-me"
@@ -92,6 +94,18 @@ func main() {
 	// 启动 WS 终端服务器
 	terminalServer := ws.NewTerminalServer(jwtSecret)
 
+	// 桥接进程输出到 WebSocket 终端
+	manager.SetOutputHandler(func(instanceID string, stream string, data []byte) {
+		terminalServer.Broadcast(instanceID, stream, string(data))
+	})
+
+	// 桥接终端输入到进程 stdin
+	terminalServer.SetStdinHandler(func(instanceID, data string) {
+		if err := manager.SendCommand(instanceID, data); err != nil {
+			slog.Warn("终端输入发送失败", "instanceId", instanceID, "error", err)
+		}
+	})
+
 	wsMux := http.NewServeMux()
 	wsMux.HandleFunc("/ws/terminal", terminalServer.Handler())
 
@@ -115,6 +129,8 @@ func main() {
 		ControlPlaneAddr: cpAddr,
 		NodeName:         nodeName,
 		WsPort:           wsPort,
+		GrpcPort:         grpcPort,
+		Host:             host,
 	})
 	if err != nil {
 		slog.Error("注册到 Control Plane 失败", "error", err)
@@ -125,7 +141,7 @@ func main() {
 	slog.Info("已注册到 Control Plane", "nodeUUID", nodeUUID)
 
 	// 启动心跳上报
-	hb := heartbeat.New(cpAddr, nodeUUID, 30*time.Second)
+	hb := heartbeat.New(cpAddr, nodeUUID, 30*time.Second, manager)
 	hb.Start()
 	defer hb.Stop()
 

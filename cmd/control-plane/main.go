@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 
+	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
 
 	"github.com/wxys233/JianManager/internal/controlplane/config"
@@ -44,7 +45,7 @@ func main() {
 	nodeSvc := service.NewNodeService(db)
 	pool := cpgrpc.NewClientPool()
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
-	terminalSvc := service.NewTerminalService(db, cfg.JWT.Secret)
+	terminalSvc := service.NewTerminalService(db, cfg.JWT.Secret, fmt.Sprintf("ws://localhost:%d", cfg.Server.Port))
 	fileSvc := service.NewFileService(db, pool)
 	botSvc := service.NewBotService(db)
 	alertSvc := service.NewAlertService(db)
@@ -69,11 +70,15 @@ func main() {
 		Audit:    auditSvc,
 	}, cfg.JWT.Secret)
 
+	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）
+	terminalProxy := service.NewTerminalProxy(cfg.JWT.Secret, terminalSvc)
+	r.GET("/ws/terminal", gin.WrapF(terminalProxy.Handler()))
+
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	slog.Info("Control Plane 启动", "addr", addr)
 
 	// 启动 gRPC 服务器（用于 Worker Node 注册和心跳）
-	grpcHandler := cpgrpc.NewControlPlaneHandler(db)
+	grpcHandler := cpgrpc.NewControlPlaneHandler(db, pool)
 	grpcServer := grpc.NewServer()
 	workerpb.RegisterWorkerServiceServer(grpcServer, grpcHandler)
 

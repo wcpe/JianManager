@@ -106,6 +106,11 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		return nil, err
 	}
 
+	// 同步注册实例到 Worker Node
+	if err := s.registerOnWorker(instance); err != nil {
+		slog.Warn("实例已创建但未注册到 Worker，启动时将重试", "instanceId", instance.UUID, "error", err)
+	}
+
 	return instance, nil
 }
 
@@ -179,7 +184,8 @@ func (s *InstanceService) Delete(id uint) error {
 	if err != nil {
 		return err
 	}
-	if instance.Status != model.InstanceStatusStopped {
+	// 只允许删除已停止或已崩溃的实例
+	if instance.Status != model.InstanceStatusStopped && instance.Status != model.InstanceStatusCrashed {
 		return ErrInstanceRunning
 	}
 
@@ -257,6 +263,37 @@ func (s *InstanceService) Kill(id uint) error {
 	return nil
 }
 
+// registerOnWorker 将实例注册到 Worker Node 的进程管理器。
+func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
+	var node model.Node
+	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
+		return fmt.Errorf("查找节点失败: %w", err)
+	}
+
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return fmt.Errorf("节点 %s 未连接", node.UUID)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.CreateInstance(ctx, &workerpb.CreateInstanceRequest{
+		InstanceUuid: instance.UUID,
+		Name:         instance.Name,
+		StartCommand: instance.StartCommand,
+		WorkDir:      instance.WorkDir,
+		AutoRestart:  instance.AutoRestart,
+	})
+	if err != nil {
+		return fmt.Errorf("Worker CreateInstance 失败: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("Worker CreateInstance 失败: %s", resp.Error)
+	}
+	return nil
+}
+
 // delegateToWorker 委托实例操作给 Worker Node。
 func (s *InstanceService) delegateToWorker(instance *model.Instance, action string) {
 	// 查找节点
@@ -283,19 +320,30 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 	}
 
 	var err error
+	var resp *workerpb.InstanceActionResponse
 	switch action {
 	case "start":
-		_, err = client.Worker.StartInstance(ctx, req)
+		// 确保实例已注册到 Worker（Create 时可能 Worker 离线）
+		if regErr := s.registerOnWorker(instance); regErr != nil {
+			slog.Debug("实例已在 Worker 注册或注册失败", "instanceId", instance.UUID, "error", regErr)
+		}
+		resp, err = client.Worker.StartInstance(ctx, req)
 	case "stop":
-		_, err = client.Worker.StopInstance(ctx, req)
+		resp, err = client.Worker.StopInstance(ctx, req)
 	case "restart":
-		_, err = client.Worker.RestartInstance(ctx, req)
+		resp, err = client.Worker.RestartInstance(ctx, req)
 	case "kill":
-		_, err = client.Worker.KillInstance(ctx, req)
+		resp, err = client.Worker.KillInstance(ctx, req)
 	}
 
 	if err != nil {
 		slog.Error("Worker 操作失败", "action", action, "instanceId", instance.UUID, "error", err)
+		s.updateStatusAsync(instance.ID, model.InstanceStatusCrashed)
+		return
+	}
+
+	if resp != nil && !resp.Success {
+		slog.Error("Worker 操作未成功", "action", action, "instanceId", instance.UUID, "error", resp.Error)
 		s.updateStatusAsync(instance.ID, model.InstanceStatusCrashed)
 		return
 	}
@@ -351,4 +399,45 @@ func (s *InstanceService) transition(id uint, target model.InstanceStatus, actio
 // UpdateStatus 直接更新实例状态（供 Worker 回调使用）。
 func (s *InstanceService) UpdateStatus(id uint, status model.InstanceStatus) error {
 	return s.db.Model(&model.Instance{}).Where("id = ?", id).Update("status", status).Error
+}
+
+// MetricsData 实例指标数据。
+type MetricsData struct {
+	TPS           float32 `json:"tps"`
+	OnlinePlayers int32   `json:"onlinePlayers"`
+	MemoryMB      int64   `json:"memoryMb"`
+}
+
+// GetMetrics 通过 gRPC 从 Worker 获取实例指标。
+func (s *InstanceService) GetMetrics(id uint) (*MetricsData, error) {
+	instance, err := s.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+
+	var node model.Node
+	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
+		return nil, fmt.Errorf("查找节点失败: %w", err)
+	}
+
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return nil, fmt.Errorf("节点 %s 未连接", node.UUID)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.GetInstanceMetrics(ctx, &workerpb.GetInstanceMetricsRequest{
+		InstanceUuid: instance.UUID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("获取指标失败: %w", err)
+	}
+
+	return &MetricsData{
+		TPS:           resp.Tps,
+		OnlinePlayers: resp.OnlinePlayers,
+		MemoryMB:      resp.MemoryMb,
+	}, nil
 }

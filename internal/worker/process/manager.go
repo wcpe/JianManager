@@ -2,11 +2,16 @@ package process
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
 	"time"
+
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 )
 
 // InstanceState 实例运行状态。
@@ -31,15 +36,17 @@ type Instance struct {
 	RCONPassword string
 	State        InstanceState
 	Cmd          *exec.Cmd
+	Stdin        io.WriteCloser // stdin 管道，在 Start 前创建
 	AutoRestart  bool
 	CrashCount   int
 }
 
 // Manager 进程管理器。
 type Manager struct {
-	mu        sync.RWMutex
-	instances map[string]*Instance
+	mu         sync.RWMutex
+	instances  map[string]*Instance
 	serversDir string
+	onOutput   func(instanceID string, stream string, data []byte)
 }
 
 // NewManager 创建进程管理器。
@@ -48,6 +55,57 @@ func NewManager(serversDir string) *Manager {
 		instances:  make(map[string]*Instance),
 		serversDir: serversDir,
 	}
+}
+
+// SetOutputHandler 设置进程输出回调。
+// 输出会路由到此处（用于桥接 WebSocket 终端）。
+func (m *Manager) SetOutputHandler(handler func(instanceID string, stream string, data []byte)) {
+	m.onOutput = handler
+}
+
+// instanceWriter 将进程输出路由到 Manager 的 onOutput 回调。
+// Windows 上自动将 GBK 编码转换为 UTF-8。
+type instanceWriter struct {
+	manager    *Manager
+	instanceID string
+	stream     string // "stdout" or "stderr"
+}
+
+func (w *instanceWriter) Write(p []byte) (n int, err error) {
+	if w.manager.onOutput != nil {
+		data := p
+		if runtime.GOOS == "windows" {
+			// Windows cmd.exe 子进程输出默认 GBK，转换为 UTF-8
+			utf8Data, _, transformErr := transform.Bytes(simplifiedchinese.GBK.NewDecoder(), p)
+			if transformErr == nil {
+				data = utf8Data
+			}
+			// 转换失败则用原始数据（可能本身就是 UTF-8）
+		}
+		w.manager.onOutput(w.instanceID, w.stream, data)
+	}
+	return len(p), nil
+}
+
+// InstanceSnapshot 表示单个实例的状态快照（用于心跳上报）。
+type InstanceSnapshot struct {
+	UUID  string
+	State string // STOPPED, STARTING, RUNNING, STOPPING, CRASHED
+}
+
+// GetAllInstanceStates 返回所有实例的状态快照（用于心跳上报）。
+func (m *Manager) GetAllInstanceStates() []InstanceSnapshot {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	states := make([]InstanceSnapshot, 0, len(m.instances))
+	for uuid, inst := range m.instances {
+		states = append(states, InstanceSnapshot{
+			UUID:  uuid,
+			State: string(inst.State),
+		})
+	}
+	return states
 }
 
 // Create 创建实例（但不启动）。
@@ -117,16 +175,33 @@ func (m *Manager) Start(uuid string) error {
 	inst.State = StateStarting
 	m.mu.Unlock()
 
-	cmd := exec.Command("sh", "-c", inst.StartCommand)
+	// 跨平台 shell 命令执行
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		// 不加 chcp — Go 的 instanceWriter 会将 GBK 输出转换为 UTF-8
+		cmd = exec.Command("cmd.exe", "/c", inst.StartCommand)
+	} else {
+		cmd = exec.Command("sh", "-c", inst.StartCommand)
+	}
 	cmd.Dir = inst.WorkDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = &instanceWriter{manager: m, instanceID: uuid, stream: "stdout"}
+	cmd.Stderr = &instanceWriter{manager: m, instanceID: uuid, stream: "stderr"}
+
+	// 创建 stdin 管道（必须在 Start 前）
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		m.mu.Lock()
+		inst.State = StateCrashed
+		m.mu.Unlock()
+		return fmt.Errorf("创建 stdin 管道失败: %w", err)
+	}
 
 	for k, v := range inst.EnvVars {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 
 	if err := cmd.Start(); err != nil {
+		stdin.Close()
 		m.mu.Lock()
 		inst.State = StateCrashed
 		m.mu.Unlock()
@@ -135,6 +210,7 @@ func (m *Manager) Start(uuid string) error {
 
 	m.mu.Lock()
 	inst.Cmd = cmd
+	inst.Stdin = stdin
 	inst.State = StateRunning
 	m.mu.Unlock()
 
@@ -143,10 +219,16 @@ func (m *Manager) Start(uuid string) error {
 	// 异步等待进程结束
 	go func() {
 		err := cmd.Wait()
+		// 关闭 stdin 管道
+		if inst.Stdin != nil {
+			inst.Stdin.Close()
+		}
 		m.mu.Lock()
 
-		if inst.State == StateStopping {
+		// Stopping/Stopped 都视为正常停止（Windows Kill 返回非零退出码）
+		if inst.State == StateStopping || inst.State == StateStopped {
 			inst.State = StateStopped
+			inst.Cmd = nil
 			inst.CrashCount = 0
 			m.mu.Unlock()
 			slog.Info("实例已停止", "instanceId", uuid)
@@ -196,7 +278,21 @@ func (m *Manager) Stop(uuid string) error {
 	inst.State = StateStopping
 	m.mu.Unlock()
 
-	return inst.Cmd.Process.Signal(os.Interrupt)
+	// Windows 上 os.Interrupt 对多数进程无效，直接 Kill 更可靠
+	if runtime.GOOS == "windows" {
+		if err := inst.Cmd.Process.Kill(); err != nil {
+			return fmt.Errorf("终止实例 %s 失败: %w", uuid, err)
+		}
+	} else {
+		if err := inst.Cmd.Process.Signal(os.Interrupt); err != nil {
+			// Interrupt 失败则回退到 Kill
+			if err := inst.Cmd.Process.Kill(); err != nil {
+				return fmt.Errorf("终止实例 %s 失败: %w", uuid, err)
+			}
+		}
+	}
+
+	return nil
 }
 
 // Kill 强制终止实例。
@@ -266,12 +362,11 @@ func (m *Manager) SendCommand(uuid, command string) error {
 		return fmt.Errorf("实例 %s 未运行", uuid)
 	}
 
-	stdin, err := inst.Cmd.StdinPipe()
-	if err != nil {
-		return fmt.Errorf("获取 stdin 失败: %w", err)
+	if inst.Stdin == nil {
+		return fmt.Errorf("实例 %s 的 stdin 不可用", uuid)
 	}
 
-	_, err = fmt.Fprintln(stdin, command)
+	_, err := fmt.Fprintln(inst.Stdin, command)
 	return err
 }
 

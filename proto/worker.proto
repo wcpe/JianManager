@@ -72,6 +72,12 @@ message HeartbeatRequest {
   float disk_usage = 4;
   int64 memory_used_mb = 5;
   int64 disk_used_mb = 6;
+  repeated InstanceState instances = 7;  // 实例状态快照
+}
+
+message InstanceState {
+  string instance_uuid = 1;
+  string state = 2; // STOPPED, STARTING, RUNNING, STOPPING, CRASHED
 }
 
 message HeartbeatResponse {

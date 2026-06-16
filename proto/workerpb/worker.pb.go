@@ -189,6 +189,16 @@ type HeartbeatRequest struct {
 	DiskUsage     float32                `protobuf:"fixed32,4,opt,name=disk_usage,json=diskUsage,proto3" json:"disk_usage,omitempty"`
 	MemoryUsedMb  int64                  `protobuf:"varint,5,opt,name=memory_used_mb,json=memoryUsedMb,proto3" json:"memory_used_mb,omitempty"`
 	DiskUsedMb    int64                  `protobuf:"varint,6,opt,name=disk_used_mb,json=diskUsedMb,proto3" json:"disk_used_mb,omitempty"`
+	Instances     []*InstanceState       `protobuf:"bytes,7,rep,name=instances,proto3" json:"instances,omitempty"` // 实例状态快照
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+// InstanceState 实例状态快照。
+type InstanceState struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceUuid  string                 `protobuf:"bytes,1,opt,name=instance_uuid,json=instanceUuid,proto3" json:"instance_uuid,omitempty"`
+	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -263,6 +273,27 @@ func (x *HeartbeatRequest) GetDiskUsedMb() int64 {
 		return x.DiskUsedMb
 	}
 	return 0
+}
+
+func (x *HeartbeatRequest) GetInstances() []*InstanceState {
+	if x != nil {
+		return x.Instances
+	}
+	return nil
+}
+
+func (x *InstanceState) GetInstanceUuid() string {
+	if x != nil {
+		return x.InstanceUuid
+	}
+	return ""
+}
+
+func (x *InstanceState) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
 }
 
 type HeartbeatResponse struct {
