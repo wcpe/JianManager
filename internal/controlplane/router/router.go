@@ -31,6 +31,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	r := gin.Default()
 
 	api := r.Group("/api/v1")
+	api.Use(middleware.RateLimit(10, 20)) // 10 请求/秒，桶容量 20
 
 	// 公开路由（无需认证）
 	authHandler := NewAuthHandler(svcs.Auth)

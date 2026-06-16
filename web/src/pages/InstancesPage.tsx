@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { Link } from 'react-router'
 import { useInstances, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance } from '@/api/instances'
+import CreateInstanceDialog from '@/components/CreateInstanceDialog'
 
 const statusConfig: Record<string, { text: string; color: string }> = {
   STOPPED: { text: '停止', color: 'text-gray-500' },
@@ -10,6 +12,7 @@ const statusConfig: Record<string, { text: string; color: string }> = {
 }
 
 export default function InstancesPage() {
+  const [showCreate, setShowCreate] = useState(false)
   const { data: instances, isLoading } = useInstances()
   const start = useStartInstance()
   const stop = useStopInstance()
@@ -20,7 +23,15 @@ export default function InstancesPage() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">实例管理</h1>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+        >
+          + 创建实例
+        </button>
       </div>
+
+      <CreateInstanceDialog open={showCreate} onClose={() => setShowCreate(false)} />
 
       {isLoading ? (
         <p className="text-muted-foreground">加载中...</p>
