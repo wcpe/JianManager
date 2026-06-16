@@ -21,14 +21,15 @@ export interface NodeInfo {
   createdAt: string
 }
 
-/** 获取节点列表。 */
-export function useNodes() {
+/** 获取节点列表，支持自动轮询刷新。 */
+export function useNodes(options?: { refetchInterval?: number }) {
   return useQuery({
     queryKey: ['nodes'],
     queryFn: async () => {
       const { data } = await api.get<NodeInfo[]>('/nodes')
       return data
     },
+    refetchInterval: options?.refetchInterval,
   })
 }
 

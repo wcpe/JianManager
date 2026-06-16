@@ -7,7 +7,7 @@ const statusLabel: Record<number, { text: string; color: string }> = {
 }
 
 export default function NodesPage() {
-  const { data: nodes, isLoading } = useNodes()
+  const { data: nodes, isLoading } = useNodes({ refetchInterval: 30_000 })
 
   return (
     <div>
@@ -27,6 +27,7 @@ export default function NodesPage() {
                 <th className="text-left p-3 font-medium">状态</th>
                 <th className="text-left p-3 font-medium">CPU</th>
                 <th className="text-left p-3 font-medium">内存</th>
+                <th className="text-left p-3 font-medium">磁盘</th>
                 <th className="text-left p-3 font-medium">系统</th>
               </tr>
             </thead>
@@ -42,13 +43,14 @@ export default function NodesPage() {
                     </td>
                     <td className="p-3">{node.cpuUsage ? `${(node.cpuUsage * 100).toFixed(0)}%` : '--'}</td>
                     <td className="p-3">{node.memoryUsage ? `${(node.memoryUsage * 100).toFixed(0)}%` : '--'}</td>
+                    <td className="p-3">{node.diskUsage ? `${(node.diskUsage * 100).toFixed(0)}%` : '--'}</td>
                     <td className="p-3 text-muted-foreground">{node.os} {node.arch}</td>
                   </tr>
                 )
               })}
               {(!nodes || nodes.length === 0) && (
                 <tr>
-                  <td colSpan={6} className="p-6 text-center text-muted-foreground">
+                  <td colSpan={7} className="p-6 text-center text-muted-foreground">
                     暂无节点
                   </td>
                 </tr>
