@@ -37,7 +37,7 @@ func (h *TerminalHandler) IssueToken(c *gin.Context) {
 		return
 	}
 
-	token, err := h.terminalSvc.IssueToken(id, permission)
+	token, err := h.terminalSvc.IssueToken(id, permission, c.Request.Host)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": err.Error()})
 		return

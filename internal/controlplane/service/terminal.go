@@ -31,7 +31,8 @@ type TerminalToken struct {
 }
 
 // IssueToken 签发一次性终端连接 token（30s 有效期）。
-func (s *TerminalService) IssueToken(instanceID uint, permission string) (*TerminalToken, error) {
+// requestHost 为浏览器请求的 Host 头，用于构造 WS URL；空值回退到 baseURL。
+func (s *TerminalService) IssueToken(instanceID uint, permission, requestHost string) (*TerminalToken, error) {
 	// 验证实例存在
 	var instance model.Instance
 	if err := s.db.First(&instance, instanceID).Error; err != nil {
@@ -60,8 +61,15 @@ func (s *TerminalService) IssueToken(instanceID uint, permission string) (*Termi
 	}
 
 	// WS URL 指向 CP 代理端点（浏览器 → CP → Worker）
-	// 不含 token 参数，由前端拼接
-	wsURL := fmt.Sprintf("%s/ws/terminal", s.baseURL)
+	// 使用浏览器请求的 Host 构造，支持生产环境非 localhost 访问
+	host := requestHost
+	if host == "" {
+		host = s.baseURL
+	} else {
+		// 从 requestHost (如 192.168.1.100:8080) 构造 ws:// URL
+		host = fmt.Sprintf("ws://%s", host)
+	}
+	wsURL := fmt.Sprintf("%s/ws/terminal", host)
 
 	return &TerminalToken{
 		Token:     tokenStr,
