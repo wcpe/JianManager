@@ -55,16 +55,16 @@ func main() {
 	auditSvc := service.NewAuditService(db)
 	authzSvc := service.NewAuthzService(db)
 
-	// TODO(FR-011): 告警评估器装配
-	// alertEvaluator := service.NewAlertEvaluator(db)
-	// alertEvaluator.Start()
-	// defer alertEvaluator.Stop()
+	// 告警评估器：每 60s 检测节点指标，触发 Webhook 通知
+	alertEvaluator := service.NewAlertEvaluator(db)
+	alertEvaluator.Start()
+	defer alertEvaluator.Stop()
 
-	// TODO(FR-012): 定时任务调度器装配
-	// scheduleExecutor := service.NewScheduleExecutorImpl(db, instanceSvc, backupSvc, pool)
-	// scheduler := service.NewScheduler(db, scheduleExecutor)
-	// scheduler.Start()
-	// defer scheduler.Stop()
+	// 定时任务调度器：每分钟检查到期任务并执行
+	scheduleExecutor := service.NewScheduleExecutorImpl(db, instanceSvc, backupSvc, pool)
+	scheduler := service.NewScheduler(db, scheduleExecutor)
+	scheduler.Start()
+	defer scheduler.Stop()
 
 	r := router.Setup(&router.Services{
 		Auth:     authSvc,
