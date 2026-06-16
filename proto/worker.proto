@@ -38,6 +38,8 @@ service WorkerService {
   rpc WriteFile(WriteFileRequest) returns (WriteFileResponse);
   // DeleteFile 删除文件。
   rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
+  // RenameFile 重命名文件。
+  rpc RenameFile(RenameFileRequest) returns (RenameFileResponse);
   // GetNodeMetrics 获取节点指标。
   rpc GetNodeMetrics(GetNodeMetricsRequest) returns (GetNodeMetricsResponse);
   // GetInstanceMetrics 获取实例指标。
@@ -211,6 +213,17 @@ message DeleteFileRequest {
 }
 
 message DeleteFileResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message RenameFileRequest {
+  string instance_uuid = 1;
+  string old_path = 2;
+  string new_path = 3;
+}
+
+message RenameFileResponse {
   bool success = 1;
   string error = 2;
 }

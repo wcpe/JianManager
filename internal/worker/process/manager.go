@@ -53,6 +53,8 @@ type Manager struct {
 	onOutput   func(instanceID string, stream string, data []byte)
 	// pidDir 存放 daemon wrapper 的 PID 文件目录。
 	pidDir string
+	// onStateChange 实例状态变更回调，用于 StreamInstanceEvents 推送。
+	onStateChange func(instanceUUID string, oldState, newState InstanceState)
 }
 
 // NewManager 创建进程管理器。
@@ -68,6 +70,19 @@ func NewManager(serversDir string) *Manager {
 // 输出会路由到此处（用于桥接 WebSocket 终端）。
 func (m *Manager) SetOutputHandler(handler func(instanceID string, stream string, data []byte)) {
 	m.onOutput = handler
+}
+
+// SetStateChangeHandler 设置实例状态变更回调。
+// 每次实例状态发生转换时调用，用于 StreamInstanceEvents 推送。
+func (m *Manager) SetStateChangeHandler(handler func(instanceUUID string, oldState, newState InstanceState)) {
+	m.onStateChange = handler
+}
+
+// emitStateChange 触发状态变更回调。调用方需持有或不持有锁均可（回调在锁外执行）。
+func (m *Manager) emitStateChange(instanceUUID string, oldState, newState InstanceState) {
+	if m.onStateChange != nil && oldState != newState {
+		m.onStateChange(instanceUUID, oldState, newState)
+	}
 }
 
 // InstanceSnapshot 表示单个实例的状态快照（用于心跳上报）。
@@ -176,19 +191,26 @@ func (m *Manager) Start(uuid string) error {
 		inst.strategy = strategy
 	}
 	strategy := inst.strategy
+	oldState := inst.State
 	inst.State = StateStarting
 	m.mu.Unlock()
 
+	m.emitStateChange(uuid, oldState, StateStarting)
+
 	if err := strategy.Start(context.Background()); err != nil {
 		m.mu.Lock()
+		prevState := inst.State
 		inst.State = StateCrashed
 		m.mu.Unlock()
+		m.emitStateChange(uuid, prevState, StateCrashed)
 		return fmt.Errorf("启动实例 %s 失败: %w", uuid, err)
 	}
 
 	m.mu.Lock()
+	prevState := inst.State
 	inst.State = StateRunning
 	m.mu.Unlock()
+	m.emitStateChange(uuid, prevState, StateRunning)
 	slog.Info("实例已启动", "instanceId", uuid)
 	return nil
 }
@@ -203,17 +225,21 @@ func (m *Manager) Stop(uuid string) error {
 	}
 
 	m.mu.Lock()
+	oldState := inst.State
 	inst.State = StateStopping
 	m.mu.Unlock()
+	m.emitStateChange(uuid, oldState, StateStopping)
 
 	if err := inst.strategy.Stop(); err != nil {
 		return fmt.Errorf("停止实例 %s 失败: %w", uuid, err)
 	}
 
 	m.mu.Lock()
+	oldState = inst.State
 	inst.State = StateStopped
 	inst.CrashCount = 0
 	m.mu.Unlock()
+	m.emitStateChange(uuid, oldState, StateStopped)
 	return nil
 }
 
@@ -234,8 +260,10 @@ func (m *Manager) Kill(uuid string) error {
 	}
 
 	m.mu.Lock()
+	oldState := inst.State
 	inst.State = StateStopped
 	m.mu.Unlock()
+	m.emitStateChange(uuid, oldState, StateStopped)
 
 	return nil
 }

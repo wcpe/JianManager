@@ -35,6 +35,7 @@ const (
 	WorkerService_ReadFile_FullMethodName             = "/worker.WorkerService/ReadFile"
 	WorkerService_WriteFile_FullMethodName            = "/worker.WorkerService/WriteFile"
 	WorkerService_DeleteFile_FullMethodName           = "/worker.WorkerService/DeleteFile"
+	WorkerService_RenameFile_FullMethodName           = "/worker.WorkerService/RenameFile"
 	WorkerService_GetNodeMetrics_FullMethodName       = "/worker.WorkerService/GetNodeMetrics"
 	WorkerService_GetInstanceMetrics_FullMethodName   = "/worker.WorkerService/GetInstanceMetrics"
 )
@@ -77,6 +78,8 @@ type WorkerServiceClient interface {
 	WriteFile(ctx context.Context, in *WriteFileRequest, opts ...grpc.CallOption) (*WriteFileResponse, error)
 	// DeleteFile 删除文件。
 	DeleteFile(ctx context.Context, in *DeleteFileRequest, opts ...grpc.CallOption) (*DeleteFileResponse, error)
+	// RenameFile 重命名文件。
+	RenameFile(ctx context.Context, in *RenameFileRequest, opts ...grpc.CallOption) (*RenameFileResponse, error)
 	// GetNodeMetrics 获取节点指标。
 	GetNodeMetrics(ctx context.Context, in *GetNodeMetricsRequest, opts ...grpc.CallOption) (*GetNodeMetricsResponse, error)
 	// GetInstanceMetrics 获取实例指标。
@@ -263,6 +266,16 @@ func (c *workerServiceClient) DeleteFile(ctx context.Context, in *DeleteFileRequ
 	return out, nil
 }
 
+func (c *workerServiceClient) RenameFile(ctx context.Context, in *RenameFileRequest, opts ...grpc.CallOption) (*RenameFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenameFileResponse)
+	err := c.cc.Invoke(ctx, WorkerService_RenameFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) GetNodeMetrics(ctx context.Context, in *GetNodeMetricsRequest, opts ...grpc.CallOption) (*GetNodeMetricsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetNodeMetricsResponse)
@@ -321,6 +334,8 @@ type WorkerServiceServer interface {
 	WriteFile(context.Context, *WriteFileRequest) (*WriteFileResponse, error)
 	// DeleteFile 删除文件。
 	DeleteFile(context.Context, *DeleteFileRequest) (*DeleteFileResponse, error)
+	// RenameFile 重命名文件。
+	RenameFile(context.Context, *RenameFileRequest) (*RenameFileResponse, error)
 	// GetNodeMetrics 获取节点指标。
 	GetNodeMetrics(context.Context, *GetNodeMetricsRequest) (*GetNodeMetricsResponse, error)
 	// GetInstanceMetrics 获取实例指标。
@@ -382,6 +397,9 @@ func (UnimplementedWorkerServiceServer) WriteFile(context.Context, *WriteFileReq
 }
 func (UnimplementedWorkerServiceServer) DeleteFile(context.Context, *DeleteFileRequest) (*DeleteFileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteFile not implemented")
+}
+func (UnimplementedWorkerServiceServer) RenameFile(context.Context, *RenameFileRequest) (*RenameFileResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenameFile not implemented")
 }
 func (UnimplementedWorkerServiceServer) GetNodeMetrics(context.Context, *GetNodeMetricsRequest) (*GetNodeMetricsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNodeMetrics not implemented")
@@ -680,6 +698,24 @@ func _WorkerService_DeleteFile_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_RenameFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenameFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).RenameFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_RenameFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).RenameFile(ctx, req.(*RenameFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_GetNodeMetrics_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetNodeMetricsRequest)
 	if err := dec(in); err != nil {
@@ -778,6 +814,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteFile",
 			Handler:    _WorkerService_DeleteFile_Handler,
+		},
+		{
+			MethodName: "RenameFile",
+			Handler:    _WorkerService_RenameFile_Handler,
 		},
 		{
 			MethodName: "GetNodeMetrics",
