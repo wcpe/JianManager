@@ -3,6 +3,7 @@ package router
 import (
 	"github.com/gin-gonic/gin"
 
+	"github.com/wxys233/JianManager/internal/controlplane/embed"
 	"github.com/wxys233/JianManager/internal/controlplane/middleware"
 	"github.com/wxys233/JianManager/internal/controlplane/model"
 	"github.com/wxys233/JianManager/internal/controlplane/service"
@@ -87,6 +88,9 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		auditHandler := NewAuditHandler(svcs.Audit)
 		auditHandler.RegisterRoutes(admin)
 	}
+
+	// 前端静态文件（go:embed 嵌入）
+	embed.RegisterStaticRoutes(r)
 
 	return r
 }
