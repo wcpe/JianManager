@@ -169,6 +169,15 @@ func TestWrapper_PIDFileCleanup(t *testing.T) {
 	conn, err := Dial(addr)
 	require.NoError(t, err)
 
+	// 捕获 Java pid：stop 后 wrapper 会清理 PID 文件，届时无法再读。
+	pf := NewPIDFile(PIDFileName(pidDir, uuid))
+	require.Eventually(t, func() bool {
+		rec, err := pf.ReadRecord()
+		return err == nil && rec.JavaPID != 0
+	}, 3*time.Second, 50*time.Millisecond, "应能读到 Java pid")
+	rec, _ := pf.ReadRecord()
+	javaPID := rec.JavaPID
+
 	stopFrame := &Frame{Header: Header{Channel: ChannelControl, Type: TypeCommand}, Payload: []byte(ControlStop)}
 	require.NoError(t, stopFrame.Encode(conn))
 	// 等待 wrapper 处理 stop 后再关闭连接，避免 EOF 抢先于 stop 帧
@@ -183,4 +192,13 @@ func TestWrapper_PIDFileCleanup(t *testing.T) {
 	// PID 文件应已清理
 	_, err = os.Stat(filepath.Join(pidDir, uuid+".pid"))
 	assert.True(t, os.IsNotExist(err), "PID 文件应已被清理")
+
+	// Windows 上 taskkill /T /F 异步终止进程树，Java 进程的句柄可能仍占用
+	// 工作目录导致 t.TempDir() 清理失败。等待 Java pid 真正消失后再返回，
+	// 让 TempDir 的 RemoveAll 能成功。
+	if javaPID != 0 {
+		require.Eventually(t, func() bool {
+			return !IsPIDAlive(javaPID)
+		}, 5*time.Second, 50*time.Millisecond, "Java 进程应已退出")
+	}
 }
