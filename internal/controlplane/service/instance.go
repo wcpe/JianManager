@@ -1,13 +1,17 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"gorm.io/gorm"
 
 	"github.com/wxys233/JianManager/internal/controlplane/model"
+	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
+	"github.com/wxys233/JianManager/proto/workerpb"
 )
 
 var (
@@ -31,11 +35,12 @@ var validTransitions = map[model.InstanceStatus][]model.InstanceStatus{
 type InstanceService struct {
 	db       *gorm.DB
 	groupSvc *GroupService
+	pool     *cpgrpc.ClientPool
 }
 
 // NewInstanceService 创建实例服务。
-func NewInstanceService(db *gorm.DB, groupSvc *GroupService) *InstanceService {
-	return &InstanceService{db: db, groupSvc: groupSvc}
+func NewInstanceService(db *gorm.DB, groupSvc *GroupService, pool *cpgrpc.ClientPool) *InstanceService {
+	return &InstanceService{db: db, groupSvc: groupSvc, pool: pool}
 }
 
 // CreateInstanceRequest 创建实例请求。
@@ -186,14 +191,38 @@ func (s *InstanceService) Delete(id uint) error {
 	})
 }
 
-// Start 启动实例（状态转换 STOPPED → STARTING）。
+// Start 启动实例（委托给 Worker Node）。
 func (s *InstanceService) Start(id uint) error {
-	return s.transition(id, model.InstanceStatusStarting, "启动")
+	instance, err := s.GetByID(id)
+	if err != nil {
+		return err
+	}
+
+	// 状态转换
+	if err := s.transition(id, model.InstanceStatusStarting, "启动"); err != nil {
+		return err
+	}
+
+	// 委托给 Worker Node
+	go s.delegateToWorker(instance, "start")
+
+	return nil
 }
 
-// Stop 停止实例（状态转换 RUNNING → STOPPING）。
+// Stop 停止实例（委托给 Worker Node）。
 func (s *InstanceService) Stop(id uint) error {
-	return s.transition(id, model.InstanceStatusStopping, "停止")
+	instance, err := s.GetByID(id)
+	if err != nil {
+		return err
+	}
+
+	if err := s.transition(id, model.InstanceStatusStopping, "停止"); err != nil {
+		return err
+	}
+
+	go s.delegateToWorker(instance, "stop")
+
+	return nil
 }
 
 // Restart 重启实例。
@@ -203,19 +232,93 @@ func (s *InstanceService) Restart(id uint) error {
 		return err
 	}
 
-	if instance.Status == model.InstanceStatusRunning {
-		if err := s.transition(id, model.InstanceStatusStopping, "重启-停止"); err != nil {
-			return err
-		}
-		return s.transition(id, model.InstanceStatusStarting, "重启-启动")
+	if err := s.transition(id, model.InstanceStatusStopping, "重启-停止"); err != nil {
+		return err
 	}
 
-	return s.transition(id, model.InstanceStatusStarting, "重启")
+	go s.delegateToWorker(instance, "restart")
+
+	return nil
 }
 
 // Kill 强制终止实例。
 func (s *InstanceService) Kill(id uint) error {
-	return s.transition(id, model.InstanceStatusStopped, "强制终止")
+	instance, err := s.GetByID(id)
+	if err != nil {
+		return err
+	}
+
+	if err := s.transition(id, model.InstanceStatusStopped, "强制终止"); err != nil {
+		return err
+	}
+
+	go s.delegateToWorker(instance, "kill")
+
+	return nil
+}
+
+// delegateToWorker 委托实例操作给 Worker Node。
+func (s *InstanceService) delegateToWorker(instance *model.Instance, action string) {
+	// 查找节点
+	var node model.Node
+	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
+		slog.Error("查找节点失败", "instanceId", instance.UUID, "error", err)
+		s.updateStatusAsync(instance.ID, model.InstanceStatusCrashed)
+		return
+	}
+
+	// 获取 gRPC 客户端
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		slog.Error("节点未连接", "nodeUUID", node.UUID)
+		s.updateStatusAsync(instance.ID, model.InstanceStatusCrashed)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req := &workerpb.InstanceActionRequest{
+		InstanceUuid: instance.UUID,
+	}
+
+	var err error
+	switch action {
+	case "start":
+		_, err = client.Worker.StartInstance(ctx, req)
+	case "stop":
+		_, err = client.Worker.StopInstance(ctx, req)
+	case "restart":
+		_, err = client.Worker.RestartInstance(ctx, req)
+	case "kill":
+		_, err = client.Worker.KillInstance(ctx, req)
+	}
+
+	if err != nil {
+		slog.Error("Worker 操作失败", "action", action, "instanceId", instance.UUID, "error", err)
+		s.updateStatusAsync(instance.ID, model.InstanceStatusCrashed)
+		return
+	}
+
+	// 操作成功，更新状态
+	var targetStatus model.InstanceStatus
+	switch action {
+	case "start":
+		targetStatus = model.InstanceStatusRunning
+	case "stop", "kill":
+		targetStatus = model.InstanceStatusStopped
+	case "restart":
+		targetStatus = model.InstanceStatusRunning
+	}
+
+	s.updateStatusAsync(instance.ID, targetStatus)
+	slog.Info("Worker 操作成功", "action", action, "instanceId", instance.UUID)
+}
+
+func (s *InstanceService) updateStatusAsync(id uint, status model.InstanceStatus) {
+	if err := s.UpdateStatus(id, status); err != nil {
+		slog.Error("更新实例状态失败", "instanceId", id, "status", status, "error", err)
+	}
 }
 
 // transition 执行状态转换。
