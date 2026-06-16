@@ -27,6 +27,8 @@ type Instance struct {
 	StartCommand string
 	WorkDir      string
 	EnvVars      map[string]string
+	RCONPort     int
+	RCONPassword string
 	State        InstanceState
 	Cmd          *exec.Cmd
 	AutoRestart  bool
@@ -69,6 +71,34 @@ func (m *Manager) Create(uuid, name, startCommand, workDir string, envVars map[s
 
 	slog.Info("实例已创建", "instanceId", uuid, "name", name, "autoRestart", autoRestart)
 	return nil
+}
+
+// SetRCONConfig 设置实例的 RCON 配置。
+func (m *Manager) SetRCONConfig(uuid string, port int, password string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	inst, exists := m.instances[uuid]
+	if !exists {
+		return fmt.Errorf("实例 %s 不存在", uuid)
+	}
+
+	inst.RCONPort = port
+	inst.RCONPassword = password
+	return nil
+}
+
+// GetRCONConfig 获取实例的 RCON 配置。
+func (m *Manager) GetRCONConfig(uuid string) (port int, password string, err error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	inst, exists := m.instances[uuid]
+	if !exists {
+		return 0, "", fmt.Errorf("实例 %s 不存在", uuid)
+	}
+
+	return inst.RCONPort, inst.RCONPassword, nil
 }
 
 // Start 启动实例。

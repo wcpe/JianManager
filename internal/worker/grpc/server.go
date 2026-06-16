@@ -156,8 +156,15 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 	}
 
 	// 通过 RCON 查询 MC 专用指标
-	// TODO: 从实例配置获取 RCON 端口和密码
-	tps, onlinePlayers, _ := metrics.QueryInstanceMetrics("localhost", 25575, "")
+	rconPort, rconPassword, err := s.manager.GetRCONConfig(req.InstanceUuid)
+	if err != nil || rconPort == 0 {
+		// 没有 RCON 配置，返回默认值
+		resp.Tps = 20.0
+		resp.OnlinePlayers = 0
+		return resp, nil
+	}
+
+	tps, onlinePlayers, _ := metrics.QueryInstanceMetrics("localhost", rconPort, rconPassword)
 	resp.Tps = tps
 	resp.OnlinePlayers = onlinePlayers
 	resp.MemoryMb = 0
