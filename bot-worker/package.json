@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "mineflayer": "^4.20.1"
+    "mineflayer": "^4.37.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -1,8 +1,9 @@
 /**
  * IPC 命令分发器。
- * 管理 Bot 实例和行为引擎。
+ * 管理 Bot 实例和行为引擎，通过 Mineflayer 连接 MC 服务器。
  */
 
+import { createBot, type Bot } from 'mineflayer'
 import { sendEvent } from '../index.js'
 import { createBehavior, type Behavior } from '../behavior/index.js'
 import type { IpcCommand, BotConfig } from './types.js'
@@ -12,6 +13,7 @@ interface BotInstance {
   config: BotConfig
   behavior: Behavior
   status: string
+  mcBot: Bot | null
 }
 
 const bots = new Map<string, BotInstance>()
@@ -49,30 +51,85 @@ function createBots(configs: BotConfig[]): void {
     const behavior = createBehavior(config.id, config.behavior || 'idle')
     behavior.start()
 
-    bots.set(config.id, {
+    const instance: BotInstance = {
       config,
       behavior,
       status: 'connecting',
-    })
+      mcBot: null,
+    }
+    bots.set(config.id, instance)
 
     results.push({ id: config.id, status: 'connecting' })
 
-    // TODO: 使用 mineflayer 连接到 MC 服务器
-    // const bot = mineflayer.createBot({ ... })
-    // bot.on('spawn', () => { ... })
-    // bot.on('kicked', () => { ... })
-
-    // 模拟连接成功
-    setTimeout(() => {
-      const instance = bots.get(config.id)
-      if (instance) {
-        instance.status = 'connected'
-        sendEvent({ evt: 'bot-state', bots: [{ id: config.id, status: 'connected' }] })
-      }
-    }, 1000)
+    // 通过 Mineflayer 连接到 MC 服务器
+    connectBot(config.id, config)
   }
 
   sendEvent({ evt: 'bot-state', bots: results })
+}
+
+/** 通过 Mineflayer 连接到 MC 服务器。 */
+function connectBot(botId: string, config: BotConfig): void {
+  try {
+    const mcBot = createBot({
+      host: config.host,
+      port: config.port || 25565,
+      username: config.username || `Bot_${botId.slice(0, 6)}`,
+      version: config.version,
+      hideErrors: true,
+    })
+
+    const instance = bots.get(botId)
+    if (!instance) return
+    instance.mcBot = mcBot
+
+    mcBot.on('spawn', () => {
+      if (instance) {
+        instance.status = 'connected'
+      }
+      sendEvent({ evt: 'bot-state', bots: [{ id: botId, status: 'connected' }] })
+      sendEvent({ evt: 'bot-event', botId, type: 'spawn', data: {} })
+    })
+
+    mcBot.on('kicked', (reason: string) => {
+      if (instance) {
+        instance.status = 'disconnected'
+      }
+      sendEvent({ evt: 'bot-state', bots: [{ id: botId, status: 'disconnected' }] })
+      sendEvent({ evt: 'bot-event', botId, type: 'kicked', data: { reason } })
+    })
+
+    mcBot.on('error', (err: Error) => {
+      sendEvent({ evt: 'bot-error', botId, error: err.message })
+    })
+
+    mcBot.on('end', () => {
+      if (instance) {
+        instance.status = 'disconnected'
+      }
+      sendEvent({ evt: 'bot-state', bots: [{ id: botId, status: 'disconnected' }] })
+    })
+
+    // 行为引擎 tick 循环
+    const tickInterval = setInterval(() => {
+      if (!bots.has(botId)) {
+        clearInterval(tickInterval)
+        return
+      }
+      const inst = bots.get(botId)
+      if (inst && inst.status === 'connected') {
+        inst.behavior.tick().catch((err: Error) => {
+          sendEvent({ evt: 'bot-error', botId, error: err.message })
+        })
+      }
+    }, 250)
+  } catch (err) {
+    const instance = bots.get(botId)
+    if (instance) {
+      instance.status = 'error'
+    }
+    sendEvent({ evt: 'bot-error', botId, error: String(err) })
+  }
 }
 
 /** 停止 Bot。 */
@@ -87,6 +144,10 @@ function stopBots(botIds: string[]): void {
     }
 
     instance.behavior.stop()
+    if (instance.mcBot) {
+      instance.mcBot.quit()
+      instance.mcBot = null
+    }
     bots.delete(id)
     results.push({ id, status: 'stopped' })
   }
@@ -123,7 +184,14 @@ function sendBotCommand(botId: string, command: string): void {
     return
   }
 
-  // TODO: 通过 mineflayer 执行命令
+  if (!instance.mcBot) {
+    sendEvent({ evt: 'bot-error', botId, error: `Bot ${botId} 未连接到 MC 服务器` })
+    return
+  }
+
+  // 通过 Mineflayer 发送聊天命令
+  instance.mcBot.chat(command)
+
   sendEvent({
     evt: 'bot-event',
     botId,

@@ -1,25 +1,30 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"gorm.io/gorm"
 
+	"github.com/wxys233/JianManager/internal/controlplane/grpc"
 	"github.com/wxys233/JianManager/internal/controlplane/model"
+	"github.com/wxys233/JianManager/proto/workerpb"
 )
 
 var ErrBackupNotFound = errors.New("备份不存在")
 
 // BackupService 备份服务。
 type BackupService struct {
-	db *gorm.DB
+	db   *gorm.DB
+	pool *grpc.ClientPool
 }
 
 // NewBackupService 创建备份服务。
-func NewBackupService(db *gorm.DB) *BackupService {
-	return &BackupService{db: db}
+func NewBackupService(db *gorm.DB, pool *grpc.ClientPool) *BackupService {
+	return &BackupService{db: db, pool: pool}
 }
 
 // Create 创建备份。
@@ -45,18 +50,49 @@ func (s *BackupService) executeBackup(backup *model.Backup) {
 	// 更新状态为进行中
 	s.db.Model(backup).Update("status", model.BackupStatusInProgress)
 
-	// TODO: 通过 gRPC 委托给 Worker Node 执行实际备份
-	// Worker Node 需要:
-	// 1. 停止实例（或在运行时创建快照）
-	// 2. 压缩工作目录
-	// 3. 上传备份文件
-	// 4. 返回文件大小
+	// 查找实例和节点
+	var instance model.Instance
+	if err := s.db.First(&instance, backup.InstanceID).Error; err != nil {
+		s.db.Model(backup).Update("status", model.BackupStatusFailed)
+		slog.Error("备份失败：实例不存在", "backupId", backup.UUID, "error", err)
+		return
+	}
 
-	// 模拟备份完成
+	var node model.Node
+	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
+		s.db.Model(backup).Update("status", model.BackupStatusFailed)
+		slog.Error("备份失败：节点不存在", "backupId", backup.UUID, "error", err)
+		return
+	}
+
+	// 通过 gRPC 委托给 Worker Node 执行备份
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		s.db.Model(backup).Update("status", model.BackupStatusFailed)
+		slog.Error("备份失败：节点未连接", "nodeUUID", node.UUID)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	// 使用 SendCommand 发送备份命令给实例
+	_, err := client.Worker.SendCommand(ctx, &workerpb.SendCommandRequest{
+		InstanceUuid: instance.UUID,
+		Command:      fmt.Sprintf("backup %s", backup.UUID),
+	})
+
+	if err != nil {
+		s.db.Model(backup).Update("status", model.BackupStatusFailed)
+		slog.Error("备份执行失败", "backupId", backup.UUID, "error", err)
+		return
+	}
+
+	// 更新备份完成
 	s.db.Model(backup).Updates(map[string]interface{}{
-		"status":        model.BackupStatusCompleted,
-		"file_size_mb":  0,
-		"file_path":     fmt.Sprintf("backups/%d/%s.tar.gz", backup.InstanceID, backup.UUID),
+		"status":       model.BackupStatusCompleted,
+		"file_size_mb": 0,
+		"file_path":    fmt.Sprintf("backups/%d/%s.tar.gz", backup.InstanceID, backup.UUID),
 	})
 
 	slog.Info("备份已完成", "backupId", backup.UUID, "instanceId", backup.InstanceID)
@@ -92,12 +128,40 @@ func (s *BackupService) Restore(backupID uint) error {
 
 // executeRestore 异步执行恢复。
 func (s *BackupService) executeRestore(backup *model.Backup) {
-	// TODO: 通过 gRPC 委托给 Worker Node 执行恢复
-	// Worker Node 需要:
-	// 1. 停止实例
-	// 2. 解压备份文件到工作目录
-	// 3. 重新启动实例
-	slog.Info("恢复已启动", "backupId", backup.UUID, "instanceId", backup.InstanceID)
+	// 查找实例和节点
+	var instance model.Instance
+	if err := s.db.First(&instance, backup.InstanceID).Error; err != nil {
+		slog.Error("恢复失败：实例不存在", "backupId", backup.UUID, "error", err)
+		return
+	}
+
+	var node model.Node
+	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
+		slog.Error("恢复失败：节点不存在", "backupId", backup.UUID, "error", err)
+		return
+	}
+
+	// 通过 gRPC 委托给 Worker Node 执行恢复
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		slog.Error("恢复失败：节点未连接", "nodeUUID", node.UUID)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	_, err := client.Worker.SendCommand(ctx, &workerpb.SendCommandRequest{
+		InstanceUuid: instance.UUID,
+		Command:      fmt.Sprintf("restore %s", backup.FilePath),
+	})
+
+	if err != nil {
+		slog.Error("恢复执行失败", "backupId", backup.UUID, "error", err)
+		return
+	}
+
+	slog.Info("恢复已完成", "backupId", backup.UUID, "instanceId", backup.InstanceID)
 }
 
 // Delete 删除备份。

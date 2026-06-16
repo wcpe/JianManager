@@ -41,8 +41,11 @@ export interface SendBotCommand {
 export interface BotConfig {
   id: string
   name: string
-  server: string
+  host: string
   port: number
-  auth: 'offline' | 'microsoft'
+  username?: string
+  version?: string
+  auth?: 'offline' | 'microsoft'
   behavior?: string
+  server?: string
 }

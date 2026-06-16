@@ -3,12 +3,20 @@
  * 所有行为模式继承此类，实现 tick 方法。
  */
 
+import type { Bot } from 'mineflayer'
+
 export abstract class Behavior {
   protected botId: string
   protected running = false
+  protected mcBot: Bot | null = null
 
   constructor(botId: string) {
     this.botId = botId
+  }
+
+  /** 绑定 Mineflayer Bot 实例。 */
+  setMcBot(bot: Bot): void {
+    this.mcBot = bot
   }
 
   /** 启动行为。 */
@@ -53,10 +61,21 @@ export class FollowBehavior extends Behavior {
   get name() { return 'follow' }
 
   async tick() {
-    if (!this.running) return
-    // TODO: 使用 mineflayer-pathfinder 跟随目标玩家
-    // const player = this.bot.players[this.target]
-    // if (player) { ... }
+    if (!this.running || !this.mcBot) return
+
+    const player = this.mcBot.players[this.target]
+    if (!player || !player.entity) return
+
+    const pos = player.entity.position
+    this.mcBot.lookAt(pos)
+
+    // 简单跟随：如果玩家距离超过 3 格则走向玩家
+    const dist = this.mcBot.entity.position.distanceTo(pos)
+    if (dist > 3) {
+      this.mcBot.setControlState('forward', true)
+    } else {
+      this.mcBot.setControlState('forward', false)
+    }
   }
 }
 
@@ -79,9 +98,22 @@ export class PatrolBehavior extends Behavior {
   }
 
   async tick() {
-    if (!this.running || this.waypoints.length === 0) return
-    // TODO: 使用 mineflayer-pathfinder 移动到下一个路径点
-    this.currentIndex = (this.currentIndex + 1) % this.waypoints.length
+    if (!this.running || !this.mcBot || this.waypoints.length === 0) return
+
+    const target = this.waypoints[this.currentIndex]
+    const currentPos = this.mcBot.entity.position
+    const dx = target.x - currentPos.x
+    const dy = target.y - currentPos.y
+    const dz = target.z - currentPos.z
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
+
+    if (dist < 2) {
+      this.currentIndex = (this.currentIndex + 1) % this.waypoints.length
+    } else {
+      // 简单移动：设置前进状态
+      this.mcBot.setControlState('forward', true)
+      this.mcBot.setControlState('sprint', dist > 10)
+    }
   }
 }
 
@@ -102,9 +134,29 @@ export class GuardBehavior extends Behavior {
   }
 
   async tick() {
-    if (!this.running) return
-    // TODO: 检测附近敌对实体并攻击
+    if (!this.running || !this.mcBot) return
+
+    // 检测附近敌对实体
+    const hostile = this.mcBot.nearestEntity((entity) => {
+      return entity.kind === 'Hostile mobs'
+    })
+
+    if (hostile) {
+      this.mcBot.attack(hostile)
+    }
+
     // 如果远离守卫位置则返回
+    if (this.guardPos) {
+      const currentPos = this.mcBot.entity.position
+      const dx = this.guardPos.x - currentPos.x
+      const dy = this.guardPos.y - currentPos.y
+      const dz = this.guardPos.z - currentPos.z
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
+
+      if (dist > 10) {
+        this.mcBot.setControlState('forward', true)
+      }
+    }
   }
 }
 

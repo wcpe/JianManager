@@ -155,9 +155,11 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 		return resp, nil
 	}
 
-	// TODO: 通过 RCON 查询 MC 专用指标（TPS、在线玩家）
-	resp.Tps = 20.0
-	resp.OnlinePlayers = 0
+	// 通过 RCON 查询 MC 专用指标
+	// TODO: 从实例配置获取 RCON 端口和密码
+	tps, onlinePlayers, _ := metrics.QueryInstanceMetrics("localhost", 25575, "")
+	resp.Tps = tps
+	resp.OnlinePlayers = onlinePlayers
 	resp.MemoryMb = 0
 
 	return resp, nil

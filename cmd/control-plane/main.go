@@ -49,7 +49,7 @@ func main() {
 	botSvc := service.NewBotService(db)
 	alertSvc := service.NewAlertService(db)
 	scheduleSvc := service.NewScheduleService(db)
-	backupSvc := service.NewBackupService(db)
+	backupSvc := service.NewBackupService(db, pool)
 	templateSvc := service.NewTemplateService(db)
 	auditSvc := service.NewAuditService(db)
 
