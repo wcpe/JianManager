@@ -182,6 +182,16 @@ func (d *directStrategy) Close() error {
 	return nil
 }
 
+// GetPID 返回实例进程的 PID，未启动或已退出时返回 0。
+func (d *directStrategy) GetPID() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cmd == nil || d.cmd.Process == nil {
+		return 0
+	}
+	return d.cmd.Process.Pid
+}
+
 // instanceWriter 将进程输出路由到 Manager 的 onOutput 回调。
 // Windows 上自动将 GBK 编码转换为 UTF-8。
 type instanceWriter struct {

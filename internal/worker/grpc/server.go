@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	psproc "github.com/shirou/gopsutil/v4/process"
+
 	"github.com/wxys233/JianManager/internal/worker/metrics"
 	"github.com/wxys233/JianManager/internal/worker/process"
 	"github.com/wxys233/JianManager/proto/workerpb"
@@ -171,6 +173,8 @@ func (s *Server) GetNodeMetrics(ctx context.Context, req *workerpb.GetNodeMetric
 }
 
 // GetInstanceMetrics 获取实例指标。
+// TPS/在线玩家通过 RCON 查询（MC 专用），内存通过 OS 进程内存近似。
+// RCON 不可用时返回 N/A 标记值（-1），调用方应据此显示 "N/A"。
 func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstanceMetricsRequest) (*workerpb.GetInstanceMetricsResponse, error) {
 	resp := &workerpb.GetInstanceMetricsResponse{}
 
@@ -185,19 +189,27 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 		return resp, nil
 	}
 
+	// 通过 OS 进程内存近似 MC JVM 内存
+	if pid := s.manager.GetInstancePID(req.InstanceUuid); pid > 0 {
+		if proc, err := psproc.NewProcess(int32(pid)); err == nil {
+			if memInfo, err := proc.MemoryInfo(); err == nil && memInfo != nil {
+				resp.MemoryMb = int64(memInfo.RSS / 1024 / 1024)
+			}
+		}
+	}
+
 	// 通过 RCON 查询 MC 专用指标
 	rconPort, rconPassword, err := s.manager.GetRCONConfig(req.InstanceUuid)
 	if err != nil || rconPort == 0 {
-		// 没有 RCON 配置，返回默认值
-		resp.Tps = 20.0
-		resp.OnlinePlayers = 0
+		// 没有 RCON 配置，返回 N/A
+		resp.Tps = -1
+		resp.OnlinePlayers = -1
 		return resp, nil
 	}
 
 	tps, onlinePlayers, _ := metrics.QueryInstanceMetrics("localhost", rconPort, rconPassword)
 	resp.Tps = tps
 	resp.OnlinePlayers = onlinePlayers
-	resp.MemoryMb = 0
 
 	return resp, nil
 }

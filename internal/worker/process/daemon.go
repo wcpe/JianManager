@@ -306,6 +306,16 @@ func (d *daemonStrategy) SetWrapperPID(pid int) {
 	}
 }
 
+// GetPID 返回 wrapper 进程的 PID，未启动或已退出时返回 0。
+func (d *daemonStrategy) GetPID() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.wrapperCmd == nil || d.wrapperCmd.Process == nil {
+		return 0
+	}
+	return d.wrapperCmd.Process.Pid
+}
+
 // decodeGBK 将 GBK 字节解码为 UTF-8（Windows Java 输出常见）。
 func decodeGBK(p []byte) []byte {
 	// 复用 direct 包内转换器，避免重复导入 transform

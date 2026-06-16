@@ -10,6 +10,7 @@ import (
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/mem"
+	psnet "github.com/shirou/gopsutil/v4/net"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -181,6 +182,12 @@ func CollectHeartbeatData(nodeUUID string) *workerpb.HeartbeatRequest {
 	if usage, err := disk.Usage("/"); err == nil {
 		req.DiskUsage = float32(usage.UsedPercent / 100.0)
 		req.DiskUsedMb = int64(usage.Used / 1024 / 1024)
+	}
+
+	// 网络 IO（所有网卡汇总）
+	if counters, err := psnet.IOCounters(false); err == nil && len(counters) > 0 {
+		req.NetworkBytesSent = int64(counters[0].BytesSent)
+		req.NetworkBytesRecv = int64(counters[0].BytesRecv)
 	}
 
 	return req

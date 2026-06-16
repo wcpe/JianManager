@@ -189,8 +189,10 @@ type HeartbeatRequest struct {
 	DiskUsage     float32                `protobuf:"fixed32,4,opt,name=disk_usage,json=diskUsage,proto3" json:"disk_usage,omitempty"`
 	MemoryUsedMb  int64                  `protobuf:"varint,5,opt,name=memory_used_mb,json=memoryUsedMb,proto3" json:"memory_used_mb,omitempty"`
 	DiskUsedMb    int64                  `protobuf:"varint,6,opt,name=disk_used_mb,json=diskUsedMb,proto3" json:"disk_used_mb,omitempty"`
-	Instances     []*InstanceState       `protobuf:"bytes,7,rep,name=instances,proto3" json:"instances,omitempty"` // 实例状态快照
-	unknownFields protoimpl.UnknownFields
+	Instances          []*InstanceState       `protobuf:"bytes,7,rep,name=instances,proto3" json:"instances,omitempty"` // 实例状态快照
+	NetworkBytesSent   int64                  `protobuf:"varint,8,opt,name=network_bytes_sent,json=networkBytesSent,proto3" json:"network_bytes_sent,omitempty"` // 累计网络发送字节
+	NetworkBytesRecv   int64                  `protobuf:"varint,9,opt,name=network_bytes_recv,json=networkBytesRecv,proto3" json:"network_bytes_recv,omitempty"` // 累计网络接收字节
+	unknownFields      protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
@@ -271,6 +273,20 @@ func (x *HeartbeatRequest) GetInstances() []*InstanceState {
 		return x.Instances
 	}
 	return nil
+}
+
+func (x *HeartbeatRequest) GetNetworkBytesSent() int64 {
+	if x != nil {
+		return x.NetworkBytesSent
+	}
+	return 0
+}
+
+func (x *HeartbeatRequest) GetNetworkBytesRecv() int64 {
+	if x != nil {
+		return x.NetworkBytesRecv
+	}
+	return 0
 }
 
 type InstanceState struct {

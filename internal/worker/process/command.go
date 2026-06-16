@@ -50,6 +50,9 @@ type IProcessCommand interface {
 	// Close 释放策略持有的资源（socket 连接、goroutine 等），
 	// 不影响被管理的游戏服进程本身（daemon 模式下 wrapper 继续运行）。
 	Close() error
+	// GetPID 返回实例进程的 PID，用于从 OS 层采集进程内存等指标。
+	// 未启动或已退出时返回 0。
+	GetPID() int
 }
 
 // newStrategy 按 ProcessType 构造对应策略。

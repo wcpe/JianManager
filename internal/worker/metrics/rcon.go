@@ -218,24 +218,26 @@ func cleanMinecraftColors(s string) string {
 }
 
 // QueryInstanceMetrics 通过 RCON 查询实例指标。
+// RCON 连接失败时返回 N/A 标记值（TPS=-1, OnlinePlayers=-1），调用方应据此显示 "N/A"。
 func QueryInstanceMetrics(host string, rconPort int, rconPassword string) (tps float32, onlinePlayers int32, err error) {
 	client := NewRCONClient(host, rconPort, rconPassword)
 	defer client.Close()
 
 	if err := client.Connect(); err != nil {
-		slog.Warn("RCON 连接失败", "host", host, "port", rconPort, "error", err)
-		return 20.0, 0, nil // 优雅降级
+		slog.Debug("RCON 连接失败，返回 N/A", "host", host, "port", rconPort, "error", err)
+		return -1, -1, nil // 优雅降级，返回 N/A 标记值
 	}
 
 	tpsVal, err := client.QueryTPS()
 	if err != nil {
 		slog.Warn("RCON 查询 TPS 失败", "error", err)
-		tpsVal = 20.0
+		tpsVal = -1
 	}
 
 	playerCount, _, err := client.QueryOnlinePlayers()
 	if err != nil {
 		slog.Warn("RCON 查询玩家列表失败", "error", err)
+		playerCount = -1
 	}
 
 	return float32(tpsVal), int32(playerCount), nil

@@ -158,6 +158,20 @@ func (m *Manager) GetRCONConfig(uuid string) (port int, password string, err err
 	return inst.RCONPort, inst.RCONPassword, nil
 }
 
+// GetInstancePID 获取实例进程的 PID。
+// 策略未启动或已退出时返回 0。
+func (m *Manager) GetInstancePID(uuid string) int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	inst, exists := m.instances[uuid]
+	if !exists || inst.strategy == nil {
+		return 0
+	}
+
+	return inst.strategy.GetPID()
+}
+
 // Start 启动实例。按实例的 ProcessType 选择策略；首次启动时惰性构造策略。
 func (m *Manager) Start(uuid string) error {
 	m.mu.Lock()

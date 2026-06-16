@@ -92,6 +92,8 @@ message HeartbeatRequest {
   int64 memory_used_mb = 5;
   int64 disk_used_mb = 6;
   repeated InstanceState instances = 7;  // 实例状态快照
+  int64 network_bytes_sent = 8;  // 累计网络发送字节
+  int64 network_bytes_recv = 9;  // 累计网络接收字节
 }
 
 message InstanceState {

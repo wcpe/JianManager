@@ -143,13 +143,15 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 
 		// 更新节点指标和心跳时间
 		updates := map[string]interface{}{
-			"cpu_usage":      req.CpuUsage,
-			"memory_usage":   req.MemoryUsage,
-			"disk_usage":     req.DiskUsage,
-			"memory_used_mb": req.MemoryUsedMb,
-			"disk_used_mb":   req.DiskUsedMb,
-			"last_heartbeat": time.Now(),
-			"status":         model.NodeStatusOnline,
+			"cpu_usage":           req.CpuUsage,
+			"memory_usage":        req.MemoryUsage,
+			"disk_usage":          req.DiskUsage,
+			"memory_used_mb":      req.MemoryUsedMb,
+			"disk_used_mb":        req.DiskUsedMb,
+			"network_bytes_sent":  req.NetworkBytesSent,
+			"network_bytes_recv":  req.NetworkBytesRecv,
+			"last_heartbeat":      time.Now(),
+			"status":              model.NodeStatusOnline,
 		}
 
 		if err := h.db.Model(&model.Node{}).Where("uuid = ?", req.NodeUuid).Updates(updates).Error; err != nil {

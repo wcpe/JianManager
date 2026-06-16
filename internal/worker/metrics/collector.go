@@ -9,18 +9,21 @@ import (
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/mem"
+	"github.com/shirou/gopsutil/v4/net"
 )
 
 // NodeMetrics 节点指标。
 type NodeMetrics struct {
-	CPUUsage     float32
-	MemoryUsage  float32
-	DiskUsage    float32
-	MemoryUsedMB int64
-	MemoryTotalMB int64
-	DiskUsedMB   int64
-	DiskTotalMB  int64
-	Goroutines   int
+	CPUUsage         float32
+	MemoryUsage      float32
+	DiskUsage        float32
+	MemoryUsedMB     int64
+	MemoryTotalMB    int64
+	DiskUsedMB       int64
+	DiskTotalMB      int64
+	Goroutines       int
+	NetworkBytesSent int64
+	NetworkBytesRecv int64
 }
 
 // Collector 指标采集器。
@@ -61,6 +64,12 @@ func (c *Collector) Collect() NodeMetrics {
 		metrics.DiskUsage = float32(usage.UsedPercent / 100.0)
 		metrics.DiskUsedMB = int64(usage.Used / 1024 / 1024)
 		metrics.DiskTotalMB = int64(usage.Total / 1024 / 1024)
+	}
+
+	// 网络 IO（所有网卡汇总）
+	if counters, err := net.IOCountersWithContext(ctx, false); err == nil && len(counters) > 0 {
+		metrics.NetworkBytesSent = int64(counters[0].BytesSent)
+		metrics.NetworkBytesRecv = int64(counters[0].BytesRecv)
 	}
 
 	return metrics
