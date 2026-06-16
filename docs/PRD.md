@@ -53,14 +53,14 @@
 - **关联 API**: `POST /groups`, `POST /groups/:id/instances`, `GET /groups/:id/quota`
 
 ### FR-004: 节点注册与心跳
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: Worker Node 启动时 gRPC 注册到 Control Plane，30s 心跳上报资源指标
 - **验收标准**:
   - [x] Worker 首次启动自动注册，获得 node_uuid + node_secret
   - [x] 30s 心跳间隔，上报 CPU/内存/磁盘
   - [x] Control Plane 检测离线（超 90s 无心跳）
-  - [ ] 前端节点列表实时显示在线状态
+  - [x] 前端节点列表实时显示在线状态
 - **关联 API**: `GET /nodes`, `GET /nodes/:id`
 
 ### FR-005: 实例生命周期管理
@@ -76,35 +76,35 @@
 - **关联 API**: `POST /instances`, `POST /instances/:id/start`, `POST /instances/:id/stop`
 
 ### FR-006: 守护进程（Daemon Wrapper）
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 平台进程重启不杀游戏服，通过 Daemon Wrapper 子进程实现进程隔离
 - **验收标准**:
-  - [ ] 启动方式为 daemon 时，spawn 独立子进程管理游戏服
+  - [x] 启动方式为 daemon 时，spawn 独立子进程管理游戏服
   - [x] 二进制帧协议通信（Unix Socket / Named Pipe）
-  - [ ] 平台重启后恢复守护进程连接
+  - [x] 平台重启后恢复守护进程连接
   - [x] 崩溃自动重启 + PID 文件恢复
 - **关联 ADR**: ADR-003
 
 ### FR-007: 终端实时
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: xterm.js 浏览器终端，直连 Worker Node WebSocket，支持多人同时查看
 - **验收标准**:
   - [x] Control Plane 签发一次性 30s token
   - [x] 浏览器持 token 直连 Worker Node WS
-  - [ ] stdin/stderr 双向流
+  - [x] stdin/stderr 双向流
   - [x] 多人同时查看（读写分离）
   - [x] 环形缓冲区回放最近输出
 - **关联 API**: `GET /instances/:id/terminal-token`
 
 ### FR-008: 文件管理
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 实例工作目录文件浏览/编辑/上传下载
 - **验收标准**:
-  - [ ] 文件列表浏览（目录树）
-  - [ ] CodeMirror 在线编辑（YAML/TXT/JSON 高亮）
+  - [x] 文件列表浏览（目录树）
+  - [x] CodeMirror 在线编辑（YAML/TXT/JSON 高亮）
   - [x] 文件上传（分块）/ 下载（流式）
   - [x] 创建/删除/重命名
 - **关联 API**: `GET /instances/:id/files`, `GET /instances/:id/files/read`, `POST /instances/:id/files/write`
@@ -114,7 +114,7 @@
 ## P1 — 重要功能
 
 ### FR-009: Bot 平台
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: Mineflayer Bot 管理，行为引擎、寻路、脚本执行、压测、预热池
 - **验收标准**:
@@ -128,13 +128,13 @@
 - **关联 API**: `POST /bots`, `POST /bots/:id/behavior`, `GET /bots/:id/state`
 
 ### FR-010: 监控指标
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: 节点和实例指标采集，Recharts 仪表盘展示
 - **验收标准**:
-  - [ ] 节点指标：CPU/内存/磁盘/网络（周期采集）
+  - [x] 节点指标：CPU/内存/磁盘/网络（周期采集）
   - [ ] 实例指标：MC TPS/在线玩家/内存（MC 专用）
-  - [ ] 仪表盘页面：Recharts 图表
+  - [x] 仪表盘页面：Recharts 图表
 - **关联 API**: `GET /nodes/:id/metrics`, `GET /instances/:id/metrics`
 
 ### FR-011: 告警规则
@@ -159,7 +159,7 @@
 - **关联 API**: `POST /schedules`, `GET /schedules`
 
 ### FR-013: 备份恢复
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: 手动/自动备份，压缩存储，一键恢复
 - **验收标准**:
@@ -174,7 +174,7 @@
 ## P2 — 增强功能
 
 ### FR-014: 服务端模板
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P2
 - **描述**: 预设 MC 服务端模板（Paper/Spigot/Forge），一键创建实例
 - **验收标准**:
