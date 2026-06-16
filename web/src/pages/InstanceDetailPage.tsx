@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useParams } from 'react-router'
 import { useInstance } from '@/api/instances'
+import FileBrowser from '@/components/FileBrowser'
 
 const tabs = ['控制台', '终端', '文件', '配置', '备份', 'Bot']
 
@@ -102,15 +103,7 @@ function TerminalTab({ instanceId }: { instanceId: number }) {
 }
 
 function FilesTab({ instanceId }: { instanceId: number }) {
-  return (
-    <div>
-      <p className="text-sm text-muted-foreground mb-2">文件管理（实例工作目录）</p>
-      <div className="border rounded-lg p-4 min-h-[400px]">
-        <p className="text-muted-foreground">文件浏览器待加载...</p>
-        <p className="text-muted-foreground mt-1">实例 ID: {instanceId}</p>
-      </div>
-    </div>
-  )
+  return <FileBrowser instanceId={instanceId} />
 }
 
 function ConfigTab({ instance }: { instance: { startCommand: string; workDir: string; autoStart: boolean; autoRestart: boolean } }) {
