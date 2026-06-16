@@ -12,7 +12,7 @@ database:
   dsn: data/jianmanager.db
 
 jwt:
-  secret: ${JIANMANAGER_JWT_SECRET}
+  secret: dev-secret-change-me  # 生产环境通过 JIANMANAGER_JWT_SECRET 环境变量覆盖
   access_ttl: 15m
   refresh_ttl: 168h
 
@@ -22,4 +22,4 @@ log:
 
 bootstrap:
   admin_username: admin
-  admin_password: ${JIANMANAGER_ADMIN_PASSWORD}
+  # admin_password 默认 admin123；生产环境通过 JIANMANAGER_BOOTSTRAP_ADMIN_PASSWORD 环境变量覆盖

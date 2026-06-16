@@ -64,11 +64,13 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("grpc.port", 9100)
 	v.SetDefault("database.driver", "sqlite")
 	v.SetDefault("database.dsn", "data/jianmanager.db")
+	v.SetDefault("jwt.secret", "dev-secret-change-me")
 	v.SetDefault("jwt.access_ttl", "15m")
 	v.SetDefault("jwt.refresh_ttl", "168h")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("bootstrap.admin_username", "admin")
+	v.SetDefault("bootstrap.admin_password", "admin123")
 
 	// 配置文件
 	if path != "" {
