@@ -127,6 +127,8 @@ func (s *BackupService) Restore(backupID uint) error {
 }
 
 // executeRestore 异步执行恢复。
+// 通过 gRPC 委托给 Worker Node 执行文件级恢复：
+// Worker 从备份文件解压到实例工作目录，实现真正的文件级恢复。
 func (s *BackupService) executeRestore(backup *model.Backup) {
 	// 查找实例和节点
 	var instance model.Instance
@@ -151,9 +153,13 @@ func (s *BackupService) executeRestore(backup *model.Backup) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
+	// 发送 restore 命令，Worker 侧负责：
+	// 1. 从备份文件路径读取 tar.gz
+	// 2. 解压到实例工作目录（覆盖现有文件）
+	// 3. 返回执行结果
 	_, err := client.Worker.SendCommand(ctx, &workerpb.SendCommandRequest{
 		InstanceUuid: instance.UUID,
-		Command:      fmt.Sprintf("restore %s", backup.FilePath),
+		Command:      fmt.Sprintf("restore %s %s", backup.FilePath, instance.WorkDir),
 	})
 
 	if err != nil {
@@ -161,7 +167,7 @@ func (s *BackupService) executeRestore(backup *model.Backup) {
 		return
 	}
 
-	slog.Info("恢复已完成", "backupId", backup.UUID, "instanceId", backup.InstanceID)
+	slog.Info("恢复已完成", "backupId", backup.UUID, "instanceId", backup.InstanceID, "workDir", instance.WorkDir)
 }
 
 // Delete 删除备份。
