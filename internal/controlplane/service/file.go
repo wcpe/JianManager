@@ -1,8 +1,11 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -37,6 +40,10 @@ type FileInfo struct {
 
 // ListFiles 列出实例工作目录下的文件。
 func (s *FileService) ListFiles(instanceID uint, path string) ([]FileInfo, error) {
+	if err := validatePath(path); err != nil {
+		return nil, err
+	}
+
 	instance, node, err := s.getInstanceAndNode(instanceID)
 	if err != nil {
 		return nil, err
@@ -46,11 +53,11 @@ func (s *FileService) ListFiles(instanceID uint, path string) ([]FileInfo, error
 	if !ok {
 		return nil, ErrNodeNotConnected
 	}
-	if client.Worker == nil {
-		return nil, fmt.Errorf("gRPC 客户端未就绪")
-	}
 
-	resp, err := client.Worker.ListFiles(nil, &workerpb.ListFilesRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.ListFiles(ctx, &workerpb.ListFilesRequest{
 		InstanceUuid: instance.UUID,
 		Path:         path,
 	})
@@ -72,6 +79,10 @@ func (s *FileService) ListFiles(instanceID uint, path string) ([]FileInfo, error
 
 // ReadFile 读取文件内容。
 func (s *FileService) ReadFile(instanceID uint, path string) ([]byte, error) {
+	if err := validatePath(path); err != nil {
+		return nil, err
+	}
+
 	instance, node, err := s.getInstanceAndNode(instanceID)
 	if err != nil {
 		return nil, err
@@ -81,11 +92,11 @@ func (s *FileService) ReadFile(instanceID uint, path string) ([]byte, error) {
 	if !ok {
 		return nil, ErrNodeNotConnected
 	}
-	if client.Worker == nil {
-		return nil, fmt.Errorf("gRPC 客户端未就绪")
-	}
 
-	resp, err := client.Worker.ReadFile(nil, &workerpb.ReadFileRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.ReadFile(ctx, &workerpb.ReadFileRequest{
 		InstanceUuid: instance.UUID,
 		Path:         path,
 	})
@@ -98,6 +109,10 @@ func (s *FileService) ReadFile(instanceID uint, path string) ([]byte, error) {
 
 // WriteFile 写入文件内容。
 func (s *FileService) WriteFile(instanceID uint, path string, content []byte) error {
+	if err := validatePath(path); err != nil {
+		return err
+	}
+
 	instance, node, err := s.getInstanceAndNode(instanceID)
 	if err != nil {
 		return err
@@ -107,11 +122,11 @@ func (s *FileService) WriteFile(instanceID uint, path string, content []byte) er
 	if !ok {
 		return ErrNodeNotConnected
 	}
-	if client.Worker == nil {
-		return fmt.Errorf("gRPC 客户端未就绪")
-	}
 
-	resp, err := client.Worker.WriteFile(nil, &workerpb.WriteFileRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.WriteFile(ctx, &workerpb.WriteFileRequest{
 		InstanceUuid: instance.UUID,
 		Path:         path,
 		Content:      content,
@@ -128,6 +143,10 @@ func (s *FileService) WriteFile(instanceID uint, path string, content []byte) er
 
 // DeleteFile 删除文件。
 func (s *FileService) DeleteFile(instanceID uint, path string) error {
+	if err := validatePath(path); err != nil {
+		return err
+	}
+
 	instance, node, err := s.getInstanceAndNode(instanceID)
 	if err != nil {
 		return err
@@ -137,11 +156,11 @@ func (s *FileService) DeleteFile(instanceID uint, path string) error {
 	if !ok {
 		return ErrNodeNotConnected
 	}
-	if client.Worker == nil {
-		return fmt.Errorf("gRPC 客户端未就绪")
-	}
 
-	resp, err := client.Worker.DeleteFile(nil, &workerpb.DeleteFileRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.DeleteFile(ctx, &workerpb.DeleteFileRequest{
 		InstanceUuid: instance.UUID,
 		Path:         path,
 	})
@@ -152,6 +171,17 @@ func (s *FileService) DeleteFile(instanceID uint, path string) error {
 		return fmt.Errorf("删除文件失败: %s", resp.Error)
 	}
 
+	return nil
+}
+
+// validatePath 校验文件路径，防止路径遍历攻击。
+func validatePath(path string) error {
+	if strings.Contains(path, "..") {
+		return fmt.Errorf("路径不允许包含 ..")
+	}
+	if strings.HasPrefix(path, "/") {
+		return fmt.Errorf("路径不允许以 / 开头")
+	}
 	return nil
 }
 
