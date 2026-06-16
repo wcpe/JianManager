@@ -232,15 +232,15 @@
 - **关联 API**: gRPC Register, Heartbeat
 
 ### FR-018: 实例 gRPC 生命周期操作
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: Control Plane 通过 gRPC 委托 Worker Node 执行实例的创建、启动、停止、重启、销毁操作
 - **验收标准**:
-  - [ ] 前端创建实例 → Control Plane → gRPC CreateInstance → Worker 创建进程
-  - [ ] 前端启动实例 → Control Plane → gRPC StartInstance → Worker 启动进程
-  - [ ] 前端停止实例 → Control Plane → gRPC StopInstance → Worker 停止进程
-  - [ ] 实例状态变更通过 StreamInstanceEvents 实时推送到前端
-  - [ ] 操作失败时前端显示错误信息
+  - [x] 前端创建实例 → Control Plane → gRPC CreateInstance → Worker 创建进程
+  - [x] 前端启动实例 → Control Plane → gRPC StartInstance → Worker 启动进程
+  - [x] 前端停止实例 → Control Plane → gRPC StopInstance → Worker 停止进程
+  - [ ] 实例状态变更通过 StreamInstanceEvents 实时推送到前端（当前用轮询替代）
+  - [x] 操作失败时前端显示错误信息
 - **依赖**: FR-017（Worker 注册）
 - **关联 API**: gRPC CreateInstance, StartInstance, StopInstance, RestartInstance
 
@@ -248,7 +248,8 @@
 - **状态**: ✅ done
 
 ### FR-020: 文件管理 gRPC 全链路
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
+- **备注**: 后端读写/上传下载/删除已实现，缺少 rename；前端用 textarea 替代 CodeMirror，无上传 UI
 
 ### FR-021: Bot Mineflayer 集成
 - **状态**: 📋 todo
@@ -291,14 +292,14 @@
 - **Spec**: `docs/specs/grpc-real/`
 
 ### FR-024: 前端对接运行时 API
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: 前端页面对接 FR-017~022 的真实 API，实现完整的前后端联调
 - **验收标准**:
   - [x] 节点列表页面显示在线节点的实时 CPU/内存/磁盘指标（30s 自动刷新）
   - [x] 实例详情页终端 Tab 能连接 Worker WebSocket 并显示终端输出
   - [x] 实例详情页文件 Tab 能浏览/编辑 Worker 上的文件
-  - [x] 实例详情页显示 TPS 和在线玩家数（通过 RCON 指标 API）
+  - [ ] 实例详情页显示 TPS 和在线玩家数（依赖 FR-022 RCON）
   - [x] 创建/启动/停止实例操作能通过 gRPC 委托给 Worker 执行
   - [x] Bot 管理页面能创建 Bot 并显示连接状态
 - **依赖**: FR-023（gRPC 真实实现）
@@ -320,30 +321,30 @@
 - **关联 API**: gRPC Register, Heartbeat
 
 ### FR-026: 前端 shadcn/ui 标准化
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 将前端页面从手写样式迁移到 shadcn/ui 组件库默认样式，统一视觉风格
 - **验收标准**:
-  - [ ] 所有表格使用 `<Table>` 组件替代手写 `<table>` 标签
-  - [ ] 所有按钮使用 `<Button>` 组件（variant: default/destructive/outline/ghost）
-  - [ ] 所有对话框使用 `<Dialog>` 组件替代手写 modal
-  - [ ] 所有表单输入使用 `<Input>` / `<Select>` / `<Checkbox>` 组件
-  - [ ] 所有状态标签使用 `<Badge>` 组件（variant: default/success/warning/destructive）
-  - [ ] 页面标题使用 `<h1>` + shadcn 排版规范，间距统一
+  - [x] 所有表格使用 `<Table>` 组件替代手写 `<table>` 标签
+  - [x] 所有按钮使用 `<Button>` 组件（variant: default/destructive/outline/ghost）
+  - [x] 所有对话框使用 `<Dialog>` 组件替代手写 modal
+  - [x] 所有表单输入使用 `<Input>` / `<Select>` / `<Checkbox>` 组件
+  - [x] 所有状态标签使用 `<Badge>` 组件（variant: default/success/warning/destructive）
+  - [x] 页面标题使用 `<h1>` + shadcn 排版规范，间距统一
   - [ ] 暗色/亮色主题切换正常，无样式错乱
 - **依赖**: FR-024（前端对接运行时 API）
 
 ### FR-027: API 集成测试
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 为核心 REST API 编写集成测试，使用 httptest + 真实 SQLite 数据库
 - **验收标准**:
-  - [ ] 认证 API 测试：注册→登录→刷新 token→401 拦截
+  - [x] 认证 API 测试：注册→登录→刷新 token→401 拦截
   - [ ] 实例 API 测试：创建→查询→启动→停止→删除（happy path + 错误路径）
   - [ ] 节点 API 测试：列表→详情→删除离线节点
   - [ ] 用户组 API 测试：创建→添加成员→设置配额→超额拒绝
-  - [ ] 每个测试使用独立 SQLite 数据库，测试间隔离
-  - [ ] `go test ./internal/controlplane/...` 全部通过
+  - [x] 每个测试使用独立 SQLite 数据库，测试间隔离
+  - [x] `go test ./internal/controlplane/...` 全部通过
 - **依赖**: FR-025（gRPC 连通性修复）
 
 ### FR-028: 实例创建 E2E 测试
@@ -359,6 +360,13 @@
   - [ ] 通过 API 删除实例
   - [ ] 测试脚本可一键运行（`make e2e` 或 `go test -tags=e2e`）
 - **依赖**: FR-025（gRPC 连通性修复）, FR-027（API 集成测试）
+
+### BUG-001: 实例创建-启动-终端全链路断裂
+- **状态**: ✅ done
+- **优先级**: P0
+- **描述**: FR-005/FR-018/FR-019 标记 done 但实际链路断裂，5 个 bug 导致实例无法启动、终端无法输出
+- **关联 FR**: FR-005, FR-018, FR-019
+- **Spec**: `docs/specs/instance-lifecycle-fix/`
 
 ---
 
