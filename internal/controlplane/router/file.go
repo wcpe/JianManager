@@ -198,6 +198,38 @@ func (h *FileHandler) Download(c *gin.Context) {
 	c.Data(http.StatusOK, "application/octet-stream", content)
 }
 
+// renameRequest 文件重命名请求。
+type renameRequest struct {
+	OldPath string `json:"oldPath" binding:"required"`
+	NewPath string `json:"newPath" binding:"required"`
+}
+
+// Rename 重命名文件或目录。
+func (h *FileHandler) Rename(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+
+	if !canManageInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+
+	var req renameRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+
+	if err := h.fileSvc.RenameFile(id, req.OldPath, req.NewPath); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "已重命名"})
+}
+
 // RegisterRoutes 注册文件路由。
 func (h *FileHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	files := rg.Group("/instances/:id/files")
@@ -207,6 +239,7 @@ func (h *FileHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		files.POST("/write", h.Write)
 		files.POST("/upload", h.Upload)
 		files.GET("/download", h.Download)
+		files.POST("/rename", h.Rename)
 		files.DELETE("", h.Delete)
 	}
 }

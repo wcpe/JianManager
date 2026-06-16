@@ -3,11 +3,22 @@ package grpc
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/wxys233/JianManager/internal/worker/metrics"
 	"github.com/wxys233/JianManager/internal/worker/process"
 	"github.com/wxys233/JianManager/proto/workerpb"
 )
+
+// instanceEvent 内部事件，由 Manager 状态回调产生，分发给所有 StreamInstanceEvents 订阅者。
+type instanceEvent struct {
+	UUID      string
+	OldState  string
+	NewState  string
+	Timestamp int64
+}
 
 // Server Worker Node gRPC 服务器实现。
 // 仅实现 Control Plane 反向调用 Worker 的 RPC（实例操作、文件操作、指标）。
@@ -19,15 +30,40 @@ type Server struct {
 	manager   *process.Manager
 	nodeUUID  string
 	collector *metrics.Collector
+
+	// eventMu 保护 eventSubs，StreamInstanceEvents 订阅/取消订阅时加锁。
+	eventMu   sync.Mutex
+	eventSubs []chan instanceEvent
 }
 
 // NewServer 创建 Worker gRPC 服务器。
+// 注册 Manager 状态变更回调，将事件扇出到所有 StreamInstanceEvents 订阅者。
 func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Collector) *Server {
-	return &Server{
+	s := &Server{
 		manager:   manager,
 		nodeUUID:  nodeUUID,
 		collector: collector,
 	}
+	manager.SetStateChangeHandler(func(uuid string, oldState, newState process.InstanceState) {
+		evt := instanceEvent{
+			UUID:      uuid,
+			OldState:  string(oldState),
+			NewState:  string(newState),
+			Timestamp: time.Now().Unix(),
+		}
+		s.eventMu.Lock()
+		subs := make([]chan instanceEvent, len(s.eventSubs))
+		copy(subs, s.eventSubs)
+		s.eventMu.Unlock()
+		for _, ch := range subs {
+			select {
+			case ch <- evt:
+			default:
+				// 订阅者消费太慢，丢弃事件避免阻塞
+			}
+		}
+	})
+	return s
 }
 
 // CreateInstance 创建实例。
@@ -172,4 +208,51 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 // 便于调用方区分「该能力归属 CP」与「Worker 未实现」。
 func (s *Server) IssueTerminalToken(ctx context.Context, req *workerpb.IssueTerminalTokenRequest) (*workerpb.IssueTerminalTokenResponse, error) {
 	return nil, fmt.Errorf("终端 token 由 Control Plane 签发，Worker 不实现此 RPC")
+}
+
+// StreamInstanceEvents 订阅实例状态变更事件流。
+// CP 调用此 RPC 后，Worker 持续推送实例状态转换事件（STOPPED→STARTING→RUNNING 等）。
+// instance_uuid 为空时表示订阅所有实例。流关闭时自动取消订阅。
+func (s *Server) StreamInstanceEvents(req *workerpb.StreamInstanceEventsRequest, stream workerpb.WorkerService_StreamInstanceEventsServer) error {
+	ch := make(chan instanceEvent, 64)
+	s.eventMu.Lock()
+	s.eventSubs = append(s.eventSubs, ch)
+	s.eventMu.Unlock()
+
+	defer func() {
+		s.eventMu.Lock()
+		for i, sub := range s.eventSubs {
+			if sub == ch {
+				s.eventSubs = append(s.eventSubs[:i], s.eventSubs[i+1:]...)
+				break
+			}
+		}
+		s.eventMu.Unlock()
+		close(ch)
+	}()
+
+	slog.Info("StreamInstanceEvents 订阅开始", "filter", req.InstanceUuid)
+
+	for {
+		select {
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		case evt, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			// 按 instance_uuid 过滤
+			if req.InstanceUuid != "" && evt.UUID != req.InstanceUuid {
+				continue
+			}
+			if err := stream.Send(&workerpb.InstanceEvent{
+				InstanceUuid: evt.UUID,
+				Type:         "state_change",
+				Data:         fmt.Sprintf("%s→%s", evt.OldState, evt.NewState),
+				Timestamp:    evt.Timestamp,
+			}); err != nil {
+				return err
+			}
+		}
+	}
 }

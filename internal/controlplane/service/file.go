@@ -174,6 +174,43 @@ func (s *FileService) DeleteFile(instanceID uint, path string) error {
 	return nil
 }
 
+// RenameFile 重命名文件或目录。
+func (s *FileService) RenameFile(instanceID uint, oldPath, newPath string) error {
+	if err := validatePath(oldPath); err != nil {
+		return err
+	}
+	if err := validatePath(newPath); err != nil {
+		return err
+	}
+
+	instance, node, err := s.getInstanceAndNode(instanceID)
+	if err != nil {
+		return err
+	}
+
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return ErrNodeNotConnected
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.RenameFile(ctx, &workerpb.RenameFileRequest{
+		InstanceUuid: instance.UUID,
+		OldPath:      oldPath,
+		NewPath:      newPath,
+	})
+	if err != nil {
+		return fmt.Errorf("重命名文件失败: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("重命名文件失败: %s", resp.Error)
+	}
+
+	return nil
+}
+
 // validatePath 校验文件路径，防止路径遍历攻击。
 func validatePath(path string) error {
 	if strings.Contains(path, "..") {

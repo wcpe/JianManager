@@ -107,6 +107,29 @@ func (s *Server) DeleteFile(ctx context.Context, req *workerpb.DeleteFileRequest
 	return &workerpb.DeleteFileResponse{Success: true}, nil
 }
 
+// RenameFile 重命名文件或目录。
+func (s *Server) RenameFile(ctx context.Context, req *workerpb.RenameFileRequest) (*workerpb.RenameFileResponse, error) {
+	inst, exists := s.manager.GetInstance(req.InstanceUuid)
+	if !exists {
+		return nil, fmt.Errorf("实例 %s 不存在", req.InstanceUuid)
+	}
+
+	oldPath := filepath.Join(inst.WorkDir, req.OldPath)
+	newPath := filepath.Join(inst.WorkDir, req.NewPath)
+	if err := validatePath(inst.WorkDir, oldPath); err != nil {
+		return nil, err
+	}
+	if err := validatePath(inst.WorkDir, newPath); err != nil {
+		return nil, err
+	}
+
+	if err := os.Rename(oldPath, newPath); err != nil {
+		return &workerpb.RenameFileResponse{Success: false, Error: fmt.Sprintf("重命名失败: %v", err)}, nil
+	}
+
+	return &workerpb.RenameFileResponse{Success: true}, nil
+}
+
 // validatePath 校验路径安全（防止路径遍历攻击）。
 func validatePath(workDir, targetPath string) error {
 	absWork, err := filepath.Abs(workDir)
