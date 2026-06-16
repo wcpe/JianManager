@@ -76,12 +76,36 @@ internal/controlplane/
   middleware/auth.go
   model/{user,group,node,instance,bot,alert,schedule,backup,template,audit}.go
   router/{router,auth,user,group,node,instance,terminal,bot,file,schedule,backup,alert,template,audit}.go
-  service/{auth,user,group,node,instance,terminal,bot,schedule,backup,alert,template,audit,file}.go
+  service/{auth,user,group,node,instance,terminal,bot,schedule,backup,alert,template,audit,file,authz}.go
   grpc/{pool,client}.go          # TODO: gRPC 客户端池
   event/bus.go                   # TODO: 事件总线
   ws/gateway.go                  # TODO: WebSocket 网关
   embed/static.go                # TODO: 前端嵌入
 ```
+
+### 4.1 权限模型（RBAC）
+
+基于「三级角色 + 用户组隔离」的权限模型，参见 ADR-004（用户组替代多租户）。
+
+```
+角色层级
+  平台管理员 (role=10) → 拥有全部权限，可管理所有用户/组/节点/实例
+  组管理员   (role=1)  → 受限于其任组管理员身份的组（group_members.role=1）
+  组成员     (role=0)  → 受限于其所属组（group_members.role=0）
+```
+
+**权限节点**（`service/authz.go`）：`user:*`、`group:*`、`node:*`、`instance:*`、`file:*`、`terminal:access`、`bot:*`。
+
+**授权链路**：
+1. `middleware.JWTAuth` → 解析 JWT，写入 `userId/role`
+2. `middleware.LoadAccess` → 调用 `AuthzService.LoadUserAccess` 加载用户的组成员关系（管理组/所属组集合），写入 `access` 上下文
+3. 处理器内调用 `AuthzService.CanAccessInstance/CanManageGroup/CanAccessBot` 做资源级隔离判断；平台管理员全量放行
+
+**隔离规则**：
+- 实例：通过 `group_instances` 关联判断归属；未分配组的实例仅平台管理员可访问
+- 跨组隔离：组 A 成员不能读写组 B 的实例/文件/终端/Bot；未授权访问返回 404（避免泄露存在性）
+- 节点管理：限平台管理员
+- 配额：创建实例时校验 `MaxInstances`/`MaxBots`/`MaxStorageMB`（0 表示不限）；`GET /groups/:id/quota` 返回用量
 
 ## 5. Worker Node 架构
 

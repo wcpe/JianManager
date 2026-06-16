@@ -24,6 +24,7 @@ type Services struct {
 	Backup   *service.BackupService
 	Template *service.TemplateService
 	Audit    *service.AuditService
+	Authz    *service.AuthzService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -48,23 +49,30 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			_ = svcs.Audit.Record(userID, action, targetType, targetID, detail, ip)
 		},
 	}))
+	// 加载授权上下文（用户角色 + 组成员关系），供后续权限判断使用
+	protected.Use(middleware.LoadAccess(svcs.Authz))
 
-	// 所有认证用户可访问
+	// 所有认证用户可访问的资源（按权限节点 + 资源隔离收敛）
 	{
 		nodeHandler := NewNodeHandler(svcs.Node)
 		nodeHandler.RegisterRoutes(protected)
 
-		instanceHandler := NewInstanceHandler(svcs.Instance)
+		instanceHandler := NewInstanceHandler(svcs.Instance, svcs.Authz)
 		instanceHandler.RegisterRoutes(protected)
 
-		terminalHandler := NewTerminalHandler(svcs.Terminal)
+		terminalHandler := NewTerminalHandler(svcs.Terminal, svcs.Authz)
 		terminalHandler.RegisterRoutes(protected)
 
-		fileHandler := NewFileHandler(svcs.File)
+		fileHandler := NewFileHandler(svcs.File, svcs.Authz)
 		fileHandler.RegisterRoutes(protected)
 
-		botHandler := NewBotHandler(svcs.Bot)
+		botHandler := NewBotHandler(svcs.Bot, svcs.Authz)
 		botHandler.RegisterRoutes(protected)
+
+		// 组相关：列表/创建由 group:read/group:manage 节点控制，
+		// 组级资源（:id）由 GroupHandler 内部按授权上下文收敛
+		groupHandler := NewGroupHandler(svcs.Group, svcs.Authz)
+		groupHandler.RegisterRoutes(protected)
 
 		alertHandler := NewAlertHandler(svcs.Alert)
 		alertHandler.RegisterRoutes(protected)
@@ -85,9 +93,6 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	{
 		userHandler := NewUserHandler(svcs.User)
 		userHandler.RegisterRoutes(admin)
-
-		groupHandler := NewGroupHandler(svcs.Group)
-		groupHandler.RegisterRoutes(admin)
 
 		auditHandler := NewAuditHandler(svcs.Audit)
 		auditHandler.RegisterRoutes(admin)

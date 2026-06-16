@@ -19,6 +19,7 @@ var (
 	ErrInvalidToken       = errors.New("无效的 token")
 	ErrUserDisabled       = errors.New("用户已被禁用")
 	ErrAdminAlreadyExists = errors.New("管理员已存在")
+	ErrUserNotFound       = errors.New("用户不存在")
 )
 
 // AuthService 认证服务。

@@ -9,6 +9,14 @@
 ### Added
 - SDD 开发体系（文档 + 规则 + 技能）
 - PRD, ARCHITECTURE, API, ADR 基础文档
+- RBAC 授权服务（`service/authz.go`）：三级角色权限节点、用户组隔离、实例/Bot 资源级访问判断
+- 权限中间件：`LoadAccess` 加载授权上下文、`RequirePermission`/`RequireGroupAccess`/`RequireInstanceAccess` 等
+- `GET /api/v1/groups/:id/quota` 接口，返回组配额及当前用量（实例数/Bot 数/存储用量）
+
+### Changed
+- 实例/文件/终端/Bot 路由按用户组隔离：组管理员仅管理本组、组成员仅操作所属组实例，跨组访问返回 404
+- 节点管理限平台管理员
+- 实例创建配额检查补全 `MaxBots`（组 Bot 数达上限拒绝）与 `MaxStorageMB`（组内备份总大小超额拒绝）
 
 #### 核心功能 (P0)
 - 用户认证：JWT 双 Token（15min access + 7d refresh），bcrypt 密码加密

@@ -14,15 +14,27 @@ import (
 // InstanceHandler 实例路由处理器。
 type InstanceHandler struct {
 	instanceSvc *service.InstanceService
+	authz       *service.AuthzService
 }
 
 // NewInstanceHandler 创建实例路由处理器。
-func NewInstanceHandler(instanceSvc *service.InstanceService) *InstanceHandler {
-	return &InstanceHandler{instanceSvc: instanceSvc}
+func NewInstanceHandler(instanceSvc *service.InstanceService, authz *service.AuthzService) *InstanceHandler {
+	return &InstanceHandler{instanceSvc: instanceSvc, authz: authz}
 }
 
 // List 实例列表。
+// 平台管理员返回全部；组管理员/成员仅返回其可访问组下的实例。
 func (h *InstanceHandler) List(c *gin.Context) {
+	access := getAccess(c)
+	if access == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
+	}
+	if !access.HasPermission(service.PermInstanceRead) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
+	}
+
 	var nodeID *uint
 	if v := c.Query("nodeId"); v != "" {
 		id, _ := strconv.ParseUint(v, 10, 64)
@@ -34,6 +46,22 @@ func (h *InstanceHandler) List(c *gin.Context) {
 	if v := c.Query("status"); v != "" {
 		s := model.InstanceStatus(v)
 		status = &s
+	}
+
+	// 非平台管理员强制按其可访问组过滤，忽略前端传入的 groupId
+	if !access.IsPlatformAdmin {
+		groupIDs := accessibleGroupIDs(access)
+		if len(groupIDs) == 0 {
+			c.JSON(http.StatusOK, []interface{}{})
+			return
+		}
+		instances, err := h.instanceSvc.ListByGroups(nodeID, status, groupIDs)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询实例列表失败"})
+			return
+		}
+		c.JSON(http.StatusOK, instances)
+		return
 	}
 
 	var groupID *uint
@@ -59,6 +87,11 @@ func (h *InstanceHandler) Get(c *gin.Context) {
 		return
 	}
 
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+
 	instance, err := h.instanceSvc.GetByID(id)
 	if err != nil {
 		if errors.Is(err, service.ErrInstanceNotFound) {
@@ -73,23 +106,42 @@ func (h *InstanceHandler) Get(c *gin.Context) {
 }
 
 type createInstanceRequest struct {
-	NodeID       uint              `json:"nodeId" binding:"required"`
-	Name         string            `json:"name" binding:"required"`
+	NodeID       uint               `json:"nodeId" binding:"required"`
+	Name         string             `json:"name" binding:"required"`
 	Type         model.InstanceType `json:"type" binding:"required"`
 	ProcessType  model.ProcessType  `json:"processType" binding:"required"`
-	StartCommand string            `json:"startCommand" binding:"required"`
-	WorkDir      string            `json:"workDir"`
-	AutoStart    bool              `json:"autoStart"`
-	AutoRestart  bool              `json:"autoRestart"`
-	GroupID      uint              `json:"groupId"`
+	StartCommand string             `json:"startCommand" binding:"required"`
+	WorkDir      string             `json:"workDir"`
+	AutoStart    bool               `json:"autoStart"`
+	AutoRestart  bool               `json:"autoRestart"`
+	GroupID      uint               `json:"groupId"`
 }
 
 // Create 创建实例。
+// 平台管理员可创建并指定任意组；组管理员仅可创建并分配到自己管理的组。
 func (h *InstanceHandler) Create(c *gin.Context) {
+	access := getAccess(c)
+	if access == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
+	}
+	if !access.HasPermission(service.PermInstanceCreate) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
+	}
+
 	var req createInstanceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
 		return
+	}
+
+	// 非平台管理员：必须分配到自己可管理的组
+	if !access.IsPlatformAdmin {
+		if req.GroupID == 0 || !access.CanManageGroup(req.GroupID) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "无权向该用户组分配实例"})
+			return
+		}
 	}
 
 	instance, err := h.instanceSvc.Create(service.CreateInstanceRequest{
@@ -129,6 +181,11 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 		return
 	}
 
+	if !canManageInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+
 	var req updateInstanceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
@@ -155,6 +212,11 @@ func (h *InstanceHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	if !canManageInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+
 	if err := h.instanceSvc.Delete(id); err != nil {
 		if errors.Is(err, service.ErrInstanceRunning) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "INSTANCE_RUNNING", "message": "实例正在运行，需先停止"})
@@ -174,6 +236,11 @@ func (h *InstanceHandler) Start(c *gin.Context) {
 		return
 	}
 
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+
 	if err := h.instanceSvc.Start(id); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "INVALID_TRANSITION", "message": err.Error()})
 		return
@@ -186,6 +253,11 @@ func (h *InstanceHandler) Start(c *gin.Context) {
 func (h *InstanceHandler) Stop(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
+		return
+	}
+
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
 		return
 	}
 
@@ -204,6 +276,11 @@ func (h *InstanceHandler) Restart(c *gin.Context) {
 		return
 	}
 
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+
 	if err := h.instanceSvc.Restart(id); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "INVALID_TRANSITION", "message": err.Error()})
 		return
@@ -219,6 +296,11 @@ func (h *InstanceHandler) Kill(c *gin.Context) {
 		return
 	}
 
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+
 	if err := h.instanceSvc.Kill(id); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "INVALID_TRANSITION", "message": err.Error()})
 		return
@@ -231,6 +313,11 @@ func (h *InstanceHandler) Kill(c *gin.Context) {
 func (h *InstanceHandler) Metrics(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
+		return
+	}
+
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
 		return
 	}
 
@@ -258,4 +345,39 @@ func (h *InstanceHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		instances.POST("/:id/kill", h.Kill)
 		instances.GET("/:id/metrics", h.Metrics)
 	}
+}
+
+// canAccessInstance 校验当前用户能否访问指定实例，失败或出错均返回 false。
+func canAccessInstance(c *gin.Context, authz *service.AuthzService, instanceID uint) bool {
+	access := getAccess(c)
+	if access == nil {
+		return false
+	}
+	ok, err := authz.CanAccessInstance(access, instanceID)
+	if err != nil {
+		return false
+	}
+	return ok
+}
+
+// canManageInstance 校验当前用户能否管理（写/删除）指定实例。
+func canManageInstance(c *gin.Context, authz *service.AuthzService, instanceID uint) bool {
+	access := getAccess(c)
+	if access == nil {
+		return false
+	}
+	ok, err := authz.CanManageInstance(access, instanceID)
+	if err != nil {
+		return false
+	}
+	return ok
+}
+
+// accessibleGroupIDs 将授权上下文中的可访问组集合转为切片。
+func accessibleGroupIDs(access *service.UserAccess) []uint {
+	ids := make([]uint, 0, len(access.AccessibleGroups))
+	for id := range access.AccessibleGroups {
+		ids = append(ids, id)
+	}
+	return ids
 }

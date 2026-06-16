@@ -139,6 +139,24 @@
 - **关联 FR**: FR-003
 - **请求**: `{ "maxInstances": 10, "maxBots": 50, "maxStorageMb": 10240 }`
 
+### GET /api/v1/groups/:id/quota
+- **描述**: 查询组配额及当前用量（组成员可查看本组，组管理员/平台管理员同）
+- **关联 FR**: FR-003
+- **权限**: `group:quota:read`（本组可访问）
+- **响应**:
+  ```json
+  {
+    "groupId": 1,
+    "maxInstances": 10,
+    "maxBots": 50,
+    "maxStorageMb": 10240,
+    "usedInstances": 3,
+    "usedBots": 15,
+    "usedStorageMb": 2100
+  }
+  ```
+- **错误**: 404 用户组不存在或无权访问
+
 ---
 
 ## 节点

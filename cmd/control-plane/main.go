@@ -53,6 +53,7 @@ func main() {
 	backupSvc := service.NewBackupService(db, pool)
 	templateSvc := service.NewTemplateService(db)
 	auditSvc := service.NewAuditService(db)
+	authzSvc := service.NewAuthzService(db)
 
 	r := router.Setup(&router.Services{
 		Auth:     authSvc,
@@ -68,6 +69,7 @@ func main() {
 		Backup:   backupSvc,
 		Template: templateSvc,
 		Audit:    auditSvc,
+		Authz:    authzSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）

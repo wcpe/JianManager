@@ -11,17 +11,23 @@ import (
 // TerminalHandler 终端路由处理器。
 type TerminalHandler struct {
 	terminalSvc *service.TerminalService
+	authz       *service.AuthzService
 }
 
 // NewTerminalHandler 创建终端路由处理器。
-func NewTerminalHandler(terminalSvc *service.TerminalService) *TerminalHandler {
-	return &TerminalHandler{terminalSvc: terminalSvc}
+func NewTerminalHandler(terminalSvc *service.TerminalService, authz *service.AuthzService) *TerminalHandler {
+	return &TerminalHandler{terminalSvc: terminalSvc, authz: authz}
 }
 
 // IssueToken 签发终端连接 token。
 func (h *TerminalHandler) IssueToken(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
+		return
+	}
+
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
 		return
 	}
 

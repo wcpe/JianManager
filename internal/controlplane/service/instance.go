@@ -71,17 +71,48 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 	}
 
 	err := s.db.Transaction(func(tx *gorm.DB) error {
-		// 配额检查
+		// 配额检查：实例数 / Bot 数 / 存储空间
 		if req.GroupID > 0 {
 			var quota model.GroupQuota
 			if err := tx.Where("group_id = ?", req.GroupID).First(&quota).Error; err != nil {
 				return fmt.Errorf("查询组配额失败: %w", err)
 			}
 
+			// 实例数配额
 			var currentCount int64
 			tx.Model(&model.GroupInstance{}).Where("group_id = ?", req.GroupID).Count(&currentCount)
-			if int(currentCount) >= quota.MaxInstances {
-				return fmt.Errorf("%w: 当前 %d/%d", ErrQuotaExceeded, currentCount, quota.MaxInstances)
+			if quota.MaxInstances > 0 && int(currentCount) >= quota.MaxInstances {
+				return fmt.Errorf("%w: 实例数 %d/%d", ErrQuotaExceeded, currentCount, quota.MaxInstances)
+			}
+
+			// Bot 数配额：组内关联 Bot 已达上限时拒绝新建实例
+			// 参见 FR-003 验收：配额检查覆盖 MaxBots。
+			if quota.MaxBots > 0 {
+				var botCount int64
+				tx.Model(&model.Bot{}).
+					Joins("JOIN group_instances ON group_instances.instance_id = bots.instance_id").
+					Where("group_instances.group_id = ?", req.GroupID).
+					Count(&botCount)
+				if int(botCount) >= quota.MaxBots {
+					return fmt.Errorf("%w: Bot 数 %d/%d", ErrQuotaExceeded, botCount, quota.MaxBots)
+				}
+			}
+
+			// 存储配额：按组内备份总大小预估，超额拒绝创建。
+			// 参见 FR-003 验收：配额检查覆盖 MaxStorageMB。
+			// TODO(FR-003): 接入 Worker 工作目录大小上报后替换为更精确的累计。
+			if quota.MaxStorageMB > 0 {
+				var storageSum struct {
+					Total float64
+				}
+				tx.Model(&model.Backup{}).
+					Select("COALESCE(SUM(file_size_mb), 0) as total").
+					Joins("JOIN group_instances ON group_instances.instance_id = backups.instance_id").
+					Where("group_instances.group_id = ?", req.GroupID).
+					Scan(&storageSum)
+				if int(storageSum.Total) >= quota.MaxStorageMB {
+					return fmt.Errorf("%w: 存储 %d/%d MB", ErrQuotaExceeded, int(storageSum.Total), quota.MaxStorageMB)
+				}
 			}
 		}
 
@@ -128,6 +159,29 @@ func (s *InstanceService) List(nodeID *uint, status *model.InstanceStatus, group
 	if groupID != nil {
 		q = q.Joins("JOIN group_instances ON group_instances.instance_id = instances.id").
 			Where("group_instances.group_id = ?", *groupID)
+	}
+
+	if err := q.Find(&instances).Error; err != nil {
+		return nil, fmt.Errorf("查询实例列表失败: %w", err)
+	}
+	return instances, nil
+}
+
+// ListByGroups 返回指定组集合内的实例列表，用于非平台管理员的权限过滤。
+func (s *InstanceService) ListByGroups(nodeID *uint, status *model.InstanceStatus, groupIDs []uint) ([]model.Instance, error) {
+	if len(groupIDs) == 0 {
+		return []model.Instance{}, nil
+	}
+	var instances []model.Instance
+	q := s.db.Model(&model.Instance{}).
+		Joins("JOIN group_instances ON group_instances.instance_id = instances.id").
+		Where("group_instances.group_id IN ?", groupIDs)
+
+	if nodeID != nil {
+		q = q.Where("instances.node_id = ?", *nodeID)
+	}
+	if status != nil {
+		q = q.Where("instances.status = ?", *status)
 	}
 
 	if err := q.Find(&instances).Error; err != nil {

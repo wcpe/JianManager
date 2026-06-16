@@ -19,8 +19,21 @@ func NewNodeHandler(nodeSvc *service.NodeService) *NodeHandler {
 	return &NodeHandler{nodeSvc: nodeSvc}
 }
 
-// List 节点列表。
+// requirePlatformAdmin 校验当前用户是否为平台管理员。
+func requirePlatformAdmin(c *gin.Context) bool {
+	access := getAccess(c)
+	if access == nil || !access.IsPlatformAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return false
+	}
+	return true
+}
+
+// List 节点列表（仅平台管理员）。
 func (h *NodeHandler) List(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
 	nodes, err := h.nodeSvc.List()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -32,8 +45,11 @@ func (h *NodeHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, nodes)
 }
 
-// Get 节点详情。
+// Get 节点详情（仅平台管理员）。
 func (h *NodeHandler) Get(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return
@@ -52,8 +68,11 @@ func (h *NodeHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, node)
 }
 
-// Delete 删除节点。
+// Delete 删除节点（仅平台管理员）。
 func (h *NodeHandler) Delete(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
 	id, err := parseID(c)
 	if err != nil {
 		return

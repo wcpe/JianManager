@@ -51,6 +51,7 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 	}
 	groupSvc := service.NewGroupService(db)
 	pool := cpgrpc.NewClientPool()
+	authzSvc := service.NewAuthzService(db)
 	svcs := &Services{
 		Auth:     service.NewAuthService(db, jwtCfg),
 		User:     service.NewUserService(db),
@@ -65,6 +66,7 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 		Backup:   service.NewBackupService(db, pool),
 		Template: service.NewTemplateService(db),
 		Audit:    service.NewAuditService(db),
+		Authz:    authzSvc,
 	}
 	return Setup(svcs, jwtCfg.Secret)
 }
