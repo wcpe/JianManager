@@ -8,6 +8,7 @@
 - [ ] 实现和 `docs/specs/<feature>/api.md` 一致
 - [ ] 实现和 `docs/ARCHITECTURE.md` 架构一致（未引入未记录的模式）
 - [ ] 数据库 migration 和 ARCHITECTURE.md 中的表结构一致
+- [ ] **FR 验收标准逐条通过，且由用户确认（Agent 不得自行标记 done）**
 
 ### 文档同步
 - [ ] `docs/ARCHITECTURE.md` 已更新（如有架构变更）

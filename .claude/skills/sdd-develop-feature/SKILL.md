@@ -51,18 +51,46 @@ description: 完整的 Feature 开发工作流（文档 → 脚手架 → 编码
     - 检查和 ARCHITECTURE.md 一致性
 11. **修复不一致项**
 
-### Phase 5: 收尾
+### Phase 5: 验收（用户确认）
 
-12. **文档同步**：
+12. **逐条核对验收标准**，向用户输出：
+    ```
+    FR-005 验收报告：
+
+    ✅ 创建实例：选择节点、类型、启动方式、启动命令
+       → POST /api/v1/instances 返回 201，数据库有记录
+    ✅ 启动/停止/重启/强制终止操作
+       → POST /instances/:id/start 状态变为 RUNNING
+    ❌ 状态机：STOPPED → STARTING → RUNNING → STOPPING → STOPPED / CRASHED
+       → CRASHED 后未自动重启，缺少指数退避逻辑
+    ✅ 崩溃自动重启（指数退避）
+       → 实测 kill 进程后 5s 内自动重启
+    ✅ 实例分配给用户组
+       → 组成员只能看到分配的实例
+
+    通过率: 4/5
+    未通过: 状态机 CRASHED 转换
+    ```
+
+13. **等待用户确认**：
+    - 用户说「全部通过」「可以了」→ 进入 Phase 6
+    - 用户指出哪些没通过 → **回到 Phase 3** 修复未通过项
+    - Agent 不得自行标记 FR 为 done
+
+### Phase 6: 收尾
+
+14. 用户确认全部通过后：
     - 更新 `docs/ARCHITECTURE.md`（如有架构变更）
     - 更新 `docs/API.md`（如有 API 变更）
-    - 更新 `docs/PRD.md` 中 FR 状态 → `✅ done`
-13. **Gate 4 检查**：按 `.claude/rules/gate-merge.md` checklist 逐项核对
-14. **提交代码**：遵循 `git-commit.md` 规范
+    - **由用户确认后**更新 `docs/PRD.md` 中 FR 状态 → `✅ done`
+15. **Gate 4 检查**：按 `.claude/rules/gate-merge.md` checklist 逐项核对
+16. **提交代码**：遵循 `git-commit.md` 规范
 
 ## 约束
 
 - 严格按 Phase 顺序执行，不得跳步
 - Phase 1 的 Gate 未通过不得进入 Phase 2
 - Phase 4 的审查未通过不得进入 Phase 5
-- 每个 Phase 可以产出多个 commit
+- **Phase 5 验收未通过不得进入 Phase 6**
+- **Agent 不得自行将 FR 标记为 done，必须等用户确认验收通过**
+- **验收标准必须逐条核对，不能笼统说「已完成」**
