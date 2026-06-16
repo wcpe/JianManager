@@ -2,6 +2,8 @@ package service
 
 import (
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -103,15 +105,80 @@ func (s *Scheduler) shouldRun(schedule *model.Schedule, now time.Time) bool {
 	return matchesCron(schedule.CronExpr, now)
 }
 
-// matchesCron 简化的 cron 表达式匹配。
-// 支持格式: "分 时 日 月 周"
-// 特殊值: * 表示任意, 数字表示精确匹配
+// matchesCron cron 表达式匹配。
+// 支持格式: "分 时 日 月 周"（5 字段标准 cron）
+// 特殊值: * 任意, */N 步进, N 精确匹配, N-M 范围, N,M 列表
 func matchesCron(expr string, now time.Time) bool {
-	// TODO: 实现完整的 cron 表达式解析
-	// 目前返回 false，避免误触发
-	_ = expr
-	_ = now
-	return false
+	fields := strings.Fields(expr)
+	if len(fields) != 5 {
+		slog.Warn("cron 表达式格式错误", "expr", expr)
+		return false
+	}
+
+	// 分(0-59) 时(0-23) 日(1-31) 月(1-12) 周(0-6)
+	checks := []struct {
+		value int
+		min   int
+		max   int
+	}{
+		{now.Minute(), 0, 59},
+		{now.Hour(), 0, 23},
+		{now.Day(), 1, 31},
+		{int(now.Month()), 1, 12},
+		{int(now.Weekday()), 0, 6},
+	}
+
+	for i, field := range fields {
+		if !matchCronField(field, checks[i].value, checks[i].min, checks[i].max) {
+			return false
+		}
+	}
+	return true
+}
+
+// matchCronField 匹配单个 cron 字段。
+func matchCronField(field string, value, min, max int) bool {
+	// * 任意匹配
+	if field == "*" {
+		return true
+	}
+
+	// 逗号分隔的列表
+	if strings.Contains(field, ",") {
+		for _, part := range strings.Split(field, ",") {
+			if matchCronField(strings.TrimSpace(part), value, min, max) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// 步进 */N
+	if strings.HasPrefix(field, "*/") {
+		n, err := strconv.Atoi(field[2:])
+		if err != nil || n <= 0 {
+			return false
+		}
+		return (value-min)%n == 0
+	}
+
+	// 范围 N-M
+	if strings.Contains(field, "-") {
+		parts := strings.SplitN(field, "-", 2)
+		lo, err1 := strconv.Atoi(parts[0])
+		hi, err2 := strconv.Atoi(parts[1])
+		if err1 != nil || err2 != nil {
+			return false
+		}
+		return value >= lo && value <= hi
+	}
+
+	// 精确匹配
+	n, err := strconv.Atoi(field)
+	if err != nil {
+		return false
+	}
+	return value == n
 }
 
 // runSchedule 执行定时任务。

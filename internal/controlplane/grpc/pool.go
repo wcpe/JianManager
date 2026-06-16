@@ -51,7 +51,7 @@ func (p *ClientPool) Connect(nodeUUID, addr string) error {
 
 	client := &Client{
 		Conn:     conn,
-		Worker:   nil, // TODO: 生成代码后使用 NewWorkerServiceClient(conn)
+		Worker:   workerpb.NewWorkerServiceClient(conn),
 		NodeUUID: nodeUUID,
 	}
 

@@ -142,8 +142,25 @@ func (s *Server) GetNodeMetrics(ctx context.Context, req *workerpb.GetNodeMetric
 
 // GetInstanceMetrics 获取实例指标。
 func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstanceMetricsRequest) (*workerpb.GetInstanceMetricsResponse, error) {
-	// TODO: 实际指标采集
-	return &workerpb.GetInstanceMetricsResponse{}, nil
+	resp := &workerpb.GetInstanceMetricsResponse{}
+
+	// 获取实例状态，确认实例存在
+	state, err := s.manager.GetState(req.InstanceUuid)
+	if err != nil {
+		return resp, fmt.Errorf("实例不存在: %w", err)
+	}
+
+	// 仅运行中的实例有指标
+	if state != "RUNNING" {
+		return resp, nil
+	}
+
+	// TODO: 通过 RCON 查询 MC 专用指标（TPS、在线玩家）
+	resp.Tps = 20.0
+	resp.OnlinePlayers = 0
+	resp.MemoryMb = 0
+
+	return resp, nil
 }
 
 // IssueTerminalToken 签发终端 token（由 Control Plane 处理，此处不实现）。

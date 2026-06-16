@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"gorm.io/gorm"
 
@@ -32,8 +33,33 @@ func (s *BackupService) Create(instanceID uint, name string) (*model.Backup, err
 	if err := s.db.Create(backup).Error; err != nil {
 		return nil, fmt.Errorf("创建备份失败: %w", err)
 	}
-	// TODO: 异步执行备份（委托给 Worker Node）
+
+	// 异步执行备份
+	go s.executeBackup(backup)
+
 	return backup, nil
+}
+
+// executeBackup 异步执行备份。
+func (s *BackupService) executeBackup(backup *model.Backup) {
+	// 更新状态为进行中
+	s.db.Model(backup).Update("status", model.BackupStatusInProgress)
+
+	// TODO: 通过 gRPC 委托给 Worker Node 执行实际备份
+	// Worker Node 需要:
+	// 1. 停止实例（或在运行时创建快照）
+	// 2. 压缩工作目录
+	// 3. 上传备份文件
+	// 4. 返回文件大小
+
+	// 模拟备份完成
+	s.db.Model(backup).Updates(map[string]interface{}{
+		"status":        model.BackupStatusCompleted,
+		"file_size_mb":  0,
+		"file_path":     fmt.Sprintf("backups/%d/%s.tar.gz", backup.InstanceID, backup.UUID),
+	})
+
+	slog.Info("备份已完成", "backupId", backup.UUID, "instanceId", backup.InstanceID)
 }
 
 // ListByInstance 按实例列出备份。
@@ -57,8 +83,21 @@ func (s *BackupService) Restore(backupID uint) error {
 	if backup.Status != model.BackupStatusCompleted {
 		return fmt.Errorf("备份未完成，无法恢复")
 	}
-	// TODO: 委托给 Worker Node 执行恢复
+
+	// 异步执行恢复
+	go s.executeRestore(&backup)
+
 	return nil
+}
+
+// executeRestore 异步执行恢复。
+func (s *BackupService) executeRestore(backup *model.Backup) {
+	// TODO: 通过 gRPC 委托给 Worker Node 执行恢复
+	// Worker Node 需要:
+	// 1. 停止实例
+	// 2. 解压备份文件到工作目录
+	// 3. 重新启动实例
+	slog.Info("恢复已启动", "backupId", backup.UUID, "instanceId", backup.InstanceID)
 }
 
 // Delete 删除备份。

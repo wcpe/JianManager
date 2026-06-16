@@ -12,7 +12,11 @@ import (
 	"github.com/wxys233/JianManager/internal/worker/daemon"
 )
 
-// TerminalMessage 终端消息。
+// StdinHandler stdin 输入处理函数。
+type StdinHandler func(instanceID, data string)
+
+// ResizeHandler 终端大小调整处理函数。
+type ResizeHandler func(instanceID string, cols, rows int)
 type TerminalMessage struct {
 	Type       string `json:"type"`
 	InstanceID string `json:"instanceId,omitempty"`
@@ -36,6 +40,8 @@ type TerminalServer struct {
 	upgrader  websocket.Upgrader
 	mu        sync.RWMutex
 	sessions  map[string][]*TerminalSession
+	onStdin   StdinHandler
+	onResize  ResizeHandler
 }
 
 // NewTerminalServer 创建终端服务器。
@@ -47,6 +53,16 @@ func NewTerminalServer(jwtSecret string) *TerminalServer {
 		},
 		sessions: make(map[string][]*TerminalSession),
 	}
+}
+
+// SetStdinHandler 设置 stdin 输入处理函数。
+func (s *TerminalServer) SetStdinHandler(handler StdinHandler) {
+	s.onStdin = handler
+}
+
+// SetResizeHandler 设置终端大小调整处理函数。
+func (s *TerminalServer) SetResizeHandler(handler ResizeHandler) {
+	s.onResize = handler
 }
 
 // Handler 返回 HTTP handler。
@@ -127,13 +143,13 @@ func (s *TerminalServer) handleSession(session *TerminalSession) {
 
 		switch msg.Type {
 		case "stdin":
-			if session.Permission == "write" {
-				// TODO: 转发 stdin 到实例进程
-				slog.Debug("终端输入", "instanceId", session.InstanceID, "data", msg.Data)
+			if session.Permission == "write" && s.onStdin != nil {
+				s.onStdin(session.InstanceID, msg.Data)
 			}
 		case "resize":
-			// TODO: 调整 PTY 大小
-			slog.Debug("终端调整大小", "instanceId", session.InstanceID, "cols", msg.Cols, "rows", msg.Rows)
+			if s.onResize != nil {
+				s.onResize(session.InstanceID, msg.Cols, msg.Rows)
+			}
 		}
 	}
 }

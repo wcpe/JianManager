@@ -12,8 +12,9 @@ type BackupStatus int
 
 const (
 	BackupStatusPending    BackupStatus = 0 // 待处理
-	BackupStatusCompleted  BackupStatus = 1 // 完成
-	BackupStatusFailed     BackupStatus = 2 // 失败
+	BackupStatusInProgress BackupStatus = 1 // 进行中
+	BackupStatusCompleted  BackupStatus = 2 // 完成
+	BackupStatusFailed     BackupStatus = 3 // 失败
 )
 
 // BackupType 备份类型。
