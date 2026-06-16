@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { useUsers, useDeleteUser } from '@/api/users'
+import CreateUserDialog from '@/components/CreateUserDialog'
 
 const roleLabel: Record<number, string> = {
   0: '组成员',
@@ -7,12 +9,24 @@ const roleLabel: Record<number, string> = {
 }
 
 export default function UsersPage() {
+  const [showCreate, setShowCreate] = useState(false)
   const { data: users, isLoading } = useUsers()
   const deleteUser = useDeleteUser()
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-4">用户管理</h1>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-bold">用户管理</h1>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+        >
+          + 创建用户
+        </button>
+      </div>
+
+      <CreateUserDialog open={showCreate} onClose={() => setShowCreate(false)} />
+
       {isLoading ? (
         <p className="text-muted-foreground">加载中...</p>
       ) : (

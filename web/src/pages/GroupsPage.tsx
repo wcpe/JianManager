@@ -1,11 +1,25 @@
+import { useState } from 'react'
 import { useGroups } from '@/api/groups'
+import CreateGroupDialog from '@/components/CreateGroupDialog'
 
 export default function GroupsPage() {
+  const [showCreate, setShowCreate] = useState(false)
   const { data: groups, isLoading } = useGroups()
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-4">用户组管理</h1>
+      <div className="flex items-center justify-between mb-4">
+        <h1 className="text-2xl font-bold">用户组管理</h1>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+        >
+          + 创建组
+        </button>
+      </div>
+
+      <CreateGroupDialog open={showCreate} onClose={() => setShowCreate(false)} />
+
       {isLoading ? (
         <p className="text-muted-foreground">加载中...</p>
       ) : (
