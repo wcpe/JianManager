@@ -277,7 +277,7 @@
 - **关联 API**: GET /instances/:id/metrics
 
 ### FR-023: gRPC 客户端真实实现
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: 替换 proto/workerpb 中的桩代码，实现真实的 gRPC 客户端和服务端 RPC 调用
 - **验收标准**:
@@ -290,7 +290,7 @@
 - **关联 API**: gRPC Register, Heartbeat, StartInstance, StopInstance, ListFiles
 
 ### FR-024: 前端对接运行时 API
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: 前端页面对接 FR-017~022 的真实 API，实现完整的前后端联调
 - **验收标准**:
