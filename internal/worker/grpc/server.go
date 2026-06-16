@@ -3,7 +3,6 @@ package grpc
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"github.com/wxys233/JianManager/internal/worker/metrics"
 	"github.com/wxys233/JianManager/internal/worker/process"
@@ -11,8 +10,12 @@ import (
 )
 
 // Server Worker Node gRPC 服务器实现。
+// 仅实现 Control Plane 反向调用 Worker 的 RPC（实例操作、文件操作、指标）。
+// 生命周期 RPC（Register/Heartbeat）由 Worker 主动发起，不由 CP 调用 Worker，
+// 因此走 UnimplementedWorkerServiceServer 的默认实现，返回 codes.Unimplemented，
+// 避免因嵌入接口导致未实现方法被调用时 panic。
 type Server struct {
-	workerpb.WorkerServiceServer
+	workerpb.UnimplementedWorkerServiceServer
 	manager   *process.Manager
 	nodeUUID  string
 	collector *metrics.Collector
@@ -25,16 +28,6 @@ func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Col
 		nodeUUID:  nodeUUID,
 		collector: collector,
 	}
-}
-
-// Register 处理节点注册。
-func (s *Server) Register(ctx context.Context, req *workerpb.RegisterRequest) (*workerpb.RegisterResponse, error) {
-	slog.Info("收到注册请求", "name", req.Name, "host", req.Host)
-	// 实际注册逻辑由 Worker 启动时调用 Control Plane 完成
-	return &workerpb.RegisterResponse{
-		NodeUuid:   s.nodeUUID,
-		NodeSecret: "placeholder",
-	}, nil
 }
 
 // CreateInstance 创建实例。
@@ -173,7 +166,10 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 	return resp, nil
 }
 
-// IssueTerminalToken 签发终端 token（由 Control Plane 处理，此处不实现）。
+// IssueTerminalToken 签发终端 token。
+// 有意不在 Worker 侧实现：终端 token 由 Control Plane 签发并代理（见 FR-007/FR-019 决策），
+// 浏览器经 CP 拿到 token 后直连 Worker WS。此处返回明确错误而非走 Unimplemented，
+// 便于调用方区分「该能力归属 CP」与「Worker 未实现」。
 func (s *Server) IssueTerminalToken(ctx context.Context, req *workerpb.IssueTerminalTokenRequest) (*workerpb.IssueTerminalTokenResponse, error) {
-	return nil, fmt.Errorf("终端 token 由 Control Plane 签发")
+	return nil, fmt.Errorf("终端 token 由 Control Plane 签发，Worker 不实现此 RPC")
 }

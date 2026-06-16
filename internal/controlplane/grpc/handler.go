@@ -7,11 +7,18 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/net/context"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 
 	"github.com/wxys233/JianManager/internal/controlplane/model"
 	"github.com/wxys233/JianManager/proto/workerpb"
 )
+
+// nodeSecretHeader 心跳请求中携带 node_secret 的 gRPC metadata header 名。
+// 与 internal/worker/heartbeat 中的常量保持一致。
+const nodeSecretHeader = "node-secret"
 
 // ControlPlaneHandler Control Plane 侧的 gRPC 处理器。
 // 处理来自 Worker Node 的 Register 和 Heartbeat 请求。
@@ -97,11 +104,41 @@ func (h *ControlPlaneHandler) Register(ctx context.Context, req *workerpb.Regist
 
 // Heartbeat 处理 Worker Node 心跳（双向流）。
 func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatServer) error {
+	// 首次心跳到达时校验 node_secret（通过 gRPC metadata 传递，不改 proto）。
+	// secret 在 Register 阶段由 CP 签发，Worker 存入本地并在每次心跳携带。
+	var nodeSecretValid bool
+	if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
+		if vals := md.Get(nodeSecretHeader); len(vals) > 0 {
+			secret := vals[0]
+			// 用第一条心跳的 nodeUUID 查 DB secret 并校验；
+			// 无 secret header 的旧版 Worker（FR-004 阶段）跳过校验以保持向后兼容。
+			_ = secret // 实际校验在首次 Recv 拿到 nodeUUID 后进行
+			nodeSecretValid = true
+		}
+	}
+
 	for {
 		req, err := stream.Recv()
 		if err != nil {
 			slog.Warn("心跳流断开", "error", err)
 			return err
+		}
+
+		// 首次收到心跳时做 secret 校验（需要 nodeUUID 查 DB）
+		if nodeSecretValid {
+			var node model.Node
+			if err := h.db.Where("uuid = ?", req.NodeUuid).First(&node).Error; err != nil {
+				slog.Warn("心跳鉴权失败：节点不存在", "nodeUUID", req.NodeUuid)
+				return status.Errorf(codes.NotFound, "节点 %s 不存在", req.NodeUuid)
+			}
+			md, _ := metadata.FromIncomingContext(stream.Context())
+			secret := md.Get(nodeSecretHeader)[0]
+			if node.Secret != secret {
+				slog.Warn("心跳鉴权失败：secret 不匹配", "nodeUUID", req.NodeUuid)
+				return status.Errorf(codes.PermissionDenied, "心跳鉴权失败")
+			}
+			// 校验通过后关闭标记，后续心跳不再重复查 DB
+			nodeSecretValid = false
 		}
 
 		// 更新节点指标和心跳时间

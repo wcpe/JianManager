@@ -156,18 +156,19 @@ func runWorker() {
 	}()
 
 	// 注册到 Control Plane
+	// Control Plane 未启动时 Worker 不退出，按指数退避重试直到注册成功。
 	cpAddr := os.Getenv("JIANMANAGER_CONTROL_PLANE_GRPC")
 	if cpAddr == "" {
 		cpAddr = "localhost:9100"
 	}
 
-	regResult, err := register.Register(context.Background(), register.Config{
+	regResult, err := register.RegisterWithRetry(context.Background(), register.Config{
 		ControlPlaneAddr: cpAddr,
 		NodeName:         nodeName,
 		WsPort:           wsPort,
 		GrpcPort:         grpcPort,
 		Host:             host,
-	})
+	}, 2*time.Second, 60*time.Second)
 	if err != nil {
 		slog.Error("注册到 Control Plane 失败", "error", err)
 		os.Exit(1)
@@ -176,8 +177,8 @@ func runWorker() {
 	nodeUUID = regResult.NodeUUID
 	slog.Info("已注册到 Control Plane", "nodeUUID", nodeUUID)
 
-	// 启动心跳上报
-	hb := heartbeat.New(cpAddr, nodeUUID, 30*time.Second, manager)
+	// 启动心跳上报（携带注册获得的 node_secret 供 Control Plane 鉴权）
+	hb := heartbeat.New(cpAddr, nodeUUID, regResult.NodeSecret, 30*time.Second, manager)
 	hb.Start()
 	defer hb.Stop()
 

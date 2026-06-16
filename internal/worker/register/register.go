@@ -61,6 +61,41 @@ func Register(ctx context.Context, cfg Config) (*Result, error) {
 	}, nil
 }
 
+// RegisterWithRetry 带指数退避重试的注册。
+// Control Plane 未启动或暂时不可达时，Worker 不退出，按指数退避重试直到成功或 ctx 取消。
+// 退避区间 [initialDelay, maxDelay]，每次 ×2，上限 maxDelay。
+func RegisterWithRetry(ctx context.Context, cfg Config, initialDelay, maxDelay time.Duration) (*Result, error) {
+	delay := initialDelay
+	if delay <= 0 {
+		delay = 2 * time.Second
+	}
+	if maxDelay <= 0 {
+		maxDelay = 60 * time.Second
+	}
+
+	var lastErr error
+	for {
+		result, err := Register(ctx, cfg)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		slog.Warn("注册 Control Plane 失败，稍后重试",
+			"addr", cfg.ControlPlaneAddr, "error", err, "retryIn", delay)
+
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("注册中止: %w (最后错误: %v)", ctx.Err(), lastErr)
+		case <-time.After(delay):
+		}
+
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
+		}
+	}
+}
+
 // collectSystemInfo 采集系统信息用于注册。
 func collectSystemInfo(cfg Config) *workerpb.RegisterRequest {
 	host := cfg.Host
