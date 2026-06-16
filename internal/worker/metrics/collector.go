@@ -1,10 +1,14 @@
 package metrics
 
 import (
+	"context"
 	"log/slog"
-	"os"
 	"runtime"
 	"time"
+
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/disk"
+	"github.com/shirou/gopsutil/v4/mem"
 )
 
 // NodeMetrics 节点指标。
@@ -35,43 +39,31 @@ func NewCollector(interval time.Duration) *Collector {
 
 // Collect 采集当前节点指标。
 func (c *Collector) Collect() NodeMetrics {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-
+	ctx := context.Background()
 	metrics := NodeMetrics{
-		MemoryUsedMB:  int64(m.Sys / 1024 / 1024),
-		MemoryTotalMB: int64(m.Sys / 1024 / 1024), // 简化：使用 sys 作为总量
-		Goroutines:    runtime.NumGoroutine(),
+		Goroutines: runtime.NumGoroutine(),
+	}
+
+	// CPU 使用率
+	if percents, err := cpu.PercentWithContext(ctx, time.Second, false); err == nil && len(percents) > 0 {
+		metrics.CPUUsage = float32(percents[0] / 100.0)
 	}
 
 	// 内存使用率
-	if metrics.MemoryTotalMB > 0 {
-		metrics.MemoryUsage = float32(m.Alloc) / float32(m.Sys)
+	if vmem, err := mem.VirtualMemoryWithContext(ctx); err == nil {
+		metrics.MemoryUsage = float32(vmem.UsedPercent / 100.0)
+		metrics.MemoryUsedMB = int64(vmem.Used / 1024 / 1024)
+		metrics.MemoryTotalMB = int64(vmem.Total / 1024 / 1024)
 	}
 
-	// CPU 使用率（简化：基于 Goroutine 数估算）
-	numCPU := runtime.NumCPU()
-	metrics.CPUUsage = float32(runtime.NumGoroutine()) / float32(numCPU*100)
-	if metrics.CPUUsage > 1.0 {
-		metrics.CPUUsage = 1.0
-	}
-
-	// 磁盘使用率（简化）
-	cwd, err := os.Getwd()
-	if err == nil {
-		usage := getDiskUsage(cwd)
-		metrics.DiskUsage = usage
+	// 磁盘使用率
+	if usage, err := disk.UsageWithContext(ctx, "/"); err == nil {
+		metrics.DiskUsage = float32(usage.UsedPercent / 100.0)
+		metrics.DiskUsedMB = int64(usage.Used / 1024 / 1024)
+		metrics.DiskTotalMB = int64(usage.Total / 1024 / 1024)
 	}
 
 	return metrics
-}
-
-// getDiskUsage 获取磁盘使用率（简化实现）。
-func getDiskUsage(path string) float32 {
-	// 在实际实现中应使用 syscall 获取磁盘信息
-	// 这里返回估算值
-	_ = path
-	return 0.0
 }
 
 // StartPeriodic 启动周期性采集。

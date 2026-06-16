@@ -49,7 +49,7 @@ func main() {
 		nodeUUID = "local-dev"
 	}
 
-	server := grpc.NewServer(manager, nodeUUID)
+	server := grpc.NewServer(manager, nodeUUID, collector)
 
 	addr := fmt.Sprintf(":%d", grpcPort)
 	listener, err := net.Listen("tcp", addr)

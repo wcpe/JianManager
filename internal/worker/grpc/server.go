@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/wxys233/JianManager/internal/worker/metrics"
 	"github.com/wxys233/JianManager/internal/worker/process"
 	"github.com/wxys233/JianManager/proto/workerpb"
 )
@@ -12,15 +13,17 @@ import (
 // Server Worker Node gRPC 服务器实现。
 type Server struct {
 	workerpb.WorkerServiceServer
-	manager *process.Manager
-	nodeUUID string
+	manager   *process.Manager
+	nodeUUID  string
+	collector *metrics.Collector
 }
 
 // NewServer 创建 Worker gRPC 服务器。
-func NewServer(manager *process.Manager, nodeUUID string) *Server {
+func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Collector) *Server {
 	return &Server{
-		manager:  manager,
-		nodeUUID: nodeUUID,
+		manager:   manager,
+		nodeUUID:  nodeUUID,
+		collector: collector,
 	}
 }
 
@@ -121,8 +124,20 @@ func (s *Server) ListInstances(ctx context.Context, req *workerpb.ListInstancesR
 
 // GetNodeMetrics 获取节点指标。
 func (s *Server) GetNodeMetrics(ctx context.Context, req *workerpb.GetNodeMetricsRequest) (*workerpb.GetNodeMetricsResponse, error) {
-	// TODO: 实际指标采集
-	return &workerpb.GetNodeMetricsResponse{}, nil
+	if s.collector == nil {
+		return &workerpb.GetNodeMetricsResponse{}, nil
+	}
+
+	m := s.collector.Collect()
+	return &workerpb.GetNodeMetricsResponse{
+		CpuUsage:     m.CPUUsage,
+		MemoryUsage:  m.MemoryUsage,
+		DiskUsage:    m.DiskUsage,
+		MemoryUsedMb: m.MemoryUsedMB,
+		MemoryTotalMb: m.MemoryTotalMB,
+		DiskUsedMb:   m.DiskUsedMB,
+		DiskTotalMb:  m.DiskTotalMB,
+	}, nil
 }
 
 // GetInstanceMetrics 获取实例指标。
