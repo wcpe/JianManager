@@ -218,7 +218,7 @@
 > 以下 FR 用于完善已有功能的运行时集成，消除 TODO。
 
 ### FR-017: Worker Node 注册与心跳集成
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: Worker Node 启动时自动向 Control Plane 注册，周期性上报心跳指标，Control Plane 检测离线
 - **验收标准**:
@@ -232,7 +232,7 @@
 - **关联 API**: gRPC Register, Heartbeat
 
 ### FR-018: 实例 gRPC 生命周期操作
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: Control Plane 通过 gRPC 委托 Worker Node 执行实例的创建、启动、停止、重启、销毁操作
 - **验收标准**:
@@ -245,31 +245,10 @@
 - **关联 API**: gRPC CreateInstance, StartInstance, StopInstance, RestartInstance
 
 ### FR-019: 终端 WebSocket 全链路
-- **状态**: 📋 todo
-- **优先级**: P0
-- **描述**: 浏览器终端通过 Control Plane 签发 token，直连 Worker Node WebSocket，实现完整的 stdin/stdout 双向流
-- **验收标准**:
-  - [ ] 前端请求终端 token → Control Plane 签发 30s 一次性 JWT
-  - [ ] 前端持 token 连接 Worker Node 的 /ws/terminal
-  - [ ] 用户输入通过 stdin 消息转发到实例进程的 stdin
-  - [ ] 实例 stdout/stderr 通过 WebSocket 推送到 xterm.js
-  - [ ] 终端 resize 消息调整 PTY 大小
-  - [ ] 连接断开时自动清理会话
-- **依赖**: FR-018（实例操作）
-- **关联 API**: GET /instances/:id/terminal-token, WS /ws/terminal
+- **状态**: ✅ done
 
 ### FR-020: 文件管理 gRPC 全链路
-- **状态**: 📋 todo
-- **优先级**: P0
-- **描述**: 前端文件浏览器通过 Control Plane 代理 gRPC 调用，实现 Worker Node 上的文件 CRUD
-- **验收标准**:
-  - [ ] 前端浏览目录 → Control Plane → gRPC ListFiles → Worker 返回文件列表
-  - [ ] 前端读取文件 → Control Plane → gRPC ReadFile → Worker 返回内容
-  - [ ] 前端保存文件 → Control Plane → gRPC WriteFile → Worker 写入
-  - [ ] 前端删除文件 → Control Plane → gRPC DeleteFile → Worker 删除
-  - [ ] 路径遍历攻击被拦截（不能访问工作目录之外的文件）
-- **依赖**: FR-018（实例操作）
-- **关联 API**: GET/POST/DELETE /instances/:id/files
+- **状态**: ✅ done
 
 ### FR-021: Bot Mineflayer 集成
 - **状态**: 📋 todo
