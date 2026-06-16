@@ -4,13 +4,17 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"net"
 	"os"
+
+	"google.golang.org/grpc"
 
 	"github.com/wxys233/JianManager/internal/controlplane/config"
 	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
 	"github.com/wxys233/JianManager/internal/controlplane/database"
 	"github.com/wxys233/JianManager/internal/controlplane/router"
 	"github.com/wxys233/JianManager/internal/controlplane/service"
+	"github.com/wxys233/JianManager/proto/workerpb"
 )
 
 func main() {
@@ -67,6 +71,28 @@ func main() {
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	slog.Info("Control Plane 启动", "addr", addr)
+
+	// 启动 gRPC 服务器（用于 Worker Node 注册和心跳）
+	grpcHandler := cpgrpc.NewControlPlaneHandler(db)
+	grpcServer := grpc.NewServer()
+	workerpb.RegisterWorkerServiceServer(grpcServer, grpcHandler)
+
+	grpcAddr := fmt.Sprintf(":%d", cfg.GRPC.Port)
+	grpcListener, err := net.Listen("tcp", grpcAddr)
+	if err != nil {
+		log.Fatalf("监听 gRPC 端口失败: %v", err)
+	}
+
+	go func() {
+		slog.Info("gRPC 服务器就绪", "addr", grpcAddr)
+		if err := grpcServer.Serve(grpcListener); err != nil {
+			slog.Error("gRPC 服务器退出", "error", err)
+		}
+	}()
+
+	// 启动离线检测器
+	cpgrpc.StartOfflineDetector(db)
+
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("启动服务器失败: %v", err)
 	}

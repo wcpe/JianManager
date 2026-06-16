@@ -31,9 +31,11 @@ type Node struct {
 	CPUCores      int            `json:"cpuCores"`
 	MemoryMB      int64          `json:"memoryMb"`
 	DiskTotalMB   int64          `json:"diskTotalMb"`
-	CPUUsage      float64        `gorm:"-" json:"cpuUsage"`
-	MemoryUsage   float64        `gorm:"-" json:"memoryUsage"`
-	DiskUsage     float64        `gorm:"-" json:"diskUsage"`
+	CPUUsage      float32        `gorm:"default:0" json:"cpuUsage"`
+	MemoryUsage   float32        `gorm:"default:0" json:"memoryUsage"`
+	DiskUsage     float32        `gorm:"default:0" json:"diskUsage"`
+	MemoryUsedMB  int64          `gorm:"default:0" json:"memoryUsedMb"`
+	DiskUsedMB    int64          `gorm:"default:0" json:"diskUsedMb"`
 	LastHeartbeat *time.Time     `json:"lastHeartbeat"`
 	CreatedAt     time.Time      `json:"createdAt"`
 	UpdatedAt     time.Time      `json:"updatedAt"`

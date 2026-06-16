@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -12,9 +13,11 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/wxys233/JianManager/internal/worker/heartbeat"
 	wgrpc "github.com/wxys233/JianManager/internal/worker/grpc"
 	"github.com/wxys233/JianManager/internal/worker/metrics"
 	"github.com/wxys233/JianManager/internal/worker/process"
+	"github.com/wxys233/JianManager/internal/worker/register"
 	"github.com/wxys233/JianManager/internal/worker/ws"
 	"github.com/wxys233/JianManager/proto/workerpb"
 )
@@ -102,8 +105,29 @@ func main() {
 		}
 	}()
 
-	// TODO: 连接 Control Plane 进行注册（需要 protoc 生成的客户端代码）
-	// TODO: 启动心跳上报（需要 Control Plane 连接）
+	// 注册到 Control Plane
+	cpAddr := os.Getenv("JIANMANAGER_CONTROL_PLANE_GRPC")
+	if cpAddr == "" {
+		cpAddr = "localhost:9100"
+	}
+
+	regResult, err := register.Register(context.Background(), register.Config{
+		ControlPlaneAddr: cpAddr,
+		NodeName:         nodeName,
+		WsPort:           wsPort,
+	})
+	if err != nil {
+		slog.Error("注册到 Control Plane 失败", "error", err)
+		os.Exit(1)
+	}
+
+	nodeUUID = regResult.NodeUUID
+	slog.Info("已注册到 Control Plane", "nodeUUID", nodeUUID)
+
+	// 启动心跳上报
+	hb := heartbeat.New(cpAddr, nodeUUID, 30*time.Second)
+	hb.Start()
+	defer hb.Stop()
 
 	// 等待信号
 	sigCh := make(chan os.Signal, 1)
