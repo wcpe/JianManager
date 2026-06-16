@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-web build-bot dev-cp dev-web lint vet test clean proto embed-web docker
+.PHONY: build build-cp build-worker build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web docker
 
 # 构建所有（含前端嵌入）
 build: build-web embed-web build-cp build-worker
@@ -43,6 +43,10 @@ lint:
 # Go 测试
 test:
 	go test -race ./...
+
+# E2E 端到端测试（需启动真实 CP + Worker 进程）
+e2e:
+	go test -tags=e2e -run TestE2E ./internal/e2e/ -v -timeout 120s
 
 # Go 测试覆盖率
 test-cover:
