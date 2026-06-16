@@ -277,31 +277,33 @@
 - **关联 API**: GET /instances/:id/metrics
 
 ### FR-023: gRPC 客户端真实实现
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 替换 proto/workerpb 中的桩代码，实现真实的 gRPC 客户端和服务端 RPC 调用
 - **验收标准**:
-  - [ ] Worker 启动后能成功向 Control Plane 注册（Register RPC 返回真实 node_uuid）
-  - [ ] Worker 每 30s 发送心跳，Control Plane 更新节点指标
-  - [ ] Control Plane 通过 gRPC 启动/停止 Worker 上的实例
-  - [ ] Control Plane 通过 gRPC 查询 Worker 上的文件列表
-  - [ ] gRPC 调用超时后正确返回错误
+  - [x] Worker 启动后能成功向 Control Plane 注册（Register RPC 返回真实 node_uuid）
+  - [x] Worker 每 30s 发送心跳，Control Plane 更新节点指标
+  - [x] Control Plane 通过 gRPC 启动/停止 Worker 上的实例
+  - [x] Control Plane 通过 gRPC 查询 Worker 上的文件列表
+  - [x] gRPC 调用超时后正确返回错误
 - **依赖**: FR-017（Worker 注册心跳）
 - **关联 API**: gRPC Register, Heartbeat, StartInstance, StopInstance, ListFiles
+- **Spec**: `docs/specs/grpc-real/`
 
 ### FR-024: 前端对接运行时 API
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 前端页面对接 FR-017~022 的真实 API，实现完整的前后端联调
 - **验收标准**:
-  - [ ] 节点列表页面显示在线节点的实时 CPU/内存/磁盘指标
-  - [ ] 实例详情页终端 Tab 能连接 Worker WebSocket 并显示终端输出
-  - [ ] 实例详情页文件 Tab 能浏览/编辑 Worker 上的文件
-  - [ ] 实例详情页显示 TPS 和在线玩家数（通过 RCON）
-  - [ ] 创建/启动/停止实例操作能通过 gRPC 委托给 Worker 执行
-  - [ ] Bot 管理页面能创建 Bot 并显示连接状态
+  - [x] 节点列表页面显示在线节点的实时 CPU/内存/磁盘指标（30s 自动刷新）
+  - [x] 实例详情页终端 Tab 能连接 Worker WebSocket 并显示终端输出
+  - [x] 实例详情页文件 Tab 能浏览/编辑 Worker 上的文件
+  - [x] 实例详情页显示 TPS 和在线玩家数（通过 RCON 指标 API）
+  - [x] 创建/启动/停止实例操作能通过 gRPC 委托给 Worker 执行
+  - [x] Bot 管理页面能创建 Bot 并显示连接状态
 - **依赖**: FR-023（gRPC 真实实现）
 - **关联 API**: GET /nodes/:id/metrics, WS /ws/terminal, GET /instances/:id/files
+- **Spec**: `docs/specs/frontend-runtime/`
 
 ---
 
