@@ -37,6 +37,9 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	authHandler := NewAuthHandler(svcs.Auth)
 	authHandler.RegisterRoutes(api)
 
+	setupHandler := NewSetupHandler(svcs.Auth)
+	setupHandler.RegisterRoutes(api)
+
 	// 需要认证的路由
 	protected := api.Group("")
 	protected.Use(middleware.JWTAuth(jwtSecret))

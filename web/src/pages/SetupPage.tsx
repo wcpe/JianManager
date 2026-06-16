@@ -1,34 +1,44 @@
 import { useState, type FormEvent } from 'react'
 import { Navigate } from 'react-router'
-import { useLogin } from '@/api/auth'
-import { useSetupStatus } from '@/api/setup'
+import { useSetupStatus, useSetup } from '@/api/setup'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 
-export default function LoginPage() {
-  const [username, setUsername] = useState('')
+export default function SetupPage() {
+  const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
 
-  const login = useLogin()
-  const { data: setupStatus, isLoading } = useSetupStatus()
+  const { data: status, isLoading } = useSetupStatus()
+  const setup = useSetup()
 
-  // 需要初始化则跳转到 /setup
-  if (!isLoading && setupStatus?.setupRequired) {
-    return <Navigate to="/setup" replace />
+  // 已有管理员则跳转登录页
+  if (!isLoading && status && !status.setupRequired) {
+    return <Navigate to="/login" replace />
   }
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
     setError('')
 
-    login.mutate(
+    if (password !== confirm) {
+      setError('两次输入的密码不一致')
+      return
+    }
+
+    if (password.length < 8) {
+      setError('密码长度至少 8 个字符')
+      return
+    }
+
+    setup.mutate(
       { username, password },
       {
         onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-          setError(err.response?.data?.message || '登录失败')
+          setError(err.response?.data?.message || '创建失败')
         },
       },
     )
@@ -46,8 +56,8 @@ export default function LoginPage() {
     <div className="flex items-center justify-center h-screen">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">JianManager</CardTitle>
-          <CardDescription>登录到管理平台</CardDescription>
+          <CardTitle className="text-2xl">🎮 JianManager</CardTitle>
+          <CardDescription>首次使用，请设置管理员账号</CardDescription>
         </CardHeader>
         <CardContent>
           {error && (
@@ -64,6 +74,8 @@ export default function LoginPage() {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
+                minLength={3}
+                maxLength={64}
               />
             </div>
             <div className="space-y-2">
@@ -71,13 +83,28 @@ export default function LoginPage() {
               <Input
                 id="password"
                 type="password"
+                placeholder="至少 8 个字符"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                minLength={8}
+                maxLength={128}
               />
             </div>
-            <Button type="submit" className="w-full" disabled={login.isPending}>
-              {login.isPending ? '登录中...' : '登录'}
+            <div className="space-y-2">
+              <Label htmlFor="confirm">确认密码</Label>
+              <Input
+                id="confirm"
+                type="password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                required
+                minLength={8}
+                maxLength={128}
+              />
+            </div>
+            <Button type="submit" className="w-full" disabled={setup.isPending}>
+              {setup.isPending ? '创建中...' : '开始使用'}
             </Button>
           </form>
         </CardContent>

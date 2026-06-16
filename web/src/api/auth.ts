@@ -14,11 +14,6 @@ interface LoginResponse {
   expiresIn: number
 }
 
-interface RegisterRequest {
-  username: string
-  password: string
-}
-
 /** 登录 mutation。 */
 export function useLogin() {
   const loginStore = useAuthStore((s) => s.login)
@@ -32,16 +27,6 @@ export function useLogin() {
     onSuccess: (data) => {
       loginStore(data.accessToken, data.refreshToken)
       navigate('/')
-    },
-  })
-}
-
-/** 注册 mutation。 */
-export function useRegister() {
-  return useMutation({
-    mutationFn: async (req: RegisterRequest) => {
-      const { data } = await api.post('/auth/register', req)
-      return data
     },
   })
 }

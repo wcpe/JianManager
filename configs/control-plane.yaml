@@ -19,7 +19,3 @@ jwt:
 log:
   level: debug
   format: text
-
-bootstrap:
-  admin_username: admin
-  # admin_password 默认 admin123；生产环境通过 JIANMANAGER_BOOTSTRAP_ADMIN_PASSWORD 环境变量覆盖

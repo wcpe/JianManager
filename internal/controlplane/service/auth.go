@@ -14,10 +14,11 @@ import (
 )
 
 var (
-	ErrUserExists     = errors.New("用户名已存在")
-	ErrInvalidCreds   = errors.New("用户名或密码错误")
-	ErrInvalidToken   = errors.New("无效的 token")
-	ErrUserDisabled   = errors.New("用户已被禁用")
+	ErrUserExists         = errors.New("用户名已存在")
+	ErrInvalidCreds       = errors.New("用户名或密码错误")
+	ErrInvalidToken       = errors.New("无效的 token")
+	ErrUserDisabled       = errors.New("用户已被禁用")
+	ErrAdminAlreadyExists = errors.New("管理员已存在")
 )
 
 // AuthService 认证服务。
@@ -157,4 +158,43 @@ func (s *AuthService) generateTokenPair(user *model.User) (*TokenPair, error) {
 		RefreshToken: refreshStr,
 		ExpiresIn:    int(s.cfg.AccessTTL.Seconds()),
 	}, nil
+}
+
+// SetupRequired 检查系统是否需要初始化（是否存在平台管理员）。
+func (s *AuthService) SetupRequired() (bool, error) {
+	var count int64
+	if err := s.db.Model(&model.User{}).Where("role = ?", model.RolePlatformAdmin).Count(&count).Error; err != nil {
+		return false, fmt.Errorf("查询管理员数量失败: %w", err)
+	}
+	return count == 0, nil
+}
+
+// SetupAdmin 创建初始管理员并返回 Token。仅当无管理员时可用。
+func (s *AuthService) SetupAdmin(username, password string) (*TokenPair, error) {
+	// 幂等检查：管理员已存在则拒绝
+	var count int64
+	if err := s.db.Model(&model.User{}).Where("role = ?", model.RolePlatformAdmin).Count(&count).Error; err != nil {
+		return nil, fmt.Errorf("查询管理员数量失败: %w", err)
+	}
+	if count > 0 {
+		return nil, ErrAdminAlreadyExists
+	}
+
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, fmt.Errorf("加密密码失败: %w", err)
+	}
+
+	user := &model.User{
+		Username: username,
+		Password: string(hashed),
+		Role:     model.RolePlatformAdmin,
+		Status:   model.UserStatusActive,
+	}
+
+	if err := s.db.Create(user).Error; err != nil {
+		return nil, fmt.Errorf("创建管理员失败: %w", err)
+	}
+
+	return s.generateTokenPair(user)
 }

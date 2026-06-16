@@ -6,13 +6,9 @@ import (
 	"log/slog"
 	"os"
 
-	"golang.org/x/crypto/bcrypt"
-	"gorm.io/gorm"
-
 	"github.com/wxys233/JianManager/internal/controlplane/config"
 	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
 	"github.com/wxys233/JianManager/internal/controlplane/database"
-	"github.com/wxys233/JianManager/internal/controlplane/model"
 	"github.com/wxys233/JianManager/internal/controlplane/router"
 	"github.com/wxys233/JianManager/internal/controlplane/service"
 )
@@ -36,10 +32,6 @@ func main() {
 
 	if err := database.AutoMigrate(db); err != nil {
 		log.Fatalf("数据库迁移失败: %v", err)
-	}
-
-	if err := bootstrapAdmin(db, cfg.Bootstrap); err != nil {
-		slog.Warn("初始化管理员账号失败", "error", err)
 	}
 
 	authSvc := service.NewAuthService(db, cfg.JWT)
@@ -101,36 +93,4 @@ func initLogger(cfg config.LogConfig) {
 		handler = slog.NewTextHandler(os.Stdout, opts)
 	}
 	slog.SetDefault(slog.New(handler))
-}
-
-// bootstrapAdmin 确保管理员账号存在。
-func bootstrapAdmin(db *gorm.DB, cfg config.BootstrapConfig) error {
-	if cfg.AdminUsername == "" || cfg.AdminPassword == "" {
-		return nil
-	}
-
-	var count int64
-	db.Model(&model.User{}).Where("username = ?", cfg.AdminUsername).Count(&count)
-	if count > 0 {
-		return nil
-	}
-
-	hashed, err := bcrypt.GenerateFromPassword([]byte(cfg.AdminPassword), bcrypt.DefaultCost)
-	if err != nil {
-		return fmt.Errorf("加密管理员密码失败: %w", err)
-	}
-
-	admin := &model.User{
-		Username: cfg.AdminUsername,
-		Password: string(hashed),
-		Role:     model.RolePlatformAdmin,
-		Status:   model.UserStatusActive,
-	}
-
-	if err := db.Create(admin).Error; err != nil {
-		return fmt.Errorf("创建管理员账号失败: %w", err)
-	}
-
-	slog.Info("已创建管理员账号", "username", cfg.AdminUsername)
-	return nil
 }

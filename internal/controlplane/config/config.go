@@ -8,12 +8,11 @@ import (
 
 // Config 是 Control Plane 的完整配置。
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	GRPC      GRPCConfig      `mapstructure:"grpc"`
-	Database  DatabaseConfig  `mapstructure:"database"`
-	JWT       JWTConfig       `mapstructure:"jwt"`
-	Log       LogConfig       `mapstructure:"log"`
-	Bootstrap BootstrapConfig `mapstructure:"bootstrap"`
+	Server   ServerConfig   `mapstructure:"server"`
+	GRPC     GRPCConfig     `mapstructure:"grpc"`
+	Database DatabaseConfig `mapstructure:"database"`
+	JWT      JWTConfig      `mapstructure:"jwt"`
+	Log      LogConfig      `mapstructure:"log"`
 }
 
 // ServerConfig HTTP 服务器配置。
@@ -47,12 +46,6 @@ type LogConfig struct {
 	Format string `mapstructure:"format"`
 }
 
-// BootstrapConfig 初始管理员配置。
-type BootstrapConfig struct {
-	AdminUsername string `mapstructure:"admin_username"`
-	AdminPassword string `mapstructure:"admin_password"`
-}
-
 // Load 从文件和环境变量加载配置。
 func Load(path string) (*Config, error) {
 	v := viper.New()
@@ -69,8 +62,6 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("jwt.refresh_ttl", "168h")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
-	v.SetDefault("bootstrap.admin_username", "admin")
-	v.SetDefault("bootstrap.admin_password", "admin123")
 
 	// 配置文件
 	if path != "" {
