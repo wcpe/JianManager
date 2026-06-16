@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -39,8 +40,8 @@ type AuditFilter struct {
 	UserID     *uint
 	Action     *string
 	TargetType *string
-	From       *string
-	To         *string
+	From       *time.Time
+	To         *time.Time
 	Limit      int
 }
 
@@ -57,6 +58,12 @@ func (s *AuditService) List(filter AuditFilter) ([]model.AuditLog, error) {
 	}
 	if filter.TargetType != nil {
 		q = q.Where("target_type = ?", *filter.TargetType)
+	}
+	if filter.From != nil {
+		q = q.Where("created_at >= ?", *filter.From)
+	}
+	if filter.To != nil {
+		q = q.Where("created_at <= ?", *filter.To)
 	}
 
 	limit := filter.Limit
