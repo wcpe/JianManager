@@ -320,7 +320,7 @@
 - **关联 API**: gRPC Register, Heartbeat
 
 ### FR-026: 前端 shadcn/ui 标准化
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 将前端页面从手写样式迁移到 shadcn/ui 组件库默认样式，统一视觉风格
 - **验收标准**:
@@ -334,7 +334,7 @@
 - **依赖**: FR-024（前端对接运行时 API）
 
 ### FR-027: API 集成测试
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 为核心 REST API 编写集成测试，使用 httptest + 真实 SQLite 数据库
 - **验收标准**:
