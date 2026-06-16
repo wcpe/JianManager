@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -75,6 +76,7 @@ func Load(path string) (*Config, error) {
 
 	// 环境变量
 	v.SetEnvPrefix("JIANMANAGER")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
 	_ = v.ReadInConfig() // 配置文件可选

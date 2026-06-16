@@ -3,6 +3,7 @@ import { useQueryClient, useMutation } from '@tanstack/react-query'
 import api from '@/api/client'
 import { useNodes } from '@/api/nodes'
 import { useGroups } from '@/api/groups'
+import { useTemplates } from '@/api/templates'
 
 interface CreateInstanceDialogProps {
   open: boolean
@@ -13,6 +14,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
   const qc = useQueryClient()
   const { data: nodes } = useNodes()
   const { data: groups } = useGroups()
+  const { data: templates } = useTemplates()
 
   const [name, setName] = useState('')
   const [nodeId, setNodeId] = useState('')
@@ -22,6 +24,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
   const [workDir, setWorkDir] = useState('')
   const [autoRestart, setAutoRestart] = useState(true)
   const [groupId, setGroupId] = useState('')
+  const [templateId, setTemplateId] = useState('')
   const [error, setError] = useState('')
 
   const create = useMutation({
@@ -45,6 +48,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
     setWorkDir('')
     setAutoRestart(true)
     setGroupId('')
+    setTemplateId('')
     setError('')
   }
 
@@ -111,6 +115,29 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
               >
                 <option value="minecraft_java">Minecraft Java</option>
                 <option value="generic">通用</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-sm font-medium">模板</label>
+              <select
+                value={templateId}
+                onChange={(e) => {
+                  const tid = e.target.value
+                  setTemplateId(tid)
+                  if (tid) {
+                    const tpl = templates?.find(t => String(t.id) === tid)
+                    if (tpl) {
+                      setStartCommand(tpl.startCommand)
+                      setType(tpl.type || type)
+                    }
+                  }
+                }}
+                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
+              >
+                <option value="">不使用模板</option>
+                {templates?.map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
               </select>
             </div>
             <div>
