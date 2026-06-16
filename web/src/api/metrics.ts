@@ -29,14 +29,14 @@ export function useNodeMetrics(nodeId: number) {
   })
 }
 
-export function useInstanceMetrics(instanceId: number) {
+export function useInstanceMetrics(instanceId: number, enabled = true) {
   return useQuery({
     queryKey: ['instanceMetrics', instanceId],
     queryFn: async () => {
       const { data } = await api.get<InstanceMetricsData>(`/instances/${instanceId}/metrics`)
       return data
     },
-    enabled: !!instanceId,
-    refetchInterval: 10_000,
+    enabled: !!instanceId && enabled,
+    refetchInterval: enabled ? 10_000 : false,
   })
 }

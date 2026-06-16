@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useGroups } from '@/api/groups'
 import CreateGroupDialog from '@/components/CreateGroupDialog'
+import { Button } from '@/components/ui/button'
 
 export default function GroupsPage() {
   const [showCreate, setShowCreate] = useState(false)
@@ -10,12 +11,7 @@ export default function GroupsPage() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">用户组管理</h1>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-        >
-          + 创建组
-        </button>
+        <Button onClick={() => setShowCreate(true)}>+ 创建组</Button>
       </div>
 
       <CreateGroupDialog open={showCreate} onClose={() => setShowCreate(false)} />

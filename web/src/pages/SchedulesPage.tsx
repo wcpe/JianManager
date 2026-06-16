@@ -1,4 +1,13 @@
 import { useSchedules } from '@/api/schedules'
+import { Badge } from '@/components/ui/badge'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 
 export default function SchedulesPage() {
   const { data: schedules, isLoading } = useSchedules()
@@ -9,40 +18,40 @@ export default function SchedulesPage() {
       {isLoading ? (
         <p className="text-muted-foreground">加载中...</p>
       ) : (
-        <div className="border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50">
-              <tr>
-                <th className="text-left p-3 font-medium">名称</th>
-                <th className="text-left p-3 font-medium">实例 ID</th>
-                <th className="text-left p-3 font-medium">Cron</th>
-                <th className="text-left p-3 font-medium">操作</th>
-                <th className="text-left p-3 font-medium">启用</th>
-                <th className="text-left p-3 font-medium">上次执行</th>
-              </tr>
-            </thead>
-            <tbody>
+        <div className="border rounded-lg">
+          <Table>
+            <TableHeader className="bg-muted/50">
+              <TableRow>
+                <TableHead>名称</TableHead>
+                <TableHead>实例 ID</TableHead>
+                <TableHead>Cron</TableHead>
+                <TableHead>操作</TableHead>
+                <TableHead>启用</TableHead>
+                <TableHead>上次执行</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {schedules?.map((s) => (
-                <tr key={s.id} className="border-t hover:bg-muted/30">
-                  <td className="p-3 font-medium">{s.name}</td>
-                  <td className="p-3 text-muted-foreground">{s.instanceId}</td>
-                  <td className="p-3 font-mono text-xs">{s.cronExpr}</td>
-                  <td className="p-3">{s.action}</td>
-                  <td className="p-3">
-                    <span className={s.enabled ? 'text-green-500' : 'text-gray-400'}>
-                      {s.enabled ? '● 启用' : '○ 禁用'}
-                    </span>
-                  </td>
-                  <td className="p-3 text-muted-foreground">
+                <TableRow key={s.id}>
+                  <TableCell className="font-medium">{s.name}</TableCell>
+                  <TableCell className="text-muted-foreground">{s.instanceId}</TableCell>
+                  <TableCell className="font-mono text-xs">{s.cronExpr}</TableCell>
+                  <TableCell>{s.action}</TableCell>
+                  <TableCell>
+                    <Badge variant={s.enabled ? 'default' : 'secondary'}>
+                      {s.enabled ? '启用' : '禁用'}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
                     {s.lastRun ? new Date(s.lastRun).toLocaleString() : '未执行'}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
               {(!schedules || schedules.length === 0) && (
-                <tr><td colSpan={6} className="p-6 text-center text-muted-foreground">暂无定时任务</td></tr>
+                <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground">暂无定时任务</TableCell></TableRow>
               )}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       )}
     </div>

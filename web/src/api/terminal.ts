@@ -7,8 +7,8 @@ export interface TerminalTokenData {
   expiresIn: number
 }
 
-/** 获取实例终端一次性连接 token。 */
-export function useTerminalToken(instanceId: number, permission: 'read' | 'write') {
+/** 获取实例终端一次性连接 token（仅实例运行时可用）。 */
+export function useTerminalToken(instanceId: number, permission: 'read' | 'write', enabled = true) {
   return useQuery({
     queryKey: ['terminalToken', instanceId, permission],
     queryFn: async () => {
@@ -18,7 +18,7 @@ export function useTerminalToken(instanceId: number, permission: 'read' | 'write
       )
       return data
     },
-    enabled: !!instanceId,
+    enabled: !!instanceId && enabled,
     staleTime: 0,
     retry: 1,
   })

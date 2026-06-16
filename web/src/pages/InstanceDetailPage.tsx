@@ -1,5 +1,5 @@
 import { useParams } from 'react-router'
-import { useInstance, useStartInstance, useStopInstance, useRestartInstance } from '@/api/instances'
+import { useInstance, useStartInstance, useStopInstance, useRestartInstance, useKillInstance } from '@/api/instances'
 import { useInstanceMetrics } from '@/api/metrics'
 import { useTerminalToken } from '@/api/terminal'
 import { useBots } from '@/api/bots'
@@ -26,6 +26,7 @@ export default function InstanceDetailPage() {
   const startMut = useStartInstance()
   const stopMut = useStopInstance()
   const restartMut = useRestartInstance()
+  const killMut = useKillInstance()
 
   if (isLoading) {
     return <p className="text-muted-foreground">加载中...</p>
@@ -42,7 +43,12 @@ export default function InstanceDetailPage() {
           <h1 className="text-2xl font-bold">{instance.name}</h1>
           <p className="text-sm text-muted-foreground">
             状态:{' '}
-            <span className={instance.status === 'RUNNING' ? 'text-green-500' : 'text-gray-500'}>
+            <span className={
+              instance.status === 'RUNNING' ? 'text-green-500' :
+              instance.status === 'CRASHED' ? 'text-red-500' :
+              instance.status === 'STARTING' || instance.status === 'STOPPING' ? 'text-yellow-500' :
+              'text-gray-500'
+            }>
               {instance.status}
             </span>
             {' | '}类型: {instance.type}
@@ -50,7 +56,7 @@ export default function InstanceDetailPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          {instance.status === 'STOPPED' && (
+          {(instance.status === 'STOPPED' || instance.status === 'CRASHED') && (
             <Button
               variant="outline"
               onClick={() => startMut.mutate(instanceId)}
@@ -80,6 +86,16 @@ export default function InstanceDetailPage() {
               </Button>
             </>
           )}
+          {(instance.status === 'STARTING' || instance.status === 'STOPPING') && (
+            <Button
+              variant="outline"
+              onClick={() => killMut.mutate(instanceId)}
+              disabled={killMut.isPending}
+              className="text-yellow-600 border-yellow-200 hover:bg-yellow-50 hover:text-yellow-700"
+            >
+              {killMut.isPending ? '终止中...' : '强制停止'}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -94,10 +110,10 @@ export default function InstanceDetailPage() {
         </TabsList>
 
         <TabsContent value="控制台">
-          <ConsoleTab instanceId={instanceId} />
+          <ConsoleTab instanceId={instanceId} status={instance.status} />
         </TabsContent>
         <TabsContent value="终端">
-          <TerminalTab instanceId={instanceId} />
+          <TerminalTab instanceId={instanceId} status={instance.status} />
         </TabsContent>
         <TabsContent value="文件">
           <FileBrowser instanceId={instanceId} />
@@ -116,8 +132,8 @@ export default function InstanceDetailPage() {
   )
 }
 
-function ConsoleTab({ instanceId }: { instanceId: number }) {
-  const { data: metrics, isLoading } = useInstanceMetrics(instanceId)
+function ConsoleTab({ instanceId, status }: { instanceId: number; status: string }) {
+  const { data: metrics, isLoading } = useInstanceMetrics(instanceId, status === 'RUNNING')
   const { data: tokenData, isLoading: tokenLoading, error: tokenError } = useTerminalToken(instanceId, 'read')
 
   return (
@@ -125,23 +141,34 @@ function ConsoleTab({ instanceId }: { instanceId: number }) {
       <div className="grid grid-cols-3 gap-4">
         <div className="border rounded-lg p-3">
           <p className="text-xs text-muted-foreground">TPS</p>
-          <p className="text-xl font-bold mt-1">{isLoading ? '--' : (metrics?.tps ?? '--')}</p>
+          <p className="text-xl font-bold mt-1">{status === 'RUNNING' && !isLoading ? (metrics?.tps ?? '--') : '--'}</p>
         </div>
         <div className="border rounded-lg p-3">
           <p className="text-xs text-muted-foreground">在线玩家</p>
-          <p className="text-xl font-bold mt-1">{isLoading ? '--' : (metrics?.onlinePlayers ?? '--')}</p>
+          <p className="text-xl font-bold mt-1">{status === 'RUNNING' && !isLoading ? (metrics?.onlinePlayers ?? '--') : '--'}</p>
         </div>
         <div className="border rounded-lg p-3">
           <p className="text-xs text-muted-foreground">内存</p>
           <p className="text-xl font-bold mt-1">
-            {isLoading ? '--' : metrics?.memoryMb ? `${metrics.memoryMb} MB` : '--'}
+            {status === 'RUNNING' && !isLoading && metrics?.memoryMb ? `${metrics.memoryMb} MB` : '--'}
           </p>
         </div>
       </div>
 
+      {status === 'CRASHED' && (
+        <div className="border border-red-300 bg-red-50 dark:bg-red-950 dark:border-red-800 rounded-lg p-3 text-sm text-red-700 dark:text-red-300">
+          ⚠ 实例已崩溃 — 下方终端显示最近输出（含错误堆栈），请查看崩溃原因
+        </div>
+      )}
+      {status === 'STARTING' && (
+        <div className="border border-yellow-300 bg-yellow-50 dark:bg-yellow-950 dark:border-yellow-800 rounded-lg p-3 text-sm text-yellow-700 dark:text-yellow-300">
+          ⏳ 实例启动中...
+        </div>
+      )}
+
       {tokenError ? (
         <div className="border rounded-lg p-4 bg-[#1a1b26] min-h-[400px] flex items-center justify-center">
-          <p className="text-muted-foreground text-sm">无法获取终端 token，请确认实例正在运行</p>
+          <p className="text-muted-foreground text-sm">无法获取终端连接: {(tokenError as Error).message || '连接失败'}</p>
         </div>
       ) : tokenLoading ? (
         <div className="border rounded-lg p-4 bg-[#1a1b26] min-h-[400px] flex items-center justify-center">
@@ -159,16 +186,13 @@ function ConsoleTab({ instanceId }: { instanceId: number }) {
   )
 }
 
-function TerminalTab({ instanceId }: { instanceId: number }) {
+function TerminalTab({ instanceId, status }: { instanceId: number; status: string }) {
   const { data: tokenData, isLoading, error } = useTerminalToken(instanceId, 'write')
 
   if (error) {
     return (
       <div className="border rounded-lg p-4 bg-[#1a1b26] min-h-[400px] flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-muted-foreground text-sm mb-2">无法获取终端 token</p>
-          <p className="text-muted-foreground text-xs">请确认实例正在运行且有终端权限</p>
-        </div>
+        <p className="text-muted-foreground text-sm">无法获取终端连接</p>
       </div>
     )
   }
@@ -182,11 +206,19 @@ function TerminalTab({ instanceId }: { instanceId: number }) {
   }
 
   return (
-    <TerminalComponent
-      instanceId={String(instanceId)}
-      wsUrl={tokenData?.wsUrl}
-      token={tokenData?.token}
-    />
+    <div className="space-y-2">
+      {status !== 'RUNNING' && (
+        <div className="border border-yellow-300 bg-yellow-50 dark:bg-yellow-950 dark:border-yellow-800 rounded-lg p-2 text-xs text-yellow-700 dark:text-yellow-300">
+          实例未运行（{status}），终端为只读模式，显示最近输出
+        </div>
+      )}
+      <TerminalComponent
+        instanceId={String(instanceId)}
+        wsUrl={tokenData?.wsUrl}
+        token={tokenData?.token}
+        readOnly={status !== 'RUNNING'}
+      />
+    </div>
   )
 }
 

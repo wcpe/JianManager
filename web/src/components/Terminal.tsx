@@ -14,9 +14,11 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
   const terminalRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const cleanupRef = useRef(false)
 
   const connect = useCallback(() => {
     if (!wsUrl || !token) return
+    cleanupRef.current = false
 
     const ws = new WebSocket(`${wsUrl}?token=${token}`)
     wsRef.current = ws
@@ -39,11 +41,15 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
     }
 
     ws.onclose = () => {
-      termRef.current?.write('\r\n[连接已断开]\r\n')
+      if (!cleanupRef.current) {
+        termRef.current?.write('\r\n[连接已断开]\r\n')
+      }
     }
 
     ws.onerror = () => {
-      termRef.current?.write('\r\n[连接错误]\r\n')
+      if (!cleanupRef.current) {
+        termRef.current?.write('\r\n[连接错误]\r\n')
+      }
     }
   }, [wsUrl, token, instanceId])
 
@@ -100,6 +106,7 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
 
     return () => {
       window.removeEventListener('resize', handleResize)
+      cleanupRef.current = true
       wsRef.current?.close()
       term.dispose()
     }

@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Link } from 'react-router'
-import { useInstances, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance } from '@/api/instances'
+import { useInstances, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance, useKillInstance } from '@/api/instances'
 import CreateInstanceDialog from '@/components/CreateInstanceDialog'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Table,
@@ -12,12 +13,12 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-const statusConfig: Record<string, { text: string; color: string }> = {
-  STOPPED: { text: '停止', color: 'text-gray-500' },
-  STARTING: { text: '启动中', color: 'text-yellow-500' },
-  RUNNING: { text: '运行', color: 'text-green-500' },
-  STOPPING: { text: '停止中', color: 'text-yellow-500' },
-  CRASHED: { text: '崩溃', color: 'text-red-500' },
+const statusConfig: Record<string, { text: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' }> = {
+  STOPPED: { text: '停止', variant: 'secondary' },
+  STARTING: { text: '启动中', variant: 'outline' },
+  RUNNING: { text: '运行', variant: 'default' },
+  STOPPING: { text: '停止中', variant: 'outline' },
+  CRASHED: { text: '崩溃', variant: 'destructive' },
 }
 
 export default function InstancesPage() {
@@ -26,6 +27,7 @@ export default function InstancesPage() {
   const start = useStartInstance()
   const stop = useStopInstance()
   const restart = useRestartInstance()
+  const kill = useKillInstance()
   const del = useDeleteInstance()
 
   return (
@@ -64,11 +66,11 @@ export default function InstancesPage() {
                     <TableCell className="text-muted-foreground">{inst.type}</TableCell>
                     <TableCell className="text-muted-foreground">{inst.processType}</TableCell>
                     <TableCell>
-                      <span className={st.color}>{st.text}</span>
+                      <Badge variant={st.variant}>{st.text}</Badge>
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1">
-                        {inst.status === 'STOPPED' && (
+                        {(inst.status === 'STOPPED' || inst.status === 'CRASHED') && (
                           <Button
                             variant="ghost"
                             size="xs"
@@ -98,7 +100,17 @@ export default function InstancesPage() {
                             </Button>
                           </>
                         )}
-                        {inst.status === 'STOPPED' && (
+                        {(inst.status === 'STARTING' || inst.status === 'STOPPING') && (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            onClick={() => kill.mutate(inst.id)}
+                            className="text-yellow-600 hover:text-yellow-700"
+                          >
+                            强制停止
+                          </Button>
+                        )}
+                        {(inst.status === 'STOPPED' || inst.status === 'CRASHED') && (
                           <Button
                             variant="ghost"
                             size="xs"
