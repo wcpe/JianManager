@@ -55,6 +55,17 @@ func main() {
 	auditSvc := service.NewAuditService(db)
 	authzSvc := service.NewAuthzService(db)
 
+	// TODO(FR-011): 告警评估器装配
+	// alertEvaluator := service.NewAlertEvaluator(db)
+	// alertEvaluator.Start()
+	// defer alertEvaluator.Stop()
+
+	// TODO(FR-012): 定时任务调度器装配
+	// scheduleExecutor := service.NewScheduleExecutorImpl(db, instanceSvc, backupSvc, pool)
+	// scheduler := service.NewScheduler(db, scheduleExecutor)
+	// scheduler.Start()
+	// defer scheduler.Stop()
+
 	r := router.Setup(&router.Services{
 		Auth:     authSvc,
 		User:     userSvc,
