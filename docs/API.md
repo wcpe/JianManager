@@ -6,6 +6,29 @@
 
 ## 认证
 
+### GET /api/v1/setup/status
+- **描述**: 查询系统是否需要初始化（首次启动引导）
+- **关联 FR**: FR-017
+- **权限**: 无需认证
+- **响应** (200):
+  ```json
+  { "setupRequired": true }
+  ```
+
+### POST /api/v1/setup
+- **描述**: 创建初始管理员账号（仅首次启动可用）
+- **关联 FR**: FR-017
+- **权限**: 无需认证，setupRequired=true 时可用
+- **请求**:
+  ```json
+  { "username": "string", "password": "string" }
+  ```
+- **响应** (201):
+  ```json
+  { "accessToken": "string", "refreshToken": "string", "expiresIn": 900 }
+  ```
+- **错误**: 409 管理员已存在 | 400 参数校验失败
+
 ### POST /api/v1/auth/register
 - **描述**: 用户注册
 - **关联 FR**: FR-001

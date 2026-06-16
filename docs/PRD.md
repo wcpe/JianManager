@@ -18,6 +18,20 @@
 
 ## P0 — 核心功能
 
+### FR-017: 首次启动引导流程
+- **状态**: 🔨 in-progress
+- **优先级**: P0
+- **描述**: Control Plane 首次启动时，Web UI 引导管理员设置用户名和密码，替代配置文件/环境变量 bootstrap 方式
+- **验收标准**:
+  - [ ] 后端：`GET /api/v1/setup/status` 返回是否需要初始化
+  - [ ] 后端：`POST /api/v1/setup` 创建管理员并返回 JWT Token（幂等，已存在返回 409）
+  - [ ] 前端：无 token 时检测 setup 状态，需初始化则跳转 `/setup` 引导页
+  - [ ] 前端：引导页表单含用户名、密码、确认密码，提交后自动登录进入 Dashboard
+  - [ ] 删除旧的 `bootstrapAdmin` 启动逻辑和 `bootstrap` 配置段
+  - [ ] 已有管理员的旧版升级无影响（setup 状态为 false，正常进入登录页）
+- **关联 API**: `GET /setup/status`, `POST /setup`
+- **Spec**: `docs/specs/first-launch-setup/`
+
 ### FR-001: 用户认证
 - **状态**: ✅ done
 - **优先级**: P0
