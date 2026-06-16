@@ -79,7 +79,7 @@
 ## 依赖
 
 - FR-004（节点注册与心跳）— 已完成，数据库模型已有
-- FR-017（Worker 注册心跳集成）— in-progress，本 FR 为其提供底层 gRPC 实现
+- FR-029（Worker 注册心跳集成）— in-progress，本 FR 为其提供底层 gRPC 实现
 - protoc + protoc-gen-go + protoc-gen-go-grpc 工具链
 
 ---

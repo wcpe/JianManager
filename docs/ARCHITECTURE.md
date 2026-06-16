@@ -574,7 +574,7 @@ STOPPED → STARTING → RUNNING → STOPPING → STOPPED
 
 ## 11. 配置
 
-**Control Plane**: `control-plane.yaml` — server port, gRPC port, database, JWT secret, bootstrap admin
+**Control Plane**: `control-plane.yaml` — server port, gRPC port, database, JWT secret（管理员账号通过首次启动 Web 引导创建，见 FR-017）
 **Worker Node**: `worker.yaml` — node name, Control Plane address, gRPC/WS ports, servers_dir, Docker, Bot 配置
 
 ## 12. 部署

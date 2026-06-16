@@ -37,9 +37,7 @@ log:
   level: info     # debug | info | warn | error
   format: json    # json | text
 
-bootstrap:
-  admin_username: admin
-  admin_password: ${JIANMANAGER_ADMIN_PASSWORD}
+# 首次启动引导通过 Web UI 完成（FR-017），不再使用 bootstrap 配置段
 ```
 
 ## 规则

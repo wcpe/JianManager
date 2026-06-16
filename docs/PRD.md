@@ -19,7 +19,7 @@
 ## P0 — 核心功能
 
 ### FR-017: 首次启动引导流程
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: Control Plane 首次启动时，Web UI 引导管理员设置用户名和密码，替代配置文件/环境变量 bootstrap 方式
 - **验收标准**:
@@ -45,18 +45,18 @@
 - **关联 API**: `POST /auth/login`, `POST /auth/register`, `POST /auth/refresh`
 
 ### FR-002: 用户与权限管理
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: 平台管理员/组管理员/组成员三级角色，基于权限节点的 RBAC
 - **验收标准**:
   - [x] 平台管理员可管理所有用户和节点
-  - [x] 组管理员可管理组内成员和实例分配
-  - [x] 组成员只能操作分配给自己的实例
+  - [ ] 组管理员可管理组内成员和实例分配
+  - [ ] 组成员只能操作分配给自己的实例
   - [x] 权限中间件拦截未授权请求
 - **关联 API**: `GET/POST /users`, `GET/POST /groups`, `POST /groups/:id/members`
 
 ### FR-003: 用户组与配额
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: 用户组管理，实例分配给组，配额限制（最大实例数、Bot 数、存储空间）
 - **验收标准**:
@@ -78,7 +78,7 @@
 - **关联 API**: `GET /nodes`, `GET /nodes/:id`
 
 ### FR-005: 实例生命周期管理
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: 实例创建/启动/停止/重启/销毁，状态机驱动，支持四种启动方式
 - **验收标准**:
@@ -90,7 +90,7 @@
 - **关联 API**: `POST /instances`, `POST /instances/:id/start`, `POST /instances/:id/stop`
 
 ### FR-006: 守护进程（Daemon Wrapper）
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: 平台进程重启不杀游戏服，通过 Daemon Wrapper 子进程实现进程隔离
 - **验收标准**:
@@ -101,7 +101,7 @@
 - **关联 ADR**: ADR-003
 
 ### FR-007: 终端实时
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: xterm.js 浏览器终端，直连 Worker Node WebSocket，支持多人同时查看
 - **验收标准**:
@@ -113,7 +113,7 @@
 - **关联 API**: `GET /instances/:id/terminal-token`
 
 ### FR-008: 文件管理
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: 实例工作目录文件浏览/编辑/上传下载
 - **验收标准**:
@@ -128,12 +128,12 @@
 ## P1 — 重要功能
 
 ### FR-009: Bot 平台
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: Mineflayer Bot 管理，行为引擎、寻路、脚本执行、压测、预热池
 - **验收标准**:
   - [x] 创建/删除 Bot（选择目标 MC 服务器）
-  - [x] 行为模式切换（follow/guard/patrol/idle/custom）
+  - [ ] 行为模式切换（follow/guard/patrol/idle/custom）
   - [ ] 寻路（mineflayer-pathfinder）
   - [ ] 脚本执行 + 进度上报
   - [ ] 压测会话（批量上线/下线）
@@ -142,38 +142,38 @@
 - **关联 API**: `POST /bots`, `POST /bots/:id/behavior`, `GET /bots/:id/state`
 
 ### FR-010: 监控指标
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 节点和实例指标采集，Recharts 仪表盘展示
 - **验收标准**:
-  - [x] 节点指标：CPU/内存/磁盘/网络（周期采集）
+  - [ ] 节点指标：CPU/内存/磁盘/网络（周期采集）
   - [ ] 实例指标：MC TPS/在线玩家/内存（MC 专用）
   - [x] 仪表盘页面：Recharts 图表
 - **关联 API**: `GET /nodes/:id/metrics`, `GET /instances/:id/metrics`
 
 ### FR-011: 告警规则
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 阈值触发告警，Webhook 通知
 - **验收标准**:
   - [x] 创建告警规则（metric + operator + threshold + duration）
-  - [x] 触发后发送 Webhook
-  - [x] 告警事件列表
+  - [ ] 触发后发送 Webhook
+  - [ ] 告警事件列表
 - **关联 API**: `POST /alerts/rules`, `GET /alerts/events`
 
 ### FR-012: 定时任务
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: Cron 表达式调度，支持实例启停/命令执行/备份
 - **验收标准**:
   - [x] 创建/编辑/删除定时任务
   - [x] Cron 表达式解析
   - [x] 支持 action: start/stop/restart/command/backup
-  - [x] 执行日志
+  - [ ] 执行日志
 - **关联 API**: `POST /schedules`, `GET /schedules`
 
 ### FR-013: 备份恢复
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 手动/自动备份，压缩存储，一键恢复
 - **验收标准**:
@@ -188,7 +188,7 @@
 ## P2 — 增强功能
 
 ### FR-014: 服务端模板
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P2
 - **描述**: 预设 MC 服务端模板（Paper/Spigot/Forge），一键创建实例
 - **验收标准**:
@@ -196,20 +196,20 @@
   - [ ] 从模板创建实例（自动填充启动命令和配置）
 
 ### FR-015: 审计日志
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P2
 - **描述**: 操作审计（谁/什么时间/对什么/做了什么）
 - **验收标准**:
   - [x] 关键操作自动记录（实例启停/文件修改/用户管理）
-  - [x] 审计日志查询（按用户/操作/时间筛选）
+  - [ ] 审计日志查询（按用户/操作/时间筛选）
 
 ### FR-016: i18n
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P2
 - **描述**: 中文 + 英文国际化
 - **验收标准**:
-  - [x] 前端 i18next 切换
-  - [x] 所有 UI 文本可翻译
+  - [ ] 前端 i18next 切换
+  - [ ] 所有 UI 文本可翻译
 
 ---
 
@@ -217,7 +217,7 @@
 
 > 以下 FR 用于完善已有功能的运行时集成，消除 TODO。
 
-### FR-017: Worker Node 注册与心跳集成
+### FR-029: Worker Node 注册与心跳集成
 - **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: Worker Node 启动时自动向 Control Plane 注册，周期性上报心跳指标，Control Plane 检测离线
@@ -241,11 +241,12 @@
   - [x] 前端停止实例 → Control Plane → gRPC StopInstance → Worker 停止进程
   - [ ] 实例状态变更通过 StreamInstanceEvents 实时推送到前端（当前用轮询替代）
   - [x] 操作失败时前端显示错误信息
-- **依赖**: FR-017（Worker 注册）
+- **依赖**: FR-029（Worker 注册）
 - **关联 API**: gRPC CreateInstance, StartInstance, StopInstance, RestartInstance
 
 ### FR-019: 终端 WebSocket 全链路
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
+- **备注**: 链路可跑通，但 `terminal_proxy` baseURL 硬编码 `ws://localhost`（生产不可用），且实现为 CP 代理而非「浏览器直连 Worker」
 
 ### FR-020: 文件管理 gRPC 全链路
 - **状态**: 🔨 in-progress
@@ -278,23 +279,24 @@
 - **关联 API**: GET /instances/:id/metrics
 
 ### FR-023: gRPC 客户端真实实现
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: 替换 proto/workerpb 中的桩代码，实现真实的 gRPC 客户端和服务端 RPC 调用
+- **备注**: 核心 RPC 真实，但残留桩：Worker `Register` 返回 `NodeSecret:"placeholder"`、`IssueTerminalToken` 返回 unimplemented
 - **验收标准**:
   - [x] Worker 启动后能成功向 Control Plane 注册（Register RPC 返回真实 node_uuid）
   - [x] Worker 每 30s 发送心跳，Control Plane 更新节点指标
   - [x] Control Plane 通过 gRPC 启动/停止 Worker 上的实例
   - [x] Control Plane 通过 gRPC 查询 Worker 上的文件列表
   - [x] gRPC 调用超时后正确返回错误
-- **依赖**: FR-017（Worker 注册心跳）
+- **依赖**: FR-029（Worker 注册心跳）
 - **关联 API**: gRPC Register, Heartbeat, StartInstance, StopInstance, ListFiles
 - **Spec**: `docs/specs/grpc-real/`
 
 ### FR-024: 前端对接运行时 API
 - **状态**: 🔨 in-progress
 - **优先级**: P0
-- **描述**: 前端页面对接 FR-017~022 的真实 API，实现完整的前后端联调
+- **描述**: 前端页面对接 FR-029~022 的真实 API，实现完整的前后端联调
 - **验收标准**:
   - [x] 节点列表页面显示在线节点的实时 CPU/内存/磁盘指标（30s 自动刷新）
   - [x] 实例详情页终端 Tab 能连接 Worker WebSocket 并显示终端输出
