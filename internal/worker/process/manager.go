@@ -263,6 +263,24 @@ func (m *Manager) Remove(uuid string) error {
 	return nil
 }
 
+// StopAll 停止所有运行中的实例。
+func (m *Manager) StopAll() {
+	m.mu.RLock()
+	uuids := make([]string, 0)
+	for uuid, inst := range m.instances {
+		if inst.State == StateRunning {
+			uuids = append(uuids, uuid)
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, uuid := range uuids {
+		if err := m.Stop(uuid); err != nil {
+			slog.Warn("停止实例失败", "instanceId", uuid, "error", err)
+		}
+	}
+}
+
 // backoffDelay 计算指数退避延迟。
 // 1s → 2s → 4s → 8s → 16s → 30s (上限)。
 func backoffDelay(crashCount int) time.Duration {

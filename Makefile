@@ -1,7 +1,7 @@
-.PHONY: build build-cp build-worker build-web build-bot dev-cp dev-web lint vet test clean proto
+.PHONY: build build-cp build-worker build-web build-bot dev-cp dev-web lint vet test clean proto embed-web docker
 
-# 构建所有
-build: build-web build-cp build-worker
+# 构建所有（含前端嵌入）
+build: build-web embed-web build-cp build-worker
 
 # 构建 Control Plane（含嵌入前端）
 build-cp:
@@ -14,6 +14,11 @@ build-worker:
 # 构建前端
 build-web:
 	cd web && npm run build
+
+# 将前端构建产物复制到嵌入目录
+embed-web:
+	mkdir -p internal/controlplane/embed/dist
+	cp -r web/dist/* internal/controlplane/embed/dist/
 
 # 构建 Bot Worker
 build-bot:
@@ -55,9 +60,19 @@ lint-bot:
 proto:
 	protoc --go_out=. --go-grpc_out=. proto/worker.proto
 
+# Docker 构建
+docker:
+	docker compose build
+
+docker-up:
+	docker compose up -d
+
+docker-down:
+	docker compose down
+
 # 清理
 clean:
-	rm -rf bin/ web/dist/ bot-worker/dist/ data/
+	rm -rf bin/ web/dist/ bot-worker/dist/ data/ internal/controlplane/embed/dist/
 
 # 安装所有依赖
 install:
