@@ -250,6 +250,7 @@ AlertRule ──1:N──▶ AlertEvent
 | bots | uuid, instance_id(FK), name, status, config(JSON), behavior, worker_id |
 | backups | uuid, instance_id(FK), name, file_path, file_size_mb, type(0/1), status(0/1/2) |
 | schedules | uuid, instance_id(FK), name, cron_expr, action, payload, enabled |
+| schedule_execution_logs | schedule_id(FK), action, status, error, started_at, finished_at |
 | alert_rules | uuid, name, target_type, target_id, metric, operator, threshold, duration_sec, notify_type, notify_target, enabled |
 | alert_events | rule_id, target_id, value, message, resolved, fired_at |
 | templates | uuid, name, type, description, start_command, download_url, config_files(JSON) |

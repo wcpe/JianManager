@@ -158,8 +158,8 @@
 - **描述**: 阈值触发告警，Webhook 通知
 - **验收标准**:
   - [x] 创建告警规则（metric + operator + threshold + duration）
-  - [ ] 触发后发送 Webhook
-  - [ ] 告警事件列表
+  - [x] 触发后发送 Webhook
+  - [x] 告警事件列表
 - **关联 API**: `POST /alerts/rules`, `GET /alerts/events`
 
 ### FR-012: 定时任务
@@ -170,8 +170,8 @@
   - [x] 创建/编辑/删除定时任务
   - [x] Cron 表达式解析
   - [x] 支持 action: start/stop/restart/command/backup
-  - [ ] 执行日志
-- **关联 API**: `POST /schedules`, `GET /schedules`
+  - [x] 执行日志
+- **关联 API**: `POST /schedules`, `GET /schedules`, `GET /schedules/:id/logs`
 
 ### FR-013: 备份恢复
 - **状态**: 🔨 in-progress
@@ -180,8 +180,8 @@
 - **验收标准**:
   - [x] 手动创建备份
   - [x] 备份列表（大小/时间/类型）
-  - [ ] 一键恢复到指定备份
-  - [ ] 自动备份（通过定时任务）
+  - [x] 一键恢复到指定备份
+  - [x] 自动备份（通过定时任务，依赖 Scheduler 启动）
 - **关联 API**: `POST /instances/:id/backups`, `POST /backups/:id/restore`
 
 ---
@@ -202,7 +202,7 @@
 - **描述**: 操作审计（谁/什么时间/对什么/做了什么）
 - **验收标准**:
   - [x] 关键操作自动记录（实例启停/文件修改/用户管理）
-  - [ ] 审计日志查询（按用户/操作/时间筛选）
+  - [x] 审计日志查询（按用户/操作/时间筛选）
 
 ### FR-016: i18n
 - **状态**: 🔨 in-progress

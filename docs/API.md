@@ -397,6 +397,20 @@
 - **描述**: 删除定时任务
 - **关联 FR**: FR-012
 
+### GET /api/v1/schedules/:id/logs
+- **描述**: 定时任务执行日志列表
+- **关联 FR**: FR-012
+- **Query**: `?page=1&pageSize=20`
+- **响应** (200):
+  ```json
+  {
+    "items": [{ "id": 1, "scheduleId": 1, "action": "restart", "status": "success", "error": "", "startedAt": "datetime", "finishedAt": "datetime" }],
+    "total": 50,
+    "page": 1,
+    "pageSize": 20
+  }
+  ```
+
 ---
 
 ## 备份
@@ -476,7 +490,9 @@
 ### GET /api/v1/audit
 - **描述**: 审计日志列表（平台管理员）
 - **关联 FR**: FR-015
-- **Query**: `?userId=xxx&action=instance.start&from=xxx&to=yyy`
+- **Query**: `?userId=xxx&action=instance.start&targetType=instance&from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z&limit=100`
+- **参数说明**:
+  - `from`/`to`: RFC3339 格式时间，按 created_at 筛选范围
 
 ---
 
