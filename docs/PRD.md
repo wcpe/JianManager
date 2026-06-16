@@ -305,6 +305,61 @@
 - **关联 API**: GET /nodes/:id/metrics, WS /ws/terminal, GET /instances/:id/files
 - **Spec**: `docs/specs/frontend-runtime/`
 
+### FR-025: Worker→Control Plane gRPC 连通性修复
+- **状态**: 📋 todo
+- **优先级**: P0
+- **描述**: 修复 Worker Node 无法连接 Control Plane gRPC 端口（9100）的问题，确保注册和心跳链路畅通
+- **验收标准**:
+  - [ ] Control Plane 启动后 gRPC Server 监听 9100 端口（`netstat` 可见）
+  - [ ] Worker 启动后成功注册到 Control Plane，日志显示 `注册成功 nodeUUID=xxx`
+  - [ ] Worker 每 30s 发送心跳，Control Plane `nodes` 表 `last_heartbeat` 字段持续更新
+  - [ ] Control Plane 未启动时 Worker 启动不 panic，日志显示重连等待
+  - [ ] Worker 断线后自动重连 Control Plane，恢复心跳
+  - [ ] 前端节点列表显示 Worker 为「在线」状态
+- **依赖**: FR-023（gRPC 客户端真实实现）
+- **关联 API**: gRPC Register, Heartbeat
+
+### FR-026: 前端 shadcn/ui 标准化
+- **状态**: 📋 todo
+- **优先级**: P1
+- **描述**: 将前端页面从手写样式迁移到 shadcn/ui 组件库默认样式，统一视觉风格
+- **验收标准**:
+  - [ ] 所有表格使用 `<Table>` 组件替代手写 `<table>` 标签
+  - [ ] 所有按钮使用 `<Button>` 组件（variant: default/destructive/outline/ghost）
+  - [ ] 所有对话框使用 `<Dialog>` 组件替代手写 modal
+  - [ ] 所有表单输入使用 `<Input>` / `<Select>` / `<Checkbox>` 组件
+  - [ ] 所有状态标签使用 `<Badge>` 组件（variant: default/success/warning/destructive）
+  - [ ] 页面标题使用 `<h1>` + shadcn 排版规范，间距统一
+  - [ ] 暗色/亮色主题切换正常，无样式错乱
+- **依赖**: FR-024（前端对接运行时 API）
+
+### FR-027: API 集成测试
+- **状态**: 📋 todo
+- **优先级**: P1
+- **描述**: 为核心 REST API 编写集成测试，使用 httptest + 真实 SQLite 数据库
+- **验收标准**:
+  - [ ] 认证 API 测试：注册→登录→刷新 token→401 拦截
+  - [ ] 实例 API 测试：创建→查询→启动→停止→删除（happy path + 错误路径）
+  - [ ] 节点 API 测试：列表→详情→删除离线节点
+  - [ ] 用户组 API 测试：创建→添加成员→设置配额→超额拒绝
+  - [ ] 每个测试使用独立 SQLite 数据库，测试间隔离
+  - [ ] `go test ./internal/controlplane/...` 全部通过
+- **依赖**: FR-025（gRPC 连通性修复）
+
+### FR-028: 实例创建 E2E 测试
+- **状态**: 📋 todo
+- **优先级**: P1
+- **描述**: 端到端验证「管理员创建实例并启动」的完整流程，覆盖前端→Control Plane→Worker 全链路
+- **验收标准**:
+  - [ ] 启动 Control Plane + Worker 进程
+  - [ ] 通过 API 创建管理员账号（setup 流程）
+  - [ ] 通过 API 创建实例并分配到 Worker 节点
+  - [ ] 通过 API 启动实例，验证状态变为 RUNNING
+  - [ ] 通过 API 停止实例，验证状态变为 STOPPED
+  - [ ] 通过 API 删除实例
+  - [ ] 测试脚本可一键运行（`make e2e` 或 `go test -tags=e2e`）
+- **依赖**: FR-025（gRPC 连通性修复）, FR-027（API 集成测试）
+
 ---
 
 ## V1 不包含（后续版本）
