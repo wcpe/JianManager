@@ -1,6 +1,15 @@
 import { useState } from 'react'
 import { useUsers, useDeleteUser } from '@/api/users'
 import CreateUserDialog from '@/components/CreateUserDialog'
+import { Button } from '@/components/ui/button'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 
 const roleLabel: Record<number, string> = {
   0: '组成员',
@@ -17,56 +26,55 @@ export default function UsersPage() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">用户管理</h1>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-        >
-          + 创建用户
-        </button>
+        <Button onClick={() => setShowCreate(true)}>+ 创建用户</Button>
       </div>
 
-      <CreateUserDialog open={showCreate} onClose={() => setShowCreate(false)} />
+      <CreateUserDialog open={showCreate} onOpenChange={setShowCreate} />
 
       {isLoading ? (
         <p className="text-muted-foreground">加载中...</p>
       ) : (
-        <div className="border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50">
-              <tr>
-                <th className="text-left p-3 font-medium">用户名</th>
-                <th className="text-left p-3 font-medium">角色</th>
-                <th className="text-left p-3 font-medium">状态</th>
-                <th className="text-left p-3 font-medium">创建时间</th>
-                <th className="text-left p-3 font-medium">操作</th>
-              </tr>
-            </thead>
-            <tbody>
+        <div className="border rounded-lg">
+          <Table>
+            <TableHeader className="bg-muted/50">
+              <TableRow>
+                <TableHead>用户名</TableHead>
+                <TableHead>角色</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead>创建时间</TableHead>
+                <TableHead>操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {users?.map((u) => (
-                <tr key={u.id} className="border-t hover:bg-muted/30">
-                  <td className="p-3 font-medium">{u.username}</td>
-                  <td className="p-3">{roleLabel[u.role] ?? `未知(${u.role})`}</td>
-                  <td className="p-3">
+                <TableRow key={u.id}>
+                  <TableCell className="font-medium">{u.username}</TableCell>
+                  <TableCell>{roleLabel[u.role] ?? `未知(${u.role})`}</TableCell>
+                  <TableCell>
                     <span className={u.status === 0 ? 'text-green-500' : 'text-red-500'}>
                       {u.status === 0 ? '● 启用' : '○ 禁用'}
                     </span>
-                  </td>
-                  <td className="p-3 text-muted-foreground">{new Date(u.createdAt).toLocaleDateString()}</td>
-                  <td className="p-3">
-                    <button
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{new Date(u.createdAt).toLocaleDateString()}</TableCell>
+                  <TableCell>
+                    <Button
+                      variant="ghost"
+                      size="xs"
                       onClick={() => { if (confirm('确定删除？')) deleteUser.mutate(u.id) }}
-                      className="px-2 py-1 text-xs bg-red-500/10 text-red-600 rounded hover:bg-red-500/20"
+                      className="text-red-600 hover:text-red-700"
                     >
                       删除
-                    </button>
-                  </td>
-                </tr>
+                    </Button>
+                  </TableCell>
+                </TableRow>
               ))}
               {(!users || users.length === 0) && (
-                <tr><td colSpan={5} className="p-6 text-center text-muted-foreground">暂无用户</td></tr>
+                <TableRow>
+                  <TableCell colSpan={5} className="text-center text-muted-foreground">暂无用户</TableCell>
+                </TableRow>
               )}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       )}
     </div>

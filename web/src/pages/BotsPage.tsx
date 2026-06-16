@@ -1,6 +1,31 @@
 import { useState, type FormEvent } from 'react'
 import { useBots, useCreateBot, useDeleteBot, useSetBotBehavior, type BotInfo } from '@/api/bots'
 import { useInstances } from '@/api/instances'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 
 const statusConfig: Record<string, { text: string; color: string }> = {
   connected: { text: '已连接', color: 'text-green-500' },
@@ -25,32 +50,27 @@ export default function BotsPage() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">Bot 管理</h1>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-        >
-          + 创建 Bot
-        </button>
+        <Button onClick={() => setShowCreate(true)}>+ 创建 Bot</Button>
       </div>
 
-      <CreateBotDialog open={showCreate} onClose={() => setShowCreate(false)} />
+      <CreateBotDialog open={showCreate} onOpenChange={setShowCreate} />
 
       {isLoading ? (
         <p className="text-muted-foreground">加载中...</p>
       ) : (
-        <div className="border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50">
-              <tr>
-                <th className="text-left p-3 font-medium">名称</th>
-                <th className="text-left p-3 font-medium">实例</th>
-                <th className="text-left p-3 font-medium">状态</th>
-                <th className="text-left p-3 font-medium">行为</th>
-                <th className="text-left p-3 font-medium">服务器</th>
-                <th className="text-left p-3 font-medium">操作</th>
-              </tr>
-            </thead>
-            <tbody>
+        <div className="border rounded-lg">
+          <Table>
+            <TableHeader className="bg-muted/50">
+              <TableRow>
+                <TableHead>名称</TableHead>
+                <TableHead>实例</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead>行为</TableHead>
+                <TableHead>服务器</TableHead>
+                <TableHead>操作</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {bots?.map((bot) => (
                 <BotRow
                   key={bot.id}
@@ -61,14 +81,14 @@ export default function BotsPage() {
                 />
               ))}
               {(!bots || bots.length === 0) && (
-                <tr>
-                  <td colSpan={6} className="p-6 text-center text-muted-foreground">
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-muted-foreground">
                     暂无 Bot
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               )}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       )}
     </div>
@@ -80,41 +100,52 @@ function BotRow({ bot, onDelete }: { bot: BotInfo; onDelete: (id: number) => voi
   const st = statusConfig[bot.status] || statusConfig.disconnected
 
   return (
-    <tr className="border-t hover:bg-muted/30">
-      <td className="p-3 font-medium">{bot.name}</td>
-      <td className="p-3 text-muted-foreground">#{bot.instanceId}</td>
-      <td className="p-3">
-        <span className={st.color}>● {st.text}</span>
-      </td>
-      <td className="p-3">
-        <select
+    <TableRow>
+      <TableCell className="font-medium">{bot.name}</TableCell>
+      <TableCell className="text-muted-foreground">#{bot.instanceId}</TableCell>
+      <TableCell>
+        <span className={st.color}>{st.text}</span>
+      </TableCell>
+      <TableCell>
+        <Select
           value={bot.behavior}
-          onChange={(e) => setBehavior.mutate({ id: bot.id, behavior: e.target.value })}
-          className="px-2 py-1 border rounded bg-background text-sm"
+          onValueChange={(value) => setBehavior.mutate({ id: bot.id, behavior: value })}
         >
-          {behaviorOptions.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
-      </td>
-      <td className="p-3 text-muted-foreground">
+          <SelectTrigger className="w-[100px] h-8">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {behaviorOptions.map((opt) => (
+              <SelectItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </TableCell>
+      <TableCell className="text-muted-foreground">
         {bot.config.server}:{bot.config.port}
-      </td>
-      <td className="p-3">
-        <button
+      </TableCell>
+      <TableCell>
+        <Button
+          variant="ghost"
+          size="xs"
           onClick={() => onDelete(bot.id)}
-          className="px-2 py-1 text-xs bg-red-500/10 text-red-600 rounded hover:bg-red-500/20"
+          className="text-red-600 hover:text-red-700"
         >
           删除
-        </button>
-      </td>
-    </tr>
+        </Button>
+      </TableCell>
+    </TableRow>
   )
 }
 
-function CreateBotDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+interface CreateBotDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}
+
+function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
   const { data: instances } = useInstances()
   const create = useCreateBot()
 
@@ -148,7 +179,7 @@ function CreateBotDialog({ open, onClose }: { open: boolean; onClose: () => void
       },
       {
         onSuccess: () => {
-          onClose()
+          onOpenChange(false)
           resetForm()
         },
         onError: (err: unknown) => {
@@ -162,120 +193,114 @@ function CreateBotDialog({ open, onClose }: { open: boolean; onClose: () => void
     )
   }
 
-  if (!open) return null
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-background border rounded-lg p-6 w-full max-w-md shadow-lg">
-        <h2 className="text-lg font-bold mb-4">创建 Bot</h2>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>创建 Bot</DialogTitle>
+        </DialogHeader>
 
         {error && (
-          <div className="mb-3 p-2 text-sm text-destructive bg-destructive/10 rounded">
+          <div className="p-2 text-sm text-destructive bg-destructive/10 rounded">
             {error}
           </div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-3">
-          <div>
-            <label className="text-sm font-medium">名称</label>
-            <input
+          <div className="space-y-1">
+            <Label>名称</Label>
+            <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
               placeholder="GuardBot"
               required
             />
           </div>
 
-          <div>
-            <label className="text-sm font-medium">实例</label>
-            <select
-              value={instanceId}
-              onChange={(e) => setInstanceId(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
-              required
-            >
-              <option value="">选择实例</option>
-              {instances?.map((inst) => (
-                <option key={inst.id} value={inst.id}>
-                  {inst.name}
-                </option>
-              ))}
-            </select>
+          <div className="space-y-1">
+            <Label>实例</Label>
+            <Select value={instanceId} onValueChange={setInstanceId} required>
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder="选择实例" />
+              </SelectTrigger>
+              <SelectContent>
+                {instances?.map((inst) => (
+                  <SelectItem key={inst.id} value={String(inst.id)}>
+                    {inst.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="grid grid-cols-3 gap-3">
-            <div className="col-span-2">
-              <label className="text-sm font-medium">服务器地址</label>
-              <input
+            <div className="col-span-2 space-y-1">
+              <Label>服务器地址</Label>
+              <Input
                 value={server}
                 onChange={(e) => setServer(e.target.value)}
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
                 placeholder="mc.example.com"
                 required
               />
             </div>
-            <div>
-              <label className="text-sm font-medium">端口</label>
-              <input
+            <div className="space-y-1">
+              <Label>端口</Label>
+              <Input
                 value={port}
                 onChange={(e) => setPort(e.target.value)}
                 type="number"
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
                 required
               />
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-sm font-medium">认证方式</label>
-              <select
-                value={auth}
-                onChange={(e) => setAuth(e.target.value)}
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
-              >
-                <option value="offline">离线</option>
-                <option value="microsoft">Microsoft</option>
-              </select>
+            <div className="space-y-1">
+              <Label>认证方式</Label>
+              <Select value={auth} onValueChange={setAuth}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="offline">离线</SelectItem>
+                  <SelectItem value="microsoft">Microsoft</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
-            <div>
-              <label className="text-sm font-medium">初始行为</label>
-              <select
-                value={behavior}
-                onChange={(e) => setBehavior(e.target.value)}
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
-              >
-                {behaviorOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
+            <div className="space-y-1">
+              <Label>初始行为</Label>
+              <Select value={behavior} onValueChange={setBehavior}>
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {behaviorOptions.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
-          <div className="flex justify-end gap-2 pt-2">
-            <button
+          <DialogFooter>
+            <Button
               type="button"
+              variant="outline"
               onClick={() => {
-                onClose()
+                onOpenChange(false)
                 resetForm()
               }}
-              className="px-4 py-2 text-sm border rounded-md hover:bg-accent"
             >
               取消
-            </button>
-            <button
-              type="submit"
-              disabled={create.isPending}
-              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50"
-            >
+            </Button>
+            <Button type="submit" disabled={create.isPending}>
               {create.isPending ? '创建中...' : '创建'}
-            </button>
-          </div>
+            </Button>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

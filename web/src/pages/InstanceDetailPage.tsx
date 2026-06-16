@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { useParams } from 'react-router'
 import { useInstance, useStartInstance, useStopInstance, useRestartInstance } from '@/api/instances'
 import { useInstanceMetrics } from '@/api/metrics'
@@ -6,14 +5,23 @@ import { useTerminalToken } from '@/api/terminal'
 import { useBots } from '@/api/bots'
 import FileBrowser from '@/components/FileBrowser'
 import TerminalComponent from '@/components/Terminal'
-
-const tabs = ['控制台', '终端', '文件', '配置', '备份', 'Bot']
+import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 export default function InstanceDetailPage() {
   const { id } = useParams<{ id: string }>()
   const instanceId = Number(id)
   const { data: instance, isLoading } = useInstance(instanceId)
-  const [activeTab, setActiveTab] = useState('控制台')
 
   const startMut = useStartInstance()
   const stopMut = useStopInstance()
@@ -43,61 +51,67 @@ export default function InstanceDetailPage() {
         </div>
         <div className="flex gap-2">
           {instance.status === 'STOPPED' && (
-            <button
+            <Button
+              variant="outline"
               onClick={() => startMut.mutate(instanceId)}
               disabled={startMut.isPending}
-              className="px-3 py-1.5 text-sm bg-green-500/10 text-green-600 rounded hover:bg-green-500/20 disabled:opacity-50"
+              className="text-green-600 border-green-200 hover:bg-green-50 hover:text-green-700"
             >
               {startMut.isPending ? '启动中...' : '启动'}
-            </button>
+            </Button>
           )}
           {instance.status === 'RUNNING' && (
             <>
-              <button
+              <Button
+                variant="outline"
                 onClick={() => stopMut.mutate(instanceId)}
                 disabled={stopMut.isPending}
-                className="px-3 py-1.5 text-sm bg-yellow-500/10 text-yellow-600 rounded hover:bg-yellow-500/20 disabled:opacity-50"
+                className="text-yellow-600 border-yellow-200 hover:bg-yellow-50 hover:text-yellow-700"
               >
                 {stopMut.isPending ? '停止中...' : '停止'}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="outline"
                 onClick={() => restartMut.mutate(instanceId)}
                 disabled={restartMut.isPending}
-                className="px-3 py-1.5 text-sm bg-blue-500/10 text-blue-600 rounded hover:bg-blue-500/20 disabled:opacity-50"
+                className="text-blue-600 border-blue-200 hover:bg-blue-50 hover:text-blue-700"
               >
                 {restartMut.isPending ? '重启中...' : '重启'}
-              </button>
+              </Button>
             </>
           )}
         </div>
       </div>
 
-      <div className="border-b mb-4">
-        <div className="flex gap-1">
-          {tabs.map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 text-sm border-b-2 transition-colors ${
-                activeTab === tab
-                  ? 'border-primary font-medium'
-                  : 'border-transparent text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
-      </div>
+      <Tabs defaultValue="控制台">
+        <TabsList variant="line">
+          <TabsTrigger value="控制台">控制台</TabsTrigger>
+          <TabsTrigger value="终端">终端</TabsTrigger>
+          <TabsTrigger value="文件">文件</TabsTrigger>
+          <TabsTrigger value="配置">配置</TabsTrigger>
+          <TabsTrigger value="备份">备份</TabsTrigger>
+          <TabsTrigger value="Bot">Bot</TabsTrigger>
+        </TabsList>
 
-      <div>
-        {activeTab === '控制台' && <ConsoleTab instanceId={instanceId} />}
-        {activeTab === '终端' && <TerminalTab instanceId={instanceId} />}
-        {activeTab === '文件' && <FilesTab instanceId={instanceId} />}
-        {activeTab === '配置' && <ConfigTab instance={instance} />}
-        {activeTab === '备份' && <BackupsTab instanceId={instanceId} />}
-        {activeTab === 'Bot' && <BotsTab instanceId={instanceId} />}
-      </div>
+        <TabsContent value="控制台">
+          <ConsoleTab instanceId={instanceId} />
+        </TabsContent>
+        <TabsContent value="终端">
+          <TerminalTab instanceId={instanceId} />
+        </TabsContent>
+        <TabsContent value="文件">
+          <FileBrowser instanceId={instanceId} />
+        </TabsContent>
+        <TabsContent value="配置">
+          <ConfigTab instance={instance} />
+        </TabsContent>
+        <TabsContent value="备份">
+          <BackupsTab />
+        </TabsContent>
+        <TabsContent value="Bot">
+          <BotsTab instanceId={instanceId} />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }
@@ -108,7 +122,6 @@ function ConsoleTab({ instanceId }: { instanceId: number }) {
 
   return (
     <div className="space-y-4">
-      {/* 指标卡片 */}
       <div className="grid grid-cols-3 gap-4">
         <div className="border rounded-lg p-3">
           <p className="text-xs text-muted-foreground">TPS</p>
@@ -126,7 +139,6 @@ function ConsoleTab({ instanceId }: { instanceId: number }) {
         </div>
       </div>
 
-      {/* 只读终端 */}
       {tokenError ? (
         <div className="border rounded-lg p-4 bg-[#1a1b26] min-h-[400px] flex items-center justify-center">
           <p className="text-muted-foreground text-sm">无法获取终端 token，请确认实例正在运行</p>
@@ -178,10 +190,6 @@ function TerminalTab({ instanceId }: { instanceId: number }) {
   )
 }
 
-function FilesTab({ instanceId }: { instanceId: number }) {
-  return <FileBrowser instanceId={instanceId} />
-}
-
 function ConfigTab({
   instance,
 }: {
@@ -190,28 +198,28 @@ function ConfigTab({
   return (
     <div className="space-y-4 max-w-lg">
       <div>
-        <label className="text-sm font-medium">启动命令</label>
+        <Label className="text-sm font-medium">启动命令</Label>
         <p className="mt-1 p-2 bg-muted rounded text-sm font-mono">{instance.startCommand}</p>
       </div>
       <div>
-        <label className="text-sm font-medium">工作目录</label>
+        <Label className="text-sm font-medium">工作目录</Label>
         <p className="mt-1 p-2 bg-muted rounded text-sm font-mono">{instance.workDir || '默认'}</p>
       </div>
       <div className="flex gap-4">
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={instance.autoStart} readOnly />
-          自动启动
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={instance.autoRestart} readOnly />
-          崩溃自动重启
-        </label>
+        <div className="flex items-center gap-2">
+          <Checkbox checked={instance.autoStart} disabled />
+          <Label className="text-sm">自动启动</Label>
+        </div>
+        <div className="flex items-center gap-2">
+          <Checkbox checked={instance.autoRestart} disabled />
+          <Label className="text-sm">崩溃自动重启</Label>
+        </div>
       </div>
     </div>
   )
 }
 
-function BackupsTab({ instanceId: _instanceId }: { instanceId: number }) {
+function BackupsTab() {
   return (
     <div>
       <p className="text-sm text-muted-foreground mb-2">备份管理</p>
@@ -231,37 +239,33 @@ function BotsTab({ instanceId }: { instanceId: number }) {
       {isLoading ? (
         <p className="text-sm text-muted-foreground">加载中...</p>
       ) : bots && bots.length > 0 ? (
-        <div className="border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50">
-              <tr>
-                <th className="text-left p-3 font-medium">名称</th>
-                <th className="text-left p-3 font-medium">状态</th>
-                <th className="text-left p-3 font-medium">行为</th>
-                <th className="text-left p-3 font-medium">服务器</th>
-              </tr>
-            </thead>
-            <tbody>
+        <div className="border rounded-lg">
+          <Table>
+            <TableHeader className="bg-muted/50">
+              <TableRow>
+                <TableHead>名称</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead>行为</TableHead>
+                <TableHead>服务器</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {bots.map((bot) => (
-                <tr key={bot.id} className="border-t hover:bg-muted/30">
-                  <td className="p-3 font-medium">{bot.name}</td>
-                  <td className="p-3">
-                    <span
-                      className={
-                        bot.status === 'connected' ? 'text-green-500' : 'text-gray-500'
-                      }
-                    >
+                <TableRow key={bot.id}>
+                  <TableCell className="font-medium">{bot.name}</TableCell>
+                  <TableCell>
+                    <span className={bot.status === 'connected' ? 'text-green-500' : 'text-gray-500'}>
                       {bot.status === 'connected' ? '● 已连接' : '○ 断开'}
                     </span>
-                  </td>
-                  <td className="p-3 text-muted-foreground">{bot.behavior}</td>
-                  <td className="p-3 text-muted-foreground">
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{bot.behavior}</TableCell>
+                  <TableCell className="text-muted-foreground">
                     {bot.config.server}:{bot.config.port}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       ) : (
         <div className="border rounded-lg p-4 min-h-[200px]">

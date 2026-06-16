@@ -1,4 +1,12 @@
 import { useNodes } from '@/api/nodes'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 
 const statusLabel: Record<number, { text: string; color: string }> = {
   0: { text: '离线', color: 'text-red-500' },
@@ -18,45 +26,45 @@ export default function NodesPage() {
       {isLoading ? (
         <p className="text-muted-foreground">加载中...</p>
       ) : (
-        <div className="border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/50">
-              <tr>
-                <th className="text-left p-3 font-medium">名称</th>
-                <th className="text-left p-3 font-medium">IP</th>
-                <th className="text-left p-3 font-medium">状态</th>
-                <th className="text-left p-3 font-medium">CPU</th>
-                <th className="text-left p-3 font-medium">内存</th>
-                <th className="text-left p-3 font-medium">磁盘</th>
-                <th className="text-left p-3 font-medium">系统</th>
-              </tr>
-            </thead>
-            <tbody>
+        <div className="border rounded-lg">
+          <Table>
+            <TableHeader className="bg-muted/50">
+              <TableRow>
+                <TableHead>名称</TableHead>
+                <TableHead>IP</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead>CPU</TableHead>
+                <TableHead>内存</TableHead>
+                <TableHead>磁盘</TableHead>
+                <TableHead>系统</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {nodes?.map((node) => {
                 const st = statusLabel[node.status] || statusLabel[0]
                 return (
-                  <tr key={node.id} className="border-t hover:bg-muted/30">
-                    <td className="p-3 font-medium">{node.name}</td>
-                    <td className="p-3 text-muted-foreground">{node.host}</td>
-                    <td className="p-3">
-                      <span className={st.color}>● {st.text}</span>
-                    </td>
-                    <td className="p-3">{node.cpuUsage ? `${(node.cpuUsage * 100).toFixed(0)}%` : '--'}</td>
-                    <td className="p-3">{node.memoryUsage ? `${(node.memoryUsage * 100).toFixed(0)}%` : '--'}</td>
-                    <td className="p-3">{node.diskUsage ? `${(node.diskUsage * 100).toFixed(0)}%` : '--'}</td>
-                    <td className="p-3 text-muted-foreground">{node.os} {node.arch}</td>
-                  </tr>
+                  <TableRow key={node.id}>
+                    <TableCell className="font-medium">{node.name}</TableCell>
+                    <TableCell className="text-muted-foreground">{node.host}</TableCell>
+                    <TableCell>
+                      <span className={st.color}>{st.text}</span>
+                    </TableCell>
+                    <TableCell>{node.cpuUsage ? `${(node.cpuUsage * 100).toFixed(0)}%` : '--'}</TableCell>
+                    <TableCell>{node.memoryUsage ? `${(node.memoryUsage * 100).toFixed(0)}%` : '--'}</TableCell>
+                    <TableCell>{node.diskUsage ? `${(node.diskUsage * 100).toFixed(0)}%` : '--'}</TableCell>
+                    <TableCell className="text-muted-foreground">{node.os} {node.arch}</TableCell>
+                  </TableRow>
                 )
               })}
               {(!nodes || nodes.length === 0) && (
-                <tr>
-                  <td colSpan={7} className="p-6 text-center text-muted-foreground">
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center text-muted-foreground">
                     暂无节点
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               )}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       )}
     </div>
