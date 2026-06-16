@@ -18,6 +18,9 @@
 - 节点管理限平台管理员
 - 实例创建配额检查补全 `MaxBots`（组 Bot 数达上限拒绝）与 `MaxStorageMB`（组内备份总大小超额拒绝）
 
+### Changed
+- FR-006 守护进程按 ADR-003 真实现：引入 `IProcessCommand` 策略接口按 `ProcessType` 路由（direct/daemon/docker）；daemon 模式 spawn 独立 wrapper 子进程（复用 worker 二进制 `daemon` 子命令），脱离 Worker 进程组隔离；通过 Unix Socket（Linux/macOS）/ Named Pipe（Windows，npipe）+ 二进制帧协议通信；PID 文件（JSON）恢复 + `RecoverDaemonInstances` 重连；daemon 模式 `StopAll` 优雅断开不杀游戏服；`registerOnWorker` 补传 `ProcessType`。
+
 #### 核心功能 (P0)
 - 用户认证：JWT 双 Token（15min access + 7d refresh），bcrypt 密码加密
 - 用户与权限：平台管理员/组管理员/组成员三级角色，RBAC 权限中间件

@@ -17,3 +17,13 @@
   - 直接子进程（platform 死 = 游戏服死）— 最简单但不可接受
   - systemd service 管理（Linux only，跨平台困难）
 - **参考**: JianAgent 的 DaemonProcessCommand 实现
+
+- **实现细化（2026-06，17）**: 落地实现时的具体约定，  - wrapper 复用 worker 二进制，通过 `daemon` 子命令模式启动（`jianmanager-worker daemon`），配置经 `JM_DAEMON_WRAPPER_CONFIG` 环境变量（JSON）传递，避免命令行转义问题。
+  - 进程组隔离：Linux/macOS 用 `SysProcAttr{Setsid: true}`，Windows 用 `CREATE_NEW_PROCESS_GROUP`（`internal/worker/process/detach_*.go`）。
+  - 传输层：`internal/worker/daemon/conn.go` + `conn_unix.go`/`conn_windows.go`` 按 `runtime.GOOS` 分支；Unix Socket（`<pidDir>/<uuid>.sock`）/ Named Pipe（`\\.\pipe\jianmanager-<uuid>`，基于 `gopkg.in/natefinch/npipe.v2`）；Windows 拨号用 `DialTimeout` 避免管道未就绪时无限阻塞。
+  - 进程存活探测：`IsPIDAlive` 跨平台实现（unix: signal 0；windows: `OpenProcess`，`pid_alive_*.go`），因 Windows 不支持 signal 0。
+  - PID 文件：JSON 结构（`PIDRecord`：wrapper pid、java pid、socket addr、instance uuid），存 `<pidDir>/<uuid>.pid`，兼容旧版裸 PID 数字格式。
+  - Java 进程树终止：Windows 上 `cmd.Process.Kill` 仅终止 cmd.exe、其子进程句柄导致 `cmd.Wait` 阻塞，故 wrapper 用 `taskkill /T /F` 递归终止 Java 进程树。
+  - Worker 重启恢复：`Manager.RecoverDaemonInstances` 扫描 PID 文件，存活则 `Reconnect` socket，恢复管理，否则清理。
+  - 优雅退出：daemon 模式 `Manager.StopAll` 只断开与 wrapper 连接，不杀游戏服（区别于 direct 模式终止进程））。
+  - 进程管理策略：`IProcessCommand` 接口（`internal/worker/process/command.go`）按 `ProcessType` 路由 direct/daemon/docker（docker/rcon 返回 `ErrNotImplemented`）。

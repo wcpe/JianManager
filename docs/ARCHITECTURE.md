@@ -130,15 +130,14 @@ internal/controlplane/
 ### 目录结构
 
 ```
-cmd/worker/main.go
+cmd/worker/main.go           # 含 daemon 子命令分支（wrapper 模式）
 internal/worker/
   config.go
   register.go
   heartbeat.go
   grpc/{server,handler_instance,handler_bot,handler_file,handler_metrics}.go
-  process/{manager,state,command,direct,daemon,docker_cmd,rcon}.go
-  daemon/{wrapper,socket_server,java_process,output_buffer,pid_file,commands,frame}.go
-  docker/{client,lifecycle,stats}.go
+  process/{manager,command,direct,daemon,docker,gbk,detach,detach_unix,detach_windows}.go
+  daemon/{wrapper,conn,conn_unix,conn_windows,pid_file,pid_alive_unix,pid_alive_windows,buffer,frame}.go
   terminal/{manager,session}.go
   ws/{server,auth,handler_terminal,handler_log}.go
   bot/{manager,worker_pool,ipc,state,prewarm}.go
@@ -185,6 +184,9 @@ Browser → Worker Node (WS ws://worker:port/ws/terminal?token=xxx)
 
 ### 6.3 守护进程二进制帧协议
 
+Worker Node 与 daemon wrapper 子进程之间通过二进制帧协议通信。
+传输层跨平台：Linux/macOS 用 **Unix Socket**（`<pidDir>/<uuid>.sock`），Windows 用 **Named Pipe**（`\\.\pipe\jianmanager-<uuid>`，基于 `npipe`）。
+
 ```
 帧结构 (8 字节头 + 可变载荷):
 ┌─────────┬──────┬──────┬───────────┬───────────────────┐
@@ -196,6 +198,15 @@ Channel: STDIN(0) STDOUT(1) STDERR(2) CONTROL(3)
 Type:    DATA(0x01) COMMAND(0x02) RESPONSE(0x03) HEARTBEAT(0x04)
 Flags:   bit0=compressed(zlib)
 ```
+
+#### daemon wrapper 生命周期（ADR-003）
+
+- **进程隔离**：Worker spawn 独立 wrapper 子进程（复用 worker 二进制的 `daemon` 子命令，配置经 `JM_DAEMON_WRAPPER_CONFIG` 环境变量传递），wrapper 通过 `SysProcAttr{Setsid}`（unix）/ `CREATE_NEW_PROCESS_GROUP`（windows）脱离 Worker 进程组。Worker 退出/重启时 wrapper 继续运行。
+- **角色**：wrapper 作为 Java 游戏服进程的父进程，负责启动/指数退避重启 Java、监听 socket、与 Worker 双向帧通信、维护 PID 文件。
+- **stdio 转发**：Java 的 stdout/stderr 由 wrapper 编码为 `ChannelStdout/Stderr` 帧发给 Worker，Worker 的 `daemonStrategy.readLoop` 解码后桥接到 `onOutput`（→ WebSocket 终端）；Worker 下发的 stdin/控制命令通过 `ChannelStdin/Control` 帧发给 wrapper。
+- **控制命令**（`ChannelControl` + payload 文本）：`stop`（优雅停止 Java 进程树）、`kill`（强制）、`ping`（心跳，回 `pong`）。
+- **PID 文件恢复**：wrapper 写 `<pidDir>/<uuid>.pid`（JSON：wrapper pid、java pid、socket 地址、instance uuid）。Worker 启动时 `Manager.RecoverDaemonInstances` 扫描 PID 文件，wrapper pid 存活则 reconnect socket 恢复管理，否则清理文件与残留 socket。
+- **优雅退出**：daemon 模式下 `Manager.StopAll` 只断开与 wrapper 的连接，不杀游戏服（direct 模式才终止进程）。
 
 ### 6.4 Bot Worker IPC
 

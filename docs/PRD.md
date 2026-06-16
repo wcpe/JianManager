@@ -93,6 +93,7 @@
 - **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: 平台进程重启不杀游戏服，通过 Daemon Wrapper 子进程实现进程隔离
+- **备注**: 按 ADR-003 真实现：IProcessCommand 策略路由（direct/daemon/docker）、wrapper 子进程进程组隔离、Unix Socket/Named Pipe + 二进制帧协议、PID 文件恢复、daemon 模式优雅退出不杀游戏服。单元/集成测试覆盖帧协议、PID 恢复、StopAll 优雅断开；「Worker 退出后游戏服存活」真机验证待主控执行
 - **验收标准**:
   - [x] 启动方式为 daemon 时，spawn 独立子进程管理游戏服
   - [x] 二进制帧协议通信（Unix Socket / Named Pipe）

@@ -1,17 +1,15 @@
 package process
 
 import (
+	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
-	"os/exec"
-	"runtime"
+	"path/filepath"
+	"strings"
 	"sync"
-	"time"
 
-	"golang.org/x/text/encoding/simplifiedchinese"
-	"golang.org/x/text/transform"
+	"github.com/wxys233/JianManager/internal/worker/daemon"
 )
 
 // InstanceState 实例运行状态。
@@ -25,7 +23,8 @@ const (
 	StateCrashed  InstanceState = "CRASHED"
 )
 
-// Instance 运行中的实例。
+// Instance 运行中的实例记账信息。
+// 策略实现（direct/daemon）持有进程/socket 句柄，这里只保留 Manager 路由与查询所需字段。
 type Instance struct {
 	UUID         string
 	Name         string
@@ -35,18 +34,25 @@ type Instance struct {
 	RCONPort     int
 	RCONPassword string
 	State        InstanceState
-	Cmd          *exec.Cmd
-	Stdin        io.WriteCloser // stdin 管道，在 Start 前创建
 	AutoRestart  bool
 	CrashCount   int
+	// strategy 是该实例的启动策略，按 ProcessType 选择。
+	// nil 表示实例已创建但尚未启动（或已 Close）。
+	strategy IProcessCommand
+	// processType 记录构造策略时的方式，用于 StopAll 判断优雅退出路径。
+	processType ProcessType
 }
 
 // Manager 进程管理器。
+// 它通过 IProcessCommand 策略接口支持多种启动方式（direct/daemon/docker），
+// 参见 ADR-003: 守护进程 Wrapper 模式。
 type Manager struct {
 	mu         sync.RWMutex
 	instances  map[string]*Instance
 	serversDir string
 	onOutput   func(instanceID string, stream string, data []byte)
+	// pidDir 存放 daemon wrapper 的 PID 文件目录。
+	pidDir string
 }
 
 // NewManager 创建进程管理器。
@@ -54,6 +60,7 @@ func NewManager(serversDir string) *Manager {
 	return &Manager{
 		instances:  make(map[string]*Instance),
 		serversDir: serversDir,
+		pidDir:     serversDir,
 	}
 }
 
@@ -61,30 +68,6 @@ func NewManager(serversDir string) *Manager {
 // 输出会路由到此处（用于桥接 WebSocket 终端）。
 func (m *Manager) SetOutputHandler(handler func(instanceID string, stream string, data []byte)) {
 	m.onOutput = handler
-}
-
-// instanceWriter 将进程输出路由到 Manager 的 onOutput 回调。
-// Windows 上自动将 GBK 编码转换为 UTF-8。
-type instanceWriter struct {
-	manager    *Manager
-	instanceID string
-	stream     string // "stdout" or "stderr"
-}
-
-func (w *instanceWriter) Write(p []byte) (n int, err error) {
-	if w.manager.onOutput != nil {
-		data := p
-		if runtime.GOOS == "windows" {
-			// Windows cmd.exe 子进程输出默认 GBK，转换为 UTF-8
-			utf8Data, _, transformErr := transform.Bytes(simplifiedchinese.GBK.NewDecoder(), p)
-			if transformErr == nil {
-				data = utf8Data
-			}
-			// 转换失败则用原始数据（可能本身就是 UTF-8）
-		}
-		w.manager.onOutput(w.instanceID, w.stream, data)
-	}
-	return len(p), nil
 }
 
 // InstanceSnapshot 表示单个实例的状态快照（用于心跳上报）。
@@ -108,8 +91,8 @@ func (m *Manager) GetAllInstanceStates() []InstanceSnapshot {
 	return states
 }
 
-// Create 创建实例（但不启动）。
-func (m *Manager) Create(uuid, name, startCommand, workDir string, envVars map[string]string, autoRestart bool) error {
+// Create 创建实例（但不启动）。processType 决定启动方式（direct/daemon/docker/rcon）。
+func (m *Manager) Create(uuid, name, startCommand, workDir string, envVars map[string]string, autoRestart bool, processType ProcessType) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -125,9 +108,10 @@ func (m *Manager) Create(uuid, name, startCommand, workDir string, envVars map[s
 		EnvVars:      envVars,
 		State:        StateStopped,
 		AutoRestart:  autoRestart,
+		processType:  processType,
 	}
 
-	slog.Info("实例已创建", "instanceId", uuid, "name", name, "autoRestart", autoRestart)
+	slog.Info("实例已创建", "instanceId", uuid, "name", name, "autoRestart", autoRestart, "processType", processType)
 	return nil
 }
 
@@ -159,7 +143,7 @@ func (m *Manager) GetRCONConfig(uuid string) (port int, password string, err err
 	return inst.RCONPort, inst.RCONPassword, nil
 }
 
-// Start 启动实例。
+// Start 启动实例。按实例的 ProcessType 选择策略；首次启动时惰性构造策略。
 func (m *Manager) Start(uuid string) error {
 	m.mu.Lock()
 	inst, exists := m.instances[uuid]
@@ -172,36 +156,30 @@ func (m *Manager) Start(uuid string) error {
 		return fmt.Errorf("实例 %s 当前状态 %s 无法启动", uuid, inst.State)
 	}
 
+	// 惰性构造策略：CRASHED 重启时复用已构造的策略（保留连接），首次启动则新建。
+	if inst.strategy == nil {
+		spec := CommandSpec{
+			UUID:         inst.UUID,
+			Name:         inst.Name,
+			StartCommand: inst.StartCommand,
+			WorkDir:      inst.WorkDir,
+			EnvVars:      inst.EnvVars,
+			AutoRestart:  inst.AutoRestart,
+			ProcessType:  inst.processType,
+		}
+		strategy, err := m.newStrategy(spec)
+		if err != nil {
+			inst.State = StateCrashed
+			m.mu.Unlock()
+			return fmt.Errorf("构造启动策略失败: %w", err)
+		}
+		inst.strategy = strategy
+	}
+	strategy := inst.strategy
 	inst.State = StateStarting
 	m.mu.Unlock()
 
-	// 跨平台 shell 命令执行
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		// 不加 chcp — Go 的 instanceWriter 会将 GBK 输出转换为 UTF-8
-		cmd = exec.Command("cmd.exe", "/c", inst.StartCommand)
-	} else {
-		cmd = exec.Command("sh", "-c", inst.StartCommand)
-	}
-	cmd.Dir = inst.WorkDir
-	cmd.Stdout = &instanceWriter{manager: m, instanceID: uuid, stream: "stdout"}
-	cmd.Stderr = &instanceWriter{manager: m, instanceID: uuid, stream: "stderr"}
-
-	// 创建 stdin 管道（必须在 Start 前）
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		m.mu.Lock()
-		inst.State = StateCrashed
-		m.mu.Unlock()
-		return fmt.Errorf("创建 stdin 管道失败: %w", err)
-	}
-
-	for k, v := range inst.EnvVars {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
-
-	if err := cmd.Start(); err != nil {
-		stdin.Close()
+	if err := strategy.Start(context.Background()); err != nil {
 		m.mu.Lock()
 		inst.State = StateCrashed
 		m.mu.Unlock()
@@ -209,59 +187,9 @@ func (m *Manager) Start(uuid string) error {
 	}
 
 	m.mu.Lock()
-	inst.Cmd = cmd
-	inst.Stdin = stdin
 	inst.State = StateRunning
 	m.mu.Unlock()
-
-	slog.Info("实例已启动", "instanceId", uuid, "pid", cmd.Process.Pid)
-
-	// 异步等待进程结束
-	go func() {
-		err := cmd.Wait()
-		// 关闭 stdin 管道
-		if inst.Stdin != nil {
-			inst.Stdin.Close()
-		}
-		m.mu.Lock()
-
-		// Stopping/Stopped 都视为正常停止（Windows Kill 返回非零退出码）
-		if inst.State == StateStopping || inst.State == StateStopped {
-			inst.State = StateStopped
-			inst.Cmd = nil
-			inst.CrashCount = 0
-			m.mu.Unlock()
-			slog.Info("实例已停止", "instanceId", uuid)
-			return
-		}
-
-		inst.State = StateCrashed
-		inst.Cmd = nil
-		inst.CrashCount++
-		crashCount := inst.CrashCount
-		autoRestart := inst.AutoRestart
-		m.mu.Unlock()
-
-		slog.Warn("实例崩溃", "instanceId", uuid, "err", err, "crashCount", crashCount)
-
-		// 指数退避自动重启
-		if autoRestart {
-			delay := backoffDelay(crashCount)
-			slog.Info("将在延迟后自动重启", "instanceId", uuid, "delay", delay, "crashCount", crashCount)
-			time.Sleep(delay)
-
-			m.mu.RLock()
-			currentState := inst.State
-			m.mu.RUnlock()
-
-			if currentState == StateCrashed {
-				if restartErr := m.Start(uuid); restartErr != nil {
-					slog.Error("自动重启失败", "instanceId", uuid, "error", restartErr)
-				}
-			}
-		}
-	}()
-
+	slog.Info("实例已启动", "instanceId", uuid)
 	return nil
 }
 
@@ -270,7 +198,7 @@ func (m *Manager) Stop(uuid string) error {
 	m.mu.RLock()
 	inst, exists := m.instances[uuid]
 	m.mu.RUnlock()
-	if !exists || inst.Cmd == nil {
+	if !exists || inst.strategy == nil {
 		return fmt.Errorf("实例 %s 未运行", uuid)
 	}
 
@@ -278,20 +206,14 @@ func (m *Manager) Stop(uuid string) error {
 	inst.State = StateStopping
 	m.mu.Unlock()
 
-	// Windows 上 os.Interrupt 对多数进程无效，直接 Kill 更可靠
-	if runtime.GOOS == "windows" {
-		if err := inst.Cmd.Process.Kill(); err != nil {
-			return fmt.Errorf("终止实例 %s 失败: %w", uuid, err)
-		}
-	} else {
-		if err := inst.Cmd.Process.Signal(os.Interrupt); err != nil {
-			// Interrupt 失败则回退到 Kill
-			if err := inst.Cmd.Process.Kill(); err != nil {
-				return fmt.Errorf("终止实例 %s 失败: %w", uuid, err)
-			}
-		}
+	if err := inst.strategy.Stop(); err != nil {
+		return fmt.Errorf("停止实例 %s 失败: %w", uuid, err)
 	}
 
+	m.mu.Lock()
+	inst.State = StateStopped
+	inst.CrashCount = 0
+	m.mu.Unlock()
 	return nil
 }
 
@@ -305,15 +227,14 @@ func (m *Manager) Kill(uuid string) error {
 		return fmt.Errorf("实例 %s 不存在", uuid)
 	}
 
-	if inst.Cmd != nil {
-		if err := inst.Cmd.Process.Kill(); err != nil {
-			return fmt.Errorf("终止实例 %s 失败: %w", uuid, err)
-		}
+	if inst.strategy != nil {
+		_ = inst.strategy.Kill()
+		_ = inst.strategy.Close()
+		inst.strategy = nil
 	}
 
 	m.mu.Lock()
 	inst.State = StateStopped
-	inst.Cmd = nil
 	m.mu.Unlock()
 
 	return nil
@@ -358,16 +279,11 @@ func (m *Manager) SendCommand(uuid, command string) error {
 	inst, exists := m.instances[uuid]
 	m.mu.RUnlock()
 
-	if !exists || inst.Cmd == nil || inst.Cmd.Process == nil {
+	if !exists || inst.strategy == nil {
 		return fmt.Errorf("实例 %s 未运行", uuid)
 	}
 
-	if inst.Stdin == nil {
-		return fmt.Errorf("实例 %s 的 stdin 不可用", uuid)
-	}
-
-	_, err := fmt.Fprintln(inst.Stdin, command)
-	return err
+	return inst.strategy.SendCommand(command)
 }
 
 // Remove 移除实例记录。
@@ -380,8 +296,9 @@ func (m *Manager) Remove(uuid string) error {
 		return nil
 	}
 
-	if inst.Cmd != nil {
-		_ = inst.Cmd.Process.Kill()
+	if inst.strategy != nil {
+		_ = inst.strategy.Kill()
+		_ = inst.strategy.Close()
 	}
 
 	delete(m.instances, uuid)
@@ -389,6 +306,8 @@ func (m *Manager) Remove(uuid string) error {
 }
 
 // StopAll 停止所有运行中的实例。
+// direct 模式：终止游戏服进程（Worker 退出时一并清理）。
+// daemon 模式：仅断开与 wrapper 的连接，wrapper 继续托管游戏服（ADR-003 进程隔离目标）。
 func (m *Manager) StopAll() {
 	m.mu.RLock()
 	uuids := make([]string, 0)
@@ -400,19 +319,86 @@ func (m *Manager) StopAll() {
 	m.mu.RUnlock()
 
 	for _, uuid := range uuids {
+		inst, ok := m.GetInstance(uuid)
+		if !ok {
+			continue
+		}
+		// daemon 模式优雅退出：不杀游戏服，只断开 wrapper 连接。
+		if inst.processType == ProcessTypeDaemon {
+			m.mu.Lock()
+			if inst.strategy != nil {
+				_ = inst.strategy.Close()
+				inst.strategy = nil
+			}
+			inst.State = StateStopped
+			m.mu.Unlock()
+			slog.Info("daemon 实例已断开连接（wrapper 继续运行）", "instanceId", uuid)
+			continue
+		}
 		if err := m.Stop(uuid); err != nil {
 			slog.Warn("停止实例失败", "instanceId", uuid, "error", err)
 		}
 	}
 }
 
-// backoffDelay 计算指数退避延迟。
-// 1s → 2s → 4s → 8s → 16s → 30s (上限)。
-func backoffDelay(crashCount int) time.Duration {
-	delay := time.Second * time.Duration(1<<uint(crashCount-1))
-	maxDelay := 30 * time.Second
-	if delay > maxDelay {
-		delay = maxDelay
+// RecoverDaemonInstances 在 Worker 重启后扫描 PID 目录，恢复仍存活的 daemon wrapper 连接。
+// 对每个 PID 文件：wrapper pid 存活且 socket 可达则 reconnect 并登记实例为 RUNNING；
+// 否则删除 PID 文件与残留 socket（清理）。返回成功恢复的实例数。
+// 参见 ADR-003: 平台重启后通过 PID 文件重新连接已有 daemon。
+func (m *Manager) RecoverDaemonInstances() (int, error) {
+	entries, err := os.ReadDir(m.pidDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("读取 PID 目录失败: %w", err)
 	}
-	return delay
+
+	recovered := 0
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".pid") {
+			continue
+		}
+		pidPath := filepath.Join(m.pidDir, entry.Name())
+		instanceUUID := strings.TrimSuffix(entry.Name(), ".pid")
+
+		rec, err := daemon.NewPIDFile(pidPath).ReadRecord()
+		if err != nil {
+			slog.Warn("读取 PID 文件失败，清理", "path", pidPath, "error", err)
+			_ = os.Remove(pidPath)
+			continue
+		}
+
+		// wrapper 进程不存活：清理 PID 文件 + 残留 socket
+		if rec.WrapperPID <= 0 || !daemon.IsPIDAlive(rec.WrapperPID) {
+			slog.Info("daemon wrapper 已不存活，清理残留", "instanceId", rec.InstanceUUID, "wrapperPid", rec.WrapperPID)
+			_ = os.Remove(pidPath)
+			if rec.SocketAddr != "" {
+				daemon.RemoveSocket(rec.SocketAddr)
+			}
+			continue
+		}
+
+		// wrapper 存活：构造 daemon 策略并 reconnect
+		strategy := newDaemonStrategy(m, CommandSpec{UUID: instanceUUID, ProcessType: ProcessTypeDaemon})
+		if err := strategy.Reconnect(rec.SocketAddr); err != nil {
+			slog.Warn("reconnect wrapper 失败，清理", "instanceId", instanceUUID, "error", err)
+			_ = os.Remove(pidPath)
+			continue
+		}
+		strategy.SetWrapperPID(rec.WrapperPID)
+
+		m.mu.Lock()
+		m.instances[instanceUUID] = &Instance{
+			UUID:        instanceUUID,
+			State:       StateRunning,
+			AutoRestart: true,
+			strategy:    strategy,
+			processType: ProcessTypeDaemon,
+		}
+		m.mu.Unlock()
+		recovered++
+		slog.Info("已恢复 daemon 实例", "instanceId", instanceUUID, "wrapperPid", rec.WrapperPID)
+	}
+	return recovered, nil
 }

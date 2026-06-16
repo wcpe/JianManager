@@ -13,6 +13,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/wxys233/JianManager/internal/worker/daemon"
 	"github.com/wxys233/JianManager/internal/worker/heartbeat"
 	wgrpc "github.com/wxys233/JianManager/internal/worker/grpc"
 	"github.com/wxys233/JianManager/internal/worker/metrics"
@@ -22,7 +23,32 @@ import (
 	"github.com/wxys233/JianManager/proto/workerpb"
 )
 
+// main 是 Worker Node 入口。
+// 若以 `daemon` 子命令模式启动（由 daemonStrategy spawn），则运行 wrapper 而非 Worker 主进程。
+// 见 ADR-003: 守护进程 Wrapper 模式。
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "daemon" {
+		runDaemonWrapper()
+		return
+	}
+	runWorker()
+}
+
+// runDaemonWrapper 以 wrapper 子进程模式运行。
+// 配置通过环境变量 JM_DAEMON_WRAPPER_CONFIG 传递（JSON）。
+func runDaemonWrapper() {
+	cfg, err := daemon.ParseWrapperConfigFromEnv()
+	if err != nil {
+		slog.Error("daemon wrapper 配置解析失败", "error", err)
+		os.Exit(1)
+	}
+	if err := daemon.Run(cfg); err != nil {
+		slog.Error("daemon wrapper 退出", "instanceId", cfg.InstanceUUID, "error", err)
+		os.Exit(1)
+	}
+}
+
+func runWorker() {
 	// 配置
 	nodeName := "node-01"
 	if v := os.Getenv("JIANMANAGER_NODE_NAME"); v != "" {
@@ -60,6 +86,16 @@ func main() {
 
 	// 初始化进程管理器
 	manager := process.NewManager(workDir)
+
+	// 恢复 daemon 模式实例：扫描 PID 文件，存活则 reconnect wrapper，否则清理。
+	// 这是 ADR-003「平台重启不杀游戏服」的关键路径。
+	recovered, recoverErr := manager.RecoverDaemonInstances()
+	if recoverErr != nil {
+		slog.Warn("恢复 daemon 实例失败", "error", recoverErr)
+	}
+	if recovered > 0 {
+		slog.Info("已恢复 daemon 实例连接", "count", recovered)
+	}
 
 	// 初始化指标采集器
 	collector := metrics.NewCollector(30 * time.Second)

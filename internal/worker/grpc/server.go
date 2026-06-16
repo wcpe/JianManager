@@ -46,6 +46,7 @@ func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanc
 		req.WorkDir,
 		req.EnvVars,
 		req.AutoRestart,
+		process.ProcessType(req.ProcessType),
 	)
 	if err != nil {
 		return &workerpb.CreateInstanceResponse{Success: false, Error: err.Error()}, nil

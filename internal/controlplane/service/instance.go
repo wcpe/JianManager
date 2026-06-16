@@ -335,6 +335,7 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 	resp, err := client.Worker.CreateInstance(ctx, &workerpb.CreateInstanceRequest{
 		InstanceUuid: instance.UUID,
 		Name:         instance.Name,
+		ProcessType:  string(instance.ProcessType),
 		StartCommand: instance.StartCommand,
 		WorkDir:      instance.WorkDir,
 		AutoRestart:  instance.AutoRestart,
