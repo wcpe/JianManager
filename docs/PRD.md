@@ -213,6 +213,92 @@
 
 ---
 
+## V1 增强 — 运行时集成
+
+> 以下 FR 用于完善已有功能的运行时集成，消除 TODO。
+
+### FR-017: Worker Node 注册与心跳集成
+- **状态**: 📋 todo
+- **优先级**: P0
+- **描述**: Worker Node 启动时自动向 Control Plane 注册，周期性上报心跳指标，Control Plane 检测离线
+- **验收标准**:
+  - [ ] Worker 启动后自动连接 Control Plane gRPC 端口并发送 Register 请求
+  - [ ] 注册成功后获得 node_uuid 和 node_secret
+  - [ ] 每 30s 发送一次心跳，携带 CPU/内存/磁盘指标
+  - [ ] Control Plane 超过 90s 未收到心跳标记节点为离线
+  - [ ] Worker 断线后自动重连 Control Plane
+  - [ ] 前端节点列表显示在线/离线状态和实时指标
+- **依赖**: FR-004（节点注册与心跳）
+- **关联 API**: gRPC Register, Heartbeat
+
+### FR-018: 实例 gRPC 生命周期操作
+- **状态**: 📋 todo
+- **优先级**: P0
+- **描述**: Control Plane 通过 gRPC 委托 Worker Node 执行实例的创建、启动、停止、重启、销毁操作
+- **验收标准**:
+  - [ ] 前端创建实例 → Control Plane → gRPC CreateInstance → Worker 创建进程
+  - [ ] 前端启动实例 → Control Plane → gRPC StartInstance → Worker 启动进程
+  - [ ] 前端停止实例 → Control Plane → gRPC StopInstance → Worker 停止进程
+  - [ ] 实例状态变更通过 StreamInstanceEvents 实时推送到前端
+  - [ ] 操作失败时前端显示错误信息
+- **依赖**: FR-017（Worker 注册）
+- **关联 API**: gRPC CreateInstance, StartInstance, StopInstance, RestartInstance
+
+### FR-019: 终端 WebSocket 全链路
+- **状态**: 📋 todo
+- **优先级**: P0
+- **描述**: 浏览器终端通过 Control Plane 签发 token，直连 Worker Node WebSocket，实现完整的 stdin/stdout 双向流
+- **验收标准**:
+  - [ ] 前端请求终端 token → Control Plane 签发 30s 一次性 JWT
+  - [ ] 前端持 token 连接 Worker Node 的 /ws/terminal
+  - [ ] 用户输入通过 stdin 消息转发到实例进程的 stdin
+  - [ ] 实例 stdout/stderr 通过 WebSocket 推送到 xterm.js
+  - [ ] 终端 resize 消息调整 PTY 大小
+  - [ ] 连接断开时自动清理会话
+- **依赖**: FR-018（实例操作）
+- **关联 API**: GET /instances/:id/terminal-token, WS /ws/terminal
+
+### FR-020: 文件管理 gRPC 全链路
+- **状态**: 📋 todo
+- **优先级**: P0
+- **描述**: 前端文件浏览器通过 Control Plane 代理 gRPC 调用，实现 Worker Node 上的文件 CRUD
+- **验收标准**:
+  - [ ] 前端浏览目录 → Control Plane → gRPC ListFiles → Worker 返回文件列表
+  - [ ] 前端读取文件 → Control Plane → gRPC ReadFile → Worker 返回内容
+  - [ ] 前端保存文件 → Control Plane → gRPC WriteFile → Worker 写入
+  - [ ] 前端删除文件 → Control Plane → gRPC DeleteFile → Worker 删除
+  - [ ] 路径遍历攻击被拦截（不能访问工作目录之外的文件）
+- **依赖**: FR-018（实例操作）
+- **关联 API**: GET/POST/DELETE /instances/:id/files
+
+### FR-021: Bot Mineflayer 集成
+- **状态**: 📋 todo
+- **优先级**: P1
+- **描述**: Bot Worker 通过 Mineflayer 连接 Minecraft 服务器，支持行为引擎（follow/guard/patrol/idle）
+- **验收标准**:
+  - [ ] 创建 Bot 后 Bot Worker 通过 Mineflayer 连接目标 MC 服务器
+  - [ ] 连接成功后 Bot 状态变为 connected
+  - [ ] 切换行为模式（follow/guard/patrol/idle）后 Bot 行为改变
+  - [ ] follow 模式跟随目标玩家移动
+  - [ ] guard 模式在固定位置警戒
+  - [ ] Bot 断开连接后状态变为 disconnected
+- **依赖**: FR-009（Bot 平台）
+- **关联 API**: POST /bots, POST /bots/:id/behavior
+
+### FR-022: RCON 指标采集
+- **状态**: 📋 todo
+- **优先级**: P1
+- **描述**: Worker Node 通过 RCON 协议查询 Minecraft 服务器的 TPS 和在线玩家数
+- **验收标准**:
+  - [ ] 实例运行时 Worker 通过 RCON 连接查询 TPS
+  - [ ] 实例运行时 Worker 通过 RCON 查询在线玩家列表
+  - [ ] 前端实例详情页显示 TPS 和在线玩家数
+  - [ ] RCON 连接失败时优雅降级（显示 N/A）
+- **依赖**: FR-010（监控指标）
+- **关联 API**: GET /instances/:id/metrics
+
+---
+
 ## V1 不包含（后续版本）
 
 | FR | 描述 | 预计版本 |
