@@ -1,14 +1,23 @@
 /**
  * 行为引擎基类。
  * 所有行为模式继承此类，实现 tick 方法。
+ * follow/patrol/guard 行为接入 mineflayer-pathfinder 寻路（A* 移动）。
  */
 
 import type { Bot } from 'mineflayer'
+import { PathfinderMover } from '../pathfinder/index.js'
+import { CustomBehavior, type CustomBehaviorConfig } from './custom.js'
+
+export { CustomBehavior } from './custom.js'
+export type { BehaviorStep, CustomBehaviorConfig } from './custom.js'
 
 export abstract class Behavior {
   protected botId: string
   protected running = false
   protected mcBot: Bot | null = null
+  /** 寻路移动器，首次 tick 时惰性初始化。 */
+  protected mover: PathfinderMover | null = null
+  private moverInitialized = false
 
   constructor(botId: string) {
     this.botId = botId
@@ -27,6 +36,9 @@ export abstract class Behavior {
   /** 停止行为。 */
   stop(): void {
     this.running = false
+    if (this.mover) {
+      this.mover.stop()
+    }
   }
 
   /** 每 250ms 调用一次。 */
@@ -34,6 +46,19 @@ export abstract class Behavior {
 
   /** 行为名称。 */
   abstract get name(): string
+
+  /** 确保 pathfinder 已初始化（惰性加载）。 */
+  protected async ensureMover(): Promise<void> {
+    if (this.moverInitialized || !this.mcBot) return
+    this.mover = new PathfinderMover(this.mcBot)
+    await this.mover.init()
+    this.moverInitialized = true
+  }
+
+  /** 寻路是否就绪。 */
+  protected isPathfinderReady(): boolean {
+    return this.moverInitialized && this.mover !== null && this.mover.isReady()
+  }
 }
 
 /**
@@ -48,7 +73,8 @@ export class IdleBehavior extends Behavior {
 }
 
 /**
- * 跟随行为：Bot 跟随指定玩家。
+ * 跟随行为：Bot 通过 pathfinder 跟随指定玩家。
+ * 优先使用 A* 寻路，pathfinder 不可用时降级为简单前进。
  */
 export class FollowBehavior extends Behavior {
   private target: string
@@ -69,18 +95,26 @@ export class FollowBehavior extends Behavior {
     const pos = player.entity.position
     this.mcBot.lookAt(pos)
 
-    // 简单跟随：如果玩家距离超过 3 格则走向玩家
-    const dist = this.mcBot.entity.position.distanceTo(pos)
-    if (dist > 3) {
-      this.mcBot.setControlState('forward', true)
+    await this.ensureMover()
+
+    if (this.isPathfinderReady() && this.mover) {
+      // A* 寻路跟随
+      await this.mover.followPlayer(this.target, 3)
     } else {
-      this.mcBot.setControlState('forward', false)
+      // 降级：简单前进
+      const dist = this.mcBot.entity.position.distanceTo(pos)
+      if (dist > 3) {
+        this.mcBot.setControlState('forward', true)
+      } else {
+        this.mcBot.setControlState('forward', false)
+      }
     }
   }
 }
 
 /**
- * 巡逻行为：Bot 在指定区域内巡逻。
+ * 巡逻行为：Bot 通过 pathfinder 在航点间巡逻。
+ * 优先使用 A* 寻路，pathfinder 不可用时降级为简单移动。
  */
 export class PatrolBehavior extends Behavior {
   private waypoints: Array<{ x: number; y: number; z: number }> = []
@@ -109,8 +143,16 @@ export class PatrolBehavior extends Behavior {
 
     if (dist < 2) {
       this.currentIndex = (this.currentIndex + 1) % this.waypoints.length
+      return
+    }
+
+    await this.ensureMover()
+
+    if (this.isPathfinderReady() && this.mover) {
+      // A* 寻路移动到下一个航点
+      await this.mover.moveTo(target.x, target.y, target.z, 2)
     } else {
-      // 简单移动：设置前进状态
+      // 降级：简单移动
       this.mcBot.setControlState('forward', true)
       this.mcBot.setControlState('sprint', dist > 10)
     }
@@ -119,6 +161,7 @@ export class PatrolBehavior extends Behavior {
 
 /**
  * 守卫行为：Bot 在固定位置警戒，攻击敌对实体。
+ * 远离守卫位置时通过 pathfinder 返回。
  */
 export class GuardBehavior extends Behavior {
   private guardPos: { x: number; y: number; z: number } | null = null
@@ -154,7 +197,12 @@ export class GuardBehavior extends Behavior {
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
 
       if (dist > 10) {
-        this.mcBot.setControlState('forward', true)
+        await this.ensureMover()
+        if (this.isPathfinderReady() && this.mover) {
+          await this.mover.moveTo(this.guardPos.x, this.guardPos.y, this.guardPos.z, 2)
+        } else {
+          this.mcBot.setControlState('forward', true)
+        }
       }
     }
   }
@@ -162,15 +210,26 @@ export class GuardBehavior extends Behavior {
 
 /**
  * 创建行为实例。
+ * custom 类型需要额外的 config 参数。
  */
-export function createBehavior(botId: string, type: string, target?: string): Behavior {
+export function createBehavior(
+  botId: string,
+  type: string,
+  targetOrConfig?: string | CustomBehaviorConfig
+): Behavior {
   switch (type) {
     case 'follow':
-      return new FollowBehavior(botId, target || '')
+      return new FollowBehavior(botId, typeof targetOrConfig === 'string' ? targetOrConfig : '')
     case 'patrol':
       return new PatrolBehavior(botId)
     case 'guard':
       return new GuardBehavior(botId)
+    case 'custom': {
+      const config = targetOrConfig && typeof targetOrConfig === 'object'
+        ? targetOrConfig as CustomBehaviorConfig
+        : { steps: [] }
+      return new CustomBehavior(botId, config)
+    }
     case 'idle':
     default:
       return new IdleBehavior(botId)

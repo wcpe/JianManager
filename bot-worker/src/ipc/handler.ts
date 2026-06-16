@@ -1,11 +1,24 @@
 /**
  * IPC 命令分发器。
  * 管理 Bot 实例和行为引擎，通过 Mineflayer 连接 MC 服务器。
+ *
+ * 功能：
+ *   - 批量创建/停止 Bot
+ *   - 行为模式切换（idle/follow/patrol/guard/custom）
+ *   - 脚本执行 + 进度上报
+ *   - 预热池管理
+ *   - 容量限制（50 bots/worker）
+ *   - 周期性状态上报
  */
 
 import { createBot, type Bot } from 'mineflayer'
 import { sendEvent } from '../index.js'
-import { createBehavior, type Behavior } from '../behavior/index.js'
+import { createBehavior, type Behavior, type CustomBehaviorConfig } from '../behavior/index.js'
+import { ScriptRunner } from '../script/index.js'
+import { PrewarmPool } from '../state/prewarm.js'
+import { CapacityLimiter } from '../state/capacity.js'
+import { StateReporter, type BotStateSnapshot } from '../state/index.js'
+import { HealthCheck } from '../health/index.js'
 import type { IpcCommand, BotConfig } from './types.js'
 
 /** 活跃的 Bot 实例。 */
@@ -18,6 +31,54 @@ interface BotInstance {
 
 const bots = new Map<string, BotInstance>()
 
+/** 预热池（默认 5 个预热，最大 50）。 */
+const prewarmPool = new PrewarmPool({ count: 0, maxPoolSize: 50 })
+
+/** 容量限制器（默认 50 bots/worker）。 */
+const capacity = new CapacityLimiter({ maxBots: 50 })
+
+/** 脚本执行器。 */
+const scriptRunner = new ScriptRunner()
+
+/** 状态上报器（每 3s 上报一次）。 */
+const stateReporter = new StateReporter({ intervalMs: 3000 })
+
+/** 心跳检测器（每 10s 发送一次）。 */
+const healthCheck = new HealthCheck({ intervalMs: 10000 })
+
+/** 初始化子系统。 */
+export function init(): void {
+  stateReporter.setSnapshotProvider(() => {
+    const snapshots: BotStateSnapshot[] = []
+    for (const [id, instance] of bots) {
+      const snapshot: BotStateSnapshot = {
+        id,
+        status: instance.status,
+        name: instance.config.name,
+        behavior: instance.behavior.name,
+      }
+      if (instance.mcBot && instance.status === 'connected') {
+        snapshot.health = instance.mcBot.health
+        snapshot.food = instance.mcBot.food
+        const pos = instance.mcBot.entity?.position
+        if (pos) {
+          snapshot.position = { x: pos.x, y: pos.y, z: pos.z }
+        }
+      }
+      snapshots.push(snapshot)
+    }
+    return snapshots
+  })
+
+  stateReporter.start()
+  healthCheck.start()
+}
+
+/** 初始化预热池。 */
+export function initPrewarm(count: number): void {
+  prewarmPool.init(count)
+}
+
 /** 处理来自 Worker Node 的命令。 */
 export function handleCommand(cmd: IpcCommand): void {
   switch (cmd.cmd) {
@@ -28,10 +89,21 @@ export function handleCommand(cmd: IpcCommand): void {
       stopBots(cmd.botIds)
       break
     case 'set-behavior':
-      setBehavior(cmd.botId, cmd.behavior, cmd.target)
+      setBehavior(cmd.botId, cmd.behavior, cmd.target, cmd.config)
       break
     case 'send-command':
       sendBotCommand(cmd.botId, cmd.command)
+      break
+    case 'run-script':
+      scriptRunner.execute(
+        cmd.scriptId,
+        cmd.steps,
+        cmd.botIds,
+        (botId) => bots.get(botId)?.mcBot ?? null
+      )
+      break
+    case 'stop-script':
+      scriptRunner.stop()
       break
     default:
       sendEvent({ evt: 'bot-error', error: `未知命令: ${(cmd as { cmd: string }).cmd}` })
@@ -40,6 +112,14 @@ export function handleCommand(cmd: IpcCommand): void {
 
 /** 批量创建 Bot。 */
 function createBots(configs: BotConfig[]): void {
+  if (!capacity.canCreate(configs.length)) {
+    sendEvent({
+      evt: 'bot-error',
+      error: `容量超限：当前 ${capacity.current()}，请求 ${configs.length}，上限 ${capacity.max()}`,
+    })
+    return
+  }
+
   const results: Array<{ id: string; status: string }> = []
 
   for (const config of configs) {
@@ -48,7 +128,7 @@ function createBots(configs: BotConfig[]): void {
       continue
     }
 
-    const behavior = createBehavior(config.id, config.behavior || 'idle')
+    const behavior = createBehavior(config.id, config.behavior || 'idle', config.behaviorConfig)
     behavior.start()
 
     const instance: BotInstance = {
@@ -58,10 +138,10 @@ function createBots(configs: BotConfig[]): void {
       mcBot: null,
     }
     bots.set(config.id, instance)
+    capacity.add(1)
 
     results.push({ id: config.id, status: 'connecting' })
 
-    // 通过 Mineflayer 连接到 MC 服务器
     connectBot(config.id, config)
   }
 
@@ -118,6 +198,7 @@ function connectBot(botId: string, config: BotConfig): void {
       }
       const inst = bots.get(botId)
       if (inst && inst.status === 'connected') {
+        inst.behavior.setMcBot(mcBot)
         inst.behavior.tick().catch((err: Error) => {
           sendEvent({ evt: 'bot-error', botId, error: err.message })
         })
@@ -149,6 +230,8 @@ function stopBots(botIds: string[]): void {
       instance.mcBot = null
     }
     bots.delete(id)
+    capacity.remove(1)
+    prewarmPool.add()
     results.push({ id, status: 'stopped' })
   }
 
@@ -156,7 +239,12 @@ function stopBots(botIds: string[]): void {
 }
 
 /** 切换 Bot 行为。 */
-function setBehavior(botId: string, behaviorType: string, target?: string): void {
+function setBehavior(
+  botId: string,
+  behaviorType: string,
+  target?: string,
+  config?: CustomBehaviorConfig
+): void {
   const instance = bots.get(botId)
   if (!instance) {
     sendEvent({ evt: 'bot-error', botId, error: `Bot ${botId} 不存在` })
@@ -164,7 +252,15 @@ function setBehavior(botId: string, behaviorType: string, target?: string): void
   }
 
   instance.behavior.stop()
-  const newBehavior = createBehavior(botId, behaviorType, target)
+
+  const newBehavior = behaviorType === 'custom' && config
+    ? createBehavior(botId, 'custom', config)
+    : createBehavior(botId, behaviorType, target)
+
+  if (instance.mcBot) {
+    newBehavior.setMcBot(instance.mcBot)
+  }
+
   newBehavior.start()
   instance.behavior = newBehavior
 
@@ -189,7 +285,6 @@ function sendBotCommand(botId: string, command: string): void {
     return
   }
 
-  // 通过 Mineflayer 发送聊天命令
   instance.mcBot.chat(command)
 
   sendEvent({
@@ -198,4 +293,18 @@ function sendBotCommand(botId: string, command: string): void {
     type: 'command-sent',
     data: { command },
   })
+}
+
+/** 获取预热池状态。 */
+export function getPrewarmStats() {
+  return prewarmPool.stats()
+}
+
+/** 获取容量信息。 */
+export function getCapacityInfo() {
+  return {
+    current: capacity.current(),
+    max: capacity.max(),
+    remaining: capacity.remaining(),
+  }
 }

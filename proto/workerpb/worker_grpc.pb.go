@@ -38,6 +38,13 @@ const (
 	WorkerService_RenameFile_FullMethodName           = "/worker.WorkerService/RenameFile"
 	WorkerService_GetNodeMetrics_FullMethodName       = "/worker.WorkerService/GetNodeMetrics"
 	WorkerService_GetInstanceMetrics_FullMethodName   = "/worker.WorkerService/GetInstanceMetrics"
+	WorkerService_CreateBot_FullMethodName            = "/worker.WorkerService/CreateBot"
+	WorkerService_DeleteBot_FullMethodName            = "/worker.WorkerService/DeleteBot"
+	WorkerService_ListBots_FullMethodName             = "/worker.WorkerService/ListBots"
+	WorkerService_SetBotBehavior_FullMethodName       = "/worker.WorkerService/SetBotBehavior"
+	WorkerService_SendBotCommand_FullMethodName       = "/worker.WorkerService/SendBotCommand"
+	WorkerService_RunBotScript_FullMethodName         = "/worker.WorkerService/RunBotScript"
+	WorkerService_StreamBotEvents_FullMethodName      = "/worker.WorkerService/StreamBotEvents"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
@@ -84,6 +91,20 @@ type WorkerServiceClient interface {
 	GetNodeMetrics(ctx context.Context, in *GetNodeMetricsRequest, opts ...grpc.CallOption) (*GetNodeMetricsResponse, error)
 	// GetInstanceMetrics 获取实例指标。
 	GetInstanceMetrics(ctx context.Context, in *GetInstanceMetricsRequest, opts ...grpc.CallOption) (*GetInstanceMetricsResponse, error)
+	// CreateBot 在 Worker 上创建 Bot 连接。
+	CreateBot(ctx context.Context, in *CreateBotRequest, opts ...grpc.CallOption) (*CreateBotResponse, error)
+	// DeleteBot 停止并删除 Bot。
+	DeleteBot(ctx context.Context, in *DeleteBotRequest, opts ...grpc.CallOption) (*DeleteBotResponse, error)
+	// ListBots 列出 Worker 上所有 Bot。
+	ListBots(ctx context.Context, in *ListBotsRequest, opts ...grpc.CallOption) (*ListBotsResponse, error)
+	// SetBotBehavior 切换 Bot 行为模式。
+	SetBotBehavior(ctx context.Context, in *SetBotBehaviorRequest, opts ...grpc.CallOption) (*SetBotBehaviorResponse, error)
+	// SendBotCommand 向 Bot 发送命令。
+	SendBotCommand(ctx context.Context, in *SendBotCommandRequest, opts ...grpc.CallOption) (*SendBotCommandResponse, error)
+	// RunBotScript 在指定 Bot 上执行脚本。
+	RunBotScript(ctx context.Context, in *RunBotScriptRequest, opts ...grpc.CallOption) (*RunBotScriptResponse, error)
+	// StreamBotEvents 订阅 Bot 事件流。
+	StreamBotEvents(ctx context.Context, in *StreamBotEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BotEvent], error)
 }
 
 type workerServiceClient struct {
@@ -296,6 +317,85 @@ func (c *workerServiceClient) GetInstanceMetrics(ctx context.Context, in *GetIns
 	return out, nil
 }
 
+func (c *workerServiceClient) CreateBot(ctx context.Context, in *CreateBotRequest, opts ...grpc.CallOption) (*CreateBotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateBotResponse)
+	err := c.cc.Invoke(ctx, WorkerService_CreateBot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) DeleteBot(ctx context.Context, in *DeleteBotRequest, opts ...grpc.CallOption) (*DeleteBotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteBotResponse)
+	err := c.cc.Invoke(ctx, WorkerService_DeleteBot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ListBots(ctx context.Context, in *ListBotsRequest, opts ...grpc.CallOption) (*ListBotsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListBotsResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ListBots_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) SetBotBehavior(ctx context.Context, in *SetBotBehaviorRequest, opts ...grpc.CallOption) (*SetBotBehaviorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetBotBehaviorResponse)
+	err := c.cc.Invoke(ctx, WorkerService_SetBotBehavior_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) SendBotCommand(ctx context.Context, in *SendBotCommandRequest, opts ...grpc.CallOption) (*SendBotCommandResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SendBotCommandResponse)
+	err := c.cc.Invoke(ctx, WorkerService_SendBotCommand_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) RunBotScript(ctx context.Context, in *RunBotScriptRequest, opts ...grpc.CallOption) (*RunBotScriptResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RunBotScriptResponse)
+	err := c.cc.Invoke(ctx, WorkerService_RunBotScript_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) StreamBotEvents(ctx context.Context, in *StreamBotEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BotEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[2], WorkerService_StreamBotEvents_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[StreamBotEventsRequest, BotEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerService_StreamBotEventsClient = grpc.ServerStreamingClient[BotEvent]
+
 // WorkerServiceServer is the server API for WorkerService service.
 // All implementations must embed UnimplementedWorkerServiceServer
 // for forward compatibility.
@@ -340,6 +440,20 @@ type WorkerServiceServer interface {
 	GetNodeMetrics(context.Context, *GetNodeMetricsRequest) (*GetNodeMetricsResponse, error)
 	// GetInstanceMetrics 获取实例指标。
 	GetInstanceMetrics(context.Context, *GetInstanceMetricsRequest) (*GetInstanceMetricsResponse, error)
+	// CreateBot 在 Worker 上创建 Bot 连接。
+	CreateBot(context.Context, *CreateBotRequest) (*CreateBotResponse, error)
+	// DeleteBot 停止并删除 Bot。
+	DeleteBot(context.Context, *DeleteBotRequest) (*DeleteBotResponse, error)
+	// ListBots 列出 Worker 上所有 Bot。
+	ListBots(context.Context, *ListBotsRequest) (*ListBotsResponse, error)
+	// SetBotBehavior 切换 Bot 行为模式。
+	SetBotBehavior(context.Context, *SetBotBehaviorRequest) (*SetBotBehaviorResponse, error)
+	// SendBotCommand 向 Bot 发送命令。
+	SendBotCommand(context.Context, *SendBotCommandRequest) (*SendBotCommandResponse, error)
+	// RunBotScript 在指定 Bot 上执行脚本。
+	RunBotScript(context.Context, *RunBotScriptRequest) (*RunBotScriptResponse, error)
+	// StreamBotEvents 订阅 Bot 事件流。
+	StreamBotEvents(*StreamBotEventsRequest, grpc.ServerStreamingServer[BotEvent]) error
 	mustEmbedUnimplementedWorkerServiceServer()
 }
 
@@ -406,6 +520,27 @@ func (UnimplementedWorkerServiceServer) GetNodeMetrics(context.Context, *GetNode
 }
 func (UnimplementedWorkerServiceServer) GetInstanceMetrics(context.Context, *GetInstanceMetricsRequest) (*GetInstanceMetricsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetInstanceMetrics not implemented")
+}
+func (UnimplementedWorkerServiceServer) CreateBot(context.Context, *CreateBotRequest) (*CreateBotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateBot not implemented")
+}
+func (UnimplementedWorkerServiceServer) DeleteBot(context.Context, *DeleteBotRequest) (*DeleteBotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteBot not implemented")
+}
+func (UnimplementedWorkerServiceServer) ListBots(context.Context, *ListBotsRequest) (*ListBotsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListBots not implemented")
+}
+func (UnimplementedWorkerServiceServer) SetBotBehavior(context.Context, *SetBotBehaviorRequest) (*SetBotBehaviorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetBotBehavior not implemented")
+}
+func (UnimplementedWorkerServiceServer) SendBotCommand(context.Context, *SendBotCommandRequest) (*SendBotCommandResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SendBotCommand not implemented")
+}
+func (UnimplementedWorkerServiceServer) RunBotScript(context.Context, *RunBotScriptRequest) (*RunBotScriptResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RunBotScript not implemented")
+}
+func (UnimplementedWorkerServiceServer) StreamBotEvents(*StreamBotEventsRequest, grpc.ServerStreamingServer[BotEvent]) error {
+	return status.Error(codes.Unimplemented, "method StreamBotEvents not implemented")
 }
 func (UnimplementedWorkerServiceServer) mustEmbedUnimplementedWorkerServiceServer() {}
 func (UnimplementedWorkerServiceServer) testEmbeddedByValue()                       {}
@@ -752,6 +887,125 @@ func _WorkerService_GetInstanceMetrics_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_CreateBot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateBotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).CreateBot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_CreateBot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).CreateBot(ctx, req.(*CreateBotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_DeleteBot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteBotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).DeleteBot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_DeleteBot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).DeleteBot(ctx, req.(*DeleteBotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_ListBots_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListBotsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ListBots(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ListBots_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ListBots(ctx, req.(*ListBotsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_SetBotBehavior_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetBotBehaviorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).SetBotBehavior(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_SetBotBehavior_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).SetBotBehavior(ctx, req.(*SetBotBehaviorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_SendBotCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SendBotCommandRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).SendBotCommand(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_SendBotCommand_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).SendBotCommand(ctx, req.(*SendBotCommandRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_RunBotScript_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunBotScriptRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).RunBotScript(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_RunBotScript_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).RunBotScript(ctx, req.(*RunBotScriptRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_StreamBotEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StreamBotEventsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(WorkerServiceServer).StreamBotEvents(m, &grpc.GenericServerStream[StreamBotEventsRequest, BotEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerService_StreamBotEventsServer = grpc.ServerStreamingServer[BotEvent]
+
 // WorkerService_ServiceDesc is the grpc.ServiceDesc for WorkerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -827,6 +1081,30 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "GetInstanceMetrics",
 			Handler:    _WorkerService_GetInstanceMetrics_Handler,
 		},
+		{
+			MethodName: "CreateBot",
+			Handler:    _WorkerService_CreateBot_Handler,
+		},
+		{
+			MethodName: "DeleteBot",
+			Handler:    _WorkerService_DeleteBot_Handler,
+		},
+		{
+			MethodName: "ListBots",
+			Handler:    _WorkerService_ListBots_Handler,
+		},
+		{
+			MethodName: "SetBotBehavior",
+			Handler:    _WorkerService_SetBotBehavior_Handler,
+		},
+		{
+			MethodName: "SendBotCommand",
+			Handler:    _WorkerService_SendBotCommand_Handler,
+		},
+		{
+			MethodName: "RunBotScript",
+			Handler:    _WorkerService_RunBotScript_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -838,6 +1116,11 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "StreamInstanceEvents",
 			Handler:       _WorkerService_StreamInstanceEvents_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamBotEvents",
+			Handler:       _WorkerService_StreamBotEvents_Handler,
 			ServerStreams: true,
 		},
 	},

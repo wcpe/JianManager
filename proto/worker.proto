@@ -44,6 +44,23 @@ service WorkerService {
   rpc GetNodeMetrics(GetNodeMetricsRequest) returns (GetNodeMetricsResponse);
   // GetInstanceMetrics 获取实例指标。
   rpc GetInstanceMetrics(GetInstanceMetricsRequest) returns (GetInstanceMetricsResponse);
+
+  // === Bot 操作 ===
+
+  // CreateBot 在 Worker 上创建 Bot 连接。
+  rpc CreateBot(CreateBotRequest) returns (CreateBotResponse);
+  // DeleteBot 停止并删除 Bot。
+  rpc DeleteBot(DeleteBotRequest) returns (DeleteBotResponse);
+  // ListBots 列出 Worker 上所有 Bot。
+  rpc ListBots(ListBotsRequest) returns (ListBotsResponse);
+  // SetBotBehavior 切换 Bot 行为模式。
+  rpc SetBotBehavior(SetBotBehaviorRequest) returns (SetBotBehaviorResponse);
+  // SendBotCommand 向 Bot 发送命令。
+  rpc SendBotCommand(SendBotCommandRequest) returns (SendBotCommandResponse);
+  // RunBotScript 在指定 Bot 上执行脚本。
+  rpc RunBotScript(RunBotScriptRequest) returns (RunBotScriptResponse);
+  // StreamBotEvents 订阅 Bot 事件流。
+  rpc StreamBotEvents(StreamBotEventsRequest) returns (stream BotEvent);
 }
 
 // === 注册 ===
@@ -250,4 +267,99 @@ message GetInstanceMetricsResponse {
   float tps = 1;
   int32 online_players = 2;
   int64 memory_mb = 3;
+}
+
+// === Bot 操作 ===
+
+message CreateBotRequest {
+  string bot_uuid = 1;
+  string instance_uuid = 2;
+  string name = 3;
+  string host = 4;
+  int32 port = 5;
+  string username = 6;
+  string version = 7;
+  string auth = 8;           // offline, microsoft
+  string behavior = 9;       // idle, follow, patrol, guard, custom
+  string behavior_config = 10; // JSON: custom 行为配置
+}
+
+message CreateBotResponse {
+  bool success = 1;
+  string error = 2;
+  string status = 3;  // connecting, connected, error
+}
+
+message DeleteBotRequest {
+  string bot_uuid = 1;
+}
+
+message DeleteBotResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message ListBotsRequest {
+  string instance_uuid = 1; // 空表示所有
+}
+
+message ListBotsResponse {
+  repeated BotInfo bots = 1;
+}
+
+message BotInfo {
+  string bot_uuid = 1;
+  string instance_uuid = 2;
+  string name = 3;
+  string status = 4;     // connecting, connected, disconnected, error
+  string behavior = 5;
+  float health = 6;
+  int32 food = 7;
+  float pos_x = 8;
+  float pos_y = 9;
+  float pos_z = 10;
+}
+
+message SetBotBehaviorRequest {
+  string bot_uuid = 1;
+  string behavior = 2;
+  string target = 3;       // follow 目标玩家名
+  string behavior_config = 4; // JSON: custom 行为配置
+}
+
+message SetBotBehaviorResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message SendBotCommandRequest {
+  string bot_uuid = 1;
+  string command = 2;
+}
+
+message SendBotCommandResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message RunBotScriptRequest {
+  string script_id = 1;
+  string steps_json = 2; // JSON: 脚本步骤列表
+  repeated string bot_uuids = 3;
+}
+
+message RunBotScriptResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message StreamBotEventsRequest {
+  string bot_uuid = 1; // 空表示所有
+}
+
+message BotEvent {
+  string bot_uuid = 1;
+  string type = 2;    // spawn, kicked, behavior-changed, command-sent, script-progress, state
+  string data = 3;    // JSON
+  int64 timestamp = 4;
 }
