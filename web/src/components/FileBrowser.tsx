@@ -39,7 +39,8 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
       setSelectedFile(null)
       setFileContent(null)
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : t('files.loadFailed')
+      const axiosMsg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+      const msg = axiosMsg || (err instanceof Error ? err.message : t('files.loadFailed'))
       setError(msg)
     } finally {
       setLoading(false)

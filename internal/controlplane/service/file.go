@@ -15,8 +15,9 @@ import (
 )
 
 var (
-	ErrNodeNotOnline  = errors.New("节点不在线")
+	ErrNodeNotOnline    = errors.New("节点不在线")
 	ErrNodeNotConnected = errors.New("节点未连接")
+	ErrWorkDirNotSet    = errors.New("实例未设置工作目录")
 )
 
 // FileService 文件管理服务（Control Plane 侧，通过 gRPC 委托给 Worker）。
@@ -230,6 +231,9 @@ func (s *FileService) getInstanceAndNode(instanceID uint) (*model.Instance, *mod
 			return nil, nil, ErrInstanceNotFound
 		}
 		return nil, nil, fmt.Errorf("查询实例失败: %w", err)
+	}
+	if instance.WorkDir == "" {
+		return nil, nil, ErrWorkDirNotSet
 	}
 	if instance.Node.Status != model.NodeStatusOnline {
 		return nil, nil, ErrNodeNotOnline

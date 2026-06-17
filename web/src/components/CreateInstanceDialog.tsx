@@ -175,7 +175,9 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
               onChange={(e) => setWorkDir(e.target.value)}
               className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
               placeholder="/servers/survival"
+              required
             />
+            <p className="mt-1 text-xs text-muted-foreground">实例的工作目录，文件管理将以此为根目录</p>
           </div>
 
           <div>
