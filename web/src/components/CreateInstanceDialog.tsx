@@ -126,6 +126,9 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
                     if (tpl) {
                       setStartCommand(tpl.startCommand)
                       setType(tpl.type || type)
+                      if (tpl.defaultWorkDir) {
+                        setWorkDir(tpl.defaultWorkDir)
+                      }
                     }
                   }
                 }}

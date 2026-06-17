@@ -20,23 +20,25 @@ func NewTemplateService(db *gorm.DB) *TemplateService {
 
 // CreateTemplateRequest 创建模板请求。
 type CreateTemplateRequest struct {
-	Name         string `json:"name" binding:"required"`
-	Type         string `json:"type" binding:"required"`
-	Description  string `json:"description"`
-	StartCommand string `json:"startCommand" binding:"required"`
-	DownloadURL  string `json:"downloadUrl"`
-	ConfigFiles  string `json:"configFiles"`
+	Name           string `json:"name" binding:"required"`
+	Type           string `json:"type" binding:"required"`
+	Description    string `json:"description"`
+	StartCommand   string `json:"startCommand" binding:"required"`
+	DefaultWorkDir string `json:"defaultWorkDir"`
+	DownloadURL    string `json:"downloadUrl"`
+	ConfigFiles    string `json:"configFiles"`
 }
 
 // Create 创建模板。
 func (s *TemplateService) Create(req CreateTemplateRequest) (*model.Template, error) {
 	t := &model.Template{
-		Name:         req.Name,
-		Type:         req.Type,
-		Description:  req.Description,
-		StartCommand: req.StartCommand,
-		DownloadURL:  req.DownloadURL,
-		ConfigFiles:  req.ConfigFiles,
+		Name:           req.Name,
+		Type:           req.Type,
+		Description:    req.Description,
+		StartCommand:   req.StartCommand,
+		DefaultWorkDir: req.DefaultWorkDir,
+		DownloadURL:    req.DownloadURL,
+		ConfigFiles:    req.ConfigFiles,
 	}
 	if err := s.db.Create(t).Error; err != nil {
 		return nil, fmt.Errorf("创建模板失败: %w", err)

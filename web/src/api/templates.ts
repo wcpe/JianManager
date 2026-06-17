@@ -8,6 +8,7 @@ export interface TemplateInfo {
   type: string
   description: string
   startCommand: string
+  defaultWorkDir: string
   downloadUrl: string
   createdAt: string
 }
