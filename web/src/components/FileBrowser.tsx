@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import api from '@/api/client'
 
 interface FileInfo {
@@ -21,6 +21,9 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
   const [fileContent, setFileContent] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [editContent, setEditContent] = useState('')
+  const [renaming, setRenaming] = useState<string | null>(null)
+  const [newName, setNewName] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const loadFiles = useCallback(async (dirPath: string) => {
     setLoading(true)
@@ -98,6 +101,37 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
     }
   }
 
+  const renameFile = async (oldName: string) => {
+    if (!newName || newName === oldName) { setRenaming(null); return }
+    const oldPath = path ? `${path}/${oldName}` : oldName
+    const newPath = path ? `${path}/${newName}` : newName
+    try {
+      await api.post(`/instances/${instanceId}/files/rename`, { oldPath, newPath })
+      setRenaming(null)
+      setNewName('')
+      loadFiles(path)
+    } catch {
+      setError('重命名失败')
+    }
+  }
+
+  const uploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('path', path ? `${path}/${file.name}` : file.name)
+    try {
+      await api.post(`/instances/${instanceId}/files/upload`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      loadFiles(path)
+    } catch {
+      setError('上传失败')
+    }
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
   const isEditable = (name: string) => {
     return /\.(yml|yaml|json|txt|conf|cfg|properties|toml|log|md|sh|bat)$/i.test(name)
   }
@@ -116,7 +150,11 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
           <button onClick={navigateUp} className="px-2 py-0.5 hover:bg-accent rounded" disabled={!path}>
             ↑
           </button>
-          <span className="text-muted-foreground truncate">/{path || ''}</span>
+          <span className="text-muted-foreground truncate flex-1">/{path || ''}</span>
+          <button onClick={() => fileInputRef.current?.click()} className="px-2 py-0.5 text-xs bg-green-500/10 text-green-600 rounded hover:bg-green-500/20">
+            上传
+          </button>
+          <input ref={fileInputRef} type="file" className="hidden" onChange={uploadFile} />
         </div>
         <div className="flex-1 overflow-auto">
           {loading ? (
@@ -127,14 +165,27 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
             files.map((f) => (
               <div
                 key={f.name}
-                className={`flex items-center justify-between px-3 py-1.5 text-sm cursor-pointer hover:bg-accent/50 ${
+                className={`group flex items-center justify-between px-3 py-1.5 text-sm cursor-pointer hover:bg-accent/50 ${
                   selectedFile === f.name ? 'bg-accent' : ''
                 }`}
                 onClick={() => f.isDir ? navigateTo(f.name) : readFile(f.name)}
+                onDoubleClick={(e) => { e.stopPropagation(); setRenaming(f.name); setNewName(f.name) }}
               >
-                <span className="truncate">
-                  {f.isDir ? '📁 ' : '📄 '}{f.name}
-                </span>
+                {renaming === f.name ? (
+                  <input
+                    autoFocus
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    onBlur={() => renameFile(f.name)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') renameFile(f.name); if (e.key === 'Escape') setRenaming(null) }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex-1 px-1 py-0 text-sm border rounded bg-background"
+                  />
+                ) : (
+                  <span className="truncate">
+                    {f.isDir ? '📁 ' : '📄 '}{f.name}
+                  </span>
+                )}
                 <span className="text-xs text-muted-foreground ml-2 shrink-0">
                   {f.isDir ? '' : formatSize(f.size)}
                 </span>
