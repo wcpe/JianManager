@@ -11,8 +11,8 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/wxys233/JianManager/internal/controlplane/config"
-	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
 	"github.com/wxys233/JianManager/internal/controlplane/database"
+	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
 	"github.com/wxys233/JianManager/internal/controlplane/router"
 	"github.com/wxys233/JianManager/internal/controlplane/service"
 	"github.com/wxys233/JianManager/proto/workerpb"
@@ -47,6 +47,7 @@ func main() {
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
 	terminalSvc := service.NewTerminalService(db, cfg.JWT.Secret, fmt.Sprintf("ws://localhost:%d", cfg.Server.Port))
 	fileSvc := service.NewFileService(db, pool)
+	configSvc := service.NewConfigService(db, pool)
 	botSvc := service.NewBotService(db, pool)
 	alertSvc := service.NewAlertService(db)
 	scheduleSvc := service.NewScheduleService(db)
@@ -78,6 +79,7 @@ func main() {
 		Instance: instanceSvc,
 		Terminal: terminalSvc,
 		File:     fileSvc,
+		Config:   configSvc,
 		Bot:      botSvc,
 		Alert:    alertSvc,
 		Schedule: scheduleSvc,

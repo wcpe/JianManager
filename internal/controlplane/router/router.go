@@ -18,6 +18,7 @@ type Services struct {
 	Instance *service.InstanceService
 	Terminal *service.TerminalService
 	File     *service.FileService
+	Config   *service.ConfigService
 	Bot      *service.BotService
 	Alert    *service.AlertService
 	Schedule *service.ScheduleService
@@ -66,6 +67,9 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		fileHandler := NewFileHandler(svcs.File, svcs.Authz)
 		fileHandler.RegisterRoutes(protected)
+
+		configHandler := NewConfigHandler(svcs.Config, svcs.Authz)
+		configHandler.RegisterRoutes(protected)
 
 		botHandler := NewBotHandler(svcs.Bot, svcs.Authz)
 		botHandler.RegisterRoutes(protected)

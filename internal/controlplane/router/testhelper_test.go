@@ -15,9 +15,9 @@ import (
 
 	"github.com/wxys233/JianManager/internal/controlplane/config"
 	"github.com/wxys233/JianManager/internal/controlplane/database"
+	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
 	"github.com/wxys233/JianManager/internal/controlplane/model"
 	"github.com/wxys233/JianManager/internal/controlplane/service"
-	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
 )
 
 // setupTestDB 创建临时 SQLite 数据库并运行自动迁移。
@@ -52,6 +52,8 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 	groupSvc := service.NewGroupService(db)
 	pool := cpgrpc.NewClientPool()
 	authzSvc := service.NewAuthzService(db)
+	fileSvc := service.NewFileService(db, pool)
+	configSvc := service.NewConfigService(db, pool)
 	svcs := &Services{
 		Auth:     service.NewAuthService(db, jwtCfg),
 		User:     service.NewUserService(db),
@@ -59,7 +61,8 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 		Node:     service.NewNodeService(db),
 		Instance: service.NewInstanceService(db, groupSvc, pool),
 		Terminal: service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),
-		File:     service.NewFileService(db, pool),
+		File:     fileSvc,
+		Config:   configSvc,
 		Bot:      service.NewBotService(db, pool),
 		Alert:    service.NewAlertService(db),
 		Schedule: service.NewScheduleService(db),

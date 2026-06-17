@@ -36,6 +36,10 @@ const (
 	WorkerService_WriteFile_FullMethodName            = "/worker.WorkerService/WriteFile"
 	WorkerService_DeleteFile_FullMethodName           = "/worker.WorkerService/DeleteFile"
 	WorkerService_RenameFile_FullMethodName           = "/worker.WorkerService/RenameFile"
+	WorkerService_ListConfigFiles_FullMethodName      = "/worker.WorkerService/ListConfigFiles"
+	WorkerService_ReadConfig_FullMethodName           = "/worker.WorkerService/ReadConfig"
+	WorkerService_WriteConfig_FullMethodName          = "/worker.WorkerService/WriteConfig"
+	WorkerService_ValidateConfig_FullMethodName       = "/worker.WorkerService/ValidateConfig"
 	WorkerService_GetNodeMetrics_FullMethodName       = "/worker.WorkerService/GetNodeMetrics"
 	WorkerService_GetInstanceMetrics_FullMethodName   = "/worker.WorkerService/GetInstanceMetrics"
 	WorkerService_CreateBot_FullMethodName            = "/worker.WorkerService/CreateBot"
@@ -87,6 +91,14 @@ type WorkerServiceClient interface {
 	DeleteFile(ctx context.Context, in *DeleteFileRequest, opts ...grpc.CallOption) (*DeleteFileResponse, error)
 	// RenameFile 重命名文件。
 	RenameFile(ctx context.Context, in *RenameFileRequest, opts ...grpc.CallOption) (*RenameFileResponse, error)
+	// ListConfigFiles 列出可管理配置文件。
+	ListConfigFiles(ctx context.Context, in *ListConfigFilesRequest, opts ...grpc.CallOption) (*ListConfigFilesResponse, error)
+	// ReadConfig 读取配置文件并解析。
+	ReadConfig(ctx context.Context, in *ReadConfigRequest, opts ...grpc.CallOption) (*ReadConfigResponse, error)
+	// WriteConfig 写入配置文件。
+	WriteConfig(ctx context.Context, in *WriteConfigRequest, opts ...grpc.CallOption) (*WriteConfigResponse, error)
+	// ValidateConfig 校验配置内容。
+	ValidateConfig(ctx context.Context, in *ValidateConfigRequest, opts ...grpc.CallOption) (*ValidateConfigResponse, error)
 	// GetNodeMetrics 获取节点指标。
 	GetNodeMetrics(ctx context.Context, in *GetNodeMetricsRequest, opts ...grpc.CallOption) (*GetNodeMetricsResponse, error)
 	// GetInstanceMetrics 获取实例指标。
@@ -297,6 +309,46 @@ func (c *workerServiceClient) RenameFile(ctx context.Context, in *RenameFileRequ
 	return out, nil
 }
 
+func (c *workerServiceClient) ListConfigFiles(ctx context.Context, in *ListConfigFilesRequest, opts ...grpc.CallOption) (*ListConfigFilesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListConfigFilesResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ListConfigFiles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ReadConfig(ctx context.Context, in *ReadConfigRequest, opts ...grpc.CallOption) (*ReadConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadConfigResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ReadConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) WriteConfig(ctx context.Context, in *WriteConfigRequest, opts ...grpc.CallOption) (*WriteConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WriteConfigResponse)
+	err := c.cc.Invoke(ctx, WorkerService_WriteConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ValidateConfig(ctx context.Context, in *ValidateConfigRequest, opts ...grpc.CallOption) (*ValidateConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateConfigResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ValidateConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) GetNodeMetrics(ctx context.Context, in *GetNodeMetricsRequest, opts ...grpc.CallOption) (*GetNodeMetricsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetNodeMetricsResponse)
@@ -436,6 +488,14 @@ type WorkerServiceServer interface {
 	DeleteFile(context.Context, *DeleteFileRequest) (*DeleteFileResponse, error)
 	// RenameFile 重命名文件。
 	RenameFile(context.Context, *RenameFileRequest) (*RenameFileResponse, error)
+	// ListConfigFiles 列出可管理配置文件。
+	ListConfigFiles(context.Context, *ListConfigFilesRequest) (*ListConfigFilesResponse, error)
+	// ReadConfig 读取配置文件并解析。
+	ReadConfig(context.Context, *ReadConfigRequest) (*ReadConfigResponse, error)
+	// WriteConfig 写入配置文件。
+	WriteConfig(context.Context, *WriteConfigRequest) (*WriteConfigResponse, error)
+	// ValidateConfig 校验配置内容。
+	ValidateConfig(context.Context, *ValidateConfigRequest) (*ValidateConfigResponse, error)
 	// GetNodeMetrics 获取节点指标。
 	GetNodeMetrics(context.Context, *GetNodeMetricsRequest) (*GetNodeMetricsResponse, error)
 	// GetInstanceMetrics 获取实例指标。
@@ -514,6 +574,18 @@ func (UnimplementedWorkerServiceServer) DeleteFile(context.Context, *DeleteFileR
 }
 func (UnimplementedWorkerServiceServer) RenameFile(context.Context, *RenameFileRequest) (*RenameFileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RenameFile not implemented")
+}
+func (UnimplementedWorkerServiceServer) ListConfigFiles(context.Context, *ListConfigFilesRequest) (*ListConfigFilesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListConfigFiles not implemented")
+}
+func (UnimplementedWorkerServiceServer) ReadConfig(context.Context, *ReadConfigRequest) (*ReadConfigResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadConfig not implemented")
+}
+func (UnimplementedWorkerServiceServer) WriteConfig(context.Context, *WriteConfigRequest) (*WriteConfigResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method WriteConfig not implemented")
+}
+func (UnimplementedWorkerServiceServer) ValidateConfig(context.Context, *ValidateConfigRequest) (*ValidateConfigResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ValidateConfig not implemented")
 }
 func (UnimplementedWorkerServiceServer) GetNodeMetrics(context.Context, *GetNodeMetricsRequest) (*GetNodeMetricsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNodeMetrics not implemented")
@@ -851,6 +923,78 @@ func _WorkerService_RenameFile_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_ListConfigFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListConfigFilesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ListConfigFiles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ListConfigFiles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ListConfigFiles(ctx, req.(*ListConfigFilesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_ReadConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ReadConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ReadConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ReadConfig(ctx, req.(*ReadConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_WriteConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(WriteConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).WriteConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_WriteConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).WriteConfig(ctx, req.(*WriteConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_ValidateConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ValidateConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ValidateConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ValidateConfig(ctx, req.(*ValidateConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_GetNodeMetrics_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetNodeMetricsRequest)
 	if err := dec(in); err != nil {
@@ -1072,6 +1216,22 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RenameFile",
 			Handler:    _WorkerService_RenameFile_Handler,
+		},
+		{
+			MethodName: "ListConfigFiles",
+			Handler:    _WorkerService_ListConfigFiles_Handler,
+		},
+		{
+			MethodName: "ReadConfig",
+			Handler:    _WorkerService_ReadConfig_Handler,
+		},
+		{
+			MethodName: "WriteConfig",
+			Handler:    _WorkerService_WriteConfig_Handler,
+		},
+		{
+			MethodName: "ValidateConfig",
+			Handler:    _WorkerService_ValidateConfig_Handler,
 		},
 		{
 			MethodName: "GetNodeMetrics",

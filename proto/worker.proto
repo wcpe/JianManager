@@ -40,6 +40,14 @@ service WorkerService {
   rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
   // RenameFile 重命名文件。
   rpc RenameFile(RenameFileRequest) returns (RenameFileResponse);
+  // ListConfigFiles 列出可管理配置文件。
+  rpc ListConfigFiles(ListConfigFilesRequest) returns (ListConfigFilesResponse);
+  // ReadConfig 读取配置文件并解析。
+  rpc ReadConfig(ReadConfigRequest) returns (ReadConfigResponse);
+  // WriteConfig 写入配置文件。
+  rpc WriteConfig(WriteConfigRequest) returns (WriteConfigResponse);
+  // ValidateConfig 校验配置内容。
+  rpc ValidateConfig(ValidateConfigRequest) returns (ValidateConfigResponse);
   // GetNodeMetrics 获取节点指标。
   rpc GetNodeMetrics(GetNodeMetricsRequest) returns (GetNodeMetricsResponse);
   // GetInstanceMetrics 获取实例指标。
@@ -245,6 +253,83 @@ message RenameFileRequest {
 message RenameFileResponse {
   bool success = 1;
   string error = 2;
+}
+
+// === 配置文件操作 ===
+
+message ListConfigFilesRequest {
+  string instance_uuid = 1;
+  string path = 2;
+}
+
+message ConfigFileInfo {
+  string path = 1;
+  string format = 2;
+  int64 size = 3;
+  int64 updated_at = 4;
+  bool supported = 5;
+}
+
+message ListConfigFilesResponse {
+  repeated ConfigFileInfo files = 1;
+}
+
+message ConfigField {
+  string key = 1;
+  string value = 2;
+  string type = 3;
+  string description = 4;
+  int32 line = 5;
+}
+
+message ValidationIssue {
+  string level = 1;
+  string message = 2;
+  string path = 3;
+  int32 line = 4;
+  string key = 5;
+}
+
+message ConfigValidationResult {
+  bool valid = 1;
+  repeated ValidationIssue issues = 2;
+}
+
+message ReadConfigRequest {
+  string instance_uuid = 1;
+  string path = 2;
+}
+
+message ReadConfigResponse {
+  string path = 1;
+  string format = 2;
+  string content = 3;
+  repeated ConfigField fields = 4;
+  string schema_json = 5;
+  ConfigValidationResult validation = 6;
+}
+
+message WriteConfigRequest {
+  string instance_uuid = 1;
+  string path = 2;
+  string content = 3;
+  repeated ConfigField fields = 4;
+}
+
+message WriteConfigResponse {
+  bool success = 1;
+  string error = 2;
+  ConfigValidationResult validation = 3;
+}
+
+message ValidateConfigRequest {
+  string instance_uuid = 1;
+  string path = 2;
+  string content = 3;
+}
+
+message ValidateConfigResponse {
+  ConfigValidationResult validation = 1;
 }
 
 // === 指标 ===
