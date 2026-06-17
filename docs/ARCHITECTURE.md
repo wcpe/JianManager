@@ -319,6 +319,7 @@ database:
 │ 仪表盘    │                                          │
 │ 节点     │                                          │
 │ 实例     │                                          │
+│ 群组服    │                                          │
 │ Bot      │                                          │
 │ ─────    │                                          │
 │ 用户组   │                                          │
@@ -424,7 +425,7 @@ database:
 └──────────────────────────────────────────────────────┘
 ```
 
-**操作按钮**: 启动(▶) / 停止(⏸) / 重启(⟳) / 强制终止(🗑)
+**操作按钮**: 启动(▶) / 停止(⏸) / 重启(⟳) / 强制终止(🗑) / 一键复制(⧉，仅 backend，V2)
 **点击实例名** → 实例详情页（Tabs: 控制台 / 终端 / 文件 / 配置 / 备份 / Bot）
 
 #### 实例详情 `/instances/:id`
@@ -446,7 +447,7 @@ database:
 **Tab: 控制台** — 实时日志输出（只读 xterm.js）+ 命令输入框
 **Tab: 终端** — 可交互终端（读写 xterm.js，直连 Worker Node WS）
 **Tab: 文件** — 文件树 + CodeMirror 编辑器
-**Tab: 配置** — 实例配置表单（启动命令、自动重启、环境变量等）
+**Tab: 配置** — 实例运行配置（结构化启动：绑定 JDK / 内存 / JVM 参数；自动重启；环境变量）+ **MC 配置文件编辑器**（V2：server.properties/spigot/paper/velocity 等，配置文件树 + 可视表单↔原始双模式、保留注释、校验提示、版本 diff/回滚）
 **Tab: 备份** — 备份列表 + 创建备份 + 恢复
 **Tab: Bot** — 该实例关联的 Bot 列表
 
@@ -454,22 +455,23 @@ database:
 
 ```
 ┌──────────────────────────────────────────┐
-│  创建实例                                 │
+│  创建实例（向导）                         │
 │                                          │
-│  名称: [Survival Server          ]       │
+│  角色: (●)Bukkit子服  ( )代理  ( )通用    │
+│  名称: [survival1                ]       │
 │  节点: [node-01              ▼]          │
-│  类型: [Minecraft Java        ▼]         │
-│  启动方式: [daemon (推荐)     ▼]         │
-│  工作目录: [/servers/survival    ]       │
-│  启动命令: [java -Xmx2G -jar paper.jar] │
-│                                          │
-│  ☐ 跟随节点自动启动                       │
-│  ☑ 崩溃自动重启                           │
-│                                          │
-│  用户组: [Team A                  ▼]     │
+│  核心: [Paper 1.20.4         ▼] 自动下载  │
+│  JDK : [Temurin 17           ▼] 缺则安装  │
+│  内存: [2G]   JVM: [Aikar flags  ▼]      │
+│  工作目录: 系统自动分配（只读展示）        │
+│  ☑ 崩溃自动重启   ☐ 跟随节点自启          │
+│  注册到代理: [☑ proxyA   ☐ proxyB]        │
+│  用户组(权限): [Team A ▼]  群组: [生存大区▼]│
 │                                          │
 │       [取消]              [创建]         │
 └──────────────────────────────────────────┘
+
+> 工作目录与端口由系统分配（不再由用户输入，见 §13.2）；MC 子服用结构化启动（绑定 JDK + 内存 + JVM 参数 + core jar），不再手填启动命令；代理/通用角色字段相应不同。
 ```
 
 #### Bot 管理 `/bots`
@@ -549,6 +551,9 @@ database:
 - **模板 `/templates`**: 服务端模板列表，平台管理员可管理
 - **审计日志 `/audit`**: 操作日志表格，按用户/操作/时间筛选
 - **设置 `/settings`**: 系统设置（仅平台管理员）
+- **群组服 `/networks`** (V2): 拓扑视图（代理 + 已注册后端，含各子服在线人数）；管理 proxy↔backend 注册（别名/优先级/forced-host）；群组软标签筛选与批量启停；「搭建子服 / 搭建代理」向导入口
+- **运行时/JDK** (V2): 在节点详情页 `/nodes/:id` 增「JDK」标签——列出已装 JDK、安装指定版本、登记系统已有 JDK、查看被哪些实例占用
+- **配置编辑器** (V2): 位于实例详情「配置」Tab——MC 配置文件树 + 可视表单/原始双模式 + 一致性校验 + 版本 diff/回滚（非独立页面）
 
 ### 8.4 核心用户流程
 
@@ -585,6 +590,14 @@ Bot 页面 → 创建压测会话 → 选择目标实例 + bot 数量
 → 分配实例给组 → 成员登录后只能看到分配的实例
 ```
 
+#### 流程 5: 开一个 MC 群组服（V2）
+
+```
+搭建代理(Velocity，自动生成 secret) → 搭建 lobby 子服(系统配端口/转发/JDK)
+→ 一键复制 lobby 为 survival1（系统改端口/名称）→ 勾选注册进代理
+→ 配置 Tab 调 server.properties/paper → 启动整个群组 → 玩家经代理进服
+```
+
 ### 8.5 前端嵌入
 
 前端通过 `go:embed all:dist` 嵌入 Control Plane 二进制。开发模式下 Gin 反代到 Vite dev server。
@@ -596,8 +609,9 @@ web/src/
   api/          # Axios client + per-module API (TanStack Query hooks)
   ws/           # WebSocket client, provider, hooks
   stores/       # Zustand (auth, theme, sidebar, terminal)
-  pages/        # 页面（全部 React.lazy 懒加载）
+  pages/        # 页面（懒加载）；V2 新增 NetworksPage(群组服拓扑) + 节点详情 JDK 标签
   components/   # 共享组件 (layout, ui/shadcn, terminal, chart)
+                # V2: config-editor(表单/原始/版本) · provision-wizard · jdk-manager · clone-dialog · registration-editor
   hooks/        # 自定义 hooks
   i18n/         # 中文 + 英文
   lib/          # 工具函数
