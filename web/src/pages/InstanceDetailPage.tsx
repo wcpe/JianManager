@@ -4,6 +4,7 @@ import { useInstance, useStartInstance, useStopInstance, useRestartInstance, use
 import { useInstanceMetrics } from '@/api/metrics'
 import { useTerminalToken } from '@/api/terminal'
 import { useBots } from '@/api/bots'
+import ConfigEditor from '@/components/ConfigEditor'
 import FileBrowser from '@/components/FileBrowser'
 import TerminalComponent from '@/components/Terminal'
 import { Button } from '@/components/ui/button'
@@ -117,7 +118,7 @@ export default function InstanceDetailPage() {
           <FileBrowser instanceId={instanceId} />
         </TabsContent>
         <TabsContent value="config">
-          <ConfigTab instance={instance} />
+          <ConfigTab instanceId={instanceId} />
         </TabsContent>
         <TabsContent value="backups">
           <BackupsTab />
@@ -201,34 +202,11 @@ function TerminalTab({ instanceId, status }: { instanceId: number; status: strin
 }
 
 function ConfigTab({
-  instance,
+  instanceId,
 }: {
-  instance: { startCommand: string; workDir: string; autoStart: boolean; autoRestart: boolean }
+  instanceId: number
 }) {
-  const { t } = useTranslation()
-
-  return (
-    <div className="space-y-4 max-w-lg">
-      <div>
-        <Label className="text-sm font-medium">{t('instanceDetail.startCommand')}</Label>
-        <p className="mt-1 p-2 bg-muted rounded text-sm font-mono">{instance.startCommand}</p>
-      </div>
-      <div>
-        <Label className="text-sm font-medium">{t('instanceDetail.workDir')}</Label>
-        <p className="mt-1 p-2 bg-muted rounded text-sm font-mono">{instance.workDir || t('instanceDetail.defaultWorkDir')}</p>
-      </div>
-      <div className="flex gap-4">
-        <div className="flex items-center gap-2">
-          <Checkbox checked={instance.autoStart} disabled />
-          <Label className="text-sm">{t('instanceDetail.autoStart')}</Label>
-        </div>
-        <div className="flex items-center gap-2">
-          <Checkbox checked={instance.autoRestart} disabled />
-          <Label className="text-sm">{t('instanceDetail.autoRestart')}</Label>
-        </div>
-      </div>
-    </div>
-  )
+  return <ConfigEditor instanceId={instanceId} />
 }
 
 function BackupsTab() {
