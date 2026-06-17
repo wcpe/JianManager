@@ -53,6 +53,15 @@ service WorkerService {
   // GetInstanceMetrics 获取实例指标。
   rpc GetInstanceMetrics(GetInstanceMetricsRequest) returns (GetInstanceMetricsResponse);
 
+  // === JDK 管理 ===
+
+  // ListJDKs 列出 Worker 本地已注册/探测到的 JDK 目录。
+  rpc ListJDKs(ListJDKsRequest) returns (ListJDKsResponse);
+  // InstallJDK 下载并安装指定 JDK 到 Worker 托管目录。
+  rpc InstallJDK(InstallJDKRequest) returns (InstallJDKResponse);
+  // RemoveJDK 删除 Worker 托管的 JDK 目录。
+  rpc RemoveJDK(RemoveJDKRequest) returns (RemoveJDKResponse);
+
   // === Bot 操作 ===
 
   // CreateBot 在 Worker 上创建 Bot 连接。
@@ -124,6 +133,11 @@ message CreateInstanceRequest {
   string work_dir = 6;
   map<string, string> env_vars = 7;
   bool auto_restart = 8;
+  // 绑定到 Worker 本地 JDK 路径（CP 解析 NodeJDK.Path 后下发），非空时
+  // Worker 启动实例时把它作为 JAVA_HOME 并把 bin 接入 PATH。
+  string jdk_path = 9;
+  // 显式指定 JDK bin 目录，覆盖默认的 jdk_path/bin。
+  string jdk_bin_path = 10;
 }
 
 message CreateInstanceResponse {
@@ -467,3 +481,43 @@ message BotEvent {
   string data = 3;    // JSON
   int64 timestamp = 4;
 }
+// === JDK 管理 ===
+
+message ListJDKsRequest {}
+
+message JDKInfo {
+  string vendor = 1;
+  int32 major_version = 2;
+  string version = 3;
+  string arch = 4;
+  string path = 5;
+  bool managed = 6;
+}
+
+message ListJDKsResponse {
+  repeated JDKInfo jdks = 1;
+}
+
+message InstallJDKRequest {
+  string vendor = 1;       // Temurin / Zulu / Corretto / ...
+  int32 major_version = 2; // 8 / 11 / 17 / 21 / ...
+  string arch = 3;         // x64 / aarch64
+  string install_dir = 4;   // 可选：自定义安装目录（默认 <serversDir>/jdks/<vendor>-<major>）
+}
+
+message InstallJDKResponse {
+  bool success = 1;
+  string error = 2;
+  JDKInfo jdk = 3;
+}
+
+message RemoveJDKRequest {
+  string path = 1;
+}
+
+message RemoveJDKResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+// === Bot 操作 ===

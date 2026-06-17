@@ -42,6 +42,9 @@ const (
 	WorkerService_ValidateConfig_FullMethodName       = "/worker.WorkerService/ValidateConfig"
 	WorkerService_GetNodeMetrics_FullMethodName       = "/worker.WorkerService/GetNodeMetrics"
 	WorkerService_GetInstanceMetrics_FullMethodName   = "/worker.WorkerService/GetInstanceMetrics"
+	WorkerService_ListJDKs_FullMethodName             = "/worker.WorkerService/ListJDKs"
+	WorkerService_InstallJDK_FullMethodName           = "/worker.WorkerService/InstallJDK"
+	WorkerService_RemoveJDK_FullMethodName            = "/worker.WorkerService/RemoveJDK"
 	WorkerService_CreateBot_FullMethodName            = "/worker.WorkerService/CreateBot"
 	WorkerService_DeleteBot_FullMethodName            = "/worker.WorkerService/DeleteBot"
 	WorkerService_ListBots_FullMethodName             = "/worker.WorkerService/ListBots"
@@ -103,6 +106,12 @@ type WorkerServiceClient interface {
 	GetNodeMetrics(ctx context.Context, in *GetNodeMetricsRequest, opts ...grpc.CallOption) (*GetNodeMetricsResponse, error)
 	// GetInstanceMetrics 获取实例指标。
 	GetInstanceMetrics(ctx context.Context, in *GetInstanceMetricsRequest, opts ...grpc.CallOption) (*GetInstanceMetricsResponse, error)
+	// ListJDKs 列出 Worker 本地已注册/探测到的 JDK 目录。
+	ListJDKs(ctx context.Context, in *ListJDKsRequest, opts ...grpc.CallOption) (*ListJDKsResponse, error)
+	// InstallJDK 下载并安装指定 JDK 到 Worker 托管目录。
+	InstallJDK(ctx context.Context, in *InstallJDKRequest, opts ...grpc.CallOption) (*InstallJDKResponse, error)
+	// RemoveJDK 删除 Worker 托管的 JDK 目录。
+	RemoveJDK(ctx context.Context, in *RemoveJDKRequest, opts ...grpc.CallOption) (*RemoveJDKResponse, error)
 	// CreateBot 在 Worker 上创建 Bot 连接。
 	CreateBot(ctx context.Context, in *CreateBotRequest, opts ...grpc.CallOption) (*CreateBotResponse, error)
 	// DeleteBot 停止并删除 Bot。
@@ -369,6 +378,36 @@ func (c *workerServiceClient) GetInstanceMetrics(ctx context.Context, in *GetIns
 	return out, nil
 }
 
+func (c *workerServiceClient) ListJDKs(ctx context.Context, in *ListJDKsRequest, opts ...grpc.CallOption) (*ListJDKsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListJDKsResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ListJDKs_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) InstallJDK(ctx context.Context, in *InstallJDKRequest, opts ...grpc.CallOption) (*InstallJDKResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InstallJDKResponse)
+	err := c.cc.Invoke(ctx, WorkerService_InstallJDK_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) RemoveJDK(ctx context.Context, in *RemoveJDKRequest, opts ...grpc.CallOption) (*RemoveJDKResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveJDKResponse)
+	err := c.cc.Invoke(ctx, WorkerService_RemoveJDK_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) CreateBot(ctx context.Context, in *CreateBotRequest, opts ...grpc.CallOption) (*CreateBotResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateBotResponse)
@@ -500,6 +539,12 @@ type WorkerServiceServer interface {
 	GetNodeMetrics(context.Context, *GetNodeMetricsRequest) (*GetNodeMetricsResponse, error)
 	// GetInstanceMetrics 获取实例指标。
 	GetInstanceMetrics(context.Context, *GetInstanceMetricsRequest) (*GetInstanceMetricsResponse, error)
+	// ListJDKs 列出 Worker 本地已注册/探测到的 JDK 目录。
+	ListJDKs(context.Context, *ListJDKsRequest) (*ListJDKsResponse, error)
+	// InstallJDK 下载并安装指定 JDK 到 Worker 托管目录。
+	InstallJDK(context.Context, *InstallJDKRequest) (*InstallJDKResponse, error)
+	// RemoveJDK 删除 Worker 托管的 JDK 目录。
+	RemoveJDK(context.Context, *RemoveJDKRequest) (*RemoveJDKResponse, error)
 	// CreateBot 在 Worker 上创建 Bot 连接。
 	CreateBot(context.Context, *CreateBotRequest) (*CreateBotResponse, error)
 	// DeleteBot 停止并删除 Bot。
@@ -592,6 +637,15 @@ func (UnimplementedWorkerServiceServer) GetNodeMetrics(context.Context, *GetNode
 }
 func (UnimplementedWorkerServiceServer) GetInstanceMetrics(context.Context, *GetInstanceMetricsRequest) (*GetInstanceMetricsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetInstanceMetrics not implemented")
+}
+func (UnimplementedWorkerServiceServer) ListJDKs(context.Context, *ListJDKsRequest) (*ListJDKsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListJDKs not implemented")
+}
+func (UnimplementedWorkerServiceServer) InstallJDK(context.Context, *InstallJDKRequest) (*InstallJDKResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InstallJDK not implemented")
+}
+func (UnimplementedWorkerServiceServer) RemoveJDK(context.Context, *RemoveJDKRequest) (*RemoveJDKResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveJDK not implemented")
 }
 func (UnimplementedWorkerServiceServer) CreateBot(context.Context, *CreateBotRequest) (*CreateBotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateBot not implemented")
@@ -1031,6 +1085,60 @@ func _WorkerService_GetInstanceMetrics_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_ListJDKs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListJDKsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ListJDKs(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ListJDKs_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ListJDKs(ctx, req.(*ListJDKsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_InstallJDK_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InstallJDKRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).InstallJDK(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_InstallJDK_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).InstallJDK(ctx, req.(*InstallJDKRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_RemoveJDK_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveJDKRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).RemoveJDK(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_RemoveJDK_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).RemoveJDK(ctx, req.(*RemoveJDKRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_CreateBot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateBotRequest)
 	if err := dec(in); err != nil {
@@ -1240,6 +1348,18 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetInstanceMetrics",
 			Handler:    _WorkerService_GetInstanceMetrics_Handler,
+		},
+		{
+			MethodName: "ListJDKs",
+			Handler:    _WorkerService_ListJDKs_Handler,
+		},
+		{
+			MethodName: "InstallJDK",
+			Handler:    _WorkerService_InstallJDK_Handler,
+		},
+		{
+			MethodName: "RemoveJDK",
+			Handler:    _WorkerService_RemoveJDK_Handler,
 		},
 		{
 			MethodName: "CreateBot",

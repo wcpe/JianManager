@@ -386,15 +386,20 @@ func (x *HeartbeatResponse) GetTimestamp() int64 {
 }
 
 type CreateInstanceRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InstanceUuid  string                 `protobuf:"bytes,1,opt,name=instance_uuid,json=instanceUuid,proto3" json:"instance_uuid,omitempty"`
-	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Type          string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`
-	ProcessType   string                 `protobuf:"bytes,4,opt,name=process_type,json=processType,proto3" json:"process_type,omitempty"`
-	StartCommand  string                 `protobuf:"bytes,5,opt,name=start_command,json=startCommand,proto3" json:"start_command,omitempty"`
-	WorkDir       string                 `protobuf:"bytes,6,opt,name=work_dir,json=workDir,proto3" json:"work_dir,omitempty"`
-	EnvVars       map[string]string      `protobuf:"bytes,7,rep,name=env_vars,json=envVars,proto3" json:"env_vars,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	AutoRestart   bool                   `protobuf:"varint,8,opt,name=auto_restart,json=autoRestart,proto3" json:"auto_restart,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	InstanceUuid string                 `protobuf:"bytes,1,opt,name=instance_uuid,json=instanceUuid,proto3" json:"instance_uuid,omitempty"`
+	Name         string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Type         string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`
+	ProcessType  string                 `protobuf:"bytes,4,opt,name=process_type,json=processType,proto3" json:"process_type,omitempty"`
+	StartCommand string                 `protobuf:"bytes,5,opt,name=start_command,json=startCommand,proto3" json:"start_command,omitempty"`
+	WorkDir      string                 `protobuf:"bytes,6,opt,name=work_dir,json=workDir,proto3" json:"work_dir,omitempty"`
+	EnvVars      map[string]string      `protobuf:"bytes,7,rep,name=env_vars,json=envVars,proto3" json:"env_vars,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	AutoRestart  bool                   `protobuf:"varint,8,opt,name=auto_restart,json=autoRestart,proto3" json:"auto_restart,omitempty"`
+	// 绑定到 Worker 本地 JDK 路径（CP 解析 NodeJDK.Path 后下发），非空时
+	// Worker 启动实例时把它作为 JAVA_HOME 并把 bin 接入 PATH。
+	JdkPath string `protobuf:"bytes,9,opt,name=jdk_path,json=jdkPath,proto3" json:"jdk_path,omitempty"`
+	// 显式指定 JDK bin 目录，覆盖默认的 jdk_path/bin。
+	JdkBinPath    string `protobuf:"bytes,10,opt,name=jdk_bin_path,json=jdkBinPath,proto3" json:"jdk_bin_path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -483,6 +488,20 @@ func (x *CreateInstanceRequest) GetAutoRestart() bool {
 		return x.AutoRestart
 	}
 	return false
+}
+
+func (x *CreateInstanceRequest) GetJdkPath() string {
+	if x != nil {
+		return x.JdkPath
+	}
+	return ""
+}
+
+func (x *CreateInstanceRequest) GetJdkBinPath() string {
+	if x != nil {
+		return x.JdkBinPath
+	}
+	return ""
 }
 
 type CreateInstanceResponse struct {
@@ -3825,6 +3844,394 @@ func (x *BotEvent) GetTimestamp() int64 {
 	return 0
 }
 
+type ListJDKsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListJDKsRequest) Reset() {
+	*x = ListJDKsRequest{}
+	mi := &file_proto_worker_proto_msgTypes[63]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListJDKsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListJDKsRequest) ProtoMessage() {}
+
+func (x *ListJDKsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[63]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListJDKsRequest.ProtoReflect.Descriptor instead.
+func (*ListJDKsRequest) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{63}
+}
+
+type JDKInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Vendor        string                 `protobuf:"bytes,1,opt,name=vendor,proto3" json:"vendor,omitempty"`
+	MajorVersion  int32                  `protobuf:"varint,2,opt,name=major_version,json=majorVersion,proto3" json:"major_version,omitempty"`
+	Version       string                 `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
+	Arch          string                 `protobuf:"bytes,4,opt,name=arch,proto3" json:"arch,omitempty"`
+	Path          string                 `protobuf:"bytes,5,opt,name=path,proto3" json:"path,omitempty"`
+	Managed       bool                   `protobuf:"varint,6,opt,name=managed,proto3" json:"managed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *JDKInfo) Reset() {
+	*x = JDKInfo{}
+	mi := &file_proto_worker_proto_msgTypes[64]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *JDKInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*JDKInfo) ProtoMessage() {}
+
+func (x *JDKInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[64]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use JDKInfo.ProtoReflect.Descriptor instead.
+func (*JDKInfo) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{64}
+}
+
+func (x *JDKInfo) GetVendor() string {
+	if x != nil {
+		return x.Vendor
+	}
+	return ""
+}
+
+func (x *JDKInfo) GetMajorVersion() int32 {
+	if x != nil {
+		return x.MajorVersion
+	}
+	return 0
+}
+
+func (x *JDKInfo) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *JDKInfo) GetArch() string {
+	if x != nil {
+		return x.Arch
+	}
+	return ""
+}
+
+func (x *JDKInfo) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *JDKInfo) GetManaged() bool {
+	if x != nil {
+		return x.Managed
+	}
+	return false
+}
+
+type ListJDKsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Jdks          []*JDKInfo             `protobuf:"bytes,1,rep,name=jdks,proto3" json:"jdks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListJDKsResponse) Reset() {
+	*x = ListJDKsResponse{}
+	mi := &file_proto_worker_proto_msgTypes[65]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListJDKsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListJDKsResponse) ProtoMessage() {}
+
+func (x *ListJDKsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[65]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListJDKsResponse.ProtoReflect.Descriptor instead.
+func (*ListJDKsResponse) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{65}
+}
+
+func (x *ListJDKsResponse) GetJdks() []*JDKInfo {
+	if x != nil {
+		return x.Jdks
+	}
+	return nil
+}
+
+type InstallJDKRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Vendor        string                 `protobuf:"bytes,1,opt,name=vendor,proto3" json:"vendor,omitempty"`                                  // Temurin / Zulu / Corretto / ...
+	MajorVersion  int32                  `protobuf:"varint,2,opt,name=major_version,json=majorVersion,proto3" json:"major_version,omitempty"` // 8 / 11 / 17 / 21 / ...
+	Arch          string                 `protobuf:"bytes,3,opt,name=arch,proto3" json:"arch,omitempty"`                                      // x64 / aarch64
+	InstallDir    string                 `protobuf:"bytes,4,opt,name=install_dir,json=installDir,proto3" json:"install_dir,omitempty"`        // 可选：自定义安装目录（默认 <serversDir>/jdks/<vendor>-<major>）
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InstallJDKRequest) Reset() {
+	*x = InstallJDKRequest{}
+	mi := &file_proto_worker_proto_msgTypes[66]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InstallJDKRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InstallJDKRequest) ProtoMessage() {}
+
+func (x *InstallJDKRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[66]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InstallJDKRequest.ProtoReflect.Descriptor instead.
+func (*InstallJDKRequest) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{66}
+}
+
+func (x *InstallJDKRequest) GetVendor() string {
+	if x != nil {
+		return x.Vendor
+	}
+	return ""
+}
+
+func (x *InstallJDKRequest) GetMajorVersion() int32 {
+	if x != nil {
+		return x.MajorVersion
+	}
+	return 0
+}
+
+func (x *InstallJDKRequest) GetArch() string {
+	if x != nil {
+		return x.Arch
+	}
+	return ""
+}
+
+func (x *InstallJDKRequest) GetInstallDir() string {
+	if x != nil {
+		return x.InstallDir
+	}
+	return ""
+}
+
+type InstallJDKResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	Jdk           *JDKInfo               `protobuf:"bytes,3,opt,name=jdk,proto3" json:"jdk,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InstallJDKResponse) Reset() {
+	*x = InstallJDKResponse{}
+	mi := &file_proto_worker_proto_msgTypes[67]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InstallJDKResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InstallJDKResponse) ProtoMessage() {}
+
+func (x *InstallJDKResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[67]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InstallJDKResponse.ProtoReflect.Descriptor instead.
+func (*InstallJDKResponse) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{67}
+}
+
+func (x *InstallJDKResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *InstallJDKResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *InstallJDKResponse) GetJdk() *JDKInfo {
+	if x != nil {
+		return x.Jdk
+	}
+	return nil
+}
+
+type RemoveJDKRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveJDKRequest) Reset() {
+	*x = RemoveJDKRequest{}
+	mi := &file_proto_worker_proto_msgTypes[68]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveJDKRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveJDKRequest) ProtoMessage() {}
+
+func (x *RemoveJDKRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[68]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveJDKRequest.ProtoReflect.Descriptor instead.
+func (*RemoveJDKRequest) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{68}
+}
+
+func (x *RemoveJDKRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+type RemoveJDKResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RemoveJDKResponse) Reset() {
+	*x = RemoveJDKResponse{}
+	mi := &file_proto_worker_proto_msgTypes[69]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RemoveJDKResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RemoveJDKResponse) ProtoMessage() {}
+
+func (x *RemoveJDKResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[69]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RemoveJDKResponse.ProtoReflect.Descriptor instead.
+func (*RemoveJDKResponse) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{69}
+}
+
+func (x *RemoveJDKResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *RemoveJDKResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_proto_worker_proto protoreflect.FileDescriptor
 
 const file_proto_worker_proto_rawDesc = "" +
@@ -3860,7 +4267,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\"1\n" +
 	"\x11HeartbeatResponse\x12\x1c\n" +
-	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\xed\x02\n" +
+	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\xaa\x03\n" +
 	"\x15CreateInstanceRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -3869,7 +4276,11 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\rstart_command\x18\x05 \x01(\tR\fstartCommand\x12\x19\n" +
 	"\bwork_dir\x18\x06 \x01(\tR\aworkDir\x12E\n" +
 	"\benv_vars\x18\a \x03(\v2*.worker.CreateInstanceRequest.EnvVarsEntryR\aenvVars\x12!\n" +
-	"\fauto_restart\x18\b \x01(\bR\vautoRestart\x1a:\n" +
+	"\fauto_restart\x18\b \x01(\bR\vautoRestart\x12\x19\n" +
+	"\bjdk_path\x18\t \x01(\tR\ajdkPath\x12 \n" +
+	"\fjdk_bin_path\x18\n" +
+	" \x01(\tR\n" +
+	"jdkBinPath\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"H\n" +
@@ -4109,7 +4520,32 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\bbot_uuid\x18\x01 \x01(\tR\abotUuid\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x12\n" +
 	"\x04data\x18\x03 \x01(\tR\x04data\x12\x1c\n" +
-	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp2\xe9\x11\n" +
+	"\ttimestamp\x18\x04 \x01(\x03R\ttimestamp\"\x11\n" +
+	"\x0fListJDKsRequest\"\xa2\x01\n" +
+	"\aJDKInfo\x12\x16\n" +
+	"\x06vendor\x18\x01 \x01(\tR\x06vendor\x12#\n" +
+	"\rmajor_version\x18\x02 \x01(\x05R\fmajorVersion\x12\x18\n" +
+	"\aversion\x18\x03 \x01(\tR\aversion\x12\x12\n" +
+	"\x04arch\x18\x04 \x01(\tR\x04arch\x12\x12\n" +
+	"\x04path\x18\x05 \x01(\tR\x04path\x12\x18\n" +
+	"\amanaged\x18\x06 \x01(\bR\amanaged\"7\n" +
+	"\x10ListJDKsResponse\x12#\n" +
+	"\x04jdks\x18\x01 \x03(\v2\x0f.worker.JDKInfoR\x04jdks\"\x85\x01\n" +
+	"\x11InstallJDKRequest\x12\x16\n" +
+	"\x06vendor\x18\x01 \x01(\tR\x06vendor\x12#\n" +
+	"\rmajor_version\x18\x02 \x01(\x05R\fmajorVersion\x12\x12\n" +
+	"\x04arch\x18\x03 \x01(\tR\x04arch\x12\x1f\n" +
+	"\vinstall_dir\x18\x04 \x01(\tR\n" +
+	"installDir\"g\n" +
+	"\x12InstallJDKResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x12!\n" +
+	"\x03jdk\x18\x03 \x01(\v2\x0f.worker.JDKInfoR\x03jdk\"&\n" +
+	"\x10RemoveJDKRequest\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"C\n" +
+	"\x11RemoveJDKResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error2\xaf\x13\n" +
 	"\rWorkerService\x12=\n" +
 	"\bRegister\x12\x17.worker.RegisterRequest\x1a\x18.worker.RegisterResponse\x12D\n" +
 	"\tHeartbeat\x12\x18.worker.HeartbeatRequest\x1a\x19.worker.HeartbeatResponse(\x010\x01\x12O\n" +
@@ -4136,7 +4572,11 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\vWriteConfig\x12\x1a.worker.WriteConfigRequest\x1a\x1b.worker.WriteConfigResponse\x12O\n" +
 	"\x0eValidateConfig\x12\x1d.worker.ValidateConfigRequest\x1a\x1e.worker.ValidateConfigResponse\x12O\n" +
 	"\x0eGetNodeMetrics\x12\x1d.worker.GetNodeMetricsRequest\x1a\x1e.worker.GetNodeMetricsResponse\x12[\n" +
-	"\x12GetInstanceMetrics\x12!.worker.GetInstanceMetricsRequest\x1a\".worker.GetInstanceMetricsResponse\x12@\n" +
+	"\x12GetInstanceMetrics\x12!.worker.GetInstanceMetricsRequest\x1a\".worker.GetInstanceMetricsResponse\x12=\n" +
+	"\bListJDKs\x12\x17.worker.ListJDKsRequest\x1a\x18.worker.ListJDKsResponse\x12C\n" +
+	"\n" +
+	"InstallJDK\x12\x19.worker.InstallJDKRequest\x1a\x1a.worker.InstallJDKResponse\x12@\n" +
+	"\tRemoveJDK\x12\x18.worker.RemoveJDKRequest\x1a\x19.worker.RemoveJDKResponse\x12@\n" +
 	"\tCreateBot\x12\x18.worker.CreateBotRequest\x1a\x19.worker.CreateBotResponse\x12@\n" +
 	"\tDeleteBot\x12\x18.worker.DeleteBotRequest\x1a\x19.worker.DeleteBotResponse\x12=\n" +
 	"\bListBots\x12\x17.worker.ListBotsRequest\x1a\x18.worker.ListBotsResponse\x12O\n" +
@@ -4157,7 +4597,7 @@ func file_proto_worker_proto_rawDescGZIP() []byte {
 	return file_proto_worker_proto_rawDescData
 }
 
-var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 64)
+var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 71)
 var file_proto_worker_proto_goTypes = []any{
 	(*RegisterRequest)(nil),             // 0: worker.RegisterRequest
 	(*RegisterResponse)(nil),            // 1: worker.RegisterResponse
@@ -4222,11 +4662,18 @@ var file_proto_worker_proto_goTypes = []any{
 	(*RunBotScriptResponse)(nil),        // 60: worker.RunBotScriptResponse
 	(*StreamBotEventsRequest)(nil),      // 61: worker.StreamBotEventsRequest
 	(*BotEvent)(nil),                    // 62: worker.BotEvent
-	nil,                                 // 63: worker.CreateInstanceRequest.EnvVarsEntry
+	(*ListJDKsRequest)(nil),             // 63: worker.ListJDKsRequest
+	(*JDKInfo)(nil),                     // 64: worker.JDKInfo
+	(*ListJDKsResponse)(nil),            // 65: worker.ListJDKsResponse
+	(*InstallJDKRequest)(nil),           // 66: worker.InstallJDKRequest
+	(*InstallJDKResponse)(nil),          // 67: worker.InstallJDKResponse
+	(*RemoveJDKRequest)(nil),            // 68: worker.RemoveJDKRequest
+	(*RemoveJDKResponse)(nil),           // 69: worker.RemoveJDKResponse
+	nil,                                 // 70: worker.CreateInstanceRequest.EnvVarsEntry
 }
 var file_proto_worker_proto_depIdxs = []int32{
 	3,  // 0: worker.HeartbeatRequest.instances:type_name -> worker.InstanceState
-	63, // 1: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
+	70, // 1: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
 	14, // 2: worker.ListInstancesResponse.instances:type_name -> worker.InstanceInfo
 	21, // 3: worker.ListFilesResponse.files:type_name -> worker.FileInfo
 	31, // 4: worker.ListConfigFilesResponse.files:type_name -> worker.ConfigFileInfo
@@ -4237,71 +4684,79 @@ var file_proto_worker_proto_depIdxs = []int32{
 	35, // 9: worker.WriteConfigResponse.validation:type_name -> worker.ConfigValidationResult
 	35, // 10: worker.ValidateConfigResponse.validation:type_name -> worker.ConfigValidationResult
 	54, // 11: worker.ListBotsResponse.bots:type_name -> worker.BotInfo
-	0,  // 12: worker.WorkerService.Register:input_type -> worker.RegisterRequest
-	2,  // 13: worker.WorkerService.Heartbeat:input_type -> worker.HeartbeatRequest
-	5,  // 14: worker.WorkerService.CreateInstance:input_type -> worker.CreateInstanceRequest
-	7,  // 15: worker.WorkerService.StartInstance:input_type -> worker.InstanceActionRequest
-	7,  // 16: worker.WorkerService.StopInstance:input_type -> worker.InstanceActionRequest
-	7,  // 17: worker.WorkerService.RestartInstance:input_type -> worker.InstanceActionRequest
-	7,  // 18: worker.WorkerService.KillInstance:input_type -> worker.InstanceActionRequest
-	9,  // 19: worker.WorkerService.SendCommand:input_type -> worker.SendCommandRequest
-	7,  // 20: worker.WorkerService.GetInstanceStatus:input_type -> worker.InstanceActionRequest
-	12, // 21: worker.WorkerService.ListInstances:input_type -> worker.ListInstancesRequest
-	15, // 22: worker.WorkerService.StreamInstanceEvents:input_type -> worker.StreamInstanceEventsRequest
-	17, // 23: worker.WorkerService.IssueTerminalToken:input_type -> worker.IssueTerminalTokenRequest
-	19, // 24: worker.WorkerService.ListFiles:input_type -> worker.ListFilesRequest
-	22, // 25: worker.WorkerService.ReadFile:input_type -> worker.ReadFileRequest
-	24, // 26: worker.WorkerService.WriteFile:input_type -> worker.WriteFileRequest
-	26, // 27: worker.WorkerService.DeleteFile:input_type -> worker.DeleteFileRequest
-	28, // 28: worker.WorkerService.RenameFile:input_type -> worker.RenameFileRequest
-	30, // 29: worker.WorkerService.ListConfigFiles:input_type -> worker.ListConfigFilesRequest
-	36, // 30: worker.WorkerService.ReadConfig:input_type -> worker.ReadConfigRequest
-	38, // 31: worker.WorkerService.WriteConfig:input_type -> worker.WriteConfigRequest
-	40, // 32: worker.WorkerService.ValidateConfig:input_type -> worker.ValidateConfigRequest
-	44, // 33: worker.WorkerService.GetNodeMetrics:input_type -> worker.GetNodeMetricsRequest
-	46, // 34: worker.WorkerService.GetInstanceMetrics:input_type -> worker.GetInstanceMetricsRequest
-	48, // 35: worker.WorkerService.CreateBot:input_type -> worker.CreateBotRequest
-	50, // 36: worker.WorkerService.DeleteBot:input_type -> worker.DeleteBotRequest
-	52, // 37: worker.WorkerService.ListBots:input_type -> worker.ListBotsRequest
-	55, // 38: worker.WorkerService.SetBotBehavior:input_type -> worker.SetBotBehaviorRequest
-	57, // 39: worker.WorkerService.SendBotCommand:input_type -> worker.SendBotCommandRequest
-	59, // 40: worker.WorkerService.RunBotScript:input_type -> worker.RunBotScriptRequest
-	61, // 41: worker.WorkerService.StreamBotEvents:input_type -> worker.StreamBotEventsRequest
-	1,  // 42: worker.WorkerService.Register:output_type -> worker.RegisterResponse
-	4,  // 43: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
-	6,  // 44: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
-	8,  // 45: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
-	8,  // 46: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
-	8,  // 47: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
-	8,  // 48: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
-	10, // 49: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
-	11, // 50: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
-	13, // 51: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
-	16, // 52: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
-	18, // 53: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
-	20, // 54: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
-	23, // 55: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
-	25, // 56: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
-	27, // 57: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
-	29, // 58: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
-	32, // 59: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
-	37, // 60: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
-	39, // 61: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
-	41, // 62: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
-	45, // 63: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
-	47, // 64: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
-	49, // 65: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
-	51, // 66: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
-	53, // 67: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
-	56, // 68: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
-	58, // 69: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
-	60, // 70: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
-	62, // 71: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
-	42, // [42:72] is the sub-list for method output_type
-	12, // [12:42] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	64, // 12: worker.ListJDKsResponse.jdks:type_name -> worker.JDKInfo
+	64, // 13: worker.InstallJDKResponse.jdk:type_name -> worker.JDKInfo
+	0,  // 14: worker.WorkerService.Register:input_type -> worker.RegisterRequest
+	2,  // 15: worker.WorkerService.Heartbeat:input_type -> worker.HeartbeatRequest
+	5,  // 16: worker.WorkerService.CreateInstance:input_type -> worker.CreateInstanceRequest
+	7,  // 17: worker.WorkerService.StartInstance:input_type -> worker.InstanceActionRequest
+	7,  // 18: worker.WorkerService.StopInstance:input_type -> worker.InstanceActionRequest
+	7,  // 19: worker.WorkerService.RestartInstance:input_type -> worker.InstanceActionRequest
+	7,  // 20: worker.WorkerService.KillInstance:input_type -> worker.InstanceActionRequest
+	9,  // 21: worker.WorkerService.SendCommand:input_type -> worker.SendCommandRequest
+	7,  // 22: worker.WorkerService.GetInstanceStatus:input_type -> worker.InstanceActionRequest
+	12, // 23: worker.WorkerService.ListInstances:input_type -> worker.ListInstancesRequest
+	15, // 24: worker.WorkerService.StreamInstanceEvents:input_type -> worker.StreamInstanceEventsRequest
+	17, // 25: worker.WorkerService.IssueTerminalToken:input_type -> worker.IssueTerminalTokenRequest
+	19, // 26: worker.WorkerService.ListFiles:input_type -> worker.ListFilesRequest
+	22, // 27: worker.WorkerService.ReadFile:input_type -> worker.ReadFileRequest
+	24, // 28: worker.WorkerService.WriteFile:input_type -> worker.WriteFileRequest
+	26, // 29: worker.WorkerService.DeleteFile:input_type -> worker.DeleteFileRequest
+	28, // 30: worker.WorkerService.RenameFile:input_type -> worker.RenameFileRequest
+	30, // 31: worker.WorkerService.ListConfigFiles:input_type -> worker.ListConfigFilesRequest
+	36, // 32: worker.WorkerService.ReadConfig:input_type -> worker.ReadConfigRequest
+	38, // 33: worker.WorkerService.WriteConfig:input_type -> worker.WriteConfigRequest
+	40, // 34: worker.WorkerService.ValidateConfig:input_type -> worker.ValidateConfigRequest
+	44, // 35: worker.WorkerService.GetNodeMetrics:input_type -> worker.GetNodeMetricsRequest
+	46, // 36: worker.WorkerService.GetInstanceMetrics:input_type -> worker.GetInstanceMetricsRequest
+	63, // 37: worker.WorkerService.ListJDKs:input_type -> worker.ListJDKsRequest
+	66, // 38: worker.WorkerService.InstallJDK:input_type -> worker.InstallJDKRequest
+	68, // 39: worker.WorkerService.RemoveJDK:input_type -> worker.RemoveJDKRequest
+	48, // 40: worker.WorkerService.CreateBot:input_type -> worker.CreateBotRequest
+	50, // 41: worker.WorkerService.DeleteBot:input_type -> worker.DeleteBotRequest
+	52, // 42: worker.WorkerService.ListBots:input_type -> worker.ListBotsRequest
+	55, // 43: worker.WorkerService.SetBotBehavior:input_type -> worker.SetBotBehaviorRequest
+	57, // 44: worker.WorkerService.SendBotCommand:input_type -> worker.SendBotCommandRequest
+	59, // 45: worker.WorkerService.RunBotScript:input_type -> worker.RunBotScriptRequest
+	61, // 46: worker.WorkerService.StreamBotEvents:input_type -> worker.StreamBotEventsRequest
+	1,  // 47: worker.WorkerService.Register:output_type -> worker.RegisterResponse
+	4,  // 48: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
+	6,  // 49: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
+	8,  // 50: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
+	8,  // 51: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
+	8,  // 52: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
+	8,  // 53: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
+	10, // 54: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
+	11, // 55: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
+	13, // 56: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
+	16, // 57: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
+	18, // 58: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
+	20, // 59: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
+	23, // 60: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
+	25, // 61: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
+	27, // 62: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
+	29, // 63: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
+	32, // 64: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
+	37, // 65: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
+	39, // 66: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
+	41, // 67: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
+	45, // 68: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
+	47, // 69: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
+	65, // 70: worker.WorkerService.ListJDKs:output_type -> worker.ListJDKsResponse
+	67, // 71: worker.WorkerService.InstallJDK:output_type -> worker.InstallJDKResponse
+	69, // 72: worker.WorkerService.RemoveJDK:output_type -> worker.RemoveJDKResponse
+	49, // 73: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
+	51, // 74: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
+	53, // 75: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
+	56, // 76: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
+	58, // 77: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
+	60, // 78: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
+	62, // 79: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
+	47, // [47:80] is the sub-list for method output_type
+	14, // [14:47] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_proto_worker_proto_init() }
@@ -4315,7 +4770,7 @@ func file_proto_worker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_worker_proto_rawDesc), len(file_proto_worker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   64,
+			NumMessages:   71,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
