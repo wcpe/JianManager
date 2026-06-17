@@ -21,6 +21,8 @@
 | ADR-004 | 用户组替代多租户 | 不得在表中添加 tenant_id 字段 |
 | ADR-005 | go:embed 前端 | 不得为前端单独配置 nginx |
 | ADR-006 | Bot Node.js 子进程 | Bot 功能必须通过 Node.js 子进程 + stdin/stdout IPC |
+| ADR-007 | MC 群组服 M:N 建模 + 系统分配工作目录 | proxy↔backend 用 server_registrations(M:N)；群组为非独占软标签；工作目录系统分配，不由用户输入 |
+| ADR-008 | MC 结构化启动 + 托管多 JDK | MC 实例由 jdk+jvm参数+jar 派生启动命令；按节点托管多 JDK 并绑定 |
 
 ## 检查时机
 

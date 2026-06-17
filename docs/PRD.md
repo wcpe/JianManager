@@ -440,6 +440,99 @@
 
 ---
 
+## V2 — MC 群组服运维
+
+> 围绕「开好并运维一个 MC 群组服（代理 + 多 Bukkit 子服）」。优先级：配置文件管理最高，其次搭子服 / 插件管理 / 搭代理 / 一键复制修正。关系模型见 ADR-007，启动与运行时见 ADR-008。
+
+### FR-031: 配置文件管理引擎
+- **状态**: 📋 todo
+- **优先级**: P0
+- **描述**: 统一管理 MC 全部配置文件——保留注释的多格式读写 + schema 化可视编辑 + 跨文件一致性校验 + 版本回滚
+- **验收标准**:
+  - [ ] 支持 properties/yaml/toml/json/txt 解析与回写，**保留原有注释、键顺序与格式**
+  - [ ] 内置 server.properties / spigot.yml / paper-global.yml / bukkit.yml / velocity.toml / bungeecord config.yml 字段 schema（类型/默认/说明），可视化表单编辑
+  - [ ] 表单与原始文本双模式切换，保存后注释不丢失
+  - [ ] 跨文件/跨实例校验：同节点端口唯一、online-mode 与代理转发配套、forwarding secret 跨代理一致，违规实时提示
+  - [ ] 每次保存生成配置版本，可查看 diff 并一键回滚
+  - [ ] 配置读写经 gRPC 委托 Worker（配置在 workDir，归 Worker 所有）
+- **关联 ADR**: ADR-007
+- **关联 API**: `GET/POST /instances/:id/configs`, `GET /instances/:id/configs/:file/versions`
+- **依赖**: 无（地基）
+
+### FR-032: 节点资源分配与群组服关系模型
+- **状态**: 📋 todo
+- **优先级**: P0
+- **描述**: 实例角色化 + proxy↔backend 的 M:N 注册 + 可选群组软标签 + 端口/工作目录由系统分配
+- **验收标准**:
+  - [ ] 实例具备 `role`（proxy / backend / universal）
+  - [ ] **工作目录由系统分配**：创建对话框移除 workDir 输入，系统在 `servers_dir` 下建 `servers/<name-slug>-<shortid>`，路径只读展示（取代 BUG-004 的必填 UI）
+  - [ ] 端口池：为新实例自动分配同节点唯一的 server-port/rcon/query，可查看占用情况
+  - [ ] proxy↔backend 为 **M:N**：一个 backend 可注册进多个 proxy；每条注册含本地 alias/priority/forced-host/restricted
+  - [ ] 群组（Network）为**非独占软标签**：一个子服可属于多个群组；删除群组不影响子服与注册
+  - [ ] 群组视图可按标签筛选并批量操作（启停/同步）
+- **关联 ADR**: ADR-007
+- **关联 API**: `GET/POST /networks`, `POST /proxies/:id/registrations`, `GET /nodes/:id/ports`
+- **依赖**: FR-031（注册/复制会写代理配置）
+
+### FR-033: JDK 与运行时管理
+- **状态**: 📋 todo
+- **优先级**: P0
+- **描述**: 平台按节点托管多 JDK，安装/登记多版本，实例绑定并在启动时注入环境变量
+- **验收标准**:
+  - [ ] 节点 JDK 注册表：列出已装 JDK（vendor/版本/arch/路径）
+  - [ ] 一键安装指定版本 JDK（下载源可配，默认 Adoptium）到系统分配目录；也可登记系统已有 JDK
+  - [ ] 实例可绑定具体 JDK 或 Java 大版本；目标节点缺失时提示安装
+  - [ ] 启动实例时自动注入 `JAVA_HOME` 并将 JDK/bin 接入 `PATH`，再叠加实例自定义 `env_vars`
+  - [ ] 删除被实例占用的 JDK 时拒绝并提示占用方
+- **关联 ADR**: ADR-008
+- **关联 API**: `GET/POST /nodes/:id/jdks`, `DELETE /nodes/:id/jdks/:jid`
+- **依赖**: 无（FR-034/035 依赖它）
+
+### FR-034: 搭建 Bukkit 子服
+- **状态**: 📋 todo
+- **优先级**: P1
+- **描述**: 向导式创建 Paper/Spigot/Purpur 后端子服，自动下载核心、系统分配目录与端口、写好群组服配置、结构化启动
+- **验收标准**:
+  - [ ] 选择核心类型 + MC 版本，从核心仓库/下载源获取 jar
+  - [ ] 系统自动分配工作目录与端口；自动写 `eula=true`、`online-mode=false`、spigot `bungeecord=true` / paper 代理转发
+  - [ ] 绑定 JDK、设置内存与 JVM 参数（结构化启动，不手填命令）
+  - [ ] 创建后可一键启动，状态进入 RUNNING
+  - [ ] 可选：创建时即注册进所选代理
+- **关联 ADR**: ADR-007, ADR-008
+- **关联 API**: `POST /instances`（role=backend, 结构化启动）, `GET /cores`
+- **依赖**: FR-031, FR-032, FR-033
+
+### FR-035: 搭建代理（BungeeCord/Velocity）
+- **状态**: 📋 todo
+- **优先级**: P1
+- **描述**: 向导式创建代理实例，生成转发配置与 secret，注册后端
+- **验收标准**:
+  - [ ] 选择 BungeeCord/Waterfall 或 Velocity 并获取 jar
+  - [ ] 系统分配目录/监听端口，生成 config（BC: `ip_forward=true` / Velocity: modern 转发 + 生成 `forwarding-secret`）
+  - [ ] 将已有 backend 注册进代理（servers + priorities/try），支持 forced-host
+  - [ ] Velocity secret 自动下发到所注册后端的 paper 配置，并校验跨代理一致
+  - [ ] 启动代理后玩家可经代理进入后端
+- **关联 ADR**: ADR-007, ADR-008
+- **关联 API**: `POST /instances`（role=proxy）, `POST /proxies/:id/registrations`
+- **依赖**: FR-031, FR-032, FR-033
+
+### FR-036: 一键复制子服 + 配置修正 + 注册
+- **状态**: 📋 todo
+- **优先级**: P1
+- **描述**: 复制一个后端子服为独立新实例，自动修正身份配置并按需注册进所选代理
+- **验收标准**:
+  - [ ] 复制产出**独立**新实例（系统分配新目录/新端口）
+  - [ ] 拷贝 workDir 时排除 session.lock、logs、缓存、usercache 等运行态文件
+  - [ ] 配置引擎自动修正：新 server-port/rcon/query、服务器名/motd，可选改 level-name；保留 forwarding secret 不变
+  - [ ] 复制时可勾选注册进 0/1/多个代理（写入各代理 servers + priorities）
+  - [ ] 复制前预检端口/名称/目录冲突并提示
+  - [ ] 复制后新子服可直接启动并经所选代理进入
+- **关联 ADR**: ADR-007
+- **关联 API**: `POST /instances/:id/clone`
+- **依赖**: FR-031, FR-032, FR-033, FR-034, FR-035
+
+---
+
 ## V1 不包含（后续版本）
 
 | FR | 描述 | 预计版本 |
