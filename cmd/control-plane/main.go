@@ -47,7 +47,7 @@ func main() {
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
 	terminalSvc := service.NewTerminalService(db, cfg.JWT.Secret, fmt.Sprintf("ws://localhost:%d", cfg.Server.Port))
 	fileSvc := service.NewFileService(db, pool)
-	botSvc := service.NewBotService(db)
+	botSvc := service.NewBotService(db, pool)
 	alertSvc := service.NewAlertService(db)
 	scheduleSvc := service.NewScheduleService(db)
 	backupSvc := service.NewBackupService(db, pool)
