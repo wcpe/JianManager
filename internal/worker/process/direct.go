@@ -61,9 +61,7 @@ func (d *directStrategy) Start(ctx context.Context) error {
 		return fmt.Errorf("创建 stdin 管道失败: %w", err)
 	}
 
-	for k, v := range d.spec.EnvVars {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
+	cmd.Env = ComposeEnv(os.Environ(), d.spec)
 
 	if err := cmd.Start(); err != nil {
 		stdin.Close()

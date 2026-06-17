@@ -62,6 +62,8 @@ func (d *daemonStrategy) Start(ctx context.Context) error {
 		StartCommand: d.spec.StartCommand,
 		WorkDir:      d.spec.WorkDir,
 		EnvVars:      d.spec.EnvVars,
+		JavaHome:     d.spec.JavaHome,
+		JDKBinPath:   d.spec.JDKBinPath,
 		AutoRestart:  d.spec.AutoRestart,
 		PIDDir:       d.pidDir,
 	}

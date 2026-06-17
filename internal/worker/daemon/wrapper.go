@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -17,11 +18,15 @@ import (
 
 // WrapperConfig 是 daemon wrapper 子进程的启动配置。
 // 通过环境变量从 Worker 传递给 wrapper 子进程（避免命令行长度/转义问题）。
+// WrapperConfig 是 daemon wrapper 子进程的启动配置。
+// 通过环境变量从 Worker 传递给 wrapper 子进程（避免命令行长度/转义问题）。
 type WrapperConfig struct {
 	InstanceUUID  string            `json:"instance_uuid"`
 	StartCommand  string            `json:"start_command"`
 	WorkDir       string            `json:"work_dir"`
 	EnvVars       map[string]string `json:"env_vars"`
+	JavaHome      string            `json:"java_home,omitempty"`
+	JDKBinPath    string            `json:"jdk_bin_path,omitempty"`
 	AutoRestart   bool              `json:"auto_restart"`
 	PIDDir        string            `json:"pid_dir"`
 	StartTimeout  time.Duration     `json:"start_timeout"` // Java 启动到首字节输出的等待（0=不限）
@@ -389,10 +394,53 @@ func buildJavaCmd(cfg WrapperConfig) *exec.Cmd {
 		cmd = exec.Command("sh", "-c", cfg.StartCommand)
 	}
 	cmd.Dir = cfg.WorkDir
-	for k, v := range cfg.EnvVars {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
+	cmd.Env = composeEnv(os.Environ(), cfg)
 	return cmd
+}
+
+// composeEnv 合成进程环境：基线 (os.Environ) + JAVA_HOME + PATH 前置 + 实例 EnvVars。
+// 与 internal/worker/process.ComposeEnv 行为一致，本地复制以避免 daemon ↔ process 包循环依赖。
+func composeEnv(base []string, cfg WrapperConfig) []string {
+	out := append([]string(nil), base...)
+
+	javaBin := cfg.JDKBinPath
+	if javaBin == "" && cfg.JavaHome != "" {
+		javaBin = filepath.Join(cfg.JavaHome, "bin")
+	}
+	pathKey := "PATH"
+	if runtime.GOOS == "windows" {
+		pathKey = "Path"
+	}
+
+	if cfg.JavaHome != "" {
+		out = append(out, "JAVA_HOME="+cfg.JavaHome)
+	}
+	if javaBin != "" {
+		replaced := false
+		for i, kv := range out {
+			if k, v, ok := splitEnvKey(kv); ok && k == pathKey {
+				out[i] = k + "=" + javaBin + string(os.PathListSeparator) + v
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			out = append(out, pathKey+"="+javaBin)
+		}
+	}
+	for k, v := range cfg.EnvVars {
+		out = append(out, k+"="+v)
+	}
+	return out
+}
+
+func splitEnvKey(kv string) (key, value string, ok bool) {
+	for i := 0; i < len(kv); i++ {
+		if kv[i] == '=' {
+			return kv[:i], kv[i+1:], true
+		}
+	}
+	return "", "", false
 }
 
 // backoffDelay 指数退避：1s→2s→4s→...→30s 上限。
