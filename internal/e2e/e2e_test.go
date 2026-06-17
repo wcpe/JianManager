@@ -14,6 +14,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"testing"
 	"time"
 
@@ -68,6 +70,22 @@ func (c *e2eClient) request(method, path string, body interface{}) (*http.Respon
 	}
 
 	return resp, data, nil
+}
+
+// stopProcessTree 终止整棵进程树。
+// `go run` 会再 spawn 真正的二进制子进程，直接 Kill `go run` 会留下孤儿进程持有
+// 测试的 stdout/stderr 句柄，导致 go test 报 "Test I/O incomplete" 而失败。
+// Windows 用 taskkill /T 递归终止，其他平台回退到 Process.Kill。
+func stopProcessTree(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		_ = exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+	} else {
+		_ = cmd.Process.Kill()
+	}
+	_ = cmd.Wait()
 }
 
 // waitForReady 等待服务就绪。
@@ -153,11 +171,9 @@ func TestE2E_InstanceFullLifecycle(t *testing.T) {
 	)
 	cpCmd.Stdout = os.Stdout
 	cpCmd.Stderr = os.Stderr
+	cpCmd.WaitDelay = 10 * time.Second
 	require.NoError(t, cpCmd.Start(), "启动 Control Plane 失败")
-	t.Cleanup(func() {
-		cpCmd.Process.Kill()
-		cpCmd.Wait()
-	})
+	t.Cleanup(func() { stopProcessTree(cpCmd) })
 
 	// 等待 CP 就绪
 	require.NoError(t, waitForReady(cpAddr, 30*time.Second), "Control Plane 未就绪")
@@ -175,11 +191,9 @@ func TestE2E_InstanceFullLifecycle(t *testing.T) {
 	)
 	workerCmd.Stdout = os.Stdout
 	workerCmd.Stderr = os.Stderr
+	workerCmd.WaitDelay = 10 * time.Second
 	require.NoError(t, workerCmd.Start(), "启动 Worker 失败")
-	t.Cleanup(func() {
-		workerCmd.Process.Kill()
-		workerCmd.Wait()
-	})
+	t.Cleanup(func() { stopProcessTree(workerCmd) })
 
 	// 3. Setup 创建管理员（先于节点查询，因为 /nodes 需要认证）
 	client := &e2eClient{
