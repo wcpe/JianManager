@@ -63,7 +63,38 @@ func (s *Server) ReadConfig(ctx context.Context, req *workerpb.ReadConfigRequest
 		return nil, fmt.Errorf("读取配置失败: %w", err)
 	}
 	text := string(content)
-	return &workerpb.ReadConfigResponse{Path: req.Path, Format: format, Content: text, Fields: parseConfigFields(format, text), SchemaJson: `{"known":false}`, Validation: validateConfigText(format, text)}, nil
+	return &workerpb.ReadConfigResponse{
+		Path:       req.Path,
+		Format:     format,
+		Content:    text,
+		Fields:     parseConfigFields(format, text),
+		SchemaJson: `{"known":false}`,
+		Validation: validateConfigText(format, text),
+		Model:      modelNameForPath(req.Path),
+	}, nil
+}
+
+// modelNameForPath 返回已知 schema 名称；未知返回空。
+func modelNameForPath(p string) string {
+	base := strings.ToLower(filepath.Base(p))
+	switch base {
+	case "server.properties":
+		return "server.properties"
+	case "spigot.yml":
+		return "spigot.yml"
+	case "bukkit.yml":
+		return "bukkit.yml"
+	case "paper-global.yml", "paper.yml":
+		return "paper-global.yml"
+	case "velocity.toml":
+		return "velocity.toml"
+	case "config.yml":
+		if strings.Contains(filepath.ToSlash(strings.ToLower(p)), "velocity/") {
+			return "velocity.toml"
+		}
+		return "config.yml"
+	}
+	return ""
 }
 
 // WriteConfig 写入配置原文；properties 以行级 round-trip 为 MVP，其他格式仅校验后原文保存。
@@ -159,7 +190,8 @@ func inferScalarType(value string) string {
 	if lower == "true" || lower == "false" {
 		return "bool"
 	}
-	if _, err := fmt.Sscanf(value, "%d", new(int)); err == nil {
+	var n int
+	if _, err := fmt.Sscanf(value, "%d", &n); err == nil {
 		return "int"
 	}
 	return "string"

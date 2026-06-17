@@ -307,6 +307,7 @@ message ReadConfigResponse {
   repeated ConfigField fields = 4;
   string schema_json = 5;
   ConfigValidationResult validation = 6;
+  string model = 7;
 }
 
 message WriteConfigRequest {
@@ -320,6 +321,7 @@ message WriteConfigResponse {
   bool success = 1;
   string error = 2;
   ConfigValidationResult validation = 3;
+  uint32 version_id = 4;
 }
 
 message ValidateConfigRequest {
@@ -330,6 +332,21 @@ message ValidateConfigRequest {
 
 message ValidateConfigResponse {
   ConfigValidationResult validation = 1;
+}
+
+message DiffConfigRequest {
+  string instance_uuid = 1;
+  string path = 2;
+  uint32 from_version_id = 3;
+  uint32 to_version_id = 4;
+}
+
+message DiffConfigResponse {
+  uint32 from_version_id = 1;
+  uint32 to_version_id = 2;
+  string unified_diff = 3;
+  string from_content = 4;
+  string to_content = 5;
 }
 
 // === 指标 ===
