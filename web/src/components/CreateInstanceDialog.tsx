@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueryClient, useMutation } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import api from '@/api/client'
 import { useNodes } from '@/api/nodes'
 import { useGroups } from '@/api/groups'
@@ -27,17 +28,17 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
   const [autoRestart, setAutoRestart] = useState(true)
   const [groupId, setGroupId] = useState('')
   const [templateId, setTemplateId] = useState('')
-  const [error, setError] = useState('')
 
   const create = useMutation({
     mutationFn: (body: Record<string, unknown>) => api.post('/instances', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['instances'] })
+      toast.success('实例已创建')
       onClose()
       resetForm()
     },
     onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-      setError(err.response?.data?.message || t('instances.createFailed'))
+      toast.error(err.response?.data?.message || t('instances.createFailed'))
     },
   })
 
@@ -51,12 +52,10 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
     setAutoRestart(true)
     setGroupId('')
     setTemplateId('')
-    setError('')
   }
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
-    setError('')
     create.mutate({
       nodeId: Number(nodeId),
       name,
@@ -75,10 +74,6 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="bg-background border rounded-lg p-6 w-full max-w-md shadow-lg">
         <h2 className="text-lg font-bold mb-4">{t('instances.createInstance')}</h2>
-
-        {error && (
-          <div className="mb-3 p-2 text-sm text-destructive bg-destructive/10 rounded">{error}</div>
-        )}
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>

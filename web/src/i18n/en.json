@@ -178,7 +178,11 @@
     "uploadSuccess": "Upload successful",
     "uploadFailed": "Upload failed",
     "saveFailed": "Save failed",
+    "saved": "Saved",
     "deleteFailed": "Delete failed",
+    "deleted": "Deleted",
+    "renamed": "Renamed",
+    "uploaded": "Uploaded",
     "loadFailed": "Load failed"
   },
   "bots": {

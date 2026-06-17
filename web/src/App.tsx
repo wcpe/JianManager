@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router'
 import { Suspense, lazy, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Toaster } from 'sonner'
 import { useAuthStore } from '@/stores/auth'
 
 const LoginPage = lazy(() => import('./pages/LoginPage'))
@@ -25,20 +26,23 @@ function App() {
   }, [loadFromStorage])
 
   return (
-    <Suspense fallback={<div className="flex items-center justify-center h-screen">{t('common.loading')}</div>}>
-      <Routes>
-        <Route path="/setup" element={<SetupPage />} />
-        <Route path="/login" element={<LoginPage />} />
-        <Route
-          path="/*"
-          element={
-            <AuthGuard>
-              <DashboardPage />
-            </AuthGuard>
-          }
-        />
-      </Routes>
-    </Suspense>
+    <>
+      <Toaster position="top-right" richColors closeButton />
+      <Suspense fallback={<div className="flex items-center justify-center h-screen">{t('common.loading')}</div>}>
+        <Routes>
+          <Route path="/setup" element={<SetupPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="/*"
+            element={
+              <AuthGuard>
+                <DashboardPage />
+              </AuthGuard>
+            }
+          />
+        </Routes>
+      </Suspense>
+    </>
   )
 }
 

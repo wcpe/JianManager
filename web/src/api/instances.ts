@@ -1,4 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import api from '@/api/client'
 
 export interface InstanceInfo {
@@ -54,7 +55,13 @@ export function useStartInstance() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: number) => api.post(`/instances/${id}/start`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['instances'] }),
+    onSuccess: () => {
+      toast.success('实例启动中…')
+      qc.invalidateQueries({ queryKey: ['instances'] })
+    },
+    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
+      toast.error(err.response?.data?.message || '启动失败')
+    },
   })
 }
 
@@ -63,7 +70,13 @@ export function useStopInstance() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: number) => api.post(`/instances/${id}/stop`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['instances'] }),
+    onSuccess: () => {
+      toast.success('实例已停止')
+      qc.invalidateQueries({ queryKey: ['instances'] })
+    },
+    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
+      toast.error(err.response?.data?.message || '停止失败')
+    },
   })
 }
 
@@ -72,7 +85,13 @@ export function useRestartInstance() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: number) => api.post(`/instances/${id}/restart`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['instances'] }),
+    onSuccess: () => {
+      toast.success('实例重启中…')
+      qc.invalidateQueries({ queryKey: ['instances'] })
+    },
+    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
+      toast.error(err.response?.data?.message || '重启失败')
+    },
   })
 }
 
@@ -81,7 +100,13 @@ export function useKillInstance() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: number) => api.post(`/instances/${id}/kill`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['instances'] }),
+    onSuccess: () => {
+      toast.success('实例已强制终止')
+      qc.invalidateQueries({ queryKey: ['instances'] })
+    },
+    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
+      toast.error(err.response?.data?.message || '终止失败')
+    },
   })
 }
 
@@ -90,6 +115,12 @@ export function useDeleteInstance() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: number) => api.delete(`/instances/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['instances'] }),
+    onSuccess: () => {
+      toast.success('实例已删除')
+      qc.invalidateQueries({ queryKey: ['instances'] })
+    },
+    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
+      toast.error(err.response?.data?.message || '删除失败')
+    },
   })
 }

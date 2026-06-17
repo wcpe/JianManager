@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { useInstances, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance, useKillInstance } from '@/api/instances'
+import ConfirmDialog from '@/components/ConfirmDialog'
 import CreateInstanceDialog from '@/components/CreateInstanceDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,6 +18,7 @@ import {
 export default function InstancesPage() {
   const { t } = useTranslation()
   const [showCreate, setShowCreate] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
   const { data: instances, isLoading } = useInstances()
   const start = useStartInstance()
   const stop = useStopInstance()
@@ -116,9 +118,7 @@ export default function InstancesPage() {
                           <Button
                             variant="ghost"
                             size="xs"
-                            onClick={() => {
-                              if (confirm(t('instances.deleteConfirm'))) del.mutate(inst.id)
-                            }}
+                            onClick={() => setDeleteTarget(inst.id)}
                             className="text-red-600 hover:text-red-700"
                           >
                             {t('common.delete')}
@@ -140,6 +140,16 @@ export default function InstancesPage() {
           </Table>
         </div>
       )}
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title={t('instances.deleteConfirm')}
+        description="此操作不可撤销，实例的所有数据将被删除。"
+        confirmLabel={t('common.delete')}
+        variant="destructive"
+        onConfirm={() => { if (deleteTarget) del.mutate(deleteTarget); setDeleteTarget(null) }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   )
 }
