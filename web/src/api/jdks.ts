@@ -33,10 +33,28 @@ export function useCreateJDK(nodeId: number) {
   })
 }
 
+export function useUpdateJDK(nodeId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ jdkId, body }: { jdkId: number; body: Partial<Omit<NodeJDK, 'id' | 'nodeId' | 'createdAt'>> }) =>
+      api.put(`/nodes/${nodeId}/jdks/${jdkId}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['node-jdks', nodeId] }),
+  })
+}
+
 export function useDeleteJDK(nodeId: number) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (jdkId: number) => api.delete(`/nodes/${nodeId}/jdks/${jdkId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['node-jdks', nodeId] }),
+  })
+}
+
+export function useInstallJDK(nodeId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { vendor: string; majorVersion: number; arch: string }) =>
+      api.post(`/nodes/${nodeId}/jdks/install`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['node-jdks', nodeId] }),
   })
 }

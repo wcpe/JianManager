@@ -46,6 +46,34 @@ func (h *JDKHandler) Install(c *gin.Context) {
 	c.JSON(http.StatusCreated, jdk)
 }
 
+func (h *JDKHandler) Update(c *gin.Context) {
+	if !requirePlatformAdmin(c) { return }
+	nodeID, err := parseUintParam(c, "id"); if err != nil { return }
+	jdkID, err := parseUintParam(c, "jid"); if err != nil { return }
+	var body struct {
+		Vendor       *string `json:"vendor"`
+		MajorVersion *int    `json:"majorVersion"`
+		Version      *string `json:"version"`
+		Arch         *string `json:"arch"`
+		Path         *string `json:"path"`
+		Managed      *bool   `json:"managed"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":"INVALID_REQUEST","message":"请求参数错误"}); return }
+	// 简化：CP 暂未提供 JDK Update 业务方法，前端可直接重新 Create 一个新条目。
+	// 这里用 Delete + Create 模拟 PUT 语义：先校验占用，再删旧建新。
+	used, _ := h.svc.Delete(nodeID, jdkID)
+	if used != nil { c.JSON(http.StatusConflict, gin.H{"error":"JDK_IN_USE","message":"JDK 正被实例占用"}); return }
+	if body.Path == nil || body.Vendor == nil || body.Version == nil || body.Arch == nil || body.MajorVersion == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error":"INVALID_REQUEST","message":"path / vendor / version / arch / majorVersion 均必填"}); return
+	}
+	jdk, err := h.svc.Create(nodeID, service.CreateJDKRequest{
+		Vendor: *body.Vendor, MajorVersion: *body.MajorVersion, Version: *body.Version, Arch: *body.Arch, Path: *body.Path,
+		Managed: body.Managed != nil && *body.Managed,
+	})
+	if err != nil { c.JSON(http.StatusUnprocessableEntity, gin.H{"error":"BUSINESS_ERROR","message":err.Error()}); return }
+	c.JSON(http.StatusOK, jdk)
+}
+
 func (h *JDKHandler) Delete(c *gin.Context) {
 	if !requirePlatformAdmin(c) { return }
 	nodeID, err := parseUintParam(c, "id"); if err != nil { return }
@@ -63,6 +91,7 @@ func (h *JDKHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	jdks := rg.Group("/nodes/:id/jdks")
 	jdks.GET("", h.List)
 	jdks.POST("", h.Create)
+	jdks.PUT("/:jid", h.Update)
 	jdks.POST("/install", h.Install)
 	jdks.DELETE("/:jid", h.Delete)
 }
