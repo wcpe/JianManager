@@ -445,7 +445,7 @@
 > 围绕「开好并运维一个 MC 群组服（代理 + 多 Bukkit 子服）」。优先级：配置文件管理最高，其次搭子服 / 插件管理 / 搭代理 / 一键复制修正。关系模型见 ADR-007，启动与运行时见 ADR-008。
 
 ### FR-031: 配置文件管理引擎
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: 统一管理 MC 全部配置文件——保留注释的多格式读写 + schema 化可视编辑 + 跨文件一致性校验 + 版本回滚
 - **验收标准**:
@@ -458,9 +458,10 @@
 - **关联 ADR**: ADR-007
 - **关联 API**: `GET/POST /instances/:id/configs`, `GET /instances/:id/configs/:file/versions`
 - **依赖**: 无（地基）
+- **Spec**: `docs/specs/config-engine/`
 
 ### FR-032: 节点资源分配与群组服关系模型
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: 实例角色化 + proxy↔backend 的 M:N 注册 + 可选群组软标签 + 端口/工作目录由系统分配
 - **验收标准**:
@@ -473,9 +474,10 @@
 - **关联 ADR**: ADR-007
 - **关联 API**: `GET/POST /networks`, `POST /proxies/:id/registrations`, `GET /nodes/:id/ports`
 - **依赖**: FR-031（注册/复制会写代理配置）
+- **Spec**: `docs/specs/network-resource-model/`
 
 ### FR-033: JDK 与运行时管理
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P0
 - **描述**: 平台按节点托管多 JDK，安装/登记多版本，实例绑定并在启动时注入环境变量
 - **验收标准**:
@@ -487,9 +489,10 @@
 - **关联 ADR**: ADR-008
 - **关联 API**: `GET/POST /nodes/:id/jdks`, `DELETE /nodes/:id/jdks/:jid`
 - **依赖**: 无（FR-034/035 依赖它）
+- **Spec**: `docs/specs/jdk-runtime/`
 
 ### FR-034: 搭建 Bukkit 子服
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 向导式创建 Paper/Spigot/Purpur 后端子服，自动下载核心、系统分配目录与端口、写好群组服配置、结构化启动
 - **验收标准**:
@@ -501,9 +504,10 @@
 - **关联 ADR**: ADR-007, ADR-008
 - **关联 API**: `POST /instances`（role=backend, 结构化启动）, `GET /cores`
 - **依赖**: FR-031, FR-032, FR-033
+- **Spec**: `docs/specs/provision-bukkit/`
 
 ### FR-035: 搭建代理（BungeeCord/Velocity）
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 向导式创建代理实例，生成转发配置与 secret，注册后端
 - **验收标准**:
@@ -515,9 +519,10 @@
 - **关联 ADR**: ADR-007, ADR-008
 - **关联 API**: `POST /instances`（role=proxy）, `POST /proxies/:id/registrations`
 - **依赖**: FR-031, FR-032, FR-033
+- **Spec**: `docs/specs/provision-proxy/`
 
 ### FR-036: 一键复制子服 + 配置修正 + 注册
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 复制一个后端子服为独立新实例，自动修正身份配置并按需注册进所选代理
 - **验收标准**:
@@ -530,6 +535,7 @@
 - **关联 ADR**: ADR-007
 - **关联 API**: `POST /instances/:id/clone`
 - **依赖**: FR-031, FR-032, FR-033, FR-034, FR-035
+- **Spec**: `docs/specs/clone-instance/`
 
 ---
 
