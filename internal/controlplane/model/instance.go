@@ -45,9 +45,12 @@ type Instance struct {
 	Type          InstanceType   `gorm:"type:varchar(64);not null" json:"type"`
 	ProcessType   ProcessType    `gorm:"type:varchar(32);not null" json:"processType"`
 	Status        InstanceStatus `gorm:"type:varchar(32);default:STOPPED" json:"status"`
-	StartCommand  string         `gorm:"type:varchar(1024);not null" json:"startCommand"`
-	WorkDir       string         `gorm:"type:varchar(512)" json:"workDir"`
-	EnvVars       string         `gorm:"type:text" json:"envVars"` // JSON
+	StartCommand      string         `gorm:"type:varchar(1024);not null" json:"startCommand"`
+	JDKID             uint           `gorm:"index" json:"jdkId"`
+	JavaMajorVersion  int            `gorm:"index" json:"javaMajorVersion"`
+	LaunchSpec        string         `gorm:"type:text" json:"launchSpec"`
+	WorkDir           string         `gorm:"type:varchar(512)" json:"workDir"`
+	EnvVars           string         `gorm:"type:text" json:"envVars"` // JSON
 	AutoStart     bool           `gorm:"default:false" json:"autoStart"`
 	AutoRestart   bool           `gorm:"default:true" json:"autoRestart"`
 	RCONPort      int            `gorm:"default:0" json:"rconPort"`
