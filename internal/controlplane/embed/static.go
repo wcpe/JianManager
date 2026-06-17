@@ -21,7 +21,18 @@ func RegisterStaticRoutes(r *gin.Engine) {
 
 	staticFS := http.FS(sub)
 
-	// SPA 路由：所有非 API 路径返回 index.html
+	// 预读 index.html。SPA 回退时直接返回其内容，避免 http.FileServer
+	// 对以 /index.html 结尾的请求触发 301 → "./" 的规范化重定向，
+	// 该重定向会和根路径形成死循环（ERR_TOO_MANY_REDIRECTS）。
+	indexHTML, err := fs.ReadFile(sub, "index.html")
+	if err != nil {
+		panic("读取嵌入 index.html 失败: " + err.Error())
+	}
+	serveIndex := func(c *gin.Context) {
+		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
+	}
+
+	// SPA 路由：所有非 API 路径返回静态文件或 index.html
 	r.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
 
@@ -31,12 +42,14 @@ func RegisterStaticRoutes(r *gin.Engine) {
 			return
 		}
 
-		// 尝试提供静态文件
+		// 根路径或首页直接返回 index.html 内容
 		cleanPath := strings.TrimPrefix(path, "/")
-		if cleanPath == "" {
-			cleanPath = "index.html"
+		if cleanPath == "" || cleanPath == "index.html" {
+			serveIndex(c)
+			return
 		}
 
+		// 尝试提供静态资源（assets/*、favicon 等真实文件）
 		file, err := sub.Open(cleanPath)
 		if err == nil {
 			file.Close()
@@ -44,7 +57,7 @@ func RegisterStaticRoutes(r *gin.Engine) {
 			return
 		}
 
-		// SPA fallback：返回 index.html
-		c.FileFromFS("index.html", staticFS)
+		// SPA fallback：返回 index.html 内容
+		serveIndex(c)
 	})
 }
