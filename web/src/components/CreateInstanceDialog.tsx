@@ -6,6 +6,7 @@ import api from '@/api/client'
 import { useNodes } from '@/api/nodes'
 import { useGroups } from '@/api/groups'
 import { useTemplates } from '@/api/templates'
+import { useNodeJDKs } from '@/api/jdks'
 
 interface CreateInstanceDialogProps {
   open: boolean
@@ -28,6 +29,9 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
   const [autoRestart, setAutoRestart] = useState(true)
   const [groupId, setGroupId] = useState('')
   const [templateId, setTemplateId] = useState('')
+  const [jdkId, setJdkId] = useState('')
+
+  const { data: jdks } = useNodeJDKs(nodeId ? Number(nodeId) : 0)
 
   const create = useMutation({
     mutationFn: (body: Record<string, unknown>) => api.post('/instances', body),
@@ -52,6 +56,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
     setAutoRestart(true)
     setGroupId('')
     setTemplateId('')
+    setJdkId('')
   }
 
   const handleSubmit = (e: FormEvent) => {
@@ -65,6 +70,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
       workDir,
       autoRestart,
       groupId: groupId ? Number(groupId) : undefined,
+      jdkId: jdkId ? Number(jdkId) : undefined,
     })
   }
 
@@ -176,6 +182,23 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
               required
             />
             <p className="mt-1 text-xs text-muted-foreground">实例的工作目录，文件管理将以此为根目录</p>
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">JDK（可选）</label>
+            <select
+              value={jdkId}
+              onChange={(e) => setJdkId(e.target.value)}
+              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
+            >
+              <option value="">不指定（使用系统 Java）</option>
+              {jdks?.map((j) => (
+                <option key={j.id} value={j.id}>
+                  {j.vendor} {j.majorVersion} ({j.version})
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-muted-foreground">绑定后启动实例时会自动注入 JAVA_HOME 与 PATH</p>
           </div>
 
           <div>
