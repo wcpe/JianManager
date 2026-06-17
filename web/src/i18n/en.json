@@ -294,7 +294,9 @@
     "botQuota": "Bot Quota",
     "storageQuota": "Storage Quota",
     "admin": "Admin",
-    "empty": "No groups"
+    "empty": "No groups",
+    "description": "Description",
+    "createFailed": "Failed to create group"
   },
   "alerts": {
     "title": "Alert Management",
