@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -58,6 +59,8 @@ type CreateInstanceRequest struct {
 
 // Create 创建实例。
 func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, error) {
+	req.StartCommand = sanitizeStartCommand(req.StartCommand)
+
 	instance := &model.Instance{
 		NodeID:       req.NodeID,
 		Name:         req.Name,
@@ -214,7 +217,8 @@ func (s *InstanceService) Update(id uint, name, startCommand *string, autoStart,
 		updates["name"] = *name
 	}
 	if startCommand != nil {
-		updates["start_command"] = *startCommand
+		sanitized := sanitizeStartCommand(*startCommand)
+		updates["start_command"] = sanitized
 	}
 	if autoStart != nil {
 		updates["auto_start"] = *autoStart
@@ -422,6 +426,26 @@ func (s *InstanceService) updateStatusAsync(id uint, status model.InstanceStatus
 	if err := s.UpdateStatus(id, status); err != nil {
 		slog.Error("更新实例状态失败", "instanceId", id, "status", status, "error", err)
 	}
+}
+
+// sanitizeStartCommand 去除启动命令外层多余的引号包裹。
+// 用户从其他来源复制命令时可能带入单引号或双引号包裹，导致 cmd.exe 执行失败。
+// 仅当整个命令被同种引号完整包裹时才去除，避免误删路径中的引号。
+func sanitizeStartCommand(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	if len(cmd) < 2 {
+		return cmd
+	}
+	// 仅当整个字符串被一对引号包裹时才去除
+	first, last := cmd[0], cmd[len(cmd)-1]
+	if (first == '"' && last == '"') || (first == '\'' && last == '\'') {
+		inner := strings.TrimSpace(cmd[1 : len(cmd)-1])
+		// 内容不包含同类引号 → 说明是多余的外层包裹
+		if !strings.ContainsRune(inner, rune(first)) {
+			return inner
+		}
+	}
+	return cmd
 }
 
 // transition 执行状态转换。

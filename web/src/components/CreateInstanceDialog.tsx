@@ -165,6 +165,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
               placeholder="java -Xmx2G -jar paper.jar nogui"
               required
             />
+            <p className="mt-1 text-xs text-muted-foreground">直接填写命令，不要用引号包裹整个命令</p>
           </div>
 
           <div>
