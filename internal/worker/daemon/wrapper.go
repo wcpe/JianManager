@@ -380,12 +380,11 @@ func (o *wrapperOutput) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// buildJavaCmd 构造 Java 进程命令。跨平台：Windows 用 cmd.exe /s /c，其他用 sh -c。
+// buildJavaCmd 构造 Java 进程命令。跨平台：Windows 用 cmd.exe /c，其他用 sh -c。
 func buildJavaCmd(cfg WrapperConfig) *exec.Cmd {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		// /s /c 让 cmd.exe 先剥掉外层引号再解析，避免路径引号被当作可执行文件名的一部分
-		cmd = exec.Command("cmd.exe", "/s", "/c", `"`+cfg.StartCommand+`"`)
+		cmd = exec.Command("cmd.exe", "/c", cfg.StartCommand)
 	} else {
 		cmd = exec.Command("sh", "-c", cfg.StartCommand)
 	}

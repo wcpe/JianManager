@@ -45,8 +45,8 @@ func (d *directStrategy) Start(ctx context.Context) error {
 	// 跨平台 shell 命令执行
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
-		// /s /c 让 cmd.exe 先剥掉外层引号再解析，避免路径引号被当作可执行文件名的一部分
-		cmd = exec.Command("cmd.exe", "/s", "/c", `"`+d.spec.StartCommand+`"`)
+		// 不加 chcp — instanceWriter 会将 GBK 输出转换为 UTF-8
+		cmd = exec.Command("cmd.exe", "/c", d.spec.StartCommand)
 	} else {
 		cmd = exec.Command("sh", "-c", d.spec.StartCommand)
 	}
