@@ -10,6 +10,24 @@
 
 ---
 
+## 0.2.0（2026-06-17）
+
+运行时集成补全 + 嵌入前端可用性修复 + i18n 完整化版本。新增实例状态实时推送与模板默认工作目录；修复了单二进制部署下前端无法加载的重定向死循环、前端构建失败与 i18n 文案缺漏。
+
+### Added
+- **实例状态实时推送**（FR-018）：StreamInstanceEvents gRPC 流经 Control Plane SSE 代理推送到前端，替代轮询
+- **模板默认工作目录**（FR-014）：模板新增 `defaultWorkDir` 字段，从模板创建实例时自动填充工作目录与启动命令
+- **InstanceDetailPage 全面 i18n**：实例详情页全部文案接入 i18next
+- **Users/Groups/Templates 页面 i18n 化**（FR-016）：三个页面此前完全硬编码中文，接入 i18next 实现中英双语
+
+### Fixed
+- **嵌入前端重定向死循环**：单二进制部署时 `c.FileFromFS("index.html")` 触发 `http.FileServer` 的 `/index.html → ./` 规范化 301 跳转，与根路径形成死循环（ERR_TOO_MANY_REDIRECTS），UI 完全无法加载；改为预读 index.html 并以 `c.Data` 直接返回
+- **前端 TypeScript 构建失败**：修复 `events.ts`/`AlertsPage`/`BackupsPage`/`UsersPage` 共 8 处类型错误，恢复 `npm run build`
+- **i18n 文案缺失**：补齐 `groups` 与 `backups` 命名空间在 en/zh 的缺失键，消除英文模式下的中文泄漏
+- **E2E 测试孤儿进程**（FR-028）：`go run` 派生的二进制子进程未随测试结束回收，导致 `go test` 报 `Test I/O incomplete` 退出非零；改用进程树终止（Windows `taskkill /T`）+ `WaitDelay`
+
+---
+
 ## 0.1.1（2026-06-17）
 
 Bug 修复 + 前端 UX 标准化版本。修复终端连接闪烁、启动命令引号、文件浏览器 422 等实际使用问题。
