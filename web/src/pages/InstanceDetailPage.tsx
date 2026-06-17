@@ -141,16 +141,26 @@ function ConsoleTab({ instanceId, status }: { instanceId: number; status: string
       <div className="grid grid-cols-3 gap-4">
         <div className="border rounded-lg p-3">
           <p className="text-xs text-muted-foreground">TPS</p>
-          <p className="text-xl font-bold mt-1">{status === 'RUNNING' && !isLoading ? (metrics?.tps ?? '--') : '--'}</p>
+          <p className="text-xl font-bold mt-1">
+            {status === 'RUNNING' && !isLoading
+              ? (metrics && metrics.tps >= 0 ? metrics.tps : 'N/A')
+              : '--'}
+          </p>
         </div>
         <div className="border rounded-lg p-3">
           <p className="text-xs text-muted-foreground">在线玩家</p>
-          <p className="text-xl font-bold mt-1">{status === 'RUNNING' && !isLoading ? (metrics?.onlinePlayers ?? '--') : '--'}</p>
+          <p className="text-xl font-bold mt-1">
+            {status === 'RUNNING' && !isLoading
+              ? (metrics && metrics.onlinePlayers >= 0 ? metrics.onlinePlayers : 'N/A')
+              : '--'}
+          </p>
         </div>
         <div className="border rounded-lg p-3">
           <p className="text-xs text-muted-foreground">内存</p>
           <p className="text-xl font-bold mt-1">
-            {status === 'RUNNING' && !isLoading && metrics?.memoryMb ? `${metrics.memoryMb} MB` : '--'}
+            {status === 'RUNNING' && !isLoading
+              ? (metrics && metrics.memoryMb > 0 ? `${metrics.memoryMb} MB` : 'N/A')
+              : '--'}
           </p>
         </div>
       </div>

@@ -9,6 +9,15 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
+/** 将字节数格式化为人类可读的大小（B/KB/MB/GB）。 */
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+  const value = bytes / Math.pow(1024, i)
+  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+}
+
 export default function NodesPage() {
   const { t } = useTranslation()
   const { data: nodes, isLoading } = useNodes({ refetchInterval: 30_000 })
@@ -38,6 +47,7 @@ export default function NodesPage() {
                 <TableHead>{t('nodes.cpu')}</TableHead>
                 <TableHead>{t('nodes.memory')}</TableHead>
                 <TableHead>{t('nodes.disk')}</TableHead>
+                <TableHead>{t('nodes.network')}</TableHead>
                 <TableHead>{t('nodes.system')}</TableHead>
               </TableRow>
             </TableHeader>
@@ -54,13 +64,18 @@ export default function NodesPage() {
                     <TableCell>{node.cpuUsage ? `${(node.cpuUsage * 100).toFixed(0)}%` : '--'}</TableCell>
                     <TableCell>{node.memoryUsage ? `${(node.memoryUsage * 100).toFixed(0)}%` : '--'}</TableCell>
                     <TableCell>{node.diskUsage ? `${(node.diskUsage * 100).toFixed(0)}%` : '--'}</TableCell>
+                    <TableCell className="text-muted-foreground text-xs">
+                      {node.networkBytesSent || node.networkBytesRecv
+                        ? `↑${formatBytes(node.networkBytesSent)} ↓${formatBytes(node.networkBytesRecv)}`
+                        : '--'}
+                    </TableCell>
                     <TableCell className="text-muted-foreground">{node.os} {node.arch}</TableCell>
                   </TableRow>
                 )
               })}
               {(!nodes || nodes.length === 0) && (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center text-muted-foreground">
                     {t('nodes.empty')}
                   </TableCell>
                 </TableRow>

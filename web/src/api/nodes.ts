@@ -17,6 +17,8 @@ export interface NodeInfo {
   cpuUsage: number
   memoryUsage: number
   diskUsage: number
+  networkBytesSent: number
+  networkBytesRecv: number
   lastHeartbeat: string | null
   createdAt: string
 }
