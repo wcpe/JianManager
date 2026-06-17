@@ -61,6 +61,7 @@ Worker Node (Go) × 20~100
 │  auth, user, group, node, instance, terminal,        │
 │  file, bot, schedule, backup, monitor, template,     │
 │  audit                                               │
+│  群组服(V2): network · registration · config · jdk · clone │
 ├─ 基础设施层 ────────────────────────────────────────┤
 │  database, config, logger, event, embed              │
 └─────────────────────────────────────────────────────┘
@@ -74,9 +75,9 @@ internal/controlplane/
   config/config.go
   database/database.go
   middleware/auth.go
-  model/{user,group,node,instance,bot,alert,schedule,backup,template,audit}.go
-  router/{router,auth,user,group,node,instance,terminal,bot,file,schedule,backup,alert,template,audit}.go
-  service/{auth,user,group,node,instance,terminal,bot,schedule,backup,alert,template,audit,file,authz}.go
+  model/{user,group,node,instance,bot,alert,schedule,backup,template,audit,network,registration,jdk,config_version}.go
+  router/{router,auth,user,group,node,instance,terminal,bot,file,schedule,backup,alert,template,audit,network,config,jdk}.go
+  service/{auth,user,group,node,instance,terminal,bot,schedule,backup,alert,template,audit,file,authz,network,registration,config,jdk,clone}.go
   grpc/{pool,client}.go          # TODO: gRPC 客户端池
   event/bus.go                   # TODO: 事件总线
   ws/gateway.go                  # TODO: WebSocket 网关
@@ -124,6 +125,10 @@ internal/controlplane/
 │  bot manager, worker_pool, ipc, state, prewarm       │
 ├─ 指标采集 ──────────────────────────────────────────┤
 │  collector, mc_ping, rcon_client                     │
+├─ 群组服层 (V2) ─────────────────────────────────────┤
+│  config_engine(round-trip+schema+校验),              │
+│  resource_alloc(端口池+工作目录), jdk_manager,        │
+│  launch_spec(结构化启动组装)                          │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -142,6 +147,10 @@ internal/worker/
   ws/{server,auth,handler_terminal,handler_log}.go
   bot/{manager,worker_pool,ipc,state,prewarm}.go
   metrics/{collector,mc_ping,rcon_client}.go
+  config/{parser,schema,validator,version}.go    # V2 配置引擎（保注释 round-trip）
+  resource/{port_pool,workdir_alloc}.go          # V2 端口/工作目录系统分配
+  jdk/{manager,registry,download}.go             # V2 JDK 托管
+  provision/{core_download,launch_spec,clone}.go # V2 搭建/结构化启动/复制
 ```
 
 ## 6. 通信协议
@@ -157,6 +166,9 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 终端：IssueTerminalToken
 - Bot：CreateBot, DeleteBot, ListBots, StreamBotEvents (server stream), SendBotCommand
 - 指标：GetNodeMetrics, GetInstanceMetrics
+- 配置 (V2)：ListConfigFiles, ReadConfig, WriteConfig, ListConfigVersions, RollbackConfig
+- 运行时 (V2)：ListJDKs, InstallJDK, RemoveJDK, DownloadCore
+- 搭建/复制 (V2)：ProvisionServer, ProvisionProxy, CloneInstance（端口与工作目录由 Worker 分配并回报）
 
 ### 6.2 WebSocket（浏览器 ↔ Worker Node）
 
@@ -232,6 +244,10 @@ Group ──1:N──▶ GroupQuota
 Group ──M:N──▶ Instance (GroupInstance, UNIQUE instance_id)
 Node ──1:N──▶ Instance
 Instance ──1:N──▶ Backup / Schedule / Bot
+Instance(proxy) ──M:N──▶ Instance(backend)   # V2 ServerRegistration: alias/priority/forced_host
+Network ──M:N──▶ Instance                    # V2 NetworkMember（非独占软标签）
+Node ──1:N──▶ NodeJDK                         # V2
+Instance ──1:N──▶ InstanceConfigVersion       # V2
 AuditLog ──N:1──▶ User
 AlertRule ──1:N──▶ AlertEvent
 ```
@@ -245,7 +261,7 @@ AlertRule ──1:N──▶ AlertEvent
 | group_members | group_id, user_id, role(0=member/1=admin) |
 | group_quotas | group_id(UNIQUE), max_instances, max_bots, max_storage_mb |
 | nodes | uuid, name, host, grpc_port, ws_port, secret, status(0/1/2), os, arch, cpu_cores, memory_mb, disk_total_mb, last_heartbeat |
-| instances | uuid, node_id(FK), name, type, process_type, status, start_command, work_dir, env_vars(JSON), auto_start, auto_restart, docker_*, rcon_*, mc_*, tags(JSON) |
+| instances | uuid, node_id(FK), name, type, role(proxy/backend/universal, V2), process_type, status, start_command, work_dir(系统分配), env_vars(JSON), auto_start, auto_restart, jdk_id(FK, V2), launch_spec(JSON: jvm_args/core_jar/args, V2), docker_*, rcon_*, mc_*, tags(JSON) |
 | group_instances | group_id, instance_id(UNIQUE) |
 | bots | uuid, instance_id(FK), name, status, config(JSON), behavior, worker_id |
 | backups | uuid, instance_id(FK), name, file_path, file_size_mb, type(0/1), status(0/1/2) |
@@ -253,8 +269,13 @@ AlertRule ──1:N──▶ AlertEvent
 | schedule_execution_logs | schedule_id(FK), action, status, error, started_at, finished_at |
 | alert_rules | uuid, name, target_type, target_id, metric, operator, threshold, duration_sec, notify_type, notify_target, enabled |
 | alert_events | rule_id, target_id, value, message, resolved, fired_at |
-| templates | uuid, name, type, description, start_command, download_url, config_files(JSON) |
+| templates | uuid, name, type, description, start_command, default_work_dir, download_url, config_files(JSON) |
 | audit_logs | user_id, action, target_type, target_id, detail(JSON), ip |
+| networks (V2) | uuid, name, description（非独占软标签） |
+| network_members (V2) | network_id(FK), instance_id(FK)（M:N，一个子服可属多群组） |
+| server_registrations (V2) | proxy_instance_id(FK), backend_instance_id(FK), alias, priority, forced_host, restricted, enabled；UNIQUE(proxy,backend) |
+| node_jdks (V2) | node_id(FK), vendor, major_version, version, arch, path, managed(下载/登记) |
+| instance_config_versions (V2) | instance_id(FK), file_path, content, author, created_at |
 
 ### 数据库切换
 
@@ -618,3 +639,30 @@ STOPPED → STARTING → RUNNING → STOPPING → STOPPED
 **开发**: `go run ./cmd/control-plane --dev` + `cd web && npm run dev`
 **生产**: 多节点部署，Control Plane 一个 + Worker Node 多个
 **Docker**: `Dockerfile.control-plane` + `Dockerfile.worker` + `docker-compose.yml`
+
+## 13. MC 群组服模型（V2）
+
+> 对应 PRD FR-031~036、ADR-007/008。代理 + 多 Bukkit 子服的开服与运维。开发中。
+
+### 13.1 角色与关系
+- 实例 `role`：`proxy`（BungeeCord/Velocity）、`backend`（Bukkit/Paper 子服）、`universal`（通用进程）。实例是独立原子单元。
+- **proxy ↔ backend 为 M:N**（`server_registrations`）：一个 backend 可注册进多个 proxy（共享大厅/小游戏）；每条注册带「代理内本地属性」alias/priority/forced_host/restricted。
+- **群组（Network）为非独占软标签**（`network_members` M:N）：仅供分组/筛选/批量操作，子服可属多群组；真实路由只由 `server_registrations` 驱动。
+
+### 13.2 资源所有权（系统分配）
+- **工作目录**：Worker 在 `servers_dir` 下建 `servers/<name-slug>-<shortid>`，用户不可输入，路径只读展示（取代 BUG-004 必填 UI）。
+- **端口**：端口池为新实例分配同节点唯一的 server-port/rcon/query，代理监听端口同理；分配由 Worker 实施、CP 登记。
+- **JDK/运行时**：按节点维护 `node_jdks` 注册表，支持安装多版本（默认 Adoptium）；实例绑定 JDK，启动注入 JAVA_HOME/PATH。
+
+### 13.3 配置引擎
+- 多格式 **保留注释** 的 round-trip 读写：properties / yaml / toml / json / txt。
+- 内置 MC 配置 schema（server.properties、spigot.yml、paper-global.yml、bukkit.yml、velocity.toml、bungeecord config.yml）。
+- 跨文件/跨实例/跨网络一致性校验：端口唯一、`online-mode=false` 与代理转发配套、`forwarding-secret` 在共享 backend 的所有 proxy 间一致。
+- 每次保存生成 `instance_config_versions`，可 diff / 回滚。
+
+### 13.4 结构化启动（取代自由文本命令）
+- MC 实例由 `jdk + jvm_args + core_jar + args` 派生启动命令，Worker 组装 `cd <workDir> && <jdk>/bin/java <args> -jar core.jar nogui`（根治 BUG-005 引号问题）；universal 实例仍可自由命令。
+
+### 13.5 一键复制子服
+- 复制产出独立新实例（系统分配新目录/端口）；拷贝 workDir 时排除 session.lock / logs / 缓存 / usercache。
+- 配置引擎修正身份字段（端口 / 名称 / motd，可选 level-name），保留 forwarding secret；按勾选注册进 0/1/多个代理（写入各代理 servers + priorities）。
