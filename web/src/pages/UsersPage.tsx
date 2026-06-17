@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useUsers, useDeleteUser } from '@/api/users'
+import ConfirmDialog from '@/components/ConfirmDialog'
 import CreateUserDialog from '@/components/CreateUserDialog'
 import { Button } from '@/components/ui/button'
 import {
@@ -19,6 +20,7 @@ const roleLabel: Record<number, string> = {
 
 export default function UsersPage() {
   const [showCreate, setShowCreate] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
   const { data: users, isLoading } = useUsers()
   const deleteUser = useDeleteUser()
 
@@ -60,7 +62,7 @@ export default function UsersPage() {
                     <Button
                       variant="ghost"
                       size="xs"
-                      onClick={() => { if (confirm('确定删除？')) deleteUser.mutate(u.id) }}
+                      onClick={() => setDeleteTarget(u.id)}
                       className="text-red-600 hover:text-red-700"
                     >
                       删除
@@ -77,6 +79,16 @@ export default function UsersPage() {
           </Table>
         </div>
       )}
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title="确认删除用户"
+        description="此操作不可撤销。"
+        confirmLabel="删除"
+        variant="destructive"
+        onConfirm={() => { if (deleteTarget) deleteUser.mutate(deleteTarget); setDeleteTarget(null) }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   )
 }

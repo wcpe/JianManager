@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useBots, useCreateBot, useDeleteBot, useSetBotBehavior, type BotInfo } from '@/api/bots'
 import { useInstances } from '@/api/instances'
+import ConfirmDialog from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -31,6 +32,7 @@ import {
 export default function BotsPage() {
   const { t } = useTranslation()
   const [showCreate, setShowCreate] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
   const { data: bots, isLoading } = useBots()
   const del = useDeleteBot()
 
@@ -71,9 +73,7 @@ export default function BotsPage() {
                   key={bot.id}
                   bot={bot}
                   statusConfig={statusConfig}
-                  onDelete={(id) => {
-                    if (confirm(t('bots.deleteConfirm'))) del.mutate(id)
-                  }}
+                  onDelete={(id) => setDeleteTarget(id)}
                 />
               ))}
               {(!bots || bots.length === 0) && (
@@ -87,6 +87,16 @@ export default function BotsPage() {
           </Table>
         </div>
       )}
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        title={t('bots.deleteConfirm')}
+        description="此操作不可撤销。"
+        confirmLabel={t('common.delete')}
+        variant="destructive"
+        onConfirm={() => { if (deleteTarget) del.mutate(deleteTarget); setDeleteTarget(null) }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   )
 }

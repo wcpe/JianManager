@@ -2,10 +2,12 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useBackups, useCreateBackup, useDeleteBackup, useRestoreBackup, type BackupInfo } from '@/api/backups'
 import { useInstances } from '@/api/instances'
+import ConfirmDialog from '@/components/ConfirmDialog'
 
 export default function BackupsPage() {
   const { t } = useTranslation()
   const [selectedInstance, setSelectedInstance] = useState<number | undefined>()
+  const [restoreTarget, setRestoreTarget] = useState<number | null>(null)
   const { data: instances } = useInstances()
   const { data: backups, isLoading } = useBackups(selectedInstance)
   const createBackup = useCreateBackup()
@@ -18,8 +20,8 @@ export default function BackupsPage() {
   }
 
   const handleRestore = async (backupId: number) => {
-    if (!confirm(t('backups.confirmRestore', '确认恢复此备份？当前文件将被覆盖。'))) return
     await restoreBackup.mutateAsync(backupId)
+    setRestoreTarget(null)
   }
 
   return (
@@ -59,7 +61,7 @@ export default function BackupsPage() {
                   <td className="p-3">{b.status === 0 ? t('backups.ready', '就绪') : b.status === 1 ? t('backups.creating', '创建中') : t('backups.failed', '失败')}</td>
                   <td className="p-3">{new Date(b.createdAt).toLocaleString()}</td>
                   <td className="p-3 flex gap-2">
-                    <button className="text-primary hover:underline disabled:opacity-50" onClick={() => handleRestore(b.id)} disabled={b.status !== 0 || restoreBackup.isPending}>{t('backups.restore', '恢复')}</button>
+                    <button className="text-primary hover:underline disabled:opacity-50" onClick={() => setRestoreTarget(b.id)} disabled={b.status !== 0 || restoreBackup.isPending}>{t('backups.restore', '恢复')}</button>
                     <button className="text-destructive hover:underline" onClick={() => deleteBackup.mutate(b.id)}>{t('common.delete', '删除')}</button>
                   </td>
                 </tr>
@@ -69,6 +71,15 @@ export default function BackupsPage() {
           </table>
         </div>
       )}
+
+      <ConfirmDialog
+        open={restoreTarget !== null}
+        title={t('backups.confirmRestore', '确认恢复此备份？')}
+        description="当前文件将被覆盖，此操作不可撤销。"
+        confirmLabel={t('backups.restore', '恢复')}
+        onConfirm={() => { if (restoreTarget) handleRestore(restoreTarget) }}
+        onCancel={() => setRestoreTarget(null)}
+      />
     </div>
   )
 }
