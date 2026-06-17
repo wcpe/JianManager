@@ -24,13 +24,19 @@ const nodeSecretHeader = "node-secret"
 // 处理来自 Worker Node 的 Register 和 Heartbeat 请求。
 type ControlPlaneHandler struct {
 	workerpb.WorkerServiceServer
-	db   *gorm.DB
-	pool *ClientPool
+	db       *gorm.DB
+	pool     *ClientPool
+	onWorkerConnect func(nodeUUID string) // Worker 注册成功后回调
 }
 
 // NewControlPlaneHandler 创建处理器。
 func NewControlPlaneHandler(db *gorm.DB, pool *ClientPool) *ControlPlaneHandler {
 	return &ControlPlaneHandler{db: db, pool: pool}
+}
+
+// SetOnWorkerConnect 设置 Worker 注册成功后的回调。
+func (h *ControlPlaneHandler) SetOnWorkerConnect(fn func(nodeUUID string)) {
+	h.onWorkerConnect = fn
 }
 
 // Register 处理 Worker Node 注册。
@@ -93,6 +99,8 @@ func (h *ControlPlaneHandler) Register(ctx context.Context, req *workerpb.Regist
 		addr := fmt.Sprintf("%s:%d", req.Host, req.GrpcPort)
 		if err := h.pool.Connect(node.UUID, addr); err != nil {
 			slog.Warn("连接 Worker Node 失败，稍后重试", "nodeUUID", node.UUID, "addr", addr, "error", err)
+		} else if h.onWorkerConnect != nil {
+			h.onWorkerConnect(node.UUID)
 		}
 	}
 

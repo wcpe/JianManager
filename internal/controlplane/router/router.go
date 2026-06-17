@@ -25,6 +25,7 @@ type Services struct {
 	Template *service.TemplateService
 	Audit    *service.AuditService
 	Authz    *service.AuthzService
+	Event    *service.EventService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -68,6 +69,9 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		botHandler := NewBotHandler(svcs.Bot, svcs.Authz)
 		botHandler.RegisterRoutes(protected)
+
+		eventHandler := NewEventHandler(svcs.Event)
+		eventHandler.RegisterRoutes(protected)
 
 		// 组相关：列表/创建由 group:read/group:manage 节点控制，
 		// 组级资源（:id）由 GroupHandler 内部按授权上下文收敛

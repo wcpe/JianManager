@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 import { changeLanguage } from '@/i18n'
+import { useInstanceEvents } from '@/api/events'
 
 const OverviewPage = lazy(() => import('./OverviewPage'))
 const NodesPage = lazy(() => import('./NodesPage'))
@@ -44,6 +45,9 @@ export default function DashboardPage() {
   const { t, i18n } = useTranslation()
   const logout = useAuthStore((s) => s.logout)
   const { theme, setTheme } = useThemeStore()
+
+  // 订阅实例状态变更 SSE，收到事件后自动失效缓存
+  useInstanceEvents()
 
   const currentLang = i18n.language as 'zh' | 'en'
 

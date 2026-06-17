@@ -54,11 +54,15 @@ func main() {
 	templateSvc := service.NewTemplateService(db)
 	auditSvc := service.NewAuditService(db)
 	authzSvc := service.NewAuthzService(db)
+	eventSvc := service.NewEventService(pool)
 
 	// 告警评估器：每 60s 检测节点指标，触发 Webhook 通知
 	alertEvaluator := service.NewAlertEvaluator(db)
 	alertEvaluator.Start()
 	defer alertEvaluator.Stop()
+
+	// 实例事件服务：订阅 Worker 状态变更流并推送给前端 SSE
+	defer eventSvc.Stop()
 
 	// 定时任务调度器：每分钟检查到期任务并执行
 	scheduleExecutor := service.NewScheduleExecutorImpl(db, instanceSvc, backupSvc, pool)
@@ -81,6 +85,7 @@ func main() {
 		Template: templateSvc,
 		Audit:    auditSvc,
 		Authz:    authzSvc,
+		Event:    eventSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）
@@ -92,6 +97,9 @@ func main() {
 
 	// 启动 gRPC 服务器（用于 Worker Node 注册和心跳）
 	grpcHandler := cpgrpc.NewControlPlaneHandler(db, pool)
+	grpcHandler.SetOnWorkerConnect(func(nodeUUID string) {
+		eventSvc.StartWorkerStream(nodeUUID)
+	})
 	grpcServer := grpc.NewServer()
 	workerpb.RegisterWorkerServiceServer(grpcServer, grpcHandler)
 
