@@ -8,7 +8,7 @@ import (
 
 // createDirect 是测试辅助：用 direct 方式创建实例（旧 Create 默认行为）。
 func createDirect(m *Manager, uuid, name, cmd, dir string) error {
-	return m.Create(uuid, name, cmd, dir, nil, false, ProcessTypeDirect)
+	return m.Create(uuid, name, cmd, dir, nil, false, ProcessTypeDirect, "", "")
 }
 
 func TestManager_Create(t *testing.T) {
@@ -128,7 +128,7 @@ func TestNewStrategy_Routing(t *testing.T) {
 // TestManager_DockerStartFails docker 策略启动应返回未实现错误。
 func TestManager_DockerStartFails(t *testing.T) {
 	m := NewManager(t.TempDir())
-	err := m.Create("inst-d", "Docker", "echo hi", ".", nil, false, ProcessTypeDocker)
+	err := m.Create("inst-d", "Docker", "echo hi", ".", nil, false, ProcessTypeDocker, "", "")
 	assert.NoError(t, err)
 
 	err = m.Start("inst-d")
@@ -138,3 +138,4 @@ func TestManager_DockerStartFails(t *testing.T) {
 	st, _ := m.GetState("inst-d")
 	assert.Equal(t, StateCrashed, st)
 }
+
