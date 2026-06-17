@@ -138,20 +138,15 @@ func TestE2E_InstanceFullLifecycle(t *testing.T) {
 	projectRoot := findProjectRoot(t)
 
 	// 1. 启动 Control Plane
-	// 使用项目内的 e2e-data 目录作为临时数据目录，避免 Windows 长路径问题
-	dbDir := filepath.Join(projectRoot, "e2e-data")
-	if err := os.MkdirAll(dbDir, 0o755); err != nil {
-		t.Fatalf("创建数据目录失败: %v", err)
-	}
-	dbDSN := filepath.Join(dbDir, "e2e.db")
-	t.Cleanup(func() { os.RemoveAll(dbDir) })
+	// 使用内存数据库避免文件残留
+	dbDSN := "file:e2e-" + fmt.Sprintf("%d", time.Now().UnixNano()) + "?mode=memory&cache=shared"
 
 	cpCmd := exec.Command("go", "run", "./cmd/control-plane")
 	cpCmd.Dir = projectRoot
 	cpCmd.Env = append(os.Environ(),
 		"JIANMANAGER_SERVER_PORT=18080",
-		"JIANMANAGER_DB_DRIVER=sqlite",
-		"JIANMANAGER_DB_DSN="+dbDSN,
+		"JIANMANAGER_DATABASE_DRIVER=sqlite",
+		"JIANMANAGER_DATABASE_DSN="+dbDSN,
 		"JIANMANAGER_GRPC_PORT="+cpGRPC,
 		"JIANMANAGER_LOG_LEVEL=info",
 		"JIANMANAGER_LOG_FORMAT=text",
@@ -160,7 +155,7 @@ func TestE2E_InstanceFullLifecycle(t *testing.T) {
 	cpCmd.Stderr = os.Stderr
 	require.NoError(t, cpCmd.Start(), "启动 Control Plane 失败")
 	t.Cleanup(func() {
-		cpCmd.Process.Signal(os.Interrupt)
+		cpCmd.Process.Kill()
 		cpCmd.Wait()
 	})
 
@@ -182,16 +177,28 @@ func TestE2E_InstanceFullLifecycle(t *testing.T) {
 	workerCmd.Stderr = os.Stderr
 	require.NoError(t, workerCmd.Start(), "启动 Worker 失败")
 	t.Cleanup(func() {
-		workerCmd.Process.Signal(os.Interrupt)
+		workerCmd.Process.Kill()
 		workerCmd.Wait()
 	})
 
-	// 等待 Worker 注册到 CP（轮询节点列表）
+	// 3. Setup 创建管理员（先于节点查询，因为 /nodes 需要认证）
 	client := &e2eClient{
 		baseURL: cpAddr,
 		client:  &http.Client{Timeout: 10 * time.Second},
 	}
 
+	resp, data, err := client.request("POST", "/api/v1/setup", map[string]string{
+		"username": "admin",
+		"password": "e2e-password-123",
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, resp.StatusCode, "setup 失败: %s", string(data))
+
+	tokenResp := parseJSON(t, data)
+	client.token = tokenResp["accessToken"].(string)
+	require.NotEmpty(t, client.token, "登录后 accessToken 为空")
+
+	// 等待 Worker 注册到 CP（轮询节点列表，需要认证）
 	var nodeRegistered bool
 	for i := 0; i < 30; i++ {
 		_, data, err := client.request("GET", "/api/v1/nodes", nil)
@@ -207,18 +214,6 @@ func TestE2E_InstanceFullLifecycle(t *testing.T) {
 	}
 	require.True(t, nodeRegistered, "Worker 未在 30s 内注册到 Control Plane")
 
-	// 3. Setup 创建管理员
-	resp, data, err := client.request("POST", "/api/v1/setup", map[string]string{
-		"username": "admin",
-		"password": "e2e-password-123",
-	})
-	require.NoError(t, err)
-	require.Equal(t, http.StatusCreated, resp.StatusCode, "setup 失败: %s", string(data))
-
-	tokenResp := parseJSON(t, data)
-	client.token = tokenResp["accessToken"].(string)
-	require.NotEmpty(t, client.token, "登录后 accessToken 为空")
-
 	// 4. 获取节点 ID
 	_, data, err = client.request("GET", "/api/v1/nodes", nil)
 	require.NoError(t, err)
@@ -232,7 +227,7 @@ func TestE2E_InstanceFullLifecycle(t *testing.T) {
 		"name":         "e2e-test-instance",
 		"type":         "minecraft_java",
 		"processType":  "direct",
-		"startCommand": "echo hello",
+		"startCommand": "ping -n 10 127.0.0.1",
 	})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode, "创建实例失败: %s", string(data))
