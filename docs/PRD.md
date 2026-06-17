@@ -19,7 +19,7 @@
 ## P0 — 核心功能
 
 ### FR-017: 首次启动引导流程
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: Control Plane 首次启动时，Web UI 引导管理员设置用户名和密码，替代配置文件/环境变量 bootstrap 方式
 - **验收标准**:
@@ -45,7 +45,7 @@
 - **关联 API**: `POST /auth/login`, `POST /auth/register`, `POST /auth/refresh`
 
 ### FR-002: 用户与权限管理
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 平台管理员/组管理员/组成员三级角色，基于权限节点的 RBAC
 - **验收标准**:
@@ -56,7 +56,7 @@
 - **关联 API**: `GET/POST /users`, `GET/POST /groups`, `POST /groups/:id/members`
 
 ### FR-003: 用户组与配额
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 用户组管理，实例分配给组，配额限制（最大实例数、Bot 数、存储空间）
 - **验收标准**:
@@ -78,7 +78,7 @@
 - **关联 API**: `GET /nodes`, `GET /nodes/:id`
 
 ### FR-005: 实例生命周期管理
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 实例创建/启动/停止/重启/销毁，状态机驱动，支持四种启动方式
 - **验收标准**:
@@ -90,7 +90,7 @@
 - **关联 API**: `POST /instances`, `POST /instances/:id/start`, `POST /instances/:id/stop`
 
 ### FR-006: 守护进程（Daemon Wrapper）
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 平台进程重启不杀游戏服，通过 Daemon Wrapper 子进程实现进程隔离
 - **备注**: 按 ADR-003 真实现：IProcessCommand 策略路由（direct/daemon/docker）、wrapper 子进程进程组隔离、Unix Socket/Named Pipe + 二进制帧协议、PID 文件恢复、daemon 模式优雅退出不杀游戏服。单元/集成测试覆盖帧协议、PID 恢复、StopAll 优雅断开；「Worker 退出后游戏服存活」真机验证待主控执行
@@ -102,7 +102,7 @@
 - **关联 ADR**: ADR-003
 
 ### FR-007: 终端实时
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: xterm.js 浏览器终端，直连 Worker Node WebSocket，支持多人同时查看
 - **验收标准**:
@@ -114,7 +114,7 @@
 - **关联 API**: `GET /instances/:id/terminal-token`
 
 ### FR-008: 文件管理
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 实例工作目录文件浏览/编辑/上传下载
 - **验收标准**:
@@ -129,7 +129,7 @@
 ## P1 — 重要功能
 
 ### FR-009: Bot 平台
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: Mineflayer Bot 管理，行为引擎、寻路、脚本执行、压测、预热池
 - **验收标准**:
@@ -143,7 +143,7 @@
 - **关联 API**: `POST /bots`, `POST /bots/:id/behavior`, `GET /bots/:id/state`
 
 ### FR-010: 监控指标
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: 节点和实例指标采集，Recharts 仪表盘展示
 - **验收标准**:
@@ -153,7 +153,7 @@
 - **关联 API**: `GET /nodes/:id/metrics`, `GET /instances/:id/metrics`
 
 ### FR-011: 告警规则
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: 阈值触发告警，Webhook 通知
 - **验收标准**:
@@ -163,7 +163,7 @@
 - **关联 API**: `POST /alerts/rules`, `GET /alerts/events`
 
 ### FR-012: 定时任务
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: Cron 表达式调度，支持实例启停/命令执行/备份
 - **验收标准**:
@@ -174,7 +174,7 @@
 - **关联 API**: `POST /schedules`, `GET /schedules`, `GET /schedules/:id/logs`
 
 ### FR-013: 备份恢复
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: 手动/自动备份，压缩存储，一键恢复
 - **验收标准**:
@@ -189,7 +189,7 @@
 ## P2 — 增强功能
 
 ### FR-014: 服务端模板
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P2
 - **描述**: 预设 MC 服务端模板（Paper/Spigot/Forge），一键创建实例
 - **验收标准**:
@@ -197,7 +197,7 @@
   - [ ] 从模板创建实例（自动填充启动命令和配置）
 
 ### FR-015: 审计日志
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P2
 - **描述**: 操作审计（谁/什么时间/对什么/做了什么）
 - **验收标准**:
@@ -205,7 +205,7 @@
   - [x] 审计日志查询（按用户/操作/时间筛选）
 
 ### FR-016: i18n
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P2
 - **描述**: 中文 + 英文国际化
 - **验收标准**:
@@ -219,7 +219,7 @@
 > 以下 FR 用于完善已有功能的运行时集成，消除 TODO。
 
 ### FR-029: Worker Node 注册与心跳集成
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: Worker Node 启动时自动向 Control Plane 注册，周期性上报心跳指标，Control Plane 检测离线
 - **验收标准**:
@@ -233,7 +233,7 @@
 - **关联 API**: gRPC Register, Heartbeat
 
 ### FR-018: 实例 gRPC 生命周期操作
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: Control Plane 通过 gRPC 委托 Worker Node 执行实例的创建、启动、停止、重启、销毁操作
 - **验收标准**:
@@ -246,15 +246,15 @@
 - **关联 API**: gRPC CreateInstance, StartInstance, StopInstance, RestartInstance
 
 ### FR-019: 终端 WebSocket 全链路
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **备注**: 链路可跑通，但 `terminal_proxy` baseURL 硬编码 `ws://localhost`（生产不可用），且实现为 CP 代理而非「浏览器直连 Worker」
 
 ### FR-020: 文件管理 gRPC 全链路
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **备注**: 后端读写/上传下载/删除已实现，缺少 rename；前端用 textarea 替代 CodeMirror，无上传 UI
 
 ### FR-021: Bot Mineflayer 集成
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: Bot Worker 通过 Mineflayer 连接 Minecraft 服务器，支持行为引擎（follow/guard/patrol/idle）
 - **验收标准**:
@@ -268,7 +268,7 @@
 - **关联 API**: POST /bots, POST /bots/:id/behavior
 
 ### FR-022: RCON 指标采集
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: Worker Node 通过 RCON 协议查询 Minecraft 服务器的 TPS 和在线玩家数
 - **验收标准**:
@@ -280,7 +280,7 @@
 - **关联 API**: GET /instances/:id/metrics
 
 ### FR-023: gRPC 客户端真实实现
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 替换 proto/workerpb 中的桩代码，实现真实的 gRPC 客户端和服务端 RPC 调用
 - **备注**: 核心 RPC 真实，但残留桩：Worker `Register` 返回 `NodeSecret:"placeholder"`、`IssueTerminalToken` 返回 unimplemented
@@ -295,7 +295,7 @@
 - **Spec**: `docs/specs/grpc-real/`
 
 ### FR-024: 前端对接运行时 API
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 前端页面对接 FR-029~022 的真实 API，实现完整的前后端联调
 - **验收标准**:
@@ -310,7 +310,7 @@
 - **Spec**: `docs/specs/frontend-runtime/`
 
 ### FR-025: Worker→Control Plane gRPC 连通性修复
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 修复 Worker Node 无法连接 Control Plane gRPC 端口（9100）的问题，确保注册和心跳链路畅通
 - **验收标准**:
@@ -324,7 +324,7 @@
 - **关联 API**: gRPC Register, Heartbeat
 
 ### FR-026: 前端 shadcn/ui 标准化
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: 将前端页面从手写样式迁移到 shadcn/ui 组件库默认样式，统一视觉风格
 - **验收标准**:
@@ -338,7 +338,7 @@
 - **依赖**: FR-024（前端对接运行时 API）
 
 ### FR-027: API 集成测试
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: 为核心 REST API 编写集成测试，使用 httptest + 真实 SQLite 数据库
 - **验收标准**:
