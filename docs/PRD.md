@@ -134,12 +134,12 @@
 - **描述**: Mineflayer Bot 管理，行为引擎、寻路、脚本执行、压测、预热池
 - **验收标准**:
   - [x] 创建/删除 Bot（选择目标 MC 服务器）
-  - [ ] 行为模式切换（follow/guard/patrol/idle/custom）
-  - [ ] 寻路（mineflayer-pathfinder）
-  - [ ] 脚本执行 + 进度上报
-  - [ ] 压测会话（批量上线/下线）
-  - [ ] 预热池（预创建空闲 bot）
-  - [ ] 容量：50 bots/worker，256 workers max
+  - [x] 行为模式切换（follow/guard/patrol/idle/custom）
+  - [x] 寻路（mineflayer-pathfinder）
+  - [x] 脚本执行 + 进度上报
+  - [x] 压测会话（批量上线/下线）
+  - [x] 预热池（预创建空闲 bot）
+  - [x] 容量：50 bots/worker，256 workers max
 - **关联 API**: `POST /bots`, `POST /bots/:id/behavior`, `GET /bots/:id/state`
 
 ### FR-010: 监控指标
@@ -147,8 +147,8 @@
 - **优先级**: P1
 - **描述**: 节点和实例指标采集，Recharts 仪表盘展示
 - **验收标准**:
-  - [ ] 节点指标：CPU/内存/磁盘/网络（周期采集）
-  - [ ] 实例指标：MC TPS/在线玩家/内存（MC 专用）
+  - [x] 节点指标：CPU/内存/磁盘/网络（周期采集）
+  - [x] 实例指标：MC TPS/在线玩家/内存（MC 专用）
   - [x] 仪表盘页面：Recharts 图表
 - **关联 API**: `GET /nodes/:id/metrics`, `GET /instances/:id/metrics`
 
@@ -194,7 +194,7 @@
 - **描述**: 预设 MC 服务端模板（Paper/Spigot/Forge），一键创建实例
 - **验收标准**:
   - [x] 模板列表（名称/类型/描述/图标）
-  - [ ] 从模板创建实例（自动填充启动命令和配置）
+  - [x] 从模板创建实例（自动填充启动命令和配置）
 
 ### FR-015: 审计日志
 - **状态**: ✅ done
@@ -209,8 +209,8 @@
 - **优先级**: P2
 - **描述**: 中文 + 英文国际化
 - **验收标准**:
-  - [ ] 前端 i18next 切换
-  - [ ] 所有 UI 文本可翻译
+  - [x] 前端 i18next 切换
+  - [x] 所有 UI 文本可翻译
 
 ---
 
@@ -223,24 +223,24 @@
 - **优先级**: P0
 - **描述**: Worker Node 启动时自动向 Control Plane 注册，周期性上报心跳指标，Control Plane 检测离线
 - **验收标准**:
-  - [ ] Worker 启动后自动连接 Control Plane gRPC 端口并发送 Register 请求
-  - [ ] 注册成功后获得 node_uuid 和 node_secret
-  - [ ] 每 30s 发送一次心跳，携带 CPU/内存/磁盘指标
-  - [ ] Control Plane 超过 90s 未收到心跳标记节点为离线
-  - [ ] Worker 断线后自动重连 Control Plane
-  - [ ] 前端节点列表显示在线/离线状态和实时指标
+  - [x] Worker 启动后自动连接 Control Plane gRPC 端口并发送 Register 请求
+  - [x] 注册成功后获得 node_uuid 和 node_secret
+  - [x] 每 30s 发送一次心跳，携带 CPU/内存/磁盘指标
+  - [x] Control Plane 超过 90s 未收到心跳标记节点为离线
+  - [x] Worker 断线后自动重连 Control Plane
+  - [x] 前端节点列表显示在线/离线状态和实时指标
 - **依赖**: FR-004（节点注册与心跳）
 - **关联 API**: gRPC Register, Heartbeat
 
 ### FR-018: 实例 gRPC 生命周期操作
 - **状态**: ✅ done
 - **优先级**: P0
-- **描述**: Control Plane 通过 gRPC 委托 Worker Node 执行实例的创建、启动、停止、重启、销毁操作
+- **描述**: Control Plane 通过 gRPC 委托 Worker Node 执行实例的创建、启动、停止、重启、销毁操作；实例状态变更通过 StreamInstanceEvents gRPC 流经 CP SSE 代理推送到前端
 - **验收标准**:
   - [x] 前端创建实例 → Control Plane → gRPC CreateInstance → Worker 创建进程
   - [x] 前端启动实例 → Control Plane → gRPC StartInstance → Worker 启动进程
   - [x] 前端停止实例 → Control Plane → gRPC StopInstance → Worker 停止进程
-  - [ ] 实例状态变更通过 StreamInstanceEvents 实时推送到前端（当前用轮询替代）
+  - [x] 实例状态变更通过 StreamInstanceEvents 实时推送到前端（当前用轮询替代）
   - [x] 操作失败时前端显示错误信息
 - **依赖**: FR-029（Worker 注册）
 - **关联 API**: gRPC CreateInstance, StartInstance, StopInstance, RestartInstance
@@ -258,12 +258,12 @@
 - **优先级**: P1
 - **描述**: Bot Worker 通过 Mineflayer 连接 Minecraft 服务器，支持行为引擎（follow/guard/patrol/idle）
 - **验收标准**:
-  - [ ] 创建 Bot 后 Bot Worker 通过 Mineflayer 连接目标 MC 服务器
-  - [ ] 连接成功后 Bot 状态变为 connected
-  - [ ] 切换行为模式（follow/guard/patrol/idle）后 Bot 行为改变
-  - [ ] follow 模式跟随目标玩家移动
-  - [ ] guard 模式在固定位置警戒
-  - [ ] Bot 断开连接后状态变为 disconnected
+  - [x] 创建 Bot 后 Bot Worker 通过 Mineflayer 连接目标 MC 服务器
+  - [x] 连接成功后 Bot 状态变为 connected
+  - [x] 切换行为模式（follow/guard/patrol/idle）后 Bot 行为改变
+  - [x] follow 模式跟随目标玩家移动
+  - [x] guard 模式在固定位置警戒
+  - [x] Bot 断开连接后状态变为 disconnected
 - **依赖**: FR-009（Bot 平台）
 - **关联 API**: POST /bots, POST /bots/:id/behavior
 
@@ -272,10 +272,10 @@
 - **优先级**: P1
 - **描述**: Worker Node 通过 RCON 协议查询 Minecraft 服务器的 TPS 和在线玩家数
 - **验收标准**:
-  - [ ] 实例运行时 Worker 通过 RCON 连接查询 TPS
-  - [ ] 实例运行时 Worker 通过 RCON 查询在线玩家列表
-  - [ ] 前端实例详情页显示 TPS 和在线玩家数
-  - [ ] RCON 连接失败时优雅降级（显示 N/A）
+  - [x] 实例运行时 Worker 通过 RCON 连接查询 TPS
+  - [x] 实例运行时 Worker 通过 RCON 查询在线玩家列表
+  - [x] 前端实例详情页显示 TPS 和在线玩家数
+  - [x] RCON 连接失败时优雅降级（显示 N/A）
 - **依赖**: FR-010（监控指标）
 - **关联 API**: GET /instances/:id/metrics
 
@@ -302,7 +302,7 @@
   - [x] 节点列表页面显示在线节点的实时 CPU/内存/磁盘指标（30s 自动刷新）
   - [x] 实例详情页终端 Tab 能连接 Worker WebSocket 并显示终端输出
   - [x] 实例详情页文件 Tab 能浏览/编辑 Worker 上的文件
-  - [ ] 实例详情页显示 TPS 和在线玩家数（依赖 FR-022 RCON）
+  - [x] 实例详情页显示 TPS 和在线玩家数（依赖 FR-022 RCON）
   - [x] 创建/启动/停止实例操作能通过 gRPC 委托给 Worker 执行
   - [x] Bot 管理页面能创建 Bot 并显示连接状态
 - **依赖**: FR-023（gRPC 真实实现）
@@ -314,12 +314,12 @@
 - **优先级**: P0
 - **描述**: 修复 Worker Node 无法连接 Control Plane gRPC 端口（9100）的问题，确保注册和心跳链路畅通
 - **验收标准**:
-  - [ ] Control Plane 启动后 gRPC Server 监听 9100 端口（`netstat` 可见）
-  - [ ] Worker 启动后成功注册到 Control Plane，日志显示 `注册成功 nodeUUID=xxx`
-  - [ ] Worker 每 30s 发送心跳，Control Plane `nodes` 表 `last_heartbeat` 字段持续更新
-  - [ ] Control Plane 未启动时 Worker 启动不 panic，日志显示重连等待
-  - [ ] Worker 断线后自动重连 Control Plane，恢复心跳
-  - [ ] 前端节点列表显示 Worker 为「在线」状态
+  - [x] Control Plane 启动后 gRPC Server 监听 9100 端口（`netstat` 可见）
+  - [x] Worker 启动后成功注册到 Control Plane，日志显示 `注册成功 nodeUUID=xxx`
+  - [x] Worker 每 30s 发送心跳，Control Plane `nodes` 表 `last_heartbeat` 字段持续更新
+  - [x] Control Plane 未启动时 Worker 启动不 panic，日志显示重连等待
+  - [x] Worker 断线后自动重连 Control Plane，恢复心跳
+  - [x] 前端节点列表显示 Worker 为「在线」状态
 - **依赖**: FR-023（gRPC 客户端真实实现）
 - **关联 API**: gRPC Register, Heartbeat
 
@@ -334,7 +334,7 @@
   - [x] 所有表单输入使用 `<Input>` / `<Select>` / `<Checkbox>` 组件
   - [x] 所有状态标签使用 `<Badge>` 组件（variant: default/success/warning/destructive）
   - [x] 页面标题使用 `<h1>` + shadcn 排版规范，间距统一
-  - [ ] 暗色/亮色主题切换正常，无样式错乱
+  - [x] 暗色/亮色主题切换正常，无样式错乱
 - **依赖**: FR-024（前端对接运行时 API）
 
 ### FR-027: API 集成测试
@@ -343,25 +343,25 @@
 - **描述**: 为核心 REST API 编写集成测试，使用 httptest + 真实 SQLite 数据库
 - **验收标准**:
   - [x] 认证 API 测试：注册→登录→刷新 token→401 拦截
-  - [ ] 实例 API 测试：创建→查询→启动→停止→删除（happy path + 错误路径）
-  - [ ] 节点 API 测试：列表→详情→删除离线节点
-  - [ ] 用户组 API 测试：创建→添加成员→设置配额→超额拒绝
+  - [x] 实例 API 测试：创建→查询→启动→停止→删除（happy path + 错误路径）
+  - [x] 节点 API 测试：列表→详情→删除离线节点
+  - [x] 用户组 API 测试：创建→添加成员→设置配额→超额拒绝
   - [x] 每个测试使用独立 SQLite 数据库，测试间隔离
   - [x] `go test ./internal/controlplane/...` 全部通过
 - **依赖**: FR-025（gRPC 连通性修复）
 
 ### FR-028: 实例创建 E2E 测试
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: 端到端验证「管理员创建实例并启动」的完整流程，覆盖前端→Control Plane→Worker 全链路
 - **验收标准**:
-  - [ ] 启动 Control Plane + Worker 进程
-  - [ ] 通过 API 创建管理员账号（setup 流程）
-  - [ ] 通过 API 创建实例并分配到 Worker 节点
-  - [ ] 通过 API 启动实例，验证状态变为 RUNNING
-  - [ ] 通过 API 停止实例，验证状态变为 STOPPED
-  - [ ] 通过 API 删除实例
-  - [ ] 测试脚本可一键运行（`make e2e` 或 `go test -tags=e2e`）
+  - [x] 启动 Control Plane + Worker 进程
+  - [x] 通过 API 创建管理员账号（setup 流程）
+  - [x] 通过 API 创建实例并分配到 Worker 节点
+  - [x] 通过 API 启动实例，验证状态变为 RUNNING
+  - [x] 通过 API 停止实例，验证状态变为 STOPPED
+  - [x] 通过 API 删除实例
+  - [x] 测试脚本可一键运行（`make e2e` 或 `go test -tags=e2e`）
 - **依赖**: FR-025（gRPC 连通性修复）, FR-027（API 集成测试）
 
 ### BUG-001: 实例创建-启动-终端全链路断裂
@@ -382,10 +382,10 @@
 - **优先级**: P1
 - **描述**: 进入实例终端 Tab 时，先显示 [连接错误] [连接已断开] 再显示「已连接」，体验差。根因：Terminal 组件在 token 加载完成前就渲染并尝试 WebSocket 连接
 - **验收标准**:
-  - [ ] token 未加载完成时，终端区域显示加载占位（spinner 或骨架屏），不显示终端
-  - [ ] token 加载完成后才创建 WebSocket 连接，不再出现 [连接错误]
-  - [ ] 连接断开时仅显示一次 [连接已断开]，不重复
-  - [ ] WebSocket 连接失败时自动重试（最多 3 次，间隔递增）
+  - [x] token 未加载完成时，终端区域显示加载占位（spinner 或骨架屏），不显示终端
+  - [x] token 加载完成后才创建 WebSocket 连接，不再出现 [连接错误]
+  - [x] 连接断开时仅显示一次 [连接已断开]，不重复
+  - [x] WebSocket 连接失败时自动重试（最多 3 次，间隔递增）
 - **关联 FR**: FR-007（终端实时）, FR-019（终端 WebSocket 全链路）
 
 ### BUG-003: 实例详情页控制台与终端 Tab 合并
@@ -393,11 +393,11 @@
 - **优先级**: P1
 - **描述**: 实例详情页同时存在「控制台」和「终端」两个 Tab，两者都渲染 xterm 终端，功能重复。应合并为一个 Tab：上方显示实例指标（TPS/在线/内存），下方为可交互终端
 - **验收标准**:
-  - [ ] 仅保留一个「终端」Tab，移除原「控制台」Tab
-  - [ ] 该 Tab 上方显示实例状态指标（TPS、在线玩家、内存，仅 RUNNING 状态显示）
-  - [ ] 该 Tab 下方为终端区域，RUNNING 状态时可输入命令，其他状态只读
-  - [ ] 状态 banner（CRASHED 红色/STARTING 黄色）保留在指标区域下方
-  - [ ] 不改变其他 Tab（配置/文件/备份/Bot）的布局
+  - [x] 仅保留一个「终端」Tab，移除原「控制台」Tab
+  - [x] 该 Tab 上方显示实例状态指标（TPS、在线玩家、内存，仅 RUNNING 状态显示）
+  - [x] 该 Tab 下方为终端区域，RUNNING 状态时可输入命令，其他状态只读
+  - [x] 状态 banner（CRASHED 红色/STARTING 黄色）保留在指标区域下方
+  - [x] 不改变其他 Tab（配置/文件/备份/Bot）的布局
 - **关联 FR**: FR-007（终端实时）, FR-010（监控指标）
 
 ### BUG-004: 文件浏览器 workDir 空值 422 错误
@@ -405,10 +405,10 @@
 - **优先级**: P1
 - **描述**: 实例创建时未指定工作目录（workDir 为空），进入文件 Tab 时 API 返回 422 错误。应做前后端防御：创建实例时 workDir 必填，文件浏览器在 workDir 为空时显示友好提示
 - **验收标准**:
-  - [ ] 创建实例对话框中 workDir 字段改为必填，为空时表单不可提交
-  - [ ] 创建实例对话框提供 workDir 的默认值建议（如 `/opt/mc-server` 或模板的默认目录）
-  - [ ] 文件浏览器在 workDir 为空时显示提示信息而非 422 错误
-  - [ ] 后端 ListFiles 在实例 workDir 为空时返回明确的错误信息
+  - [x] 创建实例对话框中 workDir 字段改为必填，为空时表单不可提交
+  - [x] 创建实例对话框提供 workDir 的默认值建议（如 `/opt/mc-server` 或模板的默认目录）
+  - [x] 文件浏览器在 workDir 为空时显示提示信息而非 422 错误
+  - [x] 后端 ListFiles 在实例 workDir 为空时返回明确的错误信息
 - **关联 FR**: FR-005（实例生命周期）, FR-008（文件管理）
 
 ### BUG-005: 启动命令多余引号导致执行失败
@@ -416,11 +416,11 @@
 - **优先级**: P0
 - **描述**: 实例配置的启动命令被附带多余单引号，导致 Windows 执行时报错 `'\"C:\...\java.exe\"' 不是内部或外部命令`。需排查引号来源（前端提交/后端存储/Worker 执行）并修复
 - **验收标准**:
-  - [ ] 前端提交的 startCommand 不包含额外引号包裹
-  - [ ] 后端存储和返回的 startCommand 保持原样
-  - [ ] Worker 执行 startCommand 时不会额外添加引号
-  - [ ] 启动命令含空格路径时能正确执行（如 `C:\Program Files\java.exe -jar server.jar`）
-  - [ ] 前端配置 Tab 显示的启动命令和创建时填写的一致
+  - [x] 前端提交的 startCommand 不包含额外引号包裹
+  - [x] 后端存储和返回的 startCommand 保持原样
+  - [x] Worker 执行 startCommand 时不会额外添加引号
+  - [x] 启动命令含空格路径时能正确执行（如 `C:\Program Files\java.exe -jar server.jar`）
+  - [x] 前端配置 Tab 显示的启动命令和创建时填写的一致
 - **关联 FR**: FR-005（实例生命周期）, FR-006（守护进程）
 
 ### FR-030: 前端通知系统与 UX 标准化
@@ -428,13 +428,13 @@
 - **优先级**: P1
 - **描述**: 引入标准 Toast 通知组件替换隐藏 div 通知方式；弹窗和输入使用模态框（Dialog）；禁止随意改变页面布局
 - **验收标准**:
-  - [ ] 安装并集成 Toast 通知库（如 sonner），全局挂载 `<Toaster>` 组件
-  - [ ] 实例操作（启动/停止/重启）使用 Toast 通知：「实例启动中…」「实例已停止」等
-  - [ ] 文件操作（保存/上传/删除/重命名）使用 Toast 通知反馈结果
-  - [ ] 错误消息统一使用 Toast error 样式显示，替代内联 error div
-  - [ ] 删除确认、文件重命名等交互使用 Dialog 模态框，替代 `window.confirm()`
-  - [ ] 所有表单输入在模态框内完成，不改变页面主布局
-  - [ ] 现有页面布局（侧边栏/头部/内容区域）不发生变化
+  - [x] 安装并集成 Toast 通知库（如 sonner），全局挂载 `<Toaster>` 组件
+  - [x] 实例操作（启动/停止/重启）使用 Toast 通知：「实例启动中…」「实例已停止」等
+  - [x] 文件操作（保存/上传/删除/重命名）使用 Toast 通知反馈结果
+  - [x] 错误消息统一使用 Toast error 样式显示，替代内联 error div
+  - [x] 删除确认、文件重命名等交互使用 Dialog 模态框，替代 `window.confirm()`
+  - [x] 所有表单输入在模态框内完成，不改变页面主布局
+  - [x] 现有页面布局（侧边栏/头部/内容区域）不发生变化
 - **依赖**: BUG-002（终端修复完成后避免冲突）
 - **关联 FR**: FR-026（shadcn/ui 标准化）
 
