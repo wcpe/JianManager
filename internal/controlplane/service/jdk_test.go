@@ -21,7 +21,7 @@ func newJDKTestDB(t *testing.T) *gorm.DB {
 // 占用的实例不会阻拦 JDK 删除；未占用应直接删除并返回 nil。
 func TestJDKService_Delete_OK(t *testing.T) {
 	db := newJDKTestDB(t)
-	svc := NewJDKService(db)
+	svc := NewJDKService(db, nil)
 
 	node := &model.Node{Name: "n1", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(node).Error)
@@ -40,7 +40,7 @@ func TestJDKService_Delete_OK(t *testing.T) {
 // 有实例占用时返回 ErrJDKInUse 和占用实例列表，不删除 JDK。
 func TestJDKService_Delete_InUse(t *testing.T) {
 	db := newJDKTestDB(t)
-	svc := NewJDKService(db)
+	svc := NewJDKService(db, nil)
 
 	node := &model.Node{Name: "n1", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(node).Error)
@@ -62,7 +62,7 @@ func TestJDKService_Delete_InUse(t *testing.T) {
 // ResolveForInstance：优先按 jdkId 匹配，否则按大版本倒序。
 func TestJDKService_ResolveForInstance(t *testing.T) {
 	db := newJDKTestDB(t)
-	svc := NewJDKService(db)
+	svc := NewJDKService(db, nil)
 
 	node := &model.Node{Name: "n1", Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(node).Error)
@@ -76,3 +76,4 @@ func TestJDKService_ResolveForInstance(t *testing.T) {
 	require.NotNil(t, got)
 	require.Equal(t, b.Path, got.Path)
 }
+

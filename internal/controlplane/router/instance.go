@@ -176,10 +176,12 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 }
 
 type updateInstanceRequest struct {
-	Name         *string `json:"name"`
-	StartCommand *string `json:"startCommand"`
-	AutoStart    *bool   `json:"autoStart"`
-	AutoRestart  *bool   `json:"autoRestart"`
+	Name         *string             `json:"name"`
+	StartCommand *string             `json:"startCommand"`
+	AutoStart    *bool               `json:"autoStart"`
+	AutoRestart  *bool               `json:"autoRestart"`
+	JDKID        *uint               `json:"jdkId"`
+	EnvVars      *map[string]string  `json:"envVars"`
 }
 
 // Update 更新实例配置。
@@ -200,7 +202,7 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 		return
 	}
 
-	instance, err := h.instanceSvc.Update(id, req.Name, req.StartCommand, req.AutoStart, req.AutoRestart)
+	instance, err := h.instanceSvc.Update(id, req.Name, req.StartCommand, req.AutoStart, req.AutoRestart, req.JDKID, req.EnvVars)
 	if err != nil {
 		if errors.Is(err, service.ErrInstanceNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})

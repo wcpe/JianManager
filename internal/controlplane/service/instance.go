@@ -218,7 +218,8 @@ func (s *InstanceService) GetByID(id uint) (*model.Instance, error) {
 }
 
 // Update 更新实例配置。
-func (s *InstanceService) Update(id uint, name, startCommand *string, autoStart, autoRestart *bool) (*model.Instance, error) {
+// jdkId == 0 时表示不变；envVars == nil 时表示不变。
+func (s *InstanceService) Update(id uint, name, startCommand *string, autoStart, autoRestart *bool, jdkID *uint, envVars *map[string]string) (*model.Instance, error) {
 	instance, err := s.GetByID(id)
 	if err != nil {
 		return nil, err
@@ -237,6 +238,13 @@ func (s *InstanceService) Update(id uint, name, startCommand *string, autoStart,
 	}
 	if autoRestart != nil {
 		updates["auto_restart"] = *autoRestart
+	}
+	if jdkID != nil {
+		updates["jdk_id"] = *jdkID
+	}
+	if envVars != nil {
+		raw, _ := json.Marshal(*envVars)
+		updates["env_vars"] = string(raw)
 	}
 
 	if len(updates) > 0 {

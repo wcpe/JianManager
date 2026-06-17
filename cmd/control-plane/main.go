@@ -45,7 +45,7 @@ func main() {
 	nodeSvc := service.NewNodeService(db)
 	pool := cpgrpc.NewClientPool()
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
-	jdkSvc := service.NewJDKService(db)
+	jdkSvc := service.NewJDKService(db, pool)
 	terminalSvc := service.NewTerminalService(db, cfg.JWT.Secret, fmt.Sprintf("ws://localhost:%d", cfg.Server.Port))
 	fileSvc := service.NewFileService(db, pool)
 	configSvc := service.NewConfigService(db, pool)

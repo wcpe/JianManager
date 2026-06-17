@@ -36,8 +36,14 @@ func (h *JDKHandler) Install(c *gin.Context) {
 	nodeID, err := parseUintParam(c, "id"); if err != nil { return }
 	var req service.InstallJDKRequest
 	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":"INVALID_REQUEST","message":"请求参数错误"}); return }
-	if err := h.svc.Install(nodeID, req); err != nil { c.JSON(http.StatusNotImplemented, gin.H{"error":"NOT_IMPLEMENTED","message":err.Error()}); return }
-	c.JSON(http.StatusAccepted, gin.H{"message":"安装任务已创建"})
+	jdk, err := h.svc.Install(nodeID, req)
+	if err != nil {
+		if errors.Is(err, service.ErrNodeOffline) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error":"NODE_OFFLINE","message":"节点未连接，无法下发安装任务"}); return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error":"INSTALL_FAILED","message":err.Error()}); return
+	}
+	c.JSON(http.StatusCreated, jdk)
 }
 
 func (h *JDKHandler) Delete(c *gin.Context) {
