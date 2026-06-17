@@ -276,7 +276,7 @@
     "delete": "删除",
     "deleteConfirm": "确定删除？",
     "empty": "暂无用户",
-    "member": "成员",
+    "member": "组成员",
     "groupAdmin": "组管理员",
     "platformAdmin": "平台管理员",
     "enabled": "启用",
@@ -290,7 +290,9 @@
     "botQuota": "Bot 配额",
     "storageQuota": "存储配额",
     "admin": "管理员",
-    "empty": "暂无用户组"
+    "empty": "暂无用户组",
+    "description": "描述",
+    "createFailed": "创建失败"
   },
   "alerts": {
     "title": "告警管理",

@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useQueryClient, useMutation } from '@tanstack/react-query'
 import api from '@/api/client'
 import { useNodes } from '@/api/nodes'
@@ -11,6 +12,7 @@ interface CreateInstanceDialogProps {
 }
 
 export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDialogProps) {
+  const { t } = useTranslation()
   const qc = useQueryClient()
   const { data: nodes } = useNodes()
   const { data: groups } = useGroups()
@@ -35,7 +37,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
       resetForm()
     },
     onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-      setError(err.response?.data?.message || '创建失败')
+      setError(err.response?.data?.message || t('instances.createFailed'))
     },
   })
 
@@ -72,7 +74,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="bg-background border rounded-lg p-6 w-full max-w-md shadow-lg">
-        <h2 className="text-lg font-bold mb-4">创建实例</h2>
+        <h2 className="text-lg font-bold mb-4">{t('instances.createInstance')}</h2>
 
         {error && (
           <div className="mb-3 p-2 text-sm text-destructive bg-destructive/10 rounded">{error}</div>
@@ -80,7 +82,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
-            <label className="text-sm font-medium">名称</label>
+            <label className="text-sm font-medium">{t('instances.instanceName')}</label>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -91,14 +93,14 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
           </div>
 
           <div>
-            <label className="text-sm font-medium">节点</label>
+            <label className="text-sm font-medium">{t('instances.node')}</label>
             <select
               value={nodeId}
               onChange={(e) => setNodeId(e.target.value)}
               className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
               required
             >
-              <option value="">选择节点</option>
+              <option value="">{t('instances.selectNode')}</option>
               {nodes?.filter(n => n.status === 1).map((n) => (
                 <option key={n.id} value={n.id}>{n.name}</option>
               ))}
@@ -107,18 +109,18 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-sm font-medium">类型</label>
+              <label className="text-sm font-medium">{t('instances.type')}</label>
               <select
                 value={type}
                 onChange={(e) => setType(e.target.value)}
                 className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
               >
                 <option value="minecraft_java">Minecraft Java</option>
-                <option value="generic">通用</option>
+                <option value="generic">{t('common.type')}</option>
               </select>
             </div>
             <div>
-              <label className="text-sm font-medium">模板</label>
+              <label className="text-sm font-medium">{t('templates.selectTemplate').replace(/[（(].*[）)]/, '').trim()}</label>
               <select
                 value={templateId}
                 onChange={(e) => {
@@ -134,20 +136,20 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
                 }}
                 className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
               >
-                <option value="">不使用模板</option>
+                <option value="">{t('templates.noTemplate')}</option>
                 {templates?.map((t) => (
                   <option key={t.id} value={t.id}>{t.name}</option>
                 ))}
               </select>
             </div>
             <div>
-              <label className="text-sm font-medium">启动方式</label>
+              <label className="text-sm font-medium">{t('instanceDetail.processType')}</label>
               <select
                 value={processType}
                 onChange={(e) => setProcessType(e.target.value)}
                 className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
               >
-                <option value="daemon">daemon (推荐)</option>
+                <option value="daemon">daemon ({t('common.enabled')})</option>
                 <option value="direct">direct</option>
                 <option value="docker">docker</option>
               </select>
@@ -155,7 +157,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
           </div>
 
           <div>
-            <label className="text-sm font-medium">启动命令</label>
+            <label className="text-sm font-medium">{t('instanceDetail.startCommand')}</label>
             <input
               value={startCommand}
               onChange={(e) => setStartCommand(e.target.value)}
@@ -166,7 +168,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
           </div>
 
           <div>
-            <label className="text-sm font-medium">工作目录</label>
+            <label className="text-sm font-medium">{t('instanceDetail.workDir')}</label>
             <input
               value={workDir}
               onChange={(e) => setWorkDir(e.target.value)}
@@ -176,13 +178,13 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
           </div>
 
           <div>
-            <label className="text-sm font-medium">用户组</label>
+            <label className="text-sm font-medium">{t('instances.group')}</label>
             <select
               value={groupId}
               onChange={(e) => setGroupId(e.target.value)}
               className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
             >
-              <option value="">不分配</option>
+              <option value="">{t('instances.noGroup')}</option>
               {groups?.map((g) => (
                 <option key={g.id} value={g.id}>{g.name}</option>
               ))}
@@ -195,7 +197,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
               checked={autoRestart}
               onChange={(e) => setAutoRestart(e.target.checked)}
             />
-            崩溃自动重启
+            {t('instanceDetail.autoRestart')}
           </label>
 
           <div className="flex justify-end gap-2 pt-2">
@@ -204,14 +206,14 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
               onClick={() => { onClose(); resetForm() }}
               className="px-4 py-2 text-sm border rounded-md hover:bg-accent"
             >
-              取消
+              {t('common.cancel')}
             </button>
             <button
               type="submit"
               disabled={create.isPending}
               className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50"
             >
-              {create.isPending ? '创建中...' : '创建'}
+              {create.isPending ? t('common.creating') : t('common.create')}
             </button>
           </div>
         </form>

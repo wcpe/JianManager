@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import api from '@/api/client'
 
 interface FileInfo {
@@ -13,6 +14,7 @@ interface FileBrowserProps {
 }
 
 export default function FileBrowser({ instanceId }: FileBrowserProps) {
+  const { t } = useTranslation()
   const [path, setPath] = useState('')
   const [files, setFiles] = useState<FileInfo[]>([])
   const [loading, setLoading] = useState(false)
@@ -37,12 +39,12 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
       setSelectedFile(null)
       setFileContent(null)
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : '加载失败'
+      const msg = err instanceof Error ? err.message : t('files.loadFailed')
       setError(msg)
     } finally {
       setLoading(false)
     }
-  }, [instanceId])
+  }, [instanceId, t])
 
   useEffect(() => {
     loadFiles('')
@@ -71,7 +73,7 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
       setFileContent(data)
       setEditContent(data)
     } catch {
-      setFileContent('读取失败')
+      setFileContent(t('files.loadFailed'))
     }
   }
 
@@ -86,18 +88,18 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
       setFileContent(editContent)
       setEditing(false)
     } catch {
-      setError('保存失败')
+      setError(t('files.saveFailed'))
     }
   }
 
   const deleteFile = async (fileName: string) => {
-    if (!confirm(`确定删除 ${fileName}？`)) return
+    if (!confirm(t('files.deleteConfirm', { name: fileName }))) return
     const filePath = path ? `${path}/${fileName}` : fileName
     try {
       await api.delete(`/instances/${instanceId}/files`, { data: { path: filePath } })
       loadFiles(path)
     } catch {
-      setError('删除失败')
+      setError(t('files.deleteFailed'))
     }
   }
 
@@ -111,7 +113,7 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
       setNewName('')
       loadFiles(path)
     } catch {
-      setError('重命名失败')
+      setError(t('files.renameFailed'))
     }
   }
 
@@ -127,7 +129,7 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
       })
       loadFiles(path)
     } catch {
-      setError('上传失败')
+      setError(t('files.uploadFailed'))
     }
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
@@ -152,13 +154,13 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
           </button>
           <span className="text-muted-foreground truncate flex-1">/{path || ''}</span>
           <button onClick={() => fileInputRef.current?.click()} className="px-2 py-0.5 text-xs bg-green-500/10 text-green-600 rounded hover:bg-green-500/20">
-            上传
+            {t('files.upload')}
           </button>
           <input ref={fileInputRef} type="file" className="hidden" onChange={uploadFile} />
         </div>
         <div className="flex-1 overflow-auto">
           {loading ? (
-            <p className="p-3 text-sm text-muted-foreground">加载中...</p>
+            <p className="p-3 text-sm text-muted-foreground">{t('files.loading')}</p>
           ) : error ? (
             <p className="p-3 text-sm text-red-500">{error}</p>
           ) : (
@@ -193,7 +195,7 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
             ))
           )}
           {!loading && files.length === 0 && (
-            <p className="p-3 text-sm text-muted-foreground">空目录</p>
+            <p className="p-3 text-sm text-muted-foreground">{t('files.emptyDir')}</p>
           )}
         </div>
       </div>
@@ -210,7 +212,7 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
                     onClick={() => setEditing(true)}
                     className="px-2 py-0.5 text-xs bg-blue-500/10 text-blue-600 rounded hover:bg-blue-500/20"
                   >
-                    编辑
+                    {t('files.edit')}
                   </button>
                 )}
                 {editing && (
@@ -219,13 +221,13 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
                       onClick={saveFile}
                       className="px-2 py-0.5 text-xs bg-green-500/10 text-green-600 rounded hover:bg-green-500/20"
                     >
-                      保存
+                      {t('files.save')}
                     </button>
                     <button
                       onClick={() => { setEditing(false); setEditContent(fileContent ?? '') }}
                       className="px-2 py-0.5 text-xs bg-gray-500/10 rounded hover:bg-gray-500/20"
                     >
-                      取消
+                      {t('files.cancel')}
                     </button>
                   </>
                 )}
@@ -233,7 +235,7 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
                   onClick={() => deleteFile(selectedFile)}
                   className="px-2 py-0.5 text-xs bg-red-500/10 text-red-600 rounded hover:bg-red-500/20"
                 >
-                  删除
+                  {t('files.delete')}
                 </button>
               </div>
             </div>
@@ -254,7 +256,7 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
           </>
         ) : (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
-            选择文件查看内容
+            {t('files.selectFile')}
           </div>
         )}
       </div>
