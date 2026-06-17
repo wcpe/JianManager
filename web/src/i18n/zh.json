@@ -250,7 +250,13 @@
     "restoreFailed": "恢复备份失败",
     "deleteFailed": "删除备份失败",
     "instance": "实例",
-    "allInstances": "全部实例"
+    "allInstances": "全部实例",
+    "create": "创建备份",
+    "hint": "请先选择一个实例查看备份列表",
+    "name": "名称",
+    "time": "时间",
+    "type": "类型",
+    "confirmRestore": "确认恢复此备份？"
   },
   "templates": {
     "title": "服务端模板",

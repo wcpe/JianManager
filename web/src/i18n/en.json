@@ -250,7 +250,13 @@
     "restoreFailed": "Restore backup failed",
     "deleteFailed": "Delete backup failed",
     "instance": "Instance",
-    "allInstances": "All Instances"
+    "allInstances": "All Instances",
+    "create": "Create Backup",
+    "hint": "Please select an instance to view its backup list",
+    "name": "Name",
+    "time": "Time",
+    "type": "Type",
+    "confirmRestore": "Restore this backup?"
   },
   "templates": {
     "title": "Server Templates",
