@@ -10,13 +10,13 @@ export default function BackupsPage() {
   const [restoreTarget, setRestoreTarget] = useState<number | null>(null)
   const { data: instances } = useInstances()
   const { data: backups, isLoading } = useBackups(selectedInstance)
-  const createBackup = useCreateBackup()
+  const createBackup = useCreateBackup(selectedInstance ?? 0)
   const deleteBackup = useDeleteBackup()
   const restoreBackup = useRestoreBackup()
 
   const handleCreate = async () => {
     if (!selectedInstance) return
-    await createBackup.mutateAsync({ instanceId: selectedInstance, name: `backup-${new Date().toISOString().slice(0, 19)}` })
+    await createBackup.mutateAsync({ name: `backup-${new Date().toISOString().slice(0, 19)}` })
   }
 
   const handleRestore = async (backupId: number) => {

@@ -31,7 +31,7 @@ export default function UsersPage() {
         <Button onClick={() => setShowCreate(true)}>+ 创建用户</Button>
       </div>
 
-      <CreateUserDialog open={showCreate} onOpenChange={setShowCreate} />
+      <CreateUserDialog open={showCreate} onClose={() => setShowCreate(false)} />
 
       {isLoading ? (
         <p className="text-muted-foreground">加载中...</p>

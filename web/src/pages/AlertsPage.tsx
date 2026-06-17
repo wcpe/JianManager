@@ -9,12 +9,12 @@ export default function AlertsPage() {
   const createRule = useCreateAlertRule()
   const deleteRule = useDeleteAlertRule()
   const [showCreate, setShowCreate] = useState(false)
-  const [form, setForm] = useState({ name: '', metric: 'cpu_usage', operator: '>', threshold: 80, durationSec: 60, notifyType: 'webhook', notifyTarget: '' })
+  const [form, setForm] = useState({ name: '', targetType: 'node', targetId: null, metric: 'cpu_usage', operator: '>', threshold: 80, durationSec: 60, notifyType: 'webhook', notifyTarget: '', enabled: true })
 
   const handleCreate = async () => {
     await createRule.mutateAsync(form)
     setShowCreate(false)
-    setForm({ name: '', metric: 'cpu_usage', operator: '>', threshold: 80, durationSec: 60, notifyType: 'webhook', notifyTarget: '' })
+    setForm({ name: '', targetType: 'node', targetId: null, metric: 'cpu_usage', operator: '>', threshold: 80, durationSec: 60, notifyType: 'webhook', notifyTarget: '', enabled: true })
   }
 
   return (
@@ -77,10 +77,10 @@ export default function AlertsPage() {
           <tbody>
             {(events ?? []).map((e) => (
               <tr key={e.id} className="border-t">
-                <td className="p-3">{new Date(e.createdAt).toLocaleString()}</td>
-                <td className="p-3">{e.ruleId}</td>
+                <td className="p-3">{new Date(e.firedAt).toLocaleString()}</td>
+                <td className="p-3">{e.ruleName ?? e.ruleId}</td>
                 <td className="p-3">{e.message}</td>
-                <td className="p-3">{e.status === 0 ? t('alerts.unresolved') : t('alerts.resolved')}</td>
+                <td className="p-3">{e.resolved ? t('alerts.resolved') : t('alerts.unresolved')}</td>
               </tr>
             ))}
             {(!events || events.length === 0) && <tr><td colSpan={4} className="p-3 text-center text-muted-foreground">{t('alerts.emptyEvents')}</td></tr>}

@@ -9,7 +9,6 @@ import { useAuthStore } from '@/stores/auth'
  */
 export function useInstanceEvents() {
   const qc = useQueryClient()
-  const sourceRef = useRef<EventSource | null>(null)
 
   useEffect(() => {
     const token = useAuthStore.getState().accessToken
