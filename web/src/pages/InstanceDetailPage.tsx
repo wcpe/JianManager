@@ -180,16 +180,13 @@ function ConsoleTab({ instanceId, status }: { instanceId: number; status: string
         <div className="border rounded-lg p-4 bg-[#1a1b26] min-h-[400px] flex items-center justify-center">
           <p className="text-muted-foreground text-sm">无法获取终端连接: {(tokenError as Error).message || '连接失败'}</p>
         </div>
-      ) : tokenLoading ? (
-        <div className="border rounded-lg p-4 bg-[#1a1b26] min-h-[400px] flex items-center justify-center">
-          <p className="text-muted-foreground text-sm">连接中...</p>
-        </div>
       ) : (
         <TerminalComponent
           instanceId={String(instanceId)}
           wsUrl={tokenData?.wsUrl}
           token={tokenData?.token}
           readOnly
+          isLoading={tokenLoading}
         />
       )}
     </div>
@@ -207,14 +204,6 @@ function TerminalTab({ instanceId, status }: { instanceId: number; status: strin
     )
   }
 
-  if (isLoading) {
-    return (
-      <div className="border rounded-lg p-4 bg-[#1a1b26] min-h-[400px] flex items-center justify-center">
-        <p className="text-muted-foreground text-sm">正在建立终端连接...</p>
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-2">
       {status !== 'RUNNING' && (
@@ -227,6 +216,7 @@ function TerminalTab({ instanceId, status }: { instanceId: number; status: strin
         wsUrl={tokenData?.wsUrl}
         token={tokenData?.token}
         readOnly={status !== 'RUNNING'}
+        isLoading={isLoading}
       />
     </div>
   )
