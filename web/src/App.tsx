@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router'
 import { Suspense, lazy, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth'
 
 const LoginPage = lazy(() => import('./pages/LoginPage'))
@@ -17,13 +18,14 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 
 function App() {
   const loadFromStorage = useAuthStore((s) => s.loadFromStorage)
+  const { t } = useTranslation()
 
   useEffect(() => {
     loadFromStorage()
   }, [loadFromStorage])
 
   return (
-    <Suspense fallback={<div className="flex items-center justify-center h-screen">加载中...</div>}>
+    <Suspense fallback={<div className="flex items-center justify-center h-screen">{t('common.loading')}</div>}>
       <Routes>
         <Route path="/setup" element={<SetupPage />} />
         <Route path="/login" element={<LoginPage />} />

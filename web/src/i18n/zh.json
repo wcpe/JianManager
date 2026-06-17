@@ -9,7 +9,24 @@
     "save": "保存",
     "search": "搜索",
     "back": "返回",
-    "logout": "退出登录"
+    "logout": "退出登录",
+    "none": "无",
+    "actions": "操作",
+    "name": "名称",
+    "status": "状态",
+    "type": "类型",
+    "enabled": "启用",
+    "disabled": "禁用",
+    "yes": "是",
+    "no": "否",
+    "error": "错误",
+    "success": "成功",
+    "creating": "创建中...",
+    "saving": "保存中...",
+    "deleting": "删除中...",
+    "na": "N/A",
+    "online": "在线",
+    "offline": "离线"
   },
   "nav": {
     "dashboard": "仪表盘",
@@ -22,7 +39,8 @@
     "backups": "备份",
     "audit": "审计日志",
     "templates": "模板",
-    "settings": "设置"
+    "settings": "设置",
+    "alerts": "告警"
   },
   "login": {
     "title": "JianManager",
@@ -33,7 +51,8 @@
     "register": "注册",
     "switchToRegister": "没有账号？去注册",
     "switchToLogin": "已有账号？去登录",
-    "registerSuccess": "注册成功，请登录"
+    "registerSuccess": "注册成功，请登录",
+    "loginFailed": "登录失败"
   },
   "dashboard": {
     "title": "仪表盘",
@@ -42,7 +61,12 @@
     "instancesTotal": "{{count}} 总计",
     "instancesRunning": "{{count}} 运行中",
     "nodeStatus": "节点状态",
-    "recentInstances": "最近实例"
+    "recentInstances": "最近实例",
+    "nodes": "节点",
+    "instances": "实例",
+    "noData": "暂无数据",
+    "noNodes": "暂无节点",
+    "noInstances": "暂无实例"
   },
   "nodes": {
     "title": "节点管理",
@@ -51,6 +75,8 @@
     "status": "状态",
     "cpu": "CPU",
     "memory": "内存",
+    "disk": "磁盘",
+    "network": "网络",
     "system": "系统",
     "online": "在线",
     "offline": "离线",
@@ -74,7 +100,16 @@
     "starting": "启动中",
     "running": "运行",
     "stopping": "停止中",
-    "crashed": "崩溃"
+    "crashed": "崩溃",
+    "startFailed": "启动失败",
+    "instanceName": "实例名称",
+    "node": "节点",
+    "selectNode": "选择节点",
+    "autoRestart": "崩溃自动重启",
+    "group": "用户组",
+    "noGroup": "不分配",
+    "createFailed": "创建失败",
+    "createInstance": "创建实例"
   },
   "setup": {
     "title": "JianManager",
@@ -297,7 +332,16 @@
     "unresolvedOnly": "仅未恢复",
     "createFailed": "创建规则失败",
     "updateFailed": "更新规则失败",
-    "deleteFailed": "删除规则失败"
+    "deleteFailed": "删除规则失败",
+    "condition": "条件",
+    "rule": "规则",
+    "create": "新建",
+    "empty": "暂无告警规则",
+    "noEvents": "暂无告警事件",
+    "name": "名称",
+    "time": "时间",
+    "status": "状态",
+    "duration": "持续时间"
   },
   "theme": {
     "toggle": "切换主题",

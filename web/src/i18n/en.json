@@ -89,6 +89,7 @@
     "cpu": "CPU",
     "memory": "Memory",
     "disk": "Disk",
+    "network": "Network",
     "system": "System",
     "online": "Online",
     "offline": "Offline",
@@ -331,7 +332,16 @@
     "unresolvedOnly": "Unresolved Only",
     "createFailed": "Create rule failed",
     "updateFailed": "Update rule failed",
-    "deleteFailed": "Delete rule failed"
+    "deleteFailed": "Delete rule failed",
+    "condition": "Condition",
+    "rule": "Rule",
+    "create": "Create",
+    "empty": "No alert rules",
+    "noEvents": "No alert events",
+    "name": "Name",
+    "time": "Time",
+    "status": "Status",
+    "duration": "Duration"
   },
   "theme": {
     "toggle": "Toggle Theme",
