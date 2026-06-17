@@ -26,7 +26,8 @@
     "deleting": "Deleting...",
     "na": "N/A",
     "online": "Online",
-    "offline": "Offline"
+    "offline": "Offline",
+    "irreversible": "This action cannot be undone."
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -290,7 +291,9 @@
     "groupAdmin": "Group Admin",
     "platformAdmin": "Platform Admin",
     "enabled": "Enabled",
-    "disabled": "Disabled"
+    "disabled": "Disabled",
+    "deleteTitle": "Delete User",
+    "roleUnknown": "Unknown ({{role}})"
   },
   "groups": {
     "title": "Group Management",
@@ -302,7 +305,8 @@
     "admin": "Admin",
     "empty": "No groups",
     "description": "Description",
-    "createFailed": "Failed to create group"
+    "createFailed": "Failed to create group",
+    "userPrefix": "User#"
   },
   "alerts": {
     "title": "Alert Management",

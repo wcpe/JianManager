@@ -1,23 +1,25 @@
 import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useGroups } from '@/api/groups'
 import CreateGroupDialog from '@/components/CreateGroupDialog'
 import { Button } from '@/components/ui/button'
 
 export default function GroupsPage() {
+  const { t } = useTranslation()
   const [showCreate, setShowCreate] = useState(false)
   const { data: groups, isLoading } = useGroups()
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">用户组管理</h1>
-        <Button onClick={() => setShowCreate(true)}>+ 创建组</Button>
+        <h1 className="text-2xl font-bold">{t('groups.title')}</h1>
+        <Button onClick={() => setShowCreate(true)}>+ {t('groups.createGroup')}</Button>
       </div>
 
       <CreateGroupDialog open={showCreate} onClose={() => setShowCreate(false)} />
 
       {isLoading ? (
-        <p className="text-muted-foreground">加载中...</p>
+        <p className="text-muted-foreground">{t('common.loading')}</p>
       ) : (
         <div className="space-y-4">
           {groups?.map((g) => (
@@ -27,12 +29,12 @@ export default function GroupsPage() {
               </div>
               {g.description && <p className="text-sm text-muted-foreground mb-3">{g.description}</p>}
               <div className="flex gap-4 text-sm">
-                <span>成员: {g.members?.length ?? 0}</span>
+                <span>{t('groups.members')}: {g.members?.length ?? 0}</span>
                 {g.quota && (
                   <>
-                    <span>实例配额: {g.quota.maxInstances}</span>
-                    <span>Bot 配额: {g.quota.maxBots}</span>
-                    <span>存储配额: {g.quota.maxStorageMb}MB</span>
+                    <span>{t('groups.instanceQuota')}: {g.quota.maxInstances}</span>
+                    <span>{t('groups.botQuota')}: {g.quota.maxBots}</span>
+                    <span>{t('groups.storageQuota')}: {g.quota.maxStorageMb}MB</span>
                   </>
                 )}
               </div>
@@ -40,8 +42,8 @@ export default function GroupsPage() {
                 <div className="mt-2 flex gap-1 flex-wrap">
                   {g.members.map((m) => (
                     <span key={m.id} className="px-2 py-0.5 text-xs bg-muted rounded">
-                      {m.user?.username ?? `用户#${m.userId}`}
-                      {m.role === 1 && ' (管理员)'}
+                      {m.user?.username ?? `${t('groups.userPrefix')}${m.userId}`}
+                      {m.role === 1 && ` (${t('groups.admin')})`}
                     </span>
                   ))}
                 </div>
@@ -49,7 +51,7 @@ export default function GroupsPage() {
             </div>
           ))}
           {(!groups || groups.length === 0) && (
-            <p className="text-muted-foreground text-center py-8">暂无用户组</p>
+            <p className="text-muted-foreground text-center py-8">{t('groups.empty')}</p>
           )}
         </div>
       )}

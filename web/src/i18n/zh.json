@@ -26,7 +26,8 @@
     "deleting": "删除中...",
     "na": "N/A",
     "online": "在线",
-    "offline": "离线"
+    "offline": "离线",
+    "irreversible": "此操作不可撤销。"
   },
   "nav": {
     "dashboard": "仪表盘",
@@ -290,7 +291,9 @@
     "groupAdmin": "组管理员",
     "platformAdmin": "平台管理员",
     "enabled": "启用",
-    "disabled": "禁用"
+    "disabled": "禁用",
+    "deleteTitle": "确认删除用户",
+    "roleUnknown": "未知({{role}})"
   },
   "groups": {
     "title": "用户组管理",
@@ -302,7 +305,8 @@
     "admin": "管理员",
     "empty": "暂无用户组",
     "description": "描述",
-    "createFailed": "创建失败"
+    "createFailed": "创建失败",
+    "userPrefix": "用户#"
   },
   "alerts": {
     "title": "告警管理",
