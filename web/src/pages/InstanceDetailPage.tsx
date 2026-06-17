@@ -99,9 +99,8 @@ export default function InstanceDetailPage() {
         </div>
       </div>
 
-      <Tabs defaultValue="控制台">
+      <Tabs defaultValue="终端">
         <TabsList variant="line">
-          <TabsTrigger value="控制台">控制台</TabsTrigger>
           <TabsTrigger value="终端">终端</TabsTrigger>
           <TabsTrigger value="文件">文件</TabsTrigger>
           <TabsTrigger value="配置">配置</TabsTrigger>
@@ -109,9 +108,6 @@ export default function InstanceDetailPage() {
           <TabsTrigger value="Bot">Bot</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="控制台">
-          <ConsoleTab instanceId={instanceId} status={instance.status} />
-        </TabsContent>
         <TabsContent value="终端">
           <TerminalTab instanceId={instanceId} status={instance.status} />
         </TabsContent>
@@ -132,39 +128,41 @@ export default function InstanceDetailPage() {
   )
 }
 
-function ConsoleTab({ instanceId, status }: { instanceId: number; status: string }) {
-  const { data: metrics, isLoading } = useInstanceMetrics(instanceId, status === 'RUNNING')
-  const { data: tokenData, isLoading: tokenLoading, error: tokenError } = useTerminalToken(instanceId, 'read')
+function TerminalTab({ instanceId, status }: { instanceId: number; status: string }) {
+  const { data: metrics } = useInstanceMetrics(instanceId, status === 'RUNNING')
+  const { data: tokenData, isLoading, error } = useTerminalToken(instanceId, status === 'RUNNING' ? 'write' : 'read')
 
   return (
     <div className="space-y-4">
+      {/* 实例指标 */}
       <div className="grid grid-cols-3 gap-4">
         <div className="border rounded-lg p-3">
           <p className="text-xs text-muted-foreground">TPS</p>
           <p className="text-xl font-bold mt-1">
-            {status === 'RUNNING' && !isLoading
-              ? (metrics && metrics.tps >= 0 ? metrics.tps : 'N/A')
+            {status === 'RUNNING' && metrics
+              ? (metrics.tps >= 0 ? metrics.tps : 'N/A')
               : '--'}
           </p>
         </div>
         <div className="border rounded-lg p-3">
           <p className="text-xs text-muted-foreground">在线玩家</p>
           <p className="text-xl font-bold mt-1">
-            {status === 'RUNNING' && !isLoading
-              ? (metrics && metrics.onlinePlayers >= 0 ? metrics.onlinePlayers : 'N/A')
+            {status === 'RUNNING' && metrics
+              ? (metrics.onlinePlayers >= 0 ? metrics.onlinePlayers : 'N/A')
               : '--'}
           </p>
         </div>
         <div className="border rounded-lg p-3">
           <p className="text-xs text-muted-foreground">内存</p>
           <p className="text-xl font-bold mt-1">
-            {status === 'RUNNING' && !isLoading
-              ? (metrics && metrics.memoryMb > 0 ? `${metrics.memoryMb} MB` : 'N/A')
+            {status === 'RUNNING' && metrics
+              ? (metrics.memoryMb > 0 ? `${metrics.memoryMb} MB` : 'N/A')
               : '--'}
           </p>
         </div>
       </div>
 
+      {/* 状态提示 */}
       {status === 'CRASHED' && (
         <div className="border border-red-300 bg-red-50 dark:bg-red-950 dark:border-red-800 rounded-lg p-3 text-sm text-red-700 dark:text-red-300">
           ⚠ 实例已崩溃 — 下方终端显示最近输出（含错误堆栈），请查看崩溃原因
@@ -175,49 +173,26 @@ function ConsoleTab({ instanceId, status }: { instanceId: number; status: string
           ⏳ 实例启动中...
         </div>
       )}
+      {status !== 'RUNNING' && status !== 'CRASHED' && status !== 'STARTING' && (
+        <div className="border border-yellow-300 bg-yellow-50 dark:bg-yellow-950 dark:border-yellow-800 rounded-lg p-2 text-xs text-yellow-700 dark:text-yellow-300">
+          实例未运行（{status}），终端为只读模式
+        </div>
+      )}
 
-      {tokenError ? (
+      {/* 终端 */}
+      {error ? (
         <div className="border rounded-lg p-4 bg-[#1a1b26] min-h-[400px] flex items-center justify-center">
-          <p className="text-muted-foreground text-sm">无法获取终端连接: {(tokenError as Error).message || '连接失败'}</p>
+          <p className="text-muted-foreground text-sm">无法获取终端连接: {(error as Error).message || '连接失败'}</p>
         </div>
       ) : (
         <TerminalComponent
           instanceId={String(instanceId)}
           wsUrl={tokenData?.wsUrl}
           token={tokenData?.token}
-          readOnly
-          isLoading={tokenLoading}
+          readOnly={status !== 'RUNNING'}
+          isLoading={isLoading}
         />
       )}
-    </div>
-  )
-}
-
-function TerminalTab({ instanceId, status }: { instanceId: number; status: string }) {
-  const { data: tokenData, isLoading, error } = useTerminalToken(instanceId, 'write')
-
-  if (error) {
-    return (
-      <div className="border rounded-lg p-4 bg-[#1a1b26] min-h-[400px] flex items-center justify-center">
-        <p className="text-muted-foreground text-sm">无法获取终端连接</p>
-      </div>
-    )
-  }
-
-  return (
-    <div className="space-y-2">
-      {status !== 'RUNNING' && (
-        <div className="border border-yellow-300 bg-yellow-50 dark:bg-yellow-950 dark:border-yellow-800 rounded-lg p-2 text-xs text-yellow-700 dark:text-yellow-300">
-          实例未运行（{status}），终端为只读模式，显示最近输出
-        </div>
-      )}
-      <TerminalComponent
-        instanceId={String(instanceId)}
-        wsUrl={tokenData?.wsUrl}
-        token={tokenData?.token}
-        readOnly={status !== 'RUNNING'}
-        isLoading={isLoading}
-      />
     </div>
   )
 }
