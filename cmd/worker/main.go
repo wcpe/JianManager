@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 
 	"github.com/wxys233/JianManager/internal/worker/daemon"
 	"github.com/wxys233/JianManager/internal/worker/heartbeat"
+	jdks "github.com/wxys233/JianManager/internal/worker/jdk"
 	wgrpc "github.com/wxys233/JianManager/internal/worker/grpc"
 	"github.com/wxys233/JianManager/internal/worker/metrics"
 	"github.com/wxys233/JianManager/internal/worker/process"
@@ -83,11 +86,20 @@ func runWorker() {
 	}
 
 	slog.Info("Worker Node 启动", "name", nodeName, "grpcPort", grpcPort, "wsPort", wsPort)
-
 	// 初始化进程管理器
 	manager := process.NewManager(workDir)
 
-	// 恢复 daemon 模式实例：扫描 PID 文件，存活则 reconnect wrapper，否则清理。
+	// 初始化 JDK 管理器：托管根 <workDir>/jdks；可选追加系统 JDK 探测目录。
+	var systemJDKDirs []string
+	if v := os.Getenv("JIANMANAGER_JDK_SYSTEM_DIRS"); v != "" {
+		for _, d := range strings.Split(v, string(os.PathListSeparator)) {
+			d = strings.TrimSpace(d)
+			if d != "" {
+				systemJDKDirs = append(systemJDKDirs, d)
+			}
+		}
+	}
+	jdkMgr := jdks.NewManager(filepath.Join(workDir, "jdks"), systemJDKDirs)
 	// 这是 ADR-003「平台重启不杀游戏服」的关键路径。
 	recovered, recoverErr := manager.RecoverDaemonInstances()
 	if recoverErr != nil {
@@ -110,7 +122,7 @@ func runWorker() {
 
 	// 启动 gRPC 服务器
 	grpcServer := grpc.NewServer()
-	workerServer := wgrpc.NewServer(manager, nodeUUID, collector)
+	workerServer := wgrpc.NewServer(manager, nodeUUID, collector, jdkMgr)
 	workerpb.RegisterWorkerServiceServer(grpcServer, workerServer)
 
 	grpcAddr := fmt.Sprintf(":%d", grpcPort)

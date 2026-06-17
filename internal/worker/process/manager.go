@@ -31,6 +31,8 @@ type Instance struct {
 	StartCommand string
 	WorkDir      string
 	EnvVars      map[string]string
+	JDKPath      string
+	JDKBinPath   string
 	RCONPort     int
 	RCONPassword string
 	State        InstanceState
@@ -107,7 +109,8 @@ func (m *Manager) GetAllInstanceStates() []InstanceSnapshot {
 }
 
 // Create 创建实例（但不启动）。processType 决定启动方式（direct/daemon/docker/rcon）。
-func (m *Manager) Create(uuid, name, startCommand, workDir string, envVars map[string]string, autoRestart bool, processType ProcessType) error {
+// jdkPath / jdkBinPath 非空时会被注入到实例启动时的环境。
+func (m *Manager) Create(uuid, name, startCommand, workDir string, envVars map[string]string, autoRestart bool, processType ProcessType, jdkPath, jdkBinPath string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -121,12 +124,14 @@ func (m *Manager) Create(uuid, name, startCommand, workDir string, envVars map[s
 		StartCommand: startCommand,
 		WorkDir:      workDir,
 		EnvVars:      envVars,
+		JDKPath:      jdkPath,
+		JDKBinPath:   jdkBinPath,
 		State:        StateStopped,
 		AutoRestart:  autoRestart,
 		processType:  processType,
 	}
 
-	slog.Info("实例已创建", "instanceId", uuid, "name", name, "autoRestart", autoRestart, "processType", processType)
+	slog.Info("实例已创建", "instanceId", uuid, "name", name, "autoRestart", autoRestart, "processType", processType, "jdkPath", jdkPath)
 	return nil
 }
 
@@ -193,6 +198,8 @@ func (m *Manager) Start(uuid string) error {
 			StartCommand: inst.StartCommand,
 			WorkDir:      inst.WorkDir,
 			EnvVars:      inst.EnvVars,
+			JavaHome:     inst.JDKPath,
+			JDKBinPath:   inst.JDKBinPath,
 			AutoRestart:  inst.AutoRestart,
 			ProcessType:  inst.processType,
 		}

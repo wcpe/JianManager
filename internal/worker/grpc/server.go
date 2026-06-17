@@ -9,6 +9,7 @@ import (
 
 	psproc "github.com/shirou/gopsutil/v4/process"
 
+	"github.com/wxys233/JianManager/internal/worker/jdk"
 	"github.com/wxys233/JianManager/internal/worker/metrics"
 	"github.com/wxys233/JianManager/internal/worker/process"
 	"github.com/wxys233/JianManager/proto/workerpb"
@@ -32,6 +33,7 @@ type Server struct {
 	manager   *process.Manager
 	nodeUUID  string
 	collector *metrics.Collector
+	jdkMgr    *jdk.Manager
 
 	// eventMu 保护 eventSubs，StreamInstanceEvents 订阅/取消订阅时加锁。
 	eventMu   sync.Mutex
@@ -40,11 +42,13 @@ type Server struct {
 
 // NewServer 创建 Worker gRPC 服务器。
 // 注册 Manager 状态变更回调，将事件扇出到所有 StreamInstanceEvents 订阅者。
-func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Collector) *Server {
+// jdkMgr 可为 nil（未启用 JDK 托管时）。
+func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Collector, jdkMgr *jdk.Manager) *Server {
 	s := &Server{
 		manager:   manager,
 		nodeUUID:  nodeUUID,
 		collector: collector,
+		jdkMgr:    jdkMgr,
 	}
 	manager.SetStateChangeHandler(func(uuid string, oldState, newState process.InstanceState) {
 		evt := instanceEvent{
@@ -78,6 +82,8 @@ func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanc
 		req.EnvVars,
 		req.AutoRestart,
 		process.ProcessType(req.ProcessType),
+		req.JdkPath,
+		req.JdkBinPath,
 	)
 	if err != nil {
 		return &workerpb.CreateInstanceResponse{Success: false, Error: err.Error()}, nil
@@ -220,6 +226,62 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 // 便于调用方区分「该能力归属 CP」与「Worker 未实现」。
 func (s *Server) IssueTerminalToken(ctx context.Context, req *workerpb.IssueTerminalTokenRequest) (*workerpb.IssueTerminalTokenResponse, error) {
 	return nil, fmt.Errorf("终端 token 由 Control Plane 签发，Worker 不实现此 RPC")
+}
+
+// ListJDKs 列出 Worker 本地 JDK 注册表。
+func (s *Server) ListJDKs(ctx context.Context, req *workerpb.ListJDKsRequest) (*workerpb.ListJDKsResponse, error) {
+	if s.jdkMgr == nil {
+		return &workerpb.ListJDKsResponse{}, nil
+	}
+	infos, err := s.jdkMgr.List()
+	if err != nil {
+		return nil, fmt.Errorf("扫描 JDK 失败: %w", err)
+	}
+	out := make([]*workerpb.JDKInfo, 0, len(infos))
+	for _, i := range infos {
+		out = append(out, &workerpb.JDKInfo{
+			Vendor:       i.Vendor,
+			MajorVersion: int32(i.MajorVersion),
+			Version:      i.Version,
+			Arch:         i.Arch,
+			Path:         i.Path,
+			Managed:      i.Managed,
+		})
+	}
+	return &workerpb.ListJDKsResponse{Jdks: out}, nil
+}
+
+// InstallJDK 下载并安装指定 JDK。
+func (s *Server) InstallJDK(ctx context.Context, req *workerpb.InstallJDKRequest) (*workerpb.InstallJDKResponse, error) {
+	if s.jdkMgr == nil {
+		return &workerpb.InstallJDKResponse{Success: false, Error: "JDK 管理器未启用"}, nil
+	}
+	info, err := s.jdkMgr.Install(req.Vendor, int(req.MajorVersion), req.Arch, req.InstallDir)
+	if err != nil {
+		return &workerpb.InstallJDKResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &workerpb.InstallJDKResponse{
+		Success: true,
+		Jdk: &workerpb.JDKInfo{
+			Vendor:       info.Vendor,
+			MajorVersion: int32(info.MajorVersion),
+			Version:      info.Version,
+			Arch:         info.Arch,
+			Path:         info.Path,
+			Managed:      info.Managed,
+		},
+	}, nil
+}
+
+// RemoveJDK 删除托管 JDK。
+func (s *Server) RemoveJDK(ctx context.Context, req *workerpb.RemoveJDKRequest) (*workerpb.RemoveJDKResponse, error) {
+	if s.jdkMgr == nil {
+		return &workerpb.RemoveJDKResponse{Success: false, Error: "JDK 管理器未启用"}, nil
+	}
+	if err := s.jdkMgr.Remove(req.Path); err != nil {
+		return &workerpb.RemoveJDKResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &workerpb.RemoveJDKResponse{Success: true}, nil
 }
 
 // StreamInstanceEvents 订阅实例状态变更事件流。
