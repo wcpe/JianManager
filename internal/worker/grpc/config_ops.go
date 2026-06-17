@@ -1,6 +1,7 @@
 package grpc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -112,13 +113,37 @@ func (s *Server) WriteConfig(ctx context.Context, req *workerpb.WriteConfigReque
 	if !validation.Valid {
 		return &workerpb.WriteConfigResponse{Success: false, Error: "配置格式校验失败", Validation: validation}, nil
 	}
+	finalContent := req.Content
+	// YAML AST round-trip：保留注释与键顺序。
+	if format == "yaml" {
+		if normalized, err := roundTripYAML(req.Content); err == nil {
+			finalContent = normalized
+		}
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return &workerpb.WriteConfigResponse{Success: false, Error: fmt.Sprintf("创建目录失败: %v", err), Validation: validation}, nil
 	}
-	if err := os.WriteFile(path, []byte(req.Content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(finalContent), 0644); err != nil {
 		return &workerpb.WriteConfigResponse{Success: false, Error: fmt.Sprintf("写入配置失败: %v", err), Validation: validation}, nil
 	}
 	return &workerpb.WriteConfigResponse{Success: true, Validation: validation}, nil
+}
+
+// roundTripYAML 通过 yaml.v3 重新序列化以保留注释、锚点引用、键顺序等。
+// 解析失败时返回原内容，调用方继续走原文路径。
+func roundTripYAML(content string) (string, error) {
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte(content), &node); err != nil {
+		return content, err
+	}
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(&node); err != nil {
+		return content, err
+	}
+	_ = enc.Close()
+	return buf.String(), nil
 }
 
 func (s *Server) ValidateConfig(ctx context.Context, req *workerpb.ValidateConfigRequest) (*workerpb.ValidateConfigResponse, error) {
