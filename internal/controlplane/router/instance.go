@@ -106,15 +106,19 @@ func (h *InstanceHandler) Get(c *gin.Context) {
 }
 
 type createInstanceRequest struct {
-	NodeID       uint               `json:"nodeId" binding:"required"`
-	Name         string             `json:"name" binding:"required"`
-	Type         model.InstanceType `json:"type" binding:"required"`
-	ProcessType  model.ProcessType  `json:"processType" binding:"required"`
-	StartCommand string             `json:"startCommand" binding:"required"`
-	WorkDir      string             `json:"workDir"`
-	AutoStart    bool               `json:"autoStart"`
-	AutoRestart  bool               `json:"autoRestart"`
-	GroupID      uint               `json:"groupId"`
+	NodeID            uint               `json:"nodeId" binding:"required"`
+	Name              string             `json:"name" binding:"required"`
+	Type              model.InstanceType `json:"type" binding:"required"`
+	ProcessType       model.ProcessType  `json:"processType" binding:"required"`
+	StartCommand      string             `json:"startCommand" binding:"required"`
+	JDKID             uint               `json:"jdkId"`
+	JavaMajorVersion  int                `json:"javaMajorVersion"`
+	LaunchSpec        string             `json:"launchSpec"`
+	WorkDir           string             `json:"workDir"`
+	EnvVars           map[string]string  `json:"envVars"`
+	AutoStart         bool               `json:"autoStart"`
+	AutoRestart       bool               `json:"autoRestart"`
+	GroupID           uint               `json:"groupId"`
 }
 
 // Create 创建实例。
@@ -145,15 +149,19 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 	}
 
 	instance, err := h.instanceSvc.Create(service.CreateInstanceRequest{
-		NodeID:       req.NodeID,
-		Name:         req.Name,
-		Type:         req.Type,
-		ProcessType:  req.ProcessType,
-		StartCommand: req.StartCommand,
-		WorkDir:      req.WorkDir,
-		AutoStart:    req.AutoStart,
-		AutoRestart:  req.AutoRestart,
-		GroupID:      req.GroupID,
+		NodeID:           req.NodeID,
+		Name:             req.Name,
+		Type:             req.Type,
+		ProcessType:      req.ProcessType,
+		StartCommand:     req.StartCommand,
+		JDKID:            req.JDKID,
+		JavaMajorVersion: req.JavaMajorVersion,
+		LaunchSpec:       req.LaunchSpec,
+		WorkDir:          req.WorkDir,
+		EnvVars:          req.EnvVars,
+		AutoStart:        req.AutoStart,
+		AutoRestart:      req.AutoRestart,
+		GroupID:          req.GroupID,
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrQuotaExceeded) {

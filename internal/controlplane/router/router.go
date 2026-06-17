@@ -16,6 +16,7 @@ type Services struct {
 	Group    *service.GroupService
 	Node     *service.NodeService
 	Instance *service.InstanceService
+	JDK      *service.JDKService
 	Terminal *service.TerminalService
 	File     *service.FileService
 	Config   *service.ConfigService
@@ -58,6 +59,9 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	{
 		nodeHandler := NewNodeHandler(svcs.Node)
 		nodeHandler.RegisterRoutes(protected)
+
+		jdkHandler := NewJDKHandler(svcs.JDK)
+		jdkHandler.RegisterRoutes(protected)
 
 		instanceHandler := NewInstanceHandler(svcs.Instance, svcs.Authz)
 		instanceHandler.RegisterRoutes(protected)

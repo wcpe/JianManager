@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -46,15 +47,19 @@ func NewInstanceService(db *gorm.DB, groupSvc *GroupService, pool *cpgrpc.Client
 
 // CreateInstanceRequest 创建实例请求。
 type CreateInstanceRequest struct {
-	NodeID       uint              `json:"nodeId" binding:"required"`
-	Name         string            `json:"name" binding:"required,min=1,max=128"`
-	Type         model.InstanceType `json:"type" binding:"required"`
-	ProcessType  model.ProcessType  `json:"processType" binding:"required"`
-	StartCommand string            `json:"startCommand" binding:"required"`
-	WorkDir      string            `json:"workDir"`
-	AutoStart    bool              `json:"autoStart"`
-	AutoRestart  bool              `json:"autoRestart"`
-	GroupID      uint              `json:"groupId"`
+	NodeID            uint              `json:"nodeId" binding:"required"`
+	Name              string            `json:"name" binding:"required,min=1,max=128"`
+	Type              model.InstanceType `json:"type" binding:"required"`
+	ProcessType       model.ProcessType  `json:"processType" binding:"required"`
+	StartCommand      string            `json:"startCommand" binding:"required"`
+	JDKID             uint              `json:"jdkId"`
+	JavaMajorVersion  int               `json:"javaMajorVersion"`
+	LaunchSpec        string            `json:"launchSpec"`
+	WorkDir           string            `json:"workDir"`
+	EnvVars           map[string]string `json:"envVars"`
+	AutoStart         bool              `json:"autoStart"`
+	AutoRestart       bool              `json:"autoRestart"`
+	GroupID           uint              `json:"groupId"`
 }
 
 // Create 创建实例。
@@ -62,15 +67,22 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 	req.StartCommand = sanitizeStartCommand(req.StartCommand)
 
 	instance := &model.Instance{
-		NodeID:       req.NodeID,
-		Name:         req.Name,
-		Type:         req.Type,
-		ProcessType:  req.ProcessType,
-		StartCommand: req.StartCommand,
-		WorkDir:      req.WorkDir,
-		AutoStart:    req.AutoStart,
-		AutoRestart:  req.AutoRestart,
-		Status:       model.InstanceStatusStopped,
+		NodeID:           req.NodeID,
+		Name:             req.Name,
+		Type:             req.Type,
+		ProcessType:      req.ProcessType,
+		StartCommand:     req.StartCommand,
+		JDKID:            req.JDKID,
+		JavaMajorVersion: req.JavaMajorVersion,
+		LaunchSpec:       req.LaunchSpec,
+		WorkDir:          req.WorkDir,
+		AutoStart:        req.AutoStart,
+		AutoRestart:      req.AutoRestart,
+		Status:           model.InstanceStatusStopped,
+	}
+	if len(req.EnvVars) > 0 {
+		raw, _ := json.Marshal(req.EnvVars)
+		instance.EnvVars = string(raw)
 	}
 
 	err := s.db.Transaction(func(tx *gorm.DB) error {
@@ -336,12 +348,19 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// 把存储为 JSON 字符串的 EnvVars 解出来，原样下发给 Worker 注入到进程环境。
+	var envVars map[string]string
+	if strings.TrimSpace(instance.EnvVars) != "" {
+		_ = json.Unmarshal([]byte(instance.EnvVars), &envVars)
+	}
+
 	resp, err := client.Worker.CreateInstance(ctx, &workerpb.CreateInstanceRequest{
 		InstanceUuid: instance.UUID,
 		Name:         instance.Name,
 		ProcessType:  string(instance.ProcessType),
 		StartCommand: instance.StartCommand,
 		WorkDir:      instance.WorkDir,
+		EnvVars:      envVars,
 		AutoRestart:  instance.AutoRestart,
 	})
 	if err != nil {
