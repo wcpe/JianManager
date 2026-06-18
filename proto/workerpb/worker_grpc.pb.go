@@ -45,6 +45,7 @@ const (
 	WorkerService_ListJDKs_FullMethodName             = "/worker.WorkerService/ListJDKs"
 	WorkerService_InstallJDK_FullMethodName           = "/worker.WorkerService/InstallJDK"
 	WorkerService_RemoveJDK_FullMethodName            = "/worker.WorkerService/RemoveJDK"
+	WorkerService_DownloadCore_FullMethodName         = "/worker.WorkerService/DownloadCore"
 	WorkerService_CreateBot_FullMethodName            = "/worker.WorkerService/CreateBot"
 	WorkerService_DeleteBot_FullMethodName            = "/worker.WorkerService/DeleteBot"
 	WorkerService_ListBots_FullMethodName             = "/worker.WorkerService/ListBots"
@@ -112,6 +113,8 @@ type WorkerServiceClient interface {
 	InstallJDK(ctx context.Context, in *InstallJDKRequest, opts ...grpc.CallOption) (*InstallJDKResponse, error)
 	// RemoveJDK 删除 Worker 托管的 JDK 目录。
 	RemoveJDK(ctx context.Context, in *RemoveJDKRequest, opts ...grpc.CallOption) (*RemoveJDKResponse, error)
+	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
+	DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error)
 	// CreateBot 在 Worker 上创建 Bot 连接。
 	CreateBot(ctx context.Context, in *CreateBotRequest, opts ...grpc.CallOption) (*CreateBotResponse, error)
 	// DeleteBot 停止并删除 Bot。
@@ -408,6 +411,16 @@ func (c *workerServiceClient) RemoveJDK(ctx context.Context, in *RemoveJDKReques
 	return out, nil
 }
 
+func (c *workerServiceClient) DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DownloadCoreResponse)
+	err := c.cc.Invoke(ctx, WorkerService_DownloadCore_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) CreateBot(ctx context.Context, in *CreateBotRequest, opts ...grpc.CallOption) (*CreateBotResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateBotResponse)
@@ -545,6 +558,8 @@ type WorkerServiceServer interface {
 	InstallJDK(context.Context, *InstallJDKRequest) (*InstallJDKResponse, error)
 	// RemoveJDK 删除 Worker 托管的 JDK 目录。
 	RemoveJDK(context.Context, *RemoveJDKRequest) (*RemoveJDKResponse, error)
+	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
+	DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error)
 	// CreateBot 在 Worker 上创建 Bot 连接。
 	CreateBot(context.Context, *CreateBotRequest) (*CreateBotResponse, error)
 	// DeleteBot 停止并删除 Bot。
@@ -646,6 +661,9 @@ func (UnimplementedWorkerServiceServer) InstallJDK(context.Context, *InstallJDKR
 }
 func (UnimplementedWorkerServiceServer) RemoveJDK(context.Context, *RemoveJDKRequest) (*RemoveJDKResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveJDK not implemented")
+}
+func (UnimplementedWorkerServiceServer) DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DownloadCore not implemented")
 }
 func (UnimplementedWorkerServiceServer) CreateBot(context.Context, *CreateBotRequest) (*CreateBotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateBot not implemented")
@@ -1139,6 +1157,24 @@ func _WorkerService_RemoveJDK_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_DownloadCore_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DownloadCoreRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).DownloadCore(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_DownloadCore_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).DownloadCore(ctx, req.(*DownloadCoreRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_CreateBot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateBotRequest)
 	if err := dec(in); err != nil {
@@ -1360,6 +1396,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RemoveJDK",
 			Handler:    _WorkerService_RemoveJDK_Handler,
+		},
+		{
+			MethodName: "DownloadCore",
+			Handler:    _WorkerService_DownloadCore_Handler,
 		},
 		{
 			MethodName: "CreateBot",

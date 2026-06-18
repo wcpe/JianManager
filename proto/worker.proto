@@ -61,6 +61,8 @@ service WorkerService {
   rpc InstallJDK(InstallJDKRequest) returns (InstallJDKResponse);
   // RemoveJDK 删除 Worker 托管的 JDK 目录。
   rpc RemoveJDK(RemoveJDKRequest) returns (RemoveJDKResponse);
+  // DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
+  rpc DownloadCore(DownloadCoreRequest) returns (DownloadCoreResponse);
 
   // === Bot 操作 ===
 
@@ -518,6 +520,21 @@ message RemoveJDKRequest {
 message RemoveJDKResponse {
   bool success = 1;
   string error = 2;
+}
+
+// === 子服搭建（FR-034） ===
+
+message DownloadCoreRequest {
+  string instance_uuid = 1;
+  string dest_filename = 2; // 落地文件名（如 server.jar），相对实例工作目录
+  string download_url = 3;
+  string sha256 = 4;        // 可选；非空时校验下载内容
+}
+
+message DownloadCoreResponse {
+  bool success = 1;
+  string error = 2;
+  int64 size = 3;
 }
 
 // === Bot 操作 ===
