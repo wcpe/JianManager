@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -18,6 +21,7 @@ import (
 	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
 	"github.com/wxys233/JianManager/internal/controlplane/model"
 	"github.com/wxys233/JianManager/internal/controlplane/service"
+	"github.com/wxys233/JianManager/internal/platform/dataroot"
 )
 
 // setupTestDB 创建临时 SQLite 数据库并运行自动迁移。
@@ -54,6 +58,8 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 	authzSvc := service.NewAuthzService(db)
 	fileSvc := service.NewFileService(db, pool)
 	configSvc := service.NewConfigService(db, pool)
+	// 制品库需要数据根；测试用临时根，进程退出后由 OS 回收。
+	root, _ := dataroot.Init(filepath.Join(os.TempDir(), "jm-test-"+strconv.FormatInt(time.Now().UnixNano(), 10)))
 	svcs := &Services{
 		Auth:     service.NewAuthService(db, jwtCfg),
 		User:     service.NewUserService(db),
@@ -70,6 +76,7 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 		Template: service.NewTemplateService(db),
 		Audit:    service.NewAuditService(db),
 		Authz:    authzSvc,
+		Asset:    service.NewAssetService(db, root),
 	}
 	return Setup(svcs, jwtCfg.Secret)
 }

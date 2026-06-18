@@ -276,6 +276,7 @@ AlertRule ──1:N──▶ AlertEvent
 | server_registrations (V2) | proxy_instance_id(FK), backend_instance_id(FK), alias, priority, forced_host, restricted, enabled；UNIQUE(proxy,backend) |
 | node_jdks (V2) | node_id(FK), vendor, major_version, version, arch, path, managed(下载/登记) |
 | instance_config_versions (V2) | instance_id(FK), file_path, content, author, created_at |
+| assets | type(core/plugin/image/video/archive/blob), name, version, filename, sha256(寻址+去重键), md5, size, content_type, source_url, metadata(JSON), storage_state(hot/archived/external), storage_backend, ref_count, rel_path(相对数据根), created_at, last_used_at；UNIQUE(type,sha256) |
 
 ### 数据库切换
 
@@ -705,3 +706,24 @@ data/
 ### 13.5 一键复制子服
 - 复制产出独立新实例（系统分配新目录/端口）；拷贝 workDir 时排除 session.lock / logs / 缓存 / usercache。
 - 配置引擎修正身份字段（端口 / 名称 / motd，可选 level-name），保留 forwarding secret；按勾选注册进 0/1/多个代理（写入各代理 servers + priorities）。
+
+## 14. 制品库（内容寻址，ADR-011）
+
+> 平台所有二进制资产（核心 jar、插件、图片、视频、媒体 blob…）统一进内容寻址的制品库，带 sha256/md5 完整性校验，可去重、可追溯、可复用。核心 jar 是第一类资产，模型同样容纳后续插件/图片/媒体。物理根位于数据根 `var/artifacts`（见 §11.1）。
+
+### 14.1 类型分区 + 内容寻址（CAS）
+- 资产存 `var/artifacts/<type>/<sha256 前 2 位>/<sha256>.<ext>`；类型内按 sha256 去重，类型间物理分目录（便于浏览/整类备份/归档）。
+- `type` ∈ `core | plugin | image | video | archive | blob`。sha256 既是寻址键也是去重键，登记 `rel_path` 相对数据根存储（便携）。
+
+### 14.2 入库与完整性
+- 入库即算 sha256+md5；调用方提供期望校验和则比对，不符拒收。
+- 同 `(type, sha256)` 命中 → 复用记录并刷新 `last_used_at`，不重复落盘。
+- 入口：multipart 上传 / 从本地路径登记 / 下载入库（`IngestFromURL`，供 FR-034 建服取核心复用）。
+
+### 14.3 生命周期与引用保护
+- `storage_state`(hot/archived/external) + `storage_backend` 驱动归档/外置（归档策略与外部后端为后续 FR，此处先立模型）；归档只改状态与位置，DB 记录与引用（sha256）不变。
+- `ref_count`>0（被模板/实例引用）的资产删除前拒绝。
+
+### 14.4 API 与鉴权
+- `GET /assets`（按 type 筛选、分页）、`GET /assets/:id`、`POST /assets`（上传/登记）、`DELETE /assets/:id`。
+- 平台级共享资源，统一由平台管理员管理（同节点/模板的平台管理员收敛）。

@@ -15,6 +15,7 @@ import (
 	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
 	"github.com/wxys233/JianManager/internal/controlplane/router"
 	"github.com/wxys233/JianManager/internal/controlplane/service"
+	"github.com/wxys233/JianManager/internal/platform/dataroot"
 	"github.com/wxys233/JianManager/proto/workerpb"
 )
 
@@ -39,6 +40,13 @@ func main() {
 		log.Fatalf("数据库迁移失败: %v", err)
 	}
 
+	// 解析并初始化项目自包含数据根（CP 拥有制品库 var/artifacts）。参见 ADR-010/011。
+	root, err := dataroot.Init(os.Getenv(dataroot.EnvVar))
+	if err != nil {
+		log.Fatalf("初始化数据根失败: %v", err)
+	}
+	slog.Info("数据根就绪", "dataDir", root.Base())
+
 	authSvc := service.NewAuthService(db, cfg.JWT)
 	userSvc := service.NewUserService(db)
 	groupSvc := service.NewGroupService(db)
@@ -57,6 +65,7 @@ func main() {
 	auditSvc := service.NewAuditService(db)
 	authzSvc := service.NewAuthzService(db)
 	eventSvc := service.NewEventService(pool)
+	assetSvc := service.NewAssetService(db, root)
 
 	// 告警评估器：每 60s 检测节点指标，触发 Webhook 通知
 	alertEvaluator := service.NewAlertEvaluator(db)
@@ -90,6 +99,7 @@ func main() {
 		Audit:    auditSvc,
 		Authz:    authzSvc,
 		Event:    eventSvc,
+		Asset:    assetSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）

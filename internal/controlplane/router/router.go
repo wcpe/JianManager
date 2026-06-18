@@ -28,6 +28,7 @@ type Services struct {
 	Audit    *service.AuditService
 	Authz    *service.AuthzService
 	Event    *service.EventService
+	Asset    *service.AssetService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -97,6 +98,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		templateHandler := NewTemplateHandler(svcs.Template)
 		templateHandler.RegisterRoutes(protected)
+
+		// 制品库：平台级共享资源，Handler 内部按平台管理员收敛（FR-045）。
+		assetHandler := NewAssetHandler(svcs.Asset)
+		assetHandler.RegisterRoutes(protected)
 	}
 
 	// 仅平台管理员

@@ -557,6 +557,67 @@
 
 ---
 
+## 制品库
+
+> 平台级共享资产，内容寻址（sha256）+ 类型分区存储，统一由平台管理员管理。物理文件位于数据根 `var/artifacts/<type>/<sha256[:2]>/<sha256><ext>`。参见 ADR-011。
+> 权限：以下接口均要求平台管理员。
+
+### GET /api/v1/assets
+- **描述**: 列出资产，可按类型筛选、分页
+- **关联 FR**: FR-045
+- **Query**: `?type=core&page=1&pageSize=20`
+  - `type`: 可选，`core|plugin|image|video|archive|blob`，非法值返回 400 `INVALID_TYPE`
+- **响应 200**:
+```json
+{
+  "items": [
+    {
+      "id": 1, "type": "core", "name": "paper-1.20.4", "version": "435",
+      "filename": "paper.jar",
+      "sha256": "<64hex>", "md5": "<32hex>", "size": 48234123,
+      "contentType": "application/java-archive", "sourceUrl": "",
+      "metadata": "", "storageState": "hot", "storageBackend": "local",
+      "refCount": 0, "relPath": "var/artifacts/core/ab/<sha256>.jar",
+      "createdAt": "2026-06-19T00:00:00Z", "lastUsedAt": "2026-06-19T00:00:00Z"
+    }
+  ],
+  "total": 1, "page": 1, "pageSize": 20
+}
+```
+
+### GET /api/v1/assets/:id
+- **描述**: 资产详情
+- **关联 FR**: FR-045
+- **响应**: 单个资产对象（字段同上）；不存在返回 404 `NOT_FOUND`
+
+### POST /api/v1/assets
+- **描述**: 入库一个资产——multipart 上传 **或** 从本地路径登记。入库即算 sha256+md5；同 `(type, sha256)` 去重复用并刷新 `last_used_at`；提供期望校验和则比对，不符拒收。
+- **关联 FR**: FR-045
+- **方式 A（multipart 上传）** `Content-Type: multipart/form-data`：
+  - `file`（必填，文件）、`type`（必填）
+  - 可选：`name`、`version`、`contentType`、`sourceUrl`、`metadata`(JSON 字符串)、`expectedSha256`、`expectedMd5`
+- **方式 B（从本地路径登记）** `Content-Type: application/json`：
+```json
+{ "type": "core", "path": "/abs/or/rel/path/to/paper.jar",
+  "name": "paper-1.20.4", "version": "435", "filename": "paper.jar",
+  "expectedSha256": "<64hex>" }
+```
+- **响应 201**: 新建或复用的资产对象
+- **错误**:
+  - 400 `INVALID_REQUEST`（缺 type 或既无 file 也无 path）
+  - 400 `INVALID_TYPE`（类型非法）
+  - 422 `CHECKSUM_MISMATCH`（期望校验和与实际不符）
+  - 500 `INGEST_FAILED`
+
+### DELETE /api/v1/assets/:id
+- **描述**: 删除资产；被引用（`refCount>0`）时拒绝
+- **关联 FR**: FR-045
+- **错误**: 404 `NOT_FOUND`；409 `ASSET_IN_USE`（附当前引用数）
+
+> 备注：内部「下载入库」（download → store）能力已实现于服务层（`AssetService.IngestFromURL`），供 FR-034 建服取核心时复用，暂未单独暴露为公开 endpoint。
+
+---
+
 ## 审计日志
 
 ### GET /api/v1/audit
