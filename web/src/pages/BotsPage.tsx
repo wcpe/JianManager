@@ -1,6 +1,15 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useBots, useCreateBot, useDeleteBot, useSetBotBehavior, type BotInfo } from '@/api/bots'
+import { useBots, useCreateBot, useDeleteBot, useSetBotBehavior, type BotConfig, type BotInfo } from '@/api/bots'
+
+/** 安全解析 Bot 的 JSON 配置字符串，解析失败时返回占位。 */
+function parseBotConfig(config: string): BotConfig {
+  try {
+    return JSON.parse(config) as BotConfig
+  } catch {
+    return { server: '', port: 0, auth: '' }
+  }
+}
 import { useInstances } from '@/api/instances'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
@@ -33,7 +42,8 @@ export default function BotsPage() {
   const { t } = useTranslation()
   const [showCreate, setShowCreate] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
-  const { data: bots, isLoading } = useBots()
+  const { data: botList, isLoading } = useBots()
+  const bots = botList?.items
   const del = useDeleteBot()
 
   const statusConfig: Record<string, { text: string; color: string }> = {
@@ -105,6 +115,7 @@ function BotRow({ bot, statusConfig, onDelete }: { bot: BotInfo; statusConfig: R
   const { t } = useTranslation()
   const setBehavior = useSetBotBehavior()
   const st = statusConfig[bot.status] || statusConfig.disconnected
+  const config = parseBotConfig(bot.config)
 
   const behaviorOptions = [
     { value: 'idle', label: t('bots.idle') },
@@ -138,7 +149,7 @@ function BotRow({ bot, statusConfig, onDelete }: { bot: BotInfo; statusConfig: R
         </Select>
       </TableCell>
       <TableCell className="text-muted-foreground">
-        {bot.config.server}:{bot.config.port}
+        {config.server}:{config.port}
       </TableCell>
       <TableCell>
         <Button

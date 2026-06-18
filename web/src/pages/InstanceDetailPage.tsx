@@ -222,7 +222,8 @@ function BackupsTab() {
 
 function BotsTab({ instanceId }: { instanceId: number }) {
   const { t } = useTranslation()
-  const { data: bots, isLoading } = useBots(instanceId)
+  const { data: botList, isLoading } = useBots({ instanceId })
+  const bots = botList?.items
 
   return (
     <div>
@@ -241,7 +242,17 @@ function BotsTab({ instanceId }: { instanceId: number }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {bots.map((bot) => (
+              {bots.map((bot) => {
+                let server = ''
+                let port: number | string = ''
+                try {
+                  const cfg = JSON.parse(bot.config) as { server?: string; port?: number }
+                  server = cfg.server ?? ''
+                  port = cfg.port ?? ''
+                } catch {
+                  // config 非法 JSON 时留空
+                }
+                return (
                 <TableRow key={bot.id}>
                   <TableCell className="font-medium">{bot.name}</TableCell>
                   <TableCell>
@@ -251,10 +262,11 @@ function BotsTab({ instanceId }: { instanceId: number }) {
                   </TableCell>
                   <TableCell className="text-muted-foreground">{bot.behavior}</TableCell>
                   <TableCell className="text-muted-foreground">
-                    {bot.config.server}:{bot.config.port}
+                    {server}:{port}
                   </TableCell>
                 </TableRow>
-              ))}
+                )
+              })}
             </TableBody>
           </Table>
         </div>
