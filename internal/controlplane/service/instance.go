@@ -66,6 +66,18 @@ type CreateInstanceRequest struct {
 func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, error) {
 	req.StartCommand = sanitizeStartCommand(req.StartCommand)
 
+	// MC 结构化启动（ADR-008）：提供 launchSpec 时由其派生 java 启动命令，
+	// 取代自由文本 start_command；启动时由 Worker 注入绑定 JDK 的 JAVA_HOME/PATH。
+	if spec, err := parseLaunchSpec(req.LaunchSpec); err != nil {
+		return nil, err
+	} else if spec != nil {
+		derived, derr := deriveStartCommand(spec)
+		if derr != nil {
+			return nil, derr
+		}
+		req.StartCommand = derived
+	}
+
 	// 工作目录系统分配（ADR-007/ADR-010）：MC 实例不接受用户手填绝对路径，
 	// 由系统在数据根 var/servers 下按 slug+shortid 分配，按相对路径登记保证便携。
 	// 其它类型（generic）保留用户传入的 WorkDir。
@@ -370,6 +382,13 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 		_ = json.Unmarshal([]byte(instance.EnvVars), &envVars)
 	}
 
+	// 解析实例绑定的 JDK 安装路径下发给 Worker：Worker 启动时据此注入 JAVA_HOME 并把
+	// <jdk>/bin 接入 PATH（ADR-008 / FR-033），结构化启动命令里的 `java` 即指向它。
+	jdkPath, err := s.resolveJDKPath(instance)
+	if err != nil {
+		return err
+	}
+
 	resp, err := client.Worker.CreateInstance(ctx, &workerpb.CreateInstanceRequest{
 		InstanceUuid: instance.UUID,
 		Name:         instance.Name,
@@ -378,6 +397,7 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 		WorkDir:      instance.WorkDir,
 		EnvVars:      envVars,
 		AutoRestart:  instance.AutoRestart,
+		JdkPath:      jdkPath,
 	})
 	if err != nil {
 		return fmt.Errorf("Worker CreateInstance 失败: %w", err)
@@ -386,6 +406,30 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 		return fmt.Errorf("Worker CreateInstance 失败: %s", resp.Error)
 	}
 	return nil
+}
+
+// resolveJDKPath 解析实例绑定的 JDK 在节点上的安装路径，下发给 Worker 作 JAVA_HOME。
+// 优先按 JDKID 精确匹配；未绑定但指定了 Java 大版本时，回退到本节点该大版本的 JDK；
+// 都没有则返回空字符串（generic/universal 实例无需注入 JDK）。
+func (s *InstanceService) resolveJDKPath(instance *model.Instance) (string, error) {
+	if instance.JDKID > 0 {
+		var jdk model.NodeJDK
+		if err := s.db.First(&jdk, instance.JDKID).Error; err != nil {
+			return "", fmt.Errorf("绑定的 JDK(id=%d) 不存在: %w", instance.JDKID, err)
+		}
+		return jdk.Path, nil
+	}
+	if instance.JavaMajorVersion > 0 {
+		var jdk model.NodeJDK
+		err := s.db.Where("node_id = ? AND major_version = ?", instance.NodeID, instance.JavaMajorVersion).First(&jdk).Error
+		if err == nil {
+			return jdk.Path, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", fmt.Errorf("查询 JDK 失败: %w", err)
+		}
+	}
+	return "", nil
 }
 
 // delegateToWorker 委托实例操作给 Worker Node。
