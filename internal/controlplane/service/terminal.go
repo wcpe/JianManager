@@ -31,8 +31,9 @@ type TerminalToken struct {
 }
 
 // IssueToken 签发一次性终端连接 token（30s 有效期）。
-// requestHost 为浏览器请求的 Host 头，用于构造 WS URL；空值回退到 baseURL。
-func (s *TerminalService) IssueToken(instanceID uint, permission, requestHost string) (*TerminalToken, error) {
+// requestHost 为浏览器请求的 Host 头，secure 表示访问是否经 TLS（HTTPS 直连或反代标注），
+// 二者共同决定 WS URL 的 host 与 ws/wss scheme；requestHost 空值回退到 baseURL。
+func (s *TerminalService) IssueToken(instanceID uint, permission, requestHost string, secure bool) (*TerminalToken, error) {
 	// 验证实例存在
 	var instance model.Instance
 	if err := s.db.First(&instance, instanceID).Error; err != nil {
@@ -60,22 +61,29 @@ func (s *TerminalService) IssueToken(instanceID uint, permission, requestHost st
 		return nil, fmt.Errorf("签发终端 token 失败: %w", err)
 	}
 
-	// WS URL 指向 CP 代理端点（浏览器 → CP → Worker）
-	// 使用浏览器请求的 Host 构造，支持生产环境非 localhost 访问
-	host := requestHost
-	if host == "" {
-		host = s.baseURL
-	} else {
-		// 从 requestHost (如 192.168.1.100:8080) 构造 ws:// URL
-		host = fmt.Sprintf("ws://%s", host)
-	}
-	wsURL := fmt.Sprintf("%s/ws/terminal", host)
+	// WS URL 指向 CP 代理端点（浏览器 → CP → Worker），按浏览器访问的 Host 与协议构造，
+	// 支持生产环境非 localhost 访问；scheme 跟随访问协议，避免 HTTPS 页面连 ws 被浏览器按混合内容拦截。
+	wsURL := buildTerminalWSURL(s.baseURL, requestHost, secure)
 
 	return &TerminalToken{
 		Token:     tokenStr,
 		WSURL:     wsURL,
 		ExpiresIn: 30,
 	}, nil
+}
+
+// buildTerminalWSURL 构造终端代理 WS URL。
+// requestHost 非空时按其访问协议选择 scheme（secure → wss，否则 ws），避免 HTTPS 页面连 ws 被混合内容策略拦截；
+// requestHost 为空时回退到配置的 baseURL（已含 scheme，不再追加）。
+func buildTerminalWSURL(baseURL, requestHost string, secure bool) string {
+	if requestHost == "" {
+		return fmt.Sprintf("%s/ws/terminal", baseURL)
+	}
+	scheme := "ws"
+	if secure {
+		scheme = "wss"
+	}
+	return fmt.Sprintf("%s://%s/ws/terminal", scheme, requestHost)
 }
 
 // GetWorkerAddr 返回实例所在 Worker 的 WS 地址（供代理使用）。

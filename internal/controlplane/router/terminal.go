@@ -37,7 +37,9 @@ func (h *TerminalHandler) IssueToken(c *gin.Context) {
 		return
 	}
 
-	token, err := h.terminalSvc.IssueToken(id, permission, c.Request.Host)
+	// scheme 跟随访问协议：TLS 直连或反代标注 X-Forwarded-Proto=https 时用 wss
+	secure := c.Request.TLS != nil || c.GetHeader("X-Forwarded-Proto") == "https"
+	token, err := h.terminalSvc.IssueToken(id, permission, c.Request.Host, secure)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": err.Error()})
 		return

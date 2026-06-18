@@ -46,7 +46,7 @@ go build -o bin/worker        ./cmd/worker
 - 失败定位：
   - 连不上且 URL 仍为 `ws://localhost` → 非本版本行为（本版本 `terminal.go` 用 `c.Request.Host`，确认运行的是最新二进制）。
   - token 失败 → token 有效期 30s，注意时钟偏移与 `permission`（read/write）。
-  - **HTTPS / 反代部署注意**：当前固定 `ws://`，若 CP 经 HTTPS 对外，浏览器会因混合内容拦截，需 `wss://`（见文末「已知限制」）。
+  - **HTTPS / 反代部署**：scheme 已跟随访问协议——经 TLS 直连或反代标注 `X-Forwarded-Proto: https` 时签发 `wss://`，否则 `ws://`；反代须透传 `X-Forwarded-Proto`，否则浏览器会因混合内容拦截。
 
 ### 4. Bot 进服
 - 操作：`/bots` 页创建 Bot，目标指向该 RUNNING 实例（server = 实例监听地址，port = 系统分配的 `server_port`）→ 启动 Bot。
@@ -69,5 +69,6 @@ go build -o bin/worker        ./cmd/worker
 
 ## 已知限制 / 待办
 
-- **终端 WS 在 HTTPS / 反代部署下需 `wss://`**：当前 `service/terminal.go` 固定 `ws://`。生产经 TLS 对外时应据 `c.Request.TLS` 或 `X-Forwarded-Proto` 选择 `ws`/`wss`。LAN / 本机 HTTP 验收不受影响；确认存在 HTTPS 部署需求后再做此小修。
 - **核心走制品库命中**（FR-045 消费侧）：当前 Worker 直接 HTTP 下载核心；命中制品库免重复下载属后续增量。
+
+> 终端 WS 的 HTTPS/反代 `wss://` 已实现：`service/terminal.go` 据 `c.Request.TLS` 或 `X-Forwarded-Proto` 选择 scheme，反代须透传 `X-Forwarded-Proto`。

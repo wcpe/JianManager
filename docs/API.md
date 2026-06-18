@@ -279,10 +279,11 @@
   ```json
   {
     "token": "one-time-token",
-    "wsUrl": "ws://worker-node:9101/ws/terminal?token=xxx",
+    "wsUrl": "ws://<访问 Host>/ws/terminal",
     "expiresIn": 30
   }
   ```
+- **说明**: `wsUrl` 指向 CP 代理端点，host 取浏览器请求的 Host（支持非 localhost 访问）；scheme 跟随访问协议——经 TLS 直连或反代标注 `X-Forwarded-Proto: https` 时为 `wss`，否则 `ws`，避免 HTTPS 页面连 `ws` 被混合内容策略拦截。前端连接时以 `?token=` 附加 token。
 
 ---
 
