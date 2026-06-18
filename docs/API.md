@@ -314,10 +314,82 @@
 ## Bot
 
 ### GET /api/v1/bots
-- **描述**: Bot 列表
-- **关联 FR**: FR-009
-- **权限**: `bot.read`
-- **Query**: `?instanceId=xxx&status=connected`
+- **描述**: Bot 列表，分页 + 多维筛选（替换原扁平数组返回，FR-038）
+- **关联 FR**: FR-009, FR-038
+- **权限**: `bot:read`（资源级按可访问实例隔离）
+- **Query**: `?page=1&pageSize=20&instanceId=xxx&nodeId=xxx&status=connected&behavior=guard&q=keyword`
+  - `page` 默认 1（< 1 归一为 1）；`pageSize` 默认 20，范围 [1,100]，越界裁剪
+  - `nodeId` 经实例联表过滤；`q` 匹配 `name` 或 `uuid`
+- **响应**:
+  ```json
+  {
+    "items": [
+      { "id": 1, "uuid": "...", "instanceId": 1, "name": "GuardBot",
+        "status": "connected", "behavior": "guard", "config": "{...}",
+        "workerId": "node-uuid", "createdAt": "...", "updatedAt": "..." }
+    ],
+    "total": 1,
+    "page": 1,
+    "pageSize": 20
+  }
+  ```
+  - 非平台管理员：`items`/`total` 仅含其可访问实例下的 Bot
+
+### GET /api/v1/bots/summary
+- **描述**: Bot 计数聚合（全局或按 `groupBy` 分组），不返回逐条 Bot（FR-038）
+- **关联 FR**: FR-038
+- **权限**: `bot:read`（资源级按可访问实例隔离）
+- **Query**: `?groupBy=instance|node|status|behavior` + 同 `GET /bots` 的筛选维度（先过滤再聚合）
+- **响应（无 groupBy）**:
+  ```json
+  { "total": 12800, "byStatus": { "connected": 12000, "connecting": 800 } }
+  ```
+- **响应（groupBy=instance|node|status|behavior）**:
+  ```json
+  {
+    "total": 12800,
+    "byStatus": { "connected": 12000, "connecting": 800 },
+    "groupBy": "instance",
+    "groups": [ { "key": "1", "label": "生存服", "total": 50, "online": 48 } ]
+  }
+  ```
+  - `groups[].key`：分组键（instance/node 为 ID 字符串，status/behavior 为该值）
+  - `groups[].label`：可读名（instance→实例名，node→节点名）；`online`：该组 `connected` 数
+  - 仅做 DB 聚合（COUNT + GROUP BY），不序列化任何 Bot 行
+- **错误**: `groupBy` 非法值 → 400 `INVALID_REQUEST`
+
+### POST /api/v1/bots/batch
+- **描述**: 按 id 列表或筛选条件批量执行操作，经 gRPC 委托对应 Worker，返回成功/失败计数（FR-038）
+- **关联 FR**: FR-038
+- **权限**: `bot:manage`（资源级按可管理实例隔离）
+- **请求**:
+  ```json
+  {
+    "action": "set-behavior",
+    "ids": [1, 2, 3],
+    "filter": { "instanceId": 1, "nodeId": 2, "status": "connected", "behavior": "idle", "q": "guard" },
+    "behavior": "follow",
+    "target": "PlayerName"
+  }
+  ```
+  - `action` ∈ `set-behavior` | `start` | `stop` | `delete`
+  - 目标二选一：`ids` 或 `filter`（皆空 → 400；同时给出以 `ids` 为准）
+  - `behavior`：`action=set-behavior` 时必填；目标上限 5000（超出 → 400）
+  - 动作映射（复用既有 per-bot RPC）：`set-behavior`→SetBotBehavior、`start`→CreateBot、`stop`→DeleteBot(保留行,置 stopped)、`delete`→DeleteBot+软删
+- **响应**:
+  ```json
+  {
+    "action": "set-behavior",
+    "requested": 3,
+    "succeeded": 2,
+    "failed": 1,
+    "skipped": 0,
+    "errors": [ { "botId": 3, "error": "Worker node-x 未连接" } ]
+  }
+  ```
+  - `skipped`：请求 `ids` 中越权/不存在被静默剔除的数量（存在性隐藏）
+  - `failed` 仅统计 Worker 委托结果；DB 侧变更按既有「失败记 warning 不阻塞」语义
+- **错误**: 400 `INVALID_REQUEST`（action 非法 / 目标皆空 / set-behavior 缺 behavior / 超上限）；403 `FORBIDDEN`
 
 ### POST /api/v1/bots
 - **描述**: 创建 Bot
