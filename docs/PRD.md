@@ -423,6 +423,18 @@
   - [x] 前端配置 Tab 显示的启动命令和创建时填写的一致
 - **关联 FR**: FR-005（实例生命周期）, FR-006（守护进程）
 
+### BUG-006: 已登录用户硬刷新被弹回登录页
+- **状态**: 📋 todo
+- **优先级**: P1
+- **描述**: 登录后硬刷新页面（或直接打开受保护深链如 `/settings`）会被弹回 `/login`，即便 localStorage 中有有效 token。根因：`stores/auth.ts` 初始化 `isAuthenticated:false`，token 仅由 `App.tsx` 的 `useEffect→loadFromStorage()` 异步载入，`AuthGuard` 在首帧（effect 执行前）即重定向到 `/login`，且 `LoginPage` 不会把已登录用户弹回
+- **验收标准**:
+  - [ ] 登录后硬刷新页面，停留在控制台，不被弹回 `/login`
+  - [ ] 已登录时直接打开 `/settings` 等受保护深链，正常渲染
+  - [ ] 退出登录后回到 `/login`
+  - [ ] 已登录时访问 `/login` 自动跳回 `/`
+  - [ ] access token 过期仍能经 401 拦截器刷新（无回归）
+- **关联 FR**: FR-037（运维控制台布局，受此 bug 影响）
+
 ### FR-030: 前端通知系统与 UX 标准化
 - **状态**: ✅ done
 - **优先级**: P1

@@ -3,6 +3,7 @@ import { Navigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { useLogin } from '@/api/auth'
 import { useSetupStatus } from '@/api/setup'
+import { useAuthStore } from '@/stores/auth'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -16,6 +17,12 @@ export default function LoginPage() {
 
   const login = useLogin()
   const { data: setupStatus, isLoading } = useSetupStatus()
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
+
+  // 已登录用户不应停留在登录页，跳回控制台（BUG-006）
+  if (isAuthenticated) {
+    return <Navigate to="/" replace />
+  }
 
   if (!isLoading && setupStatus?.setupRequired) {
     return <Navigate to="/setup" replace />
