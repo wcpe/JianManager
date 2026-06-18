@@ -8,17 +8,17 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"google.golang.org/grpc"
 
+	"github.com/wxys233/JianManager/internal/platform/dataroot"
 	"github.com/wxys233/JianManager/internal/worker/daemon"
+	wgrpc "github.com/wxys233/JianManager/internal/worker/grpc"
 	"github.com/wxys233/JianManager/internal/worker/heartbeat"
 	jdks "github.com/wxys233/JianManager/internal/worker/jdk"
-	wgrpc "github.com/wxys233/JianManager/internal/worker/grpc"
 	"github.com/wxys233/JianManager/internal/worker/metrics"
 	"github.com/wxys233/JianManager/internal/worker/process"
 	"github.com/wxys233/JianManager/internal/worker/register"
@@ -80,16 +80,26 @@ func runWorker() {
 		nodeUUID = "local-dev"
 	}
 
-	workDir := os.Getenv("JIANMANAGER_WORK_DIR")
-	if workDir == "" {
-		workDir = "./servers"
+	// 解析并初始化项目自包含数据根（默认 ./data，可经 JIANMANAGER_DATA_DIR 覆盖）。
+	// 运行态数据全部收口到此根，整体可迁移。参见 ADR-010。
+	root, err := dataroot.Init(os.Getenv(dataroot.EnvVar))
+	if err != nil {
+		slog.Error("初始化数据根失败", "error", err)
+		os.Exit(1)
 	}
 
-	slog.Info("Worker Node 启动", "name", nodeName, "grpcPort", grpcPort, "wsPort", wsPort)
-	// 初始化进程管理器
-	manager := process.NewManager(workDir)
+	// 服务器工作目录根：默认数据根下 var/servers；JIANMANAGER_WORK_DIR 显式覆盖（兼容旧部署）。
+	serversDir := root.ServersDir()
+	if v := os.Getenv("JIANMANAGER_WORK_DIR"); v != "" {
+		serversDir = v
+	}
 
-	// 初始化 JDK 管理器：托管根 <workDir>/jdks；可选追加系统 JDK 探测目录。
+	slog.Info("Worker Node 启动", "name", nodeName, "grpcPort", grpcPort, "wsPort", wsPort, "dataDir", root.Base(), "serversDir", serversDir)
+	// 初始化进程管理器
+	manager := process.NewManager(serversDir)
+
+	// 初始化 JDK 管理器：托管根 <dataRoot>/opt/jdks；可选追加系统 JDK 探测目录。
+	// 参见 ADR-010：JDK 从旧的 <serversDir>/jdks 迁移到 opt/jdks。
 	var systemJDKDirs []string
 	if v := os.Getenv("JIANMANAGER_JDK_SYSTEM_DIRS"); v != "" {
 		for _, d := range strings.Split(v, string(os.PathListSeparator)) {
@@ -101,8 +111,8 @@ func runWorker() {
 	}
 	var jdkMgr *jdks.Manager
 	if os.Getenv("JIANMANAGER_DISABLE_JDK") != "1" {
-		jdkMgr = jdks.NewManager(filepath.Join(workDir, "jdks"), systemJDKDirs)
-		slog.Info("JDK manager enabled", "rootDir", filepath.Join(workDir, "jdks"))
+		jdkMgr = jdks.NewManager(root.JDKsDir(), systemJDKDirs)
+		slog.Info("JDK manager enabled", "rootDir", root.JDKsDir())
 	} else {
 		slog.Info("JDK manager disabled by JIANMANAGER_DISABLE_JDK=1")
 	}
@@ -128,7 +138,7 @@ func runWorker() {
 
 	// 启动 gRPC 服务器
 	grpcServer := grpc.NewServer()
-	workerServer := wgrpc.NewServer(manager, nodeUUID, collector, jdkMgr)
+	workerServer := wgrpc.NewServer(manager, nodeUUID, collector, jdkMgr, root)
 	workerpb.RegisterWorkerServiceServer(grpcServer, workerServer)
 
 	grpcAddr := fmt.Sprintf(":%d", grpcPort)

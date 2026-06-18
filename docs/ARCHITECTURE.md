@@ -652,7 +652,26 @@ STOPPED → STARTING → RUNNING → STOPPING → STOPPED
 ## 11. 配置
 
 **Control Plane**: `control-plane.yaml` — server port, gRPC port, database, JWT secret（管理员账号通过首次启动 Web 引导创建，见 FR-017）
-**Worker Node**: `worker.yaml` — node name, Control Plane address, gRPC/WS ports, servers_dir, Docker, Bot 配置
+**Worker Node**: `worker.yaml` — node name, Control Plane address, gRPC/WS ports, data_dir, Docker, Bot 配置
+
+### 11.1 项目自包含数据根（FHS 布局，ADR-010）
+
+平台运行态数据统一收口到单一数据根，默认进程工作目录下 `./data`，可经环境变量 `JIANMANAGER_DATA_DIR` 覆盖；进程启动时若不存在按布局自动初始化（CP 与 Worker 同源约定，由 `internal/platform/dataroot` 解析）。
+
+```
+data/
+├── bin/              # 平台/辅助可执行
+├── etc/              # 平台与节点配置
+├── opt/jdks/         # 便携 JDK：<vendor>-<ver>/（取代旧的 <serversDir>/jdks）
+├── var/
+│   ├── servers/      # 服务器工作目录：<slug>-<shortid>/（系统分配）
+│   ├── log/          # 运行日志
+│   └── artifacts/    # 制品库（内容寻址，见 §14 / ADR-011）
+└── cache/            # 临时：下载中转/解压
+```
+
+- 登记路径**按数据根相对存储**（如 `var/servers/hub-a1b2c3d4`），整体拷到另一机器后仍自洽。
+- Worker 收到 CP 下发的相对工作目录后，按本节点数据根解析为绝对路径并创建。
 
 ## 12. 部署
 
@@ -670,9 +689,9 @@ STOPPED → STARTING → RUNNING → STOPPING → STOPPED
 - **群组（Network）为非独占软标签**（`network_members` M:N）：仅供分组/筛选/批量操作，子服可属多群组；真实路由只由 `server_registrations` 驱动。
 
 ### 13.2 资源所有权（系统分配）
-- **工作目录**：Worker 在 `servers_dir` 下建 `servers/<name-slug>-<shortid>`，用户不可输入，路径只读展示（取代 BUG-004 必填 UI）。
+- **工作目录**：系统在数据根 `var/servers` 下分配 `<name-slug>-<shortid>`（CP 分配并按相对路径登记，Worker 解析为绝对路径），用户不可输入，路径只读展示（取代 BUG-004 必填 UI，落位见 §11.1 / ADR-010）。
 - **端口**：端口池为新实例分配同节点唯一的 server-port/rcon/query，代理监听端口同理；分配由 Worker 实施、CP 登记。
-- **JDK/运行时**：按节点维护 `node_jdks` 注册表，支持安装多版本（默认 Adoptium）；实例绑定 JDK，启动注入 JAVA_HOME/PATH。
+- **JDK/运行时**：按节点维护 `node_jdks` 注册表，支持安装多版本（默认 Adoptium）；JDK 装入数据根 `opt/jdks`（见 §11.1）；实例绑定 JDK，启动注入 JAVA_HOME/PATH。
 
 ### 13.3 配置引擎
 - 多格式 **保留注释** 的 round-trip 读写：properties / yaml / toml / json / txt。

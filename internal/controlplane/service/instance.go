@@ -11,8 +11,8 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/wxys233/JianManager/internal/controlplane/model"
 	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
+	"github.com/wxys233/JianManager/internal/controlplane/model"
 	"github.com/wxys233/JianManager/proto/workerpb"
 )
 
@@ -47,24 +47,32 @@ func NewInstanceService(db *gorm.DB, groupSvc *GroupService, pool *cpgrpc.Client
 
 // CreateInstanceRequest 创建实例请求。
 type CreateInstanceRequest struct {
-	NodeID            uint              `json:"nodeId" binding:"required"`
-	Name              string            `json:"name" binding:"required,min=1,max=128"`
-	Type              model.InstanceType `json:"type" binding:"required"`
-	ProcessType       model.ProcessType  `json:"processType" binding:"required"`
-	StartCommand      string            `json:"startCommand" binding:"required"`
-	JDKID             uint              `json:"jdkId"`
-	JavaMajorVersion  int               `json:"javaMajorVersion"`
-	LaunchSpec        string            `json:"launchSpec"`
-	WorkDir           string            `json:"workDir"`
-	EnvVars           map[string]string `json:"envVars"`
-	AutoStart         bool              `json:"autoStart"`
-	AutoRestart       bool              `json:"autoRestart"`
-	GroupID           uint              `json:"groupId"`
+	NodeID           uint               `json:"nodeId" binding:"required"`
+	Name             string             `json:"name" binding:"required,min=1,max=128"`
+	Type             model.InstanceType `json:"type" binding:"required"`
+	ProcessType      model.ProcessType  `json:"processType" binding:"required"`
+	StartCommand     string             `json:"startCommand" binding:"required"`
+	JDKID            uint               `json:"jdkId"`
+	JavaMajorVersion int                `json:"javaMajorVersion"`
+	LaunchSpec       string             `json:"launchSpec"`
+	WorkDir          string             `json:"workDir"`
+	EnvVars          map[string]string  `json:"envVars"`
+	AutoStart        bool               `json:"autoStart"`
+	AutoRestart      bool               `json:"autoRestart"`
+	GroupID          uint               `json:"groupId"`
 }
 
 // Create 创建实例。
 func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, error) {
 	req.StartCommand = sanitizeStartCommand(req.StartCommand)
+
+	// 工作目录系统分配（ADR-007/ADR-010）：MC 实例不接受用户手填绝对路径，
+	// 由系统在数据根 var/servers 下按 slug+shortid 分配，按相对路径登记保证便携。
+	// 其它类型（generic）保留用户传入的 WorkDir。
+	workDir := req.WorkDir
+	if req.Type == model.InstanceTypeMinecraftJava {
+		workDir = allocWorkDirRel(req.Name)
+	}
 
 	instance := &model.Instance{
 		NodeID:           req.NodeID,
@@ -75,7 +83,7 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		JDKID:            req.JDKID,
 		JavaMajorVersion: req.JavaMajorVersion,
 		LaunchSpec:       req.LaunchSpec,
-		WorkDir:          req.WorkDir,
+		WorkDir:          workDir,
 		AutoStart:        req.AutoStart,
 		AutoRestart:      req.AutoRestart,
 		Status:           model.InstanceStatusStopped,

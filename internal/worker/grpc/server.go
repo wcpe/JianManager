@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
 	psproc "github.com/shirou/gopsutil/v4/process"
 
+	"github.com/wxys233/JianManager/internal/platform/dataroot"
 	"github.com/wxys233/JianManager/internal/worker/jdk"
 	"github.com/wxys233/JianManager/internal/worker/metrics"
 	"github.com/wxys233/JianManager/internal/worker/process"
@@ -34,6 +36,8 @@ type Server struct {
 	nodeUUID  string
 	collector *metrics.Collector
 	jdkMgr    *jdk.Manager
+	// root 是本节点数据根，用于把 CP 下发的相对工作目录解析为绝对路径。参见 ADR-010。
+	root *dataroot.Root
 
 	// eventMu 保护 eventSubs，StreamInstanceEvents 订阅/取消订阅时加锁。
 	eventMu   sync.Mutex
@@ -42,13 +46,14 @@ type Server struct {
 
 // NewServer 创建 Worker gRPC 服务器。
 // 注册 Manager 状态变更回调，将事件扇出到所有 StreamInstanceEvents 订阅者。
-// jdkMgr 可为 nil（未启用 JDK 托管时）。
-func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Collector, jdkMgr *jdk.Manager) *Server {
+// jdkMgr 可为 nil（未启用 JDK 托管时）。root 用于解析相对工作目录，可为 nil（按绝对路径处理）。
+func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Collector, jdkMgr *jdk.Manager, root *dataroot.Root) *Server {
 	s := &Server{
 		manager:   manager,
 		nodeUUID:  nodeUUID,
 		collector: collector,
 		jdkMgr:    jdkMgr,
+		root:      root,
 	}
 	manager.SetStateChangeHandler(func(uuid string, oldState, newState process.InstanceState) {
 		evt := instanceEvent{
@@ -73,12 +78,21 @@ func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Col
 }
 
 // CreateInstance 创建实例。
+// CP 下发的 WorkDir 按数据根相对存储（系统分配的 var/servers/<slug>-<shortid>），
+// 此处解析为本节点绝对路径并确保目录存在。参见 ADR-010。
 func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanceRequest) (*workerpb.CreateInstanceResponse, error) {
+	workDir := req.WorkDir
+	if s.root != nil && workDir != "" {
+		workDir = s.root.Abs(workDir)
+		if err := os.MkdirAll(workDir, 0o755); err != nil {
+			return &workerpb.CreateInstanceResponse{Success: false, Error: fmt.Sprintf("创建工作目录失败: %v", err)}, nil
+		}
+	}
 	err := s.manager.Create(
 		req.InstanceUuid,
 		req.Name,
 		req.StartCommand,
-		req.WorkDir,
+		workDir,
 		req.EnvVars,
 		req.AutoRestart,
 		process.ProcessType(req.ProcessType),
@@ -168,13 +182,13 @@ func (s *Server) GetNodeMetrics(ctx context.Context, req *workerpb.GetNodeMetric
 
 	m := s.collector.Collect()
 	return &workerpb.GetNodeMetricsResponse{
-		CpuUsage:     m.CPUUsage,
-		MemoryUsage:  m.MemoryUsage,
-		DiskUsage:    m.DiskUsage,
-		MemoryUsedMb: m.MemoryUsedMB,
+		CpuUsage:      m.CPUUsage,
+		MemoryUsage:   m.MemoryUsage,
+		DiskUsage:     m.DiskUsage,
+		MemoryUsedMb:  m.MemoryUsedMB,
 		MemoryTotalMb: m.MemoryTotalMB,
-		DiskUsedMb:   m.DiskUsedMB,
-		DiskTotalMb:  m.DiskTotalMB,
+		DiskUsedMb:    m.DiskUsedMB,
+		DiskTotalMb:   m.DiskTotalMB,
 	}, nil
 }
 

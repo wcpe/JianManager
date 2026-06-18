@@ -9,7 +9,12 @@ grpc:
 ws:
   port: 9102
 
-servers_dir: ./servers
+# 项目自包含数据根（FHS 式布局，见 ADR-010）。默认 ./data，可经 JIANMANAGER_DATA_DIR 覆盖。
+# JDK 装入 <data_dir>/opt/jdks，服务器工作目录在 <data_dir>/var/servers，整体可迁移。
+data_dir: ./data
+
+# 兼容旧部署：显式指定时覆盖数据根派生的 var/servers；留空则用 <data_dir>/var/servers。
+# servers_dir: ./servers
 
 log:
   level: debug
