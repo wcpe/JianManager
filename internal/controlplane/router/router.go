@@ -26,9 +26,11 @@ type Services struct {
 	Backup   *service.BackupService
 	Template *service.TemplateService
 	Audit    *service.AuditService
-	Authz    *service.AuthzService
-	Event    *service.EventService
-	Asset    *service.AssetService
+	Authz     *service.AuthzService
+	Event     *service.EventService
+	Asset     *service.AssetService
+	Core      *service.CoreService
+	Provision *service.ProvisionService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -113,6 +115,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		auditHandler := NewAuditHandler(svcs.Audit)
 		auditHandler.RegisterRoutes(admin)
+
+		// 一键搭建子服与核心查询：平台管理员（FR-034）
+		provisionHandler := NewProvisionHandler(svcs.Core, svcs.Provision)
+		provisionHandler.RegisterRoutes(admin)
 	}
 
 	// 前端静态文件（go:embed 嵌入）

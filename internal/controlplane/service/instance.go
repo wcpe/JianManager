@@ -60,6 +60,10 @@ type CreateInstanceRequest struct {
 	AutoStart        bool               `json:"autoStart"`
 	AutoRestart      bool               `json:"autoRestart"`
 	GroupID          uint               `json:"groupId"`
+	ServerPort       int                `json:"serverPort"`
+	RCONPort         int                `json:"rconPort"`
+	QueryPort        int                `json:"queryPort"`
+	RCONPassword     string             `json:"-"`
 }
 
 // Create 创建实例。
@@ -98,6 +102,10 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		WorkDir:          workDir,
 		AutoStart:        req.AutoStart,
 		AutoRestart:      req.AutoRestart,
+		ServerPort:       req.ServerPort,
+		RCONPort:         req.RCONPort,
+		QueryPort:        req.QueryPort,
+		RCONPassword:     req.RCONPassword,
 		Status:           model.InstanceStatusStopped,
 	}
 	if len(req.EnvVars) > 0 {
