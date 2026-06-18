@@ -30,7 +30,7 @@ export default function WorkspacePane({ instanceId }: WorkspacePaneProps) {
         </div>
         <Tabs
           value={segment}
-          onValueChange={(v) => setSegment(instanceId, v as WorkspaceSegment)}
+          onValueChange={(v: string) => setSegment(instanceId, v as WorkspaceSegment)}
           className="ml-auto"
         >
           <TabsList>

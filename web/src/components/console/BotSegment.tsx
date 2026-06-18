@@ -116,7 +116,7 @@ export default function BotSegment({ instanceId }: BotSegmentProps) {
           />
           <Select
             value={statusFilter || 'all'}
-            onValueChange={(v) => {
+            onValueChange={(v: string) => {
               setStatusFilter(v === 'all' ? '' : v)
               resetPage()
             }}
@@ -135,7 +135,7 @@ export default function BotSegment({ instanceId }: BotSegmentProps) {
           </Select>
           <Select
             value={behaviorFilter || 'all'}
-            onValueChange={(v) => {
+            onValueChange={(v: string) => {
               setBehaviorFilter(v === 'all' ? '' : v)
               resetPage()
             }}
@@ -152,7 +152,7 @@ export default function BotSegment({ instanceId }: BotSegmentProps) {
               ))}
             </SelectContent>
           </Select>
-          <Select value={groupBy} onValueChange={(v) => setGroupBy(v as BotGroupBy)}>
+          <Select value={groupBy} onValueChange={(v: string) => setGroupBy(v as BotGroupBy)}>
             <SelectTrigger className="h-9 w-36">
               <SelectValue />
             </SelectTrigger>
@@ -342,7 +342,7 @@ function BotRow({
       </span>
       <Select
         value={bot.behavior}
-        onValueChange={(value) => setBehavior.mutate({ id: bot.id, behavior: value })}
+        onValueChange={(value: string) => setBehavior.mutate({ id: bot.id, behavior: value })}
       >
         <SelectTrigger className="h-7 w-24 text-xs">
           <SelectValue />

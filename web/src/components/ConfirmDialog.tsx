@@ -29,7 +29,7 @@ export default function ConfirmDialog({
   onCancel,
 }: ConfirmDialogProps) {
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onCancel() }}>
+    <Dialog open={open} onOpenChange={(v: boolean) => { if (!v) onCancel() }}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>

@@ -220,7 +220,7 @@ function Toolbar({
       />
       <Select
         value={nodeId === null ? SENTINEL_ALL : String(nodeId)}
-        onValueChange={(v) => onNode(v === SENTINEL_ALL ? null : Number(v))}
+        onValueChange={(v: string) => onNode(v === SENTINEL_ALL ? null : Number(v))}
       >
         <SelectTrigger size="sm" className="w-40">
           <SelectValue placeholder={t('bots.allNodes')} />
@@ -236,7 +236,7 @@ function Toolbar({
       </Select>
       <Select
         value={status === '' ? SENTINEL_ALL : status}
-        onValueChange={(v) => onStatus(v === SENTINEL_ALL ? '' : v)}
+        onValueChange={(v: string) => onStatus(v === SENTINEL_ALL ? '' : v)}
       >
         <SelectTrigger size="sm" className="w-36">
           <SelectValue placeholder={t('bots.allStatus')} />
@@ -471,7 +471,7 @@ function GroupBatchMenu({
   return (
     <Select
       value=""
-      onValueChange={(v) => {
+      onValueChange={(v: string) => {
         if (v.startsWith('behavior:')) run('set-behavior', v.slice('behavior:'.length))
         else run(v as BotBatchAction)
       }}

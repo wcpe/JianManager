@@ -40,7 +40,7 @@ export default function SettingsPage() {
               <p className="text-sm font-medium">{t('settings.theme')}</p>
               <p className="text-xs text-muted-foreground">{t('settings.themeDesc')}</p>
             </div>
-            <Select value={theme} onValueChange={(v) => setTheme(v as Theme)}>
+            <Select value={theme} onValueChange={(v: string) => setTheme(v as Theme)}>
               <SelectTrigger size="sm" className="w-36">
                 <SelectValue />
               </SelectTrigger>
@@ -57,7 +57,7 @@ export default function SettingsPage() {
               <p className="text-sm font-medium">{t('settings.language')}</p>
               <p className="text-xs text-muted-foreground">{t('settings.languageDesc')}</p>
             </div>
-            <Select value={currentLang} onValueChange={(v) => changeLanguage(v as 'zh' | 'en')}>
+            <Select value={currentLang} onValueChange={(v: string) => changeLanguage(v as 'zh' | 'en')}>
               <SelectTrigger size="sm" className="w-36">
                 <SelectValue />
               </SelectTrigger>

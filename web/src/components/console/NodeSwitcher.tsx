@@ -22,7 +22,7 @@ export default function NodeSwitcher() {
   return (
     <Select
       value={selectedNodeId === null ? ALL : String(selectedNodeId)}
-      onValueChange={(v) => setSelectedNodeId(v === ALL ? null : Number(v))}
+      onValueChange={(v: string) => setSelectedNodeId(v === ALL ? null : Number(v))}
     >
       <SelectTrigger size="sm" className="w-full">
         <SelectValue placeholder={t('console.allNodes')} />
