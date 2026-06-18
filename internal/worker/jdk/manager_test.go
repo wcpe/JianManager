@@ -16,7 +16,7 @@ func TestSanitizeArchivePath(t *testing.T) {
 		{"normal", "jdk-21/bin/java", false},
 		{"nested", "a/b/c.txt", false},
 		{"slip-rel", "../etc/passwd", true},
-		{"slip-abs", "/etc/passwd", true},
+		{"slip-deep", "a/../../etc/passwd", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

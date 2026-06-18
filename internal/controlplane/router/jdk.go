@@ -50,29 +50,17 @@ func (h *JDKHandler) Update(c *gin.Context) {
 	if !requirePlatformAdmin(c) { return }
 	nodeID, err := parseUintParam(c, "id"); if err != nil { return }
 	jdkID, err := parseUintParam(c, "jid"); if err != nil { return }
-	var body struct {
-		Vendor       *string `json:"vendor"`
-		MajorVersion *int    `json:"majorVersion"`
-		Version      *string `json:"version"`
-		Arch         *string `json:"arch"`
-		Path         *string `json:"path"`
-		Managed      *bool   `json:"managed"`
+	var req service.CreateJDKRequest
+	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":"INVALID_REQUEST","message":"bad request"}); return }
+	jdk, err := h.svc.Update(nodeID, jdkID, req)
+	if err != nil {
+		if errors.Is(err, service.ErrJDKInUse) { c.JSON(http.StatusConflict, gin.H{"error":"JDK_IN_USE","message":"jdk in use"}); return }
+		if errors.Is(err, service.ErrJDKNotFound) { c.JSON(http.StatusNotFound, gin.H{"error":"NOT_FOUND","message":"jdk not found"}); return }
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error":"BUSINESS_ERROR","message":err.Error()}); return
 	}
-	if err := c.ShouldBindJSON(&body); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":"INVALID_REQUEST","message":"请求参数错误"}); return }
-	// 简化：CP 暂未提供 JDK Update 业务方法，前端可直接重新 Create 一个新条目。
-	// 这里用 Delete + Create 模拟 PUT 语义：先校验占用，再删旧建新。
-	used, _ := h.svc.Delete(nodeID, jdkID)
-	if used != nil { c.JSON(http.StatusConflict, gin.H{"error":"JDK_IN_USE","message":"JDK 正被实例占用"}); return }
-	if body.Path == nil || body.Vendor == nil || body.Version == nil || body.Arch == nil || body.MajorVersion == nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error":"INVALID_REQUEST","message":"path / vendor / version / arch / majorVersion 均必填"}); return
-	}
-	jdk, err := h.svc.Create(nodeID, service.CreateJDKRequest{
-		Vendor: *body.Vendor, MajorVersion: *body.MajorVersion, Version: *body.Version, Arch: *body.Arch, Path: *body.Path,
-		Managed: body.Managed != nil && *body.Managed,
-	})
-	if err != nil { c.JSON(http.StatusUnprocessableEntity, gin.H{"error":"BUSINESS_ERROR","message":err.Error()}); return }
 	c.JSON(http.StatusOK, jdk)
 }
+
 
 func (h *JDKHandler) Delete(c *gin.Context) {
 	if !requirePlatformAdmin(c) { return }

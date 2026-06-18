@@ -9,6 +9,9 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
+import { useState } from 'react'
+import NodeJDKPanel from '@/components/NodeJDKPanel'
+
 /** 将字节数格式化为人类可读的大小（B/KB/MB/GB）。 */
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return '0 B'
@@ -21,6 +24,8 @@ function formatBytes(bytes: number): string {
 export default function NodesPage() {
   const { t } = useTranslation()
   const { data: nodes, isLoading } = useNodes({ refetchInterval: 30_000 })
+
+  const [jdkNodeId, setJdkNodeId] = useState<number | null>(null)
 
   const statusLabel: Record<number, { text: string; color: string }> = {
     0: { text: t('nodes.offline'), color: 'text-red-500' },
@@ -70,6 +75,14 @@ export default function NodesPage() {
                         : '--'}
                     </TableCell>
                     <TableCell className="text-muted-foreground">{node.os} {node.arch}</TableCell>
+                    <TableCell>
+                      <button
+                        className="text-xs text-blue-600 hover:underline"
+                        onClick={() => setJdkNodeId(node.id)}
+                      >
+                        JDK
+                      </button>
+                    </TableCell>
                   </TableRow>
                 )
               })}
@@ -82,6 +95,17 @@ export default function NodesPage() {
               )}
             </TableBody>
           </Table>
+        </div>
+      )}
+      {jdkNodeId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-background border rounded-lg p-6 w-full max-w-2xl shadow-lg max-h-[80vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold">JDK Management</h2>
+              <button onClick={() => setJdkNodeId(null)} className="text-sm text-muted-foreground hover:text-foreground">Close</button>
+            </div>
+            <NodeJDKPanel nodeId={jdkNodeId} />
+          </div>
         </div>
       )}
     </div>

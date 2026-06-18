@@ -99,7 +99,13 @@ func runWorker() {
 			}
 		}
 	}
-	jdkMgr := jdks.NewManager(filepath.Join(workDir, "jdks"), systemJDKDirs)
+	var jdkMgr *jdks.Manager
+	if os.Getenv("JIANMANAGER_DISABLE_JDK") != "1" {
+		jdkMgr = jdks.NewManager(filepath.Join(workDir, "jdks"), systemJDKDirs)
+		slog.Info("JDK manager enabled", "rootDir", filepath.Join(workDir, "jdks"))
+	} else {
+		slog.Info("JDK manager disabled by JIANMANAGER_DISABLE_JDK=1")
+	}
 	// 这是 ADR-003「平台重启不杀游戏服」的关键路径。
 	recovered, recoverErr := manager.RecoverDaemonInstances()
 	if recoverErr != nil {

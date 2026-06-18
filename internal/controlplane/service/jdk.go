@@ -141,6 +141,43 @@ func (s *JDKService) Delete(nodeID, jdkID uint) ([]model.Instance, error) {
 	return nil, s.db.Delete(&model.NodeJDK{}, jdkID).Error
 }
 
+// Update modifies a registered JDK. Rejects if instances reference it.
+func (s *JDKService) Update(nodeID, jdkID uint, req CreateJDKRequest) (*model.NodeJDK, error) {
+	if _, err := s.nodeByID(nodeID); err != nil {
+		return nil, err
+	}
+	var jdk model.NodeJDK
+	if err := s.db.Where("id = ? AND node_id = ?", jdkID, nodeID).First(&jdk).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrJDKNotFound
+		}
+		return nil, err
+	}
+	var used []model.Instance
+	if err := s.db.Where("node_id = ? AND jdk_id = ?", nodeID, jdkID).Find(&used).Error; err != nil {
+		return nil, err
+	}
+	if len(used) > 0 {
+		return nil, ErrJDKInUse
+	}
+	updates := map[string]interface{}{
+		"vendor":        req.Vendor,
+		"major_version": req.MajorVersion,
+		"version":       req.Version,
+		"arch":          req.Arch,
+		"path":          req.Path,
+		"managed":       req.Managed,
+	}
+	if err := s.db.Model(&jdk).Updates(updates).Error; err != nil {
+		return nil, fmt.Errorf("update jdk failed: %w", err)
+	}
+	var refreshed model.NodeJDK
+	if err := s.db.Where("id = ?", jdkID).First(&refreshed).Error; err != nil {
+		return nil, err
+	}
+	return &refreshed, nil
+}
+
 func (s *JDKService) ResolveForInstance(nodeID, jdkID uint, javaMajor int) (*model.NodeJDK, error) {
 	if jdkID == 0 && javaMajor == 0 {
 		return nil, nil

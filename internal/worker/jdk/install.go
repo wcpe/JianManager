@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,12 +22,12 @@ func buildDownloadURL(vendor string, major int, arch string) (string, error) {
 	switch strings.ToLower(vendor) {
 	case "temurin", "adoptium":
 		return temurinURL(major, arch), nil
+case "corretto", "amazon":
+		return correttoURL(major, arch), nil
 	case "zulu", "azul":
-		// Azul 提供 https://api.azul.com/metadata/v1/zulu/packages?...
-		// 本期留口，由运维手动登记；后续可扩展。
-		return "", fmt.Errorf("Zulu 一键安装尚未实现，请手动下载并使用 POST /jdks 登记")
+		return zuluURL(major, arch)
 	default:
-		return "", fmt.Errorf("不支持的 vendor: %s（当前仅支持 Temurin）", vendor)
+		return "", fmt.Errorf("unsupported vendor: %s (supported: Temurin, Corretto, Zulu)", vendor)
 	}
 }
 
@@ -40,6 +41,52 @@ func temurinURL(major int, arch string) string {
 	// Adoptium Temurin LTS 通用归档（带完整 JRE+JDK）。
 	return fmt.Sprintf("https://api.adoptium.net/v3/binary/latest/%d/ga/%s/%s/jdk/hotspot/normal/eclipse?project=jdk",
 		major, osName, arch)
+}
+
+func correttoURL(major int, arch string) string {
+	osName := "linux"
+	ext := "tar.gz"
+	if runtime.GOOS == "windows" {
+		osName = "windows"
+		ext = "zip"
+	} else if runtime.GOOS == "darwin" {
+		osName = "macos"
+		ext = "tar.gz"
+	}
+	return fmt.Sprintf("https://corretto.aws/downloads/latest/amazon-corretto-%d-%s-%s-jdk.%s",
+		major, arch, osName, ext)
+}
+
+// zuluURL queries the Azul metadata API for the latest Zulu JDK download URL.
+func zuluURL(major int, arch string) (string, error) {
+	osName := "linux"
+	ext := "tar.gz"
+	if runtime.GOOS == "windows" {
+		osName = "windows"
+		ext = "zip"
+	} else if runtime.GOOS == "darwin" {
+		osName = "macos"
+	}
+	apiURL := fmt.Sprintf("https://api.azul.com/metadata/v1/zulu/packages?java_version=%d&os=%s&arch=%s&archive_type=%s&latest=true&release_type=ga",
+		major, osName, arch, ext)
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		return "", fmt.Errorf("zulu metadata API failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return "", fmt.Errorf("zulu metadata API returned HTTP %d", resp.StatusCode)
+	}
+	var pkgs []struct {
+		DownloadURL string `json:"download_url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&pkgs); err != nil {
+		return "", fmt.Errorf("zulu metadata API parse failed: %w", err)
+	}
+	if len(pkgs) == 0 || pkgs[0].DownloadURL == "" {
+		return "", fmt.Errorf("zulu metadata API returned no packages for Java %d %s", major, arch)
+	}
+	return pkgs[0].DownloadURL, nil
 }
 
 // downloadAndExtract 下载归档到临时文件，按平台后缀解压到 destDir。
