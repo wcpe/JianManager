@@ -252,6 +252,20 @@
 - **描述**: 实例指标（TPS/玩家/内存）
 - **关联 FR**: FR-010
 
+### GET /api/v1/cores
+- **描述**: 查询服务端核心可用版本/构建。无 `mcVersion` 返回版本列表；带 `mcVersion` 返回下载信息
+- **权限**: 平台管理员
+- **Query**: `type=paper`（默认）、`mcVersion`、`build`（可选，缺省最新）
+- **响应（带 mcVersion）**: `{ "type":"paper","mcVersion":"1.21.1","build":196,"filename":"...","downloadUrl":"...","sha256":"..." }`
+- **关联 FR**: FR-034
+
+### POST /api/v1/instances/provision/bukkit
+- **描述**: 一键搭建 Paper 后端子服：解析核心 → 分配端口 → 系统分配目录 + 结构化启动 → 下载核心 + 写 eula/server.properties，返回实例（STOPPED，可一键启动）
+- **权限**: 平台管理员
+- **请求**: `{ "nodeId":1,"name":"lobby","coreType":"paper","mcVersion":"1.21.1","build":0,"jdkId":1,"memoryMb":4096,"jvmArgs":["-XX:+UseG1GC"],"groupId":0 }`
+- **响应**: `201` 创建的 Instance；`502 PROVISION_FAILED`（含已创建实例供重试/删除）
+- **关联 FR**: FR-034
+
 ---
 
 ## 终端
