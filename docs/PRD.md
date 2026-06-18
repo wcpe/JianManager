@@ -438,6 +438,18 @@
 - **依赖**: BUG-002（终端修复完成后避免冲突）
 - **关联 FR**: FR-026（shadcn/ui 标准化）
 
+### BUG-006: 硬刷新后丢失登录态回到 /login
+- **状态**: 📋 todo
+- **优先级**: P1
+- **描述**: 已登录后硬刷新（或直接访问受保护深链）被弹回 /login，尽管 localStorage 内有有效 token。根因：auth store 初始 `isAuthenticated=false`，token 仅在 App 的 `useEffect` 里异步 `loadFromStorage`；`AuthGuard` 在首次渲染（补水之前）即判未登录并 `Navigate` 到 /login，补水完成后 URL 已切走，且 LoginPage 不会把已登录用户弹回
+- **验收标准**:
+  - [ ] 已登录状态下硬刷新任意受保护页面，停留原页面，不被弹回 /login
+  - [ ] 直接访问深链（如 /settings、/nodes）已登录时正常渲染，未登录才跳 /login
+  - [ ] auth store 从 localStorage **同步初始化**（首次渲染即正确登录态），不依赖 useEffect 异步补水
+  - [ ] 已登录用户访问 /login 自动跳回 /（防御性）
+  - [ ] token 过期仍由刷新拦截器处理，不回归
+- **关联 FR**: FR-001（用户认证）, FR-017（首次启动引导）
+
 ---
 
 ## V2 — MC 群组服运维
