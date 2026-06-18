@@ -208,6 +208,31 @@ func (s *AuthzService) CanAccessBot(access *UserAccess, botID uint) (bool, error
 	return s.CanAccessInstance(access, instanceID)
 }
 
+// AccessibleInstanceIDs 返回用户可访问（可读）的实例 ID 集合，用于将跨组隔离下沉为 SQL 谓词。
+// 平台管理员返回 (nil, false)，表示不收敛（调用方不应附加实例 IN 过滤）；
+// 非管理员返回 (ids, true)，ids 为其可访问组下的实例 ID（可能为空切片，表示无任何可见实例）。
+// 万级 Bot 下不可用逐条 CanAccessInstance 循环，故以集合谓词替代（参见 FR-038）。
+func (s *AuthzService) AccessibleInstanceIDs(access *UserAccess) ([]uint, bool, error) {
+	if access.IsPlatformAdmin {
+		return nil, false, nil
+	}
+	if len(access.AccessibleGroups) == 0 {
+		return []uint{}, true, nil
+	}
+	groupIDs := make([]uint, 0, len(access.AccessibleGroups))
+	for gid := range access.AccessibleGroups {
+		groupIDs = append(groupIDs, gid)
+	}
+	var instanceIDs []uint
+	if err := s.db.Model(&model.GroupInstance{}).
+		Where("group_id IN ?", groupIDs).
+		Distinct().
+		Pluck("instance_id", &instanceIDs).Error; err != nil {
+		return nil, false, fmt.Errorf("查询可访问实例集合失败: %w", err)
+	}
+	return instanceIDs, true, nil
+}
+
 // CanManageBot 判断用户是否能管理指定 Bot。
 func (s *AuthzService) CanManageBot(access *UserAccess, botID uint) (bool, error) {
 	instanceID, err := s.getBotInstanceID(botID)

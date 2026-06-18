@@ -31,6 +31,9 @@ type Bot struct {
 	CreatedAt  time.Time      `json:"createdAt"`
 	UpdatedAt  time.Time      `json:"updatedAt"`
 	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+
+	// Instance 所属实例，仅用于批量委托时预加载节点路由信息，不参与序列化。
+	Instance Instance `gorm:"foreignKey:InstanceID" json:"-"`
 }
 
 // BeforeCreate 创建前自动生成 UUID。

@@ -56,22 +56,6 @@ func (s *BotService) Create(req CreateBotRequest) (*model.Bot, error) {
 	return bot, nil
 }
 
-// List 返回 Bot 列表。
-func (s *BotService) List(instanceID *uint, status *model.BotStatus) ([]model.Bot, error) {
-	var bots []model.Bot
-	q := s.db.Model(&model.Bot{})
-	if instanceID != nil {
-		q = q.Where("instance_id = ?", *instanceID)
-	}
-	if status != nil {
-		q = q.Where("status = ?", *status)
-	}
-	if err := q.Find(&bots).Error; err != nil {
-		return nil, fmt.Errorf("查询 Bot 列表失败: %w", err)
-	}
-	return bots, nil
-}
-
 // GetByID 获取 Bot 详情。
 func (s *BotService) GetByID(id uint) (*model.Bot, error) {
 	var bot model.Bot

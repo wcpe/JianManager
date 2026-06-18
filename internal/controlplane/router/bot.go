@@ -22,51 +22,151 @@ func NewBotHandler(botSvc *service.BotService, authz *service.AuthzService) *Bot
 	return &BotHandler{botSvc: botSvc, authz: authz}
 }
 
-// List Bot 列表。
-// 平台管理员返回全部；其余按其可访问实例过滤。
-func (h *BotHandler) List(c *gin.Context) {
-	access := getAccess(c)
-	if access == nil {
-		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
-		return
-	}
-	if !access.HasPermission(service.PermBotRead) {
-		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
-		return
-	}
-
-	var instanceID *uint
+// parseBotFilter 从查询参数构造 Bot 筛选条件（列表/摘要/批量共用）。
+func parseBotFilter(c *gin.Context) service.BotFilter {
+	var f service.BotFilter
 	if v := c.Query("instanceId"); v != "" {
-		id, _ := strconv.ParseUint(v, 10, 64)
-		u := uint(id)
-		instanceID = &u
+		if id, err := strconv.ParseUint(v, 10, 64); err == nil {
+			u := uint(id)
+			f.InstanceID = &u
+		}
 	}
-	var status *model.BotStatus
+	if v := c.Query("nodeId"); v != "" {
+		if id, err := strconv.ParseUint(v, 10, 64); err == nil {
+			u := uint(id)
+			f.NodeID = &u
+		}
+	}
 	if v := c.Query("status"); v != "" {
 		s := model.BotStatus(v)
-		status = &s
+		f.Status = &s
+	}
+	if v := c.Query("behavior"); v != "" {
+		b := v
+		f.Behavior = &b
+	}
+	f.Keyword = c.Query("q")
+	return f
+}
+
+// List Bot 列表，分页 + 多维筛选（FR-038）。
+// 平台管理员返回全部；其余按其可访问实例集合在 SQL 层收敛。
+func (h *BotHandler) List(c *gin.Context) {
+	access := getAccess(c)
+	if access == nil || !access.HasPermission(service.PermBotRead) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
 	}
 
-	bots, err := h.botSvc.List(instanceID, status)
+	scopeIDs, scope, err := h.authz.AccessibleInstanceIDs(access)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
 		return
 	}
 
-	// 非平台管理员按可访问实例过滤
-	if !access.IsPlatformAdmin {
-		filtered := make([]model.Bot, 0, len(bots))
-		for _, b := range bots {
-			ok, err := h.authz.CanAccessInstance(access, b.InstanceID)
-			if err != nil || !ok {
-				continue
-			}
-			filtered = append(filtered, b)
-		}
-		bots = filtered
+	page, _ := strconv.Atoi(c.Query("page"))
+	pageSize, _ := strconv.Atoi(c.Query("pageSize"))
+	query := service.BotListQuery{Filter: parseBotFilter(c), Page: page, PageSize: pageSize}
+
+	res, err := h.botSvc.ListPaged(query, scopeIDs, scope)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+// Summary Bot 计数聚合（全局或按 groupBy 分组），不返回逐条 Bot（FR-038）。
+func (h *BotHandler) Summary(c *gin.Context) {
+	access := getAccess(c)
+	if access == nil || !access.HasPermission(service.PermBotRead) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
 	}
 
-	c.JSON(http.StatusOK, bots)
+	groupBy := c.Query("groupBy")
+	switch groupBy {
+	case "", "instance", "node", "status", "behavior":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "不支持的分组维度"})
+		return
+	}
+
+	scopeIDs, scope, err := h.authz.AccessibleInstanceIDs(access)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return
+	}
+
+	summary, err := h.botSvc.Summary(parseBotFilter(c), groupBy, scopeIDs, scope)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return
+	}
+	c.JSON(http.StatusOK, summary)
+}
+
+type batchRequest struct {
+	Action   string               `json:"action"`
+	IDs      []uint               `json:"ids"`
+	Filter   *service.BotFilterIn `json:"filter"`
+	Behavior string               `json:"behavior"`
+	Target   string               `json:"target"`
+}
+
+// Batch 批量执行 set-behavior/start/stop/delete，经 gRPC 委托对应 Worker（FR-038）。
+func (h *BotHandler) Batch(c *gin.Context) {
+	access := getAccess(c)
+	if access == nil || !access.HasPermission(service.PermBotManage) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
+	}
+
+	var req batchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+
+	action := service.BotBatchAction(req.Action)
+	switch action {
+	case service.BotBatchSetBehavior, service.BotBatchStart, service.BotBatchStop, service.BotBatchDelete:
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "不支持的批量动作"})
+		return
+	}
+	if len(req.IDs) == 0 && req.Filter == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "需指定 ids 或 filter"})
+		return
+	}
+	if action == service.BotBatchSetBehavior && req.Behavior == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "set-behavior 需指定 behavior"})
+		return
+	}
+
+	scopeIDs, scope, err := h.authz.AccessibleInstanceIDs(access)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return
+	}
+
+	svcReq := service.BotBatchRequest{
+		Action:   action,
+		IDs:      req.IDs,
+		Behavior: req.Behavior,
+		Target:   req.Target,
+	}
+	if req.Filter != nil {
+		f := req.Filter.ToFilter()
+		svcReq.Filter = &f
+	}
+
+	res, err := h.botSvc.Batch(svcReq, scopeIDs, scope)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, res)
 }
 
 // Get Bot 详情。
@@ -208,7 +308,9 @@ func (h *BotHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	bots := rg.Group("/bots")
 	{
 		bots.GET("", h.List)
+		bots.GET("/summary", h.Summary)
 		bots.POST("", h.Create)
+		bots.POST("/batch", h.Batch)
 		bots.GET("/:id", h.Get)
 		bots.DELETE("/:id", h.Delete)
 		bots.POST("/:id/behavior", h.UpdateBehavior)
