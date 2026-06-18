@@ -1,0 +1,55 @@
+import { Routes, Route } from 'react-router'
+import { Suspense, lazy } from 'react'
+import { useTranslation } from 'react-i18next'
+import { useConsoleStore } from '@/stores/console'
+import TerminalPane from './TerminalPane'
+import WorkspaceEmpty from './WorkspaceEmpty'
+
+const OverviewPage = lazy(() => import('@/pages/OverviewPage'))
+const NodesPage = lazy(() => import('@/pages/NodesPage'))
+const InstancesPage = lazy(() => import('@/pages/InstancesPage'))
+const InstanceDetailPage = lazy(() => import('@/pages/InstanceDetailPage'))
+const UsersPage = lazy(() => import('@/pages/UsersPage'))
+const GroupsPage = lazy(() => import('@/pages/GroupsPage'))
+const SchedulesPage = lazy(() => import('@/pages/SchedulesPage'))
+const BackupsPage = lazy(() => import('@/pages/BackupsPage'))
+const BotsPage = lazy(() => import('@/pages/BotsPage'))
+const AuditPage = lazy(() => import('@/pages/AuditPage'))
+const TemplatesPage = lazy(() => import('@/pages/TemplatesPage'))
+const AlertsPage = lazy(() => import('@/pages/AlertsPage'))
+
+/**
+ * 运维控制台右侧工作区（ADR-009 / FR-037）。
+ * 打开实例终端时渲染单个 TerminalPane；否则按路由渲染对应页面，既有页面不变。
+ * 同一时刻仅一个终端，切换实例即换 instanceId。
+ */
+export default function Workspace() {
+  const { t } = useTranslation()
+  const openInstanceId = useConsoleStore((s) => s.openInstanceId)
+
+  if (openInstanceId !== null) {
+    return <TerminalPane instanceId={openInstanceId} />
+  }
+
+  return (
+    <Suspense fallback={<div className="p-6 text-muted-foreground">{t('common.loading')}</div>}>
+      <div className="h-full overflow-auto p-6">
+        <Routes>
+          <Route index element={<OverviewPage />} />
+          <Route path="nodes" element={<NodesPage />} />
+          <Route path="instances" element={<InstancesPage />} />
+          <Route path="instances/:id" element={<InstanceDetailPage />} />
+          <Route path="bots" element={<BotsPage />} />
+          <Route path="alerts" element={<AlertsPage />} />
+          <Route path="users" element={<UsersPage />} />
+          <Route path="groups" element={<GroupsPage />} />
+          <Route path="templates" element={<TemplatesPage />} />
+          <Route path="schedules" element={<SchedulesPage />} />
+          <Route path="backups" element={<BackupsPage />} />
+          <Route path="audit" element={<AuditPage />} />
+          <Route path="*" element={<WorkspaceEmpty />} />
+        </Routes>
+      </div>
+    </Suspense>
+  )
+}

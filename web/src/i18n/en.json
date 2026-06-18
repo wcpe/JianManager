@@ -43,6 +43,18 @@
     "settings": "Settings",
     "alerts": "Alerts"
   },
+  "console": {
+    "title": "Ops Console",
+    "allNodes": "All Nodes",
+    "unknownNode": "Node #{{id}}",
+    "noInstances": "No instances",
+    "split": "Split",
+    "director": "Director",
+    "splitSoon": "Split view coming soon",
+    "directorSoon": "Director view coming soon",
+    "emptyTitle": "No terminal open",
+    "emptyHint": "Pick an instance from the tree on the left to open its terminal"
+  },
   "login": {
     "title": "JianManager",
     "subtitle": "Sign in to the management platform",

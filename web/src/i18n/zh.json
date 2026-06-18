@@ -43,6 +43,18 @@
     "settings": "设置",
     "alerts": "告警"
   },
+  "console": {
+    "title": "运维控制台",
+    "allNodes": "全部节点",
+    "unknownNode": "节点 #{{id}}",
+    "noInstances": "暂无实例",
+    "split": "分屏",
+    "director": "切导播台",
+    "splitSoon": "分屏功能即将推出",
+    "directorSoon": "导播台功能即将推出",
+    "emptyTitle": "未打开任何终端",
+    "emptyHint": "从左侧实例树选择一个实例以打开终端"
+  },
   "login": {
     "title": "JianManager",
     "subtitle": "登录到管理平台",
