@@ -661,13 +661,14 @@
 - **优先级**: P1
 - **描述**: 平台资产统一进内容寻址（sha256）的制品库，附 md5/sha256 校验与类型化元数据；存于数据根 `var/artifacts/`，DB 索引；核心 jar 为首类资产，模型可扩展到插件 / 图片 / 媒体
 - **验收标准**:
-  - [ ] `assets` 表：`type`(core|plugin|image|blob)、`name`、`version`、`filename`、`sha256`(寻址+去重键)、`md5`、`size`、`content_type`、`source_url`、`metadata`(JSON)、`created_at`、`last_used_at`
-  - [ ] 内容寻址存储：资产落 `var/artifacts/<sha256 前 2 位>/<sha256>`，相同内容只存一份（去重）
+  - [ ] `assets` 表：`type`(core|plugin|image|video|archive|blob)、`name`、`version`、`filename`、`sha256`(寻址+去重键)、`md5`、`size`、`content_type`(MIME)、`source_url`、`metadata`(JSON)、`storage_state`(hot|archived|external)、`storage_backend`、`ref_count`、`created_at`、`last_used_at`
+  - [ ] **按类型分区**的内容寻址存储：资产落 `var/artifacts/<type>/<sha256 前 2 位>/<sha256>.<ext>`；类型内相同内容只存一份（去重），不同类型物理分目录，便于浏览/整类备份/归档
   - [ ] 入库即算 sha256+md5；来源提供校验和则比对，不符拒绝入库
   - [ ] API：`GET /assets`（按 type 筛选）、`GET /assets/:id`、`POST /assets`（上传/登记），下载入库（建服时自动 ingest 核心）
-  - [ ] 引用保护：被模板/实例引用的资产删除前拒绝并提示占用方（引用计数）
+  - [ ] 引用保护：被模板/实例引用的资产删除前拒绝并提示占用方（`ref_count`）
+  - [ ] **归档就绪**：按 类型/冷热/占用 可选择性归档——归档或外置只改 `storage_state`+`storage_backend`+存储位置，DB 记录与引用（sha256）不变；整类归档由类型分区直接支持（归档策略与外置存储后端为后续 FR，模型先留位）
   - [ ] 核心走制品库后，FR-034 建服优先命中、缺失才下载；FR-014 模板可引用制品库核心
-  - [ ] 类型可扩展：新增 plugin/image/blob 仅差元数据/校验，不改存储层
+  - [ ] 类型可扩展：新增 plugin/image/video/blob 仅差元数据/校验，不改存储层
 - **关联 ADR**: ADR-011（制品库内容寻址与资产模型，待创建）
 - **关联 API**: `GET/POST /assets`, `GET /assets/:id`
 - **依赖**: FR-044（数据根提供 `var/artifacts/`）；被 FR-034（建服取核心）、FR-014（模板）复用
