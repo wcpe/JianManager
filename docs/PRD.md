@@ -424,15 +424,15 @@
 - **关联 FR**: FR-005（实例生命周期）, FR-006（守护进程）
 
 ### BUG-006: 已登录用户硬刷新被弹回登录页
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P1
-- **描述**: 登录后硬刷新页面（或直接打开受保护深链如 `/settings`）会被弹回 `/login`，即便 localStorage 中有有效 token。根因：`stores/auth.ts` 初始化 `isAuthenticated:false`，token 仅由 `App.tsx` 的 `useEffect→loadFromStorage()` 异步载入，`AuthGuard` 在首帧（effect 执行前）即重定向到 `/login`，且 `LoginPage` 不会把已登录用户弹回
+- **描述**: 登录后硬刷新页面（或直接打开受保护深链如 `/settings`）会被弹回 `/login`，即便 localStorage 中有有效 token。根因：`stores/auth.ts` 初始化 `isAuthenticated:false`，token 仅由 `App.tsx` 的 `useEffect→loadFromStorage()` 异步载入，`AuthGuard` 在首帧（effect 执行前）即重定向到 `/login`，且 `LoginPage` 不会把已登录用户弹回。修复：auth store 从 localStorage 同步初始化 + LoginPage 已登录跳回 `/`
 - **验收标准**:
-  - [ ] 登录后硬刷新页面，停留在控制台，不被弹回 `/login`
-  - [ ] 已登录时直接打开 `/settings` 等受保护深链，正常渲染
-  - [ ] 退出登录后回到 `/login`
-  - [ ] 已登录时访问 `/login` 自动跳回 `/`
-  - [ ] access token 过期仍能经 401 拦截器刷新（无回归）
+  - [x] 登录后硬刷新页面，停留在控制台，不被弹回 `/login`
+  - [x] 已登录时直接打开 `/settings` 等受保护深链，正常渲染
+  - [x] 退出登录后回到 `/login`
+  - [x] 已登录时访问 `/login` 自动跳回 `/`
+  - [x] access token 过期仍能经 401 拦截器刷新（无回归）
 - **关联 FR**: FR-037（运维控制台布局，受此 bug 影响）
 
 ### FR-030: 前端通知系统与 UX 标准化
@@ -449,18 +449,6 @@
   - [x] 现有页面布局（侧边栏/头部/内容区域）不发生变化
 - **依赖**: BUG-002（终端修复完成后避免冲突）
 - **关联 FR**: FR-026（shadcn/ui 标准化）
-
-### BUG-006: 硬刷新后丢失登录态回到 /login
-- **状态**: 📋 todo
-- **优先级**: P1
-- **描述**: 已登录后硬刷新（或直接访问受保护深链）被弹回 /login，尽管 localStorage 内有有效 token。根因：auth store 初始 `isAuthenticated=false`，token 仅在 App 的 `useEffect` 里异步 `loadFromStorage`；`AuthGuard` 在首次渲染（补水之前）即判未登录并 `Navigate` 到 /login，补水完成后 URL 已切走，且 LoginPage 不会把已登录用户弹回
-- **验收标准**:
-  - [ ] 已登录状态下硬刷新任意受保护页面，停留原页面，不被弹回 /login
-  - [ ] 直接访问深链（如 /settings、/nodes）已登录时正常渲染，未登录才跳 /login
-  - [ ] auth store 从 localStorage **同步初始化**（首次渲染即正确登录态），不依赖 useEffect 异步补水
-  - [ ] 已登录用户访问 /login 自动跳回 /（防御性）
-  - [ ] token 过期仍由刷新拦截器处理，不回归
-- **关联 FR**: FR-001（用户认证）, FR-017（首次启动引导）
 
 ---
 
@@ -568,32 +556,33 @@
 > 把实例终端与 Bot 联动统一进「运维控制台」三段式布局（上=功能导航 / 中=节点切换+实例树 / 下=系统平台导航 / 右=工作区）。Bot 在压测场景下可达上万（容量见 FR-009：50 bots/worker × 256 workers），因此所有 Bot UI 一律「聚合优先、永不全量铺开」。Bot 内核（CRUD/行为/压测/预热）已在 FR-009、FR-021 完成，本批为运维 UX + 规模化 API/UI。
 
 ### FR-037: 运维控制台布局
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P1
-- **描述**: 以「运维控制台」三段式侧栏替换现有主布局，右侧工作区点实例开单个终端；分屏/分组/导播台为后续阶段
+- **描述**: 以「运维控制台」三段式侧栏替换现有主布局，右侧工作区点实例开单个终端；分屏/分组/导播台为后续阶段。本 FR 范围内追加系统设置页（`设置` 导航接入 `/settings`）
 - **验收标准**:
-  - [ ] 登录后默认进入运维控制台；左侧栏三段：上方功能导航（仪表盘/节点/实例/Bot/告警…）、中部节点下拉+实例树、下方系统平台导航（用户/审计/设置/退出）
-  - [ ] 节点下拉含「全部节点」+各节点；选「全部」时实例树按节点分组，选某节点时只列该节点实例（复用 `GET /instances?nodeId=`）
-  - [ ] 实例树每项显示状态点（RUNNING 绿 / STARTING·STOPPING 琥珀 / CRASHED 红 / STOPPED 空心）
-  - [ ] 点击实例在右侧工作区打开其终端（复用一次性 token + xterm），点另一个实例切换终端
-  - [ ] 顶部工具栏显示面包屑（运维控制台 / 实例名）；「分屏」「切导播台」为禁用占位
-  - [ ] 其余页面（节点/用户/审计…）仍按路由在工作区渲染，原有导航按钮全部保留
-  - [ ] 暗色/亮色主题与 i18n 正常，无样式错乱
-- **关联 ADR**: ADR-009（运维控制台为主 Shell，待创建）
+  - [x] 登录后默认进入运维控制台；左侧栏三段：上方功能导航（仪表盘/节点/实例/Bot/告警…）、中部节点下拉+实例树、下方系统平台导航（用户/审计/设置/退出）
+  - [x] 节点下拉含「全部节点」+各节点；选「全部」时实例树按节点分组，选某节点时只列该节点实例（复用 `GET /instances?nodeId=`）
+  - [x] 实例树每项显示状态点（RUNNING 绿 / STARTING·STOPPING 琥珀 / CRASHED 红 / STOPPED 空心）
+  - [x] 点击实例在右侧工作区打开其终端（复用一次性 token + xterm），点另一个实例切换终端
+  - [x] 顶部工具栏显示面包屑（运维控制台 / 实例名）；「分屏」「切导播台」为禁用占位
+  - [x] 其余页面（节点/用户/审计…）仍按路由在工作区渲染，原有导航按钮全部保留
+  - [x] 暗色/亮色主题与 i18n 正常，无样式错乱
+- **备注**: 真机复验通过（短视口三段不重叠、设置页、登录态硬刷新由 BUG-006 修复）
+- **关联 ADR**: ADR-009（运维控制台为主 Shell）
 - **关联 API**: `GET /nodes`, `GET /instances?nodeId=`, `GET /instances/:id/terminal-token`（均已存在）
 - **依赖**: FR-007（终端实时）, FR-005（实例生命周期）, FR-026（shadcn/ui 标准化）
 
 ### FR-038: Bot 规模化后端 API
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: 为 Bot 在上万数量级下提供可扩展的查询与操作 API：列表分页+筛选、聚合摘要、批量操作。替换现有 `GET /bots` 一次性返回扁平数组的实现
 - **验收标准**:
-  - [ ] `GET /bots` 支持分页（page/pageSize）与筛选（instanceId/nodeId/status/behavior/关键字），返回当前页 + 总数
-  - [ ] `GET /bots/summary` 返回全局或按 `groupBy=instance|node|status|behavior` 的计数聚合，不返回逐条 bot
-  - [ ] `POST /bots/batch` 支持按 id 列表或筛选条件批量执行 set-behavior / stop / start / delete，返回成功/失败计数
-  - [ ] 批量操作经 gRPC 委托对应 Worker，超大批次分片下发，请求不被阻塞
-  - [ ] 沿用 `bot:*` 权限与跨组隔离：组成员仅能查询/操作有权实例下的 bot
-  - [ ] 1 万级 bot 下分页与摘要接口不全量序列化，响应时延可接受
+  - [x] `GET /bots` 支持分页（page/pageSize）与筛选（instanceId/nodeId/status/behavior/关键字），返回当前页 + 总数
+  - [x] `GET /bots/summary` 返回全局或按 `groupBy=instance|node|status|behavior` 的计数聚合，不返回逐条 bot
+  - [x] `POST /bots/batch` 支持按 id 列表或筛选条件批量执行 set-behavior / stop / start / delete，返回成功/失败计数（上限 5000、并发 16）
+  - [x] 批量操作经 gRPC 委托对应 Worker（CP 侧信号量分片扇出），请求不被阻塞
+  - [x] 沿用 `bot:*` 权限与跨组隔离：组成员仅能查询/操作有权实例下的 bot（越权 id 计入 skipped）
+  - [x] 1 万级 bot 下分页与摘要接口不全量序列化（DB 聚合），响应时延可接受
 - **关联 ADR**: ADR-002（gRPC 节点通信）
 - **关联 API**: `GET /bots`（扩展分页/筛选）, `GET /bots/summary`（新增）, `POST /bots/batch`（新增）
 - **依赖**: FR-009（Bot 平台）
@@ -658,17 +647,17 @@
 > 平台运行态数据收纳进单一项目内数据根，FHS 式标准目录布局，JDK/服务器/配置/核心缓存均在根内、便携可迁移。为进行中的 FR-032/033/034 提供统一存储底座，是 FR-043 真实开服的前提。
 
 ### FR-044: 项目自包含便携运行时（FHS 数据根 + 核心缓存）
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 平台所有运行态数据统一收口到单一项目内数据根，采用 FHS 式标准目录；便携 JDK、服务器工作目录、配置、下载的核心 jar 缓存均在根内；整体可迁移
 - **验收标准**:
-  - [ ] 单一数据根（默认项目内 `./data`，可经 `JIANMANAGER_DATA_DIR` 覆盖），首启按布局自动初始化
-  - [ ] FHS 式子目录：`bin/`、`etc/`（平台配置）、`opt/jdks/<vendor>-<ver>/`（便携 JDK）、`var/servers/<slug>-<shortid>/`（服务器工作目录）、`var/log/`、`var/artifacts/`（制品库/资产，内容寻址，见 FR-045）、`cache/`（临时：下载中转/解压）
-  - [ ] JDK 便携安装进 `opt/jdks/`，取代当前硬编码 `<serversDir>/jdks`（细化 FR-033，路径全在根内）
-  - [ ] 实例工作目录由系统在 `var/servers/` 下按 slug+shortid 分配，创建时不手填路径（与 FR-032 一致，取代 BUG-004 必填）
-  - [ ] 下载的 Paper/核心 jar 入**制品库**（FR-045，内容寻址 + md5/sha256 校验），建服优先命中、缺失才下载（FR-034 复用）
-  - [ ] 制品库中的核心可登记为模板来源，与 FR-014 模板打通
-  - [ ] 数据根整体拷贝到另一机器后登记仍自洽（按根相对解析，不写死绝对路径）
+  - [x] 单一数据根（默认项目内 `./data`，可经 `JIANMANAGER_DATA_DIR` 覆盖），首启按布局自动初始化
+  - [x] FHS 式子目录：`bin/`、`etc/`（平台配置）、`opt/jdks/<vendor>-<ver>/`（便携 JDK）、`var/servers/<slug>-<shortid>/`（服务器工作目录）、`var/log/`、`var/artifacts/`（制品库/资产，内容寻址，见 FR-045）、`cache/`（临时：下载中转/解压）
+  - [x] JDK 便携安装进 `opt/jdks/`，取代当前硬编码 `<serversDir>/jdks`（细化 FR-033，路径全在根内）
+  - [x] 实例工作目录由系统在 `var/servers/` 下按 slug+shortid 分配，创建时不手填路径（与 FR-032 一致，取代 BUG-004 必填）
+  - [ ] 下载的 Paper/核心 jar 入**制品库**（FR-045，内容寻址 + md5/sha256 校验），建服优先命中、缺失才下载（底座 IngestFromURL 已就绪，命中消费侧待 FR-034）
+  - [ ] 制品库中的核心可登记为模板来源，与 FR-014 模板打通（待 FR-014）
+  - [x] 数据根整体拷贝到另一机器后登记仍自洽（按根相对解析，不写死绝对路径）
 - **关联 ADR**: ADR-010（项目自包含便携运行时目录布局，待创建；细化 ADR-007/008）
 - **关联 API**: 细化 `GET/POST /nodes/:id/jdks`、`POST /instances`（系统分配目录）、`GET /cores`
 - **依赖**: 细化并先于 FR-032/033/034；是 FR-043 真实开服的运行时底座
@@ -681,18 +670,18 @@
 > 平台所有二进制资产（服务器核心、插件、图片、媒体 blob…）统一进内容寻址的制品库，带 md5/sha256 完整性校验，可去重、可追溯、可复用。核心 jar 是第一类资产，模型同样容纳后续插件 / 图片 / 媒体。
 
 ### FR-045: 制品库（内容寻址 + 完整性校验）
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: 平台资产统一进内容寻址（sha256）的制品库，附 md5/sha256 校验与类型化元数据；存于数据根 `var/artifacts/`，DB 索引；核心 jar 为首类资产，模型可扩展到插件 / 图片 / 媒体
 - **验收标准**:
-  - [ ] `assets` 表：`type`(core|plugin|image|video|archive|blob)、`name`、`version`、`filename`、`sha256`(寻址+去重键)、`md5`、`size`、`content_type`(MIME)、`source_url`、`metadata`(JSON)、`storage_state`(hot|archived|external)、`storage_backend`、`ref_count`、`created_at`、`last_used_at`
-  - [ ] **按类型分区**的内容寻址存储：资产落 `var/artifacts/<type>/<sha256 前 2 位>/<sha256>.<ext>`；类型内相同内容只存一份（去重），不同类型物理分目录，便于浏览/整类备份/归档
-  - [ ] 入库即算 sha256+md5；来源提供校验和则比对，不符拒绝入库
-  - [ ] API：`GET /assets`（按 type 筛选）、`GET /assets/:id`、`POST /assets`（上传/登记），下载入库（建服时自动 ingest 核心）
-  - [ ] 引用保护：被模板/实例引用的资产删除前拒绝并提示占用方（`ref_count`）
-  - [ ] **归档就绪**：按 类型/冷热/占用 可选择性归档——归档或外置只改 `storage_state`+`storage_backend`+存储位置，DB 记录与引用（sha256）不变；整类归档由类型分区直接支持（归档策略与外置存储后端为后续 FR，模型先留位）
-  - [ ] 核心走制品库后，FR-034 建服优先命中、缺失才下载；FR-014 模板可引用制品库核心
-  - [ ] 类型可扩展：新增 plugin/image/video/blob 仅差元数据/校验，不改存储层
+  - [x] `assets` 表：`type`(core|plugin|image|video|archive|blob)、`name`、`version`、`filename`、`sha256`(寻址+去重键)、`md5`、`size`、`content_type`(MIME)、`source_url`、`metadata`(JSON)、`storage_state`(hot|archived|external)、`storage_backend`、`ref_count`、`created_at`、`last_used_at`
+  - [x] **按类型分区**的内容寻址存储：资产落 `var/artifacts/<type>/<sha256 前 2 位>/<sha256>.<ext>`；类型内相同内容只存一份（去重），不同类型物理分目录，便于浏览/整类备份/归档
+  - [x] 入库即算 sha256+md5；来源提供校验和则比对，不符拒绝入库
+  - [x] API：`GET /assets`（按 type 筛选）、`GET /assets/:id`、`POST /assets`（上传/登记），下载入库（建服时自动 ingest 核心）
+  - [x] 引用保护：被模板/实例引用的资产删除前拒绝并提示占用方（`ref_count`）
+  - [x] **归档就绪**：按 类型/冷热/占用 可选择性归档——归档或外置只改 `storage_state`+`storage_backend`+存储位置，DB 记录与引用（sha256）不变；整类归档由类型分区直接支持（归档策略与外置存储后端为后续 FR，模型先留位）
+  - [ ] 核心走制品库后，FR-034 建服优先命中、缺失才下载；FR-014 模板可引用制品库核心（消费侧待 FR-034/FR-014）
+  - [x] 类型可扩展：新增 plugin/image/video/blob 仅差元数据/校验，不改存储层
 - **关联 ADR**: ADR-011（制品库内容寻址与资产模型，待创建）
 - **关联 API**: `GET/POST /assets`, `GET /assets/:id`
 - **依赖**: FR-044（数据根提供 `var/artifacts/`）；被 FR-034（建服取核心）、FR-014（模板）复用
