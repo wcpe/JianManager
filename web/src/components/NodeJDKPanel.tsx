@@ -1,5 +1,4 @@
 import { useState, type FormEvent } from 'react'
-import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useNodeJDKs, useCreateJDK, useDeleteJDK, useInstallJDK } from '@/api/jdks'
 
@@ -8,7 +7,6 @@ interface NodeJDKPanelProps {
 }
 
 export default function NodeJDKPanel({ nodeId }: NodeJDKPanelProps) {
-  const { t } = useTranslation()
   const { data: jdks, isLoading } = useNodeJDKs(nodeId)
   const create = useCreateJDK(nodeId)
   const del = useDeleteJDK(nodeId)

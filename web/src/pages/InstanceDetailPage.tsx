@@ -8,8 +8,6 @@ import ConfigEditor from '@/components/ConfigEditor'
 import FileBrowser from '@/components/FileBrowser'
 import TerminalComponent from '@/components/Terminal'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Label } from '@/components/ui/label'
 import {
   Table,
   TableBody,
