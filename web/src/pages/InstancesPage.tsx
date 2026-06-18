@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useInstances, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance, useKillInstance } from '@/api/instances'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import CreateInstanceDialog from '@/components/CreateInstanceDialog'
+import ProvisionServerDialog from '@/components/ProvisionServerDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -18,6 +19,7 @@ import {
 export default function InstancesPage() {
   const { t } = useTranslation()
   const [showCreate, setShowCreate] = useState(false)
+  const [showProvision, setShowProvision] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
   const { data: instances, isLoading } = useInstances()
   const start = useStartInstance()
@@ -38,9 +40,13 @@ export default function InstancesPage() {
     <div>
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">{t('instances.title')}</h1>
-        <Button onClick={() => setShowCreate(true)}>+ {t('instances.createInstance')}</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setShowProvision(true)}>⚡ {t('provision.entry')}</Button>
+          <Button onClick={() => setShowCreate(true)}>+ {t('instances.createInstance')}</Button>
+        </div>
       </div>
 
+      <ProvisionServerDialog open={showProvision} onClose={() => setShowProvision(false)} />
       <CreateInstanceDialog open={showCreate} onClose={() => setShowCreate(false)} />
 
       {isLoading ? (

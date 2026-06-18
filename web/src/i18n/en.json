@@ -1,4 +1,26 @@
 {
+  "provision": {
+    "entry": "Provision",
+    "title": "Provision Paper Server",
+    "systemAssigned": "Ports and work directory are assigned automatically",
+    "coreType": "Core Type",
+    "mcVersion": "MC Version",
+    "selectVersion": "Select version",
+    "loadingVersions": "Loading versions…",
+    "versionsError": "Failed to load versions",
+    "build": "Build (optional)",
+    "latestBuild": "Latest build",
+    "willDownload": "Will download",
+    "memory": "Memory (MB)",
+    "noJdk": "None (use system Java)",
+    "jvmArgs": "JVM Args (optional)",
+    "jvmArgsHint": "Space-separated, e.g. -XX:+UseG1GC -XX:MaxGCPauseMillis=200",
+    "submit": "Provision",
+    "provisioning": "Provisioning…",
+    "success": "Server \"{{name}}\" provisioned, ready to start",
+    "partialFailure": "Instance created, but core download or config write did not finish; retry from the instance detail page",
+    "failed": "Provisioning failed"
+  },
   "common": {
     "loading": "Loading...",
     "confirm": "Confirm",

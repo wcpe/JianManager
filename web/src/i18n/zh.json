@@ -1,4 +1,26 @@
 {
+  "provision": {
+    "entry": "一键搭建",
+    "title": "一键搭建 Paper 子服",
+    "systemAssigned": "端口与工作目录由系统自动分配，无需填写",
+    "coreType": "核心类型",
+    "mcVersion": "MC 版本",
+    "selectVersion": "选择版本",
+    "loadingVersions": "加载版本中…",
+    "versionsError": "无法获取版本列表",
+    "build": "构建号（可选）",
+    "latestBuild": "最新构建",
+    "willDownload": "将下载",
+    "memory": "内存 (MB)",
+    "noJdk": "不指定（使用系统 Java）",
+    "jvmArgs": "JVM 参数（可选）",
+    "jvmArgsHint": "空格分隔，例如 -XX:+UseG1GC -XX:MaxGCPauseMillis=200",
+    "submit": "搭建",
+    "provisioning": "搭建中…",
+    "success": "子服「{{name}}」已搭建，可一键启动",
+    "partialFailure": "实例已创建，但核心下载或配置写入未完成，请在实例详情中重试",
+    "failed": "搭建失败"
+  },
   "common": {
     "loading": "加载中...",
     "confirm": "确认",
