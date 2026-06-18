@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -97,7 +98,7 @@ func (h *ConfigHandler) Versions(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
 		return
 	}
-	versions, err := h.svc.Versions(id, c.Param("file"))
+	versions, err := h.svc.Versions(id, strings.TrimPrefix(c.Param("file"), "/"))
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return
@@ -126,7 +127,7 @@ func (h *ConfigHandler) Rollback(c *gin.Context) {
 	}
 	uid, _ := c.Get(middleware.CtxUserID)
 	authorID, _ := uid.(uint)
-	versionID, err := h.svc.Rollback(id, c.Param("file"), req.VersionID, req.Message, authorID)
+	versionID, err := h.svc.Rollback(id, strings.TrimPrefix(c.Param("file"), "/"), req.VersionID, req.Message, authorID)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return
@@ -140,10 +141,10 @@ func (h *ConfigHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	cfg.GET("/read", h.Read)
 	cfg.POST("/write", h.Write)
 	cfg.POST("/cross-check", h.CrossCheck)
-	// 使用 *file 通配符，使 /configs/plugins/Example/config.yml/versions 这样的子目录路径也能命中。
-	cfg.GET("/*file/versions", h.Versions)
-	cfg.POST("/*file/rollback", h.Rollback)
-	cfg.GET("/*file/versions/:fromId/diff", h.Diff)
+	// *file 通配符必须在路径末尾；文件路径可能含子目录（如 plugins/Foo/config.yml）。
+	cfg.GET("/versions/*file", h.Versions)
+	cfg.POST("/rollback/*file", h.Rollback)
+	cfg.GET("/diff/*file", h.Diff)
 }
 
 // Diff 返回 fromID -> toID 的差异。
@@ -157,7 +158,12 @@ func (h *ConfigHandler) Diff(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
 		return
 	}
-	fromID, err := strconv.ParseUint(c.Param("fromId"), 10, 64)
+	fromRaw := c.Query("from")
+	if fromRaw == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少 from 版本 ID"})
+		return
+	}
+	fromID, err := strconv.ParseUint(fromRaw, 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的 from 版本 ID"})
 		return
@@ -171,7 +177,7 @@ func (h *ConfigHandler) Diff(c *gin.Context) {
 		}
 		toID = t
 	}
-	res, err := h.svc.Diff(id, c.Param("file"), uint(fromID), uint(toID))
+	res, err := h.svc.Diff(id, strings.TrimPrefix(c.Param("file"), "/"), uint(fromID), uint(toID))
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return

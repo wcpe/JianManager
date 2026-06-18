@@ -111,7 +111,7 @@ export function useConfigVersions(instanceId: number, filePath: string | null) {
     queryKey: ['configs', instanceId, 'versions', filePath],
     queryFn: async () => {
       const { data } = await api.get<ConfigVersion[]>(
-        `/instances/${instanceId}/configs/${encodeURIComponent(filePath || '')}/versions`,
+        `/instances/${instanceId}/configs/versions/${encodeURIComponent(filePath || '')}`,
       )
       return data
     },
@@ -125,7 +125,7 @@ export function useRollbackConfig(instanceId: number, filePath: string | null) {
   return useMutation({
     mutationFn: async (payload: { versionId: number; message?: string }) => {
       const { data } = await api.post<{ versionId: number }>(
-        `/instances/${instanceId}/configs/${encodeURIComponent(filePath || '')}/rollback`,
+        `/instances/${instanceId}/configs/rollback/${encodeURIComponent(filePath || '')}`,
         payload,
       )
       return data
@@ -146,8 +146,8 @@ export function useConfigDiff(instanceId: number, filePath: string | null, fromI
     queryKey: ['configs', instanceId, 'diff', filePath, fromId, toId],
     queryFn: async () => {
       const { data } = await api.get<ConfigDiff>(
-        `/instances/${instanceId}/configs/${encodeURIComponent(filePath || '')}/versions/${fromId}/diff`,
-        { params: { to: toId } },
+        `/instances/${instanceId}/configs/diff/${encodeURIComponent(filePath || '')}`,
+        { params: { from: fromId, to: toId } },
       )
       return data
     },
