@@ -12,9 +12,15 @@ import { Button } from '@/components/ui/button'
 interface TerminalPaneProps {
   /** 当前打开终端的实例 id */
   instanceId: number
+  /**
+   * 隐藏自带的面包屑/占位按钮工具栏。
+   * 工作区分段（FR-039）中由 WorkspacePane 统一承载面包屑与「终端 | Bot」切换，
+   * 此时本组件只渲染终端区，避免双重头部。
+   */
+  hideHeader?: boolean
 }
 
-export default function TerminalPane({ instanceId }: TerminalPaneProps) {
+export default function TerminalPane({ instanceId, hideHeader = false }: TerminalPaneProps) {
   const { t } = useTranslation()
   const { data: instance } = useInstance(instanceId)
   const status = instance?.status ?? ''
@@ -26,22 +32,24 @@ export default function TerminalPane({ instanceId }: TerminalPaneProps) {
 
   return (
     <div className="flex h-full flex-col">
-      {/* 工具栏：面包屑 + 禁用占位按钮 */}
-      <div className="flex items-center justify-between border-b px-4 py-2">
-        <div className="flex items-center gap-1.5 text-sm">
-          <span className="text-muted-foreground">{t('console.title')}</span>
-          <span className="text-muted-foreground">/</span>
-          <span className="font-medium">{instance?.name ?? `#${instanceId}`}</span>
+      {/* 工具栏：面包屑 + 禁用占位按钮（分段模式下由父组件承载，隐藏） */}
+      {!hideHeader && (
+        <div className="flex items-center justify-between border-b px-4 py-2">
+          <div className="flex items-center gap-1.5 text-sm">
+            <span className="text-muted-foreground">{t('console.title')}</span>
+            <span className="text-muted-foreground">/</span>
+            <span className="font-medium">{instance?.name ?? `#${instanceId}`}</span>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" disabled title={t('console.splitSoon')}>
+              {t('console.split')}
+            </Button>
+            <Button variant="outline" size="sm" disabled title={t('console.directorSoon')}>
+              {t('console.director')}
+            </Button>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" disabled title={t('console.splitSoon')}>
-            {t('console.split')}
-          </Button>
-          <Button variant="outline" size="sm" disabled title={t('console.directorSoon')}>
-            {t('console.director')}
-          </Button>
-        </div>
-      </div>
+      )}
 
       {/* 终端区 */}
       <div className="min-h-0 flex-1 p-4">

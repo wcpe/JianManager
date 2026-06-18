@@ -2,7 +2,7 @@ import { Routes, Route } from 'react-router'
 import { Suspense, lazy } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useConsoleStore } from '@/stores/console'
-import TerminalPane from './TerminalPane'
+import WorkspacePane from './WorkspacePane'
 import WorkspaceEmpty from './WorkspaceEmpty'
 
 const OverviewPage = lazy(() => import('@/pages/OverviewPage'))
@@ -20,16 +20,16 @@ const AlertsPage = lazy(() => import('@/pages/AlertsPage'))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 
 /**
- * 运维控制台右侧工作区（ADR-009 / FR-037）。
- * 打开实例终端时渲染单个 TerminalPane；否则按路由渲染对应页面，既有页面不变。
- * 同一时刻仅一个终端，切换实例即换 instanceId。
+ * 运维控制台右侧工作区（ADR-009 / FR-037 / FR-039）。
+ * 打开实例时渲染单个 WorkspacePane（终端 | Bot 分段）；否则按路由渲染对应页面，既有页面不变。
+ * 同一时刻仅一个实例面板，切换实例即换 instanceId。
  */
 export default function Workspace() {
   const { t } = useTranslation()
   const openInstanceId = useConsoleStore((s) => s.openInstanceId)
 
   if (openInstanceId !== null) {
-    return <TerminalPane instanceId={openInstanceId} />
+    return <WorkspacePane instanceId={openInstanceId} />
   }
 
   return (
