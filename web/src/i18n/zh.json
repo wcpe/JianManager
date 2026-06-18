@@ -371,6 +371,19 @@
     "status": "状态",
     "duration": "持续时间"
   },
+  "settings": {
+    "title": "系统设置",
+    "subtitle": "管理外观与平台偏好",
+    "appearance": "外观",
+    "appearanceDesc": "自定义界面主题与语言",
+    "theme": "主题",
+    "themeDesc": "浅色、深色或跟随系统",
+    "language": "语言",
+    "languageDesc": "界面显示语言",
+    "moreTitle": "更多设置",
+    "moreDesc": "后续将提供更多平台配置项",
+    "comingSoon": "敬请期待"
+  },
   "theme": {
     "toggle": "切换主题",
     "light": "浅色",

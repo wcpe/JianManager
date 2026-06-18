@@ -6,13 +6,13 @@ import SidebarNavLink, { type NavEntry } from './SidebarNavLink'
 
 /**
  * 左栏下段：系统平台导航（平台管理）。
- * 用户 / 用户组 / 审计（ADR-009）。
- * 注：「设置」暂无对应页面/路由，待其落地后补入，避免死链。
+ * 用户 / 用户组 / 审计 / 设置（ADR-009）。
  */
 const platformNav: NavEntry[] = [
   { to: '/users', labelKey: 'nav.users' },
   { to: '/groups', labelKey: 'nav.groups' },
   { to: '/audit', labelKey: 'nav.audit' },
+  { to: '/settings', labelKey: 'nav.settings' },
 ]
 
 export default function PlatformNav() {

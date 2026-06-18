@@ -371,6 +371,19 @@
     "status": "Status",
     "duration": "Duration"
   },
+  "settings": {
+    "title": "Settings",
+    "subtitle": "Manage appearance and platform preferences",
+    "appearance": "Appearance",
+    "appearanceDesc": "Customize the interface theme and language",
+    "theme": "Theme",
+    "themeDesc": "Light, dark, or follow system",
+    "language": "Language",
+    "languageDesc": "Interface display language",
+    "moreTitle": "More Settings",
+    "moreDesc": "More platform options will be available later",
+    "comingSoon": "Coming soon"
+  },
   "theme": {
     "toggle": "Toggle Theme",
     "light": "Light",
