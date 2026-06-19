@@ -10,6 +10,33 @@
 
 ---
 
+## 0.3.0（2026-06-20）
+
+全链路运维打通 + 终端重写 + daemon 健壮性版本。打通「节点 → 实例 → 终端 → Bot 进服」完整运维链路（FR-043），落地一键搭建 Paper 子服向导（FR-034），重写终端体验，并修复一批 daemon 生命周期与控制面健壮性缺陷。
+
+### Added
+- **全链路运维打通**（FR-043）：节点在线 → 创建启动真实 MC 实例 → 浏览器终端交互 → Bot 真正进服 → 运维闭环；全链路 e2e 覆盖节点/实例/终端/Bot 进服/停止断开五条验收
+- **一键搭建 Paper 子服向导**（FR-034）：选版本/资源，系统分配目录与端口、下载核心、写 eula/server.properties、结构化启动；向导默认绑定节点最高版本已装 JDK
+- **接通 Bot 进服 gRPC 链路**：Worker 实现 CreateBot/DeleteBot/SetBotBehavior/SendBotCommand/ListBots 并托管 bot-worker；CP 据 Config 与实例解析连接目标、用 Bot 名作游戏内用户名、经 ListBots 实时回填状态（此前 Worker 侧无实现、dist 为 mock 桩）
+- **运维控制台统一**：点击实例名进统一控制台（终端/文件/配置/Bot），工具栏含启动/停止/重启/强制终止
+- **终端重写**：上下命令历史 + 右侧历史抽屉；Tab 补全命令、在线玩家名（据输出实时维护）与 `@` 选择器；拖选复制/全选/复制全部/保存日志/右键菜单；停服终端保持连接转只读并续流关服日志
+- **文件编辑器语法高亮**（FR-008）：CodeMirror 6 集成，按扩展名 YAML/JSON 语法高亮 + 行号 + 撤销/重做（此前为纯 textarea）
+
+### Fixed
+- **daemon 优雅停止看不到停止日志**：停止改为向 stdin 发 MC `stop` 优雅关服、流出完整停止日志（Stopping/Saving worlds…），此前 Windows 一律 `taskkill` 硬杀；超时强杀兜底（`JIANMANAGER_GRACEFUL_STOP_TIMEOUT` 可覆盖）
+- **停服后无法再启动**：实时态心跳曾把停止瞬态 STOPPING 覆盖已记账 STOPPED，致 STOPPING→STARTING 被拒；改为仅 RUNNING→CRASHED 纠正
+- **daemon 重启 panic**：Start 重置 connectDone，避免 close of closed channel 崩溃整个 Worker
+- **崩溃实例永显 RUNNING 不可删**：wrapper 连续快速崩溃放弃自动重启并退出、心跳实时态对账落 CRASHED
+- **实例恢复工作目录丢失**：PID 记录持久化 WorkDir，Worker 重启恢复后文件/配置不再 `open` 空路径
+- **CP 重启失联**：Heartbeat 重建 gRPC 连接池、对账未恢复实例为 STOPPED，避免 NODE_OFFLINE 与永卡 RUNNING（生命周期 422）
+- **Bot 重连/创建**：CP 批量启动补传连接目标、bot-worker 重建已存在连接；创建表单 config JSON 序列化修复 400
+- **终端一次性 token TTL**：30s → 10min，修复重开终端复用过期 token 握手失败
+- **direct 停止进程树泄漏**：`taskkill /T` 递归终止，避免泄漏 java/node 子进程
+- **控制台导航**：点击侧栏导航即关闭实例工作区，修复从实例页打开控制台后点同路由「实例」不关闭
+- **daemon 崩溃即时反映**：wrapper 退出区分主动停止与崩溃并即时推送状态，崩溃不再等下次心跳（~30s）才反映到前端
+
+---
+
 ## 0.2.0（2026-06-17）
 
 运行时集成补全 + 嵌入前端可用性修复 + i18n 完整化版本。新增实例状态实时推送与模板默认工作目录；修复了单二进制部署下前端无法加载的重定向死循环、前端构建失败与 i18n 文案缺漏。
