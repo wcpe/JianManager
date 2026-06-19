@@ -504,15 +504,15 @@
 - **Spec**: `docs/specs/jdk-runtime/`
 
 ### FR-034: 搭建 Bukkit 子服
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done（v0.3.0）
 - **优先级**: P1
 - **描述**: 向导式创建 Paper/Spigot/Purpur 后端子服，自动下载核心、系统分配目录与端口、写好群组服配置、结构化启动
 - **验收标准**:
-  - [ ] 选择核心类型 + MC 版本，从核心仓库/下载源获取 jar
-  - [ ] 系统自动分配工作目录与端口；自动写 `eula=true`、`online-mode=false`、spigot `bungeecord=true` / paper 代理转发
-  - [ ] 绑定 JDK、设置内存与 JVM 参数（结构化启动，不手填命令）
-  - [ ] 创建后可一键启动，状态进入 RUNNING
-  - [ ] 可选：创建时即注册进所选代理
+  - [x] 选择核心类型 + MC 版本，从核心仓库/下载源获取 jar
+  - [x] 系统自动分配工作目录与端口；自动写 `eula=true`、`online-mode=false`、spigot `bungeecord=true` / paper 代理转发
+  - [x] 绑定 JDK、设置内存与 JVM 参数（结构化启动，不手填命令）
+  - [x] 创建后可一键启动，状态进入 RUNNING
+  - [ ] 可选：创建时即注册进所选代理（延后至 FR-035 代理集成）
 - **关联 ADR**: ADR-007, ADR-008
 - **关联 API**: `POST /instances`（role=backend, 结构化启动）, `GET /cores`
 - **依赖**: FR-031, FR-032, FR-033
@@ -695,17 +695,17 @@
 > 把已交付的节点/实例/终端/Bot 各 FR 在真实场景下端到端打通并验收，达到「能正常运维一台 MC 服务器」的标准。这是集成与验收 FR，不引入新功能内核；过程中发现的断点按 BUG-xxx 拆出修复。
 
 ### FR-043: 全链路运维打通（节点→实例→终端→Bot 进服）
-- **状态**: 📋 todo
+- **状态**: ✅ done（v0.3.0）
 - **优先级**: P0
 - **描述**: 打通并验收「节点在线 → 创建并启动 MC 实例 → 终端交互 → 创建 Bot 并真正进入该实例服务器」的完整运维链路，达到可真实运维一台服务器的标准；含闭合 FR-019 终端生产连通性（`ws://localhost` 硬编码）
 - **验收标准**:
-  - [ ] 节点：Worker 注册在线，前端显示在线 + 实时 CPU/内存/磁盘指标
-  - [ ] 实例：经平台创建并启动一个真实 MC 实例，状态进入 RUNNING，终端可见服务端启动日志
-  - [ ] 终端：浏览器终端连上并执行命令（如 `list`）、看到输出；连接地址不再硬编码 `ws://localhost`，非本机环境可用（闭合 FR-019 备注）
-  - [ ] Bot 进服：创建指向该运行实例的 Bot，Bot 实际加入服务器——服务端 `list` / 在线玩家数可见该 Bot，前端 Bot 状态变 `connected`
-  - [ ] 运维闭环：在终端对该 Bot 下发可见交互（服务端 `say` / Bot 行为切换），再停止实例，Bot 随之断开、状态正确回落 `disconnected`
-  - [ ] 可复现：全链路可在「一键」脚本或文档化步骤下复现（扩展 FR-028 E2E 覆盖到终端交互 + Bot 进服）
-  - [ ] 可诊断：任一 hop 失败有明确定位（节点离线 / 实例未起 / 终端 token 失败 / Bot 连接被拒）
+  - [x] 节点：Worker 注册在线，前端显示在线 + 实时 CPU/内存/磁盘指标
+  - [x] 实例：经平台创建并启动一个真实 MC 实例，状态进入 RUNNING，终端可见服务端启动日志
+  - [x] 终端：浏览器终端连上并执行命令（如 `list`）、看到输出；连接地址不再硬编码 `ws://localhost`，非本机环境可用（闭合 FR-019 备注）
+  - [x] Bot 进服：创建指向该运行实例的 Bot，Bot 实际加入服务器——服务端 `list` / 在线玩家数可见该 Bot，前端 Bot 状态变 `connected`
+  - [x] 运维闭环：在终端对该 Bot 下发可见交互（服务端 `say` / Bot 行为切换），再停止实例，Bot 随之断开、状态正确回落 `disconnected`
+  - [x] 可复现：全链路可在「一键」脚本或文档化步骤下复现（扩展 FR-028 E2E 覆盖到终端交互 + Bot 进服）
+  - [x] 可诊断：任一 hop 失败有明确定位（节点离线 / 实例未起 / 终端 token 失败 / Bot 连接被拒）
 - **关联 ADR**: ADR-002（gRPC 节点通信）, ADR-007（群组服关系，Bot 连接目标）
 - **关联 API**: gRPC Register / StartInstance / IssueTerminalToken / CreateBot, WS 终端, `GET /instances/:id/terminal-token`
 - **依赖**: FR-004, FR-005, FR-007, FR-009, FR-019, FR-021, FR-024（均 done，本 FR 做集成打通与验收）

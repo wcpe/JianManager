@@ -7,9 +7,24 @@
 
 ## 自动化已覆盖（无需真机）
 
-- 核心解析联网路径：`go test -tags e2e -run Live -v ./internal/controlplane/service/` —— 列版本 → 解析最新构建 → 下载地址 HEAD 可达（已绿）。
-- 全后端 `go build ./...` / `go vet ./...` / `go test ./...` 绿；前端 `tsc -b` + `vite build` + `vitest` 绿。
-- 终端 WS 地址非硬编码：`service/terminal.go` 按浏览器 `c.Request.Host` 构造 `ws://<host>/ws/terminal`（闭合 FR-019 的 `ws://localhost`）。
+- **全链路 e2e（验收 1~5 自动通过）**：`make e2e`（或 `go test -tags=e2e -run TestE2E ./internal/e2e/ -v`）。
+  `TestE2E_FullChainTerminalBot` 起真实 CP+Worker，建实例→启动→终端发 `list`/`say`→创建 Bot 真正进服→停止实例→Bot 回落 `disconnected`，逐条断言。
+  受 e2e 主机仅 Java 8 限制（真实 Paper 1.21 跑不起来），实例进程用确定性**假 MC 服务器**（`bot-worker/test/fake-mc-server.mjs`，基于 mineflayer 自带的 minecraft-protocol，离线 1.8.9）；
+  平台侧每个环节（CP/Worker/gRPC/进程管理/终端代理/真实 bot-worker spawn 真实 mineflayer 进服/状态回传）都是真链路，唯一替身是「Paper 实现」本身。
+- 核心解析联网路径：`go test -tags e2e -run Live -v ./internal/controlplane/service/` —— 列版本 → 解析最新构建 → 下载地址 HEAD 可达。
+- 核心下载机制（离线）：`go test -run TestDownloadCore ./internal/worker/grpc/` —— 本地 HTTP 服桩 jar，下载落地 + sha256 校验 + 路径穿越拒绝。
+- 全后端 `go build ./...` / `go vet ./...` / `go test ./...` 绿；前端 `tsc -b` + `vite build` + `vitest` 绿；bot-worker `tsc --noEmit` 绿。
+- 终端 WS 地址非硬编码：`service/terminal.go` 按浏览器 `c.Request.Host` 构造 `ws(s)://<host>/ws/terminal`（闭合 FR-019 的 `ws://localhost`）。
+
+## 验收中发现并修复的实现缺口
+
+> 验收即打通：FR-021/024（Bot）此前标 done，但 Bot 进服链路在 Worker 侧并未接通，本轮补齐。
+
+- **Worker 侧 Bot RPC 缺失** → 已实现 `CreateBot/DeleteBot/SetBotBehavior/SendBotCommand/ListBots`（`internal/worker/grpc/server.go`），按需 spawn bot-worker（`JIANMANAGER_BOT_WORKER_PATH`，默认 `bot-worker/dist/index.js`）。
+- **CP 不下发连接目标** → `service/bot.go` 解析 Bot.Config 下发 host/port/version/username（缺省回环 + 实例 `server_port`）。
+- **Bot 状态无回传**（CP 曾乐观置 connected）→ 改为读取时经 `ListBots` 懒拉取回填 DB（`refreshStatus`）；新增 `disconnected` 状态。
+- **bot-worker 从未真正运行**（dist 是 mock 桩）→ 重新构建并修两处加载期崩溃：mineflayer-pathfinder 的 CJS 具名导入改为运行时 import；behavior 基类抽到 `base.ts` 打破 index↔custom 循环依赖。
+- **direct 策略停止泄漏游戏服进程（Windows）**：`Stop/Kill` 原只杀 `cmd.exe` wrapper、遗留真实 node/java 进程 → 改为 `taskkill /T` 杀进程树（`process/direct.go`）。
 
 ## 准备：起 CP + Worker
 
