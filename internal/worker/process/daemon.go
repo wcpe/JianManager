@@ -98,6 +98,11 @@ func (d *daemonStrategy) Start(ctx context.Context) error {
 	d.state = StateRunning
 	slog.Info("daemon wrapper 已启动", "instanceId", d.spec.UUID, "wrapperPid", cmd.Process.Pid)
 
+	// 每次 Start 重置 connectDone：daemon 策略实例在实例重启时被复用，connectLoop 退出会
+	// close(connectDone)；若不重置，第二次 Start 的 connectLoop 会 close 已关闭的 channel 而 panic
+	// （崩溃整个 Worker）。Reconnect 路径已自行重置，此处对应 Start/重启路径。
+	d.connectDone = make(chan struct{})
+
 	// 异步连接 wrapper 的 socket（wrapper 需要时间监听就绪）
 	go d.connectLoop(addr)
 

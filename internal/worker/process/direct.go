@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -133,10 +134,10 @@ func (d *directStrategy) Stop() error {
 	}
 	// Windows 上 os.Interrupt 对多数进程无效，直接 Kill 更可靠
 	if runtime.GOOS == "windows" {
-		return cmd.Process.Kill()
+		return killProcessTree(cmd)
 	}
 	if err := cmd.Process.Signal(os.Interrupt); err != nil {
-		return cmd.Process.Kill()
+		return killProcessTree(cmd)
 	}
 	return nil
 }
@@ -147,6 +148,20 @@ func (d *directStrategy) Kill() error {
 	d.mu.Unlock()
 	if cmd == nil || cmd.Process == nil {
 		return nil
+	}
+	return killProcessTree(cmd)
+}
+
+// killProcessTree 终止进程及其子进程树。
+// direct 策略经 cmd.exe/sh 包裹真实进程（如 node/java），父进程的 Kill 在 Windows 上
+// 只杀 wrapper、遗留真实游戏服进程（导致「停止实例后服务器仍在跑」）。
+// Windows 用 taskkill /T 递归终止整棵树；其他平台回退到进程 Kill。
+func killProcessTree(cmd *exec.Cmd) error {
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	if runtime.GOOS == "windows" {
+		return exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
 	}
 	return cmd.Process.Kill()
 }
