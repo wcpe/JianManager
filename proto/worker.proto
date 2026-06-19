@@ -63,6 +63,8 @@ service WorkerService {
   rpc RemoveJDK(RemoveJDKRequest) returns (RemoveJDKResponse);
   // DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
   rpc DownloadCore(DownloadCoreRequest) returns (DownloadCoreResponse);
+  // CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
+  rpc CloneWorkDir(CloneWorkDirRequest) returns (CloneWorkDirResponse);
 
   // === Bot 操作 ===
 
@@ -535,6 +537,22 @@ message DownloadCoreResponse {
   bool success = 1;
   string error = 2;
   int64 size = 3;
+}
+
+// === 一键复制子服（FR-036） ===
+
+message CloneWorkDirRequest {
+  string src_instance_uuid = 1; // 源实例（须已注册，提供其工作目录）
+  string dst_instance_uuid = 2; // 目标实例（须已注册，提供其工作目录）
+  repeated string exclude = 3;  // 相对源工作目录的排除项：目录前缀、精确路径或 basename glob（如 *.pid）
+}
+
+message CloneWorkDirResponse {
+  bool success = 1;
+  string error = 2;
+  int64 copied_files = 3;
+  int64 copied_bytes = 4;
+  repeated string skipped = 5; // 被排除跳过的顶层项/目录（回报用）
 }
 
 // === Bot 操作 ===

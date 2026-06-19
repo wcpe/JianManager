@@ -4360,6 +4360,142 @@ func (x *DownloadCoreResponse) GetSize() int64 {
 	return 0
 }
 
+type CloneWorkDirRequest struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SrcInstanceUuid string                 `protobuf:"bytes,1,opt,name=src_instance_uuid,json=srcInstanceUuid,proto3" json:"src_instance_uuid,omitempty"` // 源实例（须已注册，提供其工作目录）
+	DstInstanceUuid string                 `protobuf:"bytes,2,opt,name=dst_instance_uuid,json=dstInstanceUuid,proto3" json:"dst_instance_uuid,omitempty"` // 目标实例（须已注册，提供其工作目录）
+	Exclude         []string               `protobuf:"bytes,3,rep,name=exclude,proto3" json:"exclude,omitempty"`                                          // 相对源工作目录的排除项：目录前缀、精确路径或 basename glob（如 *.pid）
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *CloneWorkDirRequest) Reset() {
+	*x = CloneWorkDirRequest{}
+	mi := &file_proto_worker_proto_msgTypes[72]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CloneWorkDirRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CloneWorkDirRequest) ProtoMessage() {}
+
+func (x *CloneWorkDirRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[72]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CloneWorkDirRequest.ProtoReflect.Descriptor instead.
+func (*CloneWorkDirRequest) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{72}
+}
+
+func (x *CloneWorkDirRequest) GetSrcInstanceUuid() string {
+	if x != nil {
+		return x.SrcInstanceUuid
+	}
+	return ""
+}
+
+func (x *CloneWorkDirRequest) GetDstInstanceUuid() string {
+	if x != nil {
+		return x.DstInstanceUuid
+	}
+	return ""
+}
+
+func (x *CloneWorkDirRequest) GetExclude() []string {
+	if x != nil {
+		return x.Exclude
+	}
+	return nil
+}
+
+type CloneWorkDirResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	CopiedFiles   int64                  `protobuf:"varint,3,opt,name=copied_files,json=copiedFiles,proto3" json:"copied_files,omitempty"`
+	CopiedBytes   int64                  `protobuf:"varint,4,opt,name=copied_bytes,json=copiedBytes,proto3" json:"copied_bytes,omitempty"`
+	Skipped       []string               `protobuf:"bytes,5,rep,name=skipped,proto3" json:"skipped,omitempty"` // 被排除跳过的顶层项/目录（回报用）
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CloneWorkDirResponse) Reset() {
+	*x = CloneWorkDirResponse{}
+	mi := &file_proto_worker_proto_msgTypes[73]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CloneWorkDirResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CloneWorkDirResponse) ProtoMessage() {}
+
+func (x *CloneWorkDirResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[73]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CloneWorkDirResponse.ProtoReflect.Descriptor instead.
+func (*CloneWorkDirResponse) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{73}
+}
+
+func (x *CloneWorkDirResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *CloneWorkDirResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *CloneWorkDirResponse) GetCopiedFiles() int64 {
+	if x != nil {
+		return x.CopiedFiles
+	}
+	return 0
+}
+
+func (x *CloneWorkDirResponse) GetCopiedBytes() int64 {
+	if x != nil {
+		return x.CopiedBytes
+	}
+	return 0
+}
+
+func (x *CloneWorkDirResponse) GetSkipped() []string {
+	if x != nil {
+		return x.Skipped
+	}
+	return nil
+}
+
 var File_proto_worker_proto protoreflect.FileDescriptor
 
 const file_proto_worker_proto_rawDesc = "" +
@@ -4682,7 +4818,17 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x14DownloadCoreResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x12\n" +
-	"\x04size\x18\x03 \x01(\x03R\x04size2\xfa\x13\n" +
+	"\x04size\x18\x03 \x01(\x03R\x04size\"\x87\x01\n" +
+	"\x13CloneWorkDirRequest\x12*\n" +
+	"\x11src_instance_uuid\x18\x01 \x01(\tR\x0fsrcInstanceUuid\x12*\n" +
+	"\x11dst_instance_uuid\x18\x02 \x01(\tR\x0fdstInstanceUuid\x12\x18\n" +
+	"\aexclude\x18\x03 \x03(\tR\aexclude\"\xa6\x01\n" +
+	"\x14CloneWorkDirResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x12!\n" +
+	"\fcopied_files\x18\x03 \x01(\x03R\vcopiedFiles\x12!\n" +
+	"\fcopied_bytes\x18\x04 \x01(\x03R\vcopiedBytes\x12\x18\n" +
+	"\askipped\x18\x05 \x03(\tR\askipped2\xc5\x14\n" +
 	"\rWorkerService\x12=\n" +
 	"\bRegister\x12\x17.worker.RegisterRequest\x1a\x18.worker.RegisterResponse\x12D\n" +
 	"\tHeartbeat\x12\x18.worker.HeartbeatRequest\x1a\x19.worker.HeartbeatResponse(\x010\x01\x12O\n" +
@@ -4714,7 +4860,8 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\n" +
 	"InstallJDK\x12\x19.worker.InstallJDKRequest\x1a\x1a.worker.InstallJDKResponse\x12@\n" +
 	"\tRemoveJDK\x12\x18.worker.RemoveJDKRequest\x1a\x19.worker.RemoveJDKResponse\x12I\n" +
-	"\fDownloadCore\x12\x1b.worker.DownloadCoreRequest\x1a\x1c.worker.DownloadCoreResponse\x12@\n" +
+	"\fDownloadCore\x12\x1b.worker.DownloadCoreRequest\x1a\x1c.worker.DownloadCoreResponse\x12I\n" +
+	"\fCloneWorkDir\x12\x1b.worker.CloneWorkDirRequest\x1a\x1c.worker.CloneWorkDirResponse\x12@\n" +
 	"\tCreateBot\x12\x18.worker.CreateBotRequest\x1a\x19.worker.CreateBotResponse\x12@\n" +
 	"\tDeleteBot\x12\x18.worker.DeleteBotRequest\x1a\x19.worker.DeleteBotResponse\x12=\n" +
 	"\bListBots\x12\x17.worker.ListBotsRequest\x1a\x18.worker.ListBotsResponse\x12O\n" +
@@ -4735,7 +4882,7 @@ func file_proto_worker_proto_rawDescGZIP() []byte {
 	return file_proto_worker_proto_rawDescData
 }
 
-var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 73)
+var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 75)
 var file_proto_worker_proto_goTypes = []any{
 	(*RegisterRequest)(nil),             // 0: worker.RegisterRequest
 	(*RegisterResponse)(nil),            // 1: worker.RegisterResponse
@@ -4809,11 +4956,13 @@ var file_proto_worker_proto_goTypes = []any{
 	(*RemoveJDKResponse)(nil),           // 69: worker.RemoveJDKResponse
 	(*DownloadCoreRequest)(nil),         // 70: worker.DownloadCoreRequest
 	(*DownloadCoreResponse)(nil),        // 71: worker.DownloadCoreResponse
-	nil,                                 // 72: worker.CreateInstanceRequest.EnvVarsEntry
+	(*CloneWorkDirRequest)(nil),         // 72: worker.CloneWorkDirRequest
+	(*CloneWorkDirResponse)(nil),        // 73: worker.CloneWorkDirResponse
+	nil,                                 // 74: worker.CreateInstanceRequest.EnvVarsEntry
 }
 var file_proto_worker_proto_depIdxs = []int32{
 	3,  // 0: worker.HeartbeatRequest.instances:type_name -> worker.InstanceState
-	72, // 1: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
+	74, // 1: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
 	14, // 2: worker.ListInstancesResponse.instances:type_name -> worker.InstanceInfo
 	21, // 3: worker.ListFilesResponse.files:type_name -> worker.FileInfo
 	31, // 4: worker.ListConfigFilesResponse.files:type_name -> worker.ConfigFileInfo
@@ -4853,49 +5002,51 @@ var file_proto_worker_proto_depIdxs = []int32{
 	66, // 38: worker.WorkerService.InstallJDK:input_type -> worker.InstallJDKRequest
 	68, // 39: worker.WorkerService.RemoveJDK:input_type -> worker.RemoveJDKRequest
 	70, // 40: worker.WorkerService.DownloadCore:input_type -> worker.DownloadCoreRequest
-	48, // 41: worker.WorkerService.CreateBot:input_type -> worker.CreateBotRequest
-	50, // 42: worker.WorkerService.DeleteBot:input_type -> worker.DeleteBotRequest
-	52, // 43: worker.WorkerService.ListBots:input_type -> worker.ListBotsRequest
-	55, // 44: worker.WorkerService.SetBotBehavior:input_type -> worker.SetBotBehaviorRequest
-	57, // 45: worker.WorkerService.SendBotCommand:input_type -> worker.SendBotCommandRequest
-	59, // 46: worker.WorkerService.RunBotScript:input_type -> worker.RunBotScriptRequest
-	61, // 47: worker.WorkerService.StreamBotEvents:input_type -> worker.StreamBotEventsRequest
-	1,  // 48: worker.WorkerService.Register:output_type -> worker.RegisterResponse
-	4,  // 49: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
-	6,  // 50: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
-	8,  // 51: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
-	8,  // 52: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
-	8,  // 53: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
-	8,  // 54: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
-	10, // 55: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
-	11, // 56: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
-	13, // 57: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
-	16, // 58: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
-	18, // 59: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
-	20, // 60: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
-	23, // 61: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
-	25, // 62: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
-	27, // 63: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
-	29, // 64: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
-	32, // 65: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
-	37, // 66: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
-	39, // 67: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
-	41, // 68: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
-	45, // 69: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
-	47, // 70: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
-	65, // 71: worker.WorkerService.ListJDKs:output_type -> worker.ListJDKsResponse
-	67, // 72: worker.WorkerService.InstallJDK:output_type -> worker.InstallJDKResponse
-	69, // 73: worker.WorkerService.RemoveJDK:output_type -> worker.RemoveJDKResponse
-	71, // 74: worker.WorkerService.DownloadCore:output_type -> worker.DownloadCoreResponse
-	49, // 75: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
-	51, // 76: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
-	53, // 77: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
-	56, // 78: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
-	58, // 79: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
-	60, // 80: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
-	62, // 81: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
-	48, // [48:82] is the sub-list for method output_type
-	14, // [14:48] is the sub-list for method input_type
+	72, // 41: worker.WorkerService.CloneWorkDir:input_type -> worker.CloneWorkDirRequest
+	48, // 42: worker.WorkerService.CreateBot:input_type -> worker.CreateBotRequest
+	50, // 43: worker.WorkerService.DeleteBot:input_type -> worker.DeleteBotRequest
+	52, // 44: worker.WorkerService.ListBots:input_type -> worker.ListBotsRequest
+	55, // 45: worker.WorkerService.SetBotBehavior:input_type -> worker.SetBotBehaviorRequest
+	57, // 46: worker.WorkerService.SendBotCommand:input_type -> worker.SendBotCommandRequest
+	59, // 47: worker.WorkerService.RunBotScript:input_type -> worker.RunBotScriptRequest
+	61, // 48: worker.WorkerService.StreamBotEvents:input_type -> worker.StreamBotEventsRequest
+	1,  // 49: worker.WorkerService.Register:output_type -> worker.RegisterResponse
+	4,  // 50: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
+	6,  // 51: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
+	8,  // 52: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
+	8,  // 53: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
+	8,  // 54: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
+	8,  // 55: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
+	10, // 56: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
+	11, // 57: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
+	13, // 58: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
+	16, // 59: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
+	18, // 60: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
+	20, // 61: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
+	23, // 62: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
+	25, // 63: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
+	27, // 64: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
+	29, // 65: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
+	32, // 66: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
+	37, // 67: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
+	39, // 68: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
+	41, // 69: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
+	45, // 70: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
+	47, // 71: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
+	65, // 72: worker.WorkerService.ListJDKs:output_type -> worker.ListJDKsResponse
+	67, // 73: worker.WorkerService.InstallJDK:output_type -> worker.InstallJDKResponse
+	69, // 74: worker.WorkerService.RemoveJDK:output_type -> worker.RemoveJDKResponse
+	71, // 75: worker.WorkerService.DownloadCore:output_type -> worker.DownloadCoreResponse
+	73, // 76: worker.WorkerService.CloneWorkDir:output_type -> worker.CloneWorkDirResponse
+	49, // 77: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
+	51, // 78: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
+	53, // 79: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
+	56, // 80: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
+	58, // 81: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
+	60, // 82: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
+	62, // 83: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
+	49, // [49:84] is the sub-list for method output_type
+	14, // [14:49] is the sub-list for method input_type
 	14, // [14:14] is the sub-list for extension type_name
 	14, // [14:14] is the sub-list for extension extendee
 	0,  // [0:14] is the sub-list for field type_name
@@ -4912,7 +5063,7 @@ func file_proto_worker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_worker_proto_rawDesc), len(file_proto_worker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   73,
+			NumMessages:   75,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

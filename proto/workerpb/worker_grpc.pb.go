@@ -46,6 +46,7 @@ const (
 	WorkerService_InstallJDK_FullMethodName           = "/worker.WorkerService/InstallJDK"
 	WorkerService_RemoveJDK_FullMethodName            = "/worker.WorkerService/RemoveJDK"
 	WorkerService_DownloadCore_FullMethodName         = "/worker.WorkerService/DownloadCore"
+	WorkerService_CloneWorkDir_FullMethodName         = "/worker.WorkerService/CloneWorkDir"
 	WorkerService_CreateBot_FullMethodName            = "/worker.WorkerService/CreateBot"
 	WorkerService_DeleteBot_FullMethodName            = "/worker.WorkerService/DeleteBot"
 	WorkerService_ListBots_FullMethodName             = "/worker.WorkerService/ListBots"
@@ -115,6 +116,8 @@ type WorkerServiceClient interface {
 	RemoveJDK(ctx context.Context, in *RemoveJDKRequest, opts ...grpc.CallOption) (*RemoveJDKResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
 	DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error)
+	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
+	CloneWorkDir(ctx context.Context, in *CloneWorkDirRequest, opts ...grpc.CallOption) (*CloneWorkDirResponse, error)
 	// CreateBot 在 Worker 上创建 Bot 连接。
 	CreateBot(ctx context.Context, in *CreateBotRequest, opts ...grpc.CallOption) (*CreateBotResponse, error)
 	// DeleteBot 停止并删除 Bot。
@@ -421,6 +424,16 @@ func (c *workerServiceClient) DownloadCore(ctx context.Context, in *DownloadCore
 	return out, nil
 }
 
+func (c *workerServiceClient) CloneWorkDir(ctx context.Context, in *CloneWorkDirRequest, opts ...grpc.CallOption) (*CloneWorkDirResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CloneWorkDirResponse)
+	err := c.cc.Invoke(ctx, WorkerService_CloneWorkDir_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) CreateBot(ctx context.Context, in *CreateBotRequest, opts ...grpc.CallOption) (*CreateBotResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateBotResponse)
@@ -560,6 +573,8 @@ type WorkerServiceServer interface {
 	RemoveJDK(context.Context, *RemoveJDKRequest) (*RemoveJDKResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
 	DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error)
+	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
+	CloneWorkDir(context.Context, *CloneWorkDirRequest) (*CloneWorkDirResponse, error)
 	// CreateBot 在 Worker 上创建 Bot 连接。
 	CreateBot(context.Context, *CreateBotRequest) (*CreateBotResponse, error)
 	// DeleteBot 停止并删除 Bot。
@@ -664,6 +679,9 @@ func (UnimplementedWorkerServiceServer) RemoveJDK(context.Context, *RemoveJDKReq
 }
 func (UnimplementedWorkerServiceServer) DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DownloadCore not implemented")
+}
+func (UnimplementedWorkerServiceServer) CloneWorkDir(context.Context, *CloneWorkDirRequest) (*CloneWorkDirResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CloneWorkDir not implemented")
 }
 func (UnimplementedWorkerServiceServer) CreateBot(context.Context, *CreateBotRequest) (*CreateBotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateBot not implemented")
@@ -1175,6 +1193,24 @@ func _WorkerService_DownloadCore_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_CloneWorkDir_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CloneWorkDirRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).CloneWorkDir(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_CloneWorkDir_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).CloneWorkDir(ctx, req.(*CloneWorkDirRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_CreateBot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateBotRequest)
 	if err := dec(in); err != nil {
@@ -1400,6 +1436,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DownloadCore",
 			Handler:    _WorkerService_DownloadCore_Handler,
+		},
+		{
+			MethodName: "CloneWorkDir",
+			Handler:    _WorkerService_CloneWorkDir_Handler,
 		},
 		{
 			MethodName: "CreateBot",
