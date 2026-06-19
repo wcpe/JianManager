@@ -2,46 +2,68 @@
 
 > 关联 FR: FR-032 | 优先级: P0 | 状态: 🔨 in-progress
 
+## 现状（复用既有）
+
+- ✅ 端口系统分配：`service/ports.go` `allocPortsForNode`（同节点唯一）
+- ✅ 工作目录系统分配：`service/workdir.go` `allocWorkDirRel`（var/servers/<slug>-<shortid>）
+- ✅ 已接入 `InstanceService.Create`（MC 实例自动分配 workDir）
+- ❌ 缺：role 字段、server_registrations、networks/network_members、对应服务与路由
+
 ## 任务拆解
 
-### Phase 1: 模型
-- [ ] 扩展 `Instance`：role、serverPort、queryPort、系统分配 workDir 标记。
-- [ ] 新增 `Network` / `NetworkMember`。
-- [ ] 新增 `ProxyRegistration`。
-- [ ] 新增端口占用查询模型或服务。
+### Phase 1: 模型 + 迁移
+- [ ] `model/instance.go`：新增 `Role InstanceRole`（backend/proxy/universal，默认 universal）
+- [ ] `model/registration.go`：新增 `ServerRegistration`（proxyId/backendId/alias/priority/forcedHost/restricted/enabled），唯一索引 (proxyId, alias)
+- [ ] `model/network.go`：新增 `Network` + `NetworkMember`，唯一索引 (networkId, instanceId)
+- [ ] `database/database.go`：AutoMigrate 注册新模型
 
-### Phase 2: 资源分配
-- [ ] Worker/CP 读取 `servers_dir` 配置。
-- [ ] 创建实例时生成 slug + shortid 工作目录。
-- [ ] 实现同节点端口池分配和冲突检测。
-- [ ] 创建实例后把分配结果写回数据库。
+### Phase 2: 服务层
+- [ ] `service/registration.go`：`RegistrationService` CRUD（List/Create/Update/Delete），角色校验、alias 唯一、重复注册校验。预留 `applyHook`（FR-035 注入写代理配置）
+- [ ] `service/network.go`：`NetworkService` CRUD + 成员增删 + `BatchAction`（start/stop/restart 经 InstanceService）
+- [ ] `service/ports.go`：补 `NodePortUsage(nodeID)` 返回占用列表 + 范围
+- [ ] `service/instance.go`：`CreateInstanceRequest` 增 `Role`；Create 落 role；List 支持 role 过滤
+- [ ] `service/provision.go`：bukkit provision 落 `role=backend`
 
-### Phase 3: REST 路由
-- [ ] 新增 `network` service/router。
-- [ ] 新增 `registration` service/router。
-- [ ] 新增 `GET /nodes/:id/ports`。
-- [ ] 调整实例创建逻辑，不再要求前端传入 workDir。
+### Phase 3: 路由
+- [ ] `router/registration.go`：`RegistrationHandler`（/proxies/:id/registrations...）
+- [ ] `router/network.go`：`NetworkHandler`（/networks...）
+- [ ] `router/provision.go` 或 node：`GET /nodes/:id/ports`
+- [ ] `router/router.go`：在 admin 组注册三个 handler
 
 ### Phase 4: 前端
-- [ ] 创建实例对话框移除 workDir 输入，改成只读提示。
-- [ ] 增加 role 选择和端口占用展示。
-- [ ] 增加 Network 视图筛选和批量操作入口。
+- [ ] `CreateInstanceDialog.tsx`：workDir 改只读说明（系统分配）
+- [ ] `api/networks.ts` + `api/registrations.ts` + `api/ports.ts`
+- [ ] 群组（Network）视图：列表/创建/成员/按标签批量启停
+- [ ] 节点端口占用展示
+- [ ] i18n 中英同步
+
+### Phase 5: 测试
+- [ ] `registration_test.go`：角色校验、alias 冲突、重复注册、M:N
+- [ ] `network_test.go`：CRUD、成员幂等、删除不影响注册、批量动作计数
+- [ ] `ports_test.go`：补占用查询用例
 
 ## 产出文件范围
 
-| 文件 | 操作 | 说明 |
-|---|---|---|
-| `internal/controlplane/model/instance.go` | 修改 | role/port 字段 |
-| `internal/controlplane/model/network.go` | 新增 | Network 软标签 |
-| `internal/controlplane/model/registration.go` | 新增 | proxy-backend 注册 |
-| `internal/controlplane/service/instance.go` | 修改 | 资源分配 |
-| `internal/controlplane/service/network.go` | 新增 | 群组软标签 |
-| `internal/controlplane/service/registration.go` | 新增 | 注册关系 |
-| `internal/controlplane/router/network.go` | 新增 | Network API |
-| `internal/controlplane/router/registration.go` | 新增 | Registration API |
-| `web/src/components/CreateInstanceDialog.tsx` | 修改 | UI 调整 |
+| 文件 | 操作 |
+|---|---|
+| `internal/controlplane/model/instance.go` | 修改（role） |
+| `internal/controlplane/model/registration.go` | 新增 |
+| `internal/controlplane/model/network.go` | 新增 |
+| `internal/controlplane/database/database.go` | 修改（migrate） |
+| `internal/controlplane/service/{registration,network}.go` | 新增 |
+| `internal/controlplane/service/{ports,instance,provision}.go` | 修改 |
+| `internal/controlplane/router/{registration,network}.go` | 新增 |
+| `internal/controlplane/router/{router,provision}.go` | 修改 |
+| `web/src/api/{networks,registrations,ports}.ts` | 新增 |
+| `web/src/components/CreateInstanceDialog.tsx` | 修改 |
 
-## 风险
+## 验收映射（FR-032）
 
-- 与 FR-031 共享配置写入能力，注册关系写代理配置应依赖配置引擎。
-- 与 FR-034/035 共享实例创建路径，需要先保持最小稳定字段。
+| 验收标准 | 实现 |
+|---|---|
+| 实例具备 role | Instance.Role + 创建落值 |
+| 工作目录系统分配、只读展示 | 复用 allocWorkDirRel + 前端只读 |
+| 端口池可查看占用 | GET /nodes/:id/ports |
+| proxy↔backend M:N，每注册含 alias/priority/forced-host/restricted | server_registrations |
+| Network 非独占软标签，删除不影响子服与注册 | networks + 软删除不级联 |
+| 群组视图按标签筛选 + 批量操作 | NetworkService.BatchAction + 前端 |
