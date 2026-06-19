@@ -118,10 +118,16 @@ export function parseBotConfig(config: string): BotConfig {
 }
 
 /**
- * 新建 Bot 时的连接地址预填（FR-039 验收：所在节点 host + 默认端口，可改）。
- * 找不到节点时回退空串，让用户手填；端口默认为 MC 默认 25565
- * （FR-032 端口分配落地后可替换为实际 server-port）。
+ * 新建 Bot 时的连接地址预填：默认连到「所在节点 host + 该实例实际 server-port」，可改。
+ * 这样 Bot 默认就指向它所属的实例，避免用户手填端口出错导致连不进服务器。
+ * serverPort 缺省（未分配）时回退 MC 默认 25565；节点 host 缺省回退回环。
  */
-export function suggestBotServer(node: NodeInfo | undefined): { server: string; port: number } {
-  return { server: node?.host ?? '', port: 25565 }
+export function suggestBotServer(
+  node: NodeInfo | undefined,
+  serverPort?: number,
+): { server: string; port: number } {
+  return {
+    server: node?.host || '127.0.0.1',
+    port: serverPort && serverPort > 0 ? serverPort : 25565,
+  }
 }

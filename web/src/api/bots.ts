@@ -132,7 +132,10 @@ export function useBot(id: number) {
 export function useCreateBot() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (payload: CreateBotRequest) => api.post('/bots', payload),
+    // 后端 Bot.config 以 JSON 字符串存储（CreateBotRequest.Config string），
+    // 表单的 config 是对象，必须序列化后再提交，否则 Gin 绑定失败返回 400。
+    mutationFn: (payload: CreateBotRequest) =>
+      api.post('/bots', { ...payload, config: JSON.stringify(payload.config) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['bots'] }),
   })
 }

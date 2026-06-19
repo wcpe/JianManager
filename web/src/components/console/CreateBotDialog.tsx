@@ -38,7 +38,7 @@ export default function CreateBotDialog({ open, onOpenChange, instanceId }: Crea
   const create = useCreateBot()
   const { data: instance } = useInstance(instanceId)
   const { data: node } = useNode(instance?.nodeId ?? 0)
-  const suggested = suggestBotServer(node)
+  const suggested = suggestBotServer(node, instance?.serverPort)
 
   const [name, setName] = useState('')
   const [auth, setAuth] = useState('offline')

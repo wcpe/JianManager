@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useState, useEffect, useRef, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useNodes } from '@/api/nodes'
@@ -43,6 +43,26 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
 
   const provision = useProvisionBukkit()
 
+  // 默认选最高版本的已装 JDK：漏选会用系统 Java，现代 Paper 起不来。
+  // 仅在 jdks 变化（选/换节点）时设，用户随后仍可改回「不指定」。
+  useEffect(() => {
+    if (jdks && jdks.length > 0) {
+      const best = [...jdks].sort((a, b) => b.majorVersion - a.majorVersion)[0]
+      setJdkId(String(best.id))
+    }
+  }, [jdks])
+
+  // 选节点后默认绑定该节点最高版本的已装 JDK：现代 Paper 需 Java 17/21，
+  // 默认「不指定」会用系统 Java（常为 8）导致一键搭建出的服跑不起来。每节点只默认一次，用户仍可改。
+  const jdkDefaultNodeRef = useRef('')
+  useEffect(() => {
+    if (nodeId && jdks && jdks.length > 0 && jdkDefaultNodeRef.current !== nodeId) {
+      jdkDefaultNodeRef.current = nodeId
+      const best = [...jdks].sort((a, b) => b.majorVersion - a.majorVersion)[0]
+      setJdkId(String(best.id))
+    }
+  }, [nodeId, jdks])
+
   const resetForm = () => {
     setName('')
     setNodeId('')
@@ -52,6 +72,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
     setMemoryMb('2048')
     setJvmArgs('')
     setGroupId('')
+    jdkDefaultNodeRef.current = ''
   }
 
   const close = () => {

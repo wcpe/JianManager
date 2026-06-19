@@ -732,7 +732,19 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
 
           <div className="space-y-1">
             <Label>{t('bots.instance')}</Label>
-            <Select value={instanceId} onValueChange={setInstanceId} required>
+            <Select
+              value={instanceId}
+              onValueChange={(v: string) => {
+                setInstanceId(v)
+                // 选实例即默认连到该实例（本机回环 + 实例实际端口），避免端口填错连不进
+                const inst = instances?.find((i) => String(i.id) === v)
+                if (inst) {
+                  setServer('127.0.0.1')
+                  setPort(String(inst.serverPort && inst.serverPort > 0 ? inst.serverPort : 25565))
+                }
+              }}
+              required
+            >
               <SelectTrigger className="w-full">
                 <SelectValue placeholder={t('bots.selectInstance')} />
               </SelectTrigger>
