@@ -473,16 +473,17 @@
 - **Spec**: `docs/specs/config-engine/`
 
 ### FR-032: 节点资源分配与群组服关系模型
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 实例角色化 + proxy↔backend 的 M:N 注册 + 可选群组软标签 + 端口/工作目录由系统分配
 - **验收标准**:
-  - [ ] 实例具备 `role`（proxy / backend / universal）
-  - [ ] **工作目录由系统分配**：创建对话框移除 workDir 输入，系统在 `servers_dir` 下建 `servers/<name-slug>-<shortid>`，路径只读展示（取代 BUG-004 的必填 UI）
-  - [ ] 端口池：为新实例自动分配同节点唯一的 server-port/rcon/query，可查看占用情况
-  - [ ] proxy↔backend 为 **M:N**：一个 backend 可注册进多个 proxy；每条注册含本地 alias/priority/forced-host/restricted
-  - [ ] 群组（Network）为**非独占软标签**：一个子服可属于多个群组；删除群组不影响子服与注册
-  - [ ] 群组视图可按标签筛选并批量操作（启停/同步）
+  - [x] 实例具备 `role`（proxy / backend / universal）
+  - [x] **工作目录由系统分配**：创建对话框移除 workDir 输入，系统在 `servers_dir` 下建 `servers/<name-slug>-<shortid>`，路径只读展示（取代 BUG-004 的必填 UI）
+  - [x] 端口池：为新实例自动分配同节点唯一的 server-port/rcon/query，可查看占用情况
+  - [x] proxy↔backend 为 **M:N**：一个 backend 可注册进多个 proxy；每条注册含本地 alias/priority/forced-host/restricted
+  - [x] 群组（Network）为**非独占软标签**：一个子服可属于多个群组；删除群组不影响子服与注册
+  - [x] 群组视图可按标签筛选并批量操作（启停/同步）
+- **备注**: 真机端到端复验通过（隔离栈跑通端口分配 25565/25566/25567、M:N 注册、系统分配 workDir）
 - **关联 ADR**: ADR-007
 - **关联 API**: `GET/POST /networks`, `POST /proxies/:id/registrations`, `GET /nodes/:id/ports`
 - **依赖**: FR-031（注册/复制会写代理配置）
@@ -519,31 +520,33 @@
 - **Spec**: `docs/specs/provision-bukkit/`
 
 ### FR-035: 搭建代理（BungeeCord/Velocity）
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: 向导式创建代理实例，生成转发配置与 secret，注册后端
 - **验收标准**:
-  - [ ] 选择 BungeeCord/Waterfall 或 Velocity 并获取 jar
-  - [ ] 系统分配目录/监听端口，生成 config（BC: `ip_forward=true` / Velocity: modern 转发 + 生成 `forwarding-secret`）
-  - [ ] 将已有 backend 注册进代理（servers + priorities/try），支持 forced-host
-  - [ ] Velocity secret 自动下发到所注册后端的 paper 配置，并校验跨代理一致
-  - [ ] 启动代理后玩家可经代理进入后端
+  - [x] 选择 BungeeCord/Waterfall 或 Velocity 并获取 jar
+  - [x] 系统分配目录/监听端口，生成 config（BC: `ip_forward=true` / Velocity: modern 转发 + 生成 `forwarding-secret`）
+  - [x] 将已有 backend 注册进代理（servers + priorities/try），支持 forced-host
+  - [x] Velocity secret 自动下发到所注册后端的 paper 配置，并校验跨代理一致
+  - [x] 启动代理后玩家可经代理进入后端
+- **备注**: 真 Paper 1.20.4 + 真 BungeeCord 26.1 端到端复验通过——Mineflayer 客户端经代理（25566）进入后端 lobby（`ServerConnector [lobby] connected` + 后端 `ProxyTester joined`）。追加可选 online-mode（持久化，离线模式群组服可关闭）。
 - **关联 ADR**: ADR-007, ADR-008
 - **关联 API**: `POST /instances`（role=proxy）, `POST /proxies/:id/registrations`
 - **依赖**: FR-031, FR-032, FR-033
 - **Spec**: `docs/specs/provision-proxy/`
 
 ### FR-036: 一键复制子服 + 配置修正 + 注册
-- **状态**: 📋 todo
+- **状态**: ✅ done
 - **优先级**: P1
 - **描述**: 复制一个后端子服为独立新实例，自动修正身份配置并按需注册进所选代理
 - **验收标准**:
-  - [ ] 复制产出**独立**新实例（系统分配新目录/新端口）
-  - [ ] 拷贝 workDir 时排除 session.lock、logs、缓存、usercache 等运行态文件
-  - [ ] 配置引擎自动修正：新 server-port/rcon/query、服务器名/motd，可选改 level-name；保留 forwarding secret 不变
-  - [ ] 复制时可勾选注册进 0/1/多个代理（写入各代理 servers + priorities）
-  - [ ] 复制前预检端口/名称/目录冲突并提示
-  - [ ] 复制后新子服可直接启动并经所选代理进入
+  - [x] 复制产出**独立**新实例（系统分配新目录/新端口）
+  - [x] 拷贝 workDir 时排除 session.lock、logs、缓存、usercache 等运行态文件
+  - [x] 配置引擎自动修正：新 server-port/rcon/query、服务器名/motd，可选改 level-name；保留 forwarding secret 不变
+  - [x] 复制时可勾选注册进 0/1/多个代理（写入各代理 servers + priorities）
+  - [x] 复制前预检端口/名称/目录冲突并提示
+  - [x] 复制后新子服可直接启动并经所选代理进入
+- **备注**: 真机端到端复验通过——克隆 lobby→lobby2（新端口 25567/新目录，世界已拷、运行态已排除、端口/rcon 已修正），独立启动后经代理进入（`ServerConnector [lobby2] connected` + 克隆 `ProxyTester joined`，与源同坐标证明世界忠实复制）。
 - **关联 ADR**: ADR-007
 - **关联 API**: `POST /instances/:id/clone`
 - **依赖**: FR-031, FR-032, FR-033, FR-034, FR-035

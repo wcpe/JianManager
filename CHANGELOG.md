@@ -6,7 +6,10 @@
 
 ## [Unreleased]
 
-（暂无）
+### Added
+- **MC 群组服关系模型**（FR-032）：实例角色化（proxy/backend/universal）、proxy↔backend M:N 注册（alias/priority/forced-host/restricted）、Network 非独占软标签 + 群组视图批量启停、节点端口占用查看、工作目录系统分配（创建对话框改只读）
+- **搭建代理向导**（FR-035）：BungeeCord/Waterfall（PaperMC）+ Velocity（modern 转发，自动生成 forwarding-secret 下发所注册后端 + 跨代理一致校验）；把已有 backend 注册进代理写 servers/priorities/forced-host；可选 online-mode（持久化，离线模式群组服可关闭）。真 Paper 1.20.4 + 真 BungeeCord 端到端复验：玩家经代理进入后端
+- **一键复制子服**（FR-036）：复制为独立新实例（系统分配新目录/端口），排除 session.lock/logs/缓存/usercache 等运行态文件，修正端口/rcon/motd/可选 level-name 并保留 forwarding secret，可选注册进 0/1/多代理，复制前 dryRun 预检冲突。端到端复验：克隆独立启动并经代理进入
 
 ---
 

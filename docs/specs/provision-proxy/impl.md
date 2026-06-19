@@ -1,6 +1,6 @@
 # 实施计划 — FR-035 搭建代理（BungeeCord/Velocity）
 
-> 关联 FR: FR-035 | 优先级: P1 | 状态: 🔨 in-progress
+> 关联 FR: FR-035 | 优先级: P1 | 状态: ✅ done
 
 ## 任务拆解
 
