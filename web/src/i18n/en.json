@@ -23,6 +23,7 @@
   },
   "common": {
     "loading": "Loading...",
+    "close": "Close",
     "confirm": "Confirm",
     "cancel": "Cancel",
     "delete": "Delete",
