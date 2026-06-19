@@ -70,6 +70,9 @@ func main() {
 	provisionSvc := service.NewProvisionService(db, pool, instanceSvc, coreSvc)
 	registrationSvc := service.NewRegistrationService(db)
 	networkSvc := service.NewNetworkService(db, instanceSvc)
+	// 代理服务实现 RegistrationSyncer：注册变更后写代理配置 + 下发 Velocity secret（FR-035）。
+	proxySvc := service.NewProxyService(db, pool, instanceSvc, coreSvc, registrationSvc)
+	registrationSvc.SetSyncer(proxySvc)
 
 	// 告警评估器：每 60s 检测节点指标，触发 Webhook 通知
 	alertEvaluator := service.NewAlertEvaluator(db)
@@ -106,6 +109,7 @@ func main() {
 		Asset:     assetSvc,
 		Core:         coreSvc,
 		Provision:    provisionSvc,
+		Proxy:        proxySvc,
 		Registration: registrationSvc,
 		Network:      networkSvc,
 	}, cfg.JWT.Secret)

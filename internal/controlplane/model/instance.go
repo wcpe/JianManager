@@ -77,6 +77,9 @@ type Instance struct {
 	AutoRestart   bool           `gorm:"default:true" json:"autoRestart"`
 	RCONPort      int            `gorm:"default:0" json:"rconPort"`
 	RCONPassword  string         `gorm:"type:varchar(128)" json:"-"`
+	// ForwardingSecret 是 Velocity modern 转发的 forwarding secret（代理实例 provision 时生成）。
+	// 下发到所注册后端 paper 配置 + 跨代理一致校验复用；BungeeCord/Waterfall 不使用。参见 FR-035。
+	ForwardingSecret string `gorm:"type:varchar(128)" json:"-"`
 	ServerPort    int            `gorm:"default:0" json:"serverPort"`
 	QueryPort     int            `gorm:"default:0" json:"queryPort"`
 	PID           int            `gorm:"default:0" json:"pid"`

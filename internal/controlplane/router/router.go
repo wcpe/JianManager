@@ -31,6 +31,7 @@ type Services struct {
 	Asset        *service.AssetService
 	Core         *service.CoreService
 	Provision    *service.ProvisionService
+	Proxy        *service.ProxyService
 	Registration *service.RegistrationService
 	Network      *service.NetworkService
 }
@@ -118,8 +119,8 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		auditHandler := NewAuditHandler(svcs.Audit)
 		auditHandler.RegisterRoutes(admin)
 
-		// 一键搭建子服与核心查询：平台管理员（FR-034）
-		provisionHandler := NewProvisionHandler(svcs.Core, svcs.Provision)
+		// 一键搭建子服与核心查询（FR-034）、搭建代理（FR-035）：平台管理员
+		provisionHandler := NewProvisionHandler(svcs.Core, svcs.Provision, svcs.Proxy)
 		provisionHandler.RegisterRoutes(admin)
 
 		// 群组服关系模型：角色注册、Network 软标签（FR-032）。平台管理员。

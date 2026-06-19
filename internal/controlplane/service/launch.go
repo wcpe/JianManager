@@ -18,6 +18,8 @@ type LaunchSpec struct {
 	CoreJar string `json:"coreJar"`
 	// ExtraArgs 传给服务端的额外参数（`nogui` 已默认附加，无需重复）。
 	ExtraArgs []string `json:"extraArgs"`
+	// OmitNogui 为 true 时不追加 `nogui`（代理 Velocity/BungeeCord 不接受该参数，FR-035）。
+	OmitNogui bool `json:"omitNogui,omitempty"`
 }
 
 // parseLaunchSpec 解析实例存储的 LaunchSpec JSON。空字符串表示「无结构化启动」，
@@ -58,7 +60,10 @@ func deriveStartCommand(spec *LaunchSpec) (string, error) {
 			parts = append(parts, a)
 		}
 	}
-	parts = append(parts, "-jar", quoteIfSpace(spec.CoreJar), "nogui")
+	parts = append(parts, "-jar", quoteIfSpace(spec.CoreJar))
+	if !spec.OmitNogui {
+		parts = append(parts, "nogui")
+	}
 	for _, a := range spec.ExtraArgs {
 		if a = strings.TrimSpace(a); a != "" {
 			parts = append(parts, a)

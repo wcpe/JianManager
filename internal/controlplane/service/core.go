@@ -11,8 +11,12 @@ import (
 	"time"
 )
 
-// paperAPIBase 是 PaperMC 下载 API 根（FR-034 核心下载源）。
+// paperAPIBase 是 PaperMC 下载 API 根（FR-034/035 核心下载源：paper/velocity/waterfall）。
 const paperAPIBase = "https://api.papermc.io/v2/projects"
+
+// bungeeJenkinsURL 是 BungeeCord 最新成功构建的 jar 地址（md-5 Jenkins，FR-035）。
+// BungeeCord 不在 PaperMC API 上，仅提供单一 latest jar，无 sha256 校验。
+const bungeeJenkinsURL = "https://ci.md-5.net/job/BungeeCord/lastSuccessfulBuild/artifact/bootstrap/target/BungeeCord.jar"
 
 // CoreInfo 描述一个可下载的 MC 服务端核心构建。
 type CoreInfo struct {
@@ -35,9 +39,13 @@ func NewCoreService() *CoreService {
 	return &CoreService{client: &http.Client{Timeout: 20 * time.Second}, base: paperAPIBase}
 }
 
-// ListVersions 返回指定核心类型可用的 MC 版本（新→旧）。当前支持 paper。
+// ListVersions 返回指定核心类型可用的版本（新→旧）。
+// paper/velocity/waterfall 走 PaperMC API；bungeecord 仅有单一 latest。
 func (s *CoreService) ListVersions(ctx context.Context, coreType string) ([]string, error) {
-	if !supportedCore(coreType) {
+	if project(coreType) == "bungeecord" {
+		return []string{"latest"}, nil
+	}
+	if !paperFamily(coreType) {
 		return nil, fmt.Errorf("暂不支持的核心类型: %s", coreType)
 	}
 	var out struct {
@@ -54,8 +62,19 @@ func (s *CoreService) ListVersions(ctx context.Context, coreType string) ([]stri
 }
 
 // ResolveBuild 解析指定核心类型/版本的下载信息。build<=0 取最新构建。
+// bungeecord 直接返回 md-5 Jenkins 的 latest jar（无版本/构建/校验）。
 func (s *CoreService) ResolveBuild(ctx context.Context, coreType, mcVersion string, build int) (*CoreInfo, error) {
-	if !supportedCore(coreType) {
+	if project(coreType) == "bungeecord" {
+		return &CoreInfo{
+			Type:        "bungeecord",
+			MCVersion:   "latest",
+			Build:       0,
+			Filename:    "BungeeCord.jar",
+			DownloadURL: bungeeJenkinsURL,
+			SHA256:      "",
+		}, nil
+	}
+	if !paperFamily(coreType) {
 		return nil, fmt.Errorf("暂不支持的核心类型: %s", coreType)
 	}
 	if strings.TrimSpace(mcVersion) == "" {
@@ -125,6 +144,27 @@ func (s *CoreService) getJSON(ctx context.Context, url string, v interface{}) er
 	return json.NewDecoder(resp.Body).Decode(v)
 }
 
-func supportedCore(t string) bool { return project(t) == "paper" }
+// paperFamily 判断核心类型是否走 PaperMC API（paper 后端 + velocity/waterfall 代理）。
+func paperFamily(t string) bool {
+	switch project(t) {
+	case "paper", "velocity", "waterfall":
+		return true
+	}
+	return false
+}
+
+// IsProxyCore 判断核心类型是否为代理核心（FR-035）。
+func IsProxyCore(coreType string) bool {
+	switch project(coreType) {
+	case "velocity", "waterfall", "bungeecord":
+		return true
+	}
+	return false
+}
+
+// IsVelocityCore 判断是否为 Velocity（modern 转发，需下发 forwarding secret）。
+func IsVelocityCore(coreType string) bool {
+	return project(coreType) == "velocity"
+}
 
 func project(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
