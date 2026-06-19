@@ -25,10 +25,9 @@ export default function TerminalPane({ instanceId, hideHeader = false }: Termina
   const { data: instance } = useInstance(instanceId)
   const status = instance?.status ?? ''
   const isRunning = status === 'RUNNING'
-  const { data: tokenData, isLoading, error } = useTerminalToken(
-    instanceId,
-    isRunning ? 'write' : 'read',
-  )
+  // 固定用 write token 并按会话缓存：实例状态变化（running↔stopped）不切换 token，
+  // 终端连接保持不断，能看到关服/启动日志；是否允许输入由 readOnly 在前端把关。
+  const { data: tokenData, isLoading, error } = useTerminalToken(instanceId, 'write')
 
   return (
     <div className="flex h-full flex-col">
