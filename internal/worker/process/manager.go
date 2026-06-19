@@ -100,9 +100,15 @@ func (m *Manager) GetAllInstanceStates() []InstanceSnapshot {
 
 	states := make([]InstanceSnapshot, 0, len(m.instances))
 	for uuid, inst := range m.instances {
+		// 以管理器记账状态为准；仅当「记账为 RUNNING 但策略已崩溃」时用策略实时状态纠正为 CRASHED。
+		// （否则会把停止时 inst.State 已置的 STOPPED 被策略的瞬态 STOPPING 覆盖，导致无法再次启动。）
+		state := inst.State
+		if inst.State == StateRunning && inst.strategy != nil && inst.strategy.State() == StateCrashed {
+			state = StateCrashed
+		}
 		states = append(states, InstanceSnapshot{
 			UUID:  uuid,
-			State: string(inst.State),
+			State: string(state),
 		})
 	}
 	return states
@@ -428,8 +434,9 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 			continue
 		}
 
-		// wrapper 存活：构造 daemon 策略并 reconnect
-		strategy := newDaemonStrategy(m, CommandSpec{UUID: instanceUUID, ProcessType: ProcessTypeDaemon})
+		// wrapper 存活：构造 daemon 策略并 reconnect。
+		// WorkDir 从 PID 记录恢复，否则文件/配置操作会因空工作目录失败（open :）。
+		strategy := newDaemonStrategy(m, CommandSpec{UUID: instanceUUID, WorkDir: rec.WorkDir, ProcessType: ProcessTypeDaemon})
 		if err := strategy.Reconnect(rec.SocketAddr); err != nil {
 			slog.Warn("reconnect wrapper 失败，清理", "instanceId", instanceUUID, "error", err)
 			_ = os.Remove(pidPath)
@@ -442,6 +449,7 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 			UUID:        instanceUUID,
 			State:       StateRunning,
 			AutoRestart: true,
+			WorkDir:     rec.WorkDir,
 			strategy:    strategy,
 			processType: ProcessTypeDaemon,
 		}

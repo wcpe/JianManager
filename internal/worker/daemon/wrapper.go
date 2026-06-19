@@ -67,10 +67,12 @@ type Wrapper struct {
 	javaStdin   io.WriteCloser
 	listener    net.Listener
 	workerConn  netConn
-	state       InstanceState
-	closed      bool
-	closing     chan struct{}
-	crashCount  int
+	state         InstanceState
+	closed        bool
+	closing       chan struct{}
+	crashCount    int
+	fastCrashes   int       // 连续「快速崩溃」（启动后很快退出）计数
+	javaStartedAt time.Time // 本次 Java 启动时刻，用于判断是否快速崩溃
 }
 
 // netConn 别名避免直接依赖 net（便于测试替换）。
@@ -127,6 +129,7 @@ func (w *Wrapper) run(ready chan<- struct{}) error {
 		WrapperPID:   os.Getpid(),
 		InstanceUUID: w.cfg.InstanceUUID,
 		SocketAddr:   w.addr,
+		WorkDir:      w.cfg.WorkDir,
 	}); err != nil {
 		slog.Warn("写 PID 文件失败", "instanceId", w.cfg.InstanceUUID, "error", err)
 	}
@@ -216,7 +219,10 @@ func (w *Wrapper) startJava() error {
 	}
 	slog.Info("Java 已启动", "instanceId", w.cfg.InstanceUUID, "javaPid", javaPID)
 
-	// 等待 Java 退出
+	// 记录启动时刻并等待 Java 退出（用于快速崩溃判定）
+	w.mu.Lock()
+	w.javaStartedAt = time.Now()
+	w.mu.Unlock()
 	go w.javaWait(cmd)
 	return nil
 }
@@ -245,9 +251,23 @@ func (w *Wrapper) javaWait(cmd *exec.Cmd) {
 	w.mu.Lock()
 	w.crashCount++
 	crashCount := w.crashCount
+	if time.Since(w.javaStartedAt) < minHealthyUptime {
+		w.fastCrashes++
+	} else {
+		w.fastCrashes = 0 // 曾健康运行过，重置快速崩溃计数
+	}
+	fastCrashes := w.fastCrashes
 	w.state = StateCrashed
 	w.mu.Unlock()
 	w.setState(StateCrashed)
+
+	// 持续快速崩溃（缺核心 jar / JDK 不兼容等）：放弃自动重启、退出 wrapper，
+	// 实例落到 CRASHED 而非永远 RUNNING（否则状态误导且无法删除）。
+	if fastCrashes >= maxFastCrashes {
+		slog.Warn("Java 连续快速崩溃，停止自动重启", "instanceId", w.cfg.InstanceUUID, "fastCrashes", fastCrashes)
+		w.signalClose()
+		return
+	}
 
 	if !w.cfg.AutoRestart || w.isClosed() {
 		w.signalClose()
@@ -335,32 +355,69 @@ func (w *Wrapper) handleControl(cmd string) {
 	}
 }
 
-// stopJava 停止 Java 进程树并通知 wrapper 主循环退出。
-// force=true 强制 Kill；否则先尝试 Interrupt（unix），失败回退 Kill。
-// Windows 上 Kill 仅终止 cmd.exe，其子进程（如 ping）会继承句柄继续运行，
-// 导致 cmd.Wait 阻塞；因此用 taskkill /T 递归终止进程树。
-// stop 后 wrapper 应退出，直接 signalClose 不依赖 javaWait。
+// stopJava 停止 Java 进程。
+// force=true（kill）：直接强杀进程树并立即退出，不等关服序列。
+// force=false（stop）：向 MC 服务器 stdin 写 "stop" 命令触发优雅关服，
+// 让其保存世界并输出完整停止日志；Java 自行退出后由 javaWait 善后 signalClose。
+// 这样终端能看到「Stopping the server / Saving worlds」等停止日志，而非被瞬间杀掉。
+// 超时仍未退出则强杀兜底，避免 wrapper 永不退出。
 func (w *Wrapper) stopJava(force bool) {
 	w.mu.Lock()
 	cmd := w.javaCmd
+	stdin := w.javaStdin
 	w.state = StateStopping
 	w.mu.Unlock()
 	if cmd == nil || cmd.Process == nil {
 		w.signalClose()
 		return
 	}
-	if runtime.GOOS == "windows" {
-		// taskkill /T /F 递归终止 Java 进程树，避免子进程句柄导致 Wait 阻塞
-		_ = exec.Command("taskkill", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Run()
-	} else if force {
-		_ = cmd.Process.Kill()
-	} else {
-		if err := cmd.Process.Signal(os.Interrupt); err != nil {
-			_ = cmd.Process.Kill()
+
+	if force {
+		w.forceKill(cmd)
+		w.signalClose()
+		return
+	}
+
+	// 优雅停止：MC 服务器以 stdin "stop" 命令关服。无 stdin（非 MC 进程）时回退信号/强杀。
+	wrote := false
+	if stdin != nil {
+		if _, err := stdin.Write([]byte("stop\n")); err == nil {
+			wrote = true
 		}
 	}
-	// stop 语义：wrapper 应退出，通知主循环
-	w.signalClose()
+	if !wrote {
+		if runtime.GOOS != "windows" {
+			_ = cmd.Process.Signal(os.Interrupt)
+		} else {
+			w.forceKill(cmd)
+			w.signalClose()
+			return
+		}
+	}
+	// 超时兜底：关服序列卡死时强杀（javaWait 在 Java 退出时把 javaCmd 置 nil）。
+	go func() {
+		time.Sleep(resolveGracefulStopTimeout())
+		w.mu.Lock()
+		still := w.javaCmd
+		w.mu.Unlock()
+		if still != nil && still.Process != nil {
+			slog.Warn("优雅停止超时，强制终止 Java", "instanceId", w.cfg.InstanceUUID)
+			w.forceKill(still)
+		}
+	}()
+}
+
+// forceKill 强制终止 Java 进程树。Windows 上 Kill 仅终止 cmd.exe，子进程继承句柄继续运行
+// 导致 cmd.Wait 阻塞，故用 taskkill /T 递归终止整棵进程树。
+func (w *Wrapper) forceKill(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		_ = exec.Command("taskkill", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Run()
+	} else {
+		_ = cmd.Process.Kill()
+	}
 }
 
 func (w *Wrapper) cleanupPIDFile() {
@@ -441,6 +498,28 @@ func splitEnvKey(kv string) (key, value string, ok bool) {
 		}
 	}
 	return "", "", false
+}
+
+const (
+	// minHealthyUptime：Java 存活不足此时长即视为「快速崩溃」（启动即挂）。
+	minHealthyUptime = 10 * time.Second
+	// maxFastCrashes：连续快速崩溃达到此数即放弃自动重启、wrapper 退出（实例标 CRASHED）。
+	maxFastCrashes = 5
+	// gracefulStopTimeout：优雅停止（向 MC 发 "stop"）后等待 Java 自行退出的上限，超时强杀兜底。
+	gracefulStopTimeout = 30 * time.Second
+	// envGracefulStopTimeout：覆盖优雅停止超时的环境变量（Go duration 文本）。
+	// 供测试/集成缩短——测试替身进程（ping/sleep）不响应 "stop"，否则每个停止用例都要等满超时。
+	envGracefulStopTimeout = "JIANMANAGER_GRACEFUL_STOP_TIMEOUT"
+)
+
+// resolveGracefulStopTimeout 返回优雅停止超时：环境变量优先（解析失败/非正忽略），否则用默认值。
+func resolveGracefulStopTimeout() time.Duration {
+	if v := os.Getenv(envGracefulStopTimeout); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return gracefulStopTimeout
 }
 
 // backoffDelay 指数退避：1s→2s→4s→...→30s 上限。
