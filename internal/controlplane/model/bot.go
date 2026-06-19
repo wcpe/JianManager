@@ -11,11 +11,12 @@ import (
 type BotStatus string
 
 const (
-	BotStatusPending   BotStatus = "pending"
-	BotStatusConnecting BotStatus = "connecting"
-	BotStatusConnected  BotStatus = "connected"
-	BotStatusError      BotStatus = "error"
-	BotStatusStopped    BotStatus = "stopped"
+	BotStatusPending      BotStatus = "pending"
+	BotStatusConnecting   BotStatus = "connecting"
+	BotStatusConnected    BotStatus = "connected"
+	BotStatusDisconnected BotStatus = "disconnected"
+	BotStatusError        BotStatus = "error"
+	BotStatusStopped      BotStatus = "stopped"
 )
 
 // Bot Mineflayer Bot。

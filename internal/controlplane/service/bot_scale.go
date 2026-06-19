@@ -186,6 +186,7 @@ func (s *BotService) ListPaged(query BotListQuery, scopeIDs []uint, scope bool) 
 	var items []model.Bot
 	if total > 0 {
 		if err := base.
+			Preload("Instance.Node").
 			Order("bots.id ASC").
 			Offset((page - 1) * size).
 			Limit(size).
@@ -197,7 +198,48 @@ func (s *BotService) ListPaged(query BotListQuery, scopeIDs []uint, scope bool) 
 		items = []model.Bot{}
 	}
 
+	// 列表也回填实时状态：否则重连/连接的 Bot 在聚合页一直显示 connecting。
+	s.refreshStatuses(items)
+
 	return &BotListResult{Items: items, Total: total, Page: page, PageSize: size}, nil
+}
+
+// refreshStatuses 按节点聚合批量拉取各 Bot 的实时状态并回填 DB（每个 Worker 仅一次 ListBots）。
+// 需 items 预加载 Instance.Node。Worker 离线或 Bot 不在列表中时保留上次状态。
+func (s *BotService) refreshStatuses(bots []model.Bot) {
+	byNode := map[string][]int{}
+	for i := range bots {
+		if u := bots[i].Instance.Node.UUID; u != "" {
+			byNode[u] = append(byNode[u], i)
+		}
+	}
+	for nodeUUID, idxs := range byNode {
+		client, ok := s.pool.Get(nodeUUID)
+		if !ok {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		resp, err := client.Worker.ListBots(ctx, &workerpb.ListBotsRequest{})
+		cancel()
+		if err != nil {
+			continue
+		}
+		live := make(map[string]string, len(resp.Bots))
+		for _, bi := range resp.Bots {
+			live[bi.BotUuid] = bi.Status
+		}
+		for _, i := range idxs {
+			st, ok := live[bots[i].UUID]
+			if !ok {
+				continue
+			}
+			mapped := mapWorkerBotStatus(st)
+			if mapped != "" && mapped != bots[i].Status {
+				bots[i].Status = mapped
+				_ = s.db.Model(&model.Bot{}).Where("id = ?", bots[i].ID).Update("status", mapped).Error
+			}
+		}
+	}
 }
 
 // Summary 计算 Bot 计数聚合，仅 DB 聚合不序列化 Bot 行。
@@ -503,12 +545,18 @@ func (s *BotService) delegateBatchOne(req BotBatchRequest, bot *model.Bot) error
 			return fmt.Errorf("Worker DeleteBot 失败: %s", resp.Error)
 		}
 	case BotBatchStart:
+		// 重连即重新上线：必须带连接目标（host/port/version），否则 Bot 连到默认端口连不上。
+		host, port, conn := botConnTarget(bot, &bot.Instance)
 		resp, err := client.Worker.CreateBot(ctx, &workerpb.CreateBotRequest{
-			BotUuid:        bot.UUID,
-			InstanceUuid:   bot.Instance.UUID,
-			Name:           bot.Name,
-			Behavior:       bot.Behavior,
-			BehaviorConfig: bot.Config,
+			BotUuid:      bot.UUID,
+			InstanceUuid: bot.Instance.UUID,
+			Name:         bot.Name,
+			Host:         host,
+			Port:         int32(port),
+			Username:     conn.Username,
+			Version:      conn.Version,
+			Auth:         conn.Auth,
+			Behavior:     bot.Behavior,
 		})
 		if err != nil {
 			return fmt.Errorf("gRPC CreateBot 失败: %w", err)
@@ -516,7 +564,8 @@ func (s *BotService) delegateBatchOne(req BotBatchRequest, bot *model.Bot) error
 		if !resp.Success {
 			return fmt.Errorf("Worker CreateBot 失败: %s", resp.Error)
 		}
-		_ = s.db.Model(&model.Bot{}).Where("id = ?", bot.ID).Update("status", model.BotStatusConnected).Error
+		// 真实状态由读取时 refreshStatus 回填，这里先置 connecting，不再乐观置 connected。
+		_ = s.db.Model(&model.Bot{}).Where("id = ?", bot.ID).Update("status", model.BotStatusConnecting).Error
 	default:
 		return fmt.Errorf("不支持的批量动作: %s", req.Action)
 	}
