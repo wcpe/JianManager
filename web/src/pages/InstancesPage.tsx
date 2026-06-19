@@ -5,6 +5,8 @@ import { useConsoleStore } from '@/stores/console'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import CreateInstanceDialog from '@/components/CreateInstanceDialog'
 import ProvisionServerDialog from '@/components/ProvisionServerDialog'
+import ProvisionProxyDialog from '@/components/ProvisionProxyDialog'
+import ProxyRegistrationsDialog from '@/components/ProxyRegistrationsDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -22,6 +24,8 @@ export default function InstancesPage() {
   const openInstance = useConsoleStore((s) => s.openInstance)
   const [showCreate, setShowCreate] = useState(false)
   const [showProvision, setShowProvision] = useState(false)
+  const [showProvisionProxy, setShowProvisionProxy] = useState(false)
+  const [manageProxy, setManageProxy] = useState<{ id: number; name: string } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
   const { data: instances, isLoading } = useInstances()
   const start = useStartInstance()
@@ -44,12 +48,17 @@ export default function InstancesPage() {
         <h1 className="text-2xl font-bold">{t('instances.title')}</h1>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setShowProvision(true)}>⚡ {t('provision.entry')}</Button>
+          <Button variant="outline" onClick={() => setShowProvisionProxy(true)}>🌐 {t('proxy.entry')}</Button>
           <Button onClick={() => setShowCreate(true)}>+ {t('instances.createInstance')}</Button>
         </div>
       </div>
 
       <ProvisionServerDialog open={showProvision} onClose={() => setShowProvision(false)} />
+      <ProvisionProxyDialog open={showProvisionProxy} onClose={() => setShowProvisionProxy(false)} />
       <CreateInstanceDialog open={showCreate} onClose={() => setShowCreate(false)} />
+      {manageProxy && (
+        <ProxyRegistrationsDialog proxyId={manageProxy.id} proxyName={manageProxy.name} onClose={() => setManageProxy(null)} />
+      )}
 
       {isLoading ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
@@ -60,6 +69,7 @@ export default function InstancesPage() {
               <TableRow>
                 <TableHead>{t('instances.name')}</TableHead>
                 <TableHead>{t('instances.type')}</TableHead>
+                <TableHead>{t('instances.role')}</TableHead>
                 <TableHead>{t('instances.processType')}</TableHead>
                 <TableHead>{t('instances.status')}</TableHead>
                 <TableHead>{t('instances.actions')}</TableHead>
@@ -80,12 +90,31 @@ export default function InstancesPage() {
                       </button>
                     </TableCell>
                     <TableCell className="text-muted-foreground">{inst.type}</TableCell>
+                    <TableCell>
+                      {inst.role === 'proxy' ? (
+                        <Badge variant="default">{t('networks.role_proxy')}</Badge>
+                      ) : inst.role === 'backend' ? (
+                        <Badge variant="secondary">{t('networks.role_backend')}</Badge>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">{t('networks.role_universal')}</span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-muted-foreground">{inst.processType}</TableCell>
                     <TableCell>
                       <Badge variant={st.variant}>{st.text}</Badge>
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1">
+                        {inst.role === 'proxy' && (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            onClick={() => setManageProxy({ id: inst.id, name: inst.name })}
+                            className="text-indigo-600 hover:text-indigo-700"
+                          >
+                            {t('proxy.manageBackends')}
+                          </Button>
+                        )}
                         {(inst.status === 'STOPPED' || inst.status === 'CRASHED') && (
                           <Button
                             variant="ghost"
@@ -143,7 +172,7 @@ export default function InstancesPage() {
               })}
               {(!instances || instances.length === 0) && (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground">
+                  <TableCell colSpan={6} className="text-center text-muted-foreground">
                     {t('instances.empty')}
                   </TableCell>
                 </TableRow>
