@@ -166,10 +166,27 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			slog.Warn("更新心跳数据失败", "nodeUUID", req.NodeUuid, "error", err)
 		}
 
-		// 同步实例状态
-		if len(req.Instances) > 0 {
-			h.syncInstanceStates(req.Instances)
+		// CP 重启后反向连接池为空，而 Worker 仅启动时注册一次、不会重连后重注册，
+		// 导致 CP→Worker 的 RPC（建 Bot/装 JDK/拉状态）全部 NODE_OFFLINE。
+		// 借心跳重建：池中缺该 Worker 客户端时按节点 host+grpcPort 重连。
+		if _, ok := h.pool.Get(req.NodeUuid); !ok {
+			var node model.Node
+			if err := h.db.Where("uuid = ?", req.NodeUuid).First(&node).Error; err == nil && node.GRPCPort > 0 {
+				addr := fmt.Sprintf("%s:%d", node.Host, node.GRPCPort)
+				if err := h.pool.Connect(node.UUID, addr); err != nil {
+					slog.Warn("心跳重建 Worker 反向连接失败", "nodeUUID", node.UUID, "addr", addr, "error", err)
+				} else {
+					slog.Info("心跳重建到 Worker 的反向 gRPC 连接", "nodeUUID", node.UUID, "addr", addr)
+					if h.onWorkerConnect != nil {
+						h.onWorkerConnect(node.UUID)
+					}
+				}
+			}
 		}
+
+		// 同步实例状态并对账（即使 Worker 上报空也要对账：
+		// Worker 重启未恢复某实例时，DB 会永远卡在 RUNNING 致所有生命周期操作 422）。
+		h.syncInstanceStates(req.NodeUuid, req.Instances)
 
 		// 返回响应
 		if err := stream.Send(&workerpb.HeartbeatResponse{
@@ -203,13 +220,31 @@ func StartOfflineDetector(db *gorm.DB) {
 }
 
 // syncInstanceStates 从心跳数据同步实例状态到数据库。
-func (h *ControlPlaneHandler) syncInstanceStates(states []*workerpb.InstanceState) {
+func (h *ControlPlaneHandler) syncInstanceStates(nodeUUID string, states []*workerpb.InstanceState) {
+	reported := make([]string, 0, len(states))
 	for _, s := range states {
+		reported = append(reported, s.InstanceUuid)
 		status := model.InstanceStatus(s.State)
 		if err := h.db.Model(&model.Instance{}).
 			Where("uuid = ?", s.InstanceUuid).
 			Update("status", status).Error; err != nil {
 			slog.Warn("同步实例状态失败", "instanceUUID", s.InstanceUuid, "state", s.State, "error", err)
 		}
+	}
+
+	// 对账：本节点上 DB 认为在运行（RUNNING/STARTING/STOPPING）但 Worker 未上报的实例，
+	// 说明 Worker 已不再持有它（如 Worker 重启未恢复），置为 STOPPED，
+	// 否则实例永远卡 RUNNING、start/stop/kill 全部 422，无法操作。
+	var node model.Node
+	if err := h.db.Where("uuid = ?", nodeUUID).First(&node).Error; err != nil {
+		return
+	}
+	q := h.db.Model(&model.Instance{}).
+		Where("node_id = ? AND status IN ?", node.ID, []string{"RUNNING", "STARTING", "STOPPING"})
+	if len(reported) > 0 {
+		q = q.Where("uuid NOT IN ?", reported)
+	}
+	if err := q.Update("status", "STOPPED").Error; err != nil {
+		slog.Warn("对账离线实例状态失败", "nodeUUID", nodeUUID, "error", err)
 	}
 }
