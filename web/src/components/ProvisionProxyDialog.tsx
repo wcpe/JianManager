@@ -30,6 +30,7 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
   const [memoryMb, setMemoryMb] = useState('1024')
   const [jvmArgs, setJvmArgs] = useState('')
   const [groupId, setGroupId] = useState('')
+  const [onlineMode, setOnlineMode] = useState(true) // 默认正版网络
 
   const { data: jdks } = useNodeJDKs(nodeId ? Number(nodeId) : 0)
   // bungeecord 无版本选择（仅 latest）；velocity/waterfall 走 PaperMC 版本列表。
@@ -69,6 +70,7 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
         memoryMb: memoryMb ? Number(memoryMb) : undefined,
         jvmArgs: args,
         groupId: groupId ? Number(groupId) : undefined,
+        onlineMode,
       },
       {
         onSuccess: (res) => {
@@ -165,6 +167,14 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
               <option value="">{t('instances.noGroup')}</option>
               {groups?.map((g) => (<option key={g.id} value={g.id}>{g.name}</option>))}
             </select>
+          </div>
+
+          <div>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={onlineMode} onChange={(e) => setOnlineMode(e.target.checked)} />
+              {t('proxy.onlineMode')}
+            </label>
+            <p className="mt-1 text-xs text-muted-foreground">{t('proxy.onlineModeHint')}</p>
           </div>
 
           <div className="flex justify-end gap-2 pt-2">

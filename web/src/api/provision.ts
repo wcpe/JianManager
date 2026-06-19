@@ -58,6 +58,8 @@ export interface ProvisionBukkitBody {
   memoryMb?: number
   jvmArgs?: string[]
   groupId?: number
+  /** 是否向 Mojang 校验正版（缺省 false=代理就绪/离线）。 */
+  onlineMode?: boolean
 }
 
 /**

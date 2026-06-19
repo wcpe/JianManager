@@ -29,6 +29,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
   const [memoryMb, setMemoryMb] = useState('2048')
   const [jvmArgs, setJvmArgs] = useState('')
   const [groupId, setGroupId] = useState('')
+  const [onlineMode, setOnlineMode] = useState(false) // 默认代理就绪（离线）
 
   const { data: jdks } = useNodeJDKs(nodeId ? Number(nodeId) : 0)
   const { data: versions, isLoading: versionsLoading, isError: versionsError } = useCoreVersions(
@@ -42,15 +43,6 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
   )
 
   const provision = useProvisionBukkit()
-
-  // 默认选最高版本的已装 JDK：漏选会用系统 Java，现代 Paper 起不来。
-  // 仅在 jdks 变化（选/换节点）时设，用户随后仍可改回「不指定」。
-  useEffect(() => {
-    if (jdks && jdks.length > 0) {
-      const best = [...jdks].sort((a, b) => b.majorVersion - a.majorVersion)[0]
-      setJdkId(String(best.id))
-    }
-  }, [jdks])
 
   // 选节点后默认绑定该节点最高版本的已装 JDK：现代 Paper 需 Java 17/21，
   // 默认「不指定」会用系统 Java（常为 8）导致一键搭建出的服跑不起来。每节点只默认一次，用户仍可改。
@@ -72,6 +64,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
     setMemoryMb('2048')
     setJvmArgs('')
     setGroupId('')
+    setOnlineMode(false)
     jdkDefaultNodeRef.current = ''
   }
 
@@ -94,6 +87,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
         memoryMb: memoryMb ? Number(memoryMb) : undefined,
         jvmArgs: args,
         groupId: groupId ? Number(groupId) : undefined,
+        onlineMode,
       },
       {
         onSuccess: () => {
@@ -254,6 +248,14 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
                 <option key={g.id} value={g.id}>{g.name}</option>
               ))}
             </select>
+          </div>
+
+          <div>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={onlineMode} onChange={(e) => setOnlineMode(e.target.checked)} />
+              {t('provision.onlineMode')}
+            </label>
+            <p className="mt-1 text-xs text-muted-foreground">{t('provision.onlineModeHint')}</p>
           </div>
 
           <div className="flex justify-end gap-2 pt-2">

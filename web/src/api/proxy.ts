@@ -12,6 +12,8 @@ export interface ProvisionProxyBody {
   memoryMb?: number
   jvmArgs?: string[]
   groupId?: number
+  /** 代理是否向 Mojang 校验正版（缺省 true=正版网络；离线模式群组服传 false）。 */
+  onlineMode?: boolean
 }
 
 /** 搭建代理结果。 */
