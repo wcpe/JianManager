@@ -9,6 +9,7 @@ const OverviewPage = lazy(() => import('@/pages/OverviewPage'))
 const NodesPage = lazy(() => import('@/pages/NodesPage'))
 const InstancesPage = lazy(() => import('@/pages/InstancesPage'))
 const InstanceDetailPage = lazy(() => import('@/pages/InstanceDetailPage'))
+const NetworksPage = lazy(() => import('@/pages/NetworksPage'))
 const UsersPage = lazy(() => import('@/pages/UsersPage'))
 const GroupsPage = lazy(() => import('@/pages/GroupsPage'))
 const SchedulesPage = lazy(() => import('@/pages/SchedulesPage'))
@@ -52,6 +53,7 @@ export default function Workspace() {
           <Route path="nodes" element={<NodesPage />} />
           <Route path="instances" element={<InstancesPage />} />
           <Route path="instances/:id" element={<InstanceDetailPage />} />
+          <Route path="networks" element={<NetworksPage />} />
           <Route path="bots" element={<BotsPage />} />
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="users" element={<UsersPage />} />

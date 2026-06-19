@@ -8,6 +8,8 @@ export interface InstanceInfo {
   nodeId: number
   name: string
   type: string
+  /** 群组服角色（FR-032）：proxy / backend / universal。 */
+  role: string
   processType: string
   status: string
   startCommand: string

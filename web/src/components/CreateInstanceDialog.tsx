@@ -172,17 +172,26 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
             <p className="mt-1 text-xs text-muted-foreground">直接填写命令，不要用引号包裹整个命令</p>
           </div>
 
-          <div>
-            <label className="text-sm font-medium">{t('instanceDetail.workDir')}</label>
-            <input
-              value={workDir}
-              onChange={(e) => setWorkDir(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
-              placeholder="/servers/survival"
-              required
-            />
-            <p className="mt-1 text-xs text-muted-foreground">实例的工作目录，文件管理将以此为根目录</p>
-          </div>
+          {type === 'minecraft_java' ? (
+            <div>
+              <label className="text-sm font-medium">{t('instanceDetail.workDir')}</label>
+              <div className="w-full mt-1 px-3 py-2 border rounded-md bg-muted/40 text-sm text-muted-foreground">
+                {t('instances.workDirSystemAssigned')}
+              </div>
+            </div>
+          ) : (
+            <div>
+              <label className="text-sm font-medium">{t('instanceDetail.workDir')}</label>
+              <input
+                value={workDir}
+                onChange={(e) => setWorkDir(e.target.value)}
+                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
+                placeholder="/servers/survival"
+                required
+              />
+              <p className="mt-1 text-xs text-muted-foreground">{t('instances.workDirHint')}</p>
+            </div>
+          )}
 
           <div>
             <label className="text-sm font-medium">JDK（可选）</label>
