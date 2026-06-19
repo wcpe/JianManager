@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,6 +12,7 @@ import (
 	psproc "github.com/shirou/gopsutil/v4/process"
 
 	"github.com/wxys233/JianManager/internal/platform/dataroot"
+	"github.com/wxys233/JianManager/internal/worker/bot"
 	"github.com/wxys233/JianManager/internal/worker/jdk"
 	"github.com/wxys233/JianManager/internal/worker/metrics"
 	"github.com/wxys233/JianManager/internal/worker/process"
@@ -38,6 +40,9 @@ type Server struct {
 	jdkMgr    *jdk.Manager
 	// root 是本节点数据根，用于把 CP 下发的相对工作目录解析为绝对路径。参见 ADR-010。
 	root *dataroot.Root
+	// botMgr 管理本节点 Bot（spawn bot-worker Node 子进程，stdin/stdout IPC）。参见 ADR-006。
+	// 为 nil 表示本节点未启用 Bot 能力，相关 RPC 返回明确错误。由 SetBotManager 注入。
+	botMgr *bot.Manager
 
 	// eventMu 保护 eventSubs，StreamInstanceEvents 订阅/取消订阅时加锁。
 	eventMu   sync.Mutex
@@ -343,4 +348,112 @@ func (s *Server) StreamInstanceEvents(req *workerpb.StreamInstanceEventsRequest,
 			}
 		}
 	}
+}
+
+// === Bot 操作 ===
+//
+// Worker 侧 Bot 由 bot.Manager spawn 的 Node 子进程（bot-worker）经 stdin/stdout IPC 管理，
+// 一个 bot-worker 进程承载本节点全部 Bot。参见 ADR-006。
+// botMgr 为 nil 表示本节点未启用 Bot 能力，相关 RPC 返回明确错误而非 panic。
+// Bot 状态（connecting/connected/disconnected）由 CP 经 ListBots 拉取回填（懒拉取，见 BotService.refreshStatus）。
+
+// SetBotManager 注入 Bot 管理器，由 Worker 主进程在启动时设置。
+func (s *Server) SetBotManager(m *bot.Manager) { s.botMgr = m }
+
+// ensureBotManager 确保 bot-worker 子进程已启动（首次创建 Bot 时懒启动）。
+// 子进程生命周期跟随 Worker（用 background 上下文），由 botMgr.Stop() 收束。
+func (s *Server) ensureBotManager() error {
+	if s.botMgr == nil {
+		return fmt.Errorf("本节点未启用 Bot 能力")
+	}
+	if !s.botMgr.IsRunning() {
+		if err := s.botMgr.Start(context.Background()); err != nil {
+			return fmt.Errorf("启动 bot-worker 失败: %w", err)
+		}
+	}
+	return nil
+}
+
+// CreateBot 创建并连接一个 Bot。
+func (s *Server) CreateBot(ctx context.Context, req *workerpb.CreateBotRequest) (*workerpb.CreateBotResponse, error) {
+	if err := s.ensureBotManager(); err != nil {
+		return &workerpb.CreateBotResponse{Success: false, Error: err.Error()}, nil
+	}
+	slog.Info("CreateBot", "botUuid", req.BotUuid, "host", req.Host, "port", req.Port, "username", req.Username, "version", req.Version)
+	cfg := bot.BotConfig{
+		ID:       req.BotUuid,
+		Name:     req.Name,
+		Host:     req.Host,
+		Port:     int(req.Port),
+		Username: req.Username,
+		Version:  req.Version,
+		Auth:     req.Auth,
+		Behavior: req.Behavior,
+	}
+	if req.BehaviorConfig != "" {
+		cfg.BehaviorConfig = json.RawMessage(req.BehaviorConfig)
+	}
+	if err := s.botMgr.CreateBots([]bot.BotConfig{cfg}); err != nil {
+		return &workerpb.CreateBotResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &workerpb.CreateBotResponse{Success: true, Status: "connecting"}, nil
+}
+
+// DeleteBot 停止并删除 Bot。
+func (s *Server) DeleteBot(ctx context.Context, req *workerpb.DeleteBotRequest) (*workerpb.DeleteBotResponse, error) {
+	if s.botMgr == nil {
+		return &workerpb.DeleteBotResponse{Success: true}, nil
+	}
+	if err := s.botMgr.StopBots([]string{req.BotUuid}); err != nil {
+		return &workerpb.DeleteBotResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &workerpb.DeleteBotResponse{Success: true}, nil
+}
+
+// SetBotBehavior 切换 Bot 行为模式。
+func (s *Server) SetBotBehavior(ctx context.Context, req *workerpb.SetBotBehaviorRequest) (*workerpb.SetBotBehaviorResponse, error) {
+	if s.botMgr == nil {
+		return &workerpb.SetBotBehaviorResponse{Success: false, Error: "本节点未启用 Bot 能力"}, nil
+	}
+	if err := s.botMgr.SetBehavior(req.BotUuid, req.Behavior, req.Target); err != nil {
+		return &workerpb.SetBotBehaviorResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &workerpb.SetBotBehaviorResponse{Success: true}, nil
+}
+
+// SendBotCommand 向 Bot 发送聊天/命令。
+func (s *Server) SendBotCommand(ctx context.Context, req *workerpb.SendBotCommandRequest) (*workerpb.SendBotCommandResponse, error) {
+	if s.botMgr == nil {
+		return &workerpb.SendBotCommandResponse{Success: false, Error: "本节点未启用 Bot 能力"}, nil
+	}
+	if err := s.botMgr.SendBotCommand(req.BotUuid, req.Command); err != nil {
+		return &workerpb.SendBotCommandResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &workerpb.SendBotCommandResponse{Success: true}, nil
+}
+
+// ListBots 返回本节点 Bot 的实时状态快照（CP 据此回填 DB）。
+func (s *Server) ListBots(ctx context.Context, req *workerpb.ListBotsRequest) (*workerpb.ListBotsResponse, error) {
+	if s.botMgr == nil {
+		return &workerpb.ListBotsResponse{}, nil
+	}
+	bots := s.botMgr.GetBots()
+	out := make([]*workerpb.BotInfo, 0, len(bots))
+	for _, b := range bots {
+		info := &workerpb.BotInfo{
+			BotUuid:  b.ID,
+			Name:     b.Name,
+			Status:   b.Status,
+			Behavior: b.Behavior,
+			Health:   float32(b.Health),
+			Food:     int32(b.Food),
+		}
+		if b.Position != nil {
+			info.PosX = float32(b.Position.X)
+			info.PosY = float32(b.Position.Y)
+			info.PosZ = float32(b.Position.Z)
+		}
+		out = append(out, info)
+	}
+	return &workerpb.ListBotsResponse{Bots: out}, nil
 }

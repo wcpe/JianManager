@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/wxys233/JianManager/internal/platform/dataroot"
+	"github.com/wxys233/JianManager/internal/worker/bot"
 	"github.com/wxys233/JianManager/internal/worker/daemon"
 	wgrpc "github.com/wxys233/JianManager/internal/worker/grpc"
 	"github.com/wxys233/JianManager/internal/worker/heartbeat"
@@ -139,6 +141,17 @@ func runWorker() {
 	// 启动 gRPC 服务器
 	grpcServer := grpc.NewServer()
 	workerServer := wgrpc.NewServer(manager, nodeUUID, collector, jdkMgr, root)
+
+	// Bot 管理器：按需 spawn bot-worker(Node) 子进程，经 stdin/stdout IPC 管理 Mineflayer Bot。
+	// 入口脚本默认 bot-worker/dist/index.js（相对 cwd），可经 JIANMANAGER_BOT_WORKER_PATH 覆盖。参见 ADR-006。
+	botWorkerPath := os.Getenv("JIANMANAGER_BOT_WORKER_PATH")
+	if botWorkerPath == "" {
+		botWorkerPath = filepath.Join("bot-worker", "dist", "index.js")
+	}
+	botMgr := bot.NewManager(bot.ManagerConfig{BotWorkerPath: botWorkerPath})
+	defer botMgr.Stop()
+	workerServer.SetBotManager(botMgr)
+
 	workerpb.RegisterWorkerServiceServer(grpcServer, workerServer)
 
 	grpcAddr := fmt.Sprintf(":%d", grpcPort)
