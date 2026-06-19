@@ -22,7 +22,7 @@ export interface InstanceInfo {
 }
 
 /** 获取实例列表（有过过渡状态实例时自动轮询）。 */
-export function useInstances(params?: { nodeId?: number; status?: string; groupId?: number }) {
+export function useInstances(params?: { nodeId?: number; status?: string; groupId?: number; role?: string }) {
   return useQuery({
     queryKey: ['instances', params],
     queryFn: async () => {
