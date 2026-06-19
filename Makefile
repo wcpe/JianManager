@@ -45,8 +45,10 @@ test:
 	go test -race ./...
 
 # E2E 端到端测试（需启动真实 CP + Worker 进程）
-e2e:
-	go test -tags=e2e -run TestE2E ./internal/e2e/ -v -timeout 120s
+# 全链路用例（FR-043）会 spawn 真实 bot-worker(Node) 并让真实 Bot 进服，
+# 故依赖已构建的 bot-worker dist；需预先 `make install`（含 bot-worker npm i）。
+e2e: build-bot
+	go test -tags=e2e -run TestE2E ./internal/e2e/ -v -timeout 240s
 
 # Go 测试覆盖率
 test-cover:
