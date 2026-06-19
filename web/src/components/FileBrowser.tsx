@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import api from '@/api/client'
+import CodeEditor from './CodeEditor'
 
 interface FileInfo {
   name: string
@@ -223,7 +224,7 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
                 <div className="flex gap-1">
                   {isEditable(selectedFile) && !editing && (
                     <button
-                      onClick={() => setEditing(true)}
+                      onClick={() => { setEditContent(fileContent ?? ''); setEditing(true) }}
                       className="px-2 py-0.5 text-xs bg-blue-500/10 text-blue-600 rounded hover:bg-blue-500/20"
                     >
                       {t('files.edit')}
@@ -253,19 +254,13 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
                   </button>
                 </div>
               </div>
-              <div className="flex-1 overflow-auto p-0">
-                {editing ? (
-                  <textarea
-                    value={editContent}
-                    onChange={(e) => setEditContent(e.target.value)}
-                    className="w-full h-full p-3 font-mono text-sm bg-background resize-none outline-none"
-                    spellCheck={false}
-                  />
-                ) : (
-                  <pre className="p-3 font-mono text-sm whitespace-pre-wrap break-all">
-                    {fileContent}
-                  </pre>
-                )}
+              <div className="flex-1 overflow-hidden p-0">
+                <CodeEditor
+                  value={editing ? editContent : (fileContent ?? '')}
+                  filename={selectedFile}
+                  readOnly={!editing}
+                  onChange={setEditContent}
+                />
               </div>
             </>
           ) : (
