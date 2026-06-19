@@ -68,6 +68,8 @@ func main() {
 	assetSvc := service.NewAssetService(db, root)
 	coreSvc := service.NewCoreService()
 	provisionSvc := service.NewProvisionService(db, pool, instanceSvc, coreSvc)
+	registrationSvc := service.NewRegistrationService(db)
+	networkSvc := service.NewNetworkService(db, instanceSvc)
 
 	// 告警评估器：每 60s 检测节点指标，触发 Webhook 通知
 	alertEvaluator := service.NewAlertEvaluator(db)
@@ -102,8 +104,10 @@ func main() {
 		Authz:    authzSvc,
 		Event:     eventSvc,
 		Asset:     assetSvc,
-		Core:      coreSvc,
-		Provision: provisionSvc,
+		Core:         coreSvc,
+		Provision:    provisionSvc,
+		Registration: registrationSvc,
+		Network:      networkSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）

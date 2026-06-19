@@ -50,6 +50,7 @@ type CreateInstanceRequest struct {
 	NodeID           uint               `json:"nodeId" binding:"required"`
 	Name             string             `json:"name" binding:"required,min=1,max=128"`
 	Type             model.InstanceType `json:"type" binding:"required"`
+	Role             model.InstanceRole `json:"role"`
 	ProcessType      model.ProcessType  `json:"processType" binding:"required"`
 	StartCommand     string             `json:"startCommand" binding:"required"`
 	JDKID            uint               `json:"jdkId"`
@@ -90,10 +91,17 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		workDir = allocWorkDirRel(req.Name)
 	}
 
+	// 角色化（ADR-007）：未指定或非法时落 universal（grandfather 既有创建路径）。
+	role := req.Role
+	if !model.ValidInstanceRole(role) {
+		role = model.InstanceRoleUniversal
+	}
+
 	instance := &model.Instance{
 		NodeID:           req.NodeID,
 		Name:             req.Name,
 		Type:             req.Type,
+		Role:             role,
 		ProcessType:      req.ProcessType,
 		StartCommand:     req.StartCommand,
 		JDKID:            req.JDKID,
@@ -188,8 +196,8 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 	return instance, nil
 }
 
-// List 返回实例列表，支持按节点、状态、组过滤。
-func (s *InstanceService) List(nodeID *uint, status *model.InstanceStatus, groupID *uint) ([]model.Instance, error) {
+// List 返回实例列表，支持按节点、状态、组、角色过滤。
+func (s *InstanceService) List(nodeID *uint, status *model.InstanceStatus, groupID *uint, role *model.InstanceRole) ([]model.Instance, error) {
 	var instances []model.Instance
 	q := s.db.Model(&model.Instance{})
 
@@ -198,6 +206,9 @@ func (s *InstanceService) List(nodeID *uint, status *model.InstanceStatus, group
 	}
 	if status != nil {
 		q = q.Where("status = ?", *status)
+	}
+	if role != nil {
+		q = q.Where("role = ?", *role)
 	}
 	if groupID != nil {
 		q = q.Joins("JOIN group_instances ON group_instances.instance_id = instances.id").
@@ -211,7 +222,7 @@ func (s *InstanceService) List(nodeID *uint, status *model.InstanceStatus, group
 }
 
 // ListByGroups 返回指定组集合内的实例列表，用于非平台管理员的权限过滤。
-func (s *InstanceService) ListByGroups(nodeID *uint, status *model.InstanceStatus, groupIDs []uint) ([]model.Instance, error) {
+func (s *InstanceService) ListByGroups(nodeID *uint, status *model.InstanceStatus, groupIDs []uint, role *model.InstanceRole) ([]model.Instance, error) {
 	if len(groupIDs) == 0 {
 		return []model.Instance{}, nil
 	}
@@ -225,6 +236,9 @@ func (s *InstanceService) ListByGroups(nodeID *uint, status *model.InstanceStatu
 	}
 	if status != nil {
 		q = q.Where("instances.status = ?", *status)
+	}
+	if role != nil {
+		q = q.Where("instances.role = ?", *role)
 	}
 
 	if err := q.Find(&instances).Error; err != nil {
@@ -298,6 +312,9 @@ func (s *InstanceService) Delete(id uint) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		// 删除组关联
 		tx.Where("instance_id = ?", id).Delete(&model.GroupInstance{})
+		// 级联删除群组服关系（ADR-007）：作为代理或后端的注册记录、群组成员关系。
+		tx.Where("proxy_id = ? OR backend_id = ?", id, id).Delete(&model.ServerRegistration{})
+		tx.Where("instance_id = ?", id).Delete(&model.NetworkMember{})
 		// 删除实例
 		return tx.Delete(&model.Instance{}, id).Error
 	})

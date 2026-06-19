@@ -60,3 +60,24 @@ func TestAllocPortsForNode(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 25566, p4.ServerPort) // p2 的端口被回收
 }
+
+func TestNodePortUsage(t *testing.T) {
+	db := newPortsTestDB(t)
+	require.NoError(t, db.Create(mkInstance("b", 1, AllocatedPorts{25566, 25576, 25566})).Error)
+	require.NoError(t, db.Create(mkInstance("a", 1, AllocatedPorts{25565, 25575, 25565})).Error)
+	require.NoError(t, db.Create(mkInstance("other-node", 2, AllocatedPorts{25565, 25575, 25565})).Error)
+	// 无端口的实例不计入
+	noPort := &model.Instance{Name: "noport", NodeID: 1, Type: model.InstanceTypeGeneric, ProcessType: model.ProcessTypeDirect, StartCommand: "x"}
+	require.NoError(t, db.Create(noPort).Error)
+
+	usage, err := NodePortUsage(db, 1)
+	require.NoError(t, err)
+	require.Len(t, usage, 2)
+	// 按 server_port 升序
+	require.Equal(t, 25565, usage[0].ServerPort)
+	require.Equal(t, 25566, usage[1].ServerPort)
+
+	ranges := DefaultPortRanges()
+	require.Equal(t, 25565, ranges.ServerPortBase)
+	require.Equal(t, 2000, ranges.RangeSize)
+}

@@ -48,6 +48,12 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		status = &s
 	}
 
+	var role *model.InstanceRole
+	if v := c.Query("role"); v != "" {
+		r := model.InstanceRole(v)
+		role = &r
+	}
+
 	// 非平台管理员强制按其可访问组过滤，忽略前端传入的 groupId
 	if !access.IsPlatformAdmin {
 		groupIDs := accessibleGroupIDs(access)
@@ -55,7 +61,7 @@ func (h *InstanceHandler) List(c *gin.Context) {
 			c.JSON(http.StatusOK, []interface{}{})
 			return
 		}
-		instances, err := h.instanceSvc.ListByGroups(nodeID, status, groupIDs)
+		instances, err := h.instanceSvc.ListByGroups(nodeID, status, groupIDs, role)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询实例列表失败"})
 			return
@@ -71,7 +77,7 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		groupID = &u
 	}
 
-	instances, err := h.instanceSvc.List(nodeID, status, groupID)
+	instances, err := h.instanceSvc.List(nodeID, status, groupID, role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询实例列表失败"})
 		return
@@ -109,6 +115,7 @@ type createInstanceRequest struct {
 	NodeID            uint               `json:"nodeId" binding:"required"`
 	Name              string             `json:"name" binding:"required"`
 	Type              model.InstanceType `json:"type" binding:"required"`
+	Role              model.InstanceRole `json:"role"`
 	ProcessType       model.ProcessType  `json:"processType" binding:"required"`
 	StartCommand      string             `json:"startCommand" binding:"required"`
 	JDKID             uint               `json:"jdkId"`
@@ -152,6 +159,7 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		NodeID:           req.NodeID,
 		Name:             req.Name,
 		Type:             req.Type,
+		Role:             req.Role,
 		ProcessType:      req.ProcessType,
 		StartCommand:     req.StartCommand,
 		JDKID:            req.JDKID,

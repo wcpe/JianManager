@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -70,6 +71,7 @@ func (p *ProvisionService) ProvisionBukkit(ctx context.Context, req ProvisionBuk
 		NodeID:       req.NodeID,
 		Name:         req.Name,
 		Type:         model.InstanceTypeMinecraftJava,
+		Role:         model.InstanceRoleBackend,
 		ProcessType:  model.ProcessTypeDaemon,
 		JDKID:        req.JDKID,
 		LaunchSpec:   string(specJSON),
@@ -89,6 +91,22 @@ func (p *ProvisionService) ProvisionBukkit(ctx context.Context, req ProvisionBuk
 		return inst, fmt.Errorf("子服搭建失败: %w", err)
 	}
 	return inst, nil
+}
+
+// NodePorts 返回某节点的端口占用与分配范围（FR-032：系统分配端口的可视化）。
+func (p *ProvisionService) NodePorts(nodeID uint) (*NodePortsResult, error) {
+	var node model.Node
+	if err := p.db.First(&node, nodeID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNodeNotFound
+		}
+		return nil, fmt.Errorf("查找节点失败: %w", err)
+	}
+	usage, err := NodePortUsage(p.db, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	return &NodePortsResult{NodeID: nodeID, Ranges: DefaultPortRanges(), Occupied: usage}, nil
 }
 
 // provisionOnWorker 在 Worker 上下载核心 jar 并写入 eula.txt / server.properties。

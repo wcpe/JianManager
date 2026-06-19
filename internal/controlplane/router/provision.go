@@ -1,6 +1,7 @@
 package router
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -62,7 +63,27 @@ func (h *ProvisionHandler) ProvisionBukkit(c *gin.Context) {
 	c.JSON(http.StatusCreated, inst)
 }
 
+// Ports GET /nodes/:id/ports —— 查看某节点端口占用与分配范围（FR-032）。
+func (h *ProvisionHandler) Ports(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的节点 ID"})
+		return
+	}
+	result, err := h.prov.NodePorts(uint(id))
+	if err != nil {
+		if errors.Is(err, service.ErrNodeNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NODE_NOT_FOUND", "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 func (h *ProvisionHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.GET("/cores", h.Cores)
 	rg.POST("/instances/provision/bukkit", h.ProvisionBukkit)
+	rg.GET("/nodes/:id/ports", h.Ports)
 }

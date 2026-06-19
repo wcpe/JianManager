@@ -26,6 +26,27 @@ const (
 	InstanceTypeGeneric       InstanceType = "generic"
 )
 
+// InstanceRole 实例在 MC 群组服拓扑中的角色（ADR-007）。
+type InstanceRole string
+
+const (
+	// InstanceRoleBackend 后端子服（Paper/Spigot/Purpur），可注册进多个代理。
+	InstanceRoleBackend InstanceRole = "backend"
+	// InstanceRoleProxy 代理（BungeeCord/Waterfall/Velocity），聚合多个后端。
+	InstanceRoleProxy InstanceRole = "proxy"
+	// InstanceRoleUniversal 通用实例（默认；非群组服角色，保留自由命令）。
+	InstanceRoleUniversal InstanceRole = "universal"
+)
+
+// ValidInstanceRole 校验角色是否在允许枚举内。
+func ValidInstanceRole(r InstanceRole) bool {
+	switch r {
+	case InstanceRoleBackend, InstanceRoleProxy, InstanceRoleUniversal:
+		return true
+	}
+	return false
+}
+
 // ProcessType 启动方式。
 type ProcessType string
 
@@ -43,6 +64,7 @@ type Instance struct {
 	NodeID        uint           `gorm:"not null;index" json:"nodeId"`
 	Name          string         `gorm:"type:varchar(128);not null" json:"name"`
 	Type          InstanceType   `gorm:"type:varchar(64);not null" json:"type"`
+	Role          InstanceRole   `gorm:"type:varchar(16);default:universal;index" json:"role"`
 	ProcessType   ProcessType    `gorm:"type:varchar(32);not null" json:"processType"`
 	Status        InstanceStatus `gorm:"type:varchar(32);default:STOPPED" json:"status"`
 	StartCommand      string         `gorm:"type:varchar(1024);not null" json:"startCommand"`
