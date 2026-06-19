@@ -123,9 +123,20 @@ function createBots(configs: BotConfig[]): void {
   const results: Array<{ id: string; status: string }> = []
 
   for (const config of configs) {
-    if (bots.has(config.id)) {
-      results.push({ id: config.id, status: 'already_exists' })
-      continue
+    // 已存在（可能已断开）：停掉旧连接后按新配置重建，实现「重连」语义。
+    // 此前直接返回 already_exists 导致断开的 Bot 永远连不回来。
+    const existing = bots.get(config.id)
+    if (existing) {
+      existing.behavior.stop()
+      if (existing.mcBot) {
+        try {
+          existing.mcBot.quit()
+        } catch {
+          // 已断开，忽略
+        }
+      }
+      bots.delete(config.id)
+      capacity.remove(1)
     }
 
     const behavior = createBehavior(config.id, config.behavior || 'idle', config.behaviorConfig)
