@@ -48,7 +48,7 @@ make dev-web
 **启动 Worker Node**:
 ```bash
 # 新终端
-JIANMANAGER_CONTROL_PLANE=localhost:9100 go run ./cmd/worker
+JIANMANAGER_CONTROL_PLANE_GRPC=localhost:9100 go run ./cmd/worker
 ```
 
 ### 生产构建
@@ -148,7 +148,7 @@ log:
 | 变量 | 说明 | 默认值 |
 |---|---|---|
 | `JIANMANAGER_NODE_NAME` | 节点名称 | node-01 |
-| `JIANMANAGER_CONTROL_PLANE` | Control Plane gRPC 地址 | localhost:9100 |
+| `JIANMANAGER_CONTROL_PLANE_GRPC` | Control Plane gRPC 地址 | localhost:9100 |
 | `JIANMANAGER_GRPC_PORT` | Worker gRPC 端口 | 9101 |
 | `JIANMANAGER_WS_PORT` | Worker WebSocket 端口 | 9102 |
 | `JIANMANAGER_WORK_DIR` | 实例工作目录 | ./servers |
@@ -253,6 +253,7 @@ docs/               # 文档
 
 ## 文档
 
+- [DEPLOY.md](docs/DEPLOY.md) — 部署指南（发布产物运维）
 - [PRD.md](docs/PRD.md) — 产品需求
 - [ARCHITECTURE.md](docs/ARCHITECTURE.md) — 系统架构
 - [API.md](docs/API.md) — API 参考
