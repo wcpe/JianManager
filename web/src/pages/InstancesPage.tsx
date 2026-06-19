@@ -7,6 +7,7 @@ import CreateInstanceDialog from '@/components/CreateInstanceDialog'
 import ProvisionServerDialog from '@/components/ProvisionServerDialog'
 import ProvisionProxyDialog from '@/components/ProvisionProxyDialog'
 import ProxyRegistrationsDialog from '@/components/ProxyRegistrationsDialog'
+import CloneInstanceDialog from '@/components/CloneInstanceDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -26,6 +27,7 @@ export default function InstancesPage() {
   const [showProvision, setShowProvision] = useState(false)
   const [showProvisionProxy, setShowProvisionProxy] = useState(false)
   const [manageProxy, setManageProxy] = useState<{ id: number; name: string } | null>(null)
+  const [cloneTarget, setCloneTarget] = useState<{ id: number; name: string } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
   const { data: instances, isLoading } = useInstances()
   const start = useStartInstance()
@@ -58,6 +60,9 @@ export default function InstancesPage() {
       <CreateInstanceDialog open={showCreate} onClose={() => setShowCreate(false)} />
       {manageProxy && (
         <ProxyRegistrationsDialog proxyId={manageProxy.id} proxyName={manageProxy.name} onClose={() => setManageProxy(null)} />
+      )}
+      {cloneTarget && (
+        <CloneInstanceDialog sourceId={cloneTarget.id} sourceName={cloneTarget.name} onClose={() => setCloneTarget(null)} />
       )}
 
       {isLoading ? (
@@ -113,6 +118,16 @@ export default function InstancesPage() {
                             className="text-indigo-600 hover:text-indigo-700"
                           >
                             {t('proxy.manageBackends')}
+                          </Button>
+                        )}
+                        {inst.role === 'backend' && (inst.status === 'STOPPED' || inst.status === 'CRASHED') && (
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            onClick={() => setCloneTarget({ id: inst.id, name: inst.name })}
+                            className="text-indigo-600 hover:text-indigo-700"
+                          >
+                            {t('clone.action')}
                           </Button>
                         )}
                         {(inst.status === 'STOPPED' || inst.status === 'CRASHED') && (

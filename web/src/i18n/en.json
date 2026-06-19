@@ -54,6 +54,23 @@
     "aliasConflict": "Alias already used in this proxy",
     "alreadyRegistered": "This backend is already registered to this proxy"
   },
+  "clone": {
+    "action": "Clone",
+    "title": "Clone Server — {{name}}",
+    "name": "New Instance Name",
+    "motd": "MOTD (optional)",
+    "levelName": "Level name (optional)",
+    "registerTo": "Register to proxies (optional)",
+    "noProxies": "No proxies to register",
+    "preview": "Preflight",
+    "submit": "Clone",
+    "cloning": "Cloning…",
+    "allocated": "Will allocate: ports {{server}}/{{rcon}}/{{query}}, dir {{workDir}}",
+    "excluded": "Will exclude: {{list}}",
+    "success": "Cloned as \"{{name}}\", ready to start",
+    "failed": "Clone failed",
+    "sourceRunning": "Stop the source instance before cloning"
+  },
   "networks": {
     "title": "Networks",
     "subtitle": "Non-exclusive soft labels for grouping, filtering and batch ops; deleting a network does not affect servers or proxy registrations",

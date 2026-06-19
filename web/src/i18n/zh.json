@@ -54,6 +54,23 @@
     "aliasConflict": "该代理内别名已占用",
     "alreadyRegistered": "该后端已注册进此代理"
   },
+  "clone": {
+    "action": "复制",
+    "title": "复制子服 — {{name}}",
+    "name": "新实例名称",
+    "motd": "MOTD（可选）",
+    "levelName": "世界名（可选）",
+    "registerTo": "注册进代理（可选）",
+    "noProxies": "暂无代理可注册",
+    "preview": "预检",
+    "submit": "复制",
+    "cloning": "复制中…",
+    "allocated": "将分配：端口 {{server}}/{{rcon}}/{{query}}，目录 {{workDir}}",
+    "excluded": "将排除：{{list}}",
+    "success": "已复制为「{{name}}」，可独立启动",
+    "failed": "复制失败",
+    "sourceRunning": "请先停止源实例再复制"
+  },
   "networks": {
     "title": "群组管理",
     "subtitle": "非独占软标签，用于分组、筛选与批量运维；删除群组不影响子服与代理注册",
