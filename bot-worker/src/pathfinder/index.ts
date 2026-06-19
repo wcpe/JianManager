@@ -8,12 +8,17 @@
 
 import type { Bot } from 'mineflayer'
 import type { Pathfinder } from 'mineflayer-pathfinder'
-import { goals } from 'mineflayer-pathfinder'
+
+// mineflayer-pathfinder 是 CommonJS，ESM 下不暴露具名导出（goals/pathfinder）。
+// 全部经运行时 await import 取值，避免静态具名导入在模块加载期即崩溃——
+// 该崩溃会连带打挂整个 bot-worker（包括 idle 等不寻路的 Bot）。
+type Goals = typeof import('mineflayer-pathfinder').goals
 
 /** 寻路移动器，封装 pathfinder 的常用操作。 */
 export class PathfinderMover {
   private bot: Bot
   private pathfinder: Pathfinder | null = null
+  private goals: Goals | null = null
   private initialized = false
 
   constructor(bot: Bot) {
@@ -24,9 +29,10 @@ export class PathfinderMover {
   async init(): Promise<void> {
     if (this.initialized) return
     try {
-      const { pathfinder } = await import('mineflayer-pathfinder')
-      this.bot.loadPlugin(pathfinder)
+      const pf = await import('mineflayer-pathfinder')
+      this.bot.loadPlugin(pf.pathfinder)
       this.pathfinder = this.bot.pathfinder
+      this.goals = pf.goals
       this.initialized = true
     } catch (err) {
       console.error(`[pathfinder] 初始化失败: ${err}`)
@@ -35,13 +41,13 @@ export class PathfinderMover {
 
   /** 是否已初始化。 */
   isReady(): boolean {
-    return this.initialized && this.pathfinder !== null
+    return this.initialized && this.pathfinder !== null && this.goals !== null
   }
 
   /** 移动到指定坐标。 */
   async moveTo(x: number, y: number, z: number, range = 2): Promise<void> {
     if (!this.isReady()) return
-    const goal = new goals.GoalBlock(x, y, z)
+    const goal = new this.goals!.GoalBlock(x, y, z)
     this.pathfinder!.setGoal(goal)
   }
 
@@ -50,14 +56,14 @@ export class PathfinderMover {
     if (!this.isReady()) return
     const player = this.bot.players[playerName]
     if (!player || !player.entity) return
-    const goal = new goals.GoalFollow(player.entity, range)
+    const goal = new this.goals!.GoalFollow(player.entity, range)
     this.pathfinder!.setGoal(goal)
   }
 
   /** 在指定半径内巡逻（随机漫步）。 */
   async wanderInRadius(cx: number, cy: number, cz: number, radius: number): Promise<void> {
     if (!this.isReady()) return
-    const goal = new goals.GoalNear(cx, cy, cz, radius)
+    const goal = new this.goals!.GoalNear(cx, cy, cz, radius)
     this.pathfinder!.setGoal(goal)
   }
 

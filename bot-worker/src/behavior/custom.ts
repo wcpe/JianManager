@@ -11,8 +11,7 @@
  *   - use_item: 使用手持物品
  */
 
-import { Behavior } from './index.js'
-import { PathfinderMover } from '../pathfinder/index.js'
+import { Behavior } from './base.js'
 import { sendEvent } from '../index.js'
 
 /** 行为步骤定义。 */
@@ -45,8 +44,6 @@ export class CustomBehavior extends Behavior {
   private config: CustomBehaviorConfig
   private currentStep = 0
   private waitUntil = 0
-  private mover: PathfinderMover | null = null
-  private moverInitialized = false
 
   constructor(botId: string, config: CustomBehaviorConfig) {
     super(botId)
@@ -61,20 +58,7 @@ export class CustomBehavior extends Behavior {
     this.waitUntil = 0
   }
 
-  stop(): void {
-    super.stop()
-    if (this.mover) {
-      this.mover.stop()
-    }
-  }
-
-  /** 确保 pathfinder 已初始化。 */
-  private async ensureMover(): Promise<void> {
-    if (this.moverInitialized || !this.mcBot) return
-    this.mover = new PathfinderMover(this.mcBot)
-    await this.mover.init()
-    this.moverInitialized = true
-  }
+  // stop()/mover/ensureMover 复用基类（base.ts）。
 
   async tick(): Promise<void> {
     if (!this.running || !this.mcBot) return
