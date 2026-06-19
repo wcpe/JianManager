@@ -180,10 +180,20 @@ func (d *daemonStrategy) reapWrapper() {
 	err := cmd.Wait()
 	slog.Info("wrapper 进程退出", "instanceId", d.spec.UUID, "err", err)
 	d.mu.Lock()
-	if !d.closed {
+	old := d.state
+	if d.closed || d.state == StateStopping || d.state == StateStopped {
+		// 主动停止/关闭：wrapper 正常退出
+		d.state = StateStopped
+	} else {
+		// 未请求停止时 wrapper 退出 = 崩溃（含连续快速崩溃放弃重启）
 		d.state = StateCrashed
 	}
+	newState := d.state
 	d.mu.Unlock()
+	// 立即把状态变更推给 CP（StreamInstanceEvents），避免崩溃只能等下次心跳（~30s）才反映到前端
+	if old != newState {
+		d.mgr.emitStateChange(d.spec.UUID, old, newState)
+	}
 }
 
 func (d *daemonStrategy) Stop() error {
