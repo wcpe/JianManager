@@ -519,7 +519,7 @@
 - **Spec**: `docs/specs/provision-bukkit/`
 
 ### FR-035: 搭建代理（BungeeCord/Velocity）
-- **状态**: 🔨 in-progress
+- **状态**: 📋 todo
 - **优先级**: P1
 - **描述**: 向导式创建代理实例，生成转发配置与 secret，注册后端
 - **验收标准**:
@@ -534,7 +534,7 @@
 - **Spec**: `docs/specs/provision-proxy/`
 
 ### FR-036: 一键复制子服 + 配置修正 + 注册
-- **状态**: 🔨 in-progress
+- **状态**: 📋 todo
 - **优先级**: P1
 - **描述**: 复制一个后端子服为独立新实例，自动修正身份配置并按需注册进所选代理
 - **验收标准**:
