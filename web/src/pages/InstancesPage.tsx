@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { Link } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { useInstances, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance, useKillInstance } from '@/api/instances'
+import { useConsoleStore } from '@/stores/console'
 import ConfirmDialog from '@/components/ConfirmDialog'
 import CreateInstanceDialog from '@/components/CreateInstanceDialog'
 import ProvisionServerDialog from '@/components/ProvisionServerDialog'
@@ -18,6 +18,8 @@ import {
 
 export default function InstancesPage() {
   const { t } = useTranslation()
+  // 点实例名进统一的「运维控制台」（终端/文件/配置/Bot），不再跳老的实例详情页。
+  const openInstance = useConsoleStore((s) => s.openInstance)
   const [showCreate, setShowCreate] = useState(false)
   const [showProvision, setShowProvision] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
@@ -69,9 +71,13 @@ export default function InstancesPage() {
                 return (
                   <TableRow key={inst.id}>
                     <TableCell className="font-medium">
-                      <Link to={`/instances/${inst.id}`} className="hover:underline text-primary">
+                      <button
+                        type="button"
+                        className="text-left text-primary hover:underline"
+                        onClick={() => openInstance(inst.id)}
+                      >
                         {inst.name}
-                      </Link>
+                      </button>
                     </TableCell>
                     <TableCell className="text-muted-foreground">{inst.type}</TableCell>
                     <TableCell className="text-muted-foreground">{inst.processType}</TableCell>

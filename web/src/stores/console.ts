@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
-/** 工作区分段：当前实例展示「终端」还是「Bot」段（FR-039）。 */
-export type WorkspaceSegment = 'terminal' | 'bot'
+/** 工作区分段：实例的统一视图分段——终端 / 文件 / 配置 / Bot（FR-039，合并原实例详情页）。 */
+export type WorkspaceSegment = 'terminal' | 'files' | 'config' | 'bot'
 
 /**
  * 运维控制台的客户端 UI 状态（ADR-009 / FR-037 / FR-039）。

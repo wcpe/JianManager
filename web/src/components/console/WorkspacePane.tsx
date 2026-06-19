@@ -1,9 +1,18 @@
 import { useTranslation } from 'react-i18next'
-import { useInstance } from '@/api/instances'
+import {
+  useInstance,
+  useStartInstance,
+  useStopInstance,
+  useRestartInstance,
+  useKillInstance,
+} from '@/api/instances'
 import { useConsoleStore, type WorkspaceSegment } from '@/stores/console'
 import TerminalPane from './TerminalPane'
 import BotSegment from './BotSegment'
+import FileBrowser from '@/components/FileBrowser'
+import ConfigEditor from '@/components/ConfigEditor'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Button } from '@/components/ui/button'
 
 /**
  * 工作区单实例面板（FR-039）：顶部「终端 | Bot」分段切换，按实例记忆当前分段（store）。
@@ -19,6 +28,14 @@ export default function WorkspacePane({ instanceId }: WorkspacePaneProps) {
   const { data: instance } = useInstance(instanceId)
   const segment = useConsoleStore((s) => s.workspaceSegmentByInstance[instanceId] ?? 'terminal')
   const setSegment = useConsoleStore((s) => s.setWorkspaceSegment)
+  const closeInstance = useConsoleStore((s) => s.closeInstance)
+
+  const status = instance?.status ?? ''
+  const isRunning = status === 'RUNNING'
+  const start = useStartInstance()
+  const stop = useStopInstance()
+  const restart = useRestartInstance()
+  const kill = useKillInstance()
 
   return (
     <div className="flex h-full flex-col">
@@ -27,7 +44,40 @@ export default function WorkspacePane({ instanceId }: WorkspacePaneProps) {
           <span className="text-muted-foreground">{t('console.title')}</span>
           <span className="text-muted-foreground">/</span>
           <span className="font-medium">{instance?.name ?? `#${instanceId}`}</span>
+          {status && (
+            <span
+              className={`ml-1 rounded px-1.5 py-0.5 text-xs ${
+                isRunning
+                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                  : 'bg-muted text-muted-foreground'
+              }`}
+            >
+              {status}
+            </span>
+          )}
         </div>
+
+        {/* 实例生命周期操作（此前控制台缺失启动/停止等按钮） */}
+        <div className="flex items-center gap-1.5">
+          {isRunning ? (
+            <>
+              <Button size="sm" variant="outline" disabled={stop.isPending} onClick={() => stop.mutate(instanceId)}>
+                {t('instances.stop')}
+              </Button>
+              <Button size="sm" variant="outline" disabled={restart.isPending} onClick={() => restart.mutate(instanceId)}>
+                {t('instances.restart')}
+              </Button>
+              <Button size="sm" variant="outline" disabled={kill.isPending} onClick={() => kill.mutate(instanceId)}>
+                {t('instances.kill')}
+              </Button>
+            </>
+          ) : (
+            <Button size="sm" disabled={!instance || start.isPending} onClick={() => start.mutate(instanceId)}>
+              {t('instances.start')}
+            </Button>
+          )}
+        </div>
+
         <Tabs
           value={segment}
           onValueChange={(v: string) => setSegment(instanceId, v as WorkspaceSegment)}
@@ -35,14 +85,27 @@ export default function WorkspacePane({ instanceId }: WorkspacePaneProps) {
         >
           <TabsList>
             <TabsTrigger value="terminal">{t('console.segmentTerminal')}</TabsTrigger>
+            <TabsTrigger value="files">{t('instanceDetail.files')}</TabsTrigger>
+            <TabsTrigger value="config">{t('instanceDetail.config')}</TabsTrigger>
             <TabsTrigger value="bot">{t('console.segmentBot')}</TabsTrigger>
           </TabsList>
         </Tabs>
+        <Button size="sm" variant="ghost" title={t('common.close')} onClick={closeInstance}>
+          ✕
+        </Button>
       </div>
 
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1 overflow-auto">
         {segment === 'bot' ? (
           <BotSegment instanceId={instanceId} />
+        ) : segment === 'files' ? (
+          <div className="p-4">
+            <FileBrowser instanceId={instanceId} />
+          </div>
+        ) : segment === 'config' ? (
+          <div className="p-4">
+            <ConfigEditor instanceId={instanceId} />
+          </div>
         ) : (
           <TerminalPane instanceId={instanceId} hideHeader />
         )}

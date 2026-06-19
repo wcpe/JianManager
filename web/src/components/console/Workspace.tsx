@@ -1,5 +1,5 @@
-import { Routes, Route } from 'react-router'
-import { Suspense, lazy } from 'react'
+import { Routes, Route, useLocation } from 'react-router'
+import { Suspense, lazy, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useConsoleStore } from '@/stores/console'
 import WorkspacePane from './WorkspacePane'
@@ -27,6 +27,18 @@ const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 export default function Workspace() {
   const { t } = useTranslation()
   const openInstanceId = useConsoleStore((s) => s.openInstanceId)
+  const closeInstance = useConsoleStore((s) => s.closeInstance)
+  const location = useLocation()
+  const lastPathRef = useRef(location.pathname)
+
+  // 打开实例工作区不改 URL；但侧栏导航切页时路由会变。此处监听路由变化即关闭工作区，
+  // 让导航能正常切到目标页面（此前 openInstanceId 非空会永久覆盖路由内容，无法切页）。
+  useEffect(() => {
+    if (location.pathname !== lastPathRef.current) {
+      lastPathRef.current = location.pathname
+      if (openInstanceId !== null) closeInstance()
+    }
+  }, [location.pathname, openInstanceId, closeInstance])
 
   if (openInstanceId !== null) {
     return <WorkspacePane instanceId={openInstanceId} />
