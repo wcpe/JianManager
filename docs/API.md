@@ -255,7 +255,7 @@
 ### GET /api/v1/cores
 - **描述**: 查询服务端核心可用版本/构建。无 `mcVersion` 返回版本列表；带 `mcVersion` 返回下载信息
 - **权限**: 平台管理员
-- **Query**: `type=paper`（默认）、`mcVersion`、`build`（可选，缺省最新）
+- **Query**: `type=paper`（默认）/`velocity`/`waterfall`（PaperMC API）/`bungeecord`（md-5 Jenkins，仅 `latest`）、`mcVersion`、`build`（可选，缺省最新）
 - **响应（带 mcVersion）**: `{ "type":"paper","mcVersion":"1.21.1","build":196,"filename":"...","downloadUrl":"...","sha256":"..." }`
 - **关联 FR**: FR-034
 
@@ -265,6 +265,54 @@
 - **请求**: `{ "nodeId":1,"name":"lobby","coreType":"paper","mcVersion":"1.21.1","build":0,"jdkId":1,"memoryMb":4096,"jvmArgs":["-XX:+UseG1GC"],"groupId":0 }`
 - **响应**: `201` 创建的 Instance；`502 PROVISION_FAILED`（含已创建实例供重试/删除）
 - **关联 FR**: FR-034
+
+### POST /api/v1/instances/provision/proxy
+- **描述**: 一键搭建代理（role=proxy）：velocity/waterfall（PaperMC）/bungeecord（md-5 Jenkins），分配监听端口/目录，下载核心，生成转发配置；Velocity 生成 forwarding secret 并返回一次
+- **权限**: 平台管理员
+- **请求**: `{ "nodeId":1,"name":"velocity-main","proxyType":"velocity","version":"3.3.0-SNAPSHOT","jdkId":1,"memoryMb":1024,"jvmArgs":[],"groupId":0,"backendRegistrations":[] }`
+- **响应**: `201 { instance, forwardingSecret?, registrations, warnings }`；`502 PROVISION_FAILED`
+- **关联 FR**: FR-035 | **Spec**: `docs/specs/provision-proxy/`
+
+### POST /api/v1/proxies/:id/resync
+- **描述**: 重新把注册关系与 secret 推到代理配置与各后端（代理/后端离线恢复后）
+- **权限**: 平台管理员
+- **响应**: `200 { synced, secretConsistent, warnings }`
+- **关联 FR**: FR-035
+
+### GET / POST /api/v1/proxies/:id/registrations，PATCH / DELETE …/:rid
+- **描述**: 管理 proxy↔backend 注册（M:N）；POST/PATCH/DELETE 落库后同步写代理 servers/priorities/forced-host 并下发 Velocity secret
+- **权限**: 平台管理员
+- **请求(POST)**: `{ "backendId":21,"alias":"lobby","priority":0,"forcedHost":"","restricted":false }`
+- **错误**: `404 INSTANCE_NOT_FOUND`、`422 NOT_A_PROXY`/`NOT_A_BACKEND`、`409 ALIAS_CONFLICT`/`ALREADY_REGISTERED`
+- **关联 FR**: FR-032（关系）/ FR-035（同步）
+
+### POST /api/v1/instances/:id/clone
+- **描述**: 复制 backend 子服为独立新实例（同节点）：系统分配新目录/端口 → CloneWorkDir 复制（排除运行态）→ 修正 server.properties 端口/rcon/motd/level-name（保留 forwarding secret）→ 可选注册进代理。`dryRun=true` 仅预检
+- **权限**: 平台管理员
+- **请求**: `{ "name":"lobby-2","motd":"","levelName":"","registerToProxyIds":[30],"dryRun":false }`
+- **响应**: `201`（dryRun `200`）`{ instance?, allocated, excluded, registrations, warnings, dryRun }`；`422 NOT_A_BACKEND`/`SOURCE_RUNNING`；`502 CLONE_FAILED`
+- **关联 FR**: FR-036 | **Spec**: `docs/specs/clone-instance/`
+
+---
+
+## 群组服关系模型（FR-032）
+
+> 全部位于平台管理员路由组。详见 `docs/specs/network-resource-model/`。
+
+### GET /api/v1/nodes/:id/ports
+- **描述**: 查看某节点端口占用与分配范围
+- **响应**: `{ nodeId, ranges:{serverPortBase,rconPortBase,rangeSize}, occupied:[{instanceId,name,role,serverPort,rconPort,queryPort}] }`
+
+### GET / POST /api/v1/networks，GET / PATCH / DELETE …/:id
+- **描述**: 群组（Network 非独占软标签）CRUD；删除群组不影响成员实例与代理注册
+- **请求(POST)**: `{ "name":"survival","description":"" }`；**错误**: `409 NETWORK_NAME_CONFLICT`、`404 NETWORK_NOT_FOUND`
+
+### POST /api/v1/networks/:id/members，DELETE …/members/:instanceId
+- **描述**: 群组成员增删（幂等）；**请求(POST)**: `{ "instanceIds":[12,13] }`
+
+### POST /api/v1/networks/:id/actions
+- **描述**: 群组成员批量生命周期操作；**请求**: `{ "action":"start"|"stop"|"restart" }`
+- **响应**: `{ action,total,succeeded,failed,results }`
 
 ---
 

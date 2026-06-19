@@ -168,7 +168,8 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 指标：GetNodeMetrics, GetInstanceMetrics
 - 配置 (V2)：ListConfigFiles, ReadConfig, WriteConfig, ListConfigVersions, RollbackConfig
 - 运行时 (V2)：ListJDKs, InstallJDK, RemoveJDK, DownloadCore
-- 搭建/复制 (V2)：ProvisionServer, ProvisionProxy, CloneInstance（端口与工作目录由 Worker 分配并回报）
+- 复制 (V2)：CloneWorkDir（本机复制源工作目录到目标，排除运行态文件）
+  - 搭建子服/代理由 Control Plane 编排：分配端口/目录 → CreateInstance → DownloadCore → WriteConfig，不另设 worker 端 Provision RPC
 
 ### 6.2 WebSocket（浏览器 ↔ Worker Node）
 
@@ -261,7 +262,7 @@ AlertRule ──1:N──▶ AlertEvent
 | group_members | group_id, user_id, role(0=member/1=admin) |
 | group_quotas | group_id(UNIQUE), max_instances, max_bots, max_storage_mb |
 | nodes | uuid, name, host, grpc_port, ws_port, secret, status(0/1/2), os, arch, cpu_cores, memory_mb, disk_total_mb, last_heartbeat |
-| instances | uuid, node_id(FK), name, type, role(proxy/backend/universal, V2), process_type, status, start_command, work_dir(系统分配), env_vars(JSON), auto_start, auto_restart, jdk_id(FK, V2), launch_spec(JSON: jvm_args/core_jar/args, V2), docker_*, rcon_*, mc_*, tags(JSON) |
+| instances | uuid, node_id(FK), name, type, role(proxy/backend/universal, V2), process_type, status, start_command, work_dir(系统分配), env_vars(JSON), auto_start, auto_restart, jdk_id(FK, V2), launch_spec(JSON: jvm_args/core_jar/args/omit_nogui, V2), docker_*, rcon_*, forwarding_secret(V2, Velocity 转发), server_port/query_port, mc_*, tags(JSON) |
 | group_instances | group_id, instance_id(UNIQUE) |
 | bots | uuid, instance_id(FK), name, status, config(JSON), behavior, worker_id |
 | backups | uuid, instance_id(FK), name, file_path, file_size_mb, type(0/1), status(0/1/2) |
@@ -273,7 +274,7 @@ AlertRule ──1:N──▶ AlertEvent
 | audit_logs | user_id, action, target_type, target_id, detail(JSON), ip |
 | networks (V2) | uuid, name, description（非独占软标签） |
 | network_members (V2) | network_id(FK), instance_id(FK)（M:N，一个子服可属多群组） |
-| server_registrations (V2) | proxy_instance_id(FK), backend_instance_id(FK), alias, priority, forced_host, restricted, enabled；UNIQUE(proxy,backend) |
+| server_registrations (V2) | proxy_id(FK), backend_id(FK), alias, priority, forced_host, restricted, enabled；UNIQUE(proxy_id, alias) |
 | node_jdks (V2) | node_id(FK), vendor, major_version, version, arch, path, managed(下载/登记) |
 | instance_config_versions (V2) | instance_id(FK), file_path, content, author, created_at |
 | assets | type(core/plugin/image/video/archive/blob), name, version, filename, sha256(寻址+去重键), md5, size, content_type, source_url, metadata(JSON), storage_state(hot/archived/external), storage_backend, ref_count, rel_path(相对数据根), created_at, last_used_at；UNIQUE(type,sha256) |
