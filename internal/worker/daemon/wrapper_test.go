@@ -11,6 +11,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// 测试替身进程（ping/sleep）不响应 stdin "stop"，缩短优雅停止超时让其快速回退强杀，
+// 避免每个停止用例等满 30s。
+func init() {
+	_ = os.Setenv(envGracefulStopTimeout, "1s")
+}
+
 // keepAliveCommand 返回一个跨平台的「保持存活」命令。
 // wrapper 用它作为 Java 进程的替身，便于测试控制停止与 PID 恢复。
 // 注意：buildJavaCmd 已用 cmd.exe /c（Windows）或 sh -c（unix）包裹，

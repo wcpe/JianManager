@@ -1,6 +1,7 @@
 package process
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -10,6 +11,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/wxys233/JianManager/internal/worker/daemon"
 )
+
+// daemon 集成测试在进程内运行 wrapper，替身进程（ping/sleep）不响应 stdin "stop"，
+// 缩短优雅停止超时，避免清理阶段 stop 等满默认 30s 导致 TempDir 被占用清理失败。
+func init() {
+	_ = os.Setenv("JIANMANAGER_GRACEFUL_STOP_TIMEOUT", "1s")
+}
 
 // keepAliveCmd 跨平台保持存活命令（daemon 策略集成测试用）。
 func keepAliveCmd() string {
