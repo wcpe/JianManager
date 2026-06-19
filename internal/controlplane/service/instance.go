@@ -433,6 +433,16 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 	return nil
 }
 
+// EnsureRegistered 确保实例已在其 Worker 注册（幂等：已存在视为成功）。
+// 供克隆等需要源/目标实例在册的流程复用（STOPPED 实例在 Worker 重启后可能不在管理器中）。
+func (s *InstanceService) EnsureRegistered(inst *model.Instance) error {
+	err := s.registerOnWorker(inst)
+	if err != nil && strings.Contains(err.Error(), "已存在") {
+		return nil
+	}
+	return err
+}
+
 // resolveJDKPath 解析实例绑定的 JDK 在节点上的安装路径，下发给 Worker 作 JAVA_HOME。
 // 优先按 JDKID 精确匹配；未绑定但指定了 Java 大版本时，回退到本节点该大版本的 JDK；
 // 都没有则返回空字符串（generic/universal 实例无需注入 JDK）。

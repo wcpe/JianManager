@@ -10,15 +10,17 @@ import (
 	"github.com/wxys233/JianManager/internal/controlplane/service"
 )
 
-// ProvisionHandler 处理核心查询、一键搭建子服（FR-034）与搭建代理（FR-035）。注册在平台管理员路由组下。
+// ProvisionHandler 处理核心查询、一键搭建子服（FR-034）、搭建代理（FR-035）与复制子服（FR-036）。
+// 注册在平台管理员路由组下。
 type ProvisionHandler struct {
 	core  *service.CoreService
 	prov  *service.ProvisionService
 	proxy *service.ProxyService
+	clone *service.CloneService
 }
 
-func NewProvisionHandler(core *service.CoreService, prov *service.ProvisionService, proxy *service.ProxyService) *ProvisionHandler {
-	return &ProvisionHandler{core: core, prov: prov, proxy: proxy}
+func NewProvisionHandler(core *service.CoreService, prov *service.ProvisionService, proxy *service.ProxyService, clone *service.CloneService) *ProvisionHandler {
+	return &ProvisionHandler{core: core, prov: prov, proxy: proxy, clone: clone}
 }
 
 // Cores GET /cores?type=paper —— 无 mcVersion 时返回可用版本；带 mcVersion 时返回该版本的
@@ -118,10 +120,49 @@ func (h *ProvisionHandler) Ports(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+// CloneInstance POST /instances/:id/clone —— 一键复制 backend 子服（FR-036）。
+func (h *ProvisionHandler) CloneInstance(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的实例 ID"})
+		return
+	}
+	var req service.CloneInstanceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+	result, err := h.clone.Clone(c.Request.Context(), uint(id), req)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInstanceNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "INSTANCE_NOT_FOUND", "message": err.Error()})
+		case errors.Is(err, service.ErrSourceNotBackend):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "NOT_A_BACKEND", "message": err.Error()})
+		case errors.Is(err, service.ErrSourceRunning):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "SOURCE_RUNNING", "message": err.Error()})
+		default:
+			// result 非空且含实例：已创建但复制/修正失败，回报供重试/删除。
+			if result != nil && result.Instance != nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "CLONE_FAILED", "message": err.Error(), "result": result})
+				return
+			}
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "CLONE_FAILED", "message": err.Error()})
+		}
+		return
+	}
+	status := http.StatusCreated
+	if result.DryRun {
+		status = http.StatusOK
+	}
+	c.JSON(status, result)
+}
+
 func (h *ProvisionHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.GET("/cores", h.Cores)
 	rg.POST("/instances/provision/bukkit", h.ProvisionBukkit)
 	rg.POST("/instances/provision/proxy", h.ProvisionProxy)
+	rg.POST("/instances/:id/clone", h.CloneInstance)
 	rg.POST("/proxies/:id/resync", h.ResyncProxy)
 	rg.GET("/nodes/:id/ports", h.Ports)
 }
