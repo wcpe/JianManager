@@ -240,8 +240,8 @@ func (s *CloneService) fixupConfig(ctx context.Context, dst *model.Instance, req
 
 	var content string
 	if strings.TrimSpace(existing) == "" {
-		// 源无 server.properties：生成基础档再叠加 motd/level-name。
-		content = patchProperties(buildServerProperties(dst.ServerPort, dst.RCONPort, dst.QueryPort, dst.RCONPassword), kv)
+		// 源无 server.properties：生成基础档（代理就绪 online-mode=false）再叠加 motd/level-name。
+		content = patchProperties(buildServerProperties(dst.ServerPort, dst.RCONPort, dst.QueryPort, dst.RCONPassword, false), kv)
 	} else {
 		content = patchProperties(existing, kv)
 	}

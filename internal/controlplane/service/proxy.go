@@ -43,6 +43,8 @@ type ProvisionProxyRequest struct {
 	MemoryMb  int      `json:"memoryMb"`
 	JvmArgs   []string `json:"jvmArgs"`
 	GroupID   uint     `json:"groupId"`
+	// OnlineMode 代理是否向 Mojang 校验正版（缺省 true=正版网络；离线模式群组服传 false）。
+	OnlineMode *bool `json:"onlineMode"`
 	// BackendRegistrations 可选：创建时即注册的后端。
 	BackendRegistrations []CreateRegistrationRequest `json:"backendRegistrations"`
 }
@@ -96,6 +98,13 @@ func (p *ProxyService) ProvisionProxy(ctx context.Context, req ProvisionProxyReq
 	if err != nil {
 		return nil, err
 	}
+
+	// online-mode 选择持久化（缺省 true=正版），供 SyncProxy 重新生成配置时保留。
+	onlineMode := boolOr(req.OnlineMode, true)
+	if err := p.db.Model(inst).Update("proxy_online_mode", onlineMode).Error; err != nil {
+		return inst2result(inst, secret), fmt.Errorf("保存 online-mode 失败: %w", err)
+	}
+	inst.ProxyOnlineMode = onlineMode
 
 	if secret != "" {
 		if err := p.db.Model(inst).Update("forwarding_secret", secret).Error; err != nil {
@@ -196,9 +205,9 @@ func (p *ProxyService) syncProxyDetailed(proxyID uint) ([]string, error) {
 
 	isVelocity := proxy.ForwardingSecret != ""
 
-	// 写代理配置（critical）。
+	// 写代理配置（critical）。online-mode 取持久化选择，避免每次同步把它重置。
 	if isVelocity {
-		if err := p.writeConfig(proxyClient, proxy.UUID, "velocity.toml", buildVelocityToml(proxy.ServerPort, proxyMotd, entries)); err != nil {
+		if err := p.writeConfig(proxyClient, proxy.UUID, "velocity.toml", buildVelocityToml(proxy.ServerPort, proxyMotd, proxy.ProxyOnlineMode, entries)); err != nil {
 			return warnings, fmt.Errorf("写 velocity.toml 失败: %w", err)
 		}
 		// 确保 forwarding.secret 文件存在（provision 已写，这里幂等补写）。
@@ -206,7 +215,7 @@ func (p *ProxyService) syncProxyDetailed(proxyID uint) ([]string, error) {
 			warnings = append(warnings, fmt.Sprintf("写 forwarding.secret 失败: %v", err))
 		}
 	} else {
-		content, berr := buildBungeeConfig(proxy.ServerPort, proxyMotd, entries)
+		content, berr := buildBungeeConfig(proxy.ServerPort, proxyMotd, proxy.ProxyOnlineMode, entries)
 		if berr != nil {
 			return warnings, berr
 		}

@@ -80,6 +80,9 @@ type Instance struct {
 	// ForwardingSecret 是 Velocity modern 转发的 forwarding secret（代理实例 provision 时生成）。
 	// 下发到所注册后端 paper 配置 + 跨代理一致校验复用；BungeeCord/Waterfall 不使用。参见 FR-035。
 	ForwardingSecret string `gorm:"type:varchar(128)" json:"-"`
+	// ProxyOnlineMode 代理是否向 Mojang 校验正版（true=正版网络，false=离线模式群组服）。
+	// 仅代理实例使用；持久化以便 SyncProxy 重新生成配置时保留选择（默认 true）。参见 FR-035。
+	ProxyOnlineMode bool `gorm:"default:true" json:"proxyOnlineMode"`
 	ServerPort    int            `gorm:"default:0" json:"serverPort"`
 	QueryPort     int            `gorm:"default:0" json:"queryPort"`
 	PID           int            `gorm:"default:0" json:"pid"`

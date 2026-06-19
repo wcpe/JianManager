@@ -35,15 +35,16 @@ func tomlEscapeString(s string) string {
 }
 
 // buildVelocityToml 生成 velocity.toml：modern 转发 + 监听端口 + 由注册关系派生的 servers/try/forced-hosts。
+// onlineMode 决定代理是否向 Mojang 校验正版（离线模式群组服传 false）。
 // secret 不写入此文件，而是写入 forwarding-secret-file 指向的 forwarding.secret。
-func buildVelocityToml(listenPort int, motd string, entries []proxyServerEntry) string {
+func buildVelocityToml(listenPort int, motd string, onlineMode bool, entries []proxyServerEntry) string {
 	var b strings.Builder
 	b.WriteString("# 由 JianManager 生成（FR-035）。servers/try/forced-hosts 由平台注册关系同步管理。\n")
 	b.WriteString("config-version = \"2.7\"\n")
 	fmt.Fprintf(&b, "bind = \"0.0.0.0:%d\"\n", listenPort)
 	fmt.Fprintf(&b, "motd = \"%s\"\n", tomlEscapeString(motd))
 	b.WriteString("show-max-players = 500\n")
-	b.WriteString("online-mode = true\n")
+	fmt.Fprintf(&b, "online-mode = %t\n", onlineMode)
 	b.WriteString("player-info-forwarding-mode = \"modern\"\n")
 	b.WriteString("forwarding-secret-file = \"forwarding.secret\"\n")
 	b.WriteString("announce-forge = false\n")
@@ -104,7 +105,8 @@ type bungeeConfigCfg struct {
 }
 
 // buildBungeeConfig 生成 BungeeCord/Waterfall config.yml：ip_forward + 监听端口 + servers/priorities/forced-hosts。
-func buildBungeeConfig(listenPort int, motd string, entries []proxyServerEntry) (string, error) {
+// onlineMode 决定代理是否向 Mojang 校验正版（离线模式群组服传 false）。
+func buildBungeeConfig(listenPort int, motd string, onlineMode bool, entries []proxyServerEntry) (string, error) {
 	servers := make(map[string]bungeeServerCfg, len(entries))
 	priorities := make([]string, 0, len(entries))
 	forced := map[string]string{}
@@ -117,7 +119,7 @@ func buildBungeeConfig(listenPort int, motd string, entries []proxyServerEntry) 
 	}
 	cfg := bungeeConfigCfg{
 		IPForward:                   true,
-		OnlineMode:                  true,
+		OnlineMode:                  onlineMode,
 		NetworkCompressionThreshold: 256,
 		Listeners: []bungeeListenerCfg{{
 			QueryPort:          listenPort,

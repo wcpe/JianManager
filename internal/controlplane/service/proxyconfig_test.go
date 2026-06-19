@@ -14,11 +14,16 @@ func TestBuildVelocityToml(t *testing.T) {
 		{Alias: "lobby", Address: "127.0.0.1:25566"},
 		{Alias: "smp", Address: "10.0.0.2:25567", ForcedHost: "smp.example.com", Restricted: true},
 	}
-	out := buildVelocityToml(25565, "Hi \"there\"", entries)
+	out := buildVelocityToml(25565, "Hi \"there\"", true, entries)
 
 	var parsed map[string]interface{}
 	require.NoError(t, toml.Unmarshal([]byte(out), &parsed), "生成的 velocity.toml 必须可解析")
 	require.Equal(t, "modern", parsed["player-info-forwarding-mode"])
+	require.Equal(t, true, parsed["online-mode"])
+	// 离线模式透传
+	off := map[string]interface{}{}
+	require.NoError(t, toml.Unmarshal([]byte(buildVelocityToml(25565, "x", false, entries)), &off))
+	require.Equal(t, false, off["online-mode"])
 	require.Equal(t, "forwarding.secret", parsed["forwarding-secret-file"])
 	require.Equal(t, "0.0.0.0:25565", parsed["bind"])
 
@@ -34,7 +39,7 @@ func TestBuildVelocityToml(t *testing.T) {
 }
 
 func TestBuildVelocityToml_Empty(t *testing.T) {
-	out := buildVelocityToml(25565, "Hi", nil)
+	out := buildVelocityToml(25565, "Hi", true, nil)
 	var parsed map[string]interface{}
 	require.NoError(t, toml.Unmarshal([]byte(out), &parsed))
 	servers := parsed["servers"].(map[string]interface{})
@@ -43,11 +48,12 @@ func TestBuildVelocityToml_Empty(t *testing.T) {
 
 func TestBuildBungeeConfig(t *testing.T) {
 	entries := []proxyServerEntry{{Alias: "lobby", Address: "127.0.0.1:25566", ForcedHost: "play.example.com"}}
-	out, err := buildBungeeConfig(25565, "Hi", entries)
+	out, err := buildBungeeConfig(25565, "Hi", false, entries)
 	require.NoError(t, err)
 	var parsed map[string]interface{}
 	require.NoError(t, yaml.Unmarshal([]byte(out), &parsed), "生成的 config.yml 必须可解析")
 	require.Equal(t, true, parsed["ip_forward"])
+	require.Equal(t, false, parsed["online_mode"]) // 离线模式透传
 	servers := parsed["servers"].(map[string]interface{})
 	require.Contains(t, servers, "lobby")
 	listeners := parsed["listeners"].([]interface{})

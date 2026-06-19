@@ -46,6 +46,8 @@ type ProvisionBukkitRequest struct {
 	MemoryMb  int      `json:"memoryMb"`
 	JvmArgs   []string `json:"jvmArgs"`
 	GroupID   uint     `json:"groupId"`
+	// OnlineMode 子服是否向 Mojang 校验正版（缺省 false=代理就绪/离线；独立正版服可传 true）。
+	OnlineMode *bool `json:"onlineMode"`
 }
 
 // ProvisionBukkit 端到端搭建一个 Paper 后端子服，返回创建的实例（STOPPED，可一键启动）。
@@ -86,7 +88,7 @@ func (p *ProvisionService) ProvisionBukkit(ctx context.Context, req ProvisionBuk
 		return nil, err
 	}
 
-	if err := p.provisionOnWorker(ctx, inst, core); err != nil {
+	if err := p.provisionOnWorker(ctx, inst, core, boolOr(req.OnlineMode, false)); err != nil {
 		// 实例已落库（STOPPED），返回实例与错误，便于用户重试或删除。
 		return inst, fmt.Errorf("子服搭建失败: %w", err)
 	}
@@ -110,7 +112,7 @@ func (p *ProvisionService) NodePorts(nodeID uint) (*NodePortsResult, error) {
 }
 
 // provisionOnWorker 在 Worker 上下载核心 jar 并写入 eula.txt / server.properties。
-func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.Instance, core *CoreInfo) error {
+func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.Instance, core *CoreInfo, onlineMode bool) error {
 	var node model.Node
 	if err := p.db.First(&node, inst.NodeID).Error; err != nil {
 		return fmt.Errorf("查找节点失败: %w", err)
@@ -139,7 +141,7 @@ func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.In
 	defer cancel2()
 	configs := []struct{ path, content string }{
 		{"eula.txt", "eula=true\n"},
-		{"server.properties", buildServerProperties(inst.ServerPort, inst.RCONPort, inst.QueryPort, inst.RCONPassword)},
+		{"server.properties", buildServerProperties(inst.ServerPort, inst.RCONPort, inst.QueryPort, inst.RCONPassword, onlineMode)},
 	}
 	for _, c := range configs {
 		resp, werr := client.Worker.WriteConfig(cfgCtx, &workerpb.WriteConfigRequest{
@@ -157,13 +159,13 @@ func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.In
 	return nil
 }
 
-// buildServerProperties 生成基础 server.properties：分配的 server-port、代理转发场景关闭
-// 正版校验、开启 rcon（供指标采集）与 query。
-func buildServerProperties(serverPort, rconPort, queryPort int, rconPassword string) string {
+// buildServerProperties 生成基础 server.properties：分配的 server-port、按 onlineMode 设正版校验
+//（代理转发场景传 false）、开启 rcon（供指标采集）与 query。
+func buildServerProperties(serverPort, rconPort, queryPort int, rconPassword string, onlineMode bool) string {
 	var b strings.Builder
 	b.WriteString("# 由 JianManager 一键开服生成（FR-034）\n")
 	fmt.Fprintf(&b, "server-port=%d\n", serverPort)
-	b.WriteString("online-mode=false\n")
+	fmt.Fprintf(&b, "online-mode=%t\n", onlineMode)
 	b.WriteString("enable-rcon=true\n")
 	fmt.Fprintf(&b, "rcon.port=%d\n", rconPort)
 	fmt.Fprintf(&b, "rcon.password=%s\n", rconPassword)
