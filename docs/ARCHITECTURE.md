@@ -168,6 +168,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 终端：IssueTerminalToken
 - Bot：CreateBot, DeleteBot, ListBots, StreamBotEvents (server stream), SendBotCommand
 - 指标：GetNodeMetrics, GetInstanceMetrics
+- 玩家管理：ExecRconCommand（经实例 RCON 执行命令并回传输出，FR-054；RCON 端口/密码由 CP 随请求下发，Worker 不访问 DB；`available=false` 优雅降级）
 - 配置 (V2)：ListConfigFiles, ReadConfig, WriteConfig, ListConfigVersions, RollbackConfig
 - 运行时 (V2)：ListJDKs, InstallJDK, RemoveJDK, DownloadCore
 - 复制 (V2)：CloneWorkDir（本机复制源工作目录到目标，排除运行态文件）
@@ -286,6 +287,7 @@ AlertRule ──1:N──▶ AlertEvent
 | file_versions (V2) | instance_id(FK), file_path, content_hash, content(base64,二进制安全), size, author_id, rollback_of_version_id, created_at；INDEX(instance_id,file_path)（FR-051 通用文件改前快照） |
 | assets | type(core/plugin/image/video/archive/blob), name, version, filename, sha256(寻址+去重键), md5, size, content_type, source_url, metadata(JSON), storage_state(hot/archived/external), storage_backend, ref_count, rel_path(相对数据根), created_at, last_used_at；UNIQUE(type,sha256) |
 | logs (FR-049) | source(instance/control_plane/worker), level(debug/info/warn/error), instance_id, instance_uuid, node_id, stream(stdout/stderr), message, time；复合索引 (source,time)/(level,time)/(instance_id,time)/(node_id,time)，关键字检索走 message 列谓词 |
+| ban_records (V2) | uuid, player_name, reason, scope(network/instance/global), scope_id, operator_id(FK), active, created_at, unbanned_at（玩家封禁台账，FR-054；RCON 命令已下发后留档，解封置 active=false 保留历史） |
 
 ### 数据库切换
 
@@ -569,6 +571,7 @@ database:
 - **审计日志 `/audit`**: 操作日志表格，按用户/操作/时间筛选
 - **设置 `/settings`**: 系统设置（仅平台管理员）
 - **群组服 `/networks`** (V2): 拓扑视图（代理 + 已注册后端，含各子服在线人数）；管理 proxy↔backend 注册（别名/优先级/forced-host）；群组软标签筛选与批量启停；「搭建子服 / 搭建代理」向导入口
+- **玩家管理 `/players`** (V2): 在线玩家（聚合各后端 RCON `list`，标注所在子服，BC 跨服感知）/封禁记录/白名单三视图；踢出/封禁二次确认 + 原因输入，解封；RCON 不可用子服降级提示（FR-054）
 - **运行时/JDK** (V2): 在节点详情页 `/nodes/:id` 增「JDK」标签——列出已装 JDK、安装指定版本、登记系统已有 JDK、查看被哪些实例占用
 - **配置编辑器** (V2): 位于实例详情「配置」Tab——MC 配置文件树 + 可视表单/原始双模式 + 一致性校验 + 版本 diff/回滚（非独立页面）
 

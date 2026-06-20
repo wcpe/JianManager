@@ -322,6 +322,52 @@
 - **描述**: 实例指标（TPS/玩家/内存）
 - **关联 FR**: FR-010
 
+### GET /api/v1/players
+- **描述**: 在线玩家列表，聚合可见后端子服（role=backend 且运行中）的 RCON `list` 输出，每个玩家标注所在子服（BC 跨服感知）；按可访问实例集合收敛
+- **权限**: `instance.read`
+- **响应**: `{ "players":[{"name":"alice","instanceId":3,"instanceName":"lobby"}], "backends":[{"instanceId":3,"instanceName":"lobby","available":true}] }`（`available=false` 的后端 RCON 不可用，结果优雅降级）
+- **关联 FR**: FR-054
+
+### POST /api/v1/players/:name/kick
+- **描述**: 踢出玩家，向目标后端集合下发 RCON `kick`。范围互斥：`instanceId`（单服）> `networkId`（群组）> 全部可见后端
+- **权限**: `instance.operate` | **审计**: `player.kick`
+- **请求**: `{ "instanceId":0, "networkId":0, "reason":"" }`（均可选）
+- **响应**: `{ "player":"alice","action":"kick","total":2,"succeeded":2,"failed":0,"results":[...] }`
+- **错误**: `422 NO_REACHABLE_BACKEND`、`404 NOT_FOUND`（指定实例不可见）
+- **关联 FR**: FR-054
+
+### POST /api/v1/players/:name/ban
+- **描述**: 封禁玩家，向目标后端集合下发 RCON `ban` 并写入封禁记录（玩家/原因/操作者/范围/是否生效）
+- **权限**: `instance.operate` | **审计**: `player.ban`
+- **请求**: `{ "instanceId":0, "networkId":0, "reason":"破坏" }`
+- **响应**: 同 kick 的执行汇总
+- **关联 FR**: FR-054
+
+### POST /api/v1/players/:name/unban
+- **描述**: 解封玩家，向目标后端集合下发 RCON `pardon`，并把该玩家仍生效的封禁记录置为失效（保留历史）
+- **权限**: `instance.operate` | **审计**: `player.unban`
+- **请求**: `{ "instanceId":0, "networkId":0 }`（可选）
+- **关联 FR**: FR-054
+
+### GET /api/v1/instances/:id/whitelist
+- **描述**: 查询单后端子服白名单（RCON `whitelist list`）
+- **权限**: `instance.read`
+- **响应**: `{ "instanceId":3,"available":true,"players":["alice","bob"] }`
+- **关联 FR**: FR-054
+
+### POST /api/v1/instances/:id/whitelist
+- **描述**: 单后端子服白名单增删（RCON `whitelist add|remove`）
+- **权限**: `instance.write` | **审计**: `player.whitelist.add` / `player.whitelist.remove`
+- **请求**: `{ "action":"add", "player":"alice" }`（`action`：`add`/`remove`）
+- **关联 FR**: FR-054
+
+### GET /api/v1/bans
+- **描述**: 封禁记录查询（平台侧台账）
+- **权限**: `instance.read`
+- **Query**: `player`（模糊匹配）、`active=true`（仅生效中）、`limit`（默认 100）
+- **响应**: `[{ "id":1,"playerName":"alice","reason":"破坏","scope":"global","scopeId":0,"operatorId":1,"active":true,"createdAt":"...","unbannedAt":null,"operator":{"username":"admin"} }]`
+- **关联 FR**: FR-054
+
 ### GET /api/v1/cores
 - **描述**: 查询服务端核心可用版本/构建。无 `mcVersion` 返回版本列表；带 `mcVersion` 返回下载信息
 - **权限**: 平台管理员
