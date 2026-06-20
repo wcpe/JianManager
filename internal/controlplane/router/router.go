@@ -35,6 +35,7 @@ type Services struct {
 	Clone        *service.CloneService
 	Registration *service.RegistrationService
 	Network      *service.NetworkService
+	Log          *service.LogService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -108,6 +109,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 制品库：平台级共享资源，Handler 内部按平台管理员收敛（FR-045）。
 		assetHandler := NewAssetHandler(svcs.Asset)
 		assetHandler.RegisterRoutes(protected)
+
+		// 日志中心：所有认证用户可查询，Handler 内部按可访问实例收敛、平台日志仅管理员可见（FR-049）。
+		logHandler := NewLogHandler(svcs.Log, svcs.Authz)
+		logHandler.RegisterRoutes(protected)
 	}
 
 	// 仅平台管理员

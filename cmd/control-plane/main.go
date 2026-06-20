@@ -65,6 +65,16 @@ func main() {
 	auditSvc := service.NewAuditService(db)
 	authzSvc := service.NewAuthzService(db)
 	eventSvc := service.NewEventService(pool)
+	// 日志中心：采集实例输出与平台日志入库、归档到数据根 var/log、按策略保留（FR-049）。
+	logSvc := service.NewLogService(db, root, cfg.LogStore)
+	logSvc.Start()
+	defer logSvc.Stop()
+	// 实例 stdout/stderr 经事件流采集落库。
+	eventSvc.SetLogSink(logSvc)
+	// 平台结构化日志在输出 stdout 之外同时落库（持久化开关由 log_store.persist_platform 控制）。
+	if persist := service.NewPersistSlogHandler(slog.Default().Handler(), logSvc); persist != slog.Default().Handler() {
+		slog.SetDefault(slog.New(persist))
+	}
 	assetSvc := service.NewAssetService(db, root)
 	coreSvc := service.NewCoreService()
 	provisionSvc := service.NewProvisionService(db, pool, instanceSvc, coreSvc)
@@ -114,6 +124,7 @@ func main() {
 		Clone:        cloneSvc,
 		Registration: registrationSvc,
 		Network:      networkSvc,
+		Log:          logSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）
