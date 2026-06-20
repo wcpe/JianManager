@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +54,8 @@ type LogService struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+	// cache 缓存采集侧 UUID→ID 解析，避免每条实例日志反查数据库。
+	cache *resolveCache
 }
 
 // NewLogService 创建日志服务。root 用于解析归档目录 var/log，可为 nil（此时归档落盘跳过，仅做表内保留删除）。
@@ -65,6 +68,7 @@ func NewLogService(db *gorm.DB, root *dataroot.Root, cfg config.LogStoreConfig) 
 		ingest: make(chan IngestEntry, logIngestBuffer),
 		ctx:    ctx,
 		cancel: cancel,
+		cache:  newResolveCache(),
 	}
 }
 
@@ -124,8 +128,8 @@ func (s *LogService) runIngestLoop() {
 			return
 		}
 		if err := s.db.Create(&batch).Error; err != nil {
-			// 入库失败不重试（避免循环放大故障）；日志服务本身的错误经 stderr 暴露即可。
-			fmt.Printf("日志入库失败: %v\n", err)
+			// 入库失败不重试（避免循环放大故障）；日志服务本身的错误经 slog 暴露即可。
+			slog.Error("日志入库失败", "err", err, "count", len(batch))
 		}
 		batch = batch[:0]
 	}

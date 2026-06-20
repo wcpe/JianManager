@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -35,14 +36,14 @@ func (s *LogService) runArchiveLoop(interval time.Duration) {
 // runRetentionOnce 执行一轮完整的归档+保留。错误仅记录不中断（下一轮重试）。
 func (s *LogService) runRetentionOnce() {
 	if n, err := s.archiveBeforeRetention(); err != nil {
-		fmt.Printf("按保留天数归档日志失败: %v\n", err)
+		slog.Error("按保留天数归档日志失败", "err", err)
 	} else if n > 0 {
-		fmt.Printf("按保留天数归档日志 %d 条\n", n)
+		slog.Info("按保留天数归档日志", "count", n)
 	}
 	if n, err := s.archiveOverCapacity(); err != nil {
-		fmt.Printf("按总量上限归档日志失败: %v\n", err)
+		slog.Error("按总量上限归档日志失败", "err", err)
 	} else if n > 0 {
-		fmt.Printf("按总量上限归档日志 %d 条\n", n)
+		slog.Info("按总量上限归档日志", "count", n)
 	}
 }
 

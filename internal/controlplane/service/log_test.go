@@ -260,6 +260,50 @@ func TestLog_PurgeArchivesOlderThan(t *testing.T) {
 	require.FileExists(t, newFile)
 }
 
+func TestLog_IngestInstanceOutput(t *testing.T) {
+	svc, _, db := newLogSvc(t, defaultCfg())
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}))
+
+	node := model.Node{UUID: "node-uuid-1", Name: "n1", Host: "127.0.0.1"}
+	require.NoError(t, db.Create(&node).Error)
+	inst := model.Instance{
+		UUID:        "inst-uuid-1",
+		Name:        "srv",
+		NodeID:      node.ID,
+		Type:        model.InstanceTypeGeneric,
+		ProcessType: model.ProcessTypeDirect,
+		StartCommand: "echo hi",
+	}
+	require.NoError(t, db.Create(&inst).Error)
+
+	svc.Start()
+	defer svc.Stop()
+
+	// 多行 stdout chunk：拆成多条，空行跳过。
+	svc.IngestInstanceOutput("node-uuid-1", "inst-uuid-1", "stdout", "line one\n\nline two\r\n", 0)
+	// stderr 归为 error 级。
+	svc.IngestInstanceOutput("node-uuid-1", "inst-uuid-1", "stderr", "boom", 0)
+
+	require.Eventually(t, func() bool {
+		var n int64
+		db.Model(&model.LogEntry{}).Count(&n)
+		return n == 3 // line one, line two, boom
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// ID 解析正确回填。
+	var entries []model.LogEntry
+	require.NoError(t, db.Order("id ASC").Find(&entries).Error)
+	for _, e := range entries {
+		require.Equal(t, inst.ID, e.InstanceID)
+		require.Equal(t, node.ID, e.NodeID)
+		require.Equal(t, model.LogSourceInstance, e.Source)
+	}
+	// stderr 那条是 error 级。
+	var errCount int64
+	db.Model(&model.LogEntry{}).Where("level = ?", model.LogLevelError).Count(&errCount)
+	require.EqualValues(t, 1, errCount)
+}
+
 func requireFileContains(t *testing.T, path, substr string) {
 	t.Helper()
 	f, err := os.Open(path)

@@ -17,6 +17,13 @@ type InstanceEvent struct {
 	Timestamp    int64  `json:"timestamp"`
 }
 
+// LogSink 接收来自 Worker 事件流的实例进程输出并落库（由 LogService 实现）。
+// 以接口注入而非直接依赖 LogService，保持 EventService 对持久化的解耦（FR-049）。
+type LogSink interface {
+	// IngestInstanceOutput 落库一条实例输出。nodeUUID 标识来源节点，stream 为 stdout/stderr。
+	IngestInstanceOutput(nodeUUID, instanceUUID, stream, message string, ts int64)
+}
+
 // EventService 订阅所有 Worker 的实例事件流并扇出给前端 SSE 客户端。
 type EventService struct {
 	pool  *cpgrpc.ClientPool
@@ -24,6 +31,8 @@ type EventService struct {
 	subs  []chan InstanceEvent
 	ctx   context.Context
 	cancel context.CancelFunc
+	// logSink 可选：非 nil 时把 stdout/stderr 事件落库（FR-049）。
+	logSink LogSink
 }
 
 // NewEventService 创建事件服务。
@@ -31,6 +40,9 @@ func NewEventService(pool *cpgrpc.ClientPool) *EventService {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &EventService{pool: pool, ctx: ctx, cancel: cancel}
 }
+
+// SetLogSink 注入日志落库器，使实例 stdout/stderr 经事件流采集入库（FR-049）。
+func (es *EventService) SetLogSink(sink LogSink) { es.logSink = sink }
 
 // Subscribe 订阅实例事件，返回只读 channel。取消时调用返回的函数。
 func (es *EventService) Subscribe() (<-chan InstanceEvent, func()) {
@@ -88,6 +100,12 @@ func (es *EventService) streamFromWorker(nodeUUID string, client *cpgrpc.Client)
 			if err != nil {
 				slog.Info("EventService: Worker 事件流断开", "nodeUUID", nodeUUID, "err", err)
 				break
+			}
+
+			// 实例进程输出（stdout/stderr）落库供日志中心检索（FR-049）；
+			// 状态变更仍只走 SSE 扇出。落库与扇出相互独立。
+			if es.logSink != nil && (evt.Type == "stdout" || evt.Type == "stderr") {
+				es.logSink.IngestInstanceOutput(nodeUUID, evt.InstanceUuid, evt.Type, evt.Data, evt.Timestamp)
 			}
 
 			event := InstanceEvent{
