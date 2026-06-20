@@ -3,21 +3,25 @@ package router
 import (
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/wxys233/JianManager/internal/controlplane/middleware"
 	"github.com/wxys233/JianManager/internal/controlplane/service"
 )
 
 // FileHandler 文件路由处理器。
 type FileHandler struct {
-	fileSvc *service.FileService
-	authz   *service.AuthzService
+	fileSvc    *service.FileService
+	versionSvc *service.FileVersionService
+	authz      *service.AuthzService
 }
 
 // NewFileHandler 创建文件路由处理器。
-func NewFileHandler(fileSvc *service.FileService, authz *service.AuthzService) *FileHandler {
-	return &FileHandler{fileSvc: fileSvc, authz: authz}
+func NewFileHandler(fileSvc *service.FileService, versionSvc *service.FileVersionService, authz *service.AuthzService) *FileHandler {
+	return &FileHandler{fileSvc: fileSvc, versionSvc: versionSvc, authz: authz}
 }
 
 // List 文件列表。
@@ -93,6 +97,14 @@ func (h *FileHandler) Write(c *gin.Context) {
 		return
 	}
 
+	// FR-051：覆盖已存在文件前先做改前快照（文件不存在则自动跳过）。
+	uid, _ := c.Get(middleware.CtxUserID)
+	authorID, _ := uid.(uint)
+	if err := h.versionSvc.SnapshotBeforeWrite(id, req.Path, authorID); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+
 	if err := h.fileSvc.WriteFile(id, req.Path, []byte(req.Content)); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return
@@ -159,6 +171,14 @@ func (h *FileHandler) Upload(c *gin.Context) {
 	content, err := io.ReadAll(file)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "读取上传文件失败"})
+		return
+	}
+
+	// FR-051：上传覆盖已存在文件前先做改前快照（新文件则自动跳过）。
+	uid, _ := c.Get(middleware.CtxUserID)
+	authorID, _ := uid.(uint)
+	if err := h.versionSvc.SnapshotBeforeWrite(id, path, authorID); err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return
 	}
 
@@ -230,6 +250,101 @@ func (h *FileHandler) Rename(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已重命名"})
 }
 
+// Versions 列出某文件的历史版本（FR-051）。
+func (h *FileHandler) Versions(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	path := c.Query("path")
+	if path == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少 path 参数"})
+		return
+	}
+	versions, err := h.versionSvc.Versions(id, path)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, versions)
+}
+
+// FileDiff 返回某文件 from→to 版本的差异（FR-051）。to=0/缺省表示与当前文件比较。
+func (h *FileHandler) FileDiff(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	path := c.Query("path")
+	if path == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少 path 参数"})
+		return
+	}
+	fromRaw := c.Query("from")
+	if fromRaw == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少 from 版本 ID"})
+		return
+	}
+	fromID, err := strconv.ParseUint(fromRaw, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的 from 版本 ID"})
+		return
+	}
+	var toID uint64
+	if raw := c.Query("to"); raw != "" {
+		t, perr := strconv.ParseUint(raw, 10, 64)
+		if perr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的 to 版本 ID"})
+			return
+		}
+		toID = t
+	}
+	res, err := h.versionSvc.Diff(id, path, uint(fromID), uint(toID))
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+type fileRollbackRequest struct {
+	Path      string `json:"path" binding:"required"`
+	VersionID uint   `json:"versionId" binding:"required"`
+}
+
+// Rollback 把文件回滚到指定版本（FR-051），回滚前自动快照当前内容。
+func (h *FileHandler) Rollback(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !canManageInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	var req fileRollbackRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+	uid, _ := c.Get(middleware.CtxUserID)
+	authorID, _ := uid.(uint)
+	versionID, err := h.versionSvc.Rollback(id, strings.TrimPrefix(req.Path, "/"), req.VersionID, authorID)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"versionId": versionID})
+}
+
 // RegisterRoutes 注册文件路由。
 func (h *FileHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	files := rg.Group("/instances/:id/files")
@@ -241,5 +356,9 @@ func (h *FileHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		files.GET("/download", h.Download)
 		files.POST("/rename", h.Rename)
 		files.DELETE("", h.Delete)
+		// FR-051 文件版本：加性追加，不重排既有路由。
+		files.GET("/versions", h.Versions)
+		files.GET("/diff", h.FileDiff)
+		files.POST("/rollback", h.Rollback)
 	}
 }

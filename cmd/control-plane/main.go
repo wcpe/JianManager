@@ -56,6 +56,10 @@ func main() {
 	jdkSvc := service.NewJDKService(db, pool)
 	terminalSvc := service.NewTerminalService(db, cfg.JWT.Secret, fmt.Sprintf("ws://localhost:%d", cfg.Server.Port))
 	fileSvc := service.NewFileService(db, pool)
+	fileVersionSvc := service.NewFileVersionService(db, pool, service.FileVersionConfig{
+		MaxPerFile:   cfg.FileVersion.MaxPerFile,
+		MaxSizeBytes: cfg.FileVersion.MaxSizeBytes,
+	})
 	configSvc := service.NewConfigService(db, pool)
 	botSvc := service.NewBotService(db, pool)
 	alertSvc := service.NewAlertService(db)
@@ -100,24 +104,25 @@ func main() {
 	defer scheduler.Stop()
 
 	r := router.Setup(&router.Services{
-		Auth:     authSvc,
-		User:     userSvc,
-		Group:    groupSvc,
-		Node:     nodeSvc,
-		Instance: instanceSvc,
-		JDK:      jdkSvc,
-		Terminal: terminalSvc,
-		File:     fileSvc,
-		Config:   configSvc,
-		Bot:      botSvc,
-		Alert:    alertSvc,
-		Schedule: scheduleSvc,
-		Backup:   backupSvc,
-		Template: templateSvc,
-		Audit:    auditSvc,
-		Authz:    authzSvc,
-		Event:     eventSvc,
-		Asset:     assetSvc,
+		Auth:         authSvc,
+		User:         userSvc,
+		Group:        groupSvc,
+		Node:         nodeSvc,
+		Instance:     instanceSvc,
+		JDK:          jdkSvc,
+		Terminal:     terminalSvc,
+		File:         fileSvc,
+		FileVersion:  fileVersionSvc,
+		Config:       configSvc,
+		Bot:          botSvc,
+		Alert:        alertSvc,
+		Schedule:     scheduleSvc,
+		Backup:       backupSvc,
+		Template:     templateSvc,
+		Audit:        auditSvc,
+		Authz:        authzSvc,
+		Event:        eventSvc,
+		Asset:        assetSvc,
 		Core:         coreSvc,
 		Provision:    provisionSvc,
 		Proxy:        proxySvc,

@@ -60,6 +60,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Template{},
 		&model.AuditLog{},
 		&model.InstanceConfigVersion{},
+		&model.FileVersion{},
 		&model.Asset{},
 		&model.LogEntry{},
 	)

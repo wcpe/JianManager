@@ -11,23 +11,24 @@ import (
 
 // Services 聚合所有服务依赖。
 type Services struct {
-	Auth     *service.AuthService
-	User     *service.UserService
-	Group    *service.GroupService
-	Node     *service.NodeService
-	Instance *service.InstanceService
-	JDK      *service.JDKService
-	Terminal *service.TerminalService
-	File     *service.FileService
-	Config   *service.ConfigService
-	Bot      *service.BotService
-	Alert    *service.AlertService
-	Schedule *service.ScheduleService
-	Backup   *service.BackupService
-	Template *service.TemplateService
-	Audit    *service.AuditService
-	Authz     *service.AuthzService
-	Event     *service.EventService
+	Auth         *service.AuthService
+	User         *service.UserService
+	Group        *service.GroupService
+	Node         *service.NodeService
+	Instance     *service.InstanceService
+	JDK          *service.JDKService
+	Terminal     *service.TerminalService
+	File         *service.FileService
+	FileVersion  *service.FileVersionService
+	Config       *service.ConfigService
+	Bot          *service.BotService
+	Alert        *service.AlertService
+	Schedule     *service.ScheduleService
+	Backup       *service.BackupService
+	Template     *service.TemplateService
+	Audit        *service.AuditService
+	Authz        *service.AuthzService
+	Event        *service.EventService
 	Asset        *service.AssetService
 	Core         *service.CoreService
 	Provision    *service.ProvisionService
@@ -77,7 +78,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		terminalHandler := NewTerminalHandler(svcs.Terminal, svcs.Authz)
 		terminalHandler.RegisterRoutes(protected)
 
-		fileHandler := NewFileHandler(svcs.File, svcs.Authz)
+		fileHandler := NewFileHandler(svcs.File, svcs.FileVersion, svcs.Authz)
 		fileHandler.RegisterRoutes(protected)
 
 		configHandler := NewConfigHandler(svcs.Config, svcs.Authz)

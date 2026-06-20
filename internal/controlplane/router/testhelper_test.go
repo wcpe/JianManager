@@ -57,27 +57,29 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 	pool := cpgrpc.NewClientPool()
 	authzSvc := service.NewAuthzService(db)
 	fileSvc := service.NewFileService(db, pool)
+	fileVersionSvc := service.NewFileVersionService(db, pool, service.DefaultFileVersionConfig())
 	configSvc := service.NewConfigService(db, pool)
 	// 制品库需要数据根；测试用临时根，进程退出后由 OS 回收。
 	root, _ := dataroot.Init(filepath.Join(os.TempDir(), "jm-test-"+strconv.FormatInt(time.Now().UnixNano(), 10)))
 	svcs := &Services{
-		Auth:     service.NewAuthService(db, jwtCfg),
-		User:     service.NewUserService(db),
-		Group:    groupSvc,
-		Node:     service.NewNodeService(db),
-		Instance: service.NewInstanceService(db, groupSvc, pool),
-		Terminal: service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),
-		File:     fileSvc,
-		Config:   configSvc,
-		Bot:      service.NewBotService(db, pool),
-		Alert:    service.NewAlertService(db),
-		Schedule: service.NewScheduleService(db),
-		Backup:   service.NewBackupService(db, pool),
-		Template: service.NewTemplateService(db),
-		Audit:    service.NewAuditService(db),
-		Authz:    authzSvc,
-		Asset:    service.NewAssetService(db, root),
-		Log:      service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),
+		Auth:        service.NewAuthService(db, jwtCfg),
+		User:        service.NewUserService(db),
+		Group:       groupSvc,
+		Node:        service.NewNodeService(db),
+		Instance:    service.NewInstanceService(db, groupSvc, pool),
+		Terminal:    service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),
+		File:        fileSvc,
+		FileVersion: fileVersionSvc,
+		Config:      configSvc,
+		Bot:         service.NewBotService(db, pool),
+		Alert:       service.NewAlertService(db),
+		Schedule:    service.NewScheduleService(db),
+		Backup:      service.NewBackupService(db, pool),
+		Template:    service.NewTemplateService(db),
+		Audit:       service.NewAuditService(db),
+		Authz:       authzSvc,
+		Asset:       service.NewAssetService(db, root),
+		Log:         service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),
 	}
 	return Setup(svcs, jwtCfg.Secret)
 }
