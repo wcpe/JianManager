@@ -347,6 +347,68 @@ func TestLog_PersistSlogHandlerBypass(t *testing.T) {
 	require.Equal(t, inner, NewPersistSlogHandler(inner, svc))
 }
 
+func TestLog_ResolveNodeFallback(t *testing.T) {
+	svc, _, db := newLogSvc(t, defaultCfg())
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}))
+	node := model.Node{UUID: "node-only", Name: "n", Host: "127.0.0.1"}
+	require.NoError(t, db.Create(&node).Error)
+
+	svc.Start()
+	defer svc.Stop()
+
+	// 实例 UUID 查不到（实例未登记），但节点 UUID 能解析：日志仍带 nodeID 落库。
+	svc.IngestInstanceOutput("node-only", "missing-instance", "stdout", "orphan line", 0)
+	require.Eventually(t, func() bool {
+		var n int64
+		db.Model(&model.LogEntry{}).Where("node_id = ?", node.ID).Count(&n)
+		return n == 1
+	}, 5*time.Second, 50*time.Millisecond)
+}
+
+func TestLog_ArchiveOverCapacity_Triggers(t *testing.T) {
+	cfg := defaultCfg()
+	cfg.RetentionDays = 0
+	cfg.MaxTotalMB = 1 // 1MB → 约 2048 行阈值
+	svc, root, db := newLogSvc(t, cfg)
+
+	// 插入超过阈值的行：阈值 = 1MB/512B = 2048，插 2100 触发裁剪到 2048。
+	rows := make([]model.LogEntry, 0, 2100)
+	base := time.Now().Add(-time.Hour)
+	for i := 0; i < 2100; i++ {
+		rows = append(rows, model.LogEntry{Source: model.LogSourceInstance, Level: model.LogLevelInfo, InstanceID: 1, Message: "x", Time: base.Add(time.Duration(i) * time.Millisecond)})
+	}
+	require.NoError(t, db.CreateInBatches(&rows, 500).Error)
+
+	n, err := svc.archiveOverCapacity()
+	require.NoError(t, err)
+	require.Equal(t, 2100-2048, n) // 裁掉超出部分
+
+	var cnt int64
+	db.Model(&model.LogEntry{}).Count(&cnt)
+	require.EqualValues(t, 2048, cnt)
+
+	// 归档文件已生成。
+	archive := filepath.Join(root.LogDir(), "logs-"+base.Format("2006-01-02")+".ndjson")
+	require.FileExists(t, archive)
+}
+
+func TestLog_SlogHandlerWithAttrs(t *testing.T) {
+	svc, _, db := newLogSvc(t, defaultCfg())
+	svc.Start()
+	defer svc.Stop()
+
+	inner := slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug})
+	// WithAttrs 累积的属性应一并落库进正文。
+	logger := slog.New(NewPersistSlogHandler(inner, svc)).With("component", "scheduler")
+	logger.Info("tick")
+
+	require.Eventually(t, func() bool {
+		var n int64
+		db.Model(&model.LogEntry{}).Where("message LIKE ?", "%component=scheduler%").Count(&n)
+		return n == 1
+	}, 5*time.Second, 50*time.Millisecond)
+}
+
 func requireFileContains(t *testing.T, path, substr string) {
 	t.Helper()
 	f, err := os.Open(path)
