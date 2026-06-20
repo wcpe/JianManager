@@ -11,33 +11,34 @@ import (
 
 // Services 聚合所有服务依赖。
 type Services struct {
-	Auth         *service.AuthService
-	User         *service.UserService
-	Group        *service.GroupService
-	Node         *service.NodeService
-	Instance     *service.InstanceService
-	JDK          *service.JDKService
-	Terminal     *service.TerminalService
-	File         *service.FileService
-	FileVersion  *service.FileVersionService
-	Plugin       *service.PluginService
-	Config       *service.ConfigService
-	Bot          *service.BotService
-	Alert        *service.AlertService
-	Schedule     *service.ScheduleService
-	Backup       *service.BackupService
-	Template     *service.TemplateService
-	Audit        *service.AuditService
-	Authz        *service.AuthzService
-	Event        *service.EventService
-	Asset        *service.AssetService
-	Core         *service.CoreService
-	Provision    *service.ProvisionService
-	Proxy        *service.ProxyService
-	Clone        *service.CloneService
-	Registration *service.RegistrationService
-	Network      *service.NetworkService
-	Log          *service.LogService
+	Auth          *service.AuthService
+	User          *service.UserService
+	Group         *service.GroupService
+	Node          *service.NodeService
+	Instance      *service.InstanceService
+	InstanceBatch *service.InstanceBatchService
+	JDK           *service.JDKService
+	Terminal      *service.TerminalService
+	File          *service.FileService
+	FileVersion   *service.FileVersionService
+	Plugin        *service.PluginService
+	Config        *service.ConfigService
+	Bot           *service.BotService
+	Alert         *service.AlertService
+	Schedule      *service.ScheduleService
+	Backup        *service.BackupService
+	Template      *service.TemplateService
+	Audit         *service.AuditService
+	Authz         *service.AuthzService
+	Event         *service.EventService
+	Asset         *service.AssetService
+	Core          *service.CoreService
+	Provision     *service.ProvisionService
+	Proxy         *service.ProxyService
+	Clone         *service.CloneService
+	Registration  *service.RegistrationService
+	Network       *service.NetworkService
+	Log           *service.LogService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -75,6 +76,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		instanceHandler := NewInstanceHandler(svcs.Instance, svcs.Authz)
 		instanceHandler.RegisterRoutes(protected)
+
+		// 实例批量操作（FR-058）：独立 handler，挂 /instances/batch（与单实例路由共存）。
+		instanceBatchHandler := NewInstanceBatchHandler(svcs.InstanceBatch, svcs.Authz)
+		instanceBatchHandler.RegisterRoutes(protected)
 
 		terminalHandler := NewTerminalHandler(svcs.Terminal, svcs.Authz)
 		terminalHandler.RegisterRoutes(protected)

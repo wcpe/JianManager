@@ -77,6 +77,9 @@ func determineAction(method, path string) string {
 		return "plugin.deploy"
 	case method == "DELETE" && strings.Contains(path, "/plugins"):
 		return "plugin.delete"
+	case method == "POST" && strings.HasSuffix(path, "/instances/batch"):
+		// 批量操作（FR-058）：危险操作（批量 kill/stop）留痕，请求体含动作与目标。
+		return "instance.batch"
 	case method == "POST" && strings.Contains(path, "/instances"):
 		return "instance.create"
 	case method == "PUT" && strings.Contains(path, "/instances"):

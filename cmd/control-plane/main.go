@@ -53,6 +53,7 @@ func main() {
 	nodeSvc := service.NewNodeService(db)
 	pool := cpgrpc.NewClientPool()
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
+	instanceBatchSvc := service.NewInstanceBatchService(db, pool)
 	jdkSvc := service.NewJDKService(db, pool)
 	terminalSvc := service.NewTerminalService(db, cfg.JWT.Secret, fmt.Sprintf("ws://localhost:%d", cfg.Server.Port))
 	fileSvc := service.NewFileService(db, pool)
@@ -106,33 +107,34 @@ func main() {
 	defer scheduler.Stop()
 
 	r := router.Setup(&router.Services{
-		Auth:         authSvc,
-		User:         userSvc,
-		Group:        groupSvc,
-		Node:         nodeSvc,
-		Instance:     instanceSvc,
-		JDK:          jdkSvc,
-		Terminal:     terminalSvc,
-		File:         fileSvc,
-		FileVersion:  fileVersionSvc,
-		Plugin:       pluginSvc,
-		Config:       configSvc,
-		Bot:          botSvc,
-		Alert:        alertSvc,
-		Schedule:     scheduleSvc,
-		Backup:       backupSvc,
-		Template:     templateSvc,
-		Audit:        auditSvc,
-		Authz:        authzSvc,
-		Event:        eventSvc,
-		Asset:        assetSvc,
-		Core:         coreSvc,
-		Provision:    provisionSvc,
-		Proxy:        proxySvc,
-		Clone:        cloneSvc,
-		Registration: registrationSvc,
-		Network:      networkSvc,
-		Log:          logSvc,
+		Auth:          authSvc,
+		User:          userSvc,
+		Group:         groupSvc,
+		Node:          nodeSvc,
+		Instance:      instanceSvc,
+		InstanceBatch: instanceBatchSvc,
+		JDK:           jdkSvc,
+		Terminal:      terminalSvc,
+		File:          fileSvc,
+		FileVersion:   fileVersionSvc,
+		Plugin:        pluginSvc,
+		Config:        configSvc,
+		Bot:           botSvc,
+		Alert:         alertSvc,
+		Schedule:      scheduleSvc,
+		Backup:        backupSvc,
+		Template:      templateSvc,
+		Audit:         auditSvc,
+		Authz:         authzSvc,
+		Event:         eventSvc,
+		Asset:         assetSvc,
+		Core:          coreSvc,
+		Provision:     provisionSvc,
+		Proxy:         proxySvc,
+		Clone:         cloneSvc,
+		Registration:  registrationSvc,
+		Network:       networkSvc,
+		Log:           logSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）
