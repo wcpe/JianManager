@@ -395,6 +395,39 @@
 
 ---
 
+## 插件 / 模组（单服）
+
+> 复用文件 gRPC（ListFiles/WriteFile/RenameFile/DeleteFile）在实例 `plugins/` 与 `mods/` 目录上操作；启用态文件名 `*.jar`，禁用态 `*.jar.disabled`。实例级隔离（AuthzService），写操作经审计中间件记录（`plugin.deploy`/`plugin.delete`/`plugin.toggle`）。
+
+### GET /api/v1/instances/:id/plugins
+- **描述**: 列出实例 `plugins/` 与 `mods/` 目录的插件 jar，识别启用/禁用状态（目录不存在视为空）
+- **关联 FR**: FR-052
+- **权限**: 实例可访问（成员仅限有权实例）
+- **响应**: `[{ "name": "EssentialsX.jar", "dir": "plugins", "enabled": true, "size": 1024, "modTime": 1710000000 }]`
+
+### POST /api/v1/instances/:id/plugins
+- **描述**: 上传插件（multipart）。先入制品库（FR-045，`type=plugin`，sha256 去重）再部署到目标目录
+- **关联 FR**: FR-052, FR-045
+- **权限**: 实例可管理
+- **表单**: `file`（必填，.jar）、`dir`（可选，`plugins`|`mods`，默认 `plugins`）
+- **响应**: `201 { "message": "已上传", "asset": { ...Asset } }`
+
+### DELETE /api/v1/instances/:id/plugins/:name
+- **描述**: 删除指定插件（同时匹配启用/禁用文件名）。二次确认在前端完成
+- **关联 FR**: FR-052
+- **权限**: 实例可管理
+- **Query**: `?dir=plugins|mods`（可选，默认 `plugins`）
+- **路径参数**: `name` 为展示名（不含 `.disabled`）
+
+### POST /api/v1/instances/:id/plugins/:name/toggle
+- **描述**: 启用/禁用插件（在 `.jar` 与 `.jar.disabled` 间重命名，不删除文件）
+- **关联 FR**: FR-052
+- **权限**: 实例可管理
+- **Query**: `?dir=plugins|mods`（可选，默认 `plugins`）
+- **响应**: `{ "message": "已切换", "enabled": false }`
+
+---
+
 ## Bot
 
 ### GET /api/v1/bots
