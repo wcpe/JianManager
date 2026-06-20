@@ -90,7 +90,7 @@ func (s *BackupService) CreateWithOptions(instanceID uint, name string, opts Cre
 func (s *BackupService) latestCompleted(instanceID uint) (*model.Backup, error) {
 	var b model.Backup
 	err := s.db.Where("instance_id = ? AND status = ?", instanceID, model.BackupStatusCompleted).
-		Order("created_at DESC").First(&b).Error
+		Order("created_at DESC, id DESC").First(&b).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
