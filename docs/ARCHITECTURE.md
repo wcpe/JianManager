@@ -75,9 +75,9 @@ internal/controlplane/
   config/config.go
   database/database.go
   middleware/auth.go
-  model/{user,group,node,instance,bot,alert,schedule,backup,template,audit,network,registration,jdk,config_version}.go
+  model/{user,group,node,instance,bot,alert,schedule,backup,template,audit,network,registration,jdk,config_version,file_version}.go
   router/{router,auth,user,group,node,instance,terminal,bot,file,schedule,backup,alert,template,audit,network,config,jdk}.go
-  service/{auth,user,group,node,instance,terminal,bot,schedule,backup,alert,template,audit,file,authz,network,registration,config,jdk,clone}.go
+  service/{auth,user,group,node,instance,terminal,bot,schedule,backup,alert,template,audit,file,file_version,authz,network,registration,config,jdk,clone}.go
   grpc/{pool,client}.go          # TODO: gRPC 客户端池
   event/bus.go                   # TODO: 事件总线
   ws/gateway.go                  # TODO: WebSocket 网关
@@ -253,7 +253,8 @@ Instance ──1:N──▶ Backup / Schedule / Bot
 Instance(proxy) ──M:N──▶ Instance(backend)   # V2 ServerRegistration: alias/priority/forced_host
 Network ──M:N──▶ Instance                    # V2 NetworkMember（非独占软标签）
 Node ──1:N──▶ NodeJDK                         # V2
-Instance ──1:N──▶ InstanceConfigVersion       # V2
+Instance ──1:N──▶ InstanceConfigVersion       # V2（仅配置文件，FR-031）
+Instance ──1:N──▶ FileVersion                 # V2（任意文件改前快照，FR-051）
 AuditLog ──N:1──▶ User
 AlertRule ──1:N──▶ AlertEvent
 ```
@@ -282,6 +283,7 @@ AlertRule ──1:N──▶ AlertEvent
 | server_registrations (V2) | proxy_id(FK), backend_id(FK), alias, priority, forced_host, restricted, enabled；UNIQUE(proxy_id, alias) |
 | node_jdks (V2) | node_id(FK), vendor, major_version, version, arch, path, managed(下载/登记) |
 | instance_config_versions (V2) | instance_id(FK), file_path, content, author, created_at |
+| file_versions (V2) | instance_id(FK), file_path, content_hash, content(base64,二进制安全), size, author_id, rollback_of_version_id, created_at；INDEX(instance_id,file_path)（FR-051 通用文件改前快照） |
 | assets | type(core/plugin/image/video/archive/blob), name, version, filename, sha256(寻址+去重键), md5, size, content_type, source_url, metadata(JSON), storage_state(hot/archived/external), storage_backend, ref_count, rel_path(相对数据根), created_at, last_used_at；UNIQUE(type,sha256) |
 | logs (FR-049) | source(instance/control_plane/worker), level(debug/info/warn/error), instance_id, instance_uuid, node_id, stream(stdout/stderr), message, time；复合索引 (source,time)/(level,time)/(instance_id,time)/(node_id,time)，关键字检索走 message 列谓词 |
 
@@ -720,6 +722,7 @@ data/
 - 内置 MC 配置 schema（server.properties、spigot.yml、paper-global.yml、bukkit.yml、velocity.toml、bungeecord config.yml）。
 - 跨文件/跨实例/跨网络一致性校验：端口唯一、`online-mode=false` 与代理转发配套、`forwarding-secret` 在共享 backend 的所有 proxy 间一致。
 - 每次保存生成 `instance_config_versions`，可 diff / 回滚。
+- **通用文件版本（FR-051）**：编辑器保存或上传覆盖**已存在**的任意文件前，CP 经 gRPC 读旧内容落库 `file_versions`（base64 二进制安全），提供版本列表 / diff / 一键回滚。与配置版本同机制但刻意分表：配置版本带 schema/校验语义，通用文件版本只关心字节内容。保留上限与触发快照大小阈值由 `file_version.max_per_file` / `file_version.max_size_bytes` 配置，超大文件（如世界存档）跳过快照。复用 `unifiedDiff`、`ErrNodeNotConnected` 等既有领域逻辑。
 
 ### 13.4 结构化启动（取代自由文本命令）
 - MC 实例由 `jdk + jvm_args + core_jar + args` 派生启动命令，Worker 组装 `cd <workDir> && <jdk>/bin/java <args> -jar core.jar nogui`（根治 BUG-005 引号问题）；universal 实例仍可自由命令。

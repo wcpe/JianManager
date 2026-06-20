@@ -13,6 +13,7 @@
 - **MC 群组服关系模型**（FR-032）：实例角色化（proxy/backend/universal）、proxy↔backend M:N 注册（alias/priority/forced-host/restricted）、Network 非独占软标签 + 群组视图批量启停、节点端口占用查看、工作目录系统分配（创建对话框改只读）
 - **搭建代理向导**（FR-035）：BungeeCord/Waterfall（PaperMC）+ Velocity（modern 转发，自动生成 forwarding-secret 下发所注册后端 + 跨代理一致校验）；把已有 backend 注册进代理写 servers/priorities/forced-host；可选 online-mode（持久化，离线模式群组服可关闭）。真 Paper 1.20.4 + 真 BungeeCord 端到端复验：玩家经代理进入后端
 - **一键复制子服**（FR-036）：复制为独立新实例（系统分配新目录/端口），排除 session.lock/logs/缓存/usercache 等运行态文件，修正端口/rcon/motd/可选 level-name 并保留 forwarding secret，可选注册进 0/1/多代理，复制前 dryRun 预检冲突。端到端复验：克隆独立启动并经代理进入
+- **通用文件改前自动备份与版本回滚**（FR-051）：编辑器保存或上传覆盖**已存在**的任意文件前自动生成快照（含二进制文件，base64 无损存储），提供版本列表（时间/大小/操作者）、unified diff（二进制自动识别并跳过文本差异）与一键回滚（回滚前再快照当前内容，回滚本身可再回滚）；版本落 CP DB（事实源在 CP，文件归 Worker，经现有文件读写 gRPC 委托，无新增 proto），保留上限与触发快照大小阈值可配（`file_version.max_per_file` / `file_version.max_size_bytes`）。与 FR-031 配置版本同机制并复用 `unifiedDiff` 等逻辑，刻意分表区分文本/二进制语义；前端文件浏览器加历史版本面板 + diff + 回滚二次确认（i18n zh/en + 主题）
 
 ### Fixed
 - **代理 daemon 停止缺陷**（FR-035 / FR-006）：daemon 优雅停止此前硬编码向 stdin 发 MC `stop`，代理（BungeeCord/Waterfall/Velocity）不认该命令而一直挂到超时才强杀，超时窗口内重启时旧进程仍占监听端口致新进程端口冲突崩溃（`exit status 1`）；改为 CP 按实例角色派生停止命令（后端/通用 `stop`、代理 `end`）经 `CreateInstance.stop_command` 下发并烤进 wrapper 配置（空值回退 `stop`）。并在 daemon 重启前按 PID 文件等待上一代 wrapper/Java 完全退出（`WaitForPriorExit`，`JIANMANAGER_START_WAIT_PRIOR_EXIT_TIMEOUT` 可覆盖），消除快速 stop→start 的端口竞态；修复重启复用同一 strategy 时陈旧 reaper 误改新实例状态；修复 daemon `Kill` 在 Windows 上仅杀 wrapper 进程、致 Java 孤儿化继续占监听端口（重启 `Kill`+`Start` 时新进程 `java.net.BindException` 崩溃），改用 `taskkill /T` 终止整棵进程树

@@ -27,3 +27,8 @@ log_store:
   retention_days: 14            # 保留天数，<=0 不按时间清理
   max_total_mb: 512             # 表内日志总量上限(MB)，<=0 不按总量清理
   archive_interval_minutes: 30  # 后台归档/保留巡检周期（分钟）
+
+# 通用文件改前快照与版本回滚（FR-051）
+file_version:
+  max_per_file: 20        # 单文件保留版本上限，超出删最旧；<=0 不限制
+  max_size_bytes: 5242880 # 触发快照的单文件大小上限（5MiB），超过则跳过；<=0 不限制

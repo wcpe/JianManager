@@ -63,6 +63,9 @@ jwt:
 log:
   level: info         # debug|info|warn|error
   format: json        # json|text
+file_version:         # 通用文件改前快照（FR-051）
+  max_per_file: 20    # 单文件保留版本上限，超出删最旧；<=0 不限制
+  max_size_bytes: 5242880  # 触发快照的单文件大小上限（默认 5MiB），超过则跳过；<=0 不限制
 ```
 
 常用环境变量覆盖：

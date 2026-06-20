@@ -372,6 +372,27 @@
 - **关联 FR**: FR-008
 - **请求**: `{ "oldPath": "string", "newPath": "string" }`
 
+### GET /api/v1/instances/:id/files/versions
+- **描述**: 列出某文件的历史版本（按 ID 倒序，最新在前）。编辑保存或上传覆盖已存在文件前自动生成快照
+- **关联 FR**: FR-051
+- **权限**: `instance.file`（可访问实例）
+- **Query**: `?path=plugins/essentials/config.yml`
+- **响应**: `[{ "id": 12, "filePath": "string", "size": 0, "authorId": 0, "rollbackOfVersionId": 0, "createdAt": "RFC3339" }]`
+
+### GET /api/v1/instances/:id/files/diff
+- **描述**: 某文件 from→to 版本差异（unified diff）。`to` 省略表示与当前文件内容比较；二进制内容返回 `binary=true` 且 `unifiedDiff` 为空
+- **关联 FR**: FR-051
+- **权限**: `instance.file`（可访问实例）
+- **Query**: `?path=...&from=11&to=12`
+- **响应**: `{ "fromVersionId": 11, "toVersionId": 12, "unifiedDiff": "string", "binary": false }`
+
+### POST /api/v1/instances/:id/files/rollback
+- **描述**: 把文件回滚到指定版本，回滚前自动快照当前内容（回滚本身可被再次回滚）
+- **关联 FR**: FR-051
+- **权限**: `instance.file`（可管理实例）
+- **请求**: `{ "path": "string", "versionId": 12 }`
+- **响应**: `{ "versionId": 15 }`（回滚写回后新生成的版本 ID）
+
 ---
 
 ## Bot
