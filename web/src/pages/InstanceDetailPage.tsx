@@ -19,6 +19,16 @@ import {
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
+function formatUptime(seconds: number): string {
+  if (!seconds || seconds < 0) return '--'
+  const d = Math.floor(seconds / 86400)
+  const h = Math.floor((seconds % 86400) / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  if (d > 0) return `${d}d ${h}h`
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
+}
+
 export default function InstanceDetailPage() {
   const { id } = useParams<{ id: string }>()
   const instanceId = Number(id)
@@ -141,13 +151,13 @@ function TerminalTab({ instanceId, status }: { instanceId: number; status: strin
 
   return (
     <div className="space-y-4">
-      {/* 实例指标 */}
+      {/* 实例指标（基础三项） */}
       <div className="grid grid-cols-3 gap-4">
         <div className="border rounded-lg p-3">
           <p className="text-xs text-muted-foreground">{t('instanceDetail.tps')}</p>
           <p className="text-xl font-bold mt-1">
             {status === 'RUNNING' && metrics
-              ? (metrics.tps >= 0 ? metrics.tps : t('common.na'))
+              ? (metrics.tps >= 0 ? metrics.tps.toFixed(2) : t('common.na'))
               : '--'}
           </p>
         </div>
@@ -163,11 +173,71 @@ function TerminalTab({ instanceId, status }: { instanceId: number; status: strin
           <p className="text-xs text-muted-foreground">{t('instanceDetail.memory')}</p>
           <p className="text-xl font-bold mt-1">
             {status === 'RUNNING' && metrics
-              ? (metrics.memoryMb > 0 ? `${metrics.memoryMb} MB` : t('common.na'))
+              ? (metrics.memoryMb > 0
+                  ? (metrics.heapMaxMb > 0
+                      ? `${metrics.memoryMb} / ${metrics.heapMaxMb} MB`
+                      : `${metrics.memoryMb} MB`)
+                  : t('common.na'))
               : '--'}
           </p>
         </div>
       </div>
+
+      {/* 探针富指标（FR-010：MSPT/线程/CPU/运行时长） */}
+      {status === 'RUNNING' && metrics?.probeAvailable && (
+        <div className="grid grid-cols-4 gap-4">
+          <div className="border rounded-lg p-3">
+            <p className="text-xs text-muted-foreground">{t('instanceDetail.mspt')}</p>
+            <p className="text-lg font-semibold mt-1">{metrics.msptMillis.toFixed(2)} ms</p>
+          </div>
+          <div className="border rounded-lg p-3">
+            <p className="text-xs text-muted-foreground">{t('instanceDetail.threads')}</p>
+            <p className="text-lg font-semibold mt-1">{metrics.threads}</p>
+          </div>
+          <div className="border rounded-lg p-3">
+            <p className="text-xs text-muted-foreground">{t('instanceDetail.cpu')}</p>
+            <p className="text-lg font-semibold mt-1">{metrics.cpuPercent.toFixed(1)}%</p>
+          </div>
+          <div className="border rounded-lg p-3">
+            <p className="text-xs text-muted-foreground">{t('instanceDetail.uptime')}</p>
+            <p className="text-lg font-semibold mt-1">{formatUptime(metrics.uptimeSeconds)}</p>
+          </div>
+        </div>
+      )}
+
+      {/* 世界负载（按世界名展示） */}
+      {status === 'RUNNING' && metrics?.probeAvailable && metrics.worlds && metrics.worlds.length > 0 && (
+        <div className="border rounded-lg p-3">
+          <p className="text-sm font-semibold mb-2">{t('instanceDetail.worldLoad')}</p>
+          <table className="w-full text-xs">
+            <thead className="text-muted-foreground">
+              <tr>
+                <th className="text-left font-normal pb-1">{t('common.name')}</th>
+                <th className="text-right font-normal pb-1">{t('instanceDetail.worldChunks')}</th>
+                <th className="text-right font-normal pb-1">{t('instanceDetail.worldEntities')}</th>
+                <th className="text-right font-normal pb-1">{t('instanceDetail.worldTileEntities')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {metrics.worlds.map((w) => (
+                <tr key={w.name} className="border-t">
+                  <td className="py-1 font-mono">{w.name}</td>
+                  <td className="py-1 text-right">{w.loadedChunks}</td>
+                  <td className="py-1 text-right">{w.entities}</td>
+                  <td className="py-1 text-right">{w.tileEntities}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* 探针未安装提示（基础三项仍可用） */}
+      {status === 'RUNNING' && metrics && !metrics.probeAvailable && (
+        <div className="border border-blue-200 bg-blue-50 dark:bg-blue-950 dark:border-blue-800 rounded-lg p-2 text-xs text-blue-700 dark:text-blue-300">
+          ℹ {t('instanceDetail.probeUnavailable')}
+        </div>
+      )}
 
       {/* 状态提示 */}
       {status === 'CRASHED' && (

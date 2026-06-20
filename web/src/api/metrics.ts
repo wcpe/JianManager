@@ -11,10 +11,24 @@ export interface NodeMetricsData {
   diskTotalMb: number
 }
 
+export interface WorldMetric {
+  name: string
+  loadedChunks: number
+  entities: number
+  tileEntities: number
+}
+
 export interface InstanceMetricsData {
   tps: number
   onlinePlayers: number
   memoryMb: number
+  msptMillis: number
+  threads: number
+  cpuPercent: number
+  heapMaxMb: number
+  uptimeSeconds: number
+  worlds: WorldMetric[] | null
+  probeAvailable: boolean
 }
 
 export function useNodeMetrics(nodeId: number) {
