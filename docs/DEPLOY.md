@@ -96,6 +96,9 @@ Worker 全部用环境变量配置（也可放 `worker.yaml` 同名键）：
 | `JIANMANAGER_DATA_DIR` | 数据根（游戏服在 `var/servers/`、JDK 在 `opt/jdks/`） | 进程目录下 `data/` |
 | `JIANMANAGER_BOT_WORKER_PATH` | Bot Worker 入口 `index.js` 路径（启用 Bot 必填，见下） | `bot-worker/dist/index.js` |
 | `JIANMANAGER_DISABLE_JDK` | 设为 `1` 关闭托管 JDK 能力 | 启用 |
+| `JIANMANAGER_JDK_TEMURIN_BASE` | 一键安装 Temurin 的下载基址（国内可换镜像） | `https://api.adoptium.net` |
+| `JIANMANAGER_JDK_CORRETTO_BASE` | 一键安装 Corretto 的下载基址 | `https://corretto.aws` |
+| `JIANMANAGER_JDK_ZULU_BASE` | 一键安装 Zulu 的元数据 API 基址 | `https://api.azul.com` |
 
 ### Bot Worker（Node.js，按源码运行）
 

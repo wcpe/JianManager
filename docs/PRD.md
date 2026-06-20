@@ -457,18 +457,19 @@
 > 围绕「开好并运维一个 MC 群组服（代理 + 多 Bukkit 子服）」。优先级：配置文件管理最高，其次搭子服 / 插件管理 / 搭代理 / 一键复制修正。关系模型见 ADR-007，启动与运行时见 ADR-008。
 
 ### FR-031: 配置文件管理引擎
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 统一管理 MC 全部配置文件——保留注释的多格式读写 + schema 化可视编辑 + 跨文件一致性校验 + 版本回滚
 - **验收标准**:
-  - [ ] 支持 properties/yaml/toml/json/txt 解析与回写，**保留原有注释、键顺序与格式**
-  - [ ] 内置 server.properties / spigot.yml / paper-global.yml / bukkit.yml / velocity.toml / bungeecord config.yml 字段 schema（类型/默认/说明），可视化表单编辑
-  - [ ] 表单与原始文本双模式切换，保存后注释不丢失
-  - [ ] 跨文件/跨实例校验：同节点端口唯一、online-mode 与代理转发配套、forwarding secret 跨代理一致，违规实时提示
-  - [ ] 每次保存生成配置版本，可查看 diff 并一键回滚
-  - [ ] 配置读写经 gRPC 委托 Worker（配置在 workDir，归 Worker 所有）
+  - [x] 支持 properties/yaml/toml/json/txt 解析与回写，**保留原有注释、键顺序与格式**
+  - [x] 内置 server.properties / spigot.yml / paper-global.yml / bukkit.yml / velocity.toml / bungeecord config.yml 字段 schema（类型/默认/说明），可视化表单编辑
+  - [x] 表单与原始文本双模式切换，保存后注释不丢失
+  - [x] 跨文件/跨实例校验：同节点端口唯一、online-mode 与代理转发配套、forwarding secret 跨代理一致，违规实时提示
+  - [x] 每次保存生成配置版本，可查看 diff 并一键回滚
+  - [x] 配置读写经 gRPC 委托 Worker（配置在 workDir，归 Worker 所有）
+- **备注**: 真机浏览器复验通过——真 BungeeCord config.yml（yaml）与真 Paper server.properties（properties，保留 Mojang 注释头）表单字段级补丁保存、文本/表单切换、跨实例校验、版本 diff/回滚；properties/yaml/toml 补丁单测覆盖
 - **关联 ADR**: ADR-007
-- **关联 API**: `GET/POST /instances/:id/configs`, `GET /instances/:id/configs/:file/versions`
+- **关联 API**: `GET/POST /instances/:id/configs`, `POST /instances/:id/configs/write-fields`, `GET /instances/:id/configs/:file/versions`
 - **依赖**: 无（地基）
 - **Spec**: `docs/specs/config-engine/`
 
@@ -490,15 +491,16 @@
 - **Spec**: `docs/specs/network-resource-model/`
 
 ### FR-033: JDK 与运行时管理
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done
 - **优先级**: P0
 - **描述**: 平台按节点托管多 JDK，安装/登记多版本，实例绑定并在启动时注入环境变量
 - **验收标准**:
-  - [ ] 节点 JDK 注册表：列出已装 JDK（vendor/版本/arch/路径）
-  - [ ] 一键安装指定版本 JDK（下载源可配，默认 Adoptium）到系统分配目录；也可登记系统已有 JDK
-  - [ ] 实例可绑定具体 JDK 或 Java 大版本；目标节点缺失时提示安装
-  - [ ] 启动实例时自动注入 `JAVA_HOME` 并将 JDK/bin 接入 `PATH`，再叠加实例自定义 `env_vars`
-  - [ ] 删除被实例占用的 JDK 时拒绝并提示占用方
+  - [x] 节点 JDK 注册表：列出已装 JDK（vendor/版本/arch/路径）
+  - [x] 一键安装指定版本 JDK（下载源可配，默认 Adoptium）到系统分配目录；也可登记系统已有 JDK
+  - [x] 实例可绑定具体 JDK 或 Java 大版本；目标节点缺失时提示安装
+  - [x] 启动实例时自动注入 `JAVA_HOME` 并将 JDK/bin 接入 `PATH`，再叠加实例自定义 `env_vars`
+  - [x] 删除被实例占用的 JDK 时拒绝并提示占用方
+- **备注**: 真机浏览器复验——节点 JDK 面板列出 4 个 JDK、向导默认绑定最高 JDK、真 Paper 启动注入 GraalVM22；下载源经 `JIANMANAGER_JDK_<VENDOR>_BASE` 可配（单测覆盖），删除占用拒绝单测覆盖
 - **关联 ADR**: ADR-008
 - **关联 API**: `GET/POST /nodes/:id/jdks`, `DELETE /nodes/:id/jdks/:jid`
 - **依赖**: 无（FR-034/035 依赖它）

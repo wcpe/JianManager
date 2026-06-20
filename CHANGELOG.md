@@ -7,6 +7,8 @@
 ## [Unreleased]
 
 ### Added
+- **配置文件管理引擎**（FR-031）：properties/yaml/toml/json/txt 解析回写**保留注释/键顺序**；6 类 MC 配置内置字段 schema；配置编辑器**文本/表单双模式**，表单按 schema 渲染（bool 下拉/选择项/数字/文本）、保存走字段级补丁（properties 行级 / yaml AST / toml 行级，保留注释）；跨实例一致性校验入口（端口唯一/online-mode 配套/forwarding secret 一致）；每次保存生成版本，diff 与一键回滚；读写经 gRPC 委托 Worker。真机复验：真 BungeeCord config.yml + 真 Paper server.properties 表单编辑、注释保留
+- **JDK 一键安装下载源可配**（FR-033）：Temurin/Corretto/Zulu 下载基址经 `JIANMANAGER_JDK_<VENDOR>_BASE` 覆盖（默认 Adoptium 等官方源，便于国内镜像）；补齐 FR-033 验收（注册表/绑定/JAVA_HOME+PATH 注入/删除占用拒绝均真机或单测覆盖）
 - **MC 群组服关系模型**（FR-032）：实例角色化（proxy/backend/universal）、proxy↔backend M:N 注册（alias/priority/forced-host/restricted）、Network 非独占软标签 + 群组视图批量启停、节点端口占用查看、工作目录系统分配（创建对话框改只读）
 - **搭建代理向导**（FR-035）：BungeeCord/Waterfall（PaperMC）+ Velocity（modern 转发，自动生成 forwarding-secret 下发所注册后端 + 跨代理一致校验）；把已有 backend 注册进代理写 servers/priorities/forced-host；可选 online-mode（持久化，离线模式群组服可关闭）。真 Paper 1.20.4 + 真 BungeeCord 端到端复验：玩家经代理进入后端
 - **一键复制子服**（FR-036）：复制为独立新实例（系统分配新目录/端口），排除 session.lock/logs/缓存/usercache 等运行态文件，修正端口/rcon/motd/可选 level-name 并保留 forwarding secret，可选注册进 0/1/多代理，复制前 dryRun 预检冲突。端到端复验：克隆独立启动并经代理进入
