@@ -54,6 +54,8 @@ func main() {
 	pool := cpgrpc.NewClientPool()
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
 	instanceBatchSvc := service.NewInstanceBatchService(db, pool)
+	// 回填实例服务，供节点排空（drain）复用实例停止逻辑（FR-048）。
+	nodeSvc.SetInstanceService(instanceSvc)
 	jdkSvc := service.NewJDKService(db, pool)
 	terminalSvc := service.NewTerminalService(db, cfg.JWT.Secret, fmt.Sprintf("ws://localhost:%d", cfg.Server.Port))
 	fileSvc := service.NewFileService(db, pool)

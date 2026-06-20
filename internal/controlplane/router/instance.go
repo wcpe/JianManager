@@ -180,6 +180,11 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "QUOTA_EXCEEDED", "message": err.Error()})
 			return
 		}
+		// 调度拦截（FR-048）：目标节点维护中拒绝接纳新实例。
+		if errors.Is(err, service.ErrNodeInMaintenance) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "NODE_MAINTENANCE", "message": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "创建实例失败"})
 		return
 	}

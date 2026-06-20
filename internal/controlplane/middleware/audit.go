@@ -102,6 +102,12 @@ func determineAction(method, path string) string {
 		return "file.write"
 	case method == "DELETE" && strings.Contains(path, "/files"):
 		return "file.delete"
+	case method == "POST" && strings.Contains(path, "/nodes") && strings.HasSuffix(path, "/maintenance"):
+		return "node.maintenance"
+	case method == "POST" && strings.Contains(path, "/nodes") && strings.HasSuffix(path, "/drain"):
+		return "node.drain"
+	case method == "DELETE" && strings.Contains(path, "/nodes"):
+		return "node.delete"
 	default:
 		return ""
 	}

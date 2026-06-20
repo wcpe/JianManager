@@ -69,6 +69,19 @@ type CreateInstanceRequest struct {
 
 // Create 创建实例。
 func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, error) {
+	// 调度拦截（FR-048）：维护模式（cordon）节点拒绝接纳新实例。
+	// 直接查目标节点的维护标记，避免 InstanceService 反向依赖 NodeService。
+	// 节点不存在时不在此处硬失败（沿用既有创建行为，注册/启动阶段另有校验），
+	// 仅当节点存在且处于维护模式时拒绝。
+	var target model.Node
+	if err := s.db.First(&target, req.NodeID).Error; err == nil {
+		if target.Maintenance {
+			return nil, ErrNodeInMaintenance
+		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("查询目标节点失败: %w", err)
+	}
+
 	req.StartCommand = sanitizeStartCommand(req.StartCommand)
 
 	// MC 结构化启动（ADR-008）：提供 launchSpec 时由其派生 java 启动命令，

@@ -59,14 +59,18 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 	fileSvc := service.NewFileService(db, pool)
 	fileVersionSvc := service.NewFileVersionService(db, pool, service.DefaultFileVersionConfig())
 	configSvc := service.NewConfigService(db, pool)
+	nodeSvc := service.NewNodeService(db)
+	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
+	// 回填实例服务，供节点排空（drain）测试复用实例停止逻辑（FR-048）。
+	nodeSvc.SetInstanceService(instanceSvc)
 	// 制品库需要数据根；测试用临时根，进程退出后由 OS 回收。
 	root, _ := dataroot.Init(filepath.Join(os.TempDir(), "jm-test-"+strconv.FormatInt(time.Now().UnixNano(), 10)))
 	svcs := &Services{
 		Auth:          service.NewAuthService(db, jwtCfg),
 		User:          service.NewUserService(db),
 		Group:         groupSvc,
-		Node:          service.NewNodeService(db),
-		Instance:      service.NewInstanceService(db, groupSvc, pool),
+		Node:          nodeSvc,
+		Instance:      instanceSvc,
 		InstanceBatch: service.NewInstanceBatchService(db, pool),
 		Terminal:      service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),
 		File:          fileSvc,

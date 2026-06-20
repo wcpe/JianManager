@@ -61,3 +61,108 @@ func TestNode_List_AdminOnly(t *testing.T) {
 	w := makeRequest(r, "GET", "/api/v1/nodes", nil, memberToken)
 	assert.Equal(t, http.StatusForbidden, w.Code)
 }
+
+// TestNode_Maintenance_Toggle 置/解维护模式翻转标记（FR-048）。
+func TestNode_Maintenance_Toggle(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+
+	w := makeRequest(r, "POST", "/api/v1/nodes/"+itoa(node.ID)+"/maintenance", map[string]bool{"enabled": true}, token)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, true, parseJSON(t, w)["maintenance"])
+
+	w = makeRequest(r, "POST", "/api/v1/nodes/"+itoa(node.ID)+"/maintenance", map[string]bool{"enabled": false}, token)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, false, parseJSON(t, w)["maintenance"])
+}
+
+// TestNode_Maintenance_AdminOnly 普通成员不能置维护模式。
+func TestNode_Maintenance_AdminOnly(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	getAdminToken(t, r)
+	node := createTestNode(t, db)
+	memberToken := getMemberToken(t, r, "nodemem2", "password123")
+
+	w := makeRequest(r, "POST", "/api/v1/nodes/"+itoa(node.ID)+"/maintenance", map[string]bool{"enabled": true}, memberToken)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+// TestNode_Maintenance_RejectsScheduling 维护中节点拒绝创建实例（调度拦截）。
+func TestNode_Maintenance_RejectsScheduling(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+
+	// 置维护
+	w := makeRequest(r, "POST", "/api/v1/nodes/"+itoa(node.ID)+"/maintenance", map[string]bool{"enabled": true}, token)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// 创建实例应被拒绝（service.ErrNodeInMaintenance 映射为 422）
+	body := map[string]interface{}{
+		"nodeId":       node.ID,
+		"name":         "i1",
+		"type":         "generic",
+		"processType":  "direct",
+		"startCommand": "echo hi",
+	}
+	w = makeRequest(r, "POST", "/api/v1/instances", body, token)
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	assert.Equal(t, "NODE_MAINTENANCE", parseJSON(t, w)["error"])
+}
+
+// TestNode_Drain_StopsRunning 排空停止节点上运行实例（FR-048）。
+func TestNode_Drain_StopsRunning(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+
+	inst := &model.Instance{
+		NodeID:       node.ID,
+		Name:         "run",
+		Type:         model.InstanceTypeGeneric,
+		ProcessType:  model.ProcessTypeDirect,
+		StartCommand: "x",
+		Status:       model.InstanceStatusRunning,
+	}
+	require.NoError(t, db.Create(inst).Error)
+
+	w := makeRequest(r, "POST", "/api/v1/nodes/"+itoa(node.ID)+"/drain", nil, token)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, float64(1), parseJSON(t, w)["stoppedCount"])
+
+	var fromDB model.Instance
+	require.NoError(t, db.First(&fromDB, inst.ID).Error)
+	assert.Equal(t, model.InstanceStatusStopping, fromDB.Status)
+}
+
+// TestNode_Drain_AdminOnly 普通成员不能排空节点。
+func TestNode_Drain_AdminOnly(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	getAdminToken(t, r)
+	node := createTestNode(t, db)
+	memberToken := getMemberToken(t, r, "nodemem3", "password123")
+
+	w := makeRequest(r, "POST", "/api/v1/nodes/"+itoa(node.ID)+"/drain", nil, memberToken)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+}
+
+// TestNode_Maintenance_Audited 维护操作写入审计日志（FR-048 / FR-015）。
+func TestNode_Maintenance_Audited(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+
+	w := makeRequest(r, "POST", "/api/v1/nodes/"+itoa(node.ID)+"/maintenance", map[string]bool{"enabled": true}, token)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var count int64
+	db.Model(&model.AuditLog{}).Where("action = ? AND target_type = ?", "node.maintenance", "node").Count(&count)
+	assert.Equal(t, int64(1), count)
+}

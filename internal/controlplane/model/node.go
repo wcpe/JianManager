@@ -34,6 +34,10 @@ type Node struct {
 	CPUUsage         float32        `gorm:"default:0" json:"cpuUsage"`
 	MemoryUsage      float32        `gorm:"default:0" json:"memoryUsage"`
 	DiskUsage        float32        `gorm:"default:0" json:"diskUsage"`
+	// Maintenance 维护模式（cordon）标记。为 true 时禁止新实例调度/分配到本节点，
+	// 与 Status（在线/离线，由心跳驱动）正交：节点可同时「在线 + 维护中」。
+	// 参见 FR-048。
+	Maintenance bool `gorm:"default:false" json:"maintenance"`
 	MemoryUsedMB     int64          `gorm:"default:0" json:"memoryUsedMb"`
 	DiskUsedMB       int64          `gorm:"default:0" json:"diskUsedMb"`
 	NetworkBytesSent int64          `gorm:"default:0" json:"networkBytesSent"`

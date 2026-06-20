@@ -68,7 +68,64 @@ func (h *NodeHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, node)
 }
 
-// Delete 删除节点（仅平台管理员）。
+type maintenanceRequest struct {
+	// Enabled 置/解维护模式：true=cordon（禁新调度），false=解除。
+	Enabled bool `json:"enabled"`
+}
+
+// Maintenance 置/解节点维护模式（cordon，仅平台管理员）。参见 FR-048。
+func (h *NodeHandler) Maintenance(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+
+	var req maintenanceRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+
+	node, err := h.nodeSvc.SetMaintenance(id, req.Enabled)
+	if err != nil {
+		if errors.Is(err, service.ErrNodeNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "节点不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "更新维护模式失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, node)
+}
+
+// Drain 排空节点：停止其上运行实例（仅平台管理员，危险操作）。参见 FR-048。
+func (h *NodeHandler) Drain(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+
+	result, err := h.nodeSvc.Drain(id)
+	if err != nil {
+		if errors.Is(err, service.ErrNodeNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "节点不存在"})
+			return
+		}
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
+// Delete 主动下线节点：解除注册并保留记录（仅平台管理员，危险操作）。参见 FR-048。
 func (h *NodeHandler) Delete(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -83,7 +140,7 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
+	c.JSON(http.StatusOK, gin.H{"message": "已下线"})
 }
 
 // RegisterRoutes 注册节点路由。
@@ -92,6 +149,8 @@ func (h *NodeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	{
 		nodes.GET("", h.List)
 		nodes.GET("/:id", h.Get)
+		nodes.POST("/:id/maintenance", h.Maintenance)
+		nodes.POST("/:id/drain", h.Drain)
 		nodes.DELETE("/:id", h.Delete)
 	}
 }
