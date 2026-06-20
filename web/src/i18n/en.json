@@ -232,7 +232,29 @@
     "templates": "Templates",
     "settings": "Settings",
     "alerts": "Alerts",
-    "logs": "Logs"
+    "logs": "Logs",
+    "plugins": "Plugin Bridge"
+  },
+  "pluginBridge": {
+    "title": "Plugin Bridge",
+    "subtitle": "Platform plugins connect to the Worker over WebSocket to report player/server events and run platform commands",
+    "issueToken": "Issue Plugin Token",
+    "issue": "Issue",
+    "issueHint": "Pick an instance, issue a connection token, then put the returned wsUrl/token/instanceUuid into that instance plugin's config.yml",
+    "selectInstance": "Select instance",
+    "writeConfigHint": "Put the three values into the plugin's config.yml and reload the plugin to connect",
+    "tokenIssued": "Token issued",
+    "tokenIssueFailed": "Failed to issue token",
+    "connectedCount": "Connected plugins",
+    "connectionsTitle": "Connected Plugins",
+    "eventsTitle": "Recent Events",
+    "instance": "Instance",
+    "status": "Status",
+    "lastEvent": "Last event",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "noConnections": "No plugins connected",
+    "noEvents": "No events"
   },
   "console": {
     "title": "Ops Console",

@@ -22,6 +22,7 @@ const TemplatesPage = lazy(() => import('@/pages/TemplatesPage'))
 const AlertsPage = lazy(() => import('@/pages/AlertsPage'))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 const LogsPage = lazy(() => import('@/pages/LogsPage'))
+const PluginBridgePage = lazy(() => import('@/pages/PluginBridgePage'))
 
 /**
  * 运维控制台右侧工作区（ADR-009 / FR-037 / FR-039）。
@@ -60,6 +61,7 @@ export default function Workspace() {
           <Route path="players" element={<PlayersPage />} />
           <Route path="bots" element={<BotsPage />} />
           <Route path="alerts" element={<AlertsPage />} />
+          <Route path="plugins" element={<PluginBridgePage />} />
           <Route path="users" element={<UsersPage />} />
           <Route path="groups" element={<GroupsPage />} />
           <Route path="templates" element={<TemplatesPage />} />
