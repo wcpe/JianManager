@@ -9,6 +9,7 @@ const featureNav: NavEntry[] = [
   { to: '/nodes', labelKey: 'nav.nodes' },
   { to: '/instances', labelKey: 'nav.instances' },
   { to: '/networks', labelKey: 'nav.networks' },
+  { to: '/players', labelKey: 'nav.players' },
   { to: '/bots', labelKey: 'nav.bots' },
   { to: '/alerts', labelKey: 'nav.alerts' },
   { to: '/templates', labelKey: 'nav.templates' },
