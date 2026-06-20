@@ -41,6 +41,7 @@ type Services struct {
 	Registration  *service.RegistrationService
 	Network       *service.NetworkService
 	Log           *service.LogService
+	PluginBridge  *service.PluginBridgeService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -104,6 +105,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		eventHandler := NewEventHandler(svcs.Event)
 		eventHandler.RegisterRoutes(protected)
+
+		// 插件桥（FR-103 / ADR-012）：token 签发/事件 SSE/指令下发按实例授权收敛
+		pluginBridgeHandler := NewPluginBridgeHandler(svcs.PluginBridge, svcs.Authz)
+		pluginBridgeHandler.RegisterRoutes(protected)
 
 		// 组相关：列表/创建由 group:read/group:manage 节点控制，
 		// 组级资源（:id）由 GroupHandler 内部按授权上下文收敛
