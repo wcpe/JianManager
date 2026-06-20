@@ -58,6 +58,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Schedule{},
 		&model.ScheduleExecutionLog{},
 		&model.Backup{},
+		&model.BackupStorage{},
 		&model.Template{},
 		&model.AuditLog{},
 		&model.InstanceConfigVersion{},

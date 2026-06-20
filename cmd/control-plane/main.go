@@ -68,6 +68,9 @@ func main() {
 	alertSvc := service.NewAlertService(db)
 	scheduleSvc := service.NewScheduleService(db)
 	backupSvc := service.NewBackupService(db, pool)
+	// 备份远程存储后端（FR-057）：注入备份服务，凭证经 ${ENV_VAR} 解析后下发 Worker。
+	backupStorageSvc := service.NewBackupStorageService(db)
+	backupSvc.SetStorageService(backupStorageSvc)
 	templateSvc := service.NewTemplateService(db)
 	auditSvc := service.NewAuditService(db)
 	authzSvc := service.NewAuthzService(db)
@@ -127,6 +130,7 @@ func main() {
 		Alert:         alertSvc,
 		Schedule:      scheduleSvc,
 		Backup:        backupSvc,
+		BackupStorage: backupStorageSvc,
 		Template:      templateSvc,
 		Audit:         auditSvc,
 		Authz:         authzSvc,

@@ -27,11 +27,18 @@ var (
 type BackupService struct {
 	db   *gorm.DB
 	pool *grpc.ClientPool
+	// storages 提供远程存储后端解析（FR-057）；nil 表示仅本地备份。
+	storages *BackupStorageService
 }
 
 // NewBackupService 创建备份服务。
 func NewBackupService(db *gorm.DB, pool *grpc.ClientPool) *BackupService {
 	return &BackupService{db: db, pool: pool}
+}
+
+// SetStorageService 注入远程存储服务（FR-057）。在 main 装配阶段调用，避免构造期循环依赖。
+func (s *BackupService) SetStorageService(ss *BackupStorageService) {
+	s.storages = ss
 }
 
 // CreateOptions 创建备份的可选参数（向后兼容旧的仅 name 调用）。
@@ -313,10 +320,13 @@ func (s *BackupService) chainManifest(parentID *uint) ([]*workerpb.BackupManifes
 	return out, nil
 }
 
-// storageSpec 把存储后端 ID 解析为下发 Worker 的传输参数。
-// FR-056 阶段恒返回 nil（本地备份）；FR-057 接入远程存储服务后据 ${ENV_VAR} 解析凭证。
+// storageSpec 把存储后端 ID 解析为下发 Worker 的传输参数（凭证从 ${ENV_VAR} 解析）。
+// storageID 为 nil 或未注入 storages 时返回 nil，表示本地备份（FR-057）。
 func (s *BackupService) storageSpec(storageID *uint) (*workerpb.StorageBackendSpec, error) {
-	return nil, nil
+	if storageID == nil || s.storages == nil {
+		return nil, nil
+	}
+	return s.storages.ResolveSpec(*storageID)
 }
 
 // resolveInstanceNode 加载备份目标实例及其所在节点。

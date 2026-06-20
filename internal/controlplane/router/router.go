@@ -28,6 +28,7 @@ type Services struct {
 	Alert         *service.AlertService
 	Schedule      *service.ScheduleService
 	Backup        *service.BackupService
+	BackupStorage *service.BackupStorageService
 	Template      *service.TemplateService
 	Audit         *service.AuditService
 	Authz         *service.AuthzService
@@ -150,6 +151,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		networkHandler := NewNetworkHandler(svcs.Network)
 		networkHandler.RegisterRoutes(admin)
+
+		// 备份远程存储后端：含凭证 env 引用，平台级配置，限平台管理员（FR-057）。
+		if svcs.BackupStorage != nil {
+			backupStorageHandler := NewBackupStorageHandler(svcs.BackupStorage)
+			backupStorageHandler.RegisterRoutes(admin)
+		}
 	}
 
 	// 前端静态文件（go:embed 嵌入）
