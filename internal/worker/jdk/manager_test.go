@@ -97,13 +97,29 @@ func TestRemoveBlocksOutsideRoot(t *testing.T) {
 }
 
 func TestBuildDownloadURL(t *testing.T) {
-	if _, err := buildDownloadURL("Temurin", 21, "x64"); err != nil {
-		t.Fatalf("Temurin URL failed: %v", err)
+	// Temurin / Corretto 构造静态 URL，不触网，默认指向官方源。
+	if u, err := buildDownloadURL("Temurin", 21, "x64"); err != nil || !strings.Contains(u, "api.adoptium.net") {
+		t.Fatalf("Temurin 默认 URL 异常: url=%q err=%v", u, err)
 	}
-	if _, err := buildDownloadURL("Zulu", 21, "x64"); err == nil {
-		t.Fatalf("Zulu should return not-implemented")
+	if u, err := buildDownloadURL("Corretto", 21, "x64"); err != nil || !strings.Contains(u, "corretto.aws") {
+		t.Fatalf("Corretto 默认 URL 异常: url=%q err=%v", u, err)
 	}
 	if _, err := buildDownloadURL("Random", 21, "x64"); err == nil {
 		t.Fatalf("unknown vendor should fail")
+	}
+}
+
+// TestBuildDownloadURL_MirrorConfigurable 验证下载源可经环境变量覆盖（FR-033「下载源可配」）。
+func TestBuildDownloadURL_MirrorConfigurable(t *testing.T) {
+	t.Setenv("JIANMANAGER_JDK_TEMURIN_BASE", "https://mirror.example.com/adoptium")
+	u, err := buildDownloadURL("Temurin", 17, "x64")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !strings.Contains(u, "mirror.example.com/adoptium") {
+		t.Fatalf("镜像基址未生效: %s", u)
+	}
+	if strings.Contains(u, "api.adoptium.net") {
+		t.Fatalf("仍指向默认源: %s", u)
 	}
 }

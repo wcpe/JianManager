@@ -15,23 +15,45 @@ import (
 	"time"
 )
 
-// buildDownloadURL 根据 vendor/major/arch/平台返回官方归档下载 URL。
-// 当前仅实现 Temurin：Adoptium API 静态归档。
-// 其他 vendor 返回明确错误，提示使用 POST /jdks 手动登记。
+// jdkMirrorBase 返回指定 vendor 的下载基址：环境变量优先（支持国内镜像等自定义源），
+// 为空时回退官方默认。实现 FR-033「下载源可配，默认 Adoptium」。
+func jdkMirrorBase(vendor string) string {
+	switch strings.ToLower(vendor) {
+	case "temurin", "adoptium":
+		return envOr("JIANMANAGER_JDK_TEMURIN_BASE", "https://api.adoptium.net")
+	case "corretto", "amazon":
+		return envOr("JIANMANAGER_JDK_CORRETTO_BASE", "https://corretto.aws")
+	case "zulu", "azul":
+		return envOr("JIANMANAGER_JDK_ZULU_BASE", "https://api.azul.com")
+	}
+	return ""
+}
+
+// envOr 返回环境变量值（去空白），为空时返回默认值。
+func envOr(key, def string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return def
+}
+
+// buildDownloadURL 根据 vendor/major/arch/平台返回归档下载 URL。
+// 下载基址可经 JIANMANAGER_JDK_<VENDOR>_BASE 覆盖（默认官方源，Temurin 默认 Adoptium）；
+// 未支持的 vendor 返回明确错误，提示使用 POST /jdks 手动登记。
 func buildDownloadURL(vendor string, major int, arch string) (string, error) {
 	switch strings.ToLower(vendor) {
 	case "temurin", "adoptium":
-		return temurinURL(major, arch), nil
-case "corretto", "amazon":
-		return correttoURL(major, arch), nil
+		return temurinURL(jdkMirrorBase(vendor), major, arch), nil
+	case "corretto", "amazon":
+		return correttoURL(jdkMirrorBase(vendor), major, arch), nil
 	case "zulu", "azul":
-		return zuluURL(major, arch)
+		return zuluURL(jdkMirrorBase(vendor), major, arch)
 	default:
 		return "", fmt.Errorf("unsupported vendor: %s (supported: Temurin, Corretto, Zulu)", vendor)
 	}
 }
 
-func temurinURL(major int, arch string) string {
+func temurinURL(base string, major int, arch string) string {
 	osName := "linux"
 	if runtime.GOOS == "windows" {
 		osName = "windows"
@@ -39,11 +61,11 @@ func temurinURL(major int, arch string) string {
 		osName = "mac"
 	}
 	// Adoptium Temurin LTS 通用归档（带完整 JRE+JDK）。
-	return fmt.Sprintf("https://api.adoptium.net/v3/binary/latest/%d/ga/%s/%s/jdk/hotspot/normal/eclipse?project=jdk",
-		major, osName, arch)
+	return fmt.Sprintf("%s/v3/binary/latest/%d/ga/%s/%s/jdk/hotspot/normal/eclipse?project=jdk",
+		base, major, osName, arch)
 }
 
-func correttoURL(major int, arch string) string {
+func correttoURL(base string, major int, arch string) string {
 	osName := "linux"
 	ext := "tar.gz"
 	if runtime.GOOS == "windows" {
@@ -53,12 +75,12 @@ func correttoURL(major int, arch string) string {
 		osName = "macos"
 		ext = "tar.gz"
 	}
-	return fmt.Sprintf("https://corretto.aws/downloads/latest/amazon-corretto-%d-%s-%s-jdk.%s",
-		major, arch, osName, ext)
+	return fmt.Sprintf("%s/downloads/latest/amazon-corretto-%d-%s-%s-jdk.%s",
+		base, major, arch, osName, ext)
 }
 
 // zuluURL queries the Azul metadata API for the latest Zulu JDK download URL.
-func zuluURL(major int, arch string) (string, error) {
+func zuluURL(base string, major int, arch string) (string, error) {
 	osName := "linux"
 	ext := "tar.gz"
 	if runtime.GOOS == "windows" {
@@ -67,8 +89,8 @@ func zuluURL(major int, arch string) (string, error) {
 	} else if runtime.GOOS == "darwin" {
 		osName = "macos"
 	}
-	apiURL := fmt.Sprintf("https://api.azul.com/metadata/v1/zulu/packages?java_version=%d&os=%s&arch=%s&archive_type=%s&latest=true&release_type=ga",
-		major, osName, arch, ext)
+	apiURL := fmt.Sprintf("%s/metadata/v1/zulu/packages?java_version=%d&os=%s&arch=%s&archive_type=%s&latest=true&release_type=ga",
+		base, major, osName, arch, ext)
 	resp, err := http.Get(apiURL)
 	if err != nil {
 		return "", fmt.Errorf("zulu metadata API failed: %w", err)
