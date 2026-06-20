@@ -128,3 +128,44 @@ export function useDeleteInstance() {
     },
   })
 }
+
+/** 实例批量操作动作（FR-058）。 */
+export type InstanceBatchAction = 'command' | 'start' | 'stop' | 'restart' | 'kill'
+
+/** 批量操作筛选条件（与列表筛选维度一致）。 */
+export interface InstanceBatchFilter {
+  nodeId?: number
+  status?: string
+  role?: string
+}
+
+/** 批量操作请求，目标由 ids 或 filter 二选一指定。 */
+export interface InstanceBatchRequest {
+  action: InstanceBatchAction
+  ids?: number[]
+  filter?: InstanceBatchFilter
+  /** action=command 时下发的命令。 */
+  command?: string
+}
+
+/** 批量操作结果计数。 */
+export interface InstanceBatchResult {
+  action: string
+  requested: number
+  succeeded: number
+  failed: number
+  skipped: number
+  errors: { instanceId: number; error: string }[]
+}
+
+/** 批量执行 command/start/stop/restart/kill（FR-058）。 */
+export function useInstanceBatch() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (payload: InstanceBatchRequest) => {
+      const { data } = await api.post<InstanceBatchResult>('/instances/batch', payload)
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['instances'] }),
+  })
+}

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useInstances, useStartInstance, useStopInstance, useRestartInstance, useDeleteInstance, useKillInstance } from '@/api/instances'
 import { useConsoleStore } from '@/stores/console'
 import ConfirmDialog from '@/components/ConfirmDialog'
+import InstanceBatchBar from '@/components/InstanceBatchBar'
 import CreateInstanceDialog from '@/components/CreateInstanceDialog'
 import ProvisionServerDialog from '@/components/ProvisionServerDialog'
 import ProvisionProxyDialog from '@/components/ProvisionProxyDialog'
@@ -10,6 +11,7 @@ import ProxyRegistrationsDialog from '@/components/ProxyRegistrationsDialog'
 import CloneInstanceDialog from '@/components/CloneInstanceDialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Table,
   TableBody,
@@ -29,7 +31,16 @@ export default function InstancesPage() {
   const [manageProxy, setManageProxy] = useState<{ id: number; name: string } | null>(null)
   const [cloneTarget, setCloneTarget] = useState<{ id: number; name: string } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
+  // 批量操作选中的实例 ID 集合（FR-058）。
+  const [selectedIds, setSelectedIds] = useState<number[]>([])
   const { data: instances, isLoading } = useInstances()
+
+  const toggleOne = (id: number) =>
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  const allIds = instances?.map((i) => i.id) ?? []
+  const allSelected = allIds.length > 0 && allIds.every((id) => selectedIds.includes(id))
+  const toggleAll = () => setSelectedIds(allSelected ? [] : allIds)
+  const clearSelection = () => setSelectedIds([])
   const start = useStartInstance()
   const stop = useStopInstance()
   const restart = useRestartInstance()
@@ -68,10 +79,21 @@ export default function InstancesPage() {
       {isLoading ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
       ) : (
-        <div className="border rounded-lg">
+        <div className="space-y-3">
+          {selectedIds.length > 0 && (
+            <InstanceBatchBar selectedIds={selectedIds} onClear={clearSelection} />
+          )}
+          <div className="border rounded-lg">
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow>
+                <TableHead className="w-10">
+                  <Checkbox
+                    checked={allSelected}
+                    onCheckedChange={toggleAll}
+                    aria-label={t('instanceBatch.selectAll')}
+                  />
+                </TableHead>
                 <TableHead>{t('instances.name')}</TableHead>
                 <TableHead>{t('instances.type')}</TableHead>
                 <TableHead>{t('instances.role')}</TableHead>
@@ -84,7 +106,14 @@ export default function InstancesPage() {
               {instances?.map((inst) => {
                 const st = statusConfig[inst.status] || statusConfig.STOPPED
                 return (
-                  <TableRow key={inst.id}>
+                  <TableRow key={inst.id} data-state={selectedIds.includes(inst.id) ? 'selected' : undefined}>
+                    <TableCell>
+                      <Checkbox
+                        checked={selectedIds.includes(inst.id)}
+                        onCheckedChange={() => toggleOne(inst.id)}
+                        aria-label={inst.name}
+                      />
+                    </TableCell>
                     <TableCell className="font-medium">
                       <button
                         type="button"
@@ -187,13 +216,14 @@ export default function InstancesPage() {
               })}
               {(!instances || instances.length === 0) && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center text-muted-foreground">
                     {t('instances.empty')}
                   </TableCell>
                 </TableRow>
               )}
             </TableBody>
           </Table>
+          </div>
         </div>
       )}
 
