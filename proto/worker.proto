@@ -142,6 +142,9 @@ message CreateInstanceRequest {
   string jdk_path = 9;
   // 显式指定 JDK bin 目录，覆盖默认的 jdk_path/bin。
   string jdk_bin_path = 10;
+  // 优雅停止命令：daemon 模式优雅关服时写入进程 stdin 的命令（不含换行）。
+  // CP 按实例角色派生（MC 后端 stop / 代理 end）；为空时 Worker 回退到 "stop"。
+  string stop_command = 11;
 }
 
 message CreateInstanceResponse {

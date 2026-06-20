@@ -399,7 +399,10 @@ type CreateInstanceRequest struct {
 	// Worker 启动实例时把它作为 JAVA_HOME 并把 bin 接入 PATH。
 	JdkPath string `protobuf:"bytes,9,opt,name=jdk_path,json=jdkPath,proto3" json:"jdk_path,omitempty"`
 	// 显式指定 JDK bin 目录，覆盖默认的 jdk_path/bin。
-	JdkBinPath    string `protobuf:"bytes,10,opt,name=jdk_bin_path,json=jdkBinPath,proto3" json:"jdk_bin_path,omitempty"`
+	JdkBinPath string `protobuf:"bytes,10,opt,name=jdk_bin_path,json=jdkBinPath,proto3" json:"jdk_bin_path,omitempty"`
+	// 优雅停止命令：daemon 模式优雅关服时写入进程 stdin 的命令（不含换行）。
+	// CP 按实例角色派生（MC 后端 stop / 代理 end）；为空时 Worker 回退到 "stop"。
+	StopCommand   string `protobuf:"bytes,11,opt,name=stop_command,json=stopCommand,proto3" json:"stop_command,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -500,6 +503,13 @@ func (x *CreateInstanceRequest) GetJdkPath() string {
 func (x *CreateInstanceRequest) GetJdkBinPath() string {
 	if x != nil {
 		return x.JdkBinPath
+	}
+	return ""
+}
+
+func (x *CreateInstanceRequest) GetStopCommand() string {
+	if x != nil {
+		return x.StopCommand
 	}
 	return ""
 }
@@ -4531,7 +4541,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\"1\n" +
 	"\x11HeartbeatResponse\x12\x1c\n" +
-	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\xaa\x03\n" +
+	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\xcd\x03\n" +
 	"\x15CreateInstanceRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -4544,7 +4554,8 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\bjdk_path\x18\t \x01(\tR\ajdkPath\x12 \n" +
 	"\fjdk_bin_path\x18\n" +
 	" \x01(\tR\n" +
-	"jdkBinPath\x1a:\n" +
+	"jdkBinPath\x12!\n" +
+	"\fstop_command\x18\v \x01(\tR\vstopCommand\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"H\n" +
