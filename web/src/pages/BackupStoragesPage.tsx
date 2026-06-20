@@ -9,7 +9,7 @@ import {
   type CreateBackupStorageBody,
 } from '@/api/backupStorages'
 import { Badge } from '@/components/ui/badge'
-import ConfirmDialog from '@/components/ConfirmDialog'
+import DangerConfirm from '@/components/DangerConfirm'
 
 const TYPES = ['s3', 'sftp', 'webdav'] as const
 
@@ -173,11 +173,10 @@ export default function BackupStoragesPage() {
         </table>
       </div>
 
-      <ConfirmDialog
+      <DangerConfirm
         open={deleteTarget !== null}
         title={t('backupStorages.deleteConfirm', '确定删除此存储后端？')}
-        description=""
-        variant="destructive"
+        scope="platform"
         confirmLabel={t('common.delete', '删除')}
         onConfirm={() => { if (deleteTarget) handleDelete(deleteTarget) }}
         onCancel={() => setDeleteTarget(null)}

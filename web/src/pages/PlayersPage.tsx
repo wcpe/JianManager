@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import ConfirmDialog from '@/components/ConfirmDialog'
+import DangerConfirm from '@/components/DangerConfirm'
 import { useInstances } from '@/api/instances'
 import {
   useOnlinePlayers,
@@ -245,11 +245,12 @@ function BansTab() {
         </div>
       )}
 
-      <ConfirmDialog
+      <DangerConfirm
         open={pending !== null}
         title={t('players.unbanTitle')}
         description={t('players.unbanConfirm', { player: pending || '' })}
         confirmLabel={t('players.unban')}
+        scope="group"
         onConfirm={doUnban}
         onCancel={() => setPending(null)}
       />

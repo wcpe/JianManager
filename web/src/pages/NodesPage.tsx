@@ -20,7 +20,7 @@ import { Badge } from '@/components/ui/badge'
 import { useState } from 'react'
 import NodeJDKPanel from '@/components/NodeJDKPanel'
 import NodePortsPanel from '@/components/NodePortsPanel'
-import ConfirmDialog from '@/components/ConfirmDialog'
+import DangerConfirm from '@/components/DangerConfirm'
 
 /** 将字节数格式化为人类可读的大小（B/KB/MB/GB）。 */
 function formatBytes(bytes: number): string {
@@ -203,7 +203,7 @@ export default function NodesPage() {
           </div>
         </div>
       )}
-      <ConfirmDialog
+      <DangerConfirm
         open={pending !== null}
         title={pending?.kind === 'drain' ? t('nodes.drainConfirmTitle') : t('nodes.deleteConfirmTitle')}
         description={
@@ -212,7 +212,8 @@ export default function NodesPage() {
             : t('nodes.deleteConfirmDesc', { name: pending?.node.name })
         }
         confirmLabel={pending?.kind === 'drain' ? t('nodes.drain') : t('nodes.delete')}
-        variant="destructive"
+        confirmText={pending?.kind === 'delete' ? pending?.node.name : undefined}
+        scope="platform"
         onConfirm={confirmPending}
         onCancel={() => setPending(null)}
       />

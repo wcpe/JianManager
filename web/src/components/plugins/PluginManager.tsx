@@ -24,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import ConfirmDialog from '@/components/ConfirmDialog'
+import DangerConfirm from '@/components/DangerConfirm'
 
 /** 插件/模组单服管理面板（FR-052）：列表 + 启用/禁用 + 上传 + 删除（二次确认）。 */
 interface PluginManagerProps {
@@ -160,12 +160,13 @@ export default function PluginManager({ instanceId }: PluginManagerProps) {
         </Table>
       )}
 
-      <ConfirmDialog
+      <DangerConfirm
         open={!!deleteTarget}
         title={t('plugins.deleteTitle')}
         description={t('plugins.deleteConfirm', { name: deleteTarget?.name ?? '' })}
         confirmLabel={t('plugins.delete')}
-        variant="destructive"
+        confirmText={deleteTarget?.name ?? ''}
+        scope="group"
         onConfirm={confirmDelete}
         onCancel={() => setDeleteTarget(null)}
       />
