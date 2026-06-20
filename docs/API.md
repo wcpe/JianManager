@@ -186,9 +186,17 @@
 
 ### GET /api/v1/instances
 - **描述**: 实例列表（按当前用户权限过滤）
-- **关联 FR**: FR-005
+- **关联 FR**: FR-005, FR-047
 - **权限**: `instance.read`
-- **Query**: `?nodeId=xxx&groupId=yyy&status=RUNNING`
+- **Query**（多维筛选，任意组合，AND）:
+  - `nodeId` 节点 ID
+  - `groupId` 用户组 ID（非平台管理员忽略，强制按可访问组过滤）
+  - `status` 状态（`RUNNING` 等）
+  - `role` 角色（`backend`/`proxy`/`universal`）
+  - `networkId` 群组（Network 软标签）ID（FR-047）
+  - `env` 环境维度（`dev`/`test`/`prod`，对应 `env:` 前缀标签，FR-047）
+  - `tag` 单个自由标签精确匹配（FR-047）
+- **示例**: `?nodeId=1&networkId=2&env=prod&tag=survival&status=RUNNING`
 
 ### POST /api/v1/instances
 - **描述**: 创建实例
@@ -215,8 +223,21 @@
 
 ### PUT /api/v1/instances/:id
 - **描述**: 更新实例配置
-- **关联 FR**: FR-005
+- **关联 FR**: FR-005, FR-047
 - **权限**: `instance.write`
+- **请求**（字段均可选，缺省/`null` 表示不变）:
+  ```json
+  {
+    "name": "Survival",
+    "startCommand": "java -jar paper.jar nogui",
+    "autoStart": true,
+    "autoRestart": true,
+    "jdkId": 3,
+    "envVars": { "TZ": "Asia/Shanghai" },
+    "tags": ["env:prod", "survival"]
+  }
+  ```
+- **说明**: `tags` 传数组（含空数组 `[]` 清空）覆盖标签；环境维度复用 `env:` 前缀（FR-047），无独立字段。
 
 ### DELETE /api/v1/instances/:id
 - **描述**: 删除实例（需先停止）
