@@ -49,6 +49,11 @@ func newDaemonStrategy(mgr *Manager, spec CommandSpec) *daemonStrategy {
 }
 
 func (d *daemonStrategy) Start(ctx context.Context) error {
+	// 重启前等待上一代 wrapper/Java 完全退出，避免快速 stop→start 时旧进程仍占监听端口/socket
+	// 导致新进程端口冲突崩溃。不持 d.mu，以免长时间阻塞 State()/SendCommand 等查询；
+	// pidDir/UUID 构造后不可变，无锁读取安全；并发启动已由 Manager 的 STARTING 状态串行化。
+	daemon.WaitForPriorExit(d.pidDir, d.spec.UUID)
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -60,6 +65,7 @@ func (d *daemonStrategy) Start(ctx context.Context) error {
 	cfg := daemon.WrapperConfig{
 		InstanceUUID: d.spec.UUID,
 		StartCommand: d.spec.StartCommand,
+		StopCommand:  d.spec.StopCommand,
 		WorkDir:      d.spec.WorkDir,
 		EnvVars:      d.spec.EnvVars,
 		JavaHome:     d.spec.JavaHome,
@@ -180,6 +186,12 @@ func (d *daemonStrategy) reapWrapper() {
 	err := cmd.Wait()
 	slog.Info("wrapper 进程退出", "instanceId", d.spec.UUID, "err", err)
 	d.mu.Lock()
+	// 重启复用同一 strategy：若上一代 wrapper 退出晚于新一轮 Start，d.wrapperCmd 已被替换，
+	// 本 reaper 已陈旧——必须放手，否则会把新实例的 RUNNING 误改成 CRASHED/STOPPED。
+	if d.wrapperCmd != cmd {
+		d.mu.Unlock()
+		return
+	}
 	old := d.state
 	if d.closed || d.state == StateStopping || d.state == StateStopped {
 		// 主动停止/关闭：wrapper 正常退出
@@ -215,12 +227,14 @@ func (d *daemonStrategy) Kill() error {
 	if conn != nil {
 		_ = d.sendControl(daemon.ControlKill)
 	}
-	// 同时直接 kill wrapper（兜底）
+	// 兜底：直接终止 wrapper。必须杀整棵进程树（wrapper→cmd.exe→Java），不能只杀 wrapper PID——
+	// 否则 Windows 上 wrapper 被单独杀掉后 Java 孤儿化、继续占监听端口，重启时新进程端口冲突
+	// 崩溃（java.net.BindException: Address already in use）。复用 killProcessTree（taskkill /T）。
 	d.mu.Lock()
 	cmd := d.wrapperCmd
 	d.mu.Unlock()
 	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
+		_ = killProcessTree(cmd)
 	}
 	return nil
 }

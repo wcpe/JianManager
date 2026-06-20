@@ -23,6 +23,10 @@ import (
 type WrapperConfig struct {
 	InstanceUUID  string            `json:"instance_uuid"`
 	StartCommand  string            `json:"start_command"`
+	// StopCommand 优雅停止时写入进程 stdin 的命令（不含换行）。
+	// 由 Control Plane 按实例角色派生（MC 后端用 stop，代理用 end）。
+	// 为空时 wrapper 回退到 MC 的 "stop"，保证旧实例/恢复路径行为不变。
+	StopCommand   string            `json:"stop_command,omitempty"`
 	WorkDir       string            `json:"work_dir"`
 	EnvVars       map[string]string `json:"env_vars"`
 	JavaHome      string            `json:"java_home,omitempty"`
@@ -378,10 +382,13 @@ func (w *Wrapper) stopJava(force bool) {
 		return
 	}
 
-	// 优雅停止：MC 服务器以 stdin "stop" 命令关服。无 stdin（非 MC 进程）时回退信号/强杀。
+	// 优雅停止：向进程 stdin 写关服命令。命令按实例角色派生（MC 后端 stop / 代理 end），
+	// 代理不认 "stop"，若误发会一直挂到超时强杀、且重启时旧进程仍占端口导致崩溃。
+	// 无 stdin（非交互进程）时回退信号/强杀。
+	stopCmd := resolveStopCommand(w.cfg.StopCommand)
 	wrote := false
 	if stdin != nil {
-		if _, err := stdin.Write([]byte("stop\n")); err == nil {
+		if _, err := stdin.Write([]byte(stopCmd + "\n")); err == nil {
 			wrote = true
 		}
 	}
@@ -511,6 +518,18 @@ const (
 	// 供测试/集成缩短——测试替身进程（ping/sleep）不响应 "stop"，否则每个停止用例都要等满超时。
 	envGracefulStopTimeout = "JIANMANAGER_GRACEFUL_STOP_TIMEOUT"
 )
+
+// defaultStopCommand 是未指定停止命令时的回退值（Minecraft 服务端关服命令）。
+const defaultStopCommand = "stop"
+
+// resolveStopCommand 返回优雅停止时写入 stdin 的命令：配置非空则用配置（去空白），
+// 否则回退到 MC 的 "stop"。保证旧实例、PID 恢复等未携带停止命令的路径行为不变。
+func resolveStopCommand(cfg string) string {
+	if c := strings.TrimSpace(cfg); c != "" {
+		return c
+	}
+	return defaultStopCommand
+}
 
 // resolveGracefulStopTimeout 返回优雅停止超时：环境变量优先（解析失败/非正忽略），否则用默认值。
 func resolveGracefulStopTimeout() time.Duration {

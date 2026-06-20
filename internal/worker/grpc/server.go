@@ -97,6 +97,7 @@ func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanc
 		req.InstanceUuid,
 		req.Name,
 		req.StartCommand,
+		req.StopCommand,
 		workDir,
 		req.EnvVars,
 		req.AutoRestart,

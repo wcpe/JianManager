@@ -16,6 +16,8 @@ import (
 // 缩短优雅停止超时，避免清理阶段 stop 等满默认 30s 导致 TempDir 被占用清理失败。
 func init() {
 	_ = os.Setenv("JIANMANAGER_GRACEFUL_STOP_TIMEOUT", "1s")
+	// 缩短重启前「等待上一代进程退出」上限，避免 daemon 启动路径用例久等。
+	_ = os.Setenv("JIANMANAGER_START_WAIT_PRIOR_EXIT_TIMEOUT", "1s")
 }
 
 // keepAliveCmd 跨平台保持存活命令（daemon 策略集成测试用）。
@@ -104,7 +106,7 @@ func TestManager_DaemonStopAllGraceful(t *testing.T) {
 	wrapperPID := rec.WrapperPID
 
 	m := NewManager(pidDir)
-	require.NoError(t, m.Create(uuid, "Daemon", keepAliveCmd(), pidDir, nil, false, ProcessTypeDaemon, "", ""))
+	require.NoError(t, m.Create(uuid, "Daemon", keepAliveCmd(), "", pidDir, nil, false, ProcessTypeDaemon, "", ""))
 	// 用 recover 接管已运行的 wrapper
 	recovered, recErr := m.RecoverDaemonInstances()
 	t.Logf("recover: recovered=%d err=%v wrapperPID=%d", recovered, recErr, wrapperPID)

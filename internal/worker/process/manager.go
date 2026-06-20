@@ -29,6 +29,8 @@ type Instance struct {
 	UUID         string
 	Name         string
 	StartCommand string
+	// StopCommand 优雅停止命令（按角色派生：MC 后端 stop / 代理 end）；空时回退默认 stop。
+	StopCommand  string
 	WorkDir      string
 	EnvVars      map[string]string
 	JDKPath      string
@@ -116,7 +118,8 @@ func (m *Manager) GetAllInstanceStates() []InstanceSnapshot {
 
 // Create 创建实例（但不启动）。processType 决定启动方式（direct/daemon/docker/rcon）。
 // jdkPath / jdkBinPath 非空时会被注入到实例启动时的环境。
-func (m *Manager) Create(uuid, name, startCommand, workDir string, envVars map[string]string, autoRestart bool, processType ProcessType, jdkPath, jdkBinPath string) error {
+// stopCommand 为优雅停止命令（按角色派生：MC 后端 stop / 代理 end），空时回退默认 stop。
+func (m *Manager) Create(uuid, name, startCommand, stopCommand, workDir string, envVars map[string]string, autoRestart bool, processType ProcessType, jdkPath, jdkBinPath string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -128,6 +131,7 @@ func (m *Manager) Create(uuid, name, startCommand, workDir string, envVars map[s
 		UUID:         uuid,
 		Name:         name,
 		StartCommand: startCommand,
+		StopCommand:  stopCommand,
 		WorkDir:      workDir,
 		EnvVars:      envVars,
 		JDKPath:      jdkPath,
@@ -202,6 +206,7 @@ func (m *Manager) Start(uuid string) error {
 			UUID:         inst.UUID,
 			Name:         inst.Name,
 			StartCommand: inst.StartCommand,
+			StopCommand:  inst.StopCommand,
 			WorkDir:      inst.WorkDir,
 			EnvVars:      inst.EnvVars,
 			JavaHome:     inst.JDKPath,

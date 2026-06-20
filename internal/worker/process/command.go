@@ -29,6 +29,9 @@ type CommandSpec struct {
 	UUID         string
 	Name         string
 	StartCommand string
+	// StopCommand 优雅停止时写入进程 stdin 的命令（按实例角色派生：MC 后端 stop / 代理 end）。
+	// 空时由策略回退到默认 "stop"。仅 daemon 策略经 stdin 优雅关服时使用。
+	StopCommand  string
 	WorkDir      string
 	EnvVars      map[string]string
 	// JavaHome 显式指定 JAVA_HOME（来自实例绑定的 JDK），非空时 Worker 会
