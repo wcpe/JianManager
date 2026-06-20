@@ -22,6 +22,7 @@ type Services struct {
 	File          *service.FileService
 	FileVersion   *service.FileVersionService
 	Plugin        *service.PluginService
+	Player        *service.PlayerService
 	Config        *service.ConfigService
 	Bot           *service.BotService
 	Alert         *service.AlertService
@@ -96,6 +97,9 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		botHandler := NewBotHandler(svcs.Bot, svcs.Authz)
 		botHandler.RegisterRoutes(protected)
+
+		playerHandler := NewPlayerHandler(svcs.Player, svcs.Authz, svcs.Audit)
+		playerHandler.RegisterRoutes(protected)
 
 		eventHandler := NewEventHandler(svcs.Event)
 		eventHandler.RegisterRoutes(protected)

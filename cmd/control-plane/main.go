@@ -93,6 +93,7 @@ func main() {
 	proxySvc := service.NewProxyService(db, pool, instanceSvc, coreSvc, registrationSvc)
 	registrationSvc.SetSyncer(proxySvc)
 	cloneSvc := service.NewCloneService(db, pool, instanceSvc, registrationSvc)
+	playerSvc := service.NewPlayerService(db, pool)
 
 	// 告警评估器：每 60s 检测节点指标，触发 Webhook 通知
 	alertEvaluator := service.NewAlertEvaluator(db)
@@ -120,6 +121,7 @@ func main() {
 		File:          fileSvc,
 		FileVersion:   fileVersionSvc,
 		Plugin:        pluginSvc,
+		Player:        playerSvc,
 		Config:        configSvc,
 		Bot:           botSvc,
 		Alert:         alertSvc,
