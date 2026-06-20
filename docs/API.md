@@ -248,6 +248,39 @@
 - **关联 FR**: FR-005
 - **请求**: `{ "command": "say hello" }`
 
+### POST /api/v1/instances/batch
+- **描述**: 按 id 列表或筛选条件批量执行操作，CP 侧信号量分片有界并发经 gRPC 委托对应 Worker（复用既有 per-instance RPC），返回成功/失败/跳过计数（FR-058）
+- **关联 FR**: FR-058
+- **权限**: `instance:operate`（资源级按可访问实例隔离）
+- **请求**:
+  ```json
+  {
+    "action": "command",
+    "ids": [1, 2, 3],
+    "filter": { "nodeId": 2, "status": "RUNNING", "role": "backend" },
+    "command": "say hello"
+  }
+  ```
+  - `action` ∈ `command` | `start` | `stop` | `restart` | `kill`
+  - 目标二选一：`ids` 或 `filter`（皆空 → 400；同时给出以 `ids` 为准）
+  - `command`：`action=command` 时必填；目标上限 5000（超出 → 400）
+  - 动作映射（复用既有 per-instance RPC）：`command`→SendCommand（仅对 RUNNING 实例）、`start/stop/restart/kill`→Start/Stop/Restart/KillInstance
+  - 生命周期动作委托结果回写终态，失败回写 CRASHED；`command` 不改实例状态
+- **响应**:
+  ```json
+  {
+    "action": "command",
+    "requested": 3,
+    "succeeded": 2,
+    "failed": 1,
+    "skipped": 0,
+    "errors": [ { "instanceId": 3, "error": "Worker node-x 未连接" } ]
+  }
+  ```
+  - `skipped`：请求 `ids` 中越权/不存在被静默剔除的数量（存在性隐藏）
+  - `failed` 仅统计 Worker 委托结果；危险操作（批量 kill/stop）前端二次确认，服务端经审计中间件留痕（`instance.batch`）
+- **错误**: 400 `INVALID_REQUEST`（action 非法 / 目标皆空 / command 缺 command / 超上限）；403 `FORBIDDEN`
+
 ### GET /api/v1/instances/:id/metrics
 - **描述**: 实例指标（TPS/玩家/内存）
 - **关联 FR**: FR-010
