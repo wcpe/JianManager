@@ -725,6 +725,8 @@
 > 本批由需求盘点拆出（见 `.tmp/brainstorm-ops-platform-expansion-2026-06-20.md`）。横切约束：**每条 FR 的验收都含 i18n(FR-016) 完整性 + 暗色/亮色主题(FR-026) 正常**。执行：地基优先 + 并行开发（`sdd-parallel-develop`，rebase 线性合并，Agent 不自标 done，逐条用户验收）。
 >
 > **验收记录（2026-06-20）**：10 条经 build 全绿（go build/vet/test、前端 tsc+vite）+ 浏览器 smoke（各页渲染无 console 错误、i18n zh/en 完整、FR-049/050 日志真实数据流端到端通）后用户验收 done。**真机复验（2026-06-20，真 Paper 1.21 + RCON + 平台 CP/Worker）**：① FR-054 发现并修复 RCON 鉴权包类型 bug（误用类型 2 致 kick/ban/whitelist 形同空操作），修复后真机踢出在线 Bot 成功（commit d1314b5）；② FR-056 发现并修复运行中实例备份因 world/session.lock 独占锁整体失败，修复后真机打包 186 文件/170MB 成功（commit 52a13c9）；③ FR-103 插件桥以真实 WS 客户端验证 token 鉴权+会话+CP 连接中转（真 Bukkit/BC Java 插件需 Maven+JDK17 构建，本环境缺，未构建）；④ FR-057 远程存储后端 S3/WebDAV/SFTP 经单测覆盖，真实 S3/SFTP/WebDAV 端点本环境不可达、live 传输未做。FR-059 已全量迁移至 DangerConfirm，移除 ConfirmDialog。
+>
+> **验收记录（2026-06-21，ServerProbe 监控探针 epic）**：用 ServerProbe 子模块取代自写插件桥作监控探针（ADR-014 取代 ADR-012）。**真机全链路 E2E（真 CP+Worker + 真 Paper 1.21.1，独立 data-e2e）**：经 CP `provision/bukkit` 建服 → 自动下发探针 jar(937KB)+生成 config.yml（metrics 开启于系统分配 probe 端口 29940）→ 实例启动后 ServerProbe `/metrics` 就绪 → CP `GET /instances/:id/metrics` 返回富指标(probeAvailable=true) → 浏览器实例详情页渲染 TPS=20.00/MSPT=0.17ms/内存 706·1024MB/线程 59/CPU 6.1%/运行时长/三世界负载表，无 console 错误、侧栏无残留「插件桥」入口。用户验收：① FR-010 富指标增强 done；② FR-103 / FR-055 确认退役（deprecated）。FR-057 真传补验经用户决定转 backlog（本机无 MinIO/SFTP/WebDAV 服务端）。
 
 ### FR-046: Sponge 子服支持
 - **状态**: 📋 todo
