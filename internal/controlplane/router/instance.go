@@ -35,23 +35,28 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		return
 	}
 
-	var nodeID *uint
+	// 多维筛选（FR-047）：节点/状态/角色/群组/环境/标签任意组合。
+	filter := service.InstanceFilter{
+		Env: c.Query("env"),
+		Tag: c.Query("tag"),
+	}
 	if v := c.Query("nodeId"); v != "" {
 		id, _ := strconv.ParseUint(v, 10, 64)
 		u := uint(id)
-		nodeID = &u
+		filter.NodeID = &u
 	}
-
-	var status *model.InstanceStatus
 	if v := c.Query("status"); v != "" {
 		s := model.InstanceStatus(v)
-		status = &s
+		filter.Status = &s
 	}
-
-	var role *model.InstanceRole
 	if v := c.Query("role"); v != "" {
 		r := model.InstanceRole(v)
-		role = &r
+		filter.Role = &r
+	}
+	if v := c.Query("networkId"); v != "" {
+		id, _ := strconv.ParseUint(v, 10, 64)
+		u := uint(id)
+		filter.NetworkID = &u
 	}
 
 	// 非平台管理员强制按其可访问组过滤，忽略前端传入的 groupId
@@ -61,7 +66,7 @@ func (h *InstanceHandler) List(c *gin.Context) {
 			c.JSON(http.StatusOK, []interface{}{})
 			return
 		}
-		instances, err := h.instanceSvc.ListByGroups(nodeID, status, groupIDs, role)
+		instances, err := h.instanceSvc.ListByGroups(groupIDs, filter)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询实例列表失败"})
 			return
@@ -70,14 +75,13 @@ func (h *InstanceHandler) List(c *gin.Context) {
 		return
 	}
 
-	var groupID *uint
 	if v := c.Query("groupId"); v != "" {
 		id, _ := strconv.ParseUint(v, 10, 64)
 		u := uint(id)
-		groupID = &u
+		filter.GroupID = &u
 	}
 
-	instances, err := h.instanceSvc.List(nodeID, status, groupID, role)
+	instances, err := h.instanceSvc.List(filter)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询实例列表失败"})
 		return
@@ -184,12 +188,14 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 }
 
 type updateInstanceRequest struct {
-	Name         *string             `json:"name"`
-	StartCommand *string             `json:"startCommand"`
-	AutoStart    *bool               `json:"autoStart"`
-	AutoRestart  *bool               `json:"autoRestart"`
-	JDKID        *uint               `json:"jdkId"`
-	EnvVars      *map[string]string  `json:"envVars"`
+	Name         *string            `json:"name"`
+	StartCommand *string            `json:"startCommand"`
+	AutoStart    *bool              `json:"autoStart"`
+	AutoRestart  *bool              `json:"autoRestart"`
+	JDKID        *uint              `json:"jdkId"`
+	EnvVars      *map[string]string `json:"envVars"`
+	// Tags 环境/标签维度（FR-047）：传 null/缺省不变，传数组（含空数组）覆盖。
+	Tags *[]string `json:"tags"`
 }
 
 // Update 更新实例配置。
@@ -210,7 +216,15 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 		return
 	}
 
-	instance, err := h.instanceSvc.Update(id, req.Name, req.StartCommand, req.AutoStart, req.AutoRestart, req.JDKID, req.EnvVars)
+	instance, err := h.instanceSvc.Update(id, service.UpdateInstanceFields{
+		Name:         req.Name,
+		StartCommand: req.StartCommand,
+		AutoStart:    req.AutoStart,
+		AutoRestart:  req.AutoRestart,
+		JDKID:        req.JDKID,
+		EnvVars:      req.EnvVars,
+		Tags:         req.Tags,
+	})
 	if err != nil {
 		if errors.Is(err, service.ErrInstanceNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})

@@ -196,33 +196,82 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 	return instance, nil
 }
 
-// List 返回实例列表，支持按节点、状态、组、角色过滤。
-func (s *InstanceService) List(nodeID *uint, status *model.InstanceStatus, groupID *uint, role *model.InstanceRole) ([]model.Instance, error) {
-	var instances []model.Instance
-	q := s.db.Model(&model.Instance{})
+// InstanceFilter 聚合实例列表的多维筛选条件（FR-047）。
+// 各字段为零值（nil / 空串）时表示该维度不参与过滤；多维之间为 AND 组合。
+// 群组(NetworkID)、节点/状态/角色/组用 DB 侧过滤；环境(Env)/标签(Tag)因 Tags 以
+// JSON 字符串存储，DB 侧用 LIKE 粗筛，最终由应用层精确校验（避免子串误命中）。
+type InstanceFilter struct {
+	NodeID    *uint
+	Status    *model.InstanceStatus
+	GroupID   *uint
+	Role      *model.InstanceRole
+	NetworkID *uint
+	Env       string
+	Tag       string
+}
 
-	if nodeID != nil {
-		q = q.Where("node_id = ?", *nodeID)
+// applyDBFilters 把可下推到 DB 的筛选条件附加到查询上。
+// 表名前缀统一用 instances.，兼容携带 JOIN 的查询。
+func applyDBFilters(q *gorm.DB, f InstanceFilter) *gorm.DB {
+	if f.NodeID != nil {
+		q = q.Where("instances.node_id = ?", *f.NodeID)
 	}
-	if status != nil {
-		q = q.Where("status = ?", *status)
+	if f.Status != nil {
+		q = q.Where("instances.status = ?", *f.Status)
 	}
-	if role != nil {
-		q = q.Where("role = ?", *role)
+	if f.Role != nil {
+		q = q.Where("instances.role = ?", *f.Role)
 	}
-	if groupID != nil {
+	if f.NetworkID != nil {
+		// 群组是 M:N 软标签（ADR-007）：经 network_members 关联过滤。
+		q = q.Joins("JOIN network_members ON network_members.instance_id = instances.id").
+			Where("network_members.network_id = ?", *f.NetworkID)
+	}
+	// 环境/标签：DB 侧用 LIKE 缩小候选集，精确判定交给应用层（filterByTags）。
+	if env := strings.TrimSpace(f.Env); env != "" {
+		q = q.Where("instances.tags LIKE ?", "%"+model.EnvTagPrefix+env+"%")
+	}
+	if tag := strings.TrimSpace(f.Tag); tag != "" {
+		q = q.Where("instances.tags LIKE ?", "%"+tag+"%")
+	}
+	return q
+}
+
+// filterByTags 对 DB 粗筛后的实例做环境/标签精确过滤。
+// DB LIKE 仅缩小范围，可能误命中子串（如标签 `production` 命中 env 过滤 `prod`），
+// 故按解析后的标签集合精确判定。Env/Tag 均空时原样返回。
+func filterByTags(instances []model.Instance, env, tag string) []model.Instance {
+	if strings.TrimSpace(env) == "" && strings.TrimSpace(tag) == "" {
+		return instances
+	}
+	out := make([]model.Instance, 0, len(instances))
+	for _, inst := range instances {
+		tags := model.ParseTags(inst.Tags)
+		if model.MatchEnv(tags, env) && model.MatchTag(tags, tag) {
+			out = append(out, inst)
+		}
+	}
+	return out
+}
+
+// List 返回实例列表，支持按节点/状态/组/角色/群组/环境/标签多维组合过滤（FR-047）。
+func (s *InstanceService) List(f InstanceFilter) ([]model.Instance, error) {
+	var instances []model.Instance
+	q := applyDBFilters(s.db.Model(&model.Instance{}), f)
+	if f.GroupID != nil {
 		q = q.Joins("JOIN group_instances ON group_instances.instance_id = instances.id").
-			Where("group_instances.group_id = ?", *groupID)
+			Where("group_instances.group_id = ?", *f.GroupID)
 	}
 
 	if err := q.Find(&instances).Error; err != nil {
 		return nil, fmt.Errorf("查询实例列表失败: %w", err)
 	}
-	return instances, nil
+	return filterByTags(instances, f.Env, f.Tag), nil
 }
 
 // ListByGroups 返回指定组集合内的实例列表，用于非平台管理员的权限过滤。
-func (s *InstanceService) ListByGroups(nodeID *uint, status *model.InstanceStatus, groupIDs []uint, role *model.InstanceRole) ([]model.Instance, error) {
+// 在权限组约束之上叠加 InstanceFilter 的多维筛选（FR-047）。
+func (s *InstanceService) ListByGroups(groupIDs []uint, f InstanceFilter) ([]model.Instance, error) {
 	if len(groupIDs) == 0 {
 		return []model.Instance{}, nil
 	}
@@ -230,21 +279,12 @@ func (s *InstanceService) ListByGroups(nodeID *uint, status *model.InstanceStatu
 	q := s.db.Model(&model.Instance{}).
 		Joins("JOIN group_instances ON group_instances.instance_id = instances.id").
 		Where("group_instances.group_id IN ?", groupIDs)
-
-	if nodeID != nil {
-		q = q.Where("instances.node_id = ?", *nodeID)
-	}
-	if status != nil {
-		q = q.Where("instances.status = ?", *status)
-	}
-	if role != nil {
-		q = q.Where("instances.role = ?", *role)
-	}
+	q = applyDBFilters(q, f)
 
 	if err := q.Find(&instances).Error; err != nil {
 		return nil, fmt.Errorf("查询实例列表失败: %w", err)
 	}
-	return instances, nil
+	return filterByTags(instances, f.Env, f.Tag), nil
 }
 
 // GetByID 按 ID 获取实例。
@@ -259,34 +299,51 @@ func (s *InstanceService) GetByID(id uint) (*model.Instance, error) {
 	return &instance, nil
 }
 
-// Update 更新实例配置。
-// jdkId == 0 时表示不变；envVars == nil 时表示不变。
-func (s *InstanceService) Update(id uint, name, startCommand *string, autoStart, autoRestart *bool, jdkID *uint, envVars *map[string]string) (*model.Instance, error) {
+// UpdateInstanceFields 实例可更新字段（nil 表示不变）。
+// tags 用于环境/标签多维分组（FR-047）：写入前规范化（去空/去重/保序），
+// 环境维度复用 `env:` 前缀标签，不单独建字段。
+type UpdateInstanceFields struct {
+	Name         *string
+	StartCommand *string
+	AutoStart    *bool
+	AutoRestart  *bool
+	JDKID        *uint
+	EnvVars      *map[string]string
+	Tags         *[]string
+}
+
+// Update 更新实例配置。各字段为 nil 时表示不变。
+func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instance, error) {
 	instance, err := s.GetByID(id)
 	if err != nil {
 		return nil, err
 	}
 
 	updates := map[string]interface{}{}
-	if name != nil {
-		updates["name"] = *name
+	if f.Name != nil {
+		updates["name"] = *f.Name
 	}
-	if startCommand != nil {
-		sanitized := sanitizeStartCommand(*startCommand)
+	if f.StartCommand != nil {
+		sanitized := sanitizeStartCommand(*f.StartCommand)
 		updates["start_command"] = sanitized
 	}
-	if autoStart != nil {
-		updates["auto_start"] = *autoStart
+	if f.AutoStart != nil {
+		updates["auto_start"] = *f.AutoStart
 	}
-	if autoRestart != nil {
-		updates["auto_restart"] = *autoRestart
+	if f.AutoRestart != nil {
+		updates["auto_restart"] = *f.AutoRestart
 	}
-	if jdkID != nil {
-		updates["jdk_id"] = *jdkID
+	if f.JDKID != nil {
+		updates["jdk_id"] = *f.JDKID
 	}
-	if envVars != nil {
-		raw, _ := json.Marshal(*envVars)
+	if f.EnvVars != nil {
+		raw, _ := json.Marshal(*f.EnvVars)
 		updates["env_vars"] = string(raw)
+	}
+	if f.Tags != nil {
+		// 规范化后持久化为 JSON；空集合落 "null"，ParseTags 读回为空，等价清空标签。
+		raw, _ := json.Marshal(model.NormalizeTags(*f.Tags))
+		updates["tags"] = string(raw)
 	}
 
 	if len(updates) > 0 {
