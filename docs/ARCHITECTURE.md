@@ -267,7 +267,7 @@ AlertRule ──1:N──▶ AlertEvent
 | groups | uuid, name, description |
 | group_members | group_id, user_id, role(0=member/1=admin) |
 | group_quotas | group_id(UNIQUE), max_instances, max_bots, max_storage_mb |
-| nodes | uuid, name, host, grpc_port, ws_port, secret, status(0/1/2), os, arch, cpu_cores, memory_mb, disk_total_mb, last_heartbeat |
+| nodes | uuid, name, host, grpc_port, ws_port, secret, status(0/1/2), maintenance(bool, cordon 维护模式，与在线/离线正交), os, arch, cpu_cores, memory_mb, disk_total_mb, last_heartbeat |
 | instances | uuid, node_id(FK), name, type, role(proxy/backend/universal, V2), process_type, status, start_command, work_dir(系统分配), env_vars(JSON), auto_start, auto_restart, jdk_id(FK, V2), launch_spec(JSON: jvm_args/core_jar/args/omit_nogui, V2), docker_*, rcon_*, forwarding_secret(V2, Velocity 转发), proxy_online_mode(V2, 代理正版校验), server_port/query_port, mc_*, tags(JSON) |
 | group_instances | group_id, instance_id(UNIQUE) |
 | bots | uuid, instance_id(FK), name, status, config(JSON), behavior, worker_id |

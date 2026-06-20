@@ -171,10 +171,26 @@
 - **描述**: 节点详情（含资源使用率）
 - **关联 FR**: FR-004
 
+### POST /api/v1/nodes/:id/maintenance
+- **描述**: 置/解节点维护模式（cordon）。维护中拒绝新实例调度到该节点，与在线/离线状态正交
+- **关联 FR**: FR-048
+- **权限**: 平台管理员
+- **请求**: `{ enabled: bool }`
+- **响应**: 更新后的节点对象（含 `maintenance`）
+- **审计**: `node.maintenance`
+
+### POST /api/v1/nodes/:id/drain
+- **描述**: 排空节点——停止其上所有 RUNNING 实例（复用实例停止 gRPC，不做迁移）。STARTING 为瞬态不强停
+- **关联 FR**: FR-048
+- **权限**: 平台管理员（危险操作，前端二次确认）
+- **响应**: `{ stoppedCount, stopped: [id], failed: [id], errors?: [string] }`
+- **审计**: `node.drain`
+
 ### DELETE /api/v1/nodes/:id
-- **描述**: 删除节点（离线时）
-- **关联 FR**: FR-004
-- **权限**: `node.delete`
+- **描述**: 主动下线节点：解除注册并保留记录（软删除），复连需重新注册。节点在线时拒绝（422）
+- **关联 FR**: FR-004, FR-048
+- **权限**: 平台管理员（危险操作，前端二次确认）
+- **审计**: `node.delete`
 
 ### GET /api/v1/nodes/:id/metrics
 - **描述**: 节点指标（CPU/内存/磁盘时间序列）
