@@ -22,6 +22,8 @@
 - **危险操作保护体系化**（FR-059）：统一 `DangerConfirm` 组件收敛全部破坏性二次确认——高危操作（删实例/删用户）要求输入资源名逐字校验，角色门禁按范围（组管理员/平台管理员）禁用越权确认并提示（前端 UI 拦截，最终拒绝仍由后端 RBAC 强制）。接入删实例/删用户/删群组/删备份/恢复备份/删 Bot/批量停止·删除 Bot 等现有入口；补齐删备份此前缺失的二次确认；删除被取代的 ConfirmDialog。i18n(zh+en) + 暗/亮色主题
 
 ### Fixed
+- **RCON 鉴权包类型错误**（FR-054 / FR-022）：RCON 客户端鉴权帧误用类型 2(EXECCOMMAND) 而非 3(SERVERDATA_AUTH)，连接从未鉴权、命令被服务端在鉴权前拒绝却被上报为成功——kick/ban/whitelist 及指标 RCON 形同空操作；改用类型 3 发送鉴权并校验响应 requestID != -1（密码错/被拒时报错）。真机复验 FR-054 发现，修复后真服踢出在线玩家成功，补假 RCON 服务端回归测试
+- **运行中实例备份失败**（FR-056）：备份打包未排除 `world/session.lock`，运行中的服务端对其持有独占锁，Windows 上读取报「另一进程锁定文件」导致整次备份失败（0 字节）；改为排除 session.lock/logs/cache/usercache.json/*.pid 等运行态文件（与 FR-036 一键复制一致）。真机复验发现，修复后对运行中真 Paper 打包 186 文件/170MB 成功，补回归测试
 - **代理 daemon 停止缺陷**（FR-035 / FR-006）：daemon 优雅停止此前硬编码向 stdin 发 MC `stop`，代理（BungeeCord/Waterfall/Velocity）不认该命令而一直挂到超时才强杀，超时窗口内重启时旧进程仍占监听端口致新进程端口冲突崩溃（`exit status 1`）；改为 CP 按实例角色派生停止命令（后端/通用 `stop`、代理 `end`）经 `CreateInstance.stop_command` 下发并烤进 wrapper 配置（空值回退 `stop`）。并在 daemon 重启前按 PID 文件等待上一代 wrapper/Java 完全退出（`WaitForPriorExit`，`JIANMANAGER_START_WAIT_PRIOR_EXIT_TIMEOUT` 可覆盖），消除快速 stop→start 的端口竞态；修复重启复用同一 strategy 时陈旧 reaper 误改新实例状态；修复 daemon `Kill` 在 Windows 上仅杀 wrapper 进程、致 Java 孤儿化继续占监听端口（重启 `Kill`+`Start` 时新进程 `java.net.BindException` 崩溃），改用 `taskkill /T` 终止整棵进程树
 
 ---

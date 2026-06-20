@@ -722,7 +722,7 @@
 
 > 本批由需求盘点拆出（见 `.tmp/brainstorm-ops-platform-expansion-2026-06-20.md`）。横切约束：**每条 FR 的验收都含 i18n(FR-016) 完整性 + 暗色/亮色主题(FR-026) 正常**。执行：地基优先 + 并行开发（`sdd-parallel-develop`，rebase 线性合并，Agent 不自标 done，逐条用户验收）。
 >
-> **验收记录（2026-06-20）**：10 条经 build 全绿（go build/vet/test、前端 tsc+vite）+ 浏览器 smoke（各页渲染无 console 错误、i18n zh/en 完整、FR-049/050 日志真实数据流端到端通）后用户验收 done。**待真机复验**：FR-054（RCON 真服踢/封）、FR-103（插件桥 WS 真连+Java 插件）、FR-056/057（真实例增量 + 远程 S3/SFTP/WebDAV 传输）的真机功能未在本轮验证，建议接真实 MC/对象存储环境复验后再用于生产。FR-059 已全量迁移至 DangerConfirm，移除 ConfirmDialog。
+> **验收记录（2026-06-20）**：10 条经 build 全绿（go build/vet/test、前端 tsc+vite）+ 浏览器 smoke（各页渲染无 console 错误、i18n zh/en 完整、FR-049/050 日志真实数据流端到端通）后用户验收 done。**真机复验（2026-06-20，真 Paper 1.21 + RCON + 平台 CP/Worker）**：① FR-054 发现并修复 RCON 鉴权包类型 bug（误用类型 2 致 kick/ban/whitelist 形同空操作），修复后真机踢出在线 Bot 成功（commit d1314b5）；② FR-056 发现并修复运行中实例备份因 world/session.lock 独占锁整体失败，修复后真机打包 186 文件/170MB 成功（commit 52a13c9）；③ FR-103 插件桥以真实 WS 客户端验证 token 鉴权+会话+CP 连接中转（真 Bukkit/BC Java 插件需 Maven+JDK17 构建，本环境缺，未构建）；④ FR-057 远程存储后端 S3/WebDAV/SFTP 经单测覆盖，真实 S3/SFTP/WebDAV 端点本环境不可达、live 传输未做。FR-059 已全量迁移至 DangerConfirm，移除 ConfirmDialog。
 
 ### FR-046: Sponge 子服支持
 - **状态**: 📋 todo
