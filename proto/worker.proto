@@ -130,11 +130,29 @@ message HeartbeatRequest {
   repeated InstanceState instances = 7;  // 实例状态快照
   int64 network_bytes_sent = 8;  // 累计网络发送字节
   int64 network_bytes_recv = 9;  // 累计网络接收字节
+  repeated InstanceMetricSample instance_metrics = 10;  // 每实例 ServerProbe 快照（FR-060 时序）
 }
 
 message InstanceState {
   string instance_uuid = 1;
   string state = 2; // STOPPED, STARTING, RUNNING, STOPPING, CRASHED
+}
+
+// InstanceMetricSample 心跳负载里携带的每实例 ServerProbe 指标快照（FR-060 时序留存）。
+// probe_available=false 表示探针不可用（回退 RCON 或缺测），相应字段为零值。
+// 复用下方 WorldMetric 承载分世界负载。
+message InstanceMetricSample {
+  string instance_uuid = 1;
+  bool probe_available = 2;
+  double tps = 3;
+  double mspt_millis = 4;
+  int32 players_online = 5;
+  int64 heap_used_bytes = 6;
+  int64 heap_max_bytes = 7;
+  int32 threads = 8;
+  double cpu_load = 9;        // 0~1 系统 CPU；<0 不可用
+  double uptime_seconds = 10;
+  repeated WorldMetric worlds = 11;
 }
 
 message HeartbeatResponse {
