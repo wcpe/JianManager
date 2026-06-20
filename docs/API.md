@@ -692,6 +692,42 @@
 
 ---
 
+## 日志中心（FR-049）
+
+> 实例运行日志（stdout/stderr）与平台结构化日志统一持久化、检索与导出。过滤与分页在 DB 完成，不全量序列化。
+
+### GET /api/v1/logs
+- **描述**: 分页查询日志
+- **关联 FR**: FR-049, FR-050
+- **权限**: 所有认证用户。平台管理员可见全部（实例 + 平台日志）；组成员/组管理员仅见有权实例日志，平台日志对其隐藏（强制 `source=instance` 并按可访问实例集合收敛）
+- **Query**: `?source=instance&level=error&instanceId=12&nodeId=3&keyword=NPE&from=2026-01-01T00:00:00Z&to=2026-12-31T23:59:59Z&page=1&pageSize=50`
+- **参数说明**:
+  - `source`: `instance` / `control_plane` / `worker`
+  - `level`: `debug` / `info` / `warn` / `error`
+  - `keyword`: 在 message 上做 DB 侧 LIKE 检索
+  - `from`/`to`: RFC3339 时间，按日志产生时间筛选
+  - `page`（默认 1）/`pageSize`（默认 50，上限 500）
+- **响应**:
+```json
+{
+  "items": [
+    { "id": 1, "source": "instance", "level": "info", "instanceId": 12, "instanceUuid": "...", "nodeId": 3, "stream": "stdout", "message": "Done (3.2s)! For help, type \"help\"", "time": "2026-06-20T12:00:00Z" }
+  ],
+  "total": 1,
+  "page": 1,
+  "pageSize": 50
+}
+```
+
+### GET /api/v1/logs/export
+- **描述**: 按当前筛选导出日志为 NDJSON 附件（每行一条 JSON，按时间正序）
+- **关联 FR**: FR-049, FR-050
+- **权限**: 同 `GET /logs`（同样的可见性收敛）
+- **Query**: 同 `GET /logs` 的筛选参数；额外 `limit`（最大导出行数，默认/上限 50000）。分页参数忽略
+- **响应**: `Content-Type: application/x-ndjson`，`Content-Disposition: attachment`
+
+---
+
 ## 错误码
 
 | HTTP | 含义 |

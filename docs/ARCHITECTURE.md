@@ -163,6 +163,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 实例操作：CreateInstance, StartInstance, StopInstance, RestartInstance, KillInstance, SendCommand, GetInstanceStatus, ListInstances
   - `CreateInstance` 除 `start_command` 外携带 `stop_command`（优雅停止命令，CP 按实例角色派生：backend/universal=`stop`，proxy=`end`），由 daemon wrapper 在优雅停止时写入进程 stdin
 - 实例事件流：StreamInstanceEvents (server stream)
+  - 同一流承载两类事件：`state_change`（状态转换）与 `stdout`/`stderr`（进程输出）。Worker 进程输出回调分流为「WS 终端广播 + 事件流上报」两路，互不阻塞。CP 侧 EventService 把 `stdout`/`stderr` 经 LogService 落库（日志中心 FR-049），`state_change` 经 SSE 推前端
 - 文件操作：ListFiles, ReadFile, WriteFile, DeleteFile, UploadFile (client stream), DownloadFile (server stream)
 - 终端：IssueTerminalToken
 - Bot：CreateBot, DeleteBot, ListBots, StreamBotEvents (server stream), SendBotCommand
@@ -282,6 +283,7 @@ AlertRule ──1:N──▶ AlertEvent
 | node_jdks (V2) | node_id(FK), vendor, major_version, version, arch, path, managed(下载/登记) |
 | instance_config_versions (V2) | instance_id(FK), file_path, content, author, created_at |
 | assets | type(core/plugin/image/video/archive/blob), name, version, filename, sha256(寻址+去重键), md5, size, content_type, source_url, metadata(JSON), storage_state(hot/archived/external), storage_backend, ref_count, rel_path(相对数据根), created_at, last_used_at；UNIQUE(type,sha256) |
+| logs (FR-049) | source(instance/control_plane/worker), level(debug/info/warn/error), instance_id, instance_uuid, node_id, stream(stdout/stderr), message, time；复合索引 (source,time)/(level,time)/(instance_id,time)/(node_id,time)，关键字检索走 message 列谓词 |
 
 ### 数据库切换
 
@@ -658,8 +660,21 @@ STOPPED → STARTING → RUNNING → STOPPING → STOPPED
 
 ## 11. 配置
 
-**Control Plane**: `control-plane.yaml` — server port, gRPC port, database, JWT secret（管理员账号通过首次启动 Web 引导创建，见 FR-017）
+**Control Plane**: `control-plane.yaml` — server port, gRPC port, database, JWT secret（管理员账号通过首次启动 Web 引导创建，见 FR-017）；`log_store`（日志中心，FR-049）
 **Worker Node**: `worker.yaml` — node name, Control Plane address, gRPC/WS ports, data_dir, Docker, Bot 配置
+
+`log_store`（日志持久化/归档/保留，均有默认值，零配置即用）：
+
+```yaml
+log_store:
+  enabled: true                 # 是否启用日志入库与归档
+  persist_platform: true        # 平台结构化日志是否一并落库
+  retention_days: 14            # 保留天数，<=0 不按时间清理
+  max_total_mb: 512             # 表内日志总量上限(MB)，<=0 不按总量清理
+  archive_interval_minutes: 30  # 后台归档/保留巡检周期
+```
+
+归档目录恒为数据根 `var/log`（不可配，保证便携自洽）：超阈值的旧日志按 NDJSON（`logs-YYYY-MM-DD.ndjson`）滚动落盘后从表中清理。
 
 ### 11.1 项目自包含数据根（FHS 布局，ADR-010）
 

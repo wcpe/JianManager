@@ -19,3 +19,11 @@ jwt:
 log:
   level: debug
   format: text
+
+# 日志中心：持久化、归档与保留（FR-049）。均有默认值，可整体省略。
+log_store:
+  enabled: true                 # 是否启用日志入库与归档
+  persist_platform: true        # 平台结构化日志是否一并落库
+  retention_days: 14            # 保留天数，<=0 不按时间清理
+  max_total_mb: 512             # 表内日志总量上限(MB)，<=0 不按总量清理
+  archive_interval_minutes: 30  # 后台归档/保留巡检周期（分钟）
