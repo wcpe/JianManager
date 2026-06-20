@@ -186,8 +186,15 @@ func runWorker() {
 		}
 	})
 
+	// 插件桥 WS 服务器（FR-103 / ADR-012）：平台插件经 /ws/plugin-bridge 连入，
+	// 与终端 WS 复用同一监听端口；token 用同一 CP 签名密钥校验。
+	// 注入 gRPC Server：插件事件经 StreamPluginEvents 冒泡给 CP，指令经 SendPluginCommand 下发。
+	pluginBridge := ws.NewPluginBridgeServer(jwtSecret)
+	workerServer.SetPluginBridge(pluginBridge)
+
 	wsMux := http.NewServeMux()
 	wsMux.HandleFunc("/ws/terminal", terminalServer.Handler())
+	wsMux.HandleFunc("/ws/plugin-bridge", pluginBridge.Handler())
 
 	wsAddr := fmt.Sprintf(":%d", wsPort)
 	wsServer := &http.Server{Addr: wsAddr, Handler: wsMux}

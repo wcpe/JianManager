@@ -52,6 +52,13 @@ type Server struct {
 	// eventMu 保护 eventSubs，StreamInstanceEvents 订阅/取消订阅时加锁。
 	eventMu   sync.Mutex
 	eventSubs []chan instanceEvent
+
+	// pluginBridge 插件桥 WS 服务器（FR-103 / ADR-012）。为 nil 表示本节点未启用插件桥，
+	// SendPluginCommand 返回明确错误、StreamPluginEvents 仍可订阅（永不收到事件）。由 SetPluginBridge 注入。
+	pluginBridge pluginBridgeBroker
+	// pluginEventMu 保护 pluginEventSubs，StreamPluginEvents 订阅/取消订阅时加锁。
+	pluginEventMu   sync.Mutex
+	pluginEventSubs []chan pluginBridgeEvent
 }
 
 // NewServer 创建 Worker gRPC 服务器。
