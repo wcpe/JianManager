@@ -52,6 +52,10 @@ service WorkerService {
   rpc GetNodeMetrics(GetNodeMetricsRequest) returns (GetNodeMetricsResponse);
   // GetInstanceMetrics 获取实例指标。
   rpc GetInstanceMetrics(GetInstanceMetricsRequest) returns (GetInstanceMetricsResponse);
+  // ExecRconCommand 经实例 RCON 执行一条命令并返回原始输出（FR-054 玩家管理）。
+  // RCON 端口/密码由 Control Plane 从 DB 取出后随请求下发（Worker 不碰 DB），
+  // Worker 连接 localhost:rcon_port 执行命令。RCON 不可用时返回 available=false 优雅降级。
+  rpc ExecRconCommand(ExecRconCommandRequest) returns (ExecRconCommandResponse);
 
   // === JDK 管理 ===
 
@@ -392,6 +396,23 @@ message GetInstanceMetricsResponse {
   float tps = 1;
   int32 online_players = 2;
   int64 memory_mb = 3;
+}
+
+// === RCON 命令（FR-054 玩家管理） ===
+
+message ExecRconCommandRequest {
+  string instance_uuid = 1;
+  string command = 2;
+  // RCON 连接参数由 CP 从 DB 取出后下发，避免 Worker 访问数据库。
+  int32 rcon_port = 3;
+  string rcon_password = 4;
+}
+
+message ExecRconCommandResponse {
+  // available 为 false 表示 RCON 不可用（未配置/连接失败/实例未运行），调用方据此优雅降级。
+  bool available = 1;
+  string output = 2;
+  string error = 3;
 }
 
 // === Bot 操作 ===
