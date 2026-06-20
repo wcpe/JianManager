@@ -16,6 +16,7 @@ function inst(id: number, nodeId: number, status = 'RUNNING'): InstanceInfo {
     workDir: '',
     autoStart: false,
     autoRestart: false,
+    tags: null,
     createdAt: '',
   }
 }

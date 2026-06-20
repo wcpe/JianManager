@@ -18,11 +18,27 @@ export interface InstanceInfo {
   serverPort: number
   autoStart: boolean
   autoRestart: boolean
+  /** 标签集合（FR-047）：环境维度复用 `env:` 前缀（如 `env:prod`），其余为自由标签。 */
+  tags: string[] | null
   createdAt: string
 }
 
+/** 实例列表多维筛选参数（FR-047）：任意组合，留空表示该维度不过滤。 */
+export interface InstanceListParams {
+  nodeId?: number
+  status?: string
+  groupId?: number
+  role?: string
+  /** 群组（Network）ID。 */
+  networkId?: number
+  /** 环境维度（dev/test/prod），对应 `env:` 前缀标签。 */
+  env?: string
+  /** 单个自由标签精确匹配。 */
+  tag?: string
+}
+
 /** 获取实例列表（有过过渡状态实例时自动轮询）。 */
-export function useInstances(params?: { nodeId?: number; status?: string; groupId?: number; role?: string }) {
+export function useInstances(params?: InstanceListParams) {
   return useQuery({
     queryKey: ['instances', params],
     queryFn: async () => {
@@ -110,6 +126,33 @@ export function useKillInstance() {
     },
     onError: (err: Error & { response?: { data?: { message?: string } } }) => {
       toast.error(err.response?.data?.message || '终止失败')
+    },
+  })
+}
+
+/** 可更新的实例字段（FR-047 新增 tags：环境/标签维度）。 */
+export interface UpdateInstanceBody {
+  name?: string
+  startCommand?: string
+  autoStart?: boolean
+  autoRestart?: boolean
+  jdkId?: number
+  /** 传数组（含空数组）覆盖标签；不传则不变。 */
+  tags?: string[]
+}
+
+/** 更新实例配置（含标签）。 */
+export function useUpdateInstance() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, body }: { id: number; body: UpdateInstanceBody }) =>
+      api.put<InstanceInfo>(`/instances/${id}`, body).then((r) => r.data),
+    onSuccess: (_data, { id }) => {
+      qc.invalidateQueries({ queryKey: ['instances'] })
+      qc.invalidateQueries({ queryKey: ['instances', id] })
+    },
+    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
+      toast.error(err.response?.data?.message || '更新失败')
     },
   })
 }
