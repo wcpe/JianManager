@@ -80,6 +80,7 @@ func (p *ProvisionService) ProvisionBukkit(ctx context.Context, req ProvisionBuk
 		ServerPort:   ports.ServerPort,
 		RCONPort:     ports.RCONPort,
 		QueryPort:    ports.QueryPort,
+		ProbePort:    ports.ProbePort,
 		RCONPassword: randRCONPassword(),
 		AutoRestart:  true,
 		GroupID:      req.GroupID,

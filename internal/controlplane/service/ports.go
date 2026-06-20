@@ -13,7 +13,8 @@ import (
 const (
 	serverPortBase = 25565
 	rconPortBase   = 25575
-	portRangeSize  = 2000 // 每个起点向上探测的端口数
+	probePortBase  = 29940 // ServerProbe /metrics 端口起点（FR-010），避开 server/rcon 段
+	portRangeSize  = 2000  // 每个起点向上探测的端口数
 )
 
 // AllocatedPorts 为新 MC 实例分配的端口集合。
@@ -21,6 +22,7 @@ type AllocatedPorts struct {
 	ServerPort int
 	RCONPort   int
 	QueryPort  int
+	ProbePort  int
 }
 
 // PortRanges 描述端口池的分配范围，用于前端展示与冲突预检。
@@ -50,6 +52,7 @@ type PortUsage struct {
 	ServerPort int                `json:"serverPort"`
 	RCONPort   int                `json:"rconPort"`
 	QueryPort  int                `json:"queryPort"`
+	ProbePort  int                `json:"probePort"`
 }
 
 // NodePortUsage 返回某节点上各实例的端口占用（系统分配端口的可视化，FR-032）。
@@ -61,7 +64,7 @@ func NodePortUsage(db *gorm.DB, nodeID uint) ([]PortUsage, error) {
 	}
 	usage := make([]PortUsage, 0, len(instances))
 	for _, in := range instances {
-		if in.ServerPort == 0 && in.RCONPort == 0 && in.QueryPort == 0 {
+		if in.ServerPort == 0 && in.RCONPort == 0 && in.QueryPort == 0 && in.ProbePort == 0 {
 			continue
 		}
 		usage = append(usage, PortUsage{
@@ -71,6 +74,7 @@ func NodePortUsage(db *gorm.DB, nodeID uint) ([]PortUsage, error) {
 			ServerPort: in.ServerPort,
 			RCONPort:   in.RCONPort,
 			QueryPort:  in.QueryPort,
+			ProbePort:  in.ProbePort,
 		})
 	}
 	return usage, nil
@@ -87,7 +91,7 @@ func allocPortsForNode(db *gorm.DB, nodeID uint) (AllocatedPorts, error) {
 
 	used := make(map[int]bool)
 	for _, in := range instances {
-		for _, p := range []int{in.ServerPort, in.RCONPort, in.QueryPort} {
+		for _, p := range []int{in.ServerPort, in.RCONPort, in.QueryPort, in.ProbePort} {
 			if p > 0 {
 				used[p] = true
 			}
@@ -112,5 +116,9 @@ func allocPortsForNode(db *gorm.DB, nodeID uint) (AllocatedPorts, error) {
 	if err != nil {
 		return AllocatedPorts{}, err
 	}
-	return AllocatedPorts{ServerPort: server, RCONPort: rcon, QueryPort: server}, nil
+	probe, err := pick(probePortBase)
+	if err != nil {
+		return AllocatedPorts{}, err
+	}
+	return AllocatedPorts{ServerPort: server, RCONPort: rcon, QueryPort: server, ProbePort: probe}, nil
 }

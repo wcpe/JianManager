@@ -407,12 +407,34 @@ message GetNodeMetricsResponse {
 
 message GetInstanceMetricsRequest {
   string instance_uuid = 1;
+  // probe_port 是 ServerProbe /metrics 端口（0=未部署探针，Worker 回退 RCON 查询）。
+  int32 probe_port = 2;
+  // rcon_port/rcon_password 为回退路径：ServerProbe 不可用时用 RCON 查询 TPS/在线人数。
+  int32 rcon_port = 3;
+  string rcon_password = 4;
 }
 
 message GetInstanceMetricsResponse {
   float tps = 1;
   int32 online_players = 2;
   int64 memory_mb = 3;
+  // 以下为 ServerProbe 富指标（FR-010）；探针不可用时为零值，probe_available=false。
+  float mspt_millis = 4;
+  int32 threads = 5;
+  double cpu_percent = 6;
+  int64 heap_max_mb = 7;
+  double uptime_seconds = 8;
+  repeated WorldMetric worlds = 9;
+  // probe_available=true 表示指标来自 ServerProbe；false 表示回退 RCON/进程内存。
+  bool probe_available = 10;
+}
+
+// WorldMetric 单个世界的负载（来自 ServerProbe serverprobe_world_*）。
+message WorldMetric {
+  string name = 1;
+  int64 loaded_chunks = 2;
+  int64 entities = 3;
+  int64 tile_entities = 4;
 }
 
 // === RCON 命令（FR-054 玩家管理） ===

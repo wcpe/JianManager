@@ -85,6 +85,8 @@ type Instance struct {
 	ProxyOnlineMode bool `gorm:"default:true" json:"proxyOnlineMode"`
 	ServerPort    int            `gorm:"default:0" json:"serverPort"`
 	QueryPort     int            `gorm:"default:0" json:"queryPort"`
+	// ProbePort 是 ServerProbe 监控探针 /metrics 端口（系统分配，FR-010）。0 表示未部署探针。
+	ProbePort     int            `gorm:"default:0" json:"probePort"`
 	PID           int            `gorm:"default:0" json:"pid"`
 	StartedAt     *time.Time     `json:"startedAt"`
 	CrashCount    int            `gorm:"default:0" json:"crashCount"`

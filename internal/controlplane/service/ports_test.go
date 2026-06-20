@@ -23,7 +23,7 @@ func mkInstance(name string, nodeID uint, ports AllocatedPorts) *model.Instance 
 	return &model.Instance{
 		Name: name, NodeID: nodeID, Type: model.InstanceTypeMinecraftJava,
 		ProcessType: model.ProcessTypeDirect, StartCommand: "x",
-		ServerPort: ports.ServerPort, RCONPort: ports.RCONPort, QueryPort: ports.QueryPort,
+		ServerPort: ports.ServerPort, RCONPort: ports.RCONPort, QueryPort: ports.QueryPort, ProbePort: ports.ProbePort,
 	}
 }
 
@@ -36,6 +36,7 @@ func TestAllocPortsForNode(t *testing.T) {
 	require.Equal(t, 25565, p1.ServerPort)
 	require.Equal(t, 25575, p1.RCONPort)
 	require.Equal(t, p1.ServerPort, p1.QueryPort) // query 约定等于 server
+	require.Equal(t, 29940, p1.ProbePort)         // 探针端口取起点
 
 	// 落库后再分配应跳过已占用端口
 	require.NoError(t, db.Create(mkInstance("a", 1, p1)).Error)
@@ -43,6 +44,7 @@ func TestAllocPortsForNode(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 25566, p2.ServerPort)
 	require.Equal(t, 25576, p2.RCONPort)
+	require.Equal(t, 29941, p2.ProbePort) // p1 占了 29940，跳到 29941
 
 	// 不同节点独立计数
 	p3, err := allocPortsForNode(db, 2)
@@ -63,9 +65,9 @@ func TestAllocPortsForNode(t *testing.T) {
 
 func TestNodePortUsage(t *testing.T) {
 	db := newPortsTestDB(t)
-	require.NoError(t, db.Create(mkInstance("b", 1, AllocatedPorts{25566, 25576, 25566})).Error)
-	require.NoError(t, db.Create(mkInstance("a", 1, AllocatedPorts{25565, 25575, 25565})).Error)
-	require.NoError(t, db.Create(mkInstance("other-node", 2, AllocatedPorts{25565, 25575, 25565})).Error)
+	require.NoError(t, db.Create(mkInstance("b", 1, AllocatedPorts{ServerPort: 25566, RCONPort: 25576, QueryPort: 25566})).Error)
+	require.NoError(t, db.Create(mkInstance("a", 1, AllocatedPorts{ServerPort: 25565, RCONPort: 25575, QueryPort: 25565})).Error)
+	require.NoError(t, db.Create(mkInstance("other-node", 2, AllocatedPorts{ServerPort: 25565, RCONPort: 25575, QueryPort: 25565})).Error)
 	// 无端口的实例不计入
 	noPort := &model.Instance{Name: "noport", NodeID: 1, Type: model.InstanceTypeGeneric, ProcessType: model.ProcessTypeDirect, StartCommand: "x"}
 	require.NoError(t, db.Create(noPort).Error)

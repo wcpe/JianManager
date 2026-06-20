@@ -231,8 +231,8 @@ func (s *Server) GetNodeMetrics(ctx context.Context, req *workerpb.GetNodeMetric
 }
 
 // GetInstanceMetrics 获取实例指标。
-// TPS/在线玩家通过 RCON 查询（MC 专用），内存通过 OS 进程内存近似。
-// RCON 不可用时返回 N/A 标记值（-1），调用方应据此显示 "N/A"。
+// 优先抓取 ServerProbe /metrics（localhost:probe_port，FR-010 富指标：TPS/MSPT/堆/线程/世界）；
+// 探针未部署或抓取失败时回退 RCON 查询 TPS/在线人数 + OS 进程内存近似；均不可用时返回 N/A（-1）。
 func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstanceMetricsRequest) (*workerpb.GetInstanceMetricsResponse, error) {
 	resp := &workerpb.GetInstanceMetricsResponse{}
 
@@ -256,18 +256,43 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 		}
 	}
 
-	// 通过 RCON 查询 MC 专用指标
-	rconPort, rconPassword, err := s.manager.GetRCONConfig(req.InstanceUuid)
-	if err != nil || rconPort == 0 {
-		// 没有 RCON 配置，返回 N/A
-		resp.Tps = -1
-		resp.OnlinePlayers = -1
-		return resp, nil
+	// 优先 ServerProbe /metrics（FR-010 富指标，取代 RCON 粗指标）。
+	// 探针与实例同机，抓 localhost:probe_port；本机 IP 白名单放行，无需 token。
+	if req.ProbePort > 0 {
+		if snap, perr := metrics.ScrapeServerProbe("localhost", int(req.ProbePort), ""); perr == nil {
+			resp.Tps = float32(snap.TPS)
+			resp.OnlinePlayers = snap.PlayersOnline
+			if snap.HeapUsedBytes > 0 {
+				resp.MemoryMb = snap.HeapUsedBytes / (1024 * 1024)
+			}
+			resp.MsptMillis = float32(snap.MSPTAvgMillis)
+			resp.Threads = snap.Threads
+			resp.CpuPercent = snap.SystemCPULoad * 100
+			resp.HeapMaxMb = snap.HeapMaxBytes / (1024 * 1024)
+			resp.UptimeSeconds = snap.UptimeSeconds
+			for name, w := range snap.Worlds {
+				resp.Worlds = append(resp.Worlds, &workerpb.WorldMetric{
+					Name:         name,
+					LoadedChunks: w.LoadedChunks,
+					Entities:     w.Entities,
+					TileEntities: w.TileEntities,
+				})
+			}
+			resp.ProbeAvailable = true
+			return resp, nil
+		}
+		// 探针未就绪/抓取失败 → 回退 RCON（下方）。
 	}
 
-	tps, onlinePlayers, _ := metrics.QueryInstanceMetrics("localhost", rconPort, rconPassword)
-	resp.Tps = tps
-	resp.OnlinePlayers = onlinePlayers
+	// 回退：RCON 查询 TPS/在线人数（探针未部署或抓取失败时）。
+	if req.RconPort > 0 {
+		tps, onlinePlayers, _ := metrics.QueryInstanceMetrics("localhost", int(req.RconPort), req.RconPassword)
+		resp.Tps = tps
+		resp.OnlinePlayers = onlinePlayers
+	} else {
+		resp.Tps = -1
+		resp.OnlinePlayers = -1
+	}
 
 	return resp, nil
 }

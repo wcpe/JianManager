@@ -64,6 +64,7 @@ type CreateInstanceRequest struct {
 	ServerPort       int                `json:"serverPort"`
 	RCONPort         int                `json:"rconPort"`
 	QueryPort        int                `json:"queryPort"`
+	ProbePort        int                `json:"probePort"`
 	RCONPassword     string             `json:"-"`
 }
 
@@ -126,6 +127,7 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		ServerPort:       req.ServerPort,
 		RCONPort:         req.RCONPort,
 		QueryPort:        req.QueryPort,
+		ProbePort:        req.ProbePort,
 		RCONPassword:     req.RCONPassword,
 		Status:           model.InstanceStatusStopped,
 	}
@@ -681,6 +683,22 @@ type MetricsData struct {
 	TPS           float32 `json:"tps"`
 	OnlinePlayers int32   `json:"onlinePlayers"`
 	MemoryMB      int64   `json:"memoryMb"`
+	// 以下为 ServerProbe 富指标（FR-010）；探针不可用时为零值，ProbeAvailable=false。
+	MSPTMillis     float32       `json:"msptMillis"`
+	Threads        int32         `json:"threads"`
+	CPUPercent     float64       `json:"cpuPercent"`
+	HeapMaxMB      int64         `json:"heapMaxMb"`
+	UptimeSeconds  float64       `json:"uptimeSeconds"`
+	Worlds         []WorldMetric `json:"worlds"`
+	ProbeAvailable bool          `json:"probeAvailable"`
+}
+
+// WorldMetric 单个世界的负载（来自 ServerProbe），供前端 FR-010 监控页展示。
+type WorldMetric struct {
+	Name         string `json:"name"`
+	LoadedChunks int64  `json:"loadedChunks"`
+	Entities     int64  `json:"entities"`
+	TileEntities int64  `json:"tileEntities"`
 }
 
 // GetMetrics 通过 gRPC 从 Worker 获取实例指标。
@@ -705,14 +723,32 @@ func (s *InstanceService) GetMetrics(id uint) (*MetricsData, error) {
 
 	resp, err := client.Worker.GetInstanceMetrics(ctx, &workerpb.GetInstanceMetricsRequest{
 		InstanceUuid: instance.UUID,
+		ProbePort:    int32(instance.ProbePort),
+		RconPort:     int32(instance.RCONPort),
+		RconPassword: instance.RCONPassword,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("获取指标失败: %w", err)
 	}
 
-	return &MetricsData{
-		TPS:           resp.Tps,
-		OnlinePlayers: resp.OnlinePlayers,
-		MemoryMB:      resp.MemoryMb,
-	}, nil
+	data := &MetricsData{
+		TPS:            resp.Tps,
+		OnlinePlayers:  resp.OnlinePlayers,
+		MemoryMB:       resp.MemoryMb,
+		MSPTMillis:     resp.MsptMillis,
+		Threads:        resp.Threads,
+		CPUPercent:     resp.CpuPercent,
+		HeapMaxMB:      resp.HeapMaxMb,
+		UptimeSeconds:  resp.UptimeSeconds,
+		ProbeAvailable: resp.ProbeAvailable,
+	}
+	for _, w := range resp.Worlds {
+		data.Worlds = append(data.Worlds, WorldMetric{
+			Name:         w.Name,
+			LoadedChunks: w.LoadedChunks,
+			Entities:     w.Entities,
+			TileEntities: w.TileEntities,
+		})
+	}
+	return data, nil
 }
