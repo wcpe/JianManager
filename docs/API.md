@@ -451,6 +451,45 @@
 
 ---
 
+## 插件桥（FR-103 / ADR-012）
+
+平台插件（Bukkit/BC）经 WS 连入 Worker `/ws/plugin-bridge`（token 鉴权），上报事件、执行指令。
+插件只与 Worker 通信，事件经 Worker→CP gRPC 流→前端 SSE，指令经 CP→Worker gRPC→插件。
+
+### POST /api/v1/instances/:id/plugin-token
+- **描述**: 为实例签发插件桥连接 token（运维写入插件 config.yml）
+- **关联 FR**: FR-103
+- **权限**: 对实例有管理权
+- **响应**:
+  ```json
+  {
+    "token": "plugin-bridge-token",
+    "wsUrl": "ws://<节点host>:<wsPort>/ws/plugin-bridge",
+    "instanceUuid": "uuid",
+    "expiresIn": 600
+  }
+  ```
+- **说明**: token 的 scope 为 `plugin-bridge`（与终端 token 区分）；`wsUrl` 指向实例所在节点的 Worker WS 端口（插件与游戏服同机）。
+
+### POST /api/v1/instances/:id/plugin-command
+- **描述**: 向实例当前连入的插件下发指令（踢/封/whitelist 等）
+- **关联 FR**: FR-103
+- **权限**: 对实例有管理权
+- **请求**: `{ "action": "kick|ban|unban|whitelist_add|whitelist_remove", "argsJson": "{\"player\":\"Steve\",\"reason\":\"...\"}" }`
+- **响应**: `{ "success": true }`；实例无插件连入或 Worker 未连接时返回 `409 PLUGIN_COMMAND_FAILED`
+
+### GET /api/v1/plugins
+- **描述**: 已连插件列表（连接状态，按可访问实例过滤）
+- **关联 FR**: FR-103
+- **响应**: `[{ "instanceUuid": "...", "instanceId": 1, "instanceName": "lobby", "nodeUuid": "...", "connected": true, "lastEventAt": 1718870000 }]`
+
+### GET /api/v1/plugins/events
+- **描述**: SSE 推送插件桥事件（连接/断开/玩家加入退出聊天）
+- **关联 FR**: FR-103
+- **响应**: `event: plugin` + `data: {"instanceUuid","type","data","timestamp"}`（`data` 为事件载荷 JSON）
+
+---
+
 ## 文件管理
 
 ### GET /api/v1/instances/:id/files
