@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 import CodeEditor from './CodeEditor'
+import FileVersionPanel from './FileVersionPanel'
 
 interface FileInfo {
   name: string
@@ -17,6 +19,7 @@ interface FileBrowserProps {
 
 export default function FileBrowser({ instanceId }: FileBrowserProps) {
   const { t } = useTranslation()
+  const qc = useQueryClient()
   const [path, setPath] = useState('')
   const [files, setFiles] = useState<FileInfo[]>([])
   const [loading, setLoading] = useState(false)
@@ -28,7 +31,11 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
   const [renaming, setRenaming] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [showVersions, setShowVersions] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // 选中文件的完整路径（含当前目录前缀），供版本面板使用。
+  const selectedPath = selectedFile ? (path ? `${path}/${selectedFile}` : selectedFile) : null
 
   const loadFiles = useCallback(async (dirPath: string) => {
     setLoading(true)
@@ -65,10 +72,8 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
     loadFiles(parts.join('/'))
   }
 
-  const readFile = async (fileName: string) => {
-    const filePath = path ? `${path}/${fileName}` : fileName
-    setSelectedFile(fileName)
-    setEditing(false)
+  // reloadContent 重新拉取当前选中文件内容，不影响版本面板开合状态（供回滚后刷新使用）。
+  const reloadContent = useCallback(async (filePath: string) => {
     try {
       const { data } = await api.get(`/instances/${instanceId}/files/read`, {
         params: { path: filePath },
@@ -79,6 +84,14 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
     } catch {
       toast.error(t('files.loadFailed'))
     }
+  }, [instanceId, t])
+
+  const readFile = async (fileName: string) => {
+    const filePath = path ? `${path}/${fileName}` : fileName
+    setSelectedFile(fileName)
+    setEditing(false)
+    setShowVersions(false)
+    await reloadContent(filePath)
   }
 
   const saveFile = async () => {
@@ -91,6 +104,8 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
       })
       setFileContent(editContent)
       setEditing(false)
+      // 保存会在改前生成快照（FR-051），失效版本列表缓存以便面板刷新。
+      qc.invalidateQueries({ queryKey: ['fileVersions', instanceId, filePath] })
       toast.success(t('files.saved'))
     } catch {
       toast.error(t('files.saveFailed'))
@@ -140,6 +155,9 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
       await api.post(`/instances/${instanceId}/files/upload`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
+      // 覆盖已存在文件会在改前快照（FR-051），失效该文件版本缓存。
+      const uploadedPath = path ? `${path}/${file.name}` : file.name
+      qc.invalidateQueries({ queryKey: ['fileVersions', instanceId, uploadedPath] })
       toast.success(t('files.uploaded'))
       loadFiles(path)
     } catch {
@@ -222,6 +240,14 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
               <div className="p-2 border-b bg-muted/50 flex items-center justify-between text-sm">
                 <span className="font-medium">{selectedFile}</span>
                 <div className="flex gap-1">
+                  <button
+                    onClick={() => setShowVersions((v) => !v)}
+                    className={`px-2 py-0.5 text-xs rounded hover:bg-accent ${
+                      showVersions ? 'bg-accent' : 'bg-muted/60'
+                    }`}
+                  >
+                    {showVersions ? t('fileVersions.hide') : t('fileVersions.show')}
+                  </button>
                   {isEditable(selectedFile) && !editing && (
                     <button
                       onClick={() => { setEditContent(fileContent ?? ''); setEditing(true) }}
@@ -254,7 +280,7 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
                   </button>
                 </div>
               </div>
-              <div className="flex-1 overflow-hidden p-0">
+              <div className={`overflow-hidden p-0 ${showVersions ? 'flex-1 min-h-0' : 'flex-1'}`}>
                 <CodeEditor
                   value={editing ? editContent : (fileContent ?? '')}
                   filename={selectedFile}
@@ -262,6 +288,13 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
                   onChange={setEditContent}
                 />
               </div>
+              {showVersions && selectedPath && (
+                <FileVersionPanel
+                  instanceId={instanceId}
+                  filePath={selectedPath}
+                  onRolledBack={() => reloadContent(selectedPath)}
+                />
+              )}
             </>
           ) : (
             <div className="flex items-center justify-center h-full text-muted-foreground text-sm">

@@ -340,6 +340,27 @@
     "uploaded": "Uploaded",
     "loadFailed": "Load failed"
   },
+  "fileVersions": {
+    "title": "Version History",
+    "show": "History",
+    "hide": "Hide",
+    "empty": "No versions",
+    "size": "Size",
+    "time": "Time",
+    "author": "Author",
+    "diffFrom": "From",
+    "diffTo": "To",
+    "rollback": "Rollback",
+    "rollbackTitle": "Rollback File",
+    "rollbackConfirm": "Roll {{name}} back to version #{{version}}? The current content will be snapshotted first.",
+    "rollbackSuccess": "Rolled back to version #{{version}}",
+    "rollbackFailed": "Rollback failed",
+    "rollbackVia": "rolled back from",
+    "binary": "Binary file; text diff unavailable",
+    "diffTitle": "Diff",
+    "loadFailed": "Failed to load versions",
+    "selectTwo": "Select two versions to compare"
+  },
   "bots": {
     "title": "Bot Management",
     "createBot": "Create Bot",
