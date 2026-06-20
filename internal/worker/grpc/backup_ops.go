@@ -18,6 +18,11 @@ import (
 // 备份归档与制品库（var/artifacts）平级，整类便于浏览/迁移/归档。
 const backupsSubdir = "var/backups"
 
+// backupRuntimeExcludes 备份时排除的运行态/可再生文件，与 FR-036 一键复制的排除一致。
+// 关键：运行中的服务端对 world/session.lock 持有独占锁，Windows 上读它会报
+// 「另一进程锁定了文件」导致整次备份失败；logs/cache/usercache 等为可再生运行态，无需入备份。
+var backupRuntimeExcludes = []string{"session.lock", "logs", "cache", "usercache.json", "*.pid", "libraries/.cache"}
+
 // CreateBackup 将实例工作目录打包为 tar.gz 落到节点数据根 var/backups/<instanceID>/。
 // 全量备份打包全部常规文件；增量备份据 base_manifest 仅打包新增或变化（size/mtime 不同）的文件。
 // 无论增量与否都返回「本次备份后工作目录的完整清单」，供 Control Plane 持久化，
@@ -213,6 +218,13 @@ func writeBackupArchive(absArchive, workDir string, base map[string]*workerpb.Ba
 			return rerr
 		}
 		if rel == "." {
+			return nil
+		}
+		// 排除运行态/锁定文件（session.lock 被运行中的服务端独占锁），否则对运行中实例打包会整体失败。
+		if cloneExcluded(rel, backupRuntimeExcludes) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		relSlash := filepath.ToSlash(rel)
