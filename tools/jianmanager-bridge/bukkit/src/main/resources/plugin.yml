@@ -1,6 +1,0 @@
-name: JianManagerBridge
-version: 0.1.0
-main: com.jianmanager.bridge.bukkit.JianManagerBridgePlugin
-api-version: "1.20"
-author: JianManager
-description: JianManager 平台插件桥——经 WebSocket 连入 Worker，上报玩家/服务器事件并执行平台指令（FR-103 / ADR-012）

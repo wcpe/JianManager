@@ -77,7 +77,6 @@ func main() {
 	eventSvc := service.NewEventService(pool)
 	// 日志中心：采集实例输出与平台日志入库、归档到数据根 var/log、按策略保留（FR-049）。
 	logSvc := service.NewLogService(db, root, cfg.LogStore)
-	pluginBridgeSvc := service.NewPluginBridgeService(db, pool, cfg.JWT.Secret)
 	logSvc.Start()
 	defer logSvc.Stop()
 	// 实例 stdout/stderr 经事件流采集落库。
@@ -106,9 +105,6 @@ func main() {
 
 	// 实例事件服务：订阅 Worker 状态变更流并推送给前端 SSE
 	defer eventSvc.Stop()
-
-	// 插件桥服务：订阅 Worker 插件事件流并推送给前端 SSE（FR-103 / ADR-012）
-	defer pluginBridgeSvc.Stop()
 
 	// 定时任务调度器：每分钟检查到期任务并执行
 	scheduleExecutor := service.NewScheduleExecutorImpl(db, instanceSvc, backupSvc, pool)
@@ -147,7 +143,6 @@ func main() {
 		Registration:  registrationSvc,
 		Network:       networkSvc,
 		Log:           logSvc,
-		PluginBridge:  pluginBridgeSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）
@@ -161,8 +156,6 @@ func main() {
 	grpcHandler := cpgrpc.NewControlPlaneHandler(db, pool)
 	grpcHandler.SetOnWorkerConnect(func(nodeUUID string) {
 		eventSvc.StartWorkerStream(nodeUUID)
-		// 同步订阅该 Worker 的插件桥事件流（FR-103 / ADR-012）
-		pluginBridgeSvc.StartWorkerStream(nodeUUID)
 	})
 	grpcServer := grpc.NewServer()
 	workerpb.RegisterWorkerServiceServer(grpcServer, grpcHandler)

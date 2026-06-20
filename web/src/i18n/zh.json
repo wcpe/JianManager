@@ -244,29 +244,7 @@
     "templates": "模板",
     "settings": "设置",
     "alerts": "告警",
-    "logs": "日志",
-    "plugins": "插件桥"
-  },
-  "pluginBridge": {
-    "title": "插件桥",
-    "subtitle": "平台插件经 WebSocket 连入 Worker，上报玩家/服务器事件并执行平台指令",
-    "issueToken": "签发插件 Token",
-    "issue": "签发",
-    "issueHint": "选择实例后签发连接 Token，把返回的 wsUrl/token/instanceUuid 填入该实例插件的 config.yml",
-    "selectInstance": "选择实例",
-    "writeConfigHint": "把以上三项填入插件 config.yml 并重载插件即可连入",
-    "tokenIssued": "Token 已签发",
-    "tokenIssueFailed": "Token 签发失败",
-    "connectedCount": "已连接插件",
-    "connectionsTitle": "已连插件",
-    "eventsTitle": "最近事件",
-    "instance": "实例",
-    "status": "状态",
-    "lastEvent": "最近事件时间",
-    "connected": "已连接",
-    "disconnected": "已断开",
-    "noConnections": "暂无插件连入",
-    "noEvents": "暂无事件"
+    "logs": "日志"
   },
   "console": {
     "title": "运维控制台",

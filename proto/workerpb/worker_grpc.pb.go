@@ -58,8 +58,6 @@ const (
 	WorkerService_SendBotCommand_FullMethodName       = "/worker.WorkerService/SendBotCommand"
 	WorkerService_RunBotScript_FullMethodName         = "/worker.WorkerService/RunBotScript"
 	WorkerService_StreamBotEvents_FullMethodName      = "/worker.WorkerService/StreamBotEvents"
-	WorkerService_StreamPluginEvents_FullMethodName   = "/worker.WorkerService/StreamPluginEvents"
-	WorkerService_SendPluginCommand_FullMethodName    = "/worker.WorkerService/SendPluginCommand"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
@@ -150,11 +148,6 @@ type WorkerServiceClient interface {
 	RunBotScript(ctx context.Context, in *RunBotScriptRequest, opts ...grpc.CallOption) (*RunBotScriptResponse, error)
 	// StreamBotEvents 订阅 Bot 事件流。
 	StreamBotEvents(ctx context.Context, in *StreamBotEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BotEvent], error)
-	// StreamPluginEvents 订阅平台插件经 WS 连入 Worker 后上报的事件流（连接/断开/玩家事件等）。
-	// CP 调用此 RPC，Worker 把插件会话事件冒泡给 CP，CP 再经 SSE 扇出给前端。
-	StreamPluginEvents(ctx context.Context, in *StreamPluginEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PluginEvent], error)
-	// SendPluginCommand 经 Worker 把指令下发给某实例当前连入的插件（踢/封/whitelist 等）。
-	SendPluginCommand(ctx context.Context, in *SendPluginCommandRequest, opts ...grpc.CallOption) (*SendPluginCommandResponse, error)
 }
 
 type workerServiceClient struct {
@@ -576,35 +569,6 @@ func (c *workerServiceClient) StreamBotEvents(ctx context.Context, in *StreamBot
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkerService_StreamBotEventsClient = grpc.ServerStreamingClient[BotEvent]
 
-func (c *workerServiceClient) StreamPluginEvents(ctx context.Context, in *StreamPluginEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PluginEvent], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[3], WorkerService_StreamPluginEvents_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[StreamPluginEventsRequest, PluginEvent]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WorkerService_StreamPluginEventsClient = grpc.ServerStreamingClient[PluginEvent]
-
-func (c *workerServiceClient) SendPluginCommand(ctx context.Context, in *SendPluginCommandRequest, opts ...grpc.CallOption) (*SendPluginCommandResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SendPluginCommandResponse)
-	err := c.cc.Invoke(ctx, WorkerService_SendPluginCommand_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // WorkerServiceServer is the server API for WorkerService service.
 // All implementations must embed UnimplementedWorkerServiceServer
 // for forward compatibility.
@@ -693,11 +657,6 @@ type WorkerServiceServer interface {
 	RunBotScript(context.Context, *RunBotScriptRequest) (*RunBotScriptResponse, error)
 	// StreamBotEvents 订阅 Bot 事件流。
 	StreamBotEvents(*StreamBotEventsRequest, grpc.ServerStreamingServer[BotEvent]) error
-	// StreamPluginEvents 订阅平台插件经 WS 连入 Worker 后上报的事件流（连接/断开/玩家事件等）。
-	// CP 调用此 RPC，Worker 把插件会话事件冒泡给 CP，CP 再经 SSE 扇出给前端。
-	StreamPluginEvents(*StreamPluginEventsRequest, grpc.ServerStreamingServer[PluginEvent]) error
-	// SendPluginCommand 经 Worker 把指令下发给某实例当前连入的插件（踢/封/whitelist 等）。
-	SendPluginCommand(context.Context, *SendPluginCommandRequest) (*SendPluginCommandResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }
 
@@ -824,12 +783,6 @@ func (UnimplementedWorkerServiceServer) RunBotScript(context.Context, *RunBotScr
 }
 func (UnimplementedWorkerServiceServer) StreamBotEvents(*StreamBotEventsRequest, grpc.ServerStreamingServer[BotEvent]) error {
 	return status.Error(codes.Unimplemented, "method StreamBotEvents not implemented")
-}
-func (UnimplementedWorkerServiceServer) StreamPluginEvents(*StreamPluginEventsRequest, grpc.ServerStreamingServer[PluginEvent]) error {
-	return status.Error(codes.Unimplemented, "method StreamPluginEvents not implemented")
-}
-func (UnimplementedWorkerServiceServer) SendPluginCommand(context.Context, *SendPluginCommandRequest) (*SendPluginCommandResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SendPluginCommand not implemented")
 }
 func (UnimplementedWorkerServiceServer) mustEmbedUnimplementedWorkerServiceServer() {}
 func (UnimplementedWorkerServiceServer) testEmbeddedByValue()                       {}
@@ -1529,35 +1482,6 @@ func _WorkerService_StreamBotEvents_Handler(srv interface{}, stream grpc.ServerS
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkerService_StreamBotEventsServer = grpc.ServerStreamingServer[BotEvent]
 
-func _WorkerService_StreamPluginEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(StreamPluginEventsRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(WorkerServiceServer).StreamPluginEvents(m, &grpc.GenericServerStream[StreamPluginEventsRequest, PluginEvent]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WorkerService_StreamPluginEventsServer = grpc.ServerStreamingServer[PluginEvent]
-
-func _WorkerService_SendPluginCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SendPluginCommandRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WorkerServiceServer).SendPluginCommand(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WorkerService_SendPluginCommand_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WorkerServiceServer).SendPluginCommand(ctx, req.(*SendPluginCommandRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // WorkerService_ServiceDesc is the grpc.ServiceDesc for WorkerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1709,10 +1633,6 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "RunBotScript",
 			Handler:    _WorkerService_RunBotScript_Handler,
 		},
-		{
-			MethodName: "SendPluginCommand",
-			Handler:    _WorkerService_SendPluginCommand_Handler,
-		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -1729,11 +1649,6 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "StreamBotEvents",
 			Handler:       _WorkerService_StreamBotEvents_Handler,
-			ServerStreams: true,
-		},
-		{
-			StreamName:    "StreamPluginEvents",
-			Handler:       _WorkerService_StreamPluginEvents_Handler,
 			ServerStreams: true,
 		},
 	},
