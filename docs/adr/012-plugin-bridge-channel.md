@@ -1,7 +1,7 @@
 # ADR-012: 插件桥——平台插件经 Worker WebSocket 连入的通信通道
 
 - **日期**: 2026-06-20
-- **状态**: accepted
+- **状态**: superseded-by [ADR-014](014-monitoring-via-serverprobe.md)（2026-06-21 改用 ServerProbe 作监控探针、退役自写插件桥；玩家治理走 RCON）
 - **上下文**: 玩家管理等运维能力此前只能经 RCON 文本协议实现（FR-054），RCON 无实时事件、跨服感知靠文本解析、能力受限。要拿到「玩家加入/退出/聊天」的实时精确事件并精确执行踢/封/白名单（FR-055 依赖），需要在游戏服 JVM 内运行平台侧插件（Bukkit/BungeeCord），由它主动把事件推给平台、并接收平台指令。问题是：插件运行在游戏服 JVM（与 Worker 同机），它该接入哪一层、走什么协议，且不得破坏三进程模型与既有通信边界。
 - **决策**:
   1. **插件经 WebSocket 连入 Worker Node**：Worker 新增 WS 端点 `/ws/plugin-bridge`，复用 Worker 既有 WS 服务体系（与终端 WS `/ws/terminal` 并列，同一 WS 监听端口）。插件**只与 Worker 通信**，绝不直连 Control Plane / 数据库 / gRPC。游戏服与 Worker 同机，走本机回环 WS，零额外网络面。

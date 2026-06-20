@@ -6,6 +6,9 @@
 
 ## [Unreleased]
 
+### Changed
+- **监控探针改用 ServerProbe，退役自写插件桥**（FR-010 / ADR-014 取代 ADR-012）：将 [ServerProbe](https://github.com/wcpe/ServerProbe) 作为 git 子模块引入 `third_party/ServerProbe`，CP 经 `go:embed` 内嵌探针 jar，建服 provision 时经新增 gRPC `DeployServerProbe` 自动写入实例 plugins 目录并下发最小 config.yml（仅本机回环开启 `/metrics` + 系统分配 probe 端口，29940 段）；Worker `GetInstanceMetrics` 改为优先抓取 ServerProbe `/metrics` 取 TPS/MSPT/堆/线程/CPU/世界负载等富指标，探针未部署/抓取失败时回退 RCON+RSS。前端实例详情页展示富指标四宫 + 按世界负载表。**同时删除自写 jianmanager-bridge**（Bukkit/BungeeCord 插件源码、Worker `/ws/plugin-bridge`、gRPC `StreamPluginEvents`/`SendPluginCommand`、CP `plugin_bridge` service/router/SSE、前端 PluginBridgePage 与侧栏入口）；玩家治理（踢/封/whitelist）由 FR-054 RCON 路径承担。FR-103/FR-055 标记 deprecated；构建配方 `make embed-probe`（需 JDK21 + 子模块）。真机验证：真 Paper 1.21 + ServerProbe 抓得 TPS=20.03/MSPT=0.53ms/heap 434/1024MB/threads=60/2 worlds
+
 ### Added
 - **日志持久化、归档与保留**（FR-049）：实例 stdout/stderr 经 StreamInstanceEvents 上报、平台结构化日志经 slog 装饰器，统一异步缓冲批量入库 `logs` 表（采集侧非阻塞）；`GET /logs` 按 source/level/instance/node/keyword/time 分页检索（DB 侧过滤不全量序列化）+ `GET /logs/export` 导出 NDJSON；超保留天数/总量上限的旧日志按 NDJSON 滚动归档到数据根 `var/log` 后清理；保留策略 `log_store` 可配（保留天数/总量上限/巡检周期，均有默认值）；RBAC 组成员仅见有权实例日志、平台日志仅管理员可见。前端日志中心查询页（筛选+分页+导出，i18n zh/en）
 - **配置文件管理引擎**（FR-031）：properties/yaml/toml/json/txt 解析回写**保留注释/键顺序**；6 类 MC 配置内置字段 schema；配置编辑器**文本/表单双模式**，表单按 schema 渲染（bool 下拉/选择项/数字/文本）、保存走字段级补丁（properties 行级 / yaml AST / toml 行级，保留注释）；跨实例一致性校验入口（端口唯一/online-mode 配套/forwarding secret 一致）；每次保存生成版本，diff 与一键回滚；读写经 gRPC 委托 Worker。真机复验：真 BungeeCord config.yml + 真 Paper server.properties 表单编辑、注释保留

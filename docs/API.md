@@ -319,8 +319,24 @@
 - **错误**: 400 `INVALID_REQUEST`（action 非法 / 目标皆空 / command 缺 command / 超上限）；403 `FORBIDDEN`
 
 ### GET /api/v1/instances/:id/metrics
-- **描述**: 实例指标（TPS/玩家/内存）
+- **描述**: 实例指标。优先经 ServerProbe `/metrics` 取富指标（探针未部署/抓取失败时回退 RCON+RSS）
 - **关联 FR**: FR-010
+- **响应**:
+  ```json
+  {
+    "tps": 20.03,
+    "onlinePlayers": 7,
+    "memoryMb": 391,
+    "msptMillis": 0.60,
+    "threads": 59,
+    "cpuPercent": 7.9,
+    "heapMaxMb": 2048,
+    "uptimeSeconds": 112.7,
+    "worlds": [{"name":"world","loadedChunks":49,"entities":84,"tileEntities":2}],
+    "probeAvailable": true
+  }
+  ```
+  `probeAvailable=false` 时富指标为零值，调用方仅展示 tps/onlinePlayers/memoryMb 与提示「未安装 ServerProbe 探针」。
 
 ### GET /api/v1/players
 - **描述**: 在线玩家列表，聚合可见后端子服（role=backend 且运行中）的 RCON `list` 输出，每个玩家标注所在子服（BC 跨服感知）；按可访问实例集合收敛
@@ -448,45 +464,6 @@
   }
   ```
 - **说明**: `wsUrl` 指向 CP 代理端点，host 取浏览器请求的 Host（支持非 localhost 访问）；scheme 跟随访问协议——经 TLS 直连或反代标注 `X-Forwarded-Proto: https` 时为 `wss`，否则 `ws`，避免 HTTPS 页面连 `ws` 被混合内容策略拦截。前端连接时以 `?token=` 附加 token。
-
----
-
-## 插件桥（FR-103 / ADR-012）
-
-平台插件（Bukkit/BC）经 WS 连入 Worker `/ws/plugin-bridge`（token 鉴权），上报事件、执行指令。
-插件只与 Worker 通信，事件经 Worker→CP gRPC 流→前端 SSE，指令经 CP→Worker gRPC→插件。
-
-### POST /api/v1/instances/:id/plugin-token
-- **描述**: 为实例签发插件桥连接 token（运维写入插件 config.yml）
-- **关联 FR**: FR-103
-- **权限**: 对实例有管理权
-- **响应**:
-  ```json
-  {
-    "token": "plugin-bridge-token",
-    "wsUrl": "ws://<节点host>:<wsPort>/ws/plugin-bridge",
-    "instanceUuid": "uuid",
-    "expiresIn": 600
-  }
-  ```
-- **说明**: token 的 scope 为 `plugin-bridge`（与终端 token 区分）；`wsUrl` 指向实例所在节点的 Worker WS 端口（插件与游戏服同机）。
-
-### POST /api/v1/instances/:id/plugin-command
-- **描述**: 向实例当前连入的插件下发指令（踢/封/whitelist 等）
-- **关联 FR**: FR-103
-- **权限**: 对实例有管理权
-- **请求**: `{ "action": "kick|ban|unban|whitelist_add|whitelist_remove", "argsJson": "{\"player\":\"Steve\",\"reason\":\"...\"}" }`
-- **响应**: `{ "success": true }`；实例无插件连入或 Worker 未连接时返回 `409 PLUGIN_COMMAND_FAILED`
-
-### GET /api/v1/plugins
-- **描述**: 已连插件列表（连接状态，按可访问实例过滤）
-- **关联 FR**: FR-103
-- **响应**: `[{ "instanceUuid": "...", "instanceId": 1, "instanceName": "lobby", "nodeUuid": "...", "connected": true, "lastEventAt": 1718870000 }]`
-
-### GET /api/v1/plugins/events
-- **描述**: SSE 推送插件桥事件（连接/断开/玩家加入退出聊天）
-- **关联 FR**: FR-103
-- **响应**: `event: plugin` + `data: {"instanceUuid","type","data","timestamp"}`（`data` 为事件载荷 JSON）
 
 ---
 

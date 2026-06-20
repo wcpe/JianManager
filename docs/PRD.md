@@ -145,12 +145,14 @@
 ### FR-010: 监控指标
 - **状态**: ✅ done
 - **优先级**: P1
-- **描述**: 节点和实例指标采集，Recharts 仪表盘展示
+- **描述**: 节点和实例指标采集，Recharts 仪表盘展示；实例指标经 ServerProbe 探针抓取，覆盖 TPS/MSPT/堆/线程/CPU/世界负载等富指标（ADR-014）
 - **验收标准**:
   - [x] 节点指标：CPU/内存/磁盘/网络（周期采集）
   - [x] 实例指标：MC TPS/在线玩家/内存（MC 专用）
   - [x] 仪表盘页面：Recharts 图表
+  - [x] 富指标：经 ServerProbe `/metrics` 抓 MSPT/线程/CPU/世界负载（探针未部署时回退基础三项）
 - **关联 API**: `GET /nodes/:id/metrics`, `GET /instances/:id/metrics`
+- **关联 ADR**: ADR-014
 
 ### FR-011: 告警规则
 - **状态**: ✅ done
@@ -856,16 +858,10 @@
 - **依赖**: FR-022, FR-035
 
 ### FR-055: 玩家管理插件桥增强
-- **状态**: 📋 todo
+- **状态**: ❌ deprecated（2026-06-21；FR-103 退役后失去载体，玩家治理由 RCON 路径承担，未来真有实时事件需求再独立设计；ADR-014）
 - **优先级**: P2
-- **描述**: 在插件桥（FR-103）之上提供实时玩家事件（加入/退出/聊天）与精确跨服感知，增强 RCON 方案
-- **验收标准**:
-  - [ ] 装有平台插件的服上报实时玩家事件（join/quit/chat）
-  - [ ] 玩家列表/封禁经插件桥精确执行（优于 RCON 文本解析）
-  - [ ] 未装插件的服回落到 FR-054 RCON 路径
-  - [ ] i18n + 主题正常
-- **关联 API**: 经 FR-103 插件桥 WS
-- **依赖**: FR-103, FR-054
+- **描述**: 原计划在 FR-103 插件桥之上提供实时玩家事件与精确跨服感知；FR-054 修复 RCON 鉴权 bug（commit d1314b5）后纯 RCON 路径已能真机踢出在线玩家，且 V1 暂无实时事件强需求，遂废弃。
+- **关联 ADR**: ADR-014 取代 ADR-012
 
 ### FR-056: 增量备份
 - **状态**: ✅ done
@@ -923,20 +919,10 @@
 - **依赖**: FR-030
 
 ### FR-103: 插件桥（Bukkit/BC 插件 WS 连入）
-- **状态**: ✅ done
+- **状态**: ❌ deprecated（2026-06-21；监控由 ServerProbe 探针取代，玩家治理由 RCON 路径覆盖，自写插件桥沉没成本不再维护；ADR-014）
 - **优先级**: P2
-- **描述**: 平台侧插件经 WebSocket 连入并鉴权，上报服务器/玩家事件、接收平台指令，为玩家管理等提供实时精确通道（原列 V1.1，因 FR-055 提前纳入本批）
-- **验收标准**:
-  - [ ] 提供 Bukkit/BungeeCord 平台插件，启动后经 WS 连入并鉴权（一次性 token / node secret）
-  - [ ] 插件上报服务器/玩家事件（在线/加入/退出/聊天）
-  - [ ] 平台经插件下发指令（踢/封/whitelist 等）
-  - [ ] 断线自动重连
-  - [ ] 架构不变量：遵循既定通信边界，插件不直连 DB/gRPC，经 Worker 中转
-  - [ ] 管理 UI i18n + 主题正常
-- **关联 ADR**: **ADR-012（插件桥通信通道，待创建）**, ADR-001/002
-- **关联 API**: WS `/ws/plugin-bridge`, gRPC（Worker 中转）
-- **依赖**: 无（新通信通道，为 FR-055 前置）
-- **备注**: 引入「插件 ↔ 平台」新通信路径，按 decision-alignment 须先写 ADR-012 再编码
+- **描述**: 原为玩家治理实时通道与富监控指标设计的 Bukkit/BC 插件 WS 通道（ADR-012）；因实际需求被 RCON + ServerProbe 两条更轻路径覆盖而退役，jianmanager-bridge 源码、Worker `/ws/plugin-bridge`、gRPC `StreamPluginEvents`/`SendPluginCommand`、CP `plugin_bridge` service 与前端页一并移除。
+- **关联 ADR**: ADR-012 → 被 ADR-014 取代
 
 ---
 
