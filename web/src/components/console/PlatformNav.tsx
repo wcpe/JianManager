@@ -12,6 +12,7 @@ const platformNav: NavEntry[] = [
   { to: '/users', labelKey: 'nav.users' },
   { to: '/groups', labelKey: 'nav.groups' },
   { to: '/audit', labelKey: 'nav.audit' },
+  { to: '/logs', labelKey: 'nav.logs' },
   { to: '/settings', labelKey: 'nav.settings' },
 ]
 

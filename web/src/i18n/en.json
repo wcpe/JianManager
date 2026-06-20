@@ -158,7 +158,8 @@
     "audit": "Audit Log",
     "templates": "Templates",
     "settings": "Settings",
-    "alerts": "Alerts"
+    "alerts": "Alerts",
+    "logs": "Logs"
   },
   "console": {
     "title": "Ops Console",
@@ -500,6 +501,35 @@
     "target": "Target",
     "ip": "IP",
     "empty": "No audit logs"
+  },
+  "logs": {
+    "title": "Log Center",
+    "time": "Time",
+    "level": "Level",
+    "source": "Source",
+    "message": "Message",
+    "searchPlaceholder": "Search log messages…",
+    "allSources": "All sources",
+    "allLevels": "All levels",
+    "allNodes": "All nodes",
+    "allInstances": "All instances",
+    "source_instance": "Instance",
+    "source_control_plane": "Platform",
+    "source_worker": "Node",
+    "level_debug": "Debug",
+    "level_info": "Info",
+    "level_warn": "Warn",
+    "level_error": "Error",
+    "export": "Export",
+    "exporting": "Exporting…",
+    "exportStarted": "Log export started",
+    "exportFailed": "Log export failed",
+    "empty": "No logs",
+    "loadError": "Failed to load logs",
+    "totalCount": "{{count}} total",
+    "prevPage": "Previous",
+    "nextPage": "Next",
+    "pageInfo": "Page {{page}} / {{totalPages}}"
   },
   "users": {
     "title": "User Management",

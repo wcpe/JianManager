@@ -19,6 +19,7 @@ const AuditPage = lazy(() => import('@/pages/AuditPage'))
 const TemplatesPage = lazy(() => import('@/pages/TemplatesPage'))
 const AlertsPage = lazy(() => import('@/pages/AlertsPage'))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
+const LogsPage = lazy(() => import('@/pages/LogsPage'))
 
 /**
  * 运维控制台右侧工作区（ADR-009 / FR-037 / FR-039）。
@@ -62,6 +63,7 @@ export default function Workspace() {
           <Route path="schedules" element={<SchedulesPage />} />
           <Route path="backups" element={<BackupsPage />} />
           <Route path="audit" element={<AuditPage />} />
+          <Route path="logs" element={<LogsPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<WorkspaceEmpty />} />
         </Routes>

@@ -158,7 +158,8 @@
     "audit": "审计日志",
     "templates": "模板",
     "settings": "设置",
-    "alerts": "告警"
+    "alerts": "告警",
+    "logs": "日志"
   },
   "console": {
     "title": "运维控制台",
@@ -500,6 +501,35 @@
     "target": "目标",
     "ip": "IP",
     "empty": "暂无审计日志"
+  },
+  "logs": {
+    "title": "日志中心",
+    "time": "时间",
+    "level": "级别",
+    "source": "来源",
+    "message": "内容",
+    "searchPlaceholder": "搜索日志内容…",
+    "allSources": "全部来源",
+    "allLevels": "全部级别",
+    "allNodes": "全部节点",
+    "allInstances": "全部实例",
+    "source_instance": "实例",
+    "source_control_plane": "平台",
+    "source_worker": "节点",
+    "level_debug": "调试",
+    "level_info": "信息",
+    "level_warn": "警告",
+    "level_error": "错误",
+    "export": "导出",
+    "exporting": "导出中…",
+    "exportStarted": "日志导出已开始",
+    "exportFailed": "日志导出失败",
+    "empty": "暂无日志",
+    "loadError": "加载日志失败",
+    "totalCount": "共 {{count}} 条",
+    "prevPage": "上一页",
+    "nextPage": "下一页",
+    "pageInfo": "第 {{page}} / {{totalPages}} 页"
   },
   "users": {
     "title": "用户管理",
