@@ -128,8 +128,8 @@ func (s *LogService) runIngestLoop() {
 			return
 		}
 		if err := s.db.Create(&batch).Error; err != nil {
-			// 入库失败不重试（避免循环放大故障）；日志服务本身的错误经 slog 暴露即可。
-			slog.Error("日志入库失败", "err", err, "count", len(batch))
+			// 入库失败不重试（避免循环放大故障）；服务自身错误经 slog 暴露但不再落库（防递归）。
+			slog.Error("日志入库失败", "err", err, "count", len(batch), SkipPersist())
 		}
 		batch = batch[:0]
 	}

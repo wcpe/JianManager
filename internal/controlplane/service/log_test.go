@@ -2,6 +2,8 @@ package service
 
 import (
 	"bufio"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -302,6 +304,47 @@ func TestLog_IngestInstanceOutput(t *testing.T) {
 	var errCount int64
 	db.Model(&model.LogEntry{}).Where("level = ?", model.LogLevelError).Count(&errCount)
 	require.EqualValues(t, 1, errCount)
+}
+
+func TestLog_PersistSlogHandler(t *testing.T) {
+	svc, _, db := newLogSvc(t, defaultCfg())
+	svc.Start()
+	defer svc.Stop()
+
+	// 底层 handler 丢弃输出（io.Discard），只验证落库侧。
+	inner := slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug})
+	h := NewPersistSlogHandler(inner, svc)
+	logger := slog.New(h)
+
+	logger.Info("control plane started", "addr", ":8080")
+	logger.Error("something failed", "err", "boom")
+	// 带 SkipPersist 的记录不落库。
+	logger.Warn("internal noise", SkipPersist())
+
+	require.Eventually(t, func() bool {
+		var n int64
+		db.Model(&model.LogEntry{}).Where("source = ?", model.LogSourceControlPlane).Count(&n)
+		return n == 2
+	}, 5*time.Second, 50*time.Millisecond)
+
+	// 属性平铺进正文，便于检索。
+	var hit int64
+	db.Model(&model.LogEntry{}).Where("message LIKE ?", "%addr=:8080%").Count(&hit)
+	require.EqualValues(t, 1, hit)
+
+	// 级别映射正确。
+	var errCount int64
+	db.Model(&model.LogEntry{}).Where("source = ? AND level = ?", model.LogSourceControlPlane, model.LogLevelError).Count(&errCount)
+	require.EqualValues(t, 1, errCount)
+}
+
+func TestLog_PersistSlogHandlerBypass(t *testing.T) {
+	// 未启用持久化时直接返回 inner（零开销旁路）。
+	cfg := defaultCfg()
+	cfg.PersistPlatform = false
+	svc, _, _ := newLogSvc(t, cfg)
+	inner := slog.NewTextHandler(io.Discard, nil)
+	require.Equal(t, inner, NewPersistSlogHandler(inner, svc))
 }
 
 func requireFileContains(t *testing.T, path, substr string) {

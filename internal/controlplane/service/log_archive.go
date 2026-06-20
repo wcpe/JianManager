@@ -36,14 +36,14 @@ func (s *LogService) runArchiveLoop(interval time.Duration) {
 // runRetentionOnce 执行一轮完整的归档+保留。错误仅记录不中断（下一轮重试）。
 func (s *LogService) runRetentionOnce() {
 	if n, err := s.archiveBeforeRetention(); err != nil {
-		slog.Error("按保留天数归档日志失败", "err", err)
+		slog.Error("按保留天数归档日志失败", "err", err, SkipPersist())
 	} else if n > 0 {
-		slog.Info("按保留天数归档日志", "count", n)
+		slog.Info("按保留天数归档日志", "count", n, SkipPersist())
 	}
 	if n, err := s.archiveOverCapacity(); err != nil {
-		slog.Error("按总量上限归档日志失败", "err", err)
+		slog.Error("按总量上限归档日志失败", "err", err, SkipPersist())
 	} else if n > 0 {
-		slog.Info("按总量上限归档日志", "count", n)
+		slog.Info("按总量上限归档日志", "count", n, SkipPersist())
 	}
 }
 
