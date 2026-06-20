@@ -245,7 +245,22 @@
     "online": "在线",
     "offline": "离线",
     "starting": "启动中",
-    "empty": "暂无节点"
+    "empty": "暂无节点",
+    "actions": "操作",
+    "maintenance": "维护中",
+    "cordon": "进入维护",
+    "uncordon": "解除维护",
+    "maintenanceEnabled": "已进入维护模式，新实例将不再调度到该节点",
+    "maintenanceDisabled": "已解除维护模式",
+    "drain": "排空",
+    "drainConfirmTitle": "排空节点",
+    "drainConfirmDesc": "将停止节点「{{name}}」上所有运行中的实例，确定继续？",
+    "drainDone": "排空完成，已停止 {{count}} 个实例",
+    "delete": "下线",
+    "deleteConfirmTitle": "下线节点",
+    "deleteConfirmDesc": "将解除节点「{{name}}」的注册并保留历史记录，复连需重新注册。确定下线？",
+    "deleteOnlineHint": "在线节点不能下线，请先排空并断开 Worker",
+    "deleted": "节点已下线"
   },
   "instances": {
     "title": "实例管理",

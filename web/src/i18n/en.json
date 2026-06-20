@@ -258,7 +258,22 @@
     "online": "Online",
     "offline": "Offline",
     "starting": "Starting",
-    "empty": "No nodes"
+    "empty": "No nodes",
+    "actions": "Actions",
+    "maintenance": "Maintenance",
+    "cordon": "Cordon",
+    "uncordon": "Uncordon",
+    "maintenanceEnabled": "Maintenance mode on; new instances will not be scheduled here",
+    "maintenanceDisabled": "Maintenance mode off",
+    "drain": "Drain",
+    "drainConfirmTitle": "Drain node",
+    "drainConfirmDesc": "This will stop all running instances on node \"{{name}}\". Continue?",
+    "drainDone": "Drained, {{count}} instance(s) stopped",
+    "delete": "Decommission",
+    "deleteConfirmTitle": "Decommission node",
+    "deleteConfirmDesc": "This deregisters node \"{{name}}\" but keeps its records; reconnecting requires re-registration. Continue?",
+    "deleteOnlineHint": "Online nodes cannot be decommissioned; drain and disconnect the Worker first",
+    "deleted": "Node decommissioned"
   },
   "instances": {
     "title": "Instance Management",
