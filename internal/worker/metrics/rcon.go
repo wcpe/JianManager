@@ -35,15 +35,19 @@ func (c *RCONClient) Connect() error {
 	}
 	c.conn = conn
 
-	// 发送认证请求
-	if err := c.sendPacket(3, 2, c.password); err != nil {
+	// 发送认证请求（SERVERDATA_AUTH = 类型 3；此前误用类型 2(EXECCOMMAND) 导致连接从未鉴权，
+	// 后续命令被服务端在鉴权前拒绝，却仍被上报为成功——kick/ban/whitelist 形同空操作）。
+	if err := c.sendPacket(1, 3, c.password); err != nil {
 		return err
 	}
 
-	// 读取认证响应
-	_, _, _, err = c.readPacket()
+	// 读取认证响应：requestID == -1 表示密码错误/鉴权失败（服务端约定）。
+	reqID, _, _, err := c.readPacket()
 	if err != nil {
 		return fmt.Errorf("RCON 认证失败: %w", err)
+	}
+	if reqID == -1 {
+		return fmt.Errorf("RCON 认证失败: 密码错误或被拒绝")
 	}
 
 	return nil
