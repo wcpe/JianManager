@@ -11,6 +11,7 @@ import TerminalPane from './TerminalPane'
 import BotSegment from './BotSegment'
 import FileBrowser from '@/components/FileBrowser'
 import ConfigEditor from '@/components/ConfigEditor'
+import PluginManager from '@/components/plugins/PluginManager'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 
@@ -87,6 +88,7 @@ export default function WorkspacePane({ instanceId }: WorkspacePaneProps) {
             <TabsTrigger value="terminal">{t('console.segmentTerminal')}</TabsTrigger>
             <TabsTrigger value="files">{t('instanceDetail.files')}</TabsTrigger>
             <TabsTrigger value="config">{t('instanceDetail.config')}</TabsTrigger>
+            <TabsTrigger value="plugins">{t('plugins.tab')}</TabsTrigger>
             <TabsTrigger value="bot">{t('console.segmentBot')}</TabsTrigger>
           </TabsList>
         </Tabs>
@@ -105,6 +107,10 @@ export default function WorkspacePane({ instanceId }: WorkspacePaneProps) {
         ) : segment === 'config' ? (
           <div className="p-4">
             <ConfigEditor instanceId={instanceId} />
+          </div>
+        ) : segment === 'plugins' ? (
+          <div className="p-4">
+            <PluginManager instanceId={instanceId} />
           </div>
         ) : (
           <TerminalPane instanceId={instanceId} hideHeader />

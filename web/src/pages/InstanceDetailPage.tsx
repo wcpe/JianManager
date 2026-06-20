@@ -6,6 +6,7 @@ import { useTerminalToken } from '@/api/terminal'
 import { useBots } from '@/api/bots'
 import ConfigEditor from '@/components/ConfigEditor'
 import FileBrowser from '@/components/FileBrowser'
+import PluginManager from '@/components/plugins/PluginManager'
 import TerminalComponent from '@/components/Terminal'
 import { Button } from '@/components/ui/button'
 import {
@@ -105,6 +106,7 @@ export default function InstanceDetailPage() {
           <TabsTrigger value="terminal">{t('instanceDetail.terminal')}</TabsTrigger>
           <TabsTrigger value="files">{t('instanceDetail.files')}</TabsTrigger>
           <TabsTrigger value="config">{t('instanceDetail.config')}</TabsTrigger>
+          <TabsTrigger value="plugins">{t('plugins.tab')}</TabsTrigger>
           <TabsTrigger value="backups">{t('instanceDetail.backups')}</TabsTrigger>
           <TabsTrigger value="bot">{t('instanceDetail.bot')}</TabsTrigger>
         </TabsList>
@@ -117,6 +119,9 @@ export default function InstanceDetailPage() {
         </TabsContent>
         <TabsContent value="config">
           <ConfigTab instanceId={instanceId} />
+        </TabsContent>
+        <TabsContent value="plugins">
+          <PluginManager instanceId={instanceId} />
         </TabsContent>
         <TabsContent value="backups">
           <BackupsTab />
