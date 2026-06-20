@@ -40,6 +40,30 @@ export interface ConfigReadResult {
   validation: ConfigValidationResult
 }
 
+/** 单字段 schema 元数据（与后端 service/schema.FieldSchema 对应）。 */
+export interface FieldSchema {
+  key: string
+  type: string
+  default: string
+  description: string
+  choices?: string[]
+}
+
+/** 单配置文件 schema（与后端 service/schema.ModelSchema 对应）。 */
+export interface ModelSchema {
+  name: string
+  description: string
+  format: string
+  fields: Record<string, FieldSchema>
+}
+
+/** 跨文件/跨实例一致性校验告警。 */
+export interface CrossCheckIssue {
+  level: string
+  message: string
+  key?: string
+}
+
 export interface ConfigVersion {
   id: number
   filePath: string
@@ -101,6 +125,44 @@ export function useWriteConfig(instanceId: number) {
     onError: (err: Error & { response?: { data?: { message?: string; validation?: ConfigValidationResult } } }) => {
       const msg = err.response?.data?.validation?.issues?.[0]?.message ?? err.response?.data?.message
       toast.error(msg || err.message || '保存失败')
+    },
+  })
+}
+
+/** 表单模式保存：提交字段修改，后端字段级补丁回原文（保留注释）。 */
+export function useWriteConfigFields(instanceId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (payload: { path: string; fields: Record<string, string>; message?: string }) => {
+      const { data } = await api.post<{ versionId: number; validation: ConfigValidationResult }>(
+        `/instances/${instanceId}/configs/write-fields`,
+        payload,
+      )
+      return data
+    },
+    onSuccess: (_, vars) => {
+      toast.success(`已保存 ${vars.path}`)
+      qc.invalidateQueries({ queryKey: ['configs', instanceId] })
+    },
+    onError: (err: Error & { response?: { data?: { message?: string; validation?: ConfigValidationResult } } }) => {
+      const msg = err.response?.data?.validation?.issues?.[0]?.message ?? err.response?.data?.message
+      toast.error(msg || err.message || '保存失败')
+    },
+  })
+}
+
+/** 跨文件/跨实例一致性校验（端口唯一 / online-mode 配套 / forwarding secret 跨代理一致）。 */
+export function useCrossCheck(instanceId: number) {
+  return useMutation({
+    mutationFn: async (payload: { path: string; content: string }) => {
+      const { data } = await api.post<{ issues: CrossCheckIssue[] }>(
+        `/instances/${instanceId}/configs/cross-check`,
+        payload,
+      )
+      return data.issues
+    },
+    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
+      toast.error(err.response?.data?.message || '校验失败')
     },
   })
 }
