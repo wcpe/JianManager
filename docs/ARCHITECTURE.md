@@ -16,9 +16,11 @@ Control Plane (Go 单二进制)      Worker Node WS Server
 Worker Node (Go) × 20~100
     ├── 游戏服进程管理 (direct/daemon/docker/rcon)
     ├── 守护进程 Wrapper
-    ├── WebSocket 终端服务
+    ├── WebSocket 终端服务 + 插件桥 (/ws/plugin-bridge)
     ├── Bot 管理 → Node.js 子进程 (Mineflayer)
     └── 指标采集
+        ▲ WS (token 鉴权, 同机回环)
+        └── 平台插件 (Bukkit/BC, 运行于游戏服 JVM)  // 见 ADR-012
 ```
 
 ## 2. 三进程模型
@@ -167,6 +169,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 文件操作：ListFiles, ReadFile, WriteFile, DeleteFile, UploadFile (client stream), DownloadFile (server stream)
 - 终端：IssueTerminalToken
 - Bot：CreateBot, DeleteBot, ListBots, StreamBotEvents (server stream), SendBotCommand
+- 插件桥 (V2)：StreamPluginEvents (server stream, 插件事件经 Worker 冒泡给 CP)、SendPluginCommand（CP 经 Worker 下发指令给插件）。见 ADR-012
 - 指标：GetNodeMetrics, GetInstanceMetrics
 - 玩家管理：ExecRconCommand（经实例 RCON 执行命令并回传输出，FR-054；RCON 端口/密码由 CP 随请求下发，Worker 不访问 DB；`available=false` 优雅降级）
 - 配置 (V2)：ListConfigFiles, ReadConfig, WriteConfig, ListConfigVersions, RollbackConfig
@@ -200,6 +203,44 @@ Browser → Worker Node (WS ws://worker:port/ws/terminal?token=xxx)
 {"type":"stdin","instanceId":"xxx","data":"..."}
 {"type":"resize","instanceId":"xxx","cols":120,"rows":40}
 ```
+
+### 6.2.1 WebSocket（平台插件 ↔ Worker Node）插件桥
+
+平台侧插件（Bukkit/BungeeCord，运行于游戏服 JVM，与 Worker 同机）经 WS 连入 Worker，
+与终端 WS 并列、复用同一 WS 监听端口。插件**只与 Worker 通信**，不直连 CP/DB/gRPC（见 ADR-012）。
+
+鉴权：CP 为实例签发插件桥 token（HS256 JWT，claims 含 `instanceId` + `scope=plugin-bridge`，TTL 数分钟），
+运维写入插件配置；插件握手携带 `?token=...&instance=<uuid>`，Worker 用同一 `JIANMANAGER_JWT_SECRET` 校验。
+
+```
+Browser → Control Plane (POST /api/v1/instances/:id/plugin-token)
+  → 返回 {token, wsUrl, expiresIn}（写入插件配置）
+插件 → Worker Node (WS ws://worker:wsPort/ws/plugin-bridge?token=xxx&instance=<uuid>)
+  → 事件上行：插件 →(WS) Worker →(gRPC StreamPluginEvents) CP →(SSE /plugins/events) 浏览器
+  → 指令下行：浏览器 →(HTTP) CP →(gRPC SendPluginCommand) Worker →(WS) 插件
+```
+
+消息格式（插件 ↔ Worker，JSON 行）：
+
+```json
+// 插件 → Worker（事件上行）
+{"type":"event","event":"player_join","instanceId":"xxx","data":{"player":"Steve"},"ts":1718870000}
+{"type":"event","event":"player_quit","instanceId":"xxx","data":{"player":"Steve"}}
+{"type":"event","event":"player_chat","instanceId":"xxx","data":{"player":"Steve","message":"hi"}}
+{"type":"event","event":"server_status","instanceId":"xxx","data":{"online":3,"players":["A","B","C"]}}
+{"type":"hello","instanceId":"xxx","data":{"platform":"bukkit","pluginVersion":"0.1.0"}}
+{"type":"pong"}
+{"type":"command_result","id":"<cmdId>","data":{"ok":true}}
+
+// Worker → 插件（指令下行）
+{"type":"command","id":"<cmdId>","action":"kick","args":{"player":"Steve","reason":"..."}}
+{"type":"command","id":"<cmdId>","action":"ban","args":{"player":"Steve","reason":"..."}}
+{"type":"command","id":"<cmdId>","action":"whitelist_add","args":{"player":"Steve"}}
+{"type":"ping"}
+```
+
+会话：Worker 维护「实例 UUID → 插件会话」表（同实例同时仅一活动会话，新连顶替旧连）；
+连接/断开作为 `connected`/`disconnected` 事件经 `StreamPluginEvents` 冒泡到 CP，前端据此展示已连插件列表/连接状态。
 
 ### 6.3 守护进程二进制帧协议
 

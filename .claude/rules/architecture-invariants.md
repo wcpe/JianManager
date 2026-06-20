@@ -18,6 +18,7 @@
 
 - Control Plane ↔ Worker Node：gRPC（唯一允许的 RPC 协议）
 - 浏览器 ↔ Worker Node：WebSocket（仅终端/日志流，需一次性 token 鉴权）
+- 平台插件（Bukkit/BC）↔ Worker Node：WebSocket（插件桥 `/ws/plugin-bridge`，需实例级 token 鉴权；插件不直连 CP/DB/gRPC，事件/指令经 Worker 中转。见 ADR-012）
 - Worker Node ↔ Bot Worker：stdin/stdout JSON 行协议
 - 守护进程 ↔ Worker Node：Unix Socket 二进制帧协议
 
