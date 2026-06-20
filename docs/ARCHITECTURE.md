@@ -679,12 +679,24 @@ web/src/
   pages/        # 页面（懒加载）；DashboardPage = 运维控制台 Shell；V2 新增 NetworksPage(群组服拓扑) + 节点详情 JDK 标签
   components/   # 共享组件 (console[控制台侧栏/工作区/终端面板], ui/shadcn, terminal, chart)
                 # V2: config-editor(表单/原始/版本) · provision-wizard · jdk-manager · clone-dialog · registration-editor
+                # DangerConfirm: 统一危险操作二次确认（高危需输入名校验 + 角色门禁，FR-059）
   hooks/        # 自定义 hooks
-  i18n/         # 中文 + 英文
-  lib/          # 工具函数
+  i18n/         # 中文 + 英文（danger 命名空间 = 危险操作文案）
+  lib/          # 工具函数（jwt 解码声明、danger 角色门禁判定）
   router.tsx
   route-permissions.ts
 ```
+
+### 8.7 危险操作保护（FR-059）
+
+所有破坏性操作统一经 `components/DangerConfirm.tsx` 二次确认，替代 `window.confirm` 与零散内联确认弹窗：
+
+- **二次确认**：基于 shadcn Dialog，主按钮恒为 `destructive` 样式。
+- **高危输入名校验**：传 `confirmText`（通常为资源名）后，用户须逐字输入该名称方可确认（删实例/删用户等）。
+- **角色门禁**：传 `scope`（`group` = 组管理员+，如删实例/删备份/删 Bot；`platform` = 仅平台管理员，如删用户/删群组）。越权用户确认按钮禁用并提示；前端仅做 UI 拦截，最终拒绝由 Control Plane RBAC 中间件强制（架构不变量）。审计经既有后端中间件留痕。
+- 角色来自 `stores/auth` 解码自身 access token 的 `role` 声明（`lib/jwt.ts`），门禁判定纯函数为 `lib/danger.ts#canRunDanger`。
+
+其它 FR 的新破坏性操作（如 FR-048 节点下线、FR-052 删插件、FR-058 批量 kill）应复用此组件，按上述 `scope`/`confirmText` 约定接入。
 
 ## 9. Bot Worker 架构
 

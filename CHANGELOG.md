@@ -19,6 +19,7 @@
 - **节点维护模式与主动下线**（FR-048）：节点新增 `maintenance`（cordon）标记，与在线/离线正交；维护中拒绝新实例调度到该节点（创建期拦截，返回 `NODE_MAINTENANCE`）；排空 `POST /nodes/:id/drain` 停止其上 RUNNING 实例（复用实例停止 gRPC，不迁移）；主动下线 `DELETE /nodes/:id` 解除注册保留记录、复连需重新注册（在线拒绝）；维护/排空/下线写审计（`node.maintenance`/`node.drain`/`node.delete`），前端节点页加维护标记展示与维护/排空/下线操作（排空、下线二次确认）+ zh/en i18n
 - **增量备份与备份链恢复**（FR-056）：备份新增全量/增量模式，增量挂最近一次已完成备份为父形成链；Worker 据上次清单按 mtime/size 仅打包变化文件并回传完整文件清单；恢复沿父链回溯解析整链（全量基 + 各增量）按序回放；列表展示模式与链关系；删除被增量依赖的备份予以拒绝
 - **备份远程存储**（FR-057）：备份存储位置可配本地/S3 兼容/SFTP/WebDAV，凭证以 `${ENV_VAR}` 引用不落明文（创建时校验拒绝明文）；创建备份可选目标存储，远程备份恢复=拉回本地再回放；与制品库 storage_backend 模型对齐；`GET/POST/DELETE /backup-storages`（平台管理员）。S3 仅用标准库实现 SigV4，无新增第三方依赖
+- **危险操作保护体系化**（FR-059）：统一 `DangerConfirm` 组件收敛全部破坏性二次确认——高危操作（删实例/删用户）要求输入资源名逐字校验，角色门禁按范围（组管理员/平台管理员）禁用越权确认并提示（前端 UI 拦截，最终拒绝仍由后端 RBAC 强制）。接入删实例/删用户/删群组/删备份/恢复备份/删 Bot/批量停止·删除 Bot 等现有入口；补齐删备份此前缺失的二次确认；删除被取代的 ConfirmDialog。i18n(zh+en) + 暗/亮色主题
 
 ### Fixed
 - **代理 daemon 停止缺陷**（FR-035 / FR-006）：daemon 优雅停止此前硬编码向 stdin 发 MC `stop`，代理（BungeeCord/Waterfall/Velocity）不认该命令而一直挂到超时才强杀，超时窗口内重启时旧进程仍占监听端口致新进程端口冲突崩溃（`exit status 1`）；改为 CP 按实例角色派生停止命令（后端/通用 `stop`、代理 `end`）经 `CreateInstance.stop_command` 下发并烤进 wrapper 配置（空值回退 `stop`）。并在 daemon 重启前按 PID 文件等待上一代 wrapper/Java 完全退出（`WaitForPriorExit`，`JIANMANAGER_START_WAIT_PRIOR_EXIT_TIMEOUT` 可覆盖），消除快速 stop→start 的端口竞态；修复重启复用同一 strategy 时陈旧 reaper 误改新实例状态；修复 daemon `Kill` 在 Windows 上仅杀 wrapper 进程、致 Java 孤儿化继续占监听端口（重启 `Kill`+`Start` 时新进程 `java.net.BindException` 崩溃），改用 `taskkill /T` 终止整棵进程树
