@@ -89,6 +89,37 @@ func (h *ConfigHandler) Write(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"versionId": versionID, "validation": validation})
 }
 
+type configWriteFieldsRequest struct {
+	Path    string            `json:"path" binding:"required"`
+	Fields  map[string]string `json:"fields" binding:"required"`
+	Message string            `json:"message"`
+}
+
+// WriteFields 表单模式保存：字段级补丁回原文（保留注释），生成新版本。
+func (h *ConfigHandler) WriteFields(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !canManageInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	var req configWriteFieldsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+	uid, _ := c.Get(middleware.CtxUserID)
+	authorID, _ := uid.(uint)
+	versionID, validation, err := h.svc.WriteFields(id, req.Path, req.Fields, req.Message, authorID)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error(), "validation": validation})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"versionId": versionID, "validation": validation})
+}
+
 func (h *ConfigHandler) Versions(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -140,6 +171,7 @@ func (h *ConfigHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	cfg.GET("", h.List)
 	cfg.GET("/read", h.Read)
 	cfg.POST("/write", h.Write)
+	cfg.POST("/write-fields", h.WriteFields)
 	cfg.POST("/cross-check", h.CrossCheck)
 	// *file 通配符必须在路径末尾；文件路径可能含子目录（如 plugins/Foo/config.yml）。
 	cfg.GET("/versions/*file", h.Versions)

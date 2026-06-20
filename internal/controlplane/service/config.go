@@ -92,21 +92,56 @@ func (s *ConfigService) Read(instanceID uint, filePath string) (*ConfigReadResul
 	if err != nil {
 		return nil, fmt.Errorf("读取配置失败: %w", err)
 	}
-	fields := make([]map[string]any, 0, len(resp.Fields))
-	for _, f := range resp.Fields {
+	// 用内置 schema 解析当前文件字段（覆盖 properties/yaml/toml；Worker 仅解析 properties），
+	// 并附上真实 schema 元数据，供前端渲染表单模式（FR-031 验收标准 2/3）。
+	m := schema.MatchPath(filePath)
+	parsed := schema.ApplyTypes(schema.BuildFields(resp.Format, resp.Content), m)
+	fields := make([]map[string]any, 0, len(parsed))
+	for _, f := range parsed {
 		fields = append(fields, map[string]any{"key": f.Key, "value": f.Value, "type": f.Type, "description": f.Description, "line": f.Line})
 	}
 	validation := map[string]any{"valid": true, "issues": []any{}}
 	if resp.Validation != nil {
 		validation = map[string]any{"valid": resp.Validation.Valid, "issues": resp.Validation.Issues}
 	}
-	model := ""
-	if resp.Model != "" {
-		model = resp.Model
-	} else if m := schema.MatchPath(filePath); m != nil {
-		model = m.Name
+	modelName := resp.Model
+	schemaJSON := resp.SchemaJson
+	if m != nil {
+		modelName = m.Name
+		schemaJSON = schemaToJSON(m)
 	}
-	return &ConfigReadResult{Path: resp.Path, Format: resp.Format, Content: resp.Content, Fields: fields, SchemaJSON: resp.SchemaJson, Model: model, Validation: validation}, nil
+	return &ConfigReadResult{Path: resp.Path, Format: resp.Format, Content: resp.Content, Fields: fields, SchemaJSON: schemaJSON, Model: modelName, Validation: validation}, nil
+}
+
+// WriteFields 表单模式保存：把字段修改字段级补丁回原始文件（保留注释/顺序），再写入并生成版本。
+// updates 为「键→新值」，键为 properties 平铺键 / yaml 点路径 / toml 顶层键。
+func (s *ConfigService) WriteFields(instanceID uint, filePath string, updates map[string]string, message string, authorID uint) (uint, map[string]any, error) {
+	inst, client, err := s.client(instanceID)
+	if err != nil {
+		return 0, nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cur, err := client.Worker.ReadConfig(ctx, &workerpb.ReadConfigRequest{InstanceUuid: inst.UUID, Path: filePath})
+	if err != nil {
+		return 0, nil, fmt.Errorf("读取当前配置失败: %w", err)
+	}
+	m := schema.MatchPath(filePath)
+	fus := make([]fieldUpdate, 0, len(updates))
+	for k, v := range updates {
+		typ := "string"
+		if m != nil {
+			if fs, ok := m.Fields[k]; ok {
+				typ = fs.Type
+			}
+		}
+		fus = append(fus, fieldUpdate{Key: k, Value: v, Type: typ})
+	}
+	patched, err := patchConfig(cur.Format, cur.Content, fus)
+	if err != nil {
+		return 0, nil, err
+	}
+	return s.Write(instanceID, filePath, patched, message, authorID, nil)
 }
 
 // Write 保存新版本；可选回滚源 versionID。
@@ -309,9 +344,6 @@ func schemaToJSON(m *schema.ModelSchema) string {
 	b, _ := json.Marshal(m)
 	return string(b)
 }
-
-// 防止 schema 导入被 Go 编译器标记未用（BuildFields/MatchPath/ApplyTypes 已在 parseToSchema 中引用）。
-var _ = schemaToJSON
 
 func isConfigFile(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
