@@ -41,6 +41,7 @@ type Services struct {
 	Registration  *service.RegistrationService
 	Network       *service.NetworkService
 	Log           *service.LogService
+	Metric        *service.MetricService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -129,6 +130,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 日志中心：所有认证用户可查询，Handler 内部按可访问实例收敛、平台日志仅管理员可见（FR-049）。
 		logHandler := NewLogHandler(svcs.Log, svcs.Authz)
 		logHandler.RegisterRoutes(protected)
+
+		// 时序监控历史曲线（FR-060）：node 维度对认证用户开放，instance 维度按 CanAccessInstance 收敛。
+		metricHandler := NewMetricHandler(svcs.Metric, svcs.Authz)
+		metricHandler.RegisterRoutes(protected)
 	}
 
 	// 仅平台管理员

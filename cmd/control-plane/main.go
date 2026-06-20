@@ -112,6 +112,11 @@ func main() {
 	scheduler.Start()
 	defer scheduler.Stop()
 
+	// 时序指标卷积器：周期卷积 raw→5m→1h 并按 TTL 清理（FR-060/ADR-013）。
+	metricSvc := service.NewMetricService(db)
+	metricSvc.Start()
+	defer metricSvc.Stop()
+
 	r := router.Setup(&router.Services{
 		Auth:          authSvc,
 		User:          userSvc,
@@ -143,6 +148,7 @@ func main() {
 		Registration:  registrationSvc,
 		Network:       networkSvc,
 		Log:           logSvc,
+		Metric:        metricSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）

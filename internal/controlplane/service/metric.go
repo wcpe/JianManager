@@ -75,6 +75,28 @@ func NewMetricService(db *gorm.DB) *MetricService {
 	return &MetricService{db: db}
 }
 
+// NodeExists 判断节点 UUID 是否存在（查询目标存在性校验用）。
+func (s *MetricService) NodeExists(uuid string) (bool, error) {
+	var n int64
+	if err := s.db.Model(&model.Node{}).Where("uuid = ?", uuid).Count(&n).Error; err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// ResolveInstanceID 由实例 UUID 取数值 ID（供 RBAC 校验）；不存在返回 found=false。
+func (s *MetricService) ResolveInstanceID(uuid string) (uint, bool, error) {
+	var inst model.Instance
+	err := s.db.Select("id").Where("uuid = ?", uuid).First(&inst).Error
+	if err == nil {
+		return inst.ID, true, nil
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, false, nil
+	}
+	return 0, false, err
+}
+
 // selectResolution 据查询跨度自动选档；显式 resolution 优先。
 func selectResolution(span time.Duration, requested string) string {
 	switch requested {

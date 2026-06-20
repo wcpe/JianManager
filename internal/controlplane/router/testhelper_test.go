@@ -85,6 +85,7 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 		Authz:         authzSvc,
 		Asset:         service.NewAssetService(db, root),
 		Log:           service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),
+		Metric:        service.NewMetricService(db),
 	}
 	return Setup(svcs, jwtCfg.Secret)
 }
