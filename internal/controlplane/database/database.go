@@ -65,6 +65,10 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.FileVersion{},
 		&model.Asset{},
 		&model.LogEntry{},
+		&model.MetricSeries{},
+		&model.MetricSampleRaw{},
+		&model.MetricRollup5m{},
+		&model.MetricRollup1h{},
 	)
 }
 
