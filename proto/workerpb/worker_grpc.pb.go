@@ -48,6 +48,8 @@ const (
 	WorkerService_RemoveJDK_FullMethodName            = "/worker.WorkerService/RemoveJDK"
 	WorkerService_DownloadCore_FullMethodName         = "/worker.WorkerService/DownloadCore"
 	WorkerService_CloneWorkDir_FullMethodName         = "/worker.WorkerService/CloneWorkDir"
+	WorkerService_CreateBackup_FullMethodName         = "/worker.WorkerService/CreateBackup"
+	WorkerService_RestoreBackup_FullMethodName        = "/worker.WorkerService/RestoreBackup"
 	WorkerService_CreateBot_FullMethodName            = "/worker.WorkerService/CreateBot"
 	WorkerService_DeleteBot_FullMethodName            = "/worker.WorkerService/DeleteBot"
 	WorkerService_ListBots_FullMethodName             = "/worker.WorkerService/ListBots"
@@ -123,6 +125,12 @@ type WorkerServiceClient interface {
 	DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error)
 	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
 	CloneWorkDir(ctx context.Context, in *CloneWorkDirRequest, opts ...grpc.CallOption) (*CloneWorkDirResponse, error)
+	// CreateBackup 将实例工作目录打包为 tar.gz 落到节点数据根 var/backups/。
+	// 增量备份据 base_manifest 仅打包新增/变化文件；可选上传到远程存储后端。
+	CreateBackup(ctx context.Context, in *CreateBackupRequest, opts ...grpc.CallOption) (*CreateBackupResponse, error)
+	// RestoreBackup 按备份链顺序（全量基 + 各增量）回放归档到实例工作目录；
+	// 远程归档先据 storage 拉回本地再回放。
+	RestoreBackup(ctx context.Context, in *RestoreBackupRequest, opts ...grpc.CallOption) (*RestoreBackupResponse, error)
 	// CreateBot 在 Worker 上创建 Bot 连接。
 	CreateBot(ctx context.Context, in *CreateBotRequest, opts ...grpc.CallOption) (*CreateBotResponse, error)
 	// DeleteBot 停止并删除 Bot。
@@ -449,6 +457,26 @@ func (c *workerServiceClient) CloneWorkDir(ctx context.Context, in *CloneWorkDir
 	return out, nil
 }
 
+func (c *workerServiceClient) CreateBackup(ctx context.Context, in *CreateBackupRequest, opts ...grpc.CallOption) (*CreateBackupResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateBackupResponse)
+	err := c.cc.Invoke(ctx, WorkerService_CreateBackup_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) RestoreBackup(ctx context.Context, in *RestoreBackupRequest, opts ...grpc.CallOption) (*RestoreBackupResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RestoreBackupResponse)
+	err := c.cc.Invoke(ctx, WorkerService_RestoreBackup_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) CreateBot(ctx context.Context, in *CreateBotRequest, opts ...grpc.CallOption) (*CreateBotResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateBotResponse)
@@ -594,6 +622,12 @@ type WorkerServiceServer interface {
 	DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error)
 	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
 	CloneWorkDir(context.Context, *CloneWorkDirRequest) (*CloneWorkDirResponse, error)
+	// CreateBackup 将实例工作目录打包为 tar.gz 落到节点数据根 var/backups/。
+	// 增量备份据 base_manifest 仅打包新增/变化文件；可选上传到远程存储后端。
+	CreateBackup(context.Context, *CreateBackupRequest) (*CreateBackupResponse, error)
+	// RestoreBackup 按备份链顺序（全量基 + 各增量）回放归档到实例工作目录；
+	// 远程归档先据 storage 拉回本地再回放。
+	RestoreBackup(context.Context, *RestoreBackupRequest) (*RestoreBackupResponse, error)
 	// CreateBot 在 Worker 上创建 Bot 连接。
 	CreateBot(context.Context, *CreateBotRequest) (*CreateBotResponse, error)
 	// DeleteBot 停止并删除 Bot。
@@ -704,6 +738,12 @@ func (UnimplementedWorkerServiceServer) DownloadCore(context.Context, *DownloadC
 }
 func (UnimplementedWorkerServiceServer) CloneWorkDir(context.Context, *CloneWorkDirRequest) (*CloneWorkDirResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CloneWorkDir not implemented")
+}
+func (UnimplementedWorkerServiceServer) CreateBackup(context.Context, *CreateBackupRequest) (*CreateBackupResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateBackup not implemented")
+}
+func (UnimplementedWorkerServiceServer) RestoreBackup(context.Context, *RestoreBackupRequest) (*RestoreBackupResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RestoreBackup not implemented")
 }
 func (UnimplementedWorkerServiceServer) CreateBot(context.Context, *CreateBotRequest) (*CreateBotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateBot not implemented")
@@ -1251,6 +1291,42 @@ func _WorkerService_CloneWorkDir_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_CreateBackup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateBackupRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).CreateBackup(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_CreateBackup_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).CreateBackup(ctx, req.(*CreateBackupRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_RestoreBackup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RestoreBackupRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).RestoreBackup(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_RestoreBackup_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).RestoreBackup(ctx, req.(*RestoreBackupRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_CreateBot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateBotRequest)
 	if err := dec(in); err != nil {
@@ -1484,6 +1560,14 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CloneWorkDir",
 			Handler:    _WorkerService_CloneWorkDir_Handler,
+		},
+		{
+			MethodName: "CreateBackup",
+			Handler:    _WorkerService_CreateBackup_Handler,
+		},
+		{
+			MethodName: "RestoreBackup",
+			Handler:    _WorkerService_RestoreBackup_Handler,
 		},
 		{
 			MethodName: "CreateBot",

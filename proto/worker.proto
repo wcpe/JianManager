@@ -70,6 +70,15 @@ service WorkerService {
   // CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
   rpc CloneWorkDir(CloneWorkDirRequest) returns (CloneWorkDirResponse);
 
+  // === 备份操作（FR-013 全量 / FR-056 增量 / FR-057 远程存储） ===
+
+  // CreateBackup 将实例工作目录打包为 tar.gz 落到节点数据根 var/backups/。
+  // 增量备份据 base_manifest 仅打包新增/变化文件；可选上传到远程存储后端。
+  rpc CreateBackup(CreateBackupRequest) returns (CreateBackupResponse);
+  // RestoreBackup 按备份链顺序（全量基 + 各增量）回放归档到实例工作目录；
+  // 远程归档先据 storage 拉回本地再回放。
+  rpc RestoreBackup(RestoreBackupRequest) returns (RestoreBackupResponse);
+
   // === Bot 操作 ===
 
   // CreateBot 在 Worker 上创建 Bot 连接。
@@ -577,6 +586,60 @@ message CloneWorkDirResponse {
   int64 copied_files = 3;
   int64 copied_bytes = 4;
   repeated string skipped = 5; // 被排除跳过的顶层项/目录（回报用）
+}
+
+// === 备份操作（FR-013/FR-056/FR-057） ===
+
+// StorageBackendSpec 远程存储后端的传输参数。
+// 凭证由 Control Plane 侧从 ${ENV_VAR} 解析后填入（CP 拥有配置/DB），
+// Worker 视其为不透明传输参数，仅按 type 执行上传/下载。参见 config-files.md。
+message StorageBackendSpec {
+  string type = 1;        // local | s3 | sftp | webdav
+  string endpoint = 2;    // S3 endpoint / WebDAV base URL / SFTP host:port
+  string bucket = 3;      // S3 bucket（其余后端忽略）
+  string region = 4;      // S3 region
+  string prefix = 5;      // 对象键/远程目录前缀
+  string access_key = 6;  // 已解析凭证：S3 access key / SFTP 用户名 / WebDAV 用户名
+  string secret_key = 7;  // 已解析凭证：S3 secret key / SFTP 密码 / WebDAV 密码
+  bool use_ssl = 8;       // S3 是否启用 TLS
+}
+
+// BackupManifestEntry 备份清单中的单个文件指纹，用于增量差异比对。
+message BackupManifestEntry {
+  string path = 1;     // 相对实例工作目录、以「/」分隔的可移植路径
+  int64 size = 2;      // 字节数
+  int64 mod_time = 3;  // 修改时间 Unix 秒
+}
+
+message CreateBackupRequest {
+  string instance_uuid = 1;          // 目标实例（据其工作目录打包）
+  string backup_uuid = 2;            // 备份 UUID，决定归档文件名
+  bool incremental = 3;              // 是否增量
+  repeated BackupManifestEntry base_manifest = 4; // 增量基准清单（链上各前序备份合并后的文件指纹）
+  StorageBackendSpec storage = 5;    // 非空且 type!=local 时，打包后上传到该远程后端
+}
+
+message CreateBackupResponse {
+  bool success = 1;
+  string error = 2;
+  string rel_path = 3;               // 归档相对节点数据根的路径（var/backups/<instanceID>/<uuid>.tar.gz）
+  int64 size_bytes = 4;              // 归档字节数
+  int64 file_count = 5;              // 本次实际打包文件数（增量为变化文件数）
+  repeated BackupManifestEntry manifest = 6; // 本次备份后实例工作目录的完整清单（供下次增量比对与链回放）
+  string storage_key = 7;            // 上传到远程后的对象键（本地备份为空）
+}
+
+message RestoreBackupRequest {
+  string instance_uuid = 1;          // 目标实例（恢复到其工作目录）
+  repeated string rel_paths = 2;     // 备份链归档相对路径，按顺序回放（全量基在前，增量依次在后）
+  StorageBackendSpec storage = 3;    // 非空且 type!=local 时，归档先从远程拉回本地再回放
+  repeated string storage_keys = 4;  // 与 rel_paths 对应的远程对象键（远程恢复用）
+}
+
+message RestoreBackupResponse {
+  bool success = 1;
+  string error = 2;
+  int64 restored_files = 3;          // 回放写入的文件数
 }
 
 // === Bot 操作 ===
