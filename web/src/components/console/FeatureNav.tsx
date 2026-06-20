@@ -15,6 +15,7 @@ const featureNav: NavEntry[] = [
   { to: '/templates', labelKey: 'nav.templates' },
   { to: '/schedules', labelKey: 'nav.schedules' },
   { to: '/backups', labelKey: 'nav.backups' },
+  { to: '/backup-storages', labelKey: 'nav.backupStorages' },
 ]
 
 export default function FeatureNav() {
