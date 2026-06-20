@@ -9,12 +9,13 @@ import (
 
 // Config 是 Control Plane 的完整配置。
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	GRPC     GRPCConfig     `mapstructure:"grpc"`
-	Database DatabaseConfig `mapstructure:"database"`
-	JWT      JWTConfig      `mapstructure:"jwt"`
-	Log      LogConfig      `mapstructure:"log"`
-	LogStore LogStoreConfig `mapstructure:"log_store"`
+	Server      ServerConfig      `mapstructure:"server"`
+	GRPC        GRPCConfig        `mapstructure:"grpc"`
+	Database    DatabaseConfig    `mapstructure:"database"`
+	JWT         JWTConfig         `mapstructure:"jwt"`
+	Log         LogConfig         `mapstructure:"log"`
+	LogStore    LogStoreConfig    `mapstructure:"log_store"`
+	FileVersion FileVersionConfig `mapstructure:"file_version"`
 }
 
 // ServerConfig HTTP 服务器配置。
@@ -63,6 +64,14 @@ type LogStoreConfig struct {
 	ArchiveIntervalMinutes int `mapstructure:"archive_interval_minutes"`
 }
 
+// FileVersionConfig 通用文件版本（FR-051）配置。
+type FileVersionConfig struct {
+	// MaxPerFile 单文件保留的版本上限；超出时删除最旧版本。<=0 表示不限制。
+	MaxPerFile int `mapstructure:"max_per_file"`
+	// MaxSizeBytes 单文件触发快照的大小上限；超过此值跳过版本快照，避免大文件（如世界存档）撑爆 DB。<=0 表示不限制。
+	MaxSizeBytes int64 `mapstructure:"max_size_bytes"`
+}
+
 // Load 从文件和环境变量加载配置。
 func Load(path string) (*Config, error) {
 	v := viper.New()
@@ -84,6 +93,9 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log_store.retention_days", 14)
 	v.SetDefault("log_store.max_total_mb", 512)
 	v.SetDefault("log_store.archive_interval_minutes", 30)
+	// 文件版本（FR-051）：默认每文件保留 20 个版本，单文件 ≤5MiB 才快照。
+	v.SetDefault("file_version.max_per_file", 20)
+	v.SetDefault("file_version.max_size_bytes", 5*1024*1024)
 
 	// 配置文件
 	if path != "" {
