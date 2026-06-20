@@ -1,6 +1,7 @@
 package router
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -32,6 +33,10 @@ func (h *BackupHandler) List(c *gin.Context) {
 
 type createBackupRequest struct {
 	Name string `json:"name" binding:"required"`
+	// Incremental 为 true 时创建增量备份（FR-056），挂到该实例最近一次已完成备份后形成链。
+	Incremental bool `json:"incremental"`
+	// StorageID 指定远程存储后端；缺省存于节点本地（FR-057）。
+	StorageID *uint `json:"storageId"`
 }
 
 func (h *BackupHandler) Create(c *gin.Context) {
@@ -44,8 +49,16 @@ func (h *BackupHandler) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
 		return
 	}
-	backup, err := h.backupSvc.Create(instanceID, req.Name)
+	backup, err := h.backupSvc.CreateWithOptions(instanceID, req.Name, service.CreateOptions{
+		Incremental: req.Incremental,
+		StorageID:   req.StorageID,
+	})
 	if err != nil {
+		// 增量缺少基准是可预期的业务错误，回 422 便于前端提示先做全量。
+		if errors.Is(err, service.ErrNoFullBaseForIncremental) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
 		return
 	}
