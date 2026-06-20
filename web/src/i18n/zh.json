@@ -185,6 +185,18 @@
     "empty": "该节点暂无端口占用",
     "range": "分配范围：server {{server}}+ / rcon {{rcon}}+（每段 {{size}} 个）"
   },
+  "danger": {
+    "denied": "你的角色无权执行此操作，请联系管理员。",
+    "typeToConfirm": "请输入「{{name}}」以确认此操作",
+    "deleteInstanceTitle": "删除实例「{{name}}」？",
+    "deleteInstanceDesc": "此操作不可撤销，实例的所有数据将被删除。",
+    "deleteNodeTitle": "下线节点「{{name}}」？",
+    "deleteNodeDesc": "节点将被解除注册，其上记录保留；复连需重新注册。",
+    "deleteUserTitle": "删除用户「{{name}}」？",
+    "deleteUserDesc": "此操作不可撤销，该用户将无法登录。",
+    "batchKillTitle": "强制关闭 {{count}} 个实例？",
+    "batchKillDesc": "将强制终止所选实例进程，可能导致未保存数据丢失。"
+  },
   "common": {
     "loading": "加载中...",
     "close": "关闭",
@@ -636,6 +648,8 @@
     "backupNamePlaceholder": "可选，留空自动生成",
     "restore": "恢复",
     "restoreConfirm": "确认恢复此备份？当前数据将被覆盖。",
+    "confirmRestore": "确认恢复此备份？",
+    "restoreWarning": "当前文件将被覆盖，此操作不可撤销。",
     "deleteConfirm": "确定删除此备份？",
     "empty": "暂无备份",
     "size": "大小",

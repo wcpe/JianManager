@@ -185,6 +185,18 @@
     "empty": "No ports in use on this node",
     "range": "Allocation: server {{server}}+ / rcon {{rcon}}+ ({{size}} per range)"
   },
+  "danger": {
+    "denied": "Your role is not allowed to perform this action. Contact an administrator.",
+    "typeToConfirm": "Type \"{{name}}\" to confirm this action",
+    "deleteInstanceTitle": "Delete instance \"{{name}}\"?",
+    "deleteInstanceDesc": "This action cannot be undone. All instance data will be deleted.",
+    "deleteNodeTitle": "Decommission node \"{{name}}\"?",
+    "deleteNodeDesc": "The node will be unregistered; its records are kept. Reconnecting requires re-registration.",
+    "deleteUserTitle": "Delete user \"{{name}}\"?",
+    "deleteUserDesc": "This action cannot be undone. The user will no longer be able to sign in.",
+    "batchKillTitle": "Force stop {{count}} instances?",
+    "batchKillDesc": "Selected instance processes will be killed; unsaved data may be lost."
+  },
   "common": {
     "loading": "Loading...",
     "close": "Close",
@@ -636,6 +648,8 @@
     "backupNamePlaceholder": "Optional, leave empty to auto-generate",
     "restore": "Restore",
     "restoreConfirm": "Restore to this backup? Current data will be overwritten",
+    "confirmRestore": "Restore this backup?",
+    "restoreWarning": "Current files will be overwritten. This action cannot be undone.",
     "deleteConfirm": "Delete this backup?",
     "empty": "No backups",
     "size": "Size",
