@@ -173,6 +173,9 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 运行时 (V2)：ListJDKs, InstallJDK, RemoveJDK, DownloadCore
 - 复制 (V2)：CloneWorkDir（本机复制源工作目录到目标，排除运行态文件）
   - 搭建子服/代理由 Control Plane 编排：分配端口/目录 → CreateInstance → DownloadCore → WriteConfig，不另设 worker 端 Provision RPC
+- 备份 (V2)：CreateBackup, RestoreBackup（FR-056/057）
+  - Worker 把工作目录打 tar.gz 落数据根 `var/backups/<instanceUUID>/`，据 base_manifest 做增量差异，始终回传完整文件清单供 CP 维护链/基准
+  - 恢复按链顺序（全量基 + 各增量）回放；远程后端（S3/SFTP/WebDAV）由 Worker 持 CP 下发的 StorageBackendSpec 直传/拉回，凭证由 CP 从 `${ENV_VAR}` 解析后下发（Worker 不读环境/不碰 DB）
 
 ### 6.2 WebSocket（浏览器 ↔ Worker Node）
 
@@ -251,6 +254,8 @@ Group ──1:N──▶ GroupQuota
 Group ──M:N──▶ Instance (GroupInstance, UNIQUE instance_id)
 Node ──1:N──▶ Instance
 Instance ──1:N──▶ Backup / Schedule / Bot
+Backup ──N:1──▶ Backup (parent_id, 增量备份链, V2)
+Backup ──N:1──▶ BackupStorage (storage_id, 远程存储位置, V2)
 Instance(proxy) ──M:N──▶ Instance(backend)   # V2 ServerRegistration: alias/priority/forced_host
 Network ──M:N──▶ Instance                    # V2 NetworkMember（非独占软标签）
 Node ──1:N──▶ NodeJDK                         # V2
@@ -272,7 +277,8 @@ AlertRule ──1:N──▶ AlertEvent
 | instances | uuid, node_id(FK), name, type, role(proxy/backend/universal, V2), process_type, status, start_command, work_dir(系统分配), env_vars(JSON), auto_start, auto_restart, jdk_id(FK, V2), launch_spec(JSON: jvm_args/core_jar/args/omit_nogui, V2), docker_*, rcon_*, forwarding_secret(V2, Velocity 转发), proxy_online_mode(V2, 代理正版校验), server_port/query_port, mc_*, tags(JSON) |
 | group_instances | group_id, instance_id(UNIQUE) |
 | bots | uuid, instance_id(FK), name, status, config(JSON), behavior, worker_id |
-| backups | uuid, instance_id(FK), name, file_path, file_size_mb, type(0/1), status(0/1/2) |
+| backups | uuid, instance_id(FK), name, file_path, file_size_mb, type(0/1), mode(0 全量/1 增量, V2), status(0/1/2/3), parent_id(FK self, 备份链, V2), manifest(JSON 文件清单, V2), storage_id(FK, V2), storage_key(远程对象键, V2) |
+| backup_storages | name(UNIQUE), type(local/s3/sftp/webdav), endpoint, bucket, region, prefix, access_key_env(${ENV_VAR}), secret_key_env(${ENV_VAR}), use_ssl (V2, FR-057) |
 | schedules | uuid, instance_id(FK), name, cron_expr, action, payload, enabled |
 | schedule_execution_logs | schedule_id(FK), action, status, error, started_at, finished_at |
 | alert_rules | uuid, name, target_type, target_id, metric, operator, threshold, duration_sec, notify_type, notify_target, enabled |

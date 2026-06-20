@@ -721,21 +721,38 @@
 ## 备份
 
 ### GET /api/v1/instances/:id/backups
-- **描述**: 实例备份列表
-- **关联 FR**: FR-013
+- **描述**: 实例备份列表（含 `mode` 全量/增量、`parentId` 备份链、`storageId` 存储位置）
+- **关联 FR**: FR-013, FR-056, FR-057
 
 ### POST /api/v1/instances/:id/backups
-- **描述**: 创建备份
-- **关联 FR**: FR-013
-- **请求**: `{ "name": "string" }`
+- **描述**: 创建备份。`incremental=true` 时挂到该实例最近一次已完成备份后形成备份链（仅打包变化文件）；`storageId` 指定远程存储后端，缺省存于节点本地
+- **关联 FR**: FR-013, FR-056, FR-057
+- **请求**: `{ "name": "string", "incremental": false, "storageId": 0 }`
+- **错误**: 422 `BUSINESS_ERROR`（增量但无可作基准的已完成全量备份）
 
 ### POST /api/v1/backups/:id/restore
-- **描述**: 恢复备份
-- **关联 FR**: FR-013
+- **描述**: 恢复备份。增量备份沿父链回溯解析整链（全量基 + 各增量），委托 Worker 按序回放；远程备份先拉回本地再回放
+- **关联 FR**: FR-013, FR-056, FR-057
 
 ### DELETE /api/v1/backups/:id
-- **描述**: 删除备份
-- **关联 FR**: FR-013
+- **描述**: 删除备份。被增量子备份依赖时拒绝（422），避免割裂备份链
+- **关联 FR**: FR-013, FR-056
+
+### GET /api/v1/backup-storages
+- **描述**: 备份远程存储后端列表（凭证以 `${ENV_VAR}` 引用，不返回明文）
+- **权限**: 平台管理员
+- **关联 FR**: FR-057
+
+### POST /api/v1/backup-storages
+- **描述**: 创建远程存储后端（`type` ∈ s3/sftp/webdav）。凭证字段须为 `${ENV_VAR}` 引用，明文/非法类型回 422
+- **权限**: 平台管理员
+- **关联 FR**: FR-057
+- **请求**: `{ "name": "string", "type": "s3", "endpoint": "", "bucket": "", "region": "", "prefix": "", "accessKeyEnv": "${VAR}", "secretKeyEnv": "${VAR}", "useSsl": true }`
+
+### DELETE /api/v1/backup-storages/:id
+- **描述**: 删除远程存储后端。被备份引用时拒绝（422）
+- **权限**: 平台管理员
+- **关联 FR**: FR-057
 
 ---
 
