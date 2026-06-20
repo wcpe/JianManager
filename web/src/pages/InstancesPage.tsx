@@ -401,13 +401,14 @@ export default function InstancesPage() {
         </div>
       )}
 
-      <ConfirmDialog
+      <DangerConfirm
         open={deleteTarget !== null}
-        title={t('instances.deleteConfirm')}
-        description="此操作不可撤销，实例的所有数据将被删除。"
+        title={t('danger.deleteInstanceTitle', { name: deleteTarget?.name ?? '' })}
+        description={t('danger.deleteInstanceDesc')}
         confirmLabel={t('common.delete')}
-        variant="destructive"
-        onConfirm={() => { if (deleteTarget) del.mutate(deleteTarget); setDeleteTarget(null) }}
+        confirmText={deleteTarget?.name}
+        scope="group"
+        onConfirm={() => { if (deleteTarget) del.mutate(deleteTarget.id); setDeleteTarget(null) }}
         onCancel={() => setDeleteTarget(null)}
       />
     </div>

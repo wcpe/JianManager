@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUsers, useDeleteUser } from '@/api/users'
-import ConfirmDialog from '@/components/ConfirmDialog'
+import DangerConfirm from '@/components/DangerConfirm'
 import CreateUserDialog from '@/components/CreateUserDialog'
 import { Button } from '@/components/ui/button'
 import {
@@ -16,7 +16,7 @@ import {
 export default function UsersPage() {
   const { t } = useTranslation()
   const [showCreate, setShowCreate] = useState(false)
-  const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; username: string } | null>(null)
   const { data: users, isLoading } = useUsers()
   const deleteUser = useDeleteUser()
 
@@ -71,7 +71,7 @@ export default function UsersPage() {
                     <Button
                       variant="ghost"
                       size="xs"
-                      onClick={() => setDeleteTarget(u.id)}
+                      onClick={() => setDeleteTarget({ id: u.id, username: u.username })}
                       className="text-red-600 hover:text-red-700"
                     >
                       {t('common.delete')}
@@ -89,13 +89,14 @@ export default function UsersPage() {
         </div>
       )}
 
-      <ConfirmDialog
+      <DangerConfirm
         open={deleteTarget !== null}
-        title={t('users.deleteTitle')}
-        description={t('common.irreversible')}
+        title={t('danger.deleteUserTitle', { name: deleteTarget?.username ?? '' })}
+        description={t('danger.deleteUserDesc')}
         confirmLabel={t('common.delete')}
-        variant="destructive"
-        onConfirm={() => { if (deleteTarget) deleteUser.mutate(deleteTarget); setDeleteTarget(null) }}
+        confirmText={deleteTarget?.username}
+        scope="platform"
+        onConfirm={() => { if (deleteTarget) deleteUser.mutate(deleteTarget.id); setDeleteTarget(null) }}
         onCancel={() => setDeleteTarget(null)}
       />
     </div>

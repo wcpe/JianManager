@@ -19,6 +19,7 @@ export default function BackupsPage() {
   const [selectedInstance, setSelectedInstance] = useState<number | undefined>()
   const [storageId, setStorageId] = useState<number | undefined>()
   const [restoreTarget, setRestoreTarget] = useState<number | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<BackupInfo | null>(null)
   const { data: instances } = useInstances()
   const { data: storages } = useBackupStorages()
   const { data: backups, isLoading } = useBackups(selectedInstance)
@@ -157,13 +158,24 @@ export default function BackupsPage() {
         </div>
       )}
 
-      <ConfirmDialog
+      <DangerConfirm
         open={restoreTarget !== null}
         title={t('backups.confirmRestore', '确认恢复此备份？')}
         description={t('backups.restoreConfirm', '当前文件将被覆盖，此操作不可撤销。')}
         confirmLabel={t('backups.restore', '恢复')}
+        scope="group"
         onConfirm={() => { if (restoreTarget) handleRestore(restoreTarget) }}
         onCancel={() => setRestoreTarget(null)}
+      />
+
+      <DangerConfirm
+        open={deleteTarget !== null}
+        title={t('backups.deleteConfirm', '确定删除此备份？')}
+        description={t('common.irreversible')}
+        confirmLabel={t('common.delete', '删除')}
+        scope="group"
+        onConfirm={() => { if (deleteTarget) deleteBackup.mutate(deleteTarget.id); setDeleteTarget(null) }}
+        onCancel={() => setDeleteTarget(null)}
       />
     </div>
   )

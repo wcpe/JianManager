@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import DangerConfirm from '@/components/DangerConfirm'
 import {
   Table,
   TableBody,
@@ -27,14 +28,16 @@ export default function NetworksPage() {
   const { data: networks, isLoading } = useNetworks()
   const [createOpen, setCreateOpen] = useState(false)
   const [detailId, setDetailId] = useState<number | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<NetworkSummary | null>(null)
   const del = useDeleteNetwork()
 
-  const handleDelete = (n: NetworkSummary) => {
-    if (!window.confirm(t('networks.deleteConfirm', { name: n.name }))) return
-    del.mutate(n.id, {
+  const confirmDelete = () => {
+    if (!deleteTarget) return
+    del.mutate(deleteTarget.id, {
       onSuccess: () => toast.success(t('networks.deleted')),
       onError: () => toast.error(t('common.error')),
     })
+    setDeleteTarget(null)
   }
 
   return (
@@ -73,7 +76,7 @@ export default function NetworksPage() {
                     <button className="text-xs text-blue-600 hover:underline" onClick={() => setDetailId(n.id)}>
                       {t('networks.view')}
                     </button>
-                    <button className="text-xs text-red-600 hover:underline" onClick={() => handleDelete(n)}>
+                    <button className="text-xs text-red-600 hover:underline" onClick={() => setDeleteTarget(n)}>
                       {t('common.delete')}
                     </button>
                   </TableCell>
@@ -93,6 +96,15 @@ export default function NetworksPage() {
 
       {createOpen && <CreateNetworkModal onClose={() => setCreateOpen(false)} />}
       {detailId !== null && <NetworkDetailModal networkId={detailId} onClose={() => setDetailId(null)} />}
+
+      <DangerConfirm
+        open={deleteTarget !== null}
+        title={t('networks.deleteConfirm', { name: deleteTarget?.name ?? '' })}
+        confirmLabel={t('common.delete')}
+        scope="platform"
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   )
 }

@@ -21,7 +21,7 @@ import {
 } from './bot-list'
 import BotStatusDot from './BotStatusDot'
 import CreateBotDialog from './CreateBotDialog'
-import ConfirmDialog from '@/components/ConfirmDialog'
+import DangerConfirm from '@/components/DangerConfirm'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -369,12 +369,12 @@ function BotRow({
       >
         {t('common.delete')}
       </Button>
-      <ConfirmDialog
+      <DangerConfirm
         open={confirmDelete}
         title={t('bots.deleteConfirm')}
         description={t('common.irreversible')}
         confirmLabel={t('common.delete')}
-        variant="destructive"
+        scope="group"
         onConfirm={() => {
           del.mutate(bot.id)
           setConfirmDelete(false)
@@ -467,7 +467,7 @@ function BotBatchBar({
         </Button>
       </div>
 
-      <ConfirmDialog
+      <DangerConfirm
         open={confirm !== null}
         title={
           confirm === 'delete'
@@ -476,7 +476,7 @@ function BotBatchBar({
         }
         description={confirm === 'delete' ? t('common.irreversible') : ''}
         confirmLabel={confirm === 'delete' ? t('common.delete') : t('bots.stop')}
-        variant={confirm === 'delete' ? 'destructive' : 'default'}
+        scope="group"
         onConfirm={() => {
           if (confirm) run(confirm)
           setConfirm(null)
