@@ -5,7 +5,7 @@ import { useBackups, useCreateBackup, useDeleteBackup, useRestoreBackup, type Ba
 import { useBackupStorages } from '@/api/backupStorages'
 import { useInstances } from '@/api/instances'
 import { Badge } from '@/components/ui/badge'
-import ConfirmDialog from '@/components/ConfirmDialog'
+import DangerConfirm from '@/components/DangerConfirm'
 
 /** 备份状态码 → i18n key（与后端 model.BackupStatus 对齐：0 待处理 / 1 进行中 / 2 完成 / 3 失败）。 */
 const STATUS_KEY: Record<number, string> = { 0: 'pending', 1: 'inProgress', 2: 'completed', 3: 'failed' }

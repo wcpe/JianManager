@@ -12,7 +12,7 @@ import {
 import { useNodes } from '@/api/nodes'
 import { useNetworks } from '@/api/networks'
 import { useConsoleStore } from '@/stores/console'
-import ConfirmDialog from '@/components/ConfirmDialog'
+import DangerConfirm from '@/components/DangerConfirm'
 import InstanceBatchBar from '@/components/InstanceBatchBar'
 import CreateInstanceDialog from '@/components/CreateInstanceDialog'
 import ProvisionServerDialog from '@/components/ProvisionServerDialog'
@@ -60,7 +60,7 @@ export default function InstancesPage() {
   const [manageProxy, setManageProxy] = useState<{ id: number; name: string } | null>(null)
   const [cloneTarget, setCloneTarget] = useState<{ id: number; name: string } | null>(null)
   const [tagsTarget, setTagsTarget] = useState<{ id: number; name: string; tags: string[] } | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null)
   // 批量操作选中的实例 ID 集合（FR-058）。
   const [selectedIds, setSelectedIds] = useState<number[]>([])
 
@@ -259,7 +259,7 @@ export default function InstancesPage() {
               <Button
                 variant="ghost"
                 size="xs"
-                onClick={() => setDeleteTarget(inst.id)}
+                onClick={() => setDeleteTarget({ id: inst.id, name: inst.name })}
                 className="text-red-600 hover:text-red-700"
               >
                 {t('common.delete')}
