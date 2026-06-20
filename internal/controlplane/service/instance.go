@@ -419,6 +419,7 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 		Name:         instance.Name,
 		ProcessType:  string(instance.ProcessType),
 		StartCommand: instance.StartCommand,
+		StopCommand:  gracefulStopCommand(instance.Role),
 		WorkDir:      instance.WorkDir,
 		EnvVars:      envVars,
 		AutoRestart:  instance.AutoRestart,
@@ -431,6 +432,17 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 		return fmt.Errorf("Worker CreateInstance 失败: %s", resp.Error)
 	}
 	return nil
+}
+
+// gracefulStopCommand 按实例角色派生优雅停止命令（daemon 模式写入进程 stdin）。
+// 代理（BungeeCord/Waterfall/Velocity）控制台用 `end`，不认 MC 的 `stop`；若误发 `stop`
+// 代理不退出，会一直挂到超时强杀，期间旧进程仍占监听端口，重启时端口冲突崩溃（FR-035）。
+// 后端/通用实例沿用 MC 的 `stop`。
+func gracefulStopCommand(role model.InstanceRole) string {
+	if role == model.InstanceRoleProxy {
+		return "end"
+	}
+	return "stop"
 }
 
 // EnsureRegistered 确保实例已在其 Worker 注册（幂等：已存在视为成功）。
