@@ -95,6 +95,14 @@ service WorkerService {
   rpc RunBotScript(RunBotScriptRequest) returns (RunBotScriptResponse);
   // StreamBotEvents 订阅 Bot 事件流。
   rpc StreamBotEvents(StreamBotEventsRequest) returns (stream BotEvent);
+
+  // === 插件桥（FR-103 / ADR-012） ===
+
+  // StreamPluginEvents 订阅平台插件经 WS 连入 Worker 后上报的事件流（连接/断开/玩家事件等）。
+  // CP 调用此 RPC，Worker 把插件会话事件冒泡给 CP，CP 再经 SSE 扇出给前端。
+  rpc StreamPluginEvents(StreamPluginEventsRequest) returns (stream PluginEvent);
+  // SendPluginCommand 经 Worker 把指令下发给某实例当前连入的插件（踢/封/whitelist 等）。
+  rpc SendPluginCommand(SendPluginCommandRequest) returns (SendPluginCommandResponse);
 }
 
 // === 注册 ===
@@ -643,3 +651,29 @@ message RestoreBackupResponse {
 }
 
 // === Bot 操作 ===
+// === 插件桥（FR-103 / ADR-012） ===
+
+message StreamPluginEventsRequest {
+  string instance_uuid = 1; // 空表示订阅本节点所有实例的插件事件
+}
+
+// PluginEvent 平台插件经 WS 上报的事件（连接/断开/玩家事件等），Worker 冒泡给 CP。
+message PluginEvent {
+  string instance_uuid = 1;
+  // type：connected / disconnected / player_join / player_quit / player_chat / server_status / hello / 其它
+  string type = 2;
+  string data = 3;    // JSON：事件载荷（玩家名/消息/在线列表等）
+  int64 timestamp = 4;
+}
+
+message SendPluginCommandRequest {
+  string instance_uuid = 1;
+  // action：kick / ban / unban / whitelist_add / whitelist_remove / 其它（插件侧解释）
+  string action = 2;
+  string args_json = 3; // JSON：指令参数（player/reason 等）
+}
+
+message SendPluginCommandResponse {
+  bool success = 1;
+  string error = 2;     // 实例无插件连入或下发失败时填充
+}
