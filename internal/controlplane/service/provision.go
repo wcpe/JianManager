@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"gorm.io/gorm"
 
+	cpembed "github.com/wxys233/JianManager/internal/controlplane/embed"
 	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
 	"github.com/wxys233/JianManager/internal/controlplane/model"
 	"github.com/wxys233/JianManager/proto/workerpb"
@@ -157,7 +159,41 @@ func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.In
 			return fmt.Errorf("写入 %s 失败: %s", c.path, resp.Error)
 		}
 	}
+
+	// 部署 ServerProbe 监控探针（FR-010）：CP 内嵌探针 jar 时下发 jar + 开启 /metrics 的 config.yml；
+	// 未内嵌（未跑 make embed-probe）则跳过。探针为辅助监控，部署失败仅告警、不阻断建服。
+	if jar := cpembed.ServerProbeJar(); len(jar) > 0 {
+		probeCtx, cancel3 := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel3()
+		dp, derr := client.Worker.DeployServerProbe(probeCtx, &workerpb.DeployServerProbeRequest{
+			InstanceUuid: inst.UUID,
+			Jar:          jar,
+			ConfigYaml:   buildServerProbeConfig(inst.ProbePort),
+		})
+		switch {
+		case derr != nil:
+			slog.Warn("部署 ServerProbe 探针失败（不阻断建服）", "instance", inst.UUID, "err", derr)
+		case !dp.Success:
+			slog.Warn("部署 ServerProbe 探针失败（不阻断建服）", "instance", inst.UUID, "err", dp.Error)
+		}
+	}
 	return nil
+}
+
+// buildServerProbeConfig 生成实例的 ServerProbe config.yml：仅本机开启 /metrics 端点于分配的
+// probe 端口，token 留空依赖本机 IP 白名单（探针与 Worker 同机，Worker 抓 localhost）。
+func buildServerProbeConfig(probePort int) string {
+	var b strings.Builder
+	b.WriteString("# 本文件由 JianManager 建服时自动生成：开启 ServerProbe /metrics 供 Worker 抓取（FR-010）。\n")
+	b.WriteString("# 仅本机回环可访问；如需远程 Prometheus 抓取请改 host 并配置 token/allowed-ips。\n")
+	b.WriteString("metrics:\n")
+	b.WriteString("  enabled: true\n")
+	b.WriteString("  host: \"127.0.0.1\"\n")
+	fmt.Fprintf(&b, "  port: %d\n", probePort)
+	b.WriteString("  token: \"\"\n")
+	b.WriteString("  allowed-ips:\n")
+	b.WriteString("    - \"127.0.0.1\"\n")
+	return b.String()
 }
 
 // buildServerProperties 生成基础 server.properties：分配的 server-port、按 onlineMode 设正版校验

@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web docker
+.PHONY: build build-cp build-worker build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-probe docker
 
 # 构建所有（含前端嵌入）
 build: build-web embed-web build-cp build-worker
@@ -19,6 +19,14 @@ build-web:
 embed-web:
 	mkdir -p internal/controlplane/embed/dist
 	cp -r web/dist/* internal/controlplane/embed/dist/
+
+# 构建 ServerProbe 探针 jar 并注入 CP 内嵌目录（FR-010 建服自动部署，可选）。
+# 需 JDK 21（设 JAVA_HOME 指向 JDK21）+ 子模块已拉取（git submodule update --init）。
+# 不跑此目标时 CP 不捆绑探针，建服时自动部署优雅跳过，不影响其它构建。
+embed-probe:
+	cd third_party/ServerProbe && ./gradlew :plugin:jar :plugin:taboolibMainTask
+	mkdir -p internal/controlplane/embed/probe
+	cp third_party/ServerProbe/plugin/build/libs/ServerProbe-*.jar internal/controlplane/embed/probe/ServerProbe.jar
 
 # 构建 Bot Worker
 build-bot:

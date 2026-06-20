@@ -67,6 +67,8 @@ service WorkerService {
   rpc RemoveJDK(RemoveJDKRequest) returns (RemoveJDKResponse);
   // DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
   rpc DownloadCore(DownloadCoreRequest) returns (DownloadCoreResponse);
+  // DeployServerProbe 部署 ServerProbe 监控探针 jar 与 config 到实例 plugins 目录（FR-010）。
+  rpc DeployServerProbe(DeployServerProbeRequest) returns (DeployServerProbeResponse);
   // CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
   rpc CloneWorkDir(CloneWorkDirRequest) returns (CloneWorkDirResponse);
 
@@ -600,6 +602,19 @@ message DownloadCoreResponse {
   bool success = 1;
   string error = 2;
   int64 size = 3;
+}
+
+message DeployServerProbeRequest {
+  string instance_uuid = 1;
+  // jar 探针插件 jar 字节（CP 由 go:embed 取出后下发；为空表示未捆绑探针，跳过 jar 写入）。
+  bytes jar = 2;
+  // config_yaml 生成的 plugins/ServerProbe/config.yml 内容（已按分配端口开启 /metrics）。
+  string config_yaml = 3;
+}
+
+message DeployServerProbeResponse {
+  bool success = 1;
+  string error = 2;
 }
 
 // === 一键复制子服（FR-036） ===

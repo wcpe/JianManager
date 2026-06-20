@@ -44,6 +44,37 @@ func (s *Server) DownloadCore(ctx context.Context, req *workerpb.DownloadCoreReq
 	return &workerpb.DownloadCoreResponse{Success: true, Size: size}, nil
 }
 
+// serverProbeJarName 是 ServerProbe 探针 jar 在实例 plugins 目录下的固定文件名。
+const serverProbeJarName = "ServerProbe.jar"
+
+// DeployServerProbe 将 ServerProbe 探针 jar 与 config.yml 写入实例 plugins 目录（FR-010 建服自动部署）。
+// jar 为空（CP 未捆绑探针）时仅写 config，便于运维后续手动放入 jar 即按分配端口开启 /metrics；实例须已注册。
+func (s *Server) DeployServerProbe(_ context.Context, req *workerpb.DeployServerProbeRequest) (*workerpb.DeployServerProbeResponse, error) {
+	inst, exists := s.manager.GetInstance(req.InstanceUuid)
+	if !exists {
+		return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("实例 %s 未注册", req.InstanceUuid)}, nil
+	}
+	pluginsDir := filepath.Join(inst.WorkDir, "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+		return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("创建 plugins 目录失败: %v", err)}, nil
+	}
+	if len(req.Jar) > 0 {
+		if err := os.WriteFile(filepath.Join(pluginsDir, serverProbeJarName), req.Jar, 0o644); err != nil {
+			return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("写入探针 jar 失败: %v", err)}, nil
+		}
+	}
+	if cfg := req.ConfigYaml; cfg != "" {
+		cfgDir := filepath.Join(pluginsDir, "ServerProbe")
+		if err := os.MkdirAll(cfgDir, 0o755); err != nil {
+			return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("创建探针配置目录失败: %v", err)}, nil
+		}
+		if err := os.WriteFile(filepath.Join(cfgDir, "config.yml"), []byte(cfg), 0o644); err != nil {
+			return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("写入探针配置失败: %v", err)}, nil
+		}
+	}
+	return &workerpb.DeployServerProbeResponse{Success: true}, nil
+}
+
 // downloadFile 流式下载 url 到 destPath，边写边算 sha256，返回字节数与 hex 小写摘要。
 func downloadFile(ctx context.Context, url, destPath string) (int64, string, error) {
 	if strings.TrimSpace(url) == "" {

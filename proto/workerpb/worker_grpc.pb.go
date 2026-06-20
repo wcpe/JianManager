@@ -47,6 +47,7 @@ const (
 	WorkerService_InstallJDK_FullMethodName           = "/worker.WorkerService/InstallJDK"
 	WorkerService_RemoveJDK_FullMethodName            = "/worker.WorkerService/RemoveJDK"
 	WorkerService_DownloadCore_FullMethodName         = "/worker.WorkerService/DownloadCore"
+	WorkerService_DeployServerProbe_FullMethodName    = "/worker.WorkerService/DeployServerProbe"
 	WorkerService_CloneWorkDir_FullMethodName         = "/worker.WorkerService/CloneWorkDir"
 	WorkerService_CreateBackup_FullMethodName         = "/worker.WorkerService/CreateBackup"
 	WorkerService_RestoreBackup_FullMethodName        = "/worker.WorkerService/RestoreBackup"
@@ -125,6 +126,8 @@ type WorkerServiceClient interface {
 	RemoveJDK(ctx context.Context, in *RemoveJDKRequest, opts ...grpc.CallOption) (*RemoveJDKResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
 	DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error)
+	// DeployServerProbe 部署 ServerProbe 监控探针 jar 与 config 到实例 plugins 目录（FR-010）。
+	DeployServerProbe(ctx context.Context, in *DeployServerProbeRequest, opts ...grpc.CallOption) (*DeployServerProbeResponse, error)
 	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
 	CloneWorkDir(ctx context.Context, in *CloneWorkDirRequest, opts ...grpc.CallOption) (*CloneWorkDirResponse, error)
 	// CreateBackup 将实例工作目录打包为 tar.gz 落到节点数据根 var/backups/。
@@ -454,6 +457,16 @@ func (c *workerServiceClient) DownloadCore(ctx context.Context, in *DownloadCore
 	return out, nil
 }
 
+func (c *workerServiceClient) DeployServerProbe(ctx context.Context, in *DeployServerProbeRequest, opts ...grpc.CallOption) (*DeployServerProbeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeployServerProbeResponse)
+	err := c.cc.Invoke(ctx, WorkerService_DeployServerProbe_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) CloneWorkDir(ctx context.Context, in *CloneWorkDirRequest, opts ...grpc.CallOption) (*CloneWorkDirResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CloneWorkDirResponse)
@@ -656,6 +669,8 @@ type WorkerServiceServer interface {
 	RemoveJDK(context.Context, *RemoveJDKRequest) (*RemoveJDKResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
 	DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error)
+	// DeployServerProbe 部署 ServerProbe 监控探针 jar 与 config 到实例 plugins 目录（FR-010）。
+	DeployServerProbe(context.Context, *DeployServerProbeRequest) (*DeployServerProbeResponse, error)
 	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
 	CloneWorkDir(context.Context, *CloneWorkDirRequest) (*CloneWorkDirResponse, error)
 	// CreateBackup 将实例工作目录打包为 tar.gz 落到节点数据根 var/backups/。
@@ -776,6 +791,9 @@ func (UnimplementedWorkerServiceServer) RemoveJDK(context.Context, *RemoveJDKReq
 }
 func (UnimplementedWorkerServiceServer) DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DownloadCore not implemented")
+}
+func (UnimplementedWorkerServiceServer) DeployServerProbe(context.Context, *DeployServerProbeRequest) (*DeployServerProbeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeployServerProbe not implemented")
 }
 func (UnimplementedWorkerServiceServer) CloneWorkDir(context.Context, *CloneWorkDirRequest) (*CloneWorkDirResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CloneWorkDir not implemented")
@@ -1320,6 +1338,24 @@ func _WorkerService_DownloadCore_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_DeployServerProbe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeployServerProbeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).DeployServerProbe(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_DeployServerProbe_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).DeployServerProbe(ctx, req.(*DeployServerProbeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_CloneWorkDir_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CloneWorkDirRequest)
 	if err := dec(in); err != nil {
@@ -1632,6 +1668,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DownloadCore",
 			Handler:    _WorkerService_DownloadCore_Handler,
+		},
+		{
+			MethodName: "DeployServerProbe",
+			Handler:    _WorkerService_DeployServerProbe_Handler,
 		},
 		{
 			MethodName: "CloneWorkDir",
