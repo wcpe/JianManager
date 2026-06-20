@@ -71,6 +71,12 @@ func determineAction(method, path string) string {
 		return "instance.restart"
 	case method == "POST" && strings.Contains(path, "/instances") && strings.HasSuffix(path, "/kill"):
 		return "instance.kill"
+	case method == "POST" && strings.Contains(path, "/plugins") && strings.HasSuffix(path, "/toggle"):
+		return "plugin.toggle"
+	case method == "POST" && strings.Contains(path, "/plugins"):
+		return "plugin.deploy"
+	case method == "DELETE" && strings.Contains(path, "/plugins"):
+		return "plugin.delete"
 	case method == "POST" && strings.Contains(path, "/instances"):
 		return "instance.create"
 	case method == "PUT" && strings.Contains(path, "/instances"):

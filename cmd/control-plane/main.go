@@ -80,6 +80,8 @@ func main() {
 		slog.SetDefault(slog.New(persist))
 	}
 	assetSvc := service.NewAssetService(db, root)
+	// 插件服务：上传先入制品库（type=plugin 去重）再经 file gRPC 部署到实例（FR-052）。
+	pluginSvc := service.NewPluginService(db, pool, assetSvc)
 	coreSvc := service.NewCoreService()
 	provisionSvc := service.NewProvisionService(db, pool, instanceSvc, coreSvc)
 	registrationSvc := service.NewRegistrationService(db)
@@ -113,6 +115,7 @@ func main() {
 		Terminal:     terminalSvc,
 		File:         fileSvc,
 		FileVersion:  fileVersionSvc,
+		Plugin:       pluginSvc,
 		Config:       configSvc,
 		Bot:          botSvc,
 		Alert:        alertSvc,
