@@ -19,11 +19,16 @@ import (
 	"github.com/wxys233/JianManager/proto/workerpb"
 )
 
-// instanceEvent 内部事件，由 Manager 状态回调产生，分发给所有 StreamInstanceEvents 订阅者。
+// instanceEvent 内部事件，分发给所有 StreamInstanceEvents 订阅者。
+// 既承载状态变更（由 Manager 状态回调产生），也承载进程输出（stdout/stderr，由 EmitOutput 产生），
+// 统一走一套订阅者扇出。Kind 区分两类，StreamInstanceEvents 按 Kind 决定 gRPC 事件的 type 与 data。
 type instanceEvent struct {
+	// Kind 为 "state_change" 或 "stdout"/"stderr"（即原始流名）。
+	Kind      string
 	UUID      string
 	OldState  string
 	NewState  string
+	Data      string // Kind 为输出时的日志正文
 	Timestamp int64
 }
 
@@ -61,25 +66,45 @@ func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Col
 		root:      root,
 	}
 	manager.SetStateChangeHandler(func(uuid string, oldState, newState process.InstanceState) {
-		evt := instanceEvent{
+		s.dispatch(instanceEvent{
+			Kind:      "state_change",
 			UUID:      uuid,
 			OldState:  string(oldState),
 			NewState:  string(newState),
 			Timestamp: time.Now().Unix(),
-		}
-		s.eventMu.Lock()
-		subs := make([]chan instanceEvent, len(s.eventSubs))
-		copy(subs, s.eventSubs)
-		s.eventMu.Unlock()
-		for _, ch := range subs {
-			select {
-			case ch <- evt:
-			default:
-				// 订阅者消费太慢，丢弃事件避免阻塞
-			}
-		}
+		})
 	})
 	return s
+}
+
+// dispatch 把一条内部事件非阻塞地扇出给所有 StreamInstanceEvents 订阅者。
+// 订阅者消费太慢则丢弃，绝不阻塞产生方（状态回调或进程输出回调）。
+func (s *Server) dispatch(evt instanceEvent) {
+	s.eventMu.Lock()
+	subs := make([]chan instanceEvent, len(s.eventSubs))
+	copy(subs, s.eventSubs)
+	s.eventMu.Unlock()
+	for _, ch := range subs {
+		select {
+		case ch <- evt:
+		default:
+		}
+	}
+}
+
+// EmitOutput 把实例进程输出（stdout/stderr）作为事件扇出到 StreamInstanceEvents 订阅者，
+// 供 CP 侧采集落库（FR-049）。stream 为原始流名（stdout/stderr）。
+// 与 WS 终端广播相互独立：终端面向交互、本路径面向持久化，二者从同一份输出分流。
+func (s *Server) EmitOutput(instanceUUID, stream, data string) {
+	if data == "" {
+		return
+	}
+	s.dispatch(instanceEvent{
+		Kind:      stream,
+		UUID:      instanceUUID,
+		Data:      data,
+		Timestamp: time.Now().Unix(),
+	})
 }
 
 // CreateInstance 创建实例。
@@ -339,12 +364,18 @@ func (s *Server) StreamInstanceEvents(req *workerpb.StreamInstanceEventsRequest,
 			if req.InstanceUuid != "" && evt.UUID != req.InstanceUuid {
 				continue
 			}
-			if err := stream.Send(&workerpb.InstanceEvent{
+			pbEvt := &workerpb.InstanceEvent{
 				InstanceUuid: evt.UUID,
-				Type:         "state_change",
-				Data:         fmt.Sprintf("%s→%s", evt.OldState, evt.NewState),
+				Type:         evt.Kind,
 				Timestamp:    evt.Timestamp,
-			}); err != nil {
+			}
+			if evt.Kind == "state_change" {
+				pbEvt.Data = fmt.Sprintf("%s→%s", evt.OldState, evt.NewState)
+			} else {
+				// stdout/stderr：原样下发日志正文
+				pbEvt.Data = evt.Data
+			}
+			if err := stream.Send(pbEvt); err != nil {
 				return err
 			}
 		}

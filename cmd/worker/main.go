@@ -171,9 +171,12 @@ func runWorker() {
 	// 启动 WS 终端服务器
 	terminalServer := ws.NewTerminalServer(jwtSecret)
 
-	// 桥接进程输出到 WebSocket 终端
+	// 桥接进程输出：一份给 WebSocket 终端（交互），一份给 StreamInstanceEvents 事件流（CP 采集落库，FR-049）。
+	// 两条路径相互独立，从同一份进程输出分流，互不阻塞。
 	manager.SetOutputHandler(func(instanceID string, stream string, data []byte) {
-		terminalServer.Broadcast(instanceID, stream, string(data))
+		text := string(data)
+		terminalServer.Broadcast(instanceID, stream, text)
+		workerServer.EmitOutput(instanceID, stream, text)
 	})
 
 	// 桥接终端输入到进程 stdin
