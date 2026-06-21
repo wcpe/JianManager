@@ -99,6 +99,19 @@ service WorkerService {
   rpc RunBotScript(RunBotScriptRequest) returns (RunBotScriptResponse);
   // StreamBotEvents 订阅 Bot 事件流。
   rpc StreamBotEvents(StreamBotEventsRequest) returns (stream BotEvent);
+
+  // === 插件桥（ServerProbe 反向 WS ↔ Worker，FR-065，见 ADR-016）===
+  //
+  // 一次铺齐桥的全面：下游 FR-066（玩家事件）/FR-067（治理迁移+退 RCON）/FR-068（在线更新）
+  // 复用以下 RPC 与 message，不再改 proto。地基（FR-065）仅真实使用 StreamPluginEvents
+  // 的 connected/disconnected/heartbeat；其余事件子类型与命令/状态查询为骨架，语义留下游填充。
+
+  // StreamPluginEvents 订阅某实例（或全部）探针经反向 WS 上报的事件流（connected/disconnected/玩家事件…）。
+  rpc StreamPluginEvents(StreamPluginEventsRequest) returns (stream PluginEvent);
+  // SendPluginCommand CP 经 Worker 向探针下发治理/查询指令（踢/封/白名单/在线列表…）。
+  rpc SendPluginCommand(SendPluginCommandRequest) returns (SendPluginCommandResponse);
+  // QueryServerState 查询子服全状态（在线列表/世界/TPS 等聚合），骨架，语义留下游。
+  rpc QueryServerState(QueryServerStateRequest) returns (QueryServerStateResponse);
 }
 
 // === 注册 ===
@@ -719,4 +732,63 @@ message RestoreBackupResponse {
   int64 restored_files = 3;          // 回放写入的文件数
 }
 
-// === Bot 操作 ===
+// === 插件桥（ServerProbe 反向 WS ↔ Worker，FR-065，见 ADR-016）===
+//
+// 一次铺齐桥全面：事件（PluginEvent）/命令（PluginCommand）/状态查询（QueryServerState*）。
+// 地基（FR-065）仅真实使用 PluginEvent 的 connected/disconnected/heartbeat；其余字段为骨架，
+// 语义由 FR-066/067/068 填充。
+
+message StreamPluginEventsRequest {
+  string instance_uuid = 1; // 空表示订阅所有实例
+}
+
+// PluginEvent 探针经反向 WS 上报、由 Worker 经本流冒泡给 CP 的事件。
+// type 取值：connected | disconnected | heartbeat | player_join | player_quit
+//          | chat | cross_server | command_result | state
+message PluginEvent {
+  string instance_uuid = 1;
+  string type = 2;
+  int64 timestamp = 3;
+  string player_name = 4;   // 玩家事件：玩家名
+  string player_uuid = 5;   // 玩家事件：玩家 UUID
+  string message = 6;       // chat 内容 / 事件描述
+  string server = 7;        // 子服名（玩家所在/事件发生）
+  string from_server = 8;   // cross_server：来源子服
+  string to_server = 9;     // cross_server：目标子服
+  string platform = 10;     // bukkit | bungee（来自探针 hello）
+  string version = 11;      // 探针版本
+  string request_id = 12;   // command_result 对应的请求标识
+  string raw_json = 13;     // 透传原始载荷（下游按需解析）
+}
+
+// PluginCommand CP 下发给探针的治理/查询指令。
+// action 取值：kick | ban | unban | whitelist_add | whitelist_remove | list | query_state
+message PluginCommand {
+  string action = 1;
+  string target = 2;        // 目标玩家名/UUID
+  string reason = 3;        // 踢/封原因
+  repeated string args = 4; // 透传额外参数
+  string request_id = 5;    // 关联 command_result 回执
+}
+
+message SendPluginCommandRequest {
+  string instance_uuid = 1;
+  PluginCommand command = 2;
+}
+
+message SendPluginCommandResponse {
+  bool success = 1;
+  string error = 2;
+  string request_id = 3;
+}
+
+message QueryServerStateRequest {
+  string instance_uuid = 1;
+}
+
+message QueryServerStateResponse {
+  bool success = 1;
+  string error = 2;
+  bool connected = 3;       // 探针当前是否在线
+  string state_json = 4;    // 聚合状态 JSON（下游填充）
+}

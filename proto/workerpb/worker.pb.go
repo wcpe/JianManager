@@ -5633,6 +5633,496 @@ func (x *RestoreBackupResponse) GetRestoredFiles() int64 {
 	return 0
 }
 
+type StreamPluginEventsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceUuid  string                 `protobuf:"bytes,1,opt,name=instance_uuid,json=instanceUuid,proto3" json:"instance_uuid,omitempty"` // 空表示订阅所有实例
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *StreamPluginEventsRequest) Reset() {
+	*x = StreamPluginEventsRequest{}
+	mi := &file_proto_worker_proto_msgTypes[88]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *StreamPluginEventsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StreamPluginEventsRequest) ProtoMessage() {}
+
+func (x *StreamPluginEventsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[88]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StreamPluginEventsRequest.ProtoReflect.Descriptor instead.
+func (*StreamPluginEventsRequest) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{88}
+}
+
+func (x *StreamPluginEventsRequest) GetInstanceUuid() string {
+	if x != nil {
+		return x.InstanceUuid
+	}
+	return ""
+}
+
+// PluginEvent 探针经反向 WS 上报、由 Worker 经本流冒泡给 CP 的事件。
+// type 取值：connected | disconnected | heartbeat | player_join | player_quit
+//
+//	| chat | cross_server | command_result | state
+type PluginEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceUuid  string                 `protobuf:"bytes,1,opt,name=instance_uuid,json=instanceUuid,proto3" json:"instance_uuid,omitempty"`
+	Type          string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
+	Timestamp     int64                  `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	PlayerName    string                 `protobuf:"bytes,4,opt,name=player_name,json=playerName,proto3" json:"player_name,omitempty"` // 玩家事件：玩家名
+	PlayerUuid    string                 `protobuf:"bytes,5,opt,name=player_uuid,json=playerUuid,proto3" json:"player_uuid,omitempty"` // 玩家事件：玩家 UUID
+	Message       string                 `protobuf:"bytes,6,opt,name=message,proto3" json:"message,omitempty"`                         // chat 内容 / 事件描述
+	Server        string                 `protobuf:"bytes,7,opt,name=server,proto3" json:"server,omitempty"`                           // 子服名（玩家所在/事件发生）
+	FromServer    string                 `protobuf:"bytes,8,opt,name=from_server,json=fromServer,proto3" json:"from_server,omitempty"` // cross_server：来源子服
+	ToServer      string                 `protobuf:"bytes,9,opt,name=to_server,json=toServer,proto3" json:"to_server,omitempty"`       // cross_server：目标子服
+	Platform      string                 `protobuf:"bytes,10,opt,name=platform,proto3" json:"platform,omitempty"`                      // bukkit | bungee（来自探针 hello）
+	Version       string                 `protobuf:"bytes,11,opt,name=version,proto3" json:"version,omitempty"`                        // 探针版本
+	RequestId     string                 `protobuf:"bytes,12,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`   // command_result 对应的请求标识
+	RawJson       string                 `protobuf:"bytes,13,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`         // 透传原始载荷（下游按需解析）
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PluginEvent) Reset() {
+	*x = PluginEvent{}
+	mi := &file_proto_worker_proto_msgTypes[89]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PluginEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PluginEvent) ProtoMessage() {}
+
+func (x *PluginEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[89]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PluginEvent.ProtoReflect.Descriptor instead.
+func (*PluginEvent) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{89}
+}
+
+func (x *PluginEvent) GetInstanceUuid() string {
+	if x != nil {
+		return x.InstanceUuid
+	}
+	return ""
+}
+
+func (x *PluginEvent) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *PluginEvent) GetTimestamp() int64 {
+	if x != nil {
+		return x.Timestamp
+	}
+	return 0
+}
+
+func (x *PluginEvent) GetPlayerName() string {
+	if x != nil {
+		return x.PlayerName
+	}
+	return ""
+}
+
+func (x *PluginEvent) GetPlayerUuid() string {
+	if x != nil {
+		return x.PlayerUuid
+	}
+	return ""
+}
+
+func (x *PluginEvent) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *PluginEvent) GetServer() string {
+	if x != nil {
+		return x.Server
+	}
+	return ""
+}
+
+func (x *PluginEvent) GetFromServer() string {
+	if x != nil {
+		return x.FromServer
+	}
+	return ""
+}
+
+func (x *PluginEvent) GetToServer() string {
+	if x != nil {
+		return x.ToServer
+	}
+	return ""
+}
+
+func (x *PluginEvent) GetPlatform() string {
+	if x != nil {
+		return x.Platform
+	}
+	return ""
+}
+
+func (x *PluginEvent) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *PluginEvent) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *PluginEvent) GetRawJson() string {
+	if x != nil {
+		return x.RawJson
+	}
+	return ""
+}
+
+// PluginCommand CP 下发给探针的治理/查询指令。
+// action 取值：kick | ban | unban | whitelist_add | whitelist_remove | list | query_state
+type PluginCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Action        string                 `protobuf:"bytes,1,opt,name=action,proto3" json:"action,omitempty"`
+	Target        string                 `protobuf:"bytes,2,opt,name=target,proto3" json:"target,omitempty"`                        // 目标玩家名/UUID
+	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`                        // 踢/封原因
+	Args          []string               `protobuf:"bytes,4,rep,name=args,proto3" json:"args,omitempty"`                            // 透传额外参数
+	RequestId     string                 `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"` // 关联 command_result 回执
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PluginCommand) Reset() {
+	*x = PluginCommand{}
+	mi := &file_proto_worker_proto_msgTypes[90]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PluginCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PluginCommand) ProtoMessage() {}
+
+func (x *PluginCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[90]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PluginCommand.ProtoReflect.Descriptor instead.
+func (*PluginCommand) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{90}
+}
+
+func (x *PluginCommand) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
+}
+
+func (x *PluginCommand) GetTarget() string {
+	if x != nil {
+		return x.Target
+	}
+	return ""
+}
+
+func (x *PluginCommand) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *PluginCommand) GetArgs() []string {
+	if x != nil {
+		return x.Args
+	}
+	return nil
+}
+
+func (x *PluginCommand) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+type SendPluginCommandRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceUuid  string                 `protobuf:"bytes,1,opt,name=instance_uuid,json=instanceUuid,proto3" json:"instance_uuid,omitempty"`
+	Command       *PluginCommand         `protobuf:"bytes,2,opt,name=command,proto3" json:"command,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SendPluginCommandRequest) Reset() {
+	*x = SendPluginCommandRequest{}
+	mi := &file_proto_worker_proto_msgTypes[91]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SendPluginCommandRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SendPluginCommandRequest) ProtoMessage() {}
+
+func (x *SendPluginCommandRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[91]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SendPluginCommandRequest.ProtoReflect.Descriptor instead.
+func (*SendPluginCommandRequest) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{91}
+}
+
+func (x *SendPluginCommandRequest) GetInstanceUuid() string {
+	if x != nil {
+		return x.InstanceUuid
+	}
+	return ""
+}
+
+func (x *SendPluginCommandRequest) GetCommand() *PluginCommand {
+	if x != nil {
+		return x.Command
+	}
+	return nil
+}
+
+type SendPluginCommandResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	RequestId     string                 `protobuf:"bytes,3,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SendPluginCommandResponse) Reset() {
+	*x = SendPluginCommandResponse{}
+	mi := &file_proto_worker_proto_msgTypes[92]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SendPluginCommandResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SendPluginCommandResponse) ProtoMessage() {}
+
+func (x *SendPluginCommandResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[92]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SendPluginCommandResponse.ProtoReflect.Descriptor instead.
+func (*SendPluginCommandResponse) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{92}
+}
+
+func (x *SendPluginCommandResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *SendPluginCommandResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *SendPluginCommandResponse) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+type QueryServerStateRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceUuid  string                 `protobuf:"bytes,1,opt,name=instance_uuid,json=instanceUuid,proto3" json:"instance_uuid,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueryServerStateRequest) Reset() {
+	*x = QueryServerStateRequest{}
+	mi := &file_proto_worker_proto_msgTypes[93]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueryServerStateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueryServerStateRequest) ProtoMessage() {}
+
+func (x *QueryServerStateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[93]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueryServerStateRequest.ProtoReflect.Descriptor instead.
+func (*QueryServerStateRequest) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{93}
+}
+
+func (x *QueryServerStateRequest) GetInstanceUuid() string {
+	if x != nil {
+		return x.InstanceUuid
+	}
+	return ""
+}
+
+type QueryServerStateResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	Connected     bool                   `protobuf:"varint,3,opt,name=connected,proto3" json:"connected,omitempty"`                 // 探针当前是否在线
+	StateJson     string                 `protobuf:"bytes,4,opt,name=state_json,json=stateJson,proto3" json:"state_json,omitempty"` // 聚合状态 JSON（下游填充）
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueryServerStateResponse) Reset() {
+	*x = QueryServerStateResponse{}
+	mi := &file_proto_worker_proto_msgTypes[94]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueryServerStateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueryServerStateResponse) ProtoMessage() {}
+
+func (x *QueryServerStateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[94]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueryServerStateResponse.ProtoReflect.Descriptor instead.
+func (*QueryServerStateResponse) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{94}
+}
+
+func (x *QueryServerStateResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *QueryServerStateResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *QueryServerStateResponse) GetConnected() bool {
+	if x != nil {
+		return x.Connected
+	}
+	return false
+}
+
+func (x *QueryServerStateResponse) GetStateJson() string {
+	if x != nil {
+		return x.StateJson
+	}
+	return ""
+}
+
 var File_proto_worker_proto protoreflect.FileDescriptor
 
 const file_proto_worker_proto_rawDesc = "" +
@@ -6071,7 +6561,51 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x15RestoreBackupResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12%\n" +
-	"\x0erestored_files\x18\x03 \x01(\x03R\rrestoredFiles2\xdf\x17\n" +
+	"\x0erestored_files\x18\x03 \x01(\x03R\rrestoredFiles\"@\n" +
+	"\x19StreamPluginEventsRequest\x12#\n" +
+	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\"\x86\x03\n" +
+	"\vPluginEvent\x12#\n" +
+	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x12\n" +
+	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1c\n" +
+	"\ttimestamp\x18\x03 \x01(\x03R\ttimestamp\x12\x1f\n" +
+	"\vplayer_name\x18\x04 \x01(\tR\n" +
+	"playerName\x12\x1f\n" +
+	"\vplayer_uuid\x18\x05 \x01(\tR\n" +
+	"playerUuid\x12\x18\n" +
+	"\amessage\x18\x06 \x01(\tR\amessage\x12\x16\n" +
+	"\x06server\x18\a \x01(\tR\x06server\x12\x1f\n" +
+	"\vfrom_server\x18\b \x01(\tR\n" +
+	"fromServer\x12\x1b\n" +
+	"\tto_server\x18\t \x01(\tR\btoServer\x12\x1a\n" +
+	"\bplatform\x18\n" +
+	" \x01(\tR\bplatform\x12\x18\n" +
+	"\aversion\x18\v \x01(\tR\aversion\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\f \x01(\tR\trequestId\x12\x19\n" +
+	"\braw_json\x18\r \x01(\tR\arawJson\"\x8a\x01\n" +
+	"\rPluginCommand\x12\x16\n" +
+	"\x06action\x18\x01 \x01(\tR\x06action\x12\x16\n" +
+	"\x06target\x18\x02 \x01(\tR\x06target\x12\x16\n" +
+	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x12\n" +
+	"\x04args\x18\x04 \x03(\tR\x04args\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x05 \x01(\tR\trequestId\"p\n" +
+	"\x18SendPluginCommandRequest\x12#\n" +
+	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12/\n" +
+	"\acommand\x18\x02 \x01(\v2\x15.worker.PluginCommandR\acommand\"j\n" +
+	"\x19SendPluginCommandResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x03 \x01(\tR\trequestId\">\n" +
+	"\x17QueryServerStateRequest\x12#\n" +
+	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\"\x87\x01\n" +
+	"\x18QueryServerStateResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1c\n" +
+	"\tconnected\x18\x03 \x01(\bR\tconnected\x12\x1d\n" +
+	"\n" +
+	"state_json\x18\x04 \x01(\tR\tstateJson2\xe0\x19\n" +
 	"\rWorkerService\x12=\n" +
 	"\bRegister\x12\x17.worker.RegisterRequest\x1a\x18.worker.RegisterResponse\x12D\n" +
 	"\tHeartbeat\x12\x18.worker.HeartbeatRequest\x1a\x19.worker.HeartbeatResponse(\x010\x01\x12O\n" +
@@ -6116,7 +6650,10 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x0eSetBotBehavior\x12\x1d.worker.SetBotBehaviorRequest\x1a\x1e.worker.SetBotBehaviorResponse\x12O\n" +
 	"\x0eSendBotCommand\x12\x1d.worker.SendBotCommandRequest\x1a\x1e.worker.SendBotCommandResponse\x12I\n" +
 	"\fRunBotScript\x12\x1b.worker.RunBotScriptRequest\x1a\x1c.worker.RunBotScriptResponse\x12E\n" +
-	"\x0fStreamBotEvents\x12\x1e.worker.StreamBotEventsRequest\x1a\x10.worker.BotEvent0\x01B,Z*github.com/wcpe/JianManager/proto/workerpbb\x06proto3"
+	"\x0fStreamBotEvents\x12\x1e.worker.StreamBotEventsRequest\x1a\x10.worker.BotEvent0\x01\x12N\n" +
+	"\x12StreamPluginEvents\x12!.worker.StreamPluginEventsRequest\x1a\x13.worker.PluginEvent0\x01\x12X\n" +
+	"\x11SendPluginCommand\x12 .worker.SendPluginCommandRequest\x1a!.worker.SendPluginCommandResponse\x12U\n" +
+	"\x10QueryServerState\x12\x1f.worker.QueryServerStateRequest\x1a .worker.QueryServerStateResponseB,Z*github.com/wcpe/JianManager/proto/workerpbb\x06proto3"
 
 var (
 	file_proto_worker_proto_rawDescOnce sync.Once
@@ -6130,7 +6667,7 @@ func file_proto_worker_proto_rawDescGZIP() []byte {
 	return file_proto_worker_proto_rawDescData
 }
 
-var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 89)
+var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 96)
 var file_proto_worker_proto_goTypes = []any{
 	(*RegisterRequest)(nil),             // 0: worker.RegisterRequest
 	(*RegisterResponse)(nil),            // 1: worker.RegisterResponse
@@ -6220,13 +6757,20 @@ var file_proto_worker_proto_goTypes = []any{
 	(*CreateBackupResponse)(nil),        // 85: worker.CreateBackupResponse
 	(*RestoreBackupRequest)(nil),        // 86: worker.RestoreBackupRequest
 	(*RestoreBackupResponse)(nil),       // 87: worker.RestoreBackupResponse
-	nil,                                 // 88: worker.CreateInstanceRequest.EnvVarsEntry
+	(*StreamPluginEventsRequest)(nil),   // 88: worker.StreamPluginEventsRequest
+	(*PluginEvent)(nil),                 // 89: worker.PluginEvent
+	(*PluginCommand)(nil),               // 90: worker.PluginCommand
+	(*SendPluginCommandRequest)(nil),    // 91: worker.SendPluginCommandRequest
+	(*SendPluginCommandResponse)(nil),   // 92: worker.SendPluginCommandResponse
+	(*QueryServerStateRequest)(nil),     // 93: worker.QueryServerStateRequest
+	(*QueryServerStateResponse)(nil),    // 94: worker.QueryServerStateResponse
+	nil,                                 // 95: worker.CreateInstanceRequest.EnvVarsEntry
 }
 var file_proto_worker_proto_depIdxs = []int32{
 	3,  // 0: worker.HeartbeatRequest.instances:type_name -> worker.InstanceState
 	4,  // 1: worker.HeartbeatRequest.instance_metrics:type_name -> worker.InstanceMetricSample
 	51, // 2: worker.InstanceMetricSample.worlds:type_name -> worker.WorldMetric
-	88, // 3: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
+	95, // 3: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
 	15, // 4: worker.ListInstancesResponse.instances:type_name -> worker.InstanceInfo
 	22, // 5: worker.ListFilesResponse.files:type_name -> worker.FileInfo
 	34, // 6: worker.ListConfigFilesResponse.files:type_name -> worker.ConfigFileInfo
@@ -6244,91 +6788,98 @@ var file_proto_worker_proto_depIdxs = []int32{
 	82, // 18: worker.CreateBackupRequest.storage:type_name -> worker.StorageBackendSpec
 	83, // 19: worker.CreateBackupResponse.manifest:type_name -> worker.BackupManifestEntry
 	82, // 20: worker.RestoreBackupRequest.storage:type_name -> worker.StorageBackendSpec
-	0,  // 21: worker.WorkerService.Register:input_type -> worker.RegisterRequest
-	2,  // 22: worker.WorkerService.Heartbeat:input_type -> worker.HeartbeatRequest
-	6,  // 23: worker.WorkerService.CreateInstance:input_type -> worker.CreateInstanceRequest
-	8,  // 24: worker.WorkerService.StartInstance:input_type -> worker.InstanceActionRequest
-	8,  // 25: worker.WorkerService.StopInstance:input_type -> worker.InstanceActionRequest
-	8,  // 26: worker.WorkerService.RestartInstance:input_type -> worker.InstanceActionRequest
-	8,  // 27: worker.WorkerService.KillInstance:input_type -> worker.InstanceActionRequest
-	10, // 28: worker.WorkerService.SendCommand:input_type -> worker.SendCommandRequest
-	8,  // 29: worker.WorkerService.GetInstanceStatus:input_type -> worker.InstanceActionRequest
-	13, // 30: worker.WorkerService.ListInstances:input_type -> worker.ListInstancesRequest
-	16, // 31: worker.WorkerService.StreamInstanceEvents:input_type -> worker.StreamInstanceEventsRequest
-	18, // 32: worker.WorkerService.IssueTerminalToken:input_type -> worker.IssueTerminalTokenRequest
-	20, // 33: worker.WorkerService.ListFiles:input_type -> worker.ListFilesRequest
-	23, // 34: worker.WorkerService.ReadFile:input_type -> worker.ReadFileRequest
-	25, // 35: worker.WorkerService.WriteFile:input_type -> worker.WriteFileRequest
-	27, // 36: worker.WorkerService.DeleteFile:input_type -> worker.DeleteFileRequest
-	29, // 37: worker.WorkerService.RenameFile:input_type -> worker.RenameFileRequest
-	31, // 38: worker.WorkerService.DownloadArchive:input_type -> worker.DownloadArchiveRequest
-	33, // 39: worker.WorkerService.ListConfigFiles:input_type -> worker.ListConfigFilesRequest
-	39, // 40: worker.WorkerService.ReadConfig:input_type -> worker.ReadConfigRequest
-	41, // 41: worker.WorkerService.WriteConfig:input_type -> worker.WriteConfigRequest
-	43, // 42: worker.WorkerService.ValidateConfig:input_type -> worker.ValidateConfigRequest
-	47, // 43: worker.WorkerService.GetNodeMetrics:input_type -> worker.GetNodeMetricsRequest
-	49, // 44: worker.WorkerService.GetInstanceMetrics:input_type -> worker.GetInstanceMetricsRequest
-	52, // 45: worker.WorkerService.ExecRconCommand:input_type -> worker.ExecRconCommandRequest
-	69, // 46: worker.WorkerService.ListJDKs:input_type -> worker.ListJDKsRequest
-	72, // 47: worker.WorkerService.InstallJDK:input_type -> worker.InstallJDKRequest
-	74, // 48: worker.WorkerService.RemoveJDK:input_type -> worker.RemoveJDKRequest
-	76, // 49: worker.WorkerService.DownloadCore:input_type -> worker.DownloadCoreRequest
-	78, // 50: worker.WorkerService.DeployServerProbe:input_type -> worker.DeployServerProbeRequest
-	80, // 51: worker.WorkerService.CloneWorkDir:input_type -> worker.CloneWorkDirRequest
-	84, // 52: worker.WorkerService.CreateBackup:input_type -> worker.CreateBackupRequest
-	86, // 53: worker.WorkerService.RestoreBackup:input_type -> worker.RestoreBackupRequest
-	54, // 54: worker.WorkerService.CreateBot:input_type -> worker.CreateBotRequest
-	56, // 55: worker.WorkerService.DeleteBot:input_type -> worker.DeleteBotRequest
-	58, // 56: worker.WorkerService.ListBots:input_type -> worker.ListBotsRequest
-	61, // 57: worker.WorkerService.SetBotBehavior:input_type -> worker.SetBotBehaviorRequest
-	63, // 58: worker.WorkerService.SendBotCommand:input_type -> worker.SendBotCommandRequest
-	65, // 59: worker.WorkerService.RunBotScript:input_type -> worker.RunBotScriptRequest
-	67, // 60: worker.WorkerService.StreamBotEvents:input_type -> worker.StreamBotEventsRequest
-	1,  // 61: worker.WorkerService.Register:output_type -> worker.RegisterResponse
-	5,  // 62: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
-	7,  // 63: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
-	9,  // 64: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
-	9,  // 65: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
-	9,  // 66: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
-	9,  // 67: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
-	11, // 68: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
-	12, // 69: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
-	14, // 70: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
-	17, // 71: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
-	19, // 72: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
-	21, // 73: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
-	24, // 74: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
-	26, // 75: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
-	28, // 76: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
-	30, // 77: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
-	32, // 78: worker.WorkerService.DownloadArchive:output_type -> worker.DownloadArchiveChunk
-	35, // 79: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
-	40, // 80: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
-	42, // 81: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
-	44, // 82: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
-	48, // 83: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
-	50, // 84: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
-	53, // 85: worker.WorkerService.ExecRconCommand:output_type -> worker.ExecRconCommandResponse
-	71, // 86: worker.WorkerService.ListJDKs:output_type -> worker.ListJDKsResponse
-	73, // 87: worker.WorkerService.InstallJDK:output_type -> worker.InstallJDKResponse
-	75, // 88: worker.WorkerService.RemoveJDK:output_type -> worker.RemoveJDKResponse
-	77, // 89: worker.WorkerService.DownloadCore:output_type -> worker.DownloadCoreResponse
-	79, // 90: worker.WorkerService.DeployServerProbe:output_type -> worker.DeployServerProbeResponse
-	81, // 91: worker.WorkerService.CloneWorkDir:output_type -> worker.CloneWorkDirResponse
-	85, // 92: worker.WorkerService.CreateBackup:output_type -> worker.CreateBackupResponse
-	87, // 93: worker.WorkerService.RestoreBackup:output_type -> worker.RestoreBackupResponse
-	55, // 94: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
-	57, // 95: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
-	59, // 96: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
-	62, // 97: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
-	64, // 98: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
-	66, // 99: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
-	68, // 100: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
-	61, // [61:101] is the sub-list for method output_type
-	21, // [21:61] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	90, // 21: worker.SendPluginCommandRequest.command:type_name -> worker.PluginCommand
+	0,  // 22: worker.WorkerService.Register:input_type -> worker.RegisterRequest
+	2,  // 23: worker.WorkerService.Heartbeat:input_type -> worker.HeartbeatRequest
+	6,  // 24: worker.WorkerService.CreateInstance:input_type -> worker.CreateInstanceRequest
+	8,  // 25: worker.WorkerService.StartInstance:input_type -> worker.InstanceActionRequest
+	8,  // 26: worker.WorkerService.StopInstance:input_type -> worker.InstanceActionRequest
+	8,  // 27: worker.WorkerService.RestartInstance:input_type -> worker.InstanceActionRequest
+	8,  // 28: worker.WorkerService.KillInstance:input_type -> worker.InstanceActionRequest
+	10, // 29: worker.WorkerService.SendCommand:input_type -> worker.SendCommandRequest
+	8,  // 30: worker.WorkerService.GetInstanceStatus:input_type -> worker.InstanceActionRequest
+	13, // 31: worker.WorkerService.ListInstances:input_type -> worker.ListInstancesRequest
+	16, // 32: worker.WorkerService.StreamInstanceEvents:input_type -> worker.StreamInstanceEventsRequest
+	18, // 33: worker.WorkerService.IssueTerminalToken:input_type -> worker.IssueTerminalTokenRequest
+	20, // 34: worker.WorkerService.ListFiles:input_type -> worker.ListFilesRequest
+	23, // 35: worker.WorkerService.ReadFile:input_type -> worker.ReadFileRequest
+	25, // 36: worker.WorkerService.WriteFile:input_type -> worker.WriteFileRequest
+	27, // 37: worker.WorkerService.DeleteFile:input_type -> worker.DeleteFileRequest
+	29, // 38: worker.WorkerService.RenameFile:input_type -> worker.RenameFileRequest
+	31, // 39: worker.WorkerService.DownloadArchive:input_type -> worker.DownloadArchiveRequest
+	33, // 40: worker.WorkerService.ListConfigFiles:input_type -> worker.ListConfigFilesRequest
+	39, // 41: worker.WorkerService.ReadConfig:input_type -> worker.ReadConfigRequest
+	41, // 42: worker.WorkerService.WriteConfig:input_type -> worker.WriteConfigRequest
+	43, // 43: worker.WorkerService.ValidateConfig:input_type -> worker.ValidateConfigRequest
+	47, // 44: worker.WorkerService.GetNodeMetrics:input_type -> worker.GetNodeMetricsRequest
+	49, // 45: worker.WorkerService.GetInstanceMetrics:input_type -> worker.GetInstanceMetricsRequest
+	52, // 46: worker.WorkerService.ExecRconCommand:input_type -> worker.ExecRconCommandRequest
+	69, // 47: worker.WorkerService.ListJDKs:input_type -> worker.ListJDKsRequest
+	72, // 48: worker.WorkerService.InstallJDK:input_type -> worker.InstallJDKRequest
+	74, // 49: worker.WorkerService.RemoveJDK:input_type -> worker.RemoveJDKRequest
+	76, // 50: worker.WorkerService.DownloadCore:input_type -> worker.DownloadCoreRequest
+	78, // 51: worker.WorkerService.DeployServerProbe:input_type -> worker.DeployServerProbeRequest
+	80, // 52: worker.WorkerService.CloneWorkDir:input_type -> worker.CloneWorkDirRequest
+	84, // 53: worker.WorkerService.CreateBackup:input_type -> worker.CreateBackupRequest
+	86, // 54: worker.WorkerService.RestoreBackup:input_type -> worker.RestoreBackupRequest
+	54, // 55: worker.WorkerService.CreateBot:input_type -> worker.CreateBotRequest
+	56, // 56: worker.WorkerService.DeleteBot:input_type -> worker.DeleteBotRequest
+	58, // 57: worker.WorkerService.ListBots:input_type -> worker.ListBotsRequest
+	61, // 58: worker.WorkerService.SetBotBehavior:input_type -> worker.SetBotBehaviorRequest
+	63, // 59: worker.WorkerService.SendBotCommand:input_type -> worker.SendBotCommandRequest
+	65, // 60: worker.WorkerService.RunBotScript:input_type -> worker.RunBotScriptRequest
+	67, // 61: worker.WorkerService.StreamBotEvents:input_type -> worker.StreamBotEventsRequest
+	88, // 62: worker.WorkerService.StreamPluginEvents:input_type -> worker.StreamPluginEventsRequest
+	91, // 63: worker.WorkerService.SendPluginCommand:input_type -> worker.SendPluginCommandRequest
+	93, // 64: worker.WorkerService.QueryServerState:input_type -> worker.QueryServerStateRequest
+	1,  // 65: worker.WorkerService.Register:output_type -> worker.RegisterResponse
+	5,  // 66: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
+	7,  // 67: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
+	9,  // 68: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
+	9,  // 69: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
+	9,  // 70: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
+	9,  // 71: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
+	11, // 72: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
+	12, // 73: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
+	14, // 74: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
+	17, // 75: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
+	19, // 76: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
+	21, // 77: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
+	24, // 78: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
+	26, // 79: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
+	28, // 80: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
+	30, // 81: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
+	32, // 82: worker.WorkerService.DownloadArchive:output_type -> worker.DownloadArchiveChunk
+	35, // 83: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
+	40, // 84: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
+	42, // 85: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
+	44, // 86: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
+	48, // 87: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
+	50, // 88: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
+	53, // 89: worker.WorkerService.ExecRconCommand:output_type -> worker.ExecRconCommandResponse
+	71, // 90: worker.WorkerService.ListJDKs:output_type -> worker.ListJDKsResponse
+	73, // 91: worker.WorkerService.InstallJDK:output_type -> worker.InstallJDKResponse
+	75, // 92: worker.WorkerService.RemoveJDK:output_type -> worker.RemoveJDKResponse
+	77, // 93: worker.WorkerService.DownloadCore:output_type -> worker.DownloadCoreResponse
+	79, // 94: worker.WorkerService.DeployServerProbe:output_type -> worker.DeployServerProbeResponse
+	81, // 95: worker.WorkerService.CloneWorkDir:output_type -> worker.CloneWorkDirResponse
+	85, // 96: worker.WorkerService.CreateBackup:output_type -> worker.CreateBackupResponse
+	87, // 97: worker.WorkerService.RestoreBackup:output_type -> worker.RestoreBackupResponse
+	55, // 98: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
+	57, // 99: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
+	59, // 100: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
+	62, // 101: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
+	64, // 102: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
+	66, // 103: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
+	68, // 104: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
+	89, // 105: worker.WorkerService.StreamPluginEvents:output_type -> worker.PluginEvent
+	92, // 106: worker.WorkerService.SendPluginCommand:output_type -> worker.SendPluginCommandResponse
+	94, // 107: worker.WorkerService.QueryServerState:output_type -> worker.QueryServerStateResponse
+	65, // [65:108] is the sub-list for method output_type
+	22, // [22:65] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_proto_worker_proto_init() }
@@ -6342,7 +6893,7 @@ func file_proto_worker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_worker_proto_rawDesc), len(file_proto_worker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   89,
+			NumMessages:   96,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
