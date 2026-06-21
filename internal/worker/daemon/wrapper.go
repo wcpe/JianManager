@@ -21,19 +21,21 @@ import (
 // WrapperConfig 是 daemon wrapper 子进程的启动配置。
 // 通过环境变量从 Worker 传递给 wrapper 子进程（避免命令行长度/转义问题）。
 type WrapperConfig struct {
-	InstanceUUID  string            `json:"instance_uuid"`
-	StartCommand  string            `json:"start_command"`
+	InstanceUUID string `json:"instance_uuid"`
+	StartCommand string `json:"start_command"`
 	// StopCommand 优雅停止时写入进程 stdin 的命令（不含换行）。
 	// 由 Control Plane 按实例角色派生（MC 后端用 stop，代理用 end）。
 	// 为空时 wrapper 回退到 MC 的 "stop"，保证旧实例/恢复路径行为不变。
-	StopCommand   string            `json:"stop_command,omitempty"`
-	WorkDir       string            `json:"work_dir"`
-	EnvVars       map[string]string `json:"env_vars"`
-	JavaHome      string            `json:"java_home,omitempty"`
-	JDKBinPath    string            `json:"jdk_bin_path,omitempty"`
-	AutoRestart   bool              `json:"auto_restart"`
-	PIDDir        string            `json:"pid_dir"`
-	StartTimeout  time.Duration     `json:"start_timeout"` // Java 启动到首字节输出的等待（0=不限）
+	StopCommand  string            `json:"stop_command,omitempty"`
+	WorkDir      string            `json:"work_dir"`
+	EnvVars      map[string]string `json:"env_vars"`
+	JavaHome     string            `json:"java_home,omitempty"`
+	JDKBinPath   string            `json:"jdk_bin_path,omitempty"`
+	AutoRestart  bool              `json:"auto_restart"`
+	PIDDir       string            `json:"pid_dir"`
+	StartTimeout time.Duration     `json:"start_timeout"` // Java 启动到首字节输出的等待（0=不限）
+	// ProbePort 透传到 PID 记录，使 Worker 重启恢复后心跳继续自采该实例 ServerProbe 指标（FR-060）。
+	ProbePort int `json:"probe_port,omitempty"`
 }
 
 // 环境变量键名约定。Worker spawn wrapper 时写入这些变量。
@@ -44,9 +46,9 @@ const (
 // controlCommand 是 Worker 通过 ChannelControl 下发的控制命令。
 // 约定 payload 为 "stop" / "kill" / "ping" 文本。
 const (
-	CtrlStop  = "stop"
-	CtrlKill  = "kill"
-	CtrlPing  = "ping"
+	CtrlStop = "stop"
+	CtrlKill = "kill"
+	CtrlPing = "ping"
 )
 
 // ControlStop / ControlKill / ControlPing 是导出的控制命令常量，
@@ -62,15 +64,15 @@ const (
 // 与 Worker 双向帧通信（转发 stdio + 接收控制命令）、维护 PID 文件。
 // 参见 ADR-003: 守护进程 Wrapper 模式。
 type Wrapper struct {
-	cfg      WrapperConfig
-	pidFile  *PIDFile
-	addr     string
+	cfg     WrapperConfig
+	pidFile *PIDFile
+	addr    string
 
-	mu          sync.Mutex
-	javaCmd     *exec.Cmd
-	javaStdin   io.WriteCloser
-	listener    net.Listener
-	workerConn  netConn
+	mu            sync.Mutex
+	javaCmd       *exec.Cmd
+	javaStdin     io.WriteCloser
+	listener      net.Listener
+	workerConn    netConn
 	state         InstanceState
 	closed        bool
 	closing       chan struct{}
@@ -91,11 +93,11 @@ func Run(cfg WrapperConfig) error {
 // ready 为 nil 时忽略。供测试/集成方等待 wrapper 可被拨号后再连接，消除竞态。
 func RunWithReady(cfg WrapperConfig, ready chan<- struct{}) error {
 	w := &Wrapper{
-		cfg:      cfg,
-		pidFile:  NewPIDFile(PIDFileName(cfg.PIDDir, cfg.InstanceUUID)),
-		addr:     SocketAddr(cfg.PIDDir, cfg.InstanceUUID),
-		state:    StateStopped,
-		closing:  make(chan struct{}),
+		cfg:     cfg,
+		pidFile: NewPIDFile(PIDFileName(cfg.PIDDir, cfg.InstanceUUID)),
+		addr:    SocketAddr(cfg.PIDDir, cfg.InstanceUUID),
+		state:   StateStopped,
+		closing: make(chan struct{}),
 	}
 	return w.run(ready)
 }
@@ -134,6 +136,7 @@ func (w *Wrapper) run(ready chan<- struct{}) error {
 		InstanceUUID: w.cfg.InstanceUUID,
 		SocketAddr:   w.addr,
 		WorkDir:      w.cfg.WorkDir,
+		ProbePort:    w.cfg.ProbePort,
 	}); err != nil {
 		slog.Warn("写 PID 文件失败", "instanceId", w.cfg.InstanceUUID, "error", err)
 	}
@@ -218,6 +221,7 @@ func (w *Wrapper) startJava() error {
 	rec.WrapperPID = os.Getpid()
 	rec.SocketAddr = w.addr
 	rec.InstanceUUID = w.cfg.InstanceUUID
+	rec.ProbePort = w.cfg.ProbePort
 	if err := w.pidFile.WriteRecord(*rec); err != nil {
 		slog.Warn("更新 PID 文件 java pid 失败", "error", err)
 	}

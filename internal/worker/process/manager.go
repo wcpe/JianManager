@@ -37,9 +37,12 @@ type Instance struct {
 	JDKBinPath   string
 	RCONPort     int
 	RCONPassword string
-	State        InstanceState
-	AutoRestart  bool
-	CrashCount   int
+	// ProbePort 是实例 ServerProbe /metrics 端口（CP 分配后随 Create 下发）。
+	// 心跳采集器据此自采每实例富指标（FR-060）；0=未部署探针，心跳跳过该实例。
+	ProbePort   int
+	State       InstanceState
+	AutoRestart bool
+	CrashCount  int
 	// strategy 是该实例的启动策略，按 ProcessType 选择。
 	// nil 表示实例已创建但尚未启动（或已 Close）。
 	strategy IProcessCommand
@@ -91,8 +94,9 @@ func (m *Manager) emitStateChange(instanceUUID string, oldState, newState Instan
 
 // InstanceSnapshot 表示单个实例的状态快照（用于心跳上报）。
 type InstanceSnapshot struct {
-	UUID  string
-	State string // STOPPED, STARTING, RUNNING, STOPPING, CRASHED
+	UUID      string
+	State     string // STOPPED, STARTING, RUNNING, STOPPING, CRASHED
+	ProbePort int    // ServerProbe /metrics 端口；>0 且 RUNNING 时心跳采集器自采富指标（FR-060）
 }
 
 // GetAllInstanceStates 返回所有实例的状态快照（用于心跳上报）。
@@ -109,8 +113,9 @@ func (m *Manager) GetAllInstanceStates() []InstanceSnapshot {
 			state = StateCrashed
 		}
 		states = append(states, InstanceSnapshot{
-			UUID:  uuid,
-			State: string(state),
+			UUID:      uuid,
+			State:     string(state),
+			ProbePort: inst.ProbePort,
 		})
 	}
 	return states
@@ -119,7 +124,8 @@ func (m *Manager) GetAllInstanceStates() []InstanceSnapshot {
 // Create 创建实例（但不启动）。processType 决定启动方式（direct/daemon/docker/rcon）。
 // jdkPath / jdkBinPath 非空时会被注入到实例启动时的环境。
 // stopCommand 为优雅停止命令（按角色派生：MC 后端 stop / 代理 end），空时回退默认 stop。
-func (m *Manager) Create(uuid, name, startCommand, stopCommand, workDir string, envVars map[string]string, autoRestart bool, processType ProcessType, jdkPath, jdkBinPath string) error {
+// probePort 为实例 ServerProbe /metrics 端口（CP 分配），供心跳采集器自采富指标（FR-060）；0=未部署。
+func (m *Manager) Create(uuid, name, startCommand, stopCommand, workDir string, envVars map[string]string, autoRestart bool, processType ProcessType, jdkPath, jdkBinPath string, probePort int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -136,12 +142,13 @@ func (m *Manager) Create(uuid, name, startCommand, stopCommand, workDir string, 
 		EnvVars:      envVars,
 		JDKPath:      jdkPath,
 		JDKBinPath:   jdkBinPath,
+		ProbePort:    probePort,
 		State:        StateStopped,
 		AutoRestart:  autoRestart,
 		processType:  processType,
 	}
 
-	slog.Info("实例已创建", "instanceId", uuid, "name", name, "autoRestart", autoRestart, "processType", processType, "jdkPath", jdkPath)
+	slog.Info("实例已创建", "instanceId", uuid, "name", name, "autoRestart", autoRestart, "processType", processType, "jdkPath", jdkPath, "probePort", probePort)
 	return nil
 }
 
@@ -213,6 +220,7 @@ func (m *Manager) Start(uuid string) error {
 			JDKBinPath:   inst.JDKBinPath,
 			AutoRestart:  inst.AutoRestart,
 			ProcessType:  inst.processType,
+			ProbePort:    inst.ProbePort,
 		}
 		strategy, err := m.newStrategy(spec)
 		if err != nil {
@@ -441,7 +449,7 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 
 		// wrapper 存活：构造 daemon 策略并 reconnect。
 		// WorkDir 从 PID 记录恢复，否则文件/配置操作会因空工作目录失败（open :）。
-		strategy := newDaemonStrategy(m, CommandSpec{UUID: instanceUUID, WorkDir: rec.WorkDir, ProcessType: ProcessTypeDaemon})
+		strategy := newDaemonStrategy(m, CommandSpec{UUID: instanceUUID, WorkDir: rec.WorkDir, ProcessType: ProcessTypeDaemon, ProbePort: rec.ProbePort})
 		if err := strategy.Reconnect(rec.SocketAddr); err != nil {
 			slog.Warn("reconnect wrapper 失败，清理", "instanceId", instanceUUID, "error", err)
 			_ = os.Remove(pidPath)
@@ -455,6 +463,7 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 			State:       StateRunning,
 			AutoRestart: true,
 			WorkDir:     rec.WorkDir,
+			ProbePort:   rec.ProbePort,
 			strategy:    strategy,
 			processType: ProcessTypeDaemon,
 		}

@@ -19,6 +19,8 @@ func TestPIDFile_WriteReadRecord(t *testing.T) {
 		JavaPID:      67890,
 		SocketAddr:   "/tmp/inst.sock",
 		InstanceUUID: "uuid-abc",
+		WorkDir:      "/srv/inst",
+		ProbePort:    29940,
 	}
 	require.NoError(t, pf.WriteRecord(rec))
 

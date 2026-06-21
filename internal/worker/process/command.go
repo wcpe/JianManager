@@ -31,16 +31,19 @@ type CommandSpec struct {
 	StartCommand string
 	// StopCommand 优雅停止时写入进程 stdin 的命令（按实例角色派生：MC 后端 stop / 代理 end）。
 	// 空时由策略回退到默认 "stop"。仅 daemon 策略经 stdin 优雅关服时使用。
-	StopCommand  string
-	WorkDir      string
-	EnvVars      map[string]string
+	StopCommand string
+	WorkDir     string
+	EnvVars     map[string]string
 	// JavaHome 显式指定 JAVA_HOME（来自实例绑定的 JDK），非空时 Worker 会
 	// 把它注入到进程环境并把 JavaHome/bin 接入 PATH。
 	JavaHome string
 	// JDKBinPath 显式指定要前置到 PATH 的目录；空时由 JavaHome 派生。
-	JDKBinPath string
+	JDKBinPath  string
 	AutoRestart bool
 	ProcessType ProcessType
+	// ProbePort 是实例 ServerProbe /metrics 端口（CP 分配后下发）。daemon 策略透传到
+	// wrapper→PID 记录，供 Worker 重启恢复后心跳继续自采（FR-060）；0=未部署探针。
+	ProbePort int
 }
 
 // pathKey 当前平台的 PATH 变量名：Windows 使用 Path，Unix 使用 PATH。
@@ -109,6 +112,7 @@ func splitEnvKey(kv string) (key, value string, ok bool) {
 	}
 	return "", "", false
 }
+
 // IProcessCommand 进程启动策略接口。
 // Manager 按 instance.ProcessType 选择具体实现（direct/daemon/docker），
 // 把「如何启动/停止/发送命令」的差异收敛到策略内部，Manager 只负责路由和生命周期记账。

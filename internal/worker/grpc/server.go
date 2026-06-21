@@ -129,6 +129,7 @@ func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanc
 		process.ProcessType(req.ProcessType),
 		req.JdkPath,
 		req.JdkBinPath,
+		int(req.ProbePort),
 	)
 	if err != nil {
 		return &workerpb.CreateInstanceResponse{Success: false, Error: err.Error()}, nil

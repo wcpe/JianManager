@@ -21,10 +21,10 @@ import (
 // 两者通过 Unix Socket / Named Pipe + 二进制帧协议通信。
 // Worker 退出/重启时 wrapper 继续运行，Worker 重启后通过 PID 文件 reconnect。
 type daemonStrategy struct {
-	mu      sync.Mutex
-	spec    CommandSpec
-	mgr     *Manager
-	pidDir  string
+	mu     sync.Mutex
+	spec   CommandSpec
+	mgr    *Manager
+	pidDir string
 
 	wrapperCmd *exec.Cmd
 	conn       net.Conn
@@ -72,6 +72,7 @@ func (d *daemonStrategy) Start(ctx context.Context) error {
 		JDKBinPath:   d.spec.JDKBinPath,
 		AutoRestart:  d.spec.AutoRestart,
 		PIDDir:       d.pidDir,
+		ProbePort:    d.spec.ProbePort,
 	}
 	cfgBytes, err := json.Marshal(cfg)
 	if err != nil {
