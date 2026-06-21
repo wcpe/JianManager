@@ -10,6 +10,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
+import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { validateRequired } from '@/lib/form-validation'
 import { useInstances } from '@/api/instances'
 import {
   useNetworks,
@@ -115,8 +118,11 @@ function CreateNetworkModal({ onClose }: { onClose: () => void }) {
   const [description, setDescription] = useState('')
   const create = useCreateNetwork()
 
+  const nameError = validateRequired(name)
+
   const submit = (e: FormEvent) => {
     e.preventDefault()
+    if (nameError) return
     create.mutate(
       { name, description: description || undefined },
       {
@@ -136,22 +142,23 @@ function CreateNetworkModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-background border rounded-lg p-6 w-full max-w-md shadow-lg">
+    <div className={MODAL_OVERLAY}>
+      <div className={`${MODAL_PANEL} max-w-md`}>
         <h2 className="text-lg font-bold mb-4">{t('networks.create')}</h2>
         <form onSubmit={submit} className="space-y-3">
           <div>
-            <label className="text-sm font-medium">{t('networks.name')}</label>
+            <FieldLabel required>{t('networks.name')}</FieldLabel>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
+              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
               placeholder="survival"
-              required
+              aria-invalid={!!nameError}
             />
+            <FieldError error={nameError} />
           </div>
           <div>
-            <label className="text-sm font-medium">{t('networks.description')}</label>
+            <FieldLabel>{t('networks.description')}</FieldLabel>
             <input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -162,7 +169,7 @@ function CreateNetworkModal({ onClose }: { onClose: () => void }) {
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-md hover:bg-accent">
               {t('common.cancel')}
             </button>
-            <button type="submit" disabled={create.isPending || !name} className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50">
+            <button type="submit" disabled={create.isPending || !!nameError} className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50">
               {create.isPending ? t('common.creating') : t('common.create')}
             </button>
           </div>

@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAlertRules, useAlertEvents, useCreateAlertRule, useDeleteAlertRule, type AlertRuleInfo } from '@/api/alerts'
+import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { validateRequired, validateUrl, validatePositiveInt } from '@/lib/form-validation'
 
 export default function AlertsPage() {
   const { t } = useTranslation()
@@ -11,7 +13,14 @@ export default function AlertsPage() {
   const [showCreate, setShowCreate] = useState(false)
   const [form, setForm] = useState({ name: '', targetType: 'node', targetId: null, metric: 'cpu_usage', operator: '>', threshold: 80, durationSec: 60, notifyType: 'webhook', notifyTarget: '', enabled: true })
 
+  const nameError = validateRequired(form.name)
+  const thresholdError = validatePositiveInt(String(form.threshold))
+  const durationError = validatePositiveInt(String(form.durationSec))
+  const webhookError = validateRequired(form.notifyTarget) || validateUrl(form.notifyTarget)
+  const hasError = !!(nameError || thresholdError || durationError || webhookError)
+
   const handleCreate = async () => {
+    if (hasError) return
     await createRule.mutateAsync(form)
     setShowCreate(false)
     setForm({ name: '', targetType: 'node', targetId: null, metric: 'cpu_usage', operator: '>', threshold: 80, durationSec: 60, notifyType: 'webhook', notifyTarget: '', enabled: true })
@@ -28,25 +37,47 @@ export default function AlertsPage() {
 
       {showCreate && (
         <div className="border rounded-lg p-4 space-y-3">
-          <input className="w-full p-2 border rounded" placeholder={t('alerts.ruleName')} value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
-          <div className="grid grid-cols-4 gap-2">
-            <select className="p-2 border rounded" value={form.metric} onChange={e => setForm({ ...form, metric: e.target.value })}>
-              <option value="cpu_usage">{t('alerts.cpu')}</option>
-              <option value="memory_usage">{t('alerts.memory')}</option>
-              <option value="disk_usage">{t('alerts.disk')}</option>
-            </select>
-            <select className="p-2 border rounded" value={form.operator} onChange={e => setForm({ ...form, operator: e.target.value })}>
-              <option value=">">&gt;</option>
-              <option value="<">&lt;</option>
-              <option value=">=">&gt;=</option>
-              <option value="<=">&lt;=</option>
-            </select>
-            <input type="number" className="p-2 border rounded" placeholder={t('alerts.threshold')} value={form.threshold} onChange={e => setForm({ ...form, threshold: Number(e.target.value) })} />
-            <input type="number" className="p-2 border rounded" placeholder={t('alerts.durationSec')} value={form.durationSec} onChange={e => setForm({ ...form, durationSec: Number(e.target.value) })} />
+          <div>
+            <FieldLabel required>{t('alerts.ruleName')}</FieldLabel>
+            <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" placeholder={t('alerts.ruleName')} value={form.name} aria-invalid={!!nameError} onChange={e => setForm({ ...form, name: e.target.value })} />
+            <FieldError error={nameError} />
           </div>
-          <input className="w-full p-2 border rounded" placeholder={t('alerts.webhook')} value={form.notifyTarget} onChange={e => setForm({ ...form, notifyTarget: e.target.value })} />
+          <div className="grid grid-cols-4 gap-2">
+            <div>
+              <FieldLabel>{t('alerts.metric')}</FieldLabel>
+              <select className="w-full mt-1 p-2 border rounded" value={form.metric} onChange={e => setForm({ ...form, metric: e.target.value })}>
+                <option value="cpu_usage">{t('alerts.cpu')}</option>
+                <option value="memory_usage">{t('alerts.memory')}</option>
+                <option value="disk_usage">{t('alerts.disk')}</option>
+              </select>
+            </div>
+            <div>
+              <FieldLabel>{t('alerts.condition', 'Condition')}</FieldLabel>
+              <select className="w-full mt-1 p-2 border rounded" value={form.operator} onChange={e => setForm({ ...form, operator: e.target.value })}>
+                <option value=">">&gt;</option>
+                <option value="<">&lt;</option>
+                <option value=">=">&gt;=</option>
+                <option value="<=">&lt;=</option>
+              </select>
+            </div>
+            <div>
+              <FieldLabel required>{t('alerts.threshold')}</FieldLabel>
+              <input type="number" className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" placeholder={t('alerts.threshold')} value={form.threshold} aria-invalid={!!thresholdError} onChange={e => setForm({ ...form, threshold: Number(e.target.value) })} />
+              <FieldError error={thresholdError} />
+            </div>
+            <div>
+              <FieldLabel required>{t('alerts.durationSec')}</FieldLabel>
+              <input type="number" className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" placeholder={t('alerts.durationSec')} value={form.durationSec} aria-invalid={!!durationError} onChange={e => setForm({ ...form, durationSec: Number(e.target.value) })} />
+              <FieldError error={durationError} />
+            </div>
+          </div>
+          <div>
+            <FieldLabel required>{t('alerts.webhook')}</FieldLabel>
+            <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" placeholder={t('alerts.webhook')} value={form.notifyTarget} aria-invalid={!!webhookError} onChange={e => setForm({ ...form, notifyTarget: e.target.value })} />
+            <FieldError error={webhookError} />
+          </div>
           <div className="flex gap-2">
-            <button className="px-4 py-2 bg-primary text-primary-foreground rounded-md" onClick={handleCreate}>{t('common.save')}</button>
+            <button className="px-4 py-2 bg-primary text-primary-foreground rounded-md disabled:opacity-50" disabled={hasError || createRule.isPending} onClick={handleCreate}>{t('common.save')}</button>
             <button className="px-4 py-2 border rounded-md" onClick={() => setShowCreate(false)}>{t('common.cancel')}</button>
           </div>
         </div>
