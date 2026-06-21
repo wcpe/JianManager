@@ -1001,5 +1001,23 @@
   "language": {
     "zh": "中文",
     "en": "English"
+  },
+  "validation": {
+    "requiredMark": "必填",
+    "required": "此项必填",
+    "portInteger": "端口须为整数",
+    "portRange": "端口须在 1–65535 之间",
+    "integer": "须为整数",
+    "positive": "须为正整数",
+    "absPath": "须为绝对路径（如 /servers/x 或 C:/x）",
+    "url": "须为合法 URL",
+    "urlScheme": "仅支持 http/https 地址",
+    "envRef": "须为环境变量引用形式 ${VAR_NAME}",
+    "host": "须为合法主机名或 IP"
+  },
+  "combobox": {
+    "searchPlaceholder": "搜索或输入…",
+    "noResults": "无匹配项",
+    "useCustom": "使用 \"{{value}}\""
   }
 }

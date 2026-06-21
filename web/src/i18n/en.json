@@ -1001,5 +1001,23 @@
   "language": {
     "zh": "中文",
     "en": "English"
+  },
+  "validation": {
+    "requiredMark": "required",
+    "required": "This field is required",
+    "portInteger": "Port must be an integer",
+    "portRange": "Port must be between 1 and 65535",
+    "integer": "Must be an integer",
+    "positive": "Must be a positive integer",
+    "absPath": "Must be an absolute path (e.g. /servers/x or C:/x)",
+    "url": "Must be a valid URL",
+    "urlScheme": "Only http/https URLs are allowed",
+    "envRef": "Must be an environment variable reference ${VAR_NAME}",
+    "host": "Must be a valid hostname or IP"
+  },
+  "combobox": {
+    "searchPlaceholder": "Search or type…",
+    "noResults": "No matches",
+    "useCustom": "Use \"{{value}}\""
   }
 }
