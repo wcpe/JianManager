@@ -351,9 +351,9 @@ export default function NodesPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-background border rounded-lg p-6 w-full max-w-2xl shadow-lg max-h-[80vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold">JDK Management</h2>
+              <h2 className="text-lg font-bold">{t('nodes.jdkTitle')}</h2>
               <button onClick={() => setJdkNodeId(null)} className="text-sm text-muted-foreground hover:text-foreground">
-                Close
+                {t('common.close')}
               </button>
             </div>
             <NodeJDKPanel nodeId={jdkNodeId} />

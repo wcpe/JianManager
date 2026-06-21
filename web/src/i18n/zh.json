@@ -352,7 +352,8 @@
     "deleteConfirmTitle": "下线节点",
     "deleteConfirmDesc": "将解除节点「{{name}}」的注册并保留历史记录，复连需重新注册。确定下线？",
     "deleteOnlineHint": "在线节点不能下线，请先排空并断开 Worker",
-    "deleted": "节点已下线"
+    "deleted": "节点已下线",
+    "jdkTitle": "JDK 管理"
   },
   "instances": {
     "title": "实例管理",

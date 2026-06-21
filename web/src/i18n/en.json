@@ -365,7 +365,8 @@
     "deleteConfirmTitle": "Decommission node",
     "deleteConfirmDesc": "This deregisters node \"{{name}}\" but keeps its records; reconnecting requires re-registration. Continue?",
     "deleteOnlineHint": "Online nodes cannot be decommissioned; drain and disconnect the Worker first",
-    "deleted": "Node decommissioned"
+    "deleted": "Node decommissioned",
+    "jdkTitle": "JDK Management"
   },
   "instances": {
     "title": "Instance Management",
