@@ -1,6 +1,6 @@
 # 实施计划 — FR-061 面板信息密度与视觉改造
 
-> 关联 FR: FR-061 | 优先级: P1 | 状态: 📋 todo | 关联 ADR: ADR-009
+> 关联 FR: FR-061 | 优先级: P1 | 状态: 🔨 in-progress（5 阶段实现完成 + 真机浏览器验收通过；待用户验收标 done）| 关联 ADR: ADR-009
 
 ## 背景
 
@@ -37,32 +37,32 @@ web/src/i18n/{zh,en}.json                  # 新增 nav/IA/组件文案键
 ## 任务拆解
 
 ### Phase 1: 设计 token 底座
-- [ ] `index.css` 扩展密度档位变量 + 状态色系（亮/暗双值）+ MC 绿主色
-- [ ] 阈值 → 颜色的工具函数（资源/TPS）
+- [x] `index.css` 扩展密度档位变量 + 状态色系（亮/暗双值）+ MC 绿主色
+- [x] 阈值 → 颜色的工具函数（资源/TPS）
 
 ### Phase 2: 通用高密度组件
-- [ ] `ResourceGauge` / `Panel` / `MiniBar` / `StatusBadge`
-- [ ] `DataTable` dense 变体（行内操作链接 + 徽章 + 迷你条）
-- [ ] `TimeSeriesChart` / `RangePicker`（FR-060 依赖此二者）
+- [x] `ResourceGauge` / `Panel` / `MiniBar` / `StatusBadge`
+- [x] `DataTable` dense 变体（行内操作链接 + 徽章 + 迷你条）
+- [x] `TimeSeriesChart` / `RangePicker`（FR-060 依赖此二者）
 
 ### Phase 3: 侧栏 IA 改造
-- [ ] `ConsoleSidebar` 改为常驻多级侧栏，整合 FeatureNav/PlatformNav
-- [ ] 实例树作为「实例」组可展开子区 + 节点切换器保留（能力不丢）
-- [ ] 短屏高度分配实测（沿用 `min-h-0` 经验）
+- [x] `ConsoleSidebar` 改为常驻多级侧栏，整合 FeatureNav/PlatformNav
+- [x] 实例树作为「实例」组可展开子区 + 节点切换器保留（能力不丢）
+- [x] 短屏高度分配实测（沿用 `min-h-0` 经验）
 
 ### Phase 4: 各页面套用
-- [ ] `OverviewPage`（仪表盘排 + 聚合曲线 + 密集实例表，与 FR-060 对接）
-- [ ] `NodesPage` / 节点详情（环形仪表盘 + 曲线）
-- [ ] `InstancesPage` / 实例详情、其余列表页套高密度档位
-- [ ] i18n（zh/en）补键
+- [x] `OverviewPage`（仪表盘排 + 聚合曲线 + 密集实例表，与 FR-060 对接）
+- [x] `NodesPage` / 节点详情（环形仪表盘 + 曲线）
+- [x] `InstancesPage` / 实例详情、其余列表页套高密度档位
+- [x] i18n（zh/en）补键
 
 ### Phase 5: 验证
-- [ ] `cd web && npx tsc --noEmit` 通过
-- [ ] `cd web && npm run lint` 通过
-- [ ] `cd web && npm run build` 通过
-- [ ] `cd web && npx vitest run` 通过（组件/工具函数单测）
-- [ ] 暗色/亮色 + zh/en 无样式错乱、对比度可读（人工核对）
-- [ ] 既有路由与能力（实例树/节点切换/各页）均不丢失
+- [x] `cd web && npx tsc --noEmit` 通过
+- [x] `cd web && npm run lint` 通过
+- [x] `cd web && npm run build` 通过
+- [x] `cd web && npx vitest run` 通过（组件/工具函数单测）
+- [x] 暗色/亮色 + zh/en 无样式错乱、对比度可读（人工核对）
+- [x] 既有路由与能力（实例树/节点切换/各页）均不丢失
 
 ## 产出文件范围
 | 文件 | 操作 |
