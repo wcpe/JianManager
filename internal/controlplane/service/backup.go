@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -14,6 +16,9 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
+
+// backupRetentionTick 备份保留裁剪巡检周期。备份非高频，按小时级巡检足够及时且开销低。
+const backupRetentionTick = time.Hour
 
 var (
 	// ErrBackupNotFound 备份不存在。
@@ -29,6 +34,13 @@ type BackupService struct {
 	pool *grpc.ClientPool
 	// storages 提供远程存储后端解析（FR-057）；nil 表示仅本地备份。
 	storages *BackupStorageService
+	// settings 提供保留天数生效值（backup.retention_days），驱动定期裁剪（FR-063）；
+	// 为 nil 时裁剪循环不启动（无消费者，行为同改造前）。
+	settings SettingsReader
+
+	mu      sync.Mutex
+	running bool
+	stopCh  chan struct{}
 }
 
 // NewBackupService 创建备份服务。
@@ -39,6 +51,11 @@ func NewBackupService(db *gorm.DB, pool *grpc.ClientPool) *BackupService {
 // SetStorageService 注入远程存储服务（FR-057）。在 main 装配阶段调用，避免构造期循环依赖。
 func (s *BackupService) SetStorageService(ss *BackupStorageService) {
 	s.storages = ss
+}
+
+// SetSettingsReader 注入平台设置读取器，启用按保留天数定期裁剪（FR-063）。
+func (s *BackupService) SetSettingsReader(r SettingsReader) {
+	s.settings = r
 }
 
 // CreateOptions 创建备份的可选参数（向后兼容旧的仅 name 调用）。
@@ -346,4 +363,93 @@ func (s *BackupService) resolveInstanceNode(instanceID uint) (*model.Instance, *
 func (s *BackupService) failBackup(backup *model.Backup, msg string, err error) {
 	s.db.Model(backup).Update("status", model.BackupStatusFailed)
 	slog.Error("备份失败："+msg, "backupId", backup.UUID, "error", err)
+}
+
+// Start 启动按保留天数定期裁剪旧备份的后台巡检（FR-063：backup.retention_days 真生效）。
+// 未注入设置读取器则不启动（无消费者）。幂等：重复调用只启动一次。
+func (s *BackupService) Start() {
+	if s.settings == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
+		return
+	}
+	s.running = true
+	s.stopCh = make(chan struct{})
+	stop := s.stopCh
+	s.mu.Unlock()
+	go s.runRetentionLoop(stop)
+}
+
+// Stop 停止保留裁剪巡检。
+func (s *BackupService) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.running {
+		return
+	}
+	s.running = false
+	close(s.stopCh)
+}
+
+// runRetentionLoop 周期裁剪：启动后先跑一轮（避免重启后久未清理），其后每 tick 一轮。
+func (s *BackupService) runRetentionLoop(stop <-chan struct{}) {
+	ticker := time.NewTicker(backupRetentionTick)
+	defer ticker.Stop()
+
+	s.pruneExpiredOnce()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			s.pruneExpiredOnce()
+		}
+	}
+}
+
+// pruneExpiredOnce 裁剪一轮：每轮重新取保留天数生效值（运行时改设置即下轮生效），
+// 删除 CreatedAt 早于 now-N天 的备份。retentionDays<=0 视为不裁剪（保留全部）。
+// 逐个走 Delete（含删文件 + 拒删被增量子链引用者，保链完整）；单条失败仅记录不中断。
+// 返回成功删除的条数，便于测试断言。
+func (s *BackupService) pruneExpiredOnce() int {
+	days := s.retentionDays()
+	if days <= 0 {
+		return 0
+	}
+	cutoff := time.Now().AddDate(0, 0, -days)
+
+	var expired []model.Backup
+	if err := s.db.Where("created_at < ?", cutoff).Order("created_at ASC, id ASC").Find(&expired).Error; err != nil {
+		slog.Error("查询超期备份失败", "err", err)
+		return 0
+	}
+
+	deleted := 0
+	for i := range expired {
+		if err := s.Delete(expired[i].ID); err != nil {
+			// 被未超期的增量子备份引用等：本轮跳过，待子备份超期后再裁剪（保链不可恢复）。
+			slog.Warn("裁剪超期备份失败（跳过）", "backupId", expired[i].UUID, "err", err)
+			continue
+		}
+		deleted++
+	}
+	if deleted > 0 {
+		slog.Info("按保留天数裁剪旧备份", "days", days, "deleted", deleted)
+	}
+	return deleted
+}
+
+// retentionDays 取保留天数生效值（平台设置 backup.retention_days）。解析失败返回 0（不裁剪）。
+func (s *BackupService) retentionDays() int {
+	if s.settings == nil {
+		return 0
+	}
+	n, err := strconv.Atoi(s.settings.EffectiveValue(SettingKeyBackupRetentionDays))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }

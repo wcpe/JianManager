@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
@@ -11,6 +12,27 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
+
+// stubSettings 是 SettingsReader 的测试替身：按固定 map 返回生效值。
+type stubSettings map[string]string
+
+func (s stubSettings) EffectiveValue(key string) string { return s[key] }
+
+// makeBackupAt 写一条已完成备份并把 CreatedAt 校准到指定时刻（用 Update 绕过 gorm autoCreateTime）。
+func makeBackupAt(t *testing.T, db *gorm.DB, instanceID uint, createdAt time.Time) *model.Backup {
+	t.Helper()
+	b := makeBackup(t, db, instanceID, model.BackupModeFull, nil, nil)
+	require.NoError(t, db.Model(&model.Backup{}).Where("id = ?", b.ID).Update("created_at", createdAt).Error)
+	return b
+}
+
+// countBackups 统计未软删的备份条数。
+func countBackups(t *testing.T, db *gorm.DB) int64 {
+	t.Helper()
+	var n int64
+	require.NoError(t, db.Model(&model.Backup{}).Count(&n).Error)
+	return n
+}
 
 func newBackupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
@@ -142,4 +164,59 @@ func TestDelete_RejectedWhenReferenced(t *testing.T) {
 	// 叶子（无子）可删。
 	leaf := makeBackup(t, db, 2, model.BackupModeFull, nil, nil)
 	require.NoError(t, svc.Delete(leaf.ID))
+}
+
+// TestPruneExpired_RemovesOldKeepsRecent 保留 N 天：超 N 天的旧备份被裁剪、未超期的保留（FR-063）。
+func TestPruneExpired_RemovesOldKeepsRecent(t *testing.T) {
+	db := newBackupTestDB(t)
+	svc := NewBackupService(db, nil)
+	svc.SetSettingsReader(stubSettings{SettingKeyBackupRetentionDays: "30"})
+
+	now := time.Now()
+	old1 := makeBackupAt(t, db, 1, now.AddDate(0, 0, -40)) // 超 30 天
+	old2 := makeBackupAt(t, db, 1, now.AddDate(0, 0, -31)) // 超 30 天
+	recent := makeBackupAt(t, db, 1, now.AddDate(0, 0, -10)) // 未超期
+	require.Equal(t, int64(3), countBackups(t, db))
+
+	deleted := svc.pruneExpiredOnce()
+	require.Equal(t, 2, deleted)
+
+	// 超期的被删，未超期的留。
+	require.Equal(t, int64(1), countBackups(t, db))
+	var survivors []model.Backup
+	require.NoError(t, db.Find(&survivors).Error)
+	require.Len(t, survivors, 1)
+	require.Equal(t, recent.ID, survivors[0].ID)
+
+	// 已删的确实查不到（软删）。
+	require.ErrorIs(t, db.First(&model.Backup{}, old1.ID).Error, gorm.ErrRecordNotFound)
+	require.ErrorIs(t, db.First(&model.Backup{}, old2.ID).Error, gorm.ErrRecordNotFound)
+}
+
+// TestPruneExpired_ZeroDaysKeepsAll 保留天数<=0 视为不裁剪：全部保留。
+func TestPruneExpired_ZeroDaysKeepsAll(t *testing.T) {
+	db := newBackupTestDB(t)
+	svc := NewBackupService(db, nil)
+	svc.SetSettingsReader(stubSettings{SettingKeyBackupRetentionDays: "0"})
+
+	makeBackupAt(t, db, 1, time.Now().AddDate(0, 0, -100))
+	require.Equal(t, 0, svc.pruneExpiredOnce()) // 不裁剪
+	require.Equal(t, int64(1), countBackups(t, db))
+}
+
+// TestPruneExpired_KeepsChainWhenChildNotExpired 超期全量基有未超期增量子时跳过该基（保链可恢复）。
+func TestPruneExpired_KeepsChainWhenChildNotExpired(t *testing.T) {
+	db := newBackupTestDB(t)
+	svc := NewBackupService(db, nil)
+	svc.SetSettingsReader(stubSettings{SettingKeyBackupRetentionDays: "30"})
+
+	now := time.Now()
+	// 全量基已超期，但其增量子未超期 → 删基会割裂链，应被 Delete 拒绝、本轮跳过。
+	full := makeBackupAt(t, db, 1, now.AddDate(0, 0, -40))
+	inc := makeBackup(t, db, 1, model.BackupModeIncremental, &full.ID, nil)
+	require.NoError(t, db.Model(&model.Backup{}).Where("id = ?", inc.ID).Update("created_at", now.AddDate(0, 0, -5)).Error)
+
+	deleted := svc.pruneExpiredOnce()
+	require.Equal(t, 0, deleted)                 // 基被拒删，子未超期不在裁剪集
+	require.Equal(t, int64(2), countBackups(t, db)) // 链完整保留
 }
