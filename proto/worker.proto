@@ -131,6 +131,7 @@ message HeartbeatRequest {
   int64 network_bytes_sent = 8;  // 累计网络发送字节
   int64 network_bytes_recv = 9;  // 累计网络接收字节
   repeated InstanceMetricSample instance_metrics = 10;  // 每实例 ServerProbe 快照（FR-060 时序）
+  double load_avg1 = 11;  // 节点 1 分钟 load average（FR-062；gopsutil 跨平台，取不到为 0）
 }
 
 message InstanceState {

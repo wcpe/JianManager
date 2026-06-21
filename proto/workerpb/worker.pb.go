@@ -193,6 +193,7 @@ type HeartbeatRequest struct {
 	NetworkBytesSent int64                   `protobuf:"varint,8,opt,name=network_bytes_sent,json=networkBytesSent,proto3" json:"network_bytes_sent,omitempty"` // 累计网络发送字节
 	NetworkBytesRecv int64                   `protobuf:"varint,9,opt,name=network_bytes_recv,json=networkBytesRecv,proto3" json:"network_bytes_recv,omitempty"` // 累计网络接收字节
 	InstanceMetrics  []*InstanceMetricSample `protobuf:"bytes,10,rep,name=instance_metrics,json=instanceMetrics,proto3" json:"instance_metrics,omitempty"`      // 每实例 ServerProbe 快照（FR-060 时序）
+	LoadAvg1         float64                 `protobuf:"fixed64,11,opt,name=load_avg1,json=loadAvg1,proto3" json:"load_avg1,omitempty"`                         // 节点 1 分钟 load average（FR-062；gopsutil 跨平台，取不到为 0）
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -295,6 +296,13 @@ func (x *HeartbeatRequest) GetInstanceMetrics() []*InstanceMetricSample {
 		return x.InstanceMetrics
 	}
 	return nil
+}
+
+func (x *HeartbeatRequest) GetLoadAvg1() float64 {
+	if x != nil {
+		return x.LoadAvg1
+	}
+	return 0
 }
 
 type InstanceState struct {
@@ -5526,7 +5534,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x10RegisterResponse\x12\x1b\n" +
 	"\tnode_uuid\x18\x01 \x01(\tR\bnodeUuid\x12\x1f\n" +
 	"\vnode_secret\x18\x02 \x01(\tR\n" +
-	"nodeSecret\"\xb0\x03\n" +
+	"nodeSecret\"\xcd\x03\n" +
 	"\x10HeartbeatRequest\x12\x1b\n" +
 	"\tnode_uuid\x18\x01 \x01(\tR\bnodeUuid\x12\x1b\n" +
 	"\tcpu_usage\x18\x02 \x01(\x02R\bcpuUsage\x12!\n" +
@@ -5540,7 +5548,8 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x12network_bytes_sent\x18\b \x01(\x03R\x10networkBytesSent\x12,\n" +
 	"\x12network_bytes_recv\x18\t \x01(\x03R\x10networkBytesRecv\x12G\n" +
 	"\x10instance_metrics\x18\n" +
-	" \x03(\v2\x1c.worker.InstanceMetricSampleR\x0finstanceMetrics\"J\n" +
+	" \x03(\v2\x1c.worker.InstanceMetricSampleR\x0finstanceMetrics\x12\x1b\n" +
+	"\tload_avg1\x18\v \x01(\x01R\bloadAvg1\"J\n" +
 	"\rInstanceState\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\"\x95\x03\n" +
