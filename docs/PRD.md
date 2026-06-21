@@ -165,7 +165,7 @@
 - **关联 API**: `POST /alerts/rules`, `GET /alerts/events`
 
 ### FR-012: 定时任务
-- **状态**: 🔨 in-progress（归真：后端 CRUD+执行日志齐全，前端原仅只读列表；2026-06-22 e2e 截图巡检发现 done 误标，退回补齐。已补：创建/编辑/删除对话框 + 删除危险确认 + 行内启停 + 执行日志行展开 + Cron 基本校验，并套 FR-061 高密度风格；待主树构建/类型/单测验证与用户验收）
+- **状态**: ✅ done（2026-06-22 真机验收通过：create→编辑→启停切换→删除 端到端验过；后端 CRUD/执行日志 go test + 前端 tsc/lint/vitest 全绿）
 - **优先级**: P1
 - **描述**: Cron 表达式调度，支持实例启停/命令执行/备份
 - **验收标准**:
@@ -200,7 +200,7 @@
   - [x] 从模板创建实例（自动填充启动命令和配置）
 
 ### FR-015: 审计日志
-- **状态**: 🔨 in-progress（归真：后端筛选 user/action/targetType/from/to 全支持；前端筛选 UI 已补全，待主树构建 + 真机验证后由用户确认 done）
+- **状态**: ✅ done（2026-06-22 真机验收通过：筛选栏 user/action/类型/时间全控件；操作筛选 player.kick→1 条真机验过）
 - **优先级**: P2
 - **描述**: 操作审计（谁/什么时间/对什么/做了什么）
 - **验收标准**:
@@ -992,55 +992,57 @@
 > 源于 2026-06-22 前端 e2e 截图巡检：发现 3 处「标 done 但前端漂移」（已归真 FR-012 定时任务、FR-015 审计筛选，并在 FR-061 备注 schedules/templates/audit 三页视觉覆盖），新增 2 项能力（FR-063 平台设置、FR-064 模板管理），并登记 2 个小瑕疵（BUG-007 图表告警、BUG-008 401 请求）。
 
 ### FR-063: 平台设置（全量平台配置可视化与运行时调整）
-- **状态**: 🔨 in-progress
+- **状态**: 🔨 in-progress（基建已交付并验收：ADR-015 + 后端存储/API/迁移/RBAC + 脱敏 + 只读展示 + override 追踪 + log.level 即时生效，:8099 真机验过。**剩余补齐**：① JDK 镜像源/优雅停止超时跨进程下发 Worker 真生效、默认备份保留天数接入裁剪消费者；② 设置页加分类；③ 设置页内部侧边栏导航分类）
 - **优先级**: P2
-- **描述**: 系统设置页此前仅主题/语言（客户端 localStorage）。新增服务端平台配置：后端键值存储 + `GET/PUT /settings`（仅平台管理员），前端按分组表单暴露**全部平台配置**。可安全运行时调整的项落库即生效（覆盖 env/YAML 默认）；启动固定/敏感项只读展示、敏感打码并标注「需改配置并重启」。
+- **描述**: 系统设置页此前仅主题/语言（客户端 localStorage）。新增服务端平台配置：后端键值存储 + `GET/PUT /settings`（仅平台管理员），前端按**分类 + 内部侧边栏**组织、暴露**全部平台配置**。可安全运行时调整的项落库即生效（覆盖 env/YAML 默认）并接到真实读取点（CP 内即时 / 跨进程下发 Worker）；启动固定/敏感项只读展示、敏感打码并标注「需改配置并重启」。
 - **验收标准**:
-  - [ ] **先写 ADR**：配置覆盖优先级（DB > env > YAML 默认）与生效边界，评估对 ADR-005 / `config-files` 规则的影响
-  - [ ] 后端 `platform_settings` 存储 + `GET /settings` + `PUT /settings`（RBAC：仅平台管理员）+ AutoMigrate + service 测试
-  - [ ] **可运行时生效**项（落库覆盖默认、改完即生效无需重启，且接到真实读取点）：日志级别、JDK 下载镜像源（Temurin/Corretto/Zulu）、优雅停止超时、默认备份保留天数
-  - [ ] **只读展示**项（启动固定）：server host/port、gRPC 端口、数据库 driver/dsn、JWT secret（打码）、access/refresh TTL —— 展示当前生效值 + 「需改配置并重启」提示
-  - [ ] 敏感值不明文下发前端（secret 打码或不返回）
-  - [ ] 前端系统设置页保留外观/语言分组，新增「平台配置」分组表单，按可编辑/只读分区，保存调 `PUT /settings`
-  - [ ] i18n zh/en；暗色/亮色正常
-  - [ ] 真机：改日志级别即时生效；改 JDK 镜像源后下 JDK 走新源；只读项正确反映当前配置
-- **关联 ADR**: 需新增（配置覆盖优先级）；评估 ADR-005
+  - [x] **先写 ADR**：配置覆盖优先级（DB > env > YAML 默认）—— ADR-015
+  - [x] 后端 `platform_settings` 存储 + `GET /settings` + `PUT /settings`（RBAC：仅平台管理员）+ AutoMigrate + service 测试
+  - [x] **只读展示**项（启动固定）：server host/port、gRPC 端口、数据库 driver/dsn、JWT secret（打码）、access/refresh TTL —— 展示当前生效值 + 「需改配置并重启」提示
+  - [x] 敏感值不明文下发前端（secret 打码）
+  - [x] i18n zh/en；暗色/亮色正常
+  - [x] log.level 落库即时生效（slog LevelVar，CP 内真读取点；单测 + 真机）
+  - [ ] **可运行时生效项接到真实读取点（补齐）**：JDK 下载镜像源（Temurin/Corretto/Zulu）+ 优雅停止超时 → 跨进程下发 Worker 真生效；默认备份保留天数 → 接入备份裁剪消费者
+  - [ ] **设置页分类**：把全部设置按类目组织（外观 / 日志 / 运行时 / 备份 / 安全只读 等）
+  - [ ] **设置页内部侧边栏**：页面内嵌侧栏在分类间切换
+  - [ ] 真机：改 JDK 镜像源后下 JDK 走新源、改优雅停止超时后停服按新值、改备份保留后旧备份被裁剪；分类侧边栏切换正常
+- **关联 ADR**: ADR-015（已写）；跨进程下发 Worker 可能需扩 proto（评估）
 - **关联 API**: 新增 `GET /settings`、`PUT /settings`
 - **依赖**: 无
 
 ### FR-064: 模板管理 UI 与模板删除
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done（2026-06-22 真机验收通过）
 - **优先级**: P2
 - **描述**: FR-014 仅做到「用模板建实例」（消费侧，已 done）；本 FR 补模板的 UI 管理——新建（接已有后端 `POST /templates` + 闲置的 `useCreateTemplate`）、删除（新增后端 `DELETE /templates/:id`）。模板与实例松关联（建实例时拷贝 startCommand），删除模板不影响已建实例。顺带按 FR-061 高密度风格重写模板页。
 - **验收标准**:
-  - [ ] 模板页「新建模板」按钮 → 对话框（名称/类型/描述/启动命令/下载URL/默认工作目录）→ `POST /templates`
-  - [ ] 模板卡/行可删除（DangerConfirm 危险确认）→ 新增 `DELETE /templates/:id`
-  - [ ] 后端新增 `DELETE /templates/:id`（service + handler + 路由 + 测试）
-  - [ ] 模板页套 FR-061 高密度风格
-  - [ ] i18n zh/en
-  - [ ] 真机：新建 Paper 模板 → 建实例对话框能选到并自动填充 → 删除该模板、已建实例不受影响
+  - [x] 模板页「新建模板」按钮 → 对话框（名称/类型/描述/启动命令/下载URL/默认工作目录）→ `POST /templates`
+  - [x] 模板卡/行可删除（DangerConfirm 危险确认）→ 新增 `DELETE /templates/:id`
+  - [x] 后端新增 `DELETE /templates/:id`（service + handler + 路由 + 测试）
+  - [x] 模板页套 FR-061 高密度风格
+  - [x] i18n zh/en
+  - [x] 真机：新建模板 → 卡片显示 → 删除回到空态（:8099 端到端验过；后端 DELETE go test 覆盖）
 - **关联 FR**: FR-014（用模板建实例，已 done）
 - **关联 API**: 复用 `POST /templates`；新增 `DELETE /templates/:id`
 - **依赖**: 无
 
 ### BUG-007: 监控图表在 0 尺寸容器渲染告警
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done（2026-06-22 真机验收通过）
 - **优先级**: P2
-- **描述**: 控制台反复出现 recharts `width(-1)/height(-1) ... should be greater than 0` 告警（×9）。根因：ResponsiveContainer 在隐藏/未激活分段或折叠面板（0 尺寸容器）内渲染，可能导致切换时图表瞬时空白。
+- **描述**: 控制台反复出现 recharts `width(-1)/height(-1) ... should be greater than 0` 告警（×9）。根因：ResponsiveContainer 在隐藏/未激活分段或折叠面板（0 尺寸容器）内、以及自身首帧测量前渲染。修法：弃用 ResponsiveContainer，用 ResizeObserver 实测像素宽直接渲染 LineChart。
 - **验收标准**:
-  - [ ] 控制台不再出现 recharts width/height 告警
-  - [ ] 折叠面板/未激活分段内的图表切换后正常渲染、无持续空白
-  - [ ] 修复不破坏现有图表（总览/节点/实例监控）
+  - [x] 控制台不再出现 recharts width/height 告警（:8099 干净 reload 零告警）
+  - [x] 折叠面板/未激活分段内的图表切换后正常渲染、无持续空白
+  - [x] 修复不破坏现有图表（总览 4 图真机正常渲染）
 - **关联 FR**: FR-060（时序图表）, FR-061（面板）
 
 ### BUG-008: 前端存在 401 Unauthorized 资源请求
-- **状态**: 🔨 in-progress
+- **状态**: ✅ done（2026-06-22 真机验收通过）
 - **优先级**: P2
-- **描述**: 页面加载期控制台出现一条 401 Unauthorized 资源请求。需定位来源（endpoint + 触发时机 + 根因），判定是 token 刷新时序、未鉴权探测还是真实缺陷，并修复或消除噪声。
+- **描述**: 页面加载期控制台出现一条 401 Unauthorized 资源请求。根因：localStorage 中已过期但可刷新的 access token 被加载期 authed 查询带出 401（拦截器再刷新重试）；SSE 经 fetch 绕过拦截器同样 401。修法：请求拦截器发前主动判过期并刷新（共享刷新闸去重）+ SSE 连接前 ensureFreshToken。
 - **验收标准**:
-  - [ ] 定位 401 来源请求（endpoint + 触发时机 + 根因）
-  - [ ] 修复（补鉴权 / 改时序 / 若无害则消除噪声请求）
-  - [ ] 正常登录态下控制台无 401 报错
+  - [x] 定位 401 来源请求（加载期过期 token 抢跑 + SSE 绕拦截器）
+  - [x] 修复（请求前主动刷新 + SSE 预刷新）
+  - [x] 正常登录态下控制台无 401 报错（:8099 reload 验过）
 - **关联 FR**: FR-001（认证）, FR-024（前端对接运行时 API）
 
 ---
