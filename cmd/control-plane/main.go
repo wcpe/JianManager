@@ -120,6 +120,14 @@ func main() {
 	// 平台配置：在 YAML+env 基线上叠加 DB 覆盖层，白名单项可运行时调整（FR-063/ADR-015）。
 	// 构造时重放已落库的可即时生效覆盖（如日志级别），保证重启后覆盖仍生效。
 	settingsSvc := service.NewSettingsService(db, cfg)
+	// 把设置读取器注入消费方，使覆盖项真生效（FR-063）：
+	//   JDK 安装读 jdk.mirror.<vendor>；实例启动读 graceful_stop.timeout 随启动下发；
+	//   备份裁剪读 backup.retention_days 定期回收旧备份。
+	jdkSvc.SetSettingsReader(settingsSvc)
+	instanceSvc.SetSettingsReader(settingsSvc)
+	backupSvc.SetSettingsReader(settingsSvc)
+	backupSvc.Start()
+	defer backupSvc.Stop()
 
 	r := router.Setup(&router.Services{
 		Auth:          authSvc,
