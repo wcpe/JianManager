@@ -538,14 +538,22 @@
 - **关联 FR**: FR-008
 - **Query**: `?path=plugins/essentials/config.yml`
 
+### POST /api/v1/instances/:id/files/archive
+- **描述**: 批量打包下载。把选中的若干文件/目录（目录递归）即时打包为 **zip** 流式返回。Worker 边遍历边打包边流式发送（不全量缓冲整包），CP 把 gRPC 流转为 HTTP `application/zip` 响应体；打包开始前失败仍返回 JSON 错误
+- **关联 FR**: FR-070
+- **权限**: `instance.file`（可访问实例）
+- **请求**: `{ "paths": ["plugins", "server.properties", "world/level.dat"] }`（相对工作目录，非空；每条经路径校验：禁 `..`/前导 `/`；目录递归、文件直纳入）
+- **响应**: `200`，`Content-Type: application/zip`，`Content-Disposition: attachment; filename="<instanceName>-files.zip"`，响应体为分块 zip 字节流
+- **错误**: `400 INVALID_REQUEST`（paths 为空或含非法路径）；`404 NOT_FOUND`（实例不存在/无权限）；`422 BUSINESS_ERROR`（节点离线/工作目录未设置/打包失败，流已开始则截断连接）
+
 ### DELETE /api/v1/instances/:id/files
 - **描述**: 删除文件
 - **关联 FR**: FR-008
 - **请求**: `{ "path": "string" }`
 
 ### POST /api/v1/instances/:id/files/rename
-- **描述**: 重命名文件
-- **关联 FR**: FR-008
+- **描述**: 重命名/移动文件或目录。`newPath` 跨目录时即「移动」（Worker `os.Rename`），故资源管理器树内拖拽移动复用本端点，无需独立 move 端点
+- **关联 FR**: FR-008, FR-020, FR-070
 - **请求**: `{ "oldPath": "string", "newPath": "string" }`
 
 ### GET /api/v1/instances/:id/files/versions

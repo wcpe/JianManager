@@ -167,7 +167,8 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
   - `CreateInstance` 除 `start_command` 外携带 `stop_command`（优雅停止命令，CP 按实例角色派生：backend/universal=`stop`，proxy=`end`），由 daemon wrapper 在优雅停止时写入进程 stdin；并携带 `probe_port`（CP 分配的 ServerProbe 端口，daemon 模式透传到 wrapper→PID 记录，供 Worker 心跳自采与重启恢复，FR-060）；以及 `graceful_stop_timeout_seconds`（CP 从平台设置 `graceful_stop.timeout` 取生效值随启动下发，daemon 透传到 wrapper 做超时强杀兜底，FR-063；值在启动时定型，对设置变更后新启动的实例生效）
 - 实例事件流：StreamInstanceEvents (server stream)
   - 同一流承载两类事件：`state_change`（状态转换）与 `stdout`/`stderr`（进程输出）。Worker 进程输出回调分流为「WS 终端广播 + 事件流上报」两路，互不阻塞。CP 侧 EventService 把 `stdout`/`stderr` 经 LogService 落库（日志中心 FR-049），`state_change` 经 SSE 推前端
-- 文件操作：ListFiles, ReadFile, WriteFile, DeleteFile, UploadFile (client stream), DownloadFile (server stream)
+- 文件操作：ListFiles, ReadFile, WriteFile, DeleteFile, RenameFile（跨目录即移动）, UploadFile (client stream), DownloadFile (server stream), DownloadArchive (server stream)
+  - `DownloadArchive` 把选中的文件/目录（目录递归，仅常规文件）即时打包为 zip 边遍历边分片流式返回（每条目经 `validatePath` 防越界/zip-slip，~32KiB 分片，不缓冲整包）；CP `FileHandler.DownloadArchive` 逐帧 `Recv` 写响应并 `Flush`，转为 HTTP `application/zip`（批量下载，FR-070）。资源管理器树内拖拽「移动」复用 `RenameFile`，无独立 move RPC
 - 终端：IssueTerminalToken
 - Bot：CreateBot, DeleteBot, ListBots, StreamBotEvents (server stream), SendBotCommand
 - 探针部署：DeployServerProbe（CP 内嵌 ServerProbe jar + 生成的 config.yml 经 gRPC 下发到实例 plugins 目录，FR-010；见 ADR-014）
@@ -400,6 +401,7 @@ database:
   - 底部：主题切换 + 语言切换 + 退出 + 版本号。分组展开态存 Zustand（`stores/console.ts.collapsedGroups`）。
 - **右 = 工作区**：
   - 点实例 → 工作区打开该实例统一面板（终端 / 文件 / 配置 / 插件 / 监控 / Bot 分段，按实例记忆当前段）；**同时仅一个实例**，点另一个切换。**监控**段 = 该实例 FR-060 历史曲线（TPS/MSPT/堆/在线/线程/CPU + 分世界区块）。
+  - **文件**段 = 共享资源管理器 `components/explorer/ResourceExplorer`（FR-070）：左懒加载目录树（`FileTree`）+ 右目录内容（`FileList` 多选/右键/拖拽源）/ CodeMirror 编辑器（`editor/CodeEditor`，多格式高亮 + Ctrl+S 拦截保存接 FR-051 历史）。交互全集（新建文件夹/重命名/删除/剪切复制粘贴/树内拖拽移动/拖拽上传/单文件流式与多选 zip 批量下载/shift·ctrl·全选多选）抽为纯函数（`selection`/`clipboard`/`paths`/`language`，vitest 覆盖）；删除/回滚走 `DangerConfirm`（FR-059），历史版本经右侧抽屉 `VersionDrawer`。**此组件为 FR-071/073/074/075/082/083/084 复用地基**。
   - 其余路由在工作区按路由渲染。**总览页（`OverviewPage`）** = 环形仪表盘 + 跨节点聚合历史曲线（FR-060：总 CPU/内存/在线玩家）+ 密集实例表；**节点页**行内 MiniBar + 可展开节点详情（环形仪表盘 + CPU/内存曲线）。
 - **高密度设计系统（FR-061）**：OKLCH token 扩展 MC 绿主色 + 状态色系（success/warning/danger/info，阈值驱动变色，见 `lib/threshold.ts`）+ 13px 密度档位；通用组件 `ResourceGauge`/`Panel`/`MiniBar`/`StatusBadge`（`components/ui`）与 `TimeSeriesChart`/`RangePicker`（`components/charts`）。仍基于 shadcn/ui + Tailwind + OKLCH，不引入新框架。
 - 暗色/亮色主题与 i18n（zh/en）正常；选中实例/节点为客户端 UI 状态，不进 URL。
