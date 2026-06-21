@@ -981,6 +981,39 @@
 
 ---
 
+## 平台设置（FR-063）
+
+> 平台配置在 YAML+env 基线上叠加一层 DB 覆盖层（`platform_settings`），生效优先级 **DB 覆盖 > 环境变量 > YAML 默认**。仅白名单项可运行时修改；启动固定/敏感项只读展示，敏感值脱敏不下发明文。参见 ADR-015。
+
+### GET /api/v1/settings
+- **描述**: 返回当前有效配置视图，分为可编辑项（`editable`）与只读项（`readOnly`）。每项含当前生效值（敏感项已脱敏）、是否可编辑、是否敏感、是否被 DB 覆盖、运行时修改是否在 CP 内即时生效
+- **权限**: 平台管理员
+- **关联 FR**: FR-063
+- **响应**:
+  ```json
+  {
+    "editable": [
+      { "key": "log.level", "value": "info", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": true },
+      { "key": "jdk.mirror.temurin", "value": "https://api.adoptium.net", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": false },
+      { "key": "graceful_stop.timeout", "value": "30s", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": false },
+      { "key": "backup.retention_days", "value": "14", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": false }
+    ],
+    "readOnly": [
+      { "key": "server.port", "value": "8080", "editable": false, "sensitive": false, "overridden": false, "effectiveImmediately": false },
+      { "key": "jwt.secret", "value": "dev***-me", "editable": false, "sensitive": true, "overridden": false, "effectiveImmediately": false }
+    ]
+  }
+  ```
+
+### PUT /api/v1/settings
+- **描述**: 写入一批白名单配置覆盖。非白名单键或值不合法时整体拒绝（422）且不落库；成功后返回更新后的最新视图。可即时生效项（`log.level`）落库后立即应用
+- **权限**: 平台管理员
+- **关联 FR**: FR-063
+- **可写白名单键**: `log.level`（debug|info|warn|error）、`jdk.mirror.temurin` / `jdk.mirror.corretto` / `jdk.mirror.zulu`、`graceful_stop.timeout`（Go duration 文本）、`backup.retention_days`（非负整数）
+- **请求**: `{ "values": { "log.level": "debug", "backup.retention_days": "30" } }`
+
+---
+
 ## 错误码
 
 | HTTP | 含义 |

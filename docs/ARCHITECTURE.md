@@ -332,6 +332,7 @@ AlertRule ──1:N──▶ AlertEvent
 | assets | type(core/plugin/image/video/archive/blob), name, version, filename, sha256(寻址+去重键), md5, size, content_type, source_url, metadata(JSON), storage_state(hot/archived/external), storage_backend, ref_count, rel_path(相对数据根), created_at, last_used_at；UNIQUE(type,sha256) |
 | logs (FR-049) | source(instance/control_plane/worker), level(debug/info/warn/error), instance_id, instance_uuid, node_id, stream(stdout/stderr), message, time；复合索引 (source,time)/(level,time)/(instance_id,time)/(node_id,time)，关键字检索走 message 列谓词 |
 | ban_records (V2) | uuid, player_name, reason, scope(network/instance/global), scope_id, operator_id(FK), active, created_at, unbanned_at（玩家封禁台账，FR-054；RCON 命令已下发后留档，解封置 active=false 保留历史） |
+| platform_settings (V2) | key(PK), value, updated_at（平台配置 DB 覆盖层，仅存被显式覆盖的白名单键；生效优先级 DB 覆盖 > 环境变量 > YAML 默认，FR-063/ADR-015） |
 
 ### 数据库切换
 
