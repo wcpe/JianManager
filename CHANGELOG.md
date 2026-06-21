@@ -6,6 +6,9 @@
 
 ## [Unreleased]
 
+### 变更
+- **实例导航与侧栏树形优化**（FR-069）：ConsoleSidebar 节点切换下拉**瘦身**为紧凑控件（矮行高 + 小字号 + 前置节点图标），实例分组从平铺小标题改为**可折叠树形分支**（按 节点/环境/状态 层级展开折叠，默认按节点；每分支头部显示计数，成员行保留状态点 RUNNING 绿·STARTING/STOPPING 琥珀·CRASHED 红·STOPPED 空心 + Bot 聚合徽标）；**折叠记忆**沿用 console store `collapsedGroups`（树分支键 `tree:<dim>:<group>` 与导航组 key 隔离）；**折叠优先**——折叠分支不渲染成员行，大量实例下不全量铺开、不卡。点实例开终端、节点切换（复用 `GET /instances?nodeId=`）、bot 徽标等既有能力无损。纯前端，i18n zh/en 对齐。
+
 ## 0.6.0（2026-06-22）
 
 ### 新增

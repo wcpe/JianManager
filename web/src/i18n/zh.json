@@ -263,7 +263,8 @@
     "emptyHint": "从左侧实例树选择一个实例以打开终端",
     "segmentTerminal": "终端",
     "segmentBot": "Bot",
-    "botBadgeTitle": "在线 {{online}} / 共 {{total}}"
+    "botBadgeTitle": "在线 {{online}} / 共 {{total}}",
+    "nodeSwitcher": "切换节点"
   },
   "login": {
     "title": "JianManager",

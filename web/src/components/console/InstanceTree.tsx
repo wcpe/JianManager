@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useInstances, type InstanceInfo } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useBotSummary } from '@/api/bots'
 import { useConsoleStore } from '@/stores/console'
-import { groupInstancesByNode } from './instance-tree'
+import { groupInstancesByNode, toTreeBranches, type TreeBranch as Branch } from './instance-tree'
 import { groupInstances, type GroupDimension } from './instance-grouping'
 import { indexBotBadgesByInstance, type InstanceBotBadge as BadgeData } from './bot-list'
 import InstanceStatusDot from './InstanceStatusDot'
@@ -12,10 +13,12 @@ import InstanceBotBadge from './InstanceBotBadge'
 import { cn } from '@/lib/utils'
 
 /**
- * 常驻实例树。
+ * 常驻实例树（FR-069 树形化）。
  * 「全部节点」(selectedNodeId=null) → 拉全部实例并按节点分组；
  * 选某节点 → `GET /instances?nodeId=` 只列该节点实例（后端过滤）。
- * 点实例在工作区打开其工作面板（终端 | Bot）。
+ * 每个分组是一条可折叠分支（节点/环境/状态层级），折叠态记忆在 console store 的
+ * collapsedGroups（键 `tree:<dim>:<group>`，与导航组 key 隔离）；折叠优先——折叠的分支
+ * 不渲染成员行，故大量实例下不全量铺开、不卡。点实例在工作区打开其工作面板（终端 | Bot）。
  * 每行挂 Bot 聚合徽标，数据来自单次 `GET /bots/summary?groupBy=instance`（FR-039，永不逐个 Bot）。
  */
 export default function InstanceTree() {
@@ -31,8 +34,28 @@ export default function InstanceTree() {
     ...(selectedNodeId === null ? {} : { nodeId: selectedNodeId }),
   })
   const badges = useMemo(() => indexBotBadgesByInstance(botSummary?.groups), [botSummary])
-  // 控制台树分组维度（FR-047）：默认按环境/状态聚合；选某节点时另含「无分组」平铺。
-  const [dim, setDim] = useState<GroupDimension>('none')
+  // 控制台树分组维度（FR-047/FR-069）：默认按节点分组；可切换环境/状态层级。
+  const [dim, setDim] = useState<GroupDimension>('node')
+
+  // 分组 → 带折叠键的树分支：全部节点视图保留节点名与孤儿处理，其余维度走通用分组。
+  const branches = useMemo<{ branch: Branch; label: string }[]>(() => {
+    if (!instances) return []
+    if (dim === 'node') {
+      const groups = groupInstancesByNode(instances, nodes ?? [])
+        .filter((g) => g.instances.length > 0)
+        .map((g) => ({
+          key: String(g.nodeId),
+          instances: g.instances,
+          label: g.nodeName ?? t('console.unknownNode', { id: g.nodeId }),
+        }))
+      return toTreeBranches('node', groups).map((branch, i) => ({ branch, label: groups[i].label }))
+    }
+    const groups = groupInstances(instances, dim)
+    return toTreeBranches(dim, groups).map((branch) => ({
+      branch,
+      label: dimLabel(dim, branch.key, t),
+    }))
+  }, [instances, nodes, dim, t])
 
   if (isLoading) {
     return <p className="px-3 py-2 text-xs text-muted-foreground">{t('common.loading')}</p>
@@ -42,110 +65,79 @@ export default function InstanceTree() {
     return <p className="px-3 py-2 text-xs text-muted-foreground">{t('console.noInstances')}</p>
   }
 
-  const groupSelector = (
-    <div className="flex items-center gap-1 px-2 pb-1">
-      {(['none', 'env', 'status'] as const).map((d) => (
-        <button
-          key={d}
-          type="button"
-          onClick={() => setDim(d)}
-          className={cn(
-            'rounded px-1.5 py-0.5 text-[11px]',
-            dim === d ? 'bg-accent font-medium text-foreground' : 'text-muted-foreground hover:bg-accent/50',
-          )}
-        >
-          {t(`grouping.dim_${d}`)}
-        </button>
-      ))}
-    </div>
-  )
-
-  // 选某节点时：dim=none 平铺；否则按所选维度（环境/状态）聚合。
-  if (selectedNodeId !== null) {
-    if (dim === 'none') {
-      return (
-        <div>
-          {groupSelector}
-          <ul className="space-y-0.5">
-            {instances.map((inst) => (
-              <InstanceRow key={inst.id} instance={inst} botBadge={badges.get(inst.id)} />
-            ))}
-          </ul>
-        </div>
-      )
-    }
-    const groups = groupInstances(instances, dim)
-    return (
-      <div>
-        {groupSelector}
-        <GenericGroups groups={groups} dim={dim} badges={badges} />
-      </div>
-    )
-  }
-
-  // 全部节点：dim=none 按节点分组（保留 host 名与孤儿处理）；否则按所选维度聚合。
-  if (dim === 'none') {
-    const groups = groupInstancesByNode(instances, nodes ?? [])
-    return (
-      <div>
-        {groupSelector}
-        <div className="space-y-2">
-          {groups
-            .filter((g) => g.instances.length > 0)
-            .map((group) => (
-              <div key={group.nodeId}>
-                <p className="px-3 py-1 text-xs font-medium text-muted-foreground">
-                  {group.nodeName ?? t('console.unknownNode', { id: group.nodeId })}
-                </p>
-                <ul className="space-y-0.5">
-                  {group.instances.map((inst) => (
-                    <InstanceRow key={inst.id} instance={inst} botBadge={badges.get(inst.id)} />
-                  ))}
-                </ul>
-              </div>
-            ))}
-        </div>
-      </div>
-    )
-  }
-
-  const groups = groupInstances(instances, dim)
   return (
     <div>
-      {groupSelector}
-      <GenericGroups groups={groups} dim={dim} badges={badges} />
+      <div className="flex items-center gap-1 px-2 pb-1" role="group" aria-label={t('grouping.groupBy')}>
+        {(['node', 'env', 'status'] as const).map((d) => (
+          <button
+            key={d}
+            type="button"
+            onClick={() => setDim(d)}
+            className={cn(
+              'rounded px-1.5 py-0.5 text-[11px]',
+              dim === d ? 'bg-accent font-medium text-foreground' : 'text-muted-foreground hover:bg-accent/50',
+            )}
+          >
+            {t(`grouping.dim_${d}`)}
+          </button>
+        ))}
+      </div>
+      <div className="space-y-0.5">
+        {branches.map(({ branch, label }) => (
+          <TreeBranch key={branch.branchKey} branch={branch} label={label} badges={badges} />
+        ))}
+      </div>
     </div>
   )
 }
 
-/** 按通用维度（环境/状态）渲染分组小标题 + 成员行。空 key 显示「未分组」占位。 */
-function GenericGroups({
-  groups,
-  dim,
+/** 通用维度（环境/状态）分组标签。空 key 显示「未分组/未分环境」占位。 */
+function dimLabel(dim: GroupDimension, key: string, t: (k: string, o?: Record<string, unknown>) => string): string {
+  if (key === '') return dim === 'env' ? t('grouping.envNone') : t('grouping.ungrouped')
+  if (dim === 'env') return t(`grouping.env_${key}`, { defaultValue: key })
+  return key
+}
+
+/**
+ * 一条可折叠树分支：头部（折叠箭头 + 标签 + 计数），展开时渲染成员行。
+ * 折叠态来自 console store collapsedGroups[branchKey]，默认展开；折叠时不渲染成员（折叠优先）。
+ */
+function TreeBranch({
+  branch,
+  label,
   badges,
 }: {
-  groups: { key: string; instances: InstanceInfo[] }[]
-  dim: GroupDimension
+  branch: Branch
+  label: string
   badges: Map<number, BadgeData | undefined>
 }) {
-  const { t } = useTranslation()
-  const label = (key: string): string => {
-    if (key === '') return dim === 'env' ? t('grouping.envNone') : t('grouping.ungrouped')
-    if (dim === 'env') return t(`grouping.env_${key}`, { defaultValue: key })
-    return key
-  }
+  const collapsed = useConsoleStore((s) => s.collapsedGroups[branch.branchKey])
+  const toggleGroup = useConsoleStore((s) => s.toggleGroup)
+
   return (
-    <div className="space-y-2">
-      {groups.map((group) => (
-        <div key={group.key || '__none__'}>
-          <p className="px-3 py-1 text-xs font-medium text-muted-foreground">{label(group.key)}</p>
-          <ul className="space-y-0.5">
-            {group.instances.map((inst) => (
-              <InstanceRow key={inst.id} instance={inst} botBadge={badges.get(inst.id)} />
-            ))}
-          </ul>
-        </div>
-      ))}
+    <div>
+      <button
+        type="button"
+        onClick={() => toggleGroup(branch.branchKey)}
+        aria-expanded={!collapsed}
+        className="flex w-full items-center gap-1 rounded px-2 py-1 text-left text-xs font-medium text-muted-foreground hover:bg-accent/50"
+      >
+        {collapsed ? (
+          <ChevronRight className="size-3.5 shrink-0 opacity-70" />
+        ) : (
+          <ChevronDown className="size-3.5 shrink-0 opacity-70" />
+        )}
+        <span className="min-w-0 flex-1 truncate">{label}</span>
+        <span className="shrink-0 tabular-nums opacity-60">{branch.instances.length}</span>
+      </button>
+
+      {!collapsed && (
+        <ul className="space-y-0.5">
+          {branch.instances.map((inst) => (
+            <InstanceRow key={inst.id} instance={inst} botBadge={badges.get(inst.id)} />
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
@@ -161,7 +153,7 @@ function InstanceRow({ instance, botBadge }: { instance: InstanceInfo; botBadge:
         type="button"
         onClick={() => openInstance(instance.id)}
         className={cn(
-          'flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left text-sm',
+          'flex w-full items-center gap-2 rounded-md py-1.5 pl-7 pr-3 text-left text-sm',
           isActive ? 'bg-accent font-medium' : 'hover:bg-accent/50',
         )}
       >

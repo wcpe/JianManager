@@ -1,5 +1,6 @@
 import type { InstanceInfo } from '@/api/instances'
 import type { NodeInfo } from '@/api/nodes'
+import type { GroupDimension } from './instance-grouping'
 
 /** 实例树中一个节点分组：节点信息 + 其下实例列表。 */
 export interface NodeGroup {
@@ -38,6 +39,41 @@ export function groupInstancesByNode(
   }
 
   return groups
+}
+
+/**
+ * 侧栏实例树某一分组分支的折叠记忆键（FR-069）。
+ * 命名空间前缀 `tree:` 与 `<dim>` 隔离，避免与多级侧栏导航组 key（如 `instances`/`monitor`）
+ * 在 console store 的 `collapsedGroups` 中相撞；空 groupKey（未分组/孤儿）用 `__none__` 占位。
+ * 同一 dim 下同一 groupKey 必稳定，切换 dim 时键自然不同，互不污染折叠态。
+ */
+export function treeBranchKey(dim: GroupDimension, groupKey: string): string {
+  return `tree:${dim}:${groupKey === '' ? '__none__' : groupKey}`
+}
+
+/** 一棵侧栏实例树的分支：分组键 + 折叠记忆键 + 该组成员。 */
+export interface TreeBranch {
+  /** 原始分组键（nodeId 字符串 / env 值 / status 值 / 空串=未分组）。 */
+  key: string
+  /** 折叠记忆键（写入 console store collapsedGroups）。 */
+  branchKey: string
+  instances: InstanceInfo[]
+}
+
+/**
+ * 把已分好的「分组键→成员」列表统一包装为带折叠键的树分支（FR-069）。
+ * 不改变入参顺序（分组排序由上游 groupInstances/groupInstancesByNode 决定），
+ * 仅为每个分组补出稳定的 branchKey，供组件做「折叠优先」渲染与折叠记忆。
+ */
+export function toTreeBranches(
+  dim: GroupDimension,
+  groups: { key: string; instances: InstanceInfo[] }[],
+): TreeBranch[] {
+  return groups.map((g) => ({
+    key: g.key,
+    branchKey: treeBranchKey(dim, g.key),
+    instances: g.instances,
+  }))
 }
 
 /**

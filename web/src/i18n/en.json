@@ -263,7 +263,8 @@
     "emptyHint": "Pick an instance from the tree on the left to open its terminal",
     "segmentTerminal": "Terminal",
     "segmentBot": "Bot",
-    "botBadgeTitle": "{{online}} online / {{total}} total"
+    "botBadgeTitle": "{{online}} online / {{total}} total",
+    "nodeSwitcher": "Switch node"
   },
   "login": {
     "title": "JianManager",
