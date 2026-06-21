@@ -17,5 +17,5 @@ data_dir: ./data
 # servers_dir: ./servers
 
 log:
-  level: debug
+  level: info
   format: text

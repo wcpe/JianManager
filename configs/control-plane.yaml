@@ -17,7 +17,7 @@ jwt:
   refresh_ttl: 168h
 
 log:
-  level: debug
+  level: info
   format: text
 
 # 日志中心：持久化、归档与保留（FR-049）。均有默认值，可整体省略。
