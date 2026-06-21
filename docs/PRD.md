@@ -970,7 +970,7 @@
 - **Spec**: `docs/specs/panel-density-redesign/`
 
 ### FR-062: 节点负载（load average）采集与仪表盘
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P2
 - **描述**: 节点心跳采集系统负载（load average 1/5/15，gopsutil 跨平台；Windows 经处理器队列长度模拟），Control Plane 落时序，前端节点/总览补「负载」环形仪表盘与历史曲线。补齐 FR-061 验收 #3 中「负载」一项（验收时拆出）
 - **验收标准**:

@@ -369,7 +369,7 @@
   ```json
   {
     "totals": { "nodeCount": 3, "onlineNodeCount": 2, "runningInstances": 5,
-                "cpuPct": 47.5, "memUsedBytes": 3221225472, "memTotalBytes": 8589934592,
+                "cpuPct": 47.5, "loadAvg": 31.2, "memUsedBytes": 3221225472, "memTotalBytes": 8589934592,
                 "onlinePlayers": 12 },
     "resolution": "5m",
     "trends": [
