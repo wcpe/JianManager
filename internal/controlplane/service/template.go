@@ -54,3 +54,9 @@ func (s *TemplateService) List() ([]model.Template, error) {
 	}
 	return templates, nil
 }
+
+// Delete 删除模板。模板与实例为松关联（建实例时拷贝 startCommand），
+// 删除模板不影响已创建的实例。
+func (s *TemplateService) Delete(id uint) error {
+	return s.db.Delete(&model.Template{}, id).Error
+}

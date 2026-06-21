@@ -42,10 +42,23 @@ func (h *TemplateHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, t)
 }
 
+func (h *TemplateHandler) Delete(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if err := h.templateSvc.Delete(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
+}
+
 func (h *TemplateHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	templates := rg.Group("/templates")
 	{
 		templates.GET("", h.List)
 		templates.POST("", h.Create)
+		templates.DELETE("/:id", h.Delete)
 	}
 }
