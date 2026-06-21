@@ -1009,7 +1009,7 @@
 - **依赖**: 无
 
 ### FR-064: 模板管理 UI 与模板删除
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P2
 - **描述**: FR-014 仅做到「用模板建实例」（消费侧，已 done）；本 FR 补模板的 UI 管理——新建（接已有后端 `POST /templates` + 闲置的 `useCreateTemplate`）、删除（新增后端 `DELETE /templates/:id`）。模板与实例松关联（建实例时拷贝 startCommand），删除模板不影响已建实例。顺带按 FR-061 高密度风格重写模板页。
 - **验收标准**:

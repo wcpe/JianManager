@@ -9,6 +9,7 @@
 ### 新增
 - **审计日志筛选 UI**（FR-015 归真）：审计页补全顶部筛选栏（用户下拉/操作/目标类型/时间范围），筛选下沉到后端 DB（`GET /audit?userId=&action=&targetType=&from=&to=&limit=`），变更即重查、「加载更多」递增 limit、「清空」恢复默认；时间按后端 `time.RFC3339` 期望转换（datetime-local 本地值经 `toISOString` 带时区透传）。套 FR-061 高密度风格，i18n zh/en 对齐。纯前端，不改后端行为。
 - **定时任务管理 UI 归真**（FR-012）：定时任务页此前仅只读列表，补齐创建/编辑/删除对话框（创建走 `POST /schedules`、编辑走 `PUT /schedules/:id` 改 cron/动作/启用、删除走危险确认 `DELETE /schedules/:id`）、行内启停切换、执行日志行展开（`GET /schedules/:id/logs`，列时间/动作/结果/输出）与 Cron 表达式基本前端校验；页面套 FR-061 高密度风格（Panel + 密集表 + StatusBadge）。i18n zh/en 补全。
+- **模板管理 UI 与模板删除**（FR-064）：模板页补「新建模板」对话框（名称/类型/描述/启动命令/下载URL/默认工作目录，接已有 `POST /templates`）与每卡「删除」（DangerConfirm 危险确认，接新增 `DELETE /templates/:id`）；模板与实例为松关联（建实例时拷贝 startCommand），删除模板不影响已创建实例。后端补 `DELETE /templates/:id`（service + handler + 路由 + 单测/路由测试）。模板页按 FR-061 高密度风格重写（Panel 卡片 + 工具栏标题，替换旧 `text-2xl` 大标题）。i18n zh/en。
 
 ### 修复
 - **监控图表在 0 尺寸容器渲染告警**（BUG-007）：`TimeSeriesChart` 在隐藏/未激活分段或折叠面板（0 尺寸容器）内渲染时，recharts `ResponsiveContainer` 反复报 `width(-1)/height(-1) ... should be greater than 0`（×9）。改为用 callback ref + `ResizeObserver` 守卫——容器宽度为 0 时不挂载 `ResponsiveContainer`，待容器获得尺寸（切回分段/展开面板）后自动恢复，不留持续空白；不影响总览/节点/实例监控既有图表。

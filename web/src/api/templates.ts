@@ -32,7 +32,16 @@ export function useCreateTemplate() {
       description?: string
       startCommand: string
       downloadUrl?: string
+      defaultWorkDir?: string
     }) => api.post('/templates', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['templates'] }),
+  })
+}
+
+export function useDeleteTemplate() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api.delete(`/templates/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['templates'] }),
   })
 }

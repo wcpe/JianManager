@@ -865,6 +865,12 @@
 - **描述**: 创建模板（平台管理员）
 - **关联 FR**: FR-014
 
+### DELETE /api/v1/templates/:id
+- **描述**: 删除模板。模板与实例为松关联（建实例时拷贝 startCommand），删除模板不影响已创建的实例。
+- **关联 FR**: FR-064
+- **响应 200**: `{ "message": "已删除" }`
+- **错误**: `400 INVALID_REQUEST`（ID 非法）、`500 INTERNAL_ERROR`
+
 ---
 
 ## 制品库
