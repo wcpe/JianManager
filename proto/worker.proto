@@ -182,6 +182,10 @@ message CreateInstanceRequest {
   // probe_port 是 ServerProbe /metrics 端口（CP 分配后下发），Worker 持久化到 PID 记录，
   // 心跳时据此自采每实例 ServerProbe 快照（FR-060 时序）；0=未部署探针，心跳不采该实例。
   int32 probe_port = 12;
+  // graceful_stop_timeout_seconds 是优雅停止后等待进程自行退出的上限（秒，CP 从平台设置
+  // graceful_stop.timeout 取生效值后下发）。daemon 策略透传到 wrapper，停服按此值超时强杀。
+  // 语义：对设置变更后「新启动」的实例生效（值在启动时定型）；0=未指定，wrapper 回退 env/默认。
+  int32 graceful_stop_timeout_seconds = 13;
 }
 
 message CreateInstanceResponse {
@@ -586,6 +590,9 @@ message InstallJDKRequest {
   int32 major_version = 2; // 8 / 11 / 17 / 21 / ...
   string arch = 3;         // x64 / aarch64
   string install_dir = 4;   // 可选：自定义安装目录（默认 <serversDir>/jdks/<vendor>-<major>）
+  // mirror_base 是该 vendor 的下载基址（CP 从平台设置 jdk.mirror.<vendor> 取生效值后下发）。
+  // 非空时 Worker 用它构造下载 URL，使运行时配置的镜像源真生效；为空时回退 Worker 本地 env/默认源。
+  string mirror_base = 5;
 }
 
 message InstallJDKResponse {

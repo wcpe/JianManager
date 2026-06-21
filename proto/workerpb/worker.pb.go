@@ -548,9 +548,13 @@ type CreateInstanceRequest struct {
 	StopCommand string `protobuf:"bytes,11,opt,name=stop_command,json=stopCommand,proto3" json:"stop_command,omitempty"`
 	// probe_port 是 ServerProbe /metrics 端口（CP 分配后下发），Worker 持久化到 PID 记录，
 	// 心跳时据此自采每实例 ServerProbe 快照（FR-060 时序）；0=未部署探针，心跳不采该实例。
-	ProbePort     int32 `protobuf:"varint,12,opt,name=probe_port,json=probePort,proto3" json:"probe_port,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ProbePort int32 `protobuf:"varint,12,opt,name=probe_port,json=probePort,proto3" json:"probe_port,omitempty"`
+	// graceful_stop_timeout_seconds 是优雅停止后等待进程自行退出的上限（秒，CP 从平台设置
+	// graceful_stop.timeout 取生效值后下发）。daemon 策略透传到 wrapper，停服按此值超时强杀。
+	// 语义：对设置变更后「新启动」的实例生效（值在启动时定型）；0=未指定，wrapper 回退 env/默认。
+	GracefulStopTimeoutSeconds int32 `protobuf:"varint,13,opt,name=graceful_stop_timeout_seconds,json=gracefulStopTimeoutSeconds,proto3" json:"graceful_stop_timeout_seconds,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *CreateInstanceRequest) Reset() {
@@ -663,6 +667,13 @@ func (x *CreateInstanceRequest) GetStopCommand() string {
 func (x *CreateInstanceRequest) GetProbePort() int32 {
 	if x != nil {
 		return x.ProbePort
+	}
+	return 0
+}
+
+func (x *CreateInstanceRequest) GetGracefulStopTimeoutSeconds() int32 {
+	if x != nil {
+		return x.GracefulStopTimeoutSeconds
 	}
 	return 0
 }
@@ -4455,11 +4466,14 @@ func (x *ListJDKsResponse) GetJdks() []*JDKInfo {
 }
 
 type InstallJDKRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Vendor        string                 `protobuf:"bytes,1,opt,name=vendor,proto3" json:"vendor,omitempty"`                                  // Temurin / Zulu / Corretto / ...
-	MajorVersion  int32                  `protobuf:"varint,2,opt,name=major_version,json=majorVersion,proto3" json:"major_version,omitempty"` // 8 / 11 / 17 / 21 / ...
-	Arch          string                 `protobuf:"bytes,3,opt,name=arch,proto3" json:"arch,omitempty"`                                      // x64 / aarch64
-	InstallDir    string                 `protobuf:"bytes,4,opt,name=install_dir,json=installDir,proto3" json:"install_dir,omitempty"`        // 可选：自定义安装目录（默认 <serversDir>/jdks/<vendor>-<major>）
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Vendor       string                 `protobuf:"bytes,1,opt,name=vendor,proto3" json:"vendor,omitempty"`                                  // Temurin / Zulu / Corretto / ...
+	MajorVersion int32                  `protobuf:"varint,2,opt,name=major_version,json=majorVersion,proto3" json:"major_version,omitempty"` // 8 / 11 / 17 / 21 / ...
+	Arch         string                 `protobuf:"bytes,3,opt,name=arch,proto3" json:"arch,omitempty"`                                      // x64 / aarch64
+	InstallDir   string                 `protobuf:"bytes,4,opt,name=install_dir,json=installDir,proto3" json:"install_dir,omitempty"`        // 可选：自定义安装目录（默认 <serversDir>/jdks/<vendor>-<major>）
+	// mirror_base 是该 vendor 的下载基址（CP 从平台设置 jdk.mirror.<vendor> 取生效值后下发）。
+	// 非空时 Worker 用它构造下载 URL，使运行时配置的镜像源真生效；为空时回退 Worker 本地 env/默认源。
+	MirrorBase    string `protobuf:"bytes,5,opt,name=mirror_base,json=mirrorBase,proto3" json:"mirror_base,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4518,6 +4532,13 @@ func (x *InstallJDKRequest) GetArch() string {
 func (x *InstallJDKRequest) GetInstallDir() string {
 	if x != nil {
 		return x.InstallDir
+	}
+	return ""
+}
+
+func (x *InstallJDKRequest) GetMirrorBase() string {
+	if x != nil {
+		return x.MirrorBase
 	}
 	return ""
 }
@@ -5568,7 +5589,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	" \x01(\x01R\ruptimeSeconds\x12+\n" +
 	"\x06worlds\x18\v \x03(\v2\x13.worker.WorldMetricR\x06worlds\"1\n" +
 	"\x11HeartbeatResponse\x12\x1c\n" +
-	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\xec\x03\n" +
+	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\xaf\x04\n" +
 	"\x15CreateInstanceRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -5584,7 +5605,8 @@ const file_proto_worker_proto_rawDesc = "" +
 	"jdkBinPath\x12!\n" +
 	"\fstop_command\x18\v \x01(\tR\vstopCommand\x12\x1d\n" +
 	"\n" +
-	"probe_port\x18\f \x01(\x05R\tprobePort\x1a:\n" +
+	"probe_port\x18\f \x01(\x05R\tprobePort\x12A\n" +
+	"\x1dgraceful_stop_timeout_seconds\x18\r \x01(\x05R\x1agracefulStopTimeoutSeconds\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"H\n" +
@@ -5862,13 +5884,15 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x04path\x18\x05 \x01(\tR\x04path\x12\x18\n" +
 	"\amanaged\x18\x06 \x01(\bR\amanaged\"7\n" +
 	"\x10ListJDKsResponse\x12#\n" +
-	"\x04jdks\x18\x01 \x03(\v2\x0f.worker.JDKInfoR\x04jdks\"\x85\x01\n" +
+	"\x04jdks\x18\x01 \x03(\v2\x0f.worker.JDKInfoR\x04jdks\"\xa6\x01\n" +
 	"\x11InstallJDKRequest\x12\x16\n" +
 	"\x06vendor\x18\x01 \x01(\tR\x06vendor\x12#\n" +
 	"\rmajor_version\x18\x02 \x01(\x05R\fmajorVersion\x12\x12\n" +
 	"\x04arch\x18\x03 \x01(\tR\x04arch\x12\x1f\n" +
 	"\vinstall_dir\x18\x04 \x01(\tR\n" +
-	"installDir\"g\n" +
+	"installDir\x12\x1f\n" +
+	"\vmirror_base\x18\x05 \x01(\tR\n" +
+	"mirrorBase\"g\n" +
 	"\x12InstallJDKResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12!\n" +
