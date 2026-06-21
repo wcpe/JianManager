@@ -305,11 +305,8 @@ function ScheduleFormDialog({
   // 打开时按模式初始化表单：编辑回填，创建清空。
   useEffect(() => {
     if (!open) return
-    if (mode === 'edit' && initial) {
-      setForm(formFromSchedule(initial))
-    } else {
-      setForm(EMPTY_SCHEDULE_FORM)
-    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 弹窗打开瞬间一次性回填/清空表单，非渲染期联动
+    setForm(mode === 'edit' && initial ? formFromSchedule(initial) : EMPTY_SCHEDULE_FORM)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在弹窗打开瞬间初始化一次
   }, [open])
 
