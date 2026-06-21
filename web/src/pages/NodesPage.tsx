@@ -1,3 +1,4 @@
+import { Fragment, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
@@ -7,6 +8,7 @@ import {
   useDeleteNode,
   type NodeInfo,
 } from '@/api/nodes'
+import { useMetricSeries } from '@/api/metrics'
 import {
   Table,
   TableBody,
@@ -16,8 +18,14 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
+import { Panel } from '@/components/ui/panel'
+import { MiniBar } from '@/components/ui/mini-bar'
+import { StatusBadge } from '@/components/ui/status-badge'
+import { ResourceGauge } from '@/components/ui/gauge'
+import { TimeSeriesChart, type ChartSeries } from '@/components/charts/TimeSeriesChart'
+import { RangePicker, type MetricRange } from '@/components/charts/RangePicker'
+import type { StatusLevel } from '@/lib/threshold'
 
-import { useState } from 'react'
 import NodeJDKPanel from '@/components/NodeJDKPanel'
 import NodePortsPanel from '@/components/NodePortsPanel'
 import DangerConfirm from '@/components/DangerConfirm'
@@ -31,8 +39,61 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
 }
 
+/** 节点状态码 → 状态等级（1 在线=正常 / 2 启动中=警告 / 0 离线=危险）。 */
+function nodeStatusLevel(status: number): StatusLevel {
+  if (status === 1) return 'success'
+  if (status === 2) return 'warning'
+  return 'danger'
+}
+
 /** 待二次确认的危险节点操作（FR-048）。 */
 type PendingAction = { kind: 'drain' | 'delete'; node: NodeInfo }
+
+/** 单元格内的占用条：MiniBar + 百分比（阈值变色）。 */
+function UsageCell({ pct }: { pct: number }) {
+  if (!pct) return <span className="text-muted-foreground">--</span>
+  const v = pct * 100
+  return (
+    <div className="flex items-center gap-2">
+      <MiniBar value={v} className="w-16" />
+      <span className="tabular-nums text-xs">{v.toFixed(0)}%</span>
+    </div>
+  )
+}
+
+/** 展开的节点详情（FR-061）：环形仪表盘（CPU/内存/磁盘）+ CPU/内存历史曲线。 */
+function NodeDetail({ node }: { node: NodeInfo }) {
+  const { t } = useTranslation()
+  const [range, setRange] = useState<MetricRange>('24h')
+  const { data } = useMetricSeries({ scope: 'node', targetId: node.uuid, range })
+
+  const seriesOf = (metricKey: string, name: string): ChartSeries[] => {
+    const s = data?.series.find((x) => x.metricKey === metricKey)
+    if (!s) return []
+    return [{ key: metricKey, name, points: s.points.map((p) => ({ ts: p.ts, value: p.avg })) }]
+  }
+
+  return (
+    <div className="space-y-3 bg-muted/30 p-3">
+      <div className="flex flex-wrap items-center gap-6">
+        <ResourceGauge label={t('nodes.cpu')} value={(node.cpuUsage ?? 0) * 100} unit="%" size={84} />
+        <ResourceGauge label={t('nodes.memory')} value={(node.memoryUsage ?? 0) * 100} unit="%" size={84} />
+        <ResourceGauge label={t('nodes.disk')} value={(node.diskUsage ?? 0) * 100} unit="%" size={84} />
+        <div className="ml-auto">
+          <RangePicker value={range} onChange={setRange} />
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <Panel title={t('dashboard.cpuTrend')}>
+          <TimeSeriesChart series={seriesOf('node_cpu_pct', t('nodes.cpu'))} height={160} valueFormatter={(v) => `${v.toFixed(0)}%`} />
+        </Panel>
+        <Panel title={t('dashboard.memTrend')}>
+          <TimeSeriesChart series={seriesOf('node_mem_used', t('nodes.memory'))} height={160} valueFormatter={formatBytes} />
+        </Panel>
+      </div>
+    </div>
+  )
+}
 
 export default function NodesPage() {
   const { t } = useTranslation()
@@ -41,16 +102,11 @@ export default function NodesPage() {
   const [jdkNodeId, setJdkNodeId] = useState<number | null>(null)
   const [portsNodeId, setPortsNodeId] = useState<number | null>(null)
   const [pending, setPending] = useState<PendingAction | null>(null)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
 
   const setMaintenance = useSetNodeMaintenance()
   const drain = useDrainNode()
   const del = useDeleteNode()
-
-  const statusLabel: Record<number, { text: string; color: string }> = {
-    0: { text: t('nodes.offline'), color: 'text-red-500' },
-    1: { text: t('nodes.online'), color: 'text-green-500' },
-    2: { text: t('nodes.starting'), color: 'text-yellow-500' },
-  }
 
   const toggleMaintenance = (node: NodeInfo) => {
     const enabled = !node.maintenance
@@ -71,8 +127,7 @@ export default function NodesPage() {
     setPending(null)
     if (kind === 'drain') {
       drain.mutate(node.id, {
-        onSuccess: (res) =>
-          toast.success(t('nodes.drainDone', { count: res.data.stoppedCount })),
+        onSuccess: (res) => toast.success(t('nodes.drainDone', { count: res.data.stoppedCount })),
         onError: (e: Error & { response?: { data?: { message?: string } } }) =>
           toast.error(e?.response?.data?.message || t('common.error')),
       })
@@ -86,17 +141,15 @@ export default function NodesPage() {
   }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">{t('nodes.title')}</h1>
-      </div>
+    <div className="space-y-4">
+      <h1 className="text-xl font-bold">{t('nodes.title')}</h1>
 
       {isLoading ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
       ) : (
-        <div className="border rounded-lg">
+        <Panel bodyClassName="p-0">
           <Table>
-            <TableHeader className="bg-muted/50">
+            <TableHeader>
               <TableRow>
                 <TableHead>{t('nodes.name')}</TableHead>
                 <TableHead>{t('nodes.ip')}</TableHead>
@@ -111,66 +164,94 @@ export default function NodesPage() {
             </TableHeader>
             <TableBody>
               {nodes?.map((node) => {
-                const st = statusLabel[node.status] || statusLabel[0]
                 const isOnline = node.status === 1
+                const expanded = expandedId === node.id
                 return (
-                  <TableRow key={node.id}>
-                    <TableCell className="font-medium">{node.name}</TableCell>
-                    <TableCell className="text-muted-foreground">{node.host}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <span className={st.color}>{st.text}</span>
-                        {node.maintenance && (
-                          <Badge variant="outline" className="text-amber-600 border-amber-500/50">
-                            {t('nodes.maintenance')}
-                          </Badge>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>{node.cpuUsage ? `${(node.cpuUsage * 100).toFixed(0)}%` : '--'}</TableCell>
-                    <TableCell>{node.memoryUsage ? `${(node.memoryUsage * 100).toFixed(0)}%` : '--'}</TableCell>
-                    <TableCell>{node.diskUsage ? `${(node.diskUsage * 100).toFixed(0)}%` : '--'}</TableCell>
-                    <TableCell className="text-muted-foreground text-xs">
-                      {node.networkBytesSent || node.networkBytesRecv
-                        ? `↑${formatBytes(node.networkBytesSent)} ↓${formatBytes(node.networkBytesRecv)}`
-                        : '--'}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground">{node.os} {node.arch}</TableCell>
-                    <TableCell className="text-right space-x-3 whitespace-nowrap">
-                      <button
-                        className="text-xs text-blue-600 hover:underline"
-                        onClick={() => setJdkNodeId(node.id)}
-                      >
-                        JDK
-                      </button>
-                      <button
-                        className="text-xs text-blue-600 hover:underline"
-                        onClick={() => setPortsNodeId(node.id)}
-                      >
-                        {t('ports.button')}
-                      </button>
-                      <button
-                        className="text-xs text-amber-600 hover:underline"
-                        onClick={() => toggleMaintenance(node)}
-                      >
-                        {node.maintenance ? t('nodes.uncordon') : t('nodes.cordon')}
-                      </button>
-                      <button
-                        className="text-xs text-orange-600 hover:underline disabled:opacity-40 disabled:no-underline"
-                        onClick={() => setPending({ kind: 'drain', node })}
-                      >
-                        {t('nodes.drain')}
-                      </button>
-                      <button
-                        className="text-xs text-red-600 hover:underline disabled:opacity-40 disabled:no-underline"
-                        disabled={isOnline}
-                        title={isOnline ? t('nodes.deleteOnlineHint') : undefined}
-                        onClick={() => setPending({ kind: 'delete', node })}
-                      >
-                        {t('nodes.delete')}
-                      </button>
-                    </TableCell>
-                  </TableRow>
+                  <Fragment key={node.id}>
+                    <TableRow>
+                      <TableCell>
+                        <button
+                          className="font-medium hover:text-primary"
+                          onClick={() => setExpandedId(expanded ? null : node.id)}
+                        >
+                          {expanded ? '▾ ' : '▸ '}
+                          {node.name}
+                        </button>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">{node.host}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1.5">
+                          <StatusBadge
+                            level={nodeStatusLevel(node.status)}
+                            label={
+                              node.status === 1
+                                ? t('nodes.online')
+                                : node.status === 2
+                                  ? t('nodes.starting')
+                                  : t('nodes.offline')
+                            }
+                          />
+                          {node.maintenance && (
+                            <Badge variant="outline" className="text-status-warning border-status-warning/50">
+                              {t('nodes.maintenance')}
+                            </Badge>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <UsageCell pct={node.cpuUsage} />
+                      </TableCell>
+                      <TableCell>
+                        <UsageCell pct={node.memoryUsage} />
+                      </TableCell>
+                      <TableCell>
+                        <UsageCell pct={node.diskUsage} />
+                      </TableCell>
+                      <TableCell className="text-muted-foreground text-xs">
+                        {node.networkBytesSent || node.networkBytesRecv
+                          ? `↑${formatBytes(node.networkBytesSent)} ↓${formatBytes(node.networkBytesRecv)}`
+                          : '--'}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {node.os} {node.arch}
+                      </TableCell>
+                      <TableCell className="space-x-3 text-right whitespace-nowrap">
+                        <button className="text-xs text-primary hover:underline" onClick={() => setJdkNodeId(node.id)}>
+                          JDK
+                        </button>
+                        <button className="text-xs text-primary hover:underline" onClick={() => setPortsNodeId(node.id)}>
+                          {t('ports.button')}
+                        </button>
+                        <button
+                          className="text-xs text-status-warning hover:underline"
+                          onClick={() => toggleMaintenance(node)}
+                        >
+                          {node.maintenance ? t('nodes.uncordon') : t('nodes.cordon')}
+                        </button>
+                        <button
+                          className="text-xs text-status-warning hover:underline"
+                          onClick={() => setPending({ kind: 'drain', node })}
+                        >
+                          {t('nodes.drain')}
+                        </button>
+                        <button
+                          className="text-xs text-status-danger hover:underline disabled:opacity-40 disabled:no-underline"
+                          disabled={isOnline}
+                          title={isOnline ? t('nodes.deleteOnlineHint') : undefined}
+                          onClick={() => setPending({ kind: 'delete', node })}
+                        >
+                          {t('nodes.delete')}
+                        </button>
+                      </TableCell>
+                    </TableRow>
+                    {expanded && (
+                      <TableRow>
+                        <TableCell colSpan={9} className="p-0">
+                          <NodeDetail node={node} />
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Fragment>
                 )
               })}
               {(!nodes || nodes.length === 0) && (
@@ -182,14 +263,17 @@ export default function NodesPage() {
               )}
             </TableBody>
           </Table>
-        </div>
+        </Panel>
       )}
+
       {jdkNodeId !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-background border rounded-lg p-6 w-full max-w-2xl shadow-lg max-h-[80vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-bold">JDK Management</h2>
-              <button onClick={() => setJdkNodeId(null)} className="text-sm text-muted-foreground hover:text-foreground">Close</button>
+              <button onClick={() => setJdkNodeId(null)} className="text-sm text-muted-foreground hover:text-foreground">
+                Close
+              </button>
             </div>
             <NodeJDKPanel nodeId={jdkNodeId} />
           </div>
@@ -200,7 +284,9 @@ export default function NodesPage() {
           <div className="bg-background border rounded-lg p-6 w-full max-w-2xl shadow-lg max-h-[80vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-bold">{t('ports.title')}</h2>
-              <button onClick={() => setPortsNodeId(null)} className="text-sm text-muted-foreground hover:text-foreground">{t('common.close')}</button>
+              <button onClick={() => setPortsNodeId(null)} className="text-sm text-muted-foreground hover:text-foreground">
+                {t('common.close')}
+              </button>
             </div>
             <NodePortsPanel nodeId={portsNodeId} />
           </div>

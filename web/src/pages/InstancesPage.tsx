@@ -30,6 +30,8 @@ import {
   type GroupDimension,
 } from '@/components/console/instance-grouping'
 import { Badge } from '@/components/ui/badge'
+import { StatusBadge } from '@/components/ui/status-badge'
+import { instanceStatusLevel } from '@/lib/threshold'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -184,7 +186,7 @@ export default function InstancesPage() {
           </div>
         </TableCell>
         <TableCell>
-          <Badge variant={st.variant}>{st.text}</Badge>
+          <StatusBadge level={instanceStatusLevel(inst.status)} label={st.text} />
         </TableCell>
         <TableCell>
           <div className="flex gap-1">

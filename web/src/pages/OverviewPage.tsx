@@ -1,161 +1,119 @@
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts'
+import { useMetricOverview } from '@/api/metrics'
+import { Panel } from '@/components/ui/panel'
+import { ResourceGauge } from '@/components/ui/gauge'
+import { StatusBadge } from '@/components/ui/status-badge'
+import { TimeSeriesChart, type ChartSeries } from '@/components/charts/TimeSeriesChart'
+import { RangePicker, type MetricRange } from '@/components/charts/RangePicker'
+import { instanceStatusLevel } from '@/lib/threshold'
 
-const COLORS = ['#22c55e', '#ef4444', '#f59e0b', '#3b82f6']
+/** 字节 → 紧凑可读（G/M/K）。 */
+function fmtBytes(b: number): string {
+  if (!Number.isFinite(b) || b <= 0) return '0'
+  if (b >= 1e9) return `${(b / 1024 / 1024 / 1024).toFixed(1)}G`
+  if (b >= 1e6) return `${(b / 1024 / 1024).toFixed(0)}M`
+  return `${(b / 1024).toFixed(0)}K`
+}
 
+/** 统计块：大数值 + 标签 + 可选副信息。 */
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="flex flex-col justify-center rounded-lg border bg-card px-4 py-3">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="mt-0.5 text-2xl font-semibold tabular-nums">{value}</span>
+      {sub && <span className="mt-0.5 text-xs text-muted-foreground">{sub}</span>}
+    </div>
+  )
+}
+
+/** 总览页（FR-061 旗舰）：环形仪表盘 + 聚合历史曲线（FR-060） + 密集实例表，一屏概览。 */
 export default function OverviewPage() {
   const { t } = useTranslation()
+  const [range, setRange] = useState<MetricRange>('24h')
   const { data: nodes } = useNodes()
   const { data: instances } = useInstances()
+  const { data: overview } = useMetricOverview(range)
 
-  const onlineNodes = nodes?.filter((n) => n.status === 1).length ?? 0
-  const offlineNodes = nodes?.filter((n) => n.status === 0).length ?? 0
-  const totalNodes = nodes?.length ?? 0
-  const totalInstances = instances?.length ?? 0
-  const runningInstances = instances?.filter((i) => i.status === 'RUNNING').length ?? 0
-  const stoppedInstances = instances?.filter((i) => i.status === 'STOPPED').length ?? 0
-  const crashedInstances = instances?.filter((i) => i.status === 'CRASHED').length ?? 0
+  const totals = overview?.totals
+  const memPct = totals && totals.memTotalBytes > 0 ? (totals.memUsedBytes / totals.memTotalBytes) * 100 : 0
 
-  const nodeData = [
-    { name: t('nodes.online'), value: onlineNodes },
-    { name: t('nodes.offline'), value: offlineNodes },
-  ].filter((d) => d.value > 0)
-
-  const instanceData = [
-    { name: t('instances.running'), value: runningInstances },
-    { name: t('instances.stopped'), value: stoppedInstances },
-    { name: t('instances.crashed'), value: crashedInstances },
-  ].filter((d) => d.value > 0)
-
-  const cards = [
-    { label: t('dashboard.nodes'), value: t('dashboard.nodesOnline', { count: onlineNodes }), sub: t('dashboard.nodesTotal', { count: totalNodes }) },
-    { label: t('dashboard.instances'), value: t('dashboard.instancesTotal', { count: totalInstances }), sub: t('dashboard.instancesRunning', { count: runningInstances }) },
-  ]
+  /** 据 metricKey 取一条聚合趋势并映射为图表序列。 */
+  const trend = (metricKey: string, name: string): ChartSeries[] => {
+    const tr = overview?.trends.find((x) => x.metricKey === metricKey)
+    if (!tr) return []
+    return [{ key: metricKey, name, points: tr.points.map((p) => ({ ts: p.ts, value: p.avg })) }]
+  }
 
   return (
-    <div>
-      <h1 className="text-2xl font-bold mb-4">{t('dashboard.title')}</h1>
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-        {cards.map((card) => (
-          <div key={card.label} className="border rounded-lg p-4">
-            <p className="text-sm text-muted-foreground">{card.label}</p>
-            <p className="text-2xl font-bold mt-1">{card.value}</p>
-            <p className="text-xs text-muted-foreground mt-1">{card.sub}</p>
-          </div>
-        ))}
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-bold">{t('dashboard.title')}</h1>
+        <RangePicker value={range} onChange={setRange} />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-        <div className="border rounded-lg p-4">
-          <h3 className="font-medium mb-3">{t('dashboard.nodeStatus')}</h3>
-          <div className="h-48">
-            {nodeData.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={nodeData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={40}
-                    outerRadius={70}
-                    paddingAngle={5}
-                    dataKey="value"
-                    label={({ name, value }) => `${name} ${value}`}
-                  >
-                    {nodeData.map((_, i) => (
-                      <Cell key={i} fill={COLORS[i]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <p className="text-muted-foreground text-sm text-center py-8">{t('dashboard.noNodes')}</p>
-            )}
-          </div>
-        </div>
-
-        <div className="border rounded-lg p-4">
-          <h3 className="font-medium mb-3">{t('instances.status')}</h3>
-          <div className="h-48">
-            {instanceData.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={instanceData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={40}
-                    outerRadius={70}
-                    paddingAngle={5}
-                    dataKey="value"
-                    label={({ name, value }) => `${name} ${value}`}
-                  >
-                    {instanceData.map((_, i) => (
-                      <Cell key={i} fill={COLORS[i]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-            ) : (
-              <p className="text-muted-foreground text-sm text-center py-8">{t('dashboard.noInstances')}</p>
-            )}
-          </div>
-        </div>
+      {/* 顶部：环形仪表盘 + 统计块 */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <Panel bodyClassName="flex items-center justify-center py-3">
+          <ResourceGauge label={t('dashboard.totalCpu')} value={totals?.cpuPct ?? 0} unit="%" />
+        </Panel>
+        <Panel bodyClassName="flex items-center justify-center py-3">
+          <ResourceGauge label={t('dashboard.totalMem')} value={memPct} unit="%" />
+        </Panel>
+        <Stat
+          label={t('dashboard.nodes')}
+          value={`${totals?.onlineNodeCount ?? 0}/${totals?.nodeCount ?? nodes?.length ?? 0}`}
+          sub={t('dashboard.online')}
+        />
+        <Stat label={t('dashboard.runningInstances')} value={String(totals?.runningInstances ?? 0)} sub={t('dashboard.instances')} />
+        <Stat label={t('dashboard.onlinePlayers')} value={String(totals?.onlinePlayers ?? 0)} sub={t('nav.players')} />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="border rounded-lg p-4">
-          <h3 className="font-medium mb-3">{t('dashboard.nodeStatus')}</h3>
-          <div className="space-y-2">
-            {nodes?.map((node) => (
-              <div key={node.id} className="flex items-center justify-between text-sm">
-                <span>{node.name}</span>
-                <div className="flex items-center gap-2">
-                  {node.cpuUsage > 0 && (
-                    <span className="text-xs text-muted-foreground">CPU {(node.cpuUsage * 100).toFixed(0)}%</span>
-                  )}
-                  <span className={node.status === 1 ? 'text-green-500' : 'text-red-500'}>
-                    {node.status === 1 ? `● ${t('nodes.online')}` : `○ ${t('nodes.offline')}`}
-                  </span>
-                </div>
-              </div>
-            ))}
-            {(!nodes || nodes.length === 0) && (
-              <p className="text-muted-foreground text-sm">{t('nodes.empty')}</p>
-            )}
-          </div>
-        </div>
+      {/* 中部：聚合历史曲线（FR-060） */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+        <Panel title={t('dashboard.cpuTrend')}>
+          <TimeSeriesChart series={trend('node_cpu_pct', t('dashboard.totalCpu'))} height={180} valueFormatter={(v) => `${v.toFixed(0)}%`} />
+        </Panel>
+        <Panel title={t('dashboard.memTrend')}>
+          <TimeSeriesChart series={trend('node_mem_used', t('dashboard.totalMem'))} height={180} valueFormatter={fmtBytes} />
+        </Panel>
+        <Panel title={t('dashboard.playersTrend')}>
+          <TimeSeriesChart series={trend('inst_players_online', t('dashboard.onlinePlayers'))} height={180} valueFormatter={(v) => v.toFixed(0)} />
+        </Panel>
+      </div>
 
-        <div className="border rounded-lg p-4">
-          <h3 className="font-medium mb-3">{t('dashboard.recentInstances')}</h3>
-          <div className="space-y-2">
-            {instances?.slice(0, 5).map((inst) => (
-              <div key={inst.id} className="flex items-center justify-between text-sm">
-                <span>{inst.name}</span>
-                <span
-                  className={
-                    inst.status === 'RUNNING'
-                      ? 'text-green-500'
-                      : inst.status === 'CRASHED'
-                        ? 'text-red-500'
-                        : 'text-gray-500'
-                  }
-                >
-                  {inst.status}
-                </span>
-              </div>
+      {/* 底部：密集实例表 */}
+      <Panel title={t('dashboard.instanceList')} bodyClassName="p-0">
+        <table className="w-full text-[13px]">
+          <thead>
+            <tr className="border-b text-xs text-muted-foreground">
+              <th className="px-3 py-2 text-left font-medium">{t('instances.name')}</th>
+              <th className="px-3 py-2 text-left font-medium">{t('instances.type')}</th>
+              <th className="px-3 py-2 text-left font-medium">{t('instances.status')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {instances?.map((inst) => (
+              <tr key={inst.id} className="border-b last:border-0 hover:bg-muted/40">
+                <td className="px-3 py-1.5 font-medium">{inst.name}</td>
+                <td className="px-3 py-1.5 text-muted-foreground">{inst.type}</td>
+                <td className="px-3 py-1.5">
+                  <StatusBadge level={instanceStatusLevel(inst.status)} label={inst.status} />
+                </td>
+              </tr>
             ))}
             {(!instances || instances.length === 0) && (
-              <p className="text-muted-foreground text-sm">{t('instances.empty')}</p>
+              <tr>
+                <td colSpan={3} className="px-3 py-6 text-center text-muted-foreground">
+                  {t('instances.empty')}
+                </td>
+              </tr>
             )}
-          </div>
-        </div>
-      </div>
+          </tbody>
+        </table>
+      </Panel>
     </div>
   )
 }

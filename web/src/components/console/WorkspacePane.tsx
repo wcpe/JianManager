@@ -9,11 +9,14 @@ import {
 import { useConsoleStore, type WorkspaceSegment } from '@/stores/console'
 import TerminalPane from './TerminalPane'
 import BotSegment from './BotSegment'
+import MetricsSegment from './MetricsSegment'
 import FileBrowser from '@/components/FileBrowser'
 import ConfigEditor from '@/components/ConfigEditor'
 import PluginManager from '@/components/plugins/PluginManager'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
+import { StatusBadge } from '@/components/ui/status-badge'
+import { instanceStatusLevel } from '@/lib/threshold'
 
 /**
  * 工作区单实例面板（FR-039）：顶部「终端 | Bot」分段切换，按实例记忆当前分段（store）。
@@ -45,17 +48,7 @@ export default function WorkspacePane({ instanceId }: WorkspacePaneProps) {
           <span className="text-muted-foreground">{t('console.title')}</span>
           <span className="text-muted-foreground">/</span>
           <span className="font-medium">{instance?.name ?? `#${instanceId}`}</span>
-          {status && (
-            <span
-              className={`ml-1 rounded px-1.5 py-0.5 text-xs ${
-                isRunning
-                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                  : 'bg-muted text-muted-foreground'
-              }`}
-            >
-              {status}
-            </span>
-          )}
+          {status && <StatusBadge level={instanceStatusLevel(status)} label={status} className="ml-1" />}
         </div>
 
         {/* 实例生命周期操作（此前控制台缺失启动/停止等按钮） */}
@@ -89,6 +82,7 @@ export default function WorkspacePane({ instanceId }: WorkspacePaneProps) {
             <TabsTrigger value="files">{t('instanceDetail.files')}</TabsTrigger>
             <TabsTrigger value="config">{t('instanceDetail.config')}</TabsTrigger>
             <TabsTrigger value="plugins">{t('plugins.tab')}</TabsTrigger>
+            <TabsTrigger value="metrics">{t('metrics.tab')}</TabsTrigger>
             <TabsTrigger value="bot">{t('console.segmentBot')}</TabsTrigger>
           </TabsList>
         </Tabs>
@@ -112,6 +106,8 @@ export default function WorkspacePane({ instanceId }: WorkspacePaneProps) {
           <div className="p-4">
             <PluginManager instanceId={instanceId} />
           </div>
+        ) : segment === 'metrics' ? (
+          <MetricsSegment instanceUuid={instance?.uuid ?? ''} />
         ) : (
           <TerminalPane instanceId={instanceId} hideHeader />
         )}
