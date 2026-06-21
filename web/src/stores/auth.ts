@@ -16,8 +16,10 @@ interface AuthState {
 
 // 同步从 localStorage 读取初始鉴权状态，使首帧渲染即正确（BUG-006）。
 // 否则 AuthGuard 在 loadFromStorage 副作用执行前会把已登录用户弹回 /login。
-const storedAccess = localStorage.getItem('accessToken')
-const storedRefresh = localStorage.getItem('refreshToken')
+// typeof 守卫：非 DOM 上下文（vitest node 环境/SSR）无 localStorage，避免模块加载即崩。
+const hasStorage = typeof localStorage !== 'undefined'
+const storedAccess = hasStorage ? localStorage.getItem('accessToken') : null
+const storedRefresh = hasStorage ? localStorage.getItem('refreshToken') : null
 const storedClaims = decodeJwt(storedAccess)
 
 export const useAuthStore = create<AuthState>((set) => ({

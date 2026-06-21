@@ -136,7 +136,7 @@ describe('suggestBotServer', () => {
     expect(suggestBotServer(node('10.0.0.5'))).toEqual({ server: '10.0.0.5', port: 25565 })
   })
 
-  it('falls back to empty server when node is unknown', () => {
-    expect(suggestBotServer(undefined)).toEqual({ server: '', port: 25565 })
+  it('falls back to localhost when node is unknown', () => {
+    expect(suggestBotServer(undefined)).toEqual({ server: '127.0.0.1', port: 25565 })
   })
 })
