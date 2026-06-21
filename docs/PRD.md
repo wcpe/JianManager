@@ -200,13 +200,13 @@
   - [x] 从模板创建实例（自动填充启动命令和配置）
 
 ### FR-015: 审计日志
-- **状态**: 🔨 in-progress（归真：后端筛选 user/action/targetType/from/to 全支持，但前端无筛选 UI、仅拉 limit=100；2026-06-22 e2e 截图巡检发现 done 误标，退回补前端筛选）
+- **状态**: 🔨 in-progress（归真：后端筛选 user/action/targetType/from/to 全支持；前端筛选 UI 已补全，待主树构建 + 真机验证后由用户确认 done）
 - **优先级**: P2
 - **描述**: 操作审计（谁/什么时间/对什么/做了什么）
 - **验收标准**:
   - [x] 关键操作自动记录（实例启停/文件修改/用户管理）
-  - [ ] 审计日志查询（前端筛选栏：用户/操作/目标类型/时间范围/分页 → `GET /audit?userId=&action=&targetType=&from=&to=&limit=`）
-  - [ ] 审计页套 FR-061 高密度风格
+  - [x] 审计日志查询（前端筛选栏：用户/操作/目标类型/时间范围/加载更多 → `GET /audit?userId=&action=&targetType=&from=&to=&limit=`；时间按 RFC3339 透传）
+  - [x] 审计页套 FR-061 高密度风格
 
 ### FR-016: i18n
 - **状态**: ✅ done

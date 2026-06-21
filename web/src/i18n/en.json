@@ -756,7 +756,16 @@
     "action": "Action",
     "target": "Target",
     "ip": "IP",
-    "empty": "No audit logs"
+    "empty": "No audit logs",
+    "allUsers": "All users",
+    "actionPlaceholder": "Action…",
+    "targetTypePlaceholder": "Target type…",
+    "from": "From",
+    "to": "To",
+    "clear": "Clear",
+    "loadMore": "Load more",
+    "loadError": "Failed to load audit logs",
+    "totalCount": "{{count}} shown"
   },
   "logs": {
     "title": "Log Center",

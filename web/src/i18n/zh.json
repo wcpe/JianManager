@@ -756,7 +756,16 @@
     "action": "操作",
     "target": "目标",
     "ip": "IP",
-    "empty": "暂无审计日志"
+    "empty": "暂无审计日志",
+    "allUsers": "全部用户",
+    "actionPlaceholder": "操作…",
+    "targetTypePlaceholder": "目标类型…",
+    "from": "起始时间",
+    "to": "结束时间",
+    "clear": "清空",
+    "loadMore": "加载更多",
+    "loadError": "加载审计日志失败",
+    "totalCount": "已加载 {{count}} 条"
   },
   "logs": {
     "title": "日志中心",
