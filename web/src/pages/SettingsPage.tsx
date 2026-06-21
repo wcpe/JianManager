@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { toast } from 'sonner'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
@@ -26,7 +27,7 @@ const ROLE_PLATFORM_ADMIN = 10
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const
 
 /** 取配置项的本地化标签，缺省回退键名本身。 */
-function settingLabel(t: (k: string, d?: string) => string, key: string): string {
+function settingLabel(t: TFunction, key: string): string {
   return t(`settings.keys.${key}`, key)
 }
 
@@ -104,16 +105,8 @@ function PlatformConfigCard() {
   const { data, isLoading, isError } = useSettings()
   const update = useUpdateSettings()
 
-  // 可编辑项的本地草稿，初值取后端当前生效值。
+  // 可编辑项的本地草稿：仅存用户改动；展示值回退到后端当前生效值（draft[key] ?? it.value）。
   const [draft, setDraft] = useState<Record<string, string>>({})
-
-  useEffect(() => {
-    if (data?.editable) {
-      const next: Record<string, string> = {}
-      for (const it of data.editable) next[it.key] = it.value
-      setDraft(next)
-    }
-  }, [data])
 
   const editable = data?.editable ?? []
   const readOnly = data?.readOnly ?? []
