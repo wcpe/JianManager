@@ -3,7 +3,6 @@ import {
   CartesianGrid,
   Line,
   LineChart,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -68,11 +67,11 @@ export function TimeSeriesChart({
     return { data: rows, spanMs: span }
   }, [series])
 
-  // 仅当容器具备非 0 宽度时才挂载 ResponsiveContainer：在隐藏/未激活分段或折叠面板
-  // （0 尺寸容器）内渲染时，recharts 会以 width(-1)/height(-1) 告警（BUG-007）。
-  // 用 callback ref 在容器挂载时建 ResizeObserver；容器获得尺寸（切回分段/展开面板）后
-  // 再次触发，自动恢复，不留持续空白。容器跨「无数据/有图」分支重挂载也能正确重接。
-  const [hasWidth, setHasWidth] = useState(false)
+  // 自测容器宽度并把实测宽度直接喂给 LineChart，不用 ResponsiveContainer：后者在隐藏/
+  // 未激活分段或折叠面板（0 尺寸容器）内、以及自身首帧测量完成前都会以 width(-1)/
+  // height(-1) 告警（BUG-007）。用 callback ref 建 ResizeObserver 实时测宽，宽度为 0 时
+  // 不渲染图（切回分段/展开面板后自动恢复），>0 时以确切像素宽渲染，彻底无 -1 告警。
+  const [width, setWidth] = useState(0)
   const observerRef = useRef<ResizeObserver | null>(null)
   const containerRef = useCallback((el: HTMLDivElement | null) => {
     observerRef.current?.disconnect()
@@ -81,7 +80,7 @@ export function TimeSeriesChart({
       return
     }
     const observer = new ResizeObserver((entries) => {
-      setHasWidth((entries[0]?.contentRect.width ?? 0) > 0)
+      setWidth(Math.floor(entries[0]?.contentRect.width ?? 0))
     })
     observer.observe(el)
     observerRef.current = observer
@@ -104,9 +103,8 @@ export function TimeSeriesChart({
 
   return (
     <div ref={containerRef} style={{ height, width: '100%' }}>
-      {hasWidth && (
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 6, right: 12, bottom: 0, left: 4 }}>
+      {width > 0 && (
+        <LineChart width={width} height={height} data={data} margin={{ top: 6, right: 12, bottom: 0, left: 4 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
           <XAxis
             dataKey="ts"
@@ -149,7 +147,6 @@ export function TimeSeriesChart({
             />
           ))}
         </LineChart>
-      </ResponsiveContainer>
       )}
     </div>
   )

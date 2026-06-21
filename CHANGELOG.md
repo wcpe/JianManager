@@ -13,7 +13,7 @@
 - **平台设置：全量配置可视化与运行时调整**（FR-063 / ADR-015）：在 YAML+env 基线之上新增一层平台配置 DB 覆盖层（`platform_settings` 键值表），生效优先级 **DB 覆盖 > 环境变量 > YAML 默认**。新增 `GET /settings`（返回可编辑项 + 只读项当前生效值，敏感项 jwt secret / db dsn 脱敏不下发明文）与 `PUT /settings`（仅平台管理员，仅白名单键可改：日志级别 / JDK 下载镜像源 Temurin·Corretto·Zulu / 优雅停止超时 / 默认备份保留天数；非白名单键或非法值整体拒绝 422 且不落库）。日志级别经 slog `LevelVar` 接到 Control Plane 内真实读取点，落库即时生效、无需重启，重启后已落库覆盖自动重放；JDK 镜像源与优雅停止超时的实际消费点在 Worker（env），CP 负责存储 + API + 展示。前端系统设置页保留外观/语言分组，新增「平台配置」分组：可编辑项表单（按改动批量保存）+ 只读项展示（标注「需改配置并重启」、敏感项标注「已脱敏」），i18n zh/en 对齐。
 
 ### 修复
-- **监控图表在 0 尺寸容器渲染告警**（BUG-007）：`TimeSeriesChart` 在隐藏/未激活分段或折叠面板（0 尺寸容器）内渲染时，recharts `ResponsiveContainer` 反复报 `width(-1)/height(-1) ... should be greater than 0`（×9）。改为用 callback ref + `ResizeObserver` 守卫——容器宽度为 0 时不挂载 `ResponsiveContainer`，待容器获得尺寸（切回分段/展开面板）后自动恢复，不留持续空白；不影响总览/节点/实例监控既有图表。
+- **监控图表在 0 尺寸容器渲染告警**（BUG-007）：`TimeSeriesChart` 在隐藏/未激活分段或折叠面板（0 尺寸容器）内、以及 `ResponsiveContainer` 自身首帧测量完成前，recharts 反复报 `width(-1)/height(-1) ... should be greater than 0`（×9）。改为 callback ref + `ResizeObserver` 实测容器宽度，直接以确切像素宽渲染 `LineChart`（弃用 `ResponsiveContainer`）；宽度为 0 时不渲染、获得尺寸后自动恢复，彻底消除 -1 告警，不影响总览/节点/实例监控既有图表。
 - **加载期一条无谓的 401 请求**（BUG-008）：登录态下页面加载时，首个携带「已过期但可刷新」access token 的请求会先打出一条 401（再由拦截器刷新重试），该网络错误被浏览器记入控制台。改为请求拦截器在发请求前主动判过期并刷新（`isTokenExpired` + 共享 refresh 闸去重，与既有响应 401 兜底复用同一刷新路径）；绕过 axios 的 SSE 事件流连接前经 `ensureFreshToken` 同样预刷新。正常登录态控制台不再出现加载期 401。
 
 ## 0.5.0（2026-06-21）
