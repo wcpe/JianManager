@@ -162,15 +162,16 @@ internal/worker/
 Protobuf 定义位于 `proto/worker.proto`，包含：
 
 - 生命周期：Register, Heartbeat (双向 stream)
+  - `Heartbeat` 负载除节点指标（CPU/内存/磁盘/累计网络字节）外携带 `instance_metrics`（每实例 ServerProbe 快照：TPS/MSPT/在线/堆/线程/CPU/uptime + 分世界负载，FR-060）；CP 收心跳经 `IngestHeartbeat` 落库为时序样本并据相邻累计字节算网络速率（Worker 不碰 DB）
 - 实例操作：CreateInstance, StartInstance, StopInstance, RestartInstance, KillInstance, SendCommand, GetInstanceStatus, ListInstances
-  - `CreateInstance` 除 `start_command` 外携带 `stop_command`（优雅停止命令，CP 按实例角色派生：backend/universal=`stop`，proxy=`end`），由 daemon wrapper 在优雅停止时写入进程 stdin
+  - `CreateInstance` 除 `start_command` 外携带 `stop_command`（优雅停止命令，CP 按实例角色派生：backend/universal=`stop`，proxy=`end`），由 daemon wrapper 在优雅停止时写入进程 stdin；并携带 `probe_port`（CP 分配的 ServerProbe 端口，daemon 模式透传到 wrapper→PID 记录，供 Worker 心跳自采与重启恢复，FR-060）
 - 实例事件流：StreamInstanceEvents (server stream)
   - 同一流承载两类事件：`state_change`（状态转换）与 `stdout`/`stderr`（进程输出）。Worker 进程输出回调分流为「WS 终端广播 + 事件流上报」两路，互不阻塞。CP 侧 EventService 把 `stdout`/`stderr` 经 LogService 落库（日志中心 FR-049），`state_change` 经 SSE 推前端
 - 文件操作：ListFiles, ReadFile, WriteFile, DeleteFile, UploadFile (client stream), DownloadFile (server stream)
 - 终端：IssueTerminalToken
 - Bot：CreateBot, DeleteBot, ListBots, StreamBotEvents (server stream), SendBotCommand
 - 探针部署：DeployServerProbe（CP 内嵌 ServerProbe jar + 生成的 config.yml 经 gRPC 下发到实例 plugins 目录，FR-010；见 ADR-014）
-- 指标：GetNodeMetrics, GetInstanceMetrics（请求带 probe_port/rcon_port/rcon_password，Worker 优先抓 ServerProbe `/metrics`，回退 RCON+RSS）
+- 指标：GetNodeMetrics, GetInstanceMetrics（请求带 probe_port/rcon_port/rcon_password，Worker 优先抓 ServerProbe `/metrics`，回退 RCON+RSS）——用于**实时**面板的 CP 主动拉取；**历史时序**（FR-060）改由 Worker 心跳推送 `instance_metrics`，二者互补
 - 玩家管理：ExecRconCommand（经实例 RCON 执行命令并回传输出，FR-054；RCON 端口/密码由 CP 随请求下发，Worker 不访问 DB；`available=false` 优雅降级）
 - 配置 (V2)：ListConfigFiles, ReadConfig, WriteConfig, ListConfigVersions, RollbackConfig
 - 运行时 (V2)：ListJDKs, InstallJDK, RemoveJDK, DownloadCore
@@ -219,6 +220,8 @@ GetInstanceMetrics(req) → Worker → HTTP GET http://127.0.0.1:<probe_port>/me
                                   ↓ 探针未就绪/抓取失败
                                   RCON 查询（TPS/在线）+ 进程 RSS（内存）兜底
 ```
+
+同一抓取链路有两个驱动方：**实时面板**由 CP 按需 `GetInstanceMetrics` 拉取；**历史时序**（FR-060）由 Worker 心跳 tick 自抓本机各 RUNNING 实例 `/metrics`，装入 `Heartbeat.instance_metrics` 上报，CP 分级降采样落库。probe 端口经 `CreateInstance.probe_port` 下发并持久化到 daemon PID 记录，Worker 重启可恢复自采。
 
 被抓取的关键指标（解析后透传给 CP/前端）：
 
@@ -305,7 +308,7 @@ AlertRule ──1:N──▶ AlertEvent
 | group_members | group_id, user_id, role(0=member/1=admin) |
 | group_quotas | group_id(UNIQUE), max_instances, max_bots, max_storage_mb |
 | nodes | uuid, name, host, grpc_port, ws_port, secret, status(0/1/2), maintenance(bool, cordon 维护模式，与在线/离线正交), os, arch, cpu_cores, memory_mb, disk_total_mb, last_heartbeat |
-| instances | uuid, node_id(FK), name, type, role(proxy/backend/universal, V2), process_type, status, start_command, work_dir(系统分配), env_vars(JSON), auto_start, auto_restart, jdk_id(FK, V2), launch_spec(JSON: jvm_args/core_jar/args/omit_nogui, V2), docker_*, rcon_*, forwarding_secret(V2, Velocity 转发), proxy_online_mode(V2, 代理正版校验), server_port/query_port, mc_*, tags(JSON) |
+| instances | uuid, node_id(FK), name, type, role(proxy/backend/universal, V2), process_type, status, start_command, work_dir(系统分配), env_vars(JSON), auto_start, auto_restart, jdk_id(FK, V2), launch_spec(JSON: jvm_args/core_jar/args/omit_nogui, V2), docker_*, rcon_*, forwarding_secret(V2, Velocity 转发), proxy_online_mode(V2, 代理正版校验), server_port/query_port, probe_port(V2, ServerProbe /metrics 端口, 29940 段), mc_*, tags(JSON) |
 | group_instances | group_id, instance_id(UNIQUE) |
 | bots | uuid, instance_id(FK), name, status, config(JSON), behavior, worker_id |
 | backups | uuid, instance_id(FK), name, file_path, file_size_mb, type(0/1), mode(0 全量/1 增量, V2), status(0/1/2/3), parent_id(FK self, 备份链, V2), manifest(JSON 文件清单, V2), storage_id(FK, V2), storage_key(远程对象键, V2) |
@@ -314,6 +317,10 @@ AlertRule ──1:N──▶ AlertEvent
 | schedule_execution_logs | schedule_id(FK), action, status, error, started_at, finished_at |
 | alert_rules | uuid, name, target_type, target_id, metric, operator, threshold, duration_sec, notify_type, notify_target, enabled |
 | alert_events | rule_id, target_id, value, message, resolved, fired_at |
+| metric_series (V2) | node_uuid, instance_id, scope(node/instance/world), metric_key, world, unit, last_seen_at; UNIQUE(node_uuid,instance_id,scope,metric_key,world)（时序序列维度，FR-060/ADR-013） |
+| metric_sample_raw (V2) | series_id(FK), ts, value(NULL=缺测)；留 ~48h |
+| metric_rollup_5m (V2) | series_id(FK), bucket_ts, avg/min/max/last/count；留 ~30d |
+| metric_rollup_1h (V2) | series_id(FK), bucket_ts, avg/min/max/last/count；留 ≥1y |
 | templates | uuid, name, type, description, start_command, default_work_dir, download_url, config_files(JSON) |
 | audit_logs | user_id, action, target_type, target_id, detail(JSON), ip |
 | networks (V2) | uuid, name, description（非独占软标签） |

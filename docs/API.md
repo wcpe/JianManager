@@ -338,6 +338,50 @@
   ```
   `probeAvailable=false` 时富指标为零值，调用方仅展示 tps/onlinePlayers/memoryMb 与提示「未安装 ServerProbe 探针」。
 
+### GET /api/v1/metrics/series
+- **描述**: 节点/实例历史曲线。Worker 心跳上报节点指标 + 每实例 ServerProbe 快照，CP 分级降采样持久化（raw 48h / 5m 30d / 1h ≥1y，ADR-013），按区间自动选档返回
+- **关联 FR**: FR-060 ｜ **关联 ADR**: ADR-013, ADR-014
+- **权限**: 登录；`scope=node` 对认证用户开放，`scope=instance` 按 `instance.read` 收敛（越权 403）
+- **Query**: `scope`(node\|instance) 必填；`targetId` 必填（node_uuid 或 instance_uuid）；`metrics` 可选（逗号分隔指标键；`scope=instance` 含 `world_*` 时按 world 维度返回多序列）；`range`(1h\|6h\|24h\|7d\|30d\|90d) 或 `from`/`to`(RFC3339)；`resolution`(auto\|raw\|5m\|1h，默认 auto)
+- **响应**:
+  ```json
+  {
+    "resolution": "5m",
+    "from": "2026-06-20T00:00:00Z",
+    "to": "2026-06-21T00:00:00Z",
+    "series": [
+      { "metricKey": "inst_tps", "unit": "tps", "world": "",
+        "points": [ { "ts": "2026-06-20T00:05:00Z", "avg": 19.8, "min": 14.2, "max": 20.0 } ] },
+      { "metricKey": "world_entities", "unit": "count", "world": "world_nether",
+        "points": [ { "ts": "2026-06-20T00:05:00Z", "avg": 312, "min": 300, "max": 333 } ] }
+    ]
+  }
+  ```
+  raw 档 `points` 的 `avg/min/max` 同为样本值，缺测（探针不可用）`avg:null` 渲染为断点。
+- **错误**: 400 `INVALID_SCOPE`/`INVALID_RANGE`/`INVALID_RESOLUTION`；403 `FORBIDDEN`；404 `TARGET_NOT_FOUND`
+
+### GET /api/v1/metrics/overview
+- **描述**: 总览页跨节点聚合：当前总量 + 聚合历史曲线（总 CPU 均值 / 总内存合计 / 总在线玩家合计）
+- **关联 FR**: FR-060
+- **权限**: 登录（仅聚合总量与曲线，不暴露单实例明细）
+- **Query**: `range` 或 `from`/`to`（默认 24h）；`resolution`(auto\|raw\|5m\|1h)
+- **响应**:
+  ```json
+  {
+    "totals": { "nodeCount": 3, "onlineNodeCount": 2, "runningInstances": 5,
+                "cpuPct": 47.5, "memUsedBytes": 3221225472, "memTotalBytes": 8589934592,
+                "onlinePlayers": 12 },
+    "resolution": "5m",
+    "trends": [
+      { "metricKey": "node_cpu_pct", "unit": "pct", "points": [ { "ts": "...", "avg": 47.5 } ] },
+      { "metricKey": "node_mem_used", "unit": "bytes", "points": [ { "ts": "...", "avg": 3.2e9 } ] },
+      { "metricKey": "inst_players_online", "unit": "count", "points": [ { "ts": "...", "avg": 12 } ] }
+    ]
+  }
+  ```
+  `totals` 取 Node/Instance 表当前值 + 各实例最近 2min 在线人数合计。
+- **错误**: 400 `INVALID_RANGE`/`INVALID_RESOLUTION`；403 `FORBIDDEN`
+
 ### GET /api/v1/players
 - **描述**: 在线玩家列表，聚合可见后端子服（role=backend 且运行中）的 RCON `list` 输出，每个玩家标注所在子服（BC 跨服感知）；按可访问实例集合收敛
 - **权限**: `instance.read`

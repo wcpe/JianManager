@@ -1,6 +1,6 @@
 # API Spec — FR-060 时序监控与历史曲线
 
-> 关联 FR: FR-060 | 优先级: P1 | 状态: 📋 todo | 关联 ADR: ADR-013（分级降采样存储）；ADR-014（ServerProbe 为实例指标源）
+> 关联 FR: FR-060 | 优先级: P1 | 状态: 🔨 in-progress（后端完成，前端待 FR-061） | 关联 ADR: ADR-013（分级降采样存储）；ADR-014（ServerProbe 为实例指标源）
 
 ## 概述
 
@@ -51,11 +51,8 @@
 
 ## gRPC 变更（`proto/worker.proto`）
 
-`HeartbeatRequest` 追加（向后兼容）：
+`HeartbeatRequest` 追加（向后兼容；分世界复用既有 `WorldMetric`）：
 ```proto
-message WorldSample {
-  string world = 1; int64 loaded_chunks = 2; int64 entities = 3; int64 tile_entities = 4;
-}
 message InstanceMetricSample {
   string instance_uuid = 1;
   bool probe_available = 2;            // false = 回退 RCON / 缺测
@@ -63,11 +60,12 @@ message InstanceMetricSample {
   int64 heap_used_bytes = 6; int64 heap_max_bytes = 7; int32 threads = 8;
   double cpu_load = 9;                 // 0~1 系统 CPU；<0 不可用
   double uptime_seconds = 10;
-  repeated WorldSample worlds = 11;
+  repeated WorldMetric worlds = 11;    // 复用 GetInstanceMetrics 既有 WorldMetric
 }
-// HeartbeatRequest += repeated InstanceMetricSample instance_metrics = 10;
+// HeartbeatRequest  += repeated InstanceMetricSample instance_metrics = 10;
+// CreateInstanceRequest += int32 probe_port = 12;  // CP 分配后下发，Worker 持久化到 PID 记录
 ```
-Worker 心跳 tick 对每个 RUNNING 实例 `ScrapeServerProbe(localhost, ProbePort, token)`（探针不可用回退 RCON），装入 `instance_metrics`。CP 收心跳 → upsert series → 写 raw（缺字段写 NULL）。
+Worker 心跳 tick 对每个 RUNNING 且 `ProbePort>0` 的实例 `ScrapeServerProbe(localhost, ProbePort)`，装入 `instance_metrics`（探针不可用 `probe_available=false`）。ProbePort 经 `CreateInstanceRequest.probe_port` 喂给 Worker，daemon 模式透传到 wrapper→PID 记录，Worker 重启经 `RecoverDaemonInstances` 恢复。CP 收心跳经 `IngestHeartbeat` → upsert series → 写 raw（缺测/探针不可用写 NULL；网络速率据相邻累计字节差算）。
 
 ## REST API
 
@@ -88,9 +86,22 @@ Worker 心跳 tick 对每个 RUNNING 实例 `ScrapeServerProbe(localhost, ProbeP
 - **错误**: 400 `INVALID_SCOPE`/`INVALID_RANGE`/`INVALID_RESOLUTION`；403 `FORBIDDEN`；404 `TARGET_NOT_FOUND`。
 
 ### GET /api/v1/metrics/overview
-- **权限**: 登录（按可见范围聚合）。
-- **Query**: `range` 可选（默认 24h，用于趋势）。
-- **响应 200**: `{ nodesOnline, nodesTotal, instancesRunning, instancesTotal, playersOnline, cpuPct, memUsed, memTotal, alertsActive, trend:{ cpuPct:[{ts,avg}], playersOnline:[{ts,avg}] } }`。
+- **权限**: 登录（聚合总量与曲线，不暴露单实例明细；与 node 维度指标一致）。
+- **Query**: `range`(1h|6h|24h|7d|30d|90d) 或 `from`/`to`（默认 24h）；`resolution`(auto|raw|5m|1h)。
+- **响应 200**（实际实现形状）:
+```json
+{ "totals": { "nodeCount": 3, "onlineNodeCount": 2, "runningInstances": 5,
+              "cpuPct": 47.5, "memUsedBytes": 3221225472, "memTotalBytes": 8589934592,
+              "onlinePlayers": 12 },
+  "resolution": "5m",
+  "trends": [
+    { "metricKey": "node_cpu_pct", "unit": "pct", "points": [ { "ts": "...", "avg": 47.5 } ] },
+    { "metricKey": "node_mem_used", "unit": "bytes", "points": [ { "ts": "...", "avg": 3.2e9 } ] },
+    { "metricKey": "inst_players_online", "unit": "count", "points": [ { "ts": "...", "avg": 12 } ] }
+  ] }
+```
+- `totals` 取 Node/Instance 表当前值 + 各实例最近 2min 在线人数合计；`trends` 跨序列按档位桶对齐后聚合（CPU 取均值、内存/玩家取合计）。`alertsActive` 不纳入（属 FR-011 告警域）。
+- **错误**: 400 `INVALID_RANGE`/`INVALID_RESOLUTION`；403 `FORBIDDEN`。
 
 ## 错误码汇总
 | HTTP | error | 场景 |
