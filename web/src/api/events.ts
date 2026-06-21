@@ -11,8 +11,7 @@ export function useInstanceEvents() {
   const qc = useQueryClient()
 
   useEffect(() => {
-    const token = useAuthStore.getState().accessToken
-    if (!token) return
+    if (!useAuthStore.getState().accessToken) return
 
     const base = api.defaults.baseURL || ''
     const url = `${base}/instances/events`
@@ -22,6 +21,9 @@ export function useInstanceEvents() {
 
     async function connect() {
       try {
+        // 该原生 fetch 绕过 axios 拦截器，连接前自行确保 token 未过期，避免加载期无谓 401（BUG-008）。
+        const token = await ensureFreshToken()
+        if (!token || controller.signal.aborted) return
         const resp = await fetch(url, {
           headers: { Authorization: `Bearer ${token}` },
           signal: controller.signal,
@@ -77,5 +79,5 @@ export function useInstanceEvents() {
   }, [qc])
 }
 
-// 需要从 client 导入 api 以获取 baseURL
-import api from '@/api/client'
+// 需要从 client 导入 api 以获取 baseURL，并复用 ensureFreshToken 做连接前 token 刷新
+import api, { ensureFreshToken } from '@/api/client'

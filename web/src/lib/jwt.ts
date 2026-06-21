@@ -14,6 +14,8 @@ export interface JwtClaims {
   username?: string
   /** 角色等级：0=组成员 1=组管理员 10=平台管理员（与后端 model.UserRole 对齐）。 */
   role?: number
+  /** 过期时间（Unix 秒，标准 JWT 声明）。用于前端在请求前判定 access token 是否已过期。 */
+  exp?: number
 }
 
 /** base64url 解码为 UTF-8 字符串，兼容浏览器 atob。 */
@@ -36,4 +38,15 @@ export function decodeJwt(token: string | null | undefined): JwtClaims | null {
   } catch {
     return null
   }
+}
+
+/**
+ * 判断 access token 是否已过期（或在 skewSeconds 容差内即将过期）。
+ * 用于请求拦截器在发请求前主动刷新过期 token，避免加载期一条无谓的 401（BUG-008）。
+ * token 缺失或无 exp 声明时返回 false——交由后端鉴权与既有 401 拦截器兜底处理。
+ */
+export function isTokenExpired(token: string | null | undefined, skewSeconds = 5): boolean {
+  const claims = decodeJwt(token)
+  if (!claims?.exp) return false
+  return Date.now() >= (claims.exp - skewSeconds) * 1000
 }

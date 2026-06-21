@@ -6,7 +6,9 @@
 
 ## [Unreleased]
 
-## 0.5.0（2026-06-21）
+### 修复
+- **监控图表在 0 尺寸容器渲染告警**（BUG-007）：`TimeSeriesChart` 在隐藏/未激活分段或折叠面板（0 尺寸容器）内渲染时，recharts `ResponsiveContainer` 反复报 `width(-1)/height(-1) ... should be greater than 0`（×9）。改为用 callback ref + `ResizeObserver` 守卫——容器宽度为 0 时不挂载 `ResponsiveContainer`，待容器获得尺寸（切回分段/展开面板）后自动恢复，不留持续空白；不影响总览/节点/实例监控既有图表。
+- **加载期一条无谓的 401 请求**（BUG-008）：登录态下页面加载时，首个携带「已过期但可刷新」access token 的请求会先打出一条 401（再由拦截器刷新重试），该网络错误被浏览器记入控制台。改为请求拦截器在发请求前主动判过期并刷新（`isTokenExpired` + 共享 refresh 闸去重，与既有响应 401 兜底复用同一刷新路径）；绕过 axios 的 SSE 事件流连接前经 `ensureFreshToken` 同样预刷新。正常登录态控制台不再出现加载期 401。
 
 ### 新增
 - **时序监控与历史曲线**（FR-060）：在 ServerProbe 富实时指标之上沉淀历史时序。Worker 30s 心跳附带节点指标（含 load average）+ 每实例 ServerProbe 快照（TPS/MSPT/堆 used·max/线程/CPU/uptime + 分世界 区块/实体/方块实体），Control Plane 经 `IngestHeartbeat` 落库并分级降采样（raw ~48h / 5m ~30d / 1h ≥1y，ADR-013）。新增 `GET /metrics/series`（节点/实例历史曲线，按区间 1h~90d 自动选档 raw/5m/1h）与 `GET /metrics/overview`（跨节点聚合总量 + 趋势）；探针不可达时段曲线断点（null）不显假值；probe 端口经 `CreateInstance` 下发并持久化 daemon PID 记录，Worker 重启 `RecoverDaemonInstances` 恢复自采。真机验证：真 Paper + ServerProbe 历史曲线累积、CP 重启不丢、5m 卷积、杀 worker 重启后采集无缝续上。
