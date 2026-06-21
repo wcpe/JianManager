@@ -47,7 +47,9 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
   const lineBufRef = useRef('')
   // readOnly 用 ref：实例状态变化只切换是否允许输入，不重建/不重连——停服时保持连接看关服日志。
   const readOnlyRef = useRef(readOnly)
-  readOnlyRef.current = readOnly
+  useEffect(() => {
+    readOnlyRef.current = readOnly
+  }, [readOnly])
 
   // 命令历史（ref 供输入处理用，state 供右侧抽屉渲染）
   const historyRef = useRef<string[]>([])
@@ -190,11 +192,13 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
       if (cleanupRef.current) return
       if (retryCountRef.current < MAX_RETRIES) {
         retryCountRef.current++
+        // eslint-disable-next-line react-hooks/immutability -- 重试定时器经 ref 记录，connect 递归重连为既定模式
         retryTimerRef.current = setTimeout(() => { if (!cleanupRef.current) connect() }, BASE_RETRY_DELAY * retryCountRef.current)
       } else {
         termRef.current?.write('\r\n[连接错误]\r\n')
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- connect 递归重连，仅依赖连接参数
   }, [wsUrl, token, instanceId])
 
   useEffect(() => {

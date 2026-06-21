@@ -45,7 +45,10 @@ export default function CodeEditor({ value, filename, readOnly = false, onChange
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const onChangeRef = useRef(onChange)
-  onChangeRef.current = onChange
+  // 在 effect 中同步最新 onChange（避免渲染期写 ref）；updateListener 经 ref 取最新回调。
+  useEffect(() => {
+    onChangeRef.current = onChange
+  }, [onChange])
 
   useEffect(() => {
     if (!hostRef.current) return

@@ -70,6 +70,7 @@ export default function DangerConfirm({
 
   // 每次打开重置输入，避免上次输入残留导致直接可确认。
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 弹窗 open 变化时重置输入，属合法同步
     if (open) setTyped('')
   }, [open])
 

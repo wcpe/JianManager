@@ -51,6 +51,7 @@ export default function ConfigEditor({ instanceId }: ConfigEditorProps) {
   const diffQ = useConfigDiff(instanceId, selectedPath, diffFrom ?? undefined, diffTo ?? undefined)
 
   // 解析 schema 与当前字段值
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization -- 手动 useMemo 解析 schema，行为正确
   const schema = useMemo<ModelSchema | null>(() => {
     if (!readQ.data?.schemaJson) return null
     try {
@@ -70,6 +71,7 @@ export default function ConfigEditor({ instanceId }: ConfigEditorProps) {
   // 切换文件 / 读取完成时同步草稿；无 schema 时强制文本模式
   useEffect(() => {
     if (!readQ.data) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 读取完成后初始化可编辑草稿，属合法同步
     setDraft(readQ.data.content)
     const init: Record<string, string> = {}
     if (schema) {
@@ -83,6 +85,7 @@ export default function ConfigEditor({ instanceId }: ConfigEditorProps) {
     setDiffTo(null)
     setCrossIssues(null)
     if (!schema) setMode('text')
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅在文件切换/重读时初始化草稿，valueByKey 故意不入依赖
   }, [readQ.data?.path, readQ.data?.content, schema])
 
   const files: ConfigFileInfo[] = filesQ.data ?? []

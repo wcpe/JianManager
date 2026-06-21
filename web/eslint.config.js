@@ -19,15 +19,11 @@ export default defineConfig([
       globals: globals.browser,
     },
     rules: {
-      // shadcn/ui 组件文件以 `export { Comp, compVariants }` 列表式随组件导出 cva 变体，
-      // 仅影响 Fast Refresh 的 HMR 体验、非正确性问题，降为 warn 不阻断 CI。
-      'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
-      // React Compiler 顾问级规则（react-hooks v6 recommended 引入）：标记「可被编译器优化性」
-      // 而非缺陷，现有组件未按其重构。降为 warn 以免阻断 CI；真正重构作为独立技术债跟进。
-      'react-hooks/set-state-in-effect': 'warn',
-      'react-hooks/refs': 'warn',
-      'react-hooks/preserve-manual-memoization': 'warn',
-      'react-hooks/immutability': 'warn',
+      // react-refresh 保持 error 以拦截新组件文件的非组件导出；
+      // shadcn(badge/button/tabs) 与 RangePicker 随组件导出变体/常量，已在各文件顶部按需豁免。
+      // React Compiler 顾问规则（set-state-in-effect/refs/immutability/preserve-manual-memoization）
+      // 沿用 react-hooks recommended 的 error 级；既有合法模式已逐处 eslint-disable 并注明理由。
+      'react-refresh/only-export-components': 'error',
     },
   },
 ])

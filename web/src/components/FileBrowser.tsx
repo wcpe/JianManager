@@ -58,6 +58,7 @@ export default function FileBrowser({ instanceId }: FileBrowserProps) {
   }, [instanceId, t])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 挂载即拉取文件列表（手动 fetch），属合法同步
     loadFiles('')
   }, [loadFiles])
 

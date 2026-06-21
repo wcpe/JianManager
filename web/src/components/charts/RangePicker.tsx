@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- 与组件同文件导出 MetricRange 类型/常量，仅影响 Fast Refresh */
 import { cn } from '@/lib/utils'
 
 /** 时序查询区间（FR-060/FR-061），与后端 /metrics range 枚举一致。 */
