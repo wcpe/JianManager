@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
-/** 工作区分段：实例的统一视图分段——终端 / 文件 / 配置 / 插件 / Bot（FR-039 合并原实例详情页，FR-052 插件）。 */
-export type WorkspaceSegment = 'terminal' | 'files' | 'config' | 'plugins' | 'bot'
+/** 工作区分段：实例的统一视图分段——终端 / 文件 / 配置 / 插件 / 监控 / Bot（FR-039、FR-052 插件、FR-060 监控）。 */
+export type WorkspaceSegment = 'terminal' | 'files' | 'config' | 'plugins' | 'metrics' | 'bot'
 
 /**
  * 运维控制台的客户端 UI 状态（ADR-009 / FR-037 / FR-039）。
@@ -15,17 +15,22 @@ interface ConsoleState {
   openInstanceId: number | null
   /** 每个已打开实例的工作区分段（终端/Bot），按实例 id 记忆，缺省为终端 */
   workspaceSegmentByInstance: Record<number, WorkspaceSegment>
+  /** 多级侧栏中被折叠的分组 key 集合（FR-061）；默认展开，记录已折叠者。 */
+  collapsedGroups: Record<string, boolean>
   setSelectedNodeId: (nodeId: number | null) => void
   openInstance: (instanceId: number) => void
   closeInstance: () => void
   /** 设置某实例的工作区分段（终端/Bot），持久化于本会话内 */
   setWorkspaceSegment: (instanceId: number, segment: WorkspaceSegment) => void
+  /** 切换侧栏分组展开/折叠（FR-061）。 */
+  toggleGroup: (key: string) => void
 }
 
 export const useConsoleStore = create<ConsoleState>((set) => ({
   selectedNodeId: null,
   openInstanceId: null,
   workspaceSegmentByInstance: {},
+  collapsedGroups: {},
   setSelectedNodeId: (nodeId) => set({ selectedNodeId: nodeId }),
   openInstance: (instanceId) => set({ openInstanceId: instanceId }),
   closeInstance: () => set({ openInstanceId: null }),
@@ -33,4 +38,6 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
     set((s) => ({
       workspaceSegmentByInstance: { ...s.workspaceSegmentByInstance, [instanceId]: segment },
     })),
+  toggleGroup: (key) =>
+    set((s) => ({ collapsedGroups: { ...s.collapsedGroups, [key]: !s.collapsedGroups[key] } })),
 }))

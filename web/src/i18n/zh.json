@@ -244,7 +244,11 @@
     "templates": "模板",
     "settings": "设置",
     "alerts": "告警",
-    "logs": "日志"
+    "logs": "日志",
+    "allInstances": "全部实例",
+    "monitor": "监控",
+    "backup": "备份",
+    "systemSettings": "系统设置"
   },
   "console": {
     "title": "运维控制台",
@@ -285,7 +289,27 @@
     "instances": "实例",
     "noData": "暂无数据",
     "noNodes": "暂无节点",
-    "noInstances": "暂无实例"
+    "noInstances": "暂无实例",
+    "online": "在线",
+    "totalCpu": "总 CPU",
+    "totalMem": "总内存",
+    "runningInstances": "运行实例",
+    "onlinePlayers": "在线玩家",
+    "cpuTrend": "CPU 趋势",
+    "memTrend": "内存趋势",
+    "playersTrend": "在线玩家趋势",
+    "instanceList": "实例列表"
+  },
+  "metrics": {
+    "tab": "监控",
+    "title": "历史指标",
+    "tps": "TPS",
+    "mspt": "MSPT",
+    "heap": "堆内存",
+    "players": "在线玩家",
+    "threads": "线程",
+    "cpu": "CPU",
+    "worldChunks": "分世界加载区块"
   },
   "nodes": {
     "title": "节点管理",

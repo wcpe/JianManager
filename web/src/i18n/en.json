@@ -244,7 +244,11 @@
     "templates": "Templates",
     "settings": "Settings",
     "alerts": "Alerts",
-    "logs": "Logs"
+    "logs": "Logs",
+    "allInstances": "All Instances",
+    "monitor": "Monitoring",
+    "backup": "Backup",
+    "systemSettings": "System Settings"
   },
   "console": {
     "title": "Ops Console",
@@ -298,7 +302,27 @@
     "instances": "Instances",
     "noData": "No data",
     "noNodes": "No nodes",
-    "noInstances": "No instances"
+    "noInstances": "No instances",
+    "online": "Online",
+    "totalCpu": "Total CPU",
+    "totalMem": "Total Memory",
+    "runningInstances": "Running",
+    "onlinePlayers": "Online Players",
+    "cpuTrend": "CPU Trend",
+    "memTrend": "Memory Trend",
+    "playersTrend": "Players Trend",
+    "instanceList": "Instances"
+  },
+  "metrics": {
+    "tab": "Monitor",
+    "title": "History Metrics",
+    "tps": "TPS",
+    "mspt": "MSPT",
+    "heap": "Heap",
+    "players": "Players",
+    "threads": "Threads",
+    "cpu": "CPU",
+    "worldChunks": "Loaded Chunks by World"
   },
   "nodes": {
     "title": "Node Management",

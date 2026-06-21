@@ -1,42 +1,209 @@
-import FeatureNav from './FeatureNav'
+import { useTranslation } from 'react-i18next'
+import { useLocation } from 'react-router'
+import {
+  Activity,
+  Archive,
+  Bell,
+  Bot,
+  Box,
+  Boxes,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  Database,
+  FileClock,
+  Gamepad2,
+  LayoutDashboard,
+  LayoutTemplate,
+  Network,
+  ScrollText,
+  Server,
+  Settings,
+  Settings2,
+  User,
+  UsersRound,
+  type LucideIcon,
+} from 'lucide-react'
+
+import { useAuthStore } from '@/stores/auth'
+import { useThemeStore } from '@/stores/theme'
+import { useConsoleStore } from '@/stores/console'
+import { changeLanguage } from '@/i18n'
+import { cn } from '@/lib/utils'
+import SidebarNavLink, { type NavEntry } from './SidebarNavLink'
 import NodeSwitcher from './NodeSwitcher'
 import InstanceTree from './InstanceTree'
-import PlatformNav from './PlatformNav'
+
+/** 一个导航组：leaf=单链接；children=可展开子项；instances 标记内嵌实例树/节点切换。 */
+interface NavGroup {
+  key: string
+  labelKey: string
+  icon: LucideIcon
+  to?: string
+  children?: NavEntry[]
+  instances?: boolean
+}
 
 /**
- * 运维控制台左侧栏（ADR-009 / FR-037）：上 = 功能导航；中 = 节点切换 + 常驻实例树；下 = 系统平台导航。
- *
- * 高度分配策略：整列为定高 flex column；中部实例树是主区域（flex-1 占据剩余高度并独立滚动），
- * 上部功能导航限高且可滚动、可收缩，下部系统平台导航固定。
- * 关键：每个 flex 后代都带 min-h-0，使可滚动子项能真正收缩并由自身 overflow-y-auto 裁剪滚动，
- * 短屏（如 1366×700 / 1280×640）下不会溢出压到下部导航。
+ * 多级侧栏信息架构（FR-061，整合原 FeatureNav/PlatformNav 三段为分组可展开侧栏）。
+ * 能力不丢：实例树/节点切换并入「实例」组，用户/组/审计/设置并入「设置」组。
+ */
+const NAV_GROUPS: NavGroup[] = [
+  { key: 'overview', labelKey: 'nav.dashboard', icon: LayoutDashboard, to: '/' },
+  { key: 'nodes', labelKey: 'nav.nodes', icon: Server, to: '/nodes' },
+  {
+    key: 'instances',
+    labelKey: 'nav.instances',
+    icon: Boxes,
+    instances: true,
+    children: [
+      { to: '/instances', labelKey: 'nav.allInstances', icon: Box },
+      { to: '/networks', labelKey: 'nav.networks', icon: Network },
+    ],
+  },
+  {
+    key: 'monitor',
+    labelKey: 'nav.monitor',
+    icon: Activity,
+    children: [
+      { to: '/alerts', labelKey: 'nav.alerts', icon: Bell },
+      { to: '/logs', labelKey: 'nav.logs', icon: ScrollText },
+    ],
+  },
+  { key: 'players', labelKey: 'nav.players', icon: Gamepad2, to: '/players' },
+  { key: 'bots', labelKey: 'nav.bots', icon: Bot, to: '/bots' },
+  { key: 'schedules', labelKey: 'nav.schedules', icon: Clock, to: '/schedules' },
+  {
+    key: 'backup',
+    labelKey: 'nav.backup',
+    icon: Archive,
+    children: [
+      { to: '/backups', labelKey: 'nav.backups', icon: Archive },
+      { to: '/backup-storages', labelKey: 'nav.backupStorages', icon: Database },
+    ],
+  },
+  { key: 'templates', labelKey: 'nav.templates', icon: LayoutTemplate, to: '/templates' },
+  {
+    key: 'settings',
+    labelKey: 'nav.settings',
+    icon: Settings,
+    children: [
+      { to: '/users', labelKey: 'nav.users', icon: User },
+      { to: '/groups', labelKey: 'nav.groups', icon: UsersRound },
+      { to: '/audit', labelKey: 'nav.audit', icon: FileClock },
+      { to: '/settings', labelKey: 'nav.systemSettings', icon: Settings2 },
+    ],
+  },
+]
+
+/**
+ * 运维控制台左侧栏（ADR-009 / FR-037 / FR-061）：常驻多级侧栏。
+ * 定高 flex column；分组导航区占据剩余高度并整体滚动，「实例」组展开时内嵌节点切换 + 实例树；
+ * 底部主题/语言/退出/版本固定可见。
  */
 export default function ConsoleSidebar() {
   return (
-    <aside className="flex h-full min-h-0 w-60 flex-col border-r">
-      <div className="shrink-0 border-b p-4">
-        <h2 className="text-lg font-bold">JianManager</h2>
+    <aside className="flex h-full min-h-0 w-60 flex-col border-r bg-card/40">
+      <div className="flex shrink-0 items-center gap-2 border-b px-4 py-3">
+        <span className="grid size-6 place-items-center rounded bg-primary text-primary-foreground">
+          <Boxes className="size-4" />
+        </span>
+        <h2 className="text-base font-bold tracking-tight">JianManager</h2>
       </div>
 
-      {/* 上：功能导航（视口相对限高 + 可滚动，短屏下优先让位给实例树） */}
-      <div className="max-h-[30vh] min-h-0 shrink overflow-y-auto">
-        <FeatureNav />
-      </div>
+      <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
+        {NAV_GROUPS.map((g) => (g.to ? <LeafGroup key={g.key} group={g} /> : <ExpandableGroup key={g.key} group={g} />))}
+      </nav>
 
-      {/* 中：节点切换 + 实例树（主区域，占据剩余高度并可滚动） */}
-      <div className="flex min-h-0 flex-1 flex-col border-t">
-        <div className="shrink-0 p-2">
-          <NodeSwitcher />
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2">
-          <InstanceTree />
-        </div>
-      </div>
-
-      {/* 下：系统平台导航 + 主题/语言/退出/版本（固定不压缩，始终可见） */}
-      <div className="shrink-0">
-        <PlatformNav />
-      </div>
+      <SidebarFooter />
     </aside>
+  )
+}
+
+/** 单链接组（总览/节点/玩家/Bot/定时任务/模板）。 */
+function LeafGroup({ group }: { group: NavGroup }) {
+  return <SidebarNavLink to={group.to!} labelKey={group.labelKey} icon={group.icon} />
+}
+
+/** 可展开组（实例/监控/备份/设置）：头部可折叠，子项嵌套；实例组额外内嵌节点切换 + 实例树。 */
+function ExpandableGroup({ group }: { group: NavGroup }) {
+  const { t } = useTranslation()
+  const { pathname } = useLocation()
+  const collapsed = useConsoleStore((s) => s.collapsedGroups[group.key])
+  const toggleGroup = useConsoleStore((s) => s.toggleGroup)
+  const Icon = group.icon
+  const hasActiveChild = (group.children ?? []).some((c) => pathname === c.to || pathname.startsWith(c.to + '/'))
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => toggleGroup(group.key)}
+        className={cn(
+          'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-colors hover:bg-accent/60',
+          hasActiveChild ? 'font-medium text-foreground' : 'text-foreground/80',
+        )}
+      >
+        <Icon className="size-4 shrink-0" />
+        <span className="flex-1 truncate text-left">{t(group.labelKey)}</span>
+        {collapsed ? <ChevronRight className="size-3.5 opacity-60" /> : <ChevronDown className="size-3.5 opacity-60" />}
+      </button>
+
+      {!collapsed && (
+        <div className="mt-0.5 space-y-0.5">
+          {group.children?.map((c) => <SidebarNavLink key={c.to} {...c} nested />)}
+          {group.instances && (
+            <div className="mt-1 space-y-1 pl-2">
+              <NodeSwitcher />
+              <div className="max-h-[40vh] overflow-y-auto">
+                <InstanceTree />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** 底部：主题切换 / 语言 / 退出 / 版本（原 PlatformNav 页脚整合至此）。 */
+function SidebarFooter() {
+  const { t, i18n } = useTranslation()
+  const logout = useAuthStore((s) => s.logout)
+  const { theme, setTheme } = useThemeStore()
+  const currentLang = i18n.language as 'zh' | 'en'
+
+  const cycleTheme = () => {
+    const order: Array<'light' | 'dark' | 'system'> = ['light', 'dark', 'system']
+    const idx = order.indexOf(theme)
+    setTheme(order[(idx + 1) % order.length])
+  }
+  const themeIcon = theme === 'dark' ? '🌙' : theme === 'light' ? '☀️' : '💻'
+
+  return (
+    <div className="shrink-0 space-y-1 border-t p-2">
+      <div className="flex items-center gap-1">
+        <button
+          onClick={cycleTheme}
+          className="flex-1 rounded px-2 py-1 text-left text-xs text-muted-foreground hover:bg-accent/50"
+          title={t('theme.toggle')}
+        >
+          {themeIcon} {t(`theme.${theme}`)}
+        </button>
+        <button
+          onClick={() => changeLanguage(currentLang === 'zh' ? 'en' : 'zh')}
+          className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50"
+        >
+          {currentLang === 'zh' ? 'EN' : '中'}
+        </button>
+      </div>
+      <button
+        onClick={logout}
+        className="w-full rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent/50"
+      >
+        {t('common.logout')}
+      </button>
+      <p className="px-2 text-[11px] text-muted-foreground/70">v{__APP_VERSION__}</p>
+    </div>
   )
 }

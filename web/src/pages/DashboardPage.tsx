@@ -3,8 +3,8 @@ import ConsoleSidebar from '@/components/console/ConsoleSidebar'
 import Workspace from '@/components/console/Workspace'
 
 /**
- * 运维控制台 Shell（ADR-009 / FR-037）：
- * 左 = 三段式侧栏（功能导航 / 节点切换+实例树 / 系统平台导航），右 = 工作区。
+ * 运维控制台 Shell（ADR-009 / FR-037 / FR-061）：
+ * 左 = 常驻多级侧栏（分组可展开，实例树/节点切换并入「实例」组），右 = 工作区。
  * 登录后默认落地此处。
  */
 export default function DashboardPage() {
