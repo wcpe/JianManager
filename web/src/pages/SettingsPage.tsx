@@ -2,9 +2,11 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { toast } from 'sonner'
+import { Palette, ScrollText, Cpu, Archive, Lock, type LucideIcon } from 'lucide-react'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import { changeLanguage } from '@/i18n'
+import { cn } from '@/lib/utils'
 import { useSettings, useUpdateSettings, type SettingItem } from '@/api/settings'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -26,81 +28,146 @@ const ROLE_PLATFORM_ADMIN = 10
 /** 日志级别可选值，用于可编辑项的下拉。 */
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const
 
+/** 设置分类（FR-063）：内部侧边栏据此分组。appearance 为客户端偏好，其余为平台配置。 */
+type SettingCategory = 'appearance' | 'logging' | 'runtime' | 'backup' | 'security'
+
+/** 把平台配置键映射到分类：可编辑项落 logging/runtime/backup，只读项落 security。 */
+function keyCategory(key: string): SettingCategory {
+  if (key.startsWith('log.')) return 'logging'
+  if (key.startsWith('jdk.') || key.startsWith('graceful_stop.')) return 'runtime'
+  if (key.startsWith('backup.')) return 'backup'
+  return 'security'
+}
+
+const CATEGORY_ICON: Record<SettingCategory, LucideIcon> = {
+  appearance: Palette,
+  logging: ScrollText,
+  runtime: Cpu,
+  backup: Archive,
+  security: Lock,
+}
+
 /** 取配置项的本地化标签，缺省回退键名本身。 */
 function settingLabel(t: TFunction, key: string): string {
   return t(`settings.keys.${key}`, key)
 }
 
 /**
- * 系统设置页（FR-037 + FR-063）。
- * 外观/语言为客户端偏好（localStorage）；平台配置为服务端 DB 覆盖层，
+ * 系统设置页（FR-037 + FR-063）：内部侧边栏分类 + 右侧分类面板。
+ * 外观/语言为客户端偏好（localStorage）；其余为服务端平台配置（DB 覆盖层），
  * 可编辑项落库即生效（覆盖 env/YAML），只读项展示当前生效值并提示需改配置重启。
- * 平台配置分组仅对平台管理员展示（后端 RBAC 同样收敛）。
+ * 平台配置分类仅对平台管理员展示（后端 RBAC 同样收敛）。
  */
 export default function SettingsPage() {
-  const { t, i18n } = useTranslation()
-  const { theme, setTheme } = useThemeStore()
+  const { t } = useTranslation()
   const role = useAuthStore((s) => s.role)
-  const currentLang = i18n.language as 'zh' | 'en'
   const isPlatformAdmin = role === ROLE_PLATFORM_ADMIN
+  const [cat, setCat] = useState<SettingCategory>('appearance')
+
+  const categories: SettingCategory[] = isPlatformAdmin
+    ? ['appearance', 'logging', 'runtime', 'backup', 'security']
+    : ['appearance']
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold">{t('settings.title')}</h1>
-        <p className="text-sm text-muted-foreground">{t('settings.subtitle')}</p>
+        <h1 className="text-xl font-bold">{t('settings.title')}</h1>
+        <p className="text-xs text-muted-foreground">{t('settings.subtitle')}</p>
       </div>
 
-      {/* 外观：主题 + 语言 */}
-      <Card>
-        <CardHeader>
-          <CardTitle>{t('settings.appearance')}</CardTitle>
-          <CardDescription>{t('settings.appearanceDesc')}</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-medium">{t('settings.theme')}</p>
-              <p className="text-xs text-muted-foreground">{t('settings.themeDesc')}</p>
-            </div>
-            <Select value={theme} onValueChange={(v: string) => setTheme(v as Theme)}>
-              <SelectTrigger size="sm" className="w-36">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="light">{t('theme.light')}</SelectItem>
-                <SelectItem value="dark">{t('theme.dark')}</SelectItem>
-                <SelectItem value="system">{t('theme.system')}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+      <div className="flex gap-6">
+        {/* 内部侧边栏：分类导航 */}
+        <aside className="w-44 shrink-0">
+          <nav className="space-y-0.5">
+            {categories.map((c) => {
+              const Icon = CATEGORY_ICON[c]
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCat(c)}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-colors',
+                    cat === c
+                      ? 'bg-primary/10 font-medium text-primary'
+                      : 'text-foreground/80 hover:bg-accent/60',
+                  )}
+                >
+                  <Icon className="size-4 shrink-0" />
+                  <span className="truncate">{t(`settings.cat.${c}`)}</span>
+                </button>
+              )
+            })}
+          </nav>
+        </aside>
 
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-medium">{t('settings.language')}</p>
-              <p className="text-xs text-muted-foreground">{t('settings.languageDesc')}</p>
-            </div>
-            <Select value={currentLang} onValueChange={(v: string) => changeLanguage(v as 'zh' | 'en')}>
-              <SelectTrigger size="sm" className="w-36">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="zh">{t('language.zh')}</SelectItem>
-                <SelectItem value="en">{t('language.en')}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* 平台配置：服务端 DB 覆盖层，仅平台管理员 */}
-      {isPlatformAdmin && <PlatformConfigCard />}
+        {/* 右侧：当前分类面板 */}
+        <div className="min-w-0 max-w-2xl flex-1">
+          {cat === 'appearance' ? (
+            <AppearanceSettings />
+          ) : (
+            <PlatformCategory category={cat} />
+          )}
+        </div>
+      </div>
     </div>
   )
 }
 
-/** 平台配置分组：可编辑项表单（保存调 PUT /settings）+ 只读项展示。 */
-function PlatformConfigCard() {
+/** 外观：主题 + 语言（客户端偏好）。 */
+function AppearanceSettings() {
+  const { t, i18n } = useTranslation()
+  const { theme, setTheme } = useThemeStore()
+  const currentLang = i18n.language as 'zh' | 'en'
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t('settings.appearance')}</CardTitle>
+        <CardDescription>{t('settings.appearanceDesc')}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium">{t('settings.theme')}</p>
+            <p className="text-xs text-muted-foreground">{t('settings.themeDesc')}</p>
+          </div>
+          <Select value={theme} onValueChange={(v: string) => setTheme(v as Theme)}>
+            <SelectTrigger size="sm" className="w-36">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="light">{t('theme.light')}</SelectItem>
+              <SelectItem value="dark">{t('theme.dark')}</SelectItem>
+              <SelectItem value="system">{t('theme.system')}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium">{t('settings.language')}</p>
+            <p className="text-xs text-muted-foreground">{t('settings.languageDesc')}</p>
+          </div>
+          <Select value={currentLang} onValueChange={(v: string) => changeLanguage(v as 'zh' | 'en')}>
+            <SelectTrigger size="sm" className="w-36">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="zh">{t('language.zh')}</SelectItem>
+              <SelectItem value="en">{t('language.en')}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+/**
+ * 平台配置分类面板：security 展示只读项，其余（logging/runtime/backup）展示可编辑项 + 保存。
+ * 数据经 useSettings（react-query 缓存，切换分类不重拉），按分类过滤后渲染。
+ */
+function PlatformCategory({ category }: { category: SettingCategory }) {
   const { t } = useTranslation()
   const { data, isLoading, isError } = useSettings()
   const update = useUpdateSettings()
@@ -108,10 +175,9 @@ function PlatformConfigCard() {
   // 可编辑项的本地草稿：仅存用户改动；展示值回退到后端当前生效值（draft[key] ?? it.value）。
   const [draft, setDraft] = useState<Record<string, string>>({})
 
-  const editable = data?.editable ?? []
-  const readOnly = data?.readOnly ?? []
+  const editable = (data?.editable ?? []).filter((it) => keyCategory(it.key) === category)
+  const readOnly = (data?.readOnly ?? []).filter((it) => keyCategory(it.key) === category)
 
-  // 计算被改动过的键（草稿值 != 后端当前值），只提交改动项。
   const changed: Record<string, string> = {}
   for (const it of editable) {
     if (draft[it.key] !== undefined && draft[it.key] !== it.value) changed[it.key] = draft[it.key]
@@ -132,55 +198,47 @@ function PlatformConfigCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{t('settings.platform')}</CardTitle>
-        <CardDescription>{t('settings.platformDesc')}</CardDescription>
+        <CardTitle>{t(`settings.cat.${category}`)}</CardTitle>
+        <CardDescription>{t(`settings.catDesc.${category}`, '')}</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-6">
+      <CardContent className="space-y-4">
         {isLoading && <p className="text-sm text-muted-foreground">{t('common.loading', '加载中…')}</p>}
         {isError && <p className="text-sm text-destructive">{t('settings.loadFailed', '加载平台配置失败')}</p>}
 
-        {!isLoading && !isError && (
-          <>
-            {/* 可编辑项 */}
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold">{t('settings.editable', '可运行时调整')}</h3>
-                <Badge variant="secondary">{editable.length}</Badge>
-              </div>
-              <p className="text-xs text-muted-foreground">{t('settings.editableHint', '保存后立即覆盖默认值。')}</p>
+        {!isLoading && !isError && category === 'security' && (
+          <div className="divide-y rounded-md border">
+            {readOnly.length === 0 ? (
+              <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('settings.empty', '暂无配置项')}</p>
+            ) : (
+              readOnly.map((it) => <ReadOnlyRow key={it.key} item={it} />)
+            )}
+          </div>
+        )}
 
-              <div className="divide-y rounded-md border">
-                {editable.map((it) => (
+        {!isLoading && !isError && category !== 'security' && (
+          <>
+            <p className="text-xs text-muted-foreground">{t('settings.editableHint', '保存后立即覆盖默认值。')}</p>
+            <div className="divide-y rounded-md border">
+              {editable.length === 0 ? (
+                <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('settings.empty', '暂无配置项')}</p>
+              ) : (
+                editable.map((it) => (
                   <EditableRow
                     key={it.key}
                     item={it}
                     value={draft[it.key] ?? it.value}
                     onChange={(v) => setDraft((d) => ({ ...d, [it.key]: v }))}
                   />
-                ))}
-              </div>
-
+                ))
+              )}
+            </div>
+            {editable.length > 0 && (
               <div className="flex justify-end">
                 <Button size="sm" onClick={save} disabled={!hasChanges || update.isPending}>
                   {update.isPending ? t('common.saving', '保存中…') : t('common.save', '保存')}
                 </Button>
               </div>
-            </div>
-
-            {/* 只读项 */}
-            <div className="space-y-3">
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold">{t('settings.readOnly', '只读（启动固定）')}</h3>
-                <Badge variant="outline">{readOnly.length}</Badge>
-              </div>
-              <p className="text-xs text-muted-foreground">{t('settings.readOnlyHint', '如需修改请改配置文件/环境变量并重启。')}</p>
-
-              <div className="divide-y rounded-md border">
-                {readOnly.map((it) => (
-                  <ReadOnlyRow key={it.key} item={it} />
-                ))}
-              </div>
-            </div>
+            )}
           </>
         )}
       </CardContent>

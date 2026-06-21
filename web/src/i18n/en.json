@@ -958,6 +958,21 @@
     "overridden": "Overridden",
     "workerSide": "Effective on Worker",
     "masked": "Masked",
+    "empty": "No settings",
+    "cat": {
+      "appearance": "Appearance",
+      "logging": "Logging",
+      "runtime": "Runtime",
+      "backup": "Backup",
+      "security": "Security / System"
+    },
+    "catDesc": {
+      "appearance": "Interface theme and language (local preference)",
+      "logging": "Log level and other runtime logging settings",
+      "runtime": "JDK download mirrors and instance runtime behavior",
+      "backup": "Backup retention and defaults",
+      "security": "Startup-fixed server/database/auth parameters (read-only)"
+    },
     "keys": {
       "log.level": "Log level",
       "jdk.mirror.temurin": "JDK mirror (Temurin)",
