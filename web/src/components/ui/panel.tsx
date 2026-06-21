@@ -10,7 +10,7 @@ export function Panel({
   className,
   bodyClassName,
   ...props
-}: React.ComponentProps<'div'> & {
+}: Omit<React.ComponentProps<'div'>, 'title'> & {
   title?: React.ReactNode
   /** 标题栏右侧操作区（按钮/选择器等）。 */
   actions?: React.ReactNode
