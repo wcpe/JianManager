@@ -18,14 +18,14 @@ const (
 	// SettingKeyLogLevel CP 日志级别（debug|info|warn|error）。落库即时生效（slog LevelVar）。
 	SettingKeyLogLevel = "log.level"
 	// SettingKeyJDKMirrorTemurin / Corretto / Zulu JDK 下载镜像源基址。
-	// 实际消费点在 Worker（env JIANMANAGER_JDK_*_BASE），CP 负责存储 + 展示。
+	// 安装 JDK 时 CP 取生效值经 InstallJDKRequest.mirror_base 下发 Worker，使配置真生效（FR-063）。
 	SettingKeyJDKMirrorTemurin  = "jdk.mirror.temurin"
 	SettingKeyJDKMirrorCorretto = "jdk.mirror.corretto"
 	SettingKeyJDKMirrorZulu     = "jdk.mirror.zulu"
 	// SettingKeyGracefulStopTimeout 优雅停止超时（Go duration 文本）。
-	// 实际消费点在 Worker daemon（env JIANMANAGER_GRACEFUL_STOP_TIMEOUT），CP 负责存储 + 展示。
+	// 启动实例时 CP 取生效值经 CreateInstanceRequest 下发 Worker→wrapper，对其后新启动的实例生效（FR-063）。
 	SettingKeyGracefulStopTimeout = "graceful_stop.timeout"
-	// SettingKeyBackupRetentionDays 默认备份保留天数（整数）。当前无裁剪消费者，CP 存储为默认值。
+	// SettingKeyBackupRetentionDays 默认备份保留天数（整数）。CP 后台巡检据此裁剪超期备份（FR-063）。
 	SettingKeyBackupRetentionDays = "backup.retention_days"
 )
 
@@ -35,6 +35,14 @@ var (
 	// ErrSettingValueInvalid 写入值未通过该键的语义校验。
 	ErrSettingValueInvalid = errors.New("配置值非法")
 )
+
+// SettingsReader 暴露「按键取生效值」给其它服务（JDK 安装、实例启动等），
+// 使它们读取平台设置的覆盖而无需依赖整个 SettingsService。*SettingsService 实现该接口。
+// 为 nil 时消费方须自行回退到各自的默认/本地配置（依赖注入可选）。
+type SettingsReader interface {
+	// EffectiveValue 返回某键当前生效值（DB 覆盖 > 基线默认）。
+	EffectiveValue(key string) string
+}
 
 // SettingsService 平台配置服务（FR-063 / ADR-015）。
 //
@@ -82,12 +90,12 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 	}
 
 	editable := []SettingItem{
-		s.editableItem(SettingKeyLogLevel, s.cfg.Log.Level, overrides, true),
-		s.editableItem(SettingKeyJDKMirrorTemurin, "https://api.adoptium.net", overrides, false),
-		s.editableItem(SettingKeyJDKMirrorCorretto, "https://corretto.aws", overrides, false),
-		s.editableItem(SettingKeyJDKMirrorZulu, "https://api.azul.com", overrides, false),
-		s.editableItem(SettingKeyGracefulStopTimeout, "30s", overrides, false),
-		s.editableItem(SettingKeyBackupRetentionDays, strconv.Itoa(s.cfg.LogStore.RetentionDays), overrides, false),
+		s.editableItem(SettingKeyLogLevel, s.defaultValue(SettingKeyLogLevel), overrides, true),
+		s.editableItem(SettingKeyJDKMirrorTemurin, s.defaultValue(SettingKeyJDKMirrorTemurin), overrides, false),
+		s.editableItem(SettingKeyJDKMirrorCorretto, s.defaultValue(SettingKeyJDKMirrorCorretto), overrides, false),
+		s.editableItem(SettingKeyJDKMirrorZulu, s.defaultValue(SettingKeyJDKMirrorZulu), overrides, false),
+		s.editableItem(SettingKeyGracefulStopTimeout, s.defaultValue(SettingKeyGracefulStopTimeout), overrides, false),
+		s.editableItem(SettingKeyBackupRetentionDays, s.defaultValue(SettingKeyBackupRetentionDays), overrides, false),
 	}
 
 	readOnly := []SettingItem{
@@ -160,6 +168,38 @@ func readOnlyItem(key, value string, sensitive bool) SettingItem {
 	return SettingItem{Key: key, Value: value, Editable: false, Sensitive: sensitive}
 }
 
+// defaultValue 返回某键的基线默认值（DB 无覆盖时的生效值）。
+// 单点定义，供 Get（展示）与 EffectiveValue（消费）共享，避免默认值在两处漂移。
+func (s *SettingsService) defaultValue(key string) string {
+	switch key {
+	case SettingKeyLogLevel:
+		return s.cfg.Log.Level
+	case SettingKeyJDKMirrorTemurin:
+		return "https://api.adoptium.net"
+	case SettingKeyJDKMirrorCorretto:
+		return "https://corretto.aws"
+	case SettingKeyJDKMirrorZulu:
+		return "https://api.azul.com"
+	case SettingKeyGracefulStopTimeout:
+		return "30s"
+	case SettingKeyBackupRetentionDays:
+		return strconv.Itoa(s.cfg.LogStore.RetentionDays)
+	}
+	return ""
+}
+
+// EffectiveValue 返回某键当前生效值（DB 覆盖 > 基线默认）。
+// CP 各消费点（JDK 安装、备份裁剪、实例启动）据此读取单项设置，使覆盖真生效。
+// 查询失败或键无默认时回退默认值，保证消费方始终拿到可用值（不因 DB 故障卡死）。
+func (s *SettingsService) EffectiveValue(key string) string {
+	if overrides, err := s.loadOverrides(); err == nil {
+		if v, ok := overrides[key]; ok {
+			return v
+		}
+	}
+	return s.defaultValue(key)
+}
+
 // loadOverrides 读取全部 DB 覆盖为 map。
 func (s *SettingsService) loadOverrides() (map[string]string, error) {
 	var rows []model.PlatformSetting
@@ -185,7 +225,8 @@ func (s *SettingsService) applyPersistedOverrides() {
 }
 
 // applyOverride 把单个覆盖项应用到 CP 内的运行时读取点。
-// 仅日志级别在 CP 内即时生效；其余项的消费点在 Worker（env）或暂无消费者，仅存储。
+// 仅日志级别在 CP 内即时生效（EffectiveImmediately）；其余项在各自动作发生时按需读取生效值：
+// JDK 镜像源随安装下发、优雅停止超时随启动下发、备份保留天数由后台巡检读取（均经 EffectiveValue）。
 func (s *SettingsService) applyOverride(key, val string) {
 	switch key {
 	case SettingKeyLogLevel:
