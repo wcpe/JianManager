@@ -165,15 +165,16 @@
 - **关联 API**: `POST /alerts/rules`, `GET /alerts/events`
 
 ### FR-012: 定时任务
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress（归真：后端 CRUD+执行日志齐全，但前端仅只读列表，"创建/编辑/删除""执行日志"从未在 UI 落地；2026-06-22 e2e 截图巡检发现 done 误标，退回补齐）
 - **优先级**: P1
 - **描述**: Cron 表达式调度，支持实例启停/命令执行/备份
 - **验收标准**:
-  - [x] 创建/编辑/删除定时任务
-  - [x] Cron 表达式解析
-  - [x] 支持 action: start/stop/restart/command/backup
-  - [x] 执行日志
-- **关联 API**: `POST /schedules`, `GET /schedules`, `GET /schedules/:id/logs`
+  - [ ] 创建/编辑/删除定时任务（前端：创建对话框→`POST /schedules`、行内编辑→`PUT /schedules/:id`、删除危险确认→`DELETE /schedules/:id`、启停切换）
+  - [x] Cron 表达式解析（后端）
+  - [x] 支持 action: start/stop/restart/command/backup（后端）
+  - [ ] 执行日志（前端：行展开/抽屉调 `GET /schedules/:id/logs`，列时间/结果/输出）
+  - [ ] 定时任务页套 FR-061 高密度风格
+- **关联 API**: `POST /schedules`, `GET /schedules`, `PUT /schedules/:id`, `DELETE /schedules/:id`, `GET /schedules/:id/logs`
 
 ### FR-013: 备份恢复
 - **状态**: ✅ done
@@ -199,12 +200,13 @@
   - [x] 从模板创建实例（自动填充启动命令和配置）
 
 ### FR-015: 审计日志
-- **状态**: ✅ done
+- **状态**: 🔨 in-progress（归真：后端筛选 user/action/targetType/from/to 全支持，但前端无筛选 UI、仅拉 limit=100；2026-06-22 e2e 截图巡检发现 done 误标，退回补前端筛选）
 - **优先级**: P2
 - **描述**: 操作审计（谁/什么时间/对什么/做了什么）
 - **验收标准**:
   - [x] 关键操作自动记录（实例启停/文件修改/用户管理）
-  - [x] 审计日志查询（按用户/操作/时间筛选）
+  - [ ] 审计日志查询（前端筛选栏：用户/操作/目标类型/时间范围/分页 → `GET /audit?userId=&action=&targetType=&from=&to=&limit=`）
+  - [ ] 审计页套 FR-061 高密度风格
 
 ### FR-016: i18n
 - **状态**: ✅ done
@@ -968,6 +970,7 @@
 - **关联 API**: 无（纯前端，复用现有 API + FR-060 的 `/metrics`）
 - **依赖**: FR-037（运维控制台布局）, FR-060（历史仪表盘为旗舰画布）, FR-026（shadcn/ui 标准化）
 - **Spec**: `docs/specs/panel-density-redesign/`
+- **补全**: schedules/templates/audit 三页此前漏套高密度风格，随 FR-012 / FR-015 / FR-064 功能补齐时一并覆盖（2026-06-22 e2e 巡检发现）
 
 ### FR-062: 节点负载（load average）采集与仪表盘
 - **状态**: ✅ done（v0.5.0）
@@ -981,6 +984,64 @@
 - **关联 ADR**: ADR-013（分级降采样时序）；ADR-014（指标源）
 - **关联 API**: 扩展 gRPC `Heartbeat` 负载（节点 load）；复用 `GET /metrics/series`
 - **依赖**: FR-060（时序存储/查询/前端图表）、FR-004（节点心跳）
+
+---
+
+## 控制台功能补全与平台设置
+
+> 源于 2026-06-22 前端 e2e 截图巡检：发现 3 处「标 done 但前端漂移」（已归真 FR-012 定时任务、FR-015 审计筛选，并在 FR-061 备注 schedules/templates/audit 三页视觉覆盖），新增 2 项能力（FR-063 平台设置、FR-064 模板管理），并登记 2 个小瑕疵（BUG-007 图表告警、BUG-008 401 请求）。
+
+### FR-063: 平台设置（全量平台配置可视化与运行时调整）
+- **状态**: 📋 todo
+- **优先级**: P2
+- **描述**: 系统设置页此前仅主题/语言（客户端 localStorage）。新增服务端平台配置：后端键值存储 + `GET/PUT /settings`（仅平台管理员），前端按分组表单暴露**全部平台配置**。可安全运行时调整的项落库即生效（覆盖 env/YAML 默认）；启动固定/敏感项只读展示、敏感打码并标注「需改配置并重启」。
+- **验收标准**:
+  - [ ] **先写 ADR**：配置覆盖优先级（DB > env > YAML 默认）与生效边界，评估对 ADR-005 / `config-files` 规则的影响
+  - [ ] 后端 `platform_settings` 存储 + `GET /settings` + `PUT /settings`（RBAC：仅平台管理员）+ AutoMigrate + service 测试
+  - [ ] **可运行时生效**项（落库覆盖默认、改完即生效无需重启，且接到真实读取点）：日志级别、JDK 下载镜像源（Temurin/Corretto/Zulu）、优雅停止超时、默认备份保留天数
+  - [ ] **只读展示**项（启动固定）：server host/port、gRPC 端口、数据库 driver/dsn、JWT secret（打码）、access/refresh TTL —— 展示当前生效值 + 「需改配置并重启」提示
+  - [ ] 敏感值不明文下发前端（secret 打码或不返回）
+  - [ ] 前端系统设置页保留外观/语言分组，新增「平台配置」分组表单，按可编辑/只读分区，保存调 `PUT /settings`
+  - [ ] i18n zh/en；暗色/亮色正常
+  - [ ] 真机：改日志级别即时生效；改 JDK 镜像源后下 JDK 走新源；只读项正确反映当前配置
+- **关联 ADR**: 需新增（配置覆盖优先级）；评估 ADR-005
+- **关联 API**: 新增 `GET /settings`、`PUT /settings`
+- **依赖**: 无
+
+### FR-064: 模板管理 UI 与模板删除
+- **状态**: 📋 todo
+- **优先级**: P2
+- **描述**: FR-014 仅做到「用模板建实例」（消费侧，已 done）；本 FR 补模板的 UI 管理——新建（接已有后端 `POST /templates` + 闲置的 `useCreateTemplate`）、删除（新增后端 `DELETE /templates/:id`）。模板与实例松关联（建实例时拷贝 startCommand），删除模板不影响已建实例。顺带按 FR-061 高密度风格重写模板页。
+- **验收标准**:
+  - [ ] 模板页「新建模板」按钮 → 对话框（名称/类型/描述/启动命令/下载URL/默认工作目录）→ `POST /templates`
+  - [ ] 模板卡/行可删除（DangerConfirm 危险确认）→ 新增 `DELETE /templates/:id`
+  - [ ] 后端新增 `DELETE /templates/:id`（service + handler + 路由 + 测试）
+  - [ ] 模板页套 FR-061 高密度风格
+  - [ ] i18n zh/en
+  - [ ] 真机：新建 Paper 模板 → 建实例对话框能选到并自动填充 → 删除该模板、已建实例不受影响
+- **关联 FR**: FR-014（用模板建实例，已 done）
+- **关联 API**: 复用 `POST /templates`；新增 `DELETE /templates/:id`
+- **依赖**: 无
+
+### BUG-007: 监控图表在 0 尺寸容器渲染告警
+- **状态**: 📋 todo
+- **优先级**: P2
+- **描述**: 控制台反复出现 recharts `width(-1)/height(-1) ... should be greater than 0` 告警（×9）。根因：ResponsiveContainer 在隐藏/未激活分段或折叠面板（0 尺寸容器）内渲染，可能导致切换时图表瞬时空白。
+- **验收标准**:
+  - [ ] 控制台不再出现 recharts width/height 告警
+  - [ ] 折叠面板/未激活分段内的图表切换后正常渲染、无持续空白
+  - [ ] 修复不破坏现有图表（总览/节点/实例监控）
+- **关联 FR**: FR-060（时序图表）, FR-061（面板）
+
+### BUG-008: 前端存在 401 Unauthorized 资源请求
+- **状态**: 📋 todo
+- **优先级**: P2
+- **描述**: 页面加载期控制台出现一条 401 Unauthorized 资源请求。需定位来源（endpoint + 触发时机 + 根因），判定是 token 刷新时序、未鉴权探测还是真实缺陷，并修复或消除噪声。
+- **验收标准**:
+  - [ ] 定位 401 来源请求（endpoint + 触发时机 + 根因）
+  - [ ] 修复（补鉴权 / 改时序 / 若无害则消除噪声请求）
+  - [ ] 正常登录态下控制台无 401 报错
+- **关联 FR**: FR-001（认证）, FR-024（前端对接运行时 API）
 
 ---
 
