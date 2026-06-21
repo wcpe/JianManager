@@ -28,6 +28,8 @@ export default function MetricsSegment({ instanceUuid }: { instanceUuid: string 
     if (!s) return []
     return [{ key: metricKey, name, points: s.points.map((p) => ({ ts: p.ts, value: p.avg })) }]
   }
+  // 多指标同图（如堆 used·max 叠加）
+  const many = (...pairs: [string, string][]): ChartSeries[] => pairs.flatMap(([k, n]) => one(k, n))
   // 分世界：同一 metricKey 下每个 world 一条线
   const byWorld = (metricKey: string): ChartSeries[] =>
     series
@@ -52,7 +54,11 @@ export default function MetricsSegment({ instanceUuid }: { instanceUuid: string 
           <TimeSeriesChart series={one('inst_mspt', t('metrics.mspt'))} height={160} valueFormatter={(v) => `${v.toFixed(1)}ms`} />
         </Panel>
         <Panel title={t('metrics.heap')}>
-          <TimeSeriesChart series={one('inst_heap_used', t('metrics.heap'))} height={160} valueFormatter={fmtBytes} />
+          <TimeSeriesChart
+            series={many(['inst_heap_used', t('metrics.heapUsed')], ['inst_heap_max', t('metrics.heapMax')])}
+            height={160}
+            valueFormatter={fmtBytes}
+          />
         </Panel>
         <Panel title={t('metrics.players')}>
           <TimeSeriesChart series={one('inst_players_online', t('metrics.players'))} height={160} valueFormatter={(v) => v.toFixed(0)} />
@@ -63,8 +69,14 @@ export default function MetricsSegment({ instanceUuid }: { instanceUuid: string 
         <Panel title={t('metrics.cpu')}>
           <TimeSeriesChart series={one('inst_cpu_pct', t('metrics.cpu'))} height={160} valueFormatter={(v) => `${v.toFixed(0)}%`} />
         </Panel>
-        <Panel title={t('metrics.worldChunks')} className="lg:col-span-2 xl:col-span-3">
-          <TimeSeriesChart series={byWorld('world_loaded_chunks')} height={180} valueFormatter={(v) => v.toFixed(0)} />
+        <Panel title={t('metrics.worldChunks')}>
+          <TimeSeriesChart series={byWorld('world_loaded_chunks')} height={160} valueFormatter={(v) => v.toFixed(0)} />
+        </Panel>
+        <Panel title={t('metrics.worldEntities')}>
+          <TimeSeriesChart series={byWorld('world_entities')} height={160} valueFormatter={(v) => v.toFixed(0)} />
+        </Panel>
+        <Panel title={t('metrics.worldTileEntities')}>
+          <TimeSeriesChart series={byWorld('world_tile_entities')} height={160} valueFormatter={(v) => v.toFixed(0)} />
         </Panel>
       </div>
     </div>

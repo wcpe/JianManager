@@ -309,7 +309,11 @@
     "players": "在线玩家",
     "threads": "线程",
     "cpu": "CPU",
-    "worldChunks": "分世界加载区块"
+    "heapUsed": "已用",
+    "heapMax": "上限",
+    "worldChunks": "分世界加载区块",
+    "worldEntities": "分世界实体",
+    "worldTileEntities": "分世界方块实体"
   },
   "nodes": {
     "title": "节点管理",
@@ -320,6 +324,11 @@
     "memory": "内存",
     "disk": "磁盘",
     "network": "网络",
+    "diskTrend": "磁盘趋势",
+    "netTrend": "网络趋势",
+    "netRx": "下行",
+    "netTx": "上行",
+    "instanceCompare": "实例指标对比",
     "system": "系统",
     "online": "在线",
     "offline": "离线",

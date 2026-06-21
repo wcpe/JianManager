@@ -1,6 +1,7 @@
 import { Fragment, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useQueries } from '@tanstack/react-query'
 import {
   useNodes,
   useSetNodeMaintenance,
@@ -8,7 +9,9 @@ import {
   useDeleteNode,
   type NodeInfo,
 } from '@/api/nodes'
-import { useMetricSeries } from '@/api/metrics'
+import { useInstances } from '@/api/instances'
+import api from '@/api/client'
+import { useMetricSeries, type MetricSeriesResponse } from '@/api/metrics'
 import {
   Table,
   TableBody,
@@ -61,7 +64,65 @@ function UsageCell({ pct }: { pct: number }) {
   )
 }
 
-/** 展开的节点详情（FR-061）：环形仪表盘（CPU/内存/磁盘）+ CPU/内存历史曲线。 */
+/** 各实例对比图可切的指标（FR-060 #2：节点上各实例 TPS/MSPT/堆/线程对比）。 */
+const COMPARE_METRICS: { key: string; labelKey: string; fmt: (v: number) => string }[] = [
+  { key: 'inst_tps', labelKey: 'metrics.tps', fmt: (v) => v.toFixed(1) },
+  { key: 'inst_mspt', labelKey: 'metrics.mspt', fmt: (v) => `${v.toFixed(1)}ms` },
+  { key: 'inst_heap_used', labelKey: 'metrics.heap', fmt: formatBytes },
+  { key: 'inst_threads', labelKey: 'metrics.threads', fmt: (v) => v.toFixed(0) },
+]
+
+/** 节点上各实例同一指标对比：每实例一条线，可切 TPS/MSPT/堆/线程。 */
+function NodeInstanceCompare({ node, range }: { node: NodeInfo; range: MetricRange }) {
+  const { t } = useTranslation()
+  const [metric, setMetric] = useState('inst_tps')
+  const { data: instances } = useInstances()
+  const nodeInstances = (instances ?? []).filter((i) => i.nodeId === node.id)
+  const spec = COMPARE_METRICS.find((m) => m.key === metric) ?? COMPARE_METRICS[0]
+
+  // 每实例一条查询并行拉取（实例数动态，用 useQueries）。
+  const results = useQueries({
+    queries: nodeInstances.map((inst) => ({
+      queryKey: ['metricSeries', 'instance', inst.uuid, range, metric],
+      queryFn: async () => {
+        const q = new URLSearchParams({ scope: 'instance', targetId: inst.uuid, range, metrics: metric })
+        const { data } = await api.get<MetricSeriesResponse>(`/metrics/series?${q.toString()}`)
+        return data
+      },
+      enabled: !!inst.uuid,
+      refetchInterval: 30_000,
+    })),
+  })
+
+  const series: ChartSeries[] = nodeInstances.map((inst, i) => {
+    const s = results[i].data?.series.find((x) => x.metricKey === metric && x.world === '')
+    return { key: inst.uuid, name: inst.name, points: (s?.points ?? []).map((p) => ({ ts: p.ts, value: p.avg })) }
+  })
+
+  return (
+    <Panel
+      title={t('nodes.instanceCompare')}
+      actions={
+        <div className="inline-flex rounded-md border p-0.5">
+          {COMPARE_METRICS.map((m) => (
+            <button
+              key={m.key}
+              type="button"
+              onClick={() => setMetric(m.key)}
+              className={`rounded px-2 py-0.5 text-xs ${metric === m.key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              {t(m.labelKey)}
+            </button>
+          ))}
+        </div>
+      }
+    >
+      <TimeSeriesChart series={series} height={180} valueFormatter={spec.fmt} emptyHint={t('nodes.empty')} />
+    </Panel>
+  )
+}
+
+/** 展开的节点详情（FR-061/FR-060）：环形仪表盘 + CPU/内存/磁盘/网络历史曲线 + 各实例指标对比。 */
 function NodeDetail({ node }: { node: NodeInfo }) {
   const { t } = useTranslation()
   const [range, setRange] = useState<MetricRange>('24h')
@@ -72,6 +133,10 @@ function NodeDetail({ node }: { node: NodeInfo }) {
     if (!s) return []
     return [{ key: metricKey, name, points: s.points.map((p) => ({ ts: p.ts, value: p.avg })) }]
   }
+  const netSeries: ChartSeries[] = [
+    ...seriesOf('node_net_rx_rate', t('nodes.netRx')),
+    ...seriesOf('node_net_tx_rate', t('nodes.netTx')),
+  ]
 
   return (
     <div className="space-y-3 bg-muted/30 p-3">
@@ -90,7 +155,14 @@ function NodeDetail({ node }: { node: NodeInfo }) {
         <Panel title={t('dashboard.memTrend')}>
           <TimeSeriesChart series={seriesOf('node_mem_used', t('nodes.memory'))} height={160} valueFormatter={formatBytes} />
         </Panel>
+        <Panel title={t('nodes.diskTrend')}>
+          <TimeSeriesChart series={seriesOf('node_disk_used', t('nodes.disk'))} height={160} valueFormatter={formatBytes} />
+        </Panel>
+        <Panel title={t('nodes.netTrend')}>
+          <TimeSeriesChart series={netSeries} height={160} valueFormatter={(v) => `${formatBytes(v)}/s`} />
+        </Panel>
       </div>
+      <NodeInstanceCompare node={node} range={range} />
     </div>
   )
 }

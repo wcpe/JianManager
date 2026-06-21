@@ -322,7 +322,11 @@
     "players": "Players",
     "threads": "Threads",
     "cpu": "CPU",
-    "worldChunks": "Loaded Chunks by World"
+    "heapUsed": "Used",
+    "heapMax": "Max",
+    "worldChunks": "Loaded Chunks by World",
+    "worldEntities": "Entities by World",
+    "worldTileEntities": "Tile Entities by World"
   },
   "nodes": {
     "title": "Node Management",
@@ -333,6 +337,11 @@
     "memory": "Memory",
     "disk": "Disk",
     "network": "Network",
+    "diskTrend": "Disk Trend",
+    "netTrend": "Network Trend",
+    "netRx": "RX",
+    "netTx": "TX",
+    "instanceCompare": "Instance Metrics Compare",
     "system": "System",
     "online": "Online",
     "offline": "Offline",
