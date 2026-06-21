@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   validateRequired,
+  minLength,
   validatePort,
   validatePositiveInt,
   validateAbsPath,
@@ -18,6 +19,18 @@ describe('validateRequired', () => {
   })
   it('非空合法', () => {
     expect(validateRequired('a')).toBeUndefined()
+  })
+})
+
+describe('minLength', () => {
+  const min3 = minLength(3)
+  it('空串放行（交由 required）', () => {
+    expect(min3('')).toBeUndefined()
+  })
+  it('短于阈值判错，达标放行', () => {
+    expect(min3('ab')).toBe('validation.minLength')
+    expect(min3('abc')).toBeUndefined()
+    expect(min3('abcd')).toBeUndefined()
   })
 })
 

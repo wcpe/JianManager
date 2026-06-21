@@ -379,6 +379,8 @@
     "role": "角色",
     "node": "节点",
     "selectNode": "选择节点",
+    "jdkOptional": "JDK（可选）",
+    "jdkSystemDefault": "不指定（使用系统 Java）",
     "autoRestart": "崩溃自动重启",
     "group": "用户组",
     "noGroup": "不分配",
@@ -1005,6 +1007,7 @@
   "validation": {
     "requiredMark": "必填",
     "required": "此项必填",
+    "minLength": "至少需要 {{min}} 个字符",
     "portInteger": "端口须为整数",
     "portRange": "端口须在 1–65535 之间",
     "integer": "须为整数",

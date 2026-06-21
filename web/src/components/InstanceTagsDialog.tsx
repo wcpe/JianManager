@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { useUpdateInstance } from '@/api/instances'
 import { ENV_TAG_PREFIX } from '@/components/console/instance-grouping'
 import { Badge } from '@/components/ui/badge'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
 import {
   Select,
   SelectContent,
@@ -74,8 +75,8 @@ export default function InstanceTagsDialog({ instanceId, instanceName, tags, onC
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-background border rounded-lg p-6 w-full max-w-md shadow-lg">
+    <div className={MODAL_OVERLAY}>
+      <div className={`${MODAL_PANEL} max-w-md`}>
         <h2 className="text-lg font-bold mb-4">{t('grouping.tagsTitle', { name: instanceName })}</h2>
         <form onSubmit={submit} className="space-y-4">
           <div>

@@ -14,6 +14,17 @@ export function validateRequired(value: string): FieldError {
 }
 
 /**
+ * 最小长度校验工厂。空串放行（交由 required 把关）；非空但短于 min 时判错。
+ * 返回的错误 key 为 `validation.minLength`（调用方用 i18n 插值 {{min}} 提示具体值）。
+ */
+export function minLength(min: number): (value: string) => FieldError {
+  return (value: string) => {
+    if (value === '') return undefined
+    return value.length < min ? 'validation.minLength' : undefined
+  }
+}
+
+/**
  * 端口号：1–65535 的整数。空串视为合法（由 required 单独把关），
  * 这样选填端口字段不会因留空而误报。
  */

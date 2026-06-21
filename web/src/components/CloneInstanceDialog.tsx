@@ -3,6 +3,9 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useInstances } from '@/api/instances'
 import { useCloneInstance, type CloneResult } from '@/api/clone'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
+import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { validateRequired } from '@/lib/form-validation'
 
 interface CloneInstanceDialogProps {
   sourceId: number
@@ -24,6 +27,8 @@ export default function CloneInstanceDialog({ sourceId, sourceName, onClose }: C
   const [levelName, setLevelName] = useState('')
   const [proxyIds, setProxyIds] = useState<number[]>([])
   const [preview, setPreview] = useState<CloneResult | null>(null)
+
+  const nameError = validateRequired(name)
 
   const body = () => ({
     name,
@@ -47,6 +52,7 @@ export default function CloneInstanceDialog({ sourceId, sourceName, onClose }: C
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
+    if (nameError) return
     clone.mutate(body(), {
       onSuccess: (res) => {
         toast.success(t('clone.success', { name }))
@@ -61,30 +67,32 @@ export default function CloneInstanceDialog({ sourceId, sourceName, onClose }: C
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-background border rounded-lg p-6 w-full max-w-md shadow-lg max-h-[88vh] overflow-y-auto">
+    <div className={MODAL_OVERLAY}>
+      <div className={`${MODAL_PANEL} max-w-md`}>
         <h2 className="text-lg font-bold mb-4">{t('clone.title', { name: sourceName })}</h2>
         <form onSubmit={submit} className="space-y-3">
           <div>
-            <label className="text-sm font-medium">{t('clone.name')}</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} required
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm" />
+            <FieldLabel required>{t('clone.name')}</FieldLabel>
+            <input value={name} onChange={(e) => setName(e.target.value)}
+              aria-invalid={!!nameError}
+              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive" />
+            <FieldError error={nameError} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-sm font-medium">{t('clone.motd')}</label>
+              <FieldLabel>{t('clone.motd')}</FieldLabel>
               <input value={motd} onChange={(e) => setMotd(e.target.value)}
                 className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm" />
             </div>
             <div>
-              <label className="text-sm font-medium">{t('clone.levelName')}</label>
+              <FieldLabel>{t('clone.levelName')}</FieldLabel>
               <input value={levelName} onChange={(e) => setLevelName(e.target.value)} placeholder="world"
                 className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm" />
             </div>
           </div>
 
           <div>
-            <label className="text-sm font-medium">{t('clone.registerTo')}</label>
+            <FieldLabel>{t('clone.registerTo')}</FieldLabel>
             {proxies && proxies.length > 0 ? (
               <div className="mt-1 border rounded-md p-2 space-y-1 max-h-32 overflow-y-auto">
                 {proxies.map((p) => (

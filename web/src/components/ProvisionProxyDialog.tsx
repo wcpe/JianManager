@@ -6,6 +6,10 @@ import { useGroups } from '@/api/groups'
 import { useNodeJDKs } from '@/api/jdks'
 import { useCoreVersions, useResolvedCore } from '@/api/provision'
 import { useProvisionProxy } from '@/api/proxy'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
+import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
+import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { validateRequired, validatePositiveInt, validateFields, hasErrors } from '@/lib/form-validation'
 
 interface ProvisionProxyDialogProps {
   open: boolean
@@ -41,6 +45,33 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
 
   const provision = useProvisionProxy()
 
+  // 系统可获取项 → 下拉选项（FR-072）。代理类型/版本允许自定义。
+  const nodeOptions: ComboboxOption[] = (nodes ?? [])
+    .filter((n) => n.status === 1)
+    .map((n) => ({ value: String(n.id), label: n.name }))
+  const proxyTypeOptions: ComboboxOption[] = [
+    { value: 'velocity', label: 'Velocity (modern)' },
+    { value: 'waterfall', label: 'Waterfall' },
+    { value: 'bungeecord', label: 'BungeeCord' },
+  ]
+  const versionOptions: ComboboxOption[] = (versions ?? []).map((v) => ({ value: v }))
+  const jdkOptions: ComboboxOption[] = (jdks ?? []).map((j) => ({
+    value: String(j.id),
+    label: `${j.vendor} ${j.majorVersion} (${j.version})`,
+  }))
+  const groupOptions: ComboboxOption[] = (groups ?? []).map((g) => ({ value: String(g.id), label: g.name }))
+
+  const errors = validateFields(
+    { name, nodeId, version, memoryMb },
+    {
+      name: [validateRequired],
+      nodeId: [validateRequired],
+      // 仅当该代理类型需要版本时才把版本设为必填
+      version: needsVersion ? [validateRequired] : [],
+      memoryMb: [validatePositiveInt],
+    },
+  )
+
   const jdkDefaultNodeRef = useRef('')
   useEffect(() => {
     if (nodeId && jdks && jdks.length > 0 && jdkDefaultNodeRef.current !== nodeId) {
@@ -59,6 +90,7 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
+    if (hasErrors(errors)) return
     const args = jvmArgs.trim() ? jvmArgs.trim().split(/\s+/).filter(Boolean) : undefined
     provision.mutate(
       {
@@ -91,47 +123,59 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-background border rounded-lg p-6 w-full max-w-md shadow-lg max-h-[88vh] overflow-y-auto">
+    <div className={MODAL_OVERLAY}>
+      <div className={`${MODAL_PANEL} max-w-md`}>
         <h2 className="text-lg font-bold mb-1">{t('proxy.title')}</h2>
         <p className="text-xs text-muted-foreground mb-4">{t('provision.systemAssigned')}</p>
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
-            <label className="text-sm font-medium">{t('instances.instanceName')}</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} required
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm" placeholder="velocity-main" />
+            <FieldLabel required>{t('instances.instanceName')}</FieldLabel>
+            <input value={name} onChange={(e) => setName(e.target.value)}
+              aria-invalid={!!errors.name}
+              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive" placeholder="velocity-main" />
+            <FieldError error={errors.name} />
           </div>
 
           <div>
-            <label className="text-sm font-medium">{t('instances.node')}</label>
-            <select value={nodeId} onChange={(e) => setNodeId(e.target.value)} required
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm">
-              <option value="">{t('instances.selectNode')}</option>
-              {nodes?.filter((n) => n.status === 1).map((n) => (
-                <option key={n.id} value={n.id}>{n.name}</option>
-              ))}
-            </select>
+            <FieldLabel required>{t('instances.node')}</FieldLabel>
+            <div className="mt-1">
+              <Combobox
+                options={nodeOptions}
+                value={nodeId}
+                onChange={setNodeId}
+                allowCustom={false}
+                placeholder={t('instances.selectNode')}
+                invalid={!!errors.nodeId}
+              />
+            </div>
+            <FieldError error={errors.nodeId} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-sm font-medium">{t('proxy.type')}</label>
-              <select value={proxyType} onChange={(e) => { setProxyType(e.target.value); setVersion('') }}
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm">
-                <option value="velocity">Velocity (modern)</option>
-                <option value="waterfall">Waterfall</option>
-                <option value="bungeecord">BungeeCord</option>
-              </select>
+              <FieldLabel>{t('proxy.type')}</FieldLabel>
+              <div className="mt-1">
+                <Combobox
+                  options={proxyTypeOptions}
+                  value={proxyType}
+                  onChange={(v) => { setProxyType(v); setVersion('') }}
+                />
+              </div>
             </div>
             <div>
-              <label className="text-sm font-medium">{t('proxy.version')}</label>
-              <select value={version} onChange={(e) => setVersion(e.target.value)}
-                disabled={!needsVersion || versionsLoading} required={needsVersion}
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm disabled:opacity-60">
-                <option value="">{needsVersion ? (versionsLoading ? t('provision.loadingVersions') : t('provision.selectVersion')) : t('proxy.latestOnly')}</option>
-                {versions?.map((v) => (<option key={v} value={v}>{v}</option>))}
-              </select>
+              <FieldLabel required={needsVersion}>{t('proxy.version')}</FieldLabel>
+              <div className="mt-1">
+                <Combobox
+                  options={versionOptions}
+                  value={needsVersion ? version : ''}
+                  onChange={setVersion}
+                  disabled={!needsVersion || versionsLoading}
+                  invalid={!!errors.version}
+                  placeholder={needsVersion ? (versionsLoading ? t('provision.loadingVersions') : t('provision.selectVersion')) : t('proxy.latestOnly')}
+                />
+              </div>
+              <FieldError error={errors.version} />
             </div>
           </div>
           {resolved && (
@@ -140,33 +184,43 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-sm font-medium">{t('provision.memory')}</label>
+              <FieldLabel>{t('provision.memory')}</FieldLabel>
               <input value={memoryMb} onChange={(e) => setMemoryMb(e.target.value)} inputMode="numeric"
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm" placeholder="1024" />
+                aria-invalid={!!errors.memoryMb}
+                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive" placeholder="1024" />
+              <FieldError error={errors.memoryMb} />
             </div>
             <div>
-              <label className="text-sm font-medium">JDK</label>
-              <select value={jdkId} onChange={(e) => setJdkId(e.target.value)}
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm">
-                <option value="">{t('provision.noJdk')}</option>
-                {jdks?.map((j) => (<option key={j.id} value={j.id}>{j.vendor} {j.majorVersion} ({j.version})</option>))}
-              </select>
+              <FieldLabel>JDK</FieldLabel>
+              <div className="mt-1">
+                <Combobox
+                  options={jdkOptions}
+                  value={jdkId}
+                  onChange={setJdkId}
+                  allowCustom={false}
+                  placeholder={t('provision.noJdk')}
+                />
+              </div>
             </div>
           </div>
 
           <div>
-            <label className="text-sm font-medium">{t('provision.jvmArgs')}</label>
+            <FieldLabel>{t('provision.jvmArgs')}</FieldLabel>
             <input value={jvmArgs} onChange={(e) => setJvmArgs(e.target.value)}
               className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm font-mono" placeholder="-XX:+UseG1GC" />
           </div>
 
           <div>
-            <label className="text-sm font-medium">{t('instances.group')}</label>
-            <select value={groupId} onChange={(e) => setGroupId(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm">
-              <option value="">{t('instances.noGroup')}</option>
-              {groups?.map((g) => (<option key={g.id} value={g.id}>{g.name}</option>))}
-            </select>
+            <FieldLabel>{t('instances.group')}</FieldLabel>
+            <div className="mt-1">
+              <Combobox
+                options={groupOptions}
+                value={groupId}
+                onChange={setGroupId}
+                allowCustom={false}
+                placeholder={t('instances.noGroup')}
+              />
+            </div>
           </div>
 
           <div>
@@ -181,7 +235,7 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
             <button type="button" onClick={close} className="px-4 py-2 text-sm border rounded-md hover:bg-accent">
               {t('common.cancel')}
             </button>
-            <button type="submit" disabled={provision.isPending || !nodeId || !name || (needsVersion && !version)}
+            <button type="submit" disabled={provision.isPending || hasErrors(errors)}
               className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50">
               {provision.isPending ? t('proxy.provisioning') : t('proxy.submit')}
             </button>

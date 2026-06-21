@@ -36,11 +36,13 @@ export function FieldLabel({ required, className, children, ...props }: FieldLab
 interface FieldErrorProps {
   /** 错误的 i18n key（validation 命名空间）；空则不渲染。 */
   error?: string
+  /** 可选 i18n 插值参数（如 minLength 的 {{min}}）。 */
+  values?: Record<string, unknown>
 }
 
-/** 字段内联错误文字。传入 i18n key，翻译后以 destructive 小字展示。 */
-export function FieldError({ error }: FieldErrorProps) {
+/** 字段内联错误文字。传入 i18n key（可带插值参数），翻译后以 destructive 小字展示。 */
+export function FieldError({ error, values }: FieldErrorProps) {
   const { t } = useTranslation()
   if (!error) return null
-  return <p className="mt-1 text-xs text-destructive">{t(error)}</p>
+  return <p className="mt-1 text-xs text-destructive">{t(error, values)}</p>
 }

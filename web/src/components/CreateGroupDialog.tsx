@@ -1,6 +1,9 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useCreateGroup } from '@/api/groups'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
+import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { validateRequired } from '@/lib/form-validation'
 
 interface CreateGroupDialogProps {
   open: boolean
@@ -20,8 +23,11 @@ export default function CreateGroupDialog({ open, onClose }: CreateGroupDialogPr
     setError('')
   }
 
+  const nameError = validateRequired(name)
+
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
+    if (nameError) return
     setError('')
     create.mutate(
       { name, description },
@@ -40,8 +46,8 @@ export default function CreateGroupDialog({ open, onClose }: CreateGroupDialogPr
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-background border rounded-lg p-6 w-full max-w-sm shadow-lg">
+    <div className={MODAL_OVERLAY}>
+      <div className={`${MODAL_PANEL} max-w-sm`}>
         <h2 className="text-lg font-bold mb-4">{t('groups.createGroup')}</h2>
 
         {error && (
@@ -50,17 +56,18 @@ export default function CreateGroupDialog({ open, onClose }: CreateGroupDialogPr
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
-            <label className="text-sm font-medium">{t('common.name')}</label>
+            <FieldLabel required>{t('common.name')}</FieldLabel>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
-              required
+              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
+              aria-invalid={!!nameError}
             />
+            <FieldError error={nameError} />
           </div>
 
           <div>
-            <label className="text-sm font-medium">{t('groups.description', 'Description')}</label>
+            <FieldLabel>{t('groups.description', 'Description')}</FieldLabel>
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -79,7 +86,7 @@ export default function CreateGroupDialog({ open, onClose }: CreateGroupDialogPr
             </button>
             <button
               type="submit"
-              disabled={create.isPending}
+              disabled={create.isPending || !!nameError}
               className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50"
             >
               {create.isPending ? t('common.creating') : t('common.create')}

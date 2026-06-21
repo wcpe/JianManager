@@ -392,6 +392,8 @@
     "role": "Role",
     "node": "Node",
     "selectNode": "Select Node",
+    "jdkOptional": "JDK (optional)",
+    "jdkSystemDefault": "Unspecified (system Java)",
     "autoRestart": "Auto restart on crash",
     "group": "Group",
     "noGroup": "No group",
@@ -1005,6 +1007,7 @@
   "validation": {
     "requiredMark": "required",
     "required": "This field is required",
+    "minLength": "Must be at least {{min}} characters",
     "portInteger": "Port must be an integer",
     "portRange": "Port must be between 1 and 65535",
     "integer": "Must be an integer",

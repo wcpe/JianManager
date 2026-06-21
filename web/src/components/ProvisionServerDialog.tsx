@@ -5,6 +5,10 @@ import { useNodes } from '@/api/nodes'
 import { useGroups } from '@/api/groups'
 import { useNodeJDKs } from '@/api/jdks'
 import { useCoreVersions, useResolvedCore, useProvisionBukkit } from '@/api/provision'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
+import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
+import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { validateRequired, validatePositiveInt, validateFields, hasErrors } from '@/lib/form-validation'
 
 interface ProvisionServerDialogProps {
   open: boolean
@@ -44,6 +48,27 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
 
   const provision = useProvisionBukkit()
 
+  // 系统可获取项 → 下拉选项（FR-072）。版本允许自定义（PaperMC 列表外的版本）。
+  const nodeOptions: ComboboxOption[] = (nodes ?? [])
+    .filter((n) => n.status === 1)
+    .map((n) => ({ value: String(n.id), label: n.name }))
+  const versionOptions: ComboboxOption[] = (versions ?? []).map((v) => ({ value: v }))
+  const jdkOptions: ComboboxOption[] = (jdks ?? []).map((j) => ({
+    value: String(j.id),
+    label: `${j.vendor} ${j.majorVersion} (${j.version})`,
+  }))
+  const groupOptions: ComboboxOption[] = (groups ?? []).map((g) => ({ value: String(g.id), label: g.name }))
+
+  const errors = validateFields(
+    { name, nodeId, mcVersion, memoryMb },
+    {
+      name: [validateRequired],
+      nodeId: [validateRequired],
+      mcVersion: [validateRequired],
+      memoryMb: [validatePositiveInt],
+    },
+  )
+
   // 选节点后默认绑定该节点最高版本的已装 JDK：现代 Paper 需 Java 17/21，
   // 默认「不指定」会用系统 Java（常为 8）导致一键搭建出的服跑不起来。每节点只默认一次，用户仍可改。
   const jdkDefaultNodeRef = useRef('')
@@ -75,6 +100,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
+    if (hasErrors(errors)) return
     const args = jvmArgs.trim() ? jvmArgs.trim().split(/\s+/).filter(Boolean) : undefined
     provision.mutate(
       {
@@ -111,41 +137,42 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-background border rounded-lg p-6 w-full max-w-md shadow-lg max-h-[88vh] overflow-y-auto">
+    <div className={MODAL_OVERLAY}>
+      <div className={`${MODAL_PANEL} max-w-md`}>
         <h2 className="text-lg font-bold mb-1">{t('provision.title')}</h2>
         <p className="text-xs text-muted-foreground mb-4">{t('provision.systemAssigned')}</p>
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
-            <label className="text-sm font-medium">{t('instances.instanceName')}</label>
+            <FieldLabel required>{t('instances.instanceName')}</FieldLabel>
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
+              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
               placeholder="lobby"
-              required
+              aria-invalid={!!errors.name}
             />
+            <FieldError error={errors.name} />
           </div>
 
           <div>
-            <label className="text-sm font-medium">{t('instances.node')}</label>
-            <select
-              value={nodeId}
-              onChange={(e) => setNodeId(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
-              required
-            >
-              <option value="">{t('instances.selectNode')}</option>
-              {nodes?.filter((n) => n.status === 1).map((n) => (
-                <option key={n.id} value={n.id}>{n.name}</option>
-              ))}
-            </select>
+            <FieldLabel required>{t('instances.node')}</FieldLabel>
+            <div className="mt-1">
+              <Combobox
+                options={nodeOptions}
+                value={nodeId}
+                onChange={setNodeId}
+                allowCustom={false}
+                placeholder={t('instances.selectNode')}
+                invalid={!!errors.nodeId}
+              />
+            </div>
+            <FieldError error={errors.nodeId} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-sm font-medium">{t('provision.coreType')}</label>
+              <FieldLabel>{t('provision.coreType')}</FieldLabel>
               <select
                 value={coreType}
                 disabled
@@ -155,30 +182,29 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
               </select>
             </div>
             <div>
-              <label className="text-sm font-medium">{t('provision.mcVersion')}</label>
-              <select
-                value={mcVersion}
-                onChange={(e) => setMcVersion(e.target.value)}
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
-                required
-                disabled={versionsLoading || versionsError}
-              >
-                <option value="">
-                  {versionsLoading
-                    ? t('provision.loadingVersions')
-                    : versionsError
-                      ? t('provision.versionsError')
-                      : t('provision.selectVersion')}
-                </option>
-                {versions?.map((v) => (
-                  <option key={v} value={v}>{v}</option>
-                ))}
-              </select>
+              <FieldLabel required>{t('provision.mcVersion')}</FieldLabel>
+              <div className="mt-1">
+                <Combobox
+                  options={versionOptions}
+                  value={mcVersion}
+                  onChange={setMcVersion}
+                  disabled={versionsLoading || versionsError}
+                  invalid={!!errors.mcVersion}
+                  placeholder={
+                    versionsLoading
+                      ? t('provision.loadingVersions')
+                      : versionsError
+                        ? t('provision.versionsError')
+                        : t('provision.selectVersion')
+                  }
+                />
+              </div>
+              <FieldError error={errors.mcVersion} />
             </div>
           </div>
 
           <div>
-            <label className="text-sm font-medium">{t('provision.build')}</label>
+            <FieldLabel>{t('provision.build')}</FieldLabel>
             <input
               value={build}
               onChange={(e) => setBuild(e.target.value)}
@@ -199,34 +225,33 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-sm font-medium">{t('provision.memory')}</label>
+              <FieldLabel>{t('provision.memory')}</FieldLabel>
               <input
                 value={memoryMb}
                 onChange={(e) => setMemoryMb(e.target.value)}
                 inputMode="numeric"
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
+                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
                 placeholder="2048"
+                aria-invalid={!!errors.memoryMb}
               />
+              <FieldError error={errors.memoryMb} />
             </div>
             <div>
-              <label className="text-sm font-medium">JDK</label>
-              <select
-                value={jdkId}
-                onChange={(e) => setJdkId(e.target.value)}
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
-              >
-                <option value="">{t('provision.noJdk')}</option>
-                {jdks?.map((j) => (
-                  <option key={j.id} value={j.id}>
-                    {j.vendor} {j.majorVersion} ({j.version})
-                  </option>
-                ))}
-              </select>
+              <FieldLabel>JDK</FieldLabel>
+              <div className="mt-1">
+                <Combobox
+                  options={jdkOptions}
+                  value={jdkId}
+                  onChange={setJdkId}
+                  allowCustom={false}
+                  placeholder={t('provision.noJdk')}
+                />
+              </div>
             </div>
           </div>
 
           <div>
-            <label className="text-sm font-medium">{t('provision.jvmArgs')}</label>
+            <FieldLabel>{t('provision.jvmArgs')}</FieldLabel>
             <input
               value={jvmArgs}
               onChange={(e) => setJvmArgs(e.target.value)}
@@ -237,17 +262,16 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
           </div>
 
           <div>
-            <label className="text-sm font-medium">{t('instances.group')}</label>
-            <select
-              value={groupId}
-              onChange={(e) => setGroupId(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
-            >
-              <option value="">{t('instances.noGroup')}</option>
-              {groups?.map((g) => (
-                <option key={g.id} value={g.id}>{g.name}</option>
-              ))}
-            </select>
+            <FieldLabel>{t('instances.group')}</FieldLabel>
+            <div className="mt-1">
+              <Combobox
+                options={groupOptions}
+                value={groupId}
+                onChange={setGroupId}
+                allowCustom={false}
+                placeholder={t('instances.noGroup')}
+              />
+            </div>
           </div>
 
           <div>
@@ -268,7 +292,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
             </button>
             <button
               type="submit"
-              disabled={provision.isPending || !nodeId || !mcVersion || !name}
+              disabled={provision.isPending || hasErrors(errors)}
               className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50"
             >
               {provision.isPending ? t('provision.provisioning') : t('provision.submit')}

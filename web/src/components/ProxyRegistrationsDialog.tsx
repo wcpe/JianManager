@@ -16,6 +16,10 @@ import {
   useDeleteRegistration,
 } from '@/api/registrations'
 import { useResyncProxy } from '@/api/proxy'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
+import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
+import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { validateHost } from '@/lib/form-validation'
 
 interface ProxyRegistrationsDialogProps {
   proxyId: number
@@ -39,10 +43,15 @@ export default function ProxyRegistrationsDialog({ proxyId, proxyName, onClose }
 
   const registeredBackendIds = new Set(regs?.map((r) => r.backendId))
   const candidates = (backends || []).filter((b) => !registeredBackendIds.has(b.id))
+  const backendOptions: ComboboxOption[] = candidates.map((b) => ({
+    value: String(b.id),
+    label: `${b.name} (:${b.serverPort})`,
+  }))
+  const forcedHostError = validateHost(forcedHost)
 
   const add = (e: FormEvent) => {
     e.preventDefault()
-    if (!backendId) return
+    if (!backendId || forcedHostError) return
     create.mutate(
       {
         backendId: Number(backendId),
@@ -79,8 +88,8 @@ export default function ProxyRegistrationsDialog({ proxyId, proxyName, onClose }
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="bg-background border rounded-lg p-6 w-full max-w-2xl shadow-lg max-h-[85vh] overflow-y-auto">
+    <div className={MODAL_OVERLAY}>
+      <div className={`${MODAL_PANEL} max-w-2xl`}>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold">{t('proxy.manageTitle', { name: proxyName })}</h2>
           <div className="flex items-center gap-3">
@@ -128,31 +137,37 @@ export default function ProxyRegistrationsDialog({ proxyId, proxyName, onClose }
         </div>
 
         <h3 className="text-sm font-medium mb-2">{t('proxy.registerBackend')}</h3>
-        <form onSubmit={add} className="grid grid-cols-2 gap-3 items-end">
+        <form onSubmit={add} className="grid grid-cols-2 gap-3 items-start">
           <div>
-            <label className="text-xs text-muted-foreground">{t('proxy.backend')}</label>
-            <select value={backendId} onChange={(e) => setBackendId(e.target.value)} required
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm">
-              <option value="">{t('proxy.selectBackend')}</option>
-              {candidates.map((b) => (<option key={b.id} value={b.id}>{b.name} (:{b.serverPort})</option>))}
-            </select>
+            <FieldLabel required className="text-xs text-muted-foreground font-normal">{t('proxy.backend')}</FieldLabel>
+            <div className="mt-1">
+              <Combobox
+                options={backendOptions}
+                value={backendId}
+                onChange={setBackendId}
+                allowCustom={false}
+                placeholder={t('proxy.selectBackend')}
+              />
+            </div>
           </div>
           <div>
-            <label className="text-xs text-muted-foreground">{t('proxy.alias')} ({t('proxy.aliasOptional')})</label>
+            <FieldLabel className="text-xs text-muted-foreground font-normal">{t('proxy.alias')} ({t('proxy.aliasOptional')})</FieldLabel>
             <input value={alias} onChange={(e) => setAlias(e.target.value)}
               className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm" placeholder="lobby" />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground">{t('proxy.forcedHost')}</label>
+            <FieldLabel className="text-xs text-muted-foreground font-normal">{t('proxy.forcedHost')}</FieldLabel>
             <input value={forcedHost} onChange={(e) => setForcedHost(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm" placeholder="play.example.com" />
+              aria-invalid={!!forcedHostError}
+              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive" placeholder="play.example.com" />
+            <FieldError error={forcedHostError} />
           </div>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between pt-6">
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={restricted} onChange={(e) => setRestricted(e.target.checked)} />
               {t('proxy.restricted')}
             </label>
-            <button type="submit" disabled={create.isPending || !backendId}
+            <button type="submit" disabled={create.isPending || !backendId || !!forcedHostError}
               className="px-3 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50">
               {t('proxy.register')}
             </button>
