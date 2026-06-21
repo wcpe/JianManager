@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/wxys233/JianManager/proto/workerpb"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // writeMaliciousArchive 手工写一个含越界路径条目（../escape.txt）的 tar.gz，用于测试 zip-slip 防御。

@@ -5,7 +5,7 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/wxys233/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 // 端口分配范围（FR-032）。MC 默认 server-port=25565、rcon=25575。

@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/wxys233/JianManager/internal/controlplane/service"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
 // RegistrationHandler proxy↔backend 注册关系路由（FR-032 / ADR-007）。注册在平台管理员组下。

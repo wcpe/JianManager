@@ -9,7 +9,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/wxys233/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 // uploadAsset 用 multipart 向 POST /assets 上传一份内容。

@@ -9,8 +9,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/wxys233/JianManager/internal/controlplane/model"
-	"github.com/wxys233/JianManager/internal/controlplane/service"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
 // LogHandler 日志中心路由处理器（FR-049 查询 + 导出）。

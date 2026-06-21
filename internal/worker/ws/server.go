@@ -9,7 +9,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
 
-	"github.com/wxys233/JianManager/internal/worker/daemon"
+	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
 // StdinHandler stdin 输入处理函数。

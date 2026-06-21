@@ -4,8 +4,8 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/wxys233/JianManager/internal/worker/metrics"
-	"github.com/wxys233/JianManager/proto/workerpb"
+	"github.com/wcpe/JianManager/internal/worker/metrics"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // ExecRconCommand 经实例 RCON 执行一条命令并返回原始输出（FR-054 玩家管理）。

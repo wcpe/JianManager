@@ -9,8 +9,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
-	"github.com/wxys233/JianManager/internal/controlplane/config"
-	"github.com/wxys233/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/config"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 var (

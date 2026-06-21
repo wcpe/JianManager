@@ -5990,7 +5990,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x0eSetBotBehavior\x12\x1d.worker.SetBotBehaviorRequest\x1a\x1e.worker.SetBotBehaviorResponse\x12O\n" +
 	"\x0eSendBotCommand\x12\x1d.worker.SendBotCommandRequest\x1a\x1e.worker.SendBotCommandResponse\x12I\n" +
 	"\fRunBotScript\x12\x1b.worker.RunBotScriptRequest\x1a\x1c.worker.RunBotScriptResponse\x12E\n" +
-	"\x0fStreamBotEvents\x12\x1e.worker.StreamBotEventsRequest\x1a\x10.worker.BotEvent0\x01B/Z-github.com/wxys233/JianManager/proto/workerpbb\x06proto3"
+	"\x0fStreamBotEvents\x12\x1e.worker.StreamBotEventsRequest\x1a\x10.worker.BotEvent0\x01B/Z-github.com/wcpe/JianManager/proto/workerpbb\x06proto3"
 
 var (
 	file_proto_worker_proto_rawDescOnce sync.Once

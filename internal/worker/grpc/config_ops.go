@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
-	"github.com/wxys233/JianManager/proto/workerpb"
+	"github.com/wcpe/JianManager/proto/workerpb"
 	"gopkg.in/yaml.v3"
 )
 

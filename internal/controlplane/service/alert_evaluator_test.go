@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/wxys233/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 func TestCompareOp(t *testing.T) {

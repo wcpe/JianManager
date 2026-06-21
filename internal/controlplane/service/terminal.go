@@ -7,7 +7,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"gorm.io/gorm"
 
-	"github.com/wxys233/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 // TerminalService 终端连接服务。

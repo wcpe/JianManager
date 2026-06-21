@@ -72,8 +72,8 @@ lint-bot:
 
 # 生成 protobuf 代码（module 选项确保按 go_package 写入 proto/workerpb，而非嵌套 github.com 目录）
 proto:
-	protoc --go_out=. --go_opt=module=github.com/wxys233/JianManager \
-		--go-grpc_out=. --go-grpc_opt=module=github.com/wxys233/JianManager \
+	protoc --go_out=. --go_opt=module=github.com/wcpe/JianManager \
+		--go-grpc_out=. --go-grpc_opt=module=github.com/wcpe/JianManager \
 		proto/worker.proto
 
 # Docker 构建

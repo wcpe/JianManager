@@ -7,8 +7,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/wxys233/JianManager/internal/controlplane/config"
-	"github.com/wxys233/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/config"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 // New 创建并返回数据库连接。

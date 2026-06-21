@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/wxys233/JianManager/internal/controlplane/service"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
 // TerminalHandler 终端路由处理器。

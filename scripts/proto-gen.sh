@@ -5,7 +5,7 @@ set -euo pipefail
 
 PROTO_DIR="proto"
 OUT_DIR="proto/workerpb"
-MODULE="github.com/wxys233/JianManager"
+MODULE="github.com/wcpe/JianManager"
 
 # 清理旧的生成文件
 rm -f "${OUT_DIR}/worker.pb.go" "${OUT_DIR}/worker_grpc.pb.go"

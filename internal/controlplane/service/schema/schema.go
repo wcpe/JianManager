@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wxys233/JianManager/proto/workerpb"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // FieldSchema 单字段元数据。

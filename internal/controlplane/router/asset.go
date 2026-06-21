@@ -8,8 +8,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/wxys233/JianManager/internal/controlplane/model"
-	"github.com/wxys233/JianManager/internal/controlplane/service"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
 // AssetHandler 制品库路由处理器。资产是平台级共享资源，统一由平台管理员管理。

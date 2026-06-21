@@ -10,13 +10,13 @@ import (
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
 
-	"github.com/wxys233/JianManager/internal/controlplane/config"
-	"github.com/wxys233/JianManager/internal/controlplane/database"
-	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
-	"github.com/wxys233/JianManager/internal/controlplane/router"
-	"github.com/wxys233/JianManager/internal/controlplane/service"
-	"github.com/wxys233/JianManager/internal/platform/dataroot"
-	"github.com/wxys233/JianManager/proto/workerpb"
+	"github.com/wcpe/JianManager/internal/controlplane/config"
+	"github.com/wcpe/JianManager/internal/controlplane/database"
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/router"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
+	"github.com/wcpe/JianManager/internal/platform/dataroot"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 func main() {

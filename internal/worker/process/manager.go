@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/wxys233/JianManager/internal/worker/daemon"
+	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
 // InstanceState 实例运行状态。

@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wxys233/JianManager/internal/worker/storage"
-	"github.com/wxys233/JianManager/proto/workerpb"
+	"github.com/wcpe/JianManager/internal/worker/storage"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // backupsSubdir 是节点数据根下存放备份归档的子目录（相对数据根）。

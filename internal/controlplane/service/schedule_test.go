@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
-	"github.com/wxys233/JianManager/internal/controlplane/database"
-	"github.com/wxys233/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/database"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 func setupScheduleTestDB(t *testing.T) *gorm.DB {

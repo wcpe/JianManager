@@ -10,9 +10,9 @@ import (
 
 	"gorm.io/gorm"
 
-	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
-	"github.com/wxys233/JianManager/internal/controlplane/model"
-	"github.com/wxys233/JianManager/proto/workerpb"
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // 玩家管理相关错误（FR-054）。

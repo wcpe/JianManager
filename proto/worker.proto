@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package worker;
 
-option go_package = "github.com/wxys233/JianManager/proto/workerpb";
+option go_package = "github.com/wcpe/JianManager/proto/workerpb";
 
 // WorkerService 定义 Control Plane 与 Worker Node 之间的 gRPC 服务。
 service WorkerService {

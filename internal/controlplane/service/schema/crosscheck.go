@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/wxys233/JianManager/proto/workerpb"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // ParsedConfig 单文件解析结果：路径 + 已解析字段列表。

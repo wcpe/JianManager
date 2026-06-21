@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wxys233/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 // instanceRef 是实例 UUID 解析出的主键引用，缓存以避免每条日志反查数据库。

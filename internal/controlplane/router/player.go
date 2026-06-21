@@ -8,8 +8,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/wxys233/JianManager/internal/controlplane/middleware"
-	"github.com/wxys233/JianManager/internal/controlplane/service"
+	"github.com/wcpe/JianManager/internal/controlplane/middleware"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
 // PlayerHandler 玩家管理路由处理器（FR-054）。

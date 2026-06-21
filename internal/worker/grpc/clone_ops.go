@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wxys233/JianManager/proto/workerpb"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。

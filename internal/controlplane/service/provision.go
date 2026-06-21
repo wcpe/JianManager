@@ -13,10 +13,10 @@ import (
 
 	"gorm.io/gorm"
 
-	cpembed "github.com/wxys233/JianManager/internal/controlplane/embed"
-	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
-	"github.com/wxys233/JianManager/internal/controlplane/model"
-	"github.com/wxys233/JianManager/proto/workerpb"
+	cpembed "github.com/wcpe/JianManager/internal/controlplane/embed"
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // provisionCoreJar 是一键搭建时核心 jar 在工作目录内的固定文件名，

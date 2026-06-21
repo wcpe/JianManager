@@ -9,9 +9,9 @@ import (
 
 	"gorm.io/gorm"
 
-	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
-	"github.com/wxys233/JianManager/internal/controlplane/model"
-	"github.com/wxys233/JianManager/proto/workerpb"
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // proxyMotd 是平台生成代理配置时写入的默认 motd。

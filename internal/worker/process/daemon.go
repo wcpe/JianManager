@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wxys233/JianManager/internal/worker/daemon"
+	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
 // daemonStrategy 通过独立 wrapper 子进程管理游戏服（ADR-003）。

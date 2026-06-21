@@ -15,17 +15,17 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/wxys233/JianManager/internal/platform/dataroot"
-	"github.com/wxys233/JianManager/internal/worker/bot"
-	"github.com/wxys233/JianManager/internal/worker/daemon"
-	wgrpc "github.com/wxys233/JianManager/internal/worker/grpc"
-	"github.com/wxys233/JianManager/internal/worker/heartbeat"
-	jdks "github.com/wxys233/JianManager/internal/worker/jdk"
-	"github.com/wxys233/JianManager/internal/worker/metrics"
-	"github.com/wxys233/JianManager/internal/worker/process"
-	"github.com/wxys233/JianManager/internal/worker/register"
-	"github.com/wxys233/JianManager/internal/worker/ws"
-	"github.com/wxys233/JianManager/proto/workerpb"
+	"github.com/wcpe/JianManager/internal/platform/dataroot"
+	"github.com/wcpe/JianManager/internal/worker/bot"
+	"github.com/wcpe/JianManager/internal/worker/daemon"
+	wgrpc "github.com/wcpe/JianManager/internal/worker/grpc"
+	"github.com/wcpe/JianManager/internal/worker/heartbeat"
+	jdks "github.com/wcpe/JianManager/internal/worker/jdk"
+	"github.com/wcpe/JianManager/internal/worker/metrics"
+	"github.com/wcpe/JianManager/internal/worker/process"
+	"github.com/wcpe/JianManager/internal/worker/register"
+	"github.com/wcpe/JianManager/internal/worker/ws"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // main 是 Worker Node 入口。

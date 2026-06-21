@@ -13,8 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/wxys233/JianManager/internal/worker/process"
-	"github.com/wxys233/JianManager/proto/workerpb"
+	"github.com/wcpe/JianManager/internal/worker/process"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // TestDownloadCore_LocalStub 离线验证「一键建服」核心下载机制：

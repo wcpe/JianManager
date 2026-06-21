@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"sync"
 
-	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
-	"github.com/wxys233/JianManager/proto/workerpb"
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // InstanceEvent 实例事件（前端消费）。

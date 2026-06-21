@@ -15,9 +15,9 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/wxys233/JianManager/internal/controlplane/config"
-	"github.com/wxys233/JianManager/internal/controlplane/model"
-	"github.com/wxys233/JianManager/internal/platform/dataroot"
+	"github.com/wcpe/JianManager/internal/controlplane/config"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/platform/dataroot"
 )
 
 // newLogSvc 构造测试用 LogService：内存 SQLite + 临时数据根。

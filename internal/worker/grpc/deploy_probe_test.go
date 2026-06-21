@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/wxys233/JianManager/internal/worker/process"
-	"github.com/wxys233/JianManager/proto/workerpb"
+	"github.com/wcpe/JianManager/internal/worker/process"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // TestDeployServerProbe 验证探针自动部署：jar 与 config.yml 落到实例 plugins 目录（FR-010）。

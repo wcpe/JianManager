@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wxys233/JianManager/proto/workerpb"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 func TestParseProperties_PreservesOrder(t *testing.T) {

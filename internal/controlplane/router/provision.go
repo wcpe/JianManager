@@ -7,7 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"github.com/wxys233/JianManager/internal/controlplane/service"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
 // ProvisionHandler 处理核心查询、一键搭建子服（FR-034）、搭建代理（FR-035）与复制子服（FR-036）。

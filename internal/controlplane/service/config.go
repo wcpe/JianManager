@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/pmezard/go-difflib/difflib"
-	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
-	"github.com/wxys233/JianManager/internal/controlplane/model"
-	"github.com/wxys233/JianManager/internal/controlplane/service/schema"
-	"github.com/wxys233/JianManager/proto/workerpb"
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/service/schema"
+	"github.com/wcpe/JianManager/proto/workerpb"
 	"gorm.io/gorm"
 )
 

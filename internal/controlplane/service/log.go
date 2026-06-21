@@ -10,9 +10,9 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/wxys233/JianManager/internal/controlplane/config"
-	"github.com/wxys233/JianManager/internal/controlplane/model"
-	"github.com/wxys233/JianManager/internal/platform/dataroot"
+	"github.com/wcpe/JianManager/internal/controlplane/config"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/platform/dataroot"
 )
 
 // 入库通道与批量参数。日志是高写入路径，故异步缓冲 + 定量/定时批量 Create，

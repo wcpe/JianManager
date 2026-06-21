@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wxys233/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 // logPersistSkipKey 是一个 slog 属性键：带此属性的日志记录不落库，

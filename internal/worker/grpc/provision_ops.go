@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/wxys233/JianManager/proto/workerpb"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。

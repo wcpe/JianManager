@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/wxys233/JianManager/internal/worker/daemon"
+	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
 // daemon 集成测试在进程内运行 wrapper，替身进程（ping/sleep）不响应 stdin "stop"，

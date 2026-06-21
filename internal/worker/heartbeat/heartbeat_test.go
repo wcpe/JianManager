@@ -10,7 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/wxys233/JianManager/internal/worker/process"
+	"github.com/wcpe/JianManager/internal/worker/process"
 )
 
 // fakeProbeBody 是一份可被 metrics.parseServerProbeMetrics 解析的 ServerProbe /metrics 文本。

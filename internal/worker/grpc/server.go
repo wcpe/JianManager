@@ -11,12 +11,12 @@ import (
 
 	psproc "github.com/shirou/gopsutil/v4/process"
 
-	"github.com/wxys233/JianManager/internal/platform/dataroot"
-	"github.com/wxys233/JianManager/internal/worker/bot"
-	"github.com/wxys233/JianManager/internal/worker/jdk"
-	"github.com/wxys233/JianManager/internal/worker/metrics"
-	"github.com/wxys233/JianManager/internal/worker/process"
-	"github.com/wxys233/JianManager/proto/workerpb"
+	"github.com/wcpe/JianManager/internal/platform/dataroot"
+	"github.com/wcpe/JianManager/internal/worker/bot"
+	"github.com/wcpe/JianManager/internal/worker/jdk"
+	"github.com/wcpe/JianManager/internal/worker/metrics"
+	"github.com/wcpe/JianManager/internal/worker/process"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // instanceEvent 内部事件，分发给所有 StreamInstanceEvents 订阅者。

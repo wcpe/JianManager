@@ -10,10 +10,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/wxys233/JianManager/internal/worker/metrics"
-	"github.com/wxys233/JianManager/internal/worker/process"
-	"github.com/wxys233/JianManager/internal/worker/register"
-	"github.com/wxys233/JianManager/proto/workerpb"
+	"github.com/wcpe/JianManager/internal/worker/metrics"
+	"github.com/wcpe/JianManager/internal/worker/process"
+	"github.com/wcpe/JianManager/internal/worker/register"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // maxConcurrentProbeScrapes 单次心跳并发抓取 ServerProbe 的上限，避免实例多时一拍抓爆。

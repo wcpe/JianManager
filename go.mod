@@ -1,4 +1,4 @@
-module github.com/wxys233/JianManager
+module github.com/wcpe/JianManager
 
 go 1.26.2
 

@@ -9,9 +9,9 @@ import (
 
 	"gorm.io/gorm"
 
-	cpgrpc "github.com/wxys233/JianManager/internal/controlplane/grpc"
-	"github.com/wxys233/JianManager/internal/controlplane/model"
-	"github.com/wxys233/JianManager/proto/workerpb"
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // 实例批量操作（FR-058）。镜像 FR-038 Bot 批量：按 id/filter 选目标，CP 侧信号量分片有界并发，
