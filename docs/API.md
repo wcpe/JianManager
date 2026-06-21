@@ -1010,6 +1010,11 @@
 - **权限**: 平台管理员
 - **关联 FR**: FR-063
 - **可写白名单键**: `log.level`（debug|info|warn|error）、`jdk.mirror.temurin` / `jdk.mirror.corretto` / `jdk.mirror.zulu`、`graceful_stop.timeout`（Go duration 文本）、`backup.retention_days`（非负整数）
+- **各项生效方式**（FR-063）：
+  - `log.level`：`effectiveImmediately=true`，落库即在 CP 内切换（slog LevelVar）
+  - `jdk.mirror.*`：安装 JDK 时 CP 取生效值经 `InstallJDK.mirror_base` 下发 Worker，影响下载源
+  - `graceful_stop.timeout`：启动实例时 CP 取生效值经 `CreateInstance.graceful_stop_timeout_seconds` 下发 Worker→wrapper；对设置变更后**新启动**的实例生效，已运行实例保留启动时的值
+  - `backup.retention_days`：CP 后台巡检（约每小时一轮）裁剪 `createdAt` 早于 N 天的备份；`≤0` 不裁剪；被未超期增量子链引用的全量基跳过以保链可恢复
 - **请求**: `{ "values": { "log.level": "debug", "backup.retention_days": "30" } }`
 
 ---

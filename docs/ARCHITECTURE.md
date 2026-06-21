@@ -164,7 +164,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 生命周期：Register, Heartbeat (双向 stream)
   - `Heartbeat` 负载除节点指标（CPU/内存/磁盘/累计网络字节/`load_avg1` 系统负载，FR-062）外携带 `instance_metrics`（每实例 ServerProbe 快照：TPS/MSPT/在线/堆/线程/CPU/uptime + 分世界负载，FR-060）；CP 收心跳经 `IngestHeartbeat` 落库为时序样本（node_cpu/mem/disk/net 速率/load）并据相邻累计字节算网络速率（Worker 不碰 DB）
 - 实例操作：CreateInstance, StartInstance, StopInstance, RestartInstance, KillInstance, SendCommand, GetInstanceStatus, ListInstances
-  - `CreateInstance` 除 `start_command` 外携带 `stop_command`（优雅停止命令，CP 按实例角色派生：backend/universal=`stop`，proxy=`end`），由 daemon wrapper 在优雅停止时写入进程 stdin；并携带 `probe_port`（CP 分配的 ServerProbe 端口，daemon 模式透传到 wrapper→PID 记录，供 Worker 心跳自采与重启恢复，FR-060）
+  - `CreateInstance` 除 `start_command` 外携带 `stop_command`（优雅停止命令，CP 按实例角色派生：backend/universal=`stop`，proxy=`end`），由 daemon wrapper 在优雅停止时写入进程 stdin；并携带 `probe_port`（CP 分配的 ServerProbe 端口，daemon 模式透传到 wrapper→PID 记录，供 Worker 心跳自采与重启恢复，FR-060）；以及 `graceful_stop_timeout_seconds`（CP 从平台设置 `graceful_stop.timeout` 取生效值随启动下发，daemon 透传到 wrapper 做超时强杀兜底，FR-063；值在启动时定型，对设置变更后新启动的实例生效）
 - 实例事件流：StreamInstanceEvents (server stream)
   - 同一流承载两类事件：`state_change`（状态转换）与 `stdout`/`stderr`（进程输出）。Worker 进程输出回调分流为「WS 终端广播 + 事件流上报」两路，互不阻塞。CP 侧 EventService 把 `stdout`/`stderr` 经 LogService 落库（日志中心 FR-049），`state_change` 经 SSE 推前端
 - 文件操作：ListFiles, ReadFile, WriteFile, DeleteFile, UploadFile (client stream), DownloadFile (server stream)
@@ -175,6 +175,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 玩家管理：ExecRconCommand（经实例 RCON 执行命令并回传输出，FR-054；RCON 端口/密码由 CP 随请求下发，Worker 不访问 DB；`available=false` 优雅降级）
 - 配置 (V2)：ListConfigFiles, ReadConfig, WriteConfig, ListConfigVersions, RollbackConfig
 - 运行时 (V2)：ListJDKs, InstallJDK, RemoveJDK, DownloadCore
+  - `InstallJDK` 携带 `mirror_base`（CP 从平台设置 `jdk.mirror.<vendor>` 取生效值后下发；Worker 用它构造下载 URL，使运行时配置的镜像源真生效，FR-033/FR-063；为空回退 Worker 本地 env/官方默认源）
 - 复制 (V2)：CloneWorkDir（本机复制源工作目录到目标，排除运行态文件）
   - 搭建子服/代理由 Control Plane 编排：分配端口/目录 → CreateInstance → DownloadCore → WriteConfig，不另设 worker 端 Provision RPC
 - 备份 (V2)：CreateBackup, RestoreBackup（FR-056/057）
