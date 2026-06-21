@@ -28,9 +28,11 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Panel } from '@/components/ui/panel'
 import { StatusBadge } from '@/components/ui/status-badge'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@/components/ui/scrollable-dialog'
+import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
+import { FieldLabel } from '@/components/ui/field-label'
 import {
   Table,
   TableBody,
@@ -315,6 +317,9 @@ function ScheduleFormDialog({
   const nameMissing = mode === 'create' && form.name.trim() === ''
   const canSubmit = !submitting && cron.valid && !instanceMissing && !nameMissing
 
+  const instanceOptions: ComboboxOption[] = instances.map((i) => ({ value: String(i.id), label: i.name }))
+  const actionOptions: ComboboxOption[] = SCHEDULE_ACTIONS.map((a) => ({ value: a, label: t(`schedules.action_${a}`) }))
+
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
     if (!canSubmit) return
@@ -323,105 +328,101 @@ function ScheduleFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v: boolean) => { if (!v) onClose() }}>
-      <DialogContent>
+      <DialogContent className={scrollableDialogContentClass}>
         <DialogHeader>
           <DialogTitle>
             {mode === 'create' ? t('schedules.createSchedule') : t('schedules.editSchedule')}
           </DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div className="space-y-1.5">
-            <Label>{t('schedules.instance')}</Label>
-            {mode === 'create' ? (
-              <select
-                value={form.instanceId}
-                onChange={(e) => setForm({ ...form, instanceId: e.target.value })}
-                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-                required
-              >
-                <option value="">{t('schedules.selectInstance')}</option>
-                {instances.map((i) => (
-                  <option key={i.id} value={i.id}>{i.name}</option>
-                ))}
-              </select>
-            ) : (
-              <div className="w-full rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-                {initial ? (instances.find((i) => i.id === initial.instanceId)?.name ?? `#${initial.instanceId}`) : ''}
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>{t('schedules.name')}</Label>
-            {mode === 'create' ? (
-              <Input
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder={t('schedules.namePlaceholder')}
-                required
-              />
-            ) : (
-              <div className="w-full rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
-                {form.name}
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>{t('schedules.cron')}</Label>
-            <Input
-              value={form.cronExpr}
-              onChange={(e) => setForm({ ...form, cronExpr: e.target.value })}
-              placeholder="0 4 * * *"
-              className="font-mono"
-              aria-invalid={form.cronExpr.length > 0 && !cron.valid}
-            />
-            {form.cronExpr.length > 0 && !cron.valid ? (
-              <p className="text-xs text-destructive">{t(cron.messageKey ?? 'schedules.cronInvalidChar')}</p>
-            ) : (
-              <p className="text-xs text-muted-foreground">{t('schedules.cronHint')}</p>
-            )}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>{t('schedules.action')}</Label>
-            <select
-              value={form.action}
-              onChange={(e) => setForm({ ...form, action: e.target.value })}
-              className="w-full rounded-md border bg-background px-3 py-2 text-sm"
-            >
-              {SCHEDULE_ACTIONS.map((a) => (
-                <option key={a} value={a}>{t(`schedules.action_${a}`)}</option>
-              ))}
-            </select>
-          </div>
-
-          {form.action === 'command' && (
+        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+          <ScrollableDialogBody className="space-y-3 py-1">
             <div className="space-y-1.5">
-              <Label>{t('schedules.command')}</Label>
-              <Input
-                value={form.command}
-                onChange={(e) => setForm({ ...form, command: e.target.value })}
-                placeholder="say server restarting"
-                className="font-mono"
-              />
-              {mode === 'edit' && (
-                <p className="text-xs text-muted-foreground">{t('schedules.commandEditHint')}</p>
+              <FieldLabel required={mode === 'create'}>{t('schedules.instance')}</FieldLabel>
+              {mode === 'create' ? (
+                <Combobox
+                  options={instanceOptions}
+                  value={form.instanceId}
+                  onChange={(v) => setForm({ ...form, instanceId: v })}
+                  allowCustom={false}
+                  placeholder={t('schedules.selectInstance')}
+                  invalid={instanceMissing}
+                />
+              ) : (
+                <div className="w-full rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                  {initial ? (instances.find((i) => i.id === initial.instanceId)?.name ?? `#${initial.instanceId}`) : ''}
+                </div>
               )}
             </div>
-          )}
 
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={form.enabled}
-              onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
-            />
-            {t('schedules.enabled')}
-          </label>
+            <div className="space-y-1.5">
+              <FieldLabel required={mode === 'create'}>{t('schedules.name')}</FieldLabel>
+              {mode === 'create' ? (
+                <Input
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder={t('schedules.namePlaceholder')}
+                  aria-invalid={nameMissing}
+                />
+              ) : (
+                <div className="w-full rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                  {form.name}
+                </div>
+              )}
+            </div>
 
-          <DialogFooter>
+            <div className="space-y-1.5">
+              <FieldLabel required>{t('schedules.cron')}</FieldLabel>
+              <Input
+                value={form.cronExpr}
+                onChange={(e) => setForm({ ...form, cronExpr: e.target.value })}
+                placeholder="0 4 * * *"
+                className="font-mono"
+                aria-invalid={form.cronExpr.length > 0 && !cron.valid}
+              />
+              {form.cronExpr.length > 0 && !cron.valid ? (
+                <p className="text-xs text-destructive">{t(cron.messageKey ?? 'schedules.cronInvalidChar')}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">{t('schedules.cronHint')}</p>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <FieldLabel>{t('schedules.action')}</FieldLabel>
+              <Combobox
+                options={actionOptions}
+                value={form.action}
+                onChange={(v) => setForm({ ...form, action: v })}
+                allowCustom={false}
+              />
+            </div>
+
+            {form.action === 'command' && (
+              <div className="space-y-1.5">
+                <FieldLabel>{t('schedules.command')}</FieldLabel>
+                <Input
+                  value={form.command}
+                  onChange={(e) => setForm({ ...form, command: e.target.value })}
+                  placeholder="say server restarting"
+                  className="font-mono"
+                />
+                {mode === 'edit' && (
+                  <p className="text-xs text-muted-foreground">{t('schedules.commandEditHint')}</p>
+                )}
+              </div>
+            )}
+
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.enabled}
+                onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
+              />
+              {t('schedules.enabled')}
+            </label>
+          </ScrollableDialogBody>
+
+          <DialogFooter className="pt-4">
             <Button type="button" variant="outline" onClick={onClose}>
               {t('common.cancel')}
             </Button>

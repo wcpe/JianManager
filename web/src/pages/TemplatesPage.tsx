@@ -11,7 +11,6 @@ import {
 import { Panel } from '@/components/ui/panel'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import {
   Dialog,
@@ -20,6 +19,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@/components/ui/scrollable-dialog'
+import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
+import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { validateRequired, validateUrl, validateAbsPath, validateFields, hasErrors } from '@/lib/form-validation'
 import DangerConfirm from '@/components/DangerConfirm'
 
 /** 服务端模板管理页（FR-064）：新建/删除模板，套 FR-061 高密度风格。 */
@@ -122,6 +125,7 @@ export default function TemplatesPage() {
 /** 新建模板对话框：名称/类型/描述/启动命令/下载URL/默认工作目录。 */
 function CreateTemplateDialog({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation()
+  const { data: templates } = useTemplates()
   const create = useCreateTemplate()
   const [name, setName] = useState('')
   const [type, setType] = useState('minecraft_java')
@@ -130,8 +134,25 @@ function CreateTemplateDialog({ onClose }: { onClose: () => void }) {
   const [downloadUrl, setDownloadUrl] = useState('')
   const [defaultWorkDir, setDefaultWorkDir] = useState('')
 
+  // 类型可编辑下拉：内置常用类型 + 已有模板出现过的类型去重（FR-072）。
+  const typeOptions: ComboboxOption[] = Array.from(
+    new Set(['minecraft_java', 'generic', ...((templates ?? []).map((tpl) => tpl.type).filter(Boolean))]),
+  ).map((v) => ({ value: v }))
+
+  const errors = validateFields(
+    { name, type, startCommand, downloadUrl, defaultWorkDir },
+    {
+      name: [validateRequired],
+      type: [validateRequired],
+      startCommand: [validateRequired],
+      downloadUrl: [validateUrl],
+      defaultWorkDir: [validateAbsPath],
+    },
+  )
+
   const submit = (e: FormEvent) => {
     e.preventDefault()
+    if (hasErrors(errors)) return
     create.mutate(
       {
         name,
@@ -153,75 +174,85 @@ function CreateTemplateDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <Dialog open onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent>
+      <DialogContent className={scrollableDialogContentClass}>
         <DialogHeader>
           <DialogTitle>{t('templates.createTitle')}</DialogTitle>
         </DialogHeader>
-        <form onSubmit={submit} className="space-y-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="tpl-name">{t('templates.name')}</Label>
-            <Input
-              id="tpl-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={t('templates.namePlaceholder')}
-              required
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="tpl-type">{t('templates.type')}</Label>
-            <Input
-              id="tpl-type"
-              value={type}
-              onChange={(e) => setType(e.target.value)}
-              placeholder={t('templates.typePlaceholder')}
-              required
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="tpl-desc">{t('templates.description')}</Label>
-            <Input
-              id="tpl-desc"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder={t('templates.descriptionPlaceholder')}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="tpl-cmd">{t('templates.startCommand')}</Label>
-            <Textarea
-              id="tpl-cmd"
-              value={startCommand}
-              onChange={(e) => setStartCommand(e.target.value)}
-              placeholder={t('templates.startCommandPlaceholder')}
-              className="font-mono text-xs"
-              rows={2}
-              required
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="tpl-url">{t('templates.downloadUrl')}</Label>
-            <Input
-              id="tpl-url"
-              value={downloadUrl}
-              onChange={(e) => setDownloadUrl(e.target.value)}
-              placeholder={t('templates.downloadUrlPlaceholder')}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="tpl-workdir">{t('templates.defaultWorkDir')}</Label>
-            <Input
-              id="tpl-workdir"
-              value={defaultWorkDir}
-              onChange={(e) => setDefaultWorkDir(e.target.value)}
-              placeholder={t('templates.defaultWorkDirPlaceholder')}
-            />
-          </div>
-          <DialogFooter>
+        <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+          <ScrollableDialogBody className="space-y-3 py-1">
+            <div className="space-y-1.5">
+              <FieldLabel required htmlFor="tpl-name">{t('templates.name')}</FieldLabel>
+              <Input
+                id="tpl-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={t('templates.namePlaceholder')}
+                aria-invalid={!!errors.name}
+              />
+              <FieldError error={errors.name} />
+            </div>
+            <div className="space-y-1.5">
+              <FieldLabel required htmlFor="tpl-type">{t('templates.type')}</FieldLabel>
+              <Combobox
+                id="tpl-type"
+                options={typeOptions}
+                value={type}
+                onChange={setType}
+                placeholder={t('templates.typePlaceholder')}
+                invalid={!!errors.type}
+              />
+              <FieldError error={errors.type} />
+            </div>
+            <div className="space-y-1.5">
+              <FieldLabel htmlFor="tpl-desc">{t('templates.description')}</FieldLabel>
+              <Input
+                id="tpl-desc"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder={t('templates.descriptionPlaceholder')}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <FieldLabel required htmlFor="tpl-cmd">{t('templates.startCommand')}</FieldLabel>
+              <Textarea
+                id="tpl-cmd"
+                value={startCommand}
+                onChange={(e) => setStartCommand(e.target.value)}
+                placeholder={t('templates.startCommandPlaceholder')}
+                className="font-mono text-xs"
+                rows={2}
+                aria-invalid={!!errors.startCommand}
+              />
+              <FieldError error={errors.startCommand} />
+            </div>
+            <div className="space-y-1.5">
+              <FieldLabel htmlFor="tpl-url">{t('templates.downloadUrl')}</FieldLabel>
+              <Input
+                id="tpl-url"
+                value={downloadUrl}
+                onChange={(e) => setDownloadUrl(e.target.value)}
+                placeholder={t('templates.downloadUrlPlaceholder')}
+                aria-invalid={!!errors.downloadUrl}
+              />
+              <FieldError error={errors.downloadUrl} />
+            </div>
+            <div className="space-y-1.5">
+              <FieldLabel htmlFor="tpl-workdir">{t('templates.defaultWorkDir')}</FieldLabel>
+              <Input
+                id="tpl-workdir"
+                value={defaultWorkDir}
+                onChange={(e) => setDefaultWorkDir(e.target.value)}
+                placeholder={t('templates.defaultWorkDirPlaceholder')}
+                aria-invalid={!!errors.defaultWorkDir}
+              />
+              <FieldError error={errors.defaultWorkDir} />
+            </div>
+          </ScrollableDialogBody>
+          <DialogFooter className="pt-4">
             <Button type="button" variant="outline" onClick={onClose}>
               {t('common.cancel')}
             </Button>
-            <Button type="submit" disabled={create.isPending || !name || !startCommand}>
+            <Button type="submit" disabled={create.isPending || hasErrors(errors)}>
               {create.isPending ? t('common.creating') : t('common.create')}
             </Button>
           </DialogFooter>

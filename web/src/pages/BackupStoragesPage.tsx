@@ -9,9 +9,13 @@ import {
   type CreateBackupStorageBody,
 } from '@/api/backupStorages'
 import { Badge } from '@/components/ui/badge'
+import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
+import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { validateRequired, validateEnvRef, validateFields, hasErrors } from '@/lib/form-validation'
 import DangerConfirm from '@/components/DangerConfirm'
 
 const TYPES = ['s3', 'sftp', 'webdav'] as const
+const TYPE_OPTIONS: ComboboxOption[] = TYPES.map((tp) => ({ value: tp, label: tp.toUpperCase() }))
 
 const emptyForm: CreateBackupStorageBody = {
   name: '', type: 's3', endpoint: '', bucket: '', region: '', prefix: '',
@@ -33,6 +37,16 @@ export default function BackupStoragesPage() {
 
   const set = (k: keyof CreateBackupStorageBody, v: string | boolean) => setForm((f) => ({ ...f, [k]: v }))
 
+  // 凭证须为 ${ENV_VAR} 形式（config-files.md），名称必填（FR-072）。
+  const errors = validateFields(
+    { name: form.name, accessKeyEnv: form.accessKeyEnv ?? '', secretKeyEnv: form.secretKeyEnv ?? '' },
+    {
+      name: [validateRequired],
+      accessKeyEnv: [validateEnvRef],
+      secretKeyEnv: [validateEnvRef],
+    },
+  )
+
   const endpointHint = () =>
     form.type === 's3' ? t('backupStorages.endpointHintS3', 'S3 endpoint')
       : form.type === 'sftp' ? t('backupStorages.endpointHintSftp', 'SFTP 主机')
@@ -40,6 +54,7 @@ export default function BackupStoragesPage() {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    if (hasErrors(errors)) return
     try {
       await create.mutateAsync(form)
       toast.success(t('backupStorages.create', '创建'))
@@ -79,18 +94,17 @@ export default function BackupStoragesPage() {
 
       {showForm && (
         <form onSubmit={submit} className="border rounded-lg p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-          <label className="flex flex-col gap-1 text-sm">
-            {t('backupStorages.name', '名称')}
-            <input className="p-2 border rounded bg-background" required value={form.name}
+          <div className="flex flex-col gap-1 text-sm">
+            <FieldLabel required>{t('backupStorages.name', '名称')}</FieldLabel>
+            <input className="p-2 border rounded bg-background aria-invalid:border-destructive" value={form.name}
+              aria-invalid={!!errors.name}
               onChange={(e) => set('name', e.target.value)} />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            {t('backupStorages.type', '类型')}
-            <select className="p-2 border rounded bg-background" value={form.type}
-              onChange={(e) => set('type', e.target.value)}>
-              {TYPES.map((tp) => <option key={tp} value={tp}>{tp.toUpperCase()}</option>)}
-            </select>
-          </label>
+            <FieldError error={errors.name} />
+          </div>
+          <div className="flex flex-col gap-1 text-sm">
+            <FieldLabel>{t('backupStorages.type', '类型')}</FieldLabel>
+            <Combobox options={TYPE_OPTIONS} value={form.type} onChange={(v) => set('type', v)} allowCustom={false} />
+          </div>
           <label className="flex flex-col gap-1 text-sm md:col-span-2">
             {t('backupStorages.endpoint', 'Endpoint')}
             <input className="p-2 border rounded bg-background" placeholder={endpointHint()} value={form.endpoint}
@@ -122,21 +136,25 @@ export default function BackupStoragesPage() {
               {t('backupStorages.useSsl', '启用 TLS')}
             </label>
           )}
-          <label className="flex flex-col gap-1 text-sm">
-            {t('backupStorages.accessKeyEnv', 'Access Key 环境变量')}
-            <input className="p-2 border rounded bg-background font-mono" placeholder={t('backupStorages.credentialHint', '')}
+          <div className="flex flex-col gap-1 text-sm">
+            <FieldLabel>{t('backupStorages.accessKeyEnv', 'Access Key 环境变量')}</FieldLabel>
+            <input className="p-2 border rounded bg-background font-mono aria-invalid:border-destructive" placeholder={t('backupStorages.credentialHint', '')}
+              aria-invalid={!!errors.accessKeyEnv}
               value={form.accessKeyEnv} onChange={(e) => set('accessKeyEnv', e.target.value)} />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            {t('backupStorages.secretKeyEnv', 'Secret Key 环境变量')}
-            <input className="p-2 border rounded bg-background font-mono" placeholder={t('backupStorages.credentialHint', '')}
+            <FieldError error={errors.accessKeyEnv} />
+          </div>
+          <div className="flex flex-col gap-1 text-sm">
+            <FieldLabel>{t('backupStorages.secretKeyEnv', 'Secret Key 环境变量')}</FieldLabel>
+            <input className="p-2 border rounded bg-background font-mono aria-invalid:border-destructive" placeholder={t('backupStorages.credentialHint', '')}
+              aria-invalid={!!errors.secretKeyEnv}
               value={form.secretKeyEnv} onChange={(e) => set('secretKeyEnv', e.target.value)} />
-          </label>
+            <FieldError error={errors.secretKeyEnv} />
+          </div>
           <div className="md:col-span-2 flex gap-2 justify-end">
             <button type="button" className="px-4 py-2 border rounded-md hover:bg-accent"
               onClick={() => setShowForm(false)}>{t('backupStorages.cancel', '取消')}</button>
             <button type="submit" className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50"
-              disabled={create.isPending}>{t('backupStorages.create', '创建')}</button>
+              disabled={create.isPending || hasErrors(errors)}>{t('backupStorages.create', '创建')}</button>
           </div>
         </form>
       )}

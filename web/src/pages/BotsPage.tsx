@@ -30,7 +30,6 @@ import {
 } from './bots-overview'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
@@ -46,6 +45,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@/components/ui/scrollable-dialog'
+import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
+import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { validateRequired, validateHost, validatePort, validateFields, hasErrors } from '@/lib/form-validation'
 import {
   Table,
   TableBody,
@@ -672,6 +675,21 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
   const [behavior, setBehavior] = useState('idle')
   const [error, setError] = useState('')
 
+  const instanceOptions: ComboboxOption[] = (instances ?? []).map((inst) => ({
+    value: String(inst.id),
+    label: inst.name,
+  }))
+
+  const errors = validateFields(
+    { name, instanceId, server, port },
+    {
+      name: [validateRequired],
+      instanceId: [validateRequired],
+      server: [validateRequired, validateHost],
+      port: [validateRequired, validatePort],
+    },
+  )
+
   const resetForm = () => {
     setName('')
     setInstanceId('')
@@ -684,6 +702,7 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
+    if (hasErrors(errors)) return
     setError('')
     create.mutate(
       {
@@ -710,106 +729,104 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-md`}>
         <DialogHeader>
           <DialogTitle>{t('bots.createBot')}</DialogTitle>
         </DialogHeader>
 
-        {error && (
-          <div className="rounded bg-destructive/10 p-2 text-sm text-destructive">{error}</div>
-        )}
+        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+          <ScrollableDialogBody className="space-y-3 py-1">
+            {error && (
+              <div className="rounded bg-destructive/10 p-2 text-sm text-destructive">{error}</div>
+            )}
 
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div className="space-y-1">
-            <Label>{t('bots.name')}</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="GuardBot"
-              required
-            />
-          </div>
-
-          <div className="space-y-1">
-            <Label>{t('bots.instance')}</Label>
-            <Select
-              value={instanceId}
-              onValueChange={(v: string) => {
-                setInstanceId(v)
-                // 选实例即默认连到该实例（本机回环 + 实例实际端口），避免端口填错连不进
-                const inst = instances?.find((i) => String(i.id) === v)
-                if (inst) {
-                  setServer('127.0.0.1')
-                  setPort(String(inst.serverPort && inst.serverPort > 0 ? inst.serverPort : 25565))
-                }
-              }}
-              required
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder={t('bots.selectInstance')} />
-              </SelectTrigger>
-              <SelectContent>
-                {instances?.map((inst) => (
-                  <SelectItem key={inst.id} value={String(inst.id)}>
-                    {inst.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="grid grid-cols-3 gap-3">
-            <div className="col-span-2 space-y-1">
-              <Label>{t('bots.serverAddr')}</Label>
+            <div className="space-y-1">
+              <FieldLabel required>{t('bots.name')}</FieldLabel>
               <Input
-                value={server}
-                onChange={(e) => setServer(e.target.value)}
-                placeholder="mc.example.com"
-                required
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="GuardBot"
+                aria-invalid={!!errors.name}
               />
+              <FieldError error={errors.name} />
             </div>
+
             <div className="space-y-1">
-              <Label>{t('bots.port')}</Label>
-              <Input
-                value={port}
-                onChange={(e) => setPort(e.target.value)}
-                type="number"
-                required
+              <FieldLabel required>{t('bots.instance')}</FieldLabel>
+              <Combobox
+                options={instanceOptions}
+                value={instanceId}
+                onChange={(v: string) => {
+                  setInstanceId(v)
+                  // 选实例即默认连到该实例（本机回环 + 实例实际端口），避免端口填错连不进
+                  const inst = instances?.find((i) => String(i.id) === v)
+                  if (inst) {
+                    setServer('127.0.0.1')
+                    setPort(String(inst.serverPort && inst.serverPort > 0 ? inst.serverPort : 25565))
+                  }
+                }}
+                allowCustom={false}
+                placeholder={t('bots.selectInstance')}
+                invalid={!!errors.instanceId}
               />
+              <FieldError error={errors.instanceId} />
             </div>
-          </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label>{t('bots.authMethod')}</Label>
-              <Select value={auth} onValueChange={setAuth}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="offline">{t('bots.offline')}</SelectItem>
-                  <SelectItem value="microsoft">{t('bots.microsoft')}</SelectItem>
-                </SelectContent>
-              </Select>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-2 space-y-1">
+                <FieldLabel required>{t('bots.serverAddr')}</FieldLabel>
+                <Input
+                  value={server}
+                  onChange={(e) => setServer(e.target.value)}
+                  placeholder="mc.example.com"
+                  aria-invalid={!!errors.server}
+                />
+                <FieldError error={errors.server} />
+              </div>
+              <div className="space-y-1">
+                <FieldLabel required>{t('bots.port')}</FieldLabel>
+                <Input
+                  value={port}
+                  onChange={(e) => setPort(e.target.value)}
+                  type="number"
+                  aria-invalid={!!errors.port}
+                />
+                <FieldError error={errors.port} />
+              </div>
             </div>
-            <div className="space-y-1">
-              <Label>{t('bots.initialBehavior')}</Label>
-              <Select value={behavior} onValueChange={setBehavior}>
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {BEHAVIOR_OPTIONS.map((b) => (
-                    <SelectItem key={b} value={b}>
-                      {t(`bots.${b}`)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
 
-          <DialogFooter>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <FieldLabel>{t('bots.authMethod')}</FieldLabel>
+                <Select value={auth} onValueChange={setAuth}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="offline">{t('bots.offline')}</SelectItem>
+                    <SelectItem value="microsoft">{t('bots.microsoft')}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <FieldLabel>{t('bots.initialBehavior')}</FieldLabel>
+                <Select value={behavior} onValueChange={setBehavior}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {BEHAVIOR_OPTIONS.map((b) => (
+                      <SelectItem key={b} value={b}>
+                        {t(`bots.${b}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </ScrollableDialogBody>
+
+          <DialogFooter className="pt-4">
             <Button
               type="button"
               variant="outline"
@@ -820,7 +837,7 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
             >
               {t('common.cancel')}
             </Button>
-            <Button type="submit" disabled={create.isPending}>
+            <Button type="submit" disabled={create.isPending || hasErrors(errors)}>
               {create.isPending ? t('common.creating') : t('common.create')}
             </Button>
           </DialogFooter>

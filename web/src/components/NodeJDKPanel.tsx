@@ -1,6 +1,23 @@
 import { useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
 import { useNodeJDKs, useCreateJDK, useDeleteJDK, useInstallJDK } from '@/api/jdks'
+import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
+import { FieldError } from '@/components/ui/field-label'
+import { validateAbsPath, validatePositiveInt } from '@/lib/form-validation'
+
+/** JDK 厂商常用集（可自定义其它厂商）。 */
+const VENDOR_OPTIONS: ComboboxOption[] = [
+  { value: 'Temurin' },
+  { value: 'Corretto' },
+  { value: 'Zulu' },
+  { value: 'Liberica' },
+  { value: 'Microsoft' },
+]
+/** CPU 架构常用集（可自定义）。 */
+const ARCH_OPTIONS: ComboboxOption[] = [
+  { value: 'x64' },
+  { value: 'aarch64' },
+]
 
 interface NodeJDKPanelProps {
   nodeId: number
@@ -20,8 +37,14 @@ export default function NodeJDKPanel({ nodeId }: NodeJDKPanelProps) {
   const [managed, setManaged] = useState(false)
   const [showRegister, setShowRegister] = useState(false)
 
+  // 路径须为绝对路径、大版本为正整数（FR-072）。
+  const pathError = validateAbsPath(path)
+  const majorError = validatePositiveInt(major)
+  const registerInvalid = path.trim() === '' || !!pathError || !!majorError
+
   const onRegister = (e: FormEvent) => {
     e.preventDefault()
+    if (registerInvalid) return
     create.mutate(
       { vendor, majorVersion: Number(major), version, arch, path, managed },
       {
@@ -73,27 +96,41 @@ export default function NodeJDKPanel({ nodeId }: NodeJDKPanelProps) {
 
       {showRegister && (
         <form onSubmit={onRegister} className="border rounded-md p-3 grid grid-cols-2 gap-2 text-sm">
-          <label>厂商
-            <input value={vendor} onChange={(e) => setVendor(e.target.value)} className="w-full mt-1 px-2 py-1 border rounded" />
-          </label>
-          <label>大版本
-            <input value={major} onChange={(e) => setMajor(e.target.value)} className="w-full mt-1 px-2 py-1 border rounded" />
-          </label>
+          <div>
+            <span className="text-sm font-medium">厂商</span>
+            <div className="mt-1">
+              <Combobox options={VENDOR_OPTIONS} value={vendor} onChange={setVendor} />
+            </div>
+          </div>
+          <div>
+            <span className="text-sm font-medium">大版本<span className="ml-0.5 text-destructive">*</span></span>
+            <input value={major} onChange={(e) => setMajor(e.target.value)} inputMode="numeric"
+              aria-invalid={!!majorError}
+              className="w-full mt-1 px-2 py-1 border rounded aria-invalid:border-destructive" />
+            <FieldError error={majorError} />
+          </div>
           <label>版本号
             <input value={version} onChange={(e) => setVersion(e.target.value)} className="w-full mt-1 px-2 py-1 border rounded" placeholder="21.0.4" />
           </label>
-          <label>架构
-            <input value={arch} onChange={(e) => setArch(e.target.value)} className="w-full mt-1 px-2 py-1 border rounded" />
-          </label>
-          <label className="col-span-2">本地路径
-            <input value={path} onChange={(e) => setPath(e.target.value)} className="w-full mt-1 px-2 py-1 border rounded" placeholder="C:/Java/jdk-21" required />
-          </label>
+          <div>
+            <span className="text-sm font-medium">架构</span>
+            <div className="mt-1">
+              <Combobox options={ARCH_OPTIONS} value={arch} onChange={setArch} />
+            </div>
+          </div>
+          <div className="col-span-2">
+            <span className="text-sm font-medium">本地路径<span className="ml-0.5 text-destructive">*</span></span>
+            <input value={path} onChange={(e) => setPath(e.target.value)}
+              aria-invalid={!!pathError}
+              className="w-full mt-1 px-2 py-1 border rounded aria-invalid:border-destructive" placeholder="C:/Java/jdk-21" />
+            <FieldError error={pathError} />
+          </div>
           <label className="flex items-center gap-2 col-span-2">
             <input type="checkbox" checked={managed} onChange={(e) => setManaged(e.target.checked)} />
             标记为 Worker 托管（仅作记录）
           </label>
           <div className="col-span-2 flex justify-end">
-            <button type="submit" className="px-3 py-1 bg-primary text-primary-foreground rounded text-sm disabled:opacity-50" disabled={create.isPending}>
+            <button type="submit" className="px-3 py-1 bg-primary text-primary-foreground rounded text-sm disabled:opacity-50" disabled={create.isPending || registerInvalid}>
               {create.isPending ? '登记中…' : '保存'}
             </button>
           </div>
