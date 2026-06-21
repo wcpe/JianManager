@@ -1,11 +1,48 @@
 package config
 
 import (
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/spf13/viper"
 )
+
+// LogLevelVar 是 Control Plane 日志器的动态级别持有者（FR-063 / ADR-015）。
+//
+// 进程启动时 initLogger 用它构造 slog handler，使日志级别可在运行时切换
+// （平台设置写入 log.level 后调用 SetLogLevel 即时生效，无需重启）。
+var LogLevelVar = new(slog.LevelVar)
+
+// ParseLogLevel 把日志级别文本解析为 slog.Level。
+// 取值：debug | info | warn | error；无法识别时回退 info。
+func ParseLogLevel(level string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// SetLogLevel 运行时切换 Control Plane 日志级别。
+// 因为 LogLevelVar 已注入到当前 slog handler，调用后立即影响后续日志输出。
+func SetLogLevel(level string) {
+	LogLevelVar.Set(ParseLogLevel(level))
+}
+
+// ValidLogLevel 报告日志级别文本是否在允许枚举内。
+func ValidLogLevel(level string) bool {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug", "info", "warn", "error":
+		return true
+	}
+	return false
+}
 
 // Config 是 Control Plane 的完整配置。
 type Config struct {

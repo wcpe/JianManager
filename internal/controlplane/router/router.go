@@ -42,6 +42,7 @@ type Services struct {
 	Network       *service.NetworkService
 	Log           *service.LogService
 	Metric        *service.MetricService
+	Settings      *service.SettingsService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -161,6 +162,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.BackupStorage != nil {
 			backupStorageHandler := NewBackupStorageHandler(svcs.BackupStorage)
 			backupStorageHandler.RegisterRoutes(admin)
+		}
+
+		// 平台配置：全量配置可视化 + 白名单运行时覆盖，限平台管理员（FR-063 / ADR-015）。
+		if svcs.Settings != nil {
+			settingsHandler := NewSettingsHandler(svcs.Settings)
+			settingsHandler.RegisterRoutes(admin)
 		}
 	}
 

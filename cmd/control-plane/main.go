@@ -117,6 +117,10 @@ func main() {
 	metricSvc.Start()
 	defer metricSvc.Stop()
 
+	// 平台配置：在 YAML+env 基线上叠加 DB 覆盖层，白名单项可运行时调整（FR-063/ADR-015）。
+	// 构造时重放已落库的可即时生效覆盖（如日志级别），保证重启后覆盖仍生效。
+	settingsSvc := service.NewSettingsService(db, cfg)
+
 	r := router.Setup(&router.Services{
 		Auth:          authSvc,
 		User:          userSvc,
@@ -149,6 +153,7 @@ func main() {
 		Network:       networkSvc,
 		Log:           logSvc,
 		Metric:        metricSvc,
+		Settings:      settingsSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）
@@ -190,19 +195,10 @@ func main() {
 }
 
 func initLogger(cfg config.LogConfig) {
-	var level slog.Level
-	switch cfg.Level {
-	case "debug":
-		level = slog.LevelDebug
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	default:
-		level = slog.LevelInfo
-	}
+	// 用动态 LevelVar 而非静态 Level，使日志级别可经平台设置运行时切换（FR-063 / ADR-015）。
+	config.LogLevelVar.Set(config.ParseLogLevel(cfg.Level))
 
-	opts := &slog.HandlerOptions{Level: level}
+	opts := &slog.HandlerOptions{Level: config.LogLevelVar}
 	var handler slog.Handler
 	if cfg.Format == "json" {
 		handler = slog.NewJSONHandler(os.Stdout, opts)
