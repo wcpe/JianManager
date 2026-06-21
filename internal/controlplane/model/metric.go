@@ -32,6 +32,7 @@ const (
 	MetricNodeDiskTotal = "node_disk_total"
 	MetricNodeNetRxRate = "node_net_rx_rate"
 	MetricNodeNetTxRate = "node_net_tx_rate"
+	MetricNodeLoad      = "node_load" // 1 分钟 load average（FR-062）
 
 	MetricInstTPS           = "inst_tps"
 	MetricInstMSPT          = "inst_mspt"

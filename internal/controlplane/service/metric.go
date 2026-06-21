@@ -177,6 +177,10 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 		nodeSample(model.MetricNodeMemUsed, "bytes", ptr(float64(req.MemoryUsedMb)*1024*1024)),
 		nodeSample(model.MetricNodeDiskUsed, "bytes", ptr(float64(req.DiskUsedMb)*1024*1024)),
 	)
+	// load average：取不到为 0（Windows 预热/不支持），此时不落点，曲线优雅留空（FR-062）。
+	if req.LoadAvg1 > 0 {
+		samples = append(samples, nodeSample(model.MetricNodeLoad, "load", ptr(req.LoadAvg1)))
+	}
 
 	// 网络速率：相邻心跳累计字节差 / 间隔秒。差为负（节点重启计数器回绕）时跳过该拍。
 	s.netMu.Lock()
@@ -342,6 +346,7 @@ type OverviewTotals struct {
 	OnlineNodeCount  int     `json:"onlineNodeCount"`
 	RunningInstances int     `json:"runningInstances"`
 	CPUPct           float64 `json:"cpuPct"`        // 在线节点 CPU 使用率均值
+	LoadAvg          float64 `json:"loadAvg"`       // 在线节点负载利用率均值（load1/核数*100，FR-062）
 	MemUsedBytes     int64   `json:"memUsedBytes"`  // 在线节点已用内存合计
 	MemTotalBytes    int64   `json:"memTotalBytes"` // 在线节点内存容量合计
 	OnlinePlayers    int64   `json:"onlinePlayers"` // 各实例最近在线人数合计
@@ -386,6 +391,7 @@ func (s *MetricService) overviewAt(now, from, to time.Time, resolution string) (
 		sum   bool // true=跨序列求和，false=求均值
 	}{
 		{model.MetricScopeNode, model.MetricNodeCPUPct, "pct", false},
+		{model.MetricScopeNode, model.MetricNodeLoad, "load", false},
 		{model.MetricScopeNode, model.MetricNodeMemUsed, "bytes", true},
 		{model.MetricScopeInstance, model.MetricInstPlayersOnline, "count", true},
 	}
@@ -407,7 +413,8 @@ func (s *MetricService) overviewTotals(now time.Time) (OverviewTotals, error) {
 		return t, err
 	}
 	t.NodeCount = len(nodes)
-	var cpuSum float64
+	var cpuSum, loadSum float64
+	var loadCount int
 	for _, n := range nodes {
 		if n.Status != model.NodeStatusOnline {
 			continue
@@ -416,9 +423,17 @@ func (s *MetricService) overviewTotals(now time.Time) (OverviewTotals, error) {
 		cpuSum += float64(n.CPUUsage) * 100
 		t.MemUsedBytes += n.MemoryUsedMB * 1024 * 1024
 		t.MemTotalBytes += n.MemoryMB * 1024 * 1024
+		// 负载利用率 = load1/核数*100，按 CPU 核数归一后跨节点求均值。
+		if n.CPUCores > 0 {
+			loadSum += n.LoadAvg1 / float64(n.CPUCores) * 100
+			loadCount++
+		}
 	}
 	if t.OnlineNodeCount > 0 {
 		t.CPUPct = cpuSum / float64(t.OnlineNodeCount)
+	}
+	if loadCount > 0 {
+		t.LoadAvg = loadSum / float64(loadCount)
 	}
 
 	var running int64

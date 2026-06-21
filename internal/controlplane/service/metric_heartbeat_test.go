@@ -33,6 +33,7 @@ func TestMetric_IngestHeartbeat_NodeAndInstance(t *testing.T) {
 		CpuUsage:     0.5, // → 50 pct
 		MemoryUsedMb: 2048,
 		DiskUsedMb:   10240,
+		LoadAvg1:     3.5,
 		InstanceMetrics: []*workerpb.InstanceMetricSample{{
 			InstanceUuid:   "inst-1",
 			ProbeAvailable: true,
@@ -64,6 +65,9 @@ func TestMetric_IngestHeartbeat_NodeAndInstance(t *testing.T) {
 	mem := findSeries(nodeSeries, model.MetricNodeMemUsed, "")
 	require.NotNil(t, mem)
 	require.Equal(t, float64(2048)*1024*1024, *mem.Points[0].Avg)
+	loadS := findSeries(nodeSeries, model.MetricNodeLoad, "")
+	require.NotNil(t, loadS, "节点 load average 落 node_load 时序")
+	require.Equal(t, 3.5, *loadS.Points[0].Avg)
 
 	// 实例维度 + 世界维度（同一 instance_id 下都返回）
 	_, instSeries, err := svc.QuerySeries(SeriesQuery{
@@ -163,10 +167,10 @@ func TestMetric_Overview(t *testing.T) {
 
 	// 两个在线节点（当前值用于 totals）
 	require.NoError(t, svc.db.Create(&model.Node{
-		Name: "n1", Status: model.NodeStatusOnline, CPUUsage: 0.4, MemoryUsedMB: 1024, MemoryMB: 4096,
+		Name: "n1", Status: model.NodeStatusOnline, CPUUsage: 0.4, MemoryUsedMB: 1024, MemoryMB: 4096, LoadAvg1: 1, CPUCores: 4, // 25%
 	}).Error)
 	require.NoError(t, svc.db.Create(&model.Node{
-		Name: "n2", Status: model.NodeStatusOnline, CPUUsage: 0.6, MemoryUsedMB: 2048, MemoryMB: 4096,
+		Name: "n2", Status: model.NodeStatusOnline, CPUUsage: 0.6, MemoryUsedMB: 2048, MemoryMB: 4096, LoadAvg1: 3, CPUCores: 4, // 75%
 	}).Error)
 	require.NoError(t, svc.db.Create(&model.Node{
 		Name: "n3", Status: model.NodeStatusOffline, CPUUsage: 0.9, MemoryUsedMB: 9999, MemoryMB: 4096,
@@ -199,6 +203,7 @@ func TestMetric_Overview(t *testing.T) {
 	require.Equal(t, 2, ov.Totals.OnlineNodeCount)
 	require.Equal(t, 1, ov.Totals.RunningInstances)
 	require.InDelta(t, 50.0, ov.Totals.CPUPct, 1e-4) // (40+60)/2，float32 源值留容差
+	require.InDelta(t, 50.0, ov.Totals.LoadAvg, 1e-9) // 负载利用率均值 (25+75)/2
 	require.Equal(t, int64(3072)*1024*1024, ov.Totals.MemUsedBytes)
 	require.Equal(t, int64(8), ov.Totals.OnlinePlayers) // 5+3 最近样本
 

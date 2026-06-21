@@ -171,6 +171,7 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			"disk_used_mb":       req.DiskUsedMb,
 			"network_bytes_sent": req.NetworkBytesSent,
 			"network_bytes_recv": req.NetworkBytesRecv,
+			"load_avg1":          req.LoadAvg1,
 			"last_heartbeat":     time.Now(),
 			"status":             model.NodeStatusOnline,
 		}

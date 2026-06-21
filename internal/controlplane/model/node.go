@@ -42,6 +42,8 @@ type Node struct {
 	DiskUsedMB       int64          `gorm:"default:0" json:"diskUsedMb"`
 	NetworkBytesSent int64          `gorm:"default:0" json:"networkBytesSent"`
 	NetworkBytesRecv int64          `gorm:"default:0" json:"networkBytesRecv"`
+	// LoadAvg1 节点 1 分钟 load average（FR-062，心跳驱动）。
+	LoadAvg1         float64        `gorm:"default:0" json:"loadAvg1"`
 	LastHeartbeat    *time.Time     `json:"lastHeartbeat"`
 	CreatedAt        time.Time      `json:"createdAt"`
 	UpdatedAt        time.Time      `json:"updatedAt"`
