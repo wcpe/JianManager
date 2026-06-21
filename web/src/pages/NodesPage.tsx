@@ -142,6 +142,12 @@ function NodeDetail({ node }: { node: NodeInfo }) {
     <div className="space-y-3 bg-muted/30 p-3">
       <div className="flex flex-wrap items-center gap-6">
         <ResourceGauge label={t('nodes.cpu')} value={(node.cpuUsage ?? 0) * 100} unit="%" size={84} />
+        <ResourceGauge
+          label={t('nodes.load')}
+          value={node.cpuCores > 0 ? ((node.loadAvg1 ?? 0) / node.cpuCores) * 100 : 0}
+          unit="%"
+          size={84}
+        />
         <ResourceGauge label={t('nodes.memory')} value={(node.memoryUsage ?? 0) * 100} unit="%" size={84} />
         <ResourceGauge label={t('nodes.disk')} value={(node.diskUsage ?? 0) * 100} unit="%" size={84} />
         <div className="ml-auto">
@@ -160,6 +166,9 @@ function NodeDetail({ node }: { node: NodeInfo }) {
         </Panel>
         <Panel title={t('nodes.netTrend')}>
           <TimeSeriesChart series={netSeries} height={160} valueFormatter={(v) => `${formatBytes(v)}/s`} />
+        </Panel>
+        <Panel title={t('nodes.loadTrend')}>
+          <TimeSeriesChart series={seriesOf('node_load', t('nodes.load'))} height={160} valueFormatter={(v) => v.toFixed(2)} />
         </Panel>
       </div>
       <NodeInstanceCompare node={node} range={range} />

@@ -21,6 +21,8 @@ export interface NodeInfo {
   diskUsage: number
   networkBytesSent: number
   networkBytesRecv: number
+  /** 1 分钟 load average（FR-062）；取不到为 0。 */
+  loadAvg1: number
   lastHeartbeat: string | null
   createdAt: string
 }

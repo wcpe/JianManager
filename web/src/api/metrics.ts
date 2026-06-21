@@ -109,6 +109,8 @@ export interface OverviewTotals {
   onlineNodeCount: number
   runningInstances: number
   cpuPct: number
+  /** 在线节点负载利用率均值（load1/核数*100，FR-062）。 */
+  loadAvg: number
   memUsedBytes: number
   memTotalBytes: number
   onlinePlayers: number

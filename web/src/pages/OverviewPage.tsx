@@ -55,9 +55,12 @@ export default function OverviewPage() {
       </div>
 
       {/* 顶部：环形仪表盘 + 统计块 */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Panel bodyClassName="flex items-center justify-center py-3">
           <ResourceGauge label={t('dashboard.totalCpu')} value={totals?.cpuPct ?? 0} unit="%" />
+        </Panel>
+        <Panel bodyClassName="flex items-center justify-center py-3">
+          <ResourceGauge label={t('dashboard.totalLoad')} value={totals?.loadAvg ?? 0} unit="%" />
         </Panel>
         <Panel bodyClassName="flex items-center justify-center py-3">
           <ResourceGauge label={t('dashboard.totalMem')} value={memPct} unit="%" />
@@ -72,9 +75,12 @@ export default function OverviewPage() {
       </div>
 
       {/* 中部：聚合历史曲线（FR-060） */}
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <Panel title={t('dashboard.cpuTrend')}>
           <TimeSeriesChart series={trend('node_cpu_pct', t('dashboard.totalCpu'))} height={180} valueFormatter={(v) => `${v.toFixed(0)}%`} />
+        </Panel>
+        <Panel title={t('dashboard.loadTrend')}>
+          <TimeSeriesChart series={trend('node_load', t('dashboard.totalLoad'))} height={180} valueFormatter={(v) => v.toFixed(2)} />
         </Panel>
         <Panel title={t('dashboard.memTrend')}>
           <TimeSeriesChart series={trend('node_mem_used', t('dashboard.totalMem'))} height={180} valueFormatter={fmtBytes} />
