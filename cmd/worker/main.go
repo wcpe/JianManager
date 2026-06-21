@@ -186,8 +186,14 @@ func runWorker() {
 		}
 	})
 
+	// 插件桥服务端（ServerProbe 反向 WS，FR-065，见 ADR-016）：与终端 WS 并列、同一监听端口。
+	// 探针主动连入 /ws/plugin-bridge，事件经 gRPC StreamPluginEvents 冒泡到 CP；token 校验复用 JWT secret。
+	pluginBridge := ws.NewPluginBridgeServer(jwtSecret)
+	workerServer.SetPluginBridge(pluginBridge)
+
 	wsMux := http.NewServeMux()
 	wsMux.HandleFunc("/ws/terminal", terminalServer.Handler())
+	wsMux.HandleFunc("/ws/plugin-bridge", pluginBridge.Handler())
 
 	wsAddr := fmt.Sprintf(":%d", wsPort)
 	wsServer := &http.Server{Addr: wsAddr, Handler: wsMux}

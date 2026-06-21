@@ -17,6 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/jdk"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/process"
+	"github.com/wcpe/JianManager/internal/worker/ws"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
@@ -53,6 +54,14 @@ type Server struct {
 	// eventMu 保护 eventSubs，StreamInstanceEvents 订阅/取消订阅时加锁。
 	eventMu   sync.Mutex
 	eventSubs []chan instanceEvent
+
+	// 插件桥（ServerProbe 反向 WS，FR-065，见 ADR-016）。
+	// bridge 提供「实例 UUID→探针会话」表与下发能力；为 nil 表示本节点未启用插件桥。由 SetPluginBridge 注入。
+	bridge *ws.PluginBridgeServer
+	// pluginEventMu 保护 pluginEventSubs，StreamPluginEvents 订阅/取消订阅时加锁。
+	// 插件事件与实例事件刻意分两套订阅者总线：二者消费方、过滤维度、生命周期均不同。
+	pluginEventMu   sync.Mutex
+	pluginEventSubs []chan *workerpb.PluginEvent
 }
 
 // NewServer 创建 Worker gRPC 服务器。
