@@ -91,7 +91,9 @@ func main() {
 	// 插件服务：上传先入制品库（type=plugin 去重）再经 file gRPC 部署到实例（FR-052）。
 	pluginSvc := service.NewPluginService(db, pool, assetSvc)
 	coreSvc := service.NewCoreService()
-	provisionSvc := service.NewProvisionService(db, pool, instanceSvc, coreSvc)
+	// 插件桥服务（FR-065，见 ADR-016）：建服时为实例签发插件桥 token 并写入探针 config 的 bridge 段。
+	pluginBridgeSvc := service.NewPluginBridgeService(cfg.JWT.Secret)
+	provisionSvc := service.NewProvisionService(db, pool, instanceSvc, coreSvc, pluginBridgeSvc)
 	registrationSvc := service.NewRegistrationService(db)
 	networkSvc := service.NewNetworkService(db, instanceSvc)
 	// 代理服务实现 RegistrationSyncer：注册变更后写代理配置 + 下发 Velocity secret（FR-035）。

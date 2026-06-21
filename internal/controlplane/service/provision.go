@@ -30,11 +30,15 @@ type ProvisionService struct {
 	pool     *cpgrpc.ClientPool
 	instance *InstanceService
 	core     *CoreService
+	// bridge 用于建服时签发实例级插件桥 token 并写入探针 config（FR-065，见 ADR-016）。
+	// 为 nil 时探针 config 不含 bridge 段（探针只跑 /metrics，不连反向 WS）。
+	bridge *PluginBridgeService
 }
 
 // NewProvisionService 创建一键搭建服务。
-func NewProvisionService(db *gorm.DB, pool *cpgrpc.ClientPool, instance *InstanceService, core *CoreService) *ProvisionService {
-	return &ProvisionService{db: db, pool: pool, instance: instance, core: core}
+// bridge 可为 nil（未启用插件桥时）；非 nil 时建服自动为实例签发插件桥 token 并下发探针。
+func NewProvisionService(db *gorm.DB, pool *cpgrpc.ClientPool, instance *InstanceService, core *CoreService, bridge *PluginBridgeService) *ProvisionService {
+	return &ProvisionService{db: db, pool: pool, instance: instance, core: core, bridge: bridge}
 }
 
 // ProvisionBukkitRequest 一键搭建 Paper 后端子服请求。
@@ -168,7 +172,7 @@ func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.In
 		dp, derr := client.Worker.DeployServerProbe(probeCtx, &workerpb.DeployServerProbeRequest{
 			InstanceUuid: inst.UUID,
 			Jar:          jar,
-			ConfigYaml:   buildServerProbeConfig(inst.ProbePort),
+			ConfigYaml:   buildServerProbeConfig(inst.ProbePort, p.bridgeConfigBlock(inst.UUID, node.WSPort)),
 		})
 		switch {
 		case derr != nil:
@@ -182,7 +186,8 @@ func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.In
 
 // buildServerProbeConfig 生成实例的 ServerProbe config.yml：仅本机开启 /metrics 端点于分配的
 // probe 端口，token 留空依赖本机 IP 白名单（探针与 Worker 同机，Worker 抓 localhost）。
-func buildServerProbeConfig(probePort int) string {
+// bridgeBlock 为插件桥配置段（FR-065，见 ADR-016）；为空时 config 不含 bridge 段（探针只跑 /metrics）。
+func buildServerProbeConfig(probePort int, bridgeBlock string) string {
 	var b strings.Builder
 	b.WriteString("# 本文件由 JianManager 建服时自动生成：开启 ServerProbe /metrics 供 Worker 抓取（FR-010）。\n")
 	b.WriteString("# 仅本机回环可访问；如需远程 Prometheus 抓取请改 host 并配置 token/allowed-ips。\n")
@@ -193,7 +198,25 @@ func buildServerProbeConfig(probePort int) string {
 	b.WriteString("  token: \"\"\n")
 	b.WriteString("  allowed-ips:\n")
 	b.WriteString("    - \"127.0.0.1\"\n")
+	if bridgeBlock != "" {
+		b.WriteString("\n")
+		b.WriteString(bridgeBlock)
+	}
 	return b.String()
+}
+
+// bridgeConfigBlock 为实例签发插件桥 token 并生成探针 config.yml 的 bridge 段（FR-065）。
+// bridge 服务未注入或签发失败时返回空串（探针不连反向 WS，监控 /metrics 不受影响、建服不阻断）。
+func (p *ProvisionService) bridgeConfigBlock(instanceUUID string, wsPort int) string {
+	if p.bridge == nil {
+		return ""
+	}
+	token, err := p.bridge.IssueToken(instanceUUID)
+	if err != nil {
+		slog.Warn("签发插件桥 token 失败（探针将不连反向 WS，不阻断建服）", "instance", instanceUUID, "err", err)
+		return ""
+	}
+	return p.bridge.BuildBridgeConfigBlock(pluginBridgeWSURL(wsPort), instanceUUID, token)
 }
 
 // buildServerProperties 生成基础 server.properties：分配的 server-port、按 onlineMode 设正版校验
