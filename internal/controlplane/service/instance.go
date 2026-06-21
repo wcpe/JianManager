@@ -38,11 +38,33 @@ type InstanceService struct {
 	db       *gorm.DB
 	groupSvc *GroupService
 	pool     *cpgrpc.ClientPool
+	// settings 提供平台设置生效值（graceful_stop.timeout），随启动下发使优雅停止超时真生效；
+	// 为 nil 时不下发，Worker 回退本地 env/默认（FR-063）。
+	settings SettingsReader
 }
 
 // NewInstanceService 创建实例服务。
 func NewInstanceService(db *gorm.DB, groupSvc *GroupService, pool *cpgrpc.ClientPool) *InstanceService {
 	return &InstanceService{db: db, groupSvc: groupSvc, pool: pool}
+}
+
+// SetSettingsReader 注入平台设置读取器（FR-063）。在 main 装配阶段调用，避免构造期循环依赖。
+func (s *InstanceService) SetSettingsReader(r SettingsReader) {
+	s.settings = r
+}
+
+// gracefulStopTimeoutSeconds 取优雅停止超时（秒）的生效值（平台设置 graceful_stop.timeout）。
+// 设置以 Go duration 文本存储（如 "30s"）；解析失败或未注入设置时返回 0，由 Worker 回退默认。
+// 语义：仅随「启动」下发，故设置变更对其后新启动的实例生效，已运行实例保留启动时的值。
+func (s *InstanceService) gracefulStopTimeoutSeconds() int32 {
+	if s.settings == nil {
+		return 0
+	}
+	d, err := time.ParseDuration(s.settings.EffectiveValue(SettingKeyGracefulStopTimeout))
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return int32(d.Seconds())
 }
 
 // CreateInstanceRequest 创建实例请求。
@@ -487,16 +509,17 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 	}
 
 	resp, err := client.Worker.CreateInstance(ctx, &workerpb.CreateInstanceRequest{
-		InstanceUuid: instance.UUID,
-		Name:         instance.Name,
-		ProcessType:  string(instance.ProcessType),
-		StartCommand: instance.StartCommand,
-		StopCommand:  gracefulStopCommand(instance.Role),
-		WorkDir:      instance.WorkDir,
-		EnvVars:      envVars,
-		AutoRestart:  instance.AutoRestart,
-		JdkPath:      jdkPath,
-		ProbePort:    int32(instance.ProbePort),
+		InstanceUuid:               instance.UUID,
+		Name:                       instance.Name,
+		ProcessType:                string(instance.ProcessType),
+		StartCommand:               instance.StartCommand,
+		StopCommand:                gracefulStopCommand(instance.Role),
+		WorkDir:                    instance.WorkDir,
+		EnvVars:                    envVars,
+		AutoRestart:                instance.AutoRestart,
+		JdkPath:                    jdkPath,
+		ProbePort:                  int32(instance.ProbePort),
+		GracefulStopTimeoutSeconds: s.gracefulStopTimeoutSeconds(),
 	})
 	if err != nil {
 		return fmt.Errorf("Worker CreateInstance 失败: %w", err)

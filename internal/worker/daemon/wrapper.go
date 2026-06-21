@@ -36,6 +36,10 @@ type WrapperConfig struct {
 	StartTimeout time.Duration     `json:"start_timeout"` // Java 启动到首字节输出的等待（0=不限）
 	// ProbePort 透传到 PID 记录，使 Worker 重启恢复后心跳继续自采该实例 ServerProbe 指标（FR-060）。
 	ProbePort int `json:"probe_port,omitempty"`
+	// GracefulStopTimeoutSeconds 优雅停止后等待进程自行退出的上限（秒，CP 从平台设置
+	// graceful_stop.timeout 取生效值后于启动时下发，FR-063）。>0 时 wrapper 用它做超时强杀兜底；
+	// 0=未指定，回退环境变量/默认。值在启动时定型，故对设置变更后「新启动」的实例生效。
+	GracefulStopTimeoutSeconds int `json:"graceful_stop_timeout_seconds,omitempty"`
 }
 
 // 环境变量键名约定。Worker spawn wrapper 时写入这些变量。
@@ -407,7 +411,7 @@ func (w *Wrapper) stopJava(force bool) {
 	}
 	// 超时兜底：关服序列卡死时强杀（javaWait 在 Java 退出时把 javaCmd 置 nil）。
 	go func() {
-		time.Sleep(resolveGracefulStopTimeout())
+		time.Sleep(w.resolveGracefulStopTimeout())
 		w.mu.Lock()
 		still := w.javaCmd
 		w.mu.Unlock()
@@ -535,8 +539,16 @@ func resolveStopCommand(cfg string) string {
 	return defaultStopCommand
 }
 
-// resolveGracefulStopTimeout 返回优雅停止超时：环境变量优先（解析失败/非正忽略），否则用默认值。
-func resolveGracefulStopTimeout() time.Duration {
+// resolveGracefulStopTimeout 返回优雅停止超时，按优先级解析：
+//  1. 启动时下发的 config 值（CP 从平台设置 graceful_stop.timeout 取生效值，FR-063）；
+//  2. 环境变量（供测试/集成缩短）；
+//  3. 默认值。
+//
+// config 值在实例启动时定型，故设置变更只对其后「新启动」的实例生效，已运行实例保留启动时的值。
+func (w *Wrapper) resolveGracefulStopTimeout() time.Duration {
+	if w.cfg.GracefulStopTimeoutSeconds > 0 {
+		return time.Duration(w.cfg.GracefulStopTimeoutSeconds) * time.Second
+	}
 	if v := os.Getenv(envGracefulStopTimeout); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			return d

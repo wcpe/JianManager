@@ -44,6 +44,9 @@ type CommandSpec struct {
 	// ProbePort 是实例 ServerProbe /metrics 端口（CP 分配后下发）。daemon 策略透传到
 	// wrapper→PID 记录，供 Worker 重启恢复后心跳继续自采（FR-060）；0=未部署探针。
 	ProbePort int
+	// GracefulStopTimeoutSeconds 是优雅停止超时（秒，CP 从平台设置下发，FR-063）。daemon 策略
+	// 透传到 wrapper 做超时强杀兜底；0=未指定，wrapper 回退 env/默认。值在启动时定型。
+	GracefulStopTimeoutSeconds int
 }
 
 // pathKey 当前平台的 PATH 变量名：Windows 使用 Path，Unix 使用 PATH。

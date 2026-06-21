@@ -39,10 +39,13 @@ type Instance struct {
 	RCONPassword string
 	// ProbePort 是实例 ServerProbe /metrics 端口（CP 分配后随 Create 下发）。
 	// 心跳采集器据此自采每实例富指标（FR-060）；0=未部署探针，心跳跳过该实例。
-	ProbePort   int
-	State       InstanceState
-	AutoRestart bool
-	CrashCount  int
+	ProbePort int
+	// GracefulStopTimeoutSeconds 是优雅停止超时（秒，CP 从平台设置下发，FR-063）。daemon 启动时
+	// 透传到 wrapper 做超时强杀兜底；0=未指定，wrapper 回退 env/默认。值在启动时随 spec 定型。
+	GracefulStopTimeoutSeconds int
+	State                      InstanceState
+	AutoRestart                bool
+	CrashCount                 int
 	// strategy 是该实例的启动策略，按 ProcessType 选择。
 	// nil 表示实例已创建但尚未启动（或已 Close）。
 	strategy IProcessCommand
@@ -125,7 +128,8 @@ func (m *Manager) GetAllInstanceStates() []InstanceSnapshot {
 // jdkPath / jdkBinPath 非空时会被注入到实例启动时的环境。
 // stopCommand 为优雅停止命令（按角色派生：MC 后端 stop / 代理 end），空时回退默认 stop。
 // probePort 为实例 ServerProbe /metrics 端口（CP 分配），供心跳采集器自采富指标（FR-060）；0=未部署。
-func (m *Manager) Create(uuid, name, startCommand, stopCommand, workDir string, envVars map[string]string, autoRestart bool, processType ProcessType, jdkPath, jdkBinPath string, probePort int) error {
+// gracefulStopTimeoutSeconds 为优雅停止超时（秒，CP 从平台设置下发，FR-063）；0=未指定，wrapper 回退默认。
+func (m *Manager) Create(uuid, name, startCommand, stopCommand, workDir string, envVars map[string]string, autoRestart bool, processType ProcessType, jdkPath, jdkBinPath string, probePort, gracefulStopTimeoutSeconds int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -134,22 +138,34 @@ func (m *Manager) Create(uuid, name, startCommand, stopCommand, workDir string, 
 	}
 
 	m.instances[uuid] = &Instance{
-		UUID:         uuid,
-		Name:         name,
-		StartCommand: startCommand,
-		StopCommand:  stopCommand,
-		WorkDir:      workDir,
-		EnvVars:      envVars,
-		JDKPath:      jdkPath,
-		JDKBinPath:   jdkBinPath,
-		ProbePort:    probePort,
-		State:        StateStopped,
-		AutoRestart:  autoRestart,
-		processType:  processType,
+		UUID:                       uuid,
+		Name:                       name,
+		StartCommand:               startCommand,
+		StopCommand:                stopCommand,
+		WorkDir:                    workDir,
+		EnvVars:                    envVars,
+		JDKPath:                    jdkPath,
+		JDKBinPath:                 jdkBinPath,
+		ProbePort:                  probePort,
+		GracefulStopTimeoutSeconds: gracefulStopTimeoutSeconds,
+		State:                      StateStopped,
+		AutoRestart:                autoRestart,
+		processType:                processType,
 	}
 
-	slog.Info("实例已创建", "instanceId", uuid, "name", name, "autoRestart", autoRestart, "processType", processType, "jdkPath", jdkPath, "probePort", probePort)
+	slog.Info("实例已创建", "instanceId", uuid, "name", name, "autoRestart", autoRestart, "processType", processType, "jdkPath", jdkPath, "probePort", probePort, "gracefulStopTimeoutSeconds", gracefulStopTimeoutSeconds)
 	return nil
+}
+
+// SetGracefulStopTimeout 更新已登记实例的优雅停止超时（秒）。
+// 供 CP 在「重新注册已存在实例」时刷新该值，使设置变更对下一次启动生效（值在 Start 时随 spec 定型）。
+// 实例不存在则忽略（与 SetRCONConfig 的容错风格一致，但此处不报错以免阻塞启动路径）。
+func (m *Manager) SetGracefulStopTimeout(uuid string, seconds int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if inst, ok := m.instances[uuid]; ok {
+		inst.GracefulStopTimeoutSeconds = seconds
+	}
 }
 
 // SetRCONConfig 设置实例的 RCON 配置。
@@ -210,17 +226,18 @@ func (m *Manager) Start(uuid string) error {
 	// 惰性构造策略：CRASHED 重启时复用已构造的策略（保留连接），首次启动则新建。
 	if inst.strategy == nil {
 		spec := CommandSpec{
-			UUID:         inst.UUID,
-			Name:         inst.Name,
-			StartCommand: inst.StartCommand,
-			StopCommand:  inst.StopCommand,
-			WorkDir:      inst.WorkDir,
-			EnvVars:      inst.EnvVars,
-			JavaHome:     inst.JDKPath,
-			JDKBinPath:   inst.JDKBinPath,
-			AutoRestart:  inst.AutoRestart,
-			ProcessType:  inst.processType,
-			ProbePort:    inst.ProbePort,
+			UUID:                       inst.UUID,
+			Name:                       inst.Name,
+			StartCommand:               inst.StartCommand,
+			StopCommand:                inst.StopCommand,
+			WorkDir:                    inst.WorkDir,
+			EnvVars:                    inst.EnvVars,
+			JavaHome:                   inst.JDKPath,
+			JDKBinPath:                 inst.JDKBinPath,
+			AutoRestart:                inst.AutoRestart,
+			ProcessType:                inst.processType,
+			ProbePort:                  inst.ProbePort,
+			GracefulStopTimeoutSeconds: inst.GracefulStopTimeoutSeconds,
 		}
 		strategy, err := m.newStrategy(spec)
 		if err != nil {

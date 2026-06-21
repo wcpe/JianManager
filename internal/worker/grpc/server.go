@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -130,8 +131,14 @@ func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanc
 		req.JdkPath,
 		req.JdkBinPath,
 		int(req.ProbePort),
+		int(req.GracefulStopTimeoutSeconds),
 	)
 	if err != nil {
+		// 实例已存在（CP 在每次启动前幂等重注册）：刷新随启动定型的优雅停止超时，
+		// 使设置变更对下一次启动生效（FR-063）。该错误对 CP 启动路径是良性的（按已注册处理）。
+		if strings.Contains(err.Error(), "已存在") {
+			s.manager.SetGracefulStopTimeout(req.InstanceUuid, int(req.GracefulStopTimeoutSeconds))
+		}
 		return &workerpb.CreateInstanceResponse{Success: false, Error: err.Error()}, nil
 	}
 	return &workerpb.CreateInstanceResponse{Success: true}, nil

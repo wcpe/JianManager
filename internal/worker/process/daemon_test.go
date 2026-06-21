@@ -106,7 +106,7 @@ func TestManager_DaemonStopAllGraceful(t *testing.T) {
 	wrapperPID := rec.WrapperPID
 
 	m := NewManager(pidDir)
-	require.NoError(t, m.Create(uuid, "Daemon", keepAliveCmd(), "", pidDir, nil, false, ProcessTypeDaemon, "", "", 0))
+	require.NoError(t, m.Create(uuid, "Daemon", keepAliveCmd(), "", pidDir, nil, false, ProcessTypeDaemon, "", "", 0, 0))
 	// 用 recover 接管已运行的 wrapper
 	recovered, recErr := m.RecoverDaemonInstances()
 	t.Logf("recover: recovered=%d err=%v wrapperPID=%d", recovered, recErr, wrapperPID)

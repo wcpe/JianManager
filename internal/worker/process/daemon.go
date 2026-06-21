@@ -63,16 +63,17 @@ func (d *daemonStrategy) Start(ctx context.Context) error {
 
 	// 构造 wrapper 配置，通过环境变量传递（避免命令行转义问题）
 	cfg := daemon.WrapperConfig{
-		InstanceUUID: d.spec.UUID,
-		StartCommand: d.spec.StartCommand,
-		StopCommand:  d.spec.StopCommand,
-		WorkDir:      d.spec.WorkDir,
-		EnvVars:      d.spec.EnvVars,
-		JavaHome:     d.spec.JavaHome,
-		JDKBinPath:   d.spec.JDKBinPath,
-		AutoRestart:  d.spec.AutoRestart,
-		PIDDir:       d.pidDir,
-		ProbePort:    d.spec.ProbePort,
+		InstanceUUID:               d.spec.UUID,
+		StartCommand:               d.spec.StartCommand,
+		StopCommand:                d.spec.StopCommand,
+		WorkDir:                    d.spec.WorkDir,
+		EnvVars:                    d.spec.EnvVars,
+		JavaHome:                   d.spec.JavaHome,
+		JDKBinPath:                 d.spec.JDKBinPath,
+		AutoRestart:                d.spec.AutoRestart,
+		PIDDir:                     d.pidDir,
+		ProbePort:                  d.spec.ProbePort,
+		GracefulStopTimeoutSeconds: d.spec.GracefulStopTimeoutSeconds,
 	}
 	cfgBytes, err := json.Marshal(cfg)
 	if err != nil {
