@@ -167,6 +167,7 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
             const raw = parseBufRef.current.slice(0, nl)
             parseBufRef.current = parseBufRef.current.slice(nl + 1)
             // 去 ANSI 颜色码与 CR：Paper 控制台给玩家名套色，否则玩家名被转义码包裹导致正则匹配不到
+            // eslint-disable-next-line no-control-regex -- ANSI 转义符为有意匹配
             const line = raw.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\r/g, '')
             const join = line.match(/([A-Za-z0-9_]{1,16}) joined the game/)
             if (join) onlinePlayersRef.current.add(join[1])

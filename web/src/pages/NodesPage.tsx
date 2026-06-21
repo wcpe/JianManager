@@ -59,7 +59,8 @@ export default function NodesPage() {
       {
         onSuccess: () =>
           toast.success(enabled ? t('nodes.maintenanceEnabled') : t('nodes.maintenanceDisabled')),
-        onError: (e: any) => toast.error(e?.response?.data?.message || t('common.error')),
+        onError: (e: Error & { response?: { data?: { message?: string } } }) =>
+          toast.error(e?.response?.data?.message || t('common.error')),
       },
     )
   }
@@ -72,12 +73,14 @@ export default function NodesPage() {
       drain.mutate(node.id, {
         onSuccess: (res) =>
           toast.success(t('nodes.drainDone', { count: res.data.stoppedCount })),
-        onError: (e: any) => toast.error(e?.response?.data?.message || t('common.error')),
+        onError: (e: Error & { response?: { data?: { message?: string } } }) =>
+          toast.error(e?.response?.data?.message || t('common.error')),
       })
     } else {
       del.mutate(node.id, {
         onSuccess: () => toast.success(t('nodes.deleted')),
-        onError: (e: any) => toast.error(e?.response?.data?.message || t('common.error')),
+        onError: (e: Error & { response?: { data?: { message?: string } } }) =>
+          toast.error(e?.response?.data?.message || t('common.error')),
       })
     }
   }

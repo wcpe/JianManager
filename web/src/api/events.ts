@@ -62,7 +62,7 @@ export function useInstanceEvents() {
             }
           }
         }
-      } catch (err) {
+      } catch {
         if (controller.signal.aborted) return
         // 连接失败时延迟重试
         setTimeout(connect, 5000)
