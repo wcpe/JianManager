@@ -6,6 +6,17 @@
 
 ## [Unreleased]
 
+## 0.5.0（2026-06-21）
+
+### 新增
+- **时序监控与历史曲线**（FR-060）：在 ServerProbe 富实时指标之上沉淀历史时序。Worker 30s 心跳附带节点指标（含 load average）+ 每实例 ServerProbe 快照（TPS/MSPT/堆 used·max/线程/CPU/uptime + 分世界 区块/实体/方块实体），Control Plane 经 `IngestHeartbeat` 落库并分级降采样（raw ~48h / 5m ~30d / 1h ≥1y，ADR-013）。新增 `GET /metrics/series`（节点/实例历史曲线，按区间 1h~90d 自动选档 raw/5m/1h）与 `GET /metrics/overview`（跨节点聚合总量 + 趋势）；探针不可达时段曲线断点（null）不显假值；probe 端口经 `CreateInstance` 下发并持久化 daemon PID 记录，Worker 重启 `RecoverDaemonInstances` 恢复自采。真机验证：真 Paper + ServerProbe 历史曲线累积、CP 重启不丢、5m 卷积、杀 worker 重启后采集无缝续上。
+- **面板信息密度与视觉改造**（FR-061）：参考 baota 把前端重做为高密度运维面板。常驻**多级侧栏**（分组可展开，整合原三段式；实例树/节点切换器并入「实例」组、用户/组/审计并入「设置」组，能力不丢）；**环形资源仪表盘** + 分区面板 + 密集表格 + 迷你资源条 + 状态徽章，资源/TPS 按阈值自动变色；引入状态色系（success/warning/danger/info）与 **MC 绿主色**，替代纯灰阶。新增通用组件 `ResourceGauge`/`Panel`/`MiniBar`/`StatusBadge` 与历史曲线 `TimeSeriesChart`/`RangePicker`（recharts，多序列 + null 断点）。总览旗舰页（仪表盘 + 跨节点聚合曲线 + 密集实例表）、节点详情（仪表盘 + CPU/内存/磁盘/网络曲线 + 各实例指标对比）、实例工作区「监控」段（实例历史曲线 + 分世界）。纯前端重构，仍基于 shadcn/ui + Tailwind + OKLCH，不改后端行为。暗/亮主题 + zh/en 真机验证。
+- **节点负载（load average）采集与仪表盘**（FR-062）：节点心跳采集系统负载（gopsutil 跨平台；Windows 经处理器队列长度模拟），Control Plane 落 `node_load` 时序 + 节点当前值，总览/节点详情新增「负载」环形仪表盘（按 CPU 核数归一后阈值变色）+ 历史曲线；取不到时优雅留空。真机验证：CPU 过载时 load 端到端落库与渲染。
+
+### 修复
+- **实例标签为 JSON 字符串致 /instances 白屏**（FR-047 回归）：后端 `tags` 等 JSON 列以原始字符串返回（空为 `""`），前端误当数组直接 `.filter` 抛 `TypeError` 致整页白屏；新增 `parseTags` 容错解析（数组/JSON 串/空/null），分组与标签编辑统一经其消费。
+- **前端测试与静态检查清零**：修复 vitest 两处失败（`auth.ts` 模块顶层 localStorage 访问加非 DOM 守卫、`bot-list` 过期断言）；清理预存 eslint 错误（15→0）并恢复规则为 error，React Compiler 顾问规则与 shadcn 变体导出按文件豁免。
+
 ## 0.4.0（2026-06-21）
 
 ### Changed
