@@ -17,10 +17,11 @@ Worker Node (Go) × 20~100
     ├── 游戏服进程管理 (direct/daemon/docker/rcon)
     ├── 守护进程 Wrapper
     ├── WebSocket 终端服务 (/ws/terminal)
+    ├── 插件桥反向 WS 服务 (/ws/plugin-bridge, 探针主动连入, token, FR-065/ADR-016)
     ├── Bot 管理 → Node.js 子进程 (Mineflayer)
     └── 指标采集
-        ▲ HTTP GET (本机回环抓取)
-        └── ServerProbe 探针 jar (运行于游戏服 JVM, FR-010, 见 ADR-014)
+        ▲ HTTP GET (本机回环抓取)  +  ◀ 反向 WS (探针连入, 治理/事件通道)
+        └── ServerProbe 探针 jar (运行于游戏服 JVM, FR-010 监控见 ADR-014, 治理桥见 ADR-016)
 ```
 
 ## 2. 三进程模型
@@ -172,6 +173,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 终端：IssueTerminalToken
 - Bot：CreateBot, DeleteBot, ListBots, StreamBotEvents (server stream), SendBotCommand
 - 探针部署：DeployServerProbe（CP 内嵌 ServerProbe jar + 生成的 config.yml 经 gRPC 下发到实例 plugins 目录，FR-010；见 ADR-014）
+- 插件桥（FR-065；见 ADR-016）：StreamPluginEvents (server stream，CP 订阅某实例/全部探针经反向 WS 上报的事件流 connected/disconnected/heartbeat/玩家事件)、SendPluginCommand（CP 经 Worker 向探针下发治理/查询指令）、QueryServerState（查询子服全状态骨架）。地基阶段真实承载 connected/disconnected/heartbeat 与通道层，业务事件/治理执行语义留 FR-066/067
 - 指标：GetNodeMetrics, GetInstanceMetrics（请求带 probe_port/rcon_port/rcon_password，Worker 优先抓 ServerProbe `/metrics`，回退 RCON+RSS）——用于**实时**面板的 CP 主动拉取；**历史时序**（FR-060）改由 Worker 心跳推送 `instance_metrics`，二者互补
 - 玩家管理：ExecRconCommand（经实例 RCON 执行命令并回传输出，FR-054；RCON 端口/密码由 CP 随请求下发，Worker 不访问 DB；`available=false` 优雅降级）
 - 配置 (V2)：ListConfigFiles, ReadConfig, WriteConfig, ListConfigVersions, RollbackConfig
@@ -236,6 +238,28 @@ serverprobe_threads                         → 线程
 serverprobe_system_cpu_load                 → CPU 占用（0~1，前端转 %）
 serverprobe_uptime_seconds                  → 运行时长
 serverprobe_world_{loaded_chunks,entities,tile_entities}{world=}  → 按世界负载
+
+### 6.2.2 插件桥反向 WebSocket（探针 ↔ Worker，token，FR-065 / ADR-016）
+
+在 `/metrics` 只读抓取之外，ServerProbe fork 还经**反向 WebSocket** 主动连入本机 Worker，建立实时双向通道（治理/事件/在线更新/全状态查询的地基）。探针只与本机 Worker 通信，绝不直连 CP/DB/gRPC。与 `/metrics` 抓取并存互补：前者只读拉指标，后者双向承载事件与指令。
+
+- 端点：Worker 暴露 `GET /ws/plugin-bridge`，与 `/ws/terminal` 并列、同一 WS 监听端口。
+- 方向：探针**主动反向连入** `ws://127.0.0.1:<wsPort>/ws/plugin-bridge?token=<jwt>&instance=<uuid>`（本机回环，零额外对外网络面）。
+- 鉴权（实例级 token，复用 JWT secret）：CP 为实例签发 HS256 token（claims `instanceId`+`scope=plugin-bridge`，TTL 数分钟），随探针 config 的 `bridge:` 段下发；Worker 校验**签名 + `scope==plugin-bridge` + token 内 `instanceId == query.instance`** 后建会话，仅握手校验一次。
+- 会话表：Worker 维护「实例 UUID → 探针会话」，同实例单活动会话、**新连顶替旧连**；连接/断开冒泡 `connected`/`disconnected` 事件经 gRPC `StreamPluginEvents` 到 CP。
+- 心跳与重连：探针周期发 `ping`、Worker 回 `pong`，Worker 读超时判定断线；探针断线后自身指数退避重连（初始 ~1s，上限 ~30s）。
+- 探针侧载体：ServerProbe fork core 模块 `BridgeClient`（IOC `@Service`，`@PostEnable` 起 `@PreDestroy` 停），JDK 8 兼容、零三方依赖的最小 RFC 6455 客户端（`MinimalWebSocketClient`）。
+
+```
+建服 provision → CP 签发 plugin-bridge token → 写入探针 config.yml 的 bridge 段（url+instance+token）
+探针启用 → BridgeClient 反向连入 ws://127.0.0.1:<wsPort>/ws/plugin-bridge?token=&instance=
+  → Worker 校验 token + 建会话(单活动顶替) → 回 welcome
+  → 探针发 hello + demo connected 事件；周期 ping/pong 心跳；断线指数退避重连
+上行：探针 →(WS) Worker →(gRPC stream StreamPluginEvents) CP →(后续 SSE) 浏览器
+下行：浏览器 →(HTTP) CP →(gRPC SendPluginCommand) Worker →(WS) 探针
+```
+
+> 地基阶段（FR-065）仅打通通道层（会话/握手/心跳/connected·disconnected 冒泡 + proto 一次铺齐）；玩家事件采集（FR-066）、治理执行 + 退役 RCON（FR-067）、在线更新（FR-068）为下游 FR，复用本通道、不再改 proto。
 
 ### 6.3 守护进程二进制帧协议
 

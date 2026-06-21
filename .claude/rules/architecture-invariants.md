@@ -18,7 +18,7 @@
 
 - Control Plane ↔ Worker Node：gRPC（唯一允许的 RPC 协议）
 - 浏览器 ↔ Worker Node：WebSocket（仅终端/日志流，需一次性 token 鉴权）
-- 平台插件（Bukkit/BC）↔ Worker Node：WebSocket（插件桥 `/ws/plugin-bridge`，需实例级 token 鉴权；插件不直连 CP/DB/gRPC，事件/指令经 Worker 中转。见 ADR-012）
+- 监控探针 ServerProbe ↔ Worker Node：**反向 WebSocket**（插件桥 `/ws/plugin-bridge`，探针主动连入本机 Worker，需实例级 token 鉴权 scope=plugin-bridge；探针不直连 CP/DB/gRPC，事件/指令经 Worker 中转。载体=ServerProbe 探针，见 ADR-016，取代 ADR-014 的「探针只读+RCON 治理」、复活 ADR-012 的 WS 通道）
 - Worker Node ↔ Bot Worker：stdin/stdout JSON 行协议
 - 守护进程 ↔ Worker Node：Unix Socket 二进制帧协议
 

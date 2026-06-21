@@ -1,7 +1,7 @@
 # ADR-014: 用 ServerProbe 作监控探针、退役自写插件桥
 
 - **日期**: 2026-06-21
-- **状态**: accepted
+- **状态**: accepted（**部分被 [ADR-016](016-serverprobe-governance-bridge.md) 取代**，2026-06-22：监控部署链路保留有效；本 ADR「探针只读 + 玩家治理走 RCON」的决策被 ADR-016 推翻——探针改经反向 WS 承载治理/实时事件/全状态查询）
 - **取代**: [ADR-012](012-plugin-bridge-channel.md)
 - **上下文**: ADR-012 当初为同时满足「实时玩家事件 + 精确治理 + 富监控指标」三件事，决定在 Worker 旁起 WS 插件桥并自写 Bukkit/BungeeCord 双端插件（`tools/jianmanager-bridge/`）。但实际推进时三件事的耦合并不强：
   - **玩家治理**（踢/封/whitelist）在 FR-054 修复 RCON 鉴权包类型 bug（commit d1314b5）后，纯 RCON 路径已能真机踢出在线 Bot；当前需求不再依赖插件路径执行治理。
