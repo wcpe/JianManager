@@ -212,6 +212,39 @@ func (s *FileService) RenameFile(instanceID uint, oldPath, newPath string) error
 	return nil
 }
 
+// DownloadArchive 把选中的若干文件/目录即时打包为 zip 流式返回（FR-070 批量下载）。
+// 返回 Worker gRPC 服务端流，由调用方逐帧 Recv 并写到 HTTP 响应；Worker 边打包边发，CP 不缓冲整包。
+// 注意：流式打包需贯穿整个 HTTP 响应，故由调用方传入请求级 ctx（不在此设固定超时）。
+func (s *FileService) DownloadArchive(ctx context.Context, instanceID uint, paths []string) (workerpb.WorkerService_DownloadArchiveClient, error) {
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("未指定要打包的路径")
+	}
+	for _, p := range paths {
+		if err := validatePath(p); err != nil {
+			return nil, err
+		}
+	}
+
+	instance, node, err := s.getInstanceAndNode(instanceID)
+	if err != nil {
+		return nil, err
+	}
+
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return nil, ErrNodeNotConnected
+	}
+
+	stream, err := client.Worker.DownloadArchive(ctx, &workerpb.DownloadArchiveRequest{
+		InstanceUuid: instance.UUID,
+		Paths:        paths,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("批量下载失败: %w", err)
+	}
+	return stream, nil
+}
+
 // validatePath 校验文件路径，防止路径遍历攻击。
 func validatePath(path string) error {
 	if strings.Contains(path, "..") {

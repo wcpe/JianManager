@@ -218,6 +218,86 @@ func (h *FileHandler) Download(c *gin.Context) {
 	c.Data(http.StatusOK, "application/octet-stream", content)
 }
 
+// archiveRequest 批量打包下载请求（FR-070）。
+type archiveRequest struct {
+	Paths []string `json:"paths" binding:"required"`
+}
+
+// DownloadArchive 批量打包下载：把选中的文件/目录即时打包为 zip 流式返回（FR-070）。
+// CP 逐帧 Recv Worker 流并写入响应体并 Flush，全程不缓冲整个归档。
+func (h *FileHandler) DownloadArchive(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+
+	var req archiveRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+	if len(req.Paths) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "未选择要下载的文件"})
+		return
+	}
+
+	stream, err := h.fileSvc.DownloadArchive(c.Request.Context(), id, req.Paths)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+
+	// 先收第一帧再写头：若打包在开始前就失败（如越界/缺文件），仍能返回 JSON 错误而非半截 zip。
+	first, err := stream.Recv()
+	if err != nil {
+		if err == io.EOF {
+			// 空归档（理论上不会，paths 非空且条目存在）：返回空 zip 头交给客户端。
+			c.Header("Content-Type", "application/zip")
+			c.Status(http.StatusOK)
+			return
+		}
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Disposition", `attachment; filename="files.zip"`)
+	c.Status(http.StatusOK)
+	flusher, _ := c.Writer.(http.Flusher)
+
+	writeChunk := func(b []byte) bool {
+		if _, werr := c.Writer.Write(b); werr != nil {
+			return false // 客户端断开
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return true
+	}
+
+	if !writeChunk(first.Content) {
+		return
+	}
+	for {
+		chunk, rerr := stream.Recv()
+		if rerr == io.EOF {
+			return
+		}
+		if rerr != nil {
+			// 流中途失败：响应头已发出，只能截断连接（前端按下载失败处理）。
+			return
+		}
+		if !writeChunk(chunk.Content) {
+			return
+		}
+	}
+}
+
 // renameRequest 文件重命名请求。
 type renameRequest struct {
 	OldPath string `json:"oldPath" binding:"required"`
@@ -354,6 +434,8 @@ func (h *FileHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		files.POST("/write", h.Write)
 		files.POST("/upload", h.Upload)
 		files.GET("/download", h.Download)
+		// FR-070 批量下载：选中多文件/目录即时打包 zip 流式返回（加性追加）。
+		files.POST("/archive", h.DownloadArchive)
 		files.POST("/rename", h.Rename)
 		files.DELETE("", h.Delete)
 		// FR-051 文件版本：加性追加，不重排既有路由。
