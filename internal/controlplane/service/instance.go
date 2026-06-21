@@ -496,6 +496,7 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 		EnvVars:      envVars,
 		AutoRestart:  instance.AutoRestart,
 		JdkPath:      jdkPath,
+		ProbePort:    int32(instance.ProbePort),
 	})
 	if err != nil {
 		return fmt.Errorf("Worker CreateInstance 失败: %w", err)

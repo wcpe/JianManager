@@ -20,13 +20,21 @@ import (
 // 与 internal/worker/heartbeat 中的常量保持一致。
 const nodeSecretHeader = "node-secret"
 
+// MetricIngester 把心跳负载里的节点/实例指标落库为时序样本（FR-060）。
+// 在 grpc 包内以接口声明、由 service.MetricService 实现，避免 grpc→service 反向依赖
+// （service 已 import grpc）；接口只引用中立的 workerpb，无循环。
+type MetricIngester interface {
+	IngestHeartbeat(req *workerpb.HeartbeatRequest) error
+}
+
 // ControlPlaneHandler Control Plane 侧的 gRPC 处理器。
 // 处理来自 Worker Node 的 Register 和 Heartbeat 请求。
 type ControlPlaneHandler struct {
 	workerpb.WorkerServiceServer
-	db       *gorm.DB
-	pool     *ClientPool
+	db              *gorm.DB
+	pool            *ClientPool
 	onWorkerConnect func(nodeUUID string) // Worker 注册成功后回调
+	metrics         MetricIngester        // 时序指标入库（nil 时心跳不落时序）
 }
 
 // NewControlPlaneHandler 创建处理器。
@@ -39,6 +47,11 @@ func (h *ControlPlaneHandler) SetOnWorkerConnect(fn func(nodeUUID string)) {
 	h.onWorkerConnect = fn
 }
 
+// SetMetricIngester 注入时序指标入库器（FR-060）；不注入则心跳仅更新节点当前值不落时序。
+func (h *ControlPlaneHandler) SetMetricIngester(m MetricIngester) {
+	h.metrics = m
+}
+
 // Register 处理 Worker Node 注册。
 func (h *ControlPlaneHandler) Register(ctx context.Context, req *workerpb.RegisterRequest) (*workerpb.RegisterResponse, error) {
 	// 查找已有节点（按名称匹配）
@@ -49,17 +62,17 @@ func (h *ControlPlaneHandler) Register(ctx context.Context, req *workerpb.Regist
 		// 新节点，创建记录
 		now := time.Now()
 		node = model.Node{
-			Name:     req.Name,
-			Host:     req.Host,
-			GRPCPort: int(req.GrpcPort),
-			WSPort:   int(req.WsPort),
-			Secret:   uuid.New().String(),
-			Status:   model.NodeStatusOnline,
-			OS:       req.Os,
-			Arch:     req.Arch,
-			CPUCores: int(req.CpuCores),
-			MemoryMB: req.MemoryMb,
-			DiskTotalMB: req.DiskTotalMb,
+			Name:          req.Name,
+			Host:          req.Host,
+			GRPCPort:      int(req.GrpcPort),
+			WSPort:        int(req.WsPort),
+			Secret:        uuid.New().String(),
+			Status:        model.NodeStatusOnline,
+			OS:            req.Os,
+			Arch:          req.Arch,
+			CPUCores:      int(req.CpuCores),
+			MemoryMB:      req.MemoryMb,
+			DiskTotalMB:   req.DiskTotalMb,
 			LastHeartbeat: &now,
 		}
 
@@ -151,15 +164,15 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 
 		// 更新节点指标和心跳时间
 		updates := map[string]interface{}{
-			"cpu_usage":           req.CpuUsage,
-			"memory_usage":        req.MemoryUsage,
-			"disk_usage":          req.DiskUsage,
-			"memory_used_mb":      req.MemoryUsedMb,
-			"disk_used_mb":        req.DiskUsedMb,
-			"network_bytes_sent":  req.NetworkBytesSent,
-			"network_bytes_recv":  req.NetworkBytesRecv,
-			"last_heartbeat":      time.Now(),
-			"status":              model.NodeStatusOnline,
+			"cpu_usage":          req.CpuUsage,
+			"memory_usage":       req.MemoryUsage,
+			"disk_usage":         req.DiskUsage,
+			"memory_used_mb":     req.MemoryUsedMb,
+			"disk_used_mb":       req.DiskUsedMb,
+			"network_bytes_sent": req.NetworkBytesSent,
+			"network_bytes_recv": req.NetworkBytesRecv,
+			"last_heartbeat":     time.Now(),
+			"status":             model.NodeStatusOnline,
 		}
 
 		if err := h.db.Model(&model.Node{}).Where("uuid = ?", req.NodeUuid).Updates(updates).Error; err != nil {
@@ -187,6 +200,14 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 		// 同步实例状态并对账（即使 Worker 上报空也要对账：
 		// Worker 重启未恢复某实例时，DB 会永远卡在 RUNNING 致所有生命周期操作 422）。
 		h.syncInstanceStates(req.NodeUuid, req.Instances)
+
+		// 心跳负载落库为时序样本（节点指标 + 每实例 ServerProbe 快照，FR-060）。
+		// 失败不影响心跳本身（节点当前值已更新），仅记录告警。
+		if h.metrics != nil {
+			if err := h.metrics.IngestHeartbeat(req); err != nil {
+				slog.Warn("时序指标入库失败", "nodeUUID", req.NodeUuid, "error", err)
+			}
+		}
 
 		// 返回响应
 		if err := stream.Send(&workerpb.HeartbeatResponse{

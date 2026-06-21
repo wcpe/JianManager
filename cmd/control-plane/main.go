@@ -163,6 +163,8 @@ func main() {
 	grpcHandler.SetOnWorkerConnect(func(nodeUUID string) {
 		eventSvc.StartWorkerStream(nodeUUID)
 	})
+	// 心跳负载落库为时序样本（节点指标 + 每实例 ServerProbe 快照，FR-060）。
+	grpcHandler.SetMetricIngester(metricSvc)
 	grpcServer := grpc.NewServer()
 	workerpb.RegisterWorkerServiceServer(grpcServer, grpcHandler)
 
