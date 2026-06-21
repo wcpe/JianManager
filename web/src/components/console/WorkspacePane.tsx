@@ -10,7 +10,7 @@ import { useConsoleStore, type WorkspaceSegment } from '@/stores/console'
 import TerminalPane from './TerminalPane'
 import BotSegment from './BotSegment'
 import MetricsSegment from './MetricsSegment'
-import FileBrowser from '@/components/FileBrowser'
+import ResourceExplorer from '@/components/explorer/ResourceExplorer'
 import ConfigEditor from '@/components/ConfigEditor'
 import PluginManager from '@/components/plugins/PluginManager'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -96,7 +96,7 @@ export default function WorkspacePane({ instanceId }: WorkspacePaneProps) {
           <BotSegment instanceId={instanceId} />
         ) : segment === 'files' ? (
           <div className="p-4">
-            <FileBrowser instanceId={instanceId} />
+            <ResourceExplorer instanceId={instanceId} />
           </div>
         ) : segment === 'config' ? (
           <div className="p-4">

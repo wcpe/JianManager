@@ -5,7 +5,7 @@ import { useInstanceMetrics } from '@/api/metrics'
 import { useTerminalToken } from '@/api/terminal'
 import { useBots } from '@/api/bots'
 import ConfigEditor from '@/components/ConfigEditor'
-import FileBrowser from '@/components/FileBrowser'
+import ResourceExplorer from '@/components/explorer/ResourceExplorer'
 import PluginManager from '@/components/plugins/PluginManager'
 import TerminalComponent from '@/components/Terminal'
 import { Button } from '@/components/ui/button'
@@ -125,7 +125,7 @@ export default function InstanceDetailPage() {
           <TerminalTab instanceId={instanceId} status={instance.status} />
         </TabsContent>
         <TabsContent value="files">
-          <FileBrowser instanceId={instanceId} />
+          <ResourceExplorer instanceId={instanceId} />
         </TabsContent>
         <TabsContent value="config">
           <ConfigTab instanceId={instanceId} />
