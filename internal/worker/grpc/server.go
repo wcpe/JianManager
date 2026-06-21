@@ -327,7 +327,7 @@ func (s *Server) InstallJDK(ctx context.Context, req *workerpb.InstallJDKRequest
 	if s.jdkMgr == nil {
 		return &workerpb.InstallJDKResponse{Success: false, Error: "JDK 管理器未启用"}, nil
 	}
-	info, err := s.jdkMgr.Install(req.Vendor, int(req.MajorVersion), req.Arch, req.InstallDir)
+	info, err := s.jdkMgr.Install(req.Vendor, int(req.MajorVersion), req.Arch, req.InstallDir, req.MirrorBase)
 	if err != nil {
 		return &workerpb.InstallJDKResponse{Success: false, Error: err.Error()}, nil
 	}

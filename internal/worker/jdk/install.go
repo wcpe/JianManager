@@ -15,9 +15,13 @@ import (
 	"time"
 )
 
-// jdkMirrorBase 返回指定 vendor 的下载基址：环境变量优先（支持国内镜像等自定义源），
-// 为空时回退官方默认。实现 FR-033「下载源可配，默认 Adoptium」。
-func jdkMirrorBase(vendor string) string {
+// jdkMirrorBase 返回指定 vendor 的下载基址：CP 下发的 override 优先（来自平台设置
+// jdk.mirror.<vendor>，使运行时配置真生效），其次环境变量，最后回退官方默认。
+// 实现 FR-033「下载源可配，默认 Adoptium」与 FR-063 平台设置真生效。
+func jdkMirrorBase(vendor, override string) string {
+	if v := strings.TrimSpace(override); v != "" {
+		return v
+	}
 	switch strings.ToLower(vendor) {
 	case "temurin", "adoptium":
 		return envOr("JIANMANAGER_JDK_TEMURIN_BASE", "https://api.adoptium.net")
@@ -38,16 +42,16 @@ func envOr(key, def string) string {
 }
 
 // buildDownloadURL 根据 vendor/major/arch/平台返回归档下载 URL。
-// 下载基址可经 JIANMANAGER_JDK_<VENDOR>_BASE 覆盖（默认官方源，Temurin 默认 Adoptium）；
-// 未支持的 vendor 返回明确错误，提示使用 POST /jdks 手动登记。
-func buildDownloadURL(vendor string, major int, arch string) (string, error) {
+// 下载基址优先用 mirrorBase（CP 从平台设置下发），其次 JIANMANAGER_JDK_<VENDOR>_BASE，
+// 最后回退官方源（Temurin 默认 Adoptium）；未支持的 vendor 返回明确错误，提示用 POST /jdks 手动登记。
+func buildDownloadURL(vendor string, major int, arch, mirrorBase string) (string, error) {
 	switch strings.ToLower(vendor) {
 	case "temurin", "adoptium":
-		return temurinURL(jdkMirrorBase(vendor), major, arch), nil
+		return temurinURL(jdkMirrorBase(vendor, mirrorBase), major, arch), nil
 	case "corretto", "amazon":
-		return correttoURL(jdkMirrorBase(vendor), major, arch), nil
+		return correttoURL(jdkMirrorBase(vendor, mirrorBase), major, arch), nil
 	case "zulu", "azul":
-		return zuluURL(jdkMirrorBase(vendor), major, arch)
+		return zuluURL(jdkMirrorBase(vendor, mirrorBase), major, arch)
 	default:
 		return "", fmt.Errorf("unsupported vendor: %s (supported: Temurin, Corretto, Zulu)", vendor)
 	}

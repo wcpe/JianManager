@@ -112,8 +112,9 @@ func (m *Manager) List() ([]Info, error) {
 }
 
 // Install 下载并安装指定 Temurin JDK 到 installDir（默认 <rootDir>/<vendor>-<major>）。
-// vendor/major/arch 必填；下载完成后自动 detect。
-func (m *Manager) Install(vendor string, major int, arch, installDir string) (Info, error) {
+// vendor/major/arch 必填；mirrorBase 非空时作下载基址（CP 从平台设置下发，使镜像源真生效），
+// 为空回退本地 env/默认源。下载完成后自动 detect。
+func (m *Manager) Install(vendor string, major int, arch, installDir, mirrorBase string) (Info, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -130,7 +131,7 @@ func (m *Manager) Install(vendor string, major int, arch, installDir string) (In
 		return Info{}, fmt.Errorf("目标目录已存在: %s", installDir)
 	}
 
-	downloadURL, err := buildDownloadURL(vendor, major, arch)
+	downloadURL, err := buildDownloadURL(vendor, major, arch, mirrorBase)
 	if err != nil {
 		return Info{}, err
 	}

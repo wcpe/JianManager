@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -23,10 +24,44 @@ var (
 type JDKService struct {
 	db   *gorm.DB
 	pool *cpgrpc.ClientPool
+	// settings 提供平台设置生效值（jdk.mirror.<vendor>），使运行时配置的镜像源真生效；
+	// 为 nil 时安装走 Worker 本地 env/默认源（FR-063）。
+	settings SettingsReader
 }
 
 func NewJDKService(db *gorm.DB, pool *cpgrpc.ClientPool) *JDKService {
 	return &JDKService{db: db, pool: pool}
+}
+
+// SetSettingsReader 注入平台设置读取器（FR-063）。在 main 装配阶段调用，避免构造期循环依赖。
+func (s *JDKService) SetSettingsReader(r SettingsReader) {
+	s.settings = r
+}
+
+// mirrorBaseForVendor 取该 vendor 的下载基址生效值（平台设置 jdk.mirror.<vendor>）。
+// 未注入设置读取器或 vendor 无对应键时返回空，由 Worker 回退本地 env/默认源。
+func (s *JDKService) mirrorBaseForVendor(vendor string) string {
+	if s.settings == nil {
+		return ""
+	}
+	key := jdkMirrorSettingKey(vendor)
+	if key == "" {
+		return ""
+	}
+	return s.settings.EffectiveValue(key)
+}
+
+// jdkMirrorSettingKey 把 vendor 映射到平台设置键 jdk.mirror.<vendor>（含常见别名归一）。
+func jdkMirrorSettingKey(vendor string) string {
+	switch strings.ToLower(vendor) {
+	case "temurin", "adoptium":
+		return SettingKeyJDKMirrorTemurin
+	case "corretto", "amazon":
+		return SettingKeyJDKMirrorCorretto
+	case "zulu", "azul":
+		return SettingKeyJDKMirrorZulu
+	}
+	return ""
 }
 
 type CreateJDKRequest struct {
@@ -81,6 +116,7 @@ func (s *JDKService) Install(nodeID uint, req InstallJDKRequest) (*model.NodeJDK
 		Vendor:       req.Vendor,
 		MajorVersion: int32(req.MajorVersion),
 		Arch:         req.Arch,
+		MirrorBase:   s.mirrorBaseForVendor(req.Vendor),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("Worker InstallJDK RPC 失败: %w", err)
