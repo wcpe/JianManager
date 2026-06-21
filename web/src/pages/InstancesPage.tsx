@@ -26,6 +26,7 @@ import {
   envOf,
   freeTagsOf,
   groupInstances,
+  parseTags,
   type GroupDimension,
 } from '@/components/console/instance-grouping'
 import { Badge } from '@/components/ui/badge'
@@ -190,7 +191,7 @@ export default function InstancesPage() {
             <Button
               variant="ghost"
               size="xs"
-              onClick={() => setTagsTarget({ id: inst.id, name: inst.name, tags: inst.tags ?? [] })}
+              onClick={() => setTagsTarget({ id: inst.id, name: inst.name, tags: parseTags(inst.tags) })}
               className="text-muted-foreground hover:text-foreground"
             >
               {t('grouping.editTags')}

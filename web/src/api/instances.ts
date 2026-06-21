@@ -18,8 +18,12 @@ export interface InstanceInfo {
   serverPort: number
   autoStart: boolean
   autoRestart: boolean
-  /** 标签集合（FR-047）：环境维度复用 `env:` 前缀（如 `env:prod`），其余为自由标签。 */
-  tags: string[] | null
+  /**
+   * 标签集合（FR-047）：环境维度复用 `env:` 前缀（如 `env:prod`），其余为自由标签。
+   * 后端以原始 JSON 字符串返回（空为 ""、有值为 `'["env:prod"]'`、清空为 "null"），与
+   * envVars/launchSpec 一致；消费前一律经 `parseTags()` 规范化为数组，勿直接当数组用。
+   */
+  tags: string | string[] | null
   createdAt: string
 }
 

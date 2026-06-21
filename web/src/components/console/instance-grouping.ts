@@ -4,12 +4,33 @@ import type { InstanceInfo } from '@/api/instances'
 export const ENV_TAG_PREFIX = 'env:'
 
 /**
+ * 把实例 `tags` 字段规范化为字符串数组。
+ * 后端将 JSON 列原样以字符串返回（空标签为 ""，有标签为 `'["env:prod"]'`，清空为 "null"），
+ * 与 `envVars`/`launchSpec` 一致；前端在此统一解析，容错任意非数组输入，避免直接 `.filter` 崩溃。
+ */
+export function parseTags(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.filter((t): t is string => typeof t === 'string')
+  }
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    try {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        return parsed.filter((t): t is string => typeof t === 'string')
+      }
+    } catch {
+      // 非 JSON（理论上不会出现），按无标签处理
+    }
+  }
+  return []
+}
+
+/**
  * 从实例标签中提取环境维度值（去掉 `env:` 前缀），取首个 env 标签。
  * 无 env 标签时返回空串，表示「未分环境」。
  */
 export function envOf(inst: Pick<InstanceInfo, 'tags'>): string {
-  const tags = inst.tags ?? []
-  for (const tag of tags) {
+  for (const tag of parseTags(inst.tags)) {
     if (tag.startsWith(ENV_TAG_PREFIX)) {
       return tag.slice(ENV_TAG_PREFIX.length).trim()
     }
@@ -19,7 +40,7 @@ export function envOf(inst: Pick<InstanceInfo, 'tags'>): string {
 
 /** 实例的自由标签（剔除 env: 前缀的环境标签）。 */
 export function freeTagsOf(inst: Pick<InstanceInfo, 'tags'>): string[] {
-  return (inst.tags ?? []).filter((t) => !t.startsWith(ENV_TAG_PREFIX))
+  return parseTags(inst.tags).filter((t) => !t.startsWith(ENV_TAG_PREFIX))
 }
 
 /**
