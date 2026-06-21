@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   CartesianGrid,
   Line,
@@ -68,6 +68,25 @@ export function TimeSeriesChart({
     return { data: rows, spanMs: span }
   }, [series])
 
+  // 仅当容器具备非 0 宽度时才挂载 ResponsiveContainer：在隐藏/未激活分段或折叠面板
+  // （0 尺寸容器）内渲染时，recharts 会以 width(-1)/height(-1) 告警（BUG-007）。
+  // 用 callback ref 在容器挂载时建 ResizeObserver；容器获得尺寸（切回分段/展开面板）后
+  // 再次触发，自动恢复，不留持续空白。容器跨「无数据/有图」分支重挂载也能正确重接。
+  const [hasWidth, setHasWidth] = useState(false)
+  const observerRef = useRef<ResizeObserver | null>(null)
+  const containerRef = useCallback((el: HTMLDivElement | null) => {
+    observerRef.current?.disconnect()
+    if (!el) {
+      observerRef.current = null
+      return
+    }
+    const observer = new ResizeObserver((entries) => {
+      setHasWidth((entries[0]?.contentRect.width ?? 0) > 0)
+    })
+    observer.observe(el)
+    observerRef.current = observer
+  }, [])
+
   const hasData = data.some((row) => series.some((s) => row[s.key] != null))
   if (!hasData) {
     return (
@@ -84,7 +103,8 @@ export function TimeSeriesChart({
   const tickFormatter = makeTickFormatter(spanMs)
 
   return (
-    <div style={{ height, width: '100%' }}>
+    <div ref={containerRef} style={{ height, width: '100%' }}>
+      {hasWidth && (
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 6, right: 12, bottom: 0, left: 4 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
@@ -130,6 +150,7 @@ export function TimeSeriesChart({
           ))}
         </LineChart>
       </ResponsiveContainer>
+      )}
     </div>
   )
 }

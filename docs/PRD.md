@@ -1024,7 +1024,7 @@
 - **依赖**: 无
 
 ### BUG-007: 监控图表在 0 尺寸容器渲染告警
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P2
 - **描述**: 控制台反复出现 recharts `width(-1)/height(-1) ... should be greater than 0` 告警（×9）。根因：ResponsiveContainer 在隐藏/未激活分段或折叠面板（0 尺寸容器）内渲染，可能导致切换时图表瞬时空白。
 - **验收标准**:
