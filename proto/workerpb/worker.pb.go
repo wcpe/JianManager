@@ -1958,6 +1958,102 @@ func (x *RenameFileResponse) GetError() string {
 	return ""
 }
 
+type DownloadArchiveRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	InstanceUuid  string                 `protobuf:"bytes,1,opt,name=instance_uuid,json=instanceUuid,proto3" json:"instance_uuid,omitempty"`
+	Paths         []string               `protobuf:"bytes,2,rep,name=paths,proto3" json:"paths,omitempty"` // 相对工作目录的文件/目录集合，目录递归打包
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DownloadArchiveRequest) Reset() {
+	*x = DownloadArchiveRequest{}
+	mi := &file_proto_worker_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DownloadArchiveRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DownloadArchiveRequest) ProtoMessage() {}
+
+func (x *DownloadArchiveRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DownloadArchiveRequest.ProtoReflect.Descriptor instead.
+func (*DownloadArchiveRequest) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *DownloadArchiveRequest) GetInstanceUuid() string {
+	if x != nil {
+		return x.InstanceUuid
+	}
+	return ""
+}
+
+func (x *DownloadArchiveRequest) GetPaths() []string {
+	if x != nil {
+		return x.Paths
+	}
+	return nil
+}
+
+type DownloadArchiveChunk struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Content       []byte                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"` // zip 字节分片
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DownloadArchiveChunk) Reset() {
+	*x = DownloadArchiveChunk{}
+	mi := &file_proto_worker_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DownloadArchiveChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DownloadArchiveChunk) ProtoMessage() {}
+
+func (x *DownloadArchiveChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DownloadArchiveChunk.ProtoReflect.Descriptor instead.
+func (*DownloadArchiveChunk) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *DownloadArchiveChunk) GetContent() []byte {
+	if x != nil {
+		return x.Content
+	}
+	return nil
+}
+
 type ListConfigFilesRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	InstanceUuid  string                 `protobuf:"bytes,1,opt,name=instance_uuid,json=instanceUuid,proto3" json:"instance_uuid,omitempty"`
@@ -1968,7 +2064,7 @@ type ListConfigFilesRequest struct {
 
 func (x *ListConfigFilesRequest) Reset() {
 	*x = ListConfigFilesRequest{}
-	mi := &file_proto_worker_proto_msgTypes[31]
+	mi := &file_proto_worker_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1980,7 +2076,7 @@ func (x *ListConfigFilesRequest) String() string {
 func (*ListConfigFilesRequest) ProtoMessage() {}
 
 func (x *ListConfigFilesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[31]
+	mi := &file_proto_worker_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1993,7 +2089,7 @@ func (x *ListConfigFilesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListConfigFilesRequest.ProtoReflect.Descriptor instead.
 func (*ListConfigFilesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{31}
+	return file_proto_worker_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ListConfigFilesRequest) GetInstanceUuid() string {
@@ -2023,7 +2119,7 @@ type ConfigFileInfo struct {
 
 func (x *ConfigFileInfo) Reset() {
 	*x = ConfigFileInfo{}
-	mi := &file_proto_worker_proto_msgTypes[32]
+	mi := &file_proto_worker_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2035,7 +2131,7 @@ func (x *ConfigFileInfo) String() string {
 func (*ConfigFileInfo) ProtoMessage() {}
 
 func (x *ConfigFileInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[32]
+	mi := &file_proto_worker_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2048,7 +2144,7 @@ func (x *ConfigFileInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigFileInfo.ProtoReflect.Descriptor instead.
 func (*ConfigFileInfo) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{32}
+	return file_proto_worker_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ConfigFileInfo) GetPath() string {
@@ -2095,7 +2191,7 @@ type ListConfigFilesResponse struct {
 
 func (x *ListConfigFilesResponse) Reset() {
 	*x = ListConfigFilesResponse{}
-	mi := &file_proto_worker_proto_msgTypes[33]
+	mi := &file_proto_worker_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2107,7 +2203,7 @@ func (x *ListConfigFilesResponse) String() string {
 func (*ListConfigFilesResponse) ProtoMessage() {}
 
 func (x *ListConfigFilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[33]
+	mi := &file_proto_worker_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2120,7 +2216,7 @@ func (x *ListConfigFilesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListConfigFilesResponse.ProtoReflect.Descriptor instead.
 func (*ListConfigFilesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{33}
+	return file_proto_worker_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ListConfigFilesResponse) GetFiles() []*ConfigFileInfo {
@@ -2143,7 +2239,7 @@ type ConfigField struct {
 
 func (x *ConfigField) Reset() {
 	*x = ConfigField{}
-	mi := &file_proto_worker_proto_msgTypes[34]
+	mi := &file_proto_worker_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2155,7 +2251,7 @@ func (x *ConfigField) String() string {
 func (*ConfigField) ProtoMessage() {}
 
 func (x *ConfigField) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[34]
+	mi := &file_proto_worker_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2168,7 +2264,7 @@ func (x *ConfigField) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigField.ProtoReflect.Descriptor instead.
 func (*ConfigField) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{34}
+	return file_proto_worker_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *ConfigField) GetKey() string {
@@ -2219,7 +2315,7 @@ type ValidationIssue struct {
 
 func (x *ValidationIssue) Reset() {
 	*x = ValidationIssue{}
-	mi := &file_proto_worker_proto_msgTypes[35]
+	mi := &file_proto_worker_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2231,7 +2327,7 @@ func (x *ValidationIssue) String() string {
 func (*ValidationIssue) ProtoMessage() {}
 
 func (x *ValidationIssue) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[35]
+	mi := &file_proto_worker_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2244,7 +2340,7 @@ func (x *ValidationIssue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidationIssue.ProtoReflect.Descriptor instead.
 func (*ValidationIssue) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{35}
+	return file_proto_worker_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ValidationIssue) GetLevel() string {
@@ -2292,7 +2388,7 @@ type ConfigValidationResult struct {
 
 func (x *ConfigValidationResult) Reset() {
 	*x = ConfigValidationResult{}
-	mi := &file_proto_worker_proto_msgTypes[36]
+	mi := &file_proto_worker_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2304,7 +2400,7 @@ func (x *ConfigValidationResult) String() string {
 func (*ConfigValidationResult) ProtoMessage() {}
 
 func (x *ConfigValidationResult) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[36]
+	mi := &file_proto_worker_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2317,7 +2413,7 @@ func (x *ConfigValidationResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigValidationResult.ProtoReflect.Descriptor instead.
 func (*ConfigValidationResult) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{36}
+	return file_proto_worker_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ConfigValidationResult) GetValid() bool {
@@ -2344,7 +2440,7 @@ type ReadConfigRequest struct {
 
 func (x *ReadConfigRequest) Reset() {
 	*x = ReadConfigRequest{}
-	mi := &file_proto_worker_proto_msgTypes[37]
+	mi := &file_proto_worker_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2356,7 +2452,7 @@ func (x *ReadConfigRequest) String() string {
 func (*ReadConfigRequest) ProtoMessage() {}
 
 func (x *ReadConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[37]
+	mi := &file_proto_worker_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2369,7 +2465,7 @@ func (x *ReadConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadConfigRequest.ProtoReflect.Descriptor instead.
 func (*ReadConfigRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{37}
+	return file_proto_worker_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *ReadConfigRequest) GetInstanceUuid() string {
@@ -2401,7 +2497,7 @@ type ReadConfigResponse struct {
 
 func (x *ReadConfigResponse) Reset() {
 	*x = ReadConfigResponse{}
-	mi := &file_proto_worker_proto_msgTypes[38]
+	mi := &file_proto_worker_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2413,7 +2509,7 @@ func (x *ReadConfigResponse) String() string {
 func (*ReadConfigResponse) ProtoMessage() {}
 
 func (x *ReadConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[38]
+	mi := &file_proto_worker_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2426,7 +2522,7 @@ func (x *ReadConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadConfigResponse.ProtoReflect.Descriptor instead.
 func (*ReadConfigResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{38}
+	return file_proto_worker_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *ReadConfigResponse) GetPath() string {
@@ -2490,7 +2586,7 @@ type WriteConfigRequest struct {
 
 func (x *WriteConfigRequest) Reset() {
 	*x = WriteConfigRequest{}
-	mi := &file_proto_worker_proto_msgTypes[39]
+	mi := &file_proto_worker_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2502,7 +2598,7 @@ func (x *WriteConfigRequest) String() string {
 func (*WriteConfigRequest) ProtoMessage() {}
 
 func (x *WriteConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[39]
+	mi := &file_proto_worker_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2515,7 +2611,7 @@ func (x *WriteConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteConfigRequest.ProtoReflect.Descriptor instead.
 func (*WriteConfigRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{39}
+	return file_proto_worker_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *WriteConfigRequest) GetInstanceUuid() string {
@@ -2558,7 +2654,7 @@ type WriteConfigResponse struct {
 
 func (x *WriteConfigResponse) Reset() {
 	*x = WriteConfigResponse{}
-	mi := &file_proto_worker_proto_msgTypes[40]
+	mi := &file_proto_worker_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2570,7 +2666,7 @@ func (x *WriteConfigResponse) String() string {
 func (*WriteConfigResponse) ProtoMessage() {}
 
 func (x *WriteConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[40]
+	mi := &file_proto_worker_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2583,7 +2679,7 @@ func (x *WriteConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WriteConfigResponse.ProtoReflect.Descriptor instead.
 func (*WriteConfigResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{40}
+	return file_proto_worker_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *WriteConfigResponse) GetSuccess() bool {
@@ -2625,7 +2721,7 @@ type ValidateConfigRequest struct {
 
 func (x *ValidateConfigRequest) Reset() {
 	*x = ValidateConfigRequest{}
-	mi := &file_proto_worker_proto_msgTypes[41]
+	mi := &file_proto_worker_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2637,7 +2733,7 @@ func (x *ValidateConfigRequest) String() string {
 func (*ValidateConfigRequest) ProtoMessage() {}
 
 func (x *ValidateConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[41]
+	mi := &file_proto_worker_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2650,7 +2746,7 @@ func (x *ValidateConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateConfigRequest.ProtoReflect.Descriptor instead.
 func (*ValidateConfigRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{41}
+	return file_proto_worker_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *ValidateConfigRequest) GetInstanceUuid() string {
@@ -2683,7 +2779,7 @@ type ValidateConfigResponse struct {
 
 func (x *ValidateConfigResponse) Reset() {
 	*x = ValidateConfigResponse{}
-	mi := &file_proto_worker_proto_msgTypes[42]
+	mi := &file_proto_worker_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2695,7 +2791,7 @@ func (x *ValidateConfigResponse) String() string {
 func (*ValidateConfigResponse) ProtoMessage() {}
 
 func (x *ValidateConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[42]
+	mi := &file_proto_worker_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2708,7 +2804,7 @@ func (x *ValidateConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateConfigResponse.ProtoReflect.Descriptor instead.
 func (*ValidateConfigResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{42}
+	return file_proto_worker_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *ValidateConfigResponse) GetValidation() *ConfigValidationResult {
@@ -2730,7 +2826,7 @@ type DiffConfigRequest struct {
 
 func (x *DiffConfigRequest) Reset() {
 	*x = DiffConfigRequest{}
-	mi := &file_proto_worker_proto_msgTypes[43]
+	mi := &file_proto_worker_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2742,7 +2838,7 @@ func (x *DiffConfigRequest) String() string {
 func (*DiffConfigRequest) ProtoMessage() {}
 
 func (x *DiffConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[43]
+	mi := &file_proto_worker_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2755,7 +2851,7 @@ func (x *DiffConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffConfigRequest.ProtoReflect.Descriptor instead.
 func (*DiffConfigRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{43}
+	return file_proto_worker_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *DiffConfigRequest) GetInstanceUuid() string {
@@ -2799,7 +2895,7 @@ type DiffConfigResponse struct {
 
 func (x *DiffConfigResponse) Reset() {
 	*x = DiffConfigResponse{}
-	mi := &file_proto_worker_proto_msgTypes[44]
+	mi := &file_proto_worker_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2811,7 +2907,7 @@ func (x *DiffConfigResponse) String() string {
 func (*DiffConfigResponse) ProtoMessage() {}
 
 func (x *DiffConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[44]
+	mi := &file_proto_worker_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2824,7 +2920,7 @@ func (x *DiffConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffConfigResponse.ProtoReflect.Descriptor instead.
 func (*DiffConfigResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{44}
+	return file_proto_worker_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *DiffConfigResponse) GetFromVersionId() uint32 {
@@ -2870,7 +2966,7 @@ type GetNodeMetricsRequest struct {
 
 func (x *GetNodeMetricsRequest) Reset() {
 	*x = GetNodeMetricsRequest{}
-	mi := &file_proto_worker_proto_msgTypes[45]
+	mi := &file_proto_worker_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2882,7 +2978,7 @@ func (x *GetNodeMetricsRequest) String() string {
 func (*GetNodeMetricsRequest) ProtoMessage() {}
 
 func (x *GetNodeMetricsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[45]
+	mi := &file_proto_worker_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2895,7 +2991,7 @@ func (x *GetNodeMetricsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodeMetricsRequest.ProtoReflect.Descriptor instead.
 func (*GetNodeMetricsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{45}
+	return file_proto_worker_proto_rawDescGZIP(), []int{47}
 }
 
 type GetNodeMetricsResponse struct {
@@ -2913,7 +3009,7 @@ type GetNodeMetricsResponse struct {
 
 func (x *GetNodeMetricsResponse) Reset() {
 	*x = GetNodeMetricsResponse{}
-	mi := &file_proto_worker_proto_msgTypes[46]
+	mi := &file_proto_worker_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2925,7 +3021,7 @@ func (x *GetNodeMetricsResponse) String() string {
 func (*GetNodeMetricsResponse) ProtoMessage() {}
 
 func (x *GetNodeMetricsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[46]
+	mi := &file_proto_worker_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2938,7 +3034,7 @@ func (x *GetNodeMetricsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetNodeMetricsResponse.ProtoReflect.Descriptor instead.
 func (*GetNodeMetricsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{46}
+	return file_proto_worker_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *GetNodeMetricsResponse) GetCpuUsage() float32 {
@@ -3004,7 +3100,7 @@ type GetInstanceMetricsRequest struct {
 
 func (x *GetInstanceMetricsRequest) Reset() {
 	*x = GetInstanceMetricsRequest{}
-	mi := &file_proto_worker_proto_msgTypes[47]
+	mi := &file_proto_worker_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3016,7 +3112,7 @@ func (x *GetInstanceMetricsRequest) String() string {
 func (*GetInstanceMetricsRequest) ProtoMessage() {}
 
 func (x *GetInstanceMetricsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[47]
+	mi := &file_proto_worker_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3029,7 +3125,7 @@ func (x *GetInstanceMetricsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetInstanceMetricsRequest.ProtoReflect.Descriptor instead.
 func (*GetInstanceMetricsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{47}
+	return file_proto_worker_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *GetInstanceMetricsRequest) GetInstanceUuid() string {
@@ -3080,7 +3176,7 @@ type GetInstanceMetricsResponse struct {
 
 func (x *GetInstanceMetricsResponse) Reset() {
 	*x = GetInstanceMetricsResponse{}
-	mi := &file_proto_worker_proto_msgTypes[48]
+	mi := &file_proto_worker_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3092,7 +3188,7 @@ func (x *GetInstanceMetricsResponse) String() string {
 func (*GetInstanceMetricsResponse) ProtoMessage() {}
 
 func (x *GetInstanceMetricsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[48]
+	mi := &file_proto_worker_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3105,7 +3201,7 @@ func (x *GetInstanceMetricsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetInstanceMetricsResponse.ProtoReflect.Descriptor instead.
 func (*GetInstanceMetricsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{48}
+	return file_proto_worker_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *GetInstanceMetricsResponse) GetTps() float32 {
@@ -3191,7 +3287,7 @@ type WorldMetric struct {
 
 func (x *WorldMetric) Reset() {
 	*x = WorldMetric{}
-	mi := &file_proto_worker_proto_msgTypes[49]
+	mi := &file_proto_worker_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3203,7 +3299,7 @@ func (x *WorldMetric) String() string {
 func (*WorldMetric) ProtoMessage() {}
 
 func (x *WorldMetric) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[49]
+	mi := &file_proto_worker_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3216,7 +3312,7 @@ func (x *WorldMetric) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorldMetric.ProtoReflect.Descriptor instead.
 func (*WorldMetric) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{49}
+	return file_proto_worker_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *WorldMetric) GetName() string {
@@ -3260,7 +3356,7 @@ type ExecRconCommandRequest struct {
 
 func (x *ExecRconCommandRequest) Reset() {
 	*x = ExecRconCommandRequest{}
-	mi := &file_proto_worker_proto_msgTypes[50]
+	mi := &file_proto_worker_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3272,7 +3368,7 @@ func (x *ExecRconCommandRequest) String() string {
 func (*ExecRconCommandRequest) ProtoMessage() {}
 
 func (x *ExecRconCommandRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[50]
+	mi := &file_proto_worker_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3285,7 +3381,7 @@ func (x *ExecRconCommandRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecRconCommandRequest.ProtoReflect.Descriptor instead.
 func (*ExecRconCommandRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{50}
+	return file_proto_worker_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *ExecRconCommandRequest) GetInstanceUuid() string {
@@ -3328,7 +3424,7 @@ type ExecRconCommandResponse struct {
 
 func (x *ExecRconCommandResponse) Reset() {
 	*x = ExecRconCommandResponse{}
-	mi := &file_proto_worker_proto_msgTypes[51]
+	mi := &file_proto_worker_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3340,7 +3436,7 @@ func (x *ExecRconCommandResponse) String() string {
 func (*ExecRconCommandResponse) ProtoMessage() {}
 
 func (x *ExecRconCommandResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[51]
+	mi := &file_proto_worker_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3353,7 +3449,7 @@ func (x *ExecRconCommandResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExecRconCommandResponse.ProtoReflect.Descriptor instead.
 func (*ExecRconCommandResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{51}
+	return file_proto_worker_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *ExecRconCommandResponse) GetAvailable() bool {
@@ -3395,7 +3491,7 @@ type CreateBotRequest struct {
 
 func (x *CreateBotRequest) Reset() {
 	*x = CreateBotRequest{}
-	mi := &file_proto_worker_proto_msgTypes[52]
+	mi := &file_proto_worker_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3407,7 +3503,7 @@ func (x *CreateBotRequest) String() string {
 func (*CreateBotRequest) ProtoMessage() {}
 
 func (x *CreateBotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[52]
+	mi := &file_proto_worker_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3420,7 +3516,7 @@ func (x *CreateBotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBotRequest.ProtoReflect.Descriptor instead.
 func (*CreateBotRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{52}
+	return file_proto_worker_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *CreateBotRequest) GetBotUuid() string {
@@ -3504,7 +3600,7 @@ type CreateBotResponse struct {
 
 func (x *CreateBotResponse) Reset() {
 	*x = CreateBotResponse{}
-	mi := &file_proto_worker_proto_msgTypes[53]
+	mi := &file_proto_worker_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3516,7 +3612,7 @@ func (x *CreateBotResponse) String() string {
 func (*CreateBotResponse) ProtoMessage() {}
 
 func (x *CreateBotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[53]
+	mi := &file_proto_worker_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3529,7 +3625,7 @@ func (x *CreateBotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBotResponse.ProtoReflect.Descriptor instead.
 func (*CreateBotResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{53}
+	return file_proto_worker_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *CreateBotResponse) GetSuccess() bool {
@@ -3562,7 +3658,7 @@ type DeleteBotRequest struct {
 
 func (x *DeleteBotRequest) Reset() {
 	*x = DeleteBotRequest{}
-	mi := &file_proto_worker_proto_msgTypes[54]
+	mi := &file_proto_worker_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3574,7 +3670,7 @@ func (x *DeleteBotRequest) String() string {
 func (*DeleteBotRequest) ProtoMessage() {}
 
 func (x *DeleteBotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[54]
+	mi := &file_proto_worker_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3587,7 +3683,7 @@ func (x *DeleteBotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteBotRequest.ProtoReflect.Descriptor instead.
 func (*DeleteBotRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{54}
+	return file_proto_worker_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *DeleteBotRequest) GetBotUuid() string {
@@ -3607,7 +3703,7 @@ type DeleteBotResponse struct {
 
 func (x *DeleteBotResponse) Reset() {
 	*x = DeleteBotResponse{}
-	mi := &file_proto_worker_proto_msgTypes[55]
+	mi := &file_proto_worker_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3619,7 +3715,7 @@ func (x *DeleteBotResponse) String() string {
 func (*DeleteBotResponse) ProtoMessage() {}
 
 func (x *DeleteBotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[55]
+	mi := &file_proto_worker_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3632,7 +3728,7 @@ func (x *DeleteBotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteBotResponse.ProtoReflect.Descriptor instead.
 func (*DeleteBotResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{55}
+	return file_proto_worker_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *DeleteBotResponse) GetSuccess() bool {
@@ -3658,7 +3754,7 @@ type ListBotsRequest struct {
 
 func (x *ListBotsRequest) Reset() {
 	*x = ListBotsRequest{}
-	mi := &file_proto_worker_proto_msgTypes[56]
+	mi := &file_proto_worker_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3670,7 +3766,7 @@ func (x *ListBotsRequest) String() string {
 func (*ListBotsRequest) ProtoMessage() {}
 
 func (x *ListBotsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[56]
+	mi := &file_proto_worker_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3683,7 +3779,7 @@ func (x *ListBotsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBotsRequest.ProtoReflect.Descriptor instead.
 func (*ListBotsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{56}
+	return file_proto_worker_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *ListBotsRequest) GetInstanceUuid() string {
@@ -3702,7 +3798,7 @@ type ListBotsResponse struct {
 
 func (x *ListBotsResponse) Reset() {
 	*x = ListBotsResponse{}
-	mi := &file_proto_worker_proto_msgTypes[57]
+	mi := &file_proto_worker_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3714,7 +3810,7 @@ func (x *ListBotsResponse) String() string {
 func (*ListBotsResponse) ProtoMessage() {}
 
 func (x *ListBotsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[57]
+	mi := &file_proto_worker_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3727,7 +3823,7 @@ func (x *ListBotsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBotsResponse.ProtoReflect.Descriptor instead.
 func (*ListBotsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{57}
+	return file_proto_worker_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *ListBotsResponse) GetBots() []*BotInfo {
@@ -3755,7 +3851,7 @@ type BotInfo struct {
 
 func (x *BotInfo) Reset() {
 	*x = BotInfo{}
-	mi := &file_proto_worker_proto_msgTypes[58]
+	mi := &file_proto_worker_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3767,7 +3863,7 @@ func (x *BotInfo) String() string {
 func (*BotInfo) ProtoMessage() {}
 
 func (x *BotInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[58]
+	mi := &file_proto_worker_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3780,7 +3876,7 @@ func (x *BotInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BotInfo.ProtoReflect.Descriptor instead.
 func (*BotInfo) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{58}
+	return file_proto_worker_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *BotInfo) GetBotUuid() string {
@@ -3865,7 +3961,7 @@ type SetBotBehaviorRequest struct {
 
 func (x *SetBotBehaviorRequest) Reset() {
 	*x = SetBotBehaviorRequest{}
-	mi := &file_proto_worker_proto_msgTypes[59]
+	mi := &file_proto_worker_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3877,7 +3973,7 @@ func (x *SetBotBehaviorRequest) String() string {
 func (*SetBotBehaviorRequest) ProtoMessage() {}
 
 func (x *SetBotBehaviorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[59]
+	mi := &file_proto_worker_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3890,7 +3986,7 @@ func (x *SetBotBehaviorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetBotBehaviorRequest.ProtoReflect.Descriptor instead.
 func (*SetBotBehaviorRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{59}
+	return file_proto_worker_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *SetBotBehaviorRequest) GetBotUuid() string {
@@ -3931,7 +4027,7 @@ type SetBotBehaviorResponse struct {
 
 func (x *SetBotBehaviorResponse) Reset() {
 	*x = SetBotBehaviorResponse{}
-	mi := &file_proto_worker_proto_msgTypes[60]
+	mi := &file_proto_worker_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3943,7 +4039,7 @@ func (x *SetBotBehaviorResponse) String() string {
 func (*SetBotBehaviorResponse) ProtoMessage() {}
 
 func (x *SetBotBehaviorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[60]
+	mi := &file_proto_worker_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3956,7 +4052,7 @@ func (x *SetBotBehaviorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetBotBehaviorResponse.ProtoReflect.Descriptor instead.
 func (*SetBotBehaviorResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{60}
+	return file_proto_worker_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *SetBotBehaviorResponse) GetSuccess() bool {
@@ -3983,7 +4079,7 @@ type SendBotCommandRequest struct {
 
 func (x *SendBotCommandRequest) Reset() {
 	*x = SendBotCommandRequest{}
-	mi := &file_proto_worker_proto_msgTypes[61]
+	mi := &file_proto_worker_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3995,7 +4091,7 @@ func (x *SendBotCommandRequest) String() string {
 func (*SendBotCommandRequest) ProtoMessage() {}
 
 func (x *SendBotCommandRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[61]
+	mi := &file_proto_worker_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4008,7 +4104,7 @@ func (x *SendBotCommandRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendBotCommandRequest.ProtoReflect.Descriptor instead.
 func (*SendBotCommandRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{61}
+	return file_proto_worker_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *SendBotCommandRequest) GetBotUuid() string {
@@ -4035,7 +4131,7 @@ type SendBotCommandResponse struct {
 
 func (x *SendBotCommandResponse) Reset() {
 	*x = SendBotCommandResponse{}
-	mi := &file_proto_worker_proto_msgTypes[62]
+	mi := &file_proto_worker_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4047,7 +4143,7 @@ func (x *SendBotCommandResponse) String() string {
 func (*SendBotCommandResponse) ProtoMessage() {}
 
 func (x *SendBotCommandResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[62]
+	mi := &file_proto_worker_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4060,7 +4156,7 @@ func (x *SendBotCommandResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendBotCommandResponse.ProtoReflect.Descriptor instead.
 func (*SendBotCommandResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{62}
+	return file_proto_worker_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *SendBotCommandResponse) GetSuccess() bool {
@@ -4088,7 +4184,7 @@ type RunBotScriptRequest struct {
 
 func (x *RunBotScriptRequest) Reset() {
 	*x = RunBotScriptRequest{}
-	mi := &file_proto_worker_proto_msgTypes[63]
+	mi := &file_proto_worker_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4100,7 +4196,7 @@ func (x *RunBotScriptRequest) String() string {
 func (*RunBotScriptRequest) ProtoMessage() {}
 
 func (x *RunBotScriptRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[63]
+	mi := &file_proto_worker_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4113,7 +4209,7 @@ func (x *RunBotScriptRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunBotScriptRequest.ProtoReflect.Descriptor instead.
 func (*RunBotScriptRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{63}
+	return file_proto_worker_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *RunBotScriptRequest) GetScriptId() string {
@@ -4147,7 +4243,7 @@ type RunBotScriptResponse struct {
 
 func (x *RunBotScriptResponse) Reset() {
 	*x = RunBotScriptResponse{}
-	mi := &file_proto_worker_proto_msgTypes[64]
+	mi := &file_proto_worker_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4159,7 +4255,7 @@ func (x *RunBotScriptResponse) String() string {
 func (*RunBotScriptResponse) ProtoMessage() {}
 
 func (x *RunBotScriptResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[64]
+	mi := &file_proto_worker_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4172,7 +4268,7 @@ func (x *RunBotScriptResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunBotScriptResponse.ProtoReflect.Descriptor instead.
 func (*RunBotScriptResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{64}
+	return file_proto_worker_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *RunBotScriptResponse) GetSuccess() bool {
@@ -4198,7 +4294,7 @@ type StreamBotEventsRequest struct {
 
 func (x *StreamBotEventsRequest) Reset() {
 	*x = StreamBotEventsRequest{}
-	mi := &file_proto_worker_proto_msgTypes[65]
+	mi := &file_proto_worker_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4210,7 +4306,7 @@ func (x *StreamBotEventsRequest) String() string {
 func (*StreamBotEventsRequest) ProtoMessage() {}
 
 func (x *StreamBotEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[65]
+	mi := &file_proto_worker_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4223,7 +4319,7 @@ func (x *StreamBotEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamBotEventsRequest.ProtoReflect.Descriptor instead.
 func (*StreamBotEventsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{65}
+	return file_proto_worker_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *StreamBotEventsRequest) GetBotUuid() string {
@@ -4245,7 +4341,7 @@ type BotEvent struct {
 
 func (x *BotEvent) Reset() {
 	*x = BotEvent{}
-	mi := &file_proto_worker_proto_msgTypes[66]
+	mi := &file_proto_worker_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4257,7 +4353,7 @@ func (x *BotEvent) String() string {
 func (*BotEvent) ProtoMessage() {}
 
 func (x *BotEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[66]
+	mi := &file_proto_worker_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4270,7 +4366,7 @@ func (x *BotEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BotEvent.ProtoReflect.Descriptor instead.
 func (*BotEvent) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{66}
+	return file_proto_worker_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *BotEvent) GetBotUuid() string {
@@ -4309,7 +4405,7 @@ type ListJDKsRequest struct {
 
 func (x *ListJDKsRequest) Reset() {
 	*x = ListJDKsRequest{}
-	mi := &file_proto_worker_proto_msgTypes[67]
+	mi := &file_proto_worker_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4321,7 +4417,7 @@ func (x *ListJDKsRequest) String() string {
 func (*ListJDKsRequest) ProtoMessage() {}
 
 func (x *ListJDKsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[67]
+	mi := &file_proto_worker_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4334,7 +4430,7 @@ func (x *ListJDKsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJDKsRequest.ProtoReflect.Descriptor instead.
 func (*ListJDKsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{67}
+	return file_proto_worker_proto_rawDescGZIP(), []int{69}
 }
 
 type JDKInfo struct {
@@ -4351,7 +4447,7 @@ type JDKInfo struct {
 
 func (x *JDKInfo) Reset() {
 	*x = JDKInfo{}
-	mi := &file_proto_worker_proto_msgTypes[68]
+	mi := &file_proto_worker_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4363,7 +4459,7 @@ func (x *JDKInfo) String() string {
 func (*JDKInfo) ProtoMessage() {}
 
 func (x *JDKInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[68]
+	mi := &file_proto_worker_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4376,7 +4472,7 @@ func (x *JDKInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JDKInfo.ProtoReflect.Descriptor instead.
 func (*JDKInfo) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{68}
+	return file_proto_worker_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *JDKInfo) GetVendor() string {
@@ -4430,7 +4526,7 @@ type ListJDKsResponse struct {
 
 func (x *ListJDKsResponse) Reset() {
 	*x = ListJDKsResponse{}
-	mi := &file_proto_worker_proto_msgTypes[69]
+	mi := &file_proto_worker_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4442,7 +4538,7 @@ func (x *ListJDKsResponse) String() string {
 func (*ListJDKsResponse) ProtoMessage() {}
 
 func (x *ListJDKsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[69]
+	mi := &file_proto_worker_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4455,7 +4551,7 @@ func (x *ListJDKsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListJDKsResponse.ProtoReflect.Descriptor instead.
 func (*ListJDKsResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{69}
+	return file_proto_worker_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *ListJDKsResponse) GetJdks() []*JDKInfo {
@@ -4480,7 +4576,7 @@ type InstallJDKRequest struct {
 
 func (x *InstallJDKRequest) Reset() {
 	*x = InstallJDKRequest{}
-	mi := &file_proto_worker_proto_msgTypes[70]
+	mi := &file_proto_worker_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4492,7 +4588,7 @@ func (x *InstallJDKRequest) String() string {
 func (*InstallJDKRequest) ProtoMessage() {}
 
 func (x *InstallJDKRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[70]
+	mi := &file_proto_worker_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4505,7 +4601,7 @@ func (x *InstallJDKRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallJDKRequest.ProtoReflect.Descriptor instead.
 func (*InstallJDKRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{70}
+	return file_proto_worker_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *InstallJDKRequest) GetVendor() string {
@@ -4554,7 +4650,7 @@ type InstallJDKResponse struct {
 
 func (x *InstallJDKResponse) Reset() {
 	*x = InstallJDKResponse{}
-	mi := &file_proto_worker_proto_msgTypes[71]
+	mi := &file_proto_worker_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4566,7 +4662,7 @@ func (x *InstallJDKResponse) String() string {
 func (*InstallJDKResponse) ProtoMessage() {}
 
 func (x *InstallJDKResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[71]
+	mi := &file_proto_worker_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4579,7 +4675,7 @@ func (x *InstallJDKResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InstallJDKResponse.ProtoReflect.Descriptor instead.
 func (*InstallJDKResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{71}
+	return file_proto_worker_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *InstallJDKResponse) GetSuccess() bool {
@@ -4612,7 +4708,7 @@ type RemoveJDKRequest struct {
 
 func (x *RemoveJDKRequest) Reset() {
 	*x = RemoveJDKRequest{}
-	mi := &file_proto_worker_proto_msgTypes[72]
+	mi := &file_proto_worker_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4624,7 +4720,7 @@ func (x *RemoveJDKRequest) String() string {
 func (*RemoveJDKRequest) ProtoMessage() {}
 
 func (x *RemoveJDKRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[72]
+	mi := &file_proto_worker_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4637,7 +4733,7 @@ func (x *RemoveJDKRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveJDKRequest.ProtoReflect.Descriptor instead.
 func (*RemoveJDKRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{72}
+	return file_proto_worker_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *RemoveJDKRequest) GetPath() string {
@@ -4657,7 +4753,7 @@ type RemoveJDKResponse struct {
 
 func (x *RemoveJDKResponse) Reset() {
 	*x = RemoveJDKResponse{}
-	mi := &file_proto_worker_proto_msgTypes[73]
+	mi := &file_proto_worker_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4669,7 +4765,7 @@ func (x *RemoveJDKResponse) String() string {
 func (*RemoveJDKResponse) ProtoMessage() {}
 
 func (x *RemoveJDKResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[73]
+	mi := &file_proto_worker_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4682,7 +4778,7 @@ func (x *RemoveJDKResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveJDKResponse.ProtoReflect.Descriptor instead.
 func (*RemoveJDKResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{73}
+	return file_proto_worker_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *RemoveJDKResponse) GetSuccess() bool {
@@ -4711,7 +4807,7 @@ type DownloadCoreRequest struct {
 
 func (x *DownloadCoreRequest) Reset() {
 	*x = DownloadCoreRequest{}
-	mi := &file_proto_worker_proto_msgTypes[74]
+	mi := &file_proto_worker_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4723,7 +4819,7 @@ func (x *DownloadCoreRequest) String() string {
 func (*DownloadCoreRequest) ProtoMessage() {}
 
 func (x *DownloadCoreRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[74]
+	mi := &file_proto_worker_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4736,7 +4832,7 @@ func (x *DownloadCoreRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadCoreRequest.ProtoReflect.Descriptor instead.
 func (*DownloadCoreRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{74}
+	return file_proto_worker_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *DownloadCoreRequest) GetInstanceUuid() string {
@@ -4778,7 +4874,7 @@ type DownloadCoreResponse struct {
 
 func (x *DownloadCoreResponse) Reset() {
 	*x = DownloadCoreResponse{}
-	mi := &file_proto_worker_proto_msgTypes[75]
+	mi := &file_proto_worker_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4790,7 +4886,7 @@ func (x *DownloadCoreResponse) String() string {
 func (*DownloadCoreResponse) ProtoMessage() {}
 
 func (x *DownloadCoreResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[75]
+	mi := &file_proto_worker_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4803,7 +4899,7 @@ func (x *DownloadCoreResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DownloadCoreResponse.ProtoReflect.Descriptor instead.
 func (*DownloadCoreResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{75}
+	return file_proto_worker_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *DownloadCoreResponse) GetSuccess() bool {
@@ -4840,7 +4936,7 @@ type DeployServerProbeRequest struct {
 
 func (x *DeployServerProbeRequest) Reset() {
 	*x = DeployServerProbeRequest{}
-	mi := &file_proto_worker_proto_msgTypes[76]
+	mi := &file_proto_worker_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4852,7 +4948,7 @@ func (x *DeployServerProbeRequest) String() string {
 func (*DeployServerProbeRequest) ProtoMessage() {}
 
 func (x *DeployServerProbeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[76]
+	mi := &file_proto_worker_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4865,7 +4961,7 @@ func (x *DeployServerProbeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployServerProbeRequest.ProtoReflect.Descriptor instead.
 func (*DeployServerProbeRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{76}
+	return file_proto_worker_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *DeployServerProbeRequest) GetInstanceUuid() string {
@@ -4899,7 +4995,7 @@ type DeployServerProbeResponse struct {
 
 func (x *DeployServerProbeResponse) Reset() {
 	*x = DeployServerProbeResponse{}
-	mi := &file_proto_worker_proto_msgTypes[77]
+	mi := &file_proto_worker_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4911,7 +5007,7 @@ func (x *DeployServerProbeResponse) String() string {
 func (*DeployServerProbeResponse) ProtoMessage() {}
 
 func (x *DeployServerProbeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[77]
+	mi := &file_proto_worker_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4924,7 +5020,7 @@ func (x *DeployServerProbeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployServerProbeResponse.ProtoReflect.Descriptor instead.
 func (*DeployServerProbeResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{77}
+	return file_proto_worker_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *DeployServerProbeResponse) GetSuccess() bool {
@@ -4952,7 +5048,7 @@ type CloneWorkDirRequest struct {
 
 func (x *CloneWorkDirRequest) Reset() {
 	*x = CloneWorkDirRequest{}
-	mi := &file_proto_worker_proto_msgTypes[78]
+	mi := &file_proto_worker_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4964,7 +5060,7 @@ func (x *CloneWorkDirRequest) String() string {
 func (*CloneWorkDirRequest) ProtoMessage() {}
 
 func (x *CloneWorkDirRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[78]
+	mi := &file_proto_worker_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4977,7 +5073,7 @@ func (x *CloneWorkDirRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CloneWorkDirRequest.ProtoReflect.Descriptor instead.
 func (*CloneWorkDirRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{78}
+	return file_proto_worker_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *CloneWorkDirRequest) GetSrcInstanceUuid() string {
@@ -5014,7 +5110,7 @@ type CloneWorkDirResponse struct {
 
 func (x *CloneWorkDirResponse) Reset() {
 	*x = CloneWorkDirResponse{}
-	mi := &file_proto_worker_proto_msgTypes[79]
+	mi := &file_proto_worker_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5026,7 +5122,7 @@ func (x *CloneWorkDirResponse) String() string {
 func (*CloneWorkDirResponse) ProtoMessage() {}
 
 func (x *CloneWorkDirResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[79]
+	mi := &file_proto_worker_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5039,7 +5135,7 @@ func (x *CloneWorkDirResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CloneWorkDirResponse.ProtoReflect.Descriptor instead.
 func (*CloneWorkDirResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{79}
+	return file_proto_worker_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *CloneWorkDirResponse) GetSuccess() bool {
@@ -5096,7 +5192,7 @@ type StorageBackendSpec struct {
 
 func (x *StorageBackendSpec) Reset() {
 	*x = StorageBackendSpec{}
-	mi := &file_proto_worker_proto_msgTypes[80]
+	mi := &file_proto_worker_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5108,7 +5204,7 @@ func (x *StorageBackendSpec) String() string {
 func (*StorageBackendSpec) ProtoMessage() {}
 
 func (x *StorageBackendSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[80]
+	mi := &file_proto_worker_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5121,7 +5217,7 @@ func (x *StorageBackendSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StorageBackendSpec.ProtoReflect.Descriptor instead.
 func (*StorageBackendSpec) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{80}
+	return file_proto_worker_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *StorageBackendSpec) GetType() string {
@@ -5192,7 +5288,7 @@ type BackupManifestEntry struct {
 
 func (x *BackupManifestEntry) Reset() {
 	*x = BackupManifestEntry{}
-	mi := &file_proto_worker_proto_msgTypes[81]
+	mi := &file_proto_worker_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5204,7 +5300,7 @@ func (x *BackupManifestEntry) String() string {
 func (*BackupManifestEntry) ProtoMessage() {}
 
 func (x *BackupManifestEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[81]
+	mi := &file_proto_worker_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5217,7 +5313,7 @@ func (x *BackupManifestEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BackupManifestEntry.ProtoReflect.Descriptor instead.
 func (*BackupManifestEntry) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{81}
+	return file_proto_worker_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *BackupManifestEntry) GetPath() string {
@@ -5254,7 +5350,7 @@ type CreateBackupRequest struct {
 
 func (x *CreateBackupRequest) Reset() {
 	*x = CreateBackupRequest{}
-	mi := &file_proto_worker_proto_msgTypes[82]
+	mi := &file_proto_worker_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5266,7 +5362,7 @@ func (x *CreateBackupRequest) String() string {
 func (*CreateBackupRequest) ProtoMessage() {}
 
 func (x *CreateBackupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[82]
+	mi := &file_proto_worker_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5279,7 +5375,7 @@ func (x *CreateBackupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBackupRequest.ProtoReflect.Descriptor instead.
 func (*CreateBackupRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{82}
+	return file_proto_worker_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *CreateBackupRequest) GetInstanceUuid() string {
@@ -5332,7 +5428,7 @@ type CreateBackupResponse struct {
 
 func (x *CreateBackupResponse) Reset() {
 	*x = CreateBackupResponse{}
-	mi := &file_proto_worker_proto_msgTypes[83]
+	mi := &file_proto_worker_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5344,7 +5440,7 @@ func (x *CreateBackupResponse) String() string {
 func (*CreateBackupResponse) ProtoMessage() {}
 
 func (x *CreateBackupResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[83]
+	mi := &file_proto_worker_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5357,7 +5453,7 @@ func (x *CreateBackupResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBackupResponse.ProtoReflect.Descriptor instead.
 func (*CreateBackupResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{83}
+	return file_proto_worker_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *CreateBackupResponse) GetSuccess() bool {
@@ -5421,7 +5517,7 @@ type RestoreBackupRequest struct {
 
 func (x *RestoreBackupRequest) Reset() {
 	*x = RestoreBackupRequest{}
-	mi := &file_proto_worker_proto_msgTypes[84]
+	mi := &file_proto_worker_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5433,7 +5529,7 @@ func (x *RestoreBackupRequest) String() string {
 func (*RestoreBackupRequest) ProtoMessage() {}
 
 func (x *RestoreBackupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[84]
+	mi := &file_proto_worker_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5446,7 +5542,7 @@ func (x *RestoreBackupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreBackupRequest.ProtoReflect.Descriptor instead.
 func (*RestoreBackupRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{84}
+	return file_proto_worker_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *RestoreBackupRequest) GetInstanceUuid() string {
@@ -5488,7 +5584,7 @@ type RestoreBackupResponse struct {
 
 func (x *RestoreBackupResponse) Reset() {
 	*x = RestoreBackupResponse{}
-	mi := &file_proto_worker_proto_msgTypes[85]
+	mi := &file_proto_worker_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5500,7 +5596,7 @@ func (x *RestoreBackupResponse) String() string {
 func (*RestoreBackupResponse) ProtoMessage() {}
 
 func (x *RestoreBackupResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[85]
+	mi := &file_proto_worker_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5513,7 +5609,7 @@ func (x *RestoreBackupResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreBackupResponse.ProtoReflect.Descriptor instead.
 func (*RestoreBackupResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{85}
+	return file_proto_worker_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *RestoreBackupResponse) GetSuccess() bool {
@@ -5689,7 +5785,12 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\bnew_path\x18\x03 \x01(\tR\anewPath\"D\n" +
 	"\x12RenameFileResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"Q\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"S\n" +
+	"\x16DownloadArchiveRequest\x12#\n" +
+	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x14\n" +
+	"\x05paths\x18\x02 \x03(\tR\x05paths\"0\n" +
+	"\x14DownloadArchiveChunk\x12\x18\n" +
+	"\acontent\x18\x01 \x01(\fR\acontent\"Q\n" +
 	"\x16ListConfigFilesRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\"\x8d\x01\n" +
@@ -5970,7 +6071,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x15RestoreBackupResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12%\n" +
-	"\x0erestored_files\x18\x03 \x01(\x03R\rrestoredFiles2\x8c\x17\n" +
+	"\x0erestored_files\x18\x03 \x01(\x03R\rrestoredFiles2\xdf\x17\n" +
 	"\rWorkerService\x12=\n" +
 	"\bRegister\x12\x17.worker.RegisterRequest\x1a\x18.worker.RegisterResponse\x12D\n" +
 	"\tHeartbeat\x12\x18.worker.HeartbeatRequest\x1a\x19.worker.HeartbeatResponse(\x010\x01\x12O\n" +
@@ -5990,7 +6091,8 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\n" +
 	"DeleteFile\x12\x19.worker.DeleteFileRequest\x1a\x1a.worker.DeleteFileResponse\x12C\n" +
 	"\n" +
-	"RenameFile\x12\x19.worker.RenameFileRequest\x1a\x1a.worker.RenameFileResponse\x12R\n" +
+	"RenameFile\x12\x19.worker.RenameFileRequest\x1a\x1a.worker.RenameFileResponse\x12Q\n" +
+	"\x0fDownloadArchive\x12\x1e.worker.DownloadArchiveRequest\x1a\x1c.worker.DownloadArchiveChunk0\x01\x12R\n" +
 	"\x0fListConfigFiles\x12\x1e.worker.ListConfigFilesRequest\x1a\x1f.worker.ListConfigFilesResponse\x12C\n" +
 	"\n" +
 	"ReadConfig\x12\x19.worker.ReadConfigRequest\x1a\x1a.worker.ReadConfigResponse\x12F\n" +
@@ -6028,7 +6130,7 @@ func file_proto_worker_proto_rawDescGZIP() []byte {
 	return file_proto_worker_proto_rawDescData
 }
 
-var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 87)
+var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 89)
 var file_proto_worker_proto_goTypes = []any{
 	(*RegisterRequest)(nil),             // 0: worker.RegisterRequest
 	(*RegisterResponse)(nil),            // 1: worker.RegisterResponse
@@ -6061,85 +6163,87 @@ var file_proto_worker_proto_goTypes = []any{
 	(*DeleteFileResponse)(nil),          // 28: worker.DeleteFileResponse
 	(*RenameFileRequest)(nil),           // 29: worker.RenameFileRequest
 	(*RenameFileResponse)(nil),          // 30: worker.RenameFileResponse
-	(*ListConfigFilesRequest)(nil),      // 31: worker.ListConfigFilesRequest
-	(*ConfigFileInfo)(nil),              // 32: worker.ConfigFileInfo
-	(*ListConfigFilesResponse)(nil),     // 33: worker.ListConfigFilesResponse
-	(*ConfigField)(nil),                 // 34: worker.ConfigField
-	(*ValidationIssue)(nil),             // 35: worker.ValidationIssue
-	(*ConfigValidationResult)(nil),      // 36: worker.ConfigValidationResult
-	(*ReadConfigRequest)(nil),           // 37: worker.ReadConfigRequest
-	(*ReadConfigResponse)(nil),          // 38: worker.ReadConfigResponse
-	(*WriteConfigRequest)(nil),          // 39: worker.WriteConfigRequest
-	(*WriteConfigResponse)(nil),         // 40: worker.WriteConfigResponse
-	(*ValidateConfigRequest)(nil),       // 41: worker.ValidateConfigRequest
-	(*ValidateConfigResponse)(nil),      // 42: worker.ValidateConfigResponse
-	(*DiffConfigRequest)(nil),           // 43: worker.DiffConfigRequest
-	(*DiffConfigResponse)(nil),          // 44: worker.DiffConfigResponse
-	(*GetNodeMetricsRequest)(nil),       // 45: worker.GetNodeMetricsRequest
-	(*GetNodeMetricsResponse)(nil),      // 46: worker.GetNodeMetricsResponse
-	(*GetInstanceMetricsRequest)(nil),   // 47: worker.GetInstanceMetricsRequest
-	(*GetInstanceMetricsResponse)(nil),  // 48: worker.GetInstanceMetricsResponse
-	(*WorldMetric)(nil),                 // 49: worker.WorldMetric
-	(*ExecRconCommandRequest)(nil),      // 50: worker.ExecRconCommandRequest
-	(*ExecRconCommandResponse)(nil),     // 51: worker.ExecRconCommandResponse
-	(*CreateBotRequest)(nil),            // 52: worker.CreateBotRequest
-	(*CreateBotResponse)(nil),           // 53: worker.CreateBotResponse
-	(*DeleteBotRequest)(nil),            // 54: worker.DeleteBotRequest
-	(*DeleteBotResponse)(nil),           // 55: worker.DeleteBotResponse
-	(*ListBotsRequest)(nil),             // 56: worker.ListBotsRequest
-	(*ListBotsResponse)(nil),            // 57: worker.ListBotsResponse
-	(*BotInfo)(nil),                     // 58: worker.BotInfo
-	(*SetBotBehaviorRequest)(nil),       // 59: worker.SetBotBehaviorRequest
-	(*SetBotBehaviorResponse)(nil),      // 60: worker.SetBotBehaviorResponse
-	(*SendBotCommandRequest)(nil),       // 61: worker.SendBotCommandRequest
-	(*SendBotCommandResponse)(nil),      // 62: worker.SendBotCommandResponse
-	(*RunBotScriptRequest)(nil),         // 63: worker.RunBotScriptRequest
-	(*RunBotScriptResponse)(nil),        // 64: worker.RunBotScriptResponse
-	(*StreamBotEventsRequest)(nil),      // 65: worker.StreamBotEventsRequest
-	(*BotEvent)(nil),                    // 66: worker.BotEvent
-	(*ListJDKsRequest)(nil),             // 67: worker.ListJDKsRequest
-	(*JDKInfo)(nil),                     // 68: worker.JDKInfo
-	(*ListJDKsResponse)(nil),            // 69: worker.ListJDKsResponse
-	(*InstallJDKRequest)(nil),           // 70: worker.InstallJDKRequest
-	(*InstallJDKResponse)(nil),          // 71: worker.InstallJDKResponse
-	(*RemoveJDKRequest)(nil),            // 72: worker.RemoveJDKRequest
-	(*RemoveJDKResponse)(nil),           // 73: worker.RemoveJDKResponse
-	(*DownloadCoreRequest)(nil),         // 74: worker.DownloadCoreRequest
-	(*DownloadCoreResponse)(nil),        // 75: worker.DownloadCoreResponse
-	(*DeployServerProbeRequest)(nil),    // 76: worker.DeployServerProbeRequest
-	(*DeployServerProbeResponse)(nil),   // 77: worker.DeployServerProbeResponse
-	(*CloneWorkDirRequest)(nil),         // 78: worker.CloneWorkDirRequest
-	(*CloneWorkDirResponse)(nil),        // 79: worker.CloneWorkDirResponse
-	(*StorageBackendSpec)(nil),          // 80: worker.StorageBackendSpec
-	(*BackupManifestEntry)(nil),         // 81: worker.BackupManifestEntry
-	(*CreateBackupRequest)(nil),         // 82: worker.CreateBackupRequest
-	(*CreateBackupResponse)(nil),        // 83: worker.CreateBackupResponse
-	(*RestoreBackupRequest)(nil),        // 84: worker.RestoreBackupRequest
-	(*RestoreBackupResponse)(nil),       // 85: worker.RestoreBackupResponse
-	nil,                                 // 86: worker.CreateInstanceRequest.EnvVarsEntry
+	(*DownloadArchiveRequest)(nil),      // 31: worker.DownloadArchiveRequest
+	(*DownloadArchiveChunk)(nil),        // 32: worker.DownloadArchiveChunk
+	(*ListConfigFilesRequest)(nil),      // 33: worker.ListConfigFilesRequest
+	(*ConfigFileInfo)(nil),              // 34: worker.ConfigFileInfo
+	(*ListConfigFilesResponse)(nil),     // 35: worker.ListConfigFilesResponse
+	(*ConfigField)(nil),                 // 36: worker.ConfigField
+	(*ValidationIssue)(nil),             // 37: worker.ValidationIssue
+	(*ConfigValidationResult)(nil),      // 38: worker.ConfigValidationResult
+	(*ReadConfigRequest)(nil),           // 39: worker.ReadConfigRequest
+	(*ReadConfigResponse)(nil),          // 40: worker.ReadConfigResponse
+	(*WriteConfigRequest)(nil),          // 41: worker.WriteConfigRequest
+	(*WriteConfigResponse)(nil),         // 42: worker.WriteConfigResponse
+	(*ValidateConfigRequest)(nil),       // 43: worker.ValidateConfigRequest
+	(*ValidateConfigResponse)(nil),      // 44: worker.ValidateConfigResponse
+	(*DiffConfigRequest)(nil),           // 45: worker.DiffConfigRequest
+	(*DiffConfigResponse)(nil),          // 46: worker.DiffConfigResponse
+	(*GetNodeMetricsRequest)(nil),       // 47: worker.GetNodeMetricsRequest
+	(*GetNodeMetricsResponse)(nil),      // 48: worker.GetNodeMetricsResponse
+	(*GetInstanceMetricsRequest)(nil),   // 49: worker.GetInstanceMetricsRequest
+	(*GetInstanceMetricsResponse)(nil),  // 50: worker.GetInstanceMetricsResponse
+	(*WorldMetric)(nil),                 // 51: worker.WorldMetric
+	(*ExecRconCommandRequest)(nil),      // 52: worker.ExecRconCommandRequest
+	(*ExecRconCommandResponse)(nil),     // 53: worker.ExecRconCommandResponse
+	(*CreateBotRequest)(nil),            // 54: worker.CreateBotRequest
+	(*CreateBotResponse)(nil),           // 55: worker.CreateBotResponse
+	(*DeleteBotRequest)(nil),            // 56: worker.DeleteBotRequest
+	(*DeleteBotResponse)(nil),           // 57: worker.DeleteBotResponse
+	(*ListBotsRequest)(nil),             // 58: worker.ListBotsRequest
+	(*ListBotsResponse)(nil),            // 59: worker.ListBotsResponse
+	(*BotInfo)(nil),                     // 60: worker.BotInfo
+	(*SetBotBehaviorRequest)(nil),       // 61: worker.SetBotBehaviorRequest
+	(*SetBotBehaviorResponse)(nil),      // 62: worker.SetBotBehaviorResponse
+	(*SendBotCommandRequest)(nil),       // 63: worker.SendBotCommandRequest
+	(*SendBotCommandResponse)(nil),      // 64: worker.SendBotCommandResponse
+	(*RunBotScriptRequest)(nil),         // 65: worker.RunBotScriptRequest
+	(*RunBotScriptResponse)(nil),        // 66: worker.RunBotScriptResponse
+	(*StreamBotEventsRequest)(nil),      // 67: worker.StreamBotEventsRequest
+	(*BotEvent)(nil),                    // 68: worker.BotEvent
+	(*ListJDKsRequest)(nil),             // 69: worker.ListJDKsRequest
+	(*JDKInfo)(nil),                     // 70: worker.JDKInfo
+	(*ListJDKsResponse)(nil),            // 71: worker.ListJDKsResponse
+	(*InstallJDKRequest)(nil),           // 72: worker.InstallJDKRequest
+	(*InstallJDKResponse)(nil),          // 73: worker.InstallJDKResponse
+	(*RemoveJDKRequest)(nil),            // 74: worker.RemoveJDKRequest
+	(*RemoveJDKResponse)(nil),           // 75: worker.RemoveJDKResponse
+	(*DownloadCoreRequest)(nil),         // 76: worker.DownloadCoreRequest
+	(*DownloadCoreResponse)(nil),        // 77: worker.DownloadCoreResponse
+	(*DeployServerProbeRequest)(nil),    // 78: worker.DeployServerProbeRequest
+	(*DeployServerProbeResponse)(nil),   // 79: worker.DeployServerProbeResponse
+	(*CloneWorkDirRequest)(nil),         // 80: worker.CloneWorkDirRequest
+	(*CloneWorkDirResponse)(nil),        // 81: worker.CloneWorkDirResponse
+	(*StorageBackendSpec)(nil),          // 82: worker.StorageBackendSpec
+	(*BackupManifestEntry)(nil),         // 83: worker.BackupManifestEntry
+	(*CreateBackupRequest)(nil),         // 84: worker.CreateBackupRequest
+	(*CreateBackupResponse)(nil),        // 85: worker.CreateBackupResponse
+	(*RestoreBackupRequest)(nil),        // 86: worker.RestoreBackupRequest
+	(*RestoreBackupResponse)(nil),       // 87: worker.RestoreBackupResponse
+	nil,                                 // 88: worker.CreateInstanceRequest.EnvVarsEntry
 }
 var file_proto_worker_proto_depIdxs = []int32{
 	3,  // 0: worker.HeartbeatRequest.instances:type_name -> worker.InstanceState
 	4,  // 1: worker.HeartbeatRequest.instance_metrics:type_name -> worker.InstanceMetricSample
-	49, // 2: worker.InstanceMetricSample.worlds:type_name -> worker.WorldMetric
-	86, // 3: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
+	51, // 2: worker.InstanceMetricSample.worlds:type_name -> worker.WorldMetric
+	88, // 3: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
 	15, // 4: worker.ListInstancesResponse.instances:type_name -> worker.InstanceInfo
 	22, // 5: worker.ListFilesResponse.files:type_name -> worker.FileInfo
-	32, // 6: worker.ListConfigFilesResponse.files:type_name -> worker.ConfigFileInfo
-	35, // 7: worker.ConfigValidationResult.issues:type_name -> worker.ValidationIssue
-	34, // 8: worker.ReadConfigResponse.fields:type_name -> worker.ConfigField
-	36, // 9: worker.ReadConfigResponse.validation:type_name -> worker.ConfigValidationResult
-	34, // 10: worker.WriteConfigRequest.fields:type_name -> worker.ConfigField
-	36, // 11: worker.WriteConfigResponse.validation:type_name -> worker.ConfigValidationResult
-	36, // 12: worker.ValidateConfigResponse.validation:type_name -> worker.ConfigValidationResult
-	49, // 13: worker.GetInstanceMetricsResponse.worlds:type_name -> worker.WorldMetric
-	58, // 14: worker.ListBotsResponse.bots:type_name -> worker.BotInfo
-	68, // 15: worker.ListJDKsResponse.jdks:type_name -> worker.JDKInfo
-	68, // 16: worker.InstallJDKResponse.jdk:type_name -> worker.JDKInfo
-	81, // 17: worker.CreateBackupRequest.base_manifest:type_name -> worker.BackupManifestEntry
-	80, // 18: worker.CreateBackupRequest.storage:type_name -> worker.StorageBackendSpec
-	81, // 19: worker.CreateBackupResponse.manifest:type_name -> worker.BackupManifestEntry
-	80, // 20: worker.RestoreBackupRequest.storage:type_name -> worker.StorageBackendSpec
+	34, // 6: worker.ListConfigFilesResponse.files:type_name -> worker.ConfigFileInfo
+	37, // 7: worker.ConfigValidationResult.issues:type_name -> worker.ValidationIssue
+	36, // 8: worker.ReadConfigResponse.fields:type_name -> worker.ConfigField
+	38, // 9: worker.ReadConfigResponse.validation:type_name -> worker.ConfigValidationResult
+	36, // 10: worker.WriteConfigRequest.fields:type_name -> worker.ConfigField
+	38, // 11: worker.WriteConfigResponse.validation:type_name -> worker.ConfigValidationResult
+	38, // 12: worker.ValidateConfigResponse.validation:type_name -> worker.ConfigValidationResult
+	51, // 13: worker.GetInstanceMetricsResponse.worlds:type_name -> worker.WorldMetric
+	60, // 14: worker.ListBotsResponse.bots:type_name -> worker.BotInfo
+	70, // 15: worker.ListJDKsResponse.jdks:type_name -> worker.JDKInfo
+	70, // 16: worker.InstallJDKResponse.jdk:type_name -> worker.JDKInfo
+	83, // 17: worker.CreateBackupRequest.base_manifest:type_name -> worker.BackupManifestEntry
+	82, // 18: worker.CreateBackupRequest.storage:type_name -> worker.StorageBackendSpec
+	83, // 19: worker.CreateBackupResponse.manifest:type_name -> worker.BackupManifestEntry
+	82, // 20: worker.RestoreBackupRequest.storage:type_name -> worker.StorageBackendSpec
 	0,  // 21: worker.WorkerService.Register:input_type -> worker.RegisterRequest
 	2,  // 22: worker.WorkerService.Heartbeat:input_type -> worker.HeartbeatRequest
 	6,  // 23: worker.WorkerService.CreateInstance:input_type -> worker.CreateInstanceRequest
@@ -6157,69 +6261,71 @@ var file_proto_worker_proto_depIdxs = []int32{
 	25, // 35: worker.WorkerService.WriteFile:input_type -> worker.WriteFileRequest
 	27, // 36: worker.WorkerService.DeleteFile:input_type -> worker.DeleteFileRequest
 	29, // 37: worker.WorkerService.RenameFile:input_type -> worker.RenameFileRequest
-	31, // 38: worker.WorkerService.ListConfigFiles:input_type -> worker.ListConfigFilesRequest
-	37, // 39: worker.WorkerService.ReadConfig:input_type -> worker.ReadConfigRequest
-	39, // 40: worker.WorkerService.WriteConfig:input_type -> worker.WriteConfigRequest
-	41, // 41: worker.WorkerService.ValidateConfig:input_type -> worker.ValidateConfigRequest
-	45, // 42: worker.WorkerService.GetNodeMetrics:input_type -> worker.GetNodeMetricsRequest
-	47, // 43: worker.WorkerService.GetInstanceMetrics:input_type -> worker.GetInstanceMetricsRequest
-	50, // 44: worker.WorkerService.ExecRconCommand:input_type -> worker.ExecRconCommandRequest
-	67, // 45: worker.WorkerService.ListJDKs:input_type -> worker.ListJDKsRequest
-	70, // 46: worker.WorkerService.InstallJDK:input_type -> worker.InstallJDKRequest
-	72, // 47: worker.WorkerService.RemoveJDK:input_type -> worker.RemoveJDKRequest
-	74, // 48: worker.WorkerService.DownloadCore:input_type -> worker.DownloadCoreRequest
-	76, // 49: worker.WorkerService.DeployServerProbe:input_type -> worker.DeployServerProbeRequest
-	78, // 50: worker.WorkerService.CloneWorkDir:input_type -> worker.CloneWorkDirRequest
-	82, // 51: worker.WorkerService.CreateBackup:input_type -> worker.CreateBackupRequest
-	84, // 52: worker.WorkerService.RestoreBackup:input_type -> worker.RestoreBackupRequest
-	52, // 53: worker.WorkerService.CreateBot:input_type -> worker.CreateBotRequest
-	54, // 54: worker.WorkerService.DeleteBot:input_type -> worker.DeleteBotRequest
-	56, // 55: worker.WorkerService.ListBots:input_type -> worker.ListBotsRequest
-	59, // 56: worker.WorkerService.SetBotBehavior:input_type -> worker.SetBotBehaviorRequest
-	61, // 57: worker.WorkerService.SendBotCommand:input_type -> worker.SendBotCommandRequest
-	63, // 58: worker.WorkerService.RunBotScript:input_type -> worker.RunBotScriptRequest
-	65, // 59: worker.WorkerService.StreamBotEvents:input_type -> worker.StreamBotEventsRequest
-	1,  // 60: worker.WorkerService.Register:output_type -> worker.RegisterResponse
-	5,  // 61: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
-	7,  // 62: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
-	9,  // 63: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
-	9,  // 64: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
-	9,  // 65: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
-	9,  // 66: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
-	11, // 67: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
-	12, // 68: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
-	14, // 69: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
-	17, // 70: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
-	19, // 71: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
-	21, // 72: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
-	24, // 73: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
-	26, // 74: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
-	28, // 75: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
-	30, // 76: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
-	33, // 77: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
-	38, // 78: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
-	40, // 79: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
-	42, // 80: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
-	46, // 81: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
-	48, // 82: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
-	51, // 83: worker.WorkerService.ExecRconCommand:output_type -> worker.ExecRconCommandResponse
-	69, // 84: worker.WorkerService.ListJDKs:output_type -> worker.ListJDKsResponse
-	71, // 85: worker.WorkerService.InstallJDK:output_type -> worker.InstallJDKResponse
-	73, // 86: worker.WorkerService.RemoveJDK:output_type -> worker.RemoveJDKResponse
-	75, // 87: worker.WorkerService.DownloadCore:output_type -> worker.DownloadCoreResponse
-	77, // 88: worker.WorkerService.DeployServerProbe:output_type -> worker.DeployServerProbeResponse
-	79, // 89: worker.WorkerService.CloneWorkDir:output_type -> worker.CloneWorkDirResponse
-	83, // 90: worker.WorkerService.CreateBackup:output_type -> worker.CreateBackupResponse
-	85, // 91: worker.WorkerService.RestoreBackup:output_type -> worker.RestoreBackupResponse
-	53, // 92: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
-	55, // 93: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
-	57, // 94: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
-	60, // 95: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
-	62, // 96: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
-	64, // 97: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
-	66, // 98: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
-	60, // [60:99] is the sub-list for method output_type
-	21, // [21:60] is the sub-list for method input_type
+	31, // 38: worker.WorkerService.DownloadArchive:input_type -> worker.DownloadArchiveRequest
+	33, // 39: worker.WorkerService.ListConfigFiles:input_type -> worker.ListConfigFilesRequest
+	39, // 40: worker.WorkerService.ReadConfig:input_type -> worker.ReadConfigRequest
+	41, // 41: worker.WorkerService.WriteConfig:input_type -> worker.WriteConfigRequest
+	43, // 42: worker.WorkerService.ValidateConfig:input_type -> worker.ValidateConfigRequest
+	47, // 43: worker.WorkerService.GetNodeMetrics:input_type -> worker.GetNodeMetricsRequest
+	49, // 44: worker.WorkerService.GetInstanceMetrics:input_type -> worker.GetInstanceMetricsRequest
+	52, // 45: worker.WorkerService.ExecRconCommand:input_type -> worker.ExecRconCommandRequest
+	69, // 46: worker.WorkerService.ListJDKs:input_type -> worker.ListJDKsRequest
+	72, // 47: worker.WorkerService.InstallJDK:input_type -> worker.InstallJDKRequest
+	74, // 48: worker.WorkerService.RemoveJDK:input_type -> worker.RemoveJDKRequest
+	76, // 49: worker.WorkerService.DownloadCore:input_type -> worker.DownloadCoreRequest
+	78, // 50: worker.WorkerService.DeployServerProbe:input_type -> worker.DeployServerProbeRequest
+	80, // 51: worker.WorkerService.CloneWorkDir:input_type -> worker.CloneWorkDirRequest
+	84, // 52: worker.WorkerService.CreateBackup:input_type -> worker.CreateBackupRequest
+	86, // 53: worker.WorkerService.RestoreBackup:input_type -> worker.RestoreBackupRequest
+	54, // 54: worker.WorkerService.CreateBot:input_type -> worker.CreateBotRequest
+	56, // 55: worker.WorkerService.DeleteBot:input_type -> worker.DeleteBotRequest
+	58, // 56: worker.WorkerService.ListBots:input_type -> worker.ListBotsRequest
+	61, // 57: worker.WorkerService.SetBotBehavior:input_type -> worker.SetBotBehaviorRequest
+	63, // 58: worker.WorkerService.SendBotCommand:input_type -> worker.SendBotCommandRequest
+	65, // 59: worker.WorkerService.RunBotScript:input_type -> worker.RunBotScriptRequest
+	67, // 60: worker.WorkerService.StreamBotEvents:input_type -> worker.StreamBotEventsRequest
+	1,  // 61: worker.WorkerService.Register:output_type -> worker.RegisterResponse
+	5,  // 62: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
+	7,  // 63: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
+	9,  // 64: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
+	9,  // 65: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
+	9,  // 66: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
+	9,  // 67: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
+	11, // 68: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
+	12, // 69: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
+	14, // 70: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
+	17, // 71: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
+	19, // 72: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
+	21, // 73: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
+	24, // 74: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
+	26, // 75: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
+	28, // 76: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
+	30, // 77: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
+	32, // 78: worker.WorkerService.DownloadArchive:output_type -> worker.DownloadArchiveChunk
+	35, // 79: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
+	40, // 80: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
+	42, // 81: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
+	44, // 82: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
+	48, // 83: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
+	50, // 84: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
+	53, // 85: worker.WorkerService.ExecRconCommand:output_type -> worker.ExecRconCommandResponse
+	71, // 86: worker.WorkerService.ListJDKs:output_type -> worker.ListJDKsResponse
+	73, // 87: worker.WorkerService.InstallJDK:output_type -> worker.InstallJDKResponse
+	75, // 88: worker.WorkerService.RemoveJDK:output_type -> worker.RemoveJDKResponse
+	77, // 89: worker.WorkerService.DownloadCore:output_type -> worker.DownloadCoreResponse
+	79, // 90: worker.WorkerService.DeployServerProbe:output_type -> worker.DeployServerProbeResponse
+	81, // 91: worker.WorkerService.CloneWorkDir:output_type -> worker.CloneWorkDirResponse
+	85, // 92: worker.WorkerService.CreateBackup:output_type -> worker.CreateBackupResponse
+	87, // 93: worker.WorkerService.RestoreBackup:output_type -> worker.RestoreBackupResponse
+	55, // 94: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
+	57, // 95: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
+	59, // 96: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
+	62, // 97: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
+	64, // 98: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
+	66, // 99: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
+	68, // 100: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
+	61, // [61:101] is the sub-list for method output_type
+	21, // [21:61] is the sub-list for method input_type
 	21, // [21:21] is the sub-list for extension type_name
 	21, // [21:21] is the sub-list for extension extendee
 	0,  // [0:21] is the sub-list for field type_name
@@ -6236,7 +6342,7 @@ func file_proto_worker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_worker_proto_rawDesc), len(file_proto_worker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   87,
+			NumMessages:   89,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

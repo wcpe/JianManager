@@ -40,6 +40,8 @@ service WorkerService {
   rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
   // RenameFile 重命名文件。
   rpc RenameFile(RenameFileRequest) returns (RenameFileResponse);
+  // DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（FR-070 批量下载）。
+  rpc DownloadArchive(DownloadArchiveRequest) returns (stream DownloadArchiveChunk);
   // ListConfigFiles 列出可管理配置文件。
   rpc ListConfigFiles(ListConfigFilesRequest) returns (ListConfigFilesResponse);
   // ReadConfig 读取配置文件并解析。
@@ -315,6 +317,15 @@ message RenameFileRequest {
 message RenameFileResponse {
   bool success = 1;
   string error = 2;
+}
+
+message DownloadArchiveRequest {
+  string instance_uuid = 1;
+  repeated string paths = 2; // 相对工作目录的文件/目录集合，目录递归打包
+}
+
+message DownloadArchiveChunk {
+  bytes content = 1; // zip 字节分片
 }
 
 // === 配置文件操作 ===

@@ -36,6 +36,7 @@ const (
 	WorkerService_WriteFile_FullMethodName            = "/worker.WorkerService/WriteFile"
 	WorkerService_DeleteFile_FullMethodName           = "/worker.WorkerService/DeleteFile"
 	WorkerService_RenameFile_FullMethodName           = "/worker.WorkerService/RenameFile"
+	WorkerService_DownloadArchive_FullMethodName      = "/worker.WorkerService/DownloadArchive"
 	WorkerService_ListConfigFiles_FullMethodName      = "/worker.WorkerService/ListConfigFiles"
 	WorkerService_ReadConfig_FullMethodName           = "/worker.WorkerService/ReadConfig"
 	WorkerService_WriteConfig_FullMethodName          = "/worker.WorkerService/WriteConfig"
@@ -100,6 +101,8 @@ type WorkerServiceClient interface {
 	DeleteFile(ctx context.Context, in *DeleteFileRequest, opts ...grpc.CallOption) (*DeleteFileResponse, error)
 	// RenameFile 重命名文件。
 	RenameFile(ctx context.Context, in *RenameFileRequest, opts ...grpc.CallOption) (*RenameFileResponse, error)
+	// DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（FR-070 批量下载）。
+	DownloadArchive(ctx context.Context, in *DownloadArchiveRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadArchiveChunk], error)
 	// ListConfigFiles 列出可管理配置文件。
 	ListConfigFiles(ctx context.Context, in *ListConfigFilesRequest, opts ...grpc.CallOption) (*ListConfigFilesResponse, error)
 	// ReadConfig 读取配置文件并解析。
@@ -340,6 +343,25 @@ func (c *workerServiceClient) RenameFile(ctx context.Context, in *RenameFileRequ
 	return out, nil
 }
 
+func (c *workerServiceClient) DownloadArchive(ctx context.Context, in *DownloadArchiveRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadArchiveChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[2], WorkerService_DownloadArchive_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[DownloadArchiveRequest, DownloadArchiveChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerService_DownloadArchiveClient = grpc.ServerStreamingClient[DownloadArchiveChunk]
+
 func (c *workerServiceClient) ListConfigFiles(ctx context.Context, in *ListConfigFilesRequest, opts ...grpc.CallOption) (*ListConfigFilesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListConfigFilesResponse)
@@ -552,7 +574,7 @@ func (c *workerServiceClient) RunBotScript(ctx context.Context, in *RunBotScript
 
 func (c *workerServiceClient) StreamBotEvents(ctx context.Context, in *StreamBotEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BotEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[2], WorkerService_StreamBotEvents_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[3], WorkerService_StreamBotEvents_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -609,6 +631,8 @@ type WorkerServiceServer interface {
 	DeleteFile(context.Context, *DeleteFileRequest) (*DeleteFileResponse, error)
 	// RenameFile 重命名文件。
 	RenameFile(context.Context, *RenameFileRequest) (*RenameFileResponse, error)
+	// DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（FR-070 批量下载）。
+	DownloadArchive(*DownloadArchiveRequest, grpc.ServerStreamingServer[DownloadArchiveChunk]) error
 	// ListConfigFiles 列出可管理配置文件。
 	ListConfigFiles(context.Context, *ListConfigFilesRequest) (*ListConfigFilesResponse, error)
 	// ReadConfig 读取配置文件并解析。
@@ -717,6 +741,9 @@ func (UnimplementedWorkerServiceServer) DeleteFile(context.Context, *DeleteFileR
 }
 func (UnimplementedWorkerServiceServer) RenameFile(context.Context, *RenameFileRequest) (*RenameFileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RenameFile not implemented")
+}
+func (UnimplementedWorkerServiceServer) DownloadArchive(*DownloadArchiveRequest, grpc.ServerStreamingServer[DownloadArchiveChunk]) error {
+	return status.Error(codes.Unimplemented, "method DownloadArchive not implemented")
 }
 func (UnimplementedWorkerServiceServer) ListConfigFiles(context.Context, *ListConfigFilesRequest) (*ListConfigFilesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListConfigFiles not implemented")
@@ -1092,6 +1119,17 @@ func _WorkerService_RenameFile_Handler(srv interface{}, ctx context.Context, dec
 	}
 	return interceptor(ctx, in, info, handler)
 }
+
+func _WorkerService_DownloadArchive_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(DownloadArchiveRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(WorkerServiceServer).DownloadArchive(m, &grpc.GenericServerStream[DownloadArchiveRequest, DownloadArchiveChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerService_DownloadArchiveServer = grpc.ServerStreamingServer[DownloadArchiveChunk]
 
 func _WorkerService_ListConfigFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListConfigFilesRequest)
@@ -1644,6 +1682,11 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "StreamInstanceEvents",
 			Handler:       _WorkerService_StreamInstanceEvents_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "DownloadArchive",
+			Handler:       _WorkerService_DownloadArchive_Handler,
 			ServerStreams: true,
 		},
 		{
