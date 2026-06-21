@@ -537,7 +537,10 @@ type CreateInstanceRequest struct {
 	JdkBinPath string `protobuf:"bytes,10,opt,name=jdk_bin_path,json=jdkBinPath,proto3" json:"jdk_bin_path,omitempty"`
 	// 优雅停止命令：daemon 模式优雅关服时写入进程 stdin 的命令（不含换行）。
 	// CP 按实例角色派生（MC 后端 stop / 代理 end）；为空时 Worker 回退到 "stop"。
-	StopCommand   string `protobuf:"bytes,11,opt,name=stop_command,json=stopCommand,proto3" json:"stop_command,omitempty"`
+	StopCommand string `protobuf:"bytes,11,opt,name=stop_command,json=stopCommand,proto3" json:"stop_command,omitempty"`
+	// probe_port 是 ServerProbe /metrics 端口（CP 分配后下发），Worker 持久化到 PID 记录，
+	// 心跳时据此自采每实例 ServerProbe 快照（FR-060 时序）；0=未部署探针，心跳不采该实例。
+	ProbePort     int32 `protobuf:"varint,12,opt,name=probe_port,json=probePort,proto3" json:"probe_port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -647,6 +650,13 @@ func (x *CreateInstanceRequest) GetStopCommand() string {
 		return x.StopCommand
 	}
 	return ""
+}
+
+func (x *CreateInstanceRequest) GetProbePort() int32 {
+	if x != nil {
+		return x.ProbePort
+	}
+	return 0
 }
 
 type CreateInstanceResponse struct {
@@ -5549,7 +5559,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	" \x01(\x01R\ruptimeSeconds\x12+\n" +
 	"\x06worlds\x18\v \x03(\v2\x13.worker.WorldMetricR\x06worlds\"1\n" +
 	"\x11HeartbeatResponse\x12\x1c\n" +
-	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\xcd\x03\n" +
+	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\xec\x03\n" +
 	"\x15CreateInstanceRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -5563,7 +5573,9 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\fjdk_bin_path\x18\n" +
 	" \x01(\tR\n" +
 	"jdkBinPath\x12!\n" +
-	"\fstop_command\x18\v \x01(\tR\vstopCommand\x1a:\n" +
+	"\fstop_command\x18\v \x01(\tR\vstopCommand\x12\x1d\n" +
+	"\n" +
+	"probe_port\x18\f \x01(\x05R\tprobePort\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"H\n" +

@@ -178,6 +178,9 @@ message CreateInstanceRequest {
   // 优雅停止命令：daemon 模式优雅关服时写入进程 stdin 的命令（不含换行）。
   // CP 按实例角色派生（MC 后端 stop / 代理 end）；为空时 Worker 回退到 "stop"。
   string stop_command = 11;
+  // probe_port 是 ServerProbe /metrics 端口（CP 分配后下发），Worker 持久化到 PID 记录，
+  // 心跳时据此自采每实例 ServerProbe 快照（FR-060 时序）；0=未部署探针，心跳不采该实例。
+  int32 probe_port = 12;
 }
 
 message CreateInstanceResponse {
