@@ -9,6 +9,7 @@ import (
 
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
+	"github.com/shirou/gopsutil/v4/load"
 	"github.com/shirou/gopsutil/v4/mem"
 	psnet "github.com/shirou/gopsutil/v4/net"
 	"golang.org/x/net/context"
@@ -188,6 +189,12 @@ func CollectHeartbeatData(nodeUUID string) *workerpb.HeartbeatRequest {
 	if counters, err := psnet.IOCounters(false); err == nil && len(counters) > 0 {
 		req.NetworkBytesSent = int64(counters[0].BytesSent)
 		req.NetworkBytesRecv = int64(counters[0].BytesRecv)
+	}
+
+	// 系统负载 load average（FR-062）。gopsutil 跨平台：Windows 经处理器队列长度模拟，
+	// 预热期或取不到时为 0（CP 侧据此优雅留空）。
+	if avg, err := load.Avg(); err == nil && avg != nil {
+		req.LoadAvg1 = avg.Load1
 	}
 
 	return req
