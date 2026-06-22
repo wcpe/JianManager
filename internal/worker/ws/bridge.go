@@ -32,6 +32,11 @@ var (
 	errBridgeBadScope     = errors.New("token scope 非 plugin-bridge")
 	errBridgeNoInstance   = errors.New("token 缺少 instanceId")
 	errBridgeInstMismatch = errors.New("token instanceId 与 query instance 不一致")
+
+	// ErrBridgeNotConnected 指定实例当前无活动探针会话（治理同步往返时立即返回，不阻塞）。
+	ErrBridgeNotConnected = errors.New("探针未连接")
+	// ErrBridgeCommandTimeout 探针未在期限内回 command_result（FR-067 治理同步往返超时）。
+	ErrBridgeCommandTimeout = errors.New("探针指令执行超时")
 )
 
 // PluginEventKind 是插件桥冒泡事件的类型，与 proto PluginEvent.type 对应。
@@ -100,6 +105,23 @@ func parseBridgeEventData(data json.RawMessage) bridgeEventData {
 	return d
 }
 
+// CommandResult 是探针执行一条治理/查询指令后的回执（FR-067，见 ADR-016）。
+// 由探针经 command_result 事件帧带回，Worker 据 request_id 路由给同步等待的调用方。
+type CommandResult struct {
+	RequestID string
+	Success   bool
+	Output    string // 命令输出（list/whitelist 等）
+	Error     string
+}
+
+// commandResultData 是 command_result 事件帧 data 字段的载荷（与探针侧约定一致）。
+type commandResultData struct {
+	RequestID string `json:"requestId"`
+	Success   bool   `json:"success"`
+	Output    string `json:"output"`
+	Error     string `json:"error"`
+}
+
 // PluginSession 是一个实例当前活动的探针会话。
 type PluginSession struct {
 	InstanceID string
@@ -107,6 +129,11 @@ type PluginSession struct {
 	Version    string
 	Conn       *websocket.Conn
 	writeMu    sync.Mutex // 串行化写，避免 ping/pong 与下发指令并发写同一连接
+
+	// pending 是本会话上「已下发、待 command_result」的同步等待者，键为 request_id（FR-067）。
+	// 读循环收到匹配的 command_result 时投递到对应 channel；调用方超时/会话断开则清理。
+	pendingMu sync.Mutex
+	pending   map[string]chan CommandResult
 }
 
 // writeJSON 串行化地向探针写一帧 JSON，带写超时。
@@ -115,6 +142,37 @@ func (s *PluginSession) writeJSON(v interface{}) error {
 	defer s.writeMu.Unlock()
 	_ = s.Conn.SetWriteDeadline(time.Now().Add(bridgeWriteWait))
 	return s.Conn.WriteJSON(v)
+}
+
+// registerPending 为一个 request_id 注册同步等待 channel（缓冲 1，投递方不阻塞）。
+func (s *PluginSession) registerPending(requestID string) chan CommandResult {
+	ch := make(chan CommandResult, 1)
+	s.pendingMu.Lock()
+	s.pending[requestID] = ch
+	s.pendingMu.Unlock()
+	return ch
+}
+
+// unregisterPending 移除一个等待者（调用方超时/拿到结果后清理）。
+func (s *PluginSession) unregisterPending(requestID string) {
+	s.pendingMu.Lock()
+	delete(s.pending, requestID)
+	s.pendingMu.Unlock()
+}
+
+// deliverResult 把一条 command_result 投递给匹配的等待者；无人等待返回 false（孤儿结果）。
+func (s *PluginSession) deliverResult(r CommandResult) bool {
+	s.pendingMu.Lock()
+	ch, ok := s.pending[r.RequestID]
+	s.pendingMu.Unlock()
+	if !ok {
+		return false
+	}
+	select {
+	case ch <- r:
+	default:
+	}
+	return true
 }
 
 // PluginBridgeServer 是 ServerProbe 探针反向 WS 连入的服务端（端点 /ws/plugin-bridge，FR-065）。
@@ -189,7 +247,7 @@ func (s *PluginBridgeServer) Handler() http.HandlerFunc {
 			return
 		}
 
-		session := &PluginSession{InstanceID: instanceID, Conn: conn}
+		session := &PluginSession{InstanceID: instanceID, Conn: conn, pending: make(map[string]chan CommandResult)}
 		s.addSession(session) // 单活动会话：顶替并关闭旧连
 		slog.Info("插件桥已连接", "instanceId", instanceID, "remote", r.RemoteAddr)
 
@@ -279,6 +337,18 @@ func (s *PluginBridgeServer) handleSession(session *PluginSession) {
 			session.Version = msg.Version
 			slog.Info("插件桥握手 hello", "instanceId", session.InstanceID, "platform", msg.Platform, "version", msg.Version)
 		case "event":
+			// command_result（FR-067）：路由给同步等待的治理调用方（按 request_id）；
+			// 无人等待（超时后到达/重发）则不阻塞，继续作为事件冒泡供观测。
+			if msg.Event == "command_result" {
+				var cr commandResultData
+				_ = json.Unmarshal(msg.Data, &cr)
+				session.deliverResult(CommandResult{
+					RequestID: cr.RequestID,
+					Success:   cr.Success,
+					Output:    cr.Output,
+					Error:     cr.Error,
+				})
+			}
 			// 业务事件冒泡（FR-066）：解析 data 里的结构化玩家字段填充事件，原始载荷一并透传（raw）。
 			// Worker 只解析、不消费语义（跨服感知聚合在 CP，治理执行在 FR-067）。
 			d := parseBridgeEventData(msg.Data)
@@ -307,8 +377,7 @@ func (s *PluginBridgeServer) emit(evt PluginEvent) {
 	}
 }
 
-// SendCommand 向指定实例的活动探针会话下发一帧指令（command）。
-// 地基（FR-065）提供通道：CP 经 gRPC SendPluginCommand 调到此处；探针侧具体执行留 FR-067。
+// SendCommand 向指定实例的活动探针会话下发一帧指令（command），不等待执行结果。
 // 实例当前无活动会话时返回 false。
 func (s *PluginBridgeServer) SendCommand(instanceID string, payload interface{}) (bool, error) {
 	s.mu.Lock()
@@ -321,6 +390,36 @@ func (s *PluginBridgeServer) SendCommand(instanceID string, payload interface{})
 		return false, err
 	}
 	return true, nil
+}
+
+// SendCommandAndWait 向实例的活动探针会话下发指令并同步等待 command_result（FR-067 治理）。
+//
+// 以 request_id 关联回执：注册等待 channel → 写出 command 帧 → 等 command_result 或超时。
+// 替代 RCON 的同步请求/响应语义（踢/封/解封/白名单/在线列表）。实例无活动会话立即返回
+// ErrBridgeNotConnected；探针未在 timeout 内回执返回 ErrBridgeCommandTimeout（均不永久阻塞）。
+func (s *PluginBridgeServer) SendCommandAndWait(instanceID, requestID string, payload interface{}, timeout time.Duration) (CommandResult, error) {
+	s.mu.Lock()
+	session := s.sessions[instanceID]
+	s.mu.Unlock()
+	if session == nil {
+		return CommandResult{}, ErrBridgeNotConnected
+	}
+
+	ch := session.registerPending(requestID)
+	defer session.unregisterPending(requestID)
+
+	if err := session.writeJSON(payload); err != nil {
+		return CommandResult{}, err
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case res := <-ch:
+		return res, nil
+	case <-timer.C:
+		return CommandResult{}, ErrBridgeCommandTimeout
+	}
 }
 
 // IsConnected 返回指定实例当前是否有活动探针会话。

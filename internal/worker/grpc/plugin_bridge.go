@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/ws"
 	"github.com/wcpe/JianManager/proto/workerpb"
@@ -97,8 +98,15 @@ func (s *Server) StreamPluginEvents(req *workerpb.StreamPluginEventsRequest, str
 	}
 }
 
-// SendPluginCommand CP 经 Worker 向探针下发治理/查询指令（FR-065 通道；执行语义留 FR-067）。
-// 实例当前无活动探针会话时返回 success=false 且 error 说明未连接。
+// pluginCommandTimeout 是治理同步往返（wait=true）等待探针 command_result 的上限。
+// 探针与 Worker 同机回环、命令为本地 Bukkit API 调用，5s 足够；放大会拖慢跨多后端聚合。
+const pluginCommandTimeout = 5 * time.Second
+
+// SendPluginCommand CP 经 Worker 向探针下发治理/查询指令（FR-067，见 ADR-016）。
+//
+// wait=true：同步等待探针执行回执 command_result（踢/封/解封/白名单/在线列表），把成功/输出/错误返回；
+// wait=false：即发即忘（仅校验已下发）。实例无活动探针会话时返回 success=false 且 error 说明未连接，
+// 让 CP 聚合多后端时不因单点失败中断、并向前端展示优雅降级（取代退役的 RCON 路径）。
 func (s *Server) SendPluginCommand(_ context.Context, req *workerpb.SendPluginCommandRequest) (*workerpb.SendPluginCommandResponse, error) {
 	requestID := ""
 	if req.Command != nil {
@@ -107,16 +115,31 @@ func (s *Server) SendPluginCommand(_ context.Context, req *workerpb.SendPluginCo
 	if s.bridge == nil {
 		return &workerpb.SendPluginCommandResponse{Success: false, Error: "本节点未启用插件桥", RequestId: requestID}, nil
 	}
-	// 下发一帧 command：地基阶段原样透传 PluginCommand 字段，探针侧具体执行留 FR-067。
 	payload := pluginCommandFrame(req.Command)
-	ok, err := s.bridge.SendCommand(req.InstanceUuid, payload)
+
+	if !req.Wait {
+		ok, err := s.bridge.SendCommand(req.InstanceUuid, payload)
+		if err != nil {
+			return &workerpb.SendPluginCommandResponse{Success: false, Error: err.Error(), RequestId: requestID}, nil
+		}
+		if !ok {
+			return &workerpb.SendPluginCommandResponse{Success: false, Error: "探针未连接", RequestId: requestID}, nil
+		}
+		return &workerpb.SendPluginCommandResponse{Success: true, RequestId: requestID}, nil
+	}
+
+	// 同步往返：下发并等 command_result（按 request_id 关联）。
+	res, err := s.bridge.SendCommandAndWait(req.InstanceUuid, requestID, payload, pluginCommandTimeout)
 	if err != nil {
+		// 未连接/超时：success=false + error，CP 据此优雅降级。
 		return &workerpb.SendPluginCommandResponse{Success: false, Error: err.Error(), RequestId: requestID}, nil
 	}
-	if !ok {
-		return &workerpb.SendPluginCommandResponse{Success: false, Error: "探针未连接", RequestId: requestID}, nil
-	}
-	return &workerpb.SendPluginCommandResponse{Success: true, RequestId: requestID}, nil
+	return &workerpb.SendPluginCommandResponse{
+		Success:   res.Success,
+		Error:     res.Error,
+		RequestId: requestID,
+		Output:    res.Output,
+	}, nil
 }
 
 // QueryServerState 查询子服全状态（FR-065 骨架）：地基阶段仅回报探针连接状态，

@@ -240,9 +240,10 @@ func (s *Server) GetNodeMetrics(ctx context.Context, req *workerpb.GetNodeMetric
 	}, nil
 }
 
-// GetInstanceMetrics 获取实例指标。
-// 优先抓取 ServerProbe /metrics（localhost:probe_port，FR-010 富指标：TPS/MSPT/堆/线程/世界）；
-// 探针未部署或抓取失败时回退 RCON 查询 TPS/在线人数 + OS 进程内存近似；均不可用时返回 N/A（-1）。
+// GetInstanceMetrics 获取实例指标（纯 ServerProbe，FR-067 退役 RCON 后）。
+// 抓取 ServerProbe /metrics（localhost:probe_port，FR-010 富指标：TPS/MSPT/堆/线程/世界）；
+// 探针未部署或抓取失败时 TPS/在线人数返回 N/A（-1，probe_available=false），不再有 RCON 兜底。
+// OS 进程内存近似仍作为 memory_mb 的可用回退（与探针无关）。
 func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstanceMetricsRequest) (*workerpb.GetInstanceMetricsResponse, error) {
 	resp := &workerpb.GetInstanceMetricsResponse{}
 
@@ -291,19 +292,13 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 			resp.ProbeAvailable = true
 			return resp, nil
 		}
-		// 探针未就绪/抓取失败 → 回退 RCON（下方）。
+		// 探针未就绪/抓取失败 → 指标 N/A（FR-067 退役 RCON 后无兜底）。
 	}
 
-	// 回退：RCON 查询 TPS/在线人数（探针未部署或抓取失败时）。
-	if req.RconPort > 0 {
-		tps, onlinePlayers, _ := metrics.QueryInstanceMetrics("localhost", int(req.RconPort), req.RconPassword)
-		resp.Tps = tps
-		resp.OnlinePlayers = onlinePlayers
-	} else {
-		resp.Tps = -1
-		resp.OnlinePlayers = -1
-	}
-
+	// 探针未部署或抓取失败：TPS/在线人数为 N/A（-1），probe_available 默认 false。
+	// memory_mb 若上面已由 OS 进程内存填充则保留，否则为 0。
+	resp.Tps = -1
+	resp.OnlinePlayers = -1
 	return resp, nil
 }
 
