@@ -80,6 +80,12 @@ func determineAction(method, path string) string {
 	case method == "POST" && strings.HasSuffix(path, "/instances/batch"):
 		// 批量操作（FR-058）：危险操作（批量 kill/stop）留痕，请求体含动作与目标。
 		return "instance.batch"
+	case method == "POST" && strings.HasSuffix(path, "/instances/probe/update"):
+		// 批量探针在线更新（FR-068）：留痕，请求体含 ids/filter 与 restart。
+		return "probe.update.batch"
+	case method == "POST" && strings.Contains(path, "/instances") && strings.HasSuffix(path, "/probe/update"):
+		// 单实例探针在线更新（FR-068）：留痕，含目标实例与 restart。
+		return "probe.update"
 	case method == "POST" && strings.Contains(path, "/instances"):
 		return "instance.create"
 	case method == "PUT" && strings.Contains(path, "/instances"):

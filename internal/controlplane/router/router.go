@@ -44,6 +44,7 @@ type Services struct {
 	Log           *service.LogService
 	Metric        *service.MetricService
 	Settings      *service.SettingsService
+	ProbeUpdate   *service.ProbeUpdateService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -85,6 +86,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 实例批量操作（FR-058）：独立 handler，挂 /instances/batch（与单实例路由共存）。
 		instanceBatchHandler := NewInstanceBatchHandler(svcs.InstanceBatch, svcs.Authz)
 		instanceBatchHandler.RegisterRoutes(protected)
+
+		// 探针在线更新（FR-068）：单实例 + 批量推送内嵌探针 jar，下次重启生效。instance:operate。
+		if svcs.ProbeUpdate != nil {
+			probeUpdateHandler := NewProbeUpdateHandler(svcs.ProbeUpdate, svcs.Instance, svcs.Authz)
+			probeUpdateHandler.RegisterRoutes(protected)
+		}
 
 		terminalHandler := NewTerminalHandler(svcs.Terminal, svcs.Authz)
 		terminalHandler.RegisterRoutes(protected)

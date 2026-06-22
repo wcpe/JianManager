@@ -106,6 +106,12 @@ func main() {
 	playerEventSvc := service.NewPlayerEventService(pool, db)
 	defer playerEventSvc.Stop()
 
+	// 探针在线更新服务（FR-068，见 ADR-016）：复用 gRPC DeployServerProbe 把内嵌探针 jar
+	// 推到实例（下次重启生效）。复用 pluginBridgeSvc 重新生成探针 config 的 bridge 段（实例级 token）；
+	// 探针连接状态取 FR-066 在线名册（IsProbeConnected）。
+	probeUpdateSvc := service.NewProbeUpdateService(db, pool, pluginBridgeSvc)
+	probeUpdateSvc.SetConnChecker(playerEventSvc.IsProbeConnected)
+
 	// 告警评估器：每 60s 检测节点指标，触发 Webhook 通知
 	alertEvaluator := service.NewAlertEvaluator(db)
 	alertEvaluator.Start()
@@ -171,6 +177,7 @@ func main() {
 		Log:           logSvc,
 		Metric:        metricSvc,
 		Settings:      settingsSvc,
+		ProbeUpdate:   probeUpdateSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）
