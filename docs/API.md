@@ -319,7 +319,7 @@
 - **错误**: 400 `INVALID_REQUEST`（action 非法 / 目标皆空 / command 缺 command / 超上限）；403 `FORBIDDEN`
 
 ### GET /api/v1/instances/:id/metrics
-- **描述**: 实例指标。优先经 ServerProbe `/metrics` 取富指标（探针未部署/抓取失败时回退 RCON+RSS）
+- **描述**: 实例指标。经 ServerProbe `/metrics` 取富指标（**RCON 已退役 FR-067/ADR-016**——探针未部署/抓取失败时富指标 N/A，不再回退 RCON）
 - **关联 FR**: FR-010
 - **响应**:
   ```json
@@ -383,9 +383,9 @@
 - **错误**: 400 `INVALID_RANGE`/`INVALID_RESOLUTION`；403 `FORBIDDEN`
 
 ### GET /api/v1/players
-- **描述**: 在线玩家列表，聚合可见后端子服（role=backend 且运行中）的 RCON `list` 输出，每个玩家标注所在子服（BC 跨服感知）；按可访问实例集合收敛
+- **描述**: 在线玩家列表，经 ServerProbe 探针事件实时聚合（FR-066/067），每个玩家标注所在子服（BC 跨服感知）；按可访问实例集合收敛
 - **权限**: `instance.read`
-- **响应**: `{ "players":[{"name":"alice","instanceId":3,"instanceName":"lobby"}], "backends":[{"instanceId":3,"instanceName":"lobby","available":true}] }`（`available=false` 的后端 RCON 不可用，结果优雅降级）
+- **响应**: `{ "players":[{"name":"alice","instanceId":3,"instanceName":"lobby"}], "backends":[{"instanceId":3,"instanceName":"lobby","available":true}] }`（`available=false` 的后端探针未连入，结果优雅降级）
 - **关联 FR**: FR-054
 
 ### GET /api/v1/instances/:id/players/events
@@ -397,7 +397,7 @@
 - **关联 FR**: FR-066
 
 ### POST /api/v1/players/:name/kick
-- **描述**: 踢出玩家，向目标后端集合下发 RCON `kick`。范围互斥：`instanceId`（单服）> `networkId`（群组）> 全部可见后端
+- **描述**: 踢出玩家，经探针插件桥 `SendPluginCommand` 向目标后端集合下发 kick（FR-067）。范围互斥：`instanceId`（单服）> `networkId`（群组）> 全部可见后端
 - **权限**: `instance.operate` | **审计**: `player.kick`
 - **请求**: `{ "instanceId":0, "networkId":0, "reason":"" }`（均可选）
 - **响应**: `{ "player":"alice","action":"kick","total":2,"succeeded":2,"failed":0,"results":[...] }`
@@ -405,26 +405,26 @@
 - **关联 FR**: FR-054
 
 ### POST /api/v1/players/:name/ban
-- **描述**: 封禁玩家，向目标后端集合下发 RCON `ban` 并写入封禁记录（玩家/原因/操作者/范围/是否生效）
+- **描述**: 封禁玩家，经探针插件桥下发 ban（FR-067）并写入封禁记录（玩家/原因/操作者/范围/是否生效）
 - **权限**: `instance.operate` | **审计**: `player.ban`
 - **请求**: `{ "instanceId":0, "networkId":0, "reason":"破坏" }`
 - **响应**: 同 kick 的执行汇总
 - **关联 FR**: FR-054
 
 ### POST /api/v1/players/:name/unban
-- **描述**: 解封玩家，向目标后端集合下发 RCON `pardon`，并把该玩家仍生效的封禁记录置为失效（保留历史）
+- **描述**: 解封玩家，经探针插件桥下发 pardon（FR-067），并把该玩家仍生效的封禁记录置为失效（保留历史）
 - **权限**: `instance.operate` | **审计**: `player.unban`
 - **请求**: `{ "instanceId":0, "networkId":0 }`（可选）
 - **关联 FR**: FR-054
 
 ### GET /api/v1/instances/:id/whitelist
-- **描述**: 查询单后端子服白名单（RCON `whitelist list`）
+- **描述**: 查询单后端子服白名单（经探针插件桥 `whitelist list`，FR-067）
 - **权限**: `instance.read`
 - **响应**: `{ "instanceId":3,"available":true,"players":["alice","bob"] }`
 - **关联 FR**: FR-054
 
 ### POST /api/v1/instances/:id/whitelist
-- **描述**: 单后端子服白名单增删（RCON `whitelist add|remove`）
+- **描述**: 单后端子服白名单增删（经探针插件桥 `whitelist add|remove`，FR-067）
 - **权限**: `instance.write` | **审计**: `player.whitelist.add` / `player.whitelist.remove`
 - **请求**: `{ "action":"add", "player":"alice" }`（`action`：`add`/`remove`）
 - **关联 FR**: FR-054

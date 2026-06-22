@@ -174,8 +174,8 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - Bot：CreateBot, DeleteBot, ListBots, StreamBotEvents (server stream), SendBotCommand
 - 探针部署：DeployServerProbe（CP 内嵌 ServerProbe jar + 生成的 config.yml 经 gRPC 下发到实例 plugins 目录，FR-010；见 ADR-014）
 - 插件桥（FR-065；见 ADR-016）：StreamPluginEvents (server stream，CP 订阅某实例/全部探针经反向 WS 上报的事件流 connected/disconnected/heartbeat/玩家事件)、SendPluginCommand（CP 经 Worker 向探针下发治理/查询指令）、QueryServerState（查询子服全状态骨架）。地基阶段真实承载 connected/disconnected/heartbeat 与通道层，业务事件/治理执行语义留 FR-066/067
-- 指标：GetNodeMetrics, GetInstanceMetrics（请求带 probe_port/rcon_port/rcon_password，Worker 优先抓 ServerProbe `/metrics`，回退 RCON+RSS）——用于**实时**面板的 CP 主动拉取；**历史时序**（FR-060）改由 Worker 心跳推送 `instance_metrics`，二者互补
-- 玩家管理：ExecRconCommand（经实例 RCON 执行命令并回传输出，FR-054；RCON 端口/密码由 CP 随请求下发，Worker 不访问 DB；`available=false` 优雅降级）
+- 指标：GetNodeMetrics, GetInstanceMetrics（请求带 probe_port，Worker 抓 ServerProbe `/metrics`；**RCON 已退役（FR-067/ADR-016）**——探针未就绪时富指标 N/A，不再回退 RCON）——用于**实时**面板的 CP 主动拉取；**历史时序**（FR-060）改由 Worker 心跳推送 `instance_metrics`，二者互补
+- 玩家管理：SendPluginCommand（FR-067/ADR-016；CP 经 Worker 反向 WS 向探针下发踢/封/解封/白名单治理指令，探针经服务端 API 执行；在线列表经探针事件聚合）。**RCON 路径已退役**，`ExecRconCommand`/`rcon_client` 移除；探针未连入时优雅降级
 - 配置 (V2)：ListConfigFiles, ReadConfig, WriteConfig, ListConfigVersions, RollbackConfig
 - 运行时 (V2)：ListJDKs, InstallJDK, RemoveJDK, DownloadCore
   - `InstallJDK` 携带 `mirror_base`（CP 从平台设置 `jdk.mirror.<vendor>` 取生效值后下发；Worker 用它构造下载 URL，使运行时配置的镜像源真生效，FR-033/FR-063；为空回退 Worker 本地 env/官方默认源）
@@ -222,7 +222,7 @@ Worker 抓取链路完全在本机回环、无对外网络面、无 token：
 provision → CP DeployServerProbe(jar+config) → Worker 写 plugins/ServerProbe.jar + plugins/ServerProbe/config.yml
 GetInstanceMetrics(req) → Worker → HTTP GET http://127.0.0.1:<probe_port>/metrics → 解析 serverprobe_* → 富指标
                                   ↓ 探针未就绪/抓取失败
-                                  RCON 查询（TPS/在线）+ 进程 RSS（内存）兜底
+                                  富指标 N/A（RCON 已退役 FR-067/ADR-016，不再回退）
 ```
 
 同一抓取链路有两个驱动方：**实时面板**由 CP 按需 `GetInstanceMetrics` 拉取；**历史时序**（FR-060）由 Worker 心跳 tick 自抓本机各 RUNNING 实例 `/metrics`，装入 `Heartbeat.instance_metrics` 上报，CP 分级降采样落库。probe 端口经 `CreateInstance.probe_port` 下发并持久化到 daemon PID 记录，Worker 重启可恢复自采。
@@ -649,7 +649,7 @@ database:
 - **审计日志 `/audit`**: 操作日志表格，按用户/操作/时间筛选
 - **设置 `/settings`**: 系统设置（仅平台管理员）
 - **群组服 `/networks`** (V2): 拓扑视图（代理 + 已注册后端，含各子服在线人数）；管理 proxy↔backend 注册（别名/优先级/forced-host）；群组软标签筛选与批量启停；「搭建子服 / 搭建代理」向导入口
-- **玩家管理 `/players`** (V2): 在线玩家（聚合各后端 RCON `list`，标注所在子服，BC 跨服感知）/封禁记录/白名单三视图；踢出/封禁二次确认 + 原因输入，解封；RCON 不可用子服降级提示（FR-054）
+- **玩家管理 `/players`** (V2): 在线玩家（探针事件实时聚合，标注所在子服，BC 跨服感知，FR-066）/封禁记录/白名单三视图；踢出/封禁二次确认 + 原因输入，解封（经探针插件桥 `SendPluginCommand` 执行，FR-067）；探针未连入降级提示。**「实时事件」标签**经 SSE 驱动在线名册 + 事件流
 - **运行时/JDK** (V2): 在节点详情页 `/nodes/:id` 增「JDK」标签——列出已装 JDK、安装指定版本、登记系统已有 JDK、查看被哪些实例占用
 - **配置编辑器** (V2): 位于实例详情/工作区「配置」段——复用资源管理器（`ConfigExplorer`，FR-071）呈现工作目录全部配置（递归自动发现）+ schema 表单/原始双模式 + 一致性校验 + 配置版本 diff/回滚 + 收藏书签（非独立页面）
 
