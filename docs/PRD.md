@@ -1325,7 +1325,7 @@
 >
 > **关联 ADR**：ADR-021（客户端更新组件纯 JVM 方案）、ADR-022（签名信任模型 + per-channel key + 防降级/重放 + 密钥轮换 + 公网端点）、ADR-023（分发端点防护与公网暴露：L7 + CDN）。
 >
-> **架构归属**：客户端组件（楔子 + updater-core）为 Java/Gradle **独立仓 + JM 子模块**（同构 ServerProbe/Beacon agent）；服务端能力进 JM 主仓。面向玩家公网端点的鉴权（拉取密钥）与防护见 ADR-022/023，与运营者浏览器入口隔离。
+> **架构归属**：客户端组件（楔子 + updater-core）为 JM 仓内 `client-updater/` 子目录（Java/Gradle，monorepo，类比既有 `bot-worker/`；2026-06-23 改：不再独立仓+子模块，见 ADR-021 修订）；服务端能力在 JM 主仓 Go 侧。面向玩家公网端点的鉴权（拉取密钥）与防护见 ADR-022/023，与运营者浏览器入口隔离。
 >
 > 计划全文 `.tmp/brainstorm-client-distribution-2026-06-23.md`（不入库）。
 
