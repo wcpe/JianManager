@@ -107,7 +107,7 @@ export default function WorkspacePane({ instanceId }: WorkspacePaneProps) {
             <PluginManager instanceId={instanceId} />
           </div>
         ) : segment === 'metrics' ? (
-          <MetricsSegment instanceUuid={instance?.uuid ?? ''} />
+          <MetricsSegment instanceUuid={instance?.uuid ?? ''} instanceId={instanceId} />
         ) : (
           <TerminalPane instanceId={instanceId} hideHeader />
         )}

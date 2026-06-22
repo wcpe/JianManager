@@ -332,6 +332,19 @@
     "worldEntities": "分世界实体",
     "worldTileEntities": "分世界方块实体"
   },
+  "probe": {
+    "title": "ServerProbe 探针更新",
+    "connected": "探针已连接",
+    "disconnected": "探针未连接",
+    "embeddedVersion": "内嵌版本",
+    "lastPushed": "上次推送",
+    "update": "更新探针",
+    "updateRestart": "更新并重启",
+    "notEmbedded": "本次构建未内嵌探针 jar（运行 make embed-probe 可捆绑）",
+    "updatedPending": "探针已推送，下次重启生效",
+    "updatedRestarted": "探针已推送，实例重启中",
+    "updateFailed": "更新探针失败"
+  },
   "nodes": {
     "title": "节点管理",
     "name": "名称",

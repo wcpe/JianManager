@@ -345,6 +345,19 @@
     "worldEntities": "Entities by World",
     "worldTileEntities": "Tile Entities by World"
   },
+  "probe": {
+    "title": "ServerProbe Update",
+    "connected": "Probe connected",
+    "disconnected": "Probe not connected",
+    "embeddedVersion": "Embedded version",
+    "lastPushed": "Last pushed",
+    "update": "Update probe",
+    "updateRestart": "Update & restart",
+    "notEmbedded": "No embedded probe jar in this build (run make embed-probe to bundle one)",
+    "updatedPending": "Probe pushed; takes effect on next restart",
+    "updatedRestarted": "Probe pushed, instance restarting",
+    "updateFailed": "Failed to update probe"
+  },
   "nodes": {
     "title": "Node Management",
     "name": "Name",

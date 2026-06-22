@@ -1,9 +1,54 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { useMetricSeries, type MetricSeries } from '@/api/metrics'
+import { useProbeUpdateStatus, useUpdateProbe } from '@/api/probe'
 import { Panel } from '@/components/ui/panel'
+import { Button } from '@/components/ui/button'
 import { TimeSeriesChart, type ChartSeries } from '@/components/charts/TimeSeriesChart'
 import { RangePicker, type MetricRange } from '@/components/charts/RangePicker'
+
+/**
+ * 探针在线更新卡（FR-068）：展示探针连接状态 + 内嵌最新版本 + 上次推送时间，
+ * 「更新探针」推送内嵌 jar（下次重启生效），「更新并重启」推送后立即重启实例生效。
+ */
+function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
+  const { t } = useTranslation()
+  const { data: st } = useProbeUpdateStatus(instanceId)
+  const update = useUpdateProbe(instanceId)
+  if (!st) return null
+  const doUpdate = (restart: boolean) =>
+    update.mutate(restart, {
+      onSuccess: (r) => toast.success(r.restarted ? t('probe.updatedRestarted') : t('probe.updatedPending')),
+      onError: () => toast.error(t('probe.updateFailed')),
+    })
+  return (
+    <Panel title={t('probe.title')}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 p-2 text-xs">
+        <span className={st.probeConnected ? 'font-medium text-green-600 dark:text-green-400' : 'text-muted-foreground'}>
+          {st.probeConnected ? t('probe.connected') : t('probe.disconnected')}
+        </span>
+        <span className="text-muted-foreground">
+          {t('probe.embeddedVersion')}: {st.embeddedAvailable ? st.embeddedVersion || '—' : 'N/A'}
+        </span>
+        {st.lastPushedAt && (
+          <span className="text-muted-foreground">
+            {t('probe.lastPushed')}: {new Date(st.lastPushedAt).toLocaleString()}
+          </span>
+        )}
+        <div className="ml-auto flex gap-2">
+          <Button size="sm" variant="outline" disabled={!st.embeddedAvailable || update.isPending} onClick={() => doUpdate(false)}>
+            {t('probe.update')}
+          </Button>
+          <Button size="sm" variant="outline" disabled={!st.embeddedAvailable || update.isPending} onClick={() => doUpdate(true)}>
+            {t('probe.updateRestart')}
+          </Button>
+        </div>
+      </div>
+      {!st.embeddedAvailable && <div className="px-2 pb-2 text-xs text-muted-foreground">{t('probe.notEmbedded')}</div>}
+    </Panel>
+  )
+}
 
 /** 字节 → G/M/K。 */
 function fmtBytes(b: number): string {
@@ -17,7 +62,7 @@ function fmtBytes(b: number): string {
  * 实例监控段（FR-060/FR-061）：消费 /metrics/series（scope=instance）渲染历史曲线——
  * TPS/MSPT/堆/在线/线程/CPU + 分世界区块。探针不可用时段渲染为断点。
  */
-export default function MetricsSegment({ instanceUuid }: { instanceUuid: string }) {
+export default function MetricsSegment({ instanceUuid, instanceId }: { instanceUuid: string; instanceId: number }) {
   const { t } = useTranslation()
   const [range, setRange] = useState<MetricRange>('24h')
   const { data, isLoading } = useMetricSeries({ scope: 'instance', targetId: instanceUuid, range })
@@ -46,6 +91,7 @@ export default function MetricsSegment({ instanceUuid }: { instanceUuid: string 
         <h3 className="text-sm font-semibold">{t('metrics.title')}</h3>
         <RangePicker value={range} onChange={setRange} />
       </div>
+      <ProbeUpdateCard instanceId={instanceId} />
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
         <Panel title={t('metrics.tps')}>
           <TimeSeriesChart series={one('inst_tps', t('metrics.tps'))} height={160} valueFormatter={(v) => v.toFixed(1)} />
