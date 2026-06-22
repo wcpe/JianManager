@@ -396,6 +396,20 @@
   - 增量 `event: player`，`data` 为单条事件 `{ "instanceUuid":"...","instanceId":3,"instanceName":"lobby","type":"player_join","timestamp":1719000000,"playerName":"alice","playerUuid":"...","server":"lobby" }`（`type` ∈ connected/disconnected/heartbeat/player_join/player_quit/chat/cross_server；cross_server 附 `fromServer`/`toServer`；chat 附 `message`）
 - **关联 FR**: FR-066
 
+### GET /api/v1/instances/:id/probe/update
+- **描述**: 探针在线更新状态（FR-068）：探针连接状态 + CP 内嵌最新探针版本/指纹 + 上次推送时间
+- **权限**: `instance.read`
+- **响应**: `{ "instanceId":3, "instanceUuid":"...", "probeConnected":true, "embeddedVersion":"0.1.0", "embeddedFingerprint":"<sha256 前缀>", "embeddedAvailable":true, "lastPushedAt":"2026-06-22T10:00:00Z" }`（`embeddedAvailable=false` 表示本次构建未 `make embed-probe`，无可推 jar）
+- **关联 FR**: FR-068 ｜ **关联 ADR**: ADR-016
+
+### POST /api/v1/instances/:id/probe/update
+- **描述**: 把 CP 内嵌最新探针 jar 经 gRPC `DeployServerProbe` 推到该实例 plugins 目录（**下次重启生效**）；`restart=true` 时推送后立即重启实例使其生效（FR-068）
+- **权限**: `instance.operate` ｜ **审计**: `instance.probe.update`
+- **请求**: `{ "restart": false }`
+- **响应**: `{ "instanceId":3, "deployed":true, "restarted":false, "probeConnected":true, "embeddedVersion":"0.1.0", "message":"已推送，下次重启生效" }`
+- **错误**: `422 PROBE_NOT_EMBEDDED`（构建未内嵌探针）、`404 NOT_FOUND`
+- **关联 FR**: FR-068
+
 ### POST /api/v1/players/:name/kick
 - **描述**: 踢出玩家，经探针插件桥 `SendPluginCommand` 向目标后端集合下发 kick（FR-067）。范围互斥：`instanceId`（单服）> `networkId`（群组）> 全部可见后端
 - **权限**: `instance.operate` | **审计**: `player.kick`
