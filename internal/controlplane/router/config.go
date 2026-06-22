@@ -37,6 +37,24 @@ func (h *ConfigHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, files)
 }
 
+// Discover 递归发现实例工作目录下全部配置文件（FR-071）。
+func (h *ConfigHandler) Discover(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	files, truncated, err := h.svc.Discover(id)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"files": files, "truncated": truncated})
+}
+
 func (h *ConfigHandler) Read(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -169,6 +187,8 @@ func (h *ConfigHandler) Rollback(c *gin.Context) {
 func (h *ConfigHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	cfg := rg.Group("/instances/:id/configs")
 	cfg.GET("", h.List)
+	// discover 为固定段，须在通配 *file 路由之前注册（gin 同前缀下静态优先，明确置前更稳）。
+	cfg.GET("/discover", h.Discover)
 	cfg.GET("/read", h.Read)
 	cfg.POST("/write", h.Write)
 	cfg.POST("/write-fields", h.WriteFields)

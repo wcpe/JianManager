@@ -63,6 +63,118 @@ func NewConfigService(db *gorm.DB, pool *cpgrpc.ClientPool) *ConfigService {
 	return &ConfigService{db: db, pool: pool}
 }
 
+// DiscoveredConfig 是递归发现到的单个配置文件（相对工作目录）。
+type DiscoveredConfig struct {
+	Path      string `json:"path"`
+	Format    string `json:"format"`
+	Supported bool   `json:"supported"`
+}
+
+// walkEntry 是目录遍历中的一个条目（解耦真实 gRPC，便于纯函数单测）。
+type walkEntry struct {
+	Name  string
+	IsDir bool
+}
+
+// configWalkLimits 限制递归发现的规模，避免超大目录拖垮节点。
+type configWalkLimits struct {
+	maxDepth int
+	maxDirs  int
+}
+
+var defaultConfigWalkLimits = configWalkLimits{maxDepth: 8, maxDirs: 2000}
+
+// walkConfigPaths 从工作目录根（"")开始广度优先遍历，收集所有配置文件相对路径。
+// listDir 抽象了「列某目录直接子项」（真实实现走 Worker.ListFiles）；
+// 任一目录列取失败时跳过该目录（不中断整体发现）。
+// 命中目录数超过 maxDirs 或深度超过 maxDepth 时停止下钻并返回 truncated=true。
+func walkConfigPaths(listDir func(dir string) ([]walkEntry, error), limits configWalkLimits) ([]DiscoveredConfig, bool) {
+	out := make([]DiscoveredConfig, 0, 32)
+	truncated := false
+	// queue 保存「待遍历目录(相对路径) + 深度」。
+	type qitem struct {
+		dir   string
+		depth int
+	}
+	queue := []qitem{{dir: "", depth: 0}}
+	visitedDirs := 0
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if visitedDirs >= limits.maxDirs {
+			truncated = true
+			break
+		}
+		visitedDirs++
+		entries, err := listDir(cur.dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			rel := e.Name
+			if cur.dir != "" {
+				rel = cur.dir + "/" + e.Name
+			}
+			if e.IsDir {
+				if cur.depth+1 > limits.maxDepth {
+					truncated = true
+					continue
+				}
+				queue = append(queue, qitem{dir: rel, depth: cur.depth + 1})
+				continue
+			}
+			if !isConfigFile(rel) {
+				continue
+			}
+			format, _ := configFormatOf(rel)
+			out = append(out, DiscoveredConfig{Path: rel, Format: format, Supported: schema.MatchPath(rel) != nil})
+		}
+	}
+	return out, truncated
+}
+
+// configFormatOf 返回文件扩展名对应的配置格式名。
+func configFormatOf(path string) (string, bool) {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".properties":
+		return "properties", true
+	case ".yml", ".yaml":
+		return "yaml", true
+	case ".toml":
+		return "toml", true
+	case ".json":
+		return "json", true
+	case ".txt", ".conf":
+		return "txt", true
+	default:
+		return "txt", false
+	}
+}
+
+// Discover 递归发现实例工作目录下全部配置文件（FR-071）。
+// 经既有 Worker.ListFiles gRPC 逐目录遍历，不新增 gRPC（不改 proto）。
+func (s *ConfigService) Discover(instanceID uint) ([]DiscoveredConfig, bool, error) {
+	inst, client, err := s.client(instanceID)
+	if err != nil {
+		return nil, false, err
+	}
+	listDir := func(dir string) ([]walkEntry, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		resp, lerr := client.Worker.ListFiles(ctx, &workerpb.ListFilesRequest{InstanceUuid: inst.UUID, Path: dir})
+		if lerr != nil {
+			return nil, lerr
+		}
+		entries := make([]walkEntry, 0, len(resp.Files))
+		for _, f := range resp.Files {
+			entries = append(entries, walkEntry{Name: f.Name, IsDir: f.IsDir})
+		}
+		return entries, nil
+	}
+	files, truncated := walkConfigPaths(listDir, defaultConfigWalkLimits)
+	return files, truncated, nil
+}
+
 func (s *ConfigService) List(instanceID uint, path string) ([]ConfigFileInfo, error) {
 	inst, client, err := s.client(instanceID)
 	if err != nil {
