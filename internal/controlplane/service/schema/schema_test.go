@@ -99,9 +99,8 @@ func TestServerPropertiesModel_HasCoreKeys(t *testing.T) {
 
 func TestCrossFileConsistency_PortUnique(t *testing.T) {
 	cfgs := []ParsedConfig{
-		{Path: "server.properties", Fields: []*workerpb.ConfigField{{Key: "server-port", Value: "25565"}}},
-		{Path: "server.properties", Fields: []*workerpb.ConfigField{{Key: "server-port", Value: "25565"}}},
-		{Path: "server.properties", Fields: []*workerpb.ConfigField{{Key: "rcon.port", Value: "25565"}}},
+		{Path: "a/server.properties", Fields: []*workerpb.ConfigField{{Key: "server-port", Value: "25565"}}},
+		{Path: "b/server.properties", Fields: []*workerpb.ConfigField{{Key: "server-port", Value: "25565"}}},
 	}
 	issues := CheckPortConflicts(cfgs)
 	hasDup := false
