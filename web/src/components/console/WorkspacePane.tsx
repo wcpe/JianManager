@@ -11,7 +11,7 @@ import TerminalPane from './TerminalPane'
 import BotSegment from './BotSegment'
 import MetricsSegment from './MetricsSegment'
 import ResourceExplorer from '@/components/explorer/ResourceExplorer'
-import ConfigEditor from '@/components/ConfigEditor'
+import ConfigExplorer from '@/components/config-explorer/ConfigExplorer'
 import PluginManager from '@/components/plugins/PluginManager'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
@@ -100,7 +100,7 @@ export default function WorkspacePane({ instanceId }: WorkspacePaneProps) {
           </div>
         ) : segment === 'config' ? (
           <div className="p-4">
-            <ConfigEditor instanceId={instanceId} />
+            <ConfigExplorer instanceId={instanceId} />
           </div>
         ) : segment === 'plugins' ? (
           <div className="p-4">

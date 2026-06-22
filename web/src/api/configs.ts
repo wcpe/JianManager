@@ -81,6 +81,30 @@ export interface ConfigDiff {
   toContent: string
 }
 
+/** 递归发现的单个配置文件（与后端 service.DiscoveredConfig 对应，FR-071）。 */
+export interface DiscoveredConfig {
+  path: string
+  format: string
+  supported: boolean
+}
+
+export interface ConfigDiscoverResult {
+  files: DiscoveredConfig[]
+  truncated: boolean
+}
+
+/** 递归发现实例 server 目录下全部配置文件（FR-071，不限内置 schema）。 */
+export function useConfigDiscover(instanceId: number) {
+  return useQuery({
+    queryKey: ['configs', instanceId, 'discover'],
+    queryFn: async () => {
+      const { data } = await api.get<ConfigDiscoverResult>(`/instances/${instanceId}/configs/discover`)
+      return data
+    },
+    enabled: !!instanceId,
+  })
+}
+
 /** 列出实例可管理配置文件。 */
 export function useConfigFiles(instanceId: number, path = '') {
   return useQuery({

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useQueryClient } from '@tanstack/react-query'
@@ -40,15 +40,55 @@ import {
 import { joinPath, baseName, isValidName } from './paths'
 
 /**
+ * 配置增强能力（FR-071）。注入后资源管理器在「配置」语义下复用：
+ * 打开文件时改用配置编辑器（schema 双模式 + 跨文件校验 + 配置版本），
+ * 左栏顶部插入收藏/已发现配置，历史按钮打开配置版本抽屉。不注入时为纯文件资源管理器（FR-070）。
+ */
+export interface ConfigCapabilities {
+  /**
+   * 渲染打开文件的编辑器（取代默认 CodeEditor 面板）。
+   * 自行读取/保存内容（走配置端点，生成配置版本），保存后调用 onAfterSave 让资源管理器刷新树与版本缓存。
+   */
+  renderEditor: (args: {
+    instanceId: number
+    path: string
+    name: string
+    onClose: () => void
+    onAfterSave: () => void
+    onOpenVersions: () => void
+  }) => ReactNode
+  /** 左栏目录树上方的额外内容（收藏栏 + 已发现配置面板）。 */
+  sidebarExtra?: ReactNode
+  /**
+   * 渲染配置版本抽屉（取代文件版本抽屉）。
+   * filePath 为当前查看版本的文件；onRolledBack 在回滚后触发（供编辑器重载）。
+   */
+  renderVersionDrawer: (args: {
+    instanceId: number
+    filePath: string | null
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    onRolledBack: () => void
+  }) => ReactNode
+}
+
+/**
  * 共享资源管理器（FR-070）。
  *
  * 双栏：左懒加载目录树 + 右目录内容/编辑器。统管选中/多选/剪贴板/编辑态/历史抽屉。
  * 是 FR-071/073/074/075/082/083/084 复用的入口——对外仅依赖 `instanceId`，
  * 所有文件操作经 `@/api/files`（既有后端端点 + 批量 zip）。
+ *
+ * 传入 `config`（FR-071）时叠加配置语义：打开文件改用配置编辑器、左栏插收藏/发现、历史走配置版本抽屉；
+ * 不传时行为与 FR-070 完全一致。
  */
 interface ResourceExplorerProps {
   /** 实例 ID。 */
   instanceId: number
+  /** 配置增强（FR-071）。省略即为纯文件资源管理器。 */
+  config?: ConfigCapabilities
+  /** 允许外部打开指定相对路径文件（收藏/发现面板点选）。 */
+  openPathRef?: (open: (path: string) => void) => void
 }
 
 /** 打开的编辑文件状态。 */
@@ -63,9 +103,10 @@ interface OpenFile {
   draft: string
 }
 
-export default function ResourceExplorer({ instanceId }: ResourceExplorerProps) {
+export default function ResourceExplorer({ instanceId, config, openPathRef }: ResourceExplorerProps) {
   const { t } = useTranslation()
   const qc = useQueryClient()
+  const configMode = config != null
 
   // 当前目录（相对工作目录，空串=根）。
   const [currentDir, setCurrentDir] = useState('')
@@ -148,23 +189,43 @@ export default function ResourceExplorer({ instanceId }: ResourceExplorerProps) 
     [selectedNames, currentDir],
   )
 
-  // ---- 打开（双击）----
+  // ---- 打开（双击 / 收藏·发现面板点选）----
+  // 配置模式下编辑器自行读取内容（走配置端点），故只记录打开路径，不预读。
+  const openByPath = useCallback(
+    async (path: string, name: string) => {
+      if (configMode) {
+        setOpenFile({ path, name, saved: '', draft: '' })
+        return
+      }
+      try {
+        const content = await readFileContent(instanceId, path)
+        setOpenFile({ path, name, saved: content, draft: content })
+      } catch {
+        toast.error(t('files.loadFailed'))
+      }
+    },
+    [configMode, instanceId, t],
+  )
+
   const openEntry = useCallback(
     async (file: FileInfo) => {
       if (file.isDir) {
         navigate(joinPath(currentDir, file.name))
         return
       }
-      const path = joinPath(currentDir, file.name)
-      try {
-        const content = await readFileContent(instanceId, path)
-        setOpenFile({ path, name: file.name, saved: content, draft: content })
-      } catch {
-        toast.error(t('files.loadFailed'))
-      }
+      await openByPath(joinPath(currentDir, file.name), file.name)
     },
-    [currentDir, instanceId, navigate, t],
+    [currentDir, navigate, openByPath],
   )
+
+  // 暴露「按路径打开」给外部（收藏/发现面板）。
+  useEffect(() => {
+    if (!openPathRef) return
+    openPathRef((path: string) => {
+      const name = path.split('/').pop() || path
+      void openByPath(path, name)
+    })
+  }, [openPathRef, openByPath])
 
   // ---- 保存（Ctrl+S）----
   const saveOpenFile = useCallback(async () => {
@@ -393,15 +454,18 @@ export default function ResourceExplorer({ instanceId }: ResourceExplorerProps) 
 
   return (
     <div className="flex h-[600px] overflow-hidden rounded-lg border">
-      {/* 左：目录树 */}
-      <div className="w-56 shrink-0 overflow-auto border-r bg-muted/20 p-1">
-        <FileTree
-          instanceId={instanceId}
-          currentDir={currentDir}
-          onSelectDir={navigate}
-          onDropMove={onDropMove}
-          refreshKey={treeRefresh}
-        />
+      {/* 左：收藏/发现（配置模式）+ 目录树 */}
+      <div className="flex w-56 shrink-0 flex-col overflow-hidden border-r bg-muted/20">
+        {config?.sidebarExtra}
+        <div className="min-h-0 flex-1 overflow-auto p-1">
+          <FileTree
+            instanceId={instanceId}
+            currentDir={currentDir}
+            onSelectDir={navigate}
+            onDropMove={onDropMove}
+            refreshKey={treeRefresh}
+          />
+        </div>
       </div>
 
       {/* 右：工具栏 + 内容/编辑器 */}
@@ -441,53 +505,65 @@ export default function ResourceExplorer({ instanceId }: ResourceExplorerProps) 
             />
           </div>
 
-          {/* 编辑器 */}
-          {openFile && (
-            <div className="flex w-1/2 min-w-0 flex-col">
-              <div className="flex items-center justify-between border-b bg-muted/30 px-2 py-1 text-sm">
-                <span className="truncate font-medium">
-                  {openFile.name}
-                  {dirty && <span className="ml-1 text-amber-500">•</span>}
-                </span>
-                <div className="flex items-center gap-1">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 gap-1 px-2 text-xs"
-                    onClick={() => setVersionFor(openFile.path)}
-                  >
-                    <History className="size-3.5" /> {t('fileVersions.title')}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 gap-1 px-2 text-xs"
-                    disabled={!dirty}
-                    onClick={() => void saveOpenFile()}
-                  >
-                    <Save className="size-3.5" /> {t('files.save')}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="h-7 px-1.5"
-                    title={t('common.close')}
-                    onClick={() => setOpenFile(null)}
-                  >
-                    <X className="size-3.5" />
-                  </Button>
+          {/* 编辑器：配置模式用注入的配置编辑器，否则默认 CodeEditor */}
+          {openFile &&
+            (config ? (
+              <div className="flex w-1/2 min-w-0 flex-col">
+                {config.renderEditor({
+                  instanceId,
+                  path: openFile.path,
+                  name: openFile.name,
+                  onClose: () => setOpenFile(null),
+                  onAfterSave: refreshAll,
+                  onOpenVersions: () => setVersionFor(openFile.path),
+                })}
+              </div>
+            ) : (
+              <div className="flex w-1/2 min-w-0 flex-col">
+                <div className="flex items-center justify-between border-b bg-muted/30 px-2 py-1 text-sm">
+                  <span className="truncate font-medium">
+                    {openFile.name}
+                    {dirty && <span className="ml-1 text-amber-500">•</span>}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 gap-1 px-2 text-xs"
+                      onClick={() => setVersionFor(openFile.path)}
+                    >
+                      <History className="size-3.5" /> {t('fileVersions.title')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 gap-1 px-2 text-xs"
+                      disabled={!dirty}
+                      onClick={() => void saveOpenFile()}
+                    >
+                      <Save className="size-3.5" /> {t('files.save')}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-1.5"
+                      title={t('common.close')}
+                      onClick={() => setOpenFile(null)}
+                    >
+                      <X className="size-3.5" />
+                    </Button>
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1">
+                  <CodeEditor
+                    value={openFile.draft}
+                    filename={openFile.name}
+                    onChange={(v) => setOpenFile((f) => (f ? { ...f, draft: v } : f))}
+                    onSave={() => void saveOpenFile()}
+                  />
                 </div>
               </div>
-              <div className="min-h-0 flex-1">
-                <CodeEditor
-                  value={openFile.draft}
-                  filename={openFile.name}
-                  onChange={(v) => setOpenFile((f) => (f ? { ...f, draft: v } : f))}
-                  onSave={() => void saveOpenFile()}
-                />
-              </div>
-            </div>
-          )}
+            ))}
         </div>
       </div>
 
@@ -522,23 +598,37 @@ export default function ResourceExplorer({ instanceId }: ResourceExplorerProps) 
         onCancel={() => setDeleteTargets(null)}
       />
 
-      {/* 历史版本抽屉（FR-051 复用）。 */}
-      <VersionDrawer
-        instanceId={instanceId}
-        filePath={versionFor}
-        open={versionFor !== null}
-        onOpenChange={(o) => {
-          if (!o) setVersionFor(null)
-        }}
-        onRolledBack={() => {
-          // 回滚改变文件内容：若正编辑同一文件，重新载入。
-          if (openFile && versionFor === openFile.path) {
-            void readFileContent(instanceId, openFile.path).then((content) =>
-              setOpenFile((f) => (f ? { ...f, saved: content, draft: content } : f)),
-            )
-          }
-        }}
-      />
+      {/* 历史版本抽屉：配置模式用配置版本抽屉（FR-031），否则文件版本抽屉（FR-051）。 */}
+      {config ? (
+        config.renderVersionDrawer({
+          instanceId,
+          filePath: versionFor,
+          open: versionFor !== null,
+          onOpenChange: (o: boolean) => {
+            if (!o) setVersionFor(null)
+          },
+          onRolledBack: () => {
+            // 回滚改变文件内容：配置版本抽屉已失效配置读取缓存，配置编辑器经 React Query 自动重载。
+          },
+        })
+      ) : (
+        <VersionDrawer
+          instanceId={instanceId}
+          filePath={versionFor}
+          open={versionFor !== null}
+          onOpenChange={(o) => {
+            if (!o) setVersionFor(null)
+          }}
+          onRolledBack={() => {
+            // 回滚改变文件内容：若正编辑同一文件，重新载入。
+            if (openFile && versionFor === openFile.path) {
+              void readFileContent(instanceId, openFile.path).then((content) =>
+                setOpenFile((f) => (f ? { ...f, saved: content, draft: content } : f)),
+              )
+            }
+          }}
+        />
+      )}
     </div>
   )
 }

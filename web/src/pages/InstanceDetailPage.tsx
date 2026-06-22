@@ -4,7 +4,7 @@ import { useInstance, useStartInstance, useStopInstance, useRestartInstance, use
 import { useInstanceMetrics } from '@/api/metrics'
 import { useTerminalToken } from '@/api/terminal'
 import { useBots } from '@/api/bots'
-import ConfigEditor from '@/components/ConfigEditor'
+import ConfigExplorer from '@/components/config-explorer/ConfigExplorer'
 import ResourceExplorer from '@/components/explorer/ResourceExplorer'
 import PluginManager from '@/components/plugins/PluginManager'
 import TerminalComponent from '@/components/Terminal'
@@ -279,7 +279,7 @@ function ConfigTab({
 }: {
   instanceId: number
 }) {
-  return <ConfigEditor instanceId={instanceId} />
+  return <ConfigExplorer instanceId={instanceId} />
 }
 
 function BackupsTab() {
