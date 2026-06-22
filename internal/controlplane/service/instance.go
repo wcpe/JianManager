@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -41,11 +42,21 @@ type InstanceService struct {
 	// settings 提供平台设置生效值（graceful_stop.timeout），随启动下发使优雅停止超时真生效；
 	// 为 nil 时不下发，Worker 回退本地 env/默认（FR-063）。
 	settings SettingsReader
+
+	// bgCtx/bgCancel 管理后台 Worker 委托 goroutine 的生命周期；bgWG 用于优雅关闭时 join，
+	// bgMu 保护「取消」与「登记新委托」之间的竞态（避免 WaitGroup 的 Add-after-Wait）。
+	// 委托是 fire-and-forget 的（见 Start/Stop/Restart/Kill），无 join 会在进程/测试退出后
+	// 仍向已关闭的依赖写库。参见 Shutdown。
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+	bgWG     sync.WaitGroup
+	bgMu     sync.Mutex
 }
 
 // NewInstanceService 创建实例服务。
 func NewInstanceService(db *gorm.DB, groupSvc *GroupService, pool *cpgrpc.ClientPool) *InstanceService {
-	return &InstanceService{db: db, groupSvc: groupSvc, pool: pool}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &InstanceService{db: db, groupSvc: groupSvc, pool: pool, bgCtx: ctx, bgCancel: cancel}
 }
 
 // SetSettingsReader 注入平台设置读取器（FR-063）。在 main 装配阶段调用，避免构造期循环依赖。
@@ -427,7 +438,7 @@ func (s *InstanceService) Start(id uint) error {
 	}
 
 	// 委托给 Worker Node
-	go s.delegateToWorker(instance, "start")
+	s.spawnDelegate(instance, "start")
 
 	return nil
 }
@@ -443,7 +454,7 @@ func (s *InstanceService) Stop(id uint) error {
 		return err
 	}
 
-	go s.delegateToWorker(instance, "stop")
+	s.spawnDelegate(instance, "stop")
 
 	return nil
 }
@@ -459,7 +470,7 @@ func (s *InstanceService) Restart(id uint) error {
 		return err
 	}
 
-	go s.delegateToWorker(instance, "restart")
+	s.spawnDelegate(instance, "restart")
 
 	return nil
 }
@@ -475,7 +486,7 @@ func (s *InstanceService) Kill(id uint) error {
 		return err
 	}
 
-	go s.delegateToWorker(instance, "kill")
+	s.spawnDelegate(instance, "kill")
 
 	return nil
 }
@@ -573,6 +584,34 @@ func (s *InstanceService) resolveJDKPath(instance *model.Instance) (string, erro
 		}
 	}
 	return "", nil
+}
+
+// spawnDelegate 在后台异步委托实例动作给 Worker，并登记到 bgWG 以便优雅关闭时 join。
+// Shutdown 之后（bgCtx 取消）不再发起新委托，避免向已关闭的依赖（如测试退出后关闭的 DB）写库。
+func (s *InstanceService) spawnDelegate(instance *model.Instance, action string) {
+	s.bgMu.Lock()
+	if s.bgCtx.Err() != nil {
+		s.bgMu.Unlock()
+		return
+	}
+	s.bgWG.Add(1)
+	s.bgMu.Unlock()
+
+	go func() {
+		defer s.bgWG.Done()
+		s.delegateToWorker(instance, action)
+	}()
+}
+
+// Shutdown 停止接受新的后台 Worker 委托并等待在途委托完成。
+// 用途：① 进程优雅关闭时确保异步状态回写收尾、不泄漏 goroutine；
+// ② 无 Worker 连接的测试中于装配后立即调用以禁用异步委托——否则委托因节点不可达
+// 把状态异步覆盖为 CRASHED，并可能在用例结束关闭 DB 后仍写库，引入竞态。
+func (s *InstanceService) Shutdown() {
+	s.bgMu.Lock()
+	s.bgCancel()
+	s.bgMu.Unlock()
+	s.bgWG.Wait()
 }
 
 // delegateToWorker 委托实例操作给 Worker Node。

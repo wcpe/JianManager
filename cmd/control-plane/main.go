@@ -53,6 +53,8 @@ func main() {
 	nodeSvc := service.NewNodeService(db)
 	pool := cpgrpc.NewClientPool()
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
+	// 优雅关闭：停止接受新的后台 Worker 委托并等待在途异步状态回写收尾，避免泄漏 goroutine。
+	defer instanceSvc.Shutdown()
 	instanceBatchSvc := service.NewInstanceBatchService(db, pool)
 	// 回填实例服务，供节点排空（drain）复用实例停止逻辑（FR-048）。
 	nodeSvc.SetInstanceService(instanceSvc)
