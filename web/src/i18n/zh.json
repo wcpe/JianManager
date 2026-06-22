@@ -69,7 +69,7 @@
     "preview": "预检",
     "submit": "复制",
     "cloning": "复制中…",
-    "allocated": "将分配：端口 {{server}}/{{rcon}}/{{query}}，目录 {{workDir}}",
+    "allocated": "将分配：端口 {{server}}/{{query}}，目录 {{workDir}}",
     "excluded": "将排除：{{list}}",
     "success": "已复制为「{{name}}」，可独立启动",
     "failed": "复制失败",
@@ -195,10 +195,9 @@
     "instance": "实例",
     "role": "角色",
     "serverPort": "监听端口",
-    "rconPort": "RCON",
     "queryPort": "Query",
     "empty": "该节点暂无端口占用",
-    "range": "分配范围：server {{server}}+ / rcon {{rcon}}+（每段 {{size}} 个）"
+    "range": "分配范围：server {{server}}+（每段 {{size}} 个）"
   },
   "danger": {
     "denied": "你的角色无权执行此操作，请联系管理员。",

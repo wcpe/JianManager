@@ -15,7 +15,7 @@ interface CloneInstanceDialogProps {
 
 /**
  * 一键复制子服向导（FR-036）：复制为独立新实例，系统分配新目录/端口，排除运行态文件，
- * 修正端口/rcon/motd 并可选注册进代理。支持预检（dryRun）。
+ * 修正端口/motd 并可选注册进代理。支持预检（dryRun）。
  */
 export default function CloneInstanceDialog({ sourceId, sourceName, onClose }: CloneInstanceDialogProps) {
   const { t } = useTranslation()
@@ -112,7 +112,6 @@ export default function CloneInstanceDialog({ sourceId, sourceName, onClose }: C
             <div className="text-xs bg-muted/40 rounded-md p-3 space-y-1">
               <p>{t('clone.allocated', {
                 server: preview.allocated.serverPort,
-                rcon: preview.allocated.rconPort,
                 query: preview.allocated.queryPort,
                 workDir: preview.allocated.workDir,
               })}</p>

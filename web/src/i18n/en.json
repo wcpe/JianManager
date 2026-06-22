@@ -69,7 +69,7 @@
     "preview": "Preflight",
     "submit": "Clone",
     "cloning": "Cloning…",
-    "allocated": "Will allocate: ports {{server}}/{{rcon}}/{{query}}, dir {{workDir}}",
+    "allocated": "Will allocate: ports {{server}}/{{query}}, dir {{workDir}}",
     "excluded": "Will exclude: {{list}}",
     "success": "Cloned as \"{{name}}\", ready to start",
     "failed": "Clone failed",
@@ -195,10 +195,9 @@
     "instance": "Instance",
     "role": "Role",
     "serverPort": "Listen Port",
-    "rconPort": "RCON",
     "queryPort": "Query",
     "empty": "No ports in use on this node",
-    "range": "Allocation: server {{server}}+ / rcon {{rcon}}+ ({{size}} per range)"
+    "range": "Allocation: server {{server}}+ ({{size}} per range)"
   },
   "danger": {
     "denied": "Your role is not allowed to perform this action. Contact an administrator.",

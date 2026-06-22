@@ -14,7 +14,7 @@ export interface CloneBody {
 /** 复制结果（dryRun 时 instance 为空）。 */
 export interface CloneResult {
   instance?: InstanceInfo
-  allocated: { workDir: string; serverPort: number; rconPort: number; queryPort: number }
+  allocated: { workDir: string; serverPort: number; queryPort: number }
   excluded: string[]
   registrations?: unknown[]
   warnings?: string[]

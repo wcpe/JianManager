@@ -27,7 +27,7 @@ import {
 
 type Tab = 'online' | 'live' | 'bans' | 'whitelist'
 
-/** 玩家管理页（FR-054）：经各后端 RCON 聚合在线玩家、踢/封/解封、白名单与封禁记录。 */
+/** 玩家管理页（FR-054 + FR-066 实时事件）：经各后端探针聚合在线玩家、踢/封/解封、白名单与封禁记录（FR-067 退役 RCON）。 */
 export default function PlayersPage() {
   const { t } = useTranslation()
   const [tab, setTab] = useState<Tab>('online')

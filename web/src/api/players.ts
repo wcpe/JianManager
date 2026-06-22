@@ -10,7 +10,7 @@ export interface OnlinePlayer {
   instanceName: string
 }
 
-/** 单个后端子服的 RCON 可用性（优雅降级提示）。 */
+/** 单个后端子服的探针可用性（优雅降级提示，FR-067）。 */
 export interface BackendStatus {
   instanceId: number
   instanceName: string
@@ -64,7 +64,7 @@ export interface PlayerActionScope {
   reason?: string
 }
 
-/** 在线玩家列表（聚合可达后端 RCON，标注所在子服）。每 10s 刷新。 */
+/** 在线玩家列表（聚合可达后端探针，标注所在子服，FR-067）。每 10s 刷新。 */
 export function useOnlinePlayers() {
   return useQuery({
     queryKey: ['players', 'online'],
