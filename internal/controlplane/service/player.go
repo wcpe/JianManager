@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
@@ -15,21 +16,33 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// 玩家管理相关错误（FR-054）。
+// 玩家管理相关错误（FR-054 / FR-067）。
 var (
 	ErrNoReachableBackend = errors.New("没有可达的后端子服")
 	ErrInvalidBanScope    = errors.New("不支持的封禁范围")
 )
 
-// rconExecTimeout 单次 RCON 命令的 gRPC 调用超时。
-// RCON 文本协议同步往返，5s 足够；放大会拖慢跨多后端的聚合。
-const rconExecTimeout = 5 * time.Second
+// 探针治理指令 action（FR-067，见 ADR-016；与探针侧 BridgePlayerGovernor 约定一致）。
+const (
+	pluginActionKick           = "kick"
+	pluginActionBan            = "ban"
+	pluginActionUnban          = "unban"
+	pluginActionWhitelistAdd   = "whitelist_add"
+	pluginActionWhitelistRemove = "whitelist_remove"
+	pluginActionList           = "list"            // 在线玩家列表
+	pluginActionWhitelistList  = "whitelist_list"  // 白名单列表
+)
 
-// PlayerService 玩家管理服务（FR-054）。
+// pluginExecTimeout 单次治理指令的 gRPC 调用超时（含 Worker 等探针回执的时间）。
+// 须大于 Worker 侧 pluginCommandTimeout(5s)，留出网络与排队余量。
+const pluginExecTimeout = 8 * time.Second
+
+// PlayerService 玩家管理服务（FR-054 治理能力，FR-067 迁移到探针）。
 //
-// 在线玩家、踢/封/解封、白名单均经各后端子服的 RCON 实现：CP 持有 RCON 凭据，
-// 经 Worker 的 ExecRconCommand 下发命令。BC 跨服感知通过聚合「群组内各后端的 list」
-// 并标注玩家所在子服实现；封禁记录入库留档（model.BanRecord）。
+// 在线玩家、踢/封/解封、白名单均经各后端子服的 ServerProbe 探针实现（退役 RCON，见 ADR-016）：
+// CP 经 Worker 的 SendPluginCommand(wait=true) 下发治理指令，探针执行平台 API 后同步回执。
+// BC 跨服感知通过聚合「群组内各后端探针的 list」并标注玩家所在子服实现；封禁记录入库留档
+// （model.BanRecord）。实时在线列表另由 PlayerEventService 的事件名册提供（FR-066）。
 type PlayerService struct {
 	db   *gorm.DB
 	pool *cpgrpc.ClientPool
@@ -101,7 +114,7 @@ func (s *PlayerService) OnlinePlayers(scopeIDs []uint, scoped bool) (*OnlinePlay
 
 	result := &OnlinePlayersResult{Players: []OnlinePlayer{}, Backends: []BackendStatus{}}
 	for _, b := range backends {
-		out, available, execErr := s.execRcon(&b, "list")
+		out, available, execErr := s.execPluginCommand(&b, pluginActionList, "", nil)
 		st := BackendStatus{InstanceID: b.ID, InstanceName: b.Name, Available: available}
 		if !available {
 			st.Error = execErr
@@ -127,7 +140,7 @@ func (s *PlayerService) OnlinePlayers(scopeIDs []uint, scoped bool) (*OnlinePlay
 	return result, nil
 }
 
-// Kick 踢出玩家：向目标后端集合下发 RCON `kick <name> [reason]`。
+// Kick 踢出玩家：向目标后端集合的探针下发 kick 指令（FR-067）。
 func (s *PlayerService) Kick(player string, scope PlayerActionScope, scopeIDs []uint, scoped bool) (*PlayerActionResult, error) {
 	player = strings.TrimSpace(player)
 	if player == "" {
@@ -137,14 +150,10 @@ func (s *PlayerService) Kick(player string, scope PlayerActionScope, scopeIDs []
 	if err != nil {
 		return nil, err
 	}
-	cmd := "kick " + player
-	if r := strings.TrimSpace(scope.Reason); r != "" {
-		cmd += " " + r
-	}
-	return s.fanout(player, "kick", cmd, targets), nil
+	return s.fanout(player, pluginActionKick, scope.Reason, targets), nil
 }
 
-// Ban 封禁玩家：向目标后端集合下发 RCON `ban <name> [reason]`，并写入封禁记录。
+// Ban 封禁玩家：向目标后端集合的探针下发 ban 指令，并写入封禁记录（FR-067）。
 // operatorID 用于审计与解封追溯。
 func (s *PlayerService) Ban(player string, scope PlayerActionScope, operatorID uint, scopeIDs []uint, scoped bool) (*PlayerActionResult, error) {
 	player = strings.TrimSpace(player)
@@ -155,11 +164,7 @@ func (s *PlayerService) Ban(player string, scope PlayerActionScope, operatorID u
 	if err != nil {
 		return nil, err
 	}
-	cmd := "ban " + player
-	if r := strings.TrimSpace(scope.Reason); r != "" {
-		cmd += " " + r
-	}
-	res := s.fanout(player, "ban", cmd, targets)
+	res := s.fanout(player, pluginActionBan, scope.Reason, targets)
 
 	// 入库留档：即便部分后端 RCON 不可用，只要发起了封禁即记录（权威以服务端 banned-players 为准，
 	// 本记录是平台侧台账）。范围按 scope 归类。
@@ -170,7 +175,7 @@ func (s *PlayerService) Ban(player string, scope PlayerActionScope, operatorID u
 	return res, nil
 }
 
-// Unban 解封玩家：向目标后端集合下发 RCON `pardon <name>`，并把对应封禁记录置为失效。
+// Unban 解封玩家：向目标后端集合的探针下发 unban 指令，并把对应封禁记录置为失效（FR-067）。
 func (s *PlayerService) Unban(player string, scope PlayerActionScope, scopeIDs []uint, scoped bool) (*PlayerActionResult, error) {
 	player = strings.TrimSpace(player)
 	if player == "" {
@@ -180,7 +185,7 @@ func (s *PlayerService) Unban(player string, scope PlayerActionScope, scopeIDs [
 	if err != nil {
 		return nil, err
 	}
-	res := s.fanout(player, "unban", "pardon "+player, targets)
+	res := s.fanout(player, pluginActionUnban, "", targets)
 
 	// 解封该玩家在本平台仍生效的封禁记录（保留历史，置 Active=false + 解封时间）。
 	now := time.Now()
@@ -200,13 +205,13 @@ type WhitelistResult struct {
 	Error      string   `json:"error,omitempty"`
 }
 
-// Whitelist 查询单个后端子服的白名单（RCON `whitelist list`）。
+// Whitelist 查询单个后端子服的白名单（探针 whitelist_list，FR-067）。
 func (s *PlayerService) Whitelist(instanceID uint) (*WhitelistResult, error) {
 	b, err := s.backendByID(instanceID)
 	if err != nil {
 		return nil, err
 	}
-	out, available, execErr := s.execRcon(b, "whitelist list")
+	out, available, execErr := s.execPluginCommand(b, pluginActionWhitelistList, "", nil)
 	res := &WhitelistResult{InstanceID: instanceID, Available: available, Players: []string{}}
 	if !available {
 		res.Error = execErr
@@ -216,9 +221,15 @@ func (s *PlayerService) Whitelist(instanceID uint) (*WhitelistResult, error) {
 	return res, nil
 }
 
-// WhitelistAction 对单个后端子服的白名单增/删（RCON `whitelist add|remove <name>`）。
+// WhitelistAction 对单个后端子服的白名单增/删（探针 whitelist_add|whitelist_remove，FR-067）。
 func (s *PlayerService) WhitelistAction(instanceID uint, action, player string) (*PlayerActionItem, error) {
-	if action != "add" && action != "remove" {
+	var pluginAction string
+	switch action {
+	case "add":
+		pluginAction = pluginActionWhitelistAdd
+	case "remove":
+		pluginAction = pluginActionWhitelistRemove
+	default:
 		return nil, fmt.Errorf("不支持的白名单操作: %s", action)
 	}
 	player = strings.TrimSpace(player)
@@ -229,7 +240,7 @@ func (s *PlayerService) WhitelistAction(instanceID uint, action, player string) 
 	if err != nil {
 		return nil, err
 	}
-	out, available, execErr := s.execRcon(b, "whitelist "+action+" "+player)
+	out, available, execErr := s.execPluginCommand(b, pluginAction, player, nil)
 	item := &PlayerActionItem{InstanceID: b.ID, InstanceName: b.Name, OK: available, Output: out}
 	if !available {
 		item.Error = execErr
@@ -363,12 +374,12 @@ func (s *PlayerService) backendByID(instanceID uint) (*model.Instance, error) {
 	return &inst, nil
 }
 
-// fanout 向目标后端集合逐一下发同一条 RCON 命令，汇总结果（单点失败不中断）。
-func (s *PlayerService) fanout(player, action, command string, targets []model.Instance) *PlayerActionResult {
+// fanout 向目标后端集合逐一下发同一治理 action（探针），汇总结果（单点失败不中断）。
+func (s *PlayerService) fanout(player, action, reason string, targets []model.Instance) *PlayerActionResult {
 	res := &PlayerActionResult{Player: player, Action: action, Total: len(targets), Results: []PlayerActionItem{}}
 	for i := range targets {
 		t := targets[i]
-		out, available, execErr := s.execRcon(&t, command)
+		out, available, execErr := s.execPluginCommand(&t, action, player, &reason)
 		item := PlayerActionItem{InstanceID: t.ID, InstanceName: t.Name, OK: available, Output: out}
 		if available {
 			res.Succeeded++
@@ -381,9 +392,11 @@ func (s *PlayerService) fanout(player, action, command string, targets []model.I
 	return res
 }
 
-// execRcon 经 Worker 的 ExecRconCommand 在指定实例上执行一条 RCON 命令。
-// 返回 (输出, 是否可用, 错误信息文本)。任何失败均归为「不可用」，由调用方优雅降级。
-func (s *PlayerService) execRcon(inst *model.Instance, command string) (output string, available bool, errMsg string) {
+// execPluginCommand 经 Worker 的 SendPluginCommand(wait=true) 在指定实例的探针上执行一条治理/查询指令（FR-067）。
+// target 为目标玩家名（list/whitelist_list 时为空），reason 仅 kick/ban 用（nil 表示不带）。
+// 返回 (输出, 是否可用, 错误信息文本)。任何失败（节点未连/探针未连/超时/执行失败）均归为「不可用」，
+// 由调用方优雅降级（取代退役的 RCON 路径）。
+func (s *PlayerService) execPluginCommand(inst *model.Instance, action, target string, reason *string) (output string, available bool, errMsg string) {
 	var node model.Node
 	if err := s.db.First(&node, inst.NodeID).Error; err != nil {
 		return "", false, "节点不存在"
@@ -393,19 +406,27 @@ func (s *PlayerService) execRcon(inst *model.Instance, command string) (output s
 		return "", false, "节点未连接"
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), rconExecTimeout)
+	cmd := &workerpb.PluginCommand{
+		Action:    action,
+		Target:    target,
+		RequestId: uuid.NewString(),
+	}
+	if reason != nil {
+		cmd.Reason = strings.TrimSpace(*reason)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), pluginExecTimeout)
 	defer cancel()
 
-	resp, err := client.Worker.ExecRconCommand(ctx, &workerpb.ExecRconCommandRequest{
+	resp, err := client.Worker.SendPluginCommand(ctx, &workerpb.SendPluginCommandRequest{
 		InstanceUuid: inst.UUID,
-		Command:      command,
-		RconPort:     int32(inst.RCONPort),
-		RconPassword: inst.RCONPassword,
+		Command:      cmd,
+		Wait:         true,
 	})
 	if err != nil {
-		return "", false, "RCON 调用失败"
+		return "", false, "探针指令调用失败"
 	}
-	if !resp.Available {
+	if !resp.Success {
 		return "", false, fallbackMsg(resp.Error)
 	}
 	return resp.Output, true, ""
@@ -414,7 +435,7 @@ func (s *PlayerService) execRcon(inst *model.Instance, command string) (output s
 // fallbackMsg 兜底错误文案。
 func fallbackMsg(s string) string {
 	if strings.TrimSpace(s) == "" {
-		return "RCON 不可用"
+		return "探针不可用"
 	}
 	return s
 }

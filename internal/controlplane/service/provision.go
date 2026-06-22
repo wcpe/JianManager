@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,10 +82,8 @@ func (p *ProvisionService) ProvisionBukkit(ctx context.Context, req ProvisionBuk
 		JDKID:        req.JDKID,
 		LaunchSpec:   string(specJSON),
 		ServerPort:   ports.ServerPort,
-		RCONPort:     ports.RCONPort,
 		QueryPort:    ports.QueryPort,
 		ProbePort:    ports.ProbePort,
-		RCONPassword: randRCONPassword(),
 		AutoRestart:  true,
 		GroupID:      req.GroupID,
 	})
@@ -148,7 +144,7 @@ func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.In
 	defer cancel2()
 	configs := []struct{ path, content string }{
 		{"eula.txt", "eula=true\n"},
-		{"server.properties", buildServerProperties(inst.ServerPort, inst.RCONPort, inst.QueryPort, inst.RCONPassword, onlineMode)},
+		{"server.properties", buildServerProperties(inst.ServerPort, inst.QueryPort, onlineMode)},
 	}
 	for _, c := range configs {
 		resp, werr := client.Worker.WriteConfig(cfgCtx, &workerpb.WriteConfigRequest{
@@ -220,25 +216,14 @@ func (p *ProvisionService) bridgeConfigBlock(instanceUUID string, wsPort int) st
 }
 
 // buildServerProperties 生成基础 server.properties：分配的 server-port、按 onlineMode 设正版校验
-//（代理转发场景传 false）、开启 rcon（供指标采集）与 query。
-func buildServerProperties(serverPort, rconPort, queryPort int, rconPassword string, onlineMode bool) string {
+//（代理转发场景传 false）与 query。RCON 已退役（FR-067，见 ADR-016）：治理改走 ServerProbe 探针，
+// 不再开启 rcon，去除额外暴露面。
+func buildServerProperties(serverPort, queryPort int, onlineMode bool) string {
 	var b strings.Builder
 	b.WriteString("# 由 JianManager 一键开服生成（FR-034）\n")
 	fmt.Fprintf(&b, "server-port=%d\n", serverPort)
 	fmt.Fprintf(&b, "online-mode=%t\n", onlineMode)
-	b.WriteString("enable-rcon=true\n")
-	fmt.Fprintf(&b, "rcon.port=%d\n", rconPort)
-	fmt.Fprintf(&b, "rcon.password=%s\n", rconPassword)
 	b.WriteString("enable-query=true\n")
 	fmt.Fprintf(&b, "query.port=%d\n", queryPort)
 	return b.String()
-}
-
-// randRCONPassword 生成随机 rcon 密码（hex）。
-func randRCONPassword() string {
-	b := make([]byte, 12)
-	if _, err := rand.Read(b); err != nil {
-		return "changeme-" + fmt.Sprint(time.Now().UnixNano())
-	}
-	return hex.EncodeToString(b)
 }

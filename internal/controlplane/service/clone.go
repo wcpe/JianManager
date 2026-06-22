@@ -55,11 +55,10 @@ type CloneInstanceRequest struct {
 	DryRun             bool   `json:"dryRun"`
 }
 
-// CloneAllocation 复制为新实例分配的资源。
+// CloneAllocation 复制为新实例分配的资源（RCON 已退役，FR-067）。
 type CloneAllocation struct {
 	WorkDir    string `json:"workDir"`
 	ServerPort int    `json:"serverPort"`
-	RCONPort   int    `json:"rconPort"`
 	QueryPort  int    `json:"queryPort"`
 }
 
@@ -103,7 +102,7 @@ func (s *CloneService) Clone(ctx context.Context, srcID uint, req CloneInstanceR
 	}
 
 	result := &CloneResult{
-		Allocated: CloneAllocation{ServerPort: ports.ServerPort, RCONPort: ports.RCONPort, QueryPort: ports.QueryPort},
+		Allocated: CloneAllocation{ServerPort: ports.ServerPort, QueryPort: ports.QueryPort},
 		Excluded:  defaultCloneExcludes,
 		Warnings:  warnings,
 		DryRun:    req.DryRun,
@@ -125,7 +124,7 @@ func (s *CloneService) Clone(ctx context.Context, srcID uint, req CloneInstanceR
 		groupID = gi.GroupID
 	}
 
-	// 创建独立新实例（系统分配新目录；同款结构化启动/JDK；新端口与新 rcon 密码）。
+	// 创建独立新实例（系统分配新目录；同款结构化启动/JDK；新端口）。RCON 已退役（FR-067），治理走探针。
 	dst, err := s.instance.Create(CreateInstanceRequest{
 		NodeID:           src.NodeID,
 		Name:             req.Name,
@@ -140,9 +139,7 @@ func (s *CloneService) Clone(ctx context.Context, srcID uint, req CloneInstanceR
 		AutoRestart:      src.AutoRestart,
 		GroupID:          groupID,
 		ServerPort:       ports.ServerPort,
-		RCONPort:         ports.RCONPort,
 		QueryPort:        ports.QueryPort,
-		RCONPassword:     randRCONPassword(),
 	})
 	if err != nil {
 		return result, err
@@ -207,7 +204,7 @@ func (s *CloneService) cloneWorkDirOnWorker(ctx context.Context, src, dst *model
 	return nil
 }
 
-// fixupConfig 修正目标 server.properties（端口/rcon 密码/motd/level-name）。返回告警（空表示成功）。
+// fixupConfig 修正目标 server.properties（端口/motd/level-name）。返回告警（空表示成功）。RCON 已退役（FR-067）。
 func (s *CloneService) fixupConfig(ctx context.Context, dst *model.Instance, req CloneInstanceRequest) string {
 	var node model.Node
 	if err := s.db.First(&node, dst.NodeID).Error; err != nil {
@@ -225,11 +222,10 @@ func (s *CloneService) fixupConfig(ctx context.Context, dst *model.Instance, req
 		existing = resp.Content
 	}
 
+	// RCON 已退役（FR-067）：不再写 rcon.port/rcon.password；治理走探针。
 	kv := map[string]string{
-		"server-port":  fmt.Sprintf("%d", dst.ServerPort),
-		"query.port":   fmt.Sprintf("%d", dst.QueryPort),
-		"rcon.port":    fmt.Sprintf("%d", dst.RCONPort),
-		"rcon.password": dst.RCONPassword,
+		"server-port": fmt.Sprintf("%d", dst.ServerPort),
+		"query.port":  fmt.Sprintf("%d", dst.QueryPort),
 	}
 	if strings.TrimSpace(req.Motd) != "" {
 		kv["motd"] = req.Motd
@@ -241,7 +237,7 @@ func (s *CloneService) fixupConfig(ctx context.Context, dst *model.Instance, req
 	var content string
 	if strings.TrimSpace(existing) == "" {
 		// 源无 server.properties：生成基础档（代理就绪 online-mode=false）再叠加 motd/level-name。
-		content = patchProperties(buildServerProperties(dst.ServerPort, dst.RCONPort, dst.QueryPort, dst.RCONPassword, false), kv)
+		content = patchProperties(buildServerProperties(dst.ServerPort, dst.QueryPort, false), kv)
 	} else {
 		content = patchProperties(existing, kv)
 	}

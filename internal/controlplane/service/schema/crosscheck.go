@@ -32,13 +32,14 @@ func (p ParsedConfig) IsTruthy(key string) bool {
 	return false
 }
 
-// CheckPortConflicts 跨实例文件检查 server-port / rcon.port / query.port 唯一性。
+// CheckPortConflicts 跨实例文件检查 server-port / query.port 唯一性。
 // 输入通常为同一节点上若干实例的同一文件；返回 warning 列表。
+// RCON 已退役（FR-067，见 ADR-016）：不再校验 rcon.port。
 func CheckPortConflicts(cfgs []ParsedConfig) []*workerpb.ValidationIssue {
 	issues := []*workerpb.ValidationIssue{}
 	ports := map[string]string{} // port -> first path:key
 	for _, c := range cfgs {
-		for _, key := range []string{"server-port", "rcon.port", "query.port"} {
+		for _, key := range []string{"server-port", "query.port"} {
 			v := c.fieldLookup(key)
 			if v == "" {
 				continue

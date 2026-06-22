@@ -75,8 +75,10 @@ type Instance struct {
 	EnvVars           string         `gorm:"type:text" json:"envVars"` // JSON
 	AutoStart     bool           `gorm:"default:false" json:"autoStart"`
 	AutoRestart   bool           `gorm:"default:true" json:"autoRestart"`
-	RCONPort      int            `gorm:"default:0" json:"rconPort"`
-	RCONPassword  string         `gorm:"type:varchar(128)" json:"-"`
+	// Deprecated: RCON 已退役（FR-067，见 ADR-016）——治理改走 ServerProbe 探针。
+	// 列保留仅为迁移安全（不破坏既有库与历史实例数据），新实例不再写入、读取方不再使用。
+	RCONPort     int    `gorm:"default:0" json:"rconPort"`
+	RCONPassword string `gorm:"type:varchar(128)" json:"-"`
 	// ForwardingSecret 是 Velocity modern 转发的 forwarding secret（代理实例 provision 时生成）。
 	// 下发到所注册后端 paper 配置 + 跨代理一致校验复用；BungeeCord/Waterfall 不使用。参见 FR-035。
 	ForwardingSecret string `gorm:"type:varchar(128)" json:"-"`

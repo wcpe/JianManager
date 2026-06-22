@@ -95,10 +95,8 @@ type CreateInstanceRequest struct {
 	AutoRestart      bool               `json:"autoRestart"`
 	GroupID          uint               `json:"groupId"`
 	ServerPort       int                `json:"serverPort"`
-	RCONPort         int                `json:"rconPort"`
 	QueryPort        int                `json:"queryPort"`
 	ProbePort        int                `json:"probePort"`
-	RCONPassword     string             `json:"-"`
 }
 
 // Create 创建实例。
@@ -158,10 +156,8 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		AutoStart:        req.AutoStart,
 		AutoRestart:      req.AutoRestart,
 		ServerPort:       req.ServerPort,
-		RCONPort:         req.RCONPort,
 		QueryPort:        req.QueryPort,
 		ProbePort:        req.ProbePort,
-		RCONPassword:     req.RCONPassword,
 		Status:           model.InstanceStatusStopped,
 	}
 	if len(req.EnvVars) > 0 {
@@ -784,11 +780,10 @@ func (s *InstanceService) GetMetrics(id uint) (*MetricsData, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// 指标纯探针（FR-067 退役 RCON）：仅下发 probe_port，未部署探针即 N/A。
 	resp, err := client.Worker.GetInstanceMetrics(ctx, &workerpb.GetInstanceMetricsRequest{
 		InstanceUuid: instance.UUID,
 		ProbePort:    int32(instance.ProbePort),
-		RconPort:     int32(instance.RCONPort),
-		RconPassword: instance.RCONPassword,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("获取指标失败: %w", err)
