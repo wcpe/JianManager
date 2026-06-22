@@ -172,7 +172,22 @@
     "whitelistAdded": "已将 {{player}} 加入白名单",
     "whitelistRemoved": "已将 {{player}} 移出白名单",
     "whitelistEmpty": "白名单为空",
-    "whitelistUnavailable": "该子服 RCON 不可用，无法读取白名单"
+    "whitelistUnavailable": "该子服 RCON 不可用，无法读取白名单",
+    "tab_live": "实时事件",
+    "liveSelectInstance": "选择实例",
+    "liveProbeConnected": "探针已连入，实时推送中",
+    "liveProbeDisconnected": "探针未连入，无法实时推送（在线列表暂不可用，请确认已部署探针并启用插件桥）",
+    "liveOnlineCount": "实时在线 {{count}} 人",
+    "liveNoOnline": "当前无在线玩家",
+    "liveEventsTitle": "事件流",
+    "liveNoEvents": "暂无事件",
+    "evt_player_join": "进入",
+    "evt_player_quit": "离开",
+    "evt_chat": "发言",
+    "evt_cross_server": "跨服",
+    "evt_connected": "探针连入",
+    "evt_disconnected": "探针断开",
+    "liveCrossServerDesc": "{{from}} → {{to}}"
   },
   "ports": {
     "title": "端口占用",

@@ -172,7 +172,22 @@
     "whitelistAdded": "Added {{player}} to whitelist",
     "whitelistRemoved": "Removed {{player}} from whitelist",
     "whitelistEmpty": "Whitelist is empty",
-    "whitelistUnavailable": "RCON unavailable on this subserver; cannot read whitelist"
+    "whitelistUnavailable": "RCON unavailable on this subserver; cannot read whitelist",
+    "tab_live": "Live Events",
+    "liveSelectInstance": "Select instance",
+    "liveProbeConnected": "Probe connected, streaming live",
+    "liveProbeDisconnected": "Probe not connected; live updates unavailable (online list paused — ensure the probe is deployed and the plugin bridge enabled)",
+    "liveOnlineCount": "{{count}} online (live)",
+    "liveNoOnline": "No players online",
+    "liveEventsTitle": "Event stream",
+    "liveNoEvents": "No events yet",
+    "evt_player_join": "joined",
+    "evt_player_quit": "left",
+    "evt_chat": "chat",
+    "evt_cross_server": "switched",
+    "evt_connected": "probe connected",
+    "evt_disconnected": "probe disconnected",
+    "liveCrossServerDesc": "{{from}} → {{to}}"
   },
   "ports": {
     "title": "Port Usage",
