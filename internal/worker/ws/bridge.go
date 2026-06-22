@@ -45,15 +45,23 @@ const (
 )
 
 // PluginEvent 是插件桥向上（gRPC StreamPluginEvents）冒泡的一条事件。
-// 平台无关：Worker 侧只负责会话/握手/心跳与连接状态冒泡，业务事件字段（玩家名等）
-// 由探针在 raw 中透传、下游解析（FR-066）。
+// 平台无关：Worker 侧负责会话/握手/心跳与连接状态冒泡，并把探针 event 帧里的结构化
+// 玩家字段解析出来（FR-066：join/quit/chat/cross_server），供 gRPC 侧填充 workerpb.PluginEvent。
+// Worker 只解析、不消费语义（治理执行在 FR-067，跨服感知聚合在 CP）。
 type PluginEvent struct {
 	InstanceUUID string
 	Type         PluginEventKind
 	Timestamp    int64
 	Platform     string // bukkit | bungee（来自探针 hello）
 	Version      string // 探针版本（来自探针 hello）
-	Raw          string // 透传原始消息载荷（下游按需解析）
+	// 以下为探针业务事件（FR-066）携带的结构化字段；连接/心跳事件为空。
+	PlayerName string // 玩家事件：玩家名
+	PlayerUUID string // 玩家事件：玩家 UUID
+	Message    string // chat 内容 / 事件描述
+	Server     string // 子服名（玩家所在/事件发生）
+	FromServer string // cross_server：来源子服
+	ToServer   string // cross_server：目标子服
+	Raw        string // 透传原始消息载荷（下游按需解析）
 }
 
 // PluginEventHandler 接收插件桥冒泡的事件，由 Worker 注入以桥接到 gRPC 事件流。
@@ -68,6 +76,28 @@ type bridgeMessage struct {
 	Version  string          `json:"version,omitempty"`
 	Event    string          `json:"event,omitempty"` // type=event 时的事件子类型
 	Data     json.RawMessage `json:"data,omitempty"`  // 透传业务载荷
+}
+
+// bridgeEventData 是探针 event 帧 data 字段里的结构化玩家载荷（FR-066）。
+// 字段命名与探针侧（ServerProbe BridgeClient.eventJson）约定一致；缺字段为零值。
+type bridgeEventData struct {
+	PlayerName string `json:"playerName"`
+	PlayerUUID string `json:"playerUuid"`
+	Message    string `json:"message"`
+	Server     string `json:"server"`
+	FromServer string `json:"fromServer"`
+	ToServer   string `json:"toServer"`
+}
+
+// parseBridgeEventData 解析 event 帧的 data 载荷为结构化玩家字段。
+// 空/非法 JSON 容错返回零值（不断连、不 panic）：Worker 是透传层，载荷异常由下游降级。
+func parseBridgeEventData(data json.RawMessage) bridgeEventData {
+	var d bridgeEventData
+	if len(data) == 0 {
+		return d
+	}
+	_ = json.Unmarshal(data, &d) // 失败即零值，容错
+	return d
 }
 
 // PluginSession 是一个实例当前活动的探针会话。
@@ -249,13 +279,21 @@ func (s *PluginBridgeServer) handleSession(session *PluginSession) {
 			session.Version = msg.Version
 			slog.Info("插件桥握手 hello", "instanceId", session.InstanceID, "platform", msg.Platform, "version", msg.Version)
 		case "event":
-			// 业务事件透传冒泡：地基阶段 Worker 不解析载荷，原样上送，语义留 FR-066/067。
+			// 业务事件冒泡（FR-066）：解析 data 里的结构化玩家字段填充事件，原始载荷一并透传（raw）。
+			// Worker 只解析、不消费语义（跨服感知聚合在 CP，治理执行在 FR-067）。
+			d := parseBridgeEventData(msg.Data)
 			s.emit(PluginEvent{
 				InstanceUUID: session.InstanceID,
 				Type:         msg.Event,
 				Timestamp:    time.Now().Unix(),
 				Platform:     session.Platform,
 				Version:      session.Version,
+				PlayerName:   d.PlayerName,
+				PlayerUUID:   d.PlayerUUID,
+				Message:      d.Message,
+				Server:       d.Server,
+				FromServer:   d.FromServer,
+				ToServer:     d.ToServer,
 				Raw:          string(msgBytes),
 			})
 		}

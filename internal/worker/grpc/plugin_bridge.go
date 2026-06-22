@@ -30,6 +30,12 @@ func (s *Server) SetPluginBridge(b *ws.PluginBridgeServer) {
 			Timestamp:    e.Timestamp,
 			Platform:     e.Platform,
 			Version:      e.Version,
+			PlayerName:   e.PlayerName,
+			PlayerUuid:   e.PlayerUUID,
+			Message:      e.Message,
+			Server:       e.Server,
+			FromServer:   e.FromServer,
+			ToServer:     e.ToServer,
 			RawJson:      e.Raw,
 		})
 	})
