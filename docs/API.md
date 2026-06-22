@@ -388,6 +388,14 @@
 - **响应**: `{ "players":[{"name":"alice","instanceId":3,"instanceName":"lobby"}], "backends":[{"instanceId":3,"instanceName":"lobby","available":true}] }`（`available=false` 的后端 RCON 不可用，结果优雅降级）
 - **关联 FR**: FR-054
 
+### GET /api/v1/instances/:id/players/events
+- **描述**: SSE 推送某实例（探针）的实时玩家事件（FR-066）。CP 订阅各 Worker 的 `StreamPluginEvents`（探针经反向 WS 上报），按实例 UUID 过滤后扇出。探针未连入时事件流为空（前端据 `connected` 降级提示）。子服端（Bukkit 探针）报本服 `player_join`/`player_quit`/`chat`，代理端（BC 探针）报 `player_join`/`player_quit`/`cross_server`（精确跨服路由）
+- **权限**: `instance.read`（且实例须可访问）
+- **响应**: `text/event-stream`
+  - 首帧 `event: init`，`data` 为 `{ "connected": true, "players":[{"name":"alice","server":"lobby"}] }`（当前探针连接状态 + 实时在线名册快照）
+  - 增量 `event: player`，`data` 为单条事件 `{ "instanceUuid":"...","instanceId":3,"instanceName":"lobby","type":"player_join","timestamp":1719000000,"playerName":"alice","playerUuid":"...","server":"lobby" }`（`type` ∈ connected/disconnected/heartbeat/player_join/player_quit/chat/cross_server；cross_server 附 `fromServer`/`toServer`；chat 附 `message`）
+- **关联 FR**: FR-066
+
 ### POST /api/v1/players/:name/kick
 - **描述**: 踢出玩家，向目标后端集合下发 RCON `kick`。范围互斥：`instanceId`（单服）> `networkId`（群组）> 全部可见后端
 - **权限**: `instance.operate` | **审计**: `player.kick`

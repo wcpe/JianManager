@@ -1071,14 +1071,14 @@
 - **依赖**: 无（epic 地基）
 
 #### FR-066: 实时玩家事件 + 精确跨服感知
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 玩家 join/quit/chat + BC 代理端跨服路由经探针实时推送到浏览器，提供在线玩家列表与事件流，精确感知玩家所在子服
 - **验收标准**:
-  - [ ] 探针监听 Bukkit join/quit/chat + BC 端跨服路由（进入/切换/离开子服）→ WS 上报
-  - [ ] Worker→CP gRPC StreamPluginEvents → CP event service → SSE `/instances/:id/players/events` → 浏览器
-  - [ ] 前端在线玩家列表实时 + 标注所在子服 + 事件流；仅订阅当前实例/群组；未连入降级提示
-  - [ ] 真机：真 Paper+真 BC，Bot/玩家 进/切/退/发言 → 前端实时见事件+正确子服
+  - [x] 探针监听 Bukkit join/quit/chat（`BukkitPlayerEventListener`）+ BC 端跨服路由（`BungeePlayerEventListener`：PostLogin/ServerSwitch/PlayerDisconnect）→ 经 `BridgeClient.emitPlayerEvent` WS 上报（探针三模块 compileKotlin 过）
+  - [x] Worker 解析结构化字段填充 `PluginEvent` → CP `PlayerEventService` 订阅 gRPC StreamPluginEvents → SSE `/instances/:id/players/events`（init 首帧 + player 增量）
+  - [x] 前端在线玩家列表实时（SSE 名册）+ 标注所在子服 + 事件流面板；仅订阅当前实例（按实例 UUID 过滤）；未连入降级提示
+  - [ ] 真机：真 Paper+真 BC，Bot/玩家 进/切/退/发言 → 前端实时见事件+正确子服（**待真机验**：本环境无真 Paper/BC + JDK21 仅作探针 compileKotlin 验证）
 - **关联 API**: SSE `/instances/:id/players/events`（新增）, gRPC StreamPluginEvents
 - **依赖**: FR-065
 
