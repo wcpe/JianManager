@@ -579,6 +579,58 @@
 
 ---
 
+## 配置管理
+
+> 配置引擎（FR-031）在工作目录内读写配置文件并维护**配置版本**（`instance_config_versions`，与文件版本分离）：保留注释的多格式读写、schema 表单/文本双模式、跨文件一致性校验、版本 diff/回滚。配置读写经 gRPC 委托 Worker。前端「配置」段复用 FR-070 资源管理器组件（左树右内容/编辑器 + 交互全集），叠加 schema 双模式编辑、收藏与配置版本（FR-071）。
+
+### GET /api/v1/instances/:id/configs/discover
+- **描述**: 递归发现实例工作目录下**全部**配置文件（按扩展名识别 properties/yml/yaml/toml/json/txt/conf，不限内置 schema），返回相对路径扁平列表。供「已发现配置」快速面板与收藏解析。CP 经既有 `Worker.ListFiles` gRPC 逐目录遍历（不新增 gRPC），深度上限 8、目录上限 2000，超限截断标 `truncated`
+- **关联 FR**: FR-071
+- **权限**: `instance.file`（可访问实例）
+- **响应**: `{ "files": [{ "path": "server.properties", "format": "properties", "supported": true }], "truncated": false }`（`supported=true` 表示命中内置 schema，可走表单模式）
+- **错误**: `404 NOT_FOUND`（实例不存在/无权限）；`422 BUSINESS_ERROR`（节点离线/工作目录未设置）
+
+### GET /api/v1/instances/:id/configs
+- **描述**: 列出某目录内可管理配置文件（内置可识别格式）。`?path=` 可选子目录
+- **关联 FR**: FR-031
+- **权限**: `instance.file`
+
+### GET /api/v1/instances/:id/configs/read
+- **描述**: 读取单配置文件：原文 + 字段 + schema JSON + 校验结果。`?path=server.properties`
+- **关联 FR**: FR-031
+
+### POST /api/v1/instances/:id/configs/write
+- **描述**: 文本模式写入配置，保存成功生成配置版本
+- **关联 FR**: FR-031
+- **请求**: `{ "path": "string", "content": "string", "message": "string?" }`
+- **响应**: `{ "versionId": 12, "validation": { "valid": true, "issues": [] } }`
+
+### POST /api/v1/instances/:id/configs/write-fields
+- **描述**: 表单模式写入：字段级补丁回原文（保留注释/键顺序），生成配置版本
+- **关联 FR**: FR-031
+- **请求**: `{ "path": "string", "fields": { "server-port": "25566" }, "message": "string?" }`
+
+### POST /api/v1/instances/:id/configs/cross-check
+- **描述**: 跨文件/跨实例一致性校验（端口唯一 / online-mode 与转发配套 / forwarding secret 跨代理一致）。返回 warning 列表，不影响写入
+- **关联 FR**: FR-031
+- **请求**: `{ "path": "string", "content": "string" }`
+- **响应**: `{ "issues": [{ "level": "warning", "message": "string", "key": "string?" }] }`
+
+### GET /api/v1/instances/:id/configs/versions/*file
+- **描述**: 列出某配置文件历史版本（按 ID 倒序）
+- **关联 FR**: FR-031
+
+### GET /api/v1/instances/:id/configs/diff/*file
+- **描述**: 配置版本差异。`?from=11&to=12`，`to` 省略表示与当前文件对比
+- **关联 FR**: FR-031
+
+### POST /api/v1/instances/:id/configs/rollback/*file
+- **描述**: 回滚配置到指定版本并生成新版本记录
+- **关联 FR**: FR-031
+- **请求**: `{ "versionId": 12, "message": "string?" }`
+
+---
+
 ## 插件 / 模组（单服）
 
 > 复用文件 gRPC（ListFiles/WriteFile/RenameFile/DeleteFile）在实例 `plugins/` 与 `mods/` 目录上操作；启用态文件名 `*.jar`，禁用态 `*.jar.disabled`。实例级隔离（AuthzService），写操作经审计中间件记录（`plugin.deploy`/`plugin.delete`/`plugin.toggle`）。
