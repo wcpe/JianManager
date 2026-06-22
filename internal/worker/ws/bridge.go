@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -307,6 +308,21 @@ func (s *PluginBridgeServer) handleSession(session *PluginSession) {
 
 	// 心跳超时：任意帧到达刷新读 deadline；超时未收到帧即读出错、退出循环。
 	_ = session.Conn.SetReadDeadline(time.Now().Add(bridgePongWait))
+	// 探针按心跳节奏发 WS ping 控制帧（OPCODE_PING）。gorilla 默认 ping handler 仅回 pong、
+	// 【不刷新读 deadline】，且控制帧不会让 ReadMessage 返回——故无玩家活动的空闲长连会在
+	// bridgePongWait 到点被误判断线（实测每 ~90s 断一次重连，扰动 FR-066 实时事件流）。
+	// 接管 ping handler：收到探针 ping 即刷新读 deadline 并回 pong，使空闲桥连接长期稳定。
+	session.Conn.SetPingHandler(func(appData string) error {
+		_ = session.Conn.SetReadDeadline(time.Now().Add(bridgePongWait))
+		err := session.Conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(bridgeWriteWait))
+		if errors.Is(err, websocket.ErrCloseSent) {
+			return nil
+		}
+		if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			return nil
+		}
+		return err
+	})
 
 	for {
 		_, msgBytes, err := session.Conn.ReadMessage()
