@@ -13,9 +13,13 @@ import (
 const PluginBridgeScope = "plugin-bridge"
 
 // pluginBridgeTokenTTL 插件桥 token 有效期。
-// token 仅在探针 WS 握手时校验一次、连上后长期有效；写入探针 config.yml 后探针长期复用，
-// 过期由下次 config 下发/探针重启续期。TTL 取数分钟用于阻断重放，且须明显大于探针单次重连窗口。
-const pluginBridgeTokenTTL = 10 * time.Minute
+// 插件桥 token 是【实例级持久连接凭据】——写入探针 config.yml 后，探针在整个生命周期内每次反向
+// WS 握手都复用它，本质不同于一次性终端 token。普通重启/重连不会重新下发 config（DeployServerProbe
+// 仅在建服与 FR-068 在线更新时调用），故 token 必须在实例整个运行期内有效；若取短 TTL，建服数分钟后
+// 任何重启都会因 token 过期被 Worker 握手拒绝（401），桥永久连不上。安全上：桥仅本机回环可达、token
+// 按实例隔离 scope=plugin-bridge、且已落在本机 config 文件（文件本身即信任边界），短 TTL 既挡不住实质
+// 重放又必然弄坏重启，故取等效实例生命周期的长有效期。轮换由重新建服或 FR-068 在线更新下发新 token。
+const pluginBridgeTokenTTL = 87600 * time.Hour // 约 10 年，等效实例生命周期
 
 // PluginBridgeService 负责签发实例级插件桥连接 token，并生成探针 config.yml 的 bridge 段。
 // 类比 TerminalService 的一次性 token，但 scope=plugin-bridge、不区分 read/write（见 ADR-016 / FR-065）。
