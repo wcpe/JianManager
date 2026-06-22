@@ -101,6 +101,10 @@ func main() {
 	registrationSvc.SetSyncer(proxySvc)
 	cloneSvc := service.NewCloneService(db, pool, instanceSvc, registrationSvc)
 	playerSvc := service.NewPlayerService(db, pool)
+	// 玩家事件服务（FR-066，见 ADR-016）：订阅各 Worker 的插件事件流（StreamPluginEvents），
+	// 维护实时在线名册并经 SSE 推送给前端（join/quit/chat/cross_server）。
+	playerEventSvc := service.NewPlayerEventService(pool, db)
+	defer playerEventSvc.Stop()
 
 	// 告警评估器：每 60s 检测节点指标，触发 Webhook 通知
 	alertEvaluator := service.NewAlertEvaluator(db)
@@ -146,6 +150,7 @@ func main() {
 		FileVersion:   fileVersionSvc,
 		Plugin:        pluginSvc,
 		Player:        playerSvc,
+		PlayerEvent:   playerEventSvc,
 		Config:        configSvc,
 		Bot:           botSvc,
 		Alert:         alertSvc,
@@ -179,6 +184,8 @@ func main() {
 	grpcHandler := cpgrpc.NewControlPlaneHandler(db, pool)
 	grpcHandler.SetOnWorkerConnect(func(nodeUUID string) {
 		eventSvc.StartWorkerStream(nodeUUID)
+		// 玩家事件流（探针经反向 WS 上报）同步订阅（FR-066）。
+		playerEventSvc.StartWorkerStream(nodeUUID)
 	})
 	// 心跳负载落库为时序样本（节点指标 + 每实例 ServerProbe 快照，FR-060）。
 	grpcHandler.SetMetricIngester(metricSvc)

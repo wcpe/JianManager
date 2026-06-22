@@ -3,6 +3,8 @@ package router
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -12,16 +14,18 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// PlayerHandler 玩家管理路由处理器（FR-054）。
+// PlayerHandler 玩家管理路由处理器（FR-054 + FR-066 实时玩家事件）。
 type PlayerHandler struct {
 	playerSvc *service.PlayerService
+	eventSvc  *service.PlayerEventService
 	authz     *service.AuthzService
 	audit     *service.AuditService
 }
 
 // NewPlayerHandler 创建玩家管理路由处理器。
-func NewPlayerHandler(playerSvc *service.PlayerService, authz *service.AuthzService, audit *service.AuditService) *PlayerHandler {
-	return &PlayerHandler{playerSvc: playerSvc, authz: authz, audit: audit}
+// eventSvc 提供探针经反向 WS 实时上报的玩家事件流与在线名册（FR-066）。
+func NewPlayerHandler(playerSvc *service.PlayerService, eventSvc *service.PlayerEventService, authz *service.AuthzService, audit *service.AuditService) *PlayerHandler {
+	return &PlayerHandler{playerSvc: playerSvc, eventSvc: eventSvc, authz: authz, audit: audit}
 }
 
 // playerActionRequest 踢/封/解封请求体（范围与原因均可选）。
@@ -212,6 +216,66 @@ func (h *PlayerHandler) Bans(c *gin.Context) {
 	c.JSON(http.StatusOK, bans)
 }
 
+// PlayersEvents SSE 推送某实例（及其后端子服）的实时玩家事件（join/quit/chat/cross_server，FR-066）。
+// 仅订阅当前实例的事件（按实例 UUID 过滤），探针未连入时事件流为空，前端据此降级提示。
+// 首帧附带当前在线名册快照，使前端打开即见在线列表（之后由事件流实时增量）。
+func (h *PlayerHandler) PlayersEvents(c *gin.Context) {
+	if h.eventSvc == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "UNAVAILABLE", "message": "玩家事件服务未启用"})
+		return
+	}
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	instanceUUID := h.eventSvc.InstanceUUIDByID(id)
+	if instanceUUID == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+
+	ch, unsub := h.eventSvc.Subscribe(instanceUUID)
+	defer unsub()
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+
+	// 初始帧：当前探针连接状态 + 在线名册快照，前端据此渲染初始在线列表与未连入提示。
+	snapshot := h.eventSvc.OnlineSnapshot(instanceUUID)
+	connected := h.eventSvc.IsProbeConnected(instanceUUID)
+	initBytes, _ := json.Marshal(gin.H{"connected": connected, "players": snapshot})
+	fmt.Fprintf(c.Writer, "event: init\ndata: %s\n\n", initBytes)
+	c.Writer.Flush()
+
+	ctx := c.Request.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case evt, ok := <-ch:
+			if !ok {
+				return
+			}
+			data, err := json.Marshal(evt)
+			if err != nil {
+				continue
+			}
+			if _, err := fmt.Fprintf(c.Writer, "event: player\ndata: %s\n\n", data); err != nil {
+				slog.Debug("玩家事件 SSE 写入失败", "err", err)
+				return
+			}
+			c.Writer.Flush()
+		}
+	}
+}
+
 // actorID 取当前操作用户 ID。
 func (h *PlayerHandler) actorID(c *gin.Context) uint {
 	uid, _ := c.Get(middleware.CtxUserID)
@@ -232,6 +296,7 @@ func (h *PlayerHandler) recordAudit(c *gin.Context, action, player string, detai
 // RegisterRoutes 注册玩家管理路由（FR-054）。
 func (h *PlayerHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.GET("/players", h.Online)
+	rg.GET("/instances/:id/players/events", h.PlayersEvents)
 	rg.POST("/players/:name/kick", h.Kick)
 	rg.POST("/players/:name/ban", h.Ban)
 	rg.POST("/players/:name/unban", h.Unban)
