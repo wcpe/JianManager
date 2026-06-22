@@ -6,6 +6,11 @@
 
 ## [Unreleased]
 
+### 修复
+- **探针跨平台注入崩溃（taboolib-ioc 1.2.1-SNAPSHOT，FR-066 深层真机修复）**：ServerProbe 子模块依赖升至 taboolib-ioc 1.2.1-SNAPSHOT，修复带跨平台类入参事件监听器（FR-066 玩家事件监听器）在错误平台注入时反射 `declaredMethods` 触发 `NoClassDefFoundError`（Bukkit 上加载 Bungee `PostLoginEvent`）导致整个探针 enable 失败被 Disabling 的崩溃。taboolib-ioc 侧 `findAnnotationCarrier` 反射包 `try-catch(NoClassDefFoundError)`、`injectObjectFields` 改 `catch(Throwable)`（NoClassDefFoundError 是 Error 非 Exception）。真机验证：Paper 1.21.1 上探针正常 enable。
+- **插件桥 token 改为实例生命周期有效期（FR-066/067 深层真机修复）**：CP `pluginBridgeTokenTTL` 由 10 分钟改为约 10 年（等效实例生命周期）。插件桥 token 是写入探针 config.yml、整个生命周期复用的**持久连接凭据**（普通重启不重新下发 config，仅建服/FR-068 在线更新时下发），原 10 分钟 TTL 导致建服数分钟后任何重启/重连都因 token 过期被 Worker 握手拒绝（401）、桥永久连不上。安全上桥仅本机回环可达、token 按实例隔离且落在本机 config 文件，短 TTL 既挡不住实质重放又必然弄坏重启。真机验证：桥连接 + 重连不再 401。
+- **插件桥接管 ping 刷新读 deadline 防空闲误断（FR-065/066 深层真机修复）**：Worker `bridge.go` 补 `SetPingHandler`。探针按心跳节奏发 WS ping 控制帧，gorilla 默认 handler 仅回 pong、不刷新读 deadline，且控制帧不让 `ReadMessage` 返回，故无玩家活动的空闲桥连接每约 90 秒被误判断线重连（扰动 FR-066 实时事件流）。接管 ping handler：收 ping 即刷新读 deadline 并回 pong。真机验证：空闲桥连接 >120s 稳定无断开。
+
 ## 0.7.0（2026-06-22）
 
 ### 新增
