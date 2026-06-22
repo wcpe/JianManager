@@ -43,7 +43,6 @@ const (
 	WorkerService_ValidateConfig_FullMethodName       = "/worker.WorkerService/ValidateConfig"
 	WorkerService_GetNodeMetrics_FullMethodName       = "/worker.WorkerService/GetNodeMetrics"
 	WorkerService_GetInstanceMetrics_FullMethodName   = "/worker.WorkerService/GetInstanceMetrics"
-	WorkerService_ExecRconCommand_FullMethodName      = "/worker.WorkerService/ExecRconCommand"
 	WorkerService_ListJDKs_FullMethodName             = "/worker.WorkerService/ListJDKs"
 	WorkerService_InstallJDK_FullMethodName           = "/worker.WorkerService/InstallJDK"
 	WorkerService_RemoveJDK_FullMethodName            = "/worker.WorkerService/RemoveJDK"
@@ -118,10 +117,6 @@ type WorkerServiceClient interface {
 	GetNodeMetrics(ctx context.Context, in *GetNodeMetricsRequest, opts ...grpc.CallOption) (*GetNodeMetricsResponse, error)
 	// GetInstanceMetrics 获取实例指标。
 	GetInstanceMetrics(ctx context.Context, in *GetInstanceMetricsRequest, opts ...grpc.CallOption) (*GetInstanceMetricsResponse, error)
-	// ExecRconCommand 经实例 RCON 执行一条命令并返回原始输出（FR-054 玩家管理）。
-	// RCON 端口/密码由 Control Plane 从 DB 取出后随请求下发（Worker 不碰 DB），
-	// Worker 连接 localhost:rcon_port 执行命令。RCON 不可用时返回 available=false 优雅降级。
-	ExecRconCommand(ctx context.Context, in *ExecRconCommandRequest, opts ...grpc.CallOption) (*ExecRconCommandResponse, error)
 	// ListJDKs 列出 Worker 本地已注册/探测到的 JDK 目录。
 	ListJDKs(ctx context.Context, in *ListJDKsRequest, opts ...grpc.CallOption) (*ListJDKsResponse, error)
 	// InstallJDK 下载并安装指定 JDK 到 Worker 托管目录。
@@ -431,16 +426,6 @@ func (c *workerServiceClient) GetInstanceMetrics(ctx context.Context, in *GetIns
 	return out, nil
 }
 
-func (c *workerServiceClient) ExecRconCommand(ctx context.Context, in *ExecRconCommandRequest, opts ...grpc.CallOption) (*ExecRconCommandResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ExecRconCommandResponse)
-	err := c.cc.Invoke(ctx, WorkerService_ExecRconCommand_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *workerServiceClient) ListJDKs(ctx context.Context, in *ListJDKsRequest, opts ...grpc.CallOption) (*ListJDKsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListJDKsResponse)
@@ -693,10 +678,6 @@ type WorkerServiceServer interface {
 	GetNodeMetrics(context.Context, *GetNodeMetricsRequest) (*GetNodeMetricsResponse, error)
 	// GetInstanceMetrics 获取实例指标。
 	GetInstanceMetrics(context.Context, *GetInstanceMetricsRequest) (*GetInstanceMetricsResponse, error)
-	// ExecRconCommand 经实例 RCON 执行一条命令并返回原始输出（FR-054 玩家管理）。
-	// RCON 端口/密码由 Control Plane 从 DB 取出后随请求下发（Worker 不碰 DB），
-	// Worker 连接 localhost:rcon_port 执行命令。RCON 不可用时返回 available=false 优雅降级。
-	ExecRconCommand(context.Context, *ExecRconCommandRequest) (*ExecRconCommandResponse, error)
 	// ListJDKs 列出 Worker 本地已注册/探测到的 JDK 目录。
 	ListJDKs(context.Context, *ListJDKsRequest) (*ListJDKsResponse, error)
 	// InstallJDK 下载并安装指定 JDK 到 Worker 托管目录。
@@ -816,9 +797,6 @@ func (UnimplementedWorkerServiceServer) GetNodeMetrics(context.Context, *GetNode
 }
 func (UnimplementedWorkerServiceServer) GetInstanceMetrics(context.Context, *GetInstanceMetricsRequest) (*GetInstanceMetricsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetInstanceMetrics not implemented")
-}
-func (UnimplementedWorkerServiceServer) ExecRconCommand(context.Context, *ExecRconCommandRequest) (*ExecRconCommandResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ExecRconCommand not implemented")
 }
 func (UnimplementedWorkerServiceServer) ListJDKs(context.Context, *ListJDKsRequest) (*ListJDKsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListJDKs not implemented")
@@ -1302,24 +1280,6 @@ func _WorkerService_GetInstanceMetrics_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
-func _WorkerService_ExecRconCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ExecRconCommandRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WorkerServiceServer).ExecRconCommand(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WorkerService_ExecRconCommand_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WorkerServiceServer).ExecRconCommand(ctx, req.(*ExecRconCommandRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _WorkerService_ListJDKs_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListJDKsRequest)
 	if err := dec(in); err != nil {
@@ -1720,10 +1680,6 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetInstanceMetrics",
 			Handler:    _WorkerService_GetInstanceMetrics_Handler,
-		},
-		{
-			MethodName: "ExecRconCommand",
-			Handler:    _WorkerService_ExecRconCommand_Handler,
 		},
 		{
 			MethodName: "ListJDKs",
