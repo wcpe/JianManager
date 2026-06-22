@@ -96,6 +96,9 @@ func TestNodeService_Drain_StopsRunning(t *testing.T) {
 	db := newNodeTestDB(t)
 	nodeSvc := NewNodeService(db)
 	instSvc := NewInstanceService(db, NewGroupService(db), cpgrpc.NewClientPool())
+	// 无 Worker 连接：禁用后台异步委托，否则 Stop 的同步 STOPPING 会被异步覆盖为 CRASHED
+	// （节点不可达），与下方断言竞态，并向共享内存库泄漏写入。见 InstanceService.Shutdown。
+	instSvc.Shutdown()
 	nodeSvc.SetInstanceService(instSvc)
 
 	node := newTestNode(t, db, "n1")
