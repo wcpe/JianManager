@@ -675,6 +675,31 @@
 - **请求**: `{ "path": "string", "versionId": 12 }`
 - **响应**: `{ "versionId": 15 }`（回滚写回后新生成的版本 ID）
 
+### GET /api/v1/instances/:id/files/archive/entries
+- **描述**: 列出某归档（jar/zip）内全部条目（扁平，前端按「/」重建子树）。Worker 用 Go `archive/zip` 列举，不起进程、零落盘；条目名经 zip-slip 校验，单归档条目数上限 50000（超出 `truncated=true`）
+- **关联 FR**: FR-075
+- **权限**: `instance.file`（可访问实例，只读）
+- **Query**: `?path=plugins/Foo.jar`（归档文件相对工作目录路径，必填）
+- **响应**: `{ "entries": [{ "name": "plugin.yml", "isDir": false, "size": 320, "compressedSize": 210, "modified": 1700000000, "crc32": 123456 }], "truncated": false }`
+- **错误**: `400 INVALID_REQUEST`（缺 path）；`404 NOT_FOUND`（实例不存在/无权限）；`422 BUSINESS_ERROR`（非归档/路径越界/节点离线）
+
+### GET /api/v1/instances/:id/files/archive/read
+- **描述**: 读取归档内某条目内容（文本预览，流式截断到上限 4 MiB）。返回原始字节，截断/二进制经响应头标注
+- **关联 FR**: FR-075
+- **权限**: `instance.file`（可访问实例，只读）
+- **Query**: `?path=plugins/Foo.jar&entry=plugin.yml`（归档文件 + 归档内条目名，均必填）
+- **响应**: `200`，`Content-Type: application/octet-stream`，响应头 `X-Truncated: true`（截断时）、`X-Binary: true`（嗅探为二进制时），响应体为条目原始字节
+- **错误**: `400 INVALID_REQUEST`（缺 path/entry）；`404 NOT_FOUND`；`422 BUSINESS_ERROR`（非归档/条目不存在/目录条目/越界/节点离线）
+
+### POST /api/v1/instances/:id/files/decompile
+- **描述**: 反编译工作目录内 `.class`/`.jar`（或归档内某 `.class`）为 Java 源码。Worker 经实例绑定 JDK（或系统候选 JDK / `JAVA_HOME` 兜底）受控 exec CFR，仅静态分析字节码、不运行目标代码；超时 30s + 输入上限 16 MiB + 输出截断 4 MiB。**失败/降级以 `success:false`+`error` 在 `200` 体内返回**（无 JDK / 无 CFR / 超时 / 超限 / CFR 非 0 退出）
+- **关联 FR**: FR-075
+- **权限**: `instance.file`（可访问实例，只读）
+- **请求**: `{ "path": "plugins/Foo.jar", "entry": "com/example/Foo.class" }`（`entry` 可选；`path` 为 `.class` 时忽略 `entry`；`path` 为 `.jar` 且 `entry` 空时反编译整个 jar）
+- **响应**: `{ "success": true, "source": "/*\n * Decompiled with CFR 0.152.\n */\npublic class Foo { ... }\n", "truncated": false, "decompiler": "CFR 0.152" }`
+- **降级响应**: `200`，`{ "success": false, "error": "无可用 JDK，反编译降级" }`
+- **错误**: `400 INVALID_REQUEST`（缺 path）；`404 NOT_FOUND`；`422 BUSINESS_ERROR`（路径越界/节点离线）
+
 ---
 
 ## 配置管理
