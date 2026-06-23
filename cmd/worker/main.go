@@ -135,6 +135,8 @@ func runWorker() {
 	// 启动 gRPC 服务器
 	grpcServer := grpc.NewServer()
 	workerServer := wgrpc.NewServer(manager, nodeUUID, collector, jdkMgr, root)
+	// 全文搜索追加忽略规则（worker.yaml search.ignore，叠加内置默认集，FR-074）。
+	workerServer.SetSearchIgnore(cfg.Search.Ignore)
 
 	// Bot 管理器：按需 spawn bot-worker(Node) 子进程，经 stdin/stdout IPC 管理 Mineflayer Bot。
 	// 入口脚本默认 bot-worker/dist/index.js（相对 cwd），可经 JIANMANAGER_BOT_WORKER_PATH 覆盖。参见 ADR-006。

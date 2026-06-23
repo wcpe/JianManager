@@ -17,6 +17,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/jdk"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/process"
+	"github.com/wcpe/JianManager/internal/worker/search"
 	"github.com/wcpe/JianManager/internal/worker/ws"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
@@ -69,6 +70,12 @@ type Server struct {
 	// execPath 覆盖自更新（FR-081）待替换的可执行文件路径；空时用 os.Executable()。
 	// 由 SetExecutablePath 注入（测试用，避免替换真二进制）。
 	execPath string
+	// 全文搜索索引（FR-074，见 ADR-017）。每实例一份 *search.Index，懒创建。
+	// 索引落数据根 var/index/<instance-uuid>/，是 Worker 本地派生资产，不进 CP DB。
+	// searchIgnore 为用户配置追加的忽略 glob（worker.yaml search.ignore），叠加内置默认集。
+	searchMu      sync.Mutex
+	searchIndexes map[string]*search.Index
+	searchIgnore  []string
 }
 
 // NewServer 创建 Worker gRPC 服务器。
@@ -76,11 +83,12 @@ type Server struct {
 // jdkMgr 可为 nil（未启用 JDK 托管时）。root 用于解析相对工作目录，可为 nil（按绝对路径处理）。
 func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Collector, jdkMgr *jdk.Manager, root *dataroot.Root) *Server {
 	s := &Server{
-		manager:   manager,
-		nodeUUID:  nodeUUID,
-		collector: collector,
-		jdkMgr:    jdkMgr,
-		root:      root,
+		manager:       manager,
+		nodeUUID:      nodeUUID,
+		collector:     collector,
+		jdkMgr:        jdkMgr,
+		root:          root,
+		searchIndexes: make(map[string]*search.Index),
 	}
 	manager.SetStateChangeHandler(func(uuid string, oldState, newState process.InstanceState) {
 		s.dispatch(instanceEvent{
@@ -442,6 +450,14 @@ func (s *Server) StreamInstanceEvents(req *workerpb.StreamInstanceEventsRequest,
 
 // SetBotManager 注入 Bot 管理器，由 Worker 主进程在启动时设置。
 func (s *Server) SetBotManager(m *bot.Manager) { s.botMgr = m }
+
+// SetSearchIgnore 设置全文搜索的追加忽略规则（worker.yaml search.ignore，FR-074）。
+// 叠加在内置默认忽略集之上，由 Worker 主进程在启动时按配置注入。须在首次 SearchFiles 前调用。
+func (s *Server) SetSearchIgnore(rules []string) {
+	s.searchMu.Lock()
+	defer s.searchMu.Unlock()
+	s.searchIgnore = rules
+}
 
 // ensureBotManager 确保 bot-worker 子进程已启动（首次创建 Bot 时懒启动）。
 // 子进程生命周期跟随 Worker（用 background 上下文），由 botMgr.Stop() 收束。

@@ -35,6 +35,16 @@ type Config struct {
 	EnrollToken string        `mapstructure:"enroll_token"`
 	Log         LogConfig     `mapstructure:"log"`
 	Heartbeat   time.Duration `mapstructure:"-"`
+	// Search 全文搜索索引配置（FR-074，见 ADR-017）。
+	Search SearchConfig `mapstructure:"search"`
+}
+
+// SearchConfig 全文搜索索引配置（FR-074，见 ADR-017）。
+type SearchConfig struct {
+	// Ignore 追加到内置默认忽略集的 glob 规则（相对实例工作目录，/ 分隔）。
+	// 形如 logs/（目录前缀）、*.bak（basename glob）、vendor（路径段）。默认集已覆盖常见
+	// 日志/缓存/二进制/归档/MC 世界数据，零配置即可用；此处仅做加性补充。
+	Ignore []string `mapstructure:"ignore"`
 }
 
 // GRPCConfig gRPC 服务器配置。
@@ -74,6 +84,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("enroll_token", "")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "text")
+	v.SetDefault("search.ignore", []string{})
 
 	if path != "" {
 		v.SetConfigFile(path)
