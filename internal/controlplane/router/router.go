@@ -45,6 +45,7 @@ type Services struct {
 	Metric        *service.MetricService
 	Settings      *service.SettingsService
 	ProbeUpdate   *service.ProbeUpdateService
+	ClientChannel *service.ClientChannelService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -176,6 +177,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.Settings != nil {
 			settingsHandler := NewSettingsHandler(svcs.Settings)
 			settingsHandler.RegisterRoutes(admin)
+		}
+
+		// 客户端分发频道与拉取密钥：平台级，限平台管理员（FR-086 / ADR-022）。
+		if svcs.ClientChannel != nil {
+			clientChannelHandler := NewClientChannelHandler(svcs.ClientChannel, svcs.Audit)
+			clientChannelHandler.RegisterRoutes(admin)
 		}
 	}
 

@@ -22,6 +22,7 @@ const TemplatesPage = lazy(() => import('@/pages/TemplatesPage'))
 const AlertsPage = lazy(() => import('@/pages/AlertsPage'))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 const LogsPage = lazy(() => import('@/pages/LogsPage'))
+const ClientChannelsPage = lazy(() => import('@/pages/ClientChannelsPage'))
 /**
  * 运维控制台右侧工作区（ADR-009 / FR-037 / FR-039）。
  * 打开实例时渲染单个 WorkspacePane（终端 | Bot 分段）；否则按路由渲染对应页面，既有页面不变。
@@ -66,6 +67,7 @@ export default function Workspace() {
           <Route path="backups" element={<BackupsPage />} />
           <Route path="backup-storages" element={<BackupStoragesPage />} />
           <Route path="audit" element={<AuditPage />} />
+          <Route path="client-channels" element={<ClientChannelsPage />} />
           <Route path="logs" element={<LogsPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<WorkspaceEmpty />} />

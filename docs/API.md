@@ -1106,6 +1106,97 @@
 
 ---
 
+## 客户端分发（频道 + 拉取密钥）
+
+> 运营管理端点（运营者浏览器 JWT 入口，仅平台管理员）。面向玩家公网的 manifest/制品端点见 FR-087。
+> 密钥落库只存 SHA-256 哈希，明文仅创建/轮换响应一次性返回、不可二次读取（FR-086、ADR-022）。
+> 路径中 `:id` = 频道 slug（channelId）。
+
+### GET /api/v1/client-channels
+- **描述**: 列出全部分发频道（含密钥数量）
+- **关联 FR**: FR-086
+- **权限**: 平台管理员
+- **响应** (200):
+  ```json
+  [ { "id": 1, "channelId": "skyblock-s1", "name": "空岛一服", "description": "",
+      "currentVersion": 0, "keyCount": 2, "createdAt": "datetime", "updatedAt": "datetime" } ]
+  ```
+
+### POST /api/v1/client-channels
+- **描述**: 创建分发频道（每服一个）
+- **关联 FR**: FR-086
+- **权限**: 平台管理员
+- **请求**: `{ "channelId": "skyblock-s1", "name": "空岛一服", "description": "可选" }`
+- **响应** (201): 频道对象
+- **错误**: 400 `INVALID_CHANNEL_ID`（slug 非法，须 `^[a-z0-9][a-z0-9-]{1,63}$`）| 409 `CHANNEL_EXISTS`
+
+### GET /api/v1/client-channels/:id
+- **描述**: 频道详情（含密钥元数据列表，无明文）
+- **关联 FR**: FR-086
+- **权限**: 平台管理员
+- **响应** (200):
+  ```json
+  { "id": 1, "channelId": "skyblock-s1", "name": "空岛一服", "description": "", "currentVersion": 0,
+    "createdAt": "datetime", "updatedAt": "datetime",
+    "keys": [ { "id": 10, "name": "正式包", "keyPrefix": "jmck_ab12", "revoked": false,
+                "expiresAt": null, "lastUsedAt": null, "createdAt": "datetime" } ] }
+  ```
+- **错误**: 404 `CHANNEL_NOT_FOUND`
+
+### PUT /api/v1/client-channels/:id
+- **描述**: 更新频道名称/描述（channelId 不可改）
+- **关联 FR**: FR-086
+- **权限**: 平台管理员
+- **请求**: `{ "name": "新名", "description": "新描述" }`
+- **响应** (200): 频道对象
+- **错误**: 404 `CHANNEL_NOT_FOUND`
+
+### DELETE /api/v1/client-channels/:id
+- **描述**: 删除频道及其全部拉取密钥
+- **关联 FR**: FR-086
+- **权限**: 平台管理员
+- **响应** (200): `{ "message": "已删除" }`
+- **错误**: 404 `CHANNEL_NOT_FOUND`
+- **审计**: `client_channel.delete`
+
+### GET /api/v1/client-channels/:id/keys
+- **描述**: 列出频道下拉取密钥（仅元数据，无明文）
+- **关联 FR**: FR-086
+- **权限**: 平台管理员
+- **响应** (200): 密钥元数据数组（同详情 `keys`）
+- **错误**: 404 `CHANNEL_NOT_FOUND`
+
+### POST /api/v1/client-channels/:id/keys
+- **描述**: 创建拉取密钥；**明文仅此响应返回一次，不可二次读取**
+- **关联 FR**: FR-086
+- **权限**: 平台管理员
+- **请求**: `{ "name": "正式包", "expiresAt": "2027-01-01T00:00:00Z" }`（`expiresAt` 可选）
+- **响应** (201):
+  ```json
+  { "id": 10, "name": "正式包", "keyPrefix": "jmck_ab12", "revoked": false, "expiresAt": null,
+    "createdAt": "datetime", "key": "jmck_<一次性明文>" }
+  ```
+- **错误**: 404 `CHANNEL_NOT_FOUND` | 400 `INVALID_REQUEST`
+- **审计**: `client_key.create`（detail 不含明文）
+
+### POST /api/v1/client-channels/:id/keys/:kid/rotate
+- **描述**: 轮换密钥（同一记录换新明文，旧明文立即失效）；**新明文一次性返回**
+- **关联 FR**: FR-086
+- **权限**: 平台管理员
+- **响应** (200): 同创建响应（含一次性 `key`）
+- **错误**: 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND`
+- **审计**: `client_key.rotate`（detail 不含明文）
+
+### DELETE /api/v1/client-channels/:id/keys/:kid
+- **描述**: 吊销密钥（保留记录、标记 revoked，立即鉴权失效）
+- **关联 FR**: FR-086
+- **权限**: 平台管理员
+- **响应** (200): `{ "message": "已吊销" }`
+- **错误**: 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND`
+- **审计**: `client_key.revoke`
+
+---
+
 ## 错误码
 
 | HTTP | 含义 |

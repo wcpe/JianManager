@@ -14,6 +14,9 @@
 - **实例/Bot 控制台命令 per-resource 路由未注册致调用 404（FR-005/FR-009 真机修复）**：`docs/API.md` 记载的 `POST /api/v1/instances/:id/command` 与 `POST /api/v1/bots/:id/command` 从未在路由层注册，实测均返回 404 `{"error":"NOT_FOUND","message":"接口不存在"}`，单实例/单 Bot 发命令只能退而走 `POST /instances/batch`（action=command）。根因：`internal/controlplane/router/instance.go`、`bot.go` 的 `RegisterRoutes` 漏注册该路由。修复：补注两条路由——实例命令复用既有 `SendCommand` gRPC 委托（仅对 RUNNING 实例生效、不改实例状态、同步反馈成功/失败），Bot 命令复用既有 `SendBotCommand` 链路（CP→Worker→bot-worker `send-command`→Mineflayer chat）。补路由层回归测试（不再 404 + 校验/鉴权/未运行/无 Worker 分支），同步 `docs/API.md` 两端点的权限/响应/错误。
 - **CRASHED 实例无法重启须重启 Worker 才恢复（FR-005 真机修复）**：daemon 进程型实例崩溃循环、wrapper 退出后实例停在 CRASHED；`POST /instances/:id/start` 返回 200「启动中」但 Worker 并不真正重新 spawn wrapper，且 `/stop`、`/kill` 因 CRASHED 非法转换被拒，只能杀掉主 Worker 进程重启才恢复。根因：Worker 侧进程管理器中，策略（daemon `reapWrapper` / direct `waitLoop`）检测到子进程/wrapper 异步退出时只更新策略内部状态、未回写 `Manager.inst.State`，记账仍停留在 RUNNING，于是 `Manager.Start()` 守卫（仅允许 STOPPED/CRASHED 启动）拒绝重启；重启整个 Worker 因 `RecoverDaemonInstances` 不恢复无存活 wrapper 的崩溃实例而清掉残留记账，故之后 `/start` 才干净拉起。修复：新增 `Manager.markStrategyState`，由策略在异步退出时同步记账（CRASHED/STOPPED）并扇出状态事件，使 CRASHED 实例可直接 `/start` 重新拉起新 wrapper、无需重启 Worker。补回归测试（direct 真实崩溃→重启拉起、Manager 记账同步契约）。
 
+### 新增
+- **客户端分发频道与拉取密钥**（FR-086 / ADR-022）：新增客户端分发频道（channel，每服一个：slug 标识 + 名称 + 描述 + latest 版本指针占位）与频道级拉取密钥（玩家侧 updater 拉 manifest/制品用）的服务端管理能力。密钥**落库只存 SHA-256 哈希、明文仅创建/轮换时一次性返回、不可二次读取**（同构 JM 既有运行时密钥惯例），支持创建（名称 + 可选过期）/列出/吊销/轮换；提供 `VerifyKey` 鉴权（吊销/过期/频道不匹配即失效）供 FR-087 面向玩家端点消费；创建/吊销/轮换写审计（FR-015，detail 绝不含明文）。新增端点 `GET/POST /client-channels`、`GET/PUT/DELETE /client-channels/:id`、`GET/POST /client-channels/:id/keys`、`POST /client-channels/:id/keys/:kid/rotate`、`DELETE /client-channels/:id/keys/:kid`（均限平台管理员）；新增表 `client_channels`/`client_pull_keys`。管理台「客户端分发」页（频道列表 + 密钥管理 + 一次性明文展示/复制 + 二次确认）i18n zh/en + 暗/亮色，前端构建/类型/lint/单测通过，真机交互待验。
+
 ## 0.7.0（2026-06-22）
 
 ### 新增

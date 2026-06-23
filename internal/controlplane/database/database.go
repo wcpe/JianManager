@@ -70,6 +70,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.MetricRollup5m{},
 		&model.MetricRollup1h{},
 		&model.PlatformSetting{},
+		&model.ClientChannel{},
+		&model.ClientPullKey{},
 	)
 }
 

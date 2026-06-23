@@ -88,6 +88,8 @@ func main() {
 		slog.SetDefault(slog.New(persist))
 	}
 	assetSvc := service.NewAssetService(db, root)
+	// 客户端分发频道与拉取密钥（FR-086，见 ADR-022）：密钥落库只存哈希、明文一次性返回。
+	clientChannelSvc := service.NewClientChannelService(db)
 	// 插件服务：上传先入制品库（type=plugin 去重）再经 file gRPC 部署到实例（FR-052）。
 	pluginSvc := service.NewPluginService(db, pool, assetSvc)
 	coreSvc := service.NewCoreService()
@@ -178,6 +180,7 @@ func main() {
 		Metric:        metricSvc,
 		Settings:      settingsSvc,
 		ProbeUpdate:   probeUpdateSvc,
+		ClientChannel: clientChannelSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）

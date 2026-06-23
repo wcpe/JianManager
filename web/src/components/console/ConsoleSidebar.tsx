@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Clock,
   Database,
+  DownloadCloud,
   FileClock,
   Gamepad2,
   LayoutDashboard,
@@ -83,6 +84,7 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   { key: 'templates', labelKey: 'nav.templates', icon: LayoutTemplate, to: '/templates' },
+  { key: 'clientChannels', labelKey: 'nav.clientChannels', icon: DownloadCloud, to: '/client-channels' },
   {
     key: 'settings',
     labelKey: 'nav.settings',
