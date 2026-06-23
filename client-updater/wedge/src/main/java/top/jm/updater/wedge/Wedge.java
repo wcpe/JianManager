@@ -56,12 +56,23 @@ public final class Wedge {
             gameDir = wedgeDir.getAbsolutePath();
         }
 
-        // 4. URLClassLoader 内存加载 updater-core.jar → 反射 Core.run(ctx) → 同步等待 + 超时（契约 §6.3）。
-        File coreJar = new File(wedgeDir, config.coreJar);
-        Map<String, String> ctx = buildContext(gameDir, config, wedgeDir);
-        int result = CoreLoader.loadAndRun(coreJar, ctx, config.timeoutSec);
+        // 4. 选择 core（FR-091 自更新状态机：promote/rollback/首次 trial/selected/内置 bundled）。
+        File coreDir = new File(new File(gameDir, ".jm-updater"), "core");
+        File bundledJar = new File(wedgeDir, config.coreJar);
+        CoreSelector.Selection sel = CoreSelector.select(coreDir, bundledJar, config.coreVersion);
 
-        // 5. 处理结果：0=放行；超时/非 0=fail-static 放行带本地版本 + 提示（契约 §6.3）。
+        // 5. URLClassLoader 内存加载选定 core → 反射 Core.run(ctx) → 同步等待 + 超时（契约 §6.3）。
+        Map<String, String> ctx = buildContext(gameDir, config, wedgeDir, sel.coreVersion);
+        int result = CoreLoader.loadAndRun(sel.coreJar, ctx, config.timeoutSec);
+
+        // 6. 首次 trial 且 core 正常加载运行 → 起 boot-confirm 看门狗（FR-091）；
+        //    core 加载/超时失败（坏 core）则不确认 → 下次 premain 回退 N-1。
+        boolean coreRanOk = result != CoreLoader.RESULT_LOAD_ERROR && result != CoreLoader.RESULT_TIMEOUT;
+        if (sel.trial && coreRanOk) {
+            CoreSelector.scheduleBootConfirm(coreDir, config.bootConfirmSec);
+        }
+
+        // 7. 处理结果：0=放行；超时/非 0=fail-static 放行带本地版本 + 提示（契约 §6.3）。
         if (result == CoreLoader.RESULT_OK) {
             System.out.println(msg.get(Messages.Key.UPDATE_OK));
         } else if (result == CoreLoader.RESULT_TIMEOUT) {
@@ -80,15 +91,16 @@ public final class Wedge {
         return dir != null ? dir : new File(".");
     }
 
-    /** 组装传给 core 的 ctx（契约 §6.3）。 */
-    private static Map<String, String> buildContext(String gameDir, WedgeConfig config, File wedgeDir) {
+    /** 组装传给 core 的 ctx（契约 §6.3）。coreVersion 为选定 core 的版本（FR-091 自更新比对基准）。 */
+    private static Map<String, String> buildContext(String gameDir, WedgeConfig config, File wedgeDir,
+                                                    long coreVersion) {
         Map<String, String> ctx = new LinkedHashMap<String, String>();
         ctx.put("gameDir", gameDir);
         ctx.put("channel", nullToEmpty(config.channel));
         ctx.put("key", nullToEmpty(config.key));
         ctx.put("endpoint", nullToEmpty(config.endpoint));
         ctx.put("wedgeDir", wedgeDir.getAbsolutePath());
-        ctx.put("coreVersion", "");
+        ctx.put("coreVersion", Long.toString(coreVersion));
         return ctx;
     }
 
