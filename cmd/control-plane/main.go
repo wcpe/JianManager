@@ -109,6 +109,8 @@ func main() {
 		log.Fatalf("初始化客户端分发签名器失败: %v", err)
 	}
 	clientVersionSvc := service.NewClientVersionService(db, assetSvc, clientChannelSvc, clientSigner)
+	// 客户端机器码登记（FR-092）：manifest 拉取时 best-effort upsert，弱一致、不阻断。
+	clientMachineSvc := service.NewClientMachineService(db)
 	// 插件服务：上传先入制品库（type=plugin 去重）再经 file gRPC 部署到实例（FR-052）。
 	pluginSvc := service.NewPluginService(db, pool, assetSvc)
 	coreSvc := service.NewCoreService()
@@ -211,6 +213,7 @@ func main() {
 		ProbeUpdate:   probeUpdateSvc,
 		ClientChannel: clientChannelSvc,
 		ClientVersion: clientVersionSvc,
+		ClientMachine: clientMachineSvc,
 		RuntimeAssets: runtimeAssetsSvc,
 	}, cfg.JWT.Secret)
 

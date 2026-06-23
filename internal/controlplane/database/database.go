@@ -74,6 +74,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.ClientChannel{},
 		&model.ClientPullKey{},
 		&model.ClientVersion{},
+		&model.ClientMachine{},
 	)
 }
 

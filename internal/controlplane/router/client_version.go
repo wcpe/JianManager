@@ -28,15 +28,19 @@ type ClientVersionHandler struct {
 	svc     *service.ClientVersionService
 	channel *service.ClientChannelService
 	audit   *service.AuditService
+	machine *service.ClientMachineService
 }
 
-// NewClientVersionHandler 创建客户端分发版本/消费端点处理器。
-func NewClientVersionHandler(svc *service.ClientVersionService, channel *service.ClientChannelService, audit *service.AuditService) *ClientVersionHandler {
-	return &ClientVersionHandler{svc: svc, channel: channel, audit: audit}
+// NewClientVersionHandler 创建客户端分发版本/消费端点处理器。machine 可为 nil（不登记机器码）。
+func NewClientVersionHandler(svc *service.ClientVersionService, channel *service.ClientChannelService, audit *service.AuditService, machine *service.ClientMachineService) *ClientVersionHandler {
+	return &ClientVersionHandler{svc: svc, channel: channel, audit: audit, machine: machine}
 }
 
 // clientKeyHeader 玩家拉取密钥请求头（contract §5）。
 const clientKeyHeader = "X-Client-Key"
+
+// machineIDHeader 玩家机器码请求头（contract §5，FR-092）。客户端生成、不可信，仅统计/辅助限流。
+const machineIDHeader = "X-Machine-Id"
 
 // ---- 发布端点（JWT 平台管理员）----
 
@@ -196,6 +200,14 @@ func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 	channelID := c.Param("id")
 	if !h.authChannelKey(c, channelID) {
 		return
+	}
+
+	// 机器码登记（FR-092）：鉴权通过后若携带 X-Machine-Id 则 best-effort upsert（弱一致、失败不阻断）。
+	// 机器码不可信，仅统计/辅助限流（限流主键为 IP，FR-096）。
+	if h.machine != nil {
+		if mid := c.GetHeader(machineIDHeader); mid != "" {
+			_ = h.machine.Record(channelID, mid)
+		}
 	}
 
 	manifest, err := h.svc.BuildManifest(channelID)

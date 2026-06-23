@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
@@ -235,5 +236,48 @@ func TestClientDist_PublishFile_ReturnsMD5(t *testing.T) {
 	}
 	if resp["codec"] != "none" {
 		t.Errorf("响应 codec 应为 none，实际 %v", resp["codec"])
+	}
+}
+
+// TestClientDist_MachineRegistration 拉 manifest 携带 X-Machine-Id 时机器码登记 upsert（FR-092）；
+// 不携带则不登记。机器码不可信、仅统计/辅助限流。
+func TestClientDist_MachineRegistration(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	const channelID = "s1"
+	key := createChannelAndKey(t, r, token, channelID)
+	publishOneFileVersion(t, r, token, channelID, "mods/a.jar", []byte("AAA"))
+
+	pull := func(machineID string) {
+		req := httptest.NewRequest("GET", "/api/v1/client-channels/"+channelID+"/manifest", nil)
+		req.Header.Set("X-Client-Key", key)
+		if machineID != "" {
+			req.Header.Set("X-Machine-Id", machineID)
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("拉 manifest 失败: %d %s", w.Code, w.Body.String())
+		}
+	}
+
+	// 带机器码两次 → 登记 upsert hit_count=2。
+	pull("machine-xyz")
+	pull("machine-xyz")
+	var m model.ClientMachine
+	if err := db.Where("channel_id = ? AND machine_id = ?", channelID, "machine-xyz").First(&m).Error; err != nil {
+		t.Fatalf("机器码应已登记: %v", err)
+	}
+	if m.HitCount != 2 {
+		t.Errorf("两次拉取应 hit_count=2，实际 %d", m.HitCount)
+	}
+
+	// 不带机器码 → 不新增登记行。
+	pull("")
+	var total int64
+	db.Model(&model.ClientMachine{}).Where("channel_id = ?", channelID).Count(&total)
+	if total != 1 {
+		t.Errorf("无 X-Machine-Id 不应新增登记，频道登记行应为 1，实际 %d", total)
 	}
 }
