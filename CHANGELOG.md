@@ -6,6 +6,9 @@
 
 ## [Unreleased]
 
+### 新增
+- **面板自更新（CP/Worker 二进制在线升级）**（FR-081 / ADR-020）：Control Plane 与各节点 Worker 的二进制在线升级，可配更新源 + sha256 校验，CP 自更新 + 经 gRPC 编排全网逐节点升级，daemon 模式下不杀运行中的游戏服。**公共包** `internal/platform/selfupdate`：下载（HTTPS 强制、`allow_insecure` 放行 http）+ sha256 校验 + 原子替换可执行文件 + 平滑重启（跨平台 re-exec）。**Worker 侧** gRPC `GetVersion`（返回当前版本 + os/arch）、`UpgradeWorker`（下载校验替换并重启 Worker，daemon 子进程隔离使游戏服不掉）；proto 经 protoc 重新生成 workerpb。**CP 侧** `SelfUpdateService` 统一编排：拉取 release feed（`feed_url` 可配，按 component+os+arch 精确选制品）、CP 自身对比与自更新（下载→校验→替换→异步延迟重启先回 202）、单节点经 gRPC 升级、全网逐节点串行编排（rollout 单例、单节点失败不阻断后续、聚合 succeeded/failed/pending 计数 + 逐节点状态快照）；新增 `update` 配置段（`feed_url`/`binary_base_url`/`allow_insecure`）。端点 `GET /self-update/check`、`POST /self-update/control-plane/upgrade`、`POST /self-update/nodes/:id/upgrade`、`POST /self-update/nodes/upgrade-all`、`GET /self-update/rollout`（均限平台管理员 + 审计，detail 仅含版本/节点元数据绝不含下载凭据）。**前端** 侧栏「设置」组新增「系统更新」页（仅平台管理员可见 + 页面角色兜底）：检查更新（CP 卡片 + 节点表的当前版本 vs 最新版本对比、可升级/已最新/无匹配制品/离线徽章）、CP 自更新 / 单节点升级 / 全网升级（rollout 运行中 2s 短轮询进度面板，聚合计数 + 逐节点状态），升级均走统一 `DangerConfirm`（scope=platform）二次确认（FR-059），i18n zh/en + 暗/亮色。后端 go build·vet·test、前端 npm ci·tsc·lint·build 全绿，单测覆盖 selfupdate 公共包 + CP 编排（检查/CP 升级/单节点/rollout 各路径）+ 路由层。**真机（CP/Worker 旧→新二进制热替换在线升级、版本号为证、daemon 下游戏服不掉）待真机验**（公网 release feed 未架设）。
+
 ## 0.8.0（2026-06-24）
 
 ### 修复

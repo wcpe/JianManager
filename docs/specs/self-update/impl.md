@@ -44,11 +44,12 @@
 
 - CP config 加 `UpdateConfig{ FeedURL, BinaryBaseURL, AllowInsecure }`（mapstructure `update`），默认空 + viper 默认值。
 
-### 前端
+### 前端（实际实现）
 
-- `web/src/api/selfUpdate.ts`：`useSelfUpdateCheck` / `useUpgradeControlPlane` / `useUpgradeNode` / `useUpgradeAllNodes` / `useRollout` hooks。
-- 节点页（NodesPage）头部加「检查更新」按钮 → 打开 `SelfUpdateDialog`：展示 CP 当前/最新版本 + 升级按钮，节点列表逐行当前版本 + 升级按钮 + 全网升级 + 逐节点进度（rollout 轮询）。
-- i18n：仅加 `selfUpdate.*` 键（zh + en）。
+- `web/src/api/selfUpdate.ts`：`useSelfUpdateCheck`（手动触发，`enabled:false`）/ `useUpgradeControlPlane` / `useUpgradeNode` / `useUpgradeAll` / `useRollout`（rollout 运行中 2s 自动短轮询）hooks。
+- 独立页 `web/src/pages/SystemUpdatePage.tsx`，挂侧栏「设置」组（`navGroupsForRole` 注入 `nav.systemUpdate`，仅平台管理员可见）+ 路由 `/system-update`（`Workspace.tsx`）+ 页面角色兜底——与既有 Database/Storage 等平台管理员页一致的范式，而非内嵌 NodesPage 对话框。页面：头部「检查更新」按钮、CP 卡片（当前 vs 最新 + 自更新）、节点表（逐行当前版本 + 版本对比徽章 + 单节点升级）+「全网升级」、rollout 进度面板（聚合计数 + 逐节点状态）。
+- 升级均走统一 `DangerConfirm`（`scope=platform`）二次确认（FR-059）。
+- i18n：仅加 `systemUpdate.*` 块 + `nav.systemUpdate` 键（zh + en）。
 
 ## 测试先行（TDD）
 
@@ -69,11 +70,11 @@
 ## 待办勾选
 
 - [x] 写本 spec + api.md
-- [ ] proto 加 RPC + protoc 重生成
-- [ ] selfupdate 公共包 + 测试
-- [ ] CP service + 测试
-- [ ] Worker gRPC ops + 测试
-- [ ] CP 配置项
-- [ ] HTTP 路由 + 测试 + main 接线
-- [ ] 前端 api + 页面 + i18n
-- [ ] doc-sync（API.md / ARCHITECTURE / ADR-020 / CHANGELOG）
+- [x] proto 加 RPC + protoc 重生成
+- [x] selfupdate 公共包 + 测试
+- [x] CP service + 测试
+- [x] Worker gRPC ops + 测试
+- [x] CP 配置项
+- [x] HTTP 路由 + 测试 + main 接线
+- [x] 前端 api + 页面 + i18n
+- [x] doc-sync（API.md / ARCHITECTURE / ADR-020 / CHANGELOG）
