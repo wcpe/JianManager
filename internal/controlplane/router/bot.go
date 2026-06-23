@@ -304,6 +304,50 @@ func (h *BotHandler) UpdateBehavior(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已更新"})
 }
 
+type sendBotCommandRequest struct {
+	Command string `json:"command" binding:"required"`
+}
+
+// SendCommand 向 Bot 下发聊天/控制命令（FR-009）。
+func (h *BotHandler) SendCommand(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+
+	access := getAccess(c)
+	if access == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN"})
+		return
+	}
+	ok, err := h.authz.CanManageBot(access, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "Bot 不存在"})
+		return
+	}
+
+	var req sendBotCommandRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
+		return
+	}
+
+	if err := h.botSvc.SendCommand(id, req.Command); err != nil {
+		if errors.Is(err, service.ErrBotNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "Bot 不存在"})
+			return
+		}
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "COMMAND_FAILED", "message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "已发送"})
+}
+
 func (h *BotHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	bots := rg.Group("/bots")
 	{
@@ -314,5 +358,6 @@ func (h *BotHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		bots.GET("/:id", h.Get)
 		bots.DELETE("/:id", h.Delete)
 		bots.POST("/:id/behavior", h.UpdateBehavior)
+		bots.POST("/:id/command", h.SendCommand)
 	}
 }

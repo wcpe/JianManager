@@ -247,6 +247,35 @@ func (s *BotService) refreshStatus(bot *model.Bot) {
 	}
 }
 
+// SendCommand 向 Bot 下发聊天/控制命令（同步委托 Worker，复用 SendBotCommand RPC，FR-009）。
+// 链路：CP → Worker(SendBotCommand) → bot-worker(send-command IPC) → Mineflayer chat。
+func (s *BotService) SendCommand(id uint, command string) error {
+	var bot model.Bot
+	if err := s.db.First(&bot, id).Error; err != nil {
+		return ErrBotNotFound
+	}
+
+	client, _, err := s.getWorkerClient(bot.InstanceID)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.SendBotCommand(ctx, &workerpb.SendBotCommandRequest{
+		BotUuid: bot.UUID,
+		Command: command,
+	})
+	if err != nil {
+		return fmt.Errorf("gRPC SendBotCommand 失败: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("Worker SendBotCommand 失败: %s", resp.Error)
+	}
+	return nil
+}
+
 // delegateDeleteBot 委托 Worker 停止 Bot。
 func (s *BotService) delegateDeleteBot(bot *model.Bot) error {
 	client, _, err := s.getWorkerClient(bot.InstanceID)

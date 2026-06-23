@@ -281,9 +281,12 @@
 - **权限**: `instance.operate`
 
 ### POST /api/v1/instances/:id/command
-- **描述**: 向实例发送命令
+- **描述**: 向运行中的实例下发一行控制台命令（复用既有 SendCommand 委托，仅对 RUNNING 实例生效；命令不改变实例状态）。批量下发见 `POST /instances/batch`（action=command）。
 - **关联 FR**: FR-005
+- **权限**: `instance.operate`（资源级按可访问实例隔离）
 - **请求**: `{ "command": "say hello" }`
+- **响应**: `200 { "message": "已发送" }`
+- **错误**: 400 `INVALID_REQUEST`（缺 command）；404 `NOT_FOUND`（实例不存在/无权访问）；422 `INSTANCE_NOT_RUNNING`（实例非 RUNNING）；503 `COMMAND_FAILED`（Worker 未连接/委托失败）
 
 ### POST /api/v1/instances/batch
 - **描述**: 按 id 列表或筛选条件批量执行操作，CP 侧信号量分片有界并发经 gRPC 委托对应 Worker（复用既有 per-instance RPC），返回成功/失败/跳过计数（FR-058）
@@ -798,9 +801,11 @@
 - **请求**: `{ "behavior": "follow", "target": "PlayerName" }`
 
 ### POST /api/v1/bots/:id/command
-- **描述**: 向 Bot 发送命令
+- **描述**: 向 Bot 下发聊天/控制命令（链路：CP → Worker SendBotCommand → bot-worker send-command IPC → Mineflayer chat）
 - **关联 FR**: FR-009
 - **请求**: `{ "command": "/tp 0 64 0" }`
+- **响应**: `200 { "message": "已发送" }`
+- **错误**: 400 `INVALID_REQUEST`（缺 command）；404 `NOT_FOUND`（Bot 不存在/无权访问）；503 `COMMAND_FAILED`（Worker 未连接/委托失败）
 
 ### POST /api/v1/bots/stress-test
 - **描述**: 创建压测会话

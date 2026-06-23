@@ -116,20 +116,20 @@ func (h *InstanceHandler) Get(c *gin.Context) {
 }
 
 type createInstanceRequest struct {
-	NodeID            uint               `json:"nodeId" binding:"required"`
-	Name              string             `json:"name" binding:"required"`
-	Type              model.InstanceType `json:"type" binding:"required"`
-	Role              model.InstanceRole `json:"role"`
-	ProcessType       model.ProcessType  `json:"processType" binding:"required"`
-	StartCommand      string             `json:"startCommand" binding:"required"`
-	JDKID             uint               `json:"jdkId"`
-	JavaMajorVersion  int                `json:"javaMajorVersion"`
-	LaunchSpec        string             `json:"launchSpec"`
-	WorkDir           string             `json:"workDir"`
-	EnvVars           map[string]string  `json:"envVars"`
-	AutoStart         bool               `json:"autoStart"`
-	AutoRestart       bool               `json:"autoRestart"`
-	GroupID           uint               `json:"groupId"`
+	NodeID           uint               `json:"nodeId" binding:"required"`
+	Name             string             `json:"name" binding:"required"`
+	Type             model.InstanceType `json:"type" binding:"required"`
+	Role             model.InstanceRole `json:"role"`
+	ProcessType      model.ProcessType  `json:"processType" binding:"required"`
+	StartCommand     string             `json:"startCommand" binding:"required"`
+	JDKID            uint               `json:"jdkId"`
+	JavaMajorVersion int                `json:"javaMajorVersion"`
+	LaunchSpec       string             `json:"launchSpec"`
+	WorkDir          string             `json:"workDir"`
+	EnvVars          map[string]string  `json:"envVars"`
+	AutoStart        bool               `json:"autoStart"`
+	AutoRestart      bool               `json:"autoRestart"`
+	GroupID          uint               `json:"groupId"`
 }
 
 // Create 创建实例。
@@ -346,6 +346,44 @@ func (h *InstanceHandler) Kill(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已终止"})
 }
 
+type instanceCommandRequest struct {
+	Command string `json:"command" binding:"required"`
+}
+
+// Command 向运行中的实例下发控制台命令（FR-005）。
+// 仅对 RUNNING 实例生效，复用既有 SendCommand 委托；命令不改变实例状态。
+func (h *InstanceHandler) Command(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+
+	var req instanceCommandRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+
+	if err := h.instanceSvc.SendCommand(id, req.Command); err != nil {
+		switch {
+		case errors.Is(err, service.ErrInstanceNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		case errors.Is(err, service.ErrInstanceNotRunning):
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "INSTANCE_NOT_RUNNING", "message": err.Error()})
+		default:
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "COMMAND_FAILED", "message": err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "已发送"})
+}
+
 // Metrics 获取实例指标。
 func (h *InstanceHandler) Metrics(c *gin.Context) {
 	id, err := parseID(c)
@@ -380,6 +418,7 @@ func (h *InstanceHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		instances.POST("/:id/stop", h.Stop)
 		instances.POST("/:id/restart", h.Restart)
 		instances.POST("/:id/kill", h.Kill)
+		instances.POST("/:id/command", h.Command)
 		instances.GET("/:id/metrics", h.Metrics)
 	}
 }

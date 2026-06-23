@@ -18,11 +18,12 @@ import (
 )
 
 var (
-	ErrInstanceNotFound  = errors.New("实例不存在")
-	ErrInvalidTransition = errors.New("无效的状态转换")
-	ErrInstanceRunning   = errors.New("实例正在运行，需先停止")
-	ErrInstanceStopped   = errors.New("实例已停止")
-	ErrQuotaExceeded     = errors.New("组配额已满")
+	ErrInstanceNotFound   = errors.New("实例不存在")
+	ErrInvalidTransition  = errors.New("无效的状态转换")
+	ErrInstanceRunning    = errors.New("实例正在运行，需先停止")
+	ErrInstanceStopped    = errors.New("实例已停止")
+	ErrInstanceNotRunning = errors.New("实例未运行")
+	ErrQuotaExceeded      = errors.New("组配额已满")
 )
 
 // validTransitions 合法的状态转换。
@@ -484,6 +485,44 @@ func (s *InstanceService) Kill(id uint) error {
 
 	s.spawnDelegate(instance, "kill")
 
+	return nil
+}
+
+// SendCommand 向运行中的实例下发一行控制台命令（复用既有 SendCommand RPC，FR-005）。
+// 仅 RUNNING 实例可下发（其它状态进程 stdin 不存在，返回 ErrInstanceNotRunning）；命令不改变实例状态。
+// 与 Start/Stop 的异步委托不同：命令需即时反馈成功/失败，故走同步委托（与 GetMetrics 一致），
+// 不经 spawnDelegate，因此测试中 Shutdown 禁用异步委托后仍可观测结果。
+func (s *InstanceService) SendCommand(id uint, command string) error {
+	instance, err := s.GetByID(id)
+	if err != nil {
+		return err
+	}
+	if instance.Status != model.InstanceStatusRunning {
+		return fmt.Errorf("%w：当前状态 %s", ErrInstanceNotRunning, instance.Status)
+	}
+
+	var node model.Node
+	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
+		return fmt.Errorf("查找节点失败: %w", err)
+	}
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return fmt.Errorf("节点 %s 未连接", node.UUID)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.SendCommand(ctx, &workerpb.SendCommandRequest{
+		InstanceUuid: instance.UUID,
+		Command:      command,
+	})
+	if err != nil {
+		return fmt.Errorf("gRPC SendCommand 失败: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("Worker SendCommand 失败: %s", resp.Error)
+	}
 	return nil
 }
 
