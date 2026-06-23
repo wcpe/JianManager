@@ -105,7 +105,7 @@ updater-core ──GET /manifest(latest,带 key+machineId)──→ JM 分发后
 ## 5. 鉴权与身份
 
 - **`X-Client-Key`**：频道拉取密钥。服务端只存 SHA-256 哈希、比对校验（FR-086）；吊销即 401。**半公开**（随整包分发会泄露）→ 仅鉴权路由 + 吊销，**不作内容可信依据**（内容可信靠 §3 签名）。
-- **`X-Machine-Id`**：客户端生成的机器码（FR-092）。**不可信**（客户端可伪造）→ 仅用于审计/统计/**辅助**限流；**限流主键为 IP**（FR-096）。
+- **`X-Machine-Id`**：客户端生成的机器码（FR-092，已实装）。updater 多硬件/环境特征组合 SHA-256（不可逆）+ userHome 持久化（稳定容错），随 manifest/制品请求携带；服务端 manifest 拉取时 best-effort 登记入 `client_machines`。**不可信**（客户端可伪造）→ 仅用于审计/统计/**辅助**限流；**限流主键为 IP**（FR-096）。
 
 ## 6. agentArgs 协议（楔子 ↔ updater-core）
 

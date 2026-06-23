@@ -1409,8 +1409,9 @@
 
 ### GET /api/v1/client-channels/:id/manifest
 - **描述**: 返回频道 **latest** 的**签名 manifest**（contract §2）。只提供当前版本，不暴露历史
-- **关联 FR**: FR-087
-- **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必）；`X-Machine-Id`（可，统计/审计辅助）。**无 JWT**
+- **关联 FR**: FR-087、FR-092（机器码登记）
+- **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必）；`X-Machine-Id`（可，机器码统计/辅助限流）。**无 JWT**
+- **机器码登记（FR-092）**: 鉴权通过后若 `X-Machine-Id` 非空，则 best-effort 登记入 `client_machines`（弱一致、失败不阻断）。机器码**客户端生成、不可信**，仅统计 + 辅助限流（限流主键 IP，FR-096），**不作授权依据**
 - **响应** (200): contract §2 的签名 manifest（含 `sig.alg=Ed25519`、`sig.keyId`、`sig.value`）
   - Headers：`ETag: "<version>:<keyId>"`、`Cache-Control: no-cache`（弱缓存，靠 ETag 命中省传输）
 - **响应** (304): `If-None-Match` 命中 ETag（Not Modified）
