@@ -2,8 +2,11 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/wcpe/JianManager/internal/worker/ws"
 	"github.com/wcpe/JianManager/proto/workerpb"
@@ -142,14 +145,46 @@ func (s *Server) SendPluginCommand(_ context.Context, req *workerpb.SendPluginCo
 	}, nil
 }
 
-// QueryServerState 查询子服全状态（FR-065 骨架）：地基阶段仅回报探针连接状态，
-// 聚合状态（在线列表/世界/TPS）由 FR-066/067 填充 state_json。
+// pluginActionQueryState 是向探针请求全量服务器状态的治理动作（FR-076，见 ADR-016）。
+// 探针侧 BukkitBridgeCommandHandler 收到该 action 时采集全状态并把 JSON 放入 command_result.output。
+const pluginActionQueryState = "query_state"
+
+// QueryServerState 经反向 WS 桥按需向探针请求子服全量状态并取回 state_json（FR-076）。
+//
+// 探针在 Bukkit 子服内异步、非侵入地采集 server/worlds/JVM/class 加载器/调度器/监听器等内部数据，
+// 经 query_state 指令的 command_result 回执（output 字段）把整段状态 JSON 带回。Worker 仅做透传：
+// 把 output 原样填入 state_json，不解析（探针字段演进不需改 Worker/CP，前端按结构渲染）。
+//
+// 降级（绝不 5xx，沿用「探针只读优先、绝不成为事故源」）：
+//   - 本节点未启用插件桥 → success=false + error。
+//   - 探针未连入 / 刚断 → success=true, connected=false, state_json=""（前端提示部署/连接探针）。
+//   - 探针在但采集超时 → success=true, connected=true, state_json="" + error（前端提示重试）。
 func (s *Server) QueryServerState(_ context.Context, req *workerpb.QueryServerStateRequest) (*workerpb.QueryServerStateResponse, error) {
 	if s.bridge == nil {
 		return &workerpb.QueryServerStateResponse{Success: false, Error: "本节点未启用插件桥", Connected: false}, nil
 	}
-	connected := s.bridge.IsConnected(req.InstanceUuid)
-	return &workerpb.QueryServerStateResponse{Success: true, Connected: connected}, nil
+	if !s.bridge.IsConnected(req.InstanceUuid) {
+		// 探针未连入：连接状态降级，不下发指令（避免无谓等待到超时）。
+		return &workerpb.QueryServerStateResponse{Success: true, Connected: false}, nil
+	}
+
+	requestID := uuid.NewString()
+	frame := pluginCommandFrame(&workerpb.PluginCommand{Action: pluginActionQueryState, RequestId: requestID})
+	res, err := s.bridge.SendCommandAndWait(req.InstanceUuid, requestID, frame, pluginCommandTimeout)
+	if err != nil {
+		// 刚断开：连接状态降级。
+		if errors.Is(err, ws.ErrBridgeNotConnected) {
+			return &workerpb.QueryServerStateResponse{Success: true, Connected: false}, nil
+		}
+		// 采集超时或写出错：探针在线但本次状态不可得，降级为 N/A（state_json 空 + error）。
+		return &workerpb.QueryServerStateResponse{Success: true, Connected: true, Error: err.Error()}, nil
+	}
+	return &workerpb.QueryServerStateResponse{
+		Success:   res.Success,
+		Error:     res.Error,
+		Connected: true,
+		StateJson: res.Output,
+	}, nil
 }
 
 // pluginCommandFrame 把 proto PluginCommand 转为下发给探针的 WS 帧（type=command）。
