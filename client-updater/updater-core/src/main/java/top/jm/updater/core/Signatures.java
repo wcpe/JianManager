@@ -28,16 +28,25 @@ final class Signatures {
     }
 
     /**
-     * 生产内置信任根。占位公钥在 FR-087 服务端签名密钥生成后回填（见 {@code KEY_K1}）。
-     * 当前为空——任何 manifest 验签都会因「未知 keyId」被拒（fail-static），符合「端点未实现前不放行未签内容」。
+     * 生产内置信任根：keyId → 公钥（X.509 SubjectPublicKeyInfo DER, base64）。
+     *
+     * <p>{@code k1} 为 JM 服务端 FR-087 签名公钥（与服务端 {@code ManifestSigner} 私钥成对）。
+     * <strong>当前固化的是开发用密钥</strong>——生产部署须随基础整包替换为运营方独立公钥
+     * （服务端经 {@code JIANMANAGER_CLIENT_SIGN_PRIVKEY} 注入对应私钥，ADR-022 决策 8）。
+     * 支持主 + 备多公钥（密钥轮换：新增 k2… 经一次基础包更新淘汰旧 keyId）。
      */
     static Signatures production() {
         Map<String, byte[]> store = new LinkedHashMap<>();
-        // TODO(FR-087): 回填服务端签名公钥（X.509 DER, base64）。
-        //   store.put("k1", Base64.getDecoder().decode(KEY_K1));
-        //   store.put("k2", Base64.getDecoder().decode(KEY_K2));
+        store.put("k1", Base64.getDecoder().decode(KEY_K1));
         return new Signatures(Collections.unmodifiableMap(store));
     }
+
+    /**
+     * 开发用 Ed25519 公钥（X.509 SubjectPublicKeyInfo DER, base64），keyId=k1。
+     * 与服务端 {@code service.DevSignPublicKeySPKIBase64} 同值（FR-087）。生产须替换。
+     */
+    private static final String KEY_K1 =
+            "MCowBQYDK2VwAyEAsO7B/k+2++wQtN/L0jpCXCjsGnYV5Sx2eyCk0pDzV0Y=";
 
     /** 用指定信任根构造（测试注入用）。键=keyId，值=X.509 公钥 DER 字节。 */
     static Signatures withTrustStore(Map<String, byte[]> store) {

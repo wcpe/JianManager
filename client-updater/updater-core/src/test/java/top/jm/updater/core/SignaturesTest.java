@@ -92,11 +92,19 @@ class SignaturesTest {
     }
 
     @Test
-    void productionTrustStoreRejectsUntilKeysFilled() throws Exception {
-        // 生产内置信任根当前为空（FR-087 公钥未回填）→ 任何 manifest 都因未知 keyId 被拒，符合预期。
+    void productionTrustStoreRejectsForgedKey() throws Exception {
+        // FR-087 已回填生产 k1 公钥；用随机生成的 k1 私钥（伪造方）签名 → 公钥不匹配必被拒。
+        // 证明生产信任根只认与内置公钥成对的私钥，拒绝任何冒充 keyId 的伪造签名。
         TestSigner signer = new TestSigner("k1");
         Manifest manifest = Manifest.parse(signer.sign(sampleManifest()));
         assertFalse(Signatures.production().verify(manifest),
-                "公钥未回填时生产验签应拒绝（fail-static），不放行未签内容");
+                "伪造 k1 私钥（与内置公钥不成对）的签名必须被生产验签拒绝");
+    }
+
+    @Test
+    void productionTrustStoreHasK1() {
+        // FR-087 公钥已回填：production 信任根应持有 k1（与服务端 ManifestSigner 私钥成对）。
+        assertTrue(Signatures.production().hasKey("k1"),
+                "生产信任根应内置 k1 公钥（FR-087 回填）");
     }
 }
