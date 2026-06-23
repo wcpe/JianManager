@@ -994,6 +994,24 @@
     "noNote": "(no note)",
     "noFiles": "No files"
   },
+  "clientStats": {
+    "tab": "Stats",
+    "subtitle": "Distribution stats (aggregated from pull tracking and telemetry). Machine codes are untrusted, used only as a stat dimension.",
+    "days7": "Last 7 days",
+    "days30": "Last 30 days",
+    "days90": "Last 90 days",
+    "activeMachines": "Active machines",
+    "successRate": "Update success rate",
+    "rollbackRate": "Rollback rate",
+    "downloads": "Downloads",
+    "downloadTrend": "Download trend",
+    "versionDist": "Version distribution",
+    "topIps": "Source IPs (Top 10)",
+    "ip": "IP",
+    "requestCount": "Requests",
+    "totalBytes": "Total bytes in window",
+    "empty": "No data"
+  },
   "templates": {
     "title": "Server Templates",
     "subtitle": "Reusable templates for creating instances; deleting a template does not affect instances already created from it",

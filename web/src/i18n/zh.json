@@ -994,6 +994,24 @@
     "noNote": "（无备注）",
     "noFiles": "无文件"
   },
+  "clientStats": {
+    "tab": "统计",
+    "subtitle": "分发统计（来自拉取追踪与遥测聚合）。机器码不可信，仅作统计维度。",
+    "days7": "近 7 天",
+    "days30": "近 30 天",
+    "days90": "近 90 天",
+    "activeMachines": "活跃机器码",
+    "successRate": "更新成功率",
+    "rollbackRate": "回退率",
+    "downloads": "下载量",
+    "downloadTrend": "下载量趋势",
+    "versionDist": "版本分布",
+    "topIps": "来源 IP（Top 10）",
+    "ip": "IP",
+    "requestCount": "请求数",
+    "totalBytes": "窗口内流量合计",
+    "empty": "暂无数据"
+  },
   "templates": {
     "title": "服务端模板",
     "subtitle": "用于创建实例的可复用模板；删除模板不影响已用其创建的实例",
