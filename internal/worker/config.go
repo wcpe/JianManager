@@ -32,11 +32,12 @@ type Config struct {
 	// EnrollToken 一次性 enrollment token 明文（FR-080，见 ADR-020）。
 	// 仅经环境变量/命令行传入、绝不写入 worker.yaml（一次性凭据不留盘）；
 	// 首次注册（无本地身份文件）时携带，注册成功后即作废。
-	EnrollToken string        `mapstructure:"enroll_token"`
-	Log         LogConfig     `mapstructure:"log"`
-	Heartbeat   time.Duration `mapstructure:"-"`
+	EnrollToken string           `mapstructure:"enroll_token"`
+	Log         LogConfig        `mapstructure:"log"`
+	Decompiler  DecompilerConfig `mapstructure:"decompiler"`
 	// Search 全文搜索索引配置（FR-074，见 ADR-017）。
-	Search SearchConfig `mapstructure:"search"`
+	Search    SearchConfig  `mapstructure:"search"`
+	Heartbeat time.Duration `mapstructure:"-"`
 }
 
 // SearchConfig 全文搜索索引配置（FR-074，见 ADR-017）。
@@ -45,6 +46,16 @@ type SearchConfig struct {
 	// 形如 logs/（目录前缀）、*.bak（basename glob）、vendor（路径段）。默认集已覆盖常见
 	// 日志/缓存/二进制/归档/MC 世界数据，零配置即可用；此处仅做加性补充。
 	Ignore []string `mapstructure:"ignore"`
+}
+
+// DecompilerConfig 反编译能力配置（FR-075，见 ADR-018）。
+type DecompilerConfig struct {
+	// CFRPath 显式 CFR 反编译器 jar 路径（最高优先级，可空）。
+	// 运维离线放置时直接指定；空则回退内嵌/数据根缓存/按需下载。
+	CFRPath string `mapstructure:"cfr_path"`
+	// AllowDownload 是否允许从 Maven Central 按需下载 CFR jar（sha256 pin 校验后落数据根缓存）。
+	// 默认开启；离线环境可关并用 CFRPath/内嵌。
+	AllowDownload bool `mapstructure:"allow_download"`
 }
 
 // GRPCConfig gRPC 服务器配置。
@@ -85,6 +96,9 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "text")
 	v.SetDefault("search.ignore", []string{})
+	// 反编译（FR-075）：默认无显式 CFR 路径、允许按需下载（首次反编译时拉 CFR 落数据根缓存）。
+	v.SetDefault("decompiler.cfr_path", "")
+	v.SetDefault("decompiler.allow_download", true)
 
 	if path != "" {
 		v.SetConfigFile(path)

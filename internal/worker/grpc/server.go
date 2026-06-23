@@ -14,6 +14,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 	"github.com/wcpe/JianManager/internal/worker/bot"
+	"github.com/wcpe/JianManager/internal/worker/decompiler"
 	"github.com/wcpe/JianManager/internal/worker/jdk"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/process"
@@ -59,6 +60,10 @@ type Server struct {
 	// 插件桥（ServerProbe 反向 WS，FR-065，见 ADR-016）。
 	// bridge 提供「实例 UUID→探针会话」表与下发能力；为 nil 表示本节点未启用插件桥。由 SetPluginBridge 注入。
 	bridge *ws.PluginBridgeServer
+
+	// decompiler 解析/缓存 CFR 反编译器 jar（FR-075，见 ADR-018）。
+	// 为 nil 表示本节点未启用反编译能力，DecompileClass 返回降级错误。由 SetDecompiler 注入。
+	decompiler *decompiler.Provider
 	// pluginEventMu 保护 pluginEventSubs，StreamPluginEvents 订阅/取消订阅时加锁。
 	// 插件事件与实例事件刻意分两套订阅者总线：二者消费方、过滤维度、生命周期均不同。
 	pluginEventMu   sync.Mutex

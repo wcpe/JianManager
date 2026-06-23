@@ -19,6 +19,8 @@ import (
 	workercfg "github.com/wcpe/JianManager/internal/worker"
 	"github.com/wcpe/JianManager/internal/worker/bot"
 	"github.com/wcpe/JianManager/internal/worker/daemon"
+	"github.com/wcpe/JianManager/internal/worker/decompiler"
+	wembed "github.com/wcpe/JianManager/internal/worker/embed"
 	wgrpc "github.com/wcpe/JianManager/internal/worker/grpc"
 	"github.com/wcpe/JianManager/internal/worker/heartbeat"
 	jdks "github.com/wcpe/JianManager/internal/worker/jdk"
@@ -147,6 +149,16 @@ func runWorker() {
 	botMgr := bot.NewManager(bot.ManagerConfig{BotWorkerPath: botWorkerPath})
 	defer botMgr.Stop()
 	workerServer.SetBotManager(botMgr)
+
+	// 反编译器（FR-075，见 ADR-018）：解析 CFR jar（配置路径>内嵌>数据根缓存>按需下载 sha256 pin），
+	// 缓存落数据根 cache/tools；反编译经实例/系统 JDK 受控调起 CFR，只读+超时+体积上限+失败降级。
+	decompProvider := decompiler.NewProvider(decompiler.Config{
+		ConfigPath:    cfg.Decompiler.CFRPath,
+		CacheDir:      filepath.Join(root.CacheDir(), "tools"),
+		Embedded:      wembed.CFRJar,
+		AllowDownload: cfg.Decompiler.AllowDownload,
+	})
+	workerServer.SetDecompiler(decompProvider)
 
 	workerpb.RegisterWorkerServiceServer(grpcServer, workerServer)
 
