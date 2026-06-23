@@ -1403,7 +1403,7 @@
   - [ ] 按本机平台取 manifest 平台变体文件集（win/mac/linux）
   - [ ] 原子放置（temp 下载 + 校验通过再原子换）；中断不损坏客户端
   - [ ] **fail-static**：manifest 端点不可达/断网 → 带本地现有版本返回成功（楔子放行进游戏）+ 显眼提示
-  - [ ] 仅用 JDK 自带能力（`java.net.http`/`MessageDigest`）+ 轻量 JSON，jar 精简
+  - [ ] **target Java 8**（兼容低版本游戏 JVM）：HTTP 用 `HttpURLConnection`、`MessageDigest` + 轻量 JSON；Ed25519 用 BouncyCastle（Java 8 无 JDK 内置），zstd 用 zstd-jni，fat jar 自含
   - [ ] **本地诊断日志**（供排障与遥测 FR-094）
   - [ ] 真机：增量/减量正确、玩家区未动、断网 fail-static、并发不冲突
 - **关联 ADR**: ADR-021、ADR-022
