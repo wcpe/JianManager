@@ -2,6 +2,7 @@ package top.wcpe.mc.jm.updater.core;
 
 import java.security.GeneralSecurityException;
 import java.security.KeyFactory;
+import java.security.Provider;
 import java.security.PublicKey;
 import java.security.Signature;
 import java.security.spec.X509EncodedKeySpec;
@@ -10,15 +11,22 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import org.bouncycastle.jce.provider.BouncyCastleProvider;
+
 /**
  * manifest Ed25519 验签（契约 §3，ADR-022）。信任根 = 内置公钥；签名缺失/不符一律拒绝。
  *
  * <p>内置 {@code keyId → 公钥} 映射支持密钥轮换（主 k1 + 备 k2…，ADR-022 决策 8）。
  * 测试可经 {@link #withTrustStore(Map)} 注入测试公钥而不污染生产内置集。
  *
- * <p>用 JDK15+ 内置 EdDSA（{@code KeyFactory.getInstance("Ed25519")}），零三方依赖。
+ * <p>Ed25519 由 BouncyCastle 提供（{@code KeyFactory/Signature.getInstance("Ed25519", BC)}）——
+ * updater-core 须兼容 Java 8（被老版本 MC 的 JVM 加载），而 JDK 内置 EdDSA 自 15 起才有，
+ * 故引 BouncyCastle 作 Provider；签名仍为标准 Ed25519，与服务端（Go ed25519）逐位兼容（ADR-022）。
  */
 final class Signatures {
+
+    /** Ed25519 Provider（BouncyCastle，兼容 Java 8）。仅本类内使用、不全局注册以免与宿主 JVM 冲突。 */
+    private static final Provider BC = new BouncyCastleProvider();
 
     /** keyId → X.509(SubjectPublicKeyInfo) DER 公钥字节，base64 编码。 */
     private final Map<String, byte[]> trustStore;
@@ -69,9 +77,9 @@ final class Signatures {
             return false;
         }
         try {
-            PublicKey pub = KeyFactory.getInstance("Ed25519")
+            PublicKey pub = KeyFactory.getInstance("Ed25519", BC)
                     .generatePublic(new X509EncodedKeySpec(pubDer));
-            Signature s = Signature.getInstance("Ed25519");
+            Signature s = Signature.getInstance("Ed25519", BC);
             s.initVerify(pub);
             s.update(message);
             return s.verify(sig);
@@ -97,9 +105,9 @@ final class Signatures {
             return false;
         }
         try {
-            PublicKey pub = KeyFactory.getInstance("Ed25519")
+            PublicKey pub = KeyFactory.getInstance("Ed25519", BC)
                     .generatePublic(new X509EncodedKeySpec(pubDer));
-            Signature sig = Signature.getInstance("Ed25519");
+            Signature sig = Signature.getInstance("Ed25519", BC);
             sig.initVerify(pub);
             sig.update(manifest.signingBytes());
             byte[] sigBytes = Base64.getDecoder().decode(manifest.sigValue);

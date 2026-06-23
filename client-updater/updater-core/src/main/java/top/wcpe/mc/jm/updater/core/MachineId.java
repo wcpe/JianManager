@@ -96,7 +96,8 @@ final class MachineId {
         try {
             OperatingSystemMXBean os = ManagementFactory.getOperatingSystemMXBean();
             if (os instanceof com.sun.management.OperatingSystemMXBean) {
-                return ((com.sun.management.OperatingSystemMXBean) os).getTotalMemorySize();
+                // Java 8 用 getTotalPhysicalMemorySize（getTotalMemorySize 是 Java 14+）。
+                return ((com.sun.management.OperatingSystemMXBean) os).getTotalPhysicalMemorySize();
             }
         } catch (Throwable ignore) {
             // 取不到内存特征即跳过。

@@ -41,7 +41,7 @@ class MachineIdTest {
     void reusesPersistedEvenIfHardwareChanged(@TempDir Path tmp) throws Exception {
         // 持久化一个已知机器码（模拟历史身份）→ 即使本机特征不同也应原样返回（部分变化容错）。
         Path file = tmp.resolve("machine-id");
-        String known = "a".repeat(64);
+        String known = new String(new char[64]).replace('\0', 'a'); // Java 8（无 String.repeat）
         Files.createDirectories(file.getParent());
         Files.write(file, known.getBytes(StandardCharsets.UTF_8));
         assertEquals(known, MachineId.get(file), "已持久化身份应稳定复用，硬件变化不改之");

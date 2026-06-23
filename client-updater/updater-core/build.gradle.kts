@@ -1,9 +1,17 @@
 // updater-core：更新主体，被楔子动态加载（URLClassLoader 内存加载，便于自更新换 jar）。
-// target Java 17：用 java.net.http、内置 EdDSA（Ed25519 验签）；现代整合包自带 JRE 17+。
-// 仅 JDK 自带能力 + 轻量 JSON（自写零依赖）+ zstd 制品解压（contract §4 codec=zstd）。
+// target Java 8：须能被低版本（Java 8）MC 的 JVM 加载——老整合包/启动器仍在用 Java 8，
+// 若编到 17 则 UnsupportedClassVersionError、楔子加载失败（见 FR-089 真机）。
+// 代价：Java 8 无 java.net.http（改用 HttpURLConnection）、无内置 Ed25519（JDK15+，改引 BouncyCastle）。
+// 仍只用 JDK 自带能力 + 轻量 JSON（自写）+ zstd 解压 + BouncyCastle（Ed25519 验签）。
 java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+// 用 --release 8 强制按 Java 8 API 编译：若误用 Java 9+ API（如 java.net.http、List.of）直接编译失败，
+// 而非 source/target 那样编过却在真 Java 8 上运行期崩。
+tasks.withType<JavaCompile>().configureEach {
+    options.release.set(8)
 }
 
 repositories {
@@ -11,8 +19,11 @@ repositories {
 }
 
 dependencies {
-    // 制品按 contract §2 artifact.codec=zstd 压缩；zstd-jni 是轻量、广用的 zstd 绑定。
+    // 制品按 contract §2 artifact.codec=zstd 压缩；zstd-jni 是轻量、广用的 zstd 绑定（兼容 Java 8）。
     implementation("com.github.luben:zstd-jni:1.5.6-4")
+    // manifest/.jmpack Ed25519 验签（ADR-022）。JDK 内置 EdDSA 自 15 起才有，Java 8 须引入。
+    // bcprov-jdk18on = JDK 1.8+ 构建；以 Provider 实例直用（不全局注册），打进 fat jar。
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
