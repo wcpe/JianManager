@@ -54,6 +54,7 @@ type Services struct {
 	EnrollToken   *service.EnrollTokenService
 	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
 	EnrollInstall EnrollInstallConfig
+	Storage       *service.StorageService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -206,6 +207,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.Settings != nil {
 			settingsHandler := NewSettingsHandler(svcs.Settings)
 			settingsHandler.RegisterRoutes(admin)
+		}
+
+		// 平台存储资源管理器：CP 侧数据根 FHS 只读浏览 + 占用统计 + cache 受控清理，
+		// 数据根仅 CP 读写，限平台管理员（FR-083 / ADR-010）。
+		if svcs.Storage != nil {
+			storageHandler := NewStorageHandler(svcs.Storage)
+			storageHandler.RegisterRoutes(admin)
 		}
 
 		// 客户端分发频道与拉取密钥：平台级，限平台管理员（FR-086 / ADR-022）。

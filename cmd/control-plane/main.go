@@ -95,6 +95,8 @@ func main() {
 	// 节点 enrollment token（一键安装 / 傻瓜部署，FR-080，见 ADR-020）：
 	// 一次性、限时的新节点准入凭据，落库只存哈希、明文签发时一次性返回。
 	enrollTokenSvc := service.NewEnrollTokenService(db)
+	// 平台存储资源管理器（FR-083）：CP 侧数据根 FHS 只读浏览 + 占用统计 + cache 受控清理。
+	storageSvc := service.NewStorageService(db, root)
 	// 客户端分发频道与拉取密钥（FR-086，见 ADR-022）：密钥落库只存哈希、明文一次性返回。
 	clientChannelSvc := service.NewClientChannelService(db)
 	// 客户端分发版本与签名 manifest（FR-087，见 ADR-022、contract §2/§3）。
@@ -225,6 +227,7 @@ func main() {
 			ScriptBaseURL: cfg.Enroll.ScriptBaseURL,
 			BinaryURL:     cfg.Enroll.BinaryURL,
 		},
+		Storage:       storageSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）
