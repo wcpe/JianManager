@@ -107,7 +107,12 @@ func (s *BackupService) CreateWithOptions(instanceID uint, name string, opts Cre
 		return nil, fmt.Errorf("创建备份失败: %w", err)
 	}
 
-	go s.executeBackup(backup)
+	// 后台任务在独立副本上回写状态/结果，绝不复用返回给调用方的实例：
+	// 调用方（HTTP handler）会用 encoding/json 序列化返回的 backup，而 executeBackup
+	// 经 GORM Model(...).Update 会写回模型字段（autoUpdateTime 等），二者并发读写
+	// 同一结构体构成数据竞态（go test -race 可稳定复现）。复制后两者内存隔离。
+	async := *backup
+	go s.executeBackup(&async)
 	return backup, nil
 }
 
