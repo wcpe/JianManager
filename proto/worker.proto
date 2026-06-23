@@ -45,6 +45,12 @@ service WorkerService {
   // SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
   // Worker 维护本地持久倒排索引（var/index/，增量更新），查询返回命中文件+行+片段。
   rpc SearchFiles(SearchFilesRequest) returns (SearchFilesResponse);
+  // ListArchiveEntries 列出归档（jar/zip）内全部条目（Go archive/zip，不起进程；FR-075，见 ADR-018）。
+  rpc ListArchiveEntries(ListArchiveEntriesRequest) returns (ListArchiveEntriesResponse);
+  // ReadArchiveEntry 读取归档内某条目内容，流式截断到上限（FR-075）。
+  rpc ReadArchiveEntry(ReadArchiveEntryRequest) returns (ReadArchiveEntryResponse);
+  // DecompileClass 经实例/系统 JDK 跑 CFR 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码（FR-075，见 ADR-018）。
+  rpc DecompileClass(DecompileClassRequest) returns (DecompileClassResponse);
   // ListConfigFiles 列出可管理配置文件。
   rpc ListConfigFiles(ListConfigFilesRequest) returns (ListConfigFilesResponse);
   // ReadConfig 读取配置文件并解析。
@@ -900,3 +906,52 @@ message UpgradeWorkerResponse {
   string error = 2;        // 失败原因（下载失败/校验不符/替换失败）
   string from_version = 3; // 升级前版本
 }
+
+// === 归档浏览与反编译（FR-075，见 ADR-018） ===
+
+message ListArchiveEntriesRequest {
+  string instance_uuid = 1;
+  string path = 2;          // 相对工作目录的归档文件路径（.jar/.zip）
+}
+
+// ArchiveEntry 归档（zip/jar）内的单个条目（扁平，前端按「/」重建子树）。
+message ArchiveEntry {
+  string name = 1;            // 归档内条目名（「/」分隔；目录条目以「/」结尾）
+  bool is_dir = 2;
+  int64 size = 3;            // 解压后字节
+  int64 compressed_size = 4;
+  int64 modified = 5;       // Unix 秒
+  uint32 crc32 = 6;
+}
+
+message ListArchiveEntriesResponse {
+  repeated ArchiveEntry entries = 1;
+  bool truncated = 2;       // 条目数超上限被截断
+}
+
+message ReadArchiveEntryRequest {
+  string instance_uuid = 1;
+  string path = 2;          // 归档文件路径
+  string entry = 3;         // 归档内条目名
+}
+
+message ReadArchiveEntryResponse {
+  bytes content = 1;        // 内容（截断到上限）
+  bool truncated = 2;
+  bool binary = 3;          // 嗅探为二进制（前端不文本预览）
+}
+
+message DecompileClassRequest {
+  string instance_uuid = 1;
+  string path = 2;          // 工作目录内 .class 或 .jar 路径
+  string entry = 3;         // 可选：path 为 .jar 时反编译 jar 内某 .class 条目；空=反编译整个 jar
+}
+
+message DecompileClassResponse {
+  bool success = 1;
+  string error = 2;         // 失败/降级原因（无 JDK / 无 CFR / 超时 / 超限 / CFR 非 0 退出）
+  string source = 3;        // 反编译 Java 源码（截断到上限）
+  bool truncated = 4;
+  string decompiler = 5;    // 反编译器标识（如 "CFR 0.152"）
+}
+

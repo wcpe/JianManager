@@ -38,6 +38,9 @@ const (
 	WorkerService_RenameFile_FullMethodName           = "/worker.WorkerService/RenameFile"
 	WorkerService_DownloadArchive_FullMethodName      = "/worker.WorkerService/DownloadArchive"
 	WorkerService_SearchFiles_FullMethodName          = "/worker.WorkerService/SearchFiles"
+	WorkerService_ListArchiveEntries_FullMethodName   = "/worker.WorkerService/ListArchiveEntries"
+	WorkerService_ReadArchiveEntry_FullMethodName     = "/worker.WorkerService/ReadArchiveEntry"
+	WorkerService_DecompileClass_FullMethodName       = "/worker.WorkerService/DecompileClass"
 	WorkerService_ListConfigFiles_FullMethodName      = "/worker.WorkerService/ListConfigFiles"
 	WorkerService_ReadConfig_FullMethodName           = "/worker.WorkerService/ReadConfig"
 	WorkerService_WriteConfig_FullMethodName          = "/worker.WorkerService/WriteConfig"
@@ -114,6 +117,12 @@ type WorkerServiceClient interface {
 	// SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
 	// Worker 维护本地持久倒排索引（var/index/，增量更新），查询返回命中文件+行+片段。
 	SearchFiles(ctx context.Context, in *SearchFilesRequest, opts ...grpc.CallOption) (*SearchFilesResponse, error)
+	// ListArchiveEntries 列出归档（jar/zip）内全部条目（Go archive/zip，不起进程；FR-075，见 ADR-018）。
+	ListArchiveEntries(ctx context.Context, in *ListArchiveEntriesRequest, opts ...grpc.CallOption) (*ListArchiveEntriesResponse, error)
+	// ReadArchiveEntry 读取归档内某条目内容，流式截断到上限（FR-075）。
+	ReadArchiveEntry(ctx context.Context, in *ReadArchiveEntryRequest, opts ...grpc.CallOption) (*ReadArchiveEntryResponse, error)
+	// DecompileClass 经实例/系统 JDK 跑 CFR 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码（FR-075，见 ADR-018）。
+	DecompileClass(ctx context.Context, in *DecompileClassRequest, opts ...grpc.CallOption) (*DecompileClassResponse, error)
 	// ListConfigFiles 列出可管理配置文件。
 	ListConfigFiles(ctx context.Context, in *ListConfigFilesRequest, opts ...grpc.CallOption) (*ListConfigFilesResponse, error)
 	// ReadConfig 读取配置文件并解析。
@@ -391,6 +400,36 @@ func (c *workerServiceClient) SearchFiles(ctx context.Context, in *SearchFilesRe
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SearchFilesResponse)
 	err := c.cc.Invoke(ctx, WorkerService_SearchFiles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ListArchiveEntries(ctx context.Context, in *ListArchiveEntriesRequest, opts ...grpc.CallOption) (*ListArchiveEntriesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListArchiveEntriesResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ListArchiveEntries_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ReadArchiveEntry(ctx context.Context, in *ReadArchiveEntryRequest, opts ...grpc.CallOption) (*ReadArchiveEntryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadArchiveEntryResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ReadArchiveEntry_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) DecompileClass(ctx context.Context, in *DecompileClassRequest, opts ...grpc.CallOption) (*DecompileClassResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DecompileClassResponse)
+	err := c.cc.Invoke(ctx, WorkerService_DecompileClass_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -750,6 +789,12 @@ type WorkerServiceServer interface {
 	// SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
 	// Worker 维护本地持久倒排索引（var/index/，增量更新），查询返回命中文件+行+片段。
 	SearchFiles(context.Context, *SearchFilesRequest) (*SearchFilesResponse, error)
+	// ListArchiveEntries 列出归档（jar/zip）内全部条目（Go archive/zip，不起进程；FR-075，见 ADR-018）。
+	ListArchiveEntries(context.Context, *ListArchiveEntriesRequest) (*ListArchiveEntriesResponse, error)
+	// ReadArchiveEntry 读取归档内某条目内容，流式截断到上限（FR-075）。
+	ReadArchiveEntry(context.Context, *ReadArchiveEntryRequest) (*ReadArchiveEntryResponse, error)
+	// DecompileClass 经实例/系统 JDK 跑 CFR 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码（FR-075，见 ADR-018）。
+	DecompileClass(context.Context, *DecompileClassRequest) (*DecompileClassResponse, error)
 	// ListConfigFiles 列出可管理配置文件。
 	ListConfigFiles(context.Context, *ListConfigFilesRequest) (*ListConfigFilesResponse, error)
 	// ReadConfig 读取配置文件并解析。
@@ -878,6 +923,15 @@ func (UnimplementedWorkerServiceServer) DownloadArchive(*DownloadArchiveRequest,
 }
 func (UnimplementedWorkerServiceServer) SearchFiles(context.Context, *SearchFilesRequest) (*SearchFilesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SearchFiles not implemented")
+}
+func (UnimplementedWorkerServiceServer) ListArchiveEntries(context.Context, *ListArchiveEntriesRequest) (*ListArchiveEntriesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListArchiveEntries not implemented")
+}
+func (UnimplementedWorkerServiceServer) ReadArchiveEntry(context.Context, *ReadArchiveEntryRequest) (*ReadArchiveEntryResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReadArchiveEntry not implemented")
+}
+func (UnimplementedWorkerServiceServer) DecompileClass(context.Context, *DecompileClassRequest) (*DecompileClassResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DecompileClass not implemented")
 }
 func (UnimplementedWorkerServiceServer) ListConfigFiles(context.Context, *ListConfigFilesRequest) (*ListConfigFilesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListConfigFiles not implemented")
@@ -1300,6 +1354,60 @@ func _WorkerService_SearchFiles_Handler(srv interface{}, ctx context.Context, de
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).SearchFiles(ctx, req.(*SearchFilesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_ListArchiveEntries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListArchiveEntriesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ListArchiveEntries(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ListArchiveEntries_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ListArchiveEntries(ctx, req.(*ListArchiveEntriesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_ReadArchiveEntry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadArchiveEntryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ReadArchiveEntry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ReadArchiveEntry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ReadArchiveEntry(ctx, req.(*ReadArchiveEntryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_DecompileClass_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DecompileClassRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).DecompileClass(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_DecompileClass_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).DecompileClass(ctx, req.(*DecompileClassRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1882,6 +1990,18 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SearchFiles",
 			Handler:    _WorkerService_SearchFiles_Handler,
+		},
+		{
+			MethodName: "ListArchiveEntries",
+			Handler:    _WorkerService_ListArchiveEntries_Handler,
+		},
+		{
+			MethodName: "ReadArchiveEntry",
+			Handler:    _WorkerService_ReadArchiveEntry_Handler,
+		},
+		{
+			MethodName: "DecompileClass",
+			Handler:    _WorkerService_DecompileClass_Handler,
 		},
 		{
 			MethodName: "ListConfigFiles",
