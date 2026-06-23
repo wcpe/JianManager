@@ -216,7 +216,7 @@
 
 ### POST /api/v1/instances
 - **描述**: 创建实例
-- **关联 FR**: FR-005
+- **关联 FR**: FR-005, FR-078（docker 模式）
 - **权限**: `instance.create`
 - **请求**:
   ```json
@@ -227,11 +227,13 @@
     "processType": "daemon",
     "startCommand": "java -Xmx2G -jar paper.jar nogui",
     "workDir": "/servers/survival",
+    "image": "itzg/minecraft-server:latest",
     "autoStart": false,
     "autoRestart": true,
     "groupId": 1
   }
   ```
+- **说明**: `processType=docker` 时 `image` 必填（容器镜像引用，默认 Docker Hub，本地缺失时启动前自动拉取，FR-078/ADR-019）；其它启动方式忽略 `image`。docker 模式宿主端口（FR-032 端口池分配）映射到容器内端口（MC 约定 25565），工作目录 bind-mount 到容器 `/data`。
 
 ### GET /api/v1/instances/:id
 - **描述**: 实例详情
@@ -503,6 +505,27 @@
 ### GET /api/v1/nodes/:id/ports
 - **描述**: 查看某节点端口占用与分配范围
 - **响应**: `{ nodeId, ranges:{serverPortBase,rconPortBase,rangeSize}, occupied:[{instanceId,name,role,serverPort,rconPort,queryPort}] }`
+
+### GET /api/v1/nodes/:id/docker/images
+- **描述**: 列出节点本机 Docker 镜像（CP 经 gRPC 委托 Worker，FR-078/ADR-019）
+- **关联 FR**: FR-078
+- **权限**: 平台管理员
+- **响应**: `[{ "id":"sha256:…", "tags":["itzg/minecraft-server:latest"], "sizeBytes":123456789, "created":1700000000 }]`
+- **错误**: `503 NODE_OFFLINE`（节点未连接）；`422 DOCKER_UNAVAILABLE`（节点未安装/未运行 Docker）
+
+### POST /api/v1/nodes/:id/docker/images/pull
+- **描述**: 在节点拉取镜像（默认 Docker Hub）
+- **关联 FR**: FR-078
+- **权限**: 平台管理员
+- **请求**: `{ "image": "itzg/minecraft-server:latest" }`
+- **响应**: `{ "message": "已拉取" }`；**错误**: `503 NODE_OFFLINE`、`502 DOCKER_OP_FAILED`
+
+### POST /api/v1/nodes/:id/docker/images/remove
+- **描述**: 在节点删除镜像（引用含 `/` 与 `:`，故放请求体而非路径参数）
+- **关联 FR**: FR-078
+- **权限**: 平台管理员
+- **请求**: `{ "image": "itzg/minecraft-server:latest", "force": false }`
+- **响应**: `{ "message": "已删除" }`；**错误**: `503 NODE_OFFLINE`、`502 DOCKER_OP_FAILED`
 
 ### GET / POST /api/v1/networks，GET / PATCH / DELETE …/:id
 - **描述**: 群组（Network 非独占软标签）CRUD；删除群组不影响成员实例与代理注册
