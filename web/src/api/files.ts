@@ -97,6 +97,44 @@ export async function downloadFile(instanceId: number, path: string): Promise<vo
   triggerDownload(data as Blob, name)
 }
 
+/** 搜索模式（FR-074）。content=全文，filename=文件名快速打开。 */
+export type SearchMode = 'content' | 'filename'
+
+/** 一条搜索命中（与后端 service.SearchHit 对应，FR-074）。 */
+export interface SearchHit {
+  /** 相对工作目录、以 / 分隔的路径。 */
+  path: string
+  /** 命中行号（1 起；filename 模式为 0）。 */
+  line: number
+  /** 命中行片段（仅 content 模式）。 */
+  snippet: string
+}
+
+/** 搜索结果（FR-074）。 */
+export interface SearchResult {
+  hits: SearchHit[]
+  /** 命中达到上限被截断。 */
+  truncated: boolean
+}
+
+/**
+ * 跨文件全文搜索 / 文件名快速打开（FR-074，POST /files/search）。
+ * 转发到 Worker 本地倒排索引查询，返回命中文件+行+片段。
+ */
+export async function searchFiles(
+  instanceId: number,
+  query: string,
+  mode: SearchMode = 'content',
+  maxResults = 200,
+): Promise<SearchResult> {
+  const { data } = await api.post<SearchResult>(`/instances/${instanceId}/files/search`, {
+    query,
+    mode,
+    maxResults,
+  })
+  return data
+}
+
 /** 批量下载：选中的文件/目录即时打包 zip 下载（FR-070，POST /files/archive）。 */
 export async function downloadArchive(
   instanceId: number,

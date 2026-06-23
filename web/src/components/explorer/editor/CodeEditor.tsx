@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { EditorState, type Extension } from '@codemirror/state'
+import { EditorState, EditorSelection, type Extension } from '@codemirror/state'
 import {
   EditorView,
   lineNumbers,
@@ -46,6 +46,16 @@ interface CodeEditorProps {
   onChange?: (value: string) => void
   /** Ctrl+S / Cmd+S 触发（仅非只读时生效）。返回后由调用方执行保存。 */
   onSave?: () => void
+  /**
+   * 定位到指定行（1 起），用于搜索结果点击跳转（FR-074）。
+   * 值变化时滚动并把光标置于该行。0/undefined 不定位。
+   */
+  gotoLine?: number
+  /**
+   * 定位 nonce：与 gotoLine 搭配，变化即重触发定位（即便目标行相同），
+   * 用于「再次点击同一搜索命中」也能重新跳转。
+   */
+  gotoNonce?: number
 }
 
 /**
@@ -59,6 +69,8 @@ export default function CodeEditor({
   readOnly = false,
   onChange,
   onSave,
+  gotoLine,
+  gotoNonce,
 }: CodeEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -135,6 +147,21 @@ export default function CodeEditor({
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } })
     }
   }, [value])
+
+  // 搜索结果点击跳转（FR-074）：把光标置于目标行并滚动居中。
+  // 依赖 value 一并触发，确保「先载入文件内容、后定位」时内容已就绪再定位。
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view || !gotoLine || gotoLine < 1) return
+    const lineCount = view.state.doc.lines
+    const target = Math.min(gotoLine, lineCount)
+    const line = view.state.doc.line(target)
+    view.dispatch({
+      selection: EditorSelection.cursor(line.from),
+      scrollIntoView: true,
+    })
+    view.focus()
+  }, [gotoLine, gotoNonce, value])
 
   return <div ref={hostRef} className="h-full overflow-hidden text-left" />
 }

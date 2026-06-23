@@ -21,6 +21,7 @@ import EditorShortcutsHelp from './editor/EditorShortcutsHelp'
 import FileTree from './FileTree'
 import FileList from './FileList'
 import Toolbar from './Toolbar'
+import SearchPanel from './SearchPanel'
 import PromptDialog from './PromptDialog'
 import VersionDrawer from './VersionDrawer'
 import {
@@ -102,6 +103,13 @@ interface OpenFile {
   saved: string
   /** 当前编辑内容。 */
   draft: string
+  /**
+   * 搜索命中跳转的目标行（1 起，FR-074）。每次跳转用单调递增的 nonce 拼进 key
+   * 以重触发定位（即便同一行被再次点击）。0 表示不定位。
+   */
+  gotoLine?: number
+  /** 定位 nonce：用于强制编辑器重定位（搭配 gotoLine）。 */
+  gotoNonce?: number
 }
 
 export default function ResourceExplorer({ instanceId, config, openPathRef }: ResourceExplorerProps) {
@@ -124,6 +132,9 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
 
   // 编辑器打开的文件。
   const [openFile, setOpenFile] = useState<OpenFile | null>(null)
+
+  // 搜索面板开关（FR-074）。打开时占据文件列表列。
+  const [searchOpen, setSearchOpen] = useState(false)
 
   // 对话框/抽屉状态。
   const [prompt, setPrompt] = useState<
@@ -217,6 +228,32 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
       await openByPath(joinPath(currentDir, file.name), file.name)
     },
     [currentDir, navigate, openByPath],
+  )
+
+  // 搜索命中点击：打开文件并定位到行（FR-074）。filename 模式 line=0 即仅打开不定位。
+  // 配置模式下编辑器自行读取内容（不接 gotoLine，仅打开文件）。
+  const openSearchHit = useCallback(
+    async (path: string, line: number) => {
+      const name = path.split('/').pop() || path
+      if (configMode) {
+        setOpenFile({ path, name, saved: '', draft: '' })
+        return
+      }
+      try {
+        const content = await readFileContent(instanceId, path)
+        setOpenFile({
+          path,
+          name,
+          saved: content,
+          draft: content,
+          gotoLine: line > 0 ? line : undefined,
+          gotoNonce: Date.now(),
+        })
+      } catch {
+        toast.error(t('files.loadFailed'))
+      }
+    },
+    [configMode, instanceId, t],
   )
 
   // 暴露「按路径打开」给外部（收藏/发现面板）。
@@ -484,26 +521,36 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
           onPaste={() => void pasteInto(currentDir)}
           onSelectAll={onSelectAll}
           onClearSelection={onClearSelection}
+          onToggleSearch={() => setSearchOpen((v) => !v)}
+          searchActive={searchOpen}
         />
 
         <div className="flex min-h-0 flex-1">
-          {/* 目录内容列表 */}
+          {/* 目录内容列表 / 搜索面板（FR-074：搜索打开时占据该列） */}
           <div className={openFile ? 'flex w-1/2 flex-col border-r' : 'flex flex-1 flex-col'}>
-            <FileList
-              files={files}
-              loading={loading}
-              error={error}
-              selection={selection}
-              onRowClick={onRowClick}
-              onOpen={openEntry}
-              onDragStartItem={onDragStartItem}
-              onDropUpload={handleUpload}
-              onRename={(name) => setPrompt({ kind: 'rename', initial: name, oldName: name })}
-              onDelete={(name) => setDeleteTargets([joinPath(currentDir, name)])}
-              onDownload={downloadSingle}
-              onCut={() => cutSelection(selectedNames.length ? selectedNames : [])}
-              onCopy={() => copySelection(selectedNames.length ? selectedNames : [])}
-            />
+            {searchOpen ? (
+              <SearchPanel
+                instanceId={instanceId}
+                onOpenHit={(path, line) => void openSearchHit(path, line)}
+                onClose={() => setSearchOpen(false)}
+              />
+            ) : (
+              <FileList
+                files={files}
+                loading={loading}
+                error={error}
+                selection={selection}
+                onRowClick={onRowClick}
+                onOpen={openEntry}
+                onDragStartItem={onDragStartItem}
+                onDropUpload={handleUpload}
+                onRename={(name) => setPrompt({ kind: 'rename', initial: name, oldName: name })}
+                onDelete={(name) => setDeleteTargets([joinPath(currentDir, name)])}
+                onDownload={downloadSingle}
+                onCut={() => cutSelection(selectedNames.length ? selectedNames : [])}
+                onCopy={() => copySelection(selectedNames.length ? selectedNames : [])}
+              />
+            )}
           </div>
 
           {/* 编辑器：配置模式用注入的配置编辑器，否则默认 CodeEditor */}
@@ -560,6 +607,8 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
                   <CodeEditor
                     value={openFile.draft}
                     filename={openFile.name}
+                    gotoLine={openFile.gotoLine}
+                    gotoNonce={openFile.gotoNonce}
                     onChange={(v) => setOpenFile((f) => (f ? { ...f, draft: v } : f))}
                     onSave={() => void saveOpenFile()}
                   />

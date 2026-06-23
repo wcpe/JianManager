@@ -10,6 +10,7 @@ import {
   CheckSquare,
   XSquare,
   ChevronRight,
+  Search,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
@@ -33,6 +34,10 @@ interface ToolbarProps {
   onPaste: () => void
   onSelectAll: () => void
   onClearSelection: () => void
+  /** 切换搜索面板（FR-074）。 */
+  onToggleSearch: () => void
+  /** 搜索面板是否激活（按钮高亮态）。 */
+  searchActive: boolean
 }
 
 /** 资源管理器工具栏（FR-070）：面包屑 + 新建/上传/下载/删除/粘贴/全选。 */
@@ -49,6 +54,8 @@ export default function Toolbar({
   onPaste,
   onSelectAll,
   onClearSelection,
+  onToggleSearch,
+  searchActive,
 }: ToolbarProps) {
   const { t } = useTranslation()
   const uploadRef = useRef<HTMLInputElement>(null)
@@ -116,6 +123,15 @@ export default function Toolbar({
           onClick={onPaste}
         >
           <ClipboardPaste className="size-3.5" /> {t('files.paste')}
+        </Button>
+
+        <Button
+          size="sm"
+          variant={searchActive ? 'default' : 'outline'}
+          className="h-7 gap-1 px-2 text-xs"
+          onClick={onToggleSearch}
+        >
+          <Search className="size-3.5" /> {t('search.title')}
         </Button>
 
         <div className="mx-1 h-4 w-px bg-border" />
