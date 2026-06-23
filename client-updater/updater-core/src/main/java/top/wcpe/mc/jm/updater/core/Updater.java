@@ -29,21 +29,24 @@ final class Updater {
     private final long runningCoreVersion;
     /** 新下载 core 的自检（FR-091）；为 null 表示不做自更新（纯 reconcile）。 */
     private final CoreSelfTest selfTest;
+    /** 是否展示更新进度窗口（FR-099）；测试/headless/ctx 关闭时为 false。 */
+    private final boolean progressUiEnabled;
 
-    /** 纯 reconcile 装配（不做 core 自更新）。供 FR-090 测试与不关心自更新的调用方使用。 */
+    /** 纯 reconcile 装配（不做 core 自更新、不弹进度窗）。供 FR-090 测试与不关心自更新的调用方使用。 */
     Updater(Path gameDir, Transport transport, Signatures signatures) {
-        this(gameDir, transport, signatures, 0, null);
+        this(gameDir, transport, signatures, 0, null, false);
     }
 
-    /** 完整装配（含 FR-091 core 自更新）：runningCoreVersion 为本次 core 版本，selfTest 校验新 jar。 */
+    /** 完整装配（含 FR-091 core 自更新 + FR-099 进度窗）：runningCoreVersion 为本次 core 版本，selfTest 校验新 jar。 */
     Updater(Path gameDir, Transport transport, Signatures signatures,
-            long runningCoreVersion, CoreSelfTest selfTest) {
+            long runningCoreVersion, CoreSelfTest selfTest, boolean progressUiEnabled) {
         this.gameDir = gameDir.toAbsolutePath().normalize();
         this.stateDir = this.gameDir.resolve(".jm-updater");
         this.transport = transport;
         this.signatures = signatures;
         this.runningCoreVersion = runningCoreVersion;
         this.selfTest = selfTest;
+        this.progressUiEnabled = progressUiEnabled;
     }
 
     /**
@@ -75,7 +78,9 @@ final class Updater {
             return BUSY;
         }
 
-        try (SingleInstanceLock held = lock) {
+        try (SingleInstanceLock held = lock;
+             ProgressReporter reporter = ProgressReporter.create(
+                     CoreMessages.forDefaultLocale(), log, progressUiEnabled)) {
             // 1. 拉 manifest（端点不可达 → fail-static 带本地版本，契约 §6.3）。
             String manifestJson;
             try {
@@ -111,7 +116,7 @@ final class Updater {
 
             // 4. 文件级 reconcile（增量 + 减量，托管区/玩家区隔离，契约 §2/§6.4）。
             CasCache cas = new CasCache(stateDir.resolve("cas"));
-            Reconciler reconciler = new Reconciler(gameDir, transport, cas, Platform.current(), log);
+            Reconciler reconciler = new Reconciler(gameDir, transport, cas, Platform.current(), log, reporter);
             Reconciler.Result result;
             try {
                 result = reconciler.reconcile(manifest);
@@ -145,7 +150,7 @@ final class Updater {
             if (selfTest != null) {
                 try {
                     new SelfUpdater(stateDir, transport, selfTest, log)
-                            .maybeUpdate(manifest, runningCoreVersion, Platform.current());
+                            .maybeUpdate(manifest, runningCoreVersion, Platform.current(), reporter);
                 } catch (Throwable t) {
                     log.warn("core 自更新阶段异常（忽略，照常放行）: " + t);
                 }

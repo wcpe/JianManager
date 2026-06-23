@@ -8,6 +8,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.function.LongConsumer;
 
 /**
  * 生产 manifest/制品拉取（契约 §4，ADR-022）。
@@ -55,13 +56,18 @@ final class HttpTransport implements Transport {
 
     @Override
     public byte[] fetchArtifact(String artifactSha256) throws IOException {
+        return fetchArtifact(artifactSha256, null);
+    }
+
+    @Override
+    public byte[] fetchArtifact(String artifactSha256, LongConsumer onBytes) throws IOException {
         HttpURLConnection c = open(endpoint + "/client-artifacts/" + artifactSha256, "GET", 300_000);
         try {
             int code = c.getResponseCode();
             if (code != 200 && code != 206) {
                 throw new IOException("制品拉取失败 HTTP " + code + " sha256=" + artifactSha256);
             }
-            return readAll(c.getInputStream());
+            return readAll(c.getInputStream(), onBytes);
         } finally {
             c.disconnect();
         }
@@ -102,12 +108,20 @@ final class HttpTransport implements Transport {
 
     /** 读尽输入流（Java 8 无 InputStream.readAllBytes，手写缓冲循环）。 */
     private static byte[] readAll(InputStream in) throws IOException {
+        return readAll(in, null);
+    }
+
+    /** 读尽输入流，按每个分块字节数回调 {@code onBytes}（FR-099 进度，可空）。 */
+    private static byte[] readAll(InputStream in, LongConsumer onBytes) throws IOException {
         ByteArrayOutputStream bos = new ByteArrayOutputStream();
         byte[] buf = new byte[8192];
         int n;
         try {
             while ((n = in.read(buf)) != -1) {
                 bos.write(buf, 0, n);
+                if (onBytes != null) {
+                    onBytes.accept((long) n);
+                }
             }
         } finally {
             in.close();

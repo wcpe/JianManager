@@ -34,6 +34,12 @@ final class SelfUpdater {
      * @return 是否暂存了新版（供日志/测试断言）
      */
     boolean maybeUpdate(Manifest manifest, long runningCoreVersion, Platform platform) {
+        return maybeUpdate(manifest, runningCoreVersion, platform, null);
+    }
+
+    /** 带进度上报的自更新（FR-099）；{@code reporter} 可空（无展示）。 */
+    boolean maybeUpdate(Manifest manifest, long runningCoreVersion, Platform platform,
+                        ProgressReporter reporter) {
         try {
             long target = manifest.agentCoreVersion;
             if (target < 0 || target <= runningCoreVersion) {
@@ -58,7 +64,12 @@ final class SelfUpdater {
 
             byte[] artifactBytes;
             try {
-                artifactBytes = transport.fetchArtifact(art.sha256);
+                // FR-099：core 自更新下载也计入进度（reporter 可空）。
+                if (reporter != null) {
+                    reporter.plan(art.size);
+                    reporter.beginFile("updater-core.jar");
+                }
+                artifactBytes = transport.fetchArtifact(art.sha256, reporter != null ? reporter.sink() : null);
             } catch (IOException e) {
                 log.warn("自更新：下载 core 制品失败（不影响本次放行）: " + e);
                 return false;

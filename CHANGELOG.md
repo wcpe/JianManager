@@ -6,6 +6,10 @@
 
 ## [Unreleased]
 
+### 新增
+- **客户端 OTA 更新进度窗口（FR-099）**：updater-core 更新期弹独立 Swing 进度窗口——总体进度条 + 当前下载速度 + 预计剩余时间（ETA）+ 当前文件名，覆盖 mods 文件增量与 core 自更新 jar 下载，下载完自动关闭再放行 MC。因 wedge `premain` 早于 MC 渲染线程/LWJGL，无法注入 MC 自身加载画面，故由 updater 自弹独立窗口。仅在确有内容下载时显示（已是最新不弹窗）；**headless**（`GraphicsEnvironment.isHeadless()`）自动降级文本进度，不报错不阻断；玩家关窗 = 停止下载、fail-static 以本地版本放行；窗口任意异常 fail-open 吞掉、绝不挡启动；文案 i18n（zh/en）。纯客户端、不改服务端/manifest/楔子↔core 协议；core 保持 **Java 8 字节码 + 零额外依赖**（Swing/AWT 为 JDK 自带）。新增 `ProgressModel`（滑窗速度/ETA，纯逻辑单测）/`ProgressView`(Swing|Text|Noop)/`ProgressReporter`/`CoreMessages`；`Transport` 加默认方法 `fetchArtifact(sha, LongConsumer)`、`HttpTransport` 重写为 8192 分块流式回调。验证：updater-core 全量测试绿（含 16 个新进度单测）+ **真 Java 8(1.8.0_422) headless 文本路径 36MB/6 文件端到端 + 非 headless Swing 窗口真机弹出（关窗取消→fail-static 路径已验）**。
+- **修复 Swing 进度窗口在楔子加载下的类加载竞态（FR-099 真机修）**：`SwingProgressView` 原用 `invokeLater`（异步）在 EDT 构建窗口，而楔子 `CoreLoader` 在 `Core.run` 返回后即关闭加载 core 的 `URLClassLoader`（为 FR-091 自更新解锁）；异步 build 在 EDT 上懒加载匿名内部类（`WindowAdapter` 等）时 classloader 已关 → `NoClassDefFoundError`、窗口建不出（fail-open 未崩但不显示）。改 `invokeAndWait`（同步），保证窗口生命周期含类加载在 `run()` 返回前、classloader 仍开时完成。真机复验 `NoClassDefFoundError` 消失、窗口正常弹出、JVM 干净退出（无 AWT 滞留）。
+
 ### 修复
 - **客户端更新器包名更正 `top.jm` → `top.wcpe.mc.jm`（FR-089/090/091…）**：与组织命名空间（github.com/wcpe）对齐，wedge 与 updater-core 两模块统一；同步 `Premain-Class` 清单属性、contract 类名引用、测试内动态编译假 core 的目录/jar 条目路径。纯重命名、行为不变。
 - **updater-core 编译目标 Java 17 → Java 8，修复低版本游戏 JVM 无法加载（FR-089/090 真机修复）**：老整合包/启动器仍跑 Java 8，core 编到 17 会 `UnsupportedClassVersionError`、楔子加载失败。`build.gradle.kts` 置 `sourceCompatibility/targetCompatibility=1.8` + `options.release=8` 强制按 Java 8 API 编译；`HttpTransport` 由 `java.net.http`（Java 11）改写为 `HttpURLConnection`；`Signatures` Ed25519 由 JDK 内置（15+）改为 **BouncyCastle**（`bcprov-jdk18on`，Provider 实例直用、打进 fat jar），签名仍标准 Ed25519、与服务端 Go 逐位兼容；`MachineId` `getTotalMemorySize`（14+）改 `getTotalPhysicalMemorySize`（8）。验证：107 单测全绿（含 Signatures/ServerManifestCompat 跨语言验签）+ 字节码 major=52 + **真 Java 8(1.8.0_422) JVM 经楔子加载 + 真 CP OTA + BC 验签 + HMCL/PCL2 用的真 MC 1.20.1 端到端通过**。

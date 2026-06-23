@@ -133,6 +133,11 @@ updater-core ──GET /manifest(latest,带 key+machineId)──→ JM 分发后
 - **玩家区**（永不碰）：`saves/`、`screenshots/`、`logs/`、`options.txt`、`crash-reports/`、及任何不在 `managedDirs` 下的路径。
 - `config/` 走 `sync` 策略区分整合包配置（`strict`）与玩家偏好（`once`）。
 
+### 6.5 更新进度展示（FR-099，客户端侧、不改协议）
+- core 更新期（reconcile 下载 mods 增量 + core 自更新 jar 下载）弹**独立 Swing 进度窗口**：进度条 + 速度 + ETA + 当前文件名；下载完自动关闭再放行 MC。进度纯客户端计算（core 从 manifest 已知各文件 `artifact.size`），**不改 manifest / agentArgs / `Core.run` 协议**。
+- 因 `premain` 早于 MC 渲染线程/LWJGL，无法注入 MC 自身加载画面；故由 updater 自弹独立窗口。
+- ctx 可选 `progressUi=false` 关闭展示；headless（`GraphicsEnvironment.isHeadless()`）自动降级文本进度。玩家关窗 = 取消下载、fail-static；窗口异常 fail-open——均不阻断启动。
+
 ## 7. 关联 FR
 
 | 契约要素 | 服务端实现 | 客户端实现 |

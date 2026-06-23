@@ -40,13 +40,17 @@ final class Reconciler {
     private final CasCache cas;
     private final Platform platform;
     private final Logger log;
+    /** 下载进度上报（FR-099）；不展示时为 Noop reporter（非 null）。 */
+    private final ProgressReporter reporter;
 
-    Reconciler(Path gameDir, Transport transport, CasCache cas, Platform platform, Logger log) {
+    Reconciler(Path gameDir, Transport transport, CasCache cas, Platform platform, Logger log,
+               ProgressReporter reporter) {
         this.gameDir = gameDir.toAbsolutePath().normalize();
         this.transport = transport;
         this.cas = cas;
         this.platform = platform;
         this.log = log;
+        this.reporter = reporter;
     }
 
     /**
@@ -56,10 +60,19 @@ final class Reconciler {
     Result reconcile(Manifest manifest) throws IOException {
         Result result = new Result();
 
+        // 进度分母：廉价预估本次将下载的压缩字节（不哈希；FR-099）。
+        reporter.plan(estimateDownloadBytes(manifest));
+
         // 本机适配的目标文件相对路径集合（用于减量时判断「manifest 未列」）。
         Set<String> desiredPaths = new HashSet<>();
 
         for (Manifest.FileEntry entry : manifest.files) {
+            // 玩家关闭进度窗 → 停止下载、fail-static 放行（FR-099）。
+            if (reporter.isCancelled()) {
+                result.errors.add("用户取消更新（玩家关闭进度窗）");
+                log.warn("玩家关闭进度窗，取消剩余下载，fail-static 带本地版本放行");
+                break;
+            }
             if (!platform.matches(entry.platform)) {
                 continue;
             }
@@ -83,6 +96,11 @@ final class Reconciler {
             }
         }
 
+        // 取消时不做减量（避免半截状态删玩家文件）。
+        if (reporter.isCancelled()) {
+            return result;
+        }
+
         // 减量：仅 managedDirs 内、sync!=once&&!=ignore（once/ignore 文件玩家可留）。
         Set<String> protectedFromRemoval = new HashSet<>();
         for (Manifest.FileEntry entry : manifest.files) {
@@ -93,6 +111,46 @@ final class Reconciler {
         removeStale(manifest.managedDirs, desiredPaths, protectedFromRemoval, result);
 
         return result;
+    }
+
+    /**
+     * 廉价预估本次将下载的压缩字节（FR-099 进度分母）：不哈希——按 once/exists、size 匹配、CAS 命中粗筛，
+     * 余者计 {@code artifactSize}。同大小不同 md5 的极少数误判由收尾 snap-to-100% 兜底。
+     */
+    private long estimateDownloadBytes(Manifest manifest) {
+        long total = 0;
+        for (Manifest.FileEntry entry : manifest.files) {
+            if (!platform.matches(entry.platform) || !PathRules.isSafeRelative(entry.path)) {
+                continue;
+            }
+            if ("ignore".equals(entry.sync)) {
+                continue;
+            }
+            Path target = PathRules.resolveSafe(gameDir, entry.path);
+            boolean exists = java.nio.file.Files.isRegularFile(target);
+            if ("once".equals(entry.sync) && exists) {
+                continue; // 仅缺失才写，已存在不下。
+            }
+            if (exists && sizeMatches(target, entry)) {
+                continue; // 大小一致，大概率快筛跳过（不哈希）。
+            }
+            if (entry.sha256 != null && cas.has(entry.sha256)) {
+                continue; // CAS 命中，本地复用不走网络。
+            }
+            if (entry.artifactSha256 == null) {
+                continue; // 无制品信息，无法下载。
+            }
+            total += entry.artifactSize > 0 ? entry.artifactSize : entry.size;
+        }
+        return total;
+    }
+
+    private boolean sizeMatches(Path target, Manifest.FileEntry entry) {
+        try {
+            return entry.size > 0 && java.nio.file.Files.size(target) == entry.size;
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /** 单文件增量：快筛 → CAS/下载 → 解码 → sha256 校验 → 原子放置（按 sync 策略）。 */
@@ -156,7 +214,9 @@ final class Reconciler {
         if (entry.artifactSha256 == null) {
             throw new IOException("缺少 artifact 信息，无法下载: " + entry.path);
         }
-        byte[] artifact = transport.fetchArtifact(entry.artifactSha256);
+        // FR-099：标记当前文件 + 字节级进度回调（玩家关窗时 sink 抛异常中止本次下载）。
+        reporter.beginFile(entry.path);
+        byte[] artifact = transport.fetchArtifact(entry.artifactSha256, reporter.sink());
         // 制品自身 hash 校验（下载寻址 key），防 CDN 返回错内容。
         String artHash = Hashes.sha256(artifact);
         if (!artHash.equalsIgnoreCase(entry.artifactSha256)) {

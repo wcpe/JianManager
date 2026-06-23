@@ -89,8 +89,10 @@ public final class Core {
             Path stateDir = gameDir.resolve(".jm-updater");
             long fromVersion = StateStore.load(stateDir).lastSeenVersion();
             long start = System.currentTimeMillis();
+            // 进度窗口（FR-099）：默认展示；ctx progressUi=false 可关（headless 由展示层自动降级文本）。
+            boolean progressUiEnabled = !"false".equalsIgnoreCase(ctx.getOrDefault("progressUi", "true"));
             Updater updater = new Updater(gameDir, transport, Signatures.production(),
-                    runningCoreVersion, new UrlClassLoaderSelfTest());
+                    runningCoreVersion, new UrlClassLoaderSelfTest(), progressUiEnabled);
             int rc = updater.run();
 
             // 遥测上报（FR-094，best-effort、opt-out）：BUSY（未实际更新）不报；telemetry=false 关闭。

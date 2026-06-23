@@ -1508,6 +1508,23 @@
 - **关联 ADR**: ADR-021
 - **依赖**: FR-090、FR-097
 
+### FR-099: 客户端 OTA 更新进度窗口（进度条 + 速度 + ETA）
+- **状态**: 📋 todo
+- **优先级**: P1
+- **描述**: updater-core 在更新期（reconcile 下载 mods 增量 + core 自更新 jar + .jmpack 下载/解包）弹出**独立 Swing 进度窗口**，实时显示总体进度条、当前下载速度、预计剩余时间(ETA)、当前文件名；下载完成自动关闭再放行 MC。**因 wedge premain 早于 MC 渲染线程/LWJGL**，无法注入 MC 自身加载画面，故由 updater 自弹独立窗口。headless 环境自动降级为文本进度（不弹窗、不报错、不阻断）。玩家面向文案 i18n（zh/en）。**纯客户端**，无服务端/manifest 改动；保持楔子 fail-open/fail-static 与"绝不挡启动"不变
+- **验收标准**:
+  - [ ] 有内容要下载时更新期弹出 Swing 窗口：进度条(0→100%) + 当前速度(如 3.2 MB/s) + ETA(如 剩 12s) + 当前文件名，随下载实时刷新
+  - [ ] 覆盖**所有更新期下载**：mods 文件增量、core 自更新 jar(FR-091)、.jmpack 下载/解包(FR-097)
+  - [ ] 下载完成窗口自动关闭，MC 正常启动到主菜单
+  - [ ] "已是最新"无下载时不弹窗（秒进、不闪空窗）
+  - [ ] **headless**（`GraphicsEnvironment.isHeadless()` / 无显示）自动降级为文本进度，不报错、不阻断（服务端驱动 OTA 不受影响）
+  - [ ] 玩家手动关窗 = 停止下载、以本地版本放行（fail-static）；窗口任意异常不逃逸阻断（fail-open）
+  - [ ] 窗口文案 zh/en 随 `user.language` 切换（同 Messages 风格）
+  - [ ] core 仍 **Java 8 字节码**、零额外依赖（Swing/AWT = JDK 自带）
+  - [ ] 真机：真 MC 1.20.1 经 PCL2/命令行启动，超阈值下载肉眼可见进度窗（测试绿≠真能用）
+- **关联 ADR**: ADR-021
+- **依赖**: FR-090（reconcile 下载）、FR-091（core 自更新）
+
 ---
 
 ## V1 不包含（后续版本）

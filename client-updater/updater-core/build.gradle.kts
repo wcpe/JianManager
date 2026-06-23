@@ -31,6 +31,8 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+    // FR-099：测试一律 headless——既防 CI/本地误弹 Swing 窗口，也让进度工厂走文本降级路径可验。
+    systemProperty("java.awt.headless", "true")
     // FR-091 自更新 selftest 需以独立 classloader 加载真实构建出的 core jar 自证可用，
     // 故把自身 jar 制品路径注入测试（CoreSelfTestRealJarTest）。test 依赖 jar 不成环（jar 不依赖 test）。
     dependsOn(tasks.named("jar"))
