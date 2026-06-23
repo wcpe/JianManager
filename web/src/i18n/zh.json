@@ -390,7 +390,26 @@
     "deleteConfirmDesc": "将解除节点「{{name}}」的注册并保留历史记录，复连需重新注册。确定下线？",
     "deleteOnlineHint": "在线节点不能下线，请先排空并断开 Worker",
     "deleted": "节点已下线",
-    "jdkTitle": "JDK 管理"
+    "jdkTitle": "JDK 管理",
+    "enroll": {
+      "addNode": "添加节点",
+      "addTitle": "添加节点",
+      "addDesc": "签发一次性安装凭据，在目标机器粘贴执行一键命令即可自动注册上线。",
+      "nodeName": "节点名（可选）",
+      "nodeNamePlaceholder": "留空则由 Worker 自动上报",
+      "ttl": "有效期（分钟）",
+      "generate": "生成一键命令",
+      "issueFailed": "签发失败",
+      "resultTitle": "一键安装命令（仅此一次）",
+      "resultDesc": "请立即复制保存。凭据一次性且限时，关闭后无法再次查看完整命令。",
+      "expiresAt": "过期时间",
+      "linux": "Linux / macOS",
+      "windows": "Windows (PowerShell)",
+      "hint": "公网下载源未配置时，请先把 Worker 二进制拷到目标机器，并在命令末尾追加 --binary <路径>（Windows 用 -Binary <路径>）。",
+      "copy": "复制",
+      "copied": "已复制到剪贴板",
+      "copyFailed": "复制失败，请手动选择复制"
+    }
   },
   "instances": {
     "title": "实例管理",

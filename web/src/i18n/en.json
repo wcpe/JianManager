@@ -403,7 +403,26 @@
     "deleteConfirmDesc": "This deregisters node \"{{name}}\" but keeps its records; reconnecting requires re-registration. Continue?",
     "deleteOnlineHint": "Online nodes cannot be decommissioned; drain and disconnect the Worker first",
     "deleted": "Node decommissioned",
-    "jdkTitle": "JDK Management"
+    "jdkTitle": "JDK Management",
+    "enroll": {
+      "addNode": "Add Node",
+      "addTitle": "Add Node",
+      "addDesc": "Issue a one-time install credential; paste the one-line command on the target machine to auto-register and come online.",
+      "nodeName": "Node name (optional)",
+      "nodeNamePlaceholder": "Leave blank to auto-report from Worker",
+      "ttl": "TTL (minutes)",
+      "generate": "Generate command",
+      "issueFailed": "Failed to issue token",
+      "resultTitle": "One-line install command (shown once)",
+      "resultDesc": "Copy and save it now. The credential is one-time and time-limited; the full command cannot be shown again after closing.",
+      "expiresAt": "Expires at",
+      "linux": "Linux / macOS",
+      "windows": "Windows (PowerShell)",
+      "hint": "If no public download source is configured, copy the Worker binary to the target machine first and append --binary <path> (use -Binary <path> on Windows).",
+      "copy": "Copy",
+      "copied": "Copied to clipboard",
+      "copyFailed": "Copy failed, please select and copy manually"
+    }
   },
   "instances": {
     "title": "Instance Management",

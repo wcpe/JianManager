@@ -32,6 +32,8 @@ import type { StatusLevel } from '@/lib/threshold'
 import NodeJDKPanel from '@/components/NodeJDKPanel'
 import NodePortsPanel from '@/components/NodePortsPanel'
 import DangerConfirm from '@/components/DangerConfirm'
+import AddNodeDialog from '@/components/AddNodeDialog'
+import { Button } from '@/components/ui/button'
 
 /** 将字节数格式化为人类可读的大小（B/KB/MB/GB）。 */
 function formatBytes(bytes: number): string {
@@ -184,6 +186,7 @@ export default function NodesPage() {
   const [portsNodeId, setPortsNodeId] = useState<number | null>(null)
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [addOpen, setAddOpen] = useState(false)
 
   const setMaintenance = useSetNodeMaintenance()
   const drain = useDrainNode()
@@ -223,7 +226,12 @@ export default function NodesPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-xl font-bold">{t('nodes.title')}</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-bold">{t('nodes.title')}</h1>
+        <Button size="sm" onClick={() => setAddOpen(true)}>
+          {t('nodes.enroll.addNode', '添加节点')}
+        </Button>
+      </div>
 
       {isLoading ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
@@ -373,6 +381,7 @@ export default function NodesPage() {
           </div>
         </div>
       )}
+      <AddNodeDialog open={addOpen} onClose={() => setAddOpen(false)} />
       <DangerConfirm
         open={pending !== null}
         title={pending?.kind === 'drain' ? t('nodes.drainConfirmTitle') : t('nodes.deleteConfirmTitle')}
