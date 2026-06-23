@@ -1492,6 +1492,13 @@
 - **错误**: 400 `INVALID_REQUEST`（缺/非法 sourceVersion）| 404 `CHANNEL_NOT_FOUND` / `VERSION_NOT_FOUND`
 - **审计**: `client_version.rollback`
 
+### GET /api/v1/client-dist/events
+- **描述**: 拉取/下载明细检索（FR-093 全链路追踪）。明细短保留（默认 14 天滚动清理）；发布事件审计见 `/audit`（`client_*.publish`/`rollback`）
+- **关联 FR**: FR-093
+- **鉴权**: **JWT，平台管理员**
+- **查询参数**: `channelId` / `machineId` / `ip` / `kind`(manifest|artifact) / `version` / `since`(RFC3339) / `until`(RFC3339) / `limit`(默认 200，上限 1000)
+- **响应** (200): `[ { "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "durationMs", "createdAt" } ]`（created_at DESC）
+
 ### GET /api/v1/client-channels/:id/manifest
 - **描述**: 返回频道 **latest** 的**签名 manifest**（contract §2）。只提供当前版本，不暴露历史
 - **关联 FR**: FR-087、FR-092（机器码登记）
