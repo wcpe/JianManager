@@ -73,6 +73,10 @@ type Instance struct {
 	LaunchSpec        string         `gorm:"type:text" json:"launchSpec"`
 	WorkDir           string         `gorm:"type:varchar(512)" json:"workDir"`
 	EnvVars           string         `gorm:"type:text" json:"envVars"` // JSON
+	// Image 是 docker 模式的容器镜像引用（如 itzg/minecraft-server:latest），仅 process_type=docker 使用（FR-078，ADR-019）。
+	Image string `gorm:"type:varchar(256)" json:"image"`
+	// ContainerID 记录 docker 模式实例最近一次运行的容器 ID（排障/展示用，运行态由 Worker 持有）。
+	ContainerID string `gorm:"type:varchar(64)" json:"containerId"`
 	AutoStart     bool           `gorm:"default:false" json:"autoStart"`
 	AutoRestart   bool           `gorm:"default:true" json:"autoRestart"`
 	// Deprecated: RCON 已退役（FR-067，见 ADR-016）——治理改走 ServerProbe 探针。

@@ -127,6 +127,8 @@ type createInstanceRequest struct {
 	LaunchSpec       string             `json:"launchSpec"`
 	WorkDir          string             `json:"workDir"`
 	EnvVars          map[string]string  `json:"envVars"`
+	// Image 是 docker 模式的容器镜像引用；仅 processType=docker 时使用（FR-078，ADR-019）。
+	Image            string             `json:"image"`
 	AutoStart        bool               `json:"autoStart"`
 	AutoRestart      bool               `json:"autoRestart"`
 	GroupID          uint               `json:"groupId"`
@@ -171,6 +173,7 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		LaunchSpec:       req.LaunchSpec,
 		WorkDir:          req.WorkDir,
 		EnvVars:          req.EnvVars,
+		Image:            req.Image,
 		AutoStart:        req.AutoStart,
 		AutoRestart:      req.AutoRestart,
 		GroupID:          req.GroupID,

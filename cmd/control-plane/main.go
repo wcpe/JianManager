@@ -59,6 +59,7 @@ func main() {
 	// 回填实例服务，供节点排空（drain）复用实例停止逻辑（FR-048）。
 	nodeSvc.SetInstanceService(instanceSvc)
 	jdkSvc := service.NewJDKService(db, pool)
+	dockerImageSvc := service.NewDockerImageService(db, pool)
 	terminalSvc := service.NewTerminalService(db, cfg.JWT.Secret, fmt.Sprintf("ws://localhost:%d", cfg.Server.Port))
 	fileSvc := service.NewFileService(db, pool)
 	fileVersionSvc := service.NewFileVersionService(db, pool, service.FileVersionConfig{
@@ -179,6 +180,7 @@ func main() {
 		Instance:      instanceSvc,
 		InstanceBatch: instanceBatchSvc,
 		JDK:           jdkSvc,
+		DockerImage:   dockerImageSvc,
 		Terminal:      terminalSvc,
 		File:          fileSvc,
 		FileVersion:   fileVersionSvc,

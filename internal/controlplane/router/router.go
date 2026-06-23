@@ -18,6 +18,7 @@ type Services struct {
 	Instance      *service.InstanceService
 	InstanceBatch *service.InstanceBatchService
 	JDK           *service.JDKService
+	DockerImage   *service.DockerImageService
 	Terminal      *service.TerminalService
 	File          *service.FileService
 	FileVersion   *service.FileVersionService
@@ -91,6 +92,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		jdkHandler := NewJDKHandler(svcs.JDK)
 		jdkHandler.RegisterRoutes(protected)
+
+		// Docker 镜像管理（FR-078，见 ADR-019）：节点级列出/拉取/删除本机镜像。仅平台管理员。
+		if svcs.DockerImage != nil {
+			dockerImageHandler := NewDockerImageHandler(svcs.DockerImage)
+			dockerImageHandler.RegisterRoutes(protected)
+		}
 
 		instanceHandler := NewInstanceHandler(svcs.Instance, svcs.Authz)
 		instanceHandler.RegisterRoutes(protected)

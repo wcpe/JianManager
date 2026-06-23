@@ -92,6 +92,8 @@ type CreateInstanceRequest struct {
 	LaunchSpec       string             `json:"launchSpec"`
 	WorkDir          string             `json:"workDir"`
 	EnvVars          map[string]string  `json:"envVars"`
+	// Image 是 docker 模式的容器镜像引用；仅 processType=docker 时使用（FR-078，ADR-019）。
+	Image            string             `json:"image"`
 	AutoStart        bool               `json:"autoStart"`
 	AutoRestart      bool               `json:"autoRestart"`
 	GroupID          uint               `json:"groupId"`
@@ -154,6 +156,7 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		JavaMajorVersion: req.JavaMajorVersion,
 		LaunchSpec:       req.LaunchSpec,
 		WorkDir:          workDir,
+		Image:            req.Image,
 		AutoStart:        req.AutoStart,
 		AutoRestart:      req.AutoRestart,
 		ServerPort:       req.ServerPort,
@@ -566,6 +569,8 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 		JdkPath:                    jdkPath,
 		ProbePort:                  int32(instance.ProbePort),
 		GracefulStopTimeoutSeconds: s.gracefulStopTimeoutSeconds(),
+		Image:                      instance.Image,
+		PortMappings:               dockerPortMappings(instance),
 	})
 	if err != nil {
 		return fmt.Errorf("Worker CreateInstance 失败: %w", err)
@@ -574,6 +579,35 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 		return fmt.Errorf("Worker CreateInstance 失败: %s", resp.Error)
 	}
 	return nil
+}
+
+// mcContainerServerPort 是 MC 服务端在容器内的约定监听端口（多数 MC 镜像固定 25565）。
+// docker 模式把端口池分配的宿主端口映射到此容器内端口（ADR-019）。
+const mcContainerServerPort = 25565
+
+// dockerPortMappings 为 docker 模式实例派生容器↔宿主端口映射（FR-078，ADR-019）。
+// 非 docker 模式返回 nil（direct/daemon 直接监听宿主端口，无需映射）。
+// MC 实例：宿主 ServerPort 映射到容器内 25565（tcp + query 同号 udp）；
+// 其它类型：缺乏容器内端口约定，宿主端口与容器内端口同号直通（host=container）。
+func dockerPortMappings(instance *model.Instance) []*workerpb.PortMapping {
+	if instance.ProcessType != model.ProcessTypeDocker {
+		return nil
+	}
+	var out []*workerpb.PortMapping
+	if instance.Type == model.InstanceTypeMinecraftJava {
+		if instance.ServerPort > 0 {
+			out = append(out,
+				&workerpb.PortMapping{ContainerPort: mcContainerServerPort, HostPort: int32(instance.ServerPort), Protocol: "tcp"},
+				&workerpb.PortMapping{ContainerPort: mcContainerServerPort, HostPort: int32(instance.ServerPort), Protocol: "udp"},
+			)
+		}
+		return out
+	}
+	// 通用容器：宿主端口与容器内端口同号直通。
+	if instance.ServerPort > 0 {
+		out = append(out, &workerpb.PortMapping{ContainerPort: int32(instance.ServerPort), HostPort: int32(instance.ServerPort), Protocol: "tcp"})
+	}
+	return out
 }
 
 // gracefulStopCommand 按实例角色派生优雅停止命令（daemon 模式写入进程 stdin）。
