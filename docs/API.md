@@ -1522,6 +1522,12 @@
 - **关联 FR**: FR-096 | **鉴权**: **JWT，平台管理员**
 - **响应** (200): `{ "denyBlocked", "rateLimited", "concurrencyLimited" }`
 
+### GET /api/v1/client-dist/stats
+- **描述**: 分发统计后台（FR-095）：只读聚合 FR-093/094/092 数据，按频道 + 时间窗
+- **关联 FR**: FR-095 | **鉴权**: **JWT，平台管理员**
+- **查询参数**: `channelId`（频道）、`days`（窗口天数，默认 30，上限 365）
+- **响应** (200): `{ "channelId", "days", "downloads":[{day,requests,bytes}], "versions":[{version,requests}], "results":[{result,count}], "successRate", "rollbackRate", "activeMachines", "topIps":[{ip,count}] }`
+
 ### GET /api/v1/client-channels/:id/manifest
 - **描述**: 返回频道 **latest** 的**签名 manifest**（contract §2）。只提供当前版本，不暴露历史
 - **关联 FR**: FR-087、FR-092（机器码登记）
