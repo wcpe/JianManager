@@ -97,10 +97,11 @@ updater-core ──GET /manifest(latest,带 key+machineId)──→ JM 分发后
 - 403/404/416/429
 - 制品 = FR-045 制品库 `type=client-file`，`sha256` 即 `artifact.sha256`
 
-### 4.3 `POST /client-telemetry`（FR-094）
+### 4.3 `POST /client-telemetry`（FR-094，已实装）
 - Headers：`X-Client-Key`、`X-Machine-Id`
-- Body：`{ result: "success"|"fail-static"|"rolled-back"|"error", fromVersion, toVersion, os, javaVersion, launcher, durationMs, bootSuccess: bool, error?: string }`
-- 202 Accepted（不阻塞客户端；隐私可关，见 FR-094）
+- Body：`{ channel, result: "success"|"fail-static"|"rolled-back"|"error", fromVersion, toVersion, os, javaVersion, launcher, durationMs, bootSuccess: bool, error?: string }`（`channel` 由客户端携带便于按频道聚合）
+- 202 Accepted（best-effort 落库、不阻塞客户端；隐私 opt-out：`jm-updater.json` `telemetry:false` 关闭，见 FR-094）
+- 服务端：`client_telemetry`（明细短保留）+ `client_telemetry_daily`（按 result 日聚合，供 FR-095）；挂 FR-096 L7 守卫
 
 ## 5. 鉴权与身份
 

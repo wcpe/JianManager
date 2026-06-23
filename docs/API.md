@@ -1539,6 +1539,21 @@
 - **响应** (200/206): 二进制制品；支持 `Range`（断点续传，206 部分内容）；强缓存（内容寻址不可变，`Cache-Control: public, max-age=31536000, immutable` + `ETag` 为内容 sha256）
 - **错误**: 401 `INVALID_CLIENT_KEY` | 404 `ARTIFACT_NOT_FOUND` | 416（Range 越界，由 `http.ServeContent` 处理）
 
+### POST /api/v1/client-channels/:id/pack
+- **描述**: 把频道 latest 版本打成 `.jmpack`（复用已存制品 + Ed25519 签名）入库 `type=client-pack`（FR-097）
+- **关联 FR**: FR-097 | **鉴权**: **JWT，平台管理员**
+- **响应** (201): `{ "sha256", "md5", "size", "codec" }`（.jmpack 制品元数据）
+- **错误**: 404 `CHANNEL_NOT_FOUND` / `NO_LATEST_VERSION` / `ARTIFACT_NOT_FOUND` | 400 `INVALID_VERSION_FILES`
+- **审计**: `client_pack.create`
+
+### POST /api/v1/client-telemetry
+- **描述**: 客户端遥测上报（FR-094，contract §4.3）。**best-effort、202 不阻塞**；隐私可关在客户端
+- **关联 FR**: FR-094
+- **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必，任一有效密钥）；`X-Machine-Id`（可）。**无 JWT**
+- **请求**: `{ "channel", "result"(success|fail-static|rolled-back|error), "fromVersion", "toVersion", "os", "javaVersion", "launcher", "durationMs", "bootSuccess", "error"? }`
+- **响应** (202): 无体（落库失败不影响响应）
+- **错误**: 401 `INVALID_CLIENT_KEY`
+
 ---
 
 ## 错误码
