@@ -196,6 +196,42 @@
 - **描述**: 节点指标（CPU/内存/磁盘时间序列）
 - **关联 FR**: FR-010
 
+### POST /api/v1/nodes/enroll-token
+- **描述**: 签发一次性、限时的节点准入 enrollment token，返回明文 + Linux/Windows 一键安装命令（傻瓜部署）
+- **关联 FR**: FR-080（见 ADR-020）
+- **权限**: 平台管理员
+- **请求**（全部可选）: `{ nodeName?: string, ttlMinutes?: int(默认30, 1~1440) }`
+- **响应** `201`:
+  ```json
+  {
+    "token": "jmet_xxx",
+    "tokenId": 12,
+    "tokenPrefix": "jmet_ab12",
+    "expiresAt": "2026-06-23T12:30:00Z",
+    "nodeName": "",
+    "controlPlaneGrpc": "cp-host:9100",
+    "installCommandLinux": "curl -fsSL .../install-worker.sh | sh -s -- --control-plane cp-host:9100 --token jmet_xxx",
+    "installCommandWindows": "iwr .../install-worker.ps1 -UseBasicParsing | iex; Install-JianManagerWorker -ControlPlane cp-host:9100 -Token jmet_xxx"
+  }
+  ```
+- token **落库只存 SHA-256 哈希**，明文一次性返回、不可二次读取；`controlPlaneGrpc`/脚本基址由 CP 据请求 Host 推断，可经 `enroll.advertise_grpc`/`enroll.script_base_url` 配置覆盖
+- **审计**: `node.enroll_token.create`（detail 仅含 tokenId/tokenPrefix/nodeName/expiresAt，绝不含明文）
+
+### GET /api/v1/nodes/enroll-tokens
+- **描述**: 列出 enrollment token（仅元数据：前缀/过期/消费状态/预设名，无明文）
+- **关联 FR**: FR-080
+- **权限**: 平台管理员
+- **响应**: `[{ id, tokenPrefix, nodeName, expiresAt, used, usedAt, usedByNode, revoked, createdAt }]`
+
+### DELETE /api/v1/nodes/enroll-tokens/:id
+- **描述**: 吊销未消费的 enrollment token（标记失效，立即不可用）
+- **关联 FR**: FR-080
+- **权限**: 平台管理员
+- **错误码**: `404 ENROLL_TOKEN_NOT_FOUND`
+- **审计**: `node.enroll_token.revoke`
+
+> **gRPC `Register` 行为扩展（FR-080，不改 proto）**: Worker 注册时经 gRPC metadata header `enroll-token` 携带明文。CP 分叉——新节点（`name` 未命中）**必须**带有效 token（存在+未过期+未消费+未吊销），校验通过原子标记 `used` 并换发 `node_uuid`/`node_secret`，失败回 `PermissionDenied`；老节点（`name` 命中）重注册不强制 token（避免在网节点重启掉线）。Worker 把换发的身份持久化到 `<dataRoot>/etc/node-identity.json`（0600），重启复用、不重复消费一次性 token。
+
 ---
 
 ## 实例

@@ -1245,11 +1245,11 @@
 - **优先级**: P1
 - **描述**: CP「添加节点」向导生成一键安装命令（脚本 + enrollment token + 可选系统服务）
 - **验收标准**:
-  - [ ] 先写 **ADR-020**（enrollment 一键安装 + 自更新机制/来源/校验/CP 编排）
-  - [ ] CP「添加节点」向导生成一键命令（含一次性 enrollment token）
-  - [ ] 安装脚本（Linux sh / Win ps1）：下载对应平台 Worker 二进制 + 写配置 + enrollment 注册到 CP + 可选注册系统服务（systemd/Windows service）
-  - [ ] enrollment token 一次性限时；注册换 node_uuid/secret（复用 FR-004）；装后自启自连，前端见在线
-  - [ ] 真机：另一机器/容器跑一键命令 → 节点自动注册上线
+  - [x] 先写 **ADR-020**（enrollment 一键安装 + 自更新机制/来源/校验/CP 编排）
+  - [x] CP「添加节点」向导生成一键命令（含一次性 enrollment token）
+  - [x] 安装脚本（Linux sh / Win ps1）：下载对应平台 Worker 二进制 + 写配置 + enrollment 注册到 CP + 可选注册系统服务（systemd/Windows service）
+  - [x] enrollment token 一次性限时；注册换 node_uuid/secret（复用 FR-004）；装后自启自连，前端见在线
+  - [ ] 真机：另一机器/容器跑一键命令 → 节点自动注册上线（**待真机验**：公网 release 端点未架设，当前以 `--binary` 本地兜底）
 - **关联 ADR**: ADR-020
 - **依赖**: FR-004
 

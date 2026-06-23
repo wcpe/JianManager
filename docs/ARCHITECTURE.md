@@ -140,8 +140,7 @@ internal/controlplane/
 ```
 cmd/worker/main.go           # 含 daemon 子命令分支（wrapper 模式）
 internal/worker/
-  config.go
-  register.go
+  config.go                                      # 加载 worker.yaml + env 覆盖（FR-080）
   heartbeat.go
   grpc/{server,handler_instance,handler_bot,handler_file,handler_metrics}.go
   process/{manager,command,direct,daemon,docker,gbk,detach,detach_unix,detach_windows}.go
@@ -154,7 +153,16 @@ internal/worker/
   resource/{port_pool,workdir_alloc}.go          # V2 端口/工作目录系统分配
   jdk/{manager,registry,download}.go             # V2 JDK 托管
   provision/{core_download,launch_spec,clone}.go # V2 搭建/结构化启动/复制
+  register/{register,identity}.go                # 注册（带 enroll token）+ 本地身份持久化（FR-080）
 ```
+
+### 5.1 节点接入与部署（一键安装 / enrollment，FR-080，见 ADR-020）
+
+- **配置加载**：Worker 启动时经 `internal/worker/config.go`（viper）真正加载 `worker.yaml`（CP gRPC 地址、grpc/ws 端口、data_dir、日志），`JIANMANAGER_` 前缀环境变量按路径覆盖。配置落盘取代历史的环境变量堆砌。
+- **enrollment token 准入**：新增节点凭 CP 签发的**一次性、限时** enrollment token 注册（取代 FR-004 的「无凭据自助注册」对新节点的开放）。token 经 gRPC metadata `enroll-token` 传给 CP 校验消费（不改 proto）；CP 只对「新节点首次落库」设门槛，老节点（name 命中）重注册不强制 token（不破网）。
+- **身份持久化**：注册成功换得的 `node_uuid`/`node_secret` 写入数据根 `etc/node-identity.json`（0600，含敏感 secret 不入日志）。Worker 重启优先读该文件复用既有身份走重注册，不重复消费已失效的一次性 token。
+- **一键安装脚本**：`scripts/install-worker.sh`（Linux/macOS）/ `install-worker.ps1`（Windows）由平台分发，幂等完成「下载或拷贝二进制 → 写 worker.yaml → 以 enroll token 首注册 → 可选注册 systemd / Windows 服务（开机自启、常驻自连）」。enroll token 仅经命令行/环境变量传入、绝不写入 `worker.yaml`。公网 release 端点未架设前以 `--binary` 本地二进制兜底。
+- **面板「添加节点」向导**：CP `POST /nodes/enroll-token` 签发 token 并返回 Linux/Windows 一键命令，前端节点页展示供运维复制粘贴到目标机器执行。
 
 ## 6. 通信协议
 

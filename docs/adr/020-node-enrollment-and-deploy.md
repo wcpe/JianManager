@@ -27,7 +27,8 @@
   5. 可选注册系统服务：Linux 写 `systemd` unit（`jianmanager-worker.service`，`Restart=always`）、Windows 经 `sc.exe`/`New-Service` 注册服务，使节点开机自启、常驻自连。
 - 一键命令形态（面板生成、可直接粘贴）：
   - Linux：`curl -fsSL <cp>/install-worker.sh | sh -s -- --control-plane <cp-grpc> --token <jmet_...> [--name ...] [--service]`
-  - Windows：`iwr <cp>/install-worker.ps1 -UseBasicParsing | iex; ...`（PowerShell 等价）
+  - Windows：`iwr <cp>/install-worker.ps1 -UseBasicParsing | iex; Install-JianManagerWorker -ControlPlane <cp-grpc> -Token <jmet_...> [-Name ...] [-Service]`（PowerShell 等价）
+- **实现落地**：签发端点 `POST /api/v1/nodes/enroll-token`（+ `GET /nodes/enroll-tokens`、`DELETE /nodes/enroll-tokens/:id`，均限平台管理员）。一键命令里的 CP gRPC 地址与脚本下载基址默认由签发请求 Host 推断，可经 CP 配置 `enroll.advertise_grpc` / `enroll.script_base_url` 显式覆盖；`enroll.binary_url` 非空则并入命令的 `--download-url`（缺省走脚本 `--binary` 本地兜底）。本地身份文件实现为 `internal/worker/register/identity.go`（原子写 + 0600）。
 
 ### 3. Worker 侧 enrollment 与凭据持久化
 
