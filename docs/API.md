@@ -216,7 +216,7 @@
 
 ### POST /api/v1/instances
 - **描述**: 创建实例
-- **关联 FR**: FR-005, FR-078（docker 模式）
+- **关联 FR**: FR-005, FR-078（docker 模式）, FR-079（资源限额）
 - **权限**: `instance.create`
 - **请求**:
   ```json
@@ -228,12 +228,15 @@
     "startCommand": "java -Xmx2G -jar paper.jar nogui",
     "workDir": "/servers/survival",
     "image": "itzg/minecraft-server:latest",
+    "cpuLimit": 1.5,
+    "memLimitMb": 2048,
+    "diskLimitMb": 10240,
     "autoStart": false,
     "autoRestart": true,
     "groupId": 1
   }
   ```
-- **说明**: `processType=docker` 时 `image` 必填（容器镜像引用，默认 Docker Hub，本地缺失时启动前自动拉取，FR-078/ADR-019）；其它启动方式忽略 `image`。docker 模式宿主端口（FR-032 端口池分配）映射到容器内端口（MC 约定 25565），工作目录 bind-mount 到容器 `/data`。
+- **说明**: `processType=docker` 时 `image` 必填（容器镜像引用，默认 Docker Hub，本地缺失时启动前自动拉取，FR-078/ADR-019）；其它启动方式忽略 `image`。docker 模式宿主端口（FR-032 端口池分配）映射到容器内端口（MC 约定 25565），工作目录 bind-mount 到容器 `/data`。`cpuLimit`（核数，可小数）/`memLimitMb`（MiB）/`diskLimitMb`（MiB）为 docker 模式资源限额（FR-079/ADR-019），`0` 或缺省=不限制，仅 docker 模式生效（其它启动方式忽略）；启动时 `cpuLimit`→`--cpus`、`memLimitMb`→`--memory` 注入容器 cgroup，`diskLimitMb` 当前仅持久化展示不强制。
 
 ### GET /api/v1/instances/:id
 - **描述**: 实例详情
@@ -241,7 +244,7 @@
 
 ### PUT /api/v1/instances/:id
 - **描述**: 更新实例配置
-- **关联 FR**: FR-005, FR-047
+- **关联 FR**: FR-005, FR-047, FR-079（资源限额）
 - **权限**: `instance.write`
 - **请求**（字段均可选，缺省/`null` 表示不变）:
   ```json
@@ -252,10 +255,13 @@
     "autoRestart": true,
     "jdkId": 3,
     "envVars": { "TZ": "Asia/Shanghai" },
-    "tags": ["env:prod", "survival"]
+    "tags": ["env:prod", "survival"],
+    "cpuLimit": 2,
+    "memLimitMb": 4096,
+    "diskLimitMb": 0
   }
   ```
-- **说明**: `tags` 传数组（含空数组 `[]` 清空）覆盖标签；环境维度复用 `env:` 前缀（FR-047），无独立字段。
+- **说明**: `tags` 传数组（含空数组 `[]` 清空）覆盖标签；环境维度复用 `env:` 前缀（FR-047），无独立字段。`cpuLimit`/`memLimitMb`/`diskLimitMb` 为 docker 模式资源限额（FR-079），传值（含 `0`=清除限制）覆盖、缺省/`null` 不变；变更对实例下一次启动生效，仅 docker 模式生效。
 
 ### DELETE /api/v1/instances/:id
 - **描述**: 删除实例（需先停止）
