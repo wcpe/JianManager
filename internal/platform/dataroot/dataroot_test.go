@@ -60,6 +60,7 @@ func TestEnsureLayoutCreatesFHSDirs(t *testing.T) {
 		r.ServersDir(),
 		r.LogDir(),
 		r.ArtifactsDir(),
+		r.IndexDir(),
 		r.CacheDir(),
 	}
 	for _, d := range wantDirs {
@@ -89,6 +90,7 @@ func TestLayoutMatchesADR010(t *testing.T) {
 		r.ServersDir():   filepath.Join("var", "servers"),
 		r.LogDir():       filepath.Join("var", "log"),
 		r.ArtifactsDir(): filepath.Join("var", "artifacts"),
+		r.IndexDir():     filepath.Join("var", "index"),
 		r.CacheDir():     "cache",
 	}
 	for got, wantRel := range cases {

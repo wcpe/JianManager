@@ -36,6 +36,7 @@ var layoutDirs = []string{
 	filepath.Join("var", "servers"),
 	filepath.Join("var", "log"),
 	filepath.Join("var", "artifacts"),
+	filepath.Join("var", "index"),
 	"cache",
 }
 
@@ -95,6 +96,10 @@ func (r *Root) LogDir() string { return filepath.Join(r.base, "var", "log") }
 
 // ArtifactsDir 返回制品库根目录 <root>/var/artifacts（见 ADR-011）。
 func (r *Root) ArtifactsDir() string { return filepath.Join(r.base, "var", "artifacts") }
+
+// IndexDir 返回全文搜索索引根目录 <root>/var/index（每实例一子目录，见 ADR-017）。
+// 这是 Worker 本地派生资产（倒排索引），绝不进 CP 数据库；可随时删除重建。
+func (r *Root) IndexDir() string { return filepath.Join(r.base, "var", "index") }
 
 // CacheDir 返回临时缓存目录 <root>/cache（下载中转/解压）。
 func (r *Root) CacheDir() string { return filepath.Join(r.base, "cache") }
