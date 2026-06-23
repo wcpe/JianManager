@@ -187,6 +187,47 @@ func TestDockerStrategy_StartCreatesContainerWithBindAndPorts(t *testing.T) {
 	assert.Contains(t, fake.createConfig.Env, "EULA=TRUE")
 }
 
+// TestDockerStrategy_StartInjectsResourceLimits 验证 docker 资源限额注入 HostConfig（FR-079）：
+// cpu_limit→NanoCPUs（×1e9）、mem_limit_mb→Memory（×1024×1024）；disk_limit 不注入 HostConfig。
+func TestDockerStrategy_StartInjectsResourceLimits(t *testing.T) {
+	mgr := NewManager(t.TempDir())
+	fake := newFakeDockerClient()
+	fake.images = []imagetypes.Summary{{RepoTags: []string{"x:latest"}}}
+	spec := CommandSpec{
+		UUID:        "inst-reslimit",
+		Image:       "x:latest",
+		ProcessType: ProcessTypeDocker,
+		CPULimit:    1.5,
+		MemLimitMB:  2048,
+		DiskLimitMB: 10240,
+	}
+	d := newDockerStrategyWithFake(mgr, spec, fake)
+	mgr.instances[spec.UUID] = &Instance{UUID: spec.UUID, State: StateStopped, strategy: d}
+
+	require.NoError(t, d.Start(context.Background()))
+	t.Cleanup(func() { _ = d.Close() })
+
+	// 1.5 核 → 1.5e9 NanoCPUs。
+	assert.Equal(t, int64(1_500_000_000), fake.createHost.NanoCPUs, "cpu_limit 应注入 NanoCPUs")
+	// 2048 MiB → 字节。
+	assert.Equal(t, int64(2048)*1024*1024, fake.createHost.Memory, "mem_limit_mb 应注入 Memory")
+}
+
+// TestDockerStrategy_StartNoLimitsLeavesUnset 验证零值限额不注入（0=不限制，沿用 Docker 默认）。
+func TestDockerStrategy_StartNoLimitsLeavesUnset(t *testing.T) {
+	mgr := NewManager(t.TempDir())
+	fake := newFakeDockerClient()
+	fake.images = []imagetypes.Summary{{RepoTags: []string{"x:latest"}}}
+	d := newDockerStrategyWithFake(mgr, CommandSpec{UUID: "inst-nolimit", Image: "x:latest", ProcessType: ProcessTypeDocker}, fake)
+	mgr.instances["inst-nolimit"] = &Instance{UUID: "inst-nolimit", State: StateStopped, strategy: d}
+
+	require.NoError(t, d.Start(context.Background()))
+	t.Cleanup(func() { _ = d.Close() })
+
+	assert.Zero(t, fake.createHost.NanoCPUs, "未设限额时 NanoCPUs 应为 0")
+	assert.Zero(t, fake.createHost.Memory, "未设限额时 Memory 应为 0")
+}
+
 // TestDockerStrategy_StartMissingImage 验证缺镜像名时启动失败并置 CRASHED。
 func TestDockerStrategy_StartMissingImage(t *testing.T) {
 	mgr := NewManager(t.TempDir())
@@ -320,6 +361,32 @@ func TestPortConfig(t *testing.T) {
 		require.Len(t, binds, 1)
 		assert.NotEmpty(t, binds[0].HostPort)
 		assert.NotEmpty(t, port.Port())
+	}
+}
+
+// TestApplyResourceLimits 验证 CPU/内存限额到 HostConfig 的换算（FR-079）。
+func TestApplyResourceLimits(t *testing.T) {
+	tests := []struct {
+		name         string
+		cpu          float64
+		memMB        int64
+		wantNanoCPUs int64
+		wantMemory   int64
+	}{
+		{"both set", 2, 1024, 2_000_000_000, 1024 * 1024 * 1024},
+		{"fractional cpu", 0.5, 512, 500_000_000, 512 * 1024 * 1024},
+		{"only cpu", 1, 0, 1_000_000_000, 0},
+		{"only mem", 0, 256, 0, 256 * 1024 * 1024},
+		{"none", 0, 0, 0, 0},
+		{"negative ignored", -1, -1, 0, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hostCfg := &containertypes.HostConfig{}
+			applyResourceLimits(hostCfg, tt.cpu, tt.memMB)
+			assert.Equal(t, tt.wantNanoCPUs, hostCfg.NanoCPUs)
+			assert.Equal(t, tt.wantMemory, hostCfg.Memory)
+		})
 	}
 }
 

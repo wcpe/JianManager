@@ -148,14 +148,14 @@ func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanc
 		if strings.Contains(err.Error(), "已存在") {
 			s.manager.SetGracefulStopTimeout(req.InstanceUuid, int(req.GracefulStopTimeoutSeconds))
 			if req.ProcessType == string(process.ProcessTypeDocker) {
-				s.manager.SetDockerConfig(req.InstanceUuid, req.Image, portMappingsFromProto(req.PortMappings))
+				s.manager.SetDockerConfig(req.InstanceUuid, req.Image, portMappingsFromProto(req.PortMappings), req.CpuLimit, req.MemLimitMb, req.DiskLimitMb)
 			}
 		}
 		return &workerpb.CreateInstanceResponse{Success: false, Error: err.Error()}, nil
 	}
-	// docker 模式：把镜像与端口映射存到实例记账，启动时随 spec 定型（ADR-019）。
+	// docker 模式：把镜像、端口映射与资源限额存到实例记账，启动时随 spec 定型（ADR-019 / FR-079）。
 	if req.ProcessType == string(process.ProcessTypeDocker) {
-		s.manager.SetDockerConfig(req.InstanceUuid, req.Image, portMappingsFromProto(req.PortMappings))
+		s.manager.SetDockerConfig(req.InstanceUuid, req.Image, portMappingsFromProto(req.PortMappings), req.CpuLimit, req.MemLimitMb, req.DiskLimitMb)
 	}
 	return &workerpb.CreateInstanceResponse{Success: true}, nil
 }

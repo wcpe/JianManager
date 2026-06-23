@@ -139,6 +139,10 @@ func (d *dockerStrategy) Start(ctx context.Context) error {
 	hostCfg := &containertypes.HostConfig{
 		PortBindings: bindings,
 	}
+	// 资源限额注入 cgroup（FR-079，见 ADR-019）：CPU 核数→NanoCPUs、内存 MiB→字节。
+	// 0 值表示不限制，保持 Docker 默认（不写 Resources 字段）。磁盘限额 v1 不注入
+	// （bind-mount 工作目录的配额依赖存储驱动，HostConfig 无法简单施加）。
+	applyResourceLimits(hostCfg, d.spec.CPULimit, d.spec.MemLimitMB)
 	// 工作目录 bind-mount 进容器（ADR-010 数据根的宿主绝对路径）。
 	if d.spec.WorkDir != "" {
 		hostCfg.Mounts = []mount.Mount{{
@@ -381,6 +385,23 @@ func dockerEnv(env map[string]string) []string {
 		out = append(out, k+"="+v)
 	}
 	return out
+}
+
+// nanoCPUsPerCPU 是一个 CPU 核对应的 NanoCPUs 单位（Docker 以 10^-9 核计量 CPU 配额）。
+const nanoCPUsPerCPU = 1_000_000_000
+
+// bytesPerMiB 是 1 MiB 的字节数（内存限额以 MiB 下发、以字节注入）。
+const bytesPerMiB = 1024 * 1024
+
+// applyResourceLimits 把 CPU 核数与内存 MiB 上限注入 HostConfig 的 cgroup 限额字段（FR-079）。
+// cpuLimit/memLimitMB 为 0 时不设对应字段（保持 Docker 默认=不限制）。负值按未设处理。
+func applyResourceLimits(hostCfg *containertypes.HostConfig, cpuLimit float64, memLimitMB int64) {
+	if cpuLimit > 0 {
+		hostCfg.NanoCPUs = int64(cpuLimit * nanoCPUsPerCPU)
+	}
+	if memLimitMB > 0 {
+		hostCfg.Memory = memLimitMB * bytesPerMiB
+	}
 }
 
 // portConfig 把端口映射转为 Docker 的 ExposedPorts 与 PortBindings。

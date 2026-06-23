@@ -53,6 +53,15 @@ type CommandSpec struct {
 	// PortMappings 是 docker 模式的容器端口↔宿主端口映射（宿主端口来自 FR-032 端口池）。
 	// 仅 docker 策略使用，发布容器内端口到宿主（ADR-019）。
 	PortMappings []PortMapping
+	// CPULimit 是 docker 模式的 CPU 核数上限（如 1.5 表示 1.5 核），注入 HostConfig.NanoCPUs。
+	// 仅 docker 策略使用；0=不限制（FR-079，见 ADR-019）。
+	CPULimit float64
+	// MemLimitMB 是 docker 模式的内存上限（MiB），注入 HostConfig.Memory。
+	// 仅 docker 策略使用；0=不限制（FR-079，见 ADR-019）。
+	MemLimitMB int64
+	// DiskLimitMB 是 docker 模式的磁盘上限（MiB），仅持久化与展示，v1 不注入 HostConfig。
+	// bind-mount 工作目录无法用 HostConfig 简单施加磁盘配额（依赖存储驱动），留作前向兼容（FR-079）。
+	DiskLimitMB int64
 }
 
 // PortMapping 描述一条容器端口到宿主端口的发布关系（docker 模式，ADR-019）。

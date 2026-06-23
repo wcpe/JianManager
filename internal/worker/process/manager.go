@@ -47,7 +47,12 @@ type Instance struct {
 	Image string
 	// PortMappings 是 docker 模式的容器端口↔宿主端口映射（ADR-019）；仅 docker 实例使用。
 	PortMappings []PortMapping
-	State        InstanceState
+	// CPULimit / MemLimitMB / DiskLimitMB 是 docker 模式的资源限额（FR-079，见 ADR-019）；
+	// 仅 docker 实例使用，值在 Start 时随 spec 定型。0=不限制；DiskLimitMB v1 仅记账不注入。
+	CPULimit    float64
+	MemLimitMB  int64
+	DiskLimitMB int64
+	State       InstanceState
 	AutoRestart                bool
 	CrashCount                 int
 	// strategy 是该实例的启动策略，按 ProcessType 选择。
@@ -195,15 +200,18 @@ func (m *Manager) SetGracefulStopTimeout(uuid string, seconds int) {
 	}
 }
 
-// SetDockerConfig 设置已登记实例的 docker 镜像与端口映射（ADR-019）。
-// 由 CP 在创建/重注册 docker 实例时下发，使镜像/端口对下一次启动生效（值在 Start 时随 spec 定型）。
+// SetDockerConfig 设置已登记实例的 docker 镜像、端口映射与资源限额（ADR-019 / FR-079）。
+// 由 CP 在创建/重注册 docker 实例时下发，使镜像/端口/限额对下一次启动生效（值在 Start 时随 spec 定型）。
 // 实例不存在则忽略（与 SetGracefulStopTimeout 容错风格一致，不阻塞启动路径）。
-func (m *Manager) SetDockerConfig(uuid, image string, mappings []PortMapping) {
+func (m *Manager) SetDockerConfig(uuid, image string, mappings []PortMapping, cpuLimit float64, memLimitMB, diskLimitMB int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if inst, ok := m.instances[uuid]; ok {
 		inst.Image = image
 		inst.PortMappings = mappings
+		inst.CPULimit = cpuLimit
+		inst.MemLimitMB = memLimitMB
+		inst.DiskLimitMB = diskLimitMB
 	}
 }
 
@@ -279,6 +287,9 @@ func (m *Manager) Start(uuid string) error {
 			GracefulStopTimeoutSeconds: inst.GracefulStopTimeoutSeconds,
 			Image:                      inst.Image,
 			PortMappings:               inst.PortMappings,
+			CPULimit:                   inst.CPULimit,
+			MemLimitMB:                 inst.MemLimitMB,
+			DiskLimitMB:                inst.DiskLimitMB,
 		}
 		strategy, err := m.newStrategy(spec)
 		if err != nil {
