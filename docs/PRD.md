@@ -1374,7 +1374,7 @@
 - **依赖**: FR-087
 
 ### FR-089: javaagent 楔子 jar（自定位 + 引导 + fail-open）
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 极小 Java jar，经第三方启动器 JVM 参数 `-javaagent` 注入；premain 自定位、解析 gameDir、动态加载并调用 updater-core；更新失败 fail-static 放行带旧版进游戏。**楔子自身任何异常都 fail-open（绝不挡住游戏启动）**。设计为稳定件，随基础整包分发（低频，不依赖自更新）
 - **验收标准**:
@@ -1391,7 +1391,7 @@
 - **依赖**: FR-090（同仓协同，agentArgs 契约）
 
 ### FR-090: updater-core.jar — reconcile 核心（文件级增量 + 并发锁 + 缓存治理）
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: 客户端更新主体（Java jar，被楔子动态加载）。拉签名 manifest 验签 → reconcile：**文件级**增量（下 hash 不符文件、zstd 解压）+ 减量（删托管区多余文件）；md5/size 快筛 + sha256 信任校验；托管区/玩家区隔离；CAS 本地缓存 + 清理；单实例并发锁；按平台取文件集；fail-static
 - **验收标准**:
