@@ -165,6 +165,11 @@ func NewManifestSigner(privKeyB64, keyID string) (*ManifestSigner, error) {
 // KeyID 返回签名器使用的公钥版本标识。
 func (s *ManifestSigner) KeyID() string { return s.keyID }
 
+// SignRaw 对任意原始字节做 Ed25519 签名，返回 (签名, keyId)。供 .jmpack 容器签名复用同一信任根（FR-097）。
+func (s *ManifestSigner) SignRaw(msg []byte) ([]byte, string) {
+	return ed25519.Sign(s.priv, msg), s.keyID
+}
+
 // PublicKeySPKIBase64 返回公钥 X.509 SubjectPublicKeyInfo DER 的 base64（与客户端内置公钥对照用）。
 func (s *ManifestSigner) PublicKeySPKIBase64() (string, error) {
 	pub := s.priv.Public().(ed25519.PublicKey)

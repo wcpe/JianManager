@@ -388,3 +388,41 @@ func TestClientDist_IPGuardBlocksAndRules(t *testing.T) {
 		t.Errorf("IP 规则端点无 JWT 应 401，实际 %d", nw.Code)
 	}
 }
+
+// TestClientDist_PackVersion .jmpack 打包端点（FR-097）：发布版本后打包入库 type=client-pack，返回制品 sha256。
+func TestClientDist_PackVersion(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	const channelID = "s1"
+	createChannelAndKey(t, r, token, channelID)
+	publishOneFileVersion(t, r, token, channelID, "mods/a.jar", []byte("AAA-pack"))
+
+	// 打包 latest 版本。
+	w := makeRequest(r, "POST", "/api/v1/client-channels/"+channelID+"/pack", nil, token)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("打包失败: %d %s", w.Code, w.Body.String())
+	}
+	resp := parseJSON(t, w)
+	sha, _ := resp["sha256"].(string)
+	if len(sha) != 64 {
+		t.Fatalf(".jmpack 制品 sha256 应 64 hex，实际 %q", sha)
+	}
+
+	// 制品应入库 type=client-pack。
+	var asset model.Asset
+	if err := db.Where("type = ? AND sha256 = ?", model.AssetTypeClientPack, sha).First(&asset).Error; err != nil {
+		t.Fatalf(".jmpack 应入制品库 type=client-pack: %v", err)
+	}
+
+	// 无版本频道打包 → 404。
+	createChannelAndKey(t, r, token, "empty-ch")
+	if nw := makeRequest(r, "POST", "/api/v1/client-channels/empty-ch/pack", nil, token); nw.Code != http.StatusNotFound {
+		t.Errorf("无 latest 版本打包应 404，实际 %d", nw.Code)
+	}
+
+	// 打包端点限管理员：无 JWT → 401。
+	if uw := makeRequest(r, "POST", "/api/v1/client-channels/"+channelID+"/pack", nil, ""); uw.Code != http.StatusUnauthorized {
+		t.Errorf("打包端点无 JWT 应 401，实际 %d", uw.Code)
+	}
+}

@@ -23,6 +23,8 @@ const (
 	// AssetTypeClientFile 客户端分发制品（OTA 单文件压缩/原文）。
 	// 内容寻址键 = 制品（压缩后）自身 sha256，即 manifest files[].artifact.sha256（FR-087，见 ADR-022）。
 	AssetTypeClientFile AssetType = "client-file"
+	// AssetTypeClientPack 客户端分发 .jmpack 容器（zstd 压缩段拼接 + Ed25519 签名，FR-097，见 ADR-021/022）。
+	AssetTypeClientPack AssetType = "client-pack"
 )
 
 // AssetStorageState 制品存储状态，驱动归档/外置生命周期（归档策略为后续 FR，此处先立模型）。
@@ -79,7 +81,7 @@ type Asset struct {
 // ValidAssetType 校验类型是否在允许枚举内。
 func ValidAssetType(t AssetType) bool {
 	switch t {
-	case AssetTypeCore, AssetTypePlugin, AssetTypeImage, AssetTypeVideo, AssetTypeArchive, AssetTypeBlob, AssetTypeClientFile:
+	case AssetTypeCore, AssetTypePlugin, AssetTypeImage, AssetTypeVideo, AssetTypeArchive, AssetTypeBlob, AssetTypeClientFile, AssetTypeClientPack:
 		return true
 	}
 	return false

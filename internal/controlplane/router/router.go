@@ -52,6 +52,7 @@ type Services struct {
 	ClientMachine      *service.ClientMachineService
 	ClientDistTracking *service.ClientDistTrackingService
 	ClientIPGuard      *service.ClientIPGuardService
+	JmPack             *service.JmPackService
 	RuntimeAssets      *service.RuntimeAssetsService
 	EnrollToken        *service.EnrollTokenService
 	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
@@ -242,6 +243,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.ClientIPGuard != nil {
 			clientIPRuleHandler := NewClientIPRuleHandler(svcs.ClientIPGuard, svcs.Audit)
 			clientIPRuleHandler.RegisterRoutes(admin)
+		}
+
+		// 客户端分发 .jmpack 打包（latest 版本压缩+签名入库）：运营操作，限平台管理员（FR-097 / ADR-021/022）。
+		if svcs.JmPack != nil {
+			jmPackHandler := NewJmPackHandler(svcs.JmPack, svcs.Audit)
+			jmPackHandler.RegisterRoutes(admin)
 		}
 
 		// 节点 enrollment token（一键安装 / 傻瓜部署）：签发一次性准入凭据 + 一键命令，
