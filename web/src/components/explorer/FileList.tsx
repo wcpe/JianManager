@@ -1,6 +1,16 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Folder, FileText, Download, Pencil, Trash2, Scissors, Copy } from 'lucide-react'
+import {
+  Folder,
+  FileText,
+  FileArchive,
+  FileCode2,
+  Download,
+  Pencil,
+  Trash2,
+  Scissors,
+  Copy,
+} from 'lucide-react'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   ContextMenu,
@@ -10,6 +20,7 @@ import {
   ContextMenuSeparator,
 } from '@/components/ui/context-menu'
 import type { FileInfo } from '@/api/files'
+import { isArchiveName, isClassName } from '@/api/archive'
 import type { SelectionState, ClickModifiers } from './selection'
 import { isSelected } from './selection'
 import { cn } from '@/lib/utils'
@@ -33,6 +44,10 @@ interface FileListProps {
   onDownload: (file: FileInfo) => void
   onCut: () => void
   onCopy: () => void
+  /** 打开归档浏览（jar/zip，FR-075）。 */
+  onOpenArchive: (file: FileInfo) => void
+  /** 反编译（.class/.jar，FR-075）。 */
+  onDecompile: (file: FileInfo) => void
 }
 
 function formatSize(bytes: number): string {
@@ -56,6 +71,8 @@ export default function FileList({
   onDownload,
   onCut,
   onCopy,
+  onOpenArchive,
+  onDecompile,
 }: FileListProps) {
   const { t } = useTranslation()
   const [dragOverZone, setDragOverZone] = useState(false)
@@ -92,6 +109,14 @@ export default function FileList({
         <ul>
           {files.map((f) => {
             const checked = isSelected(selection, f.name)
+            const archive = !f.isDir && isArchiveName(f.name)
+            const klass = !f.isDir && isClassName(f.name)
+            // 双击：目录进入由 onOpen 处理；归档打开归档浏览；class 反编译；其余打开文本编辑器。
+            const handleDouble = () => {
+              if (archive) onOpenArchive(f)
+              else if (klass) onDecompile(f)
+              else onOpen(f)
+            }
             return (
               <ContextMenu key={f.name}>
                 <ContextMenuTrigger asChild>
@@ -105,7 +130,7 @@ export default function FileList({
                     onClick={(e) =>
                       onRowClick(f.name, { shift: e.shiftKey, ctrlOrMeta: e.ctrlKey || e.metaKey })
                     }
-                    onDoubleClick={() => onOpen(f)}
+                    onDoubleClick={handleDouble}
                   >
                     <span onClick={(e) => e.stopPropagation()}>
                       <Checkbox
@@ -116,6 +141,10 @@ export default function FileList({
                     </span>
                     {f.isDir ? (
                       <Folder className="size-4 shrink-0 text-amber-500" />
+                    ) : archive ? (
+                      <FileArchive className="size-4 shrink-0 text-sky-500" />
+                    ) : klass ? (
+                      <FileCode2 className="size-4 shrink-0 text-violet-500" />
                     ) : (
                       <FileText className="size-4 shrink-0 text-muted-foreground" />
                     )}
@@ -126,7 +155,19 @@ export default function FileList({
                   </li>
                 </ContextMenuTrigger>
                 <ContextMenuContent>
-                  {!f.isDir && (
+                  {/* 归档：打开归档浏览（FR-075）。 */}
+                  {archive && (
+                    <ContextMenuItem onSelect={() => onOpenArchive(f)}>
+                      <FileArchive className="size-4" /> {t('archive.open')}
+                    </ContextMenuItem>
+                  )}
+                  {/* class/jar：反编译（FR-075）。 */}
+                  {(klass || archive) && (
+                    <ContextMenuItem onSelect={() => onDecompile(f)}>
+                      <FileCode2 className="size-4" /> {t('archive.decompile')}
+                    </ContextMenuItem>
+                  )}
+                  {!f.isDir && !archive && !klass && (
                     <ContextMenuItem onSelect={() => onOpen(f)}>
                       <Pencil className="size-4" /> {t('files.edit')}
                     </ContextMenuItem>

@@ -18,6 +18,8 @@ import {
 } from '@/api/files'
 import CodeEditor from './editor/CodeEditor'
 import EditorShortcutsHelp from './editor/EditorShortcutsHelp'
+import ArchiveViewer from './ArchiveViewer'
+import DecompileViewer from './DecompileViewer'
 import FileTree from './FileTree'
 import FileList from './FileList'
 import Toolbar from './Toolbar'
@@ -135,6 +137,9 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
 
   // 搜索面板开关（FR-074）。打开时占据文件列表列。
   const [searchOpen, setSearchOpen] = useState(false)
+  // 归档浏览（jar/zip）/ 反编译（class/jar）视图（FR-075）。与文本编辑器互斥占用右栏。
+  const [archiveFor, setArchiveFor] = useState<{ path: string; name: string } | null>(null)
+  const [decompileFor, setDecompileFor] = useState<{ path: string; name: string } | null>(null)
 
   // 对话框/抽屉状态。
   const [prompt, setPrompt] = useState<
@@ -205,6 +210,9 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
   // 配置模式下编辑器自行读取内容（走配置端点），故只记录打开路径，不预读。
   const openByPath = useCallback(
     async (path: string, name: string) => {
+      // 打开文本编辑器即关闭归档/反编译视图（右栏互斥）。
+      setArchiveFor(null)
+      setDecompileFor(null)
       if (configMode) {
         setOpenFile({ path, name, saved: '', draft: '' })
         return
@@ -264,6 +272,22 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
       void openByPath(path, name)
     })
   }, [openPathRef, openByPath])
+
+  // ---- 归档浏览 / 反编译（FR-075）----
+  // 三类右栏内容（文本编辑器 / 归档浏览 / 反编译）互斥：打开一个即关闭其余。
+  const openArchive = useCallback((file: FileInfo) => {
+    const path = joinPath(currentDir, file.name)
+    setOpenFile(null)
+    setDecompileFor(null)
+    setArchiveFor({ path, name: file.name })
+  }, [currentDir])
+
+  const openDecompile = useCallback((file: FileInfo) => {
+    const path = joinPath(currentDir, file.name)
+    setOpenFile(null)
+    setArchiveFor(null)
+    setDecompileFor({ path, name: file.name })
+  }, [currentDir])
 
   // ---- 保存（Ctrl+S）----
   const saveOpenFile = useCallback(async () => {
@@ -549,6 +573,8 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
                 onDownload={downloadSingle}
                 onCut={() => cutSelection(selectedNames.length ? selectedNames : [])}
                 onCopy={() => copySelection(selectedNames.length ? selectedNames : [])}
+                onOpenArchive={openArchive}
+                onDecompile={openDecompile}
               />
             )}
           </div>
