@@ -38,6 +38,14 @@ final class TestFixtures {
             }
             return data;
         }
+
+        /** 最近一次遥测上报体（FR-094 测试断言用）。 */
+        String lastTelemetry;
+
+        @Override
+        public void postTelemetry(String jsonBody) {
+            lastTelemetry = jsonBody;
+        }
     }
 
     /** 一个待加入 manifest 的文件 + 其制品。 */

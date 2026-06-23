@@ -101,6 +101,7 @@ public final class Wedge {
         ctx.put("endpoint", nullToEmpty(config.endpoint));
         ctx.put("wedgeDir", wedgeDir.getAbsolutePath());
         ctx.put("coreVersion", Long.toString(coreVersion));
+        ctx.put("telemetry", Boolean.toString(config.telemetry)); // FR-094 遥测开关（opt-out）。
         return ctx;
     }
 

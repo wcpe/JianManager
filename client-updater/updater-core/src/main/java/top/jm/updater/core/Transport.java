@@ -15,4 +15,7 @@ interface Transport {
 
     /** 按制品 sha256 拉取制品字节（可能为 zstd 压缩流，按 manifest codec 解码）。 */
     byte[] fetchArtifact(String artifactSha256) throws IOException;
+
+    /** 上报遥测（FR-094，契约 §4.3）。**best-effort**：端点不可达/非 202 静默忽略，绝不抛逃逸。 */
+    void postTelemetry(String jsonBody);
 }

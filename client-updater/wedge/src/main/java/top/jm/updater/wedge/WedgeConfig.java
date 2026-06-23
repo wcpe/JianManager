@@ -28,9 +28,11 @@ final class WedgeConfig {
     final long coreVersion;
     /** boot-confirm 看门狗等待秒数（FR-091）；默认 {@link #DEFAULT_BOOT_CONFIRM_SEC}。 */
     final int bootConfirmSec;
+    /** 遥测上报开关（FR-094 隐私 opt-out）；默认 true，置 false 关闭上报。 */
+    final boolean telemetry;
 
     WedgeConfig(String channel, String key, String endpoint, String coreJar, int timeoutSec,
-                long coreVersion, int bootConfirmSec) {
+                long coreVersion, int bootConfirmSec, boolean telemetry) {
         this.channel = channel;
         this.key = key;
         this.endpoint = endpoint;
@@ -38,6 +40,7 @@ final class WedgeConfig {
         this.timeoutSec = timeoutSec;
         this.coreVersion = coreVersion;
         this.bootConfirmSec = bootConfirmSec;
+        this.telemetry = telemetry;
     }
 
     /** 从配置文件加载；文件缺失/字段缺省按默认值。 */
@@ -56,8 +59,13 @@ final class WedgeConfig {
         int timeout = parseIntOr(m.get("timeoutSec"), DEFAULT_TIMEOUT_SEC);
         long coreVersion = parseLongOr(m.get("coreVersion"), 0);
         int bootConfirmSec = parseIntOr(m.get("bootConfirmSec"), DEFAULT_BOOT_CONFIRM_SEC);
+        boolean telemetry = !"false".equalsIgnoreCase(trimOrEmpty(m.get("telemetry"))); // 缺省/非 false 即开启。
         return new WedgeConfig(m.get("channel"), m.get("key"), m.get("endpoint"), coreJar, timeout,
-                coreVersion, bootConfirmSec);
+                coreVersion, bootConfirmSec, telemetry);
+    }
+
+    private static String trimOrEmpty(String s) {
+        return s == null ? "" : s.trim();
     }
 
     private static int parseIntOr(String s, int def) {

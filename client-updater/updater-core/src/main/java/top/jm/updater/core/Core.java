@@ -86,9 +86,21 @@ public final class Core {
 
             Transport transport = new HttpTransport(
                     endpoint, channel, key, machineId, coreVersion, Duration.ofSeconds(15));
+            Path stateDir = gameDir.resolve(".jm-updater");
+            long fromVersion = StateStore.load(stateDir).lastSeenVersion();
+            long start = System.currentTimeMillis();
             Updater updater = new Updater(gameDir, transport, Signatures.production(),
                     runningCoreVersion, new UrlClassLoaderSelfTest());
-            return updater.run();
+            int rc = updater.run();
+
+            // 遥测上报（FR-094，best-effort、opt-out）：BUSY（未实际更新）不报；telemetry=false 关闭。
+            boolean telemetryEnabled = !"false".equalsIgnoreCase(ctx.getOrDefault("telemetry", "true"));
+            if (telemetryEnabled && rc != Updater.BUSY) {
+                long toVersion = StateStore.load(stateDir).lastSeenVersion();
+                transport.postTelemetry(
+                        Telemetry.build(channel, rc, fromVersion, toVersion, System.currentTimeMillis() - start));
+            }
+            return rc;
         } catch (Throwable t) {
             // 不抛逃逸到楔子；fail-static（契约 §6.3）。
             System.err.println("[jm-updater] core fail-static: " + t);

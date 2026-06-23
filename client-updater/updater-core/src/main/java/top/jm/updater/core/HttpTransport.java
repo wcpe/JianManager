@@ -5,6 +5,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 
 /**
@@ -69,6 +70,25 @@ final class HttpTransport implements Transport {
             throw new IOException("制品拉取失败 HTTP " + code + " sha256=" + artifactSha256);
         }
         return resp.body();
+    }
+
+    @Override
+    public void postTelemetry(String jsonBody) {
+        try {
+            URI uri = URI.create(endpoint + "/client-telemetry");
+            HttpRequest req = HttpRequest.newBuilder(uri)
+                    .timeout(Duration.ofSeconds(10))
+                    .header("X-Client-Key", nullToEmpty(clientKey))
+                    .header("X-Machine-Id", nullToEmpty(machineId))
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonBody, StandardCharsets.UTF_8))
+                    .build();
+            client.send(req, HttpResponse.BodyHandlers.discarding());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            // best-effort：遥测失败绝不影响更新/游戏（契约 §4.3）。
+        }
     }
 
     private <T> HttpResponse<T> send(HttpRequest req, HttpResponse.BodyHandler<T> handler) throws IOException {
