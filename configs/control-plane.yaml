@@ -39,3 +39,10 @@ enroll:
   advertise_grpc: ""    # 对外公布的 CP gRPC 地址 host:port（留空=请求 Host + grpc.port）
   script_base_url: ""   # 安装脚本下载基址 scheme://host（留空=请求 scheme://Host）
   binary_url: ""        # Worker 二进制下载地址（留空=脚本经 --binary 指向本地二进制兜底）
+
+# 面板自更新：CP/Worker 二进制在线升级（FR-081，见 ADR-020）。均有默认值，可整体省略。
+# feed_url 留空即「未配置更新源」，检查更新返回 configured=false、不执行任何升级。
+update:
+  feed_url: ""          # release feed JSON 地址；据此解析最新版本与各平台制品（component+os+arch）
+  binary_base_url: ""   # 私有二进制基址（可选兜底）：无 feed 时按 <base>/<component>-<os>-<arch> 拼下载地址
+  allow_insecure: false # 是否允许 http 下载源（默认仅 https 防中间人篡改；本地/内网自测可开）
