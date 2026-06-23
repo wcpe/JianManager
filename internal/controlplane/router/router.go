@@ -25,6 +25,7 @@ type Services struct {
 	Plugin             *service.PluginService
 	Player             *service.PlayerService
 	PlayerEvent        *service.PlayerEventService
+	ServerState        *service.ServerStateService
 	Config             *service.ConfigService
 	Bot                *service.BotService
 	Alert              *service.AlertService
@@ -152,6 +153,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		playerHandler := NewPlayerHandler(svcs.Player, svcs.PlayerEvent, svcs.Authz, svcs.Audit)
 		playerHandler.RegisterRoutes(protected)
+
+		// 服务器状态：按需经探针桥取回某实例全量 Bukkit 状态（FR-076/077），instance:read 且实例可访问。
+		if svcs.ServerState != nil {
+			serverStateHandler := NewServerStateHandler(svcs.ServerState, svcs.Authz)
+			serverStateHandler.RegisterRoutes(protected)
+		}
 
 		eventHandler := NewEventHandler(svcs.Event)
 		eventHandler.RegisterRoutes(protected)
