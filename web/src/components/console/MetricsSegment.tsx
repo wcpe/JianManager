@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { useMetricSeries, type MetricSeries } from '@/api/metrics'
+import { useMetricSeries, type MetricSeries, useInstanceMetrics } from '@/api/metrics'
+import { useInstance } from '@/api/instances'
 import { useProbeUpdateStatus, useUpdateProbe } from '@/api/probe'
 import { Panel } from '@/components/ui/panel'
 import { Button } from '@/components/ui/button'
@@ -50,6 +51,61 @@ function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
   )
 }
 
+/**
+ * 资源限额对比卡（FR-079）：docker 模式实例的实际占用 vs 设定上限，超限标红。
+ * - 内存：实际占用（探针 memoryMb）对比内存上限 MiB；占用越限标红。
+ * - CPU：上限为核数；探针 cpuPercent 为进程 CPU%，无与核数可比的实际占用，仅展示设定上限（数据不足）。
+ * - 磁盘：v1 仅持久化展示上限，无实际占用来源。
+ * 实例非 docker 或未设任何上限时不渲染（由调用方判定）。
+ */
+function ResourceLimitCard({ instanceId }: { instanceId: number }) {
+  const { t } = useTranslation()
+  const { data: inst } = useInstance(instanceId)
+  const isRunning = inst?.status === 'RUNNING'
+  const { data: metrics } = useInstanceMetrics(instanceId, isRunning)
+  if (!inst || inst.processType !== 'docker') return null
+
+  const cpuLimit = inst.cpuLimit ?? 0
+  const memLimit = inst.memLimitMb ?? 0
+  const diskLimit = inst.diskLimitMb ?? 0
+  if (cpuLimit <= 0 && memLimit <= 0 && diskLimit <= 0) return null
+
+  const memUsed = isRunning && metrics && metrics.memoryMb > 0 ? metrics.memoryMb : null
+  const memOver = memUsed != null && memLimit > 0 && memUsed > memLimit
+
+  return (
+    <Panel title={t('metrics.resourceLimit')}>
+      <div className="grid grid-cols-1 gap-2 p-2 text-xs sm:grid-cols-3">
+        <div className="rounded-md border p-2">
+          <p className="text-muted-foreground">{t('metrics.cpuLimit')}</p>
+          <p className="mt-1 font-semibold">
+            {cpuLimit > 0 ? t('metrics.cpuCores', { n: cpuLimit }) : t('metrics.unlimited')}
+          </p>
+        </div>
+        <div className={`rounded-md border p-2 ${memOver ? 'border-destructive bg-destructive/10' : ''}`}>
+          <p className="text-muted-foreground">{t('metrics.memLimit')}</p>
+          <p className={`mt-1 font-semibold ${memOver ? 'text-destructive' : ''}`}>
+            {memLimit > 0 ? (
+              <>
+                {memUsed != null ? `${memUsed} / ${memLimit} MiB` : `— / ${memLimit} MiB`}
+                {memOver && <span className="ml-1">⚠ {t('metrics.overLimit')}</span>}
+              </>
+            ) : (
+              t('metrics.unlimited')
+            )}
+          </p>
+        </div>
+        <div className="rounded-md border p-2">
+          <p className="text-muted-foreground">{t('metrics.diskLimit')}</p>
+          <p className="mt-1 font-semibold">
+            {diskLimit > 0 ? `${diskLimit} MiB` : t('metrics.unlimited')}
+          </p>
+        </div>
+      </div>
+    </Panel>
+  )
+}
+
 /** 字节 → G/M/K。 */
 function fmtBytes(b: number): string {
   if (!Number.isFinite(b) || b <= 0) return '0'
@@ -92,6 +148,7 @@ export default function MetricsSegment({ instanceUuid, instanceId }: { instanceU
         <RangePicker value={range} onChange={setRange} />
       </div>
       <ProbeUpdateCard instanceId={instanceId} />
+      <ResourceLimitCard instanceId={instanceId} />
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
         <Panel title={t('metrics.tps')}>
           <TimeSeriesChart series={one('inst_tps', t('metrics.tps'))} height={160} valueFormatter={(v) => v.toFixed(1)} />

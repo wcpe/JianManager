@@ -332,7 +332,14 @@
     "heapMax": "上限",
     "worldChunks": "分世界加载区块",
     "worldEntities": "分世界实体",
-    "worldTileEntities": "分世界方块实体"
+    "worldTileEntities": "分世界方块实体",
+    "resourceLimit": "资源限额对比",
+    "cpuLimit": "CPU 上限",
+    "memLimit": "内存（实际/上限）",
+    "diskLimit": "磁盘上限",
+    "cpuCores": "{{n}} 核",
+    "unlimited": "不限制",
+    "overLimit": "已超限"
   },
   "probe": {
     "title": "ServerProbe 探针更新",
@@ -418,7 +425,16 @@
     "workDirSystemAssigned": "由系统自动分配（创建后只读展示）",
     "workDirHint": "实例的工作目录，文件管理将以此为根目录",
     "dockerImage": "Docker 镜像",
-    "dockerImageHint": "容器镜像引用，默认 Docker Hub。本地缺失时启动前自动拉取"
+    "dockerImageHint": "容器镜像引用，默认 Docker Hub。本地缺失时启动前自动拉取",
+    "cpuLimit": "CPU 上限（核）",
+    "memLimit": "内存上限（MiB）",
+    "diskLimit": "磁盘上限（MiB）",
+    "resourceLimit": "资源限额",
+    "resourceLimitTitle": "{{name}} 的资源限额",
+    "resourceLimitHint": "留空表示不限制；下次启动时注入容器 cgroup",
+    "diskLimitHint": "留空表示不限制；当前版本仅记录展示，不强制限制",
+    "resourceLimitDockerOnly": "资源限额需 Docker 模式（direct/daemon 不支持 cgroup 限制）",
+    "resourceLimitSaved": "资源限额已保存，下次启动生效"
   },
   "instanceBatch": {
     "selected": "已选 {{count}} 个",
@@ -1308,7 +1324,8 @@
     "url": "须为合法 URL",
     "urlScheme": "仅支持 http/https 地址",
     "envRef": "须为环境变量引用形式 ${VAR_NAME}",
-    "host": "须为合法主机名或 IP"
+    "host": "须为合法主机名或 IP",
+    "nonNegativeNumber": "须为非负数（0 表示不限制）"
   },
   "combobox": {
     "searchPlaceholder": "搜索或输入…",

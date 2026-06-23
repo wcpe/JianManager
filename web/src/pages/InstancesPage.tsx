@@ -20,6 +20,7 @@ import ProvisionProxyDialog from '@/components/ProvisionProxyDialog'
 import ProxyRegistrationsDialog from '@/components/ProxyRegistrationsDialog'
 import CloneInstanceDialog from '@/components/CloneInstanceDialog'
 import InstanceTagsDialog from '@/components/InstanceTagsDialog'
+import EditInstanceLimitsDialog from '@/components/EditInstanceLimitsDialog'
 import {
   collectEnvs,
   collectTags,
@@ -63,6 +64,15 @@ export default function InstancesPage() {
   const [manageProxy, setManageProxy] = useState<{ id: number; name: string } | null>(null)
   const [cloneTarget, setCloneTarget] = useState<{ id: number; name: string } | null>(null)
   const [tagsTarget, setTagsTarget] = useState<{ id: number; name: string; tags: string[] } | null>(null)
+  // 资源限额编辑目标（FR-079）：携带启动方式与当前限额回填。
+  const [limitsTarget, setLimitsTarget] = useState<{
+    id: number
+    name: string
+    processType: string
+    cpuLimit: number
+    memLimitMb: number
+    diskLimitMb: number
+  } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null)
   // 批量操作选中的实例 ID 集合（FR-058）。
   const [selectedIds, setSelectedIds] = useState<number[]>([])
@@ -198,6 +208,23 @@ export default function InstancesPage() {
             >
               {t('grouping.editTags')}
             </Button>
+            {inst.processType === 'docker' && (
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => setLimitsTarget({
+                  id: inst.id,
+                  name: inst.name,
+                  processType: inst.processType,
+                  cpuLimit: inst.cpuLimit ?? 0,
+                  memLimitMb: inst.memLimitMb ?? 0,
+                  diskLimitMb: inst.diskLimitMb ?? 0,
+                })}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                {t('instances.resourceLimit')}
+              </Button>
+            )}
             {inst.role === 'proxy' && (
               <Button
                 variant="ghost"
@@ -354,6 +381,17 @@ export default function InstancesPage() {
           instanceName={tagsTarget.name}
           tags={tagsTarget.tags}
           onClose={() => setTagsTarget(null)}
+        />
+      )}
+      {limitsTarget && (
+        <EditInstanceLimitsDialog
+          instanceId={limitsTarget.id}
+          instanceName={limitsTarget.name}
+          processType={limitsTarget.processType}
+          cpuLimit={limitsTarget.cpuLimit}
+          memLimitMb={limitsTarget.memLimitMb}
+          diskLimitMb={limitsTarget.diskLimitMb}
+          onClose={() => setLimitsTarget(null)}
         />
       )}
 

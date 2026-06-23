@@ -16,6 +16,12 @@ export interface InstanceInfo {
   workDir: string
   /** docker 模式的容器镜像引用（FR-078，ADR-019）；非 docker 模式为空。 */
   image?: string
+  /** docker 模式 CPU 核数上限（FR-079）；0=不限制，仅 docker 模式生效。 */
+  cpuLimit?: number
+  /** docker 模式内存上限（MiB，FR-079）；0=不限制，仅 docker 模式生效。 */
+  memLimitMb?: number
+  /** docker 模式磁盘上限（MiB，FR-079）；0=不限制，v1 仅持久化/展示不注入。 */
+  diskLimitMb?: number
   /** 系统分配的游戏服监听端口（FR-032），Bot 默认据此连入所属实例。 */
   serverPort: number
   autoStart: boolean
@@ -145,6 +151,10 @@ export interface UpdateInstanceBody {
   jdkId?: number
   /** 传数组（含空数组）覆盖标签；不传则不变。 */
   tags?: string[]
+  /** docker 资源限额（FR-079）：传值（含 0=清除限制）覆盖，不传则不变。变更对下次启动生效。 */
+  cpuLimit?: number
+  memLimitMb?: number
+  diskLimitMb?: number
 }
 
 /** 更新实例配置（含标签）。 */

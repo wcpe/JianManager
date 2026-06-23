@@ -13,6 +13,7 @@ import { FieldLabel, FieldError } from '@/components/ui/field-label'
 import {
   validateRequired,
   validateAbsPath,
+  validateNonNegativeNumber,
   validateFields,
   hasErrors,
 } from '@/lib/form-validation'
@@ -35,6 +36,9 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
   const [processType, setProcessType] = useState('daemon')
   // image 仅 docker 模式使用：容器镜像引用（FR-078，ADR-019）。
   const [image, setImage] = useState('')
+  // cpuLimit/memLimitMb 仅 docker 模式使用：资源限额，空=不限制（FR-079，ADR-019）。
+  const [cpuLimit, setCpuLimit] = useState('')
+  const [memLimitMb, setMemLimitMb] = useState('')
   const [startCommand, setStartCommand] = useState('')
   const [workDir, setWorkDir] = useState('')
   const [autoRestart, setAutoRestart] = useState(true)
@@ -69,13 +73,16 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
   const needWorkDir = type !== 'minecraft_java'
   const isDocker = processType === 'docker'
   const errors = validateFields(
-    { name, nodeId, startCommand, workDir, image },
+    { name, nodeId, startCommand, workDir, image, cpuLimit, memLimitMb },
     {
       name: [validateRequired],
       nodeId: [validateRequired],
       startCommand: [validateRequired],
       workDir: needWorkDir ? [validateRequired, validateAbsPath] : [],
       image: isDocker ? [validateRequired] : [],
+      // 资源限额选填，仅 docker 模式校验；空=不限制（FR-079）。
+      cpuLimit: isDocker ? [validateNonNegativeNumber] : [],
+      memLimitMb: isDocker ? [validateNonNegativeNumber] : [],
     },
   )
 
@@ -98,6 +105,8 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
     setType('minecraft_java')
     setProcessType('daemon')
     setImage('')
+    setCpuLimit('')
+    setMemLimitMb('')
     setStartCommand('')
     setWorkDir('')
     setAutoRestart(true)
@@ -121,6 +130,9 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
       jdkId: jdkId ? Number(jdkId) : undefined,
       // docker 模式下发镜像（ADR-019）；其它模式不传。
       image: isDocker ? image : undefined,
+      // docker 模式下发资源限额（FR-079）；空=不限制（传 0），非 docker 模式不传。
+      cpuLimit: isDocker ? (cpuLimit.trim() ? Number(cpuLimit) : 0) : undefined,
+      memLimitMb: isDocker ? (memLimitMb.trim() ? Number(memLimitMb) : 0) : undefined,
     })
   }
 
@@ -219,6 +231,49 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
                 <p className="mt-1 text-xs text-muted-foreground">{t('instances.dockerImageHint')}</p>
               )}
             </div>
+          )}
+
+          {/* docker 资源限额（FR-079）：CPU 核数 / 内存 MiB，留空=不限制；仅 docker 模式显示并下发。 */}
+          {isDocker && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <FieldLabel>{t('instances.cpuLimit')}</FieldLabel>
+                <input
+                  value={cpuLimit}
+                  onChange={(e) => setCpuLimit(e.target.value)}
+                  className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
+                  placeholder="1.5"
+                  inputMode="decimal"
+                  aria-invalid={!!errors.cpuLimit}
+                />
+                {errors.cpuLimit ? (
+                  <FieldError error={errors.cpuLimit} />
+                ) : (
+                  <p className="mt-1 text-xs text-muted-foreground">{t('instances.resourceLimitHint')}</p>
+                )}
+              </div>
+              <div>
+                <FieldLabel>{t('instances.memLimit')}</FieldLabel>
+                <input
+                  value={memLimitMb}
+                  onChange={(e) => setMemLimitMb(e.target.value)}
+                  className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
+                  placeholder="2048"
+                  inputMode="numeric"
+                  aria-invalid={!!errors.memLimitMb}
+                />
+                {errors.memLimitMb ? (
+                  <FieldError error={errors.memLimitMb} />
+                ) : (
+                  <p className="mt-1 text-xs text-muted-foreground">{t('instances.resourceLimitHint')}</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 非 docker 模式提示资源限额需 docker（FR-079 验收）。 */}
+          {!isDocker && (
+            <p className="text-xs text-muted-foreground">{t('instances.resourceLimitDockerOnly')}</p>
           )}
 
           <div>

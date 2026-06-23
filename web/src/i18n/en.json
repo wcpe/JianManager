@@ -345,7 +345,14 @@
     "heapMax": "Max",
     "worldChunks": "Loaded Chunks by World",
     "worldEntities": "Entities by World",
-    "worldTileEntities": "Tile Entities by World"
+    "worldTileEntities": "Tile Entities by World",
+    "resourceLimit": "Resource Limit Comparison",
+    "cpuLimit": "CPU Limit",
+    "memLimit": "Memory (used/limit)",
+    "diskLimit": "Disk Limit",
+    "cpuCores": "{{n}} cores",
+    "unlimited": "Unlimited",
+    "overLimit": "Over limit"
   },
   "probe": {
     "title": "ServerProbe Update",
@@ -431,7 +438,16 @@
     "workDirSystemAssigned": "Auto-assigned by the system (read-only after creation)",
     "workDirHint": "Working directory; the file manager uses it as the root",
     "dockerImage": "Docker Image",
-    "dockerImageHint": "Container image reference; defaults to Docker Hub. Pulled automatically before start if missing locally"
+    "dockerImageHint": "Container image reference; defaults to Docker Hub. Pulled automatically before start if missing locally",
+    "cpuLimit": "CPU Limit (cores)",
+    "memLimit": "Memory Limit (MiB)",
+    "diskLimit": "Disk Limit (MiB)",
+    "resourceLimit": "Resource Limits",
+    "resourceLimitTitle": "Resource Limits for {{name}}",
+    "resourceLimitHint": "Leave empty for unlimited; injected into the container cgroup on next start",
+    "diskLimitHint": "Leave empty for unlimited; recorded for display only in this version",
+    "resourceLimitDockerOnly": "Resource limits require Docker mode (direct/daemon do not support cgroup limits)",
+    "resourceLimitSaved": "Resource limits saved; effective on next start"
   },
   "instanceBatch": {
     "selected": "{{count}} selected",
@@ -1308,7 +1324,8 @@
     "url": "Must be a valid URL",
     "urlScheme": "Only http/https URLs are allowed",
     "envRef": "Must be an environment variable reference ${VAR_NAME}",
-    "host": "Must be a valid hostname or IP"
+    "host": "Must be a valid hostname or IP",
+    "nonNegativeNumber": "Must be a non-negative number (0 means unlimited)"
   },
   "combobox": {
     "searchPlaceholder": "Search or type…",

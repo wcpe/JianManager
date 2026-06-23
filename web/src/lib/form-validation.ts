@@ -50,6 +50,17 @@ export function validatePositiveInt(value: string): FieldError {
 }
 
 /**
+ * 非负数（资源限额：CPU 核数允许小数、内存/磁盘 MiB）。空串合法（选填）。
+ * 0 表示不限制（FR-079），故与 validatePositiveInt 不同——0 放行；负数判错。
+ */
+export function validateNonNegativeNumber(value: string): FieldError {
+  const trimmed = value.trim()
+  if (trimmed === '') return undefined
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) return 'validation.nonNegativeNumber'
+  return Number(trimmed) < 0 ? 'validation.nonNegativeNumber' : undefined
+}
+
+/**
  * 绝对路径（工作目录/JDK 路径）。空串合法（交由 required 把关）。
  * 接受 Unix 绝对路径（`/...`）或 Windows 盘符路径（`C:\...` 或 `C:/...`），
  * 不做存在性校验（最终以 Worker 落地为准）。
