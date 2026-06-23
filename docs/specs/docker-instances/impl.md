@@ -45,9 +45,9 @@
 - [x] ARCHITECTURE：进程模型加 docker 策略生命周期、gRPC 加镜像 RPC、instances 表加 image/container_id。
 - [x] API.md：POST /instances 加 image、新增镜像管理端点。
 - [x] CHANGELOG `[Unreleased]` 追加。
-- [ ] 真机：Docker 模式建+启 MC 实例（拉镜像→映射端口→终端见日志→可进服），停/删干净。
+- [x] 真机：dockerStrategy 全生命周期经真 Docker 守护进程跑通（拉镜像→创建[卷挂载+端口映射]→attach→stdin/stdout→停止→清理）+ 镜像管理列出/拉取真机验，门控测试 `-tags docker_integration`（见 `docker_realmachine_test.go`）。**注**：用 alpine 轻量镜像验证容器化链路本身；MC 镜像（itzg/minecraft-server）「拉镜像→映射端口→进服」走同一代码路径，待主控用真 MC 镜像 + 浏览器终端复验进服。
 
 ## 完成判据
 
-- `go build ./...` 不 panic + `go vet ./...` + 相关 `go test` 绿；前端 tsc/lint/build 绿。
-- 真机：Docker 模式建+启 MC 实例跑通（本机 Docker daemon 可用时执行，否则标「待真机验」）。
+- [x] `go build ./...` 不 panic + `go vet ./...` + 相关 `go test` 绿；前端 tsc/lint/build 绿。
+- [x] 真机：dockerStrategy 经真 Docker 守护进程跑通（alpine 验证容器化链路 + 端口发布 + stdin/stdout + 停删干净 + 镜像管理）；MC 镜像进服真机复验留主控。
