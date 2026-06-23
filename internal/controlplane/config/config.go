@@ -55,6 +55,20 @@ type Config struct {
 	FileVersion FileVersionConfig `mapstructure:"file_version"`
 	ClientDist  ClientDistConfig  `mapstructure:"client_dist"`
 	Enroll      EnrollConfig      `mapstructure:"enroll"`
+	Update      UpdateConfig      `mapstructure:"update"`
+}
+
+// UpdateConfig 面板自更新（CP/Worker 二进制在线升级）配置（FR-081，见 ADR-020 §4）。
+// 全部可选、有合理默认；留空表示「未配置更新源」，检查更新返回未配置提示而非报错。
+type UpdateConfig struct {
+	// FeedURL release feed JSON 地址；非空时「检查更新」据此解析最新版本与各平台制品。
+	// 含私有源凭据时经 ${ENV_VAR} 引用、不硬编码（config-files 规范）。
+	FeedURL string `mapstructure:"feed_url"`
+	// BinaryBaseURL 私有二进制基址（可选兜底）：无 feed 时按 <base>/<component>-<os>-<arch> 约定拼下载地址。
+	// 本 FR 以 feed 为主、base_url 为兜底（无版本/校验信息）。
+	BinaryBaseURL string `mapstructure:"binary_base_url"`
+	// AllowInsecure 是否允许 http 下载源（默认仅 https，避免二进制被中间人篡改）。本地/内网自测可开。
+	AllowInsecure bool `mapstructure:"allow_insecure"`
 }
 
 // EnrollConfig 节点 enrollment 一键安装配置（FR-080，见 ADR-020）。
@@ -166,6 +180,10 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("enroll.advertise_grpc", "")
 	v.SetDefault("enroll.script_base_url", "")
 	v.SetDefault("enroll.binary_url", "")
+	// 面板自更新（FR-081）：更新源默认空（未配置即检查更新返回未配置提示），仅允许 https。
+	v.SetDefault("update.feed_url", "")
+	v.SetDefault("update.binary_base_url", "")
+	v.SetDefault("update.allow_insecure", false)
 	// 显式绑定任务约定的私钥环境变量名（敏感信息经 env 注入、不入库，config-files 规范）。
 	_ = v.BindEnv("client_dist.sign_priv_key", "JIANMANAGER_CLIENT_SIGN_PRIVKEY")
 
