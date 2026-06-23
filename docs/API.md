@@ -905,40 +905,121 @@
 
 ## 告警
 
-### GET /api/v1/alerts/rules
-- **描述**: 告警规则列表
-- **关联 FR**: FR-011
+> FR-011 阈值告警在 FR-085 扩展为多通道 + 多触发类型 + 分级聚合静默 + 确认历史。
+> 所有端点限平台/组管理员（沿用 protected 分组鉴权）。
 
-### POST /api/v1/alerts/rules
+### 告警规则
+
+#### GET /api/v1/alerts/rules
+- **描述**: 告警规则列表
+- **关联 FR**: FR-011, FR-085
+
+#### POST /api/v1/alerts/rules
 - **描述**: 创建告警规则
-- **关联 FR**: FR-011
-- **请求**:
+- **关联 FR**: FR-011, FR-085
+- **请求**（按 `triggerType` 取用相应字段）:
   ```json
   {
     "name": "High CPU",
+    "triggerType": "metric",
+    "level": "warn",
     "targetType": "node",
     "targetId": null,
-    "metric": "cpu",
-    "operator": ">",
-    "threshold": 90,
-    "durationSec": 60,
-    "notifyType": "webhook",
-    "notifyTarget": "https://hooks.example.com/xxx"
+    "metric": "cpu", "operator": ">", "threshold": 90, "durationSec": 60,
+    "keyword": "",
+    "eventMatch": "",
+    "channelIds": [1, 2],
+    "dedupWindowSec": 300,
+    "silenceStart": "23:00", "silenceEnd": "07:00",
+    "notifyRecover": true
   }
   ```
+- **字段**:
+  - `triggerType`: `metric` | `instance_crash` | `node_offline` | `log_keyword` | `player_event` | `backup_failed`（缺省 `metric`）
+  - `level`: `info` | `warn` | `critical`（缺省 `warn`）
+  - `keyword`: 仅 `log_keyword` 用；`eventMatch`: 仅 `player_event` 用（`join`/`quit`/`chat`/`cross_server`，空=任意）
+  - `channelIds`: 路由的通知通道 ID 列表（空=不外发，仍入事件库 + 站内）
+  - `dedupWindowSec`: 去抖聚合窗口；`silenceStart`/`silenceEnd`: 静默窗口（`HH:MM`，支持跨午夜）
+  - `notifyType`/`notifyTarget`: 兼容 FR-011 单 webhook 直发（未配 `channelIds` 时回退）
+- **错误**: `400 INVALID_REQUEST`（非法触发类型/级别）
 
-### PUT /api/v1/alerts/rules/:id
-- **描述**: 更新告警规则
-- **关联 FR**: FR-011
+#### PUT /api/v1/alerts/rules/:id
+- **描述**: 更新告警规则可变字段（`triggerType`/`targetType` 不可改）
+- **关联 FR**: FR-011, FR-085
+- **请求**（均可选）: `enabled` `threshold` `level` `channelIds` `dedupWindowSec` `silenceStart` `silenceEnd` `notifyRecover` `keyword` `eventMatch`
 
-### DELETE /api/v1/alerts/rules/:id
+#### DELETE /api/v1/alerts/rules/:id
 - **描述**: 删除告警规则
 - **关联 FR**: FR-011
 
-### GET /api/v1/alerts/events
-- **描述**: 告警事件列表
-- **关联 FR**: FR-011
-- **Query**: `?ruleId=xxx&resolved=false`
+### 告警事件
+
+#### GET /api/v1/alerts/events
+- **描述**: 告警事件列表（含规则名预加载，按触发时间倒序，默认 limit 200）
+- **关联 FR**: FR-011, FR-085
+- **Query**: `ruleId` `resolved`(true/false) `acknowledged`(true/false) `level` `triggerType` `limit`
+- **响应字段**: 含 `level` `triggerType` `count`(聚合计数) `resolved` `acknowledged` `acknowledgedBy` `acknowledgedAt` `read`
+
+#### GET /api/v1/alerts/events/unread-count
+- **描述**: 未读告警数（站内角标）
+- **关联 FR**: FR-085
+- **响应**: `{ "unread": 3 }`
+
+#### POST /api/v1/alerts/events/:id/ack
+- **描述**: 确认/认领一条告警事件（记录确认人与时间，置已读）
+- **关联 FR**: FR-085
+- **错误**: `404 NOT_FOUND`
+
+#### POST /api/v1/alerts/events/:id/read
+- **描述**: 标记单条事件为已读
+- **关联 FR**: FR-085
+
+#### POST /api/v1/alerts/events/read-all
+- **描述**: 标记全部未读事件为已读
+- **关联 FR**: FR-085
+
+### 通知通道（FR-085）
+
+> 通道是可复用的通知出口，多条规则可路由到同一通道。凭证子字段（URL/token/password）
+> 强制以 `${ENV_VAR}` 引用环境变量，落库不含明文（见 config-files 规范）。
+
+#### GET /api/v1/alerts/channels
+- **描述**: 通知通道列表
+- **关联 FR**: FR-085
+
+#### POST /api/v1/alerts/channels
+- **描述**: 创建通知通道
+- **关联 FR**: FR-085
+- **请求**:
+  ```json
+  {
+    "name": "运维钉钉",
+    "type": "dingtalk",
+    "enabled": true,
+    "config": { "url": "${JM_DINGTALK_WEBHOOK}" }
+  }
+  ```
+- **`type`**: `webhook` | `email` | `dingtalk` | `wecom` | `feishu` | `discord` | `telegram` | `inapp`
+- **`config`（按类型）**:
+  - webhook/dingtalk/wecom/feishu/discord: `{ "url": "${ENV}" }`
+  - telegram: `{ "token": "${ENV}", "chatId": "..." }`
+  - email: `{ "host", "port", "username", "password": "${ENV}", "from", "to" }`
+  - inapp: `{}`
+- **错误**: `400 INVALID_REQUEST`（凭证非 `${ENV}` 引用 / 必填缺失 / 非法类型）
+
+#### PUT /api/v1/alerts/channels/:id
+- **描述**: 更新通知通道
+- **关联 FR**: FR-085
+
+#### DELETE /api/v1/alerts/channels/:id
+- **描述**: 删除通知通道
+- **关联 FR**: FR-085
+- **错误**: `409 CHANNEL_IN_USE`（被规则引用）、`404 NOT_FOUND`
+
+#### POST /api/v1/alerts/channels/:id/test
+- **描述**: 向通道发送一条测试通知（验证配置与连通性）
+- **关联 FR**: FR-085
+- **错误**: `502 TEST_SEND_FAILED`（投递失败，message 含原因）
 
 ---
 
