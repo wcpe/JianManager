@@ -1009,7 +1009,7 @@
     "topIps": "来源 IP（Top 10）",
     "ip": "IP",
     "requestCount": "请求数",
-    "totalBytes": "窗口内流量合计",
+    "totalBytes": "窗口内流量合计：",
     "empty": "暂无数据"
   },
   "templates": {

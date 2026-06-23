@@ -130,7 +130,7 @@ export default function ClientStatsPanel({ channelId }: { channelId: string }) {
       {/* 流量合计（信息性） */}
       {data && data.downloads.length > 0 && (
         <p className="text-xs text-muted-foreground">
-          {t('clientStats.totalBytes', '窗口内流量合计')}：
+          {t('clientStats.totalBytes', '窗口内流量合计')}{' '}
           {formatBytes(data.downloads.reduce((s, d) => s + d.bytes, 0))}
         </p>
       )}

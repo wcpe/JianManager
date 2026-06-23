@@ -1009,7 +1009,7 @@
     "topIps": "Source IPs (Top 10)",
     "ip": "IP",
     "requestCount": "Requests",
-    "totalBytes": "Total bytes in window",
+    "totalBytes": "Total bytes in window: ",
     "empty": "No data"
   },
   "templates": {
