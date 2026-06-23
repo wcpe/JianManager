@@ -19,6 +19,7 @@ import {
   LayoutDashboard,
   LayoutTemplate,
   Network,
+  RefreshCw,
   ScrollText,
   Server,
   Settings,
@@ -106,14 +107,21 @@ const NAV_GROUPS: NavGroup[] = [
 const ROLE_PLATFORM_ADMIN = 10
 
 /**
- * 按角色裁剪导航：平台管理员在「设置」组追加「数据库」入口（FR-084，仅平台管理员可见入口）。
- * 仅注入本入口，不改其余既有项。
+ * 按角色裁剪导航：平台管理员在「设置」组追加「数据库」（FR-084）与「系统更新」（FR-081）入口，
+ * 均仅平台管理员可见。仅注入这两个入口，不改其余既有项。
  */
 function navGroupsForRole(role: number | null): NavGroup[] {
   if (role !== ROLE_PLATFORM_ADMIN) return NAV_GROUPS
   return NAV_GROUPS.map((g) =>
     g.key === 'settings'
-      ? { ...g, children: [...(g.children ?? []), { to: '/database', labelKey: 'nav.database', icon: Database }] }
+      ? {
+          ...g,
+          children: [
+            ...(g.children ?? []),
+            { to: '/database', labelKey: 'nav.database', icon: Database },
+            { to: '/system-update', labelKey: 'nav.systemUpdate', icon: RefreshCw },
+          ],
+        }
       : g,
   )
 }
