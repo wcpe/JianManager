@@ -33,6 +33,8 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
   const [nodeId, setNodeId] = useState('')
   const [type, setType] = useState('minecraft_java')
   const [processType, setProcessType] = useState('daemon')
+  // image 仅 docker 模式使用：容器镜像引用（FR-078，ADR-019）。
+  const [image, setImage] = useState('')
   const [startCommand, setStartCommand] = useState('')
   const [workDir, setWorkDir] = useState('')
   const [autoRestart, setAutoRestart] = useState(true)
@@ -63,14 +65,17 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
   ]
 
   // 提交前校验：名称/启动命令必填；非 MC 类型工作目录必填且须为绝对路径（MC 由系统分配）。
+  // docker 模式额外要求镜像必填（ADR-019）。
   const needWorkDir = type !== 'minecraft_java'
+  const isDocker = processType === 'docker'
   const errors = validateFields(
-    { name, nodeId, startCommand, workDir },
+    { name, nodeId, startCommand, workDir, image },
     {
       name: [validateRequired],
       nodeId: [validateRequired],
       startCommand: [validateRequired],
       workDir: needWorkDir ? [validateRequired, validateAbsPath] : [],
+      image: isDocker ? [validateRequired] : [],
     },
   )
 
@@ -92,6 +97,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
     setNodeId('')
     setType('minecraft_java')
     setProcessType('daemon')
+    setImage('')
     setStartCommand('')
     setWorkDir('')
     setAutoRestart(true)
@@ -113,6 +119,8 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
       autoRestart,
       groupId: groupId ? Number(groupId) : undefined,
       jdkId: jdkId ? Number(jdkId) : undefined,
+      // docker 模式下发镜像（ADR-019）；其它模式不传。
+      image: isDocker ? image : undefined,
     })
   }
 
@@ -194,6 +202,24 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
               </div>
             </div>
           </div>
+
+          {isDocker && (
+            <div>
+              <FieldLabel required>{t('instances.dockerImage')}</FieldLabel>
+              <input
+                value={image}
+                onChange={(e) => setImage(e.target.value)}
+                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm font-mono aria-invalid:border-destructive"
+                placeholder="itzg/minecraft-server:latest"
+                aria-invalid={!!errors.image}
+              />
+              {errors.image ? (
+                <FieldError error={errors.image} />
+              ) : (
+                <p className="mt-1 text-xs text-muted-foreground">{t('instances.dockerImageHint')}</p>
+              )}
+            </div>
+          )}
 
           <div>
             <FieldLabel required>{t('instanceDetail.startCommand')}</FieldLabel>

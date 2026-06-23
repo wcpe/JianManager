@@ -429,7 +429,9 @@
     "createFailed": "Creation failed",
     "createInstance": "Create Instance",
     "workDirSystemAssigned": "Auto-assigned by the system (read-only after creation)",
-    "workDirHint": "Working directory; the file manager uses it as the root"
+    "workDirHint": "Working directory; the file manager uses it as the root",
+    "dockerImage": "Docker Image",
+    "dockerImageHint": "Container image reference; defaults to Docker Hub. Pulled automatically before start if missing locally"
   },
   "instanceBatch": {
     "selected": "{{count}} selected",

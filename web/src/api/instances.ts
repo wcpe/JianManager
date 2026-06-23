@@ -14,6 +14,8 @@ export interface InstanceInfo {
   status: string
   startCommand: string
   workDir: string
+  /** docker 模式的容器镜像引用（FR-078，ADR-019）；非 docker 模式为空。 */
+  image?: string
   /** 系统分配的游戏服监听端口（FR-032），Bot 默认据此连入所属实例。 */
   serverPort: number
   autoStart: boolean

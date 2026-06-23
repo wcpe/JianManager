@@ -416,7 +416,9 @@
     "createFailed": "创建失败",
     "createInstance": "创建实例",
     "workDirSystemAssigned": "由系统自动分配（创建后只读展示）",
-    "workDirHint": "实例的工作目录，文件管理将以此为根目录"
+    "workDirHint": "实例的工作目录，文件管理将以此为根目录",
+    "dockerImage": "Docker 镜像",
+    "dockerImageHint": "容器镜像引用，默认 Docker Hub。本地缺失时启动前自动拉取"
   },
   "instanceBatch": {
     "selected": "已选 {{count}} 个",
