@@ -55,6 +55,7 @@ type Services struct {
 	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
 	EnrollInstall EnrollInstallConfig
 	Storage       *service.StorageService
+	DBBrowse      *service.DBBrowseService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -234,6 +235,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.EnrollToken != nil {
 			enrollTokenHandler := NewEnrollTokenHandler(svcs.EnrollToken, svcs.Audit, svcs.EnrollInstall)
 			enrollTokenHandler.RegisterRoutes(admin)
+		}
+		// 数据库资源管理器只读浏览（FR-084）：CP 独有数据源，仅平台管理员；只读 + 敏感列脱敏。
+		if svcs.DBBrowse != nil {
+			dbBrowseHandler := NewDBBrowseHandler(svcs.DBBrowse)
+			dbBrowseHandler.RegisterRoutes(admin)
 		}
 	}
 

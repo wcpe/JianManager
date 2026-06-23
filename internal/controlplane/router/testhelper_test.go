@@ -93,6 +93,7 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 		Storage:       service.NewStorageService(db, root),
 		Log:           service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),
 		Metric:        service.NewMetricService(db),
+		DBBrowse:      service.NewDBBrowseService(db),
 	}
 	return Setup(svcs, jwtCfg.Secret)
 }
