@@ -1,6 +1,6 @@
 # FR-074 — 跨文件全文搜索与持久倒排索引 · 实现规格
 
-> 状态：🔨 in-progress ｜ 关联 ADR-017 ｜ 依赖 FR-070（资源管理器）
+> 状态：✅ 代码完成（待真机验收）｜ 关联 ADR-017 ｜ 依赖 FR-070（资源管理器）
 
 ## 目标
 
@@ -71,13 +71,13 @@ Worker 侧对实例工作目录建并增量维护**持久倒排全文索引**（
 - [x] ADR-017
 - [x] PRD FR-074 → in-progress
 - [x] dataroot 加 `var/index` + IndexDir()
-- [ ] proto SearchFiles + protoc 重生成
-- [ ] worker/search 包 + 单测
-- [ ] worker gRPC SearchFiles 接线 + 单测
-- [ ] CP service + router 转发
-- [ ] 前端 api + 面板 + 编辑器 gotoLine + i18n
-- [ ] doc-sync（API.md / ARCHITECTURE.md）+ CHANGELOG
-- [ ] 完成判据：go build/vet/test 绿；前端 tsc/lint/build 绿（真机难起标「待真机验」）
+- [x] proto SearchFiles + protoc 重生成
+- [x] worker/search 包 + 单测
+- [x] worker gRPC SearchFiles 接线 + 单测
+- [x] CP service + router 转发
+- [x] 前端 api + 面板 + 编辑器 gotoLine + i18n
+- [x] doc-sync（API.md / ARCHITECTURE.md）+ CHANGELOG
+- [x] 完成判据：go build/vet/test 绿；前端 tsc/lint/build 绿（真机难起标「待真机验」）
 
 ## 完成判据
 

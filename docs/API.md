@@ -636,6 +636,14 @@
 - **响应**: `200`，`Content-Type: application/zip`，`Content-Disposition: attachment; filename="<instanceName>-files.zip"`，响应体为分块 zip 字节流
 - **错误**: `400 INVALID_REQUEST`（paths 为空或含非法路径）；`404 NOT_FOUND`（实例不存在/无权限）；`422 BUSINESS_ERROR`（节点离线/工作目录未设置/打包失败，流已开始则截断连接）
 
+### POST /api/v1/instances/:id/files/search
+- **描述**: 跨文件全文搜索 / 文件名快速打开。CP 仅经 gRPC 把查询转发到目标节点 Worker；索引是 Worker 本地派生资产（落数据根 `var/index/`，不进 CP 数据库，见 ADR-017）。Worker 查询前先增量更新索引（指纹比对增/改/删），再倒排取候选文件、候选内精确行扫描返回命中
+- **关联 FR**: FR-074
+- **权限**: `instance.file`（可访问实例）
+- **请求**: `{ "query": "string", "mode": "content", "maxResults": 200 }`。`query` 必填；`mode` 取 `content`（默认，全文）或 `filename`（文件名子串匹配，行号为 0）；`maxResults<=0` 时由 Worker 取默认上限
+- **响应**: `200`，`{ "hits": [{ "path": "plugins/config.yml", "line": 12, "snippet": "命中行片段" }], "truncated": false }`。`path` 相对工作目录、以 `/` 分隔；`line` 1 起（filename 模式为 0）；`snippet` 仅 content 模式有值；`truncated=true` 表示命中达上限被截断
+- **错误**: `400 INVALID_REQUEST`（缺 query）；`404 NOT_FOUND`（实例不存在/无权限）；`422 BUSINESS_ERROR`（节点离线/工作目录未设置/搜索失败）
+
 ### DELETE /api/v1/instances/:id/files
 - **描述**: 删除文件
 - **关联 FR**: FR-008
