@@ -426,3 +426,40 @@ func TestClientDist_PackVersion(t *testing.T) {
 		t.Errorf("打包端点无 JWT 应 401，实际 %d", uw.Code)
 	}
 }
+
+// TestClientDist_TelemetryEndpoint 遥测上报端点（FR-094）：拉取密钥鉴权、202、结构化落库；无 key 401。
+func TestClientDist_TelemetryEndpoint(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	const channelID = "s1"
+	key := createChannelAndKey(t, r, token, channelID)
+
+	body := []byte(`{"channel":"s1","result":"success","fromVersion":1,"toVersion":2,"os":"linux","javaVersion":"21","launcher":"HMCL","durationMs":50,"bootSuccess":true}`)
+	req := httptest.NewRequest("POST", "/api/v1/client-telemetry", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Client-Key", key)
+	req.Header.Set("X-Machine-Id", "mach-tel")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("遥测上报应 202，实际 %d %s", w.Code, w.Body.String())
+	}
+
+	var tel model.ClientTelemetry
+	if err := db.Where("channel_id = ?", channelID).First(&tel).Error; err != nil {
+		t.Fatalf("遥测应落库: %v", err)
+	}
+	if tel.Result != "success" || tel.ToVersion != 2 || tel.MachineID != "mach-tel" || tel.Launcher != "HMCL" {
+		t.Errorf("遥测字段异常: %+v", tel)
+	}
+
+	// 无 key → 401。
+	nreq := httptest.NewRequest("POST", "/api/v1/client-telemetry", bytes.NewBuffer(body))
+	nreq.Header.Set("Content-Type", "application/json")
+	nw := httptest.NewRecorder()
+	r.ServeHTTP(nw, nreq)
+	if nw.Code != http.StatusUnauthorized {
+		t.Errorf("无 key 遥测应 401，实际 %d", nw.Code)
+	}
+}

@@ -52,6 +52,7 @@ type Services struct {
 	ClientMachine      *service.ClientMachineService
 	ClientDistTracking *service.ClientDistTrackingService
 	ClientIPGuard      *service.ClientIPGuardService
+	ClientTelemetry    *service.ClientTelemetryService
 	JmPack             *service.JmPackService
 	RuntimeAssets      *service.RuntimeAssetsService
 	EnrollToken        *service.EnrollTokenService
@@ -87,6 +88,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			consumerGroup.Use(middleware.ClientDistGuard(svcs.ClientIPGuard, 5, 20, 256))
 		}
 		clientConsumerHandler.RegisterConsumerRoutes(consumerGroup)
+		// 客户端遥测上报（FR-094）：同为面向玩家公网端点，挂守卫子组（拉取密钥鉴权 + L7 防护）。
+		if svcs.ClientTelemetry != nil {
+			NewClientTelemetryHandler(svcs.ClientTelemetry, svcs.ClientChannel).RegisterRoutes(consumerGroup)
+		}
 	}
 
 	// 需要认证的路由

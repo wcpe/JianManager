@@ -126,6 +126,10 @@ func main() {
 	clientIPGuardSvc := service.NewClientIPGuardService(db)
 	// 客户端分发 .jmpack 打包（FR-097，见 ADR-021/022）：复用已存制品 + Ed25519 签名，入库 type=client-pack。
 	jmPackSvc := service.NewJmPackService(assetSvc, clientVersionSvc, clientSigner)
+	// 客户端遥测（FR-094）：明细短保留 + 按 result 日聚合 + 后台滚动清理；端点 best-effort 202。
+	clientTelemetrySvc := service.NewClientTelemetryService(db)
+	clientTelemetrySvc.Start()
+	defer clientTelemetrySvc.Stop()
 	// 插件服务：上传先入制品库（type=plugin 去重）再经 file gRPC 部署到实例（FR-052）。
 	pluginSvc := service.NewPluginService(db, pool, assetSvc)
 	coreSvc := service.NewCoreService()
@@ -231,6 +235,7 @@ func main() {
 		ClientMachine:      clientMachineSvc,
 		ClientDistTracking: clientDistTrackingSvc,
 		ClientIPGuard:      clientIPGuardSvc,
+		ClientTelemetry:    clientTelemetrySvc,
 		JmPack:             jmPackSvc,
 		RuntimeAssets:      runtimeAssetsSvc,
 		EnrollToken:        enrollTokenSvc,
