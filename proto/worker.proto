@@ -42,6 +42,9 @@ service WorkerService {
   rpc RenameFile(RenameFileRequest) returns (RenameFileResponse);
   // DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（FR-070 批量下载）。
   rpc DownloadArchive(DownloadArchiveRequest) returns (stream DownloadArchiveChunk);
+  // SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
+  // Worker 维护本地持久倒排索引（var/index/，增量更新），查询返回命中文件+行+片段。
+  rpc SearchFiles(SearchFilesRequest) returns (SearchFilesResponse);
   // ListConfigFiles 列出可管理配置文件。
   rpc ListConfigFiles(ListConfigFilesRequest) returns (ListConfigFilesResponse);
   // ReadConfig 读取配置文件并解析。
@@ -375,6 +378,27 @@ message DownloadArchiveRequest {
 
 message DownloadArchiveChunk {
   bytes content = 1; // zip 字节分片
+}
+
+// === 全文搜索 / 文件名快速打开（FR-074，见 ADR-017）===
+
+message SearchFilesRequest {
+  string instance_uuid = 1;
+  string query = 2;        // 关键字（content 模式按词项/子串、filename 模式按路径/basename 子串）
+  string mode = 3;         // content（全文，默认）| filename（文件名快速打开）
+  int32 max_results = 4;   // 命中上限（<=0 时 Worker 取默认 200）
+}
+
+// SearchHit 单条命中：content 模式含行号与该行片段；filename 模式 line=0、snippet 为空。
+message SearchHit {
+  string path = 1;   // 相对实例工作目录、以「/」分隔的可移植路径
+  int32 line = 2;    // 命中行号（1 起；filename 模式为 0）
+  string snippet = 3; // 命中行内容（已截断，仅 content 模式）
+}
+
+message SearchFilesResponse {
+  repeated SearchHit hits = 1;
+  bool truncated = 2;  // 命中数达到 max_results 上限被截断
 }
 
 // === 配置文件操作 ===

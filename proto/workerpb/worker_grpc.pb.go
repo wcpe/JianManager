@@ -37,6 +37,7 @@ const (
 	WorkerService_DeleteFile_FullMethodName           = "/worker.WorkerService/DeleteFile"
 	WorkerService_RenameFile_FullMethodName           = "/worker.WorkerService/RenameFile"
 	WorkerService_DownloadArchive_FullMethodName      = "/worker.WorkerService/DownloadArchive"
+	WorkerService_SearchFiles_FullMethodName          = "/worker.WorkerService/SearchFiles"
 	WorkerService_ListConfigFiles_FullMethodName      = "/worker.WorkerService/ListConfigFiles"
 	WorkerService_ReadConfig_FullMethodName           = "/worker.WorkerService/ReadConfig"
 	WorkerService_WriteConfig_FullMethodName          = "/worker.WorkerService/WriteConfig"
@@ -110,6 +111,9 @@ type WorkerServiceClient interface {
 	RenameFile(ctx context.Context, in *RenameFileRequest, opts ...grpc.CallOption) (*RenameFileResponse, error)
 	// DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（FR-070 批量下载）。
 	DownloadArchive(ctx context.Context, in *DownloadArchiveRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadArchiveChunk], error)
+	// SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
+	// Worker 维护本地持久倒排索引（var/index/，增量更新），查询返回命中文件+行+片段。
+	SearchFiles(ctx context.Context, in *SearchFilesRequest, opts ...grpc.CallOption) (*SearchFilesResponse, error)
 	// ListConfigFiles 列出可管理配置文件。
 	ListConfigFiles(ctx context.Context, in *ListConfigFilesRequest, opts ...grpc.CallOption) (*ListConfigFilesResponse, error)
 	// ReadConfig 读取配置文件并解析。
@@ -382,6 +386,16 @@ func (c *workerServiceClient) DownloadArchive(ctx context.Context, in *DownloadA
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkerService_DownloadArchiveClient = grpc.ServerStreamingClient[DownloadArchiveChunk]
+
+func (c *workerServiceClient) SearchFiles(ctx context.Context, in *SearchFilesRequest, opts ...grpc.CallOption) (*SearchFilesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SearchFilesResponse)
+	err := c.cc.Invoke(ctx, WorkerService_SearchFiles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 func (c *workerServiceClient) ListConfigFiles(ctx context.Context, in *ListConfigFilesRequest, opts ...grpc.CallOption) (*ListConfigFilesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -733,6 +747,9 @@ type WorkerServiceServer interface {
 	RenameFile(context.Context, *RenameFileRequest) (*RenameFileResponse, error)
 	// DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（FR-070 批量下载）。
 	DownloadArchive(*DownloadArchiveRequest, grpc.ServerStreamingServer[DownloadArchiveChunk]) error
+	// SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
+	// Worker 维护本地持久倒排索引（var/index/，增量更新），查询返回命中文件+行+片段。
+	SearchFiles(context.Context, *SearchFilesRequest) (*SearchFilesResponse, error)
 	// ListConfigFiles 列出可管理配置文件。
 	ListConfigFiles(context.Context, *ListConfigFilesRequest) (*ListConfigFilesResponse, error)
 	// ReadConfig 读取配置文件并解析。
@@ -858,6 +875,9 @@ func (UnimplementedWorkerServiceServer) RenameFile(context.Context, *RenameFileR
 }
 func (UnimplementedWorkerServiceServer) DownloadArchive(*DownloadArchiveRequest, grpc.ServerStreamingServer[DownloadArchiveChunk]) error {
 	return status.Error(codes.Unimplemented, "method DownloadArchive not implemented")
+}
+func (UnimplementedWorkerServiceServer) SearchFiles(context.Context, *SearchFilesRequest) (*SearchFilesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SearchFiles not implemented")
 }
 func (UnimplementedWorkerServiceServer) ListConfigFiles(context.Context, *ListConfigFilesRequest) (*ListConfigFilesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListConfigFiles not implemented")
@@ -1265,6 +1285,24 @@ func _WorkerService_DownloadArchive_Handler(srv interface{}, stream grpc.ServerS
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkerService_DownloadArchiveServer = grpc.ServerStreamingServer[DownloadArchiveChunk]
+
+func _WorkerService_SearchFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SearchFilesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).SearchFiles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_SearchFiles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).SearchFiles(ctx, req.(*SearchFilesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 func _WorkerService_ListConfigFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListConfigFilesRequest)
@@ -1840,6 +1878,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RenameFile",
 			Handler:    _WorkerService_RenameFile_Handler,
+		},
+		{
+			MethodName: "SearchFiles",
+			Handler:    _WorkerService_SearchFiles_Handler,
 		},
 		{
 			MethodName: "ListConfigFiles",
