@@ -143,12 +143,19 @@ func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanc
 		int(req.GracefulStopTimeoutSeconds),
 	)
 	if err != nil {
-		// 实例已存在（CP 在每次启动前幂等重注册）：刷新随启动定型的优雅停止超时，
-		// 使设置变更对下一次启动生效（FR-063）。该错误对 CP 启动路径是良性的（按已注册处理）。
+		// 实例已存在（CP 在每次启动前幂等重注册）：刷新随启动定型的优雅停止超时与 docker 配置，
+		// 使设置/镜像/端口变更对下一次启动生效（FR-063 / FR-078）。该错误对 CP 启动路径是良性的（按已注册处理）。
 		if strings.Contains(err.Error(), "已存在") {
 			s.manager.SetGracefulStopTimeout(req.InstanceUuid, int(req.GracefulStopTimeoutSeconds))
+			if req.ProcessType == string(process.ProcessTypeDocker) {
+				s.manager.SetDockerConfig(req.InstanceUuid, req.Image, portMappingsFromProto(req.PortMappings))
+			}
 		}
 		return &workerpb.CreateInstanceResponse{Success: false, Error: err.Error()}, nil
+	}
+	// docker 模式：把镜像与端口映射存到实例记账，启动时随 spec 定型（ADR-019）。
+	if req.ProcessType == string(process.ProcessTypeDocker) {
+		s.manager.SetDockerConfig(req.InstanceUuid, req.Image, portMappingsFromProto(req.PortMappings))
 	}
 	return &workerpb.CreateInstanceResponse{Success: true}, nil
 }
