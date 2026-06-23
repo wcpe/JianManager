@@ -46,6 +46,7 @@ type Services struct {
 	Settings      *service.SettingsService
 	ProbeUpdate   *service.ProbeUpdateService
 	ClientChannel *service.ClientChannelService
+	ClientVersion *service.ClientVersionService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -61,6 +62,14 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 	setupHandler := NewSetupHandler(svcs.Auth)
 	setupHandler.RegisterRoutes(api)
+
+	// 面向玩家的客户端分发消费端点（FR-087，见 ADR-022/023、contract §4）：
+	// manifest/制品端点用拉取密钥（X-Client-Key）鉴权，与运营浏览器 JWT 入口物理隔离，
+	// 故挂在 api（公网、仅限流）而非 protected（JWT）。内容可信靠 manifest 签名而非密钥。
+	if svcs.ClientVersion != nil && svcs.ClientChannel != nil {
+		clientConsumerHandler := NewClientVersionHandler(svcs.ClientVersion, svcs.ClientChannel, svcs.Audit)
+		clientConsumerHandler.RegisterConsumerRoutes(api)
+	}
 
 	// 需要认证的路由
 	protected := api.Group("")
@@ -183,6 +192,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.ClientChannel != nil {
 			clientChannelHandler := NewClientChannelHandler(svcs.ClientChannel, svcs.Audit)
 			clientChannelHandler.RegisterRoutes(admin)
+		}
+
+		// 客户端分发发布端点（文件制品 + 版本发布、切 latest 指针）：运营操作，限平台管理员
+		// （FR-087 / ADR-022）。消费端点（manifest/制品）走公网 key 鉴权，已在 api 组注册。
+		if svcs.ClientVersion != nil && svcs.ClientChannel != nil {
+			clientVersionHandler := NewClientVersionHandler(svcs.ClientVersion, svcs.ClientChannel, svcs.Audit)
+			clientVersionHandler.RegisterPublishRoutes(admin)
 		}
 	}
 

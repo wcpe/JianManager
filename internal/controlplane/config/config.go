@@ -53,6 +53,17 @@ type Config struct {
 	Log         LogConfig         `mapstructure:"log"`
 	LogStore    LogStoreConfig    `mapstructure:"log_store"`
 	FileVersion FileVersionConfig `mapstructure:"file_version"`
+	ClientDist  ClientDistConfig  `mapstructure:"client_dist"`
+}
+
+// ClientDistConfig 客户端分发（OTA）签名配置（FR-087，见 ADR-022）。
+type ClientDistConfig struct {
+	// SignPrivKey 客户端 manifest 签名私钥（base64 of PKCS#8 DER, Ed25519）。
+	// 敏感信息：生产须经环境变量 JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入、不入库（config-files 规范）。
+	// 默认为内置开发密钥（service.DevSignPrivateKeyPKCS8Base64），仅供零配置开发，生产务必替换。
+	SignPrivKey string `mapstructure:"sign_priv_key"`
+	// SignKeyID 签名公钥版本标识（轮换用，默认 k1，须与客户端内置公钥 keyId 一致）。
+	SignKeyID string `mapstructure:"sign_key_id"`
 }
 
 // ServerConfig HTTP 服务器配置。
@@ -133,6 +144,11 @@ func Load(path string) (*Config, error) {
 	// 文件版本（FR-051）：默认每文件保留 20 个版本，单文件 ≤5MiB 才快照。
 	v.SetDefault("file_version.max_per_file", 20)
 	v.SetDefault("file_version.max_size_bytes", 5*1024*1024)
+	// 客户端分发签名（FR-087）：私钥默认空（main 回退内置开发密钥）；keyId 默认 k1。
+	v.SetDefault("client_dist.sign_priv_key", "")
+	v.SetDefault("client_dist.sign_key_id", "k1")
+	// 显式绑定任务约定的私钥环境变量名（敏感信息经 env 注入、不入库，config-files 规范）。
+	_ = v.BindEnv("client_dist.sign_priv_key", "JIANMANAGER_CLIENT_SIGN_PRIVKEY")
 
 	// 配置文件
 	if path != "" {

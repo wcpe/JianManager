@@ -1197,6 +1197,59 @@
 
 ---
 
+## 客户端分发 manifest 与制品（FR-087）
+
+> **鉴权分两组、物理隔离（ADR-022/023、contract §4）**：
+> - **发布端点**（运营操作）：`/api/v1` JWT，**仅平台管理员**（同频道管理 FR-086）。`POST .../files`、`POST .../versions`。
+> - **消费端点**（玩家）：**拉取密钥**鉴权（请求头 `X-Client-Key`，无 JWT），与运营浏览器入口隔离。`GET .../manifest`、`GET /client-artifacts/:sha256`。
+>
+> 理由：拉取密钥半公开（随整包分发必然泄露），用它鉴权「发布」=严重漏洞；内容可信靠 manifest 的 Ed25519 签名而非密钥。
+
+### POST /api/v1/client-channels/:id/files
+- **描述**: 上传客户端文件制品（入 FR-045 制品库 `type=client-file`，按制品自身 sha256 内容寻址去重）。返回的 `sha256` 即 manifest `files[].artifact.sha256`
+- **关联 FR**: FR-087
+- **鉴权**: **JWT，平台管理员**（运营操作）
+- **请求**: `multipart/form-data` — `file`（必）、`codec`（可，`zstd`|`none`）、`expectedSha256`（可，制品自身 sha256 校验）
+- **响应** (201): `{ "sha256": "ef56…", "size": 45678, "codec": "zstd" }`
+- **错误**: 400 `INVALID_REQUEST`（缺 file）| 404 `CHANNEL_NOT_FOUND` | 422 `CHECKSUM_MISMATCH`
+- **审计**: `client_file.publish`
+
+### POST /api/v1/client-channels/:id/versions
+- **描述**: 发布版本并切 latest 指针。`version` 由服务端**单调递增分配**（防降级基准，contract §3），不接受客户端指定
+- **关联 FR**: FR-087
+- **鉴权**: **JWT，平台管理员**（运营操作）
+- **请求**:
+  ```json
+  { "files": [ { "path": "mods/foo.jar", "sha256": "ab12…", "md5": "cd34…", "size": 123456,
+                 "sync": "strict", "platform": null,
+                 "artifact": { "sha256": "ef56…", "size": 45678, "codec": "zstd" } } ],
+    "managedDirs": ["mods", "config"],
+    "agent": { "wedge": { "version": 3 }, "core": { "version": 5, "platforms": { "windows": { "artifact": { "sha256": "…", "size": 0, "codec": "zstd" } } } } },
+    "note": "首发" }
+  ```
+  - `files` 必填且非空；`path` 须 POSIX 相对路径不逃逸；`sync∈{strict,once,ignore}`；`platform∈{null,windows,macos,linux}`；非 `ignore` 文件须带 `artifact.sha256`
+- **响应** (201): `{ "id": 1, "channelId": "skyblock-s1", "version": 1, "note": "首发", "createdAt": "datetime" }`
+- **错误**: 400 `INVALID_REQUEST` / `INVALID_VERSION_FILES`（清单非法，含具体原因）| 404 `CHANNEL_NOT_FOUND`
+- **审计**: `client_version.publish`
+
+### GET /api/v1/client-channels/:id/manifest
+- **描述**: 返回频道 **latest** 的**签名 manifest**（contract §2）。只提供当前版本，不暴露历史
+- **关联 FR**: FR-087
+- **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必）；`X-Machine-Id`（可，统计/审计辅助）。**无 JWT**
+- **响应** (200): contract §2 的签名 manifest（含 `sig.alg=Ed25519`、`sig.keyId`、`sig.value`）
+  - Headers：`ETag: "<version>:<keyId>"`、`Cache-Control: no-cache`（弱缓存，靠 ETag 命中省传输）
+- **响应** (304): `If-None-Match` 命中 ETag（Not Modified）
+- **错误**: 401 `INVALID_CLIENT_KEY`（无/无效/吊销/过期 key）| 404 `CHANNEL_NOT_FOUND` / `NO_LATEST_VERSION`（频道尚未发布版本）
+
+### GET /api/v1/client-artifacts/:sha256
+- **描述**: 按内容寻址下载客户端制品（zstd 压缩流或原文，按 codec）。制品跨频道共享，路径无频道段
+- **关联 FR**: FR-087
+- **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必，任一有效密钥即授权）；`X-Machine-Id`（可）。**无 JWT**
+- **响应** (200/206): 二进制制品；支持 `Range`（断点续传，206 部分内容）；强缓存（内容寻址不可变，`Cache-Control: public, max-age=31536000, immutable` + `ETag` 为内容 sha256）
+- **错误**: 401 `INVALID_CLIENT_KEY` | 404 `ARTIFACT_NOT_FOUND` | 416（Range 越界，由 `http.ServeContent` 处理）
+
+---
+
 ## 错误码
 
 | HTTP | 含义 |

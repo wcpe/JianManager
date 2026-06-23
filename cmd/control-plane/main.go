@@ -90,6 +90,21 @@ func main() {
 	assetSvc := service.NewAssetService(db, root)
 	// 客户端分发频道与拉取密钥（FR-086，见 ADR-022）：密钥落库只存哈希、明文一次性返回。
 	clientChannelSvc := service.NewClientChannelService(db)
+	// 客户端分发版本与签名 manifest（FR-087，见 ADR-022、contract §2/§3）。
+	// 签名私钥：优先 env 注入的生产私钥（config.client_dist.sign_priv_key ← JIANMANAGER_CLIENT_SIGN_PRIVKEY）；
+	// 未配置则回退内置开发密钥（仅零配置开发，公钥已回填客户端 updater-core）。
+	clientSignPriv := cfg.ClientDist.SignPrivKey
+	clientSignKeyID := cfg.ClientDist.SignKeyID
+	if clientSignPriv == "" {
+		clientSignPriv = service.DevSignPrivateKeyPKCS8Base64
+		clientSignKeyID = service.DefaultSignKeyID
+		slog.Warn("客户端分发签名使用内置开发密钥，生产务必经 JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入独立私钥")
+	}
+	clientSigner, err := service.NewManifestSigner(clientSignPriv, clientSignKeyID)
+	if err != nil {
+		log.Fatalf("初始化客户端分发签名器失败: %v", err)
+	}
+	clientVersionSvc := service.NewClientVersionService(db, assetSvc, clientChannelSvc, clientSigner)
 	// 插件服务：上传先入制品库（type=plugin 去重）再经 file gRPC 部署到实例（FR-052）。
 	pluginSvc := service.NewPluginService(db, pool, assetSvc)
 	coreSvc := service.NewCoreService()
@@ -181,6 +196,7 @@ func main() {
 		Settings:      settingsSvc,
 		ProbeUpdate:   probeUpdateSvc,
 		ClientChannel: clientChannelSvc,
+		ClientVersion: clientVersionSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）

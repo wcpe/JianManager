@@ -309,6 +309,15 @@ Node.js → Go (stdout, JSON 行):
   {"evt":"bot-error","botId":"b1","error":"ECONNREFUSED"}
 ```
 
+### 6.5 客户端 OTA 公网分发端点（玩家 updater ↔ Control Plane，FR-087 / ADR-022/023）
+
+Control Plane 新增一类**面向玩家公网**的 HTTP 分发端点（客户端 OTA 更新器拉取，非浏览器）：
+
+- **消费端点（玩家，`X-Client-Key` 拉取密钥鉴权）**：`GET /client-channels/:id/manifest`（latest 的 Ed25519 签名 manifest，ETag/304）、`GET /client-artifacts/:sha256`（client-file 制品内容寻址下载，`http.ServeContent` 支持 Range/206）。挂公网 `api` 组（仅限流、无 JWT）。
+- **发布端点（运营，JWT 平台管理员，与 FR-086 频道管理同组）**：`POST /client-channels/:id/files`（上传制品入 FR-045 制品库 type=client-file）、`POST /client-channels/:id/versions`（发布版本、单调递增、切 latest 指针）。
+
+**鉴权与信任分层（ADR-022）**：拉取密钥**半公开**（随整包分发必泄露），仅作鉴权路由 + 吊销、**不作内容可信依据**；内容可信靠 manifest 的 **Ed25519 签名**（updater 内置公钥验签，私钥服务端 env 持有）+ **单调 version 防降级**。消费端点与运营浏览器 JWT 入口、发布端点**物理隔离**；L7 防护（限流以 IP 为主）见 ADR-023。manifest 格式与 canonical 签名见 `docs/specs/client-distribution/contract.md`。
+
 ## 7. 数据库模型
 
 ### ER 关系

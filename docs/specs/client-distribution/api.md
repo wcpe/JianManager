@@ -171,3 +171,21 @@
 | 密钥请求头鉴权；吊销即失效 | §4 `VerifyKey` |
 | 创建/吊销/轮换写审计（明文不入 detail） | §3 各端点审计 |
 | 管理台「客户端分发」页 + i18n + 主题 | 前端页（web/src/pages/ClientChannelsPage.tsx） |
+
+## 7. 发布与消费端点（FR-087）
+
+> manifest/制品端点契约见 `contract.md` §2/§4。**鉴权分两组、物理隔离**（关键安全设计，ADR-022/023）：
+> - **发布端点**（运营操作）：`/api/v1` JWT，**仅平台管理员**（同 §2/§3 频道管理）。
+> - **消费端点**（玩家）：**拉取密钥** `X-Client-Key` 鉴权（**无 JWT**），与运营浏览器入口隔离。
+> 理由：拉取密钥半公开（随整包分发必然泄露，§4 半公开说明），用它鉴权「发布」=严重漏洞；内容可信靠 manifest 的 Ed25519 签名而非密钥。详见 `docs/API.md` 同名章节。
+
+| 端点 | 鉴权 | 用途 |
+|---|---|---|
+| `POST /client-channels/:id/files` | **JWT 平台管理员** | 上传客户端文件制品（`type=client-file` 内容寻址去重），返回 `artifact.sha256` |
+| `POST /client-channels/:id/versions` | **JWT 平台管理员** | 发布版本、服务端单调递增 `version`、切 latest 指针 |
+| `GET /client-channels/:id/manifest` | **拉取密钥 `X-Client-Key`** | 返回频道 latest 的签名 manifest（ETag=`version:keyId`、304） |
+| `GET /client-artifacts/:sha256` | **拉取密钥 `X-Client-Key`**（任一有效密钥，跨频道共享） | 内容寻址下载制品（Range 断点续传、强缓存） |
+
+- 服务层：`ClientVersionService.PublishFile/PublishVersion/BuildManifest/OpenArtifact`；`ClientChannelService.VerifyKey`（绑频道，manifest 用）/`VerifyAnyKey`（不绑频道，制品用）。
+- 签名：`ManifestSigner`（Ed25519，canonical JSON 与客户端 `updater-core` `Json.canonical` 逐位对齐；HTTP 响应 JSON 与签名 canonical 同源）。私钥经 `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 注入、生产替换内置开发密钥。
+- 发布写审计：`client_file.publish` / `client_version.publish`。

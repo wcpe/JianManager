@@ -253,6 +253,37 @@ func (s *ClientChannelService) VerifyKey(channelID, plaintext string) (*model.Cl
 	return &key, nil
 }
 
+// VerifyAnyKey 校验请求头明文密钥但不绑定具体频道：对明文做 SHA-256 → 按哈希查找 →
+// 校验未吊销、未过期。供 FR-087 的制品端点（GET /client-artifacts/{sha256}，路径无频道段）消费。
+// 制品内容寻址、跨频道共享，任一有效密钥即可授权路由；内容可信靠 manifest 签名而非密钥（ADR-022 §2）。
+// 命中刷新 last_used_at（弱一致）。未命中/吊销/过期统一返回 ErrPullKeyInvalid（不泄露具体原因）。
+func (s *ClientChannelService) VerifyAnyKey(plaintext string) (*model.ClientPullKey, error) {
+	if plaintext == "" {
+		return nil, ErrPullKeyInvalid
+	}
+	hash := sha256Hex(plaintext)
+
+	var key model.ClientPullKey
+	err := s.db.Where("key_hash = ?", hash).First(&key).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrPullKeyInvalid
+	}
+	if err != nil {
+		return nil, fmt.Errorf("查询拉取密钥失败: %w", err)
+	}
+	if key.Revoked {
+		return nil, ErrPullKeyInvalid
+	}
+	if key.ExpiresAt != nil && !time.Now().Before(*key.ExpiresAt) {
+		return nil, ErrPullKeyInvalid
+	}
+
+	now := time.Now()
+	s.db.Model(&key).Update("last_used_at", &now)
+	key.LastUsedAt = &now
+	return &key, nil
+}
+
 // findChannel 按 channelId 查频道，不存在返回 ErrChannelNotFound。
 func (s *ClientChannelService) findChannel(channelID string) (*model.ClientChannel, error) {
 	var ch model.ClientChannel
