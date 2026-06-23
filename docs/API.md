@@ -1499,6 +1499,29 @@
 - **查询参数**: `channelId` / `machineId` / `ip` / `kind`(manifest|artifact) / `version` / `since`(RFC3339) / `until`(RFC3339) / `limit`(默认 200，上限 1000)
 - **响应** (200): `[ { "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "durationMs", "createdAt" } ]`（created_at DESC）
 
+### GET /api/v1/client-dist/ip-rules
+- **描述**: 列出分发端点 IP 防护规则（FR-096 L7 防护）
+- **关联 FR**: FR-096 | **鉴权**: **JWT，平台管理员**
+- **响应** (200): `[ { "id", "cidr", "mode"(deny|allow), "note", "createdBy", "createdAt" } ]`
+
+### POST /api/v1/client-dist/ip-rules
+- **描述**: 新增 IP 防护规则（运行时生效、入审计）。`mode=deny` 黑名单（deny 优先）；`mode=allow` 存在即白名单模式
+- **关联 FR**: FR-096 | **鉴权**: **JWT，平台管理员**
+- **请求**: `{ "cidr": "1.2.3.4 或 10.0.0.0/8", "mode": "deny|allow", "note": "可选" }`
+- **响应** (201): 规则对象 | **错误**: 400 `INVALID_IP_RULE`（CIDR/mode 非法）
+- **审计**: `client_ip_rule.add`
+
+### DELETE /api/v1/client-dist/ip-rules/:id
+- **描述**: 删除 IP 防护规则（运行时生效、入审计）
+- **关联 FR**: FR-096 | **鉴权**: **JWT，平台管理员**
+- **响应** (200): `{ "message": "已删除" }` | **错误**: 404 `IP_RULE_NOT_FOUND`
+- **审计**: `client_ip_rule.remove`
+
+### GET /api/v1/client-dist/protection-stats
+- **描述**: 防护拦截计数（FR-096 可观测；内存计数、不写库）
+- **关联 FR**: FR-096 | **鉴权**: **JWT，平台管理员**
+- **响应** (200): `{ "denyBlocked", "rateLimited", "concurrencyLimited" }`
+
 ### GET /api/v1/client-channels/:id/manifest
 - **描述**: 返回频道 **latest** 的**签名 manifest**（contract §2）。只提供当前版本，不暴露历史
 - **关联 FR**: FR-087、FR-092（机器码登记）
