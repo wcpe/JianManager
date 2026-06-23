@@ -147,6 +147,32 @@ class SelfUpdaterTest {
     }
 
     @Test
+    void skipsFailedVersionUntilHigher(@TempDir Path gameDir) throws Exception {
+        // 模拟 wedge 在上次 trial 未确认时记下 failedVersion=6（坏 core）。
+        Path coreDir = gameDir.resolve(".jm-updater").resolve("core");
+        Files.createDirectories(coreDir);
+        java.util.Properties p = new java.util.Properties();
+        p.setProperty("failedVersion", "6");
+        try (java.io.OutputStream out = Files.newOutputStream(coreDir.resolve("state.properties"))) {
+            p.store(out, "seed failedVersion");
+        }
+
+        // 同一失败版本 v6 → 不得重暂存（否则形成 boot-loop，FR-091 真机修）。
+        TestFixtures.MemoryTransport t = new TestFixtures.MemoryTransport();
+        assertFalse(selfUpdater(gameDir, t, OK).maybeUpdate(
+                manifestWithCore(t, 6, bytes("v6"), "zstd", Platform.current().tag()), 0, Platform.current()),
+                "曾 trial 失败的版本不得被重暂存");
+        assertFalse(stateOf(gameDir).hasPending());
+
+        // 更高版本 v7（修复版）→ 允许暂存。
+        TestFixtures.MemoryTransport t2 = new TestFixtures.MemoryTransport();
+        assertTrue(selfUpdater(gameDir, t2, OK).maybeUpdate(
+                manifestWithCore(t2, 7, bytes("v7"), "zstd", Platform.current().tag()), 0, Platform.current()),
+                "更高版本（修复版）应允许暂存");
+        assertEquals(7, stateOf(gameDir).pendingVersion());
+    }
+
+    @Test
     void skipsWhenNoArtifactForPlatform(@TempDir Path gameDir) {
         TestFixtures.MemoryTransport t = new TestFixtures.MemoryTransport();
         String foreign = Platform.current() == Platform.WINDOWS ? "linux" : "windows";

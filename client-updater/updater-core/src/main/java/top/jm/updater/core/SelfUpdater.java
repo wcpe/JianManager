@@ -46,6 +46,11 @@ final class SelfUpdater {
             if (store.selectedVersion() >= target) {
                 return false; // 已选定该版本或更高。
             }
+            if (target <= store.failedVersion()) {
+                // 该版本曾 trial 失败回退（wedge 记 failedVersion）→ 不重暂存同一坏 core，
+                // 仅当出现更高版本（修复版）才再尝试，避免 boot-loop（FR-091 真机修）。
+                return false;
+            }
             Manifest.AgentArtifact art = manifest.agentCoreArtifact(platform.tag());
             if (art == null || art.sha256 == null || art.sha256.isEmpty()) {
                 return false; // 该平台无 core 制品。

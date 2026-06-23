@@ -25,6 +25,7 @@ final class CoreSelectStore {
     static final String K_PENDING_SHA = "pendingSha";
     static final String K_PENDING_VERSION = "pendingVersion";
     static final String K_PENDING_TRIED = "pendingTried";
+    static final String K_FAILED_VERSION = "failedVersion";
 
     private final Path file;
     private final Properties props;
@@ -51,6 +52,11 @@ final class CoreSelectStore {
 
     long selectedVersion() {
         return longProp(K_SELECTED_VERSION, 0);
+    }
+
+    /** 曾 trial 失败回退的最高 core 版本（wedge 回退时记录）；用于跳过重暂存同一坏版本，防 boot-loop（FR-091）。 */
+    long failedVersion() {
+        return longProp(K_FAILED_VERSION, 0);
     }
 
     String pendingSha() {

@@ -112,7 +112,10 @@ class CoreSelectorTest {
         assertEquals(new File(coreDir, "shaOLD.jar"), sel.coreJar, "未确认应回退到上一可用 N-1");
         assertEquals(5, sel.coreVersion);
         assertFalse(sel.trial);
-        assertNull(readState(coreDir).getProperty("pendingSha"), "回退后弃 pending");
+        Properties rb = readState(coreDir);
+        assertNull(rb.getProperty("pendingSha"), "回退后弃 pending");
+        assertEquals("6", rb.getProperty("failedVersion"),
+                "回退应记失败版本，供 core 跳过重暂存同一坏 core（防 boot-loop，FR-091）");
     }
 
     @Test

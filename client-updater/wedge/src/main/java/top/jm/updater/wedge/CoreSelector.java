@@ -30,6 +30,7 @@ final class CoreSelector {
     private static final String K_PENDING_SHA = "pendingSha";
     private static final String K_PENDING_VERSION = "pendingVersion";
     private static final String K_PENDING_TRIED = "pendingTried";
+    private static final String K_FAILED_VERSION = "failedVersion";
 
     /** 加载决策：jar 路径 + 版本 + 是否首次 trial（决定是否起 boot-confirm 看门狗）。 */
     static final class Selection {
@@ -98,7 +99,13 @@ final class CoreSelector {
                 // 落到下方 normal 加载新 selected。
             } else if (tried) {
                 // 上次 trial 未确认（崩溃/早退）→ 回退：弃 pending，保留 selected（N-1）。
+                // 并记失败版本：否则下一次 reconcile 会立刻重暂存同一坏 core，形成「每隔一次启动 trial 崩溃」的
+                // boot-loop（FR-091 真机发现）。SelfUpdater 据此跳过该版本，仅当出现更高版本（修复版）才再暂存。
                 System.err.println("[JM Updater] 上次新 core 未确认启动，回退到上一可用版本。");
+                long failed = parseLong(p.getProperty(K_PENDING_VERSION));
+                if (failed > parseLong(p.getProperty(K_FAILED_VERSION))) {
+                    p.setProperty(K_FAILED_VERSION, Long.toString(failed));
+                }
                 clearPending(p);
                 store(stateFile, p);
             } else {
