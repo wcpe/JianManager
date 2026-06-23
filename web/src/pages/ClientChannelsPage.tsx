@@ -24,7 +24,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import DangerConfirm from '@/components/DangerConfirm'
+import ClientVersionsPanel from '@/components/ClientVersionsPanel'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
@@ -261,6 +263,13 @@ function ChannelDetail({ channelId, onBack }: { channelId: string; onBack: () =>
         </button>
       </div>
 
+      <Tabs defaultValue="keys">
+        <TabsList variant="line">
+          <TabsTrigger value="keys">{t('clientChannels.manageKeys', '拉取密钥')}</TabsTrigger>
+          <TabsTrigger value="versions">{t('clientVersions.tab', '版本管理')}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="keys" className="space-y-6">
+
       <form onSubmit={submitKey} className="border rounded-lg p-4 flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1 text-sm flex-1 min-w-[12rem]">
           {t('clientChannels.keyName', '密钥名称')}
@@ -345,6 +354,11 @@ function ChannelDetail({ channelId, onBack }: { channelId: string; onBack: () =>
           </tbody>
         </table>
       </div>
+        </TabsContent>
+        <TabsContent value="versions">
+          <ClientVersionsPanel channelId={channelId} />
+        </TabsContent>
+      </Tabs>
 
       <SecretDialog secret={secret} onClose={() => setSecret(null)} />
 
