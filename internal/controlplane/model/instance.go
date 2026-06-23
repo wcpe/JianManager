@@ -77,6 +77,12 @@ type Instance struct {
 	Image string `gorm:"type:varchar(256)" json:"image"`
 	// ContainerID 记录 docker 模式实例最近一次运行的容器 ID（排障/展示用，运行态由 Worker 持有）。
 	ContainerID string `gorm:"type:varchar(64)" json:"containerId"`
+	// CPULimit 是 docker 模式的 CPU 核数上限（如 1.5），启动时注入容器 cgroup；0=不限制（FR-079，ADR-019）。
+	CPULimit float64 `gorm:"default:0" json:"cpuLimit"`
+	// MemLimitMB 是 docker 模式的内存上限（MiB），启动时注入容器 cgroup；0=不限制（FR-079，ADR-019）。
+	MemLimitMB int64 `gorm:"default:0" json:"memLimitMb"`
+	// DiskLimitMB 是 docker 模式的磁盘上限（MiB），仅持久化与展示，v1 不注入（依赖存储驱动）（FR-079）。
+	DiskLimitMB int64 `gorm:"default:0" json:"diskLimitMb"`
 	AutoStart     bool           `gorm:"default:false" json:"autoStart"`
 	AutoRestart   bool           `gorm:"default:true" json:"autoRestart"`
 	// Deprecated: RCON 已退役（FR-067，见 ADR-016）——治理改走 ServerProbe 探针。

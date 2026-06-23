@@ -94,6 +94,10 @@ type CreateInstanceRequest struct {
 	EnvVars          map[string]string  `json:"envVars"`
 	// Image 是 docker 模式的容器镜像引用；仅 processType=docker 时使用（FR-078，ADR-019）。
 	Image            string             `json:"image"`
+	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额（FR-079，ADR-019）；仅 processType=docker 使用，0=不限制。
+	CPULimit         float64            `json:"cpuLimit"`
+	MemLimitMB       int64              `json:"memLimitMb"`
+	DiskLimitMB      int64              `json:"diskLimitMb"`
 	AutoStart        bool               `json:"autoStart"`
 	AutoRestart      bool               `json:"autoRestart"`
 	GroupID          uint               `json:"groupId"`
@@ -157,6 +161,9 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		LaunchSpec:       req.LaunchSpec,
 		WorkDir:          workDir,
 		Image:            req.Image,
+		CPULimit:         req.CPULimit,
+		MemLimitMB:       req.MemLimitMB,
+		DiskLimitMB:      req.DiskLimitMB,
 		AutoStart:        req.AutoStart,
 		AutoRestart:      req.AutoRestart,
 		ServerPort:       req.ServerPort,
@@ -358,6 +365,10 @@ type UpdateInstanceFields struct {
 	JDKID        *uint
 	EnvVars      *map[string]string
 	Tags         *[]string
+	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额（FR-079）；nil=不变，0=清除限制。
+	CPULimit    *float64
+	MemLimitMB  *int64
+	DiskLimitMB *int64
 }
 
 // Update 更新实例配置。各字段为 nil 时表示不变。
@@ -392,6 +403,16 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 		// 规范化后持久化为 JSON；空集合落 "null"，ParseTags 读回为空，等价清空标签。
 		raw, _ := json.Marshal(model.NormalizeTags(*f.Tags))
 		updates["tags"] = string(raw)
+	}
+	// docker 资源限额（FR-079）：传指针即写入（含 0=清除限制）。变更对下一次启动生效（启动时随 spec 定型）。
+	if f.CPULimit != nil {
+		updates["cpu_limit"] = *f.CPULimit
+	}
+	if f.MemLimitMB != nil {
+		updates["mem_limit_mb"] = *f.MemLimitMB
+	}
+	if f.DiskLimitMB != nil {
+		updates["disk_limit_mb"] = *f.DiskLimitMB
 	}
 
 	if len(updates) > 0 {
@@ -571,6 +592,9 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 		GracefulStopTimeoutSeconds: s.gracefulStopTimeoutSeconds(),
 		Image:                      instance.Image,
 		PortMappings:               dockerPortMappings(instance),
+		CpuLimit:                   instance.CPULimit,
+		MemLimitMb:                 instance.MemLimitMB,
+		DiskLimitMb:                instance.DiskLimitMB,
 	})
 	if err != nil {
 		return fmt.Errorf("Worker CreateInstance 失败: %w", err)

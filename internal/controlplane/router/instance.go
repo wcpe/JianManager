@@ -129,6 +129,10 @@ type createInstanceRequest struct {
 	EnvVars          map[string]string  `json:"envVars"`
 	// Image 是 docker 模式的容器镜像引用；仅 processType=docker 时使用（FR-078，ADR-019）。
 	Image            string             `json:"image"`
+	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额（FR-079，ADR-019）；仅 docker 模式使用，0=不限制。
+	CPULimit         float64            `json:"cpuLimit"`
+	MemLimitMB       int64              `json:"memLimitMb"`
+	DiskLimitMB      int64              `json:"diskLimitMb"`
 	AutoStart        bool               `json:"autoStart"`
 	AutoRestart      bool               `json:"autoRestart"`
 	GroupID          uint               `json:"groupId"`
@@ -174,6 +178,9 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		WorkDir:          req.WorkDir,
 		EnvVars:          req.EnvVars,
 		Image:            req.Image,
+		CPULimit:         req.CPULimit,
+		MemLimitMB:       req.MemLimitMB,
+		DiskLimitMB:      req.DiskLimitMB,
 		AutoStart:        req.AutoStart,
 		AutoRestart:      req.AutoRestart,
 		GroupID:          req.GroupID,
@@ -204,6 +211,10 @@ type updateInstanceRequest struct {
 	EnvVars      *map[string]string `json:"envVars"`
 	// Tags 环境/标签维度（FR-047）：传 null/缺省不变，传数组（含空数组）覆盖。
 	Tags *[]string `json:"tags"`
+	// CPULimit/MemLimitMB/DiskLimitMB docker 资源限额（FR-079）：传 null/缺省不变，传值（含 0）覆盖。
+	CPULimit    *float64 `json:"cpuLimit"`
+	MemLimitMB  *int64   `json:"memLimitMb"`
+	DiskLimitMB *int64   `json:"diskLimitMb"`
 }
 
 // Update 更新实例配置。
@@ -232,6 +243,9 @@ func (h *InstanceHandler) Update(c *gin.Context) {
 		JDKID:        req.JDKID,
 		EnvVars:      req.EnvVars,
 		Tags:         req.Tags,
+		CPULimit:     req.CPULimit,
+		MemLimitMB:   req.MemLimitMB,
+		DiskLimitMB:  req.DiskLimitMB,
 	})
 	if err != nil {
 		if errors.Is(err, service.ErrInstanceNotFound) {

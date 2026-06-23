@@ -1230,7 +1230,7 @@
 - **备注**: 当前 `internal/worker/process/docker.go` 为占位实现
 
 #### FR-079: 实例级资源限额（Docker 模式）
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: Docker 模式实例的 CPU/内存（/磁盘）上限，UI 设置 + 监控对比
 - **验收标准**:
