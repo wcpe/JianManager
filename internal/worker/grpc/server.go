@@ -62,6 +62,13 @@ type Server struct {
 	// 插件事件与实例事件刻意分两套订阅者总线：二者消费方、过滤维度、生命周期均不同。
 	pluginEventMu   sync.Mutex
 	pluginEventSubs []chan *workerpb.PluginEvent
+
+	// restartFn 是自更新（FR-081）替换二进制后执行的重启动作；nil 时用默认 selfupdate.Restart。
+	// 由 SetRestartFunc 注入（测试用，避免真重启）。
+	restartFn func()
+	// execPath 覆盖自更新（FR-081）待替换的可执行文件路径；空时用 os.Executable()。
+	// 由 SetExecutablePath 注入（测试用，避免替换真二进制）。
+	execPath string
 }
 
 // NewServer 创建 Worker gRPC 服务器。
