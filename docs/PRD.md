@@ -535,7 +535,8 @@
   - [x] 将已有 backend 注册进代理（servers + priorities/try），支持 forced-host
   - [x] Velocity secret 自动下发到所注册后端的 paper 配置，并校验跨代理一致
   - [x] 启动代理后玩家可经代理进入后端
-- **备注**: 真 Paper 1.20.4 + 真 BungeeCord 26.1 端到端复验通过——Mineflayer 客户端经代理（25566）进入后端 lobby（`ServerConnector [lobby] connected` + 后端 `ProxyTester joined`）。追加可选 online-mode（持久化，离线模式群组服可关闭）。
+  - [ ] Velocity 代理在无 forced-host 的干净配置下也能启动（生成的 `velocity.toml` 显式输出空 `[forced-hosts]` 覆盖 Velocity 内置示例默认，避免引用不存在的 server）
+- **备注**: 真 Paper 1.20.4 + 真 BungeeCord 26.1 端到端复验通过——Mineflayer 客户端经代理（25566）进入后端 lobby（`ServerConnector [lobby] connected` + 后端 `ProxyTester joined`）。追加可选 online-mode（持久化，离线模式群组服可关闭）。Velocity 干净启动曾因 `buildVelocityToml` 省略 `[forced-hosts]` 段、被 Velocity 默认示例（factions/minigames.example.com）污染而崩溃，已修复（始终输出空 `[forced-hosts]`）并补回归单测；此前端到端 E2E 仅覆盖 BungeeCord，Velocity 干净启动真机复验待补。
 - **关联 ADR**: ADR-007, ADR-008
 - **关联 API**: `POST /instances`（role=proxy）, `POST /proxies/:id/registrations`
 - **依赖**: FR-031, FR-032, FR-033

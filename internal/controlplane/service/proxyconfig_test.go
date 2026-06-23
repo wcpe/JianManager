@@ -44,6 +44,27 @@ func TestBuildVelocityToml_Empty(t *testing.T) {
 	require.NoError(t, toml.Unmarshal([]byte(out), &parsed))
 	servers := parsed["servers"].(map[string]interface{})
 	require.Len(t, servers["try"].([]interface{}), 0)
+	// 即使无后端也必须显式输出空 [forced-hosts]，覆盖 Velocity 内置示例默认。
+	require.Contains(t, out, "[forced-hosts]")
+}
+
+// TestBuildVelocityToml_AlwaysEmitsForcedHosts 回归：无论是否存在 forced-host 条目，
+// 生成的 velocity.toml 都必须显式输出 [forced-hosts] 段。否则 Velocity 3.x 启动时会把内置
+// 默认配置合并进来（含示例 factions.example.com=["factions"]、minigames.example.com=["minigames"]），
+// 引用不存在的 server 导致 "configuration is invalid"，代理反复崩溃无法启动。
+func TestBuildVelocityToml_AlwaysEmitsForcedHosts(t *testing.T) {
+	cases := map[string][]proxyServerEntry{
+		"无后端":               nil,
+		"有后端但均无 forced-host": {{Alias: "lobby", Address: "127.0.0.1:25566"}},
+	}
+	for name, entries := range cases {
+		t.Run(name, func(t *testing.T) {
+			out := buildVelocityToml(25565, "Hi", true, entries)
+			require.Contains(t, out, "[forced-hosts]", "必须显式输出 [forced-hosts] 段以覆盖 Velocity 内置示例默认")
+			var parsed map[string]interface{}
+			require.NoError(t, toml.Unmarshal([]byte(out), &parsed), "生成的 velocity.toml 必须可解析")
+		})
+	}
 }
 
 func TestBuildBungeeConfig(t *testing.T) {

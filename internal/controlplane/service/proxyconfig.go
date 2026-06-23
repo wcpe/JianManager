@@ -59,15 +59,12 @@ func buildVelocityToml(listenPort int, motd string, onlineMode bool, entries []p
 	}
 	b.WriteString("]\n")
 
-	forced := make([]proxyServerEntry, 0)
+	// 始终输出 [forced-hosts] 段（即使无条目）。Velocity 3.x 启动时会把内置默认配置合并进缺失的段，
+	// 其默认 [forced-hosts] 含示例 factions.example.com=["factions"]、minigames.example.com=["minigames"]，
+	// 引用不存在的 server 会触发 "configuration is invalid" 使代理拒绝启动；显式输出空段即可覆盖该默认。
+	b.WriteString("\n[forced-hosts]\n")
 	for _, e := range entries {
 		if strings.TrimSpace(e.ForcedHost) != "" {
-			forced = append(forced, e)
-		}
-	}
-	if len(forced) > 0 {
-		b.WriteString("\n[forced-hosts]\n")
-		for _, e := range forced {
 			fmt.Fprintf(&b, "\"%s\" = [\"%s\"]\n", tomlEscapeString(e.ForcedHost), e.Alias)
 		}
 	}
