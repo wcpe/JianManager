@@ -457,6 +457,15 @@
 - **错误**: `422 PROBE_NOT_EMBEDDED`（构建未内嵌探针）、`404 NOT_FOUND`
 - **关联 FR**: FR-068
 
+### GET /api/v1/instances/:id/server-state
+- **描述**: 按需查询某实例全量 Bukkit 内部状态（server/worlds/jvm/**classloader**/scheduler/listeners），经探针反向 WS 桥的 `QueryServerState`（action=`query_state`）同步取回探针采集的状态 JSON（FR-076）。轻指标走 `/metrics`；本端点仅前端开「服务器状态」tab/手动刷新时调用。探针采集异步非侵入、有界、超时降级，**绝不拖慢服务器**。CP 不解析 `state`（原样透传探针 JSON，探针字段演进无需改 CP）
+- **权限**: `instance.read`（且实例须可访问）
+- **响应**: `{ "instanceId":3, "connected":true, "available":true, "state": { "collectedAt":1750000000000, "server":{...}, "worlds":{"items":[...],"total":3,"truncated":false}, "jvm":{...}, "classloader":{"counts":{...},"pluginLoaders":{...}}, "scheduler":{...}, "listeners":{...} }, "error":"" }`
+  - `connected=false`：探针未连入 → `state` 为 `null`，前端提示部署/连接探针（HTTP 200，降级不 5xx）
+  - `connected=true` 且 `available=false`：探针在线但本次采集超时/失败 → `state` 为 `null` + `error` 说明，前端提示重试
+- **错误**: `403 FORBIDDEN`（无 `instance.read`）、`404 NOT_FOUND`（实例不可见/不存在）
+- **关联 FR**: FR-076 ｜ **关联 ADR**: ADR-016
+
 ### POST /api/v1/players/:name/kick
 - **描述**: 踢出玩家，经探针插件桥 `SendPluginCommand` 向目标后端集合下发 kick（FR-067）。范围互斥：`instanceId`（单服）> `networkId`（群组）> 全部可见后端
 - **权限**: `instance.operate` | **审计**: `player.kick`

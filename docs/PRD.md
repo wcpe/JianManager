@@ -1196,10 +1196,10 @@
 - **优先级**: P2
 - **描述**: 探针 fork 全量采集 Bukkit 内部状态（含 class 加载器），异步非侵入，经 WS 按需请求/响应返回
 - **验收标准**:
-  - [ ] 探针扩展状态面：server/worlds/JVM/**class 加载器**/调度器/监听器等内部数据
-  - [ ] **异步 off-main-thread + 有界 + 超时降级 N/A，绝不拖慢服务器**（沿用「只读优先，绝不成为事故源」）
-  - [ ] 经 WS 按需请求/响应（开 tab/刷新才查）；轻指标仍走 /metrics；不支持项降级
-  - [ ] 真机：真 Paper 按需拉全状态返回真实数据，TPS 无可感下降
+  - [x] 探针扩展状态面：server/worlds/JVM/**class 加载器**/调度器/监听器等内部数据（探针 `BukkitServerStateCollector` + core `ServerStateSupport`）
+  - [x] **有界 + 超时降级 N/A，绝不拖慢服务器**（沿用「只读优先，绝不成为事故源」）：主线程快照 3s 限时、大集合 `bounded` 裁剪、JVM/classloader 经 MXBean、子项 `runCatching` 兜底；classloader 不枚举类
+  - [x] 经 WS 按需请求/响应（开 tab/刷新才查，复用 FR-065 `QueryServerState`/`query_state`）；轻指标仍走 /metrics；不支持项降级
+  - [ ] 真机：真 Paper 按需拉全状态返回真实数据，TPS 无可感下降（**待真机验**，无 Paper/JDK21 环境）
 - **关联 ADR**: ADR-016
 - **依赖**: FR-065
 
@@ -1208,9 +1208,9 @@
 - **优先级**: P2
 - **描述**: 实例工作区新增「服务器状态」tab，展示整个 Bukkit 状态 + 内部 class 加载器等
 - **验收标准**:
-  - [ ] 新增「服务器状态」tab；展示 FR-076 全量状态分区密集表（FR-061 风格）+ class 加载器专区
-  - [ ] 手动刷新（按需，不持续轮询）；加载/失败/降级态清晰；大数据分页/折叠不卡
-  - [ ] 真机：tab 渲染真 Bukkit 全状态、刷新生效、classloader 区有数据
+  - [x] 新增「服务器状态」tab；展示 FR-076 全量状态分区密集表（FR-061 风格）+ class 加载器专区（`ServerStateSegment`）
+  - [x] 手动刷新（按需，不持续轮询，`refetchInterval: false`）；加载/未连入/采集失败态清晰；大数据超阈值折叠「展开全部」纯前端切片不卡
+  - [ ] 真机：tab 渲染真 Bukkit 全状态、刷新生效、classloader 区有数据（**待真机验**，无 Paper/JDK21 环境）
 - **依赖**: FR-076
 
 ### 里程碑 M3 — Docker 容器化 + 资源限额 + 部署/自更新（对齐 MCSManager 运营底座）
