@@ -635,6 +635,15 @@
     "pasteNothing": "无可粘贴的条目（同名冲突或目标无效）",
     "deleteConfirmMany": "确定要删除选中的 {{count}} 项吗？此操作不可撤销。"
   },
+  "search": {
+    "title": "搜索",
+    "placeholder": "输入关键字搜索文件内容…",
+    "modeContent": "全文",
+    "modeFilename": "文件名",
+    "noResults": "无匹配结果",
+    "truncated": "结果过多，仅显示前若干条",
+    "failed": "搜索失败"
+  },
   "fileVersions": {
     "title": "历史版本",
     "show": "历史版本",

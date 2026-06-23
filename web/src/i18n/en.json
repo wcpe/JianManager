@@ -635,6 +635,15 @@
     "pasteNothing": "Nothing to paste (name conflict or invalid target)",
     "deleteConfirmMany": "Delete the {{count}} selected items? This cannot be undone."
   },
+  "search": {
+    "title": "Search",
+    "placeholder": "Type a keyword to search file contents…",
+    "modeContent": "Content",
+    "modeFilename": "Filename",
+    "noResults": "No matches",
+    "truncated": "Too many results, showing the first batch",
+    "failed": "Search failed"
+  },
   "fileVersions": {
     "title": "Version History",
     "show": "History",
