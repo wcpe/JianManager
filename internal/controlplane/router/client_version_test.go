@@ -50,10 +50,11 @@ func setupClientDistRouter(t *testing.T, db *gorm.DB) (*gin.Engine, *service.Cli
 		Auth:          service.NewAuthService(db, jwtCfg),
 		Authz:         service.NewAuthzService(db),
 		Audit:         service.NewAuditService(db),
-		Asset:         assetSvc,
-		ClientChannel: channelSvc,
-		ClientVersion: versionSvc,
-		ClientMachine: service.NewClientMachineService(db),
+		Asset:              assetSvc,
+		ClientChannel:      channelSvc,
+		ClientVersion:      versionSvc,
+		ClientMachine:      service.NewClientMachineService(db),
+		ClientDistTracking: service.NewClientDistTrackingService(db),
 	}
 	_ = cpgrpc.NewClientPool() // 与 setupTestRouter 一致：确保 gRPC 包初始化无副作用。
 	return Setup(svcs, jwtCfg.Secret), versionSvc

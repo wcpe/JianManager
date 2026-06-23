@@ -11,47 +11,48 @@ import (
 
 // Services 聚合所有服务依赖。
 type Services struct {
-	Auth          *service.AuthService
-	User          *service.UserService
-	Group         *service.GroupService
-	Node          *service.NodeService
-	Instance      *service.InstanceService
-	InstanceBatch *service.InstanceBatchService
-	JDK           *service.JDKService
-	DockerImage   *service.DockerImageService
-	Terminal      *service.TerminalService
-	File          *service.FileService
-	FileVersion   *service.FileVersionService
-	Plugin        *service.PluginService
-	Player        *service.PlayerService
-	PlayerEvent   *service.PlayerEventService
-	Config        *service.ConfigService
-	Bot           *service.BotService
-	Alert         *service.AlertService
-	AlertChannel  *service.AlertChannelService
-	Schedule      *service.ScheduleService
-	Backup        *service.BackupService
-	BackupStorage *service.BackupStorageService
-	Template      *service.TemplateService
-	Audit         *service.AuditService
-	Authz         *service.AuthzService
-	Event         *service.EventService
-	Asset         *service.AssetService
-	Core          *service.CoreService
-	Provision     *service.ProvisionService
-	Proxy         *service.ProxyService
-	Clone         *service.CloneService
-	Registration  *service.RegistrationService
-	Network       *service.NetworkService
-	Log           *service.LogService
-	Metric        *service.MetricService
-	Settings      *service.SettingsService
-	ProbeUpdate   *service.ProbeUpdateService
-	ClientChannel *service.ClientChannelService
-	ClientVersion *service.ClientVersionService
-	ClientMachine *service.ClientMachineService
-	RuntimeAssets *service.RuntimeAssetsService
-	EnrollToken   *service.EnrollTokenService
+	Auth               *service.AuthService
+	User               *service.UserService
+	Group              *service.GroupService
+	Node               *service.NodeService
+	Instance           *service.InstanceService
+	InstanceBatch      *service.InstanceBatchService
+	JDK                *service.JDKService
+	DockerImage        *service.DockerImageService
+	Terminal           *service.TerminalService
+	File               *service.FileService
+	FileVersion        *service.FileVersionService
+	Plugin             *service.PluginService
+	Player             *service.PlayerService
+	PlayerEvent        *service.PlayerEventService
+	Config             *service.ConfigService
+	Bot                *service.BotService
+	Alert              *service.AlertService
+	AlertChannel       *service.AlertChannelService
+	Schedule           *service.ScheduleService
+	Backup             *service.BackupService
+	BackupStorage      *service.BackupStorageService
+	Template           *service.TemplateService
+	Audit              *service.AuditService
+	Authz              *service.AuthzService
+	Event              *service.EventService
+	Asset              *service.AssetService
+	Core               *service.CoreService
+	Provision          *service.ProvisionService
+	Proxy              *service.ProxyService
+	Clone              *service.CloneService
+	Registration       *service.RegistrationService
+	Network            *service.NetworkService
+	Log                *service.LogService
+	Metric             *service.MetricService
+	Settings           *service.SettingsService
+	ProbeUpdate        *service.ProbeUpdateService
+	ClientChannel      *service.ClientChannelService
+	ClientVersion      *service.ClientVersionService
+	ClientMachine      *service.ClientMachineService
+	ClientDistTracking *service.ClientDistTrackingService
+	RuntimeAssets      *service.RuntimeAssetsService
+	EnrollToken        *service.EnrollTokenService
 	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
 	EnrollInstall EnrollInstallConfig
 	Storage       *service.StorageService
@@ -76,7 +77,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	// manifest/制品端点用拉取密钥（X-Client-Key）鉴权，与运营浏览器 JWT 入口物理隔离，
 	// 故挂在 api（公网、仅限流）而非 protected（JWT）。内容可信靠 manifest 签名而非密钥。
 	if svcs.ClientVersion != nil && svcs.ClientChannel != nil {
-		clientConsumerHandler := NewClientVersionHandler(svcs.ClientVersion, svcs.ClientChannel, svcs.Audit, svcs.ClientMachine)
+		clientConsumerHandler := NewClientVersionHandler(svcs.ClientVersion, svcs.ClientChannel, svcs.Audit, svcs.ClientMachine, svcs.ClientDistTracking)
 		clientConsumerHandler.RegisterConsumerRoutes(api)
 	}
 
@@ -226,7 +227,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 客户端分发发布端点（文件制品 + 版本发布、切 latest 指针）：运营操作，限平台管理员
 		// （FR-087 / ADR-022）。消费端点（manifest/制品）走公网 key 鉴权，已在 api 组注册。
 		if svcs.ClientVersion != nil && svcs.ClientChannel != nil {
-			clientVersionHandler := NewClientVersionHandler(svcs.ClientVersion, svcs.ClientChannel, svcs.Audit, svcs.ClientMachine)
+			clientVersionHandler := NewClientVersionHandler(svcs.ClientVersion, svcs.ClientChannel, svcs.Audit, svcs.ClientMachine, svcs.ClientDistTracking)
 			clientVersionHandler.RegisterPublishRoutes(admin)
 		}
 

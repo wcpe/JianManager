@@ -281,3 +281,45 @@ func TestClientDist_MachineRegistration(t *testing.T) {
 		t.Errorf("无 X-Machine-Id 不应新增登记，频道登记行应为 1，实际 %d", total)
 	}
 }
+
+// TestClientDist_PullTrackingAndEventQuery 拉取/下载追踪落库（FR-093）+ 管理面检索端点（含鉴权）。
+func TestClientDist_PullTrackingAndEventQuery(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	const channelID = "s1"
+	key := createChannelAndKey(t, r, token, channelID)
+	publishOneFileVersion(t, r, token, channelID, "mods/a.jar", []byte("AAA"))
+
+	// 玩家拉 manifest（带机器码）→ 追踪 defer 同步记录。
+	req := httptest.NewRequest("GET", "/api/v1/client-channels/"+channelID+"/manifest", nil)
+	req.Header.Set("X-Client-Key", key)
+	req.Header.Set("X-Machine-Id", "mach-1")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("拉 manifest 失败: %d %s", w.Code, w.Body.String())
+	}
+
+	var ev model.ClientDistEvent
+	if err := db.Where("channel_id = ? AND kind = ?", channelID, "manifest").First(&ev).Error; err != nil {
+		t.Fatalf("manifest 拉取事件应落库: %v", err)
+	}
+	if ev.Version != 1 || ev.MachineID != "mach-1" || ev.Status != http.StatusOK || ev.Bytes <= 0 {
+		t.Errorf("事件字段异常: version=%d machine=%s status=%d bytes=%d", ev.Version, ev.MachineID, ev.Status, ev.Bytes)
+	}
+
+	// 检索端点（admin）。
+	lw := makeRequest(r, "GET", "/api/v1/client-dist/events?kind=manifest", nil, token)
+	if lw.Code != http.StatusOK {
+		t.Fatalf("检索失败: %d %s", lw.Code, lw.Body.String())
+	}
+	if arr := parseJSONArray(t, lw); len(arr) < 1 {
+		t.Errorf("检索应返回至少 1 条事件")
+	}
+
+	// 检索端点限管理员：无 JWT → 401。
+	if nw := makeRequest(r, "GET", "/api/v1/client-dist/events", nil, ""); nw.Code != http.StatusUnauthorized {
+		t.Errorf("检索端点无 JWT 应 401，实际 %d", nw.Code)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -25,15 +26,16 @@ import (
 // 理由：拉取密钥半公开（随整包分发必然泄露，ADR-022 §1），用它鉴权「发布」=严重漏洞；
 // contract §4 只把 manifest/制品/遥测列为玩家 key 端点。发布走运营浏览器 JWT 入口。
 type ClientVersionHandler struct {
-	svc     *service.ClientVersionService
-	channel *service.ClientChannelService
-	audit   *service.AuditService
-	machine *service.ClientMachineService
+	svc      *service.ClientVersionService
+	channel  *service.ClientChannelService
+	audit    *service.AuditService
+	machine  *service.ClientMachineService
+	tracking *service.ClientDistTrackingService
 }
 
-// NewClientVersionHandler 创建客户端分发版本/消费端点处理器。machine 可为 nil（不登记机器码）。
-func NewClientVersionHandler(svc *service.ClientVersionService, channel *service.ClientChannelService, audit *service.AuditService, machine *service.ClientMachineService) *ClientVersionHandler {
-	return &ClientVersionHandler{svc: svc, channel: channel, audit: audit, machine: machine}
+// NewClientVersionHandler 创建客户端分发版本/消费端点处理器。machine/tracking 可为 nil（不登记机器码/不追踪）。
+func NewClientVersionHandler(svc *service.ClientVersionService, channel *service.ClientChannelService, audit *service.AuditService, machine *service.ClientMachineService, tracking *service.ClientDistTrackingService) *ClientVersionHandler {
+	return &ClientVersionHandler{svc: svc, channel: channel, audit: audit, machine: machine, tracking: tracking}
 }
 
 // clientKeyHeader 玩家拉取密钥请求头（contract §5）。
@@ -201,20 +203,33 @@ func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 	if !h.authChannelKey(c, channelID) {
 		return
 	}
+	start := time.Now()
+	mid := c.GetHeader(machineIDHeader)
 
 	// 机器码登记（FR-092）：鉴权通过后若携带 X-Machine-Id 则 best-effort upsert（弱一致、失败不阻断）。
 	// 机器码不可信，仅统计/辅助限流（限流主键为 IP，FR-096）。
-	if h.machine != nil {
-		if mid := c.GetHeader(machineIDHeader); mid != "" {
-			_ = h.machine.Record(channelID, mid)
-		}
+	if h.machine != nil && mid != "" {
+		_ = h.machine.Record(channelID, mid)
 	}
+
+	// 拉取追踪（FR-093）：响应写出后记录 version/bytes/status/耗时（best-effort、不阻断）。
+	manifestVersion := 0
+	defer func() {
+		if h.tracking != nil {
+			_ = h.tracking.Record(service.ClientDistEventInput{
+				ChannelID: channelID, MachineID: mid, IP: c.ClientIP(), Kind: "manifest",
+				Version: manifestVersion, Bytes: int64(c.Writer.Size()), Status: c.Writer.Status(),
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
 
 	manifest, err := h.svc.BuildManifest(channelID)
 	if err != nil {
 		h.respondConsumerErr(c, err)
 		return
 	}
+	manifestVersion = manifest.Version
 
 	// ETag = version:keyId（内容随版本/签名密钥变化；contract §4.1）。
 	keyID := ""
@@ -239,6 +254,17 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 		return
 	}
 	sha := c.Param("sha256")
+	start := time.Now()
+	// 下载追踪（FR-093）：响应写出后记录字节/状态/耗时（best-effort、不阻断）。
+	defer func() {
+		if h.tracking != nil {
+			_ = h.tracking.Record(service.ClientDistEventInput{
+				ChannelID: c.Param("id"), MachineID: c.GetHeader(machineIDHeader), IP: c.ClientIP(),
+				Kind: "artifact", ArtifactSHA: sha, Bytes: int64(c.Writer.Size()),
+				Status: c.Writer.Status(), DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
 	asset, absPath, err := h.svc.OpenArtifact(sha)
 	if err != nil {
 		h.respondConsumerErr(c, err)
@@ -344,6 +370,50 @@ func (h *ClientVersionHandler) recordAudit(c *gin.Context, action string, detail
 	_ = h.audit.Record(id, action, "client_channel", "", string(raw), c.ClientIP())
 }
 
+// ListEvents GET /client-dist/events — 拉取/下载明细检索（运营，平台管理员；FR-093）。
+// 按 channelId/machineId/ip/kind/version/since/until/limit 过滤，created_at DESC。
+func (h *ClientVersionHandler) ListEvents(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	if h.tracking == nil {
+		c.JSON(http.StatusOK, []any{})
+		return
+	}
+	f := service.ClientDistEventFilter{
+		ChannelID: c.Query("channelId"),
+		MachineID: c.Query("machineId"),
+		IP:        c.Query("ip"),
+		Kind:      c.Query("kind"),
+	}
+	if v := c.Query("version"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Version = &n
+		}
+	}
+	if v := c.Query("since"); v != "" {
+		if ts, err := time.Parse(time.RFC3339, v); err == nil {
+			f.Since = &ts
+		}
+	}
+	if v := c.Query("until"); v != "" {
+		if ts, err := time.Parse(time.RFC3339, v); err == nil {
+			f.Until = &ts
+		}
+	}
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Limit = n
+		}
+	}
+	events, err := h.tracking.QueryEvents(f)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "检索失败"})
+		return
+	}
+	c.JSON(http.StatusOK, events)
+}
+
 // RegisterPublishRoutes 注册发布端点（运营操作，须挂 JWT 平台管理员组）。
 func (h *ClientVersionHandler) RegisterPublishRoutes(rg *gin.RouterGroup) {
 	ch := rg.Group("/client-channels")
@@ -355,6 +425,8 @@ func (h *ClientVersionHandler) RegisterPublishRoutes(rg *gin.RouterGroup) {
 		ch.GET("/:id/versions/:version", h.GetVersion)
 		ch.POST("/:id/rollback", h.RollbackVersion)
 	}
+	// 拉取/下载明细检索（FR-093）：管理面。
+	rg.GET("/client-dist/events", h.ListEvents)
 }
 
 // RegisterConsumerRoutes 注册面向玩家的消费端点（须挂公网组：拉取密钥鉴权，与 JWT 入口隔离）。
