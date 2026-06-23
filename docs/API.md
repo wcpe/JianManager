@@ -1209,6 +1209,55 @@
 
 ---
 
+## 平台存储（FR-083）
+
+> 对 Control Plane 侧数据根（ADR-010 FHS 布局）只读浏览 + 占用统计 + 制品归档冷热可见 + `cache/` 受控清理。
+> 数据根是平台级资源（仅 CP 读写，见架构不变量），故全部端点限平台管理员。Worker 侧数据根（`var/servers`、`opt/jdks` 落各节点本机）按节点经实例文件管理浏览，不在此组范围。
+
+### GET /api/v1/storage/overview
+- **描述**: 按固定 FHS 布局统计各子目录占用（大小/文件数）+ 用途标注 + 跨 `assets` 表聚合制品库冷热分布（FR-045 `storage_state`）
+- **关联 FR**: FR-083（聚合 FR-044 数据根布局 + FR-045 归档状态）
+- **权限**: 平台管理员
+- **统计目录**（固定顺序，缺失目录仍列出且 `exists=false`）: `bin`、`etc`、`opt/jdks`、`var/servers`、`var/log`、`var/artifacts`、`cache`（仅 `cache` 的 `clearable=true`）
+- **响应 200**:
+```json
+{
+  "base": "/abs/path/to/data",
+  "dirs": [
+    { "path": "var/artifacts", "label": "artifacts", "size": 48234123, "fileCount": 12, "exists": true, "clearable": false },
+    { "path": "cache", "label": "cache", "size": 1024, "fileCount": 2, "exists": true, "clearable": true }
+  ],
+  "totalSize": 48235147,
+  "totalFiles": 14,
+  "archive": { "hotCount": 3, "archivedCount": 1, "externalCount": 0, "hotSize": 48234123, "archivedSize": 2048, "externalSize": 0 }
+}
+```
+- **错误**: 401/403（非平台管理员）；500 `INTERNAL_ERROR`
+
+### GET /api/v1/storage/files
+- **描述**: 列举数据根内某目录的直接子项（只读，目录在前再按名排序）。不读取文件内容
+- **关联 FR**: FR-083
+- **权限**: 平台管理员
+- **Query**: `?path=var/artifacts`（相对数据根，以「/」分隔；空/省略表示数据根本身）
+- **路径守卫**: `..` 折叠后经 `filepath.Rel` 二次校验，绝不逃出数据根；布局声明但未创建的目录返回空列表
+- **响应 200**:
+```json
+[
+  { "name": "core", "isDir": true, "size": 0, "modTime": 1719100000 },
+  { "name": "index.json", "isDir": false, "size": 256, "modTime": 1719100001 }
+]
+```
+- **错误**: 400 `INVALID_PATH`（路径越出数据根）；400 `NOT_A_DIR`（目标不是目录）；401/403；500 `INTERNAL_ERROR`
+
+### POST /api/v1/storage/cache/clear
+- **描述**: 清空 `cache/` 目录内容（受控清理，二次确认由前端强制）。仅删除 `cache/` 下直接子项、保留 `cache/` 本身，绝不触及其他目录
+- **关联 FR**: FR-083（受控清理，FR-059 二次确认）
+- **权限**: 平台管理员
+- **响应 200**: `{ "removed": 2 }`（删除的条目数）
+- **错误**: 401/403；500 `INTERNAL_ERROR`
+
+---
+
 ## 审计日志
 
 ### GET /api/v1/audit
