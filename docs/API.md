@@ -1197,20 +1197,20 @@
 
 ---
 
-## 客户端分发 manifest 与制品（FR-087）
+## 客户端分发 manifest 与制品（FR-087/088）
 
 > **鉴权分两组、物理隔离（ADR-022/023、contract §4）**：
-> - **发布端点**（运营操作）：`/api/v1` JWT，**仅平台管理员**（同频道管理 FR-086）。`POST .../files`、`POST .../versions`。
+> - **发布/版本管理端点**（运营操作）：`/api/v1` JWT，**仅平台管理员**（同频道管理 FR-086）。`POST .../files`、`POST .../versions`、`GET .../versions`、`GET .../versions/:version`、`POST .../rollback`。
 > - **消费端点**（玩家）：**拉取密钥**鉴权（请求头 `X-Client-Key`，无 JWT），与运营浏览器入口隔离。`GET .../manifest`、`GET /client-artifacts/:sha256`。
 >
-> 理由：拉取密钥半公开（随整包分发必然泄露），用它鉴权「发布」=严重漏洞；内容可信靠 manifest 的 Ed25519 签名而非密钥。
+> 理由：拉取密钥半公开（随整包分发必然泄露），用它鉴权「发布」=严重漏洞；内容可信靠 manifest 的 Ed25519 签名而非密钥。**版本历史仅管理面可见，玩家侧只认 latest**（FR-088）。
 
 ### POST /api/v1/client-channels/:id/files
 - **描述**: 上传客户端文件制品（入 FR-045 制品库 `type=client-file`，按制品自身 sha256 内容寻址去重）。返回的 `sha256` 即 manifest `files[].artifact.sha256`
 - **关联 FR**: FR-087
 - **鉴权**: **JWT，平台管理员**（运营操作）
 - **请求**: `multipart/form-data` — `file`（必）、`codec`（可，`zstd`|`none`）、`expectedSha256`（可，制品自身 sha256 校验）
-- **响应** (201): `{ "sha256": "ef56…", "size": 45678, "codec": "zstd" }`
+- **响应** (201): `{ "sha256": "ef56…", "md5": "cd34…", "size": 45678, "codec": "zstd" }`（`md5` 供发布向导填 `file.md5`；codec=none 时制品即原始内容，`sha256`/`md5`/`size` 可直接作 `files[]` 的解压后字段）
 - **错误**: 400 `INVALID_REQUEST`（缺 file）| 404 `CHANNEL_NOT_FOUND` | 422 `CHECKSUM_MISMATCH`
 - **审计**: `client_file.publish`
 
@@ -1231,6 +1231,29 @@
 - **响应** (201): `{ "id": 1, "channelId": "skyblock-s1", "version": 1, "note": "首发", "createdAt": "datetime" }`
 - **错误**: 400 `INVALID_REQUEST` / `INVALID_VERSION_FILES`（清单非法，含具体原因）| 404 `CHANNEL_NOT_FOUND`
 - **审计**: `client_version.publish`
+
+### GET /api/v1/client-channels/:id/versions
+- **描述**: 版本历史列表（版本号 DESC）。**仅管理面**——玩家侧只认 latest，不经此端点拉取任意版本（FR-088）
+- **关联 FR**: FR-088
+- **鉴权**: **JWT，平台管理员**（运营操作）
+- **响应** (200): `[ { "version": 2, "note": "…", "fileCount": 3, "createdBy": 1, "createdAt": "datetime", "isLatest": true }, { "version": 1, …, "isLatest": false } ]`
+- **错误**: 404 `CHANNEL_NOT_FOUND`
+
+### GET /api/v1/client-channels/:id/versions/:version
+- **描述**: 版本详情（含完整文件清单 + 托管目录 + 自更新段），供管理台查看与回滚前确认（FR-088）
+- **关联 FR**: FR-088
+- **鉴权**: **JWT，平台管理员**（运营操作）
+- **响应** (200): `{ "version": 1, "note": "…", "createdBy": 1, "createdAt": "datetime", "isLatest": false, "managedDirs": ["mods"], "files": [ { "path": "mods/foo.jar", "sha256": "…", "md5": "…", "size": 0, "sync": "strict", "platform": null, "artifact": { … } } ], "agent": { … } }`
+- **错误**: 400 `INVALID_REQUEST`（版本号非法）| 404 `CHANNEL_NOT_FOUND` / `VERSION_NOT_FOUND`
+
+### POST /api/v1/client-channels/:id/rollback
+- **描述**: 运营回滚——取历史版本 `sourceVersion` 的内容，**以更高版本号重发为新 latest**（保持 `version` 单调，客户端按防降级正常前进、不被拒，ADR-022 §3 / contract §3）。不下发更低版本号
+- **关联 FR**: FR-088
+- **鉴权**: **JWT，平台管理员**（运营操作）
+- **请求**: `{ "sourceVersion": 1, "note": "可选，空则生成「回滚至 vN」" }`
+- **响应** (201): `{ "id": 7, "channelId": "skyblock-s1", "version": 3, "sourceVersion": 1, "note": "回滚至 v1", "createdAt": "datetime" }`
+- **错误**: 400 `INVALID_REQUEST`（缺/非法 sourceVersion）| 404 `CHANNEL_NOT_FOUND` / `VERSION_NOT_FOUND`
+- **审计**: `client_version.rollback`
 
 ### GET /api/v1/client-channels/:id/manifest
 - **描述**: 返回频道 **latest** 的**签名 manifest**（contract §2）。只提供当前版本，不暴露历史

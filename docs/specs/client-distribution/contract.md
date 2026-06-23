@@ -144,3 +144,5 @@ updater-core ──GET /manifest(latest,带 key+machineId)──→ JM 分发后
 | agentArgs / 楔子↔core | — | FR-089 / FR-090 |
 | `.jmpack` 容器（zstd+签名） | FR-097（打包） | FR-097（解包） |
 | L7 防护 | FR-096 | — |
+
+> **版本历史 / 运营回滚为「管理面」，不在本契约（客户端面）内**：FR-088 的 `GET .../versions`、`GET .../versions/:version`、`POST .../rollback` 走 **JWT 平台管理员**，玩家 updater 永不访问；客户端仅认 §2 的 latest manifest。回滚=以更高 version 重发旧内容（§3），对客户端等价于一次正常的版本前进。

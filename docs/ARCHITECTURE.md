@@ -373,8 +373,9 @@ AlertRule ──1:N──▶ AlertEvent
 | logs (FR-049) | source(instance/control_plane/worker), level(debug/info/warn/error), instance_id, instance_uuid, node_id, stream(stdout/stderr), message, time；复合索引 (source,time)/(level,time)/(instance_id,time)/(node_id,time)，关键字检索走 message 列谓词 |
 | ban_records (V2) | uuid, player_name, reason, scope(network/instance/global), scope_id, operator_id(FK), active, created_at, unbanned_at（玩家封禁台账，FR-054；RCON 命令已下发后留档，解封置 active=false 保留历史） |
 | platform_settings (V2) | key(PK), value, updated_at（平台配置 DB 覆盖层，仅存被显式覆盖的白名单键；生效优先级 DB 覆盖 > 环境变量 > YAML 默认，FR-063/ADR-015） |
-| client_channels (FR-086) | channel_id(slug, UNIQUE, 对外标识/URL 段), name, description, current_version(latest 指针占位，FR-088 编排), created_at, updated_at, deleted_at（客户端分发频道，每服一个，ADR-022） |
+| client_channels (FR-086) | channel_id(slug, UNIQUE, 对外标识/URL 段), name, description, current_version(latest 版本指针，0=未发布，FR-088 编排), created_at, updated_at, deleted_at（客户端分发频道，每服一个，ADR-022） |
 | client_pull_keys (FR-086) | channel_id(所属频道 slug), name, key_hash(明文 SHA-256, UNIQUE, **不存明文**), key_prefix(识别用前缀), revoked, expires_at, last_used_at, created_at, revoked_at（拉取密钥，半公开凭据；明文仅创建/轮换时一次性返回，吊销即鉴权失效，ADR-022） |
+| client_versions (FR-087/088) | channel_id(所属频道 slug), version(单调递增, UNIQUE(channel_id,version), 防降级基准), files_json(文件清单快照), managed_dirs_json(托管目录), agent_json(自更新段, 可空), note, created_by, created_at（版本快照，全保留供运营回滚/diff；manifest 即时组装+签名，回滚=以更高 version 重发旧内容，ADR-022） |
 
 ### 数据库切换
 
