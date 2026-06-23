@@ -51,6 +51,9 @@ type Services struct {
 	ClientVersion *service.ClientVersionService
 	ClientMachine *service.ClientMachineService
 	RuntimeAssets *service.RuntimeAssetsService
+	EnrollToken   *service.EnrollTokenService
+	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
+	EnrollInstall EnrollInstallConfig
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -216,6 +219,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.ClientVersion != nil && svcs.ClientChannel != nil {
 			clientVersionHandler := NewClientVersionHandler(svcs.ClientVersion, svcs.ClientChannel, svcs.Audit, svcs.ClientMachine)
 			clientVersionHandler.RegisterPublishRoutes(admin)
+		}
+
+		// 节点 enrollment token（一键安装 / 傻瓜部署）：签发一次性准入凭据 + 一键命令，
+		// 限平台管理员（FR-080，见 ADR-020）。签发/吊销写审计，明文绝不入审计。
+		if svcs.EnrollToken != nil {
+			enrollTokenHandler := NewEnrollTokenHandler(svcs.EnrollToken, svcs.Audit, svcs.EnrollInstall)
+			enrollTokenHandler.RegisterRoutes(admin)
 		}
 	}
 

@@ -32,3 +32,10 @@ log_store:
 file_version:
   max_per_file: 20        # 单文件保留版本上限，超出删最旧；<=0 不限制
   max_size_bytes: 5242880 # 触发快照的单文件大小上限（5MiB），超过则跳过；<=0 不限制
+
+# 节点 enrollment 一键安装 / 傻瓜部署（FR-080，见 ADR-020）。均有默认值，可整体省略。
+# 用于拼装面板「添加节点」展示的一键安装命令；留空字段由签发请求的 Host 推断。
+enroll:
+  advertise_grpc: ""    # 对外公布的 CP gRPC 地址 host:port（留空=请求 Host + grpc.port）
+  script_base_url: ""   # 安装脚本下载基址 scheme://host（留空=请求 scheme://Host）
+  binary_url: ""        # Worker 二进制下载地址（留空=脚本经 --binary 指向本地二进制兜底）

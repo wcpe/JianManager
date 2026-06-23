@@ -54,6 +54,21 @@ type Config struct {
 	LogStore    LogStoreConfig    `mapstructure:"log_store"`
 	FileVersion FileVersionConfig `mapstructure:"file_version"`
 	ClientDist  ClientDistConfig  `mapstructure:"client_dist"`
+	Enroll      EnrollConfig      `mapstructure:"enroll"`
+}
+
+// EnrollConfig 节点 enrollment 一键安装配置（FR-080，见 ADR-020）。
+// 用于拼装面板「添加节点」展示的一键安装命令；全部可选、有合理默认。
+type EnrollConfig struct {
+	// AdvertiseGRPC 对外公布的 CP gRPC 地址（host:port），写入 Worker 一键命令的 --control-plane。
+	// 留空则由签发请求的 Host 推断 host、配合 grpc.port 拼装（适配大多数同机/反代场景）。
+	AdvertiseGRPC string `mapstructure:"advertise_grpc"`
+	// ScriptBaseURL 安装脚本的下载基址（如 https://cp.example.com）。留空则用签发请求的 scheme://Host。
+	// 一键命令据此拼 <base>/install-worker.sh 与 <base>/install-worker.ps1。
+	ScriptBaseURL string `mapstructure:"script_base_url"`
+	// BinaryURL Worker 二进制下载地址（可选）。留空则一键命令不带 --download-url，
+	// 运营需经脚本 --binary 指向本地已拷贝的二进制（公网 release 端点未架设前的兜底，ADR-020 §2）。
+	BinaryURL string `mapstructure:"binary_url"`
 }
 
 // ClientDistConfig 客户端分发（OTA）签名配置（FR-087，见 ADR-022）。
@@ -147,6 +162,10 @@ func Load(path string) (*Config, error) {
 	// 客户端分发签名（FR-087）：私钥默认空（main 回退内置开发密钥）；keyId 默认 k1。
 	v.SetDefault("client_dist.sign_priv_key", "")
 	v.SetDefault("client_dist.sign_key_id", "k1")
+	// 节点 enrollment 一键安装（FR-080）：地址/脚本基址/二进制源默认空，由签发请求 Host 推断。
+	v.SetDefault("enroll.advertise_grpc", "")
+	v.SetDefault("enroll.script_base_url", "")
+	v.SetDefault("enroll.binary_url", "")
 	// 显式绑定任务约定的私钥环境变量名（敏感信息经 env 注入、不入库，config-files 规范）。
 	_ = v.BindEnv("client_dist.sign_priv_key", "JIANMANAGER_CLIENT_SIGN_PRIVKEY")
 

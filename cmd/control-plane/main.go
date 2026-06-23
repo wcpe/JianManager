@@ -92,6 +92,9 @@ func main() {
 	assetSvc := service.NewAssetService(db, root)
 	// 运行时与制品全局页只读聚合（FR-082）：跨节点 JDK 矩阵 + 引用实例 + 制品占用/去重/冷热。
 	runtimeAssetsSvc := service.NewRuntimeAssetsService(db)
+	// 节点 enrollment token（一键安装 / 傻瓜部署，FR-080，见 ADR-020）：
+	// 一次性、限时的新节点准入凭据，落库只存哈希、明文签发时一次性返回。
+	enrollTokenSvc := service.NewEnrollTokenService(db)
 	// 客户端分发频道与拉取密钥（FR-086，见 ADR-022）：密钥落库只存哈希、明文一次性返回。
 	clientChannelSvc := service.NewClientChannelService(db)
 	// 客户端分发版本与签名 manifest（FR-087，见 ADR-022、contract §2/§3）。
@@ -215,6 +218,13 @@ func main() {
 		ClientVersion: clientVersionSvc,
 		ClientMachine: clientMachineSvc,
 		RuntimeAssets: runtimeAssetsSvc,
+		EnrollToken:   enrollTokenSvc,
+		EnrollInstall: router.EnrollInstallConfig{
+			AdvertiseGRPC: cfg.Enroll.AdvertiseGRPC,
+			GRPCPort:      cfg.GRPC.Port,
+			ScriptBaseURL: cfg.Enroll.ScriptBaseURL,
+			BinaryURL:     cfg.Enroll.BinaryURL,
+		},
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）
@@ -233,6 +243,9 @@ func main() {
 	})
 	// 心跳负载落库为时序样本（节点指标 + 每实例 ServerProbe 快照，FR-060）。
 	grpcHandler.SetMetricIngester(metricSvc)
+	// 注入 enrollment token 校验器（FR-080，见 ADR-020）：新节点首次注册必须凭有效一次性 token，
+	// 老节点（name 命中）重注册不强制 token，避免在网节点重启掉线。
+	grpcHandler.SetEnrollmentValidator(enrollTokenSvc)
 	grpcServer := grpc.NewServer()
 	workerpb.RegisterWorkerServiceServer(grpcServer, grpcHandler)
 
