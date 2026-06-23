@@ -130,6 +130,8 @@ func main() {
 	clientTelemetrySvc := service.NewClientTelemetryService(db)
 	clientTelemetrySvc.Start()
 	defer clientTelemetrySvc.Stop()
+	// 分发统计后台（FR-095）：只读聚合 FR-093/094/092 数据，供管理台看板。
+	clientDistStatsSvc := service.NewClientDistStatsService(db)
 	// 插件服务：上传先入制品库（type=plugin 去重）再经 file gRPC 部署到实例（FR-052）。
 	pluginSvc := service.NewPluginService(db, pool, assetSvc)
 	coreSvc := service.NewCoreService()
@@ -236,6 +238,7 @@ func main() {
 		ClientDistTracking: clientDistTrackingSvc,
 		ClientIPGuard:      clientIPGuardSvc,
 		ClientTelemetry:    clientTelemetrySvc,
+		ClientDistStats:    clientDistStatsSvc,
 		JmPack:             jmPackSvc,
 		RuntimeAssets:      runtimeAssetsSvc,
 		EnrollToken:        enrollTokenSvc,

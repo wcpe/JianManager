@@ -463,3 +463,41 @@ func TestClientDist_TelemetryEndpoint(t *testing.T) {
 		t.Errorf("无 key 遥测应 401，实际 %d", nw.Code)
 	}
 }
+
+// TestClientDist_StatsEndpoint 统计后台端点（FR-095）：管理员获取复合统计；无 JWT 401。
+func TestClientDist_StatsEndpoint(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	const channelID = "s1"
+	key := createChannelAndKey(t, r, token, channelID)
+	publishOneFileVersion(t, r, token, channelID, "mods/a.jar", []byte("AAA"))
+
+	// 制造一次拉取（产生追踪事件 + 聚合），供统计有数据。
+	preq := httptest.NewRequest("GET", "/api/v1/client-channels/"+channelID+"/manifest", nil)
+	preq.Header.Set("X-Client-Key", key)
+	preq.Header.Set("X-Machine-Id", "mach-stat")
+	pw := httptest.NewRecorder()
+	r.ServeHTTP(pw, preq)
+
+	w := makeRequest(r, "GET", "/api/v1/client-dist/stats?channelId="+channelID+"&days=30", nil, token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("统计端点应 200，实际 %d %s", w.Code, w.Body.String())
+	}
+	stats := parseJSON(t, w)
+	if int(stats["days"].(float64)) != 30 {
+		t.Errorf("days 应为 30，实际 %v", stats["days"])
+	}
+	// downloads/topIps 存在（数组字段）。
+	if _, ok := stats["downloads"]; !ok {
+		t.Errorf("统计应含 downloads 字段")
+	}
+	if int64(stats["activeMachines"].(float64)) < 1 {
+		t.Errorf("活跃机器码应 ≥1（刚拉取一次），实际 %v", stats["activeMachines"])
+	}
+
+	// 无 JWT → 401。
+	if nw := makeRequest(r, "GET", "/api/v1/client-dist/stats?channelId="+channelID, nil, ""); nw.Code != http.StatusUnauthorized {
+		t.Errorf("统计端点无 JWT 应 401，实际 %d", nw.Code)
+	}
+}

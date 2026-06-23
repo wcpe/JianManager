@@ -57,6 +57,7 @@ func setupClientDistRouter(t *testing.T, db *gorm.DB) (*gin.Engine, *service.Cli
 		ClientDistTracking: service.NewClientDistTrackingService(db),
 		ClientIPGuard:      service.NewClientIPGuardService(db),
 		ClientTelemetry:    service.NewClientTelemetryService(db),
+		ClientDistStats:    service.NewClientDistStatsService(db),
 		JmPack:             service.NewJmPackService(assetSvc, versionSvc, signer),
 	}
 	_ = cpgrpc.NewClientPool() // 与 setupTestRouter 一致：确保 gRPC 包初始化无副作用。

@@ -53,6 +53,7 @@ type Services struct {
 	ClientDistTracking *service.ClientDistTrackingService
 	ClientIPGuard      *service.ClientIPGuardService
 	ClientTelemetry    *service.ClientTelemetryService
+	ClientDistStats    *service.ClientDistStatsService
 	JmPack             *service.JmPackService
 	RuntimeAssets      *service.RuntimeAssetsService
 	EnrollToken        *service.EnrollTokenService
@@ -254,6 +255,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.JmPack != nil {
 			jmPackHandler := NewJmPackHandler(svcs.JmPack, svcs.Audit)
 			jmPackHandler.RegisterRoutes(admin)
+		}
+
+		// 分发统计后台：下载趋势/版本分布/成功率/活跃机器码/TopIP 只读聚合（FR-095 / ADR-023）。限平台管理员。
+		if svcs.ClientDistStats != nil {
+			clientStatsHandler := NewClientStatsHandler(svcs.ClientDistStats)
+			clientStatsHandler.RegisterRoutes(admin)
 		}
 
 		// 节点 enrollment token（一键安装 / 傻瓜部署）：签发一次性准入凭据 + 一键命令，
