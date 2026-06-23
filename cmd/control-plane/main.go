@@ -99,6 +99,13 @@ func main() {
 	storageSvc := service.NewStorageService(db, root)
 	// 数据库资源管理器只读浏览（FR-084）：CP 独有数据源，仅平台管理员；只读 + 敏感列脱敏。
 	dbBrowseSvc := service.NewDBBrowseService(db)
+	// 面板自更新（FR-081，见 ADR-020 §4）：可配更新源 + sha256 校验，CP 统一编排
+	// CP 自升级与经 gRPC 全网 Worker 升级；CP 自身下载落数据根 cache/。
+	selfUpdateSvc := service.NewSelfUpdateService(db, pool, service.SelfUpdateConfig{
+		FeedURL:       cfg.Update.FeedURL,
+		BinaryBaseURL: cfg.Update.BinaryBaseURL,
+		AllowInsecure: cfg.Update.AllowInsecure,
+	}, root)
 	// 客户端分发频道与拉取密钥（FR-086，见 ADR-022）：密钥落库只存哈希、明文一次性返回。
 	clientChannelSvc := service.NewClientChannelService(db)
 	// 客户端分发版本与签名 manifest（FR-087，见 ADR-022、contract §2/§3）。
@@ -248,8 +255,9 @@ func main() {
 			ScriptBaseURL: cfg.Enroll.ScriptBaseURL,
 			BinaryURL:     cfg.Enroll.BinaryURL,
 		},
-		Storage:  storageSvc,
-		DBBrowse: dbBrowseSvc,
+		Storage:    storageSvc,
+		DBBrowse:   dbBrowseSvc,
+		SelfUpdate: selfUpdateSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）

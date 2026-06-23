@@ -61,6 +61,7 @@ type Services struct {
 	EnrollInstall EnrollInstallConfig
 	Storage       *service.StorageService
 	DBBrowse      *service.DBBrowseService
+	SelfUpdate    *service.SelfUpdateService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -277,6 +278,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.DBBrowse != nil {
 			dbBrowseHandler := NewDBBrowseHandler(svcs.DBBrowse)
 			dbBrowseHandler.RegisterRoutes(admin)
+		}
+
+		// 面板自更新（FR-081，见 ADR-020 §4）：检查更新 + CP 自升级 + 经 gRPC 编排全网 Worker 升级，
+		// 仅平台管理员 + 升级审计。
+		if svcs.SelfUpdate != nil {
+			selfUpdateHandler := NewSelfUpdateHandler(svcs.SelfUpdate, svcs.Audit)
+			selfUpdateHandler.RegisterRoutes(admin)
 		}
 	}
 

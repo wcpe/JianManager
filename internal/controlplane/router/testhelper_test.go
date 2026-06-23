@@ -94,6 +94,7 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 		Log:           service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),
 		Metric:        service.NewMetricService(db),
 		DBBrowse:      service.NewDBBrowseService(db),
+		SelfUpdate:    service.NewSelfUpdateService(db, pool, service.SelfUpdateConfig{}, root),
 	}
 	return Setup(svcs, jwtCfg.Secret)
 }
