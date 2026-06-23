@@ -265,7 +265,8 @@
     "systemSettings": "System Settings",
     "clientChannels": "Client Distribution",
     "runtimeAssets": "Runtime & Assets",
-    "storage": "Platform Storage"
+    "storage": "Platform Storage",
+    "database": "Database"
   },
   "console": {
     "title": "Ops Console",
@@ -1130,6 +1131,27 @@
     "loadMore": "Load more",
     "loadError": "Failed to load audit logs",
     "totalCount": "{{count}} shown"
+  },
+  "database": {
+    "title": "Database",
+    "subtitle": "Read-only browse of platform database tables and rows; sensitive columns are masked",
+    "tables": "Tables",
+    "tablesError": "Failed to load tables",
+    "noTables": "No tables",
+    "selectTable": "Select a table on the left",
+    "filterColumn": "Filter column",
+    "noFilter": "No filter",
+    "filterValue": "Filter value…",
+    "apply": "Filter",
+    "clear": "Clear",
+    "totalRows": "{{count}} rows",
+    "rowsError": "Failed to load rows",
+    "noRows": "No data",
+    "pageSize": "Per page",
+    "pageOf": "Page {{page}} / {{total}}",
+    "prev": "Prev",
+    "next": "Next",
+    "forbidden": "Platform admins only"
   },
   "logs": {
     "title": "Log Center",

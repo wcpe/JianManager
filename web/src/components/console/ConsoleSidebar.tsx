@@ -102,12 +102,30 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ]
 
+/** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
+const ROLE_PLATFORM_ADMIN = 10
+
+/**
+ * 按角色裁剪导航：平台管理员在「设置」组追加「数据库」入口（FR-084，仅平台管理员可见入口）。
+ * 仅注入本入口，不改其余既有项。
+ */
+function navGroupsForRole(role: number | null): NavGroup[] {
+  if (role !== ROLE_PLATFORM_ADMIN) return NAV_GROUPS
+  return NAV_GROUPS.map((g) =>
+    g.key === 'settings'
+      ? { ...g, children: [...(g.children ?? []), { to: '/database', labelKey: 'nav.database', icon: Database }] }
+      : g,
+  )
+}
+
 /**
  * 运维控制台左侧栏（ADR-009 / FR-037 / FR-061）：常驻多级侧栏。
  * 定高 flex column；分组导航区占据剩余高度并整体滚动，「实例」组展开时内嵌节点切换 + 实例树；
  * 底部主题/语言/退出/版本固定可见。
  */
 export default function ConsoleSidebar() {
+  const role = useAuthStore((s) => s.role)
+  const groups = navGroupsForRole(role)
   return (
     <aside className="flex h-full min-h-0 w-60 flex-col border-r bg-card/40">
       <div className="flex shrink-0 items-center gap-2 border-b px-4 py-3">
@@ -118,7 +136,7 @@ export default function ConsoleSidebar() {
       </div>
 
       <nav className="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
-        {NAV_GROUPS.map((g) => (g.to ? <LeafGroup key={g.key} group={g} /> : <ExpandableGroup key={g.key} group={g} />))}
+        {groups.map((g) => (g.to ? <LeafGroup key={g.key} group={g} /> : <ExpandableGroup key={g.key} group={g} />))}
       </nav>
 
       <SidebarFooter />
