@@ -47,6 +47,7 @@ type Services struct {
 	ProbeUpdate   *service.ProbeUpdateService
 	ClientChannel *service.ClientChannelService
 	ClientVersion *service.ClientVersionService
+	RuntimeAssets *service.RuntimeAssetsService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -145,6 +146,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 制品库：平台级共享资源，Handler 内部按平台管理员收敛（FR-045）。
 		assetHandler := NewAssetHandler(svcs.Asset)
 		assetHandler.RegisterRoutes(protected)
+
+		// 运行时与制品全局页只读聚合（FR-082）：JDK 矩阵 + 引用实例 + 制品占用/去重/冷热。
+		// 平台级共享资源，Handler 内部按平台管理员收敛。
+		if svcs.RuntimeAssets != nil {
+			runtimeAssetsHandler := NewRuntimeAssetsHandler(svcs.RuntimeAssets)
+			runtimeAssetsHandler.RegisterRoutes(protected)
+		}
 
 		// 日志中心：所有认证用户可查询，Handler 内部按可访问实例收敛、平台日志仅管理员可见（FR-049）。
 		logHandler := NewLogHandler(svcs.Log, svcs.Authz)

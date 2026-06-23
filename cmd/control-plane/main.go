@@ -88,6 +88,8 @@ func main() {
 		slog.SetDefault(slog.New(persist))
 	}
 	assetSvc := service.NewAssetService(db, root)
+	// 运行时与制品全局页只读聚合（FR-082）：跨节点 JDK 矩阵 + 引用实例 + 制品占用/去重/冷热。
+	runtimeAssetsSvc := service.NewRuntimeAssetsService(db)
 	// 客户端分发频道与拉取密钥（FR-086，见 ADR-022）：密钥落库只存哈希、明文一次性返回。
 	clientChannelSvc := service.NewClientChannelService(db)
 	// 客户端分发版本与签名 manifest（FR-087，见 ADR-022、contract §2/§3）。
@@ -197,6 +199,7 @@ func main() {
 		ProbeUpdate:   probeUpdateSvc,
 		ClientChannel: clientChannelSvc,
 		ClientVersion: clientVersionSvc,
+		RuntimeAssets: runtimeAssetsSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）

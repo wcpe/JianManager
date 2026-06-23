@@ -1021,6 +1021,48 @@
 
 ---
 
+## 运行时与制品全局页（FR-082）
+
+> 只读聚合端点，给「运行时与制品」全局页一次性提供 JDK 矩阵 + 引用关系 + 制品占用/去重/冷热统计。
+> 不引入新表/新 proto，跨现有表（`nodes`/`node_jdks`/`instances`/`assets`）聚合。
+> 权限：平台管理员。删除受引用项仍走各自端点（JDK：`DELETE /nodes/:id/jdks/:jid`；制品：`DELETE /assets/:id`），本端点只展示引用。
+
+### GET /api/v1/runtime-assets/overview
+- **描述**: 跨节点 JDK 矩阵（每项含引用实例清单）+ 制品按类型分组（每组含占用/去重/冷热统计）+ 两区汇总
+- **关联 FR**: FR-082（聚合 FR-033 JDK 绑定语义 + FR-045 制品库元数据）
+- **引用解析**:
+  - JDK 引用由实例绑定真实推导：`instances.jdk_id`（直接绑定，`binding=direct`）或 `instances.java_major_version`（按 Java 大版本绑定，解析到同节点同大版本中 id 最大者，`binding=major`）；跨节点不串台
+  - 制品当前不持久化「实例↔制品」连接（FR-045 消费侧 `ref_count` 为占位，见 ADR-011），故制品区给「按类型」占用/去重/冷热 + 既有 `refCount`，不臆造实例连接
+- **响应 200**:
+```json
+{
+  "jdks": [
+    {
+      "id": 10, "nodeId": 1, "nodeName": "node-a", "nodeOnline": true,
+      "vendor": "Temurin", "majorVersion": 21, "version": "21.0.4", "arch": "x64",
+      "path": "/opt/jdks/temurin-21", "managed": true,
+      "instances": [
+        { "id": 100, "uuid": "<uuid>", "name": "paper-1", "status": "RUNNING", "binding": "direct" }
+      ],
+      "refCount": 1
+    }
+  ],
+  "jdkSummary": { "nodeCount": 1, "jdkCount": 1, "referencedJdk": 1, "instanceRefs": 1 },
+  "assets": [
+    {
+      "type": "core",
+      "items": [ { "id": 1, "type": "core", "name": "paper-1.20.4", "sha256": "<64hex>", "size": 48234123, "refCount": 0, "storageState": "hot", "...": "（字段同 GET /assets 单条）" } ],
+      "count": 1, "totalSize": 48234123, "referencedCount": 0,
+      "hotCount": 1, "archivedCount": 0, "externalCount": 0
+    }
+  ],
+  "assetSummary": { "assetCount": 1, "totalSize": 48234123, "referencedCount": 0, "hotCount": 1, "archivedCount": 0, "externalCount": 0 }
+}
+```
+- **错误**: 401/403（非平台管理员）；500 `INTERNAL_ERROR`
+
+---
+
 ## 审计日志
 
 ### GET /api/v1/audit
