@@ -95,6 +95,29 @@ func (m *Manager) emitStateChange(instanceUUID string, oldState, newState Instan
 	}
 }
 
+// markStrategyState 由策略在检测到自身异步状态变化（如 wrapper/子进程退出 = 崩溃或停止）时回调，
+// 把变化同步到 Manager 的实例记账（inst.State）并扇出状态事件。调用方不得持有策略锁。
+//
+// 修复点：此前策略异步崩溃只更新策略内部状态、未回写 inst.State，Manager 仍记 RUNNING，
+// 导致 Start() 守卫（仅允许 STOPPED/CRASHED 启动）拒绝崩溃实例重启，必须重启整个 Worker 才能恢复。
+// oldState 取自 Manager 记账（而非策略内部状态），与 Start/Stop 的记账保持单一事实源。
+func (m *Manager) markStrategyState(uuid string, newState InstanceState) {
+	m.mu.Lock()
+	inst, ok := m.instances[uuid]
+	if !ok {
+		m.mu.Unlock()
+		return
+	}
+	oldState := inst.State
+	if oldState == newState {
+		m.mu.Unlock()
+		return
+	}
+	inst.State = newState
+	m.mu.Unlock()
+	m.emitStateChange(uuid, oldState, newState)
+}
+
 // InstanceSnapshot 表示单个实例的状态快照（用于心跳上报）。
 type InstanceSnapshot struct {
 	UUID      string

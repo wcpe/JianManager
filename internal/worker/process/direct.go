@@ -17,12 +17,12 @@ import (
 // Worker 作为游戏服进程的父进程，Worker 退出时游戏服随之退出。
 // 适用于开发/测试，或不需要进程隔离的场景。与 ADR-003 的 daemon 方式互补。
 type directStrategy struct {
-	mu     sync.Mutex
-	spec   CommandSpec
-	mgr    *Manager
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	state  InstanceState
+	mu    sync.Mutex
+	spec  CommandSpec
+	mgr   *Manager
+	cmd   *exec.Cmd
+	stdin io.WriteCloser
+	state InstanceState
 	// crashCount 记录连续崩溃次数，用于指数退避。成功重启后不清零，
 	// 持续崩溃退避逐步加长；正常停止时由 Manager 重置实例账面 CrashCount。
 	crashCount int
@@ -104,6 +104,10 @@ func (d *directStrategy) waitLoop() {
 	d.crashCount++
 	crashCount := d.crashCount
 	d.mu.Unlock()
+
+	// 同步崩溃状态到 Manager 记账并扇出（否则 Manager 仍记 RUNNING，
+	// 后续手动 /start 与下方自动重启的 Start() 守卫都会因状态不是 STOPPED/CRASHED 而拒绝）。
+	d.mgr.markStrategyState(d.spec.UUID, StateCrashed)
 
 	slog.Warn("direct 实例崩溃", "instanceId", d.spec.UUID, "err", err, "crashCount", crashCount)
 

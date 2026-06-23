@@ -194,7 +194,6 @@ func (d *daemonStrategy) reapWrapper() {
 		d.mu.Unlock()
 		return
 	}
-	old := d.state
 	if d.closed || d.state == StateStopping || d.state == StateStopped {
 		// 主动停止/关闭：wrapper 正常退出
 		d.state = StateStopped
@@ -204,10 +203,11 @@ func (d *daemonStrategy) reapWrapper() {
 	}
 	newState := d.state
 	d.mu.Unlock()
-	// 立即把状态变更推给 CP（StreamInstanceEvents），避免崩溃只能等下次心跳（~30s）才反映到前端
-	if old != newState {
-		d.mgr.emitStateChange(d.spec.UUID, old, newState)
-	}
+	// 把策略状态同步到 Manager 记账并扇出状态事件（StreamInstanceEvents），避免崩溃只能等下次
+	// 心跳（~30s）才反映到前端。此前仅 emitStateChange 通知 CP、未回写 Manager.inst.State，
+	// 导致 wrapper 崩溃退出后 Manager 仍记 RUNNING，Start() 守卫据此拒绝 CRASHED 实例重启
+	// （须重启整个 Worker 才能恢复）。
+	d.mgr.markStrategyState(d.spec.UUID, newState)
 }
 
 func (d *daemonStrategy) Stop() error {
