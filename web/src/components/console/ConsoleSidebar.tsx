@@ -14,6 +14,7 @@ import {
   DownloadCloud,
   FileClock,
   Gamepad2,
+  Layers,
   LayoutDashboard,
   LayoutTemplate,
   Network,
@@ -84,6 +85,7 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   { key: 'templates', labelKey: 'nav.templates', icon: LayoutTemplate, to: '/templates' },
+  { key: 'runtimeAssets', labelKey: 'nav.runtimeAssets', icon: Layers, to: '/runtime-assets' },
   { key: 'clientChannels', labelKey: 'nav.clientChannels', icon: DownloadCloud, to: '/client-channels' },
   {
     key: 'settings',

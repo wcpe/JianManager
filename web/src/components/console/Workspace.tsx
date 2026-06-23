@@ -19,6 +19,7 @@ const BackupStoragesPage = lazy(() => import('@/pages/BackupStoragesPage'))
 const BotsPage = lazy(() => import('@/pages/BotsPage'))
 const AuditPage = lazy(() => import('@/pages/AuditPage'))
 const TemplatesPage = lazy(() => import('@/pages/TemplatesPage'))
+const RuntimeAssetsPage = lazy(() => import('@/pages/RuntimeAssetsPage'))
 const AlertsPage = lazy(() => import('@/pages/AlertsPage'))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 const LogsPage = lazy(() => import('@/pages/LogsPage'))
@@ -63,6 +64,7 @@ export default function Workspace() {
           <Route path="users" element={<UsersPage />} />
           <Route path="groups" element={<GroupsPage />} />
           <Route path="templates" element={<TemplatesPage />} />
+          <Route path="runtime-assets" element={<RuntimeAssetsPage />} />
           <Route path="schedules" element={<SchedulesPage />} />
           <Route path="backups" element={<BackupsPage />} />
           <Route path="backup-storages" element={<BackupStoragesPage />} />
