@@ -70,6 +70,15 @@ service WorkerService {
   // CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
   rpc CloneWorkDir(CloneWorkDirRequest) returns (CloneWorkDirResponse);
 
+  // === Docker 镜像管理（FR-078，见 ADR-019）===
+
+  // ListImages 列出 Worker 本机 Docker 镜像。
+  rpc ListImages(ListImagesRequest) returns (ListImagesResponse);
+  // PullImage 从 registry 拉取镜像到 Worker 本机（建实例选镜像前置）。
+  rpc PullImage(PullImageRequest) returns (PullImageResponse);
+  // RemoveImage 删除 Worker 本机 Docker 镜像。
+  rpc RemoveImage(RemoveImageRequest) returns (RemoveImageResponse);
+
   // === 备份操作（FR-013 全量 / FR-056 增量 / FR-057 远程存储） ===
 
   // CreateBackup 将实例工作目录打包为 tar.gz 落到节点数据根 var/backups/。
@@ -197,6 +206,19 @@ message CreateInstanceRequest {
   // graceful_stop.timeout 取生效值后下发）。daemon 策略透传到 wrapper，停服按此值超时强杀。
   // 语义：对设置变更后「新启动」的实例生效（值在启动时定型）；0=未指定，wrapper 回退 env/默认。
   int32 graceful_stop_timeout_seconds = 13;
+  // image 是 docker 模式的容器镜像引用（如 itzg/minecraft-server:latest）。
+  // 仅 process_type=docker 使用；Worker 启动前若本地缺镜像则拉取（FR-078，见 ADR-019）。
+  string image = 14;
+  // port_mappings 是 docker 模式的容器端口↔宿主端口发布关系（宿主端口来自 FR-032 端口池）。
+  // 仅 process_type=docker 使用。
+  repeated PortMapping port_mappings = 15;
+}
+
+// PortMapping 描述一条容器端口到宿主端口的发布关系（docker 模式，ADR-019）。
+message PortMapping {
+  int32 container_port = 1; // 容器内监听端口（由镜像约定，如 MC 容器内 25565）
+  int32 host_port = 2;      // 宿主发布端口（来自 FR-032 端口池）
+  string protocol = 3;      // tcp（默认）或 udp（如 MC query）
 }
 
 message CreateInstanceResponse {
@@ -654,6 +676,44 @@ message CloneWorkDirResponse {
   int64 copied_files = 3;
   int64 copied_bytes = 4;
   repeated string skipped = 5; // 被排除跳过的顶层项/目录（回报用）
+}
+
+// === Docker 镜像管理（FR-078，见 ADR-019） ===
+
+message ListImagesRequest {}
+
+// ImageInfo 描述 Worker 本机一个 Docker 镜像。
+message ImageInfo {
+  string id = 1;             // 镜像 ID（sha256:...）
+  repeated string tags = 2;  // RepoTags（如 itzg/minecraft-server:latest）
+  int64 size_bytes = 3;      // 镜像占用字节
+  int64 created = 4;         // 创建时间（Unix 秒）
+}
+
+message ListImagesResponse {
+  repeated ImageInfo images = 1;
+  // docker_available 为 false 表示本机未安装/未运行 Docker 守护进程。
+  bool docker_available = 2;
+  string error = 3;
+}
+
+message PullImageRequest {
+  string image = 1; // 镜像引用（含 tag），默认 Docker Hub
+}
+
+message PullImageResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message RemoveImageRequest {
+  string image = 1; // 镜像引用或 ID
+  bool force = 2;    // 强制删除（即使有停止的容器引用）
+}
+
+message RemoveImageResponse {
+  bool success = 1;
+  string error = 2;
 }
 
 // === 备份操作（FR-013/FR-056/FR-057） ===

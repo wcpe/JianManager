@@ -49,6 +49,9 @@ const (
 	WorkerService_DownloadCore_FullMethodName         = "/worker.WorkerService/DownloadCore"
 	WorkerService_DeployServerProbe_FullMethodName    = "/worker.WorkerService/DeployServerProbe"
 	WorkerService_CloneWorkDir_FullMethodName         = "/worker.WorkerService/CloneWorkDir"
+	WorkerService_ListImages_FullMethodName           = "/worker.WorkerService/ListImages"
+	WorkerService_PullImage_FullMethodName            = "/worker.WorkerService/PullImage"
+	WorkerService_RemoveImage_FullMethodName          = "/worker.WorkerService/RemoveImage"
 	WorkerService_CreateBackup_FullMethodName         = "/worker.WorkerService/CreateBackup"
 	WorkerService_RestoreBackup_FullMethodName        = "/worker.WorkerService/RestoreBackup"
 	WorkerService_CreateBot_FullMethodName            = "/worker.WorkerService/CreateBot"
@@ -129,6 +132,12 @@ type WorkerServiceClient interface {
 	DeployServerProbe(ctx context.Context, in *DeployServerProbeRequest, opts ...grpc.CallOption) (*DeployServerProbeResponse, error)
 	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
 	CloneWorkDir(ctx context.Context, in *CloneWorkDirRequest, opts ...grpc.CallOption) (*CloneWorkDirResponse, error)
+	// ListImages 列出 Worker 本机 Docker 镜像。
+	ListImages(ctx context.Context, in *ListImagesRequest, opts ...grpc.CallOption) (*ListImagesResponse, error)
+	// PullImage 从 registry 拉取镜像到 Worker 本机（建实例选镜像前置）。
+	PullImage(ctx context.Context, in *PullImageRequest, opts ...grpc.CallOption) (*PullImageResponse, error)
+	// RemoveImage 删除 Worker 本机 Docker 镜像。
+	RemoveImage(ctx context.Context, in *RemoveImageRequest, opts ...grpc.CallOption) (*RemoveImageResponse, error)
 	// CreateBackup 将实例工作目录打包为 tar.gz 落到节点数据根 var/backups/。
 	// 增量备份据 base_manifest 仅打包新增/变化文件；可选上传到远程存储后端。
 	CreateBackup(ctx context.Context, in *CreateBackupRequest, opts ...grpc.CallOption) (*CreateBackupResponse, error)
@@ -486,6 +495,36 @@ func (c *workerServiceClient) CloneWorkDir(ctx context.Context, in *CloneWorkDir
 	return out, nil
 }
 
+func (c *workerServiceClient) ListImages(ctx context.Context, in *ListImagesRequest, opts ...grpc.CallOption) (*ListImagesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListImagesResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ListImages_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) PullImage(ctx context.Context, in *PullImageRequest, opts ...grpc.CallOption) (*PullImageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PullImageResponse)
+	err := c.cc.Invoke(ctx, WorkerService_PullImage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) RemoveImage(ctx context.Context, in *RemoveImageRequest, opts ...grpc.CallOption) (*RemoveImageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveImageResponse)
+	err := c.cc.Invoke(ctx, WorkerService_RemoveImage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) CreateBackup(ctx context.Context, in *CreateBackupRequest, opts ...grpc.CallOption) (*CreateBackupResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateBackupResponse)
@@ -690,6 +729,12 @@ type WorkerServiceServer interface {
 	DeployServerProbe(context.Context, *DeployServerProbeRequest) (*DeployServerProbeResponse, error)
 	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
 	CloneWorkDir(context.Context, *CloneWorkDirRequest) (*CloneWorkDirResponse, error)
+	// ListImages 列出 Worker 本机 Docker 镜像。
+	ListImages(context.Context, *ListImagesRequest) (*ListImagesResponse, error)
+	// PullImage 从 registry 拉取镜像到 Worker 本机（建实例选镜像前置）。
+	PullImage(context.Context, *PullImageRequest) (*PullImageResponse, error)
+	// RemoveImage 删除 Worker 本机 Docker 镜像。
+	RemoveImage(context.Context, *RemoveImageRequest) (*RemoveImageResponse, error)
 	// CreateBackup 将实例工作目录打包为 tar.gz 落到节点数据根 var/backups/。
 	// 增量备份据 base_manifest 仅打包新增/变化文件；可选上传到远程存储后端。
 	CreateBackup(context.Context, *CreateBackupRequest) (*CreateBackupResponse, error)
@@ -815,6 +860,15 @@ func (UnimplementedWorkerServiceServer) DeployServerProbe(context.Context, *Depl
 }
 func (UnimplementedWorkerServiceServer) CloneWorkDir(context.Context, *CloneWorkDirRequest) (*CloneWorkDirResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CloneWorkDir not implemented")
+}
+func (UnimplementedWorkerServiceServer) ListImages(context.Context, *ListImagesRequest) (*ListImagesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListImages not implemented")
+}
+func (UnimplementedWorkerServiceServer) PullImage(context.Context, *PullImageRequest) (*PullImageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PullImage not implemented")
+}
+func (UnimplementedWorkerServiceServer) RemoveImage(context.Context, *RemoveImageRequest) (*RemoveImageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveImage not implemented")
 }
 func (UnimplementedWorkerServiceServer) CreateBackup(context.Context, *CreateBackupRequest) (*CreateBackupResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateBackup not implemented")
@@ -1388,6 +1442,60 @@ func _WorkerService_CloneWorkDir_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_ListImages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListImagesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ListImages(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ListImages_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ListImages(ctx, req.(*ListImagesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_PullImage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PullImageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).PullImage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_PullImage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).PullImage(ctx, req.(*PullImageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_RemoveImage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveImageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).RemoveImage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_RemoveImage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).RemoveImage(ctx, req.(*RemoveImageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_CreateBackup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateBackupRequest)
 	if err := dec(in); err != nil {
@@ -1704,6 +1812,18 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CloneWorkDir",
 			Handler:    _WorkerService_CloneWorkDir_Handler,
+		},
+		{
+			MethodName: "ListImages",
+			Handler:    _WorkerService_ListImages_Handler,
+		},
+		{
+			MethodName: "PullImage",
+			Handler:    _WorkerService_PullImage_Handler,
+		},
+		{
+			MethodName: "RemoveImage",
+			Handler:    _WorkerService_RemoveImage_Handler,
 		},
 		{
 			MethodName: "CreateBackup",
