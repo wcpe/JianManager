@@ -17,6 +17,8 @@ var (
 	ErrNoLatestVersion = errors.New("频道尚未发布版本")
 	// ErrInvalidVersionFiles 发布的文件清单非法（缺字段/非法 sync/platform/路径逃逸/制品缺失）。
 	ErrInvalidVersionFiles = errors.New("版本文件清单非法")
+	// ErrVersionNotFound 指定版本在频道内不存在（历史详情/回滚源，FR-088）。
+	ErrVersionNotFound = errors.New("版本不存在")
 )
 
 // ClientVersionService 客户端分发版本发布与 manifest 组装（FR-087，见 ADR-022、contract §2/§3）。
@@ -54,6 +56,8 @@ type PublishFileParams struct {
 type ClientFileResult struct {
 	// SHA256 制品自身 sha256 = 下载寻址 key = manifest files[].artifact.sha256。
 	SHA256 string `json:"sha256"`
+	// MD5 制品自身 md5（入库即算）。codec=none 时即解压后原始内容 md5，供发布向导填 file.md5（FR-088）。
+	MD5 string `json:"md5"`
 	// Size 制品字节数。
 	Size int64 `json:"size"`
 	// Codec 压缩算法。
@@ -77,7 +81,7 @@ func (s *ClientVersionService) PublishFile(r io.Reader, p PublishFileParams) (*C
 	if err != nil {
 		return nil, err
 	}
-	return &ClientFileResult{SHA256: asset.SHA256, Size: asset.Size, Codec: codec}, nil
+	return &ClientFileResult{SHA256: asset.SHA256, MD5: asset.MD5, Size: asset.Size, Codec: codec}, nil
 }
 
 // PublishVersionParams 发布版本参数。
@@ -174,27 +178,24 @@ func (s *ClientVersionService) BuildManifest(channelID string) (*SignedManifest,
 	if s.signer == nil {
 		return nil, ErrSignKeyNotConfigured
 	}
-	var ch model.ClientChannel
-	if err := s.db.Where("channel_id = ?", channelID).First(&ch).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrChannelNotFound
-		}
-		return nil, fmt.Errorf("查询频道失败: %w", err)
+	ch, err := s.getChannel(channelID)
+	if err != nil {
+		return nil, err
 	}
 	if ch.CurrentVersion <= 0 {
 		return nil, ErrNoLatestVersion
 	}
 
-	var ver model.ClientVersion
-	if err := s.db.Where("channel_id = ? AND version = ?", channelID, ch.CurrentVersion).
-		First(&ver).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+	ver, err := s.findVersion(channelID, ch.CurrentVersion)
+	if err != nil {
+		// latest 指针指向不存在的版本属数据不一致，对玩家侧等价于「无 latest」。
+		if errors.Is(err, ErrVersionNotFound) {
 			return nil, ErrNoLatestVersion
 		}
-		return nil, fmt.Errorf("查询版本失败: %w", err)
+		return nil, err
 	}
 
-	manifest, err := assembleManifest(&ch, &ver)
+	manifest, err := assembleManifest(ch, ver)
 	if err != nil {
 		return nil, err
 	}
@@ -206,14 +207,184 @@ func (s *ClientVersionService) BuildManifest(channelID string) (*SignedManifest,
 
 // LatestVersion 返回频道当前 latest 版本号（0=未发布）。
 func (s *ClientVersionService) LatestVersion(channelID string) (int, error) {
-	var ch model.ClientChannel
-	if err := s.db.Where("channel_id = ?", channelID).First(&ch).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return 0, ErrChannelNotFound
-		}
-		return 0, fmt.Errorf("查询频道失败: %w", err)
+	ch, err := s.getChannel(channelID)
+	if err != nil {
+		return 0, err
 	}
 	return ch.CurrentVersion, nil
+}
+
+// VersionSummary 版本历史列表项（FR-088，仅管理面；不向玩家暴露）。
+type VersionSummary struct {
+	// Version 单调递增版本号。
+	Version int `json:"version"`
+	// Note 发布/回滚备注。
+	Note string `json:"note"`
+	// FileCount 该版本文件数（来自快照清单）。
+	FileCount int `json:"fileCount"`
+	// CreatedBy 发布者用户 ID（0=未知）。
+	CreatedBy uint `json:"createdBy"`
+	// CreatedAt 发布时间。
+	CreatedAt time.Time `json:"createdAt"`
+	// IsLatest 是否为频道当前 latest 指针所指版本。
+	IsLatest bool `json:"isLatest"`
+}
+
+// VersionDetail 版本详情（FR-088）：元数据 + 解析后文件清单/托管目录/自更新段。
+type VersionDetail struct {
+	Version     int            `json:"version"`
+	Note        string         `json:"note"`
+	CreatedBy   uint           `json:"createdBy"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	IsLatest    bool           `json:"isLatest"`
+	ManagedDirs []string       `json:"managedDirs"`
+	Files       []ManifestFile `json:"files"`
+	Agent       *ManifestAgent `json:"agent,omitempty"`
+}
+
+// ListVersions 列出频道版本历史（版本号 DESC，含 isLatest 标记）。
+// 历史**仅供管理面**（运营回滚/审计）；玩家侧只认 latest（contract §2），不经此端点。
+// 频道不存在返回 ErrChannelNotFound。
+func (s *ClientVersionService) ListVersions(channelID string) ([]VersionSummary, error) {
+	ch, err := s.getChannel(channelID)
+	if err != nil {
+		return nil, err
+	}
+	var versions []model.ClientVersion
+	if err := s.db.Where("channel_id = ?", channelID).Order("version DESC").Find(&versions).Error; err != nil {
+		return nil, fmt.Errorf("查询版本历史失败: %w", err)
+	}
+	out := make([]VersionSummary, 0, len(versions))
+	for i := range versions {
+		v := &versions[i]
+		out = append(out, VersionSummary{
+			Version:   v.Version,
+			Note:      v.Note,
+			FileCount: countSnapshotFiles(v.FilesJSON),
+			CreatedBy: v.CreatedBy,
+			CreatedAt: v.CreatedAt,
+			IsLatest:  v.Version == ch.CurrentVersion,
+		})
+	}
+	return out, nil
+}
+
+// GetVersionDetail 取频道某版本的完整快照详情（文件清单 + 托管目录 + 自更新段）。
+// 频道不存在返回 ErrChannelNotFound；版本不存在返回 ErrVersionNotFound。
+func (s *ClientVersionService) GetVersionDetail(channelID string, version int) (*VersionDetail, error) {
+	ch, err := s.getChannel(channelID)
+	if err != nil {
+		return nil, err
+	}
+	ver, err := s.findVersion(channelID, version)
+	if err != nil {
+		return nil, err
+	}
+	files, managedDirs, agent, err := decodeVersionSnapshot(ver)
+	if err != nil {
+		return nil, err
+	}
+	return &VersionDetail{
+		Version:     ver.Version,
+		Note:        ver.Note,
+		CreatedBy:   ver.CreatedBy,
+		CreatedAt:   ver.CreatedAt,
+		IsLatest:    ver.Version == ch.CurrentVersion,
+		ManagedDirs: managedDirs,
+		Files:       files,
+		Agent:       agent,
+	}, nil
+}
+
+// Rollback 运营回滚：取历史版本 sourceVersion 的内容，**以更高版本号重发为新 latest**（ADR-022 §3、contract §3）。
+// 不下发更低版本号——保持 version 单调，客户端按防降级正常前进、不被拒。复用 PublishVersion 完成校验/单调递增/切指针。
+// 频道不存在返回 ErrChannelNotFound；源版本不存在返回 ErrVersionNotFound。
+func (s *ClientVersionService) Rollback(channelID string, sourceVersion int, createdBy uint, note string) (*model.ClientVersion, error) {
+	if _, err := s.getChannel(channelID); err != nil {
+		return nil, err
+	}
+	src, err := s.findVersion(channelID, sourceVersion)
+	if err != nil {
+		return nil, err
+	}
+	files, managedDirs, agent, err := decodeVersionSnapshot(src)
+	if err != nil {
+		return nil, err
+	}
+	if note == "" {
+		note = fmt.Sprintf("回滚至 v%d", sourceVersion)
+	}
+	return s.PublishVersion(channelID, PublishVersionParams{
+		Files:       files,
+		ManagedDirs: managedDirs,
+		Agent:       agent,
+		Note:        note,
+		CreatedBy:   createdBy,
+	})
+}
+
+// getChannel 按 channelId 查频道；不存在返回 ErrChannelNotFound。
+func (s *ClientVersionService) getChannel(channelID string) (*model.ClientChannel, error) {
+	var ch model.ClientChannel
+	err := s.db.Where("channel_id = ?", channelID).First(&ch).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrChannelNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("查询频道失败: %w", err)
+	}
+	return &ch, nil
+}
+
+// findVersion 查频道内指定版本号的快照；不存在返回 ErrVersionNotFound。
+func (s *ClientVersionService) findVersion(channelID string, version int) (*model.ClientVersion, error) {
+	var ver model.ClientVersion
+	err := s.db.Where("channel_id = ? AND version = ?", channelID, version).First(&ver).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrVersionNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("查询版本失败: %w", err)
+	}
+	return &ver, nil
+}
+
+// countSnapshotFiles 统计版本快照文件数（解析失败计 0，仅用于列表展示，不影响信任）。
+func countSnapshotFiles(filesJSON string) int {
+	if filesJSON == "" {
+		return 0
+	}
+	var files []ManifestFile
+	if err := json.Unmarshal([]byte(filesJSON), &files); err != nil {
+		return 0
+	}
+	return len(files)
+}
+
+// decodeVersionSnapshot 把版本快照的 JSON 字段还原为 files/managedDirs/agent。
+// files 永不为 nil（空清单为 []）；managedDirs 同理；agent 可为 nil（未声明自更新段）。
+func decodeVersionSnapshot(ver *model.ClientVersion) ([]ManifestFile, []string, *ManifestAgent, error) {
+	var files []ManifestFile
+	if err := json.Unmarshal([]byte(ver.FilesJSON), &files); err != nil {
+		return nil, nil, nil, fmt.Errorf("解析文件清单失败: %w", err)
+	}
+	if files == nil {
+		files = []ManifestFile{}
+	}
+	managedDirs := []string{}
+	if ver.ManagedDirsJSON != "" {
+		if err := json.Unmarshal([]byte(ver.ManagedDirsJSON), &managedDirs); err != nil {
+			return nil, nil, nil, fmt.Errorf("解析托管目录失败: %w", err)
+		}
+	}
+	var agent *ManifestAgent
+	if ver.AgentJSON != "" {
+		agent = &ManifestAgent{}
+		if err := json.Unmarshal([]byte(ver.AgentJSON), agent); err != nil {
+			return nil, nil, nil, fmt.Errorf("解析自更新段失败: %w", err)
+		}
+	}
+	return files, managedDirs, agent, nil
 }
 
 // OpenArtifact 按制品 sha256 打开 client-file 制品（供端点 Range 分发）。
@@ -232,25 +403,9 @@ func (s *ClientVersionService) OpenArtifact(sha256 string) (*model.Asset, string
 
 // assembleManifest 把频道 + 版本快照还原为 SignedManifest（未签名）。
 func assembleManifest(ch *model.ClientChannel, ver *model.ClientVersion) (*SignedManifest, error) {
-	var files []ManifestFile
-	if err := json.Unmarshal([]byte(ver.FilesJSON), &files); err != nil {
-		return nil, fmt.Errorf("解析文件清单失败: %w", err)
-	}
-	if files == nil {
-		files = []ManifestFile{}
-	}
-	managedDirs := []string{}
-	if ver.ManagedDirsJSON != "" {
-		if err := json.Unmarshal([]byte(ver.ManagedDirsJSON), &managedDirs); err != nil {
-			return nil, fmt.Errorf("解析托管目录失败: %w", err)
-		}
-	}
-	var agent *ManifestAgent
-	if ver.AgentJSON != "" {
-		agent = &ManifestAgent{}
-		if err := json.Unmarshal([]byte(ver.AgentJSON), agent); err != nil {
-			return nil, fmt.Errorf("解析自更新段失败: %w", err)
-		}
+	files, managedDirs, agent, err := decodeVersionSnapshot(ver)
+	if err != nil {
+		return nil, err
 	}
 	return &SignedManifest{
 		SchemaVersion: manifestSchemaVersion,

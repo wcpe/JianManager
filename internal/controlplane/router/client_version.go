@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -118,6 +119,74 @@ func (h *ClientVersionHandler) PublishVersion(c *gin.Context) {
 	})
 }
 
+// ListVersions GET /client-channels/:id/versions — 版本历史列表（运营，平台管理员；FR-088）。
+// 历史**仅供管理面**（运营回滚/审计）；玩家侧只认 latest（contract §2），不经此端点拉取任意版本。
+func (h *ClientVersionHandler) ListVersions(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	versions, err := h.svc.ListVersions(c.Param("id"))
+	if err != nil {
+		h.respondErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, versions)
+}
+
+// GetVersion GET /client-channels/:id/versions/:version — 版本详情（含文件清单，运营，平台管理员；FR-088）。
+func (h *ClientVersionHandler) GetVersion(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	version, err := strconv.Atoi(c.Param("version"))
+	if err != nil || version <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "版本号非法"})
+		return
+	}
+	detail, err := h.svc.GetVersionDetail(c.Param("id"), version)
+	if err != nil {
+		h.respondErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, detail)
+}
+
+// clientRollbackRequest 运营回滚请求体（FR-088）。
+type clientRollbackRequest struct {
+	// SourceVersion 要回滚到的历史版本号（其内容将以更高版本号重发为新 latest）。
+	SourceVersion int `json:"sourceVersion"`
+	// Note 回滚备注（信息性，可空；空则服务端生成「回滚至 vN」）。
+	Note string `json:"note"`
+}
+
+// RollbackVersion POST /client-channels/:id/rollback — 运营回滚（运营，平台管理员；FR-088）。
+// 以更高版本号重发历史内容为新 latest（不下发更低号、保持单调、不触发客户端防降级，ADR-022 §3）。
+func (h *ClientVersionHandler) RollbackVersion(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	channelID := c.Param("id")
+	var body clientRollbackRequest
+	if err := c.ShouldBindJSON(&body); err != nil || body.SourceVersion <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "需提供有效的 sourceVersion"})
+		return
+	}
+	uid, _ := c.Get(middleware.CtxUserID)
+	createdBy, _ := uid.(uint)
+	ver, err := h.svc.Rollback(channelID, body.SourceVersion, createdBy, body.Note)
+	if err != nil {
+		h.respondErr(c, err)
+		return
+	}
+	h.recordAudit(c, "client_version.rollback", map[string]any{
+		"channelId": channelID, "sourceVersion": body.SourceVersion, "newVersion": ver.Version,
+	})
+	c.JSON(http.StatusCreated, gin.H{
+		"id": ver.ID, "channelId": ver.ChannelID, "version": ver.Version,
+		"sourceVersion": body.SourceVersion, "note": ver.Note, "createdAt": ver.CreatedAt,
+	})
+}
+
 // ---- 消费端点（X-Client-Key 玩家鉴权）----
 
 // GetManifest GET /client-channels/:id/manifest — 返回频道 latest 的签名 manifest（玩家，拉取密钥鉴权）。
@@ -227,6 +296,8 @@ func (h *ClientVersionHandler) respondErr(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "CHANNEL_NOT_FOUND", "message": "频道不存在"})
 	case errors.Is(err, service.ErrInvalidVersionFiles):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_VERSION_FILES", "message": err.Error()})
+	case errors.Is(err, service.ErrVersionNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "VERSION_NOT_FOUND", "message": "版本不存在"})
 	case errors.Is(err, service.ErrChecksumMismatch):
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "CHECKSUM_MISMATCH", "message": err.Error()})
 	default:
@@ -267,6 +338,10 @@ func (h *ClientVersionHandler) RegisterPublishRoutes(rg *gin.RouterGroup) {
 	{
 		ch.POST("/:id/files", h.PublishFile)
 		ch.POST("/:id/versions", h.PublishVersion)
+		// 版本历史 / 详情 / 回滚（FR-088）：仅管理面，与玩家拉取密钥端点物理隔离。
+		ch.GET("/:id/versions", h.ListVersions)
+		ch.GET("/:id/versions/:version", h.GetVersion)
+		ch.POST("/:id/rollback", h.RollbackVersion)
 	}
 }
 
