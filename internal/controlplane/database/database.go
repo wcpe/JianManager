@@ -55,6 +55,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.BanRecord{},
 		&model.AlertRule{},
 		&model.AlertEvent{},
+		&model.AlertChannel{},
 		&model.Schedule{},
 		&model.ScheduleExecutionLog{},
 		&model.Backup{},

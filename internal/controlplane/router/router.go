@@ -27,6 +27,7 @@ type Services struct {
 	Config        *service.ConfigService
 	Bot           *service.BotService
 	Alert         *service.AlertService
+	AlertChannel  *service.AlertChannelService
 	Schedule      *service.ScheduleService
 	Backup        *service.BackupService
 	BackupStorage *service.BackupStorageService
@@ -131,7 +132,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		groupHandler := NewGroupHandler(svcs.Group, svcs.Authz)
 		groupHandler.RegisterRoutes(protected)
 
-		alertHandler := NewAlertHandler(svcs.Alert)
+		alertHandler := NewAlertHandler(svcs.Alert, svcs.AlertChannel)
 		alertHandler.RegisterRoutes(protected)
 
 		scheduleHandler := NewScheduleHandler(svcs.Schedule)

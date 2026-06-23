@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -18,21 +19,25 @@ const (
 	onlineThreshold = 90 * time.Second
 )
 
-// AlertEvaluator 周期性评估告警规则，触发告警事件并通过 Webhook 通知。
+// AlertEvaluator 周期性评估「轮询型」告警规则（指标阈值 + 节点离线），触发事件经 AlertDispatcher 分发（FR-011 + FR-085）。
+// 事件驱动型触发（实例崩溃 / 日志关键字 / 玩家事件 / 备份失败）由 AlertEventTriggers 监听，不在此循环。
 type AlertEvaluator struct {
-	db      *gorm.DB
-	webhook *WebhookNotifier
-	stopCh  chan struct{}
-	running bool
-	mu      sync.Mutex
+	db         *gorm.DB
+	dispatcher *AlertDispatcher
+	stopCh     chan struct{}
+	running    bool
+	mu         sync.Mutex
+	// nodeOffline 记录上一轮已离线告警过的节点 ID，避免重复触发（恢复后清除）。
+	nodeOffline map[uint]bool
 }
 
 // NewAlertEvaluator 创建告警评估器。
-func NewAlertEvaluator(db *gorm.DB) *AlertEvaluator {
+func NewAlertEvaluator(db *gorm.DB, dispatcher *AlertDispatcher) *AlertEvaluator {
 	return &AlertEvaluator{
-		db:      db,
-		webhook: NewWebhookNotifier(),
-		stopCh:  make(chan struct{}),
+		db:          db,
+		dispatcher:  dispatcher,
+		stopCh:      make(chan struct{}),
+		nodeOffline: make(map[uint]bool),
 	}
 }
 
@@ -80,76 +85,99 @@ func (e *AlertEvaluator) Stop() {
 	slog.Info("告警评估器已停止")
 }
 
-// evaluate 单次评估：拉取在线节点指标，对比规则，触发/恢复告警。
+// evaluate 单次评估：指标阈值 + 节点离线。
 func (e *AlertEvaluator) evaluate() {
-	// 1. 拉取在线节点
-	var nodes []model.Node
-	cutoff := time.Now().Add(-onlineThreshold)
-	if err := e.db.Where("status = ? AND last_heartbeat > ?", model.NodeStatusOnline, cutoff).Find(&nodes).Error; err != nil {
-		slog.Error("告警评估：查询在线节点失败", "error", err)
-		return
-	}
-
-	if len(nodes) == 0 {
-		return
-	}
-
-	// 2. 拉取已启用的告警规则
 	var rules []model.AlertRule
 	if err := e.db.Where("enabled = ?", true).Find(&rules).Error; err != nil {
 		slog.Error("告警评估：查询告警规则失败", "error", err)
 		return
 	}
-
 	if len(rules) == 0 {
 		return
 	}
 
-	// 3. 逐规则评估
+	// 在线节点（指标阈值评估用）。
+	var onlineNodes []model.Node
+	cutoff := time.Now().Add(-onlineThreshold)
+	if err := e.db.Where("status = ? AND last_heartbeat > ?", model.NodeStatusOnline, cutoff).Find(&onlineNodes).Error; err != nil {
+		slog.Error("告警评估：查询在线节点失败", "error", err)
+		return
+	}
+
 	for i := range rules {
-		if rules[i].TargetType != "node" {
-			// 当前仅支持节点级告警
-			continue
+		rule := &rules[i]
+		switch ruleTriggerType(rule) {
+		case model.AlertTriggerMetric:
+			if rule.TargetType == "node" {
+				e.evaluateNodeMetricRule(rule, onlineNodes)
+			}
+		case model.AlertTriggerNodeOffline:
+			e.evaluateNodeOfflineRule(rule)
 		}
-		e.evaluateNodeRule(&rules[i], nodes)
 	}
 }
 
-// evaluateNodeRule 评估单条节点级告警规则。
-func (e *AlertEvaluator) evaluateNodeRule(rule *model.AlertRule, nodes []model.Node) {
+// evaluateNodeMetricRule 评估单条节点级指标阈值规则（FR-011），命中经 dispatcher 处理。
+func (e *AlertEvaluator) evaluateNodeMetricRule(rule *model.AlertRule, nodes []model.Node) {
 	for i := range nodes {
 		node := &nodes[i]
-		// 如果规则指定了 targetId，只评估该节点
 		if rule.TargetID != nil && *rule.TargetID != node.ID {
 			continue
 		}
-
 		value := getNodeMetric(node, rule.Metric)
 		if value < 0 {
-			// 不支持的指标
-			continue
+			continue // 不支持的指标
 		}
-
-		triggered := compareOp(value, rule.Operator, rule.Threshold)
-
-		// 查找该规则+节点的最新告警事件
-		var lastEvent model.AlertEvent
-		lastErr := e.db.Where("rule_id = ? AND target_id = ?", rule.ID, node.ID).
-			Order("fired_at DESC").First(&lastEvent).Error
-		hasLast := lastErr == nil
-
-		if triggered {
-			if hasLast && !lastEvent.Resolved {
-				// 已经在告警中，不重复触发
-				continue
-			}
-			// 触发新告警
-			e.fireEvent(rule, node.ID, value)
+		key := fmt.Sprintf("metric:%d:%d:%s", rule.ID, node.ID, rule.Metric)
+		if compareOp(value, rule.Operator, rule.Threshold) {
+			e.dispatcher.Fire(AlertTrigger{
+				Rule:       rule,
+				TargetID:   node.ID,
+				DedupKey:   key,
+				Value:      value,
+				Message:    fmt.Sprintf("节点 %s 指标 %s", node.Name, formatAlertMessage(rule.Metric, rule.Operator, rule.Threshold)),
+				Resolvable: true,
+			})
 		} else {
-			if hasLast && !lastEvent.Resolved {
-				// 恢复告警
-				e.resolveEvent(&lastEvent, value)
-			}
+			e.dispatcher.Resolve(rule, key, fmt.Sprintf("节点 %s 指标 %s 已恢复", node.Name, rule.Metric))
+		}
+	}
+}
+
+// evaluateNodeOfflineRule 评估节点离线规则（FR-085）。
+// 节点心跳超时被离线检测器标记 offline 后触发；恢复在线后发恢复通知。
+func (e *AlertEvaluator) evaluateNodeOfflineRule(rule *model.AlertRule) {
+	var nodes []model.Node
+	q := e.db.Model(&model.Node{})
+	if rule.TargetID != nil {
+		q = q.Where("id = ?", *rule.TargetID)
+	}
+	if err := q.Find(&nodes).Error; err != nil {
+		return
+	}
+	for i := range nodes {
+		node := &nodes[i]
+		key := fmt.Sprintf("node_offline:%d:%d", rule.ID, node.ID)
+		offline := node.Status == model.NodeStatusOffline
+		e.mu.Lock()
+		wasOffline := e.nodeOffline[node.ID]
+		e.mu.Unlock()
+		if offline && !wasOffline {
+			e.mu.Lock()
+			e.nodeOffline[node.ID] = true
+			e.mu.Unlock()
+			e.dispatcher.Fire(AlertTrigger{
+				Rule:       rule,
+				TargetID:   node.ID,
+				DedupKey:   key,
+				Message:    fmt.Sprintf("节点 %s 离线", node.Name),
+				Resolvable: true,
+			})
+		} else if !offline && wasOffline {
+			e.mu.Lock()
+			delete(e.nodeOffline, node.ID)
+			e.mu.Unlock()
+			e.dispatcher.Resolve(rule, key, fmt.Sprintf("节点 %s 已恢复在线", node.Name))
 		}
 	}
 }
@@ -157,11 +185,11 @@ func (e *AlertEvaluator) evaluateNodeRule(rule *model.AlertRule, nodes []model.N
 // getNodeMetric 从节点对象获取指标值。
 func getNodeMetric(node *model.Node, metric string) float64 {
 	switch metric {
-	case "cpu":
+	case "cpu", "cpu_usage":
 		return float64(node.CPUUsage)
-	case "memory":
+	case "memory", "memory_usage":
 		return float64(node.MemoryUsage)
-	case "disk":
+	case "disk", "disk_usage":
 		return float64(node.DiskUsage)
 	default:
 		return -1
@@ -186,112 +214,7 @@ func compareOp(value float64, operator string, threshold float64) bool {
 	}
 }
 
-// fireEvent 触发告警事件并发送 Webhook。
-func (e *AlertEvaluator) fireEvent(rule *model.AlertRule, targetID uint, value float64) {
-	msg := formatAlertMessage(rule.Metric, rule.Operator, rule.Threshold)
-
-	event := &model.AlertEvent{
-		RuleID:   rule.ID,
-		TargetID: targetID,
-		Value:    value,
-		Message:  msg,
-		Resolved: false,
-		FiredAt:  time.Now(),
-	}
-
-	if err := e.db.Create(event).Error; err != nil {
-		slog.Error("告警评估：创建告警事件失败", "ruleId", rule.UUID, "error", err)
-		return
-	}
-
-	slog.Warn("告警触发", "rule", rule.Name, "targetId", targetID,
-		"metric", rule.Metric, "value", value, "threshold", rule.Threshold)
-
-	// 发送 Webhook
-	if rule.NotifyType == "webhook" && rule.NotifyTarget != "" {
-		payload := WebhookPayload{
-			Event:   "alert_fired",
-			RuleID:  rule.UUID,
-			Target:  rule.TargetType,
-			Value:   value,
-			Message: msg,
-			Time:    time.Now().Format(time.RFC3339),
-		}
-		if err := e.webhook.Send(rule.NotifyTarget, payload); err != nil {
-			slog.Warn("告警 Webhook 发送失败", "ruleId", rule.UUID, "error", err)
-		}
-	}
-}
-
-// resolveEvent 标记告警事件为已恢复并发送 Webhook。
-func (e *AlertEvaluator) resolveEvent(event *model.AlertEvent, value float64) {
-	now := time.Now()
-	if err := e.db.Model(event).Updates(map[string]interface{}{
-		"resolved":    true,
-		"resolved_at": now,
-	}).Error; err != nil {
-		slog.Error("告警评估：标记恢复失败", "eventId", event.ID, "error", err)
-		return
-	}
-
-	// 查找规则以发送 Webhook
-	var rule model.AlertRule
-	if err := e.db.First(&rule, event.RuleID).Error; err != nil {
-		return
-	}
-
-	slog.Info("告警恢复", "rule", rule.Name, "targetId", event.TargetID, "value", value)
-
-	if rule.NotifyType == "webhook" && rule.NotifyTarget != "" {
-		payload := WebhookPayload{
-			Event:   "alert_resolved",
-			RuleID:  rule.UUID,
-			Target:  rule.TargetType,
-			Value:   value,
-			Message: "告警已恢复",
-			Time:    now.Format(time.RFC3339),
-		}
-		if err := e.webhook.Send(rule.NotifyTarget, payload); err != nil {
-			slog.Warn("告警恢复 Webhook 发送失败", "ruleId", rule.UUID, "error", err)
-		}
-	}
-}
-
-// formatAlertMessage 生成告警消息。
+// formatAlertMessage 生成指标告警消息片段。
 func formatAlertMessage(metric, operator string, threshold float64) string {
-	return metric + " " + operator + " " + formatFloat(threshold)
-}
-
-func formatFloat(v float64) string {
-	if v == float64(int64(v)) {
-		return formatInt(int64(v))
-	}
-	// 简单保留两位小数
-	whole := int64(v)
-	frac := int64((v - float64(whole)) * 100)
-	if frac < 0 {
-		frac = -frac
-	}
-	return formatInt(whole) + "." + formatInt(frac/10) + formatInt(frac%10)
-}
-
-func formatInt(v int64) string {
-	if v == 0 {
-		return "0"
-	}
-	neg := false
-	if v < 0 {
-		neg = true
-		v = -v
-	}
-	result := ""
-	for v > 0 {
-		d := v % 10
-		result = string(rune('0'+d)) + result
-		v /= 10
-	}
-	if neg {
-		result = "-" + result
-	}
-	return result
+	return fmt.Sprintf("%s %s %g", metric, operator, threshold)
 }

@@ -68,6 +68,7 @@ func main() {
 	configSvc := service.NewConfigService(db, pool)
 	botSvc := service.NewBotService(db, pool)
 	alertSvc := service.NewAlertService(db)
+	alertChannelSvc := service.NewAlertChannelService(db)
 	scheduleSvc := service.NewScheduleService(db)
 	backupSvc := service.NewBackupService(db, pool)
 	// 备份远程存储后端（FR-057）：注入备份服务，凭证经 ${ENV_VAR} 解析后下发 Worker。
@@ -131,10 +132,18 @@ func main() {
 	probeUpdateSvc := service.NewProbeUpdateService(db, pool, pluginBridgeSvc)
 	probeUpdateSvc.SetConnChecker(playerEventSvc.IsProbeConnected)
 
-	// 告警评估器：每 60s 检测节点指标，触发 Webhook 通知
-	alertEvaluator := service.NewAlertEvaluator(db)
+	// 告警分发器（FR-085）：所有触发源经此统一去抖聚合 / 静默 / 分级路由 / 落库 / 通知。
+	alertDispatcher := service.NewAlertDispatcher(db)
+	// 轮询型告警评估器：每 60s 评估指标阈值（FR-011）与节点离线（FR-085）。
+	alertEvaluator := service.NewAlertEvaluator(db, alertDispatcher)
 	alertEvaluator.Start()
 	defer alertEvaluator.Stop()
+	// 事件驱动告警触发器（FR-085）：实例崩溃 / 日志关键字 / 玩家事件 / 备份失败。
+	alertTriggers := service.NewAlertEventTriggers(db, alertDispatcher, eventSvc, playerEventSvc)
+	alertTriggers.Start()
+	defer alertTriggers.Stop()
+	// 备份失败转入告警体系（FR-085）。
+	backupSvc.SetBackupFailedHook(alertTriggers.OnBackupFailed)
 
 	// 实例事件服务：订阅 Worker 状态变更流并推送给前端 SSE
 	defer eventSvc.Stop()
@@ -179,6 +188,7 @@ func main() {
 		Config:        configSvc,
 		Bot:           botSvc,
 		Alert:         alertSvc,
+		AlertChannel:  alertChannelSvc,
 		Schedule:      scheduleSvc,
 		Backup:        backupSvc,
 		BackupStorage: backupStorageSvc,

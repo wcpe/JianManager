@@ -41,6 +41,9 @@ type BackupService struct {
 	mu      sync.Mutex
 	running bool
 	stopCh  chan struct{}
+
+	// onBackupFailed 备份失败回调（FR-085 告警触发源）；nil 表示未接入告警。
+	onBackupFailed func(backup *model.Backup, msg string)
 }
 
 // NewBackupService 创建备份服务。
@@ -56,6 +59,11 @@ func (s *BackupService) SetStorageService(ss *BackupStorageService) {
 // SetSettingsReader 注入平台设置读取器，启用按保留天数定期裁剪（FR-063）。
 func (s *BackupService) SetSettingsReader(r SettingsReader) {
 	s.settings = r
+}
+
+// SetBackupFailedHook 注入备份失败回调，供告警体系订阅备份失败触发（FR-085）。
+func (s *BackupService) SetBackupFailedHook(fn func(backup *model.Backup, msg string)) {
+	s.onBackupFailed = fn
 }
 
 // CreateOptions 创建备份的可选参数（向后兼容旧的仅 name 调用）。
@@ -359,10 +367,13 @@ func (s *BackupService) resolveInstanceNode(instanceID uint) (*model.Instance, *
 	return &instance, &node, nil
 }
 
-// failBackup 标记备份失败并记录日志。
+// failBackup 标记备份失败并记录日志，触发备份失败告警钩子（FR-085）。
 func (s *BackupService) failBackup(backup *model.Backup, msg string, err error) {
 	s.db.Model(backup).Update("status", model.BackupStatusFailed)
 	slog.Error("备份失败："+msg, "backupId", backup.UUID, "error", err)
+	if s.onBackupFailed != nil {
+		s.onBackupFailed(backup, msg)
+	}
 }
 
 // Start 启动按保留天数定期裁剪旧备份的后台巡检（FR-063：backup.retention_days 真生效）。

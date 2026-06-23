@@ -1,22 +1,27 @@
 package router
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/wcpe/JianManager/internal/controlplane/middleware"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// AlertHandler 告警路由处理器。
+// AlertHandler 告警路由处理器（FR-011 + FR-085）。
 type AlertHandler struct {
-	alertSvc *service.AlertService
+	alertSvc   *service.AlertService
+	channelSvc *service.AlertChannelService
 }
 
-func NewAlertHandler(alertSvc *service.AlertService) *AlertHandler {
-	return &AlertHandler{alertSvc: alertSvc}
+func NewAlertHandler(alertSvc *service.AlertService, channelSvc *service.AlertChannelService) *AlertHandler {
+	return &AlertHandler{alertSvc: alertSvc, channelSvc: channelSvc}
 }
+
+// ── 告警规则 ──
 
 func (h *AlertHandler) ListRules(c *gin.Context) {
 	rules, err := h.alertSvc.ListRules()
@@ -35,7 +40,7 @@ func (h *AlertHandler) CreateRule(c *gin.Context) {
 	}
 	rule, err := h.alertSvc.CreateRule(req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
 		return
 	}
 	c.JSON(http.StatusCreated, rule)
@@ -46,17 +51,18 @@ func (h *AlertHandler) UpdateRule(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	var req struct {
-		Enabled   *bool    `json:"enabled"`
-		Threshold *float64 `json:"threshold"`
-	}
+	var req service.UpdateRuleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
 		return
 	}
-	rule, err := h.alertSvc.UpdateRule(id, req.Enabled, req.Threshold)
+	rule, err := h.alertSvc.UpdateRule(id, req)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND"})
+		if errors.Is(err, service.ErrAlertRuleNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, rule)
@@ -74,24 +80,166 @@ func (h *AlertHandler) DeleteRule(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
 }
 
+// ── 告警事件 ──
+
 func (h *AlertHandler) ListEvents(c *gin.Context) {
-	var ruleID *uint
+	f := service.EventFilter{Limit: 200}
 	if v := c.Query("ruleId"); v != "" {
-		id, _ := strconv.ParseUint(v, 10, 64)
-		u := uint(id)
-		ruleID = &u
+		if id, err := strconv.ParseUint(v, 10, 64); err == nil {
+			u := uint(id)
+			f.RuleID = &u
+		}
 	}
-	var resolved *bool
 	if v := c.Query("resolved"); v != "" {
 		b := v == "true"
-		resolved = &b
+		f.Resolved = &b
 	}
-	events, err := h.alertSvc.ListEvents(ruleID, resolved)
+	if v := c.Query("acknowledged"); v != "" {
+		b := v == "true"
+		f.Acknowledged = &b
+	}
+	f.Level = c.Query("level")
+	f.TriggerType = c.Query("triggerType")
+	if v := c.Query("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			f.Limit = n
+		}
+	}
+	events, err := h.alertSvc.ListEvents(f)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
 		return
 	}
 	c.JSON(http.StatusOK, events)
+}
+
+// AcknowledgeEvent 确认/认领一条告警事件（FR-085）。
+func (h *AlertHandler) AcknowledgeEvent(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	uid, _ := c.Get(middleware.CtxUserID)
+	userID, _ := uid.(uint)
+	event, err := h.alertSvc.Acknowledge(id, userID)
+	if err != nil {
+		if errors.Is(err, service.ErrAlertEventNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+	c.JSON(http.StatusOK, event)
+}
+
+// MarkEventsRead 标记一条（:id）或全部（无 :id）告警事件为已读（FR-085）。
+func (h *AlertHandler) MarkEventsRead(c *gin.Context) {
+	var eventID uint
+	if v := c.Param("id"); v != "" {
+		if id, err := strconv.ParseUint(v, 10, 64); err == nil {
+			eventID = uint(id)
+		}
+	}
+	if err := h.alertSvc.MarkRead(eventID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "已标记已读"})
+}
+
+// UnreadCount 返回未读告警数（站内角标，FR-085）。
+func (h *AlertHandler) UnreadCount(c *gin.Context) {
+	n, err := h.alertSvc.UnreadCount()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"unread": n})
+}
+
+// ── 通知通道（FR-085）──
+
+func (h *AlertHandler) ListChannels(c *gin.Context) {
+	channels, err := h.channelSvc.List()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+	c.JSON(http.StatusOK, channels)
+}
+
+func (h *AlertHandler) CreateChannel(c *gin.Context) {
+	var req service.ChannelRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+	ch, err := h.channelSvc.Create(req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, ch)
+}
+
+func (h *AlertHandler) UpdateChannel(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	var req service.ChannelRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
+		return
+	}
+	ch, err := h.channelSvc.Update(id, req)
+	if err != nil {
+		if errors.Is(err, service.ErrAlertChannelNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND"})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, ch)
+}
+
+func (h *AlertHandler) DeleteChannel(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if err := h.channelSvc.Delete(id); err != nil {
+		if errors.Is(err, service.ErrAlertChannelNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, service.ErrAlertChannelInUse) {
+			c.JSON(http.StatusConflict, gin.H{"error": "CHANNEL_IN_USE", "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
+}
+
+// TestChannel 向通道发送测试通知（FR-085）。
+func (h *AlertHandler) TestChannel(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if err := h.channelSvc.TestSend(id); err != nil {
+		if errors.Is(err, service.ErrAlertChannelNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND"})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": "TEST_SEND_FAILED", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "测试通知已发送"})
 }
 
 func (h *AlertHandler) RegisterRoutes(rg *gin.RouterGroup) {
@@ -101,6 +249,26 @@ func (h *AlertHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		alerts.POST("/rules", h.CreateRule)
 		alerts.PUT("/rules/:id", h.UpdateRule)
 		alerts.DELETE("/rules/:id", h.DeleteRule)
+
 		alerts.GET("/events", h.ListEvents)
+		alerts.GET("/events/unread-count", h.UnreadCount)
+		alerts.POST("/events/:id/ack", h.AcknowledgeEvent)
+		alerts.POST("/events/:id/read", h.MarkEventsRead)
+		alerts.POST("/events/read-all", h.markAllRead)
+
+		alerts.GET("/channels", h.ListChannels)
+		alerts.POST("/channels", h.CreateChannel)
+		alerts.PUT("/channels/:id", h.UpdateChannel)
+		alerts.DELETE("/channels/:id", h.DeleteChannel)
+		alerts.POST("/channels/:id/test", h.TestChannel)
 	}
+}
+
+// markAllRead 标记全部未读为已读（read-all 路由，避免与 :id/read 冲突单独成端点）。
+func (h *AlertHandler) markAllRead(c *gin.Context) {
+	if err := h.alertSvc.MarkRead(0); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "全部已读"})
 }
