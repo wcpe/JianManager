@@ -317,6 +317,10 @@ func (s *SelfUpdateService) UpgradeNode(ctx context.Context, nodeID uint, wantVe
 	if err := s.db.First(&node, nodeID).Error; err != nil {
 		return "", "", fmt.Errorf("节点不存在: %w", err)
 	}
+	// 先校验更新源已配置——未配源对任何节点都无法升级，应先于节点在线状态报错。
+	if _, err := s.FetchFeed(ctx); err != nil {
+		return "", "", err
+	}
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
 		return "", "", ErrNodeOffline
