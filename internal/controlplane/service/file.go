@@ -245,6 +245,57 @@ func (s *FileService) DownloadArchive(ctx context.Context, instanceID uint, path
 	return stream, nil
 }
 
+// SearchHit 一条搜索命中（与 Worker SearchHit 对应，FR-074）。
+type SearchHit struct {
+	Path    string `json:"path"`
+	Line    int    `json:"line"`
+	Snippet string `json:"snippet"`
+}
+
+// SearchResult 一次搜索的结果（FR-074）。
+type SearchResult struct {
+	Hits      []SearchHit `json:"hits"`
+	Truncated bool        `json:"truncated"`
+}
+
+// SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
+// CP 仅经 gRPC 把查询转发到目标节点 Worker（索引是 Worker 本地资产，CP 不持有）。
+// mode 为 content（默认全文）或 filename（文件名快速打开）；maxResults<=0 时由 Worker 取默认。
+func (s *FileService) SearchFiles(instanceID uint, query, mode string, maxResults int) (*SearchResult, error) {
+	if mode != "filename" {
+		mode = "content"
+	}
+	instance, node, err := s.getInstanceAndNode(instanceID)
+	if err != nil {
+		return nil, err
+	}
+
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return nil, ErrNodeNotConnected
+	}
+
+	// 索引增量 + 大目录扫描可能略耗时，给较宽超时（仍受请求级取消约束）。
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.SearchFiles(ctx, &workerpb.SearchFilesRequest{
+		InstanceUuid: instance.UUID,
+		Query:        query,
+		Mode:         mode,
+		MaxResults:   int32(maxResults),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("搜索失败: %w", err)
+	}
+
+	hits := make([]SearchHit, len(resp.Hits))
+	for i, h := range resp.Hits {
+		hits[i] = SearchHit{Path: h.Path, Line: int(h.Line), Snippet: h.Snippet}
+	}
+	return &SearchResult{Hits: hits, Truncated: resp.Truncated}, nil
+}
+
 // validatePath 校验文件路径，防止路径遍历攻击。
 func validatePath(path string) error {
 	if strings.Contains(path, "..") {

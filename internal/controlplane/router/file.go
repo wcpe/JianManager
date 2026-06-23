@@ -330,6 +330,41 @@ func (h *FileHandler) Rename(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已重命名"})
 }
 
+// searchRequest 全文搜索 / 文件名快速打开请求（FR-074）。
+type searchRequest struct {
+	Query      string `json:"query" binding:"required"`
+	Mode       string `json:"mode"`       // content（默认）| filename
+	MaxResults int    `json:"maxResults"` // 命中上限；<=0 时由 Worker 取默认
+}
+
+// Search 全文搜索 / 文件名快速打开（FR-074，见 ADR-017）。
+// 经 gRPC 转发到目标节点 Worker 的本地倒排索引查询；CP 仅转发不持有索引。
+func (h *FileHandler) Search(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+
+	var req searchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+
+	res, err := h.fileSvc.SearchFiles(id, req.Query, req.Mode, req.MaxResults)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, res)
+}
+
 // Versions 列出某文件的历史版本（FR-051）。
 func (h *FileHandler) Versions(c *gin.Context) {
 	id, err := parseID(c)
@@ -436,6 +471,8 @@ func (h *FileHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		files.GET("/download", h.Download)
 		// FR-070 批量下载：选中多文件/目录即时打包 zip 流式返回（加性追加）。
 		files.POST("/archive", h.DownloadArchive)
+		// FR-074 全文搜索 / 文件名快速打开：转发到 Worker 本地倒排索引（加性追加）。
+		files.POST("/search", h.Search)
 		files.POST("/rename", h.Rename)
 		files.DELETE("", h.Delete)
 		// FR-051 文件版本：加性追加，不重排既有路由。
