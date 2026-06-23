@@ -6474,6 +6474,230 @@ func (x *QueryServerStateResponse) GetStateJson() string {
 	return ""
 }
 
+type GetVersionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetVersionRequest) Reset() {
+	*x = GetVersionRequest{}
+	mi := &file_proto_worker_proto_msgTypes[101]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetVersionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetVersionRequest) ProtoMessage() {}
+
+func (x *GetVersionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[101]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetVersionRequest.ProtoReflect.Descriptor instead.
+func (*GetVersionRequest) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{101}
+}
+
+type GetVersionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Version       string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"` // Worker 当前版本（internal/version.Version）
+	Os            string                 `protobuf:"bytes,2,opt,name=os,proto3" json:"os,omitempty"`           // runtime.GOOS（linux/windows/darwin）
+	Arch          string                 `protobuf:"bytes,3,opt,name=arch,proto3" json:"arch,omitempty"`       // runtime.GOARCH（amd64/arm64）
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetVersionResponse) Reset() {
+	*x = GetVersionResponse{}
+	mi := &file_proto_worker_proto_msgTypes[102]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetVersionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetVersionResponse) ProtoMessage() {}
+
+func (x *GetVersionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[102]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetVersionResponse.ProtoReflect.Descriptor instead.
+func (*GetVersionResponse) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{102}
+}
+
+func (x *GetVersionResponse) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *GetVersionResponse) GetOs() string {
+	if x != nil {
+		return x.Os
+	}
+	return ""
+}
+
+func (x *GetVersionResponse) GetArch() string {
+	if x != nil {
+		return x.Arch
+	}
+	return ""
+}
+
+type UpgradeWorkerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DownloadUrl   string                 `protobuf:"bytes,1,opt,name=download_url,json=downloadUrl,proto3" json:"download_url,omitempty"`        // 目标 Worker 二进制下载地址（CP 据 feed + 节点平台解析后下发）
+	Sha256        string                 `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`                                     // 期望 sha256（Worker 下载后校验，不符拒绝替换）
+	TargetVersion string                 `protobuf:"bytes,3,opt,name=target_version,json=targetVersion,proto3" json:"target_version,omitempty"`  // 目标版本号（仅记录/回报）
+	AllowInsecure bool                   `protobuf:"varint,4,opt,name=allow_insecure,json=allowInsecure,proto3" json:"allow_insecure,omitempty"` // 是否允许 http 下载源（默认仅 https；本地/内网自测可开）
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpgradeWorkerRequest) Reset() {
+	*x = UpgradeWorkerRequest{}
+	mi := &file_proto_worker_proto_msgTypes[103]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpgradeWorkerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpgradeWorkerRequest) ProtoMessage() {}
+
+func (x *UpgradeWorkerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[103]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpgradeWorkerRequest.ProtoReflect.Descriptor instead.
+func (*UpgradeWorkerRequest) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{103}
+}
+
+func (x *UpgradeWorkerRequest) GetDownloadUrl() string {
+	if x != nil {
+		return x.DownloadUrl
+	}
+	return ""
+}
+
+func (x *UpgradeWorkerRequest) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+func (x *UpgradeWorkerRequest) GetTargetVersion() string {
+	if x != nil {
+		return x.TargetVersion
+	}
+	return ""
+}
+
+func (x *UpgradeWorkerRequest) GetAllowInsecure() bool {
+	if x != nil {
+		return x.AllowInsecure
+	}
+	return false
+}
+
+type UpgradeWorkerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`                           // 替换成功、重启已计划
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`                                // 失败原因（下载失败/校验不符/替换失败）
+	FromVersion   string                 `protobuf:"bytes,3,opt,name=from_version,json=fromVersion,proto3" json:"from_version,omitempty"` // 升级前版本
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpgradeWorkerResponse) Reset() {
+	*x = UpgradeWorkerResponse{}
+	mi := &file_proto_worker_proto_msgTypes[104]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpgradeWorkerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpgradeWorkerResponse) ProtoMessage() {}
+
+func (x *UpgradeWorkerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[104]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpgradeWorkerResponse.ProtoReflect.Descriptor instead.
+func (*UpgradeWorkerResponse) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{104}
+}
+
+func (x *UpgradeWorkerResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *UpgradeWorkerResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *UpgradeWorkerResponse) GetFromVersion() string {
+	if x != nil {
+		return x.FromVersion
+	}
+	return ""
+}
+
 var File_proto_worker_proto protoreflect.FileDescriptor
 
 const file_proto_worker_proto_rawDesc = "" +
@@ -6979,7 +7203,21 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1c\n" +
 	"\tconnected\x18\x03 \x01(\bR\tconnected\x12\x1d\n" +
 	"\n" +
-	"state_json\x18\x04 \x01(\tR\tstateJson2\xdb\x1a\n" +
+	"state_json\x18\x04 \x01(\tR\tstateJson\"\x13\n" +
+	"\x11GetVersionRequest\"R\n" +
+	"\x12GetVersionResponse\x12\x18\n" +
+	"\aversion\x18\x01 \x01(\tR\aversion\x12\x0e\n" +
+	"\x02os\x18\x02 \x01(\tR\x02os\x12\x12\n" +
+	"\x04arch\x18\x03 \x01(\tR\x04arch\"\x9f\x01\n" +
+	"\x14UpgradeWorkerRequest\x12!\n" +
+	"\fdownload_url\x18\x01 \x01(\tR\vdownloadUrl\x12\x16\n" +
+	"\x06sha256\x18\x02 \x01(\tR\x06sha256\x12%\n" +
+	"\x0etarget_version\x18\x03 \x01(\tR\rtargetVersion\x12%\n" +
+	"\x0eallow_insecure\x18\x04 \x01(\bR\rallowInsecure\"j\n" +
+	"\x15UpgradeWorkerResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\x12!\n" +
+	"\ffrom_version\x18\x03 \x01(\tR\vfromVersion2\xee\x1b\n" +
 	"\rWorkerService\x12=\n" +
 	"\bRegister\x12\x17.worker.RegisterRequest\x1a\x18.worker.RegisterResponse\x12D\n" +
 	"\tHeartbeat\x12\x18.worker.HeartbeatRequest\x1a\x19.worker.HeartbeatResponse(\x010\x01\x12O\n" +
@@ -7030,7 +7268,10 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x0fStreamBotEvents\x12\x1e.worker.StreamBotEventsRequest\x1a\x10.worker.BotEvent0\x01\x12N\n" +
 	"\x12StreamPluginEvents\x12!.worker.StreamPluginEventsRequest\x1a\x13.worker.PluginEvent0\x01\x12X\n" +
 	"\x11SendPluginCommand\x12 .worker.SendPluginCommandRequest\x1a!.worker.SendPluginCommandResponse\x12U\n" +
-	"\x10QueryServerState\x12\x1f.worker.QueryServerStateRequest\x1a .worker.QueryServerStateResponseB,Z*github.com/wcpe/JianManager/proto/workerpbb\x06proto3"
+	"\x10QueryServerState\x12\x1f.worker.QueryServerStateRequest\x1a .worker.QueryServerStateResponse\x12C\n" +
+	"\n" +
+	"GetVersion\x12\x19.worker.GetVersionRequest\x1a\x1a.worker.GetVersionResponse\x12L\n" +
+	"\rUpgradeWorker\x12\x1c.worker.UpgradeWorkerRequest\x1a\x1d.worker.UpgradeWorkerResponseB,Z*github.com/wcpe/JianManager/proto/workerpbb\x06proto3"
 
 var (
 	file_proto_worker_proto_rawDescOnce sync.Once
@@ -7044,7 +7285,7 @@ func file_proto_worker_proto_rawDescGZIP() []byte {
 	return file_proto_worker_proto_rawDescData
 }
 
-var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 102)
+var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 106)
 var file_proto_worker_proto_goTypes = []any{
 	(*RegisterRequest)(nil),             // 0: worker.RegisterRequest
 	(*RegisterResponse)(nil),            // 1: worker.RegisterResponse
@@ -7147,13 +7388,17 @@ var file_proto_worker_proto_goTypes = []any{
 	(*SendPluginCommandResponse)(nil),   // 98: worker.SendPluginCommandResponse
 	(*QueryServerStateRequest)(nil),     // 99: worker.QueryServerStateRequest
 	(*QueryServerStateResponse)(nil),    // 100: worker.QueryServerStateResponse
-	nil,                                 // 101: worker.CreateInstanceRequest.EnvVarsEntry
+	(*GetVersionRequest)(nil),           // 101: worker.GetVersionRequest
+	(*GetVersionResponse)(nil),          // 102: worker.GetVersionResponse
+	(*UpgradeWorkerRequest)(nil),        // 103: worker.UpgradeWorkerRequest
+	(*UpgradeWorkerResponse)(nil),       // 104: worker.UpgradeWorkerResponse
+	nil,                                 // 105: worker.CreateInstanceRequest.EnvVarsEntry
 }
 var file_proto_worker_proto_depIdxs = []int32{
 	3,   // 0: worker.HeartbeatRequest.instances:type_name -> worker.InstanceState
 	4,   // 1: worker.HeartbeatRequest.instance_metrics:type_name -> worker.InstanceMetricSample
 	52,  // 2: worker.InstanceMetricSample.worlds:type_name -> worker.WorldMetric
-	101, // 3: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
+	105, // 3: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
 	7,   // 4: worker.CreateInstanceRequest.port_mappings:type_name -> worker.PortMapping
 	16,  // 5: worker.ListInstancesResponse.instances:type_name -> worker.InstanceInfo
 	23,  // 6: worker.ListFilesResponse.files:type_name -> worker.FileInfo
@@ -7219,53 +7464,57 @@ var file_proto_worker_proto_depIdxs = []int32{
 	94,  // 66: worker.WorkerService.StreamPluginEvents:input_type -> worker.StreamPluginEventsRequest
 	97,  // 67: worker.WorkerService.SendPluginCommand:input_type -> worker.SendPluginCommandRequest
 	99,  // 68: worker.WorkerService.QueryServerState:input_type -> worker.QueryServerStateRequest
-	1,   // 69: worker.WorkerService.Register:output_type -> worker.RegisterResponse
-	5,   // 70: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
-	8,   // 71: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
-	10,  // 72: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
-	10,  // 73: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
-	10,  // 74: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
-	10,  // 75: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
-	12,  // 76: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
-	13,  // 77: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
-	15,  // 78: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
-	18,  // 79: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
-	20,  // 80: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
-	22,  // 81: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
-	25,  // 82: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
-	27,  // 83: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
-	29,  // 84: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
-	31,  // 85: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
-	33,  // 86: worker.WorkerService.DownloadArchive:output_type -> worker.DownloadArchiveChunk
-	36,  // 87: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
-	41,  // 88: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
-	43,  // 89: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
-	45,  // 90: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
-	49,  // 91: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
-	51,  // 92: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
-	70,  // 93: worker.WorkerService.ListJDKs:output_type -> worker.ListJDKsResponse
-	72,  // 94: worker.WorkerService.InstallJDK:output_type -> worker.InstallJDKResponse
-	74,  // 95: worker.WorkerService.RemoveJDK:output_type -> worker.RemoveJDKResponse
-	76,  // 96: worker.WorkerService.DownloadCore:output_type -> worker.DownloadCoreResponse
-	78,  // 97: worker.WorkerService.DeployServerProbe:output_type -> worker.DeployServerProbeResponse
-	80,  // 98: worker.WorkerService.CloneWorkDir:output_type -> worker.CloneWorkDirResponse
-	83,  // 99: worker.WorkerService.ListImages:output_type -> worker.ListImagesResponse
-	85,  // 100: worker.WorkerService.PullImage:output_type -> worker.PullImageResponse
-	87,  // 101: worker.WorkerService.RemoveImage:output_type -> worker.RemoveImageResponse
-	91,  // 102: worker.WorkerService.CreateBackup:output_type -> worker.CreateBackupResponse
-	93,  // 103: worker.WorkerService.RestoreBackup:output_type -> worker.RestoreBackupResponse
-	54,  // 104: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
-	56,  // 105: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
-	58,  // 106: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
-	61,  // 107: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
-	63,  // 108: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
-	65,  // 109: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
-	67,  // 110: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
-	95,  // 111: worker.WorkerService.StreamPluginEvents:output_type -> worker.PluginEvent
-	98,  // 112: worker.WorkerService.SendPluginCommand:output_type -> worker.SendPluginCommandResponse
-	100, // 113: worker.WorkerService.QueryServerState:output_type -> worker.QueryServerStateResponse
-	69,  // [69:114] is the sub-list for method output_type
-	24,  // [24:69] is the sub-list for method input_type
+	101, // 69: worker.WorkerService.GetVersion:input_type -> worker.GetVersionRequest
+	103, // 70: worker.WorkerService.UpgradeWorker:input_type -> worker.UpgradeWorkerRequest
+	1,   // 71: worker.WorkerService.Register:output_type -> worker.RegisterResponse
+	5,   // 72: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
+	8,   // 73: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
+	10,  // 74: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
+	10,  // 75: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
+	10,  // 76: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
+	10,  // 77: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
+	12,  // 78: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
+	13,  // 79: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
+	15,  // 80: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
+	18,  // 81: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
+	20,  // 82: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
+	22,  // 83: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
+	25,  // 84: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
+	27,  // 85: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
+	29,  // 86: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
+	31,  // 87: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
+	33,  // 88: worker.WorkerService.DownloadArchive:output_type -> worker.DownloadArchiveChunk
+	36,  // 89: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
+	41,  // 90: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
+	43,  // 91: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
+	45,  // 92: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
+	49,  // 93: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
+	51,  // 94: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
+	70,  // 95: worker.WorkerService.ListJDKs:output_type -> worker.ListJDKsResponse
+	72,  // 96: worker.WorkerService.InstallJDK:output_type -> worker.InstallJDKResponse
+	74,  // 97: worker.WorkerService.RemoveJDK:output_type -> worker.RemoveJDKResponse
+	76,  // 98: worker.WorkerService.DownloadCore:output_type -> worker.DownloadCoreResponse
+	78,  // 99: worker.WorkerService.DeployServerProbe:output_type -> worker.DeployServerProbeResponse
+	80,  // 100: worker.WorkerService.CloneWorkDir:output_type -> worker.CloneWorkDirResponse
+	83,  // 101: worker.WorkerService.ListImages:output_type -> worker.ListImagesResponse
+	85,  // 102: worker.WorkerService.PullImage:output_type -> worker.PullImageResponse
+	87,  // 103: worker.WorkerService.RemoveImage:output_type -> worker.RemoveImageResponse
+	91,  // 104: worker.WorkerService.CreateBackup:output_type -> worker.CreateBackupResponse
+	93,  // 105: worker.WorkerService.RestoreBackup:output_type -> worker.RestoreBackupResponse
+	54,  // 106: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
+	56,  // 107: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
+	58,  // 108: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
+	61,  // 109: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
+	63,  // 110: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
+	65,  // 111: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
+	67,  // 112: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
+	95,  // 113: worker.WorkerService.StreamPluginEvents:output_type -> worker.PluginEvent
+	98,  // 114: worker.WorkerService.SendPluginCommand:output_type -> worker.SendPluginCommandResponse
+	100, // 115: worker.WorkerService.QueryServerState:output_type -> worker.QueryServerStateResponse
+	102, // 116: worker.WorkerService.GetVersion:output_type -> worker.GetVersionResponse
+	104, // 117: worker.WorkerService.UpgradeWorker:output_type -> worker.UpgradeWorkerResponse
+	71,  // [71:118] is the sub-list for method output_type
+	24,  // [24:71] is the sub-list for method input_type
 	24,  // [24:24] is the sub-list for extension type_name
 	24,  // [24:24] is the sub-list for extension extendee
 	0,   // [0:24] is the sub-list for field type_name
@@ -7282,7 +7531,7 @@ func file_proto_worker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_worker_proto_rawDesc), len(file_proto_worker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   102,
+			NumMessages:   106,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

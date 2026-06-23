@@ -117,6 +117,15 @@ service WorkerService {
   rpc SendPluginCommand(SendPluginCommandRequest) returns (SendPluginCommandResponse);
   // QueryServerState 查询子服全状态（在线列表/世界/TPS 等聚合），骨架，语义留下游。
   rpc QueryServerState(QueryServerStateRequest) returns (QueryServerStateResponse);
+
+  // === 面板自更新（FR-081，见 ADR-020 §4）===
+
+  // GetVersion 返回 Worker 当前版本与平台信息，供 CP 自更新检查比对。
+  rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
+  // UpgradeWorker 令 Worker 下载指定二进制 → sha256 校验 → 替换自身 → 计划重启。
+  // daemon 模式下不杀游戏服（ADR-003 wrapper 子进程与 Worker 主进程隔离，
+  // Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper）。
+  rpc UpgradeWorker(UpgradeWorkerRequest) returns (UpgradeWorkerResponse);
 }
 
 // === 注册 ===
@@ -843,4 +852,27 @@ message QueryServerStateResponse {
   string error = 2;
   bool connected = 3;       // 探针当前是否在线
   string state_json = 4;    // 聚合状态 JSON（下游填充）
+}
+
+// === 面板自更新（FR-081，见 ADR-020 §4） ===
+
+message GetVersionRequest {}
+
+message GetVersionResponse {
+  string version = 1; // Worker 当前版本（internal/version.Version）
+  string os = 2;      // runtime.GOOS（linux/windows/darwin）
+  string arch = 3;    // runtime.GOARCH（amd64/arm64）
+}
+
+message UpgradeWorkerRequest {
+  string download_url = 1;   // 目标 Worker 二进制下载地址（CP 据 feed + 节点平台解析后下发）
+  string sha256 = 2;         // 期望 sha256（Worker 下载后校验，不符拒绝替换）
+  string target_version = 3; // 目标版本号（仅记录/回报）
+  bool allow_insecure = 4;   // 是否允许 http 下载源（默认仅 https；本地/内网自测可开）
+}
+
+message UpgradeWorkerResponse {
+  bool success = 1;        // 替换成功、重启已计划
+  string error = 2;        // 失败原因（下载失败/校验不符/替换失败）
+  string from_version = 3; // 升级前版本
 }

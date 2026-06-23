@@ -64,6 +64,8 @@ const (
 	WorkerService_StreamPluginEvents_FullMethodName   = "/worker.WorkerService/StreamPluginEvents"
 	WorkerService_SendPluginCommand_FullMethodName    = "/worker.WorkerService/SendPluginCommand"
 	WorkerService_QueryServerState_FullMethodName     = "/worker.WorkerService/QueryServerState"
+	WorkerService_GetVersion_FullMethodName           = "/worker.WorkerService/GetVersion"
+	WorkerService_UpgradeWorker_FullMethodName        = "/worker.WorkerService/UpgradeWorker"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
@@ -164,6 +166,12 @@ type WorkerServiceClient interface {
 	SendPluginCommand(ctx context.Context, in *SendPluginCommandRequest, opts ...grpc.CallOption) (*SendPluginCommandResponse, error)
 	// QueryServerState 查询子服全状态（在线列表/世界/TPS 等聚合），骨架，语义留下游。
 	QueryServerState(ctx context.Context, in *QueryServerStateRequest, opts ...grpc.CallOption) (*QueryServerStateResponse, error)
+	// GetVersion 返回 Worker 当前版本与平台信息，供 CP 自更新检查比对。
+	GetVersion(ctx context.Context, in *GetVersionRequest, opts ...grpc.CallOption) (*GetVersionResponse, error)
+	// UpgradeWorker 令 Worker 下载指定二进制 → sha256 校验 → 替换自身 → 计划重启。
+	// daemon 模式下不杀游戏服（ADR-003 wrapper 子进程与 Worker 主进程隔离，
+	// Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper）。
+	UpgradeWorker(ctx context.Context, in *UpgradeWorkerRequest, opts ...grpc.CallOption) (*UpgradeWorkerResponse, error)
 }
 
 type workerServiceClient struct {
@@ -663,6 +671,26 @@ func (c *workerServiceClient) QueryServerState(ctx context.Context, in *QuerySer
 	return out, nil
 }
 
+func (c *workerServiceClient) GetVersion(ctx context.Context, in *GetVersionRequest, opts ...grpc.CallOption) (*GetVersionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetVersionResponse)
+	err := c.cc.Invoke(ctx, WorkerService_GetVersion_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) UpgradeWorker(ctx context.Context, in *UpgradeWorkerRequest, opts ...grpc.CallOption) (*UpgradeWorkerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpgradeWorkerResponse)
+	err := c.cc.Invoke(ctx, WorkerService_UpgradeWorker_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WorkerServiceServer is the server API for WorkerService service.
 // All implementations must embed UnimplementedWorkerServiceServer
 // for forward compatibility.
@@ -761,6 +789,12 @@ type WorkerServiceServer interface {
 	SendPluginCommand(context.Context, *SendPluginCommandRequest) (*SendPluginCommandResponse, error)
 	// QueryServerState 查询子服全状态（在线列表/世界/TPS 等聚合），骨架，语义留下游。
 	QueryServerState(context.Context, *QueryServerStateRequest) (*QueryServerStateResponse, error)
+	// GetVersion 返回 Worker 当前版本与平台信息，供 CP 自更新检查比对。
+	GetVersion(context.Context, *GetVersionRequest) (*GetVersionResponse, error)
+	// UpgradeWorker 令 Worker 下载指定二进制 → sha256 校验 → 替换自身 → 计划重启。
+	// daemon 模式下不杀游戏服（ADR-003 wrapper 子进程与 Worker 主进程隔离，
+	// Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper）。
+	UpgradeWorker(context.Context, *UpgradeWorkerRequest) (*UpgradeWorkerResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }
 
@@ -905,6 +939,12 @@ func (UnimplementedWorkerServiceServer) SendPluginCommand(context.Context, *Send
 }
 func (UnimplementedWorkerServiceServer) QueryServerState(context.Context, *QueryServerStateRequest) (*QueryServerStateResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method QueryServerState not implemented")
+}
+func (UnimplementedWorkerServiceServer) GetVersion(context.Context, *GetVersionRequest) (*GetVersionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetVersion not implemented")
+}
+func (UnimplementedWorkerServiceServer) UpgradeWorker(context.Context, *UpgradeWorkerRequest) (*UpgradeWorkerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpgradeWorker not implemented")
 }
 func (UnimplementedWorkerServiceServer) mustEmbedUnimplementedWorkerServiceServer() {}
 func (UnimplementedWorkerServiceServer) testEmbeddedByValue()                       {}
@@ -1698,6 +1738,42 @@ func _WorkerService_QueryServerState_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_GetVersion_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetVersionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).GetVersion(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_GetVersion_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).GetVersion(ctx, req.(*GetVersionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_UpgradeWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpgradeWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).UpgradeWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_UpgradeWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).UpgradeWorker(ctx, req.(*UpgradeWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkerService_ServiceDesc is the grpc.ServiceDesc for WorkerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1864,6 +1940,14 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "QueryServerState",
 			Handler:    _WorkerService_QueryServerState_Handler,
+		},
+		{
+			MethodName: "GetVersion",
+			Handler:    _WorkerService_GetVersion_Handler,
+		},
+		{
+			MethodName: "UpgradeWorker",
+			Handler:    _WorkerService_UpgradeWorker_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
