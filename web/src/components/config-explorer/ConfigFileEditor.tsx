@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import CodeEditor from '@/components/explorer/editor/CodeEditor'
+import EditorShortcutsHelp from '@/components/explorer/editor/EditorShortcutsHelp'
 import {
   useConfigRead,
   useWriteConfig,
@@ -168,6 +169,7 @@ export default function ConfigFileEditor({
               {readQ.data.validation.valid ? 'valid' : 'invalid'}
             </Badge>
           )}
+          {mode === 'text' && <EditorShortcutsHelp />}
           <Button size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs" onClick={onOpenVersions}>
             <History className="size-3.5" /> {t('configExplorer.versions')}
           </Button>

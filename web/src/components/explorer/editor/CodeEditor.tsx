@@ -21,6 +21,7 @@ import {
   bracketMatching,
 } from '@codemirror/language'
 import { languageExtensionFor } from '../language'
+import { ideExtensions } from './ide-extensions'
 
 /**
  * 共享 CodeMirror 6 编辑器（FR-070 编辑器基础）。
@@ -30,7 +31,9 @@ import { languageExtensionFor } from '../language'
  * - Ctrl+S / Cmd+S 拦截 → preventDefault 并回调 onSave（接 FR-051 改前快照/版本）；
  * - 行号 / 撤销重做 / 括号匹配 / 自动缩进 / 折行。
  *
- * FR-073 迷你 IDE 增强会在此基础上叠加搜索替换/批量注释等扩展，故对外暴露稳定 props。
+ * FR-073 迷你 IDE 增强在此基础上叠加（见 ide-extensions.ts）：搜索/替换面板（Ctrl+F，
+ * 含正则/全词/全部替换）、删除一行/复制一行/上下移动一行/选中整行、按文件类型的
+ * 批量注释/取消注释，且所有键位避开 Ctrl+S（保存仍走下方 saveKeymap）。
  */
 interface CodeEditorProps {
   /** 文档内容。 */
@@ -92,6 +95,9 @@ export default function CodeEditor({
       syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
       // 保存键放在默认键位之前，保证 Mod-s 优先被它消费。
       saveKeymap,
+      // FR-073 迷你 IDE 增强（搜索/替换、行操作、批量注释）。
+      // 置于默认键位之前，保证 Mod-/ 等专属键位优先；其内部不绑定 Mod-s，不与保存冲突。
+      ...ideExtensions(filename),
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
       ...languageExtensionFor(filename),
       EditorState.readOnly.of(readOnly),
@@ -103,6 +109,10 @@ export default function CodeEditor({
       EditorView.theme({
         '&': { height: '100%', fontSize: '13px' },
         '.cm-scroller': { fontFamily: 'Consolas, Monaco, monospace', overflow: 'auto' },
+        // 搜索/替换面板（FR-073）：紧凑排版，按钮可换行，短宽度面板不溢出。
+        '.cm-panels': { fontSize: '12px' },
+        '.cm-search': { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px' },
+        '.cm-search label': { display: 'inline-flex', alignItems: 'center', gap: '2px' },
       }),
     ]
 

@@ -615,6 +615,20 @@
     "loadFailed": "Failed to load versions",
     "selectTwo": "Select two versions to compare"
   },
+  "editorIde": {
+    "shortcuts": "Shortcuts",
+    "search": "Find",
+    "replace": "Find & Replace",
+    "undo": "Undo",
+    "redo": "Redo",
+    "deleteLine": "Delete line",
+    "copyLine": "Duplicate line",
+    "moveLine": "Move line up / down",
+    "selectLine": "Select line",
+    "toggleComment": "Toggle line comment",
+    "toggleBlockComment": "Toggle block comment",
+    "save": "Save (history)"
+  },
   "plugins": {
     "tab": "Plugins",
     "title": "Plugins / Mods",

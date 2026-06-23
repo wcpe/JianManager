@@ -17,6 +17,7 @@ import {
   type FileInfo,
 } from '@/api/files'
 import CodeEditor from './editor/CodeEditor'
+import EditorShortcutsHelp from './editor/EditorShortcutsHelp'
 import FileTree from './FileTree'
 import FileList from './FileList'
 import Toolbar from './Toolbar'
@@ -526,6 +527,7 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
                     {dirty && <span className="ml-1 text-amber-500">•</span>}
                   </span>
                   <div className="flex items-center gap-1">
+                    <EditorShortcutsHelp />
                     <Button
                       size="sm"
                       variant="ghost"
