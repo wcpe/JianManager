@@ -20,11 +20,23 @@ import (
 // 与 internal/worker/heartbeat 中的常量保持一致。
 const nodeSecretHeader = "node-secret"
 
+// enrollTokenHeader 注册请求中携带 enrollment token 的 gRPC metadata header 名（FR-080，见 ADR-020）。
+// 与 internal/worker/register 中的常量保持一致。token 经 metadata 传递、不改 proto。
+const enrollTokenHeader = "enroll-token"
+
 // MetricIngester 把心跳负载里的节点/实例指标落库为时序样本（FR-060）。
 // 在 grpc 包内以接口声明、由 service.MetricService 实现，避免 grpc→service 反向依赖
 // （service 已 import grpc）；接口只引用中立的 workerpb，无循环。
 type MetricIngester interface {
 	IngestHeartbeat(req *workerpb.HeartbeatRequest) error
+}
+
+// EnrollmentValidator 校验并消费 enrollment token（FR-080，见 ADR-020）。
+// 在 grpc 包内以接口声明、由 service.EnrollTokenService 实现，避免 grpc→service 反向依赖。
+// ConsumeForNewNode 仅当 token 当前有效（未消费/未吊销/未过期）时原子消费、返回 nil；
+// 否则返回非 nil（注册据此拒绝新节点）。
+type EnrollmentValidator interface {
+	ConsumeForNewNode(plaintext, nodeUUID string) error
 }
 
 // ControlPlaneHandler Control Plane 侧的 gRPC 处理器。
@@ -33,8 +45,9 @@ type ControlPlaneHandler struct {
 	workerpb.WorkerServiceServer
 	db              *gorm.DB
 	pool            *ClientPool
-	onWorkerConnect func(nodeUUID string) // Worker 注册成功后回调
-	metrics         MetricIngester        // 时序指标入库（nil 时心跳不落时序）
+	onWorkerConnect func(nodeUUID string)  // Worker 注册成功后回调
+	metrics         MetricIngester         // 时序指标入库（nil 时心跳不落时序）
+	enroll          EnrollmentValidator    // enrollment token 校验消费（nil 时退化为 FR-004 自助注册）
 }
 
 // NewControlPlaneHandler 创建处理器。
@@ -52,6 +65,13 @@ func (h *ControlPlaneHandler) SetMetricIngester(m MetricIngester) {
 	h.metrics = m
 }
 
+// SetEnrollmentValidator 注入 enrollment token 校验器（FR-080，见 ADR-020）。
+// 注入后：新节点（name 未命中）注册必须携带有效 enrollment token；
+// 不注入则退化为 FR-004 行为（任何 name 均可自助注册），保证开发环境与既有部署零配置可用。
+func (h *ControlPlaneHandler) SetEnrollmentValidator(v EnrollmentValidator) {
+	h.enroll = v
+}
+
 // Register 处理 Worker Node 注册。
 func (h *ControlPlaneHandler) Register(ctx context.Context, req *workerpb.RegisterRequest) (*workerpb.RegisterResponse, error) {
 	// 查找已有节点（按名称匹配）
@@ -59,9 +79,23 @@ func (h *ControlPlaneHandler) Register(ctx context.Context, req *workerpb.Regist
 	err := h.db.Where("name = ?", req.Name).First(&node).Error
 
 	if err == gorm.ErrRecordNotFound {
-		// 新节点，创建记录
+		// 新节点首次落库：必须凭有效 enrollment token 准入（FR-080，见 ADR-020）。
+		// token 经 metadata 携带、CP 原子消费（一次性）。校验失败回 PermissionDenied，
+		// Worker 据此明确报错退出、不重试。未注入校验器（开发/既有部署零配置）则退化为自助注册。
+		newUUID := uuid.New().String()
+		if h.enroll != nil {
+			enrollToken := enrollTokenFromContext(ctx)
+			if cerr := h.enroll.ConsumeForNewNode(enrollToken, newUUID); cerr != nil {
+				slog.Warn("新节点注册被拒：enrollment token 无效", "name", req.Name)
+				return nil, status.Errorf(codes.PermissionDenied,
+					"新节点注册需要有效的 enrollment token（请在面板「添加节点」重新生成）")
+			}
+		}
+
+		// 创建记录
 		now := time.Now()
 		node = model.Node{
+			UUID:          newUUID,
 			Name:          req.Name,
 			Host:          req.Host,
 			GRPCPort:      int(req.GrpcPort),
@@ -121,6 +155,18 @@ func (h *ControlPlaneHandler) Register(ctx context.Context, req *workerpb.Regist
 		NodeUuid:   node.UUID,
 		NodeSecret: node.Secret,
 	}, nil
+}
+
+// enrollTokenFromContext 从 gRPC metadata 取 enrollment token 明文（FR-080）；缺失返回空串。
+func enrollTokenFromContext(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	if vals := md.Get(enrollTokenHeader); len(vals) > 0 {
+		return vals[0]
+	}
+	return ""
 }
 
 // Heartbeat 处理 Worker Node 心跳（双向流）。

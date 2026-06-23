@@ -46,6 +46,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.GroupQuota{},
 		&model.Node{},
 		&model.NodeJDK{},
+		&model.NodeEnrollToken{},
 		&model.Instance{},
 		&model.GroupInstance{},
 		&model.ServerRegistration{},
