@@ -22,6 +22,7 @@ const TemplatesPage = lazy(() => import('@/pages/TemplatesPage'))
 const RuntimeAssetsPage = lazy(() => import('@/pages/RuntimeAssetsPage'))
 const AlertsPage = lazy(() => import('@/pages/AlertsPage'))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
+const StoragePage = lazy(() => import('@/pages/StoragePage'))
 const LogsPage = lazy(() => import('@/pages/LogsPage'))
 const ClientChannelsPage = lazy(() => import('@/pages/ClientChannelsPage'))
 /**
@@ -71,6 +72,7 @@ export default function Workspace() {
           <Route path="audit" element={<AuditPage />} />
           <Route path="client-channels" element={<ClientChannelsPage />} />
           <Route path="logs" element={<LogsPage />} />
+          <Route path="storage" element={<StoragePage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="*" element={<WorkspaceEmpty />} />
         </Routes>

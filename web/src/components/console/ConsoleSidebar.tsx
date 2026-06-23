@@ -14,6 +14,7 @@ import {
   DownloadCloud,
   FileClock,
   Gamepad2,
+  HardDrive,
   Layers,
   LayoutDashboard,
   LayoutTemplate,
@@ -94,6 +95,7 @@ const NAV_GROUPS: NavGroup[] = [
     children: [
       { to: '/users', labelKey: 'nav.users', icon: User },
       { to: '/groups', labelKey: 'nav.groups', icon: UsersRound },
+      { to: '/storage', labelKey: 'nav.storage', icon: HardDrive },
       { to: '/audit', labelKey: 'nav.audit', icon: FileClock },
       { to: '/settings', labelKey: 'nav.systemSettings', icon: Settings2 },
     ],

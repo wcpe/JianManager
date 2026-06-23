@@ -47,3 +47,32 @@ export function sortDirsByUsage(dirs: DirUsage[]): DirUsage[] {
     return y.size - x.size
   })
 }
+
+/** 面包屑一段：展示名 + 跳转该层用的相对路径（根为空串）。 */
+export interface Crumb {
+  name: string
+  path: string
+}
+
+/**
+ * 由当前相对路径构造只读浏览面包屑。空路径仅含根段。
+ * 各段 path 为「从根到该段」的累积相对路径（以「/」分隔，供 /storage/files?path= 直接使用）。
+ * rootName 为根段展示名（由调用方传入已 i18n 文案）。
+ */
+export function buildCrumbs(rel: string, rootName: string): Crumb[] {
+  const crumbs: Crumb[] = [{ name: rootName, path: '' }]
+  const trimmed = rel.replace(/^\/+|\/+$/g, '')
+  if (trimmed === '') return crumbs
+  let acc = ''
+  for (const seg of trimmed.split('/')) {
+    if (seg === '') continue
+    acc = acc === '' ? seg : `${acc}/${seg}`
+    crumbs.push({ name: seg, path: acc })
+  }
+  return crumbs
+}
+
+/** 拼接父相对路径与子项名为新的相对路径（根为空串）。 */
+export function joinStoragePath(parent: string, name: string): string {
+  return parent === '' ? name : `${parent}/${name}`
+}
