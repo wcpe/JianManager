@@ -1216,7 +1216,7 @@
 ### 里程碑 M3 — Docker 容器化 + 资源限额 + 部署/自更新（对齐 MCSManager 运营底座）
 
 #### FR-078: Docker 容器化实例运行 + 镜像管理 + 端口映射
-- **状态**: 📋 todo
+- **状态**: 🔨 in-progress
 - **优先级**: P1
 - **描述**: dockerStrategy 真实现（取代当前 ErrNotImplemented 占位），Worker 经本机 Docker SDK 管容器，镜像管理 + 端口映射
 - **验收标准**:
