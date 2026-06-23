@@ -82,23 +82,24 @@ func TestBackoffDelay(t *testing.T) {
 }
 
 // TestNewStrategy_Routing 验证 Manager 按 ProcessType 路由到正确策略。
-// direct → *directStrategy；daemon → *daemonStrategy；docker/rcon → ErrNotImplemented。
+// direct → *directStrategy；daemon → *daemonStrategy；docker → *dockerStrategy（ADR-019）；rcon/未知 → ErrNotImplemented。
 func TestNewStrategy_Routing(t *testing.T) {
 	m := NewManager(t.TempDir())
 
 	tests := []struct {
-		name        string
-		pt          ProcessType
-		wantErr     bool
-		wantDaemon  bool
-		wantDirect  bool
+		name       string
+		pt         ProcessType
+		wantErr    bool
+		wantDaemon bool
+		wantDirect bool
+		wantDocker bool
 	}{
-		{"direct", ProcessTypeDirect, false, false, true},
-		{"empty defaults direct", "", false, false, true},
-		{"daemon", ProcessTypeDaemon, false, true, false},
-		{"docker not implemented", ProcessTypeDocker, true, false, false},
-		{"rcon not implemented", ProcessTypeRCON, true, false, false},
-		{"unknown not implemented", ProcessType("bogus"), true, false, false},
+		{"direct", ProcessTypeDirect, false, false, true, false},
+		{"empty defaults direct", "", false, false, true, false},
+		{"daemon", ProcessTypeDaemon, false, true, false, false},
+		{"docker", ProcessTypeDocker, false, false, false, true},
+		{"rcon not implemented", ProcessTypeRCON, true, false, false, false},
+		{"unknown not implemented", ProcessType("bogus"), true, false, false, false},
 	}
 
 	for _, tt := range tests {
@@ -118,6 +119,10 @@ func TestNewStrategy_Routing(t *testing.T) {
 				_, ok := s.(*directStrategy)
 				assert.True(t, ok, "期望 directStrategy")
 			}
+			if tt.wantDocker {
+				_, ok := s.(*dockerStrategy)
+				assert.True(t, ok, "期望 dockerStrategy")
+			}
 			if s != nil {
 				_ = s.Close()
 			}
@@ -125,8 +130,10 @@ func TestNewStrategy_Routing(t *testing.T) {
 	}
 }
 
-// TestManager_DockerStartFails docker 策略启动应返回未实现错误。
-func TestManager_DockerStartFails(t *testing.T) {
+// TestManager_DockerStartWithoutImageFails docker 策略缺镜像名时启动失败并置 CRASHED。
+// docker 模式已落地（ADR-019），但未提供 image 时无法创建容器，按启动失败处理。
+// 注：完整的 docker 生命周期（拉镜像/创建/attach/停止）经注入 fake 客户端在 docker_test.go 覆盖。
+func TestManager_DockerStartWithoutImageFails(t *testing.T) {
 	m := NewManager(t.TempDir())
 	err := m.Create("inst-d", "Docker", "echo hi", "", ".", nil, false, ProcessTypeDocker, "", "", 0, 0)
 	assert.NoError(t, err)
@@ -134,7 +141,7 @@ func TestManager_DockerStartFails(t *testing.T) {
 	err = m.Start("inst-d")
 	assert.Error(t, err)
 
-	// 状态应为 CRASHED（启动失败）
+	// 状态应为 CRASHED（缺镜像，启动失败）
 	st, _ := m.GetState("inst-d")
 	assert.Equal(t, StateCrashed, st)
 }

@@ -47,6 +47,22 @@ type CommandSpec struct {
 	// GracefulStopTimeoutSeconds 是优雅停止超时（秒，CP 从平台设置下发，FR-063）。daemon 策略
 	// 透传到 wrapper 做超时强杀兜底；0=未指定，wrapper 回退 env/默认。值在启动时定型。
 	GracefulStopTimeoutSeconds int
+	// Image 是 docker 模式的容器镜像引用（如 itzg/minecraft-server:latest）。
+	// 仅 docker 策略使用；缺失时 docker 启动报错（ADR-019）。
+	Image string
+	// PortMappings 是 docker 模式的容器端口↔宿主端口映射（宿主端口来自 FR-032 端口池）。
+	// 仅 docker 策略使用，发布容器内端口到宿主（ADR-019）。
+	PortMappings []PortMapping
+}
+
+// PortMapping 描述一条容器端口到宿主端口的发布关系（docker 模式，ADR-019）。
+type PortMapping struct {
+	// ContainerPort 容器内监听端口（由镜像约定，如 MC 容器内 25565）。
+	ContainerPort int
+	// HostPort 宿主发布端口（来自 FR-032 端口池分配）。
+	HostPort int
+	// Protocol 端口协议，tcp（默认）或 udp（如 MC query）。
+	Protocol string
 }
 
 // pathKey 当前平台的 PATH 变量名：Windows 使用 Path，Unix 使用 PATH。
@@ -140,15 +156,17 @@ type IProcessCommand interface {
 }
 
 // newStrategy 按 ProcessType 构造对应策略。
-// direct 走 Worker 直连子进程；daemon 走 wrapper 子进程隔离；
-// docker/rcon 暂未实现，返回 ErrNotImplemented，避免误用未落地能力。
+// direct 走 Worker 直连子进程；daemon 走 wrapper 子进程隔离；docker 走本机 Docker 容器（ADR-019）；
+// rcon 暂未实现，返回 ErrNotImplemented，避免误用未落地能力。
 func (m *Manager) newStrategy(spec CommandSpec) (IProcessCommand, error) {
 	switch spec.ProcessType {
 	case ProcessTypeDirect, "":
 		return newDirectStrategy(m, spec), nil
 	case ProcessTypeDaemon:
 		return newDaemonStrategy(m, spec), nil
-	case ProcessTypeDocker, ProcessTypeRCON:
+	case ProcessTypeDocker:
+		return newDockerStrategy(m, spec), nil
+	case ProcessTypeRCON:
 		return nil, ErrNotImplemented
 	default:
 		return nil, ErrNotImplemented

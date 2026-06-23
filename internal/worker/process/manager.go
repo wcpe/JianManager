@@ -43,7 +43,11 @@ type Instance struct {
 	// GracefulStopTimeoutSeconds 是优雅停止超时（秒，CP 从平台设置下发，FR-063）。daemon 启动时
 	// 透传到 wrapper 做超时强杀兜底；0=未指定，wrapper 回退 env/默认。值在启动时随 spec 定型。
 	GracefulStopTimeoutSeconds int
-	State                      InstanceState
+	// Image 是 docker 模式的容器镜像引用（ADR-019）；仅 docker 实例使用。
+	Image string
+	// PortMappings 是 docker 模式的容器端口↔宿主端口映射（ADR-019）；仅 docker 实例使用。
+	PortMappings []PortMapping
+	State        InstanceState
 	AutoRestart                bool
 	CrashCount                 int
 	// strategy 是该实例的启动策略，按 ProcessType 选择。
@@ -191,6 +195,18 @@ func (m *Manager) SetGracefulStopTimeout(uuid string, seconds int) {
 	}
 }
 
+// SetDockerConfig 设置已登记实例的 docker 镜像与端口映射（ADR-019）。
+// 由 CP 在创建/重注册 docker 实例时下发，使镜像/端口对下一次启动生效（值在 Start 时随 spec 定型）。
+// 实例不存在则忽略（与 SetGracefulStopTimeout 容错风格一致，不阻塞启动路径）。
+func (m *Manager) SetDockerConfig(uuid, image string, mappings []PortMapping) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if inst, ok := m.instances[uuid]; ok {
+		inst.Image = image
+		inst.PortMappings = mappings
+	}
+}
+
 // SetRCONConfig 设置实例的 RCON 配置。
 func (m *Manager) SetRCONConfig(uuid string, port int, password string) error {
 	m.mu.Lock()
@@ -261,6 +277,8 @@ func (m *Manager) Start(uuid string) error {
 			ProcessType:                inst.processType,
 			ProbePort:                  inst.ProbePort,
 			GracefulStopTimeoutSeconds: inst.GracefulStopTimeoutSeconds,
+			Image:                      inst.Image,
+			PortMappings:               inst.PortMappings,
 		}
 		strategy, err := m.newStrategy(spec)
 		if err != nil {
