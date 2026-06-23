@@ -51,6 +51,7 @@ type Services struct {
 	ClientVersion      *service.ClientVersionService
 	ClientMachine      *service.ClientMachineService
 	ClientDistTracking *service.ClientDistTrackingService
+	ClientIPGuard      *service.ClientIPGuardService
 	RuntimeAssets      *service.RuntimeAssetsService
 	EnrollToken        *service.EnrollTokenService
 	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
@@ -78,7 +79,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	// 故挂在 api（公网、仅限流）而非 protected（JWT）。内容可信靠 manifest 签名而非密钥。
 	if svcs.ClientVersion != nil && svcs.ClientChannel != nil {
 		clientConsumerHandler := NewClientVersionHandler(svcs.ClientVersion, svcs.ClientChannel, svcs.Audit, svcs.ClientMachine, svcs.ClientDistTracking)
-		clientConsumerHandler.RegisterConsumerRoutes(api)
+		// L7 防护（FR-096，见 ADR-023）：消费端点独立子组挂 IP 黑白名单 + per-IP 限流 + 并发信号量，
+		// 不影响其它 api 路由。L3/L4 容量型 DDoS 靠 CDN/云清洗，不在此。
+		consumerGroup := api.Group("")
+		if svcs.ClientIPGuard != nil {
+			consumerGroup.Use(middleware.ClientDistGuard(svcs.ClientIPGuard, 5, 20, 256))
+		}
+		clientConsumerHandler.RegisterConsumerRoutes(consumerGroup)
 	}
 
 	// 需要认证的路由
@@ -229,6 +236,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.ClientVersion != nil && svcs.ClientChannel != nil {
 			clientVersionHandler := NewClientVersionHandler(svcs.ClientVersion, svcs.ClientChannel, svcs.Audit, svcs.ClientMachine, svcs.ClientDistTracking)
 			clientVersionHandler.RegisterPublishRoutes(admin)
+		}
+
+		// 客户端分发端点 L7 防护：IP 黑白名单规则管理 + 防护拦截计数（FR-096 / ADR-023）。限平台管理员。
+		if svcs.ClientIPGuard != nil {
+			clientIPRuleHandler := NewClientIPRuleHandler(svcs.ClientIPGuard, svcs.Audit)
+			clientIPRuleHandler.RegisterRoutes(admin)
 		}
 
 		// 节点 enrollment token（一键安装 / 傻瓜部署）：签发一次性准入凭据 + 一键命令，

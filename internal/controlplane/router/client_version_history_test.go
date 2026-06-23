@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -321,5 +322,69 @@ func TestClientDist_PullTrackingAndEventQuery(t *testing.T) {
 	// 检索端点限管理员：无 JWT → 401。
 	if nw := makeRequest(r, "GET", "/api/v1/client-dist/events", nil, ""); nw.Code != http.StatusUnauthorized {
 		t.Errorf("检索端点无 JWT 应 401，实际 %d", nw.Code)
+	}
+}
+
+// TestClientDist_IPGuardBlocksAndRules L7 防护（FR-096）：加 deny 规则后该 IP 被拒（早于鉴权），
+// 删规则恢复；规则 CRUD + protection-stats 限管理员。测试客户端 IP 为 192.0.2.1。
+func TestClientDist_IPGuardBlocksAndRules(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	const channelID = "s1"
+	key := createChannelAndKey(t, r, token, channelID)
+	publishOneFileVersion(t, r, token, channelID, "mods/a.jar", []byte("AAA"))
+
+	manifestURL := "/api/v1/client-channels/" + channelID + "/manifest"
+	pull := func() int {
+		req := httptest.NewRequest("GET", manifestURL, nil)
+		req.Header.Set("X-Client-Key", key)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	// 防护前可拉。
+	if code := pull(); code != http.StatusOK {
+		t.Fatalf("防护前应可拉 manifest，实际 %d", code)
+	}
+
+	// 加 deny 规则封测试客户端 IP。
+	aw := makeRequest(r, "POST", "/api/v1/client-dist/ip-rules",
+		map[string]any{"cidr": "192.0.2.1", "mode": "deny", "note": "test"}, token)
+	if aw.Code != http.StatusCreated {
+		t.Fatalf("加 IP 规则失败: %d %s", aw.Code, aw.Body.String())
+	}
+
+	// 被 IP 防护拒（403，早于密钥鉴权）。
+	if code := pull(); code != http.StatusForbidden {
+		t.Errorf("deny 规则下应 403，实际 %d", code)
+	}
+
+	// protection-stats 反映 deny 拦截。
+	sw := makeRequest(r, "GET", "/api/v1/client-dist/protection-stats", nil, token)
+	if sw.Code != http.StatusOK {
+		t.Fatalf("protection-stats 失败: %d", sw.Code)
+	}
+	if stats := parseJSON(t, sw); int(stats["denyBlocked"].(float64)) < 1 {
+		t.Errorf("denyBlocked 应 ≥1，实际 %v", stats["denyBlocked"])
+	}
+
+	// 删规则 → 恢复放行。
+	rulesArr := parseJSONArray(t, makeRequest(r, "GET", "/api/v1/client-dist/ip-rules", nil, token))
+	if len(rulesArr) != 1 {
+		t.Fatalf("应有 1 条规则，实际 %d", len(rulesArr))
+	}
+	ruleID := int(rulesArr[0].(map[string]any)["id"].(float64))
+	if dw := makeRequest(r, "DELETE", fmt.Sprintf("/api/v1/client-dist/ip-rules/%d", ruleID), nil, token); dw.Code != http.StatusOK {
+		t.Fatalf("删规则失败: %d", dw.Code)
+	}
+	if code := pull(); code != http.StatusOK {
+		t.Errorf("删 deny 规则后应恢复 200，实际 %d", code)
+	}
+
+	// 规则管理限管理员：无 JWT → 401。
+	if nw := makeRequest(r, "GET", "/api/v1/client-dist/ip-rules", nil, ""); nw.Code != http.StatusUnauthorized {
+		t.Errorf("IP 规则端点无 JWT 应 401，实际 %d", nw.Code)
 	}
 }

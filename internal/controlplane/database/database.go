@@ -78,6 +78,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.ClientMachine{},
 		&model.ClientDistEvent{},
 		&model.ClientDistDaily{},
+		&model.ClientIPRule{},
 	)
 }
 

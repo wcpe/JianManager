@@ -122,6 +122,8 @@ func main() {
 	clientDistTrackingSvc := service.NewClientDistTrackingService(db)
 	clientDistTrackingSvc.Start()
 	defer clientDistTrackingSvc.Stop()
+	// 客户端分发端点 L7 防护（FR-096，见 ADR-023）：IP 黑白名单 + per-IP 限流 + 并发限制，规则运行时可改入审计。
+	clientIPGuardSvc := service.NewClientIPGuardService(db)
 	// 插件服务：上传先入制品库（type=plugin 去重）再经 file gRPC 部署到实例（FR-052）。
 	pluginSvc := service.NewPluginService(db, pool, assetSvc)
 	coreSvc := service.NewCoreService()
@@ -226,6 +228,7 @@ func main() {
 		ClientVersion:      clientVersionSvc,
 		ClientMachine:      clientMachineSvc,
 		ClientDistTracking: clientDistTrackingSvc,
+		ClientIPGuard:      clientIPGuardSvc,
 		RuntimeAssets:      runtimeAssetsSvc,
 		EnrollToken:        enrollTokenSvc,
 		EnrollInstall: router.EnrollInstallConfig{
