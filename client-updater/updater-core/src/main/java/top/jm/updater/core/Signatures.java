@@ -59,6 +59,28 @@ final class Signatures {
     }
 
     /**
+     * 用 keyId 对应内置公钥验证<b>原始字节</b>的 Ed25519 签名（供 .jmpack 容器复用同一信任根，FR-097）。
+     *
+     * @return true=签名有效；未知 keyId / 算法不支持 / 签名不符均 false。
+     */
+    boolean verifyRaw(String keyId, byte[] message, byte[] sig) {
+        byte[] pubDer = trustStore.get(keyId);
+        if (pubDer == null) {
+            return false;
+        }
+        try {
+            PublicKey pub = KeyFactory.getInstance("Ed25519")
+                    .generatePublic(new X509EncodedKeySpec(pubDer));
+            Signature s = Signature.getInstance("Ed25519");
+            s.initVerify(pub);
+            s.update(message);
+            return s.verify(sig);
+        } catch (GeneralSecurityException | IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    /**
      * 验证 manifest 签名。
      *
      * @return true=签名有效；false=算法不支持/未知 keyId/签名不符（调用方据此 fail-static）。
