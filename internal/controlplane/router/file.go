@@ -365,6 +365,89 @@ func (h *FileHandler) Search(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
+// ArchiveEntries 列出归档（jar/zip）内条目（FR-075）。只读浏览，复用文件「查看」级权限。
+func (h *FileHandler) ArchiveEntries(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	path := c.Query("path")
+	if path == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少 path 参数"})
+		return
+	}
+	res, err := h.fileSvc.ListArchiveEntries(id, path)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+// ArchiveRead 读取归档内某条目内容（FR-075）。返回原始字节，截断/二进制经响应头标注。
+func (h *FileHandler) ArchiveRead(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	path := c.Query("path")
+	entry := c.Query("entry")
+	if path == "" || entry == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少 path 或 entry 参数"})
+		return
+	}
+	res, err := h.fileSvc.ReadArchiveEntry(id, path, entry)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+	if res.Truncated {
+		c.Header("X-Truncated", "true")
+	}
+	if res.Binary {
+		c.Header("X-Binary", "true")
+	}
+	c.Data(http.StatusOK, "application/octet-stream", res.Content)
+}
+
+// decompileRequest 反编译请求（FR-075）。
+type decompileRequest struct {
+	Path  string `json:"path" binding:"required"`
+	Entry string `json:"entry"`
+}
+
+// Decompile 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码（FR-075）。
+// 只读浏览，复用文件「查看」级权限；反编译失败/降级以 success=false 在 200 体内返回。
+func (h *FileHandler) Decompile(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	var req decompileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+	res, err := h.fileSvc.DecompileClass(id, req.Path, req.Entry)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
 // Versions 列出某文件的历史版本（FR-051）。
 func (h *FileHandler) Versions(c *gin.Context) {
 	id, err := parseID(c)
@@ -471,6 +554,10 @@ func (h *FileHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		files.GET("/download", h.Download)
 		// FR-070 批量下载：选中多文件/目录即时打包 zip 流式返回（加性追加）。
 		files.POST("/archive", h.DownloadArchive)
+		// FR-075 归档浏览与反编译：只读，加性追加。
+		files.GET("/archive/entries", h.ArchiveEntries)
+		files.GET("/archive/read", h.ArchiveRead)
+		files.POST("/decompile", h.Decompile)
 		// FR-074 全文搜索 / 文件名快速打开：转发到 Worker 本地倒排索引（加性追加）。
 		files.POST("/search", h.Search)
 		files.POST("/rename", h.Rename)

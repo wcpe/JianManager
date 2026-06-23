@@ -22,8 +22,8 @@ var (
 
 // FileService 文件管理服务（Control Plane 侧，通过 gRPC 委托给 Worker）。
 type FileService struct {
-	db     *gorm.DB
-	pool   *grpc.ClientPool
+	db   *gorm.DB
+	pool *grpc.ClientPool
 }
 
 // NewFileService 创建文件服务。
@@ -294,6 +294,139 @@ func (s *FileService) SearchFiles(instanceID uint, query, mode string, maxResult
 		hits[i] = SearchHit{Path: h.Path, Line: int(h.Line), Snippet: h.Snippet}
 	}
 	return &SearchResult{Hits: hits, Truncated: resp.Truncated}, nil
+}
+
+// ArchiveEntry 归档（jar/zip）内的单个条目（FR-075）。
+type ArchiveEntry struct {
+	Name           string `json:"name"`
+	IsDir          bool   `json:"isDir"`
+	Size           int64  `json:"size"`
+	CompressedSize int64  `json:"compressedSize"`
+	Modified       int64  `json:"modified"`
+	CRC32          uint32 `json:"crc32"`
+}
+
+// ArchiveEntries 是列举归档条目的结果（FR-075）。
+type ArchiveEntries struct {
+	Entries   []ArchiveEntry `json:"entries"`
+	Truncated bool           `json:"truncated"`
+}
+
+// ListArchiveEntries 列出归档（jar/zip）内全部条目（FR-075，委托 Worker archive/zip）。
+func (s *FileService) ListArchiveEntries(instanceID uint, path string) (*ArchiveEntries, error) {
+	if err := validatePath(path); err != nil {
+		return nil, err
+	}
+	instance, node, err := s.getInstanceAndNode(instanceID)
+	if err != nil {
+		return nil, err
+	}
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return nil, ErrNodeNotConnected
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.ListArchiveEntries(ctx, &workerpb.ListArchiveEntriesRequest{
+		InstanceUuid: instance.UUID,
+		Path:         path,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("列出归档条目失败: %w", err)
+	}
+	out := &ArchiveEntries{Truncated: resp.Truncated, Entries: make([]ArchiveEntry, len(resp.Entries))}
+	for i, e := range resp.Entries {
+		out.Entries[i] = ArchiveEntry{
+			Name:           e.Name,
+			IsDir:          e.IsDir,
+			Size:           e.Size,
+			CompressedSize: e.CompressedSize,
+			Modified:       e.Modified,
+			CRC32:          e.Crc32,
+		}
+	}
+	return out, nil
+}
+
+// ArchiveEntryContent 是读取归档内某条目内容的结果（FR-075）。
+type ArchiveEntryContent struct {
+	Content   []byte
+	Truncated bool
+	Binary    bool
+}
+
+// ReadArchiveEntry 读取归档内某条目内容（FR-075，委托 Worker）。
+func (s *FileService) ReadArchiveEntry(instanceID uint, path, entry string) (*ArchiveEntryContent, error) {
+	if err := validatePath(path); err != nil {
+		return nil, err
+	}
+	if entry == "" {
+		return nil, fmt.Errorf("缺少归档条目名")
+	}
+	instance, node, err := s.getInstanceAndNode(instanceID)
+	if err != nil {
+		return nil, err
+	}
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return nil, ErrNodeNotConnected
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.ReadArchiveEntry(ctx, &workerpb.ReadArchiveEntryRequest{
+		InstanceUuid: instance.UUID,
+		Path:         path,
+		Entry:        entry,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("读取归档条目失败: %w", err)
+	}
+	return &ArchiveEntryContent{Content: resp.Content, Truncated: resp.Truncated, Binary: resp.Binary}, nil
+}
+
+// DecompileResult 是反编译结果（FR-075）。
+type DecompileResult struct {
+	Success    bool   `json:"success"`
+	Error      string `json:"error,omitempty"`
+	Source     string `json:"source"`
+	Truncated  bool   `json:"truncated"`
+	Decompiler string `json:"decompiler,omitempty"`
+}
+
+// DecompileClass 反编译工作目录内 class/jar（或归档内某 class）为 Java 源码（FR-075，委托 Worker CFR）。
+// 反编译可能耗时（跑 CFR 子进程），故超时给得比普通文件操作宽（含 Worker 侧 30s 反编译 + 余量）。
+func (s *FileService) DecompileClass(instanceID uint, path, entry string) (*DecompileResult, error) {
+	if err := validatePath(path); err != nil {
+		return nil, err
+	}
+	instance, node, err := s.getInstanceAndNode(instanceID)
+	if err != nil {
+		return nil, err
+	}
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return nil, ErrNodeNotConnected
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.DecompileClass(ctx, &workerpb.DecompileClassRequest{
+		InstanceUuid: instance.UUID,
+		Path:         path,
+		Entry:        entry,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("反编译失败: %w", err)
+	}
+	return &DecompileResult{
+		Success:    resp.Success,
+		Error:      resp.Error,
+		Source:     resp.Source,
+		Truncated:  resp.Truncated,
+		Decompiler: resp.Decompiler,
+	}, nil
 }
 
 // validatePath 校验文件路径，防止路径遍历攻击。
