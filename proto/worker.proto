@@ -212,6 +212,15 @@ message CreateInstanceRequest {
   // port_mappings 是 docker 模式的容器端口↔宿主端口发布关系（宿主端口来自 FR-032 端口池）。
   // 仅 process_type=docker 使用。
   repeated PortMapping port_mappings = 15;
+  // cpu_limit 是 docker 模式的 CPU 核数上限（如 1.5 表示 1.5 核），注入 HostConfig.NanoCPUs（×1e9）。
+  // 仅 process_type=docker 使用；0=不限制（FR-079，见 ADR-019）。
+  double cpu_limit = 16;
+  // mem_limit_mb 是 docker 模式的内存上限（MiB），注入 HostConfig.Memory（×1024×1024）。
+  // 仅 process_type=docker 使用；0=不限制（FR-079，见 ADR-019）。
+  int64 mem_limit_mb = 17;
+  // disk_limit_mb 是 docker 模式的磁盘上限（MiB），仅持久化与展示，v1 不注入。
+  // bind-mount 工作目录无法用 HostConfig 简单施加磁盘配额（依赖存储驱动），留作前向兼容（FR-079）。
+  int64 disk_limit_mb = 18;
 }
 
 // PortMapping 描述一条容器端口到宿主端口的发布关系（docker 模式，ADR-019）。

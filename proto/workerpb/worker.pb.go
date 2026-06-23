@@ -558,7 +558,16 @@ type CreateInstanceRequest struct {
 	Image string `protobuf:"bytes,14,opt,name=image,proto3" json:"image,omitempty"`
 	// port_mappings 是 docker 模式的容器端口↔宿主端口发布关系（宿主端口来自 FR-032 端口池）。
 	// 仅 process_type=docker 使用。
-	PortMappings  []*PortMapping `protobuf:"bytes,15,rep,name=port_mappings,json=portMappings,proto3" json:"port_mappings,omitempty"`
+	PortMappings []*PortMapping `protobuf:"bytes,15,rep,name=port_mappings,json=portMappings,proto3" json:"port_mappings,omitempty"`
+	// cpu_limit 是 docker 模式的 CPU 核数上限（如 1.5 表示 1.5 核），注入 HostConfig.NanoCPUs（×1e9）。
+	// 仅 process_type=docker 使用；0=不限制（FR-079，见 ADR-019）。
+	CpuLimit float64 `protobuf:"fixed64,16,opt,name=cpu_limit,json=cpuLimit,proto3" json:"cpu_limit,omitempty"`
+	// mem_limit_mb 是 docker 模式的内存上限（MiB），注入 HostConfig.Memory（×1024×1024）。
+	// 仅 process_type=docker 使用；0=不限制（FR-079，见 ADR-019）。
+	MemLimitMb int64 `protobuf:"varint,17,opt,name=mem_limit_mb,json=memLimitMb,proto3" json:"mem_limit_mb,omitempty"`
+	// disk_limit_mb 是 docker 模式的磁盘上限（MiB），仅持久化与展示，v1 不注入。
+	// bind-mount 工作目录无法用 HostConfig 简单施加磁盘配额（依赖存储驱动），留作前向兼容（FR-079）。
+	DiskLimitMb   int64 `protobuf:"varint,18,opt,name=disk_limit_mb,json=diskLimitMb,proto3" json:"disk_limit_mb,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -696,6 +705,27 @@ func (x *CreateInstanceRequest) GetPortMappings() []*PortMapping {
 		return x.PortMappings
 	}
 	return nil
+}
+
+func (x *CreateInstanceRequest) GetCpuLimit() float64 {
+	if x != nil {
+		return x.CpuLimit
+	}
+	return 0
+}
+
+func (x *CreateInstanceRequest) GetMemLimitMb() int64 {
+	if x != nil {
+		return x.MemLimitMb
+	}
+	return 0
+}
+
+func (x *CreateInstanceRequest) GetDiskLimitMb() int64 {
+	if x != nil {
+		return x.DiskLimitMb
+	}
+	return 0
 }
 
 // PortMapping 描述一条容器端口到宿主端口的发布关系（docker 模式，ADR-019）。
@@ -6496,7 +6526,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	" \x01(\x01R\ruptimeSeconds\x12+\n" +
 	"\x06worlds\x18\v \x03(\v2\x13.worker.WorldMetricR\x06worlds\"1\n" +
 	"\x11HeartbeatResponse\x12\x1c\n" +
-	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\xff\x04\n" +
+	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\"\xe2\x05\n" +
 	"\x15CreateInstanceRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
@@ -6515,7 +6545,11 @@ const file_proto_worker_proto_rawDesc = "" +
 	"probe_port\x18\f \x01(\x05R\tprobePort\x12A\n" +
 	"\x1dgraceful_stop_timeout_seconds\x18\r \x01(\x05R\x1agracefulStopTimeoutSeconds\x12\x14\n" +
 	"\x05image\x18\x0e \x01(\tR\x05image\x128\n" +
-	"\rport_mappings\x18\x0f \x03(\v2\x13.worker.PortMappingR\fportMappings\x1a:\n" +
+	"\rport_mappings\x18\x0f \x03(\v2\x13.worker.PortMappingR\fportMappings\x12\x1b\n" +
+	"\tcpu_limit\x18\x10 \x01(\x01R\bcpuLimit\x12 \n" +
+	"\fmem_limit_mb\x18\x11 \x01(\x03R\n" +
+	"memLimitMb\x12\"\n" +
+	"\rdisk_limit_mb\x18\x12 \x01(\x03R\vdiskLimitMb\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"m\n" +
