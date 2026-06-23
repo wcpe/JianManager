@@ -121,9 +121,12 @@ export default function ArchiveViewer({ instanceId, path, name, onClose }: Archi
 
   useEffect(() => {
     let alive = true
+    // 切换归档（instanceId/path 变化）时复位列举态再异步拉取，属合法同步。
+    /* eslint-disable react-hooks/set-state-in-effect */
     setLoading(true)
     setError('')
     setView(null)
+    /* eslint-enable react-hooks/set-state-in-effect */
     listArchiveEntries(instanceId, path)
       .then((res) => {
         if (!alive) return

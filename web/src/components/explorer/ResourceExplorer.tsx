@@ -356,14 +356,16 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
     setDeleteTargets(null)
     try {
       await Promise.all(paths.map((p) => deleteFile(instanceId, p)))
-      // 若删除的是当前打开的文件，关闭编辑器。
+      // 若删除的是当前打开的文件/归档/反编译目标，关闭对应右栏（避免展示已删条目）。
       if (openFile && paths.includes(openFile.path)) setOpenFile(null)
+      if (archiveFor && paths.includes(archiveFor.path)) setArchiveFor(null)
+      if (decompileFor && paths.includes(decompileFor.path)) setDecompileFor(null)
       toast.success(t('files.deleted'))
       refreshAll()
     } catch {
       toast.error(t('files.deleteFailed'))
     }
-  }, [deleteTargets, instanceId, openFile, refreshAll, t])
+  }, [deleteTargets, instanceId, openFile, archiveFor, decompileFor, refreshAll, t])
 
   // ---- 上传（拖拽 / 按钮，批量逐文件）----
   const handleUpload = useCallback(
@@ -550,8 +552,14 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
         />
 
         <div className="flex min-h-0 flex-1">
-          {/* 目录内容列表 / 搜索面板（FR-074：搜索打开时占据该列） */}
-          <div className={openFile ? 'flex w-1/2 flex-col border-r' : 'flex flex-1 flex-col'}>
+          {/* 目录内容列表 / 搜索面板（FR-074 搜索打开占该列；FR-075 归档/反编译右栏打开时收窄） */}
+          <div
+            className={
+              openFile || archiveFor || decompileFor
+                ? 'flex w-1/2 flex-col border-r'
+                : 'flex flex-1 flex-col'
+            }
+          >
             {searchOpen ? (
               <SearchPanel
                 instanceId={instanceId}
@@ -641,6 +649,26 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
                 </div>
               </div>
             ))}
+
+          {/* 归档浏览（jar/zip）：内部条目树 + 只读查看/反编译（FR-075）。 */}
+          {archiveFor && (
+            <ArchiveViewer
+              instanceId={instanceId}
+              path={archiveFor.path}
+              name={archiveFor.name}
+              onClose={() => setArchiveFor(null)}
+            />
+          )}
+
+          {/* 反编译（工作目录内 .class/.jar）：只读 Java 源码（FR-075）。 */}
+          {decompileFor && (
+            <DecompileViewer
+              instanceId={instanceId}
+              path={decompileFor.path}
+              name={decompileFor.name}
+              onClose={() => setDecompileFor(null)}
+            />
+          )}
         </div>
       </div>
 

@@ -28,9 +28,12 @@ export default function DecompileViewer({ instanceId, path, name, onClose }: Dec
 
   useEffect(() => {
     let alive = true
+    // 切换目标（instanceId/path 变化）时复位反编译态再异步请求，属合法同步。
+    /* eslint-disable react-hooks/set-state-in-effect */
     setLoading(true)
     setFailed('')
     setSource('')
+    /* eslint-enable react-hooks/set-state-in-effect */
     decompile(instanceId, path)
       .then((res) => {
         if (!alive) return

@@ -644,6 +644,24 @@
     "truncated": "Too many results, showing the first batch",
     "failed": "Search failed"
   },
+  "archive": {
+    "title": "Archive",
+    "open": "Open archive",
+    "decompile": "Decompile",
+    "decompileJar": "Decompile whole Jar",
+    "decompileJarHint": "Decompile the entire Jar (slow; output may be truncated)",
+    "decompileHint": "Decompile this class",
+    "viewHint": "View this entry",
+    "loading": "Reading archive...",
+    "openFailed": "Failed to open archive",
+    "readFailed": "Failed to read entry",
+    "decompileFailed": "Decompile failed",
+    "processing": "Processing...",
+    "pickEntry": "Pick an entry on the left to view, or decompile a class",
+    "binaryNotice": "Binary entry; text preview not supported (download to inspect)",
+    "truncated": "Truncated",
+    "listTruncated": "Too many entries; truncated"
+  },
   "fileVersions": {
     "title": "Version History",
     "show": "History",

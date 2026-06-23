@@ -644,6 +644,24 @@
     "truncated": "结果过多，仅显示前若干条",
     "failed": "搜索失败"
   },
+  "archive": {
+    "title": "归档",
+    "open": "打开归档",
+    "decompile": "反编译",
+    "decompileJar": "反编译整个 Jar",
+    "decompileJarHint": "对整个 Jar 反编译（耗时较长，输出可能截断）",
+    "decompileHint": "反编译此 class",
+    "viewHint": "查看此条目内容",
+    "loading": "正在读取归档...",
+    "openFailed": "打开归档失败",
+    "readFailed": "读取条目失败",
+    "decompileFailed": "反编译失败",
+    "processing": "处理中...",
+    "pickEntry": "在左侧选择条目查看，或反编译 class",
+    "binaryNotice": "二进制条目，不支持文本预览（可下载查看）",
+    "truncated": "已截断",
+    "listTruncated": "条目过多，已截断"
+  },
   "fileVersions": {
     "title": "历史版本",
     "show": "历史版本",
