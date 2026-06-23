@@ -17,7 +17,7 @@ cd client-updater
 
 独立 Gradle 构建（wrapper 8.10，FR-089 已补），产物 jar；**不进 JM Go 主构建**。
 `updater-core` 为 fat jar（自包含 zstd-jni，因被楔子 URLClassLoader 独立加载，契约 §6.3）；
-`wedge` 极小、`Premain-Class=top.jm.updater.wedge.Wedge`。打包入基础整包时按 `jm-updater.json` 的
+`wedge` 极小、`Premain-Class=top.wcpe.mc.jm.updater.wedge.Wedge`。打包入基础整包时按 `jm-updater.json` 的
 `coreJar` 字段命名 core jar（默认 `updater-core.jar`），楔子 jar 名由 `-javaagent:` 路径决定。
 
 ## 状态

@@ -21,7 +21,7 @@ dependencies {
 tasks.jar {
     manifest {
         attributes(
-            "Premain-Class" to "top.jm.updater.wedge.Wedge",
+            "Premain-Class" to "top.wcpe.mc.jm.updater.wedge.Wedge",
             "Can-Redefine-Classes" to "false",
             "Can-Retransform-Classes" to "false"
         )

@@ -3,7 +3,7 @@
 // 独立 Gradle 构建产 wedge / updater-core 两 jar，不进 JM Go 主构建。
 
 allprojects {
-    group = "top.jm.updater"
+    group = "top.wcpe.mc.jm.updater"
     version = "0.1.0-SNAPSHOT"
     repositories {
         mavenCentral()
