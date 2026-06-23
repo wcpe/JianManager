@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
+	workercfg "github.com/wcpe/JianManager/internal/worker"
 	"github.com/wcpe/JianManager/internal/worker/bot"
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 	wgrpc "github.com/wcpe/JianManager/internal/worker/grpc"
@@ -54,46 +55,39 @@ func runDaemonWrapper() {
 }
 
 func runWorker() {
-	// 配置
-	nodeName := "node-01"
-	if v := os.Getenv("JIANMANAGER_NODE_NAME"); v != "" {
-		nodeName = v
+	// 加载配置：worker.yaml + JIANMANAGER_ 环境变量覆盖（FR-080，见 ADR-020）。
+	// 配置可选参数从命令行第 1 个参数取（如 `worker /path/worker.yaml`），缺省自动查找。
+	cfgPath := ""
+	if len(os.Args) > 1 {
+		cfgPath = os.Args[1]
+	}
+	cfg, err := workercfg.Load(cfgPath)
+	if err != nil {
+		slog.Error("加载 Worker 配置失败", "error", err)
+		os.Exit(1)
 	}
 
-	grpcPort := 9101
-	if v := os.Getenv("JIANMANAGER_GRPC_PORT"); v != "" {
-		fmt.Sscanf(v, "%d", &grpcPort)
-	}
+	nodeName := cfg.Name
+	grpcPort := cfg.GRPC.Port
+	wsPort := cfg.WS.Port
+	host := cfg.Host // 留空自动检测本机 IP
+	jwtSecret := cfg.JWTSecret
 
-	wsPort := 9102
-	if v := os.Getenv("JIANMANAGER_WS_PORT"); v != "" {
-		fmt.Sscanf(v, "%d", &wsPort)
-	}
+	// 节点 UUID 在首次注册后由 CP 签发并落本地身份文件复用（FR-080）；启动时先占位。
+	nodeUUID := "local-dev"
 
-	host := os.Getenv("JIANMANAGER_HOST") // 留空自动检测本机 IP
-
-	jwtSecret := os.Getenv("JIANMANAGER_JWT_SECRET")
-	if jwtSecret == "" {
-		jwtSecret = "dev-secret-change-me"
-	}
-
-	nodeUUID := os.Getenv("JIANMANAGER_NODE_UUID")
-	if nodeUUID == "" {
-		nodeUUID = "local-dev"
-	}
-
-	// 解析并初始化项目自包含数据根（默认 ./data，可经 JIANMANAGER_DATA_DIR 覆盖）。
+	// 解析并初始化项目自包含数据根（配置 data_dir，缺省 ./data，可经 JIANMANAGER_DATA_DIR 覆盖）。
 	// 运行态数据全部收口到此根，整体可迁移。参见 ADR-010。
-	root, err := dataroot.Init(os.Getenv(dataroot.EnvVar))
+	root, err := dataroot.Init(cfg.DataDir)
 	if err != nil {
 		slog.Error("初始化数据根失败", "error", err)
 		os.Exit(1)
 	}
 
-	// 服务器工作目录根：默认数据根下 var/servers；JIANMANAGER_WORK_DIR 显式覆盖（兼容旧部署）。
+	// 服务器工作目录根：默认数据根下 var/servers；配置 servers_dir 显式覆盖（兼容旧部署）。
 	serversDir := root.ServersDir()
-	if v := os.Getenv("JIANMANAGER_WORK_DIR"); v != "" {
-		serversDir = v
+	if cfg.ServersDir != "" {
+		serversDir = cfg.ServersDir
 	}
 
 	slog.Info("Worker Node 启动", "name", nodeName, "grpcPort", grpcPort, "wsPort", wsPort, "dataDir", root.Base(), "serversDir", serversDir)
@@ -205,20 +199,44 @@ func runWorker() {
 		}
 	}()
 
-	// 注册到 Control Plane
+	// 注册到 Control Plane（FR-080，见 ADR-020）。
 	// Control Plane 未启动时 Worker 不退出，按指数退避重试直到注册成功。
-	cpAddr := os.Getenv("JIANMANAGER_CONTROL_PLANE_GRPC")
+	cpAddr := cfg.ControlPlane
 	if cpAddr == "" {
 		cpAddr = "localhost:9100"
 	}
 
-	regResult, err := register.RegisterWithRetry(context.Background(), register.Config{
+	// 优先读本地身份文件复用既有 node_uuid/secret（重注册，不带 token，不重复消费一次性 token）；
+	// 无身份文件则为首次安装，必须携带 enrollment token 首注册。
+	etcDir := root.EtcDir()
+	identity, err := register.LoadIdentity(etcDir)
+	if err != nil {
+		slog.Error("读取本地节点身份失败", "error", err)
+		os.Exit(1)
+	}
+
+	regCfg := register.Config{
 		ControlPlaneAddr: cpAddr,
 		NodeName:         nodeName,
 		WsPort:           wsPort,
 		GrpcPort:         grpcPort,
 		Host:             host,
-	}, 2*time.Second, 60*time.Second)
+	}
+	if identity != nil {
+		// 重注册：沿用既有身份的节点名（CP 按 name 命中放行，不强制 token）。
+		regCfg.NodeName = identity.NodeName
+		slog.Info("发现本地节点身份，复用既有身份重注册", "nodeUUID", identity.NodeUUID, "name", identity.NodeName)
+	} else {
+		// 首次注册：携带一次性 enrollment token。缺 token 直接退出（避免无效注册无限重试刷日志）。
+		if cfg.EnrollToken == "" {
+			slog.Error("首次注册缺少 enrollment token：请在面板「添加节点」生成一键命令，" +
+				"或经 JIANMANAGER_ENROLL_TOKEN 提供。已有节点请确认本地身份文件 etc/node-identity.json 是否存在")
+			os.Exit(1)
+		}
+		regCfg.EnrollToken = cfg.EnrollToken
+	}
+
+	regResult, err := register.RegisterWithRetry(context.Background(), regCfg, 2*time.Second, 60*time.Second)
 	if err != nil {
 		slog.Error("注册到 Control Plane 失败", "error", err)
 		os.Exit(1)
@@ -226,6 +244,18 @@ func runWorker() {
 
 	nodeUUID = regResult.NodeUUID
 	slog.Info("已注册到 Control Plane", "nodeUUID", nodeUUID)
+
+	// 首次注册成功后持久化身份（含 node_secret，0600），重启复用、不重复消费 token（FR-080）。
+	if identity == nil {
+		if err := register.SaveIdentity(etcDir, &register.Identity{
+			NodeUUID:   regResult.NodeUUID,
+			NodeSecret: regResult.NodeSecret,
+			NodeName:   regCfg.NodeName,
+		}); err != nil {
+			// 持久化失败不致命（本次仍在线），但重启会因无身份且 token 已失效而首注册失败，需告警。
+			slog.Warn("持久化节点身份失败，重启可能需重新签发 enrollment token", "error", err)
+		}
+	}
 
 	// 启动心跳上报（携带注册获得的 node_secret 供 Control Plane 鉴权）
 	hb := heartbeat.New(cpAddr, nodeUUID, regResult.NodeSecret, 30*time.Second, manager)

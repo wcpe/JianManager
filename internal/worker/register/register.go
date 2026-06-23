@@ -15,9 +15,14 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
+
+// enrollTokenHeader 注册请求携带 enrollment token 的 gRPC metadata header 名（FR-080，见 ADR-020）。
+// 与 internal/controlplane/grpc 中的常量保持一致。token 经 metadata 传递、不改 proto。
+const enrollTokenHeader = "enroll-token"
 
 // Config 注册配置。
 type Config struct {
@@ -26,6 +31,10 @@ type Config struct {
 	WsPort           int    // WebSocket 端口
 	GrpcPort         int    // gRPC 端口（供 Control Plane 反向连接）
 	Host             string // 本机 IP（留空自动检测，优先 127.0.0.1）
+	// EnrollToken enrollment token 明文（FR-080，见 ADR-020）。
+	// 仅新节点首次注册（无本地身份文件）时携带；经 gRPC metadata 传给 CP 校验消费。
+	// 已有本地身份的重注册留空（CP 按 name 命中放行，不强制 token）。
+	EnrollToken string
 }
 
 // Result 注册结果。
@@ -49,7 +58,13 @@ func Register(ctx context.Context, cfg Config) (*Result, error) {
 	// 采集系统信息
 	info := collectSystemInfo(cfg)
 
-	slog.Info("正在向 Control Plane 注册", "addr", cfg.ControlPlaneAddr, "name", cfg.NodeName)
+	// 首次注册携带 enrollment token（经 metadata，不改 proto，FR-080）。
+	// 重注册（已有本地身份）不带 token，CP 按 name 命中放行。
+	if cfg.EnrollToken != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, enrollTokenHeader, cfg.EnrollToken)
+	}
+
+	slog.Info("正在向 Control Plane 注册", "addr", cfg.ControlPlaneAddr, "name", cfg.NodeName, "withEnrollToken", cfg.EnrollToken != "")
 
 	resp, err := client.Register(ctx, info)
 	if err != nil {

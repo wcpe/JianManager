@@ -1,7 +1,17 @@
 # JianManager — worker 配置样例
+# 配置由 Worker 启动时真正加载（FR-080，见 ADR-020）；JIANMANAGER_ 前缀环境变量按路径覆盖。
 name: node-01
 control_plane: localhost:9100
 node_secret: ${JIANMANAGER_NODE_SECRET}
+
+# 注册上报给 CP 的本机地址（供 CP 反向连接）；留空自动探测出口 IP。
+# host: ""
+
+# WS 终端 / 插件桥一次性 token 校验密钥；与 Control Plane 共享（生产经 JIANMANAGER_JWT_SECRET 覆盖）。
+jwt_secret: dev-secret-change-me
+
+# enrollment token（一次性节点准入凭据）绝不写入本文件——经 JIANMANAGER_ENROLL_TOKEN
+# 或安装脚本命令行一次性传入；注册成功后 CP 换发的身份持久化到 <data_dir>/etc/node-identity.json。
 
 grpc:
   port: 9101
