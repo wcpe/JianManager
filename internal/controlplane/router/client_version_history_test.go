@@ -310,6 +310,28 @@ func TestClientDist_PullTrackingAndEventQuery(t *testing.T) {
 		t.Errorf("事件字段异常: version=%d machine=%s status=%d bytes=%d", ev.Version, ev.MachineID, ev.Status, ev.Bytes)
 	}
 
+	// 下载制品 → 制品下载事件应落库且**归属频道**：制品 URL 内容寻址不带频道段，靠密钥归属（FR-093 回归）。
+	manifest := parseJSON(t, w)
+	artSha := manifest["files"].([]interface{})[0].(map[string]interface{})["artifact"].(map[string]interface{})["sha256"].(string)
+	areq := httptest.NewRequest("GET", "/api/v1/client-artifacts/"+artSha, nil)
+	areq.Header.Set("X-Client-Key", key)
+	areq.Header.Set("X-Machine-Id", "mach-1")
+	aw := httptest.NewRecorder()
+	r.ServeHTTP(aw, areq)
+	if aw.Code != http.StatusOK {
+		t.Fatalf("下载制品失败: %d %s", aw.Code, aw.Body.String())
+	}
+	var aev model.ClientDistEvent
+	if err := db.Where("kind = ?", "artifact").First(&aev).Error; err != nil {
+		t.Fatalf("制品下载事件应落库: %v", err)
+	}
+	if aev.ChannelID != channelID {
+		t.Errorf("制品下载事件应归属频道 %q（靠密钥归属，供按频道统计），实际 %q", channelID, aev.ChannelID)
+	}
+	if aev.Bytes <= 0 || aev.Status != http.StatusOK {
+		t.Errorf("制品下载事件字段异常: status=%d bytes=%d", aev.Status, aev.Bytes)
+	}
+
 	// 检索端点（admin）。
 	lw := makeRequest(r, "GET", "/api/v1/client-dist/events?kind=manifest", nil, token)
 	if lw.Code != http.StatusOK {

@@ -250,16 +250,18 @@ func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 // 鉴权：X-Client-Key 经 VerifyAnyKey 校验（路径无频道段；制品跨频道共享，任一有效密钥授权路由）。
 // 分发：http.ServeContent 自动处理 Range/If-Range（206 部分内容、416 越界）+ 强缓存（内容寻址不可变）。
 func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
-	if !h.authAnyKey(c) {
+	channelID, ok := h.authAnyKey(c)
+	if !ok {
 		return
 	}
 	sha := c.Param("sha256")
 	start := time.Now()
 	// 下载追踪（FR-093）：响应写出后记录字节/状态/耗时（best-effort、不阻断）。
+	// 频道取自密钥归属（URL 内容寻址、不带频道），使下载量/字节可按频道统计。
 	defer func() {
 		if h.tracking != nil {
 			_ = h.tracking.Record(service.ClientDistEventInput{
-				ChannelID: c.Param("id"), MachineID: c.GetHeader(machineIDHeader), IP: c.ClientIP(),
+				ChannelID: channelID, MachineID: c.GetHeader(machineIDHeader), IP: c.ClientIP(),
 				Kind: "artifact", ArtifactSHA: sha, Bytes: int64(c.Writer.Size()),
 				Status: c.Writer.Status(), DurationMs: time.Since(start).Milliseconds(),
 			})
@@ -309,13 +311,15 @@ func (h *ClientVersionHandler) authChannelKey(c *gin.Context, channelID string) 
 }
 
 // authAnyKey 校验请求头 X-Client-Key 为任一有效密钥（不绑定频道）；失败已写响应并返回 false。
-func (h *ClientVersionHandler) authAnyKey(c *gin.Context) bool {
+// 成功时返回密钥所属频道 ID——制品下载 URL 内容寻址、不带频道，靠密钥归属频道以供按频道统计（FR-093/095）。
+func (h *ClientVersionHandler) authAnyKey(c *gin.Context) (string, bool) {
 	plaintext := c.GetHeader(clientKeyHeader)
-	if _, err := h.channel.VerifyAnyKey(plaintext); err != nil {
+	key, err := h.channel.VerifyAnyKey(plaintext)
+	if err != nil {
 		h.respondKeyAuthErr(c, err)
-		return false
+		return "", false
 	}
-	return true
+	return key.ChannelID, true
 }
 
 // respondKeyAuthErr 统一拉取密钥鉴权失败响应（不区分缺失/吊销/过期，避免泄露密钥状态）。
