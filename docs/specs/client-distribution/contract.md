@@ -122,8 +122,10 @@ updater-core ──GET /manifest(latest,带 key+machineId)──→ JM 分发后
 - core 以独立 `URLClassLoader` **内存加载**（读 jar 字节 → defineClass，避免文件锁，便于 FR-091 自更新替换）。
 - 入口（反射）：`int top.jm.updater.Core.run(java.util.Map<String,String> ctx)`
   - `ctx` = `{ gameDir, channel, key, endpoint, wedgeDir, coreVersion }`
+  - `coreVersion`（FR-091）：楔子据自更新选择状态机选定的 core 版本（内置 bundled 默认 0），core 据此与 manifest `agent.core.version` 比对决定是否自更新；machineId 见 §5（FR-092）。
   - 返回值：`0` = 更新成功，放行；`非 0` = fail-static（带本地版本放行 + 提示）；core **不得抛异常逃逸到楔子**（自己兜底）。
 - 超时：楔子等待 `timeoutSec`（默认 120s），超时中断并 fail-static 放行。
+- **core 自更新（FR-091）**：core 消费 manifest `agent.core`（§2）暂存更高版本 core 为 pending（下载+sha256+selftest）；楔子下次 premain 经 `<gameDir>/.jm-updater/core/state.properties` + `pending.confirmed`/`rollback.flag` 标志做 promote / 首次 trial / 启动失败回退 N-1。`wedge.version` 仅信息性（楔子不自更新）。
 
 ### 6.4 托管区 / 玩家区（reconcile 边界，FR-090）
 - **托管区** = manifest `managedDirs`：updater 可增删，与 manifest 严格一致。
