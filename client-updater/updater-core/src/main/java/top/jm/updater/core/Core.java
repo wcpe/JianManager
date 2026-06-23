@@ -63,8 +63,11 @@ public final class Core {
             String key = ctx.get("key");
             String endpoint = ctx.get("endpoint");
             String coreVersion = ctx.getOrDefault("coreVersion", "");
-            // TODO(FR-092): 由机器码身份生成稳定唯一 X-Machine-Id；此前传空（端点仅审计/统计用，可空）。
+            // 机器码身份（FR-092）：稳定、不可逆、跨平台；ctx 显式提供则用之（测试/特殊），否则本机生成。
             String machineId = ctx.getOrDefault("machineId", "");
+            if (machineId.isEmpty()) {
+                machineId = MachineId.get();
+            }
 
             if (channel == null || endpoint == null) {
                 System.err.println("[jm-updater] core: 缺少 channel/endpoint，fail-static");
