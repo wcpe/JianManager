@@ -1,18 +1,35 @@
-FROM golang:1.22-alpine AS builder
+# ---- 前端构建阶段：产出 web/dist，供 Go 阶段注入 go:embed all:dist ----
+FROM node:20-alpine AS webbuilder
+WORKDIR /web
+# 先拷依赖清单以复用层缓存：package.json/lock 不变时跳过 npm ci。
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
 
+# ---- Go 构建阶段（go.mod: go 1.26.x，镜像须 >= 该版本，否则 toolchain 报错）----
+FROM golang:1.26-alpine AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
-
 COPY . .
+# 注入前端构建产物到 go:embed 目录（static.go: //go:embed all:dist）。
+# 探针 jar 若已由 `make embed-probe` 预置于 embed/probe/，则随上面的 COPY . . 一并嵌入；
+# 未预置时 embed/probe/.gitignore 占位保证 go:embed all:probe 不致编译失败，
+# 运行时建服自动部署探针会优雅跳过（FR-010 既有行为）。
+COPY --from=webbuilder /web/dist ./internal/controlplane/embed/dist
+# 纯 Go SQLite 驱动（glebarez/modernc），无需 CGO。
 RUN CGO_ENABLED=0 GOOS=linux go build -o control-plane ./cmd/control-plane
 
-FROM alpine:3.19
+# ---- 运行阶段 ----
+FROM alpine:3.20
 RUN apk --no-cache add ca-certificates
-
 WORKDIR /app
 COPY --from=builder /app/control-plane .
 COPY --from=builder /app/configs/control-plane.yaml ./configs/
+# SQLite 默认 dsn data/jianmanager.db 相对 WORKDIR；驱动不自建父目录，须预置数据目录。
+# compose 下该路径再挂 cp-data 卷；裸 docker run 也需此目录方能开库。
+RUN mkdir -p /app/data
 
 EXPOSE 8080 9100
 

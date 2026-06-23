@@ -11,8 +11,8 @@ services:
     environment:
       - JIANMANAGER_SERVER_PORT=8080
       - JIANMANAGER_GRPC_PORT=9100
-      - JIANMANAGER_DB_DRIVER=sqlite
-      - JIANMANAGER_DB_DSN=/app/data/jianmanager.db
+      - JIANMANAGER_DATABASE_DRIVER=sqlite
+      - JIANMANAGER_DATABASE_DSN=/app/data/jianmanager.db
       - JIANMANAGER_JWT_SECRET=${JIANMANAGER_JWT_SECRET:-dev-secret-change-me}
     volumes:
       - cp-data:/app/data

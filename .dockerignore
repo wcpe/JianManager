@@ -1,0 +1,28 @@
+# 构建上下文裁剪：前端在 webbuilder 阶段重建、探针 jar 经 make embed-probe 预置，
+# 故源码子模块与各类产物/本地状态无需进入上下文。
+# 注意：不排除 internal/controlplane/embed/probe/.gitignore——它是 go:embed all:probe 的目录占位。
+
+# Git 元数据
+.git
+
+# 依赖与构建产物（前端 dist 由 webbuilder 阶段重新构建并注入）
+**/node_modules
+web/dist
+bot-worker/dist
+bin/
+internal/controlplane/embed/dist
+
+# 开发数据 / 本地状态
+data/
+*.db
+*.db-shm
+*.db-wal
+.tmp/
+
+# 探针源码子模块（探针 jar 经 make embed-probe 预置于 embed/probe/，构建镜像不需源码）
+third_party/ServerProbe
+
+# IDE / OS / 日志
+.idea/
+.vscode/
+*.log
