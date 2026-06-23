@@ -43,6 +43,21 @@ final class Manifest {
         }
     }
 
+    /** updater-core 自更新段单平台制品引用（契约 §2 agent.core.platforms[os].artifact，FR-091）。 */
+    static final class AgentArtifact {
+        /** 制品自身 hash（下载寻址 key）。 */
+        final String sha256;
+        final long size;
+        /** zstd | none。 */
+        final String codec;
+
+        AgentArtifact(String sha256, long size, String codec) {
+            this.sha256 = sha256;
+            this.size = size;
+            this.codec = codec;
+        }
+    }
+
     final int schemaVersion;
     final String channel;
     final long version;
@@ -51,11 +66,16 @@ final class Manifest {
     final String sigAlg;
     final String sigKeyId;
     final String sigValue;
+    /** updater-core 自更新声明版本（契约 §2 agent.core.version，FR-091）；-1=未声明。 */
+    final long agentCoreVersion;
+    /** updater-core 自更新各平台制品（os→artifact，FR-091）；可空。 */
+    final Map<String, AgentArtifact> agentCorePlatforms;
     /** 原始对象树（含 sig），验签用。 */
     final Map<String, Object> raw;
 
     private Manifest(int schemaVersion, String channel, long version, List<String> managedDirs,
                      List<FileEntry> files, String sigAlg, String sigKeyId, String sigValue,
+                     long agentCoreVersion, Map<String, AgentArtifact> agentCorePlatforms,
                      Map<String, Object> raw) {
         this.schemaVersion = schemaVersion;
         this.channel = channel;
@@ -65,7 +85,19 @@ final class Manifest {
         this.sigAlg = sigAlg;
         this.sigKeyId = sigKeyId;
         this.sigValue = sigValue;
+        this.agentCoreVersion = agentCoreVersion;
+        this.agentCorePlatforms = agentCorePlatforms;
         this.raw = raw;
+    }
+
+    /**
+     * 取指定平台（windows|macos|linux）的 updater-core 自更新制品；无自更新段或该平台缺失返回 null（FR-091）。
+     */
+    AgentArtifact agentCoreArtifact(String platform) {
+        if (agentCorePlatforms == null || platform == null) {
+            return null;
+        }
+        return agentCorePlatforms.get(platform);
     }
 
     /** 解析 manifest JSON 文本。结构非法即抛 {@link Json.JsonException}。 */
@@ -126,10 +158,42 @@ final class Manifest {
             sigValue = (String) s.get("value");
         }
 
+        // agent.core 自更新段（契约 §2，FR-091）：version + platforms[os].artifact。可缺省。
+        long agentCoreVersion = -1;
+        Map<String, AgentArtifact> agentCorePlatforms = null;
+        Object agent = obj.get("agent");
+        if (agent instanceof Map) {
+            Object core = ((Map<String, Object>) agent).get("core");
+            if (core instanceof Map) {
+                Map<String, Object> c = (Map<String, Object>) core;
+                agentCoreVersion = asLong(c.get("version"), -1);
+                Object platforms = c.get("platforms");
+                if (platforms instanceof Map) {
+                    agentCorePlatforms = new LinkedHashMap<>();
+                    for (Map.Entry<String, Object> e : ((Map<String, Object>) platforms).entrySet()) {
+                        if (!(e.getValue() instanceof Map)) {
+                            continue;
+                        }
+                        Object art = ((Map<String, Object>) e.getValue()).get("artifact");
+                        if (art instanceof Map) {
+                            Map<String, Object> a = (Map<String, Object>) art;
+                            agentCorePlatforms.put(e.getKey(), new AgentArtifact(
+                                    (String) a.get("sha256"),
+                                    asLong(a.get("size"), 0),
+                                    a.get("codec") == null ? "none" : String.valueOf(a.get("codec"))));
+                        }
+                    }
+                }
+            }
+        }
+
         return new Manifest(schemaVersion, channel, version,
                 Collections.unmodifiableList(managedDirs),
                 Collections.unmodifiableList(files),
-                sigAlg, sigKeyId, sigValue, (Map<String, Object>) root);
+                sigAlg, sigKeyId, sigValue,
+                agentCoreVersion,
+                agentCorePlatforms == null ? null : Collections.unmodifiableMap(agentCorePlatforms),
+                (Map<String, Object>) root);
     }
 
     /**

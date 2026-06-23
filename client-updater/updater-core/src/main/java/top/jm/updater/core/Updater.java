@@ -25,12 +25,25 @@ final class Updater {
     private final Path stateDir;
     private final Transport transport;
     private final Signatures signatures;
+    /** 本次运行的 core 版本（FR-091 自更新比对基准；reconcile-only 调用按 0）。 */
+    private final long runningCoreVersion;
+    /** 新下载 core 的自检（FR-091）；为 null 表示不做自更新（纯 reconcile）。 */
+    private final CoreSelfTest selfTest;
 
+    /** 纯 reconcile 装配（不做 core 自更新）。供 FR-090 测试与不关心自更新的调用方使用。 */
     Updater(Path gameDir, Transport transport, Signatures signatures) {
+        this(gameDir, transport, signatures, 0, null);
+    }
+
+    /** 完整装配（含 FR-091 core 自更新）：runningCoreVersion 为本次 core 版本，selfTest 校验新 jar。 */
+    Updater(Path gameDir, Transport transport, Signatures signatures,
+            long runningCoreVersion, CoreSelfTest selfTest) {
         this.gameDir = gameDir.toAbsolutePath().normalize();
         this.stateDir = this.gameDir.resolve(".jm-updater");
         this.transport = transport;
         this.signatures = signatures;
+        this.runningCoreVersion = runningCoreVersion;
+        this.selfTest = selfTest;
     }
 
     /**
@@ -126,6 +139,16 @@ final class Updater {
                 state.recordVersion(manifest.version);
             } catch (IOException e) {
                 log.warn("记录 lastSeenVersion 失败: " + e);
+            }
+
+            // 8. core 自更新（FR-091）：reconcile 成功后据 manifest.agent.core 暂存更高版本 core（失败不影响放行）。
+            if (selfTest != null) {
+                try {
+                    new SelfUpdater(stateDir, transport, selfTest, log)
+                            .maybeUpdate(manifest, runningCoreVersion, Platform.current());
+                } catch (Throwable t) {
+                    log.warn("core 自更新阶段异常（忽略，照常放行）: " + t);
+                }
             }
 
             log.info("更新成功，放行游戏 version=" + manifest.version);

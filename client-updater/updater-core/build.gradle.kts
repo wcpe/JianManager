@@ -20,6 +20,14 @@ dependencies {
 
 tasks.test {
     useJUnitPlatform()
+    // FR-091 自更新 selftest 需以独立 classloader 加载真实构建出的 core jar 自证可用，
+    // 故把自身 jar 制品路径注入测试（CoreSelfTestRealJarTest）。test 依赖 jar 不成环（jar 不依赖 test）。
+    dependsOn(tasks.named("jar"))
+    val selfJar = tasks.named("jar")
+    inputs.files(selfJar)
+    doFirst {
+        systemProperty("jm.updater.core.jar", selfJar.get().outputs.files.singleFile.absolutePath)
+    }
     testLogging {
         events("passed", "skipped", "failed")
     }
