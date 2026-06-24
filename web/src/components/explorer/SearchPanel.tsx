@@ -5,6 +5,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { searchFiles, type SearchHit, type SearchMode } from '@/api/files'
 
+/** 「索引中」自动重试间隔（毫秒，FR-113）。 */
+const INDEXING_RETRY_MS = 1000
+
 /**
  * 跨文件搜索面板（FR-074，见 ADR-017）。
  *
@@ -29,16 +32,28 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose }: SearchPa
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [searched, setSearched] = useState(false)
+  // 索引首建未就绪（FR-113，ADR-024）：显示「索引中」并自动重试同一查询，直到出结果。
+  const [indexing, setIndexing] = useState(false)
   // 自增请求序号：仅最后一次请求的结果被采纳，避免防抖竞态导致旧结果覆盖新结果。
   const reqSeq = useRef(0)
+  // 「索引中」自动重试计时器：新查询或卸载时清除，避免旧查询的重试覆盖。
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 指向最新 runSearch，供「索引中」重试间接调用（避免 useCallback 递归自引用）。
+  const runSearchRef = useRef<(q: string, m: SearchMode) => void>(() => {})
 
   const runSearch = useCallback(
     async (q: string, m: SearchMode) => {
+      // 新一次查询取消上一次的「索引中」重试。
+      if (retryTimer.current) {
+        clearTimeout(retryTimer.current)
+        retryTimer.current = null
+      }
       const trimmed = q.trim()
       if (!trimmed) {
         setHits([])
         setTruncated(false)
         setSearched(false)
+        setIndexing(false)
         setError('')
         return
       }
@@ -48,6 +63,16 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose }: SearchPa
       try {
         const res = await searchFiles(instanceId, trimmed, m)
         if (seq !== reqSeq.current) return
+        if (res.indexing) {
+          // 索引首建中：本次无结果，显示进度并稍后用同一查询自动重试。
+          setIndexing(true)
+          setHits([])
+          setTruncated(false)
+          setSearched(true)
+          retryTimer.current = setTimeout(() => runSearchRef.current(q, m), INDEXING_RETRY_MS)
+          return
+        }
+        setIndexing(false)
         setHits(res.hits)
         setTruncated(res.truncated)
         setSearched(true)
@@ -58,6 +83,7 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose }: SearchPa
         setError(axiosMsg || t('search.failed'))
         setHits([])
         setTruncated(false)
+        setIndexing(false)
         setSearched(true)
       } finally {
         if (seq === reqSeq.current) setLoading(false)
@@ -66,11 +92,21 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose }: SearchPa
     [instanceId, t],
   )
 
+  // 保持 runSearchRef 指向最新 runSearch（供重试间接调用）。
+  useEffect(() => {
+    runSearchRef.current = runSearch
+  }, [runSearch])
+
   // 输入/模式变化后防抖触发查询。
   useEffect(() => {
     const id = setTimeout(() => void runSearch(query, mode), 300)
     return () => clearTimeout(id)
   }, [query, mode, runSearch])
+
+  // 卸载时清除待执行的「索引中」重试。
+  useEffect(() => () => {
+    if (retryTimer.current) clearTimeout(retryTimer.current)
+  }, [])
 
   return (
     <div className="flex h-full min-w-0 flex-col">
@@ -118,14 +154,19 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose }: SearchPa
           >
             {t('search.modeFilename')}
           </Button>
-          {loading && <Loader2 className="ml-1 size-3.5 animate-spin text-muted-foreground" />}
+          {(loading || indexing) && (
+            <Loader2 className="ml-1 size-3.5 animate-spin text-muted-foreground" />
+          )}
         </div>
       </div>
 
       {/* 结果列表 */}
       <div className="min-h-0 flex-1 overflow-auto">
         {error && <div className="p-2 text-xs text-destructive">{error}</div>}
-        {!error && searched && hits.length === 0 && !loading && (
+        {!error && indexing && (
+          <div className="p-2 text-xs text-muted-foreground">{t('search.indexing')}</div>
+        )}
+        {!error && !indexing && searched && hits.length === 0 && !loading && (
           <div className="p-2 text-xs text-muted-foreground">{t('search.noResults')}</div>
         )}
         {!error && hits.length > 0 && (

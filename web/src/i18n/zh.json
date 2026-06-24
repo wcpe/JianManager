@@ -728,6 +728,7 @@
     "modeFilename": "文件名",
     "noResults": "无匹配结果",
     "truncated": "结果过多，仅显示前若干条",
+    "indexing": "索引中，首次建立索引，请稍候…",
     "failed": "搜索失败"
   },
   "archive": {

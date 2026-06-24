@@ -728,6 +728,7 @@
     "modeFilename": "Filename",
     "noResults": "No matches",
     "truncated": "Too many results, showing the first batch",
+    "indexing": "Building index for the first time, please wait…",
     "failed": "Search failed"
   },
   "archive": {
