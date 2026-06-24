@@ -12,6 +12,7 @@ import BotSegment from './BotSegment'
 import MetricsSegment from './MetricsSegment'
 import ServerStateSegment from './ServerStateSegment'
 import BusinessSegment from './BusinessSegment'
+import EconomySegment from './EconomySegment'
 import ResourceExplorer from '@/components/explorer/ResourceExplorer'
 import ConfigExplorer from '@/components/config-explorer/ConfigExplorer'
 import PluginManager from '@/components/plugins/PluginManager'
@@ -87,6 +88,7 @@ export default function WorkspacePane({ instanceId }: WorkspacePaneProps) {
             <TabsTrigger value="metrics">{t('metrics.tab')}</TabsTrigger>
             <TabsTrigger value="serverstate">{t('serverState.tab')}</TabsTrigger>
             <TabsTrigger value="business">{t('business.tab')}</TabsTrigger>
+            <TabsTrigger value="economy">{t('economy.tab')}</TabsTrigger>
             <TabsTrigger value="bot">{t('console.segmentBot')}</TabsTrigger>
           </TabsList>
         </Tabs>
@@ -116,6 +118,8 @@ export default function WorkspacePane({ instanceId }: WorkspacePaneProps) {
           <ServerStateSegment instanceId={instanceId} />
         ) : segment === 'business' ? (
           <BusinessSegment instanceId={instanceId} />
+        ) : segment === 'economy' ? (
+          <EconomySegment instanceId={instanceId} />
         ) : (
           <TerminalPane instanceId={instanceId} hideHeader />
         )}
