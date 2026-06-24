@@ -60,7 +60,9 @@ export default function OverviewPage() {
           <ResourceGauge label={t('dashboard.totalCpu')} value={totals?.cpuPct ?? 0} unit="%" />
         </Panel>
         <Panel bodyClassName="flex items-center justify-center py-3">
-          <ResourceGauge label={t('dashboard.totalLoad')} value={totals?.loadAvg ?? 0} unit="%" />
+          {/* 负载是「占总核数比例」：以倍数（load÷核）呈现而非百分比，环按 1.0=满核封顶，
+              不再出现 >100% 的破环（FR-108）。grading 仍按占比走 resourceLevel（>0.8×→红）。 */}
+          <ResourceGauge label={t('dashboard.totalLoad')} value={(totals?.loadAvg ?? 0) / 100} max={1} unit="×" decimals={2} />
         </Panel>
         <Panel bodyClassName="flex items-center justify-center py-3">
           <ResourceGauge label={t('dashboard.totalMem')} value={memPct} unit="%" />

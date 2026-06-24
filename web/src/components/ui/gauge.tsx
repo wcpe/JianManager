@@ -9,6 +9,7 @@ export function ResourceGauge({
   level,
   size = 92,
   thickness = 8,
+  decimals = 0,
 }: {
   label: string
   value: number
@@ -18,6 +19,8 @@ export function ResourceGauge({
   level?: StatusLevel
   size?: number
   thickness?: number
+  /** 中心数值保留的小数位（默认 0；如负载倍数用 2）。 */
+  decimals?: number
 }) {
   const pct = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0
   const lvl = level ?? resourceLevel(pct)
@@ -45,7 +48,7 @@ export function ResourceGauge({
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center">
           <span className="text-lg font-semibold tabular-nums" style={{ color }}>
-            {Number.isFinite(value) ? Math.round(value) : '—'}
+            {Number.isFinite(value) ? value.toFixed(decimals) : '—'}
           </span>
           <span className="text-[11px] text-muted-foreground">{unit}</span>
         </div>
