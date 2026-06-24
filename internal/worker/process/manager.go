@@ -270,6 +270,20 @@ func (m *Manager) Start(uuid string) error {
 		return fmt.Errorf("实例 %s 当前状态 %s 无法启动", uuid, inst.State)
 	}
 
+	// 启动前校验 java 版本（仅宿主进程模式；docker 的 java 在容器内不适用）。
+	// 避免无绑定 JDK / 版本不符的 MC 实例以 UnsupportedClassVersionError 静默崩在
+	// 游戏服自身日志、面板只见 CRASHED 无因（BUG-012）。校验失败保持原状态、返回明确错误。
+	if inst.processType != ProcessTypeDocker {
+		if err := preflightJavaVersion(CommandSpec{
+			StartCommand: inst.StartCommand,
+			JavaHome:     inst.JDKPath,
+			JDKBinPath:   inst.JDKBinPath,
+		}); err != nil {
+			m.mu.Unlock()
+			return err
+		}
+	}
+
 	// 惰性构造策略：CRASHED 重启时复用已构造的策略（保留连接），首次启动则新建。
 	if inst.strategy == nil {
 		spec := CommandSpec{
