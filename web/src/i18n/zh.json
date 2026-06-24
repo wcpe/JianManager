@@ -358,6 +358,17 @@
     "updatedRestarted": "探针已推送，实例重启中",
     "updateFailed": "更新探针失败"
   },
+  "business": {
+    "tab": "业务",
+    "title": "业务掌控台",
+    "subtitle": "经探针对接业务插件（经济/背包…），按能力清单下发",
+    "refresh": "刷新能力",
+    "unavailable": "探针未连入或本服无业务 Provider；部署并连接探针、安装对应业务插件后可用",
+    "readOnly": "只读",
+    "pickAction": "从左侧选择一个业务动作",
+    "dispatch": "下发",
+    "dispatchFailed": "业务命令下发失败"
+  },
   "serverState": {
     "tab": "服务器状态",
     "title": "服务器状态（按需快照）",

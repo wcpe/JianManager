@@ -371,6 +371,17 @@
     "updatedRestarted": "Probe pushed, instance restarting",
     "updateFailed": "Failed to update probe"
   },
+  "business": {
+    "tab": "Business",
+    "title": "Business Console",
+    "subtitle": "Reach business plugins (economy/inventory…) via the probe; dispatch by capability manifest",
+    "refresh": "Refresh capabilities",
+    "unavailable": "Probe not connected or no business Provider on this server; deploy & connect the probe and install the target business plugin",
+    "readOnly": "read-only",
+    "pickAction": "Pick a business action on the left",
+    "dispatch": "Dispatch",
+    "dispatchFailed": "Business command dispatch failed"
+  },
   "serverState": {
     "tab": "Server State",
     "title": "Server State (on-demand snapshot)",

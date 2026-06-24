@@ -1722,13 +1722,14 @@
 - **依赖**: FR-117
 
 #### FR-119: 业务掌控台 UI v1（manifest 驱动）
-- **状态**: 📋 计划
+- **状态**: 🔨 开发中（实例控制台新增「业务」tab：`GET /business/manifest` 取能力清单动态渲染域/动作、按动作 args 渲染表单、`POST /business` 下发显结果，域不可用显式降级提示；新增 `api/business.ts` + `BusinessSegment` + i18n(zh/en)。tsc/lint/vitest(227)/build 全绿；浏览器真机随 M1 收口复验）
 - **优先级**: P1
 - **描述**: 前端按汇聚 manifest 动态渲染域/能力，调用 economy.balance 并展示
 - **验收标准**:
-  - [ ] 按 CP 汇聚的 manifest 动态列出域与能力（不硬编码经济/背包）
-  - [ ] 输入玩家名调用 economy.balance、展示余额；域不可用显式提示
-  - [ ] i18n 完整 + 暗/亮色正常
+  - [x] 按 manifest 动态列出域与能力（不硬编码经济/背包）+ 按动作 args 渲染表单
+  - [x] 输入参数下发 economy.balance、展示结果 output；探针未连/域不可用显式降级提示
+  - [x] i18n 完整（zh/en）+ 复用既有 UI 组件（暗/亮色随主题）
+  - [ ] 真机：浏览器对真 mce 服查到真实余额（随 M1 收口）
 - **关联 ADR**: —
 - **依赖**: FR-116
 

@@ -1,7 +1,15 @@
 import { create } from 'zustand'
 
 /** 工作区分段：实例的统一视图分段——终端 / 文件 / 配置 / 插件 / 监控 / 服务器状态 / Bot（FR-039、FR-052 插件、FR-060 监控、FR-077 状态）。 */
-export type WorkspaceSegment = 'terminal' | 'files' | 'config' | 'plugins' | 'metrics' | 'serverstate' | 'bot'
+export type WorkspaceSegment =
+  | 'terminal'
+  | 'files'
+  | 'config'
+  | 'plugins'
+  | 'metrics'
+  | 'serverstate'
+  | 'business'
+  | 'bot'
 
 /**
  * 运维控制台的客户端 UI 状态（ADR-009 / FR-037 / FR-039）。
