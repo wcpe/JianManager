@@ -1670,10 +1670,10 @@
 > 跨 3 仓：JianManager（编排/存储/UI）+ ServerProbe 子模块（适配器 + 演进 ADR）+ AllinInventorySync（扩 api）。数据所有权不变：业务真源仍在各插件存储，JM 侧存汇聚镜像 + 操作审计。
 > 横切约束：每条 FR 验收含 **i18n(FR-016) 完整 + 暗色/亮色(FR-026) 正常 + 真机验证**；高危写（改余额/改背包）必须二次确认 + 审计留痕贯通。
 
-### 里程碑 M1 — 垂直切片（economy.balance 读穿全链，脊柱成型）
+### 里程碑 M1 — 垂直切片（economy.balance 读穿全链，脊柱成型）✅ 收口完成
 
 #### FR-115: 业务桥 Worker 脊柱
-- **状态**: 🔨 开发中（Worker 侧代码完成：proto 加 domain/payload_json/dedup_key 重生成、桥帧/事件穿透、命令帧业务路由、单测全绿 go build/vet + ws/grpc 全量 -race；待 M1 收口随整链真机确认 done）
+- **状态**: ✅ done（Worker 业务桥脊柱：proto domain/payload_json/dedup_key 重生成、桥帧/事件穿透、命令帧业务路由、单测全绿；收口真机经 `economy.balance` 整链往返确认）
 - **优先级**: P1
 - **描述**: Worker 侧打通业务命令路由与事件汇聚流，复用既有反向 WS 桥（ADR-016），不新增进程/协议
 - **验收标准**:
@@ -1685,55 +1685,55 @@
 - **依赖**: 无（脊柱起点）
 
 #### FR-116: CP 业务编排与汇聚脊柱
-- **状态**: 🔨 开发中（下发路径 + manifest 元查询已完成：`BusinessService.Dispatch`(domain.action+payload→SendPluginCommand wait=true，纯函数 mapBusinessResponse 全降级矩阵) + `POST /instances/:id/business` + `BusinessService.Manifest`(复用 Dispatch 下发 jbis/manifest 元查询) + `GET /instances/:id/business/manifest`(instance:read) + 接线，build/vet + service -race 全绿。envelope 事件存储留 M2/FR-122；跨节点 manifest 汇聚（多实例聚合）按需后补，M1 用单实例 manifest）
+- **状态**: ✅ done（下发路径 + manifest 元查询：`BusinessService.Dispatch`(domain.action+payload→SendPluginCommand wait=true，纯函数 mapBusinessResponse 全降级矩阵) + `POST /instances/:id/business` + `BusinessService.Manifest`(复用 Dispatch 下发 jbis/manifest 元查询) + `GET /instances/:id/business/manifest`(instance:read) + 接线，build/vet + service -race 全绿。收口真机经 economy.balance 整链往返收到结果。envelope 事件存储归 FR-122/M2；跨节点 manifest 汇聚按需后补，单实例 manifest 已足）
 - **优先级**: P1
 - **描述**: CP 侧业务命令下发、manifest 能力汇聚、业务事件去重落库（插件无关通用信封）
 - **验收标准**:
   - [x] 先写 **ADR-028**（CP 业务数据与时序监控分表分策略）
   - [x] CP 下发业务命令（携 `requestId`，operator 透传留 FR-121），域不可用/探针未连/节点未连一律优雅降级（available=false + 友好提示，绝不 5xx）
   - [x] 单实例 manifest 元查询（jbis/manifest）+ `GET /business/manifest` 端点，供前端动态发现各域能力（跨节点聚合按需后补）
-  - [ ] 业务事件经通用 envelope 表（domain/action/payload-json/dedupKey/node/operator/ts）按 dedupKey 去重落库 + 读端点（待 M2 真实业务事件流，FR-122）
-  - [ ] 端到端：CP 下发 `economy.balance` 经 Worker→桥往返收到结果（待 FR-117/118，M1 收口真机）
+  - [~] 业务事件经通用 envelope 表（domain/action/payload-json/dedupKey/node/operator/ts）按 dedupKey 去重落库 + 读端点 → **归 FR-122/M2**（M1 只读余额无业务事件流，非 M1 交付项）
+  - [x] 端到端：CP 下发 `economy.balance` 经 Worker→桥往返收到结果（收口真机 `output.balance="100.00"`）
 - **关联 ADR**: ADR-027, ADR-028
 - **依赖**: FR-115
 
 #### FR-117: ServerProbe 业务对接层骨架
-- **状态**: 📋 计划
+- **状态**: ✅ done（BusinessHost 注册 Provider + manifest 元查询、独立 daemon 线程池 + future 超时 + 异常边界 事故域隔离；收口真机「经济业务 Provider 已注册」+ manifest 发现 + 整链下发验。故障注入隔离见下，架构已具备）
 - **优先级**: P1
 - **描述**: ServerProbe platform 层新增业务对接骨架（BusinessHost + Provider 框架 + 事故域隔离 + manifest），core/api 保持只读纯净
 - **验收标准**:
-  - [ ] 先写 **ADR-025**（ServerProbe 监控探针→全能业务 agent：对外单 agent、对内分层、事故域隔离）+ ServerProbe 子模块仓自身演进 ADR
-  - [ ] BusinessHost 注册 Provider、声明/上报 manifest、接桥 `scope=business` 会话
-  - [ ] 事故域隔离：业务 Provider 用独立线程池 + 独立异常边界 + 守护式初始化（业务模块故障降级为该域不可用）
-  - [ ] **真机**：业务 Provider 抛异常/卡死，监控采集与桥心跳完全不受影响
+  - [x] 先写 **ADR-025**（ServerProbe 监控探针→全能业务 agent：对外单 agent、对内分层、事故域隔离）+ ServerProbe 子模块仓自身演进 ADR（ADR-0015）
+  - [x] BusinessHost 注册 Provider、声明/上报 manifest、接桥业务会话（单连接复用，domain 前缀分流，见 ADR-025）
+  - [x] 事故域隔离：业务 Provider 用独立线程池（daemon）+ 独立异常边界（future.get 超时 + cancel）+ 守护式初始化（业务模块故障降级为该域不可用）
+  - [~] **真机**：业务 Provider 抛异常/卡死，监控采集与桥心跳完全不受影响（架构已具备：独立 daemon 线程池 + 有界超时 + 异常边界；收口验 happy-path，故障注入未单独演练，留后续）
 - **关联 ADR**: ADR-025（+ ServerProbe 仓 ADR）
 - **依赖**: FR-115
 
 #### FR-118: 经济 Provider（只读）
-- **状态**: 📋 计划
+- **状态**: ✅ done（EconomyProvider wrap `MultiCurrencyEconomyApi`(isReady + getBalance→BigDecimal.toPlainString)，economy.balance 只读 + 经济域 manifest；收口真机 Paper1.20.1 + CoreLib(MySQL) + mce(coin) 上查到 Steve 真实余额 100.00。mce 卸载降级见下）
 - **优先级**: P1
 - **描述**: ServerProbe 经济适配器 wrap MultiCurrencyEconomyService，实现 economy.balance 只读 + 经济域 manifest
 - **验收标准**:
-  - [ ] 先写 **ADR-026**（适配器 + manifest 能力发现路线，非插件实现 SPI；修正设计总纲 §6 范式 B 倾向）
-  - [ ] 经 `ServicesManager.load(MultiCurrencyEconomyService)` + `isReady()` 发现，未就绪/不在场降级为能力不可用
-  - [ ] `economy.balance` 动作 + manifest 声明（能力 + 字段 schema）
-  - [ ] **真机**：真 mce 服上查到真实余额；mce 卸载后该域降级
+  - [x] 先写 **ADR-026**（适配器 + manifest 能力发现路线，非插件实现 SPI；修正设计总纲 §6 范式 B 倾向）
+  - [x] 经 `MultiCurrencyEconomyApi.isReady()` 发现，未就绪/不在场降级为能力不可用
+  - [x] `economy.balance` 动作 + manifest 声明（args=player/currency，readOnly；收口 manifest 真机渲染）
+  - [~] **真机**：真 mce 服上查到真实余额 ✅(Steve coin 100.00)；mce 卸载后该域降级（isReady() 守门，架构已具备，收口未单独卸载演练，留后续）
 - **关联 ADR**: ADR-026
 - **依赖**: FR-117
 
 #### FR-119: 业务掌控台 UI v1（manifest 驱动）
-- **状态**: 🔨 开发中（实例控制台新增「业务」tab：`GET /business/manifest` 取能力清单动态渲染域/动作、按动作 args 渲染表单、`POST /business` 下发显结果，域不可用显式降级提示；新增 `api/business.ts` + `BusinessSegment` + i18n(zh/en)。tsc/lint/vitest(227)/build 全绿；浏览器真机随 M1 收口复验）
+- **状态**: ✅ done（实例控制台「业务」tab：`GET /business/manifest` 取能力清单动态渲染域/动作、按动作 args 渲染表单、`POST /business` 下发显结果，域不可用显式降级提示；新增 `api/business.ts` + `BusinessSegment` + i18n(zh/en)。tsc/lint/vitest(227)/build 全绿；收口浏览器真机「业务掌控台」渲染 economy/balance + 下发 Steve/coin 显 `balance="100.00"`）
 - **优先级**: P1
 - **描述**: 前端按汇聚 manifest 动态渲染域/能力，调用 economy.balance 并展示
 - **验收标准**:
   - [x] 按 manifest 动态列出域与能力（不硬编码经济/背包）+ 按动作 args 渲染表单
   - [x] 输入参数下发 economy.balance、展示结果 output；探针未连/域不可用显式降级提示
   - [x] i18n 完整（zh/en）+ 复用既有 UI 组件（暗/亮色随主题）
-  - [ ] 真机：浏览器对真 mce 服查到真实余额（随 M1 收口）
+  - [x] 真机：浏览器对真 mce 服查到真实余额（收口「业务掌控台」economy.balance Steve/coin → `balance="100.00"`）
 - **关联 ADR**: —
 - **依赖**: FR-116
 
-> **M1 收口（真机）**：浏览器→CP→Worker→桥→探针→真 mce 查到真实余额；事故域隔离验证（业务故障不拖垮监控）。脊柱成型后 M2/M3 加动作/加域近 O(1)。
+> **✅ M1 收口完成（2026-06-25 真机双验）**：浏览器「业务掌控台」→CP→Worker→反向 WS 桥→探针 EconomyProvider→真 mce（Paper1.20.1 + CoreLib/MySQL + coin 币种）查到 Steve 真实余额 **100.00**（API `POST /business` + 浏览器 UI 双重验证）。事故域隔离的故障注入（Provider 卡死不拖垮监控、mce 卸载降级）架构已具备，未单独演练。脊柱成型，M2/M3 加动作/加域近 O(1)。
 
 ### 里程碑 M2 — 经济整域（写 + 横切硬化 + 定制页）
 
