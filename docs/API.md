@@ -489,6 +489,31 @@
 - **错误**: `403 FORBIDDEN`（无 `instance.read`）、`404 NOT_FOUND`（实例不可见/不存在）
 - **关联 FR**: FR-116 ｜ **关联 ADR**: ADR-026, ADR-027
 
+### GET /api/v1/instances/:id/business/economy/mirror
+- **描述**: 经济余额镜像（FR-122，CP 自有汇聚镜像、非业务真源）：逐 `node→zone` 行返回最新余额（跨区同名玩家分行不混）。Query `?player=&currency=&node=&zone=&limit=`（任意组合过滤）
+- **权限**: `instance.read`
+- **响应**: `{ "balances":[{ "nodeUuid":"","zoneId":"0","playerName":"Steve","currency":"coin","currencyId":1,"balance":"100.00","lastSeq":3,"lastLedgerId":7,"occurredAt":0 }] }`（余额字符串承载 BigDecimal，禁浮点）
+- **关联 FR**: FR-122 ｜ **关联 ADR**: ADR-028
+
+### GET /api/v1/instances/:id/business/economy/aggregate
+- **描述**: 跨区经济聚合明细（FR-122）：按 `player`+`currency` 逐 `node→zone` 返回**不盲目求和**（mce 账户按 zone 隔离，是否相加由调用方按业务语义定）。Query `?player=&currency=`
+- **权限**: `instance.read`
+- **响应**: `{ "rows":[{ "nodeUuid":"","zoneId":"0","balance":"100.00" }] }`
+- **关联 FR**: FR-122 ｜ **关联 ADR**: ADR-028
+
+### GET /api/v1/instances/:id/business/economy/leaderboard
+- **描述**: 某货币余额倒序 Top-N（FR-123 旁路排行：mce 无 leaderboard API，从 JM 自有镜像表派生、不穿透探针；按 DB 方言数值 CAST 排序，避免 BigDecimal 字符串字典序错排）。逐 `node→zone` 行参与排行
+- **权限**: `instance.read`
+- **请求**: Query `?currency=（必填）&zone=&node=&limit=`（默认 100，上限 500）
+- **响应**: `{ "currency":"coin", "rows":[{ "rank":1,"playerName":"Steve","currency":"coin","nodeUuid":"","zoneId":"0","balance":"100.00" }] }`
+- **关联 FR**: FR-123 ｜ **关联 ADR**: ADR-028
+
+### GET /api/v1/instances/:id/business/events
+- **描述**: 通用业务事件流（FR-122，按 `(domain,dedupKey)` 去重的 envelope 表，CP 自有汇聚）。经济流水由 `?domain=economy` 过滤后前端解析信封。Query `?domain=&node=&limit=`
+- **权限**: `instance.read`
+- **响应**: `{ "events":[{ "domain":"economy","dedupKey":"<ledgerId>","action":"","nodeUuid":"","operator":"","payloadJson":"{...}","occurredAt":0 }] }`
+- **关联 FR**: FR-122 ｜ **关联 ADR**: ADR-028
+
 ### POST /api/v1/players/:name/kick
 - **描述**: 踢出玩家，经探针插件桥 `SendPluginCommand` 向目标后端集合下发 kick（FR-067）。范围互斥：`instanceId`（单服）> `networkId`（群组）> 全部可见后端
 - **权限**: `instance.operate` | **审计**: `player.kick`
