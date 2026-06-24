@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Folder,
@@ -77,6 +77,30 @@ export default function FileList({
   const { t } = useTranslation()
   const [dragOverZone, setDragOverZone] = useState(false)
 
+  // 单击选择延后一个 tick，使紧随的双击（打开）能撤销它——避免双击既打开又选中行（BUG-010）。
+  // 带修饰键的点击（shift/ctrl/meta）属多选语义、绝不是打开手势，故立即生效不延后。
+  const pendingClick = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const cancelPendingClick = () => {
+    if (pendingClick.current !== null) {
+      clearTimeout(pendingClick.current)
+      pendingClick.current = null
+    }
+  }
+  useEffect(() => cancelPendingClick, [])
+
+  const handleRowClick = (name: string, e: React.MouseEvent) => {
+    const mods = { shift: e.shiftKey, ctrlOrMeta: e.ctrlKey || e.metaKey }
+    if (mods.shift || mods.ctrlOrMeta) {
+      onRowClick(name, mods)
+      return
+    }
+    cancelPendingClick()
+    pendingClick.current = setTimeout(() => {
+      pendingClick.current = null
+      onRowClick(name, mods)
+    }, 200)
+  }
+
   return (
     <div
       className={cn('flex-1 overflow-auto', dragOverZone && 'bg-primary/5 ring-1 ring-inset ring-primary/40')}
@@ -127,10 +151,14 @@ export default function FileList({
                       'group flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-accent/40 border-b border-border/40',
                       checked && 'bg-accent/60',
                     )}
-                    onClick={(e) =>
-                      onRowClick(f.name, { shift: e.shiftKey, ctrlOrMeta: e.ctrlKey || e.metaKey })
-                    }
-                    onDoubleClick={handleDouble}
+                    onClick={(e) => handleRowClick(f.name, e)}
+                    onDoubleClick={(e) => {
+                      // 双击属"打开"语义：撤销可能挂起的单击选择，仅打开不勾选该行
+                      // （否则双击 jar 会既打开归档又选中行，BUG-010）。
+                      cancelPendingClick()
+                      e.preventDefault()
+                      handleDouble()
+                    }}
                   >
                     <span onClick={(e) => e.stopPropagation()}>
                       <Checkbox

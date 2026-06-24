@@ -19,18 +19,8 @@ import {
   type ArchiveEntry,
 } from '@/api/archive'
 import CodeEditor from './editor/CodeEditor'
+import { buildEntryTree, type EntryNode } from './archive-tree'
 import { cn } from '@/lib/utils'
-
-/** 归档内部条目构成的树节点（懒构建，仅展示用）。 */
-interface EntryNode {
-  /** 显示名（路径最后一段）。 */
-  label: string
-  /** 归档内完整条目名（目录以「/」结尾；文件无尾斜杠）。 */
-  fullPath: string
-  isDir: boolean
-  size: number
-  children: EntryNode[]
-}
 
 /**
  * 归档浏览与反编译视图（FR-075，复用 FR-070 只读编辑器）。
@@ -47,49 +37,6 @@ interface ArchiveViewerProps {
   /** 归档文件名（标题展示）。 */
   name: string
   onClose: () => void
-}
-
-/** 把扁平条目列表按「/」重建为树（目录隐式补全）。 */
-function buildEntryTree(entries: ArchiveEntry[]): EntryNode[] {
-  const root: EntryNode = { label: '', fullPath: '', isDir: true, size: 0, children: [] }
-  const dirCache = new Map<string, EntryNode>([['', root]])
-
-  const ensureDir = (dirPath: string): EntryNode => {
-    if (dirCache.has(dirPath)) return dirCache.get(dirPath)!
-    const trimmed = dirPath.replace(/\/$/, '')
-    const slash = trimmed.lastIndexOf('/')
-    const parentPath = slash >= 0 ? trimmed.slice(0, slash) : ''
-    const label = slash >= 0 ? trimmed.slice(slash + 1) : trimmed
-    const parent = ensureDir(parentPath)
-    const node: EntryNode = { label, fullPath: trimmed + '/', isDir: true, size: 0, children: [] }
-    parent.children.push(node)
-    dirCache.set(dirPath, node)
-    return node
-  }
-
-  for (const e of entries) {
-    const norm = e.name.replace(/\/$/, '')
-    if (norm === '') continue
-    if (e.isDir) {
-      ensureDir(norm + '/')
-      continue
-    }
-    const slash = norm.lastIndexOf('/')
-    const parentPath = slash >= 0 ? norm.slice(0, slash) : ''
-    const label = slash >= 0 ? norm.slice(slash + 1) : norm
-    const parent = ensureDir(parentPath)
-    parent.children.push({ label, fullPath: norm, isDir: false, size: e.size, children: [] })
-  }
-
-  const sortRec = (nodes: EntryNode[]) => {
-    nodes.sort((a, b) => {
-      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
-      return a.label.localeCompare(b.label)
-    })
-    nodes.forEach((n) => sortRec(n.children))
-  }
-  sortRec(root.children)
-  return root.children
 }
 
 /** 打开的内部条目查看态。 */
