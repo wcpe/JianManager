@@ -155,6 +155,9 @@ func main() {
 	// 服务器状态查询服务（FR-076，见 ADR-016）：按需经探针反向 WS 桥的 QueryServerState
 	// 取回某实例全量 Bukkit 内部状态（前端「服务器状态」tab 开/刷新才查，FR-077）。
 	serverStateSvc := service.NewServerStateService(db, pool)
+	// 业务对接编排服务（FR-116，见 ADR-026/027）：经探针桥下发业务命令（domain.action+payload）
+	// 并透传结果，CP 插件无关、降级即默认。JBIS 业务对接平台 M1 脊柱。
+	businessSvc := service.NewBusinessService(db, pool)
 	// 玩家事件服务（FR-066，见 ADR-016）：订阅各 Worker 的插件事件流（StreamPluginEvents），
 	// 维护实时在线名册并经 SSE 推送给前端（join/quit/chat/cross_server）。
 	playerEventSvc := service.NewPlayerEventService(pool, db)
@@ -221,6 +224,7 @@ func main() {
 		Player:             playerSvc,
 		PlayerEvent:        playerEventSvc,
 		ServerState:        serverStateSvc,
+		Business:           businessSvc,
 		Config:             configSvc,
 		Bot:                botSvc,
 		Alert:              alertSvc,

@@ -466,6 +466,15 @@
 - **错误**: `403 FORBIDDEN`（无 `instance.read`）、`404 NOT_FOUND`（实例不可见/不存在）
 - **关联 FR**: FR-076 ｜ **关联 ADR**: ADR-016
 
+### POST /api/v1/instances/:id/business
+- **描述**: JBIS 业务对接——向某实例下发一条业务命令（`domain.action` + 结构化 `payload`）并取回结果（FR-116，见 ADR-026/027）。CP **插件无关**：经既有探针桥（ADR-016）把信封下发到目标实例 ServerProbe 业务对接层（BusinessHost→per-plugin Provider 执行），结果 JSON 原样透传，CP 不解析。`domain` 区分业务域（`economy`/`inventory`…），与监控/治理（`core.*`）同桥分流
+- **权限**: `instance.operate`（且实例须可访问；高危写的 per-action 权限与二次确认见 FR-121/ADR-029）
+- **请求**: `{ "domain":"economy", "action":"balance", "payload":"{\"player\":\"alice\",\"currency\":\"coin\"}" }`（`payload` 为结构化参数 JSON 字符串，CP 不解析原样下发；`domain`/`action` 必填）
+- **响应**: `200`，`{ "instanceId":3, "domain":"economy", "action":"balance", "available":true, "output": {...业务结果JSON...}, "error":"" }`
+  - `available=false`：探针未连入/域不可用/Provider 执行失败 → `output` 为 `null` + `error` 说明（HTTP 200，降级不 5xx）
+- **错误**: `400 INVALID_REQUEST`（缺 domain/action）、`403 FORBIDDEN`（无 `instance.operate`）、`404 NOT_FOUND`（实例不可见/不存在）
+- **关联 FR**: FR-116 ｜ **关联 ADR**: ADR-026, ADR-027
+
 ### POST /api/v1/players/:name/kick
 - **描述**: 踢出玩家，经探针插件桥 `SendPluginCommand` 向目标后端集合下发 kick（FR-067）。范围互斥：`instanceId`（单服）> `networkId`（群组）> 全部可见后端
 - **权限**: `instance.operate` | **审计**: `player.kick`

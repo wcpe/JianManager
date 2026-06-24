@@ -26,6 +26,7 @@ type Services struct {
 	Player             *service.PlayerService
 	PlayerEvent        *service.PlayerEventService
 	ServerState        *service.ServerStateService
+	Business           *service.BusinessService
 	Config             *service.ConfigService
 	Bot                *service.BotService
 	Alert              *service.AlertService
@@ -158,6 +159,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.ServerState != nil {
 			serverStateHandler := NewServerStateHandler(svcs.ServerState, svcs.Authz)
 			serverStateHandler.RegisterRoutes(protected)
+		}
+
+		// JBIS 业务对接：经探针桥下发业务命令（domain.action+payload）并透传结果（FR-116），instance:operate 且实例可访问。
+		if svcs.Business != nil {
+			businessHandler := NewBusinessHandler(svcs.Business, svcs.Authz)
+			businessHandler.RegisterRoutes(protected)
 		}
 
 		eventHandler := NewEventHandler(svcs.Event)
