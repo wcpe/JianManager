@@ -91,11 +91,37 @@ func (h *BusinessEventHandler) AggregateEconomy(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"player": player, "rows": rows})
 }
 
+// LeaderboardEconomy GET /business/economy/leaderboard?currency=&zone=&node=&limit= —
+// 取某货币余额倒序的 Top-N（FR-123 旁路排行：mce 无 leaderboard API，从 JM 自有镜像表派生，不穿透探针）。
+// currency 必填（跨货币余额不可比）；逐 node→zone 行（同名玩家跨区各占一行，不合并）。
+func (h *BusinessEventHandler) LeaderboardEconomy(c *gin.Context) {
+	if !h.requireRead(c) {
+		return
+	}
+	currency := c.Query("currency")
+	if currency == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少 currency 参数"})
+		return
+	}
+	rows, err := h.svc.LeaderboardEconomy(service.EconomyLeaderboardQuery{
+		Currency: currency,
+		ZoneID:   c.Query("zone"),
+		NodeUUID: c.Query("node"),
+		Limit:    atoiDefault(c.Query("limit"), 0),
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "经济排行查询失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"currency": currency, "rows": rows})
+}
+
 // RegisterRoutes 注册业务事件汇聚只读路由（加性追加，平台级只读，不绑定单实例）。
 func (h *BusinessEventHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.GET("/business/events", h.ListEvents)
 	rg.GET("/business/economy/mirror", h.ListEconomyMirror)
 	rg.GET("/business/economy/aggregate", h.AggregateEconomy)
+	rg.GET("/business/economy/leaderboard", h.LeaderboardEconomy)
 }
 
 // atoiDefault 解析查询整型参数，失败/空时回退默认值。

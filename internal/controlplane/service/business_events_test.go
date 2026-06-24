@@ -176,6 +176,75 @@ func TestAggregateEconomyByZone(t *testing.T) {
 	assert.Error(t, err, "playerName 必填")
 }
 
+// TestLeaderboardEconomy_OrdersByNumericBalance 排行按余额**数值**倒序，纠正字符串字典序错误。
+func TestLeaderboardEconomy_OrdersByNumericBalance(t *testing.T) {
+	db := newBusinessEventTestDB(t)
+	svc := NewBusinessEventService(db)
+	// 字符串字典序会把 "99.9" 排在 "1000"/"100" 前；正确数值序应为 1000 > 100 > 99.9。
+	svc.Ingest("node-1", economyEvt(t, "inst-a", economyData("Rich", "coin", "z", "DEPOSIT", "1000", "1000", "1", "1")))
+	svc.Ingest("node-1", economyEvt(t, "inst-b", economyData("Mid", "coin", "z2", "DEPOSIT", "100", "100", "2", "1")))
+	svc.Ingest("node-1", economyEvt(t, "inst-c", economyData("Low", "coin", "z3", "DEPOSIT", "99.9", "99.9", "3", "1")))
+
+	rows, err := svc.LeaderboardEconomy(EconomyLeaderboardQuery{Currency: "coin"})
+	require.NoError(t, err)
+	require.Len(t, rows, 3)
+	assert.Equal(t, []string{"Rich", "Mid", "Low"}, []string{rows[0].PlayerName, rows[1].PlayerName, rows[2].PlayerName},
+		"应按余额数值倒序（非字符串字典序）")
+	assert.Equal(t, 1, rows[0].Rank)
+	assert.Equal(t, 2, rows[1].Rank)
+	assert.Equal(t, 3, rows[2].Rank)
+	assert.Equal(t, "coin", rows[0].Currency)
+	assert.Equal(t, "1000", rows[0].Balance)
+}
+
+// TestLeaderboardEconomy_RequiresCurrency 排行须锚定单一货币（跨货币不可比）。
+func TestLeaderboardEconomy_RequiresCurrency(t *testing.T) {
+	db := newBusinessEventTestDB(t)
+	svc := NewBusinessEventService(db)
+	_, err := svc.LeaderboardEconomy(EconomyLeaderboardQuery{})
+	assert.Error(t, err, "currency 必填")
+}
+
+// TestLeaderboardEconomy_FiltersAndLimit zone/node 过滤 + Limit 收敛 Top-N。
+func TestLeaderboardEconomy_FiltersAndLimit(t *testing.T) {
+	db := newBusinessEventTestDB(t)
+	svc := NewBusinessEventService(db)
+	svc.Ingest("node-1", economyEvt(t, "inst-a", economyData("A", "coin", "zone-a", "DEPOSIT", "10", "10", "1", "1")))
+	svc.Ingest("node-1", economyEvt(t, "inst-b", economyData("B", "coin", "zone-b", "DEPOSIT", "20", "20", "2", "1")))
+	svc.Ingest("node-2", economyEvt(t, "inst-c", economyData("C", "coin", "zone-a", "DEPOSIT", "30", "30", "3", "1")))
+
+	// 仅 zone-a：A(node-1) 与 C(node-2) 两行。
+	zoneRows, err := svc.LeaderboardEconomy(EconomyLeaderboardQuery{Currency: "coin", ZoneID: "zone-a"})
+	require.NoError(t, err)
+	require.Len(t, zoneRows, 2)
+	assert.Equal(t, "C", zoneRows[0].PlayerName, "zone-a 内 30 > 10")
+
+	// 仅 node-1：A(zone-a) 与 B(zone-b) 两行。
+	nodeRows, err := svc.LeaderboardEconomy(EconomyLeaderboardQuery{Currency: "coin", NodeUUID: "node-1"})
+	require.NoError(t, err)
+	require.Len(t, nodeRows, 2)
+
+	// Limit=1：只取榜首。
+	top1, err := svc.LeaderboardEconomy(EconomyLeaderboardQuery{Currency: "coin", Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, top1, 1)
+	assert.Equal(t, "C", top1[0].PlayerName, "全局榜首应为 30")
+}
+
+// TestLeaderboardEconomy_CrossZoneSamePlayerSeparateRows 跨区同名玩家各占一行参与排行（不合并）。
+func TestLeaderboardEconomy_CrossZoneSamePlayerSeparateRows(t *testing.T) {
+	db := newBusinessEventTestDB(t)
+	svc := NewBusinessEventService(db)
+	svc.Ingest("node-1", economyEvt(t, "inst-a", economyData("Steve", "coin", "zone-a", "DEPOSIT", "100", "100", "1", "1")))
+	svc.Ingest("node-1", economyEvt(t, "inst-b", economyData("Steve", "coin", "zone-b", "DEPOSIT", "50", "50", "2", "1")))
+
+	rows, err := svc.LeaderboardEconomy(EconomyLeaderboardQuery{Currency: "coin"})
+	require.NoError(t, err)
+	require.Len(t, rows, 2, "同名玩家跨区是不同账户，各占一行")
+	assert.Equal(t, "zone-a", rows[0].ZoneID, "zone-a 余额 100 居首")
+	assert.Equal(t, "zone-b", rows[1].ZoneID)
+}
+
 // TestIngest_NonBusinessIgnored domain 为空（监控/治理事件）不落任何业务表。
 func TestIngest_NonBusinessIgnored(t *testing.T) {
 	db := newBusinessEventTestDB(t)

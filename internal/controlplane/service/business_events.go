@@ -278,6 +278,64 @@ func (s *BusinessEventService) AggregateEconomyByZone(playerName, currency strin
 	return out, nil
 }
 
+// EconomyLeaderboardQuery 经济排行查询条件（FR-123，旁路实现：mce 无 leaderboard API）。
+type EconomyLeaderboardQuery struct {
+	Currency string // 必填：排行锚定单一货币（跨货币余额不可比）
+	ZoneID   string // 可选：限定某区
+	NodeUUID string // 可选：限定某节点
+	Limit    int    // Top-N，复用 clampLimit（默认 100，上限 500）
+}
+
+// EconomyLeaderboardRow 排行一行：某 (node, zone) 内某玩家某货币的余额 + 名次。
+type EconomyLeaderboardRow struct {
+	Rank       int    `json:"rank"`
+	PlayerName string `json:"playerName"`
+	Currency   string `json:"currency"`
+	NodeUUID   string `json:"nodeUuid"`
+	ZoneID     string `json:"zoneId"`
+	Balance    string `json:"balance"`
+}
+
+// LeaderboardEconomy 取某货币余额倒序的 Top-N（FR-123 旁路排行：从 JM 自有镜像表派生，不穿透探针）。
+//
+// 排序难点：[model.EconomyBalanceMirror.Balance] 是字符串承载的 BigDecimal（FR-122 禁浮点防精度失真），
+// 字符串字典序对数值排序错误（"99.9" 会排在 "1000" 前）。故按数据库方言选数值 CAST 做 ORDER BY：
+// MySQL 用 DECIMAL(65,18) 精确十进制序、SQLite 用 REAL 数值化排序（dev 足够）。
+//
+// 逐 (node, zone) 行返回（与 mirror/aggregate 同口径）：同名玩家跨区是不同账户、各占一行参与排行，
+// 不合并不串味（mce 账户按 zoneId 隔离）。Currency 必填——跨货币不可比。
+func (s *BusinessEventService) LeaderboardEconomy(q EconomyLeaderboardQuery) ([]EconomyLeaderboardRow, error) {
+	if strings.TrimSpace(q.Currency) == "" {
+		return nil, errors.New("currency 必填")
+	}
+	tx := s.db.Model(&model.EconomyBalanceMirror{}).Where("currency = ?", q.Currency)
+	if q.ZoneID != "" {
+		tx = tx.Where("zone_id = ?", q.ZoneID)
+	}
+	if q.NodeUUID != "" {
+		tx = tx.Where("node_uuid = ?", q.NodeUUID)
+	}
+	var rows []EconomyLeaderboardRow
+	if err := tx.Select("player_name", "currency", "node_uuid", "zone_id", "balance").
+		Order(balanceNumericDescExpr(s.db) + ", player_name ASC").
+		Limit(clampLimit(q.Limit)).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		rows[i].Rank = i + 1
+	}
+	return rows, nil
+}
+
+// balanceNumericDescExpr 按数据库方言返回「余额数值倒序」的 ORDER BY 片段。
+// 余额列是字符串十进制，须数值化排序：MySQL 用 DECIMAL(65,18)（精确无浮点损失）、其它（sqlite）用 REAL。
+func balanceNumericDescExpr(db *gorm.DB) string {
+	if db.Dialector != nil && db.Dialector.Name() == "mysql" {
+		return "CAST(balance AS DECIMAL(65,18)) DESC"
+	}
+	return "CAST(balance AS REAL) DESC"
+}
+
 // clampLimit 收敛查询条数到 [1, businessEventMaxLimit]，缺省取 businessEventDefaultLimit。
 func clampLimit(limit int) int {
 	switch {
