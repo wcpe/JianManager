@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## 0.9.1（2026-06-24）
+
 ### 修复
 - **数据库浏览页直接访问/刷新崩溃（BUG-009，v0.9.0 走查）**：直接访问或刷新 `/database`（FR-084）抛 `Cannot read properties of null (reading 'length')` 致整页白屏。根因：后端 Go 把空结果的 nil 切片序列化为 JSON `null`（而非 `[]`），`DbRowsResult.rows`/`columns` 在空表/过滤无命中/加载首帧为 `null`，`DatabaseExplorer` 在「无数据行」分支 `data.rows.length` 裸读 null 的 length 崩（硬刷新初始 render 必现）。修：新增 `rows-view.ts` 集中归一（`normalizeColumns`/`normalizeRows`/`shouldShowEmptyRow`，`?? []` 守卫），`DatabaseExplorer` 全部 rows/columns 读经归一辅助，杜绝裸读 null.length。补 rows-view 纯逻辑单测（null/空/有值各路径）。
 - **归档浏览树重复文件夹 + 双击 jar 误选中（BUG-010，v0.9.0 走查）**：归档查看器（FR-075）把扁平 zip 条目按「/」重建子树时，对同时存在的目录条目（`io/`）与文件条目（`io/...`）各建一个同名节点，致顶级文件夹重复（真 server.jar 里 io/META-INF/paperclip 各出现 2 次）。修：`buildEntryTree` 的 `ensureDir` 以去尾斜杠路径段为归一键，目录条目与文件路径派生的中间目录复用同一节点。另修双击 jar 同时勾选行：`FileList` 单击选择延后一拍、双击（打开）撤销挂起的单击，双击仅打开归档不选中（带修饰键的多选点击不延后）。补 `buildEntryTree` 单测（目录+文件混合去重 / 多级嵌套 / 纯文件路径）。
@@ -14,26 +16,14 @@
 
 ### 新增
 - **系统更新页未配源仍展示当前版本（FR-110，v0.9.0 走查）**：系统更新页（FR-081）点检查更新后未配 `feed_url` 时只显警告、隐藏 CP/各 Worker 当前版本（后端 `CheckUpdate` 实际无条件返回各组件版本）。改前端：未配源也渲染 CP 版本卡 + 节点版本表（升级动作因无可升级版本自然禁用），仅「最新版本对比」行依赖配源；运维未配源也能看到在跑版本。
-
-### 新增
 - **仪表盘总览负载环量纲修正（FR-108，v0.9.0 走查）**：总负载环原把「占总核数比例」（如 103）当百分比塞进 0-100 环，超核数显示 >100% 视觉破环。改为以倍数（load÷核，如 1.03×）呈现、环按 1.0=满核封顶不破；分级配色（`resourceLevel` <50绿/50-80黄/>80红）本就生效，走查全红是机器确实满载。`ResourceGauge` 加 `decimals` 支持小数显示。
-
-### 新增
 - **服务器状态页显示打磨（FR-109，v0.9.0 走查）**：①类加载器父链原 `chain.join(' → ')` + `break-all` 致类名按字符断词（如 ClassLoa der）难读，改为每段渲染不换行的 mono chip、段间 → 分隔并在 chip 边界换行、超宽横向滚动；②加「自动刷新」开关（关/5s/15s，默认关保持 FR-077 非侵入），开启后按间隔自动重拉全量状态；③核查 state_json 已是类型化对象（ProbeServerState）透传、组件直接消费、无裸 parse 问题（#19 本就干净）。
-
-### 新增
 - **归档/反编译查看器布局优化（FR-111，v0.9.0 走查）**：原打开归档查看器后右栏成 树｜文件列表(w-1/2)｜查看器 三栏（ArchiveViewer 内部再分 jar树/内容，反编译则 DecompileViewer w-1/2），中屏拥挤。改为打开归档/反编译查看器时**整列收起文件列表**（目录树仍在左栏导航），查看器占满右栏（DecompileViewer 根由 w-1/2 改 flex-1）；关闭查看器恢复双栏；打开文本编辑器仍与列表并排 w-1/2（编辑需对照，保留）。
-
-### 新增
 - **平台/运维导航信息架构统一（FR-112，v0.9.0 走查）**：原「运行时与制品」「客户端分发」为顶级叶子，而「平台存储」「数据库」「系统更新」埋在「设置」组下，平台级页面分散两处 IA 不一致。新增「平台」分组统一收纳 运行时与制品/客户端分发/平台存储（+ 平台管理员的 数据库/系统更新）；「设置」组保留 用户/用户组/审计日志/系统设置。路由 URL 不变、不破坏书签。
 
 ### 变更
 - **新增 `.gitattributes` 统一换行与标记生成代码（v0.9.0 走查 #17/#18）**：`* text=auto eol=lf` 令所有文本以 LF 存储/检出，杜绝 Windows CRLF↔LF 往返反复污染 diff（开发期满屏「LF will be replaced by CRLF」）；`proto/workerpb/*.pb.go linguist-generated=true` 标记 protoc 生成物（PR diff 折叠、不计语言统计），并约定多分支并行撞车时从合并 .proto 用 protoc 重生成而非手改/union 拼接；二进制类型显式标记不做换行转换。
-
-### 变更
 - **前端重型依赖拆分为独立 vendor chunk（v0.9.0 走查 #13）**：路由本已按页 lazy 分割，但 recharts/codemirror/xterm 等重库被卷进应用 chunk（原「PluginManager」单 chunk ~798KB、触发 vite >500KB 警告）。vite 加 `manualChunks` 按库拆分：editor(codemirror ~358KB)/charts(recharts ~342KB)/terminal(xterm ~342KB)/react-vendor/query/vendor 各自独立、按需懒载且可长期缓存；应用主 chunk 降至 ~104KB，>500KB 警告消除。
-
-### 变更
 - **内嵌 CFR 反编译器 + 镜像嵌入校验（v0.9.0 走查 #14/#20）**：CFR 内嵌机制（go:embed + CFRJar 接入 decompiler）本已就绪但无填充入口，首次反编译需从 Maven 按需下载（慢/离线失败）。新增 `make embed-cfr`（下载 + SHA-256 pin 校验注入 `internal/worker/embed/cfr/`，jar 不入库）；Dockerfile.worker 构建期下载+校验内嵌 CFR、失败显式告警并移除占位（不静默产出「声称内嵌实则没有」的镜像）。发版 `make embed-cfr && make build-worker` 即得自带 CFR、离线可反编译的 worker。
 
 ## 0.9.0（2026-06-24）
