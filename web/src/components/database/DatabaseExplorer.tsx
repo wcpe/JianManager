@@ -8,6 +8,7 @@ import {
   type DbRowsParams,
 } from '@/api/db'
 import { cn } from '@/lib/utils'
+import { normalizeColumns, normalizeRows, shouldShowEmptyRow } from './rows-view'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import {
@@ -141,7 +142,7 @@ function TableRowsView({ table }: { table: string }) {
 
   const { data, isLoading, isError, isFetching } = useDbTableRows(table, params)
 
-  const columns = useMemo(() => data?.columns ?? [], [data])
+  const columns = useMemo(() => normalizeColumns(data), [data])
   const sensitive = useMemo(() => {
     const s = new Set<string>()
     for (const c of columns) if (c.sensitive) s.add(c.name)
@@ -246,7 +247,7 @@ function TableRowsView({ table }: { table: string }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(data?.rows ?? []).map((row, i) => (
+              {normalizeRows(data).map((row, i) => (
                 <TableRow key={i}>
                   {columns.map((c) => (
                     <TableCell key={c.name} className="max-w-[24rem] truncate font-mono text-xs">
@@ -259,7 +260,7 @@ function TableRowsView({ table }: { table: string }) {
                   ))}
                 </TableRow>
               ))}
-              {(!data || data.rows.length === 0) && (
+              {shouldShowEmptyRow(data) && (
                 <TableRow>
                   <TableCell
                     colSpan={Math.max(1, columns.length)}
