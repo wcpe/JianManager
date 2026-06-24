@@ -256,6 +256,8 @@ type SearchHit struct {
 type SearchResult struct {
 	Hits      []SearchHit `json:"hits"`
 	Truncated bool        `json:"truncated"`
+	// Indexing 为 true 表示 Worker 索引首建未就绪（FR-113，ADR-024）：本次 Hits 为空，调用方应稍后用同一查询重试。
+	Indexing bool `json:"indexing"`
 }
 
 // SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
@@ -293,7 +295,7 @@ func (s *FileService) SearchFiles(instanceID uint, query, mode string, maxResult
 	for i, h := range resp.Hits {
 		hits[i] = SearchHit{Path: h.Path, Line: int(h.Line), Snippet: h.Snippet}
 	}
-	return &SearchResult{Hits: hits, Truncated: resp.Truncated}, nil
+	return &SearchResult{Hits: hits, Truncated: resp.Truncated, Indexing: resp.Indexing}, nil
 }
 
 // ArchiveEntry 归档（jar/zip）内的单个条目（FR-075）。

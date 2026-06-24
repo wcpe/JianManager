@@ -6,6 +6,9 @@
 
 ## [Unreleased]
 
+### 新增
+- **全文搜索索引首建后台化与「索引中」进度（FR-113）**：FR-074 全文索引原在查询时**同步**全量构建（读+切词所有文本文件），大工作目录首次搜索阻塞 gRPC 调用与前端 UI 达数秒到数十秒。改为首建后台异步（见 ADR-024）：`search.Index` 加进程内就绪态（`ready`/`building`/`builtCh`，CAS 单飞），`SearchFiles` 未就绪时启动后台构建并有界等待（200ms）——小目录在预算内建好本次即同步出结果（不退化）、大目录返回 `indexing=true`（空命中、不阻塞）。proto `SearchFilesResponse` 加性新增 `indexing` 字段，CP 透传；前端 `SearchPanel` 收到 `indexing=true` 显示「索引中」并自动重试同一查询（带请求序号防抖竞态）直到出结果。构建成功/失败都置就绪、由后续同步增量自愈，避免「索引中」死循环。补 Worker 就绪态单测（含构建在途 gate）与 RPC indexing 契约测试。
+
 ## 0.9.1（2026-06-24）
 
 ### 修复

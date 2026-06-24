@@ -19,6 +19,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 const (
@@ -55,7 +57,22 @@ type persisted struct {
 	Files map[string]fileFingerprint
 }
 
+// buildStartHook 是后台首建 goroutine 启动时（Update 之前）的测试钩子，生产恒为 nil。
+// 测试用它把一次构建「卡」在途，确定性地验证未就绪查询返回 indexing=true（沿用 BUG-012
+// preflight 的可替换 var 模式）。
+var buildStartHook func()
+
+// SetBuildStartHookForTest 设置后台首建启动钩子并返回旧值，仅供测试注入「构建在途」用（生产恒为 nil）。
+func SetBuildStartHookForTest(fn func()) func() {
+	prev := buildStartHook
+	buildStartHook = fn
+	return prev
+}
+
 // Index 是单实例的全文索引。并发安全（自带锁，构建/增量/查询串行化到该实例）。
+//
+// 首建后台化（FR-113，见 ADR-024）：ready/building 为进程内就绪态（不落盘，Worker 重启归零）；
+// builtCh 在首建完成（成功或失败）时关闭，供有界等待者唤醒。building 经 CAS 保证单飞构建。
 type Index struct {
 	mu       sync.Mutex
 	dir      string // 该实例索引目录 <indexRoot>/<instance-uuid>
@@ -63,6 +80,10 @@ type Index struct {
 	postings map[string]map[string]struct{}
 	files    map[string]fileFingerprint
 	loaded   bool
+
+	ready    atomic.Bool   // 是否已完成至少一次构建（可信查询）
+	building atomic.Bool    // 是否有后台构建在途（CAS 单飞）
+	builtCh  chan struct{} // 首建完成时关闭
 }
 
 // Hit 是一条搜索命中。content 模式含行号(1 起)与该行片段；filename 模式 Line=0、Snippet 空。
@@ -87,6 +108,46 @@ func NewIndex(indexRoot, instanceUUID string, extraIgnore []string) *Index {
 		ignore:   newMatcher(extraIgnore),
 		postings: make(map[string]map[string]struct{}),
 		files:    make(map[string]fileFingerprint),
+		builtCh:  make(chan struct{}),
+	}
+}
+
+// Ready 报告索引是否已完成至少一次构建（可信查询）。进程内状态，Worker 重启归零（FR-113，ADR-024）。
+func (ix *Index) Ready() bool { return ix.ready.Load() }
+
+// EnsureBuilding 若索引未就绪且无构建在途，则启动一次后台全量构建（CAS 单飞，非阻塞）。
+// 构建复用落盘索引做增量追平（非从零）；完成（成功或失败）都置 ready=true 并关闭 builtCh，
+// 避免失败时每次查询重新构建导致「索引中」死循环（自愈交由后续同步增量 Update，见 ADR-024 §3）。
+func (ix *Index) EnsureBuilding(workDir string) {
+	if ix.ready.Load() {
+		return
+	}
+	if !ix.building.CompareAndSwap(false, true) {
+		return // 已有构建在途。
+	}
+	go func() {
+		// defer LIFO：先置就绪、再关闭信号，确保等待者被唤醒时 Ready() 已为真。
+		defer close(ix.builtCh)
+		defer ix.ready.Store(true)
+		if buildStartHook != nil {
+			buildStartHook()
+		}
+		_, _ = ix.Update(workDir) // 顶层错误（如 workDir 被删）吞掉记账，置就绪自愈。
+	}()
+}
+
+// WaitReady 至多等待 d 让首建完成；返回是否已就绪。
+// 小目录构建在预算内完成 → 返回 true（调用方本次即可同步查询，不退化）；
+// 大目录预算内未完成 → 返回 false（调用方返回 indexing=true）。见 ADR-024 §2。
+func (ix *Index) WaitReady(d time.Duration) bool {
+	if ix.ready.Load() {
+		return true
+	}
+	select {
+	case <-ix.builtCh:
+		return true
+	case <-time.After(d):
+		return ix.ready.Load()
 	}
 }
 

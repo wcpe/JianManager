@@ -405,6 +405,7 @@ message SearchHit {
 message SearchFilesResponse {
   repeated SearchHit hits = 1;
   bool truncated = 2;  // 命中数达到 max_results 上限被截断
+  bool indexing = 3;   // 索引首建未就绪：本次返回空命中，调用方应稍后用同一查询重试（FR-113，ADR-024）
 }
 
 // === 配置文件操作 ===

@@ -5,11 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 	"github.com/wcpe/JianManager/internal/worker/process"
+	"github.com/wcpe/JianManager/internal/worker/search"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
@@ -59,10 +61,45 @@ func TestSearchFiles_Content(t *testing.T) {
 		MaxResults:   50,
 	})
 	require.NoError(t, err)
+	require.False(t, resp.Indexing, "小目录经快路径同步出结果，不应 indexing=true")
 	require.Len(t, resp.Hits, 1, "logs/ ignored, only server.properties should hit")
 	require.Equal(t, "server.properties", resp.Hits[0].Path)
 	require.Equal(t, int32(1), resp.Hits[0].Line)
 	require.Contains(t, resp.Hits[0].Snippet, "online-mode=false")
+}
+
+// TestSearchFiles_IndexingThenReady 验证首建后台化的 RPC 契约（FR-113，ADR-024）：
+// 构建在途时首查返回 indexing=true、空命中；就绪后再查返回 indexing=false + 命中。
+func TestSearchFiles_IndexingThenReady(t *testing.T) {
+	gate := make(chan struct{})
+	prev := search.SetBuildStartHookForTest(func() { <-gate }) // 把后台构建卡在途
+	defer search.SetBuildStartHookForTest(prev)
+
+	srv, ctx, uuid := newSearchServer(t)
+	inst, _ := srv.manager.GetInstance(uuid)
+	writeSearchFile(t, inst.WorkDir, "server.properties", "online-mode=false")
+
+	// 首查：构建被卡住，快路径预算内未就绪 → indexing=true、空命中。
+	resp, err := srv.SearchFiles(ctx, &workerpb.SearchFilesRequest{
+		InstanceUuid: uuid, Query: "online-mode", Mode: "content", MaxResults: 50,
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Indexing, "构建在途首查应返回 indexing=true")
+	require.Empty(t, resp.Hits)
+
+	// 放行构建并等就绪。
+	close(gate)
+	ix := srv.searchIndexFor(uuid)
+	require.Eventually(t, ix.Ready, 2*time.Second, 10*time.Millisecond, "放行后索引应就绪")
+
+	// 再查：indexing=false + 命中。
+	resp, err = srv.SearchFiles(ctx, &workerpb.SearchFilesRequest{
+		InstanceUuid: uuid, Query: "online-mode", Mode: "content", MaxResults: 50,
+	})
+	require.NoError(t, err)
+	require.False(t, resp.Indexing)
+	require.Len(t, resp.Hits, 1)
+	require.Equal(t, "server.properties", resp.Hits[0].Path)
 }
 
 func TestSearchFiles_FilenameMode(t *testing.T) {

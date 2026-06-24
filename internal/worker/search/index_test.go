@@ -247,6 +247,63 @@ func TestLargeFileNameOnly(t *testing.T) {
 	}
 }
 
+// TestBackgroundBuildReadiness 验证首建后台化（FR-113，ADR-024）：新建索引未就绪，
+// EnsureBuilding 后台构建、WaitReady 在预算内就绪，随后可正常查询。
+func TestBackgroundBuildReadiness(t *testing.T) {
+	work := t.TempDir()
+	idxRoot := t.TempDir()
+	writeFile(t, work, "a.txt", "needle present here")
+	ix := NewIndex(idxRoot, "inst", nil)
+
+	if ix.Ready() {
+		t.Fatal("新建索引不应就绪")
+	}
+	ix.EnsureBuilding(work)
+	if !ix.WaitReady(2 * time.Second) {
+		t.Fatal("后台构建应在预算内就绪")
+	}
+	if !ix.Ready() {
+		t.Fatal("WaitReady 返回 true 后 Ready 应为真")
+	}
+	res, err := ix.SearchContent(work, "needle", 50)
+	if err != nil {
+		t.Fatalf("查询失败: %v", err)
+	}
+	if len(res.Hits) != 1 || res.Hits[0].Path != "a.txt" {
+		t.Fatalf("期望命中 a.txt，得 %+v", res.Hits)
+	}
+}
+
+// TestWaitReadyWhileBuilding 验证构建在途时未就绪（FR-113，ADR-024）：用钩子把构建卡住，
+// WaitReady 有界等待超时返回 false（RPC 据此返回 indexing=true）；放行后就绪。
+func TestWaitReadyWhileBuilding(t *testing.T) {
+	work := t.TempDir()
+	idxRoot := t.TempDir()
+	writeFile(t, work, "a.txt", "needle here")
+	ix := NewIndex(idxRoot, "inst", nil)
+
+	gate := make(chan struct{})
+	prev := SetBuildStartHookForTest(func() { <-gate }) // 构建卡在 Update 前
+	defer SetBuildStartHookForTest(prev)
+
+	ix.EnsureBuilding(work)
+	if ix.Ready() {
+		t.Fatal("构建在途不应就绪")
+	}
+	if ix.WaitReady(50 * time.Millisecond) {
+		t.Fatal("构建被卡住时 WaitReady 应超时返回 false")
+	}
+
+	close(gate) // 放行构建
+	if !ix.WaitReady(2 * time.Second) {
+		t.Fatal("放行后应就绪")
+	}
+	res, err := ix.SearchContent(work, "needle", 50)
+	if err != nil || len(res.Hits) != 1 {
+		t.Fatalf("放行后查询应命中，err=%v hits=%+v", err, res.Hits)
+	}
+}
+
 func TestFilenameSearch(t *testing.T) {
 	work := t.TempDir()
 	idxRoot := t.TempDir()

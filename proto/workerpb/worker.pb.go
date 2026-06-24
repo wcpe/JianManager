@@ -2298,6 +2298,7 @@ type SearchFilesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Hits          []*SearchHit           `protobuf:"bytes,1,rep,name=hits,proto3" json:"hits,omitempty"`
 	Truncated     bool                   `protobuf:"varint,2,opt,name=truncated,proto3" json:"truncated,omitempty"` // 命中数达到 max_results 上限被截断
+	Indexing      bool                   `protobuf:"varint,3,opt,name=indexing,proto3" json:"indexing,omitempty"`   // 索引首建未就绪：本次返回空命中，调用方应稍后用同一查询重试（FR-113，ADR-024）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2342,6 +2343,13 @@ func (x *SearchFilesResponse) GetHits() []*SearchHit {
 func (x *SearchFilesResponse) GetTruncated() bool {
 	if x != nil {
 		return x.Truncated
+	}
+	return false
+}
+
+func (x *SearchFilesResponse) GetIndexing() bool {
+	if x != nil {
+		return x.Indexing
 	}
 	return false
 }
@@ -7501,10 +7509,11 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\tSearchHit\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04line\x18\x02 \x01(\x05R\x04line\x12\x18\n" +
-	"\asnippet\x18\x03 \x01(\tR\asnippet\"Z\n" +
+	"\asnippet\x18\x03 \x01(\tR\asnippet\"v\n" +
 	"\x13SearchFilesResponse\x12%\n" +
 	"\x04hits\x18\x01 \x03(\v2\x11.worker.SearchHitR\x04hits\x12\x1c\n" +
-	"\ttruncated\x18\x02 \x01(\bR\ttruncated\"Q\n" +
+	"\ttruncated\x18\x02 \x01(\bR\ttruncated\x12\x1a\n" +
+	"\bindexing\x18\x03 \x01(\bR\bindexing\"Q\n" +
 	"\x16ListConfigFilesRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\"\x8d\x01\n" +
