@@ -47,19 +47,37 @@ export async function fetchBusinessManifest(
 }
 
 /**
+ * 业务写动作的横切硬化参数（FR-121，见 ADR-029）。
+ * 仅写动作（manifest `readOnly=false`）需要：CP 据此走高危写权限、注入幂等键/操作者上下文、记审计。
+ */
+export interface BusinessWriteOptions {
+  /** 是否为写动作（前端据 manifest `readOnly` 取反）。 */
+  write?: boolean
+  /** 幂等标识：对同一逻辑操作的重试必须稳定（CP 用作 payload `taskId`，探针→插件幂等键）。 */
+  operationId?: string
+  /** 操作原因（可选，透传进插件流水 + JM 审计）。 */
+  reason?: string
+}
+
+/**
  * 下发一条业务命令（POST /business）。
  * @param payload 结构化业务参数 JSON 字符串（CP 不解析，原样下发）。
+ * @param opts 写动作的横切硬化参数（FR-121）；只读动作省略。
  */
 export async function dispatchBusiness(
   instanceId: number,
   domain: string,
   action: string,
   payload: string,
+  opts?: BusinessWriteOptions,
 ): Promise<BusinessResult> {
   const { data } = await api.post<BusinessResult>(`/instances/${instanceId}/business`, {
     domain,
     action,
     payload,
+    write: opts?.write ?? false,
+    operationId: opts?.operationId,
+    reason: opts?.reason,
   })
   return data
 }

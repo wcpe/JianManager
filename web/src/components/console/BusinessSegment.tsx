@@ -1,15 +1,17 @@
 import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
-import { Loader2, Play, RefreshCw } from 'lucide-react'
+import { Loader2, Play, RefreshCw, ShieldAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import DangerConfirm from '@/components/DangerConfirm'
 import {
   dispatchBusiness,
   fetchBusinessManifest,
   type BusinessAction,
   type BusinessResult,
 } from '@/api/business'
+import { isWriteAction } from './business-actions'
 
 /**
  * 业务掌控台（JBIS，FR-119，见 ADR-026/027）。
@@ -31,9 +33,12 @@ export default function BusinessSegment({ instanceId }: BusinessSegmentProps) {
   })
   const [selected, setSelected] = useState<{ domain: string; action: BusinessAction } | null>(null)
   const [args, setArgs] = useState<Record<string, string>>({})
+  const [reason, setReason] = useState('')
   const [result, setResult] = useState<BusinessResult | null>(null)
   const [dispatching, setDispatching] = useState(false)
   const [dispatchError, setDispatchError] = useState('')
+  // 写动作二次确认弹窗（FR-121）；非 null 时展示，确认后才真正下发。
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   const manifest = manifestQuery.data
   const domains = manifest?.available ? (manifest.output?.domains ?? {}) : {}
@@ -42,20 +47,26 @@ export default function BusinessSegment({ instanceId }: BusinessSegmentProps) {
   const pick = useCallback((domain: string, action: BusinessAction) => {
     setSelected({ domain, action })
     setArgs(Object.fromEntries((action.args ?? []).map((a) => [a, ''])))
+    setReason('')
     setResult(null)
     setDispatchError('')
   }, [])
 
-  const run = useCallback(async () => {
+  // 真正执行下发：写动作注入幂等键（稳定 operationId）+ 操作原因（FR-121）。
+  const doDispatch = useCallback(async () => {
     if (!selected) return
     setDispatching(true)
     setDispatchError('')
+    const write = isWriteAction(selected.action)
     try {
       const res = await dispatchBusiness(
         instanceId,
         selected.domain,
         selected.action.action,
         JSON.stringify(args),
+        write
+          ? { write: true, operationId: crypto.randomUUID(), reason: reason.trim() || undefined }
+          : undefined,
       )
       setResult(res)
     } catch (err: unknown) {
@@ -64,7 +75,17 @@ export default function BusinessSegment({ instanceId }: BusinessSegmentProps) {
     } finally {
       setDispatching(false)
     }
-  }, [selected, args, instanceId, t])
+  }, [selected, args, reason, instanceId, t])
+
+  // 「下发」入口：写动作先弹二次确认，读动作直接下发（FR-121）。
+  const run = useCallback(() => {
+    if (!selected) return
+    if (isWriteAction(selected.action)) {
+      setConfirmOpen(true)
+      return
+    }
+    void doDispatch()
+  }, [selected, doDispatch])
 
   return (
     <div className="flex h-full min-w-0 flex-col gap-3 p-4">
@@ -136,9 +157,15 @@ export default function BusinessSegment({ instanceId }: BusinessSegmentProps) {
               <div className="text-xs text-muted-foreground">{t('business.pickAction')}</div>
             ) : (
               <div className="flex flex-col gap-2">
-                <div className="text-xs font-medium">
+                <div className="flex items-center gap-1.5 text-xs font-medium">
                   <span className="text-muted-foreground">{selected.domain}.</span>
                   <span className="font-mono">{selected.action.action}</span>
+                  {isWriteAction(selected.action) && (
+                    <span className="inline-flex items-center gap-0.5 rounded bg-destructive/10 px-1 text-[10px] font-medium text-destructive">
+                      <ShieldAlert className="size-3" aria-hidden />
+                      {t('business.writeAction')}
+                    </span>
+                  )}
                 </div>
                 {(selected.action.args ?? []).map((arg) => (
                   <label key={arg} className="flex flex-col gap-0.5 text-xs">
@@ -150,6 +177,18 @@ export default function BusinessSegment({ instanceId }: BusinessSegmentProps) {
                     />
                   </label>
                 ))}
+                {/* 写动作可选「原因」，透传进插件流水 + JM 审计（FR-121）。 */}
+                {isWriteAction(selected.action) && (
+                  <label className="flex flex-col gap-0.5 text-xs">
+                    <span className="text-muted-foreground">{t('business.reason')}</span>
+                    <Input
+                      value={reason}
+                      onChange={(e) => setReason(e.target.value)}
+                      placeholder={t('business.reasonPlaceholder')}
+                      className="h-7 text-xs"
+                    />
+                  </label>
+                )}
                 <Button size="sm" className="h-7 self-start px-3 text-xs" onClick={run} disabled={dispatching}>
                   {dispatching ? (
                     <Loader2 className="mr-1 size-3.5 animate-spin" />
@@ -179,6 +218,23 @@ export default function BusinessSegment({ instanceId }: BusinessSegmentProps) {
           </div>
         </div>
       )}
+
+      {/* 写动作二次确认（FR-121）：高危业务写须确认后下发，避免误操作刷钱/吞物品。 */}
+      <DangerConfirm
+        open={confirmOpen}
+        title={t('business.confirmWriteTitle')}
+        description={t('business.confirmWriteDesc', {
+          domain: selected?.domain ?? '',
+          action: selected?.action.action ?? '',
+        })}
+        confirmLabel={t('business.confirmWrite')}
+        scope="group"
+        onConfirm={() => {
+          setConfirmOpen(false)
+          void doDispatch()
+        }}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </div>
   )
 }

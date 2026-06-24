@@ -378,6 +378,12 @@
     "refresh": "Refresh capabilities",
     "unavailable": "Probe not connected or no business Provider on this server; deploy & connect the probe and install the target business plugin",
     "readOnly": "read-only",
+    "writeAction": "high-risk write",
+    "reason": "Reason (optional)",
+    "reasonPlaceholder": "Record why you run this; written to plugin ledger and platform audit",
+    "confirmWriteTitle": "Confirm high-risk business write",
+    "confirmWriteDesc": "About to write real business data via {{domain}}.{{action}} (e.g. change balance/inventory). A mistake may dupe currency or wipe items — confirm before proceeding.",
+    "confirmWrite": "Confirm dispatch",
     "pickAction": "Pick a business action on the left",
     "dispatch": "Dispatch",
     "dispatchFailed": "Business command dispatch failed"

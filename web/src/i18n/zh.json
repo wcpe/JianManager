@@ -365,6 +365,12 @@
     "refresh": "刷新能力",
     "unavailable": "探针未连入或本服无业务 Provider；部署并连接探针、安装对应业务插件后可用",
     "readOnly": "只读",
+    "writeAction": "高危写",
+    "reason": "原因（可选）",
+    "reasonPlaceholder": "记录本次操作的原因，将写入插件流水与平台审计",
+    "confirmWriteTitle": "确认高危业务写",
+    "confirmWriteDesc": "即将对真实业务数据执行写操作 {{domain}}.{{action}}（如改余额/改背包）。误操作可能刷钱或吞物品，请确认无误后继续。",
+    "confirmWrite": "确认下发",
     "pickAction": "从左侧选择一个业务动作",
     "dispatch": "下发",
     "dispatchFailed": "业务命令下发失败"
