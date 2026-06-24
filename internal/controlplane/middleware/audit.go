@@ -86,6 +86,10 @@ func determineAction(method, path string) string {
 	case method == "POST" && strings.Contains(path, "/instances") && strings.HasSuffix(path, "/probe/update"):
 		// 单实例探针在线更新（FR-068）：留痕，含目标实例与 restart。
 		return "probe.update"
+	case method == "POST" && strings.Contains(path, "/instances") && strings.HasSuffix(path, "/business"):
+		// JBIS 业务命令下发（FR-116/FR-121）：中间件兜底留痕（覆盖读+写），
+		// 写动作另由 BusinessHandler 记结构化 business.write（含 taskId/reason）。请求体含 domain/action/payload。
+		return "business.dispatch"
 	case method == "POST" && strings.Contains(path, "/instances"):
 		return "instance.create"
 	case method == "PUT" && strings.Contains(path, "/instances"):

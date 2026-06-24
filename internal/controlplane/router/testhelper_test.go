@@ -89,6 +89,7 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 		Template:      service.NewTemplateService(db),
 		Audit:         service.NewAuditService(db),
 		Authz:         authzSvc,
+		Business:      service.NewBusinessService(db, pool),
 		Asset:         service.NewAssetService(db, root),
 		Storage:       service.NewStorageService(db, root),
 		Log:           service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),

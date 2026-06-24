@@ -163,7 +163,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		// JBIS 业务对接：经探针桥下发业务命令（domain.action+payload）并透传结果（FR-116），instance:operate 且实例可访问。
 		if svcs.Business != nil {
-			businessHandler := NewBusinessHandler(svcs.Business, svcs.Authz)
+			businessHandler := NewBusinessHandler(svcs.Business, svcs.Authz, svcs.Audit)
 			businessHandler.RegisterRoutes(protected)
 		}
 
