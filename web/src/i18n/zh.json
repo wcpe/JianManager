@@ -438,7 +438,9 @@
       "byPlugin": "按插件分组",
       "plugin": "插件",
       "count": "条目数"
-    }
+    },
+    "autoRefresh": "自动刷新",
+    "autoOff": "关"
   },
   "nodes": {
     "title": "节点管理",
@@ -1335,7 +1337,7 @@
     "upgradeAllConfirm": "确定升级全网节点？",
     "upgradeAllConfirmDesc": "将对所有在线节点逐个下发升级（串行）。每个节点下载校验后热替换并重启 Worker；daemon 模式下游戏服不掉。",
     "rolloutStarted": "全网升级已发起",
-    "rolloutFailed": "发起全网升级失败",
+    "rolloutFailed": "失败 {{n}}",
     "nodeUpgradeConfirm": "确定升级该节点？",
     "nodeUpgradeConfirmDesc": "将令该节点下载新版 Worker、sha256 校验后替换并重启。daemon 模式下运行中的游戏服不掉。",
     "nodeUpgraded": "节点已升级（{{from}} → {{to}}）",
@@ -1348,7 +1350,6 @@
     "feedLatest": "源最新",
     "rolloutTotal": "共 {{n}} 个",
     "rolloutSucceeded": "成功 {{n}}",
-    "rolloutFailed": "失败 {{n}}",
     "rolloutPending": "待处理 {{n}}",
     "versionChange": "版本变化",
     "detail": "详情",

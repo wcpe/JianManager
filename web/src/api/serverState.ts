@@ -110,14 +110,20 @@ export interface ServerStateResponse {
  * 轻指标历史时序仍走 /metrics。探针未连入/采集超时由后端降级（200 + connected/available=false）。
  * 由调用方控制 `enabled`（开 tab 后才首拉），刷新经返回的 `refetch`。
  */
-export function useServerState(instanceId: number, enabled: boolean) {
+export function useServerState(
+  instanceId: number,
+  enabled: boolean,
+  /** 自动刷新间隔（ms）；false=仅手动刷新（默认，非侵入）。开 tab 期间可由调用方开启（FR-109）。 */
+  refetchMs: number | false = false,
+) {
   return useQuery({
     queryKey: ['server-state', instanceId],
     queryFn: () =>
       api.get<ServerStateResponse>(`/instances/${instanceId}/server-state`).then((r) => r.data),
     enabled: enabled && instanceId > 0,
-    refetchInterval: false,
+    refetchInterval: refetchMs,
     refetchOnWindowFocus: false,
-    staleTime: Infinity,
+    // 自动刷新时数据视为即时过期以便按间隔重拉；手动模式下保持快照不被动重拉。
+    staleTime: refetchMs ? 0 : Infinity,
   })
 }

@@ -451,7 +451,9 @@
       "byPlugin": "By plugin",
       "plugin": "Plugin",
       "count": "Count"
-    }
+    },
+    "autoRefresh": "Auto-refresh",
+    "autoOff": "Off"
   },
   "nodes": {
     "title": "Node Management",
@@ -1335,7 +1337,7 @@
     "upgradeAllConfirm": "Upgrade all nodes?",
     "upgradeAllConfirmDesc": "Upgrades every online node one by one (serial). Each node downloads, verifies, hot-swaps, and restarts its Worker; game servers stay up under daemon mode.",
     "rolloutStarted": "Fleet-wide upgrade started",
-    "rolloutFailed": "Failed to start fleet-wide upgrade",
+    "rolloutFailed": "{{n}} failed",
     "nodeUpgradeConfirm": "Upgrade this node?",
     "nodeUpgradeConfirmDesc": "Tells the node to download the new Worker, verify sha256, replace it, and restart. Running game servers stay up under daemon mode.",
     "nodeUpgraded": "Node upgraded ({{from}} → {{to}})",
@@ -1348,7 +1350,6 @@
     "feedLatest": "feed latest",
     "rolloutTotal": "{{n}} total",
     "rolloutSucceeded": "{{n}} succeeded",
-    "rolloutFailed": "{{n}} failed",
     "rolloutPending": "{{n}} pending",
     "versionChange": "Version change",
     "detail": "Detail",

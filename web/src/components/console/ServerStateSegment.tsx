@@ -253,10 +253,26 @@ function ClassloaderPanel({ data }: { data: ClassloaderSection | undefined }) {
           rowKey={(p) => p.plugin}
           columns={[
             { header: t('serverState.classloader.plugin'), cell: (p) => p.plugin },
-            { header: t('serverState.classloader.loaderClass'), cell: (p) => <span className="break-all">{p.loaderClass}</span> },
             {
+              header: t('serverState.classloader.loaderClass'),
+              cell: (p) => <span className="whitespace-nowrap font-mono text-[10px]">{p.loaderClass}</span>,
+            },
+            {
+              // 父链每段渲染为不换行的 chip，段间以 → 分隔并在 chip 边界换行——
+              // 避免类名被按字符断词（如 ClassLoa der），列超宽时单元格横向滚动（FR-109）。
               header: t('serverState.classloader.chain'),
-              cell: (p) => <span className="break-all text-muted-foreground">{(p.chain ?? []).join(' → ')}</span>,
+              cell: (p) => (
+                <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5">
+                  {(p.chain ?? []).map((c, i) => (
+                    <span key={i} className="flex items-center gap-1">
+                      {i > 0 && <span className="text-muted-foreground/50">→</span>}
+                      <span className="whitespace-nowrap rounded bg-muted/50 px-1 font-mono text-[10px] text-muted-foreground">
+                        {c}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              ),
             },
           ]}
         />
@@ -343,9 +359,18 @@ function StateSections({ state }: { state: ProbeServerState }) {
  * 状态分区以 FR-061 风格密集表呈现（server/worlds/jvm/classloader 专区/scheduler/listeners）；
  * 探针未连入 / 本次采集超时一律清晰降级提示；插件/世界/加载器等大数据折叠展开纯前端切片不卡。
  */
+/** 自动刷新间隔选项（FR-109）：默认关（非侵入，全量快照较重）；可选 5s/15s 打开期间自动重拉。 */
+const AUTO_REFRESH_OPTIONS: { key: string; ms: number | false }[] = [
+  { key: 'off', ms: false },
+  { key: '5s', ms: 5000 },
+  { key: '15s', ms: 15000 },
+]
+
 export default function ServerStateSegment({ instanceId }: { instanceId: number }) {
   const { t } = useTranslation()
-  const { data, isFetching, isError, refetch } = useServerState(instanceId, true)
+  // 自动刷新默认关（保持 FR-077 非侵入按需语义）；开启后按间隔自动重拉。
+  const [autoMs, setAutoMs] = useState<number | false>(false)
+  const { data, isFetching, isError, refetch } = useServerState(instanceId, true, autoMs)
 
   return (
     <div className="space-y-3 p-4">
@@ -358,9 +383,27 @@ export default function ServerStateSegment({ instanceId }: { instanceId: number 
             </span>
           )}
         </div>
-        <Button size="sm" variant="outline" disabled={isFetching} onClick={() => void refetch()}>
-          {isFetching ? t('serverState.loading') : t('serverState.refresh')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-muted-foreground">{t('serverState.autoRefresh', '自动刷新')}</span>
+          <div className="flex items-center gap-0.5 rounded-md border p-0.5">
+            {AUTO_REFRESH_OPTIONS.map((o) => (
+              <button
+                key={o.key}
+                type="button"
+                className={cn(
+                  'rounded px-1.5 py-0.5 text-[11px] tabular-nums',
+                  autoMs === o.ms ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent',
+                )}
+                onClick={() => setAutoMs(o.ms)}
+              >
+                {o.key === 'off' ? t('serverState.autoOff', '关') : o.key}
+              </button>
+            ))}
+          </div>
+          <Button size="sm" variant="outline" disabled={isFetching} onClick={() => void refetch()}>
+            {isFetching ? t('serverState.loading') : t('serverState.refresh')}
+          </Button>
+        </div>
       </div>
 
       {isError && <DegradedCard title={t('serverState.unavailable')} hint={t('serverState.unavailableHint')} />}
