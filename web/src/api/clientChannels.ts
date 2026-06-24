@@ -117,3 +117,36 @@ export function useRevokeClientKey() {
     onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['client-channels', vars.channelId] }),
   })
 }
+
+/** 内嵌客户端更新器 jar 的版本与可用性（FR-107 接入引导）。 */
+export interface UpdaterJarsInfo {
+  /** 内嵌更新器版本号（与 client-updater 构建同步）。 */
+  version: string
+  wedge: { available: boolean; size: number }
+  core: { available: boolean; size: number }
+}
+
+/** 查询内嵌更新器 jar 信息（FR-107）。供接入引导展示版本 + 禁用缺失下载。 */
+export function useUpdaterJarsInfo() {
+  return useQuery({
+    queryKey: ['client-updater-jars'],
+    queryFn: async (): Promise<UpdaterJarsInfo> => {
+      const { data } = await api.get('/client-dist/updater-jars')
+      return data
+    },
+  })
+}
+
+/** 下载内嵌更新器 jar（FR-107）。component ∈ wedge | core；带鉴权流式下载并触发浏览器保存。 */
+export async function downloadUpdaterJar(component: 'wedge' | 'core'): Promise<void> {
+  const { data } = await api.get(`/client-dist/updater-jars/${component}`, {
+    responseType: 'blob',
+  })
+  const filename = component === 'wedge' ? 'wedge.jar' : 'updater-core.jar'
+  const url = URL.createObjectURL(data as Blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}

@@ -28,6 +28,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import DangerConfirm from '@/components/DangerConfirm'
 import ClientVersionsPanel from '@/components/ClientVersionsPanel'
 import ClientStatsPanel from '@/components/ClientStatsPanel'
+import ClientIntegrationGuide from '@/components/ClientIntegrationGuide'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
@@ -269,6 +270,7 @@ function ChannelDetail({ channelId, onBack }: { channelId: string; onBack: () =>
           <TabsTrigger value="keys">{t('clientChannels.manageKeys', '拉取密钥')}</TabsTrigger>
           <TabsTrigger value="versions">{t('clientVersions.tab', '版本管理')}</TabsTrigger>
           <TabsTrigger value="stats">{t('clientStats.tab', '统计')}</TabsTrigger>
+          <TabsTrigger value="guide">{t('clientGuide.tab', '接入指引')}</TabsTrigger>
         </TabsList>
         <TabsContent value="keys" className="space-y-6">
 
@@ -362,6 +364,9 @@ function ChannelDetail({ channelId, onBack }: { channelId: string; onBack: () =>
         </TabsContent>
         <TabsContent value="stats">
           <ClientStatsPanel channelId={channelId} />
+        </TabsContent>
+        <TabsContent value="guide">
+          <ClientIntegrationGuide channelId={channelId} />
         </TabsContent>
       </Tabs>
 
