@@ -1663,6 +1663,176 @@
 
 ---
 
+## JBIS 业务对接平台（全能业务 agent，3 里程碑程序）
+
+> 源于 2026-06-24 sdd-brainstorming（方向对齐 + 两插件契约调研）。13 FR（FR-115~127）/ 5 ADR（025~029），分 3 里程碑：**里程碑内可并行、里程碑间串行**（前一个落 main 再开下一个）。**M1 垂直切片必先行**（economy.balance 读穿全 5 层，脊柱一次成型，后续加动作/加域近 O(1)）。计划全文 `.tmp/brainstorm-jbis-business-integration-2026-06-24.md`（不入库）；设计总纲 `docs/specs/business-integration/design.md`；两插件对接契约 `.tmp/business-integration-plugin-contracts.md`。
+> 核心形态：**一个 ServerProbe = 本服唯一全能 agent**（对外单连接/单身份，对内监控层 core/api 只读纯净 + 业务对接层 platform 独立事故域，两层不共享线程/异常边界）。核心链路 CP/Worker/桥/DB/UI **插件无关**，只认 `domain + action + payload信封 + dedupKey`；唯一认识具体插件的是探针侧 per-plugin **适配器(Provider)** + 每域 **manifest 能力清单**（范式 A 适配器 + 能力发现）。
+> 跨 3 仓：JianManager（编排/存储/UI）+ ServerProbe 子模块（适配器 + 演进 ADR）+ AllinInventorySync（扩 api）。数据所有权不变：业务真源仍在各插件存储，JM 侧存汇聚镜像 + 操作审计。
+> 横切约束：每条 FR 验收含 **i18n(FR-016) 完整 + 暗色/亮色(FR-026) 正常 + 真机验证**；高危写（改余额/改背包）必须二次确认 + 审计留痕贯通。
+
+### 里程碑 M1 — 垂直切片（economy.balance 读穿全链，脊柱成型）
+
+#### FR-115: 业务桥 Worker 脊柱
+- **状态**: 📋 计划
+- **优先级**: P1
+- **描述**: Worker 侧打通业务命令路由与事件汇聚流，复用既有反向 WS 桥（ADR-016），不新增进程/协议
+- **验收标准**:
+  - [ ] 先写 **ADR-027**（业务命令复用桥 command/event + `domain.verb` 寻址）
+  - [ ] `proto/worker.proto` 加性新增 command/event 的 `domain`/`dedup_key` 可选字段，workerpb 经 protoc 重生成（禁手改）
+  - [ ] 桥 JSON 帧加 `scope=business` 会话区分 + `domain` 字段；Worker 按 domain 前缀把 command 透传到对应桥会话、把 event 流上报 CP（dedupKey 透传）
+  - [ ] 单测：domain 路由 + dedupKey 透传 + 业务/监控帧分流
+- **关联 ADR**: ADR-027
+- **依赖**: 无（脊柱起点）
+
+#### FR-116: CP 业务编排与汇聚脊柱
+- **状态**: 📋 计划
+- **优先级**: P1
+- **描述**: CP 侧业务命令下发、manifest 能力汇聚、业务事件去重落库（插件无关通用信封）
+- **验收标准**:
+  - [ ] 先写 **ADR-028**（CP 业务数据与时序监控分表分策略）
+  - [ ] CP 下发业务命令（携 `requestId` + 操作者身份 + args），域不可用时优雅降级（绝不 5xx）
+  - [ ] 各节点各域 manifest 汇聚为平台级能力视图
+  - [ ] 业务事件经通用 envelope 表（domain/action/payload-json/dedupKey/node/operator/ts）按 dedupKey 去重落库 + 读端点
+  - [ ] 端到端：CP 下发 `economy.balance` 经 Worker→桥往返收到结果
+- **关联 ADR**: ADR-027, ADR-028
+- **依赖**: FR-115
+
+#### FR-117: ServerProbe 业务对接层骨架
+- **状态**: 📋 计划
+- **优先级**: P1
+- **描述**: ServerProbe platform 层新增业务对接骨架（BusinessHost + Provider 框架 + 事故域隔离 + manifest），core/api 保持只读纯净
+- **验收标准**:
+  - [ ] 先写 **ADR-025**（ServerProbe 监控探针→全能业务 agent：对外单 agent、对内分层、事故域隔离）+ ServerProbe 子模块仓自身演进 ADR
+  - [ ] BusinessHost 注册 Provider、声明/上报 manifest、接桥 `scope=business` 会话
+  - [ ] 事故域隔离：业务 Provider 用独立线程池 + 独立异常边界 + 守护式初始化（业务模块故障降级为该域不可用）
+  - [ ] **真机**：业务 Provider 抛异常/卡死，监控采集与桥心跳完全不受影响
+- **关联 ADR**: ADR-025（+ ServerProbe 仓 ADR）
+- **依赖**: FR-115
+
+#### FR-118: 经济 Provider（只读）
+- **状态**: 📋 计划
+- **优先级**: P1
+- **描述**: ServerProbe 经济适配器 wrap MultiCurrencyEconomyService，实现 economy.balance 只读 + 经济域 manifest
+- **验收标准**:
+  - [ ] 先写 **ADR-026**（适配器 + manifest 能力发现路线，非插件实现 SPI；修正设计总纲 §6 范式 B 倾向）
+  - [ ] 经 `ServicesManager.load(MultiCurrencyEconomyService)` + `isReady()` 发现，未就绪/不在场降级为能力不可用
+  - [ ] `economy.balance` 动作 + manifest 声明（能力 + 字段 schema）
+  - [ ] **真机**：真 mce 服上查到真实余额；mce 卸载后该域降级
+- **关联 ADR**: ADR-026
+- **依赖**: FR-117
+
+#### FR-119: 业务掌控台 UI v1（manifest 驱动）
+- **状态**: 📋 计划
+- **优先级**: P1
+- **描述**: 前端按汇聚 manifest 动态渲染域/能力，调用 economy.balance 并展示
+- **验收标准**:
+  - [ ] 按 CP 汇聚的 manifest 动态列出域与能力（不硬编码经济/背包）
+  - [ ] 输入玩家名调用 economy.balance、展示余额；域不可用显式提示
+  - [ ] i18n 完整 + 暗/亮色正常
+- **关联 ADR**: —
+- **依赖**: FR-116
+
+> **M1 收口（真机）**：浏览器→CP→Worker→桥→探针→真 mce 查到真实余额；事故域隔离验证（业务故障不拖垮监控）。脊柱成型后 M2/M3 加动作/加域近 O(1)。
+
+### 里程碑 M2 — 经济整域（写 + 横切硬化 + 定制页）
+
+#### FR-120: 经济 Provider（写）
+- **状态**: 📋 计划
+- **优先级**: P1
+- **描述**: 经济适配器写动作 deposit/withdraw/adjust(set)/transfer/consume/refund，守 mce 契约硬约束
+- **验收标准**:
+  - [ ] 幂等键 `pluginName="JianManager" + BusinessOrder(jm_task_id)`，重试严禁换键（防 MCE-LEDGER-0001 冲突）
+  - [ ] 金额 BigDecimal **字符串**承载信封（禁 double）；强制异步线程调用（不阻塞主线程）；mce 错误码透传
+  - [ ] `economy.set` 经 read-then-adjust 差额实现并标注非原子取舍
+  - [ ] **真机**：真 mce 加/扣/转账成功且幂等（重发同键不双花）、余额不足/账户冻结等错误码正确
+- **关联 ADR**: ADR-026
+- **依赖**: FR-118
+
+#### FR-121: 业务写横切硬化（幂等 + 二次确认 + 审计）
+- **状态**: 📋 计划
+- **优先级**: P1
+- **描述**: 端到端幂等链 + 高危写权限与二次确认 + 操作者身份审计留痕贯通
+- **验收标准**:
+  - [ ] 先写 **ADR-029**（业务高危写权限与二次确认模型）
+  - [ ] 端到端幂等：CP 生成 `jm_task_id` → 桥透传 → 直达插件幂等键，跨节点重试天然防重
+  - [ ] 高危写（改余额/改背包）需 permission node + 阈值二次确认
+  - [ ] 操作者身份（哪个管理员/哪个节点/为什么）映射进插件审计流水，平台侧可追溯
+- **关联 ADR**: ADR-029
+- **依赖**: FR-116, FR-120
+
+#### FR-122: 经济汇聚与多区聚合
+- **状态**: 📋 计划
+- **优先级**: P1
+- **描述**: 汇聚所有来源的经济变更（含 web/跨服）+ 多区/多节点正确聚合 + 结构化镜像/审计存储
+- **验收标准**:
+  - [ ] 探针订阅 `PlayerEconomyChangeEvent` + `PlayerEconomyCatchupEvent` 上报，CP 按 `ledgerId` 去重（至少一次投递）
+  - [ ] `node→zoneId` 维度聚合：跨区同名玩家余额不串味/不重复计数（currencyId Int↔identifier 转换）
+  - [ ] 结构化经济镜像 + 操作审计表（分表分策略 ADR-028）
+  - [ ] **真机**：web 后台/其他服的余额变更都汇聚到 JM、跨区不混
+- **关联 ADR**: ADR-028
+- **依赖**: FR-116, FR-118
+
+#### FR-123: 经济定制页
+- **状态**: 📋 计划
+- **优先级**: P2
+- **描述**: 经济业务定制页（余额/排行/转账/流水），高危操作二次确认
+- **验收标准**:
+  - [ ] 余额查询 + 排行（旁路实现，因 mce 公开 API 无排行）+ 转账 + 流水查询
+  - [ ] 面板发起转账/加扣走二次确认 UI；i18n + 暗/亮色
+  - [ ] **真机**：定制页对真 mce 查余额排行流水、发起转账生效
+- **关联 ADR**: —
+- **依赖**: FR-119, FR-121, FR-122
+
+### 里程碑 M3 — 背包整域（扩 api + 适配器 + 定制页）
+
+#### FR-124: 扩 AllinInventorySync api 导出写门面
+- **状态**: 📋 计划
+- **优先级**: P2
+- **描述**: 在 AllinInventorySync 仓扩 `api/` 模块，导出背包读写门面（当前公开 api 零写入、读不到离线）。**跨仓 FR，在该仓走其自身 SDD 流程**
+- **验收标准**:
+  - [ ] 该仓写自身 ADR（api 扩展导出写门面契约）
+  - [ ] `getInventory(uuid)`：回源加载（含离线）+ ItemStack→ItemDTO（material/amount/meta/enchants/NBT）
+  - [ ] `giveItem/removeItem/applyInventory(...)`：带 Result 回执 + 业务幂等键 + 在线归属校验（拒绝改"正在他服在线"的玩家）+ 委托内部 InventoryEditService delta 通道（两层锁 + CAS）
+  - [ ] ItemStack↔JSON codec（信封承载）
+  - [ ] **真机**：第三方经 api 读任意玩家背包 + 带回执发/收物品 + 重发幂等不刷物品
+- **关联 ADR**: AllinInventorySync 仓 ADR
+- **依赖**: 无（独立仓，可与 M1/M2 并行起）
+
+#### FR-125: 背包 Provider
+- **状态**: 📋 计划
+- **优先级**: P2
+- **描述**: ServerProbe 背包适配器 wrap 扩展后的 AllinInventorySync api，含读写动作 + 追踪事件订阅 + manifest
+- **验收标准**:
+  - [ ] `inventory.snapshot`/`inventory.view`/`inventory.give`/`inventory.remove` 动作 + 背包域 manifest
+  - [ ] 订阅 `TrackedItemActionEvent`（重点物品流转）上报
+  - [ ] **真机**：inventory.view 看到真实物品清单、give/remove 生效且幂等、离线写下次登录生效
+- **关联 ADR**: ADR-026
+- **依赖**: FR-117, FR-124
+
+#### FR-126: 背包汇聚与存储
+- **状态**: 📋 计划
+- **优先级**: P2
+- **描述**: 背包追踪事件汇聚 + 操作审计 + 离线写"待生效"状态呈现
+- **验收标准**:
+  - [ ] 追踪事件（JOIN_CARRY/DROP/PICKUP/MOVE_TO_CONTAINER）汇聚去重落库
+  - [ ] 背包操作审计表（谁对谁做了什么物品操作）
+  - [ ] 离线写后端如实呈现"已写入、待玩家上线生效"，不谎报"已到手"
+- **关联 ADR**: ADR-028
+- **依赖**: FR-116, FR-121
+
+#### FR-127: 背包定制页
+- **状态**: 📋 计划
+- **优先级**: P2
+- **描述**: 背包业务定制页（快照查看/物品清单/远程干预），高危操作二次确认
+- **验收标准**:
+  - [ ] 玩家背包快照查看 + 物品清单展示（经导出的 ItemDTO）
+  - [ ] 远程发物品/收物品走二次确认 UI；离线写显示待生效；i18n + 暗/亮色
+  - [ ] **真机**：定制页看真玩家背包、远程发物品生效（在线即时/离线下次登录）
+- **关联 ADR**: —
+- **依赖**: FR-119, FR-121, FR-125, FR-126
+
+---
+
 ## V1 不包含（后续版本）
 
 | FR | 描述 | 预计版本 |
