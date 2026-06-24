@@ -1,5 +1,6 @@
 import axios from 'axios'
 import { isTokenExpired } from '@/lib/jwt'
+import { useAuthStore } from '@/stores/auth'
 
 const api = axios.create({
   baseURL: '/api/v1',
@@ -23,6 +24,8 @@ function refreshTokens(): Promise<string> {
     const { data } = await axios.post('/api/v1/auth/refresh', { refreshToken })
     localStorage.setItem('accessToken', data.accessToken)
     localStorage.setItem('refreshToken', data.refreshToken)
+    // 同步 zustand store，避免刷新后 store.accessToken 与 localStorage 发散（BUG-011 加固）。
+    useAuthStore.getState().loadFromStorage()
     return data.accessToken as string
   })()
   // 无论成败都释放闸，便于下次重新刷新。
@@ -74,9 +77,10 @@ api.interceptors.response.use(
   },
 )
 
+// 清理鉴权：复用 store.logout 同步清 localStorage + zustand state，
+// 避免只清 localStorage 致 store 残留旧态（BUG-011 加固；随后跳 /login 整页重载兜底）。
 function clearAuth() {
-  localStorage.removeItem('accessToken')
-  localStorage.removeItem('refreshToken')
+  useAuthStore.getState().logout()
 }
 
 /**
