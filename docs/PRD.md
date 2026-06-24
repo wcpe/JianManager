@@ -1692,7 +1692,7 @@
   - [x] 先写 **ADR-028**（CP 业务数据与时序监控分表分策略）
   - [x] CP 下发业务命令（携 `requestId`，operator 透传留 FR-121），域不可用/探针未连/节点未连一律优雅降级（available=false + 友好提示，绝不 5xx）
   - [x] 单实例 manifest 元查询（jbis/manifest）+ `GET /business/manifest` 端点，供前端动态发现各域能力（跨节点聚合按需后补）
-  - [~] 业务事件经通用 envelope 表（domain/action/payload-json/dedupKey/node/operator/ts）按 dedupKey 去重落库 + 读端点 → **归 FR-122/M2**（M1 只读余额无业务事件流，非 M1 交付项）
+  - [x] 业务事件经通用 envelope 表（domain/action/payload-json/dedupKey/node/operator/ts）按 dedupKey 去重落库 + 读端点 → **由 FR-122 交付**（`business_events` 表 + `BusinessEventService` 去重落库 + `GET /business/events` 读端点；M1 只读余额本不含业务事件流，随 FR-122 经济事件汇聚一并落地）
   - [x] 端到端：CP 下发 `economy.balance` 经 Worker→桥往返收到结果（收口真机 `output.balance="100.00"`）
 - **关联 ADR**: ADR-027, ADR-028
 - **依赖**: FR-115
@@ -1762,14 +1762,15 @@
 - **依赖**: FR-116, FR-120
 
 #### FR-122: 经济汇聚与多区聚合
-- **状态**: 📋 计划
+- **状态**: ◑ 开发中（CP+探针代码+单测全绿，待真机端到端）
 - **优先级**: P1
 - **描述**: 汇聚所有来源的经济变更（含 web/跨服）+ 多区/多节点正确聚合 + 结构化镜像/审计存储
 - **验收标准**:
-  - [ ] 探针订阅 `PlayerEconomyChangeEvent` + `PlayerEconomyCatchupEvent` 上报，CP 按 `ledgerId` 去重（至少一次投递）
-  - [ ] `node→zoneId` 维度聚合：跨区同名玩家余额不串味/不重复计数（currencyId Int↔identifier 转换）
-  - [ ] 结构化经济镜像 + 操作审计表（分表分策略 ADR-028）
-  - [ ] **真机**：web 后台/其他服的余额变更都汇聚到 JM、跨区不混
+  - [x] 探针订阅 `PlayerEconomyChangeEvent` + `PlayerEconomyCatchupEvent` 上报（platform-bukkit `BukkitEconomyEventListener` + `BridgeClient.emitBusinessEvent`，event 帧带 domain=economy/dedupKey=ledgerId），CP 按 `ledgerId` 去重（`business_events` 按 (domain,dedupKey) insert-or-ignore；`economy_ledger_entries` 按 ledgerId）（至少一次投递；单测覆盖重发去重）
+  - [x] `node→zoneId` 维度聚合：跨区同名玩家余额不串味/不重复计数（`economy_balance_mirrors` UNIQUE(node_uuid,zone_id,player_name,currency)，seq 单调推进挡乱序回退；currencyId Int→identifier 经 `getActiveCurrencies()` 折算；单测覆盖跨区/跨节点不串味 + 乱序不回退）
+  - [x] 结构化经济镜像 + 操作审计表（分表分策略 ADR-028）：通用 envelope `business_events` + 经济镜像 `economy_balance_mirrors` + 变更审计 `economy_ledger_entries`（同时补上 FR-116 延后的 envelope 存储）
+  - [x] 只读端点：`GET /business/events`（业务事件流）/`GET /business/economy/mirror`（经济镜像，逐 node→zone）/`GET /business/economy/aggregate`（跨区聚合明细，逐区不盲目求和）
+  - [ ] **真机（待真机）**：web 后台/其他服的余额变更都汇聚到 JM、跨区不混
 - **关联 ADR**: ADR-028
 - **依赖**: FR-116, FR-118
 
