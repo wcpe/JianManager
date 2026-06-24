@@ -27,6 +27,7 @@ type Services struct {
 	PlayerEvent        *service.PlayerEventService
 	ServerState        *service.ServerStateService
 	Business           *service.BusinessService
+	BusinessEvent      *service.BusinessEventService
 	Config             *service.ConfigService
 	Bot                *service.BotService
 	Alert              *service.AlertService
@@ -165,6 +166,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.Business != nil {
 			businessHandler := NewBusinessHandler(svcs.Business, svcs.Authz, svcs.Audit)
 			businessHandler.RegisterRoutes(protected)
+		}
+
+		// JBIS 业务事件汇聚只读视图（FR-122，见 ADR-027/028）：业务事件流 / 经济镜像 / 跨区聚合。
+		// 平台级只读（instance:read），汇聚镜像非业务真源；写入由探针事件流自动汇聚。
+		if svcs.BusinessEvent != nil {
+			businessEventHandler := NewBusinessEventHandler(svcs.BusinessEvent, svcs.Authz)
+			businessEventHandler.RegisterRoutes(protected)
 		}
 
 		eventHandler := NewEventHandler(svcs.Event)

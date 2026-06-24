@@ -121,6 +121,10 @@ type PlayerEventService struct {
 	mu   sync.RWMutex
 	subs []playerSub
 
+	// businessSink 接收带业务域（domain 非空）的 JBIS 事件做汇聚落库（FR-122，见 ADR-027/028）。
+	// 与玩家事件（SSE 扇出）共享同一条上行流但分流处理：可为 nil（独立测试/未启用业务汇聚时）。
+	businessSink func(nodeUUID string, evt *workerpb.PluginEvent)
+
 	ctx    context.Context
 	cancel context.CancelFunc
 }
@@ -141,6 +145,12 @@ func NewPlayerEventService(pool *cpgrpc.ClientPool, db *gorm.DB) *PlayerEventSer
 		ctx:    ctx,
 		cancel: cancel,
 	}
+}
+
+// SetBusinessSink 注入业务事件汇聚回调（FR-122）。事件流中 domain 非空的 JBIS 事件经此落库
+// （通用 envelope 去重 + 经济镜像/审计），玩家事件不受影响。传 nil 关闭业务汇聚。
+func (s *PlayerEventService) SetBusinessSink(sink func(nodeUUID string, evt *workerpb.PluginEvent)) {
+	s.businessSink = sink
 }
 
 // Subscribe 订阅玩家事件，filter 为实例 UUID（空=全部）。取消时调用返回的函数。
@@ -220,6 +230,14 @@ func (s *PlayerEventService) streamFromWorker(nodeUUID string, client *cpgrpc.Cl
 			if err != nil {
 				slog.Info("PlayerEventService: Worker 插件事件流断开", "nodeUUID", nodeUUID, "err", err)
 				break
+			}
+			// JBIS 业务事件（domain 非空，FR-122）：分流到业务汇聚（envelope 去重 + 经济镜像/审计），
+			// 不演进在线名册、不走玩家事件 SSE（与玩家/监控事件刻意分治，见 ADR-027/028）。
+			if evt.Domain != "" {
+				if s.businessSink != nil {
+					s.businessSink(nodeUUID, evt)
+				}
+				continue
 			}
 			// 先演进名册（连接/在线集合），再翻译扇出。
 			s.roster.apply(evt)

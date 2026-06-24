@@ -158,10 +158,16 @@ func main() {
 	// 业务对接编排服务（FR-116，见 ADR-026/027）：经探针桥下发业务命令（domain.action+payload）
 	// 并透传结果，CP 插件无关、降级即默认。JBIS 业务对接平台 M1 脊柱。
 	businessSvc := service.NewBusinessService(db, pool)
+	// 业务事件汇聚服务（FR-116 底座 / FR-122 经济，见 ADR-027/028）：消费同一条插件事件流中
+	// domain 非空的 JBIS 业务事件，按 (domain,dedupKey) 去重落通用 envelope，经济域再维护
+	// node→zone 结构化镜像 + 变更审计（跨区同名玩家不串味/不重复计数）。CP 插件无关。
+	businessEventSvc := service.NewBusinessEventService(db)
 	// 玩家事件服务（FR-066，见 ADR-016）：订阅各 Worker 的插件事件流（StreamPluginEvents），
 	// 维护实时在线名册并经 SSE 推送给前端（join/quit/chat/cross_server）。
 	playerEventSvc := service.NewPlayerEventService(pool, db)
 	defer playerEventSvc.Stop()
+	// 业务事件分流：同一上行流中 domain 非空的事件交业务汇聚（FR-122），玩家事件不受影响。
+	playerEventSvc.SetBusinessSink(businessEventSvc.Ingest)
 
 	// 探针在线更新服务（FR-068，见 ADR-016）：复用 gRPC DeployServerProbe 把内嵌探针 jar
 	// 推到实例（下次重启生效）。复用 pluginBridgeSvc 重新生成探针 config 的 bridge 段（实例级 token）；
@@ -225,6 +231,7 @@ func main() {
 		PlayerEvent:        playerEventSvc,
 		ServerState:        serverStateSvc,
 		Business:           businessSvc,
+		BusinessEvent:      businessEventSvc,
 		Config:             configSvc,
 		Bot:                botSvc,
 		Alert:              alertSvc,
