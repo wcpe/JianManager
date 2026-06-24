@@ -57,7 +57,8 @@ export default function DecompileViewer({ instanceId, path, name, onClose }: Dec
   }, [instanceId, path, t])
 
   return (
-    <div className="flex w-1/2 min-w-0 flex-col">
+    // flex-1 占满右栏：ResourceExplorer 打开反编译时已收起文件列表（FR-111）。
+    <div className="flex min-w-0 flex-1 flex-col">
       <div className="flex items-center justify-between border-b bg-muted/30 px-2 py-1 text-sm">
         <span className="truncate font-medium">
           {t('archive.decompile')}: {name}

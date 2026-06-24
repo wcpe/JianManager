@@ -552,40 +552,38 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
         />
 
         <div className="flex min-h-0 flex-1">
-          {/* 目录内容列表 / 搜索面板（FR-074 搜索打开占该列；FR-075 归档/反编译右栏打开时收窄） */}
-          <div
-            className={
-              openFile || archiveFor || decompileFor
-                ? 'flex w-1/2 flex-col border-r'
-                : 'flex flex-1 flex-col'
-            }
-          >
-            {searchOpen ? (
-              <SearchPanel
-                instanceId={instanceId}
-                onOpenHit={(path, line) => void openSearchHit(path, line)}
-                onClose={() => setSearchOpen(false)}
-              />
-            ) : (
-              <FileList
-                files={files}
-                loading={loading}
-                error={error}
-                selection={selection}
-                onRowClick={onRowClick}
-                onOpen={openEntry}
-                onDragStartItem={onDragStartItem}
-                onDropUpload={handleUpload}
-                onRename={(name) => setPrompt({ kind: 'rename', initial: name, oldName: name })}
-                onDelete={(name) => setDeleteTargets([joinPath(currentDir, name)])}
-                onDownload={downloadSingle}
-                onCut={() => cutSelection(selectedNames.length ? selectedNames : [])}
-                onCopy={() => copySelection(selectedNames.length ? selectedNames : [])}
-                onOpenArchive={openArchive}
-                onDecompile={openDecompile}
-              />
-            )}
-          </div>
+          {/* 目录内容列表 / 搜索面板。打开归档/反编译查看器时**整列收起**——目录树仍在左栏可导航，
+              查看器（ArchiveViewer flex-1 / DecompileViewer flex-1）占满右栏，避免树｜列表｜查看器三栏挤（FR-111）。
+              打开文本编辑器时与编辑器并排 w-1/2（编辑场景需对照文件列表，保留）。 */}
+          {!archiveFor && !decompileFor && (
+            <div className={openFile ? 'flex w-1/2 flex-col border-r' : 'flex flex-1 flex-col'}>
+              {searchOpen ? (
+                <SearchPanel
+                  instanceId={instanceId}
+                  onOpenHit={(path, line) => void openSearchHit(path, line)}
+                  onClose={() => setSearchOpen(false)}
+                />
+              ) : (
+                <FileList
+                  files={files}
+                  loading={loading}
+                  error={error}
+                  selection={selection}
+                  onRowClick={onRowClick}
+                  onOpen={openEntry}
+                  onDragStartItem={onDragStartItem}
+                  onDropUpload={handleUpload}
+                  onRename={(name) => setPrompt({ kind: 'rename', initial: name, oldName: name })}
+                  onDelete={(name) => setDeleteTargets([joinPath(currentDir, name)])}
+                  onDownload={downloadSingle}
+                  onCut={() => cutSelection(selectedNames.length ? selectedNames : [])}
+                  onCopy={() => copySelection(selectedNames.length ? selectedNames : [])}
+                  onOpenArchive={openArchive}
+                  onDecompile={openDecompile}
+                />
+              )}
+            </div>
+          )}
 
           {/* 编辑器：配置模式用注入的配置编辑器，否则默认 CodeEditor */}
           {openFile &&
