@@ -35,6 +35,10 @@ const (
 	PermInstanceOperate PermissionNode = "instance:operate"
 	PermInstanceDelete  PermissionNode = "instance:delete"
 	PermInstanceCreate  PermissionNode = "instance:create"
+	// PermInstanceBusinessWrite 业务高危写（改余额/改背包等 manifest readOnly=false 动作）。
+	// 与 instance:operate 同级（组管理员/组成员均可持有，具体实例由 CanAccessInstance 收敛）；
+	// 与只读/低危业务动作分离，挡越权高危写（FR-121，见 ADR-029）。
+	PermInstanceBusinessWrite PermissionNode = "instance:business:write"
 
 	// 文件管理（按实例所属组隔离）
 	PermFileRead  PermissionNode = "file:read"
@@ -123,7 +127,7 @@ func (a *UserAccess) HasPermission(node PermissionNode) bool {
 		// 组管理员可管理本组成员
 		return len(a.AdminGroupIDs) > 0
 	case PermInstanceWrite, PermInstanceOperate, PermInstanceCreate,
-		PermInstanceDelete, PermFileWrite, PermTerminalAccess, PermBotManage:
+		PermInstanceDelete, PermInstanceBusinessWrite, PermFileWrite, PermTerminalAccess, PermBotManage:
 		// 实例操作类权限：组管理员或组成员均可，具体实例由 CanAccessInstance 收敛
 		return len(a.AccessibleGroups) > 0
 	default:

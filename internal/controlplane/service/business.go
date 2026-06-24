@@ -48,6 +48,36 @@ func NewBusinessService(db *gorm.DB, pool *cpgrpc.ClientPool) *BusinessService {
 	return &BusinessService{db: db, pool: pool}
 }
 
+// WriteContext 业务高危写的操作者上下文与幂等键（FR-121，见 ADR-029）。
+//
+// CP 在写动作（manifest readOnly=false）下发前，把这些字段注入 payload JSON，
+// 经探针桥透传给探针 Provider：
+//   - TaskID 作业务幂等键（探针→mce BusinessOrder(taskId)，FR-120 缺失即拒绝）；对「同一逻辑操作的重试」必须稳定。
+//   - Operator/OperatorID/NodeID/Reason 映射进插件审计流水（mce operator/reason），平台侧与插件侧审计可对账追责。
+//
+// 注入策略：仅当 payload 未显式带同名键时写入（不覆盖业务方入参）。
+type WriteContext struct {
+	// TaskID 业务幂等键。空时由 Dispatch 兜底生成 UUID（保证探针不因缺 taskId 拒绝，但失去重试去重保证）。
+	TaskID string
+	// Operator 操作者用户名（透传进 mce 流水 operator，追责到真人）。
+	Operator string
+	// OperatorID 操作者用户 ID（平台侧与插件侧审计对账）。
+	OperatorID uint
+	// NodeID 实例所属节点 UUID（「哪个节点」维度）。
+	NodeID string
+	// Reason 操作原因（可选，「为什么」，透传进 mce 流水 reason）。
+	Reason string
+}
+
+// 业务写注入进 payload 的 JBIS 约定键名（与探针 Provider / 下游 FR-122/125 约定一致，见 ADR-029）。
+const (
+	payloadKeyTaskID     = "taskId"
+	payloadKeyOperator   = "operator"
+	payloadKeyOperatorID = "operatorId"
+	payloadKeyNodeID     = "nodeId"
+	payloadKeyReason     = "reason"
+)
+
 // BusinessResult 一次业务动作的结果（透传给前端）。
 type BusinessResult struct {
 	InstanceID uint   `json:"instanceId"`
@@ -63,6 +93,9 @@ type BusinessResult struct {
 
 // Dispatch 向某实例下发一条业务命令并取回结果（同步往返，wait=true）。
 //
+// 用于只读动作与元查询（manifest）：payload 原样下发，不注入操作者/幂等上下文。
+// 高危写动作走 DispatchWrite（FR-121）。
+//
 // 解析 instance→node→gRPC client → SendPluginCommand（携 domain/action/payload_json）；任何不可达环节
 // 一律降级为 available=false + 友好提示（不返回 error）。实例不存在 / 参数非法返回 error 供路由分流。
 func (s *BusinessService) Dispatch(instanceID uint, domain, action, payloadJSON string) (*BusinessResult, error) {
@@ -71,26 +104,76 @@ func (s *BusinessService) Dispatch(instanceID uint, domain, action, payloadJSON 
 	if domain == "" || action == "" {
 		return nil, ErrInvalidBusinessCommand
 	}
+	inst, node, result, err := s.resolveTarget(instanceID, domain, action)
+	if err != nil {
+		return nil, err
+	}
+	if result.Error != "" {
+		return result, nil
+	}
+	return s.sendToProbe(inst, node, result, payloadJSON), nil
+}
 
+// DispatchWrite 下发一条高危业务写动作（FR-121，见 ADR-029）。
+//
+// 与 Dispatch 同样解析 instance→node→client，但在下发前把操作者身份与幂等键注入 payload：
+//   - 注入 taskId（幂等键，缺失则兜底 UUID）、operator/operatorId/nodeId/reason（操作者审计贯通）；
+//   - 仅当 payload 未显式带同名键时写入，不覆盖业务方入参；
+//   - nodeId 取实例所属节点 UUID（WriteContext.NodeID 为空时回填）。
+//
+// 降级矩阵与 Dispatch 一致；payload 非法 JSON 返回 ErrInvalidBusinessCommand（写不可在坏信封上裸跑）。
+func (s *BusinessService) DispatchWrite(instanceID uint, domain, action, payloadJSON string, wc WriteContext) (*BusinessResult, error) {
+	domain = strings.TrimSpace(domain)
+	action = strings.TrimSpace(action)
+	if domain == "" || action == "" {
+		return nil, ErrInvalidBusinessCommand
+	}
+	inst, node, result, err := s.resolveTarget(instanceID, domain, action)
+	if err != nil {
+		return nil, err
+	}
+	if result.Error != "" {
+		return result, nil
+	}
+	if wc.NodeID == "" {
+		wc.NodeID = node.UUID
+	}
+	injected, injErr := injectWriteContext(payloadJSON, wc)
+	if injErr != nil {
+		return nil, ErrInvalidBusinessCommand
+	}
+	return s.sendToProbe(inst, node, result, injected), nil
+}
+
+// resolveTarget 解析实例与节点，构造初始结果。
+//
+// 三种返回：
+//   - 硬错误（实例不存在 / 查询失败）→ (_, _, nil, err)，调用方以 error 返回供路由分流；
+//   - 软降级（实例的节点记录不存在）→ (_, _, result(Error 已填), nil)，调用方直接回传 200+available=false；
+//   - 正常 → (inst, node, result(Error 空), nil)，调用方继续下发。
+func (s *BusinessService) resolveTarget(instanceID uint, domain, action string) (model.Instance, model.Node, *BusinessResult, error) {
 	var inst model.Instance
 	if err := s.db.First(&inst, instanceID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrInstanceNotFound
+			return inst, model.Node{}, nil, ErrInstanceNotFound
 		}
-		return nil, fmt.Errorf("查询实例失败: %w", err)
+		return inst, model.Node{}, nil, fmt.Errorf("查询实例失败: %w", err)
 	}
-
 	result := &BusinessResult{InstanceID: instanceID, Domain: domain, Action: action}
-
 	var node model.Node
 	if err := s.db.First(&node, inst.NodeID).Error; err != nil {
 		result.Error = "节点不存在"
-		return result, nil
+		return inst, node, result, nil
 	}
+	return inst, node, result, nil
+}
+
+// sendToProbe 执行 gRPC 下发并映射响应（payload 已是最终形态）。节点未连入降级为 available=false。
+func (s *BusinessService) sendToProbe(inst model.Instance, node model.Node, result *BusinessResult, payloadJSON string) *BusinessResult {
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
 		result.Error = "节点未连接"
-		return result, nil
+		return result
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), businessDispatchTimeout)
@@ -99,8 +182,8 @@ func (s *BusinessService) Dispatch(instanceID uint, domain, action, payloadJSON 
 	resp, err := client.Worker.SendPluginCommand(ctx, &workerpb.SendPluginCommandRequest{
 		InstanceUuid: inst.UUID,
 		Command: &workerpb.PluginCommand{
-			Domain:      domain,
-			Action:      action,
+			Domain:      result.Domain,
+			Action:      result.Action,
 			PayloadJson: payloadJSON,
 			RequestId:   uuid.NewString(),
 		},
@@ -108,10 +191,58 @@ func (s *BusinessService) Dispatch(instanceID uint, domain, action, payloadJSON 
 	})
 	if err != nil {
 		result.Error = "业务命令调用失败"
-		return result, nil
+		return result
 	}
 	mapBusinessResponse(result, resp)
-	return result, nil
+	return result
+}
+
+// injectWriteContext 把操作者身份与幂等键注入业务 payload JSON（FR-121）。
+//
+// 规则：
+//   - payload 为空 → 以 {} 起步；非法 JSON（非对象）→ 返回 error（写不可在坏信封上裸跑）。
+//   - 仅当对应键不存在时写入（不覆盖业务方显式入参）。
+//   - TaskID 为空时兜底生成 UUID（保证探针不因缺 taskId 拒绝；但失重试去重保证，前端写应始终带稳定 taskId）。
+//   - Reason / Operator 为空则不写该键（避免污染流水为空字符串）；OperatorID 为 0 同理跳过。
+func injectWriteContext(payloadJSON string, wc WriteContext) (string, error) {
+	obj := map[string]any{}
+	trimmed := strings.TrimSpace(payloadJSON)
+	if trimmed != "" {
+		if err := json.Unmarshal([]byte(trimmed), &obj); err != nil {
+			return "", fmt.Errorf("payload 非合法 JSON 对象: %w", err)
+		}
+	}
+
+	taskID := wc.TaskID
+	if taskID == "" {
+		taskID = uuid.NewString()
+	}
+	putIfAbsent(obj, payloadKeyTaskID, taskID)
+	if wc.Operator != "" {
+		putIfAbsent(obj, payloadKeyOperator, wc.Operator)
+	}
+	if wc.OperatorID != 0 {
+		putIfAbsent(obj, payloadKeyOperatorID, wc.OperatorID)
+	}
+	if wc.NodeID != "" {
+		putIfAbsent(obj, payloadKeyNodeID, wc.NodeID)
+	}
+	if wc.Reason != "" {
+		putIfAbsent(obj, payloadKeyReason, wc.Reason)
+	}
+
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return "", fmt.Errorf("序列化注入后 payload 失败: %w", err)
+	}
+	return string(out), nil
+}
+
+// putIfAbsent 仅当 key 不存在时写入，保护业务方显式入参不被覆盖。
+func putIfAbsent(m map[string]any, key string, val any) {
+	if _, exists := m[key]; !exists {
+		m[key] = val
+	}
 }
 
 // Manifest 取某实例的业务能力清单（JBIS 元查询）。

@@ -77,6 +77,24 @@ func TestUserAccess_HasPermission(t *testing.T) {
 			node:  PermGroupManage,
 			want:  false,
 		},
+		{
+			name:  "组成员可持有业务高危写（FR-121，资源由 CanAccessInstance 收敛）",
+			access: &UserAccess{MemberGroupIDs: map[uint]struct{}{1: {}}, AccessibleGroups: map[uint]struct{}{1: {}}},
+			node:  PermInstanceBusinessWrite,
+			want:  true,
+		},
+		{
+			name:  "无组用户不可持有业务高危写",
+			access: &UserAccess{},
+			node:  PermInstanceBusinessWrite,
+			want:  false,
+		},
+		{
+			name:  "平台管理员拥有业务高危写",
+			access: &UserAccess{IsPlatformAdmin: true},
+			node:  PermInstanceBusinessWrite,
+			want:  true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
