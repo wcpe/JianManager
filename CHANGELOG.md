@@ -33,6 +33,9 @@
 ### 变更
 - **前端重型依赖拆分为独立 vendor chunk（v0.9.0 走查 #13）**：路由本已按页 lazy 分割，但 recharts/codemirror/xterm 等重库被卷进应用 chunk（原「PluginManager」单 chunk ~798KB、触发 vite >500KB 警告）。vite 加 `manualChunks` 按库拆分：editor(codemirror ~358KB)/charts(recharts ~342KB)/terminal(xterm ~342KB)/react-vendor/query/vendor 各自独立、按需懒载且可长期缓存；应用主 chunk 降至 ~104KB，>500KB 警告消除。
 
+### 变更
+- **内嵌 CFR 反编译器 + 镜像嵌入校验（v0.9.0 走查 #14/#20）**：CFR 内嵌机制（go:embed + CFRJar 接入 decompiler）本已就绪但无填充入口，首次反编译需从 Maven 按需下载（慢/离线失败）。新增 `make embed-cfr`（下载 + SHA-256 pin 校验注入 `internal/worker/embed/cfr/`，jar 不入库）；Dockerfile.worker 构建期下载+校验内嵌 CFR、失败显式告警并移除占位（不静默产出「声称内嵌实则没有」的镜像）。发版 `make embed-cfr && make build-worker` 即得自带 CFR、离线可反编译的 worker。
+
 ## 0.9.0（2026-06-24）
 
 ### 新增

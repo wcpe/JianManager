@@ -6,6 +6,21 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
+
+# 内嵌 CFR 反编译器 jar（FR-075，#14/#20）：下载 + SHA-256 校验注入 go:embed 目录，
+# 使 worker 镜像自带 CFR、首次反编译无需联网。下载/校验失败时显式告警并移除占位 jar
+# （运行时回退按需下载，不静默产出「声称内嵌实则没有」的镜像）。
+ARG CFR_VERSION=0.152
+ARG CFR_SHA256=f686e8f3ded377d7bc87d216a90e9e9512df4156e75b06c655a16648ae8765b2
+RUN mkdir -p internal/worker/embed/cfr; \
+    if wget -q -O internal/worker/embed/cfr/cfr.jar "https://repo1.maven.org/maven2/org/benf/cfr/${CFR_VERSION}/cfr-${CFR_VERSION}.jar" \
+       && echo "${CFR_SHA256}  internal/worker/embed/cfr/cfr.jar" | sha256sum -c -; then \
+      echo "OK: CFR ${CFR_VERSION} embedded into worker image"; \
+    else \
+      echo "WARN: CFR download/verify failed; image will NOT embed CFR (runtime on-demand download fallback)" >&2; \
+      rm -f internal/worker/embed/cfr/cfr.jar; \
+    fi
+
 RUN CGO_ENABLED=0 GOOS=linux go build -o worker ./cmd/worker
 
 FROM alpine:3.20

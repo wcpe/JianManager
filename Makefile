@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-probe embed-client-updater docker
+.PHONY: build build-cp build-worker build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-probe embed-cfr embed-client-updater docker
 
 # 构建所有（含前端嵌入）
 build: build-web embed-web build-cp build-worker
@@ -36,6 +36,14 @@ embed-client-updater:
 	mkdir -p internal/controlplane/embed/client-updater
 	cp client-updater/wedge/build/libs/wedge-*.jar internal/controlplane/embed/client-updater/wedge.jar
 	cp client-updater/updater-core/build/libs/updater-core-*.jar internal/controlplane/embed/client-updater/updater-core.jar
+
+# 下载并校验 CFR 反编译器 jar 注入 Worker 内嵌目录（FR-075 反编译，可选；#14）。
+# 内容靠 SHA-256 pin 校验（不信传输通道，只信内容指纹）；版本/指纹与 decompiler/cfr.go 常量一致。
+# 不跑此目标时 Worker 不捆绑 CFR，首次反编译回退到数据根缓存 / 按需下载（联网）。
+embed-cfr:
+	mkdir -p internal/worker/embed/cfr
+	curl -fsSL -o internal/worker/embed/cfr/cfr.jar https://repo1.maven.org/maven2/org/benf/cfr/0.152/cfr-0.152.jar
+	echo "f686e8f3ded377d7bc87d216a90e9e9512df4156e75b06c655a16648ae8765b2  internal/worker/embed/cfr/cfr.jar" | sha256sum -c -
 
 # 构建 Bot Worker
 build-bot:
