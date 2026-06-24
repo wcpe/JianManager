@@ -30,6 +30,9 @@
 ### 变更
 - **新增 `.gitattributes` 统一换行与标记生成代码（v0.9.0 走查 #17/#18）**：`* text=auto eol=lf` 令所有文本以 LF 存储/检出，杜绝 Windows CRLF↔LF 往返反复污染 diff（开发期满屏「LF will be replaced by CRLF」）；`proto/workerpb/*.pb.go linguist-generated=true` 标记 protoc 生成物（PR diff 折叠、不计语言统计），并约定多分支并行撞车时从合并 .proto 用 protoc 重生成而非手改/union 拼接；二进制类型显式标记不做换行转换。
 
+### 变更
+- **前端重型依赖拆分为独立 vendor chunk（v0.9.0 走查 #13）**：路由本已按页 lazy 分割，但 recharts/codemirror/xterm 等重库被卷进应用 chunk（原「PluginManager」单 chunk ~798KB、触发 vite >500KB 警告）。vite 加 `manualChunks` 按库拆分：editor(codemirror ~358KB)/charts(recharts ~342KB)/terminal(xterm ~342KB)/react-vendor/query/vendor 各自独立、按需懒载且可长期缓存；应用主 chunk 降至 ~104KB，>500KB 警告消除。
+
 ## 0.9.0（2026-06-24）
 
 ### 新增
