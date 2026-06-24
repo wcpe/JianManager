@@ -267,7 +267,8 @@
     "runtimeAssets": "运行时与制品",
     "storage": "平台存储",
     "database": "数据库",
-    "systemUpdate": "系统更新"
+    "systemUpdate": "系统更新",
+    "platform": "平台"
   },
   "console": {
     "title": "运维控制台",

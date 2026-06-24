@@ -87,8 +87,18 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   { key: 'templates', labelKey: 'nav.templates', icon: LayoutTemplate, to: '/templates' },
-  { key: 'runtimeAssets', labelKey: 'nav.runtimeAssets', icon: Layers, to: '/runtime-assets' },
-  { key: 'clientChannels', labelKey: 'nav.clientChannels', icon: DownloadCloud, to: '/client-channels' },
+  {
+    // 平台级资源/运维统一归此组（FR-112）：原 运行时与制品/客户端分发 为顶级叶子、
+    // 平台存储/数据库/系统更新 埋在「设置」下，IA 不一致；现统一收入「平台」组。
+    key: 'platform',
+    labelKey: 'nav.platform',
+    icon: Layers,
+    children: [
+      { to: '/runtime-assets', labelKey: 'nav.runtimeAssets', icon: Layers },
+      { to: '/client-channels', labelKey: 'nav.clientChannels', icon: DownloadCloud },
+      { to: '/storage', labelKey: 'nav.storage', icon: HardDrive },
+    ],
+  },
   {
     key: 'settings',
     labelKey: 'nav.settings',
@@ -96,7 +106,6 @@ const NAV_GROUPS: NavGroup[] = [
     children: [
       { to: '/users', labelKey: 'nav.users', icon: User },
       { to: '/groups', labelKey: 'nav.groups', icon: UsersRound },
-      { to: '/storage', labelKey: 'nav.storage', icon: HardDrive },
       { to: '/audit', labelKey: 'nav.audit', icon: FileClock },
       { to: '/settings', labelKey: 'nav.systemSettings', icon: Settings2 },
     ],
@@ -107,13 +116,13 @@ const NAV_GROUPS: NavGroup[] = [
 const ROLE_PLATFORM_ADMIN = 10
 
 /**
- * 按角色裁剪导航：平台管理员在「设置」组追加「数据库」（FR-084）与「系统更新」（FR-081）入口，
+ * 按角色裁剪导航：平台管理员在「平台」组追加「数据库」（FR-084）与「系统更新」（FR-081）入口（FR-112 归类一致），
  * 均仅平台管理员可见。仅注入这两个入口，不改其余既有项。
  */
 function navGroupsForRole(role: number | null): NavGroup[] {
   if (role !== ROLE_PLATFORM_ADMIN) return NAV_GROUPS
   return NAV_GROUPS.map((g) =>
-    g.key === 'settings'
+    g.key === 'platform'
       ? {
           ...g,
           children: [

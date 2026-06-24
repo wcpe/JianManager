@@ -267,7 +267,8 @@
     "runtimeAssets": "Runtime & Assets",
     "storage": "Platform Storage",
     "database": "Database",
-    "systemUpdate": "System Update"
+    "systemUpdate": "System Update",
+    "platform": "Platform"
   },
   "console": {
     "title": "Ops Console",
