@@ -1,0 +1,4 @@
+# 客户端更新器 jar（wedge/updater-core）为构建产物（make embed-client-updater 注入），不入库。
+# 保留本 .gitignore 以维持目录存在，使 go:embed all:client-updater 不致编译失败。
+wedge.jar
+updater-core.jar

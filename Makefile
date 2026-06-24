@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-probe docker
+.PHONY: build build-cp build-worker build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-probe embed-client-updater docker
 
 # 构建所有（含前端嵌入）
 build: build-web embed-web build-cp build-worker
@@ -27,6 +27,15 @@ embed-probe:
 	cd third_party/ServerProbe && ./gradlew :plugin:jar :plugin:taboolibMainTask
 	mkdir -p internal/controlplane/embed/probe
 	cp third_party/ServerProbe/plugin/build/libs/ServerProbe-*.jar internal/controlplane/embed/probe/ServerProbe.jar
+
+# 构建客户端 OTA 更新器两件套 jar 并注入 CP 内嵌目录（FR-107 运营方接入指引，可选）。
+# 需 client-updater 可构建（toolchain 解析 Java 8）。不跑此目标时 CP 不捆绑更新器 jar，
+# 接入指引页下载按钮显示「未内嵌」，不影响其它构建。
+embed-client-updater:
+	cd client-updater && ./gradlew :wedge:jar :updater-core:jar
+	mkdir -p internal/controlplane/embed/client-updater
+	cp client-updater/wedge/build/libs/wedge-*.jar internal/controlplane/embed/client-updater/wedge.jar
+	cp client-updater/updater-core/build/libs/updater-core-*.jar internal/controlplane/embed/client-updater/updater-core.jar
 
 # 构建 Bot Worker
 build-bot:
