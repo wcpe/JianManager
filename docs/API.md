@@ -475,6 +475,14 @@
 - **错误**: `400 INVALID_REQUEST`（缺 domain/action）、`403 FORBIDDEN`（无 `instance.operate`）、`404 NOT_FOUND`（实例不可见/不存在）
 - **关联 FR**: FR-116 ｜ **关联 ADR**: ADR-026, ADR-027
 
+### GET /api/v1/instances/:id/business/manifest
+- **描述**: 取某实例的业务能力清单（JBIS 元查询，FR-116）。CP 复用业务下发通道下发保留元命令（`domain=jbis` + `action=manifest`），探针侧 `BusinessHost` 返回各业务 Provider 汇总的能力清单 JSON（`{"domains":{...}}`），供前端**动态发现各域能力、动态渲染**（不硬编码具体插件）。元命令不派发到任何业务 Provider
+- **权限**: `instance.read`（只读发现；且实例须可访问）
+- **响应**: `200`，`{ "instanceId":3, "domain":"jbis", "action":"manifest", "available":true, "output": { "domains": { "economy": { "actions":[{"action":"balance","args":["player","currency"],"readOnly":true}] } } }, "error":"" }`
+  - `available=false`：探针未连入/无业务 Provider → `output` 为 `null` + `error`（HTTP 200，降级不 5xx）
+- **错误**: `403 FORBIDDEN`（无 `instance.read`）、`404 NOT_FOUND`（实例不可见/不存在）
+- **关联 FR**: FR-116 ｜ **关联 ADR**: ADR-026, ADR-027
+
 ### POST /api/v1/players/:name/kick
 - **描述**: 踢出玩家，经探针插件桥 `SendPluginCommand` 向目标后端集合下发 kick（FR-067）。范围互斥：`instanceId`（单服）> `networkId`（群组）> 全部可见后端
 - **权限**: `instance.operate` | **审计**: `player.kick`

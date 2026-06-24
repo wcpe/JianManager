@@ -66,7 +66,36 @@ func (h *BusinessHandler) Dispatch(c *gin.Context) {
 	c.JSON(http.StatusOK, res)
 }
 
-// RegisterRoutes 注册业务对接下发路由（加性追加）。
+// Manifest GET /instances/:id/business/manifest — 取某实例的业务能力清单（JBIS 元查询，FR-116）。
+// 只读发现，权限 instance:read 且实例须可访问。探针未连/无业务 Provider 由 service 降级（200 + available=false）。
+func (h *BusinessHandler) Manifest(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	access := getAccess(c)
+	if access == nil || !access.HasPermission(service.PermInstanceRead) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
+	}
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	res, err := h.bizSvc.Manifest(id)
+	if err != nil {
+		if errors.Is(err, service.ErrInstanceNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "业务能力清单获取失败"})
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+// RegisterRoutes 注册业务对接路由（加性追加）。
 func (h *BusinessHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.POST("/instances/:id/business", h.Dispatch)
+	rg.GET("/instances/:id/business/manifest", h.Manifest)
 }

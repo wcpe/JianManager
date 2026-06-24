@@ -1685,13 +1685,13 @@
 - **依赖**: 无（脊柱起点）
 
 #### FR-116: CP 业务编排与汇聚脊柱
-- **状态**: 🔨 开发中（业务命令下发路径已完成：`BusinessService.Dispatch`(domain.action+payload→SendPluginCommand wait=true，纯函数 mapBusinessResponse 全降级矩阵) + `POST /instances/:id/business` 端点 + 接线，单测 build/vet + service -race 全绿。manifest 汇聚待 FR-117 提供 manifest 源后做；envelope 事件存储留 M2/FR-122 真实业务事件流时落地）
+- **状态**: 🔨 开发中（下发路径 + manifest 元查询已完成：`BusinessService.Dispatch`(domain.action+payload→SendPluginCommand wait=true，纯函数 mapBusinessResponse 全降级矩阵) + `POST /instances/:id/business` + `BusinessService.Manifest`(复用 Dispatch 下发 jbis/manifest 元查询) + `GET /instances/:id/business/manifest`(instance:read) + 接线，build/vet + service -race 全绿。envelope 事件存储留 M2/FR-122；跨节点 manifest 汇聚（多实例聚合）按需后补，M1 用单实例 manifest）
 - **优先级**: P1
 - **描述**: CP 侧业务命令下发、manifest 能力汇聚、业务事件去重落库（插件无关通用信封）
 - **验收标准**:
   - [x] 先写 **ADR-028**（CP 业务数据与时序监控分表分策略）
   - [x] CP 下发业务命令（携 `requestId`，operator 透传留 FR-121），域不可用/探针未连/节点未连一律优雅降级（available=false + 友好提示，绝不 5xx）
-  - [ ] 各节点各域 manifest 汇聚为平台级能力视图（待 FR-117 manifest 源）
+  - [x] 单实例 manifest 元查询（jbis/manifest）+ `GET /business/manifest` 端点，供前端动态发现各域能力（跨节点聚合按需后补）
   - [ ] 业务事件经通用 envelope 表（domain/action/payload-json/dedupKey/node/operator/ts）按 dedupKey 去重落库 + 读端点（待 M2 真实业务事件流，FR-122）
   - [ ] 端到端：CP 下发 `economy.balance` 经 Worker→桥往返收到结果（待 FR-117/118，M1 收口真机）
 - **关联 ADR**: ADR-027, ADR-028

@@ -23,6 +23,13 @@ var ErrInvalidBusinessCommand = errors.New("业务命令缺少 domain 或 action
 // 须大于 Worker 侧等探针回执的 5s（pluginCommandTimeout），留网络与排队余量（与 serverStateQueryTimeout 同量级）。
 const businessDispatchTimeout = 8 * time.Second
 
+// JBIS 元查询保留域/动作（与探针侧 BridgeClient 约定一致）：
+// 取业务能力清单而非派发到具体业务 Provider，供前端动态发现各域能力（ADR-026/027）。
+const (
+	businessMetaDomain = "jbis"
+	manifestAction     = "manifest"
+)
+
 // BusinessService 是 JBIS 业务对接的 CP 编排脊柱（FR-116，见 ADR-026/027）。
 //
 // 它把前端发起的业务动作（`domain.action` + 结构化 payload）经既有插件桥（ADR-016）下发到
@@ -105,6 +112,15 @@ func (s *BusinessService) Dispatch(instanceID uint, domain, action, payloadJSON 
 	}
 	mapBusinessResponse(result, resp)
 	return result, nil
+}
+
+// Manifest 取某实例的业务能力清单（JBIS 元查询）。
+//
+// 复用 Dispatch 下发保留元命令（domain=jbis、action=manifest），探针侧返回各业务 Provider 汇总的
+// 能力清单 JSON（{"domains":{...}}）于 output；供前端动态发现各域能力、动态渲染（不硬编码具体插件）。
+// 探针未连/无业务 Provider 时同样优雅降级（available=false + 提示）。
+func (s *BusinessService) Manifest(instanceID uint) (*BusinessResult, error) {
+	return s.Dispatch(instanceID, businessMetaDomain, manifestAction, "")
 }
 
 // mapBusinessResponse 把 Worker 的 SendPluginCommandResponse 映射为透传结果（抽出便于单测）。

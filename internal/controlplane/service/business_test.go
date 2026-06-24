@@ -81,6 +81,21 @@ func TestBusiness_Dispatch_NodeNotConnected(t *testing.T) {
 	assert.Equal(t, "节点未连接", res.Error)
 }
 
+// TestBusiness_Manifest_MetaQuery Manifest 复用 Dispatch 下发 jbis/manifest 元查询；节点未连时降级。
+func TestBusiness_Manifest_MetaQuery(t *testing.T) {
+	db := newBusinessTestDB(t)
+	svc := NewBusinessService(db, cpgrpc.NewClientPool())
+	require.NoError(t, db.Create(&model.Node{Name: "n1", UUID: "node-uuid-1", GRPCPort: 9100, WSPort: 9102}).Error)
+	inst := mkBizInstance(t, db, "biz", 1)
+
+	res, err := svc.Manifest(inst.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "jbis", res.Domain, "manifest 应走保留元域")
+	assert.Equal(t, "manifest", res.Action)
+	assert.False(t, res.Available, "节点未连接应降级")
+	assert.Equal(t, "节点未连接", res.Error)
+}
+
 // TestMapBusinessResponse 覆盖 Worker 响应到透传结果的全降级矩阵（纯函数，免 mock gRPC）。
 func TestMapBusinessResponse(t *testing.T) {
 	const validJSON = `{"balance":"100.50","currency":"coin"}`
