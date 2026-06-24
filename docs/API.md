@@ -467,13 +467,19 @@
 - **关联 FR**: FR-076 ｜ **关联 ADR**: ADR-016
 
 ### POST /api/v1/instances/:id/business
-- **描述**: JBIS 业务对接——向某实例下发一条业务命令（`domain.action` + 结构化 `payload`）并取回结果（FR-116，见 ADR-026/027）。CP **插件无关**：经既有探针桥（ADR-016）把信封下发到目标实例 ServerProbe 业务对接层（BusinessHost→per-plugin Provider 执行），结果 JSON 原样透传，CP 不解析。`domain` 区分业务域（`economy`/`inventory`…），与监控/治理（`core.*`）同桥分流
-- **权限**: `instance.operate`（且实例须可访问；高危写的 per-action 权限与二次确认见 FR-121/ADR-029）
-- **请求**: `{ "domain":"economy", "action":"balance", "payload":"{\"player\":\"alice\",\"currency\":\"coin\"}" }`（`payload` 为结构化参数 JSON 字符串，CP 不解析原样下发；`domain`/`action` 必填）
+- **描述**: JBIS 业务对接——向某实例下发一条业务命令（`domain.action` + 结构化 `payload`）并取回结果（FR-116/FR-121，见 ADR-026/027/029）。CP **插件无关**：经既有探针桥（ADR-016）把信封下发到目标实例 ServerProbe 业务对接层（BusinessHost→per-plugin Provider 执行），结果 JSON 原样透传，CP 不解析。`domain` 区分业务域（`economy`/`inventory`…），与监控/治理（`core.*`）同桥分流
+- **权限**: 读动作（`write=false`/缺省）`instance.operate`；**写动作（`write=true`，对应 manifest `readOnly=false`，如改余额/改背包）`instance.business.write`**（FR-121）。两者均须实例可访问
+- **请求**: `{ "domain":"economy", "action":"balance", "payload":"{\"player\":\"alice\",\"currency\":\"coin\"}", "write":false }`
+  - `payload`：结构化参数 JSON 字符串，CP 不解析原样下发；`domain`/`action` 必填
+  - `write`（可选，默认 `false`）：是否为高危写动作；前端据 manifest `readOnly` 取反设置
+  - `operationId`（可选，写动作必带）：**幂等标识**，对同一逻辑操作的重试必须稳定。CP 用作 payload `taskId`（探针→插件 mce `BusinessOrder` 幂等键，跨节点重试天然防重）；缺省时 CP 兜底生成（但失去重试去重）
+  - `reason`（可选）：操作原因，透传进插件流水 `reason` + JM 审计
+  - 写动作时 CP 向 payload 注入 `taskId`/`operator`/`operatorId`/`nodeId`/`reason`（仅当业务方未显式同名入参时），使插件审计流水记录操作者（哪个管理员/哪个节点/为什么）
 - **响应**: `200`，`{ "instanceId":3, "domain":"economy", "action":"balance", "available":true, "output": {...业务结果JSON...}, "error":"" }`
   - `available=false`：探针未连入/域不可用/Provider 执行失败 → `output` 为 `null` + `error` 说明（HTTP 200，降级不 5xx）
-- **错误**: `400 INVALID_REQUEST`（缺 domain/action）、`403 FORBIDDEN`（无 `instance.operate`）、`404 NOT_FOUND`（实例不可见/不存在）
-- **关联 FR**: FR-116 ｜ **关联 ADR**: ADR-026, ADR-027
+- **审计**: 写动作记 `business.write`（detail 含 domain/action/operationId/reason/available）；审计中间件兜底记 `business.dispatch`（覆盖读+写）
+- **错误**: `400 INVALID_REQUEST`（缺 domain/action 或 payload 非法 JSON）、`403 FORBIDDEN`（读缺 `instance.operate` / 写缺 `instance.business.write`）、`404 NOT_FOUND`（实例不可见/不存在）
+- **关联 FR**: FR-116, FR-121 ｜ **关联 ADR**: ADR-026, ADR-027, ADR-029
 
 ### GET /api/v1/instances/:id/business/manifest
 - **描述**: 取某实例的业务能力清单（JBIS 元查询，FR-116）。CP 复用业务下发通道下发保留元命令（`domain=jbis` + `action=manifest`），探针侧 `BusinessHost` 返回各业务 Provider 汇总的能力清单 JSON（`{"domains":{...}}`），供前端**动态发现各域能力、动态渲染**（不硬编码具体插件）。元命令不派发到任何业务 Provider
