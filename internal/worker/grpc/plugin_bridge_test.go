@@ -138,3 +138,28 @@ func TestQueryServerState_Timeout(t *testing.T) {
 		t.Fatal("QueryServerState 未在超时窗口内返回（应由 Worker 侧 5s 兜底降级）")
 	}
 }
+
+// TestPluginCommandFrame_BusinessDomainPayload 验证 JBIS 业务命令帧（FR-115/ADR-027）：
+// domain/payloadJson 仅在非空时进帧（业务/监控分流）；治理命令帧保持原样不含这两字段。
+func TestPluginCommandFrame_BusinessDomainPayload(t *testing.T) {
+	// 业务命令：domain + payloadJson 进帧，供探针 BusinessHost 按 domain 路由。
+	biz := pluginCommandFrame(&workerpb.PluginCommand{
+		Action:      "balance",
+		RequestId:   "req-1",
+		Domain:      "economy",
+		PayloadJson: `{"player":"alice","currency":"coin"}`,
+	})
+	assert.Equal(t, "economy", biz["domain"])
+	assert.Equal(t, `{"player":"alice","currency":"coin"}`, biz["payloadJson"])
+	assert.Equal(t, "balance", biz["action"])
+	assert.Equal(t, "req-1", biz["requestId"])
+
+	// 治理命令：无 domain/payloadJson 字段（帧与既有 FR-067 完全一致，业务/监控分流）。
+	gov := pluginCommandFrame(&workerpb.PluginCommand{Action: "kick", Target: "bob", RequestId: "req-2"})
+	_, hasDomain := gov["domain"]
+	_, hasPayload := gov["payloadJson"]
+	assert.False(t, hasDomain, "治理命令帧不应含 domain")
+	assert.False(t, hasPayload, "治理命令帧不应含 payloadJson")
+	assert.Equal(t, "kick", gov["action"])
+	assert.Equal(t, "bob", gov["target"])
+}

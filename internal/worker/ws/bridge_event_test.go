@@ -89,6 +89,73 @@ func TestBridge_PlayerEventFieldsBubbled(t *testing.T) {
 	assert.Equal(t, "survival", cross.ToServer)
 }
 
+// TestBridge_BusinessEventDomainDedupBubbled 验证 JBIS 业务事件（FR-115/ADR-027）：
+// 探针 event 帧的 domain/dedupKey 经 Worker 透传冒泡到 ws.PluginEvent（CP 据此分流业务汇聚 + 去重）；
+// 监控/治理事件不带 domain → 这两字段为空（业务/监控分流）。
+func TestBridge_BusinessEventDomainDedupBubbled(t *testing.T) {
+	s := NewPluginBridgeServer(testSecret)
+
+	var mu sync.Mutex
+	var events []PluginEvent
+	s.SetEventHandler(func(e PluginEvent) {
+		mu.Lock()
+		events = append(events, e)
+		mu.Unlock()
+	})
+
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	conn := dialBridge(t, srv.URL, "inst-1")
+	defer conn.Close()
+
+	var welcome bridgeMessage
+	require.NoError(t, conn.ReadJSON(&welcome))
+
+	// 业务事件：带 domain=economy + dedupKey。
+	bizData, _ := json.Marshal(map[string]any{"playerName": "alice"})
+	require.NoError(t, conn.WriteJSON(bridgeMessage{
+		Type: "event", Event: "economy_change", Data: bizData,
+		Domain: "economy", DedupKey: "led-123",
+	}))
+	// 监控事件：无 domain/dedupKey（业务/监控分流）。
+	monData, _ := json.Marshal(map[string]any{"playerName": "bob"})
+	require.NoError(t, conn.WriteJSON(bridgeMessage{Type: "event", Event: "player_join", Data: monData}))
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		var biz, mon bool
+		for _, e := range events {
+			if e.Type == "economy_change" {
+				biz = true
+			}
+			if e.Type == "player_join" {
+				mon = true
+			}
+		}
+		return biz && mon
+	}, 2*time.Second, 20*time.Millisecond, "应冒泡业务与监控事件")
+
+	mu.Lock()
+	defer mu.Unlock()
+	var biz, mon *PluginEvent
+	for i := range events {
+		switch events[i].Type {
+		case "economy_change":
+			biz = &events[i]
+		case "player_join":
+			mon = &events[i]
+		}
+	}
+	require.NotNil(t, biz)
+	assert.Equal(t, "economy", biz.Domain)
+	assert.Equal(t, "led-123", biz.DedupKey)
+
+	require.NotNil(t, mon)
+	assert.Empty(t, mon.Domain, "监控事件 domain 应空（业务/监控分流）")
+	assert.Empty(t, mon.DedupKey)
+}
+
 // TestParseBridgeEventData 直接验证 event 帧载荷解析的纯函数行为（含缺字段/空载荷容错）。
 func TestParseBridgeEventData(t *testing.T) {
 	full := json.RawMessage(`{"playerName":"alice","playerUuid":"u1","message":"hi","server":"lobby","fromServer":"a","toServer":"b"}`)

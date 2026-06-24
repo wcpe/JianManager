@@ -6203,20 +6203,26 @@ func (x *StreamPluginEventsRequest) GetInstanceUuid() string {
 //
 //	| chat | cross_server | command_result | state
 type PluginEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InstanceUuid  string                 `protobuf:"bytes,1,opt,name=instance_uuid,json=instanceUuid,proto3" json:"instance_uuid,omitempty"`
-	Type          string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
-	Timestamp     int64                  `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
-	PlayerName    string                 `protobuf:"bytes,4,opt,name=player_name,json=playerName,proto3" json:"player_name,omitempty"` // 玩家事件：玩家名
-	PlayerUuid    string                 `protobuf:"bytes,5,opt,name=player_uuid,json=playerUuid,proto3" json:"player_uuid,omitempty"` // 玩家事件：玩家 UUID
-	Message       string                 `protobuf:"bytes,6,opt,name=message,proto3" json:"message,omitempty"`                         // chat 内容 / 事件描述
-	Server        string                 `protobuf:"bytes,7,opt,name=server,proto3" json:"server,omitempty"`                           // 子服名（玩家所在/事件发生）
-	FromServer    string                 `protobuf:"bytes,8,opt,name=from_server,json=fromServer,proto3" json:"from_server,omitempty"` // cross_server：来源子服
-	ToServer      string                 `protobuf:"bytes,9,opt,name=to_server,json=toServer,proto3" json:"to_server,omitempty"`       // cross_server：目标子服
-	Platform      string                 `protobuf:"bytes,10,opt,name=platform,proto3" json:"platform,omitempty"`                      // bukkit | bungee（来自探针 hello）
-	Version       string                 `protobuf:"bytes,11,opt,name=version,proto3" json:"version,omitempty"`                        // 探针版本
-	RequestId     string                 `protobuf:"bytes,12,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`   // command_result 对应的请求标识
-	RawJson       string                 `protobuf:"bytes,13,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`         // 透传原始载荷（下游按需解析）
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	InstanceUuid string                 `protobuf:"bytes,1,opt,name=instance_uuid,json=instanceUuid,proto3" json:"instance_uuid,omitempty"`
+	Type         string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
+	Timestamp    int64                  `protobuf:"varint,3,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	PlayerName   string                 `protobuf:"bytes,4,opt,name=player_name,json=playerName,proto3" json:"player_name,omitempty"` // 玩家事件：玩家名
+	PlayerUuid   string                 `protobuf:"bytes,5,opt,name=player_uuid,json=playerUuid,proto3" json:"player_uuid,omitempty"` // 玩家事件：玩家 UUID
+	Message      string                 `protobuf:"bytes,6,opt,name=message,proto3" json:"message,omitempty"`                         // chat 内容 / 事件描述
+	Server       string                 `protobuf:"bytes,7,opt,name=server,proto3" json:"server,omitempty"`                           // 子服名（玩家所在/事件发生）
+	FromServer   string                 `protobuf:"bytes,8,opt,name=from_server,json=fromServer,proto3" json:"from_server,omitempty"` // cross_server：来源子服
+	ToServer     string                 `protobuf:"bytes,9,opt,name=to_server,json=toServer,proto3" json:"to_server,omitempty"`       // cross_server：目标子服
+	Platform     string                 `protobuf:"bytes,10,opt,name=platform,proto3" json:"platform,omitempty"`                      // bukkit | bungee（来自探针 hello）
+	Version      string                 `protobuf:"bytes,11,opt,name=version,proto3" json:"version,omitempty"`                        // 探针版本
+	RequestId    string                 `protobuf:"bytes,12,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`   // command_result 对应的请求标识
+	RawJson      string                 `protobuf:"bytes,13,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"`         // 透传原始载荷（下游按需解析）
+	// domain 业务域命名空间（JBIS，FR-115/ADR-027）：空/core=监控/治理既有事件；
+	// economy/inventory… 为业务域事件，CP 据此分流落业务汇聚而非监控。
+	Domain string `protobuf:"bytes,14,opt,name=domain,proto3" json:"domain,omitempty"`
+	// dedup_key 业务事件去重键（JBIS）：CP 按 (domain,dedup_key) 幂等落库（至少一次投递去重）；
+	// 监控事件此字段空。
+	DedupKey      string `protobuf:"bytes,15,opt,name=dedup_key,json=dedupKey,proto3" json:"dedup_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6342,15 +6348,35 @@ func (x *PluginEvent) GetRawJson() string {
 	return ""
 }
 
+func (x *PluginEvent) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+func (x *PluginEvent) GetDedupKey() string {
+	if x != nil {
+		return x.DedupKey
+	}
+	return ""
+}
+
 // PluginCommand CP 下发给探针的治理/查询指令。
 // action 取值：kick | ban | unban | whitelist_add | whitelist_remove | list | query_state
 type PluginCommand struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Action        string                 `protobuf:"bytes,1,opt,name=action,proto3" json:"action,omitempty"`
-	Target        string                 `protobuf:"bytes,2,opt,name=target,proto3" json:"target,omitempty"`                        // 目标玩家名/UUID
-	Reason        string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`                        // 踢/封原因
-	Args          []string               `protobuf:"bytes,4,rep,name=args,proto3" json:"args,omitempty"`                            // 透传额外参数
-	RequestId     string                 `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"` // 关联 command_result 回执
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Action    string                 `protobuf:"bytes,1,opt,name=action,proto3" json:"action,omitempty"`
+	Target    string                 `protobuf:"bytes,2,opt,name=target,proto3" json:"target,omitempty"`                        // 目标玩家名/UUID
+	Reason    string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`                        // 踢/封原因
+	Args      []string               `protobuf:"bytes,4,rep,name=args,proto3" json:"args,omitempty"`                            // 透传额外参数
+	RequestId string                 `protobuf:"bytes,5,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"` // 关联 command_result 回执
+	// domain 业务域命名空间（JBIS，FR-115/ADR-027）：空/core=内建治理（既有 kick/ban…）；
+	// economy/inventory… 为业务域，Worker 按 domain 前缀路由到对应桥业务会话。
+	Domain string `protobuf:"bytes,6,opt,name=domain,proto3" json:"domain,omitempty"`
+	// payload_json 结构化业务参数（JBIS）：业务动作的入参以 JSON 承载（如 economy.balance 的 player/currency），
+	// 与 args（治理用 repeated string）并存；治理命令此字段空。
+	PayloadJson   string `protobuf:"bytes,7,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6416,6 +6442,20 @@ func (x *PluginCommand) GetArgs() []string {
 func (x *PluginCommand) GetRequestId() string {
 	if x != nil {
 		return x.RequestId
+	}
+	return ""
+}
+
+func (x *PluginCommand) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+func (x *PluginCommand) GetPayloadJson() string {
+	if x != nil {
+		return x.PayloadJson
 	}
 	return ""
 }
@@ -7807,7 +7847,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12%\n" +
 	"\x0erestored_files\x18\x03 \x01(\x03R\rrestoredFiles\"@\n" +
 	"\x19StreamPluginEventsRequest\x12#\n" +
-	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\"\x86\x03\n" +
+	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\"\xbb\x03\n" +
 	"\vPluginEvent\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1c\n" +
@@ -7826,14 +7866,18 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\aversion\x18\v \x01(\tR\aversion\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\f \x01(\tR\trequestId\x12\x19\n" +
-	"\braw_json\x18\r \x01(\tR\arawJson\"\x8a\x01\n" +
+	"\braw_json\x18\r \x01(\tR\arawJson\x12\x16\n" +
+	"\x06domain\x18\x0e \x01(\tR\x06domain\x12\x1b\n" +
+	"\tdedup_key\x18\x0f \x01(\tR\bdedupKey\"\xc5\x01\n" +
 	"\rPluginCommand\x12\x16\n" +
 	"\x06action\x18\x01 \x01(\tR\x06action\x12\x16\n" +
 	"\x06target\x18\x02 \x01(\tR\x06target\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x12\n" +
 	"\x04args\x18\x04 \x03(\tR\x04args\x12\x1d\n" +
 	"\n" +
-	"request_id\x18\x05 \x01(\tR\trequestId\"\x84\x01\n" +
+	"request_id\x18\x05 \x01(\tR\trequestId\x12\x16\n" +
+	"\x06domain\x18\x06 \x01(\tR\x06domain\x12!\n" +
+	"\fpayload_json\x18\a \x01(\tR\vpayloadJson\"\x84\x01\n" +
 	"\x18SendPluginCommandRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12/\n" +
 	"\acommand\x18\x02 \x01(\v2\x15.worker.PluginCommandR\acommand\x12\x12\n" +

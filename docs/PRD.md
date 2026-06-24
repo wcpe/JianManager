@@ -1673,14 +1673,14 @@
 ### 里程碑 M1 — 垂直切片（economy.balance 读穿全链，脊柱成型）
 
 #### FR-115: 业务桥 Worker 脊柱
-- **状态**: 📋 计划
+- **状态**: 🔨 开发中（Worker 侧代码完成：proto 加 domain/payload_json/dedup_key 重生成、桥帧/事件穿透、命令帧业务路由、单测全绿 go build/vet + ws/grpc 全量 -race；待 M1 收口随整链真机确认 done）
 - **优先级**: P1
 - **描述**: Worker 侧打通业务命令路由与事件汇聚流，复用既有反向 WS 桥（ADR-016），不新增进程/协议
 - **验收标准**:
-  - [ ] 先写 **ADR-027**（业务命令复用桥 command/event + `domain.verb` 寻址）
-  - [ ] `proto/worker.proto` 加性新增 command/event 的 `domain`/`dedup_key` 可选字段，workerpb 经 protoc 重生成（禁手改）
-  - [ ] 桥 JSON 帧加 `scope=business` 会话区分 + `domain` 字段；Worker 按 domain 前缀把 command 透传到对应桥会话、把 event 流上报 CP（dedupKey 透传）
-  - [ ] 单测：domain 路由 + dedupKey 透传 + 业务/监控帧分流
+  - [x] 先写 **ADR-027**（业务命令复用桥 command/event + `domain.verb` 寻址）
+  - [x] `proto/worker.proto` 加性新增 command/event 的 `domain`/`dedup_key`（command 另加 `payload_json`）可选字段，workerpb 经 protoc 重生成（禁手改）
+  - [x] 桥 JSON 帧加 `domain` 字段（即业务/监控分流标志，非空非 core=业务；单连接无需独立 session scope，见 ADR-025）：下行命令帧带 domain/payloadJson 供探针 BusinessHost 路由、上行业务事件帧带 domain/dedupKey 透传给 CP
+  - [x] 单测：命令帧业务/治理分流（domain/payloadJson 仅业务带）+ 事件 domain/dedupKey 冒泡 + 监控帧分流
 - **关联 ADR**: ADR-027
 - **依赖**: 无（脊柱起点）
 

@@ -41,6 +41,8 @@ func (s *Server) SetPluginBridge(b *ws.PluginBridgeServer) {
 			FromServer:   e.FromServer,
 			ToServer:     e.ToServer,
 			RawJson:      e.Raw,
+			Domain:       e.Domain,   // JBIS 业务域透传给 CP（FR-115）
+			DedupKey:     e.DedupKey, // JBIS 去重键透传给 CP（FR-115）
 		})
 	})
 }
@@ -199,5 +201,13 @@ func pluginCommandFrame(cmd *workerpb.PluginCommand) map[string]interface{} {
 	frame["reason"] = cmd.Reason
 	frame["args"] = cmd.Args
 	frame["requestId"] = cmd.RequestId
+	// JBIS 业务命令（FR-115/ADR-027）：domain 非空即业务帧，探针 BusinessHost 按 domain 路由到 Provider；
+	// payloadJson 承载结构化业务参数。仅非空时附带，治理命令帧保持原样不变。
+	if cmd.Domain != "" {
+		frame["domain"] = cmd.Domain
+	}
+	if cmd.PayloadJson != "" {
+		frame["payloadJson"] = cmd.PayloadJson
+	}
 	return frame
 }

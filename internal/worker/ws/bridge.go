@@ -68,6 +68,9 @@ type PluginEvent struct {
 	FromServer string // cross_server：来源子服
 	ToServer   string // cross_server：目标子服
 	Raw        string // 透传原始消息载荷（下游按需解析）
+	// 以下为 JBIS 业务事件（FR-115/ADR-027）字段；监控/治理事件为空。
+	Domain   string // 业务域（economy/inventory…；空/core 为非业务）
+	DedupKey string // 业务事件去重键（CP 按 (domain,dedupKey) 幂等落库）
 }
 
 // PluginEventHandler 接收插件桥冒泡的事件，由 Worker 注入以桥接到 gRPC 事件流。
@@ -82,6 +85,11 @@ type bridgeMessage struct {
 	Version  string          `json:"version,omitempty"`
 	Event    string          `json:"event,omitempty"` // type=event 时的事件子类型
 	Data     json.RawMessage `json:"data,omitempty"`  // 透传业务载荷
+	// domain 业务域命名空间（JBIS，FR-115/ADR-027）：空/core=监控/治理既有帧；
+	// economy/inventory… 为业务域（即业务/监控分流标志，单连接无需独立 session scope，见 ADR-025）。
+	Domain string `json:"domain,omitempty"`
+	// dedupKey 业务事件去重键（JBIS）：业务 event 帧携带，Worker 透传给 CP 按 (domain,dedupKey) 幂等落库。
+	DedupKey string `json:"dedupKey,omitempty"`
 }
 
 // bridgeEventData 是探针 event 帧 data 字段里的结构化玩家载荷（FR-066）。
@@ -381,6 +389,8 @@ func (s *PluginBridgeServer) handleSession(session *PluginSession) {
 				FromServer:   d.FromServer,
 				ToServer:     d.ToServer,
 				Raw:          string(msgBytes),
+				Domain:       msg.Domain,   // JBIS 业务域透传（FR-115）
+				DedupKey:     msg.DedupKey, // JBIS 去重键透传（FR-115）
 			})
 		}
 	}
