@@ -12,6 +12,9 @@
 - **登录态 token 刷新一致性加固（BUG-011，v0.9.0 走查）**：核查发现访问令牌过期刷新**早由 BUG-008 完整处理**（请求前主动刷新 + 响应 401 被动刷新重放 + 共享刷新闸防并发竞态 + SSE `ensureFreshToken`）；走查中观察到的 401 实为**外部 curl 脚本**（无 axios 拦截器）所致、非浏览器前端。加固两处真实小发散：`refreshTokens` 刷新后经 `loadFromStorage` 同步 zustand store（原仅写 localStorage、store.accessToken 滞后）；`clearAuth` 改用 `store.logout` 同步清 localStorage + store 状态（原仅清 localStorage、靠 /login 重载兜底）。
 - **Worker 启 MC 无绑定 JDK 时静默用错 Java 版本（BUG-012，v0.9.0 走查）**：实例未绑定 JDK 时启动命令为裸 `java`、落到 PATH 的 Java；Paper 1.21 等需 Java 21，PATH 若是 Java 8 则游戏服以 `UnsupportedClassVersionError` 静默崩在自身日志、面板只见 CRASHED 无因。修：MC 实例启动前加 `preflightJavaVersion` 校验——绑定 JDK 探测其 bin/java 能跑即过；未绑定则探 PATH java，跑不起来或大版本 < 17（现代 MC 下限）返回明确错误指引绑定/安装 JDK（docker 模式 java 在容器内、跳过）。补 6 路径单测。
 
+### 新增
+- **系统更新页未配源仍展示当前版本（FR-110，v0.9.0 走查）**：系统更新页（FR-081）点检查更新后未配 `feed_url` 时只显警告、隐藏 CP/各 Worker 当前版本（后端 `CheckUpdate` 实际无条件返回各组件版本）。改前端：未配源也渲染 CP 版本卡 + 节点版本表（升级动作因无可升级版本自然禁用），仅「最新版本对比」行依赖配源；运维未配源也能看到在跑版本。
+
 ## 0.9.0（2026-06-24）
 
 ### 新增

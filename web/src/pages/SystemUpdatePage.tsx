@@ -104,18 +104,22 @@ export default function SystemUpdatePage() {
         </div>
       )}
 
-      {result && result.configured && (
+      {/* 未配源也渲染当前版本（后端 CheckUpdate 无条件返回 CP+各节点版本，FR-110）；
+          仅「最新版本对比」与升级动作依赖配源——配源时显示，未配源时按钮自然禁用。 */}
+      {result && (
         <>
-          <div className="text-sm text-muted-foreground">
-            {t('systemUpdate.latestVersion', '更新源最新版本')}：
-            <span className="font-mono font-medium text-foreground">{result.latestVersion || '-'}</span>
-            {result.notes && <span className="ml-2">— {result.notes}</span>}
-          </div>
+          {result.configured && (
+            <div className="text-sm text-muted-foreground">
+              {t('systemUpdate.latestVersion', '更新源最新版本')}：
+              <span className="font-mono font-medium text-foreground">{result.latestVersion || '-'}</span>
+              {result.notes && <span className="ml-2">— {result.notes}</span>}
+            </div>
+          )}
 
           <ControlPlaneCard cp={result.controlPlane} latest={result.latestVersion} onUpgraded={() => check.refetch()} />
 
           <NodesSection
-            nodes={result.nodes}
+            nodes={result.nodes ?? []}
             latest={result.latestVersion}
             rolloutRunning={rolloutRunning}
             onUpgradeAll={() => setConfirmAll(true)}
