@@ -1528,6 +1528,17 @@
 - **查询参数**: `channelId`（频道）、`days`（窗口天数，默认 30，上限 365）
 - **响应** (200): `{ "channelId", "days", "downloads":[{day,requests,bytes}], "versions":[{version,requests}], "results":[{result,count}], "successRate", "rollbackRate", "activeMachines", "topIps":[{ip,count}] }`
 
+### GET /api/v1/client-dist/updater-jars
+- **描述**: 内嵌客户端更新器 jar 的版本与可用性（FR-107 接入引导，供前端展示 + 禁用缺失下载）
+- **关联 FR**: FR-107 | **鉴权**: **JWT，平台管理员**
+- **响应** (200): `{ "version", "wedge": {"available", "size"}, "core": {"available", "size"} }`
+
+### GET /api/v1/client-dist/updater-jars/:component
+- **描述**: 下载内嵌更新器 jar（`component` ∈ `wedge` | `core`），供运营方接入（FR-107）。属管理面，走 JWT、不用拉取密钥
+- **关联 FR**: FR-107 | **鉴权**: **JWT，平台管理员**
+- **响应** (200): jar 二进制（`Content-Type: application/java-archive`、`Content-Disposition: attachment; filename=...`）
+- **错误**: 400 `INVALID_COMPONENT`（非 wedge/core）| 404 `JAR_NOT_EMBEDDED`（构建未 `make embed-client-updater`）
+
 ### GET /api/v1/client-channels/:id/manifest
 - **描述**: 返回频道 **latest** 的**签名 manifest**（contract §2）。只提供当前版本，不暴露历史
 - **关联 FR**: FR-087、FR-092（机器码登记）

@@ -1509,21 +1509,35 @@
 - **依赖**: FR-090、FR-097
 
 ### FR-099: 客户端 OTA 更新进度窗口（进度条 + 速度 + ETA）
-- **状态**: 📋 todo
+- **状态**: ✅ done（验收通过 2026-06-24，用户确认；本地提交 `9a22d28`，未 push；随下个版本发布时标「已交付@版本」）
 - **优先级**: P1
-- **描述**: updater-core 在更新期（reconcile 下载 mods 增量 + core 自更新 jar + .jmpack 下载/解包）弹出**独立 Swing 进度窗口**，实时显示总体进度条、当前下载速度、预计剩余时间(ETA)、当前文件名；下载完成自动关闭再放行 MC。**因 wedge premain 早于 MC 渲染线程/LWJGL**，无法注入 MC 自身加载画面，故由 updater 自弹独立窗口。headless 环境自动降级为文本进度（不弹窗、不报错、不阻断）。玩家面向文案 i18n（zh/en）。**纯客户端**，无服务端/manifest 改动；保持楔子 fail-open/fail-static 与"绝不挡启动"不变
+- **描述**: updater-core 在更新期（reconcile 下载 mods 增量 + core 自更新 jar）弹出**独立 Swing 进度窗口**，实时显示总体进度条、当前下载速度、预计剩余时间(ETA)、当前文件名；下载完成自动关闭再放行 MC。**因 wedge premain 早于 MC 渲染线程/LWJGL**，无法注入 MC 自身加载画面，故由 updater 自弹独立窗口。headless 环境自动降级为文本进度（不弹窗、不报错、不阻断）。玩家面向文案 i18n（zh/en）。**纯客户端**，无服务端/manifest 改动；保持楔子 fail-open/fail-static 与"绝不挡启动"不变
 - **验收标准**:
-  - [ ] 有内容要下载时更新期弹出 Swing 窗口：进度条(0→100%) + 当前速度(如 3.2 MB/s) + ETA(如 剩 12s) + 当前文件名，随下载实时刷新
-  - [ ] 覆盖**所有更新期下载**：mods 文件增量、core 自更新 jar(FR-091)、.jmpack 下载/解包(FR-097)
-  - [ ] 下载完成窗口自动关闭，MC 正常启动到主菜单
-  - [ ] "已是最新"无下载时不弹窗（秒进、不闪空窗）
-  - [ ] **headless**（`GraphicsEnvironment.isHeadless()` / 无显示）自动降级为文本进度，不报错、不阻断（服务端驱动 OTA 不受影响）
-  - [ ] 玩家手动关窗 = 停止下载、以本地版本放行（fail-static）；窗口任意异常不逃逸阻断（fail-open）
-  - [ ] 窗口文案 zh/en 随 `user.language` 切换（同 Messages 风格）
-  - [ ] core 仍 **Java 8 字节码**、零额外依赖（Swing/AWT = JDK 自带）
-  - [ ] 真机：真 MC 1.20.1 经 PCL2/命令行启动，超阈值下载肉眼可见进度窗（测试绿≠真能用）
+  - [x] 有内容要下载时更新期弹出 Swing 窗口：进度条(0→100%) + 当前速度 + ETA + 当前文件名，随下载实时刷新（PCL2 GUI 真机可视）
+  - [x] 覆盖客户端实际下载路径：mods 文件增量、core 自更新 jar(FR-091)；.jmpack 不在客户端 reconcile 下载路径（仅服务端打包+独立解包工具），N/A
+  - [x] 下载完成窗口自动关闭，MC 正常启动到主菜单（PCL2 真机 latest.log 主菜单）
+  - [x] "已是最新"无下载时不弹窗（惰性显示，首个 beginFile 才 show）
+  - [x] **headless**（`GraphicsEnvironment.isHeadless()`）自动降级为文本进度，不报错、不阻断（真 Java 8 headless 36MB 端到端）
+  - [x] 玩家手动关窗 = 停止下载、以本地版本放行（fail-static）；窗口任意异常不逃逸阻断（fail-open）（真机关窗→downloaded=5/6→放行）
+  - [x] 窗口文案 zh/en 随 `user.language` 切换（CoreMessagesTest）
+  - [x] core 仍 **Java 8 字节码**、零额外依赖（Swing/AWT = JDK 自带）（真 Java 8(1.8.0_422) 加载无 UnsupportedClassVersionError）
+  - [x] 真机：真 MC 1.20.1 经 PCL2 GUI 启动，36MB 下载肉眼可见进度窗（用户确认）
 - **关联 ADR**: ADR-021
 - **依赖**: FR-090（reconcile 下载）、FR-091（core 自更新）
+
+### FR-107: 后台客户端更新器接入指引
+- **状态**: 🔨 in-progress（实现 + 真机验证完成，待用户确认 done；本地未提交）
+- **优先级**: P1
+- **描述**: 后台「客户端分发 → 频道详情」加「接入指引」Tab，面向**运营方**：一页拿齐——下载 CP 内嵌的 wedge.jar/updater-core.jar、该频道**专属可复制**的 jm-updater.json（channelId/endpoint/密钥占位）、启动器 `-javaagent` 参数（相对路径推荐）、放置步骤、行为说明（fail-static/fail-open/进度窗/多 agent 共存）。CP 经 `go:embed` 内嵌两 jar + admin JWT 下载端点。纯运营面，不改 OTA 协议/manifest/客户端 jar 本身
+- **验收标准**:
+  - [x] 频道详情「接入指引」Tab 渲染：机制简述 + 内嵌版本 + 4 步骤 + 行为说明（真机浏览器 zh/en 均验）
+  - [x] 下载按钮命中 admin JWT 端点，返回内嵌真 jar 字节（wedge 20371B / core 14478092B 精确一致）；未内嵌 404 友好提示 + 按钮禁用
+  - [x] jm-updater.json 按频道生成（channel=本频道）+ endpoint 可编辑 + 复制；javaagent 参数复制
+  - [x] i18n zh/en + 暗亮主题；jar 下载 JWT admin 鉴权（无 token 401、非法组件 400）
+  - [x] CP `go:embed` 内嵌 wedge/updater-core jar（仿 probe，`.gitignore` 占位）+ `make embed-client-updater` 注入
+  - [x] 后端单测（Info/组件校验/未内嵌兜底/鉴权）4 项 + 真机端点下载真 jar
+- **关联 ADR**: ADR-021、ADR-022
+- **依赖**: FR-086（频道/密钥）、FR-089/090（客户端 jar）、FR-099（进度窗口，行为说明引用）
 
 ---
 
