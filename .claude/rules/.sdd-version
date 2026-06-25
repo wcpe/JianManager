@@ -1,0 +1,16 @@
+# SDD 治理同步戳记（由 sdd-sync-governance 维护）
+# 记录本项目治理模板（.claude/rules/* 等）对账到的上游 sdd-skills 版本。
+# 下次同步从此版本起做增量对账。
+
+synced_template_version: 0.1.0
+synced_at: 2026-06-26
+reconcile_mode: best-effort-full   # 本项目此前无戳记，做了全量两方对账（无 base，项目文件 vs 当前模板）
+
+notes: |
+  - .claude/rules/* 经对账判定为「项目定制超集」：architecture-invariants / testing-and-quality /
+    git-commit / static-analysis / decision-alignment 等均比上游 0.1.0 基线大且含 JianManager 专有内容
+    （三进程模型、gRPC、ADR 表、scope/type 枚举等），按技能红线保留不覆盖。
+  - 项目独有规则 doc-evolution.md / gate-{prd,sdd,api,merge}.md 上游无对应，保留。
+  - 已补 docs/specs/_template.md（项目原缺）。
+  - 未引入 docs/CONTRIBUTING.md：与项目自有 doc-evolution.md + docs/CONVENTIONS.md 职责重叠，
+    按用户决定不补，避免多真源。
