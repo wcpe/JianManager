@@ -1787,18 +1787,18 @@
 
 ### 里程碑 M3 — 背包整域（扩 api + 适配器 + 定制页）
 
-#### FR-124: 扩 AllinInventorySync api 导出写门面
-- **状态**: 📋 计划
+#### FR-124: 扩 AllinInventorySync api 导出读写门面
+- **状态**: ◑ 开发中（AllinInventorySync 仓 FR-21 api 扩展已实现+单测+落地，commit `7a254f6`+`065b51e`，发 mavenLocal `allininventorysync-api:1.2.0`；真 apply 经 NbtCodec 依赖 `net.minecraft.*` 移 E2E，待 FR-125 消费 + E2E 真机联调）
 - **优先级**: P2
-- **描述**: 在 AllinInventorySync 仓扩 `api/` 模块，导出背包读写门面（当前公开 api 零写入、读不到离线）。**跨仓 FR，在该仓走其自身 SDD 流程**
+- **描述**: 在 AllinInventorySync 仓扩 `api/` 模块，导出背包读写门面（原公开 api 零写入、读不到离线）。**跨仓 FR，在该仓走其自身 SDD 流程（其 FR-21 / ADR-0011+0012）**
 - **验收标准**:
-  - [ ] 该仓写自身 ADR（api 扩展导出写门面契约）
-  - [ ] `getInventory(uuid)`：回源加载（含离线）+ ItemStack→ItemDTO（material/amount/meta/enchants/NBT）
-  - [ ] `giveItem/removeItem/applyInventory(...)`：带 Result 回执 + 业务幂等键 + 在线归属校验（拒绝改"正在他服在线"的玩家）+ 委托内部 InventoryEditService delta 通道（两层锁 + CAS）
-  - [ ] ItemStack↔JSON codec（信封承载）
-  - [ ] **真机**：第三方经 api 读任意玩家背包 + 带回执发/收物品 + 重发幂等不刷物品
-- **关联 ADR**: AllinInventorySync 仓 ADR
-- **依赖**: 无（独立仓，可与 M1/M2 并行起）
+  - [x] 该仓写自身 ADR（ADR-0011 写门面+回执 / ADR-0012 结构化读+写安全）
+  - [x] `getPlayerInventory(uuid)`：回源加载（含离线、纯读不 bump、不存在返 null）+ 结构化 ItemDto（material/amount/displayName/lore/enchants + nbtBase64 全保真）
+  - [x] `writeInventory/writeEnderChest/writeBasicAttrs(base+edited delta)`：带 WriteResult 回执 + 持久业务幂等键（requestId 防重发刷物品）+ 在线归属校验（OWNED_ELSEWHERE 拒改他服在线）+ 委托 InventoryEditService.executeWrite delta 通道（两层锁 + CAS）
+  - [x] ItemStack↔JSON codec（ItemStackCodec，Bukkit 序列化 base64 全保真，信封承载）
+  - [~] **真机**：第三方经 api 读任意玩家背包 + 带回执发/收物品 + 重发幂等不刷物品 —— 幂等命中/归属拒绝短路由 core 单测覆盖；真 apply（NbtCodec 触 `net.minecraft.*`）经 E2E 真服验，待 FR-125 链路就绪联调
+- **关联 ADR**: AllinInventorySync 仓 ADR-0011 / ADR-0012
+- **依赖**: 无（独立仓，api 侧已完成）
 
 #### FR-125: 背包 Provider
 - **状态**: 📋 计划
