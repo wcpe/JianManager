@@ -1788,7 +1788,7 @@
 ### 里程碑 M3 — 背包整域（扩 api + 适配器 + 定制页）
 
 #### FR-124: 扩 AllinInventorySync api 导出读写门面
-- **状态**: ◑ 开发中（AllinInventorySync 仓 FR-21 api 扩展已实现+单测+落地，commit `7a254f6`+`065b51e`，发 mavenLocal `allininventorysync-api:1.2.0`；真 apply 经 NbtCodec 依赖 `net.minecraft.*` 移 E2E，待 FR-125 消费 + E2E 真机联调）
+- **状态**: ◑ 开发中（AllinInventorySync 仓 FR-21 api 扩展已实现+单测+落地，commit `7a254f6`+`065b51e`+`be0a953`，发 mavenLocal `allininventorysync-api:1.2.0`；**FR-125 消费时发现发布制品缺全部 common.model DTO（api/build `compileOnly common` 既不入制品也不入元数据）→ 重构为 api 自包含单制品（13 公开 DTO 迁入 api.model、common 降级内部，AIS ADR-0014，commit `bfdf34c`）**；真 apply 经 NbtCodec 依赖 `net.minecraft.*` 移 E2E，待 FR-125 消费 + E2E 真机联调）
 - **优先级**: P2
 - **描述**: 在 AllinInventorySync 仓扩 `api/` 模块，导出背包读写门面（原公开 api 零写入、读不到离线）。**跨仓 FR，在该仓走其自身 SDD 流程（其 FR-21 / ADR-0011+0012）**
 - **验收标准**:
@@ -1801,14 +1801,16 @@
 - **依赖**: 无（独立仓，api 侧已完成）
 
 #### FR-125: 背包 Provider
-- **状态**: 📋 计划
+- **状态**: ◑ 开发中（ServerProbe 子模块 platform-bukkit 已实现+单测+落地，commit `f2b50c2`+`0f86ed4`，`./gradlew build` 全绿；经整链下发读写 + 追踪事件汇聚的真机随 FR-126/127 统一收口，同经济域）
 - **优先级**: P2
-- **描述**: ServerProbe 背包适配器 wrap 扩展后的 AllinInventorySync api，含读写动作 + 追踪事件订阅 + manifest
+- **描述**: ServerProbe 背包适配器 `InventoryProvider` wrap 自包含后的 AllinInventorySync api（其 ADR-0014），含读写动作 + 追踪事件订阅 + manifest；物品过桥契约见 ServerProbe ADR-0016
 - **验收标准**:
-  - [ ] `inventory.snapshot`/`inventory.view`/`inventory.give`/`inventory.remove` 动作 + 背包域 manifest
-  - [ ] 订阅 `TrackedItemActionEvent`（重点物品流转）上报
-  - [ ] **真机**：inventory.view 看到真实物品清单、give/remove 生效且幂等、离线写下次登录生效
-- **关联 ADR**: ADR-026
+  - [x] `inventory.view`（getPlayerInventory 回源含离线 → 结构化视图，玩家无数据回 exists=false）+ `inventory.writeInventory`/`writeEnderChest`/`writeBasicAttrs`（经写门面 getInventoryWriteApi，WriteResult 回执透传 success/online/newDataVersion/errorCode）+ 背包域 manifest
+  - [x] 守写契约：幂等键 taskId（CP 注入）→ `InventoryWriteDto.requestId` 持久去重（缺则拒绝防刷物品）、base+edited delta 透传、operator 透传（空回退 JianManager）、future 有界阻塞取回执
+  - [x] 订阅 `TrackedItemActionEvent`（重点物品流转）→ emitBusinessEvent（domain=inventory，dedupKey=`playerUuid:action:occurredAtMs:seq`），软依赖 `@SubscribeEvent(bind=FQCN)` + OptionalEvent.get 避免漏注册
+  - [x] 纯逻辑抽 `InventoryEnvelope`/`InventoryEventEnvelope`（单测 10+3 例全绿）；`compileOnly allininventorysync-api:1.2.0` + plugin softdepend AllinInventorySync
+  - [ ] **真机**：inventory.view 看到真实物品清单、write 生效且幂等、离线写下次登录生效、追踪事件汇聚（随 FR-126/127 统一收口）
+- **关联 ADR**: JM ADR-026 / ServerProbe ADR-0016
 - **依赖**: FR-117, FR-124
 
 #### FR-126: 背包汇聚与存储
