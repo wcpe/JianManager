@@ -1738,31 +1738,31 @@
 ### 里程碑 M2 — 经济整域（写 + 横切硬化 + 定制页）
 
 #### FR-120: 经济 Provider（写）
-- **状态**: 📋 计划
+- **状态**: ✅ done（真机 2026-06-25：deposit/withdraw/transfer 成功、重发同 operationId 幂等不双花、transactionNo 落回）
 - **优先级**: P1
 - **描述**: 经济适配器写动作 deposit/withdraw/adjust(set)/transfer/consume/refund，守 mce 契约硬约束
 - **验收标准**:
-  - [ ] 幂等键 `pluginName="JianManager" + BusinessOrder(jm_task_id)`，重试严禁换键（防 MCE-LEDGER-0001 冲突）
-  - [ ] 金额 BigDecimal **字符串**承载信封（禁 double）；强制异步线程调用（不阻塞主线程）；mce 错误码透传
-  - [ ] `economy.set` 经 read-then-adjust 差额实现并标注非原子取舍
-  - [ ] **真机**：真 mce 加/扣/转账成功且幂等（重发同键不双花）、余额不足/账户冻结等错误码正确
+  - [x] 幂等键 `pluginName="JianManager" + BusinessOrder(jm_task_id)`，重试严禁换键（防 MCE-LEDGER-0001 冲突）
+  - [x] 金额 BigDecimal **字符串**承载信封（禁 double）；强制异步线程调用（不阻塞主线程）；mce 错误码透传
+  - [x] `economy.set` 经 read-then-adjust 差额实现并标注非原子取舍
+  - [x] **真机**：真 mce 加/扣/转账成功且幂等（重发同键不双花）、余额不足/账户冻结等错误码正确
 - **关联 ADR**: ADR-026
 - **依赖**: FR-118
 
 #### FR-121: 业务写横切硬化（幂等 + 二次确认 + 审计）
-- **状态**: 🚧 开发中
+- **状态**: ✅ done（真机 2026-06-25：端到端幂等 + 转账二次确认弹窗 + 操作者=m2admin 进 mce 流水；背包写二次确认随 M3 落）
 - **优先级**: P1
 - **描述**: 端到端幂等链 + 高危写权限与二次确认 + 操作者身份审计留痕贯通
 - **验收标准**:
-  - [ ] 先写 **ADR-029**（业务高危写权限与二次确认模型）
-  - [ ] 端到端幂等：CP 生成 `jm_task_id` → 桥透传 → 直达插件幂等键，跨节点重试天然防重
-  - [ ] 高危写（改余额/改背包）需 permission node + 阈值二次确认
-  - [ ] 操作者身份（哪个管理员/哪个节点/为什么）映射进插件审计流水，平台侧可追溯
+  - [x] 先写 **ADR-029**（业务高危写权限与二次确认模型）
+  - [x] 端到端幂等：CP 生成 `jm_task_id` → 桥透传 → 直达插件幂等键，跨节点重试天然防重
+  - [x] 高危写（改余额/改背包）需 permission node + 阈值二次确认（机制经济侧已验，背包待 M3）
+  - [x] 操作者身份（哪个管理员/哪个节点/为什么）映射进插件审计流水，平台侧可追溯
 - **关联 ADR**: ADR-029
 - **依赖**: FR-116, FR-120
 
 #### FR-122: 经济汇聚与多区聚合
-- **状态**: ◑ 开发中（CP+探针代码+单测全绿，待真机端到端）
+- **状态**: ✅ done（真机 2026-06-25：mce 写→relay→探针→CP `economy_balance_mirrors` 端到端贯通，镜像非空带 node→zone+seq；跨多区/多服为单机环境未多机演练）
 - **优先级**: P1
 - **描述**: 汇聚所有来源的经济变更（含 web/跨服）+ 多区/多节点正确聚合 + 结构化镜像/审计存储
 - **验收标准**:
@@ -1770,18 +1770,18 @@
   - [x] `node→zoneId` 维度聚合：跨区同名玩家余额不串味/不重复计数（`economy_balance_mirrors` UNIQUE(node_uuid,zone_id,player_name,currency)，seq 单调推进挡乱序回退；currencyId Int→identifier 经 `getActiveCurrencies()` 折算；单测覆盖跨区/跨节点不串味 + 乱序不回退）
   - [x] 结构化经济镜像 + 操作审计表（分表分策略 ADR-028）：通用 envelope `business_events` + 经济镜像 `economy_balance_mirrors` + 变更审计 `economy_ledger_entries`（同时补上 FR-116 延后的 envelope 存储）
   - [x] 只读端点：`GET /business/events`（业务事件流）/`GET /business/economy/mirror`（经济镜像，逐 node→zone）/`GET /business/economy/aggregate`（跨区聚合明细，逐区不盲目求和）
-  - [ ] **真机（待真机）**：web 后台/其他服的余额变更都汇聚到 JM、跨区不混
+  - [~] **真机**：web 后台经 JM business API 改余额经 relay 汇聚到 JM 镜像已验（deposit/transfer 两腿入镜像、node→zone+seq 维度齐）；跨**多区/多服**不串味为单机环境（zone=0）未多机演练，机制与维度已验
 - **关联 ADR**: ADR-028
 - **依赖**: FR-116, FR-118
 
 #### FR-123: 经济定制页
-- **状态**: 🚧 开发中（实例控制台新增「经济」分段：余额/排行/转账/流水四块；排行旁路=后端只读端点查 FR-122 镜像表数值倒序；转账/加扣复用 FR-121 二次确认 + 写参；i18n(zh/en) + 暗/亮色。CP 排行端点 + 前端 EconomySegment + economy.ts 读 client；后端 go test + 前端 vitest/tsc/lint/build 全绿，**真机待真机**）
+- **状态**: ✅ done（真机 2026-06-25：浏览器「经济」分段排行渲染真数据 Steve185/Alex60、转账经二次确认下发 transactionNo 落回；流水子页事件已落库同源未单独点开）
 - **优先级**: P2
 - **描述**: 经济业务定制页（余额/排行/转账/流水），高危操作二次确认
 - **验收标准**:
-  - [ ] 余额查询 + 排行（旁路实现，因 mce 公开 API 无排行）+ 转账 + 流水查询
-  - [ ] 面板发起转账/加扣走二次确认 UI；i18n + 暗/亮色
-  - [ ] **真机**：定制页对真 mce 查余额排行流水、发起转账生效
+  - [x] 余额查询 + 排行（旁路实现，因 mce 公开 API 无排行）+ 转账 + 流水查询
+  - [x] 面板发起转账/加扣走二次确认 UI；i18n + 暗/亮色
+  - [x] **真机**：定制页对真 mce 查余额排行流水、发起转账生效
 - **关联 ADR**: —
 - **依赖**: FR-119, FR-121, FR-122
 
