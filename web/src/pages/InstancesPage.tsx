@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import {
   useInstances,
@@ -82,7 +83,17 @@ export default function InstancesPage() {
   const [env, setEnv] = useState<string>(ALL)
   const [tag, setTag] = useState<string>(ALL)
   const [nodeId, setNodeId] = useState<string>(ALL)
-  const [statusFilter, setStatusFilter] = useState<string>(ALL)
+  // 顶栏集群徽标（FR-162）点击带 ?status= 跳转筛选。挂载时取初值；URL 变化时同步——
+  // 用 React 推荐的渲染期「随外部值调整 state」模式（存上一次值比对，避免 effect 内 setState）。
+  // 完整 URL 可寻址（全维度筛选进 URL、深链还原）归 FR-128，此处仅最小启用胶水。
+  const [searchParams] = useSearchParams()
+  const urlStatus = searchParams.get('status')
+  const [statusFilter, setStatusFilter] = useState<string>(urlStatus ?? ALL)
+  const [prevUrlStatus, setPrevUrlStatus] = useState(urlStatus)
+  if (urlStatus !== prevUrlStatus) {
+    setPrevUrlStatus(urlStatus)
+    if (urlStatus) setStatusFilter(urlStatus)
+  }
   // 分组视图维度。
   const [groupBy, setGroupBy] = useState<GroupDimension>('none')
 
