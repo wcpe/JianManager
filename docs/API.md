@@ -598,6 +598,69 @@
 
 ---
 
+## 实例组织分组（FR-165）
+
+> 文件夹式「实例组织分组树」——多级嵌套（自引用 `parent_id` 邻接表）+ 实例-组 M:N，与用户组（RBAC/配额）、网络群组（proxy↔backend 部署）三者**正交**，仅供人为组织归类、折叠、批量运维。详见 `docs/specs/ui-redesign/fr-165-instance-grouping.md`、ADR-XXXX。读 `instance:read`、写 `instance:write`（不引入新权限节点；树是实例的组织视图，按实例权限收敛）。
+
+### GET /api/v1/instance-groups
+- **描述**: 返回分组树（扁平节点列表，前端据 `parentId` 重建层级），每节点含「子树聚合去重」实例数
+- **关联 FR**: FR-165
+- **权限**: `instance:read`
+- **响应**:
+  ```json
+  [
+    { "id": 1, "uuid": "…", "name": "亚洲区", "parentId": null, "sort": 0, "instanceCount": 12 },
+    { "id": 2, "uuid": "…", "name": "生存", "parentId": 1, "sort": 0, "instanceCount": 5 }
+  ]
+  ```
+  - `instanceCount`：该节点子树（含自身及所有后代）去重后的实例数（同一实例属多组/属祖先与后代只计一次）
+
+### POST /api/v1/instance-groups
+- **描述**: 新建分组节点（`parentId` 省略=根分组，给出时父必须存在）
+- **关联 FR**: FR-165
+- **权限**: `instance:write`
+- **请求**: `{ "name": "生存", "parentId": 1 }`
+- **响应**: `201` `{ id, uuid, name, parentId, sort }`
+- **错误**: 400 `INVALID_REQUEST`（名称空/超长）；400 `INSTANCE_GROUP_PARENT_NOT_FOUND`（父不存在）
+
+### PUT /api/v1/instance-groups/:id
+- **描述**: 改名 / 移动父节点（防环）。`parentId` 字段语义三态：**缺省**=不改父；**`null`**=移到根；**数字**=移到该父下
+- **关联 FR**: FR-165
+- **权限**: `instance:write`
+- **请求**: `{ "name": "生存服" }` 或 `{ "parentId": 4 }` 或 `{ "parentId": null }`
+- **响应**: `200` `{ id, uuid, name, parentId, sort }`
+- **错误**: 409 `INSTANCE_GROUP_CYCLE`（移到自身或子孙下成环）；400 `INSTANCE_GROUP_PARENT_NOT_FOUND`；404 `INSTANCE_GROUP_NOT_FOUND`
+
+### DELETE /api/v1/instance-groups/:id
+- **描述**: 删除分组节点。非空（有子节点或成员实例）时**拒删**（提示先清空，不级联）；删组只解绑成员关系，不删实例
+- **关联 FR**: FR-165
+- **权限**: `instance:write`
+- **响应**: `204`
+- **错误**: 409 `INSTANCE_GROUP_NOT_EMPTY`（有子组或成员）；404 `INSTANCE_GROUP_NOT_FOUND`
+
+### GET /api/v1/instance-groups/:id/instances
+- **描述**: 返回该组「子树（含自身及后代）去重」的实例 ID 集合，供「按组（含子树）筛选」与右列表共用
+- **关联 FR**: FR-165
+- **权限**: `instance:read`
+- **响应**: `{ "instanceIds": [10, 11, 23] }`
+- **错误**: 404 `INSTANCE_GROUP_NOT_FOUND`
+
+### POST /api/v1/instance-groups/:id/members
+- **描述**: 批量将实例加入分组（幂等：已存在或不存在的实例跳过）
+- **关联 FR**: FR-165
+- **权限**: `instance:write`
+- **请求**: `{ "instanceIds": [10, 11] }`
+- **响应**: `200` `{ "added": 2, "members": [ { "instanceId": 10, "name": "…", "role": "backend", "nodeId": 2, "status": "RUNNING" } ] }`
+
+### DELETE /api/v1/instance-groups/:id/members
+- **描述**: 批量从分组移除实例（不影响实例本身）
+- **关联 FR**: FR-165
+- **权限**: `instance:write`
+- **请求**: `{ "instanceIds": [10] }`
+- **响应**: `204`
+
+---
+
 ## 群组服关系模型（FR-032）
 
 > 全部位于平台管理员路由组。详见 `docs/specs/network-resource-model/`。
