@@ -53,8 +53,8 @@ type Instance struct {
 	MemLimitMB  int64
 	DiskLimitMB int64
 	State       InstanceState
-	AutoRestart                bool
-	CrashCount                 int
+	AutoRestart bool
+	CrashCount  int
 	// strategy 是该实例的启动策略，按 ProcessType 选择。
 	// nil 表示实例已创建但尚未启动（或已 Close）。
 	strategy IProcessCommand
@@ -329,11 +329,22 @@ func (m *Manager) Start(uuid string) error {
 		return fmt.Errorf("启动实例 %s 失败: %w", uuid, err)
 	}
 
+	// 仅在记账仍为 STARTING 时才落 RUNNING（CAS）。若进程在 strategy.Start 返回前就极速崩溃，
+	// 其 waitLoop 可能已通过 markStrategyState 把记账抢先置为 CRASHED；此处若无条件覆盖为 RUNNING，
+	// 会把 CRASHED 改回 RUNNING，导致实例「已死却记 RUNNING」，Start 守卫从此拒绝重启，必须重启
+	// 整个 Worker 才能恢复（与 markStrategyState 的修复意图一致，补上其遗留的启动窗口竞态）。
 	m.mu.Lock()
-	prevState := inst.State
-	inst.State = StateRunning
+	startedClean := inst.State == StateStarting
+	if startedClean {
+		inst.State = StateRunning
+	}
 	m.mu.Unlock()
-	m.emitStateChange(uuid, prevState, StateRunning)
+	if !startedClean {
+		// 启动窗口内已被异步崩溃改写（CRASHED 等），保留该状态、不再扇出 RUNNING。
+		slog.Warn("实例启动后在启动窗口内即崩溃，保留崩溃记账", "instanceId", uuid)
+		return nil
+	}
+	m.emitStateChange(uuid, StateStarting, StateRunning)
 	slog.Info("实例已启动", "instanceId", uuid)
 	return nil
 }

@@ -54,6 +54,7 @@
 - **Cron 非法表达式通过前端校验（BUG-020）**：`,,,` 等残缺表达式漏过；按 term 结构逐个校验拒绝。
 - **告警规则无法切换启用态（BUG-021）**：规则表启用列只读、编辑弹窗无 enabled 字段；改行内 Switch 即时切换（随 FR-149）。
 - **创建用户密码下限与初始化不一致（BUG-022）**：CreateUserDialog 下限 6 与 Setup 的 8 矛盾；统一为 8。
+- **进程崩溃记账启动窗口竞态致 `worker/process` 测试高负载偶发 FAIL**：`TestManager_RestartAfterCrash`（spawn 真实 direct 进程令其 `exit 1`）在机器负载高时偶发超时失败、单独重跑稳定通过。根因是 `Manager.Start` 的生产竞态而非纯测试时序：进程在 `strategy.Start` 返回前就极速崩溃时，其 `waitLoop` 经 `markStrategyState` 已把记账置为 CRASHED，而 `Start` 收尾**无条件**写回 RUNNING 覆盖之，实例「已死却记 RUNNING」、Start 守卫（仅允许 STOPPED/CRASHED）从此拒绝重启，须重启整个 Worker 才能恢复。修：`Start` 收尾改 CAS——仅当记账仍为 STARTING 时才落 RUNNING，被异步崩溃改写（CRASHED）则保留、不再扇出 RUNNING。测试侧改用状态变更回调做确定性同步（替换对负载敏感的 `require.Eventually` 轮询/固定超时），并补确定性根因回归 `TestManager_Start_PreservesCrashDuringStartWindow`（修复前必失败、修复后必通过）。
 
 ### 变更 / 移除
 - **默认品牌色 MC 绿 → 靛蓝 `#6366F1`**（FR-163），全站 token 重基为「靛蓝圆角灵动」设计系统；新增**青绿第二主题**与一处切换（FR-164）。
