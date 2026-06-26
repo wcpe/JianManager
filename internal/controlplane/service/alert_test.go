@@ -124,24 +124,72 @@ func TestAlertService_ListEvents_Filters(t *testing.T) {
 	mk(model.AlertLevelInfo, model.AlertTriggerPlayerEvent, false, true)
 
 	// 按级别筛。
-	crit, err := svc.ListEvents(EventFilter{Level: model.AlertLevelCritical})
+	crit, critTotal, err := svc.ListEvents(EventFilter{Level: model.AlertLevelCritical})
 	require.NoError(t, err)
 	require.Len(t, crit, 1)
+	assert.Equal(t, int64(1), critTotal)
 
 	// 按已确认筛。
 	notAck := false
-	un, err := svc.ListEvents(EventFilter{Acknowledged: &notAck})
+	un, _, err := svc.ListEvents(EventFilter{Acknowledged: &notAck})
 	require.NoError(t, err)
 	require.Len(t, un, 2)
 
 	// 按触发类型筛。
-	kw, err := svc.ListEvents(EventFilter{TriggerType: model.AlertTriggerLogKeyword})
+	kw, _, err := svc.ListEvents(EventFilter{TriggerType: model.AlertTriggerLogKeyword})
 	require.NoError(t, err)
 	require.Len(t, kw, 1)
 
-	// Rule 预加载。
-	all, err := svc.ListEvents(EventFilter{})
+	// Rule 预加载 + 无筛选时总数为全量。
+	all, allTotal, err := svc.ListEvents(EventFilter{})
 	require.NoError(t, err)
 	require.Len(t, all, 3)
+	assert.Equal(t, int64(3), allTotal)
 	assert.Equal(t, "r", all[0].Rule.Name)
+}
+
+// TestAlertService_ListEvents_KeywordTimePaging 覆盖 FR-149 新增的关键字 / 时间范围 / 分页筛选。
+func TestAlertService_ListEvents_KeywordTimePaging(t *testing.T) {
+	db := newAlertTestDB(t)
+	svc := NewAlertService(db)
+	rule, err := svc.CreateRule(CreateRuleRequest{Name: "r", TargetType: "node", Metric: "cpu", Operator: ">", Threshold: 90})
+	require.NoError(t, err)
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	msgs := []string{"cpu high one", "cpu high two", "cpu high three", "cpu high four", "cpu high five"}
+	for i, m := range msgs {
+		ts := base.Add(time.Duration(i) * time.Hour)
+		require.NoError(t, db.Create(&model.AlertEvent{
+			RuleID: rule.ID, Level: model.AlertLevelWarn, TriggerType: model.AlertTriggerMetric,
+			Message: m, FiredAt: ts, LastFiredAt: &ts,
+		}).Error)
+	}
+
+	// 关键字模糊匹配 message。
+	hits, total, err := svc.ListEvents(EventFilter{Keyword: "high"})
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), total)
+	require.Len(t, hits, 5)
+
+	one, oneTotal, err := svc.ListEvents(EventFilter{Keyword: "three"})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), oneTotal)
+	require.Len(t, one, 1)
+
+	// 时间范围（含边界）：base+1h..base+3h → 第 2~4 条共 3。
+	from := base.Add(time.Hour)
+	to := base.Add(3 * time.Hour)
+	ranged, rangedTotal, err := svc.ListEvents(EventFilter{From: &from, To: &to})
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), rangedTotal)
+	require.Len(t, ranged, 3)
+
+	// 分页：每页 2，共 5 → 第 1 页 2 条、总数 5；第 3 页 1 条。
+	page1, pTotal, err := svc.ListEvents(EventFilter{PageSize: 2, Page: 1})
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), pTotal)
+	require.Len(t, page1, 2)
+	page3, _, err := svc.ListEvents(EventFilter{PageSize: 2, Page: 3})
+	require.NoError(t, err)
+	require.Len(t, page3, 1)
 }

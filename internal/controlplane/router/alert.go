@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -83,7 +84,7 @@ func (h *AlertHandler) DeleteRule(c *gin.Context) {
 // ── 告警事件 ──
 
 func (h *AlertHandler) ListEvents(c *gin.Context) {
-	f := service.EventFilter{Limit: 200}
+	f := service.EventFilter{}
 	if v := c.Query("ruleId"); v != "" {
 		if id, err := strconv.ParseUint(v, 10, 64); err == nil {
 			u := uint(id)
@@ -100,17 +101,33 @@ func (h *AlertHandler) ListEvents(c *gin.Context) {
 	}
 	f.Level = c.Query("level")
 	f.TriggerType = c.Query("triggerType")
-	if v := c.Query("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			f.Limit = n
+	f.Keyword = c.Query("keyword")
+	if v := c.Query("from"); v != "" {
+		if ts, err := time.Parse(time.RFC3339, v); err == nil {
+			f.From = &ts
 		}
 	}
-	events, err := h.alertSvc.ListEvents(f)
+	if v := c.Query("to"); v != "" {
+		if ts, err := time.Parse(time.RFC3339, v); err == nil {
+			f.To = &ts
+		}
+	}
+	if v := c.Query("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Page = n
+		}
+	}
+	if v := c.Query("pageSize"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.PageSize = n
+		}
+	}
+	events, total, err := h.alertSvc.ListEvents(f)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
 		return
 	}
-	c.JSON(http.StatusOK, events)
+	c.JSON(http.StatusOK, gin.H{"items": events, "total": total})
 }
 
 // AcknowledgeEvent 确认/认领一条告警事件（FR-085）。

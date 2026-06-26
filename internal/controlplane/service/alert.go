@@ -202,20 +202,32 @@ func (s *AlertService) DeleteRule(id uint) error {
 	return s.db.Delete(&model.AlertRule{}, id).Error
 }
 
-// EventFilter 告警事件列表筛选条件（FR-085）。
+// EventFilter 告警事件列表筛选条件（FR-085 + FR-149：关键字 / 时间范围 / 分页）。
 type EventFilter struct {
 	RuleID       *uint
 	Resolved     *bool
 	Acknowledged *bool
 	Level        string
 	TriggerType  string
-	Limit        int
+	Keyword      string     // 模糊匹配 message（FR-149）
+	From         *time.Time // fired_at 下界（含），FR-149
+	To           *time.Time // fired_at 上界（含），FR-149
+	Page         int        // 页码，从 1 起；FR-149
+	PageSize     int        // 每页条数，<=0 取默认 50；FR-149
 }
 
-// ListEvents 返回告警事件列表（FR-011 + FR-085 多维筛选）。预加载规则名。
-func (s *AlertService) ListEvents(f EventFilter) ([]model.AlertEvent, error) {
-	var events []model.AlertEvent
-	q := s.db.Model(&model.AlertEvent{}).Preload("Rule")
+// ListEvents 返回告警事件分页列表（FR-011 + FR-085 多维筛选 + FR-149 关键字/时间范围/分页）。
+// 预加载规则名；返回当前页与命中总数。
+func (s *AlertService) ListEvents(f EventFilter) ([]model.AlertEvent, int64, error) {
+	page := f.Page
+	if page < 1 {
+		page = 1
+	}
+	pageSize := f.PageSize
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	q := s.db.Model(&model.AlertEvent{})
 	if f.RuleID != nil {
 		q = q.Where("rule_id = ?", *f.RuleID)
 	}
@@ -231,13 +243,28 @@ func (s *AlertService) ListEvents(f EventFilter) ([]model.AlertEvent, error) {
 	if f.TriggerType != "" {
 		q = q.Where("trigger_type = ?", f.TriggerType)
 	}
-	if f.Limit > 0 {
-		q = q.Limit(f.Limit)
+	if f.Keyword != "" {
+		q = q.Where("message LIKE ?", "%"+f.Keyword+"%")
 	}
-	if err := q.Order("fired_at DESC").Find(&events).Error; err != nil {
-		return nil, err
+	if f.From != nil {
+		q = q.Where("fired_at >= ?", *f.From)
 	}
-	return events, nil
+	if f.To != nil {
+		q = q.Where("fired_at <= ?", *f.To)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var events []model.AlertEvent
+	if err := q.Preload("Rule").Order("fired_at DESC").
+		Limit(pageSize).Offset((page - 1) * pageSize).Find(&events).Error; err != nil {
+		return nil, 0, err
+	}
+	if events == nil {
+		events = []model.AlertEvent{}
+	}
+	return events, total, nil
 }
 
 // Acknowledge 确认/认领一条告警事件（FR-085）。记录确认人与时间，并置为已读。

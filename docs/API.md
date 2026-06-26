@@ -997,8 +997,8 @@
   ```
 
 ### PUT /api/v1/schedules/:id
-- **描述**: 更新定时任务
-- **关联 FR**: FR-012
+- **描述**: 更新定时任务（`cronExpr`/`action`/`enabled` 可选；`action=command` 时可携 `payload` 改命令，FR-153）
+- **关联 FR**: FR-012, FR-153
 
 ### DELETE /api/v1/schedules/:id
 - **描述**: 删除定时任务
@@ -1110,10 +1110,10 @@
 ### 告警事件
 
 #### GET /api/v1/alerts/events
-- **描述**: 告警事件列表（含规则名预加载，按触发时间倒序，默认 limit 200）
-- **关联 FR**: FR-011, FR-085
-- **Query**: `ruleId` `resolved`(true/false) `acknowledged`(true/false) `level` `triggerType` `limit`
-- **响应字段**: 含 `level` `triggerType` `count`(聚合计数) `resolved` `acknowledged` `acknowledgedBy` `acknowledgedAt` `read`
+- **描述**: 告警事件分页列表（含规则名预加载，按触发时间倒序，FR-149）
+- **关联 FR**: FR-011, FR-085, FR-149
+- **Query**: `ruleId` `resolved`(true/false) `acknowledged`(true/false) `level` `triggerType` `keyword`(模糊匹配 message) `from`/`to`(RFC3339 时间范围) `page`(从 1 起) `pageSize`(默认 50)
+- **响应**: `{ "items": [...], "total": <命中总数> }`；事件含 `level` `triggerType` `count`(聚合计数) `resolved` `acknowledged` `acknowledgedBy` `acknowledgedAt` `read`
 
 #### GET /api/v1/alerts/events/unread-count
 - **描述**: 未读告警数（站内角标）

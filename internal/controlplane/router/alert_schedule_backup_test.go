@@ -97,8 +97,9 @@ func TestAlert_ListEvents_Empty(t *testing.T) {
 
 	w := makeRequest(r, "GET", "/api/v1/alerts/events", nil, token)
 	assert.Equal(t, http.StatusOK, w.Code)
-	events := parseJSONArray(t, w)
-	assert.Len(t, events, 0)
+	resp := parseJSON(t, w)
+	assert.Equal(t, float64(0), resp["total"])
+	assert.Empty(t, resp["items"])
 }
 
 // TestAlert_CreateRule_MissingFields 缺少必要字段返回 400。

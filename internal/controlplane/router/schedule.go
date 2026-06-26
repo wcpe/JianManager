@@ -56,12 +56,13 @@ func (h *ScheduleHandler) Update(c *gin.Context) {
 		CronExpr *string `json:"cronExpr"`
 		Enabled  *bool   `json:"enabled"`
 		Action   *string `json:"action"`
+		Payload  *string `json:"payload"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
 		return
 	}
-	schedule, err := h.scheduleSvc.Update(id, req.CronExpr, req.Enabled, req.Action)
+	schedule, err := h.scheduleSvc.Update(id, req.CronExpr, req.Enabled, req.Action, req.Payload)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND"})
 		return

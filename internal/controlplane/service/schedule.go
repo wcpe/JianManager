@@ -60,7 +60,7 @@ func (s *ScheduleService) List(instanceID *uint) ([]model.Schedule, error) {
 }
 
 // Update 更新定时任务。
-func (s *ScheduleService) Update(id uint, cronExpr *string, enabled *bool, action *string) (*model.Schedule, error) {
+func (s *ScheduleService) Update(id uint, cronExpr *string, enabled *bool, action *string, payload *string) (*model.Schedule, error) {
 	updates := map[string]interface{}{}
 	if cronExpr != nil {
 		updates["cron_expr"] = *cronExpr
@@ -70,6 +70,9 @@ func (s *ScheduleService) Update(id uint, cronExpr *string, enabled *bool, actio
 	}
 	if action != nil {
 		updates["action"] = *action
+	}
+	if payload != nil {
+		updates["payload"] = *payload
 	}
 	if len(updates) > 0 {
 		result := s.db.Model(&model.Schedule{}).Where("id = ?", id).Updates(updates)
