@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next'
-import { useLocation } from 'react-router'
+import { Link, useLocation } from 'react-router'
 import {
   Activity,
   Archive,
@@ -7,6 +7,7 @@ import {
   Bot,
   Box,
   Boxes,
+  Check,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -15,15 +16,20 @@ import {
   FileClock,
   Gamepad2,
   HardDrive,
+  Languages,
   Layers,
   LayoutDashboard,
   LayoutTemplate,
+  Monitor,
+  Moon,
   Network,
   RefreshCw,
+  Scale,
   ScrollText,
   Server,
   Settings,
   Settings2,
+  Sun,
   User,
   UsersRound,
   type LucideIcon,
@@ -34,6 +40,12 @@ import { useThemeStore } from '@/stores/theme'
 import { useConsoleStore } from '@/stores/console'
 import { changeLanguage } from '@/i18n'
 import { cn } from '@/lib/utils'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import SidebarNavLink, { type NavEntry } from './SidebarNavLink'
 import NodeSwitcher from './NodeSwitcher'
 import InstanceTree from './InstanceTree'
@@ -138,7 +150,7 @@ function navGroupsForRole(role: number | null): NavGroup[] {
 /**
  * 运维控制台左侧栏（ADR-009 / FR-037 / FR-061）：常驻多级侧栏。
  * 定高 flex column；分组导航区占据剩余高度并整体滚动，「实例」组展开时内嵌节点切换 + 实例树；
- * 底部主题/语言/退出/版本固定可见。
+ * 底部主题/语言/版本/开源许可固定可见（退出登录迁至全局顶栏账户菜单 FR-162）。
  */
 export default function ConsoleSidebar() {
   const role = useAuthStore((s) => s.role)
@@ -207,44 +219,85 @@ function ExpandableGroup({ group }: { group: NavGroup }) {
   )
 }
 
-/** 底部：主题切换 / 语言 / 退出 / 版本（原 PlatformNav 页脚整合至此）。 */
+/** 主题三态选项：图标 + 文字，dropdown 内直选（非盲循环，FR-132）。 */
+const THEME_OPTIONS: Array<{ value: 'light' | 'dark' | 'system'; icon: LucideIcon; labelKey: string }> = [
+  { value: 'light', icon: Sun, labelKey: 'theme.light' },
+  { value: 'dark', icon: Moon, labelKey: 'theme.dark' },
+  { value: 'system', icon: Monitor, labelKey: 'theme.system' },
+]
+
+/**
+ * 底部控件（FR-132）：主题 / 语言改 lucide 图标 + 文字（与导航项同款式，dropdown 三态直选）；
+ * 切语言同步 `<html lang>`（见 `i18n.changeLanguage`）；底部「版本号左下 · 开源许可入口右下」。
+ * 退出登录迁至全局顶栏账户菜单（FR-162），此处不再保留。
+ */
 function SidebarFooter() {
   const { t, i18n } = useTranslation()
-  const logout = useAuthStore((s) => s.logout)
   const { theme, setTheme } = useThemeStore()
-  const currentLang = i18n.language as 'zh' | 'en'
-
-  const cycleTheme = () => {
-    const order: Array<'light' | 'dark' | 'system'> = ['light', 'dark', 'system']
-    const idx = order.indexOf(theme)
-    setTheme(order[(idx + 1) % order.length])
-  }
-  const themeIcon = theme === 'dark' ? '🌙' : theme === 'light' ? '☀️' : '💻'
+  const closeInstance = useConsoleStore((s) => s.closeInstance)
+  const currentLang = i18n.language === 'en' ? 'en' : 'zh'
+  const ThemeIcon = theme === 'light' ? Sun : theme === 'dark' ? Moon : Monitor
 
   return (
-    <div className="shrink-0 space-y-1 border-t p-2">
+    <div className="shrink-0 space-y-1.5 border-t p-2">
       <div className="flex items-center gap-1">
-        <button
-          onClick={cycleTheme}
-          className="flex-1 rounded px-2 py-1 text-left text-xs text-muted-foreground hover:bg-accent/50"
-          title={t('theme.toggle')}
-        >
-          {themeIcon} {t(`theme.${theme}`)}
-        </button>
-        <button
-          onClick={() => changeLanguage(currentLang === 'zh' ? 'en' : 'zh')}
-          className="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-accent/50"
-        >
-          {currentLang === 'zh' ? 'EN' : '中'}
-        </button>
+        {/* 主题：图标 + 文字，dropdown 三态直选 */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              className="flex flex-1 items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] text-foreground/80 transition-colors hover:bg-accent/60"
+            >
+              <ThemeIcon className="size-4 shrink-0" />
+              <span className="flex-1 truncate text-left">{t(`theme.${theme}`)}</span>
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent side="top" align="start" className="w-44">
+            {THEME_OPTIONS.map(({ value, icon: Icon, labelKey }) => (
+              <DropdownMenuItem key={value} onClick={() => setTheme(value)}>
+                <Icon className="size-4" />
+                <span className="flex-1">{t(labelKey)}</span>
+                {theme === value && <Check className="size-3.5" />}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        {/* 语言：图标 + 语言名，dropdown 直选 */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label={t(`language.${currentLang}`)}
+              className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] text-foreground/80 transition-colors hover:bg-accent/60"
+            >
+              <Languages className="size-4 shrink-0" />
+              <span className="truncate">{t(`language.${currentLang}`)}</span>
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent side="top" align="end" className="w-32">
+            {(['zh', 'en'] as const).map((lng) => (
+              <DropdownMenuItem key={lng} onClick={() => changeLanguage(lng)}>
+                <span className="flex-1">{t(`language.${lng}`)}</span>
+                {currentLang === lng && <Check className="size-3.5" />}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
-      <button
-        onClick={logout}
-        className="w-full rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent/50"
-      >
-        {t('common.logout')}
-      </button>
-      <p className="px-2 text-[11px] text-muted-foreground/70">v{__APP_VERSION__}</p>
+
+      {/* 版本号左下 · 开源许可入口右下（开源许可页见 FR-135） */}
+      <div className="flex items-center justify-between gap-2 px-1">
+        <span className="text-[11px] text-muted-foreground/70">v{__APP_VERSION__}</span>
+        <Link
+          to="/licenses"
+          onClick={() => closeInstance()}
+          className="flex items-center gap-1 rounded text-[11px] text-muted-foreground/70 transition-colors hover:text-foreground hover:underline"
+        >
+          <Scale className="size-3 shrink-0" />
+          {t('licenses.entry')}
+        </Link>
+      </div>
     </div>
   )
 }
