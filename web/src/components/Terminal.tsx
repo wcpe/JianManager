@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import { useDirectorRender } from '@/lib/director-render'
 
 interface TerminalComponentProps {
   instanceId: string
@@ -50,6 +51,26 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
   useEffect(() => {
     readOnlyRef.current = readOnly
   }, [readOnly])
+
+  // 导播台节流（FR-168 / ADR-035）：非激活场景的终端 WS 保活但**暂停 xterm 重绘**——
+  // onmessage 把输出累积进 pendingRef 而不 write，切回激活时一次性 flush。无 Provider 时恒激活（FR-166/167 不变）。
+  const { active: directorActive } = useDirectorRender()
+  const pausedRef = useRef(!directorActive)
+  const pendingRef = useRef<string[]>([])
+  // 累积上限：长时间不激活的场景不无限攒内存（约对应 xterm scrollback），超限丢弃最旧段。
+  const PENDING_MAX = 4000
+
+  // 激活态切换：进入激活则一次性 flush 累积输出并 fit（瞬切回零延迟看到最新日志）；离开则转暂停。
+  useEffect(() => {
+    pausedRef.current = !directorActive
+    if (directorActive && pendingRef.current.length > 0) {
+      const term = termRef.current
+      if (term) {
+        for (const chunk of pendingRef.current) term.write(chunk)
+        pendingRef.current = []
+      }
+    }
+  }, [directorActive])
 
   // 命令历史（ref 供输入处理用，state 供右侧抽屉渲染）
   const historyRef = useRef<string[]>([])
@@ -161,7 +182,14 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
         const msg = JSON.parse(event.data)
         if (msg.type === 'stdout' || msg.type === 'stderr') {
           const text = String(msg.data ?? '')
-          termRef.current?.write(text.replace(/\r?\n/g, '\r\n'))
+          const out = text.replace(/\r?\n/g, '\r\n')
+          // 非激活：累积不重绘（WS 仍在收，瞬切回再 flush，零延迟且不丢数据）。
+          if (pausedRef.current) {
+            pendingRef.current.push(out)
+            if (pendingRef.current.length > PENDING_MAX) pendingRef.current.shift()
+          } else {
+            termRef.current?.write(out)
+          }
           // 解析在线玩家：逐完整行匹配加入/离开/list 输出
           parseBufRef.current += text
           let nl: number
@@ -179,7 +207,13 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
             if (list) onlinePlayersRef.current = new Set(list[1].split(/,\s*/).map((s) => s.trim()).filter(Boolean))
           }
         } else if (msg.type === 'state') {
-          termRef.current?.write(`\r\n[状态: ${msg.state}]\r\n`)
+          const line = `\r\n[状态: ${msg.state}]\r\n`
+          if (pausedRef.current) {
+            pendingRef.current.push(line)
+            if (pendingRef.current.length > PENDING_MAX) pendingRef.current.shift()
+          } else {
+            termRef.current?.write(line)
+          }
         }
       } catch {
         termRef.current?.write(event.data)
