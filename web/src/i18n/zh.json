@@ -56,7 +56,8 @@
     "registered": "已注册到代理",
     "unregistered": "已取消注册",
     "aliasConflict": "该代理内别名已占用",
-    "alreadyRegistered": "该后端已注册进此代理"
+    "alreadyRegistered": "该后端已注册进此代理",
+    "registeredBackends": "已注册后端 {{count}}"
   },
   "clone": {
     "action": "复制",
@@ -131,7 +132,9 @@
     "addTag": "添加",
     "addTagPlaceholder": "输入标签后回车",
     "removeTag": "移除标签",
-    "tagsSaved": "标签已保存"
+    "tagsSaved": "标签已保存",
+    "viewCard": "卡片视图",
+    "viewList": "列表视图"
   },
   "players": {
     "title": "玩家管理",
@@ -678,7 +681,8 @@
     "resourceLimitHint": "留空表示不限制；下次启动时注入容器 cgroup",
     "diskLimitHint": "留空表示不限制；当前版本仅记录展示，不强制限制",
     "resourceLimitDockerOnly": "资源限额需 Docker 模式（direct/daemon 不支持 cgroup 限制）",
-    "resourceLimitSaved": "资源限额已保存，下次启动生效"
+    "resourceLimitSaved": "资源限额已保存，下次启动生效",
+    "nodePort": "节点:端口"
   },
   "instanceBatch": {
     "selected": "已选 {{count}} 个",

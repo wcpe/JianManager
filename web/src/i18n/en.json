@@ -56,7 +56,8 @@
     "registered": "Registered to proxy",
     "unregistered": "Unregistered",
     "aliasConflict": "Alias already used in this proxy",
-    "alreadyRegistered": "This backend is already registered to this proxy"
+    "alreadyRegistered": "This backend is already registered to this proxy",
+    "registeredBackends": "Registered backends: {{count}}"
   },
   "clone": {
     "action": "Clone",
@@ -131,7 +132,9 @@
     "addTag": "Add",
     "addTagPlaceholder": "Type a tag, press Enter",
     "removeTag": "Remove tag",
-    "tagsSaved": "Tags saved"
+    "tagsSaved": "Tags saved",
+    "viewCard": "Card view",
+    "viewList": "List view"
   },
   "players": {
     "title": "Players",
@@ -701,7 +704,8 @@
     "resourceLimitHint": "Leave empty for unlimited; injected into the container cgroup on next start",
     "diskLimitHint": "Leave empty for unlimited; recorded for display only in this version",
     "resourceLimitDockerOnly": "Resource limits require Docker mode (direct/daemon do not support cgroup limits)",
-    "resourceLimitSaved": "Resource limits saved; effective on next start"
+    "resourceLimitSaved": "Resource limits saved; effective on next start",
+    "nodePort": "Node:Port"
   },
   "instanceBatch": {
     "selected": "{{count}} selected",
