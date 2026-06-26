@@ -1,9 +1,14 @@
+import { useState } from 'react'
 import { useParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { useInstance, useStartInstance, useStopInstance, useRestartInstance, useKillInstance } from '@/api/instances'
 import { useInstanceMetrics } from '@/api/metrics'
 import { useTerminalToken } from '@/api/terminal'
 import { useBots } from '@/api/bots'
+import { useBackups, useCreateBackup, useRestoreBackup, useDeleteBackup, type BackupInfo } from '@/api/backups'
+import { Badge } from '@/components/ui/badge'
+import DangerConfirm from '@/components/DangerConfirm'
 import ConfigExplorer from '@/components/config-explorer/ConfigExplorer'
 import ResourceExplorer from '@/components/explorer/ResourceExplorer'
 import PluginManager from '@/components/plugins/PluginManager'
@@ -134,7 +139,7 @@ export default function InstanceDetailPage() {
           <PluginManager instanceId={instanceId} />
         </TabsContent>
         <TabsContent value="backups">
-          <BackupsTab />
+          <BackupsTab instanceId={instanceId} />
         </TabsContent>
         <TabsContent value="bot">
           <BotsTab instanceId={instanceId} />
@@ -282,15 +287,145 @@ function ConfigTab({
   return <ConfigExplorer instanceId={instanceId} />
 }
 
-function BackupsTab() {
+/** 备份状态码 → i18n key / 徽章样式（与后端 model.BackupStatus 对齐：0 待处理 / 1 进行中 / 2 完成 / 3 失败）。 */
+const BACKUP_STATUS_KEY: Record<number, string> = { 0: 'pending', 1: 'inProgress', 2: 'completed', 3: 'failed' }
+const BACKUP_STATUS_VARIANT: Record<number, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+  0: 'outline', 1: 'secondary', 2: 'default', 3: 'destructive',
+}
+
+/**
+ * 实例「备份」标签：接入 useBackups/useCreateBackup/useRestoreBackup/useDeleteBackup（FR-013/056/057）。
+ * 取代此前永久「加载中」空壳（BUG-013）。备份/恢复/删除走 i18n + DangerConfirm。
+ */
+function BackupsTab({ instanceId }: { instanceId: number }) {
   const { t } = useTranslation()
+  const { data: backups, isLoading } = useBackups(instanceId)
+  const createBackup = useCreateBackup(instanceId)
+  const restoreBackup = useRestoreBackup()
+  const deleteBackup = useDeleteBackup()
+  const [restoreTarget, setRestoreTarget] = useState<number | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<BackupInfo | null>(null)
+
+  const handleCreate = async (incremental: boolean) => {
+    try {
+      await createBackup.mutateAsync({
+        name: `${incremental ? 'inc' : 'full'}-${new Date().toISOString().slice(0, 19)}`,
+        incremental,
+      })
+      toast.success(t('backups.creating', '创建中...'))
+    } catch (e: unknown) {
+      // 增量缺少基准时后端回 422 BUSINESS_ERROR。
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+      toast.error(msg || t('backups.createFailed', '创建备份失败'))
+    }
+  }
+
+  const handleRestore = async (backupId: number) => {
+    try {
+      await restoreBackup.mutateAsync(backupId)
+      toast.success(t('backups.restoring', '恢复中...'))
+    } catch {
+      toast.error(t('backups.restoreFailed', '恢复备份失败'))
+    }
+    setRestoreTarget(null)
+  }
+
+  const handleDelete = (backupId: number) => {
+    deleteBackup.mutate(backupId, {
+      onSuccess: () => toast.success(t('common.deleted', '已删除')),
+      onError: (e: unknown) => {
+        const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+        toast.error(msg || t('backups.deleteFailed', '删除备份失败'))
+      },
+    })
+  }
 
   return (
-    <div>
-      <p className="text-sm text-muted-foreground mb-2">{t('instanceDetail.backups')}</p>
-      <div className="border rounded-lg p-4 min-h-[200px]">
-        <p className="text-muted-foreground">{t('common.loading')}</p>
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">{t('instanceDetail.backups')}</p>
+        <div className="flex gap-2">
+          <Button size="sm" onClick={() => handleCreate(false)} disabled={createBackup.isPending}>
+            {t('backups.createFull', '全量备份')}
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => handleCreate(true)} disabled={createBackup.isPending}>
+            {t('backups.createIncremental', '增量备份')}
+          </Button>
+        </div>
       </div>
+
+      {isLoading ? (
+        <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+      ) : backups && backups.length > 0 ? (
+        <div className="border rounded-lg">
+          <Table>
+            <TableHeader className="bg-muted/50">
+              <TableRow>
+                <TableHead>{t('backups.name', '名称')}</TableHead>
+                <TableHead>{t('backups.mode', '模式')}</TableHead>
+                <TableHead>{t('backups.size', '大小')}</TableHead>
+                <TableHead>{t('backups.status', '状态')}</TableHead>
+                <TableHead>{t('backups.time', '时间')}</TableHead>
+                <TableHead className="text-right">{t('common.actions', '操作')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {backups.map((b) => (
+                <TableRow key={b.id}>
+                  <TableCell className="font-medium">{b.name}</TableCell>
+                  <TableCell>
+                    {b.mode === 1
+                      ? <Badge variant="secondary">{t('backups.incremental', '增量')}{b.parentId ? ` · ${t('backups.chain', '备份链')}` : ''}</Badge>
+                      : <Badge variant="outline">{t('backups.full', '全量')}</Badge>}
+                  </TableCell>
+                  <TableCell>{b.fileSizeMb.toFixed(1)} MB</TableCell>
+                  <TableCell>
+                    <Badge variant={BACKUP_STATUS_VARIANT[b.status] ?? 'outline'}>
+                      {t(`backups.${BACKUP_STATUS_KEY[b.status] ?? 'pending'}`)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">{new Date(b.createdAt).toLocaleString()}</TableCell>
+                  <TableCell className="text-right space-x-3">
+                    <button
+                      className="text-xs text-primary hover:underline disabled:opacity-50"
+                      onClick={() => setRestoreTarget(b.id)}
+                      disabled={b.status !== 2 || restoreBackup.isPending}
+                    >
+                      {t('backups.restore', '恢复')}
+                    </button>
+                    <button className="text-xs text-destructive hover:underline" onClick={() => setDeleteTarget(b)}>
+                      {t('common.delete', '删除')}
+                    </button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      ) : (
+        <div className="border rounded-lg p-4 min-h-[120px] flex items-center justify-center">
+          <p className="text-muted-foreground">{t('backups.empty', '暂无备份')}</p>
+        </div>
+      )}
+
+      <DangerConfirm
+        open={restoreTarget !== null}
+        title={t('backups.confirmRestore', '确认恢复此备份？')}
+        description={t('backups.restoreConfirm', '当前文件将被覆盖，此操作不可撤销。')}
+        confirmLabel={t('backups.restore', '恢复')}
+        scope="group"
+        onConfirm={() => { if (restoreTarget) handleRestore(restoreTarget) }}
+        onCancel={() => setRestoreTarget(null)}
+      />
+      <DangerConfirm
+        open={deleteTarget !== null}
+        title={t('backups.deleteConfirm', '确定删除此备份？')}
+        description={t('common.irreversible')}
+        confirmLabel={t('common.delete', '删除')}
+        scope="group"
+        onConfirm={() => { if (deleteTarget) { handleDelete(deleteTarget.id); setDeleteTarget(null) } }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   )
 }
