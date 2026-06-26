@@ -34,6 +34,15 @@ function formatUptime(seconds: number): string {
   return `${m}m`
 }
 
+/** 实例状态码 → i18n 文案 key（与列表页 statusConfig 对齐，避免详情页显原始英文，BUG-014）。 */
+const STATUS_LABEL: Record<string, string> = {
+  RUNNING: 'instances.running',
+  STOPPED: 'instances.stopped',
+  STARTING: 'instances.starting',
+  STOPPING: 'instances.stopping',
+  CRASHED: 'instances.crashed',
+}
+
 export default function InstanceDetailPage() {
   const { id } = useParams<{ id: string }>()
   const instanceId = Number(id)
@@ -66,7 +75,7 @@ export default function InstanceDetailPage() {
               instance.status === 'STARTING' || instance.status === 'STOPPING' ? 'text-yellow-500' :
               'text-gray-500'
             }>
-              {instance.status}
+              {STATUS_LABEL[instance.status] ? t(STATUS_LABEL[instance.status]) : instance.status}
             </span>
             {' | '}{t('instanceDetail.type')}: {instance.type}
             {' | '}{t('instanceDetail.processType')}: {instance.processType}
@@ -152,7 +161,8 @@ export default function InstanceDetailPage() {
 function TerminalTab({ instanceId, status }: { instanceId: number; status: string }) {
   const { t } = useTranslation()
   const { data: metrics } = useInstanceMetrics(instanceId, status === 'RUNNING')
-  const { data: tokenData, isLoading, error } = useTerminalToken(instanceId, status === 'RUNNING' ? 'write' : 'read')
+  // 仅运行中才申请终端 token：离线/停止实例的节点不可达，原先无条件申请会反复 422（BUG-017）。
+  const { data: tokenData, isLoading, error } = useTerminalToken(instanceId, status === 'RUNNING' ? 'write' : 'read', status === 'RUNNING')
 
   return (
     <div className="space-y-4">
