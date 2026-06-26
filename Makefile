@@ -1,7 +1,7 @@
-.PHONY: build build-cp build-worker build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-probe embed-cfr embed-client-updater docker
+.PHONY: build build-cp build-worker build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-probe embed-cfr embed-client-updater gen-licenses docker
 
-# 构建所有（含前端嵌入）
-build: build-web embed-web build-cp build-worker
+# 构建所有（含前端嵌入）。gen-licenses 先行，确保许可清单与即将打包的前端一致。
+build: gen-licenses build-web embed-web build-cp build-worker
 
 # 构建 Control Plane（含嵌入前端）
 build-cp:
@@ -14,6 +14,12 @@ build-worker:
 # 构建前端
 build-web:
 	cd web && npm run build
+
+# 扫描三源依赖与许可证，生成 web/public/licenses.json（FR-135，开源许可页 /licenses 数据源）。
+# 需 web/bot-worker 已 npm install；Go 侧需 go-licenses（go install github.com/google/go-licenses@latest），
+# 缺失时回退 go list 启发式（见脚本）。输出确定性（按来源+包名排序、不含时间戳），构建期再生、无依赖变更不产生 diff。
+gen-licenses:
+	node scripts/gen-licenses.mjs
 
 # 将前端构建产物复制到嵌入目录
 embed-web:

@@ -27,6 +27,7 @@ const LogsPage = lazy(() => import('@/pages/LogsPage'))
 const ClientChannelsPage = lazy(() => import('@/pages/ClientChannelsPage'))
 const DatabasePage = lazy(() => import('@/pages/DatabasePage'))
 const SystemUpdatePage = lazy(() => import('@/pages/SystemUpdatePage'))
+const LicensesPage = lazy(() => import('@/pages/LicensesPage'))
 /**
  * 运维控制台右侧工作区（ADR-009 / FR-037 / FR-039）。
  * 打开实例时渲染单个 WorkspacePane（终端 | Bot 分段）；否则按路由渲染对应页面，既有页面不变。
@@ -78,6 +79,7 @@ export default function Workspace() {
           <Route path="settings" element={<SettingsPage />} />
           <Route path="database" element={<DatabasePage />} />
           <Route path="system-update" element={<SystemUpdatePage />} />
+          <Route path="licenses" element={<LicensesPage />} />
           <Route path="*" element={<WorkspaceEmpty />} />
         </Routes>
       </div>
