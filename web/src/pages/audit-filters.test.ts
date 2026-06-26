@@ -3,8 +3,11 @@ import {
   DEFAULT_AUDIT_FILTER,
   toAuditParams,
   toRFC3339,
+  formatAuditDetail,
+  auditRowsToNDJSON,
   type AuditFilterState,
 } from './audit-filters'
+import type { AuditLogInfo } from '@/api/audit'
 
 function state(overrides: Partial<AuditFilterState> = {}): AuditFilterState {
   return { ...DEFAULT_AUDIT_FILTER, ...overrides }
@@ -64,5 +67,69 @@ describe('toAuditParams', () => {
 
   it('carries an enlarged limit through (load-more)', () => {
     expect(toAuditParams(state({ limit: 300 })).limit).toBe(300)
+  })
+})
+
+describe('formatAuditDetail', () => {
+  it('returns empty string for blank detail', () => {
+    expect(formatAuditDetail('')).toBe('')
+    expect(formatAuditDetail('   ')).toBe('')
+    expect(formatAuditDetail(undefined)).toBe('')
+  })
+
+  it('pretty-prints valid JSON with 2-space indent', () => {
+    expect(formatAuditDetail('{"a":1,"b":"x"}')).toBe('{\n  "a": 1,\n  "b": "x"\n}')
+  })
+
+  it('returns the raw string verbatim when not JSON', () => {
+    expect(formatAuditDetail('plain text reason')).toBe('plain text reason')
+  })
+})
+
+describe('auditRowsToNDJSON', () => {
+  const rows: AuditLogInfo[] = [
+    {
+      id: 1,
+      uuid: 'u1',
+      userId: 7,
+      action: 'instance.start',
+      targetType: 'instance',
+      targetId: '12',
+      detail: '{"name":"srv"}',
+      ip: '10.0.0.1',
+      createdAt: '2026-06-26T12:00:00Z',
+      user: { id: 7, username: 'admin' },
+    },
+    {
+      id: 2,
+      uuid: 'u2',
+      userId: 7,
+      action: 'instance.stop',
+      targetType: 'instance',
+      targetId: '12',
+      detail: '',
+      ip: '10.0.0.1',
+      createdAt: '2026-06-26T12:01:00Z',
+    },
+  ]
+
+  it('emits one JSON object per line', () => {
+    const out = auditRowsToNDJSON(rows)
+    const lines = out.split('\n')
+    expect(lines).toHaveLength(2)
+    expect(JSON.parse(lines[0]).action).toBe('instance.start')
+    expect(JSON.parse(lines[1]).action).toBe('instance.stop')
+  })
+
+  it('flattens username and keeps core fields', () => {
+    const first = JSON.parse(auditRowsToNDJSON(rows).split('\n')[0])
+    expect(first.username).toBe('admin')
+    expect(first.id).toBe(1)
+    expect(first.targetType).toBe('instance')
+    expect(first.ip).toBe('10.0.0.1')
+  })
+
+  it('returns empty string for no rows', () => {
+    expect(auditRowsToNDJSON([])).toBe('')
   })
 })

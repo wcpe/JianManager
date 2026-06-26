@@ -42,12 +42,22 @@ export interface LogPage {
   pageSize: number
 }
 
+/** useLogs 可选项。 */
+export interface UseLogsOptions {
+  /**
+   * 自动重拉间隔（ms）；用于「实时跟随」(tail, FR-150)。
+   * 传 false 或省略则不轮询，仅在 params 变化时取数。
+   */
+  refetchInterval?: number | false
+}
+
 /**
  * 分页查询日志。
  * 过滤与分页全部在后端 DB 完成，不全量序列化（FR-049）。
  * keepPreviousData 让翻页/改筛选时旧页保留，避免表格闪烁。
+ * 传 refetchInterval 时按间隔自动重拉，实现实时跟随（FR-150）。
  */
-export function useLogs(params: LogQueryParams) {
+export function useLogs(params: LogQueryParams, options: UseLogsOptions = {}) {
   return useQuery({
     queryKey: ['logs', params],
     queryFn: async () => {
@@ -55,6 +65,7 @@ export function useLogs(params: LogQueryParams) {
       return data
     },
     placeholderData: (prev) => prev,
+    refetchInterval: options.refetchInterval ?? false,
   })
 }
 

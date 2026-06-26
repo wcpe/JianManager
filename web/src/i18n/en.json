@@ -1496,7 +1496,9 @@
     "clear": "Clear",
     "loadMore": "Load more",
     "loadError": "Failed to load audit logs",
-    "totalCount": "{{count}} shown"
+    "totalCount": "{{count}} shown",
+    "export": "Export",
+    "detail": "Change details"
   },
   "database": {
     "title": "Database",
@@ -1597,7 +1599,17 @@
     "totalCount": "{{count}} total",
     "prevPage": "Previous",
     "nextPage": "Next",
-    "pageInfo": "Page {{page}} / {{totalPages}}"
+    "pageInfo": "Page {{page}} / {{totalPages}}",
+    "follow": "Live tail",
+    "followingHint": "Live tailing · newest logs pinned to top",
+    "range_all": "All time",
+    "range_15m": "Last 15 min",
+    "range_1h": "Last 1 hour",
+    "range_24h": "Last 24 hours",
+    "range_7d": "Last 7 days",
+    "exportScope_currentPage": "Export current page",
+    "exportScope_allMatched": "Export all matches",
+    "exportScope_range": "Export selected range"
   },
   "users": {
     "title": "User Management",
@@ -1801,8 +1813,15 @@
     "loadFailed": "Failed to load platform configuration",
     "overridden": "Overridden",
     "workerSide": "Effective on Worker",
+    "effectTimingHint": "This does not take effect immediately in the Control Plane; it requires a config change/restart or applies on the Worker side.",
     "masked": "Masked",
     "empty": "No settings",
+    "unsavedTitle": "Unsaved changes",
+    "unsavedDesc": "Switching categories will discard unsaved changes in the current category. Continue?",
+    "unsavedDot": "Unsaved changes",
+    "stay": "Stay",
+    "discardAndSwitch": "Discard and switch",
+    "securityNotice": "These are startup-fixed service/database/auth parameters shown read-only. To change them, edit the config/environment variables and restart.",
     "cat": {
       "appearance": "Appearance",
       "logging": "Logging",

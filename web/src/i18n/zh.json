@@ -1496,7 +1496,9 @@
     "clear": "清空",
     "loadMore": "加载更多",
     "loadError": "加载审计日志失败",
-    "totalCount": "已加载 {{count}} 条"
+    "totalCount": "已加载 {{count}} 条",
+    "export": "导出",
+    "detail": "变更详情"
   },
   "database": {
     "title": "数据库",
@@ -1597,7 +1599,17 @@
     "totalCount": "共 {{count}} 条",
     "prevPage": "上一页",
     "nextPage": "下一页",
-    "pageInfo": "第 {{page}} / {{totalPages}} 页"
+    "pageInfo": "第 {{page}} / {{totalPages}} 页",
+    "follow": "实时跟随",
+    "followingHint": "实时跟随中 · 新日志自动置顶",
+    "range_all": "全部时间",
+    "range_15m": "最近 15 分钟",
+    "range_1h": "最近 1 小时",
+    "range_24h": "最近 24 小时",
+    "range_7d": "最近 7 天",
+    "exportScope_currentPage": "导出当前页",
+    "exportScope_allMatched": "导出全部匹配",
+    "exportScope_range": "导出所选时间段"
   },
   "users": {
     "title": "用户管理",
@@ -1801,8 +1813,15 @@
     "loadFailed": "加载平台配置失败",
     "overridden": "已覆盖",
     "workerSide": "Worker 侧生效",
+    "effectTimingHint": "此项非在 Control Plane 内即时生效，需改配置/重启或在 Worker 侧生效。",
     "masked": "已脱敏",
     "empty": "暂无配置项",
+    "unsavedTitle": "有未保存的改动",
+    "unsavedDesc": "切换分类将丢弃当前分类下未保存的改动，确定继续？",
+    "unsavedDot": "有未保存改动",
+    "stay": "留在当前",
+    "discardAndSwitch": "放弃并切换",
+    "securityNotice": "本组为启动固定的服务/数据库/鉴权参数，仅展示当前生效值，如需修改请改配置/环境变量后重启。",
     "cat": {
       "appearance": "外观",
       "logging": "日志",

@@ -1,4 +1,4 @@
-import type { AuditQueryParams } from '@/api/audit'
+import type { AuditQueryParams, AuditLogInfo } from '@/api/audit'
 
 /**
  * 审计页筛选栏的可编辑状态（FR-015）。
@@ -68,4 +68,41 @@ export function toAuditParams(filter: AuditFilterState): AuditQueryParams {
   if (filter.limit > 0) params.limit = filter.limit
 
   return params
+}
+
+/**
+ * 格式化审计行详情（FR-158 行展开）。
+ * detail 多为后端写入的 JSON 串，能解析则缩进美化，否则原样返回；空串返回空串。
+ */
+export function formatAuditDetail(detail: string | undefined): string {
+  const raw = (detail ?? '').trim()
+  if (!raw) return ''
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2)
+  } catch {
+    return raw
+  }
+}
+
+/**
+ * 把已加载的审计行序列化为 NDJSON（FR-158 审计导出）。
+ * 客户端导出当前结果集（后端暂无导出端点）：每行一条对象，扁平化 username 便于检阅。
+ */
+export function auditRowsToNDJSON(rows: AuditLogInfo[]): string {
+  return rows
+    .map((r) =>
+      JSON.stringify({
+        id: r.id,
+        uuid: r.uuid,
+        createdAt: r.createdAt,
+        userId: r.userId,
+        username: r.user?.username ?? '',
+        action: r.action,
+        targetType: r.targetType,
+        targetId: r.targetId,
+        ip: r.ip,
+        detail: r.detail,
+      }),
+    )
+    .join('\n')
 }
