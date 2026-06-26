@@ -322,6 +322,7 @@
     "systemUpdate": "System Update",
     "platform": "Platform",
     "cluster": "Cluster",
+    "superWorkbench": "Super Workbench",
     "operations": "Operations",
     "system": "System",
     "sysPlatform": "Platform & Maintenance",
@@ -379,6 +380,21 @@
       "terminal": "Terminal only",
       "resource": "Resources"
     }
+  },
+  "superWorkbench": {
+    "title": "Super Workbench",
+    "libraryTitle": "Instance Library",
+    "collapseLibrary": "Collapse library",
+    "expandLibrary": "Expand library",
+    "searchInstance": "Search instances…",
+    "selectInstance": "Select instance {{name}}",
+    "selectedHint": "{{count}} selected; drag any one to add them all",
+    "customLayout": "Custom layout",
+    "noPresets": "No cross-instance presets yet",
+    "savePreset": "Save as preset",
+    "savePresetTitle": "Save cross-instance layout as preset",
+    "emptyCanvas": "Canvas is empty",
+    "emptyCanvasHint": "Drag an instance or a function from the library: instance adds a default card group, function adds a single card, multi-select builds a watch wall"
   },
   "login": {
     "title": "JianManager",

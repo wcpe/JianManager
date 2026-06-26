@@ -19,6 +19,7 @@ import {
   Languages,
   Layers,
   LayoutDashboard,
+  LayoutGrid,
   LayoutTemplate,
   Network,
   PanelLeftClose,
@@ -88,6 +89,8 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/nodes', labelKey: 'nav.nodes', icon: Server },
       { to: '/instances', labelKey: 'nav.allInstances', icon: Box },
       { to: '/networks', labelKey: 'nav.networks', icon: Network },
+      // 跨实例超级工作台（FR-167 / design §9）：集群域独立入口。
+      { to: '/super', labelKey: 'nav.superWorkbench', icon: LayoutGrid },
     ],
   },
   {

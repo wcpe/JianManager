@@ -322,6 +322,7 @@
     "systemUpdate": "系统更新",
     "platform": "平台",
     "cluster": "集群",
+    "superWorkbench": "超级工作台",
     "operations": "运营",
     "system": "系统",
     "sysPlatform": "平台与维护",
@@ -379,6 +380,21 @@
       "terminal": "纯终端",
       "resource": "资源"
     }
+  },
+  "superWorkbench": {
+    "title": "超级工作台",
+    "libraryTitle": "实例库",
+    "collapseLibrary": "收起实例库",
+    "expandLibrary": "展开实例库",
+    "searchInstance": "搜索实例…",
+    "selectInstance": "选择实例 {{name}}",
+    "selectedHint": "已选 {{count}} 个实例，拖动任一即可批量加入",
+    "customLayout": "自定义布局",
+    "noPresets": "暂无跨实例预设",
+    "savePreset": "另存为预设",
+    "savePresetTitle": "保存跨实例布局为预设",
+    "emptyCanvas": "画布为空",
+    "emptyCanvasHint": "从左侧实例库拖入实例或功能：拖实例加默认卡组，拖功能加单卡，多选可一次拼监看墙"
   },
   "login": {
     "title": "JianManager",
