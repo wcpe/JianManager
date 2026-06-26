@@ -7,6 +7,7 @@ import {
   Bot,
   Box,
   Boxes,
+  Check,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -15,6 +16,7 @@ import {
   FileClock,
   Gamepad2,
   HardDrive,
+  Languages,
   Layers,
   LayoutDashboard,
   LayoutTemplate,
@@ -36,7 +38,14 @@ import {
 
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
+import { changeLanguage } from '@/i18n'
 import { cn } from '@/lib/utils'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import SidebarNavLink, { type NavEntry } from './SidebarNavLink'
 import NodeSwitcher from './NodeSwitcher'
 import InstanceTree from './InstanceTree'
@@ -335,7 +344,7 @@ function SidebarSection({ section }: { section: NavSection }) {
 }
 
 /**
- * 底部控件：全局主题切换器（FR-164，主题色圆点 + 明暗）；
+ * 底部控件：全局主题切换器（FR-164，主题色圆点 + 明暗）+ 语言切换（FR-132，图标 + 语言名）；
  * 「版本号左下 · 开源许可入口右下」（FR-132；开源许可页 FR-135）。折叠态纵向紧凑、隐藏文字。
  */
 function SidebarFooter({ collapsed }: { collapsed: boolean }) {
@@ -344,7 +353,10 @@ function SidebarFooter({ collapsed }: { collapsed: boolean }) {
 
   return (
     <div className={cn('shrink-0 space-y-1.5 border-t p-2', collapsed && 'px-1.5')}>
-      <ThemeSwitcher compact={collapsed} />
+      <div className={cn('flex items-center gap-2', collapsed && 'flex-col gap-1.5')}>
+        <ThemeSwitcher compact={collapsed} />
+        <LanguageSwitcher compact={collapsed} />
+      </div>
 
       {!collapsed && (
         <div className="flex items-center justify-between gap-2 px-1">
@@ -360,5 +372,37 @@ function SidebarFooter({ collapsed }: { collapsed: boolean }) {
         </div>
       )}
     </div>
+  )
+}
+
+/** 语言切换（FR-132）：图标 + 语言名，dropdown 直选；切语言同步 `<html lang>`（见 i18n）。折叠态仅图标。 */
+function LanguageSwitcher({ compact }: { compact: boolean }) {
+  const { t, i18n } = useTranslation()
+  const currentLang = i18n.language === 'en' ? 'en' : 'zh'
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={t(`language.${currentLang}`)}
+          title={t(`language.${currentLang}`)}
+          className={cn(
+            'flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[13px] text-foreground/80 transition-colors hover:bg-accent/60 hover:text-foreground',
+            compact ? 'px-0 py-0' : 'ml-auto',
+          )}
+        >
+          <Languages className="size-4 shrink-0" />
+          {!compact && <span className="truncate">{t(`language.${currentLang}`)}</span>}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent side="top" align={compact ? 'center' : 'end'} className="w-32">
+        {(['zh', 'en'] as const).map((lng) => (
+          <DropdownMenuItem key={lng} onClick={() => changeLanguage(lng)}>
+            <span className="flex-1">{t(`language.${lng}`)}</span>
+            {currentLang === lng && <Check className="size-3.5" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

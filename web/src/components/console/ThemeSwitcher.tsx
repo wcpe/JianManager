@@ -70,10 +70,7 @@ export default function ThemeSwitcher({ compact = false }: { compact?: boolean }
             type="button"
             aria-label={t('theme.toggle')}
             title={t(`theme.${theme}`)}
-            className={cn(
-              'grid size-7 shrink-0 place-items-center rounded-md text-foreground/70 transition-colors hover:bg-accent/60 hover:text-foreground',
-              !compact && 'ml-auto',
-            )}
+            className="grid size-7 shrink-0 place-items-center rounded-md text-foreground/70 transition-colors hover:bg-accent/60 hover:text-foreground"
           >
             <ModeIcon className="size-4" />
           </button>
