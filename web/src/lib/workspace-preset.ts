@@ -30,6 +30,12 @@ export interface PlacedCard {
   type: CardType
   /** 网格位置与尺寸。 */
   layout: CardLayout
+  /**
+   * 卡片所属实例 id（FR-167 跨实例超级工作台）。
+   * 单实例画布省略（全部卡同一实例，由画布上下文提供）；超级工作台每卡显式携带，
+   * 故同一画布可并存不同实例的卡（监看墙）。**可选**以向后兼容 FR-166 单实例预设。
+   */
+  instanceId?: number
 }
 
 /** 一个命名预设：画布布局快照。 */
@@ -63,15 +69,17 @@ let cardSeq = 0
 /**
  * 生成一张卡片：默认尺寸取自类型目录，可经 `over` 覆写位置/尺寸。
  * id 形如 `terminal-3-<rand>`，保证同会话内唯一且可读。
+ * `instanceId` 可选（FR-167）：超级工作台传入卡片所属实例；单实例画布省略。
  */
 export function makeCard(
   type: CardType,
   over: { x: number; y: number; w?: number; h?: number },
+  instanceId?: number,
 ): PlacedCard {
   const def = cardTypeDef(type)!
   cardSeq += 1
   const rand = Math.random().toString(36).slice(2, 8)
-  return {
+  const card: PlacedCard = {
     id: `${type}-${cardSeq}-${rand}`,
     type,
     layout: {
@@ -81,6 +89,8 @@ export function makeCard(
       h: over.h ?? def.defaultSize.h,
     },
   }
+  if (instanceId !== undefined) card.instanceId = instanceId
+  return card
 }
 
 /**
@@ -149,7 +159,10 @@ function normalizeCard(raw: unknown): PlacedCard | null {
   const x = Math.min(Math.max(0, Math.floor(lr.x)), GRID_COLS - w)
   const h = Math.max(def.minSize.h, Math.floor(lr.h))
   const y = Math.max(0, Math.floor(lr.y))
-  return { id: r.id, type: r.type, layout: { x, y, w, h } }
+  const card: PlacedCard = { id: r.id, type: r.type, layout: { x, y, w, h } }
+  // FR-167：携带 instanceId 的卡（超级工作台）。非有限值视为无主卡（容错而非整体失败）。
+  if (isFiniteNum(r.instanceId)) card.instanceId = r.instanceId
+  return card
 }
 
 /**

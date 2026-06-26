@@ -180,6 +180,50 @@ describe('serialize / deserialize round-trip', () => {
   })
 })
 
+describe('instanceId 携带（FR-167 跨实例）', () => {
+  it('makeCard 可携带 instanceId', () => {
+    const c = makeCard('terminal', { x: 0, y: 0 }, 42)
+    expect(c.instanceId).toBe(42)
+  })
+
+  it('不传 instanceId 时为 undefined（单实例画布无需）', () => {
+    const c = makeCard('terminal', { x: 0, y: 0 })
+    expect(c.instanceId).toBeUndefined()
+  })
+
+  it('序列化/反序列化保留 instanceId', () => {
+    const presets: WorkspacePreset[] = [
+      {
+        id: 's1',
+        name: '监看墙',
+        cards: [makeCard('terminal', { x: 0, y: 0 }, 1), makeCard('terminal', { x: 6, y: 0 }, 2)],
+      },
+    ]
+    const back = deserializePresets(serializePresets(presets))
+    expect(back[0].cards.map((c) => c.instanceId).sort()).toEqual([1, 2])
+  })
+
+  it('向后兼容：旧预设（卡无 instanceId）反序列化为 undefined，不报错', () => {
+    const json = JSON.stringify({
+      presets: [{ id: 'old', name: '旧', cards: [{ id: 'a', type: 'terminal', layout: { x: 0, y: 0, w: 4, h: 6 } }] }],
+    })
+    const back = deserializePresets(json)
+    expect(back).toHaveLength(1)
+    expect(back[0].cards[0].instanceId).toBeUndefined()
+  })
+
+  it('normalizePreset 丢弃非有限 instanceId（容错为无主卡而非整体失败）', () => {
+    const raw = {
+      id: 'x',
+      name: 'X',
+      cards: [{ id: 'a', type: 'terminal', instanceId: 'NaN', layout: { x: 0, y: 0, w: 4, h: 6 } }],
+    }
+    const p = normalizePreset(raw)!
+    expect(p.cards).toHaveLength(1)
+    expect(p.cards[0].instanceId).toBeUndefined()
+  })
+})
+
 describe('layoutToCards / cardsToLayout', () => {
   const cards: PlacedCard[] = [
     makeCard('terminal', { x: 0, y: 0, w: 6, h: 10 }),
