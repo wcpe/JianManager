@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useUsers, useDeleteUser } from '@/api/users'
+import { useUsers, useDeleteUser, useUpdateUser, type UserInfo } from '@/api/users'
 import DangerConfirm from '@/components/DangerConfirm'
 import CreateUserDialog from '@/components/CreateUserDialog'
+import EditUserDialog from '@/components/EditUserDialog'
 import { Button } from '@/components/ui/button'
 import {
   Table,
@@ -17,8 +18,10 @@ export default function UsersPage() {
   const { t } = useTranslation()
   const [showCreate, setShowCreate] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; username: string } | null>(null)
+  const [editUser, setEditUser] = useState<UserInfo | null>(null)
   const { data: users, isLoading } = useUsers()
   const deleteUser = useDeleteUser()
+  const updateUser = useUpdateUser()
 
   const roleLabel = (role: number): string => {
     switch (role) {
@@ -68,14 +71,27 @@ export default function UsersPage() {
                   </TableCell>
                   <TableCell className="text-muted-foreground">{new Date(u.createdAt).toLocaleDateString()}</TableCell>
                   <TableCell>
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => setDeleteTarget({ id: u.id, username: u.username })}
-                      className="text-red-600 hover:text-red-700"
-                    >
-                      {t('common.delete')}
-                    </Button>
+                    <div className="flex gap-1">
+                      <Button variant="ghost" size="xs" onClick={() => setEditUser(u)}>
+                        {t('common.edit')}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        disabled={updateUser.isPending}
+                        onClick={() => updateUser.mutate({ id: u.id, status: u.status === 0 ? 1 : 0 })}
+                      >
+                        {u.status === 0 ? t('users.disable') : t('users.enable')}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => setDeleteTarget({ id: u.id, username: u.username })}
+                        className="text-red-600 hover:text-red-700"
+                      >
+                        {t('common.delete')}
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
@@ -99,6 +115,10 @@ export default function UsersPage() {
         onConfirm={() => { if (deleteTarget) deleteUser.mutate(deleteTarget.id); setDeleteTarget(null) }}
         onCancel={() => setDeleteTarget(null)}
       />
+
+      {editUser && (
+        <EditUserDialog key={editUser.id} user={editUser} onClose={() => setEditUser(null)} />
+      )}
     </div>
   )
 }

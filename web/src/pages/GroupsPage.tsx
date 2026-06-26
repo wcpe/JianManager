@@ -1,13 +1,20 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useGroups } from '@/api/groups'
+import { useGroups, useDeleteGroup, type GroupInfo } from '@/api/groups'
 import CreateGroupDialog from '@/components/CreateGroupDialog'
+import GroupEditDialog from '@/components/GroupEditDialog'
+import GroupMembersDialog from '@/components/GroupMembersDialog'
+import DangerConfirm from '@/components/DangerConfirm'
 import { Button } from '@/components/ui/button'
 
 export default function GroupsPage() {
   const { t } = useTranslation()
   const [showCreate, setShowCreate] = useState(false)
+  const [editGroup, setEditGroup] = useState<GroupInfo | null>(null)
+  const [membersGroupId, setMembersGroupId] = useState<number | null>(null)
+  const [deleteGroup, setDeleteGroup] = useState<{ id: number; name: string } | null>(null)
   const { data: groups, isLoading } = useGroups()
+  const del = useDeleteGroup()
 
   return (
     <div>
@@ -26,6 +33,18 @@ export default function GroupsPage() {
             <div key={g.id} className="border rounded-lg p-4">
               <div className="flex items-center justify-between mb-2">
                 <h3 className="font-medium text-lg">{g.name}</h3>
+                <div className="flex gap-1">
+                  <Button variant="ghost" size="xs" onClick={() => setEditGroup(g)}>{t('common.edit')}</Button>
+                  <Button variant="ghost" size="xs" onClick={() => setMembersGroupId(g.id)}>{t('groups.manageMembersBtn')}</Button>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-red-600 hover:text-red-700"
+                    onClick={() => setDeleteGroup({ id: g.id, name: g.name })}
+                  >
+                    {t('common.delete')}
+                  </Button>
+                </div>
               </div>
               {g.description && <p className="text-sm text-muted-foreground mb-3">{g.description}</p>}
               <div className="flex gap-4 text-sm">
@@ -55,6 +74,23 @@ export default function GroupsPage() {
           )}
         </div>
       )}
+
+      {editGroup && (
+        <GroupEditDialog key={editGroup.id} group={editGroup} onClose={() => setEditGroup(null)} />
+      )}
+      {membersGroupId !== null && (
+        <GroupMembersDialog groupId={membersGroupId} onClose={() => setMembersGroupId(null)} />
+      )}
+      <DangerConfirm
+        open={deleteGroup !== null}
+        title={t('danger.deleteGroupTitle', { name: deleteGroup?.name ?? '' })}
+        description={t('danger.deleteGroupDesc')}
+        confirmLabel={t('common.delete')}
+        confirmText={deleteGroup?.name}
+        scope="platform"
+        onConfirm={() => { if (deleteGroup) del.mutate(deleteGroup.id); setDeleteGroup(null) }}
+        onCancel={() => setDeleteGroup(null)}
+      />
     </div>
   )
 }

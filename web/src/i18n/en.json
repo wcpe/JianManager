@@ -210,6 +210,8 @@
     "deleteNodeDesc": "The node will be unregistered; its records are kept. Reconnecting requires re-registration.",
     "deleteUserTitle": "Delete user \"{{name}}\"?",
     "deleteUserDesc": "This action cannot be undone. The user will no longer be able to sign in.",
+    "deleteGroupTitle": "Delete group \"{{name}}\"?",
+    "deleteGroupDesc": "This action cannot be undone. Group memberships and quota will be removed.",
     "batchKillTitle": "Force stop {{count}} instances?",
     "batchKillDesc": "Selected instance processes will be killed; unsaved data may be lost."
   },
@@ -1513,7 +1515,16 @@
     "enabled": "Enabled",
     "disabled": "Disabled",
     "deleteTitle": "Delete User",
-    "roleUnknown": "Unknown ({{role}})"
+    "roleUnknown": "Unknown ({{role}})",
+    "editUser": "Edit user \"{{name}}\"",
+    "enable": "Enable",
+    "disable": "Disable",
+    "resetPassword": "Reset password",
+    "resetPasswordPlaceholder": "Leave blank to keep unchanged",
+    "roleHint": "Members can only access authorized resources; group admins manage their group's instances and members; platform admins have full access.",
+    "roleDesc_0": "Member: can only access resources in authorized groups; cannot manage users or nodes.",
+    "roleDesc_1": "Group admin: can manage this group's instances, members and quota.",
+    "roleDesc_10": "Platform admin: full access including users, nodes and platform settings."
   },
   "groups": {
     "title": "Group Management",
@@ -1526,7 +1537,15 @@
     "empty": "No groups",
     "description": "Description",
     "createFailed": "Failed to create group",
-    "userPrefix": "User#"
+    "userPrefix": "User#",
+    "editGroup": "Edit group \"{{name}}\"",
+    "storageQuotaMb": "Storage quota (MB)",
+    "manageMembersBtn": "Members",
+    "manageMembers": "Manage \"{{name}}\" members",
+    "addMember": "Add",
+    "removeMember": "Remove",
+    "selectUser": "Select a user to add",
+    "noMembers": "No members yet"
   },
   "alerts": {
     "title": "Alert Management",

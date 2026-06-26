@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueryClient, useMutation } from '@tanstack/react-query'
 import api from '@/api/client'
+import { type UserInfo } from '@/api/users'
 import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { FieldLabel, FieldError } from '@/components/ui/field-label'
@@ -39,8 +40,19 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
   )
 
   const create = useMutation({
-    mutationFn: (body: { username: string; password: string }) =>
-      api.post('/auth/register', body),
+    // register 仅建普通成员；若选了更高角色，据返回 uuid 定位新用户并应用（FR-156）。
+    mutationFn: async (body: { username: string; password: string; role: string }) => {
+      const res = await api.post<{ id?: string }>('/auth/register', {
+        username: body.username,
+        password: body.password,
+      })
+      const newUuid = res.data?.id
+      if (body.role !== '0' && newUuid) {
+        const { data: list } = await api.get<UserInfo[]>('/users')
+        const created = list.find((u) => u.uuid === newUuid)
+        if (created) await api.put(`/users/${created.id}`, { role: Number(body.role) })
+      }
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['users'] })
       onClose()
@@ -62,7 +74,7 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
     e.preventDefault()
     if (hasErrors(errors)) return
     setError('')
-    create.mutate({ username, password })
+    create.mutate({ username, password, role })
   }
 
   if (!open) return null
@@ -105,6 +117,7 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
             <div className="mt-1">
               <Combobox options={roleOptions} value={role} onChange={setRole} allowCustom={false} />
             </div>
+            <p className="mt-1 text-xs text-muted-foreground">{t(`users.roleDesc_${role}`)}</p>
           </div>
 
           <div className="flex justify-end gap-2 pt-2">

@@ -210,6 +210,8 @@
     "deleteNodeDesc": "节点将被解除注册，其上记录保留；复连需重新注册。",
     "deleteUserTitle": "删除用户「{{name}}」？",
     "deleteUserDesc": "此操作不可撤销，该用户将无法登录。",
+    "deleteGroupTitle": "删除用户组「{{name}}」？",
+    "deleteGroupDesc": "此操作不可撤销，组内成员关系与配额将被移除。",
     "batchKillTitle": "强制关闭 {{count}} 个实例？",
     "batchKillDesc": "将强制终止所选实例进程，可能导致未保存数据丢失。"
   },
@@ -1513,7 +1515,16 @@
     "enabled": "启用",
     "disabled": "禁用",
     "deleteTitle": "确认删除用户",
-    "roleUnknown": "未知({{role}})"
+    "roleUnknown": "未知({{role}})",
+    "editUser": "编辑用户「{{name}}」",
+    "enable": "启用",
+    "disable": "停用",
+    "resetPassword": "重置密码",
+    "resetPasswordPlaceholder": "留空则不修改",
+    "roleHint": "成员仅能访问被授权的资源；组管理员可管理本组实例与成员；平台管理员拥有全部权限。",
+    "roleDesc_0": "普通成员：仅能访问被授权组内的资源，不能管理用户或节点。",
+    "roleDesc_1": "组管理员：可管理本组的实例、成员与配额。",
+    "roleDesc_10": "平台管理员：拥有全部权限，含用户、节点与平台设置。"
   },
   "groups": {
     "title": "用户组管理",
@@ -1526,7 +1537,15 @@
     "empty": "暂无用户组",
     "description": "描述",
     "createFailed": "创建失败",
-    "userPrefix": "用户#"
+    "userPrefix": "用户#",
+    "editGroup": "编辑用户组「{{name}}」",
+    "storageQuotaMb": "存储配额(MB)",
+    "manageMembersBtn": "成员",
+    "manageMembers": "管理「{{name}}」成员",
+    "addMember": "添加",
+    "removeMember": "移除",
+    "selectUser": "选择用户加入",
+    "noMembers": "暂无成员"
   },
   "alerts": {
     "title": "告警管理",
