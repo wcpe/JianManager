@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import type { BusinessEvent } from '@/api/economy'
+import type { EconomyMirrorRow } from '@/api/economy'
 import {
   toLedgerRow,
   toLedgerRows,
   isValidAmount,
   canQueryLeaderboard,
   fmtEpochMillis,
+  sumDecimalStrings,
+  aggregateByCurrency,
 } from './economy-view'
 
 /** 构造一条经济业务事件 envelope（模拟后端 GET /business/events 的 BusinessEvent 行）。 */
@@ -112,5 +115,67 @@ describe('fmtEpochMillis', () => {
   })
   it('正数格式化为本地时间串（非破折号）', () => {
     expect(fmtEpochMillis(1700000000000)).not.toBe('—')
+  })
+})
+
+describe('sumDecimalStrings 大数精确十进制求和（禁浮点）', () => {
+  it('整数相加', () => {
+    expect(sumDecimalStrings(['100', '23', '7'])).toBe('130')
+  })
+  it('小数对齐相加', () => {
+    expect(sumDecimalStrings(['1.5', '2.25', '0.25'])).toBe('4')
+  })
+  it('超 Number 精度也不失真', () => {
+    expect(sumDecimalStrings(['123456789012345.67', '0.33'])).toBe('123456789012346')
+  })
+  it('极小金额累加不进浮点误差', () => {
+    expect(sumDecimalStrings(['0.1', '0.2'])).toBe('0.3')
+  })
+  it('忽略空串 / 非法项', () => {
+    expect(sumDecimalStrings(['10', '', 'abc', '5'])).toBe('15')
+  })
+  it('空列表为 0', () => {
+    expect(sumDecimalStrings([])).toBe('0')
+  })
+})
+
+describe('aggregateByCurrency 多区聚合余额', () => {
+  function row(p: Partial<EconomyMirrorRow>): EconomyMirrorRow {
+    return {
+      id: 0,
+      nodeUuid: 'n',
+      zoneId: 'z',
+      playerName: 'Steve',
+      currency: 'coin',
+      currencyId: 1,
+      balance: '0',
+      lastSeq: 0,
+      lastLedgerId: 0,
+      lastEntryType: '',
+      occurredAt: 0,
+      updatedAt: '',
+      ...p,
+    }
+  }
+  it('同币种跨节点/区聚合为一行（总额 + 来源区数）', () => {
+    const agg = aggregateByCurrency([
+      row({ id: 1, currency: 'coin', balance: '100', nodeUuid: 'n1', zoneId: 'a' }),
+      row({ id: 2, currency: 'coin', balance: '50', nodeUuid: 'n2', zoneId: 'b' }),
+      row({ id: 3, currency: 'gem', balance: '7', nodeUuid: 'n1', zoneId: 'a' }),
+    ])
+    expect(agg).toHaveLength(2)
+    const coin = agg.find((a) => a.currency === 'coin')!
+    expect(coin.total).toBe('150')
+    expect(coin.sources).toBe(2)
+    const gem = agg.find((a) => a.currency === 'gem')!
+    expect(gem.total).toBe('7')
+    expect(gem.sources).toBe(1)
+  })
+  it('按币种字典序稳定排序', () => {
+    const agg = aggregateByCurrency([row({ currency: 'zeny' }), row({ currency: 'coin' }), row({ currency: 'gem' })])
+    expect(agg.map((a) => a.currency)).toEqual(['coin', 'gem', 'zeny'])
+  })
+  it('空输入 → 空数组', () => {
+    expect(aggregateByCurrency([])).toEqual([])
   })
 })

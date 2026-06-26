@@ -1,9 +1,11 @@
 import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
-import { Loader2, Play, RefreshCw, ShieldAlert } from 'lucide-react'
+import { Boxes, Loader2, Play, RefreshCw, ShieldAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Panel } from '@/components/ui/panel'
+import { cn } from '@/lib/utils'
 import DangerConfirm from '@/components/DangerConfirm'
 import {
   dispatchBusiness,
@@ -18,6 +20,7 @@ import { isWriteAction } from './business-actions'
  *
  * manifest 驱动：取探针汇总的业务能力清单动态渲染域 / 动作（不硬编码具体插件），按动作 args 渲染表单，
  * 经 `POST /business` 下发 `domain.action` + payload，透传展示结果。探针未连 / 无业务 Provider 优雅降级。
+ * 视觉为靛蓝圆角范式（FR-163）：统一 {@link Panel} 原语、语义图标块、写动作走语义危险色。
  */
 interface BusinessSegmentProps {
   /** 实例 ID。 */
@@ -89,18 +92,23 @@ export default function BusinessSegment({ instanceId }: BusinessSegmentProps) {
 
   return (
     <div className="flex h-full min-w-0 flex-col gap-3 p-4">
-      {/* 头部：标题 + 刷新能力清单 */}
-      <div className="flex items-center gap-2">
-        <h3 className="text-sm font-semibold">{t('business.title')}</h3>
-        <span className="text-xs text-muted-foreground">{t('business.subtitle')}</span>
+      {/* 头部：图标块 + 标题 + 刷新能力清单 */}
+      <div className="flex items-center gap-2.5">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-accent text-primary">
+          <Boxes className="size-4" />
+        </span>
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold">{t('business.title')}</h3>
+          <p className="truncate text-xs text-muted-foreground">{t('business.subtitle')}</p>
+        </div>
         <Button
           size="sm"
           variant="outline"
-          className="ml-auto h-7 px-2 text-xs"
+          className="ml-auto h-7 rounded-full px-3 text-xs"
           onClick={() => void manifestQuery.refetch()}
           disabled={manifestQuery.isFetching}
         >
-          <RefreshCw className={`mr-1 size-3.5 ${manifestQuery.isFetching ? 'animate-spin' : ''}`} />
+          <RefreshCw className={cn('mr-1 size-3.5', manifestQuery.isFetching && 'animate-spin')} />
           {t('business.refresh')}
         </Button>
       </div>
@@ -114,66 +122,76 @@ export default function BusinessSegment({ instanceId }: BusinessSegmentProps) {
 
       {/* 能力不可用：探针未连 / 无业务 Provider */}
       {!manifestQuery.isLoading && (!manifest?.available || domainEntries.length === 0) && (
-        <div className="rounded border bg-muted/30 p-3 text-xs text-muted-foreground">
+        <div className="rounded-xl border bg-muted/30 p-4 text-xs text-muted-foreground shadow-soft">
           {manifest?.error || t('business.unavailable')}
         </div>
       )}
 
       {/* manifest 驱动的能力清单 + 下发面板 */}
       {!manifestQuery.isLoading && manifest?.available && domainEntries.length > 0 && (
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 md:grid-cols-[minmax(12rem,16rem)_1fr]">
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 md:grid-cols-[minmax(13rem,17rem)_1fr]">
           {/* 域 / 动作清单 */}
-          <div className="min-h-0 overflow-auto rounded border">
-            {domainEntries.map(([domain, def]) => (
-              <div key={domain} className="border-b last:border-b-0">
-                <div className="bg-muted/40 px-2 py-1 text-xs font-medium">{domain}</div>
-                <ul>
-                  {(def.actions ?? []).map((action) => {
-                    const active = selected?.domain === domain && selected.action.action === action.action
-                    return (
-                      <li key={action.action}>
-                        <button
-                          className={`flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-xs hover:bg-accent ${active ? 'bg-accent font-medium' : ''}`}
-                          onClick={() => pick(domain, action)}
-                        >
-                          <span className="font-mono">{action.action}</span>
-                          {action.readOnly && (
-                            <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">
-                              {t('business.readOnly')}
-                            </span>
-                          )}
-                        </button>
-                      </li>
-                    )
-                  })}
-                </ul>
-              </div>
-            ))}
-          </div>
+          <Panel title={t('business.capabilities')} icon={<Boxes className="size-3.5" />} bodyClassName="min-h-0 overflow-auto p-2">
+            <div className="flex flex-col gap-3">
+              {domainEntries.map(([domain, def]) => (
+                <div key={domain}>
+                  <div className="mb-1 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {domain}
+                  </div>
+                  <ul className="flex flex-col gap-0.5">
+                    {(def.actions ?? []).map((action) => {
+                      const active = selected?.domain === domain && selected.action.action === action.action
+                      return (
+                        <li key={action.action}>
+                          <button
+                            className={cn(
+                              'flex w-full items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-left text-xs transition-colors duration-200',
+                              active ? 'bg-accent font-medium text-primary' : 'hover:bg-accent/60',
+                            )}
+                            onClick={() => pick(domain, action)}
+                          >
+                            <span className="truncate font-mono">{action.action}</span>
+                            {action.readOnly ? (
+                              <span className="ml-auto shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] text-muted-foreground">
+                                {t('business.readOnly')}
+                              </span>
+                            ) : (
+                              <ShieldAlert className="ml-auto size-3 shrink-0 text-status-danger" aria-hidden />
+                            )}
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </Panel>
 
           {/* 下发面板 */}
-          <div className="min-h-0 overflow-auto rounded border p-3">
+          <Panel
+            title={selected ? `${selected.domain}.${selected.action.action}` : t('business.dispatchPanel')}
+            icon={<Play className="size-3.5" />}
+            tone={selected && isWriteAction(selected.action) ? 'danger' : 'primary'}
+            bodyClassName="min-h-0 overflow-auto p-4"
+          >
             {!selected ? (
               <div className="text-xs text-muted-foreground">{t('business.pickAction')}</div>
             ) : (
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-1.5 text-xs font-medium">
-                  <span className="text-muted-foreground">{selected.domain}.</span>
-                  <span className="font-mono">{selected.action.action}</span>
-                  {isWriteAction(selected.action) && (
-                    <span className="inline-flex items-center gap-0.5 rounded bg-destructive/10 px-1 text-[10px] font-medium text-destructive">
-                      <ShieldAlert className="size-3" aria-hidden />
-                      {t('business.writeAction')}
-                    </span>
-                  )}
-                </div>
+              <div className="flex flex-col gap-2.5">
+                {isWriteAction(selected.action) && (
+                  <span className="inline-flex w-fit items-center gap-1 rounded-full bg-status-danger/12 px-2 py-0.5 text-[10px] font-medium text-status-danger">
+                    <ShieldAlert className="size-3" aria-hidden />
+                    {t('business.writeAction')}
+                  </span>
+                )}
                 {(selected.action.args ?? []).map((arg) => (
                   <label key={arg} className="flex flex-col gap-0.5 text-xs">
                     <span className="text-muted-foreground">{arg}</span>
                     <Input
                       value={args[arg] ?? ''}
                       onChange={(e) => setArgs((prev) => ({ ...prev, [arg]: e.target.value }))}
-                      className="h-7 text-xs"
+                      className="h-8 text-xs"
                     />
                   </label>
                 ))}
@@ -185,11 +203,17 @@ export default function BusinessSegment({ instanceId }: BusinessSegmentProps) {
                       value={reason}
                       onChange={(e) => setReason(e.target.value)}
                       placeholder={t('business.reasonPlaceholder')}
-                      className="h-7 text-xs"
+                      className="h-8 text-xs"
                     />
                   </label>
                 )}
-                <Button size="sm" className="h-7 self-start px-3 text-xs" onClick={run} disabled={dispatching}>
+                <Button
+                  size="sm"
+                  variant={isWriteAction(selected.action) ? 'destructive' : 'default'}
+                  className="h-8 self-start rounded-full px-4 text-xs"
+                  onClick={run}
+                  disabled={dispatching}
+                >
                   {dispatching ? (
                     <Loader2 className="mr-1 size-3.5 animate-spin" />
                   ) : (
@@ -198,16 +222,16 @@ export default function BusinessSegment({ instanceId }: BusinessSegmentProps) {
                   {t('business.dispatch')}
                 </Button>
 
-                {dispatchError && <div className="text-xs text-destructive">{dispatchError}</div>}
+                {dispatchError && <div className="text-xs text-status-danger">{dispatchError}</div>}
                 {result && (
                   <div className="mt-1 flex flex-col gap-1">
                     {!result.available && (
-                      <div className="text-xs text-destructive">
+                      <div className="text-xs text-status-danger">
                         {result.error || t('business.dispatchFailed')}
                       </div>
                     )}
                     {result.available && (
-                      <pre className="overflow-auto rounded bg-muted/40 p-2 text-[11px]">
+                      <pre className="overflow-auto rounded-lg bg-muted/50 p-2.5 text-[11px]">
                         {JSON.stringify(result.output, null, 2)}
                       </pre>
                     )}
@@ -215,7 +239,7 @@ export default function BusinessSegment({ instanceId }: BusinessSegmentProps) {
                 )}
               </div>
             )}
-          </div>
+          </Panel>
         </div>
       )}
 
