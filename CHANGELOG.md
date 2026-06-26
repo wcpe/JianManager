@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## 0.10.0（2026-06-27）
+
 ### 新增
 - **前端重设计批 3 · 实例多级嵌套分组（FR-165，全栈，见 ADR-033）**：新增「实例组织分组树」——后端 `instance_group_nodes`（自引用 `parent_id` 邻接表）+ `instance_group_members`（实例-组 M:N）两表 + migration + `InstanceGroupService`（树 CRUD + 成员 + 防环 `wouldCreateCycle` + 去重子树计数 + Go 表驱动测试）+ `/instance-groups` 端点（`instance:read/write`，不引新权限节点）。前端 `InstanceGroupTree`（左树折叠优先 + 子树计数）+ 右列表（工作台卡 + 组路径面包屑 + 批量标记入组）+ 拖实例入组（HTML5 DnD）+ `InstancesPage` 新增「组织分组」开关（与既有 `groupBy` 维度分组并列正交，不破坏）。**正交于**用户组（ADR-004 配额）与网络群组（ADR-007 部署），不复用 `group_instances`。
 - **前端重设计批 3 · 可组合卡片工作区（FR-166，见 ADR-034，取代 ADR-030）**：实例工作区从固定六 Tab 改为**可拖拽卡片画布**（`react-grid-layout`）——卡片 = 实例 × 功能（终端/资源[文件+配置合一，承 FR-130]/插件/监控/状态/Bot + JBIS 业务·经济·背包共 9 类，画布化无功能丢失），统一卡壳（grip 拖拽/全屏/关闭），调大小，惰性挂载（未在画布的卡不建 WS）。命名预设个人级 `localStorage` 持久 + 内置「运维台」快捷预设（原 Tab 降级而来）；`InstanceDetailPage` 519→26 行退化为深链回退、汇流同一画布。**取代 ADR-030**（标 superseded）、**并入 FR-129/130**（PRD 置废弃）。纯逻辑 `lib/workspace-preset.ts` + vitest。
@@ -52,6 +54,12 @@
 - **Cron 非法表达式通过前端校验（BUG-020）**：`,,,` 等残缺表达式漏过；按 term 结构逐个校验拒绝。
 - **告警规则无法切换启用态（BUG-021）**：规则表启用列只读、编辑弹窗无 enabled 字段；改行内 Switch 即时切换（随 FR-149）。
 - **创建用户密码下限与初始化不一致（BUG-022）**：CreateUserDialog 下限 6 与 Setup 的 8 矛盾；统一为 8。
+
+### 变更 / 移除
+- **默认品牌色 MC 绿 → 靛蓝 `#6366F1`**（FR-163），全站 token 重基为「靛蓝圆角灵动」设计系统；新增**青绿第二主题**与一处切换（FR-164）。
+- **实例工作区固定六 Tab → 可组合卡片画布**（FR-166）：取代 **ADR-030**（标 superseded-by ADR-034）；**FR-129（分屏）/ FR-130（文件配置合并）废弃并入 FR-166**。
+- **弃 shadcn `Card` 松散用法**：统一卡片原语 `Panel`/`StatCard`，eslint `no-restricted-imports` 阻断新引入（FR-163）。
+- 新增 ADR-032（设计系统底座）/ 033（实例分组树）/ 034（可组合卡片工作区）/ 035（导播台 WS 预热并发模型）。
 
 ## 0.9.1（2026-06-24）
 
