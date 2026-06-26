@@ -268,6 +268,7 @@
     "logs": "Logs",
     "allInstances": "All Instances",
     "monitor": "Monitoring",
+    "monitoring": "Monitoring Overview",
     "backup": "Backup",
     "systemSettings": "System Settings",
     "clientChannels": "Client Distribution",
@@ -275,7 +276,14 @@
     "storage": "Platform Storage",
     "database": "Database",
     "systemUpdate": "System Update",
-    "platform": "Platform"
+    "platform": "Platform",
+    "cluster": "Cluster",
+    "operations": "Operations",
+    "system": "System",
+    "sysPlatform": "Platform & Maintenance",
+    "sysAccount": "Account & Audit",
+    "collapseSidebar": "Collapse sidebar",
+    "expandSidebar": "Expand sidebar"
   },
   "console": {
     "title": "Ops Console",

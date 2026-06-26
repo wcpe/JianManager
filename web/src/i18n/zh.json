@@ -268,6 +268,7 @@
     "logs": "日志",
     "allInstances": "全部实例",
     "monitor": "监控",
+    "monitoring": "监控总览",
     "backup": "备份",
     "systemSettings": "系统设置",
     "clientChannels": "客户端分发",
@@ -275,7 +276,14 @@
     "storage": "平台存储",
     "database": "数据库",
     "systemUpdate": "系统更新",
-    "platform": "平台"
+    "platform": "平台",
+    "cluster": "集群",
+    "operations": "运营",
+    "system": "系统",
+    "sysPlatform": "平台与维护",
+    "sysAccount": "账户与审计",
+    "collapseSidebar": "收起侧栏",
+    "expandSidebar": "展开侧栏"
   },
   "console": {
     "title": "运维控制台",

@@ -173,6 +173,16 @@
   border-color: var(--border);
 }
 
+/* 隐藏滚动条但保留滚动能力（FR-131 侧栏导航区）。 */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 body {
   background-color: var(--background);
   color: var(--foreground);
