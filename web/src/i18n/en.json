@@ -1682,6 +1682,34 @@
     "zh": "中文",
     "en": "English"
   },
+  "header": {
+    "console": "Console",
+    "searchPlaceholder": "Search…",
+    "onlineNodes": "Online nodes",
+    "runningInstances": "Running instances",
+    "crashedInstances": "Crashed instances",
+    "alerts": "Alerts",
+    "unreadCount": "{{count}} unread",
+    "noAlerts": "No alerts",
+    "viewAllAlerts": "View all alerts",
+    "account": "Account"
+  },
+  "licenses": {
+    "entry": "Licenses",
+    "title": "Open-source licenses",
+    "subtitle": "This product uses the open-source dependencies below; versions and licenses are scanned at build time.",
+    "back": "Back",
+    "searchPlaceholder": "Filter by package name…",
+    "runtime": "Runtime dependencies",
+    "dev": "Dev dependencies",
+    "colName": "Package",
+    "colVersion": "Version",
+    "colLicense": "License",
+    "colAuthor": "Author",
+    "empty": "No dependency data (generated at build time)",
+    "noLicenseText": "(no license text)",
+    "generatedAt": "Generated at {{time}}"
+  },
   "validation": {
     "requiredMark": "required",
     "required": "This field is required",

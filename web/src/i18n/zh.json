@@ -1682,6 +1682,34 @@
     "zh": "中文",
     "en": "English"
   },
+  "header": {
+    "console": "控制台",
+    "searchPlaceholder": "搜索…",
+    "onlineNodes": "在线节点",
+    "runningInstances": "运行实例",
+    "crashedInstances": "崩溃实例",
+    "alerts": "告警",
+    "unreadCount": "{{count}} 条未读",
+    "noAlerts": "暂无告警",
+    "viewAllAlerts": "查看全部告警",
+    "account": "账户"
+  },
+  "licenses": {
+    "entry": "开源许可",
+    "title": "开源许可",
+    "subtitle": "本产品使用以下开源依赖，版本与许可证于构建期自动扫描生成。",
+    "back": "返回",
+    "searchPlaceholder": "按包名过滤…",
+    "runtime": "运行时依赖",
+    "dev": "开发依赖",
+    "colName": "包名",
+    "colVersion": "版本",
+    "colLicense": "许可证",
+    "colAuthor": "作者",
+    "empty": "暂无依赖数据（构建期生成）",
+    "noLicenseText": "（无许可证全文）",
+    "generatedAt": "生成于 {{time}}"
+  },
   "validation": {
     "requiredMark": "必填",
     "required": "此项必填",

@@ -463,7 +463,7 @@ database:
 
 ```
 ┌────────────────┬─────────────────────────────────────────┐
-│  JianManager   │  运维控制台 / <实例名>   [分屏] [切导播台]   │  ← 工作区工具栏（面包屑 + 禁用占位）
+│  JianManager   │ 标题/面包屑   [🔎 搜索 ⌘K]    徽标 🔔 账户  │  ← 全局顶栏（FR-162）
 │ ┌────────────┐ ├─────────────────────────────────────────┤
 │ │ 功能导航    │ │                                         │
 │ │ 仪表盘      │ │                                         │
@@ -482,7 +482,7 @@ database:
 │ │ 用户 用户组 │ │                                         │
 │ │ 审计 设置   │ │                                         │
 │ │ [主题][语言]│ │                                         │
-│ │ 退出  vX.Y │ │                                         │
+│ │ vX.Y · 许可 │ │                                         │
 │ └────────────┘ │                                         │
 └────────────────┴─────────────────────────────────────────┘
 ```
@@ -491,12 +491,16 @@ database:
   - 顶层项：总览 / 节点 /（组）实例 /（组）监控 / 玩家 / Bot / 定时任务 /（组）备份 / 模板 /（组）设置。
   - **实例**组展开 = 全部实例 + 群组 + 节点切换器（`全部节点` + 各节点，`GET /nodes`）+ 常驻实例树（`GET /instances?nodeId=`；每项状态点：RUNNING 绿 / STARTING·STOPPING 琥珀 / CRASHED 红 / STOPPED 空心 + bot 聚合徽标）。
   - **监控**组 = 告警 + 日志；**备份**组 = 备份 + 备份存储；**设置**组 = 用户 + 用户组 + 审计 + 系统设置。
-  - 底部：主题切换 + 语言切换 + 退出 + 版本号。分组展开态存 Zustand（`stores/console.ts.collapsedGroups`）。
+  - 底部（FR-132）：主题 / 语言为 lucide 图标 + 文字 dropdown（主题三态直选、切语言同步 `<html lang>`）+ 版本号（左下）+ 开源许可入口（右下 → `/licenses`，FR-135）；退出登录已迁至顶栏账户菜单（FR-162）。分组展开态存 Zustand（`stores/console.ts.collapsedGroups`）。
+- **顶栏（FR-162，`ConsoleHeader`）= 内容区上方全局页眉**（侧栏保持全高，顶栏只占右侧内容列）：
+  - **左** = 当前页轻量标题/面包屑（`lib/pageTitle.ts` 按路由首段映射；打开实例工作区时显「实例 / <名称>」）；与 FR-134 统一页头协同，本期不展开 FR-134 的 P3 全量。
+  - **中** = 常驻搜索框（本期占位：UI + `Ctrl/⌘+K` 聚焦，输入暂不联动检索，检索逻辑留后续 FR）。
+  - **右** = 集群概览徽标（在线节点/运行实例/崩溃数，复用 `GET /metrics/overview` + 实例列表本地统计；点击跳转对应筛选：运行/崩溃→`/instances?status=`、在线→`/nodes`）+ 告警铃铛（`GET /alerts/events/unread-count` 未读计数 30s 轮询 + 下拉只读最近事件）+ 账户菜单（用户名/角色 + 退出登录）。
 - **右 = 工作区**：
   - 点实例 → 工作区打开该实例统一面板（终端 / 文件 / 配置 / 插件 / 监控 / Bot 分段，按实例记忆当前段）；**同时仅一个实例**，点另一个切换。**监控**段 = 该实例 FR-060 历史曲线（TPS/MSPT/堆/在线/线程/CPU + 分世界区块）。
   - **文件**段 = 共享资源管理器 `components/explorer/ResourceExplorer`（FR-070）：左懒加载目录树（`FileTree`）+ 右目录内容（`FileList` 多选/右键/拖拽源）/ CodeMirror 编辑器（`editor/CodeEditor`，多格式高亮 + Ctrl+S 拦截保存接 FR-051 历史）。交互全集（新建文件夹/重命名/删除/剪切复制粘贴/树内拖拽移动/拖拽上传/单文件流式与多选 zip 批量下载/shift·ctrl·全选多选）抽为纯函数（`selection`/`clipboard`/`paths`/`language`，vitest 覆盖）；删除/回滚走 `DangerConfirm`（FR-059），历史版本经右侧抽屉 `VersionDrawer`。`ResourceExplorer` 接受可选 `config` 能力注入（编辑器插槽 / 左栏插槽 / 配置版本抽屉），不注入即为纯文件资源管理器。**此组件为 FR-071/073/074/075/082/083/084 复用地基**。归档浏览/反编译（FR-075）叠加为右栏互斥面板：`FileList` 双击/右键按 jar/zip→`ArchiveViewer`（内部条目子树 + 点文本条目只读查看 + 点 `.class` 触发反编译）、`.class`→`DecompileViewer`（只读 Java 源码），与文本编辑器三者互斥占用右栏；API client `api/archive.ts`，只读端点不触碰写操作。
   - **配置**段 = `components/config-explorer/ConfigExplorer`（FR-071）：**复用 `ResourceExplorer`** 并注入配置能力——打开文件改用 `ConfigFileEditor`（schema 表单/文本双模式 + 跨文件校验 + Ctrl+S 存**配置版本**，FR-031；文本模式复用共享 `CodeEditor` 多格式高亮）；左栏顶部 `FavoritesBar`（收藏书签存 `localStorage`，纯函数 `favorites.ts` + 已发现配置面板 `GET /configs/discover` 递归全部配置，分组纯函数 `discover.ts`）；历史经 `ConfigVersionDrawer`（FR-031 配置版本/diff/回滚）。树/列表本身呈现工作目录全部文件，满足「目录树呈现自动发现的全部配置」。原独立三栏 `ConfigEditor` 已移除。
-  - 其余路由在工作区按路由渲染。**总览页（`OverviewPage`）** = 环形仪表盘 + 跨节点聚合历史曲线（FR-060：总 CPU/内存/在线玩家）+ 密集实例表；**节点页**行内 MiniBar + 可展开节点详情（环形仪表盘 + CPU/内存曲线）。
+  - 其余路由在工作区按路由渲染。**总览页（`OverviewPage`）** = 环形仪表盘 + 跨节点聚合历史曲线（FR-060：总 CPU/内存/在线玩家）+ 密集实例表；**节点页**行内 MiniBar + 可展开节点详情（环形仪表盘 + CPU/内存曲线）。**开源许可页（`LicensesPage`，`/licenses`，FR-135）** = 构建期 `scripts/gen-licenses.mjs` 扫描 web + bot-worker(npm) + Go(go-licenses) 生成 `web/public/licenses.json`（静态资源、非 `/api`），页面提供包名搜索 + 运行时/开发分区计数 + 表格 [包名·版本·许可证·作者] + 行内展开许可证全文。
 - **高密度设计系统（FR-061）**：OKLCH token 扩展 MC 绿主色 + 状态色系（success/warning/danger/info，阈值驱动变色，见 `lib/threshold.ts`）+ 13px 密度档位；通用组件 `ResourceGauge`/`Panel`/`MiniBar`/`StatusBadge`（`components/ui`）与 `TimeSeriesChart`/`RangePicker`（`components/charts`）。仍基于 shadcn/ui + Tailwind + OKLCH，不引入新框架。
 - 暗色/亮色主题与 i18n（zh/en）正常；选中实例/节点为客户端 UI 状态，不进 URL。
 
