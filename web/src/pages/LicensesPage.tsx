@@ -1,10 +1,12 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { ArrowLeft, ChevronDown, ChevronRight, Search } from 'lucide-react'
+import { ArrowLeft, ChevronDown, ChevronRight, Package, ScrollText, Search, Wrench } from 'lucide-react'
 
 import { useLicenses, type LicenseDependency } from '@/api/licenses'
+import { depKey, filterByName, partitionDeps } from '@/lib/licenses'
 import { Panel } from '@/components/ui/panel'
+import { StatCard } from '@/components/ui/stat-card'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,10 +19,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 
-/** 依赖唯一键（同名包可能跨 web/bot-worker/go 多源出现）。 */
-const depKey = (d: LicenseDependency) => `${d.scope}|${d.name}|${d.version}`
-
-/** 开源许可与依赖清单页（FR-135）：搜索 + 运行时/开发分区计数 + 表格 + 行内展开许可证全文。 */
+/** 开源许可与依赖清单页（FR-135）：搜索 + 运行时/开发分区计数（StatCard）+ 表格 + 行内展开许可证全文。 */
 export default function LicensesPage() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -28,11 +27,9 @@ export default function LicensesPage() {
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
-  const deps = data?.dependencies ?? []
-  const q = query.trim().toLowerCase()
-  const filtered = q ? deps.filter((d) => d.name.toLowerCase().includes(q)) : deps
-  const runtime = filtered.filter((d) => d.type === 'runtime')
-  const dev = filtered.filter((d) => d.type === 'dev')
+  const deps = useMemo(() => data?.dependencies ?? [], [data])
+  const filtered = useMemo(() => filterByName(deps, query), [deps, query])
+  const part = useMemo(() => partitionDeps(filtered), [filtered])
 
   const toggle = (key: string) =>
     setExpanded((prev) => {
@@ -61,6 +58,33 @@ export default function LicensesPage() {
 
       <p className="text-sm text-muted-foreground">{t('licenses.subtitle')}</p>
 
+      {!isLoading && !isError && deps.length > 0 && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <StatCard
+            label={t('licenses.statTotal')}
+            value={part.total}
+            icon={<Package className="size-3.5" />}
+          />
+          <StatCard
+            label={t('licenses.runtime')}
+            value={part.runtimeCount}
+            icon={<Package className="size-3.5" />}
+            tone="success"
+          />
+          <StatCard
+            label={t('licenses.dev')}
+            value={part.devCount}
+            icon={<Wrench className="size-3.5" />}
+            tone="info"
+          />
+          <StatCard
+            label={t('licenses.statLicenses')}
+            value={part.licenseCount}
+            icon={<ScrollText className="size-3.5" />}
+          />
+        </div>
+      )}
+
       <div className="relative max-w-sm">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input
@@ -80,8 +104,22 @@ export default function LicensesPage() {
         </Panel>
       ) : (
         <>
-          <DependencyTable title={t('licenses.runtime')} deps={runtime} expanded={expanded} onToggle={toggle} />
-          <DependencyTable title={t('licenses.dev')} deps={dev} expanded={expanded} onToggle={toggle} />
+          <DependencyTable
+            title={t('licenses.runtime')}
+            icon={<Package className="size-3.5" />}
+            tone="success"
+            deps={part.runtime}
+            expanded={expanded}
+            onToggle={toggle}
+          />
+          <DependencyTable
+            title={t('licenses.dev')}
+            icon={<Wrench className="size-3.5" />}
+            tone="info"
+            deps={part.dev}
+            expanded={expanded}
+            onToggle={toggle}
+          />
         </>
       )}
     </div>
@@ -91,18 +129,34 @@ export default function LicensesPage() {
 /** 单分区依赖表（运行时 / 开发）：行内可展开查看许可证全文。 */
 function DependencyTable({
   title,
+  icon,
+  tone,
   deps,
   expanded,
   onToggle,
 }: {
   title: string
+  icon: ReactNode
+  tone: 'success' | 'info'
   deps: LicenseDependency[]
   expanded: Set<string>
   onToggle: (key: string) => void
 }) {
   const { t } = useTranslation()
   return (
-    <Panel title={`${title} (${deps.length})`} bodyClassName="p-0">
+    <Panel
+      title={
+        <span className="flex items-center gap-1.5">
+          {title}
+          <Badge variant="secondary" className="text-[10px] tabular-nums">
+            {deps.length}
+          </Badge>
+        </span>
+      }
+      icon={icon}
+      tone={tone}
+      bodyClassName="p-0"
+    >
       <Table>
         <TableHeader>
           <TableRow>
@@ -127,7 +181,10 @@ function DependencyTable({
               const isLink = /^https?:\/\//.test(d.url)
               return (
                 <Fragment key={key}>
-                  <TableRow className="cursor-pointer" onClick={() => onToggle(key)}>
+                  <TableRow
+                    className="cursor-pointer transition-colors duration-200 ease-ios"
+                    onClick={() => onToggle(key)}
+                  >
                     <TableCell className="text-muted-foreground">
                       {isOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
                     </TableCell>
@@ -152,14 +209,22 @@ function DependencyTable({
                       </span>
                     </TableCell>
                     <TableCell className="tabular-nums text-muted-foreground">{d.version || '—'}</TableCell>
-                    <TableCell>{d.license}</TableCell>
+                    <TableCell>
+                      {d.license ? (
+                        <Badge variant="secondary" className="font-normal">
+                          {d.license}
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
                     <TableCell className="max-w-64 truncate text-muted-foreground">{d.author || '—'}</TableCell>
                   </TableRow>
                   {isOpen && (
                     <TableRow className="hover:bg-transparent">
                       <TableCell colSpan={5} className="bg-muted/30">
                         {d.licenseText ? (
-                          <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded bg-background p-3 text-xs leading-relaxed text-foreground/90">
+                          <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-background p-3 text-xs leading-relaxed text-foreground/90">
                             {d.licenseText}
                           </pre>
                         ) : (

@@ -1952,6 +1952,8 @@
     "searchPlaceholder": "Filter by package name…",
     "runtime": "Runtime dependencies",
     "dev": "Dev dependencies",
+    "statTotal": "Total dependencies",
+    "statLicenses": "License types",
     "colName": "Package",
     "colVersion": "Version",
     "colLicense": "License",

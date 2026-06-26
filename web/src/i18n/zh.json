@@ -1952,6 +1952,8 @@
     "searchPlaceholder": "按包名过滤…",
     "runtime": "运行时依赖",
     "dev": "开发依赖",
+    "statTotal": "依赖总数",
+    "statLicenses": "许可证种类",
     "colName": "包名",
     "colVersion": "版本",
     "colLicense": "许可证",
