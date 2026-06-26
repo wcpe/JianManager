@@ -1,7 +1,7 @@
 import { Fragment, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { ChevronRight, ChevronDown, Zap, Globe, Plus } from 'lucide-react'
+import { ChevronRight, ChevronDown, Zap, Globe, Plus, FolderTree } from 'lucide-react'
 import {
   useInstances,
   useStartInstance,
@@ -26,6 +26,7 @@ import CloneInstanceDialog from '@/components/CloneInstanceDialog'
 import InstanceTagsDialog from '@/components/InstanceTagsDialog'
 import EditInstanceLimitsDialog from '@/components/EditInstanceLimitsDialog'
 import { InstanceWorktableCard } from '@/components/console/InstanceWorktableCard'
+import { InstanceGroupManager } from '@/components/console/InstanceGroupManager'
 import {
   collectEnvs,
   collectTags,
@@ -94,6 +95,9 @@ export default function InstancesPage() {
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   // 工作台卡 ⇄ 列表视图（FR-136，§4.5）；运行实体默认卡片。
   const [view, setView] = useState<ViewMode>('card')
+  // 组织分组视图开关（FR-165，§4.4）：开启后切到「左分组树 + 右列表」专用形态，
+  // 与既有筛选/groupBy 分组并列、互不破坏；关闭回到原平铺/分组视图。
+  const [orgView, setOrgView] = useState(false)
   // proxy 行 inline 展开已注册 backend 的代理 id 集合（FR-136）。
   const [expandedProxies, setExpandedProxies] = useState<Set<number>>(new Set())
 
@@ -455,18 +459,31 @@ export default function InstancesPage() {
               {t('grouping.clearFilters')}
             </Button>
           )}
-          <span className="text-sm text-muted-foreground">{t('grouping.groupBy')}</span>
-          <Select value={groupBy} onValueChange={(v) => setGroupBy(v as GroupDimension)}>
-            <SelectTrigger size="sm" className="w-32">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">{t('grouping.dim_none')}</SelectItem>
-              <SelectItem value="node">{t('grouping.dim_node')}</SelectItem>
-              <SelectItem value="env">{t('grouping.dim_env')}</SelectItem>
-              <SelectItem value="status">{t('grouping.dim_status')}</SelectItem>
-            </SelectContent>
-          </Select>
+          {/* 组织分组视图开关（FR-165，§4.4）：与 groupBy 维度分组并列。 */}
+          <Button
+            variant={orgView ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setOrgView((v) => !v)}
+            aria-pressed={orgView}
+          >
+            <FolderTree className="size-4" /> {t('instanceGroups.orgView')}
+          </Button>
+          {!orgView && (
+            <>
+              <span className="text-sm text-muted-foreground">{t('grouping.groupBy')}</span>
+              <Select value={groupBy} onValueChange={(v) => setGroupBy(v as GroupDimension)}>
+                <SelectTrigger size="sm" className="w-32">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">{t('grouping.dim_none')}</SelectItem>
+                  <SelectItem value="node">{t('grouping.dim_node')}</SelectItem>
+                  <SelectItem value="env">{t('grouping.dim_env')}</SelectItem>
+                  <SelectItem value="status">{t('grouping.dim_status')}</SelectItem>
+                </SelectContent>
+              </Select>
+            </>
+          )}
         </div>
       </div>
 
@@ -499,7 +516,9 @@ export default function InstancesPage() {
         />
       )}
 
-      {isLoading ? (
+      {orgView ? (
+        <InstanceGroupManager />
+      ) : isLoading ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
       ) : (
         <div className="space-y-3">
