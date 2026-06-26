@@ -13,7 +13,8 @@ interface CreateUserDialogProps {
 }
 
 const USERNAME_MIN = 3
-const PASSWORD_MIN = 6
+// 与初始化引导（SetupPage）的密码下限一致，避免同系统两处策略矛盾（BUG-022）。
+const PASSWORD_MIN = 8
 
 export default function CreateUserDialog({ open, onClose }: CreateUserDialogProps) {
   const { t } = useTranslation()
