@@ -78,6 +78,9 @@ file_version:         # 通用文件改前快照（FR-051）
 | `JIANMANAGER_DATABASE_DSN` | database.dsn | data/jianmanager.db |
 | `JIANMANAGER_JWT_SECRET` | jwt.secret | dev-secret-change-me（**必改**） |
 | `JIANMANAGER_DATA_DIR` | 数据根（资产/缓存） | 进程目录下 `data/` |
+| `JIANMANAGER_CLIENT_SIGN_PRIVKEY` | client_dist.sign_priv_key | 空（**`dev_mode: false` 时必设**，否则拒绝启动） |
+
+> **客户端分发（OTA）签名私钥（FR-087，见 ADR-022）**：生产（`dev_mode: false`）必须经 `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 注入独立 Ed25519 私钥（base64 of PKCS#8 DER），**未注入时 Control Plane fail-closed 拒绝启动**——绝不回退到源码中公开的内置开发密钥对外签 manifest（否则可被伪造投毒）。仅 `dev_mode: true`（如 `configs/control-plane.yaml`）才零配置回退开发密钥，供本地开发。生成示例：`openssl genpkey -algorithm ed25519 -outform DER | base64 -w0`，并把对应公钥回填客户端 updater-core 后随基础包分发。
 
 ## 5. 首次启动引导
 

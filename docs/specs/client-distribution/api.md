@@ -187,5 +187,6 @@
 | `GET /client-artifacts/:sha256` | **拉取密钥 `X-Client-Key`**（任一有效密钥，跨频道共享） | 内容寻址下载制品（Range 断点续传、强缓存） |
 
 - 服务层：`ClientVersionService.PublishFile/PublishVersion/BuildManifest/OpenArtifact`；`ClientChannelService.VerifyKey`（绑频道，manifest 用）/`VerifyAnyKey`（不绑频道，制品用）。
-- 签名：`ManifestSigner`（Ed25519，canonical JSON 与客户端 `updater-core` `Json.canonical` 逐位对齐；HTTP 响应 JSON 与签名 canonical 同源）。私钥经 `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 注入、生产替换内置开发密钥。
+- 签名：`ManifestSigner`（Ed25519，canonical JSON 与客户端 `updater-core` `Json.canonical` 逐位对齐；HTTP 响应 JSON 与签名 canonical 同源）。私钥经 `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 注入。
+- **签名密钥 fail-closed（ADR-022 实施补充，2026-06-27）**：私钥来源由 `service.ResolveManifestSigner(privKey, keyID, devMode)` 裁决——生产态（`dev_mode=false`）**未注入**、或显式注入**源码公开的内置开发密钥**（按解出公钥识别），CP **拒绝启动**，绝不静默用开发密钥对外签名；仅 `dev_mode=true` 零配置回退内置开发密钥。**验收**：`dev_mode=false` + 无 `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 时进程拒绝启动（发布与 `GET .../manifest` 均无可用签名器，因 manifest 在响应时实时签名）；单测 `TestResolveManifestSigner_*` 覆盖「缺私钥拒绝 / 注入开发密钥拒绝 / 生产真私钥放行 / 开发回退」。
 - 发布写审计：`client_file.publish` / `client_version.publish`。

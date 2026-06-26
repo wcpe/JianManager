@@ -2,6 +2,7 @@ package service
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
@@ -183,6 +184,86 @@ func TestNewManifestSigner_Errors(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidSignKey)
 
 	_, err = NewManifestSigner(base64.StdEncoding.EncodeToString([]byte("garbage")), "k1")
+	require.ErrorIs(t, err, ErrInvalidSignKey)
+}
+
+// freshProdSignKeyB64 生成一对全新 Ed25519 私钥并编码为 base64(PKCS#8 DER)，
+// 模拟生产经 env 注入的独立签名私钥（其公钥不等于内置开发公钥）。
+func freshProdSignKeyB64(t *testing.T) string {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	require.NoError(t, err)
+	return base64.StdEncoding.EncodeToString(der)
+}
+
+// TestResolveManifestSigner_ProdMissingKeyRejected 锁定 fail-closed 核心（FR-087，见 ADR-022）：
+// 生产态（devMode=false）未注入签名私钥时必须拒绝，绝不静默回退到源码公开的内置开发密钥
+// （否则攻击者可用人人可得的开发私钥伪造玩家客户端信任的 OTA manifest）。
+func TestResolveManifestSigner_ProdMissingKeyRejected(t *testing.T) {
+	signer, usedDev, err := ResolveManifestSigner("", "k1", false)
+	require.ErrorIs(t, err, ErrSignKeyRequiredInProd)
+	require.Nil(t, signer)
+	require.False(t, usedDev)
+
+	// 仅空白同样视为未配置（与 NewManifestSigner 的 TrimSpace 语义一致）。
+	_, _, err = ResolveManifestSigner("   ", "", false)
+	require.ErrorIs(t, err, ErrSignKeyRequiredInProd)
+}
+
+// TestResolveManifestSigner_ProdDevKeyInjectedRejected 生产态即便运维把源码里的公开开发私钥
+// 显式贴进 env，也属同一投毒面，必须拒绝（按解出的公钥识别，而非字符串比对，防再编码绕过）。
+func TestResolveManifestSigner_ProdDevKeyInjectedRejected(t *testing.T) {
+	signer, usedDev, err := ResolveManifestSigner(DevSignPrivateKeyPKCS8Base64, DefaultSignKeyID, false)
+	require.ErrorIs(t, err, ErrDevSignKeyInProd)
+	require.Nil(t, signer)
+	require.False(t, usedDev)
+}
+
+// TestResolveManifestSigner_ProdRealKeyAccepted 生产态注入独立私钥正常放行、不回退、不告警。
+func TestResolveManifestSigner_ProdRealKeyAccepted(t *testing.T) {
+	prod := freshProdSignKeyB64(t)
+	signer, usedDev, err := ResolveManifestSigner(prod, "k1", false)
+	require.NoError(t, err)
+	require.NotNil(t, signer)
+	require.False(t, usedDev)
+	require.Equal(t, "k1", signer.KeyID())
+
+	// 放行的私钥其公钥不应等于内置开发公钥（确属独立密钥）。
+	pub, err := signer.PublicKeySPKIBase64()
+	require.NoError(t, err)
+	require.NotEqual(t, DevSignPublicKeySPKIBase64, pub)
+}
+
+// TestResolveManifestSigner_DevFallback 开发态（devMode=true）维持零配置回退内置开发密钥，
+// 并标记 usedDevFallback 供上层打告警；回退签名器须可被内置公钥验证（端到端不破）。
+func TestResolveManifestSigner_DevFallback(t *testing.T) {
+	signer, usedDev, err := ResolveManifestSigner("", "", true)
+	require.NoError(t, err)
+	require.NotNil(t, signer)
+	require.True(t, usedDev)
+	require.Equal(t, DefaultSignKeyID, signer.KeyID())
+
+	exported, err := signer.PublicKeySPKIBase64()
+	require.NoError(t, err)
+	require.Equal(t, DevSignPublicKeySPKIBase64, exported)
+}
+
+// TestResolveManifestSigner_DevKeyExplicitAllowedInDev 开发态显式注入开发密钥允许，
+// 且非回退路径（usedDevFallback=false，不触发「使用内置开发密钥」告警）。
+func TestResolveManifestSigner_DevKeyExplicitAllowedInDev(t *testing.T) {
+	signer, usedDev, err := ResolveManifestSigner(DevSignPrivateKeyPKCS8Base64, DefaultSignKeyID, true)
+	require.NoError(t, err)
+	require.NotNil(t, signer)
+	require.False(t, usedDev)
+}
+
+// TestResolveManifestSigner_InvalidKeyPropagates 注入的私钥非法时透传解析错误，不静默回退到开发密钥。
+func TestResolveManifestSigner_InvalidKeyPropagates(t *testing.T) {
+	_, _, err := ResolveManifestSigner("not-base64-!!!", "k1", false)
+	require.ErrorIs(t, err, ErrInvalidSignKey)
+	_, _, err = ResolveManifestSigner("not-base64-!!!", "k1", true)
 	require.ErrorIs(t, err, ErrInvalidSignKey)
 }
 

@@ -111,18 +111,16 @@ func main() {
 	// 客户端分发频道与拉取密钥（FR-086，见 ADR-022）：密钥落库只存哈希、明文一次性返回。
 	clientChannelSvc := service.NewClientChannelService(db)
 	// 客户端分发版本与签名 manifest（FR-087，见 ADR-022、contract §2/§3）。
-	// 签名私钥：优先 env 注入的生产私钥（config.client_dist.sign_priv_key ← JIANMANAGER_CLIENT_SIGN_PRIVKEY）；
-	// 未配置则回退内置开发密钥（仅零配置开发，公钥已回填客户端 updater-core）。
-	clientSignPriv := cfg.ClientDist.SignPrivKey
-	clientSignKeyID := cfg.ClientDist.SignKeyID
-	if clientSignPriv == "" {
-		clientSignPriv = service.DevSignPrivateKeyPKCS8Base64
-		clientSignKeyID = service.DefaultSignKeyID
-		slog.Warn("客户端分发签名使用内置开发密钥，生产务必经 JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入独立私钥")
-	}
-	clientSigner, err := service.NewManifestSigner(clientSignPriv, clientSignKeyID)
+	// 签名私钥经 env 注入的生产私钥（config.client_dist.sign_priv_key ← JIANMANAGER_CLIENT_SIGN_PRIVKEY）。
+	// fail-closed：生产态（dev_mode=false）未注入即拒绝启动，绝不回退源码公开的内置开发密钥对外签
+	// OTA manifest（否则攻击者可用人人可得的开发私钥伪造玩家客户端信任的 OTA 包，供应链/RCE）；
+	// 仅 dev_mode=true 维持零配置回退内置开发密钥（公钥已回填客户端 updater-core）。
+	clientSigner, usedDevSignKey, err := service.ResolveManifestSigner(cfg.ClientDist.SignPrivKey, cfg.ClientDist.SignKeyID, cfg.Server.DevMode)
 	if err != nil {
 		log.Fatalf("初始化客户端分发签名器失败: %v", err)
+	}
+	if usedDevSignKey {
+		slog.Warn("客户端分发签名使用内置开发密钥（仅 dev_mode 生效），生产务必经 JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入独立私钥")
 	}
 	clientVersionSvc := service.NewClientVersionService(db, assetSvc, clientChannelSvc, clientSigner)
 	// 客户端机器码登记（FR-092）：manifest 拉取时 best-effort upsert，弱一致、不阻断。

@@ -89,7 +89,8 @@ type EnrollConfig struct {
 type ClientDistConfig struct {
 	// SignPrivKey 客户端 manifest 签名私钥（base64 of PKCS#8 DER, Ed25519）。
 	// 敏感信息：生产须经环境变量 JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入、不入库（config-files 规范）。
-	// 默认为内置开发密钥（service.DevSignPrivateKeyPKCS8Base64），仅供零配置开发，生产务必替换。
+	// 生产态（dev_mode=false）未注入即 fail-closed 拒绝启动；仅 dev_mode=true 回退内置开发密钥
+	// （service.DevSignPrivateKeyPKCS8Base64，零配置开发用），裁决见 service.ResolveManifestSigner。
 	SignPrivKey string `mapstructure:"sign_priv_key"`
 	// SignKeyID 签名公钥版本标识（轮换用，默认 k1，须与客户端内置公钥 keyId 一致）。
 	SignKeyID string `mapstructure:"sign_key_id"`

@@ -6,6 +6,9 @@
 
 ## [Unreleased]
 
+### 安全
+- **客户端分发 manifest 签名 fail-closed（FR-087，见 ADR-022 实施补充）**：修复 OTA 签名的生产态 **fail-open** 缺口。此前 Control Plane 在 `dev_mode=false` 且未注入 `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 时，静默回退到**源码中公开**的内置开发 Ed25519 私钥继续对外签客户端 OTA manifest（仅打一条 `slog.Warn`）——等于把信任根私钥公开，攻击者可用人人可得的开发私钥伪造玩家客户端信任的 OTA 包（供应链 / RCE），唯一拦阻是运维有没有看到那行告警。改为 **fail-closed**：新增 `service.ResolveManifestSigner(privKey, keyID, devMode)` 裁决密钥来源——生产态未注入私钥（`ErrSignKeyRequiredInProd`），或把源码公开的开发私钥**显式贴进 env**（按解出公钥识别，`ErrDevSignKeyInProd`），CP 一律**拒绝启动**；仅 `dev_mode=true` 维持零配置回退内置开发密钥（公钥已回填客户端 updater-core）。补单测 `TestResolveManifestSigner_*` 覆盖「缺私钥拒绝 / 注入开发密钥拒绝 / 生产真私钥放行 / 开发回退 / 非法私钥透传」。同步 ADR-022 实施补充、`client-distribution/api.md` 与 `docs/API.md` 验收、`configs/control-plane.yaml` 与 `docs/DEPLOY.md` 注入说明。
+
 ## 0.10.0（2026-06-27）
 
 ### 新增

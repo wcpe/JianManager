@@ -52,3 +52,15 @@
 - **复用运营者浏览器 JWT 鉴权** — 玩家无账号、规模与暴露面不同、语义不符，否决。
 - **mTLS 客户端证书认证 updater** — 证书同样随整包分发会泄露、且对玩家侧过重，否决。
 - **传输层（HTTPS）即信任** — HTTPS 防不了源端 / CDN 被投毒、也防不了 key 泄露后的滥用，必须有应用层签名，否决「仅靠 HTTPS」。
+
+## 实施补充（2026-06-27，签名密钥 fail-closed 强化）
+
+决策 2/8 的安全前提是「私钥服务端持有、env 注入、不公开、不随分发」。FR-087 初版实现存在 **fail-open** 缺口：生产态（`dev_mode=false`）未注入 `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 时，CP 静默回退到**源码中公开**的内置开发私钥继续对外签 manifest，仅打一条 `slog.Warn`。这等于把信任根私钥公开——攻击者可用人人可得的开发私钥伪造玩家客户端信任的 OTA manifest（供应链 / RCE），直接击穿决策 2 的信任根。
+
+据本 ADR 的信任模型把密钥来源裁决改为 **fail-closed**（`service.ResolveManifestSigner(privKey, keyID, devMode)`）：
+
+- `dev_mode=false`（生产）未注入私钥 → **拒绝启动**（`ErrSignKeyRequiredInProd`），绝不回退内置开发密钥；
+- `dev_mode=false` 即便把源码公开的内置开发密钥**显式贴进 env**（运维误用），也按**解出的公钥**识别并**拒绝启动**（`ErrDevSignKeyInProd`，非字符串比对，防再编码绕过）；
+- `dev_mode=true` 维持零配置回退内置开发密钥（公钥已回填 updater-core），仅供开发。
+
+本补充**不改变也不取代**本 ADR 的任何决策，仅落实其既有安全前提、堵住实现层的 fail-open；故无新增 / superseded ADR。覆盖测试见 `internal/controlplane/service/client_manifest_test.go` 的 `TestResolveManifestSigner_*`。
