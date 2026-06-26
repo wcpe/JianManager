@@ -23,12 +23,15 @@ export function StatusBadge({
   level,
   label,
   dot = true,
+  pulse = false,
   className,
 }: {
   level: StatusLevel
   label: string
   /** 是否显示前导色点，默认显示。 */
   dot?: boolean
+  /** 过渡态（启动中/停止中）色点脉冲动画，提示「进行中」（FR-138）。 */
+  pulse?: boolean
   className?: string
 }) {
   return (
@@ -40,7 +43,7 @@ export function StatusBadge({
         className,
       )}
     >
-      {dot && <span className={cn('size-1.5 shrink-0 rounded-full', DOT_CLASS[level])} />}
+      {dot && <span className={cn('size-1.5 shrink-0 rounded-full', DOT_CLASS[level], pulse && 'animate-pulse')} />}
       {label}
     </span>
   )

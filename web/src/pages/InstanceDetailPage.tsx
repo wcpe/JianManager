@@ -53,6 +53,8 @@ export default function InstanceDetailPage() {
   const stopMut = useStopInstance()
   const restartMut = useRestartInstance()
   const killMut = useKillInstance()
+  // 强杀经二次确认，与实例列表一致（FR-059 / FR-138 详情页操作对齐）。
+  const [showKill, setShowKill] = useState(false)
 
   if (isLoading) {
     return <p className="text-muted-foreground">{t('common.loading')}</p>
@@ -115,7 +117,7 @@ export default function InstanceDetailPage() {
           {(instance.status === 'STARTING' || instance.status === 'STOPPING') && (
             <Button
               variant="outline"
-              onClick={() => killMut.mutate(instanceId)}
+              onClick={() => setShowKill(true)}
               disabled={killMut.isPending}
               className="text-yellow-600 border-yellow-200 hover:bg-yellow-50 hover:text-yellow-700"
             >
@@ -124,6 +126,16 @@ export default function InstanceDetailPage() {
           )}
         </div>
       </div>
+
+      <DangerConfirm
+        open={showKill}
+        title={t('danger.killInstanceTitle', { name: instance.name })}
+        description={t('danger.killInstanceDesc')}
+        confirmLabel={t('instances.kill')}
+        scope="group"
+        onConfirm={() => { killMut.mutate(instanceId); setShowKill(false) }}
+        onCancel={() => setShowKill(false)}
+      />
 
       <Tabs defaultValue="terminal">
         <TabsList variant="line">

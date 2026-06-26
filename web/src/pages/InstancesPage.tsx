@@ -9,6 +9,7 @@ import {
   useDeleteInstance,
   useKillInstance,
   type InstanceListParams,
+  type InstanceInfo,
 } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useNetworks } from '@/api/networks'
@@ -36,6 +37,13 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import { instanceStatusLevel } from '@/lib/threshold'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu'
 import {
   Select,
   SelectContent,
@@ -127,6 +135,14 @@ export default function InstancesPage() {
   const allSelected = allIds.length > 0 && allIds.every((id) => selectedIds.includes(id))
   const toggleAll = () => setSelectedIds(allSelected ? [] : allIds)
   const clearSelection = () => setSelectedIds([])
+  // 选中实例的 {id,name,status}，供批量栏做状态感知禁用与部分失败明细（FR-139）。
+  const selectedInstances = useMemo(
+    () =>
+      (allInstances ?? instances ?? [])
+        .filter((i) => selectedIds.includes(i.id))
+        .map((i) => ({ id: i.id, name: i.name, status: i.status })),
+    [allInstances, instances, selectedIds],
+  )
 
   const envOptions = useMemo(() => collectEnvs(allInstances ?? []), [allInstances])
   const tagOptions = useMemo(() => collectTags(allInstances ?? []), [allInstances])
@@ -208,63 +224,25 @@ export default function InstancesPage() {
           </div>
         </TableCell>
         <TableCell>
-          <StatusBadge level={instanceStatusLevel(inst.status)} label={st.text} />
+          <StatusBadge
+            level={instanceStatusLevel(inst.status)}
+            label={st.text}
+            pulse={inst.status === 'STARTING' || inst.status === 'STOPPING'}
+          />
         </TableCell>
         <TableCell>
-          <div className="flex gap-1">
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={() => setTagsTarget({ id: inst.id, name: inst.name, tags: parseTags(inst.tags) })}
-              className="text-muted-foreground hover:text-foreground"
-            >
-              {t('grouping.editTags')}
-            </Button>
-            {inst.processType === 'docker' && (
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => setLimitsTarget({
-                  id: inst.id,
-                  name: inst.name,
-                  processType: inst.processType,
-                  cpuLimit: inst.cpuLimit ?? 0,
-                  memLimitMb: inst.memLimitMb ?? 0,
-                  diskLimitMb: inst.diskLimitMb ?? 0,
-                })}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                {t('instances.resourceLimit')}
-              </Button>
-            )}
-            {inst.role === 'proxy' && (
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => setManageProxy({ id: inst.id, name: inst.name })}
-                className="text-indigo-600 hover:text-indigo-700"
-              >
-                {t('proxy.manageBackends')}
-              </Button>
-            )}
-            {inst.role === 'backend' && (inst.status === 'STOPPED' || inst.status === 'CRASHED') && (
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => setCloneTarget({ id: inst.id, name: inst.name })}
-                className="text-indigo-600 hover:text-indigo-700"
-              >
-                {t('clone.action')}
-              </Button>
-            )}
+          <div className="flex items-center gap-1">
+            {/* 主操作随状态，操作进行中禁用防连点（FR-138） */}
             {(inst.status === 'STOPPED' || inst.status === 'CRASHED') && (
               <Button
                 variant="ghost"
                 size="xs"
+                disabled={start.isPending && start.variables === inst.id}
                 onClick={() => start.mutate(inst.id)}
+                aria-label={t('instances.start')}
                 className="text-green-600 hover:text-green-700"
               >
-                {t('instances.start')}
+                {start.isPending && start.variables === inst.id ? t('instances.processing') : t('instances.start')}
               </Button>
             )}
             {inst.status === 'RUNNING' && (
@@ -272,18 +250,22 @@ export default function InstancesPage() {
                 <Button
                   variant="ghost"
                   size="xs"
+                  disabled={stop.isPending && stop.variables === inst.id}
                   onClick={() => stop.mutate(inst.id)}
+                  aria-label={t('instances.stop')}
                   className="text-yellow-600 hover:text-yellow-700"
                 >
-                  {t('instances.stop')}
+                  {stop.isPending && stop.variables === inst.id ? t('instances.processing') : t('instances.stop')}
                 </Button>
                 <Button
                   variant="ghost"
                   size="xs"
+                  disabled={restart.isPending && restart.variables === inst.id}
                   onClick={() => restart.mutate(inst.id)}
+                  aria-label={t('instances.restart')}
                   className="text-blue-600 hover:text-blue-700"
                 >
-                  {t('instances.restart')}
+                  {restart.isPending && restart.variables === inst.id ? t('instances.processing') : t('instances.restart')}
                 </Button>
               </>
             )}
@@ -292,21 +274,27 @@ export default function InstancesPage() {
                 variant="ghost"
                 size="xs"
                 onClick={() => setKillTarget({ id: inst.id, name: inst.name })}
+                aria-label={t('instances.kill')}
                 className="text-yellow-600 hover:text-yellow-700"
               >
                 {t('instances.kill')}
               </Button>
             )}
-            {(inst.status === 'STOPPED' || inst.status === 'CRASHED') && (
-              <Button
-                variant="ghost"
-                size="xs"
-                onClick={() => setDeleteTarget({ id: inst.id, name: inst.name })}
-                className="text-red-600 hover:text-red-700"
-              >
-                {t('common.delete')}
-              </Button>
-            )}
+            <InstanceRowMenu
+              inst={inst}
+              onTags={() => setTagsTarget({ id: inst.id, name: inst.name, tags: parseTags(inst.tags) })}
+              onLimits={() => setLimitsTarget({
+                id: inst.id,
+                name: inst.name,
+                processType: inst.processType,
+                cpuLimit: inst.cpuLimit ?? 0,
+                memLimitMb: inst.memLimitMb ?? 0,
+                diskLimitMb: inst.diskLimitMb ?? 0,
+              })}
+              onProxy={() => setManageProxy({ id: inst.id, name: inst.name })}
+              onClone={() => setCloneTarget({ id: inst.id, name: inst.name })}
+              onDelete={() => setDeleteTarget({ id: inst.id, name: inst.name })}
+            />
           </div>
         </TableCell>
       </TableRow>
@@ -412,7 +400,7 @@ export default function InstancesPage() {
       ) : (
         <div className="space-y-3">
           {selectedIds.length > 0 && (
-            <InstanceBatchBar selectedIds={selectedIds} onClear={clearSelection} />
+            <InstanceBatchBar selected={selectedInstances} onClear={clearSelection} onRetainFailed={setSelectedIds} />
           )}
           {groupBy === 'none' ? (
             <div className="border rounded-lg">
@@ -539,5 +527,78 @@ function FilterSelect({
         ))}
       </SelectContent>
     </Select>
+  )
+}
+
+/**
+ * 实例行的「⋯」次要操作菜单（FR-138）：标签 / 资源限额 / 代理后端 / 克隆 / 删除收入下拉，
+ * 行内只保留启停/重启主操作。运行态下克隆/删除改禁用 + tooltip（非消失），删除标红。
+ */
+function InstanceRowMenu({
+  inst,
+  onTags,
+  onLimits,
+  onProxy,
+  onClone,
+  onDelete,
+}: {
+  inst: InstanceInfo
+  onTags: () => void
+  onLimits: () => void
+  onProxy: () => void
+  onClone: () => void
+  onDelete: () => void
+}) {
+  const { t } = useTranslation()
+  // 克隆/删除要求实例已停止（运行/过渡态禁用并提示原因，而非隐藏）。
+  const stopped = inst.status === 'STOPPED' || inst.status === 'CRASHED'
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="xs" aria-label={t('instances.moreActions')} className="px-1.5">
+          ⋯
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={onTags}>{t('grouping.editTags')}</DropdownMenuItem>
+        {inst.processType === 'docker' && (
+          <DropdownMenuItem onSelect={onLimits}>{t('instances.resourceLimit')}</DropdownMenuItem>
+        )}
+        {inst.role === 'proxy' && (
+          <DropdownMenuItem onSelect={onProxy}>{t('proxy.manageBackends')}</DropdownMenuItem>
+        )}
+        {inst.role === 'backend' && (
+          <DropdownMenuItem
+            title={stopped ? undefined : t('instances.cloneRunningHint')}
+            className={stopped ? undefined : 'opacity-50 cursor-not-allowed'}
+            onSelect={(e) => {
+              if (!stopped) {
+                e.preventDefault()
+                return
+              }
+              onClone()
+            }}
+          >
+            {t('clone.action')}
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          variant="destructive"
+          title={stopped ? undefined : t('instances.deleteRunningHint')}
+          className={stopped ? undefined : 'opacity-50 cursor-not-allowed'}
+          onSelect={(e) => {
+            if (!stopped) {
+              e.preventDefault()
+              return
+            }
+            onDelete()
+          }}
+        >
+          {t('common.delete')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
