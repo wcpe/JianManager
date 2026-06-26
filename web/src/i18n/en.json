@@ -1376,6 +1376,7 @@
   "templates": {
     "title": "Server Templates",
     "subtitle": "Reusable templates for creating instances; deleting a template does not affect instances already created from it",
+    "marketSubtitle": "App market: pick a server and deploy it as an instance in one click; deleting a template does not affect existing instances",
     "empty": "No templates",
     "downloadLink": "Download Link",
     "startCommand": "Start Command",
@@ -1399,7 +1400,28 @@
     "deleteConfirm": "Delete template \"{{name}}\"?",
     "deleteDescription": "This only removes the template. Instances already created from it are not affected.",
     "deleted": "Template deleted",
-    "deleteFailed": "Failed to delete template"
+    "deleteFailed": "Failed to delete template",
+    "market": {
+      "totalApps": "Total Apps",
+      "typeCount": "Server Types",
+      "oneClickDeploy": "One-Click Deploy",
+      "oneClickDeployHint": "Pick a template to create",
+      "search": "Search servers",
+      "noMatch": "No matching servers",
+      "deploy": "Deploy",
+      "deployTitle": "Deploy \"{{name}}\"",
+      "ramShort": "RAM {{value}}",
+      "variablesTitle": "Fill Variables",
+      "variablesHint": "This template has placeholders; values are substituted into the start command",
+      "variableRequired": "This variable is required",
+      "variablesSyntaxHint": "Use placeholder variables (name in double braces, e.g. -Xmx<ram>G), filled at deploy time",
+      "expand": "Expand",
+      "collapse": "Collapse",
+      "copy": "Copy start command",
+      "copied": "Start command copied",
+      "copyFailed": "Copy failed",
+      "created": "Instance \"{{name}}\" created"
+    }
   },
   "runtimeAssets": {
     "title": "Runtime & Assets",

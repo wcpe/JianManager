@@ -1376,6 +1376,7 @@
   "templates": {
     "title": "服务端模板",
     "subtitle": "用于创建实例的可复用模板；删除模板不影响已用其创建的实例",
+    "marketSubtitle": "应用市场：挑一个服务端，一键部署成实例；删除模板不影响已创建的实例",
     "empty": "暂无模板",
     "downloadLink": "下载链接",
     "startCommand": "启动命令",
@@ -1399,7 +1400,28 @@
     "deleteConfirm": "删除模板「{{name}}」？",
     "deleteDescription": "仅删除模板本身，已用其创建的实例不受影响。",
     "deleted": "模板已删除",
-    "deleteFailed": "删除模板失败"
+    "deleteFailed": "删除模板失败",
+    "market": {
+      "totalApps": "应用总数",
+      "typeCount": "服务端类型",
+      "oneClickDeploy": "一键开服",
+      "oneClickDeployHint": "选模板即建实例",
+      "search": "搜索服务端",
+      "noMatch": "没有匹配的服务端",
+      "deploy": "一键部署",
+      "deployTitle": "部署「{{name}}」",
+      "ramShort": "RAM {{value}}",
+      "variablesTitle": "变量填充",
+      "variablesHint": "模板含占位变量，填好后将代入启动命令",
+      "variableRequired": "请填写该变量",
+      "variablesSyntaxHint": "可用占位变量（双花括号包名，如 -Xmx<ram>G），部署时填充",
+      "expand": "展开",
+      "collapse": "收起",
+      "copy": "复制启动命令",
+      "copied": "已复制启动命令",
+      "copyFailed": "复制失败",
+      "created": "实例「{{name}}」已创建"
+    }
   },
   "runtimeAssets": {
     "title": "运行时与制品",
