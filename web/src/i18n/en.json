@@ -1748,6 +1748,11 @@
     "dark": "Dark",
     "system": "System"
   },
+  "colorTheme": {
+    "label": "Theme color",
+    "indigo": "Indigo",
+    "teal": "Teal"
+  },
   "language": {
     "zh": "中文",
     "en": "English"

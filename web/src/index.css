@@ -131,6 +131,31 @@
   --chart-5: oklch(0.66 0.2 25);
 }
 
+/* 第二主题 · 青绿 #14B8A6（FR-164）：与明暗正交，仅覆盖品牌变量组
+   （--primary/--primary-foreground/--accent/--accent-foreground/--ring/--brand-shadow/--chart-1）。
+   结构色（背景/卡片/边框）与状态色（--status-*）不动；靛蓝为默认（无 data-theme 即承 :root/.dark）。
+   选择器特异性 [data-theme="teal"] 等于单类，与 :root 同级但因书写在后而胜出；
+   暗色用 [data-theme="teal"].dark 叠加，特异性高于 .dark 单类，正交生效。 */
+[data-theme="teal"] {
+  --primary: oklch(0.704 0.123 183);
+  --primary-foreground: oklch(0.985 0.012 183);
+  --accent: oklch(0.955 0.028 183);
+  --accent-foreground: oklch(0.62 0.11 183);
+  --ring: oklch(0.704 0.123 183);
+  --brand-shadow: 20 184 166;
+  --chart-1: oklch(0.704 0.123 183);
+}
+
+[data-theme="teal"].dark {
+  --primary: oklch(0.76 0.12 183);
+  --primary-foreground: oklch(0.2 0.04 183);
+  --accent: oklch(0.33 0.06 183);
+  --accent-foreground: oklch(0.85 0.09 183);
+  --ring: oklch(0.76 0.12 183);
+  --brand-shadow: 45 212 191;
+  --chart-1: oklch(0.76 0.12 183);
+}
+
 /* 呼吸灯（FR-163）：运行对象脉动光环。环色取 currentColor，套用方设 text-* 即定色。 */
 @keyframes breathing {
   0% {

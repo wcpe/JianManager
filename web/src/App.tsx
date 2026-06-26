@@ -3,6 +3,7 @@ import { Suspense, lazy, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Toaster } from 'sonner'
 import { useAuthStore } from '@/stores/auth'
+import { useThemeStore } from '@/stores/theme'
 
 const LoginPage = lazy(() => import('./pages/LoginPage'))
 const SetupPage = lazy(() => import('./pages/SetupPage'))
@@ -19,11 +20,15 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 
 function App() {
   const loadFromStorage = useAuthStore((s) => s.loadFromStorage)
+  const loadTheme = useThemeStore((s) => s.loadFromStorage)
   const { t } = useTranslation()
 
   useEffect(() => {
     loadFromStorage()
-  }, [loadFromStorage])
+    // 主题 DOM 已由入口 initThemeFromStorage 套好；此处回填 store 状态 + 注册系统主题监听
+    // （覆盖登录页：监听不依赖 console shell 挂载）。
+    loadTheme()
+  }, [loadFromStorage, loadTheme])
 
   return (
     <>

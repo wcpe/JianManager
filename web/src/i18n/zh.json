@@ -1748,6 +1748,11 @@
     "dark": "深色",
     "system": "跟随系统"
   },
+  "colorTheme": {
+    "label": "主题色",
+    "indigo": "靛蓝",
+    "teal": "青绿"
+  },
   "language": {
     "zh": "中文",
     "en": "English"
