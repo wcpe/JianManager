@@ -360,6 +360,48 @@
     "unlimited": "不限制",
     "overLimit": "已超限"
   },
+  "monitor": {
+    "title": "监控",
+    "target": "对象",
+    "platform": "平台（集群）",
+    "nodes": "节点",
+    "instances": "实例",
+    "hint": "拖动图表底部的选择条可缩放该图时间窗；悬停查看该时刻各序列值。数据随轮询实时前移。",
+    "hoverHint": "悬停查看该时刻各指标值",
+    "chart": {
+      "resource": "资源使用率",
+      "load": "负载",
+      "cpu": "CPU",
+      "memory": "内存",
+      "disk": "磁盘",
+      "network": "网络 IO",
+      "tps": "TPS",
+      "mspt": "MSPT",
+      "heap": "堆内存",
+      "threads": "线程",
+      "players": "在线玩家",
+      "chunks": "分世界加载区块"
+    },
+    "metric": {
+      "cpu": "CPU",
+      "mem": "内存",
+      "disk": "磁盘",
+      "load1": "1 分钟",
+      "memUsed": "已用",
+      "memTotal": "总量",
+      "diskUsed": "已用",
+      "diskTotal": "总量",
+      "netRx": "下行",
+      "netTx": "上行",
+      "tps": "TPS",
+      "mspt": "MSPT",
+      "heapUsed": "已用",
+      "heapMax": "上限",
+      "threads": "线程",
+      "players": "在线玩家",
+      "chunks": "加载区块"
+    }
+  },
   "probe": {
     "title": "ServerProbe 探针更新",
     "connected": "探针已连接",

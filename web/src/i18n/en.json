@@ -383,6 +383,48 @@
     "unlimited": "Unlimited",
     "overLimit": "Over limit"
   },
+  "monitor": {
+    "title": "Monitoring",
+    "target": "Target",
+    "platform": "Platform (cluster)",
+    "nodes": "Nodes",
+    "instances": "Instances",
+    "hint": "Drag the selector at the bottom of a chart to zoom its time window; hover to read each series at that moment. Data advances in real time via polling.",
+    "hoverHint": "Hover to read each metric at that moment",
+    "chart": {
+      "resource": "Resource usage",
+      "load": "Load",
+      "cpu": "CPU",
+      "memory": "Memory",
+      "disk": "Disk",
+      "network": "Network IO",
+      "tps": "TPS",
+      "mspt": "MSPT",
+      "heap": "Heap",
+      "threads": "Threads",
+      "players": "Online players",
+      "chunks": "Loaded chunks by world"
+    },
+    "metric": {
+      "cpu": "CPU",
+      "mem": "Memory",
+      "disk": "Disk",
+      "load1": "1 min",
+      "memUsed": "Used",
+      "memTotal": "Total",
+      "diskUsed": "Used",
+      "diskTotal": "Total",
+      "netRx": "Rx",
+      "netTx": "Tx",
+      "tps": "TPS",
+      "mspt": "MSPT",
+      "heapUsed": "Used",
+      "heapMax": "Max",
+      "threads": "Threads",
+      "players": "Online players",
+      "chunks": "Loaded chunks"
+    }
+  },
   "probe": {
     "title": "ServerProbe Update",
     "connected": "Probe connected",
