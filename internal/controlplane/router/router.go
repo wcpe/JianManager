@@ -17,6 +17,7 @@ type Services struct {
 	Node               *service.NodeService
 	Instance           *service.InstanceService
 	InstanceBatch      *service.InstanceBatchService
+	InstanceGroup      *service.InstanceGroupService
 	JDK                *service.JDKService
 	DockerImage        *service.DockerImageService
 	Terminal           *service.TerminalService
@@ -130,6 +131,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 实例批量操作（FR-058）：独立 handler，挂 /instances/batch（与单实例路由共存）。
 		instanceBatchHandler := NewInstanceBatchHandler(svcs.InstanceBatch, svcs.Authz)
 		instanceBatchHandler.RegisterRoutes(protected)
+
+		// 实例组织分组树（FR-165，见 ADR-XXXX）：多级嵌套文件夹式归类 + 实例 M:N，
+		// 正交于用户组 / 网络群组；读 instance:read、写 instance:write，挂 /instance-groups。
+		if svcs.InstanceGroup != nil {
+			instanceGroupHandler := NewInstanceGroupHandler(svcs.InstanceGroup, svcs.Authz)
+			instanceGroupHandler.RegisterRoutes(protected)
+		}
 
 		// 探针在线更新（FR-068）：单实例 + 批量推送内嵌探针 jar，下次重启生效。instance:operate。
 		if svcs.ProbeUpdate != nil {
