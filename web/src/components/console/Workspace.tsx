@@ -30,11 +30,13 @@ const DatabasePage = lazy(() => import('@/pages/DatabasePage'))
 const SystemUpdatePage = lazy(() => import('@/pages/SystemUpdatePage'))
 const LicensesPage = lazy(() => import('@/pages/LicensesPage'))
 const SuperWorkbenchPage = lazy(() => import('./SuperWorkbenchPage'))
+const DirectorConsolePage = lazy(() => import('./DirectorConsolePage'))
 /**
  * 运维控制台右侧工作区（ADR-009 / FR-037 / FR-039 / FR-166 / FR-167）。
  * 打开实例时渲染可组合卡片画布 {@link WorkspaceCanvas}（卡片=实例×功能，可拖拽/调大小/存预设）；
  * 否则按路由渲染对应页面，既有页面不变。同一时刻仅一个实例画布，切换实例即换 instanceId。
  * 跨实例超级工作台（FR-167）走 `/super`，全幅渲染（自带左侧实例库 + 画布，无统一内边距）。
+ * 工作区导播台（FR-168）走 `/director`，同为全幅（场景舞台 + 缩略图条，多预设预热瞬切）。
  */
 export default function Workspace() {
   const { t } = useTranslation()
@@ -61,6 +63,15 @@ export default function Workspace() {
     return (
       <Suspense fallback={<div className="p-6 text-muted-foreground">{t('common.loading')}</div>}>
         <SuperWorkbenchPage />
+      </Suspense>
+    )
+  }
+
+  // 导播台全幅（场景舞台 + 缩略图条），不套统一内边距与滚动壳。
+  if (location.pathname === '/director' || location.pathname.startsWith('/director/')) {
+    return (
+      <Suspense fallback={<div className="p-6 text-muted-foreground">{t('common.loading')}</div>}>
+        <DirectorConsolePage />
       </Suspense>
     )
   }

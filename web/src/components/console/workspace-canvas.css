@@ -53,3 +53,13 @@
 .react-grid-item.react-draggable-dragging * {
   user-select: none;
 }
+
+/*
+ * 导播台非激活场景（FR-168 / ADR-035）：保活但暂停渲染。
+ * content-visibility:hidden（由组件内联设置）已让浏览器跳过子树布局/绘制；
+ * 这里给一个稳定的固有尺寸，避免隐藏时塌缩成 0 触发邻接重排。
+ */
+.director-scene-idle {
+  contain-intrinsic-size: auto 600px;
+}
+

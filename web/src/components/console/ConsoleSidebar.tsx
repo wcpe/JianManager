@@ -10,6 +10,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Clapperboard,
   Clock,
   Database,
   DownloadCloud,
@@ -91,6 +92,8 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/networks', labelKey: 'nav.networks', icon: Network },
       // 跨实例超级工作台（FR-167 / design §9）：集群域独立入口。
       { to: '/super', labelKey: 'nav.superWorkbench', icon: LayoutGrid },
+      // 工作区导播台（FR-168 / design §9）：多场景预热瞬切，集群域独立入口。
+      { to: '/director', labelKey: 'nav.director', icon: Clapperboard },
     ],
   },
   {

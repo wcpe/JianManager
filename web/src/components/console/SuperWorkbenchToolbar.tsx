@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { LayoutGrid, Save, Trash2 } from 'lucide-react'
+import { Link } from 'react-router'
+import { Clapperboard, LayoutGrid, Save, Trash2 } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -47,6 +48,14 @@ export default function SuperWorkbenchToolbar({
       </div>
 
       <div className="ml-auto flex items-center gap-1.5">
+        {/* 进导播台（FR-168）：把已存的跨实例预设当场景预热瞬切。 */}
+        <Button asChild size="sm" variant="outline" title={t('director.enter')}>
+          <Link to="/director">
+            <Clapperboard className="size-4" />
+            <span className="hidden sm:inline">{t('director.enter')}</span>
+          </Link>
+        </Button>
+
         {/* 跨实例预设选择 */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
