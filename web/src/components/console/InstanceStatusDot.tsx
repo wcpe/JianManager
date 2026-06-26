@@ -15,7 +15,7 @@ export default function InstanceStatusDot({ status }: InstanceStatusDotProps) {
       title={status}
       className={cn(
         'inline-block size-2 shrink-0 rounded-full',
-        kind === 'running' && 'bg-green-500',
+        kind === 'running' && 'bg-green-500 text-green-500 animate-breathing',
         kind === 'transitioning' && 'bg-amber-500 animate-pulse',
         kind === 'crashed' && 'bg-red-500',
         kind === 'stopped' && 'border border-muted-foreground/50 bg-transparent',

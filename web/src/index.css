@@ -38,80 +38,110 @@
   --radius-md: calc(var(--radius) - 1px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+
+  /* 设计底座（FR-163）：柔和弱阴影 + 主色晕染抬升 + iOS 缓动 + 呼吸灯。
+     品牌相关取值（--brand-shadow）经变量路由，FR-164 第二主题仅覆盖变量即可换肤。 */
+  --shadow-soft: 0 1px 3px rgb(var(--shadow-color) / 0.06), 0 1px 2px rgb(var(--shadow-color) / 0.04);
+  --shadow-lift: 0 12px 28px -6px rgb(var(--brand-shadow) / 0.18), 0 4px 10px -5px rgb(var(--brand-shadow) / 0.12);
+  --ease-ios: cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-breathing: breathing 1.8s ease-in-out infinite;
 }
 
 :root {
-  --background: oklch(0.985 0.002 145);
-  --foreground: oklch(0.18 0.01 160);
+  /* 中性冷灰底 + 深石板灰字（design.md §1.1，不纯黑纯白不死灰） */
+  --background: oklch(0.968 0.003 265);
+  --foreground: oklch(0.27 0.022 266);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.18 0.01 160);
+  --card-foreground: oklch(0.27 0.022 266);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.18 0.01 160);
-  /* MC 绿主色 */
-  --primary: oklch(0.58 0.15 145);
-  --primary-foreground: oklch(0.99 0.01 145);
-  --secondary: oklch(0.96 0.004 145);
-  --secondary-foreground: oklch(0.25 0.02 160);
-  --muted: oklch(0.96 0.004 145);
-  --muted-foreground: oklch(0.5 0.01 160);
-  --accent: oklch(0.94 0.02 145);
-  --accent-foreground: oklch(0.25 0.03 150);
-  --destructive: oklch(0.585 0.22 27);
-  --border: oklch(0.9 0.005 160);
-  --input: oklch(0.9 0.005 160);
-  --ring: oklch(0.58 0.15 145);
-  --radius: 0.5rem;
+  --popover-foreground: oklch(0.27 0.022 266);
+  /* 靛蓝主色 #6366F1（design.md §1.2，默认主题） */
+  --primary: oklch(0.585 0.222 277);
+  --primary-foreground: oklch(0.985 0.004 277);
+  --secondary: oklch(0.967 0.003 265);
+  --secondary-foreground: oklch(0.32 0.02 266);
+  --muted: oklch(0.975 0.002 265);
+  --muted-foreground: oklch(0.52 0.018 266);
+  /* 主色淡染（选中态/图标块/头像/主色标签底，对应原型 --pb） */
+  --accent: oklch(0.952 0.02 277);
+  --accent-foreground: oklch(0.585 0.222 277);
+  --destructive: oklch(0.637 0.237 25);
+  --border: oklch(0.928 0.004 265);
+  --input: oklch(0.928 0.004 265);
+  --ring: oklch(0.585 0.222 277);
+  --radius: 0.75rem;
 
-  --status-success: oklch(0.62 0.16 150);
-  --status-success-foreground: oklch(0.99 0.01 150);
-  --status-warning: oklch(0.74 0.15 75);
-  --status-warning-foreground: oklch(0.26 0.05 75);
-  --status-danger: oklch(0.585 0.22 27);
-  --status-danger-foreground: oklch(0.99 0.01 27);
-  --status-info: oklch(0.6 0.13 240);
-  --status-info-foreground: oklch(0.99 0.01 240);
+  /* 阴影色源：中性阴影用墨蓝黑，抬升阴影用主色 RGB 晕染（FR-164 覆盖 --brand-shadow 换主题晕色） */
+  --shadow-color: 16 24 40;
+  --brand-shadow: 99 102 241;
 
-  --chart-1: oklch(0.58 0.15 145);
-  --chart-2: oklch(0.6 0.13 240);
-  --chart-3: oklch(0.74 0.15 75);
-  --chart-4: oklch(0.62 0.2 320);
-  --chart-5: oklch(0.585 0.22 27);
+  --status-success: oklch(0.696 0.149 162);
+  --status-success-foreground: oklch(0.985 0.01 162);
+  --status-warning: oklch(0.769 0.156 70);
+  --status-warning-foreground: oklch(0.27 0.05 70);
+  --status-danger: oklch(0.637 0.237 25);
+  --status-danger-foreground: oklch(0.985 0.01 25);
+  --status-info: oklch(0.62 0.16 256);
+  --status-info-foreground: oklch(0.985 0.01 256);
+
+  --chart-1: oklch(0.585 0.222 277);
+  --chart-2: oklch(0.62 0.16 256);
+  --chart-3: oklch(0.769 0.156 70);
+  --chart-4: oklch(0.65 0.2 330);
+  --chart-5: oklch(0.637 0.237 25);
 }
 
 .dark {
-  --background: oklch(0.165 0.008 165);
-  --foreground: oklch(0.96 0.005 145);
-  --card: oklch(0.205 0.008 165);
-  --card-foreground: oklch(0.96 0.005 145);
-  --popover: oklch(0.205 0.008 165);
-  --popover-foreground: oklch(0.96 0.005 145);
-  --primary: oklch(0.68 0.16 145);
-  --primary-foreground: oklch(0.16 0.02 160);
-  --secondary: oklch(0.27 0.01 165);
-  --secondary-foreground: oklch(0.96 0.005 145);
-  --muted: oklch(0.27 0.01 165);
-  --muted-foreground: oklch(0.7 0.01 160);
-  --accent: oklch(0.3 0.03 150);
-  --accent-foreground: oklch(0.96 0.005 145);
-  --destructive: oklch(0.65 0.19 27);
-  --border: oklch(0.3 0.008 165);
-  --input: oklch(0.32 0.008 165);
-  --ring: oklch(0.68 0.16 145);
+  --background: oklch(0.185 0.008 264);
+  --foreground: oklch(0.93 0.006 265);
+  --card: oklch(0.22 0.01 264);
+  --card-foreground: oklch(0.93 0.006 265);
+  --popover: oklch(0.22 0.01 264);
+  --popover-foreground: oklch(0.93 0.006 265);
+  --primary: oklch(0.68 0.18 277);
+  --primary-foreground: oklch(0.2 0.03 277);
+  --secondary: oklch(0.27 0.012 264);
+  --secondary-foreground: oklch(0.93 0.006 265);
+  --muted: oklch(0.27 0.012 264);
+  --muted-foreground: oklch(0.7 0.015 265);
+  --accent: oklch(0.32 0.05 277);
+  --accent-foreground: oklch(0.86 0.08 277);
+  --destructive: oklch(0.66 0.2 25);
+  --border: oklch(0.32 0.01 264);
+  --input: oklch(0.34 0.01 264);
+  --ring: oklch(0.68 0.18 277);
 
-  --status-success: oklch(0.7 0.16 150);
-  --status-success-foreground: oklch(0.16 0.02 150);
-  --status-warning: oklch(0.8 0.14 80);
-  --status-warning-foreground: oklch(0.2 0.04 80);
-  --status-danger: oklch(0.66 0.19 27);
-  --status-danger-foreground: oklch(0.16 0.02 27);
-  --status-info: oklch(0.7 0.13 240);
-  --status-info-foreground: oklch(0.16 0.02 240);
+  --shadow-color: 0 0 0;
+  --brand-shadow: 129 140 248;
 
-  --chart-1: oklch(0.7 0.16 145);
-  --chart-2: oklch(0.7 0.13 240);
-  --chart-3: oklch(0.8 0.14 80);
-  --chart-4: oklch(0.72 0.18 320);
-  --chart-5: oklch(0.66 0.19 27);
+  --status-success: oklch(0.72 0.15 162);
+  --status-success-foreground: oklch(0.2 0.03 162);
+  --status-warning: oklch(0.8 0.14 75);
+  --status-warning-foreground: oklch(0.22 0.04 75);
+  --status-danger: oklch(0.66 0.2 25);
+  --status-danger-foreground: oklch(0.2 0.03 25);
+  --status-info: oklch(0.7 0.14 256);
+  --status-info-foreground: oklch(0.2 0.03 256);
+
+  --chart-1: oklch(0.68 0.18 277);
+  --chart-2: oklch(0.7 0.14 256);
+  --chart-3: oklch(0.8 0.14 75);
+  --chart-4: oklch(0.72 0.18 330);
+  --chart-5: oklch(0.66 0.2 25);
+}
+
+/* 呼吸灯（FR-163）：运行对象脉动光环。环色取 currentColor，套用方设 text-* 即定色。 */
+@keyframes breathing {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 45%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 * {
@@ -125,4 +155,6 @@ body {
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 13px;
   margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }

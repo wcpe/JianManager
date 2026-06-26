@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { Navigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { useSetupStatus, useSetup } from '@/api/setup'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Panel } from '@/components/ui/panel'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
@@ -69,12 +69,11 @@ export default function SetupPage() {
 
   return (
     <div className="flex items-center justify-center h-screen">
-      <Card className="w-full max-w-sm">
-        <CardHeader className="text-center">
-          <CardTitle className="text-2xl">{t('setup.title')}</CardTitle>
-          <CardDescription>{t('setup.subtitle')}</CardDescription>
-        </CardHeader>
-        <CardContent>
+      <Panel className="w-full max-w-sm" bodyClassName="p-6">
+        <div className="mb-5 text-center">
+          <h1 className="text-2xl font-semibold">{t('setup.title')}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t('setup.subtitle')}</p>
+        </div>
           {error && (
             <div className="mb-4 p-3 text-sm text-destructive bg-destructive/10 rounded-md">
               {error}
@@ -145,8 +144,7 @@ export default function SetupPage() {
               {setup.isPending ? t('setup.creating') : t('setup.submit')}
             </Button>
           </form>
-        </CardContent>
-      </Card>
+      </Panel>
     </div>
   )
 }

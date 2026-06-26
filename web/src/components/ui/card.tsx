@@ -1,7 +1,14 @@
+/**
+ * @deprecated 弃用（FR-163）：shadcn Card 松散用法已被统一卡片原语取代。
+ * 新代码请用 `@/components/ui/panel` 的 `Panel`（分区/容器）或
+ * `@/components/ui/stat-card` 的 `StatCard`（KPI 卡）。eslint 已阻断本模块的新引入。
+ * 保留定义仅为历史兼容，勿在业务页新增引用。
+ */
 import * as React from "react"
 
 import { cn } from "@/lib/utils"
 
+/** @deprecated 用 `Panel` 替代，见本文件顶部说明。 */
 function Card({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div

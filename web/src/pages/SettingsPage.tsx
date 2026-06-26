@@ -8,7 +8,7 @@ import { useAuthStore } from '@/stores/auth'
 import { changeLanguage } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { useSettings, useUpdateSettings, type SettingItem } from '@/api/settings'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Panel } from '@/components/ui/panel'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -120,13 +120,12 @@ function AppearanceSettings() {
   const { theme, setTheme } = useThemeStore()
   const currentLang = i18n.language as 'zh' | 'en'
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t('settings.appearance')}</CardTitle>
-        <CardDescription>{t('settings.appearanceDesc')}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex items-center justify-between gap-4">
+    <Panel bodyClassName="space-y-4 p-4">
+      <div>
+        <h2 className="text-sm font-semibold">{t('settings.appearance')}</h2>
+        <p className="text-xs text-muted-foreground">{t('settings.appearanceDesc')}</p>
+      </div>
+      <div className="flex items-center justify-between gap-4">
           <div>
             <p className="text-sm font-medium">{t('settings.theme')}</p>
             <p className="text-xs text-muted-foreground">{t('settings.themeDesc')}</p>
@@ -158,8 +157,7 @@ function AppearanceSettings() {
             </SelectContent>
           </Select>
         </div>
-      </CardContent>
-    </Card>
+    </Panel>
   )
 }
 
@@ -196,13 +194,12 @@ function PlatformCategory({ category }: { category: SettingCategory }) {
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{t(`settings.cat.${category}`)}</CardTitle>
-        <CardDescription>{t(`settings.catDesc.${category}`, '')}</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {isLoading && <p className="text-sm text-muted-foreground">{t('common.loading', '加载中…')}</p>}
+    <Panel bodyClassName="space-y-4 p-4">
+      <div>
+        <h2 className="text-sm font-semibold">{t(`settings.cat.${category}`)}</h2>
+        <p className="text-xs text-muted-foreground">{t(`settings.catDesc.${category}`, '')}</p>
+      </div>
+      {isLoading && <p className="text-sm text-muted-foreground">{t('common.loading', '加载中…')}</p>}
         {isError && <p className="text-sm text-destructive">{t('settings.loadFailed', '加载平台配置失败')}</p>}
 
         {!isLoading && !isError && category === 'security' && (
@@ -241,8 +238,7 @@ function PlatformCategory({ category }: { category: SettingCategory }) {
             )}
           </>
         )}
-      </CardContent>
-    </Card>
+    </Panel>
   )
 }
 

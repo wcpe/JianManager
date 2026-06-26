@@ -4,6 +4,7 @@ import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
 import { useMetricOverview } from '@/api/metrics'
 import { Panel } from '@/components/ui/panel'
+import { StatCard } from '@/components/ui/stat-card'
 import { ResourceGauge } from '@/components/ui/gauge'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { TimeSeriesChart, type ChartSeries } from '@/components/charts/TimeSeriesChart'
@@ -16,17 +17,6 @@ function fmtBytes(b: number): string {
   if (b >= 1e9) return `${(b / 1024 / 1024 / 1024).toFixed(1)}G`
   if (b >= 1e6) return `${(b / 1024 / 1024).toFixed(0)}M`
   return `${(b / 1024).toFixed(0)}K`
-}
-
-/** 统计块：大数值 + 标签 + 可选副信息。 */
-function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="flex flex-col justify-center rounded-lg border bg-card px-4 py-3">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="mt-0.5 text-2xl font-semibold tabular-nums">{value}</span>
-      {sub && <span className="mt-0.5 text-xs text-muted-foreground">{sub}</span>}
-    </div>
-  )
 }
 
 /** 总览页（FR-061 旗舰）：环形仪表盘 + 聚合历史曲线（FR-060） + 密集实例表，一屏概览。 */
@@ -67,13 +57,13 @@ export default function OverviewPage() {
         <Panel bodyClassName="flex items-center justify-center py-3">
           <ResourceGauge label={t('dashboard.totalMem')} value={memPct} unit="%" />
         </Panel>
-        <Stat
+        <StatCard
           label={t('dashboard.nodes')}
           value={`${totals?.onlineNodeCount ?? 0}/${totals?.nodeCount ?? nodes?.length ?? 0}`}
           sub={t('dashboard.online')}
         />
-        <Stat label={t('dashboard.runningInstances')} value={String(totals?.runningInstances ?? 0)} sub={t('dashboard.instances')} />
-        <Stat label={t('dashboard.onlinePlayers')} value={String(totals?.onlinePlayers ?? 0)} sub={t('nav.players')} />
+        <StatCard label={t('dashboard.runningInstances')} value={String(totals?.runningInstances ?? 0)} sub={t('dashboard.instances')} />
+        <StatCard label={t('dashboard.onlinePlayers')} value={String(totals?.onlinePlayers ?? 0)} sub={t('nav.players')} />
       </div>
 
       {/* 中部：聚合历史曲线（FR-060） */}

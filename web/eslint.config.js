@@ -24,6 +24,19 @@ export default defineConfig([
       // React Compiler 顾问规则（set-state-in-effect/refs/immutability/preserve-manual-memoization）
       // 沿用 react-hooks recommended 的 error 级；既有合法模式已逐处 eslint-disable 并注明理由。
       'react-refresh/only-export-components': 'error',
+      // 弃用 shadcn Card 松散用法（FR-163）：阻断业务代码新引入，统一走 Panel / StatCard。
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '@/components/ui/card',
+              message:
+                '弃用 shadcn Card（FR-163）：用 @/components/ui/panel 的 Panel 或 @/components/ui/stat-card 的 StatCard。',
+            },
+          ],
+        },
+      ],
     },
   },
 ])

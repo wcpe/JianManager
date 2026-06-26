@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useLogin } from '@/api/auth'
 import { useSetupStatus } from '@/api/setup'
 import { useAuthStore } from '@/stores/auth'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Panel } from '@/components/ui/panel'
 import { Input } from '@/components/ui/input'
 import { PasswordInput } from '@/components/ui/password-input'
 import { Label } from '@/components/ui/label'
@@ -53,12 +53,11 @@ export default function LoginPage() {
 
   return (
     <div className="flex items-center justify-center h-screen">
-      <Card className="w-full max-w-sm">
-        <CardHeader className="text-center">
-          <CardTitle className="text-2xl">{t('login.title')}</CardTitle>
-          <CardDescription>{t('login.subtitle')}</CardDescription>
-        </CardHeader>
-        <CardContent>
+      <Panel className="w-full max-w-sm" bodyClassName="p-6">
+        <div className="mb-5 text-center">
+          <h1 className="text-2xl font-semibold">{t('login.title')}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t('login.subtitle')}</p>
+        </div>
           {error && (
             <div className="mb-4 p-3 text-sm text-destructive bg-destructive/10 rounded-md">
               {error}
@@ -88,8 +87,7 @@ export default function LoginPage() {
               {login.isPending ? `${t('login.submit')}...` : t('login.submit')}
             </Button>
           </form>
-        </CardContent>
-      </Card>
+      </Panel>
     </div>
   )
 }
