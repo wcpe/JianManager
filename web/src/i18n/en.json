@@ -1598,6 +1598,7 @@
     "allLevels": "All levels",
     "allStatus": "All status",
     "allAck": "All ack states",
+    "allRules": "All rules",
     "trigger_metric": "Metric threshold",
     "trigger_instance_crash": "Instance crash",
     "trigger_node_offline": "Node offline",

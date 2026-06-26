@@ -1598,6 +1598,7 @@
     "allLevels": "全部级别",
     "allStatus": "全部状态",
     "allAck": "全部确认状态",
+    "allRules": "全部规则",
     "trigger_metric": "指标阈值",
     "trigger_instance_crash": "实例崩溃",
     "trigger_node_offline": "节点离线",

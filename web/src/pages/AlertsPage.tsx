@@ -4,6 +4,7 @@ import {
   useAlertRules,
   useAlertEvents,
   useDeleteAlertRule,
+  useUpdateAlertRule,
   useAlertChannels,
   useDeleteAlertChannel,
   useTestAlertChannel,
@@ -91,6 +92,7 @@ function RulesTab() {
   const { data: rules } = useAlertRules()
   const { data: channels } = useAlertChannels()
   const deleteRule = useDeleteAlertRule()
+  const updateRule = useUpdateAlertRule()
   const [editing, setEditing] = useState<AlertRuleInfo | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<AlertRuleInfo | null>(null)
@@ -133,7 +135,20 @@ function RulesTab() {
                   {parseChannelIds(r.channelIds).map(channelName).join(', ') || (r.notifyTarget ? 'webhook' : '—')}
                 </td>
                 <td className="p-3 text-muted-foreground">{formatSilenceWindow(r.silenceStart, r.silenceEnd) || '—'}</td>
-                <td className="p-3">{r.enabled ? t('alerts.on') : t('alerts.off')}</td>
+                <td className="p-3">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={r.enabled}
+                    aria-label={t('alerts.enabled')}
+                    title={r.enabled ? t('alerts.on') : t('alerts.off')}
+                    disabled={updateRule.isPending}
+                    onClick={() => updateRule.mutate({ id: r.id, enabled: !r.enabled })}
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50 ${r.enabled ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+                  >
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-background shadow transition-transform ${r.enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                  </button>
+                </td>
                 <td className="p-3 space-x-3 whitespace-nowrap">
                   <button className="text-primary hover:underline" onClick={() => setEditing(r)}>
                     {t('common.edit')}
@@ -201,6 +216,7 @@ function EventsTab() {
   const { t } = useTranslation()
   const [filter, setFilter] = useState<EventQuery>({})
   const { data: events } = useAlertEvents(filter)
+  const { data: rules } = useAlertRules()
   const ack = useAcknowledgeEvent()
   const markAll = useMarkAllRead()
 
@@ -234,6 +250,16 @@ function EventsTab() {
           <option value="">{t('alerts.allAck')}</option>
           <option value="false">{t('alerts.unacknowledged')}</option>
           <option value="true">{t('alerts.acknowledged')}</option>
+        </select>
+        <select
+          className="p-2 border rounded text-sm"
+          value={filter.ruleId ?? ''}
+          onChange={(e) => setFilter({ ...filter, ruleId: e.target.value ? Number(e.target.value) : undefined })}
+        >
+          <option value="">{t('alerts.allRules')}</option>
+          {(rules ?? []).map((r) => (
+            <option key={r.id} value={r.id}>{r.name}</option>
+          ))}
         </select>
         <div className="flex-1" />
         <button className="px-3 py-2 border rounded-md text-sm hover:bg-muted" onClick={() => markAll.mutate()}>
