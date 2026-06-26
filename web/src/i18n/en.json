@@ -1072,7 +1072,19 @@
     "selectedGroups": "{{groups}} groups · ~{{bots}} bots selected",
     "peekTotal": "{{total}} bots total",
     "stressTest": "Stress Test",
-    "stressTestSoon": "Stress-test orchestration coming soon (FR-042)"
+    "stressTestSoon": "Stress-test orchestration coming soon (FR-042)",
+    "fleetHealth": "Fleet health",
+    "batchProgress": "Processing {{done}}/{{total}} groups",
+    "behaviorConfig": "Config",
+    "behaviorTargetRequired": "This behavior needs a target first",
+    "batchDeleteTitle": "Batch delete bots",
+    "behaviorConfigTitle": "Configure \"{{behavior}}\" parameters",
+    "followTarget": "Follow target",
+    "patrolPath": "Patrol path",
+    "followTargetPlaceholder": "Target player name",
+    "patrolPathPlaceholder": "Waypoints, e.g. x,y,z; x,y,z",
+    "followTargetHint": "Leave empty to follow the nearest player",
+    "patrolPathHint": "Separate coordinates with semicolons; the bot patrols in a loop"
   },
   "schedules": {
     "title": "Schedules",

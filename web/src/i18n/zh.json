@@ -1072,7 +1072,19 @@
     "selectedGroups": "已选 {{groups}} 组 · 约 {{bots}} 个 Bot",
     "peekTotal": "共 {{total}} 个 Bot",
     "stressTest": "压测",
-    "stressTestSoon": "压测会话编排即将上线（FR-042）"
+    "stressTestSoon": "压测会话编排即将上线（FR-042）",
+    "fleetHealth": "舰队健康",
+    "batchProgress": "处理中 {{done}}/{{total}} 组",
+    "behaviorConfig": "配置",
+    "behaviorTargetRequired": "该行为需先配置目标",
+    "batchDeleteTitle": "批量删除 Bot",
+    "behaviorConfigTitle": "配置「{{behavior}}」参数",
+    "followTarget": "跟随目标",
+    "patrolPath": "巡逻路径",
+    "followTargetPlaceholder": "目标玩家名",
+    "patrolPathPlaceholder": "路径点，如 x,y,z; x,y,z",
+    "followTargetHint": "留空则跟随最近玩家",
+    "patrolPathHint": "多个坐标点以分号分隔，Bot 循环巡逻"
   },
   "schedules": {
     "title": "定时任务",

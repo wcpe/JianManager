@@ -17,7 +17,6 @@ import { useNodes } from '@/api/nodes'
 import { useConsoleStore } from '@/stores/console'
 import {
   statusCounts,
-  healthSegments,
   toListParams,
   groupFilter,
   distribution,
@@ -28,6 +27,11 @@ import {
   type BotStatusCounts,
   type Distribution,
 } from './bots-overview'
+import { BotHealthBar } from '@/components/console/BotHealthBar'
+import { BotWorktableCard } from '@/components/console/BotWorktableCard'
+import DangerConfirm from '@/components/DangerConfirm'
+import { ViewToggle, type ViewMode } from '@/components/ui/view-toggle'
+import { Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -75,6 +79,8 @@ export default function BotsPage() {
   const [nodeId, setNodeId] = useState<number | null>(null)
   const [status, setStatus] = useState<string>('')
   const [groupBy, setGroupBy] = useState<GroupByDim>('instance')
+  // 工作台卡 ⇄ 列表视图（FR-147，§4.5）；运行实体默认卡片。
+  const [view, setView] = useState<ViewMode>('card')
 
   const debouncedSearch = useDebounced(search, 300)
   const filter: OverviewFilter = useMemo(
@@ -106,6 +112,9 @@ export default function BotsPage() {
   const counts = statusCounts(globalSummary.data)
   const dist = distribution(instanceSummary.data, nodeSummary.data)
   const groups = activeSummary.data?.groups ?? []
+  // 全局各状态精确计数，供舰队健康条多段着色（FR-147）。
+  const byStatus = globalSummary.data?.byStatus
+  const fleetTotal = globalSummary.data?.total ?? 0
 
   return (
     <div>
@@ -115,11 +124,19 @@ export default function BotsPage() {
           <Button variant="outline" disabled title={t('bots.stressTestSoon')}>
             {t('bots.stressTest')}
           </Button>
-          <Button onClick={() => setShowCreate(true)}>+ {t('bots.createBot')}</Button>
+          <Button onClick={() => setShowCreate(true)}>
+            <Plus className="size-4" /> {t('bots.createBot')}
+          </Button>
         </div>
       </div>
 
-      <SummaryCards counts={counts} dist={dist} loading={globalSummary.isLoading} />
+      <SummaryCards
+        counts={counts}
+        dist={dist}
+        loading={globalSummary.isLoading}
+        fleetTotal={fleetTotal}
+        byStatus={byStatus}
+      />
 
       <Toolbar
         search={search}
@@ -130,6 +147,8 @@ export default function BotsPage() {
         onStatus={setStatus}
         groupBy={groupBy}
         onGroupBy={setGroupBy}
+        view={view}
+        onView={setView}
       />
 
       {/* key=groupBy：维度切换时重挂 GroupOverview，自然复位其展开/选择状态（避免 effect 内 setState） */}
@@ -139,6 +158,7 @@ export default function BotsPage() {
         groups={groups}
         baseFilter={filter}
         loading={activeSummary.isLoading}
+        view={view}
       />
 
       <CreateBotDialog open={showCreate} onOpenChange={setShowCreate} />
@@ -156,41 +176,72 @@ function useDebounced<T>(value: T, delay: number): T {
   return debounced
 }
 
-/** 页顶概览卡片：总计/在线/连接中/异常 + 分布（X 实例·Y 节点）。 */
+/** 页顶概览卡片：总计/在线/连接中/异常 + 分布（X 实例·Y 节点）+ 舰队健康条（多段）。 */
 function SummaryCards({
   counts,
   dist,
   loading,
+  fleetTotal,
+  byStatus,
 }: {
   counts: BotStatusCounts
   dist: Distribution
   loading: boolean
+  /** 舰队 Bot 总数（健康条分母）。 */
+  fleetTotal: number
+  /** 各状态精确计数（健康条多段着色）。 */
+  byStatus?: Record<string, number>
 }) {
   const { t } = useTranslation()
   const cards = [
     { key: 'total', label: t('bots.total'), value: counts.total, color: 'text-foreground' },
-    { key: 'online', label: t('bots.online'), value: counts.online, color: 'text-green-500' },
-    { key: 'connecting', label: t('bots.connecting'), value: counts.connecting, color: 'text-amber-500' },
-    { key: 'error', label: t('bots.abnormal'), value: counts.error, color: 'text-red-500' },
+    { key: 'online', label: t('bots.online'), value: counts.online, color: 'text-status-success' },
+    { key: 'connecting', label: t('bots.connecting'), value: counts.connecting, color: 'text-status-warning' },
+    { key: 'error', label: t('bots.abnormal'), value: counts.error, color: 'text-status-danger' },
   ]
   return (
-    <div className="mb-4 grid grid-cols-2 gap-4 md:grid-cols-4">
-      {cards.map((card) => (
-        <div key={card.key} className="rounded-lg border p-4">
-          <p className="text-sm text-muted-foreground">{card.label}</p>
-          <p className={cn('mt-1 text-2xl font-bold', card.color)}>{loading ? '—' : card.value}</p>
-          {card.key === 'total' && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t('bots.distribution', { instances: dist.instances, nodes: dist.nodes })}
-            </p>
-          )}
+    <div className="mb-4 space-y-3">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        {cards.map((card) => (
+          <div key={card.key} className="rounded-xl border bg-card p-4 shadow-soft">
+            <p className="text-sm text-muted-foreground">{card.label}</p>
+            <p className={cn('mt-1 text-2xl font-bold tabular-nums', card.color)}>{loading ? '—' : card.value}</p>
+            {card.key === 'total' && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t('bots.distribution', { instances: dist.instances, nodes: dist.nodes })}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+      {/* 舰队健康条（FR-147）：按全局 byStatus 多段着色 connected/connecting/error/stopped */}
+      {fleetTotal > 0 && (
+        <div className="rounded-xl border bg-card p-3 shadow-soft">
+          <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+            <span>{t('bots.fleetHealth')}</span>
+            <LegendDot className="bg-status-success" label={t('bots.statusKind.online')} />
+            <LegendDot className="bg-status-warning" label={t('bots.statusKind.connecting')} />
+            <LegendDot className="bg-status-danger" label={t('bots.statusKind.error')} />
+            <LegendDot className="bg-muted-foreground/40" label={t('bots.status_stopped')} />
+          </div>
+          <BotHealthBar total={fleetTotal} online={counts.online} byStatus={byStatus} />
         </div>
-      ))}
+      )}
     </div>
   )
 }
 
-/** 工具栏：搜索 + 节点筛选 + 状态筛选 + 分组维度切换。 */
+/** 图例点：色块 + 文案，用于舰队健康条说明各段语义。 */
+function LegendDot({ className, label }: { className: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span className={cn('size-2 rounded-full', className)} />
+      {label}
+    </span>
+  )
+}
+
+/** 工具栏：搜索 + 节点筛选 + 状态筛选 + 分组维度切换 + 卡/列表视图切换。 */
 function Toolbar({
   search,
   onSearch,
@@ -200,6 +251,8 @@ function Toolbar({
   onStatus,
   groupBy,
   onGroupBy,
+  view,
+  onView,
 }: {
   search: string
   onSearch: (v: string) => void
@@ -209,6 +262,8 @@ function Toolbar({
   onStatus: (v: string) => void
   groupBy: GroupByDim
   onGroupBy: (v: GroupByDim) => void
+  view: ViewMode
+  onView: (v: ViewMode) => void
 }) {
   const { t } = useTranslation()
   const { data: nodes } = useNodes()
@@ -254,35 +309,45 @@ function Toolbar({
         </SelectContent>
       </Select>
 
-      <div className="ml-auto flex items-center gap-1 rounded-md border p-0.5">
-        <span className="px-2 text-xs text-muted-foreground">{t('bots.groupBy')}</span>
-        {GROUP_BY_DIMS.map((dim) => (
-          <Button
-            key={dim}
-            type="button"
-            size="xs"
-            variant={groupBy === dim ? 'default' : 'ghost'}
-            onClick={() => onGroupBy(dim)}
-          >
-            {t(`bots.groupDim_${dim}`)}
-          </Button>
-        ))}
+      <div className="ml-auto flex items-center gap-2">
+        <div className="flex items-center gap-1 rounded-md border p-0.5">
+          <span className="px-2 text-xs text-muted-foreground">{t('bots.groupBy')}</span>
+          {GROUP_BY_DIMS.map((dim) => (
+            <Button
+              key={dim}
+              type="button"
+              size="xs"
+              variant={groupBy === dim ? 'default' : 'ghost'}
+              onClick={() => onGroupBy(dim)}
+            >
+              {t(`bots.groupDim_${dim}`)}
+            </Button>
+          ))}
+        </div>
+        <ViewToggle
+          value={view}
+          onChange={onView}
+          cardLabel={t('grouping.viewCard')}
+          listLabel={t('grouping.viewList')}
+        />
       </div>
     </div>
   )
 }
 
-/** 分组总览表：每组一行（含健康条 + 总数 + 批量 + 展开窥视 + 在控制台打开）。 */
+/** 分组总览：每组一卡/行（含多段健康条 + 总数 + 批量 + 展开窥视 + 在控制台打开）。 */
 function GroupOverview({
   groupBy,
   groups,
   baseFilter,
   loading,
+  view,
 }: {
   groupBy: GroupByDim
   groups: BotSummaryGroup[]
   baseFilter: OverviewFilter
   loading: boolean
+  view: ViewMode
 }) {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -300,6 +365,7 @@ function GroupOverview({
       else next.add(key)
       return next
     })
+  const toggleExpand = (key: string) => setExpanded((cur) => (cur === key ? null : key))
 
   if (loading) {
     return <p className="text-muted-foreground">{t('common.loading')}</p>
@@ -316,47 +382,88 @@ function GroupOverview({
         />
       )}
 
-      <div className="rounded-lg border">
-        <Table>
-          <TableHeader className="bg-muted/50">
-            <TableRow>
-              <TableHead className="w-10" />
-              <TableHead>{t(`bots.groupDim_${groupBy}`)}</TableHead>
-              <TableHead className="w-[34%]">{t('bots.health')}</TableHead>
-              <TableHead className="w-20 text-right">{t('bots.count')}</TableHead>
-              <TableHead className="w-44 text-right">{t('bots.actions')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {groups.map((group) => (
-              <GroupRow
-                key={group.key}
-                groupBy={groupBy}
-                group={group}
-                baseFilter={baseFilter}
-                checked={selected.has(group.key)}
-                onCheck={() => toggle(group.key)}
-                expanded={expanded === group.key}
-                onToggleExpand={() =>
-                  setExpanded((cur) => (cur === group.key ? null : group.key))
-                }
-              />
-            ))}
-            {groups.length === 0 && (
+      {groups.length === 0 ? (
+        <p className="rounded-lg border py-10 text-center text-muted-foreground">{t('bots.empty')}</p>
+      ) : view === 'card' ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {groups.map((group) => (
+            <BotWorktableCard
+              key={group.key}
+              groupBy={groupBy}
+              group={group}
+              checked={selected.has(group.key)}
+              onCheck={() => toggle(group.key)}
+              expanded={expanded === group.key}
+              onToggleExpand={() => toggleExpand(group.key)}
+              actions={<GroupActions groupBy={groupBy} group={group} baseFilter={baseFilter} />}
+            >
+              <GroupPeek params={groupFilter(groupBy, group, baseFilter)} />
+            </BotWorktableCard>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-lg border">
+          <Table>
+            <TableHeader className="bg-muted/50">
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-muted-foreground">
-                  {t('bots.empty')}
-                </TableCell>
+                <TableHead className="w-10" />
+                <TableHead>{t(`bots.groupDim_${groupBy}`)}</TableHead>
+                <TableHead className="w-[34%]">{t('bots.health')}</TableHead>
+                <TableHead className="w-20 text-right">{t('bots.count')}</TableHead>
+                <TableHead className="w-44 text-right">{t('bots.actions')}</TableHead>
               </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
+            </TableHeader>
+            <TableBody>
+              {groups.map((group) => (
+                <GroupRow
+                  key={group.key}
+                  groupBy={groupBy}
+                  group={group}
+                  baseFilter={baseFilter}
+                  checked={selected.has(group.key)}
+                  onCheck={() => toggle(group.key)}
+                  expanded={expanded === group.key}
+                  onToggleExpand={() => toggleExpand(group.key)}
+                />
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </div>
   )
 }
 
-/** 单个分组行：勾选 + 标签 + 健康条 + 总数 + 操作（批量/在控制台打开/展开）。 */
+/** 分组操作区（卡片/行复用）：在控制台打开（仅实例维度）+ 单组批量菜单。 */
+function GroupActions({
+  groupBy,
+  group,
+  baseFilter,
+}: {
+  groupBy: GroupByDim
+  group: BotSummaryGroup
+  baseFilter: OverviewFilter
+}) {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const openInstance = useConsoleStore((s) => s.openInstance)
+  const openInConsole = () => {
+    openInstance(Number(group.key))
+    navigate('/')
+  }
+  return (
+    <>
+      {groupBy === 'instance' && (
+        <Button variant="ghost" size="xs" onClick={openInConsole}>
+          {t('bots.openInConsole')}
+        </Button>
+      )}
+      <GroupBatchMenu groupBy={groupBy} group={group} baseFilter={baseFilter} />
+    </>
+  )
+}
+
+/** 单个分组行（列表视图）：勾选 + 标签 + 健康条 + 总数 + 操作（批量/在控制台打开/展开）。 */
 function GroupRow({
   groupBy,
   group,
@@ -375,14 +482,6 @@ function GroupRow({
   onToggleExpand: () => void
 }) {
   const { t } = useTranslation()
-  const navigate = useNavigate()
-  const openInstance = useConsoleStore((s) => s.openInstance)
-
-  // 「在控制台打开」仅对实例分组有意义：跳回控制台并在工作区打开该实例
-  const openInConsole = () => {
-    openInstance(Number(group.key))
-    navigate('/')
-  }
 
   return (
     <>
@@ -401,17 +500,12 @@ function GroupRow({
           </button>
         </TableCell>
         <TableCell>
-          <HealthBar total={group.total} online={group.online} />
+          <BotHealthBar total={group.total} online={group.online} />
         </TableCell>
         <TableCell className="text-right tabular-nums">{group.total}</TableCell>
         <TableCell>
           <div className="flex items-center justify-end gap-1">
-            {groupBy === 'instance' && (
-              <Button variant="ghost" size="xs" onClick={openInConsole}>
-                {t('bots.openInConsole')}
-              </Button>
-            )}
-            <GroupBatchMenu groupBy={groupBy} group={group} baseFilter={baseFilter} />
+            <GroupActions groupBy={groupBy} group={group} baseFilter={baseFilter} />
           </div>
         </TableCell>
       </TableRow>
@@ -423,26 +517,6 @@ function GroupRow({
         </TableRow>
       )}
     </>
-  )
-}
-
-/** 健康条：在线（绿）vs 其余（灰）按比例铺色。空组渲染空轨道。 */
-function HealthBar({ total, online }: { total: number; online: number }) {
-  const { t } = useTranslation()
-  const segments = healthSegments(total, online)
-  return (
-    <div
-      className="flex h-2.5 w-full overflow-hidden rounded-full bg-muted"
-      title={t('bots.healthTooltip', { online, total })}
-    >
-      {segments.map((seg) => (
-        <div
-          key={seg.kind}
-          className={seg.kind === 'online' ? 'bg-green-500' : 'bg-muted-foreground/40'}
-          style={{ width: `${seg.ratio * 100}%` }}
-        />
-      ))}
-    </div>
   )
 }
 
@@ -495,7 +569,14 @@ function GroupBatchMenu({
   )
 }
 
-/** 顶部批量条：对已勾选的多个分组逐组下发批量（每组一次调用，聚合结果）。 */
+/** 行为是否需要目标参数（巡逻路径 / 跟随目标）。 */
+const BEHAVIOR_NEEDS_TARGET = new Set(['follow', 'patrol'])
+
+/**
+ * 顶部批量条：对已勾选的多个分组逐组下发批量（每组一次调用，聚合结果）。
+ * 删除前 DangerConfirm 二次确认 + 串行进度提示（FR-147）；选 follow/patrol 行为时旁置「配置」入口
+ * 暴露目标参数（跟随目标 / 巡逻路径），随 set-behavior 一并下发（useBotBatch.target）。
+ */
 function BatchBar({
   groupBy,
   groups,
@@ -510,37 +591,62 @@ function BatchBar({
   const { t } = useTranslation()
   const batch = useBotBatch()
   const [behavior, setBehavior] = useState<string>('')
+  const [target, setTarget] = useState<string>('')
+  const [showConfig, setShowConfig] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  // 串行进度：已处理组数 / 总组数（null=未在进行）。
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
 
   const totalSelected = groups.reduce((sum, g) => sum + g.total, 0)
+  const needsTarget = BEHAVIOR_NEEDS_TARGET.has(behavior)
 
-  // 逐组下发同一动作（后端批量按单一 filter 收敛，多组需多次调用），聚合成功/失败计数
-  const runAll = async (action: BotBatchAction, beh?: string) => {
+  // 逐组下发同一动作（后端批量按单一 filter 收敛，多组需多次调用），聚合成功/失败计数，逐组报进度
+  const runAll = async (action: BotBatchAction, beh?: string, tgt?: string) => {
     let succeeded = 0
     let failed = 0
-    for (const g of groups) {
+    setProgress({ done: 0, total: groups.length })
+    for (let i = 0; i < groups.length; i++) {
+      const g = groups[i]
       try {
         const res = await batch.mutateAsync({
           action,
           filter: groupFilter(groupBy, g, baseFilter),
           behavior: beh,
+          target: tgt,
         })
         succeeded += res.succeeded
         failed += res.failed
       } catch {
         failed += g.total
       }
+      setProgress({ done: i + 1, total: groups.length })
     }
+    setProgress(null)
     toast.success(t('bots.batchDone', { succeeded, failed }))
     onClear()
   }
+
+  const busy = batch.isPending || progress !== null
 
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 p-2">
       <span className="text-sm font-medium">
         {t('bots.selectedGroups', { groups: groups.length, bots: totalSelected })}
       </span>
+      {progress && (
+        <span className="text-xs text-muted-foreground tabular-nums">
+          {t('bots.batchProgress', { done: progress.done, total: progress.total })}
+        </span>
+      )}
       <div className="ml-auto flex items-center gap-2">
-        <Select value={behavior} onValueChange={setBehavior}>
+        <Select
+          value={behavior}
+          onValueChange={(v) => {
+            setBehavior(v)
+            // 切到不需目标的行为时清空已填目标，避免误带。
+            if (!BEHAVIOR_NEEDS_TARGET.has(v)) setTarget('')
+          }}
+        >
           <SelectTrigger size="sm" className="w-32">
             <SelectValue placeholder={t('bots.setBehavior')} />
           </SelectTrigger>
@@ -552,30 +658,114 @@ function BatchBar({
             ))}
           </SelectContent>
         </Select>
+        {needsTarget && (
+          <Button size="sm" variant="outline" onClick={() => setShowConfig(true)}>
+            {t('bots.behaviorConfig')}
+            {target && <span className="ml-1 max-w-24 truncate text-xs text-muted-foreground">· {target}</span>}
+          </Button>
+        )}
         <Button
           size="sm"
           variant="outline"
-          disabled={!behavior || batch.isPending}
-          onClick={() => runAll('set-behavior', behavior)}
+          disabled={!behavior || busy || (needsTarget && !target)}
+          title={needsTarget && !target ? t('bots.behaviorTargetRequired') : undefined}
+          onClick={() => runAll('set-behavior', behavior, target || undefined)}
         >
           {t('bots.apply')}
         </Button>
-        <Button size="sm" variant="outline" disabled={batch.isPending} onClick={() => runAll('stop')}>
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => runAll('stop')}>
           {t('bots.batchStop')}
         </Button>
         <Button
           size="sm"
           variant="destructive"
-          disabled={batch.isPending}
-          onClick={() => runAll('delete')}
+          disabled={busy}
+          onClick={() => setConfirmDelete(true)}
         >
           {t('bots.batchDelete')}
         </Button>
-        <Button size="sm" variant="ghost" onClick={onClear}>
+        <Button size="sm" variant="ghost" disabled={busy} onClick={onClear}>
           {t('common.cancel')}
         </Button>
       </div>
+
+      {/* 行为目标配置（跟随目标玩家名 / 巡逻路径点），随 set-behavior 一并下发 */}
+      <BehaviorConfigDialog
+        open={showConfig}
+        behavior={behavior}
+        target={target}
+        onApply={(v) => {
+          setTarget(v)
+          setShowConfig(false)
+        }}
+        onClose={() => setShowConfig(false)}
+      />
+
+      {/* 多组批量删除二次确认（FR-147） */}
+      <DangerConfirm
+        open={confirmDelete}
+        title={t('bots.batchDeleteTitle')}
+        description={t('bots.batchDeleteConfirm', { count: totalSelected })}
+        confirmLabel={t('bots.batchDelete')}
+        scope="group"
+        onConfirm={() => {
+          setConfirmDelete(false)
+          runAll('delete')
+        }}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
+  )
+}
+
+/** 行为参数化配置对话框（FR-147）：跟随=目标玩家名，巡逻=路径点（逗号分隔坐标）。 */
+function BehaviorConfigDialog({
+  open,
+  behavior,
+  target,
+  onApply,
+  onClose,
+}: {
+  open: boolean
+  behavior: string
+  target: string
+  onApply: (target: string) => void
+  onClose: () => void
+}) {
+  const { t } = useTranslation()
+  const [value, setValue] = useState(target)
+  const [prevOpen, setPrevOpen] = useState(open)
+  // 打开时以当前 target 回填（渲染期同步，避免 effect）。
+  if (open !== prevOpen) {
+    setPrevOpen(open)
+    if (open) setValue(target)
+  }
+
+  const isFollow = behavior === 'follow'
+  const label = isFollow ? t('bots.followTarget') : t('bots.patrolPath')
+  const placeholder = isFollow ? t('bots.followTargetPlaceholder') : t('bots.patrolPathPlaceholder')
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t('bots.behaviorConfigTitle', { behavior: t(`bots.${behavior}`, behavior) })}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-2 py-1">
+          <FieldLabel>{label}</FieldLabel>
+          <Input value={value} onChange={(e) => setValue(e.target.value)} placeholder={placeholder} autoFocus />
+          <p className="text-xs text-muted-foreground">
+            {isFollow ? t('bots.followTargetHint') : t('bots.patrolPathHint')}
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            {t('common.cancel')}
+          </Button>
+          <Button onClick={() => onApply(value.trim())}>{t('common.save')}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
