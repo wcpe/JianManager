@@ -1,7 +1,8 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useQueries } from '@tanstack/react-query'
+import { Plus } from 'lucide-react'
 import {
   useNodes,
   useSetNodeMaintenance,
@@ -25,9 +26,21 @@ import { Panel } from '@/components/ui/panel'
 import { MiniBar } from '@/components/ui/mini-bar'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { ResourceGauge } from '@/components/ui/gauge'
+import { StatCard } from '@/components/ui/stat-card'
+import { SummaryChips, type SummaryChip } from '@/components/ui/summary-chips'
+import { ViewToggle, type ViewMode } from '@/components/ui/view-toggle'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu'
 import { TimeSeriesChart, type ChartSeries } from '@/components/charts/TimeSeriesChart'
 import { RangePicker, type MetricRange } from '@/components/charts/RangePicker'
-import type { StatusLevel } from '@/lib/threshold'
+import { resourceLevel, type StatusLevel } from '@/lib/threshold'
+import { summarizeNodes } from '@/lib/node-summary'
+import { NodeWorktableCard } from '@/components/console/NodeWorktableCard'
 
 import NodeJDKPanel from '@/components/NodeJDKPanel'
 import NodePortsPanel from '@/components/NodePortsPanel'
@@ -125,7 +138,39 @@ function NodeInstanceCompare({ node, range }: { node: NodeInfo; range: MetricRan
   )
 }
 
-/** 展开的节点详情（FR-061/FR-060）：环形仪表盘 + CPU/内存/磁盘/网络历史曲线 + 各实例指标对比。 */
+/** 详情中的「概览」分段：硬件 + 系统 + 网络等次要信息（从主表移入，FR-144）。 */
+function NodeOverviewSection({ node }: { node: NodeInfo }) {
+  const { t } = useTranslation()
+  const online = node.status === 1
+  const rows: { label: string; value: React.ReactNode }[] = [
+    { label: t('nodes.ip'), value: node.host },
+    { label: t('nodes.system'), value: `${node.os} ${node.arch}` },
+    { label: t('nodes.cpuCores'), value: node.cpuCores > 0 ? node.cpuCores : '--' },
+    {
+      label: t('nodes.network'),
+      value:
+        online && (node.networkBytesSent || node.networkBytesRecv)
+          ? `↑${formatBytes(node.networkBytesSent)} ↓${formatBytes(node.networkBytesRecv)}`
+          : '--',
+    },
+    { label: t('nodes.grpcPort'), value: node.grpcPort > 0 ? node.grpcPort : '--' },
+    { label: t('nodes.wsPort'), value: node.wsPort > 0 ? node.wsPort : '--' },
+  ]
+  return (
+    <Panel title={t('nodes.overviewSection')}>
+      <div className="grid grid-cols-2 gap-x-6 gap-y-2 lg:grid-cols-3">
+        {rows.map((r) => (
+          <div key={r.label}>
+            <div className="text-[11px] text-muted-foreground">{r.label}</div>
+            <div className="text-xs">{r.value}</div>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  )
+}
+
+/** 展开的节点详情（FR-061/FR-060/FR-144）：概览（IP/系统/网络）+ 环形仪表盘 + 历史曲线 + 各实例指标对比。 */
 function NodeDetail({ node }: { node: NodeInfo }) {
   const { t } = useTranslation()
   const [range, setRange] = useState<MetricRange>('24h')
@@ -143,6 +188,7 @@ function NodeDetail({ node }: { node: NodeInfo }) {
 
   return (
     <div className="space-y-3 bg-muted/30 p-3">
+      <NodeOverviewSection node={node} />
       <div className="flex flex-wrap items-center gap-6">
         <ResourceGauge label={t('nodes.cpu')} value={(node.cpuUsage ?? 0) * 100} unit="%" size={84} />
         <ResourceGauge
@@ -179,19 +225,88 @@ function NodeDetail({ node }: { node: NodeInfo }) {
   )
 }
 
+/**
+ * 节点操作菜单（FR-144）：JDK / 端口 / 维护 / 排空 / 下线收入「⋯」kebab，
+ * 排空与下线标危险色；下线在线节点禁用 + tooltip。
+ */
+function NodeActionsMenu({
+  node,
+  onJDK,
+  onPorts,
+  onToggleMaintenance,
+  onDrain,
+  onDelete,
+}: {
+  node: NodeInfo
+  onJDK: () => void
+  onPorts: () => void
+  onToggleMaintenance: () => void
+  onDrain: () => void
+  onDelete: () => void
+}) {
+  const { t } = useTranslation()
+  const online = node.status === 1
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="xs" aria-label={t('nodes.actions')} className="px-1.5">
+          ⋯
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={onJDK}>{t('nodes.jdkTitle')}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onPorts}>{t('ports.button')}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onToggleMaintenance}>
+          {node.maintenance ? t('nodes.uncordon') : t('nodes.cordon')}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem variant="destructive" onSelect={onDrain}>
+          {t('nodes.drain')}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          variant="destructive"
+          title={online ? t('nodes.deleteOnlineHint') : undefined}
+          className={online ? 'opacity-50 cursor-not-allowed' : undefined}
+          onSelect={(e) => {
+            if (online) {
+              e.preventDefault()
+              return
+            }
+            onDelete()
+          }}
+        >
+          {t('nodes.delete')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 export default function NodesPage() {
   const { t } = useTranslation()
   const { data: nodes, isLoading } = useNodes({ refetchInterval: 30_000 })
+  const { data: instances } = useInstances()
 
   const [jdkNodeId, setJdkNodeId] = useState<number | null>(null)
   const [portsNodeId, setPortsNodeId] = useState<number | null>(null)
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [addOpen, setAddOpen] = useState(false)
+  // 工作台卡 ⇄ 列表视图（FR-144，§4.5）；运行实体默认卡片。
+  const [view, setView] = useState<ViewMode>('card')
 
   const setMaintenance = useSetNodeMaintenance()
   const drain = useDrainNode()
   const del = useDeleteNode()
+
+  // 集群汇总（FR-144）：在线/离线/维护计数 + 在线节点资源水位均值。
+  const summary = useMemo(() => summarizeNodes(nodes ?? []), [nodes])
+  // 各节点实例数（统计一次，卡片/详情共用）。
+  const instanceCountByNode = useMemo(() => {
+    const map = new Map<number, number>()
+    for (const i of instances ?? []) map.set(i.nodeId, (map.get(i.nodeId) ?? 0) + 1)
+    return map
+  }, [instances])
 
   const toggleMaintenance = (node: NodeInfo) => {
     const enabled = !node.maintenance
@@ -225,35 +340,108 @@ export default function NodesPage() {
     }
   }
 
+  const buildMenu = (node: NodeInfo) => (
+    <NodeActionsMenu
+      node={node}
+      onJDK={() => setJdkNodeId(node.id)}
+      onPorts={() => setPortsNodeId(node.id)}
+      onToggleMaintenance={() => toggleMaintenance(node)}
+      onDrain={() => setPending({ kind: 'drain', node })}
+      onDelete={() => setPending({ kind: 'delete', node })}
+    />
+  )
+
+  // 集群水位卡（仅有在线节点时显示水位，否则「--」）。
+  const gauge = (pct: number | null) => (pct === null ? '--' : `${pct.toFixed(0)}%`)
+  const summaryChips: SummaryChip[] = [
+    {
+      key: 'online',
+      label: t('nodes.online'),
+      count: summary.online,
+      level: 'success',
+      breathing: summary.online > 0,
+    },
+    { key: 'offline', label: t('nodes.offline'), count: summary.offline, level: 'danger' },
+    { key: 'maintenance', label: t('nodes.maintenance'), count: summary.maintenance, level: 'warning' },
+  ]
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">{t('nodes.title')}</h1>
         <Button size="sm" onClick={() => setAddOpen(true)}>
-          {t('nodes.enroll.addNode', '添加节点')}
+          <Plus className="size-4" /> {t('nodes.enroll.addNode', '添加节点')}
         </Button>
+      </div>
+
+      {/* 集群汇总头：状态计数 chip + CPU/内存/磁盘聚合水位（FR-144） */}
+      <div className="flex flex-wrap items-center gap-2">
+        <SummaryChips chips={summaryChips} className="flex-1" />
+        <ViewToggle
+          value={view}
+          onChange={setView}
+          cardLabel={t('grouping.viewCard')}
+          listLabel={t('grouping.viewList')}
+        />
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        <StatCard
+          label={t('nodes.clusterCpu')}
+          value={gauge(summary.cpuPct)}
+          bar={summary.cpuPct !== null ? { value: summary.cpuPct, level: resourceLevel(summary.cpuPct) } : undefined}
+        />
+        <StatCard
+          label={t('nodes.clusterMem')}
+          value={gauge(summary.memPct)}
+          bar={summary.memPct !== null ? { value: summary.memPct, level: resourceLevel(summary.memPct) } : undefined}
+        />
+        <StatCard
+          label={t('nodes.clusterDisk')}
+          value={gauge(summary.diskPct)}
+          bar={summary.diskPct !== null ? { value: summary.diskPct, level: resourceLevel(summary.diskPct) } : undefined}
+        />
       </div>
 
       {isLoading ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
+      ) : !nodes || nodes.length === 0 ? (
+        <Panel bodyClassName="py-10 text-center text-muted-foreground">{t('nodes.empty')}</Panel>
+      ) : view === 'card' ? (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {nodes.map((node) => (
+              <NodeWorktableCard
+                key={node.id}
+                node={node}
+                instanceCount={instanceCountByNode.get(node.id) ?? 0}
+                expanded={expandedId === node.id}
+                onToggle={() => setExpandedId(expandedId === node.id ? null : node.id)}
+                menu={buildMenu(node)}
+              />
+            ))}
+          </div>
+          {/* 展开的节点详情（卡片视图：详情显示在网格下方，仅展开时挂载→可见才轮询） */}
+          {expandedId !== null && nodes.find((n) => n.id === expandedId) && (
+            <Panel bodyClassName="p-0">
+              <NodeDetail node={nodes.find((n) => n.id === expandedId)!} />
+            </Panel>
+          )}
+        </div>
       ) : (
         <Panel bodyClassName="p-0">
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>{t('nodes.name')}</TableHead>
-                <TableHead>{t('nodes.ip')}</TableHead>
                 <TableHead>{t('nodes.status')}</TableHead>
                 <TableHead>{t('nodes.cpu')}</TableHead>
                 <TableHead>{t('nodes.memory')}</TableHead>
                 <TableHead>{t('nodes.disk')}</TableHead>
-                <TableHead>{t('nodes.network')}</TableHead>
-                <TableHead>{t('nodes.system')}</TableHead>
                 <TableHead className="text-right">{t('nodes.actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {nodes?.map((node) => {
+              {nodes.map((node) => {
                 const isOnline = node.status === 1
                 const expanded = expandedId === node.id
                 return (
@@ -268,7 +456,6 @@ export default function NodesPage() {
                           {node.name}
                         </button>
                       </TableCell>
-                      <TableCell className="text-muted-foreground">{node.host}</TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1.5">
                           <StatusBadge
@@ -297,46 +484,13 @@ export default function NodesPage() {
                       <TableCell>
                         <UsageCell pct={node.diskUsage} online={isOnline} />
                       </TableCell>
-                      <TableCell className="text-muted-foreground text-xs">
-                        {isOnline && (node.networkBytesSent || node.networkBytesRecv)
-                          ? `↑${formatBytes(node.networkBytesSent)} ↓${formatBytes(node.networkBytesRecv)}`
-                          : '--'}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {node.os} {node.arch}
-                      </TableCell>
-                      <TableCell className="space-x-3 text-right whitespace-nowrap">
-                        <button className="text-xs text-primary hover:underline" onClick={() => setJdkNodeId(node.id)}>
-                          JDK
-                        </button>
-                        <button className="text-xs text-primary hover:underline" onClick={() => setPortsNodeId(node.id)}>
-                          {t('ports.button')}
-                        </button>
-                        <button
-                          className="text-xs text-status-warning hover:underline"
-                          onClick={() => toggleMaintenance(node)}
-                        >
-                          {node.maintenance ? t('nodes.uncordon') : t('nodes.cordon')}
-                        </button>
-                        <button
-                          className="text-xs text-status-warning hover:underline"
-                          onClick={() => setPending({ kind: 'drain', node })}
-                        >
-                          {t('nodes.drain')}
-                        </button>
-                        <button
-                          className="text-xs text-status-danger hover:underline disabled:opacity-40 disabled:no-underline"
-                          disabled={isOnline}
-                          title={isOnline ? t('nodes.deleteOnlineHint') : undefined}
-                          onClick={() => setPending({ kind: 'delete', node })}
-                        >
-                          {t('nodes.delete')}
-                        </button>
+                      <TableCell className="text-right whitespace-nowrap">
+                        {buildMenu(node)}
                       </TableCell>
                     </TableRow>
                     {expanded && (
                       <TableRow>
-                        <TableCell colSpan={9} className="p-0">
+                        <TableCell colSpan={6} className="p-0">
                           <NodeDetail node={node} />
                         </TableCell>
                       </TableRow>
@@ -344,13 +498,6 @@ export default function NodesPage() {
                   </Fragment>
                 )
               })}
-              {(!nodes || nodes.length === 0) && (
-                <TableRow>
-                  <TableCell colSpan={9} className="text-center text-muted-foreground">
-                    {t('nodes.empty')}
-                  </TableCell>
-                </TableRow>
-              )}
             </TableBody>
           </Table>
         </Panel>

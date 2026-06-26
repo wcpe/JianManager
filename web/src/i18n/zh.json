@@ -633,7 +633,15 @@
       "copy": "复制",
       "copied": "已复制到剪贴板",
       "copyFailed": "复制失败，请手动选择复制"
-    }
+    },
+    "instancesUnit": "实例",
+    "cpuCores": "CPU 核数",
+    "grpcPort": "gRPC 端口",
+    "wsPort": "WS 端口",
+    "overviewSection": "概览",
+    "clusterCpu": "集群 CPU",
+    "clusterMem": "集群内存",
+    "clusterDisk": "集群磁盘"
   },
   "instances": {
     "title": "实例管理",

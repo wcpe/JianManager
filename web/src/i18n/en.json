@@ -656,7 +656,15 @@
       "copy": "Copy",
       "copied": "Copied to clipboard",
       "copyFailed": "Copy failed, please select and copy manually"
-    }
+    },
+    "instancesUnit": "instances",
+    "cpuCores": "CPU cores",
+    "grpcPort": "gRPC port",
+    "wsPort": "WS port",
+    "overviewSection": "Overview",
+    "clusterCpu": "Cluster CPU",
+    "clusterMem": "Cluster memory",
+    "clusterDisk": "Cluster disk"
   },
   "instances": {
     "title": "Instance Management",
