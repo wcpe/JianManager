@@ -1,18 +1,5 @@
 import { create } from 'zustand'
 
-/** 工作区分段：实例的统一视图分段——终端 / 文件 / 配置 / 插件 / 监控 / 服务器状态 / 业务 / 经济 / 背包 / Bot（FR-039、FR-052 插件、FR-060 监控、FR-077 状态、FR-119 业务、FR-123 经济、FR-127 背包）。 */
-export type WorkspaceSegment =
-  | 'terminal'
-  | 'files'
-  | 'config'
-  | 'plugins'
-  | 'metrics'
-  | 'serverstate'
-  | 'business'
-  | 'economy'
-  | 'inventory'
-  | 'bot'
-
 /** 侧栏布局持久键（FR-131）。 */
 const SIDEBAR_COLLAPSED_KEY = 'sidebar.collapsed'
 const COLLAPSED_GROUPS_KEY = 'sidebar.collapsedGroups'
@@ -53,17 +40,16 @@ function persist(key: string, value: string | null): void {
 }
 
 /**
- * 运维控制台的客户端 UI 状态（ADR-009 / FR-037 / FR-039 / FR-131）。
- * 存「当前选中节点」「当前在工作区打开的实例」「每实例工作区分段」「侧栏折叠/分组折叠态」，不进 URL，
+ * 运维控制台的客户端 UI 状态（ADR-009 / FR-037 / FR-039 / FR-131 / FR-166）。
+ * 存「当前选中节点」「当前在工作区打开的实例」「侧栏折叠/分组折叠态」，不进 URL，
  * 避免与既有 `/instances/:id` 详情路由语义冲突。侧栏折叠态/分组态/选中节点持久化 localStorage（FR-131）。
+ * 打开实例后的画布/卡片/预设状态由 `stores/workspace.ts` 承载（FR-166 可组合卡片工作区）。
  */
 interface ConsoleState {
   /** 实例树节点筛选：null = 全部节点，否则为某节点 id（持久） */
   selectedNodeId: number | null
   /** 工作区当前打开的实例 id；null = 未打开任何实例 */
   openInstanceId: number | null
-  /** 每个已打开实例的工作区分段（终端/Bot），按实例 id 记忆，缺省为终端 */
-  workspaceSegmentByInstance: Record<number, WorkspaceSegment>
   /** 多级侧栏中被折叠的分组 key 集合（FR-061/FR-131）；默认展开，记录已折叠者（持久）。 */
   collapsedGroups: Record<string, boolean>
   /** 侧栏是否折叠为仅图标轨（FR-131，持久）。 */
@@ -71,8 +57,6 @@ interface ConsoleState {
   setSelectedNodeId: (nodeId: number | null) => void
   openInstance: (instanceId: number) => void
   closeInstance: () => void
-  /** 设置某实例的工作区分段（终端/Bot），持久化于本会话内 */
-  setWorkspaceSegment: (instanceId: number, segment: WorkspaceSegment) => void
   /** 切换侧栏分组展开/折叠（FR-061/FR-131）。 */
   toggleGroup: (key: string) => void
   /** 切换侧栏折叠态（仅图标轨 ⇄ 展开，FR-131）。 */
@@ -82,7 +66,6 @@ interface ConsoleState {
 export const useConsoleStore = create<ConsoleState>((set) => ({
   selectedNodeId: loadSelectedNode(),
   openInstanceId: null,
-  workspaceSegmentByInstance: {},
   collapsedGroups: loadJSON<Record<string, boolean>>(COLLAPSED_GROUPS_KEY, {}),
   sidebarCollapsed: loadBool(SIDEBAR_COLLAPSED_KEY, false),
   setSelectedNodeId: (nodeId) => {
@@ -91,10 +74,6 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
   },
   openInstance: (instanceId) => set({ openInstanceId: instanceId }),
   closeInstance: () => set({ openInstanceId: null }),
-  setWorkspaceSegment: (instanceId, segment) =>
-    set((s) => ({
-      workspaceSegmentByInstance: { ...s.workspaceSegmentByInstance, [instanceId]: segment },
-    })),
   toggleGroup: (key) =>
     set((s) => {
       const next = { ...s.collapsedGroups, [key]: !s.collapsedGroups[key] }

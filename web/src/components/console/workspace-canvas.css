@@ -1,0 +1,55 @@
+/* 可组合工作区画布样式（FR-166）：把 react-grid-layout 默认视觉对齐靛蓝圆角主题。 */
+
+/* 每个网格项内的卡片铺满格子高度（卡内部再自管滚动）。 */
+.react-grid-item > div {
+  height: 100%;
+}
+
+/* 拖拽/缩放时的占位框：主色虚线 + 大圆角，替换默认的硬红底。 */
+.react-grid-item.react-grid-placeholder {
+  background: color-mix(in oklab, var(--primary) 14%, transparent);
+  border: 1.5px dashed color-mix(in oklab, var(--primary) 55%, transparent);
+  border-radius: 0.75rem;
+  opacity: 1;
+  transition-duration: 120ms;
+}
+
+/* 缩放手柄：右下角，柔和、hover 显主色（默认是个小三角图片，这里改成几何角标）。 */
+.react-grid-item > .react-resizable-handle {
+  width: 16px;
+  height: 16px;
+  right: 2px;
+  bottom: 2px;
+  padding: 0;
+  background-image: none;
+}
+
+.react-grid-item > .react-resizable-handle::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--border);
+  border-bottom: 2px solid var(--border);
+  border-bottom-right-radius: 2px;
+  transition: border-color 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.react-grid-item:hover > .react-resizable-handle::after {
+  border-right-color: color-mix(in oklab, var(--primary) 70%, transparent);
+  border-bottom-color: color-mix(in oklab, var(--primary) 70%, transparent);
+}
+
+/* 拖拽中的卡片轻微抬升（iOS 缓动观感）。 */
+.react-grid-item.react-draggable-dragging {
+  z-index: 30;
+  transition: none;
+  cursor: grabbing;
+}
+
+/* 拖拽过程禁用文本选择，避免误选卡内文字。 */
+.react-grid-item.react-draggable-dragging * {
+  user-select: none;
+}

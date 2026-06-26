@@ -2,7 +2,7 @@ import { Routes, Route, useLocation } from 'react-router'
 import { Suspense, lazy, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useConsoleStore } from '@/stores/console'
-import WorkspacePane from './WorkspacePane'
+import WorkspaceCanvas from './WorkspaceCanvas'
 import WorkspaceEmpty from './WorkspaceEmpty'
 
 const OverviewPage = lazy(() => import('@/pages/OverviewPage'))
@@ -30,9 +30,9 @@ const DatabasePage = lazy(() => import('@/pages/DatabasePage'))
 const SystemUpdatePage = lazy(() => import('@/pages/SystemUpdatePage'))
 const LicensesPage = lazy(() => import('@/pages/LicensesPage'))
 /**
- * 运维控制台右侧工作区（ADR-009 / FR-037 / FR-039）。
- * 打开实例时渲染单个 WorkspacePane（终端 | Bot 分段）；否则按路由渲染对应页面，既有页面不变。
- * 同一时刻仅一个实例面板，切换实例即换 instanceId。
+ * 运维控制台右侧工作区（ADR-009 / FR-037 / FR-039 / FR-166）。
+ * 打开实例时渲染可组合卡片画布 {@link WorkspaceCanvas}（卡片=实例×功能，可拖拽/调大小/存预设）；
+ * 否则按路由渲染对应页面，既有页面不变。同一时刻仅一个实例画布，切换实例即换 instanceId。
  */
 export default function Workspace() {
   const { t } = useTranslation()
@@ -51,7 +51,7 @@ export default function Workspace() {
   }, [location.pathname, openInstanceId, closeInstance])
 
   if (openInstanceId !== null) {
-    return <WorkspacePane instanceId={openInstanceId} />
+    return <WorkspaceCanvas instanceId={openInstanceId} />
   }
 
   return (

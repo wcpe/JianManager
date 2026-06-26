@@ -14,7 +14,7 @@ interface TerminalPaneProps {
   instanceId: number
   /**
    * 隐藏自带的面包屑/占位按钮工具栏。
-   * 工作区分段（FR-039）中由 WorkspacePane 统一承载面包屑与「终端 | Bot」切换，
+   * 可组合工作区（FR-166）中由卡壳 {@link WorkspaceCard} 统一承载卡头，
    * 此时本组件只渲染终端区，避免双重头部。
    */
   hideHeader?: boolean
