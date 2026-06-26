@@ -21,6 +21,18 @@
 - **全局页眉/顶栏（FR-162）**：控制台外壳（`DashboardPage`）内容区上方新增常驻全局顶栏（`ConsoleHeader`，侧栏保持全高）。左=当前页轻量标题/面包屑（`lib/pageTitle.ts` 纯函数按路由首段映射，打开实例显「实例 / <名称>」，与 FR-134 协同但不展开其 P3 全量）；中=常驻搜索框（本期占位：UI + `Ctrl/⌘+K` 聚焦，输入暂不联动检索）；右=集群概览徽标（在线节点/运行实例/崩溃数，复用 `GET /metrics/overview` + 实例列表本地统计，点击跳转筛选：运行/崩溃→`/instances?status=`、在线→`/nodes`）+ 告警铃铛（复用 `GET /alerts/events/unread-count` 未读计数 30s 轮询 + 下拉只读最近事件）+ 账户菜单（用户名/角色 + 退出登录，接管 FR-132）。`InstancesPage` 加最小 `?status=` 筛选启用胶水（完整 URL 可寻址归 FR-128）。补 `pageTitle` 纯函数单测；真机验证顶栏全要素 + 账户菜单（admin/平台管理员/退出）+ 中/英 + 暗/亮色。
 - **侧栏底部控件图标化 + 主题三态直选 + 底部布局（FR-132）**：侧栏页脚去掉 emoji 主题盲循环与纯文字按钮，主题/语言改 lucide 图标 + 文字 dropdown——主题 `Sun/Moon/Monitor` 三态**直选**（非盲循环）、语言 `Languages` 图标 + 语言名直选；切语言同步 `<html lang>`（`i18n.changeLanguage` + 初始化 `applyHtmlLang`）。底部重排为「版本号左下 · 开源许可入口右下」（→ `/licenses`）。**退出登录迁至全局顶栏账户菜单（FR-162），页脚不再保留**。真机验证三态直选 + 中/英 + `<html lang>` zh↔en 同步 + 暗/亮色。
 - **开源许可与依赖清单页（FR-135）**：新建独立页 `/licenses`（侧栏页脚入口 + 返回），照参考布局——包名搜索框 + 按类型分区「运行时依赖(N)/开发依赖(N)」计数 + 表格 [包名·版本·许可证·作者] + 行内展开许可证全文。依赖数据**构建期扫描生成、不手维护**：新增 `scripts/gen-licenses.mjs` 全覆盖三源——web + bot-worker 用 `license-checker-rseidelsohn`（`--production/--development` 分区运行时/开发）、Go 用 `go-licenses`（真正链接的模块集，版本/全文经 `go list -m` 补全，缺失回退启发式），产出 `web/public/licenses.json`（静态资源、非 `/api`，确定性输出无 diff 噪声）；`make build` 前置 `gen-licenses`。真机快照 830 条（web 486 / bot-worker 273 / go 71；运行时 526 / 开发 304），搜索过滤 + 行内全文 + 中/英 + 暗/亮色均通过。
+- **告警事件检索增强与规则行内启停（FR-149）**：告警事件列表加关键字（message 模糊）/ 时间范围（from..to）/ 按规则筛选 + 分页（page+pageSize，响应改 `{items,total}` 含命中总数）；规则表「启用」列改行内 Switch 即时启停（经 useUpdateAlertRule），规则静默时段加服务器时区说明与跨夜提示。后端 `EventQuery` 扩展 + ListEvents 关键字/时间/分页单测，前端适配顶栏告警铃新响应，同步 API.md。真机：关键字「CPU」过滤 24 条、分页「共 60 条·第 1/2 页」、Switch 翻转持久化。
+- **计划任务 Cron 可读化与命令编辑回填（FR-153）**：创建/编辑对话框对合法 Cron 显示人类可读描述（每 N 分钟/每天 HH:MM 等）+ 下次 3 次执行预览 + 常用预设 + 时区说明；编辑命令任务**回填**原命令并可改（后端 schedule PUT 接受 payload）。cron/nextRuns/describeCron 与 toUpdateBody 单测，同步 API.md。真机：编辑命令任务命令字段回填。
+- **认证体验增强（FR-157）**：登录与初始化引导密码框加显隐切换（PasswordInput）；初始化页加密码强度条 + 规则 checklist（passwordStrength 纯函数 + 单测），两次密码不一致绑定确认字段并聚焦。真机：登录密码显隐。
+
+### 修复
+- **实例「备份」标签永久加载中空壳（BUG-013）**：详情页备份 tab 硬编码「加载中」从不取数，接入 useBackups/Create/Restore/Delete，列备份 + 全量/增量创建 + 恢复·删除（DangerConfirm）。
+- **详情页状态显原始英文（BUG-014）**：实例详情头部状态原样显 `CRASHED`，与列表本地化「崩溃」不一致；改用 `instances.*` 文案映射。
+- **离线实例详情重复触发 422（BUG-017）**：终端 token 无条件申请致离线/停止实例反复 422；改为仅运行中申请（enabled 门控）。
+- **节点列表离线节点显示 0% 资源条（BUG-019）**：离线节点渲染 DB 陈旧 last-known 值误导为在线；离线统一显 `--`。
+- **Cron 非法表达式通过前端校验（BUG-020）**：`,,,` 等残缺表达式漏过；按 term 结构逐个校验拒绝。
+- **告警规则无法切换启用态（BUG-021）**：规则表启用列只读、编辑弹窗无 enabled 字段；改行内 Switch 即时切换（随 FR-149）。
+- **创建用户密码下限与初始化不一致（BUG-022）**：CreateUserDialog 下限 6 与 Setup 的 8 矛盾；统一为 8。
 
 ## 0.9.1（2026-06-24）
 
