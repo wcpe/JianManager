@@ -58,35 +58,33 @@ export default function LoginPage() {
           <h1 className="text-2xl font-semibold">{t('login.title')}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{t('login.subtitle')}</p>
         </div>
-          {error && (
-            <div className="mb-4 p-3 text-sm text-destructive bg-destructive/10 rounded-md">
-              {error}
-            </div>
-          )}
+        {error && (
+          <div className="mb-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>
+        )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="username">{t('login.username')}</Label>
-              <Input
-                id="username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">{t('login.password')}</Label>
-              <PasswordInput
-                id="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
-            <Button type="submit" className="w-full" disabled={login.isPending}>
-              {login.isPending ? `${t('login.submit')}...` : t('login.submit')}
-            </Button>
-          </form>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="username">{t('login.username')}</Label>
+            <Input
+              id="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="password">{t('login.password')}</Label>
+            <PasswordInput
+              id="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </div>
+          <Button type="submit" className="w-full" disabled={login.isPending}>
+            {login.isPending ? `${t('login.submit')}...` : t('login.submit')}
+          </Button>
+        </form>
       </Panel>
     </div>
   )

@@ -74,76 +74,74 @@ export default function SetupPage() {
           <h1 className="text-2xl font-semibold">{t('setup.title')}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{t('setup.subtitle')}</p>
         </div>
-          {error && (
-            <div className="mb-4 p-3 text-sm text-destructive bg-destructive/10 rounded-md">
-              {error}
-            </div>
-          )}
+        {error && (
+          <div className="mb-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>
+        )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="username">{t('setup.username')}</Label>
-              <Input
-                id="username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
-                minLength={3}
-                maxLength={64}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">{t('setup.password')}</Label>
-              <PasswordInput
-                id="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={8}
-                maxLength={128}
-              />
-              {password.length > 0 && (
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
-                    <div className="flex flex-1 gap-1">
-                      {[1, 2, 3, 4].map((i) => (
-                        <div
-                          key={i}
-                          className={`h-1 flex-1 rounded ${i <= strength.score ? STRENGTH_BAR[strength.score] : 'bg-muted'}`}
-                        />
-                      ))}
-                    </div>
-                    {strength.labelKey && (
-                      <span className="text-xs text-muted-foreground">{t(strength.labelKey)}</span>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
-                    {strength.rules.map((r) => (
-                      <span key={r.key} className={r.met ? 'text-green-600 dark:text-green-500' : ''}>
-                        {r.met ? '✓' : '○'} {t(r.key)}
-                      </span>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="username">{t('setup.username')}</Label>
+            <Input
+              id="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+              minLength={3}
+              maxLength={64}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="password">{t('setup.password')}</Label>
+            <PasswordInput
+              id="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={8}
+              maxLength={128}
+            />
+            {password.length > 0 && (
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <div className="flex flex-1 gap-1">
+                    {[1, 2, 3, 4].map((i) => (
+                      <div
+                        key={i}
+                        className={`h-1 flex-1 rounded ${i <= strength.score ? STRENGTH_BAR[strength.score] : 'bg-muted'}`}
+                      />
                     ))}
                   </div>
+                  {strength.labelKey && (
+                    <span className="text-xs text-muted-foreground">{t(strength.labelKey)}</span>
+                  )}
                 </div>
-              )}
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="confirm">{t('setup.confirm')}</Label>
-              <PasswordInput
-                id="confirm"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                required
-                minLength={8}
-                maxLength={128}
-                aria-invalid={mismatch}
-              />
-              {mismatch && <p className="text-xs text-destructive">{t('setup.passwordMismatch')}</p>}
-            </div>
-            <Button type="submit" className="w-full" disabled={setup.isPending}>
-              {setup.isPending ? t('setup.creating') : t('setup.submit')}
-            </Button>
-          </form>
+                <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                  {strength.rules.map((r) => (
+                    <span key={r.key} className={r.met ? 'text-green-600 dark:text-green-500' : ''}>
+                      {r.met ? '✓' : '○'} {t(r.key)}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="confirm">{t('setup.confirm')}</Label>
+            <PasswordInput
+              id="confirm"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              required
+              minLength={8}
+              maxLength={128}
+              aria-invalid={mismatch}
+            />
+            {mismatch && <p className="text-xs text-destructive">{t('setup.passwordMismatch')}</p>}
+          </div>
+          <Button type="submit" className="w-full" disabled={setup.isPending}>
+            {setup.isPending ? t('setup.creating') : t('setup.submit')}
+          </Button>
+        </form>
       </Panel>
     </div>
   )
