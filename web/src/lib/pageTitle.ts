@@ -6,6 +6,7 @@
 
 /** 路由首段 → 标题 i18n key。与 `Workspace.tsx` 的路由表、`ConsoleSidebar` 的 nav.* 对齐。 */
 const SEGMENT_TITLE_KEYS: Record<string, string> = {
+  monitor: 'nav.monitoring',
   nodes: 'nav.nodes',
   instances: 'nav.allInstances',
   networks: 'nav.networks',

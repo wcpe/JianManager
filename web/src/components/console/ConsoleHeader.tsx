@@ -1,16 +1,16 @@
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useLocation, useNavigate } from 'react-router'
-import { AlertTriangle, Bell, Boxes, ChevronRight, LogOut, Search, Server, UserRound } from 'lucide-react'
+import { useNavigate } from 'react-router'
+import { AlertTriangle, Bell, Boxes, LogOut, Search, Server, UserRound } from 'lucide-react'
 
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
 import { useInstances } from '@/api/instances'
 import { useMetricOverview } from '@/api/metrics'
 import { useAlertEvents, useUnreadAlertCount } from '@/api/alerts'
-import { consoleTitleKey } from '@/lib/pageTitle'
 import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
+import PageBreadcrumb from './PageBreadcrumb'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,26 +45,15 @@ export default function ConsoleHeader() {
   )
 }
 
-/** 左侧标题：打开实例工作区时显「实例 / <名称>」，否则按路由首段显所属区标题。 */
+/**
+ * 左侧面包屑（FR-134 + FR-162）：打开实例工作区时末级补实例名（域›实例›名称），
+ * 否则按路由渲染「域 › 页面」轨迹。统一页头组件 `PageBreadcrumb` 承载。
+ */
 function TitleArea() {
-  const { t } = useTranslation()
-  const { pathname } = useLocation()
   const openInstanceId = useConsoleStore((s) => s.openInstanceId)
   const { data: instances } = useInstances()
   const openInst = openInstanceId != null ? instances?.find((i) => i.id === openInstanceId) : undefined
-
-  if (openInst) {
-    return (
-      <div className="flex min-w-0 items-center gap-1 text-sm">
-        <span className="shrink-0 text-muted-foreground">{t('nav.instances')}</span>
-        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60" />
-        <span className="truncate font-semibold">{openInst.name}</span>
-      </div>
-    )
-  }
-
-  const key = consoleTitleKey(pathname)
-  return <h1 className="min-w-0 truncate text-sm font-semibold">{key ? t(key) : t('header.console')}</h1>
+  return <PageBreadcrumb leaf={openInst?.name} />
 }
 
 /** 中部常驻搜索框：本期仅 UI + 聚焦快捷键（Ctrl/⌘+K），检索逻辑留后续 FR。窄屏隐藏不挤垮工作区。 */
@@ -91,7 +80,7 @@ function SearchBox() {
         type="search"
         placeholder={t('header.searchPlaceholder')}
         aria-label={t('header.searchPlaceholder')}
-        className="h-8 pl-8 pr-12 text-sm"
+        className="h-8 rounded-lg bg-muted/60 pl-8 pr-12 text-sm transition-colors focus-visible:bg-card"
       />
       <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground lg:inline-block">
         Ctrl K
@@ -120,7 +109,7 @@ function ClusterBadge({
       onClick={onClick}
       title={`${label}: ${value}`}
       aria-label={`${label}: ${value}`}
-      className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+      className="flex items-center gap-1 rounded-lg px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
     >
       <Icon className={cn('size-3.5', danger && 'text-status-danger')} />
       <span className={cn('tabular-nums', danger && 'font-medium text-status-danger')}>{value}</span>
@@ -184,7 +173,7 @@ function AlertBell() {
         <button
           type="button"
           aria-label={t('header.alerts')}
-          className="relative rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+          className="relative rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
         >
           <Bell className="size-4" />
           {unread > 0 && (
@@ -237,7 +226,7 @@ function AccountMenu() {
         <button
           type="button"
           aria-label={t('header.account')}
-          className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+          className="flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
         >
           <span className="grid size-6 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
             <UserRound className="size-3.5" />
