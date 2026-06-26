@@ -164,13 +164,29 @@ export interface EventQuery {
   acknowledged?: boolean
   level?: string
   triggerType?: string
+  /** 模糊匹配 message（FR-149）。 */
+  keyword?: string
+  /** fired_at 下界（RFC3339，FR-149）。 */
+  from?: string
+  /** fired_at 上界（RFC3339，FR-149）。 */
+  to?: string
+  /** 页码，从 1 起（FR-149）。 */
+  page?: number
+  /** 每页条数（FR-149，默认后端 50）。 */
+  pageSize?: number
+}
+
+/** 告警事件分页响应（后端 GET /alerts/events 返回 {items,total}，FR-149）。 */
+export interface AlertEventPage {
+  items: AlertEventInfo[]
+  total: number
 }
 
 export function useAlertEvents(params?: EventQuery) {
   return useQuery({
     queryKey: ['alertEvents', params],
     queryFn: async () => {
-      const { data } = await api.get<AlertEventInfo[]>('/alerts/events', { params })
+      const { data } = await api.get<AlertEventPage>('/alerts/events', { params })
       return data
     },
   })

@@ -10,6 +10,8 @@ export interface ScheduleInfo {
   cronExpr: string
   /** 动作：start / stop / restart / command / backup。 */
   action: string
+  /** action=command 时的命令文本（后端 model.Schedule.Payload，FR-153）。 */
+  payload: string
   enabled: boolean
   lastRun: string | null
   createdAt: string
@@ -51,6 +53,8 @@ export interface UpdateScheduleBody {
   cronExpr?: string
   enabled?: boolean
   action?: string
+  /** action=command 时携带的命令文本，使编辑可改命令（FR-153）。 */
+  payload?: string
 }
 
 /** 获取定时任务列表（可按实例过滤）。 */

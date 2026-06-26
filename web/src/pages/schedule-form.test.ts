@@ -69,7 +69,7 @@ describe('toCreateBody', () => {
 })
 
 describe('toUpdateBody', () => {
-  it('仅产出 cronExpr/action/enabled 三字段（后端不可改实例/名称）', () => {
+  it('非 command 动作仅产出 cronExpr/action/enabled（不含 payload）', () => {
     const form: ScheduleFormState = {
       instanceId: '3',
       name: '原名',
@@ -81,5 +81,19 @@ describe('toUpdateBody', () => {
     const body = toUpdateBody(form)
     expect(body).toEqual({ cronExpr: '0 5 * * *', action: 'stop', enabled: false })
     expect(Object.keys(body).sort()).toEqual(['action', 'cronExpr', 'enabled'])
+  })
+
+  it('command 动作携带 payload，使编辑可改命令（FR-153）', () => {
+    const form: ScheduleFormState = {
+      instanceId: '3',
+      name: '原名',
+      cronExpr: '0 5 * * *',
+      action: 'command',
+      command: 'say hello',
+      enabled: true,
+    }
+    const body = toUpdateBody(form)
+    expect(body.payload).toBe('say hello')
+    expect(Object.keys(body).sort()).toEqual(['action', 'cronExpr', 'enabled', 'payload'])
   })
 })

@@ -253,6 +253,14 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
           </div>
         </div>
         <FieldError error={silenceError} />
+        {(form.silenceStart || form.silenceEnd) && (
+          <p className="text-xs text-muted-foreground">
+            {t('alerts.silenceTzNote')}
+            {isValidHHMM(form.silenceStart) && isValidHHMM(form.silenceEnd) && form.silenceStart > form.silenceEnd
+              ? ` · ${t('alerts.silenceCrossMidnight')}`
+              : ''}
+          </p>
+        )}
 
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={form.notifyRecover} onChange={(e) => setForm({ ...form, notifyRecover: e.target.checked })} />

@@ -173,7 +173,7 @@ function AlertBell() {
   const navigate = useNavigate()
   const { data: unread = 0 } = useUnreadAlertCount()
   const { data: events } = useAlertEvents()
-  const recent = (events ?? [])
+  const recent = (events?.items ?? [])
     .slice()
     .sort((a, b) => (a.firedAt < b.firedAt ? 1 : -1))
     .slice(0, 6)

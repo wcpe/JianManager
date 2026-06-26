@@ -215,18 +215,33 @@ function ruleConditionText(r: AlertRuleInfo): string {
 function EventsTab() {
   const { t } = useTranslation()
   const [filter, setFilter] = useState<EventQuery>({})
-  const { data: events } = useAlertEvents(filter)
+  const { data: eventPage } = useAlertEvents(filter)
   const { data: rules } = useAlertRules()
   const ack = useAcknowledgeEvent()
   const markAll = useMarkAllRead()
 
+  const items = eventPage?.items ?? []
+  const total = eventPage?.total ?? 0
+  const page = filter.page ?? 1
+  const pageSize = filter.pageSize ?? 50
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+  // 改筛选条件即回第 1 页；翻页用单独 setFilter。datetime-local（本地时区）转 RFC3339 给后端（FR-149）。
+  const patchFilter = (patch: Partial<EventQuery>) => setFilter((f) => ({ ...f, ...patch, page: 1 }))
+  const toIso = (v: string) => (v ? new Date(v).toISOString() : undefined)
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
+        <input
+          className="p-2 border rounded text-sm"
+          placeholder={t('alerts.keywordPlaceholder')}
+          value={filter.keyword ?? ''}
+          onChange={(e) => patchFilter({ keyword: e.target.value || undefined })}
+        />
         <select
           className="p-2 border rounded text-sm"
           value={filter.level ?? ''}
-          onChange={(e) => setFilter({ ...filter, level: e.target.value || undefined })}
+          onChange={(e) => patchFilter({ level: e.target.value || undefined })}
         >
           <option value="">{t('alerts.allLevels')}</option>
           <option value="info">{t('alerts.level_info')}</option>
@@ -236,7 +251,7 @@ function EventsTab() {
         <select
           className="p-2 border rounded text-sm"
           value={filter.resolved === undefined ? '' : String(filter.resolved)}
-          onChange={(e) => setFilter({ ...filter, resolved: e.target.value === '' ? undefined : e.target.value === 'true' })}
+          onChange={(e) => patchFilter({ resolved: e.target.value === '' ? undefined : e.target.value === 'true' })}
         >
           <option value="">{t('alerts.allStatus')}</option>
           <option value="false">{t('alerts.unresolved')}</option>
@@ -245,7 +260,7 @@ function EventsTab() {
         <select
           className="p-2 border rounded text-sm"
           value={filter.acknowledged === undefined ? '' : String(filter.acknowledged)}
-          onChange={(e) => setFilter({ ...filter, acknowledged: e.target.value === '' ? undefined : e.target.value === 'true' })}
+          onChange={(e) => patchFilter({ acknowledged: e.target.value === '' ? undefined : e.target.value === 'true' })}
         >
           <option value="">{t('alerts.allAck')}</option>
           <option value="false">{t('alerts.unacknowledged')}</option>
@@ -254,13 +269,29 @@ function EventsTab() {
         <select
           className="p-2 border rounded text-sm"
           value={filter.ruleId ?? ''}
-          onChange={(e) => setFilter({ ...filter, ruleId: e.target.value ? Number(e.target.value) : undefined })}
+          onChange={(e) => patchFilter({ ruleId: e.target.value ? Number(e.target.value) : undefined })}
         >
           <option value="">{t('alerts.allRules')}</option>
           {(rules ?? []).map((r) => (
             <option key={r.id} value={r.id}>{r.name}</option>
           ))}
         </select>
+        <label className="flex items-center gap-1 text-xs text-muted-foreground">
+          {t('alerts.timeFrom')}
+          <input
+            type="datetime-local"
+            className="p-1.5 border rounded text-sm"
+            onChange={(e) => patchFilter({ from: toIso(e.target.value) })}
+          />
+        </label>
+        <label className="flex items-center gap-1 text-xs text-muted-foreground">
+          {t('alerts.timeTo')}
+          <input
+            type="datetime-local"
+            className="p-1.5 border rounded text-sm"
+            onChange={(e) => patchFilter({ to: toIso(e.target.value) })}
+          />
+        </label>
         <div className="flex-1" />
         <button className="px-3 py-2 border rounded-md text-sm hover:bg-muted" onClick={() => markAll.mutate()}>
           {t('alerts.markAllRead')}
@@ -281,7 +312,7 @@ function EventsTab() {
             </tr>
           </thead>
           <tbody>
-            {(events ?? []).map((e) => (
+            {items.map((e) => (
               <tr key={e.id} className={`border-t ${e.read ? '' : 'bg-primary/5'}`}>
                 <td className="p-3 whitespace-nowrap">{new Date(e.firedAt).toLocaleString()}</td>
                 <td className="p-3"><LevelBadge level={e.level} /></td>
@@ -306,7 +337,7 @@ function EventsTab() {
                 </td>
               </tr>
             ))}
-            {(!events || events.length === 0) && (
+            {items.length === 0 && (
               <tr>
                 <td colSpan={7} className="p-6 text-center text-muted-foreground">
                   {t('alerts.emptyEvents')}
@@ -316,6 +347,27 @@ function EventsTab() {
           </tbody>
         </table>
       </div>
+
+      {total > 0 && (
+        <div className="flex items-center justify-end gap-3 text-sm text-muted-foreground">
+          <span>{t('alerts.totalEvents', { count: total })}</span>
+          <button
+            className="px-2 py-1 border rounded disabled:opacity-40"
+            disabled={page <= 1}
+            onClick={() => setFilter((f) => ({ ...f, page: page - 1 }))}
+          >
+            {t('alerts.prevPage')}
+          </button>
+          <span>{t('alerts.pageOf', { page, total: totalPages })}</span>
+          <button
+            className="px-2 py-1 border rounded disabled:opacity-40"
+            disabled={page >= totalPages}
+            onClick={() => setFilter((f) => ({ ...f, page: page + 1 }))}
+          >
+            {t('alerts.nextPage')}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
