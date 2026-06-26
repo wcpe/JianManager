@@ -102,7 +102,20 @@
     "batchResult": "Succeeded {{succeeded}} · Failed {{failed}}",
     "role_proxy": "Proxy",
     "role_backend": "Backend",
-    "role_universal": "Universal"
+    "role_universal": "Universal",
+    "manage": "Manage",
+    "viewList": "List",
+    "viewTopology": "Topology",
+    "topoTitle": "Network Topology",
+    "topoSubtitle": "Proxy↔backend registrations (M:N); proxies on the left, backends on the right, edges colored by status, dashed edges are disabled",
+    "topoNoProxy": "No proxy instances yet; provision a proxy to view the proxy↔backend topology here",
+    "topoNoBackend": "No backends registered to the proxies yet",
+    "topoDisabled": "Disabled registration",
+    "filterCandidates": "Filter candidates…",
+    "healthRunning": "Running",
+    "healthTransitioning": "Transitioning",
+    "healthCrashed": "Crashed",
+    "healthStopped": "Stopped"
   },
   "grouping": {
     "all": "All",

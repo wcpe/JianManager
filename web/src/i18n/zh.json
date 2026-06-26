@@ -102,7 +102,20 @@
     "batchResult": "成功 {{succeeded}} · 失败 {{failed}}",
     "role_proxy": "代理",
     "role_backend": "后端",
-    "role_universal": "通用"
+    "role_universal": "通用",
+    "manage": "管理",
+    "viewList": "列表",
+    "viewTopology": "拓扑",
+    "topoTitle": "群组服拓扑",
+    "topoSubtitle": "代理↔后端注册关系（M:N）；左列为代理、右列为后端，连线按运行状态着色，虚线为已禁用注册",
+    "topoNoProxy": "暂无代理实例，搭建代理后可在此查看 proxy↔backend 拓扑",
+    "topoNoBackend": "代理暂未注册任何后端",
+    "topoDisabled": "已禁用注册",
+    "filterCandidates": "筛选候选…",
+    "healthRunning": "运行",
+    "healthTransitioning": "过渡",
+    "healthCrashed": "崩溃",
+    "healthStopped": "停止"
   },
   "grouping": {
     "all": "全部",
