@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { AlertTriangle, Bell } from 'lucide-react'
 import {
   useAlertRules,
   useAlertEvents,
@@ -16,13 +17,32 @@ import {
   type EventQuery,
 } from '@/api/alerts'
 import DangerConfirm from '@/components/DangerConfirm'
+import { Panel } from '@/components/ui/panel'
+import { StatusBadge } from '@/components/ui/status-badge'
+import { Button } from '@/components/ui/button'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
 import { RuleDialog } from './alerts/RuleDialog'
 import { ChannelDialog } from './alerts/ChannelDialog'
 import {
-  levelBadgeClass,
+  levelStatusLevel,
   formatSilenceWindow,
   parseChannelIds,
+  summarizeRules,
 } from './alerts/alert-helpers'
+import {
+  ConfigRow,
+  ConfigSwitch,
+  ConfigViewToggle,
+  ConfigSummaryChips,
+  type ConfigView,
+} from './config-row'
 
 type Tab = 'rules' | 'events' | 'channels'
 
@@ -75,14 +95,10 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   )
 }
 
-/** 级别徽章。 */
+/** 级别 pill：统一走 StatusBadge（severity → 状态色），不硬编码品牌色。 */
 function LevelBadge({ level }: { level: string }) {
   const { t } = useTranslation()
-  return (
-    <span className={`inline-block rounded px-2 py-0.5 text-xs font-medium ${levelBadgeClass(level)}`}>
-      {t(`alerts.level_${level}`, level)}
-    </span>
-  )
+  return <StatusBadge level={levelStatusLevel(level)} label={t(`alerts.level_${level}`, level)} dot={false} />
 }
 
 // ── 规则页 ──
@@ -96,79 +112,146 @@ function RulesTab() {
   const [editing, setEditing] = useState<AlertRuleInfo | null>(null)
   const [showCreate, setShowCreate] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<AlertRuleInfo | null>(null)
+  const [view, setView] = useState<ConfigView>('card')
+  // 汇总条筛选：'enabled' 仅启用 / 'disabled' 仅停用 / null 全部。
+  const [filter, setFilter] = useState<'enabled' | 'disabled' | null>(null)
 
   const channelName = (id: number) => channels?.find((c) => c.id === id)?.name ?? `#${id}`
+  const channelText = (r: AlertRuleInfo) =>
+    parseChannelIds(r.channelIds).map(channelName).join(', ') || (r.notifyTarget ? 'webhook' : '—')
+
+  const summary = useMemo(() => summarizeRules(rules ?? []), [rules])
+  const visible = useMemo(() => {
+    const list = rules ?? []
+    if (filter === 'enabled') return list.filter((r) => r.enabled)
+    if (filter === 'disabled') return list.filter((r) => !r.enabled)
+    return list
+  }, [rules, filter])
+
+  const toggleEnabled = (r: AlertRuleInfo) => updateRule.mutate({ id: r.id, enabled: !r.enabled })
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <button
-          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-          onClick={() => setShowCreate(true)}
-        >
-          {t('alerts.createRule')}
-        </button>
+      <div className="flex flex-wrap items-center gap-3">
+        <ConfigSummaryChips
+          chips={[
+            { label: t('alerts.summaryAll'), value: summary.total, active: filter === null, onClick: () => setFilter(null) },
+            {
+              label: t('alerts.summaryEnabled'),
+              value: summary.enabled,
+              tone: 'success',
+              active: filter === 'enabled',
+              onClick: () => setFilter(filter === 'enabled' ? null : 'enabled'),
+            },
+            {
+              label: t('alerts.summaryDisabled'),
+              value: summary.total - summary.enabled,
+              tone: 'neutral',
+              active: filter === 'disabled',
+              onClick: () => setFilter(filter === 'disabled' ? null : 'disabled'),
+            },
+          ]}
+        />
+        <div className="ml-auto flex items-center gap-2">
+          <ConfigViewToggle view={view} onChange={setView} cardLabel={t('common.cardView')} listLabel={t('common.listView')} />
+          <Button onClick={() => setShowCreate(true)}>+ {t('alerts.createRule')}</Button>
+        </div>
       </div>
 
-      <div className="border rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-muted">
-            <tr>
-              <th className="p-3 text-left">{t('alerts.ruleName')}</th>
-              <th className="p-3 text-left">{t('alerts.triggerType')}</th>
-              <th className="p-3 text-left">{t('alerts.level')}</th>
-              <th className="p-3 text-left">{t('alerts.condition')}</th>
-              <th className="p-3 text-left">{t('alerts.channels')}</th>
-              <th className="p-3 text-left">{t('alerts.silence')}</th>
-              <th className="p-3 text-left">{t('alerts.enabled')}</th>
-              <th className="p-3 text-left">{t('common.actions')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(rules ?? []).map((r) => (
-              <tr key={r.id} className="border-t">
-                <td className="p-3 font-medium">{r.name}</td>
-                <td className="p-3">{t(`alerts.trigger_${r.triggerType}`, r.triggerType)}</td>
-                <td className="p-3"><LevelBadge level={r.level} /></td>
-                <td className="p-3 text-muted-foreground">{ruleConditionText(r)}</td>
-                <td className="p-3 text-muted-foreground">
-                  {parseChannelIds(r.channelIds).map(channelName).join(', ') || (r.notifyTarget ? 'webhook' : '—')}
-                </td>
-                <td className="p-3 text-muted-foreground">{formatSilenceWindow(r.silenceStart, r.silenceEnd) || '—'}</td>
-                <td className="p-3">
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={r.enabled}
-                    aria-label={t('alerts.enabled')}
-                    title={r.enabled ? t('alerts.on') : t('alerts.off')}
+      {visible.length === 0 ? (
+        <Panel>
+          <p className="py-6 text-center text-sm text-muted-foreground">{t('alerts.emptyRules')}</p>
+        </Panel>
+      ) : view === 'card' ? (
+        <div className="flex flex-col gap-2.5">
+          {visible.map((r) => (
+            <ConfigRow
+              key={r.id}
+              icon={<AlertTriangle className="size-[18px]" />}
+              tone={levelStatusLevel(r.level)}
+              title={r.name}
+              code={ruleConditionText(r)}
+              subtitle={`${t(`alerts.trigger_${r.triggerType}`, r.triggerType)} · ${channelText(r)}`}
+              meta={
+                formatSilenceWindow(r.silenceStart, r.silenceEnd)
+                  ? `${t('alerts.silence')} ${formatSilenceWindow(r.silenceStart, r.silenceEnd)}`
+                  : undefined
+              }
+              trailing={
+                <>
+                  <LevelBadge level={r.level} />
+                  <ConfigSwitch
+                    checked={r.enabled}
                     disabled={updateRule.isPending}
-                    onClick={() => updateRule.mutate({ id: r.id, enabled: !r.enabled })}
-                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50 ${r.enabled ? 'bg-primary' : 'bg-muted-foreground/30'}`}
-                  >
-                    <span className={`inline-block h-4 w-4 transform rounded-full bg-background shadow transition-transform ${r.enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                  </button>
-                </td>
-                <td className="p-3 space-x-3 whitespace-nowrap">
-                  <button className="text-primary hover:underline" onClick={() => setEditing(r)}>
+                    onChange={() => toggleEnabled(r)}
+                    label={t('alerts.enabled')}
+                    onLabel={t('alerts.on')}
+                    offLabel={t('alerts.off')}
+                  />
+                  <Button variant="ghost" size="xs" onClick={() => setEditing(r)}>
                     {t('common.edit')}
-                  </button>
-                  <button className="text-destructive hover:underline" onClick={() => setDeleteTarget(r)}>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-status-danger hover:text-status-danger"
+                    onClick={() => setDeleteTarget(r)}
+                  >
                     {t('common.delete')}
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {(!rules || rules.length === 0) && (
-              <tr>
-                <td colSpan={8} className="p-6 text-center text-muted-foreground">
-                  {t('alerts.emptyRules')}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+                  </Button>
+                </>
+              }
+            />
+          ))}
+        </div>
+      ) : (
+        <Panel bodyClassName="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t('alerts.ruleName')}</TableHead>
+                <TableHead>{t('alerts.triggerType')}</TableHead>
+                <TableHead>{t('alerts.level')}</TableHead>
+                <TableHead>{t('alerts.condition')}</TableHead>
+                <TableHead>{t('alerts.channels')}</TableHead>
+                <TableHead>{t('alerts.silence')}</TableHead>
+                <TableHead>{t('alerts.enabled')}</TableHead>
+                <TableHead className="text-right">{t('common.actions')}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {visible.map((r) => (
+                <TableRow key={r.id}>
+                  <TableCell className="font-medium">{r.name}</TableCell>
+                  <TableCell>{t(`alerts.trigger_${r.triggerType}`, r.triggerType)}</TableCell>
+                  <TableCell><LevelBadge level={r.level} /></TableCell>
+                  <TableCell className="font-mono text-xs text-muted-foreground">{ruleConditionText(r)}</TableCell>
+                  <TableCell className="text-muted-foreground">{channelText(r)}</TableCell>
+                  <TableCell className="text-muted-foreground">{formatSilenceWindow(r.silenceStart, r.silenceEnd) || '—'}</TableCell>
+                  <TableCell>
+                    <ConfigSwitch
+                      checked={r.enabled}
+                      disabled={updateRule.isPending}
+                      onChange={() => toggleEnabled(r)}
+                      label={t('alerts.enabled')}
+                      onLabel={t('alerts.on')}
+                      offLabel={t('alerts.off')}
+                    />
+                  </TableCell>
+                  <TableCell className="space-x-3 text-right whitespace-nowrap">
+                    <button className="text-xs text-primary hover:underline" onClick={() => setEditing(r)}>
+                      {t('common.edit')}
+                    </button>
+                    <button className="text-xs text-status-danger hover:underline" onClick={() => setDeleteTarget(r)}>
+                      {t('common.delete')}
+                    </button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Panel>
+      )}
 
       {(showCreate || editing) && (
         <RuleDialog
@@ -293,79 +376,81 @@ function EventsTab() {
           />
         </label>
         <div className="flex-1" />
-        <button className="px-3 py-2 border rounded-md text-sm hover:bg-muted" onClick={() => markAll.mutate()}>
+        <Button variant="outline" size="sm" onClick={() => markAll.mutate()}>
           {t('alerts.markAllRead')}
-        </button>
+        </Button>
       </div>
 
-      <div className="border rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-muted">
-            <tr>
-              <th className="p-3 text-left">{t('alerts.firedAt')}</th>
-              <th className="p-3 text-left">{t('alerts.level')}</th>
-              <th className="p-3 text-left">{t('alerts.rule')}</th>
-              <th className="p-3 text-left">{t('alerts.message')}</th>
-              <th className="p-3 text-left">{t('alerts.count')}</th>
-              <th className="p-3 text-left">{t('alerts.status')}</th>
-              <th className="p-3 text-left">{t('common.actions')}</th>
-            </tr>
-          </thead>
-          <tbody>
+      <Panel bodyClassName="p-0">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{t('alerts.firedAt')}</TableHead>
+              <TableHead>{t('alerts.level')}</TableHead>
+              <TableHead>{t('alerts.rule')}</TableHead>
+              <TableHead>{t('alerts.message')}</TableHead>
+              <TableHead>{t('alerts.count')}</TableHead>
+              <TableHead>{t('alerts.status')}</TableHead>
+              <TableHead className="text-right">{t('common.actions')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {items.map((e) => (
-              <tr key={e.id} className={`border-t ${e.read ? '' : 'bg-primary/5'}`}>
-                <td className="p-3 whitespace-nowrap">{new Date(e.firedAt).toLocaleString()}</td>
-                <td className="p-3"><LevelBadge level={e.level} /></td>
-                <td className="p-3">{e.rule?.name ?? `#${e.ruleId}`}</td>
-                <td className="p-3 max-w-[360px] truncate" title={e.message}>{e.message}</td>
-                <td className="p-3">{e.count > 1 ? `×${e.count}` : ''}</td>
-                <td className="p-3">
+              <TableRow key={e.id} className={e.read ? '' : 'bg-primary/5'}>
+                <TableCell className="whitespace-nowrap">{new Date(e.firedAt).toLocaleString()}</TableCell>
+                <TableCell><LevelBadge level={e.level} /></TableCell>
+                <TableCell>{e.rule?.name ?? `#${e.ruleId}`}</TableCell>
+                <TableCell className="max-w-[360px] truncate" title={e.message}>{e.message}</TableCell>
+                <TableCell>{e.count > 1 ? `×${e.count}` : ''}</TableCell>
+                <TableCell>
                   {e.resolved ? (
-                    <span className="text-muted-foreground">{t('alerts.resolved')}</span>
+                    <StatusBadge level="neutral" label={t('alerts.resolved')} dot={false} />
                   ) : (
-                    <span className="text-amber-600 dark:text-amber-400">{t('alerts.unresolved')}</span>
+                    <StatusBadge level="warning" label={t('alerts.unresolved')} dot={false} />
                   )}
-                </td>
-                <td className="p-3 whitespace-nowrap">
+                </TableCell>
+                <TableCell className="text-right whitespace-nowrap">
                   {e.acknowledged ? (
                     <span className="text-xs text-muted-foreground">{t('alerts.acknowledged')}</span>
                   ) : (
-                    <button className="text-primary hover:underline" onClick={() => ack.mutate(e.id)}>
+                    <button className="text-xs text-primary hover:underline" onClick={() => ack.mutate(e.id)}>
                       {t('alerts.acknowledge')}
                     </button>
                   )}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
             {items.length === 0 && (
-              <tr>
-                <td colSpan={7} className="p-6 text-center text-muted-foreground">
+              <TableRow>
+                <TableCell colSpan={7} className="text-center text-muted-foreground">
                   {t('alerts.emptyEvents')}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             )}
-          </tbody>
-        </table>
-      </div>
+          </TableBody>
+        </Table>
+      </Panel>
 
       {total > 0 && (
         <div className="flex items-center justify-end gap-3 text-sm text-muted-foreground">
           <span>{t('alerts.totalEvents', { count: total })}</span>
-          <button
-            className="px-2 py-1 border rounded disabled:opacity-40"
+          <Button
+            variant="outline"
+            size="xs"
             disabled={page <= 1}
             onClick={() => setFilter((f) => ({ ...f, page: page - 1 }))}
           >
             {t('alerts.prevPage')}
-          </button>
+          </Button>
           <span>{t('alerts.pageOf', { page, total: totalPages })}</span>
-          <button
-            className="px-2 py-1 border rounded disabled:opacity-40"
+          <Button
+            variant="outline"
+            size="xs"
             disabled={page >= totalPages}
             onClick={() => setFilter((f) => ({ ...f, page: page + 1 }))}
           >
             {t('alerts.nextPage')}
-          </button>
+          </Button>
         </div>
       )}
     </div>
@@ -386,57 +471,48 @@ function ChannelsTab() {
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
-        <button
-          className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-          onClick={() => setShowCreate(true)}
-        >
-          {t('alerts.createChannel')}
-        </button>
+        <Button onClick={() => setShowCreate(true)}>+ {t('alerts.createChannel')}</Button>
       </div>
 
-      <div className="border rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-muted">
-            <tr>
-              <th className="p-3 text-left">{t('alerts.channelName')}</th>
-              <th className="p-3 text-left">{t('alerts.channelType')}</th>
-              <th className="p-3 text-left">{t('alerts.enabled')}</th>
-              <th className="p-3 text-left">{t('common.actions')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(channels ?? []).map((c) => (
-              <tr key={c.id} className="border-t">
-                <td className="p-3 font-medium">{c.name}</td>
-                <td className="p-3">{t(`alerts.channel_${c.type}`, c.type)}</td>
-                <td className="p-3">{c.enabled ? t('alerts.on') : t('alerts.off')}</td>
-                <td className="p-3 space-x-3 whitespace-nowrap">
-                  <button
-                    className="text-primary hover:underline disabled:opacity-50"
-                    disabled={testChannel.isPending}
-                    onClick={() => testChannel.mutate(c.id)}
-                  >
+      {(channels ?? []).length === 0 ? (
+        <Panel>
+          <p className="py-6 text-center text-sm text-muted-foreground">{t('alerts.emptyChannels')}</p>
+        </Panel>
+      ) : (
+        <div className="flex flex-col gap-2.5">
+          {(channels ?? []).map((c) => (
+            <ConfigRow
+              key={c.id}
+              icon={<Bell className="size-[18px]" />}
+              tone={c.enabled ? 'primary' : 'neutral'}
+              title={c.name}
+              subtitle={t(`alerts.channel_${c.type}`, c.type)}
+              trailing={
+                <>
+                  <StatusBadge
+                    level={c.enabled ? 'success' : 'neutral'}
+                    label={c.enabled ? t('alerts.on') : t('alerts.off')}
+                  />
+                  <Button variant="ghost" size="xs" disabled={testChannel.isPending} onClick={() => testChannel.mutate(c.id)}>
                     {t('alerts.testSend')}
-                  </button>
-                  <button className="text-primary hover:underline" onClick={() => setEditing(c)}>
+                  </Button>
+                  <Button variant="ghost" size="xs" onClick={() => setEditing(c)}>
                     {t('common.edit')}
-                  </button>
-                  <button className="text-destructive hover:underline" onClick={() => setDeleteTarget(c)}>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-status-danger hover:text-status-danger"
+                    onClick={() => setDeleteTarget(c)}
+                  >
                     {t('common.delete')}
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {(!channels || channels.length === 0) && (
-              <tr>
-                <td colSpan={4} className="p-6 text-center text-muted-foreground">
-                  {t('alerts.emptyChannels')}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+                  </Button>
+                </>
+              }
+            />
+          ))}
+        </div>
+      )}
 
       {(showCreate || editing) && (
         <ChannelDialog

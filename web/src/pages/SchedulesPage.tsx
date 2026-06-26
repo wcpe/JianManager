@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { Clock } from 'lucide-react'
 import {
   useSchedules,
   useCreateSchedule,
@@ -11,6 +12,13 @@ import {
 } from '@/api/schedules'
 import { useInstances } from '@/api/instances'
 import { validateCron, nextRuns, describeCron, CRON_PRESETS } from '@/lib/cron'
+import {
+  ConfigRow,
+  ConfigSwitch,
+  ConfigViewToggle,
+  ConfigSummaryChips,
+  type ConfigView,
+} from '@/pages/config-row'
 import {
   SCHEDULE_ACTIONS,
   EMPTY_SCHEDULE_FORM,
@@ -59,9 +67,23 @@ export default function SchedulesPage() {
   const [deleteTarget, setDeleteTarget] = useState<ScheduleInfo | null>(null)
   // 展开查看日志的任务 ID。
   const [logsId, setLogsId] = useState<number | null>(null)
+  const [view, setView] = useState<ConfigView>('list')
+  // 汇总条筛选：'enabled' 仅启用 / 'disabled' 仅停用 / null 全部。
+  const [filter, setFilter] = useState<'enabled' | 'disabled' | null>(null)
 
   const instanceName = (id: number) =>
     instances?.find((i) => i.id === id)?.name ?? `#${id}`
+
+  // cron 人类可读文案（FR-153）：可识别则译，否则退回原表达式。
+  const cronReadable = (expr: string): string => {
+    const desc = describeCron(expr)
+    return desc ? t(desc.key, desc.params) : expr
+  }
+
+  const enabledCount = (schedules ?? []).filter((s) => s.enabled).length
+  const visible = (schedules ?? []).filter((s) =>
+    filter === 'enabled' ? s.enabled : filter === 'disabled' ? !s.enabled : true,
+  )
 
   const handleToggleEnabled = (s: ScheduleInfo) => {
     updateSchedule.mutate(
@@ -91,11 +113,87 @@ export default function SchedulesPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold">{t('schedules.title')}</h1>
-        <Button onClick={() => setShowCreate(true)}>+ {t('schedules.createSchedule')}</Button>
+        <div className="flex items-center gap-2">
+          <ConfigViewToggle view={view} onChange={setView} cardLabel={t('common.cardView')} listLabel={t('common.listView')} />
+          <Button onClick={() => setShowCreate(true)}>+ {t('schedules.createSchedule')}</Button>
+        </div>
       </div>
+
+      <ConfigSummaryChips
+        chips={[
+          { label: t('schedules.summaryAll'), value: (schedules ?? []).length, active: filter === null, onClick: () => setFilter(null) },
+          {
+            label: t('schedules.summaryEnabled'),
+            value: enabledCount,
+            tone: 'success',
+            active: filter === 'enabled',
+            onClick: () => setFilter(filter === 'enabled' ? null : 'enabled'),
+          },
+          {
+            label: t('schedules.summaryDisabled'),
+            value: (schedules ?? []).length - enabledCount,
+            tone: 'neutral',
+            active: filter === 'disabled',
+            onClick: () => setFilter(filter === 'disabled' ? null : 'disabled'),
+          },
+        ]}
+      />
 
       {isLoading ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
+      ) : visible.length === 0 ? (
+        <Panel>
+          <p className="py-6 text-center text-sm text-muted-foreground">{t('schedules.empty')}</p>
+        </Panel>
+      ) : view === 'card' ? (
+        <div className="flex flex-col gap-2.5">
+          {visible.map((s) => (
+            <ConfigRow
+              key={s.id}
+              icon={<Clock className="size-[18px]" />}
+              tone={s.enabled ? 'primary' : 'neutral'}
+              title={s.name}
+              code={s.cronExpr}
+              subtitle={`${instanceName(s.instanceId)} · ${t(`schedules.action_${s.action}`, { defaultValue: s.action })} · ${cronReadable(s.cronExpr)}`}
+              meta={
+                <>
+                  <div>{s.enabled ? t('schedules.nextRunLabel') : t('schedules.disabledLabel')}</div>
+                  <div>{s.lastRun ? new Date(s.lastRun).toLocaleString() : t('schedules.neverRun')}</div>
+                </>
+              }
+              trailing={
+                <>
+                  <ConfigSwitch
+                    checked={s.enabled}
+                    onChange={() => handleToggleEnabled(s)}
+                    label={t('schedules.enabled')}
+                    onLabel={t('schedules.enable')}
+                    offLabel={t('schedules.disable')}
+                  />
+                  <Button variant="ghost" size="xs" onClick={() => setLogsId(logsId === s.id ? null : s.id)}>
+                    {logsId === s.id ? t('schedules.hideLogs') : t('schedules.viewLogs')}
+                  </Button>
+                  <Button variant="ghost" size="xs" onClick={() => setEditing(s)}>
+                    {t('common.edit')}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-status-danger hover:text-status-danger"
+                    onClick={() => setDeleteTarget(s)}
+                  >
+                    {t('common.delete')}
+                  </Button>
+                </>
+              }
+            />
+          ))}
+          {logsId !== null && visible.some((s) => s.id === logsId) && (
+            <Panel bodyClassName="p-0">
+              <ScheduleLogs scheduleId={logsId} />
+            </Panel>
+          )}
+        </div>
       ) : (
         <Panel bodyClassName="p-0">
           <Table>
@@ -111,19 +209,25 @@ export default function SchedulesPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(schedules ?? []).map((s) => {
+              {visible.map((s) => {
                 const expanded = logsId === s.id
                 return (
                   <Fragment key={s.id}>
                     <TableRow>
                       <TableCell className="font-medium">{s.name}</TableCell>
                       <TableCell className="text-muted-foreground">{instanceName(s.instanceId)}</TableCell>
-                      <TableCell className="font-mono text-xs">{s.cronExpr}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        <div>{s.cronExpr}</div>
+                        <div className="font-sans text-muted-foreground">{cronReadable(s.cronExpr)}</div>
+                      </TableCell>
                       <TableCell>{t(`schedules.action_${s.action}`, { defaultValue: s.action })}</TableCell>
                       <TableCell>
-                        <StatusBadge
-                          level={s.enabled ? 'success' : 'neutral'}
-                          label={s.enabled ? t('common.enabled') : t('common.disabled')}
+                        <ConfigSwitch
+                          checked={s.enabled}
+                          onChange={() => handleToggleEnabled(s)}
+                          label={t('schedules.enabled')}
+                          onLabel={t('schedules.enable')}
+                          offLabel={t('schedules.disable')}
                         />
                       </TableCell>
                       <TableCell className="text-muted-foreground">
@@ -135,12 +239,6 @@ export default function SchedulesPage() {
                           onClick={() => setLogsId(expanded ? null : s.id)}
                         >
                           {expanded ? t('schedules.hideLogs') : t('schedules.viewLogs')}
-                        </button>
-                        <button
-                          className="text-xs text-status-warning hover:underline"
-                          onClick={() => handleToggleEnabled(s)}
-                        >
-                          {s.enabled ? t('schedules.disable') : t('schedules.enable')}
                         </button>
                         <button
                           className="text-xs text-primary hover:underline"
@@ -166,13 +264,6 @@ export default function SchedulesPage() {
                   </Fragment>
                 )
               })}
-              {(!schedules || schedules.length === 0) && (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground">
-                    {t('schedules.empty')}
-                  </TableCell>
-                </TableRow>
-              )}
             </TableBody>
           </Table>
         </Panel>

@@ -33,7 +33,16 @@ export interface CreateBackupBody {
   storageId?: number
 }
 
-export function useBackups(instanceId?: number) {
+/** useBackups 选项。 */
+export interface UseBackupsOptions {
+  /**
+   * 轮询间隔毫秒；存在进行中备份时由调用方传入以刷新进度（FR-151）。
+   * 省略或传 false 时不轮询，保持既有行为（其他调用方不受影响）。
+   */
+  refetchInterval?: number | false
+}
+
+export function useBackups(instanceId?: number, options?: UseBackupsOptions) {
   return useQuery({
     queryKey: ['backups', instanceId],
     queryFn: async () => {
@@ -42,6 +51,7 @@ export function useBackups(instanceId?: number) {
       return data
     },
     enabled: !!instanceId,
+    refetchInterval: options?.refetchInterval ?? false,
   })
 }
 

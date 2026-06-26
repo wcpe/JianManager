@@ -1,7 +1,9 @@
 /**
- * 告警 UI 纯函数助手（FR-085）。级别着色、通道类型展示、静默窗口格式化、
- * 触发类型字段可见性判定——抽为纯函数便于 vitest 覆盖，UI 组件只做渲染。
+ * 告警 UI 纯函数助手（FR-085 / FR-149）。级别着色、通道类型展示、静默窗口格式化、
+ * 触发类型字段可见性判定、级别→状态等级映射、规则汇总——抽为纯函数便于 vitest 覆盖，
+ * UI 组件只做渲染。
  */
+import type { StatusLevel } from '@/lib/threshold'
 
 /** 告警级别。 */
 export type AlertLevel = 'info' | 'warn' | 'critical'
@@ -36,6 +38,22 @@ export function levelBadgeClass(level: string): string {
     case 'info':
     default:
       return 'bg-sky-500/15 text-sky-600 dark:text-sky-400'
+  }
+}
+
+/**
+ * 告警级别 → 状态等级（FR-149 / FR-163 StatusBadge 复用）：严重=危险、警告=警告、提示=信息。
+ * 配置行的级别 pill 与状态徽章统一走 StatusLevel，避免硬编码品牌色。
+ */
+export function levelStatusLevel(level: string): StatusLevel {
+  switch (level) {
+    case 'critical':
+      return 'danger'
+    case 'warn':
+      return 'warning'
+    case 'info':
+    default:
+      return 'info'
   }
 }
 
@@ -102,6 +120,19 @@ export function isValidHHMM(value: string): boolean {
   const v = value.trim()
   if (v === '') return true
   return /^([01]\d|2[0-3]):[0-5]\d$/.test(v)
+}
+
+/** 规则汇总统计（FR-149 配置行汇总条）：总数 / 启用数。 */
+export interface RuleSummary {
+  total: number
+  enabled: number
+}
+
+/** 统计规则总数与启用数，用于列表顶部汇总 chip（FR-149）。 */
+export function summarizeRules(rules: readonly { enabled: boolean }[]): RuleSummary {
+  let enabled = 0
+  for (const r of rules) if (r.enabled) enabled += 1
+  return { total: rules.length, enabled }
 }
 
 /** 解析后端返回的 channelIds JSON 串（"[1,2]"）为数组，容错为空数组。 */

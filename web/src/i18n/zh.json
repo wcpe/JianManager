@@ -250,7 +250,10 @@
     "na": "N/A",
     "online": "在线",
     "offline": "离线",
-    "irreversible": "此操作不可撤销。"
+    "irreversible": "此操作不可撤销。",
+    "deleted": "已删除",
+    "cardView": "卡片",
+    "listView": "列表"
   },
   "nav": {
     "dashboard": "仪表盘",
@@ -1141,7 +1144,12 @@
     "deletedToast": "定时任务已删除",
     "createFailed": "创建定时任务失败",
     "enabledToast": "定时任务已启用",
-    "disabledToast": "定时任务已禁用"
+    "disabledToast": "定时任务已禁用",
+    "summaryAll": "全部",
+    "summaryEnabled": "启用",
+    "summaryDisabled": "停用",
+    "nextRunLabel": "下次执行",
+    "disabledLabel": "已停用"
   },
   "backups": {
     "title": "备份管理",
@@ -1191,7 +1199,14 @@
     "localStorage": "本地",
     "selectStorage": "存储位置",
     "noBaseForIncremental": "尚无可作基准的全量备份，请先创建一次全量备份",
-    "deleteHasChildren": "该备份被增量备份依赖，请先删除其子备份"
+    "deleteHasChildren": "该备份被增量备份依赖，请先删除其子备份",
+    "summaryTotalSize": "总占用",
+    "summaryCount": "份数",
+    "summaryLastSuccess": "最近成功",
+    "neverSuccess": "尚无成功",
+    "autoRefreshing": "进行中，自动刷新进度…",
+    "basedOn": "基于",
+    "dependentsWarn": "有 {{count}} 个增量备份依赖此备份，删除将一并影响其恢复链"
   },
   "backupStorages": {
     "title": "备份存储后端",
@@ -1717,6 +1732,9 @@
     "pageOf": "第 {{page}}/{{total}} 页",
     "silenceTzNote": "静默时段按服务器时区",
     "silenceCrossMidnight": "跨夜（次日生效）",
+    "summaryAll": "全部",
+    "summaryEnabled": "启用",
+    "summaryDisabled": "停用",
     "trigger_metric": "指标阈值",
     "trigger_instance_crash": "实例崩溃",
     "trigger_node_offline": "节点离线",

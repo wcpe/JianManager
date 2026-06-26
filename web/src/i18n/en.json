@@ -250,7 +250,10 @@
     "na": "N/A",
     "online": "Online",
     "offline": "Offline",
-    "irreversible": "This action cannot be undone."
+    "irreversible": "This action cannot be undone.",
+    "deleted": "Deleted",
+    "cardView": "Cards",
+    "listView": "List"
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -1141,7 +1144,12 @@
     "deletedToast": "Schedule deleted",
     "createFailed": "Failed to create schedule",
     "enabledToast": "Schedule enabled",
-    "disabledToast": "Schedule disabled"
+    "disabledToast": "Schedule disabled",
+    "summaryAll": "All",
+    "summaryEnabled": "Enabled",
+    "summaryDisabled": "Disabled",
+    "nextRunLabel": "Next run",
+    "disabledLabel": "Disabled"
   },
   "backups": {
     "title": "Backup Management",
@@ -1191,7 +1199,14 @@
     "localStorage": "Local",
     "selectStorage": "Storage",
     "noBaseForIncremental": "No full backup to base on yet. Create a full backup first.",
-    "deleteHasChildren": "This backup is depended on by incremental backups; delete its children first"
+    "deleteHasChildren": "This backup is depended on by incremental backups; delete its children first",
+    "summaryTotalSize": "Total size",
+    "summaryCount": "Count",
+    "summaryLastSuccess": "Last success",
+    "neverSuccess": "None yet",
+    "autoRefreshing": "In progress, auto-refreshing…",
+    "basedOn": "based on",
+    "dependentsWarn": "{{count}} incremental backup(s) depend on this one; deleting it breaks their restore chain"
   },
   "backupStorages": {
     "title": "Backup Storage Backends",
@@ -1717,6 +1732,9 @@
     "pageOf": "Page {{page}}/{{total}}",
     "silenceTzNote": "Silence window uses server timezone",
     "silenceCrossMidnight": "Crosses midnight (next day)",
+    "summaryAll": "All",
+    "summaryEnabled": "Enabled",
+    "summaryDisabled": "Disabled",
     "trigger_metric": "Metric threshold",
     "trigger_instance_crash": "Instance crash",
     "trigger_node_offline": "Node offline",

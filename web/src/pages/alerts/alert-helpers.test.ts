@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   levelBadgeClass,
+  levelStatusLevel,
   triggerUsesMetric,
   triggerUsesKeyword,
   triggerUsesEventMatch,
@@ -12,6 +13,7 @@ import {
   formatSilenceWindow,
   isValidHHMM,
   parseChannelIds,
+  summarizeRules,
 } from './alert-helpers'
 
 describe('levelBadgeClass', () => {
@@ -20,6 +22,27 @@ describe('levelBadgeClass', () => {
     expect(levelBadgeClass('warn')).toContain('amber')
     expect(levelBadgeClass('info')).toContain('sky')
     expect(levelBadgeClass('unknown')).toContain('sky') // default
+  })
+})
+
+describe('levelStatusLevel', () => {
+  it('maps alert levels to status levels', () => {
+    expect(levelStatusLevel('critical')).toBe('danger')
+    expect(levelStatusLevel('warn')).toBe('warning')
+    expect(levelStatusLevel('info')).toBe('info')
+    expect(levelStatusLevel('unknown')).toBe('info') // default
+  })
+})
+
+describe('summarizeRules', () => {
+  it('counts total and enabled', () => {
+    expect(summarizeRules([{ enabled: true }, { enabled: false }, { enabled: true }])).toEqual({
+      total: 3,
+      enabled: 2,
+    })
+  })
+  it('empty list', () => {
+    expect(summarizeRules([])).toEqual({ total: 0, enabled: 0 })
   })
 })
 
