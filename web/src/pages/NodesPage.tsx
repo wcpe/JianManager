@@ -55,8 +55,9 @@ function nodeStatusLevel(status: number): StatusLevel {
 type PendingAction = { kind: 'drain' | 'delete'; node: NodeInfo }
 
 /** 单元格内的占用条：MiniBar + 百分比（阈值变色）。 */
-function UsageCell({ pct }: { pct: number }) {
-  if (!pct) return <span className="text-muted-foreground">--</span>
+function UsageCell({ pct, online = true }: { pct: number; online?: boolean }) {
+  // 离线节点的资源值是 DB 里的陈旧 last-known，渲染成实时占用条会误导为「在线空载/在跑」，统一显示无数据（BUG-019）。
+  if (!online || !pct) return <span className="text-muted-foreground">--</span>
   const v = pct * 100
   return (
     <div className="flex items-center gap-2">
@@ -288,16 +289,16 @@ export default function NodesPage() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <UsageCell pct={node.cpuUsage} />
+                        <UsageCell pct={node.cpuUsage} online={isOnline} />
                       </TableCell>
                       <TableCell>
-                        <UsageCell pct={node.memoryUsage} />
+                        <UsageCell pct={node.memoryUsage} online={isOnline} />
                       </TableCell>
                       <TableCell>
-                        <UsageCell pct={node.diskUsage} />
+                        <UsageCell pct={node.diskUsage} online={isOnline} />
                       </TableCell>
                       <TableCell className="text-muted-foreground text-xs">
-                        {node.networkBytesSent || node.networkBytesRecv
+                        {isOnline && (node.networkBytesSent || node.networkBytesRecv)
                           ? `↑${formatBytes(node.networkBytesSent)} ↓${formatBytes(node.networkBytesRecv)}`
                           : '--'}
                       </TableCell>
