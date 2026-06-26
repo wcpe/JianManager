@@ -42,6 +42,7 @@ import {
   type ClipboardEntry,
 } from './clipboard'
 import { joinPath, baseName, isValidName } from './paths'
+import { needsDiscardConfirm } from './discard-guard'
 
 /**
  * 配置增强能力（FR-071）。注入后资源管理器在「配置」语义下复用：
@@ -149,10 +150,7 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
   // 切换/关闭文件前若有未保存草稿则二次确认，避免静默丢失编辑（BUG-018）。
   const confirmDiscard = useCallback(
     (nextPath?: string): boolean => {
-      const of = openFileRef.current
-      const fileDirty = of != null && of.draft !== of.saved && of.path !== nextPath
-      const cfgDirty = configDirtyRef.current && (of == null || of.path !== nextPath)
-      if (fileDirty || cfgDirty) {
+      if (needsDiscardConfirm(openFileRef.current, configDirtyRef.current, nextPath)) {
         return window.confirm(t('files.unsavedConfirm'))
       }
       return true
