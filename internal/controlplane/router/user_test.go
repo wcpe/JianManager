@@ -87,3 +87,52 @@ func TestUser_Delete_Success(t *testing.T) {
 	w = makeRequest(r, "DELETE", "/api/v1/users/"+itoa(uint(targetID)), nil, token)
 	assert.Equal(t, http.StatusOK, w.Code)
 }
+
+// TestUser_Update_ResetPassword 管理员重置用户密码后，旧密码失效、新密码可登录（FR-156 验收）。
+func TestUser_Update_ResetPassword(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	getMemberToken(t, r, "resetme", "oldpassword123")
+
+	w := makeRequest(r, "GET", "/api/v1/users", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	var uid uint
+	for _, u := range parseJSONArray(t, w) {
+		um := u.(map[string]interface{})
+		if um["username"] == "resetme" {
+			uid = uint(um["id"].(float64))
+		}
+	}
+	require.Greater(t, uid, uint(0))
+
+	w = makeRequest(r, "PUT", "/api/v1/users/"+itoa(uid), map[string]any{"password": "newpassword456"}, token)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	wOld := makeRequest(r, "POST", "/api/v1/auth/login", map[string]any{"username": "resetme", "password": "oldpassword123"}, "")
+	assert.NotEqual(t, http.StatusOK, wOld.Code, "旧密码应失效")
+	wNew := makeRequest(r, "POST", "/api/v1/auth/login", map[string]any{"username": "resetme", "password": "newpassword456"}, "")
+	assert.Equal(t, http.StatusOK, wNew.Code, "新密码应可登录")
+}
+
+// TestUser_Update_RejectShortPassword 重置密码长度不足 8 时被路由 binding 拒绝（与初始化/创建一致）。
+func TestUser_Update_RejectShortPassword(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	getMemberToken(t, r, "shortpw", "password123")
+
+	w := makeRequest(r, "GET", "/api/v1/users", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	var uid uint
+	for _, u := range parseJSONArray(t, w) {
+		um := u.(map[string]interface{})
+		if um["username"] == "shortpw" {
+			uid = uint(um["id"].(float64))
+		}
+	}
+	require.Greater(t, uid, uint(0))
+
+	w = makeRequest(r, "PUT", "/api/v1/users/"+itoa(uid), map[string]any{"password": "short"}, token)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}

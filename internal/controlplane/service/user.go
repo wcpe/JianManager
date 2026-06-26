@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
@@ -36,8 +37,9 @@ func (s *UserService) GetByID(id uint) (*model.User, error) {
 	return &user, nil
 }
 
-// Update 更新用户信息（角色、状态）。
-func (s *UserService) Update(id uint, role *model.UserRole, status *model.UserStatus) (*model.User, error) {
+// Update 更新用户信息（角色、状态、密码）。
+// password 非空时重置登录密码（bcrypt 加密）；长度下限由路由层 binding 守住（与初始化/创建一致，FR-156）。
+func (s *UserService) Update(id uint, role *model.UserRole, status *model.UserStatus, password *string) (*model.User, error) {
 	user, err := s.GetByID(id)
 	if err != nil {
 		return nil, err
@@ -49,6 +51,13 @@ func (s *UserService) Update(id uint, role *model.UserRole, status *model.UserSt
 	}
 	if status != nil {
 		updates["status"] = *status
+	}
+	if password != nil && *password != "" {
+		hashed, err := bcrypt.GenerateFromPassword([]byte(*password), bcrypt.DefaultCost)
+		if err != nil {
+			return nil, fmt.Errorf("加密密码失败: %w", err)
+		}
+		updates["password"] = string(hashed)
 	}
 
 	if len(updates) > 0 {

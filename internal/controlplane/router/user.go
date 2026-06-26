@@ -79,6 +79,8 @@ func (h *UserHandler) Get(c *gin.Context) {
 type updateUserRequest struct {
 	Role   *model.UserRole   `json:"role"`
 	Status *model.UserStatus `json:"status"`
+	// Password 非空时重置该用户登录密码；长度下限 8 与初始化/创建一致（FR-156）。
+	Password *string `json:"password" binding:"omitempty,min=8"`
 }
 
 // Update 更新用户。
@@ -101,7 +103,7 @@ func (h *UserHandler) Update(c *gin.Context) {
 		return
 	}
 
-	user, err := h.userSvc.Update(uint(id), req.Role, req.Status)
+	user, err := h.userSvc.Update(uint(id), req.Role, req.Status, req.Password)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":   "NOT_FOUND",

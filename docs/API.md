@@ -84,8 +84,9 @@
 - **权限**: `user.read`
 
 ### PUT /api/v1/users/:id
-- **描述**: 更新用户（角色/状态）
-- **关联 FR**: FR-002
+- **描述**: 更新用户（角色/状态/重置密码）
+- **请求体**: `{ role?, status?, password? }`（`password` 非空时由平台管理员重置该用户登录密码，长度下限 8，与初始化/创建一致）
+- **关联 FR**: FR-002, FR-156
 - **权限**: `user.write`
 
 ### DELETE /api/v1/users/:id
