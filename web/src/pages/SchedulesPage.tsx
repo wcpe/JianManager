@@ -10,7 +10,7 @@ import {
   type ScheduleInfo,
 } from '@/api/schedules'
 import { useInstances } from '@/api/instances'
-import { validateCron } from '@/lib/cron'
+import { validateCron, nextRuns, describeCron, CRON_PRESETS } from '@/lib/cron'
 import {
   SCHEDULE_ACTIONS,
   EMPTY_SCHEDULE_FORM,
@@ -313,6 +313,9 @@ function ScheduleFormDialog({
   }, [open])
 
   const cron = useMemo(() => validateCron(form.cronExpr), [form.cronExpr])
+  // 合法时给出可读描述与下次执行预览（FR-153）；预览按浏览器本地时区，仅供直觉参考。
+  const cronDesc = useMemo(() => (cron.valid ? describeCron(form.cronExpr) : null), [cron.valid, form.cronExpr])
+  const cronNext = useMemo(() => (cron.valid ? nextRuns(form.cronExpr, 3) : []), [cron.valid, form.cronExpr])
   const instanceMissing = mode === 'create' && form.instanceId === ''
   const nameMissing = mode === 'create' && form.name.trim() === ''
   const canSubmit = !submitting && cron.valid && !instanceMissing && !nameMissing
@@ -373,6 +376,19 @@ function ScheduleFormDialog({
 
             <div className="space-y-1.5">
               <FieldLabel required>{t('schedules.cron')}</FieldLabel>
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="text-xs text-muted-foreground">{t('schedules.presets')}:</span>
+                {CRON_PRESETS.map((p) => (
+                  <button
+                    key={p.expr}
+                    type="button"
+                    onClick={() => setForm({ ...form, cronExpr: p.expr })}
+                    className="rounded border px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent"
+                  >
+                    {t(p.labelKey)}
+                  </button>
+                ))}
+              </div>
               <Input
                 value={form.cronExpr}
                 onChange={(e) => setForm({ ...form, cronExpr: e.target.value })}
@@ -382,6 +398,14 @@ function ScheduleFormDialog({
               />
               {form.cronExpr.length > 0 && !cron.valid ? (
                 <p className="text-xs text-destructive">{t(cron.messageKey ?? 'schedules.cronInvalidChar')}</p>
+              ) : cron.valid ? (
+                <div className="space-y-1 text-xs text-muted-foreground">
+                  {cronDesc && <p className="text-foreground">{t(cronDesc.key, cronDesc.params)}</p>}
+                  {cronNext.length > 0 && (
+                    <p>{t('schedules.nextRuns')}: {cronNext.map((d) => d.toLocaleString()).join(' · ')}</p>
+                  )}
+                  <p className="text-muted-foreground/70">{t('schedules.previewTzNote')}</p>
+                </div>
               ) : (
                 <p className="text-xs text-muted-foreground">{t('schedules.cronHint')}</p>
               )}
