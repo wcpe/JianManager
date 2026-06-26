@@ -75,6 +75,7 @@ export default function InstancesPage() {
     diskLimitMb: number
   } | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null)
+  const [killTarget, setKillTarget] = useState<{ id: number; name: string } | null>(null)
   // 批量操作选中的实例 ID 集合（FR-058）。
   const [selectedIds, setSelectedIds] = useState<number[]>([])
 
@@ -290,7 +291,7 @@ export default function InstancesPage() {
               <Button
                 variant="ghost"
                 size="xs"
-                onClick={() => kill.mutate(inst.id)}
+                onClick={() => setKillTarget({ id: inst.id, name: inst.name })}
                 className="text-yellow-600 hover:text-yellow-700"
               >
                 {t('instances.kill')}
@@ -462,6 +463,16 @@ export default function InstancesPage() {
         scope="group"
         onConfirm={() => { if (deleteTarget) del.mutate(deleteTarget.id); setDeleteTarget(null) }}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      <DangerConfirm
+        open={killTarget !== null}
+        title={t('danger.killInstanceTitle', { name: killTarget?.name ?? '' })}
+        description={t('danger.killInstanceDesc')}
+        confirmLabel={t('instances.kill')}
+        scope="group"
+        onConfirm={() => { if (killTarget) kill.mutate(killTarget.id); setKillTarget(null) }}
+        onCancel={() => setKillTarget(null)}
       />
     </div>
   )

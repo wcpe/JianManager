@@ -73,7 +73,8 @@ export default function InstanceBatchBar({ selectedIds, onClear }: InstanceBatch
       toast.error(t('instanceBatch.needCommand'))
       return
     }
-    if (CONFIRM_ACTIONS.includes(action)) {
+    // 命令下发与停止/强杀一律先复述确认（FR-139）：避免误向多实例下发或批量强停。
+    if (action === 'command' || CONFIRM_ACTIONS.includes(action)) {
       setKeyword('')
       setPending(action)
       return
@@ -130,12 +131,18 @@ export default function InstanceBatchBar({ selectedIds, onClear }: InstanceBatch
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {pending === 'kill' ? t('instanceBatch.confirmKillTitle') : t('instanceBatch.confirmStopTitle')}
+              {pending === 'kill'
+                ? t('instanceBatch.confirmKillTitle')
+                : pending === 'command'
+                  ? t('instanceBatch.confirmCommandTitle')
+                  : t('instanceBatch.confirmStopTitle')}
             </DialogTitle>
             <DialogDescription>
               {pending === 'kill'
                 ? t('instanceBatch.confirmKillDesc', { count })
-                : t('instanceBatch.confirmStopDesc', { count })}
+                : pending === 'command'
+                  ? t('instanceBatch.confirmCommandDesc', { count, command })
+                  : t('instanceBatch.confirmStopDesc', { count })}
             </DialogDescription>
           </DialogHeader>
           {isDanger && (
