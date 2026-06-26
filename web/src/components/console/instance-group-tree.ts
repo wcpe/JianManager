@@ -1,7 +1,7 @@
 import type { InstanceGroupNode } from '@/api/instanceGroups'
 
 /**
- * 实例组织分组树（FR-165 / ADR-XXXX）的纯逻辑：把后端扁平节点（parentId 邻接表）重建为
+ * 实例组织分组树（FR-165 / ADR-033）的纯逻辑：把后端扁平节点（parentId 邻接表）重建为
  * 嵌套树、计算子树集合、按折叠态扁平化为可见行。无 React 依赖，便于表驱动单测。
  */
 

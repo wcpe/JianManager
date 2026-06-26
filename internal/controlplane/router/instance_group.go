@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// InstanceGroupHandler 实例组织分组树路由（FR-165 / ADR-XXXX）。
+// InstanceGroupHandler 实例组织分组树路由（FR-165 / ADR-033）。
 // 组织归类正交于用户组（RBAC）与网络群组（部署），权限沿用实例写权限节点
 // instance:write（树是实例的人为归类，按实例写权限收敛，不引入新权限节点）。
 type InstanceGroupHandler struct {

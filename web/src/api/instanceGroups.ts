@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
 /**
- * 实例组织分组树节点（对应后端 service.InstanceGroupNodeView，FR-165 / ADR-XXXX）。
+ * 实例组织分组树节点（对应后端 service.InstanceGroupNodeView，FR-165 / ADR-033）。
  * 扁平节点列表，前端据 parentId 重建层级；instanceCount 为「子树聚合去重」实例数。
  * 与用户组（RBAC）、网络群组（部署）正交——纯组织归类。
  */

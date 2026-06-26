@@ -600,7 +600,7 @@
 
 ## 实例组织分组（FR-165）
 
-> 文件夹式「实例组织分组树」——多级嵌套（自引用 `parent_id` 邻接表）+ 实例-组 M:N，与用户组（RBAC/配额）、网络群组（proxy↔backend 部署）三者**正交**，仅供人为组织归类、折叠、批量运维。详见 `docs/specs/ui-redesign/fr-165-instance-grouping.md`、ADR-XXXX。读 `instance:read`、写 `instance:write`（不引入新权限节点；树是实例的组织视图，按实例权限收敛）。
+> 文件夹式「实例组织分组树」——多级嵌套（自引用 `parent_id` 邻接表）+ 实例-组 M:N，与用户组（RBAC/配额）、网络群组（proxy↔backend 部署）三者**正交**，仅供人为组织归类、折叠、批量运维。详见 `docs/specs/ui-redesign/fr-165-instance-grouping.md`、ADR-033。读 `instance:read`、写 `instance:write`（不引入新权限节点；树是实例的组织视图，按实例权限收敛）。
 
 ### GET /api/v1/instance-groups
 - **描述**: 返回分组树（扁平节点列表，前端据 `parentId` 重建层级），每节点含「子树聚合去重」实例数

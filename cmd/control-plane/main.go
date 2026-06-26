@@ -56,7 +56,7 @@ func main() {
 	// 优雅关闭：停止接受新的后台 Worker 委托并等待在途异步状态回写收尾，避免泄漏 goroutine。
 	defer instanceSvc.Shutdown()
 	instanceBatchSvc := service.NewInstanceBatchService(db, pool)
-	// 实例组织分组树（FR-165，见 ADR-XXXX）：文件夹式多级嵌套归类 + 实例 M:N，仅 CP 读写。
+	// 实例组织分组树（FR-165，见 ADR-033）：文件夹式多级嵌套归类 + 实例 M:N，仅 CP 读写。
 	instanceGroupSvc := service.NewInstanceGroupService(db)
 	// 回填实例服务，供节点排空（drain）复用实例停止逻辑（FR-048）。
 	nodeSvc.SetInstanceService(instanceSvc)

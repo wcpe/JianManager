@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// 实例组织分组树相关错误（FR-165，见 ADR-XXXX）。
+// 实例组织分组树相关错误（FR-165，见 ADR-033）。
 var (
 	ErrInstanceGroupNotFound       = errors.New("实例分组不存在")
 	ErrInstanceGroupParentNotFound = errors.New("父分组不存在")
@@ -18,7 +18,7 @@ var (
 	ErrInstanceGroupNotEmpty       = errors.New("分组非空，请先清空子分组与成员")
 )
 
-// InstanceGroupService 管理「实例组织分组树」（FR-165 / ADR-XXXX）：
+// InstanceGroupService 管理「实例组织分组树」（FR-165 / ADR-033）：
 // 自引用邻接表的多级嵌套分组 + 实例 M:N，仅供组织归类、折叠、批量运维，
 // 与用户组（ADR-004 RBAC/配额）、网络群组（ADR-007 部署）三者正交，仅 CP 读写。
 type InstanceGroupService struct {

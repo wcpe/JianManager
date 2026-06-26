@@ -132,7 +132,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		instanceBatchHandler := NewInstanceBatchHandler(svcs.InstanceBatch, svcs.Authz)
 		instanceBatchHandler.RegisterRoutes(protected)
 
-		// 实例组织分组树（FR-165，见 ADR-XXXX）：多级嵌套文件夹式归类 + 实例 M:N，
+		// 实例组织分组树（FR-165，见 ADR-033）：多级嵌套文件夹式归类 + 实例 M:N，
 		// 正交于用户组 / 网络群组；读 instance:read、写 instance:write，挂 /instance-groups。
 		if svcs.InstanceGroup != nil {
 			instanceGroupHandler := NewInstanceGroupHandler(svcs.InstanceGroup, svcs.Authz)

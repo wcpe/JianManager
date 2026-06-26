@@ -1,7 +1,7 @@
 # 功能规格：FR-165 实例多级嵌套分组
 
 > 状态：草拟（待审核）　·　关联 PRD：FR-165　·　依赖：FR-163/164（已 master）　·　批 3 第一批 / worktree A
-> 关联 ADR：`ADR-XXXX`（实例组织分组树，占位号，落地统一分配）
+> 关联 ADR：`ADR-033`（实例组织分组树，占位号，落地统一分配）
 
 ## 1. 背景与目标
 实例规模化（1000+）需要**文件夹式的组织视图**。现有两种「组」都不适配：用户组（ADR-004，配额/RBAC）、网络群组（ADR-007，proxy↔backend 软标签）。本 FR 新增**实例组织分组树**（多级嵌套 + 实例可属多组），与上述二者正交。design §4.4：左树 + 右列表。P2。
@@ -21,7 +21,7 @@
 - 分组级权限 / 配额（组织视图不承载 RBAC）。
 
 ## 3. 设计（怎么做）
-- **数据模型**（CP 独有，ADR-XXXX）：
+- **数据模型**（CP 独有，ADR-033）：
   - `instance_group_nodes`：`id, uuid, name, parent_id(自引用,可空=根), sort, created_at, updated_at, deleted_at`；索引 `parent_id`。
   - `instance_group_members`：`id, group_id, instance_id, created_at`；UNIQUE `(group_id, instance_id)`，索引各列。
   - 删非空组：默认**拒删**（有子组或成员时），或显式 `cascade` 参数（spec 选拒删 + 提示先清空，避免误删）。移动子树防环（不能移到自己子孙下）。
@@ -33,10 +33,10 @@
   - `DELETE /instance-groups/:id`（非空拒删）
   - `POST /instance-groups/:id/members` / `DELETE …/members`（批量加/移除实例）
 - **前端**：`InstanceGroupTree` 组件（左树，复用既有 `InstanceTree` 折叠/选中模式）+ 右列表（批 2 工作台卡 + 面包屑 + 批量标记）+ 拖拽（HTML5 DnD，轻量，不引第三方）+ `api/instanceGroups.ts`。按组筛选接 `InstancesPage`。i18n 中/英。
-- 引用 `ADR-XXXX`（实例组织分组树），勿在此重复 ADR 正文。
+- 引用 `ADR-033`（实例组织分组树），勿在此重复 ADR 正文。
 
 ## 4. 任务拆分
-- [ ] 写 ADR-XXXX（实例组织分组树）
+- [ ] 写 ADR-033（实例组织分组树）
 - [ ] 后端：model + migration + `InstanceGroupService`（防环/计数纯函数 + 测试红→绿）+ API endpoints + 权限
 - [ ] `docs/API.md` + `docs/ARCHITECTURE.md`（数据模型）同步
 - [ ] 前端：`api/instanceGroups.ts` + `InstanceGroupTree` + 右列表（批量标记/面包屑）+ 拖实例入组 + `InstancesPage` 按组筛选

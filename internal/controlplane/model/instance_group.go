@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// InstanceGroupNode 是「实例组织分组树」的一个节点（ADR-XXXX 实例组织分组树）。
+// InstanceGroupNode 是「实例组织分组树」的一个节点（ADR-033 实例组织分组树）。
 // 多级嵌套用自引用 ParentID 邻接表表达（NULL=根）；与用户组（ADR-004 RBAC/配额）、
 // 网络群组（ADR-007 proxy↔backend 部署）三者正交——仅供人为组织归类、折叠、批量运维，
 // 不承载权限/配额，也不表达运行时拓扑。删非空节点默认拒删（service 校验），不级联删实例。
