@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   CartesianGrid,
+  Legend,
   Line,
   LineChart,
   Tooltip,
@@ -45,13 +47,17 @@ export function TimeSeriesChart({
   series,
   height = 220,
   valueFormatter,
-  emptyHint = '暂无数据',
+  emptyHint,
+  yDomain = ['auto', 'auto'],
 }: {
   series: ChartSeries[]
   height?: number
   valueFormatter?: (v: number) => string
   emptyHint?: string
+  /** Y 轴范围。默认 ['auto','auto'] 自适应数据，使 TPS/MSPT 等窄幅指标不被 0 基线压成直线（FR-148）；占比类指标可传 [0, 100]。 */
+  yDomain?: [number | 'auto' | 'dataMin' | 'dataMax', number | 'auto' | 'dataMin' | 'dataMax']
 }) {
+  const { t } = useTranslation()
   const { data, spanMs } = useMemo(() => {
     const byTs = new Map<string, Record<string, number | null | string>>()
     for (const s of series) {
@@ -93,7 +99,7 @@ export function TimeSeriesChart({
         className="flex items-center justify-center text-xs text-muted-foreground"
         style={{ height }}
       >
-        {emptyHint}
+        {emptyHint ?? t('common.noData')}
       </div>
     )
   }
@@ -114,6 +120,7 @@ export function TimeSeriesChart({
             minTickGap={32}
           />
           <YAxis
+            domain={yDomain}
             tickFormatter={(v: number) => fmt(v)}
             tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
             stroke="var(--border)"
@@ -133,6 +140,9 @@ export function TimeSeriesChart({
               return [Number.isFinite(num) ? fmt(num) : '—', name]
             }}
           />
+          {series.length > 1 && (
+            <Legend wrapperStyle={{ fontSize: 11 }} iconType="plainline" iconSize={12} />
+          )}
           {series.map((s, i) => (
             <Line
               key={s.key}
