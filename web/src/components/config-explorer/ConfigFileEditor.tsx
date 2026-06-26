@@ -39,6 +39,8 @@ interface ConfigFileEditorProps {
   onAfterSave: () => void
   /** 打开配置版本抽屉。 */
   onOpenVersions: () => void
+  /** 内部 dirty 变化时上报，供资源管理器切换/关闭守卫判断（BUG-018 #36）。 */
+  onDirtyChange: (dirty: boolean) => void
 }
 
 type EditMode = 'text' | 'form'
@@ -50,6 +52,7 @@ export default function ConfigFileEditor({
   onClose,
   onAfterSave,
   onOpenVersions,
+  onDirtyChange,
 }: ConfigFileEditorProps) {
   const { t } = useTranslation()
   const [mode, setMode] = useState<EditMode>('text')
@@ -103,6 +106,12 @@ export default function ConfigFileEditor({
   const formDirty = changedFields.length > 0
   const dirty = mode === 'text' ? textDirty : formDirty
   const saving = writeMut.isPending || writeFieldsMut.isPending
+
+  // 把内部 dirty 上报给资源管理器，供切换/关闭守卫判断（BUG-018 #36）；卸载时复位为干净。
+  useEffect(() => {
+    onDirtyChange(dirty)
+  }, [dirty, onDirtyChange])
+  useEffect(() => () => onDirtyChange(false), [onDirtyChange])
 
   const handleSave = () => {
     if (!dirty || saving) return

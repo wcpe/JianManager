@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useQueryClient } from '@tanstack/react-query'
@@ -60,6 +60,8 @@ export interface ConfigCapabilities {
     onClose: () => void
     onAfterSave: () => void
     onOpenVersions: () => void
+    /** 编辑器内部 dirty 变化时上报，供资源管理器切换/关闭守卫判断（BUG-018 #36）。 */
+    onDirtyChange: (dirty: boolean) => void
   }) => ReactNode
   /** 左栏目录树上方的额外内容（收藏栏 + 已发现配置面板）。 */
   sidebarExtra?: ReactNode
@@ -134,6 +136,29 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
 
   // 编辑器打开的文件。
   const [openFile, setOpenFile] = useState<OpenFile | null>(null)
+  // 始终持最新 openFile，供事件回调读「未保存」态而不必把 openFile 列入各 useCallback 依赖。
+  const openFileRef = useRef<OpenFile | null>(null)
+  useEffect(() => {
+    openFileRef.current = openFile
+  }, [openFile])
+  // 配置模式下编辑器在子组件内自管 dirty，经此 ref 上报，供切换/关闭守卫一并判断（BUG-018 #36）。
+  const configDirtyRef = useRef(false)
+  const setConfigDirty = useCallback((d: boolean) => {
+    configDirtyRef.current = d
+  }, [])
+  // 切换/关闭文件前若有未保存草稿则二次确认，避免静默丢失编辑（BUG-018）。
+  const confirmDiscard = useCallback(
+    (nextPath?: string): boolean => {
+      const of = openFileRef.current
+      const fileDirty = of != null && of.draft !== of.saved && of.path !== nextPath
+      const cfgDirty = configDirtyRef.current && (of == null || of.path !== nextPath)
+      if (fileDirty || cfgDirty) {
+        return window.confirm(t('files.unsavedConfirm'))
+      }
+      return true
+    },
+    [t],
+  )
 
   // 搜索面板开关（FR-074）。打开时占据文件列表列。
   const [searchOpen, setSearchOpen] = useState(false)
@@ -210,6 +235,7 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
   // 配置模式下编辑器自行读取内容（走配置端点），故只记录打开路径，不预读。
   const openByPath = useCallback(
     async (path: string, name: string) => {
+      if (!confirmDiscard(path)) return
       // 打开文本编辑器即关闭归档/反编译视图（右栏互斥）。
       setArchiveFor(null)
       setDecompileFor(null)
@@ -224,7 +250,7 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
         toast.error(t('files.loadFailed'))
       }
     },
-    [configMode, instanceId, t],
+    [configMode, instanceId, t, confirmDiscard],
   )
 
   const openEntry = useCallback(
@@ -276,18 +302,20 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
   // ---- 归档浏览 / 反编译（FR-075）----
   // 三类右栏内容（文本编辑器 / 归档浏览 / 反编译）互斥：打开一个即关闭其余。
   const openArchive = useCallback((file: FileInfo) => {
+    if (!confirmDiscard()) return
     const path = joinPath(currentDir, file.name)
     setOpenFile(null)
     setDecompileFor(null)
     setArchiveFor({ path, name: file.name })
-  }, [currentDir])
+  }, [currentDir, confirmDiscard])
 
   const openDecompile = useCallback((file: FileInfo) => {
+    if (!confirmDiscard()) return
     const path = joinPath(currentDir, file.name)
     setOpenFile(null)
     setArchiveFor(null)
     setDecompileFor({ path, name: file.name })
-  }, [currentDir])
+  }, [currentDir, confirmDiscard])
 
   // ---- 保存（Ctrl+S）----
   const saveOpenFile = useCallback(async () => {
@@ -589,13 +617,15 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
           {openFile &&
             (config ? (
               <div className="flex w-1/2 min-w-0 flex-col">
+                {/* eslint-disable-next-line react-hooks/refs -- confirmDiscard/setConfigDirty 仅在回调内访问 ref，renderEditor 渲染期不读 ref 值 */}
                 {config.renderEditor({
                   instanceId,
                   path: openFile.path,
                   name: openFile.name,
-                  onClose: () => setOpenFile(null),
+                  onClose: () => { if (confirmDiscard()) setOpenFile(null) },
                   onAfterSave: refreshAll,
                   onOpenVersions: () => setVersionFor(openFile.path),
+                  onDirtyChange: setConfigDirty,
                 })}
               </div>
             ) : (
@@ -629,7 +659,7 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
                       variant="ghost"
                       className="h-7 px-1.5"
                       title={t('common.close')}
-                      onClick={() => setOpenFile(null)}
+                      onClick={() => { if (confirmDiscard()) setOpenFile(null) }}
                     >
                       <X className="size-3.5" />
                     </Button>
