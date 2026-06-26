@@ -494,8 +494,11 @@ database:
   - **左** = 统一面包屑（FR-134，`PageBreadcrumb` + 纯函数 `lib/breadcrumb.ts`）：按路由渲染「域 › 页面」轨迹（与五域 IA 对齐），父级可点跳转、末级加粗；打开实例工作区时末级补实例名（域 › 全部实例 › <名称>）。
   - **中** = 常驻搜索框（本期占位：UI + `Ctrl/⌘+K` 聚焦，输入暂不联动检索，检索逻辑留后续 FR）。
   - **右** = 集群概览徽标（在线节点/运行实例/崩溃数，复用 `GET /metrics/overview` + 实例列表本地统计；点击跳转对应筛选：运行/崩溃→`/instances?status=`、在线→`/nodes`）+ 告警铃铛（`GET /alerts/events/unread-count` 未读计数 30s 轮询 + 下拉只读最近事件）+ 账户菜单（用户名/角色 + 退出登录）。
-- **右 = 工作区**：
-  - 点实例 → 工作区打开该实例统一面板（终端 / 文件 / 配置 / 插件 / 监控 / Bot 分段，按实例记忆当前段）；**同时仅一个实例**，点另一个切换。**监控**段 = 该实例 FR-060 历史曲线（TPS/MSPT/堆/在线/线程/CPU + 分世界区块）。
+- **右 = 工作区（可组合卡片画布，FR-166 / ADR「可组合卡片工作区」取代 ADR-030）**：
+  - 点实例 → 工作区打开该实例的**可拖拽卡片画布**（`components/console/WorkspaceCanvas`，基于 `react-grid-layout`）：**卡片 = 实例 × 功能**，自由摆放 / 调大小 / 流式不重叠；**同时仅一个实例**，点另一个切换。原固定六 Tab 已**取代为画布 + 快捷预设**——卡片类型 = 终端 / 资源（文件+配置合一，承 FR-130）/ 插件 / 监控 / 服务器状态 / 业务·经济·背包（JBIS）/ Bot，逐种复用既有面板组件（卡内容分发 `WorkspaceCardBody`），**画布化后全部既有工作区能力均作为卡片可达，无功能退化**。**监控**卡 = 该实例 FR-060 历史曲线（TPS/MSPT/堆/在线/线程/CPU + 分世界区块）。
+  - **统一卡壳** `WorkspaceCard`：grip 拖拽手柄（`draggableHandle=".workspace-card-grip"`，仅按住卡头 grip 才移动，卡内终端/编辑器交互不被吞）+ 实例·功能标签 + 全屏（临时最大化单卡）+ 关闭。卡 resize / 全屏切换后派发 `window` resize，触发终端 `fit` 与编辑器 relayout。
+  - **惰性挂载**（承 ADR「未挂载卡不建 WS」）：仅渲染当前画布上的卡片，故终端 WS / metrics 轮询只对画布上的卡建立；未加入画布的功能不预渲染。
+  - **预设（个人级 localStorage）**：命名保存画布布局（纯函数 `lib/workspace-preset.ts` 序列化/校验/规整 + `lib/workspace-card.ts` 卡片类型目录，vitest 覆盖）。内置「快捷预设」= **运维台**（默认：大终端 + 状态 + 资源）/ 纯终端 / 资源；用户可「另存为」自定义预设、删除。画布/卡片/预设运行态由 `stores/workspace.ts`（Zustand，按实例 id 记忆，各卡自管 dirty）承载，**不进 URL**（与 `console.ts` 的侧栏/选中态分离）。`/instances/:id` 深链回退页 `InstanceDetailPage` 挂载即 `openInstance` 进同一画布。
   - **文件**段 = 共享资源管理器 `components/explorer/ResourceExplorer`（FR-070）：左懒加载目录树（`FileTree`）+ 右目录内容（`FileList` 多选/右键/拖拽源）/ CodeMirror 编辑器（`editor/CodeEditor`，多格式高亮 + Ctrl+S 拦截保存接 FR-051 历史）。交互全集（新建文件夹/重命名/删除/剪切复制粘贴/树内拖拽移动/拖拽上传/单文件流式与多选 zip 批量下载/shift·ctrl·全选多选）抽为纯函数（`selection`/`clipboard`/`paths`/`language`，vitest 覆盖）；删除/回滚走 `DangerConfirm`（FR-059），历史版本经右侧抽屉 `VersionDrawer`。`ResourceExplorer` 接受可选 `config` 能力注入（编辑器插槽 / 左栏插槽 / 配置版本抽屉），不注入即为纯文件资源管理器。**此组件为 FR-071/073/074/075/082/083/084 复用地基**。归档浏览/反编译（FR-075）叠加为右栏互斥面板：`FileList` 双击/右键按 jar/zip→`ArchiveViewer`（内部条目子树 + 点文本条目只读查看 + 点 `.class` 触发反编译）、`.class`→`DecompileViewer`（只读 Java 源码），与文本编辑器三者互斥占用右栏；API client `api/archive.ts`，只读端点不触碰写操作。
   - **配置**段 = `components/config-explorer/ConfigExplorer`（FR-071）：**复用 `ResourceExplorer`** 并注入配置能力——打开文件改用 `ConfigFileEditor`（schema 表单/文本双模式 + 跨文件校验 + Ctrl+S 存**配置版本**，FR-031；文本模式复用共享 `CodeEditor` 多格式高亮）；左栏顶部 `FavoritesBar`（收藏书签存 `localStorage`，纯函数 `favorites.ts` + 已发现配置面板 `GET /configs/discover` 递归全部配置，分组纯函数 `discover.ts`）；历史经 `ConfigVersionDrawer`（FR-031 配置版本/diff/回滚）。树/列表本身呈现工作目录全部文件，满足「目录树呈现自动发现的全部配置」。原独立三栏 `ConfigEditor` 已移除。
   - 其余路由在工作区按路由渲染。**总览页（`OverviewPage`）** = 环形仪表盘 + 跨节点聚合历史曲线（FR-060：总 CPU/内存/在线玩家）+ 密集实例表；**节点页**行内 MiniBar + 可展开节点详情（环形仪表盘 + CPU/内存曲线）。**开源许可页（`LicensesPage`，`/licenses`，FR-135）** = 构建期 `scripts/gen-licenses.mjs` 扫描 web + bot-worker(npm) + Go(go-licenses) 生成 `web/public/licenses.json`（静态资源、非 `/api`），页面提供包名搜索 + 运行时/开发分区计数 + 表格 [包名·版本·许可证·作者] + 行内展开许可证全文。
@@ -589,31 +592,36 @@ database:
 ```
 
 **操作按钮**: 启动(▶) / 停止(⏸) / 重启(⟳) / 强制终止(🗑) / 一键复制(⧉，仅 backend，V2)
-**点击实例名** → 在运维控制台工作区打开该实例（Tabs: 终端 / 文件 / 配置 / Bot，工具栏含启动/停止/重启/强制终止）；`/instances/:id` 详情页作为直链兜底保留。
+**点击实例名** → 在运维控制台工作区打开该实例的**可组合卡片画布**（见 §8.2「右=工作区」，FR-166；画布工具栏含启动/停止/重启/强制终止 + 快捷预设 + 添加卡片 + 另存预设）；`/instances/:id` 作为直链兜底保留，`InstanceDetailPage` 挂载即 `openInstance` 进同一画布。
 **组织分组视图**（V2，FR-165）: 筛选栏「组织分组」开关切到「左分组树 + 右列表」专用形态（design §4.4）——左树多级嵌套（新建/嵌套子组/折叠优先/选中，节点挂子树聚合去重计数），右列表复用工作台卡 + 组路径面包屑 + 批量「标记入组」，支持把实例拖入左树某组（HTML5 原生 DnD）。与既有多维筛选 + `groupBy` 维度分组**并列正交**，互不破坏。分组树正交于用户组（RBAC）与网络群组（部署），仅 CP 读写（`/instance-groups`，ADR-XXXX）。
 
-#### 实例详情 `/instances/:id`
+#### 实例工作区（可组合卡片画布，取代固定 Tab）
+
+实例工作区已从「固定六 Tab（一次看一个）」升级为**可拖拽卡片画布**（FR-166，取代 ADR-030 的固定分屏方向）：
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  ← 返回    Survival Server    [启动] [停止] [重启]    │
-│  状态: 🟢运行中 | 节点: node-01 | 类型: MC Java       │
-│                                                      │
-│  ┌────────┬────────┬────────┬────────┬────────┬────┐ │
-│  │ 控制台  │ 终端   │ 文件    │ 配置   │ 备份   │ Bot │ │
-│  └────────┴────────┴────────┴────────┴────────┴────┘ │
-│                                                      │
-│  (Tab 内容区)                                        │
-│                                                      │
+│  控制台 / Survival Server  🟢RUNNING  [停止][重启][杀] │
+│                       [运维台 ▾] [+ 添加卡片] [💾] [✕] │
+│  ┌──────────────────────────┐ ┌────────────────────┐  │
+│  │ ⠿ 终端  Survival          │ │ ⠿ 服务器状态        │  │
+│  │  (xterm 直连 Worker WS)   │ │  (在线/世界/运行态) │  │
+│  │                          │ ├────────────────────┤  │
+│  │                          │ │ ⠿ 资源（文件+配置） │  │
+│  └──────────────────────────┘ └────────────────────┘  │
 └──────────────────────────────────────────────────────┘
 ```
 
-**Tab: 控制台** — 实时日志输出（只读 xterm.js）+ 命令输入框
-**Tab: 终端** — 可交互终端（读写 xterm.js，直连 Worker Node WS）
-**Tab: 文件** — 文件树 + CodeMirror 编辑器
-**Tab: 配置** — 实例运行配置（结构化启动：绑定 JDK / 内存 / JVM 参数；自动重启；环境变量）+ **MC 配置文件编辑器**（V2：server.properties/spigot/paper/velocity 等，配置文件树 + 可视表单↔原始双模式、保留注释、校验提示、版本 diff/回滚）
-**Tab: 备份** — 备份列表 + 创建备份 + 恢复
-**Tab: Bot** — 该实例关联的 Bot 列表
+- **卡片类型**（各复用既有面板，惰性挂载，未上画布不建 WS）：
+  - **终端** — 可交互终端（读写 xterm.js，直连 Worker Node WS，`TerminalPane`）
+  - **资源** — 文件 + 配置**合一**（`ConfigExplorer` = `ResourceExplorer` + 配置能力，承 FR-130）：文件树 + CodeMirror 编辑器 + 配置 schema 双模式/校验/版本 + 收藏
+  - **插件** — 插件安装与管理（`PluginManager`）
+  - **监控** — FR-060 历史曲线 + 实时指标（`MetricsSegment`）
+  - **服务器状态** — 在线玩家 / 世界 / 运行态（`ServerStateSegment`）
+  - **业务 / 经济 / 背包（JBIS）** — `BusinessSegment` / `EconomySegment` / `InventorySegment`
+  - **Bot** — 该实例关联的 Bot（`BotSegment`）
+- **快捷预设**（原 Tab 降级而来，个人级 localStorage）：内置「运维台」（默认 = 大终端 + 状态 + 资源）/ 纯终端 / 资源；可「另存为」自定义预设。
+- **备份** 仍可经实例列表/详情操作入口与既有 `useBackups` API 使用（不再占工作区固定 Tab）。
 
 #### 创建实例（对话框）
 
@@ -720,7 +728,7 @@ database:
 - **群组服 `/networks`** (V2): 拓扑视图（代理 + 已注册后端，含各子服在线人数）；管理 proxy↔backend 注册（别名/优先级/forced-host）；群组软标签筛选与批量启停；「搭建子服 / 搭建代理」向导入口
 - **玩家管理 `/players`** (V2): 在线玩家（探针事件实时聚合，标注所在子服，BC 跨服感知，FR-066）/封禁记录/白名单三视图；踢出/封禁二次确认 + 原因输入，解封（经探针插件桥 `SendPluginCommand` 执行，FR-067）；探针未连入降级提示。**「实时事件」标签**经 SSE 驱动在线名册 + 事件流
 - **运行时/JDK** (V2): 在节点详情页 `/nodes/:id` 增「JDK」标签——列出已装 JDK、安装指定版本、登记系统已有 JDK、查看被哪些实例占用
-- **配置编辑器** (V2): 位于实例详情/工作区「配置」段——复用资源管理器（`ConfigExplorer`，FR-071）呈现工作目录全部配置（递归自动发现）+ schema 表单/原始双模式 + 一致性校验 + 配置版本 diff/回滚 + 收藏书签（非独立页面）
+- **配置编辑器** (V2): 位于工作区**资源卡**（文件+配置合一，FR-130/FR-166）——复用资源管理器（`ConfigExplorer`，FR-071）呈现工作目录全部配置（递归自动发现）+ schema 表单/原始双模式 + 一致性校验 + 配置版本 diff/回滚 + 收藏书签（非独立页面）
 
 ### 8.4 核心用户流程
 
@@ -735,10 +743,10 @@ database:
 #### 流程 2: 日常运维
 
 ```
-登录 → 仪表盘看到实例状态 → 点击实例
-→ 查看控制台日志 → 发送命令
-→ 如需修改文件 → 切换到文件 Tab → 编辑 → 保存
-→ 如需重启 → 点击重启按钮
+登录 → 仪表盘看到实例状态 → 点击实例（进可组合卡片画布，默认运维台布局）
+→ 在终端卡查看日志 → 发送命令
+→ 如需修改文件 → 在资源卡（文件+配置合一）编辑 → 保存（或「+ 添加卡片」加一张资源卡并排）
+→ 如需重启 → 点击工具栏重启按钮
 ```
 
 #### 流程 3: Bot 压测
@@ -762,7 +770,7 @@ Bot 页面 → 创建压测会话 → 选择目标实例 + bot 数量
 ```
 搭建代理(Velocity，自动生成 secret) → 搭建 lobby 子服(系统配端口/转发/JDK)
 → 一键复制 lobby 为 survival1（系统改端口/名称）→ 勾选注册进代理
-→ 配置 Tab 调 server.properties/paper → 启动整个群组 → 玩家经代理进服
+→ 资源卡调 server.properties/paper → 启动整个群组 → 玩家经代理进服
 ```
 
 ### 8.5 前端嵌入
@@ -777,7 +785,7 @@ web/src/
   ws/           # WebSocket client, provider, hooks
   stores/       # Zustand (auth, theme, console[选中实例/节点])
   pages/        # 页面（懒加载）；DashboardPage = 运维控制台 Shell；V2 新增 NetworksPage(群组服拓扑) + 节点详情 JDK 标签
-  components/   # 共享组件 (console[控制台侧栏/工作区/终端面板], ui/shadcn, terminal, chart)
+  components/   # 共享组件 (console[控制台侧栏/可组合卡片画布 WorkspaceCanvas/卡壳/终端面板], ui/shadcn, terminal, chart)
                 # V2: config-editor(表单/原始/版本) · provision-wizard · jdk-manager · clone-dialog · registration-editor
                 # DangerConfirm: 统一危险操作二次确认（高危需输入名校验 + 角色门禁，FR-059）
   hooks/        # 自定义 hooks
