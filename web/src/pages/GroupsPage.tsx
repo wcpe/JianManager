@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Users, Server, Bot, HardDrive } from 'lucide-react'
 import { useGroups, useDeleteGroup, type GroupInfo } from '@/api/groups'
 import CreateGroupDialog from '@/components/CreateGroupDialog'
 import GroupEditDialog from '@/components/GroupEditDialog'
 import GroupMembersDialog from '@/components/GroupMembersDialog'
 import DangerConfirm from '@/components/DangerConfirm'
 import { Button } from '@/components/ui/button'
+import { Panel } from '@/components/ui/panel'
 
 export default function GroupsPage() {
   const { t } = useTranslation()
@@ -28,46 +30,72 @@ export default function GroupsPage() {
       {isLoading ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-2.5">
           {groups?.map((g) => (
-            <div key={g.id} className="border rounded-lg p-4">
-              <div className="flex items-center justify-between mb-2">
-                <h3 className="font-medium text-lg">{g.name}</h3>
-                <div className="flex gap-1">
-                  <Button variant="ghost" size="xs" onClick={() => setEditGroup(g)}>{t('common.edit')}</Button>
-                  <Button variant="ghost" size="xs" onClick={() => setMembersGroupId(g.id)}>{t('groups.manageMembersBtn')}</Button>
+            <Panel
+              key={g.id}
+              hoverable
+              icon={<Users className="size-4" />}
+              title={
+                <span className="flex items-center gap-2 text-sm">
+                  <span className="font-semibold text-foreground">{g.name}</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {t('groups.members')} {g.members?.length ?? 0}
+                  </span>
+                </span>
+              }
+              actions={
+                <>
+                  <Button variant="ghost" size="xs" onClick={() => setEditGroup(g)}>
+                    {t('common.edit')}
+                  </Button>
+                  <Button variant="ghost" size="xs" onClick={() => setMembersGroupId(g.id)}>
+                    {t('groups.manageMembersBtn')}
+                  </Button>
                   <Button
                     variant="ghost"
                     size="xs"
-                    className="text-red-600 hover:text-red-700"
+                    className="text-status-danger hover:text-status-danger"
                     onClick={() => setDeleteGroup({ id: g.id, name: g.name })}
                   >
                     {t('common.delete')}
                   </Button>
+                </>
+              }
+              bodyClassName="px-4 py-3"
+            >
+              {g.description && <p className="mb-3 text-sm text-muted-foreground">{g.description}</p>}
+
+              {g.quota && (
+                <div className="mb-3 flex flex-wrap gap-2">
+                  <QuotaChip icon={<Server className="size-3" />} label={t('groups.instanceQuota')} value={g.quota.maxInstances} />
+                  <QuotaChip icon={<Bot className="size-3" />} label={t('groups.botQuota')} value={g.quota.maxBots} />
+                  <QuotaChip
+                    icon={<HardDrive className="size-3" />}
+                    label={t('groups.storageQuota')}
+                    value={`${g.quota.maxStorageMb}MB`}
+                  />
                 </div>
-              </div>
-              {g.description && <p className="text-sm text-muted-foreground mb-3">{g.description}</p>}
-              <div className="flex gap-4 text-sm">
-                <span>{t('groups.members')}: {g.members?.length ?? 0}</span>
-                {g.quota && (
-                  <>
-                    <span>{t('groups.instanceQuota')}: {g.quota.maxInstances}</span>
-                    <span>{t('groups.botQuota')}: {g.quota.maxBots}</span>
-                    <span>{t('groups.storageQuota')}: {g.quota.maxStorageMb}MB</span>
-                  </>
-                )}
-              </div>
+              )}
+
               {g.members && g.members.length > 0 && (
-                <div className="mt-2 flex gap-1 flex-wrap">
+                <div className="flex flex-wrap gap-1.5">
                   {g.members.map((m) => (
-                    <span key={m.id} className="px-2 py-0.5 text-xs bg-muted rounded">
+                    <span
+                      key={m.id}
+                      className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs"
+                    >
                       {m.user?.username ?? `${t('groups.userPrefix')}${m.userId}`}
-                      {m.role === 1 && ` (${t('groups.admin')})`}
+                      {m.role === 1 && (
+                        <span className="rounded-full bg-primary/15 px-1.5 text-[10px] font-medium text-primary">
+                          {t('groups.admin')}
+                        </span>
+                      )}
                     </span>
                   ))}
                 </div>
               )}
-            </div>
+            </Panel>
           ))}
           {(!groups || groups.length === 0) && (
             <p className="text-muted-foreground text-center py-8">{t('groups.empty')}</p>
@@ -92,5 +120,16 @@ export default function GroupsPage() {
         onCancel={() => setDeleteGroup(null)}
       />
     </div>
+  )
+}
+
+/** 配额小药丸（图标 + 标签 + 值），用户组属性的紧凑展示。 */
+function QuotaChip({ icon, label, value }: { icon: React.ReactNode; label: string; value: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border bg-card px-2.5 py-1 text-xs text-muted-foreground">
+      <span className="text-primary">{icon}</span>
+      <span>{label}</span>
+      <span className="font-medium text-foreground tabular-nums">{value}</span>
+    </span>
   )
 }
