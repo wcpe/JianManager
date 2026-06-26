@@ -6,6 +6,7 @@ import WorkspacePane from './WorkspacePane'
 import WorkspaceEmpty from './WorkspaceEmpty'
 
 const OverviewPage = lazy(() => import('@/pages/OverviewPage'))
+const MonitoringPage = lazy(() => import('@/pages/MonitoringPage'))
 const NodesPage = lazy(() => import('@/pages/NodesPage'))
 const InstancesPage = lazy(() => import('@/pages/InstancesPage'))
 const InstanceDetailPage = lazy(() => import('@/pages/InstanceDetailPage'))
@@ -58,6 +59,7 @@ export default function Workspace() {
       <div className="h-full overflow-auto p-6">
         <Routes>
           <Route index element={<OverviewPage />} />
+          <Route path="monitor" element={<MonitoringPage />} />
           <Route path="nodes" element={<NodesPage />} />
           <Route path="instances" element={<InstancesPage />} />
           <Route path="instances/:id" element={<InstanceDetailPage />} />
