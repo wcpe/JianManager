@@ -463,37 +463,33 @@ database:
 
 ```
 ┌────────────────┬─────────────────────────────────────────┐
-│  JianManager   │ 标题/面包屑   [🔎 搜索 ⌘K]    徽标 🔔 账户  │  ← 全局顶栏（FR-162）
+│  JianManager ◧ │ 域›面包屑   [🔎 搜索 ⌘K]     徽标 🔔 账户  │  ← 全局顶栏（FR-162）
 │ ┌────────────┐ ├─────────────────────────────────────────┤
-│ │ 功能导航    │ │                                         │
-│ │ 仪表盘      │ │                                         │
-│ │ 节点 实例   │ │   工作区                                 │
-│ │ Bot 告警    │ │   · 点实例 → 该实例终端（单个，xterm）    │
-│ │ 模板 计划   │ │   · 其余导航 → 按路由渲染对应页面          │
-│ │ 备份       │ │   · 未开终端 → 空状态                     │
+│ │ 总览        │ │                                         │
+│ │ ▾ 集群      │ │   工作区                                 │
+│ │  节点 实例  │ │   · 点实例 → 该实例终端（单个，xterm）    │
+│ │  [全部节点▼]│ │   · 其余导航 → 按路由渲染对应页面          │
+│ │  ● Survival│ │   · 未开终端 → 空状态                     │
+│ │ ▾ 监控      │ │                                         │
+│ │ ▾ 运营      │ │   （侧栏可折叠为仅图标轨 w-14）           │
+│ │ ▾ 系统      │ │                                         │
+│ │  ·平台与维护│ │                                         │
+│ │  ·账户与审计│ │                                         │
 │ ├────────────┤ │                                         │
-│ │ [全部节点▼] │ │                                         │
-│ │ 实例树      │ │                                         │
-│ │ ● Survival │ │                                         │
-│ │ ◐ Lobby    │ │                                         │
-│ │ ○ Creative │ │                                         │
-│ ├────────────┤ │                                         │
-│ │ 系统平台    │ │                                         │
-│ │ 用户 用户组 │ │                                         │
-│ │ 审计 设置   │ │                                         │
-│ │ [主题][语言]│ │                                         │
+│ │ ●● ☀  主题  │ │  ← 全局主题切换（靛蓝/青绿 + 明暗，FR-164）│
 │ │ vX.Y · 许可 │ │                                         │
 │ └────────────┘ │                                         │
 └────────────────┴─────────────────────────────────────────┘
 ```
 
-- **左栏（约 240px，常驻）= 多级侧栏（FR-061，`ConsoleSidebar`）**：分组可展开、激活态 MC 绿高亮，整合原三段（功能/实例树/平台）为统一 IA。
-  - 顶层项：总览 / 节点 /（组）实例 /（组）监控 / 玩家 / Bot / 定时任务 /（组）备份 / 模板 /（组）设置。
-  - **实例**组展开 = 全部实例 + 群组 + 节点切换器（`全部节点` + 各节点，`GET /nodes`）+ 常驻实例树（`GET /instances?nodeId=`；每项状态点：RUNNING 绿 / STARTING·STOPPING 琥珀 / CRASHED 红 / STOPPED 空心 + bot 聚合徽标）。
-  - **监控**组 = 告警 + 日志；**备份**组 = 备份 + 备份存储；**设置**组 = 用户 + 用户组 + 审计 + 系统设置。
-  - 底部（FR-132）：主题 / 语言为 lucide 图标 + 文字 dropdown（主题三态直选、切语言同步 `<html lang>`）+ 版本号（左下）+ 开源许可入口（右下 → `/licenses`，FR-135）；退出登录已迁至顶栏账户菜单（FR-162）。分组展开态存 Zustand（`stores/console.ts.collapsedGroups`）。
+- **左栏（常驻）= 五域多级侧栏（FR-131 / design §7，`ConsoleSidebar`）**：从原 11 个粒度不一的一级精简为 **5 个按运维心智分域的一级**，分组可展开、激活态主色高亮，高频域在上、低频「系统」沉底。
+  - 五域：**总览**（单链接）/ **集群** /（组）**监控** /（组）**运营** /（组）**系统**（内分「平台与维护」「账户与审计」两小节）。
+  - **集群**组展开 = 节点 + 全部实例 + 群组 + 节点切换器（`全部节点` + 各节点，`GET /nodes`）+ 常驻实例树（`GET /instances?nodeId=`；每项状态点：RUNNING 绿 / STARTING·STOPPING 琥珀 / CRASHED 红 / STOPPED 空心 + bot 聚合徽标）。
+  - **监控**组 = 监控总览（`/monitor`，FR-169）+ 告警 + 日志；**运营**组 = 玩家 + Bot + 模板 + 备份 + 备份存储 + 定时任务；**系统**组 =「平台与维护」（运行时与制品 + 客户端分发 + 平台存储 +〔平台管理员〕数据库 + 系统更新）+「账户与审计」（用户 + 用户组 + 设置 + 审计 + 开源许可）。
+  - **可折叠图标轨（FR-131）**：可折叠为仅域级图标轨（`w-14`，hover tooltip 显 label，点分组图标即展开侧栏再选子项）；导航区滚动条隐藏但保留滚动（`.scrollbar-none`）。折叠态 / 分组折叠态 / 选中节点持久化 `localStorage`（`stores/console.ts`：`sidebar.collapsed` / `sidebar.collapsedGroups` / `sidebar.selectedNodeId`）。
+  - 底部（FR-164/FR-132）：**全局主题切换器** `ThemeSwitcher`——主题色圆点（靛蓝/青绿直选）+ 明暗（lucide 图标 + dropdown 三态直选）；版本号（左下）+ 开源许可入口（右下 → `/licenses`，FR-135）；退出登录已迁至顶栏账户菜单（FR-162）。切语言同步 `<html lang>` 见 `i18n`。
 - **顶栏（FR-162，`ConsoleHeader`）= 内容区上方全局页眉**（侧栏保持全高，顶栏只占右侧内容列）：
-  - **左** = 当前页轻量标题/面包屑（`lib/pageTitle.ts` 按路由首段映射；打开实例工作区时显「实例 / <名称>」）；与 FR-134 统一页头协同，本期不展开 FR-134 的 P3 全量。
+  - **左** = 统一面包屑（FR-134，`PageBreadcrumb` + 纯函数 `lib/breadcrumb.ts`）：按路由渲染「域 › 页面」轨迹（与五域 IA 对齐），父级可点跳转、末级加粗；打开实例工作区时末级补实例名（域 › 全部实例 › <名称>）。
   - **中** = 常驻搜索框（本期占位：UI + `Ctrl/⌘+K` 聚焦，输入暂不联动检索，检索逻辑留后续 FR）。
   - **右** = 集群概览徽标（在线节点/运行实例/崩溃数，复用 `GET /metrics/overview` + 实例列表本地统计；点击跳转对应筛选：运行/崩溃→`/instances?status=`、在线→`/nodes`）+ 告警铃铛（`GET /alerts/events/unread-count` 未读计数 30s 轮询 + 下拉只读最近事件）+ 账户菜单（用户名/角色 + 退出登录）。
 - **右 = 工作区**：
@@ -501,7 +497,7 @@ database:
   - **文件**段 = 共享资源管理器 `components/explorer/ResourceExplorer`（FR-070）：左懒加载目录树（`FileTree`）+ 右目录内容（`FileList` 多选/右键/拖拽源）/ CodeMirror 编辑器（`editor/CodeEditor`，多格式高亮 + Ctrl+S 拦截保存接 FR-051 历史）。交互全集（新建文件夹/重命名/删除/剪切复制粘贴/树内拖拽移动/拖拽上传/单文件流式与多选 zip 批量下载/shift·ctrl·全选多选）抽为纯函数（`selection`/`clipboard`/`paths`/`language`，vitest 覆盖）；删除/回滚走 `DangerConfirm`（FR-059），历史版本经右侧抽屉 `VersionDrawer`。`ResourceExplorer` 接受可选 `config` 能力注入（编辑器插槽 / 左栏插槽 / 配置版本抽屉），不注入即为纯文件资源管理器。**此组件为 FR-071/073/074/075/082/083/084 复用地基**。归档浏览/反编译（FR-075）叠加为右栏互斥面板：`FileList` 双击/右键按 jar/zip→`ArchiveViewer`（内部条目子树 + 点文本条目只读查看 + 点 `.class` 触发反编译）、`.class`→`DecompileViewer`（只读 Java 源码），与文本编辑器三者互斥占用右栏；API client `api/archive.ts`，只读端点不触碰写操作。
   - **配置**段 = `components/config-explorer/ConfigExplorer`（FR-071）：**复用 `ResourceExplorer`** 并注入配置能力——打开文件改用 `ConfigFileEditor`（schema 表单/文本双模式 + 跨文件校验 + Ctrl+S 存**配置版本**，FR-031；文本模式复用共享 `CodeEditor` 多格式高亮）；左栏顶部 `FavoritesBar`（收藏书签存 `localStorage`，纯函数 `favorites.ts` + 已发现配置面板 `GET /configs/discover` 递归全部配置，分组纯函数 `discover.ts`）；历史经 `ConfigVersionDrawer`（FR-031 配置版本/diff/回滚）。树/列表本身呈现工作目录全部文件，满足「目录树呈现自动发现的全部配置」。原独立三栏 `ConfigEditor` 已移除。
   - 其余路由在工作区按路由渲染。**总览页（`OverviewPage`）** = 环形仪表盘 + 跨节点聚合历史曲线（FR-060：总 CPU/内存/在线玩家）+ 密集实例表；**节点页**行内 MiniBar + 可展开节点详情（环形仪表盘 + CPU/内存曲线）。**开源许可页（`LicensesPage`，`/licenses`，FR-135）** = 构建期 `scripts/gen-licenses.mjs` 扫描 web + bot-worker(npm) + Go(go-licenses) 生成 `web/public/licenses.json`（静态资源、非 `/api`），页面提供包名搜索 + 运行时/开发分区计数 + 表格 [包名·版本·许可证·作者] + 行内展开许可证全文。
-- **设计系统（FR-061 + FR-163 视觉底座）**：OKLCH token 驱动；主色为**靛蓝 `#6366F1`**（FR-163，替换原 MC 绿）+ 状态色系（success/warning/danger/info，阈值驱动变色，见 `lib/threshold.ts`）+ 13px 密度档位。**设计底座 token（FR-163，`index.css`）**：柔和弱阴影 `shadow-soft` / 主色晕染抬升 `shadow-lift`（hover）/ iOS 缓动 `ease-ios` / 呼吸灯 `animate-breathing`（运行对象脉动光环）/ 大圆角基线（`--radius` 0.75rem，卡片 `rounded-xl`）。**统一卡片原语**：`Panel`（分区/容器，新增可选 `icon`/`tone`/`hoverable`）+ `StatCard`（KPI 卡，「按指标混搭」逻辑下沉纯函数 `lib/stat-card.ts`/`lib/tone.ts`）+ `ResourceGauge`/`MiniBar`/`StatusBadge`（`components/ui`）与 `TimeSeriesChart`/`RangePicker`（`components/charts`）；**弃 shadcn `Card` 松散用法**（`card.tsx` 标 `@deprecated`，eslint `no-restricted-imports` 阻断新引入，见 ADR-032）。**双主题底座（FR-163）**：组件层零硬编码品牌色，品牌色全经 CSS 变量（`--primary`/`--accent`/`--ring`/`--brand-shadow`）——FR-164 第二主题（青绿）仅覆盖这组变量即可全站换肤。仍基于 shadcn/ui + Tailwind v4 + OKLCH，不引入新框架。
+- **设计系统（FR-061 + FR-163 视觉底座）**：OKLCH token 驱动；主色为**靛蓝 `#6366F1`**（FR-163，替换原 MC 绿）+ 状态色系（success/warning/danger/info，阈值驱动变色，见 `lib/threshold.ts`）+ 13px 密度档位。**设计底座 token（FR-163，`index.css`）**：柔和弱阴影 `shadow-soft` / 主色晕染抬升 `shadow-lift`（hover）/ iOS 缓动 `ease-ios` / 呼吸灯 `animate-breathing`（运行对象脉动光环）/ 大圆角基线（`--radius` 0.75rem，卡片 `rounded-xl`）。**统一卡片原语**：`Panel`（分区/容器，新增可选 `icon`/`tone`/`hoverable`）+ `StatCard`（KPI 卡，「按指标混搭」逻辑下沉纯函数 `lib/stat-card.ts`/`lib/tone.ts`）+ `ResourceGauge`/`MiniBar`/`StatusBadge`（`components/ui`）与 `TimeSeriesChart`/`RangePicker`（`components/charts`）；**弃 shadcn `Card` 松散用法**（`card.tsx` 标 `@deprecated`，eslint `no-restricted-imports` 阻断新引入，见 ADR-032）。**全局双主题（FR-163 底座 + FR-164 落地）**：组件层零硬编码品牌色，品牌色全经 CSS 变量（`--primary`/`--primary-foreground`/`--accent`/`--accent-foreground`/`--ring`/`--brand-shadow`/`--chart-1`）。第二主题**青绿 `#14B8A6`** 仅在 `index.css` 用 `[data-theme="teal"]` 与 `[data-theme="teal"].dark` 覆盖这组品牌变量（结构色/状态色不动），靛蓝为默认（无 `data-theme` 即承 `:root`/`.dark`）。**主题色（`colorTheme: indigo|teal`）与明暗（`light|dark|system`）正交、各自 `localStorage` 持久**；纯逻辑下沉 `lib/theme.ts`（`resolveColorTheme`/`colorThemeAttr`/`resolveMode`/`nextMode` + 套用 helper），`stores/theme.ts` 统管两轴。**主题/明暗初始化提到 app 入口**（`main.tsx` 在 React 挂载前 `initThemeFromStorage()` 套 `<html data-theme>` + `.dark`），登录/初始化页也套主题且首屏无闪。一处切（侧栏底部 `ThemeSwitcher`）全站 CSS 变量实时跟变（按钮/曲线/选中态/进度条随主色）。仍基于 shadcn/ui + Tailwind v4 + OKLCH，不引入新框架。
 - 暗色/亮色主题与 i18n（zh/en）正常；选中实例/节点为客户端 UI 状态，不进 URL。
 - **响应式基线（FR-163）**：栅格断点沿用 Tailwind `sm/md/lg`（如总览 KPI `grid-cols-2 sm:grid-cols-3 lg:grid-cols-6`），卡片原语 `Panel`/`StatCard` 流式宽度自适应、不破栅格。
 
