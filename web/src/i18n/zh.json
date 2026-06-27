@@ -774,6 +774,9 @@
       "linux": "Linux / macOS",
       "windows": "Windows (PowerShell)",
       "hint": "公网下载源未配置时，请先把 Worker 二进制拷到目标机器，并在命令末尾追加 --binary <路径>（Windows 用 -Binary <路径>）。",
+      "manualTitle": "手动安装步骤（分步兜底 / 先审脚本）",
+      "manualStep1": "① 下载脚本",
+      "manualStep2": "② 执行（带参数）",
       "copy": "复制",
       "copied": "已复制到剪贴板",
       "copyFailed": "复制失败，请手动选择复制"

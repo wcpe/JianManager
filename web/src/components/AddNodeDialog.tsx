@@ -54,6 +54,57 @@ function CommandBlock({ title, command }: { title: string; command: string }) {
   )
 }
 
+/** 单条手动步骤：序号说明 + 等宽命令 + 复制按钮（分步兜底，便于先审脚本再执行 / 管道被拦时用）。 */
+function ManualStep({ label, command }: { label: string; command: string }) {
+  const { t } = useTranslation()
+  return (
+    <div className="space-y-1">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="flex items-start gap-2 rounded-md border bg-muted/40 p-2">
+        <code className="flex-1 break-all font-mono text-xs leading-relaxed">{command}</code>
+        <CopyButton text={command} label={t('nodes.enroll.copy', '复制')} />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 手动安装步骤段：把一键命令拆成「下载脚本 → 执行（带参数）」分步兜底（FR-080）。
+ * 适用 `curl … | sh` 管道被策略拦截、或运维想先审脚本再执行的场景。
+ */
+function ManualInstallSection({ issued }: { issued: IssuedEnrollToken }) {
+  const { t } = useTranslation()
+  const base = issued.scriptBaseUrl
+  const grpc = issued.controlPlaneGrpc
+  const token = issued.token
+  const name = issued.nodeName
+
+  const linuxDownload = `curl -fsSL ${base}/install-worker.sh -o install-worker.sh`
+  const linuxRun = `sh install-worker.sh --control-plane ${grpc} --token ${token}${name ? ` --name ${name}` : ''}`
+  const winDownload = `iwr ${base}/install-worker.ps1 -UseBasicParsing -OutFile install-worker.ps1`
+  const winRun = `.\\install-worker.ps1 -ControlPlane ${grpc} -Token ${token}${name ? ` -Name ${name}` : ''}`
+
+  return (
+    <details className="rounded-md border bg-muted/20 p-2">
+      <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
+        {t('nodes.enroll.manualTitle', '手动安装步骤（分步兜底 / 先审脚本）')}
+      </summary>
+      <div className="space-y-3 pt-2">
+        <div className="space-y-2">
+          <div className="text-xs font-medium">{t('nodes.enroll.linux', 'Linux / macOS')}</div>
+          <ManualStep label={t('nodes.enroll.manualStep1', '① 下载脚本')} command={linuxDownload} />
+          <ManualStep label={t('nodes.enroll.manualStep2', '② 执行（带参数）')} command={linuxRun} />
+        </div>
+        <div className="space-y-2">
+          <div className="text-xs font-medium">{t('nodes.enroll.windows', 'Windows (PowerShell)')}</div>
+          <ManualStep label={t('nodes.enroll.manualStep1', '① 下载脚本')} command={winDownload} />
+          <ManualStep label={t('nodes.enroll.manualStep2', '② 执行（带参数）')} command={winRun} />
+        </div>
+      </div>
+    </details>
+  )
+}
+
 export default function AddNodeDialog({ open, onClose }: AddNodeDialogProps) {
   const { t } = useTranslation()
   const issue = useIssueEnrollToken()
@@ -142,6 +193,7 @@ export default function AddNodeDialog({ open, onClose }: AddNodeDialogProps) {
               </div>
               <CommandBlock title={t('nodes.enroll.linux', 'Linux / macOS')} command={issued.installCommandLinux} />
               <CommandBlock title={t('nodes.enroll.windows', 'Windows (PowerShell)')} command={issued.installCommandWindows} />
+              <ManualInstallSection issued={issued} />
               <div className="rounded-md border border-status-warning/40 bg-status-warning/10 p-2 text-xs text-muted-foreground">
                 {t('nodes.enroll.hint', '公网下载源未配置时，请先把 Worker 二进制拷到目标机器，并在命令末尾追加 --binary <路径>（Windows 用 -Binary <路径>）。')}
               </div>

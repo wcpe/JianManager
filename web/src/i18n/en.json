@@ -797,6 +797,9 @@
       "linux": "Linux / macOS",
       "windows": "Windows (PowerShell)",
       "hint": "If no public download source is configured, copy the Worker binary to the target machine first and append --binary <path> (use -Binary <path> on Windows).",
+      "manualTitle": "Manual install steps (step-by-step fallback / inspect first)",
+      "manualStep1": "1. Download the script",
+      "manualStep2": "2. Run it (with arguments)",
       "copy": "Copy",
       "copied": "Copied to clipboard",
       "copyFailed": "Copy failed, please select and copy manually"

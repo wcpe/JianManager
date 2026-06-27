@@ -53,6 +53,8 @@ export interface IssuedEnrollToken {
   nodeName: string
   /** CP 对外公布的 gRPC 地址（host:port），写入一键命令。 */
   controlPlaneGrpc: string
+  /** CP 托管安装脚本的基址（scheme://host），供前端拼「手动安装步骤」兜底命令。 */
+  scriptBaseUrl: string
   installCommandLinux: string
   installCommandWindows: string
 }
