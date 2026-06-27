@@ -86,6 +86,32 @@ func (h *SelfUpdateHandler) UpgradeNode(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"status": "upgrading", "nodeId": id, "fromVersion": from, "toVersion": to})
 }
 
+// RollbackControlPlane POST /self-update/control-plane/rollback — 回滚 CP 自身到升级前备份（FR-182）。
+func (h *SelfUpdateHandler) RollbackControlPlane(c *gin.Context) {
+	from, to, err := h.svc.RollbackControlPlane(c.Request.Context())
+	if err != nil {
+		h.respondUpgradeError(c, err)
+		return
+	}
+	h.recordAudit(c, "self_update.control_plane_rollback", map[string]any{"fromVersion": from, "toVersion": to})
+	c.JSON(http.StatusAccepted, gin.H{"status": "restarting", "fromVersion": from, "toVersion": to})
+}
+
+// RollbackNode POST /self-update/nodes/:id/rollback — 回滚单个节点到其升级前备份（FR-182）。
+func (h *SelfUpdateHandler) RollbackNode(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	from, to, err := h.svc.RollbackNode(c.Request.Context(), id)
+	if err != nil {
+		h.respondUpgradeError(c, err)
+		return
+	}
+	h.recordAudit(c, "self_update.node_rollback", map[string]any{"nodeId": id, "fromVersion": from, "toVersion": to})
+	c.JSON(http.StatusAccepted, gin.H{"status": "rolling-back", "nodeId": id, "fromVersion": from, "toVersion": to})
+}
+
 // UpgradeAll POST /self-update/nodes/upgrade-all — 全网逐节点升级编排（异步）。
 func (h *SelfUpdateHandler) UpgradeAll(c *gin.Context) {
 	var req upgradeAllRequest
@@ -118,6 +144,8 @@ func (h *SelfUpdateHandler) respondUpgradeError(c *gin.Context, err error) {
 		c.JSON(http.StatusTooManyRequests, gin.H{"error": "UPDATE_RATE_LIMITED", "message": "GitHub API 限流，请稍后重试或配置 github_token"})
 	case errors.Is(err, service.ErrUpdateAlreadyLatest):
 		c.JSON(http.StatusConflict, gin.H{"error": "UPDATE_ALREADY_LATEST", "message": "已是最新版本"})
+	case errors.Is(err, service.ErrNoBackup):
+		c.JSON(http.StatusConflict, gin.H{"error": "UPDATE_NO_BACKUP", "message": "无可回滚的备份（尚未升级过或备份缺失）"})
 	case errors.Is(err, service.ErrUpdateNoArtifact):
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "UPDATE_NO_ARTIFACT", "message": "更新源无匹配本平台的制品"})
 	case errors.Is(err, service.ErrNodeOffline):
@@ -149,7 +177,9 @@ func (h *SelfUpdateHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	{
 		su.GET("/check", h.Check)
 		su.POST("/control-plane/upgrade", h.UpgradeControlPlane)
+		su.POST("/control-plane/rollback", h.RollbackControlPlane)
 		su.POST("/nodes/:id/upgrade", h.UpgradeNode)
+		su.POST("/nodes/:id/rollback", h.RollbackNode)
 		su.POST("/nodes/upgrade-all", h.UpgradeAll)
 		su.GET("/rollout", h.Rollout)
 	}
