@@ -1,4 +1,4 @@
-# ADR-039: 自更新升级前备份与一键回滚 + 滚动预发布 nightly→latest
+# ADR-042: 自更新升级前备份与一键回滚 + 滚动预发布 nightly→latest
 
 - **日期**: 2026-06-27
 - **状态**: accepted
@@ -43,7 +43,7 @@
 - FR-173 发布管线的**滚动预发布固定 tag** 由 `nightly` 改名为 `latest`（`.github/workflows/release.yml` 的 `release_tag` 元数据、清理既有资产、发布步骤 `tag_name`/`name`）。语义不变：仍是 push `master` 出 / 覆盖的预发布、只留最新产物。
 - 自更新 `prerelease` 渠道端点相应由 `/releases/tags/nightly` 改为 `/releases/tags/latest`（`selfupdate_github.go`）。
 - `update.github_repo` 默认值由 `wcpe/jianmanager` 改为 `wcpe/JianManager`，对齐真实仓库名大小写（GitHub 仓库名大小写不敏感于路由但展示 / clone 一致更稳）。
-- 本节**取代 ADR-036 §3「滚动预发布固定 tag `nightly`」与 §7「prerelease → `/releases/tags/nightly`」的命名**（ADR-036 标该两处 `superseded-by ADR-039`）；ADR-036 的产物命名 / 校验 / 渠道其余契约不变。
+- 本节**取代 ADR-036 §3「滚动预发布固定 tag `nightly`」与 §7「prerelease → `/releases/tags/nightly`」的命名**（ADR-036 标该两处 `superseded-by ADR-042`）；ADR-036 的产物命名 / 校验 / 渠道其余契约不变。
 
 ## 理由
 
@@ -61,7 +61,7 @@
 - CP `service`/`router` 新增回滚编排与两个端点 + 错误码 `UPDATE_NO_BACKUP` + 两条审计动作；`ComponentStatus`/`CheckResult` 加性新增 `backupVersion`。
 - 前端 `SystemUpdatePage` notes 改说明块 + 回滚按钮；`api/selfUpdate.ts` 加 `backupVersion`/`source` 类型与回滚 mutation。
 - `.github/workflows/release.yml` 滚动预发布 tag 改 `latest`；首次跑会新建 `latest` 预发布，既有 `nightly` release 需一次性手动清理（运维动作，文档注明）。
-- ADR-036 §3 / §7 的 `nightly` 命名标 `superseded-by ADR-039`。
+- ADR-036 §3 / §7 的 `nightly` 命名标 `superseded-by ADR-042`。
 - 真机两条待用户确认：CP / Worker 升级后一键回滚成功（含 Windows 替换运行中 exe、daemon 游戏服不掉）；真 CI 出 `latest` 预发布并被 `prerelease` 渠道消费。本地以 httptest + 临时文件覆盖单测。
 
 ## 替代方案

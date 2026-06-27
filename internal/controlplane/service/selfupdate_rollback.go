@@ -13,7 +13,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// RollbackControlPlane 回滚 CP 自身到升级前备份（FR-182，见 ADR-039）。
+// RollbackControlPlane 回滚 CP 自身到升级前备份（FR-182，见 ADR-042）。
 // 流程：校验备份 sha → 换回备份二进制 → 异步延迟重启（先让 HTTP 202 返回）。
 // 无备份返回 ErrNoBackup。返回 (fromVersion, toVersion=备份版本, error)。
 func (s *SelfUpdateService) RollbackControlPlane(_ context.Context) (string, string, error) {
@@ -51,7 +51,7 @@ func (s *SelfUpdateService) scheduleCPRestart() {
 	}()
 }
 
-// RollbackNode 经 gRPC 令目标节点回滚到其升级前备份（FR-182，见 ADR-039）。
+// RollbackNode 经 gRPC 令目标节点回滚到其升级前备份（FR-182，见 ADR-042）。
 // Worker 走本地备份（不下载，不经更新源），CP 仅下发 action=rollback。
 // 节点离线返回 ErrNodeOffline；节点无备份映射 ErrNoBackup。返回 (fromVersion, toVersion, error)。
 func (s *SelfUpdateService) RollbackNode(ctx context.Context, nodeID uint) (string, string, error) {

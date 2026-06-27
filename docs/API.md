@@ -1600,10 +1600,10 @@
 
 ## 面板自更新（FR-081 / FR-175 / FR-182）
 
-> Control Plane 与各节点 Worker 的二进制在线升级与回滚（ADR-020 / ADR-036 §7 / ADR-039）。均挂运营者浏览器 JWT 入口、**仅平台管理员**。
+> Control Plane 与各节点 Worker 的二进制在线升级与回滚（ADR-020 / ADR-036 §7 / ADR-042）。均挂运营者浏览器 JWT 入口、**仅平台管理员**。
 > **更新源**（FR-175，见 ADR-036 §7）：默认**原生读 GitHub Releases API**（`control-plane.yaml` 的 `update.github_repo`，默认 `wcpe/JianManager`），`update.channel` 选 `stable`（取 `/releases/latest` 最新正式）或 `prerelease`（取滚动 `latest` 预发布，FR-182 由 `nightly` 改名）；sha256 取自 release 的 `checksums.txt` 资产（ADR-036 §2 契约），资产名按 ADR-036 §1 命名 `<component>-<os>-<arch>[.exe]` 反解。`update.github_token` 可选，提升 GitHub API 限流额度（匿名 60 次/时）。`github_repo` 为空且 `feed_url` 非空时**回退**原 feed JSON 路径（FR-081）；二者均空即未配置。下载经 FR-174 出站代理。
 > 升级类操作写审计（detail 仅含版本/节点元数据，绝不含下载 url 或凭据）。升级流程：下载目标版本制品 → **sha256 校验** → 替换二进制 → 平滑重启；Worker 升级经 CP gRPC 编排（`GetVersion`/`UpgradeWorker`），daemon 模式下不杀运行中的游戏服。
-> **升级前自动备份 + 一键回滚**（FR-182，见 ADR-039）：升级（CP 自升 / 节点升）在替换前把当前二进制 + 版本/sha256 备份到数据根 `cache/selfupdate-backup/<component>`（每组件单份，覆盖上一份）。`check` 透出各组件 `backupVersion`，可一键回滚到上一版（校验备份 sha256 → 换回 → 平滑重启）；节点回滚经 gRPC `UpgradeWorker(action=rollback)`，Worker 走本地备份不下载。无备份返回 `UPDATE_NO_BACKUP`。
+> **升级前自动备份 + 一键回滚**（FR-182，见 ADR-042）：升级（CP 自升 / 节点升）在替换前把当前二进制 + 版本/sha256 备份到数据根 `cache/selfupdate-backup/<component>`（每组件单份，覆盖上一份）。`check` 透出各组件 `backupVersion`，可一键回滚到上一版（校验备份 sha256 → 换回 → 平滑重启）；节点回滚经 gRPC `UpgradeWorker(action=rollback)`，Worker 走本地备份不下载。无备份返回 `UPDATE_NO_BACKUP`。
 
 ### GET /api/v1/self-update/check
 - **描述**: 检查更新——按配置的更新源（GitHub Releases 或 feed）解析最新版本，对比 CP 自身与各节点当前版本，标注是否有更新及是否有匹配平台（component+os+arch）的制品

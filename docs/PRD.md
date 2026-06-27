@@ -47,7 +47,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-003 / 041 / 042 / 046 / 053 / 059 / 098 / 113 / 114（在途杂项 / 归真 / 延后）→ `docs/specs/inflight-backlog/spec.md`
 - FR-163~169（前端整体重设计:视觉底座 / 双主题 / 多级分组 / 可组合工作区+超级工作台+导播台 / 监控升级）→ `docs/specs/ui-redesign/design.md`(+ 原型 `preview.html`)
 - FR-173~175（CI 发布管线 / 出站网络代理 / 自更新对接 GitHub Releases，关联 ADR-036/037）→ `docs/specs/release-pipeline/`、`docs/specs/network-proxy/`、`docs/specs/self-update-github/`（开发中创建）
-- FR-176~184（节点与运行时 UI 重做 / 自更新增强 / 全局任务中心 / jmctl 紧急控制台，关联 ADR-039/040/041 + ADR-036 更新）→ FR-182 `docs/specs/self-update-enhancement/spec.md`、FR-183 `docs/specs/task-center/spec.md`、FR-184 `docs/specs/emergency-cli/spec.md`（已落审）；FR-176/179/180/181 免 spec；FR-177/178 spec 随 W2 创建
+- FR-176~184（节点与运行时 UI 重做 / 自更新增强 / 全局任务中心 / jmctl 紧急控制台，关联 ADR-039/040/041/042 + ADR-036 更新）→ FR-182 `docs/specs/self-update-enhancement/spec.md`、FR-183 `docs/specs/task-center/spec.md`、FR-184 `docs/specs/emergency-cli/spec.md`（已落审）；FR-176/179/180/181 免 spec；FR-177/178 spec 随 W2 创建
 - BUG-A 节点重名覆盖（修 FR-004 注册身份匹配缺陷，见 ADR-039）：注册改 UUID 锚定三级匹配 + 节点名活跃唯一 + 坏节点检测/修复后端（`NodeRepairService` + `/nodes/repair/*`、`/nodes/:id/reenroll|orphans|purge-orphans`）随 ADR-039 fix 提交落地；坏节点修复**可视化入口**随 FR-177 节点页重做。属缺陷修复（非新 FR），不占 §4 FR 编号
 - 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
 

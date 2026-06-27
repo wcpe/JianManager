@@ -24,7 +24,7 @@ const (
 // ErrNoBackup 无可回滚的备份（从未升级过 / 备份元数据缺失）。
 var ErrNoBackup = errors.New("无可回滚的备份")
 
-// backupRootDir 是备份在数据根 cache/ 下的子目录名（FR-182，见 ADR-039）。
+// backupRootDir 是备份在数据根 cache/ 下的子目录名（FR-182，见 ADR-042）。
 const backupRootDir = "selfupdate-backup"
 
 // backupBinaryName 是备份目录内备份可执行文件的固定文件名。
@@ -52,7 +52,7 @@ func backupDir(component string, root *dataroot.Root) string {
 	return filepath.Join(os.TempDir(), "jianmanager-"+backupRootDir, component)
 }
 
-// BackupCurrent 备份当前进程的可执行文件（os.Executable()）到组件备份目录（FR-182，见 ADR-039）。
+// BackupCurrent 备份当前进程的可执行文件（os.Executable()）到组件备份目录（FR-182，见 ADR-042）。
 // currentVersion 为被备份二进制的版本号（写入 meta，回滚时回报）。升级流程在替换前调用。
 // 每组件只留一份，再次备份覆盖上一份。
 func BackupCurrent(component, currentVersion string, root *dataroot.Root) error {
@@ -104,7 +104,7 @@ func BackupInfo(component string, root *dataroot.Root) (BackupMeta, bool) {
 	return meta, true
 }
 
-// Rollback 把当前进程的可执行文件换回组件备份（FR-182，见 ADR-039）。
+// Rollback 把当前进程的可执行文件换回组件备份（FR-182，见 ADR-042）。
 // 流程：读 meta（无 → ErrNoBackup）→ 校验备份二进制 sha256 与 meta 一致（防损坏）→
 // 复制备份到临时文件 → ReplaceExecutable 换回 → 返回 meta（含回滚到的版本）。
 // 不在此重启——与升级一致，替换成功后由调用方异步延迟重启。

@@ -47,7 +47,7 @@ func (s *Server) GetVersion(_ context.Context, _ *workerpb.GetVersionRequest) (*
 func (s *Server) UpgradeWorker(ctx context.Context, req *workerpb.UpgradeWorkerRequest) (*workerpb.UpgradeWorkerResponse, error) {
 	from := version.Version
 
-	// action=rollback：回滚本地升级前备份，不下载（FR-182，见 ADR-039）。
+	// action=rollback：回滚本地升级前备份，不下载（FR-182，见 ADR-042）。
 	if strings.EqualFold(strings.TrimSpace(req.Action), workerRollbackAction) {
 		return s.rollbackWorker(from), nil
 	}
@@ -99,7 +99,7 @@ func (s *Server) UpgradeWorker(ctx context.Context, req *workerpb.UpgradeWorkerR
 // workerRollbackAction 是 UpgradeWorkerRequest.action 触发回滚的取值（FR-182）。
 const workerRollbackAction = "rollback"
 
-// rollbackWorker 回滚本地升级前备份（FR-182，见 ADR-039）：校验备份 sha → 换回 → 异步延迟重启。
+// rollbackWorker 回滚本地升级前备份（FR-182，见 ADR-042）：校验备份 sha → 换回 → 异步延迟重启。
 // 无备份回 success=false（error 文案含 NO_BACKUP 供 CP 映射友好码）；不下载任何远端制品。
 func (s *Server) rollbackWorker(from string) *workerpb.UpgradeWorkerResponse {
 	target, err := s.resolveExecutable()

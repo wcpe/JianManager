@@ -32,7 +32,7 @@ var (
 	ErrUpdateNoArtifact = errors.New("更新源无匹配本平台的制品")
 	// ErrUpdateAlreadyLatest 目标已是最新版本（无更高版本可升）。
 	ErrUpdateAlreadyLatest = errors.New("已是最新版本")
-	// ErrNoBackup 无可回滚的备份（CP/节点从未升级过，或备份缺失）。FR-182，见 ADR-039。
+	// ErrNoBackup 无可回滚的备份（CP/节点从未升级过，或备份缺失）。FR-182，见 ADR-042。
 	ErrNoBackup = selfupdate.ErrNoBackup
 )
 
@@ -226,7 +226,7 @@ type ComponentStatus struct {
 	Arch              string `json:"arch"`
 	UpdateAvailable   bool   `json:"updateAvailable"`
 	ArtifactAvailable bool   `json:"artifactAvailable"`
-	// BackupVersion 升级前备份的版本（FR-182，见 ADR-039）：CP 取自本地备份、节点取自 GetVersion 回报。
+	// BackupVersion 升级前备份的版本（FR-182，见 ADR-042）：CP 取自本地备份、节点取自 GetVersion 回报。
 	// 非空时前端可一键「回滚 v{BackupVersion}」；空表示无备份（回滚按钮禁用）。
 	BackupVersion string `json:"backupVersion,omitempty"`
 }
