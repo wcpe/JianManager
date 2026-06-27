@@ -18,6 +18,7 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
 	workercfg "github.com/wcpe/JianManager/internal/worker"
+	"github.com/wcpe/JianManager/internal/worker/artifactcache"
 	"github.com/wcpe/JianManager/internal/worker/bot"
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 	"github.com/wcpe/JianManager/internal/worker/decompiler"
@@ -154,6 +155,12 @@ func runWorker() {
 	workerServer.SetHTTPClient(outboundClient)
 	// 全文搜索追加忽略规则（worker.yaml search.ignore，叠加内置默认集，FR-074）。
 	workerServer.SetSearchIgnore(cfg.Search.Ignore)
+	// 节点制品缓存（FR-178）：按 sha256 缓存下载过的核心 jar（var/artifact-cache），建实例命中即秒拷免重下。
+	// 容量上限来自 worker.yaml artifact_cache.max_bytes（0=不限），可经 CP 端点运行时下发覆盖。
+	artifactCache := artifactcache.New(root.ArtifactCacheDir())
+	artifactCache.SetCap(cfg.ArtifactCache.MaxBytes)
+	workerServer.SetArtifactCache(artifactCache)
+	slog.Info("节点制品缓存已启用", "dir", root.ArtifactCacheDir(), "maxBytes", cfg.ArtifactCache.MaxBytes)
 
 	// Bot 管理器：按需 spawn bot-worker(Node) 子进程，经 stdin/stdout IPC 管理 Mineflayer Bot。
 	// 入口脚本默认 bot-worker/dist/index.js（相对 cwd），可经 JIANMANAGER_BOT_WORKER_PATH 覆盖。参见 ADR-006。

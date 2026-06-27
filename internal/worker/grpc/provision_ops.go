@@ -6,17 +6,24 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/wcpe/JianManager/internal/worker/artifactcache"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
+// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服 + FR-178 节点制品缓存）。
 // 实例须已注册（CreateInstance），据其工作目录落地；可选 sha256 校验，不符则删除并报错。
+//
+// 节点制品缓存（FR-178，仅服务端核心 jar）：
+//  1. sha256 非空且缓存命中 → 直接从缓存秒拷到工作目录（免网络），touch lastUsed。
+//  2. 未命中 → 走 downloadFile 下载（边下边算 sha256 校验），落地后存入缓存 + 写 meta。
+//  3. sha256 为空（少数源无校验）→ 不缓存，按现状下载（缓存键必须是 sha256，无键不缓存）。
 func (s *Server) DownloadCore(ctx context.Context, req *workerpb.DownloadCoreRequest) (*workerpb.DownloadCoreResponse, error) {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)
 	if !exists {
@@ -33,14 +40,43 @@ func (s *Server) DownloadCore(ctx context.Context, req *workerpb.DownloadCoreReq
 	}
 	target := filepath.Join(inst.WorkDir, dest)
 
+	want := strings.ToLower(strings.TrimSpace(req.Sha256))
+
+	// 1) 缓存命中（仅当有 sha256 键且启用缓存）：秒拷免网络。
+	if s.cache != nil && want != "" {
+		if err := os.MkdirAll(inst.WorkDir, 0o755); err != nil {
+			return &workerpb.DownloadCoreResponse{Success: false, Error: fmt.Sprintf("创建工作目录失败: %v", err)}, nil
+		}
+		if hit, err := s.cache.GetTo(want, target); err == nil && hit {
+			if st, statErr := os.Stat(target); statErr == nil {
+				return &workerpb.DownloadCoreResponse{Success: true, Size: st.Size()}, nil
+			}
+		}
+	}
+
+	// 2) 未命中：下载并（有 sha256 时）校验。
 	size, sum, err := downloadFile(ctx, s.outboundClient(), req.DownloadUrl, target)
 	if err != nil {
 		return &workerpb.DownloadCoreResponse{Success: false, Error: err.Error()}, nil
 	}
-	if want := strings.ToLower(strings.TrimSpace(req.Sha256)); want != "" && want != sum {
+	if want != "" && want != sum {
 		_ = os.Remove(target)
 		return &workerpb.DownloadCoreResponse{Success: false, Error: fmt.Sprintf("核心 sha256 校验不符：期望 %s 实得 %s", want, sum)}, nil
 	}
+
+	// 3) 存入缓存（仅当有 sha256 键且启用缓存；存入失败不影响本次建实例）。
+	if s.cache != nil && sum != "" {
+		meta := artifactcache.Meta{
+			Name:      dest,
+			Type:      "core",
+			SourceURL: req.DownloadUrl,
+			Size:      size,
+		}
+		if err := s.cache.Put(sum, target, meta); err != nil {
+			slog.Warn("存入节点制品缓存失败（不影响本次建实例）", "sha256", sum, "error", err)
+		}
+	}
+
 	return &workerpb.DownloadCoreResponse{Success: true, Size: size}, nil
 }
 

@@ -38,3 +38,15 @@ func TestLoad_EnvOverridesDefaults(t *testing.T) {
 	assert.Equal(t, "cp.example.com:9100", cfg.ControlPlane)
 	assert.Equal(t, 19101, cfg.GRPC.Port)
 }
+
+// TestLoad_ArtifactCacheCap 节点制品缓存上限默认 0（不限），可经 env 覆盖（FR-178）。
+func TestLoad_ArtifactCacheCap(t *testing.T) {
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), cfg.ArtifactCache.MaxBytes, "默认不限")
+
+	t.Setenv("JIANMANAGER_ARTIFACT_CACHE_MAX_BYTES", "1073741824")
+	cfg2, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1073741824), cfg2.ArtifactCache.MaxBytes)
+}

@@ -104,6 +104,11 @@ func (r *Root) IndexDir() string { return filepath.Join(r.base, "var", "index") 
 // CacheDir 返回临时缓存目录 <root>/cache（下载中转/解压）。
 func (r *Root) CacheDir() string { return filepath.Join(r.base, "cache") }
 
+// ArtifactCacheDir 返回节点本地内容寻址制品缓存根 <root>/var/artifact-cache（FR-178）。
+// 区别于 cache/（临时下载中转）与 var/artifacts（CP 全局制品库）：这是 Worker 持久
+// 按 sha256 缓存下载过的核心 jar，建实例命中即秒拷免重下；可随时整体删除重建。
+func (r *Root) ArtifactCacheDir() string { return filepath.Join(r.base, "var", "artifact-cache") }
+
 // EtcDir 返回配置目录 <root>/etc。
 func (r *Root) EtcDir() string { return filepath.Join(r.base, "etc") }
 

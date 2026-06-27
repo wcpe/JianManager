@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/wcpe/JianManager/internal/worker/artifactcache"
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
@@ -92,4 +93,54 @@ func TestDownloadCore_LocalStub(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, resp.Success)
 	})
+}
+
+// TestDownloadCore_CacheHitSkipsNetwork 验证节点制品缓存（FR-178）：
+// 同一 sha256 第一次下载落地后存入缓存；删掉工作目录文件、关掉下载源后再建实例，
+// 应从缓存秒拷命中、完全不走网络（命中痛点：删实例再建免重下大 jar）。
+func TestDownloadCore_CacheHitSkipsNetwork(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)
+	srv.SetArtifactCache(artifactcache.New(filepath.Join(tmp, "var", "artifact-cache")))
+	ctx := context.Background()
+
+	const uuid = "22222222-2222-2222-2222-222222222222"
+	workDir := filepath.Join(tmp, "inst2")
+	createResp, err := srv.CreateInstance(ctx, &workerpb.CreateInstanceRequest{
+		InstanceUuid: uuid, Name: "stub2", StartCommand: "noop", WorkDir: workDir, ProcessType: "direct",
+	})
+	require.NoError(t, err)
+	require.True(t, createResp.Success, createResp.Error)
+
+	jar := []byte("cache-me-core-jar-payload-abcdefghij")
+	sum := sha256.Sum256(jar)
+	hexSum := hex.EncodeToString(sum[:])
+
+	hits := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		_, _ = w.Write(jar)
+	}))
+
+	// 第一次：未命中，走网络下载并存入缓存。
+	resp1, err := srv.DownloadCore(ctx, &workerpb.DownloadCoreRequest{
+		InstanceUuid: uuid, DestFilename: "server.jar", DownloadUrl: ts.URL, Sha256: hexSum,
+	})
+	require.NoError(t, err)
+	require.True(t, resp1.Success, resp1.Error)
+	assert.Equal(t, 1, hits, "首次应走网络")
+
+	// 模拟删实例再建：删掉工作目录文件，并关掉下载源（命中则不需要网络）。
+	require.NoError(t, os.Remove(filepath.Join(workDir, "server.jar")))
+	ts.Close()
+
+	resp2, err := srv.DownloadCore(ctx, &workerpb.DownloadCoreRequest{
+		InstanceUuid: uuid, DestFilename: "server.jar", DownloadUrl: ts.URL, Sha256: hexSum,
+	})
+	require.NoError(t, err)
+	require.True(t, resp2.Success, resp2.Error)
+	assert.Equal(t, int64(len(jar)), resp2.Size)
+	got, readErr := os.ReadFile(filepath.Join(workDir, "server.jar"))
+	require.NoError(t, readErr)
+	assert.Equal(t, jar, got, "缓存命中应拷出原内容")
 }

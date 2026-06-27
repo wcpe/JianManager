@@ -39,6 +39,8 @@ type Config struct {
 	Decompiler  DecompilerConfig `mapstructure:"decompiler"`
 	// Search 全文搜索索引配置（FR-074，见 ADR-017）。
 	Search SearchConfig `mapstructure:"search"`
+	// ArtifactCache 节点本地制品缓存配置（FR-178）：按 sha256 缓存下载过的核心 jar，建实例命中即秒拷。
+	ArtifactCache ArtifactCacheConfig `mapstructure:"artifact_cache"`
 	// Proxy 本节点出站代理配置（FR-174，见 ADR-037）：所有出站下载（自更新/JDK/CFR）
 	// 经此代理。url 留空=直连（沿用环境变量代理）。各 Worker 在不同机器各配各的。
 	Proxy     httpclient.Config `mapstructure:"proxy"`
@@ -51,6 +53,13 @@ type SearchConfig struct {
 	// 形如 logs/（目录前缀）、*.bak（basename glob）、vendor（路径段）。默认集已覆盖常见
 	// 日志/缓存/二进制/归档/MC 世界数据，零配置即可用；此处仅做加性补充。
 	Ignore []string `mapstructure:"ignore"`
+}
+
+// ArtifactCacheConfig 节点本地制品缓存配置（FR-178）。
+type ArtifactCacheConfig struct {
+	// MaxBytes 缓存容量上限（字节，0=不限）。存入新项后若超限按 lastUsedAt 升序 LRU 淘汰。
+	// 可经 CP 端点 PUT /nodes/:id/artifact-cache/cap 运行时下发覆盖。
+	MaxBytes int64 `mapstructure:"max_bytes"`
 }
 
 // DecompilerConfig 反编译能力配置（FR-075，见 ADR-018）。
@@ -101,6 +110,8 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "text")
 	v.SetDefault("search.ignore", []string{})
+	// 节点制品缓存（FR-178）：默认 0=不限（建实例命中即秒拷免重下；按需经 CP 设上限触发 LRU）。
+	v.SetDefault("artifact_cache.max_bytes", int64(0))
 	// 反编译（FR-075）：默认无显式 CFR 路径、允许按需下载（首次反编译时拉 CFR 落数据根缓存）。
 	v.SetDefault("decompiler.cfr_path", "")
 	v.SetDefault("decompiler.allow_download", true)

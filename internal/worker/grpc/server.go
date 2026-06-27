@@ -14,6 +14,7 @@ import (
 	psproc "github.com/shirou/gopsutil/v4/process"
 
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
+	"github.com/wcpe/JianManager/internal/worker/artifactcache"
 	"github.com/wcpe/JianManager/internal/worker/bot"
 	"github.com/wcpe/JianManager/internal/worker/decompiler"
 	"github.com/wcpe/JianManager/internal/worker/jdk"
@@ -91,6 +92,11 @@ type Server struct {
 	// InstallJDK 异步执行时经此表更新进度/日志；心跳侧读 Snapshot 随心跳上报给 CP。
 	// 非 nil（NewServer 初始化）。
 	tasks *taskreg.Registry
+
+	// cache 节点本地内容寻址制品缓存（FR-178）。仅服务 DownloadCore 的核心 jar：
+	// 命中即从缓存秒拷到工作目录（免重下），未命中下载校验后存入。为 nil 表示未启用缓存
+	// （DownloadCore 退化为原有「每次都下载」行为，向后兼容）。由 SetArtifactCache 注入。
+	cache *artifactcache.Cache
 }
 
 // NewServer 创建 Worker gRPC 服务器。
@@ -130,6 +136,12 @@ func (s *Server) outboundClient() *http.Client {
 		return s.httpClient
 	}
 	return http.DefaultClient
+}
+
+// SetArtifactCache 注入节点本地制品缓存（FR-178）：DownloadCore 据此命中复用核心 jar。
+// 由 main 装配；不调用则 DownloadCore 退化为原有「每次都下载」行为（向后兼容，测试不受影响）。
+func (s *Server) SetArtifactCache(c *artifactcache.Cache) {
+	s.cache = c
 }
 
 // dispatch 把一条内部事件非阻塞地扇出给所有 StreamInstanceEvents 订阅者。
@@ -402,9 +414,10 @@ func (s *Server) InstallJDK(ctx context.Context, req *workerpb.InstallJDKRequest
 		s.tasks.Start(taskID)
 		// 复制下发参数，goroutine 不持有 req（避免在 RPC 返回后引用其底层内存）。
 		vendor, major, arch := req.Vendor, int(req.MajorVersion), req.Arch
+		version := req.Version // 具体版本（FR-178，可选；非空经 foojay 解析）
 		installDir, mirrorBase := req.InstallDir, req.MirrorBase
 		go func() {
-			info, err := s.jdkMgr.InstallWithProgress(vendor, major, arch, installDir, mirrorBase,
+			info, err := s.jdkMgr.InstallWithProgress(vendor, major, version, arch, installDir, mirrorBase,
 				func(percent int, line string) {
 					s.tasks.SetProgress(taskID, int32(percent))
 					if line != "" {

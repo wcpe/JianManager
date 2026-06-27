@@ -146,16 +146,17 @@ func (m *Manager) List() ([]Info, error) {
 // line 为可选的人类可读日志行（空表示仅更新百分比）。回调内不得长时间阻塞。
 type Progress func(percent int, line string)
 
-// Install 下载并安装指定 JDK（同步，无进度回调）。等价于 InstallWithProgress(... nil)。
+// Install 下载并安装指定 JDK（同步，无进度回调）。等价于 InstallWithProgress(... "", nil)。
 func (m *Manager) Install(vendor string, major int, arch, installDir, mirrorBase string) (Info, error) {
-	return m.InstallWithProgress(vendor, major, arch, installDir, mirrorBase, nil)
+	return m.InstallWithProgress(vendor, major, "", arch, installDir, mirrorBase, nil)
 }
 
 // InstallWithProgress 下载并安装指定 JDK 到 installDir（默认 <rootDir>/<vendor>-<major>），
 // 期间经 progress 回调上报下载百分比与阶段日志（FR-183 任务中心，见 ADR-040；progress 可为 nil）。
-// vendor/major/arch 必填；mirrorBase 非空时作下载基址（CP 从平台设置下发，使镜像源真生效），
-// 为空回退本地 env/默认源。下载完成后自动 detect。
-func (m *Manager) InstallWithProgress(vendor string, major int, arch, installDir, mirrorBase string, progress Progress) (Info, error) {
+// vendor/major/arch 必填；version 可选（非空时经 foojay 按具体版本解析，FR-178）；
+// mirrorBase 非空时作下载基址（CP 从平台设置下发，使镜像源真生效），为空回退本地 env/默认源。
+// 下载完成后自动 detect。
+func (m *Manager) InstallWithProgress(vendor string, major int, version, arch, installDir, mirrorBase string, progress Progress) (Info, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -166,7 +167,11 @@ func (m *Manager) InstallWithProgress(vendor string, major int, arch, installDir
 		arch = defaultArch()
 	}
 	if installDir == "" {
-		installDir = filepath.Join(m.rootDir, fmt.Sprintf("%s-%d", strings.ToLower(vendor), major))
+		suffix := fmt.Sprintf("%s-%d", strings.ToLower(vendor), major)
+		if strings.TrimSpace(version) != "" {
+			suffix = fmt.Sprintf("%s-%s", strings.ToLower(vendor), strings.TrimSpace(version))
+		}
+		installDir = filepath.Join(m.rootDir, suffix)
 	}
 	if _, err := os.Stat(installDir); err == nil {
 		return Info{}, fmt.Errorf("目标目录已存在: %s", installDir)
@@ -180,7 +185,7 @@ func (m *Manager) InstallWithProgress(vendor string, major int, arch, installDir
 
 	client := m.downloadClient()
 	report(0, fmt.Sprintf("解析下载源 %s %d (%s)", vendor, major, arch))
-	downloadURL, err := buildDownloadURL(client, vendor, major, arch, mirrorBase)
+	downloadURL, err := buildDownloadURLV(client, vendor, major, version, arch, mirrorBase)
 	if err != nil {
 		return Info{}, err
 	}
