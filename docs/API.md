@@ -228,6 +228,14 @@
 - **描述**: 节点指标（CPU/内存/磁盘时间序列）
 - **关联 FR**: FR-010
 
+### GET /install-worker.sh ; GET /install-worker.ps1
+- **描述**: CP 匿名静态托管 Worker 一键安装脚本（Linux/macOS 的 `.sh`、Windows 的 `.ps1`）。一键命令拼 `curl <cp>/install-worker.sh | sh` / `iwr <cp>/install-worker.ps1 | iex`，依赖 CP 自托管这两路径
+- **关联 FR**: FR-080（见 ADR-020 §2「也可由 CP 静态托管」）
+- **路径**: 根路径（**非** `/api/v1`），显式注册、先于前端 SPA `NoRoute` 回退
+- **权限**: 匿名（无 JWT）。脚本不含机密；准入凭据 enrollment token 在一键命令参数里、不在脚本里，故与签发 token 的平台管理员 JWT 端点暴露面/鉴权物理隔离
+- **响应**: `200` 脚本字节（`.sh` → `text/x-shellscript`、`.ps1` → `text/plain`）；脚本未内嵌时 `503 INSTALL_SCRIPT_UNAVAILABLE`（不回退到 `index.html`）
+- **内容来源**: `go:embed` 内嵌进 CP 二进制（源 = canonical `scripts/install-worker.{sh,ps1}`，`make embed-install-scripts` 同步、字节一致由测试守护）
+
 ### POST /api/v1/nodes/enroll-token
 - **描述**: 签发一次性、限时的节点准入 enrollment token，返回明文 + Linux/Windows 一键安装命令（傻瓜部署）
 - **关联 FR**: FR-080（见 ADR-020）
@@ -242,12 +250,13 @@
     "expiresAt": "2026-06-23T12:30:00Z",
     "nodeName": "",
     "controlPlaneGrpc": "cp-host:9100",
-    "installCommandLinux": "curl -fsSL .../install-worker.sh | sh -s -- --control-plane cp-host:9100 --token jmet_xxx",
-    "installCommandWindows": "iwr .../install-worker.ps1 -UseBasicParsing | iex; Install-JianManagerWorker -ControlPlane cp-host:9100 -Token jmet_xxx"
+    "scriptBaseUrl": "https://cp-host",
+    "installCommandLinux": "curl -fsSL https://cp-host/install-worker.sh | sh -s -- --control-plane cp-host:9100 --token jmet_xxx",
+    "installCommandWindows": "iwr https://cp-host/install-worker.ps1 -UseBasicParsing | iex; Install-JianManagerWorker -ControlPlane cp-host:9100 -Token jmet_xxx"
   }
   ```
-- token **落库只存 SHA-256 哈希**，明文一次性返回、不可二次读取；`controlPlaneGrpc`/脚本基址由 CP 据请求 Host 推断，可经 `enroll.advertise_grpc`/`enroll.script_base_url` 配置覆盖
-- 一键命令的二进制下载基址默认 GitHub Releases latest（`enroll.binary_url`，ADR-036 契约 `worker-<os>-<arch>[.exe]`），开箱即下载；可覆盖为内网源或置空改用脚本 `--binary` 本地兜底
+- token **落库只存 SHA-256 哈希**，明文一次性返回、不可二次读取；`controlPlaneGrpc`/`scriptBaseUrl` 由 CP 据请求 Host 推断，可经 `enroll.advertise_grpc`/`enroll.script_base_url` 配置覆盖。`scriptBaseUrl` 为 CP 托管脚本基址，前端据此拼「手动安装步骤」分步兜底命令
+- 一键命令的脚本由 CP 托管（见上 `GET /install-worker.{sh,ps1}`）；二进制下载基址默认 GitHub Releases latest（`enroll.binary_url`，ADR-036 契约 `worker-<os>-<arch>[.exe]`），开箱即下载，可覆盖为内网源或置空改用脚本 `--binary` 本地兜底
 - **审计**: `node.enroll_token.create`（detail 仅含 tokenId/tokenPrefix/nodeName/expiresAt，绝不含明文）
 
 ### GET /api/v1/nodes/enroll-tokens

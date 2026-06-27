@@ -29,6 +29,7 @@
 ### 安装脚本（build）
 - [x] `scripts/install-worker.sh`（Linux/macOS）
 - [x] `scripts/install-worker.ps1`（Windows）
+- [x] **BUG-B 修复**：CP 经 `go:embed` 内嵌脚本（`internal/controlplane/embed/install_scripts.go`，源 `embed/install-scripts/`，`make embed-install-scripts` 从 canonical `scripts/` 同步）并匿名托管 `GET /install-worker.sh`、`GET /install-worker.ps1`（`router/install_script.go`，根路径、先于 SPA 回退），修「一键命令 curl `<cp>/install-worker.sh` 404」根因。内嵌副本与 canonical 字节一致由 `embed/install_scripts_test.go` 守护；签发响应补 `scriptBaseUrl` 供前端拼手动步骤
 - [x] 下载资产名 + 默认基址对齐 ADR-036 GitHub Releases 契约（`worker-<os>-<arch>[.exe]`，开箱即下载，`--binary` 兜底保留）
 - [x] CP `enroll.binary_url` 默认指向 GitHub Releases latest，一键命令默认带 `--download-url`；单测覆盖命令含下载基址
 
@@ -44,9 +45,10 @@
 ### 完成判据
 - [x] `go build ./...` + `go vet ./...` 绿
 - [x] 相关 `go test` 绿（service/grpc/router/register 全过；新增下载基址命令单测）
+- [x] **BUG-B 回归**：`router/install_script_test.go`（匿名 GET 脚本端点 200 + 内容校验，red→green）、`embed/install_scripts_test.go`（内嵌非空 + 与 canonical 字节一致防漂移）绿
 - [x] 前端 tsc / lint / build 绿
 - [x] 安装脚本 POSIX `sh -n` / PowerShell Parser 语法校验通过
-- [ ] 真机：另一机器/容器跑一键命令 → 节点自动注册上线（**待真机验**；下载源默认走 GitHub Releases，需 FR-173 发布管线先产出真实 release 产物，或用 `--binary` 本地兜底自测）
+- [ ] 真机：另一机器/容器跑一键命令（粘 `curl <cp>/install-worker.sh | sh` 经 CP 托管脚本）→ 节点自动注册上线（**待真机验**；下载源默认走 GitHub Releases，需 FR-173 发布管线先产出真实 release 产物，或用 `--binary` 本地兜底自测）
 
 ## 设计要点（落地备忘）
 - token 经 gRPC metadata header `enroll-token`，不改 proto。

@@ -4,6 +4,18 @@
 
 ## HTTP（浏览器 ↔ Control Plane）
 
+### CP 静态托管安装脚本（匿名，BUG-B 修复）
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|---|---|---|---|
+| GET | `/install-worker.sh` | 匿名 | 返回内嵌 Linux/macOS 一键安装脚本（`text/x-shellscript`） |
+| GET | `/install-worker.ps1` | 匿名 | 返回内嵌 Windows PowerShell 一键安装脚本（`text/plain`） |
+
+- **根路径、非 `/api/v1`**：一键命令拼 `curl <cp>/install-worker.sh | sh` / `iwr <cp>/install-worker.ps1 | iex`，URL 是 `<scriptBase>/install-worker.{sh,ps1}`（`scriptBase` 默认 = 签发请求的 `scheme://Host`）。**此前 CP 从不托管这两路径** → curl/iwr 404 → 一键安装失败（BUG-B 根因）。
+- **匿名可拉、鉴权隔离**：脚本本身不含任何机密；准入凭据（enrollment token）在一键命令的参数里、不在脚本里。故与签发 token 的平台管理员 JWT 端点（`POST /api/v1/nodes/enroll-token`）暴露面与鉴权物理隔离，符合 ADR-020 §2「也可由 CP 静态托管」。
+- **内容来源**：脚本经 `go:embed` 内嵌进 CP 二进制（`internal/controlplane/embed/install_scripts.go`，源 = `internal/controlplane/embed/install-scripts/install-worker.{sh,ps1}`，由 `make embed-install-scripts` 从 canonical `scripts/install-worker.{sh,ps1}` 同步、字节一致由测试守护）。未内嵌时返回 `503 INSTALL_SCRIPT_UNAVAILABLE`，绝不静默回退到 SPA `index.html`（否则 `curl|sh` 会把 HTML 当脚本执行）。
+- 显式注册为真实路由（先于前端 SPA `NoRoute` 回退命中），避免被 `index.html` 回退吞掉。
+
 ### 签发 enrollment token（仅平台管理员）
 
 | 方法 | 路径 | 说明 |
@@ -27,8 +39,9 @@
   "expiresAt": "2026-06-23T12:30:00Z",
   "nodeName": "",
   "controlPlaneGrpc": "cp-host:9100",   // CP 据请求 Host 推断、可被显式配置覆盖
-  "installCommandLinux": "curl -fsSL .../install-worker.sh | sh -s -- --control-plane cp-host:9100 --token jmet_xxx",
-  "installCommandWindows": "iwr .../install-worker.ps1 -UseBasicParsing | iex; Install-JianManagerWorker -ControlPlane cp-host:9100 -Token jmet_xxx"
+  "scriptBaseUrl": "https://cp-host",   // CP 托管安装脚本的基址，供前端拼「手动安装步骤」兜底命令
+  "installCommandLinux": "curl -fsSL https://cp-host/install-worker.sh | sh -s -- --control-plane cp-host:9100 --token jmet_xxx",
+  "installCommandWindows": "iwr https://cp-host/install-worker.ps1 -UseBasicParsing | iex; Install-JianManagerWorker -ControlPlane cp-host:9100 -Token jmet_xxx"
 }
 ```
 

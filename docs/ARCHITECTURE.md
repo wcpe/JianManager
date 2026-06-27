@@ -169,7 +169,8 @@ internal/worker/
 - **节点名活跃唯一**：身份由 UUID 锚定，`name` 降为可变标签但活跃节点间唯一——`database.AutoMigrate` 对存量重名活跃节点先去重（追加 `-dup-<id>` 后缀）再建「部分唯一索引」（仅约束 `deleted_at IS NULL` 的活跃行），软删除节点可释放其名供新节点复用（见 ADR-039 §3）。
 - **坏节点检测/修复（见 ADR-039 §2）**：`NodeRepairService` 提供检测疑似被串改/重名节点（只读诊断）、把被挤占机器作为新节点重新 enroll（轮换 UUID/secret）、清理孤立 JDK/实例引用；破坏性操作需二次确认（`confirm=true`）并入审计（FR-015/FR-059）。HTTP 入口见 API.md 节点修复章节（UI 入口随 FR-177）。
 - **一键安装脚本**：`scripts/install-worker.sh`（Linux/macOS）/ `install-worker.ps1`（Windows）由平台分发，幂等完成「下载或拷贝二进制 → 写 worker.yaml → 以 enroll token 首注册 → 可选注册 systemd / Windows 服务（开机自启、常驻自连）」。enroll token 仅经命令行/环境变量传入、绝不写入 `worker.yaml`。公网 release 端点未架设前以 `--binary` 本地二进制兜底。
-- **面板「添加节点」向导**：CP `POST /nodes/enroll-token` 签发 token 并返回 Linux/Windows 一键命令，前端节点页展示供运维复制粘贴到目标机器执行。
+- **CP 静态托管安装脚本**：脚本经 `go:embed` 内嵌进 CP 二进制（`internal/controlplane/embed/install_scripts.go`，源由 `make embed-install-scripts` 从 canonical `scripts/` 同步、字节一致由测试守护），CP 以**匿名**路由 `GET /install-worker.sh`、`GET /install-worker.ps1`（根路径、先于 SPA 回退）下发。一键命令 `curl <cp>/install-worker.sh | sh` 据此可拉（此前 CP 不托管这两路径致 curl 404、一键安装失败）。匿名安全：脚本无机密，准入凭据在命令参数里，与签发 token 的管理员 JWT 端点暴露面隔离。
+- **面板「添加节点」向导**：CP `POST /nodes/enroll-token` 签发 token 并返回 Linux/Windows 一键命令 + `scriptBaseUrl`（CP 托管脚本基址），前端节点页展示一键命令（复制）+「手动安装步骤」分步兜底命令，供运维粘贴到目标机器执行。
 
 ## 6. 通信协议
 
