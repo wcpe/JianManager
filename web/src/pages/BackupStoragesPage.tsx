@@ -9,6 +9,7 @@ import {
   type CreateBackupStorageBody,
 } from '@/api/backupStorages'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { FieldLabel, FieldError } from '@/components/ui/field-label'
 import { validateRequired, validateEnvRef, validateFields, hasErrors } from '@/lib/form-validation'
@@ -131,8 +132,8 @@ export default function BackupStoragesPage() {
           </label>
           {form.type === 's3' && (
             <label className="flex items-center gap-2 text-sm mt-6">
-              <input type="checkbox" checked={form.useSsl}
-                onChange={(e) => set('useSsl', e.target.checked)} />
+              <Checkbox checked={form.useSsl}
+                onCheckedChange={(v) => set('useSsl', v === true)} aria-label={t('backupStorages.useSsl', '启用 TLS')} />
               {t('backupStorages.useSsl', '启用 TLS')}
             </label>
           )}

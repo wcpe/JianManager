@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { useInstances } from '@/api/instances'
 import { useCloneInstance, type CloneResult } from '@/api/clone'
 import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
+import { Checkbox } from '@/components/ui/checkbox'
 import { FieldLabel, FieldError } from '@/components/ui/field-label'
 import { validateRequired } from '@/lib/form-validation'
 
@@ -97,8 +98,8 @@ export default function CloneInstanceDialog({ sourceId, sourceName, onClose }: C
               <div className="mt-1 border rounded-md p-2 space-y-1 max-h-32 overflow-y-auto">
                 {proxies.map((p) => (
                   <label key={p.id} className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={proxyIds.includes(p.id)}
-                      onChange={(e) => setProxyIds((prev) => (e.target.checked ? [...prev, p.id] : prev.filter((x) => x !== p.id)))} />
+                    <Checkbox checked={proxyIds.includes(p.id)} aria-label={p.name}
+                      onCheckedChange={(v) => setProxyIds((prev) => (v === true ? [...prev, p.id] : prev.filter((x) => x !== p.id)))} />
                     {p.name}
                   </label>
                 ))}

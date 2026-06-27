@@ -7,6 +7,7 @@ import { Network, GitBranch, List } from 'lucide-react'
 import api from '@/api/client'
 import DangerConfirm from '@/components/DangerConfirm'
 import { Panel } from '@/components/ui/panel'
+import { Checkbox } from '@/components/ui/checkbox'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
 import { FieldLabel, FieldError } from '@/components/ui/field-label'
@@ -523,7 +524,7 @@ function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose
                             on ? 'bg-primary/10' : 'hover:bg-accent/60',
                           )}
                         >
-                          <input type="checkbox" checked={on} onChange={(e) => toggleSel(i.id, e.target.checked)} />
+                          <Checkbox checked={on} onCheckedChange={(v) => toggleSel(i.id, v === true)} aria-label={i.name} />
                           <span
                             className="size-1.5 shrink-0 rounded-full"
                             style={{ backgroundColor: statusColorVar(instanceStatusLevel(i.status)) }}

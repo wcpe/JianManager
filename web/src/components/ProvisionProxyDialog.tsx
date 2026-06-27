@@ -7,6 +7,7 @@ import { useNodeJDKs } from '@/api/jdks'
 import { useCoreVersions, useResolvedCore } from '@/api/provision'
 import { useProvisionProxy } from '@/api/proxy'
 import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { FieldLabel, FieldError } from '@/components/ui/field-label'
 import { validateRequired, validatePositiveInt, validateFields, hasErrors } from '@/lib/form-validation'
@@ -225,7 +226,7 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
 
           <div>
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={onlineMode} onChange={(e) => setOnlineMode(e.target.checked)} />
+              <Checkbox checked={onlineMode} onCheckedChange={(v) => setOnlineMode(v === true)} aria-label={t('proxy.onlineMode')} />
               {t('proxy.onlineMode')}
             </label>
             <p className="mt-1 text-xs text-muted-foreground">{t('proxy.onlineModeHint')}</p>

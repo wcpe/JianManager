@@ -17,6 +17,7 @@ import {
 } from '@/api/registrations'
 import { useResyncProxy } from '@/api/proxy'
 import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { FieldLabel, FieldError } from '@/components/ui/field-label'
 import { validateHost } from '@/lib/form-validation'
@@ -164,7 +165,7 @@ export default function ProxyRegistrationsDialog({ proxyId, proxyName, onClose }
           </div>
           <div className="flex items-center justify-between pt-6">
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={restricted} onChange={(e) => setRestricted(e.target.checked)} />
+              <Checkbox checked={restricted} onCheckedChange={(v) => setRestricted(v === true)} aria-label={t('proxy.restricted')} />
               {t('proxy.restricted')}
             </label>
             <button type="submit" disabled={create.isPending || !backendId || !!forcedHostError}
