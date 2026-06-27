@@ -11,6 +11,7 @@ import { useAlertEvents, useUnreadAlertCount } from '@/api/alerts'
 import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import PageBreadcrumb from './PageBreadcrumb'
+import { searchBoxClass, slotVisibility, visibilityClass } from './header-layout'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,19 +28,26 @@ const ROLE_LABEL_KEY: Record<number, string> = {
 }
 
 /**
- * 全局顶栏（FR-162）：控制台外壳内容区上方常驻页眉，侧栏保持全高。
- * 左 = 当前页轻量标题/面包屑；中 = 常驻搜索框（本期占位，Ctrl/⌘+K 聚焦，输入暂不联动检索）；
- * 右 = 集群概览徽标 + 告警铃铛 + 账户菜单（含退出登录，接管 FR-132）。
+ * 全局顶栏（FR-162，重排见 FR-179）：控制台外壳内容区上方常驻页眉，侧栏保持全高。
+ * 左 = 当前页面包屑（自动占据剩余宽度）；右 = **靠右对齐的操作区**——
+ * 常驻搜索框（占位，Ctrl/⌘+K 聚焦）+ 集群概览徽标 + 站内信收件箱挂载点（FR-183 预留）+
+ * 告警铃铛 + 账户菜单（含退出登录，接管 FR-132）。
+ * 搜索由 FR-162 的居中铺中部改为靠右紧贴操作图标（FR-179），窄屏隐藏不挤垮工作区。
+ * 槽位顺序 / 响应式可见性逻辑下沉纯函数 `header-layout.ts`（vitest 覆盖）。
  */
 export default function ConsoleHeader() {
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b bg-card/40 px-3 sm:px-4">
+    <header className="flex h-12 shrink-0 items-center gap-3 border-b bg-card/40 px-3 sm:px-4">
       <TitleArea />
-      <SearchBox />
-      <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
-        <ClusterBadges />
-        <AlertBell />
-        <AccountMenu />
+      {/* 右侧操作区：ml-auto 推到右缘，搜索靠右紧贴操作图标（FR-179）。 */}
+      <div className="ml-auto flex items-center gap-2 sm:gap-3">
+        <SearchBox />
+        <div className="flex items-center gap-0.5 sm:gap-1">
+          <ClusterBadges />
+          <InboxSlot />
+          <AlertBell />
+          <AccountMenu />
+        </div>
       </div>
     </header>
   )
@@ -53,10 +61,19 @@ function TitleArea() {
   const openInstanceId = useConsoleStore((s) => s.openInstanceId)
   const { data: instances } = useInstances()
   const openInst = openInstanceId != null ? instances?.find((i) => i.id === openInstanceId) : undefined
-  return <PageBreadcrumb leaf={openInst?.name} />
+  // min-w-0 让面包屑可截断，避免长轨迹把右侧操作区挤出页眉（窄屏防翻屏）。
+  return (
+    <div className="min-w-0 flex-1">
+      <PageBreadcrumb leaf={openInst?.name} />
+    </div>
+  )
 }
 
-/** 中部常驻搜索框：本期仅 UI + 聚焦快捷键（Ctrl/⌘+K），检索逻辑留后续 FR。窄屏隐藏不挤垮工作区。 */
+/**
+ * 靠右常驻搜索框（FR-179 重排）：本期仅 UI + 聚焦快捷键（Ctrl/⌘+K），检索逻辑留后续 FR。
+ * 由 FR-162 的居中铺满改为靠右固定上限宽度（`header-layout.searchBoxClass`），紧贴右侧操作图标；
+ * 窄屏（<md）隐藏不挤垮工作区。
+ */
 function SearchBox() {
   const { t } = useTranslation()
   const ref = useRef<HTMLInputElement>(null)
@@ -73,7 +90,7 @@ function SearchBox() {
   }, [])
 
   return (
-    <div className="relative mx-2 hidden w-full max-w-md flex-1 md:block">
+    <div className={searchBoxClass()}>
       <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
       <Input
         ref={ref}
@@ -82,11 +99,21 @@ function SearchBox() {
         aria-label={t('header.searchPlaceholder')}
         className="h-8 rounded-lg bg-muted/60 pl-8 pr-12 text-sm transition-colors focus-visible:bg-card"
       />
-      <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground lg:inline-block">
+      <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground xl:inline-block">
         Ctrl K
       </kbd>
     </div>
   )
+}
+
+/**
+ * 站内信收件箱挂载点（FR-183 预留）：位于集群徽标与告警铃铛之间，紧邻铃铛之前。
+ * 本期仅占位、不渲染可见内容，亦不实现站内信逻辑；待 FR-183 在此挂载收件箱铃铛/下拉。
+ */
+function InboxSlot() {
+  // TODO(FR-183): 站内信收件箱——在此渲染收件箱图标 + 未读计数 + 下拉（接站内信 API），
+  // 复用 AlertBell 的下拉壳与未读角标样式。本期保留空挂载点，不引入逻辑。
+  return null
 }
 
 /** 单个集群概览徽标：图标 + 计数，可点跳转对应筛选。danger 时计数着红。 */
@@ -129,7 +156,7 @@ function ClusterBadges() {
   const crashed = instances?.filter((i) => i.status === 'CRASHED').length ?? 0
 
   return (
-    <div className="hidden items-center lg:flex">
+    <div className={cn('items-center', visibilityClass(slotVisibility('clusterBadges')))}>
       <ClusterBadge icon={Server} value={online} label={t('header.onlineNodes')} onClick={() => navigate('/nodes')} />
       <ClusterBadge
         icon={Boxes}
