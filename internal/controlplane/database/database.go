@@ -78,7 +78,7 @@ func AutoMigrate(db *gorm.DB) error {
 		return err
 	}
 
-	return db.AutoMigrate(
+	if err := db.AutoMigrate(
 		&model.User{},
 		&model.Group{},
 		&model.GroupMember{},
@@ -129,7 +129,79 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.BusinessEvent{},
 		&model.EconomyBalanceMirror{},
 		&model.EconomyLedgerEntry{},
-	)
+	); err != nil {
+		return err
+	}
+
+	// 节点名活跃唯一约束（见 ADR-039，修复 BUG-A）：先对存量重名活跃节点去重，再建部分唯一索引。
+	// 必须在 AutoMigrate 建表后执行（依赖 nodes 表与 deleted_at 列存在）。
+	return migrateNodeNameUnique(db)
+}
+
+// nodeNameUniqueIndexName 节点名活跃唯一索引名（仅约束 deleted_at IS NULL 的活跃行）。
+const nodeNameUniqueIndexName = "uniq_nodes_name_active"
+
+// migrateNodeNameUnique 为 nodes.name 建立「活跃行唯一」约束（见 ADR-039 §3）。
+//
+// 用部分唯一索引（WHERE deleted_at IS NULL）而非普通唯一索引：身份由 UUID 锚定，name 为可变标签，
+// 软删除节点应能释放其名供新节点复用（支撑坏节点修复后重新 enroll）。普通唯一索引会让已软删的
+// 同名行永久占用名字。建索引前先对「存量重名活跃节点」去重，否则索引创建会失败。
+func migrateNodeNameUnique(db *gorm.DB) error {
+	if !db.Migrator().HasTable("nodes") {
+		return nil
+	}
+	if err := dedupeActiveNodeNames(db); err != nil {
+		return err
+	}
+	// 幂等：已存在则跳过（HasIndex 对部分索引同样适用）。
+	if db.Migrator().HasIndex(&model.Node{}, nodeNameUniqueIndexName) {
+		return nil
+	}
+	stmt := fmt.Sprintf(
+		"CREATE UNIQUE INDEX IF NOT EXISTS %s ON nodes (name) WHERE deleted_at IS NULL",
+		nodeNameUniqueIndexName)
+	if err := db.Exec(stmt).Error; err != nil {
+		return fmt.Errorf("创建节点名唯一索引失败: %w", err)
+	}
+	return nil
+}
+
+// dedupeActiveNodeNames 为存量重名活跃节点去重（见 ADR-039 §修复）：同名活跃行保留最近心跳者，
+// 其余追加 "-dup-<id>" 后缀，避免历史重名阻断部分唯一索引创建。返回去重过程中的错误。
+func dedupeActiveNodeNames(db *gorm.DB) error {
+	type dupName struct {
+		Name string
+		Cnt  int
+	}
+	var dups []dupName
+	if err := db.Model(&model.Node{}).
+		Select("name, COUNT(*) AS cnt").
+		Where("deleted_at IS NULL").
+		Group("name").
+		Having("COUNT(*) > 1").
+		Scan(&dups).Error; err != nil {
+		return fmt.Errorf("扫描重名活跃节点失败: %w", err)
+	}
+	for _, d := range dups {
+		var nodes []model.Node
+		// 保留最近心跳（NULL 心跳排末尾）、其次最新创建者；其余重命名。
+		if err := db.Where("name = ? AND deleted_at IS NULL", d.Name).
+			Order("last_heartbeat DESC, created_at DESC, id ASC").
+			Find(&nodes).Error; err != nil {
+			return fmt.Errorf("查询重名节点 %q 失败: %w", d.Name, err)
+		}
+		for i, n := range nodes {
+			if i == 0 {
+				continue // 保留首个（最近活跃）
+			}
+			newName := fmt.Sprintf("%s-dup-%d", n.Name, n.ID)
+			if err := db.Model(&model.Node{}).Where("id = ?", n.ID).
+				Update("name", newName).Error; err != nil {
+				return fmt.Errorf("重命名重名节点 id=%d 失败: %w", n.ID, err)
+			}
+		}
+	}
+	return nil
 }
 
 // migrateGRPCPortColumn 将旧的 g_rpc_port 列迁移为 grpc_port。

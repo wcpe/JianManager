@@ -18,9 +18,12 @@ const (
 
 // Node Worker Node 节点。
 type Node struct {
-	ID               uint           `gorm:"primaryKey" json:"id"`
-	UUID             string         `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
-	Name             string         `gorm:"type:varchar(128);not null" json:"name"`
+	ID   uint   `gorm:"primaryKey" json:"id"`
+	UUID string `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
+	// Name 节点名（人类可读标签）。身份由 UUID 锚定（见 ADR-039），name 仅为可变标签，
+	// 但活跃节点间名字唯一：唯一性由 database.AutoMigrate 建的「部分唯一索引」
+	// （仅约束 deleted_at IS NULL 的活跃行）强制，软删除节点可释放其名供新节点复用。
+	Name string `gorm:"type:varchar(128);not null" json:"name"`
 	Host             string         `gorm:"type:varchar(256);not null" json:"host"`
 	GRPCPort         int            `gorm:"column:grpc_port;not null" json:"grpcPort"`
 	WSPort           int            `gorm:"not null" json:"wsPort"`
