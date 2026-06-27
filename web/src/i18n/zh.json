@@ -280,6 +280,7 @@
     "jdkCatalogLoading": "查询可选版本…",
     "jdkLatest": "最新",
     "jdkInstallHint": "下载经平台出站代理；具体版本经 foojay 解析。下发后进度见任务中心。",
+    "jdkInstallPreview": "将安装",
     "jdkTab": {
       "list": "已登记",
       "install": "一键下载",

@@ -280,6 +280,7 @@
     "jdkCatalogLoading": "Loading versions…",
     "jdkLatest": "latest",
     "jdkInstallHint": "Downloads go through the outbound proxy; specific versions are resolved via foojay. Track progress in Task Center.",
+    "jdkInstallPreview": "Will install",
     "jdkTab": {
       "list": "Registered",
       "install": "Download",

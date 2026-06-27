@@ -7,6 +7,8 @@ import { useNodeJDKs } from '@/api/jdks'
 import { useCoreVersions, useResolvedCore, useProvisionBukkit } from '@/api/provision'
 import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Checkbox } from '@/components/ui/checkbox'
 import { FieldLabel, FieldError } from '@/components/ui/field-label'
 import { validateRequired, validatePositiveInt, validateFields, hasErrors } from '@/lib/form-validation'
 
@@ -173,13 +175,14 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
           <div className="grid grid-cols-2 gap-3">
             <div>
               <FieldLabel>{t('provision.coreType')}</FieldLabel>
-              <select
-                value={coreType}
-                disabled
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm disabled:opacity-70"
-              >
-                <option value="paper">Paper</option>
-              </select>
+              <Select value={coreType} disabled>
+                <SelectTrigger className="w-full mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="paper">Paper</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <FieldLabel required>{t('provision.mcVersion')}</FieldLabel>
@@ -276,7 +279,11 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
 
           <div>
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={onlineMode} onChange={(e) => setOnlineMode(e.target.checked)} />
+              <Checkbox
+                checked={onlineMode}
+                onCheckedChange={(v) => setOnlineMode(v === true)}
+                aria-label={t('provision.onlineMode')}
+              />
               {t('provision.onlineMode')}
             </label>
             <p className="mt-1 text-xs text-muted-foreground">{t('provision.onlineModeHint')}</p>

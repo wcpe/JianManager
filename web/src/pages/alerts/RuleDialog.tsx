@@ -8,6 +8,14 @@ import {
 } from '@/api/alerts'
 import { FieldLabel, FieldError } from '@/components/ui/field-label'
 import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   triggerUsesMetric,
   triggerUsesKeyword,
@@ -25,7 +33,7 @@ interface RuleDialogProps {
 
 const TRIGGER_TYPES = ['metric', 'instance_crash', 'node_offline', 'log_keyword', 'player_event', 'backup_failed'] as const
 const LEVELS = ['info', 'warn', 'critical'] as const
-const PLAYER_EVENTS = ['', 'join', 'quit', 'chat', 'cross_server'] as const
+const PLAYER_EVENTS = ['join', 'quit', 'chat', 'cross_server'] as const
 
 /** 告警规则创建/编辑对话框（FR-085）。按触发类型动态展示字段。 */
 export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
@@ -122,46 +130,52 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
         <div className="grid grid-cols-2 gap-2">
           <div>
             <FieldLabel>{t('alerts.triggerType')}</FieldLabel>
-            <select
-              className="w-full mt-1 p-2 border rounded disabled:opacity-60"
+            <Select
               value={form.triggerType}
               disabled={isEdit}
-              onChange={(e) => setForm({ ...form, triggerType: e.target.value })}
+              onValueChange={(v) => setForm({ ...form, triggerType: v })}
             >
-              {TRIGGER_TYPES.map((tt) => (
-                <option key={tt} value={tt}>
-                  {t(`alerts.trigger_${tt}`, tt)}
-                </option>
-              ))}
-            </select>
+              <SelectTrigger className="w-full mt-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TRIGGER_TYPES.map((tt) => (
+                  <SelectItem key={tt} value={tt}>
+                    {t(`alerts.trigger_${tt}`, tt)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <FieldLabel>{t('alerts.level')}</FieldLabel>
-            <select
-              className="w-full mt-1 p-2 border rounded"
-              value={form.level}
-              onChange={(e) => setForm({ ...form, level: e.target.value })}
-            >
-              {LEVELS.map((lv) => (
-                <option key={lv} value={lv}>
-                  {t(`alerts.level_${lv}`)}
-                </option>
-              ))}
-            </select>
+            <Select value={form.level} onValueChange={(v) => setForm({ ...form, level: v })}>
+              <SelectTrigger className="w-full mt-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {LEVELS.map((lv) => (
+                  <SelectItem key={lv} value={lv}>
+                    {t(`alerts.level_${lv}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
 
         {!isEdit && (
           <div>
             <FieldLabel>{t('alerts.targetType')}</FieldLabel>
-            <select
-              className="w-full mt-1 p-2 border rounded"
-              value={form.targetType}
-              onChange={(e) => setForm({ ...form, targetType: e.target.value })}
-            >
-              <option value="node">{t('alerts.node')}</option>
-              <option value="instance">{t('alerts.instance')}</option>
-            </select>
+            <Select value={form.targetType} onValueChange={(v) => setForm({ ...form, targetType: v })}>
+              <SelectTrigger className="w-full mt-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="node">{t('alerts.node')}</SelectItem>
+                <SelectItem value="instance">{t('alerts.instance')}</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         )}
 
@@ -169,20 +183,30 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
           <div className="grid grid-cols-4 gap-2">
             <div>
               <FieldLabel>{t('alerts.metric')}</FieldLabel>
-              <select className="w-full mt-1 p-2 border rounded" value={form.metric} onChange={(e) => setForm({ ...form, metric: e.target.value })}>
-                <option value="cpu">{t('alerts.cpu')}</option>
-                <option value="memory">{t('alerts.memory')}</option>
-                <option value="disk">{t('alerts.disk')}</option>
-              </select>
+              <Select value={form.metric} onValueChange={(v) => setForm({ ...form, metric: v })}>
+                <SelectTrigger className="w-full mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cpu">{t('alerts.cpu')}</SelectItem>
+                  <SelectItem value="memory">{t('alerts.memory')}</SelectItem>
+                  <SelectItem value="disk">{t('alerts.disk')}</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <FieldLabel>{t('alerts.condition')}</FieldLabel>
-              <select className="w-full mt-1 p-2 border rounded" value={form.operator} onChange={(e) => setForm({ ...form, operator: e.target.value })}>
-                <option value=">">&gt;</option>
-                <option value="<">&lt;</option>
-                <option value=">=">&gt;=</option>
-                <option value="<=">&lt;=</option>
-              </select>
+              <Select value={form.operator} onValueChange={(v) => setForm({ ...form, operator: v })}>
+                <SelectTrigger className="w-full mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value=">">&gt;</SelectItem>
+                  <SelectItem value="<">&lt;</SelectItem>
+                  <SelectItem value=">=">&gt;=</SelectItem>
+                  <SelectItem value="<=">&lt;=</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <FieldLabel>{t('alerts.threshold')}</FieldLabel>
@@ -210,13 +234,18 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
         {triggerUsesEventMatch(form.triggerType) && (
           <div>
             <FieldLabel>{t('alerts.eventMatch')}</FieldLabel>
-            <select className="w-full mt-1 p-2 border rounded" value={form.eventMatch} onChange={(e) => setForm({ ...form, eventMatch: e.target.value })}>
-              {PLAYER_EVENTS.map((ev) => (
-                <option key={ev} value={ev}>
-                  {ev === '' ? t('alerts.anyEvent') : t(`alerts.playerEvent_${ev}`, ev)}
-                </option>
-              ))}
-            </select>
+            <Select value={form.eventMatch || undefined} onValueChange={(v) => setForm({ ...form, eventMatch: v })}>
+              <SelectTrigger className="w-full mt-1">
+                <SelectValue placeholder={t('alerts.anyEvent')} />
+              </SelectTrigger>
+              <SelectContent>
+                {PLAYER_EVENTS.map((ev) => (
+                  <SelectItem key={ev} value={ev}>
+                    {t(`alerts.playerEvent_${ev}`, ev)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         )}
 
@@ -229,7 +258,7 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
             <div className="mt-1 flex flex-wrap gap-2">
               {channels.map((c) => (
                 <label key={c.id} className="flex items-center gap-1.5 px-2 py-1 border rounded cursor-pointer text-sm">
-                  <input type="checkbox" checked={form.channelIds.includes(c.id)} onChange={() => toggleChannel(c.id)} />
+                  <Checkbox checked={form.channelIds.includes(c.id)} onCheckedChange={() => toggleChannel(c.id)} aria-label={c.name} />
                   {c.name}
                 </label>
               ))}
@@ -263,7 +292,7 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
         )}
 
         <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={form.notifyRecover} onChange={(e) => setForm({ ...form, notifyRecover: e.target.checked })} />
+          <Checkbox checked={form.notifyRecover} onCheckedChange={(v) => setForm({ ...form, notifyRecover: v === true })} aria-label={t('alerts.notifyRecover')} />
           {t('alerts.notifyRecover')}
         </label>
 

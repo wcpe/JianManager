@@ -8,6 +8,14 @@ import {
 } from '@/api/alerts'
 import { FieldLabel, FieldError } from '@/components/ui/field-label'
 import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   channelUsesURL,
   channelIsTelegram,
@@ -91,13 +99,18 @@ export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {
 
         <div>
           <FieldLabel>{t('alerts.channelType')}</FieldLabel>
-          <select className="w-full mt-1 p-2 border rounded" value={type} onChange={(e) => setType(e.target.value)}>
-            {CHANNEL_TYPES.map((ct) => (
-              <option key={ct} value={ct}>
-                {t(`alerts.channel_${ct}`, ct)}
-              </option>
-            ))}
-          </select>
+          <Select value={type} onValueChange={(v) => setType(v)}>
+            <SelectTrigger className="w-full mt-1">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {CHANNEL_TYPES.map((ct) => (
+                <SelectItem key={ct} value={ct}>
+                  {t(`alerts.channel_${ct}`, ct)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         {channelIsInApp(type) && <p className="text-sm text-muted-foreground">{t('alerts.inappHint')}</p>}
@@ -180,7 +193,7 @@ export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {
         )}
 
         <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+          <Checkbox checked={enabled} onCheckedChange={(v) => setEnabled(v === true)} aria-label={t('alerts.enabled')} />
           {t('alerts.enabled')}
         </label>
 

@@ -1,13 +1,14 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Copy, Download, FolderOpen } from 'lucide-react'
+import { Copy, Download, FolderOpen, PackageCheck } from 'lucide-react'
 import { useNodeJDKs, useCreateJDK, useDeleteJDK, useInstallJDK, type NodeJDK } from '@/api/jdks'
 import { useJDKCatalog } from '@/api/nodeRuntime'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { FieldError } from '@/components/ui/field-label'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Checkbox } from '@/components/ui/checkbox'
 import DangerConfirm from '@/components/DangerConfirm'
 import DirectoryPicker from '@/components/DirectoryPicker'
 import { validateAbsPath, validatePositiveInt } from '@/lib/form-validation'
@@ -216,23 +217,33 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
                 // foojay 不可达/无结果：降级为手填具体版本（仍可下载）。
                 <Input value={version} onChange={(e) => setVersion(e.target.value)} placeholder={t('artifactCache.jdkVersionLatest')} />
               ) : (
-                <select
+                <Combobox
+                  options={[
+                    { value: '', label: t('artifactCache.jdkVersionLatest') },
+                    ...catalog.data.map((p) => ({
+                      value: p.javaVersion,
+                      label: `${p.javaVersion}${p.latest ? ` (${t('artifactCache.jdkLatest')})` : ''} · ${p.archiveType}`,
+                    })),
+                  ]}
                   value={version}
-                  onChange={(e) => setVersion(e.target.value)}
-                  className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30"
-                >
-                  <option value="">{t('artifactCache.jdkVersionLatest')}</option>
-                  {catalog.data.map((p) => (
-                    <option key={`${p.javaVersion}-${p.archiveType}`} value={p.javaVersion}>
-                      {p.javaVersion}{p.latest ? ` (${t('artifactCache.jdkLatest')})` : ''} · {p.archiveType}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setVersion}
+                  allowCustom={false}
+                  placeholder={t('artifactCache.jdkVersionLatest')}
+                />
               )}
             </label>
           </div>
-          <p className="text-xs text-muted-foreground">{t('artifactCache.jdkInstallHint')}</p>
-          <div className="flex justify-end">
+          {/* 安装预览：明示将装什么、经代理、进度去向，替代干巴巴一行提示 */}
+          <div className="flex items-start gap-2 rounded-md bg-primary/5 px-3 py-2.5 text-primary">
+            <PackageCheck className="mt-0.5 size-4 shrink-0" />
+            <div className="min-w-0 text-sm">
+              <p className="font-medium">
+                {t('artifactCache.jdkInstallPreview')}: {vendor} {version || `${major} · ${t('artifactCache.jdkLatest')}`} · {arch}
+              </p>
+              <p className="mt-0.5 text-xs text-primary/70">{t('artifactCache.jdkInstallHint')}</p>
+            </div>
+          </div>
+          <div className="flex justify-end border-t pt-3">
             <Button onClick={onInstall} disabled={install.isPending || majorNum <= 0}>
               <Download className="size-4" />
               {t('nodes.jdkInstall')}
@@ -291,8 +302,8 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
             />
           )}
 
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={regManaged} onChange={(e) => setRegManaged(e.target.checked)} />
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox checked={regManaged} onCheckedChange={(v) => setRegManaged(v === true)} aria-label={t('nodes.jdkMarkManaged')} />
             {t('nodes.jdkMarkManaged')}
           </label>
           <div className="flex justify-end">

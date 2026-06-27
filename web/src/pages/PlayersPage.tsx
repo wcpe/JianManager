@@ -9,6 +9,14 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Checkbox } from '@/components/ui/checkbox'
 import DangerConfirm from '@/components/DangerConfirm'
 import { useInstances } from '@/api/instances'
 import {
@@ -183,18 +191,22 @@ function LiveTab() {
     <div>
       <div className="flex items-center gap-2 mb-4">
         <label className="text-sm font-medium">{t('players.liveSelectInstance')}</label>
-        <select
-          value={effectiveId ?? ''}
-          onChange={(e) => setInstanceId(Number(e.target.value))}
-          className="px-3 py-2 border rounded-md bg-background text-sm"
+        <Select
+          value={effectiveId === null ? undefined : String(effectiveId)}
+          onValueChange={(v) => setInstanceId(Number(v))}
+          disabled={list.length === 0}
         >
-          {list.length === 0 && <option value="">{t('players.noBackends')}</option>}
-          {list.map((i) => (
-            <option key={i.id} value={i.id}>
-              {i.name}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder={t('players.noBackends')} />
+          </SelectTrigger>
+          <SelectContent>
+            {list.map((i) => (
+              <SelectItem key={i.id} value={String(i.id)}>
+                {i.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {effectiveId === null ? (
@@ -324,7 +336,11 @@ function BansTab() {
   return (
     <div>
       <label className="flex items-center gap-2 text-sm mb-3">
-        <input type="checkbox" checked={activeOnly} onChange={(e) => setActiveOnly(e.target.checked)} />
+        <Checkbox
+          checked={activeOnly}
+          onCheckedChange={(v) => setActiveOnly(v === true)}
+          aria-label={t('players.activeOnly')}
+        />
         {t('players.activeOnly')}
       </label>
 
@@ -431,18 +447,22 @@ function WhitelistTab() {
     <div>
       <div className="flex items-center gap-2 mb-4">
         <label className="text-sm font-medium">{t('players.selectBackend')}</label>
-        <select
-          value={effectiveId ?? ''}
-          onChange={(e) => setInstanceId(Number(e.target.value))}
-          className="px-3 py-2 border rounded-md bg-background text-sm"
+        <Select
+          value={effectiveId === null ? undefined : String(effectiveId)}
+          onValueChange={(v) => setInstanceId(Number(v))}
+          disabled={backends.length === 0}
         >
-          {backends.length === 0 && <option value="">{t('players.noBackends')}</option>}
-          {backends.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="w-full">
+            <SelectValue placeholder={t('players.noBackends')} />
+          </SelectTrigger>
+          <SelectContent>
+            {backends.map((b) => (
+              <SelectItem key={b.id} value={String(b.id)}>
+                {b.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {effectiveId === null ? (
