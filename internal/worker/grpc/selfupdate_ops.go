@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -25,12 +26,17 @@ import (
 const restartDelay = 800 * time.Millisecond
 
 // GetVersion 返回 Worker 当前版本与平台信息（CP 自更新检查比对用，FR-081）。
+// BackupVersion 透出本地升级前备份版本（无备份为空），供 CP 检查更新展示节点 backupVersion（FR-182）。
 func (s *Server) GetVersion(_ context.Context, _ *workerpb.GetVersionRequest) (*workerpb.GetVersionResponse, error) {
-	return &workerpb.GetVersionResponse{
+	resp := &workerpb.GetVersionResponse{
 		Version: version.Version,
 		Os:      runtime.GOOS,
 		Arch:    runtime.GOARCH,
-	}, nil
+	}
+	if meta, ok := selfupdate.BackupInfo(selfupdate.ComponentWorker, s.root); ok {
+		resp.BackupVersion = meta.Version
+	}
+	return resp, nil
 }
 
 // UpgradeWorker 下载目标二进制 → sha256 校验 → 替换自身 → 计划重启（FR-081）。
@@ -40,6 +46,12 @@ func (s *Server) GetVersion(_ context.Context, _ *workerpb.GetVersionRequest) (*
 // 测试可经 SetRestartFunc 注入空操作避免真重启）。
 func (s *Server) UpgradeWorker(ctx context.Context, req *workerpb.UpgradeWorkerRequest) (*workerpb.UpgradeWorkerResponse, error) {
 	from := version.Version
+
+	// action=rollback：回滚本地升级前备份，不下载（FR-182，见 ADR-039）。
+	if strings.EqualFold(strings.TrimSpace(req.Action), workerRollbackAction) {
+		return s.rollbackWorker(from), nil
+	}
+
 	if strings.TrimSpace(req.DownloadUrl) == "" {
 		return &workerpb.UpgradeWorkerResponse{Success: false, Error: "下载地址为空", FromVersion: from}, nil
 	}
@@ -64,6 +76,10 @@ func (s *Server) UpgradeWorker(ctx context.Context, req *workerpb.UpgradeWorkerR
 		_ = os.Remove(dest)
 		return &workerpb.UpgradeWorkerResponse{Success: false, Error: fmt.Sprintf("定位自身可执行文件失败: %v", err), FromVersion: from}, nil
 	}
+	// 替换前备份当前二进制供回滚（FR-182）；备份失败不阻断升级（仅记日志，本次升级无退路）。
+	if err := selfupdate.BackupCurrentFrom(selfupdate.ComponentWorker, from, target, s.root); err != nil {
+		slog.Warn("Worker 升级前备份失败，本次升级无回滚退路", "error", err)
+	}
 	if err := selfupdate.ReplaceExecutable(target, dest); err != nil {
 		_ = os.Remove(dest)
 		slog.Error("Worker 二进制替换失败", "targetVersion", req.TargetVersion, "error", err)
@@ -78,6 +94,32 @@ func (s *Server) UpgradeWorker(ctx context.Context, req *workerpb.UpgradeWorkerR
 	}()
 
 	return &workerpb.UpgradeWorkerResponse{Success: true, FromVersion: from}, nil
+}
+
+// workerRollbackAction 是 UpgradeWorkerRequest.action 触发回滚的取值（FR-182）。
+const workerRollbackAction = "rollback"
+
+// rollbackWorker 回滚本地升级前备份（FR-182，见 ADR-039）：校验备份 sha → 换回 → 异步延迟重启。
+// 无备份回 success=false（error 文案含 NO_BACKUP 供 CP 映射友好码）；不下载任何远端制品。
+func (s *Server) rollbackWorker(from string) *workerpb.UpgradeWorkerResponse {
+	target, err := s.resolveExecutable()
+	if err != nil {
+		return &workerpb.UpgradeWorkerResponse{Success: false, Error: fmt.Sprintf("定位自身可执行文件失败: %v", err), FromVersion: from}
+	}
+	meta, err := selfupdate.RollbackTo(selfupdate.ComponentWorker, target, s.root)
+	if err != nil {
+		if errors.Is(err, selfupdate.ErrNoBackup) {
+			return &workerpb.UpgradeWorkerResponse{Success: false, Error: "NO_BACKUP: 无备份可回滚", FromVersion: from}
+		}
+		slog.Error("Worker 回滚失败", "error", err)
+		return &workerpb.UpgradeWorkerResponse{Success: false, Error: err.Error(), FromVersion: from}
+	}
+	slog.Info("Worker 二进制已回滚，计划重启", "fromVersion", from, "toVersion", meta.Version)
+	go func() {
+		time.Sleep(restartDelay)
+		s.doRestart()
+	}()
+	return &workerpb.UpgradeWorkerResponse{Success: true, FromVersion: from}
 }
 
 // doRestart 执行重启动作；默认 selfupdate.Restart（re-exec 后退出），可经 SetRestartFunc 替换（测试）。
