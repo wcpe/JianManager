@@ -63,6 +63,8 @@ func main() {
 	userSvc := service.NewUserService(db)
 	groupSvc := service.NewGroupService(db)
 	nodeSvc := service.NewNodeService(db)
+	// 坏节点检测/修复（见 ADR-039 §2）：检测重名/被串改节点、重新 enroll、清理孤立 JDK/实例。
+	nodeRepairSvc := service.NewNodeRepairService(db)
 	pool := cpgrpc.NewClientPool()
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
 	// 优雅关闭：停止接受新的后台 Worker 委托并等待在途异步状态回写收尾，避免泄漏 goroutine。
@@ -249,6 +251,7 @@ func main() {
 		User:               userSvc,
 		Group:              groupSvc,
 		Node:               nodeSvc,
+		NodeRepair:         nodeRepairSvc,
 		Instance:           instanceSvc,
 		InstanceBatch:      instanceBatchSvc,
 		InstanceGroup:      instanceGroupSvc,

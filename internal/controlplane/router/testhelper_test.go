@@ -74,6 +74,7 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 		User:          service.NewUserService(db),
 		Group:         groupSvc,
 		Node:          nodeSvc,
+		NodeRepair:    service.NewNodeRepairService(db),
 		Instance:      instanceSvc,
 		InstanceBatch: service.NewInstanceBatchService(db, pool),
 		InstanceGroup: service.NewInstanceGroupService(db),

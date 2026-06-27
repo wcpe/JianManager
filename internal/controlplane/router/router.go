@@ -15,6 +15,7 @@ type Services struct {
 	User               *service.UserService
 	Group              *service.GroupService
 	Node               *service.NodeService
+	NodeRepair         *service.NodeRepairService
 	Instance           *service.InstanceService
 	InstanceBatch      *service.InstanceBatchService
 	InstanceGroup      *service.InstanceGroupService
@@ -113,7 +114,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 	// 所有认证用户可访问的资源（按权限节点 + 资源隔离收敛）
 	{
-		nodeHandler := NewNodeHandler(svcs.Node)
+		nodeHandler := NewNodeHandler(svcs.Node, svcs.NodeRepair, svcs.Audit)
 		nodeHandler.RegisterRoutes(protected)
 
 		jdkHandler := NewJDKHandler(svcs.JDK)
