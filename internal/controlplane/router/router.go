@@ -67,6 +67,9 @@ type Services struct {
 	Storage       *service.StorageService
 	DBBrowse      *service.DBBrowseService
 	SelfUpdate    *service.SelfUpdateService
+	// 全局任务中心 + 站内信（FR-183，见 ADR-040）。
+	Task         *service.TaskService
+	Notification *service.NotificationService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -222,6 +225,18 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 时序监控历史曲线（FR-060）：node 维度对认证用户开放，instance 维度按 CanAccessInstance 收敛。
 		metricHandler := NewMetricHandler(svcs.Metric, svcs.Authz)
 		metricHandler.RegisterRoutes(protected)
+
+		// 全局任务中心（FR-183，见 ADR-040）：认证用户可见，非管理员只见自己发起的任务（service 层收敛）。
+		if svcs.Task != nil {
+			taskHandler := NewTaskHandler(svcs.Task)
+			taskHandler.RegisterRoutes(protected)
+		}
+
+		// 站内信（FR-183，见 ADR-040）：认证用户只读/操作自己的站内信。
+		if svcs.Notification != nil {
+			notificationHandler := NewNotificationHandler(svcs.Notification)
+			notificationHandler.RegisterRoutes(protected)
+		}
 	}
 
 	// 仅平台管理员

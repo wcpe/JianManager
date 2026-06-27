@@ -37,6 +37,12 @@ type MetricIngester interface {
 	IngestHeartbeat(req *workerpb.HeartbeatRequest) error
 }
 
+// TaskIngester 把心跳负载里的运行中任务快照汇聚落库 + 终态副作用（FR-183，见 ADR-040）。
+// 同 MetricIngester 以接口声明、由 service.TaskService 实现，避免 grpc→service 反向依赖。
+type TaskIngester interface {
+	IngestSnapshots(nodeUUID string, snaps []*workerpb.TaskSnapshot) error
+}
+
 // EnrollmentValidator 校验并消费 enrollment token（FR-080，见 ADR-020）。
 // 在 grpc 包内以接口声明、由 service.EnrollTokenService 实现，避免 grpc→service 反向依赖。
 // ConsumeForNewNode 仅当 token 当前有效（未消费/未吊销/未过期）时原子消费、返回 nil；
@@ -53,6 +59,7 @@ type ControlPlaneHandler struct {
 	pool            *ClientPool
 	onWorkerConnect func(nodeUUID string)  // Worker 注册成功后回调
 	metrics         MetricIngester         // 时序指标入库（nil 时心跳不落时序）
+	tasks           TaskIngester           // 任务进度入库（nil 时心跳不落任务，FR-183）
 	enroll          EnrollmentValidator    // enrollment token 校验消费（nil 时退化为 FR-004 自助注册）
 }
 
@@ -69,6 +76,11 @@ func (h *ControlPlaneHandler) SetOnWorkerConnect(fn func(nodeUUID string)) {
 // SetMetricIngester 注入时序指标入库器（FR-060）；不注入则心跳仅更新节点当前值不落时序。
 func (h *ControlPlaneHandler) SetMetricIngester(m MetricIngester) {
 	h.metrics = m
+}
+
+// SetTaskIngester 注入任务进度入库器（FR-183，见 ADR-040）；不注入则心跳不处理任务快照。
+func (h *ControlPlaneHandler) SetTaskIngester(t TaskIngester) {
+	h.tasks = t
 }
 
 // SetEnrollmentValidator 注入 enrollment token 校验器（FR-080，见 ADR-020）。
@@ -324,6 +336,14 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 		if h.metrics != nil {
 			if err := h.metrics.IngestHeartbeat(req); err != nil {
 				slog.Warn("时序指标入库失败", "nodeUUID", req.NodeUuid, "error", err)
+			}
+		}
+
+		// 心跳负载里的运行中任务快照汇聚落库 + 终态副作用（落 NodeJDK / 发站内信，FR-183，见 ADR-040）。
+		// 失败不影响心跳本身，仅记录告警。
+		if h.tasks != nil && len(req.Tasks) > 0 {
+			if err := h.tasks.IngestSnapshots(req.NodeUuid, req.Tasks); err != nil {
+				slog.Warn("任务进度入库失败", "nodeUUID", req.NodeUuid, "error", err)
 			}
 		}
 

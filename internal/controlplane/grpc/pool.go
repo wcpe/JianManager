@@ -60,6 +60,14 @@ func (p *ClientPool) Connect(nodeUUID, addr string) error {
 	return nil
 }
 
+// SetWorkerClientForTest 直接注入某节点的 Worker gRPC 客户端（仅测试用）。
+// 让 service 层能以伪 WorkerServiceClient 覆盖 CP→Worker 的 RPC 编排，无需真起 gRPC 服务。
+func (p *ClientPool) SetWorkerClientForTest(nodeUUID string, worker workerpb.WorkerServiceClient) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.clients[nodeUUID] = &Client{Worker: worker, NodeUUID: nodeUUID}
+}
+
 // Get 获取指定节点的客户端。
 func (p *ClientPool) Get(nodeUUID string) (*Client, bool) {
 	p.mu.RLock()

@@ -234,6 +234,14 @@ func main() {
 	metricSvc.Start()
 	defer metricSvc.Stop()
 
+	// 全局任务中心 + 站内信（FR-183，见 ADR-040）：长任务进度汇聚 + 终态发站内信。
+	// TaskService 在心跳路径处理任务快照、终态落 NodeJDK 并经 NotificationService 发信；
+	// JDKService 据此把 JDK 安装改为异步（建任务→Worker 启动即返回 taskId）。
+	notificationSvc := service.NewNotificationService(db)
+	taskSvc := service.NewTaskService(db)
+	taskSvc.SetNotificationService(notificationSvc)
+	jdkSvc.SetTaskService(taskSvc)
+
 	// 平台配置：在 YAML+env 基线上叠加 DB 覆盖层，白名单项可运行时调整（FR-063/ADR-015）。
 	// 构造时重放已落库的可即时生效覆盖（如日志级别），保证重启后覆盖仍生效。
 	settingsSvc := service.NewSettingsService(db, cfg)
@@ -304,9 +312,11 @@ func main() {
 			ScriptBaseURL: cfg.Enroll.ScriptBaseURL,
 			BinaryURL:     cfg.Enroll.BinaryURL,
 		},
-		Storage:    storageSvc,
-		DBBrowse:   dbBrowseSvc,
-		SelfUpdate: selfUpdateSvc,
+		Storage:      storageSvc,
+		DBBrowse:     dbBrowseSvc,
+		SelfUpdate:   selfUpdateSvc,
+		Task:         taskSvc,
+		Notification: notificationSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）
@@ -325,6 +335,8 @@ func main() {
 	})
 	// 心跳负载落库为时序样本（节点指标 + 每实例 ServerProbe 快照，FR-060）。
 	grpcHandler.SetMetricIngester(metricSvc)
+	// 心跳负载里的运行中任务快照汇聚落库 + 终态副作用（落 NodeJDK / 发站内信，FR-183，见 ADR-040）。
+	grpcHandler.SetTaskIngester(taskSvc)
 	// 注入 enrollment token 校验器（FR-080，见 ADR-020）：新节点首次注册必须凭有效一次性 token，
 	// 老节点（name 命中）重注册不强制 token，避免在网节点重启掉线。
 	grpcHandler.SetEnrollmentValidator(enrollTokenSvc)

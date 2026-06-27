@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
@@ -27,10 +28,19 @@ type JDKService struct {
 	// settings 提供平台设置生效值（jdk.mirror.<vendor>），使运行时配置的镜像源真生效；
 	// 为 nil 时安装走 Worker 本地 env/默认源（FR-063）。
 	settings SettingsReader
+	// tasks 是全局任务中心服务（FR-183，见 ADR-040）；非 nil 时 Install 走异步任务路径
+	// （建 Task→Worker 启动即返回 taskId→返回 taskId，不再阻塞 20min）。为 nil 时回退同步路径。
+	tasks *TaskService
 }
 
 func NewJDKService(db *gorm.DB, pool *cpgrpc.ClientPool) *JDKService {
 	return &JDKService{db: db, pool: pool}
+}
+
+// SetTaskService 注入任务中心服务，启用 JDK 安装异步化（FR-183，见 ADR-040）。
+// 在 main 装配阶段调用；不调用则 Install 回退同步阻塞路径（向后兼容）。
+func (s *JDKService) SetTaskService(t *TaskService) {
+	s.tasks = t
 }
 
 // SetSettingsReader 注入平台设置读取器（FR-063）。在 main 装配阶段调用，避免构造期循环依赖。
@@ -101,6 +111,59 @@ func (s *JDKService) Create(nodeID uint, req CreateJDKRequest) (*model.NodeJDK, 
 	return jdk, nil
 }
 
+// InstallAsync 异步发起 JDK 安装（FR-183，见 ADR-040）：建 Task → 令 Worker 启动即返回 taskId →
+// 把 Task 置为 running → 返回 Task（HTTP 202 语义，不再阻塞最长 20min）。
+// 落 model.NodeJDK 与完成站内信由心跳终态副作用完成（见 TaskService.IngestSnapshots）。
+// createdBy 为发起用户 ID（任务归属 + 完成站内信收件人）。
+// 要求已注入 TaskService（SetTaskService）；未注入则回退同步 Install（返回错误提示）。
+func (s *JDKService) InstallAsync(nodeID uint, req InstallJDKRequest, createdBy uint) (*model.Task, error) {
+	if s.tasks == nil {
+		return nil, fmt.Errorf("任务中心未启用，无法异步安装")
+	}
+	node, err := s.nodeByID(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return nil, ErrNodeOffline
+	}
+
+	taskID := uuid.NewString()
+	title := fmt.Sprintf("安装 JDK %s %d", req.Vendor, req.MajorVersion)
+	detail := fmt.Sprintf("节点 %s · %s · arch=%s", node.Name, title, req.Arch)
+	task, err := s.tasks.CreateTask(taskID, nodeID, model.TaskKindJDKInstall, title, detail, createdBy)
+	if err != nil {
+		return nil, err
+	}
+
+	// 下发 Worker：携带 task_id，Worker 启动即返回（不再等下载完成）。
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	resp, err := client.Worker.InstallJDK(ctx, &workerpb.InstallJDKRequest{
+		Vendor:       req.Vendor,
+		MajorVersion: int32(req.MajorVersion),
+		Arch:         req.Arch,
+		MirrorBase:   s.mirrorBaseForVendor(req.Vendor),
+		TaskId:       taskID,
+	})
+	if err != nil {
+		_ = s.tasks.MarkFailed(taskID, fmt.Sprintf("下发 Worker 失败: %v", err))
+		return nil, fmt.Errorf("Worker InstallJDK RPC 失败: %w", err)
+	}
+	if !resp.Success {
+		_ = s.tasks.MarkFailed(taskID, fmt.Sprintf("Worker 拒绝安装: %s", resp.Error))
+		return nil, fmt.Errorf("Worker 拒绝安装: %s", resp.Error)
+	}
+	if err := s.tasks.MarkRunning(taskID); err != nil {
+		slog.Warn("标记任务 running 失败", "taskId", taskID, "error", err)
+	}
+	task.State = model.TaskStateRunning
+	return task, nil
+}
+
+// Install 同步发起 JDK 安装（阻塞至完成，最长 20min）。保留供未启用任务中心时回退与既有测试。
+// 生产路径已改用 InstallAsync（FR-183，见 ADR-040）。
 func (s *JDKService) Install(nodeID uint, req InstallJDKRequest) (*model.NodeJDK, error) {
 	node, err := s.nodeByID(nodeID)
 	if err != nil {
