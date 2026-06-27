@@ -2,6 +2,9 @@ package database
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -17,6 +20,11 @@ func New(cfg config.DatabaseConfig) (*gorm.DB, error) {
 
 	switch cfg.Driver {
 	case "sqlite":
+		// 首次部署自动创建数据库文件的父目录（含多级）：否则 modernc/glebarez 打开
+		// 不存在目录下的文件报 SQLITE_CANTOPEN（表象 "out of memory (14)"），逼运维手动 mkdir。
+		if err := ensureSQLiteParentDir(cfg.DSN); err != nil {
+			return nil, err
+		}
 		dialector = sqlite.Open(cfg.DSN)
 	default:
 		return nil, fmt.Errorf("不支持的数据库驱动: %s", cfg.Driver)
@@ -30,6 +38,37 @@ func New(cfg config.DatabaseConfig) (*gorm.DB, error) {
 	}
 
 	return db, nil
+}
+
+// ensureSQLiteParentDir 在打开 SQLite 文件前创建其父目录（含多级）。
+// 纯内存库（:memory: / file::memory:）与无目录段的纯文件名跳过。
+func ensureSQLiteParentDir(dsn string) error {
+	path := sqliteFilePath(dsn)
+	if path == "" {
+		return nil
+	}
+	dir := filepath.Dir(path)
+	if dir == "" || dir == "." {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("创建数据库目录 %s 失败: %w", dir, err)
+	}
+	return nil
+}
+
+// sqliteFilePath 从 SQLite DSN 提取磁盘文件路径；内存库等无磁盘路径返回空串。
+// 处理 modernc/glebarez 支持的 file: 方案前缀与 ?query 参数。
+func sqliteFilePath(dsn string) string {
+	s := strings.TrimSpace(dsn)
+	s = strings.TrimPrefix(s, "file:")
+	if i := strings.IndexByte(s, '?'); i >= 0 {
+		s = s[:i]
+	}
+	if s == "" || s == ":memory:" {
+		return ""
+	}
+	return s
 }
 
 // AutoMigrate 自动迁移所有模型。
