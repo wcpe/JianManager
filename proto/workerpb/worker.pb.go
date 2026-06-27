@@ -6741,9 +6741,10 @@ func (*GetVersionRequest) Descriptor() ([]byte, []int) {
 
 type GetVersionResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Version       string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"` // Worker 当前版本（internal/version.Version）
-	Os            string                 `protobuf:"bytes,2,opt,name=os,proto3" json:"os,omitempty"`           // runtime.GOOS（linux/windows/darwin）
-	Arch          string                 `protobuf:"bytes,3,opt,name=arch,proto3" json:"arch,omitempty"`       // runtime.GOARCH（amd64/arm64）
+	Version       string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`                                  // Worker 当前版本（internal/version.Version）
+	Os            string                 `protobuf:"bytes,2,opt,name=os,proto3" json:"os,omitempty"`                                            // runtime.GOOS（linux/windows/darwin）
+	Arch          string                 `protobuf:"bytes,3,opt,name=arch,proto3" json:"arch,omitempty"`                                        // runtime.GOARCH（amd64/arm64）
+	BackupVersion string                 `protobuf:"bytes,4,opt,name=backup_version,json=backupVersion,proto3" json:"backup_version,omitempty"` // 本地升级前备份的版本（无备份为空，供 CP 透出 backupVersion，FR-182）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6799,12 +6800,22 @@ func (x *GetVersionResponse) GetArch() string {
 	return ""
 }
 
+func (x *GetVersionResponse) GetBackupVersion() string {
+	if x != nil {
+		return x.BackupVersion
+	}
+	return ""
+}
+
 type UpgradeWorkerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	DownloadUrl   string                 `protobuf:"bytes,1,opt,name=download_url,json=downloadUrl,proto3" json:"download_url,omitempty"`        // 目标 Worker 二进制下载地址（CP 据 feed + 节点平台解析后下发）
 	Sha256        string                 `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`                                     // 期望 sha256（Worker 下载后校验，不符拒绝替换）
 	TargetVersion string                 `protobuf:"bytes,3,opt,name=target_version,json=targetVersion,proto3" json:"target_version,omitempty"`  // 目标版本号（仅记录/回报）
 	AllowInsecure bool                   `protobuf:"varint,4,opt,name=allow_insecure,json=allowInsecure,proto3" json:"allow_insecure,omitempty"` // 是否允许 http 下载源（默认仅 https；本地/内网自测可开）
+	// action 升级动作（FR-182，加性向后兼容）：空/"upgrade"=既有下载替换升级；
+	// "rollback"=回滚本地升级前备份（忽略 download_url/sha256，Worker 用自己的备份换回上一版）。
+	Action        string `protobuf:"bytes,5,opt,name=action,proto3" json:"action,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6865,6 +6876,13 @@ func (x *UpgradeWorkerRequest) GetAllowInsecure() bool {
 		return x.AllowInsecure
 	}
 	return false
+}
+
+func (x *UpgradeWorkerRequest) GetAction() string {
+	if x != nil {
+		return x.Action
+	}
+	return ""
 }
 
 type UpgradeWorkerResponse struct {
@@ -7896,16 +7914,18 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\tconnected\x18\x03 \x01(\bR\tconnected\x12\x1d\n" +
 	"\n" +
 	"state_json\x18\x04 \x01(\tR\tstateJson\"\x13\n" +
-	"\x11GetVersionRequest\"R\n" +
+	"\x11GetVersionRequest\"y\n" +
 	"\x12GetVersionResponse\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\x0e\n" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12\x12\n" +
-	"\x04arch\x18\x03 \x01(\tR\x04arch\"\x9f\x01\n" +
+	"\x04arch\x18\x03 \x01(\tR\x04arch\x12%\n" +
+	"\x0ebackup_version\x18\x04 \x01(\tR\rbackupVersion\"\xb7\x01\n" +
 	"\x14UpgradeWorkerRequest\x12!\n" +
 	"\fdownload_url\x18\x01 \x01(\tR\vdownloadUrl\x12\x16\n" +
 	"\x06sha256\x18\x02 \x01(\tR\x06sha256\x12%\n" +
 	"\x0etarget_version\x18\x03 \x01(\tR\rtargetVersion\x12%\n" +
-	"\x0eallow_insecure\x18\x04 \x01(\bR\rallowInsecure\"j\n" +
+	"\x0eallow_insecure\x18\x04 \x01(\bR\rallowInsecure\x12\x16\n" +
+	"\x06action\x18\x05 \x01(\tR\x06action\"j\n" +
 	"\x15UpgradeWorkerResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12!\n" +

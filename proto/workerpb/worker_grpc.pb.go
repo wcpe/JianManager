@@ -184,6 +184,7 @@ type WorkerServiceClient interface {
 	// UpgradeWorker 令 Worker 下载指定二进制 → sha256 校验 → 替换自身 → 计划重启。
 	// daemon 模式下不杀游戏服（ADR-003 wrapper 子进程与 Worker 主进程隔离，
 	// Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper）。
+	// action="rollback" 时改为回滚本地升级前备份（FR-182，见 ADR-039），不下载。
 	UpgradeWorker(ctx context.Context, in *UpgradeWorkerRequest, opts ...grpc.CallOption) (*UpgradeWorkerResponse, error)
 }
 
@@ -856,6 +857,7 @@ type WorkerServiceServer interface {
 	// UpgradeWorker 令 Worker 下载指定二进制 → sha256 校验 → 替换自身 → 计划重启。
 	// daemon 模式下不杀游戏服（ADR-003 wrapper 子进程与 Worker 主进程隔离，
 	// Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper）。
+	// action="rollback" 时改为回滚本地升级前备份（FR-182，见 ADR-039），不下载。
 	UpgradeWorker(context.Context, *UpgradeWorkerRequest) (*UpgradeWorkerResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }

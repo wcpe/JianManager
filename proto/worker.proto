@@ -134,6 +134,7 @@ service WorkerService {
   // UpgradeWorker 令 Worker 下载指定二进制 → sha256 校验 → 替换自身 → 计划重启。
   // daemon 模式下不杀游戏服（ADR-003 wrapper 子进程与 Worker 主进程隔离，
   // Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper）。
+  // action="rollback" 时改为回滚本地升级前备份（FR-182，见 ADR-039），不下载。
   rpc UpgradeWorker(UpgradeWorkerRequest) returns (UpgradeWorkerResponse);
 }
 
@@ -905,6 +906,7 @@ message GetVersionResponse {
   string version = 1; // Worker 当前版本（internal/version.Version）
   string os = 2;      // runtime.GOOS（linux/windows/darwin）
   string arch = 3;    // runtime.GOARCH（amd64/arm64）
+  string backup_version = 4; // 本地升级前备份的版本（无备份为空，供 CP 透出 backupVersion，FR-182）
 }
 
 message UpgradeWorkerRequest {
@@ -912,6 +914,9 @@ message UpgradeWorkerRequest {
   string sha256 = 2;         // 期望 sha256（Worker 下载后校验，不符拒绝替换）
   string target_version = 3; // 目标版本号（仅记录/回报）
   bool allow_insecure = 4;   // 是否允许 http 下载源（默认仅 https；本地/内网自测可开）
+  // action 升级动作（FR-182，加性向后兼容）：空/"upgrade"=既有下载替换升级；
+  // "rollback"=回滚本地升级前备份（忽略 download_url/sha256，Worker 用自己的备份换回上一版）。
+  string action = 5;
 }
 
 message UpgradeWorkerResponse {
