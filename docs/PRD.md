@@ -47,6 +47,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-003 / 041 / 042 / 046 / 053 / 059 / 098 / 113 / 114（在途杂项 / 归真 / 延后）→ `docs/specs/inflight-backlog/spec.md`
 - FR-163~169（前端整体重设计:视觉底座 / 双主题 / 多级分组 / 可组合工作区+超级工作台+导播台 / 监控升级）→ `docs/specs/ui-redesign/design.md`(+ 原型 `preview.html`)
 - FR-173~175（CI 发布管线 / 出站网络代理 / 自更新对接 GitHub Releases，关联 ADR-036/037）→ `docs/specs/release-pipeline/`、`docs/specs/network-proxy/`、`docs/specs/self-update-github/`（开发中创建）
+- FR-176~184（节点与运行时 UI 重做 / 自更新增强 / 全局任务中心 / jmctl 紧急控制台，关联 ADR-039/040/041 + ADR-036 更新）→ FR-182 `docs/specs/self-update-enhancement/spec.md`、FR-183 `docs/specs/task-center/spec.md`、FR-184 `docs/specs/emergency-cli/spec.md`（已落审）；FR-176/179/180/181 免 spec；FR-177/178 spec 随 W2 创建
 - 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
 
 | 编号 | 需求 | 优先级 | 状态 |
@@ -220,6 +221,15 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-173 | CI/CD 发布管线（GitHub Actions：push→滚动预发布[取 CHANGELOG Unreleased]、tag→正式 release[取版本段]；交叉编译 CP+Worker linux/amd64+windows/amd64 含 go:embed 前端；产物 + checksums.txt 上传 release；ldflags 注入版本，见 ADR-036） | P1 | 🔨 开发中 |
 | FR-174 | 出站网络代理（CP/Worker 每进程可配 HTTP/SOCKS5 + no_proxy，共享出站 HTTP 客户端工厂，覆盖自更新/JDK/服务端 jar/CFR/GitHub API 下载；留空=直连，见 ADR-037） | P1 | 🔨 开发中 |
 | FR-175 | 自更新对接 GitHub Releases（增强 FR-081：原生 GitHub Releases API 解析 + stable/prerelease 渠道 + checksums sha256 校验 + 经 FR-174 代理下载；取代 ADR-020 §4 feed 立场，见 ADR-036） | P1 | 🔨 开发中 |
+| FR-176 | 全局交互细节修正（卡片 hover 不位移 + 输入焦点态收敛 + 主题化滚动条；增强 FR-163） | P2 | 📋 计划 |
+| FR-177 | 节点管理页重做（主从双栏 + 左列表可收缩 + 节点页眉重设计 + JDK/制品/端口入口重排；增强 FR-144） | P1 | 📋 计划 |
+| FR-178 | 节点内 JDK + 制品管理面板（抽屉取代简陋模态 + JDK 异步安装/进度日志接任务中心 + foojay 多厂商多版本 + 目录选择器 + 抽屉 UX 约束；增强 FR-033/045，关联 FR-082/183） | P1 | 📋 计划 |
+| FR-179 | 全局页眉重设计 + 搜索右对齐（增强 FR-162） | P2 | 📋 计划 |
+| FR-180 | 实例工作区页眉重设计（增强 FR-069/166） | P2 | 📋 计划 |
+| FR-181 | Logo 点击折叠/展开导航栏（增强 FR-131） | P3 | 📋 计划 |
+| FR-182 | 自更新体验增强（检查更新展示更新内容 + 一键回滚上一版 + 单版本二进制备份；CP+Worker，增强 FR-081） | P1 | 📋 计划 |
+| FR-183 | 全局任务中心 + 完成站内信（job 模型 + Worker→CP 进度/日志上报 + CP API + 前端任务中心 + 完成/失败站内信；JDK 异步安装首个接入，见 ADR-040） | P1 | 📋 计划 |
+| FR-184 | jmctl 紧急控制台 CLI（独立轻量二进制 `cmd/jmctl/`，仅依赖 daemon 帧协议包，直连守护进程 Unix Socket/命名管道；emergency/list/stop/kill + UUID 前缀补全，见 ADR-041 与 `docs/specs/emergency-cli/spec.md`） | P2 | 📋 计划 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
