@@ -216,6 +216,7 @@
   }
   ```
 - token **落库只存 SHA-256 哈希**，明文一次性返回、不可二次读取；`controlPlaneGrpc`/脚本基址由 CP 据请求 Host 推断，可经 `enroll.advertise_grpc`/`enroll.script_base_url` 配置覆盖
+- 一键命令的二进制下载基址默认 GitHub Releases latest（`enroll.binary_url`，ADR-036 契约 `worker-<os>-<arch>[.exe]`），开箱即下载；可覆盖为内网源或置空改用脚本 `--binary` 本地兜底
 - **审计**: `node.enroll_token.create`（detail 仅含 tokenId/tokenPrefix/nodeName/expiresAt，绝不含明文）
 
 ### GET /api/v1/nodes/enroll-tokens

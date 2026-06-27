@@ -34,7 +34,7 @@
 
 - **审计**：`node.enroll_token.create`（detail 仅含 tokenId/tokenPrefix/nodeName/expiresAt，**绝不含明文**）。
 - token **落库只存 SHA-256 哈希**，明文一次性返回。
-- 一键命令中的下载地址在公网 release 端点未架设前为占位/可配；脚本支持 `--binary` 本地兜底。
+- 一键命令的二进制下载基址默认 GitHub Releases latest（`https://github.com/wcpe/jianmanager/releases/latest/download`，ADR-036 产物命名契约 `worker-<os>-<arch>[.exe]`），开箱即下载；可经 `enroll.binary_url` 覆盖为内网/私有源，或显式置空改用脚本 `--binary` 本地兜底。真实 release 产物由 FR-173 发布管线产出。
 
 ### 列出 / 吊销 enrollment token（仅平台管理员，便于管理未消费 token）
 
