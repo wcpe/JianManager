@@ -11,6 +11,7 @@ import { useAlertEvents, useUnreadAlertCount } from '@/api/alerts'
 import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import PageBreadcrumb from './PageBreadcrumb'
+import NotificationInbox from '@/components/NotificationInbox'
 import { searchBoxClass, slotVisibility, visibilityClass } from './header-layout'
 import {
   DropdownMenu,
@@ -107,13 +108,11 @@ function SearchBox() {
 }
 
 /**
- * 站内信收件箱挂载点（FR-183 预留）：位于集群徽标与告警铃铛之间，紧邻铃铛之前。
- * 本期仅占位、不渲染可见内容，亦不实现站内信逻辑；待 FR-183 在此挂载收件箱铃铛/下拉。
+ * 站内信收件箱（FR-183）：位于集群徽标与告警铃铛之间，紧邻铃铛之前。
+ * 挂载 FR-183 的收件箱组件（收件箱图标 + 未读计数 + 下拉，接站内信 API）。
  */
 function InboxSlot() {
-  // TODO(FR-183): 站内信收件箱——在此渲染收件箱图标 + 未读计数 + 下拉（接站内信 API），
-  // 复用 AlertBell 的下拉壳与未读角标样式。本期保留空挂载点，不引入逻辑。
-  return null
+  return <NotificationInbox />
 }
 
 /** 单个集群概览徽标：图标 + 计数，可点跳转对应筛选。danger 时计数着红。 */
