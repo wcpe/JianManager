@@ -6,6 +6,9 @@
 
 ## [Unreleased]
 
+### 新增
+- **CI/CD 发布管线（FR-173，见 ADR-036）**：新增 `.github/workflows/release.yml`（GitHub Actions，三 job `prepare-embeds`→`build` matrix→`release`）——push `master` 出/覆盖固定 tag `nightly` 滚动预发布（说明取 CHANGELOG `[Unreleased]`），push tag `v*` 出正式 release（说明取该版本段）；交叉编译 Control Plane + Worker 至 `linux/amd64`+`windows/amd64`（共 4 二进制，含 `go:embed` 前端 + 内嵌探针/客户端更新器/CFR），产物按 `<component>-<os>-<arch>[.exe]` 命名 + `checksums.txt`（每件 sha256）上传 release，`-ldflags` 注入 `internal/version.Version`（正式=tag、预发布=`0.0.0-dev+<shortsha>`，build/release 两 job 同算法保证版本一致）。新增 `scripts/changelog-extract.mjs`（提取 `[Unreleased]`/指定版本段为发布说明，缺失/空段非零退出，含 node:test 单测）。`internal/version/version.go` 默认值对齐 `0.10.0` 消除与 CHANGELOG 漂移（真值仍由 ldflags 注入）。固化产物命名/校验/渠道契约（ADR-036，FR-175 自更新对接 GitHub Releases 共享）。
+
 ### 安全
 - **客户端分发 manifest 签名 fail-closed（FR-087，见 ADR-022 实施补充）**：修复 OTA 签名的生产态 **fail-open** 缺口。此前 Control Plane 在 `dev_mode=false` 且未注入 `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 时，静默回退到**源码中公开**的内置开发 Ed25519 私钥继续对外签客户端 OTA manifest（仅打一条 `slog.Warn`）——等于把信任根私钥公开，攻击者可用人人可得的开发私钥伪造玩家客户端信任的 OTA 包（供应链 / RCE），唯一拦阻是运维有没有看到那行告警。改为 **fail-closed**：新增 `service.ResolveManifestSigner(privKey, keyID, devMode)` 裁决密钥来源——生产态未注入私钥（`ErrSignKeyRequiredInProd`），或把源码公开的开发私钥**显式贴进 env**（按解出公钥识别，`ErrDevSignKeyInProd`），CP 一律**拒绝启动**；仅 `dev_mode=true` 维持零配置回退内置开发密钥（公钥已回填客户端 updater-core）。补单测 `TestResolveManifestSigner_*` 覆盖「缺私钥拒绝 / 注入开发密钥拒绝 / 生产真私钥放行 / 开发回退 / 非法私钥透传」。同步 ADR-022 实施补充、`client-distribution/api.md` 与 `docs/API.md` 验收、`configs/control-plane.yaml` 与 `docs/DEPLOY.md` 注入说明。
 
