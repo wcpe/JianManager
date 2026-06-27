@@ -21,14 +21,18 @@ export interface ComponentStatus {
   updateAvailable: boolean
   /** feed 中存在匹配该组件平台（component+os+arch）的制品。 */
   artifactAvailable: boolean
+  /** 升级前备份的版本（FR-182）：非空时可一键「回滚 v{backupVersion}」，空表示无备份。 */
+  backupVersion?: string
 }
 
 /** GET /self-update/check 的返回。 */
 export interface CheckResult {
-  /** 是否已配置更新源（feed_url 非空）。 */
+  /** 是否已配置更新源（github_repo 或 feed_url 非空）。 */
   configured: boolean
   latestVersion: string
   notes: string
+  /** 更新源标识（FR-175）：github:owner/repo@channel | feed | 空（未配置）。 */
+  source?: string
   controlPlane: ComponentStatus
   nodes: ComponentStatus[]
 }
@@ -69,6 +73,21 @@ export interface ControlPlaneUpgradeAck {
 
 /** 单节点升级接受响应（202）。 */
 export interface NodeUpgradeAck {
+  status: string
+  nodeId: number
+  fromVersion: string
+  toVersion: string
+}
+
+/** CP 回滚接受响应（202，FR-182）。 */
+export interface ControlPlaneRollbackAck {
+  status: string
+  fromVersion: string
+  toVersion: string
+}
+
+/** 单节点回滚接受响应（202，FR-182）。 */
+export interface NodeRollbackAck {
   status: string
   nodeId: number
   fromVersion: string
@@ -128,5 +147,23 @@ export function useUpgradeAll() {
     mutationFn: ({ nodeIds, version }: { nodeIds?: number[]; version?: string }) =>
       api.post<Rollout>('/self-update/nodes/upgrade-all', { nodeIds, version }).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['self-update', 'rollout'] }),
+  })
+}
+
+/** 回滚 CP 自身到升级前备份（校验备份→换回→平滑重启，FR-182）。 */
+export function useRollbackControlPlane() {
+  return useMutation({
+    mutationFn: () =>
+      api.post<ControlPlaneRollbackAck>('/self-update/control-plane/rollback').then((r) => r.data),
+  })
+}
+
+/** 回滚单个 Worker 节点到其升级前备份（经 CP gRPC，Worker 走本地备份，FR-182）。 */
+export function useRollbackNode() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ nodeId }: { nodeId: number }) =>
+      api.post<NodeRollbackAck>(`/self-update/nodes/${nodeId}/rollback`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['self-update', 'check'] }),
   })
 }

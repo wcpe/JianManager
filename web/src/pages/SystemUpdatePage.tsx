@@ -1,13 +1,15 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { RefreshCw, ArrowUpCircle, ServerCog, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { RefreshCw, ArrowUpCircle, ArrowDownCircle, ServerCog, AlertCircle, CheckCircle2 } from 'lucide-react'
 import {
   useSelfUpdateCheck,
   useRollout,
   useUpgradeControlPlane,
   useUpgradeNode,
   useUpgradeAll,
+  useRollbackControlPlane,
+  useRollbackNode,
   type ComponentStatus,
   type Rollout,
   type RolloutNodeState,
@@ -109,10 +111,24 @@ export default function SystemUpdatePage() {
       {result && (
         <>
           {result.configured && (
-            <div className="text-sm text-muted-foreground">
-              {t('systemUpdate.latestVersion', '更新源最新版本')}：
-              <span className="font-mono font-medium text-foreground">{result.latestVersion || '-'}</span>
-              {result.notes && <span className="ml-2">— {result.notes}</span>}
+            <div className="space-y-2">
+              <div className="text-sm text-muted-foreground">
+                {t('systemUpdate.latestVersion', '更新源最新版本')}：
+                <span className="font-mono font-medium text-foreground">{result.latestVersion || '-'}</span>
+                {result.source && (
+                  <span className="ml-2 text-xs font-mono text-muted-foreground">({result.source})</span>
+                )}
+              </div>
+              {result.notes && (
+                <div className="rounded-md border bg-muted/40 px-3 py-2">
+                  <div className="text-xs font-medium text-muted-foreground mb-1">
+                    {t('systemUpdate.releaseNotes', '更新说明')}
+                  </div>
+                  <pre className="whitespace-pre-wrap break-words font-sans text-sm text-foreground max-h-60 overflow-auto">
+                    {result.notes}
+                  </pre>
+                </div>
+              )}
             </div>
           )}
 
@@ -143,11 +159,14 @@ export default function SystemUpdatePage() {
   )
 }
 
-/** Control Plane 自更新卡片：当前版本 vs 最新 + 自更新按钮。 */
+/** Control Plane 自更新卡片：当前版本 vs 最新 + 自更新按钮 + 回滚（有备份时）。 */
 function ControlPlaneCard({ cp, latest, onUpgraded }: { cp: ComponentStatus; latest: string; onUpgraded: () => void }) {
   const { t } = useTranslation()
   const upgrade = useUpgradeControlPlane()
+  const rollback = useRollbackControlPlane()
   const [confirm, setConfirm] = useState(false)
+  const [confirmRollback, setConfirmRollback] = useState(false)
+  const hasBackup = !!cp.backupVersion
 
   const doUpgrade = () => {
     setConfirm(false)
@@ -163,6 +182,22 @@ function ControlPlaneCard({ cp, latest, onUpgraded }: { cp: ComponentStatus; lat
         setTimeout(onUpgraded, 4000)
       },
       onError: (e) => toast.error(errMsg(e, t('systemUpdate.cpUpgradeFailed', '控制台升级失败'))),
+    })
+  }
+
+  const doRollback = () => {
+    setConfirmRollback(false)
+    rollback.mutate(undefined, {
+      onSuccess: (ack) => {
+        toast.success(
+          t('systemUpdate.cpRollbackStarted', '控制台已回滚（{{from}} → {{to}}），即将平滑重启', {
+            from: ack.fromVersion,
+            to: ack.toVersion,
+          }),
+        )
+        setTimeout(onUpgraded, 4000)
+      },
+      onError: (e) => toast.error(errMsg(e, t('systemUpdate.cpRollbackFailed', '控制台回滚失败'))),
     })
   }
 
@@ -182,6 +217,18 @@ function ControlPlaneCard({ cp, latest, onUpgraded }: { cp: ComponentStatus; lat
           <VersionBadge current={cp.currentVersion} latest={latest} updateAvailable={cp.updateAvailable} artifactAvailable={cp.artifactAvailable} />
           <Button
             size="sm"
+            variant="outline"
+            disabled={!hasBackup || rollback.isPending}
+            onClick={() => setConfirmRollback(true)}
+            title={hasBackup ? undefined : t('systemUpdate.noBackup', '无可回滚的备份')}
+          >
+            <ArrowDownCircle className="size-4" />
+            {hasBackup
+              ? t('systemUpdate.rollbackTo', '回滚 v{{v}}', { v: cp.backupVersion })
+              : t('systemUpdate.rollback', '回滚')}
+          </Button>
+          <Button
+            size="sm"
             disabled={!cp.updateAvailable || upgrade.isPending}
             onClick={() => setConfirm(true)}
           >
@@ -199,6 +246,16 @@ function ControlPlaneCard({ cp, latest, onUpgraded }: { cp: ComponentStatus; lat
         confirmLabel={t('systemUpdate.upgrade', '升级')}
         onConfirm={doUpgrade}
         onCancel={() => setConfirm(false)}
+      />
+
+      <DangerConfirm
+        open={confirmRollback}
+        title={t('systemUpdate.cpRollbackConfirm', '确定回滚 Control Plane？')}
+        description={t('systemUpdate.cpRollbackConfirmDesc', '将把控制台换回升级前备份（v{{v}}）、sha256 校验后替换并平滑重启。重启期间 Web 短暂不可用，重连后即为旧版本。', { v: cp.backupVersion })}
+        scope="platform"
+        confirmLabel={t('systemUpdate.rollback', '回滚')}
+        onConfirm={doRollback}
+        onCancel={() => setConfirmRollback(false)}
       />
     </div>
   )
@@ -261,11 +318,14 @@ function NodesSection({
   )
 }
 
-/** 单个节点行：版本对比 + 升级。 */
+/** 单个节点行：版本对比 + 升级 + 回滚（有备份时）。 */
 function NodeRow({ node, latest, disabled, onUpgraded }: { node: ComponentStatus; latest: string; disabled: boolean; onUpgraded: () => void }) {
   const { t } = useTranslation()
   const upgrade = useUpgradeNode()
+  const rollback = useRollbackNode()
   const [confirm, setConfirm] = useState(false)
+  const [confirmRollback, setConfirmRollback] = useState(false)
+  const hasBackup = !!node.backupVersion
 
   const doUpgrade = () => {
     setConfirm(false)
@@ -277,6 +337,20 @@ function NodeRow({ node, latest, disabled, onUpgraded }: { node: ComponentStatus
           onUpgraded()
         },
         onError: (e) => toast.error(errMsg(e, t('systemUpdate.nodeUpgradeFailed', '节点升级失败'))),
+      },
+    )
+  }
+
+  const doRollback = () => {
+    setConfirmRollback(false)
+    rollback.mutate(
+      { nodeId: node.nodeId! },
+      {
+        onSuccess: (ack) => {
+          toast.success(t('systemUpdate.nodeRolledBack', '节点已回滚（{{from}} → {{to}}）', { from: ack.fromVersion, to: ack.toVersion || node.backupVersion }))
+          onUpgraded()
+        },
+        onError: (e) => toast.error(errMsg(e, t('systemUpdate.nodeRollbackFailed', '节点回滚失败'))),
       },
     )
   }
@@ -297,16 +371,31 @@ function NodeRow({ node, latest, disabled, onUpgraded }: { node: ComponentStatus
         <VersionBadge current={node.currentVersion} latest={latest} updateAvailable={node.updateAvailable} artifactAvailable={node.artifactAvailable} offline={!node.online} />
       </td>
       <td className="p-3">
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 px-2"
-          disabled={!node.updateAvailable || upgrade.isPending || disabled}
-          onClick={() => setConfirm(true)}
-        >
-          <ArrowUpCircle className="size-4" />
-          {t('systemUpdate.upgrade', '升级')}
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2"
+            disabled={!node.online || !hasBackup || rollback.isPending || disabled}
+            onClick={() => setConfirmRollback(true)}
+            title={hasBackup ? undefined : t('systemUpdate.noBackup', '无可回滚的备份')}
+          >
+            <ArrowDownCircle className="size-4" />
+            {hasBackup
+              ? t('systemUpdate.rollbackTo', '回滚 v{{v}}', { v: node.backupVersion })
+              : t('systemUpdate.rollback', '回滚')}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2"
+            disabled={!node.updateAvailable || upgrade.isPending || disabled}
+            onClick={() => setConfirm(true)}
+          >
+            <ArrowUpCircle className="size-4" />
+            {t('systemUpdate.upgrade', '升级')}
+          </Button>
+        </div>
 
         <DangerConfirm
           open={confirm}
@@ -316,6 +405,16 @@ function NodeRow({ node, latest, disabled, onUpgraded }: { node: ComponentStatus
           confirmLabel={t('systemUpdate.upgrade', '升级')}
           onConfirm={doUpgrade}
           onCancel={() => setConfirm(false)}
+        />
+
+        <DangerConfirm
+          open={confirmRollback}
+          title={t('systemUpdate.nodeRollbackConfirm', '确定回滚该节点？')}
+          description={t('systemUpdate.nodeRollbackConfirmDesc', '将令该节点换回升级前备份（v{{v}}）、sha256 校验后替换并重启 Worker。daemon 模式下运行中的游戏服不掉。', { v: node.backupVersion })}
+          scope="platform"
+          confirmLabel={t('systemUpdate.rollback', '回滚')}
+          onConfirm={doRollback}
+          onCancel={() => setConfirmRollback(false)}
         />
       </td>
     </tr>
