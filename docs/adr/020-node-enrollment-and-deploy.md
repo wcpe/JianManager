@@ -1,7 +1,7 @@
 # ADR-020: 节点 enrollment 一键安装与部署机制
 
 - **日期**: 2026-06-23
-- **状态**: accepted
+- **状态**: accepted（§4「分发来源」立场 `superseded-by ADR-036`，见该节小字与 ADR-036 §7；enrollment / 校验 / 编排其余立场仍有效）
 - **上下文**: FR-004 已实现 Worker Node 启动时经 gRPC `Register` 注册到 Control Plane、换取 `node_uuid`/`node_secret` 并以 `node_secret` 鉴权心跳。但当前注册是「**无凭据自助注册**」：任何能连到 CP gRPC 端口的进程，只要给个 `name` 就能注册成节点（`Register` 不校验任何调用方身份），且 Worker 的运行参数全靠手工设置环境变量（`cmd/worker/main.go` 只读 env，配套的 `internal/worker/config.go` / `configs/worker.yaml` 形同虚设、从未被加载）。运营者要新增一台节点，得手动：拷二进制、设一堆 `JIANMANAGER_*` 环境变量、保证 CP 地址可达、手动常驻进程。FR-080 要求「**傻瓜部署**」：面板「添加节点」生成一条一键命令，到目标机器粘贴执行即自动装好、注册、上线。这要求解决两件事——(1) 注册必须**带凭据**（不能让陌生进程白嫖注册），(2) 安装/配置/常驻必须**脚本化**。同时面板自更新（FR-081，CP/Worker 二进制在线升级）与本主题同属「节点分发与运维」范畴，其分发来源/校验/编排的取舍一并在此立。
 
 ## 决策
@@ -38,7 +38,9 @@
 
 ### 4. 面板自更新（FR-081）的来源/校验/编排立场（本 ADR 立、FR-081 落）
 
-- **分发来源**：可配更新源（release feed / 私有 URL），与安装脚本的二进制下载源同源同治。
+> **本节「分发来源」立场 `superseded-by ADR-036`（FR-175 落地）**：发布制品的权威来源已收敛为 **GitHub Releases**，自更新改为原生读 GitHub Releases API 解析制品（stable=`/releases/latest`、prerelease=`/releases/tags/nightly`，sha256 取自 release 的 `checksums.txt`，token 可选，经 FR-174 出站代理下载），详见 ADR-036 §7。下文「可配 feed 源（release feed / 私有 URL）」**降为可选回退**（`github_repo` 为空且 `feed_url` 非空时仍走原 feed 路径，不破坏 FR-081 既有行为）。**完整性校验（SHA-256）/ 编排（CP 自升 + gRPC 全网编排 + daemon 不杀游戏服 + 逐节点进度/隔离）/ 仅平台管理员 + 审计** 立场不变、继续有效。
+
+- **分发来源**（已被 ADR-036 §7 取代为 GitHub Releases，下文降为可选回退）：可配更新源（release feed / 私有 URL），与安装脚本的二进制下载源同源同治。
 - **完整性校验**：下载产物必须带 **SHA-256** 校验（同构制品库 ADR-011、客户端分发 ADR-022 的内容校验思路），校验不符拒绝替换。
 - **编排**：CP 自更新（下载→校验→替换→平滑重启）；Worker 升级**经 CP gRPC 编排**（CP 通知/推送 → Worker 下载校验替换重启），daemon 启动方式下**不杀游戏服**（ADR-003 wrapper 隔离保证子进程存活）。逐节点进度 + 失败回滚/重试。仅平台管理员 + 审计（FR-015）。本 ADR 仅定原则，具体 RPC/端点由 FR-081 实现并按需补 proto。
 
@@ -73,4 +75,4 @@
 - **ADR-010（便携数据根）**：Worker 身份文件 `etc/node-identity.json`、`worker.yaml` 默认数据根均沿用 FHS 布局，迁移数据根即迁移节点身份与配置。
 - **ADR-011（制品库）/ ADR-022（客户端分发）**：二进制下载与自更新的 SHA-256 完整性校验思路与之同源（内容寻址 + 校验和），但节点分发面向运营者宿主、与面向玩家的客户端分发（拉取密钥 + 签名 manifest）是物理隔离的两套分发面。
 - **FR-004（节点注册与心跳）**：本 ADR 扩展其 `Register` 为「凭 token 准入」，心跳 `node_secret` 鉴权不变。
-- **FR-081（面板自更新）**：其分发来源/SHA-256 校验/CP-gRPC 编排/审计原则由本 ADR §4 确立，实现与按需补 proto 由 FR-081 完成。
+- **FR-081（面板自更新）**：其 SHA-256 校验/CP-gRPC 编排/审计原则由本 ADR §4 确立，实现与按需补 proto 由 FR-081 完成。其**分发来源**立场（§4「可配 feed 源」）已 `superseded-by ADR-036`，由 **FR-175** 切换为读 GitHub Releases API（见 ADR-036 §7）；feed 降为可选回退。

@@ -44,10 +44,29 @@
 - `go:embed` 对**缺失/空目录**会编译失败（无「优雅缺省」分支）。故发布管线的 `prepare-embeds` job 必须产出所有 embed 目录的真实内容；任一内嵌步骤失败即 fail-fast，不产出「声称内嵌实则没有」的二进制。
 - `embed-cfr` 的 sha256 pin 必须与 `internal/worker/decompiler/cfr.go` 的 `cfrSHA256` 常量一致（pin 不符 CI 失败）。
 
-### 6. 与 ADR-020 §4 的关系（取代立场，落地留 FR-175）
+### 6. 与 ADR-020 §4 的关系（取代立场，FR-175 已落地）
 
 - 本 ADR 取代 ADR-020 §4「可配 feed 源（release feed / 私有 URL）」的**分发来源立场**：发布制品的权威来源收敛为 **GitHub Releases**，自更新改为读 GitHub Releases API 解析制品（按 §1 命名 + §2 checksums 校验 + §3 渠道区分）。
-- **但 FR-173 仅确立产物 / 渠道契约，不改自更新代码**。将 ADR-020 §4 标 `superseded-by ADR-036` 的动作，由 **FR-175**（真正改自更新来源为 GitHub Releases API）落地时执行，并在彼时补「自更新读 GitHub Releases API + stable/prerelease 渠道 + 经 FR-174 出站代理下载」的来源决策。本 ADR 先立「产物 / 渠道契约」，避免 FR-173 未动自更新代码就翻旧决策、造成文档与实现脱节。
+- **FR-173 仅确立产物 / 渠道契约，不改自更新代码**。将 ADR-020 §4 标 `superseded-by ADR-036` 的动作、以及「自更新读 GitHub Releases API + stable/prerelease 渠道 + 经 FR-174 出站代理下载」的来源决策，由 **FR-175** 落地（见下 §7）。本 ADR 先立「产物 / 渠道契约」、再由 FR-175 补「消费侧来源决策」，避免 FR-173 未动自更新代码就翻旧决策、造成文档与实现脱节。
+
+### 7. 自更新对接 GitHub Releases（FR-175 落地的消费侧决策）
+
+本 §由 **FR-175** 追加，确立自更新（FR-081 已交付链路）**原生消费 GitHub Releases API** 的来源决策，落地 §6 承诺的「来源切换 + ADR-020 §4 取代」。
+
+- **原生读 GitHub Releases API，不再要求手工 feed.json**：CP 自更新「拿到 `*Feed`」这一步从「读 `feed_url` 指向的 JSON manifest」改为「调 GitHub Releases API + 解析 release JSON + 下载 `checksums.txt` 资产组装等价的归一 `Feed`」。FR-081 既有编排（`SelectArtifact` / 版本比对 / 下载校验替换 / gRPC 下发 / rollout）**零改动**——只换「取 `Feed`」的数据源。
+- **渠道 ↔ GitHub 端点映射**（落地 §3 渠道契约的消费侧）：
+  - `stable`（默认）→ `GET https://api.github.com/repos/{repo}/releases/latest`（GitHub 该端点**天然排除 prerelease/draft**，即只返回最新正式 release）。
+  - `prerelease` → `GET https://api.github.com/repos/{repo}/releases/tags/nightly`（取 §3 的滚动 `nightly` 预发布，tag 名与 FR-173 workflow 强耦合，同属本 ADR 契约）。
+- **归一映射**：`tag_name`→`Feed.Version`、`body`→`Feed.Notes`、`assets[].browser_download_url`→各制品 URL；sha256 **取自 release 的 `checksums.txt` 资产**（按 §2 行格式 `<sha256(小写)>␠␠<filename>` 解析为 `map[filename]sha256`）。资产名按 §1 命名 `<component>-<os>-<arch>[.exe]` 反解出 `component`/`os`/`arch`。
+- **无 `checksums.txt` 即视为「无可信源」报错，绝不裸下载**：sha256 是唯一完整性根（§2），release 缺 `checksums.txt`（或某资产无对应 sha256 条目）则该资产不可信、不放行（缺 sha256 的资产跳过并记日志，整 release 无 `checksums.txt` 直接报错）。这是安全底线，FR-173 workflow 保证产出 `checksums.txt`。
+- **token 可选**：GitHub API 匿名限流 60 次/时，手动触发自更新（每次检查打 1~2 次 API：release + checksums）足够；配置 `github_token` 后请求带 `Authorization: Bearer`，提升限流额度。请求统一带 `Accept: application/vnd.github+json` + `X-GitHub-Api-Version: 2022-11-28`。
+- **经 FR-174 出站代理下载**：API 调用与 `checksums.txt` / 二进制下载均走 FR-174 注入的进程级出站 client（`SelfUpdateService.outboundClient()`）；`browser_download_url` 的 302 重定向到 `objects.githubusercontent.com` 由标准库 `http.Client` 默认跟随、同样经代理。Worker 升级仍由 CP 经 gRPC 下发 `download_url`+`sha256`，Worker 侧用自己的代理 client 下载（FR-174 已就位）。
+- **限流降级**：GitHub API 返回 `403`/`429` 视为限流（新增错误 `ErrUpdateRateLimited` → HTTP `429` + 错误码 `UPDATE_RATE_LIMITED`）；`404` 映射既有 `ErrUpdateNoArtifact`（仓库/渠道无 release）。沿用 FR-081 既有错误码体系（router 错误映射），不 5xx 误导。
+- **向后兼容（feed 降为可选回退）**：`feed_url`/`binary_base_url` 保留为可选回退——`github_repo` 为空且 `feed_url` 非空时仍走原 feed JSON 路径（FR-081 既有行为与测试不破）。`Configured()` 判据放宽为「`github_repo` 非空 **或** `feed_url` 非空」。来源经新增 `CheckResult.Source`（`github:owner/repo@channel` 或 `feed`）透出，前端可选展示、不强制改造。
+- **配置（加性）**：`control-plane.yaml` 的 `update` 段加 `github_repo`（默认 `wcpe/jianmanager`，非空即启用 GitHub 源）、`channel`（`stable` 默认 / `prerelease`）、`github_token`（默认空，`${ENV}` 注入）。
+- **不做**：自动定时检查 / 自动升级（仍仅手动，沿用 FR-081 边界）、任意历史版本回拉（仍 latest-only：stable=最新正式、prerelease=nightly）、二进制签名（sha256 完整性即范围；签名属客户端 OTA FR-087 线）。
+
+至此 **ADR-020 §4 的 feed 源立场正式被本 ADR 取代**（ADR-020 §4 已标 `superseded-by ADR-036`），分发与自更新来源统一收敛到 GitHub Releases，feed 仅作可选回退。
 
 ## 理由
 
@@ -82,4 +101,4 @@
 - **FR-081（面板自更新）**：其消费的制品命名 / sha256 校验由本 ADR §1/§2 固化；当前 feed/URL 来源（ADR-020 §4）由 FR-175 切换为 GitHub Releases。
 - **FR-173（CI/CD 发布管线）**：本 ADR 的落地 FR——产出 release 与制品、固化契约。
 - **FR-174（出站网络代理）**：FR-175 经 GitHub Releases API 下载制品时走 FR-174 的出站代理。
-- **FR-175（自更新对接 GitHub Releases）**：本 ADR 契约的消费方，落地时执行 ADR-020 §4 的 `superseded-by` 标记与来源决策补全。
+- **FR-175（自更新对接 GitHub Releases）**：本 ADR 契约的消费方，**已落地**——见 §7「自更新对接 GitHub Releases」决策段；FR-175 执行了 ADR-020 §4 的 `superseded-by ADR-036` 标记，并把自更新来源切换为 GitHub Releases API（stable/prerelease 渠道、checksums 取 sha256、token 可选、经 FR-174 代理）。
