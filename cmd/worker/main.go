@@ -253,8 +253,11 @@ func runWorker() {
 		Host:             host,
 	}
 	if identity != nil {
-		// 重注册：沿用既有身份的节点名（CP 按 name 命中放行，不强制 token）。
+		// 重注册：沿用既有身份的节点名，并经 metadata 出示 node_uuid + node_secret，
+		// CP 据此按 UUID 匹配既有节点（而非可重复的 name），杜绝重名覆写（见 ADR-039）。
 		regCfg.NodeName = identity.NodeName
+		regCfg.NodeUUID = identity.NodeUUID
+		regCfg.NodeSecret = identity.NodeSecret
 		slog.Info("发现本地节点身份，复用既有身份重注册", "nodeUUID", identity.NodeUUID, "name", identity.NodeName)
 	} else {
 		// 首次注册：携带一次性 enrollment token。缺 token 直接退出（避免无效注册无限重试刷日志）。

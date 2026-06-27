@@ -24,6 +24,12 @@ const nodeSecretHeader = "node-secret"
 // 与 internal/worker/register 中的常量保持一致。token 经 metadata 传递、不改 proto。
 const enrollTokenHeader = "enroll-token"
 
+// nodeUUIDHeader 注册请求中携带本地持久化 node_uuid 的 gRPC metadata header 名（见 ADR-039）。
+// 与 internal/worker/register 中的常量保持一致。升级后的 Worker 重注册时经 metadata 出示
+// node_uuid + node_secret 证明身份，CP 据此按 UUID（而非可重复的 name）匹配既有节点，
+// 杜绝「另一台机器用同名注册覆写旧节点身份」的 BUG-A。uuid 经 metadata 传递、不改 proto。
+const nodeUUIDHeader = "node-uuid"
+
 // MetricIngester 把心跳负载里的节点/实例指标落库为时序样本（FR-060）。
 // 在 grpc 包内以接口声明、由 service.MetricService 实现，避免 grpc→service 反向依赖
 // （service 已 import grpc）；接口只引用中立的 workerpb，无循环。
@@ -73,97 +79,162 @@ func (h *ControlPlaneHandler) SetEnrollmentValidator(v EnrollmentValidator) {
 }
 
 // Register 处理 Worker Node 注册。
+//
+// 身份匹配优先级（见 ADR-039，修复 BUG-A「节点重名覆盖」）：
+//  1. metadata 携带 node-uuid 且命中库中节点 → 校验 node-secret：匹配则按 UUID 重注册
+//     （更新 host/port/os/arch，允许改名）；secret 不符回 PermissionDenied，绝不覆写。
+//  2. 过渡兼容：未升级旧 Worker 只带 name，name 命中既有节点且本次连接 host 与库存 host
+//     一致（同机重启信号）→ 放行重注册并告警建议升级；host 不一致落到 3。
+//  3. 否则视为新节点首注册：必须凭有效 enrollment token 准入（FR-080，见 ADR-020）；
+//     若上报名与既有节点撞名 → 回 AlreadyExists 拒绝（提示改名），绝不覆写既有身份。
+//
+// 之所以三级而非纯 UUID：纯 UUID 会破坏 ADR-020 之前无身份文件的 legacy 节点重启；
+// 同机 host 兼容兜住未升级节点的真实重启，待全网 Worker 带 uuid/secret 后可移除（届时纯 UUID 锚定）。
 func (h *ControlPlaneHandler) Register(ctx context.Context, req *workerpb.RegisterRequest) (*workerpb.RegisterResponse, error) {
-	// 查找已有节点（按名称匹配）
-	var node model.Node
-	err := h.db.Where("name = ?", req.Name).First(&node).Error
-
-	if err == gorm.ErrRecordNotFound {
-		// 新节点首次落库：必须凭有效 enrollment token 准入（FR-080，见 ADR-020）。
-		// token 经 metadata 携带、CP 原子消费（一次性）。校验失败回 PermissionDenied，
-		// Worker 据此明确报错退出、不重试。未注入校验器（开发/既有部署零配置）则退化为自助注册。
-		newUUID := uuid.New().String()
-		if h.enroll != nil {
-			enrollToken := enrollTokenFromContext(ctx)
-			if cerr := h.enroll.ConsumeForNewNode(enrollToken, newUUID); cerr != nil {
-				slog.Warn("新节点注册被拒：enrollment token 无效", "name", req.Name)
-				return nil, status.Errorf(codes.PermissionDenied,
-					"新节点注册需要有效的 enrollment token（请在面板「添加节点」重新生成）")
+	// 1. UUID 证明：升级后 Worker 经 metadata 出示 node-uuid + node-secret。
+	if claimedUUID := nodeUUIDFromContext(ctx); claimedUUID != "" {
+		var node model.Node
+		err := h.db.Where("uuid = ?", claimedUUID).First(&node).Error
+		if err == nil {
+			// 命中既有节点：必须 secret 匹配方可重注册（防伪造 uuid 冒认身份）。
+			if node.Secret != nodeSecretFromContext(ctx) {
+				slog.Warn("节点注册被拒：node_secret 与 UUID 不匹配", "name", req.Name, "uuid", claimedUUID)
+				return nil, status.Errorf(codes.PermissionDenied, "节点身份校验失败（node_secret 不匹配）")
 			}
+			return h.reregisterExisting(&node, req, "uuid")
 		}
-
-		// 创建记录
-		now := time.Now()
-		node = model.Node{
-			UUID:          newUUID,
-			Name:          req.Name,
-			Host:          req.Host,
-			GRPCPort:      int(req.GrpcPort),
-			WSPort:        int(req.WsPort),
-			Secret:        uuid.New().String(),
-			Status:        model.NodeStatusOnline,
-			OS:            req.Os,
-			Arch:          req.Arch,
-			CPUCores:      int(req.CpuCores),
-			MemoryMB:      req.MemoryMb,
-			DiskTotalMB:   req.DiskTotalMb,
-			LastHeartbeat: &now,
-		}
-
-		if err := h.db.Create(&node).Error; err != nil {
-			slog.Error("创建节点失败", "name", req.Name, "error", err)
+		if err != gorm.ErrRecordNotFound {
 			return nil, err
 		}
+		// claimedUUID 不在库（如残留身份指向已删节点）：不命中，落到下方 token 新建路径。
+	}
 
-		slog.Info("新节点已注册", "name", req.Name, "uuid", node.UUID)
-	} else if err != nil {
+	// 2. 过渡兼容 / 3. 新建：按 name 查既有节点。
+	var existing model.Node
+	err := h.db.Where("name = ?", req.Name).First(&existing).Error
+	switch {
+	case err == nil:
+		// name 命中。仅当本次连接 host 与库存 host 一致（同机重启）才放行重注册；
+		// host 不一致正是「另一台机器冒用同名」——拒绝，绝不覆写（BUG-A 根因）。
+		if existing.Host == req.Host {
+			slog.Warn("节点未出示 UUID 身份、按同机 host 命中重注册，建议升级 Worker 以启用 UUID 身份",
+				"name", req.Name, "host", req.Host, "uuid", existing.UUID)
+			return h.reregisterExisting(&existing, req, "same-host-legacy")
+		}
+		slog.Warn("节点注册被拒：节点名已被占用且非同机重启（疑似异机冒用同名）",
+			"name", req.Name, "reqHost", req.Host, "existingHost", existing.Host)
+		return nil, status.Errorf(codes.AlreadyExists,
+			"节点名 %q 已被占用，请改用其它名称（或在已占用机器上升级 Worker 以启用 UUID 身份重注册）", req.Name)
+	case err == gorm.ErrRecordNotFound:
+		// 名字未占用：作为全新节点首注册。
+		return h.createNewNode(ctx, req)
+	default:
 		return nil, err
-	} else {
-		// 已有节点，更新信息
-		updates := map[string]interface{}{
-			"host":           req.Host,
-			"grpc_port":      req.GrpcPort,
-			"ws_port":        req.WsPort,
-			"status":         model.NodeStatusOnline,
-			"os":             req.Os,
-			"arch":           req.Arch,
-			"cpu_cores":      req.CpuCores,
-			"memory_mb":      req.MemoryMb,
-			"disk_total_mb":  req.DiskTotalMb,
-			"last_heartbeat": time.Now(),
-		}
+	}
+}
 
-		if err := h.db.Model(&node).Updates(updates).Error; err != nil {
-			slog.Error("更新节点失败", "name", req.Name, "error", err)
-			return nil, err
-		}
+// reregisterExisting 对已确认身份的既有节点重注册：更新 host/port/os/arch/资源与心跳时间，
+// 重建反向 gRPC 连接，返回既有 UUID/secret（不重签）。matchBy 仅用于日志区分匹配路径。
+func (h *ControlPlaneHandler) reregisterExisting(node *model.Node, req *workerpb.RegisterRequest, matchBy string) (*workerpb.RegisterResponse, error) {
+	updates := map[string]interface{}{
+		"name":           req.Name, // 允许改名（UUID 锚定身份，name 降为可变标签，受唯一约束）
+		"host":           req.Host,
+		"grpc_port":      req.GrpcPort,
+		"ws_port":        req.WsPort,
+		"status":         model.NodeStatusOnline,
+		"os":             req.Os,
+		"arch":           req.Arch,
+		"cpu_cores":      req.CpuCores,
+		"memory_mb":      req.MemoryMb,
+		"disk_total_mb":  req.DiskTotalMb,
+		"last_heartbeat": time.Now(),
+	}
+	if err := h.db.Model(node).Updates(updates).Error; err != nil {
+		slog.Error("更新节点失败", "name", req.Name, "error", err)
+		return nil, err
+	}
+	slog.Info("节点已重新注册", "name", req.Name, "uuid", node.UUID, "matchBy", matchBy)
 
-		slog.Info("节点已重新注册", "name", req.Name, "uuid", node.UUID)
+	h.connectWorker(node.UUID, req)
+	return &workerpb.RegisterResponse{NodeUuid: node.UUID, NodeSecret: node.Secret}, nil
+}
+
+// createNewNode 创建全新节点：凭有效 enrollment token 准入（FR-080，见 ADR-020），
+// 换发全新 UUID/secret。未注入校验器（开发/既有部署零配置）则退化为自助注册。
+func (h *ControlPlaneHandler) createNewNode(ctx context.Context, req *workerpb.RegisterRequest) (*workerpb.RegisterResponse, error) {
+	newUUID := uuid.New().String()
+	if h.enroll != nil {
+		enrollToken := enrollTokenFromContext(ctx)
+		if cerr := h.enroll.ConsumeForNewNode(enrollToken, newUUID); cerr != nil {
+			slog.Warn("新节点注册被拒：enrollment token 无效", "name", req.Name)
+			return nil, status.Errorf(codes.PermissionDenied,
+				"新节点注册需要有效的 enrollment token（请在面板「添加节点」重新生成）")
+		}
 	}
 
-	// 建立到 Worker Node 的反向 gRPC 连接
-	if req.GrpcPort > 0 {
-		addr := fmt.Sprintf("%s:%d", req.Host, req.GrpcPort)
-		if err := h.pool.Connect(node.UUID, addr); err != nil {
-			slog.Warn("连接 Worker Node 失败，稍后重试", "nodeUUID", node.UUID, "addr", addr, "error", err)
-		} else if h.onWorkerConnect != nil {
-			h.onWorkerConnect(node.UUID)
-		}
+	now := time.Now()
+	node := model.Node{
+		UUID:          newUUID,
+		Name:          req.Name,
+		Host:          req.Host,
+		GRPCPort:      int(req.GrpcPort),
+		WSPort:        int(req.WsPort),
+		Secret:        uuid.New().String(),
+		Status:        model.NodeStatusOnline,
+		OS:            req.Os,
+		Arch:          req.Arch,
+		CPUCores:      int(req.CpuCores),
+		MemoryMB:      req.MemoryMb,
+		DiskTotalMB:   req.DiskTotalMb,
+		LastHeartbeat: &now,
 	}
+	if err := h.db.Create(&node).Error; err != nil {
+		slog.Error("创建节点失败", "name", req.Name, "error", err)
+		return nil, err
+	}
+	slog.Info("新节点已注册", "name", req.Name, "uuid", node.UUID)
 
-	return &workerpb.RegisterResponse{
-		NodeUuid:   node.UUID,
-		NodeSecret: node.Secret,
-	}, nil
+	h.connectWorker(node.UUID, req)
+	return &workerpb.RegisterResponse{NodeUuid: node.UUID, NodeSecret: node.Secret}, nil
+}
+
+// connectWorker 建立到 Worker Node 的反向 gRPC 连接（req.GrpcPort>0 时）。失败仅告警、不阻断注册。
+func (h *ControlPlaneHandler) connectWorker(nodeUUID string, req *workerpb.RegisterRequest) {
+	if req.GrpcPort <= 0 {
+		return
+	}
+	addr := fmt.Sprintf("%s:%d", req.Host, req.GrpcPort)
+	if err := h.pool.Connect(nodeUUID, addr); err != nil {
+		slog.Warn("连接 Worker Node 失败，稍后重试", "nodeUUID", nodeUUID, "addr", addr, "error", err)
+		return
+	}
+	if h.onWorkerConnect != nil {
+		h.onWorkerConnect(nodeUUID)
+	}
 }
 
 // enrollTokenFromContext 从 gRPC metadata 取 enrollment token 明文（FR-080）；缺失返回空串。
 func enrollTokenFromContext(ctx context.Context) string {
+	return metadataValue(ctx, enrollTokenHeader)
+}
+
+// nodeUUIDFromContext 从 gRPC metadata 取 Worker 出示的 node_uuid（ADR-039）；缺失返回空串。
+func nodeUUIDFromContext(ctx context.Context) string {
+	return metadataValue(ctx, nodeUUIDHeader)
+}
+
+// nodeSecretFromContext 从 gRPC metadata 取 Worker 出示的 node_secret（ADR-039）；缺失返回空串。
+func nodeSecretFromContext(ctx context.Context) string {
+	return metadataValue(ctx, nodeSecretHeader)
+}
+
+// metadataValue 从入站 gRPC metadata 取首个指定 header 值；无 metadata 或无该 header 返回空串。
+func metadataValue(ctx context.Context, header string) string {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
 		return ""
 	}
-	if vals := md.Get(enrollTokenHeader); len(vals) > 0 {
+	if vals := md.Get(header); len(vals) > 0 {
 		return vals[0]
 	}
 	return ""

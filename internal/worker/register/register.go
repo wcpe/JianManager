@@ -24,6 +24,14 @@ import (
 // 与 internal/controlplane/grpc 中的常量保持一致。token 经 metadata 传递、不改 proto。
 const enrollTokenHeader = "enroll-token"
 
+// nodeUUIDHeader / nodeSecretHeader 重注册请求携带本地身份的 gRPC metadata header 名（见 ADR-039）。
+// 与 internal/controlplane/grpc、internal/worker/heartbeat 中的常量保持一致。
+// 重注册时出示二者，CP 据此按 UUID（而非可重复的 name）匹配既有节点，杜绝重名覆写（BUG-A）。
+const (
+	nodeUUIDHeader   = "node-uuid"
+	nodeSecretHeader = "node-secret"
+)
+
 // Config 注册配置。
 type Config struct {
 	ControlPlaneAddr string // Control Plane gRPC 地址
@@ -33,8 +41,13 @@ type Config struct {
 	Host             string // 本机 IP（留空自动检测，优先 127.0.0.1）
 	// EnrollToken enrollment token 明文（FR-080，见 ADR-020）。
 	// 仅新节点首次注册（无本地身份文件）时携带；经 gRPC metadata 传给 CP 校验消费。
-	// 已有本地身份的重注册留空（CP 按 name 命中放行，不强制 token）。
+	// 已有本地身份的重注册留空（CP 按 UUID/同机 host 匹配放行，不强制 token）。
 	EnrollToken string
+	// NodeUUID / NodeSecret 本地持久化的节点身份（见 ADR-039）。
+	// 重注册时（已有本地身份文件）填入并经 gRPC metadata 出示，CP 按 UUID 匹配既有节点、
+	// 校验 secret 后重注册，避免 name 锚定带来的重名覆写。首注册留空。
+	NodeUUID   string
+	NodeSecret string
 }
 
 // Result 注册结果。
@@ -59,12 +72,16 @@ func Register(ctx context.Context, cfg Config) (*Result, error) {
 	info := collectSystemInfo(cfg)
 
 	// 首次注册携带 enrollment token（经 metadata，不改 proto，FR-080）。
-	// 重注册（已有本地身份）不带 token，CP 按 name 命中放行。
+	// 重注册（已有本地身份）出示 node_uuid + node_secret，CP 按 UUID 匹配既有节点（ADR-039）。
 	if cfg.EnrollToken != "" {
 		ctx = metadata.AppendToOutgoingContext(ctx, enrollTokenHeader, cfg.EnrollToken)
 	}
+	if cfg.NodeUUID != "" && cfg.NodeSecret != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, nodeUUIDHeader, cfg.NodeUUID, nodeSecretHeader, cfg.NodeSecret)
+	}
 
-	slog.Info("正在向 Control Plane 注册", "addr", cfg.ControlPlaneAddr, "name", cfg.NodeName, "withEnrollToken", cfg.EnrollToken != "")
+	slog.Info("正在向 Control Plane 注册", "addr", cfg.ControlPlaneAddr, "name", cfg.NodeName,
+		"withEnrollToken", cfg.EnrollToken != "", "withIdentity", cfg.NodeUUID != "")
 
 	resp, err := client.Register(ctx, info)
 	if err != nil {
