@@ -8,6 +8,7 @@ import {
   useRestartInstance,
   useKillInstance,
 } from '@/api/instances'
+import { useNodes } from '@/api/nodes'
 import { useConsoleStore } from '@/stores/console'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { GRID_COLS, GRID_ROW_HEIGHT, cardTypeDef, type CardType } from '@/lib/workspace-card'
@@ -50,6 +51,7 @@ function nudgeRelayout(): void {
 export default function WorkspaceCanvas({ instanceId }: WorkspaceCanvasProps) {
   const { t } = useTranslation()
   const { data: instance } = useInstance(instanceId)
+  const { data: nodes } = useNodes()
   const closeInstance = useConsoleStore((s) => s.closeInstance)
 
   const start = useStartInstance()
@@ -77,6 +79,10 @@ export default function WorkspaceCanvas({ instanceId }: WorkspaceCanvasProps) {
   const cards = canvas?.cards ?? EMPTY_CARDS
   const fullscreenId = canvas?.fullscreenCardId ?? null
   const instanceName = instance?.name ?? `#${instanceId}`
+  // 节点名供页眉「类型·节点:端口」展示；离线/未取到回退到「节点 #id」。
+  const nodeName = instance
+    ? (nodes?.find((n) => n.id === instance.nodeId)?.name ?? t('console.unknownNode', { id: instance.nodeId }))
+    : ''
 
   const layout = useMemo<Layout[]>(() => cardsToLayout(cards), [cards])
 
@@ -107,6 +113,10 @@ export default function WorkspaceCanvas({ instanceId }: WorkspaceCanvasProps) {
         instanceId={instanceId}
         instanceName={instanceName}
         status={instance?.status ?? ''}
+        role={instance?.role ?? ''}
+        type={instance?.type ?? ''}
+        nodeName={nodeName}
+        serverPort={instance?.serverPort ?? 0}
         presetId={canvas?.presetId ?? 'ops'}
         userPresets={userPresets}
         hasInstance={!!instance}
