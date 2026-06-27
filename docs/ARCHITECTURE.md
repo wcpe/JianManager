@@ -876,6 +876,16 @@ data/
 **生产**: 多节点部署，Control Plane 一个 + Worker Node 多个
 **Docker**: `Dockerfile.control-plane` + `Dockerfile.worker` + `docker-compose.yml`
 
+### 12.1 构建与发布管线（GitHub Actions，FR-173，见 ADR-036）
+
+`.github/workflows/release.yml` 在 `ubuntu-latest` 全程交叉编译产出 GitHub Releases 制品，三 job 串联：
+
+- **prepare-embeds**（一次性产出全部 `go:embed` 资产，平台无关跨 matrix 复用）：`submodules: recursive` 拉取 `third_party/ServerProbe`，装 Go / Node20 / JDK21；构前端（`gen-licenses` → `vite build` → 复制到 `internal/controlplane/embed/dist/`）+ 内嵌探针 jar（`embed-probe`）+ 客户端更新器两件套（`embed-client-updater`，以 `--release 8` 在 JDK21 上构 Java8 字节码）+ CFR 反编译器（`embed-cfr`，sha256 pin 与 `decompiler/cfr.go` 常量一致）；embed 目录作 job artifact 上传。该 job 顺带解析触发类型算出注入版本经 job output 下传（正式=去前缀 tag `vX.Y.Z`，预发布=`0.0.0-dev+<shortsha>`）。
+- **build**（matrix `linux/amd64` + `windows/amd64`）：下载 embed artifact 还原到 `internal/**/embed/`，`GOOS/GOARCH go build -ldflags "-X .../internal/version.Version=<v>"` 编 control-plane 与 worker（共 4 个二进制），命名 `<component>-<os>-<arch>[.exe]`（ADR-036 §1）。
+- **release**：汇总 4 二进制 + 生成 `checksums.txt`（每件 sha256，ADR-036 §2），用 `scripts/changelog-extract.mjs` 取发布说明——push tag `v*` → 正式 release（取该版本段，`prerelease=false`）；push `master` → 覆盖固定 tag `nightly` 预发布（取 `[Unreleased]` 段，`prerelease=true`，先删旧 release 再重建以仅保留本次产物）。
+
+发布二进制**内嵌全部可选资产**「下载即用」：CP 自带前端 + 探针 + 客户端更新器，Worker 自带 CFR（ADR-036 §5）。`go:embed` 对缺失/空目录会编译失败，故 prepare-embeds 任一内嵌步骤失败即 fail-fast。版本注入在 build/release 两 job 按 prepare-embeds 同一 output 取值，保证二进制内 `version.Version` 与 release tag 一致。发布制品的命名/校验/渠道契约由 ADR-036 固化，供 FR-175 自更新对接 GitHub Releases 消费（ADR-020 §4 的 feed 来源立场由 FR-175 落地时标 superseded）。
+
 ## 13. MC 群组服模型（V2）
 
 > 对应 PRD FR-031~036、ADR-007/008。代理 + 多 Bukkit 子服的开服与运维。开发中。
