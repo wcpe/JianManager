@@ -50,7 +50,7 @@ export function SummaryChips({
             aria-pressed={clickable ? !!chip.active : undefined}
             className={cn(
               'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium shadow-soft transition-all duration-200 ease-ios',
-              clickable && 'cursor-pointer hover:-translate-y-px hover:shadow-lift',
+              clickable && 'cursor-pointer hover:shadow-lift',
               !clickable && 'cursor-default',
               chip.active
                 ? 'border-primary/50 bg-accent text-primary'

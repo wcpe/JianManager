@@ -24,7 +24,7 @@ export function Panel({
   icon?: React.ReactNode
   /** 图标块色调，默认主色。 */
   tone?: Tone
-  /** 启用 hover 抬升（轻抬 + 主色晕染阴影，iOS 缓动）。 */
+  /** 启用 hover 反馈（主色晕染阴影 shadow-lift，iOS 缓动；FR-176 去位移、只换阴影不抬位）。 */
   hoverable?: boolean
 }) {
   return (
@@ -33,7 +33,7 @@ export function Panel({
       className={cn(
         'flex min-h-0 flex-col rounded-xl border bg-card text-card-foreground shadow-soft',
         hoverable &&
-          'transition-[transform,box-shadow] duration-300 ease-ios hover:-translate-y-0.5 hover:shadow-lift',
+          'transition-[box-shadow] duration-300 ease-ios hover:shadow-lift',
         className,
       )}
       {...props}

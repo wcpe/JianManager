@@ -256,7 +256,7 @@ function Slot({ cell, slot }: { cell: RawItemSlot | null; slot: number }) {
       title={title}
       className={cn(
         'relative flex size-12 flex-col items-center justify-center overflow-hidden rounded-md border bg-accent/40 p-0.5',
-        'transition-transform duration-200 ease-ios hover:-translate-y-0.5 hover:bg-accent',
+        'transition-colors duration-200 ease-ios hover:bg-accent',
       )}
     >
       <span className="line-clamp-2 break-all text-center text-[9px] font-medium leading-tight text-foreground">

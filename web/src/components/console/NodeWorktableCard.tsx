@@ -48,7 +48,7 @@ export function NodeWorktableCard({
   const loadPct = node.cpuCores > 0 ? ((node.loadAvg1 ?? 0) / node.cpuCores) * 100 : 0
 
   return (
-    <div className="flex flex-col rounded-xl border bg-card p-4 text-card-foreground shadow-soft transition-[transform,box-shadow] duration-300 ease-ios hover:-translate-y-0.5 hover:shadow-lift">
+    <div className="flex flex-col rounded-xl border bg-card p-4 text-card-foreground shadow-soft transition-[box-shadow] duration-300 ease-ios hover:shadow-lift">
       <div className="flex items-center gap-3">
         <span className={cn('flex size-10 shrink-0 items-center justify-center rounded-xl', toneChipClass(online ? 'primary' : 'neutral'))}>
           <Server className="size-5" />

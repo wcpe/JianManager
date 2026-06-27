@@ -172,7 +172,7 @@ function toneDotClass(tone: Tone): string {
 
 /**
  * 配置行卡片（灵动行）：左语义图标块 + 主体（标题 + 属性/code 条件）+ 右侧 meta/pill/toggle/操作。
- * hover 轻抬（iOS 缓动）。作卡片视图时一行一卡；列表视图请直接用 shadcn Table（本原语专供卡片视图）。
+ * hover 换阴影反馈（iOS 缓动，FR-176 去位移不抬位）。作卡片视图时一行一卡；列表视图请直接用 shadcn Table（本原语专供卡片视图）。
  */
 export function ConfigRow({
   icon,
@@ -203,7 +203,7 @@ export function ConfigRow({
     <div
       className={cn(
         'flex items-center gap-3 rounded-xl border bg-card px-4 py-3 text-card-foreground shadow-soft',
-        'transition-[transform,box-shadow] duration-300 ease-ios hover:-translate-y-0.5 hover:shadow-lift',
+        'transition-[box-shadow] duration-300 ease-ios hover:shadow-lift',
         className,
       )}
     >

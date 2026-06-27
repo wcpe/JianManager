@@ -52,7 +52,7 @@ export function BotWorktableCard({
   const { icon: Icon, tone } = dimVisual(groupBy)
 
   return (
-    <div className="flex flex-col rounded-xl border bg-card text-card-foreground shadow-soft transition-[transform,box-shadow] duration-300 ease-ios hover:-translate-y-0.5 hover:shadow-lift">
+    <div className="flex flex-col rounded-xl border bg-card text-card-foreground shadow-soft transition-[box-shadow] duration-300 ease-ios hover:shadow-lift">
       <div className="flex flex-col gap-3 p-4">
         <div className="flex items-center gap-3">
           <Checkbox checked={checked} onCheckedChange={onCheck} aria-label={t('bots.select')} />

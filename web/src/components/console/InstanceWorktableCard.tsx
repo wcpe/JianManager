@@ -71,7 +71,7 @@ export function InstanceWorktableCard({
       : 0
 
   return (
-    <div className="group flex flex-col rounded-xl border bg-card p-4 text-card-foreground shadow-soft transition-[transform,box-shadow] duration-300 ease-ios hover:-translate-y-0.5 hover:shadow-lift">
+    <div className="group flex flex-col rounded-xl border bg-card p-4 text-card-foreground shadow-soft transition-[box-shadow] duration-300 ease-ios hover:shadow-lift">
       {/* 头部：图标块 + 名称 + 状态（运行呼吸灯）+ 菜单 */}
       <div className="flex items-center gap-3">
         <span className={cn('flex size-10 shrink-0 items-center justify-center rounded-xl', toneChipClass(statusTone(inst.status)))}>
