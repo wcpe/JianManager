@@ -129,6 +129,11 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.BusinessEvent{},
 		&model.EconomyBalanceMirror{},
 		&model.EconomyLedgerEntry{},
+		// 全局任务中心 + 站内信（FR-183，见 ADR-040）：长任务（Task）+ 滚动日志（TaskLog）+
+		// 站内信（Notification）；任务进度经心跳上报、CP 汇聚 upsert，终态发站内信。
+		&model.Task{},
+		&model.TaskLog{},
+		&model.Notification{},
 	); err != nil {
 		return err
 	}
