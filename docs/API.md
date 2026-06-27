@@ -1469,6 +1469,61 @@
 
 ---
 
+## 任务中心与站内信（FR-183，见 ADR-040）
+
+> 长耗时跨进程动作（首批：JDK 一键下载安装）改为异步任务：发起即返回 `taskId`，进度/日志/历史经心跳汇聚到 CP，完成发站内信。
+> 任务/站内信按归属隔离：非平台管理员只见自己发起的任务、只读/操作自己的站内信；平台管理员可见全部任务。
+
+### POST /api/v1/nodes/:id/jdks/install（行为变更）
+- **描述**: 一键下载安装 JDK（**异步化**）。建任务 + 令 Worker 启动即返回，立即回执 `taskId`；进度/完成在任务中心与站内信查看。取代原「同步阻塞最长 20min 返回 JDK 记录」。
+- **关联 FR**: FR-072, FR-183
+- **权限**: 平台管理员
+- **请求体**: `{ "vendor": "Temurin", "majorVersion": 21, "arch": "x64" }`
+- **响应**: `202 Accepted` `{ "taskId": "<uuid>", "task": { ...Task } }`
+- **错误码**: `503 NODE_OFFLINE`（节点未连接，不建悬挂任务）；`404 NOT_FOUND`（节点不存在）；`502 INSTALL_FAILED`（下发 Worker 失败，任务已置 failed）
+
+### GET /api/v1/tasks
+- **描述**: 任务列表（倒序）。非平台管理员只见自己发起的，平台管理员见全部。
+- **关联 FR**: FR-183
+- **权限**: 所有认证用户（归属隔离）
+- **Query**: `?limit=100`
+- **响应**: `[{ id, taskId, nodeId, kind, state, progress, title, detail, error, result, createdBy, createdAt, updatedAt }]`
+  - `state`: `pending` / `running` / `succeeded` / `failed`；`progress`: 0~100
+
+### GET /api/v1/tasks/:taskId
+- **描述**: 单个任务详情（含滚动日志）。越权或不存在返回 404（不泄露存在性）。
+- **关联 FR**: FR-183
+- **权限**: 所有认证用户（仅自己发起的；平台管理员不限）
+- **响应**: `{ "task": { ...Task }, "logs": [{ id, taskId, seq, line, ts }] }`
+
+### GET /api/v1/notifications
+- **描述**: 当前用户的站内信列表（倒序）。
+- **关联 FR**: FR-183
+- **权限**: 所有认证用户（仅自己的）
+- **Query**: `?unread=true&limit=50`（`unread=true` 仅未读）
+- **响应**: `[{ id, userId, level, title, body, taskId, readAt, createdAt }]`
+  - `level`: `info` / `success` / `warning` / `error`；`readAt` 缺省=未读
+
+### GET /api/v1/notifications/unread-count
+- **描述**: 当前用户未读站内信数量（用于角标）。
+- **关联 FR**: FR-183
+- **权限**: 所有认证用户
+- **响应**: `{ "unread": 3 }`
+
+### POST /api/v1/notifications/:id/read
+- **描述**: 标记一条站内信为已读（已读幂等返回成功）。
+- **关联 FR**: FR-183
+- **权限**: 所有认证用户（仅自己的）
+- **错误码**: `404 NOT_FOUND`（不存在或非本人）
+
+### POST /api/v1/notifications/read-all
+- **描述**: 标记当前用户全部未读站内信为已读。
+- **关联 FR**: FR-183
+- **权限**: 所有认证用户
+- **响应**: `{ "updated": 5 }`
+
+---
+
 ## 日志中心（FR-049）
 
 > 实例运行日志（stdout/stderr）与平台结构化日志统一持久化、检索与导出。过滤与分页在 DB 完成，不全量序列化。
