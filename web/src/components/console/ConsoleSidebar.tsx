@@ -52,6 +52,7 @@ import SidebarNavLink, { type NavEntry } from './SidebarNavLink'
 import NodeSwitcher from './NodeSwitcher'
 import InstanceTree from './InstanceTree'
 import ThemeSwitcher from './ThemeSwitcher'
+import { logoToggleLabelKey } from './sidebar-logo'
 
 /**
  * 一个导航分区（leaf=单链接；children=可展开子项；instances 标记内嵌实例树/节点切换；
@@ -199,17 +200,29 @@ export default function ConsoleSidebar() {
   return (
     <aside className={cn('flex h-full min-h-0 flex-col border-r bg-card/40 transition-[width] duration-200 ease-ios', collapsed ? 'w-14' : 'w-60')}>
       <div className={cn('flex shrink-0 items-center border-b py-3', collapsed ? 'justify-center px-2' : 'gap-2 px-4')}>
-        <span className="grid size-6 shrink-0 place-items-center rounded bg-primary text-primary-foreground">
-          <Boxes className="size-4" />
-        </span>
-        {!collapsed && <h2 className="flex-1 truncate text-base font-bold tracking-tight">JianManager</h2>}
+        {/* logo 整体可点折叠/展开（FR-181，复用 toggleSidebar）：折叠态仅图标仍可点回展开。 */}
+        <button
+          type="button"
+          onClick={toggleSidebar}
+          aria-label={t(logoToggleLabelKey(collapsed))}
+          title={t(logoToggleLabelKey(collapsed))}
+          className={cn(
+            'flex min-w-0 items-center rounded transition-colors hover:bg-accent/60',
+            collapsed ? 'justify-center' : 'flex-1 gap-2 px-1 -mx-1',
+          )}
+        >
+          <span className="grid size-6 shrink-0 place-items-center rounded bg-primary text-primary-foreground">
+            <Boxes className="size-4" />
+          </span>
+          {!collapsed && <h2 className="min-w-0 flex-1 truncate text-left text-base font-bold tracking-tight">JianManager</h2>}
+        </button>
         {!collapsed && (
           <button
             type="button"
             onClick={toggleSidebar}
             aria-label={t('nav.collapseSidebar')}
             title={t('nav.collapseSidebar')}
-            className="grid size-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+            className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
           >
             <PanelLeftClose className="size-4" />
           </button>
