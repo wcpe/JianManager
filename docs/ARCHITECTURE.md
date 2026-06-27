@@ -509,6 +509,7 @@ database:
   - **集群**组展开 = 节点 + 全部实例 + 群组 + 节点切换器（`全部节点` + 各节点，`GET /nodes`）+ 常驻实例树（`GET /instances?nodeId=`；每项状态点：RUNNING 绿 / STARTING·STOPPING 琥珀 / CRASHED 红 / STOPPED 空心 + bot 聚合徽标）。
   - **监控**组 = 监控总览（`/monitor`，FR-169）+ 告警 + 日志；**运营**组 = 玩家 + Bot + 模板 + 备份 + 备份存储 + 定时任务；**系统**组 =「平台与维护」（运行时与制品 + 客户端分发 + 平台存储 +〔平台管理员〕数据库 + 系统更新）+「账户与审计」（用户 + 用户组 + 设置 + 审计 + 开源许可）。
   - **可折叠图标轨（FR-131）**：可折叠为仅域级图标轨（`w-14`，hover tooltip 显 label，点分组图标即展开侧栏再选子项）；导航区滚动条隐藏但保留滚动（`.scrollbar-none`）。折叠态 / 分组折叠态 / 选中节点持久化 `localStorage`（`stores/console.ts`：`sidebar.collapsed` / `sidebar.collapsedGroups` / `sidebar.selectedNodeId`）。
+  - **顶部 logo 点击折叠/展开（FR-181，增强 FR-131）**：侧栏顶部 logo（`Boxes` 图标 + `JianManager` 文字）整体为一个 `<button>`，点击复用 `console.toggleSidebar` 收缩/展开；折叠态仅图标仍可点回展开。`aria-label` 描述「将发生的动作」（展开态=收起 / 折叠态=展开，纯函数 `sidebar-logo.ts:logoToggleLabelKey`）。原 `PanelLeftClose`（展开态）与 `PanelLeftOpen`（折叠态导航区顶部）按钮保留为冗余显式控件，三者均调同一 action。
   - 底部（FR-164/FR-132）：**全局主题切换器** `ThemeSwitcher`——主题色圆点（靛蓝/青绿直选）+ 明暗（lucide 图标 + dropdown 三态直选）；版本号（左下）+ 开源许可入口（右下 → `/licenses`，FR-135）；退出登录已迁至顶栏账户菜单（FR-162）。切语言同步 `<html lang>` 见 `i18n`。
 - **顶栏（FR-162，重排 FR-179，`ConsoleHeader`）= 内容区上方全局页眉**（侧栏保持全高，顶栏只占右侧内容列；简约扁平、层次/间距精修）：
   - **左** = 统一面包屑（FR-134，`PageBreadcrumb` + 纯函数 `lib/breadcrumb.ts`）：按路由渲染「域 › 页面」轨迹（与五域 IA 对齐），父级可点跳转、末级加粗；打开实例工作区时末级补实例名（域 › 全部实例 › <名称>）。面包屑容器 `flex-1 min-w-0` 占据剩余宽度并可截断，把右侧操作区推到右缘（窄屏防翻屏）。
