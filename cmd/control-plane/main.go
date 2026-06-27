@@ -16,6 +16,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/router"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
+	"github.com/wcpe/JianManager/internal/platform/httpclient"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
@@ -30,6 +31,17 @@ func main() {
 	}
 
 	initLogger(cfg.Log)
+
+	// 出站 HTTP 客户端工厂（FR-174，见 ADR-037）：CP 所有出站下载（自更新 feed/二进制、
+	// 服务端 jar、客户端制品入库等）经此进程级代理 client。proxy.url 留空=直连（沿用环境变量代理）。
+	// 非法代理 URL 启动即 fail-fast。
+	outboundClient, err := httpclient.New(cfg.Proxy)
+	if err != nil {
+		log.Fatalf("初始化出站代理客户端失败 (proxy=%s): %v", httpclient.Sanitize(cfg.Proxy.URL), err)
+	}
+	if cfg.Proxy.URL != "" {
+		slog.Info("出站代理已启用", "proxy", httpclient.Sanitize(cfg.Proxy.URL), "noProxy", cfg.Proxy.NoProxy)
+	}
 
 	db, err := database.New(cfg.Database)
 	if err != nil {
@@ -92,6 +104,8 @@ func main() {
 		slog.SetDefault(slog.New(persist))
 	}
 	assetSvc := service.NewAssetService(db, root)
+	// 制品入库下载（如服务端核心 IngestFromURL）经进程级出站代理（FR-174，见 ADR-037）。
+	assetSvc.SetHTTPClient(outboundClient)
 	// 运行时与制品全局页只读聚合（FR-082）：跨节点 JDK 矩阵 + 引用实例 + 制品占用/去重/冷热。
 	runtimeAssetsSvc := service.NewRuntimeAssetsService(db)
 	// 节点 enrollment token（一键安装 / 傻瓜部署，FR-080，见 ADR-020）：
@@ -108,6 +122,8 @@ func main() {
 		BinaryBaseURL: cfg.Update.BinaryBaseURL,
 		AllowInsecure: cfg.Update.AllowInsecure,
 	}, root)
+	// 拉取 feed 与 CP 自身二进制下载经进程级出站代理（FR-174，见 ADR-037）。
+	selfUpdateSvc.SetHTTPClient(outboundClient)
 	// 客户端分发频道与拉取密钥（FR-086，见 ADR-022）：密钥落库只存哈希、明文一次性返回。
 	clientChannelSvc := service.NewClientChannelService(db)
 	// 客户端分发版本与签名 manifest（FR-087，见 ADR-022、contract §2/§3）。
@@ -142,6 +158,8 @@ func main() {
 	// 插件服务：上传先入制品库（type=plugin 去重）再经 file gRPC 部署到实例（FR-052）。
 	pluginSvc := service.NewPluginService(db, pool, assetSvc)
 	coreSvc := service.NewCoreService()
+	// 解析核心版本/构建的 PaperMC API 请求经进程级出站代理（FR-174，见 ADR-037）。
+	coreSvc.SetHTTPClient(outboundClient)
 	// 插件桥服务（FR-065，见 ADR-016）：建服时为实例签发插件桥 token 并写入探针 config 的 bridge 段。
 	pluginBridgeSvc := service.NewPluginBridgeService(cfg.JWT.Secret)
 	provisionSvc := service.NewProvisionService(db, pool, instanceSvc, coreSvc, pluginBridgeSvc)

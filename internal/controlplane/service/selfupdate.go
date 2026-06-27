@@ -69,6 +69,9 @@ type SelfUpdateService struct {
 	pool *cpgrpc.ClientPool
 	cfg  SelfUpdateConfig
 	root *dataroot.Root
+	// httpClient 出站 client（经进程级代理，FR-174/ADR-037）：拉 feed 与 CP 自身二进制下载共用。
+	// 为 nil 时回退 http.DefaultClient（向后兼容）。
+	httpClient *http.Client
 
 	// rolloutMu 保护 rollout（全网编排为单例：同一时刻只跑一次全网升级）。
 	rolloutMu sync.Mutex
@@ -84,6 +87,20 @@ type SelfUpdateService struct {
 // NewSelfUpdateService 创建自更新服务。root 用于 CP 自身下载落 cache/，可为 nil（回退临时目录）。
 func NewSelfUpdateService(db *gorm.DB, pool *cpgrpc.ClientPool, cfg SelfUpdateConfig, root *dataroot.Root) *SelfUpdateService {
 	return &SelfUpdateService{db: db, pool: pool, cfg: cfg, root: root}
+}
+
+// SetHTTPClient 注入出站 client（经进程级代理，FR-174/ADR-037），供拉 feed 与 CP 自身下载使用。
+// 由 main 装配；不调用则回退 http.DefaultClient（向后兼容，测试不受影响）。
+func (s *SelfUpdateService) SetHTTPClient(c *http.Client) {
+	s.httpClient = c
+}
+
+// outboundClient 返回出站 client：注入了则用之，否则回退 http.DefaultClient。
+func (s *SelfUpdateService) outboundClient() *http.Client {
+	if s.httpClient != nil {
+		return s.httpClient
+	}
+	return http.DefaultClient
 }
 
 // Configured 报告是否已配置更新源（feed_url 非空）。
@@ -108,7 +125,7 @@ func (s *SelfUpdateService) FetchFeed(ctx context.Context) (*Feed, error) {
 	if err != nil {
 		return nil, fmt.Errorf("构造 feed 请求失败: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.outboundClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("拉取更新源失败: %w", err)
 	}
@@ -284,7 +301,7 @@ func (s *SelfUpdateService) UpgradeControlPlane(ctx context.Context, wantVersion
 		_ = os.MkdirAll(cacheDir, 0o755)
 	}
 	dest := filepath.Join(cacheDir, fmt.Sprintf("control-plane-upgrade-%d", time.Now().UnixNano()))
-	if err := selfupdate.Download(ctx, art.URL, art.SHA256, dest, s.cfg.AllowInsecure); err != nil {
+	if err := selfupdate.DownloadWith(ctx, s.outboundClient(), art.URL, art.SHA256, dest, s.cfg.AllowInsecure); err != nil {
 		return from, feed.Version, err
 	}
 	target, err := os.Executable()

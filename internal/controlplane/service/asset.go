@@ -38,11 +38,28 @@ var (
 type AssetService struct {
 	db   *gorm.DB
 	root *dataroot.Root
+	// httpClient IngestFromURL 下载远端资源所用出站 client（经进程级代理，FR-174/ADR-037）。
+	// 为 nil 时回退 http.DefaultClient（向后兼容）。
+	httpClient *http.Client
 }
 
 // NewAssetService 创建制品库服务。root 提供 var/artifacts 物理根。
 func NewAssetService(db *gorm.DB, root *dataroot.Root) *AssetService {
 	return &AssetService{db: db, root: root}
+}
+
+// SetHTTPClient 注入出站 client（经进程级代理，FR-174/ADR-037）：IngestFromURL 下载经此 client。
+// 由 main 装配；不调用则回退 http.DefaultClient（向后兼容，测试不受影响）。
+func (s *AssetService) SetHTTPClient(c *http.Client) {
+	s.httpClient = c
+}
+
+// outboundClient 返回出站 client：注入了则用之，否则回退 http.DefaultClient。
+func (s *AssetService) outboundClient() *http.Client {
+	if s.httpClient != nil {
+		return s.httpClient
+	}
+	return http.DefaultClient
 }
 
 // IngestParams 入库参数。
@@ -180,7 +197,7 @@ func (s *AssetService) IngestFromURL(ctx context.Context, rawURL string, p Inges
 	if err != nil {
 		return nil, fmt.Errorf("构造下载请求失败: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.outboundClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("下载失败: %w", err)
 	}

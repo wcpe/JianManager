@@ -39,6 +39,20 @@ func NewCoreService() *CoreService {
 	return &CoreService{client: &http.Client{Timeout: 20 * time.Second}, base: paperAPIBase}
 }
 
+// SetHTTPClient 注入出站 client（经进程级代理，FR-174/ADR-037）：解析核心版本/构建的 API 请求经此 client。
+// 由 main 装配；client 为 nil 时忽略（保留默认）。注入的 client 若未设 Timeout，补足 20s 避免无限等待。
+func (s *CoreService) SetHTTPClient(c *http.Client) {
+	if c == nil {
+		return
+	}
+	if c.Timeout == 0 {
+		cc := *c
+		cc.Timeout = 20 * time.Second
+		c = &cc
+	}
+	s.client = c
+}
+
 // ListVersions 返回指定核心类型可用的版本（新→旧）。
 // paper/velocity/waterfall 走 PaperMC API；bungeecord 仅有单一 latest。
 func (s *CoreService) ListVersions(ctx context.Context, coreType string) ([]string, error) {
