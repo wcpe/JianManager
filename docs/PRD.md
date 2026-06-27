@@ -218,7 +218,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-171 | 备份完整性校验和（model.Backup 加 checksum + 创建时计算 + 列表/详情展示）——FR-151 拆出 | P3 | 📋 计划 |
 | FR-172 | 审计日志服务端分页与导出（GET /audit 加分页 + 总数 + 导出 endpoint）——FR-158 拆出 | P3 | 📋 计划 |
 | FR-173 | CI/CD 发布管线（GitHub Actions：push→滚动预发布[取 CHANGELOG Unreleased]、tag→正式 release[取版本段]；交叉编译 CP+Worker linux/amd64+windows/amd64 含 go:embed 前端；产物 + checksums.txt 上传 release；ldflags 注入版本，见 ADR-036） | P1 | 🔨 开发中 |
-| FR-174 | 出站网络代理（CP/Worker 每进程可配 HTTP/SOCKS5 + no_proxy，共享出站 HTTP 客户端工厂，覆盖自更新/JDK/服务端 jar/CFR/GitHub API 下载；留空=直连，见 ADR-037） | P1 | 📋 计划 |
+| FR-174 | 出站网络代理（CP/Worker 每进程可配 HTTP/SOCKS5 + no_proxy，共享出站 HTTP 客户端工厂，覆盖自更新/JDK/服务端 jar/CFR/GitHub API 下载；留空=直连，见 ADR-037） | P1 | 🔨 开发中 |
 | FR-175 | 自更新对接 GitHub Releases（增强 FR-081：原生 GitHub Releases API 解析 + stable/prerelease 渠道 + checksums sha256 校验 + 经 FR-174 代理下载；取代 ADR-020 §4 feed 立场，见 ADR-036） | P1 | 📋 计划 |
 
 ### 范围外（后续版本，暂不纳入 V1）

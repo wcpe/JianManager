@@ -834,8 +834,8 @@ STOPPED → STARTING → RUNNING → STOPPING → STOPPED
 
 ## 11. 配置
 
-**Control Plane**: `control-plane.yaml` — server port, gRPC port, database, JWT secret（管理员账号通过首次启动 Web 引导创建，见 FR-017）；`log_store`（日志中心，FR-049）
-**Worker Node**: `worker.yaml` — node name, Control Plane address, gRPC/WS ports, data_dir, Docker, Bot 配置
+**Control Plane**: `control-plane.yaml` — server port, gRPC port, database, JWT secret（管理员账号通过首次启动 Web 引导创建，见 FR-017）；`log_store`（日志中心，FR-049）；`proxy`（出站代理，FR-174，见 §11.2）
+**Worker Node**: `worker.yaml` — node name, Control Plane address, gRPC/WS ports, data_dir, Docker, Bot 配置；`proxy`（出站代理，FR-174，见 §11.2）
 
 `log_store`（日志持久化/归档/保留，均有默认值，零配置即用）：
 
@@ -869,6 +869,37 @@ data/
 
 - 登记路径**按数据根相对存储**（如 `var/servers/hub-a1b2c3d4`），整体拷到另一机器后仍自洽。
 - Worker 收到 CP 下发的相对工作目录后，按本节点数据根解析为绝对路径并创建。
+
+### 11.2 出站网络代理（每进程 HTTP/SOCKS5，FR-174 / ADR-037）
+
+CP 与各 Worker 的**所有出站下载**统一收口到共享出站 HTTP 客户端工厂 `internal/platform/httpclient`（`Config{URL, NoProxy}` + `New(cfg) (*http.Client, error)`），按本进程代理配置出站。收口的出站点：
+
+| 进程 | 出站点 | 用途 |
+|---|---|---|
+| CP + Worker | `internal/platform/selfupdate.DownloadWith` | 自更新二进制下载（`Download` 保留为 DefaultClient 薄包装，生产走 `DownloadWith`） |
+| CP | `service.SelfUpdateService`（`FetchFeed` + CP 自升下载） | release feed 拉取 + CP 自身升级 |
+| CP | `service.CoreService` | PaperMC API 解析服务端核心版本/构建 |
+| CP | `service.AssetService.IngestFromURL` | 远端制品（服务端核心等）下载入库 |
+| Worker | `grpc.Server.UpgradeWorker` | Worker 升级二进制下载 |
+| Worker | `jdk.Manager`（`downloadAndExtract` / Zulu 元数据 API） | JDK 归档下载 |
+| Worker | `worker/grpc.DownloadCore`（`downloadFile`） | 服务端 jar 下载到实例工作目录 |
+| Worker | `decompiler.Provider` | CFR 反编译器按需下载（Maven Central） |
+
+配置（CP `control-plane.yaml` 与各 Worker `worker.yaml` 各加 `proxy:` 段，互相独立；分布式各机网络环境不同）：
+
+```yaml
+proxy:
+  url: ""        # 代理地址；scheme 决定类型 http:// / https:// / socks5://。留空=直连
+  no_proxy: ""   # 逗号分隔免代理：localhost,127.0.0.1,10.0.0.0/8,.internal.example
+```
+
+行为规则：
+
+- `url` **留空 = 沿用改造前行为**：回退 `http.ProxyFromEnvironment`，仍尊重 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` 环境变量（零配置/旧部署不受影响）。
+- `url` 非空时**优先于环境变量**；`http`/`https` 经 `Transport.Proxy`，`socks5` 经 `golang.org/x/net/proxy` 构造 dialer 挂 `DialContext`。两类均遵守 `no_proxy`（`no_proxy` 命中走直连）。
+- 含凭据的代理 URL 经 `${ENV}` 注入、不硬编码（config-files 规范）；日志/错误透出代理地址时**脱敏 `user:pass`**。
+- 启动时 `proxy.url` 非法 → CP/Worker **fail-fast** 退出（配置错误早暴露，不静默直连）。
+- **不在范围**：备份远程存储（SFTP/WebDAV/S3，用户自有端点）、通知/Webhook 投递、Worker 抓本机 ServerProbe `/metrics`（loopback）——均非外部制品下载，不经本工厂。
 
 ## 12. 部署
 
