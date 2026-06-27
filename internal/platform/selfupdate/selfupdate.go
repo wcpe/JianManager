@@ -32,12 +32,26 @@ const downloadTimeout = 10 * time.Minute
 
 // Download 流式下载 url 到 destPath，边下边算 SHA-256，校验通过才保留。
 //
+// 用 http.DefaultClient 出站（不经显式代理）；生产路径应改用 DownloadWith 注入
+// 经 httpclient.New 构造的进程级代理 client（FR-174，见 ADR-037）。本函数保留为
+// 薄包装，向后兼容既有调用与测试。
+func Download(ctx context.Context, url, expectedSHA256, destPath string, allowInsecure bool) error {
+	return DownloadWith(ctx, http.DefaultClient, url, expectedSHA256, destPath, allowInsecure)
+}
+
+// DownloadWith 同 Download，但用调用方注入的 *http.Client 出站。
+//
+// client 为 nil 时回退 http.DefaultClient。生产路径传 httpclient.New(cfg.Proxy) 构造的
+// 进程级代理 client，使二进制下载经配置的出站代理（FR-174，见 ADR-037）。
 // expectedSHA256 为期望的十六进制 sha256（大小写不敏感）；为空表示跳过校验（不推荐，仅内部测试）。
 // allowInsecure=false 时拒绝非 https 源（ErrInsecureURL）。校验不符删除已下载文件并返回 ErrChecksumMismatch。
 // destPath 的父目录须已存在（调用方通常用数据根 cache/ 目录）。
-func Download(ctx context.Context, url, expectedSHA256, destPath string, allowInsecure bool) error {
+func DownloadWith(ctx context.Context, client *http.Client, url, expectedSHA256, destPath string, allowInsecure bool) error {
 	if !allowInsecure && !strings.HasPrefix(strings.ToLower(url), "https://") {
 		return ErrInsecureURL
+	}
+	if client == nil {
+		client = http.DefaultClient
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, downloadTimeout)
@@ -47,7 +61,7 @@ func Download(ctx context.Context, url, expectedSHA256, destPath string, allowIn
 	if err != nil {
 		return fmt.Errorf("构造下载请求失败: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("下载二进制失败: %w", err)
 	}
