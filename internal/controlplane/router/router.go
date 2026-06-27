@@ -319,6 +319,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		}
 	}
 
+	// Worker 一键安装脚本匿名静态端点（FR-080，见 ADR-020 §2）：一键命令 `curl <cp>/install-worker.sh | sh`
+	// 依赖 CP 自托管这两个脚本。显式注册（根路径、非 /api/v1）以先于下方 SPA NoRoute 回退命中。
+	registerInstallScriptRoutes(r)
+
 	// 前端静态文件（go:embed 嵌入）
 	embed.RegisterStaticRoutes(r)
 

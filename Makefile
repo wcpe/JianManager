@@ -1,7 +1,8 @@
-.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-probe embed-cfr embed-client-updater gen-licenses docker
+.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-probe embed-cfr embed-client-updater gen-licenses docker
 
 # 构建所有（含前端嵌入）。gen-licenses 先行，确保许可清单与即将打包的前端一致。
-build: gen-licenses build-web embed-web build-cp build-worker
+# embed-install-scripts 同步一键安装脚本内嵌副本（FR-080），保持与 canonical scripts/ 一致。
+build: gen-licenses build-web embed-web embed-install-scripts build-cp build-worker
 
 # 构建 Control Plane（含嵌入前端）
 build-cp:
@@ -29,6 +30,15 @@ gen-licenses:
 embed-web:
 	mkdir -p internal/controlplane/embed/dist
 	cp -r web/dist/* internal/controlplane/embed/dist/
+
+# 同步 Worker 一键安装脚本内嵌副本（FR-080，见 ADR-020 §2 CP 静态托管）。
+# canonical 真源在 scripts/install-worker.{sh,ps1}（随发布分发 / 手动拷贝）；本目标把它们复制到
+# CP 内嵌目录，go:embed 在 go build 时拉入二进制，使 `curl <cp>/install-worker.sh` 可拉。
+# 内嵌副本已入库（保证 fresh checkout 即可 build），install_scripts_test 守护两者字节一致防漂移。
+embed-install-scripts:
+	mkdir -p internal/controlplane/embed/install-scripts
+	cp scripts/install-worker.sh internal/controlplane/embed/install-scripts/install-worker.sh
+	cp scripts/install-worker.ps1 internal/controlplane/embed/install-scripts/install-worker.ps1
 
 # 构建 ServerProbe 探针 jar 并注入 CP 内嵌目录（FR-010 建服自动部署，可选）。
 # 需 JDK 21（设 JAVA_HOME 指向 JDK21）+ 子模块已拉取（git submodule update --init）。
