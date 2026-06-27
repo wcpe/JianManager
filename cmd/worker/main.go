@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
+	"github.com/wcpe/JianManager/internal/platform/httpclient"
 	workercfg "github.com/wcpe/JianManager/internal/worker"
 	"github.com/wcpe/JianManager/internal/worker/bot"
 	"github.com/wcpe/JianManager/internal/worker/daemon"
@@ -69,6 +70,17 @@ func runWorker() {
 		os.Exit(1)
 	}
 
+	// 出站 HTTP 客户端工厂（FR-174，见 ADR-037）：所有出站下载（自更新/JDK/CFR/服务端 jar）
+	// 经此进程级代理 client。proxy.url 留空=直连（沿用环境变量代理）。非法代理 URL 启动即 fail-fast。
+	outboundClient, err := httpclient.New(cfg.Proxy)
+	if err != nil {
+		slog.Error("初始化出站代理客户端失败", "proxy", httpclient.Sanitize(cfg.Proxy.URL), "error", err)
+		os.Exit(1)
+	}
+	if cfg.Proxy.URL != "" {
+		slog.Info("出站代理已启用", "proxy", httpclient.Sanitize(cfg.Proxy.URL), "noProxy", cfg.Proxy.NoProxy)
+	}
+
 	nodeName := cfg.Name
 	grpcPort := cfg.GRPC.Port
 	wsPort := cfg.WS.Port
@@ -110,6 +122,7 @@ func runWorker() {
 	var jdkMgr *jdks.Manager
 	if os.Getenv("JIANMANAGER_DISABLE_JDK") != "1" {
 		jdkMgr = jdks.NewManager(root.JDKsDir(), systemJDKDirs)
+		jdkMgr.SetHTTPClient(outboundClient) // JDK 下载经进程级出站代理（FR-174）。
 		slog.Info("JDK manager enabled", "rootDir", root.JDKsDir())
 	} else {
 		slog.Info("JDK manager disabled by JIANMANAGER_DISABLE_JDK=1")
@@ -137,6 +150,8 @@ func runWorker() {
 	// 启动 gRPC 服务器
 	grpcServer := grpc.NewServer()
 	workerServer := wgrpc.NewServer(manager, nodeUUID, collector, jdkMgr, root)
+	// Worker 升级二进制下载与服务端 jar 下载经进程级出站代理（FR-174，见 ADR-037）。
+	workerServer.SetHTTPClient(outboundClient)
 	// 全文搜索追加忽略规则（worker.yaml search.ignore，叠加内置默认集，FR-074）。
 	workerServer.SetSearchIgnore(cfg.Search.Ignore)
 
@@ -157,6 +172,7 @@ func runWorker() {
 		CacheDir:      filepath.Join(root.CacheDir(), "tools"),
 		Embedded:      wembed.CFRJar,
 		AllowDownload: cfg.Decompiler.AllowDownload,
+		HTTPClient:    outboundClient, // CFR 按需下载经进程级出站代理（FR-174）。
 	})
 	workerServer.SetDecompiler(decompProvider)
 

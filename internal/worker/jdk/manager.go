@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Info Worker 本地探测到的 JDK 信息。
@@ -36,10 +38,13 @@ type Info struct {
 // Manager 维护 Worker 本地 JDK 注册表（基于目录扫描，无持久化文件）。
 // 多协程安全：Install/Remove 串行化执行以避免并发解压冲突。
 type Manager struct {
-	mu        sync.Mutex
-	rootDir   string // 托管根目录（默认 <serversDir>/jdks）
-	managed   map[string]Info
+	mu         sync.Mutex
+	rootDir    string // 托管根目录（默认 <serversDir>/jdks）
+	managed    map[string]Info
 	systemDirs []string // 可选系统 JDK 探测路径
+	// httpClient JDK 归档/元数据下载所用出站 client（经进程级代理，FR-174/ADR-037）。
+	// 为 nil 时 download 路径回退一个 15min 超时的默认 client（向后兼容）。
+	httpClient *http.Client
 }
 
 // NewManager 创建 JDK 管理器。
@@ -51,6 +56,31 @@ func NewManager(rootDir string, systemDirs []string) *Manager {
 		managed:    make(map[string]Info),
 		systemDirs: systemDirs,
 	}
+}
+
+// SetHTTPClient 注入出站 client（经进程级代理，FR-174/ADR-037）：JDK 下载经此 client。
+// 由 main 装配；不调用则下载路径回退默认 15min 超时 client（向后兼容）。
+// 注入的 client 若未显式设 Timeout，下载路径会克隆一份并补足 15min 超时，避免大归档被无超时拖死。
+func (m *Manager) SetHTTPClient(c *http.Client) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.httpClient = c
+}
+
+// downloadClient 返回 JDK 下载所用 client：注入了则用之（必要时补足 15min 超时），否则用默认 15min client。
+// 须在持有 m.mu 时调用（Install 内已持锁）。
+func (m *Manager) downloadClient() *http.Client {
+	const dlTimeout = 15 * time.Minute
+	if m.httpClient == nil {
+		return &http.Client{Timeout: dlTimeout}
+	}
+	if m.httpClient.Timeout == 0 {
+		// 注入的工厂 client 默认不设整体超时；为大归档下载补一个上限（不改原 client）。
+		c := *m.httpClient
+		c.Timeout = dlTimeout
+		return &c
+	}
+	return m.httpClient
 }
 
 // RootDir 返回托管根目录。
@@ -131,7 +161,8 @@ func (m *Manager) Install(vendor string, major int, arch, installDir, mirrorBase
 		return Info{}, fmt.Errorf("目标目录已存在: %s", installDir)
 	}
 
-	downloadURL, err := buildDownloadURL(vendor, major, arch, mirrorBase)
+	client := m.downloadClient()
+	downloadURL, err := buildDownloadURL(client, vendor, major, arch, mirrorBase)
 	if err != nil {
 		return Info{}, err
 	}
@@ -140,7 +171,7 @@ func (m *Manager) Install(vendor string, major int, arch, installDir, mirrorBase
 	if err := os.MkdirAll(installDir, 0o755); err != nil {
 		return Info{}, fmt.Errorf("创建安装目录失败: %w", err)
 	}
-	if err := downloadAndExtract(downloadURL, installDir); err != nil {
+	if err := downloadAndExtract(client, downloadURL, installDir); err != nil {
 		_ = os.RemoveAll(installDir)
 		return Info{}, err
 	}

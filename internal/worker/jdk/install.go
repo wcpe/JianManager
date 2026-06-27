@@ -44,14 +44,16 @@ func envOr(key, def string) string {
 // buildDownloadURL 根据 vendor/major/arch/平台返回归档下载 URL。
 // 下载基址优先用 mirrorBase（CP 从平台设置下发），其次 JIANMANAGER_JDK_<VENDOR>_BASE，
 // 最后回退官方源（Temurin 默认 Adoptium）；未支持的 vendor 返回明确错误，提示用 POST /jdks 手动登记。
-func buildDownloadURL(vendor string, major int, arch, mirrorBase string) (string, error) {
+// client 用于 Zulu 这类需先查元数据 API 的来源（经进程级出站代理，FR-174/ADR-037）；
+// client 为 nil 时回退 http.DefaultClient。
+func buildDownloadURL(client *http.Client, vendor string, major int, arch, mirrorBase string) (string, error) {
 	switch strings.ToLower(vendor) {
 	case "temurin", "adoptium":
 		return temurinURL(jdkMirrorBase(vendor, mirrorBase), major, arch), nil
 	case "corretto", "amazon":
 		return correttoURL(jdkMirrorBase(vendor, mirrorBase), major, arch), nil
 	case "zulu", "azul":
-		return zuluURL(jdkMirrorBase(vendor, mirrorBase), major, arch)
+		return zuluURL(client, jdkMirrorBase(vendor, mirrorBase), major, arch)
 	default:
 		return "", fmt.Errorf("unsupported vendor: %s (supported: Temurin, Corretto, Zulu)", vendor)
 	}
@@ -84,7 +86,8 @@ func correttoURL(base string, major int, arch string) string {
 }
 
 // zuluURL queries the Azul metadata API for the latest Zulu JDK download URL.
-func zuluURL(base string, major int, arch string) (string, error) {
+// client 经进程级出站代理（FR-174/ADR-037）；为 nil 时回退 http.DefaultClient。
+func zuluURL(client *http.Client, base string, major int, arch string) (string, error) {
 	osName := "linux"
 	ext := "tar.gz"
 	if runtime.GOOS == "windows" {
@@ -95,7 +98,10 @@ func zuluURL(base string, major int, arch string) (string, error) {
 	}
 	apiURL := fmt.Sprintf("%s/metadata/v1/zulu/packages?java_version=%d&os=%s&arch=%s&archive_type=%s&latest=true&release_type=ga",
 		base, major, osName, arch, ext)
-	resp, err := http.Get(apiURL)
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Get(apiURL)
 	if err != nil {
 		return "", fmt.Errorf("zulu metadata API failed: %w", err)
 	}
@@ -116,8 +122,11 @@ func zuluURL(base string, major int, arch string) (string, error) {
 }
 
 // downloadAndExtract 下载归档到临时文件，按平台后缀解压到 destDir。
-func downloadAndExtract(url, destDir string) error {
-	client := &http.Client{Timeout: 15 * time.Minute}
+// client 经进程级出站代理（FR-174/ADR-037）；为 nil 时回退一个 15min 超时的默认 client。
+func downloadAndExtract(client *http.Client, url, destDir string) error {
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Minute}
+	}
 	resp, err := client.Get(url)
 	if err != nil {
 		return fmt.Errorf("下载失败: %w", err)

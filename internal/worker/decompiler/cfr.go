@@ -69,16 +69,28 @@ type Config struct {
 	Embedded EmbeddedJarFunc
 	// AllowDownload 是否允许从 Maven Central 按需下载（默认应开启）。
 	AllowDownload bool
+	// HTTPClient 按需下载 CFR 所用出站 client（经进程级代理，FR-174/ADR-037）。
+	// 为 nil 时回退一个 60s 超时的默认 client（向后兼容；测试也可经此注入 httptest client）。
+	HTTPClient *http.Client
 }
 
 // NewProvider 创建 CFR jar 解析器。
 func NewProvider(cfg Config) *Provider {
+	client := cfg.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 60 * time.Second}
+	} else if client.Timeout == 0 {
+		// 工厂 client 默认不设整体超时；为 CFR 下载补一个上限（不改原 client）。
+		c := *client
+		c.Timeout = 60 * time.Second
+		client = &c
+	}
 	return &Provider{
 		configPath:    cfg.ConfigPath,
 		cacheDir:      cfg.CacheDir,
 		embedded:      cfg.Embedded,
 		allowDownload: cfg.AllowDownload,
-		httpClient:    &http.Client{Timeout: 60 * time.Second},
+		httpClient:    client,
 		downloadURL:   cfrDownloadURL,
 	}
 }

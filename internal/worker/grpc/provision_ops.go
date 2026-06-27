@@ -33,7 +33,7 @@ func (s *Server) DownloadCore(ctx context.Context, req *workerpb.DownloadCoreReq
 	}
 	target := filepath.Join(inst.WorkDir, dest)
 
-	size, sum, err := downloadFile(ctx, req.DownloadUrl, target)
+	size, sum, err := downloadFile(ctx, s.outboundClient(), req.DownloadUrl, target)
 	if err != nil {
 		return &workerpb.DownloadCoreResponse{Success: false, Error: err.Error()}, nil
 	}
@@ -76,7 +76,8 @@ func (s *Server) DeployServerProbe(_ context.Context, req *workerpb.DeployServer
 }
 
 // downloadFile 流式下载 url 到 destPath，边写边算 sha256，返回字节数与 hex 小写摘要。
-func downloadFile(ctx context.Context, url, destPath string) (int64, string, error) {
+// client 经进程级出站代理（FR-174/ADR-037）；为 nil 时回退一个 15min 超时的默认 client。
+func downloadFile(ctx context.Context, client *http.Client, url, destPath string) (int64, string, error) {
 	if strings.TrimSpace(url) == "" {
 		return 0, "", fmt.Errorf("下载地址为空")
 	}
@@ -87,7 +88,14 @@ func downloadFile(ctx context.Context, url, destPath string) (int64, string, err
 	if err != nil {
 		return 0, "", err
 	}
-	client := &http.Client{Timeout: 15 * time.Minute}
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Minute}
+	} else if client.Timeout == 0 {
+		// 工厂 client 默认不设整体超时；为大 jar 下载补一个上限（不改原 client）。
+		c := *client
+		c.Timeout = 15 * time.Minute
+		client = &c
+	}
 	resp, err := client.Do(httpReq)
 	if err != nil {
 		return 0, "", fmt.Errorf("下载核心失败: %w", err)

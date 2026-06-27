@@ -97,14 +97,14 @@ func TestRemoveBlocksOutsideRoot(t *testing.T) {
 }
 
 func TestBuildDownloadURL(t *testing.T) {
-	// Temurin / Corretto 构造静态 URL，不触网，默认指向官方源。
-	if u, err := buildDownloadURL("Temurin", 21, "x64", ""); err != nil || !strings.Contains(u, "api.adoptium.net") {
+	// Temurin / Corretto 构造静态 URL，不触网，默认指向官方源。client 仅 Zulu 路径用到，此处传 nil。
+	if u, err := buildDownloadURL(nil, "Temurin", 21, "x64", ""); err != nil || !strings.Contains(u, "api.adoptium.net") {
 		t.Fatalf("Temurin 默认 URL 异常: url=%q err=%v", u, err)
 	}
-	if u, err := buildDownloadURL("Corretto", 21, "x64", ""); err != nil || !strings.Contains(u, "corretto.aws") {
+	if u, err := buildDownloadURL(nil, "Corretto", 21, "x64", ""); err != nil || !strings.Contains(u, "corretto.aws") {
 		t.Fatalf("Corretto 默认 URL 异常: url=%q err=%v", u, err)
 	}
-	if _, err := buildDownloadURL("Random", 21, "x64", ""); err == nil {
+	if _, err := buildDownloadURL(nil, "Random", 21, "x64", ""); err == nil {
 		t.Fatalf("unknown vendor should fail")
 	}
 }
@@ -112,7 +112,7 @@ func TestBuildDownloadURL(t *testing.T) {
 // TestBuildDownloadURL_MirrorConfigurable 验证下载源可经环境变量覆盖（FR-033「下载源可配」）。
 func TestBuildDownloadURL_MirrorConfigurable(t *testing.T) {
 	t.Setenv("JIANMANAGER_JDK_TEMURIN_BASE", "https://mirror.example.com/adoptium")
-	u, err := buildDownloadURL("Temurin", 17, "x64", "")
+	u, err := buildDownloadURL(nil, "Temurin", 17, "x64", "")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestBuildDownloadURL_MirrorConfigurable(t *testing.T) {
 // 优先于环境变量与默认源（FR-063 平台设置真生效）。
 func TestBuildDownloadURL_MirrorBaseOverridesEnv(t *testing.T) {
 	t.Setenv("JIANMANAGER_JDK_TEMURIN_BASE", "https://env.example.com/adoptium")
-	u, err := buildDownloadURL("Temurin", 17, "x64", "https://setting.example.com/adoptium")
+	u, err := buildDownloadURL(nil, "Temurin", 17, "x64", "https://setting.example.com/adoptium")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}

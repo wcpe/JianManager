@@ -54,7 +54,7 @@ func (s *Server) UpgradeWorker(ctx context.Context, req *workerpb.UpgradeWorkerR
 	}
 	dest := filepath.Join(cacheDir, fmt.Sprintf("worker-upgrade-%d", time.Now().UnixNano()))
 
-	if err := selfupdate.Download(ctx, req.DownloadUrl, req.Sha256, dest, req.AllowInsecure); err != nil {
+	if err := selfupdate.DownloadWith(ctx, s.outboundClient(), req.DownloadUrl, req.Sha256, dest, req.AllowInsecure); err != nil {
 		slog.Warn("Worker 升级下载/校验失败", "targetVersion", req.TargetVersion, "error", err)
 		return &workerpb.UpgradeWorkerResponse{Success: false, Error: err.Error(), FromVersion: from}, nil
 	}

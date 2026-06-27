@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -75,6 +76,9 @@ type Server struct {
 	// execPath 覆盖自更新（FR-081）待替换的可执行文件路径；空时用 os.Executable()。
 	// 由 SetExecutablePath 注入（测试用，避免替换真二进制）。
 	execPath string
+	// httpClient 出站 client（经进程级代理，FR-174/ADR-037）：Worker 升级二进制下载经此 client。
+	// 由 SetHTTPClient 注入；为 nil 时回退 http.DefaultClient（向后兼容）。
+	httpClient *http.Client
 	// 全文搜索索引（FR-074，见 ADR-017）。每实例一份 *search.Index，懒创建。
 	// 索引落数据根 var/index/<instance-uuid>/，是 Worker 本地派生资产，不进 CP DB。
 	// searchIgnore 为用户配置追加的忽略 glob（worker.yaml search.ignore），叠加内置默认集。
@@ -105,6 +109,20 @@ func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Col
 		})
 	})
 	return s
+}
+
+// SetHTTPClient 注入出站 client（经进程级代理，FR-174/ADR-037）：Worker 升级二进制下载经此 client。
+// 由 main 装配；不调用则回退 http.DefaultClient（向后兼容，测试不受影响）。
+func (s *Server) SetHTTPClient(c *http.Client) {
+	s.httpClient = c
+}
+
+// outboundClient 返回出站 client：注入了则用之，否则回退 http.DefaultClient。
+func (s *Server) outboundClient() *http.Client {
+	if s.httpClient != nil {
+		return s.httpClient
+	}
+	return http.DefaultClient
 }
 
 // dispatch 把一条内部事件非阻塞地扇出给所有 StreamInstanceEvents 订阅者。
