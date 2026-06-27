@@ -72,8 +72,29 @@ service WorkerService {
   rpc InstallJDK(InstallJDKRequest) returns (InstallJDKResponse);
   // RemoveJDK 删除 Worker 托管的 JDK 目录。
   rpc RemoveJDK(RemoveJDKRequest) returns (RemoveJDKResponse);
+  // JDKCatalog 经 foojay disco API 查询某发行版可选的具体 JDK 版本，喂前端版本选择器（FR-178）。
+  rpc JDKCatalog(JDKCatalogRequest) returns (JDKCatalogResponse);
   // DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
   rpc DownloadCore(DownloadCoreRequest) returns (DownloadCoreResponse);
+
+  // === 节点制品缓存（FR-178）===
+  //
+  // Worker 按 sha256 缓存下载过的服务端核心 jar（建实例命中即秒拷免重下）。
+  // 缓存管理（列/逐项清/清空/容量上限）经以下 RPC，CP 仅平台管理员可达。
+
+  // ListArtifactCache 列出节点本地制品缓存项 + 总占用 + 当前容量上限。
+  rpc ListArtifactCache(ListArtifactCacheRequest) returns (ListArtifactCacheResponse);
+  // EvictArtifactCache 逐项清除指定 sha256 的缓存。
+  rpc EvictArtifactCache(EvictArtifactCacheRequest) returns (EvictArtifactCacheResponse);
+  // ClearArtifactCache 清空节点全部制品缓存。
+  rpc ClearArtifactCache(ClearArtifactCacheRequest) returns (ClearArtifactCacheResponse);
+  // SetArtifactCacheCap 设置容量上限（字节，0=不限）；超限按 lastUsedAt 升序 LRU 淘汰。
+  rpc SetArtifactCacheCap(SetArtifactCacheCapRequest) returns (SetArtifactCacheCapResponse);
+
+  // === 节点目录浏览（FR-178，JDK 路径登记目录选择器）===
+
+  // BrowseDir 只读列出节点上某绝对路径下的子目录（防穿越，CP 仅平台管理员可达）。
+  rpc BrowseDir(BrowseDirRequest) returns (BrowseDirResponse);
   // DeployServerProbe 部署 ServerProbe 监控探针 jar 与 config 到实例 plugins 目录（FR-010）。
   rpc DeployServerProbe(DeployServerProbeRequest) returns (DeployServerProbeResponse);
   // CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
@@ -683,6 +704,31 @@ message InstallJDKRequest {
   // task_id 是 CP 生成的任务业务 ID（FR-183，见 ADR-040）。非空时 Worker 异步执行安装：
   // 启动即返回、后台下载、经心跳按此 task_id 上报进度/日志/终态。为空时回退同步安装（向后兼容）。
   string task_id = 6;
+  // version 具体 JDK 版本（FR-178，可选，如 "21.0.4"）。非空时经 foojay disco 按具体版本解析下载源；
+  // 为空时按 major_version 取该大版本最新 GA（沿用直链/foojay latest）。
+  string version = 7;
+}
+
+// === JDK 版本目录（foojay，FR-178）===
+
+message JDKCatalogRequest {
+  string vendor = 1;       // 发行版名（Temurin/Liberica/Microsoft/Semeru/GraalVM…）
+  int32 major_version = 2; // 大版本过滤（<=0 表示该发行版可用大版本概览）
+  string arch = 3;         // x64 / aarch64（空=本机架构）
+}
+
+// JDKCatalogPackage 一条可选的 JDK 构建（喂前端版本选择器）。
+message JDKCatalogPackage {
+  string distribution = 1; // foojay distribution slug
+  int32 major_version = 2;
+  string java_version = 3; // 具体版本（如 21.0.4）
+  string archive_type = 4; // tar.gz / zip
+  bool latest = 5;         // 是否该大版本最新可用构建
+}
+
+message JDKCatalogResponse {
+  repeated JDKCatalogPackage packages = 1;
+  string error = 2; // 查询失败原因（foojay 不可达等；packages 为空）
 }
 
 message InstallJDKResponse {
@@ -715,6 +761,76 @@ message DownloadCoreResponse {
   bool success = 1;
   string error = 2;
   int64 size = 3;
+}
+
+// === 节点制品缓存（FR-178） ===
+
+// ArtifactCacheItem 一条节点本地制品缓存项（meta 缺失时 name/version 为空、size 取 blob 实际大小）。
+message ArtifactCacheItem {
+  string sha256 = 1;
+  string name = 2;          // 人类可读名（落地文件名 / CP 由 asset 表补全）
+  string type = 3;          // 制品类型（首版固定 core）
+  string version = 4;       // 版本标记，可空
+  int64 size = 5;           // 字节数
+  int64 cached_at = 6;      // 首次存入时间（Unix 秒）
+  int64 last_used_at = 7;   // 最近命中/存入时间（Unix 秒，LRU 依据）
+}
+
+message ListArtifactCacheRequest {}
+
+message ListArtifactCacheResponse {
+  repeated ArtifactCacheItem items = 1;
+  int64 total_bytes = 2;  // 缓存总占用（所有 blob 之和）
+  int64 cap_bytes = 3;    // 当前容量上限（0=不限）
+}
+
+message EvictArtifactCacheRequest {
+  string sha256 = 1;
+}
+
+message EvictArtifactCacheResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message ClearArtifactCacheRequest {}
+
+message ClearArtifactCacheResponse {
+  bool success = 1;
+  string error = 2;
+  int32 removed = 3; // 被清除的缓存项数量
+}
+
+message SetArtifactCacheCapRequest {
+  int64 cap_bytes = 1; // 容量上限（字节，0=不限）
+}
+
+message SetArtifactCacheCapResponse {
+  bool success = 1;
+  string error = 2;
+  int64 cap_bytes = 3;     // 设定后的上限
+  int64 total_bytes = 4;   // 设定（含可能的 LRU 淘汰）后的总占用
+}
+
+// === 节点目录浏览（FR-178，目录选择器） ===
+
+message BrowseDirRequest {
+  // path 节点上的绝对路径（空=列出根/盘符等可选起点）。仅列子目录，只读。
+  string path = 1;
+}
+
+// BrowseDirEntry 一个子目录项。
+message BrowseDirEntry {
+  string name = 1; // 目录名（basename）
+  string path = 2; // 绝对路径
+}
+
+message BrowseDirResponse {
+  bool success = 1;
+  string error = 2;
+  string path = 3;             // 实际浏览的规范化绝对路径
+  string parent = 4;           // 父目录绝对路径（已在根则为空）
+  repeated BrowseDirEntry dirs = 5; // 子目录列表（不含文件）
 }
 
 message DeployServerProbeRequest {

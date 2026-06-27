@@ -50,7 +50,13 @@ const (
 	WorkerService_ListJDKs_FullMethodName             = "/worker.WorkerService/ListJDKs"
 	WorkerService_InstallJDK_FullMethodName           = "/worker.WorkerService/InstallJDK"
 	WorkerService_RemoveJDK_FullMethodName            = "/worker.WorkerService/RemoveJDK"
+	WorkerService_JDKCatalog_FullMethodName           = "/worker.WorkerService/JDKCatalog"
 	WorkerService_DownloadCore_FullMethodName         = "/worker.WorkerService/DownloadCore"
+	WorkerService_ListArtifactCache_FullMethodName    = "/worker.WorkerService/ListArtifactCache"
+	WorkerService_EvictArtifactCache_FullMethodName   = "/worker.WorkerService/EvictArtifactCache"
+	WorkerService_ClearArtifactCache_FullMethodName   = "/worker.WorkerService/ClearArtifactCache"
+	WorkerService_SetArtifactCacheCap_FullMethodName  = "/worker.WorkerService/SetArtifactCacheCap"
+	WorkerService_BrowseDir_FullMethodName            = "/worker.WorkerService/BrowseDir"
 	WorkerService_DeployServerProbe_FullMethodName    = "/worker.WorkerService/DeployServerProbe"
 	WorkerService_CloneWorkDir_FullMethodName         = "/worker.WorkerService/CloneWorkDir"
 	WorkerService_ListImages_FullMethodName           = "/worker.WorkerService/ListImages"
@@ -141,8 +147,20 @@ type WorkerServiceClient interface {
 	InstallJDK(ctx context.Context, in *InstallJDKRequest, opts ...grpc.CallOption) (*InstallJDKResponse, error)
 	// RemoveJDK 删除 Worker 托管的 JDK 目录。
 	RemoveJDK(ctx context.Context, in *RemoveJDKRequest, opts ...grpc.CallOption) (*RemoveJDKResponse, error)
+	// JDKCatalog 经 foojay disco API 查询某发行版可选的具体 JDK 版本，喂前端版本选择器（FR-178）。
+	JDKCatalog(ctx context.Context, in *JDKCatalogRequest, opts ...grpc.CallOption) (*JDKCatalogResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
 	DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error)
+	// ListArtifactCache 列出节点本地制品缓存项 + 总占用 + 当前容量上限。
+	ListArtifactCache(ctx context.Context, in *ListArtifactCacheRequest, opts ...grpc.CallOption) (*ListArtifactCacheResponse, error)
+	// EvictArtifactCache 逐项清除指定 sha256 的缓存。
+	EvictArtifactCache(ctx context.Context, in *EvictArtifactCacheRequest, opts ...grpc.CallOption) (*EvictArtifactCacheResponse, error)
+	// ClearArtifactCache 清空节点全部制品缓存。
+	ClearArtifactCache(ctx context.Context, in *ClearArtifactCacheRequest, opts ...grpc.CallOption) (*ClearArtifactCacheResponse, error)
+	// SetArtifactCacheCap 设置容量上限（字节，0=不限）；超限按 lastUsedAt 升序 LRU 淘汰。
+	SetArtifactCacheCap(ctx context.Context, in *SetArtifactCacheCapRequest, opts ...grpc.CallOption) (*SetArtifactCacheCapResponse, error)
+	// BrowseDir 只读列出节点上某绝对路径下的子目录（防穿越，CP 仅平台管理员可达）。
+	BrowseDir(ctx context.Context, in *BrowseDirRequest, opts ...grpc.CallOption) (*BrowseDirResponse, error)
 	// DeployServerProbe 部署 ServerProbe 监控探针 jar 与 config 到实例 plugins 目录（FR-010）。
 	DeployServerProbe(ctx context.Context, in *DeployServerProbeRequest, opts ...grpc.CallOption) (*DeployServerProbeResponse, error)
 	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
@@ -527,10 +545,70 @@ func (c *workerServiceClient) RemoveJDK(ctx context.Context, in *RemoveJDKReques
 	return out, nil
 }
 
+func (c *workerServiceClient) JDKCatalog(ctx context.Context, in *JDKCatalogRequest, opts ...grpc.CallOption) (*JDKCatalogResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(JDKCatalogResponse)
+	err := c.cc.Invoke(ctx, WorkerService_JDKCatalog_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DownloadCoreResponse)
 	err := c.cc.Invoke(ctx, WorkerService_DownloadCore_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ListArtifactCache(ctx context.Context, in *ListArtifactCacheRequest, opts ...grpc.CallOption) (*ListArtifactCacheResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListArtifactCacheResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ListArtifactCache_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) EvictArtifactCache(ctx context.Context, in *EvictArtifactCacheRequest, opts ...grpc.CallOption) (*EvictArtifactCacheResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EvictArtifactCacheResponse)
+	err := c.cc.Invoke(ctx, WorkerService_EvictArtifactCache_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ClearArtifactCache(ctx context.Context, in *ClearArtifactCacheRequest, opts ...grpc.CallOption) (*ClearArtifactCacheResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClearArtifactCacheResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ClearArtifactCache_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) SetArtifactCacheCap(ctx context.Context, in *SetArtifactCacheCapRequest, opts ...grpc.CallOption) (*SetArtifactCacheCapResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetArtifactCacheCapResponse)
+	err := c.cc.Invoke(ctx, WorkerService_SetArtifactCacheCap_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) BrowseDir(ctx context.Context, in *BrowseDirRequest, opts ...grpc.CallOption) (*BrowseDirResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BrowseDirResponse)
+	err := c.cc.Invoke(ctx, WorkerService_BrowseDir_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -814,8 +892,20 @@ type WorkerServiceServer interface {
 	InstallJDK(context.Context, *InstallJDKRequest) (*InstallJDKResponse, error)
 	// RemoveJDK 删除 Worker 托管的 JDK 目录。
 	RemoveJDK(context.Context, *RemoveJDKRequest) (*RemoveJDKResponse, error)
+	// JDKCatalog 经 foojay disco API 查询某发行版可选的具体 JDK 版本，喂前端版本选择器（FR-178）。
+	JDKCatalog(context.Context, *JDKCatalogRequest) (*JDKCatalogResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
 	DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error)
+	// ListArtifactCache 列出节点本地制品缓存项 + 总占用 + 当前容量上限。
+	ListArtifactCache(context.Context, *ListArtifactCacheRequest) (*ListArtifactCacheResponse, error)
+	// EvictArtifactCache 逐项清除指定 sha256 的缓存。
+	EvictArtifactCache(context.Context, *EvictArtifactCacheRequest) (*EvictArtifactCacheResponse, error)
+	// ClearArtifactCache 清空节点全部制品缓存。
+	ClearArtifactCache(context.Context, *ClearArtifactCacheRequest) (*ClearArtifactCacheResponse, error)
+	// SetArtifactCacheCap 设置容量上限（字节，0=不限）；超限按 lastUsedAt 升序 LRU 淘汰。
+	SetArtifactCacheCap(context.Context, *SetArtifactCacheCapRequest) (*SetArtifactCacheCapResponse, error)
+	// BrowseDir 只读列出节点上某绝对路径下的子目录（防穿越，CP 仅平台管理员可达）。
+	BrowseDir(context.Context, *BrowseDirRequest) (*BrowseDirResponse, error)
 	// DeployServerProbe 部署 ServerProbe 监控探针 jar 与 config 到实例 plugins 目录（FR-010）。
 	DeployServerProbe(context.Context, *DeployServerProbeRequest) (*DeployServerProbeResponse, error)
 	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
@@ -962,8 +1052,26 @@ func (UnimplementedWorkerServiceServer) InstallJDK(context.Context, *InstallJDKR
 func (UnimplementedWorkerServiceServer) RemoveJDK(context.Context, *RemoveJDKRequest) (*RemoveJDKResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveJDK not implemented")
 }
+func (UnimplementedWorkerServiceServer) JDKCatalog(context.Context, *JDKCatalogRequest) (*JDKCatalogResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method JDKCatalog not implemented")
+}
 func (UnimplementedWorkerServiceServer) DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DownloadCore not implemented")
+}
+func (UnimplementedWorkerServiceServer) ListArtifactCache(context.Context, *ListArtifactCacheRequest) (*ListArtifactCacheResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListArtifactCache not implemented")
+}
+func (UnimplementedWorkerServiceServer) EvictArtifactCache(context.Context, *EvictArtifactCacheRequest) (*EvictArtifactCacheResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method EvictArtifactCache not implemented")
+}
+func (UnimplementedWorkerServiceServer) ClearArtifactCache(context.Context, *ClearArtifactCacheRequest) (*ClearArtifactCacheResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClearArtifactCache not implemented")
+}
+func (UnimplementedWorkerServiceServer) SetArtifactCacheCap(context.Context, *SetArtifactCacheCapRequest) (*SetArtifactCacheCapResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetArtifactCacheCap not implemented")
+}
+func (UnimplementedWorkerServiceServer) BrowseDir(context.Context, *BrowseDirRequest) (*BrowseDirResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BrowseDir not implemented")
 }
 func (UnimplementedWorkerServiceServer) DeployServerProbe(context.Context, *DeployServerProbeRequest) (*DeployServerProbeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeployServerProbe not implemented")
@@ -1576,6 +1684,24 @@ func _WorkerService_RemoveJDK_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_JDKCatalog_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(JDKCatalogRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).JDKCatalog(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_JDKCatalog_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).JDKCatalog(ctx, req.(*JDKCatalogRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_DownloadCore_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DownloadCoreRequest)
 	if err := dec(in); err != nil {
@@ -1590,6 +1716,96 @@ func _WorkerService_DownloadCore_Handler(srv interface{}, ctx context.Context, d
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).DownloadCore(ctx, req.(*DownloadCoreRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_ListArtifactCache_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListArtifactCacheRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ListArtifactCache(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ListArtifactCache_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ListArtifactCache(ctx, req.(*ListArtifactCacheRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_EvictArtifactCache_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EvictArtifactCacheRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).EvictArtifactCache(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_EvictArtifactCache_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).EvictArtifactCache(ctx, req.(*EvictArtifactCacheRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_ClearArtifactCache_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClearArtifactCacheRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ClearArtifactCache(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ClearArtifactCache_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ClearArtifactCache(ctx, req.(*ClearArtifactCacheRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_SetArtifactCacheCap_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetArtifactCacheCapRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).SetArtifactCacheCap(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_SetArtifactCacheCap_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).SetArtifactCacheCap(ctx, req.(*SetArtifactCacheCapRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_BrowseDir_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BrowseDirRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).BrowseDir(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_BrowseDir_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).BrowseDir(ctx, req.(*BrowseDirRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2042,8 +2258,32 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _WorkerService_RemoveJDK_Handler,
 		},
 		{
+			MethodName: "JDKCatalog",
+			Handler:    _WorkerService_JDKCatalog_Handler,
+		},
+		{
 			MethodName: "DownloadCore",
 			Handler:    _WorkerService_DownloadCore_Handler,
+		},
+		{
+			MethodName: "ListArtifactCache",
+			Handler:    _WorkerService_ListArtifactCache_Handler,
+		},
+		{
+			MethodName: "EvictArtifactCache",
+			Handler:    _WorkerService_EvictArtifactCache_Handler,
+		},
+		{
+			MethodName: "ClearArtifactCache",
+			Handler:    _WorkerService_ClearArtifactCache_Handler,
+		},
+		{
+			MethodName: "SetArtifactCacheCap",
+			Handler:    _WorkerService_SetArtifactCacheCap_Handler,
+		},
+		{
+			MethodName: "BrowseDir",
+			Handler:    _WorkerService_BrowseDir_Handler,
 		},
 		{
 			MethodName: "DeployServerProbe",
