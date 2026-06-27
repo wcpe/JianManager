@@ -304,6 +304,8 @@
   },
   "common": {
     "noData": "No data",
+    "copyFailed": "Copy failed",
+    "refresh": "Refresh",
     "showPassword": "Show password",
     "hidePassword": "Hide password",
     "loading": "Loading...",
@@ -843,6 +845,11 @@
     "jdkRegisterFailed": "Registration failed",
     "jdkDeleteFailed": "Delete failed",
     "jdkMarkManaged": "Mark as Worker-managed (record only)",
+    "jdkEmpty": "No JDKs registered yet",
+    "jdkDeleteConfirm": "Delete {{vendor}} {{major}}?",
+    "jdkDeleteDescription": "This JDK will be removed from the node; instances referencing it may fail to start.",
+    "jdkDeleted": "JDK deleted",
+    "jdkInUse": "JDK is in use by instances: {{names}}",
     "enroll": {
       "addNode": "Add Node",
       "addTitle": "Add Node",

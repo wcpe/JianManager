@@ -304,6 +304,8 @@
   },
   "common": {
     "noData": "暂无数据",
+    "copyFailed": "复制失败",
+    "refresh": "刷新",
     "showPassword": "显示密码",
     "hidePassword": "隐藏密码",
     "loading": "加载中...",
@@ -820,6 +822,11 @@
     "jdkRegisterFailed": "登记失败",
     "jdkDeleteFailed": "删除失败",
     "jdkMarkManaged": "标记为 Worker 托管（仅作记录）",
+    "jdkEmpty": "尚未登记任何 JDK",
+    "jdkDeleteConfirm": "删除 {{vendor}} {{major}}？",
+    "jdkDeleteDescription": "将从该节点删除此 JDK，引用它的实例可能无法启动。",
+    "jdkDeleted": "JDK 已删除",
+    "jdkInUse": "JDK 正被实例占用：{{names}}",
     "enroll": {
       "addNode": "添加节点",
       "addTitle": "添加节点",
