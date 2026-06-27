@@ -57,6 +57,15 @@ type FeedArtifact struct {
 
 // SelfUpdateConfig 是注入自更新服务的更新源配置（对齐 config.UpdateConfig）。
 type SelfUpdateConfig struct {
+	// GitHubRepo owner/repo；非空即启用 GitHub Releases 源（FR-175，见 ADR-036 §7）。
+	GitHubRepo string
+	// Channel GitHub 源渠道：stable（取 /releases/latest）| prerelease（取 /releases/tags/nightly）。空=stable。
+	Channel string
+	// GitHubToken 可选 GitHub API token；非空时请求带 Authorization 提升限流额度。
+	GitHubToken string
+	// GitHubAPIBase GitHub API 基址（默认 https://api.github.com）；仅测试经 httptest 覆盖。
+	GitHubAPIBase string
+	// FeedURL release feed JSON 地址（可选回退）：github_repo 为空且 feed_url 非空时走原 feed 路径（FR-081）。
 	FeedURL       string
 	BinaryBaseURL string
 	AllowInsecure bool
@@ -78,9 +87,9 @@ type SelfUpdateService struct {
 	rollout   *Rollout
 
 	// 以下为可注入测试桩；生产为 nil 时走真实现。
-	feedFetcher   func(ctx context.Context) (*Feed, error)         // 覆盖 FetchFeed
-	cpUpgradeFn   func(art *FeedArtifact) error                    // 覆盖 CP 自身下载替换重启
-	restartCPFn   func()                                           // 覆盖 CP 重启动作
+	feedFetcher   func(ctx context.Context) (*Feed, error)                      // 覆盖 FetchFeed
+	cpUpgradeFn   func(art *FeedArtifact) error                                 // 覆盖 CP 自身下载替换重启
+	restartCPFn   func()                                                        // 覆盖 CP 重启动作
 	nodeUpgradeFn func(nodeID uint, wantVersion string) (string, string, error) // 覆盖 rollout 内单节点升级
 }
 
@@ -103,17 +112,46 @@ func (s *SelfUpdateService) outboundClient() *http.Client {
 	return http.DefaultClient
 }
 
-// Configured 报告是否已配置更新源（feed_url 非空）。
+// Configured 报告是否已配置更新源：github_repo 非空 或 feed_url 非空（FR-175，见 ADR-036 §7）。
 func (s *SelfUpdateService) Configured() bool {
-	return strings.TrimSpace(s.cfg.FeedURL) != ""
+	return strings.TrimSpace(s.cfg.GitHubRepo) != "" || strings.TrimSpace(s.cfg.FeedURL) != ""
 }
 
-// FetchFeed 拉取并解析 release feed。未配 feed_url 返回 ErrUpdateNotConfigured。
+// sourceLabel 返回当前更新源标识（CheckResult.Source 用）：
+// github:owner/repo@channel（GitHub 源）| feed（feed_url 回退）| 空（未配置）。
+func (s *SelfUpdateService) sourceLabel() string {
+	if repo := strings.TrimSpace(s.cfg.GitHubRepo); repo != "" {
+		return fmt.Sprintf("github:%s@%s", repo, s.channel())
+	}
+	if strings.TrimSpace(s.cfg.FeedURL) != "" {
+		return "feed"
+	}
+	return ""
+}
+
+// resolveRelease 取归一 *Feed：feedFetcher 桩优先 → github_repo→GitHub Releases API →
+// feed_url→原 feed JSON → 都空 ErrUpdateNotConfigured（FR-175，见 ADR-036 §7）。
+// 替代既有 FetchFeed 作为「取 Feed」的统一入口；FetchFeed 保留为 feed_url 专用实现供回退调用。
+func (s *SelfUpdateService) resolveRelease(ctx context.Context) (*Feed, error) {
+	if s.feedFetcher != nil {
+		return s.feedFetcher(ctx)
+	}
+	if strings.TrimSpace(s.cfg.GitHubRepo) != "" {
+		return s.fetchGitHubRelease(ctx)
+	}
+	if strings.TrimSpace(s.cfg.FeedURL) != "" {
+		return s.FetchFeed(ctx)
+	}
+	return nil, ErrUpdateNotConfigured
+}
+
+// FetchFeed 拉取并解析 feed_url 指向的 release feed JSON（FR-081 回退路径）。
+// GitHub 源走 fetchGitHubRelease；统一入口是 resolveRelease。feed_url 为空返回 ErrUpdateNotConfigured。
 func (s *SelfUpdateService) FetchFeed(ctx context.Context) (*Feed, error) {
 	if s.feedFetcher != nil {
 		return s.feedFetcher(ctx)
 	}
-	if !s.Configured() {
+	if strings.TrimSpace(s.cfg.FeedURL) == "" {
 		return nil, ErrUpdateNotConfigured
 	}
 	if !s.cfg.AllowInsecure && !strings.HasPrefix(strings.ToLower(s.cfg.FeedURL), "https://") {
@@ -180,17 +218,20 @@ type ComponentStatus struct {
 
 // CheckResult 是 GET /self-update/check 的返回。
 type CheckResult struct {
-	Configured    bool              `json:"configured"`
-	LatestVersion string            `json:"latestVersion"`
-	Notes         string            `json:"notes"`
-	ControlPlane  ComponentStatus   `json:"controlPlane"`
-	Nodes         []ComponentStatus `json:"nodes"`
+	Configured    bool   `json:"configured"`
+	LatestVersion string `json:"latestVersion"`
+	Notes         string `json:"notes"`
+	// Source 更新源标识（FR-175）：github:owner/repo@channel | feed | 空（未配置）。
+	Source       string            `json:"source"`
+	ControlPlane ComponentStatus   `json:"controlPlane"`
+	Nodes        []ComponentStatus `json:"nodes"`
 }
 
 // CheckUpdate 组装 CP 自身 + 各节点的版本对比。未配源时返回 configured=false 的结果（不报错）。
 func (s *SelfUpdateService) CheckUpdate(ctx context.Context) (*CheckResult, error) {
 	res := &CheckResult{
 		Configured: s.Configured(),
+		Source:     s.sourceLabel(),
 		ControlPlane: ComponentStatus{
 			CurrentVersion: version.Version,
 			OS:             runtime.GOOS,
@@ -201,7 +242,7 @@ func (s *SelfUpdateService) CheckUpdate(ctx context.Context) (*CheckResult, erro
 
 	var feed *Feed
 	if s.Configured() {
-		f, err := s.FetchFeed(ctx)
+		f, err := s.resolveRelease(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -261,7 +302,7 @@ func (s *SelfUpdateService) CheckUpdate(ctx context.Context) (*CheckResult, erro
 // version 留空取 feed 最新；非空时校验 feed.Version 与之一致（本 FR feed 为 latest-only，
 // 指定版本仅作确认，不做多版本检索）。
 func (s *SelfUpdateService) resolveArtifact(ctx context.Context, component, goos, goarch, wantVersion string) (*Feed, *FeedArtifact, error) {
-	feed, err := s.FetchFeed(ctx)
+	feed, err := s.resolveRelease(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -335,7 +376,7 @@ func (s *SelfUpdateService) UpgradeNode(ctx context.Context, nodeID uint, wantVe
 		return "", "", fmt.Errorf("节点不存在: %w", err)
 	}
 	// 先校验更新源已配置——未配源对任何节点都无法升级，应先于节点在线状态报错。
-	if _, err := s.FetchFeed(ctx); err != nil {
+	if _, err := s.resolveRelease(ctx); err != nil {
 		return "", "", err
 	}
 	client, ok := s.pool.Get(node.UUID)
