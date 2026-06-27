@@ -1498,35 +1498,35 @@
 
 ---
 
-## 面板自更新（FR-081）
+## 面板自更新（FR-081 / FR-175）
 
-> Control Plane 与各节点 Worker 的二进制在线升级（ADR-020）。均挂运营者浏览器 JWT 入口、**仅平台管理员**。
-> 升级源经 `control-plane.yaml` 的 `update` 段配置（`feed_url` 留空即未配置）；升级类操作写审计（detail 仅含版本/节点元数据，绝不含下载 url 或凭据）。
-> 升级流程：下载目标版本制品 → **sha256 校验** → 替换二进制 → 平滑重启；Worker 升级经 CP gRPC 编排（`GetVersion`/`UpgradeWorker`），daemon 模式下不杀运行中的游戏服。
+> Control Plane 与各节点 Worker 的二进制在线升级（ADR-020 / ADR-036 §7）。均挂运营者浏览器 JWT 入口、**仅平台管理员**。
+> **更新源**（FR-175，见 ADR-036 §7）：默认**原生读 GitHub Releases API**（`control-plane.yaml` 的 `update.github_repo`，默认 `wcpe/jianmanager`），`update.channel` 选 `stable`（取 `/releases/latest` 最新正式）或 `prerelease`（取滚动 `nightly` 预发布）；sha256 取自 release 的 `checksums.txt` 资产（ADR-036 §2 契约），资产名按 ADR-036 §1 命名 `<component>-<os>-<arch>[.exe]` 反解。`update.github_token` 可选，提升 GitHub API 限流额度（匿名 60 次/时）。`github_repo` 为空且 `feed_url` 非空时**回退**原 feed JSON 路径（FR-081）；二者均空即未配置。下载经 FR-174 出站代理。
+> 升级类操作写审计（detail 仅含版本/节点元数据，绝不含下载 url 或凭据）。升级流程：下载目标版本制品 → **sha256 校验** → 替换二进制 → 平滑重启；Worker 升级经 CP gRPC 编排（`GetVersion`/`UpgradeWorker`），daemon 模式下不杀运行中的游戏服。
 
 ### GET /api/v1/self-update/check
-- **描述**: 检查更新——拉取 release feed，对比 CP 自身与各节点当前版本，标注是否有更新及是否有匹配平台（component+os+arch）的制品
+- **描述**: 检查更新——按配置的更新源（GitHub Releases 或 feed）解析最新版本，对比 CP 自身与各节点当前版本，标注是否有更新及是否有匹配平台（component+os+arch）的制品
 - **权限**: 平台管理员
-- **关联 FR**: FR-081
-- **响应** (200): `{ "configured", "latestVersion", "notes", "controlPlane": ComponentStatus, "nodes": [ComponentStatus] }`，其中 `ComponentStatus = { "nodeId?", "nodeUuid?", "name?", "online", "currentVersion", "os", "arch", "updateAvailable", "artifactAvailable" }`；节点当前版本经 gRPC `GetVersion` 实时拉取，离线节点 `online=false`
-- **错误**: 409 `UPDATE_NOT_CONFIGURED`（未配置 feed_url）| 502 `UPDATE_CHECK_FAILED`（拉取/解析 feed 失败）
+- **关联 FR**: FR-081、FR-175
+- **响应** (200): `{ "configured", "latestVersion", "notes", "source", "controlPlane": ComponentStatus, "nodes": [ComponentStatus] }`，其中 `source` 标更新源（`github:owner/repo@channel` | `feed` | 空），`ComponentStatus = { "nodeId?", "nodeUuid?", "name?", "online", "currentVersion", "os", "arch", "updateAvailable", "artifactAvailable" }`；节点当前版本经 gRPC `GetVersion` 实时拉取，离线节点 `online=false`
+- **错误**: 409 `UPDATE_NOT_CONFIGURED`（未配置 github_repo / feed_url）| 429 `UPDATE_RATE_LIMITED`（GitHub API 限流，可配 github_token 提额）| 502 `UPDATE_CHECK_FAILED`（拉取/解析更新源失败）
 
 ### POST /api/v1/self-update/control-plane/upgrade
 - **描述**: 升级 CP 自身（下载 → sha256 校验 → 替换 → 平滑重启）。替换成功后异步延迟重启，先返回 202
 - **权限**: 平台管理员
-- **关联 FR**: FR-081
-- **请求**: `{ "version": "可选，留空取 feed 最新" }`
+- **关联 FR**: FR-081、FR-175
+- **请求**: `{ "version": "可选，留空取更新源最新" }`
 - **响应** (202): `{ "status": "restarting", "fromVersion", "toVersion" }`
-- **错误**: 409 `UPDATE_NOT_CONFIGURED` / `UPDATE_ALREADY_LATEST` | 422 `UPDATE_NO_ARTIFACT`（feed 无匹配本平台制品）| 502 `UPDATE_FAILED`
+- **错误**: 409 `UPDATE_NOT_CONFIGURED` / `UPDATE_ALREADY_LATEST` | 422 `UPDATE_NO_ARTIFACT`（更新源无匹配本平台制品）| 429 `UPDATE_RATE_LIMITED` | 502 `UPDATE_FAILED`
 - **审计**: `self_update.control_plane`
 
 ### POST /api/v1/self-update/nodes/:id/upgrade
 - **描述**: 经 gRPC 令目标节点下载校验替换并重启 Worker（daemon 模式下游戏服不掉）
 - **权限**: 平台管理员
-- **关联 FR**: FR-081
-- **请求**: `{ "version": "可选，留空取 feed 最新" }`
+- **关联 FR**: FR-081、FR-175
+- **请求**: `{ "version": "可选，留空取更新源最新" }`
 - **响应** (202): `{ "status": "upgrading", "nodeId", "fromVersion", "toVersion" }`
-- **错误**: 409 `UPDATE_NOT_CONFIGURED` | 422 `UPDATE_NO_ARTIFACT` | 503 `NODE_OFFLINE`（节点未连接）| 502 `UPDATE_FAILED`
+- **错误**: 409 `UPDATE_NOT_CONFIGURED` | 422 `UPDATE_NO_ARTIFACT` | 429 `UPDATE_RATE_LIMITED` | 503 `NODE_OFFLINE`（节点未连接）| 502 `UPDATE_FAILED`
 - **审计**: `self_update.node`
 
 ### POST /api/v1/self-update/nodes/upgrade-all
