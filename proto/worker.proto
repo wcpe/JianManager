@@ -171,6 +171,19 @@ message HeartbeatRequest {
   int64 network_bytes_recv = 9;  // 累计网络接收字节
   repeated InstanceMetricSample instance_metrics = 10;  // 每实例 ServerProbe 快照（FR-060 时序）
   double load_avg1 = 11;  // 节点 1 分钟 load average（FR-062；gopsutil 跨平台，取不到为 0）
+  repeated TaskSnapshot tasks = 12;  // 运行中长任务进度快照（FR-183 任务中心，见 ADR-040）
+}
+
+// TaskSnapshot 心跳负载里携带的一条运行中长任务进度快照（FR-183，见 ADR-040）。
+// Worker 维护运行中任务内存登记表，每次心跳把表内任务快照随心跳上报；
+// CP 据 task_id upsert Task、幂等追加日志，终态（succeeded/failed）触发副作用。
+message TaskSnapshot {
+  string task_id = 1;             // 业务唯一键（UUID），CP 据此 upsert
+  string state = 2;               // pending/running/succeeded/failed
+  int32 progress = 3;             // 0~100
+  string error = 4;               // 失败原因（仅 failed）
+  string result = 5;              // 成功结果 JSON（如安装出的 JDK 信息，仅 succeeded）
+  repeated string recent_log_lines = 6;  // 最近若干行滚动日志（CP 幂等追加）
 }
 
 message InstanceState {
@@ -667,12 +680,17 @@ message InstallJDKRequest {
   // mirror_base 是该 vendor 的下载基址（CP 从平台设置 jdk.mirror.<vendor> 取生效值后下发）。
   // 非空时 Worker 用它构造下载 URL，使运行时配置的镜像源真生效；为空时回退 Worker 本地 env/默认源。
   string mirror_base = 5;
+  // task_id 是 CP 生成的任务业务 ID（FR-183，见 ADR-040）。非空时 Worker 异步执行安装：
+  // 启动即返回、后台下载、经心跳按此 task_id 上报进度/日志/终态。为空时回退同步安装（向后兼容）。
+  string task_id = 6;
 }
 
 message InstallJDKResponse {
-  bool success = 1;
+  bool success = 1;     // 异步语义下表示「已受理并启动」；同步语义下表示「安装成功」
   string error = 2;
-  JDKInfo jdk = 3;
+  JDKInfo jdk = 3;      // 仅同步路径返回；异步路径为空（结果经心跳终态的 result 回传）
+  // task_id 回显受理的任务 ID（异步路径，FR-183）。CP 据此把 Task 置为 running。
+  string task_id = 4;
 }
 
 message RemoveJDKRequest {
