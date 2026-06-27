@@ -22,6 +22,7 @@ import {
   LayoutDashboard,
   LayoutGrid,
   LayoutTemplate,
+  ListChecks,
   Network,
   PanelLeftClose,
   PanelLeftOpen,
@@ -105,6 +106,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/monitor', labelKey: 'nav.monitoring', icon: Activity },
       { to: '/alerts', labelKey: 'nav.alerts', icon: Bell },
       { to: '/logs', labelKey: 'nav.logs', icon: ScrollText },
+      { to: '/tasks', labelKey: 'nav.tasks', icon: ListChecks },
     ],
   },
   {

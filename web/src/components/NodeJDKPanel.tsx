@@ -65,7 +65,8 @@ export default function NodeJDKPanel({ nodeId }: NodeJDKPanelProps) {
     install.mutate(
       { vendor, majorVersion: Number(major), arch },
       {
-        onSuccess: () => toast.success('JDK 安装任务已下发'),
+        // FR-183：异步任务，回执 taskId；进度/完成在「任务中心」与站内信查看。
+        onSuccess: () => toast.success('JDK 安装任务已下发，进度可在「任务中心」查看'),
         onError: (err: Error & { response?: { data?: { message?: string } } }) => {
           toast.error(err.response?.data?.message || '安装失败')
         },

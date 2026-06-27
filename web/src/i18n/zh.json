@@ -329,7 +329,8 @@
     "sysPlatform": "平台与维护",
     "sysAccount": "账户与审计",
     "collapseSidebar": "收起侧栏",
-    "expandSidebar": "展开侧栏"
+    "expandSidebar": "展开侧栏",
+    "tasks": "任务中心"
   },
   "console": {
     "title": "运维控制台",
@@ -2083,5 +2084,29 @@
     "searchPlaceholder": "搜索或输入…",
     "noResults": "无匹配项",
     "useCustom": "使用 \"{{value}}\""
+  },
+  "tasks": {
+    "title": "任务中心",
+    "task": "任务",
+    "stateLabel": "状态",
+    "progress": "进度",
+    "updatedAt": "更新时间",
+    "empty": "暂无任务",
+    "loadError": "加载任务失败",
+    "error": "错误",
+    "logs": "日志",
+    "noLogs": "暂无日志",
+    "state": {
+      "pending": "等待中",
+      "running": "进行中",
+      "succeeded": "已完成",
+      "failed": "已失败"
+    }
+  },
+  "notifications": {
+    "title": "站内信",
+    "empty": "暂无消息",
+    "markRead": "标记已读",
+    "markAllRead": "全部已读"
   }
 }

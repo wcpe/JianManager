@@ -329,7 +329,8 @@
     "sysPlatform": "Platform & Maintenance",
     "sysAccount": "Account & Audit",
     "collapseSidebar": "Collapse sidebar",
-    "expandSidebar": "Expand sidebar"
+    "expandSidebar": "Expand sidebar",
+    "tasks": "Tasks"
   },
   "console": {
     "title": "Ops Console",
@@ -2083,5 +2084,29 @@
     "searchPlaceholder": "Search or type…",
     "noResults": "No matches",
     "useCustom": "Use \"{{value}}\""
+  },
+  "tasks": {
+    "title": "Task Center",
+    "task": "Task",
+    "stateLabel": "State",
+    "progress": "Progress",
+    "updatedAt": "Updated",
+    "empty": "No tasks",
+    "loadError": "Failed to load tasks",
+    "error": "Error",
+    "logs": "Logs",
+    "noLogs": "No logs",
+    "state": {
+      "pending": "Pending",
+      "running": "Running",
+      "succeeded": "Succeeded",
+      "failed": "Failed"
+    }
+  },
+  "notifications": {
+    "title": "Notifications",
+    "empty": "No notifications",
+    "markRead": "Mark read",
+    "markAllRead": "Mark all read"
   }
 }

@@ -29,6 +29,7 @@ const ClientChannelsPage = lazy(() => import('@/pages/ClientChannelsPage'))
 const DatabasePage = lazy(() => import('@/pages/DatabasePage'))
 const SystemUpdatePage = lazy(() => import('@/pages/SystemUpdatePage'))
 const LicensesPage = lazy(() => import('@/pages/LicensesPage'))
+const TasksPage = lazy(() => import('@/pages/TasksPage'))
 const SuperWorkbenchPage = lazy(() => import('./SuperWorkbenchPage'))
 const DirectorConsolePage = lazy(() => import('./DirectorConsolePage'))
 /**
@@ -97,6 +98,7 @@ export default function Workspace() {
           <Route path="backups" element={<BackupsPage />} />
           <Route path="backup-storages" element={<BackupStoragesPage />} />
           <Route path="audit" element={<AuditPage />} />
+          <Route path="tasks" element={<TasksPage />} />
           <Route path="client-channels" element={<ClientChannelsPage />} />
           <Route path="logs" element={<LogsPage />} />
           <Route path="storage" element={<StoragePage />} />
