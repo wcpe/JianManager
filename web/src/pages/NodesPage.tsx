@@ -1,8 +1,15 @@
-import { Fragment, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useQueries } from '@tanstack/react-query'
-import { Plus } from 'lucide-react'
+import {
+  Box,
+  ChevronsLeft,
+  ChevronsRight,
+  Plus,
+  Search,
+  Server,
+} from 'lucide-react'
 import {
   useNodes,
   useSetNodeMaintenance,
@@ -13,22 +20,14 @@ import {
 import { useInstances } from '@/api/instances'
 import api from '@/api/client'
 import { useMetricSeries, type MetricSeriesResponse } from '@/api/metrics'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { Panel } from '@/components/ui/panel'
+import { Input } from '@/components/ui/input'
 import { MiniBar } from '@/components/ui/mini-bar'
 import { StatusBadge } from '@/components/ui/status-badge'
 import { ResourceGauge } from '@/components/ui/gauge'
 import { StatCard } from '@/components/ui/stat-card'
 import { SummaryChips, type SummaryChip } from '@/components/ui/summary-chips'
-import { ViewToggle, type ViewMode } from '@/components/ui/view-toggle'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -38,23 +37,25 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { TimeSeriesChart, type ChartSeries } from '@/components/charts/TimeSeriesChart'
 import { RangePicker, type MetricRange } from '@/components/charts/RangePicker'
-import { resourceLevel, type StatusLevel } from '@/lib/threshold'
+import { resourceLevel } from '@/lib/threshold'
 import { summarizeNodes } from '@/lib/node-summary'
-import { NodeWorktableCard } from '@/components/console/NodeWorktableCard'
+import {
+  nodeStatusLevel,
+  filterNodes,
+  resolveSelectedNode,
+  loadNodeListCollapsed,
+  persistNodeListCollapsed,
+} from '@/lib/node-list'
+import { toneChipClass } from '@/lib/tone'
+import { cn } from '@/lib/utils'
 
 import NodeJDKPanel from '@/components/NodeJDKPanel'
 import NodePortsPanel from '@/components/NodePortsPanel'
 import NodeArtifactCachePanel from '@/components/NodeArtifactCachePanel'
+import NodeRepairPanel from '@/components/NodeRepairPanel'
 import DangerConfirm from '@/components/DangerConfirm'
 import AddNodeDialog from '@/components/AddNodeDialog'
 import { Button } from '@/components/ui/button'
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-  SheetDescription,
-} from '@/components/ui/sheet'
 
 /** 将字节数格式化为人类可读的大小（B/KB/MB/GB）。 */
 function formatBytes(bytes: number): string {
@@ -65,28 +66,12 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
 }
 
-/** 节点状态码 → 状态等级（1 在线=正常 / 2 启动中=警告 / 0 离线=危险）。 */
-function nodeStatusLevel(status: number): StatusLevel {
-  if (status === 1) return 'success'
-  if (status === 2) return 'warning'
-  return 'danger'
-}
-
 /** 待二次确认的危险节点操作（FR-048）。 */
 type PendingAction = { kind: 'drain' | 'delete'; node: NodeInfo }
 
-/** 单元格内的占用条：MiniBar + 百分比（阈值变色）。 */
-function UsageCell({ pct, online = true }: { pct: number; online?: boolean }) {
-  // 离线节点的资源值是 DB 里的陈旧 last-known，渲染成实时占用条会误导为「在线空载/在跑」，统一显示无数据（BUG-019）。
-  if (!online || !pct) return <span className="text-muted-foreground">--</span>
-  const v = pct * 100
-  return (
-    <div className="flex items-center gap-2">
-      <MiniBar value={v} className="w-16" />
-      <span className="tabular-nums text-xs">{v.toFixed(0)}%</span>
-    </div>
-  )
-}
+/** 右栏分段（FR-177 §3.3）：概览/实例/JDK/缓存/端口/监控/坏节点修复。 */
+type DetailTab = 'overview' | 'instances' | 'jdk' | 'cache' | 'ports' | 'monitor' | 'repair'
+const DETAIL_TABS: DetailTab[] = ['overview', 'instances', 'jdk', 'cache', 'ports', 'monitor', 'repair']
 
 /** 各实例对比图可切的指标（FR-060 #2：节点上各实例 TPS/MSPT/堆/线程对比）。 */
 const COMPARE_METRICS: { key: string; labelKey: string; fmt: (v: number) => string }[] = [
@@ -146,7 +131,7 @@ function NodeInstanceCompare({ node, range }: { node: NodeInfo; range: MetricRan
   )
 }
 
-/** 详情中的「概览」分段：硬件 + 系统 + 网络等次要信息（从主表移入，FR-144）。 */
+/** 详情「概览」分段：硬件 + 系统 + 网络等次要信息（FR-144）。 */
 function NodeOverviewSection({ node }: { node: NodeInfo }) {
   const { t } = useTranslation()
   const online = node.status === 1
@@ -178,8 +163,8 @@ function NodeOverviewSection({ node }: { node: NodeInfo }) {
   )
 }
 
-/** 展开的节点详情（FR-061/FR-060/FR-144）：概览（IP/系统/网络）+ 环形仪表盘 + 历史曲线 + 各实例指标对比。 */
-function NodeDetail({ node }: { node: NodeInfo }) {
+/** 详情「监控」分段：节点历史曲线组（CPU/内存/磁盘/网络/负载，FR-061/FR-060）。 */
+function NodeMonitorCharts({ node }: { node: NodeInfo }) {
   const { t } = useTranslation()
   const [range, setRange] = useState<MetricRange>('24h')
   const { data } = useMetricSeries({ scope: 'node', targetId: node.uuid, range })
@@ -195,21 +180,9 @@ function NodeDetail({ node }: { node: NodeInfo }) {
   ]
 
   return (
-    <div className="space-y-3 bg-muted/30 p-3">
-      <NodeOverviewSection node={node} />
-      <div className="flex flex-wrap items-center gap-6">
-        <ResourceGauge label={t('nodes.cpu')} value={(node.cpuUsage ?? 0) * 100} unit="%" size={84} />
-        <ResourceGauge
-          label={t('nodes.load')}
-          value={node.cpuCores > 0 ? ((node.loadAvg1 ?? 0) / node.cpuCores) * 100 : 0}
-          unit="%"
-          size={84}
-        />
-        <ResourceGauge label={t('nodes.memory')} value={(node.memoryUsage ?? 0) * 100} unit="%" size={84} />
-        <ResourceGauge label={t('nodes.disk')} value={(node.diskUsage ?? 0) * 100} unit="%" size={84} />
-        <div className="ml-auto">
-          <RangePicker value={range} onChange={setRange} />
-        </div>
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <RangePicker value={range} onChange={setRange} />
       </div>
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <Panel title={t('dashboard.cpuTrend')}>
@@ -228,28 +201,21 @@ function NodeDetail({ node }: { node: NodeInfo }) {
           <TimeSeriesChart series={seriesOf('node_load', t('nodes.load'))} height={160} valueFormatter={(v) => v.toFixed(2)} />
         </Panel>
       </div>
-      <NodeInstanceCompare node={node} range={range} />
     </div>
   )
 }
 
 /**
- * 节点操作菜单（FR-144）：JDK / 端口 / 维护 / 排空 / 下线收入「⋯」kebab，
+ * 节点身份块操作菜单（FR-144/FR-177）：进入/解除维护、排空、下线收入「⋯」kebab。
  * 排空与下线标危险色；下线在线节点禁用 + tooltip。
  */
 function NodeActionsMenu({
   node,
-  onJDK,
-  onPorts,
-  onCache,
   onToggleMaintenance,
   onDrain,
   onDelete,
 }: {
   node: NodeInfo
-  onJDK: () => void
-  onPorts: () => void
-  onCache: () => void
   onToggleMaintenance: () => void
   onDrain: () => void
   onDelete: () => void
@@ -259,14 +225,11 @@ function NodeActionsMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="xs" aria-label={t('nodes.actions')} className="px-1.5">
+        <Button variant="ghost" size="sm" aria-label={t('nodes.actions')} className="px-2">
           ⋯
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={onJDK}>{t('nodes.jdkTitle')}</DropdownMenuItem>
-        <DropdownMenuItem onSelect={onCache}>{t('artifactCache.title')}</DropdownMenuItem>
-        <DropdownMenuItem onSelect={onPorts}>{t('ports.button')}</DropdownMenuItem>
         <DropdownMenuItem onSelect={onToggleMaintenance}>
           {node.maintenance ? t('nodes.uncordon') : t('nodes.cordon')}
         </DropdownMenuItem>
@@ -293,19 +256,118 @@ function NodeActionsMenu({
   )
 }
 
+/** 左栏列表中的单条资源 mini 水位（离线置灰为空轨）。 */
+function RowUsage({ label, pct, online }: { label: string; pct: number; online: boolean }) {
+  return (
+    <div className="flex items-center gap-1">
+      <span className="text-[9px] font-medium text-muted-foreground">{label}</span>
+      <MiniBar value={online ? pct : 0} className="w-10" />
+    </div>
+  )
+}
+
+/** 左栏节点列表行（FR-177）：状态点呼吸灯 + 名 + host + mini 水位（CPU/内存）+ 实例数；选中高亮、离线置灰。 */
+function NodeListRow({
+  node,
+  instanceCount,
+  selected,
+  onSelect,
+}: {
+  node: NodeInfo
+  instanceCount: number
+  selected: boolean
+  onSelect: () => void
+}) {
+  const { t } = useTranslation()
+  const online = node.status === 1
+  const level = nodeStatusLevel(node.status)
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={selected}
+      className={cn(
+        'w-full rounded-lg border px-2.5 py-2 text-left transition-colors',
+        selected ? 'border-primary/40 bg-accent' : 'border-transparent hover:bg-accent/50',
+        !online && 'opacity-60',
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={cn('size-2 shrink-0 rounded-full', online && 'animate-breathing')}
+          style={{ backgroundColor: `var(--status-${level === 'neutral' ? 'info' : level})`, color: `var(--status-${level === 'neutral' ? 'info' : level})` }}
+          aria-hidden
+        />
+        <span className="min-w-0 flex-1 truncate text-sm font-medium" title={node.name}>
+          {node.name}
+        </span>
+        <span className="inline-flex shrink-0 items-center gap-0.5 text-[11px] text-muted-foreground">
+          <Box className="size-3" />
+          <span className="tabular-nums">{instanceCount}</span>
+        </span>
+      </div>
+      <div className="mt-0.5 truncate pl-4 text-[11px] text-muted-foreground" title={node.host}>
+        {node.host}
+      </div>
+      <div className="mt-1.5 flex items-center gap-2 pl-4">
+        <RowUsage label="C" pct={(node.cpuUsage ?? 0) * 100} online={online} />
+        <RowUsage label="M" pct={(node.memoryUsage ?? 0) * 100} online={online} />
+        {node.maintenance && (
+          <Badge variant="outline" className="ml-auto h-4 px-1 text-[9px] text-status-warning border-status-warning/50">
+            {t('nodes.maintenance')}
+          </Badge>
+        )}
+      </div>
+    </button>
+  )
+}
+
+/** 收缩态窄轨中的单节点（仅状态点 + 名首字，hover tooltip 显名，点选中）。 */
+function NodeRailIcon({
+  node,
+  selected,
+  onSelect,
+}: {
+  node: NodeInfo
+  selected: boolean
+  onSelect: () => void
+}) {
+  const online = node.status === 1
+  const level = nodeStatusLevel(node.status)
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={selected}
+      title={`${node.name} · ${node.host}`}
+      className={cn(
+        'relative grid size-9 place-items-center rounded-lg border text-xs font-semibold uppercase transition-colors',
+        selected ? 'border-primary/40 bg-accent text-primary' : 'border-transparent text-foreground/70 hover:bg-accent/60',
+        !online && 'opacity-60',
+      )}
+    >
+      {node.name.slice(0, 1) || '?'}
+      <span
+        className={cn('absolute -right-0.5 -top-0.5 size-2 rounded-full ring-2 ring-card', online && 'animate-breathing')}
+        style={{ backgroundColor: `var(--status-${level === 'neutral' ? 'info' : level})` }}
+        aria-hidden
+      />
+    </button>
+  )
+}
+
 export default function NodesPage() {
   const { t } = useTranslation()
   const { data: nodes, isLoading } = useNodes({ refetchInterval: 30_000 })
   const { data: instances } = useInstances()
 
-  const [jdkNodeId, setJdkNodeId] = useState<number | null>(null)
-  const [portsNodeId, setPortsNodeId] = useState<number | null>(null)
-  const [cacheNodeId, setCacheNodeId] = useState<number | null>(null)
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [query, setQuery] = useState('')
   const [pending, setPending] = useState<PendingAction | null>(null)
-  const [expandedId, setExpandedId] = useState<number | null>(null)
   const [addOpen, setAddOpen] = useState(false)
-  // 工作台卡 ⇄ 列表视图（FR-144，§4.5）；运行实体默认卡片。
-  const [view, setView] = useState<ViewMode>('card')
+  const [tab, setTab] = useState<DetailTab>('overview')
+  // 左栏收缩为窄图标轨（FR-177）：收缩态持久化（localStorage）。
+  const [collapsed, setCollapsed] = useState(loadNodeListCollapsed)
 
   const setMaintenance = useSetNodeMaintenance()
   const drain = useDrainNode()
@@ -313,12 +375,32 @@ export default function NodesPage() {
 
   // 集群汇总（FR-144）：在线/离线/维护计数 + 在线节点资源水位均值。
   const summary = useMemo(() => summarizeNodes(nodes ?? []), [nodes])
-  // 各节点实例数（统计一次，卡片/详情共用）。
+  // 各节点实例数（统计一次，列表/详情共用）。
   const instanceCountByNode = useMemo(() => {
     const map = new Map<number, number>()
     for (const i of instances ?? []) map.set(i.nodeId, (map.get(i.nodeId) ?? 0) + 1)
     return map
   }, [instances])
+
+  const filtered = useMemo(() => filterNodes(nodes ?? [], query), [nodes, query])
+  // 选中节点解析为实时列表对象（节点下线→回空态，右栏随轮询刷新而非陈旧快照）。
+  const selected = useMemo(() => resolveSelectedNode(nodes ?? [], selectedId), [nodes, selectedId])
+
+  const toggleCollapsed = () => {
+    setCollapsed((c) => {
+      const next = !c
+      persistNodeListCollapsed(next)
+      return next
+    })
+  }
+
+  // 选中节点被下线后清掉选中态（避免「幽灵选中」）。
+  useEffect(() => {
+    if (selectedId !== null && selected === null && (nodes?.length ?? 0) > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 选中节点消失时清理，属合法同步
+      setSelectedId(null)
+    }
+  }, [selectedId, selected, nodes])
 
   const toggleMaintenance = (node: NodeInfo) => {
     const enabled = !node.maintenance
@@ -352,199 +434,126 @@ export default function NodesPage() {
     }
   }
 
-  const buildMenu = (node: NodeInfo) => (
-    <NodeActionsMenu
-      node={node}
-      onJDK={() => setJdkNodeId(node.id)}
-      onPorts={() => setPortsNodeId(node.id)}
-      onCache={() => setCacheNodeId(node.id)}
-      onToggleMaintenance={() => toggleMaintenance(node)}
-      onDrain={() => setPending({ kind: 'drain', node })}
-      onDelete={() => setPending({ kind: 'delete', node })}
-    />
-  )
-
-  // 集群水位卡（仅有在线节点时显示水位，否则「--」）。
-  const gauge = (pct: number | null) => (pct === null ? '--' : `${pct.toFixed(0)}%`)
   const summaryChips: SummaryChip[] = [
-    {
-      key: 'online',
-      label: t('nodes.online'),
-      count: summary.online,
-      level: 'success',
-      breathing: summary.online > 0,
-    },
+    { key: 'online', label: t('nodes.online'), count: summary.online, level: 'success', breathing: summary.online > 0 },
     { key: 'offline', label: t('nodes.offline'), count: summary.offline, level: 'danger' },
     { key: 'maintenance', label: t('nodes.maintenance'), count: summary.maintenance, level: 'warning' },
   ]
+  const gauge = (pct: number | null) => (pct === null ? '--' : `${pct.toFixed(0)}%`)
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">{t('nodes.title')}</h1>
-        <Button size="sm" onClick={() => setAddOpen(true)}>
-          <Plus className="size-4" /> {t('nodes.enroll.addNode', '添加节点')}
-        </Button>
-      </div>
-
-      {/* 集群汇总头：状态计数 chip + CPU/内存/磁盘聚合水位（FR-144） */}
-      <div className="flex flex-wrap items-center gap-2">
-        <SummaryChips chips={summaryChips} className="flex-1" />
-        <ViewToggle
-          value={view}
-          onChange={setView}
-          cardLabel={t('grouping.viewCard')}
-          listLabel={t('grouping.viewList')}
-        />
-      </div>
-      <div className="grid grid-cols-3 gap-3">
-        <StatCard
-          label={t('nodes.clusterCpu')}
-          value={gauge(summary.cpuPct)}
-          bar={summary.cpuPct !== null ? { value: summary.cpuPct, level: resourceLevel(summary.cpuPct) } : undefined}
-        />
-        <StatCard
-          label={t('nodes.clusterMem')}
-          value={gauge(summary.memPct)}
-          bar={summary.memPct !== null ? { value: summary.memPct, level: resourceLevel(summary.memPct) } : undefined}
-        />
-        <StatCard
-          label={t('nodes.clusterDisk')}
-          value={gauge(summary.diskPct)}
-          bar={summary.diskPct !== null ? { value: summary.diskPct, level: resourceLevel(summary.diskPct) } : undefined}
-        />
-      </div>
-
-      {isLoading ? (
-        <p className="text-muted-foreground">{t('common.loading')}</p>
-      ) : !nodes || nodes.length === 0 ? (
-        <Panel bodyClassName="py-10 text-center text-muted-foreground">{t('nodes.empty')}</Panel>
-      ) : view === 'card' ? (
-        <div className="space-y-3">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {nodes.map((node) => (
-              <NodeWorktableCard
-                key={node.id}
-                node={node}
-                instanceCount={instanceCountByNode.get(node.id) ?? 0}
-                expanded={expandedId === node.id}
-                onToggle={() => setExpandedId(expandedId === node.id ? null : node.id)}
-                menu={buildMenu(node)}
-              />
-            ))}
+    <div className="flex h-[calc(100vh-7rem)] min-h-0 gap-3">
+      {/* 左栏：可收缩节点列表（窄图标轨 ⇄ 展开），收缩态持久 */}
+      <aside
+        className={cn(
+          'flex min-h-0 shrink-0 flex-col rounded-xl border bg-card transition-[width] duration-200 ease-ios',
+          collapsed ? 'w-14' : 'w-72',
+        )}
+      >
+        {collapsed ? (
+          <div className="flex min-h-0 flex-1 flex-col items-center gap-1.5 p-2">
+            <button
+              type="button"
+              onClick={toggleCollapsed}
+              aria-label={t('nodes.expandList')}
+              title={t('nodes.expandList')}
+              className="grid size-9 w-full place-items-center rounded-lg text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+            >
+              <ChevronsRight className="size-4" />
+            </button>
+            <div className="flex min-h-0 flex-1 flex-col items-center gap-1.5 overflow-y-auto scrollbar-none">
+              {filtered.map((node) => (
+                <NodeRailIcon
+                  key={node.id}
+                  node={node}
+                  selected={node.id === selectedId}
+                  onSelect={() => setSelectedId(node.id)}
+                />
+              ))}
+            </div>
           </div>
-          {/* 展开的节点详情（卡片视图：详情显示在网格下方，仅展开时挂载→可见才轮询） */}
-          {expandedId !== null && nodes.find((n) => n.id === expandedId) && (
-            <Panel bodyClassName="p-0">
-              <NodeDetail node={nodes.find((n) => n.id === expandedId)!} />
-            </Panel>
-          )}
-        </div>
-      ) : (
-        <Panel bodyClassName="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t('nodes.name')}</TableHead>
-                <TableHead>{t('nodes.status')}</TableHead>
-                <TableHead>{t('nodes.cpu')}</TableHead>
-                <TableHead>{t('nodes.memory')}</TableHead>
-                <TableHead>{t('nodes.disk')}</TableHead>
-                <TableHead className="text-right">{t('nodes.actions')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {nodes.map((node) => {
-                const isOnline = node.status === 1
-                const expanded = expandedId === node.id
-                return (
-                  <Fragment key={node.id}>
-                    <TableRow>
-                      <TableCell>
-                        <button
-                          className="font-medium hover:text-primary"
-                          onClick={() => setExpandedId(expanded ? null : node.id)}
-                        >
-                          {expanded ? '▾ ' : '▸ '}
-                          {node.name}
-                        </button>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1.5">
-                          <StatusBadge
-                            level={nodeStatusLevel(node.status)}
-                            label={
-                              node.status === 1
-                                ? t('nodes.online')
-                                : node.status === 2
-                                  ? t('nodes.starting')
-                                  : t('nodes.offline')
-                            }
-                          />
-                          {node.maintenance && (
-                            <Badge variant="outline" className="text-status-warning border-status-warning/50">
-                              {t('nodes.maintenance')}
-                            </Badge>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <UsageCell pct={node.cpuUsage} online={isOnline} />
-                      </TableCell>
-                      <TableCell>
-                        <UsageCell pct={node.memoryUsage} online={isOnline} />
-                      </TableCell>
-                      <TableCell>
-                        <UsageCell pct={node.diskUsage} online={isOnline} />
-                      </TableCell>
-                      <TableCell className="text-right whitespace-nowrap">
-                        {buildMenu(node)}
-                      </TableCell>
-                    </TableRow>
-                    {expanded && (
-                      <TableRow>
-                        <TableCell colSpan={6} className="p-0">
-                          <NodeDetail node={node} />
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </Fragment>
-                )
-              })}
-            </TableBody>
-          </Table>
-        </Panel>
-      )}
+        ) : (
+          <>
+            <div className="shrink-0 space-y-2 border-b p-3">
+              <div className="flex items-center justify-between gap-2">
+                <h1 className="text-sm font-bold">{t('nodes.title')}</h1>
+                <button
+                  type="button"
+                  onClick={toggleCollapsed}
+                  aria-label={t('nodes.collapseList')}
+                  title={t('nodes.collapseList')}
+                  className="grid size-7 shrink-0 place-items-center rounded text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+                >
+                  <ChevronsLeft className="size-4" />
+                </button>
+              </div>
+              {/* 集群汇总头：状态计数 chip + CPU/内存/磁盘聚合水位（复用 summarizeNodes，FR-144） */}
+              <SummaryChips chips={summaryChips} />
+              <div className="grid grid-cols-3 gap-1.5">
+                <StatCard label={t('nodes.cpu')} value={gauge(summary.cpuPct)} bar={summary.cpuPct !== null ? { value: summary.cpuPct, level: resourceLevel(summary.cpuPct) } : undefined} />
+                <StatCard label={t('nodes.memory')} value={gauge(summary.memPct)} bar={summary.memPct !== null ? { value: summary.memPct, level: resourceLevel(summary.memPct) } : undefined} />
+                <StatCard label={t('nodes.disk')} value={gauge(summary.diskPct)} bar={summary.diskPct !== null ? { value: summary.diskPct, level: resourceLevel(summary.diskPct) } : undefined} />
+              </div>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder={t('nodes.searchPlaceholder')}
+                  className="h-8 pl-8 text-sm"
+                  aria-label={t('nodes.searchPlaceholder')}
+                />
+              </div>
+              <Button size="sm" className="w-full" onClick={() => setAddOpen(true)}>
+                <Plus className="size-4" /> {t('nodes.enroll.addNode')}
+              </Button>
+            </div>
+            <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
+              {isLoading ? (
+                <p className="px-2 py-4 text-sm text-muted-foreground">{t('common.loading')}</p>
+              ) : (nodes?.length ?? 0) === 0 ? (
+                <p className="px-2 py-4 text-sm text-muted-foreground">{t('nodes.empty')}</p>
+              ) : filtered.length === 0 ? (
+                <p className="px-2 py-4 text-sm text-muted-foreground">{t('nodes.searchEmpty')}</p>
+              ) : (
+                filtered.map((node) => (
+                  <NodeListRow
+                    key={node.id}
+                    node={node}
+                    instanceCount={instanceCountByNode.get(node.id) ?? 0}
+                    selected={node.id === selectedId}
+                    onSelect={() => setSelectedId(node.id)}
+                  />
+                ))
+              )}
+            </div>
+          </>
+        )}
+      </aside>
 
-      {/* 统一右侧抽屉容器取代手搓 fixed inset-0 模态（FR-178）：宽、可滚动、主题化滚动条。 */}
-      <Sheet open={jdkNodeId !== null} onOpenChange={(o: boolean) => { if (!o) setJdkNodeId(null) }}>
-        <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
-          <SheetHeader className="pr-8">
-            <SheetTitle>{t('nodes.jdkTitle')}</SheetTitle>
-            <SheetDescription>{t('artifactCache.jdkDrawerDesc')}</SheetDescription>
-          </SheetHeader>
-          {jdkNodeId !== null && <NodeJDKPanel nodeId={jdkNodeId} active={jdkNodeId !== null} />}
-        </SheetContent>
-      </Sheet>
+      {/* 右栏：选中节点详情（身份/操作/仪表 + 分段） */}
+      <section className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+        {selected ? (
+          <NodeDetailPane
+            key={selected.id}
+            node={selected}
+            instanceCount={instanceCountByNode.get(selected.id) ?? 0}
+            tab={tab}
+            onTab={setTab}
+            onToggleMaintenance={() => toggleMaintenance(selected)}
+            onDrain={() => setPending({ kind: 'drain', node: selected })}
+            onDelete={() => setPending({ kind: 'delete', node: selected })}
+          />
+        ) : (
+          <div className="grid h-full place-items-center rounded-xl border border-dashed bg-card/40">
+            <div className="flex flex-col items-center gap-2 text-center text-muted-foreground">
+              <Server className="size-8 opacity-40" />
+              <p className="text-sm">{t('nodes.selectHint')}</p>
+            </div>
+          </div>
+        )}
+      </section>
 
-      <Sheet open={cacheNodeId !== null} onOpenChange={(o: boolean) => { if (!o) setCacheNodeId(null) }}>
-        <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
-          <SheetHeader className="pr-8">
-            <SheetTitle>{t('artifactCache.title')}</SheetTitle>
-            <SheetDescription>{t('artifactCache.drawerDesc')}</SheetDescription>
-          </SheetHeader>
-          {cacheNodeId !== null && <NodeArtifactCachePanel nodeId={cacheNodeId} active={cacheNodeId !== null} />}
-        </SheetContent>
-      </Sheet>
-
-      <Sheet open={portsNodeId !== null} onOpenChange={(o: boolean) => { if (!o) setPortsNodeId(null) }}>
-        <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
-          <SheetHeader className="pr-8">
-            <SheetTitle>{t('ports.title')}</SheetTitle>
-          </SheetHeader>
-          {portsNodeId !== null && <NodePortsPanel nodeId={portsNodeId} />}
-        </SheetContent>
-      </Sheet>
       <AddNodeDialog open={addOpen} onClose={() => setAddOpen(false)} />
       <DangerConfirm
         open={pending !== null}
@@ -560,6 +569,102 @@ export default function NodesPage() {
         onConfirm={confirmPending}
         onCancel={() => setPending(null)}
       />
+    </div>
+  )
+}
+
+/** 右栏详情主体：身份块 + 资源仪表 + 分段 Tabs（切段稳定工具条，布局不重组）。 */
+function NodeDetailPane({
+  node,
+  instanceCount,
+  tab,
+  onTab,
+  onToggleMaintenance,
+  onDrain,
+  onDelete,
+}: {
+  node: NodeInfo
+  instanceCount: number
+  tab: DetailTab
+  onTab: (t: DetailTab) => void
+  onToggleMaintenance: () => void
+  onDrain: () => void
+  onDelete: () => void
+}) {
+  const { t } = useTranslation()
+  const online = node.status === 1
+  const level = nodeStatusLevel(node.status)
+  const statusLabel = online ? t('nodes.online') : node.status === 2 ? t('nodes.starting') : t('nodes.offline')
+  const loadPct = node.cpuCores > 0 ? ((node.loadAvg1 ?? 0) / node.cpuCores) * 100 : 0
+
+  return (
+    <div className="space-y-3">
+      {/* 身份块：图标 + 名 + host + 系统/架构 + 状态徽标 + 操作 kebab */}
+      <Panel bodyClassName="p-4">
+        <div className="flex items-start gap-3">
+          <span className={cn('flex size-11 shrink-0 items-center justify-center rounded-xl', toneChipClass(online ? 'primary' : 'neutral'))}>
+            <Server className="size-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <h2 className="truncate text-base font-semibold" title={node.name}>{node.name}</h2>
+              <StatusBadge level={level} label={statusLabel} />
+              {node.maintenance && (
+                <Badge variant="outline" className="text-status-warning border-status-warning/50">
+                  {t('nodes.maintenance')}
+                </Badge>
+              )}
+            </div>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+              <span className="truncate" title={node.host}>{node.host}</span>
+              <span>{node.os} {node.arch}</span>
+              <span className="inline-flex items-center gap-1">
+                <Box className="size-3" /> {instanceCount} {t('nodes.instancesUnit')}
+              </span>
+            </div>
+          </div>
+          <NodeActionsMenu node={node} onToggleMaintenance={onToggleMaintenance} onDrain={onDrain} onDelete={onDelete} />
+        </div>
+
+        {/* 资源仪表：CPU/内存/磁盘/负载（FR-061；离线归零空盘） */}
+        <div className="mt-4 flex flex-wrap items-center gap-x-8 gap-y-3">
+          <ResourceGauge label={t('nodes.cpu')} value={online ? (node.cpuUsage ?? 0) * 100 : 0} unit="%" size={78} />
+          <ResourceGauge label={t('nodes.memory')} value={online ? (node.memoryUsage ?? 0) * 100 : 0} unit="%" size={78} />
+          <ResourceGauge label={t('nodes.disk')} value={online ? (node.diskUsage ?? 0) * 100 : 0} unit="%" size={78} />
+          <ResourceGauge label={t('nodes.load')} value={online ? loadPct : 0} unit="%" size={78} />
+        </div>
+      </Panel>
+
+      {/* 分段 Tabs：固定工具条，切段不致下方内容上下重排（抽屉 UX 约束，FR-178 §5） */}
+      <div className="flex flex-wrap gap-1 rounded-lg border bg-muted/30 p-1 text-sm">
+        {DETAIL_TABS.map((k) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => onTab(k)}
+            className={cn(
+              'rounded-md px-3 py-1.5 transition-colors',
+              tab === k ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {t(`nodes.tab.${k}`)}
+          </button>
+        ))}
+      </div>
+
+      <div>
+        {tab === 'overview' && <NodeOverviewSection node={node} />}
+        {tab === 'instances' && <NodeInstanceCompare node={node} range="24h" />}
+        {tab === 'jdk' && <NodeJDKPanel nodeId={node.id} active />}
+        {tab === 'cache' && <NodeArtifactCachePanel nodeId={node.id} active />}
+        {tab === 'ports' && (
+          <Panel title={t('ports.title')}>
+            <NodePortsPanel nodeId={node.id} />
+          </Panel>
+        )}
+        {tab === 'monitor' && <NodeMonitorCharts node={node} />}
+        {tab === 'repair' && <NodeRepairPanel node={node} active />}
+      </div>
     </div>
   )
 }
