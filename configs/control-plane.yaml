@@ -55,3 +55,11 @@ update:
 client_dist:
   sign_priv_key: ""  # base64(PKCS#8 DER, Ed25519)；生产经 ${JIANMANAGER_CLIENT_SIGN_PRIVKEY} 注入，勿硬编码
   sign_key_id: k1    # 签名公钥版本标识（轮换用），须与客户端内置公钥 keyId 一致
+
+# 出站网络代理（FR-174，见 ADR-037）。CP 所有出站下载（自更新 feed/二进制、服务端 jar、
+# 客户端制品入库等）经此代理。url 留空=直连（仍尊重 HTTP_PROXY/HTTPS_PROXY/NO_PROXY 环境变量），
+# 不破坏现状；非空时优先于环境变量。CP 与各 Worker 各自独立配置。
+# scheme 决定类型：http:// / https:// / socks5://。含凭据时经 ${ENV} 注入、勿硬编码。
+# proxy:
+#   url: ""                       # 例：http://127.0.0.1:7890 或 socks5://user:${PROXY_PASS}@127.0.0.1:1080
+#   no_proxy: ""                  # 逗号分隔免代理：localhost,127.0.0.1,10.0.0.0/8,.internal.example

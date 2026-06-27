@@ -29,3 +29,11 @@ data_dir: ./data
 log:
   level: info
   format: text
+
+# 出站网络代理（FR-174，见 ADR-037）。本节点所有出站下载（自更新二进制、JDK 归档、
+# CFR 反编译器）经此代理。url 留空=直连（仍尊重 HTTP_PROXY/HTTPS_PROXY/NO_PROXY 环境变量），
+# 不破坏现状；非空时优先于环境变量。各 Worker 在不同机器各配各的。
+# scheme 决定类型：http:// / https:// / socks5://。含凭据时经 ${ENV} 注入、勿硬编码。
+# proxy:
+#   url: ""                       # 例：http://127.0.0.1:7890 或 socks5://user:${PROXY_PASS}@127.0.0.1:1080
+#   no_proxy: ""                  # 逗号分隔免代理：localhost,127.0.0.1,10.0.0.0/8,.internal.example

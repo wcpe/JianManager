@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+
+	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
 // LogLevelVar 是 Control Plane 日志器的动态级别持有者（FR-063 / ADR-015）。
@@ -56,6 +58,9 @@ type Config struct {
 	ClientDist  ClientDistConfig  `mapstructure:"client_dist"`
 	Enroll      EnrollConfig      `mapstructure:"enroll"`
 	Update      UpdateConfig      `mapstructure:"update"`
+	// Proxy CP 出站代理配置（FR-174，见 ADR-037）：自更新 feed/二进制、服务端 jar 等
+	// 出站下载经此代理。url 留空=直连（沿用环境变量代理）。与各 Worker 各自独立配置。
+	Proxy httpclient.Config `mapstructure:"proxy"`
 }
 
 // UpdateConfig 面板自更新（CP/Worker 二进制在线升级）配置（FR-081，见 ADR-020 §4）。
@@ -185,6 +190,9 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("update.feed_url", "")
 	v.SetDefault("update.binary_base_url", "")
 	v.SetDefault("update.allow_insecure", false)
+	// 出站代理（FR-174，见 ADR-037）：默认空（直连/沿用环境变量代理），不破坏现状。
+	v.SetDefault("proxy.url", "")
+	v.SetDefault("proxy.no_proxy", "")
 	// 显式绑定任务约定的私钥环境变量名（敏感信息经 env 注入、不入库，config-files 规范）。
 	_ = v.BindEnv("client_dist.sign_priv_key", "JIANMANAGER_CLIENT_SIGN_PRIVKEY")
 

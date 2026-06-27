@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+
+	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
 // Config Worker Node 配置。
@@ -36,8 +38,11 @@ type Config struct {
 	Log         LogConfig        `mapstructure:"log"`
 	Decompiler  DecompilerConfig `mapstructure:"decompiler"`
 	// Search 全文搜索索引配置（FR-074，见 ADR-017）。
-	Search    SearchConfig  `mapstructure:"search"`
-	Heartbeat time.Duration `mapstructure:"-"`
+	Search SearchConfig `mapstructure:"search"`
+	// Proxy 本节点出站代理配置（FR-174，见 ADR-037）：所有出站下载（自更新/JDK/CFR）
+	// 经此代理。url 留空=直连（沿用环境变量代理）。各 Worker 在不同机器各配各的。
+	Proxy     httpclient.Config `mapstructure:"proxy"`
+	Heartbeat time.Duration     `mapstructure:"-"`
 }
 
 // SearchConfig 全文搜索索引配置（FR-074，见 ADR-017）。
@@ -99,6 +104,9 @@ func Load(path string) (*Config, error) {
 	// 反编译（FR-075）：默认无显式 CFR 路径、允许按需下载（首次反编译时拉 CFR 落数据根缓存）。
 	v.SetDefault("decompiler.cfr_path", "")
 	v.SetDefault("decompiler.allow_download", true)
+	// 出站代理（FR-174，见 ADR-037）：默认空（直连/沿用环境变量代理），不破坏现状。
+	v.SetDefault("proxy.url", "")
+	v.SetDefault("proxy.no_proxy", "")
 
 	if path != "" {
 		v.SetConfigFile(path)
