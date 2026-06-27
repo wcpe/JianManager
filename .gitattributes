@@ -1,1 +1,3 @@
 CHANGELOG.md merge=union
+scripts/install-worker.* text eol=lf
+internal/controlplane/embed/install-scripts/install-worker.* text eol=lf
