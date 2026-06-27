@@ -63,11 +63,15 @@ cmd/
 
 ### 3.3 PID 目录发现
 
+PID 目录**以 Worker 实际写入路径为准**（ADR-041 §1）。核对源码后定位：Worker 的 `process.Manager` 把
+`<uuid>.pid` 写到「服务器工作目录根」`serversDir`（`NewManager` 中 `pidDir := serversDir`），而 `serversDir`
+= 数据根下 `var/servers`（`dataroot.Root.ServersDir()`，ADR-010）。数据根经环境变量 `JIANMANAGER_DATA_DIR`
+覆盖、缺省 `./data`（`dataroot.EnvVar` / `DefaultDir`）。故落地为 `var/servers` 而非泛指的 `var/pid`。
+
 按优先级：
 1. `--pid-dir` 显式指定
-2. 环境变量 `JIANMANAGER_DATA_ROOT`（若设置）下的 `var/pid/`
-3. 当前工作目录下 `data/var/pid/`（开发环境默认数据根）
-4. 找不到则报错提示用 `--pid-dir`
+2. 环境变量 `JIANMANAGER_DATA_DIR`（缺省 `./data`）指向的数据根下 `var/servers/`（目录存在才采用）
+3. 找不到则报错提示用 `--pid-dir`
 
 ### 3.4 交互式终端（emergency）
 

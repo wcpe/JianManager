@@ -230,7 +230,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-181 | Logo 点击折叠/展开导航栏（增强 FR-131） | P3 | 📋 计划 |
 | FR-182 | 自更新体验增强（检查更新展示更新内容 + 一键回滚上一版 + 单版本二进制备份；CP+Worker，增强 FR-081） | P1 | 📋 计划 |
 | FR-183 | 全局任务中心 + 完成站内信（job 模型 + Worker→CP 进度/日志上报 + CP API + 前端任务中心 + 完成/失败站内信；JDK 异步安装首个接入，见 ADR-040） | P1 | 📋 计划 |
-| FR-184 | jmctl 紧急控制台 CLI（独立轻量二进制 `cmd/jmctl/`，仅依赖 daemon 帧协议包，直连守护进程 Unix Socket/命名管道；emergency/list/stop/kill + UUID 前缀补全，见 ADR-041 与 `docs/specs/emergency-cli/spec.md`） | P2 | 📋 计划 |
+| FR-184 | jmctl 紧急控制台 CLI（独立轻量二进制 `cmd/jmctl/`，仅依赖 daemon 帧协议包，直连守护进程 Unix Socket/命名管道；emergency/list/stop/kill + UUID 前缀补全，见 ADR-041 与 `docs/specs/emergency-cli/spec.md`） | P2 | 🔨 开发中 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
