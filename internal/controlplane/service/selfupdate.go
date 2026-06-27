@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -31,7 +32,16 @@ var (
 	ErrUpdateNoArtifact = errors.New("更新源无匹配本平台的制品")
 	// ErrUpdateAlreadyLatest 目标已是最新版本（无更高版本可升）。
 	ErrUpdateAlreadyLatest = errors.New("已是最新版本")
+	// ErrNoBackup 无可回滚的备份（CP/节点从未升级过，或备份缺失）。FR-182，见 ADR-039。
+	ErrNoBackup = selfupdate.ErrNoBackup
 )
+
+// errNodeNoBackup 是 Worker 回报「无备份」时 error 文案的前缀标记，
+// CP 据此把节点回滚的「无备份」映射为 ErrNoBackup 透出友好码（FR-182）。
+const workerNoBackupMarker = "NO_BACKUP"
+
+// errNodeNoBackup 是节点回滚无备份的内部哨兵（测试桩与映射用）。
+var errNodeNoBackup = errors.New(workerNoBackupMarker + ": 节点无备份可回滚")
 
 // 自更新组件标识（feed artifact.component 取值）。
 const (
@@ -59,7 +69,7 @@ type FeedArtifact struct {
 type SelfUpdateConfig struct {
 	// GitHubRepo owner/repo；非空即启用 GitHub Releases 源（FR-175，见 ADR-036 §7）。
 	GitHubRepo string
-	// Channel GitHub 源渠道：stable（取 /releases/latest）| prerelease（取 /releases/tags/nightly）。空=stable。
+	// Channel GitHub 源渠道：stable（取 /releases/latest）| prerelease（取 /releases/tags/latest，FR-182）。空=stable。
 	Channel string
 	// GitHubToken 可选 GitHub API token；非空时请求带 Authorization 提升限流额度。
 	GitHubToken string
@@ -87,10 +97,12 @@ type SelfUpdateService struct {
 	rollout   *Rollout
 
 	// 以下为可注入测试桩；生产为 nil 时走真实现。
-	feedFetcher   func(ctx context.Context) (*Feed, error)                      // 覆盖 FetchFeed
-	cpUpgradeFn   func(art *FeedArtifact) error                                 // 覆盖 CP 自身下载替换重启
-	restartCPFn   func()                                                        // 覆盖 CP 重启动作
-	nodeUpgradeFn func(nodeID uint, wantVersion string) (string, string, error) // 覆盖 rollout 内单节点升级
+	feedFetcher    func(ctx context.Context) (*Feed, error)                      // 覆盖 FetchFeed
+	cpUpgradeFn    func(art *FeedArtifact) error                                 // 覆盖 CP 自身下载替换重启
+	restartCPFn    func()                                                        // 覆盖 CP 重启动作
+	nodeUpgradeFn  func(nodeID uint, wantVersion string) (string, string, error) // 覆盖 rollout 内单节点升级
+	cpRollbackFn   func() (toVersion string, err error)                          // 覆盖 CP 自身回滚（FR-182）
+	nodeRollbackFn func(nodeID uint) (from, to string, err error)                // 覆盖单节点回滚（FR-182）
 }
 
 // NewSelfUpdateService 创建自更新服务。root 用于 CP 自身下载落 cache/，可为 nil（回退临时目录）。
@@ -214,6 +226,9 @@ type ComponentStatus struct {
 	Arch              string `json:"arch"`
 	UpdateAvailable   bool   `json:"updateAvailable"`
 	ArtifactAvailable bool   `json:"artifactAvailable"`
+	// BackupVersion 升级前备份的版本（FR-182，见 ADR-039）：CP 取自本地备份、节点取自 GetVersion 回报。
+	// 非空时前端可一键「回滚 v{BackupVersion}」；空表示无备份（回滚按钮禁用）。
+	BackupVersion string `json:"backupVersion,omitempty"`
 }
 
 // CheckResult 是 GET /self-update/check 的返回。
@@ -238,6 +253,10 @@ func (s *SelfUpdateService) CheckUpdate(ctx context.Context) (*CheckResult, erro
 			Arch:           runtime.GOARCH,
 			Online:         true,
 		},
+	}
+	// CP 自身备份版本（供前端回滚按钮，FR-182）。
+	if meta, ok := selfupdate.BackupInfo(selfupdate.ComponentControlPlane, s.root); ok {
+		res.ControlPlane.BackupVersion = meta.Version
 	}
 
 	var feed *Feed
@@ -283,6 +302,7 @@ func (s *SelfUpdateService) CheckUpdate(ctx context.Context) (*CheckResult, erro
 				if vr.Arch != "" {
 					st.Arch = vr.Arch
 				}
+				st.BackupVersion = vr.BackupVersion // 节点本地备份版本（FR-182）
 			}
 			cancel()
 		}
@@ -350,21 +370,16 @@ func (s *SelfUpdateService) UpgradeControlPlane(ctx context.Context, wantVersion
 		_ = os.Remove(dest)
 		return from, feed.Version, fmt.Errorf("定位自身可执行文件失败: %w", err)
 	}
+	// 替换前备份当前 CP 二进制供回滚（FR-182）；备份失败不阻断升级（仅记日志，本次升级无退路）。
+	if err := selfupdate.BackupCurrentFrom(selfupdate.ComponentControlPlane, from, target, s.root); err != nil {
+		slog.Warn("CP 升级前备份失败，本次升级无回滚退路", "error", err)
+	}
 	if err := selfupdate.ReplaceExecutable(target, dest); err != nil {
 		_ = os.Remove(dest)
 		return from, feed.Version, err
 	}
-	// 异步延迟重启，先让 HTTP 202 返回。
-	go func() {
-		time.Sleep(time.Second)
-		if s.restartCPFn != nil {
-			s.restartCPFn()
-			return
-		}
-		if err := selfupdate.Restart(); err == nil {
-			os.Exit(0)
-		}
-	}()
+	// 异步延迟重启，先让 HTTP 202 返回（与回滚共用 scheduleCPRestart）。
+	s.scheduleCPRestart()
 	return from, feed.Version, nil
 }
 
