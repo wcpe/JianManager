@@ -124,8 +124,18 @@ func zuluURL(client *http.Client, base string, major int, arch string) (string, 
 // downloadAndExtract 下载归档到临时文件，按平台后缀解压到 destDir。
 // client 经进程级出站代理（FR-174/ADR-037）；为 nil 时回退一个 15min 超时的默认 client。
 func downloadAndExtract(client *http.Client, url, destDir string) error {
+	return downloadAndExtractWithProgress(client, url, destDir, nil)
+}
+
+// downloadAndExtractWithProgress 下载归档到临时文件并解压到 destDir，期间经 report 回调
+// 上报下载百分比与阶段日志（FR-183，见 ADR-040；report 可为 nil）。
+// 有 Content-Length 时按字节计算 0~100 的真实百分比；无则停在 0、靠阶段日志补充。
+func downloadAndExtractWithProgress(client *http.Client, url, destDir string, report jdkProgress) error {
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Minute}
+	}
+	if report == nil {
+		report = func(int, string) {}
 	}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -158,13 +168,49 @@ func downloadAndExtract(client *http.Client, url, destDir string) error {
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 
-	if _, err := io.Copy(tmp, resp.Body); err != nil {
+	// 按 Content-Length 计算下载百分比；定频上报（每 +3% 或每 4MB 报一次），避免日志刷屏。
+	pw := &progressWriter{total: resp.ContentLength, report: report}
+	if _, err := io.Copy(tmp, io.TeeReader(resp.Body, pw)); err != nil {
 		tmp.Close()
 		return fmt.Errorf("写入临时文件失败: %w", err)
 	}
 	tmp.Close()
+	report(100, "下载完成，开始解压")
 
 	return extract(tmpPath, name, destDir)
+}
+
+// jdkProgress 下载进度回调（percent 0~100，line 可选阶段日志）。
+type jdkProgress func(percent int, line string)
+
+// progressWriter 包一层 io.Writer 统计已下载字节并按节流上报百分比（FR-183）。
+type progressWriter struct {
+	total      int64 // Content-Length，<=0 表示未知
+	written    int64
+	lastReport int   // 上次上报的百分比
+	lastBytes  int64 // 上次上报时的累计字节
+	report     jdkProgress
+}
+
+func (w *progressWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	w.written += int64(n)
+	if w.total > 0 {
+		percent := int(w.written * 100 / w.total)
+		if percent > 100 {
+			percent = 100
+		}
+		// 每 +3% 报一次，避免回调过密。
+		if percent >= w.lastReport+3 || percent == 100 {
+			w.lastReport = percent
+			w.report(percent, fmt.Sprintf("下载中 %d%%", percent))
+		}
+	} else if w.written-w.lastBytes >= 4<<20 {
+		// 无 Content-Length：每 4MB 报一次累计量，百分比保持 0。
+		w.lastBytes = w.written
+		w.report(0, fmt.Sprintf("已下载 %d MB", w.written>>20))
+	}
+	return n, nil
 }
 
 // extract 根据文件名后缀分发到对应解压流程。

@@ -292,6 +292,8 @@ func runWorker() {
 
 	// 启动心跳上报（携带注册获得的 node_secret 供 Control Plane 鉴权）
 	hb := heartbeat.New(cpAddr, nodeUUID, regResult.NodeSecret, 30*time.Second, manager)
+	// 运行中长任务进度随心跳上报（FR-183，见 ADR-040）：心跳读 Worker gRPC Server 的内存任务表。
+	hb.SetTaskProvider(workerServer)
 	hb.Start()
 	defer hb.Stop()
 

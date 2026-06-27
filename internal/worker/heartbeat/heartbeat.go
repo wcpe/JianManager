@@ -30,6 +30,13 @@ type InstanceStateProvider interface {
 	GetAllInstanceStates() []process.InstanceSnapshot
 }
 
+// TaskSnapshotProvider 提供运行中长任务的心跳快照（FR-183，见 ADR-040）。
+// 由 Worker gRPC Server 实现（其内存任务登记表）。终态任务上报后由本心跳调 Drop 移除。
+type TaskSnapshotProvider interface {
+	TaskSnapshots() []*workerpb.TaskSnapshot
+	DropTask(taskID string)
+}
+
 // Heartbeat 心跳上报器。
 type Heartbeat struct {
 	controlPlaneAddr string
@@ -38,6 +45,8 @@ type Heartbeat struct {
 	interval         time.Duration
 	stopCh           chan struct{}
 	instanceProvider InstanceStateProvider
+	// taskProvider 运行中任务快照来源（FR-183）；为 nil 时心跳不带任务字段（向后兼容）。
+	taskProvider TaskSnapshotProvider
 }
 
 // New 创建心跳上报器。
@@ -51,6 +60,12 @@ func New(controlPlaneAddr, nodeUUID, nodeSecret string, interval time.Duration, 
 		stopCh:           make(chan struct{}),
 		instanceProvider: provider,
 	}
+}
+
+// SetTaskProvider 注入运行中任务快照来源（FR-183，见 ADR-040）。
+// 由 main 装配（传入 Worker gRPC Server）；不调用则心跳不携带任务进度。
+func (h *Heartbeat) SetTaskProvider(p TaskSnapshotProvider) {
+	h.taskProvider = p
 }
 
 // Start 启动心跳上报。
@@ -135,6 +150,17 @@ func (h *Heartbeat) sendHeartbeat() error {
 		req.InstanceMetrics = collectInstanceMetrics(states)
 	}
 
+	// 附加运行中长任务进度快照（FR-183，见 ADR-040）。
+	var terminalTaskIDs []string
+	if h.taskProvider != nil {
+		req.Tasks = h.taskProvider.TaskSnapshots()
+		for _, t := range req.Tasks {
+			if t.State == "succeeded" || t.State == "failed" {
+				terminalTaskIDs = append(terminalTaskIDs, t.TaskId)
+			}
+		}
+	}
+
 	// 通过 gRPC metadata 携带 node_secret 供 Control Plane 鉴权
 	ctx := metadata.AppendToOutgoingContext(context.Background(), nodeSecretHeader, h.nodeSecret)
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -155,6 +181,14 @@ func (h *Heartbeat) sendHeartbeat() error {
 	if err != nil {
 		slog.Warn("心跳响应接收失败", "error", err)
 		return err
+	}
+
+	// 终态任务已随本次心跳上报且 CP 已确认接收，从内存表移除避免重复上报（FR-183，见 ADR-040）。
+	// 仅在心跳成功确认后才 Drop，确保 CP 至少收到一次终态快照。
+	if h.taskProvider != nil {
+		for _, id := range terminalTaskIDs {
+			h.taskProvider.DropTask(id)
+		}
 	}
 
 	slog.Debug("心跳已发送", "timestamp", reply.Timestamp,

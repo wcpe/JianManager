@@ -141,10 +141,21 @@ func (m *Manager) List() ([]Info, error) {
 	return out, nil
 }
 
-// Install 下载并安装指定 Temurin JDK 到 installDir（默认 <rootDir>/<vendor>-<major>）。
+// Progress 报告安装进度的回调（FR-183，见 ADR-040）。
+// percent 为 0~100 的下载百分比（无 Content-Length 时可能停在某值，由 line 补充阶段说明）；
+// line 为可选的人类可读日志行（空表示仅更新百分比）。回调内不得长时间阻塞。
+type Progress func(percent int, line string)
+
+// Install 下载并安装指定 JDK（同步，无进度回调）。等价于 InstallWithProgress(... nil)。
+func (m *Manager) Install(vendor string, major int, arch, installDir, mirrorBase string) (Info, error) {
+	return m.InstallWithProgress(vendor, major, arch, installDir, mirrorBase, nil)
+}
+
+// InstallWithProgress 下载并安装指定 JDK 到 installDir（默认 <rootDir>/<vendor>-<major>），
+// 期间经 progress 回调上报下载百分比与阶段日志（FR-183 任务中心，见 ADR-040；progress 可为 nil）。
 // vendor/major/arch 必填；mirrorBase 非空时作下载基址（CP 从平台设置下发，使镜像源真生效），
 // 为空回退本地 env/默认源。下载完成后自动 detect。
-func (m *Manager) Install(vendor string, major int, arch, installDir, mirrorBase string) (Info, error) {
+func (m *Manager) InstallWithProgress(vendor string, major int, arch, installDir, mirrorBase string, progress Progress) (Info, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -161,20 +172,29 @@ func (m *Manager) Install(vendor string, major int, arch, installDir, mirrorBase
 		return Info{}, fmt.Errorf("目标目录已存在: %s", installDir)
 	}
 
+	report := func(percent int, line string) {
+		if progress != nil {
+			progress(percent, line)
+		}
+	}
+
 	client := m.downloadClient()
+	report(0, fmt.Sprintf("解析下载源 %s %d (%s)", vendor, major, arch))
 	downloadURL, err := buildDownloadURL(client, vendor, major, arch, mirrorBase)
 	if err != nil {
 		return Info{}, err
 	}
 	slog.Info("开始下载 JDK", "vendor", vendor, "major", major, "arch", arch, "url", downloadURL)
+	report(0, "开始下载归档")
 
 	if err := os.MkdirAll(installDir, 0o755); err != nil {
 		return Info{}, fmt.Errorf("创建安装目录失败: %w", err)
 	}
-	if err := downloadAndExtract(client, downloadURL, installDir); err != nil {
+	if err := downloadAndExtractWithProgress(client, downloadURL, installDir, report); err != nil {
 		_ = os.RemoveAll(installDir)
 		return Info{}, err
 	}
+	report(100, "解压完成，正在校验")
 
 	// 部分归档外层多包一层目录；detect 时会找到 bin/java。
 	info, ok := detectAt(installDir)
@@ -187,6 +207,7 @@ func (m *Manager) Install(vendor string, major int, arch, installDir, mirrorBase
 		}
 	}
 	info.Managed = true
+	report(100, fmt.Sprintf("安装完成：%s %s", info.Vendor, info.Version))
 	return info, nil
 }
 

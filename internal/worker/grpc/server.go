@@ -20,6 +20,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/internal/worker/search"
+	"github.com/wcpe/JianManager/internal/worker/taskreg"
 	"github.com/wcpe/JianManager/internal/worker/ws"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
@@ -85,6 +86,11 @@ type Server struct {
 	searchMu      sync.Mutex
 	searchIndexes map[string]*search.Index
 	searchIgnore  []string
+
+	// tasks 运行中长任务内存登记表（FR-183，见 ADR-040）。
+	// InstallJDK 异步执行时经此表更新进度/日志；心跳侧读 Snapshot 随心跳上报给 CP。
+	// 非 nil（NewServer 初始化）。
+	tasks *taskreg.Registry
 }
 
 // NewServer 创建 Worker gRPC 服务器。
@@ -98,6 +104,7 @@ func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Col
 		jdkMgr:        jdkMgr,
 		root:          root,
 		searchIndexes: make(map[string]*search.Index),
+		tasks:         taskreg.New(),
 	}
 	manager.SetStateChangeHandler(func(uuid string, oldState, newState process.InstanceState) {
 		s.dispatch(instanceEvent{
@@ -379,10 +386,51 @@ func (s *Server) ListJDKs(ctx context.Context, req *workerpb.ListJDKsRequest) (*
 }
 
 // InstallJDK 下载并安装指定 JDK。
+//
+// 当 req.TaskId 非空时走**异步**路径（FR-183，见 ADR-040）：登记内存任务表为 running、
+// 启动后台 goroutine 执行下载解压（经进度回调更新任务表），RPC **立即返回** task_id，
+// 不再阻塞最长 20min；进度/日志/终态经心跳上报给 CP，CP 据终态落 NodeJDK + 发站内信。
+// 当 req.TaskId 为空时回退**同步**路径（向后兼容旧 CP）。
 func (s *Server) InstallJDK(ctx context.Context, req *workerpb.InstallJDKRequest) (*workerpb.InstallJDKResponse, error) {
 	if s.jdkMgr == nil {
 		return &workerpb.InstallJDKResponse{Success: false, Error: "JDK 管理器未启用"}, nil
 	}
+
+	// 异步路径：启动即返回 task_id，后台执行。
+	if req.TaskId != "" {
+		taskID := req.TaskId
+		s.tasks.Start(taskID)
+		// 复制下发参数，goroutine 不持有 req（避免在 RPC 返回后引用其底层内存）。
+		vendor, major, arch := req.Vendor, int(req.MajorVersion), req.Arch
+		installDir, mirrorBase := req.InstallDir, req.MirrorBase
+		go func() {
+			info, err := s.jdkMgr.InstallWithProgress(vendor, major, arch, installDir, mirrorBase,
+				func(percent int, line string) {
+					s.tasks.SetProgress(taskID, int32(percent))
+					if line != "" {
+						s.tasks.AppendLog(taskID, line)
+					}
+				})
+			if err != nil {
+				s.tasks.AppendLog(taskID, "安装失败: "+err.Error())
+				s.tasks.Fail(taskID, err.Error())
+				return
+			}
+			// 成功结果序列化进任务 result，供 CP 终态副作用落 NodeJDK。
+			result, _ := json.Marshal(jdkResult{
+				Vendor:       info.Vendor,
+				MajorVersion: info.MajorVersion,
+				Version:      info.Version,
+				Arch:         info.Arch,
+				Path:         info.Path,
+				Managed:      info.Managed,
+			})
+			s.tasks.Succeed(taskID, string(result))
+		}()
+		return &workerpb.InstallJDKResponse{Success: true, TaskId: taskID}, nil
+	}
+
+	// 同步路径（向后兼容）。
 	info, err := s.jdkMgr.Install(req.Vendor, int(req.MajorVersion), req.Arch, req.InstallDir, req.MirrorBase)
 	if err != nil {
 		return &workerpb.InstallJDKResponse{Success: false, Error: err.Error()}, nil
@@ -398,6 +446,27 @@ func (s *Server) InstallJDK(ctx context.Context, req *workerpb.InstallJDKRequest
 			Managed:      info.Managed,
 		},
 	}, nil
+}
+
+// jdkResult 是 jdk_install 任务成功时写入 TaskSnapshot.result 的 JSON 结构（FR-183，见 ADR-040）。
+// CP 收到终态 succeeded 时反序列化它落一条 model.NodeJDK。字段与 workerpb.JDKInfo 一一对应。
+type jdkResult struct {
+	Vendor       string `json:"vendor"`
+	MajorVersion int    `json:"majorVersion"`
+	Version      string `json:"version"`
+	Arch         string `json:"arch"`
+	Path         string `json:"path"`
+	Managed      bool   `json:"managed"`
+}
+
+// TaskSnapshots 返回运行中任务的心跳快照（FR-183）。心跳侧据此随心跳上报给 CP。
+func (s *Server) TaskSnapshots() []*workerpb.TaskSnapshot {
+	return s.tasks.Snapshot()
+}
+
+// DropTask 从内存任务表移除任务（终态被心跳上报后调用，避免重复上报）。
+func (s *Server) DropTask(taskID string) {
+	s.tasks.Drop(taskID)
 }
 
 // RemoveJDK 删除托管 JDK。
