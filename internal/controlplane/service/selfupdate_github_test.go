@@ -72,8 +72,8 @@ func TestParseChecksums(t *testing.T) {
 }
 
 // ghTestServer 起一个模拟 GitHub Releases API 的 httptest 服务，
-// 覆盖 latest / tags/nightly 两端点与 checksums.txt 资产下载。
-func ghTestServer(t *testing.T, latestBody, nightlyBody string, withChecksums bool, checksumsBody string) *httptest.Server {
+// 覆盖 /releases/latest（stable）与 /releases/tags/latest（prerelease 滚动，FR-182）两端点与 checksums.txt 资产下载。
+func ghTestServer(t *testing.T, latestBody, prereleaseBody string, withChecksums bool, checksumsBody string) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	srv := httptest.NewServer(mux)
@@ -100,7 +100,7 @@ func ghTestServer(t *testing.T, latestBody, nightlyBody string, withChecksums bo
 			{"name":"checksums.txt","browser_download_url":"%s/assets/checksums.txt"}`, srv.URL)
 		}
 		return fmt.Sprintf(`{"tag_name":"%s","body":"%s","prerelease":%v,"assets":[%s]}`,
-			body, "release notes", strings.Contains(body, "nightly"), assets)
+			body, "release notes", strings.Contains(body, "dev"), assets)
 	}
 
 	mux.HandleFunc("/repos/owner/repo/releases/latest", func(w http.ResponseWriter, _ *http.Request) {
@@ -110,12 +110,13 @@ func ghTestServer(t *testing.T, latestBody, nightlyBody string, withChecksums bo
 		}
 		_, _ = w.Write([]byte(releaseJSON(latestBody)))
 	})
-	mux.HandleFunc("/repos/owner/repo/releases/tags/nightly", func(w http.ResponseWriter, _ *http.Request) {
-		if nightlyBody == "" {
+	// prerelease 渠道：滚动预发布固定 tag 名为 latest（FR-182，由 nightly 改名）。
+	mux.HandleFunc("/repos/owner/repo/releases/tags/latest", func(w http.ResponseWriter, _ *http.Request) {
+		if prereleaseBody == "" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		_, _ = w.Write([]byte(releaseJSON(nightlyBody)))
+		_, _ = w.Write([]byte(releaseJSON(prereleaseBody)))
 	})
 	t.Cleanup(srv.Close)
 	return srv
@@ -151,13 +152,13 @@ func TestFetchGitHubRelease_Stable(t *testing.T) {
 
 func TestFetchGitHubRelease_PrereleaseChannel(t *testing.T) {
 	checksums := fmt.Sprintf("ccc  %s\nddd  %s\n", assetName(ComponentControlPlane), assetName(ComponentWorker))
-	// latest 返回 v1.0.0；nightly 返回滚动预发布。channel=prerelease 应取 nightly。
-	srv := ghTestServer(t, "v1.0.0", "0.0.0-dev+nightly", true, checksums)
+	// /releases/latest 返回 v1.0.0；/releases/tags/latest 返回滚动预发布。channel=prerelease 应取后者（FR-182）。
+	srv := ghTestServer(t, "v1.0.0", "0.0.0-dev+abc1234", true, checksums)
 	svc := newGHService(t, srv.URL, "prerelease")
 
 	feed, err := svc.fetchGitHubRelease(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, "0.0.0-dev+nightly", feed.Version, "prerelease 渠道应取 nightly tag")
+	require.Equal(t, "0.0.0-dev+abc1234", feed.Version, "prerelease 渠道应取滚动预发布 latest tag")
 }
 
 func TestFetchGitHubRelease_NoRelease404(t *testing.T) {

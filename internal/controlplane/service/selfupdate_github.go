@@ -18,6 +18,10 @@ var ErrUpdateRateLimited = errors.New("GitHub API 限流，请稍后重试或配
 // defaultGitHubAPIBase 是 GitHub REST API 默认基址；测试经 SelfUpdateConfig.GitHubAPIBase 覆盖。
 const defaultGitHubAPIBase = "https://api.github.com"
 
+// prereleaseTag 是滚动预发布的固定 tag 名（FR-182，见 ADR-039，由 ADR-036 §3 的 nightly 改名而来）。
+// 与 FR-173 发布管线 .github/workflows/release.yml 的预发布 tag 强耦合，须保持一致。
+const prereleaseTag = "latest"
+
 // githubReqTimeout 是单次 GitHub API / checksums 请求的整体超时。
 const githubReqTimeout = 15 * time.Second
 
@@ -134,7 +138,9 @@ func (s *SelfUpdateService) fetchGitHubRelease(ctx context.Context) (*Feed, erro
 
 	var endpoint string
 	if s.channel() == "prerelease" {
-		endpoint = fmt.Sprintf("%s/repos/%s/releases/tags/nightly", s.apiBase(), repo)
+		// 滚动预发布固定 tag 由 nightly 改名为 latest（FR-182，见 ADR-039，取代 ADR-036 §7 命名）。
+		// 注意与 stable 的 /releases/latest 不同：此处是名为 latest 的 tag（/releases/tags/latest）。
+		endpoint = fmt.Sprintf("%s/repos/%s/releases/tags/%s", s.apiBase(), repo, prereleaseTag)
 	} else {
 		endpoint = fmt.Sprintf("%s/repos/%s/releases/latest", s.apiBase(), repo)
 	}

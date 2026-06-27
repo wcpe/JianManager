@@ -1,7 +1,7 @@
 # 发布管线（FR-173，见 ADR-036）。
 #
 # 触发：
-#   - push 到 master              → 滚动预发布：覆盖固定 tag `nightly`（prerelease），说明取 CHANGELOG [Unreleased]。
+#   - push 到 master              → 滚动预发布：覆盖固定 tag `latest`（prerelease，FR-182），说明取 CHANGELOG [Unreleased]。
 #   - push tag `v*`（如 v0.11.0）  → 正式发布：建 release `vX.Y.Z`（非 prerelease），说明取该版本段。
 #
 # 产物：control-plane / worker × linux/amd64 + windows/amd64 共 4 个二进制 + checksums.txt，
@@ -25,7 +25,7 @@ permissions:
   contents: write # 发 release / 管 tag 需写权限（ADR-036 后果）
 
 concurrency:
-  # nightly（master）滚动覆盖：同组取消在途，避免并发覆盖打架。tag 发布各自独立成组。
+  # latest（master）滚动覆盖：同组取消在途，避免并发覆盖打架。tag 发布各自独立成组。
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
@@ -42,7 +42,7 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }} # 注入二进制的版本号
       is_release: ${{ steps.meta.outputs.is_release }} # true=tag 正式发布，false=master 滚动预发布
-      release_tag: ${{ steps.meta.outputs.release_tag }} # 正式=vX.Y.Z，预发布=nightly
+      release_tag: ${{ steps.meta.outputs.release_tag }} # 正式=vX.Y.Z，预发布=latest
     steps:
       - name: Checkout（含子模块，embed-probe 需 third_party/ServerProbe）
         uses: actions/checkout@v4
@@ -64,7 +64,7 @@ jobs:
             v="0.0.0-dev+${GITHUB_SHA::7}" # 滚动预发布开发版（ADR-036 §4）
             echo "version=${v}" >> "$GITHUB_OUTPUT"
             echo "is_release=false" >> "$GITHUB_OUTPUT"
-            echo "release_tag=nightly" >> "$GITHUB_OUTPUT"
+            echo "release_tag=latest" >> "$GITHUB_OUTPUT"
           fi
           echo "解析得 version=${v}"
 
@@ -260,15 +260,15 @@ jobs:
           echo "提取的发布说明："
           cat release-notes.md
 
-      - name: 清空既有 nightly 资产（仅预发布，确保只保留本次产物）
+      - name: 清空既有 latest 资产（仅预发布，确保只保留本次产物）
         if: needs.prepare-embeds.outputs.is_release == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # 删除既有 nightly release（容忍不存在），随后由发布步骤以本次产物重建，杜绝旧资产残留。
-          gh release delete nightly --cleanup-tag --yes 2>/dev/null || echo "无既有 nightly release，跳过删除"
+          # 删除既有 latest release（容忍不存在），随后由发布步骤以本次产物重建，杜绝旧资产残留（FR-182：tag 由 nightly 改名 latest）。
+          gh release delete latest --cleanup-tag --yes 2>/dev/null || echo "无既有 latest release，跳过删除"
 
       - name: 发布正式 release（tag vX.Y.Z）
         if: needs.prepare-embeds.outputs.is_release == 'true'
@@ -280,12 +280,12 @@ jobs:
           prerelease: false
           files: dist/*
 
-      - name: 发布滚动预发布（nightly）
+      - name: 发布滚动预发布（latest）
         if: needs.prepare-embeds.outputs.is_release == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: nightly
-          name: nightly
+          tag_name: latest
+          name: latest
           body_path: release-notes.md
           prerelease: true
           files: dist/*

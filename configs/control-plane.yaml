@@ -40,12 +40,13 @@ enroll:
   script_base_url: ""   # 安装脚本下载基址 scheme://host（留空=请求 scheme://Host）
   binary_url: ""        # Worker 二进制下载地址（留空=脚本经 --binary 指向本地二进制兜底）
 
-# 面板自更新：CP/Worker 二进制在线升级（FR-081 / FR-175，见 ADR-036 §7）。均有默认值，可整体省略。
-# 默认读 GitHub Releases 源（github_repo=wcpe/jianmanager + channel=stable），开箱即可在线升级。
+# 面板自更新：CP/Worker 二进制在线升级（FR-081 / FR-175 / FR-182，见 ADR-036 §7、ADR-039）。
+# 均有默认值，可整体省略。默认读 GitHub Releases 源（github_repo=wcpe/JianManager + channel=stable），开箱即可在线升级。
 # github_repo 与 feed_url 均留空才视为「未配置更新源」，检查更新返回 configured=false、不执行升级。
+# 升级前会自动备份当前二进制供一键回滚（FR-182），无需额外配置。
 update:
-  github_repo: "wcpe/jianmanager"  # GitHub Releases 源 owner/repo；非空即启用（权威来源）。留空回退 feed_url
-  channel: "stable"                # stable=取最新正式 release（/releases/latest）；prerelease=取滚动 nightly 预发布
+  github_repo: "wcpe/JianManager"  # GitHub Releases 源 owner/repo；非空即启用（权威来源）。留空回退 feed_url
+  channel: "stable"                # stable=取最新正式 release（/releases/latest）；prerelease=取滚动 latest 预发布（FR-182）
   github_token: ""                 # 可选 GitHub API token，提升限流额度（匿名 60 次/时够手动用）；经 ${ENV} 注入勿硬编码
   feed_url: ""                     # 可选回退：release feed JSON 地址（github_repo 空且此项非空时走原 feed 路径）
   binary_base_url: ""              # 私有二进制基址（可选兜底）：无 feed 时按 <base>/<component>-<os>-<arch> 拼下载地址

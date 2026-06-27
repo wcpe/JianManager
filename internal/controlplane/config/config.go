@@ -67,9 +67,9 @@ type Config struct {
 // 全部可选、有合理默认；github_repo 与 feed_url 均空表示「未配置更新源」，检查更新返回未配置提示而非报错。
 type UpdateConfig struct {
 	// GitHubRepo owner/repo；非空即启用 GitHub Releases 源（FR-175，权威来源，见 ADR-036 §7）。
-	// 默认 wcpe/jianmanager（项目官方仓库），开箱即可在线升级。
+	// 默认 wcpe/JianManager（项目官方仓库），开箱即可在线升级。
 	GitHubRepo string `mapstructure:"github_repo"`
-	// Channel GitHub 源渠道：stable（默认，取 /releases/latest 最新正式）| prerelease（取 nightly 滚动预发布）。
+	// Channel GitHub 源渠道：stable（默认，取 /releases/latest 最新正式）| prerelease（取 latest 滚动预发布，FR-182）。
 	Channel string `mapstructure:"channel"`
 	// GitHubToken 可选 GitHub API token；非空时请求带 Authorization 提升限流额度（匿名 60 次/时）。
 	// 经 ${ENV_VAR} 引用、不硬编码（config-files 规范）。
@@ -199,7 +199,7 @@ func Load(path string) (*Config, error) {
 	// 面板自更新（FR-081 / FR-175）：默认读 GitHub Releases 源（ADR-036 §7），开箱即可在线升级。
 	// github_repo 默认官方仓库、channel 默认 stable（取最新正式 release）；token 默认空（匿名 60 次/时够手动用）。
 	// feed_url/binary_base_url 为可选回退（github_repo 空且 feed_url 非空时走原 feed 路径）；仅允许 https。
-	v.SetDefault("update.github_repo", "wcpe/jianmanager")
+	v.SetDefault("update.github_repo", "wcpe/JianManager")
 	v.SetDefault("update.channel", "stable")
 	v.SetDefault("update.github_token", "")
 	v.SetDefault("update.feed_url", "")
