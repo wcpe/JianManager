@@ -44,9 +44,17 @@ import { NodeWorktableCard } from '@/components/console/NodeWorktableCard'
 
 import NodeJDKPanel from '@/components/NodeJDKPanel'
 import NodePortsPanel from '@/components/NodePortsPanel'
+import NodeArtifactCachePanel from '@/components/NodeArtifactCachePanel'
 import DangerConfirm from '@/components/DangerConfirm'
 import AddNodeDialog from '@/components/AddNodeDialog'
 import { Button } from '@/components/ui/button'
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from '@/components/ui/sheet'
 
 /** 将字节数格式化为人类可读的大小（B/KB/MB/GB）。 */
 function formatBytes(bytes: number): string {
@@ -233,6 +241,7 @@ function NodeActionsMenu({
   node,
   onJDK,
   onPorts,
+  onCache,
   onToggleMaintenance,
   onDrain,
   onDelete,
@@ -240,6 +249,7 @@ function NodeActionsMenu({
   node: NodeInfo
   onJDK: () => void
   onPorts: () => void
+  onCache: () => void
   onToggleMaintenance: () => void
   onDrain: () => void
   onDelete: () => void
@@ -255,6 +265,7 @@ function NodeActionsMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem onSelect={onJDK}>{t('nodes.jdkTitle')}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={onCache}>{t('artifactCache.title')}</DropdownMenuItem>
         <DropdownMenuItem onSelect={onPorts}>{t('ports.button')}</DropdownMenuItem>
         <DropdownMenuItem onSelect={onToggleMaintenance}>
           {node.maintenance ? t('nodes.uncordon') : t('nodes.cordon')}
@@ -289,6 +300,7 @@ export default function NodesPage() {
 
   const [jdkNodeId, setJdkNodeId] = useState<number | null>(null)
   const [portsNodeId, setPortsNodeId] = useState<number | null>(null)
+  const [cacheNodeId, setCacheNodeId] = useState<number | null>(null)
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [expandedId, setExpandedId] = useState<number | null>(null)
   const [addOpen, setAddOpen] = useState(false)
@@ -345,6 +357,7 @@ export default function NodesPage() {
       node={node}
       onJDK={() => setJdkNodeId(node.id)}
       onPorts={() => setPortsNodeId(node.id)}
+      onCache={() => setCacheNodeId(node.id)}
       onToggleMaintenance={() => toggleMaintenance(node)}
       onDrain={() => setPending({ kind: 'drain', node })}
       onDelete={() => setPending({ kind: 'delete', node })}
@@ -503,32 +516,35 @@ export default function NodesPage() {
         </Panel>
       )}
 
-      {jdkNodeId !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-background border rounded-lg p-6 w-full max-w-2xl shadow-lg max-h-[80vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold">{t('nodes.jdkTitle')}</h2>
-              <button onClick={() => setJdkNodeId(null)} className="text-sm text-muted-foreground hover:text-foreground">
-                {t('common.close')}
-              </button>
-            </div>
-            <NodeJDKPanel nodeId={jdkNodeId} />
-          </div>
-        </div>
-      )}
-      {portsNodeId !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-background border rounded-lg p-6 w-full max-w-2xl shadow-lg max-h-[80vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-bold">{t('ports.title')}</h2>
-              <button onClick={() => setPortsNodeId(null)} className="text-sm text-muted-foreground hover:text-foreground">
-                {t('common.close')}
-              </button>
-            </div>
-            <NodePortsPanel nodeId={portsNodeId} />
-          </div>
-        </div>
-      )}
+      {/* 统一右侧抽屉容器取代手搓 fixed inset-0 模态（FR-178）：宽、可滚动、主题化滚动条。 */}
+      <Sheet open={jdkNodeId !== null} onOpenChange={(o: boolean) => { if (!o) setJdkNodeId(null) }}>
+        <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
+          <SheetHeader className="pr-8">
+            <SheetTitle>{t('nodes.jdkTitle')}</SheetTitle>
+            <SheetDescription>{t('artifactCache.jdkDrawerDesc')}</SheetDescription>
+          </SheetHeader>
+          {jdkNodeId !== null && <NodeJDKPanel nodeId={jdkNodeId} active={jdkNodeId !== null} />}
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={cacheNodeId !== null} onOpenChange={(o: boolean) => { if (!o) setCacheNodeId(null) }}>
+        <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
+          <SheetHeader className="pr-8">
+            <SheetTitle>{t('artifactCache.title')}</SheetTitle>
+            <SheetDescription>{t('artifactCache.drawerDesc')}</SheetDescription>
+          </SheetHeader>
+          {cacheNodeId !== null && <NodeArtifactCachePanel nodeId={cacheNodeId} active={cacheNodeId !== null} />}
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={portsNodeId !== null} onOpenChange={(o: boolean) => { if (!o) setPortsNodeId(null) }}>
+        <SheetContent className="w-full sm:max-w-2xl overflow-y-auto">
+          <SheetHeader className="pr-8">
+            <SheetTitle>{t('ports.title')}</SheetTitle>
+          </SheetHeader>
+          {portsNodeId !== null && <NodePortsPanel nodeId={portsNodeId} />}
+        </SheetContent>
+      </Sheet>
       <AddNodeDialog open={addOpen} onClose={() => setAddOpen(false)} />
       <DangerConfirm
         open={pending !== null}

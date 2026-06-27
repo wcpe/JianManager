@@ -64,7 +64,8 @@ export interface InstallJDKAccepted {
 export function useInstallJDK(nodeId: number) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (body: { vendor: string; majorVersion: number; arch: string }) =>
+    // version 可选（FR-178）：非空时经 foojay 按具体版本解析；为空取该大版本最新。
+    mutationFn: (body: { vendor: string; majorVersion: number; arch: string; version?: string }) =>
       api.post<InstallJDKAccepted>(`/nodes/${nodeId}/jdks/install`, body).then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['node-jdks', nodeId] })
