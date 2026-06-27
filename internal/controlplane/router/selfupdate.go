@@ -44,6 +44,10 @@ func (h *SelfUpdateHandler) Check(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": "UPDATE_NOT_CONFIGURED", "message": "未配置更新源"})
 			return
 		}
+		if errors.Is(err, service.ErrUpdateRateLimited) {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "UPDATE_RATE_LIMITED", "message": "GitHub API 限流，请稍后重试或配置 github_token"})
+			return
+		}
 		c.JSON(http.StatusBadGateway, gin.H{"error": "UPDATE_CHECK_FAILED", "message": err.Error()})
 		return
 	}
@@ -110,6 +114,8 @@ func (h *SelfUpdateHandler) respondUpgradeError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrUpdateNotConfigured):
 		c.JSON(http.StatusConflict, gin.H{"error": "UPDATE_NOT_CONFIGURED", "message": "未配置更新源"})
+	case errors.Is(err, service.ErrUpdateRateLimited):
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "UPDATE_RATE_LIMITED", "message": "GitHub API 限流，请稍后重试或配置 github_token"})
 	case errors.Is(err, service.ErrUpdateAlreadyLatest):
 		c.JSON(http.StatusConflict, gin.H{"error": "UPDATE_ALREADY_LATEST", "message": "已是最新版本"})
 	case errors.Is(err, service.ErrUpdateNoArtifact):

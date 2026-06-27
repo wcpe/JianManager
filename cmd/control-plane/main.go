@@ -115,9 +115,12 @@ func main() {
 	storageSvc := service.NewStorageService(db, root)
 	// 数据库资源管理器只读浏览（FR-084）：CP 独有数据源，仅平台管理员；只读 + 敏感列脱敏。
 	dbBrowseSvc := service.NewDBBrowseService(db)
-	// 面板自更新（FR-081，见 ADR-020 §4）：可配更新源 + sha256 校验，CP 统一编排
-	// CP 自升级与经 gRPC 全网 Worker 升级；CP 自身下载落数据根 cache/。
+	// 面板自更新（FR-081 / FR-175，见 ADR-036 §7）：默认读 GitHub Releases 源（feed 为可选回退）
+	// + sha256 校验，CP 统一编排 CP 自升级与经 gRPC 全网 Worker 升级；CP 自身下载落数据根 cache/。
 	selfUpdateSvc := service.NewSelfUpdateService(db, pool, service.SelfUpdateConfig{
+		GitHubRepo:    cfg.Update.GitHubRepo,
+		Channel:       cfg.Update.Channel,
+		GitHubToken:   cfg.Update.GitHubToken,
 		FeedURL:       cfg.Update.FeedURL,
 		BinaryBaseURL: cfg.Update.BinaryBaseURL,
 		AllowInsecure: cfg.Update.AllowInsecure,

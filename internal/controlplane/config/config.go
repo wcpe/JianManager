@@ -63,14 +63,21 @@ type Config struct {
 	Proxy httpclient.Config `mapstructure:"proxy"`
 }
 
-// UpdateConfig 面板自更新（CP/Worker 二进制在线升级）配置（FR-081，见 ADR-020 §4）。
-// 全部可选、有合理默认；留空表示「未配置更新源」，检查更新返回未配置提示而非报错。
+// UpdateConfig 面板自更新（CP/Worker 二进制在线升级）配置（FR-081，GitHub 源见 FR-175/ADR-036 §7）。
+// 全部可选、有合理默认；github_repo 与 feed_url 均空表示「未配置更新源」，检查更新返回未配置提示而非报错。
 type UpdateConfig struct {
-	// FeedURL release feed JSON 地址；非空时「检查更新」据此解析最新版本与各平台制品。
+	// GitHubRepo owner/repo；非空即启用 GitHub Releases 源（FR-175，权威来源，见 ADR-036 §7）。
+	// 默认 wcpe/jianmanager（项目官方仓库），开箱即可在线升级。
+	GitHubRepo string `mapstructure:"github_repo"`
+	// Channel GitHub 源渠道：stable（默认，取 /releases/latest 最新正式）| prerelease（取 nightly 滚动预发布）。
+	Channel string `mapstructure:"channel"`
+	// GitHubToken 可选 GitHub API token；非空时请求带 Authorization 提升限流额度（匿名 60 次/时）。
+	// 经 ${ENV_VAR} 引用、不硬编码（config-files 规范）。
+	GitHubToken string `mapstructure:"github_token"`
+	// FeedURL release feed JSON 地址（可选回退）：github_repo 为空且 feed_url 非空时走原 feed 路径（FR-081）。
 	// 含私有源凭据时经 ${ENV_VAR} 引用、不硬编码（config-files 规范）。
 	FeedURL string `mapstructure:"feed_url"`
 	// BinaryBaseURL 私有二进制基址（可选兜底）：无 feed 时按 <base>/<component>-<os>-<arch> 约定拼下载地址。
-	// 本 FR 以 feed 为主、base_url 为兜底（无版本/校验信息）。
 	BinaryBaseURL string `mapstructure:"binary_base_url"`
 	// AllowInsecure 是否允许 http 下载源（默认仅 https，避免二进制被中间人篡改）。本地/内网自测可开。
 	AllowInsecure bool `mapstructure:"allow_insecure"`
@@ -189,7 +196,12 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("enroll.advertise_grpc", "")
 	v.SetDefault("enroll.script_base_url", "")
 	v.SetDefault("enroll.binary_url", "https://github.com/wcpe/jianmanager/releases/latest/download")
-	// 面板自更新（FR-081）：更新源默认空（未配置即检查更新返回未配置提示），仅允许 https。
+	// 面板自更新（FR-081 / FR-175）：默认读 GitHub Releases 源（ADR-036 §7），开箱即可在线升级。
+	// github_repo 默认官方仓库、channel 默认 stable（取最新正式 release）；token 默认空（匿名 60 次/时够手动用）。
+	// feed_url/binary_base_url 为可选回退（github_repo 空且 feed_url 非空时走原 feed 路径）；仅允许 https。
+	v.SetDefault("update.github_repo", "wcpe/jianmanager")
+	v.SetDefault("update.channel", "stable")
+	v.SetDefault("update.github_token", "")
 	v.SetDefault("update.feed_url", "")
 	v.SetDefault("update.binary_base_url", "")
 	v.SetDefault("update.allow_insecure", false)
