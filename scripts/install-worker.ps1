@@ -19,8 +19,9 @@ function Install-JianManagerWorker {
         [string]$Name = "",
         # 本地已拷贝的 Worker 二进制路径（离线/内网兜底，跳过下载）。
         [string]$Binary = "",
-        # Worker 二进制下载地址（可选，缺省不下载，要求 -Binary）。
-        [string]$DownloadUrl = "",
+        # Worker 二进制下载基址/地址（可选）。缺省走 GitHub Releases latest
+        # （ADR-036 产物命名契约：worker-<os>-<arch>.exe）；离线/内网用 -Binary 或 -DownloadUrl 覆盖。
+        [string]$DownloadUrl = "https://github.com/wcpe/jianmanager/releases/latest/download",
         # 安装目录（默认 C:\JianManager）。
         [string]$InstallDir = "C:\JianManager",
         # 数据根目录（默认 <InstallDir>\data）。
@@ -55,9 +56,9 @@ function Install-JianManagerWorker {
         Copy-Item -Force -Path $Binary -Destination $binPath
     } elseif ($DownloadUrl) {
         $url = $DownloadUrl
-        # 约定: <base>/jianmanager-worker-windows-<arch>.exe；若已指向具体文件则原样用。
-        if ($url -notlike "*jianmanager-worker*") {
-            $url = $url.TrimEnd("/") + "/jianmanager-worker-windows-$arch.exe"
+        # ADR-036 产物命名契约: <base>/worker-windows-<arch>.exe；若已指向具体产物文件则原样用。
+        if ($url -notlike "*worker-*") {
+            $url = $url.TrimEnd("/") + "/worker-windows-$arch.exe"
         }
         Write-Host "      下载: $url"
         Invoke-WebRequest -Uri $url -OutFile $binPath -UseBasicParsing

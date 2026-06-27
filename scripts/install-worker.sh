@@ -15,7 +15,9 @@ CONTROL_PLANE=""        # CP gRPC 地址 host:port（必填）
 TOKEN=""                # enrollment token 明文（必填）
 NODE_NAME=""            # 节点名（可选，留空由 Worker 上报名生效）
 BINARY=""               # 本地已拷贝的 Worker 二进制路径（离线/内网兜底，跳过下载）
-DOWNLOAD_URL=""         # Worker 二进制下载地址（可选，缺省不下载，要求 --binary）
+# Worker 二进制下载地址（可选）。缺省走 GitHub Releases latest（ADR-036 产物命名契约：
+# worker-<os>-<arch>[.exe]）；离线/内网用 --binary 或 --download-url 覆盖。
+DOWNLOAD_URL="https://github.com/wcpe/jianmanager/releases/latest/download"
 INSTALL_DIR="/opt/jianmanager"   # 安装目录
 DATA_DIR=""             # 数据根（缺省 <install-dir>/data）
 GRPC_PORT="9101"        # Worker gRPC 端口
@@ -33,7 +35,7 @@ usage() {
 可选:
   --name <node>            节点名（留空由 Worker 上报名生效）
   --binary <path>          本地 Worker 二进制路径（离线/内网，跳过下载）
-  --download-url <url>     Worker 二进制下载地址
+  --download-url <url>     Worker 二进制下载基址/地址（默认 GitHub Releases latest）
   --install-dir <dir>      安装目录（默认 /opt/jianmanager）
   --data-dir <dir>         数据根目录（默认 <install-dir>/data）
   --grpc-port <port>       Worker gRPC 端口（默认 9101）
@@ -101,11 +103,12 @@ if [ -n "$BINARY" ]; then
     cp -f "$BINARY" "$BIN_PATH"
 elif [ -n "$DOWNLOAD_URL" ]; then
     url="$DOWNLOAD_URL"
-    # 约定: <base>/jianmanager-worker-<os>-<arch>；若 URL 已指向具体文件则原样用。
+    # ADR-036 产物命名契约: <base>/worker-<os>-<arch>（os=GOOS、arch=GOARCH）。
+    # 若 --download-url 已指向具体产物文件（含 worker- 资产名）则原样用。
     case "$url" in
-        */jianmanager-worker*) : ;;
-        */) url="${url}jianmanager-worker-${OS}-${ARCH}" ;;
-        *) url="${url}/jianmanager-worker-${OS}-${ARCH}" ;;
+        */worker-*) : ;;
+        */) url="${url}worker-${OS}-${ARCH}" ;;
+        *) url="${url}/worker-${OS}-${ARCH}" ;;
     esac
     echo "      下载: $url"
     if command -v curl >/dev/null 2>&1; then
