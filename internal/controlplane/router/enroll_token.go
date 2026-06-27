@@ -79,6 +79,7 @@ func (h *EnrollTokenHandler) Issue(c *gin.Context) {
 		"expiresAt":             tok.ExpiresAt,
 		"nodeName":              tok.NodeName,
 		"controlPlaneGrpc":      grpcAddr,
+		"scriptBaseUrl":         scriptBase, // CP 托管安装脚本的基址，供前端拼「手动安装步骤」兜底命令
 		"installCommandLinux":   buildLinuxInstallCommand(scriptBase, grpcAddr, plaintext, tok.NodeName, h.install.BinaryURL),
 		"installCommandWindows": buildWindowsInstallCommand(scriptBase, grpcAddr, plaintext, tok.NodeName, h.install.BinaryURL),
 	})

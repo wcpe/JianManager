@@ -60,9 +60,14 @@ func TestEnrollToken_Issue_ReturnsPlaintextAndCommands(t *testing.T) {
 	if !strings.HasSuffix(grpcAddr, ":9100") {
 		t.Fatalf("controlPlaneGrpc 应含 gRPC 端口 9100，得到 %q", grpcAddr)
 	}
+	// scriptBaseUrl 回显 CP 托管脚本的基址，供前端拼「手动安装步骤」兜底命令；一键命令的脚本 URL 应以它打头。
+	scriptBase, _ := resp["scriptBaseUrl"].(string)
+	if scriptBase == "" {
+		t.Fatalf("响应应含 scriptBaseUrl，得到空")
+	}
 	linux, _ := resp["installCommandLinux"].(string)
-	if !strings.Contains(linux, plaintext) || !strings.Contains(linux, "install-worker.sh") || !strings.Contains(linux, "--name edge-1") {
-		t.Fatalf("Linux 一键命令缺 token/脚本/节点名: %q", linux)
+	if !strings.Contains(linux, plaintext) || !strings.Contains(linux, scriptBase+"/install-worker.sh") || !strings.Contains(linux, "--name edge-1") {
+		t.Fatalf("Linux 一键命令缺 token/脚本(基址)/节点名: %q", linux)
 	}
 	win, _ := resp["installCommandWindows"].(string)
 	if !strings.Contains(win, plaintext) || !strings.Contains(win, "install-worker.ps1") {
