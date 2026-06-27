@@ -6,6 +6,8 @@
 
 ## [Unreleased]
 
+## 0.11.0（2026-06-28）
+
 ### 新增
 - **CI/CD 发布管线（FR-173，见 ADR-036）**：新增 `.github/workflows/release.yml`（GitHub Actions，三 job `prepare-embeds`→`build` matrix→`release`）——push `master` 出/覆盖固定 tag `nightly` 滚动预发布（说明取 CHANGELOG `[Unreleased]`），push tag `v*` 出正式 release（说明取该版本段）；交叉编译 Control Plane + Worker 至 `linux/amd64`+`windows/amd64`（共 4 二进制，含 `go:embed` 前端 + 内嵌探针/客户端更新器/CFR），产物按 `<component>-<os>-<arch>[.exe]` 命名 + `checksums.txt`（每件 sha256）上传 release，`-ldflags` 注入 `internal/version.Version`（正式=tag、预发布=`0.0.0-dev+<shortsha>`，build/release 两 job 同算法保证版本一致）。新增 `scripts/changelog-extract.mjs`（提取 `[Unreleased]`/指定版本段为发布说明，缺失/空段非零退出，含 node:test 单测）。`internal/version/version.go` 默认值对齐 `0.10.0` 消除与 CHANGELOG 漂移（真值仍由 ldflags 注入）。固化产物命名/校验/渠道契约（ADR-036，FR-175 自更新对接 GitHub Releases 共享）。
 - **出站网络代理 — 每进程 HTTP/SOCKS5（FR-174，CP+Worker，见 ADR-037）**：CP 与各 Worker 的所有出站下载（自更新 feed/二进制、JDK 归档、服务端 jar、CFR 反编译器）统一收口到共享出站 HTTP 客户端工厂 `internal/platform/httpclient`（`Config{URL,NoProxy}` + `New`，空配回退 `ProxyFromEnvironment`、`http`/`https` 经 `Transport.Proxy`、`socks5` 经 `golang.org/x/net/proxy`、统一 `no_proxy` 判定、非法 URL fail-fast、错误脱敏 `user:pass`）。CP `control-plane.yaml` 与各 Worker `worker.yaml` 各加性新增 `proxy:` 段（`url`+`no_proxy`，`${ENV}` 注入凭据），互相独立；`url` 留空=直连（沿用环境变量代理，不破坏现状）。`selfupdate` 新增 `DownloadWith(client,...)`（`Download` 保留为 DefaultClient 薄包装兼容既有测试）；`SelfUpdateService`/`CoreService`/`AssetService`/Worker gRPC `Server`/`jdk.Manager`/`decompiler.Provider`/provision `downloadFile` 全部改走注入的工厂 client，两进程 `main` 装配 `httpclient.New(cfg.Proxy)` 并注入。新增 `httpclient` 单测（空配/http/https/socks5 端到端经最小 SOCKS5 服务/no_proxy 命中直连/非法 URL）；`go build`/`vet`/`test` 全绿。**真机两条（HTTP 代理、SOCKS5 代理各下载成功 + 空配直连）待真机验**。
