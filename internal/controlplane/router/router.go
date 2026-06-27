@@ -20,6 +20,7 @@ type Services struct {
 	InstanceBatch      *service.InstanceBatchService
 	InstanceGroup      *service.InstanceGroupService
 	JDK                *service.JDKService
+	NodeRuntime        *service.NodeRuntimeService
 	DockerImage        *service.DockerImageService
 	Terminal           *service.TerminalService
 	File               *service.FileService
@@ -122,6 +123,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		jdkHandler := NewJDKHandler(svcs.JDK)
 		jdkHandler.RegisterRoutes(protected)
+
+		// 节点运行时管理（FR-178）：制品缓存（列/清/逐项清/设上限）+ JDK 版本目录（foojay）+ 目录浏览。
+		// Handler 内部按平台管理员收敛 + 破坏性操作写审计。
+		if svcs.NodeRuntime != nil {
+			nodeRuntimeHandler := NewNodeRuntimeHandler(svcs.NodeRuntime, svcs.Audit)
+			nodeRuntimeHandler.RegisterRoutes(protected)
+		}
 
 		// Docker 镜像管理（FR-078，见 ADR-019）：节点级列出/拉取/删除本机镜像。仅平台管理员。
 		if svcs.DockerImage != nil {

@@ -75,6 +75,8 @@ func main() {
 	// 回填实例服务，供节点排空（drain）复用实例停止逻辑（FR-048）。
 	nodeSvc.SetInstanceService(instanceSvc)
 	jdkSvc := service.NewJDKService(db, pool)
+	// 节点运行时管理（FR-178）：制品缓存 + JDK 版本目录（foojay）+ 目录浏览，经 gRPC 委托 Worker。
+	nodeRuntimeSvc := service.NewNodeRuntimeService(db, pool)
 	dockerImageSvc := service.NewDockerImageService(db, pool)
 	terminalSvc := service.NewTerminalService(db, cfg.JWT.Secret, fmt.Sprintf("ws://localhost:%d", cfg.Server.Port))
 	fileSvc := service.NewFileService(db, pool)
@@ -264,6 +266,7 @@ func main() {
 		InstanceBatch:      instanceBatchSvc,
 		InstanceGroup:      instanceGroupSvc,
 		JDK:                jdkSvc,
+		NodeRuntime:        nodeRuntimeSvc,
 		DockerImage:        dockerImageSvc,
 		Terminal:           terminalSvc,
 		File:               fileSvc,

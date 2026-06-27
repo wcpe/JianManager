@@ -78,6 +78,7 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 		Instance:      instanceSvc,
 		InstanceBatch: service.NewInstanceBatchService(db, pool),
 		InstanceGroup: service.NewInstanceGroupService(db),
+		NodeRuntime:   service.NewNodeRuntimeService(db, pool),
 		ProbeUpdate:   service.NewProbeUpdateService(db, pool, service.NewPluginBridgeService(jwtCfg.Secret)),
 		Terminal:      service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),
 		File:          fileSvc,

@@ -87,6 +87,9 @@ type InstallJDKRequest struct {
 	Vendor       string `json:"vendor" binding:"required"`
 	MajorVersion int    `json:"majorVersion" binding:"required"`
 	Arch         string `json:"arch" binding:"required"`
+	// Version 具体 JDK 版本（FR-178，可选，如 "21.0.4"）。非空时 Worker 经 foojay 按具体版本解析；
+	// 为空取该大版本最新 GA。
+	Version string `json:"version"`
 }
 
 func (s *JDKService) List(nodeID uint) ([]model.NodeJDK, error) {
@@ -144,6 +147,7 @@ func (s *JDKService) InstallAsync(nodeID uint, req InstallJDKRequest, createdBy 
 		Vendor:       req.Vendor,
 		MajorVersion: int32(req.MajorVersion),
 		Arch:         req.Arch,
+		Version:      req.Version,
 		MirrorBase:   s.mirrorBaseForVendor(req.Vendor),
 		TaskId:       taskID,
 	})
@@ -179,6 +183,7 @@ func (s *JDKService) Install(nodeID uint, req InstallJDKRequest) (*model.NodeJDK
 		Vendor:       req.Vendor,
 		MajorVersion: int32(req.MajorVersion),
 		Arch:         req.Arch,
+		Version:      req.Version,
 		MirrorBase:   s.mirrorBaseForVendor(req.Vendor),
 	})
 	if err != nil {
