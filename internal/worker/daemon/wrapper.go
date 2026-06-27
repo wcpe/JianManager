@@ -422,17 +422,11 @@ func (w *Wrapper) stopJava(force bool) {
 	}()
 }
 
-// forceKill 强制终止 Java 进程树。Windows 上 Kill 仅终止 cmd.exe，子进程继承句柄继续运行
-// 导致 cmd.Wait 阻塞，故用 taskkill /T 递归终止整棵进程树。
+// forceKill 强制终止被托管进程整棵进程树，委托平台实现 killProcessTree
+// （Linux 杀进程组 kill -pgid、Windows taskkill /T）——杜绝 sh -c / cmd.exe 派生的
+// 孙进程残留持有 stdout 管道致 cmd.Wait 永久阻塞、wrapper 在 stop 后不退出。
 func (w *Wrapper) forceKill(cmd *exec.Cmd) {
-	if cmd == nil || cmd.Process == nil {
-		return
-	}
-	if runtime.GOOS == "windows" {
-		_ = exec.Command("taskkill", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Run()
-	} else {
-		_ = cmd.Process.Kill()
-	}
+	killProcessTree(cmd)
 }
 
 func (w *Wrapper) cleanupPIDFile() {
@@ -465,6 +459,7 @@ func buildJavaCmd(cfg WrapperConfig) *exec.Cmd {
 	} else {
 		cmd = exec.Command("sh", "-c", cfg.StartCommand)
 	}
+	applyProcAttr(cmd) // 独立进程组 / 平台进程树管理，便于停止时整树终止
 	cmd.Dir = cfg.WorkDir
 	cmd.Env = composeEnv(os.Environ(), cfg)
 	return cmd
