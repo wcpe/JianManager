@@ -15,6 +15,7 @@
 
 ### 变更
 - **Worker 一键安装下载源对齐 GitHub Releases 命名契约**（FR-080 / ADR-036）：安装脚本（`install-worker.sh`/`install-worker.ps1`）下载资产名由 `jianmanager-worker-<os>-<arch>` 改为 ADR-036 契约的 `worker-<os>-<arch>[.exe]`，默认下载基址指向 `https://github.com/wcpe/jianmanager/releases/latest/download`；CP `enroll.binary_url` 默认改为该基址，使面板「添加节点」一键命令开箱即下载、无需 `--binary` 本地兜底（内网/离线仍可经 `--binary`/`enroll.binary_url` 覆盖）。真实 release 产物由 FR-173 发布管线产出。
+- **全局交互细节修正（FR-176，前端，增强 FR-163）**：① 卡片/行/chip 原语（`Panel.hoverable` / `NodeWorktableCard` / `BotWorktableCard` / `InstanceWorktableCard` / `SummaryChips` / `ConfigRow` / 背包格子）hover **去位移留阴影**——移除 `hover:-translate-y`、保留 `hover:shadow-lift`（背包单格留 `hover:bg-accent`），过渡收为 `transition-[box-shadow]`，消除 hover 时的布局抖动；② 输入框 `Input` 焦点环由 `ring-[3px] + ring-ring/50` 收敛为 `ring-2 + ring-ring/40`，更克制、配 `border-ring` 边线确保焦点态不糊邻近文字；③ `index.css` 新增全局**主题化细滚动条**（`::-webkit-scrollbar` 细轨圆角拇指 + Firefox `scrollbar-width: thin`/`scrollbar-color`，配色取中性主题变量 `--muted-foreground` 经 `color-mix`，随明暗 + 双主题靛蓝/青绿自适配；保留既有 `.scrollbar-none` opt-out）。补 `web/src/lib/ui-details.test.ts` 守护三件套源约束。**明暗 + 双主题真机观感待真机验。**
 
 ### 修复
 - **首次部署数据库目录自动创建（control-plane，见 commit `c001d16`）**：数据根 / DSN 父目录不存在时 `database.New` 直接 `sqlite.Open` 报 `SQLITE_CANTOPEN`（modernc 表象「out of memory (14)」），首次部署被迫手动 `mkdir data` 才能启动。改为打开 sqlite 前 `MkdirAll` 解析出的 DSN 文件父目录（含多级），妥善跳过 `:memory:` / `file:` / `?params` 等无磁盘路径形式；补复现测试守护、并验证不误伤内存库。
