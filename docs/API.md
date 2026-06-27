@@ -1476,11 +1476,59 @@
 
 ### POST /api/v1/nodes/:id/jdks/install（行为变更）
 - **描述**: 一键下载安装 JDK（**异步化**）。建任务 + 令 Worker 启动即返回，立即回执 `taskId`；进度/完成在任务中心与站内信查看。取代原「同步阻塞最长 20min 返回 JDK 记录」。
-- **关联 FR**: FR-072, FR-183
+- **关联 FR**: FR-072, FR-183, FR-178
 - **权限**: 平台管理员
-- **请求体**: `{ "vendor": "Temurin", "majorVersion": 21, "arch": "x64" }`
+- **请求体**: `{ "vendor": "Temurin", "majorVersion": 21, "arch": "x64", "version": "21.0.4" }`
+  - `version` 可选（FR-178）：非空时 Worker 经 foojay 按具体版本解析下载源；为空取该大版本最新 GA。
 - **响应**: `202 Accepted` `{ "taskId": "<uuid>", "task": { ...Task } }`
 - **错误码**: `503 NODE_OFFLINE`（节点未连接，不建悬挂任务）；`404 NOT_FOUND`（节点不存在）；`502 INSTALL_FAILED`（下发 Worker 失败，任务已置 failed）
+
+### 节点运行时管理（FR-178）
+
+> 节点级运行时面板后端：制品缓存（性能优化，真·节点级）、JDK 版本目录（foojay）、目录浏览。
+> 全部经 gRPC 委托 Worker（CP 不直接读节点 FS），仅平台管理员；缓存破坏性操作写审计。
+
+#### GET /api/v1/nodes/:id/artifact-cache
+- **描述**: 列出节点本地制品缓存项 + 总占用 + 当前容量上限。`name`/`version` 缺失时 CP 用全局制品库（asset 表）按 sha256 补全。
+- **关联 FR**: FR-178
+- **权限**: 平台管理员
+- **响应**: `{ "items": [{ "sha256", "name", "type", "version", "size", "cachedAt", "lastUsedAt" }], "totalBytes": 0, "capBytes": 0 }`（`capBytes=0` 表示不限；时间为 Unix 秒）
+- **错误码**: `503 NODE_OFFLINE`；`404 NOT_FOUND`；`502 WORKER_ERROR`
+
+#### DELETE /api/v1/nodes/:id/artifact-cache/:sha256
+- **描述**: 逐项清除指定 sha256 的缓存（幂等）。写审计 `node.artifact_cache.evict`。
+- **关联 FR**: FR-178
+- **权限**: 平台管理员
+- **响应**: `{ "message": "已清除" }`
+
+#### POST /api/v1/nodes/:id/artifact-cache/clear
+- **描述**: 清空节点全部制品缓存。写审计 `node.artifact_cache.clear`。
+- **关联 FR**: FR-178
+- **权限**: 平台管理员
+- **响应**: `{ "removed": 3 }`
+
+#### PUT /api/v1/nodes/:id/artifact-cache/cap
+- **描述**: 设置缓存容量上限（字节，0=不限）。设定后即按新上限触发一次 LRU（`lastUsedAt` 升序）淘汰。写审计 `node.artifact_cache.set_cap`。
+- **关联 FR**: FR-178
+- **权限**: 平台管理员
+- **请求体**: `{ "capBytes": 1073741824 }`
+- **响应**: `{ "capBytes": 1073741824, "totalBytes": 0 }`
+- **错误码**: `400 INVALID_REQUEST`（上限为负）；`503 NODE_OFFLINE`
+
+#### GET /api/v1/nodes/:id/jdk/catalog?vendor=&major=&arch=
+- **描述**: 经 CP 代理 foojay disco 查询某发行版可选的具体 JDK 版本（喂前端版本选择器）。统一出站代理、避前端跨域。
+- **关联 FR**: FR-178
+- **权限**: 平台管理员
+- **Query**: `vendor`（必填，如 Temurin/Liberica/Microsoft/Semeru/GraalVM…）；`major`（可选大版本）；`arch`（可选，x64/aarch64）
+- **响应**: `[{ "distribution", "majorVersion", "javaVersion", "archiveType", "latest" }]`
+- **错误码**: `400 INVALID_REQUEST`（缺 vendor）；`502 WORKER_ERROR`（foojay 不可达，前端降级为手填版本）
+
+#### GET /api/v1/nodes/:id/browse?path=
+- **描述**: 只读列出节点上某绝对路径下的子目录（JDK 路径登记目录选择器）。`path` 为空时返回起点（Windows 盘符 / Unix 根）；只列目录、防穿越。
+- **关联 FR**: FR-178
+- **权限**: 平台管理员
+- **响应**: `{ "path": "/opt", "parent": "/", "dirs": [{ "name": "jdks", "path": "/opt/jdks" }] }`
+- **错误码**: `503 NODE_OFFLINE`；`502 WORKER_ERROR`（路径不可访问/非目录/相对路径）
 
 ### GET /api/v1/tasks
 - **描述**: 任务列表（倒序）。非平台管理员只见自己发起的，平台管理员见全部。

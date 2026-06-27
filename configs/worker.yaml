@@ -26,6 +26,12 @@ data_dir: ./data
 # 兼容旧部署：显式指定时覆盖数据根派生的 var/servers；留空则用 <data_dir>/var/servers。
 # servers_dir: ./servers
 
+# 节点本地制品缓存（FR-178）：按 sha256 缓存下载过的服务端核心 jar（<data_dir>/var/artifact-cache），
+# 建实例命中即秒拷免重下。max_bytes=0 不限；设上限后存入超限按 lastUsedAt 升序 LRU 淘汰。
+# 也可经 CP 端点 PUT /nodes/:id/artifact-cache/cap 运行时下发覆盖。
+# artifact_cache:
+#   max_bytes: 0                    # 例：10737418240（10 GiB）
+
 log:
   level: info
   format: text
