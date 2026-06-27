@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-probe embed-cfr embed-client-updater gen-licenses docker
+.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-probe embed-cfr embed-client-updater gen-licenses docker
 
 # 构建所有（含前端嵌入）。gen-licenses 先行，确保许可清单与即将打包的前端一致。
 build: gen-licenses build-web embed-web build-cp build-worker
@@ -10,6 +10,10 @@ build-cp:
 # 构建 Worker Node
 build-worker:
 	go build -o bin/worker.exe ./cmd/worker
+
+# 构建 jmctl 紧急控制台 CLI（独立轻量二进制，仅链 daemon 帧协议包，~3.6MB，FR-184/ADR-041）
+build-jmctl:
+	go build -o bin/jmctl.exe ./cmd/jmctl
 
 # 构建前端
 build-web:
