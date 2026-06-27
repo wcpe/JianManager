@@ -68,6 +68,17 @@
 
 至此 **ADR-020 §4 的 feed 源立场正式被本 ADR 取代**（ADR-020 §4 已标 `superseded-by ADR-036`），分发与自更新来源统一收敛到 GitHub Releases，feed 仅作可选回退。
 
+### 8. 滚动预发布 tag 重命名 `nightly` → `latest`（FR-173/175 收口修订）
+
+> 本 §为 FR-173/175 收口期追加的命名修订，对齐运营者「最新预发布」的直觉命名。**语义与机制不变**，仅改 tag/显示名。
+
+- **决策**：§3/§7 中滚动预发布的固定 tag 由 `nightly` 重命名为 **`latest`**。仍是 push `master` 触发、`prerelease=true`、删旧重建只保留本次产物（"一直删除更新迭代，只留最新"）。正式版仍由 push tag `vX.Y.Z` 产出（`prerelease=false`）——**两种版本**：tag=正式版、`latest`=滚动预发布。
+- **逐处替换**（FR-173/175 收口）：
+  - `.github/workflows/release.yml`：`release_tag` 兜底值、`gh release delete nightly` → `latest`、发布步骤的 `tag_name`/`name`。
+  - `internal/controlplane/service/selfupdate_github.go`：prerelease 渠道端点 `/releases/tags/nightly` → `/releases/tags/latest`。
+- **GitHub 语义提醒（技术上不冲突）**：GitHub 内建 `GET /releases/latest` 端点天然只返回**最新正式版（排除 prerelease）**，与名为 `latest` 的滚动**预发布** tag 物理隔离——stable 渠道仍走 `/releases/latest`（最新正式版），prerelease 渠道走 `/releases/tags/latest`（滚动预发布），两端点互不覆盖。命名重叠仅概念上需注意，无技术歧义。
+- **真 CI 闸不变**：首个 release 仍须用户 push 远程实跑 Actions 产出（见下「后果」末条）；本修订只改命名，不改"真 CI 须实跑验真"的前提。`github_repo` 默认值一并校准为实际仓库 `wcpe/JianManager`。
+
 ## 理由
 
 - **契约先行、产出与消费解耦**：把命名 / 校验 / 渠道固化为契约，发布侧（CI）与消费侧（自更新）各自实现而对齐同一规则，避免两线各搞一套割裂的分发心智。

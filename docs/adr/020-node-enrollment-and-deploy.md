@@ -1,7 +1,7 @@
 # ADR-020: 节点 enrollment 一键安装与部署机制
 
 - **日期**: 2026-06-23
-- **状态**: accepted（§4「分发来源」立场 `superseded-by ADR-036`，见该节小字与 ADR-036 §7；enrollment / 校验 / 编排其余立场仍有效）
+- **状态**: accepted（§1「name 命中即重注册、不强制 token」立场 `superseded-by ADR-039`；§4「分发来源」立场 `superseded-by ADR-036`，见各节小字与 ADR-036 §7、ADR-039；enrollment / 校验 / 编排其余立场仍有效）
 - **上下文**: FR-004 已实现 Worker Node 启动时经 gRPC `Register` 注册到 Control Plane、换取 `node_uuid`/`node_secret` 并以 `node_secret` 鉴权心跳。但当前注册是「**无凭据自助注册**」：任何能连到 CP gRPC 端口的进程，只要给个 `name` 就能注册成节点（`Register` 不校验任何调用方身份），且 Worker 的运行参数全靠手工设置环境变量（`cmd/worker/main.go` 只读 env，配套的 `internal/worker/config.go` / `configs/worker.yaml` 形同虚设、从未被加载）。运营者要新增一台节点，得手动：拷二进制、设一堆 `JIANMANAGER_*` 环境变量、保证 CP 地址可达、手动常驻进程。FR-080 要求「**傻瓜部署**」：面板「添加节点」生成一条一键命令，到目标机器粘贴执行即自动装好、注册、上线。这要求解决两件事——(1) 注册必须**带凭据**（不能让陌生进程白嫖注册），(2) 安装/配置/常驻必须**脚本化**。同时面板自更新（FR-081，CP/Worker 二进制在线升级）与本主题同属「节点分发与运维」范畴，其分发来源/校验/编排的取舍一并在此立。
 
 ## 决策
