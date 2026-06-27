@@ -64,3 +64,5 @@
 - `dev_mode=true` 维持零配置回退内置开发密钥（公钥已回填 updater-core），仅供开发。
 
 本补充**不改变也不取代**本 ADR 的任何决策，仅落实其既有安全前提、堵住实现层的 fail-open；故无新增 / superseded ADR。覆盖测试见 `internal/controlplane/service/client_manifest_test.go` 的 `TestResolveManifestSigner_*`。
+
+> **后续细化（见 [ADR-038](038-signer-missing-degraded-startup.md)，2026-06-27）**：本补充规定的「未注入私钥 → 拒绝启动」已被 ADR-038 细化为「未注入 → **降级启动**（签名器置 nil、客户端 OTA 发布 / 签名调用时返回 `ErrSignKeyNotConfigured`、其余 CP 功能照常）；注入无效私钥 / 误用源码公开的开发密钥 → **仍拒绝启动**」。安全根本不变：降级绝不回退开发密钥对外签名。本 ADR 核心 8 决策与状态（`accepted`）不受影响。

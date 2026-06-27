@@ -1645,7 +1645,7 @@
 >
 > 理由：拉取密钥半公开（随整包分发必然泄露），用它鉴权「发布」=严重漏洞；内容可信靠 manifest 的 Ed25519 签名而非密钥。**版本历史仅管理面可见，玩家侧只认 latest**（FR-088）。
 >
-> **签名密钥 fail-closed（ADR-022 实施补充）**：生产态（`dev_mode=false`）必须经 `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 注入独立 Ed25519 私钥，未注入（或误把源码公开的内置开发密钥贴进 env）→ Control Plane **拒绝启动**，绝不用开发密钥对外签 manifest；仅 `dev_mode=true` 零配置回退开发密钥。部署见 `docs/DEPLOY.md`。
+> **签名密钥 fail-closed（ADR-022 实施补充，粒度细化见 ADR-038）**：生产态（`dev_mode=false`）**未注入** `JIANMANAGER_CLIENT_SIGN_PRIVKEY` → Control Plane **降级启动**（视为未启用客户端 OTA：签名器不可用，发布 / 拉取签名 manifest 调用时返回「签名私钥未配置」，其余功能照常）；**误把源码公开的内置开发密钥贴进 env** → **拒绝启动**（配置错误快失败）。两种情况都绝不用开发密钥对外签 manifest；仅 `dev_mode=true` 零配置回退开发密钥。部署见 `docs/DEPLOY.md`。
 
 ### POST /api/v1/client-channels/:id/files
 - **描述**: 上传客户端文件制品（入 FR-045 制品库 `type=client-file`，按制品自身 sha256 内容寻址去重）。返回的 `sha256` 即 manifest `files[].artifact.sha256`

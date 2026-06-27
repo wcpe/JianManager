@@ -54,8 +54,9 @@ update:
 # 客户端分发（OTA）manifest 签名（FR-087，见 ADR-022）。信任根 = manifest 的 Ed25519 签名，
 # 客户端内置公钥验签；私钥服务端持有、不入库。
 # - 本文件 dev_mode: true → sign_priv_key 留空时零配置回退内置开发密钥（公钥已回填客户端），仅供开发。
-# - 生产（dev_mode: false）→ 必须经环境变量 JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入独立私钥，
-#   否则 CP fail-closed 拒绝启动（绝不用源码公开的开发密钥对外签名）。
+# - 生产（dev_mode: false）→ 未注入私钥即降级（视为未启用客户端 OTA，签名不可用、CP 照常启动，见 ADR-038）；
+#   误注入源码公开的内置开发密钥则 fail-closed 拒绝启动。要启用 OTA 经环境变量
+#   JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入独立私钥（绝不用源码公开的开发密钥对外签名）。
 client_dist:
   sign_priv_key: ""  # base64(PKCS#8 DER, Ed25519)；生产经 ${JIANMANAGER_CLIENT_SIGN_PRIVKEY} 注入，勿硬编码
   sign_key_id: k1    # 签名公钥版本标识（轮换用），须与客户端内置公钥 keyId 一致

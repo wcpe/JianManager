@@ -14,8 +14,11 @@
 ### 变更
 - **Worker 一键安装下载源对齐 GitHub Releases 命名契约**（FR-080 / ADR-036）：安装脚本（`install-worker.sh`/`install-worker.ps1`）下载资产名由 `jianmanager-worker-<os>-<arch>` 改为 ADR-036 契约的 `worker-<os>-<arch>[.exe]`，默认下载基址指向 `https://github.com/wcpe/jianmanager/releases/latest/download`；CP `enroll.binary_url` 默认改为该基址，使面板「添加节点」一键命令开箱即下载、无需 `--binary` 本地兜底（内网/离线仍可经 `--binary`/`enroll.binary_url` 覆盖）。真实 release 产物由 FR-173 发布管线产出。
 
+### 修复
+- **首次部署数据库目录自动创建（control-plane，见 commit `c001d16`）**：数据根 / DSN 父目录不存在时 `database.New` 直接 `sqlite.Open` 报 `SQLITE_CANTOPEN`（modernc 表象「out of memory (14)」），首次部署被迫手动 `mkdir data` 才能启动。改为打开 sqlite 前 `MkdirAll` 解析出的 DSN 文件父目录（含多级），妥善跳过 `:memory:` / `file:` / `?params` 等无磁盘路径形式；补复现测试守护、并验证不误伤内存库。
+
 ### 安全
-- **客户端分发 manifest 签名 fail-closed（FR-087，见 ADR-022 实施补充）**：修复 OTA 签名的生产态 **fail-open** 缺口。此前 Control Plane 在 `dev_mode=false` 且未注入 `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 时，静默回退到**源码中公开**的内置开发 Ed25519 私钥继续对外签客户端 OTA manifest（仅打一条 `slog.Warn`）——等于把信任根私钥公开，攻击者可用人人可得的开发私钥伪造玩家客户端信任的 OTA 包（供应链 / RCE），唯一拦阻是运维有没有看到那行告警。改为 **fail-closed**：新增 `service.ResolveManifestSigner(privKey, keyID, devMode)` 裁决密钥来源——生产态未注入私钥（`ErrSignKeyRequiredInProd`），或把源码公开的开发私钥**显式贴进 env**（按解出公钥识别，`ErrDevSignKeyInProd`），CP 一律**拒绝启动**；仅 `dev_mode=true` 维持零配置回退内置开发密钥（公钥已回填客户端 updater-core）。补单测 `TestResolveManifestSigner_*` 覆盖「缺私钥拒绝 / 注入开发密钥拒绝 / 生产真私钥放行 / 开发回退 / 非法私钥透传」。同步 ADR-022 实施补充、`client-distribution/api.md` 与 `docs/API.md` 验收、`configs/control-plane.yaml` 与 `docs/DEPLOY.md` 注入说明。
+- **客户端分发 manifest 签名 fail-closed（FR-087，见 ADR-022 实施补充）**：修复 OTA 签名的生产态 **fail-open** 缺口。此前 Control Plane 在 `dev_mode=false` 且未注入 `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 时，静默回退到**源码中公开**的内置开发 Ed25519 私钥继续对外签客户端 OTA manifest（仅打一条 `slog.Warn`）——等于把信任根私钥公开，攻击者可用人人可得的开发私钥伪造玩家客户端信任的 OTA 包（供应链 / RCE），唯一拦阻是运维有没有看到那行告警。改为 **fail-closed**：新增 `service.ResolveManifestSigner(privKey, keyID, devMode)` 裁决密钥来源 + `service.StartableWithoutSigner(err)` 分流启动策略——生产态**未注入**私钥（`ErrSignKeyRequiredInProd`）→ **降级启动**（视为未启用客户端 OTA：签名器置 nil、CP 照常启动，发布 / 签名 manifest 调用时返回 `ErrSignKeyNotConfigured`）；**误把源码公开的开发私钥显式贴进 env**（按解出公钥识别，`ErrDevSignKeyInProd`）→ **拒绝启动**（配置错误快失败）；两种情况都绝不回退开发密钥对外签名。仅 `dev_mode=true` 维持零配置回退内置开发密钥（公钥已回填客户端 updater-core）。fail-closed 失败粒度的这一细化见 ADR-038（未启用 OTA 的部署不再被无谓阻断启动）。补单测 `TestResolveManifestSigner_*` 覆盖「缺私钥拒绝 / 注入开发密钥拒绝 / 生产真私钥放行 / 开发回退 / 非法私钥透传」。同步 ADR-022 实施补充、`client-distribution/api.md` 与 `docs/API.md` 验收、`configs/control-plane.yaml` 与 `docs/DEPLOY.md` 注入说明。
 
 ## 0.10.0（2026-06-27）
 

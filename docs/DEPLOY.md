@@ -78,9 +78,9 @@ file_version:         # 通用文件改前快照（FR-051）
 | `JIANMANAGER_DATABASE_DSN` | database.dsn | data/jianmanager.db |
 | `JIANMANAGER_JWT_SECRET` | jwt.secret | dev-secret-change-me（**必改**） |
 | `JIANMANAGER_DATA_DIR` | 数据根（资产/缓存） | 进程目录下 `data/` |
-| `JIANMANAGER_CLIENT_SIGN_PRIVKEY` | client_dist.sign_priv_key | 空（**`dev_mode: false` 时必设**，否则拒绝启动） |
+| `JIANMANAGER_CLIENT_SIGN_PRIVKEY` | client_dist.sign_priv_key | 空（未设=不启用客户端 OTA、CP 照常启动；设错=拒绝启动，见下） |
 
-> **客户端分发（OTA）签名私钥（FR-087，见 ADR-022）**：生产（`dev_mode: false`）必须经 `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 注入独立 Ed25519 私钥（base64 of PKCS#8 DER），**未注入时 Control Plane fail-closed 拒绝启动**——绝不回退到源码中公开的内置开发密钥对外签 manifest（否则可被伪造投毒）。仅 `dev_mode: true`（如 `configs/control-plane.yaml`）才零配置回退开发密钥，供本地开发。生成示例：`openssl genpkey -algorithm ed25519 -outform DER | base64 -w0`，并把对应公钥回填客户端 updater-core 后随基础包分发。
+> **客户端分发（OTA）签名私钥（FR-087，见 ADR-022 / ADR-038）**：客户端 OTA 为可选功能。生产（`dev_mode: false`）**未注入** `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 时 Control Plane **降级启动**——视为未启用 OTA，签名器不可用、发布 / 签名 manifest 调用时返回「签名私钥未配置」，其余功能照常（见 ADR-038）。若**误把源码中公开的内置开发密钥贴进 env**（按解出公钥识别）则 **fail-closed 拒绝启动**——绝不回退开发密钥对外签 manifest（否则可被伪造投毒）。要启用 OTA：注入独立 Ed25519 私钥（base64 of PKCS#8 DER），生成示例 `openssl genpkey -algorithm ed25519 -outform DER | base64 -w0`，并把对应公钥回填客户端 updater-core 后随基础包分发。仅 `dev_mode: true`（如 `configs/control-plane.yaml`）才零配置回退开发密钥，供本地开发。
 
 ## 5. 首次启动引导
 
