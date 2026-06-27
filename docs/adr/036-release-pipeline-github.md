@@ -27,7 +27,7 @@
 ### 3. 发布渠道契约
 
 - **正式发布**：push tag `vX.Y.Z`（如 `v0.11.0`）触发，建正式 release（`prerelease=false`），`tag_name=vX.Y.Z`，发布说明取 `CHANGELOG.md` 中该版本段（`## X.Y.Z（…）` 到下一个 `## ` 之间的正文）。
-- **滚动预发布**：push 到 `master` 触发，发布/**覆盖**固定 tag `nightly` 的预发布（`prerelease=true`），发布说明取 `CHANGELOG.md` 的 `[Unreleased]` 段。`nightly` **只保留本次构建产物**（同 tag 重发时替换既有同名资产，旧资产不残留）。
+- **滚动预发布**：push 到 `master` 触发，发布/**覆盖**固定 tag `nightly` 的预发布（`prerelease=true`），发布说明取 `CHANGELOG.md` 的 `[Unreleased]` 段。`nightly` **只保留本次构建产物**（同 tag 重发时替换既有同名资产，旧资产不残留）。**【superseded-by ADR-039】固定 tag 由 `nightly` 改名为 `latest`（语义不变，见 ADR-039 §6）；下文 §7 prerelease 渠道端点同步改为 `/releases/tags/latest`。**
 - 渠道语义：正式 = 稳定（stable）；`nightly` = 预发布（prerelease）。FR-175 自更新「stable / prerelease 渠道」即据 GitHub Releases 的 `prerelease` 标志与 tag 区分二者。
 
 ### 4. 版本注入契约
@@ -56,7 +56,7 @@
 - **原生读 GitHub Releases API，不再要求手工 feed.json**：CP 自更新「拿到 `*Feed`」这一步从「读 `feed_url` 指向的 JSON manifest」改为「调 GitHub Releases API + 解析 release JSON + 下载 `checksums.txt` 资产组装等价的归一 `Feed`」。FR-081 既有编排（`SelectArtifact` / 版本比对 / 下载校验替换 / gRPC 下发 / rollout）**零改动**——只换「取 `Feed`」的数据源。
 - **渠道 ↔ GitHub 端点映射**（落地 §3 渠道契约的消费侧）：
   - `stable`（默认）→ `GET https://api.github.com/repos/{repo}/releases/latest`（GitHub 该端点**天然排除 prerelease/draft**，即只返回最新正式 release）。
-  - `prerelease` → `GET https://api.github.com/repos/{repo}/releases/tags/nightly`（取 §3 的滚动 `nightly` 预发布，tag 名与 FR-173 workflow 强耦合，同属本 ADR 契约）。
+  - `prerelease` → `GET https://api.github.com/repos/{repo}/releases/tags/nightly`（取 §3 的滚动 `nightly` 预发布，tag 名与 FR-173 workflow 强耦合，同属本 ADR 契约）。**【superseded-by ADR-039】tag 名 `nightly` 改为 `latest`，端点改 `/releases/tags/latest`。**
 - **归一映射**：`tag_name`→`Feed.Version`、`body`→`Feed.Notes`、`assets[].browser_download_url`→各制品 URL；sha256 **取自 release 的 `checksums.txt` 资产**（按 §2 行格式 `<sha256(小写)>␠␠<filename>` 解析为 `map[filename]sha256`）。资产名按 §1 命名 `<component>-<os>-<arch>[.exe]` 反解出 `component`/`os`/`arch`。
 - **无 `checksums.txt` 即视为「无可信源」报错，绝不裸下载**：sha256 是唯一完整性根（§2），release 缺 `checksums.txt`（或某资产无对应 sha256 条目）则该资产不可信、不放行（缺 sha256 的资产跳过并记日志，整 release 无 `checksums.txt` 直接报错）。这是安全底线，FR-173 workflow 保证产出 `checksums.txt`。
 - **token 可选**：GitHub API 匿名限流 60 次/时，手动触发自更新（每次检查打 1~2 次 API：release + checksums）足够；配置 `github_token` 后请求带 `Authorization: Bearer`，提升限流额度。请求统一带 `Accept: application/vnd.github+json` + `X-GitHub-Api-Version: 2022-11-28`。
