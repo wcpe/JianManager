@@ -85,8 +85,9 @@ type EnrollConfig struct {
 	// ScriptBaseURL 安装脚本的下载基址（如 https://cp.example.com）。留空则用签发请求的 scheme://Host。
 	// 一键命令据此拼 <base>/install-worker.sh 与 <base>/install-worker.ps1。
 	ScriptBaseURL string `mapstructure:"script_base_url"`
-	// BinaryURL Worker 二进制下载地址（可选）。留空则一键命令不带 --download-url，
-	// 运营需经脚本 --binary 指向本地已拷贝的二进制（公网 release 端点未架设前的兜底，ADR-020 §2）。
+	// BinaryURL Worker 二进制下载基址/地址，写入一键命令的 --download-url。
+	// 默认 GitHub Releases latest（ADR-036 产物命名契约 worker-<os>-<arch>[.exe]），一键命令开箱即下载；
+	// 内网/私有源可覆盖；显式置空则一键命令不带 --download-url，运营改用脚本 --binary 本地兜底。
 	BinaryURL string `mapstructure:"binary_url"`
 }
 
@@ -182,10 +183,12 @@ func Load(path string) (*Config, error) {
 	// 客户端分发签名（FR-087）：私钥默认空（main 回退内置开发密钥）；keyId 默认 k1。
 	v.SetDefault("client_dist.sign_priv_key", "")
 	v.SetDefault("client_dist.sign_key_id", "k1")
-	// 节点 enrollment 一键安装（FR-080）：地址/脚本基址/二进制源默认空，由签发请求 Host 推断。
+	// 节点 enrollment 一键安装（FR-080）：CP 地址/脚本基址默认空，由签发请求 Host 推断。
+	// 二进制源默认指向 GitHub Releases latest（ADR-036 产物命名契约 worker-<os>-<arch>[.exe]），
+	// 使一键命令开箱即下载、无需 --binary；内网/私有源经 enroll.binary_url 覆盖。
 	v.SetDefault("enroll.advertise_grpc", "")
 	v.SetDefault("enroll.script_base_url", "")
-	v.SetDefault("enroll.binary_url", "")
+	v.SetDefault("enroll.binary_url", "https://github.com/wcpe/jianmanager/releases/latest/download")
 	// 面板自更新（FR-081）：更新源默认空（未配置即检查更新返回未配置提示），仅允许 https。
 	v.SetDefault("update.feed_url", "")
 	v.SetDefault("update.binary_base_url", "")

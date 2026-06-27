@@ -16,18 +16,21 @@ import (
 
 // setupEnrollRouter 建一个仅含节点 enrollment token 路由的最小引擎（挂平台管理员组）。
 func setupEnrollRouter(t *testing.T, db *gorm.DB) *gin.Engine {
+	return setupEnrollRouterWithInstall(t, db, EnrollInstallConfig{GRPCPort: 9100})
+}
+
+// setupEnrollRouterWithInstall 同 setupEnrollRouter，但允许注入自定义一键安装配置（如 BinaryURL）。
+func setupEnrollRouterWithInstall(t *testing.T, db *gorm.DB, install EnrollInstallConfig) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-testing", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
 	svcs := &Services{
-		Auth:        service.NewAuthService(db, jwtCfg),
-		User:        service.NewUserService(db),
-		Authz:       service.NewAuthzService(db),
-		Audit:       service.NewAuditService(db),
-		EnrollToken: service.NewEnrollTokenService(db),
-		EnrollInstall: EnrollInstallConfig{
-			GRPCPort: 9100,
-		},
+		Auth:          service.NewAuthService(db, jwtCfg),
+		User:          service.NewUserService(db),
+		Authz:         service.NewAuthzService(db),
+		Audit:         service.NewAuditService(db),
+		EnrollToken:   service.NewEnrollTokenService(db),
+		EnrollInstall: install,
 	}
 	_ = cpgrpc.NewClientPool()
 	return Setup(svcs, jwtCfg.Secret)
@@ -64,6 +67,30 @@ func TestEnrollToken_Issue_ReturnsPlaintextAndCommands(t *testing.T) {
 	win, _ := resp["installCommandWindows"].(string)
 	if !strings.Contains(win, plaintext) || !strings.Contains(win, "install-worker.ps1") {
 		t.Fatalf("Windows 一键命令缺 token/脚本: %q", win)
+	}
+}
+
+// TestEnrollToken_Issue_EmitsDownloadURLWhenBinaryURLConfigured 配置 BinaryURL 时一键命令带下载基址（ADR-036 契约）。
+// 一键命令应开箱即下载（--download-url / -DownloadUrl 指向 GitHub Releases），无需 --binary 本地兜底。
+func TestEnrollToken_Issue_EmitsDownloadURLWhenBinaryURLConfigured(t *testing.T) {
+	const releaseBase = "https://github.com/wcpe/jianmanager/releases/latest/download"
+	db := setupTestDB(t)
+	r := setupEnrollRouterWithInstall(t, db, EnrollInstallConfig{GRPCPort: 9100, BinaryURL: releaseBase})
+	token := getAdminToken(t, r)
+
+	w := makeRequest(r, "POST", "/api/v1/nodes/enroll-token", map[string]any{}, token)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("签发失败: status=%d body=%s", w.Code, w.Body.String())
+	}
+	resp := parseJSON(t, w)
+
+	linux, _ := resp["installCommandLinux"].(string)
+	if !strings.Contains(linux, "--download-url "+releaseBase) {
+		t.Fatalf("Linux 一键命令应带 --download-url %s，得到 %q", releaseBase, linux)
+	}
+	win, _ := resp["installCommandWindows"].(string)
+	if !strings.Contains(win, "-DownloadUrl "+releaseBase) {
+		t.Fatalf("Windows 一键命令应带 -DownloadUrl %s，得到 %q", releaseBase, win)
 	}
 }
 
