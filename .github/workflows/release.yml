@@ -155,9 +155,61 @@ jobs:
           retention-days: 1
           include-hidden-files: true
 
+  # ───────────────────────── test：Go + 前端 编译/静态检查/单测（发布前门禁） ─────────────────────────
+  # 复用 prepare-embeds 产出的 embed（go:embed 需非空目录）；test 不过则 build/release 不执行。
+  test:
+    needs: prepare-embeds
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout（不需子模块源，只需下载的 embed 产物）
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 还原 CP embed 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: embed-controlplane
+          path: internal/controlplane/embed/
+
+      - name: 还原 Worker embed 产物
+        uses: actions/download-artifact@v4
+        with:
+          name: embed-worker
+          path: internal/worker/embed/cfr/
+
+      - name: Go 构建 / vet / 测试
+        shell: bash
+        run: |
+          set -euo pipefail
+          go build ./...
+          go vet ./...
+          go test ./...
+
+      - name: 前端 依赖 / lint / 单测 / 构建
+        working-directory: web
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run lint
+          npx vitest run
+          npm run build
+
   # ───────────────────────── build：交叉编译 4 个二进制（matrix） ─────────────────────────
   build:
-    needs: prepare-embeds
+    needs: [prepare-embeds, test]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
