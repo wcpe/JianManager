@@ -131,12 +131,21 @@ func main() {
 	clientChannelSvc := service.NewClientChannelService(db)
 	// 客户端分发版本与签名 manifest（FR-087，见 ADR-022、contract §2/§3）。
 	// 签名私钥经 env 注入的生产私钥（config.client_dist.sign_priv_key ← JIANMANAGER_CLIENT_SIGN_PRIVKEY）。
-	// fail-closed：生产态（dev_mode=false）未注入即拒绝启动，绝不回退源码公开的内置开发密钥对外签
-	// OTA manifest（否则攻击者可用人人可得的开发私钥伪造玩家客户端信任的 OTA 包，供应链/RCE）；
-	// 仅 dev_mode=true 维持零配置回退内置开发密钥（公钥已回填客户端 updater-core）。
+	// fail-closed：绝不回退源码公开的内置开发密钥对外签 OTA manifest（否则攻击者可用人人可得的开发私钥
+	// 伪造玩家客户端信任的 OTA 包，供应链/RCE）；仅 dev_mode=true 维持零配置回退内置开发密钥（公钥已回填客户端）。
+	// 启动策略：生产态「未注入私钥」=未启用 OTA → 降级（签名器不可用、CP 照常启动）；
+	// 「注入了无效/开发密钥」=配错 → 快失败（见 service.StartableWithoutSigner）。
 	clientSigner, usedDevSignKey, err := service.ResolveManifestSigner(cfg.ClientDist.SignPrivKey, cfg.ClientDist.SignKeyID, cfg.Server.DevMode)
 	if err != nil {
-		log.Fatalf("初始化客户端分发签名器失败: %v", err)
+		if service.StartableWithoutSigner(err) {
+			// 未配置签名私钥：降级——客户端 OTA 分发/签名功能不可用（消费服务持 nil signer 返回
+			// ErrSignKeyNotConfigured，绝不回退开发密钥对外签名），其余 CP 功能照常启动。
+			slog.Warn("未配置客户端分发签名私钥，客户端 OTA 分发/签名功能降级不可用；如需启用请经 JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入独立 Ed25519 私钥（ADR-022）", "error", err)
+			clientSigner = nil
+		} else {
+			// 注入了无效私钥或误用源码公开的开发密钥：配置错误，fail-fast 让运维即时修正。
+			log.Fatalf("初始化客户端分发签名器失败: %v", err)
+		}
 	}
 	if usedDevSignKey {
 		slog.Warn("客户端分发签名使用内置开发密钥（仅 dev_mode 生效），生产务必经 JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入独立私钥")

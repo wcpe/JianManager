@@ -17,8 +17,8 @@ import (
 //     （见 ResolveManifestSigner），并写入 configs/control-plane.yaml 注释示例。
 //
 // 生产部署（dev_mode=false）**必须**经 JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入独立私钥，并把对应公钥
-// 回填 Signatures.production()（随基础包分发）；**未注入即 fail-closed 拒绝启动**（ResolveManifestSigner），
-// 绝不沿用此开发密钥（私钥已在源码中公开，否则可被伪造投毒）。
+// 回填 Signatures.production()（随基础包分发）；**未注入即降级**为客户端 OTA 不可用、配错（注入无效/
+// 开发密钥）则拒绝启动（见 StartableWithoutSigner），绝不沿用此开发密钥对外签名（私钥已在源码中公开，否则可被伪造投毒）。
 
 // DefaultSignKeyID 默认签名公钥版本标识（主公钥）。轮换时新增 k2… 并更新客户端内置集。
 const DefaultSignKeyID = "k1"
@@ -37,6 +37,18 @@ var (
 	// ErrDevSignKeyInProd 生产态显式注入了源码公开的内置开发密钥时拒绝（同属可被伪造的投毒面）。
 	ErrDevSignKeyInProd = errors.New("生产态（dev_mode=false）拒绝使用内置开发签名密钥（源码已公开），必须注入独立私钥")
 )
+
+// StartableWithoutSigner 报告签名器初始化错误是否应「降级启动」而非阻断整个 CP。
+//
+// 仅「生产态未注入私钥」(ErrSignKeyRequiredInProd) 属未配置——此时降级为客户端 OTA 分发/签名
+// 功能不可用（消费服务持 nil signer 时返回 ErrSignKeyNotConfigured，绝不回退源码公开的开发密钥
+// 对外签名，守住 ADR-022 安全核心），其余 CP 功能照常启动。
+//
+// 注入了无效私钥或误用源码公开的开发密钥（ErrInvalidSignKey / ErrDevSignKeyInProd）属「想用却配错」，
+// 应 fail-fast 让运维即时修正，故返回 false（不降级）。
+func StartableWithoutSigner(err error) bool {
+	return errors.Is(err, ErrSignKeyRequiredInProd)
+}
 
 // ResolveManifestSigner 按生产/开发态裁决客户端 manifest 签名密钥来源（fail-closed，FR-087、ADR-022）。
 //
