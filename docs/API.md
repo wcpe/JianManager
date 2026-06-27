@@ -193,6 +193,37 @@
 - **权限**: 平台管理员（危险操作，前端二次确认）
 - **审计**: `node.delete`
 
+### GET /api/v1/nodes/repair/suspects
+- **描述**: 列出疑似被串改/重名的节点（只读诊断）。信号：名字带迁移去重后缀 `-dup-<id>`（曾因重名被自动改名）、或仍存在同名活跃节点组。修复重名覆盖 BUG-A 的存量数据排查入口
+- **关联 FR**: FR-004（见 ADR-039 §2）；UI 入口随 FR-177
+- **权限**: 平台管理员
+- **响应**: `[{ node: <节点对象>, reasons: [string] }]`
+
+### GET /api/v1/nodes/:id/orphans
+- **描述**: 统计指定节点上孤立的 JDK / 实例数量（只读，修复前评估影响面）
+- **关联 FR**: FR-004（见 ADR-039 §2）
+- **权限**: 平台管理员
+- **响应**: `{ nodeId, jdkCount, instanceCount }`
+- **错误码**: `404 NOT_FOUND`（节点不存在）
+
+### POST /api/v1/nodes/:id/reenroll
+- **描述**: 把被挤占的机器作为新节点重新 enroll——为该节点行轮换全新 `node_uuid`/`node_secret`（切断与被冒用旧身份的关联，旧 secret 即刻失效，节点置离线待重注册）。挂在该节点的 JDK/实例随 `node_id` 保留。**破坏性操作**
+- **关联 FR**: FR-004（见 ADR-039 §2）
+- **权限**: 平台管理员（危险操作，前端二次确认）
+- **请求**: `{ confirm: bool }`（必须 `true`）
+- **响应**: `{ nodeId, newUuid, newSecret, oldUuid }`（`newSecret` 仅此一次返回）
+- **错误码**: `409 CONFIRM_REQUIRED`（未确认）、`404 NOT_FOUND`（节点不存在）
+- **审计**: `node.reenroll`
+
+### POST /api/v1/nodes/:id/purge-orphans
+- **描述**: 清理指定节点上孤立的 JDK / 实例引用——硬删该节点 NodeJDK 行、软删该节点实例（清掉冒用期间错误挂上的残留资源）。**破坏性操作**
+- **关联 FR**: FR-004（见 ADR-039 §2）
+- **权限**: 平台管理员（危险操作，前端二次确认）
+- **请求**: `{ confirm: bool }`（必须 `true`）
+- **响应**: `{ nodeId, jdkDeleted, instancesPurged }`
+- **错误码**: `409 CONFIRM_REQUIRED`（未确认）、`404 NOT_FOUND`（节点不存在）
+- **审计**: `node.purge_orphans`
+
 ### GET /api/v1/nodes/:id/metrics
 - **描述**: 节点指标（CPU/内存/磁盘时间序列）
 - **关联 FR**: FR-010
@@ -232,7 +263,12 @@
 - **错误码**: `404 ENROLL_TOKEN_NOT_FOUND`
 - **审计**: `node.enroll_token.revoke`
 
-> **gRPC `Register` 行为扩展（FR-080，不改 proto）**: Worker 注册时经 gRPC metadata header `enroll-token` 携带明文。CP 分叉——新节点（`name` 未命中）**必须**带有效 token（存在+未过期+未消费+未吊销），校验通过原子标记 `used` 并换发 `node_uuid`/`node_secret`，失败回 `PermissionDenied`；老节点（`name` 命中）重注册不强制 token（避免在网节点重启掉线）。Worker 把换发的身份持久化到 `<dataRoot>/etc/node-identity.json`（0600），重启复用、不重复消费一次性 token。
+> **gRPC `Register` 身份匹配（FR-080 + ADR-039，不改 proto）**: Worker 注册经 gRPC metadata header 携带身份/准入凭据，CP 按三级优先级匹配既有节点（修复重名覆写 BUG-A）——
+> 1. **UUID 证明**：重注册时携带 `node-uuid` + `node-secret`；命中库中节点且 secret 匹配 → 按 UUID 重注册（更新 host/port/os/arch，允许改名），返回既有身份；secret 不符 → `PermissionDenied`，绝不覆写。
+> 2. **同机 host 兼容（过渡）**：未升级旧 Worker 只带 name，name 命中且本次连接 host 与库存一致 → 放行重注册并告警建议升级；host 不一致落到 3。
+> 3. **token 新建**：否则视为新节点，必须带有效 enrollment token（`enroll-token` header，存在+未过期+未消费+未吊销），校验通过原子标记 `used` 并换发全新 `node_uuid`/`node_secret`，失败回 `PermissionDenied`；若上报名与既有节点撞名 → `AlreadyExists` 拒绝（提示改名），绝不覆写。
+>
+> Worker 把换发的身份持久化到 `<dataRoot>/etc/node-identity.json`（0600），重启读取并经 metadata 出示，不重复消费一次性 token。
 
 ---
 
