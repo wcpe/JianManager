@@ -226,6 +226,17 @@ make lint-web       # 前端类型检查
 make lint-bot       # Bot Worker 类型检查
 ```
 
+### 前端 mock 模式与测试（FR-196~212）
+
+```bash
+cd web
+npm run dev:mock   # 起 mock 模式整站（内置有状态假后端，无需真后端，开发 / 演示 / 走查）
+npm test           # vitest：node 纯逻辑 + jsdom 组件 / 页面强断言（打到 mock 假后端）
+npm run e2e        # Playwright E2E：真浏览器跑 mock 模式整站关键流（自动起 dev:mock）
+```
+
+**CI 门禁**：`.github/workflows/ci.yml` 在 PR / 非 master 分支 push 时跑 web 的 lint + vitest + build + E2E；`release.yml` 发布前同样过这些闸。**需仓库管理员在分支保护里勾选 `web-quality` 为必需 check**，合并前才硬挡（CI 只提供 check，分支保护是仓库设置）。
+
 ### 目录结构
 
 ```

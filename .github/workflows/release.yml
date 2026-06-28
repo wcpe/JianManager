@@ -197,7 +197,7 @@ jobs:
           go vet ./...
           go test ./...
 
-      - name: 前端 依赖 / lint / 单测 / 构建
+      - name: 前端 依赖 / lint / 单测 / 构建 / E2E
         working-directory: web
         shell: bash
         run: |
@@ -206,6 +206,8 @@ jobs:
           npm run lint
           npx vitest run
           npm run build
+          npx playwright install --with-deps chromium
+          npm run e2e
 
   # ───────────────────────── build：交叉编译 4 个二进制（matrix） ─────────────────────────
   build:

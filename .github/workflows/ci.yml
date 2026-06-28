@@ -1,0 +1,71 @@
+# 前端质量门禁（FR-212，见 ADR-047 决策 8 / spec §9）。
+#
+# 触发：pull_request + 非 master 分支 push —— 合并前 / 分支 push 即跑，把坏代码挡在合并前。
+#   master push 与 tag 的发布前门禁由 release.yml 的 test job 覆盖（已含 lint+vitest，补 E2E），本工作流不重复。
+#
+# 闸：web 的 lint + vitest（node + dom 双 project）+ build + Playwright E2E（跑 mock 模式整站，无需真后端），
+#   任一失败 → job 失败 → check 红。仓库**分支保护**勾选 `web-quality` 为必需 check 即合并前硬挡
+#   （分支保护是仓库设置，CI 只提供 check；见 README.md「前端 mock 模式与测试」）。
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  web-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout（不需子模块，纯前端门禁）
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 缓存 npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('web/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: 安装依赖
+        working-directory: web
+        run: npm ci
+
+      - name: Lint（eslint）
+        working-directory: web
+        run: npm run lint
+
+      - name: 单元 / 组件测试（vitest node + dom）
+        working-directory: web
+        run: npm run test
+
+      - name: 构建（tsc + vite）
+        working-directory: web
+        run: npm run build
+
+      - name: 安装 Playwright 浏览器
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E（Playwright，mock 模式整站）
+        working-directory: web
+        run: npm run e2e
