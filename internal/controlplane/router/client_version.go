@@ -193,6 +193,66 @@ func (h *ClientVersionHandler) RollbackVersion(c *gin.Context) {
 	})
 }
 
+// GetArtifactContent GET /client-channels/:id/files/content?sha256= — 管理面文本预览制品内容（运营，平台管理员；FR-214）。
+//
+// 玩家消费端点 GET /client-artifacts/:sha256 走拉取密钥鉴权、与浏览器 JWT 入口物理隔离（ADR-022/023），
+// 管理台无拉取密钥不能复用之取预览。故补此 JWT **只读**端点，仅服务发布页/版本详情的内容预览（FR-214）。
+// 二进制/压缩/超大由服务层判定并以 kind 显式返回，前端据此渲染或降级。
+func (h *ClientVersionHandler) GetArtifactContent(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	sha := c.Query("sha256")
+	if sha == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "需提供 sha256"})
+		return
+	}
+	preview, err := h.svc.ReadArtifactText(sha)
+	if err != nil {
+		h.respondErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, preview)
+}
+
+// DownloadArtifact GET /client-channels/:id/files/download?sha256= — 管理面下载制品（运营，平台管理员；FR-214）。
+//
+// 与 GetArtifactContent 同理：玩家制品端点走拉取密钥，管理台浏览器需一个 JWT 下载入口（含降级态「不可预览必可下载」）。
+// 复用 OpenArtifact 取物理文件，附下载文件名（取 sha 末段，前端 source 会以 manifest path 末段重命名亦可）。
+func (h *ClientVersionHandler) DownloadArtifact(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	sha := c.Query("sha256")
+	if sha == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "需提供 sha256"})
+		return
+	}
+	asset, absPath, err := h.svc.OpenArtifact(sha)
+	if err != nil {
+		h.respondErr(c, err)
+		return
+	}
+	f, oerr := os.Open(absPath)
+	if oerr != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "ARTIFACT_NOT_FOUND", "message": "制品文件缺失"})
+		return
+	}
+	defer f.Close()
+	stat, serr := f.Stat()
+	if serr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "读取制品失败"})
+		return
+	}
+	contentType := asset.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	c.Header("Content-Type", contentType)
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", asset.SHA256))
+	http.ServeContent(c.Writer, c.Request, asset.SHA256, stat.ModTime(), f)
+}
+
 // ---- 消费端点（X-Client-Key 玩家鉴权）----
 
 // GetManifest GET /client-channels/:id/manifest — 返回频道 latest 的签名 manifest（玩家，拉取密钥鉴权）。
@@ -340,6 +400,9 @@ func (h *ClientVersionHandler) respondErr(c *gin.Context, err error) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_VERSION_FILES", "message": err.Error()})
 	case errors.Is(err, service.ErrVersionNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "VERSION_NOT_FOUND", "message": "版本不存在"})
+	case errors.Is(err, service.ErrAssetNotFound):
+		// 管理面制品内容/下载（FR-214）取不存在的制品 → 404。
+		c.JSON(http.StatusNotFound, gin.H{"error": "ARTIFACT_NOT_FOUND", "message": "制品不存在"})
 	case errors.Is(err, service.ErrChecksumMismatch):
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "CHECKSUM_MISMATCH", "message": err.Error()})
 	default:
@@ -428,6 +491,10 @@ func (h *ClientVersionHandler) RegisterPublishRoutes(rg *gin.RouterGroup) {
 		ch.GET("/:id/versions", h.ListVersions)
 		ch.GET("/:id/versions/:version", h.GetVersion)
 		ch.POST("/:id/rollback", h.RollbackVersion)
+		// 管理面制品内容预览 / 下载（FR-214）：JWT 平台管理员，供发布页/版本详情复用共享文件浏览器。
+		// 与玩家 GET /client-artifacts/:sha256（拉取密钥）物理隔离——浏览器无拉取密钥不能复用之。
+		ch.GET("/:id/files/content", h.GetArtifactContent)
+		ch.GET("/:id/files/download", h.DownloadArtifact)
 	}
 	// 拉取/下载明细检索（FR-093）：管理面。
 	rg.GET("/client-dist/events", h.ListEvents)

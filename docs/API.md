@@ -1934,6 +1934,21 @@
 - **响应** (200): `{ "version": 1, "note": "…", "createdBy": 1, "createdAt": "datetime", "isLatest": false, "managedDirs": ["mods"], "files": [ { "path": "mods/foo.jar", "sha256": "…", "md5": "…", "size": 0, "sync": "strict", "platform": null, "artifact": { … } } ], "agent": { … } }`
 - **错误**: 400 `INVALID_REQUEST`（版本号非法）| 404 `CHANNEL_NOT_FOUND` / `VERSION_NOT_FOUND`
 
+### GET /api/v1/client-channels/:id/files/content
+- **描述**: 按制品 `sha256` 读取 client-file 制品内容用于**管理台文本预览**（FR-214，复用 FR-213 共享文件浏览器预览发布草稿/版本文件）。**只读**。玩家消费端点 `GET /client-artifacts/:sha256` 走拉取密钥、与浏览器 JWT 入口物理隔离（ADR-022/023），管理台无拉取密钥不能复用之取内容预览，故补此 JWT 路径。降级由 `kind` 显式表达，前端据此渲染或降级（不可预览必可下载）
+- **关联 FR**: FR-214 | **鉴权**: **JWT，平台管理员**（运营操作）
+- **查询参数**: `sha256`（必，制品自身 sha256 = `files[].artifact.sha256`）
+- **响应** (200): `{ "kind": "text"|"binary"|"too-large", "content": "…", "size": 45678, "codec": "none" }`
+  - `kind=text`：`content` 为 UTF-8 文本；`kind=binary`（含 NUL 或已压缩制品，本期发布恒 `codec=none`，`zstd` 等不在管理面解压）/`kind=too-large`（超 1 MiB 不读全量）：仅 `size`/`codec`，无 `content`，前端降级为「仅下载」
+- **错误**: 400 `INVALID_REQUEST`（缺 sha256）| 403 `FORBIDDEN`（非平台管理员）| 404 `ARTIFACT_NOT_FOUND`
+
+### GET /api/v1/client-channels/:id/files/download
+- **描述**: 按制品 `sha256` 下载 client-file 制品（**管理台**，FR-214）。与上同理：浏览器需一个 JWT 下载入口（含预览降级态的下载兜底），与玩家拉取密钥制品端点隔离
+- **关联 FR**: FR-214 | **鉴权**: **JWT，平台管理员**（运营操作）
+- **查询参数**: `sha256`（必）
+- **响应** (200): 制品二进制（`Content-Disposition: attachment`）。支持 `Range`（`http.ServeContent`）
+- **错误**: 400 `INVALID_REQUEST`（缺 sha256）| 403 `FORBIDDEN` | 404 `ARTIFACT_NOT_FOUND`
+
 ### POST /api/v1/client-channels/:id/rollback
 - **描述**: 运营回滚——取历史版本 `sourceVersion` 的内容，**以更高版本号重发为新 latest**（保持 `version` 单调，客户端按防降级正常前进、不被拒，ADR-022 §3 / contract §3）。不下发更低版本号
 - **关联 FR**: FR-088

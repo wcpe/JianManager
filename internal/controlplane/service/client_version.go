@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -478,6 +479,110 @@ func (s *ClientVersionService) OpenArtifact(sha256 string) (*model.Asset, string
 		return nil, "", fmt.Errorf("查询制品失败: %w", err)
 	}
 	return &asset, s.assets.AbsPath(&asset), nil
+}
+
+// ArtifactTextPreviewMaxBytes 文本预览的制品上限：超过此字节数只回降级标记、不读全量（FR-214）。
+// 与前端 clientDistSource 的 PREVIEW_MAX_BYTES（1 MiB）对齐，避免大制品撑爆内存/响应。
+const ArtifactTextPreviewMaxBytes = 1 << 20 // 1 MiB
+
+// ArtifactTextPreview 客户端分发制品的文本预览结果（FR-214，管理面 JWT 读取）。
+// 降级由 Kind 显式表达，调用方/前端据此渲染，不再自行猜测。
+type ArtifactTextPreview struct {
+	// Kind 预览类别：text（可文本预览）| binary（含 NUL/压缩，仅下载）| too-large（超上限，仅下载）。
+	Kind string `json:"kind"`
+	// Content UTF-8 文本（仅 Kind=text）。
+	Content string `json:"content,omitempty"`
+	// Size 制品字节数（降级态展示用）。
+	Size int64 `json:"size"`
+	// Codec 制品压缩算法（none|zstd 等，信息性）。
+	Codec string `json:"codec"`
+}
+
+// ReadArtifactText 读取 client-file 制品内容用于**管理面**文本预览（FR-214）。
+//
+// 为什么需要本方法：玩家消费端点 GET /client-artifacts/:sha256 走拉取密钥（X-Client-Key）鉴权，
+// 与运营浏览器 JWT 入口物理隔离（ADR-022/023）——管理台浏览器无拉取密钥、不能复用该端点取内容预览。
+// 故补一个 JWT 平台管理员可用的**只读**文本读取路径，仅服务发布页/版本详情的内容预览。
+//
+// 降级口径（适配器/前端只消费结果，关注点分离）：
+//   - 超过 {@link ArtifactTextPreviewMaxBytes} → Kind=too-large（不读全量）；
+//   - 内容含 NUL 字节 → Kind=binary；
+//   - 制品已压缩（codec != none/空，本期发布恒 none）→ Kind=binary（不在管理面解压，避免引入解压依赖）；
+//   - 其余 → Kind=text + UTF-8 内容。
+//
+// 制品不存在返回 ErrAssetNotFound。
+func (s *ClientVersionService) ReadArtifactText(sha256 string) (*ArtifactTextPreview, error) {
+	asset, absPath, err := s.OpenArtifact(sha256)
+	if err != nil {
+		return nil, err
+	}
+	codec := artifactCodec(asset.Metadata)
+	out := &ArtifactTextPreview{Size: asset.Size, Codec: codec}
+
+	// 超大：不读全量，直接降级。
+	if asset.Size > ArtifactTextPreviewMaxBytes {
+		out.Kind = "too-large"
+		return out, nil
+	}
+	// 压缩制品不在管理面解压（本期发布恒 codec=none；zstd 等仅可下载）。
+	if codec != "" && codec != "none" {
+		out.Kind = "binary"
+		return out, nil
+	}
+
+	data, rerr := readFileCapped(absPath, ArtifactTextPreviewMaxBytes)
+	if rerr != nil {
+		return nil, rerr
+	}
+	if bytesContainNUL(data) {
+		out.Kind = "binary"
+		return out, nil
+	}
+	out.Kind = "text"
+	out.Content = string(data)
+	return out, nil
+}
+
+// artifactCodec 从制品 Metadata JSON 取 codec（PublishFile 写入 {"codec": "..."}）；缺失/解析失败回退 "none"。
+func artifactCodec(metadata string) string {
+	if metadata == "" {
+		return "none"
+	}
+	var m struct {
+		Codec string `json:"codec"`
+	}
+	if err := json.Unmarshal([]byte(metadata), &m); err != nil || m.Codec == "" {
+		return "none"
+	}
+	return m.Codec
+}
+
+// bytesContainNUL 报告字节切片是否含 NUL（与前端/ArchiveViewer 二进制判定范式一致的启发式）。
+func bytesContainNUL(b []byte) bool {
+	for _, c := range b {
+		if c == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// readFileCapped 读取文件至多 limit 字节（超出部分丢弃；调用方已先据 size 判定 too-large）。
+// 用 io.LimitReader 防御性兜底，避免极端情况下读入超大文件。
+func readFileCapped(absPath string, limit int64) ([]byte, error) {
+	if absPath == "" {
+		return nil, ErrAssetNotFound
+	}
+	f, err := os.Open(absPath)
+	if err != nil {
+		return nil, ErrAssetNotFound
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, limit))
+	if err != nil {
+		return nil, fmt.Errorf("读取制品失败: %w", err)
+	}
+	return data, nil
 }
 
 // assembleManifest 把频道 + 版本快照还原为 SignedManifest（未签名）。
