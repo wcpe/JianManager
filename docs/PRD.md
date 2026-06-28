@@ -48,7 +48,8 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-163~169（前端整体重设计:视觉底座 / 双主题 / 多级分组 / 可组合工作区+超级工作台+导播台 / 监控升级）→ `docs/specs/ui-redesign/design.md`(+ 原型 `preview.html`)
 - FR-173~175（CI 发布管线 / 出站网络代理 / 自更新对接 GitHub Releases，关联 ADR-036/037）→ `docs/specs/release-pipeline/`、`docs/specs/network-proxy/`、`docs/specs/self-update-github/`（开发中创建）
 - FR-176~184（节点与运行时 UI 重做 / 自更新增强 / 全局任务中心 / jmctl 紧急控制台，关联 ADR-039/040/041/042 + ADR-036 更新）→ FR-182 `docs/specs/self-update-enhancement/spec.md`、FR-183 `docs/specs/task-center/spec.md`、FR-184 `docs/specs/emergency-cli/spec.md`（已落审）；FR-176/179/180/181 免 spec；FR-177 `docs/specs/node-page-redesign/spec.md`、FR-178 `docs/specs/node-runtime-panels/spec.md`（W2，已自审）
-- FR-185~190（出站代理面板化+节点级下发 / 更新页服务端缓存+markdown / 客户端分发迁运营+全流程向导重做 / 全站模态纪律+复制兜底 / 重度模态重做 / Worker 二进制 CP 下发，关联 ADR-043/044 + 增强 FR-174/182/086/072/009/004）→ FR-185 `docs/specs/proxy-visual-config/`、FR-186 `docs/specs/update-page-cache/`、FR-187 `docs/specs/client-dist-redesign/`、FR-189 `docs/specs/heavy-modal-redesign/`（需 spec，开发中创建）；FR-188 免 spec（规则 + 全站审计改造 + 复制兜底）；FR-190 `docs/specs/worker-binary-cp-delivery/` + ADR-044（需 spec，本波后单独做）
+- FR-185~190（出站代理面板化+节点级下发 / 更新页服务端缓存+markdown / 客户端分发迁运营+全流程向导重做 / 全站模态纪律+复制兜底 / 重度模态重做 / Worker 二进制 CP 下发，关联 ADR-043/046 + 增强 FR-174/182/086/072/009/004）→ FR-185 `docs/specs/proxy-visual-config/`、FR-186 `docs/specs/update-page-cache/`、FR-187 `docs/specs/client-dist-redesign/`、FR-189 `docs/specs/heavy-modal-redesign/`（需 spec，开发中创建）；FR-188 免 spec（规则 + 全站审计改造 + 复制兜底）；FR-190 `docs/specs/worker-binary-cp-delivery/` + ADR-046（需 spec，本波后单独做；ADR 由 044 顺延避与下批撞号）
+- FR-191~194（客户端分发二轮重做：发布文件树+zip 上传 / 拉取密钥可查看 / updater-core 版本管理 / 端到端流程图，关联 ADR-044[FR-192 修订 ADR-022①] / ADR-045[FR-193 补充 ADR-021] + 增强 FR-187/086/091）→ FR-191 `docs/specs/client-dist-publish-redesign/`、FR-192 `docs/specs/pull-key-viewable/`、FR-193 `docs/specs/updater-core-version-mgmt/`（需 spec，开发中创建）；FR-194 免 spec（前端流程图）；BUG-D 面包屑域名 / BUG-E 就绪度 CTA 不弹窗（fix，不占 §4）
 - BUG-A 节点重名覆盖（修 FR-004 注册身份匹配缺陷，见 ADR-039）：注册改 UUID 锚定三级匹配 + 节点名活跃唯一 + 坏节点检测/修复后端（`NodeRepairService` + `/nodes/repair/*`、`/nodes/:id/reenroll|orphans|purge-orphans`）随 ADR-039 fix 提交落地；坏节点修复**可视化入口**随 FR-177 节点页重做。属缺陷修复（非新 FR），不占 §4 FR 编号
 - 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
 
@@ -237,7 +238,11 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-187 | 客户端分发迁「运营」域 + 全流程向导重做（就绪度步骤器 + 空状态引导卡 + 发布版本向导分步 + 建频道/密钥全模态化；后端 API 不变、纯前端重做；增强 FR-086 线） | P1 | 🔨 开发中 |
 | FR-188 | 全站模态框纪律（立 `.claude/rules/ui-modals.md`：禁「点击新增→内联展开/布局重排表单」、强制内容自适应模态复用 FR-072；全站违规页审计改造 + 复制按钮 HTTP 非安全上下文兜底[共享 util]，行为不变） | P1 | 🔨 开发中 |
 | FR-189 | 重度模态重做（创建实例 + 添加节点：自适应壳修溢出 + 基本/启动/高级 分区或 Tab + Docker 字段条件显隐 + AddNode「自动安装/手动连接」Tab；增强 FR-009/FR-004 对话框，遵循 ui-modals） | P1 | 🔨 开发中 |
-| FR-190 | Worker 二进制由 CP 代理缓存下发（CP 经出站代理拉「与自身同版本」worker 资产→缓存→LAN 下发；装机脚本与 UpgradeNode 改走 CP，解内网无 GitHub + latest 与 CP 版本错位；见 ADR-044） | P1 | 📋 计划 |
+| FR-190 | Worker 二进制由 CP 代理缓存下发（CP 经出站代理拉「与自身同版本」worker 资产→缓存→LAN 下发；装机脚本与 UpgradeNode 改走 CP，解内网无 GitHub + latest 与 CP 版本错位；见 ADR-046） | P1 | 📋 计划 |
+| FR-191 | 客户端分发发布/上传/预览定向重做（发布向导防误关[点遮罩/Esc 不丢已传草稿]+上传即锁定文件内容；支持上传 zip 自动按包内结构编排目录；配置/审阅/详情改 Minecraft 文件树预览，内容只读、仅可编排路径/目录/sync/platform；增强 FR-187/088） | P1 | 📋 计划 |
+| FR-192 | 拉取密钥可查看（密钥改可逆加密存储[env 密钥]，管理员频道页可查看明文+复制；保留吊销/轮换；老哈希密钥不可查；修订 ADR-022 决策①，见 ADR-044） | P1 | 📋 计划 |
+| FR-193 | updater-core 版本显式管理（楔子冻结单版本不纳管，仅 updater-core 经 manifest agent.core 做 pin/更新/回滚的 gradle-wrapper 式集中版本管理 + 坏版本可退；增强 FR-091，补充 ADR-021，见 ADR-045） | P1 | 📋 计划 |
+| FR-194 | 客户端分发页内嵌端到端流程图（运维向大白话：首次发布 / 日常更新两段 + 密钥不可丢/整合包只发一次/楔子固定核心可换 要点；纯前端，增强 FR-187） | P2 | 📋 计划 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
