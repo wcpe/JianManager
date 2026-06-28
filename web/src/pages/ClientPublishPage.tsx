@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
-import { useNavigate, useParams, useBlocker } from 'react-router'
+import { useNavigate, useParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { unzip, type Unzipped } from 'fflate'
@@ -109,8 +109,20 @@ export default function ClientPublishPage() {
     if (leaving) navigate(`/client-channels?channel=${encodeURIComponent(channelId ?? '')}&tab=versions`)
   }, [leaving, navigate, channelId])
 
-  // SPA 内路由切换守卫：有草稿时拦截，转二次确认（useBlocker 仅拦应用内导航）。
-  const blocker = useBlocker(dirty)
+  // 离开守卫（FR-191）：本应用用 BrowserRouter（非 data router），useBlocker 不可用，
+  // 改用 History API 守卫浏览器后退——有草稿时拦后退、转二次确认；关页/刷新见下方 beforeunload。
+  const [navBlocked, setNavBlocked] = useState(false)
+  useEffect(() => {
+    if (!dirty) return
+    // 压入一枚哨兵历史项，使首次「后退」停留在本页，转而弹确认。
+    window.history.pushState(null, '', window.location.href)
+    const onPopState = () => {
+      window.history.pushState(null, '', window.location.href)
+      setNavBlocked(true)
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [dirty])
 
   // 关页/刷新守卫：有草稿时触发浏览器原生离开确认（beforeunload 无法自定义文案）。
   useEffect(() => {
@@ -394,25 +406,21 @@ export default function ClientPublishPage() {
         )}
       </div>
 
-      {/* 离开守卫确认：SPA 路由切换被拦（blocker.state==='blocked'）或点取消（manualDiscard）时弹。 */}
+      {/* 离开守卫确认：浏览器后退被拦（navBlocked）或点取消（manualDiscard）时弹。 */}
       <DangerConfirm
-        open={blocker.state === 'blocked' || manualDiscard}
+        open={navBlocked || manualDiscard}
         title={t('clientPublish.discardTitle', '放弃发布草稿？')}
         description={t('clientPublish.discardDesc', '已上传 {{n}} 个文件的编排草稿（文件已在服务端，但「发哪些 + 各自路径/策略」尚未发布）。离开将丢弃这些编排，需重新设置。', { n: drafts.length })}
         confirmLabel={t('clientPublish.discardConfirm', '放弃并离开')}
         onConfirm={() => {
-          if (manualDiscard) {
-            // 点「取消」触发：解除守卫并回工作台。
-            setManualDiscard(false)
-            leaveToVersions()
-          } else {
-            // 侧栏/面包屑等 SPA 导航被 blocker 拦下：放行到目标路由。
-            blocker.proceed?.()
-          }
+          // 取消(manualDiscard) 或后退被拦(navBlocked)，确认后均解除守卫回工作台。
+          setManualDiscard(false)
+          setNavBlocked(false)
+          leaveToVersions()
         }}
         onCancel={() => {
           if (manualDiscard) setManualDiscard(false)
-          else blocker.reset?.()
+          else setNavBlocked(false)
         }}
       />
     </div>
