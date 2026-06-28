@@ -49,7 +49,6 @@ import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import DangerConfirm from '@/components/DangerConfirm'
 import ClientVersionsPanel from '@/components/ClientVersionsPanel'
-import ClientCoreVersionsPanel from '@/components/ClientCoreVersionsPanel'
 import ClientStatsPanel from '@/components/ClientStatsPanel'
 import ClientIntegrationGuide from '@/components/ClientIntegrationGuide'
 import ClientDistFlowGuide from '@/components/ClientDistFlowGuide'
@@ -58,7 +57,7 @@ type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
 
 /** 工作台分段标识，与就绪度步骤 CTA 联动跳转。 */
-type WorkbenchTab = 'keys' | 'versions' | 'core' | 'stats' | 'guide'
+type WorkbenchTab = 'keys' | 'versions' | 'stats' | 'guide'
 
 /**
  * 客户端分发管理页（FR-086/187，见 ADR-022）。
@@ -394,7 +393,6 @@ function ChannelWorkbench({
         <TabsList variant="line">
           <TabsTrigger value="keys">{t('clientChannels.manageKeys', '拉取密钥')}</TabsTrigger>
           <TabsTrigger value="versions">{t('clientVersions.tab', '版本管理')}</TabsTrigger>
-          <TabsTrigger value="core">{t('clientCore.tab', '更新器版本')}</TabsTrigger>
           <TabsTrigger value="stats">{t('clientStats.tab', '统计')}</TabsTrigger>
           <TabsTrigger value="guide">{t('clientGuide.tab', '接入指引')}</TabsTrigger>
         </TabsList>
@@ -409,9 +407,6 @@ function ChannelWorkbench({
         </TabsContent>
         <TabsContent value="versions">
           <ClientVersionsPanel channelId={channelId} />
-        </TabsContent>
-        <TabsContent value="core">
-          <ClientCoreVersionsPanel channelId={channelId} />
         </TabsContent>
         <TabsContent value="stats">
           <ClientStatsPanel channelId={channelId} />
