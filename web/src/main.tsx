@@ -20,12 +20,25 @@ const queryClient = new QueryClient({
   },
 })
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <BrowserRouter>
-      <QueryClientProvider client={queryClient}>
-        <App />
-      </QueryClientProvider>
-    </BrowserRouter>
-  </StrictMode>,
-)
+/**
+ * VITE_MOCK=1 时启 MSW Service Worker，整站打到内存假后端（FR-196，`npm run dev:mock`）。
+ * 动态 import 确保 mock 代码不进生产包。否则直连真后端，行为不变。
+ */
+async function enableMocking() {
+  if (!import.meta.env.VITE_MOCK) return
+  const [{ worker }, { resetDb }] = await Promise.all([import('@/mocks/browser'), import('@/mocks/db')])
+  resetDb()
+  await worker.start({ onUnhandledRequest: 'bypass' })
+}
+
+void enableMocking().then(() => {
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <BrowserRouter>
+        <QueryClientProvider client={queryClient}>
+          <App />
+        </QueryClientProvider>
+      </BrowserRouter>
+    </StrictMode>,
+  )
+})

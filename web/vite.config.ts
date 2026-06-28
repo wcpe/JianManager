@@ -44,8 +44,28 @@ export default defineConfig({
       },
     },
   },
+  // vitest 双 project（FR-196 / ADR-047 决策 4）：node 跑纯逻辑单测（保留现状），
+  // dom 跑 jsdom + testing-library 的组件 / 页面强断言（*.dom.test.tsx）。互不污染。
   test: {
-    environment: 'node',
-    include: ['src/**/*.test.{ts,tsx}'],
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'node',
+          environment: 'node',
+          include: ['src/**/*.test.{ts,tsx}'],
+          exclude: ['src/**/*.dom.test.tsx'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'dom',
+          environment: 'jsdom',
+          include: ['src/**/*.dom.test.tsx'],
+          setupFiles: ['./src/test/setup.ts'],
+        },
+      },
+    ],
   },
 })
