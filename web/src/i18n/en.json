@@ -892,9 +892,31 @@
       "jdk": "JDK",
       "cache": "Artifact cache",
       "ports": "Ports",
+      "proxy": "Proxy",
       "monitor": "Monitoring",
       "repair": "Node repair"
     }
+  },
+  "nodeProxy": {
+    "title": "Outbound proxy",
+    "desc": "This node's downloads (JDK / server jar / self-update) go through this proxy. Changes are pushed via heartbeat and take effect at runtime — no need to edit worker.yaml or restart.",
+    "mode": "Proxy source",
+    "inherit": "Inherit global",
+    "custom": "Custom",
+    "inheritHint": "Use the platform global default proxy",
+    "globalDefault": "Global default",
+    "globalNone": "Global default: direct (not configured)",
+    "url": "Proxy URL",
+    "urlPlaceholder": "http://host:port or socks5://host:port",
+    "noProxy": "No-proxy list",
+    "noProxyPlaceholder": "localhost,10.0.0.0/8 (comma-separated, optional)",
+    "effective": "Effective",
+    "effectiveDirect": "Direct",
+    "pendingPush": "Node offline; takes effect on the next heartbeat after it comes online",
+    "saved": "Saved; will be pushed to the node via heartbeat",
+    "saveFailed": "Save failed",
+    "loadFailed": "Failed to load node proxy",
+    "maskedHint": "Addresses containing credentials are masked when displayed; re-enter the full address to change it."
   },
   "nodeRepair": {
     "unavailable": "Node repair is not enabled on this deployment.",
@@ -2100,6 +2122,7 @@
       "appearance": "Appearance",
       "logging": "Logging",
       "runtime": "Runtime",
+      "network": "Network",
       "backup": "Backup",
       "security": "Security / System"
     },
@@ -2107,9 +2130,11 @@
       "appearance": "Interface theme and language (local preference)",
       "logging": "Log level and other runtime logging settings",
       "runtime": "JDK download mirrors and instance runtime behavior",
+      "network": "Outbound proxy (self-update/JDK/server jar downloads go through it); also the default proxy for all nodes",
       "backup": "Backup retention and defaults",
       "security": "Startup-fixed server/database/auth parameters (read-only)"
     },
+    "networkNotice": "Global outbound proxy: the Control Plane's own downloads go through it, and it serves as the default proxy for all nodes (each node can override it on the node page). Takes effect immediately, no restart needed. Addresses containing credentials are masked when displayed.",
     "keys": {
       "log.level": "Log level",
       "jdk.mirror.temurin": "JDK mirror (Temurin)",
@@ -2117,6 +2142,8 @@
       "jdk.mirror.zulu": "JDK mirror (Zulu)",
       "graceful_stop.timeout": "Graceful stop timeout",
       "backup.retention_days": "Default backup retention (days)",
+      "proxy.url": "Outbound proxy URL",
+      "proxy.no_proxy": "No-proxy list",
       "server.host": "Server host",
       "server.port": "Server port",
       "grpc.port": "gRPC port",

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { toast } from 'sonner'
-import { Palette, ScrollText, Cpu, Archive, Lock, ShieldAlert, type LucideIcon } from 'lucide-react'
+import { Palette, ScrollText, Cpu, Archive, Lock, ShieldAlert, Network, type LucideIcon } from 'lucide-react'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import { changeLanguage } from '@/i18n'
@@ -37,13 +37,14 @@ const ROLE_PLATFORM_ADMIN = 10
 /** 日志级别可选值，用于可编辑项的下拉。 */
 const LOG_LEVELS = ['debug', 'info', 'warn', 'error'] as const
 
-/** 设置分类（FR-063）：内部侧边栏据此分组。appearance 为客户端偏好，其余为平台配置。 */
-type SettingCategory = 'appearance' | 'logging' | 'runtime' | 'backup' | 'security'
+/** 设置分类（FR-063 + FR-185）：内部侧边栏据此分组。appearance 为客户端偏好，其余为平台配置。 */
+type SettingCategory = 'appearance' | 'logging' | 'runtime' | 'network' | 'backup' | 'security'
 
-/** 把平台配置键映射到分类：可编辑项落 logging/runtime/backup，只读项落 security。 */
+/** 把平台配置键映射到分类：可编辑项落 logging/runtime/network/backup，只读项落 security。 */
 function keyCategory(key: string): SettingCategory {
   if (key.startsWith('log.')) return 'logging'
   if (key.startsWith('jdk.') || key.startsWith('graceful_stop.')) return 'runtime'
+  if (key.startsWith('proxy.')) return 'network' // 出站代理（FR-185）
   if (key.startsWith('backup.')) return 'backup'
   return 'security'
 }
@@ -52,6 +53,7 @@ const CATEGORY_ICON: Record<SettingCategory, LucideIcon> = {
   appearance: Palette,
   logging: ScrollText,
   runtime: Cpu,
+  network: Network,
   backup: Archive,
   security: Lock,
 }
@@ -80,7 +82,7 @@ export default function SettingsPage() {
   const [pendingCat, setPendingCat] = useState<SettingCategory | null>(null)
 
   const categories: SettingCategory[] = isPlatformAdmin
-    ? ['appearance', 'logging', 'runtime', 'backup', 'security']
+    ? ['appearance', 'logging', 'runtime', 'network', 'backup', 'security']
     : ['appearance']
 
   // 当前分类的可编辑项（appearance 无平台项）。
@@ -318,7 +320,13 @@ function PlatformCategory({
 
       {!isLoading && !isError && !isSecurity && (
         <>
-          <p className="text-xs text-muted-foreground">{t('settings.editableHint', '保存后立即覆盖默认值。')}</p>
+          {category === 'network' ? (
+            <p className="rounded-md bg-primary/10 px-3 py-2 text-xs text-muted-foreground">
+              {t('settings.networkNotice')}
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">{t('settings.editableHint', '保存后立即覆盖默认值。')}</p>
+          )}
           <div className="divide-y rounded-md border">
             {editable.length === 0 ? (
               <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('settings.empty', '暂无配置项')}</p>

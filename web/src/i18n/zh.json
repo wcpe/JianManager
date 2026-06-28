@@ -869,6 +869,7 @@
       "jdk": "JDK",
       "cache": "制品缓存",
       "ports": "端口",
+      "proxy": "代理",
       "monitor": "监控",
       "repair": "坏节点修复"
     }
@@ -2100,6 +2101,7 @@
       "appearance": "外观",
       "logging": "日志",
       "runtime": "运行时",
+      "network": "网络",
       "backup": "备份",
       "security": "安全 / 系统"
     },
@@ -2107,9 +2109,11 @@
       "appearance": "界面主题与语言（本机偏好）",
       "logging": "日志级别等运行时日志设置",
       "runtime": "JDK 下载源与实例运行时行为",
+      "network": "出站代理（自更新/JDK/服务端 jar 下载经此），同时作为各节点默认代理",
       "backup": "备份保留与默认策略",
       "security": "启动固定的服务/数据库/鉴权参数（只读）"
     },
+    "networkNotice": "全局出站代理：Control Plane 自身下载经此代理，并作为各节点的默认代理（节点可在节点页覆盖）。保存即生效，无需重启。含账号密码的地址回显时已脱敏。",
     "keys": {
       "log.level": "日志级别",
       "jdk.mirror.temurin": "JDK 镜像源（Temurin）",
@@ -2117,6 +2121,8 @@
       "jdk.mirror.zulu": "JDK 镜像源（Zulu）",
       "graceful_stop.timeout": "优雅停止超时",
       "backup.retention_days": "默认备份保留天数",
+      "proxy.url": "出站代理地址",
+      "proxy.no_proxy": "免代理列表",
       "server.host": "服务监听地址",
       "server.port": "服务端口",
       "grpc.port": "gRPC 端口",
@@ -2126,6 +2132,27 @@
       "jwt.access_ttl": "访问令牌有效期",
       "jwt.refresh_ttl": "刷新令牌有效期"
     }
+  },
+  "nodeProxy": {
+    "title": "出站代理",
+    "desc": "本节点的下载（JDK / 服务端 jar / 自更新）经此代理。改动经心跳下发，节点运行时生效、无需改 worker.yaml 或重启。",
+    "mode": "代理来源",
+    "inherit": "继承全局",
+    "custom": "自定义",
+    "inheritHint": "使用平台全局默认代理",
+    "globalDefault": "全局默认",
+    "globalNone": "全局默认：直连（未配置）",
+    "url": "代理地址",
+    "urlPlaceholder": "http://host:port 或 socks5://host:port",
+    "noProxy": "免代理列表",
+    "noProxyPlaceholder": "localhost,10.0.0.0/8（逗号分隔，可空）",
+    "effective": "当前生效",
+    "effectiveDirect": "直连",
+    "pendingPush": "节点离线，将在下次心跳上线后生效",
+    "saved": "已保存，将经心跳下发到节点",
+    "saveFailed": "保存失败",
+    "loadFailed": "加载节点代理失败",
+    "maskedHint": "含账号密码的地址回显时已脱敏；如需修改请重新填写完整地址。"
   },
   "theme": {
     "toggle": "切换主题",

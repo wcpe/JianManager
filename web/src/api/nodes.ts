@@ -159,3 +159,52 @@ export function useDeleteNode() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['nodes'] }),
   })
 }
+
+/** 节点出站代理视图（FR-185，见 ADR-043）。含凭据的 URL 已由后端脱敏。 */
+export interface NodeProxyView {
+  /** inherit=继承全局默认 / custom=自定义。 */
+  mode: 'inherit' | 'custom'
+  /** 节点自定义代理地址（脱敏；仅 custom 有意义）。 */
+  url: string
+  /** 节点自定义免代理列表（逗号分隔；仅 custom 有意义）。 */
+  noProxy: string
+  /** 当前生效代理地址（脱敏）：custom→节点值，inherit→全局默认。 */
+  effectiveUrl: string
+  /** 当前生效免代理列表。 */
+  effectiveNoProxy: string
+  /** 平台全局默认代理地址（脱敏，供展示「继承自全局」）。 */
+  globalDefaultUrl: string
+  /** 节点是否在线（离线时前端标注「待下发」，下次心跳生效）。 */
+  online: boolean
+}
+
+/** 设置节点代理请求（FR-185）：mode=inherit 时 url/noProxy 忽略；custom 时 url 必填。 */
+export interface UpdateNodeProxyBody {
+  mode: 'inherit' | 'custom'
+  url?: string
+  noProxy?: string
+}
+
+/** 查询节点出站代理配置（仅平台管理员，FR-185）。 */
+export function useNodeProxy(nodeId: number, options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ['node-proxy', nodeId],
+    queryFn: async () => {
+      const { data } = await api.get<NodeProxyView>(`/nodes/${nodeId}/proxy`)
+      return data
+    },
+    enabled: (options?.enabled ?? true) && !!nodeId,
+  })
+}
+
+/** 设置节点出站代理（继承全局/自定义，仅平台管理员，FR-185）。 */
+export function useUpdateNodeProxy(nodeId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (body: UpdateNodeProxyBody) => {
+      const { data } = await api.patch<NodeProxyView>(`/nodes/${nodeId}/proxy`, body)
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['node-proxy', nodeId] }),
+  })
+}

@@ -52,6 +52,7 @@ import { cn } from '@/lib/utils'
 import NodeJDKPanel from '@/components/NodeJDKPanel'
 import NodePortsPanel from '@/components/NodePortsPanel'
 import NodeArtifactCachePanel from '@/components/NodeArtifactCachePanel'
+import NodeProxyPanel from '@/components/NodeProxyPanel'
 import NodeRepairPanel from '@/components/NodeRepairPanel'
 import DangerConfirm from '@/components/DangerConfirm'
 import AddNodeDialog from '@/components/AddNodeDialog'
@@ -69,9 +70,9 @@ function formatBytes(bytes: number): string {
 /** 待二次确认的危险节点操作（FR-048）。 */
 type PendingAction = { kind: 'drain' | 'delete'; node: NodeInfo }
 
-/** 右栏分段（FR-177 §3.3）：概览/实例/JDK/缓存/端口/监控/坏节点修复。 */
-type DetailTab = 'overview' | 'instances' | 'jdk' | 'cache' | 'ports' | 'monitor' | 'repair'
-const DETAIL_TABS: DetailTab[] = ['overview', 'instances', 'jdk', 'cache', 'ports', 'monitor', 'repair']
+/** 右栏分段（FR-177 §3.3 + FR-185）：概览/实例/JDK/缓存/端口/代理/监控/坏节点修复。 */
+type DetailTab = 'overview' | 'instances' | 'jdk' | 'cache' | 'ports' | 'proxy' | 'monitor' | 'repair'
+const DETAIL_TABS: DetailTab[] = ['overview', 'instances', 'jdk', 'cache', 'ports', 'proxy', 'monitor', 'repair']
 
 /** 各实例对比图可切的指标（FR-060 #2：节点上各实例 TPS/MSPT/堆/线程对比）。 */
 const COMPARE_METRICS: { key: string; labelKey: string; fmt: (v: number) => string }[] = [
@@ -660,6 +661,11 @@ function NodeDetailPane({
         {tab === 'ports' && (
           <Panel title={t('ports.title')}>
             <NodePortsPanel nodeId={node.id} />
+          </Panel>
+        )}
+        {tab === 'proxy' && (
+          <Panel title={t('nodeProxy.title')}>
+            <NodeProxyPanel nodeId={node.id} active />
           </Panel>
         )}
         {tab === 'monitor' && <NodeMonitorCharts node={node} />}
