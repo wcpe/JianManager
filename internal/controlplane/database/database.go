@@ -118,6 +118,9 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.ClientChannel{},
 		&model.ClientPullKey{},
 		&model.ClientVersion{},
+		// updater-core 集中版本注册（FR-193，见 ADR-045）：version 全局单调 + 制品引用；
+		// 频道经 ClientChannel.PinnedCoreVersion 选定，manifest agent.core 由 pin 驱动。
+		&model.ClientCoreVersion{},
 		&model.ClientMachine{},
 		&model.ClientDistEvent{},
 		&model.ClientDistDaily{},

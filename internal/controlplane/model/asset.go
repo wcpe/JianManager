@@ -25,6 +25,10 @@ const (
 	AssetTypeClientFile AssetType = "client-file"
 	// AssetTypeClientPack 客户端分发 .jmpack 容器（zstd 压缩段拼接 + Ed25519 签名，FR-097，见 ADR-021/022）。
 	AssetTypeClientPack AssetType = "client-pack"
+	// AssetTypeClientCore updater-core jar 制品（集中版本管理，FR-193，见 ADR-045）。
+	// 内容寻址键 = core jar 制品（压缩后）自身 sha256，即 manifest agent.core.platforms[os].artifact.sha256。
+	// 一份 jar 三平台通用（ADR-021）：上传一份，manifest 生成时 fan-out 填各 platform 键。
+	AssetTypeClientCore AssetType = "client-core"
 )
 
 // AssetStorageState 制品存储状态，驱动归档/外置生命周期（归档策略为后续 FR，此处先立模型）。
@@ -81,7 +85,7 @@ type Asset struct {
 // ValidAssetType 校验类型是否在允许枚举内。
 func ValidAssetType(t AssetType) bool {
 	switch t {
-	case AssetTypeCore, AssetTypePlugin, AssetTypeImage, AssetTypeVideo, AssetTypeArchive, AssetTypeBlob, AssetTypeClientFile, AssetTypeClientPack:
+	case AssetTypeCore, AssetTypePlugin, AssetTypeImage, AssetTypeVideo, AssetTypeArchive, AssetTypeBlob, AssetTypeClientFile, AssetTypeClientPack, AssetTypeClientCore:
 		return true
 	}
 	return false

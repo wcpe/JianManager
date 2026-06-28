@@ -241,7 +241,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-190 | Worker 二进制由 CP 代理缓存下发（CP 经出站代理拉「与自身同版本」worker 资产→缓存→LAN 下发；装机脚本与 UpgradeNode 改走 CP，解内网无 GitHub + latest 与 CP 版本错位；见 ADR-046） | P1 | 📋 计划 |
 | FR-191 | 客户端分发发布/上传/预览定向重做（发布向导防误关[点遮罩/Esc 不丢已传草稿]+上传即锁定文件内容；支持上传 zip 自动按包内结构编排目录；配置/审阅/详情改 Minecraft 文件树预览，内容只读、仅可编排路径/目录/sync/platform；增强 FR-187/088） | P1 | 🔨 开发中 |
 | FR-192 | 拉取密钥可查看（密钥改可逆加密存储[env 密钥]，管理员频道页可查看明文+复制；保留吊销/轮换；老哈希密钥不可查；修订 ADR-022 决策①，见 ADR-044） | P1 | 🔨 开发中 |
-| FR-193 | updater-core 版本显式管理（楔子冻结单版本不纳管，仅 updater-core 经 manifest agent.core 做 pin/更新/回滚的 gradle-wrapper 式集中版本管理 + 坏版本可退；增强 FR-091，补充 ADR-021，见 ADR-045） | P1 | 📋 计划 |
+| FR-193 | updater-core 版本显式管理（楔子冻结单版本不纳管，仅 updater-core 经 manifest agent.core 做 pin/更新/回滚的 gradle-wrapper 式集中版本管理 + 坏版本可退；增强 FR-091，补充 ADR-021，见 ADR-045） | P1 | 🔨 开发中 |
 | FR-194 | 客户端分发页内嵌端到端流程图（运维向大白话：首次发布 / 日常更新两段 + 密钥不可丢/整合包只发一次/楔子固定核心可换 要点；纯前端，增强 FR-187） | P2 | 🔨 开发中 |
 
 ### 范围外（后续版本，暂不纳入 V1）

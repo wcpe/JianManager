@@ -173,6 +173,10 @@ func main() {
 		slog.Warn("客户端分发签名使用内置开发密钥（仅 dev_mode 生效），生产务必经 JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入独立私钥")
 	}
 	clientVersionSvc := service.NewClientVersionService(db, assetSvc, clientChannelSvc, clientSigner)
+	// updater-core 集中版本管理（FR-193，见 ADR-045）：core 制品注册 + 频道 pin 驱动 manifest agent.core +
+	// 更新/回退（回退=以更高版本重发旧字节、不降版）。注入版本服务后 BuildManifest 的 agent.core 由 pin 驱动。
+	clientCoreVersionSvc := service.NewClientCoreVersionService(db, assetSvc)
+	clientVersionSvc.SetCoreVersions(clientCoreVersionSvc)
 	// 客户端机器码登记（FR-092）：manifest 拉取时 best-effort upsert，弱一致、不阻断。
 	clientMachineSvc := service.NewClientMachineService(db)
 	// 客户端分发拉取/下载追踪（FR-093）：明细短保留 + 写时增量聚合 + 后台滚动清理。
@@ -343,6 +347,7 @@ func main() {
 		ProbeUpdate:        probeUpdateSvc,
 		ClientChannel:      clientChannelSvc,
 		ClientVersion:      clientVersionSvc,
+		ClientCoreVersion:  clientCoreVersionSvc,
 		ClientMachine:      clientMachineSvc,
 		ClientDistTracking: clientDistTrackingSvc,
 		ClientIPGuard:      clientIPGuardSvc,

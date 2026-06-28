@@ -49,8 +49,8 @@ updater-core ──GET /manifest(latest,带 key+machineId)──→ JM 分发后
     // …
   ],
   "agent": {
-    "wedge": { "version": 3 },        // 楔子版本（信息性；楔子随基础包、不自更新）
-    "core": {                         // updater-core 自更新段（FR-091）
+    "wedge": { "version": 3 },        // 楔子版本（信息性；楔子随基础包、不自更新、冻结不纳管）
+    "core": {                         // updater-core 自更新段（FR-091 消费；FR-193 起服务端由频道 core pin 驱动产出，见下方 §3 注与 ADR-045）
       "version": 5,
       "platforms": {
         "windows": { "artifact": { "sha256": "…", "size": 0, "codec": "zstd" } },
@@ -80,6 +80,7 @@ updater-core ──GET /manifest(latest,带 key+machineId)──→ JM 分发后
 - **验签**：updater 用 `sig.keyId` 选内置公钥验签；缺失/不符 → **拒绝整份 manifest**，fail-static 带本地版本进游戏。
 - **密钥轮换（ADR-022）**：updater 内置 `keyId → 公钥` 映射（主 `k1` + 备 `k2`…）；私钥泄露切备用 keyId、经一次基础包更新淘汰旧公钥。私钥服务端持有、env 注入不入库。
 - **防降级/重放（ADR-022）**：updater 本地持久化 `lastSeenVersion`；拉到的 manifest 若 `version < lastSeenVersion` → **拒绝**（疑似重放旧版投毒）。运营回滚不是下发更低号，而是**以更高 version 重发旧内容**（FR-088）。
+- **`agent.core` 来源 + 两条版本轴（FR-193，见 ADR-045）**：`agent.core`（version + per-platform 制品）服务端由**频道 core pin 驱动**产出（取代发布向导手填透传；无任何已登记 core 版本时回退手填透传，兼容）。**两条版本轴正交**：manifest `version`（内容轴，上方防降级）与 `agent.core.version`（updater-core 自身轴，对客户端单调**只升不降**——core 只把更高版本暂存 pending，见 §6.3）。运营**「回退」坏 core** 同 FR-088 内容回滚法：**以更高 `agent.core.version` 重发旧 core 字节**（一份 jar 三平台通用，填各 platform 键），客户端照常 promote「上去」到旧内容，**绝不降版**。楔子（`agent.wedge`）冻结、单版本、不纳管。
 
 ## 4. 端点
 

@@ -35,11 +35,21 @@ type ClientVersionService struct {
 	assets  *AssetService
 	channel *ClientChannelService
 	signer  *ManifestSigner
+	// coreVersions updater-core 集中版本管理（FR-193，见 ADR-045）。非 nil 时 BuildManifest 由频道
+	// pin 驱动 agent.core（取代纯手填透传）；nil 或无 core 注册时回退手填透传（兼容 FR-087/088）。
+	coreVersions *ClientCoreVersionService
 }
 
 // NewClientVersionService 创建版本服务。signer 为 nil 时 BuildManifest 报 ErrSignKeyNotConfigured。
 func NewClientVersionService(db *gorm.DB, assets *AssetService, channel *ClientChannelService, signer *ManifestSigner) *ClientVersionService {
 	return &ClientVersionService{db: db, assets: assets, channel: channel, signer: signer}
+}
+
+// SetCoreVersions 注入 updater-core 集中版本管理服务（FR-193，见 ADR-045）。
+// 注入后 BuildManifest 的 agent.core 由频道 pin 驱动；不注入则维持手填透传（向后兼容）。
+// 经 setter 注入以保持构造签名稳定（既有装配/测试零改动）。
+func (s *ClientVersionService) SetCoreVersions(cv *ClientCoreVersionService) {
+	s.coreVersions = cv
 }
 
 // PublishFileParams 上传客户端文件制品参数。
@@ -199,10 +209,36 @@ func (s *ClientVersionService) BuildManifest(channelID string) (*SignedManifest,
 	if err != nil {
 		return nil, err
 	}
+	// agent.core 由频道 core pin 驱动（FR-193，见 ADR-045）：覆盖版本快照中的手填透传值。
+	// 无 core 注册（ResolveForChannel 返 nil）时不覆盖，沿用快照手填透传（兼容 FR-087/088）。
+	if err := s.applyPinnedCore(manifest, ch); err != nil {
+		return nil, err
+	}
 	if err := s.signer.Sign(manifest); err != nil {
 		return nil, fmt.Errorf("签名 manifest 失败: %w", err)
 	}
 	return manifest, nil
+}
+
+// applyPinnedCore 用频道 pin 选定的 core 版本覆盖 manifest 的 agent.core（FR-193，见 ADR-045 决策 1）。
+// coreVersions 未注入或无任何已登记 core 版本时不动 agent.core（保留快照手填透传，兼容旧发布）。
+// agent.wedge 不受影响（楔子冻结、信息性，ADR-045 决策 2）。
+func (s *ClientVersionService) applyPinnedCore(manifest *SignedManifest, ch *model.ClientChannel) error {
+	if s.coreVersions == nil {
+		return nil
+	}
+	rec, err := s.coreVersions.ResolveForChannel(ch.PinnedCoreVersion)
+	if err != nil {
+		return fmt.Errorf("解析频道 core pin 失败: %w", err)
+	}
+	if rec == nil {
+		return nil // 无 core 注册 → 沿用手填透传。
+	}
+	if manifest.Agent == nil {
+		manifest.Agent = &ManifestAgent{}
+	}
+	manifest.Agent.Core = coreVersionToManifest(rec)
+	return nil
 }
 
 // LatestVersion 返回频道当前 latest 版本号（0=未发布）。

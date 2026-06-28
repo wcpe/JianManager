@@ -18,10 +18,15 @@ type ClientChannel struct {
 	// Description 描述，可空。
 	Description string `gorm:"type:varchar(512)" json:"description"`
 	// CurrentVersion 当前 latest 版本指针占位；0=未发布。本 FR 仅建字段，编排见 FR-088。
-	CurrentVersion int            `gorm:"default:0;not null" json:"currentVersion"`
-	CreatedAt      time.Time      `json:"createdAt"`
-	UpdatedAt      time.Time      `json:"updatedAt"`
-	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
+	CurrentVersion int `gorm:"default:0;not null" json:"currentVersion"`
+	// PinnedCoreVersion 频道 pin 的 updater-core 版本号（FR-193，见 ADR-045）。
+	// 0=自动指向当前已登记的最新 core 版本（默认）；>0=固定 pin 到该 core 版本。
+	// manifest 生成时据此驱动 agent.core（取代纯手填透传）；无任何已登记 core 版本时回退手填透传（兼容 FR-087/088）。
+	// 注意：这是 updater-core 自身版本轴（对客户端单调只升不降），与 CurrentVersion（内容版本轴、防降级）正交。
+	PinnedCoreVersion int            `gorm:"default:0;not null" json:"pinnedCoreVersion"`
+	CreatedAt         time.Time      `json:"createdAt"`
+	UpdatedAt         time.Time      `json:"updatedAt"`
+	DeletedAt         gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // ClientPullKey 频道拉取密钥：玩家侧 updater 拉 manifest/制品时经请求头携带。

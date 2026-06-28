@@ -57,6 +57,7 @@ type Services struct {
 	ProbeUpdate        *service.ProbeUpdateService
 	ClientChannel      *service.ClientChannelService
 	ClientVersion      *service.ClientVersionService
+	ClientCoreVersion  *service.ClientCoreVersionService
 	ClientMachine      *service.ClientMachineService
 	ClientDistTracking *service.ClientDistTrackingService
 	ClientIPGuard      *service.ClientIPGuardService
@@ -307,6 +308,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.ClientVersion != nil && svcs.ClientChannel != nil {
 			clientVersionHandler := NewClientVersionHandler(svcs.ClientVersion, svcs.ClientChannel, svcs.Audit, svcs.ClientMachine, svcs.ClientDistTracking)
 			clientVersionHandler.RegisterPublishRoutes(admin)
+		}
+
+		// updater-core 集中版本管理（FR-193 / ADR-045）：上传 core 制品 / 登记·列版本 / 频道 pin·更新·回退。
+		// 运营操作，限平台管理员；manifest agent.core 由频道 pin 驱动（见 service.BuildManifest.applyPinnedCore）。
+		if svcs.ClientCoreVersion != nil && svcs.ClientChannel != nil {
+			clientCoreVersionHandler := NewClientCoreVersionHandler(svcs.ClientCoreVersion, svcs.ClientChannel, svcs.Audit)
+			clientCoreVersionHandler.RegisterRoutes(admin)
 		}
 
 		// 客户端分发端点 L7 防护：IP 黑白名单规则管理 + 防护拦截计数（FR-096 / ADR-023）。限平台管理员。
