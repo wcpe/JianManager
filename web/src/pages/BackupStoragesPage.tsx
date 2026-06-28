@@ -10,6 +10,7 @@ import {
 } from '@/api/backupStorages'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import {
@@ -178,36 +179,45 @@ export default function BackupStoragesPage() {
         </DialogContent>
       </Dialog>
 
-      <div className="border rounded-lg overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-muted"><tr>
-            <th className="p-3 text-left">{t('backupStorages.name', '名称')}</th>
-            <th className="p-3 text-left">{t('backupStorages.type', '类型')}</th>
-            <th className="p-3 text-left">{t('backupStorages.endpoint', 'Endpoint')}</th>
-            <th className="p-3 text-left">{t('backupStorages.prefix', '前缀')}</th>
-            <th className="p-3 text-left">{t('backupStorages.accessKeyEnv', 'Access Key 环境变量')}</th>
-            <th className="p-3 text-left">{t('backupStorages.actions', '操作')}</th>
-          </tr></thead>
-          <tbody>
+      <div className="overflow-hidden rounded-lg border">
+        <Table>
+          <TableHeader className="bg-muted/50">
+            <TableRow>
+              <TableHead>{t('backupStorages.name', '名称')}</TableHead>
+              <TableHead>{t('backupStorages.type', '类型')}</TableHead>
+              <TableHead>{t('backupStorages.endpoint', 'Endpoint')}</TableHead>
+              <TableHead>{t('backupStorages.prefix', '前缀')}</TableHead>
+              <TableHead>{t('backupStorages.accessKeyEnv', 'Access Key 环境变量')}</TableHead>
+              <TableHead className="text-right">{t('backupStorages.actions', '操作')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {(storages ?? []).map((s: BackupStorage) => (
-              <tr key={s.id} className="border-t">
-                <td className="p-3">{s.name}</td>
-                <td className="p-3"><Badge variant="outline">{s.type.toUpperCase()}</Badge></td>
-                <td className="p-3 font-mono text-xs">{s.endpoint}{s.bucket ? ` / ${s.bucket}` : ''}</td>
-                <td className="p-3">{s.prefix || '-'}</td>
-                <td className="p-3 font-mono text-xs">{s.accessKeyEnv || '-'}</td>
-                <td className="p-3">
-                  <button className="text-destructive hover:underline" onClick={() => setDeleteTarget(s.id)}>
+              <TableRow key={s.id}>
+                <TableCell className="font-medium">{s.name}</TableCell>
+                <TableCell><Badge variant="outline">{s.type.toUpperCase()}</Badge></TableCell>
+                <TableCell className="font-mono text-xs">{s.endpoint}{s.bucket ? ` / ${s.bucket}` : ''}</TableCell>
+                <TableCell>{s.prefix || '-'}</TableCell>
+                <TableCell className="font-mono text-xs">{s.accessKeyEnv || '-'}</TableCell>
+                <TableCell className="text-right">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-status-danger hover:text-status-danger"
+                    onClick={() => setDeleteTarget(s.id)}
+                  >
                     {t('common.delete', '删除')}
-                  </button>
-                </td>
-              </tr>
+                  </Button>
+                </TableCell>
+              </TableRow>
             ))}
             {(!storages || storages.length === 0) && !isLoading && (
-              <tr><td colSpan={6} className="p-3 text-center text-muted-foreground">{t('backupStorages.empty', '暂无存储后端')}</td></tr>
+              <TableRow>
+                <TableCell colSpan={6} className="h-16 text-center text-muted-foreground">{t('backupStorages.empty', '暂无存储后端')}</TableCell>
+              </TableRow>
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
 
       <DangerConfirm

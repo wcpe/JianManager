@@ -22,6 +22,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { Panel } from '@/components/ui/panel'
 import { Button } from '@/components/ui/button'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
 import DangerConfirm from '@/components/DangerConfirm'
 import {
@@ -129,24 +130,22 @@ function DirUsageSection({ data }: { data: StorageOverview }) {
 
   return (
     <Panel title={t('storage.dirsTitle')} bodyClassName="p-0">
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead className="bg-muted/40">
-            <tr>
-              <th className="px-3 py-1.5 text-left font-medium">{t('storage.dirLabel')}</th>
-              <th className="px-3 py-1.5 text-left font-medium">{t('storage.dirPath')}</th>
-              <th className="px-3 py-1.5 text-right font-medium">{t('storage.size')}</th>
-              <th className="px-3 py-1.5 text-right font-medium">{t('storage.files')}</th>
-              <th className="px-3 py-1.5 text-right font-medium">{t('common.actions')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {dirs.map((d) => (
-              <DirRow key={d.path} dir={d} />
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <Table className="text-xs">
+        <TableHeader className="bg-muted/40">
+          <TableRow>
+            <TableHead>{t('storage.dirLabel')}</TableHead>
+            <TableHead>{t('storage.dirPath')}</TableHead>
+            <TableHead className="text-right">{t('storage.size')}</TableHead>
+            <TableHead className="text-right">{t('storage.files')}</TableHead>
+            <TableHead className="text-right">{t('common.actions')}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {dirs.map((d) => (
+            <DirRow key={d.path} dir={d} />
+          ))}
+        </TableBody>
+      </Table>
     </Panel>
   )
 }
@@ -157,8 +156,8 @@ function DirRow({ dir }: { dir: DirUsage }) {
   const labelText = t(`storage.dirNames.${dir.label}`, { defaultValue: dir.label })
 
   return (
-    <tr className={cn('border-t', !dir.exists && 'text-muted-foreground/60')}>
-      <td className="px-3 py-1.5">
+    <TableRow className={cn(!dir.exists && 'text-muted-foreground/60')}>
+      <TableCell>
         <span className="inline-flex items-center gap-1.5">
           <Folder className="size-3.5 shrink-0 text-muted-foreground" />
           {labelText}
@@ -173,14 +172,14 @@ function DirRow({ dir }: { dir: DirUsage }) {
             </span>
           )}
         </span>
-      </td>
-      <td className="px-3 py-1.5 font-mono text-[11px] text-muted-foreground">{dir.path}</td>
-      <td className="px-3 py-1.5 text-right tabular-nums">{formatBytes(dir.size)}</td>
-      <td className="px-3 py-1.5 text-right tabular-nums">{dir.fileCount}</td>
-      <td className="px-3 py-1.5 text-right">
+      </TableCell>
+      <TableCell className="font-mono text-[11px] text-muted-foreground">{dir.path}</TableCell>
+      <TableCell className="text-right tabular-nums">{formatBytes(dir.size)}</TableCell>
+      <TableCell className="text-right tabular-nums">{dir.fileCount}</TableCell>
+      <TableCell className="text-right">
         {dir.clearable ? <ClearCacheButton size={dir.size} fileCount={dir.fileCount} /> : <span className="text-muted-foreground/40">—</span>}
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   )
 }
 
@@ -255,35 +254,33 @@ function ArchiveSection({ data }: { data: StorageOverview }) {
       }
       bodyClassName="p-0"
     >
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs">
-          <thead className="bg-muted/40">
-            <tr>
-              <th className="px-3 py-1.5 text-left font-medium">{t('storage.storageState')}</th>
-              <th className="px-3 py-1.5 text-right font-medium">{t('storage.assetCount')}</th>
-              <th className="px-3 py-1.5 text-right font-medium">{t('storage.size')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.key} className="border-t">
-                <td className="px-3 py-1.5">
-                  <span
-                    className={cn(
-                      'rounded px-1.5 py-0.5 text-[10px]',
-                      r.cold ? 'bg-muted text-muted-foreground' : 'bg-status-success/15 text-status-success',
-                    )}
-                  >
-                    {r.label}
-                  </span>
-                </td>
-                <td className="px-3 py-1.5 text-right tabular-nums">{r.count}</td>
-                <td className="px-3 py-1.5 text-right tabular-nums">{formatBytes(r.size)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <Table className="text-xs">
+        <TableHeader className="bg-muted/40">
+          <TableRow>
+            <TableHead>{t('storage.storageState')}</TableHead>
+            <TableHead className="text-right">{t('storage.assetCount')}</TableHead>
+            <TableHead className="text-right">{t('storage.size')}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((r) => (
+            <TableRow key={r.key}>
+              <TableCell>
+                <span
+                  className={cn(
+                    'rounded px-1.5 py-0.5 text-[10px]',
+                    r.cold ? 'bg-muted text-muted-foreground' : 'bg-status-success/15 text-status-success',
+                  )}
+                >
+                  {r.label}
+                </span>
+              </TableCell>
+              <TableCell className="text-right tabular-nums">{r.count}</TableCell>
+              <TableCell className="text-right tabular-nums">{formatBytes(r.size)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
     </Panel>
   )
 }
@@ -342,17 +339,17 @@ function BrowserSection() {
       ) : !entries || entries.length === 0 ? (
         <p className="px-3 py-8 text-center text-sm text-muted-foreground">{t('storage.emptyDir')}</p>
       ) : (
-        <table className="w-full text-xs">
-          <thead className="bg-muted/40">
-            <tr>
-              <th className="px-3 py-1.5 text-left font-medium">{t('storage.name')}</th>
-              <th className="px-3 py-1.5 text-right font-medium">{t('storage.size')}</th>
-            </tr>
-          </thead>
-          <tbody>
+        <Table className="text-xs">
+          <TableHeader className="bg-muted/40">
+            <TableRow>
+              <TableHead>{t('storage.name')}</TableHead>
+              <TableHead className="text-right">{t('storage.size')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {entries.map((e) => (
-              <tr key={e.name} className="border-t">
-                <td className="px-3 py-1.5">
+              <TableRow key={e.name}>
+                <TableCell>
                   {e.isDir ? (
                     <button
                       type="button"
@@ -368,14 +365,14 @@ function BrowserSection() {
                       {e.name}
                     </span>
                   )}
-                </td>
-                <td className="px-3 py-1.5 text-right tabular-nums text-muted-foreground">
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">
                   {e.isDir ? '—' : formatBytes(e.size)}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       )}
     </Panel>
   )

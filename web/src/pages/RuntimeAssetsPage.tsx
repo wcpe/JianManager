@@ -14,6 +14,7 @@ import {
 import { Panel } from '@/components/ui/panel'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { instanceStatusLevel, type StatusLevel } from '@/lib/threshold'
 import { cn } from '@/lib/utils'
 import DangerConfirm from '@/components/DangerConfirm'
@@ -112,25 +113,23 @@ function JDKSection({
       ) : (
         <>
           {/* 可视化：节点×版本引用矩阵——格内数字=该 vendor-major 在该节点上的引用实例数。 */}
-          <Panel title={t('runtimeAssets.jdkMatrixTitle')} bodyClassName="overflow-x-auto p-0">
-            <table className="w-full border-collapse text-xs">
-              <thead>
-                <tr className="bg-muted/50">
-                  <th className="sticky left-0 z-10 border-b border-r bg-muted/50 px-3 py-2 text-left font-medium">
-                    {t('runtimeAssets.node')}
-                  </th>
+          <Panel title={t('runtimeAssets.jdkMatrixTitle')} bodyClassName="p-0">
+            <Table className="text-xs">
+              <TableHeader className="bg-muted/50">
+                <TableRow>
+                  <TableHead className="sticky left-0 z-10 border-r bg-muted/50">{t('runtimeAssets.node')}</TableHead>
                   {matrix.columns.map((col) => (
-                    <th key={col.key} className="border-b px-3 py-2 text-center font-medium whitespace-nowrap">
+                    <TableHead key={col.key} className="text-center">
                       <div>{col.vendor}</div>
                       <div className="font-mono text-[10px] text-muted-foreground">Java {col.majorVersion}</div>
-                    </th>
+                    </TableHead>
                   ))}
-                </tr>
-              </thead>
-              <tbody>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {matrix.rows.map((row) => (
-                  <tr key={row.nodeId} className="border-b last:border-b-0">
-                    <td className="sticky left-0 z-10 border-r bg-card px-3 py-2 whitespace-nowrap">
+                  <TableRow key={row.nodeId}>
+                    <TableCell className="sticky left-0 z-10 border-r bg-card whitespace-nowrap">
                       <span className="inline-flex items-center gap-1.5">
                         <span
                           className={cn(
@@ -140,40 +139,34 @@ function JDKSection({
                         />
                         {row.nodeName || `#${row.nodeId}`}
                       </span>
-                    </td>
+                    </TableCell>
                     {matrix.columns.map((col) => {
                       const cell = row.cells[col.key]
                       if (!cell) {
                         return (
-                          <td key={col.key} className="px-3 py-2 text-center text-muted-foreground/40">
-                            ·
-                          </td>
+                          <TableCell key={col.key} className="text-center text-muted-foreground/40">·</TableCell>
                         )
                       }
                       // 引用越多色越深（冷热可视）：0=灰，>0=主色调深浅。
                       const hot = cell.refCount > 0
                       return (
-                        <td key={col.key} className="px-3 py-2 text-center">
+                        <TableCell key={col.key} className="text-center">
                           <span
                             className={cn(
                               'inline-flex min-w-7 items-center justify-center rounded px-1.5 py-0.5 font-mono',
-                              hot
-                                ? 'bg-primary/15 font-semibold text-primary'
-                                : 'bg-muted text-muted-foreground',
+                              hot ? 'bg-primary/15 font-semibold text-primary' : 'bg-muted text-muted-foreground',
                             )}
-                            title={cell.items
-                              .map((it) => `${it.version || it.vendor} · ${it.refCount}`)
-                              .join('\n')}
+                            title={cell.items.map((it) => `${it.version || it.vendor} · ${it.refCount}`).join('\n')}
                           >
                             {cell.refCount}
                           </span>
-                        </td>
+                        </TableCell>
                       )
                     })}
-                  </tr>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </Panel>
 
           {/* 明细：每个 JDK + 其引用实例（引用关系下钻 + 删除占用方提示）。 */}
@@ -395,26 +388,24 @@ function AssetSection({
             }
             bodyClassName="p-0"
           >
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-muted/40">
-                  <tr>
-                    <th className="px-3 py-1.5 text-left font-medium">{t('runtimeAssets.name')}</th>
-                    <th className="px-3 py-1.5 text-left font-medium">{t('runtimeAssets.version')}</th>
-                    <th className="px-3 py-1.5 text-left font-medium">{t('runtimeAssets.sha256')}</th>
-                    <th className="px-3 py-1.5 text-right font-medium">{t('runtimeAssets.size')}</th>
-                    <th className="px-3 py-1.5 text-center font-medium">{t('runtimeAssets.storage')}</th>
-                    <th className="px-3 py-1.5 text-center font-medium">{t('runtimeAssets.refs')}</th>
-                    <th className="px-3 py-1.5 text-right font-medium">{t('common.actions')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {g.items.map((a) => (
-                    <AssetRow key={a.id} asset={a} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <Table className="text-xs">
+              <TableHeader className="bg-muted/40">
+                <TableRow>
+                  <TableHead>{t('runtimeAssets.name')}</TableHead>
+                  <TableHead>{t('runtimeAssets.version')}</TableHead>
+                  <TableHead>{t('runtimeAssets.sha256')}</TableHead>
+                  <TableHead className="text-right">{t('runtimeAssets.size')}</TableHead>
+                  <TableHead className="text-center">{t('runtimeAssets.storage')}</TableHead>
+                  <TableHead className="text-center">{t('runtimeAssets.refs')}</TableHead>
+                  <TableHead className="text-right">{t('common.actions')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {g.items.map((a) => (
+                  <AssetRow key={a.id} asset={a} />
+                ))}
+              </TableBody>
+            </Table>
           </Panel>
         ))
       )}
@@ -450,14 +441,14 @@ function AssetRow({ asset }: { asset: AssetInfo }) {
         : t('runtimeAssets.storageHot')
 
   return (
-    <tr className="border-t">
-      <td className="px-3 py-1.5">{asset.name || '—'}</td>
-      <td className="px-3 py-1.5 text-muted-foreground">{asset.version || '—'}</td>
-      <td className="px-3 py-1.5 font-mono text-[11px] text-muted-foreground" title={asset.sha256}>
+    <TableRow>
+      <TableCell>{asset.name || '—'}</TableCell>
+      <TableCell className="text-muted-foreground">{asset.version || '—'}</TableCell>
+      <TableCell className="font-mono text-[11px] text-muted-foreground" title={asset.sha256}>
         {shortSha(asset.sha256)}
-      </td>
-      <td className="px-3 py-1.5 text-right tabular-nums">{formatBytes(asset.size)}</td>
-      <td className="px-3 py-1.5 text-center">
+      </TableCell>
+      <TableCell className="text-right tabular-nums">{formatBytes(asset.size)}</TableCell>
+      <TableCell className="text-center">
         <span
           className={cn(
             'rounded px-1.5 py-0.5 text-[10px]',
@@ -468,8 +459,8 @@ function AssetRow({ asset }: { asset: AssetInfo }) {
         >
           {storageLabel}
         </span>
-      </td>
-      <td className="px-3 py-1.5 text-center">
+      </TableCell>
+      <TableCell className="text-center">
         <span
           className={cn(
             'inline-flex min-w-6 justify-center rounded px-1.5 py-0.5 font-mono text-[11px]',
@@ -479,8 +470,8 @@ function AssetRow({ asset }: { asset: AssetInfo }) {
         >
           {asset.refCount}
         </span>
-      </td>
-      <td className="px-3 py-1.5 text-right">
+      </TableCell>
+      <TableCell className="text-right">
         <Button
           variant="ghost"
           size="icon-xs"
@@ -502,7 +493,7 @@ function AssetRow({ asset }: { asset: AssetInfo }) {
           onConfirm={onDelete}
           onCancel={() => setConfirming(false)}
         />
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   )
 }

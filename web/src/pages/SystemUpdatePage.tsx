@@ -18,6 +18,7 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import DangerConfirm from '@/components/DangerConfirm'
 import { ReleaseNotes } from '@/components/ReleaseNotes'
 import { formatRelativeTime } from '@/lib/relative-time'
@@ -327,31 +328,31 @@ function NodesSection({
         </Button>
       </div>
 
-      <div className="border rounded-lg overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-muted">
-            <tr>
-              <th className="p-3 text-left">{t('common.name', '名称')}</th>
-              <th className="p-3 text-left">{t('common.status', '状态')}</th>
-              <th className="p-3 text-left">{t('systemUpdate.platform', '平台')}</th>
-              <th className="p-3 text-left">{t('systemUpdate.current', '当前版本')}</th>
-              <th className="p-3 text-left">{t('systemUpdate.updateState', '更新状态')}</th>
-              <th className="p-3 text-left">{t('common.actions', '操作')}</th>
-            </tr>
-          </thead>
-          <tbody>
+      <div className="overflow-hidden rounded-lg border">
+        <Table>
+          <TableHeader className="bg-muted/50">
+            <TableRow>
+              <TableHead>{t('common.name', '名称')}</TableHead>
+              <TableHead>{t('common.status', '状态')}</TableHead>
+              <TableHead>{t('systemUpdate.platform', '平台')}</TableHead>
+              <TableHead>{t('systemUpdate.current', '当前版本')}</TableHead>
+              <TableHead>{t('systemUpdate.updateState', '更新状态')}</TableHead>
+              <TableHead className="text-right">{t('common.actions', '操作')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {nodes.map((n) => (
               <NodeRow key={n.nodeId} node={n} latest={latest} disabled={rolloutRunning} onUpgraded={onUpgraded} />
             ))}
             {nodes.length === 0 && (
-              <tr>
-                <td colSpan={6} className="p-3 text-center text-muted-foreground">
+              <TableRow>
+                <TableCell colSpan={6} className="h-16 text-center text-muted-foreground">
                   {t('systemUpdate.noNodes', '暂无节点')}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </div>
   )
@@ -395,22 +396,22 @@ function NodeRow({ node, latest, disabled, onUpgraded }: { node: ComponentStatus
   }
 
   return (
-    <tr className="border-t">
-      <td className="p-3">{node.name}</td>
-      <td className="p-3">
+    <TableRow>
+      <TableCell className="font-medium">{node.name}</TableCell>
+      <TableCell>
         {node.online ? (
           <Badge variant="outline" className="border-emerald-500/40 text-emerald-600">{t('systemUpdate.online', '在线')}</Badge>
         ) : (
           <Badge variant="outline" className="text-muted-foreground">{t('systemUpdate.offline', '离线')}</Badge>
         )}
-      </td>
-      <td className="p-3 font-mono text-xs">{node.os}/{node.arch}</td>
-      <td className="p-3 font-mono text-xs">{node.currentVersion || '-'}</td>
-      <td className="p-3">
+      </TableCell>
+      <TableCell className="font-mono text-xs">{node.os}/{node.arch}</TableCell>
+      <TableCell className="font-mono text-xs">{node.currentVersion || '-'}</TableCell>
+      <TableCell>
         <VersionBadge current={node.currentVersion} latest={latest} updateAvailable={node.updateAvailable} artifactAvailable={node.artifactAvailable} offline={!node.online} />
-      </td>
-      <td className="p-3">
-        <div className="flex items-center gap-1">
+      </TableCell>
+      <TableCell className="text-right">
+        <div className="flex items-center justify-end gap-1">
           <Button
             size="sm"
             variant="ghost"
@@ -455,8 +456,8 @@ function NodeRow({ node, latest, disabled, onUpgraded }: { node: ComponentStatus
           onConfirm={doRollback}
           onCancel={() => setConfirmRollback(false)}
         />
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   )
 }
 
@@ -511,29 +512,29 @@ function RolloutPanel({ rollout }: { rollout: Rollout }) {
         <span>{t('systemUpdate.rolloutPending', '待处理 {{n}}', { n: rollout.pending })}</span>
       </div>
 
-      <div className="border rounded-md overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-muted">
-            <tr>
-              <th className="p-2 text-left">{t('common.name', '名称')}</th>
-              <th className="p-2 text-left">{t('common.status', '状态')}</th>
-              <th className="p-2 text-left">{t('systemUpdate.versionChange', '版本变化')}</th>
-              <th className="p-2 text-left">{t('systemUpdate.detail', '详情')}</th>
-            </tr>
-          </thead>
-          <tbody>
+      <div className="overflow-hidden rounded-md border">
+        <Table>
+          <TableHeader className="bg-muted/50">
+            <TableRow>
+              <TableHead>{t('common.name', '名称')}</TableHead>
+              <TableHead>{t('common.status', '状态')}</TableHead>
+              <TableHead>{t('systemUpdate.versionChange', '版本变化')}</TableHead>
+              <TableHead>{t('systemUpdate.detail', '详情')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {rollout.nodes.map((n) => (
-              <tr key={n.nodeId} className="border-t">
-                <td className="p-2">{n.name}</td>
-                <td className="p-2"><RolloutNodeBadge state={n.state} /></td>
-                <td className="p-2 font-mono text-xs">
+              <TableRow key={n.nodeId}>
+                <TableCell className="font-medium">{n.name}</TableCell>
+                <TableCell><RolloutNodeBadge state={n.state} /></TableCell>
+                <TableCell className="font-mono text-xs">
                   {n.fromVersion || n.toVersion ? `${n.fromVersion || '?'} → ${n.toVersion || '?'}` : '-'}
-                </td>
-                <td className="p-2 text-xs text-destructive">{n.error || ''}</td>
-              </tr>
+                </TableCell>
+                <TableCell className="text-xs text-destructive">{n.error || ''}</TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </div>
   )

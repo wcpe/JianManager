@@ -36,6 +36,7 @@ import {
 } from '@/lib/client-readiness'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   Dialog,
   DialogContent,
@@ -605,71 +606,70 @@ function KeysSegment({
         </Button>
       </div>
 
-      <div className="border rounded-lg overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-muted">
-            <tr>
-              <th className="p-3 text-left">{t('common.name', '名称')}</th>
-              <th className="p-3 text-left">{t('clientChannels.keyPrefix', '前缀')}</th>
-              <th className="p-3 text-left">{t('common.status', '状态')}</th>
-              <th className="p-3 text-left">{t('clientChannels.expiresAt', '过期时间')}</th>
-              <th className="p-3 text-left">{t('clientChannels.lastUsed', '最近使用')}</th>
-              <th className="p-3 text-left">{t('common.actions', '操作')}</th>
-            </tr>
-          </thead>
-          <tbody>
+      <div className="overflow-hidden rounded-lg border">
+        <Table>
+          <TableHeader className="bg-muted/50">
+            <TableRow>
+              <TableHead>{t('common.name', '名称')}</TableHead>
+              <TableHead>{t('clientChannels.keyPrefix', '前缀')}</TableHead>
+              <TableHead>{t('common.status', '状态')}</TableHead>
+              <TableHead>{t('clientChannels.expiresAt', '过期时间')}</TableHead>
+              <TableHead>{t('clientChannels.lastUsed', '最近使用')}</TableHead>
+              <TableHead className="text-right">{t('common.actions', '操作')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {keys.map((k) => (
-              <tr key={k.id} className="border-t">
-                <td className="p-3">{k.name}</td>
-                <td className="p-3 font-mono text-xs">{k.keyPrefix}…</td>
-                <td className="p-3">
+              <TableRow key={k.id}>
+                <TableCell className="font-medium">{k.name}</TableCell>
+                <TableCell className="font-mono text-xs">{k.keyPrefix}…</TableCell>
+                <TableCell>
                   {k.revoked ? (
-                    <Badge variant="outline" className="text-destructive border-destructive/40">
+                    <Badge variant="outline" className="border-destructive/40 text-destructive">
                       {t('clientChannels.statusRevoked', '已吊销')}
                     </Badge>
                   ) : (
                     <Badge variant="outline">{t('clientChannels.statusActive', '有效')}</Badge>
                   )}
-                </td>
-                <td className="p-3 text-xs">{k.expiresAt ? new Date(k.expiresAt).toLocaleString() : '-'}</td>
-                <td className="p-3 text-xs">{k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleString() : '-'}</td>
-                <td className="p-3">
-                  <div className="flex gap-3">
-                    <button
-                      className="text-primary hover:underline inline-flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed disabled:no-underline"
+                </TableCell>
+                <TableCell className="text-xs">{k.expiresAt ? new Date(k.expiresAt).toLocaleString() : '-'}</TableCell>
+                <TableCell className="text-xs">{k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleString() : '-'}</TableCell>
+                <TableCell>
+                  <div className="flex justify-end gap-1">
+                    <Button
+                      variant="ghost"
+                      size="xs"
                       onClick={() => doReveal(k)}
                       disabled={!k.revealable || revealKey.isPending}
                       title={k.revealable ? undefined : t('clientChannels.notRevealable')}
                     >
                       <Eye className="size-3.5" /> {t('clientChannels.reveal', '查看')}
-                    </button>
-                    <button
-                      className="text-primary hover:underline inline-flex items-center gap-1 disabled:opacity-40"
-                      onClick={() => setEditTarget(k)}
-                      disabled={k.revoked}
-                    >
+                    </Button>
+                    <Button variant="ghost" size="xs" onClick={() => setEditTarget(k)} disabled={k.revoked}>
                       <Pencil className="size-3.5" /> {t('common.edit', '编辑')}
-                    </button>
-                    <button
-                      className="text-destructive hover:underline inline-flex items-center gap-1 disabled:opacity-40"
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="text-status-danger hover:text-status-danger"
                       onClick={() => setRevokeTarget(k)}
                       disabled={k.revoked}
                     >
                       <Ban className="size-3.5" /> {t('clientChannels.revoke', '吊销')}
-                    </button>
+                    </Button>
                   </div>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
             {keys.length === 0 && !loading && (
-              <tr>
-                <td colSpan={6} className="p-3 text-center text-muted-foreground">
+              <TableRow>
+                <TableCell colSpan={6} className="h-16 text-center text-muted-foreground">
                   {t('clientChannels.noKeys', '暂无密钥')}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
 
       <CreateKeyDialog

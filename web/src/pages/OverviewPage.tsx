@@ -10,6 +10,7 @@ import { StatusBadge } from '@/components/ui/status-badge'
 import { TimeSeriesChart, type ChartSeries } from '@/components/charts/TimeSeriesChart'
 import { RangePicker, type MetricRange } from '@/components/charts/RangePicker'
 import { instanceStatusLevel } from '@/lib/threshold'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 
 /** 字节 → 紧凑可读（G/M/K）。 */
 function fmtBytes(b: number): string {
@@ -84,33 +85,33 @@ export default function OverviewPage() {
 
       {/* 底部：密集实例表 */}
       <Panel title={t('dashboard.instanceList')} bodyClassName="p-0">
-        <table className="w-full text-[13px]">
-          <thead>
-            <tr className="border-b text-xs text-muted-foreground">
-              <th className="px-3 py-2 text-left font-medium">{t('instances.name')}</th>
-              <th className="px-3 py-2 text-left font-medium">{t('instances.type')}</th>
-              <th className="px-3 py-2 text-left font-medium">{t('instances.status')}</th>
-            </tr>
-          </thead>
-          <tbody>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{t('instances.name')}</TableHead>
+              <TableHead>{t('instances.type')}</TableHead>
+              <TableHead>{t('instances.status')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {instances?.map((inst) => (
-              <tr key={inst.id} className="border-b last:border-0 hover:bg-muted/40">
-                <td className="px-3 py-1.5 font-medium">{inst.name}</td>
-                <td className="px-3 py-1.5 text-muted-foreground">{inst.type}</td>
-                <td className="px-3 py-1.5">
+              <TableRow key={inst.id}>
+                <TableCell className="font-medium">{inst.name}</TableCell>
+                <TableCell className="text-muted-foreground">{inst.type}</TableCell>
+                <TableCell>
                   <StatusBadge level={instanceStatusLevel(inst.status)} label={inst.status} />
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
             {(!instances || instances.length === 0) && (
-              <tr>
-                <td colSpan={3} className="px-3 py-6 text-center text-muted-foreground">
+              <TableRow>
+                <TableCell colSpan={3} className="h-16 text-center text-muted-foreground">
                   {t('instances.empty')}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </Panel>
     </div>
   )

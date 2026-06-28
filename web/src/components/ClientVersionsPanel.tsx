@@ -11,6 +11,7 @@ import {
 } from '@/api/clientVersions'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   Dialog,
   DialogContent,
@@ -66,58 +67,56 @@ export default function ClientVersionsPanel({ channelId }: { channelId: string }
         </Button>
       </div>
 
-      <div className="border rounded-lg overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-muted">
-            <tr>
-              <th className="p-3 text-left">{t('clientVersions.version', '版本')}</th>
-              <th className="p-3 text-left">{t('clientVersions.fileCount', '文件数')}</th>
-              <th className="p-3 text-left">{t('clientVersions.note', '备注')}</th>
-              <th className="p-3 text-left">{t('clientVersions.createdAt', '发布时间')}</th>
-              <th className="p-3 text-left">{t('common.actions', '操作')}</th>
-            </tr>
-          </thead>
-          <tbody>
+      <div className="overflow-hidden rounded-lg border">
+        <Table>
+          <TableHeader className="bg-muted/50">
+            <TableRow>
+              <TableHead>{t('clientVersions.version', '版本')}</TableHead>
+              <TableHead>{t('clientVersions.fileCount', '文件数')}</TableHead>
+              <TableHead>{t('clientVersions.note', '备注')}</TableHead>
+              <TableHead>{t('clientVersions.createdAt', '发布时间')}</TableHead>
+              <TableHead className="text-right">{t('common.actions', '操作')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {(versions ?? []).map((v) => (
-              <tr key={v.version} className="border-t">
-                <td className="p-3">
+              <TableRow key={v.version}>
+                <TableCell>
                   <span className="font-mono">v{v.version}</span>
                   {v.isLatest && (
                     <Badge className="ml-2" variant="default">{t('clientVersions.latest', 'latest')}</Badge>
                   )}
-                </td>
-                <td className="p-3">{v.fileCount}</td>
-                <td className="p-3 max-w-[20rem] truncate" title={v.note}>{v.note || '-'}</td>
-                <td className="p-3 text-xs">{new Date(v.createdAt).toLocaleString()}</td>
-                <td className="p-3">
-                  <div className="flex gap-3">
-                    <button
-                      className="text-primary hover:underline inline-flex items-center gap-1"
-                      onClick={() => setDetailVersion(v.version)}
-                    >
+                </TableCell>
+                <TableCell>{v.fileCount}</TableCell>
+                <TableCell className="max-w-[20rem] truncate" title={v.note}>{v.note || '-'}</TableCell>
+                <TableCell className="text-xs">{new Date(v.createdAt).toLocaleString()}</TableCell>
+                <TableCell className="text-right">
+                  <div className="flex justify-end gap-1">
+                    <Button variant="ghost" size="xs" onClick={() => setDetailVersion(v.version)}>
                       <Eye className="size-3.5" /> {t('clientVersions.view', '查看')}
-                    </button>
-                    <button
-                      className="text-amber-600 dark:text-amber-500 hover:underline inline-flex items-center gap-1 disabled:opacity-40"
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
                       onClick={() => setRollbackTarget(v)}
                       disabled={v.isLatest}
                       title={v.isLatest ? t('clientVersions.alreadyLatest', '已是 latest') : ''}
                     >
                       <RotateCcw className="size-3.5" /> {t('clientVersions.rollback', '回滚')}
-                    </button>
+                    </Button>
                   </div>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
             {(!versions || versions.length === 0) && !isLoading && (
-              <tr>
-                <td colSpan={5} className="p-3 text-center text-muted-foreground">
+              <TableRow>
+                <TableCell colSpan={5} className="h-16 text-center text-muted-foreground">
                   {t('clientVersions.empty', '暂无版本，点击「发布新版本」开始')}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
 
       {detailVersion !== null && (

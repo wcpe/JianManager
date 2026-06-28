@@ -36,6 +36,7 @@ export default function ClientStatsPanel({ channelId }: { channelId: string }) {
     },
   ]
   const maxVersionReq = Math.max(1, ...(data?.versions ?? []).map((v) => v.requests))
+  const maxIpReq = Math.max(1, ...(data?.topIps ?? []).map((r) => r.count))
   const pct = (r: number) => `${(r * 100).toFixed(1)}%`
 
   return (
@@ -100,30 +101,19 @@ export default function ClientStatsPanel({ channelId }: { channelId: string }) {
       {/* 来源 IP Top 10 */}
       <section className="space-y-2">
         <h3 className="text-sm font-medium">{t('clientStats.topIps', '来源 IP（Top 10）')}</h3>
-        <div className="border rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-muted">
-              <tr>
-                <th className="p-2 text-left">{t('clientStats.ip', 'IP')}</th>
-                <th className="p-2 text-left">{t('clientStats.requestCount', '请求数')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(data?.topIps ?? []).map((row) => (
-                <tr key={row.ip} className="border-t">
-                  <td className="p-2 font-mono text-xs">{row.ip}</td>
-                  <td className="p-2 tabular-nums">{row.count}</td>
-                </tr>
-              ))}
-              {(data?.topIps ?? []).length === 0 && !isLoading && (
-                <tr>
-                  <td colSpan={2} className="p-3 text-center text-muted-foreground">
-                    {t('clientStats.empty', '暂无数据')}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div className="space-y-2 rounded-lg border p-3">
+          {(data?.topIps ?? []).length === 0 && !isLoading && (
+            <p className="text-xs text-muted-foreground">{t('clientStats.empty', '暂无数据')}</p>
+          )}
+          {(data?.topIps ?? []).map((row) => (
+            <div key={row.ip} className="flex items-center gap-2 text-xs">
+              <span className="w-28 shrink-0 truncate font-mono" title={row.ip}>{row.ip}</span>
+              <div className="h-4 flex-1 overflow-hidden rounded bg-muted">
+                <div className="h-full bg-primary" style={{ width: `${(row.count / maxIpReq) * 100}%` }} />
+              </div>
+              <span className="w-12 shrink-0 text-right tabular-nums">{row.count}</span>
+            </div>
+          ))}
         </div>
       </section>
 
