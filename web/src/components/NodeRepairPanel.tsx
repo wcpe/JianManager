@@ -12,6 +12,7 @@ import {
 } from '@/api/nodeRepair'
 import { Button } from '@/components/ui/button'
 import DangerConfirm from '@/components/DangerConfirm'
+import { copyToClipboard } from '@/lib/clipboard'
 
 /**
  * 坏节点修复面板（BUG-A / ADR-039 §2，FR-177 右栏分段）。
@@ -47,11 +48,10 @@ export default function NodeRepairPanel({ node, active = true }: NodeRepairPanel
 
   const selfSuspect = (suspects.data ?? []).find((s) => s.node.id === node.id)
 
-  const copySecret = (secret: string) => {
-    navigator.clipboard?.writeText(secret).then(
-      () => toast.success(t('nodeRepair.secretCopied')),
-      () => toast.error(t('common.copyFailed')),
-    )
+  const copySecret = async (secret: string) => {
+    const ok = await copyToClipboard(secret)
+    if (ok) toast.success(t('nodeRepair.secretCopied'))
+    else toast.error(t('common.copyFailed'))
   }
 
   if (disabled) {

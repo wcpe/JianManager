@@ -53,6 +53,7 @@ import { scrollableDialogContentClass, ScrollableDialogBody } from '@/components
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { FieldLabel, FieldError } from '@/components/ui/field-label'
 import { validateRequired, validateUrl, validateAbsPath, validateFields, hasErrors } from '@/lib/form-validation'
+import { copyToClipboard } from '@/lib/clipboard'
 import { cn } from '@/lib/utils'
 import DangerConfirm from '@/components/DangerConfirm'
 
@@ -364,12 +365,11 @@ function ApplyTemplateDialog({ template, onClose }: { template: TemplateInfo; on
   })
 
   const copyCommand = async () => {
-    try {
-      await navigator.clipboard.writeText(derivedCommand)
+    if (await copyToClipboard(derivedCommand)) {
       setCopied(true)
       toast.success(t('templates.market.copied'))
       setTimeout(() => setCopied(false), 1500)
-    } catch {
+    } else {
       toast.error(t('templates.market.copyFailed'))
     }
   }

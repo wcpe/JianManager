@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { useDirectorRender } from '@/lib/director-render'
+import { copyToClipboard } from '@/lib/clipboard'
 
 interface TerminalComponentProps {
   instanceId: string
@@ -120,7 +121,7 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
   const copySelection = useCallback(() => {
     const sel = termRef.current?.getSelection()
     if (sel) {
-      navigator.clipboard?.writeText(sel).catch(() => {})
+      void copyToClipboard(sel)
       termRef.current?.clearSelection()
     }
   }, [])
@@ -152,7 +153,7 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
   // 复制全部日志到剪贴板
   const copyAll = useCallback(() => {
     const text = getAllText()
-    if (text) navigator.clipboard?.writeText(text).catch(() => {})
+    if (text) void copyToClipboard(text)
   }, [getAllText])
 
   // 保存当前日志为本地文件

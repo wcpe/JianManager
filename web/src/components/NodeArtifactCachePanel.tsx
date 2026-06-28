@@ -10,6 +10,7 @@ import {
   type ArtifactCacheItem,
 } from '@/api/nodeRuntime'
 import { formatCacheBytes, capGiBToBytes, capBytesToGiB, describeCap } from '@/lib/artifact-cache'
+import { copyToClipboard } from '@/lib/clipboard'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import DangerConfirm from '@/components/DangerConfirm'
@@ -134,11 +135,10 @@ export default function NodeArtifactCachePanel({ nodeId, active = true }: NodeAr
                       type="button"
                       className="flex items-center gap-1 font-mono text-xs text-muted-foreground hover:text-foreground"
                       title={it.sha256}
-                      onClick={() => {
-                        navigator.clipboard?.writeText(it.sha256).then(
-                          () => toast.success(t('artifactCache.shaCopied')),
-                          () => toast.error(t('common.copyFailed')),
-                        )
+                      onClick={async () => {
+                        const ok = await copyToClipboard(it.sha256)
+                        if (ok) toast.success(t('artifactCache.shaCopied'))
+                        else toast.error(t('common.copyFailed'))
                       }}
                     >
                       <span>{it.sha256.slice(0, 12)}…</span>

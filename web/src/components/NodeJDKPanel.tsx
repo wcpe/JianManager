@@ -12,6 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import DangerConfirm from '@/components/DangerConfirm'
 import DirectoryPicker from '@/components/DirectoryPicker'
 import { validateAbsPath, validatePositiveInt } from '@/lib/form-validation'
+import { copyToClipboard } from '@/lib/clipboard'
 
 /** JDK 厂商集（foojay 支持，可自定义其它发行版）。 */
 const VENDOR_OPTIONS: ComboboxOption[] = [
@@ -114,11 +115,10 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
     )
   }
 
-  const copyPath = (p: string) => {
-    navigator.clipboard?.writeText(p).then(
-      () => toast.success(t('artifactCache.pathCopied')),
-      () => toast.error(t('common.copyFailed')),
-    )
+  const copyPath = async (p: string) => {
+    const ok = await copyToClipboard(p)
+    if (ok) toast.success(t('artifactCache.pathCopied'))
+    else toast.error(t('common.copyFailed'))
   }
 
   return (
