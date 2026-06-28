@@ -28,9 +28,9 @@ const SEGMENT_DOMAIN: Record<string, string> = {
   backups: 'nav.operations',
   'backup-storages': 'nav.operations',
   schedules: 'nav.operations',
+  'client-channels': 'nav.operations',
   // 系统
   'runtime-assets': 'nav.system',
-  'client-channels': 'nav.system',
   storage: 'nav.system',
   database: 'nav.system',
   'system-update': 'nav.system',
