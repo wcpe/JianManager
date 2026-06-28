@@ -290,6 +290,10 @@ func main() {
 	taskSvc.SetNotificationService(notificationSvc)
 	jdkSvc.SetTaskService(taskSvc)
 
+	// 统一通知中心（FR-216，见 ADR-048）：只读聚合站内信（定向消息）+ 告警事件（系统警报）
+	// 为一条通知流，页眉单铃铛 + 通知中心页消费。不新建表，标记已读下推到各源既有服务。
+	notificationFeedSvc := service.NewNotificationFeedService(db, notificationSvc, alertSvc)
+
 	// 平台配置：在 YAML+env 基线上叠加 DB 覆盖层，白名单项可运行时调整（FR-063/ADR-015）。
 	// 构造时重放已落库的可即时生效覆盖（如日志级别），保证重启后覆盖仍生效。
 	settingsSvc := service.NewSettingsService(db, cfg)
@@ -385,11 +389,12 @@ func main() {
 			ScriptBaseURL: cfg.Enroll.ScriptBaseURL,
 			BinaryURL:     cfg.Enroll.BinaryURL,
 		},
-		Storage:      storageSvc,
-		DBBrowse:     dbBrowseSvc,
-		SelfUpdate:   selfUpdateSvc,
-		Task:         taskSvc,
-		Notification: notificationSvc,
+		Storage:          storageSvc,
+		DBBrowse:         dbBrowseSvc,
+		SelfUpdate:       selfUpdateSvc,
+		Task:             taskSvc,
+		Notification:     notificationSvc,
+		NotificationFeed: notificationFeedSvc,
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）

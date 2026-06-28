@@ -75,6 +75,8 @@ type Services struct {
 	// 全局任务中心 + 站内信（FR-183，见 ADR-040）。
 	Task         *service.TaskService
 	Notification *service.NotificationService
+	// 统一通知中心（FR-216，见 ADR-048）：聚合站内信 + 告警为一条只读通知流。
+	NotificationFeed *service.NotificationFeedService
 }
 
 // Setup 创建并配置 Gin 路由引擎。
@@ -255,6 +257,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.Notification != nil {
 			notificationHandler := NewNotificationHandler(svcs.Notification)
 			notificationHandler.RegisterRoutes(protected)
+		}
+
+		// 统一通知中心（FR-216，见 ADR-048）：聚合站内信 + 告警为一条只读通知流，
+		// 页眉单铃铛 + 通知中心页消费。认证用户（消息按本人、告警全局）。
+		if svcs.NotificationFeed != nil {
+			notificationFeedHandler := NewNotificationFeedHandler(svcs.NotificationFeed)
+			notificationFeedHandler.RegisterRoutes(protected)
 		}
 	}
 
