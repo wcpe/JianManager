@@ -105,14 +105,15 @@
 
 ## 4. 任务拆分
 
-- [ ] 写本 IA spec（信息架构映射 + 路由映射 + 告警去向）
-- [ ] `ConsoleSidebar.tsx`：监控域→观测域（key/labelKey）+ 三子类（监控/日志/统计）+ 告警过渡留位；任务中心迁「系统·平台与维护」
-- [ ] `Workspace.tsx`：新增 `/statistics` 路由 + 三条兼容重定向（`/monitoring`、`/stats`、`/observability`）
-- [ ] 新建 `StatisticsPage.tsx`（占位空状态）
-- [ ] `breadcrumb.ts` / `pageTitle.ts`：域归属改名 + 补 statistics/tasks 映射
-- [ ] i18n zh/en：新增 `nav.observability`、`nav.statistics`、`statistics.placeholder`
-- [ ] vitest：侧栏渲染含观测{监控/日志/统计}、任务中心在系统、旧路径重定向、breadcrumb 域归属
-- [ ] 文档同步：PRD FR-215 状态、ARCHITECTURE 前端导航章节
+- [x] 写本 IA spec（信息架构映射 + 路由映射 + 告警去向）
+- [x] `ConsoleSidebar.tsx`：监控域→观测域（key/labelKey）+ 三子类（监控/日志/统计）+ 告警过渡留位；任务中心迁「系统·平台与维护」
+- [x] `Workspace.tsx`：新增 `/statistics` 路由 + 三条兼容重定向（`/monitoring`、`/stats`、`/observability`）
+- [x] 新建 `StatisticsPage.tsx`（占位空状态）
+- [x] `breadcrumb.ts` / `pageTitle.ts`：域归属改名 + 补 statistics/tasks 映射
+- [x] i18n zh/en：新增 `nav.observability`、`nav.statistics`、`statistics.placeholder`
+- [x] vitest：侧栏渲染含观测{监控/日志/统计}、任务中心在系统、旧路径重定向、breadcrumb 域归属
+- [x] 文档同步：PRD FR-215 状态、ARCHITECTURE 前端导航章节
+- [ ] 真机验收（需用户确认）
 
 ## 5. 验收标准
 
