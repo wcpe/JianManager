@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Copy, Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { copyToClipboard } from '@/lib/clipboard'
 import { useUpdaterJarsInfo, downloadUpdaterJar } from '@/api/clientChannels'
 
 /**
@@ -32,12 +33,9 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
   const javaagentArg = '-javaagent:jm-updater\\wedge.jar'
 
   const copy = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text)
-      toast.success(t('clientGuide.copied', '已复制'))
-    } catch {
-      toast.error(t('clientGuide.copyFailed', '复制失败'))
-    }
+    const ok = await copyToClipboard(text)
+    if (ok) toast.success(t('clientGuide.copied', '已复制'))
+    else toast.error(t('clientGuide.copyFailed', '复制失败'))
   }
 
   const download = async (comp: 'wedge' | 'core') => {

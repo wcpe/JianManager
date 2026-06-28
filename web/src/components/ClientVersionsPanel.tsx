@@ -1,7 +1,7 @@
 import { useState, type ChangeEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Upload, RotateCcw, Eye, Trash2, Loader2 } from 'lucide-react'
+import { Upload, RotateCcw, Eye, Trash2, Loader2, ArrowLeft, ArrowRight, Check } from 'lucide-react'
 import {
   useClientVersions,
   useClientVersion,
@@ -11,6 +11,16 @@ import {
   type ClientVersionSummary,
   type ManifestFile,
 } from '@/api/clientVersions'
+import {
+  PUBLISH_STEPS,
+  canAdvance,
+  canPublish,
+  nextStep,
+  prevStep,
+  parseManagedDirs,
+  type PublishStepId,
+} from '@/lib/client-publish-wizard'
+import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -172,16 +182,26 @@ interface DraftFile {
   codec: string
 }
 
+/** 向导步骤的标题 i18n 键（顺序与 PUBLISH_STEPS 对齐）。 */
+const PUBLISH_STEP_META: Record<PublishStepId, { key: string; fallback: string }> = {
+  files: { key: 'clientVersions.stepFiles', fallback: '选择文件' },
+  configure: { key: 'clientVersions.stepConfigure', fallback: '逐文件配置' },
+  meta: { key: 'clientVersions.stepMeta', fallback: '托管目录 / 说明' },
+  review: { key: 'clientVersions.stepReview', fallback: '预览发布' },
+}
+
 /**
- * 完整发布向导：上传文件（codec=none，服务端入库即算 sha256/md5/size 自动填充）→
- * 逐文件设 path/sync/platform → 设 managedDirs + 备注 → 发布。
- * zstd 压缩打包不在本期（FR-097）；向导产出 codec=none 版本。
+ * 分步发布向导（FR-187，增强 FR-088）：选文件 → 逐文件配置 path/sync/platform →
+ * 托管目录/说明 → 预览 → 发布。复用 usePublishClientFile/usePublishClientVersion 与后端
+ * `POST .../files`、`POST .../versions`，不改后端。内容自适应壳：头/脚（步骤导航）固定、正文超高内部滚动。
+ * 上传 codec=none（服务端入库即算 sha256/md5/size 自动填充）；zstd 压缩打包不在本期（FR-097）。
  */
 function PublishWizard({ channelId, onClose }: { channelId: string; onClose: () => void }) {
   const { t } = useTranslation()
   const uploadFile = usePublishClientFile()
   const publish = usePublishClientVersion()
 
+  const [step, setStep] = useState<PublishStepId>('files')
   const [drafts, setDrafts] = useState<DraftFile[]>([])
   const [managedDirs, setManagedDirs] = useState('mods, config, resourcepacks')
   const [note, setNote] = useState('')
@@ -221,19 +241,12 @@ function PublishWizard({ channelId, onClose }: { channelId: string; onClose: () 
 
   const removeDraft = (i: number) => setDrafts((prev) => prev.filter((_, idx) => idx !== i))
 
-  const parseManagedDirs = (): string[] => {
-    const seen = new Set<string>()
-    return managedDirs
-      .split(/[\n,]/)
-      .map((s) => s.trim().replace(/\/+$/, ''))
-      .filter((s) => s !== '' && !seen.has(s) && (seen.add(s), true))
-  }
-
-  const pathsValid = drafts.every((d) => d.path.trim() !== '' && !d.path.startsWith('/') && !d.path.includes('..'))
-  const canPublish = drafts.length > 0 && pathsValid && !uploading && !publish.isPending
+  const wizardState = { draftCount: drafts.length, paths: drafts.map((d) => d.path), uploading }
+  const parsedDirs = parseManagedDirs(managedDirs)
+  const publishable = canPublish(wizardState) && !publish.isPending
 
   const doPublish = async () => {
-    if (!canPublish) return
+    if (!publishable) return
     // codec=none：file 原始内容元数据 = artifact 元数据（上传的就是原始文件）。
     const files: ManifestFile[] = drafts.map((d) => ({
       path: d.path.trim(),
@@ -245,7 +258,7 @@ function PublishWizard({ channelId, onClose }: { channelId: string; onClose: () 
       artifact: { sha256: d.sha256, size: d.size, codec: d.codec },
     }))
     try {
-      const res = await publish.mutateAsync({ channelId, files, managedDirs: parseManagedDirs(), note })
+      const res = await publish.mutateAsync({ channelId, files, managedDirs: parsedDirs, note })
       toast.success(t('clientVersions.published', '已发布 v{{n}}', { n: (res as { version?: number })?.version ?? '' }))
       onClose()
     } catch (err) {
@@ -263,112 +276,235 @@ function PublishWizard({ channelId, onClose }: { channelId: string; onClose: () 
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollableDialogBody className="space-y-4">
-          <div>
-            <label className="inline-flex items-center gap-2 px-4 py-2 border rounded-md hover:bg-accent cursor-pointer text-sm">
-              {uploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
-              {t('clientVersions.addFiles', '添加文件')}
-              <input type="file" multiple className="hidden" onChange={onPickFiles} disabled={uploading} />
-            </label>
-            <span className="ml-2 text-xs text-muted-foreground">
-              {t('clientVersions.filesCount', '{{n}} 个文件', { n: drafts.length })}
-            </span>
-          </div>
+        <PublishStepIndicator step={step} />
 
-          {drafts.length > 0 && (
-            <div className="border rounded-lg overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-muted">
-                  <tr>
-                    <th className="p-2 text-left">{t('clientVersions.path', '路径')}</th>
-                    <th className="p-2 text-left">{t('clientVersions.sync', '同步')}</th>
-                    <th className="p-2 text-left">{t('clientVersions.platform', '平台')}</th>
-                    <th className="p-2 text-left">{t('clientVersions.size', '大小')}</th>
-                    <th className="p-2"></th>
-                  </tr>
-                </thead>
-                <tbody>
+        <ScrollableDialogBody className="space-y-4">
+          {step === 'files' && (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                {t('clientVersions.stepFilesDesc', '选择要发布的客户端文件（mod、配置、资源包等）。上传后自动计算校验和。')}
+              </p>
+              <div>
+                <label className="inline-flex items-center gap-2 px-4 py-2 border rounded-md hover:bg-accent cursor-pointer text-sm">
+                  {uploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+                  {t('clientVersions.addFiles', '添加文件')}
+                  <input type="file" multiple className="hidden" onChange={onPickFiles} disabled={uploading} />
+                </label>
+                <span className="ml-2 text-xs text-muted-foreground">
+                  {t('clientVersions.filesCount', '{{n}} 个文件', { n: drafts.length })}
+                </span>
+              </div>
+              {drafts.length > 0 && (
+                <ul className="border rounded-lg divide-y text-sm">
                   {drafts.map((d, i) => (
-                    <tr key={`${d.sha256}-${i}`} className="border-t align-top">
-                      <td className="p-2">
-                        <input
-                          className="w-full p-1.5 border rounded bg-background font-mono text-xs aria-invalid:border-destructive"
-                          value={d.path}
-                          aria-invalid={d.path.trim() === '' || d.path.startsWith('/') || d.path.includes('..')}
-                          onChange={(e) => patchDraft(i, { path: e.target.value })}
-                        />
-                        <span className="text-[10px] text-muted-foreground">{d.filename}</span>
-                      </td>
-                      <td className="p-2">
-                        <Select value={d.sync} onValueChange={(v: string) => patchDraft(i, { sync: v as ManifestFile['sync'] })}>
-                          <SelectTrigger size="sm" className="w-28"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="strict">{t('clientVersions.syncStrict', 'strict 强制')}</SelectItem>
-                            <SelectItem value="once">{t('clientVersions.syncOnce', 'once 仅缺失')}</SelectItem>
-                            <SelectItem value="ignore">{t('clientVersions.syncIgnore', 'ignore 不动')}</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </td>
-                      <td className="p-2">
-                        <Select
-                          value={d.platform === '' ? PLATFORM_ALL : d.platform}
-                          onValueChange={(v: string) => patchDraft(i, { platform: (v === PLATFORM_ALL ? '' : v) as ManifestFile['platform'] })}
-                        >
-                          <SelectTrigger size="sm" className="w-28"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value={PLATFORM_ALL}>{t('clientVersions.platformAll', '全平台')}</SelectItem>
-                            <SelectItem value="windows">windows</SelectItem>
-                            <SelectItem value="macos">macos</SelectItem>
-                            <SelectItem value="linux">linux</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </td>
-                      <td className="p-2 text-xs text-muted-foreground whitespace-nowrap">{formatBytes(d.size)}</td>
-                      <td className="p-2">
+                    <li key={`${d.sha256}-${i}`} className="flex items-center justify-between gap-2 p-2">
+                      <span className="font-mono text-xs truncate">{d.filename}</span>
+                      <span className="flex items-center gap-2 shrink-0">
+                        <span className="text-xs text-muted-foreground whitespace-nowrap">{formatBytes(d.size)}</span>
                         <button className="text-destructive hover:opacity-70" onClick={() => removeDraft(i)} aria-label={t('common.delete', '删除')}>
                           <Trash2 className="size-4" />
                         </button>
-                      </td>
-                    </tr>
+                      </span>
+                    </li>
                   ))}
-                </tbody>
-              </table>
+                </ul>
+              )}
             </div>
           )}
 
-          <label className="flex flex-col gap-1 text-sm">
-            {t('clientVersions.managedDirs', '托管目录')}
-            <input
-              className="p-2 border rounded bg-background font-mono text-xs"
-              value={managedDirs}
-              onChange={(e) => setManagedDirs(e.target.value)}
-              placeholder="mods, config, resourcepacks"
-            />
-            <span className="text-xs text-muted-foreground">
-              {t('clientVersions.managedDirsHint', '逗号/换行分隔。仅这些目录内会删除「本地有但清单未列」的文件（减量）。')}
-            </span>
-          </label>
+          {step === 'configure' && (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                {t('clientVersions.stepConfigureDesc', '为每个文件设置游戏目录内的目标相对路径、同步策略与适用平台。')}
+              </p>
+              <div className="border rounded-lg overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted">
+                    <tr>
+                      <th className="p-2 text-left">{t('clientVersions.path', '路径')}</th>
+                      <th className="p-2 text-left">{t('clientVersions.sync', '同步')}</th>
+                      <th className="p-2 text-left">{t('clientVersions.platform', '平台')}</th>
+                      <th className="p-2 text-left">{t('clientVersions.size', '大小')}</th>
+                      <th className="p-2"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {drafts.map((d, i) => (
+                      <tr key={`${d.sha256}-${i}`} className="border-t align-top">
+                        <td className="p-2">
+                          <input
+                            className="w-full p-1.5 border rounded bg-background font-mono text-xs aria-invalid:border-destructive"
+                            value={d.path}
+                            aria-invalid={d.path.trim() === '' || d.path.startsWith('/') || d.path.includes('..')}
+                            onChange={(e) => patchDraft(i, { path: e.target.value })}
+                          />
+                          <span className="text-[10px] text-muted-foreground">{d.filename}</span>
+                        </td>
+                        <td className="p-2">
+                          <Select value={d.sync} onValueChange={(v: string) => patchDraft(i, { sync: v as ManifestFile['sync'] })}>
+                            <SelectTrigger size="sm" className="w-28"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="strict">{t('clientVersions.syncStrict', 'strict 强制')}</SelectItem>
+                              <SelectItem value="once">{t('clientVersions.syncOnce', 'once 仅缺失')}</SelectItem>
+                              <SelectItem value="ignore">{t('clientVersions.syncIgnore', 'ignore 不动')}</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </td>
+                        <td className="p-2">
+                          <Select
+                            value={d.platform === '' ? PLATFORM_ALL : d.platform}
+                            onValueChange={(v: string) => patchDraft(i, { platform: (v === PLATFORM_ALL ? '' : v) as ManifestFile['platform'] })}
+                          >
+                            <SelectTrigger size="sm" className="w-28"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value={PLATFORM_ALL}>{t('clientVersions.platformAll', '全平台')}</SelectItem>
+                              <SelectItem value="windows">windows</SelectItem>
+                              <SelectItem value="macos">macos</SelectItem>
+                              <SelectItem value="linux">linux</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </td>
+                        <td className="p-2 text-xs text-muted-foreground whitespace-nowrap">{formatBytes(d.size)}</td>
+                        <td className="p-2">
+                          <button className="text-destructive hover:opacity-70" onClick={() => removeDraft(i)} aria-label={t('common.delete', '删除')}>
+                            <Trash2 className="size-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
-          <label className="flex flex-col gap-1 text-sm">
-            {t('clientVersions.note', '备注')}
-            <input
-              className="p-2 border rounded bg-background"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder={t('clientVersions.notePlaceholder', '如：更新 mods 至 1.20.4')}
-            />
-          </label>
+          {step === 'meta' && (
+            <div className="space-y-4">
+              <label className="flex flex-col gap-1 text-sm">
+                {t('clientVersions.managedDirs', '托管目录')}
+                <input
+                  className="p-2 border rounded bg-background font-mono text-xs"
+                  value={managedDirs}
+                  onChange={(e) => setManagedDirs(e.target.value)}
+                  placeholder="mods, config, resourcepacks"
+                />
+                <span className="text-xs text-muted-foreground">
+                  {t('clientVersions.managedDirsHint', '逗号/换行分隔。仅这些目录内会删除「本地有但清单未列」的文件（减量）。')}
+                </span>
+              </label>
+
+              <label className="flex flex-col gap-1 text-sm">
+                {t('clientVersions.note', '备注')}
+                <input
+                  className="p-2 border rounded bg-background"
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder={t('clientVersions.notePlaceholder', '如：更新 mods 至 1.20.4')}
+                />
+              </label>
+            </div>
+          )}
+
+          {step === 'review' && (
+            <div className="space-y-4 text-sm">
+              <p className="text-muted-foreground">
+                {t('clientVersions.stepReviewDesc', '确认下列内容无误后发布。发布即以更高版本号切为 latest，玩家侧将拉取此版本。')}
+              </p>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
+                <dt className="text-muted-foreground">{t('clientVersions.fileCount', '文件数')}</dt>
+                <dd>{drafts.length}</dd>
+                <dt className="text-muted-foreground">{t('clientVersions.managedDirs', '托管目录')}</dt>
+                <dd className="font-mono text-xs">{parsedDirs.join(', ') || '-'}</dd>
+                <dt className="text-muted-foreground">{t('clientVersions.note', '备注')}</dt>
+                <dd>{note || t('clientVersions.noNote', '（无备注）')}</dd>
+              </dl>
+              <div className="border rounded-lg overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted">
+                    <tr>
+                      <th className="p-2 text-left">{t('clientVersions.path', '路径')}</th>
+                      <th className="p-2 text-left">{t('clientVersions.sync', '同步')}</th>
+                      <th className="p-2 text-left">{t('clientVersions.platform', '平台')}</th>
+                      <th className="p-2 text-left">{t('clientVersions.size', '大小')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {drafts.map((d, i) => (
+                      <tr key={`${d.sha256}-${i}`} className="border-t">
+                        <td className="p-2 font-mono text-xs">{d.path}</td>
+                        <td className="p-2">{d.sync}</td>
+                        <td className="p-2">{d.platform || t('clientVersions.platformAll', '全平台')}</td>
+                        <td className="p-2 text-xs whitespace-nowrap">{formatBytes(d.size)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </ScrollableDialogBody>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>{t('common.cancel', '取消')}</Button>
-          <Button disabled={!canPublish} onClick={doPublish}>
-            {publish.isPending && <Loader2 className="size-4 animate-spin" />}
-            {t('clientVersions.publish', '发布新版本')}
+        <DialogFooter className="sm:justify-between">
+          <Button variant="outline" onClick={() => (step === 'files' ? onClose() : setStep(prevStep(step)))}>
+            {step === 'files' ? (
+              t('common.cancel', '取消')
+            ) : (
+              <>
+                <ArrowLeft className="size-4" /> {t('clientVersions.prevStep', '上一步')}
+              </>
+            )}
           </Button>
+          {step === 'review' ? (
+            <Button disabled={!publishable} onClick={doPublish}>
+              {publish.isPending && <Loader2 className="size-4 animate-spin" />}
+              {t('clientVersions.publish', '发布新版本')}
+            </Button>
+          ) : (
+            <Button disabled={!canAdvance(step, wizardState)} onClick={() => setStep(nextStep(step))}>
+              {t('clientVersions.nextStep', '下一步')} <ArrowRight className="size-4" />
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** 发布向导步骤指示器（顶部固定、纯展示）。 */
+function PublishStepIndicator({ step }: { step: PublishStepId }) {
+  const { t } = useTranslation()
+  const activeIndex = PUBLISH_STEPS.indexOf(step)
+  return (
+    <ol className="flex items-center gap-1.5 flex-wrap text-xs">
+      {PUBLISH_STEPS.map((s, i) => {
+        const meta = PUBLISH_STEP_META[s]
+        const done = i < activeIndex
+        const active = i === activeIndex
+        return (
+          <li key={s} className="flex items-center gap-1.5">
+            <span
+              className={cn(
+                'flex items-center gap-1.5 rounded-full px-2.5 py-1',
+                active && 'bg-primary/10 text-primary font-medium',
+                done && 'text-muted-foreground',
+                !active && !done && 'text-muted-foreground/60',
+              )}
+            >
+              <span
+                className={cn(
+                  'grid size-4 shrink-0 place-items-center rounded-full text-[10px]',
+                  active ? 'bg-primary text-primary-foreground' : done ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-500' : 'bg-muted',
+                )}
+              >
+                {done ? <Check className="size-2.5" /> : i + 1}
+              </span>
+              {t(meta.key, meta.fallback)}
+            </span>
+            {i < PUBLISH_STEPS.length - 1 && <ArrowRight className="size-3 text-muted-foreground/40" />}
+          </li>
+        )
+      })}
+    </ol>
   )
 }
 
