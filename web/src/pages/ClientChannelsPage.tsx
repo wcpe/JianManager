@@ -296,6 +296,8 @@ function ChannelWorkbench({ channelId, onBack }: { channelId: string; onBack: ()
 
   const [tab, setTab] = useState<WorkbenchTab>('keys')
   const [deleteChannel, setDeleteChannel] = useState(false)
+  // 就绪度步骤器「创建密钥」CTA 直接开建密钥模态（BUG-E）：开关上提到工作台、随 tab 自动归零。
+  const [keyCreateOpen, setKeyCreateOpen] = useState(false)
 
   const keyCount = detail?.keys?.length ?? 0
   const steps = useMemo(
@@ -340,7 +342,13 @@ function ChannelWorkbench({ channelId, onBack }: { channelId: string; onBack: ()
         </button>
       </div>
 
-      <ReadinessStepper steps={steps} onGoto={setTab} />
+      <ReadinessStepper
+        steps={steps}
+        onCta={(id) => {
+          setTab(STEP_META[id].goto)
+          if (id === 'keys') setKeyCreateOpen(true)
+        }}
+      />
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as WorkbenchTab)}>
         <TabsList variant="line">
@@ -350,7 +358,13 @@ function ChannelWorkbench({ channelId, onBack }: { channelId: string; onBack: ()
           <TabsTrigger value="guide">{t('clientGuide.tab', '接入指引')}</TabsTrigger>
         </TabsList>
         <TabsContent value="keys">
-          <KeysSegment channelId={channelId} keys={detail?.keys ?? []} loading={isLoading} />
+          <KeysSegment
+            channelId={channelId}
+            keys={detail?.keys ?? []}
+            loading={isLoading}
+            createOpen={keyCreateOpen && tab === 'keys'}
+            onCreateOpenChange={setKeyCreateOpen}
+          />
         </TabsContent>
         <TabsContent value="versions">
           <ClientVersionsPanel channelId={channelId} />
@@ -421,7 +435,7 @@ const STEP_META: Record<
 }
 
 /** 顶部常驻就绪度步骤器（纯展示，状态由 detail 推导）。 */
-function ReadinessStepper({ steps, onGoto }: { steps: ReadinessStep[]; onGoto: (tab: WorkbenchTab) => void }) {
+function ReadinessStepper({ steps, onCta }: { steps: ReadinessStep[]; onCta: (stepId: ReadinessStepId) => void }) {
   const { t } = useTranslation()
   const current = steps.find((s) => s.current)
   const completed = readinessCompletedCount(steps)
@@ -476,7 +490,7 @@ function ReadinessStepper({ steps, onGoto }: { steps: ReadinessStep[]; onGoto: (
         <div className="flex items-center justify-between gap-3 flex-wrap rounded-lg bg-muted/40 px-3 py-2">
           <p className="text-xs text-muted-foreground">{t(STEP_META[current.id].hintKey, STEP_META[current.id].hintFallback)}</p>
           {STEP_META[current.id].ctaKey && (
-            <Button size="sm" variant="outline" className="shrink-0" onClick={() => onGoto(STEP_META[current.id].goto)}>
+            <Button size="sm" variant="outline" className="shrink-0" onClick={() => onCta(current.id)}>
               {t(STEP_META[current.id].ctaKey, STEP_META[current.id].ctaFallback)}
               <ArrowRight className="size-3.5" />
             </Button>
@@ -488,12 +502,23 @@ function ReadinessStepper({ steps, onGoto }: { steps: ReadinessStep[]; onGoto: (
 }
 
 /** 密钥分段：列表 + 「创建密钥」模态 + 轮换/吊销（DangerConfirm）+ 一次性明文弹窗。 */
-function KeysSegment({ channelId, keys, loading }: { channelId: string; keys: ClientPullKey[]; loading: boolean }) {
+function KeysSegment({
+  channelId,
+  keys,
+  loading,
+  createOpen,
+  onCreateOpenChange,
+}: {
+  channelId: string
+  keys: ClientPullKey[]
+  loading: boolean
+  createOpen: boolean
+  onCreateOpenChange: (v: boolean) => void
+}) {
   const { t } = useTranslation()
   const rotateKey = useRotateClientKey()
   const revokeKey = useRevokeClientKey()
 
-  const [createOpen, setCreateOpen] = useState(false)
   const [secret, setSecret] = useState<ClientKeyWithSecret | null>(null)
   const [revokeTarget, setRevokeTarget] = useState<ClientPullKey | null>(null)
   const [rotateTarget, setRotateTarget] = useState<ClientPullKey | null>(null)
@@ -526,7 +551,7 @@ function KeysSegment({ channelId, keys, loading }: { channelId: string; keys: Cl
         <p className="text-sm text-muted-foreground max-w-2xl">
           {t('clientChannels.keysSubtitle', '拉取密钥落库只存哈希，明文仅创建/轮换时一次性显示。请妥善保存到 jm-updater.json。')}
         </p>
-        <Button onClick={() => setCreateOpen(true)} className="shrink-0">
+        <Button onClick={() => onCreateOpenChange(true)} className="shrink-0">
           <Plus className="size-4" /> {t('clientChannels.createKey', '创建密钥')}
         </Button>
       </div>
@@ -593,7 +618,7 @@ function KeysSegment({ channelId, keys, loading }: { channelId: string; keys: Cl
       <CreateKeyDialog
         channelId={channelId}
         open={createOpen}
-        onOpenChange={setCreateOpen}
+        onOpenChange={onCreateOpenChange}
         onCreated={(s) => setSecret(s)}
       />
 
