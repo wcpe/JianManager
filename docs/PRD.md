@@ -269,7 +269,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-216 | 通知中心：站内信（定向消息）+ 告警（系统警报）合并为统一通知流，页眉单铃铛入口（下拉预览）+ 独立「通知中心」页（按类型筛选/已读/查询），侧栏置「系统/账户与审计」（**需 spec + ADR-048 统一通知模型**，依赖 FR-215 落点） | P1 | 🔨 开发中（ADR-048[视图聚合不新建表] + spec 已写；后端 NotificationFeedService 聚合 notifications+alert_events 为一条通知流 + 端点 `GET /notifications/feed{,/unread-count}` + `POST .../read-all` + `.../:source/:id/read`，表驱动单测全绿；前端页眉合并单通知铃铛、通知中心页[类型筛选/仅未读/关键字/分页/已读]、侧栏收口告警过渡位 + 通知中心入口落系统·账户与审计、breadcrumb/mock/i18n；go build/vet/test + 前端 tsc/lint/build/vitest 全绿。待真机验：真造站内信+告警后页眉下拉与通知中心统一流、筛选/标记已读端到端） |
 | FR-217 | 客户端分发观测数据底座：定时聚合客户端遥测（FR-093 events）为时序快照——拉取/更新次数、活跃客户端（machineId 去重）、版本分布与滞后、更新成功率/fail-static、下载字节/CAS 命中、平台分布；新快照表 + 定时聚合任务 + 查询端点（总 + 按频道/时间筛选）（**需 spec + ADR-049，复用 ADR-013 分级降采样思路**） | P1 | 🔨 开发中（后端落地：快照表 client_dist_snapshots + ClientDistObservabilityService 卷积/查询 + GET /client-dist/observability，单测全绿；spec + ADR-049 已写；待真机验：真有遥测数据下的端到端聚合与监控页消费 FR-218/219） |
 | FR-218 | 观测·客户端分发监控页：消费 FR-217 数据出时序趋势 + 分布/榜单，总览 + 可筛单频道（前端消费既有端点，免 spec，依赖 FR-217） | P2 | 📋 计划 |
-| FR-219 | 客户端分发频道工作台「统计」Tab 扩充维度：复用 FR-217 数据加 活跃客户端/版本分布/更新成功率/平台分布 等（增强既有频道统计，免 spec，依赖 FR-217） | P2 | 📋 计划 |
+| FR-219 | 客户端分发频道工作台「统计」Tab 扩充维度：复用 FR-217 数据加 活跃客户端/版本分布/更新成功率/平台分布 等（增强既有频道统计，免 spec，依赖 FR-217） | P2 | 🔨 开发中（前端落地：ClientStatsPanel 调 GET /client-dist/observability?channelId 扩充活跃客户端去重含精确/近似口径 + 版本分布与滞后占比 + 更新成功率/fail-static 率 + 平台分布，与 FR-095 按日看板并存；useClientDistObservability hook + i18n zh/en + vitest 全绿；待真机验：真有遥测数据下的频道统计维度） |
 | FR-220 | 观测·统计页补齐：观测三子类之一的「统计」页做成平台级聚合统计（节点/实例/玩家/分发等概览聚合，独立于 FR-219 的频道统计 Tab）（**需 spec**，依赖 FR-215） | P1 | 📋 计划 |
 | FR-221 | 观测·监控时序剖析增强（**增强 FR-060**，非净新——节点/实例时序底座 ADR-013 已交付）：在既有三档降采样时序上加 多指标对比/叠加、下钻（节点→实例→世界）、自定义聚合粒度、关键指标概览，让全站指标更精准剖析（免 spec，依赖 FR-215） | P2 | 📋 计划 |
 
