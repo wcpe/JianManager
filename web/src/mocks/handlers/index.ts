@@ -11,6 +11,9 @@ const domainHandlers: HttpHandler[] = Object.values(modules).flatMap((m) => m.ha
 
 /**
  * server（node/jsdom 测试）与 browser（mock 模式）共用的 handler 集：
- * 域簇 REST + 实例事件 SSE + 终端 token（HTTP）。终端 WS 仅 browser 追加（见 browser.ts）。
+ * 实例事件 SSE + 终端 token（HTTP）+ 域簇 REST。终端 WS 仅 browser 追加（见 browser.ts）。
+ *
+ * 顺序要紧：MSW 取首个匹配。字面路径 `/instances/events`、`/instances/:id/terminal-token`
+ * 必须排在域簇**之前**——否则实例域的 `/instances/:id` 会把 `events` 当 id 贪婪匹配、404 遮蔽 SSE 流（真机回归）。
  */
-export const handlers: HttpHandler[] = [...domainHandlers, ...instanceEventsHandlers, terminalTokenHandler]
+export const handlers: HttpHandler[] = [...instanceEventsHandlers, terminalTokenHandler, ...domainHandlers]

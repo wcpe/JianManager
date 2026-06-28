@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
 import { server } from './server'
+import { handlers } from './handlers'
 import { resetDb } from './db'
 import { clearInjections, mockInject } from './inject'
 import { requireAuth } from './auth-middleware'
@@ -63,5 +64,17 @@ describe('假后端 auth 纵切（FR-197/198/199 地基）', () => {
     expect(r.status).toBe(200)
     const body = (await r.json()) as { wsUrl: string }
     expect(body.wsUrl).toContain('_mock/terminal')
+  })
+
+  it('实例事件 SSE handler 排在实例域 /instances/:id 之前（防贪婪遮蔽 SSE，真机回归）', () => {
+    // 真机发现：实例域 `/instances/:id` 会把 `events` 当 id 贪婪匹配，把 `/instances/events` SSE 流 404 遮蔽。
+    // MSW 取首个匹配，故字面路径 events 必须排在参数路径 :id 之前。（SSE 流式响应在 node fetch 下会挂住、
+    // 无法直接断言，改测 handler 注册顺序——确定性捕获该遮蔽回归。）
+    const paths = handlers.map((h) => (h as { info?: { path?: string } }).info?.path ?? '')
+    const eventsIdx = paths.findIndex((p) => p.endsWith('/instances/events'))
+    const byIdIdx = paths.findIndex((p) => p.endsWith('/instances/:id'))
+    expect(eventsIdx).toBeGreaterThanOrEqual(0)
+    expect(byIdIdx).toBeGreaterThanOrEqual(0)
+    expect(eventsIdx).toBeLessThan(byIdIdx)
   })
 })
