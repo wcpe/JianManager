@@ -541,6 +541,35 @@
     "instances": "实例",
     "hint": "拖动图表底部的选择条可缩放该图时间窗；悬停查看该时刻各序列值。数据随轮询实时前移。",
     "hoverHint": "悬停查看该时刻各指标值",
+    "resolution": "聚合粒度",
+    "res": {
+      "auto": "自动",
+      "raw": "30 秒",
+      "5m": "5 分钟",
+      "1h": "1 小时"
+    },
+    "overview": {
+      "title": "关键指标概览",
+      "empty": "暂无关键指标数据"
+    },
+    "compare": {
+      "title": "多指标对比",
+      "hint": "勾选下方指标在同一图内叠加对比（按当前粒度与范围）。",
+      "pick": "选择对比指标",
+      "empty": "勾选上方指标以叠加对比",
+      "tooFew": "至少选 1 个指标"
+    },
+    "drill": {
+      "platform": "平台",
+      "node": "节点",
+      "instance": "实例",
+      "world": "世界",
+      "toInstances": "下钻到实例",
+      "toWorlds": "下钻到世界",
+      "pickInstance": "选择实例…",
+      "pickWorld": "选择世界…",
+      "back": "返回上一级"
+    },
     "chart": {
       "resource": "资源使用率",
       "load": "负载",

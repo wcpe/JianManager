@@ -564,6 +564,35 @@
     "instances": "Instances",
     "hint": "Drag the selector at the bottom of a chart to zoom its time window; hover to read each series at that moment. Data advances in real time via polling.",
     "hoverHint": "Hover to read each metric at that moment",
+    "resolution": "Resolution",
+    "res": {
+      "auto": "Auto",
+      "raw": "30s",
+      "5m": "5m",
+      "1h": "1h"
+    },
+    "overview": {
+      "title": "Key metrics",
+      "empty": "No key metric data yet"
+    },
+    "compare": {
+      "title": "Compare metrics",
+      "hint": "Tick metrics below to overlay them in one chart (at the current resolution & range).",
+      "pick": "Pick metrics to compare",
+      "empty": "Tick metrics above to overlay",
+      "tooFew": "Pick at least 1 metric"
+    },
+    "drill": {
+      "platform": "Platform",
+      "node": "Node",
+      "instance": "Instance",
+      "world": "World",
+      "toInstances": "Drill to instances",
+      "toWorlds": "Drill to worlds",
+      "pickInstance": "Pick instance…",
+      "pickWorld": "Pick world…",
+      "back": "Back"
+    },
     "chart": {
       "resource": "Resource usage",
       "load": "Load",

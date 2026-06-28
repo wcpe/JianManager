@@ -81,21 +81,30 @@ export interface MetricSeriesResponse {
   series: MetricSeries[]
 }
 
-/** 节点/实例历史曲线（FR-060）。按区间自动选档，30s 轮询。 */
+/**
+ * 聚合粒度档位（FR-221，ADR-013 三档降采样）：
+ * auto=按区间自动选档；raw=原始 30s；5m/1h=对应降采样卷积档。
+ */
+export type MetricResolution = 'auto' | 'raw' | '5m' | '1h'
+
+/** 节点/实例历史曲线（FR-060；FR-221 增自定义粒度）。按区间自动选档（或显式 resolution），30s 轮询。 */
 export function useMetricSeries(params: {
   scope: 'node' | 'instance'
   targetId: string
   range: MetricRange
   /** 指标键过滤（逗号合并下发）；不传返回该目标全部序列。 */
   metrics?: string[]
+  /** 聚合粒度档位（FR-221）；auto/留空=按区间自动选档。 */
+  resolution?: MetricResolution
   enabled?: boolean
 }) {
-  const { scope, targetId, range, metrics, enabled = true } = params
+  const { scope, targetId, range, metrics, resolution, enabled = true } = params
   return useQuery({
-    queryKey: ['metricSeries', scope, targetId, range, metrics?.join(',') ?? ''],
+    queryKey: ['metricSeries', scope, targetId, range, metrics?.join(',') ?? '', resolution ?? 'auto'],
     queryFn: async () => {
       const q = new URLSearchParams({ scope, targetId, range })
       if (metrics?.length) q.set('metrics', metrics.join(','))
+      if (resolution && resolution !== 'auto') q.set('resolution', resolution)
       const { data } = await api.get<MetricSeriesResponse>(`/metrics/series?${q.toString()}`)
       return data
     },
@@ -128,12 +137,14 @@ export interface MetricOverviewResponse {
   trends: OverviewTrend[]
 }
 
-/** 总览页跨节点聚合：当前总量 + 聚合曲线（FR-060）。30s 轮询。 */
-export function useMetricOverview(range: MetricRange) {
+/** 总览页跨节点聚合：当前总量 + 聚合曲线（FR-060；FR-221 增自定义粒度）。30s 轮询。 */
+export function useMetricOverview(range: MetricRange, resolution?: MetricResolution) {
   return useQuery({
-    queryKey: ['metricOverview', range],
+    queryKey: ['metricOverview', range, resolution ?? 'auto'],
     queryFn: async () => {
-      const { data } = await api.get<MetricOverviewResponse>(`/metrics/overview?range=${range}`)
+      const q = new URLSearchParams({ range })
+      if (resolution && resolution !== 'auto') q.set('resolution', resolution)
+      const { data } = await api.get<MetricOverviewResponse>(`/metrics/overview?${q.toString()}`)
       return data
     },
     refetchInterval: 30_000,
