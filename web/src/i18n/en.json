@@ -871,7 +871,16 @@
       "manualStep2": "2. Run it (with arguments)",
       "copy": "Copy",
       "copied": "Copied to clipboard",
-      "copyFailed": "Copy failed, please select and copy manually"
+      "copyFailed": "Copy failed, please select and copy manually",
+      "tabAuto": "Auto Install",
+      "tabManual": "Manual Connect",
+      "tabAutoDesc": "Run the one-line script on the target machine to auto-download, install the Worker, and register online.",
+      "tabManualDesc": "If the Worker binary is already deployed, fill in the address and one-time token below and start it to register — no install script needed.",
+      "manualConnectTitle": "Connect an already-deployed Worker manually",
+      "manualConnectStep1": "1. Control Plane address (set as control-plane in the Worker config)",
+      "manualConnectStep2": "2. One-time enroll token (set as enroll-token in the Worker config)",
+      "manualConnectStep3": "3. Start the Worker on the target machine (with arguments)",
+      "manualConnectHint": "The token is one-time and time-limited; it is invalidated once registration succeeds. The first registration must complete before expiry."
     },
     "instancesUnit": "instances",
     "cpuCores": "CPU cores",

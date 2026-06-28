@@ -848,7 +848,16 @@
       "manualStep2": "② 执行（带参数）",
       "copy": "复制",
       "copied": "已复制到剪贴板",
-      "copyFailed": "复制失败，请手动选择复制"
+      "copyFailed": "复制失败，请手动选择复制",
+      "tabAuto": "自动安装",
+      "tabManual": "手动连接",
+      "tabAutoDesc": "在目标机器执行一键脚本，自动下载并安装 Worker 后注册上线。",
+      "tabManualDesc": "Worker 二进制已自行部署时，填入下方地址与一次性 token 启动即可注册，无需安装脚本。",
+      "manualConnectTitle": "手动连接已部署的 Worker",
+      "manualConnectStep1": "① Control Plane 地址（写入 Worker 配置 control-plane）",
+      "manualConnectStep2": "② 一次性接入 token（写入 Worker 配置 enroll-token）",
+      "manualConnectStep3": "③ 在目标机器启动 Worker（带参数）",
+      "manualConnectHint": "token 一次性且限时，启动成功注册后即失效；首次注册必须在过期前完成。"
     },
     "instancesUnit": "实例",
     "cpuCores": "CPU 核数",

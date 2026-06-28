@@ -16,6 +16,9 @@
 ### 变更
 - **客户端分发迁运营域 + 全流程向导重做（FR-187，前端，增强 FR-086/087/088）**：入口 `/client-channels` 从「系统·平台与维护」迁入「运营」域（路由不变、旧链接可达）；频道列表空状态改大引导卡 + 卡片化（显当前版本/密钥数/就绪度），「新增频道」内联表单改内容自适应模态 `CreateChannelDialog`；频道详情重做为工作台——顶部常驻就绪度步骤器（创建→密钥→发版→接入，状态由 keyCount/currentVersion 推导、第一个未完成步高亮 + CTA）+ 密钥/版本/统计/接入指引分段；建密钥内联表单改模态 `CreateKeyDialog`；发布版本流程重做为分步向导（选文件→逐文件配置→托管目录/说明→预览→发布，复用现发布 mutation，头/脚步骤导航固定、正文超高内部滚动）；轮换/吊销/删除沿用 `DangerConfirm`。密钥明文与接入指引复制点统一改用 `copyToClipboard`（兜底 HTTP 非安全上下文复制失败）。抽纯逻辑 `lib/client-readiness.ts`（就绪度推导）+ `lib/client-publish-wizard.ts`（分步门控/路径校验/托管目录解析）+ vitest 全绿。后端 API/数据模型/鉴权零改动；i18n 中/英 + 明暗 + 双主题随既有体系。前端 `tsc`/`lint`/`vitest`/`build` 全绿。**浏览器走通建频道→建密钥→发版→接入指引 + zh/en + 暗亮主题待真机验。**
 
+### 优化
+- **重度模态重做：创建实例 + 添加节点对话框（FR-189，增强 FR-009/FR-004，遵循 ui-modals）**：两对话框统一套自适应壳（`scrollableDialogContentClass` + `ScrollableDialogBody`，头/脚固定、正文超高内部滚动），修「添加节点」长接入指引顶出视口；「创建实例」加宽至 `sm:max-w-2xl` 并按「基本/启动/高级」分区 + 双列网格，Docker 资源限额字段仅 docker 启动方式显示（去掉 direct/daemon 噪音占位），提交校验/payload 不变；「添加节点」结果视图新增「自动安装/手动连接」两 Tab（手动连接=已部署 Worker 凭 CP 地址 + 一次性 token 直接启动注册），复制点改用共享 `copyToClipboard`（兼容 HTTP 非安全上下文）。
+
 ## 0.11.0（2026-06-28）
 
 ### 新增

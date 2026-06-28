@@ -12,9 +12,12 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@/components/ui/scrollable-dialog'
+import { copyToClipboard } from '@/lib/clipboard'
 import { useIssueEnrollToken, type IssuedEnrollToken } from '@/api/nodes'
 
-/** 「添加节点」向导对话框：签发一次性 enrollment token，展示一键安装命令供运维复制（FR-080）。 */
+/** 「添加节点」向导对话框：签发一次性 enrollment token，提供「自动安装 / 手动连接」两条上线路径（FR-080 / FR-189）。 */
 interface AddNodeDialogProps {
   /** 是否打开。 */
   open: boolean
@@ -22,14 +25,14 @@ interface AddNodeDialogProps {
   onClose: () => void
 }
 
-/** 复制按钮：写剪贴板 + toast 反馈，复制失败提示手动选择。 */
+/** 复制按钮：写剪贴板（兼容 HTTP 非安全上下文）+ toast 反馈（FR-189）。 */
 function CopyButton({ text, label }: { text: string; label: string }) {
   const { t } = useTranslation()
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text)
+    const ok = await copyToClipboard(text)
+    if (ok) {
       toast.success(t('nodes.enroll.copied', '已复制到剪贴板'))
-    } catch {
+    } else {
       toast.error(t('nodes.enroll.copyFailed', '复制失败，请手动选择复制'))
     }
   }
@@ -105,6 +108,53 @@ function ManualInstallSection({ issued }: { issued: IssuedEnrollToken }) {
   )
 }
 
+/** 自动安装 Tab：一键脚本（Linux/Windows）+ 手动分步兜底 + 公网源未配置提示。 */
+function AutoInstallTab({ issued }: { issued: IssuedEnrollToken }) {
+  const { t } = useTranslation()
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">{t('nodes.enroll.tabAutoDesc')}</p>
+      <CommandBlock title={t('nodes.enroll.linux', 'Linux / macOS')} command={issued.installCommandLinux} />
+      <CommandBlock title={t('nodes.enroll.windows', 'Windows (PowerShell)')} command={issued.installCommandWindows} />
+      <ManualInstallSection issued={issued} />
+      <div className="rounded-md border border-status-warning/40 bg-status-warning/10 p-2 text-xs text-muted-foreground">
+        {t('nodes.enroll.hint', '公网下载源未配置时，请先把 Worker 二进制拷到目标机器，并在命令末尾追加 --binary <路径>（Windows 用 -Binary <路径>）。')}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * 手动连接 Tab：面向「Worker 二进制已自行部署」的场景（FR-189）。
+ * 展示 CP 地址 + 一次性 token + 启动命令，复用同一签发结果，不走安装脚本。
+ */
+function ManualConnectTab({ issued }: { issued: IssuedEnrollToken }) {
+  const { t } = useTranslation()
+  const grpc = issued.controlPlaneGrpc
+  const token = issued.token
+  const name = issued.nodeName
+
+  // 与 install 脚本最终调起的 worker 参数一致：直接以 CP 地址 + token 启动即注册上线。
+  const linuxRun = `worker --control-plane ${grpc} --token ${token}${name ? ` --name ${name}` : ''}`
+  const winRun = `.\\worker.exe --control-plane ${grpc} --token ${token}${name ? ` --name ${name}` : ''}`
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">{t('nodes.enroll.tabManualDesc')}</p>
+      <CommandBlock title={t('nodes.enroll.manualConnectStep1')} command={grpc} />
+      <CommandBlock title={t('nodes.enroll.manualConnectStep2')} command={token} />
+      <div className="space-y-2">
+        <div className="text-xs font-medium text-muted-foreground">{t('nodes.enroll.manualConnectStep3')}</div>
+        <CommandBlock title={t('nodes.enroll.linux', 'Linux / macOS')} command={linuxRun} />
+        <CommandBlock title={t('nodes.enroll.windows', 'Windows (PowerShell)')} command={winRun} />
+      </div>
+      <div className="rounded-md border border-status-warning/40 bg-status-warning/10 p-2 text-xs text-muted-foreground">
+        {t('nodes.enroll.manualConnectHint')}
+      </div>
+    </div>
+  )
+}
+
 export default function AddNodeDialog({ open, onClose }: AddNodeDialogProps) {
   const { t } = useTranslation()
   const issue = useIssueEnrollToken()
@@ -140,16 +190,16 @@ export default function AddNodeDialog({ open, onClose }: AddNodeDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={(v: boolean) => { if (!v) handleClose() }}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
         {issued === null ? (
-          <form onSubmit={onSubmit}>
+          <form onSubmit={onSubmit} className="flex min-h-0 flex-1 flex-col">
             <DialogHeader>
               <DialogTitle>{t('nodes.enroll.addTitle', '添加节点')}</DialogTitle>
               <DialogDescription>
                 {t('nodes.enroll.addDesc', '签发一次性安装凭据，在目标机器粘贴执行一键命令即可自动注册上线。')}
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-3 py-2">
+            <ScrollableDialogBody className="space-y-3 py-2">
               <div className="space-y-1">
                 <label className="text-sm font-medium">{t('nodes.enroll.nodeName', '节点名（可选）')}</label>
                 <Input
@@ -168,7 +218,7 @@ export default function AddNodeDialog({ open, onClose }: AddNodeDialogProps) {
                   onChange={(e) => setTtlMinutes(Number(e.target.value) || 30)}
                 />
               </div>
-            </div>
+            </ScrollableDialogBody>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={handleClose}>
                 {t('common.cancel', '取消')}
@@ -186,18 +236,24 @@ export default function AddNodeDialog({ open, onClose }: AddNodeDialogProps) {
                 {t('nodes.enroll.resultDesc', '请立即复制保存。凭据一次性且限时，关闭后无法再次查看完整命令。')}
               </DialogDescription>
             </DialogHeader>
-            <div className="space-y-3 py-1">
+            <ScrollableDialogBody className="space-y-3 py-1">
               <div className="text-xs text-muted-foreground">
                 {t('nodes.enroll.expiresAt', '过期时间')}: {new Date(issued.expiresAt).toLocaleString()}
                 {issued.nodeName && <> · {t('nodes.enroll.nodeName', '节点名')}: {issued.nodeName}</>}
               </div>
-              <CommandBlock title={t('nodes.enroll.linux', 'Linux / macOS')} command={issued.installCommandLinux} />
-              <CommandBlock title={t('nodes.enroll.windows', 'Windows (PowerShell)')} command={issued.installCommandWindows} />
-              <ManualInstallSection issued={issued} />
-              <div className="rounded-md border border-status-warning/40 bg-status-warning/10 p-2 text-xs text-muted-foreground">
-                {t('nodes.enroll.hint', '公网下载源未配置时，请先把 Worker 二进制拷到目标机器，并在命令末尾追加 --binary <路径>（Windows 用 -Binary <路径>）。')}
-              </div>
-            </div>
+              <Tabs defaultValue="auto" className="gap-3">
+                <TabsList className="self-start">
+                  <TabsTrigger value="auto">{t('nodes.enroll.tabAuto')}</TabsTrigger>
+                  <TabsTrigger value="manual">{t('nodes.enroll.tabManual')}</TabsTrigger>
+                </TabsList>
+                <TabsContent value="auto">
+                  <AutoInstallTab issued={issued} />
+                </TabsContent>
+                <TabsContent value="manual">
+                  <ManualConnectTab issued={issued} />
+                </TabsContent>
+              </Tabs>
+            </ScrollableDialogBody>
             <DialogFooter>
               <Button onClick={handleClose}>{t('common.close', '关闭')}</Button>
             </DialogFooter>
