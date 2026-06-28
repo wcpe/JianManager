@@ -1651,6 +1651,9 @@
     "contentLocked": "内容已锁定（内容寻址，不可修改字节，仅可编排路径/策略或移除）",
     "treeEmpty": "暂无文件",
     "treeDirSummary": "{{n}} 个文件 · {{size}}",
+    "viewStructure": "结构",
+    "viewPreview": "预览",
+    "previewHint": "点左侧文件查看内容（文本/配置/JSON 高亮；二进制或过大文件仅可下载）。",
     "discardTitle": "放弃发布草稿？",
     "discardDesc": "已上传 {{n}} 个文件的编排草稿（文件已在服务端，但「发哪些 + 各自路径/策略」未发布）。关闭将丢弃这些编排，需重新设置。",
     "discardConfirm": "放弃并关闭"

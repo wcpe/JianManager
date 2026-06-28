@@ -141,6 +141,64 @@ export function useRollbackClientVersion() {
   })
 }
 
+/**
+ * 管理面制品文本预览结果（FR-214，与后端 service.ArtifactTextPreview 对应）。
+ * 降级由 kind 显式表达——前端据此渲染文本或降级为「仅下载」，不自行猜测。
+ */
+export interface ArtifactTextPreview {
+  /** text=可文本预览 | binary=含 NUL/压缩仅下载 | too-large=超上限仅下载。 */
+  kind: 'text' | 'binary' | 'too-large'
+  /** UTF-8 文本（仅 kind=text）。 */
+  content?: string
+  /** 制品字节数（降级态展示）。 */
+  size: number
+  /** 制品压缩算法（none|zstd 等，信息性）。 */
+  codec: string
+}
+
+/**
+ * 读取客户端分发制品文本内容用于**管理台**预览（FR-214）。
+ *
+ * 走 JWT 平台管理员端点 `GET /client-channels/:id/files/content?sha256=`——玩家制品端点
+ * `GET /client-artifacts/:sha256` 用拉取密钥、浏览器无之不能复用（ADR-022/023）。
+ */
+export async function fetchClientArtifactContent(
+  channelId: string,
+  sha256: string,
+): Promise<ArtifactTextPreview> {
+  const { data } = await api.get<ArtifactTextPreview>(
+    `/client-channels/${channelId}/files/content`,
+    { params: { sha256 } },
+  )
+  return data
+}
+
+/** 触发浏览器下载并清理 object URL（与 @/api/files 同范式）。 */
+function triggerDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+/**
+ * 下载客户端分发制品（**管理台** JWT 端点，FR-214）。
+ * downloadName 取 manifest path 末段以贴近原始文件名（制品按内容寻址，URL 用 sha256）。
+ */
+export async function downloadClientArtifact(
+  channelId: string,
+  sha256: string,
+  downloadName?: string,
+): Promise<void> {
+  const { data } = await api.get(`/client-channels/${channelId}/files/download`, {
+    params: { sha256 },
+    responseType: 'blob',
+  })
+  triggerDownload(data as Blob, downloadName || sha256)
+}
+
 /** 发布/回滚后统一失效版本列表与频道（latest 指针随之变化）。 */
 function invalidateChannelVersions(qc: ReturnType<typeof useQueryClient>, channelId: string) {
   qc.invalidateQueries({ queryKey: ['client-versions', channelId] })

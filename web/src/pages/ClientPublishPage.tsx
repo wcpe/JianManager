@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -35,6 +35,8 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import DangerConfirm from '@/components/DangerConfirm'
 import ClientFileTree from '@/components/ClientFileTree'
+import FileBrowser from '@/components/file-browser/FileBrowser'
+import { clientDistSource } from '@/components/file-browser/sources/clientDistSource'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
@@ -221,6 +223,19 @@ export default function ClientPublishPage() {
   const parsedDirs = parseManagedDirs(managedDirs)
   const publishable = canPublish(wizardState) && !publish.isPending
 
+  // 预览（FR-214）：把草稿映射为客户端分发数据源——草稿 codec=none，其 sha256 即 artifact sha。
+  // 经管理面 JWT 制品内容端点取文本（与玩家拉取密钥端点隔离，见 ADR-022/023）。
+  const previewSource = useMemo(
+    () =>
+      clientDistSource(
+        channelId ?? '',
+        drafts.map((d) => ({ path: d.path, size: d.size, artifactSha: d.sha256 })),
+      ),
+    [channelId, drafts],
+  )
+  // 预览步骤的视图（结构 = ClientFileTree 编排预览；预览 = 共享 FileBrowser 看内容）。
+  const [reviewView, setReviewView] = useState<'structure' | 'preview'>('structure')
+
   /** 尝试取消：有草稿弹二次确认，无草稿直接回工作台。 */
   const attemptCancel = () => {
     if (dirty) setManualDiscard(true)
@@ -379,7 +394,17 @@ export default function ClientPublishPage() {
               <dt className="text-muted-foreground">{t('clientVersions.note', '备注')}</dt>
               <dd>{note || t('clientVersions.noNote', '（无备注）')}</dd>
             </dl>
-            <ClientFileTree files={drafts} readonly />
+            <div className="flex items-center justify-end">
+              <ReviewViewToggle view={reviewView} onChange={setReviewView} />
+            </div>
+            {reviewView === 'structure' ? (
+              <ClientFileTree files={drafts} readonly />
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">{t('clientVersions.previewHint')}</p>
+                <FileBrowser source={previewSource} className="h-[460px]" />
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -423,6 +448,29 @@ export default function ClientPublishPage() {
           else setNavBlocked(false)
         }}
       />
+    </div>
+  )
+}
+
+/** 预览步骤的结构 / 内容预览视图切换（分段按钮，FR-214）。 */
+function ReviewViewToggle({ view, onChange }: { view: 'structure' | 'preview'; onChange: (v: 'structure' | 'preview') => void }) {
+  const { t } = useTranslation()
+  return (
+    <div className="inline-flex rounded-lg border p-0.5 text-xs">
+      <button
+        type="button"
+        className={cn('rounded-md px-2.5 py-1 transition-colors', view === 'structure' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground')}
+        onClick={() => onChange('structure')}
+      >
+        {t('clientVersions.viewStructure', '结构')}
+      </button>
+      <button
+        type="button"
+        className={cn('rounded-md px-2.5 py-1 transition-colors', view === 'preview' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground')}
+        onClick={() => onChange('preview')}
+      >
+        {t('clientVersions.viewPreview', '预览')}
+      </button>
     </div>
   )
 }

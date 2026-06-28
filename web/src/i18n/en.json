@@ -1672,6 +1672,9 @@
     "contentLocked": "Content locked (content-addressed; bytes cannot be changed, only arranged or removed)",
     "treeEmpty": "No files",
     "treeDirSummary": "{{n}} file(s) · {{size}}",
+    "viewStructure": "Structure",
+    "viewPreview": "Preview",
+    "previewHint": "Click a file on the left to view its content (text/config/JSON highlighting; binary or oversized files can only be downloaded).",
     "discardTitle": "Discard publish draft?",
     "discardDesc": "You have an arrangement draft for {{n}} uploaded file(s) (files are on the server, but which to publish and their paths/policies are not). Closing discards this arrangement; you'll need to set it up again.",
     "discardConfirm": "Discard & Close"

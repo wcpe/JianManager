@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -23,6 +23,8 @@ import {
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@/components/ui/scrollable-dialog'
 import DangerConfirm from '@/components/DangerConfirm'
 import ClientFileTree from '@/components/ClientFileTree'
+import FileBrowser from '@/components/file-browser/FileBrowser'
+import { clientDistSource, manifestFilesToDistFiles } from '@/components/file-browser/sources/clientDistSource'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
@@ -140,10 +142,24 @@ export default function ClientVersionsPanel({ channelId }: { channelId: string }
   )
 }
 
-/** 版本详情弹窗：展示某历史版本的托管目录与文件清单（只读，一次性展示属 ui-modals 例外）。 */
+/**
+ * 版本详情弹窗：展示某历史版本的托管目录与文件清单（只读，一次性展示属 ui-modals 例外）。
+ *
+ * 两种视图（FR-214）：
+ *  - 结构：{@link ClientFileTree} 文件树 + sync/platform 徽标 + 大小（编排语义，原有能力不减）。
+ *  - 预览：共享 {@link FileBrowser} 浏览文件树并预览内容（文本/配置/JSON 高亮，二进制/超大降级 + 下载），
+ *    经管理面 JWT 制品内容端点取文本（与玩家拉取密钥端点隔离，见 ADR-022/023）。
+ */
 function VersionDetailDialog({ channelId, version, onClose }: { channelId: string; version: number; onClose: () => void }) {
   const { t } = useTranslation()
   const { data: detail, isLoading } = useClientVersion(channelId, version)
+  const [view, setView] = useState<'structure' | 'preview'>('structure')
+
+  // 预览数据源：把版本清单映射为客户端分发数据源（按文件 path → artifact sha 取内容/下载）。
+  const previewSource = useMemo(
+    () => clientDistSource(channelId, manifestFilesToDistFiles(detail?.files ?? [])),
+    [channelId, detail?.files],
+  )
 
   return (
     <Dialog open onOpenChange={(v: boolean) => { if (!v) onClose() }}>
@@ -157,14 +173,26 @@ function VersionDetailDialog({ channelId, version, onClose }: { channelId: strin
         </DialogHeader>
 
         <ScrollableDialogBody className="space-y-4">
-          <div className="text-sm">
-            <span className="text-muted-foreground">{t('clientVersions.managedDirs', '托管目录')}：</span>
-            <span className="font-mono text-xs">{(detail?.managedDirs ?? []).join(', ') || '-'}</span>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="text-sm">
+              <span className="text-muted-foreground">{t('clientVersions.managedDirs', '托管目录')}：</span>
+              <span className="font-mono text-xs">{(detail?.managedDirs ?? []).join(', ') || '-'}</span>
+            </div>
+            <ViewToggle view={view} onChange={setView} />
           </div>
           {isLoading ? (
             <p className="text-sm text-muted-foreground">{t('common.loading', '加载中…')}</p>
-          ) : (
+          ) : view === 'structure' ? (
             <ClientFileTree files={detail?.files ?? []} readonly />
+          ) : (detail?.files ?? []).length === 0 ? (
+            <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+              {t('clientVersions.treeEmpty', '暂无文件')}
+            </p>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">{t('clientVersions.previewHint')}</p>
+              <FileBrowser source={previewSource} className="h-[460px]" />
+            </div>
           )}
         </ScrollableDialogBody>
 
@@ -173,5 +201,28 @@ function VersionDetailDialog({ channelId, version, onClose }: { channelId: strin
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** 结构 / 预览视图切换（分段按钮，FR-214）。 */
+function ViewToggle({ view, onChange }: { view: 'structure' | 'preview'; onChange: (v: 'structure' | 'preview') => void }) {
+  const { t } = useTranslation()
+  return (
+    <div className="inline-flex rounded-lg border p-0.5 text-xs">
+      <button
+        type="button"
+        className={`rounded-md px-2.5 py-1 transition-colors ${view === 'structure' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+        onClick={() => onChange('structure')}
+      >
+        {t('clientVersions.viewStructure', '结构')}
+      </button>
+      <button
+        type="button"
+        className={`rounded-md px-2.5 py-1 transition-colors ${view === 'preview' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+        onClick={() => onChange('preview')}
+      >
+        {t('clientVersions.viewPreview', '预览')}
+      </button>
+    </div>
   )
 }
