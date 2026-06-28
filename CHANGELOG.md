@@ -8,6 +8,7 @@
 
 ### 修复
 - **发布管线 changelog 提取兜底（FR-173，见 ADR-036 §3）**：`changelog-extract.mjs` 的 `--unreleased` 在 `[Unreleased]` 段为空时改为输出兜底说明（刚发完版尚无新变更的正常态），不再非零退出——避免每次发版后下一次 push master 的滚动预发布因空段把整条 CI 挂掉；`--version` 段为空仍硬失败（真发布必须有说明）。补 node:test 单测（空 `[Unreleased]` → 兜底、空版本段 → 抛错）。
+- **全站模态纪律审计改造 + 复制按钮 HTTP 非安全上下文兜底（FR-188，立 `.claude/rules/ui-modals.md`）**：审计全站「创建/编辑/配置」交互，把 `BackupStoragesPage`「点击新增→页面内联展开表单顶开表格」反模式改为内容自适应模态（复用 FR-072 `scrollableDialogContentClass`+`ScrollableDialogBody`，头/脚固定正文滚动），行为不变；`NodeJDKPanel`/`NodeRepairPanel`/`NodeArtifactCachePanel`/`Terminal`/`TemplatesPage` 的复制点统一改走共享 `@/lib/clipboard` 的 `copyToClipboard`（明文 HTTP 下 `navigator.clipboard` 不可用时回退 `execCommand` 离屏 textarea，修 LAN-IP 部署复制失效）。
 
 ### 新增
 - **出站代理可视化配置（FR-185，见 ADR-043，增强 FR-174）**：设置面板新增「网络」分类配全局/CP 出站代理（`proxy.url` 敏感脱敏 / `proxy.no_proxy`，保存即运行时重建 CP 出站客户端、免重启，优先级 settings DB > control-plane.yaml > env）；节点页新增「代理」分段为单节点配「继承全局 / 自定义」（`nodes.proxy_mode/proxy_url/proxy_no_proxy`，`PATCH /nodes/:id/proxy` + 审计），经 `HeartbeatResponse` 新增 `proxy_url/proxy_no_proxy/proxy_generation` 字段按节点下发，Worker 据 generation 变化运行时重建出站客户端（`httpclient.Provider` 原子持有者）并注入 JDK/CFR/自更新/服务端 jar 各下载点——免登机器改 yaml/重启；真相源 = CP DB、Worker 不落盘、重连由心跳重发；含凭据 URL 全程脱敏。
