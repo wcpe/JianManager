@@ -946,7 +946,10 @@
     "diskLimitHint": "留空表示不限制；当前版本仅记录展示，不强制限制",
     "resourceLimitDockerOnly": "资源限额需 Docker 模式（direct/daemon 不支持 cgroup 限制）",
     "resourceLimitSaved": "资源限额已保存，下次启动生效",
-    "nodePort": "节点:端口"
+    "nodePort": "节点:端口",
+    "sectionBasic": "基本",
+    "sectionLaunch": "启动",
+    "sectionAdvanced": "高级"
   },
   "instanceBatch": {
     "selected": "已选 {{count}} 个",

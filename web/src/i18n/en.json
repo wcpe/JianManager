@@ -990,7 +990,10 @@
     "diskLimitHint": "Leave empty for unlimited; recorded for display only in this version",
     "resourceLimitDockerOnly": "Resource limits require Docker mode (direct/daemon do not support cgroup limits)",
     "resourceLimitSaved": "Resource limits saved; effective on next start",
-    "nodePort": "Node:Port"
+    "nodePort": "Node:Port",
+    "sectionBasic": "Basic",
+    "sectionLaunch": "Launch",
+    "sectionAdvanced": "Advanced"
   },
   "instanceBatch": {
     "selected": "{{count}} selected",
