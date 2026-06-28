@@ -1,6 +1,6 @@
 # 功能规格：系统更新页服务端缓存 + Markdown 更新日志
 
-> 状态：待审　·　关联 PRD：FR-186（增强 FR-182/FR-081）　·　关联 ADR：无（沿用 ADR-036/020 自更新）　·　分支：feature/fr-186-update-page-cache
+> 状态：🔨 开发中（实现完成，待真机验收）　·　关联 PRD：FR-186（增强 FR-182/FR-081）　·　关联 ADR：无（沿用 ADR-036/020 自更新）　·　分支：feature/fr-186-update-page-cache
 
 ## 1. 背景与目标
 
@@ -41,13 +41,13 @@ FR-182 自更新体验增强已交付，但实际落地有两个缺口：
 - web 新增 `react-markdown` + `remark-gfm`（package.json）。确认与 React 19/Vite 6 兼容版本；仅前端依赖。
 
 ## 4. 任务拆分
-- [ ] CP：`self_update_check_cache` 持久化（表/迁移 or kv）+ 成功检查后 upsert
-- [ ] CP：`GET /self-update/check` 返回缓存（加 `checkedAt`/`cached`）+ `refresh` 端点 live 检查更新缓存（失败不清缓存）
-- [ ] 前端：进页读缓存即时渲染 + 后台刷新 + 「上次检查时间」+ 刷新失败保留旧数据
-- [ ] 前端：`ReleaseNotes` 用 react-markdown/remark-gfm 渲染，替换 `<pre>`；链接走宿主确认；暗亮主题
-- [ ] web 依赖：`react-markdown` + `remark-gfm`
-- [ ] doc-sync：PRD FR-186「计划」→「开发中」（只改本行）；ARCHITECTURE ER（新缓存表）；API.md（check/refresh 端点变更）；CHANGELOG `[Unreleased]` 末尾追加一行
-- [ ] 中文 commit（control-plane / web / deps 拆 commit）
+- [x] CP：`self_update_check_caches` 持久化（单行表 `model.SelfUpdateCheckCache` + `database.AutoMigrate`）+ 成功检查后 upsert（`persistCheckCache`/`Save`）
+- [x] CP：`GET /self-update/check` 返回缓存（`CachedCheck`，加 `checkedAt`/`cached`，不触发 live）+ `POST /self-update/check/refresh` live 检查更新缓存（`RefreshCheck`，失败不清缓存）
+- [x] 前端：进页读缓存即时渲染（`useSelfUpdateCheck` 默认 enabled）+ 后台刷新（`useRefreshSelfUpdateCheck` + 进页 `useEffect` 静默触发）+ 「上次检查：<相对时间>」+ 刷新失败保留旧数据（仅 toast）
+- [x] 前端：`ReleaseNotes` 用 react-markdown/remark-gfm 渲染，替换 `<pre>`；链接走宿主确认（`isSafeExternalLink`+`window.confirm`）；暗亮主题（全 token）
+- [x] web 依赖：`react-markdown@^9` + `remark-gfm@^4`（React 19/Vite 兼容）
+- [x] doc-sync：PRD FR-186「计划」→「开发中」（只改本行）；ARCHITECTURE ER（新缓存表）；API.md（check/refresh 端点变更）；CHANGELOG `[Unreleased]` 末尾追加
+- [x] 中文 commit（control-plane / web / deps 拆 commit）
 
 ## 5. 验收标准
 - CP 单测：成功检查写缓存；`GET check` 返回缓存且不触发 live；`refresh` 失败不清缓存。

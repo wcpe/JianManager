@@ -11,6 +11,7 @@
 
 ### 新增
 - **出站代理可视化配置（FR-185，见 ADR-043，增强 FR-174）**：设置面板新增「网络」分类配全局/CP 出站代理（`proxy.url` 敏感脱敏 / `proxy.no_proxy`，保存即运行时重建 CP 出站客户端、免重启，优先级 settings DB > control-plane.yaml > env）；节点页新增「代理」分段为单节点配「继承全局 / 自定义」（`nodes.proxy_mode/proxy_url/proxy_no_proxy`，`PATCH /nodes/:id/proxy` + 审计），经 `HeartbeatResponse` 新增 `proxy_url/proxy_no_proxy/proxy_generation` 字段按节点下发，Worker 据 generation 变化运行时重建出站客户端（`httpclient.Provider` 原子持有者）并注入 JDK/CFR/自更新/服务端 jar 各下载点——免登机器改 yaml/重启；真相源 = CP DB、Worker 不落盘、重连由心跳重发；含凭据 URL 全程脱敏。
+- **系统更新页服务端缓存 + Markdown 更新日志（FR-186，增强 FR-182/FR-081）**：CP 持久化「上次成功检查结果」到新单行表 `self_update_check_caches`（整段 CheckResult 序列化为 JSON blob + `checked_at` + `source`，CheckResult 演进加字段免迁移、反序列化缺字段降级）；`GET /self-update/check` 改为**返缓存不触发 live**（加性新增 `cached`/`checkedAt` 字段，毫秒级返回，进系统更新页即时回显），新增 `POST /self-update/check/refresh` 走 live 检查并 upsert 覆盖缓存、**失败不清缓存**（断网/限流仍回显上次结果）。前端进页读缓存即时渲染 + 后台静默刷新一次 + 顶部「上次检查：<相对时间>」+ 刷新中指示，手动「检查更新」= 显式 live 刷新（失败 toast 但保留旧数据）；新增 `ReleaseNotes` 组件用 `react-markdown` + `remark-gfm` 渲染 release body（标题/列表/代码块/链接/表格，替换原 `<pre>` 纯文本），不渲染裸 HTML（默认防 XSS），链接经宿主确认后新标签打开（仅放行 http/https），长内容 `max-h` + 主题化滚动条，暗亮 + 双主题随 token。新增 web 依赖 `react-markdown`/`remark-gfm`。新增 CP 单测（成功检查写缓存、`GET check` 返缓存不触发 live、`refresh` 失败不清缓存、未配源仍写缓存）+ 路由单测（空缓存 `cached=false`、refresh RBAC、未配源 refresh）+ 前端纯函数单测（相对时间格式化、外链安全判定）。`go build`/`vet`/`test ./...` 全绿，前端 `tsc`/`lint`/`build`/`vitest` 全绿。**真机（连真 GitHub 看 markdown 更新日志、断网/限流看缓存回显 + 上次检查时间）待真机验**。
 
 ## 0.11.0（2026-06-28）
 

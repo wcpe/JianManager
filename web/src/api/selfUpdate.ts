@@ -35,6 +35,10 @@ export interface CheckResult {
   source?: string
   controlPlane: ComponentStatus
   nodes: ComponentStatus[]
+  /** 本结果是否来自服务端缓存（FR-186）：GET /check 命中缓存为 true、空缓存为 false。 */
+  cached?: boolean
+  /** 「上次成功检查」时刻（FR-186，ISO 字符串）；无缓存/未检查为 undefined，前端据此展示相对时间。 */
+  checkedAt?: string
 }
 
 /** rollout 中单个节点的升级状态。 */
@@ -95,8 +99,10 @@ export interface NodeRollbackAck {
 }
 
 /**
- * 检查更新（CP + 各节点版本对比）。
- * 不自动轮询：检查会实时拉取 feed 并逐节点 RPC 取版本，开销较大，由用户手动触发刷新。
+ * 读取服务端缓存的「上次成功检查结果」（FR-186，增强 FR-081）。
+ * GET /self-update/check 现返回缓存、**不触发 live 网络调用**（毫秒级），故进页即可即时回显——
+ * 默认 enabled、自动拉取。live 刷新交由 {@link useRefreshSelfUpdateCheck}（进页后台静默触发 + 手动按钮）。
+ * 缓存空时返回 `cached:false`，由页面据此后台触发一次刷新。
  */
 export function useSelfUpdateCheck() {
   return useQuery({
@@ -105,8 +111,30 @@ export function useSelfUpdateCheck() {
       const { data } = await api.get<CheckResult>('/self-update/check')
       return data
     },
-    enabled: false,
     retry: false,
+    // 缓存读取无副作用，但仍不长驻轮询：进页拉一次缓存即可，刷新由 refresh mutation 驱动。
+    refetchOnWindowFocus: false,
+  })
+}
+
+/**
+ * 显式触发一次 live 检查更新（POST /self-update/check/refresh，FR-186）。
+ * 经更新源在线拉取最新版本 + 逐节点 RPC 取版本，成功后服务端覆盖缓存；本端把返回写回 check 查询缓存，
+ * 页面随即更新。失败时服务端**不清缓存**、本端亦保留旧 check 数据（调用方 toast 提示但不清屏）。
+ * 「检查更新」按钮与进页后台静默刷新均调此。
+ */
+export function useRefreshSelfUpdateCheck() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.post<CheckResult>('/self-update/check/refresh')
+      return data
+    },
+    onSuccess: (data) => {
+      // 刷新成功：把最新结果写回 check 查询缓存，驱动页面即时更新（含 checkedAt）。
+      qc.setQueryData(['self-update', 'check'], data)
+    },
+    // 刷新失败不触碰 check 缓存：保留进页时读到的旧数据（断网/限流仍可见上次结果 + 上次检查时间）。
   })
 }
 

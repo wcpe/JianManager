@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { RefreshCw, ArrowUpCircle, ArrowDownCircle, ServerCog, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { RefreshCw, ArrowUpCircle, ArrowDownCircle, ServerCog, AlertCircle, CheckCircle2, Clock } from 'lucide-react'
 import {
   useSelfUpdateCheck,
+  useRefreshSelfUpdateCheck,
   useRollout,
   useUpgradeControlPlane,
   useUpgradeNode,
@@ -18,6 +19,8 @@ import { useAuthStore } from '@/stores/auth'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import DangerConfirm from '@/components/DangerConfirm'
+import { ReleaseNotes } from '@/components/ReleaseNotes'
+import { formatRelativeTime } from '@/lib/relative-time'
 
 /** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
 const ROLE_PLATFORM_ADMIN = 10
@@ -37,8 +40,21 @@ export default function SystemUpdatePage() {
   const role = useAuthStore((s) => s.role)
   const isPlatformAdmin = role === ROLE_PLATFORM_ADMIN
 
+  // check 读服务端缓存（进页即时回显，FR-186）；refresh 走 live 检查并覆盖缓存。
   const check = useSelfUpdateCheck()
+  const refresh = useRefreshSelfUpdateCheck()
   const upgradeAll = useUpgradeAll()
+
+  // 进页后台静默刷新一次（缓存即显在前、live 结果随后更新）。仅触发一次，避免重渲染重复刷新。
+  const autoRefreshedRef = useRef(false)
+  useEffect(() => {
+    if (!isPlatformAdmin || autoRefreshedRef.current) return
+    autoRefreshedRef.current = true
+    refresh.mutate(undefined, {
+      // 后台静默：失败不弹错（保留缓存即可），仅手动点「检查更新」时才提示失败。
+      onError: () => {},
+    })
+  }, [isPlatformAdmin, refresh])
 
   // rollout 在运行中时短轮询，空闲/完成后停（轮询逻辑在 hook 内）。
   const rolloutQ = useRollout()
@@ -56,6 +72,17 @@ export default function SystemUpdatePage() {
 
   const result = check.data
   const notConfigured = result ? !result.configured : false
+
+  // 手动「检查更新」= 显式 live 刷新（失败 toast 但保留旧缓存数据，FR-186）。
+  const doRefresh = () => {
+    refresh.mutate(undefined, {
+      onError: (e) => toast.error(errMsg(e, t('systemUpdate.checkFailed', '检查更新失败'))),
+    })
+  }
+
+  // 刷新中（手动或后台）统一指示；「上次检查」相对时间取缓存结果的 checkedAt。
+  const refreshing = refresh.isPending || check.isFetching
+  const lastChecked = result?.checkedAt ? formatRelativeTime(result.checkedAt) : ''
 
   const doUpgradeAll = () => {
     setConfirmAll(false)
@@ -80,22 +107,36 @@ export default function SystemUpdatePage() {
             {t('systemUpdate.subtitle', '检查并升级 Control Plane 与各节点 Worker 的二进制版本。升级经 sha256 校验后热替换并平滑重启，daemon 模式下不影响运行中的游戏服。')}
           </p>
         </div>
-        <Button onClick={() => check.refetch()} disabled={check.isFetching}>
-          <RefreshCw className={check.isFetching ? 'size-4 animate-spin' : 'size-4'} />
-          {t('systemUpdate.checkUpdate', '检查更新')}
-        </Button>
+        <div className="flex items-center gap-3">
+          {(lastChecked || refreshing) && (
+            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Clock className={refreshing ? 'size-3.5 animate-spin' : 'size-3.5'} />
+              {refreshing
+                ? t('systemUpdate.checking', '正在检查…')
+                : t('systemUpdate.lastChecked', '上次检查：{{time}}', { time: lastChecked })}
+            </span>
+          )}
+          <Button onClick={doRefresh} disabled={refreshing}>
+            <RefreshCw className={refreshing ? 'size-4 animate-spin' : 'size-4'} />
+            {t('systemUpdate.checkUpdate', '检查更新')}
+          </Button>
+        </div>
       </div>
 
-      {check.isError && (
+      {/* 刷新失败保留旧缓存数据，仅在「从未有过任何结果」时才整屏报错；否则错误经 toast 提示（doRefresh）。 */}
+      {check.isError && !result && (
         <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           <AlertCircle className="mt-0.5 size-4 shrink-0" />
           <span>{errMsg(check.error, t('systemUpdate.checkFailed', '检查更新失败'))}</span>
         </div>
       )}
 
-      {!check.data && !check.isError && (
+      {/* 缓存为空且尚未拉到结果时的占位（首次进页且后台刷新未回时短暂可见）。 */}
+      {!result && !check.isError && (
         <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          {t('systemUpdate.notCheckedYet', '点击「检查更新」拉取更新源并对比各组件版本。')}
+          {refreshing
+            ? t('systemUpdate.checking', '正在检查…')
+            : t('systemUpdate.notCheckedYet', '点击「检查更新」拉取更新源并对比各组件版本。')}
         </div>
       )}
 
@@ -124,22 +165,20 @@ export default function SystemUpdatePage() {
                   <div className="text-xs font-medium text-muted-foreground mb-1">
                     {t('systemUpdate.releaseNotes', '更新说明')}
                   </div>
-                  <pre className="whitespace-pre-wrap break-words font-sans text-sm text-foreground max-h-60 overflow-auto">
-                    {result.notes}
-                  </pre>
+                  <ReleaseNotes markdown={result.notes} />
                 </div>
               )}
             </div>
           )}
 
-          <ControlPlaneCard cp={result.controlPlane} latest={result.latestVersion} onUpgraded={() => check.refetch()} />
+          <ControlPlaneCard cp={result.controlPlane} latest={result.latestVersion} onUpgraded={() => refresh.mutate(undefined)} />
 
           <NodesSection
             nodes={result.nodes ?? []}
             latest={result.latestVersion}
             rolloutRunning={rolloutRunning}
             onUpgradeAll={() => setConfirmAll(true)}
-            onUpgraded={() => check.refetch()}
+            onUpgraded={() => refresh.mutate(undefined)}
           />
         </>
       )}
