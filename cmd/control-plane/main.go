@@ -32,10 +32,11 @@ func main() {
 
 	initLogger(cfg.Log)
 
-	// 出站 HTTP 客户端工厂（FR-174，见 ADR-037）：CP 所有出站下载（自更新 feed/二进制、
+	// 出站 HTTP 客户端持有者（FR-174/FR-185，见 ADR-037/043）：CP 所有出站下载（自更新 feed/二进制、
 	// 服务端 jar、客户端制品入库等）经此进程级代理 client。proxy.url 留空=直连（沿用环境变量代理）。
-	// 非法代理 URL 启动即 fail-fast。
-	outboundClient, err := httpclient.New(cfg.Proxy)
+	// 非法代理 URL 启动即 fail-fast。持有者可运行时重建：设置面板改全局代理后即时生效（FR-185）。
+	// 启动时按 yaml/env 基线构造；settings 服务就绪后再据 DB 覆盖重建（优先级 DB > yaml > env）。
+	outboundProvider, err := httpclient.NewProvider(cfg.Proxy)
 	if err != nil {
 		log.Fatalf("初始化出站代理客户端失败 (proxy=%s): %v", httpclient.Sanitize(cfg.Proxy.URL), err)
 	}
@@ -109,7 +110,8 @@ func main() {
 	}
 	assetSvc := service.NewAssetService(db, root)
 	// 制品入库下载（如服务端核心 IngestFromURL）经进程级出站代理（FR-174，见 ADR-037）。
-	assetSvc.SetHTTPClient(outboundClient)
+	// 用持有者注入，使全局代理改动运行时即时生效（FR-185，见 ADR-043）。
+	assetSvc.SetHTTPClientProvider(outboundProvider.Client)
 	// 运行时与制品全局页只读聚合（FR-082）：跨节点 JDK 矩阵 + 引用实例 + 制品占用/去重/冷热。
 	runtimeAssetsSvc := service.NewRuntimeAssetsService(db)
 	// 节点 enrollment token（一键安装 / 傻瓜部署，FR-080，见 ADR-020）：
@@ -130,7 +132,8 @@ func main() {
 		AllowInsecure: cfg.Update.AllowInsecure,
 	}, root)
 	// 拉取 feed 与 CP 自身二进制下载经进程级出站代理（FR-174，见 ADR-037）。
-	selfUpdateSvc.SetHTTPClient(outboundClient)
+	// 用持有者注入，使全局代理改动运行时即时生效（CP「检查更新」立即走新代理，FR-185）。
+	selfUpdateSvc.SetHTTPClientProvider(outboundProvider.Client)
 	// 客户端分发频道与拉取密钥（FR-086，见 ADR-022）：密钥落库只存哈希、明文一次性返回。
 	clientChannelSvc := service.NewClientChannelService(db)
 	// 客户端分发版本与签名 manifest（FR-087，见 ADR-022、contract §2/§3）。
@@ -175,7 +178,8 @@ func main() {
 	pluginSvc := service.NewPluginService(db, pool, assetSvc)
 	coreSvc := service.NewCoreService()
 	// 解析核心版本/构建的 PaperMC API 请求经进程级出站代理（FR-174，见 ADR-037）。
-	coreSvc.SetHTTPClient(outboundClient)
+	// 用持有者注入，使全局代理改动运行时即时生效（FR-185）。
+	coreSvc.SetHTTPClientProvider(outboundProvider.Client)
 	// 插件桥服务（FR-065，见 ADR-016）：建服时为实例签发插件桥 token 并写入探针 config 的 bridge 段。
 	pluginBridgeSvc := service.NewPluginBridgeService(cfg.JWT.Secret)
 	provisionSvc := service.NewProvisionService(db, pool, instanceSvc, coreSvc, pluginBridgeSvc)
@@ -256,12 +260,35 @@ func main() {
 	backupSvc.Start()
 	defer backupSvc.Stop()
 
+	// 出站代理可视化配置（FR-185，见 ADR-043）：
+	//   - settings 保存 proxy.* 后重建 CP 出站持有者（优先级 settings DB > yaml > env）；
+	//   - 启动时若 DB 已有代理覆盖，按当前生效代理重建一次（保证重启后覆盖仍生效）；
+	//   - 节点代理服务以 settings.EffectiveProxy 作全局默认，供心跳按节点算期望代理下发。
+	settingsSvc.SetProxyRebuilder(func(c httpclient.Config) {
+		if err := outboundProvider.Rebuild(c); err != nil {
+			// 已在保存前校验过，理论不达；保险起见记录而不中断（保留旧 client）。
+			slog.Warn("重建 CP 出站代理客户端失败", "proxy", httpclient.Sanitize(c.URL), "error", err)
+			return
+		}
+		slog.Info("CP 出站代理已运行时更新", "proxy", httpclient.Sanitize(c.URL), "noProxy", c.NoProxy)
+	})
+	if eff := settingsSvc.EffectiveProxy(); eff.URL != cfg.Proxy.URL || eff.NoProxy != cfg.Proxy.NoProxy {
+		if err := outboundProvider.Rebuild(eff); err != nil {
+			slog.Warn("启动时按 DB 覆盖重建出站代理失败，沿用 yaml/env", "proxy", httpclient.Sanitize(eff.URL), "error", err)
+		} else {
+			slog.Info("启动时按 settings DB 覆盖应用出站代理", "proxy", httpclient.Sanitize(eff.URL))
+		}
+	}
+	// 节点级出站代理（FR-185）：全局默认取自 settings（inherit 节点用之），custom 节点用自身值。
+	nodeProxySvc := service.NewNodeProxyService(db, settingsSvc.EffectiveProxy)
+
 	r := router.Setup(&router.Services{
 		Auth:               authSvc,
 		User:               userSvc,
 		Group:              groupSvc,
 		Node:               nodeSvc,
 		NodeRepair:         nodeRepairSvc,
+		NodeProxy:          nodeProxySvc,
 		Instance:           instanceSvc,
 		InstanceBatch:      instanceBatchSvc,
 		InstanceGroup:      instanceGroupSvc,
@@ -343,6 +370,9 @@ func main() {
 	// 注入 enrollment token 校验器（FR-080，见 ADR-020）：新节点首次注册必须凭有效一次性 token，
 	// 老节点（name 命中）重注册不强制 token，避免在网节点重启掉线。
 	grpcHandler.SetEnrollmentValidator(enrollTokenSvc)
+	// 注入节点期望代理解析器（FR-185，见 ADR-043）：每次心跳响应携带该节点期望出站代理
+	// （custom→节点值，inherit→全局默认）+ generation，Worker 据变化运行时重建出站 client。
+	grpcHandler.SetNodeProxyResolver(nodeProxySvc)
 	grpcServer := grpc.NewServer()
 	workerpb.RegisterWorkerServiceServer(grpcServer, grpcHandler)
 

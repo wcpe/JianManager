@@ -51,6 +51,13 @@ type EnrollmentValidator interface {
 	ConsumeForNewNode(plaintext, nodeUUID string) error
 }
 
+// NodeProxyResolver 计算某节点的期望出站代理 + generation，供心跳响应下发（FR-185，见 ADR-043）。
+// 同 MetricIngester 以接口声明、由 service.NodeProxyService 实现，避免 grpc→service 反向依赖。
+// 返回 url/noProxy 为期望代理（url 空=期望直连），generation 为其哈希（Worker 据此判定是否重建）。
+type NodeProxyResolver interface {
+	EffectiveNodeProxyByUUID(nodeUUID string) (url, noProxy, generation string)
+}
+
 // ControlPlaneHandler Control Plane 侧的 gRPC 处理器。
 // 处理来自 Worker Node 的 Register 和 Heartbeat 请求。
 type ControlPlaneHandler struct {
@@ -61,6 +68,7 @@ type ControlPlaneHandler struct {
 	metrics         MetricIngester         // 时序指标入库（nil 时心跳不落时序）
 	tasks           TaskIngester           // 任务进度入库（nil 时心跳不落任务，FR-183）
 	enroll          EnrollmentValidator    // enrollment token 校验消费（nil 时退化为 FR-004 自助注册）
+	proxy           NodeProxyResolver      // 节点期望代理解析（nil 时心跳响应不携带代理，FR-185）
 }
 
 // NewControlPlaneHandler 创建处理器。
@@ -88,6 +96,13 @@ func (h *ControlPlaneHandler) SetTaskIngester(t TaskIngester) {
 // 不注入则退化为 FR-004 行为（任何 name 均可自助注册），保证开发环境与既有部署零配置可用。
 func (h *ControlPlaneHandler) SetEnrollmentValidator(v EnrollmentValidator) {
 	h.enroll = v
+}
+
+// SetNodeProxyResolver 注入节点期望代理解析器（FR-185，见 ADR-043）。
+// 注入后每次心跳响应携带该节点期望代理（url/no_proxy/generation），Worker 据 generation
+// 变化运行时重建出站 client；不注入则心跳响应不带代理（退化为 Worker 仅用本地 yaml/env，向后兼容）。
+func (h *ControlPlaneHandler) SetNodeProxyResolver(r NodeProxyResolver) {
+	h.proxy = r
 }
 
 // Register 处理 Worker Node 注册。
@@ -347,10 +362,13 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 			}
 		}
 
-		// 返回响应
-		if err := stream.Send(&workerpb.HeartbeatResponse{
-			Timestamp: time.Now().Unix(),
-		}); err != nil {
+		// 返回响应；携带该节点期望出站代理供 Worker 运行时应用（FR-185，见 ADR-043）。
+		// generation 变化时 Worker 才重建出站 client（避免每拍重建）；重连/重启天然由后续心跳重发。
+		resp := &workerpb.HeartbeatResponse{Timestamp: time.Now().Unix()}
+		if h.proxy != nil {
+			resp.ProxyUrl, resp.ProxyNoProxy, resp.ProxyGeneration = h.proxy.EffectiveNodeProxyByUUID(req.NodeUuid)
+		}
+		if err := stream.Send(resp); err != nil {
 			return err
 		}
 	}

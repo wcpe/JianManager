@@ -16,6 +16,8 @@ type Services struct {
 	Group              *service.GroupService
 	Node               *service.NodeService
 	NodeRepair         *service.NodeRepairService
+	// NodeProxy 节点级出站代理管控（FR-185，见 ADR-043）；nil 时节点代理端点关闭。
+	NodeProxy          *service.NodeProxyService
 	Instance           *service.InstanceService
 	InstanceBatch      *service.InstanceBatchService
 	InstanceGroup      *service.InstanceGroupService
@@ -129,6 +131,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.NodeRuntime != nil {
 			nodeRuntimeHandler := NewNodeRuntimeHandler(svcs.NodeRuntime, svcs.Audit)
 			nodeRuntimeHandler.RegisterRoutes(protected)
+		}
+
+		// 节点级出站代理（FR-185，见 ADR-043）：查看/设置某节点继承全局或自定义代理。
+		// Handler 内按平台管理员收敛 + 设置写审计；经心跳下发 Worker 运行时生效。
+		if svcs.NodeProxy != nil {
+			nodeProxyHandler := NewNodeProxyHandler(svcs.NodeProxy, svcs.Audit)
+			nodeProxyHandler.RegisterRoutes(protected)
 		}
 
 		// Docker 镜像管理（FR-078，见 ADR-019）：节点级列出/拉取/删除本机镜像。仅平台管理员。

@@ -11,6 +11,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/controlplane/config"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/platform/httpclient"
 )
 
 func newSettingsTestDB(t *testing.T) *gorm.DB {
@@ -185,4 +186,89 @@ func TestNewService_ReplaysPersistedLogLevel(t *testing.T) {
 	require.Equal(t, slog.LevelWarn, config.LogLevelVar.Level())
 
 	config.SetLogLevel("info") // 复位
+}
+
+// === 出站代理（network 分类，FR-185 / ADR-043） ===
+
+// TestProxy_KeysEditableAndNetwork proxy.url/proxy.no_proxy 为可编辑项；proxy.url 标 sensitive、脱敏展示。
+func TestProxy_KeysEditableAndNetwork(t *testing.T) {
+	db := newSettingsTestDB(t)
+	// 含凭据的代理 URL 落库覆盖，回显须脱敏。
+	require.NoError(t, db.Save(&model.PlatformSetting{Key: SettingKeyProxyURL, Value: "http://user:pass@127.0.0.1:7890"}).Error)
+	svc := NewSettingsService(db, testConfig())
+
+	view, err := svc.Get()
+	require.NoError(t, err)
+
+	url, ok := findItem(view.Editable, SettingKeyProxyURL)
+	require.True(t, ok)
+	require.True(t, url.Editable)
+	require.True(t, url.Sensitive)
+	require.True(t, url.Overridden)
+	require.NotContains(t, url.Value, "pass") // 口令脱敏
+	require.Contains(t, url.Value, "127.0.0.1:7890")
+
+	np, ok := findItem(view.Editable, SettingKeyProxyNoProxy)
+	require.True(t, ok)
+	require.True(t, np.Editable)
+	require.False(t, np.Sensitive)
+}
+
+// TestProxy_UpdateValidatesURL 非法代理 URL（不支持 scheme）被拒、不落库；合法 http/socks5 通过。
+func TestProxy_UpdateValidatesURL(t *testing.T) {
+	db := newSettingsTestDB(t)
+	svc := NewSettingsService(db, testConfig())
+
+	require.ErrorIs(t, svc.Update(map[string]string{SettingKeyProxyURL: "ftp://127.0.0.1:1"}), ErrSettingValueInvalid)
+	require.ErrorIs(t, svc.Update(map[string]string{SettingKeyProxyURL: "http://"}), ErrSettingValueInvalid)
+
+	// 合法值落库。
+	require.NoError(t, svc.Update(map[string]string{
+		SettingKeyProxyURL:     "socks5://127.0.0.1:1080",
+		SettingKeyProxyNoProxy: "localhost,10.0.0.0/8",
+	}))
+	require.Equal(t, "socks5://127.0.0.1:1080", svc.EffectiveValue(SettingKeyProxyURL))
+
+	// 空 url 合法（=清除代理覆盖，回退 yaml/env）。
+	require.NoError(t, svc.Update(map[string]string{SettingKeyProxyURL: ""}))
+}
+
+// TestProxy_EffectivePriorityDBOverYAML CP 出站代理生效优先级：settings DB 覆盖 > control-plane.yaml proxy。
+func TestProxy_EffectivePriorityDBOverYAML(t *testing.T) {
+	cfg := testConfig()
+	cfg.Proxy.URL = "http://yaml-proxy:7890" // yaml 基线
+	db := newSettingsTestDB(t)
+	svc := NewSettingsService(db, cfg)
+
+	// 无 DB 覆盖 → 取 yaml。
+	eff := svc.EffectiveProxy()
+	require.Equal(t, "http://yaml-proxy:7890", eff.URL)
+
+	// 有 DB 覆盖 → 取 DB（压过 yaml）。
+	require.NoError(t, svc.Update(map[string]string{SettingKeyProxyURL: "http://db-proxy:8080", SettingKeyProxyNoProxy: "localhost"}))
+	eff = svc.EffectiveProxy()
+	require.Equal(t, "http://db-proxy:8080", eff.URL)
+	require.Equal(t, "localhost", eff.NoProxy)
+}
+
+// TestProxy_UpdateRebuildsProvider 保存 proxy.* 后触发出站持有者重建回调（CP 出站立即走新代理）。
+func TestProxy_UpdateRebuildsProvider(t *testing.T) {
+	db := newSettingsTestDB(t)
+	svc := NewSettingsService(db, testConfig())
+
+	var rebuilt int
+	var lastURL string
+	svc.SetProxyRebuilder(func(c httpclient.Config) {
+		rebuilt++
+		lastURL = c.URL
+	})
+
+	require.NoError(t, svc.Update(map[string]string{SettingKeyProxyURL: "http://127.0.0.1:7890"}))
+	require.Equal(t, 1, rebuilt)
+	require.Equal(t, "http://127.0.0.1:7890", lastURL)
+
+	// 改非 proxy 键不应触发 proxy 重建。
+	require.NoError(t, svc.Update(map[string]string{SettingKeyLogLevel: "warn"}))
+	require.Equal(t, 1, rebuilt)
+	config.SetLogLevel("info")
 }

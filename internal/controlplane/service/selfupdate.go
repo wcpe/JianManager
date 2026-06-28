@@ -91,6 +91,9 @@ type SelfUpdateService struct {
 	// httpClient 出站 client（经进程级代理，FR-174/ADR-037）：拉 feed 与 CP 自身二进制下载共用。
 	// 为 nil 时回退 http.DefaultClient（向后兼容）。
 	httpClient *http.Client
+	// httpProvider 运行时出站持有者（FR-185/ADR-043）：非 nil 时每次取当前 client，
+	// 使设置面板改全局代理后立即生效。优先于 httpClient。
+	httpProvider func() *http.Client
 
 	// rolloutMu 保护 rollout（全网编排为单例：同一时刻只跑一次全网升级）。
 	rolloutMu sync.Mutex
@@ -116,8 +119,19 @@ func (s *SelfUpdateService) SetHTTPClient(c *http.Client) {
 	s.httpClient = c
 }
 
-// outboundClient 返回出站 client：注入了则用之，否则回退 http.DefaultClient。
+// SetHTTPClientProvider 注入运行时出站持有者（FR-185/ADR-043）：每次拉 feed/下载取当前 client，
+// 使全局代理改动即时生效（CP「检查更新」立即走新代理）。优先于固定 client。
+func (s *SelfUpdateService) SetHTTPClientProvider(p func() *http.Client) {
+	s.httpProvider = p
+}
+
+// outboundClient 返回出站 client：优先运行时持有者（取当前），其次固定注入，再回退 DefaultClient。
 func (s *SelfUpdateService) outboundClient() *http.Client {
+	if s.httpProvider != nil {
+		if c := s.httpProvider(); c != nil {
+			return c
+		}
+	}
 	if s.httpClient != nil {
 		return s.httpClient
 	}

@@ -41,6 +41,9 @@ type AssetService struct {
 	// httpClient IngestFromURL 下载远端资源所用出站 client（经进程级代理，FR-174/ADR-037）。
 	// 为 nil 时回退 http.DefaultClient（向后兼容）。
 	httpClient *http.Client
+	// httpProvider 运行时出站 client 持有者（FR-185/ADR-043）：非 nil 时每次取当前 client，
+	// 使设置面板改全局代理后立即生效（无需重启），优先于 httpClient。
+	httpProvider func() *http.Client
 }
 
 // NewAssetService 创建制品库服务。root 提供 var/artifacts 物理根。
@@ -54,8 +57,19 @@ func (s *AssetService) SetHTTPClient(c *http.Client) {
 	s.httpClient = c
 }
 
-// outboundClient 返回出站 client：注入了则用之，否则回退 http.DefaultClient。
+// SetHTTPClientProvider 注入运行时出站持有者（FR-185/ADR-043）：每次下载取当前 client，
+// 使全局代理改动即时生效。优先于 SetHTTPClient 注入的固定 client。
+func (s *AssetService) SetHTTPClientProvider(p func() *http.Client) {
+	s.httpProvider = p
+}
+
+// outboundClient 返回出站 client：优先运行时持有者（取当前），其次固定注入，再回退 DefaultClient。
 func (s *AssetService) outboundClient() *http.Client {
+	if s.httpProvider != nil {
+		if c := s.httpProvider(); c != nil {
+			return c
+		}
+	}
 	if s.httpClient != nil {
 		return s.httpClient
 	}

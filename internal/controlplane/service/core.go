@@ -31,7 +31,10 @@ type CoreInfo struct {
 // CoreService 解析 MC 服务端核心的可用版本与下载信息（FR-034）。
 type CoreService struct {
 	client *http.Client
-	base   string // 下载 API 根，测试可注入 httptest 地址
+	// httpProvider 运行时出站持有者（FR-185/ADR-043）：非 nil 时每次请求取当前 client，
+	// 使全局代理改动即时生效（补足 20s 超时）。优先于固定 client。
+	httpProvider func() *http.Client
+	base         string // 下载 API 根，测试可注入 httptest 地址
 }
 
 // NewCoreService 创建核心服务（默认 PaperMC API）。
@@ -45,12 +48,36 @@ func (s *CoreService) SetHTTPClient(c *http.Client) {
 	if c == nil {
 		return
 	}
+	s.client = withDefaultTimeout(c)
+}
+
+// SetHTTPClientProvider 注入运行时出站持有者（FR-185/ADR-043）：每次请求取当前 client，
+// 使全局代理改动即时生效。优先于 SetHTTPClient 注入的固定 client；补足 20s 超时避免无限等待。
+func (s *CoreService) SetHTTPClientProvider(p func() *http.Client) {
+	s.httpProvider = p
+}
+
+// httpClient 返回出站 client：优先运行时持有者（取当前），否则固定 client。
+func (s *CoreService) httpClient() *http.Client {
+	if s.httpProvider != nil {
+		if c := s.httpProvider(); c != nil {
+			return withDefaultTimeout(c)
+		}
+	}
+	return s.client
+}
+
+// withDefaultTimeout 在 client 未设 Timeout 时补足 20s（避免无限等待）；不改原 client。
+func withDefaultTimeout(c *http.Client) *http.Client {
+	if c == nil {
+		return &http.Client{Timeout: 20 * time.Second}
+	}
 	if c.Timeout == 0 {
 		cc := *c
 		cc.Timeout = 20 * time.Second
-		c = &cc
+		return &cc
 	}
-	s.client = c
+	return c
 }
 
 // ListVersions 返回指定核心类型可用的版本（新→旧）。
@@ -146,7 +173,7 @@ func (s *CoreService) getJSON(ctx context.Context, url string, v interface{}) er
 	if err != nil {
 		return err
 	}
-	resp, err := s.client.Do(req)
+	resp, err := s.httpClient().Do(req)
 	if err != nil {
 		return fmt.Errorf("请求核心仓库失败: %w", err)
 	}
