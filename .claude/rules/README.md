@@ -25,3 +25,4 @@
 | [scope-discipline.md](scope-discipline.md) | 范围纪律，不做 spec 之外的事 |
 | [static-analysis.md](static-analysis.md) | 静态分析和 lint 规范 |
 | [testing-and-quality.md](testing-and-quality.md) | 测试和质量要求 |
+| [ui-modals.md](ui-modals.md) | 模态框纪律：禁内联展开表单，强制内容自适应模态 |
