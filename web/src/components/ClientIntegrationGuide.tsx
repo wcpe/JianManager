@@ -56,7 +56,7 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
         <p className="text-muted-foreground">
           {t(
             'clientGuide.intro',
-            '楔子在游戏启动前自定位、加载 updater-core、拉签名 manifest、增量更新客户端资源后放行游戏；断网或配置异常一律放行（fail-static / fail-open），绝不挡启动。按下面步骤把更新器接入整合包并下发玩家。',
+            '楔子在游戏启动前自定位、加载 updater-core、拉签名 manifest、增量更新客户端资源后放行游戏；断网兜底启动、异常兜底放行，绝不挡启动。按下面步骤把更新器接入整合包并下发玩家。',
           )}
         </p>
         {jars && (
@@ -142,8 +142,8 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
       {/* 行为说明 */}
       <Step title={t('clientGuide.behaviorTitle', '行为说明')}>
         <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
-          <li>{t('clientGuide.behaviorFailStatic', '断网 / 端点不可达 → 以本地现有版本启动游戏（fail-static）。')}</li>
-          <li>{t('clientGuide.behaviorFailOpen', '配置缺失 / 异常 → 跳过更新直接启动（fail-open）。绝不挡启动。')}</li>
+          <li>{t('clientGuide.behaviorFailStatic', '断网 / 端点不可达 → 以本地现有版本兜底启动游戏。')}</li>
+          <li>{t('clientGuide.behaviorFailOpen', '配置缺失 / 异常 → 跳过更新兜底放行直接启动，绝不挡启动。')}</li>
           <li>{t('clientGuide.behaviorProgress', '更新期弹独立进度窗口（进度条 + 速度 + ETA）；无显示环境降级为文本。')}</li>
           <li>{t('clientGuide.behaviorMultiAgent', '可与外置登录 authlib-injector 等其它 -javaagent 共存，加载顺序无关。')}</li>
         </ul>

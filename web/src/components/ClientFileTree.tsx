@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
 import { ChevronRight, File, Folder, FolderOpen, Lock, Trash2 } from 'lucide-react'
 import {
   buildFileTree,
@@ -191,7 +192,7 @@ function FileRow({
         <File className="size-4 shrink-0 text-muted-foreground" />
         <span className="font-mono text-xs truncate">{file.name}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
-          <SyncBadge sync={file.sync} />
+          <SyncBadge sync={file.sync} t={t} />
           {file.platform && <Badge variant="outline" className="text-[10px]">{file.platform}</Badge>}
           <span className="text-xs text-muted-foreground whitespace-nowrap">{formatBytes(file.size)}</span>
         </span>
@@ -225,9 +226,9 @@ function FileRow({
         <Select value={file.sync} onValueChange={(v: string) => onSyncChange?.(file.index, v as ManifestFileLike['sync'])}>
           <SelectTrigger size="sm" className="w-28"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="strict">{t('clientVersions.syncStrict', 'strict 强制')}</SelectItem>
-            <SelectItem value="once">{t('clientVersions.syncOnce', 'once 仅缺失')}</SelectItem>
-            <SelectItem value="ignore">{t('clientVersions.syncIgnore', 'ignore 不动')}</SelectItem>
+            <SelectItem value="strict">{t('clientVersions.syncStrict', '强制')}</SelectItem>
+            <SelectItem value="once">{t('clientVersions.syncOnce', '仅一次')}</SelectItem>
+            <SelectItem value="ignore">{t('clientVersions.syncIgnore', '忽略')}</SelectItem>
           </SelectContent>
         </Select>
         <Select
@@ -258,13 +259,19 @@ function FileRow({
   )
 }
 
-/** 同步策略徽标（只读预览用，配色区分 strict/once/ignore）。 */
-function SyncBadge({ sync }: { sync: ManifestFileLike['sync'] }) {
+/** 同步策略徽标（只读预览用，配色区分 strict/once/ignore；文案中文化，UI 不显英文裸词）。 */
+function SyncBadge({ sync, t }: { sync: ManifestFileLike['sync']; t: TFunction }) {
   const tone =
     sync === 'strict'
       ? 'border-primary/40 text-primary'
       : sync === 'once'
         ? 'border-amber-500/40 text-amber-600 dark:text-amber-500'
         : 'border-muted-foreground/30 text-muted-foreground'
-  return <Badge variant="outline" className={cn('text-[10px]', tone)}>{sync}</Badge>
+  const label =
+    sync === 'strict'
+      ? t('clientVersions.syncStrict', '强制')
+      : sync === 'once'
+        ? t('clientVersions.syncOnce', '仅一次')
+        : t('clientVersions.syncIgnore', '忽略')
+  return <Badge variant="outline" className={cn('text-[10px]', tone)}>{label}</Badge>
 }
