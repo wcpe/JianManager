@@ -6,6 +6,9 @@
 
 ## [Unreleased]
 
+### 修复
+- **发布管线 changelog 提取兜底（FR-173，见 ADR-036 §3）**：`changelog-extract.mjs` 的 `--unreleased` 在 `[Unreleased]` 段为空时改为输出兜底说明（刚发完版尚无新变更的正常态），不再非零退出——避免每次发版后下一次 push master 的滚动预发布因空段把整条 CI 挂掉；`--version` 段为空仍硬失败（真发布必须有说明）。补 node:test 单测（空 `[Unreleased]` → 兜底、空版本段 → 抛错）。
+
 ## 0.11.0（2026-06-28）
 
 ### 新增

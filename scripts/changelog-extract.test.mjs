@@ -75,7 +75,7 @@ test('extractSection: 缺失版本抛错', () => {
   assert.throws(() => extractSection(SAMPLE, { version: '9.9.9' }), /9\.9\.9/)
 })
 
-test('extractSection: 空段抛错（让 CI 失败而非发空说明）', () => {
+test('extractSection: 空 [Unreleased] 返回兜底说明而非抛错（刚发完版的滚动预发布不挂 CI）', () => {
   const emptyUnreleased = `# CHANGELOG
 
 ## [Unreleased]
@@ -85,7 +85,22 @@ test('extractSection: 空段抛错（让 CI 失败而非发空说明）', () => 
 ### 新增
 - 有内容
 `
-  assert.throws(() => extractSection(emptyUnreleased, { unreleased: true }), /空|empty|Unreleased/i)
+  const body = extractSection(emptyUnreleased, { unreleased: true })
+  assert.notEqual(body.trim(), '')
+  assert.match(body, /滚动|暂无|预发布/)
+})
+
+test('extractSection: 空版本段仍抛错（真发布必须有说明）', () => {
+  const emptyVersion = `# CHANGELOG
+
+## 0.13.0（2026-09-01）
+
+## 0.12.0（2026-08-01）
+
+### 新增
+- x
+`
+  assert.throws(() => extractSection(emptyVersion, { version: '0.13.0' }), /空|empty/i)
 })
 
 test('extractSection: 仅含空白的段也视为空并抛错', () => {

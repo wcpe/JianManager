@@ -9,7 +9,8 @@
 //   node scripts/changelog-extract.mjs --version 0.11.0     # 输出指定版本段（v 前缀可有可无）
 //   node scripts/changelog-extract.mjs --version 0.11.0 --file path/to/CHANGELOG.md
 //
-// 找不到段 / 段为空 → 打印错误到 stderr 并以非零退出，让 CI 失败（而非发空说明）。
+// 找不到段 → 非零退出。版本段为空 → 非零退出（真发布必须有说明）。
+// [Unreleased] 段为空 → 输出兜底说明（刚发完版的正常态，不让滚动预发布把 CI 挂掉）。
 //
 // 与 gen-licenses.mjs 同栈（纯 Node ESM，零运行时依赖）。纯解析逻辑 extractSection 已导出，
 // 供 changelog-extract.test.mjs 单测（node --test）。
@@ -80,7 +81,13 @@ export function extractSection(text, target) {
   }
   const body = lines.slice(start, end).join('\n').trim()
   if (body === '') {
-    throw new Error(`CHANGELOG 段「${label}」为空，拒绝发布空说明`)
+    // 正式版本段为空 → 硬失败：真发布必须有说明。
+    if (!target.unreleased) {
+      throw new Error(`CHANGELOG 段「${label}」为空，拒绝发布空说明`)
+    }
+    // [Unreleased] 为空是正常态（刚发完版、尚无新变更）：滚动预发布给兜底说明，
+    // 不让每次发版后的下一次 push master 都把 CI 挂掉（见 ADR-036 §3）。
+    return '滚动开发预发布构建；自上个正式版本以来 CHANGELOG 暂无记录的变更。'
   }
   return body
 }
