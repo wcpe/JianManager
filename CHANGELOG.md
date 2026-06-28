@@ -9,6 +9,9 @@
 ### 修复
 - **发布管线 changelog 提取兜底（FR-173，见 ADR-036 §3）**：`changelog-extract.mjs` 的 `--unreleased` 在 `[Unreleased]` 段为空时改为输出兜底说明（刚发完版尚无新变更的正常态），不再非零退出——避免每次发版后下一次 push master 的滚动预发布因空段把整条 CI 挂掉；`--version` 段为空仍硬失败（真发布必须有说明）。补 node:test 单测（空 `[Unreleased]` → 兜底、空版本段 → 抛错）。
 
+### 新增
+- **出站代理可视化配置（FR-185，见 ADR-043，增强 FR-174）**：设置面板新增「网络」分类配全局/CP 出站代理（`proxy.url` 敏感脱敏 / `proxy.no_proxy`，保存即运行时重建 CP 出站客户端、免重启，优先级 settings DB > control-plane.yaml > env）；节点页新增「代理」分段为单节点配「继承全局 / 自定义」（`nodes.proxy_mode/proxy_url/proxy_no_proxy`，`PATCH /nodes/:id/proxy` + 审计），经 `HeartbeatResponse` 新增 `proxy_url/proxy_no_proxy/proxy_generation` 字段按节点下发，Worker 据 generation 变化运行时重建出站客户端（`httpclient.Provider` 原子持有者）并注入 JDK/CFR/自更新/服务端 jar 各下载点——免登机器改 yaml/重启；真相源 = CP DB、Worker 不落盘、重连由心跳重发；含凭据 URL 全程脱敏。
+
 ## 0.11.0（2026-06-28）
 
 ### 新增

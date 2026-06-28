@@ -1530,6 +1530,28 @@
 - **响应**: `{ "path": "/opt", "parent": "/", "dirs": [{ "name": "jdks", "path": "/opt/jdks" }] }`
 - **错误码**: `503 NODE_OFFLINE`；`502 WORKER_ERROR`（路径不可访问/非目录/相对路径）
 
+### 节点出站代理（FR-185，见 ADR-043）
+
+> 节点级出站代理：继承平台全局默认（设置面板配，见「平台设置」network 键）或为本节点自定义。
+> 真相源 = CP DB；设置经心跳下发到 Worker，节点运行时重建出站 client（免改 worker.yaml/重启）。
+> 含凭据的代理 URL 在响应中一律脱敏（仅 `scheme://host:port`）。仅平台管理员；设置写审计。
+
+#### GET /api/v1/nodes/:id/proxy
+- **描述**: 查看节点出站代理配置（脱敏），含当前生效值与全局默认值。
+- **关联 FR**: FR-185
+- **权限**: 平台管理员
+- **响应**: `{ "mode": "inherit"|"custom", "url": "<脱敏，仅 custom>", "noProxy": "<仅 custom>", "effectiveUrl": "<脱敏；custom→节点值，inherit→全局默认>", "effectiveNoProxy": "", "globalDefaultUrl": "<脱敏>", "online": true }`
+  - `online=false` 时前端标注「待下发」（下次心跳上线后生效）。
+- **错误码**: `404 NOT_FOUND`（节点不存在）
+
+#### PATCH /api/v1/nodes/:id/proxy
+- **描述**: 设置节点继承全局/自定义代理。`mode=custom` 时 `url` 必填且须为合法代理地址（http/https/socks5，复用 httpclient 校验）；`mode=inherit` 时清空自定义字段、改用全局默认。生效经心跳下发到 Worker。写审计 `node.proxy.set`（仅记录 mode，不记录敏感 URL）。
+- **关联 FR**: FR-185
+- **权限**: 平台管理员
+- **请求体**: `{ "mode": "inherit"|"custom", "url": "http://127.0.0.1:7890", "noProxy": "localhost,10.0.0.0/8" }`（inherit 时 `url`/`noProxy` 忽略）
+- **响应**: 同 `GET`（脱敏视图）
+- **错误码**: `404 NOT_FOUND`（节点不存在）；`422 BUSINESS_ERROR`（mode 非法 / custom 缺地址 / 代理地址非法）
+
 ### GET /api/v1/tasks
 - **描述**: 任务列表（倒序）。非平台管理员只见自己发起的，平台管理员见全部。
 - **关联 FR**: FR-183
@@ -1623,7 +1645,9 @@
       { "key": "log.level", "value": "info", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": true },
       { "key": "jdk.mirror.temurin", "value": "https://api.adoptium.net", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": false },
       { "key": "graceful_stop.timeout", "value": "30s", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": false },
-      { "key": "backup.retention_days", "value": "14", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": false }
+      { "key": "backup.retention_days", "value": "14", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": false },
+      { "key": "proxy.url", "value": "http://127.0.0.1:7890", "editable": true, "sensitive": true, "overridden": true, "effectiveImmediately": true },
+      { "key": "proxy.no_proxy", "value": "localhost,10.0.0.0/8", "editable": true, "sensitive": false, "overridden": true, "effectiveImmediately": true }
     ],
     "readOnly": [
       { "key": "server.port", "value": "8080", "editable": false, "sensitive": false, "overridden": false, "effectiveImmediately": false },
@@ -1636,12 +1660,13 @@
 - **描述**: 写入一批白名单配置覆盖。非白名单键或值不合法时整体拒绝（422）且不落库；成功后返回更新后的最新视图。可即时生效项（`log.level`）落库后立即应用
 - **权限**: 平台管理员
 - **关联 FR**: FR-063
-- **可写白名单键**: `log.level`（debug|info|warn|error）、`jdk.mirror.temurin` / `jdk.mirror.corretto` / `jdk.mirror.zulu`、`graceful_stop.timeout`（Go duration 文本）、`backup.retention_days`（非负整数）
-- **各项生效方式**（FR-063）：
+- **可写白名单键**: `log.level`（debug|info|warn|error）、`jdk.mirror.temurin` / `jdk.mirror.corretto` / `jdk.mirror.zulu`、`graceful_stop.timeout`（Go duration 文本）、`backup.retention_days`（非负整数）、`proxy.url`（network 类，敏感，FR-185）、`proxy.no_proxy`（network 类，FR-185）
+- **各项生效方式**（FR-063 / FR-185）：
   - `log.level`：`effectiveImmediately=true`，落库即在 CP 内切换（slog LevelVar）
   - `jdk.mirror.*`：安装 JDK 时 CP 取生效值经 `InstallJDK.mirror_base` 下发 Worker，影响下载源
   - `graceful_stop.timeout`：启动实例时 CP 取生效值经 `CreateInstance.graceful_stop_timeout_seconds` 下发 Worker→wrapper；对设置变更后**新启动**的实例生效，已运行实例保留启动时的值
   - `backup.retention_days`：CP 后台巡检（约每小时一轮）裁剪 `createdAt` 早于 N 天的备份；`≤0` 不裁剪；被未超期增量子链引用的全量基跳过以保链可恢复
+  - `proxy.url` / `proxy.no_proxy`（FR-185/ADR-043）：`effectiveImmediately=true`，落库即重建 CP 出站持有者（CP 自身下载立即走新代理）；`proxy.url` 敏感，回显脱敏（含凭据时仅 `scheme://host:port`），非法地址（非 http/https/socks5 / 不可解析）整体拒绝（422）。此全局值同时作为各节点默认代理（节点页可覆盖），优先级 settings DB > control-plane.yaml > env
 - **请求**: `{ "values": { "log.level": "debug", "backup.retention_days": "30" } }`
 
 ---
