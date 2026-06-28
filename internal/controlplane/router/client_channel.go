@@ -188,6 +188,34 @@ func (h *ClientChannelHandler) RotateKey(c *gin.Context) {
 	c.JSON(http.StatusOK, keyWithPlaintext(key, plaintext))
 }
 
+// RevealKey GET /client-channels/:id/keys/:kid/reveal — 查看密钥明文（FR-192，见 ADR-044）。
+// 仅平台管理员 + 审计 client_key.reveal（detail 绝不含明文）。无 KeyEnc → 404 KEY_NOT_REVEALABLE。
+func (h *ClientChannelHandler) RevealKey(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	channelID := c.Param("id")
+	kid, err := parseUintParam(c, "kid")
+	if err != nil {
+		return
+	}
+	plaintext, err := h.svc.RevealKey(channelID, kid)
+	if err != nil {
+		if errors.Is(err, service.ErrPullKeyNotRevealable) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":   "KEY_NOT_REVEALABLE",
+				"message": "此密钥创建于可查看功能之前或未配置加密，明文不可找回",
+			})
+			return
+		}
+		h.respondKeyErr(c, err)
+		return
+	}
+	// 审计：记录查看动作以便追溯；detail 仅含元数据，绝不含明文。
+	h.recordAudit(c, "client_key.reveal", map[string]any{"channelId": channelID, "keyId": kid})
+	c.JSON(http.StatusOK, gin.H{"key": plaintext})
+}
+
 // RevokeKey DELETE /client-channels/:id/keys/:kid — 吊销密钥。
 func (h *ClientChannelHandler) RevokeKey(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
@@ -275,6 +303,7 @@ func (h *ClientChannelHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		ch.DELETE("/:id", h.DeleteChannel)
 		ch.GET("/:id/keys", h.ListKeys)
 		ch.POST("/:id/keys", h.CreateKey)
+		ch.GET("/:id/keys/:kid/reveal", h.RevealKey)
 		ch.POST("/:id/keys/:kid/rotate", h.RotateKey)
 		ch.DELETE("/:id/keys/:kid", h.RevokeKey)
 	}

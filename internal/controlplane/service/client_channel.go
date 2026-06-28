@@ -23,6 +23,9 @@ var (
 	ErrChannelNotFound = errors.New("频道不存在")
 	// ErrPullKeyNotFound 拉取密钥不存在（或不属于该频道）。
 	ErrPullKeyNotFound = errors.New("拉取密钥不存在")
+	// ErrPullKeyNotRevealable 拉取密钥不可查看（无 KeyEnc：存量老哈希密钥，或创建时未配加密密钥）。
+	// 供 reveal 端点映射 404 业务码 KEY_NOT_REVEALABLE（FR-192，见 ADR-044）。
+	ErrPullKeyNotRevealable = errors.New("拉取密钥不可查看")
 	// ErrPullKeyInvalid 拉取密钥鉴权失败（不存在/吊销/过期/频道不匹配）。
 	// 供 FR-087 面向玩家端点映射 401/403；不区分具体原因以免泄露密钥状态。
 	ErrPullKeyInvalid = errors.New("拉取密钥无效")
@@ -35,15 +38,25 @@ const pullKeyPlaintextPrefix = "jmck_"
 const pullKeyPrefixLen = 9
 
 // ClientChannelService 客户端分发频道与拉取密钥管理（FR-086，见 ADR-022）。
-// 密钥落库只存 SHA-256 哈希，明文仅创建/轮换时一次性返回、不可二次读取。
+// 密钥鉴权（VerifyKey）只用 SHA-256 哈希比对；另存 AES-256-GCM 可逆加密副本供管理员查看明文（FR-192）。
 // 鉴权（VerifyKey）供 FR-087 面向玩家的 manifest/制品端点消费。
 type ClientChannelService struct {
 	db *gorm.DB
+	// encryptor 拉取密钥可逆加密器（FR-192，见 ADR-044）。nil=未配置加密：建/轮换不写 KeyEnc、
+	// 查看返 ErrPullKeyNotRevealable（生产未注入 JIANMANAGER_CLIENT_KEY_ENC_SECRET 时优雅降级）。
+	encryptor *KeyEncryptor
 }
 
 // NewClientChannelService 创建客户端分发频道服务。
+// 加密器经 SetKeyEncryptor 注入（保持构造签名稳定，既有装配/测试零改动）。
 func NewClientChannelService(db *gorm.DB) *ClientChannelService {
 	return &ClientChannelService{db: db}
+}
+
+// SetKeyEncryptor 注入拉取密钥可逆加密器（FR-192，见 ADR-044）。
+// 传 nil 即「未配置加密」降级语义。装配处按生产/开发态用 ResolveKeyEncryptor 解析后注入。
+func (s *ClientChannelService) SetKeyEncryptor(enc *KeyEncryptor) {
+	s.encryptor = enc
 }
 
 // ChannelSummary 频道列表项（含密钥数量，便于管理台一览）。
@@ -170,10 +183,16 @@ func (s *ClientChannelService) CreateKey(channelID, name string, expiresAt *time
 	if err != nil {
 		return nil, "", err
 	}
+	// 可逆加密副本（FR-192）：配了加密器才写，未配（nil）则 enc 为空串、密钥仍正常可用、只是不可查看。
+	enc, err := s.encryptor.Encrypt(plaintext)
+	if err != nil {
+		return nil, "", fmt.Errorf("加密拉取密钥失败: %w", err)
+	}
 	key := &model.ClientPullKey{
 		ChannelID: channelID,
 		Name:      name,
 		KeyHash:   hash,
+		KeyEnc:    enc,
 		KeyPrefix: prefix,
 		ExpiresAt: expiresAt,
 	}
@@ -194,8 +213,14 @@ func (s *ClientChannelService) RotateKey(channelID string, keyID uint) (*model.C
 	if err != nil {
 		return nil, "", err
 	}
+	// 重写可逆加密副本（FR-192）：配了加密器写新密文，未配则置空（确保轮换后可查看性与当前配置一致）。
+	enc, err := s.encryptor.Encrypt(plaintext)
+	if err != nil {
+		return nil, "", fmt.Errorf("加密拉取密钥失败: %w", err)
+	}
 	updates := map[string]any{
 		"key_hash":   hash,
+		"key_enc":    enc,
 		"key_prefix": prefix,
 		"revoked":    false,
 		"revoked_at": nil,
@@ -204,10 +229,30 @@ func (s *ClientChannelService) RotateKey(channelID string, keyID uint) (*model.C
 		return nil, "", fmt.Errorf("轮换拉取密钥失败: %w", err)
 	}
 	key.KeyHash = hash
+	key.KeyEnc = enc
 	key.KeyPrefix = prefix
 	key.Revoked = false
 	key.RevokedAt = nil
 	return key, plaintext, nil
+}
+
+// RevealKey 返回拉取密钥明文（FR-192，见 ADR-044）：解密 KeyEnc 还原明文，供平台管理员查看 + 复制。
+// 无 KeyEnc（存量老哈希密钥 / 创建时未配加密密钥）→ ErrPullKeyNotRevealable（哈希单向，救不回）。
+// 鉴权不变（仍用 KeyHash 比对）；本方法只读、不刷新 last_used_at（查看非鉴权命中）。
+func (s *ClientChannelService) RevealKey(channelID string, keyID uint) (string, error) {
+	key, err := s.findKey(channelID, keyID)
+	if err != nil {
+		return "", err
+	}
+	if key.KeyEnc == "" {
+		return "", ErrPullKeyNotRevealable
+	}
+	plaintext, err := s.encryptor.Decrypt(key.KeyEnc)
+	if err != nil {
+		// 加密器未配置（降级）或密文解不开（如换过 env 密钥）：对管理员均呈现「不可查看」。
+		return "", ErrPullKeyNotRevealable
+	}
+	return plaintext, nil
 }
 
 // RevokeKey 吊销密钥（保留记录、标记 revoked + revokedAt，立即鉴权失效）。
@@ -314,10 +359,14 @@ func (s *ClientChannelService) findKey(channelID string, keyID uint) (*model.Cli
 }
 
 // listKeys 内部列密钥（不校验频道存在），按创建时间倒序。
+// 派生 Revealable（= KeyEnc 非空，FR-192）供前端判定可否查看；KeyEnc/KeyHash 本身不序列化。
 func (s *ClientChannelService) listKeys(channelID string) ([]model.ClientPullKey, error) {
 	var keys []model.ClientPullKey
 	if err := s.db.Where("channel_id = ?", channelID).Order("created_at DESC").Find(&keys).Error; err != nil {
 		return nil, fmt.Errorf("查询拉取密钥失败: %w", err)
+	}
+	for i := range keys {
+		keys[i].Revealable = keys[i].KeyEnc != ""
 	}
 	return keys, nil
 }

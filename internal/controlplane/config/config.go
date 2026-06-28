@@ -107,6 +107,10 @@ type ClientDistConfig struct {
 	SignPrivKey string `mapstructure:"sign_priv_key"`
 	// SignKeyID 签名公钥版本标识（轮换用，默认 k1，须与客户端内置公钥 keyId 一致）。
 	SignKeyID string `mapstructure:"sign_key_id"`
+	// KeyEncSecret 拉取密钥可逆加密密钥（base64 of 32 字节，AES-256-GCM；FR-192，见 ADR-044）。
+	// 敏感信息：经环境变量 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入、不入库（config-files 规范）。
+	// 未配置时优雅降级：dev_mode=true 回退内置 dev 密钥；生产未配则不写 KeyEnc、密钥不可查看（不阻断建密钥）。
+	KeyEncSecret string `mapstructure:"key_enc_secret"`
 }
 
 // ServerConfig HTTP 服务器配置。
@@ -190,6 +194,8 @@ func Load(path string) (*Config, error) {
 	// 客户端分发签名（FR-087）：私钥默认空（main 回退内置开发密钥）；keyId 默认 k1。
 	v.SetDefault("client_dist.sign_priv_key", "")
 	v.SetDefault("client_dist.sign_key_id", "k1")
+	// 拉取密钥可逆加密密钥（FR-192）：默认空（dev 回退内置密钥；生产未配则密钥不可查看，不阻断）。
+	v.SetDefault("client_dist.key_enc_secret", "")
 	// 节点 enrollment 一键安装（FR-080）：CP 地址/脚本基址默认空，由签发请求 Host 推断。
 	// 二进制源默认指向 GitHub Releases latest（ADR-036 产物命名契约 worker-<os>-<arch>[.exe]），
 	// 使一键命令开箱即下载、无需 --binary；内网/私有源经 enroll.binary_url 覆盖。
@@ -210,6 +216,8 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("proxy.no_proxy", "")
 	// 显式绑定任务约定的私钥环境变量名（敏感信息经 env 注入、不入库，config-files 规范）。
 	_ = v.BindEnv("client_dist.sign_priv_key", "JIANMANAGER_CLIENT_SIGN_PRIVKEY")
+	// 拉取密钥可逆加密密钥（FR-192，见 ADR-044）：同惯例经 env 注入、不入库。
+	_ = v.BindEnv("client_dist.key_enc_secret", "JIANMANAGER_CLIENT_KEY_ENC_SECRET")
 
 	// 配置文件
 	if path != "" {

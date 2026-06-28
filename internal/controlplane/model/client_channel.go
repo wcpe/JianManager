@@ -26,18 +26,25 @@ type ClientChannel struct {
 
 // ClientPullKey 频道拉取密钥：玩家侧 updater 拉 manifest/制品时经请求头携带。
 // 半公开凭据（随整包分发会泄露）——仅作鉴权路由 + 吊销，不作内容可信依据（内容可信靠 manifest 签名）。
-// 落库只存 SHA-256 哈希，明文仅创建/轮换时一次性返回、不可二次读取（同构 JM 既有运行时密钥惯例）。
-// 参见 ADR-022 §1。
+// 鉴权只用 KeyHash（SHA-256）比对；另存 AES-256-GCM 可逆加密副本 KeyEnc（FR-192）供管理员查看明文。
+// 参见 ADR-022 §1、ADR-044（拉取密钥可逆加密 + 管理员可查看，修订 ADR-022 决策①的「只存哈希」）。
 type ClientPullKey struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// ChannelID 所属频道 slug（随频道删除级联清理）。
 	ChannelID string `gorm:"column:channel_id;type:varchar(64);index;not null" json:"channelId"`
 	// Name 密钥名（识别用途，如「正式包」「灰度」）。
 	Name string `gorm:"type:varchar(128);not null" json:"name"`
-	// KeyHash 拉取密钥明文的 SHA-256 十六进制小写。库内不存明文。
+	// KeyHash 拉取密钥明文的 SHA-256 十六进制小写。**鉴权依据**，库内不存明文。
 	KeyHash string `gorm:"column:key_hash;type:char(64);uniqueIndex;not null" json:"-"`
+	// KeyEnc 拉取密钥明文的 AES-256-GCM 可逆加密副本（base64(nonce‖密文)；FR-192，见 ADR-044）。
+	// 仅供平台管理员经 reveal 端点查看明文，不参与鉴权、绝不序列化给客户端。空=不可查看
+	// （存量老密钥 / 创建时未配 JIANMANAGER_CLIENT_KEY_ENC_SECRET 的密钥）。加性列、默认空。
+	KeyEnc string `gorm:"column:key_enc;type:text" json:"-"`
 	// KeyPrefix 明文前缀（如 jmck_ab12），仅供列表识别，不足以重建密钥。
 	KeyPrefix string `gorm:"column:key_prefix;type:varchar(16);not null" json:"keyPrefix"`
+	// Revealable 是否可查看明文（派生字段，不落库；= KeyEnc 非空，FR-192）。
+	// 供前端对存量「只有哈希」的老密钥禁用「查看」并提示；不泄露密文本身。
+	Revealable bool `gorm:"-" json:"revealable"`
 	// Revoked 吊销标记；true 即鉴权失败。
 	Revoked bool `gorm:"default:false;index;not null" json:"revoked"`
 	// ExpiresAt 可选过期时间；到期即鉴权失败。

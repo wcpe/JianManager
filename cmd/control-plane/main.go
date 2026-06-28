@@ -134,8 +134,23 @@ func main() {
 	// 拉取 feed 与 CP 自身二进制下载经进程级出站代理（FR-174，见 ADR-037）。
 	// 用持有者注入，使全局代理改动运行时即时生效（CP「检查更新」立即走新代理，FR-185）。
 	selfUpdateSvc.SetHTTPClientProvider(outboundProvider.Client)
-	// 客户端分发频道与拉取密钥（FR-086，见 ADR-022）：密钥落库只存哈希、明文一次性返回。
+	// 客户端分发频道与拉取密钥（FR-086，见 ADR-022）：鉴权只用哈希比对。
 	clientChannelSvc := service.NewClientChannelService(db)
+	// 拉取密钥可逆加密 + 管理员可查看（FR-192，见 ADR-044）：另存 AES-256-GCM 加密副本供查看明文。
+	// 密钥经 env JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入；未配优雅降级——dev 回退内置密钥，
+	// 生产未配则不写 KeyEnc、密钥不可查看（不阻断建密钥，与 ADR-038 降级哲学一致）。
+	keyEncryptor, usedDevKeyEnc, err := service.ResolveKeyEncryptor(cfg.ClientDist.KeyEncSecret, cfg.Server.DevMode)
+	if err != nil {
+		// 仅「注入了非法密钥」会到此（配错快失败，让运维即时修正）；未配置走降级返 nil 不报错。
+		log.Fatalf("初始化拉取密钥加密器失败: %v", err)
+	}
+	if keyEncryptor == nil {
+		slog.Warn("未配置拉取密钥加密密钥，新建/轮换的拉取密钥将不可查看明文；如需可查看请经 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入 32 字节 base64 密钥（FR-192，见 ADR-044）")
+	}
+	if usedDevKeyEnc {
+		slog.Warn("拉取密钥加密使用内置开发密钥（仅 dev_mode 生效），生产务必经 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入独立密钥")
+	}
+	clientChannelSvc.SetKeyEncryptor(keyEncryptor)
 	// 客户端分发版本与签名 manifest（FR-087，见 ADR-022、contract §2/§3）。
 	// 签名私钥经 env 注入的生产私钥（config.client_dist.sign_priv_key ← JIANMANAGER_CLIENT_SIGN_PRIVKEY）。
 	// fail-closed：绝不回退源码公开的内置开发密钥对外签 OTA manifest（否则攻击者可用人人可得的开发私钥
