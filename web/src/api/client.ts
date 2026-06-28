@@ -58,8 +58,12 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config
+    // 认证端点（/auth/login、/auth/refresh 等）自身的 401 = 凭据无效，不是会话过期；
+    // 不触发自动刷新 + 跳登录，原样抛回调用方展示错误（修复：登录失败整页刷新 bug——
+    // 原先把登录 401 误当会话过期，refreshTokens 无 token 抛错后 window.location.href 整页跳转把错误提示冲掉）。
+    const isAuthEndpoint = typeof originalRequest?.url === 'string' && originalRequest.url.includes('/auth/')
 
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
       originalRequest._retry = true
 
       try {

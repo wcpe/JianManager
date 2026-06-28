@@ -8,13 +8,13 @@ test.describe('登录（mock 模式）', () => {
     await expect(page.getByRole('heading', { name: '仪表盘' })).toBeVisible()
   })
 
-  test('错误凭据 → 停留登录页（仍在 /login）', async ({ page }) => {
+  test('错误凭据 → 显示错误提示且停留登录页（不整页刷新）', async ({ page }) => {
     await page.goto('/login')
     await page.getByLabel('用户名', { exact: true }).fill('admin')
     await page.getByLabel('密码', { exact: true }).fill('wrong-password')
     await page.getByRole('button', { name: '登录', exact: true }).click()
-    // 不进入控制台：URL 仍是 /login（错误提示是否持久属登录 bug 范畴，由 sdd-fix-bug 回归覆盖）
+    // 登录刷页 bug 的真浏览器回归：修复前 401 触发整页跳转 /login 把错误提示冲掉；修复后提示持久可见
+    await expect(page.getByText('用户名或密码错误')).toBeVisible()
     await expect(page).toHaveURL(/\/login$/)
-    await expect(page.getByRole('button', { name: '登录' })).toBeVisible()
   })
 })

@@ -7,6 +7,7 @@
 ## [Unreleased]
 
 ### 修复
+- **登录失败不再整页刷新（修 `web/src/api/client.ts` 401 拦截器，回归并入 FR-199）**：原响应 401 拦截器对**所有** 401 统一「刷 token 失败 → clearAuth + `window.location.href='/login'`」，把 `/auth/login` 自身的 401（凭据错误）误当「会话过期」→ 整页跳转把错误提示瞬间冲掉（表现为「登录失败直接刷新页面」）。改为**豁免 `/auth/*` 端点**的 401 自动刷新+跳转，原样抛回登录页展示「用户名或密码错误」；受保护端点的会话过期兜底（刷新→失败→跳登录）完全不变。新增 jsdom 回归（登录 401 不清鉴权/不跳转）+ 强化 e2e（错误凭据→错误提示真浏览器持久可见）。
 - **发布管线 changelog 提取兜底（FR-173，见 ADR-036 §3）**：`changelog-extract.mjs` 的 `--unreleased` 在 `[Unreleased]` 段为空时改为输出兜底说明（刚发完版尚无新变更的正常态），不再非零退出——避免每次发版后下一次 push master 的滚动预发布因空段把整条 CI 挂掉；`--version` 段为空仍硬失败（真发布必须有说明）。补 node:test 单测（空 `[Unreleased]` → 兜底、空版本段 → 抛错）。
 - **全站模态纪律审计改造 + 复制按钮 HTTP 非安全上下文兜底（FR-188，立 `.claude/rules/ui-modals.md`）**：审计全站「创建/编辑/配置」交互，把 `BackupStoragesPage`「点击新增→页面内联展开表单顶开表格」反模式改为内容自适应模态（复用 FR-072 `scrollableDialogContentClass`+`ScrollableDialogBody`，头/脚固定正文滚动），行为不变；`NodeJDKPanel`/`NodeRepairPanel`/`NodeArtifactCachePanel`/`Terminal`/`TemplatesPage` 的复制点统一改走共享 `@/lib/clipboard` 的 `copyToClipboard`（明文 HTTP 下 `navigator.clipboard` 不可用时回退 `execCommand` 离屏 textarea，修 LAN-IP 部署复制失效）。
 
