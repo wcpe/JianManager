@@ -248,18 +248,18 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-196 | 前端测试与 mock 运行基座（接入 MSW v2 + jsdom/@testing-library/react；vitest 双环境[保留 node 纯逻辑、新增 jsdom 组件]；`VITE_MOCK` 浏览器 mock 模式开关[setupWorker + 入口条件挂载]；render harness[QueryClient/Router/i18n/theme]；新 ADR-047 前端测试与 mock 架构） | P1 | 🔨 开发中 |
 | FR-197 | 有状态内存假后端核心 + 错误注入框架（实体 store=Map+seed+reset、跨实体联动领域层、统一鉴权中间件[token 校验]；按 endpoint 运行时注入 401/403/404/409/500/空/网络错误/延迟；per-domain handler/seed 自动聚合防并行冲突；关联 ADR-047） | P1 | 🔨 开发中 |
 | FR-198 | 实时流仿真基座（WS 终端 PTY 伪交互[输入→回显假输出]、SSE 日志/事件/指标持续推送、可注入数据源；mock 模式与测试两用；关联 ADR-047） | P1 | 🔨 开发中 |
-| FR-199 | mock 域簇·身份访问（auth/setup/users/groups/audit 有状态 handler + Login/Setup/Users/Groups/Audit 页面强断言测试；含「登录失败不刷新页面」回归） | P2 | 📋 计划 |
-| FR-200 | mock 域簇·节点与运行时（nodes/nodeRuntime/nodeRepair/jdks/runtimeAssets/selfUpdate handler + Nodes/RuntimeAssets/SystemUpdate 强断言测试） | P2 | 📋 计划 |
-| FR-201 | mock 域簇·实例核心（instances/instanceGroups/serverState/ports handler + Instances/InstanceDetail/Overview 强断言测试，创建/启停→列表联动） | P2 | 📋 计划 |
-| FR-202 | mock 域簇·供给与模板（provision/clone/templates handler + Templates 与创建/克隆流程强断言测试） | P2 | 📋 计划 |
-| FR-203 | mock 域簇·群组服网络（networks/registrations/proxy handler + Networks 页 M:N 注册联动强断言测试） | P2 | 📋 计划 |
-| FR-204 | mock 域簇·文件与归档（files/fileVersions/storage/archive handler + 文件管理器/Storage 强断言测试） | P2 | 📋 计划 |
-| FR-205 | mock 域簇·配置与数据库（configs/db handler + 配置浏览器/Database 强断言测试） | P2 | 📋 计划 |
-| FR-206 | mock 域簇·插件玩家经济（plugins/probe/players/economy/business handler + Players/插件管理/业务经济台强断言测试） | P2 | 📋 计划 |
-| FR-207 | mock 域簇·备份与计划（backups/backupStorages/schedules handler + Backups/BackupStorages/Schedules 强断言测试） | P2 | 📋 计划 |
-| FR-208 | mock 域簇·可观测与日志（metrics/alerts/events/notifications/tasks/logs handler + SSE 流接 FR-198 + Monitoring/Alerts/Tasks/Logs/Dashboard 壳强断言测试） | P2 | 📋 计划 |
-| FR-209 | mock 域簇·Bots 与终端（bots/terminal handler + WS 终端接 FR-198 + Bots/InstanceDetail 终端强断言测试） | P2 | 📋 计划 |
-| FR-210 | mock 域簇·客户端分发与平台设置（clientChannels/clientVersions/clientStats/licenses/settings handler + ClientChannels/Licenses/Settings 强断言测试） | P2 | 📋 计划 |
+| FR-199 | mock 域簇·身份访问（auth/setup/users/groups/audit 有状态 handler + Login/Setup/Users/Groups/Audit 页面强断言测试；含「登录失败不刷新页面」回归） | P2 | 🔨 开发中 |
+| FR-200 | mock 域簇·节点与运行时（nodes/nodeRuntime/nodeRepair/jdks/runtimeAssets/selfUpdate handler + Nodes/RuntimeAssets/SystemUpdate 强断言测试） | P2 | 🔨 开发中 |
+| FR-201 | mock 域簇·实例核心（instances/instanceGroups/serverState/ports handler + Instances/InstanceDetail/Overview 强断言测试，创建/启停→列表联动） | P2 | 🔨 开发中 |
+| FR-202 | mock 域簇·供给与模板（provision/clone/templates handler + Templates 与创建/克隆流程强断言测试） | P2 | 🔨 开发中 |
+| FR-203 | mock 域簇·群组服网络（networks/registrations/proxy handler + Networks 页 M:N 注册联动强断言测试） | P2 | 🔨 开发中 |
+| FR-204 | mock 域簇·文件与归档（files/fileVersions/storage/archive handler + 文件管理器/Storage 强断言测试） | P2 | 🔨 开发中 |
+| FR-205 | mock 域簇·配置与数据库（configs/db handler + 配置浏览器/Database 强断言测试） | P2 | 🔨 开发中 |
+| FR-206 | mock 域簇·插件玩家经济（plugins/probe/players/economy/business handler + Players/插件管理/业务经济台强断言测试） | P2 | 🔨 开发中 |
+| FR-207 | mock 域簇·备份与计划（backups/backupStorages/schedules handler + Backups/BackupStorages/Schedules 强断言测试） | P2 | 🔨 开发中 |
+| FR-208 | mock 域簇·可观测与日志（metrics/alerts/events/notifications/tasks/logs handler + SSE 流接 FR-198 + Monitoring/Alerts/Tasks/Logs/Dashboard 壳强断言测试） | P2 | 🔨 开发中 |
+| FR-209 | mock 域簇·Bots 与终端（bots/terminal handler + WS 终端接 FR-198 + Bots/InstanceDetail 终端强断言测试） | P2 | 🔨 开发中 |
+| FR-210 | mock 域簇·客户端分发与平台设置（clientChannels/clientVersions/clientStats/licenses/settings handler + ClientChannels/Licenses/Settings 强断言测试） | P2 | 🔨 开发中 |
 | FR-211 | Playwright E2E（基于 mock 模式整站，无需真后端）：Playwright 安装 + 配置（webServer 起 `VITE_MOCK=1`）+ 关键路径 E2E 场景（登录→导航→实例创建/启停等跨页流），与 vitest 组件测互补 | P2 | 📋 计划 |
 | FR-212 | CI 前端质量门禁（PR 拦截）：新增 `.github/workflows/ci.yml`（on pull_request/push）跑 web lint + vitest(node+dom) + Playwright E2E，任一失败阻断；并把 E2E 加入 `release.yml` 既有 test 闸（lint/vitest 已在该闸，FR-173/ADR-036） | P2 | 📋 计划 |
 
