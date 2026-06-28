@@ -11,7 +11,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:node": "vitest run --project node",
-    "test:dom": "vitest run --project dom"
+    "test:dom": "vitest run --project dom",
+    "e2e": "playwright test",
+    "e2e:headed": "playwright test --headed"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",
@@ -46,6 +48,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/vite": "^4.3.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
