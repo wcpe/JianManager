@@ -382,7 +382,8 @@
     "sysAccount": "Account & Audit",
     "collapseSidebar": "Collapse sidebar",
     "expandSidebar": "Expand sidebar",
-    "tasks": "Tasks"
+    "tasks": "Tasks",
+    "notifications": "Notifications"
   },
   "console": {
     "title": "Ops Console",
@@ -2332,6 +2333,8 @@
     "unreadCount": "{{count}} unread",
     "noAlerts": "No alerts",
     "viewAllAlerts": "View all alerts",
+    "notifications": "Notifications",
+    "viewAllNotifications": "View all",
     "account": "Account"
   },
   "licenses": {
@@ -2400,5 +2403,24 @@
     "empty": "No notifications",
     "markRead": "Mark read",
     "markAllRead": "Mark all read"
+  },
+  "notificationCenter": {
+    "title": "Notification Center",
+    "sourceAll": "All",
+    "sourceMessage": "Messages",
+    "sourceAlert": "Alerts",
+    "badgeMessage": "Message",
+    "badgeAlert": "Alert",
+    "onlyUnread": "Unread only",
+    "keywordPlaceholder": "Search title or body…",
+    "markAllRead": "Mark all read",
+    "markRead": "Mark read",
+    "unread": "Unread",
+    "empty": "No notifications",
+    "viewAlertDetail": "View alert detail",
+    "total": "{{count}} total",
+    "prevPage": "Prev",
+    "nextPage": "Next",
+    "pageOf": "Page {{page}} / {{total}}"
   }
 }

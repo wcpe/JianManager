@@ -453,6 +453,55 @@ function stringifyChannelIds(ids?: number[]): string {
   return ids && ids.length ? JSON.stringify(ids) : ''
 }
 
+/** 统一通知条目（对齐 api/notification-feed.ts FeedItem）。 */
+interface FeedItemMock {
+  source: 'message' | 'alert'
+  id: number
+  level: 'info' | 'success' | 'warning' | 'error'
+  title: string
+  body: string
+  read: boolean
+  createdAt: string
+  taskId?: string
+  triggerType?: string
+  acknowledged?: boolean
+  resolved?: boolean
+}
+
+/** 告警三档级别就近映射到统一四档（warn→warning、critical→error，与后端一致）。 */
+function alertLevelToUnified(level: string): FeedItemMock['level'] {
+  if (level === 'critical') return 'error'
+  if (level === 'warn') return 'warning'
+  return 'info'
+}
+
+/** 把 notifications + alertEvents 合并为统一通知流（FR-216，见 ADR-048）。 */
+function mergedFeed(): FeedItemMock[] {
+  const messages: FeedItemMock[] = notifications.list().map((n) => ({
+    source: 'message',
+    id: n.id,
+    level: n.level,
+    title: n.title,
+    body: n.body,
+    read: !!n.readAt,
+    createdAt: n.createdAt,
+    taskId: n.taskId,
+  }))
+  const alerts: FeedItemMock[] = alertEvents.list().map((e) => ({
+    source: 'alert',
+    id: e.id,
+    level: alertLevelToUnified(e.level),
+    title: e.rule?.name ?? `#${e.ruleId}`,
+    body: e.message,
+    read: e.read,
+    createdAt: e.firedAt,
+    triggerType: e.triggerType,
+    acknowledged: e.acknowledged,
+    resolved: e.resolved,
+  }))
+  return [...messages, ...alerts]
+}
+
 export const handlers = [
   // ===== metrics（FR-060/061） =====
   domainRoute('get', '/metrics/overview', (info) => {
@@ -713,6 +762,58 @@ export const handlers = [
     if (denied) return denied
     notifications.list().forEach((n) => notifications.update(n.id, { readAt: new Date().toISOString() }))
     return HttpResponse.json({ ok: true })
+  }),
+
+  // ===== 统一通知中心 feed（FR-216，见 ADR-048）：聚合 notifications + alertEvents =====
+  domainRoute('get', '/notifications/feed', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const source = url.searchParams.get('source') ?? ''
+    const onlyUnread = url.searchParams.get('unread') === 'true'
+    const keyword = url.searchParams.get('keyword') ?? ''
+    const page = Number(url.searchParams.get('page') ?? '1')
+    const pageSize = Number(url.searchParams.get('pageSize') ?? '50')
+
+    let merged = mergedFeed()
+    if (source === 'message' || source === 'alert') merged = merged.filter((i) => i.source === source)
+    if (onlyUnread) merged = merged.filter((i) => !i.read)
+    if (keyword) merged = merged.filter((i) => i.title.includes(keyword) || i.body.includes(keyword))
+    merged.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+
+    const total = merged.length
+    const start = (page - 1) * pageSize
+    return HttpResponse.json({ items: merged.slice(start, start + pageSize), total })
+  }),
+
+  domainRoute('get', '/notifications/feed/unread-count', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const unread =
+      notifications.list((n) => !n.readAt).length + alertEvents.list((e) => !e.read).length
+    return HttpResponse.json({ unread })
+  }),
+
+  domainRoute('post', '/notifications/feed/read-all', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    notifications.list().forEach((n) => notifications.update(n.id, { readAt: new Date().toISOString() }))
+    alertEvents.list().forEach((e) => alertEvents.update(e.id, { read: true }))
+    return HttpResponse.json({ updated: true })
+  }),
+
+  domainRoute('post', '/notifications/feed/:source/:id/read', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    if (info.params.source === 'message') {
+      notifications.update(id, { readAt: new Date().toISOString() })
+    } else if (info.params.source === 'alert') {
+      alertEvents.update(id, { read: true })
+    } else {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '非法通知来源' }, { status: 400 })
+    }
+    return HttpResponse.json({ message: '已标记已读' })
   }),
 
   // ===== tasks 任务中心（FR-183） =====

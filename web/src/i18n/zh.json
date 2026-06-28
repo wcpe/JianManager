@@ -382,7 +382,8 @@
     "sysAccount": "账户与审计",
     "collapseSidebar": "收起侧栏",
     "expandSidebar": "展开侧栏",
-    "tasks": "任务中心"
+    "tasks": "任务中心",
+    "notifications": "通知中心"
   },
   "console": {
     "title": "运维控制台",
@@ -2332,6 +2333,8 @@
     "unreadCount": "{{count}} 条未读",
     "noAlerts": "暂无告警",
     "viewAllAlerts": "查看全部告警",
+    "notifications": "通知",
+    "viewAllNotifications": "查看全部",
     "account": "账户"
   },
   "licenses": {
@@ -2400,5 +2403,24 @@
     "empty": "暂无消息",
     "markRead": "标记已读",
     "markAllRead": "全部已读"
+  },
+  "notificationCenter": {
+    "title": "通知中心",
+    "sourceAll": "全部",
+    "sourceMessage": "消息",
+    "sourceAlert": "告警",
+    "badgeMessage": "消息",
+    "badgeAlert": "告警",
+    "onlyUnread": "仅未读",
+    "keywordPlaceholder": "搜索标题或内容…",
+    "markAllRead": "全部已读",
+    "markRead": "标记已读",
+    "unread": "未读",
+    "empty": "暂无通知",
+    "viewAlertDetail": "查看告警详情",
+    "total": "共 {{count}} 条",
+    "prevPage": "上一页",
+    "nextPage": "下一页",
+    "pageOf": "第 {{page}} / {{total}} 页"
   }
 }
