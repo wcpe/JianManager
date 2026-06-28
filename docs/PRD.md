@@ -263,7 +263,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-210 | mock 域簇·客户端分发与平台设置（clientChannels/clientVersions/clientStats/licenses/settings handler + ClientChannels/Licenses/Settings 强断言测试） | P2 | 🔨 开发中 |
 | FR-211 | Playwright E2E（基于 mock 模式整站，无需真后端）：Playwright 安装 + 配置（webServer 起 `VITE_MOCK=1`）+ 关键路径 E2E 场景（登录→导航→实例创建/启停等跨页流），与 vitest 组件测互补 | P2 | 🔨 开发中 |
 | FR-212 | CI 前端质量门禁（PR 拦截）：新增 `.github/workflows/ci.yml`（on pull_request/push）跑 web lint + vitest(node+dom) + Playwright E2E，任一失败阻断；并把 E2E 加入 `release.yml` 既有 test 闸（lint/vitest 已在该闸，FR-173/ADR-036） | P2 | 🔨 开发中 |
-| FR-213 | 共享「文件浏览器」前端组件抽取（目录树/列表 + 内容预览[文本/配置/json 语法高亮] + 下载），实例「资源卡片」文件管理迁移到该共享组件（行为不变）；为客户端分发文件预览（FR-214）提供底座（**需 spec**：组件 props/接口契约、预览类型与降级） | P1 | 📋 计划 |
+| FR-213 | 共享「文件浏览器」前端组件抽取（目录树/列表 + 内容预览[文本/配置/json 语法高亮] + 下载），实例「资源卡片」文件管理迁移到该共享组件（行为不变）；为客户端分发文件预览（FR-214）提供底座（**需 spec**：组件 props/接口契约、预览类型与降级） | P1 | 🔨 开发中 |
 | FR-214 | 客户端分发文件预览：发布页已上传文件 + 版本详情历史文件树，复用 FR-213 共享文件浏览器预览内容与结构（纯前端复用现端点，免 spec，依赖 FR-213） | P2 | 📋 计划 |
 | FR-215 | 观测导航重构：「监控」大类改名「观测」，下设 监控/日志/统计 三子类；任务中心移到「系统」；纯 IA/路由/侧栏调整、页面内容不变（**需 IA spec**；与在飞 FR-208/210/211 前端测试基座并行协调，测试按新 IA 写） | P1 | 🔨 开发中 |
 | FR-216 | 通知中心：站内信（定向消息）+ 告警（系统警报）合并为统一通知流，页眉单铃铛入口（下拉预览）+ 独立「通知中心」页（按类型筛选/已读/查询），侧栏置「系统/账户与审计」（**需 spec + ADR-048 统一通知模型**，依赖 FR-215 落点） | P1 | 📋 计划 |

@@ -152,17 +152,18 @@ export interface FileBrowserAction {
 
 ## 4. 任务拆分
 
-- [ ] `file-browser/tree.ts` + `tree.test.ts`（扁平→层级建树，node 可测）。
-- [ ] `file-browser/FilePreview.tsx`（文本高亮 / binary / too-large / error / 空态）。
-- [ ] `file-browser/FileBrowserTree.tsx`（懒加载 + 扁平两形态树/列表）。
-- [ ] `file-browser/FileBrowser.tsx`（主组件，props 契约如 §3.1）。
-- [ ] `file-browser/sources/instanceSource.ts`（实例数据源适配器，基于 `@/api/files`，含二进制/超大判定）。
-- [ ] 实例资源卡片接入：在资源卡片提供只读浏览/预览/下载（共享 FileBrowser），保留 `ConfigExplorer` 全功能；行为不变。
-- [ ] （可选、不回归前提下）`ArchiveViewer` 复用 `FilePreview` 降级原语。
-- [ ] i18n `fileBrowser.*`（zh/en 对称）。
-- [ ] vitest 组件测：树渲染、预览切换（文本↔降级）、readOnly vs 可操作、binary/too-large 降级、下载回调触发。
-- [ ] 既有 `explorer/*`、`config-explorer/*` 测试仍绿（迁移不回归）。
-- [ ] 文档同步：PRD FR-213「计划」→「开发中」；ARCHITECTURE 前端组件章节（如有）补共享文件浏览器；本 spec 任务勾选。
+- [x] `file-browser/types.ts`（契约：`FileEntry`/`PreviewContent`/`FileBrowserSource`/`FileBrowserAction`）。
+- [x] `file-browser/tree.ts` + `tree.test.ts`（扁平→层级建树，node 可测）。
+- [x] `file-browser/FilePreview.tsx`（文本高亮 / binary / too-large / error / 空态）。
+- [x] `file-browser/FileBrowserTree.tsx`（懒加载 + 扁平两形态树/列表 + 行操作菜单）。
+- [x] `file-browser/FileBrowser.tsx`（主组件，props 契约如 §3.1）。
+- [x] `file-browser/sources/instanceSource.ts`（实例数据源适配器，基于 `@/api/files`，含二进制[NUL]/超大[1 MiB]判定）。
+- [x] 实例资源卡片接入 `console/InstanceResourceCard`（「管理」=全功能 `ConfigExplorer`／「浏览」=共享 `FileBrowser`），`WorkspaceCardBody` 改挂；行为不变、能力不减。
+- [ ] （可选、不回归前提下）`ArchiveViewer` 复用 `FilePreview` 降级原语。——本 FR 暂不动 `ArchiveViewer`（避免触碰 FR-075 既有行为；降级原语已在 `FilePreview` 沉淀，后续可选复用）。
+- [x] i18n `fileBrowser.*` + `resourceCard.*`（zh/en 对称）。
+- [x] vitest 组件测：树渲染、预览切换（文本↔降级）、readOnly vs 可操作、binary/too-large 降级、下载回调触发、懒加载展开。
+- [x] 既有 `explorer/*`、`config-explorer/*` 测试仍绿（迁移不回归，全量 839 测试通过）。
+- [x] 文档同步：PRD FR-213「计划」→「开发中」；ARCHITECTURE 前端架构补共享文件浏览器；本 spec 任务勾选。
 
 ## 5. 验收标准
 
