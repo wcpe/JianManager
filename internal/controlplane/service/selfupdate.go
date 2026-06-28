@@ -254,6 +254,12 @@ type CheckResult struct {
 	Source       string            `json:"source"`
 	ControlPlane ComponentStatus   `json:"controlPlane"`
 	Nodes        []ComponentStatus `json:"nodes"`
+	// Cached 报告本结果是否来自服务端缓存（FR-186）：GET /check 命中缓存为 true、空缓存为 false；
+	// refresh（live 检查）成功后亦标 true（结果已落缓存）。加性字段，旧客户端忽略不受影响。
+	Cached bool `json:"cached"`
+	// CheckedAt 该结果对应的「上次成功检查」时刻（FR-186）；无缓存/未检查为 nil。
+	// 前端据此展示「上次检查：<相对时间>」。
+	CheckedAt *time.Time `json:"checkedAt,omitempty"`
 }
 
 // CheckUpdate 组装 CP 自身 + 各节点的版本对比。未配源时返回 configured=false 的结果（不报错）。
@@ -330,6 +336,84 @@ func (s *SelfUpdateService) CheckUpdate(ctx context.Context) (*CheckResult, erro
 		res.Nodes = append(res.Nodes, st)
 	}
 	return res, nil
+}
+
+// CachedCheck 返回服务端缓存的「上次成功检查结果」（FR-186），不触发任何 live 网络调用，毫秒级返回。
+// 进系统更新页直接读此即时回显；缓存空时返回 Cached=false 的结果（带当前 configured/CP 当前版本），
+// 让前端据此后台触发一次 RefreshCheck。反序列化兼容旧 blob：缺字段自然降级（见 spec §6）。
+func (s *SelfUpdateService) CachedCheck(ctx context.Context) (*CheckResult, error) {
+	var row model.SelfUpdateCheckCache
+	err := s.db.First(&row, model.SelfUpdateCheckCacheID).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// 无缓存：给一个最小可渲染的「未检查」结果（当前 configured + CP 本机版本），Cached=false。
+			return s.emptyCachedResult(), nil
+		}
+		return nil, fmt.Errorf("读取检查结果缓存失败: %w", err)
+	}
+	var res CheckResult
+	if e := json.Unmarshal([]byte(row.ResultJSON), &res); e != nil {
+		// 缓存损坏：降级为未缓存（不报错阻断页面），让前端走刷新。
+		slog.Warn("检查结果缓存反序列化失败，降级为未缓存", "error", e)
+		return s.emptyCachedResult(), nil
+	}
+	res.Cached = true
+	checkedAt := row.CheckedAt
+	res.CheckedAt = &checkedAt
+	return &res, nil
+}
+
+// emptyCachedResult 构造无缓存时的最小结果：仅当前是否配置 + 更新源标识 + CP 本机当前版本，Cached=false。
+func (s *SelfUpdateService) emptyCachedResult() *CheckResult {
+	return &CheckResult{
+		Configured: s.Configured(),
+		Source:     s.sourceLabel(),
+		ControlPlane: ComponentStatus{
+			CurrentVersion: version.Version,
+			OS:             runtime.GOOS,
+			Arch:           runtime.GOARCH,
+			Online:         true,
+		},
+		Cached: false,
+	}
+}
+
+// RefreshCheck 执行一次 live 检查（经 FR-174/185 出站代理）并在成功后 upsert 覆盖缓存（FR-186）。
+// 成功返回带 Cached=true + CheckedAt 的最新结果；失败透出 error 且**不清缓存**（断网/限流仍保留上次结果）。
+// 「检查更新」按钮与进页后台静默刷新均调此。
+func (s *SelfUpdateService) RefreshCheck(ctx context.Context) (*CheckResult, error) {
+	res, err := s.CheckUpdate(ctx)
+	if err != nil {
+		return nil, err // 失败不触碰缓存，保留上次成功结果。
+	}
+	now := time.Now().UTC()
+	if e := s.persistCheckCache(res, now); e != nil {
+		// 缓存写入失败不阻断本次检查结果返回（仅记日志）：本次结果仍可用，下次刷新再补。
+		slog.Warn("写入检查结果缓存失败", "error", e)
+	}
+	res.Cached = true
+	res.CheckedAt = &now
+	return res, nil
+}
+
+// persistCheckCache 把一次成功的 CheckResult 序列化为 JSON blob，单行 upsert 覆盖缓存（FR-186）。
+func (s *SelfUpdateService) persistCheckCache(res *CheckResult, checkedAt time.Time) error {
+	// 序列化前剥离 Cached/CheckedAt（这两项是「读出来时」的元信息，不应进 blob 造成自指）。
+	snapshot := *res
+	snapshot.Cached = false
+	snapshot.CheckedAt = nil
+	blob, err := json.Marshal(&snapshot)
+	if err != nil {
+		return fmt.Errorf("序列化检查结果失败: %w", err)
+	}
+	row := model.SelfUpdateCheckCache{
+		ID:         model.SelfUpdateCheckCacheID,
+		ResultJSON: string(blob),
+		Source:     res.Source,
+		CheckedAt:  checkedAt,
+	}
+	// 单行覆盖：主键冲突时全量更新（Save 在主键存在时 UPDATE、不存在时 INSERT）。
+	return s.db.Save(&row).Error
 }
 
 // resolveArtifact 取 feed（按目标版本或最新）中目标 component+平台的制品。

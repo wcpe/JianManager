@@ -134,6 +134,9 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Task{},
 		&model.TaskLog{},
 		&model.Notification{},
+		// 系统更新页检查结果缓存（FR-186，增强 FR-182）：单行覆盖式，存上次成功 CheckResult 的
+		// JSON blob + checkedAt，进页即显 + 后台静默刷新，刷新失败保留旧缓存。
+		&model.SelfUpdateCheckCache{},
 	); err != nil {
 		return err
 	}

@@ -1671,7 +1671,7 @@
 
 ---
 
-## 面板自更新（FR-081 / FR-175 / FR-182）
+## 面板自更新（FR-081 / FR-175 / FR-182 / FR-186）
 
 > Control Plane 与各节点 Worker 的二进制在线升级与回滚（ADR-020 / ADR-036 §7 / ADR-042）。均挂运营者浏览器 JWT 入口、**仅平台管理员**。
 > **更新源**（FR-175，见 ADR-036 §7）：默认**原生读 GitHub Releases API**（`control-plane.yaml` 的 `update.github_repo`，默认 `wcpe/JianManager`），`update.channel` 选 `stable`（取 `/releases/latest` 最新正式）或 `prerelease`（取滚动 `latest` 预发布，FR-182 由 `nightly` 改名）；sha256 取自 release 的 `checksums.txt` 资产（ADR-036 §2 契约），资产名按 ADR-036 §1 命名 `<component>-<os>-<arch>[.exe]` 反解。`update.github_token` 可选，提升 GitHub API 限流额度（匿名 60 次/时）。`github_repo` 为空且 `feed_url` 非空时**回退**原 feed JSON 路径（FR-081）；二者均空即未配置。下载经 FR-174 出站代理。
@@ -1679,11 +1679,19 @@
 > **升级前自动备份 + 一键回滚**（FR-182，见 ADR-042）：升级（CP 自升 / 节点升）在替换前把当前二进制 + 版本/sha256 备份到数据根 `cache/selfupdate-backup/<component>`（每组件单份，覆盖上一份）。`check` 透出各组件 `backupVersion`，可一键回滚到上一版（校验备份 sha256 → 换回 → 平滑重启）；节点回滚经 gRPC `UpgradeWorker(action=rollback)`，Worker 走本地备份不下载。无备份返回 `UPDATE_NO_BACKUP`。
 
 ### GET /api/v1/self-update/check
-- **描述**: 检查更新——按配置的更新源（GitHub Releases 或 feed）解析最新版本，对比 CP 自身与各节点当前版本，标注是否有更新及是否有匹配平台（component+os+arch）的制品
+- **描述**: 返回**服务端缓存的上次成功检查结果**（FR-186），**不触发 live 网络调用**（毫秒级返回，进系统更新页即时回显）。缓存空时返回 `cached:false` 的最小结果（仅当前 `configured`/`source` + CP 本机当前版本），由前端据此触发一次 `refresh`。live 检查走 `POST /self-update/check/refresh`
 - **权限**: 平台管理员
-- **关联 FR**: FR-081、FR-175、FR-182
-- **响应** (200): `{ "configured", "latestVersion", "notes", "source", "controlPlane": ComponentStatus, "nodes": [ComponentStatus] }`，其中 `source` 标更新源（`github:owner/repo@channel` | `feed` | 空），`ComponentStatus = { "nodeId?", "nodeUuid?", "name?", "online", "currentVersion", "os", "arch", "updateAvailable", "artifactAvailable", "backupVersion?" }`；`backupVersion`（FR-182）为升级前备份的版本，非空时该组件可一键回滚；节点当前版本与 `backupVersion` 经 gRPC `GetVersion` 实时拉取，离线节点 `online=false`
-- **错误**: 409 `UPDATE_NOT_CONFIGURED`（未配置 github_repo / feed_url）| 429 `UPDATE_RATE_LIMITED`（GitHub API 限流，可配 github_token 提额）| 502 `UPDATE_CHECK_FAILED`（拉取/解析更新源失败）
+- **关联 FR**: FR-186、FR-081、FR-175、FR-182
+- **响应** (200): `{ "configured", "latestVersion", "notes", "source", "controlPlane": ComponentStatus, "nodes": [ComponentStatus], "cached", "checkedAt?" }`，其中 `cached`（FR-186）报告本结果是否命中缓存、`checkedAt`（FR-186，ISO 时间，缓存空时省略）为上次成功检查时刻；`source` 标更新源（`github:owner/repo@channel` | `feed` | 空），`ComponentStatus = { "nodeId?", "nodeUuid?", "name?", "online", "currentVersion", "os", "arch", "updateAvailable", "artifactAvailable", "backupVersion?" }`；`backupVersion`（FR-182）为升级前备份的版本，非空时该组件可一键回滚
+- **错误**: 502 `UPDATE_CHECK_FAILED`（读取缓存失败，罕见）
+
+### POST /api/v1/self-update/check/refresh
+- **描述**: 显式触发一次 **live 检查更新**并更新缓存（FR-186）——按配置的更新源（GitHub Releases 或 feed）解析最新版本，经 gRPC `GetVersion` 实时拉取各节点当前版本与 `backupVersion`，对比标注是否有更新及是否有匹配平台（component+os+arch）的制品；**成功后 upsert 覆盖服务端缓存**并返回最新结果（`cached:true` + `checkedAt`）。**失败时不清缓存**（断网/限流后 `GET /check` 仍可回显上次结果）。「检查更新」按钮与进页后台静默刷新均调此。未配源不报错，返回 `configured:false` 的可渲染结果（同样写缓存）
+- **权限**: 平台管理员
+- **关联 FR**: FR-186、FR-081、FR-175、FR-182
+- **请求**: 无
+- **响应** (200): 同 `GET /check` 的结构，`cached:true` + `checkedAt` 为本次检查时刻
+- **错误**: 429 `UPDATE_RATE_LIMITED`（GitHub API 限流，可配 github_token 提额）| 502 `UPDATE_CHECK_FAILED`（拉取/解析更新源失败）
 
 ### POST /api/v1/self-update/control-plane/upgrade
 - **描述**: 升级 CP 自身（下载 → sha256 校验 → 替换 → 平滑重启）。替换成功后异步延迟重启，先返回 202

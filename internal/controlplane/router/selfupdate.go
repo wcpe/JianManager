@@ -36,9 +36,22 @@ type upgradeAllRequest struct {
 	NodeIDs []uint `json:"nodeIds"`
 }
 
-// Check GET /self-update/check — 检查更新（CP + 各节点版本对比）。
+// Check GET /self-update/check — 返回服务端缓存的上次检查结果（FR-186）。
+// 不触发 live 网络调用，毫秒级返回；缓存空时返回 cached=false，由前端据此触发 refresh。
+// live 检查走 POST /self-update/check/refresh。
 func (h *SelfUpdateHandler) Check(c *gin.Context) {
-	res, err := h.svc.CheckUpdate(c.Request.Context())
+	res, err := h.svc.CachedCheck(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "UPDATE_CHECK_FAILED", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+// RefreshCheck POST /self-update/check/refresh — 显式 live 检查更新并更新缓存（FR-186）。
+// 经更新源在线拉取 + 逐节点 RPC，成功覆盖缓存并返回最新结果；失败透出错误码但**不清缓存**。
+func (h *SelfUpdateHandler) RefreshCheck(c *gin.Context) {
+	res, err := h.svc.RefreshCheck(c.Request.Context())
 	if err != nil {
 		if errors.Is(err, service.ErrUpdateNotConfigured) {
 			c.JSON(http.StatusConflict, gin.H{"error": "UPDATE_NOT_CONFIGURED", "message": "未配置更新源"})
@@ -176,6 +189,7 @@ func (h *SelfUpdateHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	su := rg.Group("/self-update")
 	{
 		su.GET("/check", h.Check)
+		su.POST("/check/refresh", h.RefreshCheck)
 		su.POST("/control-plane/upgrade", h.UpgradeControlPlane)
 		su.POST("/control-plane/rollback", h.RollbackControlPlane)
 		su.POST("/nodes/:id/upgrade", h.UpgradeNode)
