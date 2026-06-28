@@ -209,6 +209,61 @@ function buildStats(channelId: string, days: number) {
   }
 }
 
+/** 构造频道观测视图（匹配 ClientDistObservability，FR-217）。 */
+function buildObservability(channelId: string, range: string) {
+  const series = Array.from({ length: 3 }, (_, i) => ({
+    ts: `2026-06-2${5 + i}T10:00:00Z`,
+    manifestPulls: 120 + i * 10,
+    artifactPulls: 35 + i * 5,
+    downloadBytes: (120 + i * 10) * 70_000,
+    casHit: 20 + i,
+    casMiss: 15,
+    activeMachines: 48 + i,
+    updateTotal: 30,
+    updateSuccess: 27,
+    updateFailStatic: 1,
+    updateRolledBack: 1,
+    updateError: 1,
+  }))
+  return {
+    channelId,
+    from: '2026-06-21T00:00:00Z',
+    to: '2026-06-28T00:00:00Z',
+    series,
+    summary: {
+      manifestPulls: 1500,
+      artifactPulls: 400,
+      downloadBytes: 99_000_000,
+      casHit: 240,
+      casMiss: 160,
+      updateTotal: 360,
+      updateSuccess: 330,
+      updateFailStatic: 10,
+      updateRolledBack: 12,
+      updateError: 8,
+      successRate: 0.9167,
+      failStaticRate: 0.0278,
+      rollbackRate: 0.0333,
+      casHitRate: 0.6,
+      activeMachines: 512,
+      // 短窗（24h/7d）落明细保留窗内→精确去重；长窗超窗→人次近似。
+      activeMachinesExact: range === '24h' || range === '7d',
+    },
+    versionDist: [
+      { version: 7, count: 900 },
+      { version: 6, count: 600 },
+    ],
+    platformDist: [
+      { os: 'windows', count: 1200 },
+      { os: 'linux', count: 300 },
+    ],
+    lagDist: [
+      { lag: 0, count: 320 },
+      { lag: 1, count: 30 },
+    ],
+  }
+}
+
 export const handlers = [
   // 频道列表（受保护）。
   domainRoute('get', '/client-channels', (info) => {
@@ -432,6 +487,16 @@ export const handlers = [
     const channelId = url.searchParams.get('channelId') ?? ''
     const days = Number(url.searchParams.get('days') ?? 30)
     return HttpResponse.json(buildStats(channelId, days))
+  }),
+
+  // 分发观测（FR-217）：时序 + 分布 + 汇总。
+  domainRoute('get', '/client-dist/observability', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const channelId = url.searchParams.get('channelId') ?? ''
+    const range = url.searchParams.get('range') ?? '7d'
+    return HttpResponse.json(buildObservability(channelId, range))
   }),
 
   // 内嵌更新器 jar 信息（FR-107 接入引导）。
