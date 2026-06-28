@@ -79,7 +79,10 @@ file_version:         # 通用文件改前快照（FR-051）
 | `JIANMANAGER_JWT_SECRET` | jwt.secret | dev-secret-change-me（**必改**） |
 | `JIANMANAGER_DATA_DIR` | 数据根（资产/缓存） | 进程目录下 `data/` |
 | `JIANMANAGER_CLIENT_SIGN_PRIVKEY` | client_dist.sign_priv_key | 空（未设=不启用客户端 OTA、CP 照常启动；设错=拒绝启动，见下） |
+| `JIANMANAGER_CLIENT_KEY_ENC_SECRET` | client_dist.key_enc_secret | 空（未设=新建/轮换的拉取密钥不可查看明文；不阻断建密钥，见下） |
 
+> **拉取密钥可逆加密密钥（FR-192，见 ADR-044）**：让管理员可在频道页**查看拉取密钥明文 + 复制**（解决「忘记密钥只能轮换→已分发玩家集体断更」）。鉴权仍只用哈希比对、行为不变；另存一份 AES-256-GCM 可逆加密副本，密钥经 `JIANMANAGER_CLIENT_KEY_ENC_SECRET`（32 字节 base64，生成示例 `openssl rand -base64 32`）注入、不入库。**未配置时优雅降级**：`dev_mode: true` 回退内置 dev 密钥（仅开发）；生产未配则新建/轮换的密钥**不写加密副本、不可查看**（密钥本身照常创建/鉴权可用，**不阻断建密钥**）。安全：拉取密钥半公开（随整包分发必泄露、非信任根），可查看与其真实信任级一致，防投毒全靠 manifest 签名、不受影响。注：更换此密钥后旧加密副本解不开（按「不可查看」处理，不崩；密钥版本化为后续事项）。
+>
 > **客户端分发（OTA）签名私钥（FR-087，见 ADR-022 / ADR-038）**：客户端 OTA 为可选功能。生产（`dev_mode: false`）**未注入** `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 时 Control Plane **降级启动**——视为未启用 OTA，签名器不可用、发布 / 签名 manifest 调用时返回「签名私钥未配置」，其余功能照常（见 ADR-038）。若**误把源码中公开的内置开发密钥贴进 env**（按解出公钥识别）则 **fail-closed 拒绝启动**——绝不回退开发密钥对外签 manifest（否则可被伪造投毒）。要启用 OTA：注入独立 Ed25519 私钥（base64 of PKCS#8 DER），生成示例 `openssl genpkey -algorithm ed25519 -outform DER | base64 -w0`，并把对应公钥回填客户端 updater-core 后随基础包分发。仅 `dev_mode: true`（如 `configs/control-plane.yaml`）才零配置回退开发密钥，供本地开发。
 
 ## 5. 首次启动引导

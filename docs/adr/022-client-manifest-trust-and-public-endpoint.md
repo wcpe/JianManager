@@ -66,3 +66,9 @@
 本补充**不改变也不取代**本 ADR 的任何决策，仅落实其既有安全前提、堵住实现层的 fail-open；故无新增 / superseded ADR。覆盖测试见 `internal/controlplane/service/client_manifest_test.go` 的 `TestResolveManifestSigner_*`。
 
 > **后续细化（见 [ADR-038](038-signer-missing-degraded-startup.md)，2026-06-27）**：本补充规定的「未注入私钥 → 拒绝启动」已被 ADR-038 细化为「未注入 → **降级启动**（签名器置 nil、客户端 OTA 发布 / 签名调用时返回 `ErrSignKeyNotConfigured`、其余 CP 功能照常）；注入无效私钥 / 误用源码公开的开发密钥 → **仍拒绝启动**」。安全根本不变：降级绝不回退开发密钥对外签名。本 ADR 核心 8 决策与状态（`accepted`）不受影响。
+
+## 实施修订（2026-06-28，拉取密钥改可逆加密存储 + 管理员可查看）
+
+决策① 原规定拉取密钥「**落库只存 SHA-256 哈希**、明文不可二次读取」。实践中这造成「运营忘记密钥 → 只能轮换 → 已分发玩家集体断更」的两难，且「只存哈希」对一把**半公开**凭据（决策① 自陈：随整包分发必泄露、不作内容可信依据）并未换来实质安全。
+
+故由 [ADR-044](044-pull-key-reversible-encryption.md) **修订决策① 的存储部分**：`KeyHash` 仍用于**鉴权（语义完全不变）**，另存 AES-256-GCM 可逆加密副本 `KeyEnc`（`JIANMANAGER_CLIENT_KEY_ENC_SECRET` 注入密钥、未配优雅降级），供平台管理员经 `GET /client-channels/:id/keys/:keyId/reveal` 查看明文 + 审计。**可查看与拉取密钥『半公开、非信任根』的真实信任级一致**；本 ADR 的签名信任根（决策②/⑧）、私钥持有、防投毒模型**完全不受影响**。决策① 的鉴权部分与决策②~⑧、状态（`accepted`）均不变，仅存储/可查看性被 ADR-044 修订。

@@ -1814,8 +1814,9 @@
 - **响应** (201):
   ```json
   { "id": 10, "name": "正式包", "keyPrefix": "jmck_ab12", "revoked": false, "expiresAt": null,
-    "createdAt": "datetime", "key": "jmck_<一次性明文>" }
+    "createdAt": "datetime", "revealable": true, "key": "jmck_<一次性明文>" }
   ```
+  （`revealable`=后端是否存有可逆加密副本，配了 `JIANMANAGER_CLIENT_KEY_ENC_SECRET` 或 dev 态为 `true`，FR-192）
 - **错误**: 404 `CHANNEL_NOT_FOUND` | 400 `INVALID_REQUEST`
 - **审计**: `client_key.create`（detail 不含明文）
 
@@ -1826,6 +1827,15 @@
 - **响应** (200): 同创建响应（含一次性 `key`）
 - **错误**: 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND`
 - **审计**: `client_key.rotate`（detail 不含明文）
+
+### GET /api/v1/client-channels/:id/keys/:kid/reveal
+- **描述**: 查看拉取密钥明文（FR-192，见 ADR-044）。密钥改可逆加密存储后管理员可随时查看明文 + 复制；鉴权仍只用哈希比对，行为不变。仅当后端存有可逆加密副本（`KeyEnc`）时可查看
+- **关联 FR**: FR-192
+- **权限**: 平台管理员
+- **响应** (200): `{ "key": "jmck_<明文>" }`
+- **错误**: 404 `KEY_NOT_REVEALABLE`（存量老哈希密钥 / 创建时未配 `JIANMANAGER_CLIENT_KEY_ENC_SECRET`，明文不可找回）| 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND`
+- **审计**: `client_key.reveal`（detail 仅元数据 channelId/keyId，**绝不含明文**）
+- **备注**: 频道详情/密钥列表的密钥元数据新增派生布尔 `revealable`（= 后端存有 `KeyEnc`），供前端对不可查看的老密钥禁用「查看」并提示；`KeyEnc`/`KeyHash` 本身不序列化
 
 ### DELETE /api/v1/client-channels/:id/keys/:kid
 - **描述**: 吊销密钥（保留记录、标记 revoked，立即鉴权失效）

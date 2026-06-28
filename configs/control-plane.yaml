@@ -61,6 +61,10 @@ update:
 client_dist:
   sign_priv_key: ""  # base64(PKCS#8 DER, Ed25519)；生产经 ${JIANMANAGER_CLIENT_SIGN_PRIVKEY} 注入，勿硬编码
   sign_key_id: k1    # 签名公钥版本标识（轮换用），须与客户端内置公钥 keyId 一致
+  # 拉取密钥可逆加密密钥（FR-192，见 ADR-044）：另存明文 AES-256-GCM 加密副本供管理员查看明文，鉴权仍只用哈希。
+  # 留空时优雅降级——dev_mode: true 回退内置 dev 密钥（仅开发）；生产留空则新建/轮换的密钥不可查看（不阻断建密钥）。
+  # 生产经 ${JIANMANAGER_CLIENT_KEY_ENC_SECRET} 注入 32 字节 base64 密钥，勿硬编码。生成示例：openssl rand -base64 32
+  key_enc_secret: ""  # base64(32 字节)；生产经 ${JIANMANAGER_CLIENT_KEY_ENC_SECRET} 注入
 
 # 出站网络代理（FR-174，见 ADR-037；可视化配置 + 节点下发见 FR-185 / ADR-043）。CP 所有出站下载
 #（自更新 feed/二进制、服务端 jar、客户端制品入库等）经此代理。url 留空=直连（仍尊重
