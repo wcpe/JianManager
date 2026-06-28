@@ -118,9 +118,9 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.ClientChannel{},
 		&model.ClientPullKey{},
 		&model.ClientVersion{},
-		// updater-core 集中版本注册（FR-193，见 ADR-045）：version 全局单调 + 制品引用；
-		// 频道经 ClientChannel.PinnedCoreVersion 选定，manifest agent.core 由 pin 驱动。
-		&model.ClientCoreVersion{},
+		// 原 updater-core 集中版本注册表（client_core_versions）已随 FR-193 反转废弃（见 ADR-045 改写）：
+		// updater-core 改由 CP 内嵌默认版本自动驱动 manifest agent.core，运营不再管理。AutoMigrate 不删表，
+		// 存量库的旧表留着无害、不再写入；模型已移除，故此处不再 AutoMigrate 该表。
 		&model.ClientMachine{},
 		&model.ClientDistEvent{},
 		&model.ClientDistDaily{},

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"log/slog"
@@ -12,7 +13,9 @@ import (
 
 	"github.com/wcpe/JianManager/internal/controlplane/config"
 	"github.com/wcpe/JianManager/internal/controlplane/database"
+	cpembed "github.com/wcpe/JianManager/internal/controlplane/embed"
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/router"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
@@ -173,10 +176,25 @@ func main() {
 		slog.Warn("客户端分发签名使用内置开发密钥（仅 dev_mode 生效），生产务必经 JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入独立私钥")
 	}
 	clientVersionSvc := service.NewClientVersionService(db, assetSvc, clientChannelSvc, clientSigner)
-	// updater-core 集中版本管理（FR-193，见 ADR-045）：core 制品注册 + 频道 pin 驱动 manifest agent.core +
-	// 更新/回退（回退=以更高版本重发旧字节、不降版）。注入版本服务后 BuildManifest 的 agent.core 由 pin 驱动。
-	clientCoreVersionSvc := service.NewClientCoreVersionService(db, assetSvc)
-	clientVersionSvc.SetCoreVersions(clientCoreVersionSvc)
+	// updater-core 默认随 CP 内嵌、自动驱动 manifest agent.core，运营不管理（FR-193，见 ADR-045 改写）。
+	// 从内嵌 updater-core jar 算 sha256/size + 整数版本，注入版本服务 → BuildManifest 自动产出 agent.core；
+	// 并把内嵌 core 当作 client-file 制品入库（内容寻址去重），使其可经公网 client-artifacts 端点下发。
+	// 无内嵌 jar（未经 make embed-client-updater）时优雅降级：省略 agent.core，不破 FR-087/088。
+	if coreJar := cpembed.UpdaterCoreJar(); len(coreJar) > 0 {
+		embeddedCore := service.NewEmbeddedCoreFromJar(coreJar, cpembed.ClientUpdaterEmbeddedCoreVersion)
+		clientVersionSvc.SetEmbeddedCore(embeddedCore)
+		// 内嵌 core 入 client-file 制品库（与 manifest files 制品同型，OpenArtifact 据此按 sha256 下发）。
+		// 内容寻址去重：每次启动落同一 sha256，命中即复用，不产生重复制品。
+		if _, ierr := assetSvc.Ingest(bytes.NewReader(coreJar), service.IngestParams{
+			Type:     model.AssetTypeClientFile,
+			Filename: "updater-core.jar",
+			Metadata: `{"codec":"none","source":"embedded-updater-core"}`,
+		}); ierr != nil {
+			slog.Warn("内嵌 updater-core 制品入库失败，客户端可能无法下载默认 core（FR-193）", "error", ierr)
+		}
+	} else {
+		slog.Warn("未内嵌 updater-core jar（make embed-client-updater 未注入），manifest 将省略 agent.core；客户端不自更新 core（FR-193）")
+	}
 	// 客户端机器码登记（FR-092）：manifest 拉取时 best-effort upsert，弱一致、不阻断。
 	clientMachineSvc := service.NewClientMachineService(db)
 	// 客户端分发拉取/下载追踪（FR-093）：明细短保留 + 写时增量聚合 + 后台滚动清理。
@@ -347,7 +365,6 @@ func main() {
 		ProbeUpdate:        probeUpdateSvc,
 		ClientChannel:      clientChannelSvc,
 		ClientVersion:      clientVersionSvc,
-		ClientCoreVersion:  clientCoreVersionSvc,
 		ClientMachine:      clientMachineSvc,
 		ClientDistTracking: clientDistTrackingSvc,
 		ClientIPGuard:      clientIPGuardSvc,

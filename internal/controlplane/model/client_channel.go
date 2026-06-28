@@ -19,11 +19,10 @@ type ClientChannel struct {
 	Description string `gorm:"type:varchar(512)" json:"description"`
 	// CurrentVersion 当前 latest 版本指针占位；0=未发布。本 FR 仅建字段，编排见 FR-088。
 	CurrentVersion int `gorm:"default:0;not null" json:"currentVersion"`
-	// PinnedCoreVersion 频道 pin 的 updater-core 版本号（FR-193，见 ADR-045）。
-	// 0=自动指向当前已登记的最新 core 版本（默认）；>0=固定 pin 到该 core 版本。
-	// manifest 生成时据此驱动 agent.core（取代纯手填透传）；无任何已登记 core 版本时回退手填透传（兼容 FR-087/088）。
-	// 注意：这是 updater-core 自身版本轴（对客户端单调只升不降），与 CurrentVersion（内容版本轴、防降级）正交。
-	PinnedCoreVersion int            `gorm:"default:0;not null" json:"pinnedCoreVersion"`
+	// Deprecated: PinnedCoreVersion 原为频道 pin 的 updater-core 版本号（FR-193 初版，已随反转废弃，见 ADR-045 改写）。
+	// updater-core 现由 CP 内嵌默认版本自动驱动 manifest agent.core，运营不再 pin/管理。保留此列（加性、默认 0）
+	// 仅为兼容存量库、避免无谓迁移；不再被任何运营端点写入、不参与 manifest 生成。
+	PinnedCoreVersion int            `gorm:"default:0;not null" json:"-"`
 	CreatedAt         time.Time      `json:"createdAt"`
 	UpdatedAt         time.Time      `json:"updatedAt"`
 	DeletedAt         gorm.DeletedAt `gorm:"index" json:"-"`

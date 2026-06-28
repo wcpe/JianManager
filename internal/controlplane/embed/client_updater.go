@@ -14,6 +14,13 @@ var clientUpdaterFS embed.FS
 // 升级客户端更新器时同步本常量。
 const ClientUpdaterEmbeddedVersion = "0.1.0"
 
+// ClientUpdaterEmbeddedCoreVersion 是内嵌 updater-core 的**整数版本号**，作 manifest `agent.core.version`
+// 的来源（FR-193，见 ADR-045 改写）。客户端 FR-091 的自更新只把**更高** `agent.core.version` 暂存为
+// pending（int 比较），故此值须为单调整数、随 CP/更新器版本演进只升不降。`ClientUpdaterEmbeddedVersion`
+// 是给运营看的展示串（语义版本），本常量是给客户端用的单调整数轴——升级内嵌 updater-core 时一并 +1。
+// 默认 1；可经构建期 `-ldflags "-X ...embed.ClientUpdaterEmbeddedCoreVersion=N"` 覆盖（须为整数字面量）。
+var ClientUpdaterEmbeddedCoreVersion = "1"
+
 // WedgeJar 返回内嵌的楔子 jar 字节；未经 `make embed-client-updater` 注入时返回 nil。
 func WedgeJar() []byte {
 	b, err := clientUpdaterFS.ReadFile("client-updater/wedge.jar")

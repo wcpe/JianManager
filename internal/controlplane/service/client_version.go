@@ -1,10 +1,14 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -21,6 +25,42 @@ var (
 	ErrVersionNotFound = errors.New("版本不存在")
 )
 
+// EmbeddedCore 描述 CP 内嵌的默认 updater-core（FR-193，见 ADR-045 改写）。
+// 由装配处（main.go）从 embed.UpdaterCoreJar() 计算一次后注入：sha256/size + 单调整数版本。
+// 内嵌 core 随 CP 走、运营不管理；CP 自更新（FR-081）后内嵌 jar 即新版、本结构随之刷新。
+type EmbeddedCore struct {
+	// Version updater-core 整数版本号 = manifest agent.core.version（对客户端单调只升不降，FR-091）。
+	Version int
+	// SHA256 内嵌 core jar 自身 sha256 = manifest agent.core.platforms[os].artifact.sha256 = 制品下载寻址 key。
+	SHA256 string
+	// Size 内嵌 core jar 字节数。
+	Size int64
+	// Codec 制品压缩算法；内嵌 jar 为原始 jar，恒 "none"。
+	Codec string
+}
+
+// NewEmbeddedCoreFromJar 由内嵌 updater-core jar 字节 + 版本字符串构造 EmbeddedCore（FR-193，见 ADR-045 改写）。
+//   - jar 为 nil/空（未经 make embed-client-updater 注入）：返回 nil（调用方据此省略 agent.core，优雅降级）；
+//   - versionStr 非整数：回退版本号 1（保证 agent.core.version 为合法单调整数，不因配置失误产出坏 manifest）。
+//
+// sha256/size 由 jar 字节现算（= 制品内容寻址 key，与经制品端点下发的字节一致）。
+func NewEmbeddedCoreFromJar(jar []byte, versionStr string) *EmbeddedCore {
+	if len(jar) == 0 {
+		return nil
+	}
+	version, err := strconv.Atoi(strings.TrimSpace(versionStr))
+	if err != nil || version <= 0 {
+		version = 1
+	}
+	sum := sha256.Sum256(jar)
+	return &EmbeddedCore{
+		Version: version,
+		SHA256:  hex.EncodeToString(sum[:]),
+		Size:    int64(len(jar)),
+		Codec:   "none",
+	}
+}
+
 // ClientVersionService 客户端分发版本发布与 manifest 组装（FR-087，见 ADR-022、contract §2/§3）。
 //
 // 职责：
@@ -35,9 +75,9 @@ type ClientVersionService struct {
 	assets  *AssetService
 	channel *ClientChannelService
 	signer  *ManifestSigner
-	// coreVersions updater-core 集中版本管理（FR-193，见 ADR-045）。非 nil 时 BuildManifest 由频道
-	// pin 驱动 agent.core（取代纯手填透传）；nil 或无 core 注册时回退手填透传（兼容 FR-087/088）。
-	coreVersions *ClientCoreVersionService
+	// embeddedCore CP 内嵌的默认 updater-core（FR-193，见 ADR-045 改写）。非 nil 时 BuildManifest
+	// 用它自动产出 agent.core（取代运营手填/pin）；nil（无内嵌 jar）时省略 agent.core（不破 FR-087/088）。
+	embeddedCore *EmbeddedCore
 }
 
 // NewClientVersionService 创建版本服务。signer 为 nil 时 BuildManifest 报 ErrSignKeyNotConfigured。
@@ -45,11 +85,11 @@ func NewClientVersionService(db *gorm.DB, assets *AssetService, channel *ClientC
 	return &ClientVersionService{db: db, assets: assets, channel: channel, signer: signer}
 }
 
-// SetCoreVersions 注入 updater-core 集中版本管理服务（FR-193，见 ADR-045）。
-// 注入后 BuildManifest 的 agent.core 由频道 pin 驱动；不注入则维持手填透传（向后兼容）。
+// SetEmbeddedCore 注入 CP 内嵌的默认 updater-core 信息（FR-193，见 ADR-045 改写）。
+// 注入后 BuildManifest 的 agent.core 由内嵌 core 自动驱动（version + 三平台同制品）；不注入则省略 agent.core。
 // 经 setter 注入以保持构造签名稳定（既有装配/测试零改动）。
-func (s *ClientVersionService) SetCoreVersions(cv *ClientCoreVersionService) {
-	s.coreVersions = cv
+func (s *ClientVersionService) SetEmbeddedCore(ec *EmbeddedCore) {
+	s.embeddedCore = ec
 }
 
 // PublishFileParams 上传客户端文件制品参数。
@@ -209,36 +249,39 @@ func (s *ClientVersionService) BuildManifest(channelID string) (*SignedManifest,
 	if err != nil {
 		return nil, err
 	}
-	// agent.core 由频道 core pin 驱动（FR-193，见 ADR-045）：覆盖版本快照中的手填透传值。
-	// 无 core 注册（ResolveForChannel 返 nil）时不覆盖，沿用快照手填透传（兼容 FR-087/088）。
-	if err := s.applyPinnedCore(manifest, ch); err != nil {
-		return nil, err
-	}
+	// agent.core 由 CP 内嵌默认 updater-core 自动驱动（FR-193，见 ADR-045 改写）：覆盖快照中的手填透传值。
+	// 无内嵌 jar（embeddedCore 未注入）时省略 agent.core，沿用快照（兼容 FR-087/088、不破签名/客户端）。
+	s.applyEmbeddedCore(manifest)
 	if err := s.signer.Sign(manifest); err != nil {
 		return nil, fmt.Errorf("签名 manifest 失败: %w", err)
 	}
 	return manifest, nil
 }
 
-// applyPinnedCore 用频道 pin 选定的 core 版本覆盖 manifest 的 agent.core（FR-193，见 ADR-045 决策 1）。
-// coreVersions 未注入或无任何已登记 core 版本时不动 agent.core（保留快照手填透传，兼容旧发布）。
-// agent.wedge 不受影响（楔子冻结、信息性，ADR-045 决策 2）。
-func (s *ClientVersionService) applyPinnedCore(manifest *SignedManifest, ch *model.ClientChannel) error {
-	if s.coreVersions == nil {
-		return nil
+// embeddedCorePlatforms manifest agent.core.platforms 须填的平台键集合（contract §2、ADR-021）。
+// ADR-021「一份 jar 三平台通用」——内嵌一份 core jar，fan-out 填这三键（同制品）。
+// 客户端 Platform.tag() 取 windows/macos/linux 之一；other 平台无键、不自更新（沿用 FR-091）。
+var embeddedCorePlatforms = []string{"windows", "macos", "linux"}
+
+// applyEmbeddedCore 用 CP 内嵌的默认 updater-core 自动产出 manifest 的 agent.core（FR-193，见 ADR-045 改写）。
+// embeddedCore 未注入（无内嵌 jar）时不动 agent.core——省略而非置空（保留快照、不破 FR-087/088）。
+// agent.wedge 不受影响（楔子冻结、信息性，随快照透传）。一份内嵌 jar fan-out 填三平台键（ADR-021）。
+func (s *ClientVersionService) applyEmbeddedCore(manifest *SignedManifest) {
+	if s.embeddedCore == nil {
+		return
 	}
-	rec, err := s.coreVersions.ResolveForChannel(ch.PinnedCoreVersion)
-	if err != nil {
-		return fmt.Errorf("解析频道 core pin 失败: %w", err)
-	}
-	if rec == nil {
-		return nil // 无 core 注册 → 沿用手填透传。
+	platforms := make(map[string]ManifestAgentArtifact, len(embeddedCorePlatforms))
+	for _, os := range embeddedCorePlatforms {
+		platforms[os] = ManifestAgentArtifact{
+			SHA256: s.embeddedCore.SHA256,
+			Size:   s.embeddedCore.Size,
+			Codec:  s.embeddedCore.Codec,
+		}
 	}
 	if manifest.Agent == nil {
 		manifest.Agent = &ManifestAgent{}
 	}
-	manifest.Agent.Core = coreVersionToManifest(rec)
-	return nil
+	manifest.Agent.Core = &ManifestCore{Version: s.embeddedCore.Version, Platforms: platforms}
 }
 
 // LatestVersion 返回频道当前 latest 版本号（0=未发布）。
