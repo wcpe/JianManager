@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Copy, Download, FolderOpen, PackageCheck } from 'lucide-react'
+import { Copy, Download, FolderOpen, Package, PackageCheck, Coffee, Search, Trash2 } from 'lucide-react'
 import { useNodeJDKs, useCreateJDK, useDeleteJDK, useInstallJDK, type NodeJDK } from '@/api/jdks'
 import { useJDKCatalog } from '@/api/nodeRuntime'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
@@ -9,6 +9,9 @@ import { FieldError } from '@/components/ui/field-label'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Badge } from '@/components/ui/badge'
+import { ViewToggle, type ViewMode } from '@/components/ui/view-toggle'
+import { cn } from '@/lib/utils'
 import DangerConfirm from '@/components/DangerConfirm'
 import DirectoryPicker from '@/components/DirectoryPicker'
 import { validateAbsPath, validatePositiveInt } from '@/lib/form-validation'
@@ -72,6 +75,9 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
   const [showPicker, setShowPicker] = useState(false)
 
   const [pendingDel, setPendingDel] = useState<NodeJDK | null>(null)
+  const [view, setView] = useState<ViewMode>('list')
+  const [query, setQuery] = useState('')
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'managed' | 'external'>('all')
 
   // foojay 版本目录（仅在「一键下载」分段且 vendor 非空时查询）。
   const majorNum = Number(major) || 0
@@ -80,6 +86,31 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
   const regPathError = validateAbsPath(regPath)
   const regMajorError = validatePositiveInt(regMajor)
   const registerInvalid = regPath.trim() === '' || !!regPathError || !!regMajorError
+
+  // 已登记列表的来源筛选 + 文本搜索（FR-195：行卡片 / 网格视图的轻量过滤）。
+  const allJdks = jdks ?? []
+  const managedCount = allJdks.filter((j) => j.managed).length
+  const filteredJdks = allJdks.filter((j) => {
+    if (sourceFilter === 'managed' && !j.managed) return false
+    if (sourceFilter === 'external' && j.managed) return false
+    const q = query.trim().toLowerCase()
+    if (q && !`${j.vendor} ${j.majorVersion} ${j.version} ${j.arch} ${j.path}`.toLowerCase().includes(q)) return false
+    return true
+  })
+
+  // 来源徽章：托管=主色「包」图标+文字，外部=中性「文件夹」图标+文字（FR-195 锁定样式）。
+  const sourceBadge = (managed: boolean) =>
+    managed ? (
+      <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs font-medium text-primary">
+        <Package className="size-3.5" />
+        {t('nodes.jdkManaged')}
+      </span>
+    ) : (
+      <span className="inline-flex items-center gap-1 whitespace-nowrap text-xs text-muted-foreground">
+        <FolderOpen className="size-3.5" />
+        {t('nodes.jdkExternal')}
+      </span>
+    )
 
   const onInstall = () => {
     install.mutate(
@@ -140,58 +171,152 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
       </div>
 
       {tab === 'list' && (
-        isLoading ? (
-          <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
-        ) : !jdks || jdks.length === 0 ? (
-          <p className="text-sm text-muted-foreground">{t('nodes.jdkEmpty')}</p>
-        ) : (
-          <div className="overflow-x-auto rounded-md border">
-            <table className="w-full text-sm">
-              <thead className="bg-muted">
-                <tr>
-                  <th className="px-2 py-1.5 text-left font-medium">{t('nodes.jdkVendor')}</th>
-                  <th className="px-2 py-1.5 text-left font-medium">{t('nodes.jdkMajor')}</th>
-                  <th className="px-2 py-1.5 text-left font-medium">{t('nodes.jdkVersion')}</th>
-                  <th className="px-2 py-1.5 text-left font-medium">{t('nodes.jdkArch')}</th>
-                  <th className="px-2 py-1.5 text-left font-medium">{t('nodes.jdkPath')}</th>
-                  <th className="px-2 py-1.5 text-left font-medium">{t('nodes.jdkSource')}</th>
-                  <th className="px-2 py-1.5 text-right font-medium">{t('common.actions')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {jdks.map((j) => (
-                  <tr key={j.id} className="border-t">
-                    <td className="px-2 py-1.5">{j.vendor}</td>
-                    <td className="px-2 py-1.5">{j.majorVersion}</td>
-                    <td className="px-2 py-1.5">{j.version || '—'}</td>
-                    <td className="px-2 py-1.5">{j.arch || '—'}</td>
-                    <td className="px-2 py-1.5">
-                      <button
-                        type="button"
-                        className="flex max-w-[16rem] items-center gap-1 font-mono text-xs text-muted-foreground hover:text-foreground"
-                        title={j.path}
-                        onClick={() => copyPath(j.path)}
-                      >
-                        <span className="truncate">{j.path}</span>
-                        <Copy className="size-3 shrink-0" />
-                      </button>
-                    </td>
-                    <td className="px-2 py-1.5 text-xs">{j.managed ? t('nodes.jdkManaged') : t('nodes.jdkExternal')}</td>
-                    <td className="px-2 py-1.5 text-right">
-                      <button
-                        type="button"
-                        className="text-xs text-destructive hover:underline"
-                        onClick={() => setPendingDel(j)}
-                      >
-                        {t('common.delete')}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="space-y-3">
+          {/* 工具条：搜索 + 视图切换（行卡片 ⇄ 网格） */}
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t('nodes.jdkSearchPlaceholder')}
+                className="h-9 pl-8"
+              />
+            </div>
+            <ViewToggle value={view} onChange={setView} cardLabel={t('grouping.viewCard')} listLabel={t('grouping.viewList')} />
           </div>
-        )
+
+          {/* 来源筛选 chips */}
+          <div className="flex flex-wrap items-center gap-2">
+            {([
+              ['all', t('grouping.all'), allJdks.length],
+              ['managed', t('nodes.jdkManaged'), managedCount],
+              ['external', t('nodes.jdkExternal'), allJdks.length - managedCount],
+            ] as const).map(([key, label, count]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setSourceFilter(key)}
+                aria-pressed={sourceFilter === key}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                  sourceFilter === key
+                    ? 'border-primary/50 bg-accent text-primary'
+                    : 'border-border bg-card text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {label}
+                <span className="font-semibold tabular-nums">{count}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* 列表 / 网格 / 空 / 载入 */}
+          {isLoading ? (
+            <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+          ) : filteredJdks.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">{t('nodes.jdkEmpty')}</p>
+          ) : view === 'list' ? (
+            <div className="space-y-2">
+              {filteredJdks.map((j) => (
+                <div
+                  key={j.id}
+                  className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2.5 transition-colors hover:bg-muted/40"
+                >
+                  <div
+                    className={cn(
+                      'flex size-9 shrink-0 items-center justify-center rounded-md',
+                      j.managed ? 'bg-accent text-primary' : 'bg-muted text-muted-foreground',
+                    )}
+                  >
+                    <Coffee className="size-[18px]" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{j.vendor}</span>
+                      <Badge variant="secondary" className="bg-accent font-medium text-primary">
+                        Java {j.majorVersion}
+                      </Badge>
+                      {(j.version || j.arch) && (
+                        <span className="text-xs text-muted-foreground">{[j.version, j.arch].filter(Boolean).join(' · ')}</span>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      className="mt-0.5 flex max-w-full items-center gap-1 font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
+                      title={j.path}
+                      onClick={() => copyPath(j.path)}
+                    >
+                      <span className="truncate">{j.path}</span>
+                      <Copy className="size-3 shrink-0" />
+                    </button>
+                  </div>
+                  {sourceBadge(j.managed)}
+                  <button
+                    type="button"
+                    aria-label={t('common.delete')}
+                    className="shrink-0 text-muted-foreground transition-colors hover:text-status-danger"
+                    onClick={() => setPendingDel(j)}
+                  >
+                    <Trash2 className="size-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+              {filteredJdks.map((j) => (
+                <div key={j.id} className="rounded-lg border bg-card p-3 transition-colors hover:bg-muted/40">
+                  <div className="mb-2.5 flex items-center gap-2.5">
+                    <div
+                      className={cn(
+                        'flex size-8 shrink-0 items-center justify-center rounded-md',
+                        j.managed ? 'bg-accent text-primary' : 'bg-muted text-muted-foreground',
+                      )}
+                    >
+                      <Coffee className="size-4" />
+                    </div>
+                    <span className="flex-1 truncate font-medium">{j.vendor}</span>
+                    <Badge variant="secondary" className="bg-accent font-medium text-primary">
+                      Java {j.majorVersion}
+                    </Badge>
+                    <button
+                      type="button"
+                      aria-label={t('common.delete')}
+                      className="shrink-0 text-muted-foreground transition-colors hover:text-status-danger"
+                      onClick={() => setPendingDel(j)}
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  </div>
+                  <dl className="space-y-1 text-xs">
+                    <div className="flex items-center justify-between">
+                      <dt className="text-muted-foreground">{t('nodes.jdkVersion')}</dt>
+                      <dd>{j.version || '—'}</dd>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <dt className="text-muted-foreground">{t('nodes.jdkArch')}</dt>
+                      <dd>{j.arch || '—'}</dd>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <dt className="text-muted-foreground">{t('nodes.jdkSource')}</dt>
+                      <dd>{sourceBadge(j.managed)}</dd>
+                    </div>
+                  </dl>
+                  <button
+                    type="button"
+                    className="mt-2 flex w-full items-center gap-1 border-t pt-2 font-mono text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+                    title={j.path}
+                    onClick={() => copyPath(j.path)}
+                  >
+                    <span className="truncate">{j.path}</span>
+                    <Copy className="size-3 shrink-0" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
 
       {tab === 'install' && (
