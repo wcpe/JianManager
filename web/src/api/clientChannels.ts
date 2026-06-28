@@ -83,13 +83,26 @@ export function useDeleteClientChannel() {
   })
 }
 
-/** 创建拉取密钥；返回一次性明文。 */
+/**
+ * 创建拉取密钥；返回一次性明文（创建后亦可经 reveal 查看，FR-192）。
+ * value 可空：留空自动生成；填入则用作自定义密钥明文值（管理员自控这把永久 key）。
+ */
 export function useCreateClientKey() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ channelId, name, expiresAt }: { channelId: string; name: string; expiresAt?: string }) =>
+    mutationFn: ({
+      channelId,
+      name,
+      expiresAt,
+      value,
+    }: {
+      channelId: string
+      name: string
+      expiresAt?: string
+      value?: string
+    }) =>
       api
-        .post<ClientKeyWithSecret>(`/client-channels/${channelId}/keys`, { name, expiresAt })
+        .post<ClientKeyWithSecret>(`/client-channels/${channelId}/keys`, { name, expiresAt, value })
         .then((r) => r.data),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['client-channels', vars.channelId] })
@@ -98,15 +111,31 @@ export function useCreateClientKey() {
   })
 }
 
-/** 轮换密钥；返回新一次性明文。 */
-export function useRotateClientKey() {
+/**
+ * 编辑拉取密钥（值/名称，FR-192）。改值时后端重算 KeyHash（鉴权切到新值）+ 重写 KeyEnc，
+ * 响应回显新明文；改值会使持旧值的已分发客户端失效。value 可空=只改名。
+ */
+export function useUpdateClientKey() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ channelId, keyId }: { channelId: string; keyId: number }) =>
+    mutationFn: ({
+      channelId,
+      keyId,
+      name,
+      value,
+    }: {
+      channelId: string
+      keyId: number
+      name: string
+      value?: string
+    }) =>
       api
-        .post<ClientKeyWithSecret>(`/client-channels/${channelId}/keys/${keyId}/rotate`)
+        .put<ClientKeyWithSecret>(`/client-channels/${channelId}/keys/${keyId}`, { name, value })
         .then((r) => r.data),
-    onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['client-channels', vars.channelId] }),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['client-channels', vars.channelId] })
+      qc.invalidateQueries({ queryKey: ['client-channels'] })
+    },
   })
 }
 

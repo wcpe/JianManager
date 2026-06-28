@@ -11,8 +11,8 @@ import {
   DownloadCloud,
   Eye,
   KeyRound,
+  Pencil,
   Plus,
-  RefreshCw,
 } from 'lucide-react'
 import {
   useClientChannels,
@@ -20,7 +20,7 @@ import {
   useCreateClientChannel,
   useDeleteClientChannel,
   useCreateClientKey,
-  useRotateClientKey,
+  useUpdateClientKey,
   useRevokeClientKey,
   useRevealClientKey,
   type ClientChannel,
@@ -545,7 +545,7 @@ function ReadinessStepper({ steps, onCta }: { steps: ReadinessStep[]; onCta: (st
   )
 }
 
-/** 密钥分段：列表 + 「创建密钥」模态 + 轮换/吊销（DangerConfirm）+ 一次性明文弹窗。 */
+/** 密钥分段：列表 + 「创建密钥」模态 + 查看/编辑/吊销（DangerConfirm）+ 一次性明文弹窗。 */
 function KeysSegment({
   channelId,
   keys,
@@ -560,13 +560,12 @@ function KeysSegment({
   onCreateOpenChange: (v: boolean) => void
 }) {
   const { t } = useTranslation()
-  const rotateKey = useRotateClientKey()
   const revokeKey = useRevokeClientKey()
   const revealKey = useRevealClientKey()
 
   const [secret, setSecret] = useState<ClientKeyWithSecret | null>(null)
   const [revokeTarget, setRevokeTarget] = useState<ClientPullKey | null>(null)
-  const [rotateTarget, setRotateTarget] = useState<ClientPullKey | null>(null)
+  const [editTarget, setEditTarget] = useState<ClientPullKey | null>(null)
   // 查看明文弹窗（FR-192）：保存当前查看到的密钥名 + 明文。
   const [revealed, setRevealed] = useState<{ name: string; key: string } | null>(null)
 
@@ -579,21 +578,10 @@ function KeysSegment({
       const res = await revealKey.mutateAsync({ channelId, keyId: key.id })
       setRevealed({ name: key.name, key: res.key })
     } catch (e) {
-      // 兜底：后端返 KEY_NOT_REVEALABLE（如并发被轮换/降级）也走不可找回提示。
+      // 兜底：后端返 KEY_NOT_REVEALABLE（如并发改值/降级）也走不可找回提示。
       const code = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
       if (code === 'KEY_NOT_REVEALABLE') toast.error(t('clientChannels.notRevealable'))
       else toast.error(errMsg(e, t('clientChannels.revealFailed', '查看密钥失败')))
-    }
-  }
-
-  const doRotate = async (key: ClientPullKey) => {
-    setRotateTarget(null)
-    try {
-      const res = await rotateKey.mutateAsync({ channelId, keyId: key.id })
-      setSecret(res)
-      toast.success(t('clientChannels.rotated', '密钥已轮换'))
-    } catch (e) {
-      toast.error(errMsg(e, t('clientChannels.rotateFailed', '轮换密钥失败')))
     }
   }
 
@@ -614,7 +602,7 @@ function KeysSegment({
         <p className="text-sm text-muted-foreground max-w-2xl">
           {t(
             'clientChannels.keysSubtitleViewable',
-            '拉取密钥以可逆加密存储，可随时查看明文并复制到 jm-updater.json。轮换会使已分发客户端失效。',
+            '拉取密钥以可逆加密存储，发出后永久使用、可随时查看明文并复制到 jm-updater.json。可编辑密钥值（改值会使持旧值的已分发客户端失效）。',
           )}
         </p>
         <Button onClick={() => onCreateOpenChange(true)} className="shrink-0">
@@ -662,10 +650,10 @@ function KeysSegment({
                     </button>
                     <button
                       className="text-primary hover:underline inline-flex items-center gap-1 disabled:opacity-40"
-                      onClick={() => setRotateTarget(k)}
+                      onClick={() => setEditTarget(k)}
                       disabled={k.revoked}
                     >
-                      <RefreshCw className="size-3.5" /> {t('clientChannels.rotate', '轮换')}
+                      <Pencil className="size-3.5" /> {t('common.edit', '编辑')}
                     </button>
                     <button
                       className="text-destructive hover:underline inline-flex items-center gap-1 disabled:opacity-40"
@@ -696,24 +684,27 @@ function KeysSegment({
         onCreated={(s) => setSecret(s)}
       />
 
+      <EditKeyDialog
+        channelId={channelId}
+        target={editTarget}
+        onOpenChange={(v) => !v && setEditTarget(null)}
+        onUpdated={(s) => {
+          // 改了值才回显新明文弹窗（后端 key 非空表示改了值）；仅改名不弹。
+          if (s.key) setSecret(s)
+        }}
+      />
+
       <SecretDialog secret={secret} onClose={() => setSecret(null)} />
 
       <RevealDialog revealed={revealed} onClose={() => setRevealed(null)} />
 
       <DangerConfirm
-        open={rotateTarget !== null}
-        title={t('clientChannels.rotateConfirm', '确定轮换此密钥？')}
-        description={t('clientChannels.rotateConfirmDesc', '轮换后旧密钥立即失效，已分发的客户端需更新为新密钥。')}
-        scope="platform"
-        confirmLabel={t('clientChannels.rotate', '轮换')}
-        onConfirm={() => rotateTarget && doRotate(rotateTarget)}
-        onCancel={() => setRotateTarget(null)}
-      />
-
-      <DangerConfirm
         open={revokeTarget !== null}
         title={t('clientChannels.revokeConfirm', '确定吊销此密钥？')}
-        description={t('clientChannels.revokeConfirmDesc', '吊销后使用此密钥的客户端将无法再拉取更新。')}
+        description={t(
+          'clientChannels.revokeConfirmDesc',
+          '吊销不可恢复：使用此密钥的已分发客户端将无法再更新（拉取 manifest/制品一律被拒）。仅在确认该密钥不再服务于任何已发出的整合包时吊销。',
+        )}
         scope="platform"
         confirmLabel={t('clientChannels.revoke', '吊销')}
         onConfirm={() => revokeTarget && doRevoke(revokeTarget)}
@@ -739,12 +730,15 @@ function CreateKeyDialog({
   const createKey = useCreateClientKey()
   const [keyName, setKeyName] = useState('')
   const [expiresAt, setExpiresAt] = useState('')
+  // 自定义密钥值（可空=自动生成）。FR-192：管理员可自控这把永久 key。
+  const [customValue, setCustomValue] = useState('')
 
   const canSubmit = keyName.trim() !== '' && !createKey.isPending
 
   const reset = () => {
     setKeyName('')
     setExpiresAt('')
+    setCustomValue('')
   }
 
   const submit = async (e: FormEvent) => {
@@ -755,6 +749,7 @@ function CreateKeyDialog({
         channelId,
         name: keyName,
         expiresAt: expiresAt ? new Date(expiresAt).toISOString() : undefined,
+        value: customValue.trim() || undefined,
       })
       reset()
       onOpenChange(false)
@@ -776,7 +771,7 @@ function CreateKeyDialog({
         <DialogHeader>
           <DialogTitle>{t('clientChannels.createKey', '创建密钥')}</DialogTitle>
           <DialogDescription>
-            {t('clientChannels.createKeyDesc', '创建后明文密钥仅显示一次，请立即复制保存。')}
+            {t('clientChannels.createKeyDescViewable', '密钥发出后永久使用；创建后可随时查看明文。留空密钥值则自动生成。')}
           </DialogDescription>
         </DialogHeader>
         <form id="create-key-form" onSubmit={submit}>
@@ -790,6 +785,18 @@ function CreateKeyDialog({
                 onChange={(e) => setKeyName(e.target.value)}
                 autoFocus
               />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              {t('clientChannels.keyValue', '密钥值（可选）')}
+              <input
+                className="p-2 border rounded bg-background font-mono"
+                placeholder={t('clientChannels.keyValuePlaceholder', '留空自动生成；可填自定义值')}
+                value={customValue}
+                onChange={(e) => setCustomValue(e.target.value)}
+              />
+              <span className="text-xs text-muted-foreground">
+                {t('clientChannels.keyValueHint', '自定义则用作明文；可随时查看/编辑。')}
+              </span>
             </label>
             <label className="flex flex-col gap-1 text-sm">
               {t('clientChannels.expiresAt', '过期时间（可选）')}
@@ -808,6 +815,124 @@ function CreateKeyDialog({
           </Button>
           <Button type="submit" form="create-key-form" disabled={!canSubmit}>
             {t('clientChannels.createKey', '创建密钥')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * 编辑拉取密钥模态（FR-192）：改名 + 可选改值。
+ * 改值会重算鉴权哈希、使持旧值的已分发客户端失效——表单内强警告。改值后回显新明文供复制。
+ * 外层壳：target 存在时以 key=target.id 挂载内部表单，使其状态随目标重新初始化（避免 effect 改状态）。
+ */
+function EditKeyDialog({
+  channelId,
+  target,
+  onOpenChange,
+  onUpdated,
+}: {
+  channelId: string
+  target: ClientPullKey | null
+  onOpenChange: (v: boolean) => void
+  onUpdated: (secret: ClientKeyWithSecret) => void
+}) {
+  if (!target) return null
+  return (
+    <EditKeyForm
+      key={target.id}
+      channelId={channelId}
+      target={target}
+      onOpenChange={onOpenChange}
+      onUpdated={onUpdated}
+    />
+  )
+}
+
+/** 编辑密钥表单（内部组件，target 非空；状态由 props 初始化，挂载即新表单）。 */
+function EditKeyForm({
+  channelId,
+  target,
+  onOpenChange,
+  onUpdated,
+}: {
+  channelId: string
+  target: ClientPullKey
+  onOpenChange: (v: boolean) => void
+  onUpdated: (secret: ClientKeyWithSecret) => void
+}) {
+  const { t } = useTranslation()
+  const updateKey = useUpdateClientKey()
+  const [name, setName] = useState(target.name)
+  // 值不回显既有明文，留空=不改值。
+  const [value, setValue] = useState('')
+
+  const canSubmit = name.trim() !== '' && !updateKey.isPending
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!canSubmit) return
+    try {
+      const res = await updateKey.mutateAsync({
+        channelId,
+        keyId: target.id,
+        name: name.trim(),
+        value: value.trim() || undefined,
+      })
+      toast.success(t('clientChannels.keyUpdated', '密钥已更新'))
+      onOpenChange(false)
+      onUpdated(res)
+    } catch (e) {
+      toast.error(errMsg(e, t('clientChannels.keyUpdateFailed', '更新密钥失败')))
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(v: boolean) => onOpenChange(v)}>
+      <DialogContent className={cn(scrollableDialogContentClass, 'sm:max-w-md')}>
+        <DialogHeader>
+          <DialogTitle>{t('clientChannels.editKey', '编辑密钥')}</DialogTitle>
+          <DialogDescription>
+            {t('clientChannels.editKeyDesc', '修改名称或密钥值。留空密钥值仅改名；填入则改值。')}
+          </DialogDescription>
+        </DialogHeader>
+        <form id="edit-key-form" onSubmit={submit}>
+          <ScrollableDialogBody className="space-y-3">
+            <label className="flex flex-col gap-1 text-sm">
+              {t('clientChannels.keyName', '密钥名称')}
+              <input
+                className="p-2 border rounded bg-background"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                autoFocus
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              {t('clientChannels.keyNewValue', '新密钥值（可选）')}
+              <input
+                className="p-2 border rounded bg-background font-mono"
+                placeholder={t('clientChannels.keyNewValuePlaceholder', '留空则不改值，仅改名')}
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+              />
+            </label>
+            {value.trim() !== '' && (
+              <p className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                {t(
+                  'clientChannels.editKeyValueWarn',
+                  '改值后旧值立即失效：持旧值的已分发客户端将无法再更新，需把新值下发给玩家。请确认确需更换。',
+                )}
+              </p>
+            )}
+          </ScrollableDialogBody>
+        </form>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            {t('common.cancel', '取消')}
+          </Button>
+          <Button type="submit" form="edit-key-form" disabled={!canSubmit}>
+            {t('common.save', '保存')}
           </Button>
         </DialogFooter>
       </DialogContent>
