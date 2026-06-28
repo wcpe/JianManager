@@ -7,14 +7,14 @@ import ServerStateSegment from './ServerStateSegment'
 import BusinessSegment from './BusinessSegment'
 import EconomySegment from './EconomySegment'
 import InventorySegment from './InventorySegment'
-import ConfigExplorer from '@/components/config-explorer/ConfigExplorer'
+import InstanceResourceCard from './InstanceResourceCard'
 import PluginManager from '@/components/plugins/PluginManager'
 
 /**
  * 卡片内容分发器（FR-166）：按卡片类型渲染既有工作区面板。
  *
  * **不丢任何功能**——画布化后所有原工作区段都作为卡片可用：
- * 终端 {@link TerminalPane} / 资源（{@link ConfigExplorer}，文件+配置合一，承 FR-130）/
+ * 终端 {@link TerminalPane} / 资源（{@link InstanceResourceCard}，文件+配置合一，承 FR-130/213）/
  * 插件 {@link PluginManager} / 监控 {@link MetricsSegment} / 服务器状态 {@link ServerStateSegment} /
  * JBIS 业务 {@link BusinessSegment} / 经济 {@link EconomySegment} / 背包 {@link InventorySegment} /
  * Bot {@link BotSegment}。
@@ -36,10 +36,11 @@ export default function WorkspaceCardBody({ instanceId, type }: WorkspaceCardBod
     case 'terminal':
       return <TerminalPane instanceId={instanceId} hideHeader />
     case 'resource':
-      // 资源卡=文件+配置合一：复用 ConfigExplorer（ResourceExplorer + config 能力，FR-130）。
+      // 资源卡=文件+配置合一：管理视图复用 ConfigExplorer（ResourceExplorer + config 能力，FR-130），
+      // 浏览视图用共享 FileBrowser（FR-213）；二者并存，能力不减。
       return (
         <div className="h-full overflow-auto p-3">
-          <ConfigExplorer instanceId={instanceId} />
+          <InstanceResourceCard instanceId={instanceId} />
         </div>
       )
     case 'plugins':
