@@ -71,9 +71,11 @@ func runWorker() {
 		os.Exit(1)
 	}
 
-	// 出站 HTTP 客户端工厂（FR-174，见 ADR-037）：所有出站下载（自更新/JDK/CFR/服务端 jar）
+	// 出站 HTTP 客户端持有者（FR-174/FR-185，见 ADR-037/043）：所有出站下载（自更新/JDK/CFR/服务端 jar）
 	// 经此进程级代理 client。proxy.url 留空=直连（沿用环境变量代理）。非法代理 URL 启动即 fail-fast。
-	outboundClient, err := httpclient.New(cfg.Proxy)
+	// 持有者可运行时重建：CP 经心跳下发节点期望代理后即时生效（custom→节点值 / inherit→全局默认，FR-185）。
+	// 启动按 worker.yaml/env 基线构造；CP 下发为空时回退此基线。
+	outboundProvider, err := httpclient.NewProvider(cfg.Proxy)
 	if err != nil {
 		slog.Error("初始化出站代理客户端失败", "proxy", httpclient.Sanitize(cfg.Proxy.URL), "error", err)
 		os.Exit(1)
@@ -123,7 +125,8 @@ func runWorker() {
 	var jdkMgr *jdks.Manager
 	if os.Getenv("JIANMANAGER_DISABLE_JDK") != "1" {
 		jdkMgr = jdks.NewManager(root.JDKsDir(), systemJDKDirs)
-		jdkMgr.SetHTTPClient(outboundClient) // JDK 下载经进程级出站代理（FR-174）。
+		// JDK 下载经进程级出站持有者（FR-174/FR-185）：CP 下发代理改动运行时即时生效。
+		jdkMgr.SetHTTPClientProvider(outboundProvider.Client)
 		slog.Info("JDK manager enabled", "rootDir", root.JDKsDir())
 	} else {
 		slog.Info("JDK manager disabled by JIANMANAGER_DISABLE_JDK=1")
@@ -151,8 +154,9 @@ func runWorker() {
 	// 启动 gRPC 服务器
 	grpcServer := grpc.NewServer()
 	workerServer := wgrpc.NewServer(manager, nodeUUID, collector, jdkMgr, root)
-	// Worker 升级二进制下载与服务端 jar 下载经进程级出站代理（FR-174，见 ADR-037）。
-	workerServer.SetHTTPClient(outboundClient)
+	// Worker 升级二进制下载与服务端 jar 下载经进程级出站持有者（FR-174/FR-185）：
+	// CP 下发代理改动运行时即时生效。
+	workerServer.SetHTTPClientProvider(outboundProvider.Client)
 	// 全文搜索追加忽略规则（worker.yaml search.ignore，叠加内置默认集，FR-074）。
 	workerServer.SetSearchIgnore(cfg.Search.Ignore)
 	// 节点制品缓存（FR-178）：按 sha256 缓存下载过的核心 jar（var/artifact-cache），建实例命中即秒拷免重下。
@@ -175,11 +179,12 @@ func runWorker() {
 	// 反编译器（FR-075，见 ADR-018）：解析 CFR jar（配置路径>内嵌>数据根缓存>按需下载 sha256 pin），
 	// 缓存落数据根 cache/tools；反编译经实例/系统 JDK 受控调起 CFR，只读+超时+体积上限+失败降级。
 	decompProvider := decompiler.NewProvider(decompiler.Config{
-		ConfigPath:    cfg.Decompiler.CFRPath,
-		CacheDir:      filepath.Join(root.CacheDir(), "tools"),
-		Embedded:      wembed.CFRJar,
-		AllowDownload: cfg.Decompiler.AllowDownload,
-		HTTPClient:    outboundClient, // CFR 按需下载经进程级出站代理（FR-174）。
+		ConfigPath:         cfg.Decompiler.CFRPath,
+		CacheDir:           filepath.Join(root.CacheDir(), "tools"),
+		Embedded:           wembed.CFRJar,
+		AllowDownload:      cfg.Decompiler.AllowDownload,
+		// CFR 按需下载经进程级出站持有者（FR-174/FR-185）：CP 下发代理改动运行时即时生效。
+		HTTPClientProvider: outboundProvider.Client,
 	})
 	workerServer.SetDecompiler(decompProvider)
 
@@ -301,6 +306,16 @@ func runWorker() {
 	hb := heartbeat.New(cpAddr, nodeUUID, regResult.NodeSecret, 30*time.Second, manager)
 	// 运行中长任务进度随心跳上报（FR-183，见 ADR-040）：心跳读 Worker gRPC Server 的内存任务表。
 	hb.SetTaskProvider(workerServer)
+	// CP 经心跳响应下发节点期望出站代理（FR-185，见 ADR-043）：generation 变化时重建出站持有者，
+	// 注入到各下载点（JDK/CFR/自更新/服务端 jar）即时生效；下发为空回退本地 worker.yaml/env。
+	hb.SetProxyRebuilder(func(c httpclient.Config) error {
+		if err := outboundProvider.Rebuild(c); err != nil {
+			slog.Warn("据心跳下发重建出站代理失败", "proxy", httpclient.Sanitize(c.URL), "error", err)
+			return err
+		}
+		slog.Info("出站代理已据 CP 下发运行时更新", "proxy", httpclient.Sanitize(c.URL), "noProxy", c.NoProxy)
+		return nil
+	})
 	hb.Start()
 	defer hb.Stop()
 

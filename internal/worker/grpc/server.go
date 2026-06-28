@@ -81,6 +81,9 @@ type Server struct {
 	// httpClient 出站 client（经进程级代理，FR-174/ADR-037）：Worker 升级二进制下载经此 client。
 	// 由 SetHTTPClient 注入；为 nil 时回退 http.DefaultClient（向后兼容）。
 	httpClient *http.Client
+	// httpProvider 运行时出站持有者（FR-185/ADR-043）：非 nil 时每次取当前 client，
+	// 使 CP 经心跳下发的代理改动即时生效。优先于 httpClient。
+	httpProvider func() *http.Client
 	// 全文搜索索引（FR-074，见 ADR-017）。每实例一份 *search.Index，懒创建。
 	// 索引落数据根 var/index/<instance-uuid>/，是 Worker 本地派生资产，不进 CP DB。
 	// searchIgnore 为用户配置追加的忽略 glob（worker.yaml search.ignore），叠加内置默认集。
@@ -130,8 +133,19 @@ func (s *Server) SetHTTPClient(c *http.Client) {
 	s.httpClient = c
 }
 
-// outboundClient 返回出站 client：注入了则用之，否则回退 http.DefaultClient。
+// SetHTTPClientProvider 注入运行时出站持有者（FR-185/ADR-043）：每次下载取当前 client，
+// 使 CP 经心跳下发的代理改动即时生效。优先于 SetHTTPClient 注入的固定 client。
+func (s *Server) SetHTTPClientProvider(p func() *http.Client) {
+	s.httpProvider = p
+}
+
+// outboundClient 返回出站 client：优先运行时持有者（取当前），其次固定注入，再回退 DefaultClient。
 func (s *Server) outboundClient() *http.Client {
+	if s.httpProvider != nil {
+		if c := s.httpProvider(); c != nil {
+			return c
+		}
+	}
 	if s.httpClient != nil {
 		return s.httpClient
 	}

@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
+	"github.com/wcpe/JianManager/internal/platform/httpclient"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/internal/worker/register"
@@ -47,6 +48,9 @@ type Heartbeat struct {
 	instanceProvider InstanceStateProvider
 	// taskProvider 运行中任务快照来源（FR-183）；为 nil 时心跳不带任务字段（向后兼容）。
 	taskProvider TaskSnapshotProvider
+	// proxyApplier 据心跳响应里 CP 下发的期望代理运行时重建 Worker 出站 client（FR-185，见 ADR-043）；
+	// 为 nil 时心跳不应用下发代理（Worker 仅用本地 yaml/env，向后兼容旧 CP）。
+	proxyApplier *proxyApplier
 }
 
 // New 创建心跳上报器。
@@ -66,6 +70,13 @@ func New(controlPlaneAddr, nodeUUID, nodeSecret string, interval time.Duration, 
 // 由 main 装配（传入 Worker gRPC Server）；不调用则心跳不携带任务进度。
 func (h *Heartbeat) SetTaskProvider(p TaskSnapshotProvider) {
 	h.taskProvider = p
+}
+
+// SetProxyRebuilder 注入「据心跳下发代理重建出站 client」的回调（FR-185，见 ADR-043）。
+// 由 main 装配（包裹 httpclient.Provider.Rebuild）；不调用则忽略 CP 下发的代理（向后兼容）。
+// 内部用 generation 比较，仅在期望代理变化时才重建（避免每拍重建）。
+func (h *Heartbeat) SetProxyRebuilder(rebuild func(httpclient.Config) error) {
+	h.proxyApplier = newProxyApplier(rebuild)
 }
 
 // Start 启动心跳上报。
@@ -182,6 +193,10 @@ func (h *Heartbeat) sendHeartbeat() error {
 		slog.Warn("心跳响应接收失败", "error", err)
 		return err
 	}
+
+	// 应用 CP 下发的期望出站代理（FR-185，见 ADR-043）：generation 变化才重建出站 client。
+	// 重连/重启天然由后续心跳重发，无需 Worker 落盘。
+	h.proxyApplier.apply(reply)
 
 	// 终态任务已随本次心跳上报且 CP 已确认接收，从内存表移除避免重复上报（FR-183，见 ADR-040）。
 	// 仅在心跳成功确认后才 Drop，确保 CP 至少收到一次终态快照。

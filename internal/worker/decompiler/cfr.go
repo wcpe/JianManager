@@ -52,6 +52,9 @@ type Provider struct {
 	allowDownload bool
 	// httpClient 用于按需下载（可注入，便于测试）。
 	httpClient *http.Client
+	// httpProvider 运行时出站持有者（FR-185/ADR-043）：非 nil 时每次下载取当前 client，
+	// 使 CP 经心跳下发的代理改动即时生效。优先于 httpClient。
+	httpProvider func() *http.Client
 	// downloadURL 是 CFR jar 下载地址（默认 Maven Central，可注入便于测试）。
 	downloadURL string
 
@@ -72,6 +75,9 @@ type Config struct {
 	// HTTPClient 按需下载 CFR 所用出站 client（经进程级代理，FR-174/ADR-037）。
 	// 为 nil 时回退一个 60s 超时的默认 client（向后兼容；测试也可经此注入 httptest client）。
 	HTTPClient *http.Client
+	// HTTPClientProvider 运行时出站持有者（FR-185/ADR-043）：非空时每次下载取当前 client，
+	// 使 CP 经心跳下发的代理改动即时生效。优先于 HTTPClient。
+	HTTPClientProvider func() *http.Client
 }
 
 // NewProvider 创建 CFR jar 解析器。
@@ -91,8 +97,24 @@ func NewProvider(cfg Config) *Provider {
 		embedded:      cfg.Embedded,
 		allowDownload: cfg.AllowDownload,
 		httpClient:    client,
+		httpProvider:  cfg.HTTPClientProvider,
 		downloadURL:   cfrDownloadURL,
 	}
+}
+
+// client 返回 CFR 下载所用 client：优先运行时持有者（取当前，补足 60s 超时），否则固定 client。
+func (p *Provider) client() *http.Client {
+	if p.httpProvider != nil {
+		if c := p.httpProvider(); c != nil {
+			if c.Timeout == 0 {
+				cc := *c
+				cc.Timeout = 60 * time.Second
+				return &cc
+			}
+			return c
+		}
+	}
+	return p.httpClient
 }
 
 // cachedJarPath 返回数据根缓存中 CFR jar 的预期路径（cacheDir 为空时返回空串）。
@@ -167,7 +189,7 @@ func (p *Provider) downloadWithPin(dest, wantHex string) (bool, error) {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return false, fmt.Errorf("创建 CFR 缓存目录失败: %w", err)
 	}
-	resp, err := p.httpClient.Get(p.downloadURL)
+	resp, err := p.client().Get(p.downloadURL)
 	if err != nil {
 		return false, fmt.Errorf("下载 CFR 失败: %w", err)
 	}
