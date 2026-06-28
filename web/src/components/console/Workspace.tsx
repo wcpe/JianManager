@@ -1,4 +1,4 @@
-import { Routes, Route, useLocation } from 'react-router'
+import { Routes, Route, Navigate, useLocation } from 'react-router'
 import { Suspense, lazy, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useConsoleStore } from '@/stores/console'
@@ -25,6 +25,7 @@ const AlertsPage = lazy(() => import('@/pages/AlertsPage'))
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 const StoragePage = lazy(() => import('@/pages/StoragePage'))
 const LogsPage = lazy(() => import('@/pages/LogsPage'))
+const StatisticsPage = lazy(() => import('@/pages/StatisticsPage'))
 const ClientChannelsPage = lazy(() => import('@/pages/ClientChannelsPage'))
 const ClientPublishPage = lazy(() => import('@/pages/ClientPublishPage'))
 const DatabasePage = lazy(() => import('@/pages/DatabasePage'))
@@ -103,6 +104,12 @@ export default function Workspace() {
           <Route path="client-channels" element={<ClientChannelsPage />} />
           <Route path="client-channels/:id/publish" element={<ClientPublishPage />} />
           <Route path="logs" element={<LogsPage />} />
+          {/* 观测·统计占位页（FR-215）；实质内容由 FR-220 补齐。 */}
+          <Route path="statistics" element={<StatisticsPage />} />
+          {/* 观测域同义旧链接重定向兼容（FR-215）：避免外部/手输旧路径 404。 */}
+          <Route path="monitoring" element={<Navigate to="/monitor" replace />} />
+          <Route path="stats" element={<Navigate to="/statistics" replace />} />
+          <Route path="observability" element={<Navigate to="/monitor" replace />} />
           <Route path="storage" element={<StoragePage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="database" element={<DatabasePage />} />

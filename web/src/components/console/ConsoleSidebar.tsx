@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router'
 import {
   Activity,
   Archive,
+  BarChart3,
   Bell,
   Bot,
   Box,
@@ -76,10 +77,10 @@ interface NavSection {
 }
 
 /**
- * 五域导航信息架构（FR-131 / design §7）：总览 / 集群 / 监控 / 运营 / 系统。
+ * 五域导航信息架构（FR-131 / design §7；观测域 FR-215）：总览 / 集群 / 观测 / 运营 / 系统。
  * 从原 11 个粒度不一的一级精简为 5 个按运维心智分域的一级，高频域在上、低频「系统」沉底。
- * 能力不丢：实例树/节点切换并入「集群·实例」；告警/日志归「监控」；
- * 模板/备份/定时归「运营」；平台资源/账户审计归「系统」两小节。
+ * 能力不丢：实例树/节点切换并入「集群·实例」；监控总览/日志/统计归「观测」（任务中心迁「系统·平台与维护」，
+ * 告警为 FR-216 接手前过渡留位）；模板/备份/定时归「运营」；平台资源/账户审计归「系统」两小节。
  */
 const NAV_GROUPS: NavGroup[] = [
   { key: 'overview', labelKey: 'nav.dashboard', icon: LayoutDashboard, to: '/' },
@@ -99,14 +100,18 @@ const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    key: 'monitor',
-    labelKey: 'nav.monitor',
+    // 「监控」域升级为「观测」域（FR-215）：下设 监控/日志/统计 三子类。
+    // 任务中心已迁出至「系统·平台与维护」；告警为 FR-216 接手前的过渡留位（见下方注释）。
+    key: 'observability',
+    labelKey: 'nav.observability',
     icon: Activity,
     children: [
       { to: '/monitor', labelKey: 'nav.monitoring', icon: Activity },
-      { to: '/alerts', labelKey: 'nav.alerts', icon: Bell },
       { to: '/logs', labelKey: 'nav.logs', icon: ScrollText },
-      { to: '/tasks', labelKey: 'nav.tasks', icon: ListChecks },
+      { to: '/statistics', labelKey: 'nav.statistics', icon: BarChart3 },
+      // 告警过渡留位（FR-215）：保证侧栏仍可达；FR-216 落地后将告警并入「系统/账户与审计」
+      // 的统一通知中心并移除此项，故本 FR 不并入观测三子类、仅留位。
+      { to: '/alerts', labelKey: 'nav.alerts', icon: Bell },
     ],
   },
   {
@@ -135,6 +140,8 @@ const NAV_GROUPS: NavGroup[] = [
         children: [
           { to: '/runtime-assets', labelKey: 'nav.runtimeAssets', icon: Layers },
           { to: '/storage', labelKey: 'nav.storage', icon: HardDrive },
+          // 任务中心由「监控(原)」迁入（FR-215）：平台运维执行流水属维护类。
+          { to: '/tasks', labelKey: 'nav.tasks', icon: ListChecks },
         ],
       },
       {
@@ -305,7 +312,7 @@ function groupRoutes(group: NavGroup): string[] {
   return [...fromChildren, ...fromSections]
 }
 
-/** 可展开域（集群/监控/运营/系统）：头部可折叠；集群域额外内嵌节点切换 + 实例树；系统域分两小节。 */
+/** 可展开域（集群/观测/运营/系统）：头部可折叠；集群域额外内嵌节点切换 + 实例树；系统域分两小节。 */
 function ExpandableGroup({ group }: { group: NavGroup }) {
   const { t } = useTranslation()
   const { pathname } = useLocation()

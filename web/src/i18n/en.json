@@ -362,6 +362,8 @@
     "logs": "Logs",
     "allInstances": "All Instances",
     "monitor": "Monitoring",
+    "observability": "Observability",
+    "statistics": "Statistics",
     "monitoring": "Monitoring Overview",
     "backup": "Backup",
     "systemSettings": "System Settings",
@@ -2352,6 +2354,11 @@
     "searchPlaceholder": "Search or type…",
     "noResults": "No matches",
     "useCustom": "Use \"{{value}}\""
+  },
+  "statistics": {
+    "title": "Statistics",
+    "placeholder": "Statistics page under construction (FR-220)",
+    "placeholderHint": "Platform-level aggregate statistics will be added in a later version"
   },
   "tasks": {
     "title": "Task Center",

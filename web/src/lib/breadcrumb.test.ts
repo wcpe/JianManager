@@ -13,15 +13,30 @@ describe('breadcrumbTrail', () => {
       { labelKey: 'nav.allInstances' },
     ])
     expect(breadcrumbTrail('/alerts')).toEqual([
-      { labelKey: 'nav.monitor' },
+      { labelKey: 'nav.observability' },
       { labelKey: 'nav.alerts' },
     ])
   })
 
-  it('监控页归「监控」域', () => {
+  it('监控/日志/统计 页归「观测」域（FR-215）', () => {
     expect(breadcrumbTrail('/monitor')).toEqual([
-      { labelKey: 'nav.monitor' },
+      { labelKey: 'nav.observability' },
       { labelKey: 'nav.monitoring' },
+    ])
+    expect(breadcrumbTrail('/logs')).toEqual([
+      { labelKey: 'nav.observability' },
+      { labelKey: 'nav.logs' },
+    ])
+    expect(breadcrumbTrail('/statistics')).toEqual([
+      { labelKey: 'nav.observability' },
+      { labelKey: 'nav.statistics' },
+    ])
+  })
+
+  it('任务中心归「系统」域（FR-215 迁出观测）', () => {
+    expect(breadcrumbTrail('/tasks')).toEqual([
+      { labelKey: 'nav.system' },
+      { labelKey: 'nav.tasks' },
     ])
   })
 

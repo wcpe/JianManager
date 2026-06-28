@@ -14,6 +14,11 @@ describe('consoleTitleKey', () => {
     expect(consoleTitleKey('/client-channels')).toBe('nav.clientChannels')
   })
 
+  it('观测·统计与任务中心路由映射（FR-215）', () => {
+    expect(consoleTitleKey('/statistics')).toBe('nav.statistics')
+    expect(consoleTitleKey('/tasks')).toBe('nav.tasks')
+  })
+
   it('子路由按首段归并到所属区', () => {
     expect(consoleTitleKey('/instances/123')).toBe('nav.allInstances')
     expect(consoleTitleKey('/nodes/7/detail')).toBe('nav.nodes')

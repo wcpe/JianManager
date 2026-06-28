@@ -17,10 +17,12 @@ const SEGMENT_DOMAIN: Record<string, string> = {
   nodes: 'nav.cluster',
   instances: 'nav.cluster',
   networks: 'nav.cluster',
-  // 监控
-  monitor: 'nav.monitor',
-  alerts: 'nav.monitor',
-  logs: 'nav.monitor',
+  // 观测（FR-215：原「监控」域改名「观测」，下设 监控/日志/统计）
+  monitor: 'nav.observability',
+  logs: 'nav.observability',
+  statistics: 'nav.observability',
+  // 告警：FR-216 接手前过渡期仍归观测域（与侧栏一致）
+  alerts: 'nav.observability',
   // 运营
   players: 'nav.operations',
   bots: 'nav.operations',
@@ -32,6 +34,8 @@ const SEGMENT_DOMAIN: Record<string, string> = {
   // 系统
   'runtime-assets': 'nav.system',
   storage: 'nav.system',
+  // 任务中心由观测(原监控)迁入「系统·平台与维护」（FR-215）
+  tasks: 'nav.system',
   database: 'nav.system',
   'system-update': 'nav.system',
   users: 'nav.system',
@@ -49,6 +53,8 @@ const SEGMENT_PAGE: Record<string, string> = {
   monitor: 'nav.monitoring',
   alerts: 'nav.alerts',
   logs: 'nav.logs',
+  statistics: 'nav.statistics',
+  tasks: 'nav.tasks',
   players: 'nav.players',
   bots: 'nav.bots',
   templates: 'nav.templates',
