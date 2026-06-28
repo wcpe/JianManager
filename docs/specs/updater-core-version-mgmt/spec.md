@@ -1,66 +1,58 @@
-# 功能规格：updater-core 版本显式管理（gradle-wrapper 式）
+# 功能规格：updater-core 默认随 CP 内嵌静默驱动（取代「运营管理 core 版本」）
 
-> 状态：待审　·　关联 PRD：FR-193（增强 FR-091）　·　关联 ADR：ADR-045（本 FR 创建，补充 ADR-021）　·　分支：feature/fr-193-updater-core-version-mgmt
+> 状态：待审（**2026-06-28 改写**：用户定「不让运营上传/管理 core，用 CP 默认内嵌更新器」，反转原「运营 pin/更新/回退」设计）　·　关联 PRD：FR-193（增强 FR-091/FR-107）　·　关联 ADR：ADR-045（**改写为 CP 默认**，补充 ADR-021）　·　分支：feature/fr-193-updater-core-cp-default
 
 ## 1. 背景与目标
 
-ADR-021 的两件套（楔子 wedge = 稳定 wrapper、updater-core = 可热更 agent）已是 gradle-wrapper 模式；FR-091 已实现客户端侧 core 自更新 + boot-confirm 看门狗 + N-1 自动回退。但**服务端/运营缺集中控制**：当前 manifest 的 `agent.core`（version + per-platform 制品）由发布向导**手填透传**（FR-088「透传原值、不编辑」），运营无法在面板**集中 pin / 更新 / 回退** core 版本——更新器（core）出问题时只能靠客户端自发 N-1，运营被动。
+原 FR-193 让运营上传 core jar、按频道 pin/更新/回退 manifest `agent.core`。**用户验收后否决**：不想让运营自己管更新器版本，要**用控制面板自带的默认更新器**（CP 已内嵌 wedge + updater-core，FR-107 供接入指引下载），打包时默认用它，更新器版本随 CP 走、运营完全不操心。
 
-**目标**：把 **updater-core** 做成 gradle-wrapper 式**集中版本管理**：运营上传 core jar、按频道 pin core 版本、一键更新到新版 / 回退到旧版，manifest 的 `agent.core` 由 pin 驱动。**楔子（wedge）冻结、只一个版本、不纳入管理**。P1。补充 ADR-021。
+**目标**：删掉运营侧「更新器版本」上传/管理页与端点；manifest 的 `agent.core` 由 **CP 内嵌的默认 updater-core 自动产出**；CP 自更新（FR-081）时默认更新器随之更新，所有频道自动跟进。P1。ADR-045 改写为「CP 默认」。
 
 ## 2. 需求（要什么）
 
 ### 范围内
-- **core 制品注册**：运营上传 updater-core jar（按平台，复用 FR-045 制品库，类型如 `client-core`），登记为带**版本号**的 core 制品（version + 各 platform → 制品 sha256/size）。
-- **频道 core pin**：每频道 pin 一个 core 版本（默认指向最新已登记 core）；manifest 生成时 `agent.core` 由该 pin 驱动产出（不再纯手填）。
-- **更新 / 回退**：运营把 pin **更新**到更新的 core 版本；**回退**坏 core **不靠降 `agent.core.version`**（客户端 core 只升不降，见 §3.1）——而是**以更高版本号重发旧 core 字节为新版**（沿用 FR-088 内容回滚法），客户端照常 promote「上去」到该新版（内容=旧 core）。
-- **管理面 UI**：频道页新增「更新器版本」段/Tab：列 core 版本、当前 pin、上传新 core jar、pin/更新/回退（破坏性走 `DangerConfirm`）。
-- **楔子冻结**：wedge 单版本固定，`agent.wedge` 恒定、不做版本管理。
-- **客户端消费复用 FR-091**：wedge `CoreSelector`（`client-updater/wedge`）已按 manifest `agent.core` promote / boot-confirm / N-1 回退——**本 FR 优先不改 wedge 代码**（楔子冻结），靠 manifest 内容驱动既有逻辑；**须验证** wedge 接受 pin 指定的版本（含运营回退到旧 core 时 `agent.core.version` 降版，wedge 照常 promote 到它）。
-- ADR-045：updater-core 集中版本管理（频道 pin 驱动 manifest agent.core + 运营 pin/更新/回退 + core 制品注册），补充 ADR-021（楔子冻结、core 集中管控）。
+- **删除运营侧 core 管理**：移除「更新器版本」Tab + `ClientCoreVersionsPanel` + 上传/列表/pin/更新/回退端点（撤销原 FR-193 已建的运营管理面与 API）。
+- **manifest `agent.core` 由 CP 内嵌 updater-core 自动驱动**：CP 把内嵌的默认 updater-core（FR-107 的 `embed/client-updater/updater-core.jar`）作为所有频道 `agent.core` 的来源——自动算其 sha256/size + 版本，填入 manifest `agent.core`（per ADR-021 一份 jar 通用，填各 platform 键）。运营发布版本时**不再手填/上传 agent 段**。
+- **随 CP 自更新跟进**：CP 升级（FR-081）后内嵌的 updater-core 即新版，下次 manifest 自动反映新 `agent.core`，客户端按 FR-091 既有逻辑 promote。**不需运营操作**。
+- ADR-045 改写：「updater-core 默认随 CP 内嵌、自动驱动 manifest agent.core，运营不管理」；楔子同理（FR-107 内嵌 wedge，agent.wedge 信息性）。
+- 撤销时清理原 FR-193 后端（core_version model/service/router）：删除或停用（迁移建的表 AutoMigrate 不删、留着无害；代码删干净）。
 
 ### 不做（范围外）
-- 楔子版本管理 / 楔子自更新（楔子冻结，ADR-021 决策 2）。
-- 改 wedge 注入方式 / agentArgs 协议。
-- 改 manifest 文件级 reconcile（FR-090）。
+- 运营自定义 core 版本 / 上传 core jar（明确不做）。
+- 改 FR-091 客户端消费逻辑（wedge/core 不动；它消费 manifest agent.core 不变）。
+- 改楔子注入 / agentArgs 协议。
 
 ## 3. 设计（怎么做）
 
-### 3.1 ADR-045（本 FR 创建，补充 ADR-021）
-决策：core 集中版本管理（频道 pin 驱动 `agent.core`、运营可 pin/更新/回退、core 制品注册复用 FR-045）；**楔子冻结单版本**；**两条版本轴区分**——
-- **manifest `version`**：内容版本，单调递增、客户端防降级（ADR-022⑦，不变）；
-- **`agent.core.version`**：updater-core 自身版本，**对客户端单调只升不降**（FR-091 / contract §6.3：core 只暂存「更高版本」为 pending，绝不降级——agent 自身的防降级）。运营「回退」坏 core = **以更高 `agent.core.version` 重发旧 core 字节**（同 FR-088 内容回滚 + ADR-022⑦ 防降级），客户端照常 promote 上去、跑到旧内容。故 `agent.core.version` **也单调递增**，pin 始终指向「当前应跑的 core 注册版本」。
-决策正文写 ADR，勿在 spec 重复。**ADR 文件名/编号用 `ADR-045`（主控预留，写死）。**
+### 3.1 ADR-045（改写，补充 ADR-021）
+决策：**updater-core 不由运营管理，默认用 CP 内嵌版本自动驱动 manifest `agent.core`**。理由：运营关心的是分发内容（mods/config），更新器是平台基建——随 CP 走最省心、版本一致、避免运营误配坏 core；CP 自更新即更新默认 updater-core，自然跟进。`agent.core.version` 仍对客户端单调（FR-091）；CP 默认 core 版本随 CP 版本演进、单调递增。原「运营 pin/更新/回退」决策**作废**（本 ADR 记录反转理由）。**ADR 文件名/编号沿用 `ADR-045`**（同一 FR、发版前改写，不另起号；ADR 内注明改写）。
 
 ### 3.2 后端（`internal/controlplane`）
-- core 制品登记：上传 core jar（per platform）入制品库（FR-045，type=client-core），登记 core 版本 → platform→artifact 映射（新表或复用 asset metadata，落地拍）。
-- 频道 pin：`ClientChannel` 加 `pinned_core_version int`（0=用最新已登记 core）；或独立 pin 表（落地拍，倾向频道字段）。
-- manifest 生成（`service/client_manifest.go`）：`agent.core` 由频道 pin 的 core 版本 + 其 platform 制品产出（取代发布向导手填透传；保留兼容——无 core 注册时 `agent.core` 省略或沿用旧透传）。
-- 端点（平台管理员 + 审计）：上传 core 制品、列 core 版本、设/更新/回退频道 pin。
+- 内嵌默认 updater-core 来源：复用 FR-107 的 `internal/controlplane/embed/client-updater/`（go:embed 的 updater-core.jar / wedge.jar）。
+- `agent.core` 自动产出（`service/client_manifest.go` 或版本/发布服务）：读内嵌 updater-core 字节 → sha256/size + **版本号**（来源落地拍：① 构建期 ldflags/版本文件注入 updater-core 版本；② 退化用 CP 版本 `internal/version`；③ 内嵌一个 core 版本元数据文件。选一、写清）→ 填 manifest `agent.core{version, platforms{各 OS: 同一内嵌制品}}`。制品需可经 `/client-artifacts/:sha256` 下发（把内嵌 core 当作内容寻址制品登记/可取）。
+- 撤销原 FR-193 后端：删 `model/client_core_version.go`、`service/client_core_version.go`、`router/client_core_version.go` 及其路由布线、频道 `PinnedCoreVersion` 字段的运营写入端点（字段可留但不再由运营改）。
+- 兼容：删管理端点后，既有 FR-087/088 发布/manifest 流程不破；`agent.core` 改由内嵌默认驱动（取代原手填透传 + pin）。
 
 ### 3.3 前端
-- 频道页「更新器版本」段：core 版本列表 + 当前 pin 高亮 + 上传 core jar（per platform）+ pin/更新/回退（DangerConfirm）+ 楔子版本只读展示（冻结提示）。i18n + 暗亮。
-
-### 3.4 客户端不改（FR-091 既有逻辑正合需求）
-- FR-091 现行（core 只 promote 更高 `agent.core.version`、boot-fail 回退 N-1）**正是本 FR 所需**：「更新」=pin 到更高版本→客户端升；「回退」=重发旧字节为更高版本→客户端仍升（到旧内容）。**无需改 wedge/core**（楔子冻结成立）。
-- core 制品 **platform 维度**：manifest schema `agent.core.platforms` 为 per-OS map（`map[string]ManifestAgentArtifact`），但 ADR-021 决策「一份 core jar 三平台通用」——故运营**上传一份 core jar 即可**，后端把它填进各 platform 键（或约定单一通配键，落地核对 wedge 取 platform 的逻辑，避免无谓多平台上传）。
+- 删 `web/src/pages/ClientChannelsPage.tsx` 工作台的「更新器版本」TabsTrigger + TabsContent；删 `ClientCoreVersionsPanel.tsx` 及其 api hooks。
+- 可选：接入指引（`ClientIntegrationGuide`）或频道页加一句只读说明「更新器用平台默认版本 vX，随控制台升级自动更新」（不是管理面，仅告知；落地拍要不要）。
 
 ## 4. 任务拆分
-- [ ] 写 `docs/adr/045-updater-core-central-version-mgmt.md`（ADR-045，预留号写死，补充 ADR-021）
-- [ ] 后端：core 制品登记（FR-045 复用）+ core 版本注册 + 频道 `pinned_core_version` + 迁移
-- [ ] 后端：manifest 生成 `agent.core` 由 pin 驱动（兼容无注册时）+ 端点（上传/列表/pin/更新/回退，管理员 + 审计）+ 单测
-- [ ] 前端：频道页「更新器版本」段（列表/上传/pin/更新/回退/楔子只读）+ i18n
-- [ ] 客户端验证：wedge CoreSelector 按 pin 版本（含回退）行为；如需微调单列上报
-- [ ] doc-sync：PRD FR-193「计划」→「开发中」；ARCHITECTURE（agent.core 由 pin 驱动 + ER 频道字段/表）+ ADR-045；API.md（core 版本端点）；`docs/specs/client-distribution/contract.md`（agent.core 来源说明）；CHANGELOG 末尾追加
-- [ ] 中文 commit（control-plane / web / 如需 client-updater 拆 commit）
+- [ ] 改写 `docs/adr/045-*.md`（CP 默认；注明反转原 pin 决策）
+- [ ] 后端：`agent.core` 由内嵌 updater-core 自动产出（版本来源择一）+ 内嵌 core 可经制品端点下发
+- [ ] 后端：删原 FR-193 core_version model/service/router + 路由布线 + 运营 pin 写入端点 + 单测调整
+- [ ] 前端：删「更新器版本」Tab + `ClientCoreVersionsPanel` + 相关 hooks
+- [ ] doc-sync：PRD FR-193（已改）、ARCHITECTURE（agent.core 来源=CP 内嵌默认）、API.md（删 core 管理端点）、`specs/client-distribution/contract.md`（agent.core 来源）、ADR-045 改写、CHANGELOG 末尾追加
+- [ ] 中文 commit（control-plane / web 拆 commit）
 
 ## 5. 验收标准
-- 单测：core 版本注册 / pin / 更新 / 回退；manifest `agent.core` 反映 pin；无注册时兼容（不破 FR-087/088 现有发布）。
-- 后端编译 + 既有测试绿；前端 tsc/lint/build 绿。
-- **【需真机，用户确认】** 运营上传 core jar、pin → manifest `agent.core` 反映；更新 pin → 客户端下次启动 promote 新 core；**回退（以更高版本重发旧 core 字节）→ 客户端 promote「上去」到旧内容**（坏 core 应急、不违反防降级）；楔子始终不变。真机用 wedge/core jar + 真 MC 验证。
+- 后端 go build/vet/test 绿（删管理端点后既有 manifest/发布测试仍绿）；前端 tsc/lint/build 绿。
+- 频道工作台**无「更新器版本」Tab**；运营无任何 core 上传/管理入口。
+- 发布版本后，manifest 的 `agent.core` 自动 = CP 内嵌默认 updater-core（version + sha256 制品可下发）。
+- **【需真机，用户确认】** 用 CP 内嵌 wedge/updater-core jar + 真 MC：楔子加载 CP 默认 core、按 manifest `agent.core` 正常 reconcile；运营全程不碰 core。CP 升级后默认 core 版本随之更新（manifest 自动反映）。
 
 ## 6. 风险 / 待定
-- **版本轴混淆**：manifest version（防降级）vs agent.core.version（pin 驱动可升降）必须在 ADR-045 与代码注释讲清，否则易把 core 回退误判为防降级违规。
-- **回退必须重发为更高版本（不可降版）**：客户端 core 只升不降（FR-091 / contract §6.3 已证）；若误把回退做成「降 `agent.core.version`」，已升级客户端不会降、回退无效。务必用「重发旧字节为更高版本」法（同 FR-088）。故无需改 wedge（楔子冻结成立）。
-- **core 制品 platform 维度**：schema 为 per-OS map 但 ADR-021 一份 jar 通用——上传一份、后端填各 platform 键；落地核对 wedge 取 platform 逻辑（§3.4）。
-- **与 FR-191/192 关系**：FR-193 主后端 + 频道页新段，与 FR-191（发布向导）/FR-192（密钥 tab）低耦合；同碰 ClientChannelsPage 的按新 Tab/段隔离。
+- **内嵌 core 版本号来源**：updater-core 自身版本如何让 CP 知道（构建注入 / 退化用 CP 版本 / 元数据文件）——落地择一并写清，确保 `agent.core.version` 单调且与内嵌 jar 对应。
+- **内嵌 core 当制品下发**：`/client-artifacts/:sha256` 需能取到内嵌 core 字节（登记为内容寻址制品或特判内嵌）。
+- **撤销原 FR-193 代码**：删 model/service/router 要干净（连带路由布线、装配、测试）；迁移建的表留着无害（AutoMigrate 不删表）。
+- **与 FR-191/192 关系**：FR-193 删 ClientChannelsPage 的「更新器版本」Tab + 后端；FR-191（发布页）= ClientVersionsPanel + 路由；FR-192 = KeysSegment。同碰 ClientChannelsPage 的不同区（FR-193 删 Tab、FR-192 改 KeysSegment）——建议 FR-192+193 同一 worktree 串行做，避免抢同文件。

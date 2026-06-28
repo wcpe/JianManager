@@ -11,7 +11,7 @@ FR-187 把发布做成分步向导，但真机暴露：① 发布向导（`Clien
 ## 2. 需求（要什么）
 
 ### 范围内（设计图见本批 brainstorm 的「文件树发布」mockup）
-- **防误关 + 上传即锁定**：向导有未发布草稿（已上传文件）时，点遮罩 / Esc **不直接关闭**——拦截并二次确认「放弃草稿？」，仅显式确认才关。已上传文件**内容锁定**（本就内容寻址 sha256 不可变），UI 明示锁定态，只能编排或移除、不能改字节。
+- **发布/上传改独立页面（非模态，2026-06-28 用户定）**：把发布向导从模态框移到**独立路由页**（如 `/client-channels/:id/publish`），根治「点模态框外面就关闭、丢上传草稿」——页面级不存在「点外面关闭」。页内分步编排；离开页（返回/路由切换）有未发布草稿时拦截确认。已上传文件**内容锁定**（本就内容寻址 sha256 不可变），UI 明示锁定态，只能编排或移除、不能改字节。
 - **zip 压缩包上传自动编排**：可上传 `.zip`；**客户端 JS 解包**，每个文件 entry 经现有 `usePublishClientFile` 上传得 sha256/md5/size，**path 取自 zip 内相对路径**，自动编排成下方文件树。混合上传（散文件 + zip）累加。
 - **Minecraft 文件树预览**：配置（编排）/ 审阅 / 版本详情把 `ManifestFile[]` 按 `path` 目录层级渲染为**树**（mods/ config/ resourcepacks/ …）。内容**只读**；可编排：改文件目标路径（移动节点）、改 `sync`（strict/once/ignore）、改 `platform`、移除文件。
 - 抽纯函数 + 测试先行（`lib/client-publish-wizard.ts` 扩展：path→树构建、路径编辑/校验、dirty 判定）。
@@ -25,9 +25,11 @@ FR-187 把发布做成分步向导，但真机暴露：① 发布向导（`Clien
 
 ## 3. 设计（怎么做）
 
-### 3.1 防误关（`PublishWizard`）
-- `<DialogContent>` 加 `onInteractOutside` / `onEscapeKeyDown`：当 `hasDraft`（有已上传/已配置文件）时 `e.preventDefault()` + 弹「放弃草稿」二次确认（复用 `DangerConfirm` 或轻确认）；无草稿时按原样关闭。关闭按钮 / 取消同样走确认。
-- 草稿态可考虑 sessionStorage 暂存以防刷新丢失（可选增强，spec 内拍）。
+### 3.1 发布改独立页面（非模态）
+- 把现 `ClientVersionsPanel` 的模态 `PublishWizard` 移到**独立路由页**（`/client-channels/:id/publish`），在 `Workspace`/App 路由注册；版本 tab 的「发布新版本」按钮改为**导航到该页**（非开模态）。页内承载分步编排（选文件→逐文件配置→托管/说明→预览→发布），**不再是模态、不会因点外面关闭**。
+- **离开守卫**：页内有未发布草稿时，返回/路由切换/`beforeunload` 拦截二次确认「放弃发布草稿？」。发布成功/取消回频道工作台版本 tab。
+- 草稿态可选 sessionStorage 暂存防刷新丢失（增强，spec 内拍）。
+- **务必实测上传可用**（用户反馈「上传不了文件」——确认散文件 + zip 在新页面真能传成功，不只是 UI）。
 
 ### 3.2 zip 上传（前端解包）
 - 引入轻量解包库（`fflate` 优先，体积小、纯 JS）；选 `.zip` → 解包遍历 entries（跳过目录项）→ 每个 entry：`usePublishClientFile` 上传（codec=none）→ 得 sha256/md5/size → 组 `ManifestFile{ path=entry 相对路径（POSIX 化）, sha256, md5, size, sync='strict' 默认, platform='', artifact }`。
