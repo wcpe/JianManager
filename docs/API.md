@@ -1592,6 +1592,41 @@
 - **权限**: 所有认证用户
 - **响应**: `{ "updated": 5 }`
 
+## 统一通知中心（FR-216，见 ADR-048）
+
+> 站内信（定向消息）+ 告警事件（系统警报）**合并为一条只读通知流**：页眉单铃铛 + 通知中心页消费。
+> **视图聚合不新建表**——查询时把 `notifications`（按当前用户）+ `alert_events`（全局，与既有 `/alerts` 可见性一致）合并；`source` 判别（`message`/`alert`）、级别统一到四档（告警 `warn→warning`、`critical→error`）。
+> 标记已读下推到各源既有语义（站内信按本人、告警全局）。既有 `/notifications/*`、`/alerts/*` 端点与写入源保留不动。
+
+### GET /api/v1/notifications/feed
+- **描述**: 统一通知流分页列表（站内信 + 告警合并，按发生时间倒序）。
+- **关联 FR**: FR-216
+- **权限**: 所有认证用户（消息按本人、告警面向全体）
+- **Query**: `?source=message|alert`（空=全部）、`unread=true`（仅未读）、`keyword=`（标题/正文模糊）、`page=1`、`pageSize=50`
+- **响应**: `{ "items": [{ source, id, level, title, body, read, createdAt, taskId?, triggerType?, acknowledged?, resolved? }], "total": 12 }`
+  - `source`: `message`（站内信）/ `alert`（告警事件）；`level`: `info`/`success`/`warning`/`error`（统一枚举）
+  - `taskId` 仅 message；`triggerType`/`acknowledged`/`resolved` 仅 alert
+  - `total` = 两源命中数之和（两源不重叠，不去重）
+
+### GET /api/v1/notifications/feed/unread-count
+- **描述**: 统一未读数（当前用户未读站内信 + 全局未读告警），用于页眉角标。
+- **关联 FR**: FR-216
+- **权限**: 所有认证用户
+- **响应**: `{ "unread": 5 }`
+
+### POST /api/v1/notifications/feed/read-all
+- **描述**: 全部标记已读（当前用户站内信 + 全局告警）。
+- **关联 FR**: FR-216
+- **权限**: 所有认证用户
+- **响应**: `{ "updated": 7 }`
+
+### POST /api/v1/notifications/feed/:source/:id/read
+- **描述**: 标记单条通知为已读。`:source` = `message`（下推站内信，按本人归属）/ `alert`（下推告警，全局）。
+- **关联 FR**: FR-216
+- **权限**: 所有认证用户（message 仅本人）
+- **响应**: `{ "message": "已标记已读" }`
+- **错误码**: `400 INVALID_REQUEST`（source 非法）；`404 NOT_FOUND`（message 不存在或非本人）
+
 ---
 
 ## 日志中心（FR-049）

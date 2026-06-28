@@ -162,16 +162,16 @@ func (s *NotificationFeedService) MarkAllRead(userID uint) (int64, error)
 ## 4. 任务拆分
 
 - [x] 写 ADR-048（统一通知模型）+ 本 spec
-- [ ] 后端 `NotificationFeedService` + 单测（合并/筛选/未读/标记已读/归属隔离/级别映射）
-- [ ] 后端路由 `notification.go` feed 端点 + router.go 接线
-- [ ] 前端 `api/notification-feed.ts`
-- [ ] 页眉合并单铃铛（`ConsoleHeader.tsx` + `header-layout.ts` + 其 test）
-- [ ] 通知中心页 `NotificationCenterPage.tsx` + 路由
-- [ ] 侧栏收口（删告警过渡位 + 加通知中心入口） + breadcrumb
-- [ ] i18n zh/en
-- [ ] mock feed 端点
-- [ ] vitest（页眉单铃铛、通知中心页筛选/已读、侧栏 IA 收口、breadcrumb）
-- [ ] 文档同步：API.md + ARCHITECTURE（数据模型/导航） + PRD FR-216 状态
+- [x] 后端 `NotificationFeedService` + 单测（合并/筛选/未读/标记已读/归属隔离/级别映射）
+- [x] 后端路由 `notification.go` feed 端点 + router.go 接线
+- [x] 前端 `api/notification-feed.ts`
+- [x] 页眉合并单铃铛（`ConsoleHeader.tsx` + `header-layout.ts` + 其 test）
+- [x] 通知中心页 `NotificationCenterPage.tsx` + 路由
+- [x] 侧栏收口（删告警过渡位 + 加通知中心入口） + breadcrumb + pageTitle
+- [x] i18n zh/en
+- [x] mock feed 端点
+- [x] vitest（页眉单铃铛、通知中心页筛选/已读、侧栏 IA 收口、breadcrumb）
+- [x] 文档同步：API.md + ARCHITECTURE（数据模型/导航） + PRD FR-216 状态
 - [ ] 真机验收（需用户确认，标「待真机验」）
 
 ## 5. 验收标准
