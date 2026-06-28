@@ -1,4 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react'
+import { useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
@@ -69,11 +70,30 @@ type WorkbenchTab = 'keys' | 'versions' | 'core' | 'stats' | 'guide'
 export default function ClientChannelsPage() {
   const { t } = useTranslation()
   const { data: channels, isLoading } = useClientChannels()
-  const [selected, setSelected] = useState<string | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  // 支持从独立发布页（FR-191）返回时按 `?channel=&tab=` 还原到对应频道工作台版本 tab。
+  const [selected, setSelected] = useState<string | null>(() => searchParams.get('channel'))
   const [createOpen, setCreateOpen] = useState(false)
 
+  /** 返回频道列表：清状态与 URL 参数（避免刷新后又自动展开工作台）。 */
+  const backToList = () => {
+    setSelected(null)
+    if (searchParams.has('channel') || searchParams.has('tab')) {
+      const next = new URLSearchParams(searchParams)
+      next.delete('channel')
+      next.delete('tab')
+      setSearchParams(next, { replace: true })
+    }
+  }
+
   if (selected) {
-    return <ChannelWorkbench channelId={selected} onBack={() => setSelected(null)} />
+    return (
+      <ChannelWorkbench
+        channelId={selected}
+        initialTab={searchParams.get('tab') as WorkbenchTab | null}
+        onBack={backToList}
+      />
+    )
   }
 
   const list = channels ?? []
@@ -295,12 +315,26 @@ function CreateChannelDialog({
  * 频道工作台：顶部就绪度步骤器（状态由 keyCount/currentVersion 推导）+
  * 密钥 / 版本 / 统计 / 接入指引 分段。取代原 ChannelDetail，全程模态化。
  */
-function ChannelWorkbench({ channelId, onBack }: { channelId: string; onBack: () => void }) {
+function ChannelWorkbench({
+  channelId,
+  initialTab,
+  onBack,
+}: {
+  channelId: string
+  /** 还原入口（FR-191 从发布页返回时为 'versions'）；非法/缺省回落 'keys'。 */
+  initialTab?: WorkbenchTab | null
+  onBack: () => void
+}) {
   const { t } = useTranslation()
   const { data: detail, isLoading } = useClientChannel(channelId)
   const del = useDeleteClientChannel()
 
-  const [tab, setTab] = useState<WorkbenchTab>('keys')
+  const validInitialTab: WorkbenchTab = (['keys', 'versions', 'core', 'stats', 'guide'] as const).includes(
+    initialTab as WorkbenchTab,
+  )
+    ? (initialTab as WorkbenchTab)
+    : 'keys'
+  const [tab, setTab] = useState<WorkbenchTab>(validInitialTab)
   const [deleteChannel, setDeleteChannel] = useState(false)
   // 就绪度步骤器「创建密钥」CTA 直接开建密钥模态（BUG-E）：开关上提到工作台、随 tab 自动归零。
   const [keyCreateOpen, setKeyCreateOpen] = useState(false)

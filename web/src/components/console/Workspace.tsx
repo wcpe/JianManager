@@ -26,6 +26,7 @@ const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 const StoragePage = lazy(() => import('@/pages/StoragePage'))
 const LogsPage = lazy(() => import('@/pages/LogsPage'))
 const ClientChannelsPage = lazy(() => import('@/pages/ClientChannelsPage'))
+const ClientPublishPage = lazy(() => import('@/pages/ClientPublishPage'))
 const DatabasePage = lazy(() => import('@/pages/DatabasePage'))
 const SystemUpdatePage = lazy(() => import('@/pages/SystemUpdatePage'))
 const LicensesPage = lazy(() => import('@/pages/LicensesPage'))
@@ -100,6 +101,7 @@ export default function Workspace() {
           <Route path="audit" element={<AuditPage />} />
           <Route path="tasks" element={<TasksPage />} />
           <Route path="client-channels" element={<ClientChannelsPage />} />
+          <Route path="client-channels/:id/publish" element={<ClientPublishPage />} />
           <Route path="logs" element={<LogsPage />} />
           <Route path="storage" element={<StoragePage />} />
           <Route path="settings" element={<SettingsPage />} />

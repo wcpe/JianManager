@@ -1627,6 +1627,12 @@
     "discardDesc": "已上传 {{n}} 个文件的编排草稿（文件已在服务端，但「发哪些 + 各自路径/策略」未发布）。关闭将丢弃这些编排，需重新设置。",
     "discardConfirm": "放弃并关闭"
   },
+  "clientPublish": {
+    "backToChannel": "返回频道工作台",
+    "discardTitle": "放弃发布草稿？",
+    "discardDesc": "已上传 {{n}} 个文件的编排草稿（文件已在服务端，但「发哪些 + 各自路径/策略」尚未发布）。离开将丢弃这些编排，需重新设置。",
+    "discardConfirm": "放弃并离开"
+  },
   "clientCore": {
     "tab": "更新器版本",
     "subtitle": "集中管理 updater-core 版本：上传 core jar、按频道 pin / 更新 / 回退。楔子（wedge）固定单版本、不纳管。回退以更高版本号重发旧内容，不触发客户端防降级。",

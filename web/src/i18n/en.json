@@ -1648,6 +1648,12 @@
     "discardDesc": "You have an arrangement draft for {{n}} uploaded file(s) (files are on the server, but which to publish and their paths/policies are not). Closing discards this arrangement; you'll need to set it up again.",
     "discardConfirm": "Discard & Close"
   },
+  "clientPublish": {
+    "backToChannel": "Back to Channel Workbench",
+    "discardTitle": "Discard publish draft?",
+    "discardDesc": "You have an arrangement draft for {{n}} uploaded file(s) (files are on the server, but which to publish and their paths/policies are not yet published). Leaving discards this arrangement; you'll need to set it up again.",
+    "discardConfirm": "Discard & Leave"
+  },
   "clientCore": {
     "tab": "Updater Version",
     "subtitle": "Centrally manage updater-core versions: upload core jar, pin / update / roll back per channel. The wedge is a fixed single version, not managed here. Roll back by republishing old content under a higher version — never trips client anti-downgrade.",
