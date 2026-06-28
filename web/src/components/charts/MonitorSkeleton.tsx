@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useMetricOverview, useMetricSeries } from '@/api/metrics'
+import { useMetricOverview, useMetricSeries, type MetricResolution } from '@/api/metrics'
 import { Panel } from '@/components/ui/panel'
 import { RangePicker, type MetricRange } from '@/components/charts/RangePicker'
 import { MonitorChart } from '@/components/charts/MonitorChart'
@@ -21,13 +21,17 @@ export type MonitorSource =
  * 按当前图的 range + 数据源取原始序列。两条查询都无条件调用、用 enabled 互斥
  * （满足 rules-of-hooks；TanStack Query 对 disabled 查询不发请求）。各图独立 range，故按图调用。
  */
-function useSourceSeries(source: MonitorSource, range: MetricRange): { series: RawSeries[]; isLoading: boolean } {
+function useSourceSeries(
+  source: MonitorSource,
+  range: MetricRange,
+  resolution: MetricResolution,
+): { series: RawSeries[]; isLoading: boolean } {
   const isPlatform = source.kind === 'platform'
   const targetId = isPlatform ? '' : source.uuid
   const scope = source.kind === 'instance' ? 'instance' : 'node'
 
-  const overview = useMetricOverview(range)
-  const seriesQ = useMetricSeries({ scope, targetId, range, enabled: !isPlatform && !!targetId })
+  const overview = useMetricOverview(range, resolution)
+  const seriesQ = useMetricSeries({ scope, targetId, range, resolution, enabled: !isPlatform && !!targetId })
 
   if (isPlatform) {
     const series: RawSeries[] = (overview.data?.trends ?? []).map((tr) => ({
@@ -49,17 +53,21 @@ function MonitorChartCard({
   def,
   source,
   defaultRange,
+  resolution,
+  worldFilter,
   height,
 }: {
   def: MetricChartDef
   source: MonitorSource
   defaultRange: MetricRange
+  resolution: MetricResolution
+  worldFilter?: string
   height: number
 }) {
   const { t } = useTranslation()
   const [range, setRange] = useState<MetricRange>(defaultRange)
-  const { series: raw, isLoading } = useSourceSeries(source, range)
-  const plot = buildChartSeries(def, raw, (k) => t(k))
+  const { series: raw, isLoading } = useSourceSeries(source, range, resolution)
+  const plot = buildChartSeries(def, raw, (k) => t(k), worldFilter)
 
   return (
     <Panel title={t(def.titleKey)} hoverable actions={<RangePicker value={range} onChange={setRange} />}>
@@ -91,17 +99,31 @@ export function MonitorSkeleton({
   defs,
   source,
   defaultRange = '24h',
+  resolution = 'auto',
+  worldFilter,
   chartHeight = 190,
 }: {
   defs: MetricChartDef[]
   source: MonitorSource
   defaultRange?: MetricRange
+  /** 页级聚合粒度（FR-221）：透传给每图查询；auto=按区间自动选档（既有默认）。 */
+  resolution?: MetricResolution
+  /** 下钻聚焦的世界名（FR-221）：分世界图只画该世界，非空才生效。 */
+  worldFilter?: string
   chartHeight?: number
 }) {
   return (
     <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
       {defs.map((def) => (
-        <MonitorChartCard key={def.id} def={def} source={source} defaultRange={defaultRange} height={chartHeight} />
+        <MonitorChartCard
+          key={def.id}
+          def={def}
+          source={source}
+          defaultRange={defaultRange}
+          resolution={resolution}
+          worldFilter={worldFilter}
+          height={chartHeight}
+        />
       ))}
     </div>
   )
