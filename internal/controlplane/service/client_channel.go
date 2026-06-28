@@ -169,9 +169,13 @@ func (s *ClientChannelService) ListKeys(channelID string) ([]model.ClientPullKey
 	return s.listKeys(channelID)
 }
 
-// CreateKey 创建拉取密钥：生成随机明文 → 落库只存其 SHA-256 哈希 → 明文一次性返回。
-// expiresAt 为可选过期时间（nil=永不过期）。返回 (密钥记录, 明文, error)；明文不可二次读取。
-func (s *ClientChannelService) CreateKey(channelID, name string, expiresAt *time.Time) (*model.ClientPullKey, string, error) {
+// CreateKey 创建拉取密钥（FR-192：密钥发出后永久使用，可填自定义明文值）。
+//   - customValue 非空：用作密钥明文（管理员自控这把永久 key）；
+//   - customValue 为空：生成随机明文（带 jmck_ 前缀）。
+//
+// 落库写 KeyHash（SHA-256，鉴权）+ KeyEnc（AES-GCM 可逆加密副本，配了加密器时）；明文随响应一次性返回，
+// 此后可经 reveal 端点查看（有 KeyEnc 时）。expiresAt 为可选过期时间（nil=永不过期）。
+func (s *ClientChannelService) CreateKey(channelID, name, customValue string, expiresAt *time.Time) (*model.ClientPullKey, string, error) {
 	if _, err := s.findChannel(channelID); err != nil {
 		return nil, "", err
 	}
@@ -179,7 +183,7 @@ func (s *ClientChannelService) CreateKey(channelID, name string, expiresAt *time
 		return nil, "", fmt.Errorf("%w: 密钥名不能为空", ErrInvalidChannelID)
 	}
 
-	plaintext, hash, prefix, err := generatePullKey()
+	plaintext, hash, prefix, err := derivePullKey(customValue)
 	if err != nil {
 		return nil, "", err
 	}
@@ -197,42 +201,55 @@ func (s *ClientChannelService) CreateKey(channelID, name string, expiresAt *time
 		ExpiresAt: expiresAt,
 	}
 	if err := s.db.Create(key).Error; err != nil {
+		// key_hash 唯一索引冲突：自定义值与既有密钥撞值（极罕见，自定义值才会发生）。
 		return nil, "", fmt.Errorf("创建拉取密钥失败: %w", err)
 	}
 	return key, plaintext, nil
 }
 
-// RotateKey 轮换密钥：生成新明文替换哈希（同一条记录），旧明文立即失效；新明文一次性返回。
-// 轮换同时清除吊销态（轮换语义为「换一把新的接着用」）。
-func (s *ClientChannelService) RotateKey(channelID string, keyID uint) (*model.ClientPullKey, string, error) {
+// UpdateKeyParams 编辑拉取密钥参数（FR-192）。名称必改；Value 非空时改密钥明文值。
+type UpdateKeyParams struct {
+	// Name 新名称（必填，非空）。
+	Name string
+	// Value 新密钥明文值（可空=不改值，只改名）。非空则重算 KeyHash + 重写 KeyEnc。
+	Value string
+}
+
+// UpdateKey 编辑拉取密钥（FR-192：管理员手动设/改这把永久 key 的值与名称）。
+//   - 仅改名（Value 为空）：更新 Name；
+//   - 改值（Value 非空）：用新明文重算 KeyHash（鉴权随之切换到新值）+ 重写 KeyEnc（可查看）+ 更新 KeyPrefix。
+//
+// 返回 (密钥记录, 本次设置的明文, error)；改值时明文随响应回显供复制，未改值则明文为空。
+// 注意：改值会使持旧值的已分发客户端失效——前端须强警告。不触碰吊销态（编辑非吊销/恢复语义）。
+func (s *ClientChannelService) UpdateKey(channelID string, keyID uint, p UpdateKeyParams) (*model.ClientPullKey, string, error) {
 	key, err := s.findKey(channelID, keyID)
 	if err != nil {
 		return nil, "", err
 	}
-	plaintext, hash, prefix, err := generatePullKey()
-	if err != nil {
-		return nil, "", err
+	if p.Name == "" {
+		return nil, "", fmt.Errorf("%w: 密钥名不能为空", ErrInvalidChannelID)
 	}
-	// 重写可逆加密副本（FR-192）：配了加密器写新密文，未配则置空（确保轮换后可查看性与当前配置一致）。
-	enc, err := s.encryptor.Encrypt(plaintext)
-	if err != nil {
-		return nil, "", fmt.Errorf("加密拉取密钥失败: %w", err)
-	}
-	updates := map[string]any{
-		"key_hash":   hash,
-		"key_enc":    enc,
-		"key_prefix": prefix,
-		"revoked":    false,
-		"revoked_at": nil,
+	updates := map[string]any{"name": p.Name}
+	var plaintext string
+	if p.Value != "" {
+		hash, prefix := deriveHashPrefix(p.Value)
+		enc, eerr := s.encryptor.Encrypt(p.Value)
+		if eerr != nil {
+			return nil, "", fmt.Errorf("加密拉取密钥失败: %w", eerr)
+		}
+		updates["key_hash"] = hash
+		updates["key_enc"] = enc
+		updates["key_prefix"] = prefix
+		plaintext = p.Value
+		key.KeyHash = hash
+		key.KeyEnc = enc
+		key.KeyPrefix = prefix
 	}
 	if err := s.db.Model(key).Updates(updates).Error; err != nil {
-		return nil, "", fmt.Errorf("轮换拉取密钥失败: %w", err)
+		return nil, "", fmt.Errorf("更新拉取密钥失败: %w", err)
 	}
-	key.KeyHash = hash
-	key.KeyEnc = enc
-	key.KeyPrefix = prefix
-	key.Revoked = false
-	key.RevokedAt = nil
+	key.Name = p.Name
+	key.Revealable = key.KeyEnc != ""
 	return key, plaintext, nil
 }
 
@@ -371,19 +388,33 @@ func (s *ClientChannelService) listKeys(channelID string) ([]model.ClientPullKey
 	return keys, nil
 }
 
-// generatePullKey 生成拉取密钥：32 字节随机 → base64url 明文（带 jmck_ 前缀），返回 (明文, SHA-256 哈希, 前缀)。
-func generatePullKey() (plaintext, hash, prefix string, err error) {
+// derivePullKey 据可选自定义值派生拉取密钥（FR-192）：
+//   - customValue 非空：直接用作明文（管理员自定义这把永久 key）；
+//   - customValue 为空：32 字节随机 → base64url 明文（带 jmck_ 前缀）。
+//
+// 返回 (明文, SHA-256 哈希, 前缀)。
+func derivePullKey(customValue string) (plaintext, hash, prefix string, err error) {
+	if customValue != "" {
+		h, p := deriveHashPrefix(customValue)
+		return customValue, h, p, nil
+	}
 	b := make([]byte, 32)
 	if _, err = rand.Read(b); err != nil {
 		return "", "", "", fmt.Errorf("生成拉取密钥失败: %w", err)
 	}
 	plaintext = pullKeyPlaintextPrefix + base64.RawURLEncoding.EncodeToString(b)
+	h, p := deriveHashPrefix(plaintext)
+	return plaintext, h, p, nil
+}
+
+// deriveHashPrefix 由明文算 (SHA-256 哈希, 落库前缀)。前缀仅供列表识别、不足以重建密钥。
+func deriveHashPrefix(plaintext string) (hash, prefix string) {
 	hash = sha256Hex(plaintext)
 	prefix = plaintext
 	if len(prefix) > pullKeyPrefixLen {
 		prefix = prefix[:pullKeyPrefixLen]
 	}
-	return plaintext, hash, prefix, nil
+	return hash, prefix
 }
 
 // sha256Hex 返回字符串的 SHA-256 十六进制小写。

@@ -1807,33 +1807,34 @@
 - **错误**: 404 `CHANNEL_NOT_FOUND`
 
 ### POST /api/v1/client-channels/:id/keys
-- **描述**: 创建拉取密钥；**明文仅此响应返回一次，不可二次读取**
-- **关联 FR**: FR-086
+- **描述**: 创建拉取密钥；明文随此响应一次性返回，**创建后亦可经 reveal 端点查看**（FR-192：密钥发出后永久使用）。`value` 可选——留空自动生成，填入则用作自定义密钥明文值（管理员自控这把永久 key）
+- **关联 FR**: FR-086 / FR-192
 - **权限**: 平台管理员
-- **请求**: `{ "name": "正式包", "expiresAt": "2027-01-01T00:00:00Z" }`（`expiresAt` 可选）
+- **请求**: `{ "name": "正式包", "expiresAt": "2027-01-01T00:00:00Z", "value": "自定义值" }`（`expiresAt`/`value` 均可选）
 - **响应** (201):
   ```json
   { "id": 10, "name": "正式包", "keyPrefix": "jmck_ab12", "revoked": false, "expiresAt": null,
-    "createdAt": "datetime", "revealable": true, "key": "jmck_<一次性明文>" }
+    "createdAt": "datetime", "revealable": true, "key": "jmck_<明文>" }
   ```
   （`revealable`=后端是否存有可逆加密副本，配了 `JIANMANAGER_CLIENT_KEY_ENC_SECRET` 或 dev 态为 `true`，FR-192）
 - **错误**: 404 `CHANNEL_NOT_FOUND` | 400 `INVALID_REQUEST`
-- **审计**: `client_key.create`（detail 不含明文）
+- **审计**: `client_key.create`（detail 不含明文，含 `custom` 标记是否自定义值）
 
-### POST /api/v1/client-channels/:id/keys/:kid/rotate
-- **描述**: 轮换密钥（同一记录换新明文，旧明文立即失效）；**新明文一次性返回**
-- **关联 FR**: FR-086
+### PUT /api/v1/client-channels/:id/keys/:kid
+- **描述**: 编辑拉取密钥（FR-192，见 ADR-044）。改名必填；`value` 可选——留空仅改名，填入则改值（重算 `KeyHash` 使鉴权切到新值 + 重写 `KeyEnc` 供查看）。**改值会使持旧值的已分发客户端失效**。取代原「轮换」（已删除）
+- **关联 FR**: FR-192
 - **权限**: 平台管理员
-- **响应** (200): 同创建响应（含一次性 `key`）
-- **错误**: 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND`
-- **审计**: `client_key.rotate`（detail 不含明文）
+- **请求**: `{ "name": "灰度", "value": "新密钥明文" }`（`value` 可空=只改名）
+- **响应** (200): 同创建响应；改值时 `key`=新明文（回显供复制），仅改名时 `key` 为空串
+- **错误**: 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND` | 400 `INVALID_REQUEST`
+- **审计**: `client_key.update`（detail 不含明文，含 `valueChanged` 标记是否改值）
 
 ### GET /api/v1/client-channels/:id/keys/:kid/reveal
 - **描述**: 查看拉取密钥明文（FR-192，见 ADR-044）。密钥改可逆加密存储后管理员可随时查看明文 + 复制；鉴权仍只用哈希比对，行为不变。仅当后端存有可逆加密副本（`KeyEnc`）时可查看
 - **关联 FR**: FR-192
 - **权限**: 平台管理员
 - **响应** (200): `{ "key": "jmck_<明文>" }`
-- **错误**: 404 `KEY_NOT_REVEALABLE`（存量老哈希密钥 / 创建时未配 `JIANMANAGER_CLIENT_KEY_ENC_SECRET`，明文不可找回）| 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND`
+- **错误**: 404 `KEY_NOT_REVEALABLE`（存量老哈希密钥 / 创建时未配 `JIANMANAGER_CLIENT_KEY_ENC_SECRET`，明文不可找回；可经 PUT 改值为已知值后再查看）| 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND`
 - **审计**: `client_key.reveal`（detail 仅元数据 channelId/keyId，**绝不含明文**）
 - **备注**: 频道详情/密钥列表的密钥元数据新增派生布尔 `revealable`（= 后端存有 `KeyEnc`），供前端对不可查看的老密钥禁用「查看」并提示；`KeyEnc`/`KeyHash` 本身不序列化
 

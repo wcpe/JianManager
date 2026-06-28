@@ -37,10 +37,19 @@ type updateChannelRequest struct {
 	Description string `json:"description"`
 }
 
-// createKeyRequest 创建拉取密钥请求体。
+// createKeyRequest 创建拉取密钥请求体。value 可空（留空自动生成；FR-192 支持自定义值）。
 type createKeyRequest struct {
 	Name      string `json:"name" binding:"required"`
 	ExpiresAt string `json:"expiresAt"`
+	// Value 自定义密钥明文值（可空=自动生成）。供管理员自控这把永久 key（FR-192）。
+	Value string `json:"value"`
+}
+
+// updateKeyRequest 编辑拉取密钥请求体（FR-192）。name 必填；value 可空（留空只改名）。
+type updateKeyRequest struct {
+	Name string `json:"name" binding:"required"`
+	// Value 新密钥明文值（可空=不改值，只改名）。非空则改值（重算 KeyHash + 重写 KeyEnc）。
+	Value string `json:"value"`
 }
 
 // ListChannels GET /client-channels — 列出全部频道。
@@ -155,20 +164,22 @@ func (h *ClientChannelHandler) CreateKey(c *gin.Context) {
 		return
 	}
 	channelID := c.Param("id")
-	key, plaintext, err := h.svc.CreateKey(channelID, body.Name, expiresAt)
+	key, plaintext, err := h.svc.CreateKey(channelID, body.Name, body.Value, expiresAt)
 	if err != nil {
 		h.respondKeyErr(c, err)
 		return
 	}
-	// 审计 detail 仅含可公开元数据，绝不含明文。
+	// 审计 detail 仅含可公开元数据，绝不含明文。custom 标记是否为管理员自定义值（不含值本身）。
 	h.recordAudit(c, "client_key.create", map[string]any{
 		"channelId": channelID, "keyId": key.ID, "name": key.Name, "keyPrefix": key.KeyPrefix,
+		"custom": body.Value != "",
 	})
 	c.JSON(http.StatusCreated, keyWithPlaintext(key, plaintext))
 }
 
-// RotateKey POST /client-channels/:id/keys/:kid/rotate — 轮换密钥；新明文一次性返回。
-func (h *ClientChannelHandler) RotateKey(c *gin.Context) {
+// UpdateKey PUT /client-channels/:id/keys/:kid — 编辑密钥（值/名称；FR-192，见 ADR-044）。
+// 仅平台管理员 + 审计。改值时重算 KeyHash（鉴权切到新值）+ 重写 KeyEnc（可查看），新明文随响应回显。
+func (h *ClientChannelHandler) UpdateKey(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
 	}
@@ -177,13 +188,20 @@ func (h *ClientChannelHandler) RotateKey(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	key, plaintext, err := h.svc.RotateKey(channelID, kid)
+	var body updateKeyRequest
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+	key, plaintext, err := h.svc.UpdateKey(channelID, kid, service.UpdateKeyParams{Name: body.Name, Value: body.Value})
 	if err != nil {
 		h.respondKeyErr(c, err)
 		return
 	}
-	h.recordAudit(c, "client_key.rotate", map[string]any{
-		"channelId": channelID, "keyId": key.ID, "keyPrefix": key.KeyPrefix,
+	// 审计 detail 仅含可公开元数据，绝不含明文；valueChanged 记录是否改了值（不含值本身）。
+	h.recordAudit(c, "client_key.update", map[string]any{
+		"channelId": channelID, "keyId": key.ID, "name": key.Name, "keyPrefix": key.KeyPrefix,
+		"valueChanged": body.Value != "",
 	})
 	c.JSON(http.StatusOK, keyWithPlaintext(key, plaintext))
 }
@@ -303,8 +321,8 @@ func (h *ClientChannelHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		ch.DELETE("/:id", h.DeleteChannel)
 		ch.GET("/:id/keys", h.ListKeys)
 		ch.POST("/:id/keys", h.CreateKey)
+		ch.PUT("/:id/keys/:kid", h.UpdateKey)
 		ch.GET("/:id/keys/:kid/reveal", h.RevealKey)
-		ch.POST("/:id/keys/:kid/rotate", h.RotateKey)
 		ch.DELETE("/:id/keys/:kid", h.RevokeKey)
 	}
 }

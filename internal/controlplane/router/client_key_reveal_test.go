@@ -60,7 +60,7 @@ func TestRevealKey_AdminGetsPlaintext(t *testing.T) {
 		t.Fatalf("建频道失败: %d %s", w.Code, w.Body.String())
 	}
 	// 经配了加密器的服务直接建密钥，拿到一次性明文（待与 reveal 结果比对）。
-	key, plaintext, err := svc.CreateKey("skyblock-s1", "正式包", nil)
+	key, plaintext, err := svc.CreateKey("skyblock-s1", "正式包", "", nil)
 	if err != nil {
 		t.Fatalf("建密钥失败: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestRevealKey_NotRevealableWhenNoEnc(t *testing.T) {
 		map[string]string{"channelId": "skyblock-s1", "name": "测试频道"}, token); w.Code != http.StatusCreated {
 		t.Fatalf("建频道失败: %d %s", w.Code, w.Body.String())
 	}
-	key, _, err := svc.CreateKey("skyblock-s1", "正式包", nil)
+	key, _, err := svc.CreateKey("skyblock-s1", "正式包", "", nil)
 	if err != nil {
 		t.Fatalf("建密钥失败: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestRevealKey_NonAdminForbidden(t *testing.T) {
 		map[string]string{"channelId": "skyblock-s1", "name": "测试频道"}, adminToken); w.Code != http.StatusCreated {
 		t.Fatalf("建频道失败: %d %s", w.Code, w.Body.String())
 	}
-	key, _, err := svc.CreateKey("skyblock-s1", "正式包", nil)
+	key, _, err := svc.CreateKey("skyblock-s1", "正式包", "", nil)
 	if err != nil {
 		t.Fatalf("建密钥失败: %v", err)
 	}

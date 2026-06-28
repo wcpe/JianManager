@@ -44,6 +44,7 @@ type ClientPullKey struct {
 	// KeyEnc 拉取密钥明文的 AES-256-GCM 可逆加密副本（base64(nonce‖密文)；FR-192，见 ADR-044）。
 	// 仅供平台管理员经 reveal 端点查看明文，不参与鉴权、绝不序列化给客户端。空=不可查看
 	// （存量老密钥 / 创建时未配 JIANMANAGER_CLIENT_KEY_ENC_SECRET 的密钥）。加性列、默认空。
+	// 密钥发出后永久使用；管理员可经编辑端点改值（重算 KeyHash + 重写 KeyEnc），不再提供轮换。
 	KeyEnc string `gorm:"column:key_enc;type:text" json:"-"`
 	// KeyPrefix 明文前缀（如 jmck_ab12），仅供列表识别，不足以重建密钥。
 	KeyPrefix string `gorm:"column:key_prefix;type:varchar(16);not null" json:"keyPrefix"`

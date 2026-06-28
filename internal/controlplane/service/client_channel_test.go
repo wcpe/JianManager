@@ -50,7 +50,7 @@ func TestCreateKey_StoresOnlyHashAndReturnsPlaintextOnce(t *testing.T) {
 	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")
 	require.NoError(t, err)
 
-	key, plaintext, err := svc.CreateKey("skyblock-s1", "正式包", nil)
+	key, plaintext, err := svc.CreateKey("skyblock-s1", "正式包", "", nil)
 	require.NoError(t, err)
 
 	// 明文非空、带约定前缀，且与前缀字段一致。
@@ -74,7 +74,7 @@ func TestVerifyKey_HappyPath(t *testing.T) {
 	svc := newClientChannelSvc(t)
 	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")
 	require.NoError(t, err)
-	_, plaintext, err := svc.CreateKey("skyblock-s1", "正式包", nil)
+	_, plaintext, err := svc.CreateKey("skyblock-s1", "正式包", "", nil)
 	require.NoError(t, err)
 
 	got, err := svc.VerifyKey("skyblock-s1", plaintext)
@@ -93,7 +93,7 @@ func TestVerifyKey_WrongKeyAndWrongChannel(t *testing.T) {
 	require.NoError(t, err)
 	_, err = svc.CreateChannel("other", "另一服", "")
 	require.NoError(t, err)
-	_, plaintext, err := svc.CreateKey("skyblock-s1", "正式包", nil)
+	_, plaintext, err := svc.CreateKey("skyblock-s1", "正式包", "", nil)
 	require.NoError(t, err)
 
 	// 错误明文拒绝。
@@ -109,7 +109,7 @@ func TestRevokeKey_InvalidatesVerification(t *testing.T) {
 	svc := newClientChannelSvc(t)
 	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")
 	require.NoError(t, err)
-	key, plaintext, err := svc.CreateKey("skyblock-s1", "正式包", nil)
+	key, plaintext, err := svc.CreateKey("skyblock-s1", "正式包", "", nil)
 	require.NoError(t, err)
 
 	// 吊销前可用。
@@ -130,31 +130,72 @@ func TestRevokeKey_InvalidatesVerification(t *testing.T) {
 	require.NotNil(t, keys[0].RevokedAt)
 }
 
-func TestRotateKey_NewPlaintextOldInvalidatedSameRecord(t *testing.T) {
+func TestCreateKey_CustomValueUsedAsPlaintext(t *testing.T) {
+	// FR-192：管理员可填自定义密钥明文值（密钥发出后永久使用、自控这把 key）。
 	svc := newClientChannelSvc(t)
 	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")
 	require.NoError(t, err)
-	key, oldPlain, err := svc.CreateKey("skyblock-s1", "正式包", nil)
+
+	custom := "my-permanent-client-key-2026"
+	key, plaintext, err := svc.CreateKey("skyblock-s1", "正式包", custom, nil)
 	require.NoError(t, err)
 
-	rotated, newPlain, err := svc.RotateKey("skyblock-s1", key.ID)
+	// 明文 = 自定义值，哈希 = SHA-256(自定义值)，前缀截自自定义值。
+	require.Equal(t, custom, plaintext)
+	require.Equal(t, sha256hexStr(custom), key.KeyHash)
+	require.True(t, strings.HasPrefix(custom, key.KeyPrefix))
+
+	// 自定义值即可鉴权拉取。
+	got, err := svc.VerifyKey("skyblock-s1", custom)
+	require.NoError(t, err)
+	require.Equal(t, "skyblock-s1", got.ChannelID)
+}
+
+func TestUpdateKey_ChangesValueAndName(t *testing.T) {
+	// FR-192：编辑密钥值——重算 KeyHash（鉴权切到新值）+ 改名；旧值随之失效。
+	svc := newClientChannelSvc(t)
+	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")
+	require.NoError(t, err)
+	key, oldPlain, err := svc.CreateKey("skyblock-s1", "正式包", "", nil)
 	require.NoError(t, err)
 
-	// 同一条记录（id 不变），明文已变。
-	require.Equal(t, key.ID, rotated.ID)
-	require.NotEqual(t, oldPlain, newPlain)
-	require.Equal(t, sha256hexStr(newPlain), rotated.KeyHash)
+	updated, newPlain, err := svc.UpdateKey("skyblock-s1", key.ID, UpdateKeyParams{Name: "灰度", Value: "new-known-value"})
+	require.NoError(t, err)
 
-	// 旧明文失效，新明文可用。
+	// 同一条记录、改名、新明文回显、哈希 = SHA-256(新值)。
+	require.Equal(t, key.ID, updated.ID)
+	require.Equal(t, "灰度", updated.Name)
+	require.Equal(t, "new-known-value", newPlain)
+	require.Equal(t, sha256hexStr("new-known-value"), updated.KeyHash)
+
+	// 旧值失效，新值可用。
 	_, err = svc.VerifyKey("skyblock-s1", oldPlain)
 	require.ErrorIs(t, err, ErrPullKeyInvalid)
-	_, err = svc.VerifyKey("skyblock-s1", newPlain)
+	_, err = svc.VerifyKey("skyblock-s1", "new-known-value")
 	require.NoError(t, err)
 
-	// 列表仍只有一条（轮换不新增记录）。
+	// 列表仍只有一条（编辑不新增记录）。
 	keys, err := svc.ListKeys("skyblock-s1")
 	require.NoError(t, err)
 	require.Len(t, keys, 1)
+}
+
+func TestUpdateKey_NameOnlyKeepsValue(t *testing.T) {
+	// 只改名（Value 为空）：鉴权值不变，明文不回显。
+	svc := newClientChannelSvc(t)
+	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")
+	require.NoError(t, err)
+	key, plain, err := svc.CreateKey("skyblock-s1", "正式包", "", nil)
+	require.NoError(t, err)
+
+	updated, newPlain, err := svc.UpdateKey("skyblock-s1", key.ID, UpdateKeyParams{Name: "改个名"})
+	require.NoError(t, err)
+	require.Equal(t, "改个名", updated.Name)
+	require.Empty(t, newPlain) // 未改值不回显明文。
+
+	// 原值仍可鉴权。
+	_, err = svc.VerifyKey("skyblock-s1", plain)
+	require.NoError(t, err)
 }
 
 func TestVerifyKey_Expired(t *testing.T) {
@@ -162,7 +203,7 @@ func TestVerifyKey_Expired(t *testing.T) {
 	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")
 	require.NoError(t, err)
 	past := time.Now().Add(-time.Hour)
-	_, plaintext, err := svc.CreateKey("skyblock-s1", "临时", &past)
+	_, plaintext, err := svc.CreateKey("skyblock-s1", "临时", "", &past)
 	require.NoError(t, err)
 
 	_, err = svc.VerifyKey("skyblock-s1", plaintext)
@@ -173,7 +214,7 @@ func TestDeleteChannel_CascadesKeys(t *testing.T) {
 	svc := newClientChannelSvc(t)
 	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")
 	require.NoError(t, err)
-	_, _, err = svc.CreateKey("skyblock-s1", "正式包", nil)
+	_, _, err = svc.CreateKey("skyblock-s1", "正式包", "", nil)
 	require.NoError(t, err)
 
 	require.NoError(t, svc.DeleteChannel("skyblock-s1"))
