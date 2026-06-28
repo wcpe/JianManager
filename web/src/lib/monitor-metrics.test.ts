@@ -7,6 +7,11 @@ import {
   NODE_CHART_DEFS,
   INSTANCE_CHART_DEFS,
   PLATFORM_CHART_DEFS,
+  catalogFor,
+  latestValue,
+  buildSnapshots,
+  buildCompareSeries,
+  NODE_METRIC_CATALOG,
   type RawSeries,
 } from './monitor-metrics'
 
@@ -113,5 +118,78 @@ describe('buildChartSeries', () => {
   it('缺序列时跳过该线', () => {
     const out = buildChartSeries(INSTANCE_CHART_DEFS[0], [], id)
     expect(out).toEqual([])
+  })
+
+  it('worldFilter 非空时区块图只画该世界（FR-221 下钻）', () => {
+    const raw: RawSeries[] = [
+      { metricKey: 'world_loaded_chunks', world: 'world', points: [{ ts: 't0', value: 100 }] },
+      { metricKey: 'world_loaded_chunks', world: 'world_nether', points: [{ ts: 't0', value: 20 }] },
+    ]
+    const chunks = INSTANCE_CHART_DEFS.find((d) => d.id === 'chunks')!
+    const out = buildChartSeries(chunks, raw, id, 'world_nether')
+    expect(out.map((s) => s.key)).toEqual(['world_nether'])
+  })
+})
+
+// ===== FR-221 时序剖析增强 =====
+
+describe('catalogFor', () => {
+  it('据 target 类型取指标目录', () => {
+    expect(catalogFor('node')).toBe(NODE_METRIC_CATALOG)
+    expect(catalogFor('platform').map((c) => c.metricKey)).toContain('inst_players_online')
+    expect(catalogFor('instance').map((c) => c.metricKey)).toContain('inst_tps')
+  })
+})
+
+describe('latestValue', () => {
+  const raw: RawSeries[] = [
+    { metricKey: 'node_cpu_pct', points: [{ ts: 't0', value: 40 }, { ts: 't1', value: 55 }, { ts: 't2', value: null }] },
+  ]
+  it('取最后一个非空值（跳过末尾缺测）', () => {
+    expect(latestValue(raw, 'node_cpu_pct')).toBe(55)
+  })
+  it('无序列/全缺测返回 null', () => {
+    expect(latestValue(raw, 'node_load')).toBeNull()
+    expect(latestValue([{ metricKey: 'node_load', points: [{ ts: 't0', value: null }] }], 'node_load')).toBeNull()
+  })
+})
+
+describe('buildSnapshots', () => {
+  const id = (k: string) => k
+  it('按目录装配当前值 + 趋势点', () => {
+    const raw: RawSeries[] = [
+      { metricKey: 'node_cpu_pct', points: [{ ts: 't0', value: 40 }, { ts: 't1', value: 60 }] },
+    ]
+    const snaps = buildSnapshots(NODE_METRIC_CATALOG, raw)
+    const cpu = snaps.find((s) => s.metricKey === 'node_cpu_pct')!
+    expect(cpu.current).toBe(60)
+    expect(cpu.points).toHaveLength(2)
+    // 无数据的指标当前值为 null、点为空
+    const load = snaps.find((s) => s.metricKey === 'node_load')!
+    expect(load.current).toBeNull()
+    expect(load.points).toEqual([])
+    // 目录全量覆盖
+    expect(snaps).toHaveLength(NODE_METRIC_CATALOG.length)
+    void id
+  })
+})
+
+describe('buildCompareSeries', () => {
+  const id = (k: string) => k
+  const raw: RawSeries[] = [
+    { metricKey: 'node_cpu_pct', points: [{ ts: 't0', value: 40 }] },
+    { metricKey: 'node_load', points: [{ ts: 't0', value: 1.2 }] },
+  ]
+  it('按选中顺序叠加多条序列', () => {
+    const out = buildCompareSeries(['node_load', 'node_cpu_pct'], NODE_METRIC_CATALOG, raw, id)
+    expect(out.map((s) => s.key)).toEqual(['node_load', 'node_cpu_pct'])
+    expect(out[0].name).toBe('monitor.metric.load1')
+  })
+  it('无匹配序列的 key 跳过', () => {
+    const out = buildCompareSeries(['node_cpu_pct', 'node_net_rx_rate'], NODE_METRIC_CATALOG, raw, id)
+    expect(out.map((s) => s.key)).toEqual(['node_cpu_pct'])
+  })
+  it('空选返回空', () => {
+    expect(buildCompareSeries([], NODE_METRIC_CATALOG, raw, id)).toEqual([])
   })
 })

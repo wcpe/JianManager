@@ -207,7 +207,7 @@ function pointsOf(raw: RawSeries[], metricKey: string, world = ''): { ts: string
 /**
  * 装配一张图的曲线集合。
  * - 「资源使用率」图特判：CPU% + 内存%（mem_used/mem_total）+ 磁盘%（disk_used/disk_total）三线对比。
- * - 区块图特判：按 world 拆成多条线。
+ * - 区块图特判：按 world 拆成多条线；worldFilter 非空时只画该世界（FR-221 下钻到世界）。
  * - 其余按 def.sources 直接取序列。
  * nameOf 为 i18n 翻译函数（注入以保持本模块纯逻辑、不依赖 i18next）。
  */
@@ -215,6 +215,7 @@ export function buildChartSeries(
   def: MetricChartDef,
   raw: RawSeries[],
   nameOf: (key: string) => string,
+  worldFilter?: string,
 ): PlotSeries[] {
   if (def.id === 'resource') {
     const out: PlotSeries[] = []
@@ -228,13 +229,112 @@ export function buildChartSeries(
   }
 
   if (def.id === 'chunks') {
-    // 分世界：同一 metricKey 下每个 world 一条线。
+    // 分世界：同一 metricKey 下每个 world 一条线；下钻聚焦时只保留该世界。
     return raw
       .filter((x) => x.metricKey === 'world_loaded_chunks' && (x.world ?? '') !== '')
+      .filter((x) => !worldFilter || x.world === worldFilter)
       .map((s) => ({ key: s.world as string, name: s.world as string, points: s.points }))
   }
 
   return def.sources
     .map((src) => ({ key: src.metricKey, name: nameOf(src.nameKey), points: pointsOf(raw, src.metricKey) }))
+    .filter((s) => s.points.length > 0)
+}
+
+// ===== FR-221 时序剖析增强：指标目录 + 关键指标概览 + 多指标对比 =====
+
+/** 一个可选/可对比的指标项（名称 + 单位格式）。FR-221 概览/对比据此枚举与取值。 */
+export interface MetricCatalogItem {
+  metricKey: string
+  nameKey: string
+  format: ValueFormat
+}
+
+/**
+ * 各 target 的指标目录（仅列「单序列、可直接取当前值」的指标——派生占比/分世界不入目录，
+ * 它们在主图网格里已有专门处理）。用于「关键指标概览」与「多指标对比」枚举可选项。
+ * 严格对齐既有 FR-060 指标键（model/metric.go），不新增后端字段。
+ */
+export const NODE_METRIC_CATALOG: MetricCatalogItem[] = [
+  { metricKey: 'node_cpu_pct', nameKey: 'monitor.metric.cpu', format: 'pct' },
+  { metricKey: 'node_load', nameKey: 'monitor.metric.load1', format: 'load' },
+  { metricKey: 'node_mem_used', nameKey: 'monitor.metric.memUsed', format: 'bytes' },
+  { metricKey: 'node_disk_used', nameKey: 'monitor.metric.diskUsed', format: 'bytes' },
+  { metricKey: 'node_net_rx_rate', nameKey: 'monitor.metric.netRx', format: 'bytesPerSec' },
+  { metricKey: 'node_net_tx_rate', nameKey: 'monitor.metric.netTx', format: 'bytesPerSec' },
+]
+
+export const INSTANCE_METRIC_CATALOG: MetricCatalogItem[] = [
+  { metricKey: 'inst_tps', nameKey: 'monitor.metric.tps', format: 'tps' },
+  { metricKey: 'inst_mspt', nameKey: 'monitor.metric.mspt', format: 'ms' },
+  { metricKey: 'inst_players_online', nameKey: 'monitor.metric.players', format: 'count' },
+  { metricKey: 'inst_heap_used', nameKey: 'monitor.metric.heapUsed', format: 'bytes' },
+  { metricKey: 'inst_threads', nameKey: 'monitor.metric.threads', format: 'count' },
+  { metricKey: 'inst_cpu_pct', nameKey: 'monitor.metric.cpu', format: 'pct' },
+]
+
+/** 平台聚合可得的指标（/metrics/overview 仅这 4 条跨节点曲线）。 */
+export const PLATFORM_METRIC_CATALOG: MetricCatalogItem[] = [
+  { metricKey: 'node_cpu_pct', nameKey: 'monitor.metric.cpu', format: 'pct' },
+  { metricKey: 'node_load', nameKey: 'monitor.metric.load1', format: 'load' },
+  { metricKey: 'node_mem_used', nameKey: 'monitor.metric.memUsed', format: 'bytes' },
+  { metricKey: 'inst_players_online', nameKey: 'monitor.metric.players', format: 'count' },
+]
+
+/** 据 target 类型取指标目录。 */
+export function catalogFor(kind: 'platform' | 'node' | 'instance'): MetricCatalogItem[] {
+  if (kind === 'node') return NODE_METRIC_CATALOG
+  if (kind === 'instance') return INSTANCE_METRIC_CATALOG
+  return PLATFORM_METRIC_CATALOG
+}
+
+/** 取一条序列在 world='' 上的最后一个非空值（关键指标「当前值」）。无则 null。 */
+export function latestValue(raw: RawSeries[], metricKey: string): number | null {
+  const pts = pointsOf(raw, metricKey)
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const v = pts[i].value
+    if (v != null && Number.isFinite(v)) return v
+  }
+  return null
+}
+
+/** 一个关键指标概览格：当前值 + 缩略趋势点。 */
+export interface MetricSnapshot {
+  metricKey: string
+  nameKey: string
+  format: ValueFormat
+  current: number | null
+  points: { ts: string; value: number | null }[]
+}
+
+/** 据目录与原始序列装配关键指标概览（当前值 + sparkline 点）。FR-221「关键指标概览」。 */
+export function buildSnapshots(catalog: MetricCatalogItem[], raw: RawSeries[]): MetricSnapshot[] {
+  return catalog.map((item) => ({
+    metricKey: item.metricKey,
+    nameKey: item.nameKey,
+    format: item.format,
+    current: latestValue(raw, item.metricKey),
+    points: pointsOf(raw, item.metricKey),
+  }))
+}
+
+/**
+ * 装配「多指标对比」叠加曲线：按 selected 的 metricKey 顺序各取一条序列叠加到同一图。
+ * 跨指标量纲不同（如 TPS vs 字节），故对比图统一不约束 Y 轴（auto），按各自原值绘制——
+ * 形状/趋势对比为主，绝对值看 hover。无匹配序列的 key 跳过。
+ */
+export function buildCompareSeries(
+  selected: string[],
+  catalog: MetricCatalogItem[],
+  raw: RawSeries[],
+  nameOf: (key: string) => string,
+): PlotSeries[] {
+  const byKey = new Map(catalog.map((c) => [c.metricKey, c]))
+  return selected
+    .map((key) => {
+      const item = byKey.get(key)
+      const points = pointsOf(raw, key)
+      return { key, name: item ? nameOf(item.nameKey) : key, points }
+    })
     .filter((s) => s.points.length > 0)
 }
