@@ -16,6 +16,7 @@ const SEGMENT_TITLE_KEYS: Record<string, string> = {
   logs: 'nav.logs',
   statistics: 'nav.statistics',
   tasks: 'nav.tasks',
+  notifications: 'nav.notifications',
   users: 'nav.users',
   groups: 'nav.groups',
   templates: 'nav.templates',

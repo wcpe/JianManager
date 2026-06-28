@@ -12,9 +12,17 @@ describe('breadcrumbTrail', () => {
       { labelKey: 'nav.cluster' },
       { labelKey: 'nav.allInstances' },
     ])
+    // 告警管理页归「系统」域（FR-216：告警随通知中心收口到系统/账户与审计）。
     expect(breadcrumbTrail('/alerts')).toEqual([
-      { labelKey: 'nav.observability' },
+      { labelKey: 'nav.system' },
       { labelKey: 'nav.alerts' },
+    ])
+  })
+
+  it('通知中心归「系统」域（FR-216）', () => {
+    expect(breadcrumbTrail('/notifications')).toEqual([
+      { labelKey: 'nav.system' },
+      { labelKey: 'nav.notifications' },
     ])
   })
 

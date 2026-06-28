@@ -21,8 +21,6 @@ const SEGMENT_DOMAIN: Record<string, string> = {
   monitor: 'nav.observability',
   logs: 'nav.observability',
   statistics: 'nav.observability',
-  // 告警：FR-216 接手前过渡期仍归观测域（与侧栏一致）
-  alerts: 'nav.observability',
   // 运营
   players: 'nav.operations',
   bots: 'nav.operations',
@@ -36,6 +34,9 @@ const SEGMENT_DOMAIN: Record<string, string> = {
   storage: 'nav.system',
   // 任务中心由观测(原监控)迁入「系统·平台与维护」（FR-215）
   tasks: 'nav.system',
+  // 通知中心 + 告警管理页归系统域（FR-216：告警随通知中心收口到系统/账户与审计）
+  notifications: 'nav.system',
+  alerts: 'nav.system',
   database: 'nav.system',
   'system-update': 'nav.system',
   users: 'nav.system',
@@ -55,6 +56,7 @@ const SEGMENT_PAGE: Record<string, string> = {
   logs: 'nav.logs',
   statistics: 'nav.statistics',
   tasks: 'nav.tasks',
+  notifications: 'nav.notifications',
   players: 'nav.players',
   bots: 'nav.bots',
   templates: 'nav.templates',

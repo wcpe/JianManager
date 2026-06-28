@@ -1,17 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import {
   HEADER_RIGHT_SLOTS,
-  INBOX_SLOT,
-  INBOX_SLOT_FR,
+  NOTIFICATIONS_SLOT,
   searchBoxClass,
   slotVisibility,
   visibilityClass,
   type HeaderSlot,
 } from './header-layout'
 
-describe('header-layout（FR-179 全局页眉右对齐 + 站内信挂载点）', () => {
-  it('右侧操作区按「搜索→集群徽标→收件箱→铃铛→账户」固定顺序', () => {
-    expect(HEADER_RIGHT_SLOTS).toEqual(['search', 'clusterBadges', 'inbox', 'alertBell', 'account'])
+describe('header-layout（FR-179 全局页眉右对齐 + FR-216 通知铃铛合并）', () => {
+  it('右侧操作区按「搜索→集群徽标→通知铃铛→账户」固定顺序', () => {
+    expect(HEADER_RIGHT_SLOTS).toEqual(['search', 'clusterBadges', 'notifications', 'account'])
   })
 
   it('搜索靠右：并入右侧操作区且排在最前（不再居中铺中部）', () => {
@@ -19,34 +18,36 @@ describe('header-layout（FR-179 全局页眉右对齐 + 站内信挂载点）',
     expect(HEADER_RIGHT_SLOTS).toContain('search')
   })
 
-  it('FR-183 站内信收件箱挂载点紧邻告警铃铛之前', () => {
-    const inboxIdx = HEADER_RIGHT_SLOTS.indexOf('inbox')
-    const bellIdx = HEADER_RIGHT_SLOTS.indexOf('alertBell')
-    expect(inboxIdx).toBeGreaterThanOrEqual(0)
-    expect(inboxIdx).toBe(bellIdx - 1)
-    expect(INBOX_SLOT).toBe('inbox')
-    expect(INBOX_SLOT_FR).toBe('FR-183')
+  it('FR-216：通知铃铛为单一入口（合并原 收件箱 + 告警铃铛），紧邻账户之前', () => {
+    const notifIdx = HEADER_RIGHT_SLOTS.indexOf('notifications')
+    const accountIdx = HEADER_RIGHT_SLOTS.indexOf('account')
+    expect(notifIdx).toBeGreaterThanOrEqual(0)
+    expect(notifIdx).toBe(accountIdx - 1)
+    expect(NOTIFICATIONS_SLOT).toBe('notifications')
+    // 不再有独立的 inbox / alertBell 槽位。
+    expect(HEADER_RIGHT_SLOTS).not.toContain('inbox' as HeaderSlot)
+    expect(HEADER_RIGHT_SLOTS).not.toContain('alertBell' as HeaderSlot)
   })
 
   it('账户菜单沉最右', () => {
     expect(HEADER_RIGHT_SLOTS[HEADER_RIGHT_SLOTS.length - 1]).toBe('account')
   })
 
-  it('窄屏（<md）仅保留铃铛 + 账户，确保不翻屏', () => {
+  it('窄屏（<md）仅保留通知铃铛 + 账户，确保不翻屏', () => {
     const alwaysVisible = HEADER_RIGHT_SLOTS.filter((s) => slotVisibility(s) === 'always')
-    expect(alwaysVisible).toEqual(['alertBell', 'account'])
+    expect(alwaysVisible).toEqual(['notifications', 'account'])
   })
 
-  it('搜索 ≥md 可见、集群徽标 ≥lg 可见、收件箱为预留挂载点', () => {
+  it('搜索 ≥md 可见、集群徽标 ≥lg 可见、通知铃铛常驻', () => {
     expect(slotVisibility('search')).toBe('md')
     expect(slotVisibility('clusterBadges')).toBe('lg')
-    expect(slotVisibility('inbox')).toBe('reserved')
+    expect(slotVisibility('notifications')).toBe('always')
   })
 
   it('每个槽位都有确定的可见性档位（穷尽）', () => {
-    const slots: HeaderSlot[] = ['search', 'clusterBadges', 'inbox', 'alertBell', 'account']
+    const slots: HeaderSlot[] = ['search', 'clusterBadges', 'notifications', 'account']
     for (const s of slots) {
-      expect(['always', 'md', 'lg', 'reserved']).toContain(slotVisibility(s))
+      expect(['always', 'md', 'lg']).toContain(slotVisibility(s))
     }
   })
 
@@ -54,8 +55,6 @@ describe('header-layout（FR-179 全局页眉右对齐 + 站内信挂载点）',
     expect(visibilityClass('md')).toBe('hidden md:block')
     expect(visibilityClass('lg')).toBe('hidden lg:flex')
     expect(visibilityClass('always')).toBe('')
-    // 预留挂载点本期不渲染可见内容，容器不加显隐类
-    expect(visibilityClass('reserved')).toBe('')
   })
 
   it('搜索框容器为靠右固定上限宽度（不再 flex-1 max-w-md 铺满中部）', () => {

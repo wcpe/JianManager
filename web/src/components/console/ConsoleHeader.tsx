@@ -7,11 +7,10 @@ import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
 import { useInstances } from '@/api/instances'
 import { useMetricOverview } from '@/api/metrics'
-import { useAlertEvents, useUnreadAlertCount } from '@/api/alerts'
+import { useNotificationFeed, useFeedUnreadCount, type FeedItem } from '@/api/notification-feed'
 import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import PageBreadcrumb from './PageBreadcrumb'
-import NotificationInbox from '@/components/NotificationInbox'
 import { searchBoxClass, slotVisibility, visibilityClass } from './header-layout'
 import {
   DropdownMenu,
@@ -29,10 +28,10 @@ const ROLE_LABEL_KEY: Record<number, string> = {
 }
 
 /**
- * 全局顶栏（FR-162，重排见 FR-179）：控制台外壳内容区上方常驻页眉，侧栏保持全高。
+ * 全局顶栏（FR-162，重排见 FR-179；通知合并见 FR-216）：控制台外壳内容区上方常驻页眉，侧栏保持全高。
  * 左 = 当前页面包屑（自动占据剩余宽度）；右 = **靠右对齐的操作区**——
- * 常驻搜索框（占位，Ctrl/⌘+K 聚焦）+ 集群概览徽标 + 站内信收件箱挂载点（FR-183 预留）+
- * 告警铃铛 + 账户菜单（含退出登录，接管 FR-132）。
+ * 常驻搜索框（占位，Ctrl/⌘+K 聚焦）+ 集群概览徽标 + **统一通知铃铛**（FR-216：合并原站内信收件箱 +
+ * 告警铃铛为单一入口，消费统一通知流）+ 账户菜单（含退出登录，接管 FR-132）。
  * 搜索由 FR-162 的居中铺中部改为靠右紧贴操作图标（FR-179），窄屏隐藏不挤垮工作区。
  * 槽位顺序 / 响应式可见性逻辑下沉纯函数 `header-layout.ts`（vitest 覆盖）。
  */
@@ -45,8 +44,7 @@ export default function ConsoleHeader() {
         <SearchBox />
         <div className="flex items-center gap-0.5 sm:gap-1">
           <ClusterBadges />
-          <InboxSlot />
-          <AlertBell />
+          <NotificationBell />
           <AccountMenu />
         </div>
       </div>
@@ -105,14 +103,6 @@ function SearchBox() {
       </kbd>
     </div>
   )
-}
-
-/**
- * 站内信收件箱（FR-183）：位于集群徽标与告警铃铛之间，紧邻铃铛之前。
- * 挂载 FR-183 的收件箱组件（收件箱图标 + 未读计数 + 下拉，接站内信 API）。
- */
-function InboxSlot() {
-  return <NotificationInbox />
 }
 
 /** 单个集群概览徽标：图标 + 计数，可点跳转对应筛选。danger 时计数着红。 */
@@ -174,31 +164,32 @@ function ClusterBadges() {
   )
 }
 
-/** 告警级别 → 圆点配色类。 */
-function levelDotClass(level: string): string {
-  const l = level.toLowerCase()
-  if (l === 'critical' || l === 'error' || l === 'danger') return 'bg-status-danger'
-  if (l === 'warning' || l === 'warn') return 'bg-status-warning'
+/** 统一通知级别 → 圆点配色类（站内信四档；告警三档已在后端就近映射到此）。 */
+function feedLevelDotClass(level: string): string {
+  if (level === 'error') return 'bg-status-danger'
+  if (level === 'warning') return 'bg-status-warning'
+  if (level === 'success') return 'bg-status-success'
   return 'bg-status-info'
 }
 
-/** 告警铃铛（FR-162）：未读计数（30s 轮询）+ 下拉只读最近告警；接现有告警体系，不在此确认/处置。 */
-function AlertBell() {
+/**
+ * 统一通知铃铛（FR-216，见 ADR-048）：合并原「站内信收件箱」+「告警铃铛」为单一入口。
+ * 未读计数（统一：本人站内信 + 全局告警，30s 轮询）+ 下拉只读最近通知（消息/告警混合，各带来源标识与级别色点）；
+ * 点「查看全部」进通知中心页。处置（确认/认领）仍在告警页，本下拉只读预览。
+ */
+function NotificationBell() {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { data: unread = 0 } = useUnreadAlertCount()
-  const { data: events } = useAlertEvents()
-  const recent = (events?.items ?? [])
-    .slice()
-    .sort((a, b) => (a.firedAt < b.firedAt ? 1 : -1))
-    .slice(0, 6)
+  const { data: unread = 0 } = useFeedUnreadCount()
+  const { data: feed } = useNotificationFeed({ pageSize: 8 })
+  const recent = feed?.items ?? []
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          aria-label={t('header.alerts')}
+          aria-label={t('header.notifications')}
           className="relative rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
         >
           <Bell className="size-4" />
@@ -211,30 +202,54 @@ function AlertBell() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-80">
         <div className="flex items-center justify-between px-2 py-1.5 text-xs font-medium">
-          <span>{t('header.alerts')}</span>
+          <span>{t('header.notifications')}</span>
           {unread > 0 && <span className="text-muted-foreground">{t('header.unreadCount', { count: unread })}</span>}
         </div>
         <DropdownMenuSeparator />
         {recent.length === 0 ? (
-          <div className="px-2 py-6 text-center text-xs text-muted-foreground">{t('header.noAlerts')}</div>
+          <div className="px-2 py-6 text-center text-xs text-muted-foreground">{t('notificationCenter.empty')}</div>
         ) : (
           <div className="max-h-72 overflow-y-auto">
-            {recent.map((e) => (
-              <div key={e.id} className="flex items-start gap-2 px-2 py-1.5 text-xs">
-                <span className={cn('mt-1 size-1.5 shrink-0 rounded-full', levelDotClass(e.level))} />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-foreground">{e.message || e.rule?.name || `#${e.ruleId}`}</p>
-                  <p className="text-[11px] text-muted-foreground">{new Date(e.firedAt).toLocaleString()}</p>
-                </div>
-                {!e.read && <span className="mt-1 size-1.5 shrink-0 rounded-full bg-primary" />}
-              </div>
+            {recent.map((it) => (
+              <NotificationPreviewRow key={`${it.source}-${it.id}`} item={it} />
             ))}
           </div>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => navigate('/alerts')}>{t('header.viewAllAlerts')}</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => navigate('/notifications')}>
+          {t('header.viewAllNotifications')}
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  )
+}
+
+/** 下拉内单条通知预览：级别色点 + 来源徽标 + 标题/正文 + 时间 + 未读点。 */
+function NotificationPreviewRow({ item }: { item: FeedItem }) {
+  const { t } = useTranslation()
+  const sourceLabel = item.source === 'alert' ? t('notificationCenter.badgeAlert') : t('notificationCenter.badgeMessage')
+  return (
+    <div className="flex items-start gap-2 px-2 py-1.5 text-xs">
+      <span className={cn('mt-1 size-1.5 shrink-0 rounded-full', feedLevelDotClass(item.level))} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span
+            className={cn(
+              'shrink-0 rounded px-1 py-px text-[10px] font-medium',
+              item.source === 'alert'
+                ? 'bg-status-warning/15 text-status-warning'
+                : 'bg-primary/10 text-primary',
+            )}
+          >
+            {sourceLabel}
+          </span>
+          <p className="truncate text-foreground">{item.title}</p>
+        </div>
+        {item.body && <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{item.body}</p>}
+        <p className="text-[11px] text-muted-foreground">{new Date(item.createdAt).toLocaleString()}</p>
+      </div>
+      {!item.read && <span className="mt-1 size-1.5 shrink-0 rounded-full bg-primary" />}
+    </div>
   )
 }
 

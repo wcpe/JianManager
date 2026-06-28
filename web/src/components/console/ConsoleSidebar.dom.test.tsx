@@ -7,10 +7,11 @@ import { useConsoleStore } from '@/stores/console'
 import ConsoleSidebar from './ConsoleSidebar'
 
 /**
- * ConsoleSidebar 信息架构（FR-215）：「观测」域含 监控总览/日志/统计；任务中心迁「系统」；
- * 告警过渡留位仍可达。验侧栏渲染出正确 IA、链接指向正确路由。
+ * ConsoleSidebar 信息架构（FR-215 + FR-216）：「观测」域含 监控总览/日志/统计；任务中心迁「系统」；
+ * 告警过渡留位已由 FR-216 收口——观测域不再有告警项，通知中心入口落「系统/账户与审计」。
+ * 验侧栏渲染出正确 IA、链接指向正确路由。
  */
-describe('ConsoleSidebar 观测导航重构（FR-215）', () => {
+describe('ConsoleSidebar 观测导航重构（FR-215 / FR-216）', () => {
   beforeEach(() => {
     // 已登录态：折叠态侧栏在「集群」域内嵌实例树/节点切换会触发 useInstances/useNodes，
     // 登录后这些查询命中假后端正常返回（否则触发刷新而无 refreshToken 抛未处理拒绝）。
@@ -52,12 +53,25 @@ describe('ConsoleSidebar 观测导航重构（FR-215）', () => {
     expect(within(sysGroup).getByRole('link', { name: '任务中心' })).toBeInTheDocument()
   })
 
-  it('告警过渡留位仍在观测域内可达（FR-216 接手前）', () => {
+  it('观测域不再有「告警」项（FR-216 收口）', () => {
     renderWithProviders(<ConsoleSidebar />)
-    const alerts = screen.getByRole('link', { name: '告警' })
-    expect(alerts).toHaveAttribute('href', '/alerts')
     const obsHeader = screen.getByRole('button', { name: '观测' })
     const obsGroup = obsHeader.parentElement as HTMLElement
-    expect(within(obsGroup).getByRole('link', { name: '告警' })).toBeInTheDocument()
+    expect(within(obsGroup).queryByRole('link', { name: '告警' })).toBeNull()
+  })
+
+  it('通知中心入口落「系统/账户与审计」，链接 /notifications（FR-216）', () => {
+    renderWithProviders(<ConsoleSidebar />)
+    const notif = screen.getByRole('link', { name: '通知中心' })
+    expect(notif).toHaveAttribute('href', '/notifications')
+
+    // 通知中心应落在「系统」分组容器内、不在「观测」域。
+    const sysHeader = screen.getByRole('button', { name: '系统' })
+    const sysGroup = sysHeader.parentElement as HTMLElement
+    expect(within(sysGroup).getByRole('link', { name: '通知中心' })).toBeInTheDocument()
+
+    const obsHeader = screen.getByRole('button', { name: '观测' })
+    const obsGroup = obsHeader.parentElement as HTMLElement
+    expect(within(obsGroup).queryByRole('link', { name: '通知中心' })).toBeNull()
   })
 })

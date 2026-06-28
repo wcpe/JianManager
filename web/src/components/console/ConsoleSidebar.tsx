@@ -101,7 +101,8 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     // 「监控」域升级为「观测」域（FR-215）：下设 监控/日志/统计 三子类。
-    // 任务中心已迁出至「系统·平台与维护」；告警为 FR-216 接手前的过渡留位（见下方注释）。
+    // 任务中心已迁出至「系统·平台与维护」；告警在 FR-216 已并入「系统/账户与审计」的统一
+    // 通知中心，故观测域不再有独立告警项（FR-215 过渡留位已由 FR-216 收口移除）。
     key: 'observability',
     labelKey: 'nav.observability',
     icon: Activity,
@@ -109,9 +110,6 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/monitor', labelKey: 'nav.monitoring', icon: Activity },
       { to: '/logs', labelKey: 'nav.logs', icon: ScrollText },
       { to: '/statistics', labelKey: 'nav.statistics', icon: BarChart3 },
-      // 告警过渡留位（FR-215）：保证侧栏仍可达；FR-216 落地后将告警并入「系统/账户与审计」
-      // 的统一通知中心并移除此项，故本 FR 不并入观测三子类、仅留位。
-      { to: '/alerts', labelKey: 'nav.alerts', icon: Bell },
     ],
   },
   {
@@ -147,6 +145,8 @@ const NAV_GROUPS: NavGroup[] = [
       {
         labelKey: 'nav.sysAccount',
         children: [
+          // 通知中心（FR-216）：站内信 + 告警合并的统一通知流入口（页眉铃铛主入口，此为侧栏入口）。
+          { to: '/notifications', labelKey: 'nav.notifications', icon: Bell },
           { to: '/users', labelKey: 'nav.users', icon: User },
           { to: '/groups', labelKey: 'nav.groups', icon: UsersRound },
           { to: '/settings', labelKey: 'nav.systemSettings', icon: Settings2 },

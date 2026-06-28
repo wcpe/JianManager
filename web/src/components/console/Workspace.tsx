@@ -32,6 +32,7 @@ const DatabasePage = lazy(() => import('@/pages/DatabasePage'))
 const SystemUpdatePage = lazy(() => import('@/pages/SystemUpdatePage'))
 const LicensesPage = lazy(() => import('@/pages/LicensesPage'))
 const TasksPage = lazy(() => import('@/pages/TasksPage'))
+const NotificationCenterPage = lazy(() => import('@/pages/NotificationCenterPage'))
 const SuperWorkbenchPage = lazy(() => import('./SuperWorkbenchPage'))
 const DirectorConsolePage = lazy(() => import('./DirectorConsolePage'))
 /**
@@ -101,6 +102,8 @@ export default function Workspace() {
           <Route path="backup-storages" element={<BackupStoragesPage />} />
           <Route path="audit" element={<AuditPage />} />
           <Route path="tasks" element={<TasksPage />} />
+          {/* 通知中心（FR-216）：站内信 + 告警合并的统一通知流页。 */}
+          <Route path="notifications" element={<NotificationCenterPage />} />
           <Route path="client-channels" element={<ClientChannelsPage />} />
           <Route path="client-channels/:id/publish" element={<ClientPublishPage />} />
           <Route path="logs" element={<LogsPage />} />
