@@ -50,6 +50,7 @@ import DangerConfirm from '@/components/DangerConfirm'
 import ClientVersionsPanel from '@/components/ClientVersionsPanel'
 import ClientStatsPanel from '@/components/ClientStatsPanel'
 import ClientIntegrationGuide from '@/components/ClientIntegrationGuide'
+import ClientDistFlowGuide from '@/components/ClientDistFlowGuide'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
@@ -94,6 +95,8 @@ export default function ClientChannelsPage() {
           </Button>
         )}
       </div>
+
+      <ClientDistFlowGuide />
 
       {isEmpty ? (
         <EmptyChannelsGuide onCreate={() => setCreateOpen(true)} />

@@ -1692,6 +1692,26 @@
     "copyFailed": "Copy failed",
     "downloadFailed": "Download failed (jar may not be embedded)"
   },
+  "clientDistFlow": {
+    "title": "How does distribution work?",
+    "subtitle": "First release vs. day-to-day updates at a glance",
+    "onceBadge": "do once",
+    "loopBadge": "repeat",
+    "firstTitle": "① First release",
+    "first1": "Create a distribution channel (one per server).",
+    "first2": "Create a pull key — the player updater's keycard. Keep it safe and viewable anytime; lose it and players stop receiving updates.",
+    "first3": "Publish the first version: upload files or a zip modpack → arrange the directory tree → publish, and the system signs it automatically.",
+    "first4": "Pack it for players: bundle wedge.jar + updater-core.jar + config (channel + key) into the modpack.",
+    "first5": "Hand out the modpack once — you never have to re-send the modpack again.",
+    "dailyTitle": "② Day-to-day updates",
+    "daily1": "You publish a new version in the panel.",
+    "daily2": "Players update automatically on launch: wedge → loads updater-core → fetches the signed manifest with the key → verifies the signature → downloads only changed files → enters the game.",
+    "daily3": "If anything goes wrong, it rolls back to the last good version automatically and players still get in.",
+    "tipsTitle": "Three things to remember",
+    "tipPackage": "The modpack ships only once; from then on this system handles updates automatically — no need to re-send the modpack.",
+    "tipKey": "Don't lose the key — it's the player's update keycard (its plaintext is viewable anytime here); if it's truly lost, rotate it and re-send the config.",
+    "tipWedge": "The wedge is fixed and rarely touched; only the updater-core is what you upgrade or roll back."
+  },
   "templates": {
     "title": "Server Templates",
     "subtitle": "Reusable templates for creating instances; deleting a template does not affect instances already created from it",
