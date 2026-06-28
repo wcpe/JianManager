@@ -30,9 +30,14 @@ describe('ConsoleSidebar 观测导航重构（FR-215 / FR-216）', () => {
     expect(screen.queryByRole('button', { name: '监控' })).toBeNull()
   })
 
-  it('观测域下含 监控总览/日志/统计 三子项，链接正确', () => {
+  it('观测域下含 监控总览/客户端分发监控/日志/统计 子项，链接正确', () => {
     renderWithProviders(<ConsoleSidebar />)
     expect(screen.getByRole('link', { name: '监控总览' })).toHaveAttribute('href', '/monitor')
+    // 客户端分发监控（FR-218）：平级路径 /client-dist-monitor，落观测域。
+    expect(screen.getByRole('link', { name: '客户端分发监控' })).toHaveAttribute(
+      'href',
+      '/client-dist-monitor',
+    )
     expect(screen.getByRole('link', { name: '日志' })).toHaveAttribute('href', '/logs')
     expect(screen.getByRole('link', { name: '统计' })).toHaveAttribute('href', '/statistics')
   })

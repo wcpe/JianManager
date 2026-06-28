@@ -26,6 +26,7 @@ const SettingsPage = lazy(() => import('@/pages/SettingsPage'))
 const StoragePage = lazy(() => import('@/pages/StoragePage'))
 const LogsPage = lazy(() => import('@/pages/LogsPage'))
 const StatisticsPage = lazy(() => import('@/pages/StatisticsPage'))
+const ClientDistMonitoringPage = lazy(() => import('@/pages/ClientDistMonitoringPage'))
 const ClientChannelsPage = lazy(() => import('@/pages/ClientChannelsPage'))
 const ClientPublishPage = lazy(() => import('@/pages/ClientPublishPage'))
 const DatabasePage = lazy(() => import('@/pages/DatabasePage'))
@@ -109,6 +110,9 @@ export default function Workspace() {
           <Route path="logs" element={<LogsPage />} />
           {/* 观测·统计占位页（FR-215）；实质内容由 FR-220 补齐。 */}
           <Route path="statistics" element={<StatisticsPage />} />
+          {/* 观测·客户端分发监控页（FR-218）：消费 FR-217 观测底座出时序趋势 + 分布/榜单，总览 + 频道筛选。
+              用平级路径（非 /monitor/* 嵌套）避免侧栏「监控总览」NavLink 前缀匹配误高亮。 */}
+          <Route path="client-dist-monitor" element={<ClientDistMonitoringPage />} />
           {/* 观测域同义旧链接重定向兼容（FR-215）：避免外部/手输旧路径 404。 */}
           <Route path="monitoring" element={<Navigate to="/monitor" replace />} />
           <Route path="stats" element={<Navigate to="/statistics" replace />} />

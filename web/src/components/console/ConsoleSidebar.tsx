@@ -108,6 +108,9 @@ const NAV_GROUPS: NavGroup[] = [
     icon: Activity,
     children: [
       { to: '/monitor', labelKey: 'nav.monitoring', icon: Activity },
+      // 客户端分发监控（FR-218）：消费 FR-217 观测底座出分发时序趋势 + 分布/榜单（总览 + 频道筛选）。
+      // 平级路径 /client-dist-monitor（非 /monitor/* 嵌套）避免「监控总览」NavLink 前缀匹配误高亮。
+      { to: '/client-dist-monitor', labelKey: 'nav.clientDistMonitor', icon: DownloadCloud },
       { to: '/logs', labelKey: 'nav.logs', icon: ScrollText },
       { to: '/statistics', labelKey: 'nav.statistics', icon: BarChart3 },
     ],

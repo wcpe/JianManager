@@ -84,11 +84,31 @@ export interface ClientDistDistItem {
   count: number
 }
 
-/** 客户端分发观测复合视图（FR-217，见 ADR-049）。平台统计页只取 summary + 分布，不画 series 时序（那归 FR-218）。 */
+/** 小时桶时序点（series[]，按 ts 升序；跨频道时同小时合并；缺数小时无点）。FR-218 分发监控页画时序趋势消费。 */
+export interface ClientDistSeriesPoint {
+  ts: string
+  manifestPulls: number
+  artifactPulls: number
+  downloadBytes: number
+  casHit: number
+  casMiss: number
+  activeMachines: number
+  updateTotal: number
+  updateSuccess: number
+  updateFailStatic: number
+  updateRolledBack: number
+  updateError: number
+}
+
+/**
+ * 客户端分发观测复合视图（FR-217，见 ADR-049）。
+ * 平台统计页（FR-220）只取 summary + 分布；分发监控页（FR-218）额外画 series 时序趋势。
+ */
 export interface ClientDistObservability {
   channelId: string
   from: string
   to: string
+  series: ClientDistSeriesPoint[]
   summary: ClientDistObservabilitySummary
   versionDist: ClientDistDistItem[]
   platformDist: ClientDistDistItem[]
