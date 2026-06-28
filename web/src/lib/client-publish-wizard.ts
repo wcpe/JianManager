@@ -80,3 +80,143 @@ export function prevStep(step: PublishStepId): PublishStepId {
   const i = PUBLISH_STEPS.indexOf(step)
   return PUBLISH_STEPS[Math.max(i - 1, 0)]
 }
+
+// ── FR-191：zip 上传归一 / 文件树 / 草稿 dirty 判定 ─────────────────────────
+
+/**
+ * 归一为 manifest 用的 POSIX 相对路径（FR-191）：
+ * 反斜杠→正斜杠、剥离前导 `./` 段与前导 `/`、压缩重复斜杠、去首尾空白。
+ * 仅做形态归一，**不**解析 `..` 越界（越界由 {@link isDraftPathValid} 拦），
+ * 既用于 zip entry 相对路径，也用于编排时的路径输入清洗。
+ */
+export function normalizeManifestPath(raw: string): string {
+  let p = raw.trim().replace(/\\/g, '/')
+  // 剥离前导 ./ 段（可能多层：././x）
+  while (p.startsWith('./')) p = p.slice(2)
+  if (p === '.') p = ''
+  // 压缩重复斜杠
+  p = p.replace(/\/{2,}/g, '/')
+  // 剥离前导斜杠（绝对路径化为相对）
+  p = p.replace(/^\/+/, '')
+  return p
+}
+
+/** 是否为 zip 文件名（按扩展名，大小写不敏感）。 */
+export function isZipFilename(name: string): boolean {
+  return /\.zip$/i.test(name.trim())
+}
+
+/**
+ * 发布向导是否存在未发布草稿（FR-191 防误关判定）。
+ * 已上传任一文件（内容寻址、已落服务端）即视为有草稿——
+ * 关闭/点遮罩/Esc 需二次确认才能放弃；空向导（0 文件）照常关闭，不拦截。
+ */
+export function hasPublishDraft(draftCount: number): boolean {
+  return draftCount > 0
+}
+
+/** 文件树叶节点（一个 manifest 文件 + 回源 index 供编排定位）。 */
+export interface TreeFile {
+  /** 在草稿/文件数组中的下标（编排 patch/remove 定位用）。 */
+  index: number
+  /** 完整相对路径（POSIX）。 */
+  path: string
+  /** 叶文件名（path 末段）。 */
+  name: string
+  sync: ManifestFileLike['sync']
+  platform: ManifestFileLike['platform']
+  size: number
+  /** 内容是否锁定（内容寻址不可改字节，仅可编排/移除）。 */
+  locked: boolean
+}
+
+/** 文件树目录节点（递归）。聚合字段便于 UI 显示子树规模。 */
+export interface TreeDir {
+  /** 目录名（末段）。 */
+  name: string
+  /** 完整相对路径（POSIX，从根到本目录）。 */
+  path: string
+  /** 子目录（字母序）。 */
+  dirs: TreeDir[]
+  /** 本目录直属文件（字母序）。 */
+  files: TreeFile[]
+  /** 递归文件总数（含子目录）。 */
+  fileCount: number
+  /** 递归字节总和（含子目录）。 */
+  totalSize: number
+}
+
+/** 构树所需的最小 manifest 文件形态（避免与 api 层类型耦合）。 */
+export interface ManifestFileLike {
+  path: string
+  sync: 'strict' | 'once' | 'ignore'
+  platform: '' | 'windows' | 'macos' | 'linux'
+  size: number
+}
+
+/**
+ * 把扁平的 manifest 文件列表按 `path` 的 `/` 分段构建为目录树（FR-191）。
+ * 叶=文件、枝=目录；目录在前文件在后、各自字母序；目录聚合递归文件数与字节数。
+ * 文件携回源 `index` 以便编排（改路径/sync/platform/删除）定位原数组项。
+ * 纯函数、与 React 无关，便于单测。
+ */
+export function buildFileTree(files: ManifestFileLike[]): TreeDir {
+  const root: TreeDir = { name: '', path: '', dirs: [], files: [], fileCount: 0, totalSize: 0 }
+
+  files.forEach((f, index) => {
+    const segments = normalizeManifestPath(f.path)
+      .split('/')
+      .filter((s) => s !== '')
+    if (segments.length === 0) return // 防御：纯斜杠/空路径跳过
+    const name = segments[segments.length - 1]
+    const dirSegments = segments.slice(0, -1)
+
+    // 逐段下钻/创建目录节点
+    let cursor = root
+    let acc = ''
+    for (const seg of dirSegments) {
+      acc = acc === '' ? seg : `${acc}/${seg}`
+      let child = cursor.dirs.find((d) => d.name === seg)
+      if (!child) {
+        child = { name: seg, path: acc, dirs: [], files: [], fileCount: 0, totalSize: 0 }
+        cursor.dirs.push(child)
+      }
+      cursor = child
+    }
+
+    cursor.files.push({
+      index,
+      path: segments.join('/'),
+      name,
+      sync: f.sync,
+      platform: f.platform,
+      size: f.size,
+      locked: true,
+    })
+  })
+
+  sortTree(root)
+  aggregate(root)
+  return root
+}
+
+/** 递归把每个目录的子目录/文件按名字母序排序（目录天然在 dirs、文件在 files，渲染时目录在前）。 */
+function sortTree(dir: TreeDir): void {
+  dir.dirs.sort((a, b) => a.name.localeCompare(b.name))
+  dir.files.sort((a, b) => a.name.localeCompare(b.name))
+  dir.dirs.forEach(sortTree)
+}
+
+/** 递归回填每个目录的 fileCount/totalSize（含子目录），返回本目录聚合值。 */
+function aggregate(dir: TreeDir): { count: number; size: number } {
+  let count = dir.files.length
+  let size = dir.files.reduce((s, f) => s + f.size, 0)
+  for (const child of dir.dirs) {
+    const agg = aggregate(child)
+    count += agg.count
+    size += agg.size
+  }
+  dir.fileCount = count
+  dir.totalSize = size
+  return { count, size }
+}
