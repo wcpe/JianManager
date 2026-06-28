@@ -1944,6 +1944,29 @@
 - **查询参数**: `channelId`（频道）、`days`（窗口天数，默认 30，上限 365）
 - **响应** (200): `{ "channelId", "days", "downloads":[{day,requests,bytes}], "versions":[{version,requests}], "results":[{result,count}], "successRate", "rollbackRate", "activeMachines", "topIps":[{ip,count}] }`
 
+### GET /api/v1/client-dist/observability
+- **描述**: 客户端分发**观测数据底座**（FR-217，见 ADR-049）：消费后台离线卷积的小时级时序快照 `client_dist_snapshots`（源 FR-093 events + FR-094 telemetry），返**跨频道/单频道**的时序 + 区间分布聚合 + 汇总标量。与 FR-095 `/client-dist/stats`（单频道按日看板）并存不替代——本端点服务观测·分发监控页的跨频道/平台时序
+- **关联 FR**: FR-217（消费方 FR-218/219）| **鉴权**: **JWT，平台管理员** | **审计**: `client_dist_observability.query`
+- **查询参数**: `channelId`（可，省略=**总**，跨频道合并含空频道桶）、`from`/`to`（可，RFC3339，同时给且 `to>from`）、`range`（可，无 from/to 时回退枚举 `24h`/`7d`/`30d`/`90d`/`180d`，默认 `7d`）
+- **响应** (200):
+  ```
+  {
+    "channelId", "from", "to",
+    "series": [{ ts, manifestPulls, artifactPulls, downloadBytes, casHit, casMiss,
+                 activeMachines, updateTotal, updateSuccess, updateFailStatic,
+                 updateRolledBack, updateError }],   // 按 ts 升序的小时桶；跨频道时同小时合并；缺数小时无点
+    "summary": { manifestPulls, artifactPulls, downloadBytes, casHit, casMiss,
+                 updateTotal, updateSuccess, updateFailStatic, updateRolledBack, updateError,
+                 successRate, failStaticRate, rollbackRate, casHitRate,
+                 activeMachines, activeMachinesExact },   // activeMachinesExact: 区间在明细保留窗(14d)内=精确去重独立数 true；窗外=各桶人次求和近似 false（ADR-049 §4）
+    "versionDist": [{ version, count }],     // 区间内跨桶合并、按 count 降序
+    "platformDist": [{ os, count }],
+    "lagDist": [{ lag, count }]              // current_version - toVersion，按 lag 升序
+  }
+  ```
+- **错误**: 400 `INVALID_RANGE`（from/to 非法或 `to<=from`，或 range 非枚举）| 403 `FORBIDDEN`（非平台管理员）| 500 `INTERNAL_ERROR`
+- **说明**: 未知 `channelId` 返 200 空时序 + 零汇总（不 404，避免泄露频道存在性、便于前端统一空态）。machineId 客户端可伪造、不可信，仅统计近似（ADR-023）
+
 ### GET /api/v1/client-dist/updater-jars
 - **描述**: 内嵌客户端更新器 jar 的版本与可用性（FR-107 接入引导，供前端展示 + 禁用缺失下载）
 - **关联 FR**: FR-107 | **鉴权**: **JWT，平台管理员**
