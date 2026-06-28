@@ -489,7 +489,8 @@ export const handlers = [
     return HttpResponse.json(buildStats(channelId, days))
   }),
 
-  // 分发观测（FR-217）：时序 + 分布 + 汇总。
+  // 客户端分发观测（FR-217，消费方含 FR-220 平台统计页）：跨频道/单频道汇总 + 分布。
+  // 平台管理员端点；mock 默认用户 role=10，requireAuth 即可放行（真后端按 role 403）。
   domainRoute('get', '/client-dist/observability', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
