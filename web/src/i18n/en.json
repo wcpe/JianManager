@@ -1211,6 +1211,23 @@
     "truncated": "Truncated",
     "listTruncated": "Too many entries; truncated"
   },
+  "fileBrowser": {
+    "pickFile": "Pick a file on the left to preview its content",
+    "loading": "Loading...",
+    "loadFailed": "Failed to load",
+    "empty": "No files",
+    "emptyDir": "Empty directory",
+    "dirSummary": "{{n}} files · {{size}}",
+    "download": "Download",
+    "actions": "Actions",
+    "truncated": "Content too long; truncated",
+    "binaryNotice": "Binary file; text preview not supported (download to inspect)",
+    "tooLargeNotice": "File too large ({{size}}); online preview not supported (download to inspect)"
+  },
+  "resourceCard": {
+    "manage": "Manage",
+    "browse": "Browse"
+  },
   "fileVersions": {
     "title": "Version History",
     "show": "History",

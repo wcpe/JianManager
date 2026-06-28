@@ -1190,6 +1190,23 @@
     "truncated": "已截断",
     "listTruncated": "条目过多，已截断"
   },
+  "fileBrowser": {
+    "pickFile": "在左侧选择文件以预览内容",
+    "loading": "正在加载...",
+    "loadFailed": "加载失败",
+    "empty": "暂无文件",
+    "emptyDir": "空目录",
+    "dirSummary": "{{n}} 个文件 · {{size}}",
+    "download": "下载",
+    "actions": "操作",
+    "truncated": "内容过长，已截断",
+    "binaryNotice": "二进制文件，不支持文本预览（可下载查看）",
+    "tooLargeNotice": "文件过大（{{size}}），不支持在线预览（可下载查看）"
+  },
+  "resourceCard": {
+    "manage": "管理",
+    "browse": "浏览"
+  },
   "fileVersions": {
     "title": "历史版本",
     "show": "历史版本",
