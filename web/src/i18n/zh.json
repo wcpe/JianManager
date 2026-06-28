@@ -1608,7 +1608,18 @@
     "stepConfigureDesc": "为每个文件设置游戏目录内的目标相对路径、同步策略与适用平台。",
     "stepMeta": "托管目录 / 说明",
     "stepReview": "预览发布",
-    "stepReviewDesc": "确认下列内容无误后发布。发布即以更高版本号切为 latest，玩家侧将拉取此版本。"
+    "stepReviewDesc": "确认下列内容无误后发布。发布即以更高版本号切为 latest，玩家侧将拉取此版本。",
+    "addZip": "上传 ZIP 整合包",
+    "zipHint": "上传 .zip 会在浏览器内解包，按包内目录结构自动编排为下方文件树；散文件与 zip 可混合累加。",
+    "uploadProgress": "上传中 {{done}}/{{total}}",
+    "lockedHint": "文件内容已锁定（内容寻址 sha256 不可变），仅可编排路径/目录、同步策略、适用平台或移除。",
+    "locked": "锁定",
+    "contentLocked": "内容已锁定（内容寻址，不可修改字节，仅可编排路径/策略或移除）",
+    "treeEmpty": "暂无文件",
+    "treeDirSummary": "{{n}} 个文件 · {{size}}",
+    "discardTitle": "放弃发布草稿？",
+    "discardDesc": "已上传 {{n}} 个文件的编排草稿（文件已在服务端，但「发哪些 + 各自路径/策略」未发布）。关闭将丢弃这些编排，需重新设置。",
+    "discardConfirm": "放弃并关闭"
   },
   "clientStats": {
     "tab": "统计",

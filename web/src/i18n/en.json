@@ -1629,7 +1629,18 @@
     "stepConfigureDesc": "Set each file's target relative path within the game directory, sync policy, and target platform.",
     "stepMeta": "Managed Dirs / Note",
     "stepReview": "Review & Publish",
-    "stepReviewDesc": "Review the items below, then publish. Publishing switches latest to a higher version number; players will fetch this version."
+    "stepReviewDesc": "Review the items below, then publish. Publishing switches latest to a higher version number; players will fetch this version.",
+    "addZip": "Upload ZIP Pack",
+    "zipHint": "Uploading a .zip unpacks it in the browser and arranges it into the tree below by its internal directory structure; loose files and zips can be mixed and accumulated.",
+    "uploadProgress": "Uploading {{done}}/{{total}}",
+    "lockedHint": "File content is locked (content-addressed sha256 is immutable); you can only arrange path/dir, sync policy, target platform, or remove.",
+    "locked": "Locked",
+    "contentLocked": "Content locked (content-addressed; bytes cannot be changed, only arranged or removed)",
+    "treeEmpty": "No files",
+    "treeDirSummary": "{{n}} file(s) · {{size}}",
+    "discardTitle": "Discard publish draft?",
+    "discardDesc": "You have an arrangement draft for {{n}} uploaded file(s) (files are on the server, but which to publish and their paths/policies are not). Closing discards this arrangement; you'll need to set it up again.",
+    "discardConfirm": "Discard & Close"
   },
   "clientStats": {
     "tab": "Stats",
