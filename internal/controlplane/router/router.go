@@ -11,11 +11,11 @@ import (
 
 // Services 聚合所有服务依赖。
 type Services struct {
-	Auth               *service.AuthService
-	User               *service.UserService
-	Group              *service.GroupService
-	Node               *service.NodeService
-	NodeRepair         *service.NodeRepairService
+	Auth       *service.AuthService
+	User       *service.UserService
+	Group      *service.GroupService
+	Node       *service.NodeService
+	NodeRepair *service.NodeRepairService
 	// NodeProxy 节点级出站代理管控（FR-185，见 ADR-043）；nil 时节点代理端点关闭。
 	NodeProxy          *service.NodeProxyService
 	Instance           *service.InstanceService
@@ -62,9 +62,11 @@ type Services struct {
 	ClientIPGuard      *service.ClientIPGuardService
 	ClientTelemetry    *service.ClientTelemetryService
 	ClientDistStats    *service.ClientDistStatsService
-	JmPack             *service.JmPackService
-	RuntimeAssets      *service.RuntimeAssetsService
-	EnrollToken        *service.EnrollTokenService
+	// ClientDistObservability 分发观测时序底座（FR-217，见 ADR-049）。
+	ClientDistObservability *service.ClientDistObservabilityService
+	JmPack                  *service.JmPackService
+	RuntimeAssets           *service.RuntimeAssetsService
+	EnrollToken             *service.EnrollTokenService
 	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
 	EnrollInstall EnrollInstallConfig
 	Storage       *service.StorageService
@@ -329,6 +331,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.ClientDistStats != nil {
 			clientStatsHandler := NewClientStatsHandler(svcs.ClientDistStats)
 			clientStatsHandler.RegisterRoutes(admin)
+		}
+
+		// 客户端分发观测数据底座：跨频道/平台时序 + 区间分布聚合（FR-217 / ADR-049）。限平台管理员 + 审计。
+		if svcs.ClientDistObservability != nil {
+			clientDistObsHandler := NewClientDistObservabilityHandler(svcs.ClientDistObservability, svcs.Audit)
+			clientDistObsHandler.RegisterRoutes(admin)
 		}
 
 		// 客户端更新器接入引导：内嵌 wedge/updater-core jar 版本查询 + 下载（FR-107）。

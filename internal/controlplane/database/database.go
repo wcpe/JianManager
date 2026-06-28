@@ -127,6 +127,9 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.ClientIPRule{},
 		&model.ClientTelemetry{},
 		&model.ClientTelemetryDaily{},
+		// 客户端分发观测时序快照（FR-217，见 ADR-049）：离线把 events/telemetry 卷积为
+		// 按频道×小时桶的观测快照，供观测·分发监控页跨频道/平台时序，与写时聚合解耦。
+		&model.ClientDistSnapshot{},
 		// JBIS 业务事件汇聚（FR-116 底座 / FR-122 经济，见 ADR-028）：
 		// 通用 envelope（按 domain+dedupKey 去重）+ 经济结构化镜像（node→zone 维度）+ 经济变更审计。
 		&model.BusinessEvent{},
