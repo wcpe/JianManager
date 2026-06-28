@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   Copy,
   DownloadCloud,
+  Eye,
   KeyRound,
   Plus,
   RefreshCw,
@@ -20,6 +21,7 @@ import {
   useCreateClientKey,
   useRotateClientKey,
   useRevokeClientKey,
+  useRevealClientKey,
   type ClientChannel,
   type ClientPullKey,
   type ClientKeyWithSecret,
@@ -518,10 +520,29 @@ function KeysSegment({
   const { t } = useTranslation()
   const rotateKey = useRotateClientKey()
   const revokeKey = useRevokeClientKey()
+  const revealKey = useRevealClientKey()
 
   const [secret, setSecret] = useState<ClientKeyWithSecret | null>(null)
   const [revokeTarget, setRevokeTarget] = useState<ClientPullKey | null>(null)
   const [rotateTarget, setRotateTarget] = useState<ClientPullKey | null>(null)
+  // 查看明文弹窗（FR-192）：保存当前查看到的密钥名 + 明文。
+  const [revealed, setRevealed] = useState<{ name: string; key: string } | null>(null)
+
+  const doReveal = async (key: ClientPullKey) => {
+    if (!key.revealable) {
+      toast.error(t('clientChannels.notRevealable'))
+      return
+    }
+    try {
+      const res = await revealKey.mutateAsync({ channelId, keyId: key.id })
+      setRevealed({ name: key.name, key: res.key })
+    } catch (e) {
+      // 兜底：后端返 KEY_NOT_REVEALABLE（如并发被轮换/降级）也走不可找回提示。
+      const code = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
+      if (code === 'KEY_NOT_REVEALABLE') toast.error(t('clientChannels.notRevealable'))
+      else toast.error(errMsg(e, t('clientChannels.revealFailed', '查看密钥失败')))
+    }
+  }
 
   const doRotate = async (key: ClientPullKey) => {
     setRotateTarget(null)
@@ -549,7 +570,10 @@ function KeysSegment({
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-sm text-muted-foreground max-w-2xl">
-          {t('clientChannels.keysSubtitle', '拉取密钥落库只存哈希，明文仅创建/轮换时一次性显示。请妥善保存到 jm-updater.json。')}
+          {t(
+            'clientChannels.keysSubtitleViewable',
+            '拉取密钥以可逆加密存储，可随时查看明文并复制到 jm-updater.json。轮换会使已分发客户端失效。',
+          )}
         </p>
         <Button onClick={() => onCreateOpenChange(true)} className="shrink-0">
           <Plus className="size-4" /> {t('clientChannels.createKey', '创建密钥')}
@@ -587,6 +611,14 @@ function KeysSegment({
                 <td className="p-3">
                   <div className="flex gap-3">
                     <button
+                      className="text-primary hover:underline inline-flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed disabled:no-underline"
+                      onClick={() => doReveal(k)}
+                      disabled={!k.revealable || revealKey.isPending}
+                      title={k.revealable ? undefined : t('clientChannels.notRevealable')}
+                    >
+                      <Eye className="size-3.5" /> {t('clientChannels.reveal', '查看')}
+                    </button>
+                    <button
                       className="text-primary hover:underline inline-flex items-center gap-1 disabled:opacity-40"
                       onClick={() => setRotateTarget(k)}
                       disabled={k.revoked}
@@ -623,6 +655,8 @@ function KeysSegment({
       />
 
       <SecretDialog secret={secret} onClose={() => setSecret(null)} />
+
+      <RevealDialog revealed={revealed} onClose={() => setRevealed(null)} />
 
       <DangerConfirm
         open={rotateTarget !== null}
@@ -761,6 +795,49 @@ function SecretDialog({ secret, onClose }: { secret: ClientKeyWithSecret | null;
         </DialogHeader>
         <div className="flex items-center gap-2 rounded-md border bg-muted/50 p-3">
           <code className="flex-1 break-all font-mono text-sm">{secret?.key}</code>
+          <Button variant="outline" size="sm" onClick={copy} className="shrink-0">
+            <Copy className="size-4" /> {t('clientChannels.copy', '复制')}
+          </Button>
+        </div>
+        <DialogFooter>
+          <Button onClick={onClose}>{t('common.close', '关闭')}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/** 查看已存密钥明文弹窗（FR-192，可逆加密存储 → 可随时查看）：展示明文 + 复制（走 copyToClipboard）。 */
+function RevealDialog({
+  revealed,
+  onClose,
+}: {
+  revealed: { name: string; key: string } | null
+  onClose: () => void
+}) {
+  const { t } = useTranslation()
+
+  const copy = async () => {
+    if (!revealed) return
+    const ok = await copyToClipboard(revealed.key)
+    if (ok) toast.success(t('clientChannels.copied', '已复制到剪贴板'))
+    else toast.error(t('clientChannels.copyFailed', '复制失败，请手动选择复制'))
+  }
+
+  return (
+    <Dialog open={revealed !== null} onOpenChange={(v: boolean) => { if (!v) onClose() }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            {t('clientChannels.revealTitle', '拉取密钥明文')}
+            {revealed ? `（${revealed.name}）` : ''}
+          </DialogTitle>
+          <DialogDescription>
+            {t('clientChannels.revealDesc', '用于玩家侧更新器鉴权拉取，请复制到 jm-updater.json 妥善保存。')}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex items-center gap-2 rounded-md border bg-muted/50 p-3">
+          <code className="flex-1 break-all font-mono text-sm">{revealed?.key}</code>
           <Button variant="outline" size="sm" onClick={copy} className="shrink-0">
             <Copy className="size-4" /> {t('clientChannels.copy', '复制')}
           </Button>

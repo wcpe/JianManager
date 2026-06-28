@@ -26,6 +26,8 @@ export interface ClientPullKey {
   expiresAt: string | null
   lastUsedAt: string | null
   createdAt: string
+  /** 是否可查看明文（= 后端存有可逆加密副本 KeyEnc；FR-192）。老哈希密钥为 false。 */
+  revealable?: boolean
 }
 
 /** 频道详情（含密钥元数据列表）。 */
@@ -115,6 +117,19 @@ export function useRevokeClientKey() {
     mutationFn: ({ channelId, keyId }: { channelId: string; keyId: number }) =>
       api.delete(`/client-channels/${channelId}/keys/${keyId}`),
     onSuccess: (_d, vars) => qc.invalidateQueries({ queryKey: ['client-channels', vars.channelId] }),
+  })
+}
+
+/**
+ * 查看拉取密钥明文（FR-192，见 ADR-044）。仅平台管理员；后端有 KeyEnc 时解密返明文。
+ * 无 KeyEnc（存量老密钥/创建时未配加密）→ 404 KEY_NOT_REVEALABLE，调用方据此提示不可找回。
+ */
+export function useRevealClientKey() {
+  return useMutation({
+    mutationFn: ({ channelId, keyId }: { channelId: string; keyId: number }) =>
+      api
+        .get<{ key: string }>(`/client-channels/${channelId}/keys/${keyId}/reveal`)
+        .then((r) => r.data),
   })
 }
 

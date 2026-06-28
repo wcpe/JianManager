@@ -1583,7 +1583,13 @@
     "stepIntegrateHint": "Follow the integration guide to bundle the updater into your modpack and ship it to players.",
     "viewGuide": "View Integration Guide",
     "keysSubtitle": "Pull keys are stored as hashes only; the plaintext is shown once on creation/rotation. Save it into jm-updater.json.",
-    "createKeyDesc": "The plaintext key is shown only once after creation — copy and save it immediately."
+    "createKeyDesc": "The plaintext key is shown only once after creation — copy and save it immediately.",
+    "keysSubtitleViewable": "Pull keys are stored with reversible encryption — you can reveal the plaintext anytime and copy it into jm-updater.json. Rotating invalidates already-distributed clients.",
+    "reveal": "Reveal",
+    "revealTitle": "Pull Key Plaintext",
+    "revealDesc": "Used by the player-side updater to authenticate pulls. Copy it into jm-updater.json and keep it safe.",
+    "revealFailed": "Failed to reveal key",
+    "notRevealable": "This key was created before the reveal feature and its plaintext cannot be recovered. Rotate it to make it revealable (note: rotation invalidates already-distributed clients)."
   },
   "clientVersions": {
     "tab": "Versions",
