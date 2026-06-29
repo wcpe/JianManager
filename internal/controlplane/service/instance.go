@@ -135,11 +135,11 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 		req.StartCommand = derived
 	}
 
-	// 工作目录系统分配（ADR-007/ADR-010）：MC 实例不接受用户手填绝对路径，
-	// 由系统在数据根 var/servers 下按 slug+shortid 分配，按相对路径登记保证便携。
-	// 其它类型（generic）保留用户传入的 WorkDir。
+	// 工作目录系统分配（ADR-007/ADR-010）：MC 实例始终系统分配（忽略用户手填）；
+	// 其它类型（generic）调用方未传则同样系统分配（FR-234 创建向导隐藏工作目录、统一自动生成），
+	// 显式传入则保留（API 调用方仍可指定）。一律落数据根 var/servers 下相对路径保证便携。
 	workDir := req.WorkDir
-	if req.Type == model.InstanceTypeMinecraftJava {
+	if req.Type == model.InstanceTypeMinecraftJava || workDir == "" {
 		workDir = allocWorkDirRel(req.Name)
 	}
 

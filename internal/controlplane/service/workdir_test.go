@@ -133,3 +133,22 @@ func TestCreate_GenericKeepsUserWorkDir(t *testing.T) {
 		t.Fatalf("generic workdir = %q, want user-provided /opt/custom", inst.WorkDir)
 	}
 }
+
+// generic 实例：调用方未传 WorkDir 时系统同样分配（FR-234，创建向导隐藏工作目录、统一自动生成）。
+func TestCreate_GenericEmptyWorkDirAllocated(t *testing.T) {
+	db := newInstanceTestDB(t)
+	svc := NewInstanceService(db, nil, nil)
+
+	inst, err := svc.Create(CreateInstanceRequest{
+		NodeID:       1,
+		Name:         "headless tool",
+		Type:         model.InstanceTypeGeneric,
+		ProcessType:  model.ProcessTypeDirect,
+		StartCommand: "./run.sh",
+		// WorkDir 留空——应由系统分配而非落空目录。
+	})
+	require.NoError(t, err)
+	if !workdirRe.MatchString(inst.WorkDir) {
+		t.Fatalf("generic empty workdir should be system-allocated, got %q", inst.WorkDir)
+	}
+}
