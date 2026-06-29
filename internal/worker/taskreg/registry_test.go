@@ -11,7 +11,7 @@ import (
 // 生命周期：Start→进度/日志→Succeed，快照如实反映；Drop 后不再出现。
 func TestRegistry_Lifecycle(t *testing.T) {
 	r := New()
-	r.Start("t1")
+	r.Start("t1", nil)
 
 	snap := r.Snapshot()
 	require.Len(t, snap, 1)
@@ -38,7 +38,7 @@ func TestRegistry_Lifecycle(t *testing.T) {
 // 失败路径：Fail 置 failed + error。
 func TestRegistry_Fail(t *testing.T) {
 	r := New()
-	r.Start("t2")
+	r.Start("t2", nil)
 	r.Fail("t2", "下载返回 HTTP 404")
 	snap := r.Snapshot()
 	require.Len(t, snap, 1)
@@ -49,7 +49,7 @@ func TestRegistry_Fail(t *testing.T) {
 // 进度越界被夹紧到 0~100。
 func TestRegistry_ProgressClamp(t *testing.T) {
 	r := New()
-	r.Start("t3")
+	r.Start("t3", nil)
 	r.SetProgress("t3", 150)
 	require.EqualValues(t, 100, r.Snapshot()[0].Progress)
 	r.SetProgress("t3", -5)
@@ -59,7 +59,7 @@ func TestRegistry_ProgressClamp(t *testing.T) {
 // 日志超过上限按环形截断，仅保留最近 recentLogCap 行；绝对序号不重置（截断后仍单调）。
 func TestRegistry_LogRingTruncate(t *testing.T) {
 	r := New()
-	r.Start("t4")
+	r.Start("t4", nil)
 	total := recentLogCap + 10
 	for i := 0; i < total; i++ {
 		r.AppendLog("t4", "line")
@@ -74,7 +74,7 @@ func TestRegistry_LogRingTruncate(t *testing.T) {
 // 并发读写不竞态（go test -race 守护）。
 func TestRegistry_ConcurrentSafe(t *testing.T) {
 	r := New()
-	r.Start("t5")
+	r.Start("t5", nil)
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
@@ -97,4 +97,23 @@ func TestRegistry_UnknownTaskIgnored(t *testing.T) {
 	r.Succeed("nope", "")
 	r.Fail("nope", "")
 	require.Empty(t, r.Snapshot())
+}
+
+// 强制停止（FR-227）：Cancel 调 cancel 并置 canceled 终态；已 canceled 不被 Succeed/Fail 覆盖（终态守卫）。
+func TestRegistry_Cancel(t *testing.T) {
+	r := New()
+	canceled := false
+	r.Start("c1", func() { canceled = true })
+	require.True(t, r.Cancel("c1"))
+	require.True(t, canceled, "cancel func 应被调用（真中断执行 context）")
+	require.Equal(t, "canceled", r.Snapshot()[0].State)
+
+	// 终态守卫：取消后 Succeed/Fail 不覆盖 canceled（防止下载 goroutine 收尾把它改回 failed）。
+	r.Succeed("c1", `{"x":1}`)
+	r.Fail("c1", "boom")
+	require.Equal(t, "canceled", r.Snapshot()[0].State)
+
+	// 幂等 / 非运行中：重复 Cancel 或对不存在 id 返回 false。
+	require.False(t, r.Cancel("c1"))
+	require.False(t, r.Cancel("nope"))
 }

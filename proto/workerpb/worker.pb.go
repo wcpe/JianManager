@@ -588,8 +588,12 @@ type HeartbeatResponse struct {
 	ProxyUrl        string `protobuf:"bytes,2,opt,name=proxy_url,json=proxyUrl,proto3" json:"proxy_url,omitempty"`                      // 期望代理地址（scheme://host[:port]，可能含凭据，Worker 直接用、日志脱敏）
 	ProxyNoProxy    string `protobuf:"bytes,3,opt,name=proxy_no_proxy,json=proxyNoProxy,proto3" json:"proxy_no_proxy,omitempty"`        // 期望免代理列表（逗号分隔，语义同 NO_PROXY）
 	ProxyGeneration string `protobuf:"bytes,4,opt,name=proxy_generation,json=proxyGeneration,proto3" json:"proxy_generation,omitempty"` // 期望代理配置的哈希；变化才触发 Worker 重建出站 client
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// cancel_task_ids 是 CP 请求中断的运行中长任务 id（FR-227）：CP 每拍把该节点「已请求取消
+	// 且未终态」的任务 id 下发，Worker 据此取消对应任务的执行 context（真中断下载 + 清理临时文件）
+	// 并经下一拍心跳上报该任务为 canceled。幂等：Worker 对已不在登记表的 id 静默忽略。
+	CancelTaskIds []string `protobuf:"bytes,5,rep,name=cancel_task_ids,json=cancelTaskIds,proto3" json:"cancel_task_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *HeartbeatResponse) Reset() {
@@ -648,6 +652,13 @@ func (x *HeartbeatResponse) GetProxyGeneration() string {
 		return x.ProxyGeneration
 	}
 	return ""
+}
+
+func (x *HeartbeatResponse) GetCancelTaskIds() []string {
+	if x != nil {
+		return x.CancelTaskIds
+	}
+	return nil
 }
 
 type CreateInstanceRequest struct {
@@ -8556,12 +8567,13 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\bcpu_load\x18\t \x01(\x01R\acpuLoad\x12%\n" +
 	"\x0euptime_seconds\x18\n" +
 	" \x01(\x01R\ruptimeSeconds\x12+\n" +
-	"\x06worlds\x18\v \x03(\v2\x13.worker.WorldMetricR\x06worlds\"\x9f\x01\n" +
+	"\x06worlds\x18\v \x03(\v2\x13.worker.WorldMetricR\x06worlds\"\xc7\x01\n" +
 	"\x11HeartbeatResponse\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\x12\x1b\n" +
 	"\tproxy_url\x18\x02 \x01(\tR\bproxyUrl\x12$\n" +
 	"\x0eproxy_no_proxy\x18\x03 \x01(\tR\fproxyNoProxy\x12)\n" +
-	"\x10proxy_generation\x18\x04 \x01(\tR\x0fproxyGeneration\"\xe2\x05\n" +
+	"\x10proxy_generation\x18\x04 \x01(\tR\x0fproxyGeneration\x12&\n" +
+	"\x0fcancel_task_ids\x18\x05 \x03(\tR\rcancelTaskIds\"\xe2\x05\n" +
 	"\x15CreateInstanceRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +

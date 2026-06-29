@@ -242,6 +242,10 @@ message HeartbeatResponse {
   string proxy_url = 2;        // 期望代理地址（scheme://host[:port]，可能含凭据，Worker 直接用、日志脱敏）
   string proxy_no_proxy = 3;   // 期望免代理列表（逗号分隔，语义同 NO_PROXY）
   string proxy_generation = 4; // 期望代理配置的哈希；变化才触发 Worker 重建出站 client
+  // cancel_task_ids 是 CP 请求中断的运行中长任务 id（FR-227）：CP 每拍把该节点「已请求取消
+  // 且未终态」的任务 id 下发，Worker 据此取消对应任务的执行 context（真中断下载 + 清理临时文件）
+  // 并经下一拍心跳上报该任务为 canceled。幂等：Worker 对已不在登记表的 id 静默忽略。
+  repeated string cancel_task_ids = 5;
 }
 
 // === 实例操作 ===

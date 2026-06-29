@@ -473,13 +473,16 @@ func (s *Server) InstallJDK(ctx context.Context, req *workerpb.InstallJDKRequest
 	// 异步路径：启动即返回 task_id，后台执行。
 	if req.TaskId != "" {
 		taskID := req.TaskId
-		s.tasks.Start(taskID)
+		// 可取消 context 登记进任务表：强制停止（FR-227）时由心跳侧 registry.Cancel 真中断下载。
+		taskCtx, cancel := context.WithCancel(context.Background())
+		s.tasks.Start(taskID, cancel)
 		// 复制下发参数，goroutine 不持有 req（避免在 RPC 返回后引用其底层内存）。
 		vendor, major, arch := req.Vendor, int(req.MajorVersion), req.Arch
 		version := req.Version // 具体版本（FR-178，可选；非空经 foojay 解析）
 		installDir, mirrorBase := req.InstallDir, req.MirrorBase
 		go func() {
-			info, err := s.jdkMgr.InstallWithProgress(vendor, major, version, arch, installDir, mirrorBase,
+			defer cancel() // goroutine 退出即释放 context（正常完成/失败/被取消均释放）
+			info, err := s.jdkMgr.InstallWithProgress(taskCtx, vendor, major, version, arch, installDir, mirrorBase,
 				func(percent int, line string) {
 					s.tasks.SetProgress(taskID, int32(percent))
 					if line != "" {
@@ -542,6 +545,12 @@ func (s *Server) TaskSnapshots() []*workerpb.TaskSnapshot {
 // DropTask 从内存任务表移除任务（终态被心跳上报后调用，避免重复上报）。
 func (s *Server) DropTask(taskID string) {
 	s.tasks.Drop(taskID)
+}
+
+// CancelTask 强制停止运行中任务（FR-227）：真中断 Worker 操作（取消其下载 context）并置 canceled 终态，
+// 由心跳侧收到 CP 下发的 cancel_task_ids 时调用。幂等（不存在/已终态返回 false）。
+func (s *Server) CancelTask(taskID string) bool {
+	return s.tasks.Cancel(taskID)
 }
 
 // RemoveJDK 删除托管 JDK。

@@ -36,6 +36,8 @@ type InstanceStateProvider interface {
 type TaskSnapshotProvider interface {
 	TaskSnapshots() []*workerpb.TaskSnapshot
 	DropTask(taskID string)
+	// CancelTask 强制停止运行中任务（FR-227）：真中断 Worker 操作（如下载）并置 canceled 终态。
+	CancelTask(taskID string) bool
 }
 
 // Heartbeat 心跳上报器。
@@ -166,7 +168,7 @@ func (h *Heartbeat) sendHeartbeat() error {
 	if h.taskProvider != nil {
 		req.Tasks = h.taskProvider.TaskSnapshots()
 		for _, t := range req.Tasks {
-			if t.State == "succeeded" || t.State == "failed" {
+			if t.State == "succeeded" || t.State == "failed" || t.State == "canceled" {
 				terminalTaskIDs = append(terminalTaskIDs, t.TaskId)
 			}
 		}
@@ -197,6 +199,13 @@ func (h *Heartbeat) sendHeartbeat() error {
 	// 应用 CP 下发的期望出站代理（FR-185，见 ADR-043）：generation 变化才重建出站 client。
 	// 重连/重启天然由后续心跳重发，无需 Worker 落盘。
 	h.proxyApplier.apply(reply)
+
+	// 应用 CP 下发的取消请求（FR-227）：真中断对应运行中任务（如下载），canceled 经下一拍心跳上报。
+	if h.taskProvider != nil {
+		for _, id := range reply.GetCancelTaskIds() {
+			h.taskProvider.CancelTask(id)
+		}
+	}
 
 	// 终态任务已随本次心跳上报且 CP 已确认接收，从内存表移除避免重复上报（FR-183，见 ADR-040）。
 	// 仅在心跳成功确认后才 Drop，确保 CP 至少收到一次终态快照。

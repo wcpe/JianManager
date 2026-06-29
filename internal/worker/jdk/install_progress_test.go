@@ -3,6 +3,7 @@ package jdk
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -75,7 +76,7 @@ func TestDownloadAndExtractWithProgress_EndToEnd(t *testing.T) {
 
 	dest := filepath.Join(t.TempDir(), "out")
 	var lastPercent int
-	err = downloadAndExtractWithProgress(srv.Client(), srv.URL, dest, func(p int, _ string) {
+	err = downloadAndExtractWithProgress(context.Background(), srv.Client(), srv.URL, dest, func(p int, _ string) {
 		if p > lastPercent {
 			lastPercent = p
 		}

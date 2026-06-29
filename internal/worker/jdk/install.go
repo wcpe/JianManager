@@ -125,14 +125,14 @@ func zuluURL(client *http.Client, base string, major int, arch string) (string, 
 
 // downloadAndExtract 下载归档到临时文件，按平台后缀解压到 destDir。
 // client 经进程级出站代理（FR-174/ADR-037）；为 nil 时回退一个 15min 超时的默认 client。
-func downloadAndExtract(client *http.Client, url, destDir string) error {
-	return downloadAndExtractWithProgress(client, url, destDir, nil)
+func downloadAndExtract(ctx context.Context, client *http.Client, url, destDir string) error {
+	return downloadAndExtractWithProgress(ctx, client, url, destDir, nil)
 }
 
 // downloadAndExtractWithProgress 下载归档到临时文件并解压到 destDir，期间经 report 回调
 // 上报下载百分比与阶段日志（FR-183，见 ADR-040；report 可为 nil）。
 // 有 Content-Length 时按字节计算 0~100 的真实百分比；无则停在 0、靠阶段日志补充。
-func downloadAndExtractWithProgress(client *http.Client, url, destDir string, report jdkProgress) error {
+func downloadAndExtractWithProgress(ctx context.Context, client *http.Client, url, destDir string, report jdkProgress) error {
 	if client == nil {
 		client = &http.Client{} // 无总超时；卡死由 stall 看门狗判定（FIX-4）
 	}
@@ -142,7 +142,8 @@ func downloadAndExtractWithProgress(client *http.Client, url, destDir string, re
 
 	// 用可取消 context + stall 看门狗替代「总超时」：慢但在进展的大归档不被拖死，
 	// 仅连续无字节进展（卡死/源不可达）时中断（FIX-4，原 15min 总超时会把进展中的大下载也掐断）。
-	ctx, cancel := context.WithCancel(context.Background())
+	// 子 context 继承外部取消（FR-227 强制停止）与 stall 看门狗本地取消（FIX-4），任一触发即中断请求。
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

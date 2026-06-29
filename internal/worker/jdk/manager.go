@@ -11,6 +11,7 @@
 package jdk
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -163,7 +164,7 @@ type Progress func(percent int, line string)
 
 // Install 下载并安装指定 JDK（同步，无进度回调）。等价于 InstallWithProgress(... "", nil)。
 func (m *Manager) Install(vendor string, major int, arch, installDir, mirrorBase string) (Info, error) {
-	return m.InstallWithProgress(vendor, major, "", arch, installDir, mirrorBase, nil)
+	return m.InstallWithProgress(context.Background(), vendor, major, "", arch, installDir, mirrorBase, nil)
 }
 
 // InstallWithProgress 下载并安装指定 JDK 到 installDir（默认 <rootDir>/<vendor>-<major>），
@@ -171,7 +172,7 @@ func (m *Manager) Install(vendor string, major int, arch, installDir, mirrorBase
 // vendor/major/arch 必填；version 可选（非空时经 foojay 按具体版本解析，FR-178）；
 // mirrorBase 非空时作下载基址（CP 从平台设置下发，使镜像源真生效），为空回退本地 env/默认源。
 // 下载完成后自动 detect。
-func (m *Manager) InstallWithProgress(vendor string, major int, version, arch, installDir, mirrorBase string, progress Progress) (Info, error) {
+func (m *Manager) InstallWithProgress(ctx context.Context, vendor string, major int, version, arch, installDir, mirrorBase string, progress Progress) (Info, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -210,7 +211,7 @@ func (m *Manager) InstallWithProgress(vendor string, major int, version, arch, i
 	if err := os.MkdirAll(installDir, 0o755); err != nil {
 		return Info{}, fmt.Errorf("创建安装目录失败: %w", err)
 	}
-	if err := downloadAndExtractWithProgress(client, downloadURL, installDir, report); err != nil {
+	if err := downloadAndExtractWithProgress(ctx, client, downloadURL, installDir, report); err != nil {
 		_ = os.RemoveAll(installDir)
 		return Info{}, err
 	}

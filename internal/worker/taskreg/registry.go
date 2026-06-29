@@ -8,6 +8,7 @@
 package taskreg
 
 import (
+	"context"
 	"strconv"
 	"sync"
 
@@ -36,6 +37,8 @@ type task struct {
 	result   string
 	logs     []logLine
 	nextSeq  int // 下一行日志的绝对序号
+	// cancel 取消任务执行 context（FR-227）：Cancel 调用它真中断 Worker 操作（如下载），可为 nil。
+	cancel context.CancelFunc
 }
 
 // Registry 运行中任务的线程安全登记表。零值不可用，须经 New 创建。
@@ -49,11 +52,12 @@ func New() *Registry {
 	return &Registry{tasks: make(map[string]*task)}
 }
 
-// Start 登记一个新任务为 running（progress=0）。重复 taskID 覆盖。
-func (r *Registry) Start(taskID string) {
+// Start 登记一个新任务为 running（progress=0）。cancel 用于强制停止时真中断执行（FR-227，可为 nil）。
+// 重复 taskID 覆盖。
+func (r *Registry) Start(taskID string, cancel context.CancelFunc) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.tasks[taskID] = &task{state: string(stateRunning)}
+	r.tasks[taskID] = &task{state: string(stateRunning), cancel: cancel}
 }
 
 // SetProgress 更新任务进度（0~100）。任务不存在则忽略。
@@ -85,10 +89,11 @@ func (r *Registry) AppendLog(taskID, line string) {
 }
 
 // Succeed 把任务置为 succeeded（progress=100），result 为成功结果 JSON。
+// 已被 Cancel 置 canceled 的任务不再被覆盖（终态守卫，FR-227）。
 func (r *Registry) Succeed(taskID, result string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if t, ok := r.tasks[taskID]; ok {
+	if t, ok := r.tasks[taskID]; ok && t.state == string(stateRunning) {
 		t.state = string(stateSucceeded)
 		t.progress = 100
 		t.result = result
@@ -96,13 +101,30 @@ func (r *Registry) Succeed(taskID, result string) {
 }
 
 // Fail 把任务置为 failed，errMsg 为失败原因。
+// 已被 Cancel 置 canceled 的任务不再被覆盖（终态守卫，FR-227）。
 func (r *Registry) Fail(taskID, errMsg string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if t, ok := r.tasks[taskID]; ok {
+	if t, ok := r.tasks[taskID]; ok && t.state == string(stateRunning) {
 		t.state = string(stateFailed)
 		t.errMsg = errMsg
 	}
+}
+
+// Cancel 强制停止任务（FR-227）：调用其执行 context 的 cancel（真中断下载等操作）并置 canceled 终态。
+// 仅对运行中任务生效（已终态/不存在返回 false，幂等——心跳可能重复下发同一 id）。
+func (r *Registry) Cancel(taskID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.tasks[taskID]
+	if !ok || t.state != string(stateRunning) {
+		return false
+	}
+	t.state = string(stateCanceled)
+	if t.cancel != nil {
+		t.cancel()
+	}
+	return true
 }
 
 // Drop 从登记表移除任务（终态被心跳上报后调用）。
@@ -142,4 +164,5 @@ const (
 	stateRunning   taskStateStr = "running"
 	stateSucceeded taskStateStr = "succeeded"
 	stateFailed    taskStateStr = "failed"
+	stateCanceled  taskStateStr = "canceled"
 )
