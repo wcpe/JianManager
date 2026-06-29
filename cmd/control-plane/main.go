@@ -410,6 +410,10 @@ func main() {
 		eventSvc.StartWorkerStream(nodeUUID)
 		// 玩家事件流（探针经反向 WS 上报）同步订阅（FR-066）。
 		playerEventSvc.StartWorkerStream(nodeUUID)
+		// Worker 重连/重注册后重推该节点全部实例规格，让重启后丢失的 STOPPED 实例
+		// 在 Worker 侧重新可被文件/配置/归档 op 定位（修 bug #2，见 ADR-050）。
+		// 异步执行：该回调可能在心跳处理路径内触发，重推不应阻塞心跳应答。
+		go instanceSvc.ResyncNode(nodeUUID)
 	})
 	// 心跳负载落库为时序样本（节点指标 + 每实例 ServerProbe 快照，FR-060）。
 	grpcHandler.SetMetricIngester(metricSvc)

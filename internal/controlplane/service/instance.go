@@ -565,6 +565,26 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	spec, err := s.buildCreateInstanceRequest(instance)
+	if err != nil {
+		return err
+	}
+
+	resp, err := client.Worker.CreateInstance(ctx, spec)
+	if err != nil {
+		return fmt.Errorf("Worker CreateInstance 失败: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("Worker CreateInstance 失败: %s", resp.Error)
+	}
+	return nil
+}
+
+// buildCreateInstanceRequest 把一条实例模型翻译成下发给 Worker 的实例规格。
+// 解出 EnvVars JSON、解析绑定 JDK 安装路径（注入 JAVA_HOME/PATH，ADR-008）、派生优雅停止命令、
+// 计算 docker 端口映射。registerOnWorker（单实例补注册）与 ResyncNode（重连整节点重推，见 ADR-050）
+// 共用此翻译，确保两条路径下发给 Worker 的规格完全一致。
+func (s *InstanceService) buildCreateInstanceRequest(instance *model.Instance) (*workerpb.CreateInstanceRequest, error) {
 	// 把存储为 JSON 字符串的 EnvVars 解出来，原样下发给 Worker 注入到进程环境。
 	var envVars map[string]string
 	if strings.TrimSpace(instance.EnvVars) != "" {
@@ -575,10 +595,10 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 	// <jdk>/bin 接入 PATH（ADR-008 / FR-033），结构化启动命令里的 `java` 即指向它。
 	jdkPath, err := s.resolveJDKPath(instance)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	resp, err := client.Worker.CreateInstance(ctx, &workerpb.CreateInstanceRequest{
+	return &workerpb.CreateInstanceRequest{
 		InstanceUuid:               instance.UUID,
 		Name:                       instance.Name,
 		ProcessType:                string(instance.ProcessType),
@@ -595,14 +615,61 @@ func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
 		CpuLimit:                   instance.CPULimit,
 		MemLimitMb:                 instance.MemLimitMB,
 		DiskLimitMb:                instance.DiskLimitMB,
-	})
+	}, nil
+}
+
+// ResyncNode 在 Worker 重连/重注册成功后，把该节点全部实例规格一次性重推给 Worker（见 ADR-050）。
+// 修 bug #2：Worker 重启后只经 PID 文件恢复 RUNNING daemon 实例，STOPPED 实例在 Worker 内存
+// 注册表丢失，致文件/配置/归档 op 报「实例不存在」。CP 是真源，重连后重推让 Worker 重新认识停机实例
+// （Worker 据此按 STOPPED 填表、不启动进程；已恢复的 RUNNING 实例在 Worker 侧按 UUID 命中跳过）。
+//
+// 由 onWorkerConnect 回调触发（Register 成功或心跳重连后），异步执行、失败仅告警不阻断
+// （与 registerOnWorker 失败的容错一致；个别实例启动路径仍有 registerOnWorker 兜底）。
+func (s *InstanceService) ResyncNode(nodeUUID string) {
+	var node model.Node
+	if err := s.db.Where("uuid = ?", nodeUUID).First(&node).Error; err != nil {
+		slog.Warn("重连重推：查节点失败", "nodeUUID", nodeUUID, "error", err)
+		return
+	}
+
+	var instances []model.Instance
+	if err := s.db.Where("node_id = ?", node.ID).Find(&instances).Error; err != nil {
+		slog.Warn("重连重推：查实例列表失败", "nodeUUID", nodeUUID, "error", err)
+		return
+	}
+	if len(instances) == 0 {
+		return
+	}
+
+	client, ok := s.pool.Get(nodeUUID)
+	if !ok {
+		slog.Warn("重连重推：节点未连接", "nodeUUID", nodeUUID)
+		return
+	}
+
+	specs := make([]*workerpb.CreateInstanceRequest, 0, len(instances))
+	for i := range instances {
+		spec, err := s.buildCreateInstanceRequest(&instances[i])
+		if err != nil {
+			// 单条实例规格构造失败（如绑定 JDK 已删）不应拖垮整批重推：跳过该条，其余照常重推。
+			slog.Warn("重连重推：构造实例规格失败，跳过", "instanceId", instances[i].UUID, "error", err)
+			continue
+		}
+		specs = append(specs, spec)
+	}
+	if len(specs) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.ResyncInstances(ctx, &workerpb.ResyncInstancesRequest{Instances: specs})
 	if err != nil {
-		return fmt.Errorf("Worker CreateInstance 失败: %w", err)
+		slog.Warn("重连重推实例规格失败", "nodeUUID", nodeUUID, "count", len(specs), "error", err)
+		return
 	}
-	if !resp.Success {
-		return fmt.Errorf("Worker CreateInstance 失败: %s", resp.Error)
-	}
-	return nil
+	slog.Info("已向 Worker 重推实例规格", "nodeUUID", nodeUUID, "pushed", len(specs), "registered", resp.Registered, "skipped", resp.Skipped)
 }
 
 // mcContainerServerPort 是 MC 服务端在容器内的约定监听端口（多数 MC 镜像固定 25565）。
