@@ -15,6 +15,7 @@
 ### 新增
 - **调试模式开关 + Gin 默认 release 静默（FR-225，增强 FR-063）**：① Gin 默认改 ReleaseMode——原启动刷约 240 行 `[GIN-debug]` 路由噪音，现默认静默。② 设置「日志」分类新增「调试模式」开关（`debug.mode` 平台设置，true/false）：开=日志 debug + Gin debug、关=日志回 log.level 基线（默认 info）+ Gin release，走 FR-063 运行时 settings 机制即时生效不重启、重启复用持久化覆盖。gin 依赖经注入 applier 留在入口层（不渗入 service）；调试开启时强制 debug、log.level 不下压。前端设置页 `debug.mode` 渲染为开启/关闭下拉（i18n 中/英）+ mock 同步。CP 单测（toggle 切 log+gin / 关回退基线 / 调试开启不被 log.level 下压 / 非法值拒绝 / 启动基线 release）+ 前端 tsc/lint/vitest 全绿。真机浏览器 A/B 验过（默认 0 `[GIN-debug]`；UI 开调试→保存→重启 240 行 `[GIN-debug]` + debug 模式警告，证明持久化 + 启动应用）。
 - **节点页默认选中第一个 + 页眉刷新按钮（FR-232，前端，增强 FR-177/179）**：① 节点页进入即默认选中第一个节点（`useMemo` 派生有效选中态，未选/选中节点消失→回退第一个），不再停留「请在左侧选择节点」空态；原 effect 同步选中态改为派生（消除 set-state-in-effect 级联）。② 全局页眉新增「刷新当前页」按钮（RotateCw 图标 + 转动反馈），点击 `invalidateQueries` 重拉当前页活跃查询（非整页 reload）。i18n 中/英；前端 `tsc`/`lint`/`vitest` 全绿，真机浏览器验过（进 /nodes 自动选中节点显详情 + 页眉刷新按钮可用）。
+- **通知-任务中心联动 + 页眉任务进度（FR-226，前端，增强 FR-216/183）**：① 通知中心 + 页眉铃铛下拉里，任务类站内信（带 `Notification.TaskID`，如 JDK 安装完成/失败）新增「查看任务」一键跳 `/tasks?task=<id>`；告警跳 `/alerts`、其余跳通知中心——「消息都有快捷跳转」。② 任务中心页支持 `?task=<id>` 深链进页自动展开定位该任务。③ 页眉新增「任务进度」chip（有 pending/running 任务时显数量 + 平均进度 + 转动，点击进任务中心；空闲隐藏，复用 `useTasks` 活跃短轮询）。复用既有 TaskID + tasks/notification-feed API，无后端/模型改动。i18n 中/英；前端 `tsc`/`lint`/`vitest`（+ 通知中心「查看任务」回归）全绿；任务相关 UI 由 mock 假后端测试覆盖。
 
 ## 0.12.0（2026-06-29）
 

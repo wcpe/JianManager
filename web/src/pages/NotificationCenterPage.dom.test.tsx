@@ -93,4 +93,15 @@ describe('NotificationCenterPage（mock 假后端，统一通知流）', () => {
     const alertRow = (await screen.findByText('CPU 过载告警')).closest('li') as HTMLElement
     expect(within(alertRow).getByText('查看告警详情')).toBeInTheDocument()
   })
+
+  it('任务类站内信附「查看任务」入口（FR-226 通知-任务联动）', async () => {
+    loginMockUser()
+    renderWithProviders(<NotificationCenterPage />)
+    // 「JDK 安装完成」站内信带 taskId（task-jdk-1）→ 行内出现「查看任务」一键跳任务中心。
+    const taskRow = (await screen.findByText('JDK 安装完成')).closest('li') as HTMLElement
+    expect(within(taskRow).getByText('查看任务')).toBeInTheDocument()
+    // 非任务站内信（无 taskId，如「备份失败」）不出现「查看任务」。
+    const backupRow = screen.getByText('备份失败').closest('li') as HTMLElement
+    expect(within(backupRow).queryByText('查看任务')).toBeNull()
+  })
 })

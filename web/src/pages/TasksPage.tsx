@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useSearchParams } from 'react-router'
 import { ChevronRight } from 'lucide-react'
 import { useTasks, useTask, isTerminalTask, type Task, type TaskState } from '@/api/tasks'
 import { Badge } from '@/components/ui/badge'
@@ -22,7 +23,9 @@ const STATE_META: Record<TaskState, { variant: 'default' | 'secondary' | 'destru
 export default function TasksPage() {
   const { t } = useTranslation()
   const { data: tasks, isLoading, isError } = useTasks()
-  const [expanded, setExpanded] = useState<string | null>(null)
+  // 通知中心/页眉跳转深链（FR-226）：?task=<taskId> 进页即自动展开该任务，定位上下文。
+  const [searchParams] = useSearchParams()
+  const [expanded, setExpanded] = useState<string | null>(() => searchParams.get('task'))
 
   return (
     <div className="space-y-4">

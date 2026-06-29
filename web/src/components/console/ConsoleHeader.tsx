@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Bell, Boxes, LogOut, RotateCw, Search, Server, UserRound } from 'lucide-react'
+import { AlertTriangle, Bell, Boxes, Loader2, LogOut, RotateCw, Search, Server, UserRound } from 'lucide-react'
 
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
 import { useInstances } from '@/api/instances'
 import { useMetricOverview } from '@/api/metrics'
+import { useTasks } from '@/api/tasks'
 import { useNotificationFeed, useFeedUnreadCount, type FeedItem } from '@/api/notification-feed'
 import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
@@ -46,6 +47,7 @@ export default function ConsoleHeader() {
         <div className="flex items-center gap-0.5 sm:gap-1">
           <RefreshButton />
           <ClusterBadges />
+          <TaskProgress />
           <NotificationBell />
           <AccountMenu />
         </div>
@@ -193,6 +195,33 @@ function ClusterBadges() {
   )
 }
 
+/**
+ * 页眉任务进度（FR-226）：有在跑任务（pending/running）时显示数量 + 平均进度，点击进任务中心定位。
+ * 无在跑任务时隐藏（任务中心入口在侧栏「系统」）；轮询复用 useTasks（有活跃任务时短轮询、空闲停）。
+ */
+function TaskProgress() {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const { data: tasks } = useTasks()
+  const active = (tasks ?? []).filter((tk) => tk.state === 'running' || tk.state === 'pending')
+  if (active.length === 0) return null
+  const avg = Math.round(active.reduce((s, tk) => s + tk.progress, 0) / active.length)
+  const label = t('header.tasksRunning', { count: active.length, progress: avg })
+  return (
+    <button
+      type="button"
+      onClick={() => navigate('/tasks')}
+      title={label}
+      aria-label={label}
+      className="flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-xs text-primary transition-colors hover:bg-accent/60"
+    >
+      <Loader2 className="size-3.5 animate-spin" />
+      <span className="font-medium tabular-nums">{active.length}</span>
+      <span className="tabular-nums text-muted-foreground">{avg}%</span>
+    </button>
+  )
+}
+
 /** 统一通知级别 → 圆点配色类（站内信四档；告警三档已在后端就近映射到此）。 */
 function feedLevelDotClass(level: string): string {
   if (level === 'error') return 'bg-status-danger'
@@ -256,9 +285,16 @@ function NotificationBell() {
 /** 下拉内单条通知预览：级别色点 + 来源徽标 + 标题/正文 + 时间 + 未读点。 */
 function NotificationPreviewRow({ item }: { item: FeedItem }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const sourceLabel = item.source === 'alert' ? t('notificationCenter.badgeAlert') : t('notificationCenter.badgeMessage')
+  // 快捷跳转（FR-226）：任务类站内信→任务中心定位该任务；告警→告警页；其余→通知中心。
+  const jump = () => {
+    if (item.source === 'message' && item.taskId) navigate(`/tasks?task=${item.taskId}`)
+    else if (item.source === 'alert') navigate('/alerts')
+    else navigate('/notifications')
+  }
   return (
-    <div className="flex items-start gap-2 px-2 py-1.5 text-xs">
+    <button type="button" onClick={jump} className="flex w-full items-start gap-2 px-2 py-1.5 text-left text-xs transition-colors hover:bg-accent/60">
       <span className={cn('mt-1 size-1.5 shrink-0 rounded-full', feedLevelDotClass(item.level))} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
@@ -278,7 +314,7 @@ function NotificationPreviewRow({ item }: { item: FeedItem }) {
         <p className="text-[11px] text-muted-foreground">{new Date(item.createdAt).toLocaleString()}</p>
       </div>
       {!item.read && <span className="mt-1 size-1.5 shrink-0 rounded-full bg-primary" />}
-    </div>
+    </button>
   )
 }
 

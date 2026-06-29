@@ -185,6 +185,12 @@ function NotificationRow({ item }: { item: FeedItem }) {
             {t('notificationCenter.markRead')}
           </button>
         )}
+        {/* 任务类站内信（含 taskId）→ 一键跳任务中心并定位该任务（FR-226 联动）。 */}
+        {item.source === 'message' && item.taskId && (
+          <button type="button" className="text-xs text-primary hover:underline" onClick={() => navigate(`/tasks?task=${item.taskId}`)}>
+            {t('notificationCenter.viewTask')}
+          </button>
+        )}
         {item.source === 'alert' && (
           <button type="button" className="text-xs text-muted-foreground hover:underline" onClick={() => navigate('/alerts')}>
             {t('notificationCenter.viewAlertDetail')}
