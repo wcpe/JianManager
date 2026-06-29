@@ -22,7 +22,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 )
 
 // Info Worker 本地探测到的 JDK 信息。
@@ -62,8 +61,8 @@ func NewManager(rootDir string, systemDirs []string) *Manager {
 }
 
 // SetHTTPClient 注入出站 client（经进程级代理，FR-174/ADR-037）：JDK 下载经此 client。
-// 由 main 装配；不调用则下载路径回退默认 15min 超时 client（向后兼容）。
-// 注入的 client 若未显式设 Timeout，下载路径会克隆一份并补足 15min 超时，避免大归档被无超时拖死。
+// 由 main 装配；不调用则下载路径回退裸默认 client（向后兼容）。
+// 下载不设「总超时」上限，卡死由 stall 看门狗判定（FIX-4）；注入 client 若设了 Timeout 会被克隆去掉。
 func (m *Manager) SetHTTPClient(c *http.Client) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -78,11 +77,10 @@ func (m *Manager) SetHTTPClientProvider(p func() *http.Client) {
 	m.httpProvider = p
 }
 
-// downloadClient 返回 JDK 下载所用 client：优先运行时持有者（取当前），其次固定注入，否则默认 15min client。
-// 命中持有者/固定 client 但未设 Timeout 时补足 15min（避免大归档被无超时拖死，不改原 client）。
-// 须在持有 m.mu 时调用（Install 内已持锁）。
+// downloadClient 返回 JDK 下载所用 client：优先运行时持有者（取当前），其次固定注入，否则裸默认 client。
+// 下载不设「总超时」上限——大归档慢但在进展不应被拖死；卡死由调用方 stall 看门狗判定（FIX-4）。
+// 注入 client 若设了 Timeout 则克隆去掉（不改原 client）。须在持有 m.mu 时调用（Install 内已持锁）。
 func (m *Manager) downloadClient() *http.Client {
-	const dlTimeout = 15 * time.Minute
 	c := m.httpClient
 	if m.httpProvider != nil {
 		if pc := m.httpProvider(); pc != nil {
@@ -90,12 +88,11 @@ func (m *Manager) downloadClient() *http.Client {
 		}
 	}
 	if c == nil {
-		return &http.Client{Timeout: dlTimeout}
+		return &http.Client{}
 	}
-	if c.Timeout == 0 {
-		// 注入的工厂 client 默认不设整体超时；为大归档下载补一个上限（不改原 client）。
+	if c.Timeout != 0 {
 		cc := *c
-		cc.Timeout = dlTimeout
+		cc.Timeout = 0
 		return &cc
 	}
 	return c

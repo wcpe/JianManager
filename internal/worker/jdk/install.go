@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -132,12 +134,26 @@ func downloadAndExtract(client *http.Client, url, destDir string) error {
 // 有 Content-Length 时按字节计算 0~100 的真实百分比；无则停在 0、靠阶段日志补充。
 func downloadAndExtractWithProgress(client *http.Client, url, destDir string, report jdkProgress) error {
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Minute}
+		client = &http.Client{} // 无总超时；卡死由 stall 看门狗判定（FIX-4）
 	}
 	if report == nil {
 		report = func(int, string) {}
 	}
-	resp, err := client.Get(url)
+
+	// 用可取消 context + stall 看门狗替代「总超时」：慢但在进展的大归档不被拖死，
+	// 仅连续无字节进展（卡死/源不可达）时中断（FIX-4，原 15min 总超时会把进展中的大下载也掐断）。
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("构造下载请求失败: %w", err)
+	}
+	pw := &progressWriter{report: report} // total 待响应头到达后填
+	watchdogDone := make(chan struct{})
+	go watchStall(cancel, pw, downloadStallTimeout, stallCheckInterval, watchdogDone)
+	defer close(watchdogDone)
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("下载失败: %w", err)
 	}
@@ -169,7 +185,7 @@ func downloadAndExtractWithProgress(client *http.Client, url, destDir string, re
 	defer os.Remove(tmpPath)
 
 	// 按 Content-Length 计算下载百分比；定频上报（每 +3% 或每 4MB 报一次），避免日志刷屏。
-	pw := &progressWriter{total: resp.ContentLength, report: report}
+	pw.total = resp.ContentLength // 响应头已到，io.Copy 前填总长（看门狗只读 written 原子，无并发冲突）
 	if _, err := io.Copy(tmp, io.TeeReader(resp.Body, pw)); err != nil {
 		tmp.Close()
 		return fmt.Errorf("写入临时文件失败: %w", err)
@@ -184,9 +200,10 @@ func downloadAndExtractWithProgress(client *http.Client, url, destDir string, re
 type jdkProgress func(percent int, line string)
 
 // progressWriter 包一层 io.Writer 统计已下载字节并按节流上报百分比（FR-183）。
+// written 用原子计数，供下载 stall 看门狗并发读取（FIX-4）。
 type progressWriter struct {
 	total      int64 // Content-Length，<=0 表示未知
-	written    int64
+	written    atomic.Int64
 	lastReport int   // 上次上报的百分比
 	lastBytes  int64 // 上次上报时的累计字节
 	report     jdkProgress
@@ -194,9 +211,9 @@ type progressWriter struct {
 
 func (w *progressWriter) Write(p []byte) (int, error) {
 	n := len(p)
-	w.written += int64(n)
+	written := w.written.Add(int64(n))
 	if w.total > 0 {
-		percent := int(w.written * 100 / w.total)
+		percent := int(written * 100 / w.total)
 		if percent > 100 {
 			percent = 100
 		}
@@ -205,12 +222,48 @@ func (w *progressWriter) Write(p []byte) (int, error) {
 			w.lastReport = percent
 			w.report(percent, fmt.Sprintf("下载中 %d%%", percent))
 		}
-	} else if w.written-w.lastBytes >= 4<<20 {
+	} else if written-w.lastBytes >= 4<<20 {
 		// 无 Content-Length：每 4MB 报一次累计量，百分比保持 0。
-		w.lastBytes = w.written
-		w.report(0, fmt.Sprintf("已下载 %d MB", w.written>>20))
+		w.lastBytes = written
+		w.report(0, fmt.Sprintf("已下载 %d MB", written>>20))
 	}
 	return n, nil
+}
+
+// Written 返回累计已下载字节（原子读，供 stall 看门狗）。
+func (w *progressWriter) Written() int64 { return w.written.Load() }
+
+// 下载 stall 看门狗参数（FIX-4）：用「无字节进展时长」而非「总时长」判定卡死——
+// 慢但在进展的大归档不中断、无总上限；仅连续 downloadStallTimeout 收不到任何字节才中断。
+const (
+	downloadStallTimeout = 90 * time.Second
+	stallCheckInterval   = 5 * time.Second
+)
+
+// watchStall 看门狗：每 interval 检查 pw 字节是否进展，连续 stall 无进展则 cancel；done 关闭即退出。
+// 阈值参数化便于测试以小值注入。
+func watchStall(cancel context.CancelFunc, pw *progressWriter, stall, interval time.Duration, done <-chan struct{}) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	var last int64
+	var idle time.Duration
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			cur := pw.Written()
+			if cur > last {
+				last, idle = cur, 0
+				continue
+			}
+			idle += interval
+			if idle >= stall {
+				cancel()
+				return
+			}
+		}
+	}
 }
 
 // extract 根据文件名后缀分发到对应解压流程。
