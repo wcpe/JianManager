@@ -1032,6 +1032,7 @@
     "role": "Role",
     "node": "Node",
     "selectNode": "Select Node",
+    "noNodesHint": "No nodes yet. Add one on the Nodes page and bring it online, then come back to create an instance.",
     "jdkOptional": "JDK (optional)",
     "jdkSystemDefault": "Unspecified (system Java)",
     "autoRestart": "Auto restart on crash",

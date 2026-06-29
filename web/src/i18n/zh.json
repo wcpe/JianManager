@@ -988,6 +988,7 @@
     "role": "角色",
     "node": "节点",
     "selectNode": "选择节点",
+    "noNodesHint": "尚无节点。请先到「节点」页添加并让其上线，再回来创建实例。",
     "jdkOptional": "JDK（可选）",
     "jdkSystemDefault": "不指定（使用系统 Java）",
     "autoRestart": "崩溃自动重启",

@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { ArrowLeft, ChevronLeft, ChevronRight, Check } from 'lucide-react'
 import api from '@/api/client'
 import { useNodes } from '@/api/nodes'
+import { buildNodeOptions } from './instance-wizard-options'
 import { useGroups } from '@/api/groups'
 import { useTemplates } from '@/api/templates'
 import { useNodeJDKs } from '@/api/jdks'
@@ -62,9 +63,13 @@ export default function InstanceWizardPage() {
   const isDocker = processType === 'docker'
   const needWorkDir = type !== 'minecraft_java'
 
-  const nodeOptions: ComboboxOption[] = (nodes ?? [])
-    .filter((n) => n.status === 1)
-    .map((n) => ({ value: String(n.id), label: n.name }))
+  const nodeOptions: ComboboxOption[] = buildNodeOptions(nodes, {
+    online: t('nodes.online'),
+    offline: t('nodes.offline'),
+    starting: t('nodes.starting'),
+    maintenance: t('nodes.maintenance'),
+  })
+  const hasNoNodes = (nodes?.length ?? 0) === 0
   const jdkOptions: ComboboxOption[] = (jdks ?? []).map((j) => ({
     value: String(j.id),
     label: `${j.vendor} ${j.majorVersion} (${j.version})`,
@@ -206,6 +211,9 @@ export default function InstanceWizardPage() {
             <Field label={t('instances.node')} required error={errors.nodeId}>
               <div className="mt-1">
                 <Combobox options={nodeOptions} value={nodeId} onChange={setNodeId} allowCustom={false} placeholder={t('instances.selectNode')} invalid={!!errors.nodeId} />
+                {hasNoNodes && (
+                  <p className="mt-1.5 text-xs text-muted-foreground">{t('instances.noNodesHint')}</p>
+                )}
               </div>
             </Field>
             <Field label={t('instances.type')}>
