@@ -29,7 +29,7 @@ const (
 	// SettingKeyBackupRetentionDays 默认备份保留天数（整数）。CP 后台巡检据此裁剪超期备份（FR-063）。
 	SettingKeyBackupRetentionDays = "backup.retention_days"
 	// SettingKeyProxyURL CP 出站代理地址（network 类，FR-185/ADR-043）。敏感（脱敏展示）。
-	// 落库即重建 CP 出站持有者（优先级 DB > control-plane.yaml > env）；同时作为各节点默认代理。
+	// 落库即重建 CP 出站持有者（优先级 DB > control-plane.yml > env）；同时作为各节点默认代理。
 	SettingKeyProxyURL = "proxy.url"
 	// SettingKeyProxyNoProxy CP/全局默认出站代理的免代理列表（逗号分隔，语义同 NO_PROXY，FR-185）。
 	SettingKeyProxyNoProxy = "proxy.no_proxy"
@@ -78,7 +78,7 @@ func (s *SettingsService) SetProxyRebuilder(fn func(httpclient.Config)) {
 }
 
 // EffectiveProxy 返回 CP 当前生效的出站代理配置（FR-185，见 ADR-043）。
-// 优先级：settings DB 覆盖（全局） > control-plane.yaml proxy > 环境变量（空配回退）。
+// 优先级：settings DB 覆盖（全局） > control-plane.yml proxy > 环境变量（空配回退）。
 // 同时作为各节点的「全局默认代理」（节点 inherit 时下发此值）。
 func (s *SettingsService) EffectiveProxy() httpclient.Config {
 	url := s.cfg.Proxy.URL

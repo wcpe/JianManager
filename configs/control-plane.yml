@@ -71,7 +71,7 @@ client_dist:
 # HTTP_PROXY/HTTPS_PROXY/NO_PROXY 环境变量），不破坏现状；非空时优先于环境变量。
 # scheme 决定类型：http:// / https:// / socks5://。含凭据时经 ${ENV} 注入、勿硬编码。
 # 也可在「设置 → 网络」面板配全局代理（保存即运行时生效、无需重启），其优先级高于本 yaml：
-# settings DB 覆盖 > control-plane.yaml > 环境变量。面板全局值同时作为各节点默认代理（节点页可覆盖）。
+# settings DB 覆盖 > control-plane.yml > 环境变量。面板全局值同时作为各节点默认代理（节点页可覆盖）。
 # proxy:
 #   url: ""                       # 例：http://127.0.0.1:7890 或 socks5://user:${PROXY_PASS}@127.0.0.1:1080
 #   no_proxy: ""                  # 逗号分隔免代理：localhost,127.0.0.1,10.0.0.0/8,.internal.example

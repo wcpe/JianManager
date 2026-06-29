@@ -14,7 +14,7 @@ import (
 //   - DevSignPublicKeySPKIBase64 同时回填到客户端 updater-core 的
 //     Signatures.production()（keyId=k1），使开发期两线可端到端验签；
 //   - DevSignPrivateKeyPKCS8Base64 仅在 dev_mode=true 且未注入私钥时作零配置回退
-//     （见 ResolveManifestSigner），并写入 configs/control-plane.yaml 注释示例。
+//     （见 ResolveManifestSigner），并写入 configs/control-plane.yml 注释示例。
 //
 // 生产部署（dev_mode=false）**必须**经 JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入独立私钥，并把对应公钥
 // 回填 Signatures.production()（随基础包分发）；**未注入即降级**为客户端 OTA 不可用、配错（注入无效/

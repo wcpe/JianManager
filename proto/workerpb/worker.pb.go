@@ -584,7 +584,7 @@ type HeartbeatResponse struct {
 	Timestamp int64                  `protobuf:"varint,1,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 	// 节点期望出站代理（FR-185，见 ADR-043）：CP 据「节点 custom ? 节点值 : 全局默认」每拍下发。
 	// Worker 仅当 proxy_generation 与本地已应用代不同时才重建出站 client（避免每拍重建）；
-	// 重连/重启天然由后续心跳重发。proxy_url 空 = 期望直连（回退 worker.yaml/env）。
+	// 重连/重启天然由后续心跳重发。proxy_url 空 = 期望直连（回退 worker.yml/env）。
 	ProxyUrl        string `protobuf:"bytes,2,opt,name=proxy_url,json=proxyUrl,proto3" json:"proxy_url,omitempty"`                      // 期望代理地址（scheme://host[:port]，可能含凭据，Worker 直接用、日志脱敏）
 	ProxyNoProxy    string `protobuf:"bytes,3,opt,name=proxy_no_proxy,json=proxyNoProxy,proto3" json:"proxy_no_proxy,omitempty"`        // 期望免代理列表（逗号分隔，语义同 NO_PROXY）
 	ProxyGeneration string `protobuf:"bytes,4,opt,name=proxy_generation,json=proxyGeneration,proto3" json:"proxy_generation,omitempty"` // 期望代理配置的哈希；变化才触发 Worker 重建出站 client

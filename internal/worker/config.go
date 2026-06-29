@@ -1,11 +1,13 @@
-// Package config 提供 Worker Node 的配置加载（worker.yaml + 环境变量覆盖）。
+// Package config 提供 Worker Node 的配置加载（worker.yml + 环境变量覆盖）。
 //
-// 配置真正落盘到 worker.yaml 而非堆砌 JIANMANAGER_* 环境变量（FR-080，见 ADR-020）；
+// 配置真正落盘到 worker.yml 而非堆砌 JIANMANAGER_* 环境变量（FR-080，见 ADR-020）；
 // 所有项有合理默认，零配置即可启动开发环境。环境变量以 JIANMANAGER_ 前缀按路径覆盖
 // （如 server gRPC 端口 → JIANMANAGER_GRPC_PORT），与 Control Plane 配置惯例一致。
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -32,7 +34,7 @@ type Config struct {
 	// JWTSecret WS 终端/插件桥一次性 token 校验密钥；与 CP 共享。
 	JWTSecret string `mapstructure:"jwt_secret"`
 	// EnrollToken 一次性 enrollment token 明文（FR-080，见 ADR-020）。
-	// 仅经环境变量/命令行传入、绝不写入 worker.yaml（一次性凭据不留盘）；
+	// 仅经环境变量/命令行传入、绝不写入 worker.yml（一次性凭据不留盘）；
 	// 首次注册（无本地身份文件）时携带，注册成功后即作废。
 	EnrollToken string           `mapstructure:"enroll_token"`
 	Log         LogConfig        `mapstructure:"log"`
@@ -90,7 +92,7 @@ type LogConfig struct {
 
 // Load 从配置文件和环境变量加载 Worker 配置（FR-080，见 ADR-020）。
 //
-// path 为空时在工作目录与 configs/ 下查找 worker.yaml（均可选）。
+// path 为空时在工作目录与 configs/ 下查找 worker.yml（均可选），找不到回退 worker.yaml（FR-224 兼容）。
 // 所有项有合理默认，零配置即可启动；JIANMANAGER_ 前缀环境变量按路径覆盖配置文件值。
 // enrollment token 经 JIANMANAGER_ENROLL_TOKEN 注入、不从 yaml 读取（一次性凭据不留盘）。
 func Load(path string) (*Config, error) {
@@ -122,10 +124,16 @@ func Load(path string) (*Config, error) {
 	if path != "" {
 		v.SetConfigFile(path)
 	} else {
+		// .yml 优先、找不到回退 .yaml（FR-224）。viper 默认搜索按 SupportedExts 顺序（yaml 先于 yml），
+		// 无法据此让 .yml 优先；故显式按 [.yml, .yaml] 在搜索目录探测，命中即 SetConfigFile。
+		// 两者同为 YAML 格式，SetConfigType 固定 yaml 保证解析正确。
 		v.SetConfigName("worker")
 		v.SetConfigType("yaml")
 		v.AddConfigPath(".")
 		v.AddConfigPath("configs")
+		if found := findConfigFile("worker", ".", "configs"); found != "" {
+			v.SetConfigFile(found)
+		}
 	}
 
 	v.SetEnvPrefix("JIANMANAGER")
@@ -145,4 +153,18 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// findConfigFile 在给定目录中按 .yml 优先、.yaml 兼容回退的顺序查找 <name>.<ext> 配置文件（FR-224）。
+// 返回首个存在的文件路径；都不存在时返回空串（交回 viper 的名字搜索 + 默认值，零配置仍可启动）。
+func findConfigFile(name string, dirs ...string) string {
+	for _, dir := range dirs {
+		for _, ext := range []string{"yml", "yaml"} {
+			p := filepath.Join(dir, name+"."+ext)
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				return p
+			}
+		}
+	}
+	return ""
 }

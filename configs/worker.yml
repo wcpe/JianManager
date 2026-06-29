@@ -41,7 +41,7 @@ log:
 # HTTP_PROXY/HTTPS_PROXY/NO_PROXY 环境变量），不破坏现状；非空时优先于环境变量。
 # scheme 决定类型：http:// / https:// / socks5://。含凭据时经 ${ENV} 注入、勿硬编码。
 # 也可在面板「节点页 → 代理」为本节点配「继承全局 / 自定义」，经心跳下发、运行时生效（无需改本文件/重启）；
-# 节点出站优先级：节点自定义（DB 下发） > 全局默认（DB 下发） > worker.yaml > 环境变量。
+# 节点出站优先级：节点自定义（DB 下发） > 全局默认（DB 下发） > worker.yml > 环境变量。
 # proxy:
 #   url: ""                       # 例：http://127.0.0.1:7890 或 socks5://user:${PROXY_PASS}@127.0.0.1:1080
 #   no_proxy: ""                  # 逗号分隔免代理：localhost,127.0.0.1,10.0.0.0/8,.internal.example

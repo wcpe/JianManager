@@ -59,8 +59,8 @@ func runDaemonWrapper() {
 }
 
 func runWorker() {
-	// 加载配置：worker.yaml + JIANMANAGER_ 环境变量覆盖（FR-080，见 ADR-020）。
-	// 配置可选参数从命令行第 1 个参数取（如 `worker /path/worker.yaml`），缺省自动查找。
+	// 加载配置：worker.yml + JIANMANAGER_ 环境变量覆盖（FR-080，见 ADR-020）。
+	// 配置可选参数从命令行第 1 个参数取（如 `worker /path/worker.yml`），缺省自动查找。
 	cfgPath := ""
 	if len(os.Args) > 1 {
 		cfgPath = os.Args[1]
@@ -74,7 +74,7 @@ func runWorker() {
 	// 出站 HTTP 客户端持有者（FR-174/FR-185，见 ADR-037/043）：所有出站下载（自更新/JDK/CFR/服务端 jar）
 	// 经此进程级代理 client。proxy.url 留空=直连（沿用环境变量代理）。非法代理 URL 启动即 fail-fast。
 	// 持有者可运行时重建：CP 经心跳下发节点期望代理后即时生效（custom→节点值 / inherit→全局默认，FR-185）。
-	// 启动按 worker.yaml/env 基线构造；CP 下发为空时回退此基线。
+	// 启动按 worker.yml/env 基线构造；CP 下发为空时回退此基线。
 	outboundProvider, err := httpclient.NewProvider(cfg.Proxy)
 	if err != nil {
 		slog.Error("初始化出站代理客户端失败", "proxy", httpclient.Sanitize(cfg.Proxy.URL), "error", err)
@@ -157,10 +157,10 @@ func runWorker() {
 	// Worker 升级二进制下载与服务端 jar 下载经进程级出站持有者（FR-174/FR-185）：
 	// CP 下发代理改动运行时即时生效。
 	workerServer.SetHTTPClientProvider(outboundProvider.Client)
-	// 全文搜索追加忽略规则（worker.yaml search.ignore，叠加内置默认集，FR-074）。
+	// 全文搜索追加忽略规则（worker.yml search.ignore，叠加内置默认集，FR-074）。
 	workerServer.SetSearchIgnore(cfg.Search.Ignore)
 	// 节点制品缓存（FR-178）：按 sha256 缓存下载过的核心 jar（var/artifact-cache），建实例命中即秒拷免重下。
-	// 容量上限来自 worker.yaml artifact_cache.max_bytes（0=不限），可经 CP 端点运行时下发覆盖。
+	// 容量上限来自 worker.yml artifact_cache.max_bytes（0=不限），可经 CP 端点运行时下发覆盖。
 	artifactCache := artifactcache.New(root.ArtifactCacheDir())
 	artifactCache.SetCap(cfg.ArtifactCache.MaxBytes)
 	workerServer.SetArtifactCache(artifactCache)
@@ -307,7 +307,7 @@ func runWorker() {
 	// 运行中长任务进度随心跳上报（FR-183，见 ADR-040）：心跳读 Worker gRPC Server 的内存任务表。
 	hb.SetTaskProvider(workerServer)
 	// CP 经心跳响应下发节点期望出站代理（FR-185，见 ADR-043）：generation 变化时重建出站持有者，
-	// 注入到各下载点（JDK/CFR/自更新/服务端 jar）即时生效；下发为空回退本地 worker.yaml/env。
+	// 注入到各下载点（JDK/CFR/自更新/服务端 jar）即时生效；下发为空回退本地 worker.yml/env。
 	hb.SetProxyRebuilder(func(c httpclient.Config) error {
 		if err := outboundProvider.Rebuild(c); err != nil {
 			slog.Warn("据心跳下发重建出站代理失败", "proxy", httpclient.Sanitize(c.URL), "error", err)

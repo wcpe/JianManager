@@ -146,18 +146,18 @@ func TestStorage_List_PathEscape(t *testing.T) {
 // List 把前导斜杠的路径当作根相对解析（安全），不视为系统绝对路径。
 func TestStorage_List_LeadingSlashIsRootRelative(t *testing.T) {
 	svc, root := newStorageTestService(t)
-	writeFile(t, root, "etc/control-plane.yaml", []byte("k: v"))
+	writeFile(t, root, "etc/control-plane.yml", []byte("k: v"))
 	entries, err := svc.List("/etc")
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
-	require.Equal(t, "control-plane.yaml", entries[0].Name)
+	require.Equal(t, "control-plane.yml", entries[0].Name)
 }
 
 // List 拒绝指向文件（非目录）的路径。
 func TestStorage_List_NotDir(t *testing.T) {
 	svc, root := newStorageTestService(t)
-	writeFile(t, root, "etc/control-plane.yaml", []byte("k: v"))
-	_, err := svc.List("etc/control-plane.yaml")
+	writeFile(t, root, "etc/control-plane.yml", []byte("k: v"))
+	_, err := svc.List("etc/control-plane.yml")
 	require.ErrorIs(t, err, ErrStorageNotDir)
 }
 

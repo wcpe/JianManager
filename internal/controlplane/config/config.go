@@ -2,6 +2,8 @@ package config
 
 import (
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -219,7 +221,9 @@ func Load(path string) (*Config, error) {
 	// 拉取密钥可逆加密密钥（FR-192，见 ADR-044）：同惯例经 env 注入、不入库。
 	_ = v.BindEnv("client_dist.key_enc_secret", "JIANMANAGER_CLIENT_KEY_ENC_SECRET")
 
-	// 配置文件
+	// 配置文件：.yml 优先、找不到回退 .yaml（FR-224）。viper 默认搜索按 SupportedExts 顺序
+	// （yaml 先于 yml），无法据此让 .yml 优先；故显式按 [.yml, .yaml] 在搜索目录探测，命中即 SetConfigFile。
+	// 两者同为 YAML 格式，SetConfigType 固定 yaml 保证解析正确。
 	if path != "" {
 		v.SetConfigFile(path)
 	} else {
@@ -227,6 +231,9 @@ func Load(path string) (*Config, error) {
 		v.SetConfigType("yaml")
 		v.AddConfigPath(".")
 		v.AddConfigPath("configs")
+		if found := findConfigFile("control-plane", ".", "configs"); found != "" {
+			v.SetConfigFile(found)
+		}
 	}
 
 	// 环境变量
@@ -242,4 +249,18 @@ func Load(path string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// findConfigFile 在给定目录中按 .yml 优先、.yaml 兼容回退的顺序查找 <name>.<ext> 配置文件（FR-224）。
+// 返回首个存在的文件路径；都不存在时返回空串（交回 viper 的名字搜索 + 默认值，零配置仍可启动）。
+func findConfigFile(name string, dirs ...string) string {
+	for _, dir := range dirs {
+		for _, ext := range []string{"yml", "yaml"} {
+			p := filepath.Join(dir, name+"."+ext)
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				return p
+			}
+		}
+	}
+	return ""
 }

@@ -233,7 +233,7 @@ func TestProxy_UpdateValidatesURL(t *testing.T) {
 	require.NoError(t, svc.Update(map[string]string{SettingKeyProxyURL: ""}))
 }
 
-// TestProxy_EffectivePriorityDBOverYAML CP 出站代理生效优先级：settings DB 覆盖 > control-plane.yaml proxy。
+// TestProxy_EffectivePriorityDBOverYAML CP 出站代理生效优先级：settings DB 覆盖 > control-plane.yml proxy。
 func TestProxy_EffectivePriorityDBOverYAML(t *testing.T) {
 	cfg := testConfig()
 	cfg.Proxy.URL = "http://yaml-proxy:7890" // yaml 基线

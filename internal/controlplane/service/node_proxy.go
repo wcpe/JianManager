@@ -13,7 +13,7 @@ import (
 
 // 节点出站代理模式（FR-185，见 ADR-043）。
 const (
-	// NodeProxyModeInherit 用平台全局默认代理（settings DB > control-plane.yaml > env）。
+	// NodeProxyModeInherit 用平台全局默认代理（settings DB > control-plane.yml > env）。
 	NodeProxyModeInherit = "inherit"
 	// NodeProxyModeCustom 用本节点自定义代理（ProxyURL/ProxyNoProxy）。
 	NodeProxyModeCustom = "custom"

@@ -48,9 +48,9 @@ type Node struct {
 	// LoadAvg1 节点 1 分钟 load average（FR-062，心跳驱动）。
 	LoadAvg1         float64        `gorm:"default:0" json:"loadAvg1"`
 	// ProxyMode 节点出站代理模式（FR-185，见 ADR-043）：
-	//   inherit（默认）= 用平台全局默认代理（settings DB > control-plane.yaml > env）；
+	//   inherit（默认）= 用平台全局默认代理（settings DB > control-plane.yml > env）；
 	//   custom         = 用本节点自定义 ProxyURL/ProxyNoProxy。
-	// CP 据此算每节点期望代理经心跳响应下发，Worker 运行时重建出站 client（免登机器改 worker.yaml）。
+	// CP 据此算每节点期望代理经心跳响应下发，Worker 运行时重建出站 client（免登机器改 worker.yml）。
 	ProxyMode string `gorm:"type:varchar(16);default:inherit" json:"proxyMode"`
 	// ProxyURL 节点自定义代理地址（仅 ProxyMode=custom 有效；含凭据，API 响应/日志脱敏）。
 	ProxyURL string `gorm:"type:varchar(512)" json:"-"`

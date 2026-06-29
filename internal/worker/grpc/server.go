@@ -86,7 +86,7 @@ type Server struct {
 	httpProvider func() *http.Client
 	// 全文搜索索引（FR-074，见 ADR-017）。每实例一份 *search.Index，懒创建。
 	// 索引落数据根 var/index/<instance-uuid>/，是 Worker 本地派生资产，不进 CP DB。
-	// searchIgnore 为用户配置追加的忽略 glob（worker.yaml search.ignore），叠加内置默认集。
+	// searchIgnore 为用户配置追加的忽略 glob（worker.yml search.ignore），叠加内置默认集。
 	searchMu      sync.Mutex
 	searchIndexes map[string]*search.Index
 	searchIgnore  []string
@@ -618,7 +618,7 @@ func (s *Server) StreamInstanceEvents(req *workerpb.StreamInstanceEventsRequest,
 // SetBotManager 注入 Bot 管理器，由 Worker 主进程在启动时设置。
 func (s *Server) SetBotManager(m *bot.Manager) { s.botMgr = m }
 
-// SetSearchIgnore 设置全文搜索的追加忽略规则（worker.yaml search.ignore，FR-074）。
+// SetSearchIgnore 设置全文搜索的追加忽略规则（worker.yml search.ignore，FR-074）。
 // 叠加在内置默认忽略集之上，由 Worker 主进程在启动时按配置注入。须在首次 SearchFiles 前调用。
 func (s *Server) SetSearchIgnore(rules []string) {
 	s.searchMu.Lock()

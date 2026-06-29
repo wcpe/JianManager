@@ -12,7 +12,7 @@ import (
 // CP 每拍下发该节点期望代理（custom→节点值 / inherit→全局默认）+ generation（配置哈希）。
 // applier 仅当 generation 与上次已应用代不同时才调 rebuild（避免每拍重建 client）。
 // generation 为空表示 CP 期望直连（未配代理 / 未下发）：重建为空配，使 Worker 回退本地
-// worker.yaml/env（httpclient.New 空配语义）。重连/重启天然由后续心跳重发（无需落盘）。
+// worker.yml/env（httpclient.New 空配语义）。重连/重启天然由后续心跳重发（无需落盘）。
 type proxyApplier struct {
 	// rebuild 用给定代理配置重建并替换 Worker 出站持有者；由 main 注入（包裹 Provider.Rebuild）。
 	rebuild func(httpclient.Config) error
