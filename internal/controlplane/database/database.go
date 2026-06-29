@@ -1,10 +1,15 @@
 package database
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -31,7 +36,9 @@ func New(cfg config.DatabaseConfig) (*gorm.DB, error) {
 	}
 
 	db, err := gorm.Open(dialector, &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		// SQL 日志跟随 FR-225 调试开关（FIX-7）：非调试静默、调试打印，运行时即时生效，
+		// 不再硬编码 logger.Info 致生产 / 迁移仍逐条刷 SQL。
+		Logger: newGormLogger(os.Stdout),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("连接数据库失败: %w", err)
@@ -238,4 +245,63 @@ func migrateGRPCPortColumn(db *gorm.DB) error {
 	}
 
 	return nil
+}
+
+// dynamicGormLogger 让 GORM 的 SQL 日志跟随 FR-225 调试开关（FIX-7）。
+//
+// 原实现把 GORM logger 硬编码为 logger.Info，与 config.LogLevelVar（FR-063/225 运行时日志级别）
+// 脱钩，导致生产（release / 非 debug）启动与迁移仍逐条打印 SQL（如 migrator 的
+// `SELECT count(*) FROM sqlite_master`）。改为按调试开关动态取级别：调试（LogLevelVar ≤ Debug）
+// → Info（打印全部 SQL）；否则 → Warn（仅错误 / 慢查询，生产静默）。LogLevelVar 可运行时切换
+// （设置面板「调试模式」），故 SQL 日志亦随之即时生效、无需重启。
+type dynamicGormLogger struct {
+	info logger.Interface
+	warn logger.Interface
+}
+
+// effectiveGormLevel 返回当前应生效的 GORM 日志级别（跟随调试开关）。
+func effectiveGormLevel() logger.LogLevel {
+	if config.LogLevelVar.Level() <= slog.LevelDebug {
+		return logger.Info
+	}
+	return logger.Warn
+}
+
+func (l dynamicGormLogger) current() logger.Interface {
+	if effectiveGormLevel() == logger.Info {
+		return l.info
+	}
+	return l.warn
+}
+
+// LogMode 忽略外部显式级别——级别由调试开关动态决定，返回自身以保持动态行为。
+func (l dynamicGormLogger) LogMode(logger.LogLevel) logger.Interface { return l }
+
+func (l dynamicGormLogger) Info(ctx context.Context, msg string, data ...any) {
+	l.current().Info(ctx, msg, data...)
+}
+
+func (l dynamicGormLogger) Warn(ctx context.Context, msg string, data ...any) {
+	l.current().Warn(ctx, msg, data...)
+}
+
+func (l dynamicGormLogger) Error(ctx context.Context, msg string, data ...any) {
+	l.current().Error(ctx, msg, data...)
+}
+
+func (l dynamicGormLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	l.current().Trace(ctx, begin, fc, err)
+}
+
+// newGormLogger 构造跟随调试开关的 GORM logger，日志写入 w（生产传 os.Stdout）。
+func newGormLogger(w io.Writer) logger.Interface {
+	build := func(lv logger.LogLevel) logger.Interface {
+		return logger.New(log.New(w, "\r\n", log.LstdFlags), logger.Config{
+			SlowThreshold:             200 * time.Millisecond,
+			LogLevel:                  lv,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  false,
+		})
+	}
+	return dynamicGormLogger{info: build(logger.Info), warn: build(logger.Warn)}
 }
