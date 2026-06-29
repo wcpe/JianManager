@@ -18,6 +18,9 @@ import (
 const (
 	// SettingKeyLogLevel CP 日志级别（debug|info|warn|error）。落库即时生效（slog LevelVar）。
 	SettingKeyLogLevel = "log.level"
+	// SettingKeyDebugMode 调试模式总开关（true|false，FR-225，增强 FR-063）。落库即时生效：
+	// 开=日志 debug + Gin debug 模式；关=日志回 log.level 基线 + Gin release（默认 false，启动即静默）。
+	SettingKeyDebugMode = "debug.mode"
 	// SettingKeyJDKMirrorTemurin / Corretto / Zulu JDK 下载镜像源基址。
 	// 安装 JDK 时 CP 取生效值经 InstallJDKRequest.mirror_base 下发 Worker，使配置真生效（FR-063）。
 	SettingKeyJDKMirrorTemurin  = "jdk.mirror.temurin"
@@ -60,6 +63,9 @@ type SettingsService struct {
 	// proxyRebuilder 在 proxy.* 覆盖落库后被调用，令 CP 重建出站持有者使新代理即时生效（FR-185）。
 	// 由 main 注入（传入重建 httpclient.Provider 的闭包）；为 nil 时不重建（仅落库，下次重启生效）。
 	proxyRebuilder func(httpclient.Config)
+	// ginModeApplier 在 debug.mode 切换 / 启动基线时被调用切 Gin 模式（true=debug / false=release，FR-225）。
+	// 由 main 注入（闭包调 gin.SetMode），使 gin 依赖留在入口层、不渗入 service。为 nil 时仅切日志级别。
+	ginModeApplier func(debug bool)
 }
 
 // NewSettingsService 创建平台配置服务。
@@ -75,6 +81,35 @@ func NewSettingsService(db *gorm.DB, cfg *config.Config) *SettingsService {
 // 令 CP 自身出站立即走新代理、免重启。不注入则代理覆盖仅落库、下次重启生效。
 func (s *SettingsService) SetProxyRebuilder(fn func(httpclient.Config)) {
 	s.proxyRebuilder = fn
+}
+
+// SetGinModeApplier 注入 Gin 模式切换回调（FR-225）。由 main 注入闭包调 gin.SetMode，使 gin 依赖留在入口层。
+// 须在 ApplyDebugBaseline 前注入，以便启动按 debug.mode 设初始 Gin 模式。
+func (s *SettingsService) SetGinModeApplier(fn func(debug bool)) {
+	s.ginModeApplier = fn
+}
+
+// ApplyDebugBaseline 按当前生效 debug.mode 设初始 Gin 模式 + 日志级别（FR-225）。
+// main 须在 router.Setup 前调用：默认 debug.mode=false → Gin release（不刷 [GIN-debug] 路由噪音）+ 日志 info。
+func (s *SettingsService) ApplyDebugBaseline() {
+	s.applyDebugMode(s.debugModeOn())
+}
+
+// debugModeOn 报告调试模式当前是否开启（生效值 == "true"）。
+func (s *SettingsService) debugModeOn() bool {
+	return s.EffectiveValue(SettingKeyDebugMode) == "true"
+}
+
+// applyDebugMode 应用调试模式（FR-225）：开=日志强制 debug + Gin debug；关=日志回 log.level 基线 + Gin release。
+func (s *SettingsService) applyDebugMode(on bool) {
+	if on {
+		config.SetLogLevel("debug")
+	} else {
+		config.SetLogLevel(s.EffectiveValue(SettingKeyLogLevel))
+	}
+	if s.ginModeApplier != nil {
+		s.ginModeApplier(on)
+	}
 }
 
 // EffectiveProxy 返回 CP 当前生效的出站代理配置（FR-185，见 ADR-043）。
@@ -124,6 +159,8 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 
 	editable := []SettingItem{
 		s.editableItem(SettingKeyLogLevel, s.defaultValue(SettingKeyLogLevel), overrides, true),
+		// 调试模式总开关（FR-225）：开=日志 debug + Gin debug，关=info + release，运行时即时生效。
+		s.editableItem(SettingKeyDebugMode, s.defaultValue(SettingKeyDebugMode), overrides, true),
 		s.editableItem(SettingKeyJDKMirrorTemurin, s.defaultValue(SettingKeyJDKMirrorTemurin), overrides, false),
 		s.editableItem(SettingKeyJDKMirrorCorretto, s.defaultValue(SettingKeyJDKMirrorCorretto), overrides, false),
 		s.editableItem(SettingKeyJDKMirrorZulu, s.defaultValue(SettingKeyJDKMirrorZulu), overrides, false),
@@ -244,6 +281,8 @@ func (s *SettingsService) defaultValue(key string) string {
 	switch key {
 	case SettingKeyLogLevel:
 		return s.cfg.Log.Level
+	case SettingKeyDebugMode:
+		return "false"
 	case SettingKeyJDKMirrorTemurin:
 		return "https://api.adoptium.net"
 	case SettingKeyJDKMirrorCorretto:
@@ -304,14 +343,19 @@ func (s *SettingsService) applyPersistedOverrides() {
 func (s *SettingsService) applyOverride(key, val string) {
 	switch key {
 	case SettingKeyLogLevel:
-		config.SetLogLevel(val)
+		// 调试模式开启时由其强制 debug，log.level 设置不下压（关调试后回退到此值）。
+		if !s.debugModeOn() {
+			config.SetLogLevel(val)
+		}
+	case SettingKeyDebugMode:
+		s.applyDebugMode(val == "true")
 	}
 }
 
 // isWritableSettingKey 报告键是否在可写白名单内。
 func isWritableSettingKey(key string) bool {
 	switch key {
-	case SettingKeyLogLevel,
+	case SettingKeyLogLevel, SettingKeyDebugMode,
 		SettingKeyJDKMirrorTemurin, SettingKeyJDKMirrorCorretto, SettingKeyJDKMirrorZulu,
 		SettingKeyGracefulStopTimeout, SettingKeyBackupRetentionDays,
 		SettingKeyProxyURL, SettingKeyProxyNoProxy:
@@ -326,6 +370,10 @@ func validateSettingValue(key, val string) error {
 	case SettingKeyLogLevel:
 		if !config.ValidLogLevel(val) {
 			return fmt.Errorf("%w: 日志级别须为 debug|info|warn|error", ErrSettingValueInvalid)
+		}
+	case SettingKeyDebugMode:
+		if val != "true" && val != "false" {
+			return fmt.Errorf("%w: 调试模式须为 true|false", ErrSettingValueInvalid)
 		}
 	case SettingKeyGracefulStopTimeout:
 		d, err := time.ParseDuration(val)

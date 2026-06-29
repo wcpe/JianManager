@@ -328,6 +328,18 @@ func main() {
 	// 节点级出站代理（FR-185）：全局默认取自 settings（inherit 节点用之），custom 节点用自身值。
 	nodeProxySvc := service.NewNodeProxyService(db, settingsSvc.EffectiveProxy)
 
+	// 调试模式（FR-225，增强 FR-063）：默认 Gin release 静默（杀启动 [GIN-debug] 路由噪音）；
+	// debug.mode 开关运行时切 Gin 模式 + 日志级别（gin 依赖留在入口层、不渗入 service）。
+	// 必须在 router.Setup（注册路由触发 [GIN-debug] 输出）之前设好 Gin 模式。
+	settingsSvc.SetGinModeApplier(func(debug bool) {
+		if debug {
+			gin.SetMode(gin.DebugMode)
+		} else {
+			gin.SetMode(gin.ReleaseMode)
+		}
+	})
+	settingsSvc.ApplyDebugBaseline()
+
 	r := router.Setup(&router.Services{
 		Auth:                    authSvc,
 		User:                    userSvc,

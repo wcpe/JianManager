@@ -272,3 +272,68 @@ func TestProxy_UpdateRebuildsProvider(t *testing.T) {
 	require.Equal(t, 1, rebuilt)
 	config.SetLogLevel("info")
 }
+
+// === 调试模式开关（FR-225，增强 FR-063） ===
+
+// TestDebugMode_DefaultFalseEditableImmediate 无覆盖时 debug.mode 默认 false、可编辑、即时生效。
+func TestDebugMode_DefaultFalseEditableImmediate(t *testing.T) {
+	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
+	view, err := svc.Get()
+	require.NoError(t, err)
+	dm, ok := findItem(view.Editable, SettingKeyDebugMode)
+	require.True(t, ok)
+	require.Equal(t, "false", dm.Value)
+	require.True(t, dm.Editable)
+	require.False(t, dm.Overridden)
+	require.True(t, dm.EffectiveImmediately)
+}
+
+// TestDebugMode_TogglesLogAndGin 开调试模式→日志 debug + Gin applier(true)；关→日志回 log.level 基线 + applier(false)。
+func TestDebugMode_TogglesLogAndGin(t *testing.T) {
+	config.SetLogLevel("info")
+	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
+	var ginDebug *bool
+	svc.SetGinModeApplier(func(debug bool) { v := debug; ginDebug = &v })
+
+	require.NoError(t, svc.Update(map[string]string{SettingKeyDebugMode: "true"}))
+	require.Equal(t, slog.LevelDebug, config.LogLevelVar.Level())
+	require.NotNil(t, ginDebug)
+	require.True(t, *ginDebug)
+
+	require.NoError(t, svc.Update(map[string]string{SettingKeyDebugMode: "false"}))
+	require.Equal(t, slog.LevelInfo, config.LogLevelVar.Level()) // 关调试 → 回退 log.level 基线 info
+	require.NotNil(t, ginDebug)
+	require.False(t, *ginDebug)
+
+	config.SetLogLevel("info")
+}
+
+// TestDebugMode_OverridesLogLevelWhileOn 调试模式开启时，log.level 设置不下压日志级别（调试强制 debug）。
+func TestDebugMode_OverridesLogLevelWhileOn(t *testing.T) {
+	config.SetLogLevel("info")
+	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
+	svc.SetGinModeApplier(func(bool) {})
+	require.NoError(t, svc.Update(map[string]string{SettingKeyDebugMode: "true"}))
+	require.Equal(t, slog.LevelDebug, config.LogLevelVar.Level())
+	// 调试模式开启时改 log.level=warn 不应把级别压回 warn。
+	require.NoError(t, svc.Update(map[string]string{SettingKeyLogLevel: "warn"}))
+	require.Equal(t, slog.LevelDebug, config.LogLevelVar.Level())
+	config.SetLogLevel("info")
+}
+
+// TestDebugMode_RejectsNonBool debug.mode 仅接受 true/false。
+func TestDebugMode_RejectsNonBool(t *testing.T) {
+	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
+	require.ErrorIs(t, svc.Update(map[string]string{SettingKeyDebugMode: "yes"}), ErrSettingValueInvalid)
+	require.ErrorIs(t, svc.Update(map[string]string{SettingKeyDebugMode: "1"}), ErrSettingValueInvalid)
+}
+
+// TestDebugMode_BaselineAppliesGinRelease ApplyDebugBaseline 默认（debug.mode=false）令 applier(false)=Gin release。
+func TestDebugMode_BaselineAppliesGinRelease(t *testing.T) {
+	svc := NewSettingsService(newSettingsTestDB(t), testConfig())
+	var ginDebug *bool
+	svc.SetGinModeApplier(func(debug bool) { v := debug; ginDebug = &v })
+	svc.ApplyDebugBaseline()
+	require.NotNil(t, ginDebug)
+	require.False(t, *ginDebug)
+}
