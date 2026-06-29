@@ -54,6 +54,23 @@ func (h *JDKHandler) Install(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"taskId": task.TaskID, "task": task})
 }
 
+// Probe 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 信息（FR-228），供登记自动填。
+func (h *JDKHandler) Probe(c *gin.Context) {
+	if !requirePlatformAdmin(c) { return }
+	nodeID, err := parseUintParam(c, "id"); if err != nil { return }
+	var req struct {
+		Path string `json:"path" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil { c.JSON(http.StatusBadRequest, gin.H{"error":"INVALID_REQUEST","message":"缺少 path"}); return }
+	res, err := h.svc.Probe(nodeID, req.Path)
+	if err != nil {
+		if errors.Is(err, service.ErrNodeOffline) { c.JSON(http.StatusServiceUnavailable, gin.H{"error":"NODE_OFFLINE","message":"节点未连接"}); return }
+		if errors.Is(err, service.ErrNodeNotFound) { c.JSON(http.StatusNotFound, gin.H{"error":"NOT_FOUND","message":"节点不存在"}); return }
+		c.JSON(http.StatusBadGateway, gin.H{"error":"PROBE_FAILED","message":err.Error()}); return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
 func (h *JDKHandler) Update(c *gin.Context) {
 	if !requirePlatformAdmin(c) { return }
 	nodeID, err := parseUintParam(c, "id"); if err != nil { return }
@@ -89,6 +106,7 @@ func (h *JDKHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	jdks.POST("", h.Create)
 	jdks.PUT("/:jid", h.Update)
 	jdks.POST("/install", h.Install)
+	jdks.POST("/probe", h.Probe)
 	jdks.DELETE("/:jid", h.Delete)
 }
 

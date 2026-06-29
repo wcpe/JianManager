@@ -166,6 +166,45 @@ func (s *JDKService) InstallAsync(nodeID uint, req InstallJDKRequest, createdBy 
 	return task, nil
 }
 
+// ProbeResult JDK 探测结果（FR-228），对齐 workerpb.ProbeJDKResponse。
+type ProbeResult struct {
+	Valid        bool   `json:"valid"`
+	Vendor       string `json:"vendor"`
+	MajorVersion int    `json:"majorVersion"`
+	Version      string `json:"version"`
+	Arch         string `json:"arch"`
+	JavaHome     string `json:"javaHome"`
+	Error        string `json:"error,omitempty"`
+}
+
+// Probe 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 信息（FR-228），供登记前自动填厂商/版本/架构。
+// 节点不存在 ErrNodeNotFound、离线 ErrNodeOffline；探测本身失败（非 JDK）作为 Valid=false + Error 返回（非 error）。
+func (s *JDKService) Probe(nodeID uint, path string) (*ProbeResult, error) {
+	node, err := s.nodeByID(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return nil, ErrNodeOffline
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	resp, err := client.Worker.ProbeJDK(ctx, &workerpb.ProbeJDKRequest{Path: path})
+	if err != nil {
+		return nil, fmt.Errorf("Worker ProbeJDK RPC 失败: %w", err)
+	}
+	return &ProbeResult{
+		Valid:        resp.Valid,
+		Vendor:       resp.Vendor,
+		MajorVersion: int(resp.MajorVersion),
+		Version:      resp.Version,
+		Arch:         resp.Arch,
+		JavaHome:     resp.JavaHome,
+		Error:        resp.Error,
+	}, nil
+}
+
 // Install 同步发起 JDK 安装（阻塞至完成，最长 20min）。保留供未启用任务中心时回退与既有测试。
 // 生产路径已改用 InstallAsync（FR-183，见 ADR-040）。
 func (s *JDKService) Install(nodeID uint, req InstallJDKRequest) (*model.NodeJDK, error) {

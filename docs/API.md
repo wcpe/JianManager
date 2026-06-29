@@ -1483,6 +1483,14 @@
 - **响应**: `202 Accepted` `{ "taskId": "<uuid>", "task": { ...Task } }`
 - **错误码**: `503 NODE_OFFLINE`（节点未连接，不建悬挂任务）；`404 NOT_FOUND`（节点不存在）；`502 INSTALL_FAILED`（下发 Worker 失败，任务已置 failed）
 
+### POST /api/v1/nodes/:id/jdks/probe（FR-228）
+- **描述**: 探测节点上某路径（JDK home 目录或 java 可执行文件）的 JDK 信息，供「登记已有」自动填厂商/版本/架构（免手填）。Worker 归一路径后跑 `java -XshowSettings:properties -version` 解析。
+- **关联 FR**: FR-228（增强 FR-178/033）
+- **权限**: 平台管理员
+- **请求体**: `{ "path": "/opt/jdks/temurin-21" }`（或指向 `.../bin/java`）
+- **响应**: `{ "valid": true, "vendor": "Temurin", "majorVersion": 21, "version": "21.0.4+9", "arch": "x64", "javaHome": "/opt/jdks/temurin-21" }`；非 JDK → `{ "valid": false, "error": "未找到 bin/java 或无法读取版本…" }`（HTTP 200，valid=false 不作 5xx）
+- **错误码**: `503 NODE_OFFLINE`；`404 NOT_FOUND`（节点不存在）；`400 INVALID_REQUEST`（缺 path）
+
 ### 节点运行时管理（FR-178）
 
 > 节点级运行时面板后端：制品缓存（性能优化，真·节点级）、JDK 版本目录（foojay）、目录浏览。

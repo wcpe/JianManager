@@ -280,7 +280,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-225 | 调试模式开关（设置项，热重载）：默认 Gin release 静默 + log info；设置「调试模式」开关开=log debug+Gin debug、关=info+release，走 FR-063 运行时机制即时生效不重启（增强 FR-063，免 spec） | P2 | 🔨 开发中 |
 | FR-226 | 通知中心快捷跳转 + 任务中心联动 + 页眉任务进度：任务类通知（含 JDK 失败）点击跳任务中心对应任务；页眉放任务中心入口 + 在跑任务进度；完成/失败站内信可一键跳（复用既有 Notification.TaskID，增强 FR-216/183，免 spec） | P1 | 🔨 开发中 |
 | FR-227 | 任务中心强制停止 + 筛选查询：强制停止=经 gRPC 真中断 Worker 长任务（取消下载 + 清临时文件）+ 任务转终态（新 canceled 态）；列表按 kind/state/node/时间/关键词筛选（增强 FR-183，需 spec：状态机 + 跨进程取消 + proto） | P1 | 🔨 开发中 |
-| FR-228 | JDK 登记体验重做：模态目录/文件选择器选 java 可执行文件 → 后端 java -version 探测自动填 vendor/major/version/arch（免手填）；「标记为 Worker 托管」复选框置顶并决定选择器默认根（面板目录/节点目录）（增强 FR-178/033，需 spec：worker java 探测 RPC + 选择器选文件 + 跨模块） | P1 | 📋 计划 |
+| FR-228 | JDK 登记体验重做：模态目录/文件选择器选 java 可执行文件 → 后端 java -version 探测自动填 vendor/major/version/arch（免手填）；「标记为 Worker 托管」复选框置顶并决定选择器默认根（面板目录/节点目录）（增强 FR-178/033，需 spec：worker java 探测 RPC + 选择器选文件 + 跨模块） | P1 | 🔨 开发中 |
 | FR-229 | 连通性自检端点族 + 测试按钮：出站代理（设置面板）、JDK 下载源/镜像（运行时）、节点存活（JDK 一键下载前先测、不通即提示不卡死）统一一族测试连通性能力（增强 FR-185/178，需 spec：端点族契约 + 经出站客户端语义） | P2 | 🔨 开发中 |
 | FR-230 | 创建实例独立向导页：创建实例改独立分步向导页（非模态）+ 每步大白话提示，复用既有 create API；与 FR-189 协调（创建出重度模态、改走页，编辑等仍用模态）（增强 FR-005/189，免 spec） | P1 | 📋 计划 |
 | FR-231 | 复制实例 高级/快速 双模式：快速复制=核心 jar + plugins/ + 根配置（server.properties 及根 *.yml/*.properties）；高级复制=目录选择器 + 用户包含/排除筛选；扩 CloneWorkDir 支持 include/选择性复制（增强 FR-036，需 spec：复制语义 + 筛选 + proto） | P2 | 📋 计划 |
