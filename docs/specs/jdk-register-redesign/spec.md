@@ -42,7 +42,14 @@ message ProbeJDKResponse {
 - [ ] `POST /nodes/:id/jdks/probe`：有效 JDK 目录/exe → valid + 正确厂商/主版本/版本/架构 + java_home；非 JDK 目录 → valid=false + error；节点离线 503。
 - [ ] 前端：托管复选框在最上方；选路径走模态（不内联顶开布局）；选定后自动填参数（只读）、不需手填；探测失败显错误且不能登记；登记成功后列表出现该 JDK（managed 反映复选框）。
 - [ ] 后端 ProbeJDK 单测（归一 exe→home / 有效目录 / 非 JDK 目录）+ 前端 tsc/lint/vitest 绿；mock 域补 probe。
-- [ ] **真机验**：真机选节点上已装 JDK 目录 → 自动探出厂商/版本 → 登记成功。
+- [x] **真机验**：真机选节点 GraalVM 21 目录 → 自动探出 Oracle/21/21.0.4/amd64 → 登记成功（2026-06-30）。
+
+## 3.1 细化（FR-228 续，2026-06-30）
+
+- **登记允许手动输入**：路径除模态选目录外，新增可手输文本框 + 「检测」按钮（手输 / 选目录都走同一 probe）。
+- **删除按来源区分**（同步到「运行时与制品」页）：
+  - 外部（managed=false）→ **只删记录、不删文件**。`JDKService.Delete` 仅当 `jdk.Managed` 才调 `RemoveJDK`（兼修旧 bug：外部 JDK 路径在托管根外，旧逻辑无条件调 `RemoveJDK` 被 worker 安全校验拒绝 → 外部删除直接失败）。前端轻确认（说明不动磁盘文件）。
+  - 内部（managed=true）→ 删记录 + 移除 Worker 文件，前端 `DangerConfirm` confirmText 二次输入「厂商 主版本」。
 
 ## 4. 关联
 

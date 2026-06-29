@@ -1492,6 +1492,13 @@
 - **响应**: `{ "valid": true, "vendor": "Temurin", "majorVersion": 21, "version": "21.0.4+9", "arch": "x64", "javaHome": "/opt/jdks/temurin-21" }`；非 JDK → `{ "valid": false, "error": "未找到 bin/java 或无法读取版本…" }`（HTTP 200，valid=false 不作 5xx）
 - **错误码**: `503 NODE_OFFLINE`；`404 NOT_FOUND`（节点不存在）；`400 INVALID_REQUEST`（缺 path）
 
+### DELETE /api/v1/nodes/:id/jdks/:jid（FR-228 细化）
+- **描述**: 删除已登记 JDK。**按来源区分文件处置**：`managed=true`（平台下载托管）删记录 + 移除 Worker 上的文件（前端要求二次输入「厂商 主版本」确认）；`managed=false`（外部登记）**仅删记录、不动磁盘文件**（外部 JDK 由用户自管）。被实例引用时拒绝。
+- **关联 FR**: FR-036 / FR-072 / FR-228
+- **权限**: 平台管理员
+- **响应**: `{ "message": "已删除" }`
+- **错误码**: `409 JDK_IN_USE`（被实例占用，附 `instances`）；`404 NOT_FOUND`
+
 ### 节点运行时管理（FR-178）
 
 > 节点级运行时面板后端：制品缓存（性能优化，真·节点级）、JDK 版本目录（foojay）、目录浏览。

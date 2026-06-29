@@ -265,7 +265,9 @@ func (s *JDKService) Delete(nodeID, jdkID uint) ([]model.Instance, error) {
 		return used, ErrJDKInUse
 	}
 
-	if s.pool != nil {
+	// 仅「内部下载（托管）」的 JDK 才删除 Worker 上的文件；外部登记的只删记录、绝不动用户磁盘文件（FR-228 细化：
+	// 外部 JDK 由用户自管，平台无权删其文件；托管 JDK 在平台 data 目录下，删记录时一并清理文件）。
+	if jdk.Managed && s.pool != nil {
 		if node, err := s.nodeByID(nodeID); err == nil {
 			if client, ok := s.pool.Get(node.UUID); ok {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
