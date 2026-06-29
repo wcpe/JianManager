@@ -6453,8 +6453,11 @@ type CloneWorkDirRequest struct {
 	SrcInstanceUuid string                 `protobuf:"bytes,1,opt,name=src_instance_uuid,json=srcInstanceUuid,proto3" json:"src_instance_uuid,omitempty"` // 源实例（须已注册，提供其工作目录）
 	DstInstanceUuid string                 `protobuf:"bytes,2,opt,name=dst_instance_uuid,json=dstInstanceUuid,proto3" json:"dst_instance_uuid,omitempty"` // 目标实例（须已注册，提供其工作目录）
 	Exclude         []string               `protobuf:"bytes,3,rep,name=exclude,proto3" json:"exclude,omitempty"`                                          // 相对源工作目录的排除项：目录前缀、精确路径或 basename glob（如 *.pid）
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// include 仅复制顶层段命中的项（目录前缀 / basename glob，如 plugins、*.jar；FR-231）。
+	// 为空=复制全部（仅受 exclude 约束，向后兼容）；非空仍叠加 exclude。
+	Include       []string `protobuf:"bytes,4,rep,name=include,proto3" json:"include,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CloneWorkDirRequest) Reset() {
@@ -6504,6 +6507,13 @@ func (x *CloneWorkDirRequest) GetDstInstanceUuid() string {
 func (x *CloneWorkDirRequest) GetExclude() []string {
 	if x != nil {
 		return x.Exclude
+	}
+	return nil
+}
+
+func (x *CloneWorkDirRequest) GetInclude() []string {
+	if x != nil {
+		return x.Include
 	}
 	return nil
 }
@@ -9134,11 +9144,12 @@ const file_proto_worker_proto_rawDesc = "" +
 	"configYaml\"K\n" +
 	"\x19DeployServerProbeResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\x87\x01\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\xa1\x01\n" +
 	"\x13CloneWorkDirRequest\x12*\n" +
 	"\x11src_instance_uuid\x18\x01 \x01(\tR\x0fsrcInstanceUuid\x12*\n" +
 	"\x11dst_instance_uuid\x18\x02 \x01(\tR\x0fdstInstanceUuid\x12\x18\n" +
-	"\aexclude\x18\x03 \x03(\tR\aexclude\"\xa6\x01\n" +
+	"\aexclude\x18\x03 \x03(\tR\aexclude\x12\x18\n" +
+	"\ainclude\x18\x04 \x03(\tR\ainclude\"\xa6\x01\n" +
 	"\x14CloneWorkDirResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12!\n" +

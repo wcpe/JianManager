@@ -27,15 +27,16 @@ func (s *Server) CloneWorkDir(ctx context.Context, req *workerpb.CloneWorkDirReq
 		return &workerpb.CloneWorkDirResponse{Success: false, Error: "源或目标工作目录为空"}, nil
 	}
 
-	files, bytesCopied, skipped, err := copyDirExcluding(src.WorkDir, dst.WorkDir, req.Exclude)
+	files, bytesCopied, skipped, err := copyDirFiltered(src.WorkDir, dst.WorkDir, req.Include, req.Exclude)
 	if err != nil {
 		return &workerpb.CloneWorkDirResponse{Success: false, Error: err.Error()}, nil
 	}
 	return &workerpb.CloneWorkDirResponse{Success: true, CopiedFiles: files, CopiedBytes: bytesCopied, Skipped: skipped}, nil
 }
 
-// copyDirExcluding 递归复制 srcDir → dstDir，按 patterns 排除。返回复制文件数、字节数与被跳过的顶层项/目录。
-func copyDirExcluding(srcDir, dstDir string, patterns []string) (int64, int64, []string, error) {
+// copyDirFiltered 递归复制 srcDir → dstDir：include 非空时仅复制顶层段命中 include 的项，
+// 再按 exclude 排除。返回复制文件数、字节数与被跳过的顶层项/目录（FR-036 / FR-231）。
+func copyDirFiltered(srcDir, dstDir string, include, exclude []string) (int64, int64, []string, error) {
 	var files, bytesCopied int64
 	skipped := []string{}
 	err := filepath.Walk(srcDir, func(p string, info os.FileInfo, werr error) error {
@@ -49,7 +50,8 @@ func copyDirExcluding(srcDir, dstDir string, patterns []string) (int64, int64, [
 		if rel == "." {
 			return nil
 		}
-		if cloneExcluded(rel, patterns) {
+		// include 非空：不在 include 内的顶层项/目录跳过（FR-231 快速/高级筛选）；exclude 始终排除（运行态垃圾等）。
+		if !cloneIncluded(rel, include) || cloneExcluded(rel, exclude) {
 			if info.IsDir() {
 				skipped = append(skipped, filepath.ToSlash(rel))
 				return filepath.SkipDir
@@ -77,6 +79,35 @@ func copyDirExcluding(srcDir, dstDir string, patterns []string) (int64, int64, [
 		return 0, 0, nil, fmt.Errorf("复制工作目录失败: %w", err)
 	}
 	return files, bytesCopied, skipped, nil
+}
+
+// cloneIncluded 判断相对路径是否命中 include（FR-231）：include 空=全包含；
+// 否则取 rel 首段，匹配某 include 模式（精确 / basename glob；自动去 "/**"、"/" 后缀，如 plugins、*.jar）。
+func cloneIncluded(rel string, include []string) bool {
+	if len(include) == 0 {
+		return true
+	}
+	relSlash := filepath.ToSlash(rel)
+	first := relSlash
+	if i := strings.IndexByte(relSlash, '/'); i >= 0 {
+		first = relSlash[:i]
+	}
+	for _, pat := range include {
+		pat = filepath.ToSlash(strings.TrimSpace(pat))
+		pat = strings.TrimSuffix(strings.TrimSuffix(pat, "/**"), "/")
+		if pat == "" {
+			continue
+		}
+		if pat == first {
+			return true
+		}
+		if !strings.Contains(pat, "/") {
+			if ok, _ := path.Match(pat, first); ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // cloneExcluded 判断相对路径是否命中排除：目录前缀 / 精确路径 / basename glob（不含 '/' 的模式如 *.pid）。
