@@ -29,6 +29,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/internal/worker/register"
+	"github.com/wcpe/JianManager/internal/worker/setup"
 	"github.com/wcpe/JianManager/internal/worker/ws"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
@@ -58,17 +59,108 @@ func runDaemonWrapper() {
 	}
 }
 
+// configPathArg 返回命令行第 1 个位置参数当且仅当它是「现存的配置文件路径」（FR-222，见 ADR-051）。
+//
+// 历史用法 `worker /path/worker.yml` 显式传配置文件仍支持；但 setup 的 `--xxx` flag 与不存在的
+// 路径不当配置文件（否则会误判已配置而跳过 setup）。返回空串表示「未显式给配置文件」。
+func configPathArg() string {
+	if len(os.Args) <= 1 {
+		return ""
+	}
+	first := os.Args[1]
+	if strings.HasPrefix(first, "-") {
+		return "" // setup flag，非配置文件
+	}
+	if st, err := os.Stat(first); err == nil && !st.IsDir() {
+		return first // 现存文件，按显式配置文件处理
+	}
+	return ""
+}
+
+// setupArgs 返回传给 setup 解析的命令行参数（剥离程序名；首个位置参数若为配置文件路径也剥离）。
+func setupArgs() []string {
+	args := os.Args[1:]
+	if len(args) > 0 && configPathArg() != "" {
+		// 首参是显式配置文件时不会进 setup（已配置），此分支几乎不触达；防御性剥离。
+		return args[1:]
+	}
+	return args
+}
+
+// isConfigured 报告 Worker 是否已配置（FR-222，见 ADR-051）。
+//
+// 已配置 ⇔ 有 worker.yml/.yaml 配置文件 或 有 <data-dir>/etc/node-identity.json 身份文件。
+// 二者任一存在即视为已配置（有 yml=写过配置；有身份=注册过）→ 跳过 setup。两者皆缺=全新机器=进 setup。
+// data-dir 按 dataroot.Resolve 同优先级解析（--data-dir > 环境变量 > ./data），只解析路径不建目录。
+func isConfigured() bool {
+	if workercfg.WorkerConfigExists() {
+		return true
+	}
+	// 身份文件路径据 data-dir 解析；--data-dir flag 与 JIANMANAGER_DATA_DIR 均纳入考量。
+	override := ""
+	for _, a := range parseDataDirArg(os.Args[1:]) {
+		override = a
+	}
+	root, err := dataroot.Resolve(override)
+	if err != nil {
+		return false // 解析失败按未配置处理（让 setup 据 dataroot 重新解析并报清晰错误）
+	}
+	if _, err := os.Stat(register.IdentityPath(root.EtcDir())); err == nil {
+		return true
+	}
+	return false
+}
+
+// parseDataDirArg 从命令行参数中提取 --data-dir 的值（支持 --data-dir v 与 --data-dir=v）。
+// 返回 0 或 1 个元素（便于调用方取最后一个）。
+func parseDataDirArg(args []string) []string {
+	var out []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--data-dir" && i+1 < len(args) {
+			out = append(out, args[i+1])
+			i++
+		} else if strings.HasPrefix(a, "--data-dir=") {
+			out = append(out, strings.TrimPrefix(a, "--data-dir="))
+		}
+	}
+	return out
+}
+
 func runWorker() {
 	// 加载配置：worker.yml + JIANMANAGER_ 环境变量覆盖（FR-080，见 ADR-020）。
 	// 配置可选参数从命令行第 1 个参数取（如 `worker /path/worker.yml`），缺省自动查找。
-	cfgPath := ""
-	if len(os.Args) > 1 {
-		cfgPath = os.Args[1]
+	// 第 1 个参数仅当是「现存的配置文件路径」时才当配置文件；setup 的 --xxx flag 不算（见下自检）。
+	cfgPath := configPathArg()
+
+	// 未配置自检（FR-222，见 ADR-051）：无 worker.yml/.yaml 且无 etc/node-identity.json → 进 setup。
+	// setup 采集入参（TTY 交互 / 无 TTY 参数+env）→ 写 worker.yml + 首注册 + 持久化身份 → 转 run。
+	// 已配置（有 yml / 有身份 / 显式传配置文件路径）→ 跳过 setup，走现有 run（现状零变化）。
+	var setupResult *setup.Result
+	if cfgPath == "" && !isConfigured() {
+		res, err := setup.Run(context.Background(), ".", setup.Options{
+			Args:  setupArgs(),
+			IsTTY: setup.IsStdinTTY(),
+		})
+		if err != nil {
+			slog.Error("节点上线 setup 失败", "error", err)
+			os.Exit(1)
+		}
+		setupResult = res
+		slog.Info("节点 setup 完成，转入正常运行", "nodeUUID", setupResult.Identity.NodeUUID)
 	}
-	cfg, err := workercfg.Load(cfgPath)
-	if err != nil {
-		slog.Error("加载 Worker 配置失败", "error", err)
-		os.Exit(1)
+
+	var cfg *workercfg.Config
+	if setupResult != nil {
+		// setup 已在内存构造配置（含刚写出的 worker.yml 内容），直接复用，不重读文件。
+		cfg = setupResult.Config
+	} else {
+		loaded, err := workercfg.Load(cfgPath)
+		if err != nil {
+			slog.Error("加载 Worker 配置失败", "error", err)
+			os.Exit(1)
+		}
+		cfg = loaded
 	}
 
 	// 出站 HTTP 客户端持有者（FR-174/FR-185，见 ADR-037/043）：所有出站下载（自更新/JDK/CFR/服务端 jar）
@@ -248,57 +340,70 @@ func runWorker() {
 		cpAddr = "localhost:9100"
 	}
 
-	// 优先读本地身份文件复用既有 node_uuid/secret（重注册，不带 token，不重复消费一次性 token）；
-	// 无身份文件则为首次安装，必须携带 enrollment token 首注册。
 	etcDir := root.EtcDir()
-	identity, err := register.LoadIdentity(etcDir)
-	if err != nil {
-		slog.Error("读取本地节点身份失败", "error", err)
-		os.Exit(1)
-	}
+	var regResult *register.Result
 
-	regCfg := register.Config{
-		ControlPlaneAddr: cpAddr,
-		NodeName:         nodeName,
-		WsPort:           wsPort,
-		GrpcPort:         grpcPort,
-		Host:             host,
-	}
-	if identity != nil {
-		// 重注册：沿用既有身份的节点名，并经 metadata 出示 node_uuid + node_secret，
-		// CP 据此按 UUID 匹配既有节点（而非可重复的 name），杜绝重名覆写（见 ADR-039）。
-		regCfg.NodeName = identity.NodeName
-		regCfg.NodeUUID = identity.NodeUUID
-		regCfg.NodeSecret = identity.NodeSecret
-		slog.Info("发现本地节点身份，复用既有身份重注册", "nodeUUID", identity.NodeUUID, "name", identity.NodeName)
+	if setupResult != nil {
+		// 本次启动由 setup 完成首注册并已持久化身份（FR-222，见 ADR-051）：
+		// 直接复用其换得的身份转 run，不再二次注册、不重复消费一次性 token。
+		regResult = &register.Result{
+			NodeUUID:   setupResult.Identity.NodeUUID,
+			NodeSecret: setupResult.Identity.NodeSecret,
+		}
+		nodeUUID = regResult.NodeUUID
+		slog.Info("沿用 setup 首注册身份转入运行", "nodeUUID", nodeUUID)
 	} else {
-		// 首次注册：携带一次性 enrollment token。缺 token 直接退出（避免无效注册无限重试刷日志）。
-		if cfg.EnrollToken == "" {
-			slog.Error("首次注册缺少 enrollment token：请在面板「添加节点」生成一键命令，" +
-				"或经 JIANMANAGER_ENROLL_TOKEN 提供。已有节点请确认本地身份文件 etc/node-identity.json 是否存在")
+		// 优先读本地身份文件复用既有 node_uuid/secret（重注册，不带 token，不重复消费一次性 token）；
+		// 无身份文件则为首次安装，必须携带 enrollment token 首注册。
+		identity, err := register.LoadIdentity(etcDir)
+		if err != nil {
+			slog.Error("读取本地节点身份失败", "error", err)
 			os.Exit(1)
 		}
-		regCfg.EnrollToken = cfg.EnrollToken
-	}
 
-	regResult, err := register.RegisterWithRetry(context.Background(), regCfg, 2*time.Second, 60*time.Second)
-	if err != nil {
-		slog.Error("注册到 Control Plane 失败", "error", err)
-		os.Exit(1)
-	}
+		regCfg := register.Config{
+			ControlPlaneAddr: cpAddr,
+			NodeName:         nodeName,
+			WsPort:           wsPort,
+			GrpcPort:         grpcPort,
+			Host:             host,
+		}
+		if identity != nil {
+			// 重注册：沿用既有身份的节点名，并经 metadata 出示 node_uuid + node_secret，
+			// CP 据此按 UUID 匹配既有节点（而非可重复的 name），杜绝重名覆写（见 ADR-039）。
+			regCfg.NodeName = identity.NodeName
+			regCfg.NodeUUID = identity.NodeUUID
+			regCfg.NodeSecret = identity.NodeSecret
+			slog.Info("发现本地节点身份，复用既有身份重注册", "nodeUUID", identity.NodeUUID, "name", identity.NodeName)
+		} else {
+			// 首次注册：携带一次性 enrollment token。缺 token 直接退出（避免无效注册无限重试刷日志）。
+			if cfg.EnrollToken == "" {
+				slog.Error("首次注册缺少 enrollment token：请在面板「添加节点」生成一键命令，" +
+					"或经 JIANMANAGER_ENROLL_TOKEN 提供。已有节点请确认本地身份文件 etc/node-identity.json 是否存在")
+				os.Exit(1)
+			}
+			regCfg.EnrollToken = cfg.EnrollToken
+		}
 
-	nodeUUID = regResult.NodeUUID
-	slog.Info("已注册到 Control Plane", "nodeUUID", nodeUUID)
+		res, err := register.RegisterWithRetry(context.Background(), regCfg, 2*time.Second, 60*time.Second)
+		if err != nil {
+			slog.Error("注册到 Control Plane 失败", "error", err)
+			os.Exit(1)
+		}
+		regResult = res
+		nodeUUID = regResult.NodeUUID
+		slog.Info("已注册到 Control Plane", "nodeUUID", nodeUUID)
 
-	// 首次注册成功后持久化身份（含 node_secret，0600），重启复用、不重复消费 token（FR-080）。
-	if identity == nil {
-		if err := register.SaveIdentity(etcDir, &register.Identity{
-			NodeUUID:   regResult.NodeUUID,
-			NodeSecret: regResult.NodeSecret,
-			NodeName:   regCfg.NodeName,
-		}); err != nil {
-			// 持久化失败不致命（本次仍在线），但重启会因无身份且 token 已失效而首注册失败，需告警。
-			slog.Warn("持久化节点身份失败，重启可能需重新签发 enrollment token", "error", err)
+		// 首次注册成功后持久化身份（含 node_secret，0600），重启复用、不重复消费 token（FR-080）。
+		if identity == nil {
+			if err := register.SaveIdentity(etcDir, &register.Identity{
+				NodeUUID:   regResult.NodeUUID,
+				NodeSecret: regResult.NodeSecret,
+				NodeName:   regCfg.NodeName,
+			}); err != nil {
+				// 持久化失败不致命（本次仍在线），但重启会因无身份且 token 已失效而首注册失败，需告警。
+				slog.Warn("持久化节点身份失败，重启可能需重新签发 enrollment token", "error", err)
+			}
 		}
 	}
 
