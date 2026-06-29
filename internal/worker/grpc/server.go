@@ -192,14 +192,26 @@ func (s *Server) EmitOutput(instanceUUID, stream, data string) {
 // CP 下发的 WorkDir 按数据根相对存储（系统分配的 var/servers/<slug>-<shortid>），
 // 此处解析为本节点绝对路径并确保目录存在。参见 ADR-010。
 func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanceRequest) (*workerpb.CreateInstanceResponse, error) {
+	if _, err := s.registerInstanceFromProto(req); err != nil {
+		return &workerpb.CreateInstanceResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &workerpb.CreateInstanceResponse{Success: true}, nil
+}
+
+// registerInstanceFromProto 把 CP 下发的实例规格填入进程管理器（不启动进程）。
+// 解析相对 WorkDir 为本节点绝对路径并建目录（ADR-010），调 manager.Create 注册为 STOPPED，
+// docker 实例补记镜像/端口/限额（启动时随 spec 定型，ADR-019 / FR-079）。
+// 返回 created：true=本次新登记，false=实例已存在（已刷新随启动定型的超时与 docker 配置）。
+// CreateInstance（CP 建实例/启动前幂等重注册）与 ResyncInstances（重连重推，见 ADR-050）共用此逻辑。
+func (s *Server) registerInstanceFromProto(req *workerpb.CreateInstanceRequest) (created bool, err error) {
 	workDir := req.WorkDir
 	if s.root != nil && workDir != "" {
 		workDir = s.root.Abs(workDir)
-		if err := os.MkdirAll(workDir, 0o755); err != nil {
-			return &workerpb.CreateInstanceResponse{Success: false, Error: fmt.Sprintf("创建工作目录失败: %v", err)}, nil
+		if mkErr := os.MkdirAll(workDir, 0o755); mkErr != nil {
+			return false, fmt.Errorf("创建工作目录失败: %v", mkErr)
 		}
 	}
-	err := s.manager.Create(
+	cerr := s.manager.Create(
 		req.InstanceUuid,
 		req.Name,
 		req.StartCommand,
@@ -213,22 +225,58 @@ func (s *Server) CreateInstance(ctx context.Context, req *workerpb.CreateInstanc
 		int(req.ProbePort),
 		int(req.GracefulStopTimeoutSeconds),
 	)
-	if err != nil {
-		// 实例已存在（CP 在每次启动前幂等重注册）：刷新随启动定型的优雅停止超时与 docker 配置，
-		// 使设置/镜像/端口变更对下一次启动生效（FR-063 / FR-078）。该错误对 CP 启动路径是良性的（按已注册处理）。
-		if strings.Contains(err.Error(), "已存在") {
+	if cerr != nil {
+		// 实例已存在（CP 在每次启动前幂等重注册，或重连重推命中已恢复的 RUNNING 实例）：
+		// 刷新随启动定型的优雅停止超时与 docker 配置，使设置/镜像/端口变更对下一次启动生效
+		// （FR-063 / FR-078）。该错误对幂等路径是良性的（按已注册处理）。
+		if strings.Contains(cerr.Error(), "已存在") {
 			s.manager.SetGracefulStopTimeout(req.InstanceUuid, int(req.GracefulStopTimeoutSeconds))
 			if req.ProcessType == string(process.ProcessTypeDocker) {
 				s.manager.SetDockerConfig(req.InstanceUuid, req.Image, portMappingsFromProto(req.PortMappings), req.CpuLimit, req.MemLimitMb, req.DiskLimitMb)
 			}
+			return false, nil
 		}
-		return &workerpb.CreateInstanceResponse{Success: false, Error: err.Error()}, nil
+		return false, cerr
 	}
 	// docker 模式：把镜像、端口映射与资源限额存到实例记账，启动时随 spec 定型（ADR-019 / FR-079）。
 	if req.ProcessType == string(process.ProcessTypeDocker) {
 		s.manager.SetDockerConfig(req.InstanceUuid, req.Image, portMappingsFromProto(req.PortMappings), req.CpuLimit, req.MemLimitMb, req.DiskLimitMb)
 	}
-	return &workerpb.CreateInstanceResponse{Success: true}, nil
+	return true, nil
+}
+
+// ResyncInstances Worker 重连/重注册后接收 CP 重推的整节点实例规格，填充内存注册表（见 ADR-050）。
+// 「只补不覆盖」：已在表者（含 RecoverDaemonInstances 恢复的 RUNNING 实例）跳过，
+// 不在表者按 STOPPED 登记且不启动进程——只让停机实例可被文件/配置/归档 op 定位工作目录，
+// 绝不擅自拉起。修 bug #2（重启后停机实例 op 报「实例不存在」）。
+func (s *Server) ResyncInstances(ctx context.Context, req *workerpb.ResyncInstancesRequest) (*workerpb.ResyncInstancesResponse, error) {
+	var registered, skipped int32
+	for _, spec := range req.Instances {
+		if spec == nil || spec.InstanceUuid == "" {
+			continue
+		}
+		// 已在内存表 → 跳过（不覆盖 RUNNING 恢复实例；重复重推幂等）。
+		if _, exists := s.manager.GetInstance(spec.InstanceUuid); exists {
+			skipped++
+			continue
+		}
+		created, err := s.registerInstanceFromProto(spec)
+		if err != nil {
+			slog.Warn("重连同步实例失败，跳过", "instanceId", spec.InstanceUuid, "error", err)
+			continue
+		}
+		if created {
+			registered++
+		} else {
+			// registerInstanceFromProto 在「已存在」时返回 created=false（GetInstance 与 Create 之间
+			// 的竞态窗口；正常路径上文已跳过），按跳过计。
+			skipped++
+		}
+	}
+	if registered > 0 || skipped > 0 {
+		slog.Info("已接收 CP 重连重推的实例规格", "registered", registered, "skipped", skipped, "total", len(req.Instances))
+	}
+	return &workerpb.ResyncInstancesResponse{Registered: registered, Skipped: skipped}, nil
 }
 
 // StartInstance 启动实例。
