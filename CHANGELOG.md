@@ -8,6 +8,7 @@
 
 ### 修复
 - **Windows 一键安装命令改 `iex (iwr …).Content`，根治 `iwr … | iex` 解析失败（FIX-1，归真 FR-223 真机缺陷）**：真机 PS 7.6 复现——面板生成的一键命令把 `iwr` 的**响应对象**管道给 `iex`，PowerShell 串化 `BasicHtmlWebResponseObject` 把脚本正文 7815→10319 字符、损坏 UTF-8（CJK），解析在含中文插值行报「Variable reference is not valid ':'」、函数从未定义 → `Install-JianManagerWorker` 不识别、安装失败。改 `enroll_token.go` 生成命令为 `iex (iwr <url> -UseBasicParsing).Content; Install-…`（喂内容字符串、当前作用域定义函数），脚本本身解析无错、逻辑未改。doc-sync 全量（脚本头注释 scripts+embed 双份字节一致、API.md、ADR-020、specs、mock node.ts、相关注释）。新增回归单测 `TestBuildWindowsInstallCommand_PipesContentNotObject`（red→green）。真 CP + 真浏览器 + 真 PS 7.6 验过。
+- **worker 服务模式工作目录自纠 + 配置自检纳入 exe 旁，防重启发蒙（FIX-2/3，归真 FR-222 真机缺陷）**：根因仅 Windows `-Service`——`New-Service` 无 WorkingDirectory 等价项 → 服务 cwd=`System32` → 免配置 setup 把 `worker.yml` 写到 System32、重启又找不到致节点「发蒙」（Linux systemd 已由 unit `WorkingDirectory=<install-dir>` 规避，两端前台均 `cd`/`Push-Location` 到安装目录）。**FIX-2**：新增 `cmd/worker/svc_windows.go`，以 Windows 服务身份运行时 `svc.IsWindowsService()` → `chdir` 到 exe 目录（=安装目录），与 Linux 平价；`svc_other.go` 非 Windows 空操作；`runWorker` 开头调用、daemon wrapper 分支不调。**FIX-3**：`config.go` 配置搜索加「exe 旁」目录（`executableDir`+`configSearchDirs`），cwd 非安装目录时仍能发现二进制旁 `worker.yml`，回归单测 `TestWorkerConfigExists_FindsConfigBesideExecutable`（red→green）。`go mod tidy`（`golang.org/x/sys` 转直接依赖）；windows+linux 双平台 `go build` + `vet` + `internal/worker/...`/`cmd/...` 测试全绿。真 CP + 真浏览器验过免配置 setup 写配置/注册/上线 + 无 token 重启复用身份不发蒙；Windows 真服务安装重启留单点手验。
 
 ## 0.12.0（2026-06-29）
 

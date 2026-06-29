@@ -65,6 +65,26 @@ func TestFindConfigFile_YmlPreferred(t *testing.T) {
 	assert.Equal(t, filepath.Join(dir, "worker.yml"), FindConfigFile("worker", dir), ".yml 优先")
 }
 
+// TestWorkerConfigExists_FindsConfigBesideExecutable 配置在「二进制旁」而非 cwd 时也应判已配置（FIX-3）。
+// 复现 Windows 服务/从别处启动：cwd 无 worker.yml，但 exe 目录有 → 应找到（否则误判未配置而重跑 setup）。
+func TestWorkerConfigExists_FindsConfigBesideExecutable(t *testing.T) {
+	cwd := t.TempDir()
+	exeDir := t.TempDir()
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	require.NoError(t, os.Chdir(cwd)) // cwd 无配置
+
+	orig := executableDir
+	executableDir = func() string { return exeDir }
+	t.Cleanup(func() { executableDir = orig })
+
+	assert.False(t, WorkerConfigExists(), "cwd 与 exe 目录皆无配置")
+
+	require.NoError(t, os.WriteFile(filepath.Join(exeDir, "worker.yml"), []byte("name: beside\n"), 0o644))
+	assert.True(t, WorkerConfigExists(), "exe 目录有 worker.yml → 应判已配置（FIX-3）")
+}
+
 // TestWorkerConfigExists 工作目录有/无 worker 配置文件时正确报告（FR-222 未配置自检的一半）。
 func TestWorkerConfigExists(t *testing.T) {
 	dir := t.TempDir()

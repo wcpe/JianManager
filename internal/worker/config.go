@@ -129,9 +129,12 @@ func Load(path string) (*Config, error) {
 		// 两者同为 YAML 格式，SetConfigType 固定 yaml 保证解析正确。
 		v.SetConfigName("worker")
 		v.SetConfigType("yaml")
-		v.AddConfigPath(".")
-		v.AddConfigPath("configs")
-		if found := FindConfigFile("worker", ".", "configs"); found != "" {
+		// 搜索目录：cwd > exe 旁 > configs（FIX-3：服务/从别处启动致 cwd 非安装目录时仍能找到二进制旁配置）。
+		dirs := configSearchDirs()
+		for _, d := range dirs {
+			v.AddConfigPath(d)
+		}
+		if found := FindConfigFile("worker", dirs...); found != "" {
 			v.SetConfigFile(found)
 		}
 	}
@@ -172,8 +175,29 @@ func FindConfigFile(name string, dirs ...string) string {
 	return ""
 }
 
-// WorkerConfigExists 报告工作目录或 configs/ 下是否存在 worker 配置文件（.yml 优先、.yaml 回退）。
-// 供 worker 入口未配置自检使用（FR-222，见 ADR-051）。
+// WorkerConfigExists 报告工作目录、可执行文件所在目录或 configs/ 下是否存在 worker 配置文件
+//（.yml 优先、.yaml 回退）。供 worker 入口未配置自检使用（FR-222，见 ADR-051）。
+// 纳入「exe 旁」搜索（FIX-3）：Windows 服务/从别处启动时 cwd 可能非安装目录，配置随二进制仍可被发现。
 func WorkerConfigExists() bool {
-	return FindConfigFile("worker", ".", "configs") != ""
+	return FindConfigFile("worker", configSearchDirs()...) != ""
+}
+
+// executableDir 返回当前可执行文件所在目录（解析失败返回空）。声明为变量便于测试覆盖。
+var executableDir = func() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(exe)
+}
+
+// configSearchDirs 返回 worker 配置文件搜索目录（按优先级）：cwd "." > 可执行文件所在目录 > "configs"。
+func configSearchDirs() []string {
+	dirs := []string{"."}
+	// 「exe 旁」搜索（FIX-3）：覆盖「服务/从别处启动致 cwd 非安装目录」时仍能发现二进制旁的 worker.yml。
+	if d := executableDir(); d != "" {
+		dirs = append(dirs, d)
+	}
+	dirs = append(dirs, "configs")
+	return dirs
 }

@@ -128,6 +128,10 @@ func parseDataDirArg(args []string) []string {
 }
 
 func runWorker() {
+	// Windows 服务默认 cwd=System32，会把 setup 写出的 worker.yml 落到错误位置且重启找不到（FIX-2/3）。
+	// 以服务身份运行时先把工作目录切到 exe 所在的安装目录（与 Linux systemd WorkingDirectory 对齐）。
+	chdirToExeDirIfService()
+
 	// 加载配置：worker.yml + JIANMANAGER_ 环境变量覆盖（FR-080，见 ADR-020）。
 	// 配置可选参数从命令行第 1 个参数取（如 `worker /path/worker.yml`），缺省自动查找。
 	// 第 1 个参数仅当是「现存的配置文件路径」时才当配置文件；setup 的 --xxx flag 不算（见下自检）。
