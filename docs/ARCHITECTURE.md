@@ -160,6 +160,7 @@ internal/worker/
 ### 5.1 节点接入与部署（一键安装 / enrollment，FR-080，见 ADR-020）
 
 - **配置加载**：Worker 启动时经 `internal/worker/config.go`（viper）真正加载 `worker.yml`（CP gRPC 地址、grpc/ws 端口、data_dir、日志），`JIANMANAGER_` 前缀环境变量按路径覆盖。配置落盘取代历史的环境变量堆砌。
+- **免配置自启 setup（FR-222，见 ADR-051，改写 ADR-020 §2 单脚本写配置编排）**：「下载」（取二进制）与「上线」（写配置 + 注册 + run）解耦——Worker 入口 `runWorker` 加载配置前先自检「是否已配置」（`无 worker.yml/.yaml` **且** `无 <data-dir>/etc/node-identity.json`）。**未配置** → 进入 `internal/worker/setup`：有 TTY 交互逐项问 CP gRPC 地址 / enroll token / 节点名（可选端口、data_dir，给默认值）；无 TTY（CI/管道/systemd/Windows 服务）从命令行参数 + `JIANMANAGER_*` env 读，缺必填（CP 地址 / token）即 fail-fast（不卡住等输入）。setup 顺序：写 `worker.yml`（原子、复刻安装脚本字段、**enroll token 绝不写入**）→ 携 token 经 gRPC 首注册换身份 → 持久化 `node_uuid`/`node_secret` 到 `etc/node-identity.json`（0600）→ **转入正常 run**（内存构造配置 + 复用首注册身份，不重启进程、不重复注册）。**已配置**（有 yml 或有 node-identity，或显式传配置文件路径）→ 跳过 setup 直接 run（现状零变化）。新机器零脚本依赖即可上线，安装脚本（FR-223）退化为「取二进制 + 调 setup」。
 - **enrollment token 准入**：新增节点凭 CP 签发的**一次性、限时** enrollment token 注册（取代 FR-004 的「无凭据自助注册」对新节点的开放）。token 经 gRPC metadata `enroll-token` 传给 CP 校验消费（不改 proto）；CP 只对「新节点首次落库」设门槛，已有身份的重注册不强制 token（不破网）。
 - **身份持久化**：注册成功换得的 `node_uuid`/`node_secret` 写入数据根 `etc/node-identity.json`（0600，含敏感 secret 不入日志）。Worker 重启优先读该文件复用既有身份走重注册，不重复消费已失效的一次性 token。
 - **注册身份匹配（UUID 锚定，见 ADR-039，修复重名覆盖 BUG-A）**：`ControlPlaneHandler.Register` 按三级优先级匹配既有节点，杜绝「另一台机器用同名注册覆写旧节点身份/host」——
