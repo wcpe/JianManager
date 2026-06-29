@@ -1,6 +1,7 @@
 import { useInstanceEvents } from '@/api/events'
 import ConsoleSidebar from '@/components/console/ConsoleSidebar'
 import ConsoleHeader from '@/components/console/ConsoleHeader'
+import { TopLoadingBar } from '@/components/console/TopLoadingBar'
 import Workspace from '@/components/console/Workspace'
 
 /**
@@ -16,7 +17,8 @@ export default function DashboardPage() {
   return (
     <div className="flex h-screen">
       <ConsoleSidebar />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        <TopLoadingBar />
         <ConsoleHeader />
         <main className="min-h-0 flex-1">
           <Workspace />

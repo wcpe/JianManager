@@ -46,6 +46,7 @@
   --shadow-lift: 0 12px 28px -6px rgb(var(--brand-shadow) / 0.18), 0 4px 10px -5px rgb(var(--brand-shadow) / 0.12);
   --ease-ios: cubic-bezier(0.16, 1, 0.3, 1);
   --animate-breathing: breathing 1.8s ease-in-out infinite;
+  --animate-top-progress: top-progress 0.8s ease-out forwards;
 }
 
 :root {
@@ -166,6 +167,22 @@
   }
   100% {
     box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+/* 页眉顶部加载进度条（FR-243）：切页时一次性 0→100% 后淡出。 */
+@keyframes top-progress {
+  0% {
+    width: 0%;
+    opacity: 1;
+  }
+  70% {
+    width: 85%;
+    opacity: 1;
+  }
+  100% {
+    width: 100%;
+    opacity: 0;
   }
 }
 
