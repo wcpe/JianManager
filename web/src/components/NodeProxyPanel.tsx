@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 /**
  * 节点出站代理面板（FR-185，见 ADR-043）：单选「继承全局 / 自定义」，自定义展开 URL + no_proxy。
  *
- * 真相源 = CP DB；保存经心跳下发到 Worker，节点运行时重建出站 client（免改 worker.yaml/重启）。
+ * 真相源 = CP DB；保存经心跳下发到 Worker，节点运行时重建出站 client（免改 worker.yml/重启）。
  * 含凭据的代理地址后端已脱敏回显；离线节点标注「待下发」（下次心跳生效）。
  * 可复用独立组件（不绑死容器），便于挂在节点详情右栏分段。
  */

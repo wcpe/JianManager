@@ -1,11 +1,11 @@
 # JianManager Worker Node 一键安装脚本（Windows PowerShell）。
-# 见 FR-080 / ADR-020：下载/拷贝 Worker 二进制 → 写 worker.yaml → 以 enrollment token 首注册 →
+# 见 FR-080 / ADR-020：下载/拷贝 Worker 二进制 → 写 worker.yml → 以 enrollment token 首注册 →
 # 可选注册 Windows 服务，使节点开机自启、常驻自连。脚本幂等：重复执行覆盖配置、重建服务。
 #
 # 一键命令形态（面板「添加节点」生成、直接粘贴到 PowerShell）：
 #   iwr <cp>/install-worker.ps1 -UseBasicParsing | iex; Install-JianManagerWorker -ControlPlane <cp-grpc> -Token <jmet_...> [-Name N] [-Service]
 #
-# enrollment token 一次性、限时；仅经参数/环境变量传入，绝不写入 worker.yaml。
+# enrollment token 一次性、限时；仅经参数/环境变量传入，绝不写入 worker.yml。
 # 注册成功后 CP 换发的 node_uuid/node_secret 由 Worker 持久化到 <DataDir>\etc\node-identity.json。
 
 function Install-JianManagerWorker {
@@ -66,8 +66,8 @@ function Install-JianManagerWorker {
         throw "未提供 -Binary 也未提供 -DownloadUrl，无法获取 Worker 二进制（内网/离线请先拷贝二进制并用 -Binary 指向它）"
     }
 
-    # 写 worker.yaml（enrollment token 不落盘）。
-    $cfgPath = Join-Path $InstallDir "worker.yaml"
+    # 写 worker.yml（enrollment token 不落盘）。
+    $cfgPath = Join-Path $InstallDir "worker.yml"
     Write-Host "[3/5] 写配置 $cfgPath"
     if (-not $Name) { $Name = "node-$($env:COMPUTERNAME)" }
     # YAML 路径用正斜杠，避免反斜杠转义歧义。

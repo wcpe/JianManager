@@ -144,7 +144,7 @@ export default function SystemUpdatePage() {
       {result && notConfigured && (
         <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
           <AlertCircle className="mt-0.5 size-4 shrink-0 text-amber-600" />
-          <span>{t('systemUpdate.notConfigured', '未配置更新源（feed_url）。请在 control-plane.yaml 的 update 段配置更新源后再检查更新。')}</span>
+          <span>{t('systemUpdate.notConfigured', '未配置更新源（feed_url）。请在 control-plane.yml 的 update 段配置更新源后再检查更新。')}</span>
         </div>
       )}
 

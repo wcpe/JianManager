@@ -1,12 +1,12 @@
 #!/bin/sh
 # JianManager Worker Node 一键安装脚本（Linux/macOS，POSIX sh）。
-# 见 FR-080 / ADR-020：下载/拷贝 Worker 二进制 → 写 worker.yaml → 以 enrollment token 首注册 →
+# 见 FR-080 / ADR-020：下载/拷贝 Worker 二进制 → 写 worker.yml → 以 enrollment token 首注册 →
 # 可选注册 systemd 系统服务，使节点开机自启、常驻自连。脚本幂等：重复执行覆盖配置、重启服务。
 #
 # 一键命令形态（面板「添加节点」生成、直接粘贴）：
 #   curl -fsSL <cp>/install-worker.sh | sh -s -- --control-plane <cp-grpc> --token <jmet_...> [--name N] [--service]
 #
-# enrollment token 一次性、限时；仅经命令行/环境变量传入，绝不写入 worker.yaml。
+# enrollment token 一次性、限时；仅经命令行/环境变量传入，绝不写入 worker.yml。
 # 注册成功后 CP 换发的 node_uuid/node_secret 由 Worker 持久化到 <data-dir>/etc/node-identity.json。
 set -eu
 
@@ -125,8 +125,8 @@ else
 fi
 chmod +x "$BIN_PATH"
 
-# ---- 写 worker.yaml（enrollment token 不落盘）----
-echo "[3/5] 写配置 $INSTALL_DIR/worker.yaml"
+# ---- 写 worker.yml（enrollment token 不落盘）----
+echo "[3/5] 写配置 $INSTALL_DIR/worker.yml"
 {
     echo "# 由 install-worker.sh 生成（FR-080）。enrollment token 不写入本文件。"
     echo "name: ${NODE_NAME:-node-$(hostname 2>/dev/null || echo local)}"
@@ -139,7 +139,7 @@ echo "[3/5] 写配置 $INSTALL_DIR/worker.yaml"
     echo "log:"
     echo "  level: info"
     echo "  format: json"
-} > "$INSTALL_DIR/worker.yaml"
+} > "$INSTALL_DIR/worker.yml"
 
 # ---- 注册系统服务 或 前台启动完成首注册 ----
 if [ "$INSTALL_SERVICE" = "1" ]; then
@@ -158,7 +158,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$BIN_PATH $INSTALL_DIR/worker.yaml
+ExecStart=$BIN_PATH $INSTALL_DIR/worker.yml
 Environment=JIANMANAGER_ENROLL_TOKEN=$TOKEN
 Restart=always
 RestartSec=5
@@ -173,5 +173,5 @@ UNIT_EOF
 else
     echo "[4/5] 未指定 --service，前台启动完成首次注册（Ctrl+C 退出；生产建议加 --service）"
     echo "[5/5] 启动 Worker..."
-    JIANMANAGER_ENROLL_TOKEN="$TOKEN" exec "$BIN_PATH" "$INSTALL_DIR/worker.yaml"
+    JIANMANAGER_ENROLL_TOKEN="$TOKEN" exec "$BIN_PATH" "$INSTALL_DIR/worker.yml"
 fi

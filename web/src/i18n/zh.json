@@ -1999,7 +1999,7 @@
     "checking": "正在检查…",
     "lastChecked": "上次检查：{{time}}",
     "releaseNotes": "更新说明",
-    "notConfigured": "未配置更新源（feed_url）。请在 control-plane.yaml 的 update 段配置更新源后再检查更新。",
+    "notConfigured": "未配置更新源（feed_url）。请在 control-plane.yml 的 update 段配置更新源后再检查更新。",
     "latestVersion": "更新源最新版本",
     "controlPlane": "Control Plane（控制台）",
     "current": "当前",
@@ -2331,7 +2331,7 @@
   },
   "nodeProxy": {
     "title": "出站代理",
-    "desc": "本节点的下载（JDK / 服务端 jar / 自更新）经此代理。改动经心跳下发，节点运行时生效、无需改 worker.yaml 或重启。",
+    "desc": "本节点的下载（JDK / 服务端 jar / 自更新）经此代理。改动经心跳下发，节点运行时生效、无需改 worker.yml 或重启。",
     "mode": "代理来源",
     "inherit": "继承全局",
     "custom": "自定义",

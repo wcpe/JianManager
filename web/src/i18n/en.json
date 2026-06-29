@@ -943,7 +943,7 @@
   },
   "nodeProxy": {
     "title": "Outbound proxy",
-    "desc": "This node's downloads (JDK / server jar / self-update) go through this proxy. Changes are pushed via heartbeat and take effect at runtime — no need to edit worker.yaml or restart.",
+    "desc": "This node's downloads (JDK / server jar / self-update) go through this proxy. Changes are pushed via heartbeat and take effect at runtime — no need to edit worker.yml or restart.",
     "mode": "Proxy source",
     "inherit": "Inherit global",
     "custom": "Custom",
@@ -2020,7 +2020,7 @@
     "checking": "Checking…",
     "lastChecked": "Last checked: {{time}}",
     "releaseNotes": "Release notes",
-    "notConfigured": "Update source (feed_url) is not configured. Set it under the update section of control-plane.yaml, then check again.",
+    "notConfigured": "Update source (feed_url) is not configured. Set it under the update section of control-plane.yml, then check again.",
     "latestVersion": "Latest version",
     "controlPlane": "Control Plane",
     "current": "Current",
