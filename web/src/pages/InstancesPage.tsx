@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { useSearchParams, useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight, ChevronDown, Zap, Globe, Plus, FolderTree } from 'lucide-react'
 import {
@@ -18,7 +18,6 @@ import { useRegistrations } from '@/api/registrations'
 import { useConsoleStore } from '@/stores/console'
 import DangerConfirm from '@/components/DangerConfirm'
 import InstanceBatchBar from '@/components/InstanceBatchBar'
-import CreateInstanceDialog from '@/components/CreateInstanceDialog'
 import ProvisionServerDialog from '@/components/ProvisionServerDialog'
 import ProvisionProxyDialog from '@/components/ProvisionProxyDialog'
 import ProxyRegistrationsDialog from '@/components/ProxyRegistrationsDialog'
@@ -74,7 +73,7 @@ export default function InstancesPage() {
   const { t } = useTranslation()
   // 点实例名进统一的「运维控制台」（终端/文件/配置/Bot），不再跳老的实例详情页。
   const openInstance = useConsoleStore((s) => s.openInstance)
-  const [showCreate, setShowCreate] = useState(false)
+  const navigate = useNavigate()
   const [showProvision, setShowProvision] = useState(false)
   const [showProvisionProxy, setShowProvisionProxy] = useState(false)
   const [manageProxy, setManageProxy] = useState<{ id: number; name: string } | null>(null)
@@ -403,7 +402,7 @@ export default function InstancesPage() {
           <Button variant="outline" onClick={() => setShowProvisionProxy(true)}>
             <Globe className="size-4" /> {t('proxy.entry')}
           </Button>
-          <Button onClick={() => setShowCreate(true)}>
+          <Button onClick={() => navigate('/instances/new')}>
             <Plus className="size-4" /> {t('instances.createInstance')}
           </Button>
         </div>
@@ -489,7 +488,6 @@ export default function InstancesPage() {
 
       <ProvisionServerDialog open={showProvision} onClose={() => setShowProvision(false)} />
       <ProvisionProxyDialog open={showProvisionProxy} onClose={() => setShowProvisionProxy(false)} />
-      <CreateInstanceDialog open={showCreate} onClose={() => setShowCreate(false)} />
       {manageProxy && (
         <ProxyRegistrationsDialog proxyId={manageProxy.id} proxyName={manageProxy.name} onClose={() => setManageProxy(null)} />
       )}

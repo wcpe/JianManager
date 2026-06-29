@@ -994,7 +994,17 @@
     "nodePort": "节点:端口",
     "sectionBasic": "基本",
     "sectionLaunch": "启动",
-    "sectionAdvanced": "高级"
+    "sectionAdvanced": "高级",
+    "created": "实例已创建",
+    "wizardSubtitle": "按步骤填写，几步就能在某台节点上建好一个服。",
+    "wizardNext": "下一步",
+    "wizardStep": { "basic": "基本", "launch": "启动", "advanced": "高级", "review": "确认" },
+    "wizardHint": {
+      "basic": "先给实例起个名字、选它在哪台节点上运行。可选套用一个模板，快速带出启动配置。",
+      "launch": "告诉平台怎么启动这个服——用哪种方式跑、什么启动命令、用哪个 JDK。Minecraft 类型的工作目录由系统自动分配，不用填。",
+      "advanced": "用 Docker 容器方式运行时，填镜像，可选填 CPU / 内存限额（留空=不限制）。",
+      "review": "核对下面的信息，没问题就点「创建」。"
+    }
   },
   "instanceBatch": {
     "selected": "已选 {{count}} 个",

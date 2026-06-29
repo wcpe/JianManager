@@ -1038,7 +1038,17 @@
     "nodePort": "Node:Port",
     "sectionBasic": "Basic",
     "sectionLaunch": "Launch",
-    "sectionAdvanced": "Advanced"
+    "sectionAdvanced": "Advanced",
+    "created": "Instance created",
+    "wizardSubtitle": "Fill in step by step — a few steps to spin up a server on a node.",
+    "wizardNext": "Next",
+    "wizardStep": { "basic": "Basics", "launch": "Launch", "advanced": "Advanced", "review": "Confirm" },
+    "wizardHint": {
+      "basic": "Name the instance and pick which node it runs on. Optionally apply a template to prefill the launch config.",
+      "launch": "Tell the platform how to start it — process type, start command, and which JDK. For Minecraft, the work directory is assigned automatically.",
+      "advanced": "When running via Docker, set the image and optional CPU / memory limits (blank = unlimited).",
+      "review": "Double-check the details below, then click Create."
+    }
   },
   "instanceBatch": {
     "selected": "{{count}} selected",

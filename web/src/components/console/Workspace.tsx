@@ -10,6 +10,7 @@ const MonitoringPage = lazy(() => import('@/pages/MonitoringPage'))
 const NodesPage = lazy(() => import('@/pages/NodesPage'))
 const InstancesPage = lazy(() => import('@/pages/InstancesPage'))
 const InstanceDetailPage = lazy(() => import('@/pages/InstanceDetailPage'))
+const InstanceWizardPage = lazy(() => import('@/pages/InstanceWizardPage'))
 const NetworksPage = lazy(() => import('@/pages/NetworksPage'))
 const PlayersPage = lazy(() => import('@/pages/PlayersPage'))
 const UsersPage = lazy(() => import('@/pages/UsersPage'))
@@ -89,6 +90,7 @@ export default function Workspace() {
           <Route path="monitor" element={<MonitoringPage />} />
           <Route path="nodes" element={<NodesPage />} />
           <Route path="instances" element={<InstancesPage />} />
+          <Route path="instances/new" element={<InstanceWizardPage />} />
           <Route path="instances/:id" element={<InstanceDetailPage />} />
           <Route path="networks" element={<NetworksPage />} />
           <Route path="players" element={<PlayersPage />} />
