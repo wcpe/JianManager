@@ -13,6 +13,7 @@ import { Panel } from '@/components/ui/panel'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { OutboundTestButton } from '@/components/OutboundTestButton'
 import {
   Dialog,
   DialogContent,
@@ -346,6 +347,20 @@ function PlatformCategory({
               <Button size="sm" onClick={save} disabled={!hasChanges || update.isPending}>
                 {update.isPending ? t('common.saving', '保存中…') : t('common.save', '保存')}
               </Button>
+            </div>
+          )}
+
+          {/* 连通性测试（FR-229）：代理在网络分类测出站、JDK 下载源在运行时分类测可达。 */}
+          {category === 'network' && (
+            <div className="space-y-2 border-t pt-3">
+              <p className="text-xs text-muted-foreground">{t('diagnostics.proxyTestHint', '测试 CP 能否经当前出站代理访问外网（GitHub）。')}</p>
+              <OutboundTestButton url="https://api.github.com" label={t('diagnostics.testProxy', '测试出站连通性')} />
+            </div>
+          )}
+          {category === 'runtime' && (
+            <div className="space-y-2 border-t pt-3">
+              <p className="text-xs text-muted-foreground">{t('diagnostics.jdkSourceTestHint', '测试 JDK 下载源（foojay）是否可达。')}</p>
+              <OutboundTestButton url="https://api.foojay.io/disco/v3.0/distributions" label={t('diagnostics.testJdkSource', '测试 JDK 下载源')} />
             </div>
           )}
         </>

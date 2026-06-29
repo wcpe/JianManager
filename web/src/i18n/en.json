@@ -1050,6 +1050,18 @@
       "review": "Double-check the details below, then click Create."
     }
   },
+  "diagnostics": {
+    "reachable": "Reachable",
+    "unreachable": "Unreachable",
+    "testFailed": "Test failed",
+    "testProxy": "Test outbound",
+    "proxyTestHint": "Test whether the CP can reach the internet (GitHub) via the current outbound proxy.",
+    "testJdkSource": "Test JDK source",
+    "jdkSourceTestHint": "Test whether the JDK download source (foojay) is reachable.",
+    "testNode": "Test node",
+    "nodeAlive": "Online",
+    "nodeOffline": "Offline"
+  },
   "instanceBatch": {
     "selected": "{{count}} selected",
     "selectAll": "Select all",

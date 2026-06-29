@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { Copy, Download, FolderOpen, Loader2, Package, PackageCheck, Coffee, Search, Trash2 } from 'lucide-react'
 import { useNodeJDKs, useCreateJDK, useDeleteJDK, useInstallJDK, type NodeJDK } from '@/api/jdks'
 import { useJDKCatalog } from '@/api/nodeRuntime'
+import { PingNodeButton } from '@/components/PingNodeButton'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
 import { FieldError } from '@/components/ui/field-label'
 import { Button } from '@/components/ui/button'
@@ -376,7 +377,9 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
               <p className="mt-0.5 text-xs text-primary/70">{t('artifactCache.jdkInstallHint')}</p>
             </div>
           </div>
-          <div className="flex justify-end border-t pt-3">
+          {/* 下载前先测节点存活（FR-229）：避免对离线/卡顿节点发起会卡死的下载 */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3">
+            <PingNodeButton nodeId={nodeId} />
             <Button onClick={onInstall} disabled={install.isPending || majorNum <= 0}>
               <Download className="size-4" />
               {t('nodes.jdkInstall')}

@@ -278,6 +278,30 @@ function componentStatusForNode(n: MockNode) {
 }
 
 export const handlers = [
+  /* ===================== 连通性测试（FR-229） ===================== */
+  domainRoute('post', '/diagnostics/http-test', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const { url } = (await info.request.json()) as { url?: string }
+    if (!url || !/^https?:\/\/[^/]/.test(url)) {
+      return HttpResponse.json({ error: 'INVALID_URL', message: '仅支持 http/https URL' }, { status: 400 })
+    }
+    // mock 不真正联网：恒返可达 200，演示按钮成功态。
+    return HttpResponse.json({ ok: true, status: 200, latencyMs: 42 })
+  }),
+
+  domainRoute('post', '/nodes/:id/ping', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number((info.params as { id: string }).id)
+    const n = nodes.get(id)
+    if (!n) return HttpResponse.json({ error: 'NOT_FOUND', message: '节点不存在' }, { status: 404 })
+    // mock：按 db 节点 status（1=在线）返存活/离线，联动节点状态。
+    return n.status === 1
+      ? HttpResponse.json({ alive: true, latencyMs: 12, version: '0.12.0', os: 'linux', arch: 'amd64' })
+      : HttpResponse.json({ alive: false, latencyMs: 0, error: '节点未连接' })
+  }),
+
   /* ===================== nodes（FR-048 / FR-080 / FR-185） ===================== */
   domainRoute('get', '/nodes', (info) => {
     const denied = requireAuth(info)
