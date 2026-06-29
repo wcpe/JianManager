@@ -1533,7 +1533,7 @@
 ### 节点出站代理（FR-185，见 ADR-043）
 
 > 节点级出站代理：继承平台全局默认（设置面板配，见「平台设置」network 键）或为本节点自定义。
-> 真相源 = CP DB；设置经心跳下发到 Worker，节点运行时重建出站 client（免改 worker.yaml/重启）。
+> 真相源 = CP DB；设置经心跳下发到 Worker，节点运行时重建出站 client（免改 worker.yml/重启）。
 > 含凭据的代理 URL 在响应中一律脱敏（仅 `scheme://host:port`）。仅平台管理员；设置写审计。
 
 #### GET /api/v1/nodes/:id/proxy
@@ -1701,7 +1701,7 @@
   - `jdk.mirror.*`：安装 JDK 时 CP 取生效值经 `InstallJDK.mirror_base` 下发 Worker，影响下载源
   - `graceful_stop.timeout`：启动实例时 CP 取生效值经 `CreateInstance.graceful_stop_timeout_seconds` 下发 Worker→wrapper；对设置变更后**新启动**的实例生效，已运行实例保留启动时的值
   - `backup.retention_days`：CP 后台巡检（约每小时一轮）裁剪 `createdAt` 早于 N 天的备份；`≤0` 不裁剪；被未超期增量子链引用的全量基跳过以保链可恢复
-  - `proxy.url` / `proxy.no_proxy`（FR-185/ADR-043）：`effectiveImmediately=true`，落库即重建 CP 出站持有者（CP 自身下载立即走新代理）；`proxy.url` 敏感，回显脱敏（含凭据时仅 `scheme://host:port`），非法地址（非 http/https/socks5 / 不可解析）整体拒绝（422）。此全局值同时作为各节点默认代理（节点页可覆盖），优先级 settings DB > control-plane.yaml > env
+  - `proxy.url` / `proxy.no_proxy`（FR-185/ADR-043）：`effectiveImmediately=true`，落库即重建 CP 出站持有者（CP 自身下载立即走新代理）；`proxy.url` 敏感，回显脱敏（含凭据时仅 `scheme://host:port`），非法地址（非 http/https/socks5 / 不可解析）整体拒绝（422）。此全局值同时作为各节点默认代理（节点页可覆盖），优先级 settings DB > control-plane.yml > env
 - **请求**: `{ "values": { "log.level": "debug", "backup.retention_days": "30" } }`
 
 ---
@@ -1709,7 +1709,7 @@
 ## 面板自更新（FR-081 / FR-175 / FR-182 / FR-186）
 
 > Control Plane 与各节点 Worker 的二进制在线升级与回滚（ADR-020 / ADR-036 §7 / ADR-042）。均挂运营者浏览器 JWT 入口、**仅平台管理员**。
-> **更新源**（FR-175，见 ADR-036 §7）：默认**原生读 GitHub Releases API**（`control-plane.yaml` 的 `update.github_repo`，默认 `wcpe/JianManager`），`update.channel` 选 `stable`（取 `/releases/latest` 最新正式）或 `prerelease`（取滚动 `latest` 预发布，FR-182 由 `nightly` 改名）；sha256 取自 release 的 `checksums.txt` 资产（ADR-036 §2 契约），资产名按 ADR-036 §1 命名 `<component>-<os>-<arch>[.exe]` 反解。`update.github_token` 可选，提升 GitHub API 限流额度（匿名 60 次/时）。`github_repo` 为空且 `feed_url` 非空时**回退**原 feed JSON 路径（FR-081）；二者均空即未配置。下载经 FR-174 出站代理。
+> **更新源**（FR-175，见 ADR-036 §7）：默认**原生读 GitHub Releases API**（`control-plane.yml` 的 `update.github_repo`，默认 `wcpe/JianManager`），`update.channel` 选 `stable`（取 `/releases/latest` 最新正式）或 `prerelease`（取滚动 `latest` 预发布，FR-182 由 `nightly` 改名）；sha256 取自 release 的 `checksums.txt` 资产（ADR-036 §2 契约），资产名按 ADR-036 §1 命名 `<component>-<os>-<arch>[.exe]` 反解。`update.github_token` 可选，提升 GitHub API 限流额度（匿名 60 次/时）。`github_repo` 为空且 `feed_url` 非空时**回退**原 feed JSON 路径（FR-081）；二者均空即未配置。下载经 FR-174 出站代理。
 > 升级类操作写审计（detail 仅含版本/节点元数据，绝不含下载 url 或凭据）。升级流程：下载目标版本制品 → **sha256 校验** → 替换二进制 → 平滑重启；Worker 升级经 CP gRPC 编排（`GetVersion`/`UpgradeWorker`），daemon 模式下不杀运行中的游戏服。
 > **升级前自动备份 + 一键回滚**（FR-182，见 ADR-042）：升级（CP 自升 / 节点升）在替换前把当前二进制 + 版本/sha256 备份到数据根 `cache/selfupdate-backup/<component>`（每组件单份，覆盖上一份）。`check` 透出各组件 `backupVersion`，可一键回滚到上一版（校验备份 sha256 → 换回 → 平滑重启）；节点回滚经 gRPC `UpgradeWorker(action=rollback)`，Worker 走本地备份不下载。无备份返回 `UPDATE_NO_BACKUP`。
 

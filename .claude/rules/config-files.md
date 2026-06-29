@@ -2,12 +2,12 @@
 
 ## 格式
 
-所有配置文件使用 YAML 格式，不使用 JSON 或 TOML。
+所有配置文件使用 YAML 格式，不使用 JSON 或 TOML。**扩展名统一用 `.yml`，不用 `.yaml`**（FR-224）。加载按 `.yml` 优先、`.yaml` 兼容回退（不破既有用 `.yaml` 的部署）。
 
 ## 命名
 
-- Control Plane：`control-plane.yaml`
-- Worker Node：`worker.yaml`
+- Control Plane：`control-plane.yml`
+- Worker Node：`worker.yml`
 - 环境变量覆盖：`JIANMANAGER_` 前缀 + `_` 分隔的路径大写
   - `server.port` → `JIANMANAGER_SERVER_PORT`
   - `database.driver` → `JIANMANAGER_DB_DRIVER`
@@ -15,7 +15,7 @@
 ## 配置结构
 
 ```yaml
-# control-plane.yaml
+# control-plane.yml
 server:
   host: 0.0.0.0
   port: 8080

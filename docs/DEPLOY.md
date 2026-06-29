@@ -10,7 +10,7 @@
 |---|---|
 | `control-plane`(`.exe`) | Control Plane：唯一面向浏览器的 HTTP 入口，已内嵌前端 UI（单二进制） |
 | `worker`(`.exe`) | Worker Node：受 Control Plane 通过 gRPC 调度，管理本机游戏服进程、终端、指标、Bot |
-| `control-plane.yaml` / `worker.yaml` | 配置样例 |
+| `control-plane.yml` / `worker.yml` | 配置样例 |
 | `README.md` / `DEPLOY.md` / `CHANGELOG.md` | 文档 |
 
 三进程模型：`浏览器 →(HTTP/WS)→ Control Plane →(gRPC)→ Worker Node →(spawn)→ Bot Worker(Node.js)`。
@@ -44,7 +44,7 @@ Worker 启动即向 Control Plane 注册，前端「节点」页应显示在线 
 
 ## 4. Control Plane 配置
 
-读取顺序：当前目录 `control-plane.yaml` / `configs/control-plane.yaml`，再被 `JIANMANAGER_` 前缀环境变量覆盖（`.` → `_`）。
+读取顺序：当前目录 `control-plane.yml` / `configs/control-plane.yml`（`.yml` 优先、找不到回退 `.yaml`，FR-224），再被 `JIANMANAGER_` 前缀环境变量覆盖（`.` → `_`）。
 
 ```yaml
 server:
@@ -83,7 +83,7 @@ file_version:         # 通用文件改前快照（FR-051）
 
 > **拉取密钥可逆加密密钥（FR-192，见 ADR-044）**：让管理员可在频道页**查看拉取密钥明文 + 复制**（解决「忘记密钥只能轮换→已分发玩家集体断更」）。鉴权仍只用哈希比对、行为不变；另存一份 AES-256-GCM 可逆加密副本，密钥经 `JIANMANAGER_CLIENT_KEY_ENC_SECRET`（32 字节 base64，生成示例 `openssl rand -base64 32`）注入、不入库。**未配置时优雅降级**：`dev_mode: true` 回退内置 dev 密钥（仅开发）；生产未配则新建/轮换的密钥**不写加密副本、不可查看**（密钥本身照常创建/鉴权可用，**不阻断建密钥**）。安全：拉取密钥半公开（随整包分发必泄露、非信任根），可查看与其真实信任级一致，防投毒全靠 manifest 签名、不受影响。注：更换此密钥后旧加密副本解不开（按「不可查看」处理，不崩；密钥版本化为后续事项）。
 >
-> **客户端分发（OTA）签名私钥（FR-087，见 ADR-022 / ADR-038）**：客户端 OTA 为可选功能。生产（`dev_mode: false`）**未注入** `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 时 Control Plane **降级启动**——视为未启用 OTA，签名器不可用、发布 / 签名 manifest 调用时返回「签名私钥未配置」，其余功能照常（见 ADR-038）。若**误把源码中公开的内置开发密钥贴进 env**（按解出公钥识别）则 **fail-closed 拒绝启动**——绝不回退开发密钥对外签 manifest（否则可被伪造投毒）。要启用 OTA：注入独立 Ed25519 私钥（base64 of PKCS#8 DER），生成示例 `openssl genpkey -algorithm ed25519 -outform DER | base64 -w0`，并把对应公钥回填客户端 updater-core 后随基础包分发。仅 `dev_mode: true`（如 `configs/control-plane.yaml`）才零配置回退开发密钥，供本地开发。
+> **客户端分发（OTA）签名私钥（FR-087，见 ADR-022 / ADR-038）**：客户端 OTA 为可选功能。生产（`dev_mode: false`）**未注入** `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 时 Control Plane **降级启动**——视为未启用 OTA，签名器不可用、发布 / 签名 manifest 调用时返回「签名私钥未配置」，其余功能照常（见 ADR-038）。若**误把源码中公开的内置开发密钥贴进 env**（按解出公钥识别）则 **fail-closed 拒绝启动**——绝不回退开发密钥对外签 manifest（否则可被伪造投毒）。要启用 OTA：注入独立 Ed25519 私钥（base64 of PKCS#8 DER），生成示例 `openssl genpkey -algorithm ed25519 -outform DER | base64 -w0`，并把对应公钥回填客户端 updater-core 后随基础包分发。仅 `dev_mode: true`（如 `configs/control-plane.yml`）才零配置回退开发密钥，供本地开发。
 
 ## 5. 首次启动引导
 
@@ -91,7 +91,7 @@ file_version:         # 通用文件改前快照（FR-051）
 
 ## 6. Worker Node 配置
 
-Worker 全部用环境变量配置（也可放 `worker.yaml` 同名键）：
+Worker 全部用环境变量配置（也可放 `worker.yml` 同名键）：
 
 | 环境变量 | 说明 | 默认 |
 |---|---|---|
