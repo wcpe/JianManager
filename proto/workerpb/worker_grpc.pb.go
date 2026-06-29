@@ -22,6 +22,7 @@ const (
 	WorkerService_Register_FullMethodName             = "/worker.WorkerService/Register"
 	WorkerService_Heartbeat_FullMethodName            = "/worker.WorkerService/Heartbeat"
 	WorkerService_CreateInstance_FullMethodName       = "/worker.WorkerService/CreateInstance"
+	WorkerService_ResyncInstances_FullMethodName      = "/worker.WorkerService/ResyncInstances"
 	WorkerService_StartInstance_FullMethodName        = "/worker.WorkerService/StartInstance"
 	WorkerService_StopInstance_FullMethodName         = "/worker.WorkerService/StopInstance"
 	WorkerService_RestartInstance_FullMethodName      = "/worker.WorkerService/RestartInstance"
@@ -90,6 +91,11 @@ type WorkerServiceClient interface {
 	Heartbeat(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[HeartbeatRequest, HeartbeatResponse], error)
 	// CreateInstance 在指定 Worker 上创建实例。
 	CreateInstance(ctx context.Context, in *CreateInstanceRequest, opts ...grpc.CallOption) (*CreateInstanceResponse, error)
+	// ResyncInstances Worker 重连/重注册后，CP 一次性重推该节点全部实例规格，
+	// Worker 用它填充内存注册表（不在表者按 STOPPED 注册、不启动进程；已在表者跳过，
+	// 不覆盖 RecoverDaemonInstances 恢复的 RUNNING 实例）。使重启后停机实例的
+	// 文件/配置/归档/备份 op 能定位工作目录（FR-FIXA 修 bug #2，见 ADR-050）。
+	ResyncInstances(ctx context.Context, in *ResyncInstancesRequest, opts ...grpc.CallOption) (*ResyncInstancesResponse, error)
 	// StartInstance 启动实例。
 	StartInstance(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
 	// StopInstance 停止实例。
@@ -241,6 +247,16 @@ func (c *workerServiceClient) CreateInstance(ctx context.Context, in *CreateInst
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateInstanceResponse)
 	err := c.cc.Invoke(ctx, WorkerService_CreateInstance_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ResyncInstances(ctx context.Context, in *ResyncInstancesRequest, opts ...grpc.CallOption) (*ResyncInstancesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResyncInstancesResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ResyncInstances_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -835,6 +851,11 @@ type WorkerServiceServer interface {
 	Heartbeat(grpc.BidiStreamingServer[HeartbeatRequest, HeartbeatResponse]) error
 	// CreateInstance 在指定 Worker 上创建实例。
 	CreateInstance(context.Context, *CreateInstanceRequest) (*CreateInstanceResponse, error)
+	// ResyncInstances Worker 重连/重注册后，CP 一次性重推该节点全部实例规格，
+	// Worker 用它填充内存注册表（不在表者按 STOPPED 注册、不启动进程；已在表者跳过，
+	// 不覆盖 RecoverDaemonInstances 恢复的 RUNNING 实例）。使重启后停机实例的
+	// 文件/配置/归档/备份 op 能定位工作目录（FR-FIXA 修 bug #2，见 ADR-050）。
+	ResyncInstances(context.Context, *ResyncInstancesRequest) (*ResyncInstancesResponse, error)
 	// StartInstance 启动实例。
 	StartInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
 	// StopInstance 停止实例。
@@ -967,6 +988,9 @@ func (UnimplementedWorkerServiceServer) Heartbeat(grpc.BidiStreamingServer[Heart
 }
 func (UnimplementedWorkerServiceServer) CreateInstance(context.Context, *CreateInstanceRequest) (*CreateInstanceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateInstance not implemented")
+}
+func (UnimplementedWorkerServiceServer) ResyncInstances(context.Context, *ResyncInstancesRequest) (*ResyncInstancesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResyncInstances not implemented")
 }
 func (UnimplementedWorkerServiceServer) StartInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartInstance not implemented")
@@ -1190,6 +1214,24 @@ func _WorkerService_CreateInstance_Handler(srv interface{}, ctx context.Context,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).CreateInstance(ctx, req.(*CreateInstanceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_ResyncInstances_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResyncInstancesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ResyncInstances(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ResyncInstances_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ResyncInstances(ctx, req.(*ResyncInstancesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2152,6 +2194,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateInstance",
 			Handler:    _WorkerService_CreateInstance_Handler,
+		},
+		{
+			MethodName: "ResyncInstances",
+			Handler:    _WorkerService_ResyncInstances_Handler,
 		},
 		{
 			MethodName: "StartInstance",
