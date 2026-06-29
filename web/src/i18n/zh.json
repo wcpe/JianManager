@@ -74,7 +74,14 @@
     "excluded": "将排除：{{list}}",
     "success": "已复制为「{{name}}」，可独立启动",
     "failed": "复制失败",
-    "sourceRunning": "请先停止源实例再复制"
+    "sourceRunning": "请先停止源实例再复制",
+    "mode": "复制范围",
+    "mode_quick": "快速复制",
+    "mode_advanced": "高级复制",
+    "quickHint": "仅复制核心 jar + 所有插件 + 根配置（server.properties 及根 *.yml/*.properties），不含世界 / 日志 / 缓存。",
+    "include": "包含（顶层项，留空=全部）",
+    "exclude": "排除（顶层项）",
+    "advancedHint": "按逗号 / 换行分隔的顶层项（目录名或 *.jar 等通配）；运行态垃圾始终排除。"
   },
   "networks": {
     "title": "群组管理",

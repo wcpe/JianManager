@@ -74,7 +74,14 @@
     "excluded": "Will exclude: {{list}}",
     "success": "Cloned as \"{{name}}\", ready to start",
     "failed": "Clone failed",
-    "sourceRunning": "Stop the source instance before cloning"
+    "sourceRunning": "Stop the source instance before cloning",
+    "mode": "Copy scope",
+    "mode_quick": "Quick",
+    "mode_advanced": "Advanced",
+    "quickHint": "Copies only the core jar + all plugins + root config (server.properties and root *.yml/*.properties); no world / logs / cache.",
+    "include": "Include (top-level, blank = all)",
+    "exclude": "Exclude (top-level)",
+    "advancedHint": "Comma / newline-separated top-level items (dir names or globs like *.jar); runtime junk is always excluded."
   },
   "networks": {
     "title": "Networks",

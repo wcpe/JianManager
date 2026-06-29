@@ -228,13 +228,20 @@ export const handlers = [
       levelName?: string
       registerToProxyIds?: number[]
       dryRun?: boolean
+      mode?: 'quick' | 'advanced'
+      include?: string[]
+      exclude?: string[]
     }
+    // 复制模式（FR-231）影响排除集：quick 只留核心+插件+根配置；advanced 用用户 exclude + 运行态垃圾。
+    const excluded = body.mode === 'quick'
+      ? ['world', 'logs', 'cache', 'crash-reports']
+      : [...(body.exclude ?? []), 'session.lock', '*.pid', 'logs']
     const allocated = { workDir: `/srv/instances/${body.name}`, serverPort: 25566, queryPort: 25566 }
     if (body.dryRun) {
       // 预检：不落库、不返回 instance，仅给出将分配的资源。
       return HttpResponse.json({
         allocated,
-        excluded: ['world/session.lock', 'logs/'],
+        excluded,
         registrations: [],
         warnings: [],
         dryRun: true,

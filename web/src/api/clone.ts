@@ -9,6 +9,10 @@ export interface CloneBody {
   levelName?: string
   registerToProxyIds?: number[]
   dryRun?: boolean
+  /** 复制模式（FR-231）：quick=核心 jar+插件+根配置；advanced=按 include/exclude（省略=advanced）。 */
+  mode?: 'quick' | 'advanced'
+  include?: string[]
+  exclude?: string[]
 }
 
 /** 复制结果（dryRun 时 instance 为空）。 */
