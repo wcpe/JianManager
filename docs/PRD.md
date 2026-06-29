@@ -287,7 +287,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-231 | 复制实例 高级/快速 双模式：快速复制=核心 jar + plugins/ + 根配置（server.properties 及根 *.yml/*.properties）；高级复制=目录选择器 + 用户包含/排除筛选；扩 CloneWorkDir 支持 include/选择性复制（增强 FR-036，需 spec：复制语义 + 筛选 + proto） | P2 | 🔨 开发中 |
 | FR-232 | 前端交互细节集：节点页进入默认选中第一个节点；页眉刷新图标刷新当前页数据（非整页 reload）（增强 FR-177/179，免 spec） | P2 | 🔨 开发中 |
 | FR-233 | 实例配置随时编辑：实例详情/工作区提供配置编辑（启动命令 / JVM 参数 / JDK / 环境变量 / 资源限额 / 自动重启等），保存即持久化并提示重启生效；今 `InstanceDetailPage` 仅深链跳画布、无编辑能力（feat，需 spec：新 PATCH /instances/:id 契约 + 跨 CP/web、worker 重读配置） | P1 | 📋 计划 |
-| FR-234 | 创建实例向导优化：启动命令预填可改示例（如 `java -Xmx2G -jar server.jar nogui`）+ 提示 jar 名/放置位置 + 彻底隐藏工作目录（系统分配，对齐 ADR-007/008）（增强 FR-230，免 spec） | P1 | 📋 计划 |
+| FR-234 | 创建实例向导优化：启动命令预填可改示例（如 `java -Xmx2G -jar server.jar nogui`）+ 提示 jar 名/放置位置 + 彻底隐藏工作目录（系统分配，对齐 ADR-007/008）（增强 FR-230，免 spec） | P1 | 🔨 开发中 |
 | FR-235 | 实例列表页重设计（面向 1000+ 实例）：卡片 + 列表重做（信息密度 / 美观 / 点击进详情），大规模下虚拟化 + 分组 + 搜索筛选；消费 FR-247 服务端搜索/分页（增强 FR-165/163，需 spec，依赖 FR-247/246/240） | P1 | 📋 计划 |
 | FR-236 | 一键搭建模态优化 + Docker 傻瓜建服：建后端服 / 建代理两模态遵循 ui-modals + 大白话；并入 Docker 一键建服（预置镜像 `itzg/minecraft-server` + 端口 + 一键起）（增强 FR-035/078，需 spec，含原 FR-239） | P1 | 📋 计划 |
 | FR-237 | 节点 Docker 可用性检测 + 未装引导：Worker 探测 docker 是否安装/可用，CP/UI 展示状态，未装给安装引导，docker 建服前先测不通即提示不卡死（feat，需 spec：worker 探测 RPC + 跨模块，关联 FR-229 连通性族） | P1 | 📋 计划 |

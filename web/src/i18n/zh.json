@@ -989,6 +989,7 @@
     "node": "节点",
     "selectNode": "选择节点",
     "noNodesHint": "尚无节点。请先到「节点」页添加并让其上线，再回来创建实例。",
+    "startCommandHint": "把服务端 jar 上传到自动分配的工作目录，并把命令里的 server.jar 换成你的实际文件名（如 paper-1.21.jar）。",
     "jdkOptional": "JDK（可选）",
     "jdkSystemDefault": "不指定（使用系统 Java）",
     "autoRestart": "崩溃自动重启",

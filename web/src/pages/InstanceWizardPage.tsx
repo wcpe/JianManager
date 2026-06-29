@@ -17,7 +17,6 @@ import { FieldLabel, FieldError } from '@/components/ui/field-label'
 import { cn } from '@/lib/utils'
 import {
   validateRequired,
-  validateAbsPath,
   validateNonNegativeNumber,
   validateFields,
 } from '@/lib/form-validation'
@@ -51,8 +50,7 @@ export default function InstanceWizardPage() {
   const [image, setImage] = useState('')
   const [cpuLimit, setCpuLimit] = useState('')
   const [memLimitMb, setMemLimitMb] = useState('')
-  const [startCommand, setStartCommand] = useState('')
-  const [workDir, setWorkDir] = useState('')
+  const [startCommand, setStartCommand] = useState('java -Xmx2G -jar server.jar nogui')
   const [autoRestart, setAutoRestart] = useState(true)
   const [groupId, setGroupId] = useState('')
   const [templateId, setTemplateId] = useState(searchParams.get('template') ?? '')
@@ -61,7 +59,6 @@ export default function InstanceWizardPage() {
   const { data: jdks } = useNodeJDKs(nodeId ? Number(nodeId) : 0)
 
   const isDocker = processType === 'docker'
-  const needWorkDir = type !== 'minecraft_java'
 
   const nodeOptions: ComboboxOption[] = buildNodeOptions(nodes, {
     online: t('nodes.online'),
@@ -87,12 +84,11 @@ export default function InstanceWizardPage() {
   ]
 
   const errors = validateFields(
-    { name, nodeId, startCommand, workDir, image, cpuLimit, memLimitMb },
+    { name, nodeId, startCommand, image, cpuLimit, memLimitMb },
     {
       name: [validateRequired],
       nodeId: [validateRequired],
       startCommand: [validateRequired],
-      workDir: needWorkDir ? [validateRequired, validateAbsPath] : [],
       image: isDocker ? [validateRequired] : [],
       cpuLimit: isDocker ? [validateNonNegativeNumber] : [],
       memLimitMb: isDocker ? [validateNonNegativeNumber] : [],
@@ -108,7 +104,7 @@ export default function InstanceWizardPage() {
   // 单步是否可继续（仅校验该步内的必填项）。
   const stepValid = (k: StepKey): boolean => {
     if (k === 'basic') return !errors.name && !errors.nodeId
-    if (k === 'launch') return !errors.startCommand && (!needWorkDir || !errors.workDir)
+    if (k === 'launch') return !errors.startCommand
     if (k === 'advanced') return !errors.image && !errors.cpuLimit && !errors.memLimitMb
     return true
   }
@@ -132,7 +128,6 @@ export default function InstanceWizardPage() {
       if (tpl) {
         setStartCommand(tpl.startCommand)
         setType(tpl.type || type)
-        if (tpl.defaultWorkDir) setWorkDir(tpl.defaultWorkDir)
       }
     }
   }
@@ -145,7 +140,6 @@ export default function InstanceWizardPage() {
       type,
       processType,
       startCommand,
-      workDir,
       autoRestart,
       groupId: groupId ? Number(groupId) : undefined,
       jdkId: jdkId ? Number(jdkId) : undefined,
@@ -243,17 +237,9 @@ export default function InstanceWizardPage() {
               </Field>
             </div>
             <Field label={t('instanceDetail.startCommand')} required error={errors.startCommand}>
-              <input value={startCommand} onChange={(e) => setStartCommand(e.target.value)} className={cn(inputClass, 'font-mono')} placeholder="java -Xmx2G -jar paper.jar nogui" aria-invalid={!!errors.startCommand} />
+              <input value={startCommand} onChange={(e) => setStartCommand(e.target.value)} className={cn(inputClass, 'font-mono')} placeholder="java -Xmx2G -jar server.jar nogui" aria-invalid={!!errors.startCommand} />
+              <p className="mt-1.5 text-xs text-muted-foreground">{t('instances.startCommandHint')}</p>
             </Field>
-            {needWorkDir ? (
-              <Field label={t('instanceDetail.workDir')} required error={errors.workDir}>
-                <input value={workDir} onChange={(e) => setWorkDir(e.target.value)} className={inputClass} placeholder="/servers/survival" aria-invalid={!!errors.workDir} />
-              </Field>
-            ) : (
-              <Field label={t('instanceDetail.workDir')}>
-                <div className="mt-1 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">{t('instances.workDirSystemAssigned')}</div>
-              </Field>
-            )}
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={autoRestart} onChange={(e) => setAutoRestart(e.target.checked)} />
               {t('instanceDetail.autoRestart')}
@@ -285,7 +271,6 @@ export default function InstanceWizardPage() {
             <ReviewRow label={t('instanceDetail.processType')} value={processType} />
             <ReviewRow label={t('instanceDetail.startCommand')} value={startCommand} mono />
             <ReviewRow label={t('instances.jdkOptional')} value={jdkLabel} />
-            {needWorkDir && <ReviewRow label={t('instanceDetail.workDir')} value={workDir} mono />}
             {isDocker && <ReviewRow label={t('instances.dockerImage')} value={image} mono />}
             <ReviewRow label={t('instanceDetail.autoRestart')} value={autoRestart ? t('common.enabled') : t('common.disabled', '关闭')} />
           </dl>

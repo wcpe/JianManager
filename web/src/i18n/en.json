@@ -1033,6 +1033,7 @@
     "node": "Node",
     "selectNode": "Select Node",
     "noNodesHint": "No nodes yet. Add one on the Nodes page and bring it online, then come back to create an instance.",
+    "startCommandHint": "Upload your server jar to the auto-assigned working directory, then replace server.jar in the command with your actual filename (e.g. paper-1.21.jar).",
     "jdkOptional": "JDK (optional)",
     "jdkSystemDefault": "Unspecified (system Java)",
     "autoRestart": "Auto restart on crash",
