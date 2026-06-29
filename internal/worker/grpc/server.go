@@ -537,6 +537,25 @@ type jdkResult struct {
 	Managed      bool   `json:"managed"`
 }
 
+// ProbeJDK 探测节点上某路径的 JDK 信息（FR-228），供登记前自动填厂商/版本/架构（不再手填）。
+func (s *Server) ProbeJDK(ctx context.Context, req *workerpb.ProbeJDKRequest) (*workerpb.ProbeJDKResponse, error) {
+	if s.jdkMgr == nil {
+		return &workerpb.ProbeJDKResponse{Valid: false, Error: "JDK 管理器未启用"}, nil
+	}
+	info, err := s.jdkMgr.Probe(req.Path)
+	if err != nil {
+		return &workerpb.ProbeJDKResponse{Valid: false, Error: err.Error()}, nil
+	}
+	return &workerpb.ProbeJDKResponse{
+		Valid:        true,
+		Vendor:       info.Vendor,
+		MajorVersion: int32(info.MajorVersion),
+		Version:      info.Version,
+		Arch:         info.Arch,
+		JavaHome:     info.Path,
+	}, nil
+}
+
 // TaskSnapshots 返回运行中任务的心跳快照（FR-183）。心跳侧据此随心跳上报给 CP。
 func (s *Server) TaskSnapshots() []*workerpb.TaskSnapshot {
 	return s.tasks.Snapshot()

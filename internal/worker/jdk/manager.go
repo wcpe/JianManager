@@ -295,6 +295,30 @@ func detectAt(dir string) (Info, bool) {
 	}, true
 }
 
+// normalizeJDKHome 把 path 归一为 JDK home（FR-228）：若指向 bin/java[.exe] 则取上两级（去掉 bin/java），否则原样。
+func normalizeJDKHome(path string) string {
+	clean := filepath.Clean(strings.TrimSpace(path))
+	switch strings.ToLower(filepath.Base(clean)) {
+	case "java", "java.exe":
+		return filepath.Dir(filepath.Dir(clean)) // .../bin/java → .../（bin 的父目录）
+	}
+	return clean
+}
+
+// Probe 探测某路径的 JDK 信息（FR-228）：path 可为 JDK home 或 java 可执行文件，归一后 detectAt。
+// 找不到 bin/java 或取不到版本时返回 error，供登记前自动填厂商/版本/架构（不再手填）。
+func (m *Manager) Probe(path string) (Info, error) {
+	if strings.TrimSpace(path) == "" {
+		return Info{}, fmt.Errorf("路径为空")
+	}
+	home := normalizeJDKHome(path)
+	info, ok := detectAt(home)
+	if !ok {
+		return Info{}, fmt.Errorf("该路径不是有效的 JDK：未找到 bin/java 或无法读取版本（%s）", home)
+	}
+	return info, nil
+}
+
 func parseProp(text, key string) string {
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)

@@ -52,6 +52,7 @@ const (
 	WorkerService_InstallJDK_FullMethodName           = "/worker.WorkerService/InstallJDK"
 	WorkerService_RemoveJDK_FullMethodName            = "/worker.WorkerService/RemoveJDK"
 	WorkerService_JDKCatalog_FullMethodName           = "/worker.WorkerService/JDKCatalog"
+	WorkerService_ProbeJDK_FullMethodName             = "/worker.WorkerService/ProbeJDK"
 	WorkerService_DownloadCore_FullMethodName         = "/worker.WorkerService/DownloadCore"
 	WorkerService_ListArtifactCache_FullMethodName    = "/worker.WorkerService/ListArtifactCache"
 	WorkerService_EvictArtifactCache_FullMethodName   = "/worker.WorkerService/EvictArtifactCache"
@@ -155,6 +156,8 @@ type WorkerServiceClient interface {
 	RemoveJDK(ctx context.Context, in *RemoveJDKRequest, opts ...grpc.CallOption) (*RemoveJDKResponse, error)
 	// JDKCatalog 经 foojay disco API 查询某发行版可选的具体 JDK 版本，喂前端版本选择器（FR-178）。
 	JDKCatalog(ctx context.Context, in *JDKCatalogRequest, opts ...grpc.CallOption) (*JDKCatalogResponse, error)
+	// ProbeJDK 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 厂商/版本/架构，供登记自动填（FR-228）。
+	ProbeJDK(ctx context.Context, in *ProbeJDKRequest, opts ...grpc.CallOption) (*ProbeJDKResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
 	DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error)
 	// ListArtifactCache 列出节点本地制品缓存项 + 总占用 + 当前容量上限。
@@ -571,6 +574,16 @@ func (c *workerServiceClient) JDKCatalog(ctx context.Context, in *JDKCatalogRequ
 	return out, nil
 }
 
+func (c *workerServiceClient) ProbeJDK(ctx context.Context, in *ProbeJDKRequest, opts ...grpc.CallOption) (*ProbeJDKResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProbeJDKResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ProbeJDK_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DownloadCoreResponse)
@@ -915,6 +928,8 @@ type WorkerServiceServer interface {
 	RemoveJDK(context.Context, *RemoveJDKRequest) (*RemoveJDKResponse, error)
 	// JDKCatalog 经 foojay disco API 查询某发行版可选的具体 JDK 版本，喂前端版本选择器（FR-178）。
 	JDKCatalog(context.Context, *JDKCatalogRequest) (*JDKCatalogResponse, error)
+	// ProbeJDK 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 厂商/版本/架构，供登记自动填（FR-228）。
+	ProbeJDK(context.Context, *ProbeJDKRequest) (*ProbeJDKResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
 	DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error)
 	// ListArtifactCache 列出节点本地制品缓存项 + 总占用 + 当前容量上限。
@@ -1078,6 +1093,9 @@ func (UnimplementedWorkerServiceServer) RemoveJDK(context.Context, *RemoveJDKReq
 }
 func (UnimplementedWorkerServiceServer) JDKCatalog(context.Context, *JDKCatalogRequest) (*JDKCatalogResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method JDKCatalog not implemented")
+}
+func (UnimplementedWorkerServiceServer) ProbeJDK(context.Context, *ProbeJDKRequest) (*ProbeJDKResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ProbeJDK not implemented")
 }
 func (UnimplementedWorkerServiceServer) DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DownloadCore not implemented")
@@ -1744,6 +1762,24 @@ func _WorkerService_JDKCatalog_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_ProbeJDK_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProbeJDKRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ProbeJDK(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ProbeJDK_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ProbeJDK(ctx, req.(*ProbeJDKRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_DownloadCore_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DownloadCoreRequest)
 	if err := dec(in); err != nil {
@@ -2306,6 +2342,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "JDKCatalog",
 			Handler:    _WorkerService_JDKCatalog_Handler,
+		},
+		{
+			MethodName: "ProbeJDK",
+			Handler:    _WorkerService_ProbeJDK_Handler,
 		},
 		{
 			MethodName: "DownloadCore",

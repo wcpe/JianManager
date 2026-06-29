@@ -79,6 +79,8 @@ service WorkerService {
   rpc RemoveJDK(RemoveJDKRequest) returns (RemoveJDKResponse);
   // JDKCatalog 经 foojay disco API 查询某发行版可选的具体 JDK 版本，喂前端版本选择器（FR-178）。
   rpc JDKCatalog(JDKCatalogRequest) returns (JDKCatalogResponse);
+  // ProbeJDK 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 厂商/版本/架构，供登记自动填（FR-228）。
+  rpc ProbeJDK(ProbeJDKRequest) returns (ProbeJDKResponse);
   // DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
   rpc DownloadCore(DownloadCoreRequest) returns (DownloadCoreResponse);
 
@@ -860,6 +862,20 @@ message BrowseDirResponse {
   string path = 3;             // 实际浏览的规范化绝对路径
   string parent = 4;           // 父目录绝对路径（已在根则为空）
   repeated BrowseDirEntry dirs = 5; // 子目录列表（不含文件）
+}
+
+// ProbeJDK 探测某路径的 JDK 信息（FR-228）：path 可为 JDK home 目录或 java 可执行文件，Worker 归一后探测。
+message ProbeJDKRequest {
+  string path = 1;
+}
+message ProbeJDKResponse {
+  bool valid = 1;             // 是否为有效 JDK（找到 bin/java 且能取版本）
+  string vendor = 2;          // 归一后的厂商（Temurin/Corretto/Zulu/...）
+  int32 major_version = 3;    // 主版本（如 21）
+  string version = 4;         // 完整版本（如 21.0.4+9）
+  string arch = 5;            // 架构（x64/aarch64...）
+  string java_home = 6;       // 归一后的 JDK home 绝对路径（登记用 path）
+  string error = 7;           // valid=false 时的原因
 }
 
 message DeployServerProbeRequest {
