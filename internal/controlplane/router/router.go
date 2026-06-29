@@ -23,6 +23,7 @@ type Services struct {
 	InstanceGroup      *service.InstanceGroupService
 	JDK                *service.JDKService
 	NodeRuntime        *service.NodeRuntimeService
+	Diagnostics        *service.DiagnosticsService
 	DockerImage        *service.DockerImageService
 	Terminal           *service.TerminalService
 	File               *service.FileService
@@ -298,6 +299,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.Settings != nil {
 			settingsHandler := NewSettingsHandler(svcs.Settings)
 			settingsHandler.RegisterRoutes(admin)
+		}
+
+		// 连通性测试：出站 HTTP 可达性（代理 / 下载源）+ 节点存活探测，限平台管理员（FR-229）。
+		if svcs.Diagnostics != nil {
+			NewDiagnosticsHandler(svcs.Diagnostics).RegisterRoutes(admin)
 		}
 
 		// 平台存储资源管理器：CP 侧数据根 FHS 只读浏览 + 占用统计 + cache 受控清理，

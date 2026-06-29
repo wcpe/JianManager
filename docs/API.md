@@ -1665,6 +1665,27 @@
 
 ---
 
+## 连通性自检（FR-229）
+
+> 「先测后用」连通性探测，仅平台管理员。出站 HTTP 测试经 CP 当前出站客户端（含已配置代理，FR-185）发起，反映「CP 能否到达该源」；节点存活经 gRPC 调用 Worker 轻量 `GetVersion` 主动探活（不读心跳缓存）。出站 HTTP 测试可让 CP 请求任意 URL（SSRF 面），故限平台管理员。
+
+### POST /api/v1/diagnostics/http-test
+- **描述**: 经 CP 出站客户端 GET 目标 URL 测可达性（代理设置 / JDK 下载源连通性复用）
+- **关联 FR**: FR-229（增强 FR-185/178）
+- **权限**: 平台管理员
+- **请求体**: `{ "url": "https://api.github.com" }`（仅带 host 的 http/https 绝对 URL，否则 400 `INVALID_URL`）
+- **响应**: `{ "ok": true, "status": 200, "latencyMs": 371 }`；连接失败返 `{ "ok": false, "latencyMs": <ms>, "error": "<原因>" }`（连接失败不作 5xx，置 `ok=false`）
+- **超时**: 10s
+
+### POST /api/v1/nodes/:id/ping
+- **描述**: 主动探测节点 Worker 是否存活（JDK 一键下载前先测，避免对离线/卡顿节点发起会卡死的下载）
+- **关联 FR**: FR-229
+- **权限**: 平台管理员
+- **响应**: `{ "alive": true, "latencyMs": 0, "version": "0.12.0", "os": "windows", "arch": "amd64" }`；未连接/调用失败返 `{ "alive": false, "latencyMs": <ms>, "error": "<原因>" }`（非 5xx）；节点不存在 404 `NOT_FOUND`
+- **超时**: 5s
+
+---
+
 ## 平台设置（FR-063）
 
 > 平台配置在 YAML+env 基线上叠加一层 DB 覆盖层（`platform_settings`），生效优先级 **DB 覆盖 > 环境变量 > YAML 默认**。仅白名单项可运行时修改；启动固定/敏感项只读展示，敏感值脱敏不下发明文。参见 ADR-015。
