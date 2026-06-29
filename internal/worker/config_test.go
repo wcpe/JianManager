@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -49,4 +51,30 @@ func TestLoad_ArtifactCacheCap(t *testing.T) {
 	cfg2, err := Load(t.TempDir() + "/nonexistent.yaml")
 	require.NoError(t, err)
 	assert.Equal(t, int64(1073741824), cfg2.ArtifactCache.MaxBytes)
+}
+
+// TestFindConfigFile_YmlPreferred .yml 优先于 .yaml，皆无返回空（FR-224 / FR-222 自检复用）。
+func TestFindConfigFile_YmlPreferred(t *testing.T) {
+	dir := t.TempDir()
+	assert.Empty(t, FindConfigFile("worker", dir), "皆无返回空")
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "worker.yaml"), []byte("name: a\n"), 0o644))
+	assert.Equal(t, filepath.Join(dir, "worker.yaml"), FindConfigFile("worker", dir), "仅 .yaml 时命中 .yaml")
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "worker.yml"), []byte("name: b\n"), 0o644))
+	assert.Equal(t, filepath.Join(dir, "worker.yml"), FindConfigFile("worker", dir), ".yml 优先")
+}
+
+// TestWorkerConfigExists 工作目录有/无 worker 配置文件时正确报告（FR-222 未配置自检的一半）。
+func TestWorkerConfigExists(t *testing.T) {
+	dir := t.TempDir()
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+	require.NoError(t, os.Chdir(dir))
+
+	assert.False(t, WorkerConfigExists(), "干净目录无配置文件")
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "worker.yml"), []byte("name: x\n"), 0o644))
+	assert.True(t, WorkerConfigExists(), "有 worker.yml 即已配置")
 }
