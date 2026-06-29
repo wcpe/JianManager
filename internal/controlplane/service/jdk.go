@@ -314,7 +314,10 @@ func (s *JDKService) syncFromWorker(nodeID uint) error {
 	if !ok {
 		return ErrNodeOffline
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// FIX-5：List 每次都同步阻塞此 gRPC（登记/打开 JDK 面板均触发），原 30s 超时使 worker gRPC
+	// 卡顿/连接陈旧时 GET /jdks 一卡 30s（前端无反馈）。同步是「容忍失败」的尽力而为（失败仍回 DB 数据），
+	// 故收敛到 UI 友好的 5s：健康 worker 远低于此、陈旧连接快速失败回退 DB，不再长卡。
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	resp, err := client.Worker.ListJDKs(ctx, &workerpb.ListJDKsRequest{})
 	if err != nil {
