@@ -42,7 +42,7 @@ type SettingCategory = 'appearance' | 'logging' | 'runtime' | 'network' | 'backu
 
 /** 把平台配置键映射到分类：可编辑项落 logging/runtime/network/backup，只读项落 security。 */
 function keyCategory(key: string): SettingCategory {
-  if (key.startsWith('log.')) return 'logging'
+  if (key.startsWith('log.') || key.startsWith('debug.')) return 'logging' // 调试模式（FR-225）归日志分类
   if (key.startsWith('jdk.') || key.startsWith('graceful_stop.')) return 'runtime'
   if (key.startsWith('proxy.')) return 'network' // 出站代理（FR-185）
   if (key.startsWith('backup.')) return 'backup'
@@ -380,7 +380,18 @@ function EditableRow({
         </div>
         <p className="text-xs text-muted-foreground font-mono">{item.key}</p>
       </div>
-      {item.key === 'log.level' ? (
+      {item.key === 'debug.mode' ? (
+        // 调试模式开关（FR-225）：开=日志 debug + Gin debug，关=info + release，运行时即时生效。
+        <Select value={value} onValueChange={onChange}>
+          <SelectTrigger size="sm" className="w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="true">{t('settings.debugOn', '开启')}</SelectItem>
+            <SelectItem value="false">{t('settings.debugOff', '关闭')}</SelectItem>
+          </SelectContent>
+        </Select>
+      ) : item.key === 'log.level' ? (
         <Select value={value} onValueChange={onChange}>
           <SelectTrigger size="sm" className="w-40">
             <SelectValue />

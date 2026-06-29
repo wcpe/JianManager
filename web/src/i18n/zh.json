@@ -2312,8 +2312,11 @@
       "security": "启动固定的服务/数据库/鉴权参数（只读）"
     },
     "networkNotice": "全局出站代理：Control Plane 自身下载经此代理，并作为各节点的默认代理（节点可在节点页覆盖）。保存即生效，无需重启。含账号密码的地址回显时已脱敏。",
+    "debugOn": "开启",
+    "debugOff": "关闭",
     "keys": {
       "log.level": "日志级别",
+      "debug.mode": "调试模式（日志 + Gin）",
       "jdk.mirror.temurin": "JDK 镜像源（Temurin）",
       "jdk.mirror.corretto": "JDK 镜像源（Corretto）",
       "jdk.mirror.zulu": "JDK 镜像源（Zulu）",

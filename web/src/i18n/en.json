@@ -2333,8 +2333,11 @@
       "security": "Startup-fixed server/database/auth parameters (read-only)"
     },
     "networkNotice": "Global outbound proxy: the Control Plane's own downloads go through it, and it serves as the default proxy for all nodes (each node can override it on the node page). Takes effect immediately, no restart needed. Addresses containing credentials are masked when displayed.",
+    "debugOn": "On",
+    "debugOff": "Off",
     "keys": {
       "log.level": "Log level",
+      "debug.mode": "Debug mode (logs + Gin)",
       "jdk.mirror.temurin": "JDK mirror (Temurin)",
       "jdk.mirror.corretto": "JDK mirror (Corretto)",
       "jdk.mirror.zulu": "JDK mirror (Zulu)",
