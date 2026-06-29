@@ -25,9 +25,14 @@ export default function TerminalPane({ instanceId, hideHeader = false }: Termina
   const { data: instance } = useInstance(instanceId)
   const status = instance?.status ?? ''
   const isRunning = status === 'RUNNING'
-  // 固定用 write token 并按会话缓存：实例状态变化（running↔stopped）不切换 token，
-  // 终端连接保持不断，能看到关服/启动日志；是否允许输入由 readOnly 在前端把关。
-  const { data: tokenData, isLoading, error } = useTerminalToken(instanceId, 'write')
+  // 完全停机（STOPPED）的实例无进程可 attach：CP→Worker 拨号失败时终端会陷入
+  // 「连上即断、重连重置计数」的死循环刷断连（FIX-B），故 STOPPED 一律展示静态占位、不连 WS。
+  // STARTING/STOPPING/CRASHED 仍连终端（只读）以看启动/关服/崩溃输出，行为不变。
+  const isStopped = status === 'STOPPED'
+  // 仅在状态已知且非完全停机时请求 token / 挂载终端：STOPPED 与状态未知都不发起 WS
+  // （enabled=false 连 token 都不取），避免对停机/加载中实例无谓拨号或闪现终端。
+  const canAttach = !!status && !isStopped
+  const { data: tokenData, isLoading, error } = useTerminalToken(instanceId, 'write', canAttach)
 
   return (
     <div className="flex h-full flex-col">
@@ -50,14 +55,29 @@ export default function TerminalPane({ instanceId, hideHeader = false }: Termina
         </div>
       )}
 
+      {/* 非运行（STARTING/STOPPING/CRASHED）仍连只读终端，给出状态提示 */}
+      {status && !isRunning && !isStopped && (
+        <div className="mx-4 mt-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
+          {t('instanceDetail.terminalReadOnly', { status })}
+        </div>
+      )}
+
       {/* 终端区 */}
       <div className="min-h-0 flex-1 p-4">
-        {status && !isRunning && (
-          <div className="mb-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
-            {t('instanceDetail.terminalReadOnly', { status })}
+        {!status ? (
+          // 实例状态未知（加载中）：先不挂载终端，避免拿不到状态就拨号/闪现。
+          <div className="flex min-h-[400px] items-center justify-center rounded-lg bg-[#1a1b26] p-4">
+            <p className="text-sm text-gray-500">{t('instanceDetail.connecting')}</p>
           </div>
-        )}
-        {error ? (
+        ) : isStopped ? (
+          // 完全停机：不挂载 xterm、不连 WS，展示「实例未运行」静态占位，避免死循环刷断连（FIX-B）。
+          <div className="flex min-h-[400px] flex-col items-center justify-center gap-1.5 rounded-lg bg-[#1a1b26] p-4 text-center">
+            <p className="text-sm font-medium text-gray-300">
+              {t('instanceDetail.terminalNotRunning', { status })}
+            </p>
+            <p className="text-xs text-gray-500">{t('instanceDetail.terminalNotRunningHint')}</p>
+          </div>
+        ) : error ? (
           <div className="flex min-h-[400px] items-center justify-center rounded-lg bg-[#1a1b26] p-4">
             <p className="text-sm text-muted-foreground">
               {t('instanceDetail.terminalConnectFailed')}: {(error as Error).message || t('common.error')}

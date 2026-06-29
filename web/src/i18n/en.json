@@ -1105,6 +1105,8 @@
     "terminalConnectFailed": "Cannot connect to terminal",
     "connecting": "Connecting...",
     "terminalReadOnly": "Instance not running ({{status}}), terminal is read-only, showing recent output",
+    "terminalNotRunning": "Instance not running ({{status}})",
+    "terminalNotRunningHint": "Start the instance to use the terminal",
     "startCommand": "Start Command",
     "workDir": "Working Directory",
     "defaultWorkDir": "Default",

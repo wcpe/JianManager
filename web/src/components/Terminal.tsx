@@ -16,6 +16,9 @@ interface TerminalComponentProps {
 
 const MAX_RETRIES = 3
 const BASE_RETRY_DELAY = 1000
+// 连接存活超过此时长才视为「真正连上」并清零重试计数；用于防止 open→立即 close 的循环
+// 反复把计数清零而绕过 MAX_RETRIES（FIX-B 死循环刷断连）。
+const STABLE_AFTER_MS = 2000
 
 // 常用 MC/Paper 控制台命令，用于 Tab 补全（服务端控制台非 PTY，无原生补全）。
 const MC_COMMANDS = [
@@ -46,6 +49,8 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
   const cleanupRef = useRef(false)
   const retryCountRef = useRef(0)
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // 连接存活计时器：onopen 后延迟清零重试计数，连接若提前关闭则取消，使 MAX_RETRIES 真正生效。
+  const stableTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lineBufRef = useRef('')
   // readOnly 用 ref：实例状态变化只切换是否允许输入，不重建/不重连——停服时保持连接看关服日志。
   const readOnlyRef = useRef(readOnly)
@@ -176,7 +181,12 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
     const ws = new WebSocket(`${wsUrl}?token=${token}`)
     wsRef.current = ws
 
-    ws.onopen = () => { retryCountRef.current = 0 }
+    // 仅在连接「存活足够久」后才清零重试计数。CP→Worker 拨号失败时浏览器侧会先 open（升级成功）
+    // 再被立即 close，若在 onopen 即清零会让 MAX_RETRIES 永远归零、陷入无限重连刷断连（FIX-B）。
+    ws.onopen = () => {
+      if (stableTimerRef.current) clearTimeout(stableTimerRef.current)
+      stableTimerRef.current = setTimeout(() => { retryCountRef.current = 0 }, STABLE_AFTER_MS)
+    }
 
     ws.onmessage = (event) => {
       try {
@@ -221,9 +231,14 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
       }
     }
 
-    ws.onclose = () => { if (!cleanupRef.current) termRef.current?.write('\r\n[连接已断开]\r\n') }
+    ws.onclose = () => {
+      // 连接关闭即取消「存活清零」计时：未撑过 STABLE_AFTER_MS 不算真正连上，保留累计计数。
+      if (stableTimerRef.current) clearTimeout(stableTimerRef.current)
+      if (!cleanupRef.current) termRef.current?.write('\r\n[连接已断开]\r\n')
+    }
 
     ws.onerror = () => {
+      if (stableTimerRef.current) clearTimeout(stableTimerRef.current)
       if (cleanupRef.current) return
       if (retryCountRef.current < MAX_RETRIES) {
         retryCountRef.current++
@@ -331,6 +346,7 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
       window.removeEventListener('resize', handleResize)
       cleanupRef.current = true
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
+      if (stableTimerRef.current) clearTimeout(stableTimerRef.current)
       wsRef.current?.close()
       term.dispose()
     }

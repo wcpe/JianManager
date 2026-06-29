@@ -1084,6 +1084,8 @@
     "terminalConnectFailed": "无法连接终端",
     "connecting": "连接中...",
     "terminalReadOnly": "实例未运行（{{status}}），终端为只读，显示最近输出",
+    "terminalNotRunning": "实例未运行（{{status}}）",
+    "terminalNotRunningHint": "启动实例后即可使用终端",
     "startCommand": "启动命令",
     "workDir": "工作目录",
     "defaultWorkDir": "默认",
