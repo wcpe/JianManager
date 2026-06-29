@@ -54,6 +54,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - BUG-A 节点重名覆盖（修 FR-004 注册身份匹配缺陷，见 ADR-039）：注册改 UUID 锚定三级匹配 + 节点名活跃唯一 + 坏节点检测/修复后端（`NodeRepairService` + `/nodes/repair/*`、`/nodes/:id/reenroll|orphans|purge-orphans`）随 ADR-039 fix 提交落地；坏节点修复**可视化入口**随 FR-177 节点页重做。属缺陷修复（非新 FR），不占 §4 FR 编号
 - FR-213~221（观测体系重构 + 客户端分发观测 + 共享文件浏览器 + 通知中心：导航{监控/日志/统计}+任务中心移系统 / 站内信+告警合并通知中心 / 分发观测时序底座+监控页+统计扩维 / 文件浏览器抽取+实例卡片迁移+分发文件预览 / 平台级统计页 / 时序剖析增强，关联 ADR-048[统一通知模型] / ADR-049[分发观测聚合，复用 ADR-013] + 增强 FR-060/086）→ FR-213 `docs/specs/file-browser-component/`、FR-215 `docs/specs/observability-ia-redesign/`、FR-216 `docs/specs/notification-center/`、FR-217 `docs/specs/client-dist-observability/`、FR-220 `docs/specs/platform-statistics/`（需 spec，开发中创建）；FR-214/218/219/221 免 spec（前端复用/消费既有）；FIX-1 发布上传复验 + strict/fail-static 等术语中文化（fix 走 sdd-fix-bug，不占 §4）
 - FR-222~224 + FIX-A~D（节点上线流程打通 + worker 生命周期修复 + .yml 约定：worker 免配置自启 setup[下载/上线分离] / 安装脚本重构[cwd 跳下载] / .yml 全改，关联 ADR-050[worker 重连重推实例] / ADR-051[worker 免配置 setup，改写 ADR-020] + 增强 FR-080/004/006/017）→ FR-222 `docs/specs/worker-self-setup/`（需 spec，开发中创建）；FR-223/224 免 spec（脚本/约定重构）；FIX-A #2 worker 重连重推实例[+ADR-050] / FIX-B #3 终端断连 / FIX-C #4 启停 kill 竞态 / FIX-D 首次上线真机断点（fix 走 sdd-fix-bug，不占 §4）
+- FR-225~232 + FIX-1~6（迭代修复批 2026-06-29：调试开关 / 通知-任务联动 / 任务强停+筛选 / JDK登记重做 / 连通性测试族 / 创建向导页 / 复制双模式 / 前端细节 + onboarding 真机修复）→ **归真 FR-222/223**（真机上线未通过，退回 🔨 开发中，由 FIX-1/2/3 修复真机验过后随发版重标 ✅）；FR-227 `docs/specs/task-force-stop/`、FR-228 `docs/specs/jdk-register-redesign/`、FR-229 `docs/specs/connectivity-selftest/`、FR-231 `docs/specs/instance-clone-modes/`（需 spec，开发中创建）；FR-225/226/230/232 免 spec；FIX-1/2/3 节点上线真机打通[归真 FR-222/223] / FIX-4 JDK 下载超时 / FIX-5 JDK 登记卡死 / FIX-6 系统更新进页只读缓存（fix 走 sdd-fix-bug，不占 §4）
 - 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
 
 | 编号 | 需求 | 优先级 | 状态 |
@@ -273,9 +274,17 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-219 | 客户端分发频道工作台「统计」Tab 扩充维度：复用 FR-217 数据加 活跃客户端/版本分布/更新成功率/平台分布 等（增强既有频道统计，免 spec，依赖 FR-217） | P2 | ✅ 已交付@v0.12.0 |
 | FR-220 | 观测·统计页补齐：观测三子类之一的「统计」页做成平台级聚合统计（节点/实例/玩家/分发等概览聚合，独立于 FR-219 的频道统计 Tab）（**需 spec**，依赖 FR-215） | P1 | ✅ 已交付@v0.12.0 |
 | FR-221 | 观测·监控时序剖析增强（**增强 FR-060**，非净新——节点/实例时序底座 ADR-013 已交付）：在既有三档降采样时序上加 多指标对比/叠加、下钻（节点→实例→世界）、自定义聚合粒度、关键指标概览，让全站指标更精准剖析（免 spec，依赖 FR-215） | P2 | ✅ 已交付@v0.12.0 |
-| FR-222 | worker 免配置自启 setup（节点上线丝滑化，参考 GitHub Actions Runner 下载/上线分离）：worker 启动时若未配置（无 .yml / 无 `etc/node-identity.json`）→ 进入 setup（有 TTY 交互式问 CP gRPC 地址 / enroll token / 节点名；无 TTY/CI 读命令行参数 + env，无人值守）写 worker.yml + 携 enroll token 注册持久化身份 → 转 run；已配置直接 run。「下载」（取二进制）与「上线」（setup+注册+run）解耦（**需 spec + ADR-051**，改写 ADR-020「一键单脚本下载+配置+注册+起」模型；依赖 FR-224 .yml） | P1 | ✅ 已交付@v0.12.0 |
-| FR-223 | 节点安装脚本重构（配合 FR-222）：检测当前目录已有完整 worker 二进制则跳过下载；「下载」与「上线」分两步；脚本调 worker setup（传参/env）完成配置+注册+可选常驻服务（增强 FR-080/ADR-020，免 spec，依赖 FR-222） | P2 | ✅ 已交付@v0.12.0 |
+| FR-222 | worker 免配置自启 setup（节点上线丝滑化，参考 GitHub Actions Runner 下载/上线分离）：worker 启动时若未配置（无 .yml / 无 `etc/node-identity.json`）→ 进入 setup（有 TTY 交互式问 CP gRPC 地址 / enroll token / 节点名；无 TTY/CI 读命令行参数 + env，无人值守）写 worker.yml + 携 enroll token 注册持久化身份 → 转 run；已配置直接 run。「下载」（取二进制）与「上线」（setup+注册+run）解耦（**需 spec + ADR-051**，改写 ADR-020「一键单脚本下载+配置+注册+起」模型；依赖 FR-224 .yml） | P1 | 🔨 开发中 |
+| FR-223 | 节点安装脚本重构（配合 FR-222）：检测当前目录已有完整 worker 二进制则跳过下载；「下载」与「上线」分两步；脚本调 worker setup（传参/env）完成配置+注册+可选常驻服务（增强 FR-080/ADR-020，免 spec，依赖 FR-222） | P2 | 🔨 开发中 |
 | FR-224 | 配置文件 .yml 约定统一（.yaml→.yml）：control-plane.yaml→control-plane.yml、worker.yaml→worker.yml + viper 搜索路径 + docker-compose + 安装脚本 + 样例 + docs 同步 + 改 `.claude/rules/config-files.md` 规则；.yml 为准、可选 .yaml 兼容回退不破存量（ref，免 spec） | P2 | ✅ 已交付@v0.12.0 |
+| FR-225 | 调试模式开关（设置项，热重载）：默认 Gin release 静默 + log info；设置「调试模式」开关开=log debug+Gin debug、关=info+release，走 FR-063 运行时机制即时生效不重启（增强 FR-063，免 spec） | P2 | 📋 计划 |
+| FR-226 | 通知中心快捷跳转 + 任务中心联动 + 页眉任务进度：任务类通知（含 JDK 失败）点击跳任务中心对应任务；页眉放任务中心入口 + 在跑任务进度；完成/失败站内信可一键跳（复用既有 Notification.TaskID，增强 FR-216/183，免 spec） | P1 | 📋 计划 |
+| FR-227 | 任务中心强制停止 + 筛选查询：强制停止=经 gRPC 真中断 Worker 长任务（取消下载 + 清临时文件）+ 任务转终态（新 canceled 态）；列表按 kind/state/node/时间/关键词筛选（增强 FR-183，需 spec：状态机 + 跨进程取消 + proto） | P1 | 📋 计划 |
+| FR-228 | JDK 登记体验重做：模态目录/文件选择器选 java 可执行文件 → 后端 java -version 探测自动填 vendor/major/version/arch（免手填）；「标记为 Worker 托管」复选框置顶并决定选择器默认根（面板目录/节点目录）（增强 FR-178/033，需 spec：worker java 探测 RPC + 选择器选文件 + 跨模块） | P1 | 📋 计划 |
+| FR-229 | 连通性自检端点族 + 测试按钮：出站代理（设置面板）、JDK 下载源/镜像（运行时）、节点存活（JDK 一键下载前先测、不通即提示不卡死）统一一族测试连通性能力（增强 FR-185/178，需 spec：端点族契约 + 经出站客户端语义） | P2 | 📋 计划 |
+| FR-230 | 创建实例独立向导页：创建实例改独立分步向导页（非模态）+ 每步大白话提示，复用既有 create API；与 FR-189 协调（创建出重度模态、改走页，编辑等仍用模态）（增强 FR-005/189，免 spec） | P1 | 📋 计划 |
+| FR-231 | 复制实例 高级/快速 双模式：快速复制=核心 jar + plugins/ + 根配置（server.properties 及根 *.yml/*.properties）；高级复制=目录选择器 + 用户包含/排除筛选；扩 CloneWorkDir 支持 include/选择性复制（增强 FR-036，需 spec：复制语义 + 筛选 + proto） | P2 | 📋 计划 |
+| FR-232 | 前端交互细节集：节点页进入默认选中第一个节点；页眉刷新图标刷新当前页数据（非整页 reload）（增强 FR-177/179，免 spec） | P2 | 📋 计划 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
