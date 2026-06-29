@@ -192,10 +192,14 @@ func buildLinuxInstallCommand(scriptBase, grpcAddr, token, nodeName, binaryURL s
 	return b.String()
 }
 
-// buildWindowsInstallCommand 拼 Windows 一键安装命令（iwr 拉脚本 | iex 后调函数）。
+// buildWindowsInstallCommand 拼 Windows 一键安装命令（iex 求值脚本「内容字符串」后调函数）。
+//
+// 关键：必须 `iex (iwr ...).Content`（喂内容字符串），不得 `iwr ... | iex`（把响应对象管道给 iex）。
+// 后者经 BasicHtmlWebResponseObject 串化会损坏 UTF-8（CJK）正文，PowerShell 7.x 解析在含中文的
+// 字符串插值行报「Variable reference is not valid ':'」、函数从未定义（FIX-1，真机 PS 7.6 复现）。
 func buildWindowsInstallCommand(scriptBase, grpcAddr, token, nodeName, binaryURL string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "iwr %s/install-worker.ps1 -UseBasicParsing | iex; Install-JianManagerWorker -ControlPlane %s -Token %s", scriptBase, grpcAddr, token)
+	fmt.Fprintf(&b, "iex (iwr %s/install-worker.ps1 -UseBasicParsing).Content; Install-JianManagerWorker -ControlPlane %s -Token %s", scriptBase, grpcAddr, token)
 	if nodeName != "" {
 		fmt.Fprintf(&b, " -Name %s", nodeName)
 	}

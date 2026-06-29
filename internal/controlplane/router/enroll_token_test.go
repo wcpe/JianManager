@@ -75,6 +75,26 @@ func TestEnrollToken_Issue_ReturnsPlaintextAndCommands(t *testing.T) {
 	}
 }
 
+// TestBuildWindowsInstallCommand_PipesContentNotObject 回归 FIX-1（节点上线真机打通）：
+// Windows 一键命令必须把脚本「内容字符串」喂给 iex（iex (iwr ...).Content），
+// 不得把 iwr 的「响应对象」直接管道给 iex（iwr ... | iex）。
+// 后者经 BasicHtmlWebResponseObject 串化会损坏 UTF-8（CJK）正文，PowerShell 7.6 解析在
+// 含中文的字符串插值行（install-worker.ps1:71 "windows/$arch，安装目录: ..."）报
+// 「Variable reference is not valid ':'」，函数从未定义 → Install-JianManagerWorker 不识别。
+// 真机 PS 7.6 复现：对象管道 THREW，.Content 管道/求值正常定义函数。
+func TestBuildWindowsInstallCommand_PipesContentNotObject(t *testing.T) {
+	cmd := buildWindowsInstallCommand("https://cp.example.com", "cp.example.com:9100", "jmet_test", "edge-1", "")
+	if strings.Contains(cmd, ".ps1 -UseBasicParsing | iex") || strings.Contains(cmd, ".ps1 | iex") {
+		t.Fatalf("FIX-1 回归：一键命令把 iwr 响应对象直接管道给 iex（串化损坏 UTF-8 正文致解析失败）: %q", cmd)
+	}
+	if !strings.Contains(cmd, ").Content") {
+		t.Fatalf("FIX-1：一键命令应把脚本内容字符串喂给 iex（iex (iwr ...).Content）: %q", cmd)
+	}
+	if !strings.Contains(cmd, "Install-JianManagerWorker -ControlPlane ") {
+		t.Fatalf("一键命令应在定义后调用 Install-JianManagerWorker: %q", cmd)
+	}
+}
+
 // TestEnrollToken_Issue_EmitsDownloadURLWhenBinaryURLConfigured 配置 BinaryURL 时一键命令带下载基址（ADR-036 契约）。
 // 一键命令应开箱即下载（--download-url / -DownloadUrl 指向 GitHub Releases），无需 --binary 本地兜底。
 func TestEnrollToken_Issue_EmitsDownloadURLWhenBinaryURLConfigured(t *testing.T) {

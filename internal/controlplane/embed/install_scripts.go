@@ -4,7 +4,7 @@ import _ "embed"
 
 // Worker 一键安装脚本（FR-080，见 ADR-020 §2「也可由 CP 静态托管」）。
 //
-// 一键命令拼 `curl <cp>/install-worker.sh | sh` / `iwr <cp>/install-worker.ps1 | iex`，
+// 一键命令拼 `curl <cp>/install-worker.sh | sh` / `iex (iwr <cp>/install-worker.ps1 -UseBasicParsing).Content`，
 // 故 CP 必须自托管这两个脚本（否则 curl/iwr 404、安装失败——BUG-B 根因）。
 // 脚本是仓库内文本源（非构建产物），直接 go:embed 进 CP 二进制，单二进制部署即开箱可拉。
 //

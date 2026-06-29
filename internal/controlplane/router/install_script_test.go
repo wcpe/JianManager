@@ -34,7 +34,7 @@ func TestInstallScript_LinuxServedAnonymously(t *testing.T) {
 	}
 }
 
-// TestInstallScript_WindowsServedAnonymously 同上，PowerShell 一键命令拉 `iwr <cp>/install-worker.ps1 | iex`。
+// TestInstallScript_WindowsServedAnonymously 同上，PowerShell 一键命令拉 `iex (iwr <cp>/install-worker.ps1 -UseBasicParsing).Content`。
 func TestInstallScript_WindowsServedAnonymously(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupEnrollRouter(t, db)

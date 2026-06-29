@@ -347,7 +347,7 @@ export const handlers = [
       controlPlaneGrpc: 'cp.example.com:9100',
       scriptBaseUrl: 'https://cp.example.com',
       installCommandLinux: `curl -fsSL https://cp.example.com/install.sh | bash -s -- --token jm_enr_${created.tokenPrefix}_secret`,
-      installCommandWindows: `iwr https://cp.example.com/install.ps1 | iex`,
+      installCommandWindows: `iex (iwr https://cp.example.com/install-worker.ps1 -UseBasicParsing).Content; Install-JianManagerWorker -ControlPlane cp.example.com:9100 -Token jmet_mock`,
     })
   }),
 

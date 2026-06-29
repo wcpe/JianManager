@@ -15,7 +15,9 @@
 #   缺省            顺序两段：下载（按需）→ 上线
 #
 # 一键命令形态（面板「添加节点」生成、直接粘贴到 PowerShell）：
-#   iwr <cp>/install-worker.ps1 -UseBasicParsing | iex; Install-JianManagerWorker -ControlPlane <cp-grpc> -Token <jmet_...> [-Name N] [-Service]
+#   iex (iwr <cp>/install-worker.ps1 -UseBasicParsing).Content; Install-JianManagerWorker -ControlPlane <cp-grpc> -Token <jmet_...> [-Name N] [-Service]
+#   注意：必须 `iex (iwr ...).Content`（喂内容字符串）。`iwr ... | iex` 会把响应对象管道给 iex，
+#   其串化损坏 UTF-8（CJK）正文，PowerShell 7.x 解析报「Variable reference is not valid ':'」（FIX-1）。
 #
 # enrollment token 一次性、限时；仅经参数/环境变量传入，绝不写入磁盘（worker setup 同样不落盘）。
 # 注册成功后 CP 换发的 node_uuid/node_secret 由 Worker 持久化到 <DataDir>\etc\node-identity.json。

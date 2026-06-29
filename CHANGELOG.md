@@ -6,6 +6,9 @@
 
 ## [Unreleased]
 
+### 修复
+- **Windows 一键安装命令改 `iex (iwr …).Content`，根治 `iwr … | iex` 解析失败（FIX-1，归真 FR-223 真机缺陷）**：真机 PS 7.6 复现——面板生成的一键命令把 `iwr` 的**响应对象**管道给 `iex`，PowerShell 串化 `BasicHtmlWebResponseObject` 把脚本正文 7815→10319 字符、损坏 UTF-8（CJK），解析在含中文插值行报「Variable reference is not valid ':'」、函数从未定义 → `Install-JianManagerWorker` 不识别、安装失败。改 `enroll_token.go` 生成命令为 `iex (iwr <url> -UseBasicParsing).Content; Install-…`（喂内容字符串、当前作用域定义函数），脚本本身解析无错、逻辑未改。doc-sync 全量（脚本头注释 scripts+embed 双份字节一致、API.md、ADR-020、specs、mock node.ts、相关注释）。新增回归单测 `TestBuildWindowsInstallCommand_PipesContentNotObject`（red→green）。真 CP + 真浏览器 + 真 PS 7.6 验过。
+
 ## 0.12.0（2026-06-29）
 
 ### 修复
