@@ -131,7 +131,7 @@ func Load(path string) (*Config, error) {
 		v.SetConfigType("yaml")
 		v.AddConfigPath(".")
 		v.AddConfigPath("configs")
-		if found := findConfigFile("worker", ".", "configs"); found != "" {
+		if found := FindConfigFile("worker", ".", "configs"); found != "" {
 			v.SetConfigFile(found)
 		}
 	}
@@ -155,9 +155,12 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// findConfigFile 在给定目录中按 .yml 优先、.yaml 兼容回退的顺序查找 <name>.<ext> 配置文件（FR-224）。
+// FindConfigFile 在给定目录中按 .yml 优先、.yaml 兼容回退的顺序查找 <name>.<ext> 配置文件（FR-224）。
 // 返回首个存在的文件路径；都不存在时返回空串（交回 viper 的名字搜索 + 默认值，零配置仍可启动）。
-func findConfigFile(name string, dirs ...string) string {
+//
+// 导出以供 worker 入口的「未配置自检」复用（FR-222，见 ADR-051）：自检需判断工作目录是否已有
+// worker.yml/.yaml 配置文件。
+func FindConfigFile(name string, dirs ...string) string {
 	for _, dir := range dirs {
 		for _, ext := range []string{"yml", "yaml"} {
 			p := filepath.Join(dir, name+"."+ext)
@@ -167,4 +170,10 @@ func findConfigFile(name string, dirs ...string) string {
 		}
 	}
 	return ""
+}
+
+// WorkerConfigExists 报告工作目录或 configs/ 下是否存在 worker 配置文件（.yml 优先、.yaml 回退）。
+// 供 worker 入口未配置自检使用（FR-222，见 ADR-051）。
+func WorkerConfigExists() bool {
+	return FindConfigFile("worker", ".", "configs") != ""
 }
