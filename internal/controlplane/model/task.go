@@ -14,11 +14,13 @@ const (
 	TaskStateSucceeded TaskState = "succeeded"
 	// TaskStateFailed 任务失败（终态）。
 	TaskStateFailed TaskState = "failed"
+	// TaskStateCanceled 任务被强制停止（终态，FR-227）。Worker 操作真被中断后由心跳上报。
+	TaskStateCanceled TaskState = "canceled"
 )
 
-// IsTerminal 报告状态是否为终态（成功或失败）。
+// IsTerminal 报告状态是否为终态（成功/失败/已取消）。
 func (s TaskState) IsTerminal() bool {
-	return s == TaskStateSucceeded || s == TaskStateFailed
+	return s == TaskStateSucceeded || s == TaskStateFailed || s == TaskStateCanceled
 }
 
 // 任务种类常量（kind）。新增长任务类型时在此登记。
@@ -41,6 +43,9 @@ type Task struct {
 	Detail   string    `gorm:"type:varchar(1024)" json:"detail"` // 发起参数摘要
 	Error    string    `gorm:"type:text" json:"error"`           // 失败原因（仅 failed）
 	Result   string    `gorm:"type:text" json:"result"`          // 成功结果 JSON（如安装出的 JDK 信息）
+	// CancelRequested 标记用户已请求强制停止（FR-227）：CP 据此每拍经心跳向节点下发 cancel_task_ids，
+	// 直到 Worker 确认中断并上报 canceled 终态。pending 未起 / 节点离线时直接置 canceled、不设此标记。
+	CancelRequested bool `gorm:"not null;default:false" json:"cancelRequested"`
 	// CreatedBy 发起用户 ID，用于归属隔离与完成站内信收件人（0=系统）。
 	CreatedBy uint      `gorm:"index" json:"createdBy"`
 	CreatedAt time.Time `json:"createdAt"`

@@ -1554,17 +1554,25 @@
 
 ### GET /api/v1/tasks
 - **描述**: 任务列表（倒序）。非平台管理员只见自己发起的，平台管理员见全部。
-- **关联 FR**: FR-183
+- **关联 FR**: FR-183 / FR-227（筛选）
 - **权限**: 所有认证用户（归属隔离）
-- **Query**: `?limit=100`
-- **响应**: `[{ id, taskId, nodeId, kind, state, progress, title, detail, error, result, createdBy, createdAt, updatedAt }]`
-  - `state`: `pending` / `running` / `succeeded` / `failed`；`progress`: 0~100
+- **Query**: `?limit=100`；筛选（FR-227）`?kind=&state=&nodeId=&keyword=&since=&until=`（`since`/`until` 为 RFC3339；`keyword` 模糊匹配标题/详情）
+- **响应**: `[{ id, taskId, nodeId, kind, state, progress, title, detail, error, result, cancelRequested, createdBy, createdAt, updatedAt }]`
+  - `state`: `pending` / `running` / `succeeded` / `failed` / `canceled`；`progress`: 0~100
+  - `cancelRequested`: 已请求强制停止但 Worker 尚未确认中断（在线 running 取消时为 true，前端显「取消中」，FR-227）
 
 ### GET /api/v1/tasks/:taskId
 - **描述**: 单个任务详情（含滚动日志）。越权或不存在返回 404（不泄露存在性）。
 - **关联 FR**: FR-183
 - **权限**: 所有认证用户（仅自己发起的；平台管理员不限）
 - **响应**: `{ "task": { ...Task }, "logs": [{ id, taskId, seq, line, ts }] }`
+
+### POST /api/v1/tasks/:taskId/cancel
+- **描述**: 强制停止任务（FR-227）。**真中断**：pending（Worker 未起）或节点离线 → 直接置 `canceled`；running 在线 → 置 `cancelRequested=true`，经心跳 `HeartbeatResponse.cancel_task_ids` 下发，Worker 取消执行 context（中断下载 + 清理临时文件）后回报 `canceled` 终态。
+- **关联 FR**: FR-227
+- **权限**: 所有认证用户（仅自己发起的；平台管理员不限）；越权/不存在 404
+- **错误**: 已终态 → 409 `ALREADY_TERMINAL`
+- **响应**: `{ "message": "已请求停止" }`
 
 ### GET /api/v1/notifications
 - **描述**: 当前用户的站内信列表（倒序）。

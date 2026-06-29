@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -21,20 +22,58 @@ func NewTaskHandler(svc *service.TaskService) *TaskHandler {
 }
 
 // List 列出任务（非平台管理员只见自己发起的，平台管理员见全部）。
+// 支持筛选 query（FR-227）：kind / state / nodeId / keyword / since / until（RFC3339）/ limit。
 func (h *TaskHandler) List(c *gin.Context) {
 	access := getAccess(c)
-	limit := 0
+	f := service.TaskListFilter{
+		Kind:    c.Query("kind"),
+		State:   c.Query("state"),
+		Keyword: c.Query("keyword"),
+	}
 	if v := c.Query("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
-			limit = n
+			f.Limit = n
 		}
 	}
-	tasks, err := h.svc.List(access, limit)
+	if v := c.Query("nodeId"); v != "" {
+		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+			f.NodeID = uint(n)
+		}
+	}
+	if v := c.Query("since"); v != "" {
+		if ts, err := time.Parse(time.RFC3339, v); err == nil {
+			f.Since = &ts
+		}
+	}
+	if v := c.Query("until"); v != "" {
+		if ts, err := time.Parse(time.RFC3339, v); err == nil {
+			f.Until = &ts
+		}
+	}
+	tasks, err := h.svc.List(access, f)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询任务列表失败"})
 		return
 	}
 	c.JSON(http.StatusOK, tasks)
+}
+
+// Cancel 强制停止任务（FR-227）；越权/不存在 404，已终态 409。
+func (h *TaskHandler) Cancel(c *gin.Context) {
+	access := getAccess(c)
+	taskID := c.Param("taskId")
+	if err := h.svc.Cancel(access, taskID); err != nil {
+		switch {
+		case errors.Is(err, service.ErrTaskNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "任务不存在"})
+		case errors.Is(err, service.ErrTaskAlreadyTerminal):
+			c.JSON(http.StatusConflict, gin.H{"error": "ALREADY_TERMINAL", "message": "任务已结束，无法停止"})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "停止任务失败"})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "已请求停止"})
 }
 
 // Get 查单个任务（含日志）；越权或不存在返回 404。
@@ -58,6 +97,7 @@ func (h *TaskHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	tasks := rg.Group("/tasks")
 	tasks.GET("", h.List)
 	tasks.GET("/:taskId", h.Get)
+	tasks.POST("/:taskId/cancel", h.Cancel)
 }
 
 // NotificationHandler 站内信路由处理器（FR-183，见 ADR-040）。

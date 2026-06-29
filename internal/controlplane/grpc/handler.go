@@ -41,6 +41,8 @@ type MetricIngester interface {
 // 同 MetricIngester 以接口声明、由 service.TaskService 实现，避免 grpc→service 反向依赖。
 type TaskIngester interface {
 	IngestSnapshots(nodeUUID string, snaps []*workerpb.TaskSnapshot) error
+	// PendingCancelTaskIDsByNodeUUID 返回该节点「已请求取消且未终态」的任务 id，供心跳下发 cancel_task_ids（FR-227）。
+	PendingCancelTaskIDsByNodeUUID(nodeUUID string) []string
 }
 
 // EnrollmentValidator 校验并消费 enrollment token（FR-080，见 ADR-020）。
@@ -367,6 +369,10 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 		resp := &workerpb.HeartbeatResponse{Timestamp: time.Now().Unix()}
 		if h.proxy != nil {
 			resp.ProxyUrl, resp.ProxyNoProxy, resp.ProxyGeneration = h.proxy.EffectiveNodeProxyByUUID(req.NodeUuid)
+		}
+		// 携带该节点「已请求取消」的任务 id，Worker 据此真中断对应运行中任务（FR-227）。
+		if h.tasks != nil {
+			resp.CancelTaskIds = h.tasks.PendingCancelTaskIDsByNodeUUID(req.NodeUuid)
 		}
 		if err := stream.Send(resp); err != nil {
 			return err

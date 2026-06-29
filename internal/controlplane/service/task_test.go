@@ -175,15 +175,84 @@ func TestTaskService_List_OwnershipScoping(t *testing.T) {
 	_, _ = svc.CreateTask("tb", node.ID, model.TaskKindJDKInstall, "t", "d", 20)
 
 	user10 := &UserAccess{UserID: 10, IsPlatformAdmin: false}
-	got, err := svc.List(user10, 0)
+	got, err := svc.List(user10, TaskListFilter{})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	require.Equal(t, "ta", got[0].TaskID)
 
 	admin := &UserAccess{UserID: 99, IsPlatformAdmin: true}
-	got, err = svc.List(admin, 0)
+	got, err = svc.List(admin, TaskListFilter{})
 	require.NoError(t, err)
 	require.Len(t, got, 2)
+}
+
+// 强制停止（FR-227）：节点离线 → 直接置 canceled（无 Worker 操作可中断）。
+func TestTaskService_Cancel_OfflineNode_Direct(t *testing.T) {
+	db := newTaskTestDB(t)
+	svc := newTaskSvc(t, db)
+	node := &model.Node{UUID: "uoff", Name: "n", Host: "h", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOffline}
+	require.NoError(t, db.Create(node).Error)
+	_, _ = svc.CreateTask("toff", node.ID, model.TaskKindJDKInstall, "t", "d", 5)
+	require.NoError(t, svc.MarkRunning("toff"))
+
+	require.NoError(t, svc.Cancel(&UserAccess{UserID: 5}, "toff"))
+	var got model.Task
+	require.NoError(t, db.Where("task_id = ?", "toff").First(&got).Error)
+	require.Equal(t, model.TaskStateCanceled, got.State)
+}
+
+// 强制停止（FR-227）：节点在线 + running → 置 CancelRequested、状态留 running，被 PendingCancelTaskIDsByNodeUUID 选出。
+func TestTaskService_Cancel_OnlineRunning_RequestsViaHeartbeat(t *testing.T) {
+	db := newTaskTestDB(t)
+	svc := newTaskSvc(t, db)
+	node := &model.Node{UUID: "uon", Name: "n", Host: "h", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOnline}
+	require.NoError(t, db.Create(node).Error)
+	_, _ = svc.CreateTask("ton", node.ID, model.TaskKindJDKInstall, "t", "d", 5)
+	require.NoError(t, svc.MarkRunning("ton"))
+
+	require.NoError(t, svc.Cancel(&UserAccess{UserID: 5}, "ton"))
+	var got model.Task
+	require.NoError(t, db.Where("task_id = ?", "ton").First(&got).Error)
+	require.Equal(t, model.TaskStateRunning, got.State, "在线 running 取消应等心跳真中断，不立即终态")
+	require.True(t, got.CancelRequested)
+	require.Equal(t, []string{"ton"}, svc.PendingCancelTaskIDsByNodeUUID("uon"))
+}
+
+// 强制停止（FR-227）：已终态 → ErrTaskAlreadyTerminal；越权 → ErrTaskNotFound。
+func TestTaskService_Cancel_TerminalAndCrossUser(t *testing.T) {
+	db := newTaskTestDB(t)
+	svc := newTaskSvc(t, db)
+	node := &model.Node{UUID: "ut", Name: "n", Host: "h", GRPCPort: 1, WSPort: 2, Secret: "s", Status: model.NodeStatusOnline}
+	require.NoError(t, db.Create(node).Error)
+	_, _ = svc.CreateTask("tt", node.ID, model.TaskKindJDKInstall, "t", "d", 5)
+	require.NoError(t, svc.MarkFailed("tt", "boom"))
+	require.ErrorIs(t, svc.Cancel(&UserAccess{UserID: 5}, "tt"), ErrTaskAlreadyTerminal)
+
+	_, _ = svc.CreateTask("tc", node.ID, model.TaskKindJDKInstall, "t", "d", 5)
+	require.NoError(t, svc.MarkRunning("tc"))
+	require.ErrorIs(t, svc.Cancel(&UserAccess{UserID: 999, IsPlatformAdmin: false}, "tc"), ErrTaskNotFound)
+}
+
+// List 筛选（FR-227）：按 state / keyword 过滤。
+func TestTaskService_List_Filters(t *testing.T) {
+	db := newTaskTestDB(t)
+	svc := newTaskSvc(t, db)
+	node := &model.Node{UUID: "uf", Name: "n", Host: "h", GRPCPort: 1, WSPort: 2, Secret: "s"}
+	require.NoError(t, db.Create(node).Error)
+	_, _ = svc.CreateTask("f1", node.ID, model.TaskKindJDKInstall, "安装 Temurin", "d", 5)
+	_, _ = svc.CreateTask("f2", node.ID, model.TaskKindJDKInstall, "安装 Corretto", "d", 5)
+	require.NoError(t, svc.MarkFailed("f2", "x"))
+	admin := &UserAccess{UserID: 1, IsPlatformAdmin: true}
+
+	byState, err := svc.List(admin, TaskListFilter{State: "failed"})
+	require.NoError(t, err)
+	require.Len(t, byState, 1)
+	require.Equal(t, "f2", byState[0].TaskID)
+
+	byKw, err := svc.List(admin, TaskListFilter{Keyword: "Temurin"})
+	require.NoError(t, err)
+	require.Len(t, byKw, 1)
+	require.Equal(t, "f1", byKw[0].TaskID)
 }
 
 // Get 越权：非管理员查别人的任务返回 ErrTaskNotFound（不泄露存在性）。

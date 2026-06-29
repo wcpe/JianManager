@@ -19,6 +19,9 @@ import (
 // ErrTaskNotFound 任务不存在。
 var ErrTaskNotFound = errors.New("任务不存在")
 
+// ErrTaskAlreadyTerminal 任务已终态，无法强制停止（FR-227）。
+var ErrTaskAlreadyTerminal = errors.New("任务已结束，无法停止")
+
 // TaskService 全局任务中心服务（FR-183，见 ADR-040）。
 // 负责：建任务（被 JDKService 等长任务发起方调用）、按归属列任务/查任务+日志、
 // 以及把 Worker 经心跳上报的任务快照汇聚落库（IngestSnapshots）+ 终态副作用。
@@ -84,15 +87,46 @@ func (s *TaskService) MarkFailed(taskID, reason string) error {
 	return nil
 }
 
-// List 列出任务。非平台管理员只见自己发起的（createdBy）；平台管理员见全部。
+// TaskListFilter 任务列表筛选条件（FR-227）。零值字段表示不限制。
+type TaskListFilter struct {
+	Kind    string     // 任务种类（如 jdk_install）
+	State   string     // 状态（pending/running/succeeded/failed/canceled）
+	NodeID  uint       // 节点 id（0=不限）
+	Keyword string     // 标题/详情模糊匹配
+	Since   *time.Time // 创建时间下界
+	Until   *time.Time // 创建时间上界
+	Limit   int        // 默认 100
+}
+
+// List 列出任务（按筛选，FR-227）。非平台管理员只见自己发起的（createdBy）；平台管理员见全部。
 // 按创建时间倒序，limit 默认 100。
-func (s *TaskService) List(access *UserAccess, limit int) ([]model.Task, error) {
+func (s *TaskService) List(access *UserAccess, f TaskListFilter) ([]model.Task, error) {
+	limit := f.Limit
 	if limit <= 0 {
 		limit = 100
 	}
 	q := s.db.Model(&model.Task{})
 	if access != nil && !access.IsPlatformAdmin {
 		q = q.Where("created_by = ?", access.UserID)
+	}
+	if f.Kind != "" {
+		q = q.Where("kind = ?", f.Kind)
+	}
+	if f.State != "" {
+		q = q.Where("state = ?", f.State)
+	}
+	if f.NodeID != 0 {
+		q = q.Where("node_id = ?", f.NodeID)
+	}
+	if kw := strings.TrimSpace(f.Keyword); kw != "" {
+		like := "%" + kw + "%"
+		q = q.Where("title LIKE ? OR detail LIKE ?", like, like)
+	}
+	if f.Since != nil {
+		q = q.Where("created_at >= ?", *f.Since)
+	}
+	if f.Until != nil {
+		q = q.Where("created_at <= ?", *f.Until)
 	}
 	var tasks []model.Task
 	if err := q.Order("created_at DESC, id DESC").Limit(limit).Find(&tasks).Error; err != nil {
@@ -118,6 +152,59 @@ func (s *TaskService) Get(access *UserAccess, taskID string) (*model.Task, []mod
 		return nil, nil, err
 	}
 	return &t, logs, nil
+}
+
+// Cancel 请求强制停止任务（FR-227）。权限同 Get（非管理员仅能停自己发起的，越权返回 ErrTaskNotFound）。
+// 已终态 → ErrTaskAlreadyTerminal。pending（Worker 未起）或节点离线 → 直接置 canceled（无 Worker 操作可中断）；
+// running 在线 → 置 CancelRequested=true，由心跳下发 cancel_task_ids 真中断、Worker 回报 canceled 落终态。
+func (s *TaskService) Cancel(access *UserAccess, taskID string) error {
+	var t model.Task
+	if err := s.db.Where("task_id = ?", taskID).First(&t).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrTaskNotFound
+		}
+		return err
+	}
+	if access != nil && !access.IsPlatformAdmin && t.CreatedBy != access.UserID {
+		return ErrTaskNotFound
+	}
+	if t.State.IsTerminal() {
+		return ErrTaskAlreadyTerminal
+	}
+	if t.State == model.TaskStatePending || !s.nodeOnline(t.NodeID) {
+		// 无运行中 Worker 操作可中断：直接落 canceled 终态 + 触发副作用。
+		if err := s.db.Model(&model.Task{}).Where("task_id = ?", taskID).
+			Updates(map[string]any{"state": model.TaskStateCanceled, "cancel_requested": true}).Error; err != nil {
+			return err
+		}
+		t.State = model.TaskStateCanceled
+		s.finalizeTerminal(&t)
+		return nil
+	}
+	// running 在线：标记取消意图，等心跳下发 cancel_task_ids 真中断、Worker 回报 canceled。
+	return s.db.Model(&model.Task{}).Where("task_id = ?", taskID).
+		Update("cancel_requested", true).Error
+}
+
+// nodeOnline 报告节点是否在线（DB status，由心跳/离线检测维护）。
+func (s *TaskService) nodeOnline(nodeID uint) bool {
+	var n model.Node
+	if err := s.db.Select("status").First(&n, nodeID).Error; err != nil {
+		return false
+	}
+	return n.Status == model.NodeStatusOnline
+}
+
+// PendingCancelTaskIDsByNodeUUID 返回某节点（按 UUID）上「已请求取消且未终态」的任务 id（FR-227），
+// 供心跳下发 cancel_task_ids。join 一次查询，避免心跳路径上额外解析节点 id。
+func (s *TaskService) PendingCancelTaskIDsByNodeUUID(nodeUUID string) []string {
+	var ids []string
+	s.db.Model(&model.Task{}).
+		Joins("JOIN nodes ON nodes.id = tasks.node_id").
+		Where("nodes.uuid = ? AND tasks.cancel_requested = ? AND tasks.state IN ?", nodeUUID, true,
+			[]model.TaskState{model.TaskStatePending, model.TaskStateRunning}).
+		Pluck("tasks.task_id", &ids)
+	return ids
 }
 
 // IngestSnapshots 把 Worker 经心跳上报的任务快照汇聚落库（FR-183，见 ADR-040）。
@@ -186,6 +273,11 @@ func (s *TaskService) IngestSnapshots(nodeUUID string, snaps []*workerpb.TaskSna
 //   - jdk_install 成功：解析 result→落 model.NodeJDK + 发成功站内信；
 //   - 失败：发失败站内信。
 func (s *TaskService) finalizeTerminal(t *model.Task) {
+	// 被强制停止（FR-227）：发中性「已停止」站内信，不落 JDK、不发「失败」。
+	if t.State == model.TaskStateCanceled {
+		s.notify(t.CreatedBy, model.NotificationLevelInfo, t.Title+" 已停止", "任务已被强制停止", t.TaskID)
+		return
+	}
 	switch t.Kind {
 	case model.TaskKindJDKInstall:
 		if t.State == model.TaskStateSucceeded {
