@@ -2518,11 +2518,31 @@
     "error": "错误",
     "logs": "日志",
     "noLogs": "暂无日志",
+    "emptyFiltered": "没有匹配筛选条件的任务",
+    "forceStop": "强制停止",
+    "forceStopTitle": "强制停止任务?",
+    "forceStopDesc": "将中断该任务在节点上的执行（如下载会被取消、临时文件清理），不可恢复。",
+    "cancelRequested": "已请求停止",
+    "cancelFailed": "停止失败",
     "state": {
       "pending": "等待中",
       "running": "进行中",
       "succeeded": "已完成",
-      "failed": "已失败"
+      "failed": "已失败",
+      "canceled": "已停止",
+      "canceling": "取消中"
+    },
+    "kind": {
+      "jdkInstall": "JDK 安装"
+    },
+    "filter": {
+      "keyword": "搜索标题 / 详情",
+      "allStates": "全部状态",
+      "allKinds": "全部种类",
+      "allNodes": "全部节点",
+      "allTime": "全部时间",
+      "last24h": "近 24 小时",
+      "last7d": "近 7 天"
     }
   },
   "notifications": {

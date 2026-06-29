@@ -90,12 +90,13 @@ interface Task {
   taskId: string
   nodeId: number
   kind: string
-  state: 'pending' | 'running' | 'succeeded' | 'failed'
+  state: 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled'
   progress: number
   title: string
   detail: string
   error: string
   result: string
+  cancelRequested?: boolean
   createdBy: number
   createdAt: string
   updatedAt: string
@@ -822,7 +823,18 @@ export const handlers = [
     if (denied) return denied
     const url = new URL(info.request.url)
     const limit = Number(url.searchParams.get('limit') ?? '100')
-    return HttpResponse.json(tasks.list().slice(0, limit))
+    const kind = url.searchParams.get('kind')
+    const state = url.searchParams.get('state')
+    const nodeId = url.searchParams.get('nodeId')
+    const keyword = url.searchParams.get('keyword')
+    const since = url.searchParams.get('since')
+    let items = tasks.list()
+    if (kind) items = items.filter((t) => t.kind === kind)
+    if (state) items = items.filter((t) => t.state === state)
+    if (nodeId) items = items.filter((t) => t.nodeId === Number(nodeId))
+    if (keyword) items = items.filter((t) => t.title.includes(keyword) || t.detail.includes(keyword))
+    if (since) items = items.filter((t) => t.createdAt >= since)
+    return HttpResponse.json(items.slice(0, limit))
   }),
 
   domainRoute('get', '/tasks/:taskId', (info) => {
@@ -832,6 +844,20 @@ export const handlers = [
     const task = tasks.find((t) => t.taskId === taskId)
     if (!task) return HttpResponse.json({ error: 'NOT_FOUND', message: '任务不存在' }, { status: 404 })
     return HttpResponse.json({ task, logs: taskLogs.list((l) => l.taskId === taskId) })
+  }),
+
+  // 强制停止（FR-227）：mock 直接置 canceled（演示强停结果）；终态 409。
+  domainRoute('post', '/tasks/:taskId/cancel', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const taskId = String(info.params.taskId)
+    const task = tasks.find((t) => t.taskId === taskId)
+    if (!task) return HttpResponse.json({ error: 'NOT_FOUND', message: '任务不存在' }, { status: 404 })
+    if (task.state === 'succeeded' || task.state === 'failed' || task.state === 'canceled') {
+      return HttpResponse.json({ error: 'ALREADY_TERMINAL', message: '任务已结束，无法停止' }, { status: 409 })
+    }
+    tasks.update(task.id, { state: 'canceled', cancelRequested: true })
+    return HttpResponse.json({ message: '已请求停止' })
   }),
 
   // ===== logs 日志中心（FR-049/050/150） =====

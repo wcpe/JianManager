@@ -2518,11 +2518,31 @@
     "error": "Error",
     "logs": "Logs",
     "noLogs": "No logs",
+    "emptyFiltered": "No tasks match the filters",
+    "forceStop": "Force stop",
+    "forceStopTitle": "Force stop task?",
+    "forceStopDesc": "This interrupts the task on the node (downloads are canceled, temp files cleaned). Cannot be undone.",
+    "cancelRequested": "Stop requested",
+    "cancelFailed": "Failed to stop",
     "state": {
       "pending": "Pending",
       "running": "Running",
       "succeeded": "Succeeded",
-      "failed": "Failed"
+      "failed": "Failed",
+      "canceled": "Stopped",
+      "canceling": "Stopping"
+    },
+    "kind": {
+      "jdkInstall": "JDK install"
+    },
+    "filter": {
+      "keyword": "Search title / detail",
+      "allStates": "All states",
+      "allKinds": "All kinds",
+      "allNodes": "All nodes",
+      "allTime": "All time",
+      "last24h": "Last 24h",
+      "last7d": "Last 7 days"
     }
   },
   "notifications": {
