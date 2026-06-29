@@ -61,6 +61,28 @@ export interface InstallJDKAccepted {
  * 进度/完成经全局任务中心（`/tasks`）与站内信查看；JDK 列表在任务完成后由心跳落库、随后失效刷新。
  * 这里仍失效 node-jdks 缓存（受理后立即刷一次；真正出现新条目要等任务完成，前端可由任务中心引导）。
  */
+/** JDK 探测结果（FR-228，对齐后端 ProbeResult）。 */
+export interface ProbeResult {
+  valid: boolean
+  vendor: string
+  majorVersion: number
+  version: string
+  arch: string
+  javaHome: string
+  error?: string
+}
+
+/**
+ * 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK（FR-228）。
+ * 登记前选目录后调用，后端跑 `java -version` 自动得出厂商/版本/架构，免手填。
+ */
+export function useProbeJDK(nodeId: number) {
+  return useMutation({
+    mutationFn: (path: string) =>
+      api.post<ProbeResult>(`/nodes/${nodeId}/jdks/probe`, { path }).then((r) => r.data),
+  })
+}
+
 export function useInstallJDK(nodeId: number) {
   const qc = useQueryClient()
   return useMutation({

@@ -514,6 +514,19 @@ export const handlers = [
     return HttpResponse.json({ taskId: `task-jdk-${Date.now()}` }, { status: 202 })
   }),
 
+  // JDK 探测（FR-228）：mock 据路径返厂商/版本/架构；含 "invalid" 或不含 jdk/java 关键字 → valid=false 演示错误态。
+  domainRoute('post', '/nodes/:id/jdks/probe', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const { path } = (await info.request.json()) as { path?: string }
+    const p = (path ?? '').toLowerCase()
+    const looksLikeJdk = p.includes('jdk') || p.includes('java') || p.includes('temurin') || p.includes('corretto') || p.includes('zulu')
+    if (!p || p.includes('invalid') || !looksLikeJdk) {
+      return HttpResponse.json({ valid: false, vendor: '', majorVersion: 0, version: '', arch: '', javaHome: path ?? '', error: '未找到 bin/java 或无法读取版本' })
+    }
+    return HttpResponse.json({ valid: true, vendor: 'Temurin', majorVersion: 21, version: '21.0.4+9', arch: 'x64', javaHome: path })
+  }),
+
   domainRoute('get', '/nodes/:id/jdk/catalog', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
