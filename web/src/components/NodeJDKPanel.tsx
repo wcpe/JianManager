@@ -79,6 +79,7 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
   const [regManaged, setRegManaged] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
   const [probed, setProbed] = useState<ProbeResult | null>(null)
+  const [pathInput, setPathInput] = useState('') // 登记路径：可手输或经选目录填入（FR-228 细化）
   const probe = useProbeJDK(nodeId)
 
   const [pendingDel, setPendingDel] = useState<NodeJDK | null>(null)
@@ -146,6 +147,7 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
         onSuccess: () => {
           toast.success(t('nodes.jdkRegistered'))
           setProbed(null)
+          setPathInput('')
           setRegManaged(false)
           setTab('list')
         },
@@ -155,9 +157,9 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
     )
   }
 
-  // 选定目录后探测（FR-228）：后端 java -version 自动得出厂商/版本/架构，结果存 probed。
-  const onPickPath = (path: string) => {
-    setPickerOpen(false)
+  // 探测路径（FR-228）：后端 java -version 自动得出厂商/版本/架构，结果存 probed。手输或选目录都走这里。
+  const runProbe = (path: string) => {
+    if (!path) return
     probe.mutate(path, {
       onSuccess: (res) => setProbed(res),
       onError: (err: Error & { response?: { data?: { message?: string } } }) => {
@@ -165,6 +167,13 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
         toast.error(err.response?.data?.message || t('nodes.jdkProbeFailed', '探测失败'))
       },
     })
+  }
+
+  // 选目录后填入路径并自动探测（FR-228）。
+  const onPickPath = (path: string) => {
+    setPickerOpen(false)
+    setPathInput(path)
+    runProbe(path)
   }
 
   const copyPath = async (p: string) => {
@@ -416,22 +425,26 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
             {t('nodes.jdkMarkManaged')}
           </label>
 
-          {/* 选目录（模态）+ 后端探测自动填，免手填厂商/版本/架构（FR-228） */}
+          {/* 路径：可手输 + 浏览（模态）+ 检测；后端探测自动填厂商/版本/架构（FR-228 细化：允许手动输入） */}
           <div className="space-y-1">
             <span className="font-medium">{t('nodes.jdkPath')}<span className="ml-0.5 text-destructive">*</span></span>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                value={pathInput}
+                onChange={(e) => setPathInput(e.target.value)}
+                placeholder="/opt/jdks/temurin-21 或 .../bin/java"
+                className="h-8 min-w-0 flex-1 font-mono"
+              />
               <Button type="button" variant="outline" size="sm" onClick={() => setPickerOpen(true)}>
                 <FolderOpen className="size-4" />
-                {t('nodes.jdkSelectDir', '选择 JDK 目录')}
+                {t('artifactCache.browse', '浏览')}
               </Button>
-              {probe.isPending && (
-                <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <Loader2 className="size-3.5 animate-spin" />
-                  {t('nodes.jdkProbing', '探测中…')}
-                </span>
-              )}
+              <Button type="button" variant="outline" size="sm" disabled={!pathInput.trim() || probe.isPending} onClick={() => runProbe(pathInput.trim())}>
+                {probe.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
+                {t('nodes.jdkDetect', '检测')}
+              </Button>
             </div>
-            <p className="text-xs text-muted-foreground">{t('nodes.jdkProbeHint', '选定 JDK 目录后自动探测厂商 / 版本 / 架构，无需手填。')}</p>
+            <p className="text-xs text-muted-foreground">{t('nodes.jdkProbeHint', '可手动输入 JDK 目录 / java 路径，或点「浏览」选目录；点「检测」后端自动探测厂商 / 版本 / 架构，无需手填。')}</p>
           </div>
 
           {/* 探测结果：有效 → 只读展示；无效 → 错误 */}
@@ -471,9 +484,14 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
 
       <DangerConfirm
         open={pendingDel !== null}
-        title={t('nodes.jdkDeleteConfirm', { vendor: pendingDel?.vendor, major: pendingDel?.majorVersion })}
-        description={t('nodes.jdkDeleteDescription')}
+        title={pendingDel?.managed
+          ? t('nodes.jdkDeleteFilesTitle', '删除 JDK（含文件）?')
+          : t('nodes.jdkDeleteRecordTitle', '删除 JDK 登记记录?')}
+        description={pendingDel?.managed
+          ? t('nodes.jdkDeleteFilesDesc', '该 JDK 由平台下载托管，删除将一并移除 Worker 上的文件，不可恢复。请输入「厂商 主版本」确认。')
+          : t('nodes.jdkDeleteRecordDesc', '外部登记的 JDK 仅删除平台记录，不影响磁盘上的 JDK 文件。')}
         confirmLabel={t('common.delete')}
+        confirmText={pendingDel?.managed ? `${pendingDel?.vendor} ${pendingDel?.majorVersion}` : undefined}
         onConfirm={() => {
           const id = pendingDel!.id
           setPendingDel(null)

@@ -269,9 +269,14 @@ function JDKCard({ jdk }: { jdk: JDKMatrixItem }) {
 
       <DangerConfirm
         open={confirming}
-        title={t('runtimeAssets.jdkDeleteConfirm', { vendor: jdk.vendor, major: jdk.majorVersion })}
-        description={t('runtimeAssets.jdkDeleteDescription')}
+        title={jdk.managed
+          ? t('nodes.jdkDeleteFilesTitle', '删除 JDK（含文件）?')
+          : t('nodes.jdkDeleteRecordTitle', '删除 JDK 登记记录?')}
+        description={jdk.managed
+          ? t('nodes.jdkDeleteFilesDesc', '该 JDK 由平台下载托管，删除将一并移除 Worker 上的文件，不可恢复。请输入「厂商 主版本」确认。')
+          : t('nodes.jdkDeleteRecordDesc', '外部登记的 JDK 仅删除平台记录，不影响磁盘上的 JDK 文件。')}
         confirmLabel={t('common.delete')}
+        confirmText={jdk.managed ? `${jdk.vendor} ${jdk.majorVersion}` : undefined}
         onConfirm={onDelete}
         onCancel={() => setConfirming(false)}
       />
