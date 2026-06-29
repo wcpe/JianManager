@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Copy, Download, FolderOpen, Package, PackageCheck, Coffee, Search, Trash2 } from 'lucide-react'
+import { Copy, Download, FolderOpen, Loader2, Package, PackageCheck, Coffee, Search, Trash2 } from 'lucide-react'
 import { useNodeJDKs, useCreateJDK, useDeleteJDK, useInstallJDK, type NodeJDK } from '@/api/jdks'
 import { useJDKCatalog } from '@/api/nodeRuntime'
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
@@ -52,7 +52,7 @@ type JDKTab = 'list' | 'install' | 'register'
  */
 export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProps) {
   const { t } = useTranslation()
-  const { data: jdks, isLoading } = useNodeJDKs(nodeId)
+  const { data: jdks, isLoading, isFetching } = useNodeJDKs(nodeId)
   const create = useCreateJDK(nodeId)
   const del = useDeleteJDK(nodeId)
   const install = useInstallJDK(nodeId)
@@ -185,6 +185,14 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
             </div>
             <ViewToggle value={view} onChange={setView} cardLabel={t('grouping.viewCard')} listLabel={t('grouping.viewList')} />
           </div>
+
+          {/* 同步反馈（FIX-5）：登记后 / 打开面板时列表从节点同步（GET /jdks 的 syncFromWorker）显式提示，不再静默「卡住无反馈」。 */}
+          {isFetching && !isLoading && (
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Loader2 className="size-3 animate-spin" />
+              {t('nodes.jdkSyncing')}
+            </p>
+          )}
 
           {/* 来源筛选 chips */}
           <div className="flex flex-wrap items-center gap-2">

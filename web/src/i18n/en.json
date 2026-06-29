@@ -875,6 +875,7 @@
     "jdkManaged": "Managed",
     "jdkExternal": "External",
     "jdkSearchPlaceholder": "Search vendor / version / path",
+    "jdkSyncing": "Syncing from node…",
     "jdkInstall": "Download & Install",
     "jdkInstallFailed": "Install failed",
     "jdkRegistered": "JDK registered",

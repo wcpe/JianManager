@@ -852,6 +852,7 @@
     "jdkManaged": "托管",
     "jdkExternal": "外部",
     "jdkSearchPlaceholder": "搜索厂商 / 版本 / 路径",
+    "jdkSyncing": "正在从节点同步…",
     "jdkInstall": "下载安装",
     "jdkInstallFailed": "安装失败",
     "jdkRegistered": "JDK 已登记",
