@@ -71,7 +71,10 @@ export function InstanceWorktableCard({
       : 0
 
   return (
-    <div className="group flex flex-col rounded-xl border bg-card p-4 text-card-foreground shadow-soft transition-[box-shadow] duration-300 ease-ios hover:shadow-lift">
+    <div
+      className="group flex cursor-pointer flex-col rounded-xl border bg-card p-4 text-card-foreground shadow-soft transition-[box-shadow] duration-300 ease-ios hover:shadow-lift"
+      onClick={() => openInstance(inst.id)}
+    >
       {/* 头部：图标块 + 名称 + 状态（运行呼吸灯）+ 菜单 */}
       <div className="flex items-center gap-3">
         <span className={cn('flex size-10 shrink-0 items-center justify-center rounded-xl', toneChipClass(statusTone(inst.status)))}>
@@ -81,7 +84,10 @@ export function InstanceWorktableCard({
           <button
             type="button"
             className="block max-w-full truncate text-left text-sm font-semibold hover:text-primary"
-            onClick={() => openInstance(inst.id)}
+            onClick={(e) => {
+              e.stopPropagation()
+              openInstance(inst.id)
+            }}
             title={inst.name}
           >
             {inst.name}
@@ -96,7 +102,8 @@ export function InstanceWorktableCard({
           </div>
         </div>
         {roleBadge}
-        {menu}
+        {/* 次要操作菜单（⋯）不冒泡到卡片，避免点菜单误开工作区（FIX-9）。 */}
+        <span onClick={(e) => e.stopPropagation()}>{menu}</span>
       </div>
 
       {/* 类型 · 节点:端口 */}
@@ -125,7 +132,7 @@ export function InstanceWorktableCard({
             </span>
           </span>
         )}
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
           {stopped && (
             <Button
               variant="ghost"
