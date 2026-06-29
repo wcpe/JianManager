@@ -95,7 +95,12 @@ export function useRuntimeAssetsOverview() {
     queryKey: ['runtime-assets-overview'],
     queryFn: async () => {
       const { data } = await api.get<RuntimeAssetsOverview>('/runtime-assets/overview')
-      return data
+      // 后端空切片序列化为 null（Go nil slice → JSON null），前端按数组 .length/.map 会崩白屏——统一归一为 []。
+      return {
+        ...data,
+        jdks: (data.jdks ?? []).map((j) => ({ ...j, instances: j.instances ?? [] })),
+        assets: (data.assets ?? []).map((g) => ({ ...g, items: g.items ?? [] })),
+      }
     },
   })
 }
