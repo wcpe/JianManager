@@ -636,11 +636,12 @@
 - **关联 FR**: FR-032（关系）/ FR-035（同步）
 
 ### POST /api/v1/instances/:id/clone
-- **描述**: 复制 backend 子服为独立新实例（同节点）：系统分配新目录/端口 → CloneWorkDir 复制（排除运行态）→ 修正 server.properties 端口/rcon/motd/level-name（保留 forwarding secret）→ 可选注册进代理。`dryRun=true` 仅预检
+- **描述**: 复制 backend 子服为独立新实例（同节点）：系统分配新目录/端口 → CloneWorkDir 复制 → 修正 server.properties 端口/rcon/motd/level-name（保留 forwarding secret）→ 可选注册进代理。`dryRun=true` 仅预检。**复制模式（FR-231）**：`mode=quick` 只复制核心 jar + plugins/ + 根配置（server.properties 及根 *.yml/*.properties，不含 world/logs/cache）；`mode=advanced`（或省略）按 `include`/`exclude` 筛选（include 空=复制全部）；两者都始终排除运行态垃圾
 - **权限**: 平台管理员
-- **请求**: `{ "name":"lobby-2","motd":"","levelName":"","registerToProxyIds":[30],"dryRun":false }`
-- **响应**: `201`（dryRun `200`）`{ instance?, allocated, excluded, registrations, warnings, dryRun }`；`422 NOT_A_BACKEND`/`SOURCE_RUNNING`；`502 CLONE_FAILED`
-- **关联 FR**: FR-036 | **Spec**: `docs/specs/clone-instance/`
+- **请求**: `{ "name":"lobby-2","motd":"","levelName":"","registerToProxyIds":[30],"dryRun":false, "mode":"quick", "include":["plugins","*.jar"], "exclude":["world"] }`
+  - `mode`: `quick` / `advanced`（省略=advanced）；`include`/`exclude`: 顶层项的目录前缀或 basename glob（如 `plugins`、`*.jar`），仅 advanced 用
+- **响应**: `201`（dryRun `200`）`{ instance?, allocated, excluded, registrations, warnings, dryRun }`（`excluded` 反映该次实际排除集）；`422 NOT_A_BACKEND`/`SOURCE_RUNNING`；`502 CLONE_FAILED`
+- **关联 FR**: FR-036, FR-231 | **Spec**: `docs/specs/clone-instance/`, `docs/specs/instance-clone-modes/`
 
 ---
 

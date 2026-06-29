@@ -33,6 +33,19 @@ var defaultCloneExcludes = []string{
 	"libraries/.cache",
 }
 
+// quickCloneIncludes 快速复制的 include 集（FR-231）：核心 jar + plugins/ + 根配置（顶层段匹配，不含 world/logs/cache）。
+var quickCloneIncludes = []string{"*.jar", "plugins", "server.properties", "*.yml", "*.yaml", "*.properties"}
+
+// cloneFilters 据复制模式派生 worker 的 include/exclude（FR-231）。
+// quick=核心+插件+根配置；advanced/默认=用户 include（空=全部）+ 用户 exclude ∪ 运行态垃圾（始终排）。
+func cloneFilters(req CloneInstanceRequest) (include, exclude []string) {
+	if req.Mode == "quick" {
+		return quickCloneIncludes, defaultCloneExcludes
+	}
+	exclude = append(append([]string{}, req.Exclude...), defaultCloneExcludes...)
+	return req.Include, exclude
+}
+
 // CloneService 一键复制 backend 子服为独立新实例（FR-036）。
 type CloneService struct {
 	db       *gorm.DB
@@ -53,6 +66,10 @@ type CloneInstanceRequest struct {
 	LevelName          string `json:"levelName"`
 	RegisterToProxyIDs []uint `json:"registerToProxyIds"`
 	DryRun             bool   `json:"dryRun"`
+	// Mode 复制模式（FR-231）：quick=核心 jar+插件+根配置；advanced=按 Include/Exclude；空=advanced（向后兼容）。
+	Mode    string   `json:"mode"`
+	Include []string `json:"include"` // 高级复制 include 顶层项（plugins、*.jar…）；空=全部
+	Exclude []string `json:"exclude"` // 高级复制额外 exclude（与运行态垃圾合并）
 }
 
 // CloneAllocation 复制为新实例分配的资源（RCON 已退役，FR-067）。
@@ -101,9 +118,10 @@ func (s *CloneService) Clone(ctx context.Context, srcID uint, req CloneInstanceR
 		warnings = append(warnings, fmt.Sprintf("已存在同名实例「%s」，复制仍会创建独立新实例", req.Name))
 	}
 
+	cloneInclude, cloneExclude := cloneFilters(req)
 	result := &CloneResult{
 		Allocated: CloneAllocation{ServerPort: ports.ServerPort, QueryPort: ports.QueryPort},
-		Excluded:  defaultCloneExcludes,
+		Excluded:  cloneExclude,
 		Warnings:  warnings,
 		DryRun:    req.DryRun,
 	}
@@ -148,7 +166,7 @@ func (s *CloneService) Clone(ctx context.Context, srcID uint, req CloneInstanceR
 	result.Allocated.WorkDir = dst.WorkDir
 
 	// 复制工作目录（排除运行态文件）。
-	if err := s.cloneWorkDirOnWorker(ctx, &src, dst); err != nil {
+	if err := s.cloneWorkDirOnWorker(ctx, &src, dst, cloneInclude, cloneExclude); err != nil {
 		return result, fmt.Errorf("复制工作目录失败: %w", err)
 	}
 
@@ -171,7 +189,7 @@ func (s *CloneService) Clone(ctx context.Context, srcID uint, req CloneInstanceR
 }
 
 // cloneWorkDirOnWorker 确保源/目标在 Worker 注册后，调用 CloneWorkDir 本机复制。
-func (s *CloneService) cloneWorkDirOnWorker(ctx context.Context, src, dst *model.Instance) error {
+func (s *CloneService) cloneWorkDirOnWorker(ctx context.Context, src, dst *model.Instance, include, exclude []string) error {
 	if err := s.instance.EnsureRegistered(src); err != nil {
 		return fmt.Errorf("源实例注册到 Worker 失败: %w", err)
 	}
@@ -193,7 +211,8 @@ func (s *CloneService) cloneWorkDirOnWorker(ctx context.Context, src, dst *model
 	resp, err := client.Worker.CloneWorkDir(cloneCtx, &workerpb.CloneWorkDirRequest{
 		SrcInstanceUuid: src.UUID,
 		DstInstanceUuid: dst.UUID,
-		Exclude:         defaultCloneExcludes,
+		Include:         include,
+		Exclude:         exclude,
 	})
 	if err != nil {
 		return err
