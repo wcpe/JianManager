@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
+import { http, HttpResponse } from 'msw'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { db } from '@/mocks/db'
+import { server } from '@/mocks/server'
+import { API } from '@/mocks/api'
 import { useAuthStore } from '@/stores/auth'
 import { mockInject } from '@/mocks/inject'
 import type { Session } from '@/mocks/handlers/domains/auth'
@@ -31,10 +34,36 @@ describe('SystemUpdatePage（mock 假后端）', () => {
     renderWithProviders(<SystemUpdatePage />)
 
     expect(await screen.findByText('系统更新')).toBeInTheDocument()
-    expect(screen.getByText('Control Plane（控制台）')).toBeInTheDocument()
+    // CP 卡片来自 GET /check（异步缓存读取）→ await（不再靠进页自动刷新的时序垫，FIX-6）。
+    expect(await screen.findByText('Control Plane（控制台）')).toBeInTheDocument()
     // 节点行（seed nodes alpha/beta）。
     expect(await screen.findByText('alpha')).toBeInTheDocument()
     expect(screen.getByText('beta')).toBeInTheDocument()
+  })
+
+  it('进页只读缓存，不自动触发 live 刷新 / 写缓存（FIX-6）', async () => {
+    loginPlatformAdmin()
+    let refreshCalls = 0
+    server.use(
+      http.post(API('/self-update/check/refresh'), () => {
+        refreshCalls++
+        return HttpResponse.json({
+          configured: true,
+          latestVersion: '0.12.0',
+          notes: '',
+          source: 'github:wcpe/JianManager@stable',
+          controlPlane: { online: true, currentVersion: '0.12.0', os: 'linux', arch: 'amd64', updateAvailable: false, artifactAvailable: true },
+          nodes: [],
+          cached: true,
+        })
+      }),
+    )
+    renderWithProviders(<SystemUpdatePage />)
+
+    // 缓存（GET /check）渲染出 CP 卡片即说明进页已读到缓存。
+    await screen.findByText('Control Plane（控制台）')
+    // 进页只读缓存，绝不自动 POST refresh（否则每次点开都 live 检查 + UPDATE self_update_check_caches）。
+    expect(refreshCalls).toBe(0)
   })
 
   it('升级节点后，check 联动反映新版本', async () => {

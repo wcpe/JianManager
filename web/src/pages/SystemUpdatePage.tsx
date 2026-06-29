@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { RefreshCw, ArrowUpCircle, ArrowDownCircle, ServerCog, AlertCircle, CheckCircle2, Clock } from 'lucide-react'
@@ -46,16 +46,9 @@ export default function SystemUpdatePage() {
   const refresh = useRefreshSelfUpdateCheck()
   const upgradeAll = useUpgradeAll()
 
-  // 进页后台静默刷新一次（缓存即显在前、live 结果随后更新）。仅触发一次，避免重渲染重复刷新。
-  const autoRefreshedRef = useRef(false)
-  useEffect(() => {
-    if (!isPlatformAdmin || autoRefreshedRef.current) return
-    autoRefreshedRef.current = true
-    refresh.mutate(undefined, {
-      // 后台静默：失败不弹错（保留缓存即可），仅手动点「检查更新」时才提示失败。
-      onError: () => {},
-    })
-  }, [isPlatformAdmin, refresh])
+  // FIX-6：进页只读缓存（useSelfUpdateCheck = GET /check，无副作用）、绝不自动 live 刷新。
+  // 原「进页静默刷新一次」每次点开都触发 live 检查 + UPDATE self_update_check_caches（慢 + 写库 + 联网），
+  // 改为仅「检查更新」按钮显式 live 刷新；缓存为空时页面提示点击检查更新。
 
   // rollout 在运行中时短轮询，空闲/完成后停（轮询逻辑在 hook 内）。
   const rolloutQ = useRollout()
