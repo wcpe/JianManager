@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
-import { AlertTriangle, Bell, Boxes, LogOut, Search, Server, UserRound } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, Bell, Boxes, LogOut, RotateCw, Search, Server, UserRound } from 'lucide-react'
 
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
@@ -43,6 +44,7 @@ export default function ConsoleHeader() {
       <div className="ml-auto flex items-center gap-2 sm:gap-3">
         <SearchBox />
         <div className="flex items-center gap-0.5 sm:gap-1">
+          <RefreshButton />
           <ClusterBadges />
           <NotificationBell />
           <AccountMenu />
@@ -102,6 +104,33 @@ function SearchBox() {
         Ctrl K
       </kbd>
     </div>
+  )
+}
+
+/**
+ * 全局刷新（FR-232）：重拉当前页所有活跃查询（invalidateQueries），转动图标给反馈。
+ * 解决「页面无刷新入口」——不整页 reload，仅失效并重取数据。
+ */
+function RefreshButton() {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const [spinning, setSpinning] = useState(false)
+  const refresh = () => {
+    setSpinning(true)
+    void queryClient.invalidateQueries().finally(() => {
+      setTimeout(() => setSpinning(false), 500)
+    })
+  }
+  return (
+    <button
+      type="button"
+      onClick={refresh}
+      aria-label={t('header.refresh')}
+      title={t('header.refresh')}
+      className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+    >
+      <RotateCw className={cn('size-4', spinning && 'animate-spin')} />
+    </button>
   )
 }
 

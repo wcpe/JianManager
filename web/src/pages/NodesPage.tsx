@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useQueries } from '@tanstack/react-query'
@@ -384,8 +384,16 @@ export default function NodesPage() {
   }, [instances])
 
   const filtered = useMemo(() => filterNodes(nodes ?? [], query), [nodes, query])
-  // 选中节点解析为实时列表对象（节点下线→回空态，右栏随轮询刷新而非陈旧快照）。
-  const selected = useMemo(() => resolveSelectedNode(nodes ?? [], selectedId), [nodes, selectedId])
+  // 有效选中（FR-232 进入默认选第一个 + FR-177 幽灵选中回退）：未显式选中或选中节点已消失 → 回退第一个。
+  // 派生而非用 effect 同步 state（避免 set-state-in-effect 级联；selectedId 仍保留用户最后点选）。
+  const effectiveSelectedId = useMemo(() => {
+    const list = nodes ?? []
+    if (list.length === 0) return null
+    if (selectedId !== null && list.some((n) => n.id === selectedId)) return selectedId
+    return list[0].id
+  }, [nodes, selectedId])
+  // 选中节点解析为实时列表对象（节点下线→回退第一个，右栏随轮询刷新而非陈旧快照）。
+  const selected = useMemo(() => resolveSelectedNode(nodes ?? [], effectiveSelectedId), [nodes, effectiveSelectedId])
 
   const toggleCollapsed = () => {
     setCollapsed((c) => {
@@ -394,14 +402,6 @@ export default function NodesPage() {
       return next
     })
   }
-
-  // 选中节点被下线后清掉选中态（避免「幽灵选中」）。
-  useEffect(() => {
-    if (selectedId !== null && selected === null && (nodes?.length ?? 0) > 0) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- 选中节点消失时清理，属合法同步
-      setSelectedId(null)
-    }
-  }, [selectedId, selected, nodes])
 
   const toggleMaintenance = (node: NodeInfo) => {
     const enabled = !node.maintenance
@@ -467,7 +467,7 @@ export default function NodesPage() {
                 <NodeRailIcon
                   key={node.id}
                   node={node}
-                  selected={node.id === selectedId}
+                  selected={node.id === effectiveSelectedId}
                   onSelect={() => setSelectedId(node.id)}
                 />
               ))}
@@ -522,7 +522,7 @@ export default function NodesPage() {
                     key={node.id}
                     node={node}
                     instanceCount={instanceCountByNode.get(node.id) ?? 0}
-                    selected={node.id === selectedId}
+                    selected={node.id === effectiveSelectedId}
                     onSelect={() => setSelectedId(node.id)}
                   />
                 ))

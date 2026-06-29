@@ -12,6 +12,7 @@
 
 ### 新增
 - **调试模式开关 + Gin 默认 release 静默（FR-225，增强 FR-063）**：① Gin 默认改 ReleaseMode——原启动刷约 240 行 `[GIN-debug]` 路由噪音，现默认静默。② 设置「日志」分类新增「调试模式」开关（`debug.mode` 平台设置，true/false）：开=日志 debug + Gin debug、关=日志回 log.level 基线（默认 info）+ Gin release，走 FR-063 运行时 settings 机制即时生效不重启、重启复用持久化覆盖。gin 依赖经注入 applier 留在入口层（不渗入 service）；调试开启时强制 debug、log.level 不下压。前端设置页 `debug.mode` 渲染为开启/关闭下拉（i18n 中/英）+ mock 同步。CP 单测（toggle 切 log+gin / 关回退基线 / 调试开启不被 log.level 下压 / 非法值拒绝 / 启动基线 release）+ 前端 tsc/lint/vitest 全绿。真机浏览器 A/B 验过（默认 0 `[GIN-debug]`；UI 开调试→保存→重启 240 行 `[GIN-debug]` + debug 模式警告，证明持久化 + 启动应用）。
+- **节点页默认选中第一个 + 页眉刷新按钮（FR-232，前端，增强 FR-177/179）**：① 节点页进入即默认选中第一个节点（`useMemo` 派生有效选中态，未选/选中节点消失→回退第一个），不再停留「请在左侧选择节点」空态；原 effect 同步选中态改为派生（消除 set-state-in-effect 级联）。② 全局页眉新增「刷新当前页」按钮（RotateCw 图标 + 转动反馈），点击 `invalidateQueries` 重拉当前页活跃查询（非整页 reload）。i18n 中/英；前端 `tsc`/`lint`/`vitest` 全绿，真机浏览器验过（进 /nodes 自动选中节点显详情 + 页眉刷新按钮可用）。
 
 ## 0.12.0（2026-06-29）
 

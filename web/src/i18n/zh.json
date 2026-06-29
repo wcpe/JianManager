@@ -2373,6 +2373,7 @@
   "header": {
     "console": "控制台",
     "searchPlaceholder": "搜索…",
+    "refresh": "刷新当前页",
     "onlineNodes": "在线节点",
     "runningInstances": "运行实例",
     "crashedInstances": "崩溃实例",

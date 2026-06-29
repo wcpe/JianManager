@@ -24,9 +24,10 @@ describe('NodesPage（mock 假后端）', () => {
     stubInstances()
     renderWithProviders(<NodesPage />)
 
-    expect(await screen.findByText('alpha')).toBeInTheDocument()
-    expect(screen.getByText('beta')).toBeInTheDocument()
-    expect(screen.getByText('10.0.0.11')).toBeInTheDocument()
+    // beta 仅列表出现（唯一，作 await 锚点）；alpha 为首个、进页默认选中（FR-232）→ 列表 + 详情各一处，故 getAllByText。
+    expect(await screen.findByText('beta')).toBeInTheDocument()
+    expect(screen.getAllByText('alpha').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('10.0.0.11').length).toBeGreaterThan(0) // alpha host：列表 + 详情
   })
 
   it('对节点进入维护后，列表联动出现「维护」标记', async () => {
@@ -35,8 +36,8 @@ describe('NodesPage（mock 假后端）', () => {
     const user = userEvent.setup()
     renderWithProviders(<NodesPage />)
 
-    // 选中 alpha → 右栏详情出现操作菜单（kebab，aria-label=操作）。
-    await user.click(await screen.findByText('alpha'))
+    // alpha 为首个、进页即默认选中（FR-232）→ 右栏详情直接出操作菜单（kebab，aria-label=操作），无需先点选。
+    await screen.findByText('beta') // 等节点列表渲染完成
     const actionsBtn = await screen.findByRole('button', { name: '操作' })
     await user.click(actionsBtn)
     await user.click(await screen.findByRole('menuitem', { name: '进入维护' }))

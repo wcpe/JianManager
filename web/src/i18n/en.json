@@ -2373,6 +2373,7 @@
   "header": {
     "console": "Console",
     "searchPlaceholder": "Search…",
+    "refresh": "Refresh page",
     "onlineNodes": "Online nodes",
     "runningInstances": "Running instances",
     "crashedInstances": "Crashed instances",
