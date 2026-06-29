@@ -215,11 +215,51 @@ func (d *daemonStrategy) Stop() error {
 	d.state = StateStopping
 	conn := d.conn
 	d.mu.Unlock()
-	if conn == nil {
+
+	// 常态：控制连接已就绪，下发 stop 控制帧让 wrapper 优雅关服（保存世界 + 输出停止日志）。
+	if conn != nil {
+		return d.sendControl(daemon.ControlStop)
+	}
+
+	// FIX-C（bug #4）连接窗口竞态：Start 仅 spawn wrapper 即返回 RUNNING，控制连接由 connectLoop
+	// 异步建立。若「启动后立即停止」时 d.conn 仍为 nil，旧实现直接 return nil、从不通知 wrapper，
+	// 被托管子进程沦为孤儿继续输出日志。此处兜底：wrapper 此刻已在监听（connectLoop 正基于此重试），
+	// 即时拨号补发 stop 控制帧使其优雅关服（wrapper 内 stopJava 自带超时强杀兜底）。
+	if d.stopViaFreshDial() {
 		return nil
 	}
-	// 通过控制帧通知 wrapper 停止 Java
-	return d.sendControl(daemon.ControlStop)
+
+	// 拨号也失败（socket 尚未就绪等极端情形）：直接强杀 wrapper 进程树（含 cmd.exe→Java），
+	// 杜绝孤儿/端口占用。复用 Kill 路径的进程树终止（taskkill /T），与 commit 79c2e52 同源治理。
+	d.mu.Lock()
+	cmd := d.wrapperCmd
+	d.mu.Unlock()
+	if cmd != nil && cmd.Process != nil {
+		_ = killProcessTree(cmd)
+	}
+	return nil
+}
+
+// stopViaFreshDial 在控制连接尚未建立时即时拨号 wrapper socket 并下发 stop 控制帧。
+// 成功（拨通且帧已发出）返回 true。用于消除「启动后立即停止」的连接窗口竞态（FIX-C）。
+// 不缓存该连接到 d.conn：connectLoop 仍会按其节奏建立长连接接管输出读取，此处仅补发停止信号；
+// wrapper 端 listener 持续 Accept 多连接，额外的一次性 stop 连接无副作用。
+func (d *daemonStrategy) stopViaFreshDial() bool {
+	addr := daemon.SocketAddr(d.pidDir, d.spec.UUID)
+	conn, err := daemon.Dial(addr)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	f := &daemon.Frame{
+		Header:  daemon.Header{Channel: daemon.ChannelControl, Type: daemon.TypeCommand},
+		Payload: []byte(daemon.ControlStop),
+	}
+	if err := f.Encode(conn); err != nil {
+		return false
+	}
+	slog.Info("连接窗口内停止：即时拨号补发 stop 控制帧", "instanceId", d.spec.UUID, "addr", addr)
+	return true
 }
 
 func (d *daemonStrategy) Kill() error {
