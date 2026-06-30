@@ -231,6 +231,9 @@ func (s *Server) registerInstanceFromProto(req *workerpb.CreateInstanceRequest) 
 		// （FR-063 / FR-078）。该错误对幂等路径是良性的（按已注册处理）。
 		if strings.Contains(cerr.Error(), "已存在") {
 			s.manager.SetGracefulStopTimeout(req.InstanceUuid, int(req.GracefulStopTimeoutSeconds))
+			// 刷新启动配置（启动命令 / 绑定 JDK / 环境变量），使配置编辑（FR-233 重绑 JDK 等）对下次启动生效——
+			// 否则 worker 保留旧 spec，重绑的 JDK 不被采用、preflight 仍报「未绑定 JDK」。
+			s.manager.SetLaunchConfig(req.InstanceUuid, req.StartCommand, req.JdkPath, req.JdkBinPath, req.EnvVars)
 			if req.ProcessType == string(process.ProcessTypeDocker) {
 				s.manager.SetDockerConfig(req.InstanceUuid, req.Image, portMappingsFromProto(req.PortMappings), req.CpuLimit, req.MemLimitMb, req.DiskLimitMb)
 			}

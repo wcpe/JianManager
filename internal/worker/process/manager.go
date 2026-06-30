@@ -215,6 +215,20 @@ func (m *Manager) SetDockerConfig(uuid, image string, mappings []PortMapping, cp
 	}
 }
 
+// SetLaunchConfig 刷新已存在实例的启动配置（启动命令 / 绑定 JDK / 环境变量），供 CP 在「重新注册已存在
+// 实例」时下发，使配置编辑（如 FR-233 重绑 JDK / 改启动命令）对下一次启动生效（值在 Start 时随 spec 定型）。
+// 修 BUG——原「已存在」分支只刷 docker 配置，重绑的 JDK 不到 worker，preflight 仍报「未绑定 JDK」。实例不存在则忽略。
+func (m *Manager) SetLaunchConfig(uuid, startCommand, jdkPath, jdkBinPath string, envVars map[string]string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if inst, ok := m.instances[uuid]; ok {
+		inst.StartCommand = startCommand
+		inst.JDKPath = jdkPath
+		inst.JDKBinPath = jdkBinPath
+		inst.EnvVars = envVars
+	}
+}
+
 // SetRCONConfig 设置实例的 RCON 配置。
 func (m *Manager) SetRCONConfig(uuid string, port int, password string) error {
 	m.mu.Lock()
