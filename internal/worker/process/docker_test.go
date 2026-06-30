@@ -42,6 +42,8 @@ type fakeDockerClient struct {
 	attachConn net.Conn
 	// waitCh 投递容器退出码；测试控制何时让容器“退出”。
 	waitCh chan containertypes.WaitResponse
+	// statsJSON 覆盖 ContainerStats 返回的 cgroup 统计原文（空则用默认）。
+	statsJSON string
 }
 
 func newFakeDockerClient() *fakeDockerClient {
@@ -126,6 +128,29 @@ func (f *fakeDockerClient) ContainerWait(_ context.Context, _ string, _ containe
 func (f *fakeDockerClient) ContainerInspect(_ context.Context, _ string) (containertypes.InspectResponse, error) {
 	return containertypes.InspectResponse{
 		ContainerJSONBase: &containertypes.ContainerJSONBase{State: &containertypes.State{Pid: 4242}},
+	}, nil
+}
+
+// statsJSON 是 ContainerStats 返回的 cgroup 统计原文；为空则用一份合理默认。
+func (f *fakeDockerClient) statsBody() string {
+	f.mu.Lock()
+	s := f.statsJSON
+	f.mu.Unlock()
+	if s != "" {
+		return s
+	}
+	// cpu 增量 5e8 / 系统增量 1e10 × 2 核 ×100 = 10%；usage 200MiB 扣 inactive_file 50MiB = 150MiB。
+	return `{
+		"cpu_stats":    {"cpu_usage": {"total_usage": 1500000000}, "system_cpu_usage": 20000000000, "online_cpus": 2},
+		"precpu_stats": {"cpu_usage": {"total_usage": 1000000000}, "system_cpu_usage": 10000000000, "online_cpus": 2},
+		"memory_stats": {"usage": 209715200, "limit": 1073741824, "stats": {"inactive_file": 52428800}}
+	}`
+}
+
+func (f *fakeDockerClient) ContainerStats(_ context.Context, _ string, _ bool) (containertypes.StatsResponseReader, error) {
+	return containertypes.StatsResponseReader{
+		Body:   io.NopCloser(strings.NewReader(f.statsBody())),
+		OSType: "linux",
 	}, nil
 }
 
@@ -345,6 +370,52 @@ func TestDockerStrategy_StopGraceful(t *testing.T) {
 	// fake 的 ContainerStop 触发退出码，waitLoop 据此把状态收敛到 STOPPED。
 	assert.Eventually(t, func() bool { return d.State() == StateStopped }, 2*time.Second, 10*time.Millisecond,
 		"容器退出后状态应收敛到 STOPPED")
+}
+
+// TestDockerStrategy_KillNoSpuriousCrash 复现并守护 #5：强杀（含 STARTING/RUNNING 中强停）时，
+// Kill 须先把策略状态置为 Stopping，使并发的 waitLoop 把容器退出视为正常停止而非崩溃。
+// 修复前 Kill 不改状态，waitLoop 见 state==Running 会误标 CRASHED，前端「点停止反而变成崩溃」。
+func TestDockerStrategy_KillNoSpuriousCrash(t *testing.T) {
+	mgr := NewManager(t.TempDir())
+	fake := newFakeDockerClient()
+	fake.images = []imagetypes.Summary{{RepoTags: []string{"x:latest"}}}
+	d := newDockerStrategyWithFake(mgr, CommandSpec{UUID: "inst-kill", Image: "x:latest", ProcessType: ProcessTypeDocker}, fake)
+	mgr.instances["inst-kill"] = &Instance{UUID: "inst-kill", State: StateRunning, strategy: d}
+	require.NoError(t, d.Start(context.Background()))
+	t.Cleanup(func() { _ = d.Close() })
+
+	require.NoError(t, d.Kill())
+	// 模拟容器被杀后退出（ContainerWait 返回退出码）。
+	fake.signalExit(137)
+
+	assert.Eventually(t, func() bool { return d.State() == StateStopped }, 2*time.Second, 10*time.Millisecond,
+		"强杀后容器退出应收敛到 STOPPED 而非 CRASHED")
+	assert.NotEqual(t, StateCrashed, d.State(), "强杀不得被误标为崩溃")
+}
+
+// TestDockerStrategy_Stats 验证经 Engine API 采集容器 CPU%/内存（#6）：
+// 用一份已知 cgroup 统计，校验 CPU% 与扣缓存后的内存换算。
+func TestDockerStrategy_Stats(t *testing.T) {
+	mgr := NewManager(t.TempDir())
+	fake := newFakeDockerClient()
+	fake.images = []imagetypes.Summary{{RepoTags: []string{"x:latest"}}}
+	d := newDockerStrategyWithFake(mgr, CommandSpec{UUID: "inst-stats", Image: "x:latest", ProcessType: ProcessTypeDocker}, fake)
+	mgr.instances["inst-stats"] = &Instance{UUID: "inst-stats", State: StateRunning, strategy: d}
+	require.NoError(t, d.Start(context.Background()))
+	t.Cleanup(func() { _ = d.Close() })
+
+	cpu, mem, limit, ok := d.Stats(context.Background())
+	require.True(t, ok, "运行中的 docker 实例应能采到指标")
+	// cpuDelta=5e8, sysDelta=1e10, 2 核 → (0.5/10)*2*100 = 10%。
+	assert.InDelta(t, 10.0, cpu, 0.01)
+	// usage 200MiB 扣 inactive_file 50MiB = 150MiB。
+	assert.Equal(t, int64(150*1024*1024), mem)
+	assert.Equal(t, int64(1024*1024*1024), limit)
+
+	// 非运行态应返回 ok=false（回退 OS 进程内存路径）。Kill 不写 stdin，置 Stopping 即可。
+	require.NoError(t, d.Kill())
+	_, _, _, ok = d.Stats(context.Background())
+	assert.False(t, ok, "非运行态应返回 ok=false")
 }
 
 // TestPortConfig 验证端口映射转 Docker ExposedPorts/PortBindings。

@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -302,6 +303,10 @@ func (d *dockerStrategy) Kill() error {
 	d.mu.Lock()
 	cli := d.cli
 	containerID := d.containerID
+	// 先置 Stopping，使并发的 waitLoop 把随后的容器退出视为正常停止而非崩溃。
+	// 否则强杀（含 STARTING/RUNNING 中强停）时 waitLoop 见 state==Running 会误标 CRASHED 并扇出，
+	// 前端表现为「点了停止反而变成崩溃」。
+	d.state = StateStopping
 	d.mu.Unlock()
 
 	if cli == nil || containerID == "" {
@@ -368,6 +373,60 @@ func (d *dockerStrategy) GetPID() int {
 		return 0
 	}
 	return info.State.Pid
+}
+
+// Stats 经 Docker Engine API 采集容器 CPU%/内存（cgroup 口径），返回内存占用、内存上限（字节）。
+// 用途：Docker Desktop/WSL2 等场景下容器主进程不是宿主可见进程，GetPID→OS 进程内存采不到，
+// 改用守护进程的 cgroup 统计兜底实例资源指标（修 #6「docker 资源看不到」，补 FR-079 可观测）。
+// 用 stream=false（非 one-shot）让守护进程预热 precpu 基线，单次返回即可算出 CPU 增量。
+func (d *dockerStrategy) Stats(ctx context.Context) (cpuPercent float64, memBytes int64, memLimitBytes int64, ok bool) {
+	d.mu.Lock()
+	cli := d.cli
+	cid := d.containerID
+	running := d.state == StateRunning
+	d.mu.Unlock()
+	if cli == nil || cid == "" || !running {
+		return 0, 0, 0, false
+	}
+
+	resp, err := cli.ContainerStats(ctx, cid, false)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	defer resp.Body.Close()
+
+	var v containertypes.StatsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&v); err != nil {
+		return 0, 0, 0, false
+	}
+	return dockerCPUPercent(&v), int64(dockerMemUsage(v.MemoryStats)), int64(v.MemoryStats.Limit), true
+}
+
+// dockerCPUPercent 按 docker CLI 口径算容器 CPU 占用：当前与上次采样的 CPU 增量除以系统 CPU 增量，
+// 再乘在线核数。precpu 为零（未预热）或增量非正时返回 0。
+func dockerCPUPercent(v *containertypes.StatsResponse) float64 {
+	cpuDelta := float64(v.CPUStats.CPUUsage.TotalUsage) - float64(v.PreCPUStats.CPUUsage.TotalUsage)
+	sysDelta := float64(v.CPUStats.SystemUsage) - float64(v.PreCPUStats.SystemUsage)
+	onlineCPUs := float64(v.CPUStats.OnlineCPUs)
+	if onlineCPUs == 0 {
+		onlineCPUs = float64(len(v.CPUStats.CPUUsage.PercpuUsage))
+	}
+	if sysDelta > 0 && cpuDelta > 0 {
+		return (cpuDelta / sysDelta) * onlineCPUs * 100.0
+	}
+	return 0
+}
+
+// dockerMemUsage 扣除页缓存得到容器真实内存占用（与 docker stats 一致）：
+// cgroup v2 用 inactive_file，cgroup v1 用 total_inactive_file；缺失则用原始 usage。
+func dockerMemUsage(m containertypes.MemoryStats) uint64 {
+	if v, ok := m.Stats["inactive_file"]; ok && v < m.Usage {
+		return m.Usage - v
+	}
+	if v, ok := m.Stats["total_inactive_file"]; ok && v < m.Usage {
+		return m.Usage - v
+	}
+	return m.Usage
 }
 
 // removeExistingContainer 删除同名残留容器（上次异常退出未清理时）。

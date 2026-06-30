@@ -387,8 +387,15 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 		return resp, nil
 	}
 
-	// 通过 OS 进程内存近似 MC JVM 内存
-	if pid := s.manager.GetInstancePID(req.InstanceUuid); pid > 0 {
+	// docker 容器：宿主 PID 在 Docker Desktop/WSL2 下通常不是可见进程，OS 进程内存采不到，
+	// 改用 Engine API 的 cgroup 统计取 CPU%/内存（#6）；非 docker 实例回退 OS 进程内存近似 MC JVM 内存。
+	if cpu, mem, memLimit, ok := s.manager.GetInstanceDockerStats(ctx, req.InstanceUuid); ok {
+		resp.MemoryMb = mem / (1024 * 1024)
+		resp.CpuPercent = cpu
+		// 容器内存上限作内存条分母（未配置限额时为宿主总内存）。docker 无 JVM 探针，
+		// 复用 HeapMaxMb 字段承载「内存上限」语义，仅卡片实时视图消费（不入时序）。
+		resp.HeapMaxMb = memLimit / (1024 * 1024)
+	} else if pid := s.manager.GetInstancePID(req.InstanceUuid); pid > 0 {
 		if proc, err := psproc.NewProcess(int32(pid)); err == nil {
 			if memInfo, err := proc.MemoryInfo(); err == nil && memInfo != nil {
 				resp.MemoryMb = int64(memInfo.RSS / 1024 / 1024)

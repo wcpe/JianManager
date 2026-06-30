@@ -271,6 +271,28 @@ func (m *Manager) GetInstancePID(uuid string) int {
 	return inst.strategy.GetPID()
 }
 
+// dockerStatser 由 docker 策略实现：经 Engine API 采集容器 cgroup 资源指标。
+// 仅 docker 实例满足此接口，供 Manager 在宿主 PID 不可见时取容器 CPU%/内存（#6）。
+type dockerStatser interface {
+	Stats(ctx context.Context) (cpuPercent float64, memBytes int64, memLimitBytes int64, ok bool)
+}
+
+// GetInstanceDockerStats 采集 docker 实例的容器资源指标（CPU%/内存/内存上限，字节）。
+// 非 docker 实例、未运行或采集失败返回 ok=false，调用方据此回退 OS 进程内存路径。
+func (m *Manager) GetInstanceDockerStats(ctx context.Context, uuid string) (cpuPercent float64, memBytes int64, memLimitBytes int64, ok bool) {
+	m.mu.RLock()
+	inst, exists := m.instances[uuid]
+	m.mu.RUnlock()
+	if !exists || inst.strategy == nil {
+		return 0, 0, 0, false
+	}
+	ds, isDocker := inst.strategy.(dockerStatser)
+	if !isDocker {
+		return 0, 0, 0, false
+	}
+	return ds.Stats(ctx)
+}
+
 // Start 启动实例。按实例的 ProcessType 选择策略；首次启动时惰性构造策略。
 func (m *Manager) Start(uuid string) error {
 	m.mu.Lock()
