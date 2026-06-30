@@ -67,6 +67,9 @@ type Instance struct {
 	Role          InstanceRole   `gorm:"type:varchar(16);default:universal;index" json:"role"`
 	ProcessType   ProcessType    `gorm:"type:varchar(32);not null" json:"processType"`
 	Status        InstanceStatus `gorm:"type:varchar(32);default:STOPPED" json:"status"`
+	// StatusReason 记录当前状态的原因，主要用于 CRASHED：异步委托（启动/停止）失败时写入具体错误
+	// （如「实例未绑定 JDK…」），供前端显示，不再让用户只见「崩溃」无因。正常状态推进时清空。
+	StatusReason  string         `gorm:"type:varchar(512)" json:"statusReason"`
 	StartCommand      string         `gorm:"type:varchar(1024);not null" json:"startCommand"`
 	JDKID             uint           `gorm:"index" json:"jdkId"`
 	JavaMajorVersion  int            `gorm:"index" json:"javaMajorVersion"`

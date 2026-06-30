@@ -510,7 +510,10 @@ func (s *InstanceService) Kill(id uint) error {
 		return err
 	}
 
-	if err := s.transition(id, model.InstanceStatusStopped, "强制终止"); err != nil {
+	// 强制终止是逃生通道：从任意状态（含 RUNNING / STARTING）直接置 STOPPED，绕过状态机校验。
+	// 修 BUG——强杀原走 transition，RUNNING→STOPPED 不在 validTransitions（须经 STOPPING）被「无效的状态转换」
+	// 拦下，导致卡在 RUNNING/STARTING 的实例无法强停。validTransitions 仅约束正常生命周期，强杀不受其限。
+	if err := s.UpdateStatus(id, model.InstanceStatusStopped); err != nil {
 		return err
 	}
 
@@ -787,7 +790,7 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 	var node model.Node
 	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
 		slog.Error("查找节点失败", "instanceId", instance.UUID, "error", err)
-		s.updateStatusAsync(instance.ID, model.InstanceStatusCrashed)
+		s.updateStatusReasonAsync(instance.ID, model.InstanceStatusCrashed, "查找节点失败: "+err.Error())
 		return
 	}
 
@@ -795,7 +798,7 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
 		slog.Error("节点未连接", "nodeUUID", node.UUID)
-		s.updateStatusAsync(instance.ID, model.InstanceStatusCrashed)
+		s.updateStatusReasonAsync(instance.ID, model.InstanceStatusCrashed, "节点未连接")
 		return
 	}
 
@@ -825,13 +828,13 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 
 	if err != nil {
 		slog.Error("Worker 操作失败", "action", action, "instanceId", instance.UUID, "error", err)
-		s.updateStatusAsync(instance.ID, model.InstanceStatusCrashed)
+		s.updateStatusReasonAsync(instance.ID, model.InstanceStatusCrashed, "Worker 操作失败: "+err.Error())
 		return
 	}
 
 	if resp != nil && !resp.Success {
 		slog.Error("Worker 操作未成功", "action", action, "instanceId", instance.UUID, "error", resp.Error)
-		s.updateStatusAsync(instance.ID, model.InstanceStatusCrashed)
+		s.updateStatusReasonAsync(instance.ID, model.InstanceStatusCrashed, resp.Error)
 		return
 	}
 
@@ -853,6 +856,14 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 func (s *InstanceService) updateStatusAsync(id uint, status model.InstanceStatus) {
 	if err := s.UpdateStatus(id, status); err != nil {
 		slog.Error("更新实例状态失败", "instanceId", id, "status", status, "error", err)
+	}
+}
+
+// updateStatusReasonAsync 异步置状态 + 原因：委托失败时写入崩溃原因（供前端显示具体错误，不再只见「崩溃」无因）。
+func (s *InstanceService) updateStatusReasonAsync(id uint, status model.InstanceStatus, reason string) {
+	if err := s.db.Model(&model.Instance{}).Where("id = ?", id).
+		Updates(map[string]any{"status": status, "status_reason": reason}).Error; err != nil {
+		slog.Error("更新实例状态/原因失败", "instanceId", id, "status", status, "error", err)
 	}
 }
 
@@ -895,7 +906,8 @@ func (s *InstanceService) transition(id uint, target model.InstanceStatus, actio
 		return fmt.Errorf("%s: 当前状态 %s 无法转换到 %s: %w", action, instance.Status, target, ErrInvalidTransition)
 	}
 
-	if err := s.db.Model(instance).Update("status", target).Error; err != nil {
+	// 正常状态推进清空崩溃原因（StatusReason 仅在异步委托失败时写入；每次启动/停止重置）。
+	if err := s.db.Model(instance).Updates(map[string]any{"status": target, "status_reason": ""}).Error; err != nil {
 		return fmt.Errorf("%s失败: %w", action, err)
 	}
 
