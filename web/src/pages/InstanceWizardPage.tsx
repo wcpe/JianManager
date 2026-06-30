@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router'
 import { useQueryClient, useMutation } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { ArrowLeft, ChevronLeft, ChevronRight, Check } from 'lucide-react'
+import { ArrowLeft, Boxes, ChevronLeft, ChevronRight, Check, Plus, X } from 'lucide-react'
 import api from '@/api/client'
 import { useNodes } from '@/api/nodes'
 import { buildNodeOptions } from './instance-wizard-options'
@@ -26,6 +26,16 @@ type StepKey = 'basic' | 'launch' | 'advanced' | 'review'
 
 const inputClass =
   'w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive'
+
+/** 把 docker 环境变量键值对收敛为对象（去空键、key 去首尾空格）；无有效项返回 undefined。 */
+function envVarsFromPairs(pairs: { key: string; value: string }[]): Record<string, string> | undefined {
+  const out: Record<string, string> = {}
+  for (const p of pairs) {
+    const k = p.key.trim()
+    if (k) out[k] = p.value
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
 
 /**
  * 创建实例向导页（FR-230，取代 FR-189 的创建模态）：
@@ -55,6 +65,8 @@ export default function InstanceWizardPage() {
   const [groupId, setGroupId] = useState('')
   const [templateId, setTemplateId] = useState(searchParams.get('template') ?? '')
   const [jdkId, setJdkId] = useState('')
+  // docker 环境变量键值对（FR-236）：一键 Minecraft 预设注入 EULA=TRUE；可手动增删。
+  const [envPairs, setEnvPairs] = useState<{ key: string; value: string }[]>([])
 
   const { data: jdks } = useNodeJDKs(nodeId ? Number(nodeId) : 0)
 
@@ -88,7 +100,7 @@ export default function InstanceWizardPage() {
     {
       name: [validateRequired],
       nodeId: [validateRequired],
-      startCommand: [validateRequired],
+      startCommand: isDocker ? [] : [validateRequired],
       image: isDocker ? [validateRequired] : [],
       cpuLimit: isDocker ? [validateNonNegativeNumber] : [],
       memLimitMb: isDocker ? [validateNonNegativeNumber] : [],
@@ -132,6 +144,14 @@ export default function InstanceWizardPage() {
     }
   }
 
+  // 一键 Minecraft docker 傻瓜建服（FR-236）：itzg 镜像 + EULA=TRUE + 空命令（交镜像 entrypoint 自管启动）。
+  const applyMinecraftDockerPreset = () => {
+    setType('minecraft_java')
+    setImage('itzg/minecraft-server:latest')
+    setEnvPairs([{ key: 'EULA', value: 'TRUE' }])
+    setStartCommand('')
+  }
+
   const submit = () => {
     if (!steps.every(stepValid)) return
     create.mutate({
@@ -146,6 +166,7 @@ export default function InstanceWizardPage() {
       image: isDocker ? image : undefined,
       cpuLimit: isDocker ? (cpuLimit.trim() ? Number(cpuLimit) : 0) : undefined,
       memLimitMb: isDocker ? (memLimitMb.trim() ? Number(memLimitMb) : 0) : undefined,
+      envVars: isDocker ? envVarsFromPairs(envPairs) : undefined,
     })
   }
 
@@ -236,9 +257,9 @@ export default function InstanceWizardPage() {
                 <div className="mt-1"><Combobox options={jdkOptions} value={jdkId} onChange={setJdkId} allowCustom={false} placeholder={t('instances.jdkSystemDefault')} /></div>
               </Field>
             </div>
-            <Field label={t('instanceDetail.startCommand')} required error={errors.startCommand}>
+            <Field label={t('instanceDetail.startCommand')} required={!isDocker} error={errors.startCommand}>
               <input value={startCommand} onChange={(e) => setStartCommand(e.target.value)} className={cn(inputClass, 'font-mono')} placeholder="java -Xmx2G -jar server.jar nogui" aria-invalid={!!errors.startCommand} />
-              <p className="mt-1.5 text-xs text-muted-foreground">{t('instances.startCommandHint')}</p>
+              <p className="mt-1.5 text-xs text-muted-foreground">{isDocker ? t('instances.startCommandDockerHint') : t('instances.startCommandHint')}</p>
             </Field>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={autoRestart} onChange={(e) => setAutoRestart(e.target.checked)} />
@@ -249,9 +270,21 @@ export default function InstanceWizardPage() {
 
         {step === 'advanced' && (
           <div className="space-y-3">
+            {/* 一键 Minecraft 傻瓜建服（FR-236）：itzg 镜像 + EULA=TRUE + 空命令 */}
+            <div className="flex items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 p-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">{t('instances.dockerMcPresetTitle')}</p>
+                <p className="text-xs text-muted-foreground">{t('instances.dockerMcPresetHint')}</p>
+              </div>
+              <Button type="button" size="sm" variant="outline" className="shrink-0" onClick={applyMinecraftDockerPreset}>
+                <Boxes className="size-4" />
+                {t('instances.dockerMcPresetApply')}
+              </Button>
+            </div>
             <Field label={t('instances.dockerImage')} required error={errors.image}>
               <input value={image} onChange={(e) => setImage(e.target.value)} className={cn(inputClass, 'font-mono')} placeholder="itzg/minecraft-server:latest" aria-invalid={!!errors.image} />
             </Field>
+            <EnvVarsEditor pairs={envPairs} onChange={setEnvPairs} />
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <Field label={t('instances.cpuLimit')} error={errors.cpuLimit}>
                 <input value={cpuLimit} onChange={(e) => setCpuLimit(e.target.value)} className={inputClass} placeholder="1.5" inputMode="decimal" aria-invalid={!!errors.cpuLimit} />
@@ -316,5 +349,56 @@ function ReviewRow({ label, value, mono }: { label: string; value: string; mono?
       <dt className="shrink-0 text-muted-foreground">{label}</dt>
       <dd className={cn('min-w-0 break-all text-right', mono && 'font-mono text-xs')}>{value || '—'}</dd>
     </div>
+  )
+}
+
+/** docker 环境变量键值对编辑器（FR-236）：itzg 需 EULA=TRUE 等；增删行、空键提交时忽略。 */
+function EnvVarsEditor({
+  pairs,
+  onChange,
+}: {
+  pairs: { key: string; value: string }[]
+  onChange: (p: { key: string; value: string }[]) => void
+}) {
+  const { t } = useTranslation()
+  const setAt = (i: number, patch: Partial<{ key: string; value: string }>) =>
+    onChange(pairs.map((p, idx) => (idx === i ? { ...p, ...patch } : p)))
+  return (
+    <Field label={t('instances.dockerEnvVars')}>
+      <div className="mt-1 space-y-2">
+        {pairs.length === 0 && <p className="text-xs text-muted-foreground">{t('instances.dockerEnvEmpty')}</p>}
+        {pairs.map((p, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <input
+              value={p.key}
+              onChange={(e) => setAt(i, { key: e.target.value })}
+              placeholder="KEY"
+              aria-label={t('instances.dockerEnvKey')}
+              className={cn(inputClass, 'mt-0 font-mono')}
+            />
+            <span className="shrink-0 text-muted-foreground">=</span>
+            <input
+              value={p.value}
+              onChange={(e) => setAt(i, { value: e.target.value })}
+              placeholder="VALUE"
+              aria-label={t('instances.dockerEnvValue')}
+              className={cn(inputClass, 'mt-0 font-mono')}
+            />
+            <button
+              type="button"
+              onClick={() => onChange(pairs.filter((_, idx) => idx !== i))}
+              aria-label={t('common.delete')}
+              className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-destructive"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+        ))}
+        <Button type="button" size="sm" variant="outline" onClick={() => onChange([...pairs, { key: '', value: '' }])}>
+          <Plus className="size-4" />
+          {t('instances.dockerEnvAdd')}
+        </Button>
+      </div>
+    </Field>
   )
 }
