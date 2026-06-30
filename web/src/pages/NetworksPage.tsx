@@ -414,7 +414,7 @@ function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose
   return (
     <div className={MODAL_OVERLAY} onClick={onClose}>
       <div
-        className="flex max-h-[88vh] w-full max-w-4xl flex-col rounded-2xl border bg-card text-card-foreground shadow-lift"
+        className="flex max-h-[88vh] w-full max-w-4xl flex-col rounded-xl border bg-card text-card-foreground shadow-lift"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 头部 */}
