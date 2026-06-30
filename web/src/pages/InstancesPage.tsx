@@ -24,6 +24,7 @@ import ProxyRegistrationsDialog from '@/components/ProxyRegistrationsDialog'
 import CloneInstanceDialog from '@/components/CloneInstanceDialog'
 import InstanceTagsDialog from '@/components/InstanceTagsDialog'
 import EditInstanceLimitsDialog from '@/components/EditInstanceLimitsDialog'
+import EditInstanceConfigDialog from '@/components/EditInstanceConfigDialog'
 import { InstanceWorktableCard } from '@/components/console/InstanceWorktableCard'
 import { InstanceGroupManager } from '@/components/console/InstanceGroupManager'
 import {
@@ -78,6 +79,7 @@ export default function InstancesPage() {
   const [showProvisionProxy, setShowProvisionProxy] = useState(false)
   const [manageProxy, setManageProxy] = useState<{ id: number; name: string } | null>(null)
   const [cloneTarget, setCloneTarget] = useState<{ id: number; name: string } | null>(null)
+  const [editConfigTarget, setEditConfigTarget] = useState<InstanceInfo | null>(null)
   const [tagsTarget, setTagsTarget] = useState<{ id: number; name: string; tags: string[] } | null>(null)
   // 资源限额编辑目标（FR-079）：携带启动方式与当前限额回填。
   const [limitsTarget, setLimitsTarget] = useState<{
@@ -236,6 +238,7 @@ export default function InstancesPage() {
     <InstanceRowMenu
       inst={inst}
       onTags={() => setTagsTarget({ id: inst.id, name: inst.name, tags: parseTags(inst.tags) })}
+      onEditConfig={() => setEditConfigTarget(inst)}
       onLimits={() => setLimitsTarget({
         id: inst.id,
         name: inst.name,
@@ -493,6 +496,17 @@ export default function InstancesPage() {
       )}
       {cloneTarget && (
         <CloneInstanceDialog sourceId={cloneTarget.id} sourceName={cloneTarget.name} onClose={() => setCloneTarget(null)} />
+      )}
+      {editConfigTarget && (
+        <EditInstanceConfigDialog
+          instanceId={editConfigTarget.id}
+          instanceName={editConfigTarget.name}
+          nodeId={editConfigTarget.nodeId}
+          jdkId={editConfigTarget.jdkId ?? 0}
+          startCommand={editConfigTarget.startCommand}
+          autoRestart={editConfigTarget.autoRestart}
+          onClose={() => setEditConfigTarget(null)}
+        />
       )}
       {tagsTarget && (
         <InstanceTagsDialog
@@ -809,6 +823,7 @@ function FilterSelect({
 function InstanceRowMenu({
   inst,
   onTags,
+  onEditConfig,
   onLimits,
   onProxy,
   onClone,
@@ -816,6 +831,7 @@ function InstanceRowMenu({
 }: {
   inst: InstanceInfo
   onTags: () => void
+  onEditConfig: () => void
   onLimits: () => void
   onProxy: () => void
   onClone: () => void
@@ -833,6 +849,7 @@ function InstanceRowMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={onEditConfig}>{t('instances.editConfig')}</DropdownMenuItem>
         <DropdownMenuItem onSelect={onTags}>{t('grouping.editTags')}</DropdownMenuItem>
         {inst.processType === 'docker' && (
           <DropdownMenuItem onSelect={onLimits}>{t('instances.resourceLimit')}</DropdownMenuItem>
