@@ -152,3 +152,29 @@ func TestCreate_GenericEmptyWorkDirAllocated(t *testing.T) {
 		t.Fatalf("generic empty workdir should be system-allocated, got %q", inst.WorkDir)
 	}
 }
+
+// docker 实例允许空启动命令（交镜像 entrypoint 自管启动，FR-078）；非 docker 仍必填。
+func TestCreate_DockerAllowsEmptyStartCommand(t *testing.T) {
+	db := newInstanceTestDB(t)
+	svc := NewInstanceService(db, nil, nil)
+
+	// docker + 空命令：成功（镜像自管启动）。
+	inst, err := svc.Create(CreateInstanceRequest{
+		NodeID:      1,
+		Name:        "docker-mc",
+		Type:        model.InstanceTypeMinecraftJava,
+		ProcessType: model.ProcessTypeDocker,
+		Image:       "itzg/minecraft-server:latest",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "", inst.StartCommand)
+
+	// 非 docker + 空命令：拒绝。
+	_, err = svc.Create(CreateInstanceRequest{
+		NodeID:      1,
+		Name:        "direct-empty",
+		Type:        model.InstanceTypeGeneric,
+		ProcessType: model.ProcessTypeDirect,
+	})
+	require.ErrorIs(t, err, ErrStartCommandRequired)
+}

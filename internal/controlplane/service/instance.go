@@ -24,6 +24,8 @@ var (
 	ErrInstanceStopped    = errors.New("实例已停止")
 	ErrInstanceNotRunning = errors.New("实例未运行")
 	ErrQuotaExceeded      = errors.New("组配额已满")
+	// ErrStartCommandRequired 非 docker 实例缺启动命令（docker 可空，交镜像 entrypoint 自管启动，FR-078）。
+	ErrStartCommandRequired = errors.New("非 docker 实例必须提供启动命令")
 )
 
 // validTransitions 合法的状态转换。
@@ -86,24 +88,24 @@ type CreateInstanceRequest struct {
 	Type             model.InstanceType `json:"type" binding:"required"`
 	Role             model.InstanceRole `json:"role"`
 	ProcessType      model.ProcessType  `json:"processType" binding:"required"`
-	StartCommand     string             `json:"startCommand" binding:"required"`
+	StartCommand     string             `json:"startCommand"`
 	JDKID            uint               `json:"jdkId"`
 	JavaMajorVersion int                `json:"javaMajorVersion"`
 	LaunchSpec       string             `json:"launchSpec"`
 	WorkDir          string             `json:"workDir"`
 	EnvVars          map[string]string  `json:"envVars"`
 	// Image 是 docker 模式的容器镜像引用；仅 processType=docker 时使用（FR-078，ADR-019）。
-	Image            string             `json:"image"`
+	Image string `json:"image"`
 	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额（FR-079，ADR-019）；仅 processType=docker 使用，0=不限制。
-	CPULimit         float64            `json:"cpuLimit"`
-	MemLimitMB       int64              `json:"memLimitMb"`
-	DiskLimitMB      int64              `json:"diskLimitMb"`
-	AutoStart        bool               `json:"autoStart"`
-	AutoRestart      bool               `json:"autoRestart"`
-	GroupID          uint               `json:"groupId"`
-	ServerPort       int                `json:"serverPort"`
-	QueryPort        int                `json:"queryPort"`
-	ProbePort        int                `json:"probePort"`
+	CPULimit    float64 `json:"cpuLimit"`
+	MemLimitMB  int64   `json:"memLimitMb"`
+	DiskLimitMB int64   `json:"diskLimitMb"`
+	AutoStart   bool    `json:"autoStart"`
+	AutoRestart bool    `json:"autoRestart"`
+	GroupID     uint    `json:"groupId"`
+	ServerPort  int     `json:"serverPort"`
+	QueryPort   int     `json:"queryPort"`
+	ProbePort   int     `json:"probePort"`
 }
 
 // Create 创建实例。
@@ -133,6 +135,11 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 			return nil, derr
 		}
 		req.StartCommand = derived
+	}
+
+	// 非 docker 实例必须有启动命令；docker 实例可空——交镜像 entrypoint 自管启动（FR-078，ADR-019）。
+	if strings.TrimSpace(req.StartCommand) == "" && req.ProcessType != model.ProcessTypeDocker {
+		return nil, ErrStartCommandRequired
 	}
 
 	// 工作目录系统分配（ADR-007/ADR-010）：MC 实例始终系统分配（忽略用户手填）；

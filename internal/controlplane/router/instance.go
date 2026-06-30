@@ -121,21 +121,21 @@ type createInstanceRequest struct {
 	Type             model.InstanceType `json:"type" binding:"required"`
 	Role             model.InstanceRole `json:"role"`
 	ProcessType      model.ProcessType  `json:"processType" binding:"required"`
-	StartCommand     string             `json:"startCommand" binding:"required"`
+	StartCommand     string             `json:"startCommand"`
 	JDKID            uint               `json:"jdkId"`
 	JavaMajorVersion int                `json:"javaMajorVersion"`
 	LaunchSpec       string             `json:"launchSpec"`
 	WorkDir          string             `json:"workDir"`
 	EnvVars          map[string]string  `json:"envVars"`
 	// Image 是 docker 模式的容器镜像引用；仅 processType=docker 时使用（FR-078，ADR-019）。
-	Image            string             `json:"image"`
+	Image string `json:"image"`
 	// CPULimit/MemLimitMB/DiskLimitMB 是 docker 模式资源限额（FR-079，ADR-019）；仅 docker 模式使用，0=不限制。
-	CPULimit         float64            `json:"cpuLimit"`
-	MemLimitMB       int64              `json:"memLimitMb"`
-	DiskLimitMB      int64              `json:"diskLimitMb"`
-	AutoStart        bool               `json:"autoStart"`
-	AutoRestart      bool               `json:"autoRestart"`
-	GroupID          uint               `json:"groupId"`
+	CPULimit    float64 `json:"cpuLimit"`
+	MemLimitMB  int64   `json:"memLimitMb"`
+	DiskLimitMB int64   `json:"diskLimitMb"`
+	AutoStart   bool    `json:"autoStart"`
+	AutoRestart bool    `json:"autoRestart"`
+	GroupID     uint    `json:"groupId"`
 }
 
 // Create 创建实例。
@@ -193,6 +193,11 @@ func (h *InstanceHandler) Create(c *gin.Context) {
 		// 调度拦截（FR-048）：目标节点维护中拒绝接纳新实例。
 		if errors.Is(err, service.ErrNodeInMaintenance) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "NODE_MAINTENANCE", "message": err.Error()})
+			return
+		}
+		// 非 docker 实例缺启动命令（FR-078）：docker 可空、其它必填。
+		if errors.Is(err, service.ErrStartCommandRequired) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "START_COMMAND_REQUIRED", "message": err.Error()})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "创建实例失败"})
