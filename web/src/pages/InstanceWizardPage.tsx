@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { ArrowLeft, Boxes, ChevronLeft, ChevronRight, Check, Plus, X } from 'lucide-react'
 import api from '@/api/client'
 import { useNodes } from '@/api/nodes'
+import { useNodeDockerCheck } from '@/api/docker'
 import { buildNodeOptions } from './instance-wizard-options'
 import { useGroups } from '@/api/groups'
 import { useTemplates } from '@/api/templates'
@@ -71,6 +72,9 @@ export default function InstanceWizardPage() {
   const { data: jdks } = useNodeJDKs(nodeId ? Number(nodeId) : 0)
 
   const isDocker = processType === 'docker'
+  // Docker 可用性检测（FR-237）：选 docker 且已选节点时探目标节点，不可用则阻止提交并提示。
+  const dockerCheck = useNodeDockerCheck(nodeId ? Number(nodeId) : 0, isDocker)
+  const dockerBlocked = isDocker && dockerCheck.data != null && !dockerCheck.data.available
 
   const nodeOptions: ComboboxOption[] = buildNodeOptions(nodes, {
     online: t('nodes.online'),
@@ -117,7 +121,7 @@ export default function InstanceWizardPage() {
   const stepValid = (k: StepKey): boolean => {
     if (k === 'basic') return !errors.name && !errors.nodeId
     if (k === 'launch') return !errors.startCommand
-    if (k === 'advanced') return !errors.image && !errors.cpuLimit && !errors.memLimitMb
+    if (k === 'advanced') return !errors.image && !errors.cpuLimit && !errors.memLimitMb && !dockerBlocked
     return true
   }
 
@@ -270,6 +274,21 @@ export default function InstanceWizardPage() {
 
         {step === 'advanced' && (
           <div className="space-y-3">
+            {/* Docker 可用性检测（FR-237）：探目标节点 Docker，不可用提示并阻止提交 */}
+            {dockerCheck.isFetching && (
+              <p className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">{t('instances.dockerChecking')}</p>
+            )}
+            {!dockerCheck.isFetching && dockerCheck.data?.available && (
+              <p className="rounded-md border border-status-success/40 bg-status-success/5 px-3 py-2 text-xs text-status-success">
+                {t('instances.dockerAvailable', { version: dockerCheck.data.version })}
+              </p>
+            )}
+            {dockerBlocked && (
+              <p className="rounded-md border border-status-danger/40 bg-status-danger/5 px-3 py-2 text-xs text-status-danger">
+                {t('instances.dockerUnavailable')}
+                {dockerCheck.data?.error ? `：${dockerCheck.data.error}` : ''}
+              </p>
+            )}
             {/* 一键 Minecraft 傻瓜建服（FR-236）：itzg 镜像 + EULA=TRUE + 空命令 */}
             <div className="flex items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 p-3">
               <div className="min-w-0">
