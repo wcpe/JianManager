@@ -30,8 +30,10 @@ var (
 
 // validTransitions 合法的状态转换。
 var validTransitions = map[model.InstanceStatus][]model.InstanceStatus{
-	model.InstanceStatusStopped:  {model.InstanceStatusStarting},
-	model.InstanceStatusStarting: {model.InstanceStatusRunning, model.InstanceStatusCrashed},
+	model.InstanceStatusStopped: {model.InstanceStatusStarting},
+	// STARTING 允许直接 STOPPING：用户常需中止「卡在启动中」的实例（docker 拉镜像/MC 建世界慢启动尤甚）。
+	// 缺此转换时「停止」被状态机拦下、不下发 Worker，容器继续跑、终端不停（修 #5）。
+	model.InstanceStatusStarting: {model.InstanceStatusRunning, model.InstanceStatusStopping, model.InstanceStatusCrashed},
 	model.InstanceStatusRunning:  {model.InstanceStatusStopping, model.InstanceStatusCrashed},
 	model.InstanceStatusStopping: {model.InstanceStatusStopped, model.InstanceStatusCrashed},
 	model.InstanceStatusCrashed:  {model.InstanceStatusStarting},
@@ -839,10 +841,16 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 	}
 
 	// 操作成功，更新状态
+	if action == "start" {
+		// 仅当仍处 STARTING 时才置 RUNNING：启动委托回来前用户可能已点停止（STARTING→STOPPING），
+		// 此时迟到的 start 成功不得把已在停止中的实例「复活」成 RUNNING（修 #5 启动中停止竞态）。
+		s.updateStatusFromTo(instance.ID, model.InstanceStatusStarting, model.InstanceStatusRunning)
+		slog.Info("Worker 操作成功", "action", action, "instanceId", instance.UUID)
+		return
+	}
+
 	var targetStatus model.InstanceStatus
 	switch action {
-	case "start":
-		targetStatus = model.InstanceStatusRunning
 	case "stop", "kill":
 		targetStatus = model.InstanceStatusStopped
 	case "restart":
@@ -856,6 +864,15 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 func (s *InstanceService) updateStatusAsync(id uint, status model.InstanceStatus) {
 	if err := s.UpdateStatus(id, status); err != nil {
 		slog.Error("更新实例状态失败", "instanceId", id, "status", status, "error", err)
+	}
+}
+
+// updateStatusFromTo 仅当实例当前状态为 from 时才置为 to（条件更新，单条 SQL 原子）。
+// 用于异步委托回写时避免覆盖期间发生的并发状态变更（如启动成功覆盖已发起的停止）。
+func (s *InstanceService) updateStatusFromTo(id uint, from, to model.InstanceStatus) {
+	if err := s.db.Model(&model.Instance{}).Where("id = ? AND status = ?", id, from).
+		Update("status", to).Error; err != nil {
+		slog.Error("条件更新实例状态失败", "instanceId", id, "from", from, "to", to, "error", err)
 	}
 }
 
