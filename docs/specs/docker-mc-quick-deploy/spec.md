@@ -44,8 +44,9 @@ Docker **容器引擎链路本身是通的**——`dockerStrategy` 真机集成�
 - [ ] 后端：docker 实例可空 `startCommand` 创建成功；非 docker 仍校验必填（单测）。
 - [ ] 一键 Minecraft：向导 `processType=docker`+MC 点预设 → image=itzg、envVars 含 `EULA=TRUE`、空命令、端口映射就绪（前端单测/组件测）。
 - [ ] FR-237：`POST /nodes/:id/docker-check` 有 docker 返 available+version、无返 available=false+error、离线 503（后端单测）；向导 docker 不可用禁用+提示（组件测）。
-- [x] **真机根因证**：`docker run itzg/minecraft-server` 无 EULA → EULA 错误退出（2026-06-30）。
-- [ ] **真机验**：本机 Docker 节点经向导「一键 Minecraft」建 docker MC 实例 → 容器启动、itzg 接受 EULA 跑起服务端（日志 `Done`）、实例转 RUNNING；非 docker 节点 docker 选项禁用提示。
+- [x] **真机根因证**：`docker run itzg/minecraft-server` 无 EULA → EULA 错误退出；带 `-e EULA=TRUE` → 越过 EULA、`Downloading server`（2026-06-30）。
+- [x] **真机验（FR-078/236）**：本机 Docker 节点经向导「一键 Minecraft」建 docker MC 实例（**空启动命令被接受**）→ 启动 → `docker ps` 见 `jianmanager-<uuid>` 容器 RUNNING（Up，25565/tcp）、itzg **越过 EULA** 下载启动服务端（`Resolved version … Downloading … server`）、UI 实例转 RUNNING（2026-06-30）。
+- [ ] **真机验（FR-237）**：非 docker 节点 docker 选项禁用提示（待 FR-237 检测实现）。
 
 ## 4. 关联
 
