@@ -49,6 +49,30 @@ func (s *DockerImageService) workerClient(nodeID uint) (*cpgrpc.Client, error) {
 	return client, nil
 }
 
+// DockerCheckResult 是节点 Docker 可用性检测结果（FR-237）。
+type DockerCheckResult struct {
+	Available bool   `json:"available"`
+	Version   string `json:"version,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// CheckDocker 探测目标节点本机 Docker 守护进程可用性（FR-237）。
+// 节点不存在/离线返回相应错误（router 映射）；Docker 不可用不作错误，返回 available=false + 原因。
+func (s *DockerImageService) CheckDocker(nodeID uint) (*DockerCheckResult, error) {
+	client, err := s.workerClient(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.CheckDocker(ctx, &workerpb.CheckDockerRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("Worker CheckDocker RPC 失败: %w", err)
+	}
+	return &DockerCheckResult{Available: resp.Available, Version: resp.Version, Error: resp.Error}, nil
+}
+
 // List 列出目标节点本机 Docker 镜像。
 // Docker 不可用时返回 ErrDockerUnavailable（由 router 映射为可读提示）。
 func (s *DockerImageService) List(nodeID uint) ([]DockerImageInfo, error) {

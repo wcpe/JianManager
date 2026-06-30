@@ -87,6 +87,24 @@ func (h *DockerImageHandler) Remove(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
 }
 
+// Check POST /nodes/:id/docker/check —— 探测节点 Docker 守护进程可用性（FR-237）。
+// Docker 不可用不作错误：返回 200 + {available:false, error}，供向导选 docker 前先测、禁用提示。
+func (h *DockerImageHandler) Check(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	nodeID, err := parseUintParam(c, "id")
+	if err != nil {
+		return
+	}
+	result, err := h.svc.CheckDocker(nodeID)
+	if err != nil {
+		h.writeErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 // writeErr 把 service 错误映射为合适的 HTTP 状态码。
 func (h *DockerImageHandler) writeErr(c *gin.Context, err error) {
 	switch {
@@ -105,4 +123,6 @@ func (h *DockerImageHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	images.GET("", h.List)
 	images.POST("/pull", h.Pull)
 	images.POST("/remove", h.Remove)
+	// Docker 可用性检测（FR-237）：同 handler，路由在 images 组外（/nodes/:id/docker/check）。
+	rg.POST("/nodes/:id/docker/check", h.Check)
 }
