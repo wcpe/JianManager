@@ -119,6 +119,14 @@ func TestDockerRealMachine_ImageManagement(t *testing.T) {
 	require.True(t, found, "拉取后镜像列表应含 %s", realImage)
 }
 
+// TestDockerRealMachine_CheckAvailable 真机验 CheckDockerAvailable（FR-237）：本机 Docker 可用应返回版本。
+func TestDockerRealMachine_CheckAvailable(t *testing.T) {
+	version, err := CheckDockerAvailable(context.Background())
+	require.NoError(t, err, "本机 Docker 可用，CheckDockerAvailable 应成功")
+	require.NotEmpty(t, version, "应返回 Docker Engine 版本")
+	t.Logf("Docker Engine 版本: %s", version)
+}
+
 func requirePortPublished(t *testing.T, d *dockerStrategy, containerPort, hostPort string) {
 	t.Helper()
 	info, err := d.cli.ContainerInspect(context.Background(), d.containerID)

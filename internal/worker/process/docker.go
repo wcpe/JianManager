@@ -75,6 +75,21 @@ func dockerClientFromEnv() (client.APIClient, error) {
 	return cli, nil
 }
 
+// CheckDockerAvailable 探测本机 Docker 守护进程可用性（FR-237）：连客户端 + ServerVersion。
+// 返回 Engine 版本；守护进程未装 / 未起 / 不可达时返回 error。供创建向导选 docker 模式前先测。
+func CheckDockerAvailable(ctx context.Context) (string, error) {
+	cli, err := dockerClientFromEnv()
+	if err != nil {
+		return "", err
+	}
+	defer cli.Close()
+	v, err := cli.ServerVersion(ctx)
+	if err != nil {
+		return "", fmt.Errorf("连接本机 Docker 守护进程失败: %w", err)
+	}
+	return v.Version, nil
+}
+
 // ensureClient 惰性创建并缓存 Docker 客户端。
 func (d *dockerStrategy) ensureClient() error {
 	if d.cli != nil {

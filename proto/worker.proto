@@ -159,6 +159,9 @@ service WorkerService {
 
   // GetVersion 返回 Worker 当前版本与平台信息，供 CP 自更新检查比对。
   rpc GetVersion(GetVersionRequest) returns (GetVersionResponse);
+  // CheckDocker 探测本机 Docker 守护进程是否可用（FR-237）：返回可用性 + 版本 + 错误，
+  // 供创建向导选 docker 模式前先测、不可用即禁用提示（与 FR-229 连通性族同范式）。
+  rpc CheckDocker(CheckDockerRequest) returns (CheckDockerResponse);
   // UpgradeWorker 令 Worker 下载指定二进制 → sha256 校验 → 替换自身 → 计划重启。
   // daemon 模式下不杀游戏服（ADR-003 wrapper 子进程与 Worker 主进程隔离，
   // Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper）。
@@ -1089,6 +1092,15 @@ message GetVersionResponse {
   string os = 2;      // runtime.GOOS（linux/windows/darwin）
   string arch = 3;    // runtime.GOARCH（amd64/arm64）
   string backup_version = 4; // 本地升级前备份的版本（无备份为空，供 CP 透出 backupVersion，FR-182）
+}
+
+// CheckDocker 探测本机 Docker 守护进程可用性（FR-237）。
+message CheckDockerRequest {}
+
+message CheckDockerResponse {
+  bool available = 1;  // Docker 守护进程是否可达
+  string version = 2;  // Docker Engine 版本（available=true 时）
+  string error = 3;    // 不可用时的原因（available=false 时）
 }
 
 message UpgradeWorkerRequest {

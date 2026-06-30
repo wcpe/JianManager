@@ -77,6 +77,7 @@ const (
 	WorkerService_SendPluginCommand_FullMethodName    = "/worker.WorkerService/SendPluginCommand"
 	WorkerService_QueryServerState_FullMethodName     = "/worker.WorkerService/QueryServerState"
 	WorkerService_GetVersion_FullMethodName           = "/worker.WorkerService/GetVersion"
+	WorkerService_CheckDocker_FullMethodName          = "/worker.WorkerService/CheckDocker"
 	WorkerService_UpgradeWorker_FullMethodName        = "/worker.WorkerService/UpgradeWorker"
 )
 
@@ -208,6 +209,9 @@ type WorkerServiceClient interface {
 	QueryServerState(ctx context.Context, in *QueryServerStateRequest, opts ...grpc.CallOption) (*QueryServerStateResponse, error)
 	// GetVersion 返回 Worker 当前版本与平台信息，供 CP 自更新检查比对。
 	GetVersion(ctx context.Context, in *GetVersionRequest, opts ...grpc.CallOption) (*GetVersionResponse, error)
+	// CheckDocker 探测本机 Docker 守护进程是否可用（FR-237）：返回可用性 + 版本 + 错误，
+	// 供创建向导选 docker 模式前先测、不可用即禁用提示（与 FR-229 连通性族同范式）。
+	CheckDocker(ctx context.Context, in *CheckDockerRequest, opts ...grpc.CallOption) (*CheckDockerResponse, error)
 	// UpgradeWorker 令 Worker 下载指定二进制 → sha256 校验 → 替换自身 → 计划重启。
 	// daemon 模式下不杀游戏服（ADR-003 wrapper 子进程与 Worker 主进程隔离，
 	// Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper）。
@@ -842,6 +846,16 @@ func (c *workerServiceClient) GetVersion(ctx context.Context, in *GetVersionRequ
 	return out, nil
 }
 
+func (c *workerServiceClient) CheckDocker(ctx context.Context, in *CheckDockerRequest, opts ...grpc.CallOption) (*CheckDockerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CheckDockerResponse)
+	err := c.cc.Invoke(ctx, WorkerService_CheckDocker_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) UpgradeWorker(ctx context.Context, in *UpgradeWorkerRequest, opts ...grpc.CallOption) (*UpgradeWorkerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpgradeWorkerResponse)
@@ -980,6 +994,9 @@ type WorkerServiceServer interface {
 	QueryServerState(context.Context, *QueryServerStateRequest) (*QueryServerStateResponse, error)
 	// GetVersion 返回 Worker 当前版本与平台信息，供 CP 自更新检查比对。
 	GetVersion(context.Context, *GetVersionRequest) (*GetVersionResponse, error)
+	// CheckDocker 探测本机 Docker 守护进程是否可用（FR-237）：返回可用性 + 版本 + 错误，
+	// 供创建向导选 docker 模式前先测、不可用即禁用提示（与 FR-229 连通性族同范式）。
+	CheckDocker(context.Context, *CheckDockerRequest) (*CheckDockerResponse, error)
 	// UpgradeWorker 令 Worker 下载指定二进制 → sha256 校验 → 替换自身 → 计划重启。
 	// daemon 模式下不杀游戏服（ADR-003 wrapper 子进程与 Worker 主进程隔离，
 	// Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper）。
@@ -1168,6 +1185,9 @@ func (UnimplementedWorkerServiceServer) QueryServerState(context.Context, *Query
 }
 func (UnimplementedWorkerServiceServer) GetVersion(context.Context, *GetVersionRequest) (*GetVersionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetVersion not implemented")
+}
+func (UnimplementedWorkerServiceServer) CheckDocker(context.Context, *CheckDockerRequest) (*CheckDockerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CheckDocker not implemented")
 }
 func (UnimplementedWorkerServiceServer) UpgradeWorker(context.Context, *UpgradeWorkerRequest) (*UpgradeWorkerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpgradeWorker not implemented")
@@ -2198,6 +2218,24 @@ func _WorkerService_GetVersion_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_CheckDocker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckDockerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).CheckDocker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_CheckDocker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).CheckDocker(ctx, req.(*CheckDockerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_UpgradeWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UpgradeWorkerRequest)
 	if err := dec(in); err != nil {
@@ -2434,6 +2472,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetVersion",
 			Handler:    _WorkerService_GetVersion_Handler,
+		},
+		{
+			MethodName: "CheckDocker",
+			Handler:    _WorkerService_CheckDocker_Handler,
 		},
 		{
 			MethodName: "UpgradeWorker",

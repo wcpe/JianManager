@@ -8073,6 +8073,103 @@ func (x *GetVersionResponse) GetBackupVersion() string {
 	return ""
 }
 
+// CheckDocker 探测本机 Docker 守护进程可用性（FR-237）。
+type CheckDockerRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CheckDockerRequest) Reset() {
+	*x = CheckDockerRequest{}
+	mi := &file_proto_worker_proto_msgTypes[126]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckDockerRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckDockerRequest) ProtoMessage() {}
+
+func (x *CheckDockerRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[126]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckDockerRequest.ProtoReflect.Descriptor instead.
+func (*CheckDockerRequest) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{126}
+}
+
+type CheckDockerResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Available     bool                   `protobuf:"varint,1,opt,name=available,proto3" json:"available,omitempty"` // Docker 守护进程是否可达
+	Version       string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`      // Docker Engine 版本（available=true 时）
+	Error         string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`          // 不可用时的原因（available=false 时）
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CheckDockerResponse) Reset() {
+	*x = CheckDockerResponse{}
+	mi := &file_proto_worker_proto_msgTypes[127]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CheckDockerResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CheckDockerResponse) ProtoMessage() {}
+
+func (x *CheckDockerResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[127]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CheckDockerResponse.ProtoReflect.Descriptor instead.
+func (*CheckDockerResponse) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{127}
+}
+
+func (x *CheckDockerResponse) GetAvailable() bool {
+	if x != nil {
+		return x.Available
+	}
+	return false
+}
+
+func (x *CheckDockerResponse) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *CheckDockerResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 type UpgradeWorkerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	DownloadUrl   string                 `protobuf:"bytes,1,opt,name=download_url,json=downloadUrl,proto3" json:"download_url,omitempty"`        // 目标 Worker 二进制下载地址（CP 据 feed + 节点平台解析后下发）
@@ -8088,7 +8185,7 @@ type UpgradeWorkerRequest struct {
 
 func (x *UpgradeWorkerRequest) Reset() {
 	*x = UpgradeWorkerRequest{}
-	mi := &file_proto_worker_proto_msgTypes[126]
+	mi := &file_proto_worker_proto_msgTypes[128]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8100,7 +8197,7 @@ func (x *UpgradeWorkerRequest) String() string {
 func (*UpgradeWorkerRequest) ProtoMessage() {}
 
 func (x *UpgradeWorkerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[126]
+	mi := &file_proto_worker_proto_msgTypes[128]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8113,7 +8210,7 @@ func (x *UpgradeWorkerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpgradeWorkerRequest.ProtoReflect.Descriptor instead.
 func (*UpgradeWorkerRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{126}
+	return file_proto_worker_proto_rawDescGZIP(), []int{128}
 }
 
 func (x *UpgradeWorkerRequest) GetDownloadUrl() string {
@@ -8162,7 +8259,7 @@ type UpgradeWorkerResponse struct {
 
 func (x *UpgradeWorkerResponse) Reset() {
 	*x = UpgradeWorkerResponse{}
-	mi := &file_proto_worker_proto_msgTypes[127]
+	mi := &file_proto_worker_proto_msgTypes[129]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8174,7 +8271,7 @@ func (x *UpgradeWorkerResponse) String() string {
 func (*UpgradeWorkerResponse) ProtoMessage() {}
 
 func (x *UpgradeWorkerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[127]
+	mi := &file_proto_worker_proto_msgTypes[129]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8187,7 +8284,7 @@ func (x *UpgradeWorkerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpgradeWorkerResponse.ProtoReflect.Descriptor instead.
 func (*UpgradeWorkerResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{127}
+	return file_proto_worker_proto_rawDescGZIP(), []int{129}
 }
 
 func (x *UpgradeWorkerResponse) GetSuccess() bool {
@@ -8221,7 +8318,7 @@ type ListArchiveEntriesRequest struct {
 
 func (x *ListArchiveEntriesRequest) Reset() {
 	*x = ListArchiveEntriesRequest{}
-	mi := &file_proto_worker_proto_msgTypes[128]
+	mi := &file_proto_worker_proto_msgTypes[130]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8233,7 +8330,7 @@ func (x *ListArchiveEntriesRequest) String() string {
 func (*ListArchiveEntriesRequest) ProtoMessage() {}
 
 func (x *ListArchiveEntriesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[128]
+	mi := &file_proto_worker_proto_msgTypes[130]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8246,7 +8343,7 @@ func (x *ListArchiveEntriesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListArchiveEntriesRequest.ProtoReflect.Descriptor instead.
 func (*ListArchiveEntriesRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{128}
+	return file_proto_worker_proto_rawDescGZIP(), []int{130}
 }
 
 func (x *ListArchiveEntriesRequest) GetInstanceUuid() string {
@@ -8278,7 +8375,7 @@ type ArchiveEntry struct {
 
 func (x *ArchiveEntry) Reset() {
 	*x = ArchiveEntry{}
-	mi := &file_proto_worker_proto_msgTypes[129]
+	mi := &file_proto_worker_proto_msgTypes[131]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8290,7 +8387,7 @@ func (x *ArchiveEntry) String() string {
 func (*ArchiveEntry) ProtoMessage() {}
 
 func (x *ArchiveEntry) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[129]
+	mi := &file_proto_worker_proto_msgTypes[131]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8303,7 +8400,7 @@ func (x *ArchiveEntry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArchiveEntry.ProtoReflect.Descriptor instead.
 func (*ArchiveEntry) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{129}
+	return file_proto_worker_proto_rawDescGZIP(), []int{131}
 }
 
 func (x *ArchiveEntry) GetName() string {
@@ -8358,7 +8455,7 @@ type ListArchiveEntriesResponse struct {
 
 func (x *ListArchiveEntriesResponse) Reset() {
 	*x = ListArchiveEntriesResponse{}
-	mi := &file_proto_worker_proto_msgTypes[130]
+	mi := &file_proto_worker_proto_msgTypes[132]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8370,7 +8467,7 @@ func (x *ListArchiveEntriesResponse) String() string {
 func (*ListArchiveEntriesResponse) ProtoMessage() {}
 
 func (x *ListArchiveEntriesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[130]
+	mi := &file_proto_worker_proto_msgTypes[132]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8383,7 +8480,7 @@ func (x *ListArchiveEntriesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListArchiveEntriesResponse.ProtoReflect.Descriptor instead.
 func (*ListArchiveEntriesResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{130}
+	return file_proto_worker_proto_rawDescGZIP(), []int{132}
 }
 
 func (x *ListArchiveEntriesResponse) GetEntries() []*ArchiveEntry {
@@ -8411,7 +8508,7 @@ type ReadArchiveEntryRequest struct {
 
 func (x *ReadArchiveEntryRequest) Reset() {
 	*x = ReadArchiveEntryRequest{}
-	mi := &file_proto_worker_proto_msgTypes[131]
+	mi := &file_proto_worker_proto_msgTypes[133]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8423,7 +8520,7 @@ func (x *ReadArchiveEntryRequest) String() string {
 func (*ReadArchiveEntryRequest) ProtoMessage() {}
 
 func (x *ReadArchiveEntryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[131]
+	mi := &file_proto_worker_proto_msgTypes[133]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8436,7 +8533,7 @@ func (x *ReadArchiveEntryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadArchiveEntryRequest.ProtoReflect.Descriptor instead.
 func (*ReadArchiveEntryRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{131}
+	return file_proto_worker_proto_rawDescGZIP(), []int{133}
 }
 
 func (x *ReadArchiveEntryRequest) GetInstanceUuid() string {
@@ -8471,7 +8568,7 @@ type ReadArchiveEntryResponse struct {
 
 func (x *ReadArchiveEntryResponse) Reset() {
 	*x = ReadArchiveEntryResponse{}
-	mi := &file_proto_worker_proto_msgTypes[132]
+	mi := &file_proto_worker_proto_msgTypes[134]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8483,7 +8580,7 @@ func (x *ReadArchiveEntryResponse) String() string {
 func (*ReadArchiveEntryResponse) ProtoMessage() {}
 
 func (x *ReadArchiveEntryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[132]
+	mi := &file_proto_worker_proto_msgTypes[134]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8496,7 +8593,7 @@ func (x *ReadArchiveEntryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadArchiveEntryResponse.ProtoReflect.Descriptor instead.
 func (*ReadArchiveEntryResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{132}
+	return file_proto_worker_proto_rawDescGZIP(), []int{134}
 }
 
 func (x *ReadArchiveEntryResponse) GetContent() []byte {
@@ -8531,7 +8628,7 @@ type DecompileClassRequest struct {
 
 func (x *DecompileClassRequest) Reset() {
 	*x = DecompileClassRequest{}
-	mi := &file_proto_worker_proto_msgTypes[133]
+	mi := &file_proto_worker_proto_msgTypes[135]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8543,7 +8640,7 @@ func (x *DecompileClassRequest) String() string {
 func (*DecompileClassRequest) ProtoMessage() {}
 
 func (x *DecompileClassRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[133]
+	mi := &file_proto_worker_proto_msgTypes[135]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8556,7 +8653,7 @@ func (x *DecompileClassRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DecompileClassRequest.ProtoReflect.Descriptor instead.
 func (*DecompileClassRequest) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{133}
+	return file_proto_worker_proto_rawDescGZIP(), []int{135}
 }
 
 func (x *DecompileClassRequest) GetInstanceUuid() string {
@@ -8593,7 +8690,7 @@ type DecompileClassResponse struct {
 
 func (x *DecompileClassResponse) Reset() {
 	*x = DecompileClassResponse{}
-	mi := &file_proto_worker_proto_msgTypes[134]
+	mi := &file_proto_worker_proto_msgTypes[136]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -8605,7 +8702,7 @@ func (x *DecompileClassResponse) String() string {
 func (*DecompileClassResponse) ProtoMessage() {}
 
 func (x *DecompileClassResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_worker_proto_msgTypes[134]
+	mi := &file_proto_worker_proto_msgTypes[136]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -8618,7 +8715,7 @@ func (x *DecompileClassResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DecompileClassResponse.ProtoReflect.Descriptor instead.
 func (*DecompileClassResponse) Descriptor() ([]byte, []int) {
-	return file_proto_worker_proto_rawDescGZIP(), []int{134}
+	return file_proto_worker_proto_rawDescGZIP(), []int{136}
 }
 
 func (x *DecompileClassResponse) GetSuccess() bool {
@@ -9275,7 +9372,12 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\x0e\n" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12\x12\n" +
 	"\x04arch\x18\x03 \x01(\tR\x04arch\x12%\n" +
-	"\x0ebackup_version\x18\x04 \x01(\tR\rbackupVersion\"\xb7\x01\n" +
+	"\x0ebackup_version\x18\x04 \x01(\tR\rbackupVersion\"\x14\n" +
+	"\x12CheckDockerRequest\"c\n" +
+	"\x13CheckDockerResponse\x12\x1c\n" +
+	"\tavailable\x18\x01 \x01(\bR\tavailable\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\"\xb7\x01\n" +
 	"\x14UpgradeWorkerRequest\x12!\n" +
 	"\fdownload_url\x18\x01 \x01(\tR\vdownloadUrl\x12\x16\n" +
 	"\x06sha256\x18\x02 \x01(\tR\x06sha256\x12%\n" +
@@ -9318,7 +9420,7 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\ttruncated\x18\x04 \x01(\bR\ttruncated\x12\x1e\n" +
 	"\n" +
 	"decompiler\x18\x05 \x01(\tR\n" +
-	"decompiler2\xc9#\n" +
+	"decompiler2\x91$\n" +
 	"\rWorkerService\x12=\n" +
 	"\bRegister\x12\x17.worker.RegisterRequest\x1a\x18.worker.RegisterResponse\x12D\n" +
 	"\tHeartbeat\x12\x18.worker.HeartbeatRequest\x1a\x19.worker.HeartbeatResponse(\x010\x01\x12O\n" +
@@ -9384,7 +9486,8 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x11SendPluginCommand\x12 .worker.SendPluginCommandRequest\x1a!.worker.SendPluginCommandResponse\x12U\n" +
 	"\x10QueryServerState\x12\x1f.worker.QueryServerStateRequest\x1a .worker.QueryServerStateResponse\x12C\n" +
 	"\n" +
-	"GetVersion\x12\x19.worker.GetVersionRequest\x1a\x1a.worker.GetVersionResponse\x12L\n" +
+	"GetVersion\x12\x19.worker.GetVersionRequest\x1a\x1a.worker.GetVersionResponse\x12F\n" +
+	"\vCheckDocker\x12\x1a.worker.CheckDockerRequest\x1a\x1b.worker.CheckDockerResponse\x12L\n" +
 	"\rUpgradeWorker\x12\x1c.worker.UpgradeWorkerRequest\x1a\x1d.worker.UpgradeWorkerResponseB,Z*github.com/wcpe/JianManager/proto/workerpbb\x06proto3"
 
 var (
@@ -9399,7 +9502,7 @@ func file_proto_worker_proto_rawDescGZIP() []byte {
 	return file_proto_worker_proto_rawDescData
 }
 
-var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 136)
+var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 138)
 var file_proto_worker_proto_goTypes = []any{
 	(*RegisterRequest)(nil),             // 0: worker.RegisterRequest
 	(*RegisterResponse)(nil),            // 1: worker.RegisterResponse
@@ -9527,23 +9630,25 @@ var file_proto_worker_proto_goTypes = []any{
 	(*QueryServerStateResponse)(nil),    // 123: worker.QueryServerStateResponse
 	(*GetVersionRequest)(nil),           // 124: worker.GetVersionRequest
 	(*GetVersionResponse)(nil),          // 125: worker.GetVersionResponse
-	(*UpgradeWorkerRequest)(nil),        // 126: worker.UpgradeWorkerRequest
-	(*UpgradeWorkerResponse)(nil),       // 127: worker.UpgradeWorkerResponse
-	(*ListArchiveEntriesRequest)(nil),   // 128: worker.ListArchiveEntriesRequest
-	(*ArchiveEntry)(nil),                // 129: worker.ArchiveEntry
-	(*ListArchiveEntriesResponse)(nil),  // 130: worker.ListArchiveEntriesResponse
-	(*ReadArchiveEntryRequest)(nil),     // 131: worker.ReadArchiveEntryRequest
-	(*ReadArchiveEntryResponse)(nil),    // 132: worker.ReadArchiveEntryResponse
-	(*DecompileClassRequest)(nil),       // 133: worker.DecompileClassRequest
-	(*DecompileClassResponse)(nil),      // 134: worker.DecompileClassResponse
-	nil,                                 // 135: worker.CreateInstanceRequest.EnvVarsEntry
+	(*CheckDockerRequest)(nil),          // 126: worker.CheckDockerRequest
+	(*CheckDockerResponse)(nil),         // 127: worker.CheckDockerResponse
+	(*UpgradeWorkerRequest)(nil),        // 128: worker.UpgradeWorkerRequest
+	(*UpgradeWorkerResponse)(nil),       // 129: worker.UpgradeWorkerResponse
+	(*ListArchiveEntriesRequest)(nil),   // 130: worker.ListArchiveEntriesRequest
+	(*ArchiveEntry)(nil),                // 131: worker.ArchiveEntry
+	(*ListArchiveEntriesResponse)(nil),  // 132: worker.ListArchiveEntriesResponse
+	(*ReadArchiveEntryRequest)(nil),     // 133: worker.ReadArchiveEntryRequest
+	(*ReadArchiveEntryResponse)(nil),    // 134: worker.ReadArchiveEntryResponse
+	(*DecompileClassRequest)(nil),       // 135: worker.DecompileClassRequest
+	(*DecompileClassResponse)(nil),      // 136: worker.DecompileClassResponse
+	nil,                                 // 137: worker.CreateInstanceRequest.EnvVarsEntry
 }
 var file_proto_worker_proto_depIdxs = []int32{
 	4,   // 0: worker.HeartbeatRequest.instances:type_name -> worker.InstanceState
 	5,   // 1: worker.HeartbeatRequest.instance_metrics:type_name -> worker.InstanceMetricSample
 	3,   // 2: worker.HeartbeatRequest.tasks:type_name -> worker.TaskSnapshot
 	58,  // 3: worker.InstanceMetricSample.worlds:type_name -> worker.WorldMetric
-	135, // 4: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
+	137, // 4: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
 	8,   // 5: worker.CreateInstanceRequest.port_mappings:type_name -> worker.PortMapping
 	7,   // 6: worker.ResyncInstancesRequest.instances:type_name -> worker.CreateInstanceRequest
 	19,  // 7: worker.ListInstancesResponse.instances:type_name -> worker.InstanceInfo
@@ -9569,7 +9674,7 @@ var file_proto_worker_proto_depIdxs = []int32{
 	112, // 27: worker.CreateBackupResponse.manifest:type_name -> worker.BackupManifestEntry
 	111, // 28: worker.RestoreBackupRequest.storage:type_name -> worker.StorageBackendSpec
 	119, // 29: worker.SendPluginCommandRequest.command:type_name -> worker.PluginCommand
-	129, // 30: worker.ListArchiveEntriesResponse.entries:type_name -> worker.ArchiveEntry
+	131, // 30: worker.ListArchiveEntriesResponse.entries:type_name -> worker.ArchiveEntry
 	0,   // 31: worker.WorkerService.Register:input_type -> worker.RegisterRequest
 	2,   // 32: worker.WorkerService.Heartbeat:input_type -> worker.HeartbeatRequest
 	7,   // 33: worker.WorkerService.CreateInstance:input_type -> worker.CreateInstanceRequest
@@ -9590,9 +9695,9 @@ var file_proto_worker_proto_depIdxs = []int32{
 	33,  // 48: worker.WorkerService.RenameFile:input_type -> worker.RenameFileRequest
 	35,  // 49: worker.WorkerService.DownloadArchive:input_type -> worker.DownloadArchiveRequest
 	37,  // 50: worker.WorkerService.SearchFiles:input_type -> worker.SearchFilesRequest
-	128, // 51: worker.WorkerService.ListArchiveEntries:input_type -> worker.ListArchiveEntriesRequest
-	131, // 52: worker.WorkerService.ReadArchiveEntry:input_type -> worker.ReadArchiveEntryRequest
-	133, // 53: worker.WorkerService.DecompileClass:input_type -> worker.DecompileClassRequest
+	130, // 51: worker.WorkerService.ListArchiveEntries:input_type -> worker.ListArchiveEntriesRequest
+	133, // 52: worker.WorkerService.ReadArchiveEntry:input_type -> worker.ReadArchiveEntryRequest
+	135, // 53: worker.WorkerService.DecompileClass:input_type -> worker.DecompileClassRequest
 	40,  // 54: worker.WorkerService.ListConfigFiles:input_type -> worker.ListConfigFilesRequest
 	46,  // 55: worker.WorkerService.ReadConfig:input_type -> worker.ReadConfigRequest
 	48,  // 56: worker.WorkerService.WriteConfig:input_type -> worker.WriteConfigRequest
@@ -9628,68 +9733,70 @@ var file_proto_worker_proto_depIdxs = []int32{
 	120, // 86: worker.WorkerService.SendPluginCommand:input_type -> worker.SendPluginCommandRequest
 	122, // 87: worker.WorkerService.QueryServerState:input_type -> worker.QueryServerStateRequest
 	124, // 88: worker.WorkerService.GetVersion:input_type -> worker.GetVersionRequest
-	126, // 89: worker.WorkerService.UpgradeWorker:input_type -> worker.UpgradeWorkerRequest
-	1,   // 90: worker.WorkerService.Register:output_type -> worker.RegisterResponse
-	6,   // 91: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
-	9,   // 92: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
-	11,  // 93: worker.WorkerService.ResyncInstances:output_type -> worker.ResyncInstancesResponse
-	13,  // 94: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
-	13,  // 95: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
-	13,  // 96: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
-	13,  // 97: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
-	15,  // 98: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
-	16,  // 99: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
-	18,  // 100: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
-	21,  // 101: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
-	23,  // 102: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
-	25,  // 103: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
-	28,  // 104: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
-	30,  // 105: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
-	32,  // 106: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
-	34,  // 107: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
-	36,  // 108: worker.WorkerService.DownloadArchive:output_type -> worker.DownloadArchiveChunk
-	39,  // 109: worker.WorkerService.SearchFiles:output_type -> worker.SearchFilesResponse
-	130, // 110: worker.WorkerService.ListArchiveEntries:output_type -> worker.ListArchiveEntriesResponse
-	132, // 111: worker.WorkerService.ReadArchiveEntry:output_type -> worker.ReadArchiveEntryResponse
-	134, // 112: worker.WorkerService.DecompileClass:output_type -> worker.DecompileClassResponse
-	42,  // 113: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
-	47,  // 114: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
-	49,  // 115: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
-	51,  // 116: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
-	55,  // 117: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
-	57,  // 118: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
-	76,  // 119: worker.WorkerService.ListJDKs:output_type -> worker.ListJDKsResponse
-	81,  // 120: worker.WorkerService.InstallJDK:output_type -> worker.InstallJDKResponse
-	83,  // 121: worker.WorkerService.RemoveJDK:output_type -> worker.RemoveJDKResponse
-	80,  // 122: worker.WorkerService.JDKCatalog:output_type -> worker.JDKCatalogResponse
-	99,  // 123: worker.WorkerService.ProbeJDK:output_type -> worker.ProbeJDKResponse
-	85,  // 124: worker.WorkerService.DownloadCore:output_type -> worker.DownloadCoreResponse
-	88,  // 125: worker.WorkerService.ListArtifactCache:output_type -> worker.ListArtifactCacheResponse
-	90,  // 126: worker.WorkerService.EvictArtifactCache:output_type -> worker.EvictArtifactCacheResponse
-	92,  // 127: worker.WorkerService.ClearArtifactCache:output_type -> worker.ClearArtifactCacheResponse
-	94,  // 128: worker.WorkerService.SetArtifactCacheCap:output_type -> worker.SetArtifactCacheCapResponse
-	97,  // 129: worker.WorkerService.BrowseDir:output_type -> worker.BrowseDirResponse
-	101, // 130: worker.WorkerService.DeployServerProbe:output_type -> worker.DeployServerProbeResponse
-	103, // 131: worker.WorkerService.CloneWorkDir:output_type -> worker.CloneWorkDirResponse
-	106, // 132: worker.WorkerService.ListImages:output_type -> worker.ListImagesResponse
-	108, // 133: worker.WorkerService.PullImage:output_type -> worker.PullImageResponse
-	110, // 134: worker.WorkerService.RemoveImage:output_type -> worker.RemoveImageResponse
-	114, // 135: worker.WorkerService.CreateBackup:output_type -> worker.CreateBackupResponse
-	116, // 136: worker.WorkerService.RestoreBackup:output_type -> worker.RestoreBackupResponse
-	60,  // 137: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
-	62,  // 138: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
-	64,  // 139: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
-	67,  // 140: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
-	69,  // 141: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
-	71,  // 142: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
-	73,  // 143: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
-	118, // 144: worker.WorkerService.StreamPluginEvents:output_type -> worker.PluginEvent
-	121, // 145: worker.WorkerService.SendPluginCommand:output_type -> worker.SendPluginCommandResponse
-	123, // 146: worker.WorkerService.QueryServerState:output_type -> worker.QueryServerStateResponse
-	125, // 147: worker.WorkerService.GetVersion:output_type -> worker.GetVersionResponse
-	127, // 148: worker.WorkerService.UpgradeWorker:output_type -> worker.UpgradeWorkerResponse
-	90,  // [90:149] is the sub-list for method output_type
-	31,  // [31:90] is the sub-list for method input_type
+	126, // 89: worker.WorkerService.CheckDocker:input_type -> worker.CheckDockerRequest
+	128, // 90: worker.WorkerService.UpgradeWorker:input_type -> worker.UpgradeWorkerRequest
+	1,   // 91: worker.WorkerService.Register:output_type -> worker.RegisterResponse
+	6,   // 92: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
+	9,   // 93: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
+	11,  // 94: worker.WorkerService.ResyncInstances:output_type -> worker.ResyncInstancesResponse
+	13,  // 95: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
+	13,  // 96: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
+	13,  // 97: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
+	13,  // 98: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
+	15,  // 99: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
+	16,  // 100: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
+	18,  // 101: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
+	21,  // 102: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
+	23,  // 103: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
+	25,  // 104: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
+	28,  // 105: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
+	30,  // 106: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
+	32,  // 107: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
+	34,  // 108: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
+	36,  // 109: worker.WorkerService.DownloadArchive:output_type -> worker.DownloadArchiveChunk
+	39,  // 110: worker.WorkerService.SearchFiles:output_type -> worker.SearchFilesResponse
+	132, // 111: worker.WorkerService.ListArchiveEntries:output_type -> worker.ListArchiveEntriesResponse
+	134, // 112: worker.WorkerService.ReadArchiveEntry:output_type -> worker.ReadArchiveEntryResponse
+	136, // 113: worker.WorkerService.DecompileClass:output_type -> worker.DecompileClassResponse
+	42,  // 114: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
+	47,  // 115: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
+	49,  // 116: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
+	51,  // 117: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
+	55,  // 118: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
+	57,  // 119: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
+	76,  // 120: worker.WorkerService.ListJDKs:output_type -> worker.ListJDKsResponse
+	81,  // 121: worker.WorkerService.InstallJDK:output_type -> worker.InstallJDKResponse
+	83,  // 122: worker.WorkerService.RemoveJDK:output_type -> worker.RemoveJDKResponse
+	80,  // 123: worker.WorkerService.JDKCatalog:output_type -> worker.JDKCatalogResponse
+	99,  // 124: worker.WorkerService.ProbeJDK:output_type -> worker.ProbeJDKResponse
+	85,  // 125: worker.WorkerService.DownloadCore:output_type -> worker.DownloadCoreResponse
+	88,  // 126: worker.WorkerService.ListArtifactCache:output_type -> worker.ListArtifactCacheResponse
+	90,  // 127: worker.WorkerService.EvictArtifactCache:output_type -> worker.EvictArtifactCacheResponse
+	92,  // 128: worker.WorkerService.ClearArtifactCache:output_type -> worker.ClearArtifactCacheResponse
+	94,  // 129: worker.WorkerService.SetArtifactCacheCap:output_type -> worker.SetArtifactCacheCapResponse
+	97,  // 130: worker.WorkerService.BrowseDir:output_type -> worker.BrowseDirResponse
+	101, // 131: worker.WorkerService.DeployServerProbe:output_type -> worker.DeployServerProbeResponse
+	103, // 132: worker.WorkerService.CloneWorkDir:output_type -> worker.CloneWorkDirResponse
+	106, // 133: worker.WorkerService.ListImages:output_type -> worker.ListImagesResponse
+	108, // 134: worker.WorkerService.PullImage:output_type -> worker.PullImageResponse
+	110, // 135: worker.WorkerService.RemoveImage:output_type -> worker.RemoveImageResponse
+	114, // 136: worker.WorkerService.CreateBackup:output_type -> worker.CreateBackupResponse
+	116, // 137: worker.WorkerService.RestoreBackup:output_type -> worker.RestoreBackupResponse
+	60,  // 138: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
+	62,  // 139: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
+	64,  // 140: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
+	67,  // 141: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
+	69,  // 142: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
+	71,  // 143: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
+	73,  // 144: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
+	118, // 145: worker.WorkerService.StreamPluginEvents:output_type -> worker.PluginEvent
+	121, // 146: worker.WorkerService.SendPluginCommand:output_type -> worker.SendPluginCommandResponse
+	123, // 147: worker.WorkerService.QueryServerState:output_type -> worker.QueryServerStateResponse
+	125, // 148: worker.WorkerService.GetVersion:output_type -> worker.GetVersionResponse
+	127, // 149: worker.WorkerService.CheckDocker:output_type -> worker.CheckDockerResponse
+	129, // 150: worker.WorkerService.UpgradeWorker:output_type -> worker.UpgradeWorkerResponse
+	91,  // [91:151] is the sub-list for method output_type
+	31,  // [31:91] is the sub-list for method input_type
 	31,  // [31:31] is the sub-list for extension type_name
 	31,  // [31:31] is the sub-list for extension extendee
 	0,   // [0:31] is the sub-list for field type_name
@@ -9706,7 +9813,7 @@ func file_proto_worker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_worker_proto_rawDesc), len(file_proto_worker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   136,
+			NumMessages:   138,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
