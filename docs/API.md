@@ -737,6 +737,13 @@
 - **请求**: `{ "image": "itzg/minecraft-server:latest", "force": false }`
 - **响应**: `{ "message": "已删除" }`；**错误**: `503 NODE_OFFLINE`、`502 DOCKER_OP_FAILED`
 
+### POST /api/v1/nodes/:id/docker/check
+- **描述**: 探测节点本机 Docker 守护进程可用性（CP 经 gRPC 委托 Worker `CheckDocker`，FR-237）；供创建向导选 docker 模式前先测、不可用即禁用提交
+- **关联 FR**: FR-237
+- **权限**: 平台管理员
+- **响应**: `{ "available": true, "version": "29.4.1" }` 或 `{ "available": false, "error": "连接本机 Docker 守护进程失败: …" }`（Docker 不可用不作错误，返 200）
+- **错误**: `503 NODE_OFFLINE`（节点未连接）
+
 ### GET / POST /api/v1/networks，GET / PATCH / DELETE …/:id
 - **描述**: 群组（Network 非独占软标签）CRUD；删除群组不影响成员实例与代理注册
 - **请求(POST)**: `{ "name":"survival","description":"" }`；**错误**: `409 NETWORK_NAME_CONFLICT`、`404 NETWORK_NOT_FOUND`
