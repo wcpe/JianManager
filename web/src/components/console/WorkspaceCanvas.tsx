@@ -113,6 +113,7 @@ export default function WorkspaceCanvas({ instanceId }: WorkspaceCanvasProps) {
         instanceId={instanceId}
         instanceName={instanceName}
         status={instance?.status ?? ''}
+        statusReason={instance?.statusReason ?? ''}
         role={instance?.role ?? ''}
         type={instance?.type ?? ''}
         nodeName={nodeName}

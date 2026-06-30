@@ -100,6 +100,12 @@ export function InstanceWorktableCard({
               className="bg-transparent px-0 py-0"
             />
           </div>
+          {/* 崩溃原因（FR-#2）：异步委托失败的具体错误，不再只见「崩溃」无因。 */}
+          {inst.status === 'CRASHED' && inst.statusReason && (
+            <p className="mt-0.5 line-clamp-2 text-[11px] text-status-danger" title={inst.statusReason}>
+              {inst.statusReason}
+            </p>
+          )}
         </div>
         {roleBadge}
         {/* 次要操作菜单（⋯）不冒泡到卡片，避免点菜单误开工作区（FIX-9）。 */}

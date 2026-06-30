@@ -12,6 +12,8 @@ export interface InstanceInfo {
   role: string
   processType: string
   status: string
+  /** 当前状态原因，主要用于 CRASHED：异步委托失败的具体错误（如「实例未绑定 JDK…」），供前端显示。 */
+  statusReason?: string
   startCommand: string
   workDir: string
   /** docker 模式的容器镜像引用（FR-078，ADR-019）；非 docker 模式为空。 */

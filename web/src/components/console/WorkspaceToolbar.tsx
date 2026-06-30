@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { LayoutGrid, Play, Plus, RotateCw, Save, Square, Trash2, X, Zap } from 'lucide-react'
+import { LayoutGrid, Loader2, Play, Plus, RotateCw, Save, Square, Trash2, X, Zap } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -37,6 +37,8 @@ interface WorkspaceToolbarProps {
   instanceId: number
   instanceName: string
   status: string
+  /** 当前状态原因，CRASHED 时为崩溃具体错误（如「实例未绑定 JDK…」），供控制台显示。 */
+  statusReason: string
   /** 群组服角色（FR-032）：proxy / backend / universal，用于身份图标与角色徽标。 */
   role: string
   /** 实例类型（如 PaperMC / Velocity），元信息行展示。 */
@@ -73,6 +75,7 @@ function builtinPresetName(id: string, t: (k: string) => string): string {
 export default function WorkspaceToolbar({
   instanceName,
   status,
+  statusReason,
   role,
   type,
   nodeName,
@@ -141,6 +144,12 @@ export default function WorkspaceToolbar({
           >
             {metaLine(type, nodeName, serverPort)}
           </p>
+          {/* 崩溃原因（FR-#2）：启动/操作失败的具体错误，不再只见「崩溃」无因。 */}
+          {status === 'CRASHED' && statusReason && (
+            <p className="mt-0.5 line-clamp-1 text-[11px] text-status-danger" title={statusReason}>
+              {statusReason}
+            </p>
+          )}
         </div>
       </div>
 
@@ -155,6 +164,19 @@ export default function WorkspaceToolbar({
             <Button size="sm" variant="outline" disabled={restartPending} onClick={onRestart}>
               <RotateCw className="size-3.5 text-status-info" />
               {t('instances.restart')}
+            </Button>
+            <Button size="sm" variant="outline" disabled={killPending} onClick={onKill}>
+              <Zap className="size-3.5 text-status-danger" />
+              {t('instances.kill')}
+            </Button>
+          </>
+        ) : isTransitioning(status) ? (
+          // 过渡态（启动中/停止中）：启动键禁用+转圈，防连点（BUG-#3）；并保留「强制终止」逃生——
+          // 卡在启动中也能强停（BUG-#4/#5，强停经 CP 绕过状态机直置 STOPPED + Worker 杀进程/容器）。
+          <>
+            <Button size="sm" disabled>
+              <Loader2 className="size-3.5 animate-spin" />
+              {statusLabel}
             </Button>
             <Button size="sm" variant="outline" disabled={killPending} onClick={onKill}>
               <Zap className="size-3.5 text-status-danger" />
