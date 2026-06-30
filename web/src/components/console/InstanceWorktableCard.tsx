@@ -65,10 +65,14 @@ export function InstanceWorktableCard({
 
   const statusLabel = t(`instances.${inst.status.toLowerCase()}`, inst.status)
   const cpuPct = running ? (metrics?.cpuPercent ?? 0) : 0
-  const memPct =
-    running && metrics && metrics.heapMaxMb > 0
-      ? Math.min(100, (metrics.memoryMb / metrics.heapMaxMb) * 100)
-      : 0
+  // 内存条分母：优先 JVM 堆上限（探针），其次容器内存上限（docker，经 heapMaxMb 承载），
+  // 再次实例配置限额；均无则为 0（仅以绝对值标签呈现，不画占比）。
+  const memMax = running && metrics ? (metrics.heapMaxMb > 0 ? metrics.heapMaxMb : (inst.memLimitMb ?? 0)) : 0
+  const memMb = running && metrics ? metrics.memoryMb : 0
+  const memPct = memMax > 0 ? Math.min(100, (memMb / memMax) * 100) : 0
+  // 标签用绝对值（docker/无探针实例 heapMaxMb 为 0 时，百分比恒 0 看不出占用，故统一显绝对内存）。
+  const cpuLabel = running ? `${cpuPct.toFixed(cpuPct > 0 && cpuPct < 10 ? 1 : 0)}%` : '--'
+  const memLabel = running && memMb > 0 ? fmtMem(memMb) : '--'
 
   return (
     <div
@@ -120,8 +124,8 @@ export function InstanceWorktableCard({
 
       {/* 内嵌资源条：CPU / 内存（仅运行态有值，否则空轨） */}
       <div className="mt-3 space-y-1.5">
-        <ResourceLine icon={<Cpu className="size-3" />} label={t('nodes.cpu')} pct={cpuPct} active={running} />
-        <ResourceLine icon={<MemoryStick className="size-3" />} label={t('nodes.memory')} pct={memPct} active={running} />
+        <ResourceLine icon={<Cpu className="size-3" />} label={t('nodes.cpu')} pct={cpuPct} active={running} valueLabel={cpuLabel} />
+        <ResourceLine icon={<MemoryStick className="size-3" />} label={t('nodes.memory')} pct={memPct} active={running} valueLabel={memLabel} />
       </div>
 
       {/* 玩家 / TPS + 启停按钮 */}
@@ -184,17 +188,20 @@ export function InstanceWorktableCard({
   )
 }
 
-/** 卡内单条资源行：图标 + 标签 + MiniBar（停机时空轨 + 「--」）。 */
+/** 卡内单条资源行：图标 + 标签 + MiniBar（停机时空轨 + 「--」）。
+ * valueLabel 覆盖右侧数值文案（如内存显绝对值、CPU 小数）；缺省回退百分比。 */
 function ResourceLine({
   icon,
   label,
   pct,
   active,
+  valueLabel,
 }: {
   icon: React.ReactNode
   label: string
   pct: number
   active: boolean
+  valueLabel?: string
 }) {
   return (
     <div className="flex items-center gap-2">
@@ -203,9 +210,15 @@ function ResourceLine({
         {label}
       </span>
       <MiniBar value={active ? pct : 0} className="flex-1" />
-      <span className="w-9 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
-        {active ? `${pct.toFixed(0)}%` : '--'}
+      <span className="w-12 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
+        {active ? (valueLabel ?? `${pct.toFixed(0)}%`) : '--'}
       </span>
     </div>
   )
+}
+
+/** 内存 MiB → 人类可读（≥1024 显 GB 一位小数，否则整 MB）。 */
+function fmtMem(mb: number): string {
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)}G`
+  return `${Math.round(mb)}M`
 }
