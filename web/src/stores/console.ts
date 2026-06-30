@@ -54,6 +54,8 @@ interface ConsoleState {
   collapsedGroups: Record<string, boolean>
   /** 侧栏是否折叠为仅图标轨（FR-131，持久）。 */
   sidebarCollapsed: boolean
+  /** 全局命令面板是否打开（FR-241 Ctrl+K，不持久）。 */
+  commandPaletteOpen: boolean
   setSelectedNodeId: (nodeId: number | null) => void
   openInstance: (instanceId: number) => void
   closeInstance: () => void
@@ -61,6 +63,8 @@ interface ConsoleState {
   toggleGroup: (key: string) => void
   /** 切换侧栏折叠态（仅图标轨 ⇄ 展开，FR-131）。 */
   toggleSidebar: () => void
+  /** 打开/关闭全局命令面板（FR-241）。 */
+  setCommandPaletteOpen: (open: boolean) => void
 }
 
 export const useConsoleStore = create<ConsoleState>((set) => ({
@@ -68,6 +72,7 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
   openInstanceId: null,
   collapsedGroups: loadJSON<Record<string, boolean>>(COLLAPSED_GROUPS_KEY, {}),
   sidebarCollapsed: loadBool(SIDEBAR_COLLAPSED_KEY, false),
+  commandPaletteOpen: false,
   setSelectedNodeId: (nodeId) => {
     persist(SELECTED_NODE_KEY, nodeId === null ? null : String(nodeId))
     set({ selectedNodeId: nodeId })
@@ -86,4 +91,5 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
       persist(SIDEBAR_COLLAPSED_KEY, next ? '1' : '0')
       return { sidebarCollapsed: next }
     }),
+  setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
 }))

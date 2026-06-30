@@ -2446,6 +2446,19 @@
     "viewAllNotifications": "View all",
     "account": "Account"
   },
+  "palette": {
+    "title": "Command palette",
+    "placeholder": "Search instances / nodes / pages / actions…",
+    "empty": "No matches",
+    "cmdRefresh": "Refresh current data",
+    "cmdToggleSidebar": "Collapse / expand sidebar",
+    "kind": {
+      "instance": "Instance",
+      "node": "Node",
+      "page": "Page",
+      "command": "Action"
+    }
+  },
   "licenses": {
     "entry": "Licenses",
     "title": "Open-source licenses",

@@ -2446,6 +2446,19 @@
     "viewAllNotifications": "查看全部",
     "account": "账户"
   },
+  "palette": {
+    "title": "命令面板",
+    "placeholder": "搜索实例 / 节点 / 页面 / 操作…",
+    "empty": "无匹配结果",
+    "cmdRefresh": "刷新当前数据",
+    "cmdToggleSidebar": "折叠 / 展开侧栏",
+    "kind": {
+      "instance": "实例",
+      "node": "节点",
+      "page": "页面",
+      "command": "操作"
+    }
+  },
   "licenses": {
     "entry": "开源许可",
     "title": "开源许可",

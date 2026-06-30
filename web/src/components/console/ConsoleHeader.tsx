@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
@@ -11,7 +11,6 @@ import { useMetricOverview } from '@/api/metrics'
 import { useTasks } from '@/api/tasks'
 import { useNotificationFeed, useFeedUnreadCount, type FeedItem } from '@/api/notification-feed'
 import { cn } from '@/lib/utils'
-import { Input } from '@/components/ui/input'
 import PageBreadcrumb from './PageBreadcrumb'
 import { searchBoxClass, slotVisibility, visibilityClass } from './header-layout'
 import {
@@ -73,38 +72,29 @@ function TitleArea() {
 }
 
 /**
- * 靠右常驻搜索框（FR-179 重排）：本期仅 UI + 聚焦快捷键（Ctrl/⌘+K），检索逻辑留后续 FR。
+ * 靠右常驻搜索入口（FR-179 重排 + FR-241）：点击或 Ctrl/⌘+K 打开全局命令面板（`CommandPalette`），
+ * 检索实例/节点/页面/操作并跳转。本身不再是输入框，仅作开面板的按钮（Ctrl+K 由面板全局监听）。
  * 由 FR-162 的居中铺满改为靠右固定上限宽度（`header-layout.searchBoxClass`），紧贴右侧操作图标；
  * 窄屏（<md）隐藏不挤垮工作区。
  */
 function SearchBox() {
   const { t } = useTranslation()
-  const ref = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        ref.current?.focus()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  const openPalette = useConsoleStore((s) => s.setCommandPaletteOpen)
 
   return (
     <div className={searchBoxClass()}>
-      <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        ref={ref}
-        type="search"
-        placeholder={t('header.searchPlaceholder')}
+      <button
+        type="button"
+        onClick={() => openPalette(true)}
         aria-label={t('header.searchPlaceholder')}
-        className="h-8 rounded-lg bg-muted/60 pl-8 pr-12 text-sm transition-colors focus-visible:bg-card"
-      />
-      <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground xl:inline-block">
-        Ctrl K
-      </kbd>
+        className="flex h-8 w-full items-center gap-2 rounded-lg bg-muted/60 pl-2.5 pr-2 text-sm text-muted-foreground transition-colors hover:bg-muted"
+      >
+        <Search className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-left">{t('header.searchPlaceholder')}</span>
+        <kbd className="hidden shrink-0 rounded border bg-background px-1.5 py-0.5 text-[10px] font-medium xl:inline-block">
+          Ctrl K
+        </kbd>
+      </button>
     </div>
   )
 }

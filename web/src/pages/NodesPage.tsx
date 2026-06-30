@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useQueries } from '@tanstack/react-query'
@@ -362,7 +363,13 @@ export default function NodesPage() {
   const { data: nodes, isLoading } = useNodes({ refetchInterval: 30_000 })
   const { data: instances } = useInstances()
 
-  const [selectedId, setSelectedId] = useState<number | null>(null)
+  // 初始选中可由 URL `?node=<id>` 指定（命令面板 FR-241 跳转携带），否则未选（派生回退第一个）。
+  const [searchParams] = useSearchParams()
+  const initialNodeId = (() => {
+    const n = Number(searchParams.get('node'))
+    return Number.isFinite(n) && n > 0 ? n : null
+  })()
+  const [selectedId, setSelectedId] = useState<number | null>(initialNodeId)
   const [query, setQuery] = useState('')
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [addOpen, setAddOpen] = useState(false)

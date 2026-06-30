@@ -1,6 +1,7 @@
 import { useInstanceEvents } from '@/api/events'
 import ConsoleSidebar from '@/components/console/ConsoleSidebar'
 import ConsoleHeader from '@/components/console/ConsoleHeader'
+import CommandPalette from '@/components/console/CommandPalette'
 import { TopLoadingBar } from '@/components/console/TopLoadingBar'
 import Workspace from '@/components/console/Workspace'
 
@@ -24,6 +25,8 @@ export default function DashboardPage() {
           <Workspace />
         </main>
       </div>
+      {/* 全局命令面板（FR-241）：始终挂载以监听 Ctrl+K，打开时覆盖全屏。 */}
+      <CommandPalette />
     </div>
   )
 }
