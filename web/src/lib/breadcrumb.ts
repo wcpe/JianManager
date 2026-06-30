@@ -17,8 +17,11 @@ const SEGMENT_DOMAIN: Record<string, string> = {
   nodes: 'nav.cluster',
   instances: 'nav.cluster',
   networks: 'nav.cluster',
+  super: 'nav.cluster',
+  director: 'nav.cluster',
   // 观测（FR-215：原「监控」域改名「观测」，下设 监控/日志/统计）
   monitor: 'nav.observability',
+  'client-dist-monitor': 'nav.observability',
   logs: 'nav.observability',
   statistics: 'nav.observability',
   // 运营
@@ -51,7 +54,10 @@ const SEGMENT_PAGE: Record<string, string> = {
   nodes: 'nav.nodes',
   instances: 'nav.allInstances',
   networks: 'nav.networks',
+  super: 'nav.superWorkbench',
+  director: 'nav.director',
   monitor: 'nav.monitoring',
+  'client-dist-monitor': 'nav.clientDistMonitor',
   alerts: 'nav.alerts',
   logs: 'nav.logs',
   statistics: 'nav.statistics',

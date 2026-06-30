@@ -19,6 +19,24 @@ describe('breadcrumbTrail', () => {
     ])
   })
 
+  it('集群域 超级工作台 / 导播台 与导航文案一致（FR-245 补漏）', () => {
+    expect(breadcrumbTrail('/super')).toEqual([
+      { labelKey: 'nav.cluster' },
+      { labelKey: 'nav.superWorkbench' },
+    ])
+    expect(breadcrumbTrail('/director')).toEqual([
+      { labelKey: 'nav.cluster' },
+      { labelKey: 'nav.director' },
+    ])
+  })
+
+  it('观测域 客户端分发监控 与导航文案一致（FR-245 补漏）', () => {
+    expect(breadcrumbTrail('/client-dist-monitor')).toEqual([
+      { labelKey: 'nav.observability' },
+      { labelKey: 'nav.clientDistMonitor' },
+    ])
+  })
+
   it('通知中心归「系统」域（FR-216）', () => {
     expect(breadcrumbTrail('/notifications')).toEqual([
       { labelKey: 'nav.system' },

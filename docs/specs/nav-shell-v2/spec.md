@@ -26,8 +26,8 @@
 - 实例数据走 FR-247 服务端搜索/分页（1000+）。
 - ⚠ 此改动重塑 FR-131 既定五域 IA 的呈现形态 → **需先出具体设计/Mockup 经用户确认**，若改 IA 语义补 ADR。
 
-### 2.3 Part C — 面包屑文案纠错（FR-245，排最后）
-- `PageBreadcrumb` 路由→labelKey 映射与侧栏导航文案对齐（用户报「面包屑文字与导航内位置不符」）。
+### 2.3 Part C — 面包屑文案纠错（FR-245）✅ 已交付
+- `lib/breadcrumb` 路由→域/页面 labelKey 映射与侧栏导航对齐：补齐原漏的 `/super`、`/director`、`/client-dist-monitor`（原回退「控制台」、与导航不符）。
 
 ## 3. 验收
 
