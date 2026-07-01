@@ -22,7 +22,11 @@ type ClientChannel struct {
 	// Deprecated: PinnedCoreVersion 原为频道 pin 的 updater-core 版本号（FR-193 初版，已随反转废弃，见 ADR-045 改写）。
 	// updater-core 现由 CP 内嵌默认版本自动驱动 manifest agent.core，运营不再 pin/管理。保留此列（加性、默认 0）
 	// 仅为兼容存量库、避免无谓迁移；不再被任何运营端点写入、不参与 manifest 生成。
-	PinnedCoreVersion int            `gorm:"default:0;not null" json:"-"`
+	PinnedCoreVersion int `gorm:"default:0;not null" json:"-"`
+	// SelectedCoreSHA256 频道选定的 updater-core 归档制品 sha256（FR-259，见 updater-arch-simplification spec §D）。
+	// 指向 type=client-updater-core 的 Asset.SHA256；空=未选定（coreEndpoint 回退最新归档版本）。
+	// 运营经 PUT /client-channels/:id/updater-core/selected 切换，客户端下次启动查 coreEndpoint 即用选定版本。
+	SelectedCoreSHA256 string `gorm:"column:selected_core_sha256;type:char(64)" json:"-"`
 	CreatedAt         time.Time      `json:"createdAt"`
 	UpdatedAt         time.Time      `json:"updatedAt"`
 	DeletedAt         gorm.DeletedAt `gorm:"index" json:"-"`

@@ -424,7 +424,7 @@ func (h *ClientVersionHandler) respondErr(c *gin.Context, err error) {
 	}
 }
 
-// respondConsumerErr 消费端点错误映射（manifest/制品；鉴权已先行通过）；返回所写错误码供追踪（FR-249）。
+// respondConsumerErr 消费端点错误映射（manifest/制品/core；鉴权已先行通过）；返回所写错误码供追踪（FR-249）。
 func (h *ClientVersionHandler) respondConsumerErr(c *gin.Context, err error) string {
 	switch {
 	case errors.Is(err, service.ErrChannelNotFound):
@@ -433,6 +433,10 @@ func (h *ClientVersionHandler) respondConsumerErr(c *gin.Context, err error) str
 	case errors.Is(err, service.ErrNoLatestVersion):
 		c.JSON(http.StatusNotFound, gin.H{"error": "NO_LATEST_VERSION", "message": "频道尚未发布版本"})
 		return "NO_LATEST_VERSION"
+	case errors.Is(err, service.ErrNoCoreVersion):
+		// FR-259：无 core 归档 → 404（coreEndpoint 端点）。
+		c.JSON(http.StatusNotFound, gin.H{"error": "NO_CORE_VERSION", "message": "无已归档的 updater-core 版本"})
+		return "NO_CORE_VERSION"
 	case errors.Is(err, service.ErrAssetNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "ARTIFACT_NOT_FOUND", "message": "制品不存在"})
 		return "ARTIFACT_NOT_FOUND"
@@ -514,6 +518,9 @@ func (h *ClientVersionHandler) RegisterPublishRoutes(rg *gin.RouterGroup) {
 		// 与玩家 GET /client-artifacts/:sha256（拉取密钥）物理隔离——浏览器无拉取密钥不能复用之。
 		ch.GET("/:id/files/content", h.GetArtifactContent)
 		ch.GET("/:id/files/download", h.DownloadArtifact)
+		// updater-core 版本管理（FR-259）：列出归档版本 + 切换频道选定版本（回滚）。
+		ch.GET("/:id/updater-core/versions", h.ListUpdaterCoreVersions)
+		ch.PUT("/:id/updater-core/selected", h.SelectUpdaterCore)
 	}
 	// 拉取/下载明细检索（FR-093）：管理面。
 	rg.GET("/client-dist/events", h.ListEvents)
@@ -523,4 +530,81 @@ func (h *ClientVersionHandler) RegisterPublishRoutes(rg *gin.RouterGroup) {
 func (h *ClientVersionHandler) RegisterConsumerRoutes(rg *gin.RouterGroup) {
 	rg.GET("/client-channels/:id/manifest", h.GetManifest)
 	rg.GET("/client-artifacts/:sha256", h.GetArtifact)
+	// updater-core 版本查询（FR-259）：楔子经 coreEndpoint 拉取选定版本信息，拉取密钥鉴权。
+	rg.GET("/client-channels/:id/updater-core", h.GetUpdaterCore)
+}
+
+// ---- updater-core 版本管理端点（FR-259）----
+
+// GetUpdaterCore GET /client-channels/:id/updater-core — 返回频道选定 core 版本信息（玩家，拉取密钥鉴权）。
+// 返回 {version, sha256, downloadUrl, size}（spec §2.5.3 冻结格式），楔子据此下载 core jar。
+func (h *ClientVersionHandler) GetUpdaterCore(c *gin.Context) {
+	channelID := c.Param("id")
+	if ec, ok := h.authChannelKey(c, channelID); !ok {
+		_ = ec
+		return
+	}
+	info, err := h.svc.GetCoreEndpointInfo(channelID)
+	if err != nil {
+		h.respondConsumerErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"version":     info.Version,
+		"sha256":      info.SHA256,
+		"downloadUrl": resolvePublicBaseURL(c) + "/client-artifacts/" + info.SHA256,
+		"size":        info.Size,
+	})
+}
+
+// ListUpdaterCoreVersions GET /client-channels/:id/updater-core/versions — 列出所有归档 core 版本（运营，平台管理员）。
+func (h *ClientVersionHandler) ListUpdaterCoreVersions(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	// 校验频道存在。
+	if _, err := h.channel.GetChannel(c.Param("id")); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "CHANNEL_NOT_FOUND", "message": "频道不存在"})
+		return
+	}
+	versions, err := h.svc.ListCoreVersions(c.Param("id"))
+	if err != nil {
+		slog.Error("查询 core 归档列表失败", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return
+	}
+	c.JSON(http.StatusOK, versions)
+}
+
+// selectUpdaterCoreRequest 切换选定 core 版本请求体。
+type selectUpdaterCoreRequest struct {
+	// SHA256 要选定为当前版本的 core jar 制品 sha256。
+	SHA256 string `json:"sha256" binding:"required"`
+}
+
+// SelectUpdaterCore PUT /client-channels/:id/updater-core/selected — 切换频道选定 core 版本（运营，平台管理员；FR-259 回滚）。
+func (h *ClientVersionHandler) SelectUpdaterCore(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	channelID := c.Param("id")
+	var body selectUpdaterCoreRequest
+	if err := c.ShouldBindJSON(&body); err != nil || body.SHA256 == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "需提供 sha256"})
+		return
+	}
+	if err := h.svc.SelectCoreVersion(channelID, body.SHA256); err != nil {
+		switch {
+		case errors.Is(err, service.ErrChannelNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "CHANNEL_NOT_FOUND", "message": "频道不存在"})
+		case errors.Is(err, service.ErrCoreVersionNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": "CORE_VERSION_NOT_FOUND", "message": "updater-core 版本不存在"})
+		default:
+			slog.Error("切换选定 core 版本失败", "channel", channelID, "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "操作失败"})
+		}
+		return
+	}
+	h.recordAudit(c, "client_core.select", map[string]any{"channelId": channelID, "sha256": body.SHA256})
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

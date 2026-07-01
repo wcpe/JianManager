@@ -24,6 +24,10 @@ var (
 	ErrInvalidVersionFiles = errors.New("版本文件清单非法")
 	// ErrVersionNotFound 指定版本在频道内不存在（历史详情/回滚源，FR-088）。
 	ErrVersionNotFound = errors.New("版本不存在")
+	// ErrNoCoreVersion 无任何已归档的 updater-core 版本（coreEndpoint 无可返回）。
+	ErrNoCoreVersion = errors.New("无已归档的 updater-core 版本")
+	// ErrCoreVersionNotFound 指定的 core 版本（sha256）不存在于归档制品库。
+	ErrCoreVersionNotFound = errors.New("updater-core 版本不存在")
 )
 
 // EmbeddedCore 描述 CP 内嵌的默认 updater-core（FR-193，见 ADR-045 改写）。
@@ -484,11 +488,19 @@ func decodeVersionSnapshot(ver *model.ClientVersion) ([]ManifestFile, []string, 
 	return files, managedDirs, cleanExclude, agent, nil
 }
 
-// OpenArtifact 按制品 sha256 打开 client-file 制品（供端点 Range 分发）。
+// artifactDownloadableTypes 可经 /client-artifacts/:sha256 公网端点分发的制品类型集合。
+// FR-259 起 core jar 归档为 client-updater-core 类型，也经此端点下发（楔子自动拉 core）。
+var artifactDownloadableTypes = []model.AssetType{
+	model.AssetTypeClientFile,
+	model.AssetTypeClientUpdaterCore,
+}
+
+// OpenArtifact 按制品 sha256 打开可分发制品（client-file 或 client-updater-core），供端点 Range 分发。
 // 返回资产元数据与其物理文件绝对路径；不存在返回 ErrAssetNotFound。
+// FR-259 起扩展支持 client-updater-core 类型（楔子经 coreEndpoint 拉取 core jar）。
 func (s *ClientVersionService) OpenArtifact(sha256 string) (*model.Asset, string, error) {
 	var asset model.Asset
-	err := s.db.Where("type = ? AND sha256 = ?", model.AssetTypeClientFile, sha256).First(&asset).Error
+	err := s.db.Where("type IN ? AND sha256 = ?", artifactDownloadableTypes, sha256).First(&asset).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, "", ErrAssetNotFound
 	}
@@ -703,4 +715,164 @@ func splitSlash(p string) []string {
 	}
 	segs = append(segs, p[start:])
 	return segs
+}
+
+// ---- updater-core 版本归档 + 频道选定（FR-259，见 updater-arch-simplification spec §D）----
+//
+// core jar 不再随 CP 内嵌单一版本"覆盖"分发，而是每次构建入库归档（type=client-updater-core，
+// 内容寻址去重——不同版本 sha256 不同即天然多版本不覆盖）。频道选定版本（SelectedCoreSHA256）
+// 指向某归档制品；coreEndpoint 端点据此返回 {version, sha256, downloadUrl, size} 供楔子拉取。
+// 运营经面板版本选择器一键切换选定版本实现回滚（客户端下次启动查端点即用旧版）。
+
+// CoreEndpointInfo coreEndpoint 端点返回的版本信息（spec §2.5.3 冻结格式）。
+// downloadUrl 由 router 层拼接（需请求上下文推断公网基址），service 层不产出。
+type CoreEndpointInfo struct {
+	// Version updater-core 整数版本号（楔子据此比较升降级）。
+	Version int `json:"version"`
+	// SHA256 core jar 制品 sha256 = 下载寻址 key。
+	SHA256 string `json:"sha256"`
+	// Size core jar 字节数。
+	Size int64 `json:"size"`
+}
+
+// CoreVersionSummary 归档版本列表项（管理面，JWT 平台管理员）。
+type CoreVersionSummary struct {
+	// Version 整数版本号（从 Asset.Version 解析）。
+	Version int `json:"version"`
+	// SHA256 制品 sha256（切换选定版本的寻址键）。
+	SHA256 string `json:"sha256"`
+	// Size 字节数。
+	Size int64 `json:"size"`
+	// CreatedAt 归档时间。
+	CreatedAt time.Time `json:"createdAt"`
+	// Selected 是否为该频道当前选定版本（运营据此高亮当前选择）。
+	Selected bool `json:"selected"`
+}
+
+// ArchiveCoreJar 把 updater-core jar 入库归档为 client-updater-core 类型（FR-259）。
+// 内容寻址去重：同 sha256 复用、不同 sha256 各自归档（不覆盖旧版）。version 写入 Asset.Version。
+func (s *ClientVersionService) ArchiveCoreJar(r io.Reader, version string) (*model.Asset, error) {
+	return s.assets.Ingest(r, IngestParams{
+		Type:     model.AssetTypeClientUpdaterCore,
+		Name:     "updater-core",
+		Version:  version,
+		Filename: "updater-core.jar",
+		Metadata: `{"codec":"none","source":"embedded-updater-core"}`,
+	})
+}
+
+// GetCoreEndpointInfo 查频道选定版本的 core jar 信息（FR-259 coreEndpoint 端点数据源）。
+// SelectedCoreSHA256 非空 → 查该版本；空 → 回退最新归档版本（按 id DESC）。
+// 频道不存在返回 ErrChannelNotFound；无任何归档返回 ErrNoCoreVersion。
+func (s *ClientVersionService) GetCoreEndpointInfo(channelID string) (*CoreEndpointInfo, error) {
+	if _, err := s.getChannel(channelID); err != nil {
+		return nil, err
+	}
+	// 查频道选定 sha256；空则取最新归档。
+	var ch model.ClientChannel
+	if err := s.db.Select("selected_core_sha256").Where("channel_id = ?", channelID).First(&ch).Error; err != nil {
+		return nil, fmt.Errorf("查询频道选定 core 版本失败: %w", err)
+	}
+
+	var asset model.Asset
+	if ch.SelectedCoreSHA256 != "" {
+		// 选定版本须存在于 client-updater-core 归档。
+		err := s.db.Where("type = ? AND sha256 = ?", model.AssetTypeClientUpdaterCore, ch.SelectedCoreSHA256).First(&asset).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// 选定 sha256 指向已失效的归档（制品被删等）→ 回退最新，避免客户端拿不到 core。
+			return s.latestCoreArchive()
+		}
+		if err != nil {
+			return nil, fmt.Errorf("查询选定 core 版本失败: %w", err)
+		}
+	} else {
+		return s.latestCoreArchive()
+	}
+	return assetToCoreEndpointInfo(&asset), nil
+}
+
+// latestCoreArchive 取最新归档的 client-updater-core 制品（按 id DESC = 最近入库）。
+// 无任何归档返回 ErrNoCoreVersion。
+func (s *ClientVersionService) latestCoreArchive() (*CoreEndpointInfo, error) {
+	var asset model.Asset
+	err := s.db.Where("type = ?", model.AssetTypeClientUpdaterCore).Order("id DESC").First(&asset).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrNoCoreVersion
+	}
+	if err != nil {
+		return nil, fmt.Errorf("查询最新 core 归档失败: %w", err)
+	}
+	return assetToCoreEndpointInfo(&asset), nil
+}
+
+// assetToCoreEndpointInfo 把 Asset 转为 CoreEndpointInfo（Asset.Version 字符串转 int，非整数回退 0）。
+func assetToCoreEndpointInfo(a *model.Asset) *CoreEndpointInfo {
+	return &CoreEndpointInfo{
+		Version: parseCoreVersionInt(a.Version),
+		SHA256:  a.SHA256,
+		Size:    a.Size,
+	}
+}
+
+// parseCoreVersionInt 把 Asset.Version 字符串解析为整数；非法/空回退 0（楔子据此判无版本声明）。
+func parseCoreVersionInt(s string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// ListCoreVersions 列出所有归档的 updater-core 版本（按 id DESC = 最近入库在前）。
+// channelID 非空时标记该频道当前选定版本（Selected=true），供面板高亮当前选择。
+func (s *ClientVersionService) ListCoreVersions(channelID ...string) ([]CoreVersionSummary, error) {
+	var assets []model.Asset
+	if err := s.db.Where("type = ?", model.AssetTypeClientUpdaterCore).Order("id DESC").Find(&assets).Error; err != nil {
+		return nil, fmt.Errorf("查询 core 归档列表失败: %w", err)
+	}
+	// 查频道选定 sha256（可选，用于标记 Selected）。
+	var selectedSHA string
+	if len(channelID) > 0 && channelID[0] != "" {
+		var ch model.ClientChannel
+		if err := s.db.Select("selected_core_sha256").Where("channel_id = ?", channelID[0]).First(&ch).Error; err == nil {
+			selectedSHA = ch.SelectedCoreSHA256
+		}
+		// 频道不存在时 selectedSHA 留空（不标记任何版本），由 router 层先行校验频道存在。
+	}
+	out := make([]CoreVersionSummary, 0, len(assets))
+	for i := range assets {
+		a := &assets[i]
+		out = append(out, CoreVersionSummary{
+			Version:   parseCoreVersionInt(a.Version),
+			SHA256:    a.SHA256,
+			Size:      a.Size,
+			CreatedAt: a.CreatedAt,
+			Selected:  selectedSHA != "" && selectedSHA == a.SHA256,
+		})
+	}
+	return out, nil
+}
+
+// SelectCoreVersion 切换频道选定的 core 版本（FR-259 回滚操作）。
+// 校验 sha256 存在于 client-updater-core 归档后更新 ClientChannel.SelectedCoreSHA256。
+// 频道不存在返回 ErrChannelNotFound；sha256 不存在返回 ErrCoreVersionNotFound。
+func (s *ClientVersionService) SelectCoreVersion(channelID, sha256 string) error {
+	if _, err := s.getChannel(channelID); err != nil {
+		return err
+	}
+	// 校验该 sha256 存在于归档制品库。
+	var count int64
+	if err := s.db.Model(&model.Asset{}).
+		Where("type = ? AND sha256 = ?", model.AssetTypeClientUpdaterCore, sha256).
+		Count(&count).Error; err != nil {
+		return fmt.Errorf("校验 core 版本失败: %w", err)
+	}
+	if count == 0 {
+		return ErrCoreVersionNotFound
+	}
+	if err := s.db.Model(&model.ClientChannel{}).Where("channel_id = ?", channelID).
+		Update("selected_core_sha256", sha256).Error; err != nil {
+		return fmt.Errorf("更新选定 core 版本失败: %w", err)
+	}
+	return nil
 }

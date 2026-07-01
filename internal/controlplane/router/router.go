@@ -341,9 +341,9 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			clientChunkUploadHandler.RegisterRoutes(admin)
 		}
 
-		// updater-core 默认随 CP 内嵌、自动驱动 manifest agent.core，运营不管理（FR-193，见 ADR-045 改写）。
-		// 已删除原运营侧 core 版本管理端点（上传/登记/pin/更新/回退）；agent.core 由内嵌 updater-core 自动产出
-		// （见 service.BuildManifest.applyEmbeddedCore），内嵌 core 当作 client-file 制品经公网 client-artifacts 下发。
+		// updater-core 版本归档 + 频道选定（FR-259，见 updater-arch-simplification spec §D）：
+		// 内嵌 core jar 入库为 client-updater-core 类型（多版本归档不覆盖），运营经版本选择器切换频道选定版本。
+		// coreEndpoint（拉取密钥鉴权）+ versions/selected（JWT 平台管理员）端点已注册于 ClientVersionHandler。
 
 		// 客户端分发端点 L7 防护：IP 黑白名单规则管理 + 防护拦截计数（FR-096 / ADR-023）。限平台管理员。
 		if svcs.ClientIPGuard != nil {

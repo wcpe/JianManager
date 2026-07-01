@@ -15,7 +15,6 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/database"
 	cpembed "github.com/wcpe/JianManager/internal/controlplane/embed"
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
-	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/router"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
@@ -159,24 +158,19 @@ func main() {
 	clientChannelSvc.SetKeyEncryptor(keyEncryptor)
 	// 客户端分发版本与 manifest 组装（FR-087 / FR-256 简化后：不再签名 manifest，信任靠 HTTPS + 拉取密钥鉴权）。
 	clientVersionSvc := service.NewClientVersionService(db, assetSvc, clientChannelSvc)
-	// updater-core 默认随 CP 内嵌、自动驱动 manifest agent.core，运营不管理（FR-193，见 ADR-045 改写）。
-	// 从内嵌 updater-core jar 算 sha256/size + 整数版本，注入版本服务 → BuildManifest 自动产出 agent.core；
-	// 并把内嵌 core 当作 client-file 制品入库（内容寻址去重），使其可经公网 client-artifacts 端点下发。
-	// 无内嵌 jar（未经 make embed-client-updater）时优雅降级：省略 agent.core，不破 FR-087/088。
+	// updater-core 版本归档（FR-259，见 updater-arch-simplification spec §D）：
+	// 内嵌 core jar 入库为 client-updater-core 类型（内容寻址去重——不同版本 sha256 不同即天然归档多版本不覆盖）。
+	// 频道选定版本经 coreEndpoint 端点返回给楔子（gradle-wrapper 模式，FR-258）；运营可一键切换回滚。
+	// manifest agent.core 段仍由内嵌 core 自动产出（信息性保留，见 applyEmbeddedCore）。
 	if coreJar := cpembed.UpdaterCoreJar(); len(coreJar) > 0 {
 		embeddedCore := service.NewEmbeddedCoreFromJar(coreJar, cpembed.ClientUpdaterEmbeddedCoreVersion)
 		clientVersionSvc.SetEmbeddedCore(embeddedCore)
-		// 内嵌 core 入 client-file 制品库（与 manifest files 制品同型，OpenArtifact 据此按 sha256 下发）。
-		// 内容寻址去重：每次启动落同一 sha256，命中即复用，不产生重复制品。
-		if _, ierr := assetSvc.Ingest(bytes.NewReader(coreJar), service.IngestParams{
-			Type:     model.AssetTypeClientFile,
-			Filename: "updater-core.jar",
-			Metadata: `{"codec":"none","source":"embedded-updater-core"}`,
-		}); ierr != nil {
-			slog.Warn("内嵌 updater-core 制品入库失败，客户端可能无法下载默认 core（FR-193）", "error", ierr)
+		// 归档入库为 client-updater-core（FR-259）：Version 字段存整数版本号，供 coreEndpoint 返回。
+		if _, ierr := clientVersionSvc.ArchiveCoreJar(bytes.NewReader(coreJar), cpembed.ClientUpdaterEmbeddedCoreVersion); ierr != nil {
+			slog.Warn("内嵌 updater-core 归档入库失败，coreEndpoint 将无可用版本（FR-259）", "error", ierr)
 		}
 	} else {
-		slog.Warn("未内嵌 updater-core jar（make embed-client-updater 未注入），manifest 将省略 agent.core；客户端不自更新 core（FR-193）")
+		slog.Warn("未内嵌 updater-core jar（make embed-client-updater 未注入），manifest 将省略 agent.core、coreEndpoint 无可用版本（FR-193/259）")
 	}
 	// 客户端分发大文件分块上传（FR-251，增强 FR-088）：init→chunk→complete，临时分片进
 	// cache/client-uploads/<id>/，complete 拼装喂 clientVersionSvc.PublishFile 落同一 CAS。
