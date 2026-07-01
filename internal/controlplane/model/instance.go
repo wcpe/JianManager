@@ -62,11 +62,11 @@ type Instance struct {
 	ID            uint           `gorm:"primaryKey" json:"id"`
 	UUID          string         `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
 	NodeID        uint           `gorm:"not null;index" json:"nodeId"`
-	Name          string         `gorm:"type:varchar(128);not null" json:"name"`
+	Name          string         `gorm:"type:varchar(128);not null;index" json:"name"`
 	Type          InstanceType   `gorm:"type:varchar(64);not null" json:"type"`
 	Role          InstanceRole   `gorm:"type:varchar(16);default:universal;index" json:"role"`
 	ProcessType   ProcessType    `gorm:"type:varchar(32);not null" json:"processType"`
-	Status        InstanceStatus `gorm:"type:varchar(32);default:STOPPED" json:"status"`
+	Status        InstanceStatus `gorm:"type:varchar(32);default:STOPPED;index" json:"status"`
 	// StatusReason 记录当前状态的原因，主要用于 CRASHED：异步委托（启动/停止）失败时写入具体错误
 	// （如「实例未绑定 JDK…」），供前端显示，不再让用户只见「崩溃」无因。正常状态推进时清空。
 	StatusReason  string         `gorm:"type:varchar(512)" json:"statusReason"`

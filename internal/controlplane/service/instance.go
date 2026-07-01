@@ -351,6 +351,192 @@ func (s *InstanceService) ListByGroups(groupIDs []uint, f InstanceFilter) ([]mod
 	return filterByTags(instances, f.Env, f.Tag), nil
 }
 
+// ── FR-247 实例规模化：服务端分页搜索 + 维度聚合 ─────────────────────────────
+
+const (
+	// defaultInstancePageSize 分页默认每页条数；maxInstancePageSize 上限（约束响应体大小）。
+	defaultInstancePageSize = 50
+	maxInstancePageSize     = 200
+)
+
+// instanceSortColumns 把排序参数白名单映射到列名（防 SQL 注入；非法值回退 name）。
+var instanceSortColumns = map[string]string{
+	"name":      "instances.name",
+	"status":    "instances.status",
+	"createdAt": "instances.created_at",
+	"nodeId":    "instances.node_id",
+}
+
+// InstanceSearchParams 分页搜索参数（FR-247）。嵌 InstanceFilter 复用多维筛选，
+// 另加自由文本 Query（名称子串）、Sort/Order、Page/PageSize。
+type InstanceSearchParams struct {
+	InstanceFilter
+	Query    string
+	Sort     string
+	Order    string
+	Page     int
+	PageSize int
+}
+
+// Normalize 归一化分页/排序边界：Page≥1、PageSize∈[1,max]（默认 50）、Sort 白名单、Order∈{asc,desc}。
+// 幂等，handler 与 service 各调一次均安全。
+func (p *InstanceSearchParams) Normalize() {
+	if p.Page < 1 {
+		p.Page = 1
+	}
+	if p.PageSize <= 0 {
+		p.PageSize = defaultInstancePageSize
+	}
+	if p.PageSize > maxInstancePageSize {
+		p.PageSize = maxInstancePageSize
+	}
+	if _, ok := instanceSortColumns[p.Sort]; !ok {
+		p.Sort = "name"
+	}
+	if strings.ToLower(p.Order) == "desc" {
+		p.Order = "desc"
+	} else {
+		p.Order = "asc"
+	}
+}
+
+// NodeCount 单节点实例计数（FR-247 聚合）。
+type NodeCount struct {
+	NodeID uint  `json:"nodeId" gorm:"column:node_id"`
+	Count  int64 `json:"count" gorm:"column:cnt"`
+}
+
+// InstanceAggregate 实例维度计数（FR-247）：供前端筛选 chip / 分组头不拉全集即得计数。
+// ByStatus/ByRole 含全部枚举键（零补 0）；ByNode 仅含出现的节点（按 nodeId 升序）。
+type InstanceAggregate struct {
+	Total    int64            `json:"total"`
+	ByStatus map[string]int64 `json:"byStatus"`
+	ByNode   []NodeCount      `json:"byNode"`
+	ByRole   map[string]int64 `json:"byRole"`
+}
+
+// applySearchFilters 把可下推维度附加到查询；env/tag 用引号定界 LIKE 精确下推到 SQL
+// （分页路径不能再 Go 后置过滤，否则破坏 page/total 一致性），并加名称子串 q。
+// 不含 GroupID / 权限作用域（由 scopedBase 按管理员/非管理员分别 JOIN）。
+func applySearchFilters(q *gorm.DB, p InstanceSearchParams) *gorm.DB {
+	if p.NodeID != nil {
+		q = q.Where("instances.node_id = ?", *p.NodeID)
+	}
+	if p.Status != nil {
+		q = q.Where("instances.status = ?", *p.Status)
+	}
+	if p.Role != nil {
+		q = q.Where("instances.role = ?", *p.Role)
+	}
+	if p.NetworkID != nil {
+		q = q.Joins("JOIN network_members ON network_members.instance_id = instances.id").
+			Where("network_members.network_id = ?", *p.NetworkID)
+	}
+	// env/tag 引号定界 LIKE：tags 存 JSON 数组（如 ["env:prod","x"]），匹配带引号的整元素精度足够。
+	if env := strings.TrimSpace(p.Env); env != "" {
+		q = q.Where("instances.tags LIKE ?", "%\""+model.EnvTagPrefix+env+"\"%")
+	}
+	if tag := strings.TrimSpace(p.Tag); tag != "" {
+		q = q.Where("instances.tags LIKE ?", "%\""+tag+"\"%")
+	}
+	if query := strings.TrimSpace(p.Query); query != "" {
+		q = q.Where("instances.name LIKE ?", "%"+query+"%")
+	}
+	return q
+}
+
+// scopedBase 构造带筛选 + 可选显式组过滤 + 可选权限作用域的基查询（每次返回新查询，调用方可独立终结）。
+// scope==nil 表示平台管理员（不限组）；scope 非空限定到这些可访问组（非管理员）。
+// GroupInstance.InstanceID 唯一，JOIN 不产重复行，故 Count 计数准确。
+func (s *InstanceService) scopedBase(scope []uint, p InstanceSearchParams) *gorm.DB {
+	q := applySearchFilters(s.db.Model(&model.Instance{}), p)
+	if p.GroupID != nil {
+		q = q.Joins("JOIN group_instances gi_filter ON gi_filter.instance_id = instances.id").
+			Where("gi_filter.group_id = ?", *p.GroupID)
+	}
+	if scope != nil {
+		q = q.Joins("JOIN group_instances gi_scope ON gi_scope.instance_id = instances.id").
+			Where("gi_scope.group_id IN ?", scope)
+	}
+	return q
+}
+
+// SearchInstances 分页搜索实例（FR-247）。返回当前页实例 + 筛选下全量 total。
+// scope==nil=平台管理员；非空=限定可访问组；非空且为空集=无可访问组，直接空结果。
+func (s *InstanceService) SearchInstances(scope []uint, p InstanceSearchParams) ([]model.Instance, int64, error) {
+	p.Normalize()
+	if scope != nil && len(scope) == 0 {
+		return []model.Instance{}, 0, nil
+	}
+
+	var total int64
+	if err := s.scopedBase(scope, p).Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("统计实例数失败: %w", err)
+	}
+
+	col := instanceSortColumns[p.Sort]
+	var items []model.Instance
+	if err := s.scopedBase(scope, p).
+		Order(col + " " + p.Order + ", instances.id asc").
+		Limit(p.PageSize).Offset((p.Page - 1) * p.PageSize).
+		Find(&items).Error; err != nil {
+		return nil, 0, fmt.Errorf("查询实例列表失败: %w", err)
+	}
+	return items, total, nil
+}
+
+// AggregateInstances 在同筛选 + 作用域下按状态/节点/角色分组计数（FR-247）。
+func (s *InstanceService) AggregateInstances(scope []uint, p InstanceSearchParams) (InstanceAggregate, error) {
+	agg := InstanceAggregate{ByStatus: map[string]int64{}, ByRole: map[string]int64{}}
+	// 预置全枚举键为 0，前端 chip 不缺键。
+	for _, st := range []model.InstanceStatus{
+		model.InstanceStatusStopped, model.InstanceStatusStarting, model.InstanceStatusRunning,
+		model.InstanceStatusStopping, model.InstanceStatusCrashed,
+	} {
+		agg.ByStatus[string(st)] = 0
+	}
+	for _, r := range []model.InstanceRole{model.InstanceRoleBackend, model.InstanceRoleProxy, model.InstanceRoleUniversal} {
+		agg.ByRole[string(r)] = 0
+	}
+	if scope != nil && len(scope) == 0 {
+		return agg, nil
+	}
+
+	type countRow struct {
+		Grp string `gorm:"column:grp"`
+		Cnt int64  `gorm:"column:cnt"`
+	}
+
+	if err := s.scopedBase(scope, p).Count(&agg.Total).Error; err != nil {
+		return agg, fmt.Errorf("统计实例总数失败: %w", err)
+	}
+
+	var statusRows []countRow
+	if err := s.scopedBase(scope, p).Select("instances.status as grp, count(*) as cnt").
+		Group("instances.status").Scan(&statusRows).Error; err != nil {
+		return agg, fmt.Errorf("按状态聚合失败: %w", err)
+	}
+	for _, r := range statusRows {
+		agg.ByStatus[r.Grp] = r.Cnt
+	}
+
+	var roleRows []countRow
+	if err := s.scopedBase(scope, p).Select("instances.role as grp, count(*) as cnt").
+		Group("instances.role").Scan(&roleRows).Error; err != nil {
+		return agg, fmt.Errorf("按角色聚合失败: %w", err)
+	}
+	for _, r := range roleRows {
+		agg.ByRole[r.Grp] = r.Cnt
+	}
+
+	if err := s.scopedBase(scope, p).Select("instances.node_id as node_id, count(*) as cnt").
+		Group("instances.node_id").Order("instances.node_id asc").Scan(&agg.ByNode).Error; err != nil {
+		return agg, fmt.Errorf("按节点聚合失败: %w", err)
+	}
+
+	return agg, nil
+}
+
 // GetByID 按 ID 获取实例。
 func (s *InstanceService) GetByID(id uint) (*model.Instance, error) {
 	var instance model.Instance

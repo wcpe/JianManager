@@ -296,6 +296,41 @@
   - `env` 环境维度（`dev`/`test`/`prod`，对应 `env:` 前缀标签，FR-047）
   - `tag` 单个自由标签精确匹配（FR-047）
 - **示例**: `?nodeId=1&networkId=2&env=prod&tag=survival&status=RUNNING`
+- **说明**: 返回**裸数组全量**（无分页）。面向 1000+ 规模请改用下面的 `GET /instances/search`（分页）+ `GET /instances/aggregate`（计数）。
+
+### GET /api/v1/instances/search
+- **描述**: 分页搜索实例（FR-247，面向 1000+）。名称子串 + 多维筛选 + 排序 + 分页，避免前端全量拉。
+- **关联 FR**: FR-247
+- **权限**: `instance.read`（非平台管理员强制按可访问组作用域，忽略 `groupId`）
+- **Query**（均可选，AND 组合）:
+  - `q` 名称子串（大小写不敏感）
+  - `nodeId` / `status` / `role` / `groupId` / `networkId` / `env` / `tag`（语义同 `GET /instances`）
+  - `sort` `name`|`status`|`createdAt`|`nodeId`（默认 `name`；非法值回退 `name`）
+  - `order` `asc`|`desc`（默认 `asc`）
+  - `page` 1 基（默认 `1`，<1 归 1）
+  - `pageSize` 默认 `50`，上限 `200`（超过截断）
+- **响应**:
+  ```json
+  { "items": [ /* InstanceInfo[]（字段同 GET /instances 元素） */ ], "total": 1234, "page": 1, "pageSize": 50 }
+  ```
+  `total` 为当前筛选下全量条数；越界 `page` → `items: []` 且 `total` 不变。
+- **示例**: `?q=survival&status=RUNNING&sort=name&order=asc&page=2&pageSize=50`
+
+### GET /api/v1/instances/aggregate
+- **描述**: 实例维度计数（FR-247）。同筛选下按状态/节点/角色分组计数，供前端筛选 chip / 分组头不拉全集即得计数。
+- **关联 FR**: FR-247
+- **权限**: `instance.read`（作用域同 search）
+- **Query**: 与 `search` 相同的筛选维度（`q` + `nodeId/status/role/groupId/networkId/env/tag`），honor 全部传入项。渲染"某维度 chip 全量计数"时调用方自行省略该维度的筛选。
+- **响应**:
+  ```json
+  {
+    "total": 1234,
+    "byStatus": { "STOPPED": 800, "STARTING": 2, "RUNNING": 400, "STOPPING": 1, "CRASHED": 31 },
+    "byNode":   [ { "nodeId": 1, "count": 900 }, { "nodeId": 2, "count": 334 } ],
+    "byRole":   { "backend": 1000, "proxy": 30, "universal": 204 }
+  }
+  ```
+  `byStatus`/`byRole` 含全部枚举键（零补 0）；`byNode` 仅含出现的节点（按 nodeId 升序）。
 
 ### POST /api/v1/instances
 - **描述**: 创建实例

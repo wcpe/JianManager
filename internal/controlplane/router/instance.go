@@ -90,6 +90,93 @@ func (h *InstanceHandler) List(c *gin.Context) {
 	c.JSON(http.StatusOK, instances)
 }
 
+// Search 分页搜索实例（FR-247）：q 名称子串 + 多维筛选 + 排序 + 分页，返回 {items,total,page,pageSize}。
+func (h *InstanceHandler) Search(c *gin.Context) {
+	access := getAccess(c)
+	if access == nil || !access.HasPermission(service.PermInstanceRead) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
+	}
+	p := parseInstanceSearchParams(c, access.IsPlatformAdmin)
+	p.Normalize()
+	items, total, err := h.instanceSvc.SearchInstances(instanceQueryScope(access), p)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询实例列表失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items, "total": total, "page": p.Page, "pageSize": p.PageSize})
+}
+
+// Aggregate 实例维度计数（FR-247）：同筛选下按状态/节点/角色分组计数，供前端筛选 chip / 分组头。
+func (h *InstanceHandler) Aggregate(c *gin.Context) {
+	access := getAccess(c)
+	if access == nil || !access.HasPermission(service.PermInstanceRead) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
+	}
+	p := parseInstanceSearchParams(c, access.IsPlatformAdmin)
+	agg, err := h.instanceSvc.AggregateInstances(instanceQueryScope(access), p)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "聚合实例计数失败"})
+		return
+	}
+	c.JSON(http.StatusOK, agg)
+}
+
+// parseInstanceSearchParams 从 query 解析搜索/筛选/分页参数。
+// 非平台管理员忽略 groupId（其作用域由 instanceQueryScope 强制，与 List 一致）。
+func parseInstanceSearchParams(c *gin.Context, isAdmin bool) service.InstanceSearchParams {
+	p := service.InstanceSearchParams{
+		Query: c.Query("q"),
+		Sort:  c.Query("sort"),
+		Order: c.Query("order"),
+	}
+	p.Env = c.Query("env")
+	p.Tag = c.Query("tag")
+	if v := c.Query("nodeId"); v != "" {
+		id, _ := strconv.ParseUint(v, 10, 64)
+		u := uint(id)
+		p.NodeID = &u
+	}
+	if v := c.Query("status"); v != "" {
+		st := model.InstanceStatus(v)
+		p.Status = &st
+	}
+	if v := c.Query("role"); v != "" {
+		r := model.InstanceRole(v)
+		p.Role = &r
+	}
+	if v := c.Query("networkId"); v != "" {
+		id, _ := strconv.ParseUint(v, 10, 64)
+		u := uint(id)
+		p.NetworkID = &u
+	}
+	if isAdmin {
+		if v := c.Query("groupId"); v != "" {
+			id, _ := strconv.ParseUint(v, 10, 64)
+			u := uint(id)
+			p.GroupID = &u
+		}
+	}
+	if v := c.Query("page"); v != "" {
+		n, _ := strconv.Atoi(v)
+		p.Page = n
+	}
+	if v := c.Query("pageSize"); v != "" {
+		n, _ := strconv.Atoi(v)
+		p.PageSize = n
+	}
+	return p
+}
+
+// instanceQueryScope 返回查询作用域：平台管理员 nil（不限组）；否则其可访问组（空集=无可见实例）。
+func instanceQueryScope(access *service.UserAccess) []uint {
+	if access.IsPlatformAdmin {
+		return nil
+	}
+	return accessibleGroupIDs(access)
+}
+
 // Get 实例详情。
 func (h *InstanceHandler) Get(c *gin.Context) {
 	id, err := parseID(c)
@@ -432,6 +519,9 @@ func (h *InstanceHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	instances := rg.Group("/instances")
 	{
 		instances.GET("", h.List)
+		// 静态段与 /:id 同级共存（gin v1.12 支持）：分页搜索 + 维度聚合（FR-247）。
+		instances.GET("/search", h.Search)
+		instances.GET("/aggregate", h.Aggregate)
 		instances.POST("", h.Create)
 		instances.GET("/:id", h.Get)
 		instances.PUT("/:id", h.Update)

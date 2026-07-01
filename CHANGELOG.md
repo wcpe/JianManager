@@ -6,6 +6,9 @@
 
 ## [Unreleased]
 
+### 新增
+- **实例规模化后端：服务端分页搜索 + 维度聚合 API（FR-247）**：今 `GET /instances` 返回裸数组全量，实例上千时前端全量拉 + 渲全量撑不住（瓶颈在前端拉/渲全集，非 DB）。新增两只读端点为列表页/导航实例选择器/全局搜索/页眉弹层提供统一数据地基：① `GET /instances/search` 分页搜索——`q` 名称子串（大小写不敏感）+ 既有多维筛选（node/status/role/group/network/env/tag）+ `sort`(name|status|createdAt|nodeId)/`order` + `page`/`pageSize`(默认 50/上限 200)，返回 `{items,total,page,pageSize}`；② `GET /instances/aggregate` 维度计数——同筛选下按状态/节点/角色分组计数（`byStatus` 五态零补、`byRole` 三角色、`byNode` 升序），供筛选 chip/分组头不拉全集即得计数。复用既有权限作用域（非管理员限可访问组）；env/tag 改 SQL 引号定界 LIKE（分页路径不再 Go 后置过滤，保 page/total 一致）；sort 走白名单映射列名防注入 + 二级 `id` 排序保翻页稳定；`Instance.Name`/`Status` 加索引（AutoMigrate）。`GET /instances` 全量端点保持不变（向后兼容）。**仅后端契约**，前端消费见 FR-235/240/241。service 9 例 + handler 4 例测试（分页/搜索/排序/筛选/聚合/权限作用域/越界/鉴权门）；`go build`/`vet` 绿。
+
 ### 修复
 - **面包屑补全 超级工作台 / 导播台 / 客户端分发监控（FR-245，导航外壳 v2 Part C）**：`lib/breadcrumb` 的路由→域/页面映射漏了 `/super`、`/director`、`/client-dist-monitor`（侧栏导航有、面包屑表无），致这三页面包屑回退「控制台」、与导航位置/文案不符（用户报「面包屑文字和导航不一致」）。补齐三条映射（域/页面 labelKey 与导航同源），加回归单测（10 例）。前端 `vitest`/`eslint` 绿。**真机验过**：`/super`→「集群 › 超级工作台」、`/client-dist-monitor`→「观测 › 客户端分发监控」（不再「控制台」）。
 - **实例启动/停止控制台缺陷簇（强停状态机 / 启动失败原因 / 启动防抖）**：① **强制终止绕过状态机**：`Kill` 原走 `transition(…STOPPED)`，RUNNING→STOPPED 不在 `validTransitions`（须经 STOPPING）被「无效的状态转换」拦下，卡在 RUNNING/STARTING 的实例无法强停；改 `UpdateStatus` 直置 STOPPED（强杀是逃生通道、不受 FSM 约束）。② **启动失败原因回传前端**：异步委托失败（如「实例未绑定 JDK…」）原只 `slog.Error`(`instance.go`) 不回传，前端只见「崩溃」无因；新增 `Instance.StatusReason`，4 条失败路径写入具体错误（worker `resp.Error` / 节点未连接 / 查节点失败），正常状态推进时清空；实例卡片与工作区控制台 CRASHED 时显示红色原因文案。③ **启动防抖 + 过渡态强停逃生**：工作区工具栏 STARTING/STOPPING 时启动键禁用+转圈防连点，并出「强制终止」逃生键（卡死可强停）。后端 `build`/`vet`、前端 `tsc`/`eslint` 绿。**真机验过**：启动未绑 JDK 的实例 → 卡片即显红色原因「实例未绑定 JDK，PATH 上的 java 为版本 8（低于现代 MC 所需的 Java 17）…」。
