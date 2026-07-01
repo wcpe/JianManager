@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { db } from '@/mocks/db'
 import type { Session } from '@/mocks/handlers/domains/auth'
@@ -93,5 +94,35 @@ describe('ClientDistMonitoringPage（mock 假后端）', () => {
     expect(await screen.findByRole('heading', { name: '客户端分发监控' })).toBeInTheDocument()
     expect(await screen.findByText('加载分发观测失败')).toBeInTheDocument()
     expect(screen.queryByText('更新成功率')).not.toBeInTheDocument()
+  })
+
+  // FR-249：分发事件（明细）Tab —— 明细表 + 结果徽章 + 失败行错误码。
+  it('⑤ 分发事件 Tab：明细表出数、失败行显示错误码（INVALID_CLIENT_KEY）', async () => {
+    loginAs(ADMIN_TOKEN, 1)
+    const user = userEvent.setup()
+    renderWithProviders(<ClientDistMonitoringPage />)
+    await screen.findByText('更新成功率')
+
+    // 切到「分发事件（明细）」Tab（Radix Tabs role=tab）。
+    await user.click(screen.getByRole('tab', { name: '分发事件（明细）' }))
+
+    // 明细表标题列出现（接通 /client-dist/events）。
+    expect(await screen.findByText('分发事件明细')).toBeInTheDocument()
+    expect(await screen.findByRole('columnheader', { name: '错误码' })).toBeInTheDocument()
+    // mock 有一条 401 失败事件 → 错误码徽章可见。
+    expect(await screen.findByText('INVALID_CLIENT_KEY')).toBeInTheDocument()
+    // 成功/失败结果徽章都渲染（mock 含 200/206 成功 + 401/404 失败）。
+    expect(screen.getAllByText('失败').length).toBeGreaterThan(0)
+  })
+
+  it('⑥ 分发事件 Tab + 端点错误 → 事件区块降级为错误态、不崩溃', async () => {
+    loginAs(ADMIN_TOKEN, 1)
+    mockInject('get', '/client-dist/events', { kind: 'status', status: 500 })
+    const user = userEvent.setup()
+    renderWithProviders(<ClientDistMonitoringPage />)
+    await screen.findByText('更新成功率')
+
+    await user.click(screen.getByRole('tab', { name: '分发事件（明细）' }))
+    expect(await screen.findByText('加载分发事件失败')).toBeInTheDocument()
   })
 })

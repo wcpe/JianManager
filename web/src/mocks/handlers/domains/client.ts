@@ -150,6 +150,81 @@ const versions = db<MockVersion>('client-versions', () => [
   },
 ])
 
+/** 假后端分发明细事件（匹配 ClientDistEvent，FR-093/249）。 */
+interface MockDistEvent {
+  id: number
+  channelId: string
+  machineId: string
+  ip: string
+  kind: string
+  version: number
+  artifactSha: string
+  bytes: number
+  status: number
+  errCode: string
+  durationMs: number
+  createdAt: string
+}
+
+const distEvents = db<MockDistEvent>('client-dist-events', () => [
+  {
+    id: 1,
+    channelId: 'skyblock-s1',
+    machineId: 'm-aaaa',
+    ip: '203.0.113.1',
+    kind: 'manifest',
+    version: 2,
+    artifactSha: '',
+    bytes: 1200,
+    status: 200,
+    errCode: '',
+    durationMs: 4,
+    createdAt: '2026-06-28T10:05:00Z',
+  },
+  {
+    id: 2,
+    channelId: 'skyblock-s1',
+    machineId: 'm-bbbb',
+    ip: '198.51.100.7',
+    kind: 'artifact',
+    version: 0,
+    artifactSha: 'a'.repeat(64),
+    bytes: 2048,
+    status: 206,
+    errCode: '',
+    durationMs: 12,
+    createdAt: '2026-06-28T10:04:00Z',
+  },
+  {
+    id: 3,
+    channelId: 'skyblock-s1',
+    machineId: 'm-cccc',
+    ip: '203.0.113.9',
+    kind: 'manifest',
+    version: 0,
+    artifactSha: '',
+    bytes: 60,
+    status: 401,
+    errCode: 'INVALID_CLIENT_KEY',
+    durationMs: 1,
+    createdAt: '2026-06-28T10:03:00Z',
+  },
+  {
+    id: 4,
+    channelId: 'survival-s2',
+    machineId: 'm-dddd',
+    ip: '203.0.113.20',
+    kind: 'manifest',
+    version: 0,
+    artifactSha: '',
+    bytes: 80,
+    status: 404,
+    errCode: 'NO_LATEST_VERSION',
+    durationMs: 2,
+    createdAt: '2026-06-28T10:02:00Z',
+  },
+])
+
 /** 频道下未吊销密钥数（列表 keyCount）。 */
 const keyCountOf = (channelId: string) =>
   keys.list((k) => k.channelId === channelId && !k.revoked).length
@@ -498,6 +573,28 @@ export const handlers = [
     const channelId = url.searchParams.get('channelId') ?? ''
     const range = url.searchParams.get('range') ?? '7d'
     return HttpResponse.json(buildObservability(channelId, range))
+  }),
+
+  // 分发明细事件检索（FR-093/249）：支持 outcome（成功/失败）、errCode、kind、channelId、limit 过滤。
+  // 平台管理员端点；mock 默认用户 role=10，requireAuth 即可放行。
+  domainRoute('get', '/client-dist/events', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const channelId = url.searchParams.get('channelId') ?? ''
+    const kind = url.searchParams.get('kind') ?? ''
+    const outcome = url.searchParams.get('outcome') ?? ''
+    const errCode = url.searchParams.get('errCode') ?? ''
+    const limit = Number(url.searchParams.get('limit') ?? 200)
+    let rows = distEvents.list()
+    if (channelId) rows = rows.filter((e) => e.channelId === channelId)
+    if (kind) rows = rows.filter((e) => e.kind === kind)
+    // failure⟺status>=400；success⟺0<status<400（含 304/200/206）。
+    if (outcome === 'failure') rows = rows.filter((e) => e.status >= 400)
+    else if (outcome === 'success') rows = rows.filter((e) => e.status > 0 && e.status < 400)
+    if (errCode) rows = rows.filter((e) => e.errCode === errCode)
+    rows = rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit)
+    return HttpResponse.json(rows)
   }),
 
   // 内嵌更新器 jar 信息（FR-107 接入引导）。

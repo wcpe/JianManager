@@ -7,10 +7,14 @@ import {
   type ClientDistSeriesPoint,
   type ClientDistDistItem,
 } from '@/api/clientStats'
+import { useClientDistEvents, type ClientDistEvent } from '@/api/clientDistEvents'
 import { useAuthStore } from '@/stores/auth'
 import { Panel } from '@/components/ui/panel'
 import { StatCard } from '@/components/ui/stat-card'
 import { MiniBar } from '@/components/ui/mini-bar'
+import { Badge } from '@/components/ui/badge'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { RangePicker, type MetricRange } from '@/components/charts/RangePicker'
 import { TimeSeriesChart, type ChartSeries } from '@/components/charts/TimeSeriesChart'
 import {
@@ -127,6 +131,137 @@ function TrendCard({
   )
 }
 
+/** 「全部」结果/类型哨兵值（Select 不接受空串 value）。 */
+const ALL = '__all__'
+
+/** 事件行结果徽章：成功绿 / 失败红（failure⟺status>=400）。 */
+function ResultBadge({ status }: { status: number }) {
+  const { t } = useTranslation()
+  const failure = status >= 400
+  return (
+    <Badge variant={failure ? 'destructive' : 'secondary'}>
+      {failure ? t('clientDistMonitor.resultFailure') : t('clientDistMonitor.resultSuccess')}
+    </Badge>
+  )
+}
+
+/** 短时间格式（本地化到分钟）。 */
+function fmtTime(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
+}
+
+/**
+ * 分发事件明细区块（FR-249，消费 `GET /client-dist/events`）。
+ * 明细表 + 结果筛选（全部/成功/失败）+ 类型筛选 + 失败行显示语义错误码。复用站内 Table/Badge 范式（FR-195）。
+ * `channelId`/`enabled` 由父页传入（承接总览的频道筛选与平台管理员门控）。
+ */
+function DistEventsPanel({ channelId, enabled }: { channelId?: string; enabled: boolean }) {
+  const { t } = useTranslation()
+  const [outcome, setOutcome] = useState<string>(ALL)
+  const [kind, setKind] = useState<string>(ALL)
+
+  const { data, isError, isLoading } = useClientDistEvents({
+    channelId,
+    kind: kind === ALL ? undefined : kind,
+    outcome: outcome === ALL ? '' : (outcome as 'success' | 'failure'),
+    enabled,
+  })
+  const events = data ?? []
+
+  const kindLabel = (k: string) =>
+    k === 'manifest'
+      ? t('clientDistMonitor.kindManifest')
+      : k === 'artifact'
+        ? t('clientDistMonitor.kindArtifact')
+        : k
+  const targetOf = (e: ClientDistEvent) =>
+    e.kind === 'artifact'
+      ? e.artifactSha
+        ? e.artifactSha.slice(0, 12)
+        : '—'
+      : e.version > 0
+        ? `v${e.version}`
+        : '—'
+
+  const filters = (
+    <div className="flex flex-wrap items-center gap-2">
+      <Select value={outcome} onValueChange={setOutcome}>
+        <SelectTrigger size="sm" className="w-32">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL}>{t('clientDistMonitor.outcomeAll')}</SelectItem>
+          <SelectItem value="success">{t('clientDistMonitor.outcomeSuccess')}</SelectItem>
+          <SelectItem value="failure">{t('clientDistMonitor.outcomeFailure')}</SelectItem>
+        </SelectContent>
+      </Select>
+      <Select value={kind} onValueChange={setKind}>
+        <SelectTrigger size="sm" className="w-32">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL}>{t('clientDistMonitor.allKinds')}</SelectItem>
+          <SelectItem value="manifest">{t('clientDistMonitor.kindManifest')}</SelectItem>
+          <SelectItem value="artifact">{t('clientDistMonitor.kindArtifact')}</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
+  )
+
+  return (
+    <Panel title={t('clientDistMonitor.eventsTitle')} actions={filters}>
+      <p className="mb-3 text-xs text-muted-foreground">{t('clientDistMonitor.eventsHint')}</p>
+      {isError ? (
+        <p className="py-10 text-center text-sm text-muted-foreground">{t('clientDistMonitor.eventsError')}</p>
+      ) : events.length === 0 ? (
+        <p className="py-10 text-center text-sm text-muted-foreground">
+          {isLoading ? t('common.loading') : t('clientDistMonitor.eventsEmpty')}
+        </p>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>{t('clientDistMonitor.colTime')}</TableHead>
+              <TableHead>{t('clientDistMonitor.colChannel')}</TableHead>
+              <TableHead>{t('clientDistMonitor.colKind')}</TableHead>
+              <TableHead>{t('clientDistMonitor.colTarget')}</TableHead>
+              <TableHead>{t('clientDistMonitor.colIp')}</TableHead>
+              <TableHead>{t('clientDistMonitor.colStatus')}</TableHead>
+              <TableHead>{t('clientDistMonitor.colResult')}</TableHead>
+              <TableHead>{t('clientDistMonitor.colErrCode')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {events.map((e) => (
+              <TableRow key={e.id}>
+                <TableCell className="tabular-nums text-muted-foreground">{fmtTime(e.createdAt)}</TableCell>
+                <TableCell>{e.channelId || '—'}</TableCell>
+                <TableCell>{kindLabel(e.kind)}</TableCell>
+                <TableCell className="font-mono text-xs">{targetOf(e)}</TableCell>
+                <TableCell className="tabular-nums">{e.ip || '—'}</TableCell>
+                <TableCell className="tabular-nums">{e.status}</TableCell>
+                <TableCell>
+                  <ResultBadge status={e.status} />
+                </TableCell>
+                <TableCell>
+                  {e.errCode ? (
+                    <Badge variant="outline" className="font-mono text-xs">
+                      {e.errCode}
+                    </Badge>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </Panel>
+  )
+}
+
 /**
  * 观测·客户端分发监控页（FR-218，消费 FR-217 观测底座 `GET /client-dist/observability`）。
  * 总览（不筛=跨频道汇总）+ 频道筛选器（下拉选单频道）；内容三段：
@@ -139,6 +274,7 @@ export default function ClientDistMonitoringPage() {
   const { t } = useTranslation()
   const [range, setRange] = useState<MetricRange>('7d')
   const [channel, setChannel] = useState<string>(ALL_CHANNELS)
+  const [tab, setTab] = useState<'overview' | 'events'>('overview')
 
   const isPlatformAdmin = useAuthStore((s) => s.role) === ROLE_PLATFORM_ADMIN
   const { data: channels } = useClientChannels()
@@ -231,7 +367,7 @@ export default function ClientDistMonitoringPage() {
         </div>
         <div className="flex items-center gap-2">
           {isPlatformAdmin && channelPicker}
-          <RangePicker value={range} onChange={setRange} />
+          {isPlatformAdmin && tab === 'overview' && <RangePicker value={range} onChange={setRange} />}
         </div>
       </div>
 
@@ -241,16 +377,24 @@ export default function ClientDistMonitoringPage() {
             {t('clientDistMonitor.adminOnly')}
           </p>
         </Panel>
-      ) : isError ? (
-        <Panel title={t('clientDistMonitor.title')}>
-          <p className="py-10 text-center text-sm text-muted-foreground">
-            {t('clientDistMonitor.loadError')}
-          </p>
-        </Panel>
       ) : (
-        <>
-          {/* ① 区间 KPI 卡 */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <Tabs value={tab} onValueChange={(v) => setTab(v as 'overview' | 'events')}>
+          <TabsList variant="line">
+            <TabsTrigger value="overview">{t('clientDistMonitor.tabOverview')}</TabsTrigger>
+            <TabsTrigger value="events">{t('clientDistMonitor.tabEvents')}</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="overview" className="space-y-4">
+            {isError ? (
+              <Panel title={t('clientDistMonitor.title')}>
+                <p className="py-10 text-center text-sm text-muted-foreground">
+                  {t('clientDistMonitor.loadError')}
+                </p>
+              </Panel>
+            ) : (
+              <>
+                {/* ① 区间 KPI 卡 */}
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <StatCard
               icon={<Download className="size-3.5" />}
               label={t('clientDistMonitor.manifestPulls')}
@@ -322,25 +466,32 @@ export default function ClientDistMonitoringPage() {
             />
           </div>
 
-          {/* ③ 分布 / 榜单 */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <DistPanel
-              title={t('clientDistMonitor.versionDist')}
-              buckets={versionBuckets}
-              empty={isLoading ? t('common.loading') : t('clientDistMonitor.empty')}
-            />
-            <DistPanel
-              title={t('clientDistMonitor.platformDist')}
-              buckets={platformBuckets}
-              empty={isLoading ? t('common.loading') : t('clientDistMonitor.empty')}
-            />
-            <DistPanel
-              title={t('clientDistMonitor.lagDist')}
-              buckets={lagBuckets}
-              empty={isLoading ? t('common.loading') : t('clientDistMonitor.empty')}
-            />
-          </div>
-        </>
+                {/* ③ 分布 / 榜单 */}
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <DistPanel
+                    title={t('clientDistMonitor.versionDist')}
+                    buckets={versionBuckets}
+                    empty={isLoading ? t('common.loading') : t('clientDistMonitor.empty')}
+                  />
+                  <DistPanel
+                    title={t('clientDistMonitor.platformDist')}
+                    buckets={platformBuckets}
+                    empty={isLoading ? t('common.loading') : t('clientDistMonitor.empty')}
+                  />
+                  <DistPanel
+                    title={t('clientDistMonitor.lagDist')}
+                    buckets={lagBuckets}
+                    empty={isLoading ? t('common.loading') : t('clientDistMonitor.empty')}
+                  />
+                </div>
+              </>
+            )}
+          </TabsContent>
+
+          <TabsContent value="events" className="space-y-4">
+            <DistEventsPanel channelId={channelId} enabled={isPlatformAdmin} />
+          </TabsContent>
+        </Tabs>
       )}
     </div>
   )
