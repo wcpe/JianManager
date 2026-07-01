@@ -9,19 +9,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * 服务端 manifest 兼容性固化测试（FR-087 契约硬验证）。
  *
- * <p>{@link #GOLDEN} 是 JM 服务端 {@code ManifestSigner}（开发签名密钥 k1）对契约 §2 样例
- * **真实输出**的签名 manifest JSON（由 Go 侧 service 测试 emit、原样粘入）。本测试证明：
- * <ol>
- *   <li>服务端输出的字段名/嵌套/类型可被 {@link Manifest#parse} 解析（两线接口对齐）；</li>
- *   <li>服务端 Ed25519 签名可被生产内置公钥 {@link Signatures#production()}（已回填 k1）验证——
- *       即服务端签名与客户端验签对同一份 canonical JSON 字节计算，逐位一致。</li>
- * </ol>
+ * <p>{@link #GOLDEN} 是 JM 服务端对契约 §2 样例**真实输出**的 manifest JSON（由 Go 侧
+ * service 测试 emit、原样粘入）。本测试证明服务端输出的字段名/嵌套/类型可被
+ * {@link Manifest#parse} 解析（两线接口对齐）。
  *
- * <p>更新规则：服务端 canonical/字段若变更，须重跑 Go 侧 emit 并替换 {@link #GOLDEN}，双线同步。
+ * <p>FR-256 起 manifest 不再携带签名段（信任模型改为 HTTPS + 拉取密钥鉴权），故 GOLDEN
+ * 已去掉 sig 段，验签相关断言/方法已删除，仅保留解析兼容性校验。
+ *
+ * <p>更新规则：服务端字段若变更，须重跑 Go 侧 emit 并替换 {@link #GOLDEN}，双线同步。
  */
 class ServerManifestCompatTest {
 
-    /** JM 服务端真实输出（dev 私钥 k1 签名，contract §2 样例）。勿手改，须由服务端 emit 同步。 */
+    /** JM 服务端真实输出（dev 私钥已去，contract §2 样例，FR-256 起无 sig 段）。勿手改，须由服务端 emit 同步。 */
     private static final String GOLDEN = "{\n"
             + "  \"agent\": {\n"
             + "    \"core\": {\n"
@@ -75,11 +74,6 @@ class ServerManifestCompatTest {
             + "    \"config\"\n"
             + "  ],\n"
             + "  \"schemaVersion\": 1,\n"
-            + "  \"sig\": {\n"
-            + "    \"alg\": \"Ed25519\",\n"
-            + "    \"keyId\": \"k1\",\n"
-            + "    \"value\": \"QzQE5n5erhS7r3xPHceNNXvT5WoUsVOyYeV7ytNX26R7ZZ0pha/LaUzziI/iwcqksH8uKX3cijLvLg8iJBYCBA==\"\n"
-            + "  },\n"
             + "  \"version\": 42\n"
             + "}";
 
@@ -99,22 +93,14 @@ class ServerManifestCompatTest {
         assertEquals("windows", m.files.get(1).platform);
         assertEquals("once", m.files.get(1).sync);
         assertEquals(2, m.managedDirs.size());
-        assertEquals("k1", m.sigKeyId);
-        assertEquals("Ed25519", m.sigAlg);
-    }
-
-    @Test
-    void verifiesWithProductionPublicKey() {
-        // 服务端真实签名，须被回填了 k1 公钥的生产信任根验证通过——两线签名/验签逐位对齐的硬证明。
-        Manifest m = Manifest.parse(GOLDEN);
-        assertTrue(Signatures.production().verify(m),
-                "服务端 manifest 签名必须可被生产内置公钥验证（FR-087 契约一致性）");
+        // agent.core 段保留（楔子消费，FR-258）。
+        assertEquals(5L, m.agentCoreVersion, "agent.core.version 须解析");
     }
 
     // ── FR-255：cleanExclude 跨端对照 ──────────────────────────────────────
 
     /**
-     * 含 cleanExclude + managedDirs["*"] 的签名 manifest（Go 侧 dev 私钥 k1 签名）。
+     * 含 cleanExclude + managedDirs["*"] 的 manifest（Go 侧 dev 私钥已去，FR-256 起无 sig）。
      * 由 Go TestGenCleanExcludeGolden 生成，双线同步——勿手改。
      */
     private static final String GOLDEN_CLEAN_EXCLUDE = "{\n"
@@ -148,11 +134,6 @@ class ServerManifestCompatTest {
             + "    \"*\"\n"
             + "  ],\n"
             + "  \"schemaVersion\": 1,\n"
-            + "  \"sig\": {\n"
-            + "    \"alg\": \"Ed25519\",\n"
-            + "    \"keyId\": \"k1\",\n"
-            + "    \"value\": \"yY9lHKS5e0He8GhgA4flBpcs0h7hC+ejnkDJS9iKFv0IowQ4UhtVtbfmEpIdGWK3XuBDaXe1DUok9bDBnSvMBw==\"\n"
-            + "  },\n"
             + "  \"version\": 42\n"
             + "}";
 
@@ -165,16 +146,6 @@ class ServerManifestCompatTest {
         assertEquals(2, m.cleanExclude.size(), "cleanExclude 须解析为两项");
         assertEquals("mods/keep", m.cleanExclude.get(0));
         assertEquals("custom", m.cleanExclude.get(1));
-        assertEquals("k1", m.sigKeyId);
-    }
-
-    @Test
-    void verifiesCleanExcludeManifestWithProductionPublicKey() {
-        // 含 cleanExclude 的 manifest 签名须被生产内置公钥验证——
-        // 证明 Go manifestToTree 与 Java signingBytes 对同一份 canonical JSON 逐位一致。
-        Manifest m = Manifest.parse(GOLDEN_CLEAN_EXCLUDE);
-        assertTrue(Signatures.production().verify(m),
-                "含 cleanExclude 的 manifest 签名必须可被生产内置公钥验证（FR-255 跨端 canonical 对齐）");
     }
 
     @Test

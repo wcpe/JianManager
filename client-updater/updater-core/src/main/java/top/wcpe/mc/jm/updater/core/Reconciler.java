@@ -13,9 +13,12 @@ import java.util.Set;
  * 文件级 reconcile 引擎（契约 §2/§6.4，FR-090 核心）。
  *
  * <p>增量：对 manifest 中 {@code platform} 适配本机的文件，md5/size 快筛命中即跳过；
- * 否则从 CAS 或 transport 取制品 → 解码 → sha256 强校验 → 原子放置。
+ * 否则从 transport 取制品 → 解码 → sha256 强校验 → 原子放置。
  * 减量：仅在 {@code managedDirs} 内、对 {@code sync} 非 once/ignore 的文件，删「本地有但 manifest 未列」的。
  * 玩家区永不碰（{@link PathRules}）。
+ *
+ * <p>FR-256 起：去掉 CAS 内容寻址缓存（CasCache 已删）。下载的制品直接解码写盘，不再落盘缓存；
+ * 重复文件复用靠 size+sha256 快筛（命中即跳过下载），不再查 CAS。
  */
 final class Reconciler {
 
@@ -24,30 +27,27 @@ final class Reconciler {
         int downloaded;
         int skipped;
         int removed;
-        int casHits;
         final List<String> errors = new ArrayList<>();
 
         @Override
         public String toString() {
             return "downloaded=" + downloaded + " skipped=" + skipped
-                    + " removed=" + removed + " casHits=" + casHits
+                    + " removed=" + removed
                     + " errors=" + errors.size();
         }
     }
 
     private final Path gameDir;
     private final Transport transport;
-    private final CasCache cas;
     private final Platform platform;
     private final Logger log;
     /** 下载进度上报（FR-099）；不展示时为 Noop reporter（非 null）。 */
     private final ProgressReporter reporter;
 
-    Reconciler(Path gameDir, Transport transport, CasCache cas, Platform platform, Logger log,
+    Reconciler(Path gameDir, Transport transport, Platform platform, Logger log,
                ProgressReporter reporter) {
         this.gameDir = gameDir.toAbsolutePath().normalize();
         this.transport = transport;
-        this.cas = cas;
         this.platform = platform;
         this.log = log;
         this.reporter = reporter;
@@ -114,7 +114,7 @@ final class Reconciler {
     }
 
     /**
-     * 廉价预估本次将下载的压缩字节（FR-099 进度分母）：不哈希——按 once/exists、size 匹配、CAS 命中粗筛，
+     * 廉价预估本次将下载的压缩字节（FR-099 进度分母）：不哈希——按 once/exists、size 匹配粗筛，
      * 余者计 {@code artifactSize}。同大小不同 md5 的极少数误判由收尾 snap-to-100% 兜底。
      */
     private long estimateDownloadBytes(Manifest manifest) {
@@ -134,9 +134,6 @@ final class Reconciler {
             if (exists && sizeMatches(target, entry)) {
                 continue; // 大小一致，大概率快筛跳过（不哈希）。
             }
-            if (entry.sha256 != null && cas.has(entry.sha256)) {
-                continue; // CAS 命中，本地复用不走网络。
-            }
             if (entry.artifactSha256 == null) {
                 continue; // 无制品信息，无法下载。
             }
@@ -153,7 +150,7 @@ final class Reconciler {
         }
     }
 
-    /** 单文件增量：快筛 → CAS/下载 → 解码 → sha256 校验 → 原子放置（按 sync 策略）。 */
+    /** 单文件增量：快筛 → 下载 → 解码 → sha256 校验 → 原子放置（按 sync 策略）。 */
     private void applyFile(Manifest.FileEntry entry, Result result) throws IOException {
         Path target = PathRules.resolveSafe(gameDir, entry.path);
 
@@ -171,18 +168,13 @@ final class Reconciler {
             return;
         }
 
-        // 取得目标内容：优先 CAS（内容寻址，命中免下），否则下载制品并解码。
+        // 取得目标内容：下载制品并解码（FR-256 起 CAS 已删，不再查本地缓存）。
         byte[] content = obtainContent(entry, result);
 
-        // sha256 强校验——信任校验必须 sha256（md5 仅快筛，ADR-022 决策 3）。
+        // sha256 强校验——完整性校验必须 sha256（md5 仅快筛）。FR-256 起为下载完整性校验而非信任校验。
         String actual = Hashes.sha256(content);
         if (!actual.equalsIgnoreCase(entry.sha256)) {
             throw new IOException("sha256 校验失败 期望=" + entry.sha256 + " 实际=" + actual);
-        }
-
-        // 入 CAS（按解压后内容 sha256），供后续/N-1 复用。
-        if (!cas.has(entry.sha256)) {
-            cas.put(entry.sha256, content);
         }
 
         atomicWrite(target, content);
@@ -205,12 +197,8 @@ final class Reconciler {
         return false;
     }
 
-    /** 从 CAS 取（命中）或下载制品并按 codec 解码。 */
+    /** 下载制品并按 codec 解码（FR-256 起 CAS 已删，直接走 transport）。 */
     private byte[] obtainContent(Manifest.FileEntry entry, Result result) throws IOException {
-        if (entry.sha256 != null && cas.has(entry.sha256)) {
-            result.casHits++;
-            return cas.get(entry.sha256);
-        }
         if (entry.artifactSha256 == null) {
             throw new IOException("缺少 artifact 信息，无法下载: " + entry.path);
         }

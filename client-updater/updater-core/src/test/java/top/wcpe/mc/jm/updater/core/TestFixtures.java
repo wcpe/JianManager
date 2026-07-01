@@ -142,30 +142,6 @@ final class TestFixtures {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    static Map<String, Object> deepCopy(Map<String, Object> src) {
-        return (Map<String, Object>) deepCopyValue(src);
-    }
-
-    @SuppressWarnings("unchecked")
-    private static Object deepCopyValue(Object v) {
-        if (v instanceof Map) {
-            Map<String, Object> out = new LinkedHashMap<>();
-            for (Map.Entry<String, Object> e : ((Map<String, Object>) v).entrySet()) {
-                out.put(e.getKey(), deepCopyValue(e.getValue()));
-            }
-            return out;
-        }
-        if (v instanceof List) {
-            List<Object> out = new ArrayList<>();
-            for (Object o : (List<Object>) v) {
-                out.add(deepCopyValue(o));
-            }
-            return out;
-        }
-        return v;
-    }
-
     private TestFixtures() {
     }
 }

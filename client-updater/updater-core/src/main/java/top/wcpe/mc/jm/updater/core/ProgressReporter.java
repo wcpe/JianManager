@@ -3,7 +3,7 @@ package top.wcpe.mc.jm.updater.core;
 import java.util.function.LongConsumer;
 
 /**
- * 更新进度上报（FR-099）：连接下载逻辑（{@link Reconciler}/{@link SelfUpdater}）与展示（{@link ProgressView}）。
+ * 更新进度上报（FR-099）：连接下载逻辑（{@link Reconciler}）与展示（{@link ProgressView}）。
  *
  * <p>持 {@link ProgressModel}（数据）+ {@link ProgressView}（展示）。下载侧调用 {@link #plan}/{@link #beginFile}/
  * {@link #sink}；窗口在首个 {@link #beginFile} 时惰性显示（无下载则不弹）。玩家关窗 → {@link #isCancelled()}。

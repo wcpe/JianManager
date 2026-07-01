@@ -17,39 +17,39 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * updater-core reconcile 端到端测试（FR-090）：用本地临时 gameDir + 内存 Transport + 注入测试公钥，
- * 不依赖真端点。覆盖增量/减量、托管区/玩家区隔离、sync 策略、防降级、fail-static、CAS、平台过滤、并发锁。
+ * updater-core reconcile 端到端测试（FR-090 / FR-256 简化后）：用本地临时 gameDir + 内存 Transport，
+ * 不依赖真端点。覆盖增量/减量、托管区/玩家区隔离、sync 策略、fail-static、平台过滤、并发锁。
+ *
+ * <p>FR-256 起 manifest 不再签名（去 TestSigner），CAS/验签/防降级相关测试已删；
+ * 保留 reconcile / 快筛 / clean-all / 平台过滤 / 单实例锁 / 非法路径测试。
  */
 class UpdaterTest {
-
-    private static final String KEY_ID = "k1";
 
     private byte[] bytes(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
     }
 
-    private Updater updater(Path gameDir, Transport transport, TestSigner signer) {
-        return new Updater(gameDir, transport, Signatures.withTrustStore(signer.trustStore()));
+    private Updater updater(Path gameDir, Transport transport) {
+        return new Updater(gameDir, transport, false);
     }
 
-    /** 构造 + 签名 manifest 并挂到 transport。 */
-    private void install(TestFixtures.MemoryTransport transport, TestSigner signer,
+    /** 构造 manifest 并挂到 transport（FR-256 起 manifest 不再签名，直接 canonical JSON）。 */
+    private void install(TestFixtures.MemoryTransport transport,
                          long version, List<String> managedDirs,
                          List<TestFixtures.FileSpec> specs) throws Exception {
         Map<String, Object> manifest = TestFixtures.buildManifest(
                 "skyblock-s1", version, managedDirs, specs, transport);
-        transport.manifestJson = signer.sign(manifest);
+        transport.manifestJson = Json.canonical(manifest);
     }
 
     @Test
     void incrementDownloadsMissingFile(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
         TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
         byte[] foo = bytes("foo jar content");
-        install(transport, signer, 1, Collections.singletonList("mods"),
+        install(transport, 1, Collections.singletonList("mods"),
                 Collections.singletonList(new TestFixtures.FileSpec("mods/foo.jar", foo)));
 
-        int rc = updater(gameDir, transport, signer).run();
+        int rc = updater(gameDir, transport).run();
 
         assertEquals(Updater.OK, rc);
         Path written = gameDir.resolve("mods/foo.jar");
@@ -60,17 +60,16 @@ class UpdaterTest {
 
     @Test
     void quickSkipWhenFileAlreadyMatches(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
         TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
         byte[] foo = bytes("already present");
         // 本地预置一致文件。
         Files.createDirectories(gameDir.resolve("mods"));
         Files.write(gameDir.resolve("mods/foo.jar"), foo);
 
-        install(transport, signer, 1, Collections.singletonList("mods"),
+        install(transport, 1, Collections.singletonList("mods"),
                 Collections.singletonList(new TestFixtures.FileSpec("mods/foo.jar", foo)));
 
-        int rc = updater(gameDir, transport, signer).run();
+        int rc = updater(gameDir, transport).run();
 
         assertEquals(Updater.OK, rc);
         assertEquals(0, transport.artifactFetchCount, "md5/size 快筛命中应跳过下载");
@@ -78,17 +77,16 @@ class UpdaterTest {
 
     @Test
     void decrementRemovesStaleFileInManagedDir(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
         TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
         // 本地有 manifest 未列的旧文件。
         Files.createDirectories(gameDir.resolve("mods"));
         Files.write(gameDir.resolve("mods/stale.jar"), bytes("old mod"));
 
         byte[] keep = bytes("keep this");
-        install(transport, signer, 1, Collections.singletonList("mods"),
+        install(transport, 1, Collections.singletonList("mods"),
                 Collections.singletonList(new TestFixtures.FileSpec("mods/keep.jar", keep)));
 
-        int rc = updater(gameDir, transport, signer).run();
+        int rc = updater(gameDir, transport).run();
 
         assertEquals(Updater.OK, rc);
         assertFalse(Files.exists(gameDir.resolve("mods/stale.jar")), "托管区内 manifest 未列文件应被减量删除");
@@ -97,7 +95,6 @@ class UpdaterTest {
 
     @Test
     void playerZoneNeverTouched(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
         TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
         // 玩家区文件（managedDirs 之外）。
         Files.createDirectories(gameDir.resolve("saves/world"));
@@ -107,10 +104,10 @@ class UpdaterTest {
         Files.write(gameDir.resolve("screenshots/shot.png"), bytes("png"));
 
         byte[] mod = bytes("mod");
-        install(transport, signer, 1, Collections.singletonList("mods"),
+        install(transport, 1, Collections.singletonList("mods"),
                 Collections.singletonList(new TestFixtures.FileSpec("mods/a.jar", mod)));
 
-        int rc = updater(gameDir, transport, signer).run();
+        int rc = updater(gameDir, transport).run();
 
         assertEquals(Updater.OK, rc);
         assertArrayEquals(bytes("player save"), Files.readAllBytes(gameDir.resolve("saves/world/level.dat")));
@@ -121,17 +118,16 @@ class UpdaterTest {
     // ── FR-255：clean-all（"*" 哨兵）+ 自定义排除 ──────────────────────────
 
     /** 带 cleanExclude 的 install 辅助（FR-255）。 */
-    private void installWithExclude(TestFixtures.MemoryTransport transport, TestSigner signer,
+    private void installWithExclude(TestFixtures.MemoryTransport transport,
                                     long version, List<String> managedDirs, List<String> cleanExclude,
                                     List<TestFixtures.FileSpec> specs) throws Exception {
         Map<String, Object> manifest = TestFixtures.buildManifest(
                 "skyblock-s1", version, managedDirs, cleanExclude, specs, transport);
-        transport.manifestJson = signer.sign(manifest);
+        transport.manifestJson = Json.canonical(manifest);
     }
 
     @Test
     void cleanAllDeletesExtraFilesButPreservesPlayerZone(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
         TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
 
         // 本地有各类「多余」文件：托管外的旧 mod、玩家存档、截图。
@@ -144,11 +140,11 @@ class UpdaterTest {
 
         byte[] keep = bytes("keep this");
         // managedDirs=["*"]：clean-all 模式。
-        installWithExclude(transport, signer, 1,
+        installWithExclude(transport, 1,
                 Collections.singletonList("*"), null,
                 Collections.singletonList(new TestFixtures.FileSpec("mods/keep.jar", keep)));
 
-        int rc = updater(gameDir, transport, signer).run();
+        int rc = updater(gameDir, transport).run();
 
         assertEquals(Updater.OK, rc);
         // 托管区内 manifest 未列文件应被删。
@@ -162,7 +158,6 @@ class UpdaterTest {
 
     @Test
     void cleanAllPreservesCustomExclude(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
         TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
 
         // 玩家自装的 mod 目录（运营排除）+ 一个应被删的多余文件。
@@ -171,11 +166,11 @@ class UpdaterTest {
         Files.write(gameDir.resolve("orphan.txt"), bytes("should be deleted"));
 
         byte[] keep = bytes("keep");
-        installWithExclude(transport, signer, 1,
+        installWithExclude(transport, 1,
                 Collections.singletonList("*"), Collections.singletonList("mymods"),
                 Collections.singletonList(new TestFixtures.FileSpec("mods/keep.jar", keep)));
 
-        int rc = updater(gameDir, transport, signer).run();
+        int rc = updater(gameDir, transport).run();
 
         assertEquals(Updater.OK, rc);
         // cleanExclude 命中的目录下文件永不删。
@@ -186,7 +181,6 @@ class UpdaterTest {
 
     @Test
     void cleanAllPreservesPlayerZoneAndExcludeSimultaneously(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
         TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
 
         // 玩家区 + 自定义排除 + 多余文件三种并存。
@@ -196,12 +190,12 @@ class UpdaterTest {
         Files.write(gameDir.resolve("orphan.txt"), bytes("orphan"));
 
         byte[] keep = bytes("keep");
-        installWithExclude(transport, signer, 1,
+        installWithExclude(transport, 1,
                 Collections.singletonList("*"),
                 Arrays.asList("mymods"),
                 Collections.singletonList(new TestFixtures.FileSpec("mods/keep.jar", keep)));
 
-        int rc = updater(gameDir, transport, signer).run();
+        int rc = updater(gameDir, transport).run();
 
         assertEquals(Updater.OK, rc);
         // 玩家区完好。
@@ -214,17 +208,16 @@ class UpdaterTest {
 
     @Test
     void syncOnceWritesOnlyWhenMissing(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
         TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
         // 本地已有玩家改过的 config（once 语义：不覆盖）。
         Files.createDirectories(gameDir.resolve("config"));
         Files.write(gameDir.resolve("config/prefs.toml"), bytes("player edited"));
 
-        install(transport, signer, 1, Collections.singletonList("config"),
+        install(transport, 1, Collections.singletonList("config"),
                 Collections.singletonList(
                         new TestFixtures.FileSpec("config/prefs.toml", bytes("default")).sync("once")));
 
-        int rc = updater(gameDir, transport, signer).run();
+        int rc = updater(gameDir, transport).run();
 
         assertEquals(Updater.OK, rc);
         assertArrayEquals(bytes("player edited"), Files.readAllBytes(gameDir.resolve("config/prefs.toml")),
@@ -234,14 +227,13 @@ class UpdaterTest {
 
     @Test
     void syncOnceWritesWhenAbsent(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
         TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
         byte[] def = bytes("default config");
-        install(transport, signer, 1, Collections.singletonList("config"),
+        install(transport, 1, Collections.singletonList("config"),
                 Collections.singletonList(
                         new TestFixtures.FileSpec("config/prefs.toml", def).sync("once")));
 
-        int rc = updater(gameDir, transport, signer).run();
+        int rc = updater(gameDir, transport).run();
 
         assertEquals(Updater.OK, rc);
         assertArrayEquals(def, Files.readAllBytes(gameDir.resolve("config/prefs.toml")),
@@ -250,17 +242,16 @@ class UpdaterTest {
 
     @Test
     void syncStrictOverwritesEditedFile(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
         TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
         Files.createDirectories(gameDir.resolve("config"));
         Files.write(gameDir.resolve("config/pack.toml"), bytes("tampered"));
 
         byte[] authoritative = bytes("authoritative pack config");
-        install(transport, signer, 1, Collections.singletonList("config"),
+        install(transport, 1, Collections.singletonList("config"),
                 Collections.singletonList(
                         new TestFixtures.FileSpec("config/pack.toml", authoritative).sync("strict")));
 
-        int rc = updater(gameDir, transport, signer).run();
+        int rc = updater(gameDir, transport).run();
 
         assertEquals(Updater.OK, rc);
         assertArrayEquals(authoritative, Files.readAllBytes(gameDir.resolve("config/pack.toml")),
@@ -269,16 +260,15 @@ class UpdaterTest {
 
     @Test
     void syncIgnoreNeitherWritesNorRemoves(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
         TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
         Files.createDirectories(gameDir.resolve("config"));
         Files.write(gameDir.resolve("config/local.toml"), bytes("local untouched"));
 
-        install(transport, signer, 1, Collections.singletonList("config"),
+        install(transport, 1, Collections.singletonList("config"),
                 Collections.singletonList(
                         new TestFixtures.FileSpec("config/local.toml", bytes("server version")).sync("ignore")));
 
-        int rc = updater(gameDir, transport, signer).run();
+        int rc = updater(gameDir, transport).run();
 
         assertEquals(Updater.OK, rc);
         assertArrayEquals(bytes("local untouched"), Files.readAllBytes(gameDir.resolve("config/local.toml")),
@@ -287,57 +277,7 @@ class UpdaterTest {
     }
 
     @Test
-    void antiDowngradeRejectsLowerVersion(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
-        // 先成功更新到 version 5。
-        TestFixtures.MemoryTransport t1 = new TestFixtures.MemoryTransport();
-        install(t1, signer, 5, Collections.singletonList("mods"),
-                Collections.singletonList(new TestFixtures.FileSpec("mods/a.jar", bytes("v5"))));
-        assertEquals(Updater.OK, updater(gameDir, t1, signer).run());
-
-        // 再投放 version 3（合法签名的旧 manifest，重放攻击）。
-        TestFixtures.MemoryTransport t2 = new TestFixtures.MemoryTransport();
-        install(t2, signer, 3, Collections.singletonList("mods"),
-                Collections.singletonList(new TestFixtures.FileSpec("mods/evil.jar", bytes("v3 rollback"))));
-        int rc = updater(gameDir, t2, signer).run();
-
-        assertEquals(Updater.FAIL_STATIC, rc, "version 低于已见最高版本必须拒绝（防降级）");
-        assertFalse(Files.exists(gameDir.resolve("mods/evil.jar")), "防降级拒绝后不得改目录");
-    }
-
-    @Test
-    void sameVersionReapplyAllowed(@TempDir Path gameDir) throws Exception {
-        // version 相等（== lastSeen）应允许（幂等重跑），仅严格更低才拒。
-        TestSigner signer = new TestSigner(KEY_ID);
-        TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
-        install(transport, signer, 7, Collections.singletonList("mods"),
-                Collections.singletonList(new TestFixtures.FileSpec("mods/a.jar", bytes("v7"))));
-        assertEquals(Updater.OK, updater(gameDir, transport, signer).run());
-
-        // 同 version 再跑。
-        TestFixtures.MemoryTransport t2 = new TestFixtures.MemoryTransport();
-        install(t2, signer, 7, Collections.singletonList("mods"),
-                Collections.singletonList(new TestFixtures.FileSpec("mods/a.jar", bytes("v7"))));
-        assertEquals(Updater.OK, updater(gameDir, t2, signer).run());
-    }
-
-    @Test
-    void invalidSignatureFailStatic(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
-        TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
-        install(transport, signer, 1, Collections.singletonList("mods"),
-                Collections.singletonList(new TestFixtures.FileSpec("mods/a.jar", bytes("x"))));
-        // 篡改签名后内容。
-        transport.manifestJson = transport.manifestJson.replace("skyblock-s1", "hacked-channel");
-
-        int rc = updater(gameDir, transport, signer).run();
-        assertEquals(Updater.FAIL_STATIC, rc, "验签失败必须 fail-static");
-        assertFalse(Files.exists(gameDir.resolve("mods/a.jar")), "验签失败不得改目录");
-    }
-
-    @Test
     void unreachableEndpointFailStatic(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
         TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
         transport.manifestUnreachable = true;
 
@@ -345,7 +285,7 @@ class UpdaterTest {
         Files.createDirectories(gameDir.resolve("mods"));
         Files.write(gameDir.resolve("mods/existing.jar"), bytes("local"));
 
-        int rc = updater(gameDir, transport, signer).run();
+        int rc = updater(gameDir, transport).run();
         assertEquals(Updater.FAIL_STATIC, rc, "端点不可达必须 fail-static");
         assertArrayEquals(bytes("local"), Files.readAllBytes(gameDir.resolve("mods/existing.jar")),
                 "断网时本地文件应保留");
@@ -353,15 +293,14 @@ class UpdaterTest {
 
     @Test
     void platformFilterSkipsForeignPlatformFiles(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
         TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
         String foreign = Platform.current() == Platform.WINDOWS ? "linux" : "windows";
 
-        install(transport, signer, 1, Collections.singletonList("mods"), Arrays.asList(
+        install(transport, 1, Collections.singletonList("mods"), Arrays.asList(
                 new TestFixtures.FileSpec("mods/universal.jar", bytes("all")).platform(null),
                 new TestFixtures.FileSpec("mods/foreign.jar", bytes("other os")).platform(foreign)));
 
-        int rc = updater(gameDir, transport, signer).run();
+        int rc = updater(gameDir, transport).run();
 
         assertEquals(Updater.OK, rc);
         assertTrue(Files.isRegularFile(gameDir.resolve("mods/universal.jar")), "全平台文件应写入");
@@ -369,41 +308,16 @@ class UpdaterTest {
     }
 
     @Test
-    void casHitAvoidsRedownload(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
-        byte[] shared = bytes("shared content across versions");
-
-        // version 1：下载并入 CAS。
-        TestFixtures.MemoryTransport t1 = new TestFixtures.MemoryTransport();
-        install(t1, signer, 1, Collections.singletonList("mods"),
-                Collections.singletonList(new TestFixtures.FileSpec("mods/a.jar", shared)));
-        assertEquals(Updater.OK, updater(gameDir, t1, signer).run());
-        assertEquals(1, t1.artifactFetchCount);
-
-        // 删除已写文件，使下次需要重新放置；但同内容已在 CAS。
-        Files.delete(gameDir.resolve("mods/a.jar"));
-
-        // version 2：同内容出现在不同路径，应命中 CAS、零下载。
-        TestFixtures.MemoryTransport t2 = new TestFixtures.MemoryTransport();
-        install(t2, signer, 2, Collections.singletonList("mods"),
-                Collections.singletonList(new TestFixtures.FileSpec("mods/b.jar", shared)));
-        assertEquals(Updater.OK, updater(gameDir, t2, signer).run());
-        assertEquals(0, t2.artifactFetchCount, "相同内容应命中 CAS，免重新下载");
-        assertArrayEquals(shared, Files.readAllBytes(gameDir.resolve("mods/b.jar")));
-    }
-
-    @Test
     void singleInstanceLockBlocksConcurrent(@TempDir Path gameDir) throws Exception {
         Path stateDir = gameDir.resolve(".jm-updater");
         try (SingleInstanceLock held = SingleInstanceLock.tryAcquire(stateDir)) {
             assertTrue(held != null);
-            TestSigner signer = new TestSigner(KEY_ID);
             TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
-            install(transport, signer, 1, Collections.singletonList("mods"),
+            install(transport, 1, Collections.singletonList("mods"),
                     Collections.singletonList(new TestFixtures.FileSpec("mods/a.jar", bytes("x"))));
 
             // 锁被占用时第二个 updater 应退让（BUSY），不并发改目录。
-            int rc = updater(gameDir, transport, signer).run();
+            int rc = updater(gameDir, transport).run();
             assertEquals(Updater.BUSY, rc, "已被占用时应退让放行");
             assertFalse(Files.exists(gameDir.resolve("mods/a.jar")));
         }
@@ -411,16 +325,15 @@ class UpdaterTest {
 
     @Test
     void escapePathInManifestRejectedAsError(@TempDir Path gameDir) throws Exception {
-        TestSigner signer = new TestSigner(KEY_ID);
         TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
-        // 构造含逃逸路径的文件（攻击者即便签名合法，也不得写出 gameDir）。
+        // 构造含逃逸路径的文件（manifest 即便内容合法，也不得写出 gameDir）。
         Map<String, Object> manifest = TestFixtures.buildManifest(
                 "skyblock-s1", 1, Collections.singletonList("mods"),
                 Collections.singletonList(new TestFixtures.FileSpec("../../evil.jar", bytes("evil"))),
                 transport);
-        transport.manifestJson = signer.sign(manifest);
+        transport.manifestJson = Json.canonical(manifest);
 
-        int rc = updater(gameDir, transport, signer).run();
+        int rc = updater(gameDir, transport).run();
         assertEquals(Updater.FAIL_STATIC, rc, "非法逃逸路径应记错误并 fail-static");
         assertFalse(Files.exists(gameDir.getParent().resolve("evil.jar")));
     }

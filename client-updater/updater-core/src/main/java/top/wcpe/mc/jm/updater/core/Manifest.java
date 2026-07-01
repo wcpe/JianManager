@@ -7,9 +7,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 已解析的版本清单（契约 §2）。仅携带 reconcile 与验签所需字段。
+ * 已解析的版本清单（契约 §2）。携带 reconcile 所需字段。
  *
- * <p>{@link #raw} 保留原始对象树，验签时去掉 {@code sig} 后做 canonical JSON（契约 §3）。
+ * <p>FR-256 起 manifest 不再携带签名段（信任模型改为 HTTPS + 拉取密钥鉴权，见
+ * updater-arch-simplification spec §2 A），故本类不再保留 sig 字段或签名输入字节。
  */
 final class Manifest {
 
@@ -65,33 +66,23 @@ final class Manifest {
     /** 运营自定义追加排除（FR-255）：命中前缀的路径永不删。空列表=未声明。 */
     final List<String> cleanExclude;
     final List<FileEntry> files;
-    final String sigAlg;
-    final String sigKeyId;
-    final String sigValue;
-    /** updater-core 自更新声明版本（契约 §2 agent.core.version，FR-091）；-1=未声明。 */
+    /** updater-core 自更新声明版本（契约 §2 agent.core.version，FR-091）；-1=未声明。段保留供楔子消费。 */
     final long agentCoreVersion;
     /** updater-core 自更新各平台制品（os→artifact，FR-091）；可空。 */
     final Map<String, AgentArtifact> agentCorePlatforms;
-    /** 原始对象树（含 sig），验签用。 */
-    final Map<String, Object> raw;
 
     private Manifest(int schemaVersion, String channel, long version, List<String> managedDirs,
                      List<String> cleanExclude,
-                     List<FileEntry> files, String sigAlg, String sigKeyId, String sigValue,
-                     long agentCoreVersion, Map<String, AgentArtifact> agentCorePlatforms,
-                     Map<String, Object> raw) {
+                     List<FileEntry> files,
+                     long agentCoreVersion, Map<String, AgentArtifact> agentCorePlatforms) {
         this.schemaVersion = schemaVersion;
         this.channel = channel;
         this.version = version;
         this.managedDirs = managedDirs;
         this.cleanExclude = cleanExclude;
         this.files = files;
-        this.sigAlg = sigAlg;
-        this.sigKeyId = sigKeyId;
-        this.sigValue = sigValue;
         this.agentCoreVersion = agentCoreVersion;
         this.agentCorePlatforms = agentCorePlatforms;
-        this.raw = raw;
     }
 
     /**
@@ -160,18 +151,8 @@ final class Manifest {
             }
         }
 
-        String sigAlg = null;
-        String sigKeyId = null;
-        String sigValue = null;
-        Object sig = obj.get("sig");
-        if (sig instanceof Map) {
-            Map<String, Object> s = (Map<String, Object>) sig;
-            sigAlg = (String) s.get("alg");
-            sigKeyId = (String) s.get("keyId");
-            sigValue = (String) s.get("value");
-        }
-
         // agent.core 自更新段（契约 §2，FR-091）：version + platforms[os].artifact。可缺省。
+        // FR-256 起 core 自更新上移到楔子（FR-258），但 manifest 仍透传该段供楔子消费，故解析保留。
         long agentCoreVersion = -1;
         Map<String, AgentArtifact> agentCorePlatforms = null;
         Object agent = obj.get("agent");
@@ -204,19 +185,8 @@ final class Manifest {
                 Collections.unmodifiableList(managedDirs),
                 Collections.unmodifiableList(cleanExclude),
                 Collections.unmodifiableList(files),
-                sigAlg, sigKeyId, sigValue,
                 agentCoreVersion,
-                agentCorePlatforms == null ? null : Collections.unmodifiableMap(agentCorePlatforms),
-                (Map<String, Object>) root);
-    }
-
-    /**
-     * 去掉 {@code sig} 字段后的 canonical JSON 字节（UTF-8）——签名覆盖范围（契约 §3）。
-     */
-    byte[] signingBytes() {
-        Map<String, Object> copy = new LinkedHashMap<>(raw);
-        copy.remove("sig");
-        return Json.canonical(copy).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                agentCorePlatforms == null ? null : Collections.unmodifiableMap(agentCorePlatforms));
     }
 
     private static long asLong(Object o, long def) {

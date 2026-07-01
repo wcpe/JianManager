@@ -1,8 +1,9 @@
 // updater-core：更新主体，被楔子动态加载（URLClassLoader 内存加载，便于自更新换 jar）。
 // target Java 8：须能被低版本（Java 8）MC 的 JVM 加载——老整合包/启动器仍在用 Java 8，
 // 若编到 17 则 UnsupportedClassVersionError、楔子加载失败（见 FR-089 真机）。
-// 代价：Java 8 无 java.net.http（改用 HttpURLConnection）、无内置 Ed25519（JDK15+，改引 BouncyCastle）。
-// 仍只用 JDK 自带能力 + 轻量 JSON（自写）+ zstd 解压 + BouncyCastle（Ed25519 验签）。
+// 代价：Java 8 无 java.net.http（改用 HttpURLConnection）。
+// FR-256 起去掉 Ed25519 验签（BouncyCastle 依赖移除），信任靠 HTTPS + 拉取密钥鉴权。
+// 仍只用 JDK 自带能力 + 轻量 JSON（自写）+ zstd 解压。
 java {
     sourceCompatibility = JavaVersion.VERSION_1_8
     targetCompatibility = JavaVersion.VERSION_1_8
@@ -21,9 +22,6 @@ repositories {
 dependencies {
     // 制品按 contract §2 artifact.codec=zstd 压缩；zstd-jni 是轻量、广用的 zstd 绑定（兼容 Java 8）。
     implementation("com.github.luben:zstd-jni:1.5.6-4")
-    // manifest/.jmpack Ed25519 验签（ADR-022）。JDK 内置 EdDSA 自 15 起才有，Java 8 须引入。
-    // bcprov-jdk18on = JDK 1.8+ 构建；以 Provider 实例直用（不全局注册），打进 fat jar。
-    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
 
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
@@ -35,6 +33,7 @@ tasks.test {
     systemProperty("java.awt.headless", "true")
     // FR-091 自更新 selftest 需以独立 classloader 加载真实构建出的 core jar 自证可用，
     // 故把自身 jar 制品路径注入测试（CoreSelfTestRealJarTest）。test 依赖 jar 不成环（jar 不依赖 test）。
+    // FR-256 起 SelfUpdater 已删，但 CoreSelfTestRealJarTest 仍验证真 jar 可加载、Core.selfTest()（zstd）通过。
     dependsOn(tasks.named("jar"))
     val selfJar = tasks.named("jar")
     inputs.files(selfJar)

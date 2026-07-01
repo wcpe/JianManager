@@ -8,10 +8,12 @@ import java.util.Map;
 /**
  * JM 客户端 OTA 更新主体（被楔子动态加载）。
  *
- * <p>{@code run} 拉签名 manifest（latest）→ Ed25519 验签 + 防降级 → 文件级 reconcile
- * （增量/减量）→ CAS 缓存；端点不可达 fail-static 带本地版本放行。
+ * <p>{@code run} 拉 manifest（latest）→ 文件级 reconcile（增量/减量）；
+ * 端点不可达 fail-static 带本地版本放行。
  *
- * <p>协议见 {@code docs/specs/client-distribution/contract.md}（ADR-021/022）。
+ * <p>FR-256 起去掉验签 / CAS / core 自更新（信任靠 HTTPS + 拉取密钥鉴权，
+ * 见 {@code docs/specs/updater-arch-simplification/spec.md}）。
+ * <p>协议见 {@code docs/specs/client-distribution/contract.md}（ADR-021）。
  */
 public final class Core {
 
@@ -62,6 +64,8 @@ public final class Core {
             String channel = ctx.get("channel");
             String key = ctx.get("key");
             String endpoint = ctx.get("endpoint");
+            // 本次运行的 core 版本号（wedge 经 ctx 注入），透传给 transport 做请求标识。
+            // FR-256 起 core 自更新上移到楔子（FR-258），core 不再据 manifest 自更新，此值仅作信息性透传。
             String coreVersion = ctx.getOrDefault("coreVersion", "");
             // 机器码身份（FR-092）：稳定、不可逆、跨平台；ctx 显式提供则用之（测试/特殊），否则本机生成。
             String machineId = ctx.getOrDefault("machineId", "");
@@ -74,16 +78,6 @@ public final class Core {
                 return Updater.FAIL_STATIC;
             }
 
-            // 本次运行的 core 版本（wedge 经 ctx 注入；解析失败/缺省按 bundled=0，FR-091 自更新比对基准）。
-            long runningCoreVersion = 0;
-            try {
-                if (!coreVersion.isEmpty()) {
-                    runningCoreVersion = Long.parseLong(coreVersion.trim());
-                }
-            } catch (NumberFormatException ignore) {
-                // 非法版本按 0 处理：自更新会把 manifest 声明版本视为更高、尝试一次（幂等无害）。
-            }
-
             Transport transport = new HttpTransport(
                     endpoint, channel, key, machineId, coreVersion, Duration.ofSeconds(15));
             Path stateDir = gameDir.resolve(".jm-updater");
@@ -91,10 +85,7 @@ public final class Core {
             long start = System.currentTimeMillis();
             // 进度窗口（FR-099）：默认展示；ctx progressUi=false 可关（headless 由展示层自动降级文本）。
             boolean progressUiEnabled = !"false".equalsIgnoreCase(ctx.getOrDefault("progressUi", "true"));
-            // 信任根裁决（FR-253，见 ADR-053）：ctx 提供配置公钥则用之，否则回退内置 dev 公钥。
-            Signatures sigs = resolveSignatures(ctx);
-            Updater updater = new Updater(gameDir, transport, sigs,
-                    runningCoreVersion, new UrlClassLoaderSelfTest(), progressUiEnabled);
+            Updater updater = new Updater(gameDir, transport, progressUiEnabled);
             int rc = updater.run();
 
             // 遥测上报（FR-094，best-effort、opt-out）：BUSY（未实际更新）不报；telemetry=false 关闭。
@@ -110,29 +101,5 @@ public final class Core {
             System.err.println("[jm-updater] core fail-static: " + t);
             return Updater.FAIL_STATIC;
         }
-    }
-
-    /**
-     * 信任根裁决（FR-253，见 ADR-053）。
-     *
-     * <p>ctx 提供 {@code signPublicKey}（非空）→ 经 {@link Signatures#fromConfig} 构造单公钥信任根；
-     * 构造失败（非法 base64 / 非 Ed25519 SPKI）→ 回退 {@link Signatures#production()} 内置公钥并记日志
-     * （保守：坏配置退回内置，验签自然失败走 fail-static 放行本地版，不因坏配置挡启动）。
-     * ctx 无 {@code signPublicKey} → 直接用内置 dev 公钥（保 dev/兼容）。
-     *
-     * @return 本次运行使用的信任根。
-     */
-    static Signatures resolveSignatures(Map<String, String> ctx) {
-        String signPublicKey = ctx.get("signPublicKey");
-        if (signPublicKey == null || signPublicKey.trim().isEmpty()) {
-            return Signatures.production();
-        }
-        String signKeyId = ctx.get("signKeyId");
-        Signatures sigs = Signatures.fromConfig(signKeyId, signPublicKey);
-        if (sigs != null) {
-            return sigs;
-        }
-        System.err.println("[jm-updater] 配置的信任公钥无效（base64/DER 解析失败），回退内置公钥");
-        return Signatures.production();
     }
 }
