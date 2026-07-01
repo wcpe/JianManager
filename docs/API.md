@@ -2046,11 +2046,11 @@
 - **审计**: `client_version.rollback`
 
 ### GET /api/v1/client-dist/events
-- **描述**: 拉取/下载明细检索（FR-093 全链路追踪）。明细短保留（默认 14 天滚动清理）；发布事件审计见 `/audit`（`client_*.publish`/`rollback`）
-- **关联 FR**: FR-093
+- **描述**: 拉取/下载明细检索（FR-093 全链路追踪；FR-249 错误追踪）。拉取失败（含 401 鉴权失败）也记录事件并带语义错误码 `errCode`。明细短保留（默认 14 天滚动清理）；发布事件审计见 `/audit`（`client_*.publish`/`rollback`）
+- **关联 FR**: FR-093、FR-249
 - **鉴权**: **JWT，平台管理员**
-- **查询参数**: `channelId` / `machineId` / `ip` / `kind`(manifest|artifact) / `version` / `since`(RFC3339) / `until`(RFC3339) / `limit`(默认 200，上限 1000)
-- **响应** (200): `[ { "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "durationMs", "createdAt" } ]`（created_at DESC）
+- **查询参数**: `channelId` / `machineId` / `ip` / `kind`(manifest|artifact) / `outcome`(success|failure，空=全部；failure⟺status≥400，success⟺0<status<400 含 200/206/304) / `errCode`(精确筛，如 `INVALID_CLIENT_KEY`) / `version` / `since`(RFC3339) / `until`(RFC3339) / `limit`(默认 200，上限 1000)
+- **响应** (200): `[ { "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "errCode", "durationMs", "createdAt" } ]`（created_at DESC）。`errCode` 成功事件为空、失败事件填语义码（`INVALID_CLIENT_KEY`/`NO_LATEST_VERSION`/`ARTIFACT_NOT_FOUND`/`SIGN_KEY_NOT_CONFIGURED`/`CHANNEL_NOT_FOUND`/`INTERNAL_ERROR`）
 
 ### GET /api/v1/client-dist/ip-rules
 - **描述**: 列出分发端点 IP 防护规则（FR-096 L7 防护）
