@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -388,6 +389,7 @@ func (h *ClientVersionHandler) respondKeyAuthErr(c *gin.Context, err error) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "INVALID_CLIENT_KEY", "message": "拉取密钥无效"})
 		return
 	}
+	slog.Error("客户端分发鉴权失败", "channel", c.Param("id"), "error", err)
 	c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "鉴权失败"})
 }
 
@@ -406,6 +408,7 @@ func (h *ClientVersionHandler) respondErr(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrChecksumMismatch):
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "CHECKSUM_MISMATCH", "message": err.Error()})
 	default:
+		slog.Error("客户端分发发布端点内部错误", "path", c.Request.URL.Path, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "操作失败"})
 	}
 }
@@ -420,8 +423,10 @@ func (h *ClientVersionHandler) respondConsumerErr(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrAssetNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "ARTIFACT_NOT_FOUND", "message": "制品不存在"})
 	case errors.Is(err, service.ErrSignKeyNotConfigured):
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "SIGN_KEY_NOT_CONFIGURED", "message": "签名私钥未配置"})
+		slog.Warn("manifest 签名私钥未配置，OTA 不可用", "channel", c.Param("id"), "path", c.Request.URL.Path)
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "SIGN_KEY_NOT_CONFIGURED", "message": "签名私钥未配置，OTA 分发不可用"})
 	default:
+		slog.Error("客户端分发消费端点内部错误", "path", c.Request.URL.Path, "channel", c.Param("id"), "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "操作失败"})
 	}
 }
