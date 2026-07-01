@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type DragE
 import { useNavigate, useParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { unzip, type Unzipped } from 'fflate'
+import { unzipWithNames } from '@/lib/zip-filename-decode'
+import { adaptEntry, type NativeFileSystemEntry } from '@/lib/webkit-entry-adapter'
 import {
   Upload,
   Trash2,
@@ -185,26 +186,23 @@ export default function ClientPublishPage() {
   }, [channelId, navigate])
 
   /**
-   * 解包 zip（fflate 客户端解包）为本地单元，path 取自 zip 内相对路径（POSIX 归一）。
+   * 解包 zip（客户端自解析解包）为本地单元，path 取自 zip 内相对路径（POSIX 归一）。
+   * 文件名按 zip UTF-8 标志位选 UTF-8/GBK 解码（FR-250/BUG-G：中文 Windows zip 常存 GBK）。
    * 跳过目录项与 __MACOSX 噪音；不上传——仅产出本地 File，随后入草稿。
    */
-  const unzipToUnits = (data: Uint8Array): Promise<LocalUnit[]> =>
-    new Promise((resolve, reject) => {
-      unzip(data, (err, unzipped: Unzipped) => {
-        if (err) return reject(err)
-        const out: LocalUnit[] = []
-        for (const [name, bytes] of Object.entries(unzipped)) {
-          if (name.endsWith('/')) continue // 目录项
-          if (name.startsWith('__MACOSX/') || name.endsWith('.DS_Store')) continue
-          const path = normalizeManifestPath(name)
-          if (path === '') continue
-          const base = path.split('/').pop() || 'file'
-          // copy 进独立 ArrayBuffer，避免 File 持有可变视图。
-          out.push({ file: new File([bytes.slice().buffer], base), path })
-        }
-        resolve(out)
-      })
-    })
+  const unzipToUnits = async (data: Uint8Array): Promise<LocalUnit[]> => {
+    const entries = await unzipWithNames(data)
+    const out: LocalUnit[] = []
+    for (const { name, data: bytes } of entries) {
+      if (name.startsWith('__MACOSX/') || name.endsWith('.DS_Store')) continue
+      const path = normalizeManifestPath(name)
+      if (path === '') continue
+      const base = path.split('/').pop() || 'file'
+      // copy 进独立 ArrayBuffer，避免 File 持有可变视图。
+      out.push({ file: new File([bytes.slice().buffer], base), path })
+    }
+    return out
+  }
 
   /** 把本地单元累加进草稿（不上传）。sync 默认 strict、platform 默认全平台。 */
   const appendUnits = useCallback((units: LocalUnit[]) => {
@@ -269,8 +267,10 @@ export default function ClientPublishPage() {
     if (items && items.length > 0) {
       for (const item of Array.from(items)) {
         // webkitGetAsEntry 非标准但主流浏览器（Chromium/Firefox/Safari）支持；文件夹拖拽必经此。
-        const entry = (item as DataTransferItem & { webkitGetAsEntry?: () => FileSystemEntryLike | null }).webkitGetAsEntry?.()
-        if (entry) entries.push(entry)
+        // 原生 entry 是回调式（file(cb)/createReader().readEntries(cb)），须经 adaptEntry
+        // Promise 化后才能喂 collectEntries（FR-250/BUG-F）——否则文件取不到、目录被跳过、拖拽失效。
+        const native = (item as DataTransferItem & { webkitGetAsEntry?: () => NativeFileSystemEntry | null }).webkitGetAsEntry?.()
+        if (native) entries.push(adaptEntry(native))
       }
     }
     try {

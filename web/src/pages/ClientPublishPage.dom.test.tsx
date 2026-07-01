@@ -47,6 +47,48 @@ function addFilesInput(container: HTMLElement): HTMLInputElement {
 
 const CH = '/client-channels/skyblock-s1/publish'
 
+/** CRC32（zip 用）。 */
+function crc32(bytes: Uint8Array): number {
+  let c = ~0
+  for (let i = 0; i < bytes.length; i++) {
+    c ^= bytes[i]
+    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1))
+  }
+  return ~c >>> 0
+}
+
+/**
+ * 拼一个含单个 GBK 文件名 STORE entry 的最小 zip（UTF-8 标志位不置）——模拟中文 Windows 打包（BUG-G）。
+ * 文件名字节由调用方给（GBK 码点手工拼），内容任意。
+ */
+function buildGbkZip(nameBytes: Uint8Array, data: Uint8Array): File {
+  const out: number[] = []
+  const central: number[] = []
+  const p16 = (a: number[], n: number) => a.push(n & 0xff, (n >>> 8) & 0xff)
+  const p32 = (a: number[], n: number) => a.push(n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff)
+  const pb = (a: number[], b: Uint8Array) => b.forEach((x) => a.push(x))
+  const crc = crc32(data)
+  // local file header
+  p32(out, 0x04034b50)
+  p16(out, 20); p16(out, 0); p16(out, 0); p16(out, 0); p16(out, 0)
+  p32(out, crc); p32(out, data.length); p32(out, data.length)
+  p16(out, nameBytes.length); p16(out, 0)
+  pb(out, nameBytes); pb(out, data)
+  // central dir
+  p32(central, 0x02014b50)
+  p16(central, 20); p16(central, 20); p16(central, 0); p16(central, 0); p16(central, 0); p16(central, 0)
+  p32(central, crc); p32(central, data.length); p32(central, data.length)
+  p16(central, nameBytes.length); p16(central, 0); p16(central, 0); p16(central, 0); p16(central, 0)
+  p32(central, 0); p32(central, 0)
+  pb(central, nameBytes)
+  const cdStart = out.length
+  pb(out, new Uint8Array(central))
+  // EOCD
+  p32(out, 0x06054b50); p16(out, 0); p16(out, 0); p16(out, 1); p16(out, 1)
+  p32(out, central.length); p32(out, cdStart); p16(out, 0)
+  return new File([new Uint8Array(out)], 'pack.zip', { type: 'application/zip' })
+}
+
 describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', () => {
   let uploads: ReturnType<typeof countUploadRequests>
   beforeEach(() => {
@@ -70,31 +112,48 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
     expect(uploads.get()).toBe(0)
   })
 
-  it('拖拽文件夹按目录结构进草稿、仍不上传', async () => {
+  it('拖拽文件夹按目录结构进草稿、仍不上传（原生回调式 entry，BUG-F 回归）', async () => {
     loginMockUser()
     renderWithProviders(<ClientPublishPage />, { route: CH })
     const zone = await screen.findByTestId('publish-dropzone')
 
-    // 造 webkitGetAsEntry 的 FileSystemEntryLike 形态：/pack 目录 → /pack/mods 目录 → a.jar 文件。
-    // 组件消费 Promise 化的 file()/readEntries()（onDrop 里由浏览器原生回调 API Promise 化而来）。
-    const fileEntryLike = {
+    // 造 webkitGetAsEntry 的**浏览器原生**形态（回调式，非 Promise）：
+    // 文件 entry.file(successCb)、目录 entry.createReader().readEntries(cb) 分批返回、读空为止。
+    // 这是真机拖拽的真实形态；onDrop 须经 adaptEntry Promise 化才能收集（BUG-F 根因）。
+    type NativeEntry = {
+      isFile: boolean
+      isDirectory: boolean
+      fullPath: string
+      name: string
+      file?: (ok: (f: File) => void) => void
+      createReader?: () => { readEntries: (ok: (e: NativeEntry[]) => void) => void }
+    }
+    const nativeFile = (fullPath: string): NativeEntry => ({
       isFile: true,
       isDirectory: false,
-      fullPath: '/pack/mods/a.jar',
-      file: async () => new File([new Uint8Array(4)], 'a.jar'),
-    }
-    const modsDir = {
+      fullPath,
+      name: fullPath.split('/').pop()!,
+      file: (ok) => ok(new File([new Uint8Array(4)], fullPath.split('/').pop()!)),
+    })
+    const nativeDir = (fullPath: string, children: NativeEntry[]): NativeEntry => ({
       isFile: false,
       isDirectory: true,
-      fullPath: '/pack/mods',
-      readEntries: async () => [fileEntryLike],
-    }
-    const packDir = {
-      isFile: false,
-      isDirectory: true,
-      fullPath: '/pack',
-      readEntries: async () => [modsDir],
-    }
+      fullPath,
+      name: fullPath.split('/').pop() ?? fullPath,
+      createReader() {
+        let done = false
+        return {
+          readEntries(ok) {
+            // 原生语义：首次返回全部子项，再次返回空数组表示读完（循环终止）。
+            // 先翻转游标再回调，模拟真实 reader 的状态推进（避免同步实现的重入歧义）。
+            const batch = done ? [] : children
+            done = true
+            ok(batch)
+          },
+        }
+      },
+    })
+    const packDir = nativeDir('/pack', [nativeDir('/pack/mods', [nativeFile('/pack/mods/a.jar')])])
 
     const dataTransfer = {
       items: [{ kind: 'file', type: '', webkitGetAsEntry: () => packDir }],
@@ -105,6 +164,23 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
 
     // 目录内文件按相对路径进草稿（files 步的列表显示归一后的完整相对路径）。
     expect(await screen.findByText('pack/mods/a.jar')).toBeInTheDocument()
+    await new Promise((r) => setTimeout(r, 30))
+    expect(uploads.get()).toBe(0)
+  })
+
+  it('上传 GBK 文件名 zip：解包后草稿路径为正确中文（BUG-G 回归）', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+    await screen.findByTestId('publish-dropzone')
+
+    // 文件名 "模组/配置.txt" 以 GBK 编码、不置 UTF-8 位（"模"=C4A3 "组"=D7E9 "配"=C5E4 "置"=D6C3）。
+    const nameBytes = new Uint8Array([0xc4, 0xa3, 0xd7, 0xe9, 0x2f, 0xc5, 0xe4, 0xd6, 0xc3, ...Array.from('.txt').map((c) => c.charCodeAt(0))])
+    const zip = buildGbkZip(nameBytes, new Uint8Array([1, 2, 3]))
+    await user.upload(addFilesInput(container), zip)
+
+    // 解包后按包内相对路径进草稿，中文正确（非乱码），且未触发上传。
+    expect(await screen.findByText('模组/配置.txt')).toBeInTheDocument()
     await new Promise((r) => setTimeout(r, 30))
     expect(uploads.get()).toBe(0)
   })
