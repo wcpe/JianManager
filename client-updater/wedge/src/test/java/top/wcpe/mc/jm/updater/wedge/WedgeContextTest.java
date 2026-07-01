@@ -2,44 +2,68 @@ package top.wcpe.mc.jm.updater.wedge;
 
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
- * Wedge.buildContext 透传测试（FR-253，见 ADR-053）。
+ * Wedge.buildContext 透传测试（§2.5.2 接口契约冻结）。
  *
- * <p>验证楔子把 WedgeConfig 的 signPublicKey / signKeyId 透传到 core 的 ctx，
- * 使 updater-core 运行期可按配置公钥验签（而非只认编译期内置公钥）。
+ * <p>验证楔子把 jm-updater.json 原文透传到 core 的 ctx（key=configJson），
+ * 以及 ctx 固定 key 集合正确。楔子代码冻结后此 ctx 格式永久固定。
  */
 class WedgeContextTest {
 
     @Test
-    void buildContextPassesSignPublicKeyAndKeyId() {
+    void buildContextPassesConfigJson() {
         WedgeConfig config = new WedgeConfig(
                 "skyblock-s1", "k_abc", "https://cdn.example.com",
-                "updater-core.jar", 120, 0, 30, true,
-                "MCowBQYDK2VwAyEAsO7B/k+2++wQtN/L0jpCXCjsGnYV5Sx2eyCk0pDzV0Y=", "k1");
-        File wedgeDir = new File("/tmp/wedge");
+                "https://srv/api/core", 120, 30, true);
+        String json = "{\"channel\":\"skyblock-s1\",\"coreEndpoint\":\"https://srv/api/core\"}";
 
-        Map<String, String> ctx = Wedge.buildContext("/game", config, wedgeDir, 0);
+        Map<String, String> ctx = Wedge.buildContext("/game", config, 5, json);
 
-        assertEquals("MCowBQYDK2VwAyEAsO7B/k+2++wQtN/L0jpCXCjsGnYV5Sx2eyCk0pDzV0Y=",
-                ctx.get("signPublicKey"), "ctx 应透传 signPublicKey（FR-253）");
-        assertEquals("k1", ctx.get("signKeyId"), "ctx 应透传 signKeyId（FR-253）");
+        assertEquals(json, ctx.get("configJson"), "ctx 应透传 jm-updater.json 原文（§2.5.2）");
     }
 
     @Test
-    void buildContextEmptySignPublicKeyWhenNotConfigured() {
-        // 未配置 signPublicKey → ctx 传空串（Core 据此回退内置）。
+    void buildContextContainsAllFrozenKeys() {
         WedgeConfig config = new WedgeConfig(
-                "c", "k", "https://e", "updater-core.jar", 120, 0, 30, true, null, null);
-        File wedgeDir = new File("/tmp/wedge");
+                "c", "k", "https://e", "https://srv/core", 90, 30, true);
 
-        Map<String, String> ctx = Wedge.buildContext("/game", config, wedgeDir, 0);
+        Map<String, String> ctx = Wedge.buildContext("/game", config, 7, "{\"channel\":\"c\"}");
 
-        assertEquals("", ctx.get("signPublicKey"), "未配置时 ctx signPublicKey 应为空串");
-        assertEquals("", ctx.get("signKeyId"), "未配置时 ctx signKeyId 应为空串");
+        // §2.5.2 冻结 key 集合
+        assertEquals("/game", ctx.get("gameDir"));
+        assertEquals("c", ctx.get("channel"));
+        assertEquals("k", ctx.get("key"));
+        assertEquals("https://e", ctx.get("endpoint"));
+        assertEquals("7", ctx.get("coreVersion"));
+        assertEquals("true", ctx.get("telemetry"));
+        assertEquals("90", ctx.get("timeoutSec"));
+        assertEquals("{\"channel\":\"c\"}", ctx.get("configJson"));
+    }
+
+    @Test
+    void buildContextDoesNotContainRemovedKeys() {
+        WedgeConfig config = new WedgeConfig(
+                "c", "k", "https://e", "https://srv/core", 90, 30, true);
+
+        Map<String, String> ctx = Wedge.buildContext("/game", config, 0, "{}");
+
+        // FR-256 移除的字段不应出现在 ctx
+        assertFalse(ctx.containsKey("signPublicKey"), "ctx 不应含 signPublicKey（FR-256 已移除）");
+        assertFalse(ctx.containsKey("signKeyId"), "ctx 不应含 signKeyId（FR-256 已移除）");
+    }
+
+    @Test
+    void buildContextEmptyConfigJsonWhenNull() {
+        WedgeConfig config = new WedgeConfig(
+                "c", "k", "https://e", "https://srv/core", 90, 30, true);
+
+        Map<String, String> ctx = Wedge.buildContext("/game", config, 0, null);
+
+        assertEquals("", ctx.get("configJson"), "configJson 为 null 时应传空串");
     }
 }

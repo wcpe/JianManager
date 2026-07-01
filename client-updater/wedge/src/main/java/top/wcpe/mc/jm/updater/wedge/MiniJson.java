@@ -4,7 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * 楔子专用极简 JSON 读取（只解析扁平对象 {@code jm-updater.json}：channel/key/endpoint/coreJar/timeoutSec）。
+ * 楔子专用极简 JSON 读取（只解析扁平对象 {@code jm-updater.json} 及 coreEndpoint 响应）。
  *
  * <p>楔子须零三方依赖、Java 8 兼容（先于 mod loader 加载），故不复用 updater-core 的 JSON。
  * 仅支持字符串值与数字值的一层对象；足够读配置，刻意不做完整 JSON（YAGNI）。
