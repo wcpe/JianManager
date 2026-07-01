@@ -108,7 +108,7 @@ final class Reconciler {
                 protectedFromRemoval.add(entry.path.replace('\\', '/'));
             }
         }
-        removeStale(manifest.managedDirs, desiredPaths, protectedFromRemoval, result);
+        removeStale(manifest.managedDirs, manifest.cleanExclude, desiredPaths, protectedFromRemoval, result);
 
         return result;
     }
@@ -239,44 +239,64 @@ final class Reconciler {
         }
     }
 
-    /** 减量：遍历 managedDirs，删本地存在但 manifest 未列、且非 once/ignore 保护的文件。 */
-    private void removeStale(List<String> managedDirs, Set<String> desiredPaths,
+    /**
+     * 减量：遍历托管目录，删本地存在但 manifest 未列、且非 once/ignore 保护的文件。
+     * FR-255：managedDirs 含 "*" 时遍历整个 gameDir（clean-all）；cleanExclude 命中则永不删。
+     */
+    private void removeStale(List<String> managedDirs, List<String> cleanExclude,
+                             Set<String> desiredPaths,
                              Set<String> protectedFromRemoval, Result result) {
+        // FR-255：clean-all 哨兵 → 遍历整个 gameDir。
+        if (managedDirs != null && managedDirs.contains(PathRules.ALL_GAMEDIR_SENTINEL)) {
+            removeStaleInDir(gameDir, "", cleanExclude, desiredPaths, protectedFromRemoval, result);
+            return;
+        }
         for (String dir : managedDirs) {
             Path dirPath = PathRules.resolveSafe(gameDir, dir);
             if (!Files.isDirectory(dirPath)) {
                 continue;
             }
-            List<Path> localFiles = new ArrayList<>();
-            try (java.util.stream.Stream<Path> walk = Files.walk(dirPath)) {
-                for (Path p : (Iterable<Path>) walk::iterator) {
-                    if (Files.isRegularFile(p)) {
-                        localFiles.add(p);
-                    }
+            removeStaleInDir(dirPath, dir, cleanExclude, desiredPaths, protectedFromRemoval, result);
+        }
+    }
+
+    /** 遍历指定目录（含子目录），删本地多余文件。dirPrefix 为该目录相对 gameDir 的前缀（根传空串）。 */
+    private void removeStaleInDir(Path dirPath, String dirPrefix, List<String> cleanExclude,
+                                   Set<String> desiredPaths, Set<String> protectedFromRemoval,
+                                   Result result) {
+        List<Path> localFiles = new ArrayList<>();
+        try (java.util.stream.Stream<Path> walk = Files.walk(dirPath)) {
+            for (Path p : (Iterable<Path>) walk::iterator) {
+                if (Files.isRegularFile(p)) {
+                    localFiles.add(p);
                 }
-            } catch (IOException e) {
-                result.errors.add("遍历托管目录失败 " + dir + ": " + e.getMessage());
+            }
+        } catch (IOException e) {
+            result.errors.add("遍历托管目录失败 " + dirPrefix + ": " + e.getMessage());
+            return;
+        }
+        for (Path p : localFiles) {
+            String rel = gameDir.relativize(p).toString().replace('\\', '/');
+            if (desiredPaths.contains(rel) || protectedFromRemoval.contains(rel)) {
                 continue;
             }
-            for (Path p : localFiles) {
-                String rel = gameDir.relativize(p).toString().replace('\\', '/');
-                if (desiredPaths.contains(rel) || protectedFromRemoval.contains(rel)) {
-                    continue;
-                }
-                if (PathRules.isPlayerZone(rel)) {
-                    continue;
-                }
-                // 跳过我方临时文件。
-                if (rel.contains(".jmtmp.")) {
-                    continue;
-                }
-                try {
-                    Files.deleteIfExists(p);
-                    result.removed++;
-                    log.debug("reconcile 减量删除 " + rel);
-                } catch (IOException e) {
-                    result.errors.add("删除失败 " + rel + ": " + e.getMessage());
-                }
+            if (PathRules.isPlayerZone(rel)) {
+                continue;
+            }
+            // FR-255：运营自定义排除命中 → 永不删。
+            if (PathRules.isExcluded(rel, cleanExclude)) {
+                continue;
+            }
+            // 跳过我方临时文件。
+            if (rel.contains(".jmtmp.")) {
+                continue;
+            }
+            try {
+                Files.deleteIfExists(p);
+                result.removed++;
+                log.debug("reconcile 减量删除 " + rel);
+            } catch (IOException e) {
+                result.errors.add("删除失败 " + rel + ": " + e.getMessage());
             }
         }
     }

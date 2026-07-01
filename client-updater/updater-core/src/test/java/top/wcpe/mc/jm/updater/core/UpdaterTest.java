@@ -118,6 +118,100 @@ class UpdaterTest {
         assertArrayEquals(bytes("png"), Files.readAllBytes(gameDir.resolve("screenshots/shot.png")));
     }
 
+    // ── FR-255：clean-all（"*" 哨兵）+ 自定义排除 ──────────────────────────
+
+    /** 带 cleanExclude 的 install 辅助（FR-255）。 */
+    private void installWithExclude(TestFixtures.MemoryTransport transport, TestSigner signer,
+                                    long version, List<String> managedDirs, List<String> cleanExclude,
+                                    List<TestFixtures.FileSpec> specs) throws Exception {
+        Map<String, Object> manifest = TestFixtures.buildManifest(
+                "skyblock-s1", version, managedDirs, cleanExclude, specs, transport);
+        transport.manifestJson = signer.sign(manifest);
+    }
+
+    @Test
+    void cleanAllDeletesExtraFilesButPreservesPlayerZone(@TempDir Path gameDir) throws Exception {
+        TestSigner signer = new TestSigner(KEY_ID);
+        TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
+
+        // 本地有各类「多余」文件：托管外的旧 mod、玩家存档、截图。
+        Files.createDirectories(gameDir.resolve("mods"));
+        Files.write(gameDir.resolve("mods/stale.jar"), bytes("old mod"));
+        Files.createDirectories(gameDir.resolve("saves/world"));
+        Files.write(gameDir.resolve("saves/world/level.dat"), bytes("player save"));
+        Files.write(gameDir.resolve("options.txt"), bytes("player options"));
+        Files.write(gameDir.resolve("random.txt"), bytes("orphan file"));
+
+        byte[] keep = bytes("keep this");
+        // managedDirs=["*"]：clean-all 模式。
+        installWithExclude(transport, signer, 1,
+                Collections.singletonList("*"), null,
+                Collections.singletonList(new TestFixtures.FileSpec("mods/keep.jar", keep)));
+
+        int rc = updater(gameDir, transport, signer).run();
+
+        assertEquals(Updater.OK, rc);
+        // 托管区内 manifest 未列文件应被删。
+        assertFalse(Files.exists(gameDir.resolve("mods/stale.jar")), "clean-all 应删除多余文件");
+        assertFalse(Files.exists(gameDir.resolve("random.txt")), "clean-all 应删除托管外多余文件");
+        assertTrue(Files.isRegularFile(gameDir.resolve("mods/keep.jar")));
+        // 玩家区必须完好。
+        assertArrayEquals(bytes("player save"), Files.readAllBytes(gameDir.resolve("saves/world/level.dat")));
+        assertArrayEquals(bytes("player options"), Files.readAllBytes(gameDir.resolve("options.txt")));
+    }
+
+    @Test
+    void cleanAllPreservesCustomExclude(@TempDir Path gameDir) throws Exception {
+        TestSigner signer = new TestSigner(KEY_ID);
+        TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
+
+        // 玩家自装的 mod 目录（运营排除）+ 一个应被删的多余文件。
+        Files.createDirectories(gameDir.resolve("mymods"));
+        Files.write(gameDir.resolve("mymods/custom.jar"), bytes("player installed"));
+        Files.write(gameDir.resolve("orphan.txt"), bytes("should be deleted"));
+
+        byte[] keep = bytes("keep");
+        installWithExclude(transport, signer, 1,
+                Collections.singletonList("*"), Collections.singletonList("mymods"),
+                Collections.singletonList(new TestFixtures.FileSpec("mods/keep.jar", keep)));
+
+        int rc = updater(gameDir, transport, signer).run();
+
+        assertEquals(Updater.OK, rc);
+        // cleanExclude 命中的目录下文件永不删。
+        assertArrayEquals(bytes("player installed"), Files.readAllBytes(gameDir.resolve("mymods/custom.jar")));
+        // 未列且未排除的多余文件应被删。
+        assertFalse(Files.exists(gameDir.resolve("orphan.txt")));
+    }
+
+    @Test
+    void cleanAllPreservesPlayerZoneAndExcludeSimultaneously(@TempDir Path gameDir) throws Exception {
+        TestSigner signer = new TestSigner(KEY_ID);
+        TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
+
+        // 玩家区 + 自定义排除 + 多余文件三种并存。
+        Files.write(gameDir.resolve("options.txt"), bytes("player options"));
+        Files.createDirectories(gameDir.resolve("mymods"));
+        Files.write(gameDir.resolve("mymods/x.jar"), bytes("custom"));
+        Files.write(gameDir.resolve("orphan.txt"), bytes("orphan"));
+
+        byte[] keep = bytes("keep");
+        installWithExclude(transport, signer, 1,
+                Collections.singletonList("*"),
+                Arrays.asList("mymods"),
+                Collections.singletonList(new TestFixtures.FileSpec("mods/keep.jar", keep)));
+
+        int rc = updater(gameDir, transport, signer).run();
+
+        assertEquals(Updater.OK, rc);
+        // 玩家区完好。
+        assertArrayEquals(bytes("player options"), Files.readAllBytes(gameDir.resolve("options.txt")));
+        // 自定义排除完好。
+        assertArrayEquals(bytes("custom"), Files.readAllBytes(gameDir.resolve("mymods/x.jar")));
+        // 多余文件被删。
+        assertFalse(Files.exists(gameDir.resolve("orphan.txt")));
+    }
+
     @Test
     void syncOnceWritesOnlyWhenMissing(@TempDir Path gameDir) throws Exception {
         TestSigner signer = new TestSigner(KEY_ID);

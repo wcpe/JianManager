@@ -60,6 +60,53 @@ class PathRulesTest {
         assertFalse(PathRules.isUnderManaged("modsxyz/foo.jar", managed));
     }
 
+    // ── FR-255：clean-all 哨兵 + 自定义排除 ──────────────────────────────
+
+    @Test
+    void allGameDirSentinelTreatsEverythingAsManaged() {
+        List<String> managed = Collections.singletonList("*");
+        assertTrue(PathRules.isUnderManaged("mods/foo.jar", managed));
+        assertTrue(PathRules.isUnderManaged("config/sub/x.toml", managed));
+        assertTrue(PathRules.isUnderManaged("randomfile.txt", managed));
+        assertTrue(PathRules.isUnderManaged("any/deep/nested/path.jar", managed));
+    }
+
+    @Test
+    void allGameDirSentinelMixedWithExplicitDirs() {
+        // "*" 与显式目录混列时，"*" 主导（全目录托管）。
+        List<String> managed = Arrays.asList("mods", "*");
+        assertTrue(PathRules.isUnderManaged("anything/anywhere.txt", managed));
+    }
+
+    @Test
+    void emptyManagedDirsReturnsFalse() {
+        assertFalse(PathRules.isUnderManaged("mods/foo.jar", Collections.emptyList()));
+        assertFalse(PathRules.isUnderManaged("mods/foo.jar", null));
+    }
+
+    @Test
+    void isExcludedHitsPrefix() {
+        List<String> excl = Arrays.asList("mods/keep", "custom");
+        assertTrue(PathRules.isExcluded("mods/keep/old.jar", excl));
+        assertTrue(PathRules.isExcluded("mods/keep", excl));
+        assertTrue(PathRules.isExcluded("custom/x.txt", excl));
+        assertFalse(PathRules.isExcluded("mods/foo.jar", excl));
+        assertFalse(PathRules.isExcluded("config/bar.txt", excl));
+    }
+
+    @Test
+    void isExcludedEmptyListReturnsFalse() {
+        assertFalse(PathRules.isExcluded("mods/foo.jar", Collections.emptyList()));
+        assertFalse(PathRules.isExcluded("mods/foo.jar", null));
+    }
+
+    @Test
+    void isExcludedPreventsFalsePrefixMatch() {
+        // 防前缀误判：mods/keeper 不应命中 mods/keep
+        List<String> excl = Collections.singletonList("mods/keep");
+        assertFalse(PathRules.isExcluded("mods/keeper/x.jar", excl));
+    }
+
     @Test
     void resolveSafeRejectsEscape() {
         Path game = Paths.get(System.getProperty("java.io.tmpdir")).resolve("jm-game-test");

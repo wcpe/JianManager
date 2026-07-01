@@ -55,8 +55,18 @@ final class PathRules {
         return false;
     }
 
+    /** manifest managedDirs 的「整个 gameDir」哨兵（FR-255 clean-all）。 */
+    static final String ALL_GAMEDIR_SENTINEL = "*";
+
     /** 该相对路径是否在某个托管目录下（managedDirs 内才允许增删）。 */
     static boolean isUnderManaged(String relPath, List<String> managedDirs) {
+        if (managedDirs == null || managedDirs.isEmpty()) {
+            return false;
+        }
+        // FR-255：哨兵 "*" 表示整个 gameDir 托管（clean-all），任何路径都算在托管下。
+        if (managedDirs.contains(ALL_GAMEDIR_SENTINEL)) {
+            return true;
+        }
         String p = relPath.replace('\\', '/');
         for (String dir : managedDirs) {
             String d = dir.replace('\\', '/');
@@ -64,6 +74,29 @@ final class PathRules {
                 d = d + "/";
             }
             if (p.equals(dir) || p.startsWith(d)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 该相对路径是否命中运营自定义排除前缀（FR-255 cleanExclude）。
+     * 命中则永不删（与 PLAYER_ZONE 并列的纵深防御）。
+     *
+     * @param cleanExclude 运营自定义排除列表；null/空视为未声明
+     */
+    static boolean isExcluded(String relPath, List<String> cleanExclude) {
+        if (cleanExclude == null || cleanExclude.isEmpty()) {
+            return false;
+        }
+        String p = relPath.replace('\\', '/');
+        for (String excl : cleanExclude) {
+            String e = excl.replace('\\', '/');
+            if (!e.endsWith("/")) {
+                e = e + "/";
+            }
+            if (p.equals(excl) || p.startsWith(e)) {
                 return true;
             }
         }

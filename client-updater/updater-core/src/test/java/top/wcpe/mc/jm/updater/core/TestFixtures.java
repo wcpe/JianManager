@@ -80,12 +80,26 @@ final class TestFixtures {
     /** 构造 manifest 对象树（不含 sig），并把制品填入 transport。 */
     static Map<String, Object> buildManifest(String channel, long version, List<String> managedDirs,
                                              List<FileSpec> specs, MemoryTransport transport) {
+        return buildManifest(channel, version, managedDirs, null, specs, transport);
+    }
+
+    /**
+     * 构造 manifest 对象树（不含 sig），并把制品填入 transport。
+     * FR-255：cleanExclude 非空时加入 manifest（omitempty 语义由调用方控制——传 null 即省略）。
+     */
+    static Map<String, Object> buildManifest(String channel, long version, List<String> managedDirs,
+                                             List<String> cleanExclude,
+                                             List<FileSpec> specs, MemoryTransport transport) {
         Map<String, Object> manifest = new LinkedHashMap<>();
         manifest.put("schemaVersion", 1L);
         manifest.put("channel", channel);
         manifest.put("version", version);
         manifest.put("issuedAt", "2026-06-23T10:00:00Z");
         manifest.put("managedDirs", new ArrayList<>(managedDirs));
+        // FR-255：cleanExclude 仅在非空时加入（omitempty，与 Go manifestToTree 对齐）。
+        if (cleanExclude != null && !cleanExclude.isEmpty()) {
+            manifest.put("cleanExclude", new ArrayList<>(cleanExclude));
+        }
 
         List<Object> files = new ArrayList<>();
         for (FileSpec spec : specs) {
