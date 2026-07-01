@@ -17,47 +17,49 @@ type Services struct {
 	Node       *service.NodeService
 	NodeRepair *service.NodeRepairService
 	// NodeProxy 节点级出站代理管控（FR-185，见 ADR-043）；nil 时节点代理端点关闭。
-	NodeProxy          *service.NodeProxyService
-	Instance           *service.InstanceService
-	InstanceBatch      *service.InstanceBatchService
-	InstanceGroup      *service.InstanceGroupService
-	JDK                *service.JDKService
-	NodeRuntime        *service.NodeRuntimeService
-	Diagnostics        *service.DiagnosticsService
-	DockerImage        *service.DockerImageService
-	Terminal           *service.TerminalService
-	File               *service.FileService
-	FileVersion        *service.FileVersionService
-	Plugin             *service.PluginService
-	Player             *service.PlayerService
-	PlayerEvent        *service.PlayerEventService
-	ServerState        *service.ServerStateService
-	Business           *service.BusinessService
-	BusinessEvent      *service.BusinessEventService
-	Config             *service.ConfigService
-	Bot                *service.BotService
-	Alert              *service.AlertService
-	AlertChannel       *service.AlertChannelService
-	Schedule           *service.ScheduleService
-	Backup             *service.BackupService
-	BackupStorage      *service.BackupStorageService
-	Template           *service.TemplateService
-	Audit              *service.AuditService
-	Authz              *service.AuthzService
-	Event              *service.EventService
-	Asset              *service.AssetService
-	Core               *service.CoreService
-	Provision          *service.ProvisionService
-	Proxy              *service.ProxyService
-	Clone              *service.CloneService
-	Registration       *service.RegistrationService
-	Network            *service.NetworkService
-	Log                *service.LogService
-	Metric             *service.MetricService
-	Settings           *service.SettingsService
-	ProbeUpdate        *service.ProbeUpdateService
-	ClientChannel      *service.ClientChannelService
-	ClientVersion      *service.ClientVersionService
+	NodeProxy     *service.NodeProxyService
+	Instance      *service.InstanceService
+	InstanceBatch *service.InstanceBatchService
+	InstanceGroup *service.InstanceGroupService
+	JDK           *service.JDKService
+	NodeRuntime   *service.NodeRuntimeService
+	Diagnostics   *service.DiagnosticsService
+	DockerImage   *service.DockerImageService
+	Terminal      *service.TerminalService
+	File          *service.FileService
+	FileVersion   *service.FileVersionService
+	Plugin        *service.PluginService
+	Player        *service.PlayerService
+	PlayerEvent   *service.PlayerEventService
+	ServerState   *service.ServerStateService
+	Business      *service.BusinessService
+	BusinessEvent *service.BusinessEventService
+	Config        *service.ConfigService
+	Bot           *service.BotService
+	Alert         *service.AlertService
+	AlertChannel  *service.AlertChannelService
+	Schedule      *service.ScheduleService
+	Backup        *service.BackupService
+	BackupStorage *service.BackupStorageService
+	Template      *service.TemplateService
+	Audit         *service.AuditService
+	Authz         *service.AuthzService
+	Event         *service.EventService
+	Asset         *service.AssetService
+	Core          *service.CoreService
+	Provision     *service.ProvisionService
+	Proxy         *service.ProxyService
+	Clone         *service.CloneService
+	Registration  *service.RegistrationService
+	Network       *service.NetworkService
+	Log           *service.LogService
+	Metric        *service.MetricService
+	Settings      *service.SettingsService
+	ProbeUpdate   *service.ProbeUpdateService
+	ClientChannel *service.ClientChannelService
+	ClientVersion *service.ClientVersionService
+	// ClientChunkUpload 大文件分块上传（FR-251，增强 FR-088）；nil 时分块端点关闭、前端回退单次上传。
+	ClientChunkUpload  *service.ChunkedUploadService
 	ClientMachine      *service.ClientMachineService
 	ClientDistTracking *service.ClientDistTrackingService
 	ClientIPGuard      *service.ClientIPGuardService
@@ -334,6 +336,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 无条件注册（nil signer 时端点返 503）：签名器由 ResolveManifestSignerWithAutogen 三轨裁决，
 		// 生产未注入即自动生成，正常不为 nil。限平台管理员；只暴露公钥，私钥绝不出服务端。
 		NewClientSignKeyHandler(svcs.ClientSignKey, svcs.ClientSignKeySrc).RegisterRoutes(admin)
+
+		// 客户端分发大文件分块上传（init→chunk→complete，支持 4G+ 文件）：运营操作，限平台管理员
+		// （FR-251，增强 FR-088）。与单次上传 POST /files 同鉴权组、落同一 CAS；独立 handler 不改 client_version.go。
+		if svcs.ClientChunkUpload != nil && svcs.ClientChannel != nil {
+			clientChunkUploadHandler := NewClientChunkUploadHandler(svcs.ClientChunkUpload, svcs.ClientChannel, svcs.Audit)
+			clientChunkUploadHandler.RegisterRoutes(admin)
+		}
 
 		// updater-core 默认随 CP 内嵌、自动驱动 manifest agent.core，运营不管理（FR-193，见 ADR-045 改写）。
 		// 已删除原运营侧 core 版本管理端点（上传/登记/pin/更新/回退）；agent.core 由内嵌 updater-core 自动产出

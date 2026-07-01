@@ -200,6 +200,12 @@ func main() {
 	} else {
 		slog.Warn("未内嵌 updater-core jar（make embed-client-updater 未注入），manifest 将省略 agent.core；客户端不自更新 core（FR-193）")
 	}
+	// 客户端分发大文件分块上传（FR-251，增强 FR-088）：init→chunk→complete，临时分片进
+	// cache/client-uploads/<id>/，complete 拼装喂 clientVersionSvc.PublishFile 落同一 CAS。
+	// Start 启动 TTL 清理并清残留分片（会话内存态，CP 重启即弃单）。
+	clientChunkUploadSvc := service.NewChunkedUploadService(root, clientVersionSvc)
+	clientChunkUploadSvc.Start()
+	defer clientChunkUploadSvc.Stop()
 	// 客户端机器码登记（FR-092）：manifest 拉取时 best-effort upsert，弱一致、不阻断。
 	clientMachineSvc := service.NewClientMachineService(db)
 	// 客户端分发拉取/下载追踪（FR-093）：明细短保留 + 写时增量聚合 + 后台滚动清理。
@@ -392,6 +398,7 @@ func main() {
 		ProbeUpdate:             probeUpdateSvc,
 		ClientChannel:           clientChannelSvc,
 		ClientVersion:           clientVersionSvc,
+		ClientChunkUpload:       clientChunkUploadSvc,
 		ClientMachine:           clientMachineSvc,
 		ClientDistTracking:      clientDistTrackingSvc,
 		ClientIPGuard:           clientIPGuardSvc,
