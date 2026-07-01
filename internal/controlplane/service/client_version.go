@@ -139,8 +139,10 @@ func (s *ClientVersionService) PublishFile(r io.Reader, p PublishFileParams) (*C
 type PublishVersionParams struct {
 	// Files 文件清单（必）。每项的 Artifact.SHA256 须已存在于 client-file 制品库。
 	Files []ManifestFile
-	// ManagedDirs 托管目录（可空，但建议提供；空则无减量）。
+	// ManagedDirs 托管目录（可空，但建议提供；空则无减量）。FR-255：可含 "*" 表 clean-all。
 	ManagedDirs []string
+	// CleanExclude 运营自定义排除（FR-255）：命中前缀的路径永不删。空则省略。
+	CleanExclude []string
 	// Agent 楔子 + updater-core 自更新段（可空）。
 	Agent *ManifestAgent
 	// Note 发布备注（信息性）。
@@ -156,6 +158,10 @@ func (s *ClientVersionService) PublishVersion(channelID string, p PublishVersion
 	if err := validateManifestFiles(p.Files); err != nil {
 		return nil, err
 	}
+	// FR-255：校验 cleanExclude 路径合法性。
+	if err := validateCleanExclude(p.CleanExclude); err != nil {
+		return nil, err
+	}
 
 	filesJSON, err := json.Marshal(p.Files)
 	if err != nil {
@@ -168,6 +174,14 @@ func (s *ClientVersionService) PublishVersion(channelID string, p PublishVersion
 	managedJSON, err := json.Marshal(managed)
 	if err != nil {
 		return nil, fmt.Errorf("序列化托管目录失败: %w", err)
+	}
+	var cleanExcludeJSON string
+	if len(p.CleanExclude) > 0 {
+		raw, merr := json.Marshal(p.CleanExclude)
+		if merr != nil {
+			return nil, fmt.Errorf("序列化清理排除失败: %w", merr)
+		}
+		cleanExcludeJSON = string(raw)
 	}
 	var agentJSON string
 	if p.Agent != nil {
@@ -198,13 +212,14 @@ func (s *ClientVersionService) PublishVersion(channelID string, p PublishVersion
 		next := maxVer.Max + 1
 
 		version = model.ClientVersion{
-			ChannelID:       channelID,
-			Version:         next,
-			FilesJSON:       string(filesJSON),
-			ManagedDirsJSON: string(managedJSON),
-			AgentJSON:       agentJSON,
-			Note:            p.Note,
-			CreatedBy:       p.CreatedBy,
+			ChannelID:        channelID,
+			Version:          next,
+			FilesJSON:        string(filesJSON),
+			ManagedDirsJSON:  string(managedJSON),
+			CleanExcludeJSON: cleanExcludeJSON,
+			AgentJSON:        agentJSON,
+			Note:             p.Note,
+			CreatedBy:        p.CreatedBy,
 		}
 		if e := tx.Create(&version).Error; e != nil {
 			return fmt.Errorf("写入版本失败: %w", e)
@@ -312,14 +327,15 @@ type VersionSummary struct {
 
 // VersionDetail 版本详情（FR-088）：元数据 + 解析后文件清单/托管目录/自更新段。
 type VersionDetail struct {
-	Version     int            `json:"version"`
-	Note        string         `json:"note"`
-	CreatedBy   uint           `json:"createdBy"`
-	CreatedAt   time.Time      `json:"createdAt"`
-	IsLatest    bool           `json:"isLatest"`
-	ManagedDirs []string       `json:"managedDirs"`
-	Files       []ManifestFile `json:"files"`
-	Agent       *ManifestAgent `json:"agent,omitempty"`
+	Version      int            `json:"version"`
+	Note         string         `json:"note"`
+	CreatedBy    uint           `json:"createdBy"`
+	CreatedAt    time.Time      `json:"createdAt"`
+	IsLatest     bool           `json:"isLatest"`
+	ManagedDirs  []string       `json:"managedDirs"`
+	CleanExclude []string       `json:"cleanExclude,omitempty"`
+	Files        []ManifestFile `json:"files"`
+	Agent        *ManifestAgent `json:"agent,omitempty"`
 }
 
 // ListVersions 列出频道版本历史（版本号 DESC，含 isLatest 标记）。
@@ -360,19 +376,20 @@ func (s *ClientVersionService) GetVersionDetail(channelID string, version int) (
 	if err != nil {
 		return nil, err
 	}
-	files, managedDirs, agent, err := decodeVersionSnapshot(ver)
+	files, managedDirs, cleanExclude, agent, err := decodeVersionSnapshot(ver)
 	if err != nil {
 		return nil, err
 	}
 	return &VersionDetail{
-		Version:     ver.Version,
-		Note:        ver.Note,
-		CreatedBy:   ver.CreatedBy,
-		CreatedAt:   ver.CreatedAt,
-		IsLatest:    ver.Version == ch.CurrentVersion,
-		ManagedDirs: managedDirs,
-		Files:       files,
-		Agent:       agent,
+		Version:      ver.Version,
+		Note:         ver.Note,
+		CreatedBy:    ver.CreatedBy,
+		CreatedAt:    ver.CreatedAt,
+		IsLatest:     ver.Version == ch.CurrentVersion,
+		ManagedDirs:  managedDirs,
+		CleanExclude: cleanExclude,
+		Files:        files,
+		Agent:        agent,
 	}, nil
 }
 
@@ -387,7 +404,7 @@ func (s *ClientVersionService) Rollback(channelID string, sourceVersion int, cre
 	if err != nil {
 		return nil, err
 	}
-	files, managedDirs, agent, err := decodeVersionSnapshot(src)
+	files, managedDirs, cleanExclude, agent, err := decodeVersionSnapshot(src)
 	if err != nil {
 		return nil, err
 	}
@@ -395,11 +412,12 @@ func (s *ClientVersionService) Rollback(channelID string, sourceVersion int, cre
 		note = fmt.Sprintf("回滚至 v%d", sourceVersion)
 	}
 	return s.PublishVersion(channelID, PublishVersionParams{
-		Files:       files,
-		ManagedDirs: managedDirs,
-		Agent:       agent,
-		Note:        note,
-		CreatedBy:   createdBy,
+		Files:        files,
+		ManagedDirs:  managedDirs,
+		CleanExclude: cleanExclude,
+		Agent:        agent,
+		Note:         note,
+		CreatedBy:    createdBy,
 	})
 }
 
@@ -441,12 +459,12 @@ func countSnapshotFiles(filesJSON string) int {
 	return len(files)
 }
 
-// decodeVersionSnapshot 把版本快照的 JSON 字段还原为 files/managedDirs/agent。
-// files 永不为 nil（空清单为 []）；managedDirs 同理；agent 可为 nil（未声明自更新段）。
-func decodeVersionSnapshot(ver *model.ClientVersion) ([]ManifestFile, []string, *ManifestAgent, error) {
+// decodeVersionSnapshot 把版本快照的 JSON 字段还原为 files/managedDirs/cleanExclude/agent。
+// files 永不为 nil（空清单为 []）；managedDirs 同理；cleanExclude 可为空切片（未声明）；agent 可为 nil。
+func decodeVersionSnapshot(ver *model.ClientVersion) ([]ManifestFile, []string, []string, *ManifestAgent, error) {
 	var files []ManifestFile
 	if err := json.Unmarshal([]byte(ver.FilesJSON), &files); err != nil {
-		return nil, nil, nil, fmt.Errorf("解析文件清单失败: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("解析文件清单失败: %w", err)
 	}
 	if files == nil {
 		files = []ManifestFile{}
@@ -454,17 +472,24 @@ func decodeVersionSnapshot(ver *model.ClientVersion) ([]ManifestFile, []string, 
 	managedDirs := []string{}
 	if ver.ManagedDirsJSON != "" {
 		if err := json.Unmarshal([]byte(ver.ManagedDirsJSON), &managedDirs); err != nil {
-			return nil, nil, nil, fmt.Errorf("解析托管目录失败: %w", err)
+			return nil, nil, nil, nil, fmt.Errorf("解析托管目录失败: %w", err)
+		}
+	}
+	// FR-255：cleanExclude（老版本无此列，空串=未声明）。
+	cleanExclude := []string{}
+	if ver.CleanExcludeJSON != "" {
+		if err := json.Unmarshal([]byte(ver.CleanExcludeJSON), &cleanExclude); err != nil {
+			return nil, nil, nil, nil, fmt.Errorf("解析清理排除失败: %w", err)
 		}
 	}
 	var agent *ManifestAgent
 	if ver.AgentJSON != "" {
 		agent = &ManifestAgent{}
 		if err := json.Unmarshal([]byte(ver.AgentJSON), agent); err != nil {
-			return nil, nil, nil, fmt.Errorf("解析自更新段失败: %w", err)
+			return nil, nil, nil, nil, fmt.Errorf("解析自更新段失败: %w", err)
 		}
 	}
-	return files, managedDirs, agent, nil
+	return files, managedDirs, cleanExclude, agent, nil
 }
 
 // OpenArtifact 按制品 sha256 打开 client-file 制品（供端点 Range 分发）。
@@ -587,7 +612,7 @@ func readFileCapped(absPath string, limit int64) ([]byte, error) {
 
 // assembleManifest 把频道 + 版本快照还原为 SignedManifest（未签名）。
 func assembleManifest(ch *model.ClientChannel, ver *model.ClientVersion) (*SignedManifest, error) {
-	files, managedDirs, agent, err := decodeVersionSnapshot(ver)
+	files, managedDirs, cleanExclude, agent, err := decodeVersionSnapshot(ver)
 	if err != nil {
 		return nil, err
 	}
@@ -597,6 +622,7 @@ func assembleManifest(ch *model.ClientChannel, ver *model.ClientVersion) (*Signe
 		Version:       ver.Version,
 		IssuedAt:      ver.CreatedAt.UTC().Format(time.RFC3339),
 		ManagedDirs:   managedDirs,
+		CleanExclude:  cleanExclude,
 		Files:         files,
 		Agent:         agent,
 	}, nil
@@ -632,6 +658,20 @@ func validateManifestFiles(files []ManifestFile) error {
 		// ignore 文件仅展示/审计，可不带制品；其余须带下载制品引用。
 		if f.Sync != "ignore" && f.Artifact.SHA256 == "" {
 			return fmt.Errorf("%w: %q 缺 artifact.sha256", ErrInvalidVersionFiles, f.Path)
+		}
+	}
+	return nil
+}
+
+// validateCleanExclude 校验运营自定义排除路径合法性（FR-255）：
+// 非"*"（非哨兵）、POSIX 风格、不绝对、无 .. 段、不含反斜杠/驱动器。
+func validateCleanExclude(excludes []string) error {
+	for _, ex := range excludes {
+		if ex == "*" {
+			return fmt.Errorf("%w: cleanExclude 不得为 \"*\"（与 managedDirs 哨兵冲突）", ErrInvalidVersionFiles)
+		}
+		if !safeManifestPath(ex) {
+			return fmt.Errorf("%w: 非法 cleanExclude 路径 %q", ErrInvalidVersionFiles, ex)
 		}
 	}
 	return nil

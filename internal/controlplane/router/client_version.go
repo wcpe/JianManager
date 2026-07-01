@@ -85,10 +85,11 @@ func (h *ClientVersionHandler) PublishFile(c *gin.Context) {
 
 // publishVersionRequest 发布版本请求体（contract §2）。
 type publishVersionRequest struct {
-	Files       []service.ManifestFile `json:"files" binding:"required"`
-	ManagedDirs []string               `json:"managedDirs"`
-	Agent       *service.ManifestAgent `json:"agent"`
-	Note        string                 `json:"note"`
+	Files        []service.ManifestFile `json:"files" binding:"required"`
+	ManagedDirs  []string                `json:"managedDirs"`
+	CleanExclude []string                `json:"cleanExclude"`
+	Agent        *service.ManifestAgent  `json:"agent"`
+	Note         string                  `json:"note"`
 }
 
 // PublishVersion POST /client-channels/:id/versions — 发布版本并切 latest 指针（运营，平台管理员）。
@@ -107,11 +108,12 @@ func (h *ClientVersionHandler) PublishVersion(c *gin.Context) {
 	uid, _ := c.Get(middleware.CtxUserID)
 	createdBy, _ := uid.(uint)
 	ver, err := h.svc.PublishVersion(channelID, service.PublishVersionParams{
-		Files:       body.Files,
-		ManagedDirs: body.ManagedDirs,
-		Agent:       body.Agent,
-		Note:        body.Note,
-		CreatedBy:   createdBy,
+		Files:        body.Files,
+		ManagedDirs:  body.ManagedDirs,
+		CleanExclude: body.CleanExclude,
+		Agent:        body.Agent,
+		Note:         body.Note,
+		CreatedBy:    createdBy,
 	})
 	if err != nil {
 		h.respondErr(c, err)

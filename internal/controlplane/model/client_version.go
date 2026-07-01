@@ -16,7 +16,11 @@ type ClientVersion struct {
 	// FilesJSON 文件清单快照（[]ManifestFile 的 JSON）：path/sha256/md5/size/sync/platform/artifact。
 	FilesJSON string `gorm:"column:files_json;type:text;not null" json:"-"`
 	// ManagedDirsJSON 托管目录快照（[]string 的 JSON）：仅这些目录可增删（减量）。
+	// FR-255：可含 "*" 哨兵表「整个 gameDir」（clean-all）。
 	ManagedDirsJSON string `gorm:"column:managed_dirs_json;type:text;not null" json:"-"`
+	// CleanExcludeJSON 运营自定义排除快照（[]string 的 JSON，FR-255）：命中前缀永不删。
+	// 空串=未声明（向后兼容，老版本无此列）。
+	CleanExcludeJSON string `gorm:"column:clean_exclude_json;type:text" json:"-"`
 	// AgentJSON 楔子 + updater-core 自更新段快照（ManifestAgent 的 JSON），可空（未声明自更新段）。
 	AgentJSON string `gorm:"column:agent_json;type:text" json:"-"`
 	// Note 发布备注（运营可读，信息性）。

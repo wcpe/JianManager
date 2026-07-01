@@ -44,7 +44,7 @@ func (s *JmPackService) PackVersion(channelID string) (*ClientFileResult, error)
 		}
 		return nil, err
 	}
-	files, _, _, err := decodeVersionSnapshot(ver)
+	files, _, _, _, err := decodeVersionSnapshot(ver)
 	if err != nil {
 		return nil, err
 	}

@@ -375,3 +375,99 @@ func sha256Hex2(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
+
+// TestClientDist_PublishWithCleanExclude 发布含 cleanExclude + managedDirs=["*"] 的版本，
+// 验证 manifest 输出含 cleanExclude 且签名有效（FR-255）。
+func TestClientDist_PublishWithCleanExclude(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	const channelID = "clean-all-test"
+	key := createChannelAndKey(t, r, token, channelID)
+
+	content := []byte("mod-bytes")
+	artSha, artSize := uploadClientFile(t, r, token, channelID, content)
+	rawSha := sha256Hex2("mods/foo.jar-raw")
+
+	// 发布：managedDirs=["*"]（clean-all）+ cleanExclude=["mods/keep", "custom"]。
+	pubBody := map[string]any{
+		"managedDirs":  []string{"*"},
+		"cleanExclude": []string{"mods/keep", "custom"},
+		"files": []map[string]any{
+			{
+				"path": "mods/foo.jar", "sha256": rawSha, "md5": "cd34", "size": 123456,
+				"sync": "strict", "platform": "",
+				"artifact": map[string]any{"sha256": artSha, "size": artSize, "codec": "zstd"},
+			},
+		},
+	}
+	w := makeRequest(r, "POST", "/api/v1/client-channels/"+channelID+"/versions", pubBody, token)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("发布版本失败: status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	// 玩家拉取 manifest。
+	mreq := httptest.NewRequest("GET", "/api/v1/client-channels/"+channelID+"/manifest", nil)
+	mreq.Header.Set("X-Client-Key", key)
+	mw := httptest.NewRecorder()
+	r.ServeHTTP(mw, mreq)
+	if mw.Code != http.StatusOK {
+		t.Fatalf("拉取 manifest 失败: status=%d body=%s", mw.Code, mw.Body.String())
+	}
+
+	// 验签。
+	verifyManifestSignature(t, mw.Body.Bytes())
+
+	// 解析 manifest 断言字段。
+	var manifest service.SignedManifest
+	if err := json.Unmarshal(mw.Body.Bytes(), &manifest); err != nil {
+		t.Fatalf("解析 manifest 失败: %v", err)
+	}
+	if len(manifest.ManagedDirs) != 1 || manifest.ManagedDirs[0] != "*" {
+		t.Errorf("managedDirs 应为 [\"*\"], 实际 %v", manifest.ManagedDirs)
+	}
+	if len(manifest.CleanExclude) != 2 {
+		t.Errorf("cleanExclude 应有 2 项, 实际 %v", manifest.CleanExclude)
+	}
+}
+
+// TestClientDist_PublishRejectsInvalidCleanExclude 校验 cleanExclude 路径合法性（FR-255）。
+func TestClientDist_PublishRejectsInvalidCleanExclude(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	const channelID = "clean-exclude-validation"
+	createChannelAndKey(t, r, token, channelID)
+
+	content := []byte("mod-bytes")
+	artSha, artSize := uploadClientFile(t, r, token, channelID, content)
+	rawSha := sha256Hex2("mods/foo.jar-raw")
+
+	baseFiles := []map[string]any{
+		{
+			"path": "mods/foo.jar", "sha256": rawSha, "md5": "cd34", "size": 123456,
+			"sync": "strict", "platform": "",
+			"artifact": map[string]any{"sha256": artSha, "size": artSize, "codec": "zstd"},
+		},
+	}
+
+	// cleanExclude 含 "*" 哨兵 → 拒绝。
+	w := makeRequest(r, "POST", "/api/v1/client-channels/"+channelID+"/versions", map[string]any{
+		"managedDirs":  []string{"*"},
+		"cleanExclude": []string{"*"},
+		"files":        baseFiles,
+	}, token)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("cleanExclude 含 \"*\" 应被拒绝, 实际 status=%d", w.Code)
+	}
+
+	// cleanExclude 含路径逃逸 → 拒绝。
+	w = makeRequest(r, "POST", "/api/v1/client-channels/"+channelID+"/versions", map[string]any{
+		"managedDirs":  []string{"mods"},
+		"cleanExclude": []string{"../escape"},
+		"files":        baseFiles,
+	}, token)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("cleanExclude 含路径逃逸应被拒绝, 实际 status=%d", w.Code)
+	}
+}
