@@ -308,7 +308,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-256 | updater-core 架构简化 Phase 1：删验签（Signatures/BouncyCastle/.jmpack）、删 CAS（CasCache）、删 core 自更新（SelfUpdater）、manifest 去 sig 段、去防降级；保留 sha256 完整性校验 + 拉取密钥鉴权（推翻 ADR-022/053，废弃 FR-090/091/097/253/248）→ `docs/specs/updater-arch-simplification/spec.md` | P1 | 🔨 开发中 |
 | FR-257 | Reconciler 流式下载 + HTTP Range 断点续传：Transport 改返回 InputStream、Reconciler 边读边写盘（64KB 缓冲）、DigestInputStream 流式 sha256、zstd 流式解压、断点续传；1GB 文件下载内存 < 10MB（依赖 FR-256）→ `docs/specs/updater-arch-simplification/spec.md` | P1 | 🔄 开发中 |
 | FR-258 | 楔子改 gradle-wrapper 模式：整合包只带 wedge.jar，首次自动拉 core（JDK 原生 HttpURLConnection + sha256 校验）、本地保留 3 版用于回滚、jm-updater.json 原文透传 ctx、Core.run(Map) 接口契约冻结（依赖 FR-256）→ `docs/specs/updater-arch-simplification/spec.md` | P1 | 🔄 开发中 |
-| FR-259 | CP core 版本归档 + 端点 + 面板回滚：make embed-client-updater 归档多版本 core jar、GET /client-channels/:id/updater-core 端点（拉取密钥鉴权）、面板「updater-core 版本」选择器一键切换回滚（依赖 FR-258）→ `docs/specs/updater-arch-simplification/spec.md` | P1 | 📋 计划 |
+| FR-259 | CP core 版本归档 + 端点 + 面板回滚：make embed-client-updater 归档多版本 core jar、GET /client-channels/:id/updater-core 端点（拉取密钥鉴权）、面板「updater-core 版本」选择器一键切换回滚（依赖 FR-258）→ `docs/specs/updater-arch-simplification/spec.md` | P1 | 🔄 开发中 |
 | FR-260 | 客户端更新器架构简化 前端 + ADR + doc-sync：接入指引去 signPublicKey 改"楔子自动拉取"、updater-core 版本选择器面板、新 ADR 推翻 ADR-022/053 修订 ADR-045、API/ARCHITECTURE/PRD/CHANGELOG 同步、重编内嵌 jar（依赖 FR-259） | P2 | 📋 计划 |
 
 ### 范围外（后续版本，暂不纳入 V1）
