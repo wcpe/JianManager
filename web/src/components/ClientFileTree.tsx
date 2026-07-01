@@ -226,7 +226,7 @@ function FileRow({
         <Select value={file.sync} onValueChange={(v: string) => onSyncChange?.(file.index, v as ManifestFileLike['sync'])}>
           <SelectTrigger size="sm" className="w-28"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="strict">{t('clientVersions.syncStrict', '强制')}</SelectItem>
+            <SelectItem value="strict">{t('clientVersions.syncStrict', '覆盖')}</SelectItem>
             <SelectItem value="once">{t('clientVersions.syncOnce', '仅一次')}</SelectItem>
             <SelectItem value="ignore">{t('clientVersions.syncIgnore', '忽略')}</SelectItem>
           </SelectContent>
@@ -269,7 +269,7 @@ function SyncBadge({ sync, t }: { sync: ManifestFileLike['sync']; t: TFunction }
         : 'border-muted-foreground/30 text-muted-foreground'
   const label =
     sync === 'strict'
-      ? t('clientVersions.syncStrict', '强制')
+      ? t('clientVersions.syncStrict', '覆盖')
       : sync === 'once'
         ? t('clientVersions.syncOnce', '仅一次')
         : t('clientVersions.syncIgnore', '忽略')

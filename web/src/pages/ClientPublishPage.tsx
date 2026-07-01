@@ -104,7 +104,7 @@ interface DraftFile {
 const PUBLISH_STEP_META: Record<PublishStepId, { key: string; fallback: string }> = {
   files: { key: 'clientVersions.stepFiles', fallback: '选择文件' },
   configure: { key: 'clientVersions.stepConfigure', fallback: '逐文件配置' },
-  meta: { key: 'clientVersions.stepMeta', fallback: '托管目录 / 说明' },
+  meta: { key: 'clientVersions.stepMeta', fallback: '清理规则 / 说明' },
   review: { key: 'clientVersions.stepReview', fallback: '预览发布' },
 }
 
@@ -514,7 +514,10 @@ export default function ClientPublishPage() {
         {step === 'configure' && (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              {t('clientVersions.stepConfigureDesc', '为每个文件设置游戏目录内的目标相对路径、同步策略与适用平台。')}
+              {t('clientVersions.stepConfigureDesc', '为每个文件设置它在玩家游戏目录里的存放路径、同步策略（覆盖 / 仅一次 / 忽略）与适用平台。')}
+            </p>
+            <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              {t('clientVersions.syncModeHint', '同步策略 = 玩家更新时怎么处理这个文件：覆盖（强制统一）· 仅一次（缺了才补）· 忽略（完全不管）')}
             </p>
             <ClientFileTree
               files={drafts}
@@ -529,7 +532,7 @@ export default function ClientPublishPage() {
         {step === 'meta' && (
           <div className="space-y-4">
             <label className="flex flex-col gap-1 text-sm">
-              {t('clientVersions.managedDirs', '托管目录')}
+              {t('clientVersions.managedDirs', '自动清理目录')}
               <input
                 className="p-2 border rounded bg-background font-mono text-xs"
                 value={managedDirs}
@@ -537,7 +540,7 @@ export default function ClientPublishPage() {
                 placeholder="mods, config, resourcepacks"
               />
               <span className="text-xs text-muted-foreground">
-                {t('clientVersions.managedDirsHint', '逗号/换行分隔。仅这些目录内会删除「本地有但清单未列」的文件（减量）。')}
+                {t('clientVersions.managedDirsHint', '填这里的目录（如 mods、config）后，玩家更新时会自动删掉这些目录里「服务器已移除、玩家本地却多出来」的文件——避免旧 mod 残留导致进不去游戏。用逗号或换行分隔多个；留空则不自动清理任何文件。')}
               </span>
             </label>
 
@@ -556,7 +559,7 @@ export default function ClientPublishPage() {
         {step === 'review' && (
           <div className="space-y-4 text-sm">
             <p className="text-muted-foreground">
-              {t('clientVersions.stepReviewDesc', '确认下列内容无误后发布。发布即以更高版本号切为 latest，玩家侧将拉取此版本。')}
+              {t('clientVersions.stepReviewDesc', '确认无误后点发布。发布后这个版本会成为玩家自动下载的最新版（版本号只增不减，玩家不会被降级）。')}
             </p>
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
               <dt className="text-muted-foreground">{t('clientVersions.fileCount', '文件数')}</dt>
