@@ -915,7 +915,7 @@ data/
 │   ├── artifact-cache/ # 节点制品缓存：<sha256[:2]>/<sha256>(+.meta)（Worker 本地派生，FR-178）
 │   ├── log/          # 运行日志
 │   └── artifacts/    # 制品库（内容寻址，见 §14 / ADR-011；CP 全局，区别于上方节点本地缓存）
-└── cache/            # 临时：下载中转/解压
+└── cache/            # 临时：下载中转/解压；client-uploads/<uploadId>/ 为大文件分块上传临时分片区（FR-251，complete 拼装喂 CAS 后清理，CP 重启清残留）
 ```
 
 - 登记路径**按数据根相对存储**（如 `var/servers/hub-a1b2c3d4`），整体拷到另一机器后仍自洽。

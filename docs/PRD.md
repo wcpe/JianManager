@@ -300,7 +300,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-248 | OTA 签名密钥自动生成与面板公钥展示：CP 启动时未注入 env 私钥则自动生成 Ed25519 密钥对并持久化到数据根文件（env 注入优先、双轨），面板展示公钥供运营者配到客户端；修订 ADR-022/038（增强 FR-087，需 spec + ADR-052）→ `docs/specs/client-sign-key-autogen/spec.md` | P1 | 🔨 开发中 |
 | FR-249 | OTA 拉取错误追踪与面板查询：manifest/artifact 拉取失败也记录追踪事件（含错误原因），面板分发事件页可按成功/失败筛选并查看错误详情（增强 FR-093，需 spec：DB schema 扩展 + 新查询维度）→ `docs/specs/client-dist-error-tracking/spec.md` | P1 | 🔨 开发中 |
 | FR-250 | 客户端分发发布编排器重做：拖拽多文件/文件夹到浏览器 → 前端本地预览文件树 → 可调整层级/sync 模式 → 点击发布才批量上传到 CP（非逐个上传节省带宽）；消费 FR-251 分块上传（增强 FR-191，需 spec，依赖 FR-251） | P1 | 📋 计划 |
-| FR-251 | 大文件分块上传端点 + 进度展示：后端新增分块上传协议（init→chunk→complete），前端分片上传 + 实时进度条，支持 4G+ 文件（增强 FR-088，需 spec：新 API 协议）→ `docs/specs/client-chunked-upload/spec.md` | P1 | 📋 计划 |
+| FR-251 | 大文件分块上传端点 + 进度展示：后端新增分块上传协议（init→chunk→complete），前端分片上传 + 实时进度条，支持 4G+ 文件（增强 FR-088，需 spec：新 API 协议）→ `docs/specs/client-chunked-upload/spec.md` | P1 | 🔨 开发中 |
 | FR-252 | 客户端分发术语大白话化：sync 模式（覆盖/仅一次/忽略）加大白话解释、"托管目录"等术语改为运营能看懂的措辞、发布步骤每页加大白话说明（增强 FR-194，免 spec） | P2 | 📋 计划 |
 
 ### 范围外（后续版本，暂不纳入 V1）

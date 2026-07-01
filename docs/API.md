@@ -1989,6 +1989,38 @@
 - **错误**: 400 `INVALID_REQUEST`（缺 file）| 404 `CHANNEL_NOT_FOUND` | 422 `CHECKSUM_MISMATCH`
 - **审计**: `client_file.publish`
 
+### POST /api/v1/client-channels/:id/uploads
+- **描述**: 大文件**分块上传**初始化（FR-251，增强 FR-088 单次上传）。声明文件总大小 → 建上传会话 → 返回 `uploadId` 与服务端敲定的 `chunkSize`/`chunkCount`（前端据此切片）。用于 4G+ 整合包，避免单请求超时、无进度、失败整传重来
+- **关联 FR**: FR-251
+- **鉴权**: **JWT，平台管理员**（运营操作，与 `POST .../files` 同组）
+- **请求**: `{ "filename": "pack.zip", "totalSize": 5368709120, "chunkSize": 8388608 }`（`totalSize` 必 >0；`chunkSize` 可空，<=0 用默认 8 MiB，越界夹取到 [1 MiB, 64 MiB]）
+- **响应** (201): `{ "uploadId": "a1b2…", "chunkSize": 8388608, "chunkCount": 640 }`
+- **错误**: 400 `INVALID_REQUEST` / `INVALID_UPLOAD_INIT`（totalSize<=0）| 404 `CHANNEL_NOT_FOUND`
+
+### PUT /api/v1/client-channels/:id/uploads/:uploadId/chunks/:index
+- **描述**: 上传第 `index`（0 基）个分片。**幂等**——重传同 index 覆盖，支持失败重试；分片先落临时文件再原子 rename，避免半写脏片被 complete 采纳
+- **关联 FR**: FR-251
+- **鉴权**: **JWT，平台管理员**
+- **请求**: body 为该分片**原始字节**（`application/octet-stream`，流式落盘、不缓冲整片进内存）；非末片须恰为 `chunkSize`，末片为末段余量
+- **响应** (200): `{ "received": 12, "total": 640 }`（已收片数 / 总片数）
+- **错误**: 400 `INVALID_REQUEST`（序号非法）/ `INVALID_CHUNK_INDEX`（越界）| 403 `UPLOAD_CHANNEL_MISMATCH` | 404 `UPLOAD_NOT_FOUND`（会话不存在 / 已过期）| 422 `INVALID_CHUNK_SIZE`（字节数不符）
+
+### POST /api/v1/client-channels/:id/uploads/:uploadId/complete
+- **描述**: 完成分块上传。校验分片齐全 + 总字节匹配 → 顺序拼装（`io.MultiReader` 流式，不额外落整文件）喂入 FR-045 制品库（同 `POST .../files` 的内容寻址 CAS）→ 返回与单次上传**逐字段一致**的结果 → 清理临时分片
+- **关联 FR**: FR-251
+- **鉴权**: **JWT，平台管理员**
+- **请求**: `{ "codec": "none", "expectedSha256": "ef56…" }`（**均可选**，请求体可空；codec 空补 `none`）
+- **响应** (201): `{ "sha256": "ef56…", "md5": "cd34…", "size": 5368709120, "codec": "none" }`（同 `POST .../files`，即 manifest `files[].artifact.sha256`）
+- **错误**: 403 `UPLOAD_CHANNEL_MISMATCH` | 404 `UPLOAD_NOT_FOUND` | 422 `UPLOAD_INCOMPLETE`（缺片）/ `INVALID_CHUNK_SIZE`（拼装总字节不符）/ `CHECKSUM_MISMATCH`（expectedSha256 不符）
+- **审计**: `client_file.publish`（detail 含 `via: "chunked"`）
+
+### DELETE /api/v1/client-channels/:id/uploads/:uploadId
+- **描述**: 弃单——移除上传会话 + 清临时分片。幂等（会话不存在亦返回 204）。前端取消上传时调用；空闲超 1h 的会话由后台 TTL 自动回收，CP 重启清残留分片
+- **关联 FR**: FR-251
+- **鉴权**: **JWT，平台管理员**
+- **响应**: `204 No Content`
+- **错误**: 403 `UPLOAD_CHANNEL_MISMATCH`（跨频道弃他人会话）
+
 ### POST /api/v1/client-channels/:id/versions
 - **描述**: 发布版本并切 latest 指针。`version` 由服务端**单调递增分配**（防降级基准，contract §3），不接受客户端指定
 - **关联 FR**: FR-087
