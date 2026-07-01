@@ -1,6 +1,7 @@
 package top.wcpe.mc.jm.updater.core;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.function.LongConsumer;
 
 /**
@@ -28,6 +29,14 @@ interface Transport {
         }
         return b;
     }
+
+    /**
+     * 流式拉取制品（FR-257）：返回 InputStream 供调用方边读边写盘（64KB 缓冲），不再全量读进 byte[]。
+     * {@code offset>0} 时以 {@code Range: bytes=<offset>-} 从断点续传（HTTP 206）。
+     * 调用方负责关闭返回的 InputStream（HttpTransport 实现会在 close 时断开底层连接）。
+     * 进度上报由调用方在读取循环中按分块字节数回调 {@link ProgressReporter#sink()}。
+     */
+    InputStream fetchArtifactStream(String artifactSha256, long offset) throws IOException;
 
     /** 上报遥测（FR-094，契约 §4.3）。**best-effort**：端点不可达/非 202 静默忽略，绝不抛逃逸。 */
     void postTelemetry(String jsonBody);

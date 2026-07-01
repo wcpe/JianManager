@@ -73,6 +73,47 @@ final class HttpTransport implements Transport {
         }
     }
 
+    /**
+     * 流式拉取制品（FR-257）：返回 InputStream 供调用方边读边写盘，不再全量读进 byte[]。
+     * {@code offset>0} 时带 {@code Range: bytes=<offset>-} 请求头从断点续传（HTTP 206）。
+     * 返回的流关闭时断开底层连接（释放 socket），调用方必须关闭。
+     */
+    @Override
+    public InputStream fetchArtifactStream(String artifactSha256, long offset) throws IOException {
+        HttpURLConnection c = open(endpoint + "/client-artifacts/" + artifactSha256, "GET", 300_000);
+        if (offset > 0) {
+            c.setRequestProperty("Range", "bytes=" + offset + "-");
+        }
+        int code = c.getResponseCode();
+        // 200=全量（服务器不支持 Range 或 offset=0）；206=部分内容（Range 命中）。
+        if (code != 200 && code != 206) {
+            c.disconnect();
+            throw new IOException("制品流式拉取失败 HTTP " + code + " sha256=" + artifactSha256);
+        }
+        final InputStream raw = c.getInputStream();
+        // 包装：close 时断开连接，避免底层 socket 泄漏。
+        return new InputStream() {
+            @Override
+            public int read() throws IOException {
+                return raw.read();
+            }
+
+            @Override
+            public int read(byte[] b, int off, int len) throws IOException {
+                return raw.read(b, off, len);
+            }
+
+            @Override
+            public void close() throws IOException {
+                try {
+                    raw.close();
+                } finally {
+                    c.disconnect();
+                }
+            }
+        };
+    }
+
     @Override
     public void postTelemetry(String jsonBody) {
         HttpURLConnection c = null;

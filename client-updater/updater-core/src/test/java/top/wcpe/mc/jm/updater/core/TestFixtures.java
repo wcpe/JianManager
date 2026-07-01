@@ -2,7 +2,9 @@ package top.wcpe.mc.jm.updater.core;
 
 import com.github.luben.zstd.Zstd;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -15,7 +17,7 @@ import java.util.Map;
 final class TestFixtures {
 
     /** 内存 Transport：从预置 manifest 文本与制品表返回，模拟端点（无需真 HTTP）。 */
-    static final class MemoryTransport implements Transport {
+    static class MemoryTransport implements Transport {
         String manifestJson;
         boolean manifestUnreachable;
         final Map<String, byte[]> artifacts = new HashMap<>();
@@ -31,12 +33,26 @@ final class TestFixtures {
 
         @Override
         public byte[] fetchArtifact(String artifactSha256) throws IOException {
-            artifactFetchCount++;
             byte[] data = artifacts.get(artifactSha256);
             if (data == null) {
                 throw new IOException("制品不存在: " + artifactSha256);
             }
             return data;
+        }
+
+        /** 最近一次流式拉取的 offset（断点续传测试断言用）。 */
+        long lastStreamOffset;
+
+        @Override
+        public InputStream fetchArtifactStream(String artifactSha256, long offset) throws IOException {
+            artifactFetchCount++;
+            lastStreamOffset = offset;
+            byte[] data = artifacts.get(artifactSha256);
+            if (data == null) {
+                throw new IOException("制品不存在: " + artifactSha256);
+            }
+            int start = (int) Math.max(0L, Math.min(offset, data.length));
+            return new ByteArrayInputStream(data, start, data.length - start);
         }
 
         /** 最近一次遥测上报体（FR-094 测试断言用）。 */

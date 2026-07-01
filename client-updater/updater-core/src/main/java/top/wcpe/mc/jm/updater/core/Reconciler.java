@@ -1,13 +1,20 @@
 package top.wcpe.mc.jm.updater.core;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.LongConsumer;
 
 /**
  * 文件级 reconcile 引擎（契约 §2/§6.4，FR-090 核心）。
@@ -17,8 +24,11 @@ import java.util.Set;
  * 减量：仅在 {@code managedDirs} 内、对 {@code sync} 非 once/ignore 的文件，删「本地有但 manifest 未列」的。
  * 玩家区永不碰（{@link PathRules}）。
  *
- * <p>FR-256 起：去掉 CAS 内容寻址缓存（CasCache 已删）。下载的制品直接解码写盘，不再落盘缓存；
- * 重复文件复用靠 size+sha256 快筛（命中即跳过下载），不再查 CAS。
+ * <p>FR-256 起：去掉 CAS 内容寻址缓存（CasCache 已删）。重复文件复用靠 size+sha256 快筛（命中即跳过下载）。
+ *
+ * <p>FR-257 起：下载改为流式——Transport 返回 {@link InputStream}，边读边写盘（64KB 缓冲）+
+ * {@link DigestInputStream} 流式 sha256 + zstd 流式解压；支持 HTTP Range 断点续传
+ * （{@code .jmtmp.dl} 残留则从已下载大小处续传）。1GB 文件下载内存占用恒定 &lt; 10MB。
  */
 final class Reconciler {
 
@@ -150,7 +160,7 @@ final class Reconciler {
         }
     }
 
-    /** 单文件增量：快筛 → 下载 → 解码 → sha256 校验 → 原子放置（按 sync 策略）。 */
+    /** 单文件增量：快筛 → 流式下载 → 校验 → 解压 → 原子放置（按 sync 策略，FR-257 流式）。 */
     private void applyFile(Manifest.FileEntry entry, Result result) throws IOException {
         Path target = PathRules.resolveSafe(gameDir, entry.path);
 
@@ -168,18 +178,9 @@ final class Reconciler {
             return;
         }
 
-        // 取得目标内容：下载制品并解码（FR-256 起 CAS 已删，不再查本地缓存）。
-        byte[] content = obtainContent(entry, result);
-
-        // sha256 强校验——完整性校验必须 sha256（md5 仅快筛）。FR-256 起为下载完整性校验而非信任校验。
-        String actual = Hashes.sha256(content);
-        if (!actual.equalsIgnoreCase(entry.sha256)) {
-            throw new IOException("sha256 校验失败 期望=" + entry.sha256 + " 实际=" + actual);
-        }
-
-        atomicWrite(target, content);
+        // 流式下载并原子放置（FR-257：64KB 缓冲，不再全量读进 byte[]）。
+        downloadAndPlace(entry, target);
         result.downloaded++;
-        log.debug("reconcile 写入 " + entry.path + " (" + content.length + "B)");
     }
 
     /** md5+size 快筛：本地文件与 manifest 声明一致则视为命中（弱校验，仅免下载）。 */
@@ -197,33 +198,112 @@ final class Reconciler {
         return false;
     }
 
-    /** 下载制品并按 codec 解码（FR-256 起 CAS 已删，直接走 transport）。 */
-    private byte[] obtainContent(Manifest.FileEntry entry, Result result) throws IOException {
+    /** 64KB 流式读写缓冲（FR-257：大文件内存占用恒定，不随文件大小增长）。 */
+    private static final int STREAM_BUF = 64 * 1024;
+    /** 下载临时后缀（存制品流，支持断点续传；含 {@code .jmtmp.} 以被减量跳过保留供下次续传）。 */
+    private static final String DL_TMP_SUFFIX = ".jmtmp.dl";
+    /** 解压输出临时后缀（仅 zstd 路径用）。 */
+    private static final String OUT_TMP_SUFFIX = ".jmtmp.out";
+
+    /**
+     * 流式下载制品 → 校验 → 解压 → 原子放置（FR-257）。
+     *
+     * <p>下载阶段：检查 {@code .jmtmp.dl} 已下载大小 → HTTP Range 从断点续传 → 追加写（64KB 缓冲），
+     * 边读边回调进度（玩家关窗时 sink 抛异常中止本次下载，已写部分保留供下次续传）。下载完成后校验
+     * 制品 sha256（下载寻址 key，防 CDN 错内容）。随后按 codec 放置：{@code none} 直接原子 rename；
+     * {@code zstd} 流式解压 + {@link DigestInputStream} 算内容 sha256 → 写 {@code .jmtmp.out} → 校验通过后 rename。
+     *
+     * <p>断点续传：{@code .jmtmp.dl} 残留则从当前大小处续传；任一 sha256 不符则删临时报错（不污染目标）。
+     */
+    private void downloadAndPlace(Manifest.FileEntry entry, Path target) throws IOException {
         if (entry.artifactSha256 == null) {
             throw new IOException("缺少 artifact 信息，无法下载: " + entry.path);
         }
-        // FR-099：标记当前文件 + 字节级进度回调（玩家关窗时 sink 抛异常中止本次下载）。
+        Files.createDirectories(target.getParent());
+        Path dlTmp = target.resolveSibling(target.getFileName() + DL_TMP_SUFFIX);
+
+        // 1. 流式下载（断点续传：从 dlTmp 已有大小处 Range 续传）。
+        long offset = Files.isRegularFile(dlTmp) ? Files.size(dlTmp) : 0L;
         reporter.beginFile(entry.path);
-        byte[] artifact = transport.fetchArtifact(entry.artifactSha256, reporter.sink());
-        // 制品自身 hash 校验（下载寻址 key），防 CDN 返回错内容。
-        String artHash = Hashes.sha256(artifact);
-        if (!artHash.equalsIgnoreCase(entry.artifactSha256)) {
-            throw new IOException("制品 hash 不符 期望=" + entry.artifactSha256 + " 实际=" + artHash);
+        LongConsumer onBytes = reporter.sink();
+        try (InputStream net = transport.fetchArtifactStream(entry.artifactSha256, offset);
+             OutputStream out = Files.newOutputStream(dlTmp,
+                     StandardOpenOption.CREATE, StandardOpenOption.APPEND)) {
+            byte[] buf = new byte[STREAM_BUF];
+            int n;
+            while ((n = net.read(buf)) != -1) {
+                out.write(buf, 0, n);
+                onBytes.accept((long) n); // 进度推进 + 取消检查（关窗时抛异常中止）
+            }
         }
-        return Codec.decode(artifact, entry.artifactCodec);
+
+        // 2. 校验制品 sha256（下载寻址 key，防 CDN 返回错内容）。
+        if (!Hashes.sha256(dlTmp).equalsIgnoreCase(entry.artifactSha256)) {
+            Files.deleteIfExists(dlTmp);
+            throw new IOException("制品 hash 不符 期望=" + entry.artifactSha256);
+        }
+
+        // 3. 按 codec 放置：none 直接 rename；zstd 流式解压后再 rename。
+        placeDecoded(dlTmp, target, entry);
     }
 
-    /** temp 写 + 原子换（契约「中断不损坏客户端」）。 */
-    private void atomicWrite(Path target, byte[] content) throws IOException {
-        Files.createDirectories(target.getParent());
-        Path tmp = target.resolveSibling(target.getFileName() + ".jmtmp." + System.nanoTime());
-        Files.write(tmp, content);
+    /**
+     * 校验内容 sha256 后原子放置到 target。
+     * <ul>
+     *   <li>{@code none}：dlTmp 即最终内容，校验 entry.sha256 后原子 rename。</li>
+     *   <li>{@code zstd}：dlTmp(压缩) → 流式解压 → DigestInputStream(算 entry.sha256) → 写 outTmp → 校验通过后 rename。</li>
+     * </ul>
+     * zstd 路径需两个临时文件（压缩流不可从中间续解压，故先存压缩流支持断点续传，再整流式解压）。
+     */
+    private void placeDecoded(Path dlTmp, Path target, Manifest.FileEntry entry) throws IOException {
+        boolean zstd = "zstd".equalsIgnoreCase(entry.artifactCodec);
+        if (!zstd) {
+            // none：dlTmp 即最终内容，校验 entry.sha256 后原子 rename。
+            if (!Hashes.sha256(dlTmp).equalsIgnoreCase(entry.sha256)) {
+                Files.deleteIfExists(dlTmp);
+                throw new IOException("sha256 校验失败 期望=" + entry.sha256);
+            }
+            atomicMove(dlTmp, target);
+            return;
+        }
+        // zstd：dlTmp(压缩) → 流式解压 + DigestInputStream(算 entry.sha256) → 写 outTmp → 校验 → rename。
+        Path outTmp = target.resolveSibling(target.getFileName() + OUT_TMP_SUFFIX);
+        MessageDigest md = newSha256Digest();
+        try (InputStream fileIn = Files.newInputStream(dlTmp);
+             InputStream decoded = Codec.decodeStream(fileIn, entry.artifactCodec);
+             DigestInputStream din = new DigestInputStream(decoded, md);
+             OutputStream out = Files.newOutputStream(outTmp,
+                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
+            byte[] buf = new byte[STREAM_BUF];
+            int n;
+            while ((n = din.read(buf)) != -1) {
+                out.write(buf, 0, n);
+            }
+        } finally {
+            Files.deleteIfExists(dlTmp); // 压缩临时用完即删
+        }
+        String actual = Hashes.hex(md.digest());
+        if (!actual.equalsIgnoreCase(entry.sha256)) {
+            Files.deleteIfExists(outTmp);
+            throw new IOException("sha256 校验失败 期望=" + entry.sha256 + " 实际=" + actual);
+        }
+        atomicMove(outTmp, target);
+    }
+
+    /** 临时文件 → 目标 原子换（不支持原子 move 时退回普通 replace，契约「中断不损坏客户端」）。 */
+    private static void atomicMove(Path tmp, Path target) throws IOException {
         try {
             Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (java.nio.file.AtomicMoveNotSupportedException e) {
             Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
-        } finally {
-            Files.deleteIfExists(tmp);
+        }
+    }
+
+    private static MessageDigest newSha256Digest() {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
         }
     }
 
