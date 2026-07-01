@@ -20,6 +20,9 @@ import {
   moveDirToDir,
   collectSubtreeFiles,
   isSelfOrDescendant,
+  collectAllDirPaths,
+  isCleanAll,
+  CLEAN_ALL_SENTINEL,
   type TreeFile,
   type FileSystemEntryLike,
 } from './client-publish-wizard'
@@ -410,5 +413,54 @@ describe('isSelfOrDescendant', () => {
   it('非后代 → false', () => {
     expect(isSelfOrDescendant('mods', 'config')).toBe(false)
     expect(isSelfOrDescendant('mods', 'modsxyz')).toBe(false)
+  })
+})
+
+/** FR-255：从草稿文件派生目录路径（managedDirs 目录树勾选用）。 */
+describe('collectAllDirPaths', () => {
+  it('空列表 → 空数组', () => {
+    expect(collectAllDirPaths([])).toEqual([])
+  })
+  it('根目录散文件不产生目录', () => {
+    expect(collectAllDirPaths([tf('options.txt', 0)])).toEqual([])
+  })
+  it('逐层收集所有目录前缀（含深层嵌套），按字母序', () => {
+    expect(
+      collectAllDirPaths([
+        tf('mods/a.jar', 0),
+        tf('mods/sub/b.jar', 1),
+        tf('config/foo/x.toml', 2),
+        tf('options.txt', 3),
+      ]),
+    ).toEqual(['config', 'config/foo', 'mods', 'mods/sub'])
+  })
+  it('去重相同目录前缀', () => {
+    expect(
+      collectAllDirPaths([
+        tf('mods/a.jar', 0),
+        tf('mods/b.jar', 1),
+        tf('mods/sub/c.jar', 2),
+      ]),
+    ).toEqual(['mods', 'mods/sub'])
+  })
+  it('路径归一（反斜杠 / 前导 ./）', () => {
+    expect(
+      collectAllDirPaths([tf('./mods\\sub/a.jar', 0)]),
+    ).toEqual(['mods', 'mods/sub'])
+  })
+})
+
+/** FR-255：clean-all 哨兵判定。 */
+describe('isCleanAll', () => {
+  it('含 "*" 哨兵 → true', () => {
+    expect(isCleanAll(['*'])).toBe(true)
+    expect(isCleanAll(['mods', '*'])).toBe(true)
+  })
+  it('不含哨兵 → false', () => {
+    expect(isCleanAll([])).toBe(false)
+    expect(isCleanAll(['mods', 'config'])).toBe(false)
+  })
+  it('哨兵常量', () => {
+    expect(CLEAN_ALL_SENTINEL).toBe('*')
   })
 })

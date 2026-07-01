@@ -277,3 +277,156 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
     }
   })
 })
+
+/**
+ * FR-255：清理范围目录树编辑器 + clean-all 哨兵 + 自定义排除 + 发布二次确认。
+ * 验证 meta 步勾选/开关产出正确的 manifest 字段，clean-all 发布触发 DangerConfirm。
+ */
+describe('ClientPublishPage（清理范围编辑器，FR-255）', () => {
+  /** 捕获发布版本请求体（最后一次 POST .../versions 的 body，clone 不干扰 handler）。 */
+  function capturePublishBody(): { get: () => Promise<Record<string, unknown>>; stop: () => void } {
+    let bodyP: Promise<Record<string, unknown>> = Promise.resolve({})
+    const listener = ({ request }: { request: Request }) => {
+      if (request.method === 'POST' && /\/client-channels\/[^/]+\/versions$/.test(new URL(request.url).pathname)) {
+        bodyP = request.clone().json().catch(() => ({}))
+      }
+    }
+    server.events.on('request:start', listener)
+    return {
+      get: () => bodyP,
+      stop: () => server.events.removeListener('request:start', listener),
+    }
+  }
+
+  /** 添加文件并走到 meta 步（files → configure → meta）。 */
+  async function gotoMeta(user: ReturnType<typeof userEvent.setup>, container: HTMLElement) {
+    await screen.findByTestId('publish-dropzone')
+    await user.upload(addFilesInput(container), new File(['x'], 'mods/a.jar'))
+    await user.upload(addFilesInput(container), new File(['y'], 'config/foo/b.toml'))
+    await screen.findByText('mods/a.jar')
+    // files → configure → meta
+    await user.click(screen.getByRole('button', { name: /下一步/ }))
+    await user.click(screen.getByRole('button', { name: /下一步/ }))
+  }
+
+  it('目录树勾选产出 managedDirs（含深层嵌套目录）', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    const pub = capturePublishBody()
+    try {
+      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      await gotoMeta(user, container)
+
+      // 勾选 config/foo 目录（深层嵌套）。
+      const cb = container.querySelector('[data-testid="managed-dirs-checkbox"][data-dir-path="config/foo"]') as HTMLElement
+      await user.click(cb)
+
+      // meta → review，点发布。
+      await user.click(screen.getByRole('button', { name: /下一步/ }))
+      await user.click(await screen.findByRole('button', { name: /发布新版本/ }))
+
+      // 发布请求体 managedDirs 含 "config/foo"。
+      const body = await waitFor(async () => {
+        const b = await pub.get()
+        expect(Object.keys(b).length).toBeGreaterThan(0)
+        return b
+      })
+      expect(body.managedDirs).toContain('config/foo')
+    } finally {
+      pub.stop()
+    }
+  })
+
+  it('clean-all 开关产出 managedDirs=["*"] + 发布触发 DangerConfirm 二次确认', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    const pub = capturePublishBody()
+    try {
+      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      await gotoMeta(user, container)
+
+      // 开启「清空整个游戏目录」开关。
+      await user.click(screen.getByTestId('clean-all-toggle'))
+      // 目录树应被禁用（clean-all 接管）。
+      expect(screen.getByTestId('managed-dirs-tree')).toHaveClass('opacity-50')
+
+      // meta → review。
+      await user.click(screen.getByRole('button', { name: /下一步/ }))
+      // review 步展示 clean-all 徽标。
+      expect(await screen.findByTestId('review-clean-all-badge')).toBeInTheDocument()
+      // 点发布 → 弹 DangerConfirm 二次确认。
+      await user.click(screen.getByRole('button', { name: /发布新版本/ }))
+      const confirmDialog = await screen.findByText(/确认清空整个游戏目录/)
+      expect(confirmDialog).toBeInTheDocument()
+      // 此时发布请求尚未发出（等二次确认）。
+      await new Promise((r) => setTimeout(r, 30))
+      expect(Object.keys(await pub.get()).length).toBe(0)
+
+      // 确认 → 发布。
+      await user.click(screen.getByRole('button', { name: /我已知晓风险/ }))
+
+      // 发布请求体 managedDirs = ["*"]。
+      const body = await waitFor(async () => {
+        const b = await pub.get()
+        expect(Object.keys(b).length).toBeGreaterThan(0)
+        return b
+      })
+      expect(body.managedDirs).toEqual(['*'])
+    } finally {
+      pub.stop()
+    }
+  })
+
+  it('自定义追加排除产出 cleanExclude', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    const pub = capturePublishBody()
+    try {
+      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      await gotoMeta(user, container)
+
+      // 在排除输入框填「玩家mod」并回车。
+      const field = screen.getByTestId('clean-exclude-field') as HTMLInputElement
+      await user.type(field, '玩家mod')
+      await user.keyboard('{Enter}')
+      // 标签出现。
+      expect(screen.getByText('玩家mod')).toBeInTheDocument()
+
+      // meta → review，点发布。
+      await user.click(screen.getByRole('button', { name: /下一步/ }))
+      await user.click(await screen.findByRole('button', { name: /发布新版本/ }))
+
+      const body = await waitFor(async () => {
+        const b = await pub.get()
+        expect(Object.keys(b).length).toBeGreaterThan(0)
+        return b
+      })
+      expect(body.cleanExclude).toContain('玩家mod')
+    } finally {
+      pub.stop()
+    }
+  })
+
+  it('clean-all 发布 DangerConfirm 取消则不发布', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    const pub = capturePublishBody()
+    try {
+      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      await gotoMeta(user, container)
+      await user.click(screen.getByTestId('clean-all-toggle'))
+      await user.click(screen.getByRole('button', { name: /下一步/ }))
+      await user.click(await screen.findByRole('button', { name: /发布新版本/ }))
+
+      // 弹确认后点「取消」（DangerConfirm 的取消按钮文案 = common.cancel = "取消"）。
+      await screen.findByText(/确认清空整个游戏目录/)
+      await user.click(screen.getByRole('button', { name: /^取消$/ }))
+
+      // 取消后发布请求不应发出。
+      await new Promise((r) => setTimeout(r, 50))
+      expect(Object.keys(await pub.get()).length).toBe(0)
+    } finally {
+      pub.stop()
+    }
+  })
+})

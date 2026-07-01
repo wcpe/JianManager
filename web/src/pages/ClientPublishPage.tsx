@@ -33,14 +33,18 @@ import {
   dedupUnits,
   localDedupKey,
   batchProgressBytes,
+  CLEAN_ALL_SENTINEL,
+  isCleanAll,
   type PublishStepId,
   type LocalUnit,
   type FileSystemEntryLike,
 } from '@/lib/client-publish-wizard'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import DangerConfirm from '@/components/DangerConfirm'
 import ClientFileTree from '@/components/ClientFileTree'
+import ManagedDirsEditor, { CleanExcludeInput } from '@/components/ManagedDirsEditor'
 import FileBrowser from '@/components/file-browser/FileBrowser'
 import { localDraftSource } from '@/components/file-browser/sources/localDraftSource'
 
@@ -126,7 +130,15 @@ export default function ClientPublishPage() {
 
   const [step, setStep] = useState<PublishStepId>('files')
   const [drafts, setDrafts] = useState<DraftFile[]>([])
-  const [managedDirs, setManagedDirs] = useState('mods, config, resourcepacks')
+  // FR-255：managedDirs 改为目录树勾选（selectedDirs）+ 高级手动兜底（managedDirsManual）。
+  const [selectedDirs, setSelectedDirs] = useState<string[]>([])
+  const [managedDirsManual, setManagedDirsManual] = useState('')
+  // 「清空整个 gameDir」开关（clean-all）：开启后 managedDirs 含哨兵 "*"，删清单未列的一切。
+  const [cleanAll, setCleanAll] = useState(false)
+  // 自定义追加排除（FR-255）：命中前缀的路径永不删（叠加在玩家区之上）。
+  const [cleanExclude, setCleanExclude] = useState<string[]>([])
+  // clean-all 发布二次确认弹窗（开启时点发布先弹 DangerConfirm）。
+  const [cleanAllConfirm, setCleanAllConfirm] = useState(false)
   const [note, setNote] = useState('')
   // 发布批量上传中（点发布后置位，禁止前进/再次发布；与选文件解耦——选文件不再上传）。
   const [uploading, setUploading] = useState(false)
@@ -314,7 +326,11 @@ export default function ClientPublishPage() {
   const removeDraft = (id: string) => setDrafts((prev) => prev.filter((d) => d.id !== id))
 
   const wizardState = { draftCount: drafts.length, paths: drafts.map((d) => d.path), uploading }
-  const parsedDirs = parseManagedDirs(managedDirs)
+  // FR-255：最终 managedDirs——clean-all 时为 ["*"] 哨兵；否则为目录树勾选 + 手动兜底去重合并。
+  const effectiveManagedDirs = cleanAll
+    ? [CLEAN_ALL_SENTINEL]
+    : Array.from(new Set([...selectedDirs, ...parseManagedDirs(managedDirsManual)]))
+  const effectiveCleanExclude = cleanExclude.length > 0 ? cleanExclude : undefined
   const publishable = canPublish(wizardState) && !publish.isPending
 
   // 预览（FR-250）：内容预览从**本地 File** 直接读文本（未上传无 sha256），零网络。
@@ -336,12 +352,23 @@ export default function ClientPublishPage() {
   const idOf = (index: number) => drafts[index]?.id ?? ''
 
   /**
+   * 触发发布（FR-255）：开启 clean-all 时先弹 DangerConfirm 二次确认，明示删除范围后才能继续；
+   * 普通模式直接发布。
+   */
+  const attemptPublish = () => {
+    if (isCleanAll(effectiveManagedDirs)) {
+      setCleanAllConfirm(true)
+    } else {
+      void doPublish()
+    }
+  }
+
+  /**
    * 发布：点「发布」才批量上传（FR-250）。建 AbortController → 本地去重（同 name+size 只传一次）→
    * 逐个 `uploadFileChunked` 得 sha256/md5/size（归并总体进度）→ 按草稿顺序回填结果组
    * `ManifestFile[]` → 提交版本。任一文件失败：保留全部草稿、停批、可重试（弹错、不清草稿）。
    */
-  const doPublish = async () => {
-    if (!publishable || uploading) return
+  const doPublish = async () => {    if (!publishable || uploading) return
     const abort = new AbortController()
     setUploadAbort(abort)
     setUploading(true)
@@ -390,7 +417,13 @@ export default function ClientPublishPage() {
           artifact: { sha256: res.sha256, size: res.size, codec: res.codec },
         }
       })
-      const pubRes = await publish.mutateAsync({ channelId: channelId!, files, managedDirs: parsedDirs, note })
+      const pubRes = await publish.mutateAsync({
+        channelId: channelId!,
+        files,
+        managedDirs: effectiveManagedDirs,
+        cleanExclude: effectiveCleanExclude,
+        note,
+      })
       toast.success(t('clientVersions.published', '已发布 v{{n}}', { n: (pubRes as { version?: number })?.version ?? '' }))
       leaveToVersions()
     } catch (err) {
@@ -534,18 +567,67 @@ export default function ClientPublishPage() {
 
         {step === 'meta' && (
           <div className="space-y-4">
-            <label className="flex flex-col gap-1 text-sm">
-              {t('clientVersions.managedDirs', '自动清理目录')}
-              <input
-                className="p-2 border rounded bg-background font-mono text-xs"
-                value={managedDirs}
-                onChange={(e) => setManagedDirs(e.target.value)}
-                placeholder="mods, config, resourcepacks"
+            {/* 「清空整个 gameDir」开关（FR-255）：开启后 managedDirs=["*"]，删清单未列的一切。 */}
+            <label className="flex items-start gap-2.5 rounded-lg border p-3 text-sm">
+              <Checkbox
+                checked={cleanAll}
+                onCheckedChange={(v) => setCleanAll(v === true)}
+                className="mt-0.5"
+                data-testid="clean-all-toggle"
               />
-              <span className="text-xs text-muted-foreground">
-                {t('clientVersions.managedDirsHint', '填这里的目录（如 mods、config）后，玩家更新时会自动删掉这些目录里「服务器已移除、玩家本地却多出来」的文件——避免旧 mod 残留导致进不去游戏。用逗号或换行分隔多个；留空则不自动清理任何文件。')}
+              <span className="flex flex-col gap-1">
+                <span className="font-medium">{t('clientVersions.cleanAllGameDir', '清空整个游戏目录')}</span>
+                <span className="text-xs text-muted-foreground">
+                  {t('clientVersions.cleanAllHint', '开启后，玩家更新时会删除游戏目录内清单未列的一切文件，仅保留存档/截图/日志等安全区与下方自定义排除项。危险：玩家在游戏目录自放的非保护文件也会被删，发布前需二次确认。')}
+                </span>
               </span>
             </label>
+
+            {/* 目录树勾选（clean-all 接管时禁用） */}
+            <div className="space-y-1.5">
+              <span className="text-sm font-medium">
+                {t('clientVersions.managedDirsTreeTitle', '自动清理目录')}
+              </span>
+              <ManagedDirsEditor
+                files={drafts}
+                selected={selectedDirs}
+                onChange={setSelectedDirs}
+                disabled={cleanAll}
+              />
+              <span className="text-xs text-muted-foreground">
+                {t('clientVersions.managedDirsTreeHint', '勾选要纳入自动清理的目录（支持深层嵌套，如 config/foo）。勾选后，玩家更新时会删掉这些目录里「服务器已移除、玩家本地却多出来」的文件。留空则不自动清理。')}
+              </span>
+            </div>
+
+            {/* 高级：手动补充目录（草稿外目录兜底） */}
+            <label className="flex flex-col gap-1 text-sm">
+              {t('clientVersions.managedDirsManual', '高级：手动补充目录')}
+              <input
+                className="p-2 border rounded bg-background font-mono text-xs disabled:opacity-50"
+                value={managedDirsManual}
+                onChange={(e) => setManagedDirsManual(e.target.value)}
+                placeholder="mods, config, resourcepacks"
+                disabled={cleanAll}
+                data-testid="managed-dirs-manual"
+              />
+              <span className="text-xs text-muted-foreground">
+                {t('clientVersions.managedDirsManualHint', '目录树只含草稿文件派生的目录；若需清理草稿外的目录（如 mods），在此补充，逗号分隔。')}
+              </span>
+            </label>
+
+            {/* 自定义追加排除（FR-255） */}
+            <div className="space-y-1.5">
+              <span className="text-sm font-medium">
+                {t('clientVersions.cleanExcludeLabel', '额外永不清理的目录/路径')}
+              </span>
+              <CleanExcludeInput
+                value={cleanExclude}
+                onChange={setCleanExclude}
+              />
+              <span className="text-xs text-muted-foreground">
+                {t('clientVersions.cleanExcludeHint', '列出玩家自装 mod、个人配置等「永不删除」的目录或路径，即使开了「清空整个游戏目录」也保留。回车添加，可多个。')}
+              </span>
+            </div>
 
             <label className="flex flex-col gap-1 text-sm">
               {t('clientVersions.note', '备注')}
@@ -567,8 +649,17 @@ export default function ClientPublishPage() {
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
               <dt className="text-muted-foreground">{t('clientVersions.fileCount', '文件数')}</dt>
               <dd>{drafts.length}</dd>
-              <dt className="text-muted-foreground">{t('clientVersions.managedDirs', '托管目录')}</dt>
-              <dd className="font-mono text-xs">{parsedDirs.join(', ') || '-'}</dd>
+              <dt className="text-muted-foreground">{t('clientVersions.reviewManagedDirs', '自动清理')}</dt>
+              <dd className="flex flex-wrap items-center gap-1.5 font-mono text-xs">
+                {cleanAll && (
+                  <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-destructive" data-testid="review-clean-all-badge">
+                    {t('clientVersions.cleanAllBadge', '清空整个游戏目录')}
+                  </span>
+                )}
+                {effectiveManagedDirs.filter((d) => d !== CLEAN_ALL_SENTINEL).join(', ') || (cleanAll ? '' : '-')}
+              </dd>
+              <dt className="text-muted-foreground">{t('clientVersions.reviewCleanExclude', '永不清理')}</dt>
+              <dd className="font-mono text-xs">{effectiveCleanExclude?.join(', ') || '-'}</dd>
               <dt className="text-muted-foreground">{t('clientVersions.note', '备注')}</dt>
               <dd>{note || t('clientVersions.noNote', '（无备注）')}</dd>
             </dl>
@@ -599,7 +690,7 @@ export default function ClientPublishPage() {
           )}
         </Button>
         {step === 'review' ? (
-          <Button disabled={!publishable || uploading} onClick={doPublish}>
+          <Button disabled={!publishable || uploading} onClick={attemptPublish}>
             {(publish.isPending || uploading) && <Loader2 className="size-4 animate-spin" />}
             {uploading ? t('clientVersions.publishing', '上传并发布中…') : t('clientVersions.publish', '发布新版本')}
           </Button>
@@ -626,6 +717,19 @@ export default function ClientPublishPage() {
           if (manualDiscard) setManualDiscard(false)
           else setNavBlocked(false)
         }}
+      />
+
+      {/* FR-255：clean-all 发布二次确认——开启「清空整个 gameDir」时点发布先弹此确认。 */}
+      <DangerConfirm
+        open={cleanAllConfirm}
+        title={t('clientVersions.cleanAllConfirmTitle', '确认清空整个游戏目录？')}
+        description={t('clientVersions.cleanAllConfirmDesc', '开启「清空整个游戏目录」后发布，玩家该频道游戏目录内、清单未列且不在保护区与自定义排除内的文件将被删除。此操作不可逆，请确认。')}
+        confirmLabel={t('clientVersions.cleanAllConfirmLabel', '我已知晓风险，发布')}
+        onConfirm={() => {
+          setCleanAllConfirm(false)
+          void doPublish()
+        }}
+        onCancel={() => setCleanAllConfirm(false)}
       />
     </div>
   )

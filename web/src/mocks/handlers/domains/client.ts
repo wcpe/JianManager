@@ -46,6 +46,8 @@ interface MockVersion {
   createdBy: number
   createdAt: string
   managedDirs: string[]
+  /** 运营自定义追加排除（FR-255）。 */
+  cleanExclude?: string[]
   files: import('@/api/clientVersions').ManifestFile[]
   agent?: import('@/api/clientVersions').ManifestAgent
 }
@@ -508,6 +510,7 @@ export const handlers = [
       createdAt: v.createdAt,
       isLatest: v.version === latestVersionOf(channelId),
       managedDirs: v.managedDirs,
+      cleanExclude: v.cleanExclude,
       files: v.files,
       agent: v.agent,
     })
@@ -607,6 +610,7 @@ export const handlers = [
     const body = (await info.request.json()) as {
       files: import('@/api/clientVersions').ManifestFile[]
       managedDirs: string[]
+      cleanExclude?: string[]
       agent?: import('@/api/clientVersions').ManifestAgent
       note?: string
     }
@@ -618,6 +622,7 @@ export const handlers = [
       createdBy: 1,
       createdAt: '2026-06-28T00:00:00Z',
       managedDirs: body.managedDirs,
+      cleanExclude: body.cleanExclude,
       files: body.files,
       agent: body.agent,
     })

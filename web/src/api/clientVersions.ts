@@ -52,6 +52,8 @@ export interface ClientVersionDetail {
   createdAt: string
   isLatest: boolean
   managedDirs: string[]
+  /** 运营自定义追加排除（FR-255）：命中前缀的路径永不删。空则省略。 */
+  cleanExclude?: string[]
   files: ManifestFile[]
   agent?: ManifestAgent
 }
@@ -111,12 +113,15 @@ export function usePublishClientVersion() {
       channelId: string
       files: ManifestFile[]
       managedDirs: string[]
+      /** 运营自定义追加排除（FR-255）：命中前缀永不删。空则不下发（omitempty）。 */
+      cleanExclude?: string[]
       agent?: ManifestAgent | null
       note?: string
     }) => {
       const { data } = await api.post(`/client-channels/${vars.channelId}/versions`, {
         files: vars.files,
         managedDirs: vars.managedDirs,
+        cleanExclude: vars.cleanExclude,
         agent: vars.agent ?? undefined,
         note: vars.note,
       })
