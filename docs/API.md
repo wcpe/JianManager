@@ -1968,6 +1968,19 @@
 - **错误**: 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND`
 - **审计**: `client_key.revoke`
 
+### GET /api/v1/client-channels/:id/updater-config
+- **描述**: 按频道生成带本机签名公钥的 `jm-updater.json`（FR-253，见 ADR-053）。返回完整配置字段，运营者直接下载放入整合包即建立客户端信任根——无需改源码重编 updater-core。复用 FR-248 签名器公钥；**只暴露公钥**（私钥绝不出服务端）。`endpoint` 按 CP 请求推断公网基址预填（可改）；`key` 留空占位由运营粘贴拉取密钥
+- **关联 FR**: FR-253
+- **鉴权**: **JWT，平台管理员**
+- **响应** (200):
+  ```json
+  { "channel": "skyblock-s1", "key": "", "endpoint": "https://cdn.example.com/api/v1",
+    "coreJar": "updater-core.jar", "timeoutSec": 120, "telemetry": true,
+    "bootConfirmSec": 30, "coreVersion": 0,
+    "signPublicKey": "MCowBQYDK2Vw…（X.509 SPKI DER base64）", "signKeyId": "k1" }
+  ```
+- **错误**: 403 `FORBIDDEN`（非平台管理员）| 404 `CHANNEL_NOT_FOUND` | 503 `SIGN_KEY_NOT_CONFIGURED`（签名器未配置）
+
 ---
 
 ## 客户端分发 manifest 与制品（FR-087/088）
