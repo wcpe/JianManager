@@ -907,7 +907,7 @@ log_store:
 ```
 data/
 ├── bin/              # 平台/辅助可执行
-├── etc/              # 平台与节点配置
+├── etc/              # 平台与节点配置；client-sign-key.pem 为生产态未注入时自动生成的 OTA 签名私钥（PKCS#8 PEM，0600，跨重启稳定，FR-248/ADR-052）
 ├── opt/jdks/         # 便携 JDK：<vendor>-<ver>/（取代旧的 <serversDir>/jdks）
 ├── var/
 │   ├── servers/      # 服务器工作目录：<slug>-<shortid>/（系统分配）

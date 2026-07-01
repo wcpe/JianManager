@@ -1978,7 +1978,7 @@
 >
 > 理由：拉取密钥半公开（随整包分发必然泄露），用它鉴权「发布」=严重漏洞；内容可信靠 manifest 的 Ed25519 签名而非密钥。**版本历史仅管理面可见，玩家侧只认 latest**（FR-088）。
 >
-> **签名密钥 fail-closed（ADR-022 实施补充，粒度细化见 ADR-038）**：生产态（`dev_mode=false`）**未注入** `JIANMANAGER_CLIENT_SIGN_PRIVKEY` → Control Plane **降级启动**（视为未启用客户端 OTA：签名器不可用，发布 / 拉取签名 manifest 调用时返回「签名私钥未配置」，其余功能照常）；**误把源码公开的内置开发密钥贴进 env** → **拒绝启动**（配置错误快失败）。两种情况都绝不用开发密钥对外签 manifest；仅 `dev_mode=true` 零配置回退开发密钥。部署见 `docs/DEPLOY.md`。
+> **签名密钥来源三轨（ADR-022 实施补充，粒度细化见 ADR-038，供给策略由 ADR-052 修订）**：优先级 **env 注入 > 生产自动生成 > dev 回退**。生产态（`dev_mode=false`）**未注入** `JIANMANAGER_CLIENT_SIGN_PRIVKEY` → Control Plane **自动生成 Ed25519 密钥对并持久化**到 `<dataRoot>/etc/client-sign-key.pem`（0600，跨重启用同一密钥），OTA 即启用；公钥经 `GET /client-dist/sign-key` 展示供配到客户端 updater-core（FR-248）。**误把源码公开的内置开发密钥贴进 env** → **拒绝启动**（配置错误快失败）；自动生成 / 持久化失败亦**拒绝启动**（信任根必须可用）。绝不用源码公开的开发密钥对外签 manifest；仅 `dev_mode=true` 零配置回退开发密钥。部署见 `docs/DEPLOY.md`。
 
 ### POST /api/v1/client-channels/:id/files
 - **描述**: 上传客户端文件制品（入 FR-045 制品库 `type=client-file`，按制品自身 sha256 内容寻址去重）。返回的 `sha256` 即 manifest `files[].artifact.sha256`
@@ -2051,6 +2051,13 @@
 - **鉴权**: **JWT，平台管理员**
 - **查询参数**: `channelId` / `machineId` / `ip` / `kind`(manifest|artifact) / `outcome`(success|failure，空=全部；failure⟺status≥400，success⟺0<status<400 含 200/206/304) / `errCode`(精确筛，如 `INVALID_CLIENT_KEY`) / `version` / `since`(RFC3339) / `until`(RFC3339) / `limit`(默认 200，上限 1000)
 - **响应** (200): `[ { "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "errCode", "durationMs", "createdAt" } ]`（created_at DESC）。`errCode` 成功事件为空、失败事件填语义码（`INVALID_CLIENT_KEY`/`NO_LATEST_VERSION`/`ARTIFACT_NOT_FOUND`/`SIGN_KEY_NOT_CONFIGURED`/`CHANNEL_NOT_FOUND`/`INTERNAL_ERROR`）
+
+### GET /api/v1/client-dist/sign-key
+- **描述**: 返回客户端 OTA manifest 的签名**公钥** + keyId + 来源，供运营者配到客户端 updater-core 的信任公钥（FR-248，见 ADR-052）。**只读、只暴露公钥**——信任根私钥绝不出服务端
+- **关联 FR**: FR-248
+- **鉴权**: **JWT，平台管理员**
+- **响应** (200): `{ "publicKey": "MCowBQYDK2Vw…（X.509 SPKI DER 的 base64）", "keyId": "k1", "source": "env" | "generated" | "dev" }`（`source`：`env`=env 注入私钥 / `generated`=生产未注入时自动生成并持久化 / `dev`=开发态内置密钥）
+- **错误**: 403 `FORBIDDEN`（非平台管理员）| 503 `SIGN_KEY_NOT_CONFIGURED`（签名器不可用；生产已自动生成，正常态不达）
 
 ### GET /api/v1/client-dist/ip-rules
 - **描述**: 列出分发端点 IP 防护规则（FR-096 L7 防护）
