@@ -141,49 +141,6 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
         <CodeBlock text={jmUpdaterJson} onCopy={copy} t={t} />
       </Step>
 
-      {/* 步骤二：放置文件 */}
-      <Step title={t('clientGuide.step2Title', '② 放置文件')}>
-        <p className="text-muted-foreground">
-          {t('clientGuide.step2Desc', '把两个 jar 与 jm-updater.json 放进游戏目录的 jm-updater 子目录：')}
-        </p>
-        <CodeBlock text={'<.minecraft>/jm-updater/\n  ├─ wedge.jar\n  ├─ updater-core.jar\n  └─ jm-updater.json'} onCopy={copy} t={t} />
-      </Step>
-
-      {/* 步骤三：频道专属 jm-updater.json */}
-      <Step title={t('clientGuide.step3Title', '③ 配置 jm-updater.json（本频道专属）')}>
-        <p className="text-muted-foreground">
-          {t(
-            'clientGuide.step3Desc',
-            '下面是本频道专属配置。key 换成你在「拉取密钥」Tab 创建的密钥（明文仅创建时一次性显示）；endpoint 改成玩家可访问的公网分发地址。',
-          )}
-        </p>
-        <label className="flex flex-col gap-1 mt-2">
-          <span className="text-xs text-muted-foreground">{t('clientGuide.endpointLabel', '公网分发端点')}</span>
-          <input
-            className="border rounded px-2 py-1 text-sm font-mono bg-background"
-            value={endpoint}
-            onChange={(e) => setEndpoint(e.target.value)}
-          />
-        </label>
-        <div className="flex flex-wrap items-center gap-2 mt-3">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={downloading === 'config'}
-            onClick={() => download('config')}
-          >
-            <Download className="size-4 mr-1" /> {t('clientGuide.downloadConfig', '下载 jm-updater.json')}
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            {t(
-              'clientGuide.coreAutoFetchHint',
-              'updater-core 不在整合包内——楔子首次启动自动拉取，运营可在「Core 版本」Tab 切换回滚。',
-            )}
-          </span>
-        </div>
-        <CodeBlock text={jmUpdaterJson} onCopy={copy} t={t} />
-      </Step>
-
       {/* 步骤四：启动器 JVM 参数 */}
       <Step title={t('clientGuide.step4Title', '④ 启动器加 JVM 参数')}>
         <p className="text-muted-foreground">

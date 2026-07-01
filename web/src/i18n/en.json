@@ -1711,17 +1711,6 @@
     "revealFailed": "Failed to reveal key",
     "notRevealable": "This key was created before the reveal feature or without encryption configured; its plaintext cannot be recovered. Use Edit to set it to a known value, then it becomes revealable (note: changing the value invalidates clients holding the old value)."
   },
-  "clientSignKey": {
-    "title": "Signing Public Key",
-    "desc": "Paste the public key below into your client updater's (updater-core) trusted public keys — only then will clients trust updates signed by this server. The private key is held by the server and never leaves it; the key is auto-generated and persisted, so do not delete etc/client-sign-key.pem manually, or the public key will change and already-distributed clients will no longer be able to update.",
-    "copy": "Copy Key",
-    "copied": "Public key copied to clipboard",
-    "copyFailed": "Copy failed, please select and copy manually",
-    "unavailable": "Unable to fetch the signing public key (signer not configured or no permission). Client distribution is unavailable while OTA signing is unavailable.",
-    "sourceEnv": "Env-injected",
-    "sourceGenerated": "Auto-generated",
-    "sourceDev": "Dev key"
-  },
   "clientVersions": {
     "tab": "Versions",
     "subtitle": "Version history is admin-only; players only fetch the latest. Rollback republishes old content under a higher version number and never triggers client downgrade protection.",

@@ -54,7 +54,6 @@ import ClientStatsPanel from '@/components/ClientStatsPanel'
 import ClientIntegrationGuide from '@/components/ClientIntegrationGuide'
 import ClientUpdaterCoreSelector from '@/components/ClientUpdaterCoreSelector'
 import ClientDistFlowGuide from '@/components/ClientDistFlowGuide'
-import ClientSignKeyCard from '@/components/ClientSignKeyCard'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
@@ -120,8 +119,6 @@ export default function ClientChannelsPage() {
       </div>
 
       <ClientDistFlowGuide />
-
-      <ClientSignKeyCard />
 
       {isEmpty ? (
         <EmptyChannelsGuide onCreate={() => setCreateOpen(true)} />

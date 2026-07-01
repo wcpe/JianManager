@@ -698,18 +698,6 @@ export const handlers = [
     return HttpResponse.json(rows)
   }),
 
-  // OTA 签名公钥（FR-248，见 ADR-052）：平台管理员端点；mock 默认用户 role=10，requireAuth 即放行。
-  // 真后端 signer 未配置返 503；mock 默认铺满成功（未配置态可经 mockInject 注入 503 验降级）。
-  domainRoute('get', '/client-dist/sign-key', (info) => {
-    const denied = requireAuth(info)
-    if (denied) return denied
-    return HttpResponse.json({
-      publicKey: 'MCowBQYDK2VwAyEAsO7B/k+2++wQtN/L0jpCXCjsGnYV5Sx2eyCk0pDzV0Y=',
-      keyId: 'k1',
-      source: 'generated',
-    })
-  }),
-
   // 内嵌更新器 jar 信息（FR-107 接入引导）。
   domainRoute('get', '/client-dist/updater-jars', (info) => {
     const denied = requireAuth(info)
