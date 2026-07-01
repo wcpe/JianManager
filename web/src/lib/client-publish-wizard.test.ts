@@ -12,7 +12,12 @@ import {
   isZipFilename,
   hasPublishDraft,
   buildFileTree,
+  collectEntries,
+  localDedupKey,
+  dedupUnits,
+  batchProgressBytes,
   type TreeFile,
+  type FileSystemEntryLike,
 } from './client-publish-wizard'
 
 /** 发布版本向导分步逻辑（FR-187）。 */
@@ -223,5 +228,118 @@ describe('buildFileTree', () => {
     expect(root.dirs[0].name).toBe('mods')
     expect(root2.dirs[0].name).toBe('mods')
     expect(root2.dirs[0].files.map((f) => f.name)).toEqual(['a.jar'])
+  })
+})
+
+/** FR-250：目录 entry 递归收集。 */
+/** 构造一个文件 entry（webkitGetAsEntry 形态）。 */
+function fileEntry(fullPath: string, size = 10): FileSystemEntryLike {
+  const name = fullPath.split('/').pop() ?? fullPath
+  return {
+    isFile: true,
+    isDirectory: false,
+    fullPath,
+    file: async () => new File([new Uint8Array(size)], name),
+  }
+}
+/** 构造一个目录 entry（子项经 readEntries 返回）。 */
+function dirEntry(fullPath: string, children: FileSystemEntryLike[]): FileSystemEntryLike {
+  return {
+    isFile: false,
+    isDirectory: true,
+    fullPath,
+    readEntries: async () => children,
+  }
+}
+
+describe('collectEntries', () => {
+  it('散文件 entry → 单元，path 取归一后的 fullPath', async () => {
+    const units = await collectEntries([fileEntry('/a.jar', 5)])
+    expect(units).toHaveLength(1)
+    expect(units[0].path).toBe('a.jar')
+    expect(units[0].file.size).toBe(5)
+    expect(units[0].file.name).toBe('a.jar')
+  })
+
+  it('目录 entry 递归下钻，保留相对目录结构（深度优先前序）', async () => {
+    // /pack 下：mods/a.jar、mods/sub/b.jar、options.txt
+    const tree = [
+      dirEntry('/pack', [
+        dirEntry('/pack/mods', [
+          fileEntry('/pack/mods/a.jar'),
+          dirEntry('/pack/mods/sub', [fileEntry('/pack/mods/sub/b.jar')]),
+        ]),
+        fileEntry('/pack/options.txt'),
+      ]),
+    ]
+    const units = await collectEntries(tree)
+    expect(units.map((u) => u.path)).toEqual([
+      'pack/mods/a.jar',
+      'pack/mods/sub/b.jar',
+      'pack/options.txt',
+    ])
+  })
+
+  it('跳过 .DS_Store 与 __MACOSX/ 噪音', async () => {
+    const units = await collectEntries([
+      dirEntry('/p', [
+        fileEntry('/p/a.jar'),
+        fileEntry('/p/.DS_Store'),
+        fileEntry('/__MACOSX/foo'),
+      ]),
+    ])
+    expect(units.map((u) => u.path)).toEqual(['p/a.jar'])
+  })
+
+  it('散文件 + 文件夹混合森林累加', async () => {
+    const units = await collectEntries([
+      fileEntry('/loose.txt'),
+      dirEntry('/d', [fileEntry('/d/x.jar')]),
+    ])
+    expect(units.map((u) => u.path)).toEqual(['loose.txt', 'd/x.jar'])
+  })
+})
+
+describe('localDedupKey / dedupUnits', () => {
+  it('去重键按 name + size', () => {
+    expect(localDedupKey('a.jar', 100)).toBe(localDedupKey('a.jar', 100))
+    expect(localDedupKey('a.jar', 100)).not.toBe(localDedupKey('a.jar', 101))
+    expect(localDedupKey('a.jar', 100)).not.toBe(localDedupKey('b.jar', 100))
+  })
+
+  it('同 name+size 只保留首个进 unique，keys 记每个原单元的键', () => {
+    const units = [
+      { name: 'a.jar', size: 100 },
+      { name: 'b.jar', size: 200 },
+      { name: 'a.jar', size: 100 }, // 与 [0] 同键 → 去重
+    ]
+    const plan = dedupUnits(units, (u) => u)
+    expect(plan.unique).toHaveLength(2)
+    expect(plan.unique.map((u) => u.name)).toEqual(['a.jar', 'b.jar'])
+    // keys 与输入等长，第 2 项键 = 第 0 项键（发布时据此复用上传结果）。
+    expect(plan.keys).toHaveLength(3)
+    expect(plan.keys[2]).toBe(plan.keys[0])
+    expect(plan.keys[1]).not.toBe(plan.keys[0])
+  })
+
+  it('同 name 不同 size 不去重（视为不同内容）', () => {
+    const plan = dedupUnits(
+      [
+        { name: 'a.jar', size: 100 },
+        { name: 'a.jar', size: 101 },
+      ],
+      (u) => u,
+    )
+    expect(plan.unique).toHaveLength(2)
+  })
+})
+
+describe('batchProgressBytes', () => {
+  it('累计 base + 当前文件已传', () => {
+    expect(batchProgressBytes(1000, 500, 5000)).toBe(1500)
+  })
+  it('夹取不超过总字节', () => {
+    expect(batchProgressBytes(4800, 500, 5000)).toBe(5000)
+    expect(batchProgressBytes(5000, 0, 5000)).toBe(5000)
   })
 })

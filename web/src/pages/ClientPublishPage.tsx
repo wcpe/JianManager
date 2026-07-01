@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -13,6 +13,7 @@ import {
   ChevronLeft,
   FileArchive,
   FileIcon,
+  FolderUp,
   X,
 } from 'lucide-react'
 import { usePublishClientVersion, type ManifestFile } from '@/api/clientVersions'
@@ -27,14 +28,20 @@ import {
   normalizeManifestPath,
   isZipFilename,
   hasPublishDraft,
+  collectEntries,
+  dedupUnits,
+  localDedupKey,
+  batchProgressBytes,
   type PublishStepId,
+  type LocalUnit,
+  type FileSystemEntryLike,
 } from '@/lib/client-publish-wizard'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import DangerConfirm from '@/components/DangerConfirm'
 import ClientFileTree from '@/components/ClientFileTree'
 import FileBrowser from '@/components/file-browser/FileBrowser'
-import { clientDistSource } from '@/components/file-browser/sources/clientDistSource'
+import { localDraftSource } from '@/components/file-browser/sources/localDraftSource'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
@@ -55,30 +62,42 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
-/** 上传进度（FR-251）：字节级累计（跨批次所有单元）+ 当前文件与文件序号，供百分比进度条。 */
+/** 生成草稿稳定本地 id（React key / 编排定位；仅前端用，不入 manifest）。 */
+let draftSeq = 0
+function nextDraftId(): string {
+  draftSeq += 1
+  return `d${draftSeq}`
+}
+
+/** 发布批量上传进度（FR-250/251）：字节级累计 + 当前文件与文件序号，供百分比进度条。 */
 interface UploadProgress {
-  /** 已上传字节（含已完成单元 + 当前单元已传部分）。 */
+  /** 已上传字节（含已完成文件 + 当前文件已传部分）。 */
   uploadedBytes: number
-  /** 本批次所有单元总字节。 */
+  /** 本批次待上传文件总字节。 */
   totalBytes: number
   /** 当前正在上传的文件名（展示用）。 */
   currentName: string
   /** 当前文件序号（1 基）。 */
   currentIndex: number
-  /** 本批次文件总数。 */
+  /** 本批次待上传文件总数。 */
   fileCount: number
 }
 
-/** 发布向导草稿文件项（artifact 元数据 + 原始内容元数据；codec=none 时两者同值）。 */
+/**
+ * 发布向导草稿文件项（FR-250 本地态）。
+ * 持浏览器内 `File` 引用 + 本地元数据（path/sync/platform/size）——**尚未上传，无 sha256/md5**；
+ * 上传结果在点「发布」时才产生（临时映射，不入草稿态）。
+ */
 interface DraftFile {
+  /** 前端稳定 id（React key / 编排定位）。 */
+  id: string
   filename: string
   path: string
   sync: ManifestFile['sync']
   platform: ManifestFile['platform']
-  sha256: string
-  md5: string
   size: number
-  codec: string
+  /** 浏览器内文件对象（内容源；上传时 slice 流式读，不预载全量进内存）。 */
+  file: File
 }
 
 /** 向导步骤的标题 i18n 键（顺序与 PUBLISH_STEPS 对齐）。 */
@@ -90,15 +109,13 @@ const PUBLISH_STEP_META: Record<PublishStepId, { key: string; fallback: string }
 }
 
 /**
- * 客户端分发「发布新版本」独立页面（FR-191，纠正 FR-187 的模态向导）。
+ * 客户端分发「发布新版本」独立页面（FR-191，编排重做 FR-250）。
  *
- * 原 PublishWizard 是 {@link ClientVersionsPanel} 内的模态 Dialog——真机暴露「点遮罩/Esc
- * 直接关闭、丢上传草稿」。FR-191 改为独立路由页 `/client-channels/:id/publish`：页面级不存在
- * 「点外面关闭」，从根上消除误关丢草稿；离开页（返回/路由切换/刷新关页）有未发布草稿时二次确认拦截。
- *
- * 分步编排：选文件 → 逐文件配置 path/sync/platform → 托管目录/说明 → 预览 → 发布。
- * 复用 usePublishClientFile/usePublishClientVersion 与后端 `POST .../files`、`POST .../versions`，
- * 不改后端。上传 codec=none（服务端入库即算 sha256/md5/size 自动填充）。
+ * FR-191 把发布做成独立路由页 `/client-channels/:id/publish`（消除模态误关丢草稿）。
+ * FR-250 反转上传时机：**选文件/拖拽不再即刻上传**，文件以浏览器内 `File` 本地暂存，文件树/路径/
+ * sync/platform 编排、删除全在本地零网络；点「发布」才**批量分块上传**（复用 FR-251
+ * `uploadFileChunked`，带总体进度 + 取消 + 失败保草稿可重试）→ 得各 sha256/md5/size → 提交版本。
+ * 省带宽（未发布/发布前删除的文件从不上传）、支持文件夹拖拽保结构。上传 codec=none（不压缩）。
  */
 export default function ClientPublishPage() {
   const { t } = useTranslation()
@@ -110,18 +127,20 @@ export default function ClientPublishPage() {
   const [drafts, setDrafts] = useState<DraftFile[]>([])
   const [managedDirs, setManagedDirs] = useState('mods, config, resourcepacks')
   const [note, setNote] = useState('')
+  // 发布批量上传中（点发布后置位，禁止前进/再次发布；与选文件解耦——选文件不再上传）。
   const [uploading, setUploading] = useState(false)
-  // 上传进度（FR-251 分块上传）：跨所有待上传单元的字节级累计 + 当前文件名/序号，供百分比进度条。
+  // 发布批量上传进度（FR-250/251）：跨所有待上传文件的字节级累计 + 当前文件名/序号。
   const [progress, setProgress] = useState<UploadProgress | null>(null)
-  // 取消当前批次上传：取消后 uploadFileChunked 抛 AbortError，并向服务端弃单（DELETE）。
+  // 取消当前批次上传：取消后 uploadFileChunked 抛 AbortError 并向服务端弃单（DELETE）。
   const [uploadAbort, setUploadAbort] = useState<AbortController | null>(null)
-  // 已确认离开（发布成功 / 取消确认 / 通过 blocker 确认）——置位即解除离开守卫，
-  // 放行后续 backToVersions 导航不再被 useBlocker 二次拦截。
+  // 已确认离开（发布成功 / 取消确认 / 通过 blocker 确认）——置位即解除离开守卫。
   const [leaving, setLeaving] = useState(false)
-  // 点「取消」时若有草稿，开此确认弹窗（useBlocker 只拦路由导航，取消是页内显式动作需另起确认）。
+  // 点「取消」时若有草稿，开此确认弹窗（后退守卫只拦浏览器后退，取消是页内显式动作需另起确认）。
   const [manualDiscard, setManualDiscard] = useState(false)
+  // 拖拽落区高亮（dragover 时置位）。
+  const [dragActive, setDragActive] = useState(false)
 
-  // 有已上传草稿即「有未发布草稿」——离开页需二次确认（FR-191 离开守卫）。确认离开后解除。
+  // 有本地草稿即「有未发布草稿」——离开页需二次确认（FR-191 离开守卫，FR-250 语义不变）。确认离开后解除。
   const dirty = hasPublishDraft(drafts.length) && !leaving
 
   /** 解除守卫并返回频道工作台版本 tab（取消确认 / 发布成功后）。 */
@@ -166,136 +185,144 @@ export default function ClientPublishPage() {
   }, [channelId, navigate])
 
   /**
-   * 分块上传一个文件（FR-251），得内容寻址元数据后追加一条草稿（path 由调用方给定）。
-   * baseBytes 为本文件之前已完成单元的累计字节；onBytes 把「基线 + 本文件已传」汇成批次总进度。
+   * 解包 zip（fflate 客户端解包）为本地单元，path 取自 zip 内相对路径（POSIX 归一）。
+   * 跳过目录项与 __MACOSX 噪音；不上传——仅产出本地 File，随后入草稿。
    */
-  const uploadOne = async (
-    file: File,
-    path: string,
-    signal: AbortSignal,
-    onBytes: (fileUploaded: number) => void,
-  ) => {
-    const res = await uploadFileChunked(channelId!, file, {
-      signal,
-      onProgress: (uploaded) => onBytes(uploaded),
-    })
-    setDrafts((prev) => [
-      ...prev,
-      {
-        filename: file.name,
-        path,
-        sync: 'strict',
-        platform: '',
-        sha256: res.sha256,
-        md5: res.md5,
-        size: res.size,
-        codec: res.codec,
-      },
-    ])
-  }
-
-  /**
-   * 解包 zip（fflate 客户端解包），逐 entry 上传，path 取自 zip 内相对路径（POSIX 归一）。
-   * 跳过目录项与 __MACOSX 噪音；返回 entry 名→字节的有序数组。
-   */
-  const unzipEntries = (data: Uint8Array): Promise<Array<{ name: string; bytes: Uint8Array }>> =>
+  const unzipToUnits = (data: Uint8Array): Promise<LocalUnit[]> =>
     new Promise((resolve, reject) => {
       unzip(data, (err, unzipped: Unzipped) => {
         if (err) return reject(err)
-        const out: Array<{ name: string; bytes: Uint8Array }> = []
+        const out: LocalUnit[] = []
         for (const [name, bytes] of Object.entries(unzipped)) {
           if (name.endsWith('/')) continue // 目录项
           if (name.startsWith('__MACOSX/') || name.endsWith('.DS_Store')) continue
-          out.push({ name, bytes })
+          const path = normalizeManifestPath(name)
+          if (path === '') continue
+          const base = path.split('/').pop() || 'file'
+          // copy 进独立 ArrayBuffer，避免 File 持有可变视图。
+          out.push({ file: new File([bytes.slice().buffer], base), path })
         }
         resolve(out)
       })
     })
 
+  /** 把本地单元累加进草稿（不上传）。sync 默认 strict、platform 默认全平台。 */
+  const appendUnits = useCallback((units: LocalUnit[]) => {
+    if (units.length === 0) return
+    setDrafts((prev) => [
+      ...prev,
+      ...units.map((u) => ({
+        id: nextDraftId(),
+        filename: u.file.name,
+        path: normalizeManifestPath(u.path),
+        sync: 'strict' as ManifestFile['sync'],
+        platform: '' as ManifestFile['platform'],
+        size: u.file.size,
+        file: u.file,
+      })),
+    ])
+  }, [])
+
+  /**
+   * 处理一批 File（来自「添加文件」「上传 ZIP」「选择文件夹」选择器或拖拽散文件）：
+   * zip 前端解包为多单元，其余按文件名（或 webkitRelativePath 目录）作单元，**均不上传**、累加进草稿。
+   */
+  const ingestFiles = useCallback(
+    async (picked: File[]) => {
+      const units: LocalUnit[] = []
+      for (const f of picked) {
+        if (isZipFilename(f.name)) {
+          const buf = new Uint8Array(await f.arrayBuffer())
+          units.push(...(await unzipToUnits(buf)))
+        } else {
+          // webkitdirectory 选择器下 File.webkitRelativePath 携带相对目录；散文件回退文件名。
+          const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath
+          units.push({ file: f, path: normalizeManifestPath(rel && rel !== '' ? rel : f.name) })
+        }
+      }
+      appendUnits(units)
+    },
+    [appendUnits],
+  )
+
   const onPickFiles = async (e: ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(e.target.files ?? [])
     e.target.value = '' // 允许重复选择同名文件再次触发 change
     if (picked.length === 0) return
-    const abort = new AbortController()
-    setUploadAbort(abort)
-    setUploading(true)
     try {
-      // 先展开 zip → 得到「待上传单元」总表，便于统一（字节级）进度。
-      const units: Array<{ file: File; path: string }> = []
-      for (const f of picked) {
-        if (isZipFilename(f.name)) {
-          const buf = new Uint8Array(await f.arrayBuffer())
-          const entries = await unzipEntries(buf)
-          for (const ent of entries) {
-            const path = normalizeManifestPath(ent.name)
-            if (path === '') continue
-            const base = path.split('/').pop() || 'file'
-            // copy 进独立 ArrayBuffer，避免 File 持有可变视图。
-            units.push({ file: new File([ent.bytes.slice().buffer], base), path })
-          }
-        } else {
-          units.push({ file: f, path: f.name })
-        }
+      await ingestFiles(picked)
+    } catch (err) {
+      toast.error(errMsg(err, t('clientVersions.unzipFailed', '解包 ZIP 失败')))
+    }
+  }
+
+  /**
+   * 拖拽落区 drop：优先用 `webkitGetAsEntry()` 递归遍历（支持**文件夹**保相对路径），
+   * 不支持 entry 的浏览器回退 `dataTransfer.files`（仅散文件）。均不上传、累加进草稿。
+   */
+  const onDrop = async (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    setDragActive(false)
+    if (uploading) return
+    const items = e.dataTransfer.items
+    const entries: FileSystemEntryLike[] = []
+    if (items && items.length > 0) {
+      for (const item of Array.from(items)) {
+        // webkitGetAsEntry 非标准但主流浏览器（Chromium/Firefox/Safari）支持；文件夹拖拽必经此。
+        const entry = (item as DataTransferItem & { webkitGetAsEntry?: () => FileSystemEntryLike | null }).webkitGetAsEntry?.()
+        if (entry) entries.push(entry)
       }
-      const totalBytes = units.reduce((s, u) => s + u.file.size, 0)
-      let baseBytes = 0 // 已完成单元累计字节。
-      for (let i = 0; i < units.length; i++) {
-        const unit = units[i]
-        setProgress({
-          uploadedBytes: baseBytes,
-          totalBytes,
-          currentName: unit.path,
-          currentIndex: i + 1,
-          fileCount: units.length,
-        })
-        await uploadOne(unit.file, unit.path, abort.signal, (fileUploaded) => {
-          setProgress({
-            uploadedBytes: baseBytes + fileUploaded,
-            totalBytes,
-            currentName: unit.path,
-            currentIndex: i + 1,
-            fileCount: units.length,
-          })
-        })
-        baseBytes += unit.file.size
+    }
+    try {
+      if (entries.length > 0) {
+        const units = await collectEntries(entries)
+        // zip 仍需前端解包：collectEntries 已得 File，逐一过 zip 判定。
+        const expanded: LocalUnit[] = []
+        for (const u of units) {
+          if (isZipFilename(u.file.name)) {
+            const buf = new Uint8Array(await u.file.arrayBuffer())
+            expanded.push(...(await unzipToUnits(buf)))
+          } else {
+            expanded.push(u)
+          }
+        }
+        appendUnits(expanded)
+      } else {
+        // 回退：无 entry 支持时仅取散文件。
+        await ingestFiles(Array.from(e.dataTransfer.files ?? []))
       }
     } catch (err) {
-      // 用户取消（AbortError）不算失败，静默；其余弹错。
-      if (isAbortError(err)) {
-        toast.info(t('clientVersions.uploadCanceled', '已取消上传'))
-      } else {
-        toast.error(errMsg(err, t('clientVersions.uploadFailed', '上传文件失败')))
-      }
-    } finally {
-      setUploading(false)
-      setProgress(null)
-      setUploadAbort(null)
+      toast.error(errMsg(err, t('clientVersions.dropFailed', '读取拖入内容失败')))
     }
+  }
+
+  const onDragOver = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    if (!uploading) setDragActive(true)
+  }
+  const onDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    setDragActive(false)
   }
 
   /** 取消当前批次上传：abort 信号触发 uploadFileChunked 中止 + 弃单。 */
   const cancelUpload = () => uploadAbort?.abort()
 
-  const patchDraft = (i: number, patch: Partial<DraftFile>) =>
-    setDrafts((prev) => prev.map((d, idx) => (idx === i ? { ...d, ...patch } : d)))
+  const patchDraft = (id: string, patch: Partial<DraftFile>) =>
+    setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)))
 
-  const removeDraft = (i: number) => setDrafts((prev) => prev.filter((_, idx) => idx !== i))
+  const removeDraft = (id: string) => setDrafts((prev) => prev.filter((d) => d.id !== id))
 
   const wizardState = { draftCount: drafts.length, paths: drafts.map((d) => d.path), uploading }
   const parsedDirs = parseManagedDirs(managedDirs)
   const publishable = canPublish(wizardState) && !publish.isPending
 
-  // 预览（FR-214）：把草稿映射为客户端分发数据源——草稿 codec=none，其 sha256 即 artifact sha。
-  // 经管理面 JWT 制品内容端点取文本（与玩家拉取密钥端点隔离，见 ADR-022/023）。
+  // 预览（FR-250）：内容预览从**本地 File** 直接读文本（未上传无 sha256），零网络。
   const previewSource = useMemo(
-    () =>
-      clientDistSource(
-        channelId ?? '',
-        drafts.map((d) => ({ path: d.path, size: d.size, artifactSha: d.sha256 })),
-      ),
-    [channelId, drafts],
+    () => localDraftSource(drafts.map((d) => ({ path: d.path, file: d.file }))),
+    [drafts],
   )
-  // 预览步骤的视图（结构 = ClientFileTree 编排预览；预览 = 共享 FileBrowser 看内容）。
+  // 预览步骤的视图（结构 = ClientFileTree 编排预览；预览 = 共享 FileBrowser 看本地内容）。
   const [reviewView, setReviewView] = useState<'structure' | 'preview'>('structure')
 
   /** 尝试取消：有草稿弹二次确认，无草稿直接回工作台。 */
@@ -304,24 +331,79 @@ export default function ClientPublishPage() {
     else leaveToVersions()
   }
 
+  // ClientFileTree 按源数组 index 回调（编排定位）；这里映射 index→稳定 id 再 patch/remove
+  // （drafts 与传入 files 同序，index 即当前 drafts 下标；越界防御返回空串使 patch/remove 空转）。
+  const idOf = (index: number) => drafts[index]?.id ?? ''
+
+  /**
+   * 发布：点「发布」才批量上传（FR-250）。建 AbortController → 本地去重（同 name+size 只传一次）→
+   * 逐个 `uploadFileChunked` 得 sha256/md5/size（归并总体进度）→ 按草稿顺序回填结果组
+   * `ManifestFile[]` → 提交版本。任一文件失败：保留全部草稿、停批、可重试（弹错、不清草稿）。
+   */
   const doPublish = async () => {
-    if (!publishable) return
-    // codec=none：file 原始内容元数据 = artifact 元数据（上传的就是原始文件）。
-    const files: ManifestFile[] = drafts.map((d) => ({
-      path: normalizeManifestPath(d.path),
-      sha256: d.sha256,
-      md5: d.md5,
-      size: d.size,
-      sync: d.sync,
-      platform: d.platform,
-      artifact: { sha256: d.sha256, size: d.size, codec: d.codec },
-    }))
+    if (!publishable || uploading) return
+    const abort = new AbortController()
+    setUploadAbort(abort)
+    setUploading(true)
+    setProgress(null)
     try {
-      const res = await publish.mutateAsync({ channelId: channelId!, files, managedDirs: parsedDirs, note })
-      toast.success(t('clientVersions.published', '已发布 v{{n}}', { n: (res as { version?: number })?.version ?? '' }))
+      // 本地去重：同 name+size 仅上传一次；keys[i] 记第 i 个草稿的去重键，用于回填复用结果。
+      const plan = dedupUnits(drafts, (d) => ({ name: d.filename, size: d.size }))
+      const totalBytes = plan.unique.reduce((s, d) => s + d.size, 0)
+      // 键 → 上传结果（sha256/md5/size/codec），供发布时为每个草稿（含被去重者）回填。
+      const resultByKey = new Map<string, { sha256: string; md5: string; size: number; codec: string }>()
+      let baseBytes = 0 // 已完成文件累计字节。
+      for (let i = 0; i < plan.unique.length; i++) {
+        const d = plan.unique[i]
+        setProgress({
+          uploadedBytes: baseBytes,
+          totalBytes,
+          currentName: d.path,
+          currentIndex: i + 1,
+          fileCount: plan.unique.length,
+        })
+        const res = await uploadFileChunked(channelId!, d.file, {
+          signal: abort.signal,
+          onProgress: (fileUploaded) =>
+            setProgress({
+              uploadedBytes: batchProgressBytes(baseBytes, fileUploaded, totalBytes),
+              totalBytes,
+              currentName: d.path,
+              currentIndex: i + 1,
+              fileCount: plan.unique.length,
+            }),
+        })
+        resultByKey.set(localDedupKey(d.filename, d.size), res)
+        baseBytes += d.size
+      }
+
+      // 按草稿顺序回填上传结果（codec=none：file 原始内容元数据 = artifact 元数据）。
+      const files: ManifestFile[] = drafts.map((d) => {
+        const res = resultByKey.get(localDedupKey(d.filename, d.size))!
+        return {
+          path: normalizeManifestPath(d.path),
+          sha256: res.sha256,
+          md5: res.md5,
+          size: res.size,
+          sync: d.sync,
+          platform: d.platform,
+          artifact: { sha256: res.sha256, size: res.size, codec: res.codec },
+        }
+      })
+      const pubRes = await publish.mutateAsync({ channelId: channelId!, files, managedDirs: parsedDirs, note })
+      toast.success(t('clientVersions.published', '已发布 v{{n}}', { n: (pubRes as { version?: number })?.version ?? '' }))
       leaveToVersions()
     } catch (err) {
-      toast.error(errMsg(err, t('clientVersions.publishFailed', '发布版本失败')))
+      // 用户取消（AbortError）：静默提示、保草稿；其余失败：弹错、保全部草稿可重试（不回退成功的、断点续批）。
+      if (isAbortError(err)) {
+        toast.info(t('clientVersions.uploadCanceled', '已取消上传'))
+      } else {
+        toast.error(errMsg(err, t('clientVersions.publishFailed', '发布版本失败')))
+      }
+    } finally {
+      setUploading(false)
+      setProgress(null)
+      setUploadAbort(null)
     }
   }
 
@@ -340,7 +422,7 @@ export default function ClientPublishPage() {
           <Upload className="size-6" /> {t('clientVersions.publish', '发布新版本')}
         </h1>
         <p className="text-sm text-muted-foreground max-w-2xl">
-          {t('clientVersions.wizardDesc', '上传客户端文件（自动计算校验和），设置每个文件的路径与同步策略，再发布。本期为未压缩（codec=none）发布。')}
+          {t('clientVersions.wizardDesc', '拖入文件/文件夹本地暂存并编排（此时不上传），点「发布」才批量上传并发布。本期为未压缩（codec=none）发布。')}
         </p>
         <p className="text-xs text-muted-foreground font-mono">{channelId}</p>
       </div>
@@ -351,38 +433,74 @@ export default function ClientPublishPage() {
         {step === 'files' && (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              {t('clientVersions.stepFilesDesc', '选择要发布的客户端文件（mod、配置、资源包等）。上传后自动计算校验和。')}
+              {t('clientVersions.stepFilesDesc', '选择或拖入要发布的客户端文件/文件夹（mod、配置、资源包等）。文件先在浏览器本地暂存，点「发布」才上传。')}
             </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="inline-flex items-center gap-2 px-4 py-2 border rounded-md hover:bg-accent cursor-pointer text-sm">
-                {uploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
-                {t('clientVersions.addFiles', '添加文件')}
-                <input type="file" multiple className="hidden" onChange={onPickFiles} disabled={uploading} />
-              </label>
-              <label className="inline-flex items-center gap-2 px-4 py-2 border rounded-md hover:bg-accent cursor-pointer text-sm">
-                {uploading ? <Loader2 className="size-4 animate-spin" /> : <FileArchive className="size-4" />}
-                {t('clientVersions.addZip', '上传 ZIP 整合包')}
-                <input type="file" accept=".zip,application/zip" className="hidden" onChange={onPickFiles} disabled={uploading} />
-              </label>
-              <span className="text-xs text-muted-foreground">
-                {t('clientVersions.filesCount', '{{n}} 个文件', { n: drafts.length })}
-              </span>
+            <div
+              onDrop={onDrop}
+              onDragOver={onDragOver}
+              onDragLeave={onDragLeave}
+              className={cn(
+                'flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-6 text-center transition-colors',
+                dragActive ? 'border-primary bg-primary/5' : 'border-muted-foreground/25',
+              )}
+              data-testid="publish-dropzone"
+            >
+              <FolderUp className="size-7 text-muted-foreground" />
+              <p className="text-sm font-medium">{t('clientVersions.dropHint', '拖拽文件或文件夹到此处')}</p>
+              <p className="text-xs text-muted-foreground">
+                {t('clientVersions.dropSubHint', '支持散文件、整个文件夹（保留目录结构）与 ZIP 整合包；均本地暂存、点发布才上传')}
+              </p>
+              <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
+                <label className="inline-flex items-center gap-2 px-4 py-2 border rounded-md hover:bg-accent cursor-pointer text-sm bg-background">
+                  <Upload className="size-4" />
+                  {t('clientVersions.addFiles', '添加文件')}
+                  <input type="file" multiple className="hidden" onChange={onPickFiles} disabled={uploading} />
+                </label>
+                <label className="inline-flex items-center gap-2 px-4 py-2 border rounded-md hover:bg-accent cursor-pointer text-sm bg-background">
+                  <FolderUp className="size-4" />
+                  {t('clientVersions.addFolder', '选择文件夹')}
+                  {/* webkitdirectory：目录选择器，File.webkitRelativePath 携带相对目录（作等价兜底入口）。 */}
+                  <input
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={onPickFiles}
+                    disabled={uploading}
+                    // @ts-expect-error 非标准属性，浏览器支持目录选择
+                    webkitdirectory=""
+                    directory=""
+                  />
+                </label>
+                <label className="inline-flex items-center gap-2 px-4 py-2 border rounded-md hover:bg-accent cursor-pointer text-sm bg-background">
+                  <FileArchive className="size-4" />
+                  {t('clientVersions.addZip', '上传 ZIP 整合包')}
+                  <input type="file" accept=".zip,application/zip" className="hidden" onChange={onPickFiles} disabled={uploading} />
+                </label>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>{t('clientVersions.filesCount', '{{n}} 个文件', { n: drafts.length })}</span>
             </div>
             <p className="text-xs text-muted-foreground">
-              {t('clientVersions.zipHint', '上传 .zip 会在浏览器内解包，按包内目录结构自动编排为下方文件树；散文件与 zip 可混合累加。')}
+              {t('clientVersions.zipHint', '上传 .zip 会在浏览器内解包，按包内目录结构自动编排为下方文件树；散文件、文件夹与 zip 可混合累加。')}
             </p>
             {progress && <UploadProgressBar progress={progress} onCancel={cancelUpload} />}
             {drafts.length > 0 && (
               <ul className="border rounded-lg divide-y text-sm">
-                {drafts.map((d, i) => (
-                  <li key={`${d.sha256}-${i}`} className="flex items-center justify-between gap-2 p-2">
+                {drafts.map((d) => (
+                  <li key={d.id} className="flex items-center justify-between gap-2 p-2">
                     <span className="flex min-w-0 items-center gap-2">
                       <FileIcon className="size-3.5 shrink-0 text-muted-foreground" />
                       <span className="font-mono text-xs truncate">{d.path}</span>
                     </span>
                     <span className="flex items-center gap-2 shrink-0">
                       <span className="text-xs text-muted-foreground whitespace-nowrap">{formatBytes(d.size)}</span>
-                      <button className="text-destructive hover:opacity-70" onClick={() => removeDraft(i)} aria-label={t('common.delete', '删除')}>
+                      <button
+                        className="text-destructive hover:opacity-70 disabled:opacity-40"
+                        onClick={() => removeDraft(d.id)}
+                        disabled={uploading}
+                        aria-label={t('common.delete', '删除')}
+                      >
                         <Trash2 className="size-4" />
                       </button>
                     </span>
@@ -398,15 +516,12 @@ export default function ClientPublishPage() {
             <p className="text-sm text-muted-foreground">
               {t('clientVersions.stepConfigureDesc', '为每个文件设置游戏目录内的目标相对路径、同步策略与适用平台。')}
             </p>
-            <p className="text-xs text-muted-foreground inline-flex items-center gap-1">
-              {t('clientVersions.lockedHint', '文件内容已锁定（内容寻址 sha256 不可变），仅可编排路径/目录、同步策略、适用平台或移除。')}
-            </p>
             <ClientFileTree
               files={drafts}
-              onPathChange={(i, path) => patchDraft(i, { path })}
-              onSyncChange={(i, sync) => patchDraft(i, { sync })}
-              onPlatformChange={(i, platform) => patchDraft(i, { platform })}
-              onRemove={removeDraft}
+              onPathChange={(i, path) => patchDraft(idOf(i), { path })}
+              onSyncChange={(i, sync) => patchDraft(idOf(i), { sync })}
+              onPlatformChange={(i, platform) => patchDraft(idOf(i), { platform })}
+              onRemove={(i) => removeDraft(idOf(i))}
             />
           </div>
         )}
@@ -458,16 +573,17 @@ export default function ClientPublishPage() {
               <ClientFileTree files={drafts} readonly />
             ) : (
               <div className="space-y-2">
-                <p className="text-xs text-muted-foreground">{t('clientVersions.previewHint')}</p>
+                <p className="text-xs text-muted-foreground">{t('clientVersions.previewLocalHint', '点左侧文件预览本地内容（文本/配置/JSON 高亮；二进制或过大文件仅可下载）。发布前从本地读取，尚未上传。')}</p>
                 <FileBrowser source={previewSource} className="h-[460px]" />
               </div>
             )}
+            {progress && <UploadProgressBar progress={progress} onCancel={cancelUpload} />}
           </div>
         )}
       </div>
 
       <div className="flex items-center justify-between gap-2">
-        <Button variant="outline" onClick={() => (step === 'files' ? attemptCancel() : setStep(prevStep(step)))}>
+        <Button variant="outline" disabled={uploading} onClick={() => (step === 'files' ? attemptCancel() : setStep(prevStep(step)))}>
           {step === 'files' ? (
             t('common.cancel', '取消')
           ) : (
@@ -477,9 +593,9 @@ export default function ClientPublishPage() {
           )}
         </Button>
         {step === 'review' ? (
-          <Button disabled={!publishable} onClick={doPublish}>
-            {publish.isPending && <Loader2 className="size-4 animate-spin" />}
-            {t('clientVersions.publish', '发布新版本')}
+          <Button disabled={!publishable || uploading} onClick={doPublish}>
+            {(publish.isPending || uploading) && <Loader2 className="size-4 animate-spin" />}
+            {uploading ? t('clientVersions.publishing', '上传并发布中…') : t('clientVersions.publish', '发布新版本')}
           </Button>
         ) : (
           <Button disabled={!canAdvance(step, wizardState)} onClick={() => setStep(nextStep(step))}>
@@ -492,7 +608,7 @@ export default function ClientPublishPage() {
       <DangerConfirm
         open={navBlocked || manualDiscard}
         title={t('clientPublish.discardTitle', '放弃发布草稿？')}
-        description={t('clientPublish.discardDesc', '已上传 {{n}} 个文件的编排草稿（文件已在服务端，但「发哪些 + 各自路径/策略」尚未发布）。离开将丢弃这些编排，需重新设置。', { n: drafts.length })}
+        description={t('clientPublish.discardDescLocal', '已在本地暂存 {{n}} 个文件的编排草稿（尚未上传）。离开将丢弃这些文件与编排，需重新添加。', { n: drafts.length })}
         confirmLabel={t('clientPublish.discardConfirm', '放弃并离开')}
         onConfirm={() => {
           // 取消(manualDiscard) 或后退被拦(navBlocked)，确认后均解除守卫回工作台。
@@ -509,7 +625,7 @@ export default function ClientPublishPage() {
   )
 }
 
-/** 分块上传进度条（FR-251）：字节级百分比 + 当前文件/序号 + 取消按钮。 */
+/** 批量上传进度条（FR-250/251）：字节级百分比 + 当前文件/序号 + 取消按钮。 */
 function UploadProgressBar({ progress, onCancel }: { progress: UploadProgress; onCancel: () => void }) {
   const { t } = useTranslation()
   const pct = progress.totalBytes > 0 ? Math.round((progress.uploadedBytes / progress.totalBytes) * 100) : 0
