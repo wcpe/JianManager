@@ -2044,10 +2044,13 @@
                  "sync": "strict", "platform": null,
                  "artifact": { "sha256": "ef56…", "size": 45678, "codec": "zstd" } } ],
     "managedDirs": ["mods", "config"],
+    "cleanExclude": ["玩家mod", "custom-mods"],
     "agent": { "wedge": { "version": 3 }, "core": { "version": 5, "platforms": { "windows": { "artifact": { "sha256": "…", "size": 0, "codec": "zstd" } } } } },
     "note": "首发" }
   ```
   - `files` 必填且非空；`path` 须 POSIX 相对路径不逃逸；`sync∈{strict,once,ignore}`；`platform∈{null,windows,macos,linux}`；非 `ignore` 文件须带 `artifact.sha256`
+  - `managedDirs`（FR-255 扩语义）：托管/自动清理目录，可含嵌套路径串（如 `config/foo`，客户端前缀匹配）；含哨兵 `"*"` 时语义 = 清空整个 gameDir（删清单未列的一切，玩家区 + `cleanExclude` 除外）；留空则不自动清理
+  - `cleanExclude`（FR-255，可选）：运营自定义追加排除，命中前缀的路径永不删（叠加在玩家区 `PLAYER_ZONE` 之上）；不得为 `"*"`（与哨兵冲突）、不得路径逃逸；空则省略（`omitempty`，老 manifest canonical 字节不变）
 - **响应** (201): `{ "id": 1, "channelId": "skyblock-s1", "version": 1, "note": "首发", "createdAt": "datetime" }`
 - **错误**: 400 `INVALID_REQUEST` / `INVALID_VERSION_FILES`（清单非法，含具体原因）| 404 `CHANNEL_NOT_FOUND`
 - **审计**: `client_version.publish`
@@ -2063,7 +2066,7 @@
 - **描述**: 版本详情（含完整文件清单 + 托管目录 + 自更新段），供管理台查看与回滚前确认（FR-088）
 - **关联 FR**: FR-088
 - **鉴权**: **JWT，平台管理员**（运营操作）
-- **响应** (200): `{ "version": 1, "note": "…", "createdBy": 1, "createdAt": "datetime", "isLatest": false, "managedDirs": ["mods"], "files": [ { "path": "mods/foo.jar", "sha256": "…", "md5": "…", "size": 0, "sync": "strict", "platform": null, "artifact": { … } } ], "agent": { … } }`
+- **响应** (200): `{ "version": 1, "note": "…", "createdBy": 1, "createdAt": "datetime", "isLatest": false, "managedDirs": ["mods"], "cleanExclude": ["custom-mods"], "files": [ { "path": "mods/foo.jar", "sha256": "…", "md5": "…", "size": 0, "sync": "strict", "platform": null, "artifact": { … } } ], "agent": { … } }`
 - **错误**: 400 `INVALID_REQUEST`（版本号非法）| 404 `CHANNEL_NOT_FOUND` / `VERSION_NOT_FOUND`
 
 ### GET /api/v1/client-channels/:id/files/content
