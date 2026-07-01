@@ -1,7 +1,7 @@
 # ADR-022: 客户端 OTA 信任模型——manifest 签名 + per-channel 拉取密钥 + 面向玩家公网拉取端点
 
 - **日期**: 2026-06-23
-- **状态**: accepted
+- **状态**: superseded（被 [ADR-054](054-updater-arch-simplification.md) 推翻——信任根从「Ed25519 签名」改为「HTTPS + 拉取密钥鉴权」，私钥在服务器上验签形同虚设）
 
 ## 上下文
 

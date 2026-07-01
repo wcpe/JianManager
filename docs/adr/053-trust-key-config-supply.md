@@ -1,7 +1,7 @@
 # ADR-053: 客户端信任公钥运行期可配（修订 ADR-022 信任根供给）
 
 - **日期**: 2026-07-01
-- **状态**: accepted
+- **状态**: superseded（被 [ADR-054](054-updater-arch-simplification.md) 推翻——验签已去，`signPublicKey`/`signKeyId` 废弃）
 - **修订**: [ADR-022](022-client-manifest-trust-and-public-endpoint.md) 决策 2/8 的**信任根公钥供给方式**（原「公钥编入 updater-core 编译期内置」补充为「编译期内置 **或** 随整合包 pin 的配置公钥」）。ADR-022 的 8 条核心决策与 `accepted` 状态不变；投毒模型（私钥服务端持有、签名防篡改、key 半公开）不受影响。
 
 ## 上下文

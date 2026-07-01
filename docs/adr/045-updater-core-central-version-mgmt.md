@@ -1,7 +1,7 @@
 # ADR-045: updater-core 默认随 CP 内嵌、自动驱动 manifest agent.core（楔子冻结，运营不管理）
 
 - **日期**: 2026-06-28
-- **状态**: accepted
+- **状态**: accepted（决策 1 被 [ADR-054](054-updater-arch-simplification.md) 修订——core 不再「默认随 CP 内嵌单版本」，改为归档多版本 + 运营面板可选 + 楔子自动拉取 gradle-wrapper 模式）
 - **补充**: [ADR-021](021-client-distribution-jvm-updater.md)（两件套纯 JVM 方案）；[ADR-022](022-client-manifest-trust-and-public-endpoint.md)（防降级 / 单调 version 并存）
 - **改写说明**: 本 ADR 初版（同日）定「运营上传 core jar、按频道 pin/更新/回退 manifest agent.core 的集中版本管理」。**真机验收后用户否决该方向**——不想让运营自己管更新器版本，要用控制面板自带的默认更新器。故本 ADR 在 FR-193 发版前**改写为下述「CP 默认」决策**；原「运营 pin/管理」决策作废。
 
