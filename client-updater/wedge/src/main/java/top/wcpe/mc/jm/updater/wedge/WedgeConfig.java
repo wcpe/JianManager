@@ -30,9 +30,14 @@ final class WedgeConfig {
     final int bootConfirmSec;
     /** 遥测上报开关（FR-094 隐私 opt-out）；默认 true，置 false 关闭上报。 */
     final boolean telemetry;
+    /** 信任公钥 X.509 SPKI DER 的 base64（FR-253，见 ADR-053）；空=未配置，回退内置 dev 公钥。 */
+    final String signPublicKey;
+    /** 信任公钥版本标识（FR-253）；空=默认 k1，与 manifest sig.keyId 对应。 */
+    final String signKeyId;
 
     WedgeConfig(String channel, String key, String endpoint, String coreJar, int timeoutSec,
-                long coreVersion, int bootConfirmSec, boolean telemetry) {
+                long coreVersion, int bootConfirmSec, boolean telemetry,
+                String signPublicKey, String signKeyId) {
         this.channel = channel;
         this.key = key;
         this.endpoint = endpoint;
@@ -41,6 +46,8 @@ final class WedgeConfig {
         this.coreVersion = coreVersion;
         this.bootConfirmSec = bootConfirmSec;
         this.telemetry = telemetry;
+        this.signPublicKey = signPublicKey;
+        this.signKeyId = signKeyId;
     }
 
     /** 从配置文件加载；文件缺失/字段缺省按默认值。 */
@@ -61,7 +68,7 @@ final class WedgeConfig {
         int bootConfirmSec = parseIntOr(m.get("bootConfirmSec"), DEFAULT_BOOT_CONFIRM_SEC);
         boolean telemetry = !"false".equalsIgnoreCase(trimOrEmpty(m.get("telemetry"))); // 缺省/非 false 即开启。
         return new WedgeConfig(m.get("channel"), m.get("key"), m.get("endpoint"), coreJar, timeout,
-                coreVersion, bootConfirmSec, telemetry);
+                coreVersion, bootConfirmSec, telemetry, m.get("signPublicKey"), m.get("signKeyId"));
     }
 
     private static String trimOrEmpty(String s) {

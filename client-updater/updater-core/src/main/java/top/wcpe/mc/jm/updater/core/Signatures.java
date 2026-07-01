@@ -61,6 +61,36 @@ final class Signatures {
         return new Signatures(new LinkedHashMap<>(store));
     }
 
+    /**
+     * 从配置公钥构造信任根（FR-253，见 ADR-053）。
+     *
+     * <p>由 {@code jm-updater.json} 的 {@code signPublicKey}（X.509 SPKI DER 的 base64）+ {@code signKeyId}
+     * 构造单公钥信任根。解析失败（非法 base64 / 非 Ed25519 SPKI DER）返回 {@code null}——
+     * 调用方（{@link Core#run}）据此回退 {@link #production()} 内置公钥并记日志（保守：坏配置退回内置，
+     * 验签自然失败走 fail-static 放行本地版，不因坏配置直接挡启动）。
+     *
+     * @param keyId  公钥版本标识；空回退 {@code "k1"}（与 manifest {@code sig.keyId} 对应）。
+     * @param pubB64 公钥 X.509 SubjectPublicKeyInfo DER 的 base64（与服务端 {@code PublicKeySPKIBase64} 同格式）。
+     * @return 单公钥信任根；解析失败返回 {@code null}。
+     */
+    static Signatures fromConfig(String keyId, String pubB64) {
+        if (keyId == null || keyId.trim().isEmpty()) {
+            keyId = "k1";
+        }
+        try {
+            byte[] der = Base64.getDecoder().decode(pubB64.trim());
+            // 提前校验是合法的 Ed25519 SPKI 公钥（坏配置在此暴露而非延迟到验签）。
+            KeyFactory.getInstance("Ed25519", BC).generatePublic(new X509EncodedKeySpec(der));
+            Map<String, byte[]> store = new LinkedHashMap<>();
+            store.put(keyId, der);
+            return new Signatures(Collections.unmodifiableMap(store));
+        } catch (RuntimeException | GeneralSecurityException e) {
+            // base64 解码（含非 ASCII / 非法字符，可能抛 ArrayIndexOutOfBoundsException）或
+            // 公钥解析失败（非 Ed25519 SPKI）均视为配置无效，返回 null 让调用方回退内置。
+            return null;
+        }
+    }
+
     /** 是否持有该 keyId 的公钥。 */
     boolean hasKey(String keyId) {
         return trustStore.containsKey(keyId);

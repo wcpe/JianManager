@@ -91,7 +91,9 @@ public final class Core {
             long start = System.currentTimeMillis();
             // 进度窗口（FR-099）：默认展示；ctx progressUi=false 可关（headless 由展示层自动降级文本）。
             boolean progressUiEnabled = !"false".equalsIgnoreCase(ctx.getOrDefault("progressUi", "true"));
-            Updater updater = new Updater(gameDir, transport, Signatures.production(),
+            // 信任根裁决（FR-253，见 ADR-053）：ctx 提供配置公钥则用之，否则回退内置 dev 公钥。
+            Signatures sigs = resolveSignatures(ctx);
+            Updater updater = new Updater(gameDir, transport, sigs,
                     runningCoreVersion, new UrlClassLoaderSelfTest(), progressUiEnabled);
             int rc = updater.run();
 
@@ -108,5 +110,29 @@ public final class Core {
             System.err.println("[jm-updater] core fail-static: " + t);
             return Updater.FAIL_STATIC;
         }
+    }
+
+    /**
+     * 信任根裁决（FR-253，见 ADR-053）。
+     *
+     * <p>ctx 提供 {@code signPublicKey}（非空）→ 经 {@link Signatures#fromConfig} 构造单公钥信任根；
+     * 构造失败（非法 base64 / 非 Ed25519 SPKI）→ 回退 {@link Signatures#production()} 内置公钥并记日志
+     * （保守：坏配置退回内置，验签自然失败走 fail-static 放行本地版，不因坏配置挡启动）。
+     * ctx 无 {@code signPublicKey} → 直接用内置 dev 公钥（保 dev/兼容）。
+     *
+     * @return 本次运行使用的信任根。
+     */
+    static Signatures resolveSignatures(Map<String, String> ctx) {
+        String signPublicKey = ctx.get("signPublicKey");
+        if (signPublicKey == null || signPublicKey.trim().isEmpty()) {
+            return Signatures.production();
+        }
+        String signKeyId = ctx.get("signKeyId");
+        Signatures sigs = Signatures.fromConfig(signKeyId, signPublicKey);
+        if (sigs != null) {
+            return sigs;
+        }
+        System.err.println("[jm-updater] 配置的信任公钥无效（base64/DER 解析失败），回退内置公钥");
+        return Signatures.production();
     }
 }

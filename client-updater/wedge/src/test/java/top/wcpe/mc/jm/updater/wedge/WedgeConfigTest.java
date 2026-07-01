@@ -41,4 +41,23 @@ class WedgeConfigTest {
         assertEquals("c", c.channel);
         assertEquals("https://e", c.endpoint);
     }
+
+    // ---- FR-253：signPublicKey / signKeyId 解析 ----
+
+    @Test
+    void parsesSignPublicKeyAndKeyId() {
+        WedgeConfig c = WedgeConfig.fromJson(
+                "{\"channel\":\"c\",\"endpoint\":\"https://e\","
+                        + "\"signPublicKey\":\"MCowBQYDK2VwAyEAsO7B/k+2++wQtN/L0jpCXCjsGnYV5Sx2eyCk0pDzV0Y=\","
+                        + "\"signKeyId\":\"k1\"}");
+        assertEquals("MCowBQYDK2VwAyEAsO7B/k+2++wQtN/L0jpCXCjsGnYV5Sx2eyCk0pDzV0Y=", c.signPublicKey);
+        assertEquals("k1", c.signKeyId);
+    }
+
+    @Test
+    void signPublicKeyDefaultsToNullWhenAbsent() {
+        WedgeConfig c = WedgeConfig.fromJson("{\"channel\":\"c\",\"endpoint\":\"https://e\"}");
+        assertEquals(null, c.signPublicKey, "未配置 signPublicKey 应为 null（回退内置）");
+        assertEquals(null, c.signKeyId, "未配置 signKeyId 应为 null");
+    }
 }

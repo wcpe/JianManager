@@ -92,7 +92,7 @@ public final class Wedge {
     }
 
     /** 组装传给 core 的 ctx（契约 §6.3）。coreVersion 为选定 core 的版本（FR-091 自更新比对基准）。 */
-    private static Map<String, String> buildContext(String gameDir, WedgeConfig config, File wedgeDir,
+    static Map<String, String> buildContext(String gameDir, WedgeConfig config, File wedgeDir,
                                                     long coreVersion) {
         Map<String, String> ctx = new LinkedHashMap<String, String>();
         ctx.put("gameDir", gameDir);
@@ -102,6 +102,8 @@ public final class Wedge {
         ctx.put("wedgeDir", wedgeDir.getAbsolutePath());
         ctx.put("coreVersion", Long.toString(coreVersion));
         ctx.put("telemetry", Boolean.toString(config.telemetry)); // FR-094 遥测开关（opt-out）。
+        ctx.put("signPublicKey", nullToEmpty(config.signPublicKey)); // FR-253 信任公钥（空=回退内置）。
+        ctx.put("signKeyId", nullToEmpty(config.signKeyId)); // FR-253 公钥版本标识（空=默认 k1）。
         return ctx;
     }
 
