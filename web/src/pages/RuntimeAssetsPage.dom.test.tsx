@@ -36,8 +36,9 @@ describe('RuntimeAssetsPage（mock 假后端）', () => {
     const card17 = screen.getByText('17.0.11+9').closest('[data-slot="panel"]') as HTMLElement
     await user.click(within(card17).getByRole('button', { name: '删除' }))
 
-    // 危险确认弹窗：点确认（JDK 删除无需逐字输入）。
+    // 危险确认弹窗：seed JDK 17 为 managed（FR-228 按来源分级确认），删除需逐字输入「厂商 主版本」= temurin 17 才启用确认。
     const dialog = await screen.findByRole('dialog')
+    await user.type(within(dialog).getByPlaceholderText('temurin 17'), 'temurin 17')
     await user.click(within(dialog).getByRole('button', { name: '删除' }))
 
     // useDeleteRuntimeJDK 失效 ['runtime-assets-overview'] → 重新拉取，handler 现已无 17，DOM 中消失。
