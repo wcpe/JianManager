@@ -65,7 +65,11 @@ type Services struct {
 	ClientDistStats    *service.ClientDistStatsService
 	// ClientDistObservability 分发观测时序底座（FR-217，见 ADR-049）。
 	ClientDistObservability *service.ClientDistObservabilityService
-	JmPack                  *service.JmPackService
+	// ClientSignKey OTA manifest 签名器；面板据其公钥展示信任根公钥（FR-248，见 ADR-052）。nil=未配置。
+	ClientSignKey *service.ManifestSigner
+	// ClientSignKeySrc 签名密钥来源（env|generated|dev），随公钥透给面板展示徽章（FR-248）。
+	ClientSignKeySrc string
+	JmPack           *service.JmPackService
 	RuntimeAssets           *service.RuntimeAssetsService
 	EnrollToken             *service.EnrollTokenService
 	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
@@ -325,6 +329,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			clientVersionHandler := NewClientVersionHandler(svcs.ClientVersion, svcs.ClientChannel, svcs.Audit, svcs.ClientMachine, svcs.ClientDistTracking)
 			clientVersionHandler.RegisterPublishRoutes(admin)
 		}
+
+		// 客户端 OTA 签名公钥展示（FR-248，见 ADR-052）：运营者取信任根公钥配到客户端 updater-core。
+		// 无条件注册（nil signer 时端点返 503）：签名器由 ResolveManifestSignerWithAutogen 三轨裁决，
+		// 生产未注入即自动生成，正常不为 nil。限平台管理员；只暴露公钥，私钥绝不出服务端。
+		NewClientSignKeyHandler(svcs.ClientSignKey, svcs.ClientSignKeySrc).RegisterRoutes(admin)
 
 		// updater-core 默认随 CP 内嵌、自动驱动 manifest agent.core，运营不管理（FR-193，见 ADR-045 改写）。
 		// 已删除原运营侧 core 版本管理端点（上传/登记/pin/更新/回退）；agent.core 由内嵌 updater-core 自动产出
