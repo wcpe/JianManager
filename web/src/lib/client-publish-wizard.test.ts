@@ -16,6 +16,10 @@ import {
   localDedupKey,
   dedupUnits,
   batchProgressBytes,
+  moveFileToDir,
+  moveDirToDir,
+  collectSubtreeFiles,
+  isSelfOrDescendant,
   type TreeFile,
   type FileSystemEntryLike,
 } from './client-publish-wizard'
@@ -341,5 +345,70 @@ describe('batchProgressBytes', () => {
   it('夹取不超过总字节', () => {
     expect(batchProgressBytes(4800, 500, 5000)).toBe(5000)
     expect(batchProgressBytes(5000, 0, 5000)).toBe(5000)
+  })
+})
+
+/** FR-254：文件树拖拽编排。 */
+describe('moveFileToDir', () => {
+  it('移到目录下：拼为目标目录 + 文件名', () => {
+    expect(moveFileToDir('mods/a.jar', 'config')).toBe('config/a.jar')
+    expect(moveFileToDir('mods/sub/a.jar', 'config')).toBe('config/a.jar')
+  })
+  it('移到根：仅留文件名', () => {
+    expect(moveFileToDir('mods/a.jar', '')).toBe('a.jar')
+    expect(moveFileToDir('mods/sub/a.jar', '')).toBe('a.jar')
+  })
+  it('已在目标目录下 → 路径不变', () => {
+    expect(moveFileToDir('config/a.jar', 'config')).toBe('config/a.jar')
+  })
+  it('目标目录尾随斜杠被归一', () => {
+    expect(moveFileToDir('mods/a.jar', 'config/')).toBe('config/a.jar')
+    expect(moveFileToDir('mods/a.jar', '  config  ')).toBe('config/a.jar')
+  })
+})
+
+describe('moveDirToDir', () => {
+  it('移到目录下：拼为目标目录 + 源目录名', () => {
+    expect(moveDirToDir('config/foo', 'mods')).toBe('mods/foo')
+  })
+  it('移到根：仅留源目录名', () => {
+    expect(moveDirToDir('config/foo', '')).toBe('foo')
+  })
+  it('源等于目标 → no-op', () => {
+    expect(moveDirToDir('config/foo', 'config')).toBe('config/foo')
+  })
+})
+
+describe('collectSubtreeFiles', () => {
+  it('递归收集子目录全部文件（含嵌套）', () => {
+    const root = buildFileTree([
+      tf('mods/a.jar', 0),
+      tf('mods/sub/b.jar', 1),
+      tf('mods/sub/deep/c.jar', 2),
+      tf('readme.txt', 3),
+    ])
+    const mods = root.dirs.find((d) => d.name === 'mods')!
+    const files = collectSubtreeFiles(mods)
+    expect(files.map((f) => f.path).sort()).toEqual([
+      'mods/a.jar',
+      'mods/sub/b.jar',
+      'mods/sub/deep/c.jar',
+    ])
+    expect(files.map((f) => f.index).sort()).toEqual([0, 1, 2])
+  })
+})
+
+describe('isSelfOrDescendant', () => {
+  it('自身 → true', () => {
+    expect(isSelfOrDescendant('mods', 'mods')).toBe(true)
+    expect(isSelfOrDescendant('mods/sub', 'mods/sub')).toBe(true)
+  })
+  it('后代 → true', () => {
+    expect(isSelfOrDescendant('mods', 'mods/sub')).toBe(true)
+    expect(isSelfOrDescendant('mods', 'mods/sub/deep')).toBe(true)
+  })
+  it('非后代 → false', () => {
+    expect(isSelfOrDescendant('mods', 'config')).toBe(false)
+    expect(isSelfOrDescendant('mods', 'modsxyz')).toBe(false)
   })
 })

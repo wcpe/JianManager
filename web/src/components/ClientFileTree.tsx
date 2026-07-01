@@ -1,9 +1,13 @@
-import { useMemo, useState } from 'react'
+import { createContext, useContext, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
-import { ChevronRight, File, Folder, FolderOpen, Lock, Trash2 } from 'lucide-react'
+import { ChevronRight, File, Folder, FolderOpen, GripVertical, Lock, Trash2 } from 'lucide-react'
 import {
   buildFileTree,
+  collectSubtreeFiles,
+  isSelfOrDescendant,
+  moveDirToDir,
+  moveFileToDir,
   type ManifestFileLike,
   type TreeDir,
   type TreeFile,
@@ -28,11 +32,29 @@ function formatBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`
 }
 
+// ── FR-254：文件树拖拽编排 ──────────────────────────────────────────────
+
+/** 拖拽载荷：文件节点或目录节点。 */
+type DragPayload =
+  | { kind: 'file'; index: number; path: string }
+  | { kind: 'dir'; dirPath: string; subtree: { index: number; path: string }[] }
+
+/** 拖拽上下文（编排态内组件树共享，避免逐层 prop 传递）。 */
+interface DragContextValue {
+  payload: DragPayload | null
+  overPath: string | null
+  setPayload: (p: DragPayload | null) => void
+  setOverPath: (p: string | null) => void
+}
+
+const DragContext = createContext<DragContextValue | null>(null)
+
 /**
- * 客户端分发文件树（FR-191）。
+ * 客户端分发文件树（FR-191，FR-254 拖拽编排）。
  * 把扁平 `ManifestFile[]` 按 `path` 目录层级渲染为 Minecraft 风格的文件树预览。
  * - `readonly`（审阅/版本详情）：纯展示，文件行显示 名称 + sync/platform 徽标 + 大小，目录可折叠。
  * - 编排态（配置步）：文件行可改目标路径 / sync / platform / 删除；内容锁定（内容寻址不可改字节）。
+ *   FR-254：编排态支持**拖拽移动**文件/目录节点到其他目录，批量改目标路径。
  * 编排回调按文件在源数组中的 `index` 定位，父组件据此 patch/remove 原数组项。
  */
 export interface ClientFileTreeProps {
@@ -62,6 +84,16 @@ export default function ClientFileTree({
   const { t } = useTranslation()
   const tree = useMemo(() => buildFileTree(files), [files])
 
+  // FR-254：拖拽编排态（仅编排态启用）。
+  const [dragPayload, setDragPayload] = useState<DragPayload | null>(null)
+  const [dragOverPath, setDragOverPath] = useState<string | null>(null)
+  const drag: DragContextValue = {
+    payload: dragPayload,
+    overPath: dragOverPath,
+    setPayload: setDragPayload,
+    setOverPath: setDragOverPath,
+  }
+
   if (files.length === 0) {
     return (
       <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
@@ -71,19 +103,68 @@ export default function ClientFileTree({
   }
 
   return (
-    <div className="rounded-lg border bg-card/30 p-1 text-sm">
-      {/* 根目录的散文件与子目录（根本身不渲染目录头） */}
-      <TreeLevel
-        dir={tree}
-        depth={0}
-        readonly={readonly}
-        onPathChange={onPathChange}
-        onSyncChange={onSyncChange}
-        onPlatformChange={onPlatformChange}
-        onRemove={onRemove}
-      />
-    </div>
+    <DragContext.Provider value={drag}>
+      <div
+        className={cn(
+          'rounded-lg border bg-card/30 p-1 text-sm',
+          !readonly && dragOverPath === '' && 'ring-2 ring-primary/50',
+        )}
+        data-testid="tree-root"
+        onDragOver={(e) => {
+          if (readonly || !drag.payload) return
+          // 仅在落到非目录区域时标为根放置目标（目录自身的 onDragOver 会 stopPropagation）。
+          e.preventDefault()
+          setDragOverPath('')
+        }}
+        onDragLeave={(e) => {
+          // 离开容器边界才清（子元素的 dragenter 冒泡会触发 dragleave）。
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+            setDragOverPath((prev) => (prev === '' ? null : prev))
+          }
+        }}
+        onDrop={(e) => {
+          if (readonly) return
+          e.preventDefault()
+          handleDrop(drag, '', onPathChange)
+        }}
+      >
+        {/* 根目录的散文件与子目录（根本身不渲染目录头） */}
+        <TreeLevel
+          dir={tree}
+          depth={0}
+          readonly={readonly}
+          onPathChange={onPathChange}
+          onSyncChange={onSyncChange}
+          onPlatformChange={onPlatformChange}
+          onRemove={onRemove}
+        />
+      </div>
+    </DragContext.Provider>
   )
+}
+
+/** 处理拖放：把载荷（文件或目录）移动到目标目录，调用 onPathChange 批量改路径。 */
+function handleDrop(
+  drag: DragContextValue,
+  targetDirPath: string,
+  onPathChange?: (index: number, path: string) => void,
+) {
+  const p = drag.payload
+  drag.setPayload(null)
+  drag.setOverPath(null)
+  if (!p || !onPathChange) return
+  if (p.kind === 'file') {
+    onPathChange(p.index, moveFileToDir(p.path, targetDirPath))
+  } else {
+    // 目录拖到自身或子目录 → 非法，忽略。
+    if (isSelfOrDescendant(p.dirPath, targetDirPath)) return
+    const newDir = moveDirToDir(p.dirPath, targetDirPath)
+    for (const f of p.subtree) {
+      // f.path 形如 "config/foo/x.txt"，p.dirPath="config/foo" → rel="/x.txt"
+      const rel = f.path.substring(p.dirPath.length)
+      onPathChange(f.index, newDir + rel)
+    }
+  }
 }
 
 interface LevelProps {
@@ -134,30 +215,75 @@ function TreeLevel(props: LevelProps) {
 /** 可折叠目录行（头 = 折叠箭头 + 文件夹图标 + 名 + 子树规模徽标）。 */
 function DirRow({ dir, depth, ...rest }: LevelProps) {
   const { t } = useTranslation()
+  const { onPathChange, readonly } = rest
+  const drag = useContext(DragContext)
   const [open, setOpen] = useState(true)
+  const isOver = drag?.overPath === dir.path
   return (
     <>
-      <button
-        type="button"
-        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left hover:bg-accent transition-[background-color]"
-        style={{ paddingLeft: `${depth * 1.25 + 0.5}rem` }}
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
-        <ChevronRight className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
-        {open ? (
-          <FolderOpen className="size-4 shrink-0 text-amber-500" />
-        ) : (
-          <Folder className="size-4 shrink-0 text-amber-500" />
+      <div
+        className={cn(
+          'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left transition-[background-color]',
+          !readonly && 'hover:bg-accent',
+          isOver && 'ring-2 ring-primary/50 bg-primary/5',
         )}
-        <span className="font-medium">{dir.name}</span>
-        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-          {t('clientVersions.treeDirSummary', '{{n}} 个文件 · {{size}}', {
-            n: dir.fileCount,
-            size: formatBytes(dir.totalSize),
-          })}
-        </span>
-      </button>
+        style={{ paddingLeft: `${depth * 1.25 + 0.5}rem` }}
+      >
+        {!readonly && (
+          <GripVertical
+            className="size-3.5 shrink-0 cursor-grab text-muted-foreground/40 hover:text-muted-foreground active:cursor-grabbing"
+            data-testid="drag-handle-dir"
+            data-dir-path={dir.path}
+          />
+        )}
+        <button
+          type="button"
+          className="flex flex-1 items-center gap-1.5 text-left"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          draggable={!readonly}
+          onDragStart={(e) => {
+            if (readonly) return
+            e.dataTransfer.effectAllowed = 'move'
+            drag?.setPayload({ kind: 'dir', dirPath: dir.path, subtree: collectSubtreeFiles(dir) })
+          }}
+          onDragEnd={() => drag?.setPayload(null)}
+          onDragOver={(e) => {
+            if (readonly || !drag?.payload) return
+            e.preventDefault()
+            e.stopPropagation()
+            drag.setOverPath(dir.path)
+          }}
+          onDragLeave={(e) => {
+            // 离开目录头才清（移动到子元素时 relatedTarget 仍在容器外，正常清除）。
+            if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+              if (drag?.overPath === dir.path) drag.setOverPath(null)
+            }
+          }}
+          onDrop={(e) => {
+            if (readonly) return
+            e.preventDefault()
+            e.stopPropagation()
+            handleDrop(drag!, dir.path, onPathChange)
+          }}
+          data-testid={readonly ? undefined : 'dir-row'}
+          data-dir-path={dir.path}
+        >
+          <ChevronRight className={cn('size-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
+          {open ? (
+            <FolderOpen className="size-4 shrink-0 text-amber-500" />
+          ) : (
+            <Folder className="size-4 shrink-0 text-amber-500" />
+          )}
+          <span className="font-medium">{dir.name}</span>
+          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+            {t('clientVersions.treeDirSummary', '{{n}} 个文件 · {{size}}', {
+              n: dir.fileCount,
+              size: formatBytes(dir.totalSize),
+            })}
+          </span>
+        </button>
+      </div>
       {open && (
         <TreeLevel dir={dir} depth={depth + 1} {...rest} />
       )}
@@ -184,6 +310,7 @@ function FileRow({
   onRemove?: (index: number) => void
 }) {
   const { t } = useTranslation()
+  const drag = useContext(DragContext)
   const pad = { paddingLeft: `${depth * 1.25 + 0.5}rem` }
 
   if (readonly) {
@@ -202,10 +329,25 @@ function FileRow({
 
   return (
     <div
-      className="flex flex-col gap-2 rounded-md px-2 py-2 hover:bg-accent/50 transition-[background-color] sm:flex-row sm:items-center"
+      className={cn(
+        'flex flex-col gap-2 rounded-md px-2 py-2 hover:bg-accent/50 transition-[background-color] sm:flex-row sm:items-center',
+        drag?.overPath === '' && 'ring-2 ring-primary/50',
+      )}
       style={pad}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = 'move'
+        drag?.setPayload({ kind: 'file', index: file.index, path: file.path })
+      }}
+      onDragEnd={() => drag?.setPayload(null)}
+      data-testid={readonly ? undefined : 'file-row'}
+      data-file-index={file.index}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2">
+        <GripVertical
+          className="size-3.5 shrink-0 cursor-grab text-muted-foreground/40 hover:text-muted-foreground active:cursor-grabbing"
+          data-testid="drag-handle-file"
+        />
         <File className="size-4 shrink-0 text-muted-foreground" />
         <input
           className="w-full rounded border bg-background p-1.5 font-mono text-xs aria-invalid:border-destructive"

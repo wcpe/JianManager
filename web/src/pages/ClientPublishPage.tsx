@@ -519,6 +519,9 @@ export default function ClientPublishPage() {
             <p className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
               {t('clientVersions.syncModeHint', '同步策略 = 玩家更新时怎么处理这个文件：覆盖（强制统一）· 仅一次（缺了才补）· 忽略（完全不管）')}
             </p>
+            <p className="text-xs text-muted-foreground">
+              {t('clientVersions.dragArrangeHint', '拖拽文件或目录节点到其他目录可批量改目标路径')}
+            </p>
             <ClientFileTree
               files={drafts}
               onPathChange={(i, path) => patchDraft(idOf(i), { path })}

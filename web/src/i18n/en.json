@@ -1788,6 +1788,7 @@
     "contentLocked": "Content locked (content-addressed; bytes cannot be changed, only arranged or removed)",
     "treeEmpty": "No files",
     "treeDirSummary": "{{n}} file(s) · {{size}}",
+    "dragArrangeHint": "Drag file or directory nodes to other directories to batch-change their target paths",
     "viewStructure": "Structure",
     "viewPreview": "Preview",
     "previewHint": "Click a file on the left to view its content (text/config/JSON highlighting; binary or oversized files can only be downloaded).",
