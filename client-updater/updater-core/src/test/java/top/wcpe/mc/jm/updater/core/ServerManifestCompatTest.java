@@ -110,4 +110,77 @@ class ServerManifestCompatTest {
         assertTrue(Signatures.production().verify(m),
                 "服务端 manifest 签名必须可被生产内置公钥验证（FR-087 契约一致性）");
     }
+
+    // ── FR-255：cleanExclude 跨端对照 ──────────────────────────────────────
+
+    /**
+     * 含 cleanExclude + managedDirs["*"] 的签名 manifest（Go 侧 dev 私钥 k1 签名）。
+     * 由 Go TestGenCleanExcludeGolden 生成，双线同步——勿手改。
+     */
+    private static final String GOLDEN_CLEAN_EXCLUDE = "{\n"
+            + "  \"agent\": {\n"
+            + "    \"wedge\": {\n"
+            + "      \"version\": 3\n"
+            + "    }\n"
+            + "  },\n"
+            + "  \"channel\": \"skyblock-s1\",\n"
+            + "  \"cleanExclude\": [\n"
+            + "    \"mods/keep\",\n"
+            + "    \"custom\"\n"
+            + "  ],\n"
+            + "  \"files\": [\n"
+            + "    {\n"
+            + "      \"artifact\": {\n"
+            + "        \"codec\": \"zstd\",\n"
+            + "        \"sha256\": \"ef56\",\n"
+            + "        \"size\": 45678\n"
+            + "      },\n"
+            + "      \"md5\": \"cd34\",\n"
+            + "      \"path\": \"mods/foo.jar\",\n"
+            + "      \"platform\": null,\n"
+            + "      \"sha256\": \"ab12\",\n"
+            + "      \"size\": 123456,\n"
+            + "      \"sync\": \"strict\"\n"
+            + "    }\n"
+            + "  ],\n"
+            + "  \"issuedAt\": \"2026-06-23T10:00:00Z\",\n"
+            + "  \"managedDirs\": [\n"
+            + "    \"*\"\n"
+            + "  ],\n"
+            + "  \"schemaVersion\": 1,\n"
+            + "  \"sig\": {\n"
+            + "    \"alg\": \"Ed25519\",\n"
+            + "    \"keyId\": \"k1\",\n"
+            + "    \"value\": \"yY9lHKS5e0He8GhgA4flBpcs0h7hC+ejnkDJS9iKFv0IowQ4UhtVtbfmEpIdGWK3XuBDaXe1DUok9bDBnSvMBw==\"\n"
+            + "  },\n"
+            + "  \"version\": 42\n"
+            + "}";
+
+    @Test
+    void parsesCleanExcludeManifest() {
+        Manifest m = Manifest.parse(GOLDEN_CLEAN_EXCLUDE);
+        assertEquals(1, m.schemaVersion);
+        assertEquals(1, m.managedDirs.size());
+        assertEquals("*", m.managedDirs.get(0), "managedDirs 含 '*' 哨兵");
+        assertEquals(2, m.cleanExclude.size(), "cleanExclude 须解析为两项");
+        assertEquals("mods/keep", m.cleanExclude.get(0));
+        assertEquals("custom", m.cleanExclude.get(1));
+        assertEquals("k1", m.sigKeyId);
+    }
+
+    @Test
+    void verifiesCleanExcludeManifestWithProductionPublicKey() {
+        // 含 cleanExclude 的 manifest 签名须被生产内置公钥验证——
+        // 证明 Go manifestToTree 与 Java signingBytes 对同一份 canonical JSON 逐位一致。
+        Manifest m = Manifest.parse(GOLDEN_CLEAN_EXCLUDE);
+        assertTrue(Signatures.production().verify(m),
+                "含 cleanExclude 的 manifest 签名必须可被生产内置公钥验证（FR-255 跨端 canonical 对齐）");
+    }
+
+    @Test
+    void oldManifestWithoutCleanExcludeStillParses() {
+        // 老 manifest（无 cleanExclude）解析后 cleanExclude 为空列表（向后兼容）。
+        Manifest m = Manifest.parse(GOLDEN);
+        assertTrue(m.cleanExclude.isEmpty(), "无 cleanExclude 的老 manifest 须解析为空列表");
+    }
 }

@@ -62,6 +62,8 @@ final class Manifest {
     final String channel;
     final long version;
     final List<String> managedDirs;
+    /** 运营自定义追加排除（FR-255）：命中前缀的路径永不删。空列表=未声明。 */
+    final List<String> cleanExclude;
     final List<FileEntry> files;
     final String sigAlg;
     final String sigKeyId;
@@ -74,6 +76,7 @@ final class Manifest {
     final Map<String, Object> raw;
 
     private Manifest(int schemaVersion, String channel, long version, List<String> managedDirs,
+                     List<String> cleanExclude,
                      List<FileEntry> files, String sigAlg, String sigKeyId, String sigValue,
                      long agentCoreVersion, Map<String, AgentArtifact> agentCorePlatforms,
                      Map<String, Object> raw) {
@@ -81,6 +84,7 @@ final class Manifest {
         this.channel = channel;
         this.version = version;
         this.managedDirs = managedDirs;
+        this.cleanExclude = cleanExclude;
         this.files = files;
         this.sigAlg = sigAlg;
         this.sigKeyId = sigKeyId;
@@ -118,6 +122,15 @@ final class Manifest {
         if (md instanceof List) {
             for (Object o : (List<Object>) md) {
                 managedDirs.add(String.valueOf(o));
+            }
+        }
+
+        // FR-255：运营自定义追加排除（omitempty，可缺省）。
+        List<String> cleanExclude = new ArrayList<>();
+        Object ce = obj.get("cleanExclude");
+        if (ce instanceof List) {
+            for (Object o : (List<Object>) ce) {
+                cleanExclude.add(String.valueOf(o));
             }
         }
 
@@ -189,6 +202,7 @@ final class Manifest {
 
         return new Manifest(schemaVersion, channel, version,
                 Collections.unmodifiableList(managedDirs),
+                Collections.unmodifiableList(cleanExclude),
                 Collections.unmodifiableList(files),
                 sigAlg, sigKeyId, sigValue,
                 agentCoreVersion,

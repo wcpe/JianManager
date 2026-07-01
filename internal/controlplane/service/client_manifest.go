@@ -118,6 +118,9 @@ type SignedManifest struct {
 	Version       int            `json:"version"`
 	IssuedAt      string         `json:"issuedAt"`
 	ManagedDirs   []string       `json:"managedDirs"`
+	// CleanExclude 运营自定义追加排除（FR-255）：命中前缀的路径永不删（叠加在 PLAYER_ZONE 之上）。
+	// 空则省略（omitempty）——老 manifest canonical 字节不变，schemaVersion 维持 1（方案 A）。
+	CleanExclude []string       `json:"cleanExclude,omitempty"`
 	Files         []ManifestFile `json:"files"`
 	Agent         *ManifestAgent `json:"agent,omitempty"`
 	Sig           *ManifestSig   `json:"sig,omitempty"`
@@ -214,6 +217,10 @@ func manifestToTree(m *SignedManifest) map[string]any {
 		"issuedAt":      m.IssuedAt,
 		"managedDirs":   stringsToTree(m.ManagedDirs),
 		"files":         filesToTree(m.Files),
+	}
+	// FR-255：cleanExclude 仅在非空时输出（omitempty），老 manifest canonical 字节不变。
+	if len(m.CleanExclude) > 0 {
+		root["cleanExclude"] = stringsToTree(m.CleanExclude)
 	}
 	if m.Agent != nil {
 		root["agent"] = agentToTree(m.Agent)

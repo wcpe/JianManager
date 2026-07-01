@@ -269,3 +269,65 @@ func TestResolveManifestSigner_InvalidKeyPropagates(t *testing.T) {
 
 // 防止 strings 包未用（保留以备扩展断言）。
 var _ = strings.TrimSpace
+
+// TestCanonicalJSON_CleanExcludeOmit 锁定 FR-255 方案 A 的 omitempty 语义：
+// cleanExclude 为空时 canonical JSON 不含该字段（老 manifest 字节不变，向后兼容）。
+func TestCanonicalJSON_CleanExcludeOmit(t *testing.T) {
+	m := sampleSignedManifest()
+	// 未设 CleanExclude → canonical 不含 cleanExclude 键。
+	got := string(SigningBytes(m))
+	require.NotContains(t, got, "cleanExclude",
+		"cleanExclude 为空时 canonical JSON 不得包含该字段（omitempty 向后兼容）")
+
+	// 与既有 golden 完全一致（确保新增字段不破坏老 manifest）。
+	want := `{` +
+		`"agent":{"core":{"platforms":{"windows":{"artifact":{"codec":"zstd","sha256":"c1","size":100}}},"version":5},"wedge":{"version":3}},` +
+		`"channel":"skyblock-s1",` +
+		`"files":[` +
+		`{"artifact":{"codec":"zstd","sha256":"ef56","size":45678},"md5":"cd34","path":"mods/foo.jar","platform":null,"sha256":"ab12","size":123456,"sync":"strict"},` +
+		`{"artifact":{"codec":"none","sha256":"aa00","size":20},"md5":"7766","path":"config/opt.txt","platform":"windows","sha256":"9988","size":12,"sync":"once"}` +
+		`],` +
+		`"issuedAt":"2026-06-23T10:00:00Z",` +
+		`"managedDirs":["mods","config"],` +
+		`"schemaVersion":1,` +
+		`"version":42` +
+		`}`
+	require.Equal(t, want, got)
+}
+
+// TestCanonicalJSON_WithCleanExclude 锁定 FR-255 cleanExclude 非空时的 canonical 输出：
+// 键按码点升序，cleanExclude 排在 channel 之后、files 之前（c-l-e-a-n < f-i-l-e-s）。
+func TestCanonicalJSON_WithCleanExclude(t *testing.T) {
+	m := sampleSignedManifest()
+	m.ManagedDirs = []string{"*"}
+	m.CleanExclude = []string{"mods/keep", "custom"}
+
+	got := string(SigningBytes(m))
+	// cleanExclude 出现在 channel 与 files 之间（码点序）。
+	require.Contains(t, got, `"channel":"skyblock-s1","cleanExclude":["mods/keep","custom"],"files":[`)
+	// managedDirs 含 "*" 哨兵原样输出。
+	require.Contains(t, got, `"managedDirs":["*"]`)
+}
+
+// TestSign_WithCleanExclude_Verifiable 签名含 cleanExclude 的 manifest 须可被内置公钥验证
+// （跨端逐位一致证明：Go 签名 → Java 验签 的基础）。
+func TestSign_WithCleanExclude_Verifiable(t *testing.T) {
+	signer, err := NewManifestSigner(DevSignPrivateKeyPKCS8Base64, DefaultSignKeyID)
+	require.NoError(t, err)
+
+	m := sampleSignedManifest()
+	m.ManagedDirs = []string{"*"}
+	m.CleanExclude = []string{"mods/keep", "custom"}
+	require.NoError(t, signer.Sign(m))
+
+	pubDER, err := base64.StdEncoding.DecodeString(DevSignPublicKeySPKIBase64)
+	require.NoError(t, err)
+	pubAny, err := x509.ParsePKIXPublicKey(pubDER)
+	require.NoError(t, err)
+	pub := pubAny.(ed25519.PublicKey)
+
+	sigBytes, err := base64.StdEncoding.DecodeString(m.Sig.Value)
+	require.NoError(t, err)
+	require.True(t, ed25519.Verify(pub, SigningBytes(m), sigBytes),
+		"含 cleanExclude 的 manifest 签名须可被内置公钥验证")
+}
