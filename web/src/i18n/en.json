@@ -1770,6 +1770,8 @@
     "addZip": "Upload ZIP Pack",
     "zipHint": "Uploading a .zip unpacks it in the browser and arranges it into the tree below by its internal directory structure; loose files and zips can be mixed and accumulated.",
     "uploadProgress": "Uploading {{done}}/{{total}}",
+    "uploadProgressBytes": "{{current}}/{{count}} · {{done}} / {{total}}",
+    "uploadCanceled": "Upload canceled",
     "lockedHint": "File content is locked (content-addressed sha256 is immutable); you can only arrange path/dir, sync policy, target platform, or remove.",
     "locked": "Locked",
     "contentLocked": "Content locked (content-addressed; bytes cannot be changed, only arranged or removed)",

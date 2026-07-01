@@ -225,6 +225,28 @@ const distEvents = db<MockDistEvent>('client-dist-events', () => [
   },
 ])
 
+/** 假后端分块上传会话（FR-251）：内存态，仅按 index 记账，不落字节。 */
+interface MockUpload {
+  channelId: string
+  filename: string
+  totalSize: number
+  chunkSize: number
+  chunkCount: number
+  received: Set<number>
+}
+
+/** 分块上传会话表（模块级内存态，进程内共享；与真后端会话内存态语义一致）。 */
+const uploads = new Map<string, MockUpload>()
+/** uploadId 自增序列（mock 稳定可预测）。 */
+let uploadSeq = 0
+
+/** mock 默认分片 8 MiB，夹取到 [1MiB,64MiB]，与后端 clampChunkSize 一致。 */
+function clampMockChunk(chunkSize?: number): number {
+  const def = 8 * 1024 * 1024
+  if (!chunkSize || chunkSize <= 0) return def
+  return Math.min(Math.max(chunkSize, 1024 * 1024), 64 * 1024 * 1024)
+}
+
 /** 频道下未吊销密钥数（列表 keyCount）。 */
 const keyCountOf = (channelId: string) =>
   keys.list((k) => k.channelId === channelId && !k.revoked).length
@@ -501,6 +523,80 @@ export const handlers = [
       size: 2048,
       codec: 'none',
     })
+  }),
+
+  // ── 大文件分块上传（FR-251）：init→chunk→complete→abort ────────────────────
+  // 内存假会话：声明大小得 uploadId/chunkSize/chunkCount → 逐片累计已收 → complete 校验齐全回元数据。
+
+  // init：建上传会话。
+  domainRoute('post', '/client-channels/:channelId/uploads', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const channelId = String(info.params.channelId)
+    const body = (await info.request.json()) as {
+      filename?: string
+      totalSize: number
+      chunkSize?: number
+    }
+    if (!body.totalSize || body.totalSize <= 0) {
+      return HttpResponse.json({ error: 'INVALID_UPLOAD_INIT', message: 'totalSize 须为正' }, { status: 400 })
+    }
+    const chunkSize = clampMockChunk(body.chunkSize)
+    const chunkCount = Math.ceil(body.totalSize / chunkSize)
+    const uploadId = `mock-upload-${++uploadSeq}`
+    uploads.set(uploadId, {
+      channelId,
+      filename: body.filename ?? '',
+      totalSize: body.totalSize,
+      chunkSize,
+      chunkCount,
+      received: new Set<number>(),
+    })
+    return HttpResponse.json({ uploadId, chunkSize, chunkCount }, { status: 201 })
+  }),
+
+  // chunk：写入一个分片（原始字节；mock 仅按 index 记账，不校验字节内容）。
+  domainRoute('put', '/client-channels/:channelId/uploads/:uploadId/chunks/:index', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const uploadId = String(info.params.uploadId)
+    const index = Number(info.params.index)
+    const sess = uploads.get(uploadId)
+    if (!sess) return HttpResponse.json({ error: 'UPLOAD_NOT_FOUND', message: '上传会话不存在' }, { status: 404 })
+    if (sess.channelId !== String(info.params.channelId)) {
+      return HttpResponse.json({ error: 'UPLOAD_CHANNEL_MISMATCH', message: '频道不匹配' }, { status: 403 })
+    }
+    if (index < 0 || index >= sess.chunkCount) {
+      return HttpResponse.json({ error: 'INVALID_CHUNK_INDEX', message: '分片序号越界' }, { status: 400 })
+    }
+    sess.received.add(index)
+    return HttpResponse.json({ received: sess.received.size, total: sess.chunkCount })
+  }),
+
+  // complete：校验齐全 → 回内容寻址元数据（与单次上传同结构）→ 清会话。
+  domainRoute('post', '/client-channels/:channelId/uploads/:uploadId/complete', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const uploadId = String(info.params.uploadId)
+    const sess = uploads.get(uploadId)
+    if (!sess) return HttpResponse.json({ error: 'UPLOAD_NOT_FOUND', message: '上传会话不存在' }, { status: 404 })
+    if (sess.received.size !== sess.chunkCount) {
+      return HttpResponse.json({ error: 'UPLOAD_INCOMPLETE', message: '分片不齐全' }, { status: 422 })
+    }
+    uploads.delete(uploadId)
+    // mock 用会话大小派生一个稳定伪 sha（真后端为内容寻址）；size 回声明总字节，供发布页草稿。
+    return HttpResponse.json(
+      { sha256: 'e'.repeat(64), md5: 'f'.repeat(32), size: sess.totalSize, codec: 'none' },
+      { status: 201 },
+    )
+  }),
+
+  // abort：弃单（幂等 204）。
+  domainRoute('delete', '/client-channels/:channelId/uploads/:uploadId', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    uploads.delete(String(info.params.uploadId))
+    return new HttpResponse(null, { status: 204 })
   }),
 
   // 发布版本：单调递增版本号、切 latest。

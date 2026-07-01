@@ -13,12 +13,10 @@ import {
   ChevronLeft,
   FileArchive,
   FileIcon,
+  X,
 } from 'lucide-react'
-import {
-  usePublishClientFile,
-  usePublishClientVersion,
-  type ManifestFile,
-} from '@/api/clientVersions'
+import { usePublishClientVersion, type ManifestFile } from '@/api/clientVersions'
+import { uploadFileChunked } from '@/lib/chunkedUpload'
 import {
   PUBLISH_STEPS,
   canAdvance,
@@ -41,11 +39,34 @@ import { clientDistSource } from '@/components/file-browser/sources/clientDistSo
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
 
+/** 判定是否为「用户取消」错误（AbortController.abort() 抛的 AbortError / CanceledError）。 */
+function isAbortError(e: unknown): boolean {
+  if (e instanceof DOMException && e.name === 'AbortError') return true
+  // axios 取消抛 CanceledError（code ERR_CANCELED）。
+  const code = (e as { code?: string })?.code
+  const name = (e as { name?: string })?.name
+  return code === 'ERR_CANCELED' || name === 'CanceledError' || name === 'AbortError'
+}
+
 /** 字节数转人类可读。 */
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
   return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
+/** 上传进度（FR-251）：字节级累计（跨批次所有单元）+ 当前文件与文件序号，供百分比进度条。 */
+interface UploadProgress {
+  /** 已上传字节（含已完成单元 + 当前单元已传部分）。 */
+  uploadedBytes: number
+  /** 本批次所有单元总字节。 */
+  totalBytes: number
+  /** 当前正在上传的文件名（展示用）。 */
+  currentName: string
+  /** 当前文件序号（1 基）。 */
+  currentIndex: number
+  /** 本批次文件总数。 */
+  fileCount: number
 }
 
 /** 发布向导草稿文件项（artifact 元数据 + 原始内容元数据；codec=none 时两者同值）。 */
@@ -83,7 +104,6 @@ export default function ClientPublishPage() {
   const { t } = useTranslation()
   const { id: channelId } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const uploadFile = usePublishClientFile()
   const publish = usePublishClientVersion()
 
   const [step, setStep] = useState<PublishStepId>('files')
@@ -91,7 +111,10 @@ export default function ClientPublishPage() {
   const [managedDirs, setManagedDirs] = useState('mods, config, resourcepacks')
   const [note, setNote] = useState('')
   const [uploading, setUploading] = useState(false)
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
+  // 上传进度（FR-251 分块上传）：跨所有待上传单元的字节级累计 + 当前文件名/序号，供百分比进度条。
+  const [progress, setProgress] = useState<UploadProgress | null>(null)
+  // 取消当前批次上传：取消后 uploadFileChunked 抛 AbortError，并向服务端弃单（DELETE）。
+  const [uploadAbort, setUploadAbort] = useState<AbortController | null>(null)
   // 已确认离开（发布成功 / 取消确认 / 通过 blocker 确认）——置位即解除离开守卫，
   // 放行后续 backToVersions 导航不再被 useBlocker 二次拦截。
   const [leaving, setLeaving] = useState(false)
@@ -142,9 +165,20 @@ export default function ClientPublishPage() {
     if (!channelId) navigate('/client-channels', { replace: true })
   }, [channelId, navigate])
 
-  /** 上传一个文件，得内容寻址元数据后追加一条草稿（path 由调用方给定）。 */
-  const uploadOne = async (file: File, path: string) => {
-    const res = await uploadFile.mutateAsync({ channelId: channelId!, file, codec: 'none' })
+  /**
+   * 分块上传一个文件（FR-251），得内容寻址元数据后追加一条草稿（path 由调用方给定）。
+   * baseBytes 为本文件之前已完成单元的累计字节；onBytes 把「基线 + 本文件已传」汇成批次总进度。
+   */
+  const uploadOne = async (
+    file: File,
+    path: string,
+    signal: AbortSignal,
+    onBytes: (fileUploaded: number) => void,
+  ) => {
+    const res = await uploadFileChunked(channelId!, file, {
+      signal,
+      onProgress: (uploaded) => onBytes(uploaded),
+    })
     setDrafts((prev) => [
       ...prev,
       {
@@ -182,9 +216,11 @@ export default function ClientPublishPage() {
     const picked = Array.from(e.target.files ?? [])
     e.target.value = '' // 允许重复选择同名文件再次触发 change
     if (picked.length === 0) return
+    const abort = new AbortController()
+    setUploadAbort(abort)
     setUploading(true)
     try {
-      // 先展开 zip → 得到「待上传单元」总表，便于统一进度。
+      // 先展开 zip → 得到「待上传单元」总表，便于统一（字节级）进度。
       const units: Array<{ file: File; path: string }> = []
       for (const f of picked) {
         if (isZipFilename(f.name)) {
@@ -201,18 +237,44 @@ export default function ClientPublishPage() {
           units.push({ file: f, path: f.name })
         }
       }
-      setProgress({ done: 0, total: units.length })
+      const totalBytes = units.reduce((s, u) => s + u.file.size, 0)
+      let baseBytes = 0 // 已完成单元累计字节。
       for (let i = 0; i < units.length; i++) {
-        await uploadOne(units[i].file, units[i].path)
-        setProgress({ done: i + 1, total: units.length })
+        const unit = units[i]
+        setProgress({
+          uploadedBytes: baseBytes,
+          totalBytes,
+          currentName: unit.path,
+          currentIndex: i + 1,
+          fileCount: units.length,
+        })
+        await uploadOne(unit.file, unit.path, abort.signal, (fileUploaded) => {
+          setProgress({
+            uploadedBytes: baseBytes + fileUploaded,
+            totalBytes,
+            currentName: unit.path,
+            currentIndex: i + 1,
+            fileCount: units.length,
+          })
+        })
+        baseBytes += unit.file.size
       }
     } catch (err) {
-      toast.error(errMsg(err, t('clientVersions.uploadFailed', '上传文件失败')))
+      // 用户取消（AbortError）不算失败，静默；其余弹错。
+      if (isAbortError(err)) {
+        toast.info(t('clientVersions.uploadCanceled', '已取消上传'))
+      } else {
+        toast.error(errMsg(err, t('clientVersions.uploadFailed', '上传文件失败')))
+      }
     } finally {
       setUploading(false)
       setProgress(null)
+      setUploadAbort(null)
     }
   }
+
+  /** 取消当前批次上传：abort 信号触发 uploadFileChunked 中止 + 弃单。 */
+  const cancelUpload = () => uploadAbort?.abort()
 
   const patchDraft = (i: number, patch: Partial<DraftFile>) =>
     setDrafts((prev) => prev.map((d, idx) => (idx === i ? { ...d, ...patch } : d)))
@@ -309,12 +371,7 @@ export default function ClientPublishPage() {
             <p className="text-xs text-muted-foreground">
               {t('clientVersions.zipHint', '上传 .zip 会在浏览器内解包，按包内目录结构自动编排为下方文件树；散文件与 zip 可混合累加。')}
             </p>
-            {progress && (
-              <p className="text-xs text-muted-foreground inline-flex items-center gap-1.5">
-                <Loader2 className="size-3.5 animate-spin" />
-                {t('clientVersions.uploadProgress', '上传中 {{done}}/{{total}}', { done: progress.done, total: progress.total })}
-              </p>
-            )}
+            {progress && <UploadProgressBar progress={progress} onCancel={cancelUpload} />}
             {drafts.length > 0 && (
               <ul className="border rounded-lg divide-y text-sm">
                 {drafts.map((d, i) => (
@@ -448,6 +505,46 @@ export default function ClientPublishPage() {
           else setNavBlocked(false)
         }}
       />
+    </div>
+  )
+}
+
+/** 分块上传进度条（FR-251）：字节级百分比 + 当前文件/序号 + 取消按钮。 */
+function UploadProgressBar({ progress, onCancel }: { progress: UploadProgress; onCancel: () => void }) {
+  const { t } = useTranslation()
+  const pct = progress.totalBytes > 0 ? Math.round((progress.uploadedBytes / progress.totalBytes) * 100) : 0
+  return (
+    <div className="space-y-1.5 rounded-lg border bg-background/60 p-3">
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+          <Loader2 className="size-3.5 shrink-0 animate-spin" />
+          <span className="truncate font-mono" title={progress.currentName}>
+            {progress.currentName}
+          </span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2">
+          <span className="tabular-nums text-muted-foreground">
+            {t('clientVersions.uploadProgressBytes', '{{current}}/{{count}} · {{done}} / {{total}}', {
+              current: progress.currentIndex,
+              count: progress.fileCount,
+              done: formatBytes(progress.uploadedBytes),
+              total: formatBytes(progress.totalBytes),
+            })}
+          </span>
+          <span className="tabular-nums font-medium text-foreground">{pct}%</span>
+          <button
+            type="button"
+            className="inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-destructive hover:bg-destructive/10"
+            onClick={onCancel}
+          >
+            <X className="size-3.5" />
+            {t('common.cancel', '取消')}
+          </button>
+        </span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+        <div className="h-full rounded-full bg-primary transition-all duration-200" style={{ width: `${pct}%` }} />
+      </div>
     </div>
   )
 }
