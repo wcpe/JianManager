@@ -721,23 +721,38 @@ export const handlers = [
     })
   }),
 
-  // jm-updater.json 一键生成（FR-253，见 ADR-053）：按频道返回带本机签名公钥的完整配置。
+  // jm-updater.json 一键生成（FR-253，见 ADR-053；FR-259 起 core 改楔子自动拉取，去 signPublicKey/coreJar）。
   domainRoute('get', '/client-channels/:channelId/updater-config', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     const base = new URL(info.request.url).origin
+    const cid = String(info.params.channelId)
     return HttpResponse.json({
-      channel: String(info.params.channelId),
+      channel: cid,
       key: '',
       endpoint: `${base}/api/v1`,
-      coreJar: 'updater-core.jar',
+      coreEndpoint: `${base}/api/v1/client-channels/${cid}/updater-core`,
       timeoutSec: 120,
       telemetry: true,
       bootConfirmSec: 30,
-      coreVersion: 0,
-      signPublicKey: 'MCowBQYDK2VwAyEAsO7B/k+2++wQtN/L0jpCXCjsGnYV5Sx2eyCk0pDzV0Y=',
-      signKeyId: 'k1',
     })
+  }),
+
+  // updater-core 归档版本列表（FR-259）。
+  domainRoute('get', '/client-channels/:channelId/updater-core/versions', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json([
+      { version: 2, sha256: 'a'.repeat(64), size: 1_048_576, createdAt: '2026-07-01T10:00:00Z', selected: true },
+      { version: 1, sha256: 'b'.repeat(64), size: 1_024_000, createdAt: '2026-06-28T10:00:00Z', selected: false },
+    ])
+  }),
+
+  // 切换频道选定 updater-core 版本（FR-259）。
+  domainRoute('put', '/client-channels/:channelId/updater-core/selected', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({ ok: true })
   }),
 
   // 下载更新器 jar（FR-107）：返回二进制占位流。

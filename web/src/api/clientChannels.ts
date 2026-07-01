@@ -196,9 +196,9 @@ export async function downloadUpdaterJar(component: 'wedge' | 'core'): Promise<v
 }
 
 /**
- * 下载带本机签名公钥的 jm-updater.json（FR-253，见 ADR-053）。
- * 调 CP 端点 GET /client-channels/:id/updater-config 取完整配置（含 signPublicKey/signKeyId），
- * 序列化为 JSON 触发浏览器下载。运营者直接放入整合包即建立客户端信任根——无需改源码重编。
+ * 下载 jm-updater.json（FR-253，见 ADR-053；FR-259 起 core 改楔子自动拉取）。
+ * 调 CP 端点 GET /client-channels/:id/updater-config 取完整配置（含 coreEndpoint），
+ * 序列化为 JSON 触发浏览器下载。运营者直接放入整合包即建立客户端配置——无需改源码重编。
  */
 export async function downloadUpdaterConfig(channelId: string): Promise<void> {
   const { data } = await api.get<Record<string, unknown>>(`/client-channels/${channelId}/updater-config`)
@@ -210,4 +210,40 @@ export async function downloadUpdaterConfig(channelId: string): Promise<void> {
   a.download = 'jm-updater.json'
   a.click()
   URL.revokeObjectURL(url)
+}
+
+/** updater-core 归档版本摘要（FR-259）。 */
+export interface UpdaterCoreVersion {
+  version: number
+  sha256: string
+  size: number
+  createdAt: string
+  /** 是否为该频道当前选定版本（后端据频道 SelectedCoreSHA256 标记）。 */
+  selected: boolean
+}
+
+/** 列出频道可选的 updater-core 归档版本（FR-259，JWT 平台管理员）。 */
+export function useUpdaterCoreVersions(channelId: string) {
+  return useQuery({
+    queryKey: ['client-channels', channelId, 'updater-core-versions'],
+    queryFn: async (): Promise<UpdaterCoreVersion[]> => {
+      const { data } = await api.get<UpdaterCoreVersion[]>(
+        `/client-channels/${channelId}/updater-core/versions`,
+      )
+      return data
+    },
+    enabled: !!channelId,
+  })
+}
+
+/** 切换频道选定的 updater-core 版本（FR-259 回滚，JWT 平台管理员）。 */
+export function useSelectUpdaterCore() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ channelId, sha256 }: { channelId: string; sha256: string }) =>
+      api.put(`/client-channels/${channelId}/updater-core/selected`, { sha256 }),
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['client-channels', vars.channelId, 'updater-core-versions'] })
+    },
+  })
 }

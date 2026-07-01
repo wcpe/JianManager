@@ -5,31 +5,29 @@ import { Copy, Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { copyToClipboard } from '@/lib/clipboard'
 import { useUpdaterJarsInfo, downloadUpdaterJar, downloadUpdaterConfig } from '@/api/clientChannels'
-import { useClientSignKey } from '@/api/clientDistSignKey'
 
 /**
- * 客户端更新器接入指引（FR-107）。面向运营方：在频道详情一页拿齐——下载更新器两件套、
- * 该频道专属 jm-updater.json、启动器 JVM 参数、行为说明，照做即可把 OTA 更新器接入并下发玩家。
+ * 客户端更新器接入指引（FR-107 / FR-259）。面向运营方：在频道详情一页拿齐——下载楔子、
+ * 该频道专属 jm-updater.json（含 coreEndpoint）、启动器 JVM 参数、行为说明，照做即可接入并下发玩家。
+ *
+ * FR-259 起 core 不再随整合包附带：整合包只带 wedge.jar（~30KB），首次启动楔子自动经
+ * coreEndpoint 拉取 updater-core（gradle-wrapper 模式，见 FR-258）。
  */
 export default function ClientIntegrationGuide({ channelId }: { channelId: string }) {
   const { t } = useTranslation()
   const { data: jars } = useUpdaterJarsInfo()
-  const { data: signKey } = useClientSignKey()
   const [endpoint, setEndpoint] = useState(`${window.location.origin}/api/v1`)
-  const [downloading, setDownloading] = useState<'wedge' | 'core' | 'config' | null>(null)
+  const [downloading, setDownloading] = useState<'wedge' | 'config' | null>(null)
 
   const jmUpdaterJson = JSON.stringify(
     {
       channel: channelId,
       key: t('clientGuide.keyPlaceholder', '在「拉取密钥」Tab 创建后填入'),
       endpoint,
-      coreJar: 'updater-core.jar',
+      coreEndpoint: `${endpoint}/client-channels/${channelId}/updater-core`,
       timeoutSec: 120,
       telemetry: true,
       bootConfirmSec: 5,
-      coreVersion: 0,
-      signPublicKey: signKey?.publicKey ?? t('clientGuide.signPublicKeyPlaceholder', '<从面板签名公钥卡片复制>'),
-      signKeyId: signKey?.keyId ?? 'k1',
     },
     null,
     2,
@@ -42,13 +40,13 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
     else toast.error(t('clientGuide.copyFailed', '复制失败'))
   }
 
-  const download = async (comp: 'wedge' | 'core' | 'config') => {
+  const download = async (comp: 'wedge' | 'config') => {
     setDownloading(comp)
     try {
       if (comp === 'config') {
         await downloadUpdaterConfig(channelId)
       } else {
-        await downloadUpdaterJar(comp)
+        await downloadUpdaterJar('wedge')
       }
     } catch {
       toast.error(t('clientGuide.downloadFailed', '下载失败（jar 可能未内嵌）'))
@@ -64,7 +62,7 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
         <p className="text-muted-foreground">
           {t(
             'clientGuide.intro',
-            '楔子在游戏启动前自定位、加载 updater-core、拉签名 manifest、增量更新客户端资源后放行游戏；断网兜底启动、异常兜底放行，绝不挡启动。按下面步骤把更新器接入整合包并下发玩家。',
+            '楔子在游戏启动前自定位、加载 updater-core、拉 manifest、增量更新客户端资源后放行游戏；断网兜底启动、异常兜底放行，绝不挡启动。按下面步骤把更新器接入整合包并下发玩家。',
           )}
         </p>
         {jars && (
@@ -75,10 +73,13 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
         )}
       </div>
 
-      {/* 步骤一：下载两件套 */}
-      <Step title={t('clientGuide.step1Title', '① 下载更新器两件套')}>
+      {/* 步骤一：下载楔子 */}
+      <Step title={t('clientGuide.step1Title', '① 下载楔子')}>
         <p className="text-muted-foreground">
-          {t('clientGuide.step1Desc', '下载 wedge.jar（楔子）与 updater-core.jar（更新核心）。')}
+          {t(
+            'clientGuide.step1Desc',
+            '只下载 wedge.jar（楔子，~30KB）。updater-core 不再随整合包附带——首次启动时楔子自动经 coreEndpoint 拉取。',
+          )}
         </p>
         <div className="flex flex-wrap gap-2 mt-2">
           <Button
@@ -89,20 +90,55 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
           >
             <Download className="size-4 mr-1" /> wedge.jar
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!jars?.core.available || downloading === 'core'}
-            onClick={() => download('core')}
-          >
-            <Download className="size-4 mr-1" /> updater-core.jar
-          </Button>
-          {jars && (!jars.wedge.available || !jars.core.available) && (
+          {jars && !jars.wedge.available && (
             <span className="text-xs text-amber-600 self-center">
-              {t('clientGuide.notEmbedded', '部分 jar 未内嵌（构建时需 make embed-client-updater）')}
+              {t('clientGuide.notEmbedded', '楔子未内嵌（构建时需 make embed-client-updater）')}
             </span>
           )}
         </div>
+      </Step>
+
+      {/* 步骤二：放置文件 */}
+      <Step title={t('clientGuide.step2Title', '② 放置文件')}>
+        <p className="text-muted-foreground">
+          {t('clientGuide.step2Desc', '把 wedge.jar 与 jm-updater.json 放进游戏目录的 jm-updater 子目录：')}
+        </p>
+        <CodeBlock text={'<.minecraft>/jm-updater/\n  ├─ wedge.jar\n  └─ jm-updater.json'} onCopy={copy} t={t} />
+      </Step>
+
+      {/* 步骤三：频道专属 jm-updater.json */}
+      <Step title={t('clientGuide.step3Title', '③ 配置 jm-updater.json（本频道专属）')}>
+        <p className="text-muted-foreground">
+          {t(
+            'clientGuide.step3Desc',
+            '下面是本频道专属配置。key 换成你在「拉取密钥」Tab 创建的密钥（明文仅创建时一次性显示）；endpoint 改成玩家可访问的公网分发地址。coreEndpoint 由系统自动拼好，楔子首次启动据此拉取 updater-core。',
+          )}
+        </p>
+        <label className="flex flex-col gap-1 mt-2">
+          <span className="text-xs text-muted-foreground">{t('clientGuide.endpointLabel', '公网分发端点')}</span>
+          <input
+            className="border rounded px-2 py-1 text-sm font-mono bg-background"
+            value={endpoint}
+            onChange={(e) => setEndpoint(e.target.value)}
+          />
+        </label>
+        <div className="flex flex-wrap items-center gap-2 mt-3">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={downloading === 'config'}
+            onClick={() => download('config')}
+          >
+            <Download className="size-4 mr-1" /> {t('clientGuide.downloadConfig', '下载 jm-updater.json')}
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {t(
+              'clientGuide.coreAutoFetchHint',
+              'updater-core 不在整合包内——楔子首次启动自动拉取，运营可在「Core 版本」Tab 切换回滚。',
+            )}
+          </span>
+        </div>
+        <CodeBlock text={jmUpdaterJson} onCopy={copy} t={t} />
       </Step>
 
       {/* 步骤二：放置文件 */}
@@ -140,8 +176,8 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
           </Button>
           <span className="text-xs text-muted-foreground">
             {t(
-              'clientGuide.signPublicKeyHint',
-              '含本机签名公钥，随整合包分发即建立信任，无需改客户端源码。',
+              'clientGuide.coreAutoFetchHint',
+              'updater-core 不在整合包内——楔子首次启动自动拉取，运营可在「Core 版本」Tab 切换回滚。',
             )}
           </span>
         </div>
