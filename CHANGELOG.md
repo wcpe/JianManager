@@ -6,6 +6,9 @@
 
 ## [Unreleased]
 
+### 变更
+- **updater-core 架构简化 Phase 1（FR-256）**：去掉 manifest Ed25519 验签（Signatures 类 + BouncyCastle 14MB 依赖删除）、去掉 CAS 内容寻址缓存（CasCache 类删除，200MB/1GB 资源包不再膨胀）、去掉 .jmpack 容器格式（JmPack 类 + 服务端 jmpack 端点删除，未在主流程使用）、去掉 core 自更新（SelfUpdater 类删除，自更新将上移到楔子 FR-258）、去掉防降级机制（lastSeenVersion 去掉，回滚靠服务端改版本号）。信任模型从"签名"简化为"HTTPS + 拉取密钥鉴权"（推翻 ADR-022/053，废弃 FR-090/091/097/253/248）。sha256 文件完整性校验保留（防下载损坏，非信任校验）。updater-core `./gradlew test` 绿、CP `go build`/`test` 绿。
+
 ### 新增
 - **客户端分发术语大白话化（FR-252，增强 FR-194）**：把发布流程里的黑话改成运营看得懂的措辞。① **同步策略**三档中文化 + 每档大白话：`strict`→「覆盖」（每次更新强制用服务器版覆盖玩家本地）、`once`→「仅一次」（只在玩家缺文件时补一次、之后不覆盖）、`ignore`→「忽略」（只登记不下发），配置步加一行同步策略解释 `syncModeHint`。② **「托管目录」→「自动清理目录」**，提示改为大白话（填的目录里，玩家更新时自动删掉「服务器已移除、玩家本地却多出来」的文件，避免旧 mod 残留进不去游戏；留空则不清理）。③ **发布步骤说明**去 latest/内容寻址等黑话（如预览步「发布后成为玩家自动下载的最新版，版本号只增不减不会降级」）。纯前端文案（i18n zh/en + 少量组件），无逻辑/接口改动；`tsc`/`lint`/`vitest`/`build` 绿。
 - **OTA 签名密钥自动生成 + 面板公钥展示（FR-248，增强 FR-087，见 ADR-052）**：原生产态未注入 `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 即**降级**（OTA 不可用，ADR-038），迫使想用 OTA 的运营者手动生成 Ed25519 + 注入 + 回填公钥。改为**签名私钥来源三轨**（优先级 env 注入 > 生产自动生成 > dev 回退）：生产未注入时**自动生成 Ed25519 并持久化**到 `<dataRoot>/etc/client-sign-key.pem`（PKCS#8 PEM，0600，先写临时再原子 rename，跨重启用同一密钥、公钥不变），OTA 即启用；env 注入仍优先且不生成/不持久化；dev 态保持内置开发密钥回退。新增 `GET /client-dist/sign-key`（平台管理员）返回 `{publicKey,keyId,source}`，前端「签名公钥」卡片展示公钥 + 来源徽章 + 复制 + 大白话（配到客户端 updater-core / 勿删密钥文件）。生产拒源码公开开发密钥（`ErrDevSignKeyInProd`）防线保留；生成/持久化失败拒绝启动（信任根必须可用）。**ADR-052 修订 ADR-038**（未注入由降级改自动生成）、细化 ADR-022 信任根供给。后端 service + router 测试（生成后加载得同密钥、env 优先、生产自动生成且重载稳定、持久化失败报错、拒开发密钥）+ 前端卡片测试；`go build`/`test`、前端 `tsc`/`lint`/`vitest`/`build` 绿。**全新数据根生产启动见自动公钥 + 重启不变待真机验。**

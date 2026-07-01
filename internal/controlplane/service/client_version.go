@@ -62,12 +62,12 @@ func NewEmbeddedCoreFromJar(jar []byte, versionStr string) *EmbeddedCore {
 	}
 }
 
-// ClientVersionService 客户端分发版本发布与 manifest 组装（FR-087，见 ADR-022、contract §2/§3）。
+// ClientVersionService 客户端分发版本发布与 manifest 组装（FR-087 / FR-256 简化后）。
 //
 // 职责：
 //   - PublishFile：把客户端文件制品入 FR-045 制品库（type=client-file，内容寻址 + 去重）；
 //   - PublishVersion：以一组文件 + managedDirs + 自更新段组成版本，version 单调递增、切 latest 指针；
-//   - BuildManifest：组装并 Ed25519 签名频道 latest 的 manifest；
+//   - BuildManifest：组装频道 latest 的 manifest（FR-256 起不再签名）；
 //   - OpenArtifact：按 sha256 取制品（供 Range 分发）。
 //
 // 复用 ClientChannelService.VerifyKey（FR-086）做端点鉴权（在 router 层）。
@@ -75,15 +75,14 @@ type ClientVersionService struct {
 	db      *gorm.DB
 	assets  *AssetService
 	channel *ClientChannelService
-	signer  *ManifestSigner
 	// embeddedCore CP 内嵌的默认 updater-core（FR-193，见 ADR-045 改写）。非 nil 时 BuildManifest
 	// 用它自动产出 agent.core（取代运营手填/pin）；nil（无内嵌 jar）时省略 agent.core（不破 FR-087/088）。
 	embeddedCore *EmbeddedCore
 }
 
-// NewClientVersionService 创建版本服务。signer 为 nil 时 BuildManifest 报 ErrSignKeyNotConfigured。
-func NewClientVersionService(db *gorm.DB, assets *AssetService, channel *ClientChannelService, signer *ManifestSigner) *ClientVersionService {
-	return &ClientVersionService{db: db, assets: assets, channel: channel, signer: signer}
+// NewClientVersionService 创建版本服务。
+func NewClientVersionService(db *gorm.DB, assets *AssetService, channel *ClientChannelService) *ClientVersionService {
+	return &ClientVersionService{db: db, assets: assets, channel: channel}
 }
 
 // SetEmbeddedCore 注入 CP 内嵌的默认 updater-core 信息（FR-193，见 ADR-045 改写）。
@@ -237,13 +236,9 @@ func (s *ClientVersionService) PublishVersion(channelID string, p PublishVersion
 	return &version, nil
 }
 
-// BuildManifest 组装并签名频道 latest 的 manifest（contract §2/§3）。
-// 频道不存在返回 ErrChannelNotFound；无 latest（CurrentVersion=0 或缺记录）返回 ErrNoLatestVersion；
-// 未配置签名私钥返回 ErrSignKeyNotConfigured。
+// BuildManifest 组装频道 latest 的 manifest（contract §2）。FR-256 起不再签名。
+// 频道不存在返回 ErrChannelNotFound；无 latest（CurrentVersion=0 或缺记录）返回 ErrNoLatestVersion。
 func (s *ClientVersionService) BuildManifest(channelID string) (*SignedManifest, error) {
-	if s.signer == nil {
-		return nil, ErrSignKeyNotConfigured
-	}
 	ch, err := s.getChannel(channelID)
 	if err != nil {
 		return nil, err
@@ -266,11 +261,8 @@ func (s *ClientVersionService) BuildManifest(channelID string) (*SignedManifest,
 		return nil, err
 	}
 	// agent.core 由 CP 内嵌默认 updater-core 自动驱动（FR-193，见 ADR-045 改写）：覆盖快照中的手填透传值。
-	// 无内嵌 jar（embeddedCore 未注入）时省略 agent.core，沿用快照（兼容 FR-087/088、不破签名/客户端）。
+	// 无内嵌 jar（embeddedCore 未注入）时省略 agent.core，沿用快照（兼容 FR-087/088）。
 	s.applyEmbeddedCore(manifest)
-	if err := s.signer.Sign(manifest); err != nil {
-		return nil, fmt.Errorf("签名 manifest 失败: %w", err)
-	}
 	return manifest, nil
 }
 

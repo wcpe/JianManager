@@ -18,9 +18,9 @@ import (
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 )
 
-// setupClientDistRouterSigner 同 setupClientDistRouter，但 signer 可控（nil → BuildManifest 报 503）。
-// 供 FR-249 覆盖「签名私钥未配置」失败路径，其余与既有装配一致。返回引擎与追踪服务（供断言落库）。
-func setupClientDistRouterSigner(t *testing.T, db *gorm.DB, withSigner bool) (*gin.Engine, *service.ClientDistTrackingService) {
+// setupClientDistRouterWithTracking 建一个含客户端分发消费端点的最小引擎（FR-249 追踪事件覆盖）。
+// FR-256 起 manifest 不再签名，装配不再依赖签名器。返回引擎与追踪服务（供断言落库）。
+func setupClientDistRouterWithTracking(t *testing.T, db *gorm.DB) (*gin.Engine, *service.ClientDistTrackingService) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-testing", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
@@ -31,14 +31,7 @@ func setupClientDistRouterSigner(t *testing.T, db *gorm.DB, withSigner bool) (*g
 	}
 	assetSvc := service.NewAssetService(db, root)
 	channelSvc := service.NewClientChannelService(db)
-	var signer *service.ManifestSigner
-	if withSigner {
-		signer, err = service.NewManifestSigner(service.DevSignPrivateKeyPKCS8Base64, service.DefaultSignKeyID)
-		if err != nil {
-			t.Fatalf("构造签名器失败: %v", err)
-		}
-	}
-	versionSvc := service.NewClientVersionService(db, assetSvc, channelSvc, signer)
+	versionSvc := service.NewClientVersionService(db, assetSvc, channelSvc)
 	tracking := service.NewClientDistTrackingService(db)
 
 	svcs := &Services{
@@ -53,7 +46,6 @@ func setupClientDistRouterSigner(t *testing.T, db *gorm.DB, withSigner bool) (*g
 		ClientIPGuard:      service.NewClientIPGuardService(db),
 		ClientTelemetry:    service.NewClientTelemetryService(db),
 		ClientDistStats:    service.NewClientDistStatsService(db),
-		JmPack:             service.NewJmPackService(assetSvc, versionSvc, signer),
 	}
 	_ = cpgrpc.NewClientPool()
 	return Setup(svcs, jwtCfg.Secret), tracking
@@ -75,7 +67,7 @@ func latestEvent(t *testing.T, tracking *service.ClientDistTrackingService, kind
 // TestClientDist_Manifest_AuthFailure_Recorded 鉴权失败(401)也记录追踪事件且带 INVALID_CLIENT_KEY（FR-249 核心：此前漏记）。
 func TestClientDist_Manifest_AuthFailure_Recorded(t *testing.T) {
 	db := setupTestDB(t)
-	r, tracking := setupClientDistRouterSigner(t, db, true)
+	r, tracking := setupClientDistRouterWithTracking(t, db)
 	token := getAdminToken(t, r)
 	const channelID = "s1"
 	_ = createChannelAndKey(t, r, token, channelID)
@@ -101,7 +93,7 @@ func TestClientDist_Manifest_AuthFailure_Recorded(t *testing.T) {
 // TestClientDist_Manifest_NoVersion_Recorded 鉴权通过但无 latest → 404 记 NO_LATEST_VERSION（FR-249）。
 func TestClientDist_Manifest_NoVersion_Recorded(t *testing.T) {
 	db := setupTestDB(t)
-	r, tracking := setupClientDistRouterSigner(t, db, true)
+	r, tracking := setupClientDistRouterWithTracking(t, db)
 	token := getAdminToken(t, r)
 	const channelID = "empty"
 	key := createChannelAndKey(t, r, token, channelID)
@@ -123,50 +115,10 @@ func TestClientDist_Manifest_NoVersion_Recorded(t *testing.T) {
 	}
 }
 
-// TestClientDist_Manifest_SignKeyMissing_Recorded 未配签名私钥 → 503 记 SIGN_KEY_NOT_CONFIGURED（FR-249）。
-func TestClientDist_Manifest_SignKeyMissing_Recorded(t *testing.T) {
-	db := setupTestDB(t)
-	// 无 signer：需先经带 signer 的引擎发布版本（发布不签名），再用无 signer 引擎拉 manifest 触发 503。
-	pubR, _ := setupClientDistRouterSigner(t, db, true)
-	token := getAdminToken(t, pubR)
-	const channelID = "s1"
-	key := createChannelAndKey(t, pubR, token, channelID)
-	artSha, artSize := uploadClientFile(t, pubR, token, channelID, []byte("x"))
-	pubBody := map[string]any{
-		"managedDirs": []string{"mods"},
-		"files": []map[string]any{{
-			"path": "mods/a.jar", "sha256": sha256Hex2("a"), "md5": "m", "size": 1,
-			"sync": "strict", "platform": "",
-			"artifact": map[string]any{"sha256": artSha, "size": artSize, "codec": "zstd"},
-		}},
-	}
-	if w := makeRequest(pubR, "POST", "/api/v1/client-channels/"+channelID+"/versions", pubBody, token); w.Code != http.StatusCreated {
-		t.Fatalf("发布版本失败: %d %s", w.Code, w.Body.String())
-	}
-
-	// 无 signer 引擎共享同一 db；拉 manifest → BuildManifest 报 ErrSignKeyNotConfigured → 503。
-	r, tracking := setupClientDistRouterSigner(t, db, false)
-	req := httptest.NewRequest("GET", "/api/v1/client-channels/"+channelID+"/manifest", nil)
-	req.Header.Set("X-Client-Key", key)
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("未配签名应 503，实际 %d body=%s", w.Code, w.Body.String())
-	}
-
-	status, errCode := latestEvent(t, tracking, "manifest")
-	if status != http.StatusServiceUnavailable {
-		t.Errorf("事件 status 应 503，实际 %d", status)
-	}
-	if errCode != "SIGN_KEY_NOT_CONFIGURED" {
-		t.Errorf("事件 errCode 应 SIGN_KEY_NOT_CONFIGURED，实际 %q", errCode)
-	}
-}
-
 // TestClientDist_Artifact_AuthFailure_Recorded 制品鉴权失败(401)记 INVALID_CLIENT_KEY（FR-249）。
 func TestClientDist_Artifact_AuthFailure_Recorded(t *testing.T) {
 	db := setupTestDB(t)
-	r, tracking := setupClientDistRouterSigner(t, db, true)
+	r, tracking := setupClientDistRouterWithTracking(t, db)
 
 	// 无 key 取制品 → 401（此前鉴权失败漏记）。
 	req := httptest.NewRequest("GET", "/api/v1/client-artifacts/"+sha256Hex2("whatever"), nil)
@@ -188,7 +140,7 @@ func TestClientDist_Artifact_AuthFailure_Recorded(t *testing.T) {
 // TestClientDist_Artifact_NotFound_Recorded 鉴权通过但制品不存在 → 404 记 ARTIFACT_NOT_FOUND（FR-249）。
 func TestClientDist_Artifact_NotFound_Recorded(t *testing.T) {
 	db := setupTestDB(t)
-	r, tracking := setupClientDistRouterSigner(t, db, true)
+	r, tracking := setupClientDistRouterWithTracking(t, db)
 	token := getAdminToken(t, r)
 	const channelID = "s1"
 	key := createChannelAndKey(t, r, token, channelID)
@@ -213,7 +165,7 @@ func TestClientDist_Artifact_NotFound_Recorded(t *testing.T) {
 // TestClientDist_Manifest_Success_NoErrCode 成功拉取事件 errCode 为空（不回归 FR-093）。
 func TestClientDist_Manifest_Success_NoErrCode(t *testing.T) {
 	db := setupTestDB(t)
-	r, tracking := setupClientDistRouterSigner(t, db, true)
+	r, tracking := setupClientDistRouterWithTracking(t, db)
 	token := getAdminToken(t, r)
 	const channelID = "s1"
 	key := createChannelAndKey(t, r, token, channelID)
@@ -250,7 +202,7 @@ func TestClientDist_Manifest_Success_NoErrCode(t *testing.T) {
 // TestClientDist_ListEvents_OutcomeFilter ListEvents 读 outcome/errCode query 参数并透传（FR-249）。
 func TestClientDist_ListEvents_OutcomeFilter(t *testing.T) {
 	db := setupTestDB(t)
-	r, tracking := setupClientDistRouterSigner(t, db, true)
+	r, tracking := setupClientDistRouterWithTracking(t, db)
 	token := getAdminToken(t, r)
 
 	// 直接落两条：一成功一失败。

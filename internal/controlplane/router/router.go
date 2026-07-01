@@ -67,11 +67,6 @@ type Services struct {
 	ClientDistStats    *service.ClientDistStatsService
 	// ClientDistObservability 分发观测时序底座（FR-217，见 ADR-049）。
 	ClientDistObservability *service.ClientDistObservabilityService
-	// ClientSignKey OTA manifest 签名器；面板据其公钥展示信任根公钥（FR-248，见 ADR-052）。nil=未配置。
-	ClientSignKey *service.ManifestSigner
-	// ClientSignKeySrc 签名密钥来源（env|generated|dev），随公钥透给面板展示徽章（FR-248）。
-	ClientSignKeySrc string
-	JmPack           *service.JmPackService
 	RuntimeAssets           *service.RuntimeAssetsService
 	EnrollToken             *service.EnrollTokenService
 	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
@@ -332,16 +327,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			clientVersionHandler.RegisterPublishRoutes(admin)
 		}
 
-		// 客户端 OTA 签名公钥展示（FR-248，见 ADR-052）：运营者取信任根公钥配到客户端 updater-core。
-		// 无条件注册（nil signer 时端点返 503）：签名器由 ResolveManifestSignerWithAutogen 三轨裁决，
-		// 生产未注入即自动生成，正常不为 nil。限平台管理员；只暴露公钥，私钥绝不出服务端。
-		NewClientSignKeyHandler(svcs.ClientSignKey, svcs.ClientSignKeySrc).RegisterRoutes(admin)
-
-		// jm-updater.json 一键生成端点（FR-253，见 ADR-053）：按频道生成带本机签名公钥的完整配置，
-		// 运营者直接下载放入整合包即建立客户端信任根——无需改源码重编 updater-core。
-		// 限平台管理员；依赖频道服务（校验存在）+ 签名器（取公钥）。
+		// jm-updater.json 一键生成端点（FR-253，见 ADR-053）：按频道生成 jm-updater.json。
+		// FR-256 起不再含签名公钥（验签已去，信任靠 HTTPS + 拉取密钥鉴权，推翻 ADR-022/053）。
+		// 限平台管理员；依赖频道服务（校验存在）。
 		if svcs.ClientChannel != nil {
-			NewClientUpdaterConfigHandler(svcs.ClientChannel, svcs.ClientSignKey).RegisterRoutes(admin)
+			NewClientUpdaterConfigHandler(svcs.ClientChannel).RegisterRoutes(admin)
 		}
 
 		// 客户端分发大文件分块上传（init→chunk→complete，支持 4G+ 文件）：运营操作，限平台管理员
@@ -359,12 +349,6 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.ClientIPGuard != nil {
 			clientIPRuleHandler := NewClientIPRuleHandler(svcs.ClientIPGuard, svcs.Audit)
 			clientIPRuleHandler.RegisterRoutes(admin)
-		}
-
-		// 客户端分发 .jmpack 打包（latest 版本压缩+签名入库）：运营操作，限平台管理员（FR-097 / ADR-021/022）。
-		if svcs.JmPack != nil {
-			jmPackHandler := NewJmPackHandler(svcs.JmPack, svcs.Audit)
-			jmPackHandler.RegisterRoutes(admin)
 		}
 
 		// 分发统计后台：下载趋势/版本分布/成功率/活跃机器码/TopIP 只读聚合（FR-095 / ADR-023）。限平台管理员。

@@ -1,18 +1,13 @@
 package service
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-// sampleSignedManifest 构造一份固定样例 manifest（contract §2），供 canonical/签名/结构断言复用。
+// sampleSignedManifest 构造一份固定样例 manifest（contract §2），供结构断言复用。
 func sampleSignedManifest() *SignedManifest {
 	return &SignedManifest{
 		SchemaVersion: 1,
@@ -44,97 +39,10 @@ func sampleSignedManifest() *SignedManifest {
 	}
 }
 
-// TestCanonicalJSON_MatchesContractRules 固化 canonical JSON 规则：键码点升序、无空白、整数最简、
-// null 平台、嵌套对象有序。此串即客户端 updater-core Json.canonical 对同一对象树的输出（逐位对齐）。
-func TestCanonicalJSON_MatchesContractRules(t *testing.T) {
-	m := sampleSignedManifest()
-	got := string(SigningBytes(m))
-
-	// 期望：去 sig，所有对象键码点升序递归排序、无空白、整数最简、全平台 platform=null。
-	// 顶层键序 agent<channel<files<issuedAt<managedDirs<schemaVersion<version；
-	// files[] 内键序 artifact<md5<path<platform<sha256<size<sync；
-	// artifact 内键序 codec<sha256<size。managedDirs/files 数组顺序保持原序（不排序）。
-	want := `{` +
-		`"agent":{"core":{"platforms":{"windows":{"artifact":{"codec":"zstd","sha256":"c1","size":100}}},"version":5},"wedge":{"version":3}},` +
-		`"channel":"skyblock-s1",` +
-		`"files":[` +
-		`{"artifact":{"codec":"zstd","sha256":"ef56","size":45678},"md5":"cd34","path":"mods/foo.jar","platform":null,"sha256":"ab12","size":123456,"sync":"strict"},` +
-		`{"artifact":{"codec":"none","sha256":"aa00","size":20},"md5":"7766","path":"config/opt.txt","platform":"windows","sha256":"9988","size":12,"sync":"once"}` +
-		`],` +
-		`"issuedAt":"2026-06-23T10:00:00Z",` +
-		`"managedDirs":["mods","config"],` +
-		`"schemaVersion":1,` +
-		`"version":42` +
-		`}`
-	require.Equal(t, want, got, "canonical JSON 必须与契约规则逐位一致（客户端据此验签）")
-}
-
-// TestSign_VerifiableWithEd25519PublicKey 用 Go ed25519.Verify 校验签名——
-// Go 与 Java 的 Ed25519 同为 RFC 8032 PureEdDSA（64 字节签名、X.509 SPKI 公钥），
-// Go 验签通过即等价于客户端 Signatures.verify 通过（无 JDK15+ 时的等价证明）。
-func TestSign_VerifiableWithEd25519PublicKey(t *testing.T) {
-	signer, err := NewManifestSigner(DevSignPrivateKeyPKCS8Base64, DefaultSignKeyID)
-	require.NoError(t, err)
-
-	m := sampleSignedManifest()
-	require.NoError(t, signer.Sign(m))
-
-	require.NotNil(t, m.Sig)
-	require.Equal(t, "Ed25519", m.Sig.Alg)
-	require.Equal(t, "k1", m.Sig.KeyID)
-
-	// 从内置开发公钥（回填客户端的同值）解出公钥，验签。
-	pubDER, err := base64.StdEncoding.DecodeString(DevSignPublicKeySPKIBase64)
-	require.NoError(t, err)
-	pubAny, err := x509.ParsePKIXPublicKey(pubDER)
-	require.NoError(t, err)
-	pub := pubAny.(ed25519.PublicKey)
-
-	sigBytes, err := base64.StdEncoding.DecodeString(m.Sig.Value)
-	require.NoError(t, err)
-	require.True(t, ed25519.Verify(pub, SigningBytes(m), sigBytes),
-		"签名必须可被内置公钥验证（等价于客户端验签通过）")
-
-	// 公钥与私钥成对：签名器导出的 SPKI 应等于固化常量。
-	exported, err := signer.PublicKeySPKIBase64()
-	require.NoError(t, err)
-	require.Equal(t, DevSignPublicKeySPKIBase64, exported, "导出公钥须与内置常量一致")
-}
-
-// TestSign_CoversVersionAndFiles 防降级/防篡改：改 version 或文件后，原签名对新 canonical 必失效。
-func TestSign_CoversVersionAndFiles(t *testing.T) {
-	signer, err := NewManifestSigner(DevSignPrivateKeyPKCS8Base64, DefaultSignKeyID)
-	require.NoError(t, err)
-
-	m := sampleSignedManifest()
-	require.NoError(t, signer.Sign(m))
-	origSig := m.Sig.Value
-
-	pubDER, _ := base64.StdEncoding.DecodeString(DevSignPublicKeySPKIBase64)
-	pubAny, _ := x509.ParsePKIXPublicKey(pubDER)
-	pub := pubAny.(ed25519.PublicKey)
-	sigBytes, _ := base64.StdEncoding.DecodeString(origSig)
-
-	// 篡改 version：用原签名对新 canonical 验签必败。
-	tampered := sampleSignedManifest()
-	tampered.Version = 99
-	require.False(t, ed25519.Verify(pub, SigningBytes(tampered), sigBytes),
-		"改 version 后原签名必失效（契约 §3 覆盖 version）")
-
-	// 篡改文件路径：同理失败。
-	tampered2 := sampleSignedManifest()
-	tampered2.Files[0].Path = "mods/evil.jar"
-	require.False(t, ed25519.Verify(pub, SigningBytes(tampered2), sigBytes),
-		"改文件路径后原签名必失效")
-}
-
 // TestSignedManifest_JSONStructureMatchesContract 断言序列化 JSON 含 contract §2 全部字段与结构，
-// 可被客户端 Manifest.parse 解析（字段名/嵌套/类型对齐）。
+// 可被客户端 Manifest.parse 解析（字段名/嵌套/类型对齐）。FR-256 起 manifest 不再含 sig 段。
 func TestSignedManifest_JSONStructureMatchesContract(t *testing.T) {
-	signer, err := NewManifestSigner(DevSignPrivateKeyPKCS8Base64, DefaultSignKeyID)
-	require.NoError(t, err)
 	m := sampleSignedManifest()
-	require.NoError(t, signer.Sign(m))
 
 	raw, err := json.Marshal(m)
 	require.NoError(t, err)
@@ -161,11 +69,8 @@ func TestSignedManifest_JSONStructureMatchesContract(t *testing.T) {
 		require.Contains(t, art, k, "artifact 须含契约字段 %s", k)
 	}
 
-	// 签名段。
-	sig := obj["sig"].(map[string]any)
-	require.Equal(t, "Ed25519", sig["alg"])
-	require.Equal(t, "k1", sig["keyId"])
-	require.NotEmpty(t, sig["value"])
+	// FR-256 起 manifest 不再含 sig 段。
+	require.NotContains(t, obj, "sig", "manifest 不应再含签名段")
 
 	// 自更新段。
 	agent := obj["agent"].(map[string]any)
@@ -175,159 +80,27 @@ func TestSignedManifest_JSONStructureMatchesContract(t *testing.T) {
 	require.Contains(t, platforms, "windows")
 }
 
-// TestNewManifestSigner_Errors 私钥缺失/非法的错误路径。
-func TestNewManifestSigner_Errors(t *testing.T) {
-	_, err := NewManifestSigner("", "k1")
-	require.ErrorIs(t, err, ErrSignKeyNotConfigured)
-
-	_, err = NewManifestSigner("not-base64-!!!", "k1")
-	require.ErrorIs(t, err, ErrInvalidSignKey)
-
-	_, err = NewManifestSigner(base64.StdEncoding.EncodeToString([]byte("garbage")), "k1")
-	require.ErrorIs(t, err, ErrInvalidSignKey)
-}
-
-// freshProdSignKeyB64 生成一对全新 Ed25519 私钥并编码为 base64(PKCS#8 DER)，
-// 模拟生产经 env 注入的独立签名私钥（其公钥不等于内置开发公钥）。
-func freshProdSignKeyB64(t *testing.T) string {
-	t.Helper()
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	der, err := x509.MarshalPKCS8PrivateKey(priv)
-	require.NoError(t, err)
-	return base64.StdEncoding.EncodeToString(der)
-}
-
-// TestResolveManifestSigner_ProdMissingKeyRejected 锁定 fail-closed 核心（FR-087，见 ADR-022）：
-// 生产态（devMode=false）未注入签名私钥时必须拒绝，绝不静默回退到源码公开的内置开发密钥
-// （否则攻击者可用人人可得的开发私钥伪造玩家客户端信任的 OTA manifest）。
-func TestResolveManifestSigner_ProdMissingKeyRejected(t *testing.T) {
-	signer, usedDev, err := ResolveManifestSigner("", "k1", false)
-	require.ErrorIs(t, err, ErrSignKeyRequiredInProd)
-	require.Nil(t, signer)
-	require.False(t, usedDev)
-
-	// 仅空白同样视为未配置（与 NewManifestSigner 的 TrimSpace 语义一致）。
-	_, _, err = ResolveManifestSigner("   ", "", false)
-	require.ErrorIs(t, err, ErrSignKeyRequiredInProd)
-}
-
-// TestResolveManifestSigner_ProdDevKeyInjectedRejected 生产态即便运维把源码里的公开开发私钥
-// 显式贴进 env，也属同一投毒面，必须拒绝（按解出的公钥识别，而非字符串比对，防再编码绕过）。
-func TestResolveManifestSigner_ProdDevKeyInjectedRejected(t *testing.T) {
-	signer, usedDev, err := ResolveManifestSigner(DevSignPrivateKeyPKCS8Base64, DefaultSignKeyID, false)
-	require.ErrorIs(t, err, ErrDevSignKeyInProd)
-	require.Nil(t, signer)
-	require.False(t, usedDev)
-}
-
-// TestResolveManifestSigner_ProdRealKeyAccepted 生产态注入独立私钥正常放行、不回退、不告警。
-func TestResolveManifestSigner_ProdRealKeyAccepted(t *testing.T) {
-	prod := freshProdSignKeyB64(t)
-	signer, usedDev, err := ResolveManifestSigner(prod, "k1", false)
-	require.NoError(t, err)
-	require.NotNil(t, signer)
-	require.False(t, usedDev)
-	require.Equal(t, "k1", signer.KeyID())
-
-	// 放行的私钥其公钥不应等于内置开发公钥（确属独立密钥）。
-	pub, err := signer.PublicKeySPKIBase64()
-	require.NoError(t, err)
-	require.NotEqual(t, DevSignPublicKeySPKIBase64, pub)
-}
-
-// TestResolveManifestSigner_DevFallback 开发态（devMode=true）维持零配置回退内置开发密钥，
-// 并标记 usedDevFallback 供上层打告警；回退签名器须可被内置公钥验证（端到端不破）。
-func TestResolveManifestSigner_DevFallback(t *testing.T) {
-	signer, usedDev, err := ResolveManifestSigner("", "", true)
-	require.NoError(t, err)
-	require.NotNil(t, signer)
-	require.True(t, usedDev)
-	require.Equal(t, DefaultSignKeyID, signer.KeyID())
-
-	exported, err := signer.PublicKeySPKIBase64()
-	require.NoError(t, err)
-	require.Equal(t, DevSignPublicKeySPKIBase64, exported)
-}
-
-// TestResolveManifestSigner_DevKeyExplicitAllowedInDev 开发态显式注入开发密钥允许，
-// 且非回退路径（usedDevFallback=false，不触发「使用内置开发密钥」告警）。
-func TestResolveManifestSigner_DevKeyExplicitAllowedInDev(t *testing.T) {
-	signer, usedDev, err := ResolveManifestSigner(DevSignPrivateKeyPKCS8Base64, DefaultSignKeyID, true)
-	require.NoError(t, err)
-	require.NotNil(t, signer)
-	require.False(t, usedDev)
-}
-
-// TestResolveManifestSigner_InvalidKeyPropagates 注入的私钥非法时透传解析错误，不静默回退到开发密钥。
-func TestResolveManifestSigner_InvalidKeyPropagates(t *testing.T) {
-	_, _, err := ResolveManifestSigner("not-base64-!!!", "k1", false)
-	require.ErrorIs(t, err, ErrInvalidSignKey)
-	_, _, err = ResolveManifestSigner("not-base64-!!!", "k1", true)
-	require.ErrorIs(t, err, ErrInvalidSignKey)
-}
-
-// 防止 strings 包未用（保留以备扩展断言）。
-var _ = strings.TrimSpace
-
-// TestCanonicalJSON_CleanExcludeOmit 锁定 FR-255 方案 A 的 omitempty 语义：
-// cleanExclude 为空时 canonical JSON 不含该字段（老 manifest 字节不变，向后兼容）。
-func TestCanonicalJSON_CleanExcludeOmit(t *testing.T) {
+// TestSignedManifest_CleanExcludeOmit 锁定 FR-255 方案 A 的 omitempty 语义：
+// cleanExclude 为空时 JSON 不含该字段（老 manifest 字节不变，向后兼容）。
+func TestSignedManifest_CleanExcludeOmit(t *testing.T) {
 	m := sampleSignedManifest()
-	// 未设 CleanExclude → canonical 不含 cleanExclude 键。
-	got := string(SigningBytes(m))
-	require.NotContains(t, got, "cleanExclude",
-		"cleanExclude 为空时 canonical JSON 不得包含该字段（omitempty 向后兼容）")
-
-	// 与既有 golden 完全一致（确保新增字段不破坏老 manifest）。
-	want := `{` +
-		`"agent":{"core":{"platforms":{"windows":{"artifact":{"codec":"zstd","sha256":"c1","size":100}}},"version":5},"wedge":{"version":3}},` +
-		`"channel":"skyblock-s1",` +
-		`"files":[` +
-		`{"artifact":{"codec":"zstd","sha256":"ef56","size":45678},"md5":"cd34","path":"mods/foo.jar","platform":null,"sha256":"ab12","size":123456,"sync":"strict"},` +
-		`{"artifact":{"codec":"none","sha256":"aa00","size":20},"md5":"7766","path":"config/opt.txt","platform":"windows","sha256":"9988","size":12,"sync":"once"}` +
-		`],` +
-		`"issuedAt":"2026-06-23T10:00:00Z",` +
-		`"managedDirs":["mods","config"],` +
-		`"schemaVersion":1,` +
-		`"version":42` +
-		`}`
-	require.Equal(t, want, got)
+	raw, err := json.Marshal(m)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "cleanExclude",
+		"cleanExclude 为空时 JSON 不得包含该字段（omitempty 向后兼容）")
 }
 
-// TestCanonicalJSON_WithCleanExclude 锁定 FR-255 cleanExclude 非空时的 canonical 输出：
-// 键按码点升序，cleanExclude 排在 channel 之后、files 之前（c-l-e-a-n < f-i-l-e-s）。
-func TestCanonicalJSON_WithCleanExclude(t *testing.T) {
+// TestSignedManifest_WithCleanExclude 锁定 FR-255 cleanExclude 非空时的 JSON 输出。
+func TestSignedManifest_WithCleanExclude(t *testing.T) {
 	m := sampleSignedManifest()
 	m.ManagedDirs = []string{"*"}
 	m.CleanExclude = []string{"mods/keep", "custom"}
 
-	got := string(SigningBytes(m))
+	raw, err := json.Marshal(m)
+	require.NoError(t, err)
+	got := string(raw)
 	// cleanExclude 出现在 channel 与 files 之间（码点序）。
 	require.Contains(t, got, `"channel":"skyblock-s1","cleanExclude":["mods/keep","custom"],"files":[`)
 	// managedDirs 含 "*" 哨兵原样输出。
 	require.Contains(t, got, `"managedDirs":["*"]`)
-}
-
-// TestSign_WithCleanExclude_Verifiable 签名含 cleanExclude 的 manifest 须可被内置公钥验证
-// （跨端逐位一致证明：Go 签名 → Java 验签 的基础）。
-func TestSign_WithCleanExclude_Verifiable(t *testing.T) {
-	signer, err := NewManifestSigner(DevSignPrivateKeyPKCS8Base64, DefaultSignKeyID)
-	require.NoError(t, err)
-
-	m := sampleSignedManifest()
-	m.ManagedDirs = []string{"*"}
-	m.CleanExclude = []string{"mods/keep", "custom"}
-	require.NoError(t, signer.Sign(m))
-
-	pubDER, err := base64.StdEncoding.DecodeString(DevSignPublicKeySPKIBase64)
-	require.NoError(t, err)
-	pubAny, err := x509.ParsePKIXPublicKey(pubDER)
-	require.NoError(t, err)
-	pub := pubAny.(ed25519.PublicKey)
-
-	sigBytes, err := base64.StdEncoding.DecodeString(m.Sig.Value)
-	require.NoError(t, err)
-	require.True(t, ed25519.Verify(pub, SigningBytes(m), sigBytes),
-		"含 cleanExclude 的 manifest 签名须可被内置公钥验证")
 }

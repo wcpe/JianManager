@@ -31,8 +31,8 @@ func newChunkedUploadSvc(t *testing.T) (*ChunkedUploadService, *ClientVersionSer
 	root, err := dataroot.Init(filepath.Join(t.TempDir(), "data"))
 	require.NoError(t, err)
 	assetSvc := NewAssetService(db, root)
-	// PublishFile 只触及制品库（Ingest），channel/signer 可为 nil。
-	verSvc := NewClientVersionService(db, assetSvc, nil, nil)
+	// PublishFile 只触及制品库（Ingest），channel 可为 nil。
+	verSvc := NewClientVersionService(db, assetSvc, nil)
 	return NewChunkedUploadService(root, verSvc), verSvc, root
 }
 

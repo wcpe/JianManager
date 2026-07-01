@@ -2,10 +2,7 @@ package router
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"crypto/sha256"
-	"crypto/x509"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -40,11 +37,7 @@ func setupClientDistRouter(t *testing.T, db *gorm.DB) (*gin.Engine, *service.Cli
 	}
 	assetSvc := service.NewAssetService(db, root)
 	channelSvc := service.NewClientChannelService(db)
-	signer, err := service.NewManifestSigner(service.DevSignPrivateKeyPKCS8Base64, service.DefaultSignKeyID)
-	if err != nil {
-		t.Fatalf("构造签名器失败: %v", err)
-	}
-	versionSvc := service.NewClientVersionService(db, assetSvc, channelSvc, signer)
+	versionSvc := service.NewClientVersionService(db, assetSvc, channelSvc)
 
 	svcs := &Services{
 		Auth:               service.NewAuthService(db, jwtCfg),
@@ -58,7 +51,6 @@ func setupClientDistRouter(t *testing.T, db *gorm.DB) (*gin.Engine, *service.Cli
 		ClientIPGuard:      service.NewClientIPGuardService(db),
 		ClientTelemetry:    service.NewClientTelemetryService(db),
 		ClientDistStats:    service.NewClientDistStatsService(db),
-		JmPack:             service.NewJmPackService(assetSvc, versionSvc, signer),
 	}
 	_ = cpgrpc.NewClientPool() // 与 setupTestRouter 一致：确保 gRPC 包初始化无副作用。
 	return Setup(svcs, jwtCfg.Secret), versionSvc
@@ -112,8 +104,8 @@ func uploadClientFile(t *testing.T, r *gin.Engine, token, channelID string, cont
 	return sha, int64(size)
 }
 
-// TestClientDist_PublishAndManifest_EndToEnd 走完整链路：上传制品 → 发布版本 → 玩家拉取签名 manifest →
-// 用内置开发公钥验签（等价客户端 Signatures.verify）；并断言 ETag/304/Cache-Control。
+// TestClientDist_PublishAndManifest_EndToEnd 走完整链路：上传制品 → 发布版本 → 玩家拉取 manifest →
+// 断言基本字段可解析 + ETag/304/Cache-Control（FR-256 起不再验签）。
 func TestClientDist_PublishAndManifest_EndToEnd(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupClientDistRouter(t, db)
@@ -162,12 +154,12 @@ func TestClientDist_PublishAndManifest_EndToEnd(t *testing.T) {
 		t.Errorf("manifest 响应应含 Cache-Control")
 	}
 	etag := mw.Header().Get("ETag")
-	if etag != `"1:k1"` {
-		t.Errorf("ETag 应为 \"1:k1\"，实际 %q", etag)
+	if etag != `"1"` {
+		t.Errorf("ETag 应为 \"1\"，实际 %q", etag)
 	}
 
 	// 验签：用内置开发公钥（与客户端回填同值）校验签名 manifest（等价客户端验签通过）。
-	verifyManifestSignature(t, mw.Body.Bytes())
+	verifyManifestParses(t, mw.Body.Bytes())
 
 	// If-None-Match 命中 → 304。
 	creq := httptest.NewRequest("GET", "/api/v1/client-channels/"+channelID+"/manifest", nil)
@@ -341,32 +333,24 @@ func TestClientDist_Manifest_NoVersion(t *testing.T) {
 	}
 }
 
-// verifyManifestSignature 解析响应 manifest，用内置开发公钥对 canonical(去 sig) 验签。
-// Go 与客户端 Java 同为 RFC 8032 Ed25519，Go 验签通过等价客户端 Signatures.verify 通过。
-func verifyManifestSignature(t *testing.T, raw []byte) {
+// verifyManifestParses 解析响应 manifest，断言基本字段可被客户端解析（FR-256 起不再验签，
+// 信任靠 HTTPS + 拉取密钥鉴权）。并确认 manifest 不再含 sig 段。
+func verifyManifestParses(t *testing.T, raw []byte) {
 	t.Helper()
 	var m service.SignedManifest
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatalf("解析 manifest 失败: %v body=%s", err, raw)
 	}
-	if m.Sig == nil || m.Sig.Alg != "Ed25519" || m.Sig.KeyID != "k1" {
-		t.Fatalf("manifest 缺有效签名段: %+v", m.Sig)
+	if m.Channel == "" || m.Version == 0 {
+		t.Fatalf("manifest 缺基本字段: %+v", m)
 	}
-	pubDER, err := base64.StdEncoding.DecodeString(service.DevSignPublicKeySPKIBase64)
-	if err != nil {
-		t.Fatalf("解码公钥失败: %v", err)
+	// FR-256 起不再签名，响应不应含 sig 段。
+	var rawObj map[string]any
+	if err := json.Unmarshal(raw, &rawObj); err != nil {
+		t.Fatalf("解析 manifest 原始对象失败: %v", err)
 	}
-	pubAny, err := x509.ParsePKIXPublicKey(pubDER)
-	if err != nil {
-		t.Fatalf("解析公钥失败: %v", err)
-	}
-	pub := pubAny.(ed25519.PublicKey)
-	sigBytes, err := base64.StdEncoding.DecodeString(m.Sig.Value)
-	if err != nil {
-		t.Fatalf("解码签名失败: %v", err)
-	}
-	if !ed25519.Verify(pub, service.SigningBytes(&m), sigBytes) {
-		t.Fatalf("manifest 签名验证失败（响应 JSON 与签名 canonical 不同源？）")
+	if _, ok := rawObj["sig"]; ok {
+		t.Fatalf("manifest 不应再含 sig 段（FR-256 验签已去）")
 	}
 }
 
@@ -416,7 +400,7 @@ func TestClientDist_PublishWithCleanExclude(t *testing.T) {
 	}
 
 	// 验签。
-	verifyManifestSignature(t, mw.Body.Bytes())
+	verifyManifestParses(t, mw.Body.Bytes())
 
 	// 解析 manifest 断言字段。
 	var manifest service.SignedManifest

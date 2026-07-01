@@ -298,12 +298,8 @@ func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 	}
 	manifestVersion = manifest.Version
 
-	// ETag = version:keyId（内容随版本/签名密钥变化；contract §4.1）。
-	keyID := ""
-	if manifest.Sig != nil {
-		keyID = manifest.Sig.KeyID
-	}
-	etag := fmt.Sprintf(`"%d:%s"`, manifest.Version, keyID)
+	// ETag = version（内容随版本变化；contract §4.1）。FR-256 起不再签名，ETag 只用 version。
+	etag := fmt.Sprintf(`"%d"`, manifest.Version)
 	c.Header("ETag", etag)
 	c.Header("Cache-Control", "no-cache") // manifest 随版本变，须每次校验新鲜度（弱缓存，靠 ETag 命中省传输）。
 	if match := c.GetHeader("If-None-Match"); match == etag {
@@ -440,10 +436,6 @@ func (h *ClientVersionHandler) respondConsumerErr(c *gin.Context, err error) str
 	case errors.Is(err, service.ErrAssetNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "ARTIFACT_NOT_FOUND", "message": "制品不存在"})
 		return "ARTIFACT_NOT_FOUND"
-	case errors.Is(err, service.ErrSignKeyNotConfigured):
-		slog.Warn("manifest 签名私钥未配置，OTA 不可用", "channel", c.Param("id"), "path", c.Request.URL.Path)
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "SIGN_KEY_NOT_CONFIGURED", "message": "签名私钥未配置，OTA 分发不可用"})
-		return "SIGN_KEY_NOT_CONFIGURED"
 	default:
 		slog.Error("客户端分发消费端点内部错误", "path", c.Request.URL.Path, "channel", c.Param("id"), "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "操作失败"})

@@ -2,7 +2,6 @@ package router
 
 import (
 	"net/http"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -15,7 +14,8 @@ import (
 )
 
 // setupUpdaterConfigRouter 建一个含 jm-updater.json 生成端点的最小引擎（FR-253）。
-func setupUpdaterConfigRouter(t *testing.T, db *gorm.DB, signer *service.ManifestSigner) *gin.Engine {
+// FR-256 起该端点不再依赖签名器（验签已去）。
+func setupUpdaterConfigRouter(t *testing.T, db *gorm.DB) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-testing", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
@@ -24,30 +24,20 @@ func setupUpdaterConfigRouter(t *testing.T, db *gorm.DB, signer *service.Manifes
 		Authz:         service.NewAuthzService(db),
 		Audit:         service.NewAuditService(db),
 		ClientChannel: service.NewClientChannelService(db),
-		ClientSignKey: signer,
 	}
 	_ = cpgrpc.NewClientPool()
 	return Setup(svcs, jwtCfg.Secret)
 }
 
-// TestGetUpdaterConfig_AdminReturnsConfigWithSignKey 平台管理员取 jm-updater.json →
-// 200 + 含 signPublicKey / signKeyId / channel / endpoint（key 占位空串）。
-func TestGetUpdaterConfig_AdminReturnsConfigWithSignKey(t *testing.T) {
+// TestGetUpdaterConfig_AdminReturnsConfig 平台管理员取 jm-updater.json →
+// 200 + 含 channel / endpoint（key 占位空串）。FR-256 起不再返回 signPublicKey/signKeyId。
+func TestGetUpdaterConfig_AdminReturnsConfig(t *testing.T) {
 	db := setupTestDB(t)
-	keyPath := filepath.Join(t.TempDir(), "client-sign-key.pem")
-	signer, err := service.LoadOrGenerateSigner(keyPath, service.DefaultSignKeyID)
-	if err != nil {
-		t.Fatalf("生成签名器失败: %v", err)
-	}
-	wantPub, err := signer.PublicKeySPKIBase64()
-	if err != nil {
-		t.Fatalf("导出公钥失败: %v", err)
-	}
 	// 建测试频道。
 	if _, e := service.NewClientChannelService(db).CreateChannel("skyblock-s1", "空岛一服", ""); e != nil {
 		t.Fatalf("创建测试频道失败: %v", e)
 	}
-	r := setupUpdaterConfigRouter(t, db, signer)
+	r := setupUpdaterConfigRouter(t, db)
 	token := getAdminToken(t, r)
 
 	w := makeRequest(r, "GET", "/api/v1/client-channels/skyblock-s1/updater-config", nil, token)
@@ -55,12 +45,6 @@ func TestGetUpdaterConfig_AdminReturnsConfigWithSignKey(t *testing.T) {
 		t.Fatalf("应 200，实际 %d: %s", w.Code, w.Body.String())
 	}
 	resp := parseJSON(t, w)
-	if resp["signPublicKey"] != wantPub {
-		t.Fatalf("signPublicKey 应为签名器公钥 %q，实得 %v", wantPub, resp["signPublicKey"])
-	}
-	if resp["signKeyId"] != service.DefaultSignKeyID {
-		t.Fatalf("signKeyId 应为 %q，实得 %v", service.DefaultSignKeyID, resp["signKeyId"])
-	}
 	if resp["channel"] != "skyblock-s1" {
 		t.Fatalf("channel 应为 skyblock-s1，实得 %v", resp["channel"])
 	}
@@ -70,17 +54,19 @@ func TestGetUpdaterConfig_AdminReturnsConfigWithSignKey(t *testing.T) {
 	if resp["endpoint"] == nil || resp["endpoint"] == "" {
 		t.Fatalf("endpoint 应非空（CP 公网基址），实得 %v", resp["endpoint"])
 	}
+	// FR-256 起 jm-updater.json 不再含签名公钥字段。
+	if _, ok := resp["signPublicKey"]; ok {
+		t.Fatalf("jm-updater.json 不应再含 signPublicKey（验签已去）")
+	}
+	if _, ok := resp["signKeyId"]; ok {
+		t.Fatalf("jm-updater.json 不应再含 signKeyId（验签已去）")
+	}
 }
 
 // TestGetUpdaterConfig_ChannelNotFound 频道不存在 → 404。
 func TestGetUpdaterConfig_ChannelNotFound(t *testing.T) {
 	db := setupTestDB(t)
-	keyPath := filepath.Join(t.TempDir(), "client-sign-key.pem")
-	signer, err := service.LoadOrGenerateSigner(keyPath, service.DefaultSignKeyID)
-	if err != nil {
-		t.Fatalf("生成签名器失败: %v", err)
-	}
-	r := setupUpdaterConfigRouter(t, db, signer)
+	r := setupUpdaterConfigRouter(t, db)
 	token := getAdminToken(t, r)
 
 	w := makeRequest(r, "GET", "/api/v1/client-channels/nonexistent/updater-config", nil, token)
@@ -92,39 +78,15 @@ func TestGetUpdaterConfig_ChannelNotFound(t *testing.T) {
 // TestGetUpdaterConfig_NonAdminForbidden 非平台管理员 → 403。
 func TestGetUpdaterConfig_NonAdminForbidden(t *testing.T) {
 	db := setupTestDB(t)
-	keyPath := filepath.Join(t.TempDir(), "client-sign-key.pem")
-	signer, err := service.LoadOrGenerateSigner(keyPath, service.DefaultSignKeyID)
-	if err != nil {
-		t.Fatalf("生成签名器失败: %v", err)
-	}
 	if _, e := service.NewClientChannelService(db).CreateChannel("skyblock-s1", "空岛一服", ""); e != nil {
 		t.Fatalf("创建测试频道失败: %v", e)
 	}
-	r := setupUpdaterConfigRouter(t, db, signer)
+	r := setupUpdaterConfigRouter(t, db)
 	_ = getAdminToken(t, r) // 触发 setup 建库/首管理员
 	memberToken := getMemberToken(t, r, "bob", "password123")
 
 	w := makeRequest(r, "GET", "/api/v1/client-channels/skyblock-s1/updater-config", nil, memberToken)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("非管理员应 403，实际 %d: %s", w.Code, w.Body.String())
-	}
-}
-
-// TestGetUpdaterConfig_NilSigner503 signer 为 nil（未配置）→ 503。
-func TestGetUpdaterConfig_NilSigner503(t *testing.T) {
-	db := setupTestDB(t)
-	if _, e := service.NewClientChannelService(db).CreateChannel("skyblock-s1", "空岛一服", ""); e != nil {
-		t.Fatalf("创建测试频道失败: %v", e)
-	}
-	r := setupUpdaterConfigRouter(t, db, nil)
-	token := getAdminToken(t, r)
-
-	w := makeRequest(r, "GET", "/api/v1/client-channels/skyblock-s1/updater-config", nil, token)
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("nil signer 应 503，实际 %d: %s", w.Code, w.Body.String())
-	}
-	resp := parseJSON(t, w)
-	if resp["error"] != "SIGN_KEY_NOT_CONFIGURED" {
-		t.Fatalf("错误码应 SIGN_KEY_NOT_CONFIGURED，实得 %v", resp["error"])
 	}
 }

@@ -157,30 +157,8 @@ func main() {
 		slog.Warn("拉取密钥加密使用内置开发密钥（仅 dev_mode 生效），生产务必经 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入独立密钥")
 	}
 	clientChannelSvc.SetKeyEncryptor(keyEncryptor)
-	// 客户端分发版本与签名 manifest（FR-087/248，见 ADR-022/052、contract §2/§3）。
-	// 签名私钥来源三轨（优先级由高到低）：
-	//   1. env 注入（config.client_dist.sign_priv_key ← JIANMANAGER_CLIENT_SIGN_PRIVKEY）：用之，来源 env；
-	//   2. 生产未注入：自动生成 Ed25519 并持久化到数据根 etc/client-sign-key.pem（0600、跨重启稳定），来源 generated；
-	//   3. dev_mode 未注入：回退源码内置开发密钥（公钥已回填客户端），来源 dev。
-	// fail-closed 防线保留：生产态绝不回退源码公开的开发密钥对外签名，显式注入源码开发密钥仍被拒（ErrDevSignKeyInProd）。
-	// 生成/持久化失败或注入私钥非法 → fail-fast（信任根必须可用，配错快失败）。
-	signKeyPath := root.Abs("etc/client-sign-key.pem")
-	clientSigner, clientSignSource, err := service.ResolveManifestSignerWithAutogen(cfg.ClientDist.SignPrivKey, cfg.ClientDist.SignKeyID, cfg.Server.DevMode, signKeyPath)
-	if err != nil {
-		// 注入无效/误用开发密钥、或自动生成/持久化失败：配置或环境错误，fail-fast 让运维即时修正。
-		log.Fatalf("初始化客户端分发签名器失败: %v", err)
-	}
-	switch clientSignSource {
-	case service.SignKeySourceGenerated:
-		// 首次生成时打出公钥 + 提示运营者配入客户端 updater-core（ADR-052）。
-		if pub, perr := clientSigner.PublicKeySPKIBase64(); perr == nil {
-			slog.Info("已自动生成 OTA 签名密钥并持久化，请将下述公钥配入客户端 updater-core 的信任公钥",
-				"keyId", clientSigner.KeyID(), "publicKey", pub, "path", signKeyPath)
-		}
-	case service.SignKeySourceDev:
-		slog.Warn("客户端分发签名使用内置开发密钥（仅 dev_mode 生效），生产务必经 JIANMANAGER_CLIENT_SIGN_PRIVKEY 注入独立私钥")
-	}
-	clientVersionSvc := service.NewClientVersionService(db, assetSvc, clientChannelSvc, clientSigner)
+	// 客户端分发版本与 manifest 组装（FR-087 / FR-256 简化后：不再签名 manifest，信任靠 HTTPS + 拉取密钥鉴权）。
+	clientVersionSvc := service.NewClientVersionService(db, assetSvc, clientChannelSvc)
 	// updater-core 默认随 CP 内嵌、自动驱动 manifest agent.core，运营不管理（FR-193，见 ADR-045 改写）。
 	// 从内嵌 updater-core jar 算 sha256/size + 整数版本，注入版本服务 → BuildManifest 自动产出 agent.core；
 	// 并把内嵌 core 当作 client-file 制品入库（内容寻址去重），使其可经公网 client-artifacts 端点下发。
@@ -214,8 +192,6 @@ func main() {
 	defer clientDistTrackingSvc.Stop()
 	// 客户端分发端点 L7 防护（FR-096，见 ADR-023）：IP 黑白名单 + per-IP 限流 + 并发限制，规则运行时可改入审计。
 	clientIPGuardSvc := service.NewClientIPGuardService(db)
-	// 客户端分发 .jmpack 打包（FR-097，见 ADR-021/022）：复用已存制品 + Ed25519 签名，入库 type=client-pack。
-	jmPackSvc := service.NewJmPackService(assetSvc, clientVersionSvc, clientSigner)
 	// 客户端遥测（FR-094）：明细短保留 + 按 result 日聚合 + 后台滚动清理；端点 best-effort 202。
 	clientTelemetrySvc := service.NewClientTelemetryService(db)
 	clientTelemetrySvc.Start()
@@ -405,9 +381,6 @@ func main() {
 		ClientTelemetry:         clientTelemetrySvc,
 		ClientDistStats:         clientDistStatsSvc,
 		ClientDistObservability: clientDistObsSvc,
-		ClientSignKey:           clientSigner,
-		ClientSignKeySrc:        clientSignSource,
-		JmPack:                  jmPackSvc,
 		RuntimeAssets:           runtimeAssetsSvc,
 		EnrollToken:             enrollTokenSvc,
 		EnrollInstall: router.EnrollInstallConfig{
