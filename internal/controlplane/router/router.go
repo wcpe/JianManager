@@ -337,6 +337,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 生产未注入即自动生成，正常不为 nil。限平台管理员；只暴露公钥，私钥绝不出服务端。
 		NewClientSignKeyHandler(svcs.ClientSignKey, svcs.ClientSignKeySrc).RegisterRoutes(admin)
 
+		// jm-updater.json 一键生成端点（FR-253，见 ADR-053）：按频道生成带本机签名公钥的完整配置，
+		// 运营者直接下载放入整合包即建立客户端信任根——无需改源码重编 updater-core。
+		// 限平台管理员；依赖频道服务（校验存在）+ 签名器（取公钥）。
+		if svcs.ClientChannel != nil {
+			NewClientUpdaterConfigHandler(svcs.ClientChannel, svcs.ClientSignKey).RegisterRoutes(admin)
+		}
+
 		// 客户端分发大文件分块上传（init→chunk→complete，支持 4G+ 文件）：运营操作，限平台管理员
 		// （FR-251，增强 FR-088）。与单次上传 POST /files 同鉴权组、落同一 CAS；独立 handler 不改 client_version.go。
 		if svcs.ClientChunkUpload != nil && svcs.ClientChannel != nil {
