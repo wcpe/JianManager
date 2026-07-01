@@ -1892,7 +1892,10 @@
     "copy": "Copy",
     "copied": "Copied",
     "copyFailed": "Copy failed",
-    "downloadFailed": "Download failed (jar may not be embedded)"
+    "downloadFailed": "Download failed (jar may not be embedded)",
+    "downloadConfig": "Download jm-updater.json",
+    "signPublicKeyHint": "Includes this server's signing public key — distribute with the modpack to establish trust, no client source changes needed.",
+    "signPublicKeyPlaceholder": "<copy from the signing public key card>"
   },
   "clientDistFlow": {
     "title": "How does distribution work?",

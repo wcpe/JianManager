@@ -4,7 +4,8 @@ import { toast } from 'sonner'
 import { Copy, Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { copyToClipboard } from '@/lib/clipboard'
-import { useUpdaterJarsInfo, downloadUpdaterJar } from '@/api/clientChannels'
+import { useUpdaterJarsInfo, downloadUpdaterJar, downloadUpdaterConfig } from '@/api/clientChannels'
+import { useClientSignKey } from '@/api/clientDistSignKey'
 
 /**
  * 客户端更新器接入指引（FR-107）。面向运营方：在频道详情一页拿齐——下载更新器两件套、
@@ -13,8 +14,9 @@ import { useUpdaterJarsInfo, downloadUpdaterJar } from '@/api/clientChannels'
 export default function ClientIntegrationGuide({ channelId }: { channelId: string }) {
   const { t } = useTranslation()
   const { data: jars } = useUpdaterJarsInfo()
+  const { data: signKey } = useClientSignKey()
   const [endpoint, setEndpoint] = useState(`${window.location.origin}/api/v1`)
-  const [downloading, setDownloading] = useState<'wedge' | 'core' | null>(null)
+  const [downloading, setDownloading] = useState<'wedge' | 'core' | 'config' | null>(null)
 
   const jmUpdaterJson = JSON.stringify(
     {
@@ -26,6 +28,8 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
       telemetry: true,
       bootConfirmSec: 5,
       coreVersion: 0,
+      signPublicKey: signKey?.publicKey ?? t('clientGuide.signPublicKeyPlaceholder', '<从面板签名公钥卡片复制>'),
+      signKeyId: signKey?.keyId ?? 'k1',
     },
     null,
     2,
@@ -38,10 +42,14 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
     else toast.error(t('clientGuide.copyFailed', '复制失败'))
   }
 
-  const download = async (comp: 'wedge' | 'core') => {
+  const download = async (comp: 'wedge' | 'core' | 'config') => {
     setDownloading(comp)
     try {
-      await downloadUpdaterJar(comp)
+      if (comp === 'config') {
+        await downloadUpdaterConfig(channelId)
+      } else {
+        await downloadUpdaterJar(comp)
+      }
     } catch {
       toast.error(t('clientGuide.downloadFailed', '下载失败（jar 可能未内嵌）'))
     } finally {
@@ -121,6 +129,22 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
             onChange={(e) => setEndpoint(e.target.value)}
           />
         </label>
+        <div className="flex flex-wrap items-center gap-2 mt-3">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={downloading === 'config'}
+            onClick={() => download('config')}
+          >
+            <Download className="size-4 mr-1" /> {t('clientGuide.downloadConfig', '下载 jm-updater.json')}
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {t(
+              'clientGuide.signPublicKeyHint',
+              '含本机签名公钥，随整合包分发即建立信任，无需改客户端源码。',
+            )}
+          </span>
+        </div>
         <CodeBlock text={jmUpdaterJson} onCopy={copy} t={t} />
       </Step>
 

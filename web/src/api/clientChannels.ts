@@ -194,3 +194,20 @@ export async function downloadUpdaterJar(component: 'wedge' | 'core'): Promise<v
   a.click()
   URL.revokeObjectURL(url)
 }
+
+/**
+ * 下载带本机签名公钥的 jm-updater.json（FR-253，见 ADR-053）。
+ * 调 CP 端点 GET /client-channels/:id/updater-config 取完整配置（含 signPublicKey/signKeyId），
+ * 序列化为 JSON 触发浏览器下载。运营者直接放入整合包即建立客户端信任根——无需改源码重编。
+ */
+export async function downloadUpdaterConfig(channelId: string): Promise<void> {
+  const { data } = await api.get<Record<string, unknown>>(`/client-channels/${channelId}/updater-config`)
+  const json = JSON.stringify(data, null, 2)
+  const blob = new Blob([json], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'jm-updater.json'
+  a.click()
+  URL.revokeObjectURL(url)
+}

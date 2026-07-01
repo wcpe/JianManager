@@ -1871,7 +1871,10 @@
     "copy": "复制",
     "copied": "已复制",
     "copyFailed": "复制失败",
-    "downloadFailed": "下载失败（jar 可能未内嵌）"
+    "downloadFailed": "下载失败（jar 可能未内嵌）",
+    "downloadConfig": "下载 jm-updater.json",
+    "signPublicKeyHint": "含本机签名公钥，随整合包分发即建立信任，无需改客户端源码。",
+    "signPublicKeyPlaceholder": "<从面板签名公钥卡片复制>"
   },
   "clientDistFlow": {
     "title": "分发是怎么跑起来的？",

@@ -716,6 +716,25 @@ export const handlers = [
     })
   }),
 
+  // jm-updater.json 一键生成（FR-253，见 ADR-053）：按频道返回带本机签名公钥的完整配置。
+  domainRoute('get', '/client-channels/:channelId/updater-config', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const base = new URL(info.request.url).origin
+    return HttpResponse.json({
+      channel: String(info.params.channelId),
+      key: '',
+      endpoint: `${base}/api/v1`,
+      coreJar: 'updater-core.jar',
+      timeoutSec: 120,
+      telemetry: true,
+      bootConfirmSec: 30,
+      coreVersion: 0,
+      signPublicKey: 'MCowBQYDK2VwAyEAsO7B/k+2++wQtN/L0jpCXCjsGnYV5Sx2eyCk0pDzV0Y=',
+      signKeyId: 'k1',
+    })
+  }),
+
   // 下载更新器 jar（FR-107）：返回二进制占位流。
   domainRoute('get', '/client-dist/updater-jars/:component', (info) => {
     const denied = requireAuth(info)
