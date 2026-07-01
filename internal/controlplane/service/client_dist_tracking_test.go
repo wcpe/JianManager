@@ -98,3 +98,54 @@ func TestClientDistTracking_QueryEventsFilters(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, byKind, 2)
 }
+
+// TestClientDistTracking_RecordPersistsErrCode 失败事件写入语义错误码（FR-249）。
+func TestClientDistTracking_RecordPersistsErrCode(t *testing.T) {
+	db := newTrackingDB(t)
+	svc := NewClientDistTrackingService(db)
+	require.NoError(t, svc.Record(ClientDistEventInput{
+		ChannelID: "ch1", Kind: "manifest", Version: 0, Status: 404, ErrCode: "NO_LATEST_VERSION",
+	}))
+
+	var ev model.ClientDistEvent
+	require.NoError(t, db.First(&ev).Error)
+	require.Equal(t, "NO_LATEST_VERSION", ev.ErrCode, "失败事件应保留错误码")
+}
+
+// TestClientDistTracking_QueryOutcomeAndErrCode 按 outcome（成功/失败）+ errCode 精确筛（FR-249）。
+// 失败⟺status>=400；成功⟺status>0 且 <400（含 304/200/206）。
+func TestClientDistTracking_QueryOutcomeAndErrCode(t *testing.T) {
+	db := newTrackingDB(t)
+	svc := NewClientDistTrackingService(db)
+	// 成功事件：200、304。
+	require.NoError(t, svc.Record(ClientDistEventInput{ChannelID: "ch1", Kind: "manifest", Version: 1, Status: 200}))
+	require.NoError(t, svc.Record(ClientDistEventInput{ChannelID: "ch1", Kind: "manifest", Version: 1, Status: 304}))
+	// 失败事件：401（无效密钥）、404（无版本）。
+	require.NoError(t, svc.Record(ClientDistEventInput{ChannelID: "ch1", Kind: "manifest", Status: 401, ErrCode: "INVALID_CLIENT_KEY"}))
+	require.NoError(t, svc.Record(ClientDistEventInput{ChannelID: "ch1", Kind: "manifest", Status: 404, ErrCode: "NO_LATEST_VERSION"}))
+
+	failures, err := svc.QueryEvents(ClientDistEventFilter{Outcome: "failure"})
+	require.NoError(t, err)
+	require.Len(t, failures, 2, "outcome=failure 只返 status>=400")
+	for _, e := range failures {
+		require.GreaterOrEqual(t, e.Status, 400)
+	}
+
+	successes, err := svc.QueryEvents(ClientDistEventFilter{Outcome: "success"})
+	require.NoError(t, err)
+	require.Len(t, successes, 2, "outcome=success 只返 0<status<400（含 304）")
+	for _, e := range successes {
+		require.Greater(t, e.Status, 0)
+		require.Less(t, e.Status, 400)
+	}
+
+	byCode, err := svc.QueryEvents(ClientDistEventFilter{ErrCode: "INVALID_CLIENT_KEY"})
+	require.NoError(t, err)
+	require.Len(t, byCode, 1, "errCode 精确筛")
+	require.Equal(t, "INVALID_CLIENT_KEY", byCode[0].ErrCode)
+
+	// outcome 空 → 不约束（返全部）。
+	all, err := svc.QueryEvents(ClientDistEventFilter{})
+	require.NoError(t, err)
+	require.Len(t, all, 4)
+}

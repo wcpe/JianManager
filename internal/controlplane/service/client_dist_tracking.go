@@ -41,7 +41,9 @@ type ClientDistEventInput struct {
 	ArtifactSHA string
 	Bytes       int64
 	Status      int
-	DurationMs  int64
+	// ErrCode 语义错误码（FR-249）；成功事件留空。
+	ErrCode    string
+	DurationMs int64
 }
 
 // Record 记录一次拉取/下载事件：写明细 + 写时增量 upsert 当日聚合。best-effort（失败不阻断）。
@@ -63,6 +65,7 @@ func (s *ClientDistTrackingService) Record(e ClientDistEventInput) error {
 		ArtifactSHA: e.ArtifactSHA,
 		Bytes:       e.Bytes,
 		Status:      e.Status,
+		ErrCode:     e.ErrCode,
 		DurationMs:  e.DurationMs,
 		CreatedAt:   now,
 	}
@@ -109,16 +112,20 @@ func (s *ClientDistTrackingService) Stop() {
 	close(s.stop)
 }
 
-// ClientDistEventFilter 明细检索过滤条件（FR-093 检索）。空字段不约束。
+// ClientDistEventFilter 明细检索过滤条件（FR-093 检索；FR-249 增 Outcome/ErrCode）。空字段不约束。
 type ClientDistEventFilter struct {
 	ChannelID string
 	MachineID string
 	IP        string
 	Kind      string
-	Version   *int
-	Since     *time.Time
-	Until     *time.Time
-	Limit     int
+	// Outcome 成功/失败维度（FR-249）："success"（0<status<400，含 200/206/304）| "failure"（status>=400）| ""（不约束）。
+	Outcome string
+	// ErrCode 语义错误码精确筛（FR-249）。
+	ErrCode string
+	Version *int
+	Since   *time.Time
+	Until   *time.Time
+	Limit   int
 }
 
 // QueryEvents 按条件检索明细（created_at DESC）。供管理面追溯（IP/机器码/频道/版本/时间）。
@@ -135,6 +142,16 @@ func (s *ClientDistTrackingService) QueryEvents(f ClientDistEventFilter) ([]mode
 	}
 	if f.Kind != "" {
 		q = q.Where("kind = ?", f.Kind)
+	}
+	// 成功/失败维度（FR-249）：failure⟺status>=400；success⟺0<status<400（含 304/200/206）。
+	switch f.Outcome {
+	case "failure":
+		q = q.Where("status >= ?", 400)
+	case "success":
+		q = q.Where("status > 0 AND status < ?", 400)
+	}
+	if f.ErrCode != "" {
+		q = q.Where("err_code = ?", f.ErrCode)
 	}
 	if f.Version != nil {
 		q = q.Where("version = ?", *f.Version)

@@ -23,6 +23,9 @@ type ClientDistEvent struct {
 	Bytes int64 `gorm:"default:0;not null" json:"bytes"`
 	// Status HTTP 状态码（200/206/304/404…）。
 	Status int `gorm:"default:0;not null" json:"status"`
+	// ErrCode 语义错误码（FR-249）。成功事件为空；失败事件填与响应 error 字段一致的码
+	// （INVALID_CLIENT_KEY/NO_LATEST_VERSION/ARTIFACT_NOT_FOUND/SIGN_KEY_NOT_CONFIGURED/CHANNEL_NOT_FOUND/INTERNAL_ERROR）。
+	ErrCode string `gorm:"column:err_code;type:varchar(48);index" json:"errCode"`
 	// DurationMs 处理耗时（毫秒）。
 	DurationMs int64 `gorm:"column:duration_ms;default:0;not null" json:"durationMs"`
 	// CreatedAt 事件时间（清理基准）。

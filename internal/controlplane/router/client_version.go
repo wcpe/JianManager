@@ -261,11 +261,27 @@ func (h *ClientVersionHandler) DownloadArtifact(c *gin.Context) {
 // 缓存：ETag=version:keyId、Cache-Control 短缓存（CDN 友好）；If-None-Match 命中返回 304（contract §4.1）。
 func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 	channelID := c.Param("id")
-	if !h.authChannelKey(c, channelID) {
-		return
-	}
 	start := time.Now()
 	mid := c.GetHeader(machineIDHeader)
+
+	// 拉取追踪（FR-093/249）：defer 前置到鉴权之前注册，闭包捕获最终 status/errCode——
+	// 鉴权失败(401)也记事件（此前漏记）。best-effort、不阻断玩家。
+	manifestVersion := 0
+	errCode := ""
+	defer func() {
+		if h.tracking != nil {
+			_ = h.tracking.Record(service.ClientDistEventInput{
+				ChannelID: channelID, MachineID: mid, IP: c.ClientIP(), Kind: "manifest",
+				Version: manifestVersion, Bytes: int64(c.Writer.Size()), Status: c.Writer.Status(),
+				ErrCode: errCode, DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
+	if ec, ok := h.authChannelKey(c, channelID); !ok {
+		errCode = ec
+		return
+	}
 
 	// 机器码登记（FR-092）：鉴权通过后若携带 X-Machine-Id 则 best-effort upsert（弱一致、失败不阻断）。
 	// 机器码不可信，仅统计/辅助限流（限流主键为 IP，FR-096）。
@@ -273,21 +289,9 @@ func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 		_ = h.machine.Record(channelID, mid)
 	}
 
-	// 拉取追踪（FR-093）：响应写出后记录 version/bytes/status/耗时（best-effort、不阻断）。
-	manifestVersion := 0
-	defer func() {
-		if h.tracking != nil {
-			_ = h.tracking.Record(service.ClientDistEventInput{
-				ChannelID: channelID, MachineID: mid, IP: c.ClientIP(), Kind: "manifest",
-				Version: manifestVersion, Bytes: int64(c.Writer.Size()), Status: c.Writer.Status(),
-				DurationMs: time.Since(start).Milliseconds(),
-			})
-		}
-	}()
-
 	manifest, err := h.svc.BuildManifest(channelID)
 	if err != nil {
-		h.respondConsumerErr(c, err)
+		errCode = h.respondConsumerErr(c, err)
 		return
 	}
 	manifestVersion = manifest.Version
@@ -311,37 +315,45 @@ func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 // 鉴权：X-Client-Key 经 VerifyAnyKey 校验（路径无频道段；制品跨频道共享，任一有效密钥授权路由）。
 // 分发：http.ServeContent 自动处理 Range/If-Range（206 部分内容、416 越界）+ 强缓存（内容寻址不可变）。
 func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
-	channelID, ok := h.authAnyKey(c)
-	if !ok {
-		return
-	}
 	sha := c.Param("sha256")
 	start := time.Now()
-	// 下载追踪（FR-093）：响应写出后记录字节/状态/耗时（best-effort、不阻断）。
-	// 频道取自密钥归属（URL 内容寻址、不带频道），使下载量/字节可按频道统计。
+	// 下载追踪（FR-093/249）：defer 前置到鉴权之前，闭包捕获最终 status/errCode——鉴权失败(401)也记事件。
+	// 频道取自密钥归属（URL 内容寻址、不带频道）；鉴权失败时频道未知，ChannelID 记空可接受。best-effort、不阻断。
+	channelID := ""
+	errCode := ""
 	defer func() {
 		if h.tracking != nil {
 			_ = h.tracking.Record(service.ClientDistEventInput{
 				ChannelID: channelID, MachineID: c.GetHeader(machineIDHeader), IP: c.ClientIP(),
 				Kind: "artifact", ArtifactSHA: sha, Bytes: int64(c.Writer.Size()),
-				Status: c.Writer.Status(), DurationMs: time.Since(start).Milliseconds(),
+				Status: c.Writer.Status(), ErrCode: errCode, DurationMs: time.Since(start).Milliseconds(),
 			})
 		}
 	}()
+
+	ch, ec, ok := h.authAnyKey(c)
+	if !ok {
+		errCode = ec
+		return
+	}
+	channelID = ch
+
 	asset, absPath, err := h.svc.OpenArtifact(sha)
 	if err != nil {
-		h.respondConsumerErr(c, err)
+		errCode = h.respondConsumerErr(c, err)
 		return
 	}
 
 	f, oerr := os.Open(absPath)
 	if oerr != nil {
+		errCode = "ARTIFACT_NOT_FOUND"
 		c.JSON(http.StatusNotFound, gin.H{"error": "ARTIFACT_NOT_FOUND", "message": "制品文件缺失"})
 		return
 	}
 	defer f.Close()
 	stat, serr := f.Stat()
 	if serr != nil {
+		errCode = "INTERNAL_ERROR"
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "读取制品失败"})
 		return
 	}
@@ -361,36 +373,37 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 
 // ---- 鉴权辅助 ----
 
-// authChannelKey 校验请求头 X-Client-Key 绑定指定频道；失败已写响应并返回 false。
-func (h *ClientVersionHandler) authChannelKey(c *gin.Context, channelID string) bool {
+// authChannelKey 校验请求头 X-Client-Key 绑定指定频道；失败已写响应并返回 (错误码, false)。
+// 成功返回 ("", true)。错误码供调用方记入追踪事件（FR-249）。
+func (h *ClientVersionHandler) authChannelKey(c *gin.Context, channelID string) (string, bool) {
 	plaintext := c.GetHeader(clientKeyHeader)
 	if _, err := h.channel.VerifyKey(channelID, plaintext); err != nil {
-		h.respondKeyAuthErr(c, err)
-		return false
+		return h.respondKeyAuthErr(c, err), false
 	}
-	return true
+	return "", true
 }
 
-// authAnyKey 校验请求头 X-Client-Key 为任一有效密钥（不绑定频道）；失败已写响应并返回 false。
+// authAnyKey 校验请求头 X-Client-Key 为任一有效密钥（不绑定频道）；失败已写响应并返回 (频道空, 错误码, false)。
 // 成功时返回密钥所属频道 ID——制品下载 URL 内容寻址、不带频道，靠密钥归属频道以供按频道统计（FR-093/095）。
-func (h *ClientVersionHandler) authAnyKey(c *gin.Context) (string, bool) {
+// 错误码供调用方记入追踪事件（FR-249；鉴权失败时频道未知，事件 ChannelID 记空可接受）。
+func (h *ClientVersionHandler) authAnyKey(c *gin.Context) (channelID, errCode string, ok bool) {
 	plaintext := c.GetHeader(clientKeyHeader)
 	key, err := h.channel.VerifyAnyKey(plaintext)
 	if err != nil {
-		h.respondKeyAuthErr(c, err)
-		return "", false
+		return "", h.respondKeyAuthErr(c, err), false
 	}
-	return key.ChannelID, true
+	return key.ChannelID, "", true
 }
 
-// respondKeyAuthErr 统一拉取密钥鉴权失败响应（不区分缺失/吊销/过期，避免泄露密钥状态）。
-func (h *ClientVersionHandler) respondKeyAuthErr(c *gin.Context, err error) {
+// respondKeyAuthErr 统一拉取密钥鉴权失败响应（不区分缺失/吊销/过期，避免泄露密钥状态）；返回所写错误码（FR-249）。
+func (h *ClientVersionHandler) respondKeyAuthErr(c *gin.Context, err error) string {
 	if errors.Is(err, service.ErrPullKeyInvalid) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "INVALID_CLIENT_KEY", "message": "拉取密钥无效"})
-		return
+		return "INVALID_CLIENT_KEY"
 	}
 	slog.Error("客户端分发鉴权失败", "channel", c.Param("id"), "error", err)
 	c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "鉴权失败"})
+	return "INTERNAL_ERROR"
 }
 
 // respondErr 发布端点错误映射（频道/清单/制品）。
@@ -413,21 +426,26 @@ func (h *ClientVersionHandler) respondErr(c *gin.Context, err error) {
 	}
 }
 
-// respondConsumerErr 消费端点错误映射（manifest/制品；鉴权已先行通过）。
-func (h *ClientVersionHandler) respondConsumerErr(c *gin.Context, err error) {
+// respondConsumerErr 消费端点错误映射（manifest/制品；鉴权已先行通过）；返回所写错误码供追踪（FR-249）。
+func (h *ClientVersionHandler) respondConsumerErr(c *gin.Context, err error) string {
 	switch {
 	case errors.Is(err, service.ErrChannelNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "CHANNEL_NOT_FOUND", "message": "频道不存在"})
+		return "CHANNEL_NOT_FOUND"
 	case errors.Is(err, service.ErrNoLatestVersion):
 		c.JSON(http.StatusNotFound, gin.H{"error": "NO_LATEST_VERSION", "message": "频道尚未发布版本"})
+		return "NO_LATEST_VERSION"
 	case errors.Is(err, service.ErrAssetNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "ARTIFACT_NOT_FOUND", "message": "制品不存在"})
+		return "ARTIFACT_NOT_FOUND"
 	case errors.Is(err, service.ErrSignKeyNotConfigured):
 		slog.Warn("manifest 签名私钥未配置，OTA 不可用", "channel", c.Param("id"), "path", c.Request.URL.Path)
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "SIGN_KEY_NOT_CONFIGURED", "message": "签名私钥未配置，OTA 分发不可用"})
+		return "SIGN_KEY_NOT_CONFIGURED"
 	default:
 		slog.Error("客户端分发消费端点内部错误", "path", c.Request.URL.Path, "channel", c.Param("id"), "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "操作失败"})
+		return "INTERNAL_ERROR"
 	}
 }
 
@@ -442,8 +460,8 @@ func (h *ClientVersionHandler) recordAudit(c *gin.Context, action string, detail
 	_ = h.audit.Record(id, action, "client_channel", "", string(raw), c.ClientIP())
 }
 
-// ListEvents GET /client-dist/events — 拉取/下载明细检索（运营，平台管理员；FR-093）。
-// 按 channelId/machineId/ip/kind/version/since/until/limit 过滤，created_at DESC。
+// ListEvents GET /client-dist/events — 拉取/下载明细检索（运营，平台管理员；FR-093/249）。
+// 按 channelId/machineId/ip/kind/outcome/errCode/version/since/until/limit 过滤，created_at DESC。
 func (h *ClientVersionHandler) ListEvents(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -457,6 +475,8 @@ func (h *ClientVersionHandler) ListEvents(c *gin.Context) {
 		MachineID: c.Query("machineId"),
 		IP:        c.Query("ip"),
 		Kind:      c.Query("kind"),
+		Outcome:   c.Query("outcome"),
+		ErrCode:   c.Query("errCode"),
 	}
 	if v := c.Query("version"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
