@@ -1,8 +1,9 @@
 # ADR-038: 客户端签名私钥缺失时降级启动而非阻断（细化 ADR-022 fail-closed 粒度）
 
 - **日期**: 2026-06-27
-- **状态**: accepted
+- **状态**: superseded-by [ADR-052](052-client-sign-key-autogen.md)
 - **关系**: 细化（refines）[ADR-022](022-client-manifest-trust-and-public-endpoint.md) 的「实施补充（签名密钥 fail-closed 强化）」；不取代 ADR-022 任何核心决策。
+- **被取代说明**: 本 ADR 的「生产态未注入签名私钥 → **降级启动**（签名器 nil、OTA 不可用）」已由 [ADR-052](052-client-sign-key-autogen.md) 改为「未注入 → **自动生成并持久化密钥**、启用签名」（FR-248）。运维门槛消除、OTA 从第一天可用且可信；信任根安全不削弱（密钥每部署独立、`0600`、私钥永不出服务端、生产拒源码开发密钥防线保留）。ADR-038 的「注入无效/误用开发密钥 → 仍拒绝启动」在 ADR-052 下延续为 fail-fast。以下正文保留作历史决策记录。
 
 ## 上下文
 
