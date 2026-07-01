@@ -302,6 +302,9 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-250 | 客户端分发发布编排器重做：拖拽多文件/文件夹到浏览器 → 前端本地预览文件树 → 可调整层级/sync 模式 → 点击发布才批量上传到 CP（非逐个上传节省带宽）；消费 FR-251 分块上传（增强 FR-191，需 spec，依赖 FR-251） | P1 | 🔨 开发中 |
 | FR-251 | 大文件分块上传端点 + 进度展示：后端新增分块上传协议（init→chunk→complete），前端分片上传 + 实时进度条，支持 4G+ 文件（增强 FR-088，需 spec：新 API 协议）→ `docs/specs/client-chunked-upload/spec.md` | P1 | 🔨 开发中 |
 | FR-252 | 客户端分发术语大白话化：sync 模式（覆盖/仅一次/忽略）加大白话解释、"托管目录"等术语改为运营能看懂的措辞、发布步骤每页加大白话说明（增强 FR-194，免 spec） | P2 | 🔨 开发中 |
+| FR-253 | OTA 客户端信任公钥运行期可配：updater-core 从 jm-updater.json 读信任公钥（缺省回退内置 dev 公钥），CP 一键生成带本机公钥的 jm-updater.json + 接入指引更新（补 FR-248/FR-107 缺口——面板自动生成的公钥此前无处填入客户端；修订 ADR-022 信任模型，需 spec + ADR）→ `docs/specs/client-trust-key-config/spec.md` | P1 | 📋 计划 |
+| FR-254 | 客户端分发发布页文件树拖拽编排：configure 步支持拖拽移动文件/目录节点改目标路径（增强 FR-191/250，FR-191 曾列增强未做，免 spec） | P2 | 📋 计划 |
+| FR-255 | 客户端分发清理范围编辑器：managedDirs 改多级目录树勾选（支持深层嵌套目录）+ 可选「清空整个 gameDir」（除内置玩家区安全清单 + 运营自定义追加排除；需客户端 clean-all 语义 + 服务端 manifest）（增强 FR-191/088，需 spec）→ `docs/specs/client-dist-clean-scope/spec.md` | P1 | 📋 计划 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
