@@ -1969,29 +1969,26 @@
 - **审计**: `client_key.revoke`
 
 ### GET /api/v1/client-channels/:id/updater-config
-- **描述**: 按频道生成带本机签名公钥的 `jm-updater.json`（FR-253，见 ADR-053）。返回完整配置字段，运营者直接下载放入整合包即建立客户端信任根——无需改源码重编 updater-core。复用 FR-248 签名器公钥；**只暴露公钥**（私钥绝不出服务端）。`endpoint` 按 CP 请求推断公网基址预填（可改）；`key` 留空占位由运营粘贴拉取密钥
-- **关联 FR**: FR-253
+- **描述**: 按频道生成 `jm-updater.json`（FR-259，见 ADR-054）。返回完整配置字段，运营者直接下载放入整合包。FR-256 起不再含签名公钥（验签已去，信任靠 HTTPS + 拉取密钥鉴权，推翻 ADR-022/053）；`coreEndpoint` 供楔子首次启动自动拉取 updater-core（gradle-wrapper 模式，FR-258）。`endpoint` 按 CP 请求推断公网基址预填（可改）；`key` 留空占位由运营粘贴拉取密钥
+- **关联 FR**: FR-259、FR-258
 - **鉴权**: **JWT，平台管理员**
 - **响应** (200):
   ```json
   { "channel": "skyblock-s1", "key": "", "endpoint": "https://cdn.example.com/api/v1",
-    "coreJar": "updater-core.jar", "timeoutSec": 120, "telemetry": true,
-    "bootConfirmSec": 30, "coreVersion": 0,
-    "signPublicKey": "MCowBQYDK2Vw…（X.509 SPKI DER base64）", "signKeyId": "k1" }
+    "coreEndpoint": "https://cdn.example.com/api/v1/client-channels/skyblock-s1/updater-core",
+    "timeoutSec": 120, "telemetry": true, "bootConfirmSec": 30 }
   ```
-- **错误**: 403 `FORBIDDEN`（非平台管理员）| 404 `CHANNEL_NOT_FOUND` | 503 `SIGN_KEY_NOT_CONFIGURED`（签名器未配置）
+- **错误**: 403 `FORBIDDEN`（非平台管理员）| 404 `CHANNEL_NOT_FOUND`
 
 ---
 
 ## 客户端分发 manifest 与制品（FR-087/088）
 
-> **鉴权分两组、物理隔离（ADR-022/023、contract §4）**：
+> **鉴权分两组、物理隔离（ADR-022/023、contract §4；信任模型见 [ADR-054](../adr/054-updater-arch-simplification.md)）**：
 > - **发布/版本管理端点**（运营操作）：`/api/v1` JWT，**仅平台管理员**（同频道管理 FR-086）。`POST .../files`、`POST .../versions`、`GET .../versions`、`GET .../versions/:version`、`POST .../rollback`。
-> - **消费端点**（玩家）：**拉取密钥**鉴权（请求头 `X-Client-Key`，无 JWT），与运营浏览器入口隔离。`GET .../manifest`、`GET /client-artifacts/:sha256`。
+> - **消费端点**（玩家）：**拉取密钥**鉴权（请求头 `X-Client-Key`，无 JWT），与运营浏览器入口隔离。`GET .../manifest`、`GET /client-artifacts/:sha256`、`GET .../updater-core`。
 >
-> 理由：拉取密钥半公开（随整包分发必然泄露），用它鉴权「发布」=严重漏洞；内容可信靠 manifest 的 Ed25519 签名而非密钥。**版本历史仅管理面可见，玩家侧只认 latest**（FR-088）。
->
-> **签名密钥来源三轨（ADR-022 实施补充，粒度细化见 ADR-038，供给策略由 ADR-052 修订）**：优先级 **env 注入 > 生产自动生成 > dev 回退**。生产态（`dev_mode=false`）**未注入** `JIANMANAGER_CLIENT_SIGN_PRIVKEY` → Control Plane **自动生成 Ed25519 密钥对并持久化**到 `<dataRoot>/etc/client-sign-key.pem`（0600，跨重启用同一密钥），OTA 即启用；公钥经 `GET /client-dist/sign-key` 展示供配到客户端 updater-core（FR-248）。**误把源码公开的内置开发密钥贴进 env** → **拒绝启动**（配置错误快失败）；自动生成 / 持久化失败亦**拒绝启动**（信任根必须可用）。绝不用源码公开的开发密钥对外签 manifest；仅 `dev_mode=true` 零配置回退开发密钥。部署见 `docs/DEPLOY.md`。
+> 理由：拉取密钥半公开（随整包分发必然泄露），用它鉴权「发布」=严重漏洞。FR-256 起去掉 manifest Ed25519 验签（推翻 ADR-022/053）——私钥在服务器上验签形同虚设（服务器被攻破即私钥泄露），信任靠 **HTTPS + 拉取密钥鉴权 + sha256 完整性校验**。**版本历史仅管理面可见，玩家侧只认 latest**（FR-088）。
 
 ### POST /api/v1/client-channels/:id/files
 - **描述**: 上传客户端文件制品（入 FR-045 制品库 `type=client-file`，按制品自身 sha256 内容寻址去重）。返回的 `sha256` 即 manifest `files[].artifact.sha256`
@@ -2100,13 +2097,6 @@
 - **查询参数**: `channelId` / `machineId` / `ip` / `kind`(manifest|artifact) / `outcome`(success|failure，空=全部；failure⟺status≥400，success⟺0<status<400 含 200/206/304) / `errCode`(精确筛，如 `INVALID_CLIENT_KEY`) / `version` / `since`(RFC3339) / `until`(RFC3339) / `limit`(默认 200，上限 1000)
 - **响应** (200): `[ { "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "errCode", "durationMs", "createdAt" } ]`（created_at DESC）。`errCode` 成功事件为空、失败事件填语义码（`INVALID_CLIENT_KEY`/`NO_LATEST_VERSION`/`ARTIFACT_NOT_FOUND`/`SIGN_KEY_NOT_CONFIGURED`/`CHANNEL_NOT_FOUND`/`INTERNAL_ERROR`）
 
-### GET /api/v1/client-dist/sign-key
-- **描述**: 返回客户端 OTA manifest 的签名**公钥** + keyId + 来源，供运营者配到客户端 updater-core 的信任公钥（FR-248，见 ADR-052）。**只读、只暴露公钥**——信任根私钥绝不出服务端
-- **关联 FR**: FR-248
-- **鉴权**: **JWT，平台管理员**
-- **响应** (200): `{ "publicKey": "MCowBQYDK2Vw…（X.509 SPKI DER 的 base64）", "keyId": "k1", "source": "env" | "generated" | "dev" }`（`source`：`env`=env 注入私钥 / `generated`=生产未注入时自动生成并持久化 / `dev`=开发态内置密钥）
-- **错误**: 403 `FORBIDDEN`（非平台管理员）| 503 `SIGN_KEY_NOT_CONFIGURED`（签名器不可用；生产已自动生成，正常态不达）
-
 ### GET /api/v1/client-dist/ip-rules
 - **描述**: 列出分发端点 IP 防护规则（FR-096 L7 防护）
 - **关联 FR**: FR-096 | **鉴权**: **JWT，平台管理员**
@@ -2171,12 +2161,12 @@
 - **错误**: 400 `INVALID_COMPONENT`（非 wedge/core）| 404 `JAR_NOT_EMBEDDED`（构建未 `make embed-client-updater`）
 
 ### GET /api/v1/client-channels/:id/manifest
-- **描述**: 返回频道 **latest** 的**签名 manifest**（contract §2）。只提供当前版本，不暴露历史。`agent.core` 由**频道 core pin 驱动**（FR-193，见 ADR-045）——取代发布时手填透传；无任何已登记 core 版本时回退手填透传（兼容）。`agent.wedge` 仍来自发布快照（楔子冻结、信息性）
-- **关联 FR**: FR-087、FR-092（机器码登记）、FR-193（`agent.core` 由 pin 驱动）
+- **描述**: 返回频道 **latest** 的 manifest（contract §2；FR-256 起去 `sig` 段不再验签，见 [ADR-054](../adr/054-updater-arch-simplification.md)）。只提供当前版本，不暴露历史。`agent.core` 由频道选定 updater-core 版本驱动（FR-259，见 ADR-054 修订 ADR-045）；无选定版本时回退手填透传（兼容）。`agent.wedge` 仍来自发布快照（楔子冻结、信息性）
+- **关联 FR**: FR-087、FR-092（机器码登记）、FR-259（`agent.core` 由选定 core 版本驱动）
 - **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必）；`X-Machine-Id`（可，机器码统计/辅助限流）。**无 JWT**
 - **机器码登记（FR-092）**: 鉴权通过后若 `X-Machine-Id` 非空，则 best-effort 登记入 `client_machines`（弱一致、失败不阻断）。机器码**客户端生成、不可信**，仅统计 + 辅助限流（限流主键 IP，FR-096），**不作授权依据**
-- **响应** (200): contract §2 的签名 manifest（含 `sig.alg=Ed25519`、`sig.keyId`、`sig.value`）
-  - Headers：`ETag: "<version>:<keyId>"`、`Cache-Control: no-cache`（弱缓存，靠 ETag 命中省传输）
+- **响应** (200): contract §2 的 manifest（去 `sig` 段）
+  - Headers：`ETag: "<version>"`、`Cache-Control: no-cache`（弱缓存，靠 ETag 命中省传输）
 - **响应** (304): `If-None-Match` 命中 ETag（Not Modified）
 - **错误**: 401 `INVALID_CLIENT_KEY`（无/无效/吊销/过期 key）| 404 `CHANNEL_NOT_FOUND` / `NO_LATEST_VERSION`（频道尚未发布版本）
 
@@ -2187,12 +2177,26 @@
 - **响应** (200/206): 二进制制品；支持 `Range`（断点续传，206 部分内容）；强缓存（内容寻址不可变，`Cache-Control: public, max-age=31536000, immutable` + `ETag` 为内容 sha256）
 - **错误**: 401 `INVALID_CLIENT_KEY` | 404 `ARTIFACT_NOT_FOUND` | 416（Range 越界，由 `http.ServeContent` 处理）
 
-### POST /api/v1/client-channels/:id/pack
-- **描述**: 把频道 latest 版本打成 `.jmpack`（复用已存制品 + Ed25519 签名）入库 `type=client-pack`（FR-097）
-- **关联 FR**: FR-097 | **鉴权**: **JWT，平台管理员**
-- **响应** (201): `{ "sha256", "md5", "size", "codec" }`（.jmpack 制品元数据）
-- **错误**: 404 `CHANNEL_NOT_FOUND` / `NO_LATEST_VERSION` / `ARTIFACT_NOT_FOUND` | 400 `INVALID_VERSION_FILES`
-- **审计**: `client_pack.create`
+### GET /api/v1/client-channels/:id/updater-core
+- **描述**: 返回频道当前选定 updater-core 版本信息（FR-259，见 [ADR-054](../adr/054-updater-arch-simplification.md)）。楔子首次启动 / 后续启动据此决定下载新版还是用本地。返回格式冻结（spec §2.5.3），后续 CP 升级只能加字段不能删/改已有字段
+- **关联 FR**: FR-259、FR-258
+- **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必）。**无 JWT**
+- **响应** (200): `{ "version": 2, "sha256": "ab12…", "downloadUrl": "/api/v1/client-artifacts/<sha256>", "size": 2097152 }`（`downloadUrl` 指向制品分发端点，可 Range 续传）
+- **错误**: 401 `INVALID_CLIENT_KEY` | 404 `CHANNEL_NOT_FOUND` / `NO_SELECTED_CORE`（频道未选定 core 版本）
+
+### GET /api/v1/client-channels/:id/updater-core/versions
+- **描述**: 列出全部归档 updater-core 版本（含选定标记），供运营面板切换回滚（FR-259）
+- **关联 FR**: FR-259 | **鉴权**: **JWT，平台管理员**
+- **响应** (200): `[ { "version": 2, "sha256": "ab12…", "size": 2097152, "createdAt": "datetime", "selected": true }, { "version": 1, "sha256": "cd34…", "size": 2048000, "createdAt": "datetime", "selected": false } ]`
+- **错误**: 403 `FORBIDDEN`（非平台管理员）| 404 `CHANNEL_NOT_FOUND`
+
+### PUT /api/v1/client-channels/:id/updater-core/selected
+- **描述**: 切换频道选定的 updater-core 版本（一键回滚，FR-259）。客户端下次启动查 coreEndpoint 拿到切换后版本——本地有就直接用、没有就下载
+- **关联 FR**: FR-259 | **鉴权**: **JWT，平台管理员**
+- **请求**: `{ "sha256": "ab12…" }`
+- **响应** (200): `{ "ok": true }`
+- **错误**: 403 `FORBIDDEN`（非平台管理员）| 404 `CHANNEL_NOT_FOUND` / `CORE_VERSION_NOT_FOUND`
+- **审计**: `client_updater_core.select`
 
 ### POST /api/v1/client-telemetry
 - **描述**: 客户端遥测上报（FR-094，contract §4.3）。**best-effort、202 不阻塞**；隐私可关在客户端
