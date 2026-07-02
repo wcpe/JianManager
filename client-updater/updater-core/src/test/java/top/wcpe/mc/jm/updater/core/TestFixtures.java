@@ -57,10 +57,24 @@ final class TestFixtures {
 
         /** 最近一次遥测上报体（FR-094 测试断言用）。 */
         String lastTelemetry;
+        /** 最近一次运行态心跳上报体（FR-265 测试断言用）。 */
+        String lastRuntimeHeartbeat;
+        /** 最近一次启动安全画像上报体（FR-264 测试断言用）。 */
+        String lastHello;
 
         @Override
         public void postTelemetry(String jsonBody) {
             lastTelemetry = jsonBody;
+        }
+
+        @Override
+        public void postRuntimeHeartbeat(String jsonBody) {
+            lastRuntimeHeartbeat = jsonBody;
+        }
+
+        @Override
+        public void postSecurityHello(String jsonBody) {
+            lastHello = jsonBody;
         }
     }
 

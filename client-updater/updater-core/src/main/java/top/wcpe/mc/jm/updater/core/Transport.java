@@ -40,4 +40,14 @@ interface Transport {
 
     /** 上报遥测（FR-094，契约 §4.3）。**best-effort**：端点不可达/非 202 静默忽略，绝不抛逃逸。 */
     void postTelemetry(String jsonBody);
+
+    /** 上报启动运行态心跳（FR-265）。诊断遥测关闭时不调用；失败绝不影响更新/游戏。 */
+    default void postRuntimeHeartbeat(String jsonBody) {
+        // 旧测试替身可不实现；生产 HttpTransport 会发送真实心跳。
+    }
+
+    /** 上报启动安全画像（FR-264）。必要安全日志，不受诊断遥测开关影响。 */
+    default void postSecurityHello(String jsonBody) throws IOException {
+        // 旧测试替身可不实现；生产 HttpTransport 会发送真实 hello。
+    }
 }

@@ -67,6 +67,8 @@ public final class Core {
             // 本次运行的 core 版本号（wedge 经 ctx 注入），透传给 transport 做请求标识。
             // FR-256 起 core 自更新上移到楔子（FR-258），core 不再据 manifest 自更新，此值仅作信息性透传。
             String coreVersion = ctx.getOrDefault("coreVersion", "");
+            String wedgeVersion = contextValue(ctx, "wedgeVersion");
+            String playerName = contextValue(ctx, "playerName");
             // 机器码身份（FR-092）：稳定、不可逆、跨平台；ctx 显式提供则用之（测试/特殊），否则本机生成。
             String machineId = ctx.getOrDefault("machineId", "");
             if (machineId.isEmpty()) {
@@ -78,10 +80,19 @@ public final class Core {
                 return Updater.FAIL_STATIC;
             }
 
-            Transport transport = new HttpTransport(
-                    endpoint, channel, key, machineId, coreVersion, Duration.ofSeconds(15));
             Path stateDir = gameDir.resolve(".jm-updater");
+            String installId = InstallId.loadOrCreate(stateDir);
             long fromVersion = StateStore.load(stateDir).lastSeenVersion();
+            Transport transport = new HttpTransport(
+                    endpoint, channel, key, machineId, installId, playerName, coreVersion, Duration.ofSeconds(15));
+            SecurityIdentity identity = new SecurityIdentity(
+                    channel, playerName, machineId, installId, coreVersion, wedgeVersion, fromVersion);
+            // 遥测开关同时控制 FR-265 运行态心跳，尊重客户端诊断数据 opt-out；安全画像不受此开关影响。
+            boolean telemetryEnabled = !"false".equalsIgnoreCase(ctx.getOrDefault("telemetry", "true"));
+            if (telemetryEnabled) {
+                transport.postRuntimeHeartbeat(RuntimeHeartbeat.build(coreVersion, fromVersion));
+            }
+            SecurityHello.postBestEffort(transport, identity);
             long start = System.currentTimeMillis();
             // 进度窗口（FR-099）：默认展示；ctx progressUi=false 可关（headless 由展示层自动降级文本）。
             boolean progressUiEnabled = !"false".equalsIgnoreCase(ctx.getOrDefault("progressUi", "true"));
@@ -89,7 +100,6 @@ public final class Core {
             int rc = updater.run();
 
             // 遥测上报（FR-094，best-effort、opt-out）：BUSY（未实际更新）不报；telemetry=false 关闭。
-            boolean telemetryEnabled = !"false".equalsIgnoreCase(ctx.getOrDefault("telemetry", "true"));
             if (telemetryEnabled && rc != Updater.BUSY) {
                 long toVersion = StateStore.load(stateDir).lastSeenVersion();
                 transport.postTelemetry(
@@ -101,5 +111,29 @@ public final class Core {
             System.err.println("[jm-updater] core fail-static: " + t);
             return Updater.FAIL_STATIC;
         }
+    }
+
+    private static String contextValue(Map<String, String> ctx, String key) {
+        String direct = ctx.get(key);
+        if (direct != null) {
+            return direct;
+        }
+        return valueFromConfig(ctx.get("configJson"), key);
+    }
+
+    private static String valueFromConfig(String configJson, String key) {
+        if (configJson == null || configJson.trim().isEmpty()) {
+            return "";
+        }
+        try {
+            Object parsed = Json.parse(configJson);
+            if (parsed instanceof Map) {
+                Object value = ((Map<?, ?>) parsed).get(key);
+                return value == null ? "" : String.valueOf(value);
+            }
+        } catch (RuntimeException e) {
+            // 配置原文不可解析时按缺省空值处理，仍让服务端基于空玩家名判险。
+        }
+        return "";
     }
 }

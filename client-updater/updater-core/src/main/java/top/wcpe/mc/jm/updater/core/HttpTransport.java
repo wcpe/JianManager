@@ -24,34 +24,55 @@ final class HttpTransport implements Transport {
     private final String channel;
     private final String clientKey;
     private final String machineId;
+    private final String installId;
+    private final String playerName;
     private final String coreVersion;
     private final int connectTimeoutMs;
+    private final HttpRetryPolicy.Sleeper sleeper;
 
     HttpTransport(String endpoint, String channel, String clientKey, String machineId,
                   String coreVersion, Duration connectTimeout) {
+        this(endpoint, channel, clientKey, machineId, "", "", coreVersion, connectTimeout,
+                new HttpRetryPolicy.ThreadSleeper());
+    }
+
+    HttpTransport(String endpoint, String channel, String clientKey, String machineId,
+                  String installId, String playerName, String coreVersion, Duration connectTimeout) {
+        this(endpoint, channel, clientKey, machineId, installId, playerName, coreVersion, connectTimeout,
+                new HttpRetryPolicy.ThreadSleeper());
+    }
+
+    HttpTransport(String endpoint, String channel, String clientKey, String machineId,
+                  String installId, String playerName, String coreVersion, Duration connectTimeout,
+                  HttpRetryPolicy.Sleeper sleeper) {
         this.endpoint = trimTrailingSlash(endpoint);
         this.channel = channel;
         this.clientKey = clientKey;
         this.machineId = machineId;
+        this.installId = installId;
+        this.playerName = playerName;
         this.coreVersion = coreVersion;
         this.connectTimeoutMs = (int) Math.max(0, connectTimeout.toMillis());
+        this.sleeper = sleeper;
     }
 
     @Override
     public String fetchManifest() throws IOException {
-        HttpURLConnection c = open(endpoint + "/client-channels/" + channel + "/manifest", "GET", 30_000);
-        if (coreVersion != null && !coreVersion.isEmpty()) {
-            c.setRequestProperty("X-Client-Core-Version", coreVersion);
-        }
-        try {
-            int code = c.getResponseCode();
-            if (code != 200) {
-                throw new IOException("manifest 拉取失败 HTTP " + code);
+        return HttpRetryPolicy.execute("manifest", () -> {
+            HttpURLConnection c = open(endpoint + "/client-channels/" + channel + "/manifest", "GET", 30_000);
+            if (coreVersion != null && !coreVersion.isEmpty()) {
+                c.setRequestProperty("X-Client-Core-Version", coreVersion);
             }
-            return new String(readAll(c.getInputStream()), StandardCharsets.UTF_8);
-        } finally {
-            c.disconnect();
-        }
+            try {
+                int code = c.getResponseCode();
+                if (code != 200) {
+                    throw failure(c, code);
+                }
+                return new String(readAll(c.getInputStream()), StandardCharsets.UTF_8);
+            } finally {
+                c.disconnect();
+            }
+        }, sleeper, java.time.Instant.now());
     }
 
     @Override
@@ -61,16 +82,18 @@ final class HttpTransport implements Transport {
 
     @Override
     public byte[] fetchArtifact(String artifactSha256, LongConsumer onBytes) throws IOException {
-        HttpURLConnection c = open(endpoint + "/client-artifacts/" + artifactSha256, "GET", 300_000);
-        try {
-            int code = c.getResponseCode();
-            if (code != 200 && code != 206) {
-                throw new IOException("制品拉取失败 HTTP " + code + " sha256=" + artifactSha256);
+        return HttpRetryPolicy.execute("制品", () -> {
+            HttpURLConnection c = open(endpoint + "/client-artifacts/" + artifactSha256, "GET", 300_000);
+            try {
+                int code = c.getResponseCode();
+                if (code != 200 && code != 206) {
+                    throw failure(c, code);
+                }
+                return readAll(c.getInputStream(), onBytes);
+            } finally {
+                c.disconnect();
             }
-            return readAll(c.getInputStream(), onBytes);
-        } finally {
-            c.disconnect();
-        }
+        }, sleeper, java.time.Instant.now());
     }
 
     /**
@@ -80,17 +103,22 @@ final class HttpTransport implements Transport {
      */
     @Override
     public InputStream fetchArtifactStream(String artifactSha256, long offset) throws IOException {
-        HttpURLConnection c = open(endpoint + "/client-artifacts/" + artifactSha256, "GET", 300_000);
-        if (offset > 0) {
-            c.setRequestProperty("Range", "bytes=" + offset + "-");
-        }
-        int code = c.getResponseCode();
-        // 200=全量（服务器不支持 Range 或 offset=0）；206=部分内容（Range 命中）。
-        if (code != 200 && code != 206) {
-            c.disconnect();
-            throw new IOException("制品流式拉取失败 HTTP " + code + " sha256=" + artifactSha256);
-        }
-        final InputStream raw = c.getInputStream();
+        HttpURLConnection c = HttpRetryPolicy.execute("制品流式", () -> {
+            HttpURLConnection conn = open(endpoint + "/client-artifacts/" + artifactSha256, "GET", 300_000);
+            if (offset > 0) {
+                conn.setRequestProperty("Range", "bytes=" + offset + "-");
+            }
+            int code = conn.getResponseCode();
+            // 200=全量（服务器不支持 Range 或 offset=0）；206=部分内容（Range 命中）。
+            if (code != 200 && code != 206) {
+                HttpRetryPolicy.HttpFailure failure = failure(conn, code);
+                conn.disconnect();
+                throw failure;
+            }
+            return conn;
+        }, sleeper, java.time.Instant.now());
+        final HttpURLConnection connection = c;
+        final InputStream raw = connection.getInputStream();
         // 包装：close 时断开连接，避免底层 socket 泄漏。
         return new InputStream() {
             @Override
@@ -108,7 +136,7 @@ final class HttpTransport implements Transport {
                 try {
                     raw.close();
                 } finally {
-                    c.disconnect();
+                    connection.disconnect();
                 }
             }
         };
@@ -116,26 +144,45 @@ final class HttpTransport implements Transport {
 
     @Override
     public void postTelemetry(String jsonBody) {
-        HttpURLConnection c = null;
+        postJsonBestEffort(endpoint + "/client-telemetry", jsonBody, "遥测");
+    }
+
+    @Override
+    public void postRuntimeHeartbeat(String jsonBody) {
+        postJsonBestEffort(endpoint + "/client-channels/" + channel + "/telemetry/heartbeat", jsonBody, "运行态心跳");
+    }
+
+    @Override
+    public void postSecurityHello(String jsonBody) {
+        postJsonBestEffort(endpoint + "/client-security/hello", jsonBody, "安全画像");
+    }
+
+    private void postJsonBestEffort(String url, String jsonBody, String operation) {
         try {
-            c = open(endpoint + "/client-telemetry", "POST", 10_000);
-            c.setRequestProperty("Content-Type", "application/json");
-            c.setDoOutput(true);
-            byte[] body = jsonBody.getBytes(StandardCharsets.UTF_8);
-            try (OutputStream out = c.getOutputStream()) {
-                out.write(body);
-            }
-            c.getResponseCode(); // 触发发送；结果忽略。
+            HttpRetryPolicy.execute(operation, () -> {
+                HttpURLConnection c = open(url, "POST", 10_000);
+                try {
+                    c.setRequestProperty("Content-Type", "application/json");
+                    c.setDoOutput(true);
+                    byte[] body = jsonBody.getBytes(StandardCharsets.UTF_8);
+                    try (OutputStream out = c.getOutputStream()) {
+                        out.write(body);
+                    }
+                    int code = c.getResponseCode();
+                    if (code < 200 || code >= 300) {
+                        throw failure(c, code);
+                    }
+                    return null;
+                } finally {
+                    c.disconnect();
+                }
+            }, sleeper, java.time.Instant.now());
         } catch (Exception e) {
-            // best-effort：遥测失败绝不影响更新/游戏（契约 §4.3）。
-        } finally {
-            if (c != null) {
-                c.disconnect();
-            }
+            // best-effort：上报失败绝不影响更新/游戏。
         }
     }
 
-    /** 打开连接并设方法/超时/通用请求头（拉取密钥 + 机器码）。 */
+    /** 打开连接并设方法/超时/通用请求头（拉取密钥 + 客户端身份）。 */
     private HttpURLConnection open(String url, String method, int readTimeoutMs) throws IOException {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setRequestMethod(method);
@@ -144,7 +191,39 @@ final class HttpTransport implements Transport {
         c.setInstanceFollowRedirects(true);
         c.setRequestProperty("X-Client-Key", nullToEmpty(clientKey));
         c.setRequestProperty("X-Machine-Id", nullToEmpty(machineId));
+        c.setRequestProperty("X-Install-Id", nullToEmpty(installId));
+        c.setRequestProperty("X-Player-Name", nullToEmpty(playerName));
+        c.setRequestProperty("User-Agent", "JianManager-UpdaterCore/" + nullToUnknown(coreVersion));
         return c;
+    }
+
+    private HttpRetryPolicy.HttpFailure failure(HttpURLConnection c, int code) {
+        return new HttpRetryPolicy.HttpFailure(code, readErrCode(c), c.getHeaderField("Retry-After"));
+    }
+
+    private String readErrCode(HttpURLConnection c) {
+        String header = c.getHeaderField("X-Err-Code");
+        if (header != null && !header.trim().isEmpty()) {
+            return header.trim();
+        }
+        try {
+            InputStream err = c.getErrorStream();
+            if (err == null) {
+                return "";
+            }
+            Object parsed = Json.parse(new String(readAll(err), StandardCharsets.UTF_8));
+			if (parsed instanceof java.util.Map) {
+				java.util.Map<?, ?> body = (java.util.Map<?, ?>) parsed;
+				Object code = body.get("errCode");
+				if (code == null) {
+					code = body.get("error");
+				}
+				return code == null ? "" : String.valueOf(code);
+			}
+        } catch (Exception e) {
+            // 错误体不可读时按无 errCode 处理。
+        }
+        return "";
     }
 
     /** 读尽输入流（Java 8 无 InputStream.readAllBytes，手写缓冲循环）。 */
@@ -179,5 +258,9 @@ final class HttpTransport implements Transport {
 
     private static String nullToEmpty(String s) {
         return s == null ? "" : s;
+    }
+
+    private static String nullToUnknown(String s) {
+        return s == null || s.isEmpty() ? "unknown" : s;
     }
 }
