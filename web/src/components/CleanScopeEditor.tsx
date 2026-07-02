@@ -13,7 +13,7 @@ import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { ChevronRight, Eraser, Ban, ShieldCheck, Folder, FolderOpen, X } from 'lucide-react'
 import {
-  buildFileTree,
+  buildFileTreeWithDirs,
   collectAllDirPaths,
   buildCleanMap,
   computeDirVisualState,
@@ -84,6 +84,10 @@ export interface CleanScopeEditorProps {
   onChange: (managedDirs: string[], cleanExclude: string[]) => void
   /** clean-all 开关：开启后全目录标记为清理红色、交互禁用。 */
   cleanAll?: boolean
+  /** 草稿外自定义目录（如 mods、custom-mods），显示在树中可标记。 */
+  extraDirs?: string[]
+  /** 自定义目录变化回调（添加/删除草稿外目录时触发）。 */
+  onExtraDirsChange?: (dirs: string[]) => void
 }
 
 export default function CleanScopeEditor({
@@ -92,10 +96,27 @@ export default function CleanScopeEditor({
   cleanExclude,
   onChange,
   cleanAll = false,
+  extraDirs = [],
+  onExtraDirsChange,
 }: CleanScopeEditorProps) {
   const { t } = useTranslation()
-  const tree = useMemo(() => buildFileTree(files), [files])
-  const allDirPaths = useMemo(() => collectAllDirPaths(files), [files])
+  const tree = useMemo(() => buildFileTreeWithDirs(files, extraDirs), [files, extraDirs])
+  const [customDirInput, setCustomDirInput] = useState('')
+  const allDirPaths = useMemo(() => {
+    const fromFiles = collectAllDirPaths(files)
+    // 合并草稿外自定义目录及其祖先路径
+    const all = new Set(fromFiles)
+    for (const d of extraDirs) {
+      all.add(d)
+      const segs = d.split('/').filter(Boolean)
+      let acc = ''
+      for (let i = 0; i < segs.length; i++) {
+        acc = acc === '' ? segs[i] : `${acc}/${segs[i]}`
+        all.add(acc)
+      }
+    }
+    return Array.from(all)
+  }, [files, extraDirs])
   const cleanMap = useMemo(
     () => buildCleanMap(managedDirs, cleanExclude),
     [managedDirs, cleanExclude],
@@ -271,6 +292,63 @@ export default function CleanScopeEditor({
           </span>
         )}
       </div>
+
+      {/* 添加自定义目录（草稿外目录，如 mods、custom-mods） */}
+      {!cleanAll && onExtraDirsChange && (
+        <div className="mt-2 space-y-1.5" data-testid="custom-dirs-section">
+          <div className="flex items-center gap-1.5">
+            <input
+              className="flex-1 rounded border bg-background px-2 py-1 text-xs font-mono"
+              value={customDirInput}
+              onChange={(e) => setCustomDirInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== 'Enter') return
+                e.preventDefault()
+                const v = customDirInput.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+                if (!v || extraDirs.includes(v)) { setCustomDirInput(''); return }
+                onExtraDirsChange([...extraDirs, v])
+                setCustomDirInput('')
+              }}
+              placeholder={t('clientVersions.customDirPlaceholder', '输入目录路径如 mods 或 config/foo，回车添加')}
+              data-testid="custom-dir-input"
+            />
+            <button
+              type="button"
+              className="shrink-0 rounded border px-2 py-1 text-xs hover:bg-accent"
+              onClick={() => {
+                const v = customDirInput.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
+                if (!v || extraDirs.includes(v)) { setCustomDirInput(''); return }
+                onExtraDirsChange([...extraDirs, v])
+                setCustomDirInput('')
+              }}
+              data-testid="custom-dir-add-btn"
+            >
+              {t('clientVersions.customDirAdd', '添加')}
+            </button>
+          </div>
+          {extraDirs.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {extraDirs.map((d) => (
+                <span
+                  key={d}
+                  className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs font-mono"
+                >
+                  {d}
+                  <button
+                    type="button"
+                    className="text-muted-foreground hover:text-destructive"
+                    onClick={() => onExtraDirsChange(extraDirs.filter((x) => x !== d))}
+                    data-testid="custom-dir-remove"
+                    data-dir={d}
+                  >
+                    <X className="size-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 右键菜单 */}
       {contextMenu && (

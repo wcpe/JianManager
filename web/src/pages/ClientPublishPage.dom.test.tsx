@@ -379,7 +379,7 @@ describe('ClientPublishPage（清理范围编辑器，FR-255）', () => {
     }
   })
 
-  it('自定义追加排除产出 cleanExclude', async () => {
+  it('自定义追加排除产出 cleanExclude（右键标记排除）', async () => {
     loginMockUser()
     const user = userEvent.setup()
     const pub = capturePublishBody()
@@ -387,12 +387,18 @@ describe('ClientPublishPage（清理范围编辑器，FR-255）', () => {
       const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
       await gotoMeta(user, container)
 
-      // 在排除输入框填「玩家mod」并回车。
-      const field = screen.getByTestId('clean-exclude-field') as HTMLInputElement
-      await user.type(field, '玩家mod')
+      // 添加自定义目录「玩家mod」。
+      const dirInput = screen.getByTestId('custom-dir-input')
+      await user.type(dirInput, '玩家mod')
       await user.keyboard('{Enter}')
-      // 标签出现。
-      expect(screen.getByText('玩家mod')).toBeInTheDocument()
+
+      // 右键目录「玩家mod」→ 标记为排除。
+      const dirRows = screen.getAllByTestId('clean-scope-dir-row')
+      const targetRow = dirRows.find((el) => el.textContent?.includes('玩家mod'))
+      expect(targetRow).toBeTruthy()
+      await user.pointer({ keys: '[MouseRight]', target: targetRow! })
+      const markExclude = await screen.findByTestId('clean-scope-mark-exclude')
+      await user.click(markExclude)
 
       // meta → review，点发布。
       await user.click(screen.getByRole('button', { name: /下一步/ }))

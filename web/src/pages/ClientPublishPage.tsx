@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from 'react'
+import { useCallback, useEffect, useState, type ChangeEvent, type DragEvent } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -25,7 +25,6 @@ import {
   canPublish,
   nextStep,
   prevStep,
-  parseManagedDirs,
   normalizeManifestPath,
   isZipFilename,
   hasPublishDraft,
@@ -44,9 +43,9 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import DangerConfirm from '@/components/DangerConfirm'
 import ClientFileTree from '@/components/ClientFileTree'
-import CleanScopeEditor, { CleanExcludeInput } from '@/components/CleanScopeEditor'
+import CleanScopeEditor from '@/components/CleanScopeEditor'
 import FileBrowser from '@/components/file-browser/FileBrowser'
-import { localDraftSource } from '@/components/file-browser/sources/localDraftSource'
+// localDraftSource 不再使用（FileExplorer 直接操作草稿）
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
@@ -132,7 +131,8 @@ export default function ClientPublishPage() {
   const [drafts, setDrafts] = useState<DraftFile[]>([])
   // FR-255：managedDirs 改为目录树勾选（selectedDirs）+ 高级手动兜底（managedDirsManual）。
   const [selectedDirs, setSelectedDirs] = useState<string[]>([])
-  const [managedDirsManual, setManagedDirsManual] = useState('')
+  // 草稿外自定义目录（如 mods、custom-mods），显示在清理目录树中可标记。
+  const [extraDirs, setExtraDirs] = useState<string[]>([])
   // 「清空整个 gameDir」开关（clean-all）：开启后 managedDirs 含哨兵 "*"，删清单未列的一切。
   const [cleanAll, setCleanAll] = useState(false)
   // 自定义追加排除（FR-255）：命中前缀的路径永不删（叠加在玩家区之上）。
@@ -326,18 +326,12 @@ export default function ClientPublishPage() {
   const removeDraft = (id: string) => setDrafts((prev) => prev.filter((d) => d.id !== id))
 
   const wizardState = { draftCount: drafts.length, paths: drafts.map((d) => d.path), uploading }
-  // FR-255：最终 managedDirs——clean-all 时为 ["*"] 哨兵；否则为目录树勾选 + 手动兜底去重合并。
+  const publishable = canPublish(wizardState)
+  // FR-255：最终 managedDirs——clean-all 时为 ["*"] 哨兵；否则为目录树勾选（含草稿外自定义目录）。
   const effectiveManagedDirs = cleanAll
     ? [CLEAN_ALL_SENTINEL]
-    : Array.from(new Set([...selectedDirs, ...parseManagedDirs(managedDirsManual)]))
+    : Array.from(new Set([...selectedDirs, ...extraDirs.filter(d => !cleanExclude.includes(d))]))
   const effectiveCleanExclude = cleanExclude.length > 0 ? cleanExclude : undefined
-  const publishable = canPublish(wizardState) && !publish.isPending
-
-  // 预览（FR-250）：内容预览从**本地 File** 直接读文本（未上传无 sha256），零网络。
-  const previewSource = useMemo(
-    () => localDraftSource(drafts.map((d) => ({ path: d.path, file: d.file }))),
-    [drafts],
-  )
   // 预览步骤的视图（结构 = ClientFileTree 编排预览；预览 = 共享 FileBrowser 看本地内容）。
   const [reviewView, setReviewView] = useState<'structure' | 'preview'>('structure')
 
@@ -597,39 +591,11 @@ export default function ClientPublishPage() {
                   setCleanExclude(ce)
                 }}
                 cleanAll={cleanAll}
+                extraDirs={extraDirs}
+                onExtraDirsChange={setExtraDirs}
               />
               <span className="text-xs text-muted-foreground">
                 {t('clientVersions.cleanScopeTreeHint', '右键目录标记为清理（红）或排除（绿），Ctrl+点击追加选、Shift+点击连选、右键批量标记。父标记后子目录继承；子目录单独改标记后父目录变为混合色（橙）。')}
-              </span>
-            </div>
-
-            {/* 高级：手动补充目录（草稿外目录兜底） */}
-            <label className="flex flex-col gap-1 text-sm">
-              {t('clientVersions.managedDirsManual', '高级：手动补充目录')}
-              <input
-                className="p-2 border rounded bg-background font-mono text-xs disabled:opacity-50"
-                value={managedDirsManual}
-                onChange={(e) => setManagedDirsManual(e.target.value)}
-                placeholder="mods, config, resourcepacks"
-                disabled={cleanAll}
-                data-testid="managed-dirs-manual"
-              />
-              <span className="text-xs text-muted-foreground">
-                {t('clientVersions.managedDirsManualHint', '目录树只含草稿文件派生的目录；若需清理草稿外的目录（如 mods），在此补充，逗号分隔。')}
-              </span>
-            </label>
-
-            {/* 自定义追加排除（FR-255） */}
-            <div className="space-y-1.5">
-              <span className="text-sm font-medium">
-                {t('clientVersions.cleanExcludeLabel', '额外永不清理的目录/路径')}
-              </span>
-              <CleanExcludeInput
-                value={cleanExclude}
-                onChange={setCleanExclude}
-              />
-              <span className="text-xs text-muted-foreground">
-                {t('clientVersions.cleanExcludeHint', '列出玩家自装 mod、个人配置等「永不删除」的目录或路径，即使开了「清空整个游戏目录」也保留。回车添加，可多个。')}
               </span>
             </div>
 
