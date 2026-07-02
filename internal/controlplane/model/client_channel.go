@@ -26,10 +26,13 @@ type ClientChannel struct {
 	// SelectedCoreSHA256 频道选定的 updater-core 归档制品 sha256（FR-259，见 updater-arch-simplification spec §D）。
 	// 指向 type=client-updater-core 的 Asset.SHA256；空=未选定（coreEndpoint 回退最新归档版本）。
 	// 运营经 PUT /client-channels/:id/updater-core/selected 切换，客户端下次启动查 coreEndpoint 即用选定版本。
-	SelectedCoreSHA256 string `gorm:"column:selected_core_sha256;type:char(64)" json:"-"`
-	CreatedAt         time.Time      `json:"createdAt"`
-	UpdatedAt         time.Time      `json:"updatedAt"`
-	DeletedAt         gorm.DeletedAt `gorm:"index" json:"-"`
+	SelectedCoreSHA256   string         `gorm:"column:selected_core_sha256;type:char(64)" json:"-"`
+	ProtectionMode       string         `gorm:"column:protection_mode;type:varchar(32);default:normal;not null" json:"protectionMode"`
+	ProtectionPolicyJSON string         `gorm:"column:protection_policy_json;type:text" json:"-"`
+	ProtectionUpdatedAt  *time.Time     `gorm:"column:protection_updated_at" json:"protectionUpdatedAt"`
+	CreatedAt            time.Time      `json:"createdAt"`
+	UpdatedAt            time.Time      `json:"updatedAt"`
+	DeletedAt            gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // ClientPullKey 频道拉取密钥：玩家侧 updater 拉 manifest/制品时经请求头携带。
@@ -59,8 +62,12 @@ type ClientPullKey struct {
 	// ExpiresAt 可选过期时间；到期即鉴权失败。
 	ExpiresAt *time.Time `json:"expiresAt"`
 	// LastUsedAt 最近一次鉴权命中时间（统计用，弱一致）。
-	LastUsedAt *time.Time `json:"lastUsedAt"`
-	CreatedAt  time.Time  `json:"createdAt"`
+	LastUsedAt         *time.Time `json:"lastUsedAt"`
+	SecurityState      string     `gorm:"column:security_state;type:varchar(32);default:normal;not null" json:"securityState"`
+	ThrottlePolicyJSON string     `gorm:"column:throttle_policy_json;type:text" json:"-"`
+	SecurityNote       string     `gorm:"column:security_note;type:varchar(512)" json:"securityNote"`
+	SecurityUpdatedAt  *time.Time `gorm:"column:security_updated_at" json:"securityUpdatedAt"`
+	CreatedAt          time.Time  `json:"createdAt"`
 	// RevokedAt 吊销时间。
 	RevokedAt *time.Time `json:"revokedAt"`
 }
