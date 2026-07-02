@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, type ChangeEvent, type DragEvent } from 'react'
-import { useNavigate, useParams } from 'react-router'
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent, type DragEvent } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { unzipWithNames } from '@/lib/zip-filename-decode'
@@ -43,7 +43,7 @@ import DangerConfirm from '@/components/DangerConfirm'
 import FileExplorer from '@/components/FileExplorer'
 import CleanScopeEditor from '@/components/CleanScopeEditor'
 import FileBrowser from '@/components/file-browser/FileBrowser'
-// localDraftSource 不再使用（FileExplorer 直接操作草稿）
+import { localDraftSource } from '@/components/file-browser/sources/localDraftSource'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
@@ -124,8 +124,25 @@ export default function ClientPublishPage() {
   const { id: channelId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const publish = usePublishClientVersion()
+  const [searchParams, setSearchParams] = useSearchParams()
 
-  const [step, setStep] = useState<PublishStepId>('files')
+  // 步骤同步 URL ?step=xxx，支持浏览器前进/后退（鼠标侧键）。
+  const validSteps: PublishStepId[] = ['files', 'configure', 'meta', 'review']
+  const urlStep = searchParams.get('step') as PublishStepId | null
+  const [step, setStepState] = useState<PublishStepId>(
+    urlStep && validSteps.includes(urlStep) ? urlStep : 'files',
+  )
+  const setStep = useCallback((s: PublishStepId) => {
+    setStepState(s)
+    setSearchParams(prev => { prev.set('step', s); return prev }, { replace: true })
+  }, [setSearchParams])
+  // 浏览器前进/后退时同步 step。
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect */
+    const s = searchParams.get('step') as PublishStepId | null
+    if (s && validSteps.includes(s) && s !== step) setStepState(s)
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [searchParams, step])
   const [drafts, setDrafts] = useState<DraftFile[]>([])
   // FR-255：managedDirs 改为目录树勾选（selectedDirs）+ 高级手动兜底（managedDirsManual）。
   const [selectedDirs, setSelectedDirs] = useState<string[]>([])
@@ -347,8 +364,10 @@ export default function ClientPublishPage() {
     ? [CLEAN_ALL_SENTINEL]
     : Array.from(new Set([...selectedDirs, ...extraDirs.filter(d => !cleanExclude.includes(d))]))
   const effectiveCleanExclude = cleanExclude.length > 0 ? cleanExclude : undefined
-  // 预览步骤的视图（结构 = ClientFileTree 编排预览；预览 = 共享 FileBrowser 看本地内容）。
+  // 预览步骤的视图（结构 = FileExplorer 编排预览；预览 = 共享 FileBrowser 看本地内容）。
   const [reviewView, setReviewView] = useState<'structure' | 'preview'>('structure')
+  // 预览数据源：从本地草稿 File 读内容（零网络，FR-250）。
+  const previewSource = useMemo(() => localDraftSource(drafts.map(d => ({ path: d.path, file: d.file }))), [drafts])
 
   /** 尝试取消：有草稿弹二次确认，无草稿直接回工作台。 */
   const attemptCancel = () => {
