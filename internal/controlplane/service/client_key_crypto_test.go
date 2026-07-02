@@ -3,6 +3,8 @@ package service
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -17,10 +19,16 @@ func randSecretB64(t *testing.T) string {
 	return base64.StdEncoding.EncodeToString(b)
 }
 
+// keyEncFilePath 在临时数据根下拼出 etc/client-key-enc.key 路径（FR-263）。
+func keyEncFilePath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "etc", keyEncFileName)
+}
+
 func TestKeyEncryptor_RoundTrip(t *testing.T) {
-	enc, dev, err := ResolveKeyEncryptor(randSecretB64(t), false)
+	enc, src, err := ResolveKeyEncryptor(randSecretB64(t), false, "")
 	require.NoError(t, err)
-	require.False(t, dev)
+	require.Equal(t, KeyEncSourceEnv, src)
 	require.NotNil(t, enc)
 
 	plain := "jmck_abcdefg1234567890_round_trip"
@@ -44,7 +52,7 @@ func TestKeyEncryptor_RoundTrip(t *testing.T) {
 }
 
 func TestKeyEncryptor_DecryptRejectsTampered(t *testing.T) {
-	enc, _, err := ResolveKeyEncryptor(randSecretB64(t), false)
+	enc, _, err := ResolveKeyEncryptor(randSecretB64(t), false, "")
 	require.NoError(t, err)
 
 	ct, err := enc.Encrypt("jmck_secret")
@@ -61,9 +69,9 @@ func TestKeyEncryptor_DecryptRejectsTampered(t *testing.T) {
 }
 
 func TestKeyEncryptor_DecryptWrongKeyFails(t *testing.T) {
-	enc1, _, err := ResolveKeyEncryptor(randSecretB64(t), false)
+	enc1, _, err := ResolveKeyEncryptor(randSecretB64(t), false, "")
 	require.NoError(t, err)
-	enc2, _, err := ResolveKeyEncryptor(randSecretB64(t), false)
+	enc2, _, err := ResolveKeyEncryptor(randSecretB64(t), false, "")
 	require.NoError(t, err)
 
 	ct, err := enc1.Encrypt("jmck_secret")
@@ -75,10 +83,10 @@ func TestKeyEncryptor_DecryptWrongKeyFails(t *testing.T) {
 }
 
 func TestResolveKeyEncryptor_DevFallbackWhenUnset(t *testing.T) {
-	// dev_mode=true 且未注入 → 回退内置 dev 密钥，可用。
-	enc, dev, err := ResolveKeyEncryptor("", true)
+	// dev_mode=true 且未注入 → 回退内置 dev 密钥，可用，不生成文件。
+	enc, src, err := ResolveKeyEncryptor("", true, "")
 	require.NoError(t, err)
-	require.True(t, dev)
+	require.Equal(t, KeyEncSourceDev, src)
 	require.NotNil(t, enc)
 
 	ct, err := enc.Encrypt("jmck_dev")
@@ -88,22 +96,83 @@ func TestResolveKeyEncryptor_DevFallbackWhenUnset(t *testing.T) {
 	require.Equal(t, "jmck_dev", got)
 }
 
-func TestResolveKeyEncryptor_ProdUnsetDegradesToNil(t *testing.T) {
-	// 生产态未注入 → 优雅降级：返回 nil encryptor、不报错、不阻断（不写 KeyEnc）。
-	enc, dev, err := ResolveKeyEncryptor("", false)
+func TestResolveKeyEncryptor_AutogenPersistsAndUsable(t *testing.T) {
+	// 生产态未注入 → 自动生成并持久化，加密器可用（FR-263）。
+	path := keyEncFilePath(t)
+	enc, src, err := ResolveKeyEncryptor("", false, path)
 	require.NoError(t, err)
-	require.False(t, dev)
+	require.Equal(t, KeyEncSourceGenerated, src)
+	require.NotNil(t, enc)
+
+	// 文件已落盘，内容为可解析的 base64 密钥。
+	// 注：0600 权限在 Windows 语义有限（Chmod 基本 no-op，见 FR-248 spec §6），不跨平台硬断言权限值。
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+
+	// 加密器可正常加解密（密钥可查看的基础）。
+	ct, err := enc.Encrypt("jmck_autogen")
+	require.NoError(t, err)
+	got, err := enc.Decrypt(ct)
+	require.NoError(t, err)
+	require.Equal(t, "jmck_autogen", got)
+}
+
+func TestResolveKeyEncryptor_AutogenReuseAcrossRestart(t *testing.T) {
+	// 同一 keyFilePath 两次解析 → 同一密钥（跨重启稳定，FR-263）。
+	path := keyEncFilePath(t)
+	enc1, src1, err := ResolveKeyEncryptor("", false, path)
+	require.NoError(t, err)
+	require.Equal(t, KeyEncSourceGenerated, src1)
+
+	enc2, src2, err := ResolveKeyEncryptor("", false, path)
+	require.NoError(t, err)
+	require.Equal(t, KeyEncSourceGenerated, src2)
+
+	// 用第一次的加密器加密，第二次的能解密回明文（同一密钥）。
+	ct, err := enc1.Encrypt("jmck_restart_stable")
+	require.NoError(t, err)
+	got, err := enc2.Decrypt(ct)
+	require.NoError(t, err)
+	require.Equal(t, "jmck_restart_stable", got)
+}
+
+func TestResolveKeyEncryptor_EnvOverridesAutogen(t *testing.T) {
+	// env 注入非空时优先于自动生成，且不生成/不写文件（FR-263）。
+	path := keyEncFilePath(t)
+	envSecret := randSecretB64(t)
+	enc, src, err := ResolveKeyEncryptor(envSecret, false, path)
+	require.NoError(t, err)
+	require.Equal(t, KeyEncSourceEnv, src)
+	require.NotNil(t, enc)
+
+	// 文件不应被生成。
+	_, statErr := os.Stat(path)
+	require.True(t, os.IsNotExist(statErr))
+}
+
+func TestResolveKeyEncryptor_PersistFailureDegradesToNil(t *testing.T) {
+	// 自动生成/持久化失败 → 降级返回 nil（不崩，不报错，FR-263 spec §3.1）。
+	// 构造一个父段为普通文件的路径，MkdirAll/ReadFile 均会失败。
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocker")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o644))
+	badPath := filepath.Join(blocker, "etc", keyEncFileName)
+
+	enc, src, err := ResolveKeyEncryptor("", false, badPath)
+	require.NoError(t, err) // 降级不报错
 	require.Nil(t, enc)
+	require.Empty(t, src)
 }
 
 func TestResolveKeyEncryptor_InvalidSecretRejected(t *testing.T) {
 	// 注入了非法密钥（非 base64 / 长度不对）→ 报错（想用却配错，快失败让运维修正）。
-	_, _, err := ResolveKeyEncryptor("not-base64-!!!", false)
+	_, _, err := ResolveKeyEncryptor("not-base64-!!!", false, "")
 	require.Error(t, err)
 
 	// 长度不足 32 字节也拒绝。
 	short := base64.StdEncoding.EncodeToString([]byte("too-short"))
-	_, _, err = ResolveKeyEncryptor(short, false)
+	_, _, err = ResolveKeyEncryptor(short, false, "")
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrInvalidKeyEncSecret)
 }

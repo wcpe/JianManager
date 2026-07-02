@@ -1,6 +1,7 @@
 package service
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -10,7 +11,7 @@ import (
 func newClientChannelSvcWithEnc(t *testing.T) (*ClientChannelService, *KeyEncryptor) {
 	t.Helper()
 	svc := newClientChannelSvc(t)
-	enc, _, err := ResolveKeyEncryptor(randSecretB64(t), false)
+	enc, _, err := ResolveKeyEncryptor(randSecretB64(t), false, "")
 	require.NoError(t, err)
 	require.NotNil(t, enc)
 	svc.SetKeyEncryptor(enc)
@@ -119,4 +120,33 @@ func TestRevealKey_ChannelAndKeyNotFound(t *testing.T) {
 	// 密钥不存在。
 	_, err = svc.RevealKey("skyblock-s1", 9999)
 	require.ErrorIs(t, err, ErrPullKeyNotFound)
+}
+
+// TestCreateKey_AutogenEncryptorRevealable 串联 FR-263 三轨生成与 FR-192 可查看：
+// 用生产态自动生成轨道（非 env 注入）解析加密器并注入频道服务，建密钥后 KeyEnc 非空、RevealKey 回明文。
+func TestCreateKey_AutogenEncryptorRevealable(t *testing.T) {
+	svc := newClientChannelSvc(t)
+	enc, src, err := ResolveKeyEncryptor("", false, filepath.Join(t.TempDir(), "etc", keyEncFileName))
+	require.NoError(t, err)
+	require.Equal(t, KeyEncSourceGenerated, src)
+	require.NotNil(t, enc)
+	svc.SetKeyEncryptor(enc)
+
+	_, err = svc.CreateChannel("skyblock-s1", "空岛一服", "")
+	require.NoError(t, err)
+
+	key, plaintext, err := svc.CreateKey("skyblock-s1", "正式包", "", nil)
+	require.NoError(t, err)
+	// 自动生成加密器注入后，新建密钥 KeyEnc 非空，且可解密回明文。
+	require.NotEmpty(t, key.KeyEnc)
+
+	// 列表派生的 Revealable=true（前端据此启用查看），且 RevealKey 回明文。
+	keys, err := svc.ListKeys("skyblock-s1")
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	require.True(t, keys[0].Revealable)
+
+	revealed, err := svc.RevealKey("skyblock-s1", key.ID)
+	require.NoError(t, err)
+	require.Equal(t, plaintext, revealed)
 }

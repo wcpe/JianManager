@@ -31,7 +31,7 @@ func setupRevealRouter(t *testing.T, db *gorm.DB, withEnc bool) (*gin.Engine, *s
 	}
 	channelSvc := service.NewClientChannelService(db)
 	if withEnc {
-		enc, _, err := service.ResolveKeyEncryptor("", true) // dev 回退一把可用密钥
+		enc, _, err := service.ResolveKeyEncryptor("", true, "") // dev 回退一把可用密钥
 		if err != nil || enc == nil {
 			t.Fatalf("构造加密器失败: enc=%v err=%v", enc, err)
 		}

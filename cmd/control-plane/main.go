@@ -142,18 +142,22 @@ func main() {
 	// 客户端分发频道与拉取密钥（FR-086，见 ADR-022）：鉴权只用哈希比对。
 	clientChannelSvc := service.NewClientChannelService(db)
 	// 拉取密钥可逆加密 + 管理员可查看（FR-192，见 ADR-044）：另存 AES-256-GCM 加密副本供查看明文。
-	// 密钥经 env JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入；未配优雅降级——dev 回退内置密钥，
-	// 生产未配则不写 KeyEnc、密钥不可查看（不阻断建密钥，与 ADR-038 降级哲学一致）。
-	keyEncryptor, usedDevKeyEnc, err := service.ResolveKeyEncryptor(cfg.ClientDist.KeyEncSecret, cfg.Server.DevMode)
+	// 加密密钥来源三轨（FR-263，优先级 env 注入 > 生产自动生成 > dev 回退）：env 注入优先；
+	// 生产未注入则自动生成并持久化到 <dataRoot>/etc/client-key-enc.key（0600，跨重启用同一密钥）；
+	// dev_mode 回退内置开发密钥；自动生成失败优雅降级（密钥不可查看但不崩，与 ADR-038 降级哲学一致）。
+	keyEncryptor, encSource, err := service.ResolveKeyEncryptor(cfg.ClientDist.KeyEncSecret, cfg.Server.DevMode, root.Abs("etc/client-key-enc.key"))
 	if err != nil {
-		// 仅「注入了非法密钥」会到此（配错快失败，让运维即时修正）；未配置走降级返 nil 不报错。
+		// 仅「注入了非法 env 密钥」会到此（配错快失败，让运维即时修正）；其余路径走降级返 nil 不报错。
 		log.Fatalf("初始化拉取密钥加密器失败: %v", err)
 	}
-	if keyEncryptor == nil {
-		slog.Warn("未配置拉取密钥加密密钥，新建/轮换的拉取密钥将不可查看明文；如需可查看请经 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入 32 字节 base64 密钥（FR-192，见 ADR-044）")
-	}
-	if usedDevKeyEnc {
+	switch encSource {
+	case service.KeyEncSourceGenerated:
+		slog.Info("已自动生成拉取密钥加密密钥并持久化（生产未注入环境变量），密钥可查看（FR-263，见 ADR-044）")
+	case service.KeyEncSourceDev:
 		slog.Warn("拉取密钥加密使用内置开发密钥（仅 dev_mode 生效），生产务必经 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入独立密钥")
+	case "":
+		// 降级（自动生成/持久化失败）：密钥不可查看，其余功能正常。
+		slog.Warn("拉取密钥加密密钥自动生成/持久化失败，降级为不可查看；可检查数据根 etc/ 目录权限或经 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入密钥（FR-263，见 ADR-044）")
 	}
 	clientChannelSvc.SetKeyEncryptor(keyEncryptor)
 	// 客户端分发版本与 manifest 组装（FR-087 / FR-256 简化后：不再签名 manifest，信任靠 HTTPS + 拉取密钥鉴权）。
