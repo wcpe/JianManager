@@ -26,8 +26,8 @@ func NewClientUpdaterConfigHandler(channelSvc *service.ClientChannelService) *Cl
 
 // GetUpdaterConfig GET /client-channels/:id/updater-config — 按频道生成 jm-updater.json。
 //
-// 返回 jm-updater.json 字段：channel + endpoint（CP 公网基址，按请求推断）+ key（占位空串，
-// 运营粘贴拉取密钥）+ coreEndpoint（楔子拉取 core 版本信息的端点地址，FR-259）。
+// 返回 jm-updater.json 字段：channel + endpoint（API 根路径，按请求推断）+ key（占位空串，
+// 运营粘贴拉取密钥）。coreEndpoint 已移除，楔子统一由 endpoint + channel 拼接。
 // 频道不存在 → 404。
 func (h *ClientUpdaterConfigHandler) GetUpdaterConfig(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
@@ -44,7 +44,6 @@ func (h *ClientUpdaterConfigHandler) GetUpdaterConfig(c *gin.Context) {
 		"channel":        channelID,
 		"key":            "", // 占位：运营在「拉取密钥」Tab 创建后粘贴。
 		"endpoint":       base,
-		"coreEndpoint":   base + "/client-channels/" + channelID + "/updater-core",
 		"timeoutSec":     120,
 		"telemetry":      true,
 		"bootConfirmSec": 30,
@@ -58,7 +57,11 @@ func resolvePublicBaseURL(c *gin.Context) string {
 	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
 		scheme = "https"
 	}
-	return fmt.Sprintf("%s://%s/api/v1", scheme, requestHostname(c))
+	host := c.Request.Host
+	if host == "" {
+		host = "localhost"
+	}
+	return fmt.Sprintf("%s://%s/api/v1", scheme, host)
 }
 
 // RegisterRoutes 注册 jm-updater.json 生成端点（挂在平台管理员组的频道路由下）。

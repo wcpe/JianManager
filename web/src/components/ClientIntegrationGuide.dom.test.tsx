@@ -6,20 +6,17 @@ import { loginMockUser } from '@/test/auth'
 import ClientIntegrationGuide from './ClientIntegrationGuide'
 
 /**
- * ClientIntegrationGuide 强断言（FR-259）：jm-updater.json 示例含 coreEndpoint（楔子自动拉 core）
- * + 不再含 signPublicKey + 下载按钮存在且可点。
+ * ClientIntegrationGuide 强断言（FR-259）：jm-updater.json 示例只含 API 根 endpoint
+ * + 不再含 coreEndpoint/signPublicKey + 下载按钮存在且可点。
  */
 describe('ClientIntegrationGuide（mock 假后端）', () => {
-  it('jm-updater.json 示例含 coreEndpoint + 不含 signPublicKey', async () => {
+  it('jm-updater.json 示例只含 API 根 endpoint', async () => {
     loginMockUser()
     renderWithProviders(<ClientIntegrationGuide channelId="skyblock-s1" />)
 
-    // 示例 JSON 含 coreEndpoint（异步加载完才出现，用 code 元素精确定位避免父容器文本匹配）。
-    const codeBlocks = await screen.findAllByText(/coreEndpoint/)
-    expect(codeBlocks.length).toBeGreaterThan(0)
-    // 不再含 signPublicKey。
+    expect(await screen.findByText(/"endpoint": "http:\/\/localhost:3000\/api\/v1"/)).toBeInTheDocument()
+    expect(screen.queryByText(/coreEndpoint/)).not.toBeInTheDocument()
     expect(screen.queryByText(/signPublicKey/)).not.toBeInTheDocument()
-    // 下载按钮存在。
     const dlBtns = screen.getAllByRole('button', { name: /下载 jm-updater\.json/ })
     expect(dlBtns.length).toBeGreaterThan(0)
   })

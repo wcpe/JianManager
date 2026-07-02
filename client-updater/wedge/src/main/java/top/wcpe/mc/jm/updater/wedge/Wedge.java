@@ -12,7 +12,7 @@ import java.util.Map;
  * JM 客户端 OTA 楔子（javaagent）。
  *
  * <p>经启动器 JVM 参数 {@code -javaagent:wedge.jar=<gameDir>} 注入；premain 自定位、
- * 查询 CP 的 coreEndpoint → 按需下载 updater-core → 加载并调用其 {@code run} 入口、同步等待，
+ * 根据 API 根 endpoint 拼接 core 端点 → 按需下载 updater-core → 加载并调用其 {@code run} 入口、同步等待，
  * 更新失败 fail-static、楔子自身任何异常 fail-open——绝不挡住游戏启动（ADR-021 决策 6）。
  *
  * <p>FR-258 楔子改 gradle-wrapper 模式：整合包只带 wedge.jar，首次自动拉 core。
@@ -30,6 +30,7 @@ public final class Wedge {
      */
     public static void premain(String agentArgs, Instrumentation inst) {
         Messages msg = safeMessages();
+        File gameDirForLog = new File(".");
         try {
             System.out.println(msg.get(Messages.Key.STARTING));
             File wedgeDir = locateWedgeDir();
@@ -37,8 +38,15 @@ public final class Wedge {
             if (gameDir == null || gameDir.trim().isEmpty()) {
                 gameDir = wedgeDir.getAbsolutePath();
             }
-            runUpdate(wedgeDir, gameDir, msg);
+            gameDirForLog = new File(gameDir);
+            try (WedgeLogger log = WedgeLogger.create(gameDirForLog)) {
+                log.info("楔子启动 gameDir=" + gameDirForLog.getAbsolutePath() + " wedgeDir=" + wedgeDir.getAbsolutePath());
+                runUpdate(wedgeDir, gameDir, msg, log);
+            }
         } catch (Throwable t) {
+            try (WedgeLogger log = WedgeLogger.create(gameDirForLog)) {
+                log.error("楔子异常，fail-open 放行游戏: " + t);
+            }
             // 楔子唯一允许的失败模式：放行游戏（ADR-021 决策 6 / FR-089）。
             System.err.println(msg.get(Messages.Key.WEDGE_FAILOPEN) + " (" + t + ")");
         }
@@ -52,65 +60,108 @@ public final class Wedge {
      * @param msg      i18n 提示
      */
     static void runUpdate(File wedgeDir, String gameDir, Messages msg) throws Exception {
+        try (WedgeLogger log = WedgeLogger.create(new File(gameDir))) {
+            runUpdate(wedgeDir, gameDir, msg, log);
+        }
+    }
+
+    static void runUpdate(File wedgeDir, String gameDir, Messages msg, WedgeLogger log) throws Exception {
+        log.info("开始执行楔子更新流程");
+        log.info("楔子环境 javaVersion=" + System.getProperty("java.version", "")
+                + " os=" + System.getProperty("os.name", "")
+                + " arch=" + System.getProperty("os.arch", "")
+                + " fileEncoding=" + System.getProperty("file.encoding", ""));
         // 1. 读 jm-updater.json（保留原始 JSON 文本供 configJson 透传）。
         File configFile = new File(wedgeDir, "jm-updater.json");
+        log.info("读取配置文件 path=" + configFile.getAbsolutePath() + " exists=" + configFile.isFile());
         if (!configFile.isFile()) {
             // 无配置 = 未启用 OTA：fail-open 放行（不挡游戏）。
-            System.err.println("[JM Updater] 未找到 jm-updater.json，跳过更新直接启动。");
+            String message = "未找到 jm-updater.json，跳过更新直接启动。";
+            log.warn(message);
+            System.err.println("[JM Updater] " + message);
             return;
         }
         String configJsonText = new String(Files.readAllBytes(configFile.toPath()), StandardCharsets.UTF_8);
         WedgeConfig config = WedgeConfig.fromJson(configJsonText);
+        log.info("配置解析完成 channel=" + config.channel
+                + " endpoint=" + config.endpoint
+                + " key=" + maskKey(config.key)
+                + " timeoutSec=" + config.timeoutSec
+                + " bootConfirmSec=" + config.bootConfirmSec
+                + " telemetry=" + config.telemetry);
 
         // 2. 准备 core 目录 + 读取本地状态摘要（不推进状态机）。
         File coreDir = new File(new File(gameDir, ".jm-updater"), "core");
         CoreSelector.StateSummary summary = CoreSelector.readSummary(coreDir);
+        log.info("本地 core 状态 selectedVersion=" + summary.selectedVersion
+                + " hasPending=" + summary.hasPending
+                + " failedVersion=" + summary.failedVersion
+                + " hasSelectedJar=" + summary.hasSelectedJar);
 
-        // 3. 查询 CP 的 coreEndpoint（best-effort，不可达返回 null）。
-        CoreFetcher.CoreEndpointInfo cpInfo = CoreFetcher.fetchInfo(config.coreEndpoint, config.key);
+        // 3. 用 API 根 endpoint 拼接 updater-core 端点（best-effort，不可达返回 null）。
+        log.info("开始查询 updater-core endpoint=" + config.updaterCoreEndpoint());
+        CoreFetcher.CoreEndpointInfo cpInfo = CoreFetcher.fetchInfo(config.updaterCoreEndpoint(), config.key, log);
+        if (cpInfo != null) {
+            log.info("查询到 updater-core version=" + cpInfo.version + " sha256=" + cpInfo.sha256);
+        } else {
+            log.warn("未查询到可用 updater-core 信息，将尝试本地版本");
+        }
 
         // 4. 决策是否下载新 core。
         boolean shouldDownload = decideDownload(summary, cpInfo);
+        log.info("core 下载决策 shouldDownload=" + shouldDownload + " reason=" + downloadDecisionReason(summary, cpInfo));
         if (shouldDownload && cpInfo != null) {
             try {
+                log.info("发现新版 core version=" + cpInfo.version + "，开始下载");
                 System.out.println("[JM Updater] 发现新版 core（v" + cpInfo.version + "），正在下载…");
-                CoreFetcher.downloadJar(cpInfo, config.key, coreDir);
-                CoreSelector.setPending(coreDir, cpInfo.sha256, cpInfo.version);
+                CoreFetcher.downloadJar(cpInfo, config.key, coreDir, log);
+                CoreSelector.setPending(coreDir, cpInfo.sha256, cpInfo.version, log);
+                log.info("新版 core 已写入 pending version=" + cpInfo.version);
             } catch (Exception e) {
                 // 下载失败，继续用本地（如果有）
+                log.warn("下载 core jar 失败，尝试使用本地版本: " + e);
                 System.err.println("[JM Updater] 下载 core jar 失败，尝试使用本地版本: " + e);
             }
         }
 
         // 5. CoreSelector.select 推进状态机（pending trial / promote / rollback）。
-        CoreSelector.Selection sel = CoreSelector.select(coreDir);
+        CoreSelector.Selection sel = CoreSelector.select(coreDir, log);
         if (sel.coreJar == null) {
             // 无可用 core（首次断网 + 本地无 jar）→ fail-open 放行游戏
+            log.warn("无可用 core jar，跳过更新直接启动。");
             System.err.println("[JM Updater] 无可用 core jar，跳过更新直接启动。");
             return;
         }
+        log.info("已选择 core jar=" + sel.coreJar.getAbsolutePath() + " version=" + sel.coreVersion + " trial=" + sel.trial);
 
         // 6. 加载 selected/pending jar → CoreLoader.loadAndRun → 同步等待 + 超时（契约 §6.3）。
         Map<String, String> ctx = buildContext(gameDir, config, sel.coreVersion, configJsonText);
-        int result = CoreLoader.loadAndRun(sel.coreJar, ctx, config.timeoutSec);
+        log.info("开始加载 updater-core timeoutSec=" + config.timeoutSec);
+        int result = CoreLoader.loadAndRun(sel.coreJar, ctx, config.timeoutSec, log);
+        log.info("updater-core 返回 result=" + result);
 
         // 7. 首次 trial 且 core 正常加载运行 → 起 boot-confirm 看门狗（FR-091）。
         boolean coreRanOk = result != CoreLoader.RESULT_LOAD_ERROR && result != CoreLoader.RESULT_TIMEOUT;
         if (sel.trial && coreRanOk) {
-            CoreSelector.scheduleBootConfirm(coreDir, config.bootConfirmSec);
+            CoreSelector.scheduleBootConfirm(coreDir, config.bootConfirmSec, log);
+            log.info("已启动 boot-confirm 看门狗 bootConfirmSec=" + config.bootConfirmSec);
         }
 
         // 8. 处理结果：0=放行；超时/非 0=fail-static 放行带本地版本 + 提示（契约 §6.3）。
         if (result == CoreLoader.RESULT_OK) {
+            log.info("更新成功，放行游戏");
             System.out.println(msg.get(Messages.Key.UPDATE_OK));
         } else if (result == CoreLoader.RESULT_TIMEOUT) {
+            log.warn("updater-core 超时，fail-static 放行");
             System.err.println(msg.get(Messages.Key.UPDATE_TIMEOUT));
         } else {
+            log.warn("updater-core 更新失败，fail-static 放行 result=" + result);
             System.err.println(msg.get(Messages.Key.UPDATE_FAILED_STATIC));
         }
 
         // 9. 清理：保留最近 3 个 jar，删最老的。
-        CoreSelector.retainLatestJars(coreDir, CoreSelector.KEEP_JARS);
+        CoreSelector.retainLatestJars(coreDir, CoreSelector.KEEP_JARS, log);
+        log.info("楔子更新流程结束");
     }
 
     /**
@@ -140,6 +191,26 @@ public final class Wedge {
             return true; // 首次运行或状态损坏
         }
         return cpInfo.version > summary.selectedVersion; // 升级
+    }
+
+    private static String downloadDecisionReason(CoreSelector.StateSummary summary,
+                                                 CoreFetcher.CoreEndpointInfo cpInfo) {
+        if (summary.hasPending) {
+            return "已有 pending，先由 CoreSelector 处理";
+        }
+        if (cpInfo == null) {
+            return "未获取到远端 core 信息";
+        }
+        if (cpInfo.version == summary.failedVersion && summary.failedVersion > 0) {
+            return "远端版本等于已失败版本 " + summary.failedVersion;
+        }
+        if (!summary.hasSelectedJar) {
+            return "本地无 selected core jar";
+        }
+        if (cpInfo.version > summary.selectedVersion) {
+            return "远端版本更高 remote=" + cpInfo.version + " local=" + summary.selectedVersion;
+        }
+        return "本地版本已满足 remote=" + cpInfo.version + " local=" + summary.selectedVersion;
     }
 
     /** 自定位楔子所在目录（契约 §6.2）。 */
@@ -177,6 +248,16 @@ public final class Wedge {
         } catch (Throwable t) {
             return Messages.forLanguage("en");
         }
+    }
+
+    private static String maskKey(String key) {
+        if (key == null || key.isEmpty()) {
+            return "<empty>";
+        }
+        if (key.length() <= 9) {
+            return key.charAt(0) + "***";
+        }
+        return key.substring(0, 9) + "***";
     }
 
     private static String nullToEmpty(String s) {

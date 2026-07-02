@@ -8,10 +8,10 @@ import { useUpdaterJarsInfo, downloadUpdaterJar, downloadUpdaterConfig } from '@
 
 /**
  * 客户端更新器接入指引（FR-107 / FR-259）。面向运营方：在频道详情一页拿齐——下载楔子、
- * 该频道专属 jm-updater.json（含 coreEndpoint）、启动器 JVM 参数、行为说明，照做即可接入并下发玩家。
+ * 该频道专属 jm-updater.json、启动器 JVM 参数、行为说明，照做即可接入并下发玩家。
  *
  * FR-259 起 core 不再随整合包附带：整合包只带 wedge.jar（~30KB），首次启动楔子自动经
- * coreEndpoint 拉取 updater-core（gradle-wrapper 模式，见 FR-258）。
+ * API 根 endpoint 拼接 updater-core 端点并拉取（gradle-wrapper 模式，见 FR-258）。
  */
 export default function ClientIntegrationGuide({ channelId }: { channelId: string }) {
   const { t } = useTranslation()
@@ -24,7 +24,6 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
       channel: channelId,
       key: t('clientGuide.keyPlaceholder', '在「拉取密钥」Tab 创建后填入'),
       endpoint,
-      coreEndpoint: `${endpoint}/client-channels/${channelId}/updater-core`,
       timeoutSec: 120,
       telemetry: true,
       bootConfirmSec: 5,
@@ -78,7 +77,7 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
         <p className="text-muted-foreground">
           {t(
             'clientGuide.step1Desc',
-            '只下载 wedge.jar（楔子，~30KB）。updater-core 不再随整合包附带——首次启动时楔子自动经 coreEndpoint 拉取。',
+            '只下载 wedge.jar（楔子，~30KB）。updater-core 不再随整合包附带——首次启动时楔子自动经 API 根 endpoint 拉取。',
           )}
         </p>
         <div className="flex flex-wrap gap-2 mt-2">
@@ -111,7 +110,7 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
         <p className="text-muted-foreground">
           {t(
             'clientGuide.step3Desc',
-            '下面是本频道专属配置。key 换成你在「拉取密钥」Tab 创建的密钥（明文仅创建时一次性显示）；endpoint 改成玩家可访问的公网分发地址。coreEndpoint 由系统自动拼好，楔子首次启动据此拉取 updater-core。',
+            '下面是本频道专属配置。key 换成你在「拉取密钥」Tab 创建的密钥（明文仅创建时一次性显示）；endpoint 必须是玩家可访问的 API 根地址，例如 http://127.0.0.1:18370/api/v1，禁止填写 /client-channels 等后缀。',
           )}
         </p>
         <label className="flex flex-col gap-1 mt-2">

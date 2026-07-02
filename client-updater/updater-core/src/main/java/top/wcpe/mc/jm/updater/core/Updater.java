@@ -42,12 +42,18 @@ final class Updater {
     int run() {
         Logger log = Logger.create(stateDir);
         try {
+            return run(log);
+        } finally {
+            log.close();
+        }
+    }
+
+    int run(Logger log) {
+        try {
             return runInternal(log);
         } catch (Throwable t) {
             log.error("更新异常，fail-static 带本地版本放行: " + t);
             return FAIL_STATIC;
-        } finally {
-            log.close();
         }
     }
 
@@ -71,7 +77,9 @@ final class Updater {
             // 1. 拉 manifest（端点不可达 → fail-static 带本地版本，契约 §6.3）。
             String manifestJson;
             try {
+                log.info("开始拉取 manifest");
                 manifestJson = transport.fetchManifest();
+                log.info("manifest 拉取完成 bytes=" + manifestJson.length());
             } catch (IOException e) {
                 log.warn("manifest 端点不可达，fail-static 带本地版本进游戏: " + e);
                 return FAIL_STATIC;
@@ -80,6 +88,7 @@ final class Updater {
             Manifest manifest;
             try {
                 manifest = Manifest.parse(manifestJson);
+                log.info("manifest 解析完成 version=" + manifest.version + " files=" + manifest.files.size());
             } catch (RuntimeException e) {
                 log.error("manifest 解析失败，fail-static: " + e);
                 return FAIL_STATIC;

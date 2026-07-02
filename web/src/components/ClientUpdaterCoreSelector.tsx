@@ -41,7 +41,7 @@ export default function ClientUpdaterCoreSelector({ channelId }: { channelId: st
         <p className="text-sm text-muted-foreground max-w-2xl">
           {t(
             'clientCore.subtitle',
-            '列出所有归档的 updater-core 版本。切换选定版本后，客户端下次启动查 coreEndpoint 即用该版本——用于坏 core 应急回滚。',
+            '列出所有归档的 updater-core 版本。切换选定版本后，客户端下次启动按 endpoint 自动查询并使用该版本——用于坏 core 应急回滚。',
           )}
         </p>
       </div>
@@ -114,7 +114,7 @@ export default function ClientUpdaterCoreSelector({ channelId }: { channelId: st
         title={t('clientCore.switchConfirm', '切换 updater-core 版本？')}
         description={t(
           'clientCore.switchDesc',
-          '切换后客户端下次启动查 coreEndpoint 即用该版本。本地已有该版本 jar 的客户端直接用、没有的自动下载。请确认确需切换。',
+          '切换后客户端下次启动按 endpoint 自动查询并使用该版本。本地已有该版本 jar 的客户端直接用、没有的自动下载。请确认确需切换。',
         )}
         scope="platform"
         confirmLabel={t('clientCore.select', '选定')}

@@ -82,11 +82,10 @@ class WedgePremainTest {
         return sb.toString();
     }
 
-    private String writeConfig(File wedgeDir, String coreEndpointUrl) throws Exception {
+    private String writeConfig(File wedgeDir, String endpoint) throws Exception {
         wedgeDir.mkdirs();
         String json = "{\"channel\":\"test-ch\",\"key\":\"test-key\","
-                + "\"endpoint\":\"http://localhost/manifest\","
-                + "\"coreEndpoint\":\"" + coreEndpointUrl + "\","
+                + "\"endpoint\":\"" + endpoint + "\","
                 + "\"timeoutSec\":15,\"bootConfirmSec\":1,"
                 + "\"telemetry\":false,\"extraField\":\"hello\"}";
         Files.write(new File(wedgeDir, "jm-updater.json").toPath(), json.getBytes(StandardCharsets.UTF_8));
@@ -111,7 +110,7 @@ class WedgePremainTest {
         int port = findFreePort();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
 
-        server.createContext("/updater-core", exchange -> {
+        server.createContext("/api/v1/client-channels/test-ch/updater-core", exchange -> {
             String json = "{\"version\":" + version + ",\"sha256\":\"" + sha + "\","
                     + "\"downloadUrl\":\"http://127.0.0.1:" + port + "/core.jar\","
                     + "\"size\":" + jarBytes.length + "}";
@@ -151,7 +150,7 @@ class WedgePremainTest {
 
         HttpServer server = startCoreEndpointServer(jar, 1);
         try {
-            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/updater-core";
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/api/v1";
             writeConfig(wedgeDir, url);
 
             Wedge.runUpdate(wedgeDir, gameDir.getAbsolutePath(), Messages.forLanguage("en"));
@@ -160,6 +159,12 @@ class WedgePremainTest {
             File coreDir = new File(gameDir, ".jm-updater/core");
             String sha = sha256Hex(jar);
             assertTrue(new File(coreDir, sha + ".jar").isFile(), "core jar 应下载到 core/<sha>.jar");
+            String logText = new String(Files.readAllBytes(new File(gameDir, ".jm-updater/logs/wedge.log").toPath()), StandardCharsets.UTF_8);
+            assertTrue(logText.contains("读取配置文件 path="), "日志应包含配置文件路径");
+            assertTrue(logText.contains("key=t***"), "日志应包含脱敏后的 key 前缀");
+            assertFalse(logText.contains("key\":\"test-key"), "日志不得包含配置原文中的完整 key");
+            assertTrue(logText.contains("core 下载决策 shouldDownload=true reason=本地无 selected core jar"), "日志应包含下载决策原因");
+            assertTrue(logText.contains("开始调用 updater-core Core.run"), "日志应包含 core 入口调用节点");
         } finally {
             server.stop(0);
         }
@@ -179,7 +184,7 @@ class WedgePremainTest {
 
         HttpServer server = startCoreEndpointServer(jar, 2); // CP 返回 version=2 > 本地 1
         try {
-            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/updater-core";
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/api/v1";
             writeConfig(wedgeDir, url);
 
             Wedge.runUpdate(wedgeDir, gameDir.getAbsolutePath(), Messages.forLanguage("en"));
@@ -222,7 +227,7 @@ class WedgePremainTest {
             }
         });
         try {
-            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/updater-core";
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/api/v1";
             writeConfig(wedgeDir, url);
 
             Wedge.runUpdate(wedgeDir, gameDir.getAbsolutePath(), Messages.forLanguage("en"));
@@ -246,8 +251,8 @@ class WedgePremainTest {
         stageLocalCore(coreDir, "localSha", 1);
         new File(gameDir, ".jm-updater/core-ran.marker").delete();
 
-        // coreEndpoint 指向不存在的端口
-        writeConfig(wedgeDir, "http://127.0.0.1:1/updater-core");
+        // endpoint 指向不存在的 API 根端口
+        writeConfig(wedgeDir, "http://127.0.0.1:1/api/v1");
 
         Wedge.runUpdate(wedgeDir, gameDir.getAbsolutePath(), Messages.forLanguage("en"));
 
@@ -259,7 +264,7 @@ class WedgePremainTest {
         File wedgeDir = tmp.resolve("wedge").toFile();
         File gameDir = tmp.resolve("game").toFile();
 
-        writeConfig(wedgeDir, "http://127.0.0.1:1/updater-core");
+        writeConfig(wedgeDir, "http://127.0.0.1:1/api/v1");
 
         // fail-open：不抛异常，不调用 Core.run
         Wedge.runUpdate(wedgeDir, gameDir.getAbsolutePath(), Messages.forLanguage("en"));
@@ -278,7 +283,7 @@ class WedgePremainTest {
 
         HttpServer server = startCoreEndpointServer(jar, 1);
         try {
-            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/updater-core";
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/api/v1";
             String configJson = writeConfig(wedgeDir, url);
 
             Wedge.runUpdate(wedgeDir, gameDir.getAbsolutePath(), Messages.forLanguage("en"));

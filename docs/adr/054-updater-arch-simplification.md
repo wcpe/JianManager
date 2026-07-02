@@ -38,7 +38,7 @@ manifest 去掉 `sig` 段，客户端拉到 manifest 直接用，不再验签。
 
 ### 2. signPublicKey / signKeyId 废弃（推翻 ADR-053）
 
-`jm-updater.json` 的 `signPublicKey`/`signKeyId` 字段废弃。验签已去掉，无需配置信任公钥。`GET /client-dist/sign-key` 端点删除（FR-248 面板公钥展示随验签一起作废）。`GET /client-channels/:id/updater-config` 端点保留但不再返回 `signPublicKey`，改为返回 `coreEndpoint`（见决策 3）。
+`jm-updater.json` 的 `signPublicKey`/`signKeyId` 字段废弃。验签已去掉，无需配置信任公钥。`GET /client-dist/sign-key` 端点删除（FR-248 面板公钥展示随验签一起作废）。`GET /client-channels/:id/updater-config` 端点保留但不再返回 `signPublicKey`；后续修复进一步移除 `coreEndpoint` 配置字段，只返回 API 根 `endpoint`，楔子由 `endpoint + channel` 自动拼接 updater-core 端点（见决策 3）。
 
 ### 3. core 改归档多版本 + 运营面板可选 + 楔子自动拉取（修订 ADR-045）
 
@@ -46,10 +46,10 @@ ADR-045 决策 1「core 默认随 CP 内嵌单版本、自动驱动 manifest `ag
 
 - **CP 每次 `make embed-client-updater` 时新 core jar 入库归档**（不覆盖旧版，制品类型 `client-updater-core`，版本号递增）。
 - **运营面板可选**：频道详情「Core 版本」Tab 列出所有归档版本，一键切换频道选定版本。
-- **楔子自动拉取**（gradle-wrapper 模式）：整合包只带 ~30KB wedge.jar，不再附带 updater-core.jar。楔子首次启动自动经 `coreEndpoint` 拉取 core jar、本地保留 3 版用于回滚。
+- **楔子自动拉取**（gradle-wrapper 模式）：整合包只带 ~30KB wedge.jar，不再附带 updater-core.jar。楔子首次启动自动经 `endpoint + channel` 拼出的 updater-core 端点拉取 core jar，本地保留 3 版用于回滚；`jm-updater.json` 禁止配置完整 `coreEndpoint`。
 - **新增端点**：`GET /client-channels/:id/updater-core`（拉取密钥鉴权，返回当前选定版本 `{version, sha256, downloadUrl, size}`）+ `GET /client-channels/:id/updater-core/versions`（JWT 平台管理员，列归档版本）+ `PUT /client-channels/:id/updater-core/selected`（JWT 平台管理员，切换选定版本）。
 
-manifest 的 `agent.core` 段保留但信息来源改为 coreEndpoint（不再由 manifest 驱动 core 自更新）。
+manifest 的 `agent.core` 段保留但信息来源改为 updater-core 查询端点（不再由 manifest 驱动 core 自更新）。
 
 ### 4. 楔子代码冻结约束（关键架构决策）
 
@@ -66,7 +66,7 @@ public final class Core {
 类名 `top.wcpe.mc.jm.updater.core.Core`、方法名 `run`、参数 `Map<String, String>`、返回 `int`（0=放行，非 0=fail-static）均不变。**后续所有 updater-core 版本必须保留此入口**——否则楔子加载不了新版 core，自动更新链条断裂。`CoreLoaderTest` 用真实构建的 core jar 验证反射调用链路。
 
 #### 4.2 jm-updater.json 原文透传
-楔子只解析自己需要的字段（`channel`/`key`/`endpoint`/`coreEndpoint`/`timeoutSec`），但把 `jm-updater.json` 原始 JSON 文本也放进 ctx（key 为 `configJson`）。后续 core 需要新配置项时只需 `jm-updater.json` 加字段 → 楔子不认得但透传原文 → core 自己从 `ctx.get("configJson")` 解析新字段，**不需要改楔子**。
+楔子只解析自己需要的字段（`channel`/`key`/`endpoint`/`timeoutSec`），但把 `jm-updater.json` 原始 JSON 文本也放进 ctx（key 为 `configJson`）。后续 core 需要新配置项时只需 `jm-updater.json` 加字段 → 楔子不认得但透传原文 → core 自己从 `ctx.get("configJson")` 解析新字段，**不需要改楔子**。`endpoint` 必须是 API 根路径（如 `/api/v1`），`coreEndpoint` 配置字段禁止出现。
 
 ctx 固定 key（楔子写入）：`channel` / `key` / `endpoint` / `timeoutSec` / `telemetry` / `gameDir` / `coreVersion` / `configJson`。
 

@@ -11,6 +11,7 @@
 // 设计为构建期稳健：任一源失败只告警并跳过该源（产出可能为部分），不让整个 build 崩。
 
 import { execSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -24,6 +25,53 @@ const OUT_FILE = join(WEB_DIR, 'public', 'licenses.json')
 const MAX_BUFFER = 128 * 1024 * 1024
 const MAX_LICENSE_TEXT = 64 * 1024
 const LICENSE_FILE_RE = /^(LICENSE|LICENCE|COPYING|COPYRIGHT)(\.[\w.-]+)?$/i
+const SCRIPT_FILE = fileURLToPath(import.meta.url)
+const FORCE = process.argv.includes('--force') || process.env.LICENSES_FORCE === '1'
+const DEPENDENCY_INPUT_FILES = [
+  join(WEB_DIR, 'package.json'),
+  join(WEB_DIR, 'package-lock.json'),
+  join(BOT_DIR, 'package.json'),
+  join(BOT_DIR, 'package-lock.json'),
+  join(REPO_ROOT, 'go.mod'),
+  join(REPO_ROOT, 'go.sum'),
+]
+const FINGERPRINT_FILES = [...DEPENDENCY_INPUT_FILES, SCRIPT_FILE]
+
+/** 计算依赖输入指纹；锁文件未变时可复用已有 licenses.json。 */
+function sourceFingerprint() {
+  const hash = createHash('sha256')
+  for (const file of FINGERPRINT_FILES) {
+    hash.update(file)
+    hash.update('\0')
+    if (existsSync(file)) {
+      hash.update(readFileSync(file))
+    }
+    hash.update('\0')
+  }
+  return hash.digest('hex')
+}
+
+/** 尝试读取已有清单的输入指纹。 */
+function existingSourceHash() {
+  try {
+    if (!existsSync(OUT_FILE)) return ''
+    const manifest = JSON.parse(readFileSync(OUT_FILE, 'utf8'))
+    return typeof manifest.sourceHash === 'string' ? manifest.sourceHash : ''
+  } catch {
+    return ''
+  }
+}
+
+/** 兼容旧清单：没有 sourceHash 时，只要依赖输入没比输出新，就快速复用。 */
+function existingOutputIsFreshByMtime() {
+  try {
+    if (!existsSync(OUT_FILE)) return false
+    const outMtime = statSync(OUT_FILE).mtimeMs
+    return DEPENDENCY_INPUT_FILES.every((file) => !existsSync(file) || statSync(file).mtimeMs <= outMtime)
+  } catch {
+    return false
+  }
+}
 
 /** 读许可证全文（截断到上限），失败返回空串。 */
 function readLicenseText(file) {
@@ -223,12 +271,20 @@ function scanGo() {
 
 // ─────────────────────────────────── 主流程 ───────────────────────────────────
 
+const sourceHash = sourceFingerprint()
+const cachedHash = existingSourceHash()
+if (!FORCE && (cachedHash === sourceHash || (!cachedHash && existingOutputIsFreshByMtime()))) {
+  console.log(`[gen-licenses] 依赖输入未变化，复用已有清单 → ${OUT_FILE}`)
+  process.exit(0)
+}
+
 const deps = [...scanNpm('web', WEB_DIR), ...scanNpm('bot-worker', BOT_DIR), ...scanGo()]
 deps.sort((a, b) => a.scope.localeCompare(b.scope) || a.name.localeCompare(b.name))
 
 const manifest = {
   // generatedAt 由调用方/CI 注入更稳；脚本内用环境变量或留空（避免不可复现 diff 噪声）。
   generatedAt: process.env.LICENSES_GENERATED_AT || '',
+  sourceHash,
   dependencies: deps,
 }
 

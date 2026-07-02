@@ -45,14 +45,26 @@ final class CoreLoader {
      * @throws IOException core jar 不存在/不可读
      */
     static int loadAndRun(File coreJar, Map<String, String> ctx, int timeoutSec) throws IOException {
+        return loadAndRun(coreJar, ctx, timeoutSec, null);
+    }
+
+    static int loadAndRun(File coreJar, Map<String, String> ctx, int timeoutSec, WedgeLogger log) throws IOException {
         if (!coreJar.isFile()) {
             throw new IOException("updater-core jar 不存在: " + coreJar.getAbsolutePath());
+        }
+        if (log != null) {
+            log.info("准备加载 updater-core jar=" + coreJar.getAbsolutePath()
+                    + " size=" + coreJar.length()
+                    + " timeoutSec=" + timeoutSec);
         }
         // 内存加载：复制 jar 字节到临时文件作为 URLClassLoader 源，原 jar 不被持续锁（便于自更新替换）。
         File tempJar = File.createTempFile("jm-updater-core", ".jar");
         tempJar.deleteOnExit();
         Files.copy(coreJar.toPath(), tempJar.toPath(),
                 java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        if (log != null) {
+            log.debug("updater-core 已复制到临时 jar=" + tempJar.getAbsolutePath());
+        }
 
         URL[] urls = { tempJar.toURI().toURL() };
         // parent = 平台类加载器避免污染：core 仅需 JDK + 自带依赖（打入 core jar / 由其自身解析）。
@@ -69,21 +81,40 @@ final class CoreLoader {
             Future<Integer> future = exec.submit(new Callable<Integer>() {
                 @Override
                 public Integer call() throws Exception {
+                    if (log != null) {
+                        log.debug("开始反射加载 core 类 " + CORE_CLASS);
+                    }
                     Class<?> coreClass = Class.forName(CORE_CLASS, true, loader);
                     Method run = coreClass.getMethod("run", Map.class);
+                    if (log != null) {
+                        log.info("开始调用 updater-core Core.run ctxKeys=" + ctx.keySet());
+                    }
                     Object ret = run.invoke(null, new HashMap<String, String>(ctx));
-                    return ret instanceof Integer ? (Integer) ret : RESULT_OK;
+                    int rc = ret instanceof Integer ? (Integer) ret : RESULT_OK;
+                    if (log != null) {
+                        log.info("updater-core Core.run 返回 rc=" + rc);
+                    }
+                    return rc;
                 }
             });
             try {
                 return future.get(timeoutSec, TimeUnit.SECONDS);
             } catch (TimeoutException e) {
+                if (log != null) {
+                    log.warn("updater-core 执行超时 timeoutSec=" + timeoutSec);
+                }
                 future.cancel(true);
                 return RESULT_TIMEOUT;
             } catch (ExecutionException e) {
+                if (log != null) {
+                    log.error("updater-core 加载或执行异常: " + e.getCause());
+                }
                 // core 内部本应自兜底；若仍逃逸异常，按加载/执行错误 fail-static。
                 return RESULT_LOAD_ERROR;
             } catch (InterruptedException e) {
+                if (log != null) {
+                    log.warn("updater-core 执行被中断");
+                }
                 Thread.currentThread().interrupt();
                 return RESULT_TIMEOUT;
             }

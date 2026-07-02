@@ -11,6 +11,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -108,6 +109,27 @@ class CoreFetcherTest {
     }
 
     @Test
+    void fetchInfoLogsBackendErrorCodeOnNon200(@TempDir Path tmp) throws Exception {
+        String body = "{\"error\":\"INVALID_CLIENT_KEY\",\"message\":\"拉取密钥无效\"}";
+        HttpServer server = startServer(exchange -> {
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(401, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        });
+        try (WedgeLogger log = WedgeLogger.create(tmp.toFile())) {
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/";
+            assertNull(CoreFetcher.fetchInfo(url, "bad-key", 5000, 5000, log));
+        } finally {
+            server.stop(0);
+        }
+        String logText = new String(Files.readAllBytes(tmp.resolve(".jm-updater/logs/wedge.log")), StandardCharsets.UTF_8);
+        assertTrue(logText.contains("HTTP 401"), "日志应包含 HTTP 状态码");
+        assertTrue(logText.contains("INVALID_CLIENT_KEY"), "日志应包含服务端错误码");
+    }
+
+    @Test
     void fetchInfoReturnsNullOnUnreachable() {
         // 指向一个不存在的端口
         assertNull(CoreFetcher.fetchInfo("http://127.0.0.1:1/updater-core", "k", 200, 200));
@@ -167,6 +189,37 @@ class CoreFetcherTest {
         } finally {
             server.stop(0);
         }
+    }
+
+    @Test
+    void downloadJarLogsBackendErrorCodeOnNon200(@TempDir Path tmp) throws Exception {
+        File coreDir = tmp.resolve("core").toFile();
+        String sha = "0000000000000000000000000000000000000000000000000000000000000000";
+        String body = "{\"error\":\"ARTIFACT_NOT_FOUND\",\"message\":\"制品不存在\"}";
+        HttpServer server = startServer(exchange -> {
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(404, bytes.length);
+            try (OutputStream os = exchange.getResponseBody()) {
+                os.write(bytes);
+            }
+        });
+        try (WedgeLogger log = WedgeLogger.create(tmp.toFile())) {
+            String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/core.jar";
+            CoreFetcher.CoreEndpointInfo info = CoreFetcher.CoreEndpointInfo.fromJson(
+                    "{\"version\":1,\"sha256\":\"" + sha + "\",\"downloadUrl\":\"" + url + "\",\"size\":1}");
+            boolean threw = false;
+            try {
+                CoreFetcher.downloadJar(info, "k", coreDir, 5000, 5000, log);
+            } catch (IOException e) {
+                threw = true;
+                assertTrue(e.getMessage().contains("ARTIFACT_NOT_FOUND"), "异常应包含服务端错误码");
+            }
+            assertTrue(threw, "下载 HTTP 非 200 应抛 IOException");
+        } finally {
+            server.stop(0);
+        }
+        String logText = new String(Files.readAllBytes(tmp.resolve(".jm-updater/logs/wedge.log")), StandardCharsets.UTF_8);
+        assertTrue(logText.contains("ARTIFACT_NOT_FOUND"), "日志应包含下载端服务端错误码");
     }
 
     @Test

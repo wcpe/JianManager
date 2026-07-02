@@ -11,7 +11,7 @@ import java.time.format.DateTimeFormatter;
 /**
  * 本地诊断日志（契约 FR-090「本地诊断日志，供排障与遥测 FR-094」）。
  *
- * <p>同时写 {@code <gameDir>/.jm-updater/updater.log} 与 stderr（楔子控制台可见）。
+ * <p>同时写 {@code <gameDir>/.jm-updater/logs/updater.log} 与 stderr（楔子控制台可见）。
  * 凭据（key/token）绝不入日志。
  */
 final class Logger implements AutoCloseable {
@@ -30,8 +30,9 @@ final class Logger implements AutoCloseable {
     static Logger create(Path stateDir) {
         PrintStream file = null;
         try {
-            Files.createDirectories(stateDir);
-            Path logFile = stateDir.resolve("updater.log");
+            Path logDir = stateDir.resolve("logs");
+            Files.createDirectories(logDir);
+            Path logFile = logDir.resolve("updater.log");
             file = new PrintStream(Files.newOutputStream(logFile,
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND), true, "UTF-8");
         } catch (IOException | SecurityException e) {

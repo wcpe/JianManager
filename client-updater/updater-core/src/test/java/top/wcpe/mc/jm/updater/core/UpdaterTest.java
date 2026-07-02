@@ -56,6 +56,11 @@ class UpdaterTest {
         assertTrue(Files.isRegularFile(written));
         assertArrayEquals(foo, Files.readAllBytes(written));
         assertEquals(1, transport.artifactFetchCount, "缺失文件应下载一次");
+        Path logFile = gameDir.resolve(".jm-updater/logs/updater.log");
+        assertTrue(Files.isRegularFile(logFile), "updater-core 应写入本地日志文件");
+        String log = new String(Files.readAllBytes(logFile), StandardCharsets.UTF_8);
+        assertTrue(log.contains("开始拉取 manifest"), "日志应包含 manifest 拉取节点");
+        assertTrue(log.contains("更新成功，放行游戏 version=1"), "日志应包含成功放行节点");
     }
 
     @Test

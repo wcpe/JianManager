@@ -97,6 +97,18 @@ class CoreLoaderTest {
         assertEquals(CoreLoader.RESULT_LOAD_ERROR, rc, "core 抛异常逃逸时应返回 RESULT_LOAD_ERROR（fail-static）");
     }
 
+    @Test
+    void logsLoadErrorWhenCoreThrows(@TempDir Path tmp) throws Exception {
+        File throwingJar = buildThrowingCoreJar(tmp);
+        try (WedgeLogger log = WedgeLogger.create(tmp.toFile())) {
+            int rc = CoreLoader.loadAndRun(throwingJar, new HashMap<>(), 5, log);
+            assertEquals(CoreLoader.RESULT_LOAD_ERROR, rc);
+        }
+        String logText = new String(Files.readAllBytes(tmp.resolve(".jm-updater/logs/wedge.log")), StandardCharsets.UTF_8);
+        assertTrue(logText.contains("准备加载 updater-core"), "日志应包含加载准备节点");
+        assertTrue(logText.contains("updater-core 加载或执行异常"), "日志应包含 core 执行异常");
+    }
+
     /** 编译并打包一个 {@code Core.run} 会 sleep 60s 的假 core jar。 */
     private File buildSlowCoreJar(Path tmp) throws Exception {
         String src =

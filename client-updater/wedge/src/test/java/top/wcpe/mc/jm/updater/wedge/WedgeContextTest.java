@@ -18,9 +18,9 @@ class WedgeContextTest {
     @Test
     void buildContextPassesConfigJson() {
         WedgeConfig config = new WedgeConfig(
-                "skyblock-s1", "k_abc", "https://cdn.example.com",
-                "https://srv/api/core", 120, 30, true);
-        String json = "{\"channel\":\"skyblock-s1\",\"coreEndpoint\":\"https://srv/api/core\"}";
+                "skyblock-s1", "k_abc", "https://cdn.example.com/api/v1",
+                120, 30, true);
+        String json = "{\"channel\":\"skyblock-s1\",\"endpoint\":\"https://cdn.example.com/api/v1\"}";
 
         Map<String, String> ctx = Wedge.buildContext("/game", config, 5, json);
 
@@ -30,7 +30,7 @@ class WedgeContextTest {
     @Test
     void buildContextContainsAllFrozenKeys() {
         WedgeConfig config = new WedgeConfig(
-                "c", "k", "https://e", "https://srv/core", 90, 30, true);
+                "c", "k", "https://e/api/v1", 90, 30, true);
 
         Map<String, String> ctx = Wedge.buildContext("/game", config, 7, "{\"channel\":\"c\"}");
 
@@ -38,7 +38,7 @@ class WedgeContextTest {
         assertEquals("/game", ctx.get("gameDir"));
         assertEquals("c", ctx.get("channel"));
         assertEquals("k", ctx.get("key"));
-        assertEquals("https://e", ctx.get("endpoint"));
+        assertEquals("https://e/api/v1", ctx.get("endpoint"));
         assertEquals("7", ctx.get("coreVersion"));
         assertEquals("true", ctx.get("telemetry"));
         assertEquals("90", ctx.get("timeoutSec"));
@@ -48,7 +48,7 @@ class WedgeContextTest {
     @Test
     void buildContextDoesNotContainRemovedKeys() {
         WedgeConfig config = new WedgeConfig(
-                "c", "k", "https://e", "https://srv/core", 90, 30, true);
+                "c", "k", "https://e/api/v1", 90, 30, true);
 
         Map<String, String> ctx = Wedge.buildContext("/game", config, 0, "{}");
 
@@ -60,7 +60,7 @@ class WedgeContextTest {
     @Test
     void buildContextEmptyConfigJsonWhenNull() {
         WedgeConfig config = new WedgeConfig(
-                "c", "k", "https://e", "https://srv/core", 90, 30, true);
+                "c", "k", "https://e/api/v1", 90, 30, true);
 
         Map<String, String> ctx = Wedge.buildContext("/game", config, 0, null);
 

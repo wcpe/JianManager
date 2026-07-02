@@ -69,32 +69,60 @@ final class CoreFetcher {
 
     /** 查询 coreEndpoint 获取当前 core 版本信息；不可达/出错返回 null（best-effort）。 */
     static CoreEndpointInfo fetchInfo(String coreEndpoint, String key) {
-        return fetchInfo(coreEndpoint, key, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS);
+        return fetchInfo(coreEndpoint, key, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, null);
+    }
+
+    static CoreEndpointInfo fetchInfo(String coreEndpoint, String key, WedgeLogger log) {
+        return fetchInfo(coreEndpoint, key, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, log);
     }
 
     /** 带超时参数的重载（供单测使用短超时）。 */
     static CoreEndpointInfo fetchInfo(String coreEndpoint, String key, int connectMs, int readMs) {
+        return fetchInfo(coreEndpoint, key, connectMs, readMs, null);
+    }
+
+    static CoreEndpointInfo fetchInfo(String coreEndpoint, String key, int connectMs, int readMs, WedgeLogger log) {
         if (coreEndpoint == null || coreEndpoint.isEmpty()) {
+            if (log != null) {
+                log.warn("core 查询端点为空");
+            }
             return null;
         }
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             HttpURLConnection conn = null;
             try {
+                if (log != null) {
+                    log.info("查询 core 信息 attempt=" + attempt + " url=" + coreEndpoint);
+                }
                 conn = openGet(coreEndpoint, key, connectMs, readMs);
                 int code = conn.getResponseCode();
                 if (code != 200) {
+                    String error = readErrorSummary(conn);
+                    if (log != null) {
+                        log.warn("查询 core 信息失败 HTTP " + code + error);
+                    }
                     conn.disconnect();
                     return null; // 非 200 不重试（服务端错误）
                 }
                 String body = readAll(conn.getInputStream());
                 conn.disconnect();
-                return CoreEndpointInfo.fromJson(body);
+                CoreEndpointInfo info = CoreEndpointInfo.fromJson(body);
+                if (log != null) {
+                    log.info("解析 core 信息完成 version=" + info.version + " size=" + info.size);
+                }
+                return info;
             } catch (Exception e) {
                 if (conn != null) {
                     try { conn.disconnect(); } catch (Exception ignore) { /* 关闭失败忽略 */ }
                 }
+                if (log != null) {
+                    log.warn("查询 core 信息异常 attempt=" + attempt + ": " + e);
+                }
                 // 网络错误，重试
             }
+        }
+        if (log != null) {
+            log.warn("查询 core 信息多次失败");
         }
         return null;
     }
@@ -106,14 +134,26 @@ final class CoreFetcher {
      * 如果目标 jar 已存在（同 sha256）直接返回。失败抛 {@link IOException}。
      */
     static File downloadJar(CoreEndpointInfo info, String key, File coreDir) throws IOException {
-        return downloadJar(info, key, coreDir, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS);
+        return downloadJar(info, key, coreDir, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, null);
+    }
+
+    static File downloadJar(CoreEndpointInfo info, String key, File coreDir, WedgeLogger log) throws IOException {
+        return downloadJar(info, key, coreDir, CONNECT_TIMEOUT_MS, READ_TIMEOUT_MS, log);
     }
 
     /** 带超时参数的重载（供单测使用短超时）。 */
     static File downloadJar(CoreEndpointInfo info, String key, File coreDir,
                             int connectMs, int readMs) throws IOException {
+        return downloadJar(info, key, coreDir, connectMs, readMs, null);
+    }
+
+    static File downloadJar(CoreEndpointInfo info, String key, File coreDir,
+                            int connectMs, int readMs, WedgeLogger log) throws IOException {
         File target = new File(coreDir, info.sha256 + ".jar");
         if (target.isFile()) {
+            if (log != null) {
+                log.info("core jar 已存在，跳过下载 sha256=" + info.sha256);
+            }
             return target; // 同 sha256 已下载过
         }
 
@@ -122,11 +162,15 @@ final class CoreFetcher {
             File tmpFile = null;
             HttpURLConnection conn = null;
             try {
+                if (log != null) {
+                    log.info("下载 core jar attempt=" + attempt + " url=" + info.downloadUrl);
+                }
                 conn = openGet(info.downloadUrl, key, connectMs, readMs);
                 int code = conn.getResponseCode();
                 if (code != 200) {
+                    String error = readErrorSummary(conn);
                     conn.disconnect();
-                    throw new IOException("下载 core jar 失败，HTTP " + code);
+                    throw new IOException("下载 core jar 失败，HTTP " + code + error);
                 }
 
                 coreDir.mkdirs();
@@ -134,6 +178,7 @@ final class CoreFetcher {
                 tmpFile.deleteOnExit();
 
                 MessageDigest md = newSha256(); // SHA-256 由 JDK 规范保证可用
+                long downloaded = 0L;
                 try (InputStream in = conn.getInputStream();
                      OutputStream out = Files.newOutputStream(tmpFile.toPath())) {
                     byte[] buf = new byte[BUF_SIZE];
@@ -141,9 +186,13 @@ final class CoreFetcher {
                     while ((n = in.read(buf)) != -1) {
                         out.write(buf, 0, n);
                         md.update(buf, 0, n);
+                        downloaded += n;
                     }
                 }
                 conn.disconnect();
+                if (log != null) {
+                    log.info("core jar 下载字节数=" + downloaded + " expectedSize=" + info.size);
+                }
 
                 String actualSha = hexEncode(md.digest());
                 if (!actualSha.equalsIgnoreCase(info.sha256)) {
@@ -152,10 +201,19 @@ final class CoreFetcher {
                 }
 
                 atomicMove(tmpFile, target);
+                if (log != null) {
+                    log.info("core jar 下载完成 file=" + target.getAbsolutePath());
+                }
                 return target;
             } catch (Sha256MismatchException e) {
+                if (log != null) {
+                    log.error("core jar sha256 校验失败: " + e.getMessage());
+                }
                 throw e; // sha256 不符不重试
             } catch (IOException e) {
+                if (log != null) {
+                    log.warn("下载 core jar 异常 attempt=" + attempt + ": " + e);
+                }
                 lastError = e;
                 if (tmpFile != null) {
                     tmpFile.delete();
@@ -192,6 +250,35 @@ final class CoreFetcher {
             conn.setRequestProperty("X-Client-Key", key); // 拉取密钥鉴权（与 manifest 端点同级）
         }
         return conn;
+    }
+
+    private static String readErrorSummary(HttpURLConnection conn) {
+        try {
+            InputStream err = conn.getErrorStream();
+            if (err == null) {
+                return "";
+            }
+            String body = readAll(err).trim();
+            if (body.isEmpty()) {
+                return "";
+            }
+            Map<String, String> parsed = MiniJson.parseFlatObject(body);
+            String code = parsed.get("error");
+            String message = parsed.get("message");
+            if (code != null && message != null) {
+                return " error=" + code + " message=" + message;
+            }
+            if (code != null) {
+                return " error=" + code;
+            }
+            return " body=" + truncate(body);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private static String truncate(String value) {
+        return value.length() <= 200 ? value : value.substring(0, 200);
     }
 
     private static String readAll(InputStream in) throws IOException {

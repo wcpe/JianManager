@@ -54,6 +54,9 @@ func TestGetUpdaterConfig_AdminReturnsConfig(t *testing.T) {
 	if resp["endpoint"] == nil || resp["endpoint"] == "" {
 		t.Fatalf("endpoint 应非空（CP 公网基址），实得 %v", resp["endpoint"])
 	}
+	if _, ok := resp["coreEndpoint"]; ok {
+		t.Fatalf("jm-updater.json 不应再含 coreEndpoint，楔子应由 endpoint 自动拼接")
+	}
 	// FR-256 起 jm-updater.json 不再含签名公钥字段。
 	if _, ok := resp["signPublicKey"]; ok {
 		t.Fatalf("jm-updater.json 不应再含 signPublicKey（验签已去）")

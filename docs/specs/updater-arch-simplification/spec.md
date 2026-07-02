@@ -49,11 +49,11 @@
 
 #### C. 楔子改 gradle-wrapper 模式
 - 整合包**只带 wedge.jar**（去掉 BC 后约 30KB），不再附带 updater-core.jar
-- `jm-updater.json` 加 `coreEndpoint` 字段（指向 CP 的 core 版本查询端点），去掉 `coreJar`/`coreVersion`/`signPublicKey`/`signKeyId`
+- `jm-updater.json` 保留 `endpoint` 字段且必须填写 API 根路径（如 `/api/v1`），去掉 `coreEndpoint`/`coreJar`/`coreVersion`/`signPublicKey`/`signKeyId`；楔子由 `endpoint + channel` 自动拼接 core 版本查询端点
 - 楔子新增 JDK 原生 HTTP 下载能力（`HttpURLConnection`，零外部依赖）
 - 楔子新增 SHA-256 校验能力（`MessageDigest`，JDK 原生）
-- 楔子首次启动：本地无 core → HTTP 请求 coreEndpoint → CP 返回版本信息 → 下载 → sha256 校验 → 存入 `.jm-updater/core/<sha>.jar`
-- 楔子后续启动：查 coreEndpoint 发现版本号 > 本地 selected → 下载新版 → 标记 pending → trial → boot-confirm → promote/rollback
+- 楔子首次启动：本地无 core → 按 API 根 `endpoint` 自动请求 updater-core 端点 → CP 返回版本信息 → 下载 → sha256 校验 → 存入 `.jm-updater/core/<sha>.jar`
+- 楔子后续启动：按 endpoint 自动查询发现版本号 > 本地 selected → 下载新版 → 标记 pending → trial → boot-confirm → promote/rollback
 - 本地保留最近 3 个 core jar，超出自动清理最老的可用 jar
 
 #### D. 服务端 core 版本管理 + 回滚
@@ -72,6 +72,8 @@
 
 **核心诉求**：楔子第一版发布后**代码冻结、永不变更**。后续所有逻辑变动（清理规则、下载策略、协议字段等）都在 updater-core 里做，通过楔子自动拉取新版 core 实现。
 
+**冻结红线**：Wedge 对外发布后，除非出现“已发布 Wedge 自身无法启动 JVM / 无法加载任何 core”的灾难级缺陷，不再修改 Wedge 代码；普通更新失败、manifest/reconcile、下载策略、遥测、防护、兼容字段均通过 updater-core 或服务端修复。发布前 Wedge 必须具备足够诊断日志，避免发布后为了排障再改 Wedge。
+
 为此必须冻结三件事：
 
 ### 2.5.1 楔子↔core 接口契约冻结
@@ -89,7 +91,7 @@ public final class Core {
 - **后续所有 updater-core 版本必须保留此入口**——否则楔子加载不了新版 core，自动更新链条断裂
 
 ### 2.5.2 jm-updater.json 原文透传
-楔子只解析自己需要的字段（channel/key/endpoint/coreEndpoint/timeoutSec），但**把 jm-updater.json 原始 JSON 文本也放进 ctx**（key 为 `configJson`）。
+楔子只解析自己需要的字段（channel/key/endpoint/timeoutSec），其中 endpoint 必须是 API 根路径且禁止额外后缀；但**把 jm-updater.json 原始 JSON 文本也放进 ctx**（key 为 `configJson`）。
 
 这样后续 core 需要新配置项时：
 - jm-updater.json 加字段 → 楔子不认得但透传原文 → core 自己从 `ctx.get("configJson")` 解析新字段
@@ -108,6 +110,15 @@ GET /client-channels/:id/updater-core → { "version": int, "sha256": string, "d
 ### 2.5.4 楔子不解析 manifest
 楔子**永远不接触 manifest**——拉 manifest、解析文件列表、reconcile 全是 core 的职责。楔子只管"拉 core + 加载 core + 调 Core.run"。这样 manifest 格式后续怎么变都不影响楔子。
 
+### 2.5.5 Wedge 冻结前诊断日志基线
+Wedge 必须写 `gameDir/.jm-updater/logs/wedge.log`，且日志足以在不改 Wedge 的前提下定位 bootstrap 失败原因。最低覆盖：
+- 启动环境：gameDir、wedgeDir、Java/OS/arch/file.encoding；不得记录完整 JVM 命令行（可能含 accessToken）。
+- 配置：`jm-updater.json` 路径、是否存在、channel、endpoint、timeout、bootConfirm、telemetry、脱敏后的 key 前缀；不得记录完整 key。
+- 远端 core 查询：endpoint、attempt、HTTP 状态、服务端 `error/message`、解析出的 version/sha/size。
+- 下载：downloadUrl、attempt、HTTP 状态、服务端 `error/message`、下载字节数、sha256 校验结果、目标 jar 路径。
+- 状态机：selected/pending/failedVersion/hasSelectedJar、下载决策原因、trial/promote/rollback/boot-confirm。
+- core 加载：jar 路径/大小、临时 jar、反射类名、ctx key 集合、Core.run 返回码、超时或异常。
+
 
 
 ### 3.1 楔子（wedge）— 新增 HTTP 下载 + 版本管理
@@ -119,13 +130,13 @@ GET /client-channels/:id/updater-core → { "version": int, "sha256": string, "d
 
 `WedgeConfig` 改动：
 - 去掉 `coreJar`/`coreVersion`/`signPublicKey`/`signKeyId`
-- 加 `coreEndpoint`（CP 端点地址，如 `https://你的服务器/api/v1/client-channels/my-channel/updater-core`）
+- 禁止配置 `coreEndpoint`；只保留 `endpoint`（API 根路径，如 `https://你的服务器/api/v1`），楔子自动拼接 `/client-channels/{channel}/updater-core`
 
 `Wedge.premain` 新流程：
 ```
-1. 读 jm-updater.json（channel/key/endpoint/coreEndpoint/timeoutSec）
-2. 查 .jm-updater/core/state.properties 本地状态
-3. HTTP 请求 coreEndpoint → CP 返回 {version, sha256, downloadUrl, size}
+1. 读 jm-updater.json（channel/key/API 根 endpoint/timeoutSec）
+2. 读本地 state.properties（selected/pending/prev/failedVersion）
+3. 按 endpoint + channel 拼接 updater-core 端点并请求 → CP 返回 {version, sha256, downloadUrl, size}
 4. 决策：
    - 本地无 jar（首次）→ 下载 CP 返回的版本 → 存为 pending
    - CP 版本 > 本地 selected → 下载 → 存为 pending
@@ -148,7 +159,7 @@ GET /client-channels/:id/updater-core → { "version": int, "sha256": string, "d
 `Manifest.java` 改动：
 - 去掉 `sig`/`sigKeyId` 字段
 - `verify` 方法删
-- `agentCoreVersion`/`agentCoreArtifact` 段保留（楔子用，但信息来源从 coreEndpoint 而非 manifest——见 3.4）
+- `agentCoreVersion`/`agentCoreArtifact` 段保留（楔子用，但信息来源从 updater-core 查询端点而非 manifest——见 3.4）
 
 `Updater.java` 改动：
 - 步骤 2（验签）删
@@ -187,7 +198,7 @@ GET /client-channels/:id/updater-core → { "version": int, "sha256": string, "d
 
 manifest 改动：
 - 去掉 `sig`/`sigKeyId` 段
-- `agent.core` 段保留但信息来源改为 coreEndpoint（不再由 manifest 驱动 core 自更新）
+- `agent.core` 段保留但信息来源改为 updater-core 查询端点（不再由 manifest 驱动 core 自更新）
 
 删除：
 - `jmpack.go` / `jmpack_service.go` / `jmpack_test.go`（.jmpack 打包端点删）
@@ -211,7 +222,7 @@ manifest 改动：
 
 ### 阶段 2：楔子自动拉 core（楔子代码冻结版本）
 - [ ] wedge：新增 CoreFetcher（HTTP 下载 + sha256 校验）
-- [ ] wedge：WedgeConfig 改（去 coreJar/coreVersion/signPublicKey，加 coreEndpoint）
+- [ ] wedge：WedgeConfig 改（去 coreJar/coreVersion/signPublicKey/coreEndpoint，只保留 API 根 endpoint）
 - [ ] wedge：Wedge.premain 新流程（查端点 → 下载 → 本地版本管理 → CoreSelector）
 - [ ] wedge：jm-updater.json 原文透传到 ctx（`configJson` 键，供 core 后续扩展）
 - [ ] wedge：本地保留 3 版 + 自动清理
@@ -248,7 +259,7 @@ manifest 改动：
 ### 6.1 首次启动断网
 楔子拉不到 core → fail-open（放行游戏，不更新）。与现在"附带 core 但 manifest 端点不可达 → fail-static"不同——gradle-wrapper 模式下首次断网=无更新但游戏可玩。**可接受**：首次安装通常在线，断网是极端情况。
 
-### 6.2 coreEndpoint 端点不可达
+### 6.2 updater-core 查询端点不可达
 楔子用本地最近 selected 版本（如果有）；本地一个 jar 都没有 → fail-open 放行游戏。比现在好：现在端点不可达 fail-static（带本地版本放行），新版改为 fail-open（无本地版本也放行，只是不更新）。
 
 ### 6.3 去掉防降级
@@ -261,11 +272,11 @@ manifest 改动：
 - FR-090/091/097/253 废弃或回滚
 - 需新 ADR 记录这次架构简化决策
 
-### 6.5 coreEndpoint 返回信息的安全性
-coreEndpoint 返回的 `{version, sha256, downloadUrl, size}` 本身走 HTTPS + 拉取密钥鉴权。攻击者即使截获，没有 token 拉不到；有 token 的人（玩家）拉到的是合法版本信息。sha256 校验保证下载的 jar 没坏。**足够**。
+### 6.5 updater-core 查询端点返回信息的安全性
+updater-core 查询端点返回的 `{version, sha256, downloadUrl, size}` 本身走 HTTPS + 拉取密钥鉴权。攻击者即使截获，没有 token 拉不到；有 token 的人（玩家）拉到的是合法版本信息。sha256 校验保证下载的 jar 没坏。**足够**。
 
 ### 6.6 楔子代码冻结后的后续 core 安全性
-楔子第一版发布后代码冻结。后续 core 更新靠"楔子查 coreEndpoint → 发现新版 → 下载 → trial → boot-confirm → promote"。核心安全保证：
+楔子第一版发布后代码冻结。后续 core 更新靠“楔子按 endpoint 查询 updater-core 端点 → 发现新版 → 下载 → trial → boot-confirm → promote”。核心安全保证：
 - **boot-confirm 看门狗**：新版 core 启动崩溃 → 不 promote → 下次回退旧版（已有 FR-091 机制，不变）
 - **failedVersion 记录**：某版 core trial 失败后标记，不再重试同版本（避免 boot-loop）
 - **服务端一键回滚**：core 有逻辑 bug（不崩但行为错）→ 运营面板切回旧版 → 客户端下次启动用旧版

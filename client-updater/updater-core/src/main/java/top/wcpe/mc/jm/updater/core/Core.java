@@ -53,13 +53,17 @@ public final class Core {
      * @return 0 = 更新成功放行；非 0 = fail-static（带本地版本放行）。不抛异常逃逸到楔子。
      */
     public static int run(Map<String, String> ctx) {
+        Logger log = Logger.consoleOnly();
         try {
             String gameDirStr = ctx.get("gameDir");
             if (gameDirStr == null || gameDirStr.isEmpty()) {
-                System.err.println("[jm-updater] core: 缺少 gameDir，fail-static");
+                log.error("core 启动缺少 gameDir，fail-static");
                 return Updater.FAIL_STATIC;
             }
             Path gameDir = Paths.get(gameDirStr);
+            log.close();
+            log = Logger.create(gameDir.resolve(".jm-updater"));
+            log.info("core 启动 gameDir=" + gameDir.toAbsolutePath().normalize());
 
             String channel = ctx.get("channel");
             String key = ctx.get("key");
@@ -76,9 +80,10 @@ public final class Core {
             }
 
             if (channel == null || endpoint == null) {
-                System.err.println("[jm-updater] core: 缺少 channel/endpoint，fail-static");
+                log.error("core 启动缺少 channel/endpoint，fail-static");
                 return Updater.FAIL_STATIC;
             }
+            log.info("配置解析完成 channel=" + channel + " endpoint=" + endpoint + " coreVersion=" + coreVersion);
 
             Path stateDir = gameDir.resolve(".jm-updater");
             String installId = InstallId.loadOrCreate(stateDir);
@@ -90,26 +95,39 @@ public final class Core {
             // 遥测开关同时控制 FR-265 运行态心跳，尊重客户端诊断数据 opt-out；安全画像不受此开关影响。
             boolean telemetryEnabled = !"false".equalsIgnoreCase(ctx.getOrDefault("telemetry", "true"));
             if (telemetryEnabled) {
+                log.info("开始上报运行态心跳 fromVersion=" + fromVersion);
                 transport.postRuntimeHeartbeat(RuntimeHeartbeat.build(coreVersion, fromVersion));
+                log.info("运行态心跳上报已提交");
+            } else {
+                log.info("遥测已关闭，跳过运行态心跳");
             }
+            log.info("开始上报安全画像");
             SecurityHello.postBestEffort(transport, identity);
+            log.info("安全画像上报已提交");
             long start = System.currentTimeMillis();
             // 进度窗口（FR-099）：默认展示；ctx progressUi=false 可关（headless 由展示层自动降级文本）。
             boolean progressUiEnabled = !"false".equalsIgnoreCase(ctx.getOrDefault("progressUi", "true"));
             Updater updater = new Updater(gameDir, transport, progressUiEnabled);
-            int rc = updater.run();
+            int rc = updater.run(log);
+            log.info("reconcile 编排结束 rc=" + rc);
 
             // 遥测上报（FR-094，best-effort、opt-out）：BUSY（未实际更新）不报；telemetry=false 关闭。
             if (telemetryEnabled && rc != Updater.BUSY) {
                 long toVersion = StateStore.load(stateDir).lastSeenVersion();
+                log.info("开始上报更新遥测 fromVersion=" + fromVersion + " toVersion=" + toVersion + " rc=" + rc);
                 transport.postTelemetry(
                         Telemetry.build(channel, rc, fromVersion, toVersion, System.currentTimeMillis() - start));
+                log.info("更新遥测上报已提交");
+            } else {
+                log.info("跳过更新遥测 telemetryEnabled=" + telemetryEnabled + " rc=" + rc);
             }
             return rc;
         } catch (Throwable t) {
             // 不抛逃逸到楔子；fail-static（契约 §6.3）。
-            System.err.println("[jm-updater] core fail-static: " + t);
+            log.error("core fail-static: " + t);
             return Updater.FAIL_STATIC;
+        } finally {
+            log.close();
         }
     }
 

@@ -1892,12 +1892,12 @@
     "intro": "The wedge self-locates before the game starts, loads updater-core, fetches the signed manifest, incrementally updates client resources, then launches the game; on network failure or config error it always launches anyway (fail-static / fail-open) and never blocks startup. Follow the steps below to integrate the updater into your modpack and ship it to players.",
     "embeddedVersion": "Embedded updater version",
     "step1Title": "① Download the wedge",
-    "step1Desc": "Download only wedge.jar (~30KB). updater-core is no longer bundled — the wedge fetches it automatically via coreEndpoint on first launch.",
+    "step1Desc": "Download only wedge.jar (~30KB). updater-core is no longer bundled — the wedge fetches it automatically from the API root endpoint on first launch.",
     "notEmbedded": "Wedge not embedded (build needs `make embed-client-updater`)",
     "step2Title": "② Place the files",
     "step2Desc": "Put wedge.jar and jm-updater.json into the jm-updater subfolder of the game directory:",
     "step3Title": "③ Configure jm-updater.json (channel-specific)",
-    "step3Desc": "Below is this channel's config. Replace key with a pull key created in the Pull Keys tab (the plaintext is shown only once at creation); change endpoint to a publicly reachable distribution address. coreEndpoint is auto-filled — the wedge fetches updater-core from it on first launch.",
+    "step3Desc": "Below is this channel's config. Replace key with a pull key created in the Pull Keys tab (the plaintext is shown only once at creation); endpoint must be the public API root, for example http://127.0.0.1:18370/api/v1. Do not add suffixes such as /client-channels.",
     "endpointLabel": "Public distribution endpoint",
     "keyPlaceholder": "Create a key in the Pull Keys tab, then paste it here",
     "step4Title": "④ Add the JVM argument in the launcher",
@@ -1913,11 +1913,11 @@
     "copyFailed": "Copy failed",
     "downloadFailed": "Download failed (jar may not be embedded)",
     "downloadConfig": "Download jm-updater.json",
-    "coreAutoFetchHint": "updater-core is not in the modpack — the wedge fetches it on first launch; operators can switch/rollback in the Core Version tab."
+    "coreAutoFetchHint": "updater-core is not in the modpack — the wedge fetches it from endpoint automatically; operators can switch/rollback in the Core Version tab."
   },
   "clientCore": {
     "tab": "Core Version",
-    "subtitle": "Lists all archived updater-core versions. Switching the selected version takes effect on the next client launch via coreEndpoint — used for emergency rollback of a bad core.",
+    "subtitle": "Lists all archived updater-core versions. Switching the selected version takes effect on the next client launch through the API root endpoint — used for emergency rollback of a bad core.",
     "colVersion": "Version",
     "colSha256": "SHA256",
     "colSize": "Size",
@@ -1927,7 +1927,7 @@
     "switched": "Switched — takes effect on next client launch",
     "switchFailed": "Switch failed",
     "switchConfirm": "Switch updater-core version?",
-    "switchDesc": "After switching, the client fetches this version from coreEndpoint on next launch. Clients that already have this jar locally use it directly; others download it automatically. Please confirm you want to switch.",
+    "switchDesc": "After switching, the client fetches this version through the API root endpoint on next launch. Clients that already have this jar locally use it directly; others download it automatically. Please confirm you want to switch.",
     "noVersions": "No archived versions (run `make embed-client-updater` then start CP to archive)"
   },
   "clientDistFlow": {

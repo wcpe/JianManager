@@ -197,7 +197,7 @@ export async function downloadUpdaterJar(component: 'wedge' | 'core'): Promise<v
 
 /**
  * 下载 jm-updater.json（FR-253，见 ADR-053；FR-259 起 core 改楔子自动拉取）。
- * 调 CP 端点 GET /client-channels/:id/updater-config 取完整配置（含 coreEndpoint），
+ * 调 CP 端点 GET /client-channels/:id/updater-config 取完整配置（只含 API 根 endpoint），
  * 序列化为 JSON 触发浏览器下载。运营者直接放入整合包即建立客户端配置——无需改源码重编。
  */
 export async function downloadUpdaterConfig(channelId: string): Promise<void> {

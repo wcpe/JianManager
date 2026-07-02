@@ -48,6 +48,7 @@ func TestUpdaterCore_Endpoint_AuthBoundary(t *testing.T) {
 
 	// 有效 key → 200 + {version, sha256, downloadUrl, size}。
 	req3 := httptest.NewRequest("GET", "/api/v1/client-channels/"+channelID+"/updater-core", nil)
+	req3.Host = "8.148.77.83:18370"
 	req3.Header.Set("X-Client-Key", key)
 	w3 := serveNoAuth(r, req3)
 	require.Equal(t, http.StatusOK, w3.Code)
@@ -56,7 +57,7 @@ func TestUpdaterCore_Endpoint_AuthBoundary(t *testing.T) {
 	require.EqualValues(t, 1, resp["version"])
 	require.Equal(t, shaV1, resp["sha256"])
 	dl, _ := resp["downloadUrl"].(string)
-	require.Contains(t, dl, "/client-artifacts/"+shaV1)
+	require.Equal(t, "http://8.148.77.83:18370/api/v1/client-artifacts/"+shaV1, dl)
 	require.NotZero(t, resp["size"])
 }
 

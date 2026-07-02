@@ -1969,13 +1969,12 @@
 - **审计**: `client_key.revoke`
 
 ### GET /api/v1/client-channels/:id/updater-config
-- **描述**: 按频道生成 `jm-updater.json`（FR-259，见 ADR-054）。返回完整配置字段，运营者直接下载放入整合包。FR-256 起不再含签名公钥（验签已去，信任靠 HTTPS + 拉取密钥鉴权，推翻 ADR-022/053）；`coreEndpoint` 供楔子首次启动自动拉取 updater-core（gradle-wrapper 模式，FR-258）。`endpoint` 按 CP 请求推断公网基址预填（可改）；`key` 留空占位由运营粘贴拉取密钥
+- **描述**: 按频道生成 `jm-updater.json`（FR-259，见 ADR-054）。返回完整配置字段，运营者直接下载放入整合包。FR-256 起不再含签名公钥（验签已去，信任靠 HTTPS + 拉取密钥鉴权，推翻 ADR-022/053）；`coreEndpoint` 配置字段已移除，楔子用 `endpoint + channel` 自动拼接 updater-core 端点。`endpoint` 按 CP 请求推断 API 根路径预填（可改，但必须保持 `/api/v1` 根路径，禁止填写 `/client-channels/...` 后缀）；`key` 留空占位由运营粘贴拉取密钥
 - **关联 FR**: FR-259、FR-258
 - **鉴权**: **JWT，平台管理员**
 - **响应** (200):
   ```json
   { "channel": "skyblock-s1", "key": "", "endpoint": "https://cdn.example.com/api/v1",
-    "coreEndpoint": "https://cdn.example.com/api/v1/client-channels/skyblock-s1/updater-core",
     "timeoutSec": 120, "telemetry": true, "bootConfirmSec": 30 }
   ```
 - **错误**: 403 `FORBIDDEN`（非平台管理员）| 404 `CHANNEL_NOT_FOUND`
@@ -2345,7 +2344,7 @@
 - **错误**: 403 `FORBIDDEN`（非平台管理员）| 404 `CHANNEL_NOT_FOUND`
 
 ### PUT /api/v1/client-channels/:id/updater-core/selected
-- **描述**: 切换频道选定的 updater-core 版本（一键回滚，FR-259）。客户端下次启动查 coreEndpoint 拿到切换后版本——本地有就直接用、没有就下载
+- **描述**: 切换频道选定的 updater-core 版本（一键回滚，FR-259）。客户端下次启动按 API 根 `endpoint` 自动查询 updater-core 端点拿到切换后版本——本地有就直接用、没有就下载
 - **关联 FR**: FR-259 | **鉴权**: **JWT，平台管理员**
 - **请求**: `{ "sha256": "ab12…" }`
 - **响应** (200): `{ "ok": true }`

@@ -84,6 +84,10 @@ final class CoreSelector {
 
     /** 设置 pending core（下载新版后调用，下次 select 将首次 trial）。 */
     static void setPending(File coreDir, String sha, long version) {
+        setPending(coreDir, sha, version, null);
+    }
+
+    static void setPending(File coreDir, String sha, long version, WedgeLogger log) {
         try {
             File stateFile = new File(coreDir, "state.properties");
             Properties p = load(stateFile);
@@ -91,13 +95,23 @@ final class CoreSelector {
             p.setProperty(K_PENDING_VERSION, Long.toString(version));
             p.setProperty(K_PENDING_TRIED, "false");
             store(stateFile, p);
+            if (log != null) {
+                log.info("设置 pending core version=" + version + " sha=" + sha);
+            }
         } catch (Exception e) {
+            if (log != null) {
+                log.warn("设置 pending 失败: " + e);
+            }
             System.err.println("[JM Updater] 设置 pending 失败: " + e);
         }
     }
 
     /** 保留最近 {@code keep} 个 core jar，超出自动清理最老的（selected/prev/pending 优先保留）。 */
     static void retainLatestJars(File coreDir, int keep) {
+        retainLatestJars(coreDir, keep, null);
+    }
+
+    static void retainLatestJars(File coreDir, int keep, WedgeLogger log) {
         File[] jars = coreDir.listFiles((dir, name) -> name.endsWith(".jar"));
         if (jars == null || jars.length <= keep) {
             return;
@@ -117,7 +131,12 @@ final class CoreSelector {
         });
         for (int i = keep; i < jars.length; i++) {
             if (!jars[i].delete()) {
+                if (log != null) {
+                    log.warn("清理旧 core jar 失败: " + jars[i].getName());
+                }
                 System.err.println("[JM Updater] 清理旧 core jar 失败: " + jars[i].getName());
+            } else if (log != null) {
+                log.info("已清理旧 core jar: " + jars[i].getName());
             }
         }
     }
@@ -143,15 +162,22 @@ final class CoreSelector {
 
     /** 决定加载哪个 core 并据此推进状态；任何异常 fail-open 返回 null。 */
     static Selection select(File coreDir) {
+        return select(coreDir, null);
+    }
+
+    static Selection select(File coreDir, WedgeLogger log) {
         try {
-            return selectInternal(coreDir);
+            return selectInternal(coreDir, log);
         } catch (Throwable t) {
+            if (log != null) {
+                log.error("core 选择异常，无可用 core: " + t);
+            }
             System.err.println("[JM Updater] core 选择异常，无可用 core: " + t);
             return new Selection(null, 0, false);
         }
     }
 
-    private static Selection selectInternal(File coreDir) throws Exception {
+    private static Selection selectInternal(File coreDir, WedgeLogger log) throws Exception {
         File stateFile = new File(coreDir, "state.properties");
         File confirmedFlag = new File(coreDir, "pending.confirmed");
         File rollbackFlag = new File(coreDir, "rollback.flag");
@@ -159,6 +185,9 @@ final class CoreSelector {
 
         // 手动回退：运营/玩家放置 rollback.flag → 弃 pending，selected 回 prev（无 prev 则清 selected）。
         if (rollbackFlag.isFile()) {
+            if (log != null) {
+                log.warn("检测到 rollback.flag，执行手动回退");
+            }
             confirmedFlag.delete();
             clearPending(p);
             if (notEmpty(p.getProperty(K_PREV_SHA))) {
@@ -178,6 +207,9 @@ final class CoreSelector {
         if (notEmpty(pendingSha)) {
             boolean tried = "true".equalsIgnoreCase(p.getProperty(K_PENDING_TRIED, "false"));
             if (confirmedFlag.isFile()) {
+                if (log != null) {
+                    log.info("pending core 已确认，执行 promote version=" + p.getProperty(K_PENDING_VERSION, "0"));
+                }
                 // promote：prev=selected，selected=pending。
                 if (notEmpty(p.getProperty(K_SELECTED_SHA))) {
                     p.setProperty(K_PREV_SHA, p.getProperty(K_SELECTED_SHA));
@@ -193,6 +225,9 @@ final class CoreSelector {
                 // 上次 trial 未确认（崩溃/早退）→ 回退：弃 pending，保留 selected（N-1）。
                 // 并记失败版本：否则下一次 reconcile 会立刻重暂存同一坏 core，形成「每隔一次启动 trial 崩溃」的
                 // boot-loop（FR-091 真机发现）。楔子据此跳过该版本，仅当出现更高版本（修复版）才再暂存。
+                if (log != null) {
+                    log.warn("上次新 core 未确认启动，回退到上一可用版本 version=" + p.getProperty(K_PENDING_VERSION, "0"));
+                }
                 System.err.println("[JM Updater] 上次新 core 未确认启动，回退到上一可用版本。");
                 long failed = parseLong(p.getProperty(K_PENDING_VERSION));
                 if (failed > parseLong(p.getProperty(K_FAILED_VERSION))) {
@@ -206,6 +241,9 @@ final class CoreSelector {
                 store(stateFile, p);
                 File jar = new File(coreDir, pendingSha + ".jar");
                 if (jar.isFile()) {
+                    if (log != null) {
+                        log.info("首次 trial pending core version=" + p.getProperty(K_PENDING_VERSION, "0"));
+                    }
                     return new Selection(jar, parseLong(p.getProperty(K_PENDING_VERSION)), true);
                 }
                 // pending jar 不见了 → 弃，继续 normal。
@@ -219,8 +257,14 @@ final class CoreSelector {
         if (notEmpty(selectedSha)) {
             File jar = new File(coreDir, selectedSha + ".jar");
             if (jar.isFile()) {
+                if (log != null) {
+                    log.info("选择 selected core version=" + p.getProperty(K_SELECTED_VERSION, "0"));
+                }
                 return new Selection(jar, parseLong(p.getProperty(K_SELECTED_VERSION)), false);
             }
+        }
+        if (log != null) {
+            log.warn("本地状态中没有可用 selected core jar");
         }
         return new Selection(null, 0, false);
     }
@@ -231,6 +275,10 @@ final class CoreSelector {
      * 游戏崩溃则 daemon 随 JVM 死、标志不建 = 未确认，下次回退。绝不阻塞/挡游戏。
      */
     static void scheduleBootConfirm(final File coreDir, final int seconds) {
+        scheduleBootConfirm(coreDir, seconds, null);
+    }
+
+    static void scheduleBootConfirm(final File coreDir, final int seconds, final WedgeLogger log) {
         final File flag = new File(coreDir, "pending.confirmed");
         Thread t = new Thread(new Runnable() {
             @Override
@@ -241,8 +289,14 @@ final class CoreSelector {
                     if (!flag.exists()) {
                         // 仅 touch（建空文件）——无读改写竞态。
                         Files.write(flag.toPath(), new byte[0]);
+                        if (log != null) {
+                            log.info("boot-confirm 已写入 pending.confirmed");
+                        }
                     }
-                } catch (Throwable ignore) {
+                } catch (Throwable e) {
+                    if (log != null) {
+                        log.warn("boot-confirm 写入失败: " + e);
+                    }
                     // 看门狗失败=不确认→下次回退，绝不影响游戏。
                 }
             }

@@ -1023,7 +1023,6 @@ export const handlers = [
       channel: cid,
       key: '',
       endpoint: `${base}/api/v1`,
-      coreEndpoint: `${base}/api/v1/client-channels/${cid}/updater-core`,
       timeoutSec: 120,
       telemetry: true,
       bootConfirmSec: 30,
