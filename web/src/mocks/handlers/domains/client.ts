@@ -655,6 +655,34 @@ export const handlers = [
     return HttpResponse.json({ version: nextVersion })
   }),
 
+  // 制品文本预览（FR-214，版本详情弹窗「预览」视图用）。
+  domainRoute('get', '/client-channels/:channelId/files/content', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const sha = new URL(info.request.url).searchParams.get('sha256') ?? ''
+    // mock：返回占位文本，让 FileBrowser 能展示内容。
+    const content = `# mock artifact preview\nsha256: ${sha}\n这是 mock 模式下的占位内容。`
+    return new HttpResponse(content, {
+      status: 200,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    })
+  }),
+
+  // 制品下载（FR-214，版本详情弹窗「下载」按钮）。
+  domainRoute('get', '/client-channels/:channelId/files/download', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const sha = new URL(info.request.url).searchParams.get('sha256') ?? ''
+    const content = `mock artifact download\nsha256: ${sha}\n`
+    return new HttpResponse(content, {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="artifact-${sha.slice(0, 12)}"`,
+      },
+    })
+  }),
+
   // 分发统计（FR-095）。
   domainRoute('get', '/client-dist/stats', (info) => {
     const denied = requireAuth(info)
