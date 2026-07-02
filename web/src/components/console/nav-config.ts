@@ -25,6 +25,7 @@ import {
   Server,
   Settings,
   Settings2,
+  ShieldCheck,
   User,
   UsersRound,
   type LucideIcon,
@@ -100,6 +101,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: '/bots', labelKey: 'nav.bots', icon: Bot },
       // 客户端分发（FR-187 由「系统·平台与维护」迁入运营域；路由 /client-channels 不变、旧链接可达）。
       { to: '/client-channels', labelKey: 'nav.clientChannels', icon: DownloadCloud },
+      { to: '/client-dist-security', labelKey: 'nav.clientDistSecurity', icon: ShieldCheck },
       { to: '/templates', labelKey: 'nav.templates', icon: LayoutTemplate },
       { to: '/backups', labelKey: 'nav.backups', icon: Archive },
       { to: '/backup-storages', labelKey: 'nav.backupStorages', icon: Database },

@@ -29,6 +29,7 @@ const LogsPage = lazy(() => import('@/pages/LogsPage'))
 const StatisticsPage = lazy(() => import('@/pages/StatisticsPage'))
 const ClientDistMonitoringPage = lazy(() => import('@/pages/ClientDistMonitoringPage'))
 const ClientChannelsPage = lazy(() => import('@/pages/ClientChannelsPage'))
+const ProtectionCenterPage = lazy(() => import('@/pages/ProtectionCenterPage'))
 const ClientPublishPage = lazy(() => import('@/pages/ClientPublishPage'))
 const DatabasePage = lazy(() => import('@/pages/DatabasePage'))
 const SystemUpdatePage = lazy(() => import('@/pages/SystemUpdatePage'))
@@ -108,6 +109,7 @@ export default function Workspace() {
           {/* 通知中心（FR-216）：站内信 + 告警合并的统一通知流页。 */}
           <Route path="notifications" element={<NotificationCenterPage />} />
           <Route path="client-channels" element={<ClientChannelsPage />} />
+          <Route path="client-dist-security" element={<ProtectionCenterPage />} />
           <Route path="client-channels/:id/publish" element={<ClientPublishPage />} />
           <Route path="logs" element={<LogsPage />} />
           {/* 观测·统计占位页（FR-215）；实质内容由 FR-220 补齐。 */}
