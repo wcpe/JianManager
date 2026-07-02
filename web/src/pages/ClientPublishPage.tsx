@@ -44,7 +44,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import DangerConfirm from '@/components/DangerConfirm'
 import ClientFileTree from '@/components/ClientFileTree'
-import ManagedDirsEditor, { CleanExcludeInput } from '@/components/ManagedDirsEditor'
+import CleanScopeEditor, { CleanExcludeInput } from '@/components/CleanScopeEditor'
 import FileBrowser from '@/components/file-browser/FileBrowser'
 import { localDraftSource } from '@/components/file-browser/sources/localDraftSource'
 
@@ -583,19 +583,23 @@ export default function ClientPublishPage() {
               </span>
             </label>
 
-            {/* 目录树勾选（clean-all 接管时禁用） */}
+            {/* 目录树标记（clean-all 接管时禁用） */}
             <div className="space-y-1.5">
               <span className="text-sm font-medium">
                 {t('clientVersions.managedDirsTreeTitle', '自动清理目录')}
               </span>
-              <ManagedDirsEditor
+              <CleanScopeEditor
                 files={drafts}
-                selected={selectedDirs}
-                onChange={setSelectedDirs}
-                disabled={cleanAll}
+                managedDirs={selectedDirs}
+                cleanExclude={cleanExclude}
+                onChange={(md, ce) => {
+                  setSelectedDirs(md)
+                  setCleanExclude(ce)
+                }}
+                cleanAll={cleanAll}
               />
               <span className="text-xs text-muted-foreground">
-                {t('clientVersions.managedDirsTreeHint', '勾选要纳入自动清理的目录（支持深层嵌套，如 config/foo）。勾选后，玩家更新时会删掉这些目录里「服务器已移除、玩家本地却多出来」的文件。留空则不自动清理。')}
+                {t('clientVersions.cleanScopeTreeHint', '右键目录标记为清理（红）或排除（绿），Ctrl+点击追加选、Shift+点击连选、右键批量标记。父标记后子目录继承；子目录单独改标记后父目录变为混合色（橙）。')}
               </span>
             </div>
 

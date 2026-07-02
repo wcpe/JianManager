@@ -115,6 +115,9 @@ interface ExplorerContextValue {
   openContextMenu: (e: ReactMouseEvent, target: ContextTarget) => void
   // 拖拽移动落区（统一处理文件/目录移动 + emptyDirs 同步）
   onMoveDrop: (targetDirPath: string) => void
+  // 外部文件拖入
+  resolveDrop?: ((files: File[], targetDirPath: string) => Promise<LocalUnit[]>) | null
+  handleExternalDrop: (files: File[], targetDirPath: string) => void
   // 编排回调
   onPathChange?: (index: number, path: string) => void
   onSyncChange?: (index: number, sync: ManifestFileLike['sync']) => void
@@ -282,6 +285,7 @@ export default function FileExplorer({
     (newName: string) => {
       const target = renamingTarget
       setRenamingTarget(null)
+      if (!target) return
       const name = newName.trim()
       if (name === '' || name.includes('/')) return
       if (target.kind === 'file') {
@@ -534,6 +538,14 @@ export default function FileExplorer({
     commitRename,
     cancelRename,
     openContextMenu,
+    onMoveDrop: handleMoveDrop,
+    resolveDrop,
+    handleExternalDrop: (dropped: File[], targetDirPath: string) => {
+      setResolving(true)
+      resolveDrop?.(dropped, targetDirPath)
+        .then((units) => applyIncoming(units))
+        .finally(() => setResolving(false))
+    },
     onPathChange,
     onSyncChange,
     onPlatformChange,
@@ -858,10 +870,13 @@ function DirRow({ dir, depth }: { dir: TreeDir; depth: number }) {
           }}
           onDragEnd={() => ctx.setDragPayload(null)}
           onDragOver={(e) => {
-            if (readonly || !ctx.dragPayload) return
-            e.preventDefault()
-            e.stopPropagation()
-            ctx.setDragOverPath(dir.path)
+            if (readonly) return
+            // 内部拖拽移动或外部文件拖入都需 preventDefault 才能触发 drop
+            if (ctx.dragPayload || (ctx.resolveDrop && e.dataTransfer.types.includes('Files'))) {
+              e.preventDefault()
+              e.stopPropagation()
+              ctx.setDragOverPath(dir.path)
+            }
           }}
           onDragLeave={(e) => {
             if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
@@ -873,8 +888,8 @@ function DirRow({ dir, depth }: { dir: TreeDir; depth: number }) {
             e.preventDefault()
             e.stopPropagation()
             if (ctx.dragPayload) {
+              // 内部拖拽移动
               ctx.setDragOverPath(null)
-              // 调用主组件的移动逻辑（经 context 传递不便，直接用 onPathChange）
               const p = ctx.dragPayload
               ctx.setDragPayload(null)
               if (p.kind === 'file') {
@@ -887,6 +902,10 @@ function DirRow({ dir, depth }: { dir: TreeDir; depth: number }) {
                   ctx.onPathChange?.(f.index, newDir + rel)
                 }
               }
+            } else if (ctx.resolveDrop && e.dataTransfer.files.length > 0) {
+              // 外部文件拖入目录
+              ctx.setDragOverPath(null)
+              ctx.handleExternalDrop(Array.from(e.dataTransfer.files), dir.path)
             }
           }}
           onDoubleClick={() => !readonly && ctx.startRename({ kind: 'dir', dirPath: dir.path })}

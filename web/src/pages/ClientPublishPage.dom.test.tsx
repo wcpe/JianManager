@@ -309,7 +309,7 @@ describe('ClientPublishPage（清理范围编辑器，FR-255）', () => {
     await user.click(screen.getByRole('button', { name: /下一步/ }))
   }
 
-  it('目录树勾选产出 managedDirs（含深层嵌套目录）', async () => {
+  it('目录树右键标记为清理产出 managedDirs（含深层嵌套目录）', async () => {
     loginMockUser()
     const user = userEvent.setup()
     const pub = capturePublishBody()
@@ -317,9 +317,11 @@ describe('ClientPublishPage（清理范围编辑器，FR-255）', () => {
       const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
       await gotoMeta(user, container)
 
-      // 勾选 config/foo 目录（深层嵌套）。
-      const cb = container.querySelector('[data-testid="managed-dirs-checkbox"][data-dir-path="config/foo"]') as HTMLElement
-      await user.click(cb)
+      // 右键 config/foo 目录 → 标记为清理（FR-262 新交互）
+      const row = container.querySelector('[data-testid="clean-scope-dir-row"][data-dir-path="config/foo"]') as HTMLElement
+      fireEvent.contextMenu(row, { button: 2, clientX: 100, clientY: 100 })
+      const menu = await screen.findByTestId('clean-scope-context-menu')
+      fireEvent.click(within(menu).getByTestId('clean-scope-mark-clean'))
 
       // meta → review，点发布。
       await user.click(screen.getByRole('button', { name: /下一步/ }))
@@ -347,8 +349,8 @@ describe('ClientPublishPage（清理范围编辑器，FR-255）', () => {
 
       // 开启「清空整个游戏目录」开关。
       await user.click(screen.getByTestId('clean-all-toggle'))
-      // 目录树应被禁用（clean-all 接管）。
-      expect(screen.getByTestId('managed-dirs-tree')).toHaveClass('opacity-50')
+      // 目录树标注 clean-all（FR-262：全目录标记为清理红色、交互禁用）。
+      expect(screen.getByTestId('clean-scope-tree')).toHaveAttribute('data-clean-all', 'true')
 
       // meta → review。
       await user.click(screen.getByRole('button', { name: /下一步/ }))

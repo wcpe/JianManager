@@ -28,6 +28,10 @@ import {
   nextUniqueName,
   keepBothPath,
   detectConflicts,
+  buildCleanMap,
+  computeDirVisualState,
+  exportMarkings,
+  getDescendantDirPaths,
   type TreeFile,
   type FileSystemEntryLike,
 } from './client-publish-wizard'
@@ -564,5 +568,144 @@ describe('detectConflicts', () => {
   })
   it('无冲突 → 空数组', () => {
     expect(detectConflicts(['a.jar'], ['b.jar'])).toEqual([])
+  })
+})
+
+/** FR-262：清理目录三态标记纯函数。 */
+describe('buildCleanMap', () => {
+  it('managedDirs → clean、cleanExclude → exclude', () => {
+    const m = buildCleanMap(['mods', 'config'], ['saves'])
+    expect(m.get('mods')).toBe('clean')
+    expect(m.get('config')).toBe('clean')
+    expect(m.get('saves')).toBe('exclude')
+  })
+  it('空输入 → 空 Map', () => {
+    expect(buildCleanMap([], []).size).toBe(0)
+  })
+  it('同路径同时出现时 cleanExclude 优先（后写覆盖）', () => {
+    const m = buildCleanMap(['mods'], ['mods'])
+    expect(m.get('mods')).toBe('exclude')
+  })
+})
+
+describe('getDescendantDirPaths', () => {
+  const all = ['mods', 'mods/sub', 'mods/sub/deep', 'config', 'config/foo']
+  it('返回所有后代目录（不含自身）', () => {
+    expect(getDescendantDirPaths('mods', all)).toEqual(['mods/sub', 'mods/sub/deep'])
+    expect(getDescendantDirPaths('config', all)).toEqual(['config/foo'])
+  })
+  it('无后代 → 空数组', () => {
+    expect(getDescendantDirPaths('mods/sub/deep', all)).toEqual([])
+  })
+  it('不误匹配同名前缀（modsxyz 不算 mods 的后代）', () => {
+    expect(getDescendantDirPaths('mod', ['mods', 'mods/sub'])).toEqual([])
+  })
+})
+
+describe('computeDirVisualState', () => {
+  const all = ['mods', 'mods/sub', 'mods/sub/deep', 'config', 'config/foo']
+
+  it('无标记 → none', () => {
+    expect(computeDirVisualState('mods', new Map(), all)).toBe('none')
+  })
+
+  it('自身 clean + 子全 clean → clean（继承一致）', () => {
+    const m = buildCleanMap(['mods', 'mods/sub'], [])
+    expect(computeDirVisualState('mods', m, all)).toBe('clean')
+  })
+
+  it('自身 clean + 无子标记 → clean', () => {
+    const m = buildCleanMap(['mods'], [])
+    expect(computeDirVisualState('mods', m, all)).toBe('clean')
+  })
+
+  it('自身 clean + 子有 exclude → mixed（橙）', () => {
+    const m = buildCleanMap(['mods', 'mods/sub'], ['mods/sub'])
+    // mods/sub 在 cleanExclude 优先覆盖为 exclude
+    expect(computeDirVisualState('mods', m, all)).toBe('mixed')
+  })
+
+  it('自身无标记 + 子全 clean → clean（继承子树）', () => {
+    const m = buildCleanMap(['mods/sub'], [])
+    expect(computeDirVisualState('mods', m, all)).toBe('clean')
+  })
+
+  it('自身无标记 + 子全 exclude → exclude（继承子树）', () => {
+    const m = buildCleanMap([], ['mods/sub'])
+    expect(computeDirVisualState('mods', m, all)).toBe('exclude')
+  })
+
+  it('自身无标记 + 子有 clean 又有 exclude → mixed', () => {
+    const m = buildCleanMap(['mods/sub'], ['mods/sub/deep'])
+    expect(computeDirVisualState('mods', m, all)).toBe('mixed')
+  })
+
+  it('叶子目录自身 clean → clean', () => {
+    const m = buildCleanMap(['config/foo'], [])
+    expect(computeDirVisualState('config/foo', m, all)).toBe('clean')
+  })
+
+  it('叶子目录无标记 → none', () => {
+    expect(computeDirVisualState('config/foo', new Map(), all)).toBe('none')
+  })
+
+  it('子目录继承祖先标记（去子优化后仍继承父）', () => {
+    // managedDirs=['mods'] 去子后 cleanMap 只有 mods，mods/sub 无显式标记
+    // 但 mods/sub 应继承 mods 的 clean 标记
+    const m = buildCleanMap(['mods'], [])
+    expect(computeDirVisualState('mods/sub', m, all)).toBe('clean')
+  })
+
+  it('子目录继承祖先标记但自身有不同标记 → 自身优先', () => {
+    // mods=clean, mods/sub=exclude → mods/sub 用自身 exclude
+    const m = buildCleanMap(['mods'], ['mods/sub'])
+    expect(computeDirVisualState('mods/sub', m, all)).toBe('exclude')
+  })
+
+  it('中间目录继承祖先标记且子有不同标记 → mixed', () => {
+    // mods=clean, mods/sub/deep=exclude → mods/sub 继承 clean 但子有 exclude → mixed
+    const m = buildCleanMap(['mods'], ['mods/sub/deep'])
+    expect(computeDirVisualState('mods/sub', m, all)).toBe('mixed')
+  })
+})
+
+describe('exportMarkings', () => {
+  it('clean → managedDirs、exclude → cleanExclude', () => {
+    const m = buildCleanMap(['mods', 'config'], ['saves'])
+    const out = exportMarkings(m)
+    expect(out.managedDirs).toEqual(['config', 'mods'])
+    expect(out.cleanExclude).toEqual(['saves'])
+  })
+
+  it('去子：祖先已标记则子不产出', () => {
+    // mods 和 mods/sub 都标记 clean → 只产出 mods
+    const m = buildCleanMap(['mods', 'mods/sub'], [])
+    const out = exportMarkings(m)
+    expect(out.managedDirs).toEqual(['mods'])
+    expect(out.cleanExclude).toEqual([])
+  })
+
+  it('不同分支不去重（mods 和 config 独立产出）', () => {
+    const m = buildCleanMap(['mods', 'config'], [])
+    expect(exportMarkings(m).managedDirs).toEqual(['config', 'mods'])
+  })
+
+  it('clean 和 exclude 分别去子', () => {
+    // mods=clean, mods/sub=clean, saves=exclude, saves/backup=exclude
+    const m = buildCleanMap(['mods', 'mods/sub'], ['saves', 'saves/backup'])
+    const out = exportMarkings(m)
+    expect(out.managedDirs).toEqual(['mods'])
+    expect(out.cleanExclude).toEqual(['saves'])
+  })
+
+  it('空 cleanMap → 空产出', () => {
+    const out = exportMarkings(new Map())
+    expect(out.managedDirs).toEqual([])
+    expect(out.cleanExclude).toEqual([])
+  })
+
+  it('结果按字母序', () => {
+    const m = buildCleanMap(['zebra', 'alpha', 'mid'], [])
+    expect(exportMarkings(m).managedDirs).toEqual(['alpha', 'mid', 'zebra'])
   })
 })
