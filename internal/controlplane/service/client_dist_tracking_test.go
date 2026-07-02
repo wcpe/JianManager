@@ -16,7 +16,7 @@ func newTrackingDB(t *testing.T) *gorm.DB {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.ClientDistEvent{}, &model.ClientDistDaily{}))
+	require.NoError(t, db.AutoMigrate(&model.ClientDistEvent{}, &model.ClientDistDaily{}, &model.ClientRuntimeState{}))
 	return db
 }
 
@@ -149,3 +149,75 @@ func TestClientDistTracking_QueryOutcomeAndErrCode(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, all, 4)
 }
+
+func TestClientDistTracking_RecordSanitizedHeadersAndDetail(t *testing.T) {
+	db := newTrackingDB(t)
+	svc := NewClientDistTrackingService(db)
+	require.NoError(t, svc.Record(ClientDistEventInput{
+		ChannelID: "ch1", MachineID: "m1", IP: "1.2.3.4", Kind: "manifest", Version: 5,
+		Method: "GET", Path: "/api/v1/client-channels/ch1/manifest?secret=bad", Status: 200,
+		RequestHeaders: map[string]string{
+			"User-Agent": "JM-Updater", "X-Client-Key": "jmck_secret_should_not_persist", "Authorization": "Bearer nope",
+			"Range": "bytes=0-99",
+		},
+		ResponseHeaders: map[string]string{"ETag": "\"5\"", "Set-Cookie": "bad=1", "Content-Length": "100"},
+	}))
+
+	detail, err := svc.GetEventDetail(1)
+	require.NoError(t, err)
+	require.Equal(t, "GET", detail.Method)
+	require.Equal(t, "/api/v1/client-channels/ch1/manifest", detail.Path, "path 不应保留 query")
+	require.Equal(t, "JM-Updater", detail.RequestHeaders["User-Agent"])
+	require.Equal(t, "present", detail.RequestHeaders["X-Client-Key"], "拉取密钥只能保留 present 标记")
+	require.NotContains(t, detail.RequestHeaders, "Authorization")
+	require.Equal(t, "\"5\"", detail.ResponseHeaders["ETag"])
+	require.NotContains(t, detail.ResponseHeaders, "Set-Cookie")
+}
+
+func TestClientDistTracking_SearchEventsRuntimeFiltersAndPagination(t *testing.T) {
+	db := newTrackingDB(t)
+	svc := NewClientDistTrackingService(db)
+	require.NoError(t, db.Create(&model.ClientRuntimeState{ChannelID: "ch1", MachineID: "m1", Platform: "windows", CoreVersion: "3", LocalVersion: 15}).Error)
+	require.NoError(t, db.Create(&model.ClientRuntimeState{ChannelID: "ch1", MachineID: "m2", Platform: "linux", CoreVersion: "2", LocalVersion: 14}).Error)
+	require.NoError(t, svc.Record(ClientDistEventInput{ChannelID: "ch1", MachineID: "m1", IP: "A", Kind: "manifest", Version: 15, Status: 200}))
+	require.NoError(t, svc.Record(ClientDistEventInput{ChannelID: "ch1", MachineID: "m2", IP: "B", Kind: "manifest", Version: 14, Status: 200}))
+	require.NoError(t, svc.Record(ClientDistEventInput{ChannelID: "ch1", MachineID: "m3", IP: "C", Kind: "manifest", Version: 13, Status: 200}))
+
+	page, err := svc.SearchEvents(ClientDistEventSearchFilter{RuntimeVersion: intPtr(15), Page: 1, PageSize: 10})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), page.Total)
+	require.Len(t, page.Items, 1)
+	require.Equal(t, "m1", page.Items[0].MachineID)
+
+	page, err = svc.SearchEvents(ClientDistEventSearchFilter{Platform: "linux", Page: 1, PageSize: 10})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), page.Total)
+	require.Equal(t, "m2", page.Items[0].MachineID)
+
+	page, err = svc.SearchEvents(ClientDistEventSearchFilter{Lag: intPtr(1), Page: 1, PageSize: 10})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), page.Total)
+	require.Equal(t, "m2", page.Items[0].MachineID)
+}
+
+func TestClientDistTracking_RealtimeOverview(t *testing.T) {
+	db := newTrackingDB(t)
+	svc := NewClientDistTrackingService(db)
+	now := time.Date(2026, 7, 2, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: "ch1", MachineID: "m1", IP: "1.1.1.1", Kind: "manifest", Status: 200, CreatedAt: now.Add(-10 * time.Minute)}).Error)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: "ch1", MachineID: "m2", IP: "1.1.1.1", Kind: "artifact", Status: 206, CreatedAt: now.Add(-20 * time.Minute)}).Error)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: "ch1", MachineID: "m2", IP: "2.2.2.2", Kind: "manifest", Status: 401, ErrCode: "INVALID_CLIENT_KEY", CreatedAt: now.Add(-30 * time.Minute)}).Error)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: "ch1", MachineID: "old", IP: "3.3.3.3", Kind: "manifest", Status: 200, CreatedAt: now.Add(-2 * time.Hour)}).Error)
+
+	out, err := svc.Realtime(ClientDistRealtimeQuery{ChannelID: "ch1", Now: now})
+	require.NoError(t, err)
+	require.Equal(t, int64(2), out.Summary1h.ManifestPulls)
+	require.Equal(t, int64(1), out.Summary1h.ArtifactPulls)
+	require.Equal(t, int64(1), out.Summary1h.ErrorRequests)
+	require.Equal(t, int64(2), out.Summary1h.ActiveMachines)
+	require.Len(t, out.RecentErrors, 1)
+	require.Equal(t, "INVALID_CLIENT_KEY", out.RecentErrors[0].ErrCode)
+	require.Equal(t, "1.1.1.1", out.TopIPs1h[0].IP)
+}
+
+func intPtr(n int) *int { return &n }

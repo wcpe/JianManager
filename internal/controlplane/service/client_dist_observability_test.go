@@ -27,7 +27,7 @@ func atHour(base time.Time, hoursAgo int) time.Time {
 	return base.UTC().Truncate(time.Hour).Add(-time.Duration(hoursAgo) * time.Hour).Add(10 * time.Minute)
 }
 
-// TestObs_Aggregate_PullDimensions 卷积拉取侧：manifest/制品计数、字节求和、CAS 命中/未命中分流、桶内机器码去重、版本分布。
+// TestObs_Aggregate_PullDimensions 卷积拉取侧：manifest/制品计数、字节求和、桶内机器码去重、版本分布。
 func TestObs_Aggregate_PullDimensions(t *testing.T) {
 	db := newObsDB(t)
 	svc := NewClientDistObservabilityService(db)
@@ -38,8 +38,8 @@ func TestObs_Aggregate_PullDimensions(t *testing.T) {
 	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: ch, Kind: "manifest", Version: 7, MachineID: "m1", Bytes: 100, Status: 200, CreatedAt: ts}).Error)
 	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: ch, Kind: "manifest", Version: 7, MachineID: "m1", Bytes: 100, Status: 200, CreatedAt: ts}).Error)
 	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: ch, Kind: "manifest", Version: 6, MachineID: "m2", Bytes: 100, Status: 200, CreatedAt: ts}).Error)
-	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: ch, Kind: "artifact", MachineID: "m1", Bytes: 5000, Status: 200, CreatedAt: ts}).Error) // CAS miss
-	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: ch, Kind: "artifact", MachineID: "m3", Bytes: 0, Status: 304, CreatedAt: ts}).Error)    // CAS hit
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: ch, Kind: "artifact", MachineID: "m1", Bytes: 5000, Status: 200, CreatedAt: ts}).Error)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: ch, Kind: "artifact", MachineID: "m3", Bytes: 0, Status: 304, CreatedAt: ts}).Error)
 
 	require.NoError(t, svc.AggregateAndPurge(now))
 
@@ -48,8 +48,6 @@ func TestObs_Aggregate_PullDimensions(t *testing.T) {
 	require.Equal(t, int64(3), snap.ManifestPulls)
 	require.Equal(t, int64(2), snap.ArtifactPulls)
 	require.Equal(t, int64(5300), snap.DownloadBytes)
-	require.Equal(t, int64(1), snap.CASHit)
-	require.Equal(t, int64(1), snap.CASMiss)
 	require.Equal(t, int64(3), snap.ActiveMachines, "m1/m2/m3 桶内去重计 3")
 	require.Equal(t, ts.Truncate(time.Hour), snap.BucketTS.UTC())
 

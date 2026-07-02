@@ -33,6 +33,7 @@ func setupClientDistRouterWithTracking(t *testing.T, db *gorm.DB) (*gin.Engine, 
 	channelSvc := service.NewClientChannelService(db)
 	versionSvc := service.NewClientVersionService(db, assetSvc, channelSvc)
 	tracking := service.NewClientDistTrackingService(db)
+	securitySvc := service.NewClientDistSecurityService(db, channelSvc, versionSvc)
 
 	svcs := &Services{
 		Auth:               service.NewAuthService(db, jwtCfg),
@@ -46,6 +47,7 @@ func setupClientDistRouterWithTracking(t *testing.T, db *gorm.DB) (*gin.Engine, 
 		ClientIPGuard:      service.NewClientIPGuardService(db),
 		ClientTelemetry:    service.NewClientTelemetryService(db),
 		ClientDistStats:    service.NewClientDistStatsService(db),
+		ClientDistSecurity: securitySvc,
 	}
 	_ = cpgrpc.NewClientPool()
 	return Setup(svcs, jwtCfg.Secret), tracking

@@ -26,6 +26,18 @@ type ClientDistEvent struct {
 	// ErrCode 语义错误码（FR-249）。成功事件为空；失败事件填与响应 error 字段一致的码
 	// （INVALID_CLIENT_KEY/NO_LATEST_VERSION/ARTIFACT_NOT_FOUND/SIGN_KEY_NOT_CONFIGURED/CHANNEL_NOT_FOUND/INTERNAL_ERROR）。
 	ErrCode string `gorm:"column:err_code;type:varchar(48);index" json:"errCode"`
+	// ErrReason 可读错误原因（FR-265）。
+	ErrReason string `gorm:"column:err_reason;type:varchar(255)" json:"errReason"`
+	// Method HTTP 方法（FR-265 日志详情）。
+	Method string `gorm:"type:varchar(8)" json:"method"`
+	// Path 请求路径（不含 query，FR-265 日志详情）。
+	Path string `gorm:"type:varchar(512)" json:"path"`
+	// RequestHeadersJSON 脱敏后的请求头白名单 JSON（FR-265）。
+	RequestHeadersJSON string `gorm:"column:request_headers_json;type:text" json:"-"`
+	// ResponseHeadersJSON 响应头白名单 JSON（FR-265）。
+	ResponseHeadersJSON string `gorm:"column:response_headers_json;type:text" json:"-"`
+	// ETag 响应 ETag 快捷列（FR-265）。
+	ETag string `gorm:"column:etag;type:varchar(128)" json:"etag"`
 	// DurationMs 处理耗时（毫秒）。
 	DurationMs int64 `gorm:"column:duration_ms;default:0;not null" json:"durationMs"`
 	// CreatedAt 事件时间（清理基准）。

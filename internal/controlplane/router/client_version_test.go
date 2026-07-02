@@ -38,6 +38,7 @@ func setupClientDistRouter(t *testing.T, db *gorm.DB) (*gin.Engine, *service.Cli
 	assetSvc := service.NewAssetService(db, root)
 	channelSvc := service.NewClientChannelService(db)
 	versionSvc := service.NewClientVersionService(db, assetSvc, channelSvc)
+	securitySvc := service.NewClientDistSecurityService(db, channelSvc, versionSvc)
 
 	svcs := &Services{
 		Auth:               service.NewAuthService(db, jwtCfg),
@@ -51,6 +52,7 @@ func setupClientDistRouter(t *testing.T, db *gorm.DB) (*gin.Engine, *service.Cli
 		ClientIPGuard:      service.NewClientIPGuardService(db),
 		ClientTelemetry:    service.NewClientTelemetryService(db),
 		ClientDistStats:    service.NewClientDistStatsService(db),
+		ClientDistSecurity: securitySvc,
 	}
 	_ = cpgrpc.NewClientPool() // 与 setupTestRouter 一致：确保 gRPC 包初始化无副作用。
 	return Setup(svcs, jwtCfg.Secret), versionSvc
@@ -268,7 +270,18 @@ func TestClientDist_Artifact_RangeDelivery(t *testing.T) {
 	key := createChannelAndKey(t, r, token, channelID)
 
 	content := []byte("0123456789abcdef") // 16 字节，便于 Range 断言。
-	artSha, _ := uploadClientFile(t, r, token, channelID, content)
+	artSha, artSize := uploadClientFile(t, r, token, channelID, content)
+	pubBody := map[string]any{
+		"managedDirs": []string{"mods"},
+		"files": []map[string]any{{
+			"path": "mods/range.jar", "sha256": sha256Hex2("range-raw"), "md5": "m", "size": 1,
+			"sync": "strict", "platform": "",
+			"artifact": map[string]any{"sha256": artSha, "size": artSize, "codec": "none"},
+		}},
+	}
+	if w := makeRequest(r, "POST", "/api/v1/client-channels/"+channelID+"/versions", pubBody, token); w.Code != http.StatusCreated {
+		t.Fatalf("发布 Range 测试版本失败: %d %s", w.Code, w.Body.String())
+	}
 
 	// 无 key → 401。
 	nreq := httptest.NewRequest("GET", "/api/v1/client-artifacts/"+artSha, nil)

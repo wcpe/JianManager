@@ -11,13 +11,18 @@ import (
 // ClientTelemetryHandler 客户端遥测上报端点（FR-094，见 ADR-023、contract §4.3）。
 // 面向玩家公网：拉取密钥（X-Client-Key）鉴权 + X-Machine-Id；202 Accepted、best-effort 落库不阻塞。
 type ClientTelemetryHandler struct {
-	svc     *service.ClientTelemetryService
-	channel *service.ClientChannelService
+	svc      *service.ClientTelemetryService
+	channel  *service.ClientChannelService
+	security *service.ClientDistSecurityService
 }
 
 // NewClientTelemetryHandler 创建遥测处理器。
-func NewClientTelemetryHandler(svc *service.ClientTelemetryService, channel *service.ClientChannelService) *ClientTelemetryHandler {
-	return &ClientTelemetryHandler{svc: svc, channel: channel}
+func NewClientTelemetryHandler(svc *service.ClientTelemetryService, channel *service.ClientChannelService, security ...*service.ClientDistSecurityService) *ClientTelemetryHandler {
+	var sec *service.ClientDistSecurityService
+	if len(security) > 0 {
+		sec = security[0]
+	}
+	return &ClientTelemetryHandler{svc: svc, channel: channel, security: sec}
 }
 
 // telemetryBody 遥测上报体（contract §4.3 + channel 由客户端携带便于按频道聚合）。
@@ -36,7 +41,12 @@ type telemetryBody struct {
 
 // Post POST /client-telemetry — 接收客户端遥测（玩家，拉取密钥鉴权）。
 func (h *ClientTelemetryHandler) Post(c *gin.Context) {
-	if _, err := h.channel.VerifyAnyKey(c.GetHeader(clientKeyHeader)); err != nil {
+	if h.security != nil {
+		if _, err := h.security.VerifyAnyKey(c.GetHeader(clientKeyHeader)); err != nil {
+			respondSecurityAuthErr(c, h.security, err)
+			return
+		}
+	} else if _, err := h.channel.VerifyAnyKey(c.GetHeader(clientKeyHeader)); err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "INVALID_CLIENT_KEY", "message": "拉取密钥无效"})
 		return
 	}

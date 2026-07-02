@@ -50,8 +50,6 @@ type bucketAgg struct {
 	manifestPulls int64
 	artifactPulls int64
 	downloadBytes int64
-	casHit        int64
-	casMiss       int64
 	machines      map[string]struct{} // 桶内 machineId 去重集（卷积期临时，落库只存 size）
 	versionDist   map[string]int64
 	platformDist  map[string]int64
@@ -128,13 +126,6 @@ func (s *ClientDistObservabilityService) aggregate(now time.Time) error {
 			}
 		case "artifact":
 			a.artifactPulls++
-			// CAS 命中 = 304（客户端已有该制品）；未命中 = 200/206（实际传输）。
-			switch e.Status {
-			case 304:
-				a.casHit++
-			case 200, 206:
-				a.casMiss++
-			}
 		}
 		if e.MachineID != "" {
 			a.machines[e.MachineID] = struct{}{}
@@ -181,8 +172,6 @@ func (s *ClientDistObservabilityService) aggregate(now time.Time) error {
 			ManifestPulls:    a.manifestPulls,
 			ArtifactPulls:    a.artifactPulls,
 			DownloadBytes:    a.downloadBytes,
-			CASHit:           a.casHit,
-			CASMiss:          a.casMiss,
 			ActiveMachines:   int64(len(a.machines)),
 			VersionDist:      marshalDist(a.versionDist),
 			PlatformDist:     marshalDist(a.platformDist),
@@ -201,8 +190,6 @@ func (s *ClientDistObservabilityService) aggregate(now time.Time) error {
 				"manifest_pulls":     row.ManifestPulls,
 				"artifact_pulls":     row.ArtifactPulls,
 				"download_bytes":     row.DownloadBytes,
-				"cas_hit":            row.CASHit,
-				"cas_miss":           row.CASMiss,
 				"active_machines":    row.ActiveMachines,
 				"version_dist":       row.VersionDist,
 				"platform_dist":      row.PlatformDist,

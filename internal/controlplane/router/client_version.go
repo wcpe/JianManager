@@ -8,11 +8,13 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/JianManager/internal/controlplane/middleware"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
@@ -32,11 +34,16 @@ type ClientVersionHandler struct {
 	audit    *service.AuditService
 	machine  *service.ClientMachineService
 	tracking *service.ClientDistTrackingService
+	security *service.ClientDistSecurityService
 }
 
 // NewClientVersionHandler 创建客户端分发版本/消费端点处理器。machine/tracking 可为 nil（不登记机器码/不追踪）。
-func NewClientVersionHandler(svc *service.ClientVersionService, channel *service.ClientChannelService, audit *service.AuditService, machine *service.ClientMachineService, tracking *service.ClientDistTrackingService) *ClientVersionHandler {
-	return &ClientVersionHandler{svc: svc, channel: channel, audit: audit, machine: machine, tracking: tracking}
+func NewClientVersionHandler(svc *service.ClientVersionService, channel *service.ClientChannelService, audit *service.AuditService, machine *service.ClientMachineService, tracking *service.ClientDistTrackingService, security ...*service.ClientDistSecurityService) *ClientVersionHandler {
+	var sec *service.ClientDistSecurityService
+	if len(security) > 0 {
+		sec = security[0]
+	}
+	return &ClientVersionHandler{svc: svc, channel: channel, audit: audit, machine: machine, tracking: tracking, security: sec}
 }
 
 // clientKeyHeader 玩家拉取密钥请求头（contract §5）。
@@ -86,10 +93,10 @@ func (h *ClientVersionHandler) PublishFile(c *gin.Context) {
 // publishVersionRequest 发布版本请求体（contract §2）。
 type publishVersionRequest struct {
 	Files        []service.ManifestFile `json:"files" binding:"required"`
-	ManagedDirs  []string                `json:"managedDirs"`
-	CleanExclude []string                `json:"cleanExclude"`
-	Agent        *service.ManifestAgent  `json:"agent"`
-	Note         string                  `json:"note"`
+	ManagedDirs  []string               `json:"managedDirs"`
+	CleanExclude []string               `json:"cleanExclude"`
+	Agent        *service.ManifestAgent `json:"agent"`
+	Note         string                 `json:"note"`
 }
 
 // PublishVersion POST /client-channels/:id/versions — 发布版本并切 latest 指针（运营，平台管理员）。
@@ -275,14 +282,22 @@ func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 			_ = h.tracking.Record(service.ClientDistEventInput{
 				ChannelID: channelID, MachineID: mid, IP: c.ClientIP(), Kind: "manifest",
 				Version: manifestVersion, Bytes: int64(c.Writer.Size()), Status: c.Writer.Status(),
-				ErrCode: errCode, DurationMs: time.Since(start).Milliseconds(),
+				ErrCode: errCode, DurationMs: time.Since(start).Milliseconds(), Method: c.Request.Method,
+				Path: c.Request.URL.RequestURI(), RequestHeaders: requestHeaderMap(c), ResponseHeaders: responseHeaderMap(c),
 			})
 		}
 	}()
 
-	if ec, ok := h.authChannelKey(c, channelID); !ok {
+	key, ec, ok := h.authChannelKey(c, channelID)
+	if !ok {
 		errCode = ec
 		return
+	}
+	if h.security != nil {
+		if err := h.checkCommonSecurity(c, channelID, key); err != nil {
+			errCode = h.respondSecurityErr(c, err)
+			return
+		}
 	}
 
 	// 机器码登记（FR-092）：鉴权通过后若携带 X-Machine-Id 则 best-effort upsert（弱一致、失败不阻断）。
@@ -324,22 +339,55 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 			_ = h.tracking.Record(service.ClientDistEventInput{
 				ChannelID: channelID, MachineID: c.GetHeader(machineIDHeader), IP: c.ClientIP(),
 				Kind: "artifact", ArtifactSHA: sha, Bytes: int64(c.Writer.Size()),
-				Status: c.Writer.Status(), ErrCode: errCode, DurationMs: time.Since(start).Milliseconds(),
+				Status: c.Writer.Status(), ErrCode: errCode, DurationMs: time.Since(start).Milliseconds(), Method: c.Request.Method,
+				Path: c.Request.URL.RequestURI(), RequestHeaders: requestHeaderMap(c), ResponseHeaders: responseHeaderMap(c),
 			})
 		}
 	}()
 
-	ch, ec, ok := h.authAnyKey(c)
+	key, ch, ec, ok := h.authAnyKey(c)
 	if !ok {
 		errCode = ec
 		return
 	}
 	channelID = ch
-
 	asset, absPath, err := h.svc.OpenArtifact(sha)
 	if err != nil {
 		errCode = h.respondConsumerErr(c, err)
 		return
+	}
+	if h.security != nil {
+		if err := h.checkCommonSecurity(c, channelID, key); err != nil {
+			errCode = h.respondSecurityErr(c, err)
+			return
+		}
+		if mode, err := h.security.ChannelProtectionMode(channelID); err == nil && mode == service.ClientChannelModeProtected {
+			errCode = h.respondSecurityErr(c, service.ErrChannelProtected)
+			return
+		}
+		if ok, err := h.security.IsArtifactAllowedForChannel(channelID, sha); err != nil || !ok {
+			if err != nil {
+				errCode = h.respondSecurityErr(c, err)
+			} else {
+				errCode = h.respondSecurityErr(c, service.ErrArtifactNotAllowed)
+			}
+			return
+		}
+		if invalidMultiRange(c.GetHeader("Range")) {
+			_ = h.security.RecordRiskEvent("INVALID_RANGE", channelID, c.GetHeader(machineIDHeader), "", "", c.ClientIP(), key, "medium", nil)
+			errCode = "INVALID_RANGE"
+			c.JSON(http.StatusRequestedRangeNotSatisfiable, gin.H{"error": "INVALID_RANGE", "message": "不支持多段 Range"})
+			return
+		}
+		if smallRange(c.GetHeader("Range")) {
+			_ = h.security.RecordRiskEvent("RANGE_SMALL", channelID, c.GetHeader(machineIDHeader), "", "", c.ClientIP(), key, "low", nil)
+		}
+		lease, err := h.security.AcquireArtifact(c.ClientIP(), key.ID, channelID)
+		if err != nil {
+			errCode = h.respondSecurityErr(c, err)
+			return
+		}
+		defer lease.Release()
 	}
 
 	f, oerr := os.Open(absPath)
@@ -354,6 +402,12 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 		errCode = "INTERNAL_ERROR"
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "读取制品失败"})
 		return
+	}
+	if h.security != nil {
+		if err := h.security.CheckBandwidth(c.ClientIP(), key.ID, channelID, asset.Size); err != nil {
+			errCode = h.respondSecurityErr(c, err)
+			return
+		}
 	}
 
 	contentType := asset.ContentType
@@ -373,28 +427,62 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 
 // authChannelKey 校验请求头 X-Client-Key 绑定指定频道；失败已写响应并返回 (错误码, false)。
 // 成功返回 ("", true)。错误码供调用方记入追踪事件（FR-249）。
-func (h *ClientVersionHandler) authChannelKey(c *gin.Context, channelID string) (string, bool) {
-	plaintext := c.GetHeader(clientKeyHeader)
-	if _, err := h.channel.VerifyKey(channelID, plaintext); err != nil {
-		return h.respondKeyAuthErr(c, err), false
+func (h *ClientVersionHandler) authChannelKey(c *gin.Context, channelID string) (*model.ClientPullKey, string, bool) {
+	if h.security != nil {
+		if _, blocked := h.security.ActiveIPBlock(c.ClientIP()); blocked {
+			return nil, h.respondSecurityErr(c, service.ErrIPTempBlocked), false
+		}
 	}
-	return "", true
+	plaintext := c.GetHeader(clientKeyHeader)
+	var key *model.ClientPullKey
+	var err error
+	if h.security != nil {
+		var check *service.SecurityKeyCheck
+		check, err = h.security.VerifyChannelKey(channelID, plaintext)
+		if check != nil {
+			key = check.Key
+		}
+	} else {
+		key, err = h.channel.VerifyKey(channelID, plaintext)
+	}
+	if err != nil {
+		return nil, h.respondKeyAuthErr(c, err), false
+	}
+	return key, "", true
 }
 
 // authAnyKey 校验请求头 X-Client-Key 为任一有效密钥（不绑定频道）；失败已写响应并返回 (频道空, 错误码, false)。
 // 成功时返回密钥所属频道 ID——制品下载 URL 内容寻址、不带频道，靠密钥归属频道以供按频道统计（FR-093/095）。
 // 错误码供调用方记入追踪事件（FR-249；鉴权失败时频道未知，事件 ChannelID 记空可接受）。
-func (h *ClientVersionHandler) authAnyKey(c *gin.Context) (channelID, errCode string, ok bool) {
-	plaintext := c.GetHeader(clientKeyHeader)
-	key, err := h.channel.VerifyAnyKey(plaintext)
-	if err != nil {
-		return "", h.respondKeyAuthErr(c, err), false
+func (h *ClientVersionHandler) authAnyKey(c *gin.Context) (*model.ClientPullKey, string, string, bool) {
+	if h.security != nil {
+		if _, blocked := h.security.ActiveIPBlock(c.ClientIP()); blocked {
+			return nil, "", h.respondSecurityErr(c, service.ErrIPTempBlocked), false
+		}
 	}
-	return key.ChannelID, "", true
+	plaintext := c.GetHeader(clientKeyHeader)
+	var key *model.ClientPullKey
+	var err error
+	if h.security != nil {
+		var check *service.SecurityKeyCheck
+		check, err = h.security.VerifyAnyKey(plaintext)
+		if check != nil {
+			key = check.Key
+		}
+	} else {
+		key, err = h.channel.VerifyAnyKey(plaintext)
+	}
+	if err != nil {
+		return nil, "", h.respondKeyAuthErr(c, err), false
+	}
+	return key, key.ChannelID, "", true
 }
 
 // respondKeyAuthErr 统一拉取密钥鉴权失败响应（不区分缺失/吊销/过期，避免泄露密钥状态）；返回所写错误码（FR-249）。
 func (h *ClientVersionHandler) respondKeyAuthErr(c *gin.Context, err error) string {
+	if h.security != nil && (errors.Is(err, service.ErrClientKeySuspended) || errors.Is(err, service.ErrClientKeyThrottled)) {
+		return respondSecurityAuthErr(c, h.security, err)
+	}
 	if errors.Is(err, service.ErrPullKeyInvalid) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "INVALID_CLIENT_KEY", "message": "拉取密钥无效"})
 		return "INVALID_CLIENT_KEY"
@@ -402,6 +490,64 @@ func (h *ClientVersionHandler) respondKeyAuthErr(c *gin.Context, err error) stri
 	slog.Error("客户端分发鉴权失败", "channel", c.Param("id"), "error", err)
 	c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "鉴权失败"})
 	return "INTERNAL_ERROR"
+}
+
+func (h *ClientVersionHandler) checkCommonSecurity(c *gin.Context, channelID string, key *model.ClientPullKey) error {
+	if h.security == nil {
+		return nil
+	}
+	if key != nil {
+		if err := h.security.CheckRate("key", strconv.FormatUint(uint64(key.ID), 10)); err != nil {
+			return err
+		}
+	}
+	return h.security.CheckRate("channel", channelID)
+}
+
+func (h *ClientVersionHandler) respondSecurityErr(c *gin.Context, err error) string {
+	switch {
+	case errors.Is(err, service.ErrIPTempBlocked):
+		setRetryAfter(c, h.security)
+		c.JSON(http.StatusForbidden, gin.H{"error": "IP_TEMP_BLOCKED", "message": "IP 已临时封禁"})
+		return "IP_TEMP_BLOCKED"
+	case errors.Is(err, service.ErrChannelProtected):
+		setRetryAfter(c, h.security)
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "CHANNEL_PROTECTED", "message": "频道保护中，请稍后再试"})
+		return "CHANNEL_PROTECTED"
+	case errors.Is(err, service.ErrArtifactNotAllowed):
+		c.JSON(http.StatusForbidden, gin.H{"error": "ARTIFACT_NOT_ALLOWED", "message": "制品不属于当前频道"})
+		return "ARTIFACT_NOT_ALLOWED"
+	case errors.Is(err, service.ErrDownloadConcurrencyLimited):
+		setRetryAfter(c, h.security)
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "DOWNLOAD_CONCURRENCY_LIMITED", "message": "下载并发过高"})
+		return "DOWNLOAD_CONCURRENCY_LIMITED"
+	case errors.Is(err, service.ErrBandwidthLimited):
+		setRetryAfter(c, h.security)
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "BANDWIDTH_LIMITED", "message": "带宽配额已用尽"})
+		return "BANDWIDTH_LIMITED"
+	case errors.Is(err, service.ErrRateLimited):
+		setRetryAfter(c, h.security)
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "RATE_LIMITED", "message": "请求过于频繁，请稍后再试"})
+		return "RATE_LIMITED"
+	default:
+		slog.Error("客户端分发安全检查失败", "path", c.Request.URL.Path, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "安全检查失败"})
+		return "INTERNAL_ERROR"
+	}
+}
+
+func invalidMultiRange(header string) bool { return strings.Contains(header, ",") }
+func smallRange(header string) bool {
+	if !strings.HasPrefix(header, "bytes=") || strings.Contains(header, ",") {
+		return false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(header, "bytes="), "-", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return false
+	}
+	start, e1 := strconv.ParseInt(parts[0], 10, 64)
+	end, e2 := strconv.ParseInt(parts[1], 10, 64)
+	return e1 == nil && e2 == nil && end >= start && end-start+1 <= 4
 }
 
 // respondErr 发布端点错误映射（频道/清单/制品）。
@@ -460,6 +606,22 @@ func (h *ClientVersionHandler) recordAudit(c *gin.Context, action string, detail
 
 // ListEvents GET /client-dist/events — 拉取/下载明细检索（运营，平台管理员；FR-093/249）。
 // 按 channelId/machineId/ip/kind/outcome/errCode/version/since/until/limit 过滤，created_at DESC。
+func requestHeaderMap(c *gin.Context) map[string]string {
+	out := map[string]string{}
+	for k, vals := range c.Request.Header {
+		out[k] = strings.Join(vals, ", ")
+	}
+	return out
+}
+
+func responseHeaderMap(c *gin.Context) map[string]string {
+	out := map[string]string{}
+	for k, vals := range c.Writer.Header() {
+		out[k] = strings.Join(vals, ", ")
+	}
+	return out
+}
+
 func (h *ClientVersionHandler) ListEvents(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -540,9 +702,16 @@ func (h *ClientVersionHandler) RegisterConsumerRoutes(rg *gin.RouterGroup) {
 // 返回 {version, sha256, downloadUrl, size}（spec §2.5.3 冻结格式），楔子据此下载 core jar。
 func (h *ClientVersionHandler) GetUpdaterCore(c *gin.Context) {
 	channelID := c.Param("id")
-	if ec, ok := h.authChannelKey(c, channelID); !ok {
+	key, ec, ok := h.authChannelKey(c, channelID)
+	if !ok {
 		_ = ec
 		return
+	}
+	if h.security != nil {
+		if err := h.checkCommonSecurity(c, channelID, key); err != nil {
+			_ = h.respondSecurityErr(c, err)
+			return
+		}
 	}
 	info, err := h.svc.GetCoreEndpointInfo(channelID)
 	if err != nil {

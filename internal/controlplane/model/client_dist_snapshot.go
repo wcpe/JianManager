@@ -16,11 +16,9 @@ type ClientDistSnapshot struct {
 	BucketTS time.Time `gorm:"not null;uniqueIndex:idx_cds_channel_bucket,priority:2;index:idx_cds_bucket" json:"bucketTs"`
 
 	// 拉取侧（源 client_dist_event）。
-	ManifestPulls int64 `gorm:"default:0;not null" json:"manifestPulls"`           // 桶内 manifest 拉取次数
-	ArtifactPulls int64 `gorm:"default:0;not null" json:"artifactPulls"`           // 桶内制品拉取次数
-	DownloadBytes int64 `gorm:"default:0;not null" json:"downloadBytes"`           // 桶内总响应字节
-	CASHit        int64 `gorm:"column:cas_hit;default:0;not null" json:"casHit"`   // 制品 CAS 命中（artifact 且 status=304）
-	CASMiss       int64 `gorm:"column:cas_miss;default:0;not null" json:"casMiss"` // 制品 CAS 未命中（artifact 且 status∈{200,206}）
+	ManifestPulls int64 `gorm:"default:0;not null" json:"manifestPulls"` // 桶内 manifest 拉取次数
+	ArtifactPulls int64 `gorm:"default:0;not null" json:"artifactPulls"` // 桶内制品拉取次数
+	DownloadBytes int64 `gorm:"default:0;not null" json:"downloadBytes"` // 桶内总响应字节
 	// ActiveMachines 桶内 machineId 精确去重计数（排空串）。machineId 不可信（ADR-023），仅统计近似；
 	// 跨桶不可简单求和（同客户端跨小时会重复），跨区间去重口径见 ADR-049 §4。
 	ActiveMachines int64 `gorm:"default:0;not null" json:"activeMachines"`

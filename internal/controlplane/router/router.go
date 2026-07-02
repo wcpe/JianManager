@@ -65,6 +65,9 @@ type Services struct {
 	ClientIPGuard      *service.ClientIPGuardService
 	ClientTelemetry    *service.ClientTelemetryService
 	ClientDistStats    *service.ClientDistStatsService
+	// ClientRuntimeState 客户端运行态心跳与聚合（FR-265）。
+	ClientRuntimeState *service.ClientRuntimeStateService
+	ClientDistSecurity *service.ClientDistSecurityService
 	// ClientDistObservability 分发观测时序底座（FR-217，见 ADR-049）。
 	ClientDistObservability *service.ClientDistObservabilityService
 	RuntimeAssets           *service.RuntimeAssetsService
@@ -98,18 +101,26 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	// 面向玩家的客户端分发消费端点（FR-087，见 ADR-022/023、contract §4）：
 	// manifest/制品端点用拉取密钥（X-Client-Key）鉴权，与运营浏览器 JWT 入口物理隔离，
 	// 故挂在 api（公网、仅限流）而非 protected（JWT）。内容可信靠 manifest 签名而非密钥。
-	if svcs.ClientVersion != nil && svcs.ClientChannel != nil {
-		clientConsumerHandler := NewClientVersionHandler(svcs.ClientVersion, svcs.ClientChannel, svcs.Audit, svcs.ClientMachine, svcs.ClientDistTracking)
+	if svcs.ClientChannel != nil && (svcs.ClientVersion != nil || svcs.ClientTelemetry != nil || svcs.ClientRuntimeState != nil || svcs.ClientDistSecurity != nil) {
 		// L7 防护（FR-096，见 ADR-023）：消费端点独立子组挂 IP 黑白名单 + per-IP 限流 + 并发信号量，
 		// 不影响其它 api 路由。L3/L4 容量型 DDoS 靠 CDN/云清洗，不在此。
 		consumerGroup := api.Group("")
 		if svcs.ClientIPGuard != nil {
 			consumerGroup.Use(middleware.ClientDistGuard(svcs.ClientIPGuard, 5, 20, 256))
 		}
-		clientConsumerHandler.RegisterConsumerRoutes(consumerGroup)
+		if svcs.ClientVersion != nil {
+			clientConsumerHandler := NewClientVersionHandler(svcs.ClientVersion, svcs.ClientChannel, svcs.Audit, svcs.ClientMachine, svcs.ClientDistTracking, svcs.ClientDistSecurity)
+			clientConsumerHandler.RegisterConsumerRoutes(consumerGroup)
+		}
 		// 客户端遥测上报（FR-094）：同为面向玩家公网端点，挂守卫子组（拉取密钥鉴权 + L7 防护）。
 		if svcs.ClientTelemetry != nil {
-			NewClientTelemetryHandler(svcs.ClientTelemetry, svcs.ClientChannel).RegisterRoutes(consumerGroup)
+			NewClientTelemetryHandler(svcs.ClientTelemetry, svcs.ClientChannel, svcs.ClientDistSecurity).RegisterRoutes(consumerGroup)
+		}
+		if svcs.ClientRuntimeState != nil {
+			NewClientDistRuntimeHandler(svcs.ClientRuntimeState, svcs.ClientDistTracking, svcs.ClientChannel, svcs.Audit).RegisterConsumerRoutes(consumerGroup)
+		}
+		if svcs.ClientDistSecurity != nil {
+			NewClientSecurityHandler(svcs.ClientDistSecurity).RegisterConsumerRoutes(consumerGroup)
 		}
 	}
 
@@ -323,7 +334,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 客户端分发发布端点（文件制品 + 版本发布、切 latest 指针）：运营操作，限平台管理员
 		// （FR-087 / ADR-022）。消费端点（manifest/制品）走公网 key 鉴权，已在 api 组注册。
 		if svcs.ClientVersion != nil && svcs.ClientChannel != nil {
-			clientVersionHandler := NewClientVersionHandler(svcs.ClientVersion, svcs.ClientChannel, svcs.Audit, svcs.ClientMachine, svcs.ClientDistTracking)
+			clientVersionHandler := NewClientVersionHandler(svcs.ClientVersion, svcs.ClientChannel, svcs.Audit, svcs.ClientMachine, svcs.ClientDistTracking, svcs.ClientDistSecurity)
 			clientVersionHandler.RegisterPublishRoutes(admin)
 		}
 
@@ -345,6 +356,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 内嵌 core jar 入库为 client-updater-core 类型（多版本归档不覆盖），运营经版本选择器切换频道选定版本。
 		// coreEndpoint（拉取密钥鉴权）+ versions/selected（JWT 平台管理员）端点已注册于 ClientVersionHandler。
 
+		// 客户端分发安全防护（FR-264）：画像、风险事件、处置与保护模式。限平台管理员。
+		if svcs.ClientDistSecurity != nil {
+			NewClientSecurityHandler(svcs.ClientDistSecurity).RegisterAdminRoutes(admin)
+		}
+
 		// 客户端分发端点 L7 防护：IP 黑白名单规则管理 + 防护拦截计数（FR-096 / ADR-023）。限平台管理员。
 		if svcs.ClientIPGuard != nil {
 			clientIPRuleHandler := NewClientIPRuleHandler(svcs.ClientIPGuard, svcs.Audit)
@@ -361,6 +377,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.ClientDistObservability != nil {
 			clientDistObsHandler := NewClientDistObservabilityHandler(svcs.ClientDistObservability, svcs.Audit)
 			clientDistObsHandler.RegisterRoutes(admin)
+		}
+
+		// 客户端分发运行态与请求近实时观测（FR-265）：客户端 Tab 独立使用运行态表，日志/实时只读分发事件。
+		if svcs.ClientRuntimeState != nil && svcs.ClientDistTracking != nil {
+			NewClientDistRuntimeHandler(svcs.ClientRuntimeState, svcs.ClientDistTracking, svcs.ClientChannel, svcs.Audit).RegisterAdminRoutes(admin)
 		}
 
 		// 客户端更新器接入引导：内嵌 wedge/updater-core jar 版本查询 + 下载（FR-107）。

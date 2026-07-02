@@ -14,8 +14,6 @@ type ObsSeriesPoint struct {
 	ManifestPulls    int64     `json:"manifestPulls"`
 	ArtifactPulls    int64     `json:"artifactPulls"`
 	DownloadBytes    int64     `json:"downloadBytes"`
-	CASHit           int64     `json:"casHit"`
-	CASMiss          int64     `json:"casMiss"`
 	ActiveMachines   int64     `json:"activeMachines"`
 	UpdateTotal      int64     `json:"updateTotal"`
 	UpdateSuccess    int64     `json:"updateSuccess"`
@@ -29,8 +27,6 @@ type ObsSummary struct {
 	ManifestPulls    int64   `json:"manifestPulls"`
 	ArtifactPulls    int64   `json:"artifactPulls"`
 	DownloadBytes    int64   `json:"downloadBytes"`
-	CASHit           int64   `json:"casHit"`
-	CASMiss          int64   `json:"casMiss"`
 	UpdateTotal      int64   `json:"updateTotal"`
 	UpdateSuccess    int64   `json:"updateSuccess"`
 	UpdateFailStatic int64   `json:"updateFailStatic"`
@@ -39,7 +35,6 @@ type ObsSummary struct {
 	SuccessRate      float64 `json:"successRate"`
 	FailStaticRate   float64 `json:"failStaticRate"`
 	RollbackRate     float64 `json:"rollbackRate"`
-	CASHitRate       float64 `json:"casHitRate"`
 	// ActiveMachines 区间「活跃客户端」；ActiveMachinesExact 标明是否为精确去重独立数（ADR-049 §4）。
 	ActiveMachines      int64 `json:"activeMachines"`
 	ActiveMachinesExact bool  `json:"activeMachinesExact"`
@@ -121,8 +116,6 @@ func (s *ClientDistObservabilityService) queryAt(now time.Time, q ObservabilityQ
 		p.ManifestPulls += r.ManifestPulls
 		p.ArtifactPulls += r.ArtifactPulls
 		p.DownloadBytes += r.DownloadBytes
-		p.CASHit += r.CASHit
-		p.CASMiss += r.CASMiss
 		p.ActiveMachines += r.ActiveMachines
 		p.UpdateTotal += r.UpdateTotal
 		p.UpdateSuccess += r.UpdateSuccess
@@ -143,8 +136,6 @@ func (s *ClientDistObservabilityService) queryAt(now time.Time, q ObservabilityQ
 		sum.ManifestPulls += p.ManifestPulls
 		sum.ArtifactPulls += p.ArtifactPulls
 		sum.DownloadBytes += p.DownloadBytes
-		sum.CASHit += p.CASHit
-		sum.CASMiss += p.CASMiss
 		sum.UpdateTotal += p.UpdateTotal
 		sum.UpdateSuccess += p.UpdateSuccess
 		sum.UpdateFailStatic += p.UpdateFailStatic
@@ -157,10 +148,6 @@ func (s *ClientDistObservabilityService) queryAt(now time.Time, q ObservabilityQ
 		sum.FailStaticRate = float64(sum.UpdateFailStatic) / float64(sum.UpdateTotal)
 		sum.RollbackRate = float64(sum.UpdateRolledBack) / float64(sum.UpdateTotal)
 	}
-	if casTotal := sum.CASHit + sum.CASMiss; casTotal > 0 {
-		sum.CASHitRate = float64(sum.CASHit) / float64(casTotal)
-	}
-
 	// 活跃客户端独立数（ADR-049 §4）：区间完全落在明细保留窗内 → 回查明细做区间级精确去重；
 	// 否则只能给各桶 active_machines 求和（人次近似上界）。
 	exactActive, exact, err := s.activeMachinesExact(now, q.ChannelID, from, to)

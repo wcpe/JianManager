@@ -52,6 +52,7 @@ type ClientDistStats struct {
 	Versions       []StatsVersion  `json:"versions"`
 	Results        []StatsResult   `json:"results"`
 	SuccessRate    float64         `json:"successRate"`
+	FailureRate    float64         `json:"failureRate"`
 	RollbackRate   float64         `json:"rollbackRate"`
 	ActiveMachines int64           `json:"activeMachines"`
 	TopIPs         []StatsIP       `json:"topIps"`
@@ -69,51 +70,47 @@ func (s *ClientDistStatsService) Overview(channelID string, days int) (*ClientDi
 		Downloads: []StatsDayPoint{}, Versions: []StatsVersion{}, Results: []StatsResult{}, TopIPs: []StatsIP{},
 	}
 
-	// 下载量趋势（按日，所有 kind 汇总）。
-	if err := s.db.Model(&model.ClientDistDaily{}).
+	daily := s.db.Model(&model.ClientDistDaily{}).Where("day >= ?", sinceDay)
+	events := s.db.Model(&model.ClientDistEvent{}).Where("created_at >= ?", sinceTime)
+	if channelID != "" {
+		daily = daily.Where("channel_id = ?", channelID)
+		events = events.Where("channel_id = ?", channelID)
+	}
+
+	// 下载量趋势（按日，所有 kind 汇总；仅源自 client_dist_daily）。
+	if err := daily.Session(&gorm.Session{}).
 		Select("day, SUM(requests) AS requests, SUM(bytes) AS bytes").
-		Where("channel_id = ? AND day >= ?", channelID, sinceDay).
 		Group("day").Order("day").Scan(&out.Downloads).Error; err != nil {
 		return nil, err
 	}
-	// 版本分布（manifest 拉取）。
-	if err := s.db.Model(&model.ClientDistDaily{}).
+	// 版本分布（manifest 拉取；仅源自 client_dist_daily）。
+	if err := daily.Session(&gorm.Session{}).
 		Select("version, SUM(requests) AS requests").
-		Where("channel_id = ? AND kind = ? AND day >= ?", channelID, "manifest", sinceDay).
+		Where("kind = ?", "manifest").
 		Group("version").Order("version").Scan(&out.Versions).Error; err != nil {
 		return nil, err
 	}
-	// 更新结果分布（遥测）。
-	if err := s.db.Model(&model.ClientTelemetryDaily{}).
-		Select("result, SUM(count) AS count").
-		Where("channel_id = ? AND day >= ?", channelID, sinceDay).
-		Group("result").Scan(&out.Results).Error; err != nil {
+
+	var success, failure int64
+	if err := events.Session(&gorm.Session{}).Where("status > 0 AND status < ?", 400).Count(&success).Error; err != nil {
 		return nil, err
 	}
-	var total, success, rollback int64
-	for _, r := range out.Results {
-		total += r.Count
-		switch r.Result {
-		case "success":
-			success = r.Count
-		case "rolled-back":
-			rollback = r.Count
-		}
+	if err := events.Session(&gorm.Session{}).Where("status >= ?", 400).Count(&failure).Error; err != nil {
+		return nil, err
 	}
-	if total > 0 {
+	out.Results = []StatsResult{{Result: "success", Count: success}, {Result: "failure", Count: failure}}
+	if total := success + failure; total > 0 {
 		out.SuccessRate = float64(success) / float64(total)
-		out.RollbackRate = float64(rollback) / float64(total)
+		out.FailureRate = float64(failure) / float64(total)
 	}
-	// 活跃机器码数（近窗去重）。
-	if err := s.db.Model(&model.ClientDistEvent{}).
-		Where("channel_id = ? AND created_at >= ? AND machine_id != ''", channelID, sinceTime).
-		Distinct("machine_id").Count(&out.ActiveMachines).Error; err != nil {
+	// 活跃机器码数（近窗去重；仅源自 client_dist_events）。
+	if err := events.Session(&gorm.Session{}).
+		Where("machine_id != ''").Distinct("machine_id").Count(&out.ActiveMachines).Error; err != nil {
 		return nil, err
 	}
-	// 来源 IP 分布 Top 10（近窗）。
-	if err := s.db.Model(&model.ClientDistEvent{}).
-		Select("ip, COUNT(*) AS count").
-		Where("channel_id = ? AND created_at >= ? AND ip != ''", channelID, sinceTime).
+	// 来源 IP 分布 Top 10（近窗；仅源自 client_dist_events）。
+	if err := events.Session(&gorm.Session{}).
+		Select("ip, COUNT(*) AS count").Where("ip != ''").
 		Group("ip").Order("count DESC").Limit(10).Scan(&out.TopIPs).Error; err != nil {
 		return nil, err
 	}

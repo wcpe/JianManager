@@ -196,6 +196,10 @@ func main() {
 	defer clientTelemetrySvc.Stop()
 	// 分发统计后台（FR-095）：只读聚合 FR-093/094/092 数据，供管理台看板。
 	clientDistStatsSvc := service.NewClientDistStatsService(db)
+	// 客户端启动运行态（FR-265）：独立表记录心跳，不污染分发请求事件与遥测明细。
+	clientRuntimeStateSvc := service.NewClientRuntimeStateService(db)
+	// 客户端分发安全防护（FR-264）：画像、处置、key/channel 防护与制品授权。
+	clientDistSecuritySvc := service.NewClientDistSecurityService(db, clientChannelSvc, clientVersionSvc)
 	// 客户端分发观测数据底座（FR-217，见 ADR-049）：离线把 events/telemetry 卷积为按频道×小时桶的
 	// 时序快照，供观测·分发监控页跨频道/平台时序。聚合落 CP、复用 scheduler 式后台 goroutine。
 	clientDistObsSvc := service.NewClientDistObservabilityService(db)
@@ -378,6 +382,8 @@ func main() {
 		ClientIPGuard:           clientIPGuardSvc,
 		ClientTelemetry:         clientTelemetrySvc,
 		ClientDistStats:         clientDistStatsSvc,
+		ClientRuntimeState:      clientRuntimeStateSvc,
+		ClientDistSecurity:      clientDistSecuritySvc,
 		ClientDistObservability: clientDistObsSvc,
 		RuntimeAssets:           runtimeAssetsSvc,
 		EnrollToken:             enrollTokenSvc,

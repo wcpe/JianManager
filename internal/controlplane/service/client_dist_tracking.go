@@ -1,7 +1,11 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/url"
+	"sort"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -42,8 +46,84 @@ type ClientDistEventInput struct {
 	Bytes       int64
 	Status      int
 	// ErrCode 语义错误码（FR-249）；成功事件留空。
-	ErrCode    string
+	ErrCode string
+	// ErrReason 可读错误原因（FR-265）。
+	ErrReason  string
 	DurationMs int64
+	// FR-265 日志详情字段：仅保存白名单脱敏后的请求/响应头。
+	Method          string
+	Path            string
+	RequestHeaders  map[string]string
+	ResponseHeaders map[string]string
+}
+
+// ClientDistEventDetail 单条分发请求详情（FR-265）。
+type ClientDistEventDetail struct {
+	model.ClientDistEvent
+	RequestHeaders  map[string]string `json:"requestHeaders"`
+	ResponseHeaders map[string]string `json:"responseHeaders"`
+}
+
+// ClientDistEventSearchFilter 分页检索条件（FR-265）。
+type ClientDistEventSearchFilter struct {
+	ClientDistEventFilter
+	ArtifactSHA    string
+	RuntimeVersion *int
+	CoreVersion    string
+	Platform       string
+	Lag            *int
+	Page           int
+	PageSize       int
+}
+
+// ClientDistEventPage 分页检索响应（FR-265）。
+type ClientDistEventPage struct {
+	Items    []model.ClientDistEvent `json:"items"`
+	Page     int                     `json:"page"`
+	PageSize int                     `json:"pageSize"`
+	Total    int64                   `json:"total"`
+}
+
+// ClientDistRealtimeQuery 近实时查询参数（FR-265）。
+type ClientDistRealtimeQuery struct {
+	ChannelID string
+	Now       time.Time
+}
+
+// ClientDistRealtimeSummary 近 1h KPI。
+type ClientDistRealtimeSummary struct {
+	ManifestPulls  int64 `json:"manifestPulls"`
+	ArtifactPulls  int64 `json:"artifactPulls"`
+	ErrorRequests  int64 `json:"errorRequests"`
+	ActiveMachines int64 `json:"activeMachines"`
+}
+
+// ClientDistRatePoint 24h 请求速率点。
+type ClientDistRatePoint struct {
+	TS       time.Time `json:"ts"`
+	Manifest int64     `json:"manifest"`
+	Artifact int64     `json:"artifact"`
+	Error    int64     `json:"error"`
+}
+
+// ClientDistRecentError 最近错误事件。
+type ClientDistRecentError struct {
+	ID        uint      `json:"id"`
+	Time      time.Time `json:"time"`
+	ChannelID string    `json:"channelId"`
+	Kind      string    `json:"kind"`
+	Target    string    `json:"target"`
+	IP        string    `json:"ip"`
+	Status    int       `json:"status"`
+	ErrCode   string    `json:"errCode"`
+}
+
+// ClientDistRealtime 近实时观测结果。
+type ClientDistRealtime struct {
+	Summary1h      ClientDistRealtimeSummary `json:"summary1h"`
+	RequestRate24h []ClientDistRatePoint     `json:"requestRate24h"`
+	RecentErrors   []ClientDistRecentError   `json:"recentErrors"`
+	TopIPs1h       []StatsIP                 `json:"topIps1h"`
 }
 
 // Record 记录一次拉取/下载事件：写明细 + 写时增量 upsert 当日聚合。best-effort（失败不阻断）。
@@ -56,18 +136,15 @@ func (s *ClientDistTrackingService) Record(e ClientDistEventInput) error {
 		e.MachineID = e.MachineID[:machineIDMaxLen]
 	}
 	now := time.Now()
+	reqHeaders := sanitizeRequestHeaders(e.RequestHeaders)
+	respHeaders := sanitizeResponseHeaders(e.ResponseHeaders)
 	ev := &model.ClientDistEvent{
-		ChannelID:   e.ChannelID,
-		MachineID:   e.MachineID,
-		IP:          e.IP,
-		Kind:        e.Kind,
-		Version:     e.Version,
-		ArtifactSHA: e.ArtifactSHA,
-		Bytes:       e.Bytes,
-		Status:      e.Status,
-		ErrCode:     e.ErrCode,
-		DurationMs:  e.DurationMs,
-		CreatedAt:   now,
+		ChannelID: e.ChannelID, MachineID: e.MachineID, IP: e.IP, Kind: e.Kind,
+		Version: e.Version, ArtifactSHA: e.ArtifactSHA, Bytes: e.Bytes, Status: e.Status,
+		ErrCode: e.ErrCode, ErrReason: trunc(e.ErrReason, 255), DurationMs: e.DurationMs,
+		Method: strings.ToUpper(trunc(e.Method, 8)), Path: sanitizePath(e.Path),
+		RequestHeadersJSON: mustJSON(reqHeaders), ResponseHeadersJSON: mustJSON(respHeaders),
+		ETag: trunc(respHeaders["ETag"], 128), CreatedAt: now,
 	}
 	if err := s.db.Create(ev).Error; err != nil {
 		return fmt.Errorf("写分发明细失败: %w", err)
@@ -108,9 +185,7 @@ func (s *ClientDistTrackingService) Start() {
 }
 
 // Stop 停止后台清理循环。
-func (s *ClientDistTrackingService) Stop() {
-	close(s.stop)
-}
+func (s *ClientDistTrackingService) Stop() { close(s.stop) }
 
 // ClientDistEventFilter 明细检索过滤条件（FR-093 检索；FR-249 增 Outcome/ErrCode）。空字段不约束。
 type ClientDistEventFilter struct {
@@ -130,7 +205,90 @@ type ClientDistEventFilter struct {
 
 // QueryEvents 按条件检索明细（created_at DESC）。供管理面追溯（IP/机器码/频道/版本/时间）。
 func (s *ClientDistTrackingService) QueryEvents(f ClientDistEventFilter) ([]model.ClientDistEvent, error) {
-	q := s.db.Model(&model.ClientDistEvent{})
+	q := s.applyEventFilter(s.db.Model(&model.ClientDistEvent{}), f)
+	limit := f.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	var events []model.ClientDistEvent
+	if err := q.Order("created_at DESC").Limit(limit).Find(&events).Error; err != nil {
+		return nil, fmt.Errorf("检索分发明细失败: %w", err)
+	}
+	return events, nil
+}
+
+// SearchEvents 分页检索明细，支持运行态维度筛选（FR-265）。
+func (s *ClientDistTrackingService) SearchEvents(f ClientDistEventSearchFilter) (*ClientDistEventPage, error) {
+	page, size := normalizePage(f.Page, f.PageSize)
+	q := s.applyEventFilter(s.db.Model(&model.ClientDistEvent{}), f.ClientDistEventFilter)
+	if f.ArtifactSHA != "" {
+		q = q.Where("artifact_sha = ?", f.ArtifactSHA)
+	}
+	q = s.applyRuntimeFilters(q, f)
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, fmt.Errorf("统计分发明细失败: %w", err)
+	}
+	var items []model.ClientDistEvent
+	if err := q.Order("created_at DESC").Offset((page - 1) * size).Limit(size).Find(&items).Error; err != nil {
+		return nil, fmt.Errorf("检索分发明细失败: %w", err)
+	}
+	return &ClientDistEventPage{Items: items, Page: page, PageSize: size, Total: total}, nil
+}
+
+// GetEventDetail 返回单条明细与脱敏 header（FR-265）。
+func (s *ClientDistTrackingService) GetEventDetail(id uint) (*ClientDistEventDetail, error) {
+	var ev model.ClientDistEvent
+	if err := s.db.First(&ev, id).Error; err != nil {
+		return nil, err
+	}
+	return &ClientDistEventDetail{
+		ClientDistEvent: ev,
+		RequestHeaders:  parseHeaderJSON(ev.RequestHeadersJSON),
+		ResponseHeaders: parseHeaderJSON(ev.ResponseHeadersJSON),
+	}, nil
+}
+
+// Realtime 返回近实时分发请求健康度（FR-265）。
+func (s *ClientDistTrackingService) Realtime(q ClientDistRealtimeQuery) (*ClientDistRealtime, error) {
+	now := q.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	out := &ClientDistRealtime{RequestRate24h: []ClientDistRatePoint{}, RecentErrors: []ClientDistRecentError{}, TopIPs1h: []StatsIP{}}
+	base1h := s.db.Model(&model.ClientDistEvent{}).Where("created_at >= ?", now.Add(-time.Hour))
+	base24h := s.db.Model(&model.ClientDistEvent{}).Where("created_at >= ?", now.Add(-24*time.Hour))
+	if q.ChannelID != "" {
+		base1h = base1h.Where("channel_id = ?", q.ChannelID)
+		base24h = base24h.Where("channel_id = ?", q.ChannelID)
+	}
+	if err := base1h.Session(&gorm.Session{}).Where("kind = ?", "manifest").Count(&out.Summary1h.ManifestPulls).Error; err != nil {
+		return nil, err
+	}
+	if err := base1h.Session(&gorm.Session{}).Where("kind = ?", "artifact").Count(&out.Summary1h.ArtifactPulls).Error; err != nil {
+		return nil, err
+	}
+	if err := base1h.Session(&gorm.Session{}).Where("status >= ?", 400).Count(&out.Summary1h.ErrorRequests).Error; err != nil {
+		return nil, err
+	}
+	if err := base1h.Session(&gorm.Session{}).Where("machine_id != ''").Distinct("machine_id").Count(&out.Summary1h.ActiveMachines).Error; err != nil {
+		return nil, err
+	}
+	if err := realtimeRate(base24h, &out.RequestRate24h); err != nil {
+		return nil, err
+	}
+	if err := recentErrors(base24h, &out.RecentErrors); err != nil {
+		return nil, err
+	}
+	if err := topIPs(base1h, &out.TopIPs1h); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *ClientDistTrackingService) applyEventFilter(q *gorm.DB, f ClientDistEventFilter) *gorm.DB {
 	if f.ChannelID != "" {
 		q = q.Where("channel_id = ?", f.ChannelID)
 	}
@@ -143,7 +301,6 @@ func (s *ClientDistTrackingService) QueryEvents(f ClientDistEventFilter) ([]mode
 	if f.Kind != "" {
 		q = q.Where("kind = ?", f.Kind)
 	}
-	// 成功/失败维度（FR-249）：failure⟺status>=400；success⟺0<status<400（含 304/200/206）。
 	switch f.Outcome {
 	case "failure":
 		q = q.Where("status >= ?", 400)
@@ -162,13 +319,202 @@ func (s *ClientDistTrackingService) QueryEvents(f ClientDistEventFilter) ([]mode
 	if f.Until != nil {
 		q = q.Where("created_at <= ?", *f.Until)
 	}
-	limit := f.Limit
-	if limit <= 0 || limit > 1000 {
-		limit = 200
+	return q
+}
+
+func (s *ClientDistTrackingService) applyRuntimeFilters(q *gorm.DB, f ClientDistEventSearchFilter) *gorm.DB {
+	if f.RuntimeVersion == nil && f.CoreVersion == "" && f.Platform == "" && f.Lag == nil {
+		return q
 	}
-	var events []model.ClientDistEvent
-	if err := q.Order("created_at DESC").Limit(limit).Find(&events).Error; err != nil {
-		return nil, fmt.Errorf("检索分发明细失败: %w", err)
+	var states []model.ClientRuntimeState
+	rq := s.db.Model(&model.ClientRuntimeState{})
+	if f.ChannelID != "" {
+		rq = rq.Where("channel_id = ?", f.ChannelID)
 	}
-	return events, nil
+	if f.RuntimeVersion != nil {
+		rq = rq.Where("local_version = ?", *f.RuntimeVersion)
+	}
+	if f.CoreVersion != "" {
+		rq = rq.Where("core_version = ?", f.CoreVersion)
+	}
+	if f.Platform != "" {
+		rq = rq.Where("platform = ?", f.Platform)
+	}
+	if err := rq.Find(&states).Error; err != nil || len(states) == 0 {
+		return q.Where("1 = 0")
+	}
+	if f.Lag != nil {
+		latest := latestByChannel(states)
+		filtered := states[:0]
+		for _, st := range states {
+			lag := latest[st.ChannelID] - st.LocalVersion
+			if lag < 0 {
+				lag = 0
+			}
+			if lag == *f.Lag {
+				filtered = append(filtered, st)
+			}
+		}
+		states = filtered
+	}
+	machines := make([]string, 0, len(states))
+	for _, st := range states {
+		machines = append(machines, st.MachineID)
+	}
+	if len(machines) == 0 {
+		return q.Where("1 = 0")
+	}
+	return q.Where("machine_id IN ?", machines)
+}
+
+func normalizePage(page, size int) (int, int) {
+	if page <= 0 {
+		page = 1
+	}
+	if size <= 0 {
+		size = 100
+	}
+	if size > 500 {
+		size = 500
+	}
+	return page, size
+}
+
+func realtimeRate(q *gorm.DB, out *[]ClientDistRatePoint) error {
+	var rows []model.ClientDistEvent
+	if err := q.Find(&rows).Error; err != nil {
+		return err
+	}
+	byHour := map[string]*ClientDistRatePoint{}
+	var order []string
+	for _, r := range rows {
+		ts := r.CreatedAt.UTC().Truncate(time.Hour)
+		key := ts.Format(time.RFC3339)
+		p := byHour[key]
+		if p == nil {
+			p = &ClientDistRatePoint{TS: ts}
+			byHour[key] = p
+			order = append(order, key)
+		}
+		switch r.Kind {
+		case "manifest":
+			p.Manifest++
+		case "artifact":
+			p.Artifact++
+		}
+		if r.Status >= 400 {
+			p.Error++
+		}
+	}
+	sort.Strings(order)
+	for _, k := range order {
+		*out = append(*out, *byHour[k])
+	}
+	return nil
+}
+
+func recentErrors(q *gorm.DB, out *[]ClientDistRecentError) error {
+	var rows []model.ClientDistEvent
+	if err := q.Where("status >= ?", 400).Order("created_at DESC").Limit(10).Find(&rows).Error; err != nil {
+		return err
+	}
+	for _, r := range rows {
+		target := r.ArtifactSHA
+		if r.Kind == "manifest" && r.Version > 0 {
+			target = fmt.Sprintf("v%d", r.Version)
+		}
+		*out = append(*out, ClientDistRecentError{ID: r.ID, Time: r.CreatedAt, ChannelID: r.ChannelID, Kind: r.Kind, Target: target, IP: r.IP, Status: r.Status, ErrCode: r.ErrCode})
+	}
+	return nil
+}
+
+func topIPs(q *gorm.DB, out *[]StatsIP) error {
+	return q.Select("ip, COUNT(*) AS count").Where("ip != ''").Group("ip").Order("count DESC").Limit(10).Scan(out).Error
+}
+
+func sanitizeRequestHeaders(in map[string]string) map[string]string {
+	return sanitizeHeaders(in, map[string]bool{
+		"User-Agent": true, "If-None-Match": true, "Range": true, "X-Machine-Id": true,
+		"X-Client-Core-Version": true, "X-Client-Key": true,
+	}, true)
+}
+
+func sanitizeResponseHeaders(in map[string]string) map[string]string {
+	return sanitizeHeaders(in, map[string]bool{
+		"ETag": true, "Cache-Control": true, "Content-Length": true, "Content-Range": true,
+	}, false)
+}
+
+func sanitizeHeaders(in map[string]string, allow map[string]bool, redactKey bool) map[string]string {
+	out := map[string]string{}
+	for k, v := range in {
+		canon := canonicalHeader(k)
+		if !allow[canon] {
+			continue
+		}
+		if redactKey && canon == "X-Client-Key" {
+			if v != "" {
+				out[canon] = "present"
+			}
+			continue
+		}
+		out[canon] = trunc(v, 512)
+	}
+	return out
+}
+
+func canonicalHeader(k string) string {
+	switch strings.ToLower(strings.TrimSpace(k)) {
+	case "user-agent":
+		return "User-Agent"
+	case "if-none-match":
+		return "If-None-Match"
+	case "range":
+		return "Range"
+	case "x-machine-id":
+		return "X-Machine-Id"
+	case "x-client-core-version":
+		return "X-Client-Core-Version"
+	case "x-client-key":
+		return "X-Client-Key"
+	case "etag":
+		return "ETag"
+	case "cache-control":
+		return "Cache-Control"
+	case "content-length":
+		return "Content-Length"
+	case "content-range":
+		return "Content-Range"
+	}
+	return k
+}
+
+func sanitizePath(p string) string {
+	if p == "" {
+		return ""
+	}
+	if u, err := url.Parse(p); err == nil && u.Path != "" {
+		return trunc(u.Path, 512)
+	}
+	if i := strings.IndexByte(p, '?'); i >= 0 {
+		p = p[:i]
+	}
+	return trunc(p, 512)
+}
+
+func mustJSON(v map[string]string) string {
+	if len(v) == 0 {
+		return "{}"
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
+}
+
+func parseHeaderJSON(s string) map[string]string {
+	out := map[string]string{}
+	if s == "" {
+		return out
+	}
+	_ = json.Unmarshal([]byte(s), &out)
+	return out
 }

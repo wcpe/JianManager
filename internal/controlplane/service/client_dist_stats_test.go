@@ -21,7 +21,7 @@ func newStatsDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// TestClientDistStats_Overview 复合聚合：下载趋势 + 版本分布 + 成功率/回退率 + 活跃机器码 + TopIP。
+// TestClientDistStats_Overview 复合聚合：下载趋势 + 版本分布 + 请求成功率/失败率 + 活跃机器码 + TopIP。
 func TestClientDistStats_Overview(t *testing.T) {
 	db := newStatsDB(t)
 	svc := NewClientDistStatsService(db)
@@ -32,13 +32,13 @@ func TestClientDistStats_Overview(t *testing.T) {
 	// 下载/版本聚合（client_dist_daily）。
 	require.NoError(t, db.Create(&model.ClientDistDaily{Day: day, ChannelID: ch, Version: 1, Kind: "manifest", Requests: 5, Bytes: 500}).Error)
 	require.NoError(t, db.Create(&model.ClientDistDaily{Day: day, ChannelID: ch, Version: 2, Kind: "manifest", Requests: 3, Bytes: 300}).Error)
-	// 遥测结果聚合（client_telemetry_daily）。
+	// 遥测结果聚合存在也不得污染统计 Tab 口径。
 	require.NoError(t, db.Create(&model.ClientTelemetryDaily{Day: day, ChannelID: ch, Result: "success", Count: 8}).Error)
 	require.NoError(t, db.Create(&model.ClientTelemetryDaily{Day: day, ChannelID: ch, Result: "rolled-back", Count: 2}).Error)
-	// 明细（机器码/IP）。
-	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: ch, Kind: "manifest", MachineID: "m1", IP: "1.1.1.1", CreatedAt: now}).Error)
-	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: ch, Kind: "manifest", MachineID: "m1", IP: "1.1.1.1", CreatedAt: now}).Error)
-	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: ch, Kind: "manifest", MachineID: "m2", IP: "2.2.2.2", CreatedAt: now}).Error)
+	// 明细（机器码/IP/请求结果）。
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: ch, Kind: "manifest", MachineID: "m1", IP: "1.1.1.1", Status: 200, CreatedAt: now}).Error)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: ch, Kind: "manifest", MachineID: "m1", IP: "1.1.1.1", Status: 500, ErrCode: "INTERNAL_ERROR", CreatedAt: now}).Error)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: ch, Kind: "manifest", MachineID: "m2", IP: "2.2.2.2", Status: 200, CreatedAt: now}).Error)
 
 	st, err := svc.Overview(ch, 30)
 	require.NoError(t, err)
@@ -49,9 +49,10 @@ func TestClientDistStats_Overview(t *testing.T) {
 	require.Equal(t, int64(800), st.Downloads[0].Bytes)
 	// 版本分布。
 	require.Len(t, st.Versions, 2)
-	// 成功率/回退率。
-	require.InDelta(t, 0.8, st.SuccessRate, 0.001)
-	require.InDelta(t, 0.2, st.RollbackRate, 0.001)
+	// 请求结果只来自 client_dist_events，不读 client_telemetry_daily。
+	require.Equal(t, []StatsResult{{Result: "success", Count: 2}, {Result: "failure", Count: 1}}, st.Results)
+	require.InDelta(t, 2.0/3.0, st.SuccessRate, 0.001)
+	require.InDelta(t, 1.0/3.0, st.FailureRate, 0.001)
 	// 活跃机器码 = 2（m1/m2）。
 	require.Equal(t, int64(2), st.ActiveMachines)
 	// TopIP：1.1.1.1 计 2 居首。

@@ -134,6 +134,14 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.ClientIPRule{},
 		&model.ClientTelemetry{},
 		&model.ClientTelemetryDaily{},
+		// 客户端启动运行态（FR-265）：独立于 client_telemetry，避免运行态污染分发请求观测。
+		&model.ClientRuntimeState{},
+		&model.ClientSecurityProfile{},
+		&model.ClientSecurityHello{},
+		&model.ClientSecurityRiskEvent{},
+		&model.ClientProtectionAction{},
+		&model.ClientSecurityGroup{},
+		&model.ClientSecurityCounter{},
 		// 客户端分发观测时序快照（FR-217，见 ADR-049）：离线把 events/telemetry 卷积为
 		// 按频道×小时桶的观测快照，供观测·分发监控页跨频道/平台时序，与写时聚合解耦。
 		&model.ClientDistSnapshot{},
