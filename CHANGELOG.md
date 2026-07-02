@@ -7,6 +7,7 @@
 ## [Unreleased]
 
 ### 新增
+- **清理目录树形右键菜单可视化（FR-262，增强 FR-255，依赖 FR-261）**：发布页 meta 步「自动清理目录」从 ManagedDirsEditor 复选框勾选改为 CleanScopeEditor 右键菜单 + 多选 + 颜色标记交互。复用 FR-261 FileExplorer 同款文件树（从草稿 files 派生目录树），目录节点左侧 2px 色条标记四态：红=清理、绿=排除、橙=混合（子目录有不同标记）、无色=不管理。右键目录弹出「标记为清理 / 标记为排除 / 取消标记」菜单；Ctrl+点击追加选、Shift+点击连选、右键选中集批量标记。父子联动：标记父目录→子目录继承同标记（联动写入 cleanMap）、子目录单独改标记→父目录变混合色（橙）；取消父标记→子目录也取消。`cleanMap` 从 manifest 的 managedDirs + cleanExclude 反向初始化，标记变化时 `exportMarkings` 去子优化（祖先已标记则子不重复产出）后输出 managedDirs + cleanExclude。clean-all 开关保留：开启后全目录视觉标记为清理红色、交互禁用（产出 `["*"]` 哨兵由 ClientPublishPage 接管）；DangerConfirm 二次确认保留。CleanExcludeInput（自定义追加排除标签）从 ManagedDirsEditor 迁移至 CleanScopeEditor。新增纯函数 `buildCleanMap` / `computeDirVisualState`（含祖先继承判定）/ `exportMarkings`（去子）/ `getDescendantDirPaths` / `findAncestorMark` + 单测（11 例）；CleanScopeEditor 组件 dom 测试（15 例）；更新 ClientPublishPage dom 测试适配新交互。i18n zh/en + 颜色图例。前端 tsc/eslint/vitest(1052)/build 绿。**真机验：右键标记清理+排除 → 发布 → manifest 字段正确待真机验。**
 - **拉取密钥加密器自动生成与持久化（FR-263）**：CP 启动未注入 `JIANMANAGER_CLIENT_KEY_ENC_SECRET` 时自动生成 AES-256-GCM 密钥并持久化到 `<dataRoot>/etc/client-key-enc.key`（0600，原子 rename，跨重启用同一密钥）。三轨优先级：env 注入 > 自动生成 > dev 回退。全新启动零配置即可查看/复制密钥明文。修订 ADR-044 存储策略。
 - **发布页文件资源管理器（FR-261，增强 FR-250/254）**：用 react-arborist 专业文件树库替换 ClientFileTree。新建文件夹、双击重命名、Ctrl+点击/Shift+点击多选、Delete 键删除、拖拽上传文件/zip（含 GBK 自动解压）、拖拽移动调整目录结构、同名冲突弹窗（忽略/覆盖/保留两者）。保留"本地编排 → 点发布才上传"架构。前端 tsc/eslint/vitest(1013)/build 绿。
 
