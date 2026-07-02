@@ -23,6 +23,11 @@ import {
   collectAllDirPaths,
   isCleanAll,
   CLEAN_ALL_SENTINEL,
+  buildFileTreeWithDirs,
+  renamePathSegment,
+  nextUniqueName,
+  keepBothPath,
+  detectConflicts,
   type TreeFile,
   type FileSystemEntryLike,
 } from './client-publish-wizard'
@@ -462,5 +467,102 @@ describe('isCleanAll', () => {
   })
   it('哨兵常量', () => {
     expect(CLEAN_ALL_SENTINEL).toBe('*')
+  })
+})
+
+/** FR-261：文件资源管理器纯函数。 */
+describe('buildFileTreeWithDirs', () => {
+  it('空目录插入树中显示为空目录节点', () => {
+    const root = buildFileTreeWithDirs(
+      [tf('mods/a.jar', 0)],
+      ['config'],
+    )
+    expect(root.dirs.map((d) => d.name)).toEqual(['config', 'mods'])
+    const config = root.dirs.find((d) => d.name === 'config')!
+    expect(config.files).toEqual([])
+    expect(config.dirs).toEqual([])
+    expect(config.fileCount).toBe(0)
+  })
+
+  it('已存在的目录不重复创建（合并）', () => {
+    const root = buildFileTreeWithDirs(
+      [tf('mods/a.jar', 0)],
+      ['mods'],
+    )
+    expect(root.dirs).toHaveLength(1)
+    expect(root.dirs[0].name).toBe('mods')
+    expect(root.dirs[0].files.map((f) => f.name)).toEqual(['a.jar'])
+  })
+
+  it('嵌套空目录逐层创建', () => {
+    const root = buildFileTreeWithDirs(
+      [tf('readme.txt', 0)],
+      ['mods/sub/deep'],
+    )
+    const mods = root.dirs.find((d) => d.name === 'mods')!
+    expect(mods.dirs.map((d) => d.name)).toEqual(['sub'])
+    const sub = mods.dirs[0]
+    expect(sub.dirs.map((d) => d.name)).toEqual(['deep'])
+    expect(sub.dirs[0].files).toEqual([])
+  })
+
+  it('空 emptyDirs 退化为普通 buildFileTree', () => {
+    const root = buildFileTreeWithDirs([tf('mods/a.jar', 0)], [])
+    expect(root.dirs.map((d) => d.name)).toEqual(['mods'])
+  })
+})
+
+describe('renamePathSegment', () => {
+  it('替换末段文件名，保留目录前缀', () => {
+    expect(renamePathSegment('mods/sub/a.jar', 'b.jar')).toBe('mods/sub/b.jar')
+  })
+  it('根级文件仅替换文件名', () => {
+    expect(renamePathSegment('a.jar', 'b.jar')).toBe('b.jar')
+  })
+  it('路径归一（反斜杠/前导斜杠）', () => {
+    expect(renamePathSegment('/mods\\a.jar', 'b.jar')).toBe('mods/b.jar')
+  })
+})
+
+describe('nextUniqueName', () => {
+  it('base 不冲突 → 返回 base', () => {
+    expect(nextUniqueName('新建文件夹', ['mods', 'config'])).toBe('新建文件夹')
+  })
+  it('base 冲突 → 加数字后缀', () => {
+    expect(nextUniqueName('新建文件夹', ['新建文件夹'])).toBe('新建文件夹 2')
+    expect(nextUniqueName('新建文件夹', ['新建文件夹', '新建文件夹 2'])).toBe('新建文件夹 3')
+  })
+  it('空 existingNames → 返回 base', () => {
+    expect(nextUniqueName('foo', [])).toBe('foo')
+  })
+})
+
+describe('keepBothPath', () => {
+  it('有扩展名 → stem 与扩展名间插 (1)', () => {
+    expect(keepBothPath('mods/a.jar', ['mods/a.jar'])).toBe('mods/a (1).jar')
+  })
+  it('递增直到不冲突', () => {
+    expect(keepBothPath('mods/a.jar', ['mods/a.jar', 'mods/a (1).jar'])).toBe('mods/a (2).jar')
+  })
+  it('无扩展名 → 后缀直接追加', () => {
+    expect(keepBothPath('readme', ['readme'])).toBe('readme (1)')
+  })
+  it('根级文件（无目录前缀）', () => {
+    expect(keepBothPath('a.jar', ['a.jar'])).toBe('a (1).jar')
+  })
+  it('不冲突时仍加 (1)（调用方应先检测冲突）', () => {
+    expect(keepBothPath('mods/a.jar', [])).toBe('mods/a (1).jar')
+  })
+})
+
+describe('detectConflicts', () => {
+  it('返回 incoming 中与 existing 同路径的项', () => {
+    expect(detectConflicts(['a.jar', 'b.jar'], ['a.jar'])).toEqual(['a.jar'])
+  })
+  it('incoming 去重', () => {
+    expect(detectConflicts(['a.jar', 'a.jar'], ['a.jar'])).toEqual(['a.jar'])
+  })
+  it('无冲突 → 空数组', () => {
+    expect(detectConflicts(['a.jar'], ['b.jar'])).toEqual([])
   })
 })
