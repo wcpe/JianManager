@@ -2091,11 +2091,43 @@
 - **审计**: `client_version.rollback`
 
 ### GET /api/v1/client-dist/events
-- **描述**: 拉取/下载明细检索（FR-093 全链路追踪；FR-249 错误追踪）。拉取失败（含 401 鉴权失败）也记录事件并带语义错误码 `errCode`。明细短保留（默认 14 天滚动清理）；发布事件审计见 `/audit`（`client_*.publish`/`rollback`）
-- **关联 FR**: FR-093、FR-249
+- **描述**: 拉取/下载明细检索（FR-093 全链路追踪；FR-249 错误追踪；FR-265 日志 Tab 兼容入口）。拉取失败（含 401 鉴权失败）也记录事件并带语义错误码 `errCode`。明细短保留（默认 14 天滚动清理）；发布事件审计见 `/audit`（`client_*.publish`/`rollback`）
+- **关联 FR**: FR-093、FR-249、FR-265
 - **鉴权**: **JWT，平台管理员**
 - **查询参数**: `channelId` / `machineId` / `ip` / `kind`(manifest|artifact) / `outcome`(success|failure，空=全部；failure⟺status≥400，success⟺0<status<400 含 200/206/304) / `errCode`(精确筛，如 `INVALID_CLIENT_KEY`) / `version` / `since`(RFC3339) / `until`(RFC3339) / `limit`(默认 200，上限 1000)
-- **响应** (200): `[ { "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "errCode", "durationMs", "createdAt" } ]`（created_at DESC）。`errCode` 成功事件为空、失败事件填语义码（`INVALID_CLIENT_KEY`/`NO_LATEST_VERSION`/`ARTIFACT_NOT_FOUND`/`SIGN_KEY_NOT_CONFIGURED`/`CHANNEL_NOT_FOUND`/`INTERNAL_ERROR`）
+- **响应** (200): `[ { "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "errCode", "errReason", "method", "path", "etag", "durationMs", "createdAt" } ]`（created_at DESC）。`errCode` 成功事件为空、失败事件填语义码（`INVALID_CLIENT_KEY`/`NO_LATEST_VERSION`/`ARTIFACT_NOT_FOUND`/`SIGN_KEY_NOT_CONFIGURED`/`CHANNEL_NOT_FOUND`/`INTERNAL_ERROR`）
+
+### GET /api/v1/client-dist/events/search
+- **描述**: 分发请求日志分页检索（FR-265）。在兼容 `/client-dist/events` 数组响应的基础上，提供日志 Tab 使用的分页对象，并支持运行态维度筛选。
+- **关联 FR**: FR-265 | **鉴权**: **JWT，平台管理员**
+- **查询参数**: 兼容 `/client-dist/events` 的 `channelId` / `machineId` / `ip` / `kind` / `outcome` / `errCode` / `version`，并新增 `artifactSha` / `runtimeVersion` / `coreVersion` / `platform` / `lag` / `page`(默认 1) / `pageSize`(默认 100，上限 500)
+- **响应** (200): `{ "items":[{ "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "errCode", "errReason", "method", "path", "etag", "durationMs", "createdAt" }], "page":1, "pageSize":100, "total":1234 }`
+
+### GET /api/v1/client-dist/events/:id
+- **描述**: 单条分发请求脱敏详情（FR-265）。仅返回白名单请求/响应头；`X-Client-Key` 只保存 `present`/脱敏标记，绝不保存明文。
+- **关联 FR**: FR-265 | **鉴权**: **JWT，平台管理员** | **审计**: `client_dist_event.detail`
+- **响应** (200): `{ "id", "channelId", "machineId", "ip", "kind", "version", "artifactSha", "bytes", "status", "errCode", "errReason", "method", "path", "etag", "durationMs", "createdAt", "requestHeaders":{}, "responseHeaders":{} }`
+- **错误**: 400 `INVALID_REQUEST`（事件 ID 非法）| 404 `EVENT_NOT_FOUND`
+
+### GET /api/v1/client-dist/realtime
+- **描述**: 分发请求近实时聚合（FR-265 监控 Tab）。只统计 manifest/artifact HTTP 请求健康度，不混入客户端更新成功率或运行版本。
+- **关联 FR**: FR-265 | **鉴权**: **JWT，平台管理员**
+- **查询参数**: `channelId`（可选）
+- **响应** (200): `{ "summary1h":{ "manifestPulls", "artifactPulls", "errorRequests", "activeMachines" }, "requestRate24h":[{ "ts", "manifest", "artifact", "error" }], "recentErrors":[{ "id", "time", "channelId", "kind", "target", "ip", "status", "errCode" }], "topIps1h":[{ "ip", "count" }] }`
+
+### GET /api/v1/client-dist/clients
+- **描述**: 客户端运行态聚合（FR-265 客户端 Tab）。读取启动心跳最新态与 `client_telemetry` 更新结果；不承诺“在线客户端”。
+- **关联 FR**: FR-265 | **鉴权**: **JWT，平台管理员** | **审计**: `client_dist_clients.query`
+- **查询参数**: `channelId`（可选）、`range`(`24h`|`7d`|`30d`|`90d`，默认 `7d`)
+- **响应** (200): `{ "channelId", "from", "to", "summary":{ "recentStarted", "todayStarted", "recentStarts", "todayStarts", "updateSuccessRate", "updateFailureRate" }, "items":[{ "channelId", "machineId", "ip", "platform", "javaVersion", "launcher", "coreVersion", "localVersion", "firstSeenAt", "lastHeartbeatAt" }], "runtimeVersionDist":[{ "version", "count" }], "coreVersionDist":[{ "value", "count" }], "platformDist":[{ "value", "count" }], "launcherDist":[{ "value", "count" }], "lagDist":[{ "lag", "count" }], "updateResultSeries":[{ "ts", "success", "failStatic", "rolledBack", "error" }] }`
+
+### POST /api/v1/client-channels/:id/telemetry/heartbeat
+- **描述**: updater-core 启动心跳（FR-265）。按 `channel_id + machine_id` upsert `client_runtime_states`，只更新运行态，不写 `client_telemetry`，因此不会污染更新成功率。
+- **关联 FR**: FR-265 | **鉴权**: 玩家侧拉取密钥（`X-Client-Key`，必须属于该频道）
+- **请求头**: `X-Machine-Id`（必需，否则 best-effort 忽略心跳）
+- **请求**: `{ "platform":"windows", "javaVersion":"17.0.10", "launcher":"HMCL", "coreVersion":"3", "localVersion":15 }`
+- **响应**: `202 Accepted`
+- **错误**: 401 `INVALID_CLIENT_KEY`
 
 ### GET /api/v1/client-dist/ip-rules
 - **描述**: 列出分发端点 IP 防护规则（FR-096 L7 防护）
@@ -2120,6 +2152,128 @@
 - **关联 FR**: FR-096 | **鉴权**: **JWT，平台管理员**
 - **响应** (200): `{ "denyBlocked", "rateLimited", "concurrencyLimited" }`
 
+---
+
+## 客户端分发防护中心（FR-264）
+
+### POST /api/v1/client-security/hello
+- **描述**: updater-core 启动早期上报安全画像。`playerName`、`machineId`、`installId`、`channel` 必填；玩家名可伪造，仅作粗略排查线索。IP 临时封禁先于密钥校验生效。
+- **关联 FR**: FR-264
+- **鉴权**: 玩家侧拉取密钥（`X-Client-Key`）
+- **请求**:
+  ```json
+  { "channel":"skyblock-s1", "playerName":"Steve", "machineId":"m-1", "installId":"i-1",
+    "coreVersion":"5", "wedgeVersion":"3", "manifestVersion":"12",
+    "os":"windows", "osVersion":"10", "arch":"amd64", "javaVendor":"Temurin",
+    "javaVersion":"17", "javaArch":"amd64", "launcher":"official", "locale":"zh-CN",
+    "timezone":"Asia/Shanghai", "memoryTier":"4-8g" }
+  ```
+- **响应**: `202 Accepted`
+- **错误**: 400 `INVALID_REQUEST` | 401 `INVALID_CLIENT_KEY` | 403 `IP_TEMP_BLOCKED` / `CLIENT_KEY_SUSPENDED`
+
+### GET /api/v1/client-dist/security/overview
+- **描述**: 防护中心安全总览（画像、风险事件、动作、活跃封禁等聚合）。
+- **鉴权**: JWT，平台管理员
+- **响应** (200): `{ "activeDownloads", "downloadBytesPerSecond", "abnormalRequests", "unauthorizedRequests", "forbiddenRequests", "rateLimitedRequests", "blockedIpCount", "throttledKeyCount", "protectedChannelCount", "topIps", "topKeys", "topChannels", "topPlayers" }`
+
+### GET /api/v1/client-dist/security/events
+- **描述**: 风险事件列表，按创建时间倒序。
+- **鉴权**: JWT，平台管理员
+- **响应** (200): `[ { "id", "subjectType", "subjectValue", "channelId", "machineId", "installId", "playerName", "ip", "keyId", "keyPrefix", "ruleCode", "severity", "scoreDelta", "action", "reason", "createdAt" } ]`
+
+### GET /api/v1/client-dist/security/profiles
+- **描述**: 客户端安全画像列表，按最近出现倒序。
+- **鉴权**: JWT，平台管理员
+- **响应** (200): `[ { "id", "channelId", "machineId", "installId", "playerName", "keyId", "keyPrefix", "lastIp", "coreVersion", "os", "javaVersion", "riskLevel", "protectionState", "lastSeen" } ]`
+
+### GET /api/v1/client-dist/security/ip-analysis
+- **描述**: IP 剖析聚合，用于查异常来源 IP。
+- **鉴权**: JWT，平台管理员
+- **查询参数**: `limit`（默认 200）
+- **响应** (200): `[ { "ip", "requestCount", "rejectCount", "invalidKeyCount", "notFoundCount", "rangeCount", "downloadBytes", "keyCount", "channelCount", "riskScore", "blocked", "lastSeen" } ]`
+
+### GET /api/v1/client-dist/security/player-analysis
+- **描述**: 玩家名剖析聚合。玩家名可伪造，不作为可信身份。
+- **鉴权**: JWT，平台管理员
+- **查询参数**: `limit`（默认 200）
+- **响应** (200): `[ { "playerName", "installCount", "machineCount", "ipCount", "keyCount", "channelCount", "downloadBytes", "abnormalRequests", "riskScore", "lastSeen" } ]`
+
+### GET /api/v1/client-dist/security/actions
+- **描述**: 保护动作列表（IP 封禁、key 状态、频道保护等）。
+- **鉴权**: JWT，平台管理员
+- **响应** (200): `[ { "id", "targetType", "targetValue", "channelId", "action", "status", "reason", "auto", "expiresAt", "createdBy", "createdAt", "canceledAt" } ]`
+
+### POST /api/v1/client-dist/security/ip-blocks
+- **描述**: 手动临时封禁 IP。命中消费端点返回 `IP_TEMP_BLOCKED` + `Retry-After`。
+- **鉴权**: JWT，平台管理员
+- **请求**: `{ "ip":"192.0.2.1", "reason":"异常拉取", "ttlSeconds":3600 }`（也兼容 `durationMinutes`）
+- **响应** (201): `ClientProtectionAction`
+- **错误**: 400 `INVALID_REQUEST`
+
+### POST /api/v1/client-dist/security/ip-blocks/:id/cancel
+- **描述**: 取消 IP 临时封禁 / 处置动作，状态置 `canceled`。
+- **鉴权**: JWT，平台管理员
+- **响应** (200): `{ "ok": true }`
+
+### POST /api/v1/client-dist/security/keys/:id/state
+- **描述**: 切换拉取密钥安全状态：`normal` / `observe` / `throttled` / `suspended` / `revoked`。`suspended` 拉取返回 `CLIENT_KEY_SUSPENDED`。
+- **鉴权**: JWT，平台管理员
+- **请求**: `{ "state":"suspended", "reason":"异常拉取" }`
+- **响应** (200): `{ "ok": true }`
+
+### PUT /api/v1/client-dist/security/channels/:id/protection
+- **描述**: 设置频道保护模式。频道只允许降速 / 降级保护，不做自动封禁。
+- **鉴权**: JWT，平台管理员
+- **请求**: `{ "mode":"protected", "reason":"异常流量" }`
+- **响应** (200): `{ "ok": true }`
+- **错误**: 404 `CHANNEL_NOT_FOUND`
+
+### DELETE /api/v1/client-dist/security/channels/:id/protection
+- **描述**: 清除频道保护模式，恢复 `normal`。
+- **鉴权**: JWT，平台管理员
+- **响应** (200): `{ "ok": true }`
+
+### GET /api/v1/client-dist/security/groups
+- **描述**: 安全分组列表。
+- **鉴权**: JWT，平台管理员
+- **响应** (200): `[ { "id", "name", "kind", "targetType", "enabled", "createdBy", "createdAt", "updatedAt" } ]`
+
+### POST /api/v1/client-dist/security/groups
+- **描述**: 创建安全分组。
+- **鉴权**: JWT，平台管理员
+- **请求**: `{ "name":"高风险 IP", "kind":"manual", "targetType":"ip", "rule":{}, "actionPolicy":{}, "enabled":true }`
+- **响应** (201): `ClientSecurityGroup`
+
+### PUT /api/v1/client-dist/security/groups/:id
+- **描述**: 更新安全分组。
+- **鉴权**: JWT，平台管理员
+- **请求**: 同创建分组
+- **响应** (200): `ClientSecurityGroup`
+
+### DELETE /api/v1/client-dist/security/groups/:id
+- **描述**: 删除安全分组。
+- **鉴权**: JWT，平台管理员
+- **响应** (200): `{ "ok": true }`
+
+### GET /api/v1/client-dist/security/privacy-notice
+- **描述**: 防护中心遥测告知文案。
+- **鉴权**: JWT，平台管理员
+- **响应** (200): `{ "requiredFields", "diagnosticFields", "notice", "retentionDays" }`
+
+### FR-264 消费端错误码
+
+| 错误码 | HTTP | 说明 |
+|---|---:|---|
+| `IP_TEMP_BLOCKED` | 403 | IP 被临时封禁，带 `Retry-After` |
+| `CLIENT_KEY_SUSPENDED` | 403 | 拉取密钥暂停，带 `Retry-After` |
+| `RATE_LIMITED` | 429 | per-key / per-channel 限速，带 `Retry-After` |
+| `CHANNEL_PROTECTED` | 429 | 频道保护模式下制品下载降速 / 暂缓，带 `Retry-After` |
+| `DOWNLOAD_CONCURRENCY_LIMITED` | 429 | 下载并发过高，带 `Retry-After` |
+| `BANDWIDTH_LIMITED` | 429 | 字节配额受限，带 `Retry-After` |
+| `ARTIFACT_NOT_ALLOWED` | 403 | 制品不在该 key 所属频道允许范围内 |
+
+---
+
 ### GET /api/v1/client-dist/stats
 - **描述**: 分发统计后台（FR-095）：只读聚合 FR-093/094/092 数据，按频道 + 时间窗
 - **关联 FR**: FR-095 | **鉴权**: **JWT，平台管理员**
@@ -2127,19 +2281,19 @@
 - **响应** (200): `{ "channelId", "days", "downloads":[{day,requests,bytes}], "versions":[{version,requests}], "results":[{result,count}], "successRate", "rollbackRate", "activeMachines", "topIps":[{ip,count}] }`
 
 ### GET /api/v1/client-dist/observability
-- **描述**: 客户端分发**观测数据底座**（FR-217，见 ADR-049）：消费后台离线卷积的小时级时序快照 `client_dist_snapshots`（源 FR-093 events + FR-094 telemetry），返**跨频道/单频道**的时序 + 区间分布聚合 + 汇总标量。与 FR-095 `/client-dist/stats`（单频道按日看板）并存不替代——本端点服务观测·分发监控页的跨频道/平台时序
-- **关联 FR**: FR-217（消费方 FR-218/219）| **鉴权**: **JWT，平台管理员** | **审计**: `client_dist_observability.query`
+- **描述**: 客户端分发**观测数据底座**（FR-217，见 ADR-049；FR-265 修订指标边界）：消费后台离线卷积的小时级时序快照 `client_dist_snapshots`（源 FR-093 events + FR-094 telemetry），返**跨频道/单频道**的时序 + 区间分布聚合 + 汇总标量。与 FR-095 `/client-dist/stats`（单频道按日看板）并存不替代——本端点服务观测·分发监控页的跨频道/平台时序
+- **关联 FR**: FR-217（消费方 FR-218/219）、FR-265 | **鉴权**: **JWT，平台管理员** | **审计**: `client_dist_observability.query`
 - **查询参数**: `channelId`（可，省略=**总**，跨频道合并含空频道桶）、`from`/`to`（可，RFC3339，同时给且 `to>from`）、`range`（可，无 from/to 时回退枚举 `24h`/`7d`/`30d`/`90d`/`180d`，默认 `7d`）
 - **响应** (200):
   ```
   {
     "channelId", "from", "to",
-    "series": [{ ts, manifestPulls, artifactPulls, downloadBytes, casHit, casMiss,
+    "series": [{ ts, manifestPulls, artifactPulls, downloadBytes,
                  activeMachines, updateTotal, updateSuccess, updateFailStatic,
                  updateRolledBack, updateError }],   // 按 ts 升序的小时桶；跨频道时同小时合并；缺数小时无点
-    "summary": { manifestPulls, artifactPulls, downloadBytes, casHit, casMiss,
+    "summary": { manifestPulls, artifactPulls, downloadBytes,
                  updateTotal, updateSuccess, updateFailStatic, updateRolledBack, updateError,
-                 successRate, failStaticRate, rollbackRate, casHitRate,
+                 successRate, failStaticRate, rollbackRate,
                  activeMachines, activeMachinesExact },   // activeMachinesExact: 区间在明细保留窗(14d)内=精确去重独立数 true；窗外=各桶人次求和近似 false（ADR-049 §4）
     "versionDist": [{ version, count }],     // 区间内跨桶合并、按 count 降序
     "platformDist": [{ os, count }],

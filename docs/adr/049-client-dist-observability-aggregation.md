@@ -4,8 +4,8 @@
 - **状态**: accepted
 - **上下文**:
   客户端分发（FR-086~097）已落地全链路遥测来源——拉取/下载明细 `client_dist_event`（FR-093，短保留 14d + 写时增量 `client_dist_daily` 长保留）、更新结果遥测 `client_telemetry`（FR-094，短保留 + 写时 `client_telemetry_daily` 按 result 聚合）、机器码登记 `client_machine`（FR-092）。
-  FR-095 的 `ClientDistStats.Overview` 只对单频道做近 N 天 ad-hoc GROUP BY，**按「日」粒度且只服务一个频道工作台看板**，无法支撑 FR-218「观测·客户端分发监控页」要的**跨频道 + 平台总览 + 任意时间范围 + 小时级时序曲线**，也未沉淀「活跃客户端去重 / 版本滞后 / 平台分布 / CAS 命中」等观测维度为可回看的时序。
-  既有 `client_dist_daily` / `client_telemetry_daily` 是**写时增量**（玩家拉取热路径上 upsert），维度受限（只 channel×version×kind / channel×result），且与明细的 machineId/平台/CAS 等富维度脱节——直接扩这两表会污染热路径写入、且按日粒度太粗。
+  FR-095 的 `ClientDistStats.Overview` 只对单频道做近 N 天 ad-hoc GROUP BY，**按「日」粒度且只服务一个频道工作台看板**，无法支撑 FR-218「观测·客户端分发监控页」要的**跨频道 + 平台总览 + 任意时间范围 + 小时级时序曲线**，也未沉淀「活跃客户端去重 / 版本滞后 / 平台分布」等观测维度为可回看的时序。
+  既有 `client_dist_daily` / `client_telemetry_daily` 是**写时增量**（玩家拉取热路径上 upsert），维度受限（只 channel×version×kind / channel×result），且与明细的 machineId/平台等富维度脱节——直接扩这两表会污染热路径写入、且按日粒度太粗。
   架构不变量：Worker 不直连 DB，遥测明细本就由 CP 持有，聚合必须落 CP；单二进制自包含（ADR-001/005），不可引入外部 TSDB。
   ADR-013（节点/实例时序）已确立「CP 端后台定时把高频源卷积为分级时序 + TTL 清理，复用 scheduler」的范式，本 ADR 复用其**思路**而非其**表**。
 
@@ -13,7 +13,7 @@
   1. **新增独立快照表 `client_dist_snapshot`，离线后台聚合，不碰玩家热路径**：后台任务周期性把保留窗内的 `client_dist_event` + `client_telemetry` 卷积为**按 频道 × 小时桶**的观测快照，与写时聚合（`*_daily`）解耦——热路径只管 best-effort 写明细，富维度观测交给离线卷积，互不阻塞。
   2. **单档小时桶（精简 ADR-013 的三档为一档），理由**：分发遥测数据量远小于节点/实例的 30s 高频样本（事件是「每次拉取/上报」级，且明细本就只留 14d）；观测页诉求是「周/月范围看小时级趋势」，无需 30s 近端高清，也无需 ≥1 年的二级下卷——故单一小时档即可覆盖，避免无谓的多表/多级卷积复杂度。保留 `client_dist_snapshot` 自身 ≥180d（小时桶 × 半年 ≈ 4320 行/频道，量级可控），明细到期照旧由 FR-093/094 各自滚动清理。
   3. **快照维度（每 频道×小时桶 一行）**：
-     - 拉取侧（源 `client_dist_event`）：`manifest_pulls` / `artifact_pulls`（按 kind）、`download_bytes`（总响应字节）、`cas_hit`/`cas_miss`（artifact 命中 = 304；未命中 = 200/206）、`active_machines`（**桶内** machineId 去重计数）、平台/版本分布（JSON：见决策 5）。
+     - 拉取侧（源 `client_dist_event`）：`manifest_pulls` / `artifact_pulls`（按 kind）、`download_bytes`（总响应字节）、`active_machines`（**桶内** machineId 去重计数）、平台/版本分布（JSON：见决策 5）。
      - 更新侧（源 `client_telemetry`）：`update_total` 及 `update_success`/`update_fail_static`/`update_rolled_back`/`update_error`（按 result 分桶计数）、`version_lag` 分布（`toVersion` vs 频道 `current_version` 的滞后分布，JSON）。
   4. **machineId 去重口径（写清，避免误读）**：
      - **桶内（`active_machines` 列）= 该小时内 `client_dist_event` 的 machineId 精确去重计数**（`COUNT(DISTINCT machine_id)`，排除空串）。machineId 客户端可伪造、不可信（ADR-023），仅作统计近似，不作授权依据。

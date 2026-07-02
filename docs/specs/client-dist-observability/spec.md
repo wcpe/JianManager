@@ -38,8 +38,6 @@
 | manifest_pulls | bigint default 0 | 桶内 manifest 拉取次数（`kind=manifest`） |
 | artifact_pulls | bigint default 0 | 桶内制品拉取次数（`kind=artifact`） |
 | download_bytes | bigint default 0 | 桶内总响应字节（明细 bytes 求和） |
-| cas_hit | bigint default 0 | 制品 CAS 命中数（artifact 且 status=304） |
-| cas_miss | bigint default 0 | 制品 CAS 未命中数（artifact 且 status∈{200,206}） |
 | active_machines | bigint default 0 | **桶内** machineId 精确去重计数（`COUNT(DISTINCT machine_id)`，排空串）。跨桶不可简单求和，见 §4 去重口径 |
 | version_dist | text | 版本分布 JSON `map[version]count`（manifest 拉取按 version 计数） |
 | platform_dist | text | 平台分布 JSON `map[os]count`（来源遥测 os 字段） |
@@ -63,7 +61,7 @@
 - **卷积口径**（`AggregateAndPurge(now)`，幂等可重跑）：
   1. 只卷**已完结**的小时桶：`bucket_ts < Truncate(now, 1h)`。为避免每次全量重扫，按「上次水位 `lastAggregatedBucket`」往后扫到完结边界（首次启动从最早明细桶或近 `backfillWindow` 起；持久化水位非必须，重扫幂等 upsert 也安全——MVP 取**重算近 `reaggregateWindow`=48h 完结桶**，保证延迟到达的明细被纳入，且开销有界）。
   2. 对每个 `(channel_id, hour)`：
-     - 从 `client_dist_event` 卷出 `manifest_pulls/artifact_pulls/download_bytes/cas_hit/cas_miss/active_machines/version_dist/platform_dist`（平台分布 event 无 os → 平台分布主由遥测侧补，event 侧可为空）。
+     - 从 `client_dist_event` 卷出 `manifest_pulls/artifact_pulls/download_bytes/active_machines/version_dist/platform_dist`（平台分布 event 无 os → 平台分布主由遥测侧补，event 侧可为空）。
      - 从 `client_telemetry` 卷出 `update_*` 计数、`platform_dist`（os）、`lag_dist`。
      - 按 `(channel_id, bucket_ts)` 唯一键 **upsert**（OnConflict 覆盖全部聚合列 + 刷新 updated_at）。
   3. **TTL 清理**：删 `bucket_ts < now - snapshotRetention` 的快照行。
@@ -102,18 +100,16 @@
     {
       "ts": "2026-06-27T10:00:00Z",
       "manifestPulls": 120, "artifactPulls": 35, "downloadBytes": 8123456,
-      "casHit": 20, "casMiss": 15, "activeMachines": 48,
+      "activeMachines": 48,
       "updateTotal": 30, "updateSuccess": 27, "updateFailStatic": 1,
       "updateRolledBack": 1, "updateError": 1
     }
   ],
   "summary": {
     "manifestPulls": 1500, "artifactPulls": 400, "downloadBytes": 99000000,
-    "casHit": 240, "casMiss": 160,
     "updateTotal": 360, "updateSuccess": 330, "updateFailStatic": 10,
     "updateRolledBack": 12, "updateError": 8,
     "successRate": 0.9167, "failStaticRate": 0.0278, "rollbackRate": 0.0333,
-    "casHitRate": 0.60,
     "activeMachines": 512, "activeMachinesExact": true
   },
   "versionDist": [ { "version": 7, "count": 900 }, { "version": 6, "count": 600 } ],
@@ -146,7 +142,7 @@
 ## 7. 测试
 
 - **服务单测**（`client_dist_observability_test.go`）：
-  - 卷积口径：拉取/制品计数、字节求和、CAS 命中/未命中分流、桶内 machineId 去重、版本/平台/滞后 JSON 分布、更新 result 分流。
+  - 卷积口径：拉取/制品计数、字节求和、桶内 machineId 去重、版本/平台/滞后 JSON 分布、更新 result 分流。
   - 幂等：同一窗重跑两次结果一致（upsert 覆盖不翻倍）。
   - TTL 清理：超 `snapshotRetention` 的桶被删。
   - 去重口径：区间在保留窗内 → 精确独立数 + `activeMachinesExact=true`；跨保留窗 → 人次求和 + `false`。

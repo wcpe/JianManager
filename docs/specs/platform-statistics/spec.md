@@ -77,7 +77,7 @@ FR-215（观测导航重构，波 1 已落）把「监控」域升级为「观�
 5. **`GET /api/v1/client-dist/observability`**（FR-217）
    - 权限：**JWT，平台管理员**（非管理员 403 `FORBIDDEN`）。审计：`client_dist_observability.query`。
    - Query：省略 `channelId`=跨频道总；`range`（无 from/to 时枚举 `24h`/`7d`/`30d`/`90d`/`180d`，默认 `7d`）。
-   - 响应（本页用 `summary` + `versionDist`/`platformDist`）：`{ summary:{ manifestPulls, artifactPulls, downloadBytes, activeMachines, successRate, failStaticRate, rollbackRate, casHitRate, ... }, versionDist:[{version,count}], platformDist:[{os,count}], series:[...], lagDist:[...] }`。
+   - 响应（本页用 `summary` + `versionDist`/`platformDist`）：`{ summary:{ manifestPulls, artifactPulls, downloadBytes, activeMachines, successRate, failStaticRate, rollbackRate, ... }, versionDist:[{version,count}], platformDist:[{os,count}], series:[...], lagDist:[...] }`。
    - 未知 `channelId` 返 200 空时序+零汇总（本页不传 channelId，取总）。
 
 > **权限分层提示**：本页主体（节点/实例/玩家维度）登录即可见；分发区块依赖平台管理员端点，**对非管理员前端整体降级**（捕获 403 → 隐藏该区块或显权限提示），不致整页 403/崩溃。这是前端按既有端点权限做的呈现降级，**不新增权限节点**。

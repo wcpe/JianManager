@@ -56,6 +56,8 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-222~224 + FIX-A~D（节点上线流程打通 + worker 生命周期修复 + .yml 约定：worker 免配置自启 setup[下载/上线分离] / 安装脚本重构[cwd 跳下载] / .yml 全改，关联 ADR-050[worker 重连重推实例] / ADR-051[worker 免配置 setup，改写 ADR-020] + 增强 FR-080/004/006/017）→ FR-222 `docs/specs/worker-self-setup/`（需 spec，开发中创建）；FR-223/224 免 spec（脚本/约定重构）；FIX-A #2 worker 重连重推实例[+ADR-050] / FIX-B #3 终端断连 / FIX-C #4 启停 kill 竞态 / FIX-D 首次上线真机断点（fix 走 sdd-fix-bug，不占 §4）
 - FR-225~232 + FIX-1~6（迭代修复批 2026-06-29：调试开关 / 通知-任务联动 / 任务强停+筛选 / JDK登记重做 / 连通性测试族 / 创建向导页 / 复制双模式 / 前端细节 + onboarding 真机修复）→ **归真 FR-222/223**（真机上线未通过，退回 🔨 开发中，由 FIX-1/2/3 修复真机验过后随发版重标 ✅）；FR-227 `docs/specs/task-force-stop/`、FR-228 `docs/specs/jdk-register-redesign/`、FR-229 `docs/specs/connectivity-selftest/`、FR-231 `docs/specs/instance-clone-modes/`（需 spec，开发中创建）；FR-225/226/230/232 免 spec；FIX-1/2/3 节点上线真机打通[归真 FR-222/223] / FIX-4 JDK 下载超时 / FIX-5 JDK 登记卡死 / FIX-6 系统更新进页只读缓存（fix 走 sdd-fix-bug，不占 §4）
 - FR-233~247 + FIX-7~9（UI 重塑 + Docker 落地 + 实例规模化 2026-06-30）：实例配置随时编辑 / 创建向导优化 / 实例页重设计[1000+] / 一键搭建+docker傻瓜建服 / Docker检测引导 / 导航外壳+实例选择器重构[原型,1000+]+面包屑文案纠错[排最后] / 全局搜索命令面板+页眉弹层选实例 / 加载进度条 / 全局动画统一 / 全站卡片范式提质+节点页卡片 / 实例规模化后端API → **需 spec**：FR-233/235/236/237/240/241/246/247；**免 spec**：FR-234/243/244；**FR-240 含 2-3 原型审核闸**。合并：FR-238→FR-078（既有「镜像管理」范围，完成 FR-078/079 即覆盖 docker 启动修通+镜像/容器管理 UI+端口+限额）、FR-239→FR-236、FR-242→FR-241、FR-245→FR-240。FIX-7 生产 SQL 日志静默[`database.go` GORM logger 接调试开关] / FIX-8 创建实例节点下拉空[放宽+空态] / FIX-9 点击实例卡片无反应（fix 走 sdd-fix-bug，不占 §4）。3 地基（FR-247 规模化后端 / FR-240 导航原型 / FR-246 卡片范式）设计决策先落。计划见 `.tmp/brainstorm-ui-docker-batch-2026-06-30.md`
+- FR-264（客户端分发单节点源站安全防护：多维限流 / IP 临时封禁 / key 状态机 / 频道降速保护 / 制品授权收紧 / 启动安全画像 / 独立防护中心）→ `docs/specs/client-dist-security-firewall/spec.md`（已交付）
+- FR-265（客户端分发观测四 Tab 重构：统计/监控/日志只看请求事件，客户端 Tab 独立看运行态与更新结果；新增运行态心跳表/端点、请求日志脱敏详情、实时聚合；清理废弃缓存命中指标；与 FR-264 并行开发互不覆盖）→ `docs/specs/client-dist-observability-rebuild/spec.md`（已交付）
 - 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
 
 | 编号 | 需求 | 优先级 | 状态 |
@@ -270,7 +272,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-214 | 客户端分发文件预览：发布页已上传文件 + 版本详情历史文件树，复用 FR-213 共享文件浏览器预览内容与结构（前端复用为主，补一个管理面 JWT 只读制品内容/下载端点——玩家拉取密钥端点与浏览器入口物理隔离不可复用，免 spec，依赖 FR-213） | P2 | ✅ 已交付@v0.12.0 |
 | FR-215 | 观测导航重构：「监控」大类改名「观测」，下设 监控/日志/统计 三子类；任务中心移到「系统」；纯 IA/路由/侧栏调整、页面内容不变（**需 IA spec**；与在飞 FR-208/210/211 前端测试基座并行协调，测试按新 IA 写） | P1 | ✅ 已交付@v0.12.0 |
 | FR-216 | 通知中心：站内信（定向消息）+ 告警（系统警报）合并为统一通知流，页眉单铃铛入口（下拉预览）+ 独立「通知中心」页（按类型筛选/已读/查询），侧栏置「系统/账户与审计」（**需 spec + ADR-048 统一通知模型**，依赖 FR-215 落点） | P1 | ✅ 已交付@v0.12.0 |
-| FR-217 | 客户端分发观测数据底座：定时聚合客户端遥测（FR-093 events）为时序快照——拉取/更新次数、活跃客户端（machineId 去重）、版本分布与滞后、更新成功率/fail-static、下载字节/CAS 命中、平台分布；新快照表 + 定时聚合任务 + 查询端点（总 + 按频道/时间筛选）（**需 spec + ADR-049，复用 ADR-013 分级降采样思路**） | P1 | ✅ 已交付@v0.12.0 |
+| FR-217 | 客户端分发观测数据底座：定时聚合客户端遥测（FR-093 events）为时序快照——拉取/更新次数、活跃客户端（machineId 去重）、版本分布与滞后、更新成功率/fail-static、下载字节、平台分布；新快照表 + 定时聚合任务 + 查询端点（总 + 按频道/时间筛选）（**需 spec + ADR-049，复用 ADR-013 分级降采样思路**） | P1 | ✅ 已交付@v0.12.0 |
 | FR-218 | 观测·客户端分发监控页：消费 FR-217 数据出时序趋势 + 分布/榜单，总览 + 可筛单频道（前端消费既有端点，免 spec，依赖 FR-217） | P2 | ✅ 已交付@v0.12.0 |
 | FR-219 | 客户端分发频道工作台「统计」Tab 扩充维度：复用 FR-217 数据加 活跃客户端/版本分布/更新成功率/平台分布 等（增强既有频道统计，免 spec，依赖 FR-217） | P2 | ✅ 已交付@v0.12.0 |
 | FR-220 | 观测·统计页补齐：观测三子类之一的「统计」页做成平台级聚合统计（节点/实例/玩家/分发等概览聚合，独立于 FR-219 的频道统计 Tab）（**需 spec**，依赖 FR-215） | P1 | ✅ 已交付@v0.12.0 |
@@ -311,8 +313,10 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-259 | CP core 版本归档 + 端点 + 面板回滚：make embed-client-updater 归档多版本 core jar、GET /client-channels/:id/updater-core 端点（拉取密钥鉴权）、面板「updater-core 版本」选择器一键切换回滚（依赖 FR-258）→ `docs/specs/updater-arch-simplification/spec.md` | — | ✅ 已交付 |
 | FR-260 | 客户端更新器架构简化 前端 + ADR + doc-sync：接入指引去 signPublicKey 改"楔子自动拉取"、updater-core 版本选择器面板、新 ADR 推翻 ADR-022/053 修订 ADR-045、API/ARCHITECTURE/PRD/CHANGELOG 同步、重编内嵌 jar（依赖 FR-259） | — | ✅ 已交付 |
 | FR-263 | 拉取密钥加密器自动生成与持久化：CP 启动未注入 JIANMANAGER_CLIENT_KEY_ENC_SECRET 时自动生成 AES-256-GCM 密钥并持久化到数据根文件（env 注入优先、双轨），dev 回退内置开发密钥；修订 ADR-044 存储策略（feat，需 spec + ADR） | P1 | ✅ 已交付 |
+| FR-264 | 客户端分发单节点源站安全防护：在无 CDN 部署下补多维限流、字节配额、IP 临时封禁与手动解封、key 状态机、频道降速保护、制品授权收紧、启动安全画像遥测（playerName+machineId+installId+环境特征强制上报）与独立防护中心页面（feat，需 spec）→ `docs/specs/client-dist-security-firewall/spec.md` | P1 | ✅ 已交付 |
 | FR-261 | 发布页文件资源管理器（专业文件树库重写）：react-arborist 替换 ClientFileTree，新建文件夹/重命名/Ctrl+点选/Shift+连选/Delete 删除/拖拽上传文件/拖拽上传 zip 自动解压（含 GBK）/拖拽移动调整结构/同名冲突提示忽略覆盖保留两者；保留本地编排→点发布才上传架构（feat，需 spec） | P1 | ✅ 已交付 |
 | FR-262 | 清理目录树形右键菜单可视化：FR-261 同款文件树展示目录结构，右键菜单标记清理/排除/取消，Ctrl+点选 Shift+连选批量操作，颜色区分（红=清理/绿=排除/无色=不管理），父子联动；产出 managedDirs+cleanExclude（增强 FR-255，依赖 FR-261，需 spec） | P1 | ✅ 已交付 |
+| FR-265 | 客户端分发观测四 Tab 重构：同页面拆统计/监控/日志/客户端；统计/监控/日志仅看分发请求事件，客户端 Tab 独立看运行态与更新结果；新增运行态心跳表/端点、请求日志脱敏详情、实时聚合与运行态联动筛选；清理废弃缓存命中指标；与 FR-264 并行开发互不覆盖 → `docs/specs/client-dist-observability-rebuild/spec.md` | P1 | ✅ 已交付@v0.12.0 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
