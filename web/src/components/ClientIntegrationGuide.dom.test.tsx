@@ -12,7 +12,7 @@ import ClientIntegrationGuide from './ClientIntegrationGuide'
 describe('ClientIntegrationGuide（mock 假后端）', () => {
   it('jm-updater.json 示例只含 API 根 endpoint', async () => {
     loginMockUser()
-    renderWithProviders(<ClientIntegrationGuide channelId="skyblock-s1" />)
+    renderWithProviders(<ClientIntegrationGuide channelId="skyblock-s1" keys={[]} />)
 
     expect(await screen.findByText(/"endpoint": "http:\/\/localhost:3000\/api\/v1"/)).toBeInTheDocument()
     expect(screen.queryByText(/coreEndpoint/)).not.toBeInTheDocument()
@@ -21,17 +21,17 @@ describe('ClientIntegrationGuide（mock 假后端）', () => {
     expect(dlBtns.length).toBeGreaterThan(0)
   })
 
-  it('点击下载按钮触发 updater-config 端点调用', async () => {
+  it('点击下载按钮在本地生成配置文件', async () => {
     loginMockUser()
     const user = userEvent.setup()
     vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:mock'), revokeObjectURL: vi.fn() })
 
-    renderWithProviders(<ClientIntegrationGuide channelId="skyblock-s1" />)
+    renderWithProviders(<ClientIntegrationGuide channelId="skyblock-s1" keys={[]} />)
 
     const dlBtns = await screen.findAllByRole('button', { name: /下载 jm-updater\.json/ })
     await user.click(dlBtns[0])
 
-    // 端点被调（mock 返回 200，不报错即通过；downloadUpdaterConfig 内部触发下载）。
+    // 本地 Blob 下载，不再请求 updater-config 远程端点。
     expect(screen.queryByText(/下载失败/)).not.toBeInTheDocument()
   })
 })

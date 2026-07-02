@@ -22,6 +22,9 @@ export default function ClientUpdaterCoreSelector({ channelId }: { channelId: st
   const select = useSelectUpdaterCore()
   const [target, setTarget] = useState<string | null>(null)
 
+  const selectedVersion = versions?.find((v) => v.selected)
+  const latestVersion = versions?.[0]
+
   const doSelect = () => {
     if (!target) return
     const sha = target
@@ -44,6 +47,29 @@ export default function ClientUpdaterCoreSelector({ channelId }: { channelId: st
             '列出所有归档的 updater-core 版本。切换选定版本后，客户端下次启动按 endpoint 自动查询并使用该版本——用于坏 core 应急回滚。',
           )}
         </p>
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="rounded-lg border bg-card p-3">
+          <div className="text-[11px] text-muted-foreground">{t('clientCore.latestArchived', '最新归档版本')}</div>
+          <div className="mt-1 font-mono text-lg font-semibold">
+            {latestVersion ? `v${latestVersion.version}` : '—'}
+          </div>
+          <div className="mt-1 text-[11px] text-muted-foreground">
+            {latestVersion ? `${latestVersion.sha256.slice(0, 12)}… · ${formatBytes(latestVersion.size)}` : t('clientCore.noVersionsShort', '暂无归档')}
+          </div>
+        </div>
+        <div className="rounded-lg border bg-card p-3">
+          <div className="text-[11px] text-muted-foreground">{t('clientCore.currentSelected', '当前选定版本')}</div>
+          <div className="mt-1 font-mono text-lg font-semibold">
+            {selectedVersion ? `v${selectedVersion.version}` : latestVersion ? t('clientCore.followLatest', '跟随最新') : '—'}
+          </div>
+          <div className="mt-1 text-[11px] text-muted-foreground">
+            {selectedVersion
+              ? `${selectedVersion.sha256.slice(0, 12)}… · ${formatBytes(selectedVersion.size)}`
+              : t('clientCore.followLatestHint', '频道未固定版本时，客户端使用最新归档 updater-core。')}
+          </div>
+        </div>
       </div>
 
       <div className="overflow-hidden rounded-lg border">

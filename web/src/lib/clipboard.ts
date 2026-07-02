@@ -25,10 +25,13 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     ta.style.position = 'fixed'
     ta.style.top = '-9999px'
     ta.style.opacity = '0'
-    document.body.appendChild(ta)
+    const host = document.querySelector('[role="dialog"]') ?? document.body
+    host.appendChild(ta)
+    ta.focus()
     ta.select()
+    ta.setSelectionRange(0, ta.value.length)
     const ok = document.execCommand('copy')
-    document.body.removeChild(ta)
+    host.removeChild(ta)
     return ok
   } catch {
     return false

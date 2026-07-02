@@ -15,7 +15,7 @@ describe('ClientUpdaterCoreSelector（mock 假后端）', () => {
     renderWithProviders(<ClientUpdaterCoreSelector channelId="skyblock-s1" />)
 
     // 两版本出现（v2 在前=最新，v1 在后）。
-    expect(await screen.findByText('v2')).toBeInTheDocument()
+    expect(await screen.findAllByText('v2')).not.toHaveLength(0)
     expect(screen.getByText('v1')).toBeInTheDocument()
     // v2 标为「当前选定」。
     expect(screen.getByText('当前选定')).toBeInTheDocument()
@@ -29,7 +29,7 @@ describe('ClientUpdaterCoreSelector（mock 假后端）', () => {
     renderWithProviders(<ClientUpdaterCoreSelector channelId="skyblock-s1" />)
 
     // 等版本加载。
-    await screen.findByText('v2')
+    await screen.findAllByText('v2')
     // 点击 v1 的「选定」按钮。
     const btn = screen.getByRole('button', { name: '选定' })
     await user.click(btn)

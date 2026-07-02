@@ -172,3 +172,29 @@ func TestOpenArtifact_SupportsClientUpdaterCore(t *testing.T) {
 	require.Equal(t, model.AssetTypeClientUpdaterCore, asset.Type)
 	require.NotEmpty(t, absPath)
 }
+
+func TestDelete_RejectsEmbeddedUpdaterCore(t *testing.T) {
+	svc, assetSvc, _ := newUpdaterCoreSvc(t)
+	a, err := svc.ArchiveCoreJar(strings.NewReader("jar-v1"), "1")
+	require.NoError(t, err)
+
+	err = assetSvc.Delete(a.ID)
+	require.ErrorIs(t, err, ErrAssetInUse)
+}
+
+func TestDelete_RejectsSelectedUpdaterCore(t *testing.T) {
+	svc, assetSvc, db := newUpdaterCoreSvc(t)
+	a, err := assetSvc.Ingest(strings.NewReader("manual-core"), IngestParams{
+		Type:     model.AssetTypeClientUpdaterCore,
+		Name:     "updater-core",
+		Version:  "1",
+		Filename: "updater-core.jar",
+		Metadata: `{"codec":"none","source":"manual-upload"}`,
+	})
+	require.NoError(t, err)
+	_, _ = NewClientChannelService(db).CreateChannel("s1", "测试", "")
+	require.NoError(t, svc.SelectCoreVersion("s1", a.SHA256))
+
+	err = assetSvc.Delete(a.ID)
+	require.ErrorIs(t, err, ErrAssetInUse)
+}

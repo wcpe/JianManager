@@ -213,6 +213,10 @@ type UpdateKeyParams struct {
 	Name string
 	// Value 新密钥明文值（可空=不改值，只改名）。非空则重算 KeyHash + 重写 KeyEnc。
 	Value string
+	// ExpiresAtSet 表示调用方显式编辑过期时间；false 时保持原值。
+	ExpiresAtSet bool
+	// ExpiresAt 新过期时间；ExpiresAtSet=true 且为 nil 表示清空为永不过期。
+	ExpiresAt *time.Time
 }
 
 // UpdateKey 编辑拉取密钥（FR-192：管理员手动设/改这把永久 key 的值与名称）。
@@ -248,7 +252,19 @@ func (s *ClientChannelService) UpdateKey(channelID string, keyID uint, p UpdateK
 	if err := s.db.Model(key).Updates(updates).Error; err != nil {
 		return nil, "", fmt.Errorf("更新拉取密钥失败: %w", err)
 	}
+	if p.ExpiresAtSet {
+		expiresAtValue := any(p.ExpiresAt)
+		if p.ExpiresAt == nil {
+			expiresAtValue = gorm.Expr("NULL")
+		}
+		if err := s.db.Model(key).Update("expires_at", expiresAtValue).Error; err != nil {
+			return nil, "", fmt.Errorf("更新拉取密钥过期时间失败: %w", err)
+		}
+	}
 	key.Name = p.Name
+	if p.ExpiresAtSet {
+		key.ExpiresAt = p.ExpiresAt
+	}
 	key.Revealable = key.KeyEnc != ""
 	return key, plaintext, nil
 }

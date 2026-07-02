@@ -1402,9 +1402,9 @@
   - 500 `INGEST_FAILED`
 
 ### DELETE /api/v1/assets/:id
-- **描述**: 删除资产；被引用（`refCount>0`）时拒绝
-- **关联 FR**: FR-045
-- **错误**: 404 `NOT_FOUND`；409 `ASSET_IN_USE`（附当前引用数）
+- **描述**: 删除资产；被引用（`refCount>0`）时拒绝。`client-updater-core` 内置归档或被频道选定时同样拒绝删除，避免楔子首次/下次启动拉不到 updater-core
+- **关联 FR**: FR-045 / FR-259
+- **错误**: 404 `NOT_FOUND`；409 `ASSET_IN_USE`（附当前引用数；`client-updater-core` 内置或被频道选定时也返回该错误）
 
 > 备注：内部「下载入库」（download → store）能力已实现于服务层（`AssetService.IngestFromURL`），供 FR-034 建服取核心时复用，暂未单独暴露为公开 endpoint。
 
@@ -1946,8 +1946,8 @@
 - **描述**: 编辑拉取密钥（FR-192，见 ADR-044）。改名必填；`value` 可选——留空仅改名，填入则改值（重算 `KeyHash` 使鉴权切到新值 + 重写 `KeyEnc` 供查看）。**改值会使持旧值的已分发客户端失效**。取代原「轮换」（已删除）
 - **关联 FR**: FR-192
 - **权限**: 平台管理员
-- **请求**: `{ "name": "灰度", "value": "新密钥明文" }`（`value` 可空=只改名）
-- **响应** (200): 同创建响应；改值时 `key`=新明文（回显供复制），仅改名时 `key` 为空串
+- **请求**: `{ "name": "灰度", "value": "新密钥明文", "expiresAt": "2027-01-01T00:00:00Z" }`（`value` 可空=只改名；`expiresAt` 不传=保持原过期时间，传 ISO 时间=设置过期时间，传 `null`/空字符串=清空为永不过期）
+- **响应** (200): 同创建响应；改值时 `key`=新明文（回显供复制），仅改名/改过期时间时 `key` 为空串
 - **错误**: 404 `CHANNEL_NOT_FOUND` / `KEY_NOT_FOUND` | 400 `INVALID_REQUEST`
 - **审计**: `client_key.update`（detail 不含明文，含 `valueChanged` 标记是否改值）
 

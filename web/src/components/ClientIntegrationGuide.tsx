@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Copy, Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { copyToClipboard } from '@/lib/clipboard'
-import { useUpdaterJarsInfo, downloadUpdaterJar, downloadUpdaterConfig } from '@/api/clientChannels'
+import { useUpdaterJarsInfo, downloadUpdaterJar, useRevealClientKey, type ClientPullKey } from '@/api/clientChannels'
 
 /**
  * 客户端更新器接入指引（FR-107 / FR-259）。面向运营方：在频道详情一页拿齐——下载楔子、
@@ -13,16 +13,24 @@ import { useUpdaterJarsInfo, downloadUpdaterJar, downloadUpdaterConfig } from '@
  * FR-259 起 core 不再随整合包附带：整合包只带 wedge.jar（~30KB），首次启动楔子自动经
  * API 根 endpoint 拼接 updater-core 端点并拉取（gradle-wrapper 模式，见 FR-258）。
  */
-export default function ClientIntegrationGuide({ channelId }: { channelId: string }) {
+export default function ClientIntegrationGuide({ channelId, keys }: { channelId: string; keys: ClientPullKey[] }) {
   const { t } = useTranslation()
   const { data: jars } = useUpdaterJarsInfo()
+  const revealKey = useRevealClientKey()
   const [endpoint, setEndpoint] = useState(`${window.location.origin}/api/v1`)
+  const [selectedKeyId, setSelectedKeyId] = useState('')
+  const [selectedKeyPlaintext, setSelectedKeyPlaintext] = useState('')
   const [downloading, setDownloading] = useState<'wedge' | 'config' | null>(null)
 
+  const selectedKey = useMemo(
+    () => keys.find((key) => String(key.id) === selectedKeyId) ?? null,
+    [keys, selectedKeyId],
+  )
+  const configKey = selectedKeyPlaintext || t('clientGuide.keyPlaceholder', '在「拉取密钥」Tab 创建后填入')
   const jmUpdaterJson = JSON.stringify(
     {
       channel: channelId,
-      key: t('clientGuide.keyPlaceholder', '在「拉取密钥」Tab 创建后填入'),
+      key: configKey,
       endpoint,
       timeoutSec: 120,
       telemetry: true,
@@ -39,11 +47,39 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
     else toast.error(t('clientGuide.copyFailed', '复制失败'))
   }
 
+  const revealSelectedKey = async (keyId: string) => {
+    setSelectedKeyId(keyId)
+    setSelectedKeyPlaintext('')
+    const key = keys.find((item) => String(item.id) === keyId)
+    if (!key) return
+    if (!key.revealable) {
+      toast.error(t('clientGuide.keyNotRevealable', '此密钥不可查看明文，请在「拉取密钥」Tab 编辑为已知值后再选择。'))
+      return
+    }
+    try {
+      const res = await revealKey.mutateAsync({ channelId, keyId: key.id })
+      setSelectedKeyPlaintext(res.key)
+      toast.success(t('clientGuide.keyFilled', '已填入所选密钥'))
+    } catch {
+      toast.error(t('clientGuide.keyRevealFailed', '读取密钥明文失败'))
+    }
+  }
+
+  const downloadConfig = () => {
+    const blob = new Blob([jmUpdaterJson], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'jm-updater.json'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   const download = async (comp: 'wedge' | 'config') => {
     setDownloading(comp)
     try {
       if (comp === 'config') {
-        await downloadUpdaterConfig(channelId)
+        downloadConfig()
       } else {
         await downloadUpdaterJar('wedge')
       }
@@ -113,6 +149,27 @@ export default function ClientIntegrationGuide({ channelId }: { channelId: strin
             '下面是本频道专属配置。key 换成你在「拉取密钥」Tab 创建的密钥（明文仅创建时一次性显示）；endpoint 必须是玩家可访问的 API 根地址，例如 http://127.0.0.1:18370/api/v1，禁止填写 /client-channels 等后缀。',
           )}
         </p>
+        <label className="flex flex-col gap-1 mt-2">
+          <span className="text-xs text-muted-foreground">{t('clientGuide.keySelectLabel', '选择拉取密钥')}</span>
+          <select
+            className="border rounded px-2 py-1 text-sm bg-background"
+            value={selectedKeyId}
+            onChange={(e) => void revealSelectedKey(e.target.value)}
+            disabled={revealKey.isPending}
+          >
+            <option value="">{t('clientGuide.keySelectPlaceholder', '不自动填入，保留占位')}</option>
+            {keys.map((key) => (
+              <option key={key.id} value={key.id} disabled={!key.revealable || key.revoked}>
+                {key.name} · {key.keyPrefix}…{key.expiresAt ? '' : ` · ${t('clientChannels.neverExpires', '永不过期')}`}
+              </option>
+            ))}
+          </select>
+        </label>
+        {selectedKey && selectedKeyPlaintext && (
+          <p className="text-xs text-status-success">
+            {t('clientGuide.keyFilledHint', '已把所选密钥明文写入下方 jm-updater.json。')}
+          </p>
+        )}
         <label className="flex flex-col gap-1 mt-2">
           <span className="text-xs text-muted-foreground">{t('clientGuide.endpointLabel', '公网分发端点')}</span>
           <input
@@ -194,6 +251,7 @@ function CodeBlock({
         {text}
       </pre>
       <Button
+        type="button"
         variant="ghost"
         size="sm"
         className="absolute top-2 right-2 h-7 px-2"

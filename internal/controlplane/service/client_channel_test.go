@@ -198,6 +198,28 @@ func TestUpdateKey_NameOnlyKeepsValue(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestUpdateKey_ChangesExpiresAt(t *testing.T) {
+	svc := newClientChannelSvc(t)
+	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")
+	require.NoError(t, err)
+	key, plain, err := svc.CreateKey("skyblock-s1", "正式包", "", nil)
+	require.NoError(t, err)
+
+	past := time.Now().Add(-time.Hour).Truncate(time.Second)
+	updated, _, err := svc.UpdateKey("skyblock-s1", key.ID, UpdateKeyParams{Name: "正式包", ExpiresAtSet: true, ExpiresAt: &past})
+	require.NoError(t, err)
+	require.NotNil(t, updated.ExpiresAt)
+	require.WithinDuration(t, past, *updated.ExpiresAt, time.Second)
+	_, err = svc.VerifyKey("skyblock-s1", plain)
+	require.ErrorIs(t, err, ErrPullKeyInvalid)
+
+	updated, _, err = svc.UpdateKey("skyblock-s1", key.ID, UpdateKeyParams{Name: "正式包", ExpiresAtSet: true})
+	require.NoError(t, err)
+	require.Nil(t, updated.ExpiresAt)
+	_, err = svc.VerifyKey("skyblock-s1", plain)
+	require.NoError(t, err)
+}
+
 func TestVerifyKey_Expired(t *testing.T) {
 	svc := newClientChannelSvc(t)
 	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")

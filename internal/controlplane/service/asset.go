@@ -286,6 +286,9 @@ func (s *AssetService) Delete(id uint) error {
 	if asset.RefCount > 0 {
 		return fmt.Errorf("%w: 当前引用数 %d", ErrAssetInUse, asset.RefCount)
 	}
+	if err := s.ensureAssetDeletable(asset); err != nil {
+		return err
+	}
 	if err := s.db.Delete(&model.Asset{}, id).Error; err != nil {
 		return fmt.Errorf("删除资产记录失败: %w", err)
 	}
@@ -301,6 +304,24 @@ func (s *AssetService) AbsPath(a *model.Asset) string {
 		return ""
 	}
 	return s.root.Abs(a.RelPath)
+}
+
+// ensureAssetDeletable 阻止删除平台运行依赖的内置 updater-core 归档。
+func (s *AssetService) ensureAssetDeletable(asset *model.Asset) error {
+	if asset.Type != model.AssetTypeClientUpdaterCore {
+		return nil
+	}
+	var selectedCount int64
+	if err := s.db.Model(&model.ClientChannel{}).Where("selected_core_sha256 = ?", asset.SHA256).Count(&selectedCount).Error; err != nil {
+		return fmt.Errorf("检查 updater-core 引用失败: %w", err)
+	}
+	if selectedCount > 0 {
+		return fmt.Errorf("%w: updater-core 正被 %d 个频道选定", ErrAssetInUse, selectedCount)
+	}
+	if strings.Contains(asset.Metadata, `"source":"embedded-updater-core"`) {
+		return fmt.Errorf("%w: 内置 updater-core 由面板启动归档，禁止从制品库删除", ErrAssetInUse)
+	}
+	return nil
 }
 
 // casRelPath 计算资产相对数据根的 CAS 路径：

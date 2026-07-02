@@ -123,14 +123,16 @@ export function useUpdateClientKey() {
       keyId,
       name,
       value,
+      expiresAt,
     }: {
       channelId: string
       keyId: number
       name: string
       value?: string
+      expiresAt?: string | null
     }) =>
       api
-        .put<ClientKeyWithSecret>(`/client-channels/${channelId}/keys/${keyId}`, { name, value })
+        .put<ClientKeyWithSecret>(`/client-channels/${channelId}/keys/${keyId}`, { name, value, expiresAt })
         .then((r) => r.data),
     onSuccess: (_d, vars) => {
       qc.invalidateQueries({ queryKey: ['client-channels', vars.channelId] })
@@ -191,23 +193,6 @@ export async function downloadUpdaterJar(component: 'wedge' | 'core'): Promise<v
   const a = document.createElement('a')
   a.href = url
   a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
-/**
- * 下载 jm-updater.json（FR-253，见 ADR-053；FR-259 起 core 改楔子自动拉取）。
- * 调 CP 端点 GET /client-channels/:id/updater-config 取完整配置（只含 API 根 endpoint），
- * 序列化为 JSON 触发浏览器下载。运营者直接放入整合包即建立客户端配置——无需改源码重编。
- */
-export async function downloadUpdaterConfig(channelId: string): Promise<void> {
-  const { data } = await api.get<Record<string, unknown>>(`/client-channels/${channelId}/updater-config`)
-  const json = JSON.stringify(data, null, 2)
-  const blob = new Blob([json], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = 'jm-updater.json'
   a.click()
   URL.revokeObjectURL(url)
 }

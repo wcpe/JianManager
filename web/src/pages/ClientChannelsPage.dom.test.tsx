@@ -39,6 +39,7 @@ describe('ClientChannelsPage（mock 假后端）', () => {
     expect(await screen.findByRole('heading', { name: /创造三区/ })).toBeInTheDocument()
   })
 
+
   it('注入 500 → 列表显示错误态（不崩溃）', async () => {
     loginMockUser()
     mockInject('get', '/client-channels', { kind: 'status', status: 500 })

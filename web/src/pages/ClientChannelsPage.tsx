@@ -57,6 +57,8 @@ import ClientDistFlowGuide from '@/components/ClientDistFlowGuide'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
+const formatKeyExpiresAt = (value: string | null, neverLabel: string) => value ? new Date(value).toLocaleString() : neverLabel
+const toDatetimeLocal = (value: string | null) => value ? new Date(value).toISOString().slice(0, 16) : ''
 
 /** 工作台分段标识，与就绪度步骤 CTA 联动跳转。 */
 type WorkbenchTab = 'keys' | 'versions' | 'core' | 'stats' | 'guide'
@@ -418,7 +420,7 @@ function ChannelWorkbench({
           <ClientStatsPanel channelId={channelId} />
         </TabsContent>
         <TabsContent value="guide">
-          <ClientIntegrationGuide channelId={channelId} />
+          <ClientIntegrationGuide channelId={channelId} keys={detail?.keys ?? []} />
         </TabsContent>
       </Tabs>
 
@@ -637,7 +639,7 @@ function KeysSegment({
                     <Badge variant="outline">{t('clientChannels.statusActive', '有效')}</Badge>
                   )}
                 </TableCell>
-                <TableCell className="text-xs">{k.expiresAt ? new Date(k.expiresAt).toLocaleString() : '-'}</TableCell>
+                <TableCell className="text-xs">{formatKeyExpiresAt(k.expiresAt, t('clientChannels.neverExpires', '永不过期'))}</TableCell>
                 <TableCell className="text-xs">{k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleString() : '-'}</TableCell>
                 <TableCell>
                   <div className="flex justify-end gap-1">
@@ -806,11 +808,14 @@ function CreateKeyDialog({
                 value={expiresAt}
                 onChange={(e) => setExpiresAt(e.target.value)}
               />
+              <span className="text-xs text-muted-foreground">
+                {t('clientChannels.neverExpiresHint', '留空表示永不过期。')}
+              </span>
             </label>
           </ScrollableDialogBody>
         </form>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             {t('common.cancel', '取消')}
           </Button>
           <Button type="submit" form="create-key-form" disabled={!canSubmit}>
@@ -867,6 +872,7 @@ function EditKeyForm({
   const [name, setName] = useState(target.name)
   // 值不回显既有明文，留空=不改值。
   const [value, setValue] = useState('')
+  const [expiresAt, setExpiresAt] = useState(toDatetimeLocal(target.expiresAt))
 
   const canSubmit = name.trim() !== '' && !updateKey.isPending
 
@@ -879,6 +885,7 @@ function EditKeyForm({
         keyId: target.id,
         name: name.trim(),
         value: value.trim() || undefined,
+        expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
       })
       toast.success(t('clientChannels.keyUpdated', '密钥已更新'))
       onOpenChange(false)
@@ -917,6 +924,18 @@ function EditKeyForm({
                 onChange={(e) => setValue(e.target.value)}
               />
             </label>
+            <label className="flex flex-col gap-1 text-sm">
+              {t('clientChannels.expiresAt', '过期时间（可选）')}
+              <input
+                type="datetime-local"
+                className="p-2 border rounded bg-background"
+                value={expiresAt}
+                onChange={(e) => setExpiresAt(e.target.value)}
+              />
+              <span className="text-xs text-muted-foreground">
+                {t('clientChannels.neverExpiresHint', '留空表示永不过期。')}
+              </span>
+            </label>
             {value.trim() !== '' && (
               <p className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
                 {t(
@@ -928,7 +947,7 @@ function EditKeyForm({
           </ScrollableDialogBody>
         </form>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             {t('common.cancel', '取消')}
           </Button>
           <Button type="submit" form="edit-key-form" disabled={!canSubmit}>
@@ -962,7 +981,7 @@ function SecretDialog({ secret, onClose }: { secret: ClientKeyWithSecret | null;
         </DialogHeader>
         <div className="flex items-center gap-2 rounded-md border bg-muted/50 p-3">
           <code className="flex-1 break-all font-mono text-sm">{secret?.key}</code>
-          <Button variant="outline" size="sm" onClick={copy} className="shrink-0">
+          <Button type="button" variant="outline" size="sm" onClick={copy} className="shrink-0">
             <Copy className="size-4" /> {t('clientChannels.copy', '复制')}
           </Button>
         </div>
@@ -995,17 +1014,19 @@ function RevealDialog({
     <Dialog open={revealed !== null} onOpenChange={(v: boolean) => { if (!v) onClose() }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>
-            {t('clientChannels.revealTitle', '拉取密钥明文')}
-            {revealed ? `（${revealed.name}）` : ''}
-          </DialogTitle>
+          <DialogTitle>{t('clientChannels.revealTitle', '拉取密钥明文')}</DialogTitle>
           <DialogDescription>
             {t('clientChannels.revealDesc', '用于玩家侧更新器鉴权拉取，请复制到 jm-updater.json 妥善保存。')}
           </DialogDescription>
         </DialogHeader>
+        {revealed && (
+          <p className="text-xs text-muted-foreground">
+            {t('clientChannels.revealKeyName', '密钥名称')}：{revealed.name}
+          </p>
+        )}
         <div className="flex items-center gap-2 rounded-md border bg-muted/50 p-3">
           <code className="flex-1 break-all font-mono text-sm">{revealed?.key}</code>
-          <Button variant="outline" size="sm" onClick={copy} className="shrink-0">
+          <Button type="button" variant="outline" size="sm" onClick={copy} className="shrink-0">
             <Copy className="size-4" /> {t('clientChannels.copy', '复制')}
           </Button>
         </div>

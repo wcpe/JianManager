@@ -418,6 +418,16 @@ function AssetSection({
   )
 }
 
+function parseAssetMetadata(raw: string): { path?: string; codec?: string } {
+  if (!raw) return {}
+  try {
+    const value = JSON.parse(raw) as { path?: string; codec?: string; targetPath?: string }
+    return { path: value.path || value.targetPath, codec: value.codec }
+  } catch {
+    return {}
+  }
+}
+
 function AssetRow({ asset }: { asset: AssetInfo }) {
   const { t } = useTranslation()
   const del = useDeleteAsset()
@@ -444,10 +454,17 @@ function AssetRow({ asset }: { asset: AssetInfo }) {
       : asset.storageState === 'external'
         ? t('runtimeAssets.storageExternal')
         : t('runtimeAssets.storageHot')
+  const metadata = parseAssetMetadata(asset.metadata)
+  const clientFileInfo = asset.type === 'client-file'
+    ? [asset.filename, metadata.path, metadata.codec].filter(Boolean).join(' · ')
+    : ''
 
   return (
     <TableRow>
-      <TableCell>{asset.name || '—'}</TableCell>
+      <TableCell>
+        <div>{asset.name || asset.filename || '—'}</div>
+        {clientFileInfo && <div className="mt-0.5 max-w-64 truncate text-[11px] text-muted-foreground" title={clientFileInfo}>{clientFileInfo}</div>}
+      </TableCell>
       <TableCell className="text-muted-foreground">{asset.version || '—'}</TableCell>
       <TableCell className="font-mono text-[11px] text-muted-foreground" title={asset.sha256}>
         {shortSha(asset.sha256)}

@@ -152,12 +152,12 @@ func main() {
 	}
 	switch encSource {
 	case service.KeyEncSourceGenerated:
-		slog.Info("已自动生成拉取密钥加密密钥并持久化（生产未注入环境变量），密钥可查看（FR-263，见 ADR-044）")
+		slog.Info("已自动生成拉取密钥加密密钥并持久化（生产未注入环境变量），密钥可查看")
 	case service.KeyEncSourceDev:
 		slog.Warn("拉取密钥加密使用内置开发密钥（仅 dev_mode 生效），生产务必经 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入独立密钥")
 	case "":
 		// 降级（自动生成/持久化失败）：密钥不可查看，其余功能正常。
-		slog.Warn("拉取密钥加密密钥自动生成/持久化失败，降级为不可查看；可检查数据根 etc/ 目录权限或经 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入密钥（FR-263，见 ADR-044）")
+		slog.Warn("拉取密钥加密密钥自动生成/持久化失败，降级为不可查看；可检查数据根 etc/ 目录权限或经 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入密钥")
 	}
 	clientChannelSvc.SetKeyEncryptor(keyEncryptor)
 	// 客户端分发版本与 manifest 组装（FR-087 / FR-256 简化后：不再签名 manifest，信任靠 HTTPS + 拉取密钥鉴权）。
@@ -171,10 +171,10 @@ func main() {
 		clientVersionSvc.SetEmbeddedCore(embeddedCore)
 		// 归档入库为 client-updater-core（FR-259）：Version 字段存整数版本号，供 coreEndpoint 返回。
 		if _, ierr := clientVersionSvc.ArchiveCoreJar(bytes.NewReader(coreJar), cpembed.ClientUpdaterEmbeddedCoreVersion); ierr != nil {
-			slog.Warn("内嵌 updater-core 归档入库失败，coreEndpoint 将无可用版本（FR-259）", "error", ierr)
+			slog.Warn("内嵌 updater-core 归档入库失败，coreEndpoint 将无可用版本", "error", ierr)
 		}
 	} else {
-		slog.Warn("未内嵌 updater-core jar（make embed-client-updater 未注入），manifest 将省略 agent.core、coreEndpoint 无可用版本（FR-193/259）")
+		slog.Warn("未内嵌 updater-core jar（make embed-client-updater 未注入），manifest 将省略 agent.core、coreEndpoint 无可用版本")
 	}
 	// 客户端分发大文件分块上传（FR-251，增强 FR-088）：init→chunk→complete，临时分片进
 	// cache/client-uploads/<id>/，complete 拼装喂 clientVersionSvc.PublishFile 落同一 CAS。

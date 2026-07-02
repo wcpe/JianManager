@@ -3,7 +3,9 @@ package router
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -50,6 +52,8 @@ type updateKeyRequest struct {
 	Name string `json:"name" binding:"required"`
 	// Value 新密钥明文值（可空=不改值，只改名）。非空则改值（重算 KeyHash + 重写 KeyEnc）。
 	Value string `json:"value"`
+	// ExpiresAt 可选过期时间；不传保持原值，null/空字符串清空为永不过期。
+	ExpiresAt *string `json:"expiresAt"`
 }
 
 // ListChannels GET /client-channels — 列出全部频道。
@@ -188,12 +192,43 @@ func (h *ClientChannelHandler) UpdateKey(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	var body updateKeyRequest
-	if err := c.ShouldBindJSON(&body); err != nil {
+	rawBody, err := io.ReadAll(c.Request.Body)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
 		return
 	}
-	key, plaintext, err := h.svc.UpdateKey(channelID, kid, service.UpdateKeyParams{Name: body.Name, Value: body.Value})
+	var body updateKeyRequest
+	if err := json.Unmarshal(rawBody, &body); err != nil || strings.TrimSpace(body.Name) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rawBody, &raw); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+	params := service.UpdateKeyParams{Name: body.Name, Value: body.Value}
+	if rawExpiresAt, ok := raw["expiresAt"]; ok {
+		params.ExpiresAtSet = true
+		var expiresAtText *string
+		if string(rawExpiresAt) != "null" {
+			var parsed string
+			if err := json.Unmarshal(rawExpiresAt, &parsed); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "expiresAt 格式错误"})
+				return
+			}
+			expiresAtText = &parsed
+		}
+		if expiresAtText != nil && strings.TrimSpace(*expiresAtText) != "" {
+			expiresAt, err := parseOptionalTime(*expiresAtText)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "expiresAt 格式错误"})
+				return
+			}
+			params.ExpiresAt = expiresAt
+		}
+	}
+	key, plaintext, err := h.svc.UpdateKey(channelID, kid, params)
 	if err != nil {
 		h.respondKeyErr(c, err)
 		return
