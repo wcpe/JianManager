@@ -10,8 +10,6 @@ export interface ObservabilitySeriesPoint {
   manifestPulls: number
   artifactPulls: number
   downloadBytes: number
-  casHit: number
-  casMiss: number
   activeMachines: number
   updateTotal: number
   updateSuccess: number
@@ -25,8 +23,6 @@ export interface ObservabilitySummary {
   manifestPulls: number
   artifactPulls: number
   downloadBytes: number
-  casHit: number
-  casMiss: number
   updateTotal: number
   updateSuccess: number
   updateFailStatic: number
@@ -35,7 +31,6 @@ export interface ObservabilitySummary {
   successRate: number
   failStaticRate: number
   rollbackRate: number
-  casHitRate: number
   /**
    * 活跃客户端（machineId 去重，不可信仅近似，ADR-023）。
    * activeMachinesExact=true：区间在明细保留窗(14d)内，精确区间级独立数；

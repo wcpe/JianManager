@@ -164,11 +164,17 @@ interface MockDistEvent {
   bytes: number
   status: number
   errCode: string
+  errReason?: string
+  method?: string
+  path?: string
+  etag?: string
+  requestHeaders?: Record<string, string>
+  responseHeaders?: Record<string, string>
   durationMs: number
   createdAt: string
 }
 
-const distEvents = db<MockDistEvent>('client-dist-events', () => [
+const distEvents = db<MockDistEvent>('client-dist-events', (): MockDistEvent[] => [
   {
     id: 1,
     channelId: 'skyblock-s1',
@@ -180,6 +186,11 @@ const distEvents = db<MockDistEvent>('client-dist-events', () => [
     bytes: 1200,
     status: 200,
     errCode: '',
+    method: 'GET',
+    path: '/api/v1/client-channels/skyblock-s1/manifest',
+    etag: '"v2"',
+    requestHeaders: { 'User-Agent': 'JM-Updater/1.0', 'X-Client-Key': 'present', 'X-Machine-Id': 'm-aaaa' },
+    responseHeaders: { ETag: '"v2"', 'Cache-Control': 'no-store' },
     durationMs: 4,
     createdAt: '2026-06-28T10:05:00Z',
   },
@@ -194,6 +205,11 @@ const distEvents = db<MockDistEvent>('client-dist-events', () => [
     bytes: 2048,
     status: 206,
     errCode: '',
+    method: 'GET',
+    path: '/api/v1/client-artifacts/aaaaaaaaaaaa',
+    etag: '"artifact-a"',
+    requestHeaders: { 'User-Agent': 'JM-Updater/1.0', Range: 'bytes=0-2047', 'X-Machine-Id': 'm-bbbb' },
+    responseHeaders: { ETag: '"artifact-a"', 'Content-Range': 'bytes 0-2047/4096' },
     durationMs: 12,
     createdAt: '2026-06-28T10:04:00Z',
   },
@@ -208,6 +224,11 @@ const distEvents = db<MockDistEvent>('client-dist-events', () => [
     bytes: 60,
     status: 401,
     errCode: 'INVALID_CLIENT_KEY',
+    errReason: '拉取密钥无效',
+    method: 'GET',
+    path: '/api/v1/client-channels/skyblock-s1/manifest',
+    requestHeaders: { 'User-Agent': 'JM-Updater/1.0', 'X-Client-Key': 'present', 'X-Machine-Id': 'm-cccc' },
+    responseHeaders: { 'Cache-Control': 'no-store' },
     durationMs: 1,
     createdAt: '2026-06-28T10:03:00Z',
   },
@@ -222,8 +243,78 @@ const distEvents = db<MockDistEvent>('client-dist-events', () => [
     bytes: 80,
     status: 404,
     errCode: 'NO_LATEST_VERSION',
+    errReason: '频道尚未发布版本',
+    method: 'GET',
+    path: '/api/v1/client-channels/survival-s2/manifest',
+    requestHeaders: { 'User-Agent': 'JM-Updater/1.0', 'X-Client-Key': 'present', 'X-Machine-Id': 'm-dddd' },
+    responseHeaders: { 'Cache-Control': 'no-store' },
     durationMs: 2,
     createdAt: '2026-06-28T10:02:00Z',
+  },
+])
+
+/** 假后端客户端运行态（匹配 ClientRuntimeState，FR-265）。 */
+interface MockRuntimeState {
+  id: number
+  channelId: string
+  machineId: string
+  ip: string
+  platform: string
+  javaVersion: string
+  launcher: string
+  coreVersion: string
+  localVersion: number
+  firstSeenAt: string
+  lastHeartbeatAt: string
+  createdAt: string
+  updatedAt: string
+}
+
+const runtimeStates = db<MockRuntimeState>('client-runtime-states', () => [
+  {
+    id: 1,
+    channelId: 'skyblock-s1',
+    machineId: 'm-aaaa',
+    ip: '203.0.113.1',
+    platform: 'windows',
+    javaVersion: '21',
+    launcher: 'hmcl',
+    coreVersion: '3',
+    localVersion: 2,
+    firstSeenAt: '2026-06-28T09:50:00Z',
+    lastHeartbeatAt: '2026-06-28T10:05:00Z',
+    createdAt: '2026-06-28T09:50:00Z',
+    updatedAt: '2026-06-28T10:05:00Z',
+  },
+  {
+    id: 2,
+    channelId: 'skyblock-s1',
+    machineId: 'm-bbbb',
+    ip: '198.51.100.7',
+    platform: 'linux',
+    javaVersion: '17',
+    launcher: 'pcl',
+    coreVersion: '3',
+    localVersion: 1,
+    firstSeenAt: '2026-06-28T08:10:00Z',
+    lastHeartbeatAt: '2026-06-28T10:01:00Z',
+    createdAt: '2026-06-28T08:10:00Z',
+    updatedAt: '2026-06-28T10:01:00Z',
+  },
+  {
+    id: 3,
+    channelId: 'survival-s2',
+    machineId: 'm-dddd',
+    ip: '203.0.113.20',
+    platform: 'windows',
+    javaVersion: '21',
+    launcher: 'hmcl',
+    coreVersion: '2',
+    localVersion: 0,
+    firstSeenAt: '2026-06-28T09:00:00Z',
+    lastHeartbeatAt: '2026-06-28T09:58:00Z',
+    createdAt: '2026-06-28T09:00:00Z',
+    updatedAt: '2026-06-28T09:58:00Z',
   },
 ])
 
@@ -278,33 +369,42 @@ function keyToMeta(k: MockKey) {
 
 // ── client-dist 统计（FR-095）────────────────────────────────────────────────
 
-/** 构造频道分发统计（匹配 ClientDistStats）。 */
+/** 构造频道分发统计（匹配 ClientDistStats；只从分发请求事件派生）。 */
 function buildStats(channelId: string, days: number) {
-  const downloads = Array.from({ length: Math.min(days, 3) }, (_, i) => ({
-    day: `2026-06-${String(20 + i).padStart(2, '0')}`,
-    requests: 100 + i * 20,
-    bytes: (100 + i * 20) * 1_000_000,
-  }))
+  const rows = distEvents.list((e) => !channelId || e.channelId === channelId)
+  const byDay = new Map<string, { day: string; requests: number; bytes: number }>()
+  const versions = new Map<number, number>()
+  const ips = new Map<string, number>()
+  const machines = new Set<string>()
+  let success = 0
+  let failure = 0
+  for (const e of rows) {
+    const day = e.createdAt.slice(0, 10)
+    const cur = byDay.get(day) ?? { day, requests: 0, bytes: 0 }
+    cur.requests += 1
+    cur.bytes += e.bytes
+    byDay.set(day, cur)
+    if (e.kind === 'manifest' && e.version > 0) versions.set(e.version, (versions.get(e.version) ?? 0) + 1)
+    if (e.status >= 400) failure += 1
+    else if (e.status > 0) success += 1
+    if (e.ip) ips.set(e.ip, (ips.get(e.ip) ?? 0) + 1)
+    if (e.machineId) machines.add(e.machineId)
+  }
+  const total = success + failure
   return {
     channelId,
     days,
-    downloads,
-    versions: [
-      { version: 2, requests: 240 },
-      { version: 1, requests: 60 },
-    ],
+    downloads: [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day)),
+    versions: [...versions.entries()].map(([version, requests]) => ({ version, requests })).sort((a, b) => b.requests - a.requests),
     results: [
-      { result: 'success', count: 280 },
-      { result: 'rolled-back', count: 12 },
-      { result: 'error', count: 8 },
+      { result: 'success', count: success },
+      { result: 'failure', count: failure },
     ],
-    successRate: 0.93,
-    rollbackRate: 0.04,
-    activeMachines: 42,
-    topIps: [
-      { ip: '203.0.113.1', count: 30 },
-      { ip: '198.51.100.7', count: 18 },
-    ],
+    successRate: total > 0 ? success / total : 0,
+    failureRate: total > 0 ? failure / total : 0,
+    rollbackRate: 0,
+    activeMachines: machines.size,
+    topIps: [...ips.entries()].map(([ip, count]) => ({ ip, count })).sort((a, b) => b.count - a.count).slice(0, 10),
   }
 }
 
@@ -315,8 +415,6 @@ function buildObservability(channelId: string, range: string) {
     manifestPulls: 120 + i * 10,
     artifactPulls: 35 + i * 5,
     downloadBytes: (120 + i * 10) * 70_000,
-    casHit: 20 + i,
-    casMiss: 15,
     activeMachines: 48 + i,
     updateTotal: 30,
     updateSuccess: 27,
@@ -333,8 +431,6 @@ function buildObservability(channelId: string, range: string) {
       manifestPulls: 1500,
       artifactPulls: 400,
       downloadBytes: 99_000_000,
-      casHit: 240,
-      casMiss: 160,
       updateTotal: 360,
       updateSuccess: 330,
       updateFailStatic: 10,
@@ -343,7 +439,6 @@ function buildObservability(channelId: string, range: string) {
       successRate: 0.9167,
       failStaticRate: 0.0278,
       rollbackRate: 0.0333,
-      casHitRate: 0.6,
       activeMachines: 512,
       // 短窗（24h/7d）落明细保留窗内→精确去重；长窗超窗→人次近似。
       activeMachinesExact: range === '24h' || range === '7d',
@@ -361,6 +456,124 @@ function buildObservability(channelId: string, range: string) {
       { lag: 1, count: 30 },
     ],
   }
+}
+
+function buildRealtime(channelId: string) {
+  const rows = distEvents.list((e) => !channelId || e.channelId === channelId)
+  const summaryRows = rows.filter((e) => e.createdAt >= '2026-06-28T09:05:00Z')
+  const byHour = new Map<string, { ts: string; manifest: number; artifact: number; error: number }>()
+  const ips = new Map<string, number>()
+  const machines = new Set<string>()
+  for (const e of rows) {
+    const ts = `${e.createdAt.slice(0, 13)}:00:00Z`
+    const cur = byHour.get(ts) ?? { ts, manifest: 0, artifact: 0, error: 0 }
+    if (e.kind === 'manifest') cur.manifest += 1
+    if (e.kind === 'artifact') cur.artifact += 1
+    if (e.status >= 400) cur.error += 1
+    byHour.set(ts, cur)
+  }
+  for (const e of summaryRows) {
+    if (e.ip) ips.set(e.ip, (ips.get(e.ip) ?? 0) + 1)
+    if (e.machineId) machines.add(e.machineId)
+  }
+  return {
+    summary1h: {
+      manifestPulls: summaryRows.filter((e) => e.kind === 'manifest').length,
+      artifactPulls: summaryRows.filter((e) => e.kind === 'artifact').length,
+      errorRequests: summaryRows.filter((e) => e.status >= 400).length,
+      activeMachines: machines.size,
+    },
+    requestRate24h: [...byHour.values()].sort((a, b) => a.ts.localeCompare(b.ts)),
+    recentErrors: rows
+      .filter((e) => e.status >= 400)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 10)
+      .map((e) => ({
+        id: e.id,
+        time: e.createdAt,
+        channelId: e.channelId,
+        kind: e.kind,
+        target: e.kind === 'manifest' && e.version > 0 ? `v${e.version}` : e.artifactSha.slice(0, 12),
+        ip: e.ip,
+        status: e.status,
+        errCode: e.errCode,
+      })),
+    topIps1h: [...ips.entries()].map(([ip, count]) => ({ ip, count })).sort((a, b) => b.count - a.count).slice(0, 10),
+  }
+}
+
+function buildRuntimeOverview(channelId: string, range: string) {
+  const rows = runtimeStates.list((s) => !channelId || s.channelId === channelId)
+  const latest = new Map<string, number>()
+  for (const row of rows) latest.set(row.channelId, Math.max(latest.get(row.channelId) ?? 0, row.localVersion))
+  const updateResultSeries = [
+    { ts: '2026-06-27T00:00:00Z', success: 6, failStatic: 1, rolledBack: 0, error: 1 },
+    { ts: '2026-06-28T00:00:00Z', success: 8, failStatic: 0, rolledBack: 1, error: 1 },
+  ]
+  const total = updateResultSeries.reduce((sum, p) => sum + p.success + p.failStatic + p.rolledBack + p.error, 0)
+  const success = updateResultSeries.reduce((sum, p) => sum + p.success, 0)
+  const failure = updateResultSeries.reduce((sum, p) => sum + p.failStatic + p.error, 0)
+  return {
+    channelId,
+    from: range === '24h' ? '2026-06-27T10:00:00Z' : '2026-06-21T10:00:00Z',
+    to: '2026-06-28T10:00:00Z',
+    summary: {
+      recentStarted: rows.filter((s) => s.lastHeartbeatAt >= '2026-06-28T10:00:00Z').length,
+      todayStarted: rows.filter((s) => s.lastHeartbeatAt >= '2026-06-28T00:00:00Z').length,
+      recentStarts: rows.filter((s) => s.lastHeartbeatAt >= '2026-06-28T10:00:00Z').length,
+      todayStarts: rows.filter((s) => s.lastHeartbeatAt >= '2026-06-28T00:00:00Z').length,
+      updateSuccessRate: total > 0 ? success / total : 0,
+      updateFailureRate: total > 0 ? failure / total : 0,
+    },
+    items: rows.sort((a, b) => b.lastHeartbeatAt.localeCompare(a.lastHeartbeatAt)),
+    runtimeVersionDist: countRuntime(rows, (s) => String(s.localVersion)).map((x) => ({ version: Number(x.value), count: x.count })),
+    coreVersionDist: countRuntime(rows, (s) => s.coreVersion),
+    platformDist: countRuntime(rows, (s) => s.platform),
+    launcherDist: countRuntime(rows, (s) => s.launcher),
+    lagDist: countRuntime(rows, (s) => String(Math.max(0, (latest.get(s.channelId) ?? s.localVersion) - s.localVersion))).map((x) => ({ lag: Number(x.value), count: x.count })),
+    updateResultSeries,
+  }
+}
+
+function countRuntime(rows: MockRuntimeState[], pick: (s: MockRuntimeState) => string) {
+  const m = new Map<string, number>()
+  for (const row of rows) m.set(pick(row), (m.get(pick(row)) ?? 0) + 1)
+  return [...m.entries()].map(([value, count]) => ({ value, count })).sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
+}
+
+function searchDistEvents(url: URL) {
+  const channelId = url.searchParams.get('channelId') ?? ''
+  const machineId = url.searchParams.get('machineId') ?? ''
+  const kind = url.searchParams.get('kind') ?? ''
+  const outcome = url.searchParams.get('outcome') ?? ''
+  const errCode = url.searchParams.get('errCode') ?? ''
+  const runtimeVersion = url.searchParams.get('runtimeVersion')
+  const coreVersion = url.searchParams.get('coreVersion') ?? ''
+  const platform = url.searchParams.get('platform') ?? ''
+  const lag = url.searchParams.get('lag')
+  let rows = distEvents.list()
+  if (channelId) rows = rows.filter((e) => e.channelId === channelId)
+  if (machineId) rows = rows.filter((e) => e.machineId === machineId)
+  if (kind) rows = rows.filter((e) => e.kind === kind)
+  if (outcome === 'failure') rows = rows.filter((e) => e.status >= 400)
+  else if (outcome === 'success') rows = rows.filter((e) => e.status > 0 && e.status < 400)
+  if (errCode) rows = rows.filter((e) => e.errCode === errCode)
+  if (runtimeVersion || coreVersion || platform || lag) {
+    const states = runtimeStates.list((s) => {
+      if (channelId && s.channelId !== channelId) return false
+      if (runtimeVersion && s.localVersion !== Number(runtimeVersion)) return false
+      if (coreVersion && s.coreVersion !== coreVersion) return false
+      if (platform && s.platform !== platform) return false
+      if (lag) {
+        const latest = Math.max(...runtimeStates.list((x) => x.channelId === s.channelId).map((x) => x.localVersion))
+        if (Math.max(0, latest - s.localVersion) !== Number(lag)) return false
+      }
+      return true
+    })
+    const machines = new Set(states.map((s) => s.machineId))
+    rows = rows.filter((e) => machines.has(e.machineId))
+  }
+  return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
 
 export const handlers = [
@@ -704,26 +917,89 @@ export const handlers = [
     return HttpResponse.json(buildObservability(channelId, range))
   }),
 
-  // 分发明细事件检索（FR-093/249）：支持 outcome（成功/失败）、errCode、kind、channelId、limit 过滤。
-  // 平台管理员端点；mock 默认用户 role=10，requireAuth 即可放行。
+  // 运行态启动心跳（FR-265）：mock 接收后 upsert 运行态，避免端点 404。
+  domainRoute('post', '/client-channels/:channelId/telemetry/heartbeat', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const channelId = String(info.params.channelId)
+    const body = (await info.request.json().catch(() => ({}))) as Partial<MockRuntimeState>
+    const machineId = info.request.headers.get('X-Machine-Id') ?? 'mock-machine'
+    const row = runtimeStates.find((s) => s.channelId === channelId && s.machineId === machineId)
+    const now = new Date().toISOString()
+    if (row) {
+      runtimeStates.update(row.id, {
+        platform: body.platform ?? row.platform,
+        javaVersion: body.javaVersion ?? row.javaVersion,
+        launcher: body.launcher ?? row.launcher,
+        coreVersion: body.coreVersion ?? row.coreVersion,
+        localVersion: body.localVersion ?? row.localVersion,
+        lastHeartbeatAt: now,
+        updatedAt: now,
+      })
+    } else {
+      runtimeStates.insert({
+        id: Date.now(),
+        channelId,
+        machineId,
+        ip: '127.0.0.1',
+        platform: body.platform ?? 'unknown',
+        javaVersion: body.javaVersion ?? '',
+        launcher: body.launcher ?? 'unknown',
+        coreVersion: body.coreVersion ?? 'unknown',
+        localVersion: body.localVersion ?? 0,
+        firstSeenAt: now,
+        lastHeartbeatAt: now,
+        createdAt: now,
+        updatedAt: now,
+      })
+    }
+    return new HttpResponse(null, { status: 202 })
+  }),
+
+  // 分发请求近实时聚合（FR-265）：只看 client-dist-events mock 集合。
+  domainRoute('get', '/client-dist/realtime', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    return HttpResponse.json(buildRealtime(url.searchParams.get('channelId') ?? ''))
+  }),
+
+  // 客户端运行态聚合（FR-265）：运行态 + client_telemetry 更新结果 mock。
+  domainRoute('get', '/client-dist/clients', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    return HttpResponse.json(buildRuntimeOverview(url.searchParams.get('channelId') ?? '', url.searchParams.get('range') ?? '7d'))
+  }),
+
+  // 分发明细分页检索（FR-265）：支持 outcome 与运行态维度联动过滤。
+  domainRoute('get', '/client-dist/events/search', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const page = Number(url.searchParams.get('page') ?? 1)
+    const pageSize = Number(url.searchParams.get('pageSize') ?? 100)
+    const rows = searchDistEvents(url)
+    return HttpResponse.json({ items: rows.slice((page - 1) * pageSize, page * pageSize), page, pageSize, total: rows.length })
+  }),
+
+  // 分发明细脱敏详情（FR-265）。
+  domainRoute('get', '/client-dist/events/:id', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const row = distEvents.find((e) => e.id === id)
+    if (!row) return HttpResponse.json({ error: 'EVENT_NOT_FOUND' }, { status: 404 })
+    return HttpResponse.json({ ...row, requestHeaders: row.requestHeaders ?? {}, responseHeaders: row.responseHeaders ?? {} })
+  }),
+
+  // 分发明细事件检索（FR-093/249 兼容旧端点）。
   domainRoute('get', '/client-dist/events', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     const url = new URL(info.request.url)
-    const channelId = url.searchParams.get('channelId') ?? ''
-    const kind = url.searchParams.get('kind') ?? ''
-    const outcome = url.searchParams.get('outcome') ?? ''
-    const errCode = url.searchParams.get('errCode') ?? ''
     const limit = Number(url.searchParams.get('limit') ?? 200)
-    let rows = distEvents.list()
-    if (channelId) rows = rows.filter((e) => e.channelId === channelId)
-    if (kind) rows = rows.filter((e) => e.kind === kind)
-    // failure⟺status>=400；success⟺0<status<400（含 304/200/206）。
-    if (outcome === 'failure') rows = rows.filter((e) => e.status >= 400)
-    else if (outcome === 'success') rows = rows.filter((e) => e.status > 0 && e.status < 400)
-    if (errCode) rows = rows.filter((e) => e.errCode === errCode)
-    rows = rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit)
-    return HttpResponse.json(rows)
+    return HttpResponse.json(searchDistEvents(url).slice(0, limit))
   }),
 
   // 内嵌更新器 jar 信息（FR-107 接入引导）。

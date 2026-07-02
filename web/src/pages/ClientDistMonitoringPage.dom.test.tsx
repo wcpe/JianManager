@@ -8,17 +8,6 @@ import { useAuthStore } from '@/stores/auth'
 import { mockInject } from '@/mocks/inject'
 import ClientDistMonitoringPage from './ClientDistMonitoringPage'
 
-/**
- * ClientDistMonitoringPage 强断言（FR-218）：
- * ① 平台管理员：总览 KPI（汇总）+ 时序趋势卡 + 分布面板出数（接通 /client-dist/observability series/summary/分布）。
- * ② 频道筛选器：选单频道后请求带 channelId、内容仍渲染（用 mock 频道 list 填下拉）。
- * ③ 非平台管理员：整页降级为权限提示、不出 KPI、不发起请求。
- * ④ 端点 403/500 注入：降级为错误态、不崩溃。
- *
- * 图表（recharts）依赖 ResizeObserver 实测宽度，jsdom 无布局——补 ResizeObserver 桩使组件不崩，
- * 断言 Panel 标题 / KPI 标签 / 频道下拉项（均不依赖容器尺寸）即证数据路径接通。
- * /client-channels、/client-dist/observability 由 client 域 mock handler 提供，无需就地桩。
- */
 const ADMIN_TOKEN = `mock.${btoa(
   JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }),
 )}.sig`
@@ -31,7 +20,6 @@ function loginAs(token: string, userId: number) {
   useAuthStore.getState().login(token, 'r')
 }
 
-// 图表（recharts）依赖 ResizeObserver；Radix Select 依赖 pointer/scroll API——jsdom 默认缺，按标准配方补齐。
 beforeAll(() => {
   if (!('ResizeObserver' in globalThis)) {
     class RO {
@@ -46,83 +34,95 @@ beforeAll(() => {
   if (!Element.prototype.setPointerCapture) Element.prototype.setPointerCapture = () => {}
 })
 
-describe('ClientDistMonitoringPage（mock 假后端）', () => {
-  it('① 平台管理员：渲染 KPI + 时序趋势 + 分布面板', async () => {
+describe('ClientDistMonitoringPage（FR-265 四 Tab）', () => {
+  it('① 平台管理员：四 Tab 同页面，默认统计 Tab 只渲染请求侧指标且无 CAS 文案', async () => {
     loginAs(ADMIN_TOKEN, 1)
     renderWithProviders(<ClientDistMonitoringPage />)
 
-    expect(await screen.findByRole('heading', { name: '客户端分发监控' })).toBeInTheDocument()
-    // 汇总 KPI（summary 到达）。
-    expect(await screen.findByText('更新成功率')).toBeInTheDocument()
-    expect(screen.getByText('活跃客户端')).toBeInTheDocument()
-    // 时序趋势卡标题（series 路径）。
-    expect(screen.getByText('拉取趋势')).toBeInTheDocument()
-    expect(screen.getByText('更新成功率趋势')).toBeInTheDocument()
-    // 分布面板（versionDist/platformDist/lagDist）。
-    expect(screen.getByText('版本分布')).toBeInTheDocument()
-    expect(screen.getByText('平台分布')).toBeInTheDocument()
-    expect(screen.getByText('版本滞后分布')).toBeInTheDocument()
-    // 分布桶内容来自 mock buildObservability（windows 平台、v7 版本）。
-    expect(await screen.findByText('Windows')).toBeInTheDocument()
-    expect(screen.getByText('v7')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '客户端分发观测' })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /统计/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /监控/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /日志/ })).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: /客户端/ })).toBeInTheDocument()
+    expect(await screen.findByText('请求成功率')).toBeInTheDocument()
+    expect(screen.getByText('请求结果分布')).toBeInTheDocument()
+    expect(screen.queryByText(/CAS/i)).not.toBeInTheDocument()
+    expect(screen.queryByText('更新成功率')).not.toBeInTheDocument()
   })
 
-  it('② 频道筛选器：渲染并默认「全部频道（总）」（频道 list 已加载）', async () => {
+  it('② 监控 Tab：只展示近实时分发请求聚合', async () => {
     loginAs(ADMIN_TOKEN, 1)
+    const user = userEvent.setup()
     renderWithProviders(<ClientDistMonitoringPage />)
-    await screen.findByText('更新成功率')
+    await screen.findByText('请求成功率')
 
-    // 频道筛选器存在且默认取总（不传 channelId）；下拉项由 mock 频道 list 填充（Radix 弹层在 jsdom 不稳，不展开断言）。
-    const trigger = screen.getByRole('combobox')
-    expect(within(trigger).getByText('全部频道（总）')).toBeInTheDocument()
+    await user.click(screen.getByRole('tab', { name: /监控/ }))
+
+    expect(await screen.findByText('近 1h 错误')).toBeInTheDocument()
+    expect(screen.getByText('近 24h 请求速率')).toBeInTheDocument()
+    expect(screen.getByText('最近错误请求')).toBeInTheDocument()
+    expect(screen.getByText('INVALID_CLIENT_KEY')).toBeInTheDocument()
   })
 
-  it('③ 非平台管理员：整页降级为权限提示、不出 KPI', async () => {
+  it('③ 日志 Tab：分页事件表出数，并可打开脱敏 Header 详情', async () => {
+    loginAs(ADMIN_TOKEN, 1)
+    const user = userEvent.setup()
+    renderWithProviders(<ClientDistMonitoringPage />)
+    await screen.findByText('请求成功率')
+
+    await user.click(screen.getByRole('tab', { name: /日志/ }))
+    expect(await screen.findByText('分发请求日志')).toBeInTheDocument()
+    expect(await screen.findByRole('columnheader', { name: '错误码' })).toBeInTheDocument()
+    expect(screen.getByText('INVALID_CLIENT_KEY')).toBeInTheDocument()
+
+    const detailButtons = await screen.findAllByRole('button', { name: '详情' })
+    await user.click(detailButtons[0])
+
+    expect(await screen.findByText('请求脱敏详情')).toBeInTheDocument()
+    expect(screen.getByText('请求头（已脱敏）')).toBeInTheDocument()
+    expect(screen.getByText('X-Client-Key')).toBeInTheDocument()
+    expect(screen.getByText('present')).toBeInTheDocument()
+    expect(screen.queryByText('secret')).not.toBeInTheDocument()
+  })
+
+  it('④ 客户端 Tab：运行态指标独立展示，并可联动到日志 Tab 按机器码过滤', async () => {
+    loginAs(ADMIN_TOKEN, 1)
+    const user = userEvent.setup()
+    renderWithProviders(<ClientDistMonitoringPage />)
+    await screen.findByText('请求成功率')
+
+    await user.click(screen.getByRole('tab', { name: /客户端/ }))
+    expect(await screen.findByText('近 5 分钟启动')).toBeInTheDocument()
+    expect(screen.getByText('今日启动')).toBeInTheDocument()
+    expect(screen.getByText('客户端运行态')).toBeInTheDocument()
+    expect(screen.getByText('m-aaaa')).toBeInTheDocument()
+
+    const row = screen.getByText('m-aaaa').closest('tr')
+    expect(row).not.toBeNull()
+    await user.click(within(row as HTMLElement).getByRole('button', { name: '看日志' }))
+
+    expect(await screen.findByText('已从客户端维度联动过滤日志：')).toBeInTheDocument()
+    expect(screen.getByText('machine=m-aaaa')).toBeInTheDocument()
+    expect(screen.getByText('m-aaaa')).toBeInTheDocument()
+    expect(screen.queryByText('m-bbbb')).not.toBeInTheDocument()
+  })
+
+  it('⑤ 非平台管理员：整页降级为权限提示', async () => {
     loginAs(MEMBER_TOKEN, 2)
     renderWithProviders(<ClientDistMonitoringPage />)
 
-    expect(await screen.findByRole('heading', { name: '客户端分发监控' })).toBeInTheDocument()
-    expect(await screen.findByText('客户端分发监控需平台管理员权限')).toBeInTheDocument()
-    expect(screen.queryByText('更新成功率')).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '客户端分发观测' })).toBeInTheDocument()
+    expect(await screen.findByText('客户端分发观测需平台管理员权限')).toBeInTheDocument()
+    expect(screen.queryByText('请求成功率')).not.toBeInTheDocument()
   })
 
-  it('④ 平台管理员 + 端点 403 → 降级为错误态、不崩溃', async () => {
+  it('⑥ 端点错误：当前 Tab 降级为错误态、不崩溃', async () => {
     loginAs(ADMIN_TOKEN, 1)
-    mockInject('get', '/client-dist/observability', { kind: 'status', status: 403 })
+    mockInject('get', '/client-dist/stats', { kind: 'status', status: 500 })
     renderWithProviders(<ClientDistMonitoringPage />)
 
-    expect(await screen.findByRole('heading', { name: '客户端分发监控' })).toBeInTheDocument()
-    expect(await screen.findByText('加载分发观测失败')).toBeInTheDocument()
-    expect(screen.queryByText('更新成功率')).not.toBeInTheDocument()
-  })
-
-  // FR-249：分发事件（明细）Tab —— 明细表 + 结果徽章 + 失败行错误码。
-  it('⑤ 分发事件 Tab：明细表出数、失败行显示错误码（INVALID_CLIENT_KEY）', async () => {
-    loginAs(ADMIN_TOKEN, 1)
-    const user = userEvent.setup()
-    renderWithProviders(<ClientDistMonitoringPage />)
-    await screen.findByText('更新成功率')
-
-    // 切到「分发事件（明细）」Tab（Radix Tabs role=tab）。
-    await user.click(screen.getByRole('tab', { name: '分发事件（明细）' }))
-
-    // 明细表标题列出现（接通 /client-dist/events）。
-    expect(await screen.findByText('分发事件明细')).toBeInTheDocument()
-    expect(await screen.findByRole('columnheader', { name: '错误码' })).toBeInTheDocument()
-    // mock 有一条 401 失败事件 → 错误码徽章可见。
-    expect(await screen.findByText('INVALID_CLIENT_KEY')).toBeInTheDocument()
-    // 成功/失败结果徽章都渲染（mock 含 200/206 成功 + 401/404 失败）。
-    expect(screen.getAllByText('失败').length).toBeGreaterThan(0)
-  })
-
-  it('⑥ 分发事件 Tab + 端点错误 → 事件区块降级为错误态、不崩溃', async () => {
-    loginAs(ADMIN_TOKEN, 1)
-    mockInject('get', '/client-dist/events', { kind: 'status', status: 500 })
-    const user = userEvent.setup()
-    renderWithProviders(<ClientDistMonitoringPage />)
-    await screen.findByText('更新成功率')
-
-    await user.click(screen.getByRole('tab', { name: '分发事件（明细）' }))
-    expect(await screen.findByText('加载分发事件失败')).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '客户端分发观测' })).toBeInTheDocument()
+    expect(await screen.findByText('加载分发请求观测失败')).toBeInTheDocument()
+    expect(screen.queryByText('请求成功率')).not.toBeInTheDocument()
   })
 })

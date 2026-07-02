@@ -14,7 +14,7 @@ export interface StatsVersion {
   requests: number
 }
 
-/** 更新结果分布项（success|fail-static|rolled-back|error）。 */
+/** 请求结果分布项（success|failure，来自 client_dist_events）。 */
 export interface StatsResult {
   result: string
   count: number
@@ -34,13 +34,14 @@ export interface ClientDistStats {
   versions: StatsVersion[]
   results: StatsResult[]
   successRate: number
+  failureRate: number
   rollbackRate: number
   activeMachines: number
   topIps: StatsIP[]
 }
 
 /** 频道分发统计（按频道 + 天数窗口）。 */
-export function useClientStats(channelId: string | null, days: number) {
+export function useClientStats(channelId: string | null | undefined, days: number) {
   return useQuery({
     queryKey: ['client-dist-stats', channelId, days],
     queryFn: async () => {
@@ -49,7 +50,7 @@ export function useClientStats(channelId: string | null, days: number) {
       })
       return data
     },
-    enabled: !!channelId,
+    enabled: channelId !== null,
   })
 }
 
@@ -60,8 +61,6 @@ export interface ClientDistObservabilitySummary {
   manifestPulls: number
   artifactPulls: number
   downloadBytes: number
-  casHit: number
-  casMiss: number
   updateTotal: number
   updateSuccess: number
   updateFailStatic: number
@@ -70,7 +69,6 @@ export interface ClientDistObservabilitySummary {
   successRate: number
   failStaticRate: number
   rollbackRate: number
-  casHitRate: number
   activeMachines: number
   /** 区间在明细保留窗(14d)内=精确去重独立数 true；窗外=各桶人次求和近似 false（ADR-049）。 */
   activeMachinesExact: boolean
@@ -90,8 +88,6 @@ export interface ClientDistSeriesPoint {
   manifestPulls: number
   artifactPulls: number
   downloadBytes: number
-  casHit: number
-  casMiss: number
   activeMachines: number
   updateTotal: number
   updateSuccess: number

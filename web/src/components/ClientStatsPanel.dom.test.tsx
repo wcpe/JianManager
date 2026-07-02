@@ -53,9 +53,9 @@ describe('ClientStatsPanel（mock 假后端，FR-219）', () => {
     mockInject('get', '/client-dist/observability', { kind: 'status', status: 500 })
     renderWithProviders(<ClientStatsPanel channelId="skyblock-s1" />)
 
-    // FR-095 stats 仍可用：活跃机器码回退值（42）与成功率（93.0%）出现。
-    await waitFor(() => expect(screen.getByText('42')).toBeInTheDocument())
-    expect(screen.getByText('93.0%')).toBeInTheDocument()
+    // FR-095 stats 仍可用：活跃机器码回退值与请求成功率出现。
+    await waitFor(() => expect(screen.getByText('3')).toBeInTheDocument())
+    expect(screen.getByText('66.7%')).toBeInTheDocument()
     // 来源 IP（FR-095）段落仍渲染。
     expect(screen.getByText('来源 IP（Top 10）')).toBeInTheDocument()
   })
