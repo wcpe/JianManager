@@ -224,9 +224,15 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
       await screen.findByText('keep.jar')
       await screen.findByText('drop.jar')
 
-      // 删除 drop.jar（其行的删除按钮）。
-      const dropRow = screen.getByText('drop.jar').closest('li') as HTMLElement
-      await user.click(within(dropRow).getByRole('button', { name: /删除/ }))
+      // 删除 drop.jar（FileExplorer：点击行选中 → Delete 键 → 确认）。
+      const fileRows = screen.getAllByTestId('fe-file-row')
+      const dropRow = fileRows.find((el) => el.textContent?.includes('drop.jar'))
+      expect(dropRow).toBeTruthy()
+      await user.click(dropRow!)
+      await user.keyboard('{Delete}')
+      // 确认删除弹窗
+      const confirmBtn = await screen.findByRole('button', { name: /确认|确定|删除/ })
+      await user.click(confirmBtn)
       await waitFor(() => expect(screen.queryByText('drop.jar')).not.toBeInTheDocument())
 
       // 发布：仅 keep.jar 应被上传。用「version 请求体只含 keep.jar」间接佐证；

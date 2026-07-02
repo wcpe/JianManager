@@ -6,14 +6,12 @@ import { unzipWithNames } from '@/lib/zip-filename-decode'
 import { adaptEntry, type NativeFileSystemEntry } from '@/lib/webkit-entry-adapter'
 import {
   Upload,
-  Trash2,
   Loader2,
   ArrowLeft,
   ArrowRight,
   Check,
   ChevronLeft,
   FileArchive,
-  FileIcon,
   FolderUp,
   X,
 } from 'lucide-react'
@@ -42,7 +40,7 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import DangerConfirm from '@/components/DangerConfirm'
-import ClientFileTree from '@/components/ClientFileTree'
+import FileExplorer from '@/components/FileExplorer'
 import CleanScopeEditor from '@/components/CleanScopeEditor'
 import FileBrowser from '@/components/file-browser/FileBrowser'
 // localDraftSource 不再使用（FileExplorer 直接操作草稿）
@@ -317,6 +315,23 @@ export default function ClientPublishPage() {
     setDragActive(false)
   }
 
+  /** FileExplorer 拖入文件解析：散文件 + zip 解压，加 targetDirPath 前缀。 */
+  const resolveDrop = async (dropped: File[], targetDirPath: string): Promise<LocalUnit[]> => {
+    const out: LocalUnit[] = []
+    for (const f of dropped) {
+      if (isZipFilename(f.name)) {
+        const buf = new Uint8Array(await f.arrayBuffer())
+        const units = await unzipToUnits(buf)
+        for (const u of units) {
+          out.push({ ...u, path: targetDirPath ? `${targetDirPath}/${u.path}` : u.path })
+        }
+      } else {
+        out.push({ file: f, path: targetDirPath ? `${targetDirPath}/${f.name}` : f.name })
+      }
+    }
+    return out
+  }
+
   /** 取消当前批次上传：abort 信号触发 uploadFileChunked 中止 + 弃单。 */
   const cancelUpload = () => uploadAbort?.abort()
 
@@ -513,27 +528,14 @@ export default function ClientPublishPage() {
             </p>
             {progress && <UploadProgressBar progress={progress} onCancel={cancelUpload} />}
             {drafts.length > 0 && (
-              <ul className="border rounded-lg divide-y text-sm">
-                {drafts.map((d) => (
-                  <li key={d.id} className="flex items-center justify-between gap-2 p-2">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <FileIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                      <span className="font-mono text-xs truncate">{d.path}</span>
-                    </span>
-                    <span className="flex items-center gap-2 shrink-0">
-                      <span className="text-xs text-muted-foreground whitespace-nowrap">{formatBytes(d.size)}</span>
-                      <button
-                        className="text-destructive hover:opacity-70 disabled:opacity-40"
-                        onClick={() => removeDraft(d.id)}
-                        disabled={uploading}
-                        aria-label={t('common.delete', '删除')}
-                      >
-                        <Trash2 className="size-4" />
-                      </button>
-                    </span>
-                  </li>
-                ))}
-              </ul>
+              <FileExplorer
+                files={drafts}
+                onPathChange={(i, path) => patchDraft(idOf(i), { path })}
+                onRemove={(i) => removeDraft(idOf(i))}
+                onRemoveMultiple={(indices) => indices.forEach((i) => removeDraft(idOf(i)))}
+                resolveDrop={resolveDrop}
+                onAddFiles={(units) => appendUnits(units)}
+              />
             )}
           </div>
         )}
@@ -549,12 +551,15 @@ export default function ClientPublishPage() {
             <p className="text-xs text-muted-foreground">
               {t('clientVersions.dragArrangeHint', '拖拽文件或目录节点到其他目录可批量改目标路径')}
             </p>
-            <ClientFileTree
+            <FileExplorer
               files={drafts}
               onPathChange={(i, path) => patchDraft(idOf(i), { path })}
               onSyncChange={(i, sync) => patchDraft(idOf(i), { sync })}
               onPlatformChange={(i, platform) => patchDraft(idOf(i), { platform })}
               onRemove={(i) => removeDraft(idOf(i))}
+              onRemoveMultiple={(indices) => indices.forEach((i) => removeDraft(idOf(i)))}
+              resolveDrop={resolveDrop}
+              onAddFiles={(units) => addDrafts(units)}
             />
           </div>
         )}
@@ -637,7 +642,7 @@ export default function ClientPublishPage() {
               <ReviewViewToggle view={reviewView} onChange={setReviewView} />
             </div>
             {reviewView === 'structure' ? (
-              <ClientFileTree files={drafts} readonly />
+              <FileExplorer files={drafts} readonly />
             ) : (
               <div className="space-y-2">
                 <p className="text-xs text-muted-foreground">{t('clientVersions.previewLocalHint', '点左侧文件预览本地内容（文本/配置/JSON 高亮；二进制或过大文件仅可下载）。发布前从本地读取，尚未上传。')}</p>
