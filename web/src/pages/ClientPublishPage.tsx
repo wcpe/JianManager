@@ -578,7 +578,7 @@ export default function ClientPublishPage() {
               onRemove={(i) => removeDraft(idOf(i))}
               onRemoveMultiple={(indices) => indices.forEach((i) => removeDraft(idOf(i)))}
               resolveDrop={resolveDrop}
-              onAddFiles={(units) => addDrafts(units)}
+              onAddFiles={(units) => appendUnits(units)}
             />
           </div>
         )}

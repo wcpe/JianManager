@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	"github.com/wcpe/JianManager/internal/controlplane/config"
 	"github.com/wcpe/JianManager/internal/controlplane/database"
@@ -28,8 +30,11 @@ import (
 // 通过 t.Cleanup 确保测试结束时关闭数据库连接。
 func setupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	tmpDir := t.TempDir()
-	db, err := gorm.Open(sqlite.Open(tmpDir+"/test.db"), &gorm.Config{})
+	gin.DefaultWriter = io.Discard
+	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		Logger: logger.Discard,
+	})
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
