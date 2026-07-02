@@ -58,7 +58,7 @@ func (s *ClientTelemetryService) Record(e ClientTelemetryInput) error {
 		e.MachineID = e.MachineID[:machineIDMaxLen]
 	}
 	result := validTelemetryResult(e.Result)
-	now := time.Now()
+	now := time.Now().UTC()
 	row := &model.ClientTelemetry{
 		ChannelID: e.ChannelID, MachineID: e.MachineID, IP: e.IP, Result: result,
 		FromVersion: e.FromVersion, ToVersion: e.ToVersion, OS: trunc(e.OS, 32),

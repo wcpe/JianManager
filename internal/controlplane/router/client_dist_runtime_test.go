@@ -25,6 +25,7 @@ func setupRuntimeRouter(t *testing.T, db *gorm.DB) *gin.Engine {
 	svcs := &Services{
 		Auth: service.NewAuthService(db, jwtCfg), User: service.NewUserService(db), Authz: service.NewAuthzService(db), Audit: service.NewAuditService(db),
 		ClientChannel: channelSvc, ClientDistTracking: service.NewClientDistTrackingService(db), ClientRuntimeState: service.NewClientRuntimeStateService(db),
+		ClientTelemetry: service.NewClientTelemetryService(db),
 	}
 	return Setup(svcs, jwtCfg.Secret)
 }
@@ -141,4 +142,39 @@ func TestClientDistRealtimeEndpoint_UsesOnlyEvents(t *testing.T) {
 	require.Equal(t, int64(1), rt.Summary1h.ArtifactPulls)
 	require.Equal(t, int64(1), rt.Summary1h.ErrorRequests)
 	require.Equal(t, int64(1), rt.Summary1h.ActiveMachines)
+}
+
+func TestClientRuntimeClientsEndpoint_UsesTelemetryUpdateResults(t *testing.T) {
+	db := setupTestDB(t)
+	seedRuntimeChannel(t, db)
+	r := setupRuntimeRouter(t, db)
+	token := getAdminToken(t, r)
+
+	heartbeatBody := map[string]any{"platform": "windows", "javaVersion": "21", "launcher": "hmcl", "coreVersion": "1.2.3", "localVersion": 7}
+	heartbeat := makeRuntimeRequest(r, "POST", "/api/v1/client-channels/stable/telemetry/heartbeat", heartbeatBody, map[string]string{"X-Client-Key": "secret", "X-Machine-Id": "machine-a"})
+	require.Equal(t, http.StatusAccepted, heartbeat.Code, heartbeat.Body.String())
+
+	telemetryBody := map[string]any{"channel": "stable", "result": "success", "fromVersion": 6, "toVersion": 7, "os": "windows", "bootSuccess": true}
+	telemetry := makeRuntimeRequest(r, "POST", "/api/v1/client-telemetry", telemetryBody, map[string]string{"X-Client-Key": "secret", "X-Machine-Id": "machine-a"})
+	require.Equal(t, http.StatusAccepted, telemetry.Code, telemetry.Body.String())
+	var written model.ClientTelemetry
+	require.NoError(t, db.Where("channel_id = ?", "stable").First(&written).Error)
+	require.Equal(t, "success", written.Result)
+
+	w := makeRequest(r, "GET", "/api/v1/client-dist/clients?channelId=stable&range=7d", nil, token)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	var clients struct {
+		Summary struct {
+			UpdateSuccessRate float64 `json:"updateSuccessRate"`
+			UpdateFailureRate float64 `json:"updateFailureRate"`
+		} `json:"summary"`
+		UpdateResultSeries []struct {
+			Success int64 `json:"success"`
+		} `json:"updateResultSeries"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &clients))
+	require.Greater(t, clients.Summary.UpdateSuccessRate, 0.0)
+	require.Equal(t, 0.0, clients.Summary.UpdateFailureRate)
+	require.NotEmpty(t, clients.UpdateResultSeries)
+	require.Equal(t, int64(1), clients.UpdateResultSeries[0].Success)
 }

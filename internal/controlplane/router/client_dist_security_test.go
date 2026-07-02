@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -156,6 +157,37 @@ func TestClientSecurityGroupsCRUD(t *testing.T) {
 	groups := parseJSONArray(t, makeRequest(r, "GET", "/api/v1/client-dist/security/groups", nil, token))
 	if len(groups) != 1 || groups[0].(map[string]any)["name"] != "观察 IP" || groups[0].(map[string]any)["enabled"] != false {
 		t.Fatalf("分组更新后列表不符: %+v", groups)
+	}
+}
+
+func TestClientSecurityAnalysisEndpoints_ReturnAggregates(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	now := time.Now()
+	if err := db.Create(&model.ClientDistEvent{ChannelID: "s1", MachineID: "m1", IP: "127.0.0.1", Kind: "artifact", Status: 416, ErrCode: "INVALID_RANGE", Bytes: 12, CreatedAt: now}).Error; err != nil {
+		t.Fatalf("写入分发事件失败: %v", err)
+	}
+	if err := db.Create(&model.ClientSecurityProfile{ChannelID: "s1", MachineID: "m1", InstallID: "i1", PlayerName: "Steve", PlayerNameNorm: "steve", LastIP: "127.0.0.1", KeyID: 1, RiskScore: 3, FirstSeen: now, LastSeen: now}).Error; err != nil {
+		t.Fatalf("写入安全画像失败: %v", err)
+	}
+
+	ips := makeRequest(r, "GET", "/api/v1/client-dist/security/ip-analysis", nil, token)
+	if ips.Code != http.StatusOK {
+		t.Fatalf("IP 剖析应 200，实际 %d %s", ips.Code, ips.Body.String())
+	}
+	ipRows := parseJSONArray(t, ips)
+	if len(ipRows) != 1 || ipRows[0].(map[string]any)["ip"] != "127.0.0.1" {
+		t.Fatalf("IP 剖析聚合不符: %+v", ipRows)
+	}
+
+	players := makeRequest(r, "GET", "/api/v1/client-dist/security/player-analysis", nil, token)
+	if players.Code != http.StatusOK {
+		t.Fatalf("玩家剖析应 200，实际 %d %s", players.Code, players.Body.String())
+	}
+	playerRows := parseJSONArray(t, players)
+	if len(playerRows) != 1 || playerRows[0].(map[string]any)["playerName"] != "Steve" {
+		t.Fatalf("玩家剖析聚合不符: %+v", playerRows)
 	}
 }
 

@@ -352,6 +352,15 @@ func (s *ClientDistSecurityService) IsArtifactAllowedForChannel(channelID, sha s
 		}
 		return cnt > 0, nil
 	}
+	if s.version != nil {
+		info, err := s.version.GetCoreEndpointInfo(channelID)
+		if err != nil && !errors.Is(err, ErrNoCoreVersion) && !errors.Is(err, ErrChannelNotFound) {
+			return false, err
+		}
+		if info != nil && info.SHA256 == sha {
+			return true, nil
+		}
+	}
 	var versions []model.ClientVersion
 	if err := s.db.Where("channel_id = ?", channelID).Order("version DESC").Limit(3).Find(&versions).Error; err != nil {
 		return false, err
@@ -542,10 +551,21 @@ func (s *ClientDistSecurityService) ListIPAnalysis(limit int) ([]ClientDistIPAna
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	var rows []ClientDistIPAnalysis
+	type ipAnalysisRow struct {
+		IP              string
+		RequestCount    int64
+		RejectCount     int64
+		InvalidKeyCount int64
+		NotFoundCount   int64
+		RangeCount      int64
+		DownloadBytes   int64
+		ChannelCount    int64
+		LastSeen        string
+	}
+	var rawRows []ipAnalysisRow
 	if err := s.db.Model(&model.ClientDistEvent{}).
-		Select("ip, COUNT(*) AS request_count, SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END) AS reject_count, SUM(CASE WHEN err_code = 'INVALID_CLIENT_KEY' THEN 1 ELSE 0 END) AS invalid_key_count, SUM(CASE WHEN err_code = 'ARTIFACT_NOT_FOUND' THEN 1 ELSE 0 END) AS not_found_count, SUM(CASE WHEN err_code IN ('INVALID_RANGE','RANGE_SMALL') THEN 1 ELSE 0 END) AS range_count, COALESCE(SUM(bytes), 0) AS download_bytes, COUNT(DISTINCT channel_id) AS channel_count, MAX(created_at) AS last_seen").
-		Where("ip != ''").Group("ip").Order("request_count DESC").Limit(limit).Scan(&rows).Error; err != nil {
+		Select("ip, COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), 0) AS reject_count, COALESCE(SUM(CASE WHEN err_code = 'INVALID_CLIENT_KEY' THEN 1 ELSE 0 END), 0) AS invalid_key_count, COALESCE(SUM(CASE WHEN err_code = 'ARTIFACT_NOT_FOUND' THEN 1 ELSE 0 END), 0) AS not_found_count, COALESCE(SUM(CASE WHEN err_code IN ('INVALID_RANGE','RANGE_SMALL') THEN 1 ELSE 0 END), 0) AS range_count, COALESCE(SUM(bytes), 0) AS download_bytes, COUNT(DISTINCT channel_id) AS channel_count, MAX(created_at) AS last_seen").
+		Where("ip != ''").Group("ip").Order("request_count DESC").Limit(limit).Scan(&rawRows).Error; err != nil {
 		return nil, err
 	}
 	blocked := map[string]bool{}
@@ -556,9 +576,15 @@ func (s *ClientDistSecurityService) ListIPAnalysis(limit int) ([]ClientDistIPAna
 	for _, a := range actions {
 		blocked[a.TargetValue] = true
 	}
-	for i := range rows {
-		rows[i].RiskScore = rows[i].RejectCount + rows[i].RangeCount
-		rows[i].Blocked = blocked[rows[i].IP]
+	rows := make([]ClientDistIPAnalysis, 0, len(rawRows))
+	for _, row := range rawRows {
+		out := ClientDistIPAnalysis{
+			IP: row.IP, RequestCount: row.RequestCount, RejectCount: row.RejectCount,
+			InvalidKeyCount: row.InvalidKeyCount, NotFoundCount: row.NotFoundCount, RangeCount: row.RangeCount,
+			DownloadBytes: row.DownloadBytes, ChannelCount: row.ChannelCount, LastSeen: parseSecurityAggregateTime(row.LastSeen),
+			RiskScore: row.RejectCount + row.RangeCount, Blocked: blocked[row.IP],
+		}
+		rows = append(rows, out)
 	}
 	return rows, nil
 }
@@ -566,11 +592,45 @@ func (s *ClientDistSecurityService) ListPlayerAnalysis(limit int) ([]ClientDistP
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	var rows []ClientDistPlayerAnalysis
-	err := s.db.Model(&model.ClientSecurityProfile{}).
+	type playerAnalysisRow struct {
+		PlayerName   string
+		InstallCount int64
+		MachineCount int64
+		IPCount      int64
+		KeyCount     int64
+		ChannelCount int64
+		RiskScore    int64
+		LastSeen     string
+	}
+	var rawRows []playerAnalysisRow
+	if err := s.db.Model(&model.ClientSecurityProfile{}).
 		Select("player_name, COUNT(DISTINCT install_id) AS install_count, COUNT(DISTINCT machine_id) AS machine_count, COUNT(DISTINCT last_ip) AS ip_count, COUNT(DISTINCT key_id) AS key_count, COUNT(DISTINCT channel_id) AS channel_count, COALESCE(SUM(risk_score), 0) AS risk_score, MAX(last_seen) AS last_seen").
-		Where("player_name != ''").Group("player_name").Order("install_count DESC").Limit(limit).Scan(&rows).Error
-	return rows, err
+		Where("player_name != ''").Group("player_name").Order("install_count DESC").Limit(limit).Scan(&rawRows).Error; err != nil {
+		return nil, err
+	}
+	rows := make([]ClientDistPlayerAnalysis, 0, len(rawRows))
+	for _, row := range rawRows {
+		rows = append(rows, ClientDistPlayerAnalysis{
+			PlayerName: row.PlayerName, InstallCount: row.InstallCount, MachineCount: row.MachineCount,
+			IPCount: row.IPCount, KeyCount: row.KeyCount, ChannelCount: row.ChannelCount,
+			RiskScore: row.RiskScore, LastSeen: parseSecurityAggregateTime(row.LastSeen),
+		})
+	}
+	return rows, nil
+}
+
+func parseSecurityAggregateTime(v string) time.Time {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return time.Time{}
+	}
+	layouts := []string{time.RFC3339Nano, "2006-01-02 15:04:05.999999999-07:00", "2006-01-02 15:04:05.999999999Z07:00", "2006-01-02 15:04:05.999999999"}
+	for _, layout := range layouts {
+		if ts, err := time.Parse(layout, v); err == nil {
+			return ts.UTC()
+		}
+	}
+	return time.Time{}
 }
 
 func manifestFilesContainSHA(files []ManifestFile, sha string) bool {

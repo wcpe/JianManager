@@ -60,6 +60,29 @@ func TestUpdaterCore_Endpoint_AuthBoundary(t *testing.T) {
 	require.NotZero(t, resp["size"])
 }
 
+func TestUpdaterCore_DefaultArchiveCanBeDownloaded(t *testing.T) {
+	db := setupTestDB(t)
+	r, versionSvc := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	const channelID = "core-default"
+	key := createChannelAndKey(t, r, token, channelID)
+	archiveTestCore(t, versionSvc, "core-jar-v1", "1")
+	shaV2 := archiveTestCore(t, versionSvc, "core-jar-v2", "2")
+
+	req := httptest.NewRequest("GET", "/api/v1/client-channels/"+channelID+"/updater-core", nil)
+	req.Header.Set("X-Client-Key", key)
+	core := serveNoAuth(r, req)
+	require.Equal(t, http.StatusOK, core.Code, core.Body.String())
+	resp := parseJSON(t, core)
+	require.Equal(t, shaV2, resp["sha256"])
+
+	download := httptest.NewRequest("GET", "/api/v1/client-artifacts/"+shaV2, nil)
+	download.Header.Set("X-Client-Key", key)
+	w := serveNoAuth(r, download)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Equal(t, "core-jar-v2", w.Body.String())
+}
+
 // TestUpdaterCore_Endpoint_NoArchive 频道有 key 但无 core 归档 → 404。
 func TestUpdaterCore_Endpoint_NoArchive(t *testing.T) {
 	db := setupTestDB(t)

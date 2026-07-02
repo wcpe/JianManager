@@ -275,7 +275,7 @@ func runtimeLagDist(states []model.ClientRuntimeState, latest map[string]int) []
 }
 
 func (s *ClientRuntimeStateService) updateSeries(channelID string, from, to time.Time) ([]RuntimeUpdateSeriesPoint, float64, float64, error) {
-	q := s.db.Where("created_at >= ? AND created_at < ?", from, to)
+	q := s.db.Where("created_at >= ? AND created_at <= ?", from, to.Add(time.Second))
 	if channelID != "" {
 		q = q.Where("channel_id = ?", channelID)
 	}
