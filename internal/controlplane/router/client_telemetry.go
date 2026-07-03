@@ -53,10 +53,12 @@ func (h *ClientTelemetryHandler) Post(c *gin.Context) {
 	var body telemetryBody
 	_ = c.ShouldBindJSON(&body) // 容忍部分字段缺失：遥测尽力收集，不因 body 不全拒绝。
 	if h.svc != nil {
+		machineID := c.GetHeader(machineIDHeader)
+		playerName := h.playerNameFromRequest(c, body.Channel, machineID)
 		_ = h.svc.Record(service.ClientTelemetryInput{
 			ChannelID:   body.Channel,
-			MachineID:   c.GetHeader(machineIDHeader),
-			PlayerName:  c.GetHeader(playerNameHeader),
+			MachineID:   machineID,
+			PlayerName:  playerName,
 			IP:          c.ClientIP(),
 			Result:      body.Result,
 			FromVersion: body.FromVersion,
@@ -75,4 +77,14 @@ func (h *ClientTelemetryHandler) Post(c *gin.Context) {
 // RegisterRoutes 注册遥测端点（须挂面向玩家公网组：拉取密钥鉴权 + L7 守卫）。
 func (h *ClientTelemetryHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.POST("/client-telemetry", h.Post)
+}
+
+func (h *ClientTelemetryHandler) playerNameFromRequest(c *gin.Context, channelID, machineID string) string {
+	if v := c.GetHeader(playerNameHeader); v != "" {
+		return v
+	}
+	if h.security == nil {
+		return ""
+	}
+	return h.security.ResolveProfilePlayerName(channelID, machineID, c.GetHeader(installIDHeader))
 }

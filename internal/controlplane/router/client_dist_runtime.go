@@ -17,11 +17,16 @@ type ClientDistRuntimeHandler struct {
 	tracking *service.ClientDistTrackingService
 	channel  *service.ClientChannelService
 	audit    *service.AuditService
+	security *service.ClientDistSecurityService
 }
 
 // NewClientDistRuntimeHandler 创建 FR-265 观测处理器。
-func NewClientDistRuntimeHandler(runtime *service.ClientRuntimeStateService, tracking *service.ClientDistTrackingService, channel *service.ClientChannelService, audit *service.AuditService) *ClientDistRuntimeHandler {
-	return &ClientDistRuntimeHandler{runtime: runtime, tracking: tracking, channel: channel, audit: audit}
+func NewClientDistRuntimeHandler(runtime *service.ClientRuntimeStateService, tracking *service.ClientDistTrackingService, channel *service.ClientChannelService, audit *service.AuditService, security ...*service.ClientDistSecurityService) *ClientDistRuntimeHandler {
+	var sec *service.ClientDistSecurityService
+	if len(security) > 0 {
+		sec = security[0]
+	}
+	return &ClientDistRuntimeHandler{runtime: runtime, tracking: tracking, channel: channel, audit: audit, security: sec}
 }
 
 // RegisterAdminRoutes 注册平台管理员观测端点。
@@ -58,12 +63,23 @@ func (h *ClientDistRuntimeHandler) Heartbeat(c *gin.Context) {
 	}
 	var body runtimeHeartbeatBody
 	_ = c.ShouldBindJSON(&body)
+	machineID := c.GetHeader(machineIDHeader)
 	_ = h.runtime.RecordHeartbeat(service.ClientRuntimeHeartbeatInput{
-		ChannelID: channelID, MachineID: c.GetHeader(machineIDHeader), PlayerName: c.GetHeader(playerNameHeader), IP: c.ClientIP(),
+		ChannelID: channelID, MachineID: machineID, PlayerName: h.playerNameFromRequest(c, channelID, machineID), IP: c.ClientIP(),
 		Platform: body.Platform, JavaVersion: body.JavaVersion, Launcher: body.Launcher,
 		CoreVersion: body.CoreVersion, LocalVersion: body.LocalVersion,
 	})
 	c.Status(http.StatusAccepted)
+}
+
+func (h *ClientDistRuntimeHandler) playerNameFromRequest(c *gin.Context, channelID, machineID string) string {
+	if v := c.GetHeader(playerNameHeader); v != "" {
+		return v
+	}
+	if h.security == nil {
+		return ""
+	}
+	return h.security.ResolveProfilePlayerName(channelID, machineID, c.GetHeader(installIDHeader))
 }
 
 // Clients 查询客户端运行态聚合（FR-265）。

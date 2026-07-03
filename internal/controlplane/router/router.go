@@ -117,7 +117,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			NewClientTelemetryHandler(svcs.ClientTelemetry, svcs.ClientChannel, svcs.ClientDistSecurity).RegisterRoutes(consumerGroup)
 		}
 		if svcs.ClientRuntimeState != nil {
-			NewClientDistRuntimeHandler(svcs.ClientRuntimeState, svcs.ClientDistTracking, svcs.ClientChannel, svcs.Audit).RegisterConsumerRoutes(consumerGroup)
+			NewClientDistRuntimeHandler(svcs.ClientRuntimeState, svcs.ClientDistTracking, svcs.ClientChannel, svcs.Audit, svcs.ClientDistSecurity).RegisterConsumerRoutes(consumerGroup)
 		}
 		if svcs.ClientDistSecurity != nil {
 			NewClientSecurityHandler(svcs.ClientDistSecurity).RegisterConsumerRoutes(consumerGroup)
@@ -381,7 +381,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		// 客户端分发运行态与请求近实时观测（FR-265）：客户端 Tab 独立使用运行态表，日志/实时只读分发事件。
 		if svcs.ClientRuntimeState != nil && svcs.ClientDistTracking != nil {
-			NewClientDistRuntimeHandler(svcs.ClientRuntimeState, svcs.ClientDistTracking, svcs.ClientChannel, svcs.Audit).RegisterAdminRoutes(admin)
+			NewClientDistRuntimeHandler(svcs.ClientRuntimeState, svcs.ClientDistTracking, svcs.ClientChannel, svcs.Audit, svcs.ClientDistSecurity).RegisterAdminRoutes(admin)
 		}
 
 		// 客户端更新器接入引导：内嵌 wedge/updater-core jar 版本查询 + 下载（FR-107）。

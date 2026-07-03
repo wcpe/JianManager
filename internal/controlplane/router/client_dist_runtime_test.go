@@ -25,7 +25,8 @@ func setupRuntimeRouter(t *testing.T, db *gorm.DB) *gin.Engine {
 	svcs := &Services{
 		Auth: service.NewAuthService(db, jwtCfg), User: service.NewUserService(db), Authz: service.NewAuthzService(db), Audit: service.NewAuditService(db),
 		ClientChannel: channelSvc, ClientDistTracking: service.NewClientDistTrackingService(db), ClientRuntimeState: service.NewClientRuntimeStateService(db),
-		ClientTelemetry: service.NewClientTelemetryService(db),
+		ClientTelemetry:    service.NewClientTelemetryService(db),
+		ClientDistSecurity: service.NewClientDistSecurityService(db, channelSvc, nil),
 	}
 	return Setup(svcs, jwtCfg.Secret)
 }
@@ -64,6 +65,38 @@ func TestClientRuntimeHeartbeatEndpoint_RecordsState(t *testing.T) {
 	require.Equal(t, "windows", st.Platform)
 	require.Equal(t, "1.2.3", st.CoreVersion)
 	require.Equal(t, 7, st.LocalVersion)
+}
+
+func TestClientRuntimeHeartbeatEndpoint_BackfillsPlayerFromSecurityProfile(t *testing.T) {
+	db := setupTestDB(t)
+	seedRuntimeChannel(t, db)
+	now := time.Now()
+	require.NoError(t, db.Create(&model.ClientSecurityProfile{ChannelID: "stable", MachineID: "machine-a", InstallID: "install-a", PlayerName: "Steve", FirstSeen: now, LastSeen: now}).Error)
+	r := setupRuntimeRouter(t, db)
+
+	body := map[string]any{"platform": "windows", "javaVersion": "21", "launcher": "hmcl", "coreVersion": "1.2.3", "localVersion": 7}
+	w := makeRuntimeRequest(r, "POST", "/api/v1/client-channels/stable/telemetry/heartbeat", body, map[string]string{"X-Client-Key": "secret", "X-Machine-Id": "machine-a", "X-Install-Id": "install-a"})
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+
+	var st model.ClientRuntimeState
+	require.NoError(t, db.Where("channel_id = ? AND machine_id = ?", "stable", "machine-a").First(&st).Error)
+	require.Equal(t, "Steve", st.PlayerName)
+}
+
+func TestClientTelemetryEndpoint_BackfillsPlayerFromSecurityProfile(t *testing.T) {
+	db := setupTestDB(t)
+	seedRuntimeChannel(t, db)
+	now := time.Now()
+	require.NoError(t, db.Create(&model.ClientSecurityProfile{ChannelID: "stable", MachineID: "machine-a", InstallID: "install-a", PlayerName: "Steve", FirstSeen: now, LastSeen: now}).Error)
+	r := setupRuntimeRouter(t, db)
+
+	body := map[string]any{"channel": "stable", "result": "success", "fromVersion": 6, "toVersion": 7, "os": "windows", "bootSuccess": true}
+	w := makeRuntimeRequest(r, "POST", "/api/v1/client-telemetry", body, map[string]string{"X-Client-Key": "secret", "X-Machine-Id": "machine-a", "X-Install-Id": "install-a"})
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+
+	var tel model.ClientTelemetry
+	require.NoError(t, db.Where("channel_id = ? AND machine_id = ?", "stable", "machine-a").First(&tel).Error)
+	require.Equal(t, "Steve", tel.PlayerName)
 }
 
 func TestClientRuntimeAdminEndpoints_QueryBoundaries(t *testing.T) {
@@ -107,9 +140,9 @@ func TestClientDistEventDetailEndpoint_ShowsRequestAndResponseDetails(t *testing
 	require.NoError(t, tracking.Record(service.ClientDistEventInput{
 		ChannelID: "stable", MachineID: "m1", IP: "127.0.0.1", Kind: "manifest", Status: 401,
 		Method: "GET", Path: "/api/v1/client-channels/stable/manifest?debug=1",
-		RequestHeaders: map[string]string{"X-Client-Key": "secret", "Authorization": "bearer secret", "X-Debug-Trace": "linux"},
+		RequestHeaders:  map[string]string{"X-Client-Key": "secret", "Authorization": "bearer secret", "X-Debug-Trace": "linux"},
 		ResponseHeaders: map[string]string{"Content-Type": "application/json", "X-Err-Code": "INVALID_CLIENT_KEY"},
-		ResponseBody: `{"error":"INVALID_CLIENT_KEY","message":"拉取密钥无效"}`,
+		ResponseBody:    `{"error":"INVALID_CLIENT_KEY","message":"拉取密钥无效"}`,
 	}))
 
 	var ev model.ClientDistEvent

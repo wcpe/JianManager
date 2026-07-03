@@ -174,6 +174,18 @@ func (s *ClientDistSecurityService) RecordHello(in ClientSecurityHelloInput, key
 	return nil
 }
 
+func (s *ClientDistSecurityService) ResolveProfilePlayerName(channelID, machineID, installID string) string {
+	if s == nil || channelID == "" || machineID == "" || installID == "" {
+		return ""
+	}
+	var profile model.ClientSecurityProfile
+	err := s.db.Select("player_name").Where("channel_id = ? AND machine_id = ? AND install_id = ?", channelID, machineID, installID).First(&profile).Error
+	if err != nil {
+		return ""
+	}
+	return profile.PlayerName
+}
+
 func (s *ClientDistSecurityService) RecordRiskEvent(code, channelID, machineID, installID, playerName, ip string, key *model.ClientPullKey, severity string, detail any) error {
 	raw, _ := json.Marshal(detail)
 	if severity == "" {
