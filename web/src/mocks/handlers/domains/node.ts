@@ -302,6 +302,17 @@ export const handlers = [
       : HttpResponse.json({ alive: false, latencyMs: 0, error: '节点未连接' })
   }),
 
+  domainRoute('post', '/nodes/:id/docker/check', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number((info.params as { id: string }).id)
+    const n = nodes.get(id)
+    if (!n) return HttpResponse.json({ error: 'NOT_FOUND', message: '节点不存在' }, { status: 404 })
+    return n.status === 1
+      ? HttpResponse.json({ available: true, version: '29.4.1' })
+      : HttpResponse.json({ error: 'NODE_OFFLINE', message: '节点未连接' }, { status: 503 })
+  }),
+
   /* ===================== nodes（FR-048 / FR-080 / FR-185） ===================== */
   domainRoute('get', '/nodes', (info) => {
     const denied = requireAuth(info)

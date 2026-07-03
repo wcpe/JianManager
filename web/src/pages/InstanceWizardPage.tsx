@@ -72,9 +72,12 @@ export default function InstanceWizardPage() {
   const { data: jdks } = useNodeJDKs(nodeId ? Number(nodeId) : 0)
 
   const isDocker = processType === 'docker'
-  // Docker 可用性检测（FR-237）：选 docker 且已选节点时探目标节点，不可用则阻止提交并提示。
+  // Docker 可用性检测（FR-237）：选 docker 且已选节点时探目标节点，不可用或检测失败均阻止提交并提示。
   const dockerCheck = useNodeDockerCheck(nodeId ? Number(nodeId) : 0, isDocker)
-  const dockerBlocked = isDocker && dockerCheck.data != null && !dockerCheck.data.available
+  const dockerUnavailable = dockerCheck.data != null && !dockerCheck.data.available
+  const dockerCheckFailed = dockerCheck.isError
+  const dockerChecking = isDocker && dockerCheck.isFetching
+  const dockerBlocked = isDocker && (dockerUnavailable || dockerCheckFailed)
 
   const nodeOptions: ComboboxOption[] = buildNodeOptions(nodes, {
     online: t('nodes.online'),
@@ -121,7 +124,7 @@ export default function InstanceWizardPage() {
   const stepValid = (k: StepKey): boolean => {
     if (k === 'basic') return !errors.name && !errors.nodeId
     if (k === 'launch') return !errors.startCommand
-    if (k === 'advanced') return !errors.image && !errors.cpuLimit && !errors.memLimitMb && !dockerBlocked
+    if (k === 'advanced') return !errors.image && !errors.cpuLimit && !errors.memLimitMb && !dockerChecking && !dockerBlocked
     return true
   }
 

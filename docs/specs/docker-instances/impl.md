@@ -1,6 +1,6 @@
 # 实施计划 — FR-078 Docker 容器化实例运行 + 镜像管理 + 端口映射
 
-> 关联 FR: FR-078 | 优先级: P1 | 状态: 🔨 in-progress | 关联 ADR: ADR-019（依赖 ADR-003/008/010、FR-005/032）
+> 关联 FR: FR-078 | 优先级: P1 | 状态: 已实现待发版 | 关联 ADR: ADR-019（依赖 ADR-003/008/010、FR-005/032）
 
 ## 背景
 
@@ -39,13 +39,13 @@
 - [x] `model.Instance` 加 `Image`/`ContainerID`（AutoMigrate 自动建列）。
 - [x] `service.CreateInstanceRequest` + router 加 `image`；`registerOnWorker` 下发 `image` 与派生 `port_mappings`（`dockerPortMappings`）。
 - [x] `service/docker_image.go` + `router/docker_image.go`：节点级镜像列出/拉取/删除端点；wire 进 router.go + main.go。
-- [x] 前端建实例对话框：docker 模式显示镜像输入（必填校验），提交下发 image；i18n 仅加自有键。
+- [x] 创建实例向导：docker 模式显示镜像输入（必填校验）与 Docker 检测提示，提交下发 image/envVars；i18n 仅加自有键。
 
 ### 5. 文档同步与验证
 - [x] ARCHITECTURE：进程模型加 docker 策略生命周期、gRPC 加镜像 RPC、instances 表加 image/container_id。
 - [x] API.md：POST /instances 加 image、新增镜像管理端点。
 - [x] CHANGELOG `[Unreleased]` 追加。
-- [x] 真机：dockerStrategy 全生命周期经真 Docker 守护进程跑通（拉镜像→创建[卷挂载+端口映射]→attach→stdin/stdout→停止→清理）+ 镜像管理列出/拉取真机验，门控测试 `-tags docker_integration`（见 `docker_realmachine_test.go`）。**注**：用 alpine 轻量镜像验证容器化链路本身；MC 镜像（itzg/minecraft-server）「拉镜像→映射端口→进服」走同一代码路径，待主控用真 MC 镜像 + 浏览器终端复验进服。
+- [x] 真机：dockerStrategy 全生命周期经真 Docker 守护进程跑通（拉镜像→创建[卷挂载+端口映射]→attach→stdin/stdout→停止→清理）+ 镜像管理列出/拉取真机验，门控测试 `-tags docker_integration`（见 `docker_realmachine_test.go`）。一键 Minecraft 真机复验已在 `docs/specs/docker-mc-quick-deploy/spec.md` 记录：itzg 镜像 + `EULA=TRUE` + 空启动命令可建出 RUNNING 容器。
 
 ## 完成判据
 

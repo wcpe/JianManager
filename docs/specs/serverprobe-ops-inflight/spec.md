@@ -27,11 +27,11 @@ ServerProbe 治理桥与运营底座增强（4 里程碑程序）源于 2026-06-
 - **优先级**: P1 | **依赖**: FR-005, FR-032 | **关联 ADR**: ADR-019, ADR-003（docker 不在其范围，本 FR 落地） | **备注**: 当前 `internal/worker/process/docker.go` 为占位实现
 - **描述**: dockerStrategy 真实现（取代当前 ErrNotImplemented 占位），Worker 经本机 Docker SDK 管容器，镜像管理 + 端口映射
 - **验收**:
-  - [ ] 先写 **ADR-019**（Worker 经本机 Docker SDK 管容器，守架构边界——管本机容器、不暴露新网络面；镜像/端口/资源模型）
-  - [ ] dockerStrategy 真实现：create/start/stop/kill/exec 经 Docker SDK
-  - [ ] 镜像管理：拉取/列出/删除本地镜像，建实例选镜像（默认 Docker Hub，registry 可配）
-  - [ ] 端口映射：容器↔宿主（复用 FR-032 端口池）；容器 stdio 接终端（attach）+ 日志采集（FR-049）；纳入状态机/监控/备份（卷挂载）
-  - [ ] 真机：Docker 模式建+启 MC 实例（拉镜像→映射端口→终端见日志→可进服），停/删干净
+  - [x] 先写 **ADR-019**（Worker 经本机 Docker SDK 管容器，守架构边界——管本机容器、不暴露新网络面；镜像/端口/资源模型）
+  - [x] dockerStrategy 真实现：create/start/stop/kill/exec 经 Docker SDK
+  - [x] 镜像管理：拉取/列出/删除本地镜像，建实例选镜像（默认 Docker Hub，registry 可配）
+  - [x] 端口映射：容器↔宿主（复用 FR-032 端口池）；容器 stdio 接终端（attach）+ 日志采集（FR-049）；纳入状态机/监控/备份（卷挂载）
+  - [x] 真机：Docker 模式建+启 MC 实例（拉镜像→映射端口→终端见日志→可进服），停/删干净
 
 #### FR-079: 实例级资源限额（Docker 模式）
 - **优先级**: P1 | **依赖**: FR-078 | **关联 ADR**: ADR-019

@@ -1,6 +1,6 @@
 # Docker 实例修通 + 一键 Minecraft 傻瓜建服 + Docker 检测（FR-078 续 / FR-236 / FR-237）
 
-> 状态：开发中 · 完成 FR-078（容器化实例运行）· 新 FR-237（Docker 检测）· FR-236 docker 傻瓜建服
+> 状态：已实现待发版 · 完成 FR-078（容器化实例运行）· FR-237（Docker 检测）· FR-236 docker 傻瓜建服
 > 关联 ADR-019（Docker 策略）/ ADR-003（区别：docker 不叠 daemon wrapper）
 
 ## 1. 背景与根因（已真机证）
@@ -36,14 +36,14 @@ Docker **容器引擎链路本身是通的**——`dockerStrategy` 真机集成�
 ### 2.3 FR-237 Docker 可用性检测 + 引导
 
 - **Worker**：新增轻量 RPC `CheckDocker`（或复用现有探测）→ 返回 `available`/`version`/`error`（探本机 Docker 守护进程，复用 `dockerClientFromEnv` + `ServerVersion`）。
-- **CP**：`POST /nodes/:id/docker-check` 委托 Worker，返回 `{available, version, error}`；节点离线 503。
+- **CP**：`POST /nodes/:id/docker/check` 委托 Worker，返回 `{available, version, error}`；节点离线 503。
 - **向导**：选 docker 模式时探目标节点 docker，可用则显「Docker vX 可用」、不可用则禁用 docker 提交并提示「该节点未检测到 Docker」；与 FR-229「连通性测试族」同范式（复用 `PingNodeButton` 风格组件）。
 
 ## 3. 验收
 
-- [ ] 后端：docker 实例可空 `startCommand` 创建成功；非 docker 仍校验必填（单测）。
-- [ ] 一键 Minecraft：向导 `processType=docker`+MC 点预设 → image=itzg、envVars 含 `EULA=TRUE`、空命令、端口映射就绪（前端单测/组件测）。
-- [ ] FR-237：`POST /nodes/:id/docker-check` 有 docker 返 available+version、无返 available=false+error、离线 503（后端单测）；向导 docker 不可用禁用+提示（组件测）。
+- [x] 后端：docker 实例可空 `startCommand` 创建成功；非 docker 仍校验必填（`TestCreate_DockerAllowsEmptyStartCommand` 等单测）。
+- [x] 一键 Minecraft：向导 `processType=docker`+MC 点预设 → image=itzg、envVars 含 `EULA=TRUE`、空命令、端口映射就绪（`InstanceWizardPage.dom.test.tsx`）。
+- [x] FR-237：`POST /nodes/:id/docker/check` 有 docker 返 available+version、无返 available=false+error、离线 503；向导 Docker 不可用 / 检测失败 / 检测未完成均禁用继续并提示（后端实现 + `InstanceWizardPage.dom.test.tsx`）。
 - [x] **真机根因证**：`docker run itzg/minecraft-server` 无 EULA → EULA 错误退出；带 `-e EULA=TRUE` → 越过 EULA、`Downloading server`（2026-06-30）。
 - [x] **真机验（FR-078/236）**：本机 Docker 节点经向导「一键 Minecraft」建 docker MC 实例（**空启动命令被接受**）→ 启动 → `docker ps` 见 `jianmanager-<uuid>` 容器 RUNNING（Up，25565/tcp）、itzg **越过 EULA** 下载启动服务端（`Resolved version … Downloading … server`）、UI 实例转 RUNNING（2026-06-30）。
 - [x] **真机验（FR-237）**：创建向导选 docker 模式进高级步 → 自动探节点 Docker → 横幅显示「Docker 29.4.1 可用」（2026-06-30）；不可用节点由 `stepValid` 阻止提交（gating 逻辑覆盖，本机仅有 docker 节点故未真机走不可用分支）。
