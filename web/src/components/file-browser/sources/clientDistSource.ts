@@ -19,6 +19,14 @@ import {
 } from '@/api/clientVersions'
 import type { FileBrowserSource, FileEntry, PreviewContent } from '../types'
 
+type ApiError = Error & { response?: { status?: number; data?: { error?: string } } }
+
+export interface ClientDistSourceMessages {
+  noArtifactContent?: string
+  artifactMissing?: string
+  artifactPreviewFailed?: string
+}
+
 /**
  * 客户端分发数据源的最小文件输入（与 {@link ManifestFile} / 发布草稿兼容）。
  * 各调用方把自身形态（version 详情 `ManifestFile` / 发布草稿 `DraftFile`）映射到此最小集合。
@@ -51,7 +59,11 @@ function baseName(path: string): string {
  *
  * 缺制品 sha（如 `sync=ignore` 的占位文件无 artifact）→ readContent 返回错误占位、download 不触发。
  */
-export function clientDistSource(channelId: string, files: ClientDistFile[]): FileBrowserSource {
+export function clientDistSource(
+  channelId: string,
+  files: ClientDistFile[],
+  messages: ClientDistSourceMessages = {},
+): FileBrowserSource {
   // path → 文件，供 readContent/download 据条目 path 反查制品 sha（FileEntry 不带 sha）。
   const byPath = new Map<string, ClientDistFile>()
   for (const f of files) byPath.set(f.path, f)
@@ -63,9 +75,18 @@ export function clientDistSource(channelId: string, files: ClientDistFile[]): Fi
     readContent: async (entry: FileEntry): Promise<PreviewContent> => {
       const f = byPath.get(entry.path)
       if (!f || !f.artifactSha) {
-        return { kind: 'error', message: '该文件无可预览的制品内容' }
+        return { kind: 'error', message: messages.noArtifactContent ?? '该文件无可预览的制品内容' }
       }
-      const res = await fetchClientArtifactContent(channelId, f.artifactSha)
+      let res
+      try {
+        res = await fetchClientArtifactContent(channelId, f.artifactSha)
+      } catch (err) {
+        const apiErr = err as ApiError
+        if (apiErr.response?.status === 404 || apiErr.response?.data?.error === 'ARTIFACT_NOT_FOUND') {
+          return { kind: 'error', message: messages.artifactMissing ?? '制品内容不存在，可能已从制品库删除。' }
+        }
+        return { kind: 'error', message: messages.artifactPreviewFailed ?? '读取制品内容失败。' }
+      }
       if (res.kind === 'text') return { kind: 'text', content: res.content ?? '' }
       if (res.kind === 'too-large') return { kind: 'too-large', size: res.size }
       return { kind: 'binary' }

@@ -188,7 +188,13 @@ func (h *AssetHandler) Delete(c *gin.Context) {
 		case errors.Is(err, service.ErrAssetNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "资产不存在"})
 		case errors.Is(err, service.ErrAssetInUse):
-			c.JSON(http.StatusConflict, gin.H{"error": "ASSET_IN_USE", "message": err.Error()})
+			var inUse *service.AssetInUseError
+			body := gin.H{"error": "ASSET_IN_USE", "message": err.Error()}
+			if errors.As(err, &inUse) {
+				body["reason"] = inUse.Reason
+				body["count"] = inUse.Count
+			}
+			c.JSON(http.StatusConflict, body)
 		default:
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "删除资产失败"})
 		}

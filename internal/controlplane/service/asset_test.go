@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +23,7 @@ func newAssetSvc(t *testing.T) (*AssetService, *dataroot.Root) {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Asset{}))
+	require.NoError(t, db.AutoMigrate(&model.Asset{}, &model.ClientChannel{}, &model.ClientVersion{}))
 	root, err := dataroot.Init(filepath.Join(t.TempDir(), "data"))
 	require.NoError(t, err)
 	return NewAssetService(db, root), root
@@ -192,6 +193,33 @@ func TestDelete_RefProtection(t *testing.T) {
 	_, err = svc.GetByID(asset.ID)
 	require.ErrorIs(t, err, ErrAssetNotFound)
 	require.NoFileExists(t, abs)
+}
+
+func TestDelete_RejectsPublishedClientFile(t *testing.T) {
+	svc, _ := newAssetSvc(t)
+	asset, err := svc.Ingest(strings.NewReader("client-file"), IngestParams{Type: model.AssetTypeClientFile, Filename: "mod.jar"})
+	require.NoError(t, err)
+
+	files := []ManifestFile{{
+		Path:     "mods/mod.jar",
+		SHA256:   "raw-sha",
+		MD5:      "raw-md5",
+		Size:     11,
+		Sync:     "strict",
+		Platform: "",
+		Artifact: ManifestArtifact{SHA256: asset.SHA256, Size: asset.Size, Codec: "none"},
+	}}
+	raw, err := json.Marshal(files)
+	require.NoError(t, err)
+	require.NoError(t, svc.db.Create(&model.ClientVersion{ChannelID: "pack", Version: 1, FilesJSON: string(raw), ManagedDirsJSON: "[]"}).Error)
+
+	err = svc.Delete(asset.ID)
+	require.ErrorIs(t, err, ErrAssetInUse)
+	var inUse *AssetInUseError
+	require.ErrorAs(t, err, &inUse)
+	require.Equal(t, AssetInUsePublishedClientFile, inUse.Reason)
+	require.Equal(t, int64(1), inUse.Count)
+	require.FileExists(t, svc.AbsPath(asset))
 }
 
 func TestDelete_NotFound(t *testing.T) {

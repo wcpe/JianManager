@@ -180,6 +180,9 @@ func TestDelete_RejectsEmbeddedUpdaterCore(t *testing.T) {
 
 	err = assetSvc.Delete(a.ID)
 	require.ErrorIs(t, err, ErrAssetInUse)
+	var inUse *AssetInUseError
+	require.ErrorAs(t, err, &inUse)
+	require.Equal(t, AssetInUseEmbeddedUpdaterCore, inUse.Reason)
 }
 
 func TestDelete_RejectsSelectedUpdaterCore(t *testing.T) {
@@ -197,4 +200,8 @@ func TestDelete_RejectsSelectedUpdaterCore(t *testing.T) {
 
 	err = assetSvc.Delete(a.ID)
 	require.ErrorIs(t, err, ErrAssetInUse)
+	var inUse *AssetInUseError
+	require.ErrorAs(t, err, &inUse)
+	require.Equal(t, AssetInUseSelectedUpdaterCore, inUse.Reason)
+	require.Equal(t, int64(1), inUse.Count)
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +32,36 @@ var (
 	// ErrChecksumMismatch 校验和不符，拒绝入库。
 	ErrChecksumMismatch = errors.New("校验和不符")
 )
+
+const (
+	// AssetInUseRefCount 表示资产仍有显式引用计数。
+	AssetInUseRefCount = "REF_COUNT"
+	// AssetInUseEmbeddedUpdaterCore 表示资产是面板内置 updater-core 归档。
+	AssetInUseEmbeddedUpdaterCore = "EMBEDDED_UPDATER_CORE"
+	// AssetInUseSelectedUpdaterCore 表示资产正被频道选为 updater-core。
+	AssetInUseSelectedUpdaterCore = "SELECTED_UPDATER_CORE"
+	// AssetInUsePublishedClientFile 表示资产仍被客户端发布版本引用。
+	AssetInUsePublishedClientFile = "PUBLISHED_CLIENT_FILE"
+)
+
+// AssetInUseError 携带资产删除保护的结构化原因，供前端展示准确 i18n 文案。
+type AssetInUseError struct {
+	Reason string
+	Count  int64
+	Msg    string
+}
+
+func (e *AssetInUseError) Error() string {
+	if e == nil {
+		return ErrAssetInUse.Error()
+	}
+	if e.Msg != "" {
+		return ErrAssetInUse.Error() + ": " + e.Msg
+	}
+	return ErrAssetInUse.Error()
+}
+
+func (e *AssetInUseError) Unwrap() error { return ErrAssetInUse }
 
 // AssetService 制品库服务：类型分区的内容寻址存储（CAS）+ DB 索引。
 // 参见 ADR-011: 资产存 var/artifacts/<type>/<sha256[:2]>/<sha256><ext>，
@@ -284,7 +315,7 @@ func (s *AssetService) Delete(id uint) error {
 		return err
 	}
 	if asset.RefCount > 0 {
-		return fmt.Errorf("%w: 当前引用数 %d", ErrAssetInUse, asset.RefCount)
+		return &AssetInUseError{Reason: AssetInUseRefCount, Count: int64(asset.RefCount), Msg: fmt.Sprintf("当前引用数 %d", asset.RefCount)}
 	}
 	if err := s.ensureAssetDeletable(asset); err != nil {
 		return err
@@ -306,8 +337,17 @@ func (s *AssetService) AbsPath(a *model.Asset) string {
 	return s.root.Abs(a.RelPath)
 }
 
-// ensureAssetDeletable 阻止删除平台运行依赖的内置 updater-core 归档。
+// ensureAssetDeletable 阻止删除平台运行或客户端发布版本仍依赖的资产。
 func (s *AssetService) ensureAssetDeletable(asset *model.Asset) error {
+	if asset.Type == model.AssetTypeClientFile {
+		count, err := s.countClientVersionReferences(asset.SHA256)
+		if err != nil {
+			return err
+		}
+		if count > 0 {
+			return &AssetInUseError{Reason: AssetInUsePublishedClientFile, Count: count, Msg: fmt.Sprintf("客户端发布版本仍引用 %d 处", count)}
+		}
+	}
 	if asset.Type != model.AssetTypeClientUpdaterCore {
 		return nil
 	}
@@ -316,12 +356,32 @@ func (s *AssetService) ensureAssetDeletable(asset *model.Asset) error {
 		return fmt.Errorf("检查 updater-core 引用失败: %w", err)
 	}
 	if selectedCount > 0 {
-		return fmt.Errorf("%w: updater-core 正被 %d 个频道选定", ErrAssetInUse, selectedCount)
+		return &AssetInUseError{Reason: AssetInUseSelectedUpdaterCore, Count: selectedCount, Msg: fmt.Sprintf("updater-core 正被 %d 个频道选定", selectedCount)}
 	}
 	if strings.Contains(asset.Metadata, `"source":"embedded-updater-core"`) {
-		return fmt.Errorf("%w: 内置 updater-core 由面板启动归档，禁止从制品库删除", ErrAssetInUse)
+		return &AssetInUseError{Reason: AssetInUseEmbeddedUpdaterCore, Msg: "内置 updater-core 由面板启动归档，禁止从制品库删除"}
 	}
 	return nil
+}
+
+func (s *AssetService) countClientVersionReferences(sha string) (int64, error) {
+	var versions []model.ClientVersion
+	if err := s.db.Select("files_json").Find(&versions).Error; err != nil {
+		return 0, fmt.Errorf("检查客户端版本引用失败: %w", err)
+	}
+	var count int64
+	for i := range versions {
+		var files []ManifestFile
+		if err := json.Unmarshal([]byte(versions[i].FilesJSON), &files); err != nil {
+			return 0, fmt.Errorf("解析客户端版本文件清单失败: %w", err)
+		}
+		for _, f := range files {
+			if f.Artifact.SHA256 == sha {
+				count++
+			}
+		}
+	}
+	return count, nil
 }
 
 // casRelPath 计算资产相对数据根的 CAS 路径：

@@ -157,8 +157,12 @@ function VersionDetailDialog({ channelId, version, onClose }: { channelId: strin
 
   // 预览数据源：把版本清单映射为客户端分发数据源（按文件 path → artifact sha 取内容/下载）。
   const previewSource = useMemo(
-    () => clientDistSource(channelId, manifestFilesToDistFiles(detail?.files ?? [])),
-    [channelId, detail?.files],
+    () => clientDistSource(channelId, manifestFilesToDistFiles(detail?.files ?? []), {
+      noArtifactContent: t('clientVersions.artifactNoContent', '该文件没有可预览的制品内容。'),
+      artifactMissing: t('clientVersions.artifactMissing', '制品内容不存在，可能已从制品库删除；该版本清单仍保留，但无法预览或下载。'),
+      artifactPreviewFailed: t('clientVersions.artifactPreviewFailed', '读取制品内容失败。'),
+    }),
+    [channelId, detail?.files, t],
   )
 
   return (

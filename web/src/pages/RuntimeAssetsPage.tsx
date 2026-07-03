@@ -29,7 +29,10 @@ import {
 
 /** API 错误形状（占用方提示从 message + instances 字段取）。 */
 type ApiError = Error & {
-  response?: { status?: number; data?: { message?: string; instances?: Array<{ name: string }> } }
+  response?: {
+    status?: number
+    data?: { message?: string; instances?: Array<{ name: string }>; reason?: string; count?: number }
+  }
 }
 
 /** 状态等级 → 色点类（实例状态前导点）。 */
@@ -439,7 +442,10 @@ function AssetRow({ asset }: { asset: AssetInfo }) {
       onSuccess: () => toast.success(t('runtimeAssets.assetDeleted')),
       onError: (err: ApiError) => {
         if (err.response?.status === 409) {
-          toast.error(t('runtimeAssets.assetInUse', { count: asset.refCount }))
+          const reason = err.response.data?.reason
+          const count = err.response.data?.count ?? asset.refCount
+          const key = reason ? `runtimeAssets.assetInUseReasons.${reason}` : 'runtimeAssets.assetInUse'
+          toast.error(t(key, { count, defaultValue: t('runtimeAssets.assetInUse', { count }) }))
         } else {
           toast.error(err.response?.data?.message || t('runtimeAssets.deleteFailed'))
         }

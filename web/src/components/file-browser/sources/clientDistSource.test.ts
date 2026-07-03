@@ -63,6 +63,13 @@ describe('clientDistSource 映射（FR-214）', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('readContent 制品 404 → 返回友好错误占位，不暴露 axios 默认报错', async () => {
+    fetchMock.mockRejectedValue({ response: { status: 404, data: { error: 'ARTIFACT_NOT_FOUND' } } })
+    const src = clientDistSource('ch1', FILES, { artifactMissing: '制品已缺失' })
+    const res = await src.readContent({ path: 'mods/foo.jar', name: 'foo.jar', isDir: false })
+    expect(res).toEqual({ kind: 'error', message: '制品已缺失' })
+  })
+
   it('download 经制品 sha 调下载端点、文件名取 path 末段', () => {
     const src = clientDistSource('ch1', FILES)
     src.download?.({ path: 'mods/foo.jar', name: 'foo.jar', isDir: false })

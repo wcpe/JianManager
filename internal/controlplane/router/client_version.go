@@ -52,6 +52,9 @@ const clientKeyHeader = "X-Client-Key"
 // machineIDHeader 玩家机器码请求头（contract §5，FR-092）。客户端生成、不可信，仅统计/辅助限流。
 const machineIDHeader = "X-Machine-Id"
 
+// playerNameHeader 玩家名请求头。客户端从 jm-updater.json 构造，不可信，仅用于观测与排障。
+const playerNameHeader = "X-Player-Name"
+
 // ---- 发布端点（JWT 平台管理员）----
 
 // PublishFile POST /client-channels/:id/files — 上传客户端文件制品（运营，平台管理员）。
