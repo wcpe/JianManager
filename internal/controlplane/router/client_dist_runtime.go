@@ -59,7 +59,7 @@ func (h *ClientDistRuntimeHandler) Heartbeat(c *gin.Context) {
 	var body runtimeHeartbeatBody
 	_ = c.ShouldBindJSON(&body)
 	_ = h.runtime.RecordHeartbeat(service.ClientRuntimeHeartbeatInput{
-		ChannelID: channelID, MachineID: c.GetHeader(machineIDHeader), IP: c.ClientIP(),
+		ChannelID: channelID, MachineID: c.GetHeader(machineIDHeader), PlayerName: c.GetHeader(playerNameHeader), IP: c.ClientIP(),
 		Platform: body.Platform, JavaVersion: body.JavaVersion, Launcher: body.Launcher,
 		CoreVersion: body.CoreVersion, LocalVersion: body.LocalVersion,
 	})

@@ -151,7 +151,31 @@ export interface ClientSecurityPrivacyNotice {
   retentionDays: number
 }
 
+export type ClientDistSecurityLogType = 'hello' | 'risk' | 'action' | 'request' | 'runtime' | 'telemetry'
+
+export interface ClientDistSecurityLogItem {
+  id: string
+  type: ClientDistSecurityLogType
+  title: string
+  channelId?: string
+  machineId?: string
+  playerName?: string
+  ip?: string
+  status?: string
+  errCode?: string
+  createdAt: string
+  detail: Record<string, unknown> | null
+}
+
+export interface ClientDistSecurityLogPage {
+  items: ClientDistSecurityLogItem[]
+  total: number
+  page: number
+  pageSize: number
+}
+
 export interface ClientDistSecurityListParams {
+  type?: ClientDistSecurityLogType | 'all'
   channelId?: string
   ip?: string
   keyId?: string | number
@@ -162,6 +186,8 @@ export interface ClientDistSecurityListParams {
   errCode?: string
   riskRule?: string
   limit?: number
+  page?: number
+  pageSize?: number
 }
 
 export interface BlockIPRequest {
@@ -207,6 +233,15 @@ export function useClientDistSecurityEvents(params: ClientDistSecurityListParams
   return useQuery({
     queryKey: [...securityKey, 'events', params],
     queryFn: async () => (await api.get<ClientDistSecurityEvent[]>('/client-dist/security/events', { params })).data,
+    retry: false,
+  })
+}
+
+export function useClientDistSecurityLogs(params: ClientDistSecurityListParams = {}) {
+  const queryParams = { ...params, type: params.type === 'all' ? undefined : params.type }
+  return useQuery({
+    queryKey: [...securityKey, 'logs', params],
+    queryFn: async () => (await api.get<ClientDistSecurityLogPage>('/client-dist/security/logs', { params: queryParams })).data,
     retry: false,
   })
 }

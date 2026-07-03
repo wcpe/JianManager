@@ -25,13 +25,16 @@ func TestClientTelemetry_RecordAndDailyAggregate(t *testing.T) {
 	db := newTelemetryDB(t)
 	svc := NewClientTelemetryService(db)
 
-	require.NoError(t, svc.Record(ClientTelemetryInput{ChannelID: "s1", Result: "success", ToVersion: 2}))
+	require.NoError(t, svc.Record(ClientTelemetryInput{ChannelID: "s1", PlayerName: "Alex", Result: "success", ToVersion: 2}))
 	require.NoError(t, svc.Record(ClientTelemetryInput{ChannelID: "s1", Result: "success", ToVersion: 2}))
 	require.NoError(t, svc.Record(ClientTelemetryInput{ChannelID: "s1", Result: "fail-static"}))
 
 	var raw int64
 	db.Model(&model.ClientTelemetry{}).Count(&raw)
 	require.Equal(t, int64(3), raw)
+	var first model.ClientTelemetry
+	require.NoError(t, db.Where("player_name = ?", "Alex").First(&first).Error)
+	require.Equal(t, "Alex", first.PlayerName)
 
 	var ok model.ClientTelemetryDaily
 	require.NoError(t, db.Where("channel_id = ? AND result = ?", "s1", "success").First(&ok).Error)

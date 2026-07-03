@@ -1764,6 +1764,9 @@
     "viewStructure": "结构",
     "viewPreview": "预览",
     "previewHint": "点左侧文件查看内容（文本/配置/JSON 高亮；二进制或过大文件仅可下载）。",
+    "artifactNoContent": "该文件没有可预览的制品内容。",
+    "artifactMissing": "制品内容不存在，可能已从制品库删除；该版本清单仍保留，但无法预览或下载。",
+    "artifactPreviewFailed": "读取制品内容失败。",
     "discardTitle": "放弃发布草稿？",
     "discardDesc": "已上传 {{n}} 个文件的编排草稿（文件已在服务端，但「发哪些 + 各自路径/策略」未发布）。关闭将丢弃这些编排，需重新设置。",
     "discardConfirm": "放弃并关闭",
@@ -2037,6 +2040,12 @@
     "storageExternal": "外置",
     "assetDeleted": "资产已删除",
     "assetInUse": "资产被 {{count}} 处引用，无法删除",
+    "assetInUseReasons": {
+      "REF_COUNT": "资产被 {{count}} 处引用，无法删除",
+      "EMBEDDED_UPDATER_CORE": "这是面板内置的 updater-core 归档，客户端首次启动依赖它，不能从制品库删除。",
+      "SELECTED_UPDATER_CORE": "该 updater-core 正被 {{count}} 个频道选定，切换频道 Core 版本后才能删除。",
+      "PUBLISHED_CLIENT_FILE": "该客户端文件仍被 {{count}} 个已发布版本引用。请保留它，否则玩家下载、历史预览或回滚会失效。"
+    },
     "assetRefHint": "被 {{count}} 处引用",
     "assetDeleteConfirm": "删除资产「{{name}}」？",
     "assetDeleteDescription": "仅当引用数为 0 时可删；删除会同时移除物理文件。",

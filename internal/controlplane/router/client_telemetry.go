@@ -56,6 +56,7 @@ func (h *ClientTelemetryHandler) Post(c *gin.Context) {
 		_ = h.svc.Record(service.ClientTelemetryInput{
 			ChannelID:   body.Channel,
 			MachineID:   c.GetHeader(machineIDHeader),
+			PlayerName:  c.GetHeader(playerNameHeader),
 			IP:          c.ClientIP(),
 			Result:      body.Result,
 			FromVersion: body.FromVersion,

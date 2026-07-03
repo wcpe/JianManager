@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -519,6 +520,225 @@ func (s *ClientDistSecurityService) ListRiskEvents() ([]model.ClientSecurityRisk
 	var e []model.ClientSecurityRiskEvent
 	return e, s.db.Order("created_at DESC").Limit(200).Find(&e).Error
 }
+
+// ClientDistSecurityLogFilter 是客户端分发安全全量日志查询条件。
+type ClientDistSecurityLogFilter struct {
+	Type       string
+	ChannelID  string
+	MachineID  string
+	PlayerName string
+	IP         string
+	Page       int
+	PageSize   int
+}
+
+// ClientDistSecurityLogItem 是安全日志页统一列表项。
+type ClientDistSecurityLogItem struct {
+	ID         string         `json:"id"`
+	Type       string         `json:"type"`
+	Title      string         `json:"title"`
+	ChannelID  string         `json:"channelId,omitempty"`
+	MachineID  string         `json:"machineId,omitempty"`
+	PlayerName string         `json:"playerName,omitempty"`
+	IP         string         `json:"ip,omitempty"`
+	Status     string         `json:"status,omitempty"`
+	ErrCode    string         `json:"errCode,omitempty"`
+	CreatedAt  time.Time      `json:"createdAt"`
+	Detail     map[string]any `json:"detail"`
+}
+
+// ClientDistSecurityLogPage 是安全日志分页结果。
+type ClientDistSecurityLogPage struct {
+	Items    []ClientDistSecurityLogItem `json:"items"`
+	Total    int                         `json:"total"`
+	Page     int                         `json:"page"`
+	PageSize int                         `json:"pageSize"`
+}
+
+// SearchLogs 合并查询 security hello、风险事件、保护动作、请求日志、运行态心跳和更新遥测。
+func (s *ClientDistSecurityService) SearchLogs(f ClientDistSecurityLogFilter) (*ClientDistSecurityLogPage, error) {
+	if f.Type == "all" {
+		f.Type = ""
+	}
+	if f.Page <= 0 {
+		f.Page = 1
+	}
+	if f.PageSize <= 0 || f.PageSize > 200 {
+		f.PageSize = 50
+	}
+	items := make([]ClientDistSecurityLogItem, 0, f.PageSize*2)
+	appenders := []struct {
+		typ string
+		fn  func(ClientDistSecurityLogFilter, int) ([]ClientDistSecurityLogItem, error)
+	}{
+		{"hello", s.securityHelloLogs},
+		{"risk", s.securityRiskLogs},
+		{"action", s.securityActionLogs},
+		{"request", s.securityRequestLogs},
+		{"runtime", s.securityRuntimeLogs},
+		{"telemetry", s.securityTelemetryLogs},
+	}
+	limit := f.Page * f.PageSize
+	for _, app := range appenders {
+		if f.Type != "" && f.Type != app.typ {
+			continue
+		}
+		rows, err := app.fn(f, limit)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, rows...)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
+	total := len(items)
+	start := (f.Page - 1) * f.PageSize
+	if start > total {
+		start = total
+	}
+	end := start + f.PageSize
+	if end > total {
+		end = total
+	}
+	return &ClientDistSecurityLogPage{Items: items[start:end], Total: total, Page: f.Page, PageSize: f.PageSize}, nil
+}
+
+func (s *ClientDistSecurityService) securityHelloLogs(f ClientDistSecurityLogFilter, limit int) ([]ClientDistSecurityLogItem, error) {
+	var rows []model.ClientSecurityHello
+	db := s.db.Order("created_at DESC").Limit(limit)
+	db = applySecurityCommonFilter(db, f, "channel_id", "machine_id", "player_name", "ip")
+	if err := db.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]ClientDistSecurityLogItem, 0, len(rows))
+	for _, r := range rows {
+		status := "rejected"
+		if r.Accepted {
+			status = "accepted"
+		}
+		out = append(out, ClientDistSecurityLogItem{ID: logID("hello", r.ID), Type: "hello", Title: "安全画像上报", ChannelID: r.ChannelID, MachineID: r.MachineID, PlayerName: r.PlayerName, IP: r.IP, Status: status, ErrCode: r.ErrCode, CreatedAt: r.CreatedAt, Detail: map[string]any{"installId": r.InstallID, "keyPrefix": r.KeyPrefix, "userAgent": r.UserAgent, "payload": parseLogJSON(r.PayloadJSON)}})
+	}
+	return out, nil
+}
+
+func (s *ClientDistSecurityService) securityRiskLogs(f ClientDistSecurityLogFilter, limit int) ([]ClientDistSecurityLogItem, error) {
+	var rows []model.ClientSecurityRiskEvent
+	db := s.db.Order("created_at DESC").Limit(limit)
+	db = applySecurityCommonFilter(db, f, "channel_id", "machine_id", "player_name", "ip")
+	if err := db.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]ClientDistSecurityLogItem, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ClientDistSecurityLogItem{ID: logID("risk", r.ID), Type: "risk", Title: r.RuleCode, ChannelID: r.ChannelID, MachineID: r.MachineID, PlayerName: r.PlayerName, IP: r.IP, Status: r.Severity, ErrCode: r.RuleCode, CreatedAt: r.CreatedAt, Detail: map[string]any{"installId": r.InstallID, "subjectType": r.SubjectType, "subjectValue": r.SubjectValue, "keyPrefix": r.KeyPrefix, "reason": r.Reason, "detail": parseLogJSON(r.DetailJSON)}})
+	}
+	return out, nil
+}
+
+func (s *ClientDistSecurityService) securityActionLogs(f ClientDistSecurityLogFilter, limit int) ([]ClientDistSecurityLogItem, error) {
+	var rows []model.ClientProtectionAction
+	if f.MachineID != "" || f.PlayerName != "" {
+		return []ClientDistSecurityLogItem{}, nil
+	}
+	db := s.db.Order("created_at DESC").Limit(limit)
+	if f.ChannelID != "" {
+		db = db.Where("channel_id = ? OR target_value = ?", f.ChannelID, f.ChannelID)
+	}
+	if f.IP != "" {
+		db = db.Where("target_type = ? AND target_value = ?", "ip", f.IP)
+	}
+	if err := db.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]ClientDistSecurityLogItem, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ClientDistSecurityLogItem{ID: logID("action", r.ID), Type: "action", Title: r.Action, ChannelID: r.ChannelID, Status: r.Status, CreatedAt: r.CreatedAt, Detail: map[string]any{"targetType": r.TargetType, "targetValue": r.TargetValue, "reason": r.Reason, "auto": r.Auto, "expiresAt": r.ExpiresAt, "createdBy": r.CreatedBy}})
+	}
+	return out, nil
+}
+
+func (s *ClientDistSecurityService) securityRequestLogs(f ClientDistSecurityLogFilter, limit int) ([]ClientDistSecurityLogItem, error) {
+	var rows []model.ClientDistEvent
+	db := s.db.Order("created_at DESC").Limit(limit)
+	db = applySecurityCommonFilter(db, f, "channel_id", "machine_id", "", "ip")
+	if err := db.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]ClientDistSecurityLogItem, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ClientDistSecurityLogItem{ID: logID("request", r.ID), Type: "request", Title: r.Kind, ChannelID: r.ChannelID, MachineID: r.MachineID, IP: r.IP, Status: strconv.Itoa(r.Status), ErrCode: r.ErrCode, CreatedAt: r.CreatedAt, Detail: map[string]any{"version": r.Version, "artifactSha": r.ArtifactSHA, "bytes": r.Bytes, "method": r.Method, "path": r.Path, "errReason": r.ErrReason, "durationMs": r.DurationMs, "etag": r.ETag, "requestHeaders": parseLogJSON(r.RequestHeadersJSON), "responseHeaders": parseLogJSON(r.ResponseHeadersJSON)}})
+	}
+	return out, nil
+}
+
+func (s *ClientDistSecurityService) securityRuntimeLogs(f ClientDistSecurityLogFilter, limit int) ([]ClientDistSecurityLogItem, error) {
+	var rows []model.ClientRuntimeState
+	db := s.db.Order("last_heartbeat_at DESC").Limit(limit)
+	db = applySecurityCommonFilter(db, f, "channel_id", "machine_id", "player_name", "ip")
+	if err := db.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]ClientDistSecurityLogItem, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ClientDistSecurityLogItem{ID: logID("runtime", r.ID), Type: "runtime", Title: "运行态心跳", ChannelID: r.ChannelID, MachineID: r.MachineID, PlayerName: r.PlayerName, IP: r.IP, Status: r.LastUpdateResult, CreatedAt: r.LastHeartbeatAt, Detail: map[string]any{"platform": r.Platform, "javaVersion": r.JavaVersion, "launcher": r.Launcher, "coreVersion": r.CoreVersion, "localVersion": r.LocalVersion, "firstSeenAt": r.FirstSeenAt, "lastUpdateAt": r.LastUpdateAt}})
+	}
+	return out, nil
+}
+
+func (s *ClientDistSecurityService) securityTelemetryLogs(f ClientDistSecurityLogFilter, limit int) ([]ClientDistSecurityLogItem, error) {
+	var rows []model.ClientTelemetry
+	db := s.db.Order("created_at DESC").Limit(limit)
+	db = applySecurityCommonFilter(db, f, "channel_id", "machine_id", "player_name", "ip")
+	if err := db.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]ClientDistSecurityLogItem, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ClientDistSecurityLogItem{ID: logID("telemetry", r.ID), Type: "telemetry", Title: "更新遥测", ChannelID: r.ChannelID, MachineID: r.MachineID, PlayerName: r.PlayerName, IP: r.IP, Status: r.Result, ErrCode: r.Error, CreatedAt: r.CreatedAt, Detail: map[string]any{"fromVersion": r.FromVersion, "toVersion": r.ToVersion, "os": r.OS, "javaVersion": r.JavaVersion, "launcher": r.Launcher, "durationMs": r.DurationMs, "bootSuccess": r.BootSuccess}})
+	}
+	return out, nil
+}
+
+func applySecurityCommonFilter(db *gorm.DB, f ClientDistSecurityLogFilter, channelCol, machineCol, playerCol, ipCol string) *gorm.DB {
+	if f.ChannelID != "" {
+		if channelCol == "" {
+			return db.Where("1 = 0")
+		}
+		db = db.Where(channelCol+" = ?", f.ChannelID)
+	}
+	if f.MachineID != "" {
+		if machineCol == "" {
+			return db.Where("1 = 0")
+		}
+		db = db.Where(machineCol+" = ?", f.MachineID)
+	}
+	if f.PlayerName != "" {
+		if playerCol == "" {
+			return db.Where("1 = 0")
+		}
+		db = db.Where(playerCol+" = ?", f.PlayerName)
+	}
+	if f.IP != "" {
+		if ipCol == "" {
+			return db.Where("1 = 0")
+		}
+		db = db.Where(ipCol+" = ?", f.IP)
+	}
+	return db
+}
+
+func logID(prefix string, id uint) string { return prefix + ":" + strconv.FormatUint(uint64(id), 10) }
+
+func parseLogJSON(raw string) any {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var out any
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return raw
+	}
+	return out
+}
+
 func (s *ClientDistSecurityService) ListGroups() ([]model.ClientSecurityGroup, error) {
 	var groups []model.ClientSecurityGroup
 	return groups, s.db.Order("updated_at DESC, id DESC").Limit(200).Find(&groups).Error

@@ -9,16 +9,17 @@ import {
   useClientDistPlayerAnalysis,
   useClientDistSecurityActions,
   useClientDistSecurityEvents,
+  useClientDistSecurityLogs,
   useClientDistSecurityOverview,
   useClientDistSecurityProfiles,
   useClientSecurityGroups,
-  useClientSecurityPrivacyNotice,
   useCreateClientSecurityGroup,
   useDeleteClientSecurityGroup,
   useSetClientDistChannelProtection,
   useSetClientDistKeyState,
   type ChannelProtectionMode,
   type ClientDistSecurityEvent,
+  type ClientDistSecurityLogType,
   type ClientProtectionAction,
   type KeySecurityState,
   type SecurityLevel,
@@ -134,6 +135,95 @@ function OverviewTab() {
         <RankList title="Top 玩家名" items={overview?.topPlayers ?? []} />
       </div>
     </div>
+  )
+}
+
+const logTypeLabels: Record<ClientDistSecurityLogType | 'all', string> = {
+  all: '全部类型',
+  hello: 'Security Hello',
+  risk: '风险事件',
+  action: '保护动作',
+  request: '请求日志',
+  runtime: '运行态心跳',
+  telemetry: '更新遥测',
+}
+
+function LogsTab() {
+  const [type, setType] = useState<ClientDistSecurityLogType | 'all'>('all')
+  const [channelId, setChannelId] = useState('')
+  const [machineId, setMachineId] = useState('')
+  const [playerName, setPlayerName] = useState('')
+  const [ip, setIp] = useState('')
+  const { data, isError, isLoading } = useClientDistSecurityLogs({
+    type,
+    channelId: channelId || undefined,
+    machineId: machineId || undefined,
+    playerName: playerName || undefined,
+    ip: ip || undefined,
+    page: 1,
+    pageSize: 100,
+  })
+  const items = data?.items ?? []
+  return (
+    <Panel
+      title="全量日志详情"
+      actions={
+        <div className="flex flex-wrap gap-2">
+          <Select value={type} onValueChange={(v) => setType(v as ClientDistSecurityLogType | 'all')}>
+            <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {(Object.keys(logTypeLabels) as Array<ClientDistSecurityLogType | 'all'>).map((key) => (
+                <SelectItem key={key} value={key}>{logTypeLabels[key]}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Input className="w-36" placeholder="频道" value={channelId} onChange={(e) => setChannelId(e.target.value)} />
+          <Input className="w-40" placeholder="Machine ID" value={machineId} onChange={(e) => setMachineId(e.target.value)} />
+          <Input className="w-32" placeholder="玩家名" value={playerName} onChange={(e) => setPlayerName(e.target.value)} />
+          <Input className="w-36" placeholder="IP" value={ip} onChange={(e) => setIp(e.target.value)} />
+        </div>
+      }
+    >
+      {isError ? (
+        <EmptyState text="全量日志接口暂不可用。" />
+      ) : items.length === 0 ? (
+        <EmptyState text={isLoading ? '加载中…' : '暂无日志'} />
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>时间</TableHead>
+              <TableHead>类型</TableHead>
+              <TableHead>摘要</TableHead>
+              <TableHead>对象</TableHead>
+              <TableHead>状态 / 错误</TableHead>
+              <TableHead>详情</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {items.map((item) => (
+              <TableRow key={item.id}>
+                <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{fmtTime(item.createdAt)}</TableCell>
+                <TableCell><Badge variant="outline">{logTypeLabels[item.type]}</Badge></TableCell>
+                <TableCell className="font-medium">{item.title || EMPTY}</TableCell>
+                <TableCell className="max-w-64 text-xs">
+                  <div className="truncate">频道：{item.channelId || EMPTY}</div>
+                  <div className="truncate text-muted-foreground">玩家：{item.playerName || EMPTY} · IP：{item.ip || EMPTY}</div>
+                  <div className="truncate text-muted-foreground">机器：{item.machineId || EMPTY}</div>
+                </TableCell>
+                <TableCell>
+                  <div>{item.status || EMPTY}</div>
+                  <div className="text-xs text-muted-foreground">{item.errCode || EMPTY}</div>
+                </TableCell>
+                <TableCell className="max-w-96">
+                  <pre className="max-h-40 overflow-auto rounded bg-muted p-2 text-xs text-muted-foreground">{JSON.stringify(item.detail ?? {}, null, 2)}</pre>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </Panel>
   )
 }
 
@@ -607,40 +697,6 @@ function GroupsTab() {
   )
 }
 
-function PrivacyTab() {
-  const { data, isError, isLoading } = useClientSecurityPrivacyNotice()
-  return (
-    <div className="space-y-4">
-      <TrustNotice />
-      <Panel title="遥测告知与采集配置">
-        {isError ? (
-          <EmptyState text="遥测告知接口暂不可用。" />
-        ) : isLoading ? (
-          <EmptyState text="加载中…" />
-        ) : (
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="space-y-3">
-              <div>
-                <h3 className="text-sm font-semibold">必要安全日志（不可关闭）</h3>
-                <p className="mt-1 text-sm text-muted-foreground">{(data?.requiredFields ?? ['IP', '请求时间', 'endpoint', 'status', 'errCode', 'keyId/keyPrefix', 'channel', 'User-Agent', 'machineId', 'installId', 'playerName']).join('、')}</p>
-              </div>
-              <div>
-                <h3 className="text-sm font-semibold">诊断遥测（可配置关闭）</h3>
-                <p className="mt-1 text-sm text-muted-foreground">{(data?.diagnosticFields ?? ['更新结果', '耗时', 'OS/Java/launcher', 'bootSuccess']).join('、')}</p>
-              </div>
-              <div>
-                <h3 className="text-sm font-semibold">保留天数</h3>
-                <p className="mt-1 text-sm text-muted-foreground">{data?.retentionDays ?? '按后端默认策略'} 天</p>
-              </div>
-            </div>
-            <Textarea readOnly className="min-h-56" value={data?.notice ?? '启动器会在启动时上报玩家名、machineId、installId、版本与基础环境信息，用于安全审查、防刷、防滥用、封禁解封与审计。玩家名由客户端提供，可能被篡改；平台不会采集账号 token、原始硬件序列号、完整本地路径或文件内容。'} />
-          </div>
-        )}
-      </Panel>
-    </div>
-  )
-}
-
 export default function ProtectionCenterPage() {
   return (
     <div className="space-y-5">
@@ -648,9 +704,9 @@ export default function ProtectionCenterPage() {
         <div>
           <div className="flex items-center gap-2">
             <ShieldCheck className="size-6 text-primary" />
-            <h1 className="text-2xl font-semibold tracking-tight">防护中心</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">客户端分发安全</h1>
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">客户端分发安全总览、异常请求、画像剖析、封禁与降级管理。</p>
+          <p className="mt-1 text-sm text-muted-foreground">客户端分发安全总览、全量日志、画像剖析、封禁与降级管理。</p>
         </div>
         <Badge variant="outline" className="mt-1"><ShieldAlert className="size-3" /> FR-264</Badge>
       </div>
@@ -658,21 +714,21 @@ export default function ProtectionCenterPage() {
         <TabsList className="flex h-auto w-full flex-wrap justify-start">
           <TabsTrigger value="overview">安全总览</TabsTrigger>
           <TabsTrigger value="events">异常请求</TabsTrigger>
+          <TabsTrigger value="logs">日志详情</TabsTrigger>
           <TabsTrigger value="profiles">客户端画像</TabsTrigger>
           <TabsTrigger value="ip">IP 剖析</TabsTrigger>
           <TabsTrigger value="actions">封禁与降级</TabsTrigger>
           <TabsTrigger value="players">玩家名剖析</TabsTrigger>
           <TabsTrigger value="groups">安全分组</TabsTrigger>
-          <TabsTrigger value="privacy">遥测告知</TabsTrigger>
         </TabsList>
         <TabsContent value="overview"><OverviewTab /></TabsContent>
         <TabsContent value="events"><EventsTab /></TabsContent>
+        <TabsContent value="logs"><LogsTab /></TabsContent>
         <TabsContent value="profiles"><ProfilesTab /></TabsContent>
         <TabsContent value="ip"><IpAnalysisTab /></TabsContent>
         <TabsContent value="actions"><ActionsTab /></TabsContent>
         <TabsContent value="players"><PlayerAnalysisTab /></TabsContent>
         <TabsContent value="groups"><GroupsTab /></TabsContent>
-        <TabsContent value="privacy"><PrivacyTab /></TabsContent>
       </Tabs>
     </div>
   )

@@ -364,7 +364,7 @@ Control Plane 新增一类**面向玩家公网**的 HTTP 分发端点（客户�
 
 **L7 应用层防护（FR-096 + FR-264，见 ADR-023）**：消费端点（manifest / updater-core / 制品 / security hello）与运营浏览器 JWT 入口隔离，并叠加两层防护。第一层 `ClientDistGuard` 提供 IP 黑白名单（`client_ip_rules`，deny 优先、有 allow 即白名单模式）、per-IP 令牌桶限流与全局并发信号量，命中拒 403/429，内存计数器经 `GET /client-dist/protection-stats` 可观测。第二层 `ClientDistSecurityService` 提供单节点源站安全防护：IP 临时封禁（`client_protection_actions`，`status=active|expired|canceled`，命中先于密钥校验返回 `IP_TEMP_BLOCKED` + `Retry-After`）、per-key / per-channel 限速、制品下载并发与字节配额、key 状态机（`normal / observe / throttled / suspended / revoked`）、频道保护模式（只能降速 / 降级，不封禁频道）和制品授权收紧（只能拉所属频道 latest/回滚窗口/选定 updater-core 引用的 sha，越权返回 `ARTIFACT_NOT_ALLOWED`）。Range 下载仍由 `http.ServeContent` 支持 206，但拒绝 multi-range，小 Range 会进入风险事件。缓存即防护（ETag/304 + 内容寻址强缓存，CDN 前置）。**L3/L4 容量型 DDoS 靠 CDN/Anycast/云清洗，不在 JM**。
 
-**启动安全画像与防护中心（FR-264）**：updater-core 启动早期调用 `POST /client-security/hello`，强制上报 `playerName`（承认可伪造，仅作粗略参考）、`machineId`、`installId`、频道、core/wedge/manifest 版本与 OS/Java/launcher/locale/timezone/memoryTier 等粗粒度环境特征。CP 写入 `client_security_hellos` 明细，并按 `(channel_id, machine_id, install_id)` upsert `client_security_profiles`；非法玩家名等写 `client_security_risk_events`。管理台新增独立 `/client-dist-security` 防护中心，不触碰发布页，消费 `/client-dist/security/*` 聚合端点展示安全总览、异常请求、客户端画像、IP/玩家剖析、封禁与降级管理、安全分组和遥测告知。
+**启动安全画像与客户端分发安全（FR-264）**：updater-core 启动早期调用 `POST /client-security/hello`，上报 `playerName`（来自 `jm-updater.json`，承认可伪造，仅作粗略参考）、`machineId`、`installId`、频道、core/wedge/manifest 版本与 OS/Java/launcher/locale/timezone/memoryTier 等粗粒度环境特征。CP 写入 `client_security_hellos` 明细，并按 `(channel_id, machine_id, install_id)` upsert `client_security_profiles`；非法玩家名等写 `client_security_risk_events`。管理台独立 `/client-dist-security` 页面命名为「客户端分发安全」，不触碰发布页，消费 `/client-dist/security/*` 聚合端点展示安全总览、异常请求、全量日志详情、客户端画像、IP/玩家剖析、封禁与降级管理、安全分组；隐私告知不再作为独立 Tab 展示。
 
 ### 6.6 客户端 OTA 更新器（玩家侧两件套纯 JVM jar，`client-updater/`，FR-089/090/091 / ADR-021）
 
@@ -382,7 +382,7 @@ Control Plane 新增一类**面向玩家公网**的 HTTP 分发端点（客户�
 
 **`.jmpack` 容器（FR-097，已废弃）**：FR-256 起连同验签一起删除——散文件下载更优（见 [ADR-054](../adr/054-updater-arch-simplification.md)）。`JmPack.java` / `JmPackService` / `POST .../pack` 端点均已删。
 
-**遥测（FR-094）**：updater reconcile 后 best-effort `POST /client-telemetry`（拉取密钥 + X-Machine-Id，**202 不阻塞**）上报结果/版本/环境(os/java/启动器粗粒度)/耗时/bootSuccess；**隐私 opt-out**（`jm-updater.json` `telemetry:false` 关闭），仅环境粗粒度 + 不可逆机器码、不收集敏感数据。CP 落 `client_telemetry`（明细短保留）+ `client_telemetry_daily`（按 result 日聚合），供 FR-095 成功率/回退率。端点挂 FR-096 守卫。
+**遥测（FR-094）**：updater reconcile 后 best-effort `POST /client-telemetry`（拉取密钥 + X-Machine-Id + X-Player-Name，**202 不阻塞**）上报结果/版本/环境(os/java/启动器粗粒度)/耗时/bootSuccess；**隐私 opt-out**（`jm-updater.json` `telemetry:false` 关闭），仅环境粗粒度 + 不可逆机器码 + 客户端声明玩家名，不收集敏感数据。CP 落 `client_telemetry`（明细短保留）+ `client_telemetry_daily`（按 result 日聚合），供 FR-095 成功率/回退率。端点挂 FR-096 守卫。
 
 **统计后台（FR-095）**：`GET /client-dist/stats?channelId=&days=`（平台管理员）**只读聚合** FR-093/092 请求数据（不引入新表）——下载量趋势/版本分布（`client_dist_daily`）、请求成功/失败分布、活跃机器码数/来源 IP Top10（`client_dist_events` 近窗）。FR-265 起，频道工作台「统计」Tab 只看分发 HTTP 请求历史统计，不再展示更新成功率、运行版本、平台或滞后分布。
 
@@ -474,7 +474,7 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | client_dist_events (FR-093/249) | channel_id, machine_id, ip, kind(manifest/artifact), version, artifact_sha, bytes, status, err_code(FR-249 语义错误码，成功空/失败填码，index), duration_ms, created_at（拉取/下载明细，**短保留**+滚动清理；按 IP/机器码/频道/版本/时间/**成功失败(outcome)/错误码**检索；FR-249 起拉取失败含 401 鉴权失败也记录事件，defer 前置到鉴权前捕获最终 status/errCode） |
 | client_dist_daily (FR-093) | day + channel_id + version + kind(UNIQUE 组合), requests, bytes（按日聚合，**长保留**、写时增量 upsert；供下载量趋势+版本分布，FR-095） |
 | client_ip_rules (FR-096) | cidr, mode(deny/allow), note, created_by, created_at（分发端点 IP 防护规则，运行时可改+入审计；deny 优先、有 allow 即白名单模式，ADR-023） |
-| client_telemetry (FR-094) | channel_id, machine_id, ip, result, from_version, to_version, os, java_version, launcher, duration_ms, boot_success, error, created_at（客户端遥测明细，**短保留**+滚动清理；仅环境粗粒度+不可逆机器码，隐私可关） |
+| client_telemetry (FR-094) | channel_id, machine_id, player_name, ip, result, from_version, to_version, os, java_version, launcher, duration_ms, boot_success, error, created_at（客户端遥测明细，**短保留**+滚动清理；仅环境粗粒度+不可逆机器码/玩家名，隐私可关；player_name 不可信，仅排障） |
 | client_telemetry_daily (FR-094) | day + channel_id + result(UNIQUE 组合), count（遥测按 result 日聚合，**长保留**；供更新成功率/回退率趋势，FR-095） |
 | client_security_profiles (FR-264) | channel_id + machine_id + install_id(UNIQUE 组合), player_name/player_name_norm(玩家名仅粗略参考、可伪造), key_id/key_prefix, first_seen/last_seen/last_ip, core_version/wedge_version/manifest_version, os/os_version/arch, java_vendor/java_version/java_arch, launcher/locale/timezone/memory_tier, risk_score/risk_level/protection_state, labels_json（启动安全画像最新态，供防护中心剖析） |
 | client_security_hellos (FR-264) | channel_id, machine_id, install_id, player_name, accepted, err_code, ip, key_id/key_prefix, user_agent, payload_json, created_at（updater-core 启动安全画像上报明细；缺必填 400、不落画像最新态） |
@@ -482,7 +482,7 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | client_protection_actions (FR-264) | target_type(ip/key/channel), target_value, channel_id, action(temp_block/key_state/channel_protection/…), status(active/expired/canceled), policy_json, reason, auto, expires_at, created_by, created_at/updated_at/canceled_at（IP 临时封禁、key 状态与频道保护动作；active IP 封禁先于密钥校验生效） |
 | client_security_groups (FR-264) | name(UNIQUE), kind(manual/rule), target_type, rule_json, action_policy_json, enabled, created_by, created_at/updated_at（防护中心安全分组配置） |
 | client_security_counters (FR-264) | scope + key + bucket(UNIQUE), value, updated_at（安全计数/配额桶辅助） |
-| client_runtime_states (FR-265) | channel_id + machine_id(UNIQUE 组合), ip, platform, java_version, launcher, core_version, local_version, first_seen_at, last_heartbeat_at, created_at/updated_at（客户端最新启动运行态；启动心跳只 upsert 此表，不写 client_telemetry；machine_id 不可信，仅统计/联动筛选） |
+| client_runtime_states (FR-265) | channel_id + machine_id(UNIQUE 组合), player_name, ip, platform, java_version, launcher, core_version, local_version, first_seen_at, last_heartbeat_at, created_at/updated_at（客户端最新启动运行态；启动心跳只 upsert 此表，不写 client_telemetry；machine_id/player_name 不可信，仅统计/联动筛选） |
 | client_dist_snapshots (FR-217/265) | channel_id + bucket_ts(UNIQUE 组合, **频道×小时桶**), manifest_pulls, artifact_pulls, download_bytes, active_machines(桶内 machine_id 去重), version_dist/platform_dist/lag_dist(JSON map), update_total/success/fail_static/rolled_back/error（**观测时序快照**，后台离线把 client_dist_events+client_telemetry 卷积而来，与写时聚合解耦；单档小时桶留 ≥180d；供观测·分发监控页跨频道/平台时序，ADR-049） |
 | business_events (FR-116/122) | domain + dedup_key(UNIQUE 组合, 至少一次投递去重), action, node_uuid, instance_uuid, operator(FR-121 回填), payload_json(信封原文), occurred_at, created_at（JBIS 通用业务事件信封表，**插件无关汇聚底座**；探针经反向 WS 桥上报的业务域事件按 (domain,dedup_key) insert-or-ignore 落库，新增域无需改表，**不降采样不丢**，ADR-028） |
 | economy_balance_mirrors (FR-122) | node_uuid + zone_id + player_name + currency(UNIQUE 组合, **node→zone 维度**), currency_id, balance(字符串 BigDecimal), last_seq(单调推进游标), last_ledger_id, last_entry_type, occurred_at, updated_at（经济结构化镜像最新余额；按 ledger 事件 seq 单调推进，跨区/跨节点同名玩家独立不串味/不重复计数；汇聚镜像非真源，ADR-028） |

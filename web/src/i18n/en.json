@@ -1785,6 +1785,9 @@
     "viewStructure": "Structure",
     "viewPreview": "Preview",
     "previewHint": "Click a file on the left to view its content (text/config/JSON highlighting; binary or oversized files can only be downloaded).",
+    "artifactNoContent": "This file has no previewable artifact content.",
+    "artifactMissing": "The artifact content is missing, likely deleted from the artifact library. The version manifest remains, but preview and download are unavailable.",
+    "artifactPreviewFailed": "Failed to read artifact content.",
     "discardTitle": "Discard publish draft?",
     "discardDesc": "You have an arrangement draft for {{n}} uploaded file(s) (files are on the server, but which to publish and their paths/policies are not). Closing discards this arrangement; you'll need to set it up again.",
     "discardConfirm": "Discard & Close",
@@ -2058,6 +2061,12 @@
     "storageExternal": "External",
     "assetDeleted": "Asset deleted",
     "assetInUse": "Asset is referenced by {{count}} place(s) and cannot be deleted",
+    "assetInUseReasons": {
+      "REF_COUNT": "Asset is referenced by {{count}} place(s) and cannot be deleted",
+      "EMBEDDED_UPDATER_CORE": "This is the embedded updater-core archive used by first client startup and cannot be deleted from the artifact library.",
+      "SELECTED_UPDATER_CORE": "This updater-core is selected by {{count}} channel(s). Switch those channels to another Core version before deleting it.",
+      "PUBLISHED_CLIENT_FILE": "This client file is still referenced by {{count}} published version(s). Keep it, otherwise player downloads, historical preview, or rollback will fail."
+    },
     "assetRefHint": "Referenced by {{count}} place(s)",
     "assetDeleteConfirm": "Delete asset \"{{name}}\"?",
     "assetDeleteDescription": "Deletable only when reference count is 0; deletion also removes the physical file.",

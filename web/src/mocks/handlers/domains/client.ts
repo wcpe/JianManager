@@ -258,6 +258,7 @@ interface MockRuntimeState {
   id: number
   channelId: string
   machineId: string
+  playerName: string
   ip: string
   platform: string
   javaVersion: string
@@ -275,6 +276,7 @@ const runtimeStates = db<MockRuntimeState>('client-runtime-states', () => [
     id: 1,
     channelId: 'skyblock-s1',
     machineId: 'm-aaaa',
+    playerName: 'Alex',
     ip: '203.0.113.1',
     platform: 'windows',
     javaVersion: '21',
@@ -290,6 +292,7 @@ const runtimeStates = db<MockRuntimeState>('client-runtime-states', () => [
     id: 2,
     channelId: 'skyblock-s1',
     machineId: 'm-bbbb',
+    playerName: 'Steve',
     ip: '198.51.100.7',
     platform: 'linux',
     javaVersion: '17',
@@ -305,6 +308,7 @@ const runtimeStates = db<MockRuntimeState>('client-runtime-states', () => [
     id: 3,
     channelId: 'survival-s2',
     machineId: 'm-dddd',
+    playerName: 'Herobrine',
     ip: '203.0.113.20',
     platform: 'windows',
     javaVersion: '21',
@@ -347,6 +351,20 @@ const keyCountOf = (channelId: string) =>
 /** 频道当前 latest 版本号（取该频道最大版本，无则 0）。 */
 const latestVersionOf = (channelId: string) =>
   versions.list((v) => v.channelId === channelId).reduce((m, v) => Math.max(m, v.version), 0)
+
+/** 按字段聚合 mock 排行，用于安全总览与剖析。 */
+function rankBy<T extends object>(rows: T[], key: keyof T) {
+  const m = new Map<string, { subject: string; count: number; bytes: number }>()
+  for (const row of rows) {
+    const subject = String(row[key] ?? '')
+    if (!subject) continue
+    const cur = m.get(subject) ?? { subject, count: 0, bytes: 0 }
+    cur.count += 1
+    cur.bytes += Number((row as { bytes?: unknown }).bytes ?? 0)
+    m.set(subject, cur)
+  }
+  return [...m.values()].sort((a, b) => b.count - a.count || a.subject.localeCompare(b.subject))
+}
 
 /** 序列化频道为列表项（带 keyCount，currentVersion 实时由版本派生）。 */
 function channelToSummary(ch: MockChannel) {
@@ -917,6 +935,80 @@ export const handlers = [
     return HttpResponse.json(buildObservability(channelId, range))
   }),
 
+  // 客户端分发安全（FR-264）：mock 模式下提供最小可验收数据。
+  domainRoute('get', '/client-dist/security/overview', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({
+      activeDownloads: 2,
+      downloadBytesPerSecond: 4096,
+      abnormalRequests: 2,
+      unauthorizedRequests: distEvents.list((e) => e.status === 401).length,
+      forbiddenRequests: distEvents.list((e) => e.status === 403).length,
+      rateLimitedRequests: distEvents.list((e) => e.status === 429).length,
+      blockedIpCount: 1,
+      throttledKeyCount: 1,
+      protectedChannelCount: 1,
+      topIps: rankBy(distEvents.list(), 'ip'),
+      topKeys: [{ subject: 'jmck_ab12', count: 3 }],
+      topChannels: rankBy(distEvents.list(), 'channelId'),
+      topPlayers: runtimeStates.list().map((s) => ({ subject: s.playerName, count: 1 })),
+    })
+  }),
+
+  domainRoute('get', '/client-dist/security/logs', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const type = url.searchParams.get('type') ?? ''
+    const playerName = url.searchParams.get('playerName') ?? ''
+    const items = [
+      ...runtimeStates.list().map((s) => ({ id: `runtime:${s.id}`, type: 'runtime', title: '运行态心跳', channelId: s.channelId, machineId: s.machineId, playerName: s.playerName, ip: s.ip, status: s.coreVersion, createdAt: s.lastHeartbeatAt, detail: { platform: s.platform, javaVersion: s.javaVersion, launcher: s.launcher, localVersion: s.localVersion } })),
+      ...distEvents.list().map((e) => ({ id: `request:${e.id}`, type: 'request', title: e.kind, channelId: e.channelId, machineId: e.machineId, playerName: '', ip: e.ip, status: String(e.status), errCode: e.errCode, createdAt: e.createdAt, detail: { path: e.path, bytes: e.bytes, requestHeaders: e.requestHeaders } })),
+      { id: 'hello:1', type: 'hello', title: '安全画像上报', channelId: 'skyblock-s1', machineId: 'm-aaaa', playerName: 'Alex', ip: '203.0.113.1', status: 'accepted', createdAt: '2026-06-28T10:06:00Z', detail: { installId: 'install-a', keyPrefix: 'jmck_ab12' } },
+      { id: 'telemetry:1', type: 'telemetry', title: '更新遥测', channelId: 'skyblock-s1', machineId: 'm-aaaa', playerName: 'Alex', ip: '203.0.113.1', status: 'success', createdAt: '2026-06-28T10:07:00Z', detail: { fromVersion: 1, toVersion: 2, durationMs: 830 } },
+      { id: 'risk:1', type: 'risk', title: 'INVALID_PLAYER_NAME', channelId: 'survival-s2', machineId: 'm-dddd', playerName: 'Herobrine', ip: '203.0.113.20', status: 'low', errCode: 'INVALID_PLAYER_NAME', createdAt: '2026-06-28T10:08:00Z', detail: { reason: '玩家名异常' } },
+      { id: 'action:1', type: 'action', title: 'temp_block', channelId: '', machineId: '', playerName: '', ip: '203.0.113.20', status: 'active', createdAt: '2026-06-28T10:09:00Z', detail: { targetType: 'ip', targetValue: '203.0.113.20', reason: '异常拉取' } },
+    ].filter((item) => (!type || item.type === type) && (!playerName || item.playerName === playerName))
+    return HttpResponse.json({ items, total: items.length, page: 1, pageSize: 100 })
+  }),
+
+  domainRoute('get', '/client-dist/security/events', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json([{ id: 1, subjectType: 'client', subjectValue: 'install-a', channelId: 'survival-s2', machineId: 'm-dddd', installId: 'install-a', playerName: 'Herobrine', ip: '203.0.113.20', keyId: 1, keyPrefix: 'jmck_ab12', ruleCode: 'INVALID_PLAYER_NAME', severity: 'warn', scoreDelta: 1, action: 'observe', reason: '玩家名异常', createdAt: '2026-06-28T10:08:00Z' }])
+  }),
+
+  domainRoute('get', '/client-dist/security/profiles', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json(runtimeStates.list().map((s) => ({ id: s.id, channelId: s.channelId, machineId: s.machineId, installId: `install-${s.id}`, playerName: s.playerName, keyId: 1, keyPrefix: 'jmck_ab12', firstSeen: s.firstSeenAt, lastSeen: s.lastHeartbeatAt, lastIp: s.ip, userAgent: 'JM-Updater/1.0', coreVersion: s.coreVersion, wedgeVersion: '1', manifestVersion: s.localVersion, os: s.platform, osVersion: '', arch: 'amd64', javaVendor: 'Temurin', javaVersion: s.javaVersion, javaArch: 'amd64', launcher: s.launcher, locale: 'zh-CN', timezone: 'Asia/Shanghai', memoryTier: '4-8g', riskScore: 0, riskLevel: 'info', protectionState: 'normal', labels: [], createdAt: s.createdAt, updatedAt: s.updatedAt })))
+  }),
+
+  domainRoute('get', '/client-dist/security/ip-analysis', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json(rankBy(distEvents.list(), 'ip').map((r) => ({ ip: r.subject, requestCount: r.count, rejectCount: r.subject === '203.0.113.20' ? 1 : 0, invalidKeyCount: 0, notFoundCount: 0, rangeCount: 1, downloadBytes: r.bytes ?? 0, keyCount: 1, channelCount: 1, riskScore: 1, blocked: r.subject === '203.0.113.20', lastSeen: '2026-06-28T10:09:00Z' })))
+  }),
+
+  domainRoute('get', '/client-dist/security/player-analysis', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json(runtimeStates.list().map((s) => ({ playerName: s.playerName, installCount: 1, machineCount: 1, ipCount: 1, keyCount: 1, channelCount: 1, downloadBytes: 2048, abnormalRequests: s.playerName === 'Herobrine' ? 1 : 0, riskScore: s.playerName === 'Herobrine' ? 1 : 0, lastSeen: s.lastHeartbeatAt })))
+  }),
+
+  domainRoute('get', '/client-dist/security/actions', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json([{ id: 1, targetType: 'ip', targetValue: '203.0.113.20', channelId: '', action: 'temp_block', status: 'active', reason: '异常拉取', auto: false, expiresAt: '2026-06-28T11:09:00Z', createdBy: 1, createdAt: '2026-06-28T10:09:00Z', updatedAt: '2026-06-28T10:09:00Z' }])
+  }),
+
+  domainRoute('get', '/client-dist/security/groups', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json([{ id: 1, name: '高风险 IP', kind: 'manual', targetType: 'ip', enabled: true, createdBy: 1, createdAt: '2026-06-28T10:00:00Z', updatedAt: '2026-06-28T10:00:00Z' }])
+  }),
+
   // 运行态启动心跳（FR-265）：mock 接收后 upsert 运行态，避免端点 404。
   domainRoute('post', '/client-channels/:channelId/telemetry/heartbeat', async (info) => {
     const denied = requireAuth(info)
@@ -924,10 +1016,12 @@ export const handlers = [
     const channelId = String(info.params.channelId)
     const body = (await info.request.json().catch(() => ({}))) as Partial<MockRuntimeState>
     const machineId = info.request.headers.get('X-Machine-Id') ?? 'mock-machine'
+    const playerName = info.request.headers.get('X-Player-Name') ?? body.playerName ?? ''
     const row = runtimeStates.find((s) => s.channelId === channelId && s.machineId === machineId)
     const now = new Date().toISOString()
     if (row) {
       runtimeStates.update(row.id, {
+        playerName: playerName || row.playerName,
         platform: body.platform ?? row.platform,
         javaVersion: body.javaVersion ?? row.javaVersion,
         launcher: body.launcher ?? row.launcher,
@@ -941,6 +1035,7 @@ export const handlers = [
         id: Date.now(),
         channelId,
         machineId,
+        playerName,
         ip: '127.0.0.1',
         platform: body.platform ?? 'unknown',
         javaVersion: body.javaVersion ?? '',

@@ -8,6 +8,7 @@ type ClientTelemetry struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	ChannelID   string    `gorm:"column:channel_id;type:varchar(64);index:idx_ct_channel_time" json:"channelId"`
 	MachineID   string    `gorm:"column:machine_id;type:varchar(128);index" json:"machineId"`
+	PlayerName  string    `gorm:"column:player_name;type:varchar(32);index" json:"playerName"`
 	IP          string    `gorm:"type:varchar(64)" json:"ip"`
 	Result      string    `gorm:"type:varchar(16);not null" json:"result"` // success|fail-static|rolled-back|error
 	FromVersion int       `gorm:"default:0;not null" json:"fromVersion"`

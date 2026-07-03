@@ -31,8 +31,11 @@ func (h *ClientSecurityHandler) Hello(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
 		return
 	}
-	if body.Channel == "" || body.PlayerName == "" || body.MachineID == "" || body.InstallID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "channel/playerName/machineId/installId 必填"})
+	if body.PlayerName == "" {
+		body.PlayerName = c.GetHeader(playerNameHeader)
+	}
+	if body.Channel == "" || body.MachineID == "" || body.InstallID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "channel/machineId/installId 必填"})
 		return
 	}
 	check, err := h.svc.VerifyChannelKey(body.Channel, c.GetHeader(clientKeyHeader))
@@ -85,6 +88,18 @@ func (h *ClientSecurityHandler) Actions(c *gin.Context) {
 		return
 	}
 	out, err := h.svc.ListActions()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (h *ClientSecurityHandler) Logs(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	out, err := h.svc.SearchLogs(service.ClientDistSecurityLogFilter{Type: c.Query("type"), ChannelID: c.Query("channelId"), MachineID: c.Query("machineId"), PlayerName: c.Query("playerName"), IP: c.Query("ip"), Page: parseIntDefault(c.Query("page"), 1), PageSize: parseIntDefault(c.Query("pageSize"), 50)})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
 		return
@@ -342,6 +357,7 @@ func (h *ClientSecurityHandler) RegisterAdminRoutes(rg *gin.RouterGroup) {
 	sec := rg.Group("/client-dist/security")
 	sec.GET("/overview", h.Overview)
 	sec.GET("/events", h.Events)
+	sec.GET("/logs", h.Logs)
 	sec.GET("/profiles", h.Profiles)
 	sec.GET("/profiles/:id", h.StubOK)
 	sec.GET("/ip-analysis", h.IPAnalysis)

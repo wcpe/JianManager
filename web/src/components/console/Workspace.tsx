@@ -85,7 +85,7 @@ export default function Workspace() {
 
   return (
     <Suspense fallback={<div className="p-6 text-muted-foreground">{t('common.loading')}</div>}>
-      <div className="h-full overflow-auto p-6">
+      <div className="h-full overflow-auto p-6 [scrollbar-gutter:stable]">
         <Routes>
           <Route index element={<OverviewPage />} />
           <Route path="monitor" element={<MonitoringPage />} />

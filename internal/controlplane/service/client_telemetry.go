@@ -28,6 +28,7 @@ func NewClientTelemetryService(db *gorm.DB) *ClientTelemetryService {
 type ClientTelemetryInput struct {
 	ChannelID   string
 	MachineID   string
+	PlayerName  string
 	IP          string
 	Result      string
 	FromVersion int
@@ -60,7 +61,7 @@ func (s *ClientTelemetryService) Record(e ClientTelemetryInput) error {
 	result := validTelemetryResult(e.Result)
 	now := time.Now().UTC()
 	row := &model.ClientTelemetry{
-		ChannelID: e.ChannelID, MachineID: e.MachineID, IP: e.IP, Result: result,
+		ChannelID: e.ChannelID, MachineID: e.MachineID, PlayerName: trunc(e.PlayerName, 32), IP: e.IP, Result: result,
 		FromVersion: e.FromVersion, ToVersion: e.ToVersion, OS: trunc(e.OS, 32),
 		JavaVersion: trunc(e.JavaVersion, 32), Launcher: trunc(e.Launcher, 32),
 		DurationMs: e.DurationMs, BootSuccess: e.BootSuccess, Error: trunc(e.Error, 512), CreatedAt: now,

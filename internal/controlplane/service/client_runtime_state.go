@@ -27,6 +27,7 @@ func NewClientRuntimeStateService(db *gorm.DB) *ClientRuntimeStateService {
 type ClientRuntimeHeartbeatInput struct {
 	ChannelID    string
 	MachineID    string
+	PlayerName   string
 	IP           string
 	Platform     string
 	JavaVersion  string
@@ -106,6 +107,7 @@ func (s *ClientRuntimeStateService) RecordHeartbeat(in ClientRuntimeHeartbeatInp
 	row := &model.ClientRuntimeState{
 		ChannelID:       trunc(in.ChannelID, 64),
 		MachineID:       trunc(in.MachineID, machineIDMaxLen),
+		PlayerName:      trunc(strings.TrimSpace(in.PlayerName), 32),
 		IP:              trunc(in.IP, 64),
 		Platform:        normalizeRuntimeString(in.Platform, 32),
 		JavaVersion:     trunc(in.JavaVersion, 32),
@@ -118,6 +120,7 @@ func (s *ClientRuntimeStateService) RecordHeartbeat(in ClientRuntimeHeartbeatInp
 	return s.db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "channel_id"}, {Name: "machine_id"}},
 		DoUpdates: clause.Assignments(map[string]any{
+			"player_name":       row.PlayerName,
 			"ip":                row.IP,
 			"platform":          row.Platform,
 			"java_version":      row.JavaVersion,

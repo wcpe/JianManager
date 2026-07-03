@@ -2118,12 +2118,12 @@
 - **描述**: 客户端运行态聚合（FR-265 客户端 Tab）。读取启动心跳最新态与 `client_telemetry` 更新结果；不承诺“在线客户端”。
 - **关联 FR**: FR-265 | **鉴权**: **JWT，平台管理员** | **审计**: `client_dist_clients.query`
 - **查询参数**: `channelId`（可选）、`range`(`24h`|`7d`|`30d`|`90d`，默认 `7d`)
-- **响应** (200): `{ "channelId", "from", "to", "summary":{ "recentStarted", "todayStarted", "recentStarts", "todayStarts", "updateSuccessRate", "updateFailureRate" }, "items":[{ "channelId", "machineId", "ip", "platform", "javaVersion", "launcher", "coreVersion", "localVersion", "firstSeenAt", "lastHeartbeatAt" }], "runtimeVersionDist":[{ "version", "count" }], "coreVersionDist":[{ "value", "count" }], "platformDist":[{ "value", "count" }], "launcherDist":[{ "value", "count" }], "lagDist":[{ "lag", "count" }], "updateResultSeries":[{ "ts", "success", "failStatic", "rolledBack", "error" }] }`
+- **响应** (200): `{ "channelId", "from", "to", "summary":{ "recentStarted", "todayStarted", "recentStarts", "todayStarts", "updateSuccessRate", "updateFailureRate" }, "items":[{ "channelId", "machineId", "playerName", "ip", "platform", "javaVersion", "launcher", "coreVersion", "localVersion", "firstSeenAt", "lastHeartbeatAt" }], "runtimeVersionDist":[{ "version", "count" }], "coreVersionDist":[{ "value", "count" }], "platformDist":[{ "value", "count" }], "launcherDist":[{ "value", "count" }], "lagDist":[{ "lag", "count" }], "updateResultSeries":[{ "ts", "success", "failStatic", "rolledBack", "error" }] }`
 
 ### POST /api/v1/client-channels/:id/telemetry/heartbeat
 - **描述**: updater-core 启动心跳（FR-265）。按 `channel_id + machine_id` upsert `client_runtime_states`，只更新运行态，不写 `client_telemetry`，因此不会污染更新成功率。
 - **关联 FR**: FR-265 | **鉴权**: 玩家侧拉取密钥（`X-Client-Key`，必须属于该频道）
-- **请求头**: `X-Machine-Id`（必需，否则 best-effort 忽略心跳）
+- **请求头**: `X-Machine-Id`（必需，否则 best-effort 忽略心跳）、`X-Player-Name`（可选，来自 `jm-updater.json` 的 `playerName`，不可信，仅用于观测与排障）
 - **请求**: `{ "platform":"windows", "javaVersion":"17.0.10", "launcher":"HMCL", "coreVersion":"3", "localVersion":15 }`
 - **响应**: `202 Accepted`
 - **错误**: 401 `INVALID_CLIENT_KEY`
@@ -2156,7 +2156,7 @@
 ## 客户端分发防护中心（FR-264）
 
 ### POST /api/v1/client-security/hello
-- **描述**: updater-core 启动早期上报安全画像。`playerName`、`machineId`、`installId`、`channel` 必填；玩家名可伪造，仅作粗略排查线索。IP 临时封禁先于密钥校验生效。
+- **描述**: updater-core 启动早期上报安全画像。`machineId`、`installId`、`channel` 必填；`playerName` 来自 body 或 `X-Player-Name`，可为空且可伪造，仅作粗略排查线索。IP 临时封禁先于密钥校验生效。
 - **关联 FR**: FR-264
 - **鉴权**: 玩家侧拉取密钥（`X-Client-Key`）
 - **请求**:
@@ -2179,6 +2179,12 @@
 - **描述**: 风险事件列表，按创建时间倒序。
 - **鉴权**: JWT，平台管理员
 - **响应** (200): `[ { "id", "subjectType", "subjectValue", "channelId", "machineId", "installId", "playerName", "ip", "keyId", "keyPrefix", "ruleCode", "severity", "scoreDelta", "action", "reason", "createdAt" } ]`
+
+### GET /api/v1/client-dist/security/logs
+- **描述**: 客户端分发安全全量日志详情，合并 security hello、风险事件、保护动作、分发请求日志、运行态心跳与更新遥测。管理台「客户端分发安全 / 日志详情」消费此接口。
+- **鉴权**: JWT，平台管理员
+- **查询参数**: `type`（可选，`hello|risk|action|request|runtime|telemetry`）、`channelId`、`machineId`、`playerName`、`ip`、`page`、`pageSize`（默认 50，上限 200）
+- **响应** (200): `{ "items":[{ "id", "type", "title", "channelId", "machineId", "playerName", "ip", "status", "errCode", "createdAt", "detail" }], "total", "page", "pageSize" }`
 
 ### GET /api/v1/client-dist/security/profiles
 - **描述**: 客户端安全画像列表，按最近出现倒序。
@@ -2354,7 +2360,7 @@
 ### POST /api/v1/client-telemetry
 - **描述**: 客户端遥测上报（FR-094，contract §4.3）。**best-effort、202 不阻塞**；隐私可关在客户端
 - **关联 FR**: FR-094
-- **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必，任一有效密钥）；`X-Machine-Id`（可）。**无 JWT**
+- **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必，任一有效密钥）；`X-Machine-Id`（可）、`X-Player-Name`（可，落库用于排障）。**无 JWT**
 - **请求**: `{ "channel", "result"(success|fail-static|rolled-back|error), "fromVersion", "toVersion", "os", "javaVersion", "launcher", "durationMs", "bootSuccess", "error"? }`
 - **响应** (202): 无体（落库失败不影响响应）
 - **错误**: 401 `INVALID_CLIENT_KEY`

@@ -25,18 +25,19 @@ func TestClientRuntimeState_RecordHeartbeatUpsertsLatest(t *testing.T) {
 	svc := NewClientRuntimeStateService(db)
 
 	require.NoError(t, svc.RecordHeartbeat(ClientRuntimeHeartbeatInput{
-		ChannelID: "s1", MachineID: "m1", IP: "1.1.1.1", Platform: "windows",
+		ChannelID: "s1", MachineID: "m1", PlayerName: "Alex", IP: "1.1.1.1", Platform: "windows",
 		JavaVersion: "17", Launcher: "HMCL", CoreVersion: "3", LocalVersion: 14,
 	}))
 	time.Sleep(time.Millisecond)
 	require.NoError(t, svc.RecordHeartbeat(ClientRuntimeHeartbeatInput{
-		ChannelID: "s1", MachineID: "m1", IP: "2.2.2.2", Platform: "linux",
+		ChannelID: "s1", MachineID: "m1", PlayerName: "Steve", IP: "2.2.2.2", Platform: "linux",
 		JavaVersion: "21", Launcher: "PCL2", CoreVersion: "4", LocalVersion: 15,
 	}))
 
 	var rows []model.ClientRuntimeState
 	require.NoError(t, db.Find(&rows).Error)
 	require.Len(t, rows, 1, "同一 channel+machine 应 upsert 最新运行态")
+	require.Equal(t, "Steve", rows[0].PlayerName)
 	require.Equal(t, "2.2.2.2", rows[0].IP)
 	require.Equal(t, "linux", rows[0].Platform)
 	require.Equal(t, "4", rows[0].CoreVersion)
