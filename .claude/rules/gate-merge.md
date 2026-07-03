@@ -14,7 +14,7 @@
 - [ ] `docs/ARCHITECTURE.md` 已更新（如有架构变更）
 - [ ] `docs/API.md` 已更新（如有 API 变更）
 - [ ] `docs/adr/` 已追加（如有架构决策变更）
-- [ ] `docs/PRD.md` 中对应 FR 状态已更新
+- [ ] `docs/PRD.md` 中对应 FR 状态已更新；已交付必须写成 `✅ 已交付@vX.Y.Z`，不得留下裸 `✅ 已交付`
 
 ### 代码质量
 - [ ] 无编译错误

@@ -98,7 +98,7 @@ Control Plane (Go)
 Worker Node (Go) × N
     ├── 进程管理 (direct/daemon/docker)
     ├── WebSocket 终端服务
-    ├── RCON 指标采集
+    ├── ServerProbe 指标采集 + 探针桥
     └── Bot 管理 → Node.js 子进程 (Mineflayer)
 ```
 
@@ -123,7 +123,7 @@ Worker Node (Go) × N
 
 ### Control Plane
 
-配置文件: `configs/control-plane.yaml`
+配置文件: `configs/control-plane.yml`（`.yaml` 仅作为兼容回退）
 
 ```yaml
 server:
@@ -258,7 +258,7 @@ internal/
     daemon/         # 守护进程协议
     grpc/           # gRPC 服务端
     ws/             # WebSocket 终端
-    metrics/        # 指标采集 + RCON
+    metrics/        # ServerProbe 指标与探针桥
     register/       # 节点注册
     heartbeat/      # 心跳上报
 proto/

@@ -1,6 +1,8 @@
 # 功能规格：OTA 客户端信任公钥运行期可配
 
-> 状态：待审　·　关联 PRD：FR-253（补 FR-248/FR-107 缺口）　·　关联 ADR：**ADR-053**（修订 ADR-022 信任根供给）　·　分支：feature/ui-docker-scale-2026-06-30（流 A，可 worktree 并行）
+> 状态：❌ 已废弃（ADR-054 / FR-256 废弃 `signPublicKey` 与 `signKeyId`）　·　关联 PRD：FR-253（已废弃）　·　关联 ADR：ADR-053（历史记录，已被 ADR-054 推翻）　·　分支：feature/ui-docker-scale-2026-06-30（流 A，可 worktree 并行）
+>
+> **废弃注记（2026-07-03）**：本文保留 FR-253 的历史设计记录，不再代表现行实现；现行 `jm-updater.json` 不再携带签名公钥，客户端分发信任模型见 ADR-054、`docs/ARCHITECTURE.md` 与 `docs/API.md`。
 
 ## 1. 背景与目标
 

@@ -1,6 +1,8 @@
 # 功能规格：OTA 签名密钥自动生成 + 面板公钥展示
 
-> 状态：待审　·　关联 PRD：FR-248（增强 FR-087）　·　关联 ADR：**ADR-052**（修订 ADR-038、细化 ADR-022 信任根供给）　·　分支：feature/fr-248-sign-key-autogen
+> 状态：❌ 已废弃（ADR-054 / FR-256 去掉 manifest 验签与签名密钥管理）　·　关联 PRD：FR-248（已废弃）　·　关联 ADR：ADR-052（历史记录，已被 ADR-054 推翻）　·　分支：feature/fr-248-sign-key-autogen
+>
+> **废弃注记（2026-07-03）**：本文保留 FR-248 的历史设计记录，不再代表现行实现；现行客户端分发信任模型见 ADR-054、`docs/ARCHITECTURE.md` 与 `docs/API.md`。
 
 ## 1. 背景与目标
 

@@ -2,7 +2,7 @@
 
 > **FR-086 产出**。分发频道（channel）与拉取密钥（pull key）的**运营管理端点**（运营者浏览器 JWT 入口）。
 > 面向玩家公网的 manifest / 制品端点见 FR-087（消费本 FR 的密钥鉴权机制）。
-> 关联 ADR-022（密钥半公开、只存 SHA-256 哈希、明文仅创建/轮换时一次性返回、可吊销/轮换）、契约 `contract.md` §4/§5。
+> 关联 ADR-054（现行信任模型：HTTPS + 拉取密钥鉴权 + sha256 完整性校验）、ADR-023（端点防护）、契约 `contract.md` §4/§5。
 > 状态：v1（2026-06-23，随实现回写）。
 
 ## 0. 约定
@@ -154,7 +154,7 @@
 - 入参：频道 slug + 请求头 `X-Client-Key` 明文。
 - 流程：对明文做 SHA-256 → 按 `key_hash` 查找 → 校验所属 channel 匹配、`revoked==false`、未过期 → 命中则刷新 `last_used_at`（弱一致）。
 - 结果：命中返回密钥与频道；未命中/吊销/过期返回 `ErrPullKeyInvalid`（FR-087 映射 401/403）。
-- **半公开**：密钥随整包分发必然泄露，仅作鉴权路由 + 吊销，不作内容可信依据（内容可信靠 manifest 签名，见 ADR-022 §2、contract §3）。
+- **半公开**：密钥随整包分发必然泄露，仅作鉴权路由 + 吊销，不作内容可信依据（信任靠 HTTPS + 拉取密钥鉴权，内容完整性靠 sha256 校验，见 ADR-054、contract §3）。
 
 ## 5. 权限要求
 
@@ -174,19 +174,18 @@
 
 ## 7. 发布与消费端点（FR-087）
 
-> manifest/制品端点契约见 `contract.md` §2/§4。**鉴权分两组、物理隔离**（关键安全设计，ADR-022/023）：
+> manifest/制品端点契约见 `contract.md` §2/§4。**鉴权分两组、物理隔离**（关键安全设计，ADR-023；信任模型见 ADR-054）：
 > - **发布端点**（运营操作）：`/api/v1` JWT，**仅平台管理员**（同 §2/§3 频道管理）。
 > - **消费端点**（玩家）：**拉取密钥** `X-Client-Key` 鉴权（**无 JWT**），与运营浏览器入口隔离。
-> 理由：拉取密钥半公开（随整包分发必然泄露，§4 半公开说明），用它鉴权「发布」=严重漏洞；内容可信靠 manifest 的 Ed25519 签名而非密钥。详见 `docs/API.md` 同名章节。
+> 理由：拉取密钥半公开（随整包分发必然泄露，§4 半公开说明），用它鉴权「发布」=严重漏洞；FR-256 起 manifest 不再 Ed25519 验签，信任靠 HTTPS + 拉取密钥鉴权，内容完整性靠 sha256 校验。详见 `docs/API.md` 同名章节。
 
 | 端点 | 鉴权 | 用途 |
 |---|---|---|
 | `POST /client-channels/:id/files` | **JWT 平台管理员** | 上传客户端文件制品（`type=client-file` 内容寻址去重），返回 `artifact.sha256` |
 | `POST /client-channels/:id/versions` | **JWT 平台管理员** | 发布版本、服务端单调递增 `version`、切 latest 指针 |
-| `GET /client-channels/:id/manifest` | **拉取密钥 `X-Client-Key`** | 返回频道 latest 的签名 manifest（ETag=`version:keyId`、304） |
+| `GET /client-channels/:id/manifest` | **拉取密钥 `X-Client-Key`** | 返回频道 latest 的 manifest（ETag=`version`、304） |
 | `GET /client-artifacts/:sha256` | **拉取密钥 `X-Client-Key`**（任一有效密钥，跨频道共享） | 内容寻址下载制品（Range 断点续传、强缓存） |
 
 - 服务层：`ClientVersionService.PublishFile/PublishVersion/BuildManifest/OpenArtifact`；`ClientChannelService.VerifyKey`（绑频道，manifest 用）/`VerifyAnyKey`（不绑频道，制品用）。
-- 签名：`ManifestSigner`（Ed25519，canonical JSON 与客户端 `updater-core` `Json.canonical` 逐位对齐；HTTP 响应 JSON 与签名 canonical 同源）。私钥经 `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 注入。
-- **签名密钥 fail-closed（ADR-022 实施补充，2026-06-27；粒度细化见 ADR-038）**：私钥来源由 `service.ResolveManifestSigner(privKey, keyID, devMode)` 裁决，启动策略由 `service.StartableWithoutSigner(err)` 分流——生产态（`dev_mode=false`）**未注入** → **降级启动**（视为未启用 OTA，签名器置 nil）；显式注入**源码公开的内置开发密钥**（按解出公钥识别）→ **拒绝启动**；两种情况都绝不静默用开发密钥对外签名；仅 `dev_mode=true` 零配置回退内置开发密钥。**验收**：`dev_mode=false` + 无 `JIANMANAGER_CLIENT_SIGN_PRIVKEY` 时进程**正常启动**，但发布版本与 `GET .../manifest` 因无可用签名器返回「签名私钥未配置」（manifest 在响应时实时签名）；注入源码公开的开发密钥时进程**拒绝启动**。单测 `TestResolveManifestSigner_*` 覆盖密钥裁决（缺私钥 / 注入开发密钥 / 真私钥 / 开发回退）；降级启动（未注入时进程不退出）由 `StartableWithoutSigner` 判定、以实机重启验证。
+- 信任与完整性：FR-256 起去掉 manifest Ed25519 验签与 `ManifestSigner` 运行依赖；服务端直接返回 latest manifest，客户端拉取后用 HTTPS + 拉取密钥鉴权建立通道边界，并对制品/解压后内容做 sha256 校验（见 ADR-054、contract §3）。
 - 发布写审计：`client_file.publish` / `client_version.publish`。

@@ -14,13 +14,13 @@ Control Plane (Go 单二进制)      Worker Node WS Server
     │ gRPC
     ▼
 Worker Node (Go) × 20~100
-    ├── 游戏服进程管理 (direct/daemon/docker/rcon)
+    ├── 游戏服进程管理 (direct/daemon/docker)
     ├── 守护进程 Wrapper
     ├── WebSocket 终端服务 (/ws/terminal)
     ├── 插件桥反向 WS 服务 (/ws/plugin-bridge, 探针主动连入, token, FR-065/ADR-016)
     ├── Bot 管理 → Node.js 子进程 (Mineflayer)
-    └── 指标采集
-        ▲ HTTP GET (本机回环抓取)  +  ◀ 反向 WS (探针连入, 治理/事件通道)
+    └── 指标采集（ServerProbe /metrics）
+        ▲ HTTP GET /metrics (本机回环抓取)  +  ◀ 反向 WS (探针桥, 治理/事件通道)
         └── ServerProbe 探针 jar (运行于游戏服 JVM, FR-010 监控见 ADR-014, 治理桥见 ADR-016)
 ```
 
@@ -75,16 +75,14 @@ Worker Node (Go) × 20~100
 ```
 cmd/control-plane/main.go
 internal/controlplane/
-  config/config.go
-  database/database.go
-  middleware/auth.go
-  model/{user,group,node,instance,bot,alert,schedule,backup,template,audit,network,registration,jdk,config_version,file_version}.go
-  router/{router,auth,user,group,node,instance,terminal,bot,file,schedule,backup,alert,template,audit,network,config,jdk}.go
-  service/{auth,user,group,node,instance,terminal,bot,schedule,backup,alert,template,audit,file,file_version,authz,network,registration,config,jdk,clone}.go
-  grpc/{pool,client}.go          # TODO: gRPC 客户端池
-  event/bus.go                   # TODO: 事件总线
-  ws/gateway.go                  # TODO: WebSocket 网关
-  embed/static.go                # TODO: 前端嵌入
+  config/                        # control-plane.yml 与环境变量覆盖
+  database/                      # GORM 初始化、迁移与数据根解析
+  middleware/                    # JWT、访问上下文、审计、限流、分发防护
+  model/                         # 用户/组/节点/实例、指标、任务、通知、客户端分发、业务事件等模型
+  router/                        # REST API：实例/节点/终端/文件/Bot/监控/客户端分发/业务域等
+  service/                       # 领域服务；含 terminal_proxy、business_events、client_*、metric/log/task/notification/selfupdate
+  grpc/{pool,handler}.go         # Worker 连接池、注册/心跳/流式事件控制面
+  embed/{static,probe,install_scripts,client_updater}.go # 前端、探针、安装脚本与客户端更新器内嵌
 ```
 
 ### 4.1 权限模型（RBAC）
@@ -115,19 +113,19 @@ internal/controlplane/
 
 ```
 ┌─ 通信层 ────────────────────────────────────────────┐
-│  grpc_server, ws_server                              │
+│  grpc_server, ws_server(/terminal, /plugin-bridge)   │
 ├─ 进程管理层 ────────────────────────────────────────┤
 │  ProcessManager → IProcessCommand (策略模式)         │
-│    Direct / Daemon / Docker / RCON                   │
+│    Direct / Daemon / Docker                          │
 ├─ 守护进程 ──────────────────────────────────────────┤
 │  socket_server, java_process, output_buffer,         │
 │  pid_file, commands, frame                           │
-├─ 终端层 ────────────────────────────────────────────┤
-│  terminal manager, session (PTY + 多观察者)           │
+├─ 终端与日志流 ──────────────────────────────────────┤
+│  process stdout/stderr → WS terminal/log + gRPC events │
 ├─ Bot 管理层 ────────────────────────────────────────┤
-│  bot manager, worker_pool, ipc, state, prewarm       │
+│  bot manager, ipc, Node.js 子进程生命周期             │
 ├─ 指标采集 ──────────────────────────────────────────┤
-│  collector, mc_ping, rcon_client                     │
+│  collector, serverprobe(/metrics), heartbeat snapshots │
 ├─ 群组服层 (V2) ─────────────────────────────────────┤
 │  config_engine(round-trip+schema+校验),              │
 │  resource_alloc(端口池+工作目录), jdk_manager,        │
@@ -142,19 +140,18 @@ cmd/worker/main.go           # 含 daemon 子命令分支（wrapper 模式）
 cmd/jmctl/                    # 紧急控制台 CLI（list/emergency/stop/kill），仅链 daemon 帧协议包（§6.7，FR-184/ADR-041）
 internal/worker/
   config.go                                      # 加载 worker.yml + env 覆盖（FR-080）
-  heartbeat.go
-  grpc/{server,handler_instance,handler_bot,handler_file,handler_metrics}.go
-  process/{manager,command,direct,daemon,docker,gbk,detach,detach_unix,detach_windows}.go
-  daemon/{wrapper,conn,conn_unix,conn_windows,pid_file,pid_alive_unix,pid_alive_windows,buffer,frame}.go
-  terminal/{manager,session}.go
-  ws/{server,auth,handler_terminal,handler_log}.go
-  bot/{manager,worker_pool,ipc,state,prewarm}.go
-  metrics/{collector,mc_ping,rcon_client}.go
-  config/{parser,schema,validator,version}.go    # V2 配置引擎（保注释 round-trip）
-  resource/{port_pool,workdir_alloc}.go          # V2 端口/工作目录系统分配
-  jdk/{manager,registry,download}.go             # V2 JDK 托管
-  provision/{core_download,launch_spec,clone}.go # V2 搭建/结构化启动/复制
+  heartbeat/                                     # 心跳负载、任务快照与代理配置下发处理
+  setup/                                         # 免配置首次上线向导（FR-222）
   register/{register,identity}.go                # 注册（带 enroll token）+ 本地身份持久化（FR-080）
+  grpc/{server,*_ops,plugin_bridge}.go           # 生命周期/文件/归档/配置/Docker/备份/JDK/升级/搜索/探针等模块化 RPC
+  process/{manager,command,direct,daemon,docker,images,preflight,detach*}.go
+  daemon/{wrapper,conn*,pid_file,pid_alive*,buffer,frame}.go
+  ws/{server,bridge}.go                          # 终端 WS 与探针桥 WS
+  bot/{manager,ipc}.go                           # Bot 子进程管理与 IPC
+  metrics/{collector,serverprobe}.go             # ServerProbe /metrics 抓取与解析
+  artifactcache/                                 # 节点服务端核心缓存（内容寻址）
+  jdk/                                           # JDK 目录、下载与登记
+  decompiler/ search/ storage/ taskreg/ embed/   # 反编译、全文索引、备份存储、任务注册、内嵌资产
 ```
 
 ### 5.1 节点接入与部署（一键安装 / enrollment，FR-080，见 ADR-020）
@@ -295,7 +292,7 @@ serverprobe_world_{loaded_chunks,entities,tile_entities}{world=}  → 按世界�
 - 代理端载体：`platform-bungee` 的 `BungeePlayerEventListener`（监听 PostLogin/ServerSwitch/PlayerDisconnect，给出精确跨服路由 from→to）。
 - 二者经 core `BridgeClient.emitPlayerEvent` 出口上报；插件桥开关关闭（独立使用探针）时不上报。
 
-> 地基阶段（FR-065）打通通道层（会话/握手/心跳/connected·disconnected 冒泡 + proto 一次铺齐）；实时玩家事件采集（FR-066）已落地（见上）；治理执行 + 退役 RCON（FR-067）、在线更新（FR-068）为下游 FR，复用本通道、不再改 proto。
+> 地基阶段（FR-065）打通通道层（会话/握手/心跳/connected·disconnected 冒泡 + proto 一次铺齐）；实时玩家事件采集（FR-066）已落地（见上）；治理执行与 RCON 退役（FR-067）已落地，在线更新（FR-068）复用本通道、不再改 proto。
 
 ### 6.3 守护进程二进制帧协议
 
@@ -344,11 +341,17 @@ Go → Node.js (stdin, JSON 行):
   {"cmd":"create-bots","bots":[...]}
   {"cmd":"stop-bots","botIds":[...]}
   {"cmd":"set-behavior","botId":"b1","behavior":"follow","target":"player"}
+  {"cmd":"send-command","botId":"b1","command":"say hello"}
+  {"cmd":"run-script","scriptId":"s1","botIds":["b1"],"steps":[...]}
+  {"cmd":"stop-script","scriptId":"s1"}
 
 Node.js → Go (stdout, JSON 行):
+  {"evt":"worker-ready"}
+  {"evt":"heartbeat","seq":1,"timestamp":...}
   {"evt":"bot-state","bots":[...]}
   {"evt":"bot-event","botId":"b1","type":"chat","data":{...}}
   {"evt":"bot-error","botId":"b1","error":"ECONNREFUSED"}
+  {"evt":"script-progress","scriptId":"s1","status":"running","progress":50}
 ```
 
 ### 6.5 客户端 OTA 公网分发端点（玩家 updater ↔ Control Plane，FR-087 / ADR-022/023）
@@ -360,7 +363,7 @@ Control Plane 新增一类**面向玩家公网**的 HTTP 分发端点（客户�
 
 **发布编排前端流程（`ClientPublishPage`，FR-191 独立路由页 → FR-250 延迟批量上传）**：选文件/拖拽（散文件 + **文件夹** `webkitGetAsEntry` 递归保相对路径 + zip 前端 fflate 解包 + `webkitdirectory` 选择器）后文件以浏览器内 `File` **本地暂存**（草稿仅 File + name/size/相对 path，**无 sha256**）；文件树/路径/sync/platform 编排、删除全在本地零网络；点「发布」才**批量分块上传**（复用 FR-251 `uploadFileChunked`，本地 name+size 近似去重、总体进度、可取消、失败停批保草稿可重试）→ 得各 sha256/md5/size 组 `ManifestFile[]` → `POST .../versions`。**选文件/拖拽/发布前删除的文件从不上传**（省带宽）；纯编排逻辑抽在 `lib/client-publish-wizard.ts`（`collectEntries`/`dedupUnits`/`batchProgressBytes` 等，纯函数可测）。上传 codec=none（本期不压缩）。
 
-**鉴权与信任分层（ADR-022/023；信任模型见 [ADR-054](../adr/054-updater-arch-simplification.md)）**：拉取密钥**半公开**（随整包分发必泄露），仅作鉴权路由 + 吊销、**不作内容可信依据**；内容可信靠 **HTTPS + 拉取密钥鉴权 + sha256 完整性校验**（FR-256 起去掉 manifest Ed25519 验签——私钥在服务器上验签形同虚设，推翻 ADR-022/053）。消费端点与运营浏览器 JWT 入口、发布端点**物理隔离**；L7 防护（限流以 IP 为主）见 ADR-023。manifest 格式见 `docs/specs/client-distribution/contract.md`。**拉取密钥可查看 / 永久使用（FR-192/ADR-044）**：拉取密钥**发出后永久使用**（随整合包分发、所有后续更新都依赖它）。鉴权仍只用 `key_hash` 比对，另存 AES-256-GCM 可逆加密副本 `key_enc`（`JIANMANAGER_CLIENT_KEY_ENC_SECRET` 注入密钥、未配优雅降级不写不阻断），平台管理员经 `GET .../keys/:keyId/reveal`（+ 审计 `client_key.reveal`）查看明文。运营操作面：创建可填自定义值（留空自动生成），`PUT .../keys/:keyId` 改值/名称（改值重算 `key_hash` + 重写 `key_enc`，审计 `client_key.update`）；**不提供轮换**（换 key 会使已分发客户端断更，与永久使用矛盾）；吊销保留并强警告。可查看与拉取密钥「半公开、非信任根」的真实信任级一致。
+**鉴权与信任分层（ADR-022/023；信任模型见 [ADR-054](../adr/054-updater-arch-simplification.md)）**：拉取密钥**半公开**（随整包分发必泄露），仅作鉴权路由 + 吊销、**不作内容可信依据**；内容可信靠 **HTTPS + 拉取密钥鉴权 + sha256 完整性校验**（FR-256 起去掉 manifest Ed25519 验签——私钥在服务器上验签形同虚设，推翻 ADR-022/053）。消费端点与运营浏览器 JWT 入口、发布端点**物理隔离**；L7 防护（限流以 IP 为主）见 ADR-023。manifest 格式见 `docs/specs/client-distribution/contract.md`。**拉取密钥可查看 / 永久使用（FR-192/ADR-044）**：拉取密钥**发出后永久使用**（随整合包分发、所有后续更新都依赖它）。鉴权仍只用 `key_hash` 比对，另存 AES-256-GCM 可逆加密副本 `key_enc`（主密钥 env 注入优先，未配则自动生成并持久化，失败时降级为不可查看但不阻断鉴权），平台管理员经 `GET .../keys/:keyId/reveal`（+ 审计 `client_key.reveal`）查看明文。运营操作面：创建可填自定义值（留空自动生成），`PUT .../keys/:keyId` 改值/名称（改值重算 `key_hash` + 重写 `key_enc`，审计 `client_key.update`）；**不提供轮换**（换 key 会使已分发客户端断更，与永久使用矛盾）；吊销保留并强警告。可查看与拉取密钥「半公开、非信任根」的真实信任级一致。
 
 **L7 应用层防护（FR-096 + FR-264，见 ADR-023）**：消费端点（manifest / updater-core / 制品 / security hello）与运营浏览器 JWT 入口隔离，并叠加两层防护。第一层 `ClientDistGuard` 提供 IP 黑白名单（`client_ip_rules`，deny 优先、有 allow 即白名单模式）、per-IP 令牌桶限流与全局并发信号量，命中拒 403/429，内存计数器经 `GET /client-dist/protection-stats` 可观测。第二层 `ClientDistSecurityService` 提供单节点源站安全防护：IP 临时封禁（`client_protection_actions`，`status=active|expired|canceled`，命中先于密钥校验返回 `IP_TEMP_BLOCKED` + `Retry-After`）、per-key / per-channel 限速、制品下载并发与字节配额、key 状态机（`normal / observe / throttled / suspended / revoked`）、频道保护模式（只能降速 / 降级，不封禁频道）和制品授权收紧（只能拉所属频道 latest/回滚窗口/选定 updater-core 引用的 sha，越权返回 `ARTIFACT_NOT_ALLOWED`）。Range 下载仍由 `http.ServeContent` 支持 206，但拒绝 multi-range，小 Range 会进入风险事件。缓存即防护（ETag/304 + 内容寻址强缓存，CDN 前置）。**L3/L4 容量型 DDoS 靠 CDN/Anycast/云清洗，不在 JM**。
 
@@ -370,11 +373,11 @@ Control Plane 新增一类**面向玩家公网**的 HTTP 分发端点（客户�
 
 启动器经 `-javaagent:wedge.jar=<gameDir>` 注入。**楔子（wedge，Java 8，~30KB 稳定件随基础包分发，代码冻结见 [ADR-054](../adr/054-updater-arch-simplification.md) §4）** premain 自定位、读同目录 `jm-updater.json`、**gradle-wrapper 模式**：只接受 API 根 `endpoint`（如 `/api/v1`），据 `endpoint + channel` 自动拼接 updater-core 端点并拉取 updater-core jar（JDK 原生 `HttpURLConnection` + `MessageDigest` SHA-256 校验，本地 `.jm-updater/core/` 保留 3 版用于回滚）→ 以独立 `URLClassLoader` **内存加载** selected core（不锁原 jar）→ 反射 `Core.run(ctx)`（入口签名冻结 `Core.run(Map<String,String>)`，ctx 含 `configJson` 原文透传供 core 后续扩展解析不改楔子）→ 同步等待 + 超时，全程 **fail-open**（任何异常都放行游戏）。楔子**永不接触 manifest**。**updater-core（Java 8，兼容低版本游戏 JVM；fat jar 自含 zstd-jni，~2MB 去掉 BouncyCastle）** 拉 manifest（不再验签）→ 文件级 reconcile（增量/减量、托管区/玩家区隔离、**流式下载 + sha256 完整性校验 + HTTP Range 断点续传**，FR-257）→ 端点不可达 **fail-static** 带本地版本放行。HTTP 用 `HttpURLConnection`（Java 8 无 `java.net.http`）。两件套包名 `top.wcpe.mc.jm.updater.{wedge,core}`。
 
-**清理范围 manifest 字段（FR-255，增强 FR-191/088）**：manifest `managedDirs`（托管/自动清理目录）支持嵌套路径串（如 `config/foo`，客户端前缀匹配）；含哨兵 `"*"` 时语义 = **清空整个 gameDir**——删除清单未列的一切，**除**内置玩家区安全清单 `PLAYER_ZONE`（`saves/ screenshots/ logs/ crash-reports/ options.txt` 等纵深防御永不删）+ 运营自定义追加排除 `cleanExclude`（`string[]`，命中前缀永不删，叠加在 `PLAYER_ZONE` 之上）。`cleanExclude` 空则省略（`omitempty`，老 manifest canonical 字节不变、向后兼容，schemaVersion 维持 1）。删除判定：`isUnderManaged && !isPlayerZone && !isExcluded` 才删。发布页 meta 步提供目录树勾选（由草稿文件派生）+ clean-all 开关 + 自定义排除标签输入；clean-all 发布强制 `DangerConfirm` 二次确认。
+**清理范围 manifest 字段（FR-255，增强 FR-191/088）**：manifest `managedDirs`（托管/自动清理目录）支持嵌套路径串（如 `config/foo`，客户端前缀匹配）；含哨兵 `"*"` 时语义 = **清空整个 gameDir**——删除清单未列的一切，**除**内置玩家区安全清单 `PLAYER_ZONE`（`saves/ screenshots/ logs/ crash-reports/ options.txt` 等纵深防御永不删）+ 运营自定义追加排除 `cleanExclude`（`string[]`，命中前缀永不删，叠加在 `PLAYER_ZONE` 之上）。`cleanExclude` 空则省略（`omitempty`，老 manifest JSON 不变、向后兼容，schemaVersion 维持 1）。删除判定：`isUnderManaged && !isPlayerZone && !isExcluded` 才删。发布页 meta 步提供目录树勾选（由草稿文件派生）+ clean-all 开关 + 自定义排除标签输入；clean-all 发布强制 `DangerConfirm` 二次确认。
 
 **楔子自动拉 core + N-1 回退（FR-258，取代 FR-091 core 自更新；见 [ADR-054](../adr/054-updater-arch-simplification.md) §3）**：整合包只带 ~30KB wedge.jar，首次启动楔子按 API 根 `endpoint` 自动查询 updater-core 端点（CP 返回选定分发信息 `{version,sha256,downloadUrl,size}`；`version` 为频道级递增分发版本，`sha256` 为实际 core jar）→ 下载 core jar → SHA-256 校验 → 存入 `.jm-updater/core/<sha>.jar` 标记 pending；`CoreSelector.select` 状态机据 `<gameDir>/.jm-updater/core/state.properties`（`selected/prev/pending/tried`，wedge↔core 共享格式）跑选择：首次加载 pending=**trial** 并起 **boot-confirm 看门狗**（daemon 存活 `bootConfirmSec` 即建 `pending.confirmed`）；下次启动若 pending 已 tried 且无 confirmed（判定上次崩溃/早退）→ **回退 N-1**（弃 pending、留 selected）；已确认 → **promote**（selected=pending、旧 selected 降 N-1）。本地保留最近 3 个 core jar 超出自动清理最老。**运营面板一键切换选定 core 版本**（FR-259）：CP 归档多版本、运营切「Core 版本」Tab 选定 → 服务端维护频道级递增分发版本；客户端下次启动按 endpoint 自动查询，看到更大的 `version` 后下载目标 `sha256`，因此切回旧归档 jar 回滚也会生效。`failedVersion` 记录某版 trial 失败后不再重试（避免 boot-loop）。运营整体回滚见 FR-088（服务端以更高 version 重发）。
 
-**客户端信任模型：HTTPS + 拉取密钥鉴权（FR-256，见 [ADR-054](../adr/054-updater-arch-simplification.md)，推翻 ADR-022/053）**：FR-256 起去掉 manifest Ed25519 验签——私钥在服务器上（自动生成落盘或 env 注入）验签形同虚设（服务器被攻破即私钥泄露，攻击者可伪造签名），验签付出的复杂度（BouncyCastle 14MB、密钥管理、配置面）换来的安全保障在实际部署下不成立。信任模型简化为：**拉取密钥鉴权**（防外人乱拉、区分频道、可吊销，ADR-022 决策 1 不变）+ **HTTPS 传输**（防中间人）+ **sha256 完整性校验**（防下载损坏，非信任校验）。`jm-updater.json` 的 `signPublicKey`/`signKeyId` 字段废弃。`GET /client-dist/sign-key` 端点删除（FR-248 面板公钥展示随验签一起作废）。`GET /client-channels/:id/updater-config` 保留但只返回 API 根 `endpoint`（不再含签名公钥，也不再含 `coreEndpoint` 配置字段）。updater-core.jar 从 ~16MB（含 BC）降到 ~2MB。
+**客户端信任模型：HTTPS + 拉取密钥鉴权（FR-256，见 [ADR-054](../adr/054-updater-arch-simplification.md)，推翻 ADR-022/053）**：FR-256 起去掉 manifest Ed25519 验签——旧方案把签名私钥放在服务器侧，服务器被攻破即可能伪造签名，验签付出的复杂度（BouncyCastle 14MB、密钥管理、配置面）换来的安全保障在实际部署下不成立。信任模型简化为：**拉取密钥鉴权**（防外人乱拉、区分频道、可吊销，ADR-022 决策 1 不变）+ **HTTPS 传输**（防中间人）+ **sha256 完整性校验**（防下载损坏，非信任校验）。`jm-updater.json` 的 `signPublicKey`/`signKeyId` 字段废弃。`GET /client-dist/sign-key` 端点删除（FR-248 面板公钥展示随验签一起作废）。`GET /client-channels/:id/updater-config` 保留但只返回 API 根 `endpoint`（不再含签名公钥，也不再含 `coreEndpoint` 配置字段）。updater-core.jar 从 ~16MB（含 BC）降到 ~2MB。
 
 **updater-core 归档多版本 + 运营面板可选（服务端，FR-259，见 [ADR-054](../adr/054-updater-arch-simplification.md) §3，修订 ADR-045）**：CP 每次 `make embed-client-updater` 时新 core jar 入库归档为 `client-updater-core` 制品类型（多版本不覆盖，归档版本号递增），而非 ADR-045 的「单版本内嵌自动驱动」；平台管理员也可在频道「Core 版本」Tab 手动上传 updater-core.jar hotfix，经 `POST /client-channels/:id/updater-core/versions` 归档为同一制品类型，并可立即选为该频道版本。updater-core.jar 构建时内嵌 `META-INF/jm-updater-core.properties` 与 Manifest 元信息（`version/gitCommit/dirty/buildTime`）；CP 归档时优先读取并写入资产 metadata，Core 版本页展示 `displayVersion` 与 commit/dirty，缺少元信息的紧急 hotfix jar 仍可直接上传。运营经频道详情「Core 版本」Tab 列出归档版本、一键切换频道选定版本（`ClientChannel.SelectedCoreSHA256`），页面同时展示最新归档与当前选定状态。updater-core 查询端点返回频道选定 `sha256` 及 `ClientChannel.SelectedCoreVersion` 分发版本供楔子自动拉取；分发版本与归档版本解耦，回滚旧 `sha256` 时仍递增。manifest `agent.core` 段保留但信息来源改为该查询端点（不再驱动 core 自更新）。`/client-artifacts/:sha256` 端点扩展支持 `client-updater-core` 类型分发 core jar。为避免误删导致楔子拉不到 core，制品库删除会保护内置来源 `client-updater-core` 与任何频道当前选定的 core 归档（返回 `ASSET_IN_USE`）。楔子（wedge）仍内嵌单版本固定（~30KB，代码冻结）。接入指引（FR-107）只读展示内嵌更新器版本。
 
@@ -435,7 +438,7 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | group_members | group_id, user_id, role(0=member/1=admin) |
 | group_quotas | group_id(UNIQUE), max_instances, max_bots, max_storage_mb |
 | nodes | uuid(UNIQUE，身份锚定键，ADR-039), name(活跃唯一：部分唯一索引 `uniq_nodes_name_active` WHERE deleted_at IS NULL，软删可释放名), host, grpc_port, ws_port, secret, status(0/1/2), maintenance(bool, cordon 维护模式，与在线/离线正交), os, arch, cpu_cores, memory_mb, disk_total_mb, load_avg1(V2, 系统负载, FR-062), proxy_mode(inherit/custom, 出站代理模式, 默认 inherit, FR-185/ADR-043), proxy_url(节点自定义代理, 仅 custom, 含凭据/API 脱敏), proxy_no_proxy(节点自定义免代理列表, 仅 custom), last_heartbeat, deleted_at |
-| instances | uuid, node_id(FK), name, type, role(proxy/backend/universal, V2), process_type, status, start_command, work_dir(系统分配), env_vars(JSON), auto_start, auto_restart, jdk_id(FK, V2), launch_spec(JSON: jvm_args/core_jar/args/omit_nogui, V2), image(docker 模式镜像引用, FR-078), container_id(docker 模式最近容器 ID), rcon_*, forwarding_secret(V2, Velocity 转发), proxy_online_mode(V2, 代理正版校验), server_port/query_port, probe_port(V2, ServerProbe /metrics 端口, 29940 段), mc_*, tags(JSON) |
+| instances | uuid, node_id(FK), name, type, role(proxy/backend/universal, V2), process_type, status, start_command, work_dir(系统分配), env_vars(JSON), auto_start, auto_restart, jdk_id(FK, V2), launch_spec(JSON: jvm_args/core_jar/args/omit_nogui, V2), image(docker 模式镜像引用, FR-078), container_id(docker 模式最近容器 ID), forwarding_secret(V2, Velocity 转发), proxy_online_mode(V2, 代理正版校验), server_port/query_port, probe_port(V2, ServerProbe /metrics 端口, 29940 段), mc_*, tags(JSON) |
 | group_instances | group_id, instance_id(UNIQUE) |
 | instance_group_nodes (V2, FR-165) | uuid, name, parent_id(自引用 FK, NULL=根), sort, deleted_at（实例组织分组树节点，邻接表表达多级嵌套；正交于用户组/网络群组，仅组织归类，ADR-033）；INDEX(parent_id) |
 | instance_group_members (V2, FR-165) | group_id(FK instance_group_nodes), instance_id(FK)；UNIQUE(group_id, instance_id)（实例-组织分组 M:N，一实例可属多组；删组只解绑、不删实例） |
@@ -461,7 +464,7 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | file_versions (V2) | instance_id(FK), file_path, content_hash, content(base64,二进制安全), size, author_id, rollback_of_version_id, created_at；INDEX(instance_id,file_path)（FR-051 通用文件改前快照） |
 | assets | type(core/plugin/image/video/archive/blob), name, version, filename, sha256(寻址+去重键), md5, size, content_type, source_url, metadata(JSON), storage_state(hot/archived/external), storage_backend, ref_count, rel_path(相对数据根), created_at, last_used_at；UNIQUE(type,sha256) |
 | logs (FR-049) | source(instance/control_plane/worker), level(debug/info/warn/error), instance_id, instance_uuid, node_id, stream(stdout/stderr), message, time；复合索引 (source,time)/(level,time)/(instance_id,time)/(node_id,time)，关键字检索走 message 列谓词 |
-| ban_records (V2) | uuid, player_name, reason, scope(network/instance/global), scope_id, operator_id(FK), active, created_at, unbanned_at（玩家封禁台账，FR-054；RCON 命令已下发后留档，解封置 active=false 保留历史） |
+| ban_records (V2) | uuid, player_name, reason, scope(network/instance/global), scope_id, operator_id(FK), active, created_at, unbanned_at（玩家封禁台账，FR-054；保留历史治理记录，解封置 active=false 保留历史） |
 | platform_settings (V2) | key(PK), value, updated_at（平台配置 DB 覆盖层，仅存被显式覆盖的白名单键；生效优先级 DB 覆盖 > 环境变量 > YAML 默认，FR-063/ADR-015）。network 类键 `proxy.url`（敏感脱敏）/`proxy.no_proxy` 为 CP 全局出站代理（FR-185/ADR-043），保存即重建 CP 出站持有者并作为各节点默认代理（优先级 settings DB > control-plane.yml > env） |
 | self_update_check_caches (FR-186) | id(固定=1, 单行覆盖), result_json(上次成功 CheckResult 的 JSON blob, 整段存不拆字段以免随 CheckResult 演进迁移、反序列化缺字段降级), source(更新源标识冗余, 诊断用), checked_at（系统更新页检查结果服务端缓存；GET /self-update/check 返此缓存不触发 live、refresh 成功后 upsert 覆盖、刷新失败不清，进页即显 + 后台静默刷新，增强 FR-182） |
 | tasks (V2, FR-183) | task_id(UNIQUE, UUID 业务键), node_id, kind(jdk_install/…), state(pending/running/succeeded/failed), progress(0~100), title, detail, error, result(成功结果 JSON), created_by(发起人/归属), created_at, updated_at（全局任务中心：长任务进度经心跳 upsert，终态触发副作用，ADR-040） |
@@ -924,14 +927,14 @@ log_store:
 ```
 data/
 ├── bin/              # 平台/辅助可执行
-├── etc/              # 平台与节点配置；client-sign-key.pem 为生产态未注入时自动生成的 OTA 签名私钥（PKCS#8 PEM，0600，跨重启稳定，FR-248/ADR-052）
+├── etc/              # 平台与节点配置；当前 OTA 不再生成 client-sign-key.pem 作为信任根，key_enc 主密钥可由 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入或自动生成持久化为 client-key-enc.key
 ├── opt/jdks/         # 便携 JDK：<vendor>-<ver>/（取代旧的 <serversDir>/jdks）
 ├── var/
 │   ├── servers/      # 服务器工作目录：<slug>-<shortid>/（系统分配）
 │   ├── index/        # 全文搜索倒排索引：<instance-uuid>/（Worker 本地派生，ADR-017）
 │   ├── artifact-cache/ # 节点制品缓存：<sha256[:2]>/<sha256>(+.meta)（Worker 本地派生，FR-178）
 │   ├── log/          # 运行日志
-│   └── artifacts/    # 制品库（内容寻址，见 §14 / ADR-011；CP 全局，区别于上方节点本地缓存）
+│   └── artifacts/    # 制品库（内容寻址，见 §14 / ADR-011；含 client-file 与 client-updater-core 归档；CP 全局，区别于上方节点本地缓存）
 └── cache/            # 临时：下载中转/解压；client-uploads/<uploadId>/ 为大文件分块上传临时分片区（FR-251，complete 拼装喂 CAS 后清理，CP 重启清残留）
 ```
 
@@ -1005,7 +1008,7 @@ proxy:
 
 ### 13.2 资源所有权（系统分配）
 - **工作目录**：系统在数据根 `var/servers` 下分配 `<name-slug>-<shortid>`（CP 分配并按相对路径登记，Worker 解析为绝对路径），用户不可输入，路径只读展示（取代 BUG-004 必填 UI，落位见 §11.1 / ADR-010）。
-- **端口**：端口池为新实例分配同节点唯一的 server-port/rcon/query，代理监听端口同理；分配由 Worker 实施、CP 登记。
+- **端口**：端口池为新实例分配同节点唯一的 server-port/query/probe，代理监听端口同理；分配由 Worker 实施、CP 登记。
 - **JDK/运行时**：按节点维护 `node_jdks` 注册表，支持安装多版本（默认 Adoptium）；JDK 装入数据根 `opt/jdks`（见 §11.1）；实例绑定 JDK，启动注入 JAVA_HOME/PATH。
 
 ### 13.3 配置引擎

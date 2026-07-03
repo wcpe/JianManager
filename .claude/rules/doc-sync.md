@@ -12,7 +12,7 @@
 | 新增/修改配置项 | `docs/CONVENTIONS.md` 或对应配置文档 |
 | 新增/修改进程模型或通信路径 | `docs/ARCHITECTURE.md` 架构图 + ADR |
 | 新增/修改页面结构或导航 | `docs/ARCHITECTURE.md` 前端架构章节 |
-| Feature 实现完成 | `docs/PRD.md` 中对应 FR 状态 → `✅ done` |
+| Feature 实现完成 | `docs/PRD.md` 中对应 FR 状态 → `✅ 已交付@vX.Y.Z`（正式发版前可标下一开发版号，禁止裸 `✅ 已交付` / `✅ done`） |
 | 新增架构决策 | `docs/adr/NNN-标题.md` |
 
 ## 同步时机

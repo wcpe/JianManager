@@ -1,9 +1,9 @@
 # ADR-052: OTA 签名密钥自动生成 + 持久化（修订 ADR-038、细化 ADR-022 信任根供给）
 
 - **日期**: 2026-07-01
-- **状态**: accepted
+- **状态**: superseded（被 [ADR-054](054-updater-arch-simplification.md) 推翻——manifest 验签已去，签名密钥自动生成与 `GET /client-dist/sign-key` 随 FR-248 作废）
 - **修订**: [ADR-038](038-signer-missing-degraded-startup.md) 的「生产态未注入私钥 → **降级启动**」→ 改为「未注入 → **自动生成并持久化密钥**、启用签名」。ADR-038 由本 ADR **superseded**。
-- **细化**: [ADR-022](022-client-manifest-trust-and-public-endpoint.md) 决策 2/8 的**信任根私钥供给方式**（原「私钥服务端持有、env 注入不入库」补充为「未注入时由服务端自动生成并持久化到数据根」）。ADR-022 的 8 条核心决策与 `accepted` 状态不变。
+- **细化**: [ADR-022](022-client-manifest-trust-and-public-endpoint.md) 决策 2/8 的**信任根私钥供给方式**（原「私钥服务端持有、env 注入不入库」补充为「未注入时由服务端自动生成并持久化到数据根」）。ADR-022 已被 ADR-054 取代，本文以下正文保留作历史决策记录。
 
 ## 上下文
 

@@ -48,80 +48,80 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-163~169（前端整体重设计:视觉底座 / 双主题 / 多级分组 / 可组合工作区+超级工作台+导播台 / 监控升级）→ `docs/specs/ui-redesign/design.md`(+ 原型 `preview.html`)
 - FR-173~175（CI 发布管线 / 出站网络代理 / 自更新对接 GitHub Releases，关联 ADR-036/037）→ `docs/specs/release-pipeline/`、`docs/specs/network-proxy/`、`docs/specs/self-update-github/`（开发中创建）
 - FR-176~184（节点与运行时 UI 重做 / 自更新增强 / 全局任务中心 / jmctl 紧急控制台，关联 ADR-039/040/041/042 + ADR-036 更新）→ FR-182 `docs/specs/self-update-enhancement/spec.md`、FR-183 `docs/specs/task-center/spec.md`、FR-184 `docs/specs/emergency-cli/spec.md`（已落审）；FR-176/179/180/181 免 spec；FR-177 `docs/specs/node-page-redesign/spec.md`、FR-178 `docs/specs/node-runtime-panels/spec.md`（W2，已自审）
-- FR-185~190（出站代理面板化+节点级下发 / 更新页服务端缓存+markdown / 客户端分发迁运营+全流程向导重做 / 全站模态纪律+复制兜底 / 重度模态重做 / Worker 二进制 CP 下发，关联 ADR-043/046 + 增强 FR-174/182/086/072/009/004）→ FR-185 `docs/specs/proxy-visual-config/`、FR-186 `docs/specs/update-page-cache/`、FR-187 `docs/specs/client-dist-redesign/`、FR-189 `docs/specs/heavy-modal-redesign/`（需 spec，开发中创建）；FR-188 免 spec（规则 + 全站审计改造 + 复制兜底）；FR-190 `docs/specs/worker-binary-cp-delivery/` + ADR-046（需 spec，本波后单独做；ADR 由 044 顺延避与下批撞号）
+- FR-185~190（出站代理面板化+节点级下发 / 更新页服务端缓存+markdown / 客户端分发迁运营+全流程向导重做 / 全站模态纪律+复制兜底 / 重度模态重做 / Worker 二进制 CP 下发，关联 ADR-043 + FR-190 待补 ADR + 增强 FR-174/182/086/072/009/004）→ FR-185 `docs/specs/proxy-visual-config/`、FR-186 `docs/specs/update-page-cache/`、FR-187 `docs/specs/client-dist-redesign/`、FR-189 `docs/specs/heavy-modal-redesign/`（需 spec，开发中创建）；FR-188 免 spec（规则 + 全站审计改造 + 复制兜底）；FR-190 待补 spec / ADR（本波后单独做，不预占编号）
 - FR-191~194（客户端分发二轮重做：发布文件树+zip 上传 / 拉取密钥可查看 / updater-core 版本管理 / 端到端流程图，关联 ADR-044[FR-192 修订 ADR-022①] / ADR-045[FR-193 补充 ADR-021] + 增强 FR-187/086/091）→ FR-191 `docs/specs/client-dist-publish-redesign/`、FR-192 `docs/specs/pull-key-viewable/`、FR-193 `docs/specs/updater-core-version-mgmt/`（需 spec，开发中创建）；FR-194 免 spec（前端流程图）；BUG-D 面包屑域名 / BUG-E 就绪度 CTA 不弹窗（fix，不占 §4）
 - FR-196~212（前端 mock API 与测试基座：MSW v2 内存假后端[有状态、跨 endpoint 全联动] + 双运行形态[`VITE_MOCK` 整站 mock 模式 + jsdom/@testing-library 强断言测试] + 成功默认/按需注入错误 + 实时流全仿真[WS 终端 / SSE 日志·事件·指标] + Playwright E2E + CI 门禁，关联新 ADR-047）→ FR-196/197/198/211/212 `docs/specs/frontend-mock-api/spec.md`（**需 spec**，地基三条＋域簇范式契约＋E2E/CI，开发中创建）；FR-199~210 **免 spec**（域簇机械套用 FR-196/197/198 既定范式 + 既有 `docs/API.md` / `web/src/api/*.ts` 类型契约，不引入新模型/新契约/新 ADR）；FR-211 Playwright E2E（mock 模式整站）+ FR-212 CI 前端质量门禁（PR/push 拦截 lint+vitest+E2E，扩 `release.yml` test 闸）；登录失败整页刷新 = fix 走 `sdd-fix-bug`（不占 §4），其页面级回归并入 FR-199
 - BUG-A 节点重名覆盖（修 FR-004 注册身份匹配缺陷，见 ADR-039）：注册改 UUID 锚定三级匹配 + 节点名活跃唯一 + 坏节点检测/修复后端（`NodeRepairService` + `/nodes/repair/*`、`/nodes/:id/reenroll|orphans|purge-orphans`）随 ADR-039 fix 提交落地；坏节点修复**可视化入口**随 FR-177 节点页重做。属缺陷修复（非新 FR），不占 §4 FR 编号
 - FR-213~221（观测体系重构 + 客户端分发观测 + 共享文件浏览器 + 通知中心：导航{监控/日志/统计}+任务中心移系统 / 站内信+告警合并通知中心 / 分发观测时序底座+监控页+统计扩维 / 文件浏览器抽取+实例卡片迁移+分发文件预览 / 平台级统计页 / 时序剖析增强，关联 ADR-048[统一通知模型] / ADR-049[分发观测聚合，复用 ADR-013] + 增强 FR-060/086）→ FR-213 `docs/specs/file-browser-component/`、FR-215 `docs/specs/observability-ia-redesign/`、FR-216 `docs/specs/notification-center/`、FR-217 `docs/specs/client-dist-observability/`、FR-220 `docs/specs/platform-statistics/`（需 spec，开发中创建）；FR-214/218/219/221 免 spec（前端复用/消费既有）；FIX-1 发布上传复验 + strict/fail-static 等术语中文化（fix 走 sdd-fix-bug，不占 §4）
-- FR-222~224 + FIX-A~D（节点上线流程打通 + worker 生命周期修复 + .yml 约定：worker 免配置自启 setup[下载/上线分离] / 安装脚本重构[cwd 跳下载] / .yml 全改，关联 ADR-050[worker 重连重推实例] / ADR-051[worker 免配置 setup，改写 ADR-020] + 增强 FR-080/004/006/017）→ FR-222 `docs/specs/worker-self-setup/`（需 spec，开发中创建）；FR-223/224 免 spec（脚本/约定重构）；FIX-A #2 worker 重连重推实例[+ADR-050] / FIX-B #3 终端断连 / FIX-C #4 启停 kill 竞态 / FIX-D 首次上线真机断点（fix 走 sdd-fix-bug，不占 §4）
-- FR-225~232 + FIX-1~6（迭代修复批 2026-06-29：调试开关 / 通知-任务联动 / 任务强停+筛选 / JDK登记重做 / 连通性测试族 / 创建向导页 / 复制双模式 / 前端细节 + onboarding 真机修复）→ **归真 FR-222/223**（真机上线未通过，退回 🔨 开发中，由 FIX-1/2/3 修复真机验过后随发版重标 ✅）；FR-227 `docs/specs/task-force-stop/`、FR-228 `docs/specs/jdk-register-redesign/`、FR-229 `docs/specs/connectivity-selftest/`、FR-231 `docs/specs/instance-clone-modes/`（需 spec，开发中创建）；FR-225/226/230/232 免 spec；FIX-1/2/3 节点上线真机打通[归真 FR-222/223] / FIX-4 JDK 下载超时 / FIX-5 JDK 登记卡死 / FIX-6 系统更新进页只读缓存（fix 走 sdd-fix-bug，不占 §4）
-- FR-233~247 + FIX-7~9（UI 重塑 + Docker 落地 + 实例规模化 2026-06-30）：实例配置随时编辑 / 创建向导优化 / 实例页重设计[1000+] / 一键搭建+docker傻瓜建服 / Docker检测引导 / 导航外壳+实例选择器重构[原型,1000+]+面包屑文案纠错[排最后] / 全局搜索命令面板+页眉弹层选实例 / 加载进度条 / 全局动画统一 / 全站卡片范式提质+节点页卡片 / 实例规模化后端API → **需 spec**：FR-233/235/236/237/240/241/246/247；**免 spec**：FR-234/243/244；**FR-240 含 2-3 原型审核闸**。合并：FR-238→FR-078（既有「镜像管理」范围，完成 FR-078/079 即覆盖 docker 启动修通+镜像/容器管理 UI+端口+限额）、FR-239→FR-236、FR-242→FR-241、FR-245→FR-240。FIX-7 生产 SQL 日志静默[`database.go` GORM logger 接调试开关] / FIX-8 创建实例节点下拉空[放宽+空态] / FIX-9 点击实例卡片无反应（fix 走 sdd-fix-bug，不占 §4）。3 地基（FR-247 规模化后端 / FR-240 导航原型 / FR-246 卡片范式）设计决策先落。计划见 `.tmp/brainstorm-ui-docker-batch-2026-06-30.md`
-- FR-264（客户端分发单节点源站安全防护：多维限流 / IP 临时封禁 / key 状态机 / 频道降速保护 / 制品授权收紧 / 启动安全画像 / 独立防护中心）→ `docs/specs/client-dist-security-firewall/spec.md`（已交付）
-- FR-265（客户端分发观测四 Tab 重构：统计/监控/日志只看请求事件，客户端 Tab 独立看运行态与更新结果；新增运行态心跳表/端点、请求日志脱敏详情、实时聚合；清理废弃缓存命中指标；与 FR-264 并行开发互不覆盖）→ `docs/specs/client-dist-observability-rebuild/spec.md`（已交付）
-- FR-266（updater-core 构建元信息内嵌与展示：jar 内写版本 / Git commit / dirty / buildTime，CP 归档读取并在 Core 版本页展示，紧急 hotfix 仍可直接上传）→ `docs/specs/updater-core-build-metadata/spec.md`（开发中）
+- FR-222~224 + FIX-A~D（节点上线流程打通 + worker 生命周期修复 + .yml 约定）：FR-222/223 已由 0.13.0 开发版 FIX-1/2/3 归真闭环；FR-224 已在 v0.12.0 交付；FR-222 `docs/specs/worker-self-setup/`，FR-223/224 免 spec。FIX-A #2 worker 重连重推实例[+ADR-050] / FIX-B #3 终端断连 / FIX-C #4 启停 kill 竞态 / FIX-D 首次上线真机断点（fix 走 sdd-fix-bug，不占 §4）
+- FR-225~232 + FIX-1~6（0.13.0 开发版归档）：调试开关 / 通知-任务联动 / 任务强停+筛选 / JDK 登记重做 / 连通性测试族 / 创建向导页 / 复制双模式 / 前端细节已交付；FIX-1/2/3 已把 FR-222/223 节点上线链路归真闭环；FR-227 `docs/specs/task-force-stop/`、FR-228 `docs/specs/jdk-register-redesign/`、FR-229 `docs/specs/connectivity-selftest/`、FR-231 `docs/specs/instance-clone-modes/`；FIX-4 JDK 下载超时 / FIX-5 JDK 登记卡死 / FIX-6 系统更新进页只读缓存为 0.13.0 修复项（fix 走 sdd-fix-bug，不占 §4）
+- FR-233~247 + FIX-7~9（UI 重塑 + Docker 落地 + 实例规模化 2026-06-30）：FR-233/234/236/237/241/243/246/247 已在 0.13.0 开发版交付；FR-235（实例列表页重设计）、FR-240（导航外壳完整重构）、FR-244（全局动画系统）仍按 §4 状态继续跟踪。合并关系：FR-238→FR-078，FR-239→FR-236，FR-242→FR-241，FR-245→FR-240。FIX-7 生产 SQL 日志静默 / FIX-8 创建实例节点下拉空 / FIX-9 点击实例卡片无反应为 0.13.0 修复项（fix 走 sdd-fix-bug，不占 §4）。计划见 `.tmp/brainstorm-ui-docker-batch-2026-06-30.md`
+- FR-264（客户端分发单节点源站安全防护：多维限流 / IP 临时封禁 / key 状态机 / 频道降速保护 / 制品授权收紧 / 启动安全画像 / 独立防护中心）→ `docs/specs/client-dist-security-firewall/spec.md`（已交付@v0.13.0）
+- FR-265（客户端分发观测四 Tab 重构：统计/监控/日志只看请求事件，客户端 Tab 独立看运行态与更新结果；新增运行态心跳表/端点、请求日志脱敏详情、实时聚合；清理废弃缓存命中指标；与 FR-264 并行开发互不覆盖）→ `docs/specs/client-dist-observability-rebuild/spec.md`（已交付@v0.13.0）
+- FR-266（updater-core 构建元信息内嵌与展示：jar 内写版本 / Git commit / dirty / buildTime，CP 归档读取并在 Core 版本页展示，紧急 hotfix 仍可直接上传）→ `docs/specs/updater-core-build-metadata/spec.md`（已交付@v0.13.0）
 - 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
 
 | 编号 | 需求 | 优先级 | 状态 |
 |---|---|---|---|
-| FR-001 | 用户认证（JWT 双 Token） | — | ✅ 已交付 |
-| FR-002 | 用户与权限管理（三级 RBAC） | — | ✅ 已交付 |
-| FR-003 | 用户组与配额 | — | ✅ 已交付 |
-| FR-004 | 节点注册与心跳 | — | ✅ 已交付 |
-| FR-005 | 实例生命周期管理 | — | ✅ 已交付 |
-| FR-006 | 守护进程（Daemon Wrapper） | — | ✅ 已交付 |
-| FR-007 | 终端实时 | — | ✅ 已交付 |
-| FR-008 | 文件管理 | — | ✅ 已交付 |
-| FR-009 | Bot 平台 | — | ✅ 已交付 |
-| FR-010 | 监控指标 | — | ✅ 已交付 |
-| FR-011 | 告警规则 | — | ✅ 已交付 |
+| FR-001 | 用户认证（JWT 双 Token） | — | ✅ 已交付@v0.1.0 |
+| FR-002 | 用户与权限管理（三级 RBAC） | — | ✅ 已交付@v0.1.0 |
+| FR-003 | 用户组与配额 | — | ✅ 已交付@v0.1.0 |
+| FR-004 | 节点注册与心跳 | — | ✅ 已交付@v0.1.0 |
+| FR-005 | 实例生命周期管理 | — | ✅ 已交付@v0.1.0 |
+| FR-006 | 守护进程（Daemon Wrapper） | — | ✅ 已交付@v0.1.0 |
+| FR-007 | 终端实时 | — | ✅ 已交付@v0.1.0 |
+| FR-008 | 文件管理 | — | ✅ 已交付@v0.1.0 |
+| FR-009 | Bot 平台 | — | ✅ 已交付@v0.1.0 |
+| FR-010 | 监控指标 | — | ✅ 已交付@v0.1.0 |
+| FR-011 | 告警规则 | — | ✅ 已交付@v0.1.0 |
 | FR-012 | 定时任务 | — | ✅ 已交付@v0.6.0 |
-| FR-013 | 备份恢复 | — | ✅ 已交付 |
-| FR-014 | 服务端模板 | — | ✅ 已交付 |
+| FR-013 | 备份恢复 | — | ✅ 已交付@v0.1.0 |
+| FR-014 | 服务端模板 | — | ✅ 已交付@v0.1.0 |
 | FR-015 | 审计日志 | — | ✅ 已交付@v0.6.0 |
-| FR-016 | i18n（中英国际化） | — | ✅ 已交付 |
-| FR-017 | 首次启动引导流程 | — | ✅ 已交付 |
-| FR-018 | 实例 gRPC 生命周期操作 | — | ✅ 已交付 |
-| FR-019 | 终端 WebSocket 全链路 | — | ✅ 已交付 |
-| FR-020 | 文件管理 gRPC 全链路 | — | ✅ 已交付 |
-| FR-021 | Bot Mineflayer 集成 | — | ✅ 已交付 |
+| FR-016 | i18n（中英国际化） | — | ✅ 已交付@v0.1.0 |
+| FR-017 | 首次启动引导流程 | — | ✅ 已交付@v0.1.0 |
+| FR-018 | 实例 gRPC 生命周期操作 | — | ✅ 已交付@v0.2.0 |
+| FR-019 | 终端 WebSocket 全链路 | — | ✅ 已交付@v0.1.0 |
+| FR-020 | 文件管理 gRPC 全链路 | — | ✅ 已交付@v0.1.0 |
+| FR-021 | Bot Mineflayer 集成 | — | ✅ 已交付@v0.1.0 |
 | FR-022 | RCON 指标采集 | — | ❌ 已废弃（ADR-016 退役 RCON） |
-| FR-023 | gRPC 客户端真实实现 | — | ✅ 已交付 |
-| FR-024 | 前端对接运行时 API | — | ✅ 已交付 |
-| FR-025 | Worker→Control Plane gRPC 连通性修复 | — | ✅ 已交付 |
-| FR-026 | 前端 shadcn/ui 标准化 | — | ✅ 已交付 |
-| FR-027 | API 集成测试 | — | ✅ 已交付 |
-| FR-028 | 实例创建 E2E 测试 | — | ✅ 已交付 |
-| FR-029 | Worker Node 注册与心跳集成 | — | ✅ 已交付 |
-| FR-030 | 前端通知系统与 UX 标准化 | — | ✅ 已交付 |
-| FR-031 | 配置文件管理引擎 | — | ✅ 已交付 |
-| FR-032 | 节点资源分配与群组服关系模型 | — | ✅ 已交付 |
-| FR-033 | JDK 与运行时管理 | — | ✅ 已交付 |
+| FR-023 | gRPC 客户端真实实现 | — | ✅ 已交付@v0.1.0 |
+| FR-024 | 前端对接运行时 API | — | ✅ 已交付@v0.1.0 |
+| FR-025 | Worker→Control Plane gRPC 连通性修复 | — | ✅ 已交付@v0.1.0 |
+| FR-026 | 前端 shadcn/ui 标准化 | — | ✅ 已交付@v0.1.0 |
+| FR-027 | API 集成测试 | — | ✅ 已交付@v0.1.0 |
+| FR-028 | 实例创建 E2E 测试 | — | ✅ 已交付@v0.2.0 |
+| FR-029 | Worker Node 注册与心跳集成 | — | ✅ 已交付@v0.1.0 |
+| FR-030 | 前端通知系统与 UX 标准化 | — | ✅ 已交付@v0.1.1 |
+| FR-031 | 配置文件管理引擎 | — | ✅ 已交付@v0.4.0 |
+| FR-032 | 节点资源分配与群组服关系模型 | — | ✅ 已交付@v0.4.0 |
+| FR-033 | JDK 与运行时管理 | — | ✅ 已交付@v0.4.0 |
 | FR-034 | 搭建 Bukkit 子服 | — | ✅ 已交付@v0.3.0 |
-| FR-035 | 搭建代理（BungeeCord/Velocity） | — | ✅ 已交付 |
-| FR-036 | 一键复制子服 + 配置修正 + 注册 | — | ✅ 已交付 |
-| FR-037 | 运维控制台布局 | — | ✅ 已交付 |
-| FR-038 | Bot 规模化后端 API | — | ✅ 已交付 |
-| FR-039 | 控制台实例内 Bot 管理段 | — | ✅ 已交付 |
-| FR-040 | 全局 Bot 管理页重构 | — | ✅ 已交付 |
+| FR-035 | 搭建代理（BungeeCord/Velocity） | — | ✅ 已交付@v0.4.0 |
+| FR-036 | 一键复制子服 + 配置修正 + 注册 | — | ✅ 已交付@v0.4.0 |
+| FR-037 | 运维控制台布局 | — | ✅ 已交付@v0.3.0 |
+| FR-038 | Bot 规模化后端 API | — | ✅ 已交付@v0.3.0 |
+| FR-039 | 控制台实例内 Bot 管理段 | — | ✅ 已交付@v0.3.0 |
+| FR-040 | 全局 Bot 管理页重构 | — | ✅ 已交付@v0.3.0 |
 | FR-041 | Bot 实时遥测与单 Bot 详情面板 | P2 | ⏸️ 已延后 |
 | FR-042 | Bot 压测会话编排 UI | P2 | ⏸️ 已延后 |
 | FR-043 | 全链路运维打通（节点→实例→终端→Bot 进服） | — | ✅ 已交付@v0.3.0 |
-| FR-044 | 项目自包含便携运行时（FHS 数据根 + 核心缓存） | — | ✅ 已交付 |
-| FR-045 | 制品库（内容寻址 + 完整性校验） | — | ✅ 已交付 |
+| FR-044 | 项目自包含便携运行时（FHS 数据根 + 核心缓存） | — | ✅ 已交付@v0.3.0 |
+| FR-045 | 制品库（内容寻址 + 完整性校验） | — | ✅ 已交付@v0.3.0 |
 | FR-046 | Sponge 子服支持 | P2 | 📋 计划 |
-| FR-047 | 环境/标签多维分组筛选 | — | ✅ 已交付 |
-| FR-048 | 节点维护模式与主动下线 | — | ✅ 已交付 |
-| FR-049 | 日志持久化、归档与保留 | — | ✅ 已交付 |
+| FR-047 | 环境/标签多维分组筛选 | — | ✅ 已交付@v0.4.0 |
+| FR-048 | 节点维护模式与主动下线 | — | ✅ 已交付@v0.4.0 |
+| FR-049 | 日志持久化、归档与保留 | — | ✅ 已交付@v0.4.0 |
 | FR-050 | 日志检索与过滤 | — | ✅ 已交付@v0.4.0 |
-| FR-051 | 通用文件改前自动备份与版本回滚 | — | ✅ 已交付 |
-| FR-052 | 插件/模组单服管理 | — | ✅ 已交付 |
+| FR-051 | 通用文件改前自动备份与版本回滚 | — | ✅ 已交付@v0.4.0 |
+| FR-052 | 插件/模组单服管理 | — | ✅ 已交付@v0.4.0 |
 | FR-053 | 插件批量部署多服 | P1 | 📋 计划 |
-| FR-054 | 玩家管理（RCON） | — | ✅ 已交付 |
+| FR-054 | 玩家管理（RCON） | — | ✅ 已交付@v0.4.0 |
 | FR-055 | 玩家管理插件桥增强 | — | ❌ 已废弃（ADR-014） |
-| FR-056 | 增量备份 | — | ✅ 已交付 |
-| FR-057 | 备份远程存储 | — | ✅ 已交付 |
-| FR-058 | 实例批量操作 | — | ✅ 已交付 |
-| FR-059 | 危险操作保护体系化 | — | ✅ 已交付 |
+| FR-056 | 增量备份 | — | ✅ 已交付@v0.4.0 |
+| FR-057 | 备份远程存储 | — | ✅ 已交付@v0.4.0 |
+| FR-058 | 实例批量操作 | — | ✅ 已交付@v0.4.0 |
+| FR-059 | 危险操作保护体系化 | — | ✅ 已交付@v0.10.0 |
 | FR-060 | 时序监控与历史曲线 | — | ✅ 已交付@v0.5.0 |
 | FR-061 | 面板信息密度与视觉改造 | — | ✅ 已交付@v0.5.0 |
 | FR-062 | 节点负载（load average）采集与仪表盘 | — | ✅ 已交付@v0.5.0 |
@@ -171,17 +171,17 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-112 | 平台/运维导航信息架构统一 | — | ✅ 已交付@v0.9.1 |
 | FR-113 | 全文索引后台化与进度 | P2 | 🔨 开发中 |
 | FR-114 | 探针依赖内联/缓存预置 | P3 | 📋 计划 |
-| FR-115 | 业务桥 Worker 脊柱（JBIS M1） | — | ✅ 已交付 |
-| FR-116 | CP 业务编排与汇聚脊柱（JBIS M1） | — | ✅ 已交付 |
-| FR-117 | ServerProbe 业务对接层骨架（JBIS M1） | — | ✅ 已交付 |
-| FR-118 | 经济 Provider（只读，JBIS M1） | — | ✅ 已交付 |
-| FR-119 | 业务掌控台 UI v1（manifest 驱动，JBIS M1） | — | ✅ 已交付 |
-| FR-120 | 经济 Provider（写，JBIS M2） | — | ✅ 已交付 |
-| FR-121 | 业务写横切硬化（幂等 + 二次确认 + 审计，JBIS M2） | — | ✅ 已交付 |
-| FR-122 | 经济汇聚与多区聚合（JBIS M2） | — | ✅ 已交付 |
-| FR-123 | 经济定制页（JBIS M2） | — | ✅ 已交付 |
-| FR-124 | 扩 AllinInventorySync api 导出读写门面 | P2 | 🔨 开发中 |
-| FR-125 | 背包 Provider | P2 | 🔨 开发中 |
+| FR-115 | 业务桥 Worker 脊柱（JBIS M1） | — | ✅ 已交付@v0.10.0 |
+| FR-116 | CP 业务编排与汇聚脊柱（JBIS M1） | — | ✅ 已交付@v0.10.0 |
+| FR-117 | ServerProbe 业务对接层骨架（JBIS M1） | — | ✅ 已交付@v0.10.0 |
+| FR-118 | 经济 Provider（只读，JBIS M1） | — | ✅ 已交付@v0.10.0 |
+| FR-119 | 业务掌控台 UI v1（manifest 驱动，JBIS M1） | — | ✅ 已交付@v0.10.0 |
+| FR-120 | 经济 Provider（写，JBIS M2） | — | ✅ 已交付@v0.10.0 |
+| FR-121 | 业务写横切硬化（幂等 + 二次确认 + 审计，JBIS M2） | — | ✅ 已交付@v0.10.0 |
+| FR-122 | 经济汇聚与多区聚合（JBIS M2） | — | ✅ 已交付@v0.10.0 |
+| FR-123 | 经济定制页（JBIS M2） | — | ✅ 已交付@v0.10.0 |
+| FR-124 | 扩 AllinInventorySync api 导出读写门面 | P2 | 📋 计划 |
+| FR-125 | 背包 Provider | P2 | 📋 计划 |
 | FR-126 | 背包汇聚与存储 | P2 | 📋 计划 |
 | FR-127 | 背包定制页 | P2 | 📋 计划 |
 | FR-128 | 导航与视图状态可寻址化 + 滚动位置恢复 | P1 | 📋 计划 |
@@ -194,8 +194,8 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-135 | 开源许可与依赖清单页（独立页，照参考图布局） | P2 | ✅ 已交付@v0.10.0 |
 | FR-136 | 实例列表汇总头 + 节点/端口列 + 角色徽标 + proxy↔backend inline | P2 | ✅ 已交付@v0.10.0 |
 | FR-137 | 实例列表搜索/排序 + 筛选吸顶可折叠 + 分组单表 | P2 | 📋 计划 |
-| FR-138 | 单实例操作可发现性与反馈 | — | ✅ 已交付 |
-| FR-139 | 批量操作增强 | — | ✅ 已交付 |
+| FR-138 | 单实例操作可发现性与反馈 | — | ✅ 已交付@v0.10.0 |
+| FR-139 | 批量操作增强 | — | ✅ 已交付@v0.10.0 |
 | FR-140 | 终端体验增强 | P2 | 📋 计划 |
 | FR-141 | 资源管理器与配置编辑器增强 | P2 | 📋 计划 |
 | FR-142 | 详情页监控与探针增强 | P2 | 📋 计划 |
@@ -204,16 +204,16 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-145 | 群组管理可寻址双栏 + proxy↔backend 拓扑 | P2 | ✅ 已交付@v0.10.0 |
 | FR-146 | 玩家管理增强 | P2 | 📋 计划 |
 | FR-147 | Bot 规模化管理增强 | P2 | ✅ 已交付@v0.10.0 |
-| FR-148 | 趋势图增强 | — | ✅ 已交付 |
-| FR-149 | 告警增强 | — | ✅ 已交付 |
+| FR-148 | 趋势图增强 | — | ✅ 已交付@v0.10.0 |
+| FR-149 | 告警增强 | — | ✅ 已交付@v0.10.0 |
 | FR-150 | 日志中心增强 | P2 | ✅ 已交付@v0.10.0 |
 | FR-151 | 备份页增强 | P2 | ✅ 已交付@v0.10.0 |
 | FR-152 | 备份存储测试连接 + 容量展示 | P2 | 📋 计划 |
-| FR-153 | 计划任务增强 | — | ✅ 已交付 |
+| FR-153 | 计划任务增强 | — | ✅ 已交付@v0.10.0 |
 | FR-154 | 模板应用到实例 + 变量填充预览 | P2 | ✅ 已交付@v0.10.0 |
 | FR-155 | 平台资产与更新页增强 | P2 | 📋 计划 |
-| FR-156 | 用户与组管理能力补齐 | — | ✅ 已交付 |
-| FR-157 | 认证体验增强 | — | ✅ 已交付 |
+| FR-156 | 用户与组管理能力补齐 | — | ✅ 已交付@v0.10.0 |
+| FR-157 | 认证体验增强 | — | ✅ 已交付@v0.10.0 |
 | FR-158 | 设置与审计页增强 | P2 | ✅ 已交付@v0.10.0 |
 | FR-159 | 共享对话框统一 | P2 | 📋 计划 |
 | FR-160 | 共享基件统一（ref 重构） | P2 | 📋 计划 |
@@ -225,7 +225,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-166 | 可组合卡片工作区（单实例可拖拽画布 + 6 功能卡 + 预设个人级持久化；取代 ADR-030，并入 FR-129/130） | P2 | ✅ 已交付@v0.10.0 |
 | FR-167 | 跨实例超级工作台（任意实例卡片拼合 + 实例库拖拽） | P2 | ✅ 已交付@v0.10.0 |
 | FR-168 | 工作区导播台（多路 WS 预热 + 瞬切 + 定时轮播 + 并发上限 + 非激活降频） | P2 | ✅ 已交付@v0.10.0 |
-| FR-169 | 监控页升级（平台/节点/实例 6 指标 + 每图时间筛选 + brush 拖拽轴 + hover 浮窗 + 实时；进程粒度 TOP10 拆后端待登记，扩 FR-060/061） | P1 | ✅ 已交付@v0.10.0 |
+| FR-169 | 监控页升级（平台/节点/实例 6 指标 + 每图时间筛选 + brush 拖拽轴 + hover 浮窗 + 实时，扩 FR-060/061） | P1 | ✅ 已交付@v0.10.0 |
 | FR-170 | 进程粒度监控采集（Worker 采每进程 CPU/内存/IO + CP 存储 + 监控页 hover 进程 TOP10）——FR-169 拆出 | P2 | 📋 计划 |
 | FR-171 | 备份完整性校验和（model.Backup 加 checksum + 创建时计算 + 列表/详情展示）——FR-151 拆出 | P3 | 📋 计划 |
 | FR-172 | 审计日志服务端分页与导出（GET /audit 加分页 + 总数 + 导出 endpoint）——FR-158 拆出 | P3 | 📋 计划 |
@@ -246,7 +246,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-187 | 客户端分发迁「运营」域 + 全流程向导重做（就绪度步骤器 + 空状态引导卡 + 发布版本向导分步 + 建频道/密钥全模态化；后端 API 不变、纯前端重做；增强 FR-086 线） | P1 | ✅ 已交付@v0.12.0 |
 | FR-188 | 全站模态框纪律（立 `.claude/rules/ui-modals.md`：禁「点击新增→内联展开/布局重排表单」、强制内容自适应模态复用 FR-072；全站违规页审计改造 + 复制按钮 HTTP 非安全上下文兜底[共享 util]，行为不变） | P1 | ✅ 已交付@v0.12.0 |
 | FR-189 | 重度模态重做（创建实例 + 添加节点：自适应壳修溢出 + 基本/启动/高级 分区或 Tab + Docker 字段条件显隐 + AddNode「自动安装/手动连接」Tab；增强 FR-009/FR-004 对话框，遵循 ui-modals） | P1 | ✅ 已交付@v0.12.0 |
-| FR-190 | Worker 二进制由 CP 代理缓存下发（CP 经出站代理拉「与自身同版本」worker 资产→缓存→LAN 下发；装机脚本与 UpgradeNode 改走 CP，解内网无 GitHub + latest 与 CP 版本错位；见 ADR-046） | P1 | 📋 计划 |
+| FR-190 | Worker 二进制由 CP 代理缓存下发（CP 经出站代理拉「与自身同版本」worker 资产→缓存→LAN 下发；装机脚本与 UpgradeNode 改走 CP，解内网无 GitHub + latest 与 CP 版本错位；待补 spec / ADR） | P1 | 📋 计划 |
 | FR-191 | 客户端分发发布/上传/预览定向重做（发布/上传改**独立页面**[非模态，根治点外面关闭丢上传草稿]+上传即锁定文件内容；支持上传 zip 自动按包内结构编排目录；配置/审阅/详情改 Minecraft 文件树预览，内容只读、仅可编排路径/目录/sync/platform；增强 FR-187/088） | P1 | ✅ 已交付@v0.12.0 |
 | FR-192 | 拉取密钥可查看/可编辑（密钥可逆加密存储[env 密钥]，管理员频道页查看明文+复制+**手动设/改密钥值**；**删「轮换」**[换值会断已分发客户端]、**保留「吊销」但强警告二次确认**；老哈希密钥不可查；修订 ADR-022 决策①，见 ADR-044） | P1 | ✅ 已交付@v0.12.0 |
 | FR-193 | updater-core 默认随 CP 内嵌静默驱动（楔子+updater-core 用 CP 自带默认版本，manifest `agent.core` 由 CP 内嵌 updater-core 自动产出；**运营不上传/不管理**，删「更新器版本」管理页；CP 自更新时默认更新器随之更新；增强 FR-091/FR-107，见 ADR-045[改写为 CP 默认]） | P1 | ✅ 已交付@v0.12.0 |
@@ -278,47 +278,47 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-219 | 客户端分发频道工作台「统计」Tab 扩充维度：复用 FR-217 数据加 活跃客户端/版本分布/更新成功率/平台分布 等（增强既有频道统计，免 spec，依赖 FR-217） | P2 | ✅ 已交付@v0.12.0 |
 | FR-220 | 观测·统计页补齐：观测三子类之一的「统计」页做成平台级聚合统计（节点/实例/玩家/分发等概览聚合，独立于 FR-219 的频道统计 Tab）（**需 spec**，依赖 FR-215） | P1 | ✅ 已交付@v0.12.0 |
 | FR-221 | 观测·监控时序剖析增强（**增强 FR-060**，非净新——节点/实例时序底座 ADR-013 已交付）：在既有三档降采样时序上加 多指标对比/叠加、下钻（节点→实例→世界）、自定义聚合粒度、关键指标概览，让全站指标更精准剖析（免 spec，依赖 FR-215） | P2 | ✅ 已交付@v0.12.0 |
-| FR-222 | worker 免配置自启 setup（节点上线丝滑化，参考 GitHub Actions Runner 下载/上线分离）：worker 启动时若未配置（无 .yml / 无 `etc/node-identity.json`）→ 进入 setup（有 TTY 交互式问 CP gRPC 地址 / enroll token / 节点名；无 TTY/CI 读命令行参数 + env，无人值守）写 worker.yml + 携 enroll token 注册持久化身份 → 转 run；已配置直接 run。「下载」（取二进制）与「上线」（setup+注册+run）解耦（**需 spec + ADR-051**，改写 ADR-020「一键单脚本下载+配置+注册+起」模型；依赖 FR-224 .yml） | P1 | 🔨 开发中 |
-| FR-223 | 节点安装脚本重构（配合 FR-222）：检测当前目录已有完整 worker 二进制则跳过下载；「下载」与「上线」分两步；脚本调 worker setup（传参/env）完成配置+注册+可选常驻服务（增强 FR-080/ADR-020，免 spec，依赖 FR-222） | P2 | 🔨 开发中 |
+| FR-222 | worker 免配置自启 setup（节点上线丝滑化，参考 GitHub Actions Runner 下载/上线分离）：worker 启动时若未配置（无 .yml / 无 `etc/node-identity.json`）→ 进入 setup（有 TTY 交互式问 CP gRPC 地址 / enroll token / 节点名；无 TTY/CI 读命令行参数 + env，无人值守）写 worker.yml + 携 enroll token 注册持久化身份 → 转 run；已配置直接 run。「下载」（取二进制）与「上线」（setup+注册+run）解耦（**需 spec + ADR-051**，改写 ADR-020「一键单脚本下载+配置+注册+起」模型；依赖 FR-224 .yml） | P1 | ✅ 已交付@v0.13.0 |
+| FR-223 | 节点安装脚本重构（配合 FR-222）：检测当前目录已有完整 worker 二进制则跳过下载；「下载」与「上线」分两步；脚本调 worker setup（传参/env）完成配置+注册+可选常驻服务（增强 FR-080/ADR-020，免 spec，依赖 FR-222） | P2 | ✅ 已交付@v0.13.0 |
 | FR-224 | 配置文件 .yml 约定统一（.yaml→.yml）：control-plane.yaml→control-plane.yml、worker.yaml→worker.yml + viper 搜索路径 + docker-compose + 安装脚本 + 样例 + docs 同步 + 改 `.claude/rules/config-files.md` 规则；.yml 为准、可选 .yaml 兼容回退不破存量（ref，免 spec） | P2 | ✅ 已交付@v0.12.0 |
-| FR-225 | 调试模式开关（设置项，热重载）：默认 Gin release 静默 + log info；设置「调试模式」开关开=log debug+Gin debug、关=info+release，走 FR-063 运行时机制即时生效不重启（增强 FR-063，免 spec） | P2 | 🔨 开发中 |
-| FR-226 | 通知中心快捷跳转 + 任务中心联动 + 页眉任务进度：任务类通知（含 JDK 失败）点击跳任务中心对应任务；页眉放任务中心入口 + 在跑任务进度；完成/失败站内信可一键跳（复用既有 Notification.TaskID，增强 FR-216/183，免 spec） | P1 | 🔨 开发中 |
-| FR-227 | 任务中心强制停止 + 筛选查询：强制停止=经 gRPC 真中断 Worker 长任务（取消下载 + 清临时文件）+ 任务转终态（新 canceled 态）；列表按 kind/state/node/时间/关键词筛选（增强 FR-183，需 spec：状态机 + 跨进程取消 + proto） | P1 | 🔨 开发中 |
-| FR-228 | JDK 登记体验重做：模态目录/文件选择器选 java 可执行文件 → 后端 java -version 探测自动填 vendor/major/version/arch（免手填）；「标记为 Worker 托管」复选框置顶并决定选择器默认根（面板目录/节点目录）（增强 FR-178/033，需 spec：worker java 探测 RPC + 选择器选文件 + 跨模块） | P1 | 🔨 开发中 |
-| FR-229 | 连通性自检端点族 + 测试按钮：出站代理（设置面板）、JDK 下载源/镜像（运行时）、节点存活（JDK 一键下载前先测、不通即提示不卡死）统一一族测试连通性能力（增强 FR-185/178，需 spec：端点族契约 + 经出站客户端语义） | P2 | 🔨 开发中 |
-| FR-230 | 创建实例独立向导页：创建实例改独立分步向导页（非模态）+ 每步大白话提示，复用既有 create API；与 FR-189 协调（创建出重度模态、改走页，编辑等仍用模态）（增强 FR-005/189，免 spec） | P1 | 🔨 开发中 |
-| FR-231 | 复制实例 高级/快速 双模式：快速复制=核心 jar + plugins/ + 根配置（server.properties 及根 *.yml/*.properties）；高级复制=目录选择器 + 用户包含/排除筛选；扩 CloneWorkDir 支持 include/选择性复制（增强 FR-036，需 spec：复制语义 + 筛选 + proto） | P2 | 🔨 开发中 |
-| FR-232 | 前端交互细节集：节点页进入默认选中第一个节点；页眉刷新图标刷新当前页数据（非整页 reload）（增强 FR-177/179，免 spec） | P2 | 🔨 开发中 |
-| FR-233 | 实例配置随时编辑：实例详情/工作区提供配置编辑（启动命令 / JVM 参数 / JDK / 环境变量 / 资源限额 / 自动重启等），保存即持久化并提示重启生效；今 `InstanceDetailPage` 仅深链跳画布、无编辑能力（feat，需 spec：新 PATCH /instances/:id 契约 + 跨 CP/web、worker 重读配置） | P1 | 🔨 开发中 |
-| FR-234 | 创建实例向导优化：启动命令预填可改示例（如 `java -Xmx2G -jar server.jar nogui`）+ 提示 jar 名/放置位置 + 彻底隐藏工作目录（系统分配，对齐 ADR-007/008）（增强 FR-230，免 spec） | P1 | 🔨 开发中 |
+| FR-225 | 调试模式开关（设置项，热重载）：默认 Gin release 静默 + log info；设置「调试模式」开关开=log debug+Gin debug、关=info+release，走 FR-063 运行时机制即时生效不重启（增强 FR-063，免 spec） | P2 | ✅ 已交付@v0.13.0 |
+| FR-226 | 通知中心快捷跳转 + 任务中心联动 + 页眉任务进度：任务类通知（含 JDK 失败）点击跳任务中心对应任务；页眉放任务中心入口 + 在跑任务进度；完成/失败站内信可一键跳（复用既有 Notification.TaskID，增强 FR-216/183，免 spec） | P1 | ✅ 已交付@v0.13.0 |
+| FR-227 | 任务中心强制停止 + 筛选查询：强制停止=经 gRPC 真中断 Worker 长任务（取消下载 + 清临时文件）+ 任务转终态（新 canceled 态）；列表按 kind/state/node/时间/关键词筛选（增强 FR-183，需 spec：状态机 + 跨进程取消 + proto） | P1 | ✅ 已交付@v0.13.0 |
+| FR-228 | JDK 登记体验重做：模态目录/文件选择器选 java 可执行文件 → 后端 java -version 探测自动填 vendor/major/version/arch（免手填）；「标记为 Worker 托管」复选框置顶并决定选择器默认根（面板目录/节点目录）（增强 FR-178/033，需 spec：worker java 探测 RPC + 选择器选文件 + 跨模块） | P1 | ✅ 已交付@v0.13.0 |
+| FR-229 | 连通性自检端点族 + 测试按钮：出站代理（设置面板）、JDK 下载源/镜像（运行时）、节点存活（JDK 一键下载前先测、不通即提示不卡死）统一一族测试连通性能力（增强 FR-185/178，需 spec：端点族契约 + 经出站客户端语义） | P2 | ✅ 已交付@v0.13.0 |
+| FR-230 | 创建实例独立向导页：创建实例改独立分步向导页（非模态）+ 每步大白话提示，复用既有 create API；与 FR-189 协调（创建出重度模态、改走页，编辑等仍用模态）（增强 FR-005/189，免 spec） | P1 | ✅ 已交付@v0.13.0 |
+| FR-231 | 复制实例 高级/快速 双模式：快速复制=核心 jar + plugins/ + 根配置（server.properties 及根 *.yml/*.properties）；高级复制=目录选择器 + 用户包含/排除筛选；扩 CloneWorkDir 支持 include/选择性复制（增强 FR-036，需 spec：复制语义 + 筛选 + proto） | P2 | ✅ 已交付@v0.13.0 |
+| FR-232 | 前端交互细节集：节点页进入默认选中第一个节点；页眉刷新图标刷新当前页数据（非整页 reload）（增强 FR-177/179，免 spec） | P2 | ✅ 已交付@v0.13.0 |
+| FR-233 | 实例配置随时编辑：实例详情/工作区提供配置编辑（启动命令 / JVM 参数 / JDK / 环境变量 / 资源限额 / 自动重启等），保存即持久化并提示重启生效；今 `InstanceDetailPage` 仅深链跳画布、无编辑能力（feat，需 spec：新 PATCH /instances/:id 契约 + 跨 CP/web、worker 重读配置） | P1 | ✅ 已交付@v0.13.0 |
+| FR-234 | 创建实例向导优化：启动命令预填可改示例（如 `java -Xmx2G -jar server.jar nogui`）+ 提示 jar 名/放置位置 + 彻底隐藏工作目录（系统分配，对齐 ADR-007/008）（增强 FR-230，免 spec） | P1 | ✅ 已交付@v0.13.0 |
 | FR-235 | 实例列表页重设计（面向 1000+ 实例）：卡片 + 列表重做（信息密度 / 美观 / 点击进详情），大规模下虚拟化 + 分组 + 搜索筛选；消费 FR-247 服务端搜索/分页（增强 FR-165/163，需 spec，依赖 FR-247/246/240） | P1 | 📋 计划 |
-| FR-236 | 一键搭建模态优化 + Docker 傻瓜建服：建后端服 / 建代理两模态遵循 ui-modals + 大白话；并入 Docker 一键建服（预置镜像 `itzg/minecraft-server` + 端口 + 一键起）（增强 FR-035/078，需 spec，含原 FR-239） | P1 | 🔨 开发中 |
-| FR-237 | 节点 Docker 可用性检测 + 未装引导：Worker 探测 docker 是否安装/可用，CP/UI 展示状态，未装给安装引导，docker 建服前先测不通即提示不卡死（feat，需 spec：worker 探测 RPC + 跨模块，关联 FR-229 连通性族） | P1 | 🔨 开发中 |
+| FR-236 | 一键搭建模态优化 + Docker 傻瓜建服：建后端服 / 建代理两模态遵循 ui-modals + 大白话；并入 Docker 一键建服（预置镜像 `itzg/minecraft-server` + 端口 + 一键起）（增强 FR-035/078，需 spec，含原 FR-239） | P1 | ✅ 已交付@v0.13.0 |
+| FR-237 | 节点 Docker 可用性检测 + 未装引导：Worker 探测 docker 是否安装/可用，CP/UI 展示状态，未装给安装引导，docker 建服前先测不通即提示不卡死（feat，需 spec：worker 探测 RPC + 跨模块，关联 FR-229 连通性族） | P1 | ✅ 已交付@v0.13.0 |
 | FR-240 | 导航外壳 + 实例选择器重构（面向 1000+ 实例）：先出 2-3 布局原型经确认 → 实现；实例选择支持搜索 / 虚拟列表 / 分组 / 最近&收藏；并入面包屑文案与路由映射纠错（今实例页面包屑文字与实际页不符；此项排最后做）（增强 FR-131/162/134，需 spec + 原型审核，含原 FR-245） | P1 | 🔨 开发中 |
-| FR-241 | 全局搜索 / 命令面板（快捷跳转）：Ctrl/⌘+K 唤起，搜实例/节点/页面/操作并跳转（今页眉搜索框为占位）；并入页眉集群徽标 → 可滚动实例选择弹层 + 点击进入；面向 1000+ 走服务端搜索（feat，需 spec：搜索契约，依赖 FR-247，含原 FR-242） | P1 | 🔨 开发中 |
-| FR-243 | 页眉顶部加载进度条 + 路由切换过渡：切页弹一次顶部进度条（nprogress 式）+ 统一路由过渡反馈（今无）（feat，免 spec） | P2 | 🔨 开发中 |
+| FR-241 | 全局搜索 / 命令面板（快捷跳转）：Ctrl/⌘+K 唤起，搜实例/节点/页面/操作并跳转（今页眉搜索框为占位）；并入页眉集群徽标 → 可滚动实例选择弹层 + 点击进入；面向 1000+ 走服务端搜索（feat，需 spec：搜索契约，依赖 FR-247，含原 FR-242） | P1 | ✅ 已交付@v0.13.0 |
+| FR-243 | 页眉顶部加载进度条 + 路由切换过渡：切页弹一次顶部进度条（nprogress 式）+ 统一路由过渡反馈（今无）（feat，免 spec） | P2 | ✅ 已交付@v0.13.0 |
 | FR-244 | 全局动画系统统一：修「稀碎卡顿 / 无动画」——统一 hover / 展开 / 弹层 / 路由过渡（今无 framer-motion、散用 CSS transition）（增强 FR-163/176，免 spec） | P2 | 📋 计划 |
-| FR-246 | 全站卡片范式提质 + 节点页卡片重设计：统一卡片圆角 / 边角 / 阴影 / 间距（修「连接感 / 阴影太假 / 圆角不符 / 边角瑕疵」）并全站贯彻 + 节点页卡片信息密度重做（增强 FR-163/176/177 落地质量，需 spec：圈定全站范围 + 范式） | P1 | 🔨 开发中 |
-| FR-247 | 实例规模化后端（1000+）：服务端实例搜索 / 分页 / 分组聚合 API（今前端全量拉、1000+ 撑不住），为列表页 / 导航实例选择器 / 全局搜索 / 页眉弹层提供统一数据地基（feat，需 spec：新查询契约 + 索引 + 多前端面消费）→ `docs/specs/instance-scale-backend/spec.md` | P1 | 🔨 开发中 |
+| FR-246 | 全站卡片范式提质 + 节点页卡片重设计：统一卡片圆角 / 边角 / 阴影 / 间距（修「连接感 / 阴影太假 / 圆角不符 / 边角瑕疵」）并全站贯彻 + 节点页卡片信息密度重做（增强 FR-163/176/177 落地质量，需 spec：圈定全站范围 + 范式） | P1 | ✅ 已交付@v0.13.0 |
+| FR-247 | 实例规模化后端（1000+）：服务端实例搜索 / 分页 / 分组聚合 API（今前端全量拉、1000+ 撑不住），为列表页 / 导航实例选择器 / 全局搜索 / 页眉弹层提供统一数据地基（feat，需 spec：新查询契约 + 索引 + 多前端面消费）→ `docs/specs/instance-scale-backend/spec.md` | P1 | ✅ 已交付@v0.13.0 |
 | FR-248 | OTA 签名密钥自动生成与面板公钥展示：CP 启动时未注入 env 私钥则自动生成 Ed25519 密钥对并持久化到数据根文件（env 注入优先、双轨），面板展示公钥供运营者配到客户端；修订 ADR-022/038（增强 FR-087，需 spec + ADR-052）→ `docs/specs/client-sign-key-autogen/spec.md` | — | ❌ 已废弃（验签已去，见 ADR-054） |
-| FR-249 | OTA 拉取错误追踪与面板查询：manifest/artifact 拉取失败也记录追踪事件（含错误原因），面板分发事件页可按成功/失败筛选并查看错误详情（增强 FR-093，需 spec：DB schema 扩展 + 新查询维度）→ `docs/specs/client-dist-error-tracking/spec.md` | P1 | 🔨 开发中 |
-| FR-250 | 客户端分发发布编排器重做：拖拽多文件/文件夹到浏览器 → 前端本地预览文件树 → 可调整层级/sync 模式 → 点击发布才批量上传到 CP（非逐个上传节省带宽）；消费 FR-251 分块上传（增强 FR-191，需 spec，依赖 FR-251） | P1 | 🔨 开发中 |
-| FR-251 | 大文件分块上传端点 + 进度展示：后端新增分块上传协议（init→chunk→complete），前端分片上传 + 实时进度条，支持 4G+ 文件（增强 FR-088，需 spec：新 API 协议）→ `docs/specs/client-chunked-upload/spec.md` | P1 | 🔨 开发中 |
-| FR-252 | 客户端分发术语大白话化：sync 模式（覆盖/仅一次/忽略）加大白话解释、"托管目录"等术语改为运营能看懂的措辞、发布步骤每页加大白话说明（增强 FR-194，免 spec） | P2 | 🔨 开发中 |
+| FR-249 | OTA 拉取错误追踪与面板查询：manifest/artifact 拉取失败也记录追踪事件（含错误原因），面板分发事件页可按成功/失败筛选并查看错误详情（增强 FR-093，需 spec：DB schema 扩展 + 新查询维度）→ `docs/specs/client-dist-error-tracking/spec.md` | P1 | ✅ 已交付@v0.13.0 |
+| FR-250 | 客户端分发发布编排器重做：拖拽多文件/文件夹到浏览器 → 前端本地预览文件树 → 可调整层级/sync 模式 → 点击发布才批量上传到 CP（非逐个上传节省带宽）；消费 FR-251 分块上传（增强 FR-191，需 spec，依赖 FR-251） | P1 | ✅ 已交付@v0.13.0 |
+| FR-251 | 大文件分块上传端点 + 进度展示：后端新增分块上传协议（init→chunk→complete），前端分片上传 + 实时进度条，支持 4G+ 文件（增强 FR-088，需 spec：新 API 协议）→ `docs/specs/client-chunked-upload/spec.md` | P1 | ✅ 已交付@v0.13.0 |
+| FR-252 | 客户端分发术语大白话化：sync 模式（覆盖/仅一次/忽略）加大白话解释、"托管目录"等术语改为运营能看懂的措辞、发布步骤每页加大白话说明（增强 FR-194，免 spec） | P2 | ✅ 已交付@v0.13.0 |
 | FR-253 | OTA 客户端信任公钥运行期可配：updater-core 从 jm-updater.json 读信任公钥（缺省回退内置 dev 公钥），CP 一键生成带本机公钥的 jm-updater.json + 接入指引更新（补 FR-248/FR-107 缺口——面板自动生成的公钥此前无处填入客户端；修订 ADR-022 信任模型，需 spec + ADR）→ `docs/specs/client-trust-key-config/spec.md` | — | ❌ 已废弃（signPublicKey 废弃，见 ADR-054） |
-| FR-254 | 客户端分发发布页文件树拖拽编排：configure 步支持拖拽移动文件/目录节点改目标路径（增强 FR-191/250，FR-191 曾列增强未做，免 spec） | P2 | 🔨 开发中 |
-| FR-255 | 客户端分发清理范围编辑器：managedDirs 改多级目录树勾选（支持深层嵌套目录）+ 可选「清空整个 gameDir」（除内置玩家区安全清单 + 运营自定义追加排除；需客户端 clean-all 语义 + 服务端 manifest）（增强 FR-191/088，需 spec）→ `docs/specs/client-dist-clean-scope/spec.md` | P1 | 🔨 开发中 |
-| FR-256 | updater-core 架构简化 Phase 1：删验签（Signatures/BouncyCastle/.jmpack）、删 CAS（CasCache）、删 core 自更新（SelfUpdater）、manifest 去 sig 段、去防降级；保留 sha256 完整性校验 + 拉取密钥鉴权（推翻 ADR-022/053，废弃 FR-090/091/097/253/248）→ `docs/specs/updater-arch-simplification/spec.md` | — | ✅ 已交付 |
-| FR-257 | Reconciler 流式下载 + HTTP Range 断点续传：Transport 改返回 InputStream、Reconciler 边读边写盘（64KB 缓冲）、DigestInputStream 流式 sha256、zstd 流式解压、断点续传；1GB 文件下载内存 < 10MB（依赖 FR-256）→ `docs/specs/updater-arch-simplification/spec.md` | — | ✅ 已交付 |
-| FR-258 | 楔子改 gradle-wrapper 模式：整合包只带 wedge.jar，首次自动拉 core（JDK 原生 HttpURLConnection + sha256 校验）、本地保留 3 版用于回滚、jm-updater.json 原文透传 ctx、Core.run(Map) 接口契约冻结（依赖 FR-256）→ `docs/specs/updater-arch-simplification/spec.md` | — | ✅ 已交付 |
-| FR-259 | CP core 版本归档 + 端点 + 面板回滚：make embed-client-updater 归档多版本 core jar、GET /client-channels/:id/updater-core 端点（拉取密钥鉴权）、面板「updater-core 版本」选择器一键切换回滚；补充平台管理员手动上传 updater-core.jar hotfix 并可立即选用（依赖 FR-258）→ `docs/specs/updater-arch-simplification/spec.md`、`docs/specs/updater-core-hotfix-telemetry/spec.md` | — | ✅ 已交付 |
-| FR-260 | 客户端更新器架构简化 前端 + ADR + doc-sync：接入指引去 signPublicKey 改"楔子自动拉取"、updater-core 版本选择器面板、新 ADR 推翻 ADR-022/053 修订 ADR-045、API/ARCHITECTURE/PRD/CHANGELOG 同步、重编内嵌 jar；后续增强：接入指引可选择 revealable 拉取密钥并自动填入/下载 `jm-updater.json`，Core 版本页展示最新归档与当前选定，内置/选定 updater-core 归档禁止从制品库删除（依赖 FR-259） | — | ✅ 已交付 |
-| FR-263 | 拉取密钥加密器自动生成与持久化：CP 启动未注入 JIANMANAGER_CLIENT_KEY_ENC_SECRET 时自动生成 AES-256-GCM 密钥并持久化到数据根文件（env 注入优先、双轨），dev 回退内置开发密钥；修订 ADR-044 存储策略；后续增强：密钥列表/编辑支持永不过期展示、设置/清空过期时间，明文弹窗标题不拼接密钥名且复制按钮稳定可用（feat，需 spec + ADR） | P1 | ✅ 已交付 |
-| FR-264 | 客户端分发单节点源站安全防护：在无 CDN 部署下补多维限流、字节配额、IP 临时封禁与手动解封、key 状态机、频道降速保护、制品授权收紧、启动安全画像遥测（playerName+machineId+installId+环境特征强制上报）与独立防护中心页面（feat，需 spec）→ `docs/specs/client-dist-security-firewall/spec.md` | P1 | ✅ 已交付 |
-| FR-261 | 发布页文件资源管理器（专业文件树库重写）：react-arborist 替换 ClientFileTree，新建文件夹/重命名/Ctrl+点选/Shift+连选/Delete 删除/拖拽上传文件/拖拽上传 zip 自动解压（含 GBK）/拖拽移动调整结构/同名冲突提示忽略覆盖保留两者；保留本地编排→点发布才上传架构（feat，需 spec） | P1 | ✅ 已交付 |
-| FR-262 | 清理目录树形右键菜单可视化：FR-261 同款文件树展示目录结构，右键菜单标记清理/排除/取消，Ctrl+点选 Shift+连选批量操作，颜色区分（红=清理/绿=排除/无色=不管理），父子联动；产出 managedDirs+cleanExclude（增强 FR-255，依赖 FR-261，需 spec） | P1 | ✅ 已交付 |
-| FR-265 | 客户端分发观测四 Tab 重构：同页面拆统计/监控/日志/客户端；统计/监控/日志仅看分发请求事件，客户端 Tab 独立看运行态与更新结果；新增运行态心跳表/端点、请求日志脱敏详情、实时聚合与运行态联动筛选；清理废弃缓存命中指标；与 FR-264 并行开发互不覆盖 → `docs/specs/client-dist-observability-rebuild/spec.md` | P1 | ✅ 已交付@v0.12.0 |
-| FR-266 | updater-core 构建元信息内嵌与展示：jar 内写入版本号 / Git commit / dirty / buildTime，CP 归档读取并在 Core 版本页展示；紧急 hotfix jar 缺少元信息仍可直接上传并立即选用 → `docs/specs/updater-core-build-metadata/spec.md` | P1 | 🔨 开发中 |
+| FR-254 | 客户端分发发布页文件树拖拽编排：configure 步支持拖拽移动文件/目录节点改目标路径（增强 FR-191/250，FR-191 曾列增强未做，免 spec） | P2 | ✅ 已交付@v0.13.0 |
+| FR-255 | 客户端分发清理范围编辑器：managedDirs 改多级目录树勾选（支持深层嵌套目录）+ 可选「清空整个 gameDir」（除内置玩家区安全清单 + 运营自定义追加排除；需客户端 clean-all 语义 + 服务端 manifest）（增强 FR-191/088，需 spec）→ `docs/specs/client-dist-clean-scope/spec.md` | P1 | ✅ 已交付@v0.13.0 |
+| FR-256 | updater-core 架构简化 Phase 1：删验签（Signatures/BouncyCastle/.jmpack）、删 CAS（CasCache）、删 core 自更新（SelfUpdater）、manifest 去 sig 段、去防降级；保留 sha256 完整性校验 + 拉取密钥鉴权（推翻 ADR-022/053，废弃 FR-090/091/097/253/248）→ `docs/specs/updater-arch-simplification/spec.md` | — | ✅ 已交付@v0.13.0 |
+| FR-257 | Reconciler 流式下载 + HTTP Range 断点续传：Transport 改返回 InputStream、Reconciler 边读边写盘（64KB 缓冲）、DigestInputStream 流式 sha256、zstd 流式解压、断点续传；1GB 文件下载内存 < 10MB（依赖 FR-256）→ `docs/specs/updater-arch-simplification/spec.md` | — | ✅ 已交付@v0.13.0 |
+| FR-258 | 楔子改 gradle-wrapper 模式：整合包只带 wedge.jar，首次自动拉 core（JDK 原生 HttpURLConnection + sha256 校验）、本地保留 3 版用于回滚、jm-updater.json 原文透传 ctx、Core.run(Map) 接口契约冻结（依赖 FR-256）→ `docs/specs/updater-arch-simplification/spec.md` | — | ✅ 已交付@v0.13.0 |
+| FR-259 | CP core 版本归档 + 端点 + 面板回滚：make embed-client-updater 归档多版本 core jar、GET /client-channels/:id/updater-core 端点（拉取密钥鉴权）、面板「updater-core 版本」选择器一键切换回滚；补充平台管理员手动上传 updater-core.jar hotfix 并可立即选用（依赖 FR-258）→ `docs/specs/updater-arch-simplification/spec.md`、`docs/specs/updater-core-hotfix-telemetry/spec.md` | — | ✅ 已交付@v0.13.0 |
+| FR-260 | 客户端更新器架构简化 前端 + ADR + doc-sync：接入指引去 signPublicKey 改"楔子自动拉取"、updater-core 版本选择器面板、新 ADR 推翻 ADR-022/053 修订 ADR-045、API/ARCHITECTURE/PRD/CHANGELOG 同步、重编内嵌 jar；后续增强：接入指引可选择 revealable 拉取密钥并自动填入/下载 `jm-updater.json`，Core 版本页展示最新归档与当前选定，内置/选定 updater-core 归档禁止从制品库删除（依赖 FR-259） | — | ✅ 已交付@v0.13.0 |
+| FR-263 | 拉取密钥加密器自动生成与持久化：CP 启动未注入 JIANMANAGER_CLIENT_KEY_ENC_SECRET 时自动生成 AES-256-GCM 密钥并持久化到数据根文件（env 注入优先、双轨），dev 回退内置开发密钥；修订 ADR-044 存储策略；后续增强：密钥列表/编辑支持永不过期展示、设置/清空过期时间，明文弹窗标题不拼接密钥名且复制按钮稳定可用（feat，需 spec + ADR） | P1 | ✅ 已交付@v0.13.0 |
+| FR-264 | 客户端分发单节点源站安全防护：在无 CDN 部署下补多维限流、字节配额、IP 临时封禁与手动解封、key 状态机、频道降速保护、制品授权收紧、启动安全画像遥测（playerName+machineId+installId+环境特征强制上报）与独立防护中心页面（feat，需 spec）→ `docs/specs/client-dist-security-firewall/spec.md` | P1 | ✅ 已交付@v0.13.0 |
+| FR-261 | 发布页文件资源管理器（专业文件树库重写）：react-arborist 替换 ClientFileTree，新建文件夹/重命名/Ctrl+点选/Shift+连选/Delete 删除/拖拽上传文件/拖拽上传 zip 自动解压（含 GBK）/拖拽移动调整结构/同名冲突提示忽略覆盖保留两者；保留本地编排→点发布才上传架构（feat，需 spec） | P1 | ✅ 已交付@v0.13.0 |
+| FR-262 | 清理目录树形右键菜单可视化：FR-261 同款文件树展示目录结构，右键菜单标记清理/排除/取消，Ctrl+点选 Shift+连选批量操作，颜色区分（红=清理/绿=排除/无色=不管理），父子联动；产出 managedDirs+cleanExclude（增强 FR-255，依赖 FR-261，需 spec） | P1 | ✅ 已交付@v0.13.0 |
+| FR-265 | 客户端分发观测四 Tab 重构：同页面拆统计/监控/日志/客户端；统计/监控/日志仅看分发请求事件，客户端 Tab 独立看运行态与更新结果；新增运行态心跳表/端点、请求日志脱敏详情、实时聚合与运行态联动筛选；清理废弃缓存命中指标；与 FR-264 并行开发互不覆盖 → `docs/specs/client-dist-observability-rebuild/spec.md` | P1 | ✅ 已交付@v0.13.0 |
+| FR-266 | updater-core 构建元信息内嵌与展示：jar 内写入版本号 / Git commit / dirty / buildTime，CP 归档读取并在 Core 版本页展示；紧急 hotfix jar 缺少元信息仍可直接上传并立即选用 → `docs/specs/updater-core-build-metadata/spec.md` | P1 | ✅ 已交付@v0.13.0 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
@@ -335,7 +335,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 
 - **部署**：单二进制（go:embed 前端，ADR-005）；SQLite 零配置起步、MySQL 生产；运行态数据收口单一数据根（FHS，便携可迁移，ADR-010）。
 - **架构不变量**：三进程模型（Control Plane / Worker Node / Bot Worker）+ 固定通信协议（gRPC 节点间 / WS 终端 / stdin-stdout Bot IPC / 反向 WS 探针），见 `.claude/rules/architecture-invariants.md`，任何变更不得逾越。
-- **安全**：JWT 双 Token（15m access + 7d refresh）；WS 终端一次性 token；探针实例级 token（scope=plugin-bridge）；客户端分发拉取密钥 + manifest Ed25519 签名 + 单调 version 防降级（ADR-022）+ L7 防护（ADR-023）；敏感信息经 `${ENV}` 注入不入库；破坏性操作二次确认 + 全程审计。
+- **安全**：JWT 双 Token（15m access + 7d refresh）；WS 终端一次性 token；探针实例级 token（scope=plugin-bridge）；客户端分发使用 HTTPS + 拉取密钥鉴权 + sha256 完整性校验（ADR-054）+ L7 防护（ADR-023）；敏感信息经 `${ENV}` 注入不入库；破坏性操作二次确认 + 全程审计。
 - **性能与规模**：指标时序分层卷积按 TTL 保留；大工作目录全文索引后台化；上万 Bot 以会话/摘要聚合不逐个铺开；离线节点/实例短路无效请求。
 - **可维护**：SDD 文档驱动 + 防漂移规则（`.claude/rules/`）；核心模块（process manager / 状态机 / 协议）测试覆盖 ≥80%，新代码 ≥60%。
 
@@ -345,6 +345,15 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - **逐 FR 验收**见对应 `docs/specs/<feature>/`；标 `已交付@vX.Y.Z` 须该 FR 验收标准全部满足 + 自动化测试通过 + 标注的真机/集成项由用户确认通过，由 `sdd-release-version` 发版统一标注。
 - **横切验收**（前端类 FR）：i18n（中/英）完整 + 暗/亮色正常 + 关键路径真机验证——三者缺一不算交付。
 
+| 期 | 主题 | 完成判定 | 主要证据 |
+|---|---|---|---|
+| 第一期（MVP） | 核心平台 | 节点、实例、终端、Bot 运维闭环真机通过 | FR-043 验收、自动化测试、真机记录 |
+| 第二期 | MC 群组服运维 | 结构化建服、复制、运行时与制品链路可用 | 对应 FR spec、集成 / 真机验收 |
+| 第三期 | 运营底座与可观测 | 监控、日志、玩家治理、备份、更新与资产能力满足运维闭环 | 对应 FR spec、监控 / 更新 / 运维场景验收 |
+| 第四期 | 玩家客户端 OTA 分发 | 发布、拉取、更新、追踪、遥测与防护链路闭环 | 分发 spec、端到端更新验收、安全验收 |
+| 第五期 | JBIS 业务对接平台 | 经济 / 背包等业务域可通过统一编排、适配器与 UI 管理 | 业务域 spec、探针适配验收、权限 / 审计验收 |
+| 第六期 | 控制台体验与可寻址性增强 | 导航、可寻址、响应式、一致性与关键交互符合设计基线 | 前端验收、i18n / 主题 / 响应式检查 |
+
 ## 7. 分期（路线）
 
 各期只描述**主题 / 目标**；具体 FR 归属以 §4 状态/版本为准，本节不随 FR 增长而改。
@@ -352,8 +361,8 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - **第一期（MVP）**：核心平台——认证 / RBAC、节点、实例生命周期、终端、文件、Bot、监控、告警、定时、备份、模板、审计、i18n + gRPC 全链路打通。
 - **第二期**：MC 群组服运维——配置引擎、群组服关系模型、JDK 运行时、结构化建服（Bukkit / 代理 / Sponge）、一键复制、便携运行时 + 制品库。
 - **第三期**：运营底座与可观测——时序监控、面板改造、ServerProbe 治理桥（退 RCON）、日志 / 插件 / 玩家 / 备份增强、Docker、一键安装、面板自更新、全局资产 / 存储 / DB 浏览、告警体系。
-- **第四期**：玩家客户端 OTA 分发——签名 manifest、updater 两件套、追踪 / 遥测 / 统计 / L7 防护 / 防降级。
-- **第五期**：JBIS 业务对接平台——经济域（已交付）、背包域（在途），插件无关编排 + 适配器 + manifest。
+- **第四期**：玩家客户端 OTA 分发——HTTPS 分发、拉取密钥鉴权、sha256 完整性校验、updater 两件套、追踪 / 遥测 / 统计 / L7 防护。
+- **第五期**：JBIS 业务对接平台——经济域、背包域，插件无关编排 + 适配器 + manifest。
 - **第六期**：控制台体验与可寻址性增强——前端走查整改（导航 / 可寻址 / 页面增强 / 一致性 / 响应式 + 全局页眉）。
 
 > 产品成熟（1.0 后稳态）不再加「第 N 期」，改按版本（CHANGELOG / tag）+ 功能（§4 / specs）组织。某期是否完成看 §4 该期 FR 状态是否都 `已交付`。
@@ -368,6 +377,6 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | ServerProbe | 游戏服内插件探针，反向 WS 连入本机 Worker；监控指标 + 业务对接 agent（ADR-016） |
 | 数据根 | 单一项目内 FHS 式运行态数据目录（bin/etc/opt/var/cache），便携可迁移（ADR-010） |
 | enrollment token | 新节点一次性、限时的准入凭据（一键安装，ADR-020） |
-| manifest | 客户端 OTA / 业务能力清单（Ed25519 签名） |
+| manifest | 客户端 OTA / 业务能力清单；客户端 OTA 通过 HTTPS 拉取，使用拉取密钥鉴权，并以 sha256 校验制品完整性（ADR-054） |
 | JBIS | 业务对接平台：经济 / 背包等域，CP/Worker/桥/UI 插件无关，探针侧适配器 + manifest |
 | 制品库 | 内容寻址（sha256）资产库，去重 + md5/sha256 完整性校验（ADR-011） |
