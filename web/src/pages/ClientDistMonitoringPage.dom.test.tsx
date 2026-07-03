@@ -6,6 +6,7 @@ import { db } from '@/mocks/db'
 import type { Session } from '@/mocks/handlers/domains/auth'
 import { useAuthStore } from '@/stores/auth'
 import { mockInject } from '@/mocks/inject'
+import { server } from '@/mocks/server'
 import ClientDistMonitoringPage from './ClientDistMonitoringPage'
 
 const ADMIN_TOKEN = `mock.${btoa(
@@ -18,6 +19,15 @@ const MEMBER_TOKEN = `mock.${btoa(
 function loginAs(token: string, userId: number) {
   db<Session>('sessions').insert({ accessToken: token, refreshToken: 'r', userId })
   useAuthStore.getState().login(token, 'r')
+}
+
+function countStatsRequests(): { get: () => number; stop: () => void } {
+  let n = 0
+  const listener = ({ request }: { request: Request }) => {
+    if (new URL(request.url).pathname.endsWith('/api/v1/client-dist/stats')) n += 1
+  }
+  server.events.on('request:start', listener)
+  return { get: () => n, stop: () => server.events.removeListener('request:start', listener) }
 }
 
 beforeAll(() => {
@@ -107,13 +117,19 @@ describe('ClientDistMonitoringPage（FR-265 四 Tab）', () => {
     expect(screen.queryByText('m-bbbb')).not.toBeInTheDocument()
   })
 
-  it('⑤ 非平台管理员：整页降级为权限提示', async () => {
+  it('⑤ 非平台管理员：整页降级为权限提示，且不发起平台级统计请求', async () => {
     loginAs(MEMBER_TOKEN, 2)
-    renderWithProviders(<ClientDistMonitoringPage />)
+    const statsRequests = countStatsRequests()
+    try {
+      renderWithProviders(<ClientDistMonitoringPage />)
 
-    expect(await screen.findByRole('heading', { name: '客户端分发观测' })).toBeInTheDocument()
-    expect(await screen.findByText('客户端分发观测需平台管理员权限')).toBeInTheDocument()
-    expect(screen.queryByText('请求成功率')).not.toBeInTheDocument()
+      expect(await screen.findByRole('heading', { name: '客户端分发观测' })).toBeInTheDocument()
+      expect(await screen.findByText('客户端分发观测需平台管理员权限')).toBeInTheDocument()
+      expect(screen.queryByText('请求成功率')).not.toBeInTheDocument()
+      expect(statsRequests.get()).toBe(0)
+    } finally {
+      statsRequests.stop()
+    }
   })
 
   it('⑥ 端点错误：当前 Tab 降级为错误态、不崩溃', async () => {

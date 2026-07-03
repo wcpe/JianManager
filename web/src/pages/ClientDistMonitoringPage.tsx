@@ -589,7 +589,7 @@ export default function ClientDistMonitoringPage() {
   const isPlatformAdmin = useAuthStore((s) => s.role) === ROLE_PLATFORM_ADMIN
   const { data: channels } = useClientChannels()
   const channelId = channel === ALL_CHANNELS ? undefined : channel
-  const statsQuery = useClientStats(channelId, toStatsDays(range))
+  const statsQuery = useClientStats(channelId, toStatsDays(range), { enabled: isPlatformAdmin })
   const realtimeQuery = useClientDistRealtime({ channelId, enabled: isPlatformAdmin })
   const runtimeQuery = useClientRuntimeOverview({ channelId, range: toApiRange(range), enabled: isPlatformAdmin })
 

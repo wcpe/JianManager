@@ -41,7 +41,7 @@ export interface ClientDistStats {
 }
 
 /** 频道分发统计（按频道 + 天数窗口）。 */
-export function useClientStats(channelId: string | null | undefined, days: number) {
+export function useClientStats(channelId: string | null | undefined, days: number, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['client-dist-stats', channelId, days],
     queryFn: async () => {
@@ -50,7 +50,7 @@ export function useClientStats(channelId: string | null | undefined, days: numbe
       })
       return data
     },
-    enabled: channelId !== null,
+    enabled: (options?.enabled ?? true) && channelId !== null,
   })
 }
 
