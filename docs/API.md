@@ -1984,7 +1984,7 @@
 ## 客户端分发 manifest 与制品（FR-087/088）
 
 > **鉴权分两组、物理隔离（ADR-022/023、contract §4；信任模型见 [ADR-054](../adr/054-updater-arch-simplification.md)）**：
-> - **发布/版本管理端点**（运营操作）：`/api/v1` JWT，**仅平台管理员**（同频道管理 FR-086）。`POST .../files`、`POST .../versions`、`GET .../versions`、`GET .../versions/:version`、`POST .../rollback`。
+> - **发布/版本管理端点**（运营操作）：`/api/v1` JWT，**仅平台管理员**（同频道管理 FR-086）。`POST .../files`、`POST .../versions`、`GET .../versions`、`GET .../versions/:version`、`POST .../rollback`、`GET/POST .../updater-core/versions`、`PUT .../updater-core/selected`。
 > - **消费端点**（玩家）：**拉取密钥**鉴权（请求头 `X-Client-Key`，无 JWT），与运营浏览器入口隔离。`GET .../manifest`、`GET /client-artifacts/:sha256`、`GET .../updater-core`。
 >
 > 理由：拉取密钥半公开（随整包分发必然泄露），用它鉴权「发布」=严重漏洞。FR-256 起去掉 manifest Ed25519 验签（推翻 ADR-022/053）——私钥在服务器上验签形同虚设（服务器被攻破即私钥泄露），信任靠 **HTTPS + 拉取密钥鉴权 + sha256 完整性校验**。**版本历史仅管理面可见，玩家侧只认 latest**（FR-088）。
@@ -2121,9 +2121,9 @@
 - **响应** (200): `{ "channelId", "from", "to", "summary":{ "recentStarted", "todayStarted", "recentStarts", "todayStarts", "updateSuccessRate", "updateFailureRate" }, "items":[{ "channelId", "machineId", "playerName", "ip", "platform", "javaVersion", "launcher", "coreVersion", "localVersion", "firstSeenAt", "lastHeartbeatAt" }], "runtimeVersionDist":[{ "version", "count" }], "coreVersionDist":[{ "value", "count" }], "platformDist":[{ "value", "count" }], "launcherDist":[{ "value", "count" }], "lagDist":[{ "lag", "count" }], "updateResultSeries":[{ "ts", "success", "failStatic", "rolledBack", "error" }] }`
 
 ### POST /api/v1/client-channels/:id/telemetry/heartbeat
-- **描述**: updater-core 启动心跳（FR-265）。按 `channel_id + machine_id` upsert `client_runtime_states`，只更新运行态，不写 `client_telemetry`，因此不会污染更新成功率。
+- **描述**: updater-core 启动心跳（FR-265）。按 `channel_id + machine_id` upsert `client_runtime_states`，只更新运行态，不写 `client_telemetry`，因此不会污染更新成功率。`playerName` 优先兼容 `X-Player-Name`，为空时按 `channel + X-Machine-Id + X-Install-Id` 从 `client_security_profiles` 反查最近安全画像补全。
 - **关联 FR**: FR-265 | **鉴权**: 玩家侧拉取密钥（`X-Client-Key`，必须属于该频道）
-- **请求头**: `X-Machine-Id`（必需，否则 best-effort 忽略心跳）、`X-Player-Name`（可选，来自 `jm-updater.json` 的 `playerName`，不可信，仅用于观测与排障）
+- **请求头**: `X-Machine-Id`（必需，否则 best-effort 忽略心跳）、`X-Install-Id`（可选但推荐，用于关联安全画像）、`X-Player-Name`（兼容旧客户端，可选且不可信，仅用于观测与排障）
 - **请求**: `{ "platform":"windows", "javaVersion":"17.0.10", "launcher":"HMCL", "coreVersion":"3", "localVersion":15 }`
 - **响应**: `202 Accepted`
 - **错误**: 401 `INVALID_CLIENT_KEY`
@@ -2337,20 +2337,28 @@
 - **错误**: 401 `INVALID_CLIENT_KEY` | 404 `ARTIFACT_NOT_FOUND` | 416（Range 越界，由 `http.ServeContent` 处理）
 
 ### GET /api/v1/client-channels/:id/updater-core
-- **描述**: 返回频道当前选定 updater-core 版本信息（FR-259，见 [ADR-054](../adr/054-updater-arch-simplification.md)）。楔子首次启动 / 后续启动据此决定下载新版还是用本地。返回格式冻结（spec §2.5.3），后续 CP 升级只能加字段不能删/改已有字段
+- **描述**: 返回频道当前选定 updater-core 分发信息（FR-259，见 [ADR-054](../adr/054-updater-arch-simplification.md)）。楔子首次启动 / 后续启动只按 `version` 是否大于本地 `selectedVersion` 决定是否下载；这里的 `version` 是频道级递增分发版本，不等同于归档列表里的 jar 版本。切回旧 `sha256` 回滚时，后端仍会抬高分发版本，确保冻结 wedge 会下载目标旧 jar。返回格式冻结（spec §2.5.3），后续 CP 升级只能加字段不能删/改已有字段
 - **关联 FR**: FR-259、FR-258
 - **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必）。**无 JWT**
-- **响应** (200): `{ "version": 2, "sha256": "ab12…", "downloadUrl": "/api/v1/client-artifacts/<sha256>", "size": 2097152 }`（`downloadUrl` 指向制品分发端点，可 Range 续传）
+- **响应** (200): `{ "version": 3, "sha256": "ab12…", "downloadUrl": "/api/v1/client-artifacts/<sha256>", "size": 2097152 }`（`version` 为频道级分发版本；`sha256` 才是实际 core jar 制品；`downloadUrl` 指向制品分发端点，可 Range 续传）
 - **错误**: 401 `INVALID_CLIENT_KEY` | 404 `CHANNEL_NOT_FOUND` / `NO_SELECTED_CORE`（频道未选定 core 版本）
 
 ### GET /api/v1/client-channels/:id/updater-core/versions
 - **描述**: 列出全部归档 updater-core 版本（含选定标记），供运营面板切换回滚（FR-259）
 - **关联 FR**: FR-259 | **鉴权**: **JWT，平台管理员**
-- **响应** (200): `[ { "version": 2, "sha256": "ab12…", "size": 2097152, "createdAt": "datetime", "selected": true }, { "version": 1, "sha256": "cd34…", "size": 2048000, "createdAt": "datetime", "selected": false } ]`
+- **响应** (200): `[ { "version": 2, "coreVersion":"0.1.0-SNAPSHOT", "displayVersion":"0.1.0-SNAPSHOT+abc123def456.dirty", "gitCommit":"abc123def456", "dirty":true, "buildTime":"datetime", "sha256": "ab12…", "size": 2097152, "createdAt": "datetime", "selected": true }, { "version": 1, "sha256": "cd34…", "size": 2048000, "createdAt": "datetime", "selected": false } ]`（`version` 是数字归档版本；`coreVersion/displayVersion/gitCommit/dirty/buildTime` 来自 jar 内元信息，旧 jar 可为空）
 - **错误**: 403 `FORBIDDEN`（非平台管理员）| 404 `CHANNEL_NOT_FOUND`
 
+### POST /api/v1/client-channels/:id/updater-core/versions
+- **描述**: 手动上传 updater-core.jar hotfix，归档为 `client-updater-core` 制品；可选择上传后立即作为当前频道选定版本（FR-259 增强）。客户端下次启动按 updater-core 端点拿到该版本。
+- **关联 FR**: FR-259 | **鉴权**: **JWT，平台管理员**
+- **请求**: `multipart/form-data`，字段：`file`（必填，jar 文件）、`version`（可选兜底；后端优先读取 jar 内 `META-INF/jm-updater-core.properties` / Manifest 元信息）、`select`（可选，`true`/`1` 表示上传后立即选用）。缺少元信息的紧急 hotfix jar 也允许上传。
+- **响应** (200): `{ "version": 9, "coreVersion":"0.1.1-hotfix", "displayVersion":"0.1.1-hotfix+def456abc789", "gitCommit":"def456abc789", "dirty":false, "buildTime":"datetime", "sha256": "ab12…", "size": 2097152, "createdAt": "datetime", "selected": true }`
+- **错误**: 400 `INVALID_REQUEST`（缺文件/文件不可读）| 403 `FORBIDDEN`（非平台管理员）| 404 `CHANNEL_NOT_FOUND`
+- **审计**: `client_core.upload`
+
 ### PUT /api/v1/client-channels/:id/updater-core/selected
-- **描述**: 切换频道选定的 updater-core 版本（一键回滚，FR-259）。客户端下次启动按 API 根 `endpoint` 自动查询 updater-core 端点拿到切换后版本——本地有就直接用、没有就下载
+- **描述**: 切换频道选定的 updater-core 版本（一键回滚，FR-259）。后端写入目标 `sha256` 并维护频道级递增分发版本；客户端下次启动按 API 根 `endpoint` 自动查询 updater-core 端点，看到更大的 `version` 后下载目标 `sha256`，因此即使回滚到旧归档 jar 也会生效
 - **关联 FR**: FR-259 | **鉴权**: **JWT，平台管理员**
 - **请求**: `{ "sha256": "ab12…" }`
 - **响应** (200): `{ "ok": true }`
@@ -2360,7 +2368,7 @@
 ### POST /api/v1/client-telemetry
 - **描述**: 客户端遥测上报（FR-094，contract §4.3）。**best-effort、202 不阻塞**；隐私可关在客户端
 - **关联 FR**: FR-094
-- **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必，任一有效密钥）；`X-Machine-Id`（可）、`X-Player-Name`（可，落库用于排障）。**无 JWT**
+- **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必，任一有效密钥）；`X-Machine-Id`（可但推荐）、`X-Install-Id`（可但推荐，用于关联安全画像）、`X-Player-Name`（兼容旧客户端，可选且不可信；为空时按 `channel + machineId + installId` 从安全画像补全）。**无 JWT**
 - **请求**: `{ "channel", "result"(success|fail-static|rolled-back|error), "fromVersion", "toVersion", "os", "javaVersion", "launcher", "durationMs", "bootSuccess", "error"? }`
 - **响应** (202): 无体（落库失败不影响响应）
 - **错误**: 401 `INVALID_CLIENT_KEY`

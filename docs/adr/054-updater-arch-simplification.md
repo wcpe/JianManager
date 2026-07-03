@@ -47,7 +47,7 @@ ADR-045 决策 1「core 默认随 CP 内嵌单版本、自动驱动 manifest `ag
 - **CP 每次 `make embed-client-updater` 时新 core jar 入库归档**（不覆盖旧版，制品类型 `client-updater-core`，版本号递增）。
 - **运营面板可选**：频道详情「Core 版本」Tab 列出所有归档版本，一键切换频道选定版本。
 - **楔子自动拉取**（gradle-wrapper 模式）：整合包只带 ~30KB wedge.jar，不再附带 updater-core.jar。楔子首次启动自动经 `endpoint + channel` 拼出的 updater-core 端点拉取 core jar，本地保留 3 版用于回滚；`jm-updater.json` 禁止配置完整 `coreEndpoint`。
-- **新增端点**：`GET /client-channels/:id/updater-core`（拉取密钥鉴权，返回当前选定版本 `{version, sha256, downloadUrl, size}`）+ `GET /client-channels/:id/updater-core/versions`（JWT 平台管理员，列归档版本）+ `PUT /client-channels/:id/updater-core/selected`（JWT 平台管理员，切换选定版本）。
+- **新增端点**：`GET /client-channels/:id/updater-core`（拉取密钥鉴权，返回当前选定分发信息 `{version, sha256, downloadUrl, size}`；`version` 为频道级递增分发版本，`sha256` 为实际 core jar）+ `GET /client-channels/:id/updater-core/versions`（JWT 平台管理员，列归档版本）+ `PUT /client-channels/:id/updater-core/selected`（JWT 平台管理员，切换选定版本）。
 
 manifest 的 `agent.core` 段保留但信息来源改为 updater-core 查询端点（不再由 manifest 驱动 core 自更新）。
 
@@ -74,7 +74,7 @@ ctx 固定 key（楔子写入）：`channel` / `key` / `endpoint` / `timeoutSec`
 ```
 GET /client-channels/:id/updater-core → { "version": int, "sha256": string, "downloadUrl": string, "size": long }
 ```
-格式冻结——后续 CP 升级只能**加字段**不能删/改已有字段。楔子只读这四个字段，多余字段忽略。
+格式冻结——后续 CP 升级只能**加字段**不能删/改已有字段。楔子只读这四个字段，多余字段忽略。`version` 是给楔子比较用的频道级分发版本，不要求等于归档列表中的 jar 版本；切换到旧 `sha256` 回滚时也必须递增。
 
 #### 4.4 楔子不解析 manifest
 楔子**永远不接触 manifest**——拉 manifest、解析文件列表、reconcile 全是 core 的职责。楔子只管「拉 core + 加载 core + 调 Core.run」。这样 manifest 格式后续怎么变都不影响楔子。

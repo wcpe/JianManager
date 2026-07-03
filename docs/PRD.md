@@ -58,6 +58,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-233~247 + FIX-7~9（UI 重塑 + Docker 落地 + 实例规模化 2026-06-30）：实例配置随时编辑 / 创建向导优化 / 实例页重设计[1000+] / 一键搭建+docker傻瓜建服 / Docker检测引导 / 导航外壳+实例选择器重构[原型,1000+]+面包屑文案纠错[排最后] / 全局搜索命令面板+页眉弹层选实例 / 加载进度条 / 全局动画统一 / 全站卡片范式提质+节点页卡片 / 实例规模化后端API → **需 spec**：FR-233/235/236/237/240/241/246/247；**免 spec**：FR-234/243/244；**FR-240 含 2-3 原型审核闸**。合并：FR-238→FR-078（既有「镜像管理」范围，完成 FR-078/079 即覆盖 docker 启动修通+镜像/容器管理 UI+端口+限额）、FR-239→FR-236、FR-242→FR-241、FR-245→FR-240。FIX-7 生产 SQL 日志静默[`database.go` GORM logger 接调试开关] / FIX-8 创建实例节点下拉空[放宽+空态] / FIX-9 点击实例卡片无反应（fix 走 sdd-fix-bug，不占 §4）。3 地基（FR-247 规模化后端 / FR-240 导航原型 / FR-246 卡片范式）设计决策先落。计划见 `.tmp/brainstorm-ui-docker-batch-2026-06-30.md`
 - FR-264（客户端分发单节点源站安全防护：多维限流 / IP 临时封禁 / key 状态机 / 频道降速保护 / 制品授权收紧 / 启动安全画像 / 独立防护中心）→ `docs/specs/client-dist-security-firewall/spec.md`（已交付）
 - FR-265（客户端分发观测四 Tab 重构：统计/监控/日志只看请求事件，客户端 Tab 独立看运行态与更新结果；新增运行态心跳表/端点、请求日志脱敏详情、实时聚合；清理废弃缓存命中指标；与 FR-264 并行开发互不覆盖）→ `docs/specs/client-dist-observability-rebuild/spec.md`（已交付）
+- FR-266（updater-core 构建元信息内嵌与展示：jar 内写版本 / Git commit / dirty / buildTime，CP 归档读取并在 Core 版本页展示，紧急 hotfix 仍可直接上传）→ `docs/specs/updater-core-build-metadata/spec.md`（开发中）
 - 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
 
 | 编号 | 需求 | 优先级 | 状态 |
@@ -310,13 +311,14 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-256 | updater-core 架构简化 Phase 1：删验签（Signatures/BouncyCastle/.jmpack）、删 CAS（CasCache）、删 core 自更新（SelfUpdater）、manifest 去 sig 段、去防降级；保留 sha256 完整性校验 + 拉取密钥鉴权（推翻 ADR-022/053，废弃 FR-090/091/097/253/248）→ `docs/specs/updater-arch-simplification/spec.md` | — | ✅ 已交付 |
 | FR-257 | Reconciler 流式下载 + HTTP Range 断点续传：Transport 改返回 InputStream、Reconciler 边读边写盘（64KB 缓冲）、DigestInputStream 流式 sha256、zstd 流式解压、断点续传；1GB 文件下载内存 < 10MB（依赖 FR-256）→ `docs/specs/updater-arch-simplification/spec.md` | — | ✅ 已交付 |
 | FR-258 | 楔子改 gradle-wrapper 模式：整合包只带 wedge.jar，首次自动拉 core（JDK 原生 HttpURLConnection + sha256 校验）、本地保留 3 版用于回滚、jm-updater.json 原文透传 ctx、Core.run(Map) 接口契约冻结（依赖 FR-256）→ `docs/specs/updater-arch-simplification/spec.md` | — | ✅ 已交付 |
-| FR-259 | CP core 版本归档 + 端点 + 面板回滚：make embed-client-updater 归档多版本 core jar、GET /client-channels/:id/updater-core 端点（拉取密钥鉴权）、面板「updater-core 版本」选择器一键切换回滚（依赖 FR-258）→ `docs/specs/updater-arch-simplification/spec.md` | — | ✅ 已交付 |
+| FR-259 | CP core 版本归档 + 端点 + 面板回滚：make embed-client-updater 归档多版本 core jar、GET /client-channels/:id/updater-core 端点（拉取密钥鉴权）、面板「updater-core 版本」选择器一键切换回滚；补充平台管理员手动上传 updater-core.jar hotfix 并可立即选用（依赖 FR-258）→ `docs/specs/updater-arch-simplification/spec.md`、`docs/specs/updater-core-hotfix-telemetry/spec.md` | — | ✅ 已交付 |
 | FR-260 | 客户端更新器架构简化 前端 + ADR + doc-sync：接入指引去 signPublicKey 改"楔子自动拉取"、updater-core 版本选择器面板、新 ADR 推翻 ADR-022/053 修订 ADR-045、API/ARCHITECTURE/PRD/CHANGELOG 同步、重编内嵌 jar；后续增强：接入指引可选择 revealable 拉取密钥并自动填入/下载 `jm-updater.json`，Core 版本页展示最新归档与当前选定，内置/选定 updater-core 归档禁止从制品库删除（依赖 FR-259） | — | ✅ 已交付 |
 | FR-263 | 拉取密钥加密器自动生成与持久化：CP 启动未注入 JIANMANAGER_CLIENT_KEY_ENC_SECRET 时自动生成 AES-256-GCM 密钥并持久化到数据根文件（env 注入优先、双轨），dev 回退内置开发密钥；修订 ADR-044 存储策略；后续增强：密钥列表/编辑支持永不过期展示、设置/清空过期时间，明文弹窗标题不拼接密钥名且复制按钮稳定可用（feat，需 spec + ADR） | P1 | ✅ 已交付 |
 | FR-264 | 客户端分发单节点源站安全防护：在无 CDN 部署下补多维限流、字节配额、IP 临时封禁与手动解封、key 状态机、频道降速保护、制品授权收紧、启动安全画像遥测（playerName+machineId+installId+环境特征强制上报）与独立防护中心页面（feat，需 spec）→ `docs/specs/client-dist-security-firewall/spec.md` | P1 | ✅ 已交付 |
 | FR-261 | 发布页文件资源管理器（专业文件树库重写）：react-arborist 替换 ClientFileTree，新建文件夹/重命名/Ctrl+点选/Shift+连选/Delete 删除/拖拽上传文件/拖拽上传 zip 自动解压（含 GBK）/拖拽移动调整结构/同名冲突提示忽略覆盖保留两者；保留本地编排→点发布才上传架构（feat，需 spec） | P1 | ✅ 已交付 |
 | FR-262 | 清理目录树形右键菜单可视化：FR-261 同款文件树展示目录结构，右键菜单标记清理/排除/取消，Ctrl+点选 Shift+连选批量操作，颜色区分（红=清理/绿=排除/无色=不管理），父子联动；产出 managedDirs+cleanExclude（增强 FR-255，依赖 FR-261，需 spec） | P1 | ✅ 已交付 |
 | FR-265 | 客户端分发观测四 Tab 重构：同页面拆统计/监控/日志/客户端；统计/监控/日志仅看分发请求事件，客户端 Tab 独立看运行态与更新结果；新增运行态心跳表/端点、请求日志脱敏详情、实时聚合与运行态联动筛选；清理废弃缓存命中指标；与 FR-264 并行开发互不覆盖 → `docs/specs/client-dist-observability-rebuild/spec.md` | P1 | ✅ 已交付@v0.12.0 |
+| FR-266 | updater-core 构建元信息内嵌与展示：jar 内写入版本号 / Git commit / dirty / buildTime，CP 归档读取并在 Core 版本页展示；紧急 hotfix jar 缺少元信息仍可直接上传并立即选用 → `docs/specs/updater-core-build-metadata/spec.md` | P1 | 🔨 开发中 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 

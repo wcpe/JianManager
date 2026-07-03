@@ -80,7 +80,7 @@ updater-core ──GET /manifest(latest,带 key+machineId)──→ JM 分发后
 - **验签**：updater 用 `sig.keyId` 选内置公钥验签；缺失/不符 → **拒绝整份 manifest**，fail-static 带本地版本进游戏。
 - **密钥轮换（ADR-022）**：updater 内置 `keyId → 公钥` 映射（主 `k1` + 备 `k2`…）；私钥泄露切备用 keyId、经一次基础包更新淘汰旧公钥。私钥服务端持有、env 注入不入库。
 - **防降级/重放（ADR-022）**：updater 本地持久化 `lastSeenVersion`；拉到的 manifest 若 `version < lastSeenVersion` → **拒绝**（疑似重放旧版投毒）。运营回滚不是下发更低号，而是**以更高 version 重发旧内容**（FR-088）。
-- **`agent.core` 来源 + 两条版本轴（FR-193，见 ADR-045 改写）**：`agent.core`（version + per-platform 制品）服务端由 **CP 内嵌的默认 updater-core 自动产出**（FR-107 内嵌 jar：算 sha256/size + 单调整数版本，一份 jar 三平台通用填各 platform 键；**运营不管理**、随 CP 自更新跟进；无内嵌 jar 时省略 `agent.core` 优雅降级）。**两条版本轴正交**：manifest `version`（内容轴，上方防降级）与 `agent.core.version`（updater-core 自身轴，对客户端单调**只升不降**——core 只把更高版本暂存 pending，见 §6.3）。CP 默认 core 版本随 CP 升级演进、单调递增（升级即驱动客户端 promote 到新 core）。楔子（`agent.wedge`）冻结、单版本、不纳管。
+- **updater-core 分发版本轴（FR-259，见 ADR-054）**：楔子冻结后不再由 manifest `agent.core` 驱动 core 自更新；楔子启动时请求 `/client-channels/{channelId}/updater-core`，服务端返回 `{version, sha256, downloadUrl, size}`。其中 `version` 是频道级递增分发版本（仅供楔子比较是否下载），`sha256` 是实际 core jar 制品。切换到旧 `sha256` 回滚时，服务端也必须抬高分发版本，确保已发布楔子会下载目标旧 jar。楔子（`agent.wedge`）冻结、单版本、不纳管。
 
 ## 4. 端点
 
