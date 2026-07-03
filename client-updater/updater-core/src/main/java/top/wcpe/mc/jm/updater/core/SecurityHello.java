@@ -19,7 +19,7 @@ final class SecurityHello {
         body.put("installId", identity.installId);
         body.put("coreVersion", identity.coreVersion);
         body.put("wedgeVersion", identity.wedgeVersion);
-        body.put("manifestVersion", identity.manifestVersion);
+        body.put("manifestVersion", Long.toString(identity.manifestVersion));
         body.put("os", System.getProperty("os.name", ""));
         body.put("osVersion", System.getProperty("os.version", ""));
         body.put("arch", System.getProperty("os.arch", ""));

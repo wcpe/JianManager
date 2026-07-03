@@ -26,7 +26,7 @@ class SecurityHelloTest {
         assertEquals("install-1", body.get("installId"));
         assertEquals("12", body.get("coreVersion"));
         assertEquals("3", body.get("wedgeVersion"));
-        assertEquals(8L, ((Number) body.get("manifestVersion")).longValue());
+        assertEquals("8", body.get("manifestVersion"));
         assertNotNull(body.get("os"));
         assertNotNull(body.get("osVersion"));
         assertNotNull(body.get("arch"));

@@ -68,9 +68,10 @@ public final class Core {
             String channel = ctx.get("channel");
             String key = ctx.get("key");
             String endpoint = ctx.get("endpoint");
-            // 本次运行的 core 版本号（wedge 经 ctx 注入），透传给 transport 做请求标识。
-            // FR-256 起 core 自更新上移到楔子（FR-258），core 不再据 manifest 自更新，此值仅作信息性透传。
-            String coreVersion = ctx.getOrDefault("coreVersion", "");
+            // wedge 注入的是频道级分发版本，仅用于说明本次选择状态；jar 真实构建版本来自 BuildInfo。
+            String distributionVersion = ctx.getOrDefault("coreVersion", "");
+            BuildInfo buildInfo = BuildInfo.current();
+            String coreVersion = buildInfo.display();
             String wedgeVersion = contextValue(ctx, "wedgeVersion");
             String playerName = contextValue(ctx, "playerName");
             // 机器码身份（FR-092）：稳定、不可逆、跨平台；ctx 显式提供则用之（测试/特殊），否则本机生成。
@@ -83,7 +84,8 @@ public final class Core {
                 log.error("core 启动缺少 channel/endpoint，fail-static");
                 return Updater.FAIL_STATIC;
             }
-            log.info("配置解析完成 channel=" + channel + " endpoint=" + endpoint + " coreVersion=" + coreVersion);
+            log.info("配置解析完成 channel=" + channel + " endpoint=" + endpoint
+                    + " coreBuild=" + coreVersion + " distributionVersion=" + distributionVersion);
 
             Path stateDir = gameDir.resolve(".jm-updater");
             String installId = InstallId.loadOrCreate(stateDir);

@@ -1,3 +1,6 @@
+import java.io.ByteArrayOutputStream
+import java.time.Instant
+
 // updater-core：更新主体，被楔子动态加载（URLClassLoader 内存加载，便于自更新换 jar）。
 // target Java 8：须能被低版本（Java 8）MC 的 JVM 加载——老整合包/启动器仍在用 Java 8，
 // 若编到 17 则 UnsupportedClassVersionError、楔子加载失败（见 FR-089 真机）。
@@ -27,6 +30,67 @@ dependencies {
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
+fun gitRootDir() = rootProject.projectDir.parentFile ?: rootProject.projectDir
+
+fun gitOutput(vararg args: String): String {
+    val out = ByteArrayOutputStream()
+    val result = exec {
+        workingDir = gitRootDir()
+        commandLine("git", *args)
+        standardOutput = out
+        errorOutput = ByteArrayOutputStream()
+        isIgnoreExitValue = true
+    }
+    if (result.exitValue != 0) {
+        return "unknown"
+    }
+    return out.toString(Charsets.UTF_8.name()).trim().ifBlank { "unknown" }
+}
+
+fun gitDirty(): String {
+    val result = exec {
+        workingDir = gitRootDir()
+        commandLine("git", "diff", "--quiet", "HEAD", "--")
+        standardOutput = ByteArrayOutputStream()
+        errorOutput = ByteArrayOutputStream()
+        isIgnoreExitValue = true
+    }
+    return when (result.exitValue) {
+        0 -> "false"
+        1 -> "true"
+        else -> "unknown"
+    }
+}
+
+val updaterBuildVersion = providers.gradleProperty("updaterVersion").orElse(project.version.toString()).get()
+val updaterGitCommit = gitOutput("rev-parse", "--short=12", "HEAD")
+val updaterGitDirty = gitDirty()
+val updaterBuildTime = Instant.now().toString()
+val generatedBuildInfoDir = layout.buildDirectory.dir("generated/resources/build-info")
+
+val generateBuildInfo by tasks.registering {
+    outputs.dir(generatedBuildInfoDir)
+    doLast {
+        val file = generatedBuildInfoDir.get().file("META-INF/jm-updater-core.properties").asFile
+        file.parentFile.mkdirs()
+        file.writeText(
+            "version=$updaterBuildVersion\n" +
+                "gitCommit=$updaterGitCommit\n" +
+                "dirty=$updaterGitDirty\n" +
+                "buildTime=$updaterBuildTime\n",
+            Charsets.UTF_8,
+        )
+    }
+}
+
+sourceSets.named("main") {
+    resources.srcDir(generatedBuildInfoDir)
+}
+
+tasks.processResources {
+    dependsOn(generateBuildInfo)
+}
+
 tasks.test {
     useJUnitPlatform()
     // FR-099：测试一律 headless——既防 CI/本地误弹 Swing 窗口，也让进度工厂走文本降级路径可验。
@@ -49,12 +113,22 @@ tasks.test {
 // 故 core 必须自包含运行时依赖（zstd-jni）——否则真机解压 zstd 制品时 ClassNotFoundException。
 // 用内置能力打 fat jar（不引 shadow 插件，保持构建零额外插件依赖）。
 tasks.jar {
+    dependsOn(generateBuildInfo)
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     from({
         configurations.runtimeClasspath.get()
             .filter { it.name.endsWith("jar") }
             .map { zipTree(it) }
     })
+    manifest {
+        attributes(
+            "Implementation-Version" to updaterBuildVersion,
+            "JM-Updater-Core-Version" to updaterBuildVersion,
+            "JM-Git-Commit" to updaterGitCommit,
+            "JM-Git-Dirty" to updaterGitDirty,
+            "JM-Build-Time" to updaterBuildTime,
+        )
+    }
     // 排除被打包依赖自身的签名/模块描述，避免 SecurityException / 多 module-info 冲突。
     exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA", "META-INF/versions/**/module-info.class")
 }
