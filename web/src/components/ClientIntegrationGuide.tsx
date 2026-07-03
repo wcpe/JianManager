@@ -26,6 +26,7 @@ export default function ClientIntegrationGuide({ channelId, keys }: { channelId:
     () => keys.find((key) => String(key.id) === selectedKeyId) ?? null,
     [keys, selectedKeyId],
   )
+  const hasRealConfigKey = selectedKeyPlaintext.trim().length > 0
   const configKey = selectedKeyPlaintext || t('clientGuide.keyPlaceholder', '在「拉取密钥」Tab 创建后填入')
   const jmUpdaterJson = JSON.stringify(
     {
@@ -76,6 +77,10 @@ export default function ClientIntegrationGuide({ channelId, keys }: { channelId:
   }
 
   const download = async (comp: 'wedge' | 'config') => {
+    if (comp === 'config' && !hasRealConfigKey) {
+      toast.error(t('clientGuide.configKeyRequired', '请先选择可查看的拉取密钥，再下载 jm-updater.json。'))
+      return
+    }
     setDownloading(comp)
     try {
       if (comp === 'config') {
@@ -182,7 +187,7 @@ export default function ClientIntegrationGuide({ channelId, keys }: { channelId:
           <Button
             variant="outline"
             size="sm"
-            disabled={downloading === 'config'}
+            disabled={downloading === 'config' || !hasRealConfigKey}
             onClick={() => download('config')}
           >
             <Download className="size-4 mr-1" /> {t('clientGuide.downloadConfig', '下载 jm-updater.json')}

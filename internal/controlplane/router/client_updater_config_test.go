@@ -30,7 +30,7 @@ func setupUpdaterConfigRouter(t *testing.T, db *gorm.DB) *gin.Engine {
 }
 
 // TestGetUpdaterConfig_AdminReturnsConfig 平台管理员取 jm-updater.json →
-// 200 + 含 channel / endpoint（key 占位空串）。FR-256 起不再返回 signPublicKey/signKeyId。
+// 200 + 含 channel / endpoint / key。FR-256 起不再返回 signPublicKey/signKeyId。
 func TestGetUpdaterConfig_AdminReturnsConfig(t *testing.T) {
 	db := setupTestDB(t)
 	// 建测试频道。
@@ -40,7 +40,7 @@ func TestGetUpdaterConfig_AdminReturnsConfig(t *testing.T) {
 	r := setupUpdaterConfigRouter(t, db)
 	token := getAdminToken(t, r)
 
-	w := makeRequest(r, "GET", "/api/v1/client-channels/skyblock-s1/updater-config", nil, token)
+	w := makeRequest(r, "GET", "/api/v1/client-channels/skyblock-s1/updater-config?key=jmck_real", nil, token)
 	if w.Code != http.StatusOK {
 		t.Fatalf("应 200，实际 %d: %s", w.Code, w.Body.String())
 	}
@@ -48,8 +48,8 @@ func TestGetUpdaterConfig_AdminReturnsConfig(t *testing.T) {
 	if resp["channel"] != "skyblock-s1" {
 		t.Fatalf("channel 应为 skyblock-s1，实得 %v", resp["channel"])
 	}
-	if resp["key"] != "" {
-		t.Fatalf("key 应为空串（占位），实得 %v", resp["key"])
+	if resp["key"] != "jmck_real" {
+		t.Fatalf("key 应为传入的真实拉取密钥，实得 %v", resp["key"])
 	}
 	if resp["endpoint"] == nil || resp["endpoint"] == "" {
 		t.Fatalf("endpoint 应非空（CP 公网基址），实得 %v", resp["endpoint"])
@@ -63,6 +63,25 @@ func TestGetUpdaterConfig_AdminReturnsConfig(t *testing.T) {
 	}
 	if _, ok := resp["signKeyId"]; ok {
 		t.Fatalf("jm-updater.json 不应再含 signKeyId（验签已去）")
+	}
+}
+
+// TestGetUpdaterConfig_KeyRequired 缺少真实拉取密钥时拒绝生成配置，避免下发空 key。
+func TestGetUpdaterConfig_KeyRequired(t *testing.T) {
+	db := setupTestDB(t)
+	if _, e := service.NewClientChannelService(db).CreateChannel("skyblock-s1", "空岛一服", ""); e != nil {
+		t.Fatalf("创建测试频道失败: %v", e)
+	}
+	r := setupUpdaterConfigRouter(t, db)
+	token := getAdminToken(t, r)
+
+	w := makeRequest(r, "GET", "/api/v1/client-channels/skyblock-s1/updater-config", nil, token)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("缺 key 应 400，实际 %d: %s", w.Code, w.Body.String())
+	}
+	resp := parseJSON(t, w)
+	if resp["error"] != "CLIENT_KEY_REQUIRED" {
+		t.Fatalf("错误码应 CLIENT_KEY_REQUIRED，实得 %v", resp["error"])
 	}
 }
 

@@ -64,6 +64,8 @@ export interface ClientDistEventPage {
 }
 
 export interface ClientDistEventDetail extends ClientDistEvent {
+  requestBody: string
+  responseBody: string
   requestHeaders: Record<string, string>
   responseHeaders: Record<string, string>
 }

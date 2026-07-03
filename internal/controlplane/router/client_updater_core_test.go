@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
@@ -59,6 +60,28 @@ func TestUpdaterCore_Endpoint_AuthBoundary(t *testing.T) {
 	dl, _ := resp["downloadUrl"].(string)
 	require.Equal(t, "http://8.148.77.83:18370/api/v1/client-artifacts/"+shaV1, dl)
 	require.NotZero(t, resp["size"])
+}
+
+func TestUpdaterCore_InvalidKeyIsTracked(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	const channelID = "core-track"
+	_ = createChannelAndKey(t, r, token, channelID)
+
+	req := httptest.NewRequest("GET", "/api/v1/client-channels/"+channelID+"/updater-core?debug=1", nil)
+	req.Header.Set("X-Client-Key", "jmck_invalid")
+	req.Header.Set("X-Debug-Trace", "linux")
+	w := serveNoAuth(r, req)
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+
+	var ev model.ClientDistEvent
+	require.NoError(t, db.Where("kind = ?", "core").First(&ev).Error)
+	require.Equal(t, channelID, ev.ChannelID)
+	require.Equal(t, http.StatusUnauthorized, ev.Status)
+	require.Equal(t, "INVALID_CLIENT_KEY", ev.ErrCode)
+	require.Equal(t, "/api/v1/client-channels/"+channelID+"/updater-core?debug=1", ev.Path)
+	require.Contains(t, ev.ResponseBody, "INVALID_CLIENT_KEY")
 }
 
 func TestUpdaterCore_DefaultArchiveCanBeDownloaded(t *testing.T) {

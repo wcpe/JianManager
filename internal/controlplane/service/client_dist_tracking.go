@@ -50,9 +50,11 @@ type ClientDistEventInput struct {
 	// ErrReason 可读错误原因（FR-265）。
 	ErrReason  string
 	DurationMs int64
-	// FR-265 日志详情字段：仅保存白名单脱敏后的请求/响应头。
+	// FR-265 日志详情字段：保存排障所需的请求/响应详情；凭证类内容不落库。
 	Method          string
 	Path            string
+	RequestBody     string
+	ResponseBody    string
 	RequestHeaders  map[string]string
 	ResponseHeaders map[string]string
 }
@@ -60,6 +62,8 @@ type ClientDistEventInput struct {
 // ClientDistEventDetail 单条分发请求详情（FR-265）。
 type ClientDistEventDetail struct {
 	model.ClientDistEvent
+	RequestBody     string            `json:"requestBody"`
+	ResponseBody    string            `json:"responseBody"`
 	RequestHeaders  map[string]string `json:"requestHeaders"`
 	ResponseHeaders map[string]string `json:"responseHeaders"`
 }
@@ -143,6 +147,7 @@ func (s *ClientDistTrackingService) Record(e ClientDistEventInput) error {
 		Version: e.Version, ArtifactSHA: e.ArtifactSHA, Bytes: e.Bytes, Status: e.Status,
 		ErrCode: e.ErrCode, ErrReason: trunc(e.ErrReason, 255), DurationMs: e.DurationMs,
 		Method: strings.ToUpper(trunc(e.Method, 8)), Path: sanitizePath(e.Path),
+		RequestBody: trunc(e.RequestBody, 4096), ResponseBody: trunc(e.ResponseBody, 4096),
 		RequestHeadersJSON: mustJSON(reqHeaders), ResponseHeadersJSON: mustJSON(respHeaders),
 		ETag: trunc(respHeaders["ETag"], 128), CreatedAt: now,
 	}
@@ -244,6 +249,8 @@ func (s *ClientDistTrackingService) GetEventDetail(id uint) (*ClientDistEventDet
 	}
 	return &ClientDistEventDetail{
 		ClientDistEvent: ev,
+		RequestBody:     ev.RequestBody,
+		ResponseBody:    ev.ResponseBody,
 		RequestHeaders:  parseHeaderJSON(ev.RequestHeadersJSON),
 		ResponseHeaders: parseHeaderJSON(ev.ResponseHeadersJSON),
 	}, nil
@@ -433,34 +440,34 @@ func topIPs(q *gorm.DB, out *[]StatsIP) error {
 }
 
 func sanitizeRequestHeaders(in map[string]string) map[string]string {
-	return sanitizeHeaders(in, map[string]bool{
-		"User-Agent": true, "If-None-Match": true, "Range": true, "X-Machine-Id": true,
-		"X-Client-Core-Version": true, "X-Client-Key": true,
-	}, true)
+	return sanitizeHeaders(in)
 }
 
 func sanitizeResponseHeaders(in map[string]string) map[string]string {
-	return sanitizeHeaders(in, map[string]bool{
-		"ETag": true, "Cache-Control": true, "Content-Length": true, "Content-Range": true,
-	}, false)
+	return sanitizeHeaders(in)
 }
 
-func sanitizeHeaders(in map[string]string, allow map[string]bool, redactKey bool) map[string]string {
+func sanitizeHeaders(in map[string]string) map[string]string {
 	out := map[string]string{}
 	for k, v := range in {
 		canon := canonicalHeader(k)
-		if !allow[canon] {
-			continue
-		}
-		if redactKey && canon == "X-Client-Key" {
-			if v != "" {
+		if secretHeader(canon) {
+			if v != "" && strings.EqualFold(canon, "X-Client-Key") {
 				out[canon] = "present"
 			}
 			continue
 		}
-		out[canon] = trunc(v, 512)
+		out[canon] = trunc(v, 1024)
 	}
 	return out
+}
+
+func secretHeader(k string) bool {
+	switch strings.ToLower(strings.TrimSpace(k)) {
+	case "authorization", "cookie", "set-cookie", "proxy-authorization", "x-api-key", "x-auth-token", "x-client-key":
+		return true
+	}
+	return false
 }
 
 func canonicalHeader(k string) string {
@@ -494,12 +501,21 @@ func sanitizePath(p string) string {
 		return ""
 	}
 	if u, err := url.Parse(p); err == nil && u.Path != "" {
-		return trunc(u.Path, 512)
+		q := u.Query()
+		for k := range q {
+			if secretQueryParam(k) {
+				q.Set(k, "present")
+			}
+		}
+		u.RawQuery = q.Encode()
+		return trunc(u.RequestURI(), 1024)
 	}
-	if i := strings.IndexByte(p, '?'); i >= 0 {
-		p = p[:i]
-	}
-	return trunc(p, 512)
+	return trunc(p, 1024)
+}
+
+func secretQueryParam(k string) bool {
+	lk := strings.ToLower(strings.TrimSpace(k))
+	return strings.Contains(lk, "token") || strings.Contains(lk, "key") || strings.Contains(lk, "secret") || strings.Contains(lk, "password")
 }
 
 func mustJSON(v map[string]string) string {

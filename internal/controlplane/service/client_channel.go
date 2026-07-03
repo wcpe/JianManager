@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -305,6 +306,7 @@ func (s *ClientChannelService) RevokeKey(channelID string, keyID uint) error {
 // 命中则刷新 last_used_at（弱一致，失败不阻断）。供 FR-087 面向玩家端点消费。
 // 未命中/吊销/过期/频道不匹配统一返回 ErrPullKeyInvalid（不泄露具体原因）。
 func (s *ClientChannelService) VerifyKey(channelID, plaintext string) (*model.ClientPullKey, error) {
+	plaintext = strings.TrimSpace(plaintext)
 	if plaintext == "" {
 		return nil, ErrPullKeyInvalid
 	}
@@ -336,6 +338,7 @@ func (s *ClientChannelService) VerifyKey(channelID, plaintext string) (*model.Cl
 // 制品内容寻址、跨频道共享，任一有效密钥即可授权路由；内容可信靠 manifest 签名而非密钥（ADR-022 §2）。
 // 命中刷新 last_used_at（弱一致）。未命中/吊销/过期统一返回 ErrPullKeyInvalid（不泄露具体原因）。
 func (s *ClientChannelService) VerifyAnyKey(plaintext string) (*model.ClientPullKey, error) {
+	plaintext = strings.TrimSpace(plaintext)
 	if plaintext == "" {
 		return nil, ErrPullKeyInvalid
 	}

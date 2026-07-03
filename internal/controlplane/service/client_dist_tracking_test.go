@@ -155,7 +155,7 @@ func TestClientDistTracking_RecordSanitizedHeadersAndDetail(t *testing.T) {
 	svc := NewClientDistTrackingService(db)
 	require.NoError(t, svc.Record(ClientDistEventInput{
 		ChannelID: "ch1", MachineID: "m1", IP: "1.2.3.4", Kind: "manifest", Version: 5,
-		Method: "GET", Path: "/api/v1/client-channels/ch1/manifest?secret=bad", Status: 200,
+		Method: "GET", Path: "/api/v1/client-channels/ch1/manifest?debug=1", Status: 200,
 		RequestHeaders: map[string]string{
 			"User-Agent": "JM-Updater", "X-Client-Key": "jmck_secret_should_not_persist", "Authorization": "Bearer nope",
 			"Range": "bytes=0-99",
@@ -166,7 +166,7 @@ func TestClientDistTracking_RecordSanitizedHeadersAndDetail(t *testing.T) {
 	detail, err := svc.GetEventDetail(1)
 	require.NoError(t, err)
 	require.Equal(t, "GET", detail.Method)
-	require.Equal(t, "/api/v1/client-channels/ch1/manifest", detail.Path, "path 不应保留 query")
+	require.Equal(t, "/api/v1/client-channels/ch1/manifest?debug=1", detail.Path, "排障详情应保留 query")
 	require.Equal(t, "JM-Updater", detail.RequestHeaders["User-Agent"])
 	require.Equal(t, "present", detail.RequestHeaders["X-Client-Key"], "拉取密钥只能保留 present 标记")
 	require.NotContains(t, detail.RequestHeaders, "Authorization")

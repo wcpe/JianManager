@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
@@ -145,10 +146,15 @@ func main() {
 	// 加密密钥来源三轨（FR-263，优先级 env 注入 > 生产自动生成 > dev 回退）：env 注入优先；
 	// 生产未注入则自动生成并持久化到 <dataRoot>/etc/client-key-enc.key（0600，跨重启用同一密钥）；
 	// dev_mode 回退内置开发密钥；自动生成失败优雅降级（密钥不可查看但不崩，与 ADR-038 降级哲学一致）。
-	keyEncryptor, encSource, err := service.ResolveKeyEncryptor(cfg.ClientDist.KeyEncSecret, cfg.Server.DevMode, root.Abs("etc/client-key-enc.key"))
+	keyEncPath := root.Abs("etc/client-key-enc.key")
+	keyEncryptor, encSource, err := service.ResolveKeyEncryptor(cfg.ClientDist.KeyEncSecret, cfg.Server.DevMode, keyEncPath)
 	if err != nil {
-		// 仅「注入了非法 env 密钥」会到此（配错快失败，让运维即时修正）；其余路径走降级返 nil 不报错。
-		log.Fatalf("初始化拉取密钥加密器失败: %v", err)
+		if strings.TrimSpace(cfg.ClientDist.KeyEncSecret) != "" {
+			// 注入了非法 env 密钥：配错快失败，让运维即时修正。
+			log.Fatalf("初始化拉取密钥加密器失败: %v", err)
+		}
+		// 自动生成/持久化失败：密钥不可查看，其余功能正常；记录真实原因便于排障。
+		slog.Warn("拉取密钥加密密钥自动生成/持久化失败，降级为不可查看；可检查数据根 etc/ 目录权限或经 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入密钥", "path", keyEncPath, "error", err)
 	}
 	switch encSource {
 	case service.KeyEncSourceGenerated:
@@ -156,8 +162,7 @@ func main() {
 	case service.KeyEncSourceDev:
 		slog.Warn("拉取密钥加密使用内置开发密钥（仅 dev_mode 生效），生产务必经 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入独立密钥")
 	case "":
-		// 降级（自动生成/持久化失败）：密钥不可查看，其余功能正常。
-		slog.Warn("拉取密钥加密密钥自动生成/持久化失败，降级为不可查看；可检查数据根 etc/ 目录权限或经 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入密钥")
+		// 降级日志已在 ResolveKeyEncryptor 返回错误时带真实原因输出。
 	}
 	clientChannelSvc.SetKeyEncryptor(keyEncryptor)
 	// 客户端分发版本与 manifest 组装（FR-087 / FR-256 简化后：不再签名 manifest，信任靠 HTTPS + 拉取密钥鉴权）。

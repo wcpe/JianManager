@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
 import { screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import ClientIntegrationGuide from './ClientIntegrationGuide'
@@ -21,17 +20,14 @@ describe('ClientIntegrationGuide（mock 假后端）', () => {
     expect(dlBtns.length).toBeGreaterThan(0)
   })
 
-  it('点击下载按钮在本地生成配置文件', async () => {
+  it('未填入真实密钥时禁止下载配置文件', async () => {
     loginMockUser()
-    const user = userEvent.setup()
     vi.stubGlobal('URL', { ...URL, createObjectURL: vi.fn(() => 'blob:mock'), revokeObjectURL: vi.fn() })
 
     renderWithProviders(<ClientIntegrationGuide channelId="skyblock-s1" keys={[]} />)
 
     const dlBtns = await screen.findAllByRole('button', { name: /下载 jm-updater\.json/ })
-    await user.click(dlBtns[0])
-
-    // 本地 Blob 下载，不再请求 updater-config 远程端点。
-    expect(screen.queryByText(/下载失败/)).not.toBeInTheDocument()
+    expect(dlBtns[0]).toBeDisabled()
+    expect(URL.createObjectURL).not.toHaveBeenCalled()
   })
 })

@@ -87,6 +87,32 @@ func TestVerifyKey_HappyPath(t *testing.T) {
 	require.NotNil(t, keys[0].LastUsedAt)
 }
 
+func TestVerifyKey_TrimsClientHeaderWhitespace(t *testing.T) {
+	// 玩家侧 jm-updater.json 常经复制/编辑产生首尾空白；鉴权应容忍传输边界空白，但不改变密钥主体。
+	svc := newClientChannelSvc(t)
+	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")
+	require.NoError(t, err)
+	_, plaintext, err := svc.CreateKey("skyblock-s1", "正式包", "", nil)
+	require.NoError(t, err)
+
+	got, err := svc.VerifyKey("skyblock-s1", " \t"+plaintext+"\n")
+	require.NoError(t, err)
+	require.Equal(t, "skyblock-s1", got.ChannelID)
+}
+
+func TestVerifyAnyKey_TrimsClientHeaderWhitespace(t *testing.T) {
+	// 制品下载端点路径无频道，也应容忍 header 首尾空白。
+	svc := newClientChannelSvc(t)
+	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")
+	require.NoError(t, err)
+	_, plaintext, err := svc.CreateKey("skyblock-s1", "正式包", "", nil)
+	require.NoError(t, err)
+
+	got, err := svc.VerifyAnyKey("\r\n" + plaintext + " ")
+	require.NoError(t, err)
+	require.Equal(t, "skyblock-s1", got.ChannelID)
+}
+
 func TestVerifyKey_WrongKeyAndWrongChannel(t *testing.T) {
 	svc := newClientChannelSvc(t)
 	_, err := svc.CreateChannel("skyblock-s1", "空岛一服", "")

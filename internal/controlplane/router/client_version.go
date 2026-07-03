@@ -280,13 +280,15 @@ func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 	// 鉴权失败(401)也记事件（此前漏记）。best-effort、不阻断玩家。
 	manifestVersion := 0
 	errCode := ""
+	responseBody := ""
 	defer func() {
 		if h.tracking != nil {
 			_ = h.tracking.Record(service.ClientDistEventInput{
 				ChannelID: channelID, MachineID: mid, IP: c.ClientIP(), Kind: "manifest",
 				Version: manifestVersion, Bytes: int64(c.Writer.Size()), Status: c.Writer.Status(),
 				ErrCode: errCode, DurationMs: time.Since(start).Milliseconds(), Method: c.Request.Method,
-				Path: c.Request.URL.RequestURI(), RequestHeaders: requestHeaderMap(c), ResponseHeaders: responseHeaderMap(c),
+				Path: c.Request.URL.RequestURI(), ResponseBody: responseBodyForLog(responseBody, errCode),
+				RequestHeaders: requestHeaderMap(c), ResponseHeaders: responseHeaderMap(c),
 			})
 		}
 	}()
@@ -324,6 +326,9 @@ func (h *ClientVersionHandler) GetManifest(c *gin.Context) {
 		c.Status(http.StatusNotModified)
 		return
 	}
+	if raw, merr := json.Marshal(manifest); merr == nil {
+		responseBody = string(raw)
+	}
 	c.JSON(http.StatusOK, manifest)
 }
 
@@ -337,13 +342,15 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 	// 频道取自密钥归属（URL 内容寻址、不带频道）；鉴权失败时频道未知，ChannelID 记空可接受。best-effort、不阻断。
 	channelID := ""
 	errCode := ""
+	responseBody := ""
 	defer func() {
 		if h.tracking != nil {
 			_ = h.tracking.Record(service.ClientDistEventInput{
 				ChannelID: channelID, MachineID: c.GetHeader(machineIDHeader), IP: c.ClientIP(),
 				Kind: "artifact", ArtifactSHA: sha, Bytes: int64(c.Writer.Size()),
 				Status: c.Writer.Status(), ErrCode: errCode, DurationMs: time.Since(start).Milliseconds(), Method: c.Request.Method,
-				Path: c.Request.URL.RequestURI(), RequestHeaders: requestHeaderMap(c), ResponseHeaders: responseHeaderMap(c),
+				Path: c.Request.URL.RequestURI(), ResponseBody: responseBodyForLog(responseBody, errCode),
+				RequestHeaders: requestHeaderMap(c), ResponseHeaders: responseHeaderMap(c),
 			})
 		}
 	}()
@@ -625,6 +632,17 @@ func responseHeaderMap(c *gin.Context) map[string]string {
 	return out
 }
 
+func responseBodyForLog(body, errCode string) string {
+	if body != "" {
+		return body
+	}
+	if errCode == "" {
+		return ""
+	}
+	raw, _ := json.Marshal(gin.H{"error": errCode})
+	return string(raw)
+}
+
 func (h *ClientVersionHandler) ListEvents(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -705,28 +723,47 @@ func (h *ClientVersionHandler) RegisterConsumerRoutes(rg *gin.RouterGroup) {
 // 返回 {version, sha256, downloadUrl, size}（spec §2.5.3 冻结格式），楔子据此下载 core jar。
 func (h *ClientVersionHandler) GetUpdaterCore(c *gin.Context) {
 	channelID := c.Param("id")
+	start := time.Now()
+	errCode := ""
+	responseBody := ""
+	defer func() {
+		if h.tracking != nil {
+			_ = h.tracking.Record(service.ClientDistEventInput{
+				ChannelID: channelID, MachineID: c.GetHeader(machineIDHeader), IP: c.ClientIP(), Kind: "core",
+				Bytes: int64(c.Writer.Size()), Status: c.Writer.Status(), ErrCode: errCode,
+				DurationMs: time.Since(start).Milliseconds(), Method: c.Request.Method,
+				Path: c.Request.URL.RequestURI(), ResponseBody: responseBodyForLog(responseBody, errCode),
+				RequestHeaders: requestHeaderMap(c), ResponseHeaders: responseHeaderMap(c),
+			})
+		}
+	}()
+
 	key, ec, ok := h.authChannelKey(c, channelID)
 	if !ok {
-		_ = ec
+		errCode = ec
 		return
 	}
 	if h.security != nil {
 		if err := h.checkCommonSecurity(c, channelID, key); err != nil {
-			_ = h.respondSecurityErr(c, err)
+			errCode = h.respondSecurityErr(c, err)
 			return
 		}
 	}
 	info, err := h.svc.GetCoreEndpointInfo(channelID)
 	if err != nil {
-		h.respondConsumerErr(c, err)
+		errCode = h.respondConsumerErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
+	body := gin.H{
 		"version":     info.Version,
 		"sha256":      info.SHA256,
 		"downloadUrl": resolvePublicBaseURL(c) + "/client-artifacts/" + info.SHA256,
 		"size":        info.Size,
-	})
+	}
+	if raw, merr := json.Marshal(body); merr == nil {
+		responseBody = string(raw)
+	}
+	c.JSON(http.StatusOK, body)
 }
 
 // ListUpdaterCoreVersions GET /client-channels/:id/updater-core/versions — 列出所有归档 core 版本（运营，平台管理员）。

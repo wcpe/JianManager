@@ -137,6 +137,22 @@ func TestResolveKeyEncryptor_AutogenReuseAcrossRestart(t *testing.T) {
 	require.Equal(t, "jmck_restart_stable", got)
 }
 
+func TestResolveKeyEncryptor_CorruptPersistedFileNeverOverwrites(t *testing.T) {
+	// 已存在的持久化文件若损坏，绝不能自动覆盖成新密钥；否则存量 KeyEnc 会永久无法解密。
+	path := keyEncFilePath(t)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("broken-secret"), 0o600))
+
+	enc, src, err := ResolveKeyEncryptor("", false, path)
+	require.Error(t, err)
+	require.Empty(t, src)
+	require.Nil(t, enc)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, "broken-secret", string(data))
+}
+
 func TestResolveKeyEncryptor_EnvOverridesAutogen(t *testing.T) {
 	// env 注入非空时优先于自动生成，且不生成/不写文件（FR-263）。
 	path := keyEncFilePath(t)
@@ -151,8 +167,25 @@ func TestResolveKeyEncryptor_EnvOverridesAutogen(t *testing.T) {
 	require.True(t, os.IsNotExist(statErr))
 }
 
-func TestResolveKeyEncryptor_PersistFailureDegradesToNil(t *testing.T) {
-	// 自动生成/持久化失败 → 降级返回 nil（不崩，不报错，FR-263 spec §3.1）。
+func TestResolveKeyEncryptor_ChmodFailureStillPersists(t *testing.T) {
+	// Linux 某些挂载盘允许写入但不支持 chmod；权限收紧失败不应导致密钥不可查看。
+	old := chmodKeyFile
+	chmodKeyFile = func(*os.File, os.FileMode) error { return os.ErrPermission }
+	t.Cleanup(func() { chmodKeyFile = old })
+
+	path := keyEncFilePath(t)
+	enc, src, err := ResolveKeyEncryptor("", false, path)
+	require.NoError(t, err)
+	require.Equal(t, KeyEncSourceGenerated, src)
+	require.NotNil(t, enc)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+}
+
+func TestResolveKeyEncryptor_PersistFailureReturnsError(t *testing.T) {
+	// 自动生成/持久化真实失败 → 返回错误给装配层记录原因，并由装配层降级不崩。
 	// 构造一个父段为普通文件的路径，MkdirAll/ReadFile 均会失败。
 	dir := t.TempDir()
 	blocker := filepath.Join(dir, "blocker")
@@ -160,7 +193,7 @@ func TestResolveKeyEncryptor_PersistFailureDegradesToNil(t *testing.T) {
 	badPath := filepath.Join(blocker, "etc", keyEncFileName)
 
 	enc, src, err := ResolveKeyEncryptor("", false, badPath)
-	require.NoError(t, err) // 降级不报错
+	require.Error(t, err)
 	require.Nil(t, enc)
 	require.Empty(t, src)
 }

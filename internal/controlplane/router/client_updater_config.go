@@ -26,8 +26,8 @@ func NewClientUpdaterConfigHandler(channelSvc *service.ClientChannelService) *Cl
 
 // GetUpdaterConfig GET /client-channels/:id/updater-config — 按频道生成 jm-updater.json。
 //
-// 返回 jm-updater.json 字段：channel + endpoint（API 根路径，按请求推断）+ key（占位空串，
-// 运营粘贴拉取密钥）。coreEndpoint 已移除，楔子统一由 endpoint + channel 拼接。
+// 返回 jm-updater.json 字段：channel + endpoint（API 根路径，按请求推断）+ key（调用方显式传入的拉取密钥）。
+// coreEndpoint 已移除，楔子统一由 endpoint + channel 拼接。
 // 频道不存在 → 404。
 func (h *ClientUpdaterConfigHandler) GetUpdaterConfig(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
@@ -39,10 +39,15 @@ func (h *ClientUpdaterConfigHandler) GetUpdaterConfig(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "CHANNEL_NOT_FOUND", "message": "频道不存在"})
 		return
 	}
+	key := strings.TrimSpace(c.Query("key"))
+	if key == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "CLIENT_KEY_REQUIRED", "message": "生成 jm-updater.json 必须提供拉取密钥"})
+		return
+	}
 	base := resolvePublicBaseURL(c)
 	c.JSON(http.StatusOK, gin.H{
 		"channel":        channelID,
-		"key":            "", // 占位：运营在「拉取密钥」Tab 创建后粘贴。
+		"key":            key,
 		"endpoint":       base,
 		"timeoutSec":     120,
 		"telemetry":      true,

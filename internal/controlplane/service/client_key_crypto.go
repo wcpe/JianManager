@@ -24,7 +24,7 @@ import (
 //     rename），跨重启用同一密钥——零配置即可用、密钥始终可查看（同构 FR-248 签名密钥先例）；
 //   - dev_mode 未注入：回退内置 dev 密钥（源码公开，仅零配置开发用）。
 //
-// 自动生成/读取失败时优雅降级返回 nil（不崩，密钥不可查看但其余功能正常，与 ADR-038 降级哲学一致）；
+// 自动生成/读取失败时返回错误给装配层记录真实原因，装配层再优雅降级（不崩，密钥不可查看但其余功能正常，与 ADR-038 降级哲学一致）；
 // 注入了非法 env 密钥仍快失败（配错即让运维修正）。
 
 // keyEncSecretLen 对称加密密钥字节数（AES-256 → 32 字节）。
@@ -52,6 +52,8 @@ var (
 	ErrInvalidKeyEncSecret = errors.New("拉取密钥加密密钥非法（须为 32 字节 base64）")
 	// ErrKeyEncNotConfigured 未配置拉取密钥加密（生产态未注入 JIANMANAGER_CLIENT_KEY_ENC_SECRET）。
 	ErrKeyEncNotConfigured = errors.New("拉取密钥加密未配置")
+	// chmodKeyFile 用于测试 Linux 挂载盘不支持 chmod 的降级路径。
+	chmodKeyFile = func(f *os.File, mode os.FileMode) error { return f.Chmod(mode) }
 )
 
 // KeyEncryptor 拉取密钥的 AES-256-GCM 可逆加密器（FR-192，见 ADR-044）。
@@ -67,7 +69,7 @@ type KeyEncryptor struct {
 //   - 未注入 + devMode=true：回退内置 dev 密钥（仅零配置开发），source=KeyEncSourceDev。
 //   - 未注入 + devMode=false：读 keyFilePath，存在→解析；不存在→生成 32 字节随机密钥→base64→写文件
 //     （0600，原子 rename）→构造加密器，source=KeyEncSourceGenerated。
-//   - 自动生成/读取失败 → 返回 (nil, "", nil) 优雅降级（不崩，密钥不可查看但其余功能正常）。
+//   - 自动生成/读取失败 → 返回 (nil, "", err)，由装配层记录原因并优雅降级。
 //
 // keyFilePath 为持久化文件绝对路径（一般由 dataroot.Root.Abs("etc/client-key-enc.key") 提供，
 // etc/ 目录由 dataroot.EnsureLayout 保证存在）。
@@ -87,10 +89,10 @@ func ResolveKeyEncryptor(secretB64 string, devMode bool, keyFilePath string) (en
 		}
 		return e, KeyEncSourceDev, nil
 	}
-	// 生产态：自动生成或读取持久化密钥。任何步骤失败 → 降级返回 nil（不崩）。
+	// 生产态：自动生成或读取持久化密钥。失败时返回错误给装配层记录原因，但仍由装配层降级不崩。
 	e, gerr := loadOrGenerateKeyEncryptor(keyFilePath)
 	if gerr != nil {
-		return nil, "", nil
+		return nil, "", gerr
 	}
 	return e, KeyEncSourceGenerated, nil
 }
@@ -100,12 +102,17 @@ func ResolveKeyEncryptor(secretB64 string, devMode bool, keyFilePath string) (en
 // 原子写文件（0600）→ 构造加密器。返回错误由调用方据降级语义处理。
 func loadOrGenerateKeyEncryptor(keyFilePath string) (*KeyEncryptor, error) {
 	if data, rerr := os.ReadFile(keyFilePath); rerr == nil {
-		// 文件存在：解析已有密钥（跨重启稳定）。
+		// 文件存在：解析已有密钥（跨重启稳定）。已有文件一旦损坏也不能自动覆盖，
+		// 否则会让存量 KeyEnc 永久无法解密；必须保留现场并降级，等待运维从备份恢复。
 		secret := strings.TrimSpace(string(data))
-		if secret != "" {
-			return newKeyEncryptor(secret)
+		if secret == "" {
+			return nil, fmt.Errorf("加密密钥文件为空: %s", keyFilePath)
 		}
-		// 文件存在但为空：当作损坏，落到生成路径。
+		enc, err := newKeyEncryptor(secret)
+		if err != nil {
+			return nil, fmt.Errorf("加密密钥文件内容非法: %w", err)
+		}
+		return enc, nil
 	} else if !os.IsNotExist(rerr) {
 		return nil, fmt.Errorf("读取加密密钥文件失败: %w", rerr)
 	}
@@ -138,10 +145,9 @@ func writeKeyFileAtomic(path string, data []byte) error {
 		tmp.Close()
 		return fmt.Errorf("写入临时文件失败: %w", err)
 	}
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return fmt.Errorf("设置文件权限失败: %w", err)
-	}
+	// 部分 Linux 挂载盘（如 CIFS/NTFS 兼容层）允许写文件但不支持 chmod。
+	// 权限收紧是安全加固而非持久化前提；失败时继续写入，避免零配置生产环境误降级为不可查看。
+	_ = chmodKeyFile(tmp, 0o600)
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("关闭临时文件失败: %w", err)
 	}

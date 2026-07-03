@@ -30,11 +30,15 @@ type ClientDistEvent struct {
 	ErrReason string `gorm:"column:err_reason;type:varchar(255)" json:"errReason"`
 	// Method HTTP 方法（FR-265 日志详情）。
 	Method string `gorm:"type:varchar(8)" json:"method"`
-	// Path 请求路径（不含 query，FR-265 日志详情）。
-	Path string `gorm:"type:varchar(512)" json:"path"`
-	// RequestHeadersJSON 脱敏后的请求头白名单 JSON（FR-265）。
+	// Path 请求路径（含 query，FR-265 日志详情）。
+	Path string `gorm:"type:varchar(1024)" json:"path"`
+	// RequestBody 请求体预览（FR-265 排障详情，最多保存短文本；凭证类字段不写入）。
+	RequestBody string `gorm:"column:request_body;type:text" json:"-"`
+	// ResponseBody 响应体预览（FR-265 排障详情，最多保存短文本；二进制响应不写入）。
+	ResponseBody string `gorm:"column:response_body;type:text" json:"-"`
+	// RequestHeadersJSON 请求头 JSON（FR-265）。凭证类头不落库。
 	RequestHeadersJSON string `gorm:"column:request_headers_json;type:text" json:"-"`
-	// ResponseHeadersJSON 响应头白名单 JSON（FR-265）。
+	// ResponseHeadersJSON 响应头 JSON（FR-265）。凭证类头不落库。
 	ResponseHeadersJSON string `gorm:"column:response_headers_json;type:text" json:"-"`
 	// ETag 响应 ETag 快捷列（FR-265）。
 	ETag string `gorm:"column:etag;type:varchar(128)" json:"etag"`

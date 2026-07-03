@@ -98,25 +98,36 @@ func TestClientRuntimeAdminEndpoints_QueryBoundaries(t *testing.T) {
 	require.Equal(t, int64(1), page.Total)
 }
 
-func TestClientDistEventDetailEndpoint_RedactsHeaders(t *testing.T) {
+func TestClientDistEventDetailEndpoint_ShowsRequestAndResponseDetails(t *testing.T) {
 	db := setupTestDB(t)
 	seedRuntimeChannel(t, db)
 	r := setupRuntimeRouter(t, db)
 	token := getAdminToken(t, r)
 	tracking := service.NewClientDistTrackingService(db)
-	require.NoError(t, tracking.Record(service.ClientDistEventInput{ChannelID: "stable", MachineID: "m1", IP: "127.0.0.1", Kind: "manifest", Status: 200, Method: "GET", Path: "/api/v1/client-channels/stable/manifest?token=bad", RequestHeaders: map[string]string{"X-Client-Key": "secret", "Authorization": "bearer secret"}, ResponseHeaders: map[string]string{"ETag": "abc"}}))
+	require.NoError(t, tracking.Record(service.ClientDistEventInput{
+		ChannelID: "stable", MachineID: "m1", IP: "127.0.0.1", Kind: "manifest", Status: 401,
+		Method: "GET", Path: "/api/v1/client-channels/stable/manifest?debug=1",
+		RequestHeaders: map[string]string{"X-Client-Key": "secret", "Authorization": "bearer secret", "X-Debug-Trace": "linux"},
+		ResponseHeaders: map[string]string{"Content-Type": "application/json", "X-Err-Code": "INVALID_CLIENT_KEY"},
+		ResponseBody: `{"error":"INVALID_CLIENT_KEY","message":"拉取密钥无效"}`,
+	}))
 
 	var ev model.ClientDistEvent
 	require.NoError(t, db.First(&ev).Error)
 	w := makeRequest(r, "GET", "/api/v1/client-dist/events/"+itoa(ev.ID), nil, token)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	var detail struct {
-		Path           string            `json:"path"`
-		RequestHeaders map[string]string `json:"requestHeaders"`
+		Path            string            `json:"path"`
+		RequestHeaders  map[string]string `json:"requestHeaders"`
+		ResponseHeaders map[string]string `json:"responseHeaders"`
+		ResponseBody    string            `json:"responseBody"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &detail))
-	require.Equal(t, "/api/v1/client-channels/stable/manifest", detail.Path)
+	require.Equal(t, "/api/v1/client-channels/stable/manifest?debug=1", detail.Path)
 	require.Equal(t, "present", detail.RequestHeaders["X-Client-Key"])
+	require.Equal(t, "linux", detail.RequestHeaders["X-Debug-Trace"])
+	require.Equal(t, "application/json", detail.ResponseHeaders["Content-Type"])
+	require.Contains(t, detail.ResponseBody, "INVALID_CLIENT_KEY")
 	require.NotContains(t, detail.RequestHeaders, "Authorization")
 }
 

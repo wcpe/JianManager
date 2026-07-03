@@ -1112,11 +1112,14 @@ export const handlers = [
   domainRoute('get', '/client-channels/:channelId/updater-config', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    const base = new URL(info.request.url).origin
+    const url = new URL(info.request.url)
+    const key = url.searchParams.get('key')?.trim()
+    if (!key) return HttpResponse.json({ error: 'CLIENT_KEY_REQUIRED', message: '生成 jm-updater.json 必须提供拉取密钥' }, { status: 400 })
+    const base = url.origin
     const cid = String(info.params.channelId)
     return HttpResponse.json({
       channel: cid,
-      key: '',
+      key,
       endpoint: `${base}/api/v1`,
       timeoutSec: 120,
       telemetry: true,

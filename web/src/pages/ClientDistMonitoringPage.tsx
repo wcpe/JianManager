@@ -454,7 +454,9 @@ function EventDetailBody({ detail }: { detail: ClientDistEventDetail }) {
         <DetailLine label={t('clientDistMonitor.colEtag')} value={detail.etag || '—'} mono />
       </div>
       <HeaderList title={t('clientDistMonitor.requestHeaders')} rows={detail.requestHeaders} />
+      <BodyBlock title={t('clientDistMonitor.requestBody', '请求体')} body={detail.requestBody} />
       <HeaderList title={t('clientDistMonitor.responseHeaders')} rows={detail.responseHeaders} />
+      <BodyBlock title={t('clientDistMonitor.responseBody', '响应体')} body={detail.responseBody} />
     </div>
   )
 }
@@ -464,6 +466,19 @@ function DetailLine({ label, value, mono }: { label: string; value: string; mono
     <div className="min-w-0">
       <div className="text-muted-foreground">{label}</div>
       <div className={mono ? 'truncate font-mono' : 'truncate'}>{value}</div>
+    </div>
+  )
+}
+
+function BodyBlock({ title, body }: { title: string; body?: string }) {
+  return (
+    <div>
+      <h4 className="mb-2 text-xs font-semibold">{title}</h4>
+      {body ? (
+        <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-lg border p-3 text-xs font-mono">{body}</pre>
+      ) : (
+        <p className="rounded-lg border p-3 text-xs text-muted-foreground">—</p>
+      )}
     </div>
   )
 }
