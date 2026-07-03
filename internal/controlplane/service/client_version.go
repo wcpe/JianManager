@@ -1,6 +1,8 @@
 package service
 
 import (
+	"archive/zip"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -722,12 +724,12 @@ func splitSlash(p string) []string {
 // core jar 不再随 CP 内嵌单一版本"覆盖"分发，而是每次构建入库归档（type=client-updater-core，
 // 内容寻址去重——不同版本 sha256 不同即天然多版本不覆盖）。频道选定版本（SelectedCoreSHA256）
 // 指向某归档制品；coreEndpoint 端点据此返回 {version, sha256, downloadUrl, size} 供楔子拉取。
-// 运营经面板版本选择器一键切换选定版本实现回滚（客户端下次启动查端点即用旧版）。
+// 其中 version 是频道级递增分发版本，不等于归档版本；选回旧 sha 回滚时仍必须递增，确保楔子下载。
 
 // CoreEndpointInfo coreEndpoint 端点返回的版本信息（spec §2.5.3 冻结格式）。
 // downloadUrl 由 router 层拼接（需请求上下文推断公网基址），service 层不产出。
 type CoreEndpointInfo struct {
-	// Version updater-core 整数版本号（楔子据此比较升降级）。
+	// Version 频道级 core 分发版本号（楔子只据此比较是否下载）。
 	Version int `json:"version"`
 	// SHA256 core jar 制品 sha256 = 下载寻址 key。
 	SHA256 string `json:"sha256"`
@@ -737,8 +739,18 @@ type CoreEndpointInfo struct {
 
 // CoreVersionSummary 归档版本列表项（管理面，JWT 平台管理员）。
 type CoreVersionSummary struct {
-	// Version 整数版本号（从 Asset.Version 解析）。
+	// Version 数字归档版本号（从 Asset.Version 解析），保留给 wedge 分发兜底与旧前端兼容。
 	Version int `json:"version"`
+	// CoreVersion jar 内声明的语义版本（如 0.1.0-SNAPSHOT），缺失为空。
+	CoreVersion string `json:"coreVersion,omitempty"`
+	// DisplayVersion 前端优先展示的完整构建版本（version+commit，dirty 时带 .dirty）。
+	DisplayVersion string `json:"displayVersion,omitempty"`
+	// GitCommit jar 构建时的 12 位短提交 hash，缺失为空。
+	GitCommit string `json:"gitCommit,omitempty"`
+	// Dirty jar 构建时是否存在未提交的已跟踪文件变更。
+	Dirty bool `json:"dirty"`
+	// BuildTime jar 构建时间（RFC3339），缺失为空。
+	BuildTime string `json:"buildTime,omitempty"`
 	// SHA256 制品 sha256（切换选定版本的寻址键）。
 	SHA256 string `json:"sha256"`
 	// Size 字节数。
@@ -749,20 +761,209 @@ type CoreVersionSummary struct {
 	Selected bool `json:"selected"`
 }
 
+type updaterCoreBuildMetadata struct {
+	Codec       string `json:"codec,omitempty"`
+	Source      string `json:"source,omitempty"`
+	CoreVersion string `json:"coreVersion,omitempty"`
+	GitCommit   string `json:"gitCommit,omitempty"`
+	Dirty       bool   `json:"dirty"`
+	BuildTime   string `json:"buildTime,omitempty"`
+}
+
 // ArchiveCoreJar 把 updater-core jar 入库归档为 client-updater-core 类型（FR-259）。
 // 内容寻址去重：同 sha256 复用、不同 sha256 各自归档（不覆盖旧版）。version 写入 Asset.Version。
 func (s *ClientVersionService) ArchiveCoreJar(r io.Reader, version string) (*model.Asset, error) {
-	return s.assets.Ingest(r, IngestParams{
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("读取 updater-core jar 失败: %w", err)
+	}
+	buildMeta := readUpdaterCoreBuildMetadata(data)
+	buildMeta.Codec = "none"
+	buildMeta.Source = "embedded-updater-core"
+	metadataJSON := encodeUpdaterCoreBuildMetadata(buildMeta)
+
+	sha := sha256.Sum256(data)
+	shaHex := hex.EncodeToString(sha[:])
+	var existing model.Asset
+	err = s.db.Where("type = ? AND sha256 = ?", model.AssetTypeClientUpdaterCore, shaHex).First(&existing).Error
+	if err == nil {
+		if shouldPatchUpdaterCoreMetadata(existing.Metadata, buildMeta) {
+			if e := s.db.Model(&model.Asset{}).Where("id = ?", existing.ID).Update("metadata", metadataJSON).Error; e == nil {
+				existing.Metadata = metadataJSON
+			}
+		}
+		return &existing, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("查询 updater-core 归档失败: %w", err)
+	}
+
+	nextVersion, err := s.normalizeCoreArchiveVersion(version)
+	if err != nil {
+		return nil, err
+	}
+	return s.assets.Ingest(bytes.NewReader(data), IngestParams{
 		Type:     model.AssetTypeClientUpdaterCore,
 		Name:     "updater-core",
-		Version:  version,
+		Version:  strconv.Itoa(nextVersion),
 		Filename: "updater-core.jar",
-		Metadata: `{"codec":"none","source":"embedded-updater-core"}`,
+		Metadata: metadataJSON,
 	})
 }
 
+func readUpdaterCoreBuildMetadata(data []byte) updaterCoreBuildMetadata {
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return updaterCoreBuildMetadata{}
+	}
+	var manifest map[string]string
+	for _, f := range zr.File {
+		switch strings.ToUpper(f.Name) {
+		case "META-INF/JM-UPDATER-CORE.PROPERTIES":
+			props := readZipTextFile(f)
+			if len(props) > 0 {
+				m := parseSimpleProperties(props)
+				return updaterCoreBuildMetadata{
+					CoreVersion: strings.TrimSpace(m["version"]),
+					GitCommit:   strings.TrimSpace(m["gitCommit"]),
+					Dirty:       strings.EqualFold(strings.TrimSpace(m["dirty"]), "true"),
+					BuildTime:   strings.TrimSpace(m["buildTime"]),
+				}
+			}
+		case "META-INF/MANIFEST.MF":
+			manifest = parseManifestAttributes(readZipTextFile(f))
+		}
+	}
+	if len(manifest) == 0 {
+		return updaterCoreBuildMetadata{}
+	}
+	return updaterCoreBuildMetadata{
+		CoreVersion: strings.TrimSpace(manifest["JM-Updater-Core-Version"]),
+		GitCommit:   strings.TrimSpace(manifest["JM-Git-Commit"]),
+		Dirty:       strings.EqualFold(strings.TrimSpace(manifest["JM-Git-Dirty"]), "true"),
+		BuildTime:   strings.TrimSpace(manifest["JM-Build-Time"]),
+	}
+}
+
+func readZipTextFile(f *zip.File) string {
+	rc, err := f.Open()
+	if err != nil {
+		return ""
+	}
+	defer rc.Close()
+	data, err := io.ReadAll(io.LimitReader(rc, 64*1024))
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func parseSimpleProperties(raw string) map[string]string {
+	out := map[string]string{}
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
+			continue
+		}
+		idx := strings.IndexAny(line, "=:")
+		if idx < 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:idx])
+		value := strings.TrimSpace(line[idx+1:])
+		if key != "" {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func parseManifestAttributes(raw string) map[string]string {
+	out := map[string]string{}
+	lastKey := ""
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, " ") && lastKey != "" {
+			out[lastKey] += strings.TrimPrefix(line, " ")
+			continue
+		}
+		idx := strings.Index(line, ":")
+		if idx < 0 {
+			continue
+		}
+		lastKey = strings.TrimSpace(line[:idx])
+		out[lastKey] = strings.TrimSpace(line[idx+1:])
+	}
+	return out
+}
+
+func encodeUpdaterCoreBuildMetadata(meta updaterCoreBuildMetadata) string {
+	if meta.Codec == "" {
+		meta.Codec = "none"
+	}
+	if meta.Source == "" {
+		meta.Source = "embedded-updater-core"
+	}
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		return `{"codec":"none","source":"embedded-updater-core"}`
+	}
+	return string(raw)
+}
+
+func shouldPatchUpdaterCoreMetadata(existing string, next updaterCoreBuildMetadata) bool {
+	if next.CoreVersion == "" && next.GitCommit == "" && next.BuildTime == "" && !next.Dirty {
+		return false
+	}
+	current := decodeUpdaterCoreBuildMetadata(existing)
+	return current.CoreVersion == "" && current.GitCommit == "" && current.BuildTime == "" && !current.Dirty
+}
+
+func decodeUpdaterCoreBuildMetadata(raw string) updaterCoreBuildMetadata {
+	var meta updaterCoreBuildMetadata
+	if raw == "" {
+		return meta
+	}
+	_ = json.Unmarshal([]byte(raw), &meta)
+	return meta
+}
+
+func updaterCoreDisplayVersion(meta updaterCoreBuildMetadata) string {
+	version := strings.TrimSpace(meta.CoreVersion)
+	commit := strings.TrimSpace(meta.GitCommit)
+	if version == "" {
+		return ""
+	}
+	if commit == "" || strings.EqualFold(commit, "unknown") {
+		if meta.Dirty {
+			return version + "+dirty"
+		}
+		return version
+	}
+	display := version + "+" + commit
+	if meta.Dirty {
+		display += ".dirty"
+	}
+	return display
+}
+
+func (s *ClientVersionService) normalizeCoreArchiveVersion(version string) (int, error) {
+	maxVersion, err := s.maxCoreArchiveVersion(s.db)
+	if err != nil {
+		return 0, err
+	}
+	input := parseCoreVersionInt(version)
+	if input > maxVersion {
+		return input, nil
+	}
+	return maxVersion + 1, nil
+}
+
 // GetCoreEndpointInfo 查频道选定版本的 core jar 信息（FR-259 coreEndpoint 端点数据源）。
-// SelectedCoreSHA256 非空 → 查该版本；空 → 回退最新归档版本（按 id DESC）。
+// SelectedCoreSHA256 非空 → 查该归档制品，并返回频道级分发版本；空 → 回退最新归档版本（按 id DESC）。
 // 频道不存在返回 ErrChannelNotFound；无任何归档返回 ErrNoCoreVersion。
 func (s *ClientVersionService) GetCoreEndpointInfo(channelID string) (*CoreEndpointInfo, error) {
 	if _, err := s.getChannel(channelID); err != nil {
@@ -770,7 +971,7 @@ func (s *ClientVersionService) GetCoreEndpointInfo(channelID string) (*CoreEndpo
 	}
 	// 查频道选定 sha256；空则取最新归档。
 	var ch model.ClientChannel
-	if err := s.db.Select("selected_core_sha256").Where("channel_id = ?", channelID).First(&ch).Error; err != nil {
+	if err := s.db.Select("selected_core_sha256", "selected_core_version").Where("channel_id = ?", channelID).First(&ch).Error; err != nil {
 		return nil, fmt.Errorf("查询频道选定 core 版本失败: %w", err)
 	}
 
@@ -788,7 +989,9 @@ func (s *ClientVersionService) GetCoreEndpointInfo(channelID string) (*CoreEndpo
 	} else {
 		return s.latestCoreArchive()
 	}
-	return assetToCoreEndpointInfo(&asset), nil
+	info := assetToCoreEndpointInfo(&asset)
+	info.Version = maxInt(info.Version, ch.SelectedCoreVersion)
+	return info, nil
 }
 
 // latestCoreArchive 取最新归档的 client-updater-core 制品（按 id DESC = 最近入库）。
@@ -823,6 +1026,54 @@ func parseCoreVersionInt(s string) int {
 	return n
 }
 
+func (s *ClientVersionService) maxCoreArchiveVersion(db *gorm.DB) (int, error) {
+	var assets []model.Asset
+	if err := db.Select("version").Where("type = ?", model.AssetTypeClientUpdaterCore).Find(&assets).Error; err != nil {
+		return 0, fmt.Errorf("查询 core 最大归档版本失败: %w", err)
+	}
+	maxVersion := 0
+	for i := range assets {
+		maxVersion = maxInt(maxVersion, parseCoreVersionInt(assets[i].Version))
+	}
+	return maxVersion, nil
+}
+
+func selectedCoreDistributionVersion(current, assetVersion, maxArchiveVersion int) int {
+	floor := current
+	if assetVersion < maxArchiveVersion {
+		// 回滚到旧归档时，客户端可能已经见过最新归档版本，端点版本必须抬过最新版本。
+		floor = maxInt(floor, maxArchiveVersion)
+	}
+	if assetVersion <= floor {
+		return floor + 1
+	}
+	return assetVersion
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// CoreVersionSummaryFromAsset 把归档资产转换为管理面摘要。selected 由调用方按频道选定状态传入。
+func CoreVersionSummaryFromAsset(a *model.Asset, selected bool) CoreVersionSummary {
+	meta := decodeUpdaterCoreBuildMetadata(a.Metadata)
+	return CoreVersionSummary{
+		Version:        parseCoreVersionInt(a.Version),
+		CoreVersion:    meta.CoreVersion,
+		DisplayVersion: updaterCoreDisplayVersion(meta),
+		GitCommit:      meta.GitCommit,
+		Dirty:          meta.Dirty,
+		BuildTime:      meta.BuildTime,
+		SHA256:         a.SHA256,
+		Size:           a.Size,
+		CreatedAt:      a.CreatedAt,
+		Selected:       selected,
+	}
+}
+
 // ListCoreVersions 列出所有归档的 updater-core 版本（按 id DESC = 最近入库在前）。
 // channelID 非空时标记该频道当前选定版本（Selected=true），供面板高亮当前选择。
 func (s *ClientVersionService) ListCoreVersions(channelID ...string) ([]CoreVersionSummary, error) {
@@ -842,37 +1093,51 @@ func (s *ClientVersionService) ListCoreVersions(channelID ...string) ([]CoreVers
 	out := make([]CoreVersionSummary, 0, len(assets))
 	for i := range assets {
 		a := &assets[i]
-		out = append(out, CoreVersionSummary{
-			Version:   parseCoreVersionInt(a.Version),
-			SHA256:    a.SHA256,
-			Size:      a.Size,
-			CreatedAt: a.CreatedAt,
-			Selected:  selectedSHA != "" && selectedSHA == a.SHA256,
-		})
+		out = append(out, CoreVersionSummaryFromAsset(a, selectedSHA != "" && selectedSHA == a.SHA256))
 	}
 	return out, nil
 }
 
 // SelectCoreVersion 切换频道选定的 core 版本（FR-259 回滚操作）。
-// 校验 sha256 存在于 client-updater-core 归档后更新 ClientChannel.SelectedCoreSHA256。
+// 校验 sha256 存在于 client-updater-core 归档后更新选定 SHA，并维护频道级递增分发版本。
 // 频道不存在返回 ErrChannelNotFound；sha256 不存在返回 ErrCoreVersionNotFound。
 func (s *ClientVersionService) SelectCoreVersion(channelID, sha256 string) error {
-	if _, err := s.getChannel(channelID); err != nil {
-		return err
-	}
-	// 校验该 sha256 存在于归档制品库。
-	var count int64
-	if err := s.db.Model(&model.Asset{}).
-		Where("type = ? AND sha256 = ?", model.AssetTypeClientUpdaterCore, sha256).
-		Count(&count).Error; err != nil {
-		return fmt.Errorf("校验 core 版本失败: %w", err)
-	}
-	if count == 0 {
-		return ErrCoreVersionNotFound
-	}
-	if err := s.db.Model(&model.ClientChannel{}).Where("channel_id = ?", channelID).
-		Update("selected_core_sha256", sha256).Error; err != nil {
-		return fmt.Errorf("更新选定 core 版本失败: %w", err)
-	}
-	return nil
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var ch model.ClientChannel
+		if err := tx.Select("channel_id", "selected_core_sha256", "selected_core_version").
+			Where("channel_id = ?", channelID).First(&ch).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrChannelNotFound
+			}
+			return fmt.Errorf("查询频道失败: %w", err)
+		}
+
+		// 校验该 sha256 存在于归档制品库，并读取其归档版本。
+		var asset model.Asset
+		if err := tx.Select("sha256", "version").
+			Where("type = ? AND sha256 = ?", model.AssetTypeClientUpdaterCore, sha256).
+			First(&asset).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrCoreVersionNotFound
+			}
+			return fmt.Errorf("校验 core 版本失败: %w", err)
+		}
+
+		nextVersion := ch.SelectedCoreVersion
+		if ch.SelectedCoreSHA256 != sha256 || nextVersion <= 0 {
+			maxArchiveVersion, err := s.maxCoreArchiveVersion(tx)
+			if err != nil {
+				return err
+			}
+			nextVersion = selectedCoreDistributionVersion(ch.SelectedCoreVersion, parseCoreVersionInt(asset.Version), maxArchiveVersion)
+		}
+		if err := tx.Model(&model.ClientChannel{}).Where("channel_id = ?", channelID).
+			Updates(map[string]any{
+				"selected_core_sha256":  sha256,
+				"selected_core_version": nextVersion,
+			}).Error; err != nil {
+			return fmt.Errorf("更新选定 core 版本失败: %w", err)
+		}
+		return nil
+	})
 }

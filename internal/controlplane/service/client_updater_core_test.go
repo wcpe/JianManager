@@ -1,6 +1,8 @@
 package service
 
 import (
+	"archive/zip"
+	"bytes"
 	"strings"
 	"testing"
 
@@ -60,6 +62,67 @@ func TestArchiveCoreJar_DifferentVersionsArchiveSeparately(t *testing.T) {
 	require.NotEqual(t, a1.ID, a2.ID)
 }
 
+func TestArchiveCoreJar_AutoBumpsNonMonotonicVersion(t *testing.T) {
+	svc, _, _ := newUpdaterCoreSvc(t)
+
+	a1, err := svc.ArchiveCoreJar(strings.NewReader("updater-core-jar-v1"), "1")
+	require.NoError(t, err)
+	a2, err := svc.ArchiveCoreJar(strings.NewReader("updater-core-jar-v2"), "1")
+	require.NoError(t, err)
+
+	require.Equal(t, "1", a1.Version)
+	require.Equal(t, "2", a2.Version, "不同 core 内容重复传 v1 时应自动递增，避免管理面全显示 v1")
+}
+
+func TestArchiveCoreJar_ReadsBuildMetadataFromJar(t *testing.T) {
+	svc, _, _ := newUpdaterCoreSvc(t)
+	jar := testUpdaterCoreJar(t, "version=0.1.0-SNAPSHOT\ngitCommit=abc123def456\ndirty=true\nbuildTime=2026-07-03T00:00:00Z\n")
+
+	asset, err := svc.ArchiveCoreJar(bytes.NewReader(jar), "1")
+	require.NoError(t, err)
+	require.Equal(t, "1", asset.Version, "归档数字版本仍保持独立递增轴")
+
+	versions, err := svc.ListCoreVersions()
+	require.NoError(t, err)
+	require.Len(t, versions, 1)
+	require.Equal(t, "0.1.0-SNAPSHOT", versions[0].CoreVersion)
+	require.Equal(t, "abc123def456", versions[0].GitCommit)
+	require.True(t, versions[0].Dirty)
+	require.Equal(t, "2026-07-03T00:00:00Z", versions[0].BuildTime)
+	require.Equal(t, "0.1.0-SNAPSHOT+abc123def456.dirty", versions[0].DisplayVersion)
+}
+
+func TestArchiveCoreJar_ReadsBuildMetadataFromManifestFallback(t *testing.T) {
+	svc, _, _ := newUpdaterCoreSvc(t)
+	jar := testUpdaterCoreManifestJar(t, "Manifest-Version: 1.0\nJM-Updater-Core-Version: 0.2.0\nJM-Git-Commit: def456abc789\nJM-Git-Dirty: false\nJM-Build-Time: 2026-07-03T01:00:00Z\n")
+
+	_, err := svc.ArchiveCoreJar(bytes.NewReader(jar), "1")
+	require.NoError(t, err)
+	versions, err := svc.ListCoreVersions()
+	require.NoError(t, err)
+	require.Len(t, versions, 1)
+	require.Equal(t, "0.2.0", versions[0].CoreVersion)
+	require.Equal(t, "def456abc789", versions[0].GitCommit)
+	require.False(t, versions[0].Dirty)
+	require.Equal(t, "2026-07-03T01:00:00Z", versions[0].BuildTime)
+	require.Equal(t, "0.2.0+def456abc789", versions[0].DisplayVersion)
+}
+
+func TestArchiveCoreJar_AllowsHotfixJarWithoutBuildMetadata(t *testing.T) {
+	svc, _, _ := newUpdaterCoreSvc(t)
+
+	asset, err := svc.ArchiveCoreJar(strings.NewReader("plain-hotfix-core"), "1")
+	require.NoError(t, err)
+	versions, err := svc.ListCoreVersions()
+	require.NoError(t, err)
+	require.Len(t, versions, 1)
+	require.Equal(t, 1, versions[0].Version)
+	require.Empty(t, versions[0].CoreVersion)
+	require.Empty(t, versions[0].GitCommit)
+	require.False(t, versions[0].Dirty)
+	require.Equal(t, asset.SHA256, versions[0].SHA256)
+}
+
 // TestGetCoreEndpointInfo_DefaultLatest 未选定版本时 → 回退最新归档版本。
 func TestGetCoreEndpointInfo_DefaultLatest(t *testing.T) {
 	svc, _, _ := newUpdaterCoreSvc(t)
@@ -78,23 +141,30 @@ func TestGetCoreEndpointInfo_DefaultLatest(t *testing.T) {
 	require.Equal(t, a2.Size, info.Size)
 }
 
-// TestGetCoreEndpointInfo_SelectedVersion 选定版本后 → 返回选定版本（非最新）。
+// TestGetCoreEndpointInfo_SelectedVersion 选定版本后 → 返回选定制品，并使用频道级递增版本号。
 func TestGetCoreEndpointInfo_SelectedVersion(t *testing.T) {
 	svc, _, _ := newUpdaterCoreSvc(t)
 	a1, err := svc.ArchiveCoreJar(strings.NewReader("jar-v1"), "1")
 	require.NoError(t, err)
-	_, err = svc.ArchiveCoreJar(strings.NewReader("jar-v2"), "2")
+	a2, err := svc.ArchiveCoreJar(strings.NewReader("jar-v2"), "2")
 	require.NoError(t, err)
 
 	chSvc := NewClientChannelService(svc.db)
 	_, _ = chSvc.CreateChannel("s1", "测试", "")
 
-	// 选定 v1（旧版），回滚场景。
+	// 选定最新 v2 时端点 version 保持归档版本，不无意义 +1。
+	require.NoError(t, svc.SelectCoreVersion("s1", a2.SHA256))
+	latest, err := svc.GetCoreEndpointInfo("s1")
+	require.NoError(t, err)
+	require.Equal(t, 2, latest.Version)
+	require.Equal(t, a2.SHA256, latest.SHA256)
+
+	// 选回 v1（旧版），回滚场景：sha 指向 v1，但端点 version 必须继续递增，楔子才会下载。
 	require.NoError(t, svc.SelectCoreVersion("s1", a1.SHA256))
 
 	info, err := svc.GetCoreEndpointInfo("s1")
 	require.NoError(t, err)
-	require.Equal(t, 1, info.Version, "应返回选定版本 v1 而非最新 v2")
+	require.Equal(t, 3, info.Version, "回滚旧 SHA 时应返回频道级递增版本，避免楔子因 1 < 2 跳过下载")
 	require.Equal(t, a1.SHA256, info.SHA256)
 }
 
@@ -204,4 +274,28 @@ func TestDelete_RejectsSelectedUpdaterCore(t *testing.T) {
 	require.ErrorAs(t, err, &inUse)
 	require.Equal(t, AssetInUseSelectedUpdaterCore, inUse.Reason)
 	require.Equal(t, int64(1), inUse.Count)
+}
+
+func testUpdaterCoreJar(t *testing.T, properties string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create("META-INF/jm-updater-core.properties")
+	require.NoError(t, err)
+	_, err = w.Write([]byte(properties))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+	return buf.Bytes()
+}
+
+func testUpdaterCoreManifestJar(t *testing.T, manifest string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.Create("META-INF/MANIFEST.MF")
+	require.NoError(t, err)
+	_, err = w.Write([]byte(manifest))
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+	return buf.Bytes()
 }

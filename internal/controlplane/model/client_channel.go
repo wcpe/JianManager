@@ -26,7 +26,10 @@ type ClientChannel struct {
 	// SelectedCoreSHA256 频道选定的 updater-core 归档制品 sha256（FR-259，见 updater-arch-simplification spec §D）。
 	// 指向 type=client-updater-core 的 Asset.SHA256；空=未选定（coreEndpoint 回退最新归档版本）。
 	// 运营经 PUT /client-channels/:id/updater-core/selected 切换，客户端下次启动查 coreEndpoint 即用选定版本。
-	SelectedCoreSHA256   string         `gorm:"column:selected_core_sha256;type:char(64)" json:"-"`
+	SelectedCoreSHA256 string `gorm:"column:selected_core_sha256;type:char(64)" json:"-"`
+	// SelectedCoreVersion 是频道级 core 分发版本号，每次切换选定 SHA 时递增。
+	// 楔子只按 version 递增决定是否下载，所以选回旧 SHA 回滚时不能返回旧 Asset.Version。
+	SelectedCoreVersion  int            `gorm:"column:selected_core_version;default:0;not null" json:"-"`
 	ProtectionMode       string         `gorm:"column:protection_mode;type:varchar(32);default:normal;not null" json:"protectionMode"`
 	ProtectionPolicyJSON string         `gorm:"column:protection_policy_json;type:text" json:"-"`
 	ProtectionUpdatedAt  *time.Time     `gorm:"column:protection_updated_at" json:"protectionUpdatedAt"`

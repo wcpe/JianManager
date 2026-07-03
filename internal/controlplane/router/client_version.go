@@ -52,6 +52,9 @@ const clientKeyHeader = "X-Client-Key"
 // machineIDHeader 玩家机器码请求头（contract §5，FR-092）。客户端生成、不可信，仅统计/辅助限流。
 const machineIDHeader = "X-Machine-Id"
 
+// installIDHeader 安装标识请求头（FR-264）。客户端生成、不可信，仅用于关联安全画像。
+const installIDHeader = "X-Install-Id"
+
 // playerNameHeader 玩家名请求头。客户端从 jm-updater.json 构造，不可信，仅用于观测与排障。
 const playerNameHeader = "X-Player-Name"
 
@@ -701,8 +704,9 @@ func (h *ClientVersionHandler) RegisterPublishRoutes(rg *gin.RouterGroup) {
 		// 与玩家 GET /client-artifacts/:sha256（拉取密钥）物理隔离——浏览器无拉取密钥不能复用之。
 		ch.GET("/:id/files/content", h.GetArtifactContent)
 		ch.GET("/:id/files/download", h.DownloadArtifact)
-		// updater-core 版本管理（FR-259）：列出归档版本 + 切换频道选定版本（回滚）。
+		// updater-core 版本管理（FR-259）：列出归档版本 + 手动上传 hotfix + 切换频道选定版本（回滚）。
 		ch.GET("/:id/updater-core/versions", h.ListUpdaterCoreVersions)
+		ch.POST("/:id/updater-core/versions", h.UploadUpdaterCoreVersion)
 		ch.PUT("/:id/updater-core/selected", h.SelectUpdaterCore)
 	}
 	// 拉取/下载明细检索（FR-093）：管理面。
@@ -783,6 +787,45 @@ func (h *ClientVersionHandler) ListUpdaterCoreVersions(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, versions)
+}
+
+// UploadUpdaterCoreVersion POST /client-channels/:id/updater-core/versions — 手动上传 updater-core.jar（运营，平台管理员；hotfix）。
+func (h *ClientVersionHandler) UploadUpdaterCoreVersion(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	channelID := c.Param("id")
+	if _, err := h.channel.GetChannel(channelID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "CHANNEL_NOT_FOUND", "message": "频道不存在"})
+		return
+	}
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "需上传 updater-core.jar"})
+		return
+	}
+	opened, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "读取上传文件失败"})
+		return
+	}
+	defer opened.Close()
+	asset, err := h.svc.ArchiveCoreJar(opened, c.PostForm("version"))
+	if err != nil {
+		slog.Error("上传 updater-core 归档失败", "channel", channelID, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "上传失败"})
+		return
+	}
+	selected := strings.EqualFold(c.PostForm("select"), "true") || c.PostForm("select") == "1"
+	if selected {
+		if err := h.svc.SelectCoreVersion(channelID, asset.SHA256); err != nil {
+			slog.Error("上传后选定 updater-core 失败", "channel", channelID, "sha256", asset.SHA256, "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "上传后选定失败"})
+			return
+		}
+	}
+	h.recordAudit(c, "client_core.upload", map[string]any{"channelId": channelID, "sha256": asset.SHA256, "selected": selected})
+	c.JSON(http.StatusOK, service.CoreVersionSummaryFromAsset(asset, selected))
 }
 
 // selectUpdaterCoreRequest 切换选定 core 版本请求体。

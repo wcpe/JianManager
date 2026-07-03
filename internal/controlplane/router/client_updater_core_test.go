@@ -1,6 +1,8 @@
 package router
 
 import (
+	"bytes"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -149,6 +151,87 @@ func TestUpdaterCore_Versions_AdminOnly(t *testing.T) {
 }
 
 // TestUpdaterCore_Select_AdminOnly 切换选定端点：JWT admin → 200；非 admin → 403；不存在 sha → 404。
+func TestUpdaterCore_UploadHotfixAndSelect(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	const channelID = "core-upload"
+	key := createChannelAndKey(t, r, token, channelID)
+
+	w := uploadUpdaterCore(t, r, channelID, token, "hotfix-core", "9", true)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp := parseJSON(t, w)
+	require.EqualValues(t, 9, resp["version"])
+	sha, _ := resp["sha256"].(string)
+	require.NotEmpty(t, sha)
+	require.Equal(t, true, resp["selected"])
+
+	var asset model.Asset
+	require.NoError(t, db.Where("type = ? AND sha256 = ?", model.AssetTypeClientUpdaterCore, sha).First(&asset).Error)
+	require.Equal(t, "9", asset.Version)
+
+	req := httptest.NewRequest("GET", "/api/v1/client-channels/"+channelID+"/updater-core", nil)
+	req.Header.Set("X-Client-Key", key)
+	selected := serveNoAuth(r, req)
+	require.Equal(t, http.StatusOK, selected.Code, selected.Body.String())
+	selectedResp := parseJSON(t, selected)
+	require.EqualValues(t, 9, selectedResp["version"], "选中新上传 hotfix 时端点版本应保持归档版本")
+	require.Equal(t, sha, selectedResp["sha256"])
+}
+
+func TestUpdaterCore_UploadRejectsInvalidRequests(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	const channelID = "core-upload-invalid"
+	createChannelAndKey(t, r, token, channelID)
+
+	missing := uploadUpdaterCore(t, r, "missing-channel", token, "hotfix-core", "9", false)
+	require.Equal(t, http.StatusNotFound, missing.Code)
+
+	noFile := uploadUpdaterCoreNoFile(t, r, channelID, token)
+	require.Equal(t, http.StatusBadRequest, noFile.Code)
+
+	memberToken := getMemberToken(t, r, "bob4", "password123")
+	forbidden := uploadUpdaterCore(t, r, channelID, memberToken, "hotfix-core", "9", false)
+	require.Equal(t, http.StatusForbidden, forbidden.Code)
+}
+
+func uploadUpdaterCore(t *testing.T, r http.Handler, channelID, token, content, version string, selectNow bool) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	fw, err := mw.CreateFormFile("file", "updater-core.jar")
+	require.NoError(t, err)
+	_, err = fw.Write([]byte(content))
+	require.NoError(t, err)
+	require.NoError(t, mw.WriteField("version", version))
+	if selectNow {
+		require.NoError(t, mw.WriteField("select", "true"))
+	}
+	require.NoError(t, mw.Close())
+	req := httptest.NewRequest("POST", "/api/v1/client-channels/"+channelID+"/updater-core/versions", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
+func uploadUpdaterCoreNoFile(t *testing.T, r http.Handler, channelID, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	require.NoError(t, mw.WriteField("version", "9"))
+	require.NoError(t, mw.Close())
+	req := httptest.NewRequest("POST", "/api/v1/client-channels/"+channelID+"/updater-core/versions", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	return w
+}
+
 func TestUpdaterCore_Select_AdminOnly(t *testing.T) {
 	db := setupTestDB(t)
 	r, versionSvc := setupClientDistRouter(t, db)
@@ -163,13 +246,14 @@ func TestUpdaterCore_Select_AdminOnly(t *testing.T) {
 		map[string]string{"sha256": shaV1}, token)
 	require.Equal(t, http.StatusOK, w.Code)
 
-	// 选定后 coreEndpoint 应返回 v1（而非最新 v2）。
+	// 选定后 coreEndpoint 应返回旧 SHA，但 version 继续递增，保证楔子会下载并完成回滚。
 	req := httptest.NewRequest("GET", "/api/v1/client-channels/"+channelID+"/updater-core", nil)
 	req.Header.Set("X-Client-Key", key)
 	w2 := serveNoAuth(r, req)
 	require.Equal(t, http.StatusOK, w2.Code)
 	resp := parseJSON(t, w2)
-	require.EqualValues(t, 1, resp["version"], "切换后应返回选定版本 v1")
+	require.EqualValues(t, 3, resp["version"], "切换旧 SHA 时端点版本必须递增")
+	require.Equal(t, shaV1, resp["sha256"], "切换后应返回选定旧 SHA")
 
 	// 不存在的 sha256 → 404。
 	w3 := makeRequest(r, "PUT", "/api/v1/client-channels/"+channelID+"/updater-core/selected",
