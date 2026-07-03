@@ -373,7 +373,7 @@
     "statistics": "Statistics",
     "monitoring": "Monitoring Overview",
     "clientDistMonitor": "Client Distribution",
-    "clientDistSecurity": "Protection Center",
+    "clientDistSecurity": "Client Distribution Security",
     "backup": "Backup",
     "systemSettings": "System Settings",
     "clientChannels": "Client Distribution",
@@ -1945,7 +1945,8 @@
     "currentSelected": "Current selected version",
     "followLatest": "Follow latest",
     "followLatestHint": "When the channel is not pinned, clients use the latest archived updater-core.",
-    "noVersionsShort": "No archive yet"
+    "noVersionsShort": "No archive yet",
+    "versionHint": "Usually not needed. The server reads the jar metadata first; emergency hotfix jars without metadata can still be uploaded."
   },
   "clientDistFlow": {
     "title": "How does distribution work?",

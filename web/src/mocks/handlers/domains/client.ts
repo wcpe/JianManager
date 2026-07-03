@@ -1132,9 +1132,43 @@ export const handlers = [
     const denied = requireAuth(info)
     if (denied) return denied
     return HttpResponse.json([
-      { version: 2, sha256: 'a'.repeat(64), size: 1_048_576, createdAt: '2026-07-01T10:00:00Z', selected: true },
+      {
+        version: 2,
+        coreVersion: '0.1.0-SNAPSHOT',
+        displayVersion: '0.1.0-SNAPSHOT+abc123def456.dirty',
+        gitCommit: 'abc123def456',
+        dirty: true,
+        buildTime: '2026-07-01T09:55:00Z',
+        sha256: 'a'.repeat(64),
+        size: 1_048_576,
+        createdAt: '2026-07-01T10:00:00Z',
+        selected: true,
+      },
       { version: 1, sha256: 'b'.repeat(64), size: 1_024_000, createdAt: '2026-06-28T10:00:00Z', selected: false },
     ])
+  }),
+
+  // 手动上传 updater-core.jar（hotfix）。
+  domainRoute('post', '/client-channels/:channelId/updater-core/versions', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const form = await info.request.formData()
+    const file = form.get('file')
+    if (!(file instanceof File)) return HttpResponse.json({ error: 'INVALID_REQUEST', message: '需上传 updater-core.jar' }, { status: 400 })
+    const version = Number(form.get('version') || 3)
+    const selected = form.get('select') === 'true'
+    return HttpResponse.json({
+      version,
+      coreVersion: '0.1.1-hotfix',
+      displayVersion: '0.1.1-hotfix+def456abc789',
+      gitCommit: 'def456abc789',
+      dirty: false,
+      buildTime: new Date().toISOString(),
+      sha256: 'c'.repeat(64),
+      size: file.size || 1_048_576,
+      createdAt: new Date().toISOString(),
+      selected,
+    })
   }),
 
   // 切换频道选定 updater-core 版本（FR-259）。

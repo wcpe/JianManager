@@ -199,7 +199,18 @@ export async function downloadUpdaterJar(component: 'wedge' | 'core'): Promise<v
 
 /** updater-core 归档版本摘要（FR-259）。 */
 export interface UpdaterCoreVersion {
+  /** 数字归档版本，兼容旧接口与 wedge 分发兜底。 */
   version: number
+  /** jar 内声明的语义版本，缺失时前端回退显示数字归档版本。 */
+  coreVersion?: string
+  /** 推荐展示版本：coreVersion + gitCommit，dirty 时带 .dirty。 */
+  displayVersion?: string
+  /** 构建 updater-core.jar 时的短提交 hash。 */
+  gitCommit?: string
+  /** 构建时是否存在未提交的已跟踪文件变更。 */
+  dirty?: boolean
+  /** 构建时间。 */
+  buildTime?: string
   sha256: string
   size: number
   createdAt: string
@@ -218,6 +229,25 @@ export function useUpdaterCoreVersions(channelId: string) {
       return data
     },
     enabled: !!channelId,
+  })
+}
+
+/** 手动上传 updater-core.jar（hotfix）。 */
+export function useUploadUpdaterCore() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ channelId, file, version, select }: { channelId: string; file: File; version?: string; select: boolean }) => {
+      const form = new FormData()
+      form.append('file', file)
+      if (version?.trim()) form.append('version', version.trim())
+      if (select) form.append('select', 'true')
+      return api
+        .post<UpdaterCoreVersion>(`/client-channels/${channelId}/updater-core/versions`, form)
+        .then((r) => r.data)
+    },
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: ['client-channels', vars.channelId, 'updater-core-versions'] })
+    },
   })
 }
 

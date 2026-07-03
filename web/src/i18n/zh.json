@@ -373,7 +373,7 @@
     "statistics": "统计",
     "monitoring": "监控总览",
     "clientDistMonitor": "客户端分发监控",
-    "clientDistSecurity": "防护中心",
+    "clientDistSecurity": "客户端分发安全",
     "backup": "备份",
     "systemSettings": "系统设置",
     "clientChannels": "客户端分发",
@@ -1924,7 +1924,8 @@
     "currentSelected": "当前选定版本",
     "followLatest": "跟随最新",
     "followLatestHint": "频道未固定版本时，客户端使用最新归档 updater-core。",
-    "noVersionsShort": "暂无归档"
+    "noVersionsShort": "暂无归档",
+    "versionHint": "通常无需填写，后端优先读取 jar 内版本；紧急 hotfix 缺少元信息也可上传。"
   },
   "clientDistFlow": {
     "title": "分发是怎么跑起来的？",
