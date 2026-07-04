@@ -4,6 +4,8 @@ import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@/mocks/inject'
+import { db } from '@/mocks/db'
+import type { Session } from '@/mocks/handlers/domains/auth'
 import RuntimeAssetsPage from './RuntimeAssetsPage'
 
 /**
@@ -23,6 +25,36 @@ describe('RuntimeAssetsPage（mock 假后端）', () => {
     expect(screen.getByText('21.0.3+9')).toBeInTheDocument()
     expect(screen.getByText('17.0.11+9')).toBeInTheDocument()
     expect(screen.getByText('paper-1.20.4')).toBeInTheDocument()
+    // mock 必须镜像后端 direct / major 两类绑定语义，并渲染短 chip。
+    expect(screen.getByText('survival-1')).toBeInTheDocument()
+    expect(screen.getByText('lobby-proxy')).toBeInTheDocument()
+    expect(screen.getByText('直接')).toBeInTheDocument()
+    expect(screen.getByText('大版本')).toBeInTheDocument()
+  })
+
+  it('支持制品类型、仅被引用与关键字筛选，并展示 client-file 客户端路径', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    renderWithProviders(<RuntimeAssetsPage />)
+
+    expect(await screen.findByText('paper-1.20.4')).toBeInTheDocument()
+    expect(screen.getByText('ViaVersion')).toBeInTheDocument()
+    expect(screen.getByText('lobby-client-config')).toBeInTheDocument()
+    expect(screen.getByText(/config\/servers\.json/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'client-file' }))
+    expect(screen.queryByText('paper-1.20.4')).not.toBeInTheDocument()
+    expect(screen.getByText('lobby-client-config')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '全部' }))
+    await user.click(screen.getByLabelText('仅被引用'))
+    expect(screen.getByText('paper-1.20.4')).toBeInTheDocument()
+    expect(screen.getByText('lobby-client-config')).toBeInTheDocument()
+    expect(screen.queryByText('ViaVersion')).not.toBeInTheDocument()
+
+    await user.type(screen.getByPlaceholderText('搜索名称/版本/sha256'), 'paper')
+    expect(screen.getByText('paper-1.20.4')).toBeInTheDocument()
+    expect(screen.queryByText('lobby-client-config')).not.toBeInTheDocument()
   })
 
   it('删除一个 JDK 后，overview 联动移除该 JDK', async () => {
@@ -45,6 +77,16 @@ describe('RuntimeAssetsPage（mock 假后端）', () => {
     await waitFor(() => expect(screen.queryByText('17.0.11+9')).not.toBeInTheDocument())
     // 另一个 JDK 仍在。
     expect(screen.getByText('21.0.3+9')).toBeInTheDocument()
+  })
+
+  it('普通成员访问 overview 被拒绝，不泄露聚合数据', async () => {
+    db<Session>('sessions').insert({ accessToken: 'member-token', refreshToken: 'member-refresh', userId: 2 })
+    localStorage.setItem('accessToken', 'member-token')
+    renderWithProviders(<RuntimeAssetsPage />)
+
+    expect(await screen.findByText('加载运行时与制品失败')).toBeInTheDocument()
+    expect(screen.queryByText('paper-1.20.4')).not.toBeInTheDocument()
+    expect(screen.queryByText('survival-1')).not.toBeInTheDocument()
   })
 
   it('注入 500：显示加载失败错误态', async () => {

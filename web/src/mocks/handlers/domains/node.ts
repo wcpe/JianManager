@@ -1,6 +1,6 @@
 import { HttpResponse } from 'msw'
 import { domainRoute } from '@/mocks/inject'
-import { requireAuth } from '@/mocks/auth-middleware'
+import { requireAuth, requirePlatformAdmin } from '@/mocks/auth-middleware'
 import { db } from '@/mocks/db'
 
 /**
@@ -85,6 +85,17 @@ interface MockAsset {
   relPath: string
   createdAt: string
   lastUsedAt: string | null
+}
+
+/** runtime-assets 聚合只需要实例的 JDK 绑定子集，避免跨域 mock 强耦合。 */
+interface MockRuntimeInstanceRef {
+  id: number
+  uuid: string
+  nodeId: number
+  name: string
+  status: string
+  jdkId?: number
+  javaMajorVersion?: number
 }
 
 const NOW = '2026-06-28T08:00:00Z'
@@ -223,6 +234,25 @@ const assets = db<MockAsset>('assets', () => [
     relPath: 'plugin/ViaVersion-5.0.1.jar',
     createdAt: NOW,
     lastUsedAt: null,
+  },
+  {
+    id: 3,
+    type: 'client-file',
+    name: 'lobby-client-config',
+    version: '2026.06.28',
+    filename: 'servers.json.zst',
+    sha256: 'e'.repeat(64),
+    md5: 'f'.repeat(32),
+    size: 2048,
+    contentType: 'application/octet-stream',
+    sourceUrl: '',
+    metadata: '{"path":"config/servers.json","codec":"zstd"}',
+    storageState: 'hot',
+    storageBackend: 'local',
+    refCount: 1,
+    relPath: 'client-file/servers.json.zst',
+    createdAt: NOW,
+    lastUsedAt: NOW,
   },
 ])
 
@@ -611,10 +641,11 @@ export const handlers = [
 
   /* ===================== 运行时与制品全局聚合（FR-082） ===================== */
   domainRoute('get', '/runtime-assets/overview', (info) => {
-    const denied = requireAuth(info)
+    const denied = requirePlatformAdmin(info)
     if (denied) return denied
     const nodeRows = nodes.list()
     const jdkRows = jdks.list()
+    const instanceRows = db<MockRuntimeInstanceRef>('instances').list()
     const jdkMatrix = jdkRows.map((j) => {
       const node = nodeRows.find((n) => n.id === j.nodeId)
       return {
@@ -632,6 +663,21 @@ export const handlers = [
         refCount: 0,
       }
     })
+    const jdkById = new Map(jdkMatrix.map((j) => [j.id, j]))
+    const jdkByNodeMajor = new Map(jdkMatrix.map((j) => [`${j.nodeId}:${j.majorVersion}`, j]))
+    for (const inst of instanceRows) {
+      const direct = inst.jdkId ? jdkById.get(inst.jdkId) : undefined
+      const resolved = direct ?? jdkByNodeMajor.get(`${inst.nodeId}:${inst.javaMajorVersion ?? 0}`)
+      if (!resolved) continue
+      resolved.instances.push({
+        id: inst.id,
+        uuid: inst.uuid,
+        name: inst.name,
+        status: inst.status,
+        binding: direct ? 'direct' : 'major',
+      })
+      resolved.refCount += 1
+    }
     const assetRows = assets.list()
     const types: MockAsset['type'][] = ['core', 'plugin', 'image', 'video', 'archive', 'blob', 'client-file']
     const assetGroups = types
@@ -654,8 +700,8 @@ export const handlers = [
       jdkSummary: {
         nodeCount: new Set(jdkRows.map((j) => j.nodeId)).size,
         jdkCount: jdkRows.length,
-        referencedJdk: 0,
-        instanceRefs: 0,
+        referencedJdk: jdkMatrix.filter((j) => j.refCount > 0).length,
+        instanceRefs: jdkMatrix.reduce((sum, j) => sum + j.refCount, 0),
       },
       assets: assetGroups,
       assetSummary: {

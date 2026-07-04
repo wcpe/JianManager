@@ -463,7 +463,7 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | node_jdks (V2) | node_id(FK), vendor, major_version, version, arch, path, managed(下载/登记) |
 | instance_config_versions (V2) | instance_id(FK), file_path, content, author, created_at |
 | file_versions (V2) | instance_id(FK), file_path, content_hash, content(base64,二进制安全), size, author_id, rollback_of_version_id, created_at；INDEX(instance_id,file_path)（FR-051 通用文件改前快照） |
-| assets | type(core/plugin/image/video/archive/blob), name, version, filename, sha256(寻址+去重键), md5, size, content_type, source_url, metadata(JSON), storage_state(hot/archived/external), storage_backend, ref_count, rel_path(相对数据根), created_at, last_used_at；UNIQUE(type,sha256) |
+| assets | type(core/plugin/image/video/archive/blob/client-file/client-pack/client-core/client-updater-core), name, version, filename, sha256(寻址+去重键), md5, size, content_type, source_url, metadata(JSON), storage_state(hot/archived/external), storage_backend, ref_count, rel_path(相对数据根), created_at, last_used_at；UNIQUE(type,sha256) |
 | logs (FR-049) | source(instance/control_plane/worker), level(debug/info/warn/error), instance_id, instance_uuid, node_id, stream(stdout/stderr), message, time；复合索引 (source,time)/(level,time)/(instance_id,time)/(node_id,time)，关键字检索走 message 列谓词 |
 | ban_records (V2) | uuid, player_name, reason, scope(network/instance/global), scope_id, operator_id(FK), active, created_at, unbanned_at（玩家封禁台账，FR-054；保留历史治理记录，解封置 active=false 保留历史） |
 | platform_settings (V2) | key(PK), value, updated_at（平台配置 DB 覆盖层，仅存被显式覆盖的白名单键；生效优先级 DB 覆盖 > 环境变量 > YAML 默认，FR-063/ADR-015）。network 类键 `proxy.url`（敏感脱敏）/`proxy.no_proxy` 为 CP 全局出站代理（FR-185/ADR-043），保存即重建 CP 出站持有者并作为各节点默认代理（优先级 settings DB > control-plane.yml > env） |
@@ -801,6 +801,7 @@ database:
 - **群组服 `/networks`** (V2): 拓扑视图（代理 + 已注册后端，含各子服在线人数）；管理 proxy↔backend 注册（别名/优先级/forced-host）；群组软标签筛选与批量启停；「搭建子服 / 搭建代理」向导入口
 - **玩家管理 `/players`** (V2): 在线玩家（探针事件实时聚合，标注所在子服，BC 跨服感知，FR-066）/封禁记录/白名单三视图；踢出/封禁二次确认 + 原因输入，解封（经探针插件桥 `SendPluginCommand` 执行，FR-067）；探针未连入降级提示。**「实时事件」标签**经 SSE 驱动在线名册 + 事件流
 - **运行时/JDK** (V2): 在节点详情页 `/nodes/:id` 增「JDK」标签——列出已装 JDK、安装指定版本、登记系统已有 JDK、查看被哪些实例占用
+- **运行时与制品全局页 `/runtime-assets`（FR-082）**：系统域平台维护入口，Control Plane 只读聚合 `nodes`/`node_jdks`/`instances`/`assets` 四类现有表，不新增表、proto 或 Worker RPC。JDK 区按 `instances.jdk_id` 生成 `direct` 引用、按同节点 `java_major_version` 解析到同大版本最大 id JDK 生成 `major` 引用；制品区只展示 FR-045 既有 `ref_count`、类型分组、冷热/归档/外置状态与 `client-file` metadata 路径，不臆造实例级制品连接。端点 `GET /api/v1/runtime-assets/overview` 限平台管理员。
 - **配置编辑器** (V2): 位于工作区**资源卡**（文件+配置合一，FR-130/FR-166）——复用资源管理器（`ConfigExplorer`，FR-071）呈现工作目录全部配置（递归自动发现）+ schema 表单/原始双模式 + 一致性校验 + 配置版本 diff/回滚 + 收藏书签（非独立页面）
 
 ### 8.4 核心用户流程

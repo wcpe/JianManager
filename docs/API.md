@@ -1422,6 +1422,8 @@
 - **引用解析**:
   - JDK 引用由实例绑定真实推导：`instances.jdk_id`（直接绑定，`binding=direct`）或 `instances.java_major_version`（按 Java 大版本绑定，解析到同节点同大版本中 id 最大者，`binding=major`）；跨节点不串台
   - 制品当前不持久化「实例↔制品」连接（FR-045 消费侧 `ref_count` 为占位，见 ADR-011），故制品区给「按类型」占用/去重/冷热 + 既有 `refCount`，不臆造实例连接
+  - `client-file` 制品沿用 `metadata` JSON 暴露客户端相对路径/codec（如 `path`、`targetPath`、`codec`），前端据此展示 OTA 文件来源
+- **权限**: 平台管理员；未登录返回 401，普通成员返回 403，均不返回聚合数据
 - **响应 200**:
 ```json
 {
@@ -1431,7 +1433,8 @@
       "vendor": "Temurin", "majorVersion": 21, "version": "21.0.4", "arch": "x64",
       "path": "/opt/jdks/temurin-21", "managed": true,
       "instances": [
-        { "id": 100, "uuid": "<uuid>", "name": "paper-1", "status": "RUNNING", "binding": "direct" }
+        { "id": 100, "uuid": "<uuid>", "name": "paper-1", "status": "RUNNING", "binding": "direct" },
+        { "id": 101, "uuid": "<uuid>", "name": "lobby-proxy", "status": "STOPPED", "binding": "major" }
       ],
       "refCount": 1
     }
@@ -1448,7 +1451,7 @@
   "assetSummary": { "assetCount": 1, "totalSize": 48234123, "referencedCount": 0, "hotCount": 1, "archivedCount": 0, "externalCount": 0 }
 }
 ```
-- **错误**: 401/403（非平台管理员）；500 `INTERNAL_ERROR`
+- **错误**: 401（未登录）；403（已登录但非平台管理员）；500 `INTERNAL_ERROR`
 
 ---
 

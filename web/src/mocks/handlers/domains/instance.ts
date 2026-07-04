@@ -25,6 +25,10 @@ export interface MockInstance {
   processType: string
   status: string
   startCommand: string
+  /** 直接绑定的 JDK id；0/缺省表示未直接绑定。 */
+  jdkId?: number
+  /** Java 大版本兜底绑定（无直接 JDK 时按节点+主版本解析）。 */
+  javaMajorVersion?: number
   workDir: string
   image: string
   cpuLimit: number
@@ -66,6 +70,8 @@ const instances = db<MockInstance>('instances', () => [
     processType: 'daemon',
     status: 'RUNNING',
     startCommand: 'java -Xmx2G -jar paper.jar nogui',
+    jdkId: 1,
+    javaMajorVersion: 21,
     workDir: '/servers/survival-1',
     image: '',
     cpuLimit: 0,
@@ -87,6 +93,8 @@ const instances = db<MockInstance>('instances', () => [
     processType: 'daemon',
     status: 'STOPPED',
     startCommand: 'java -jar velocity.jar',
+    jdkId: 0,
+    javaMajorVersion: 17,
     workDir: '/servers/lobby-proxy',
     image: '',
     cpuLimit: 0,
@@ -108,6 +116,8 @@ const instances = db<MockInstance>('instances', () => [
     processType: 'docker',
     status: 'CRASHED',
     startCommand: 'java -jar paper.jar nogui',
+    jdkId: 0,
+    javaMajorVersion: 21,
     workDir: '/servers/creative-1',
     image: 'itzg/minecraft-server:latest',
     cpuLimit: 1.5,
