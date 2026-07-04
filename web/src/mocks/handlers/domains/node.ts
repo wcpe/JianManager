@@ -89,6 +89,11 @@ interface MockAsset {
 
 const NOW = '2026-06-28T08:00:00Z'
 
+/** 生成从当前时间起算的接入 token 过期时间，避免 mock seed 随日期推进变成过期样例。 */
+function enrollTokenExpiresAt(ttlMinutes = 60) {
+  return new Date(Date.now() + ttlMinutes * 60_000).toISOString()
+}
+
 const nodes = db<MockNode>('nodes', () => [
   {
     id: 1,
@@ -169,9 +174,9 @@ const jdks = db<MockJDK>('node-jdks', () => [
 const enrollTokens = db<MockEnrollToken>('enroll-tokens', () => [
   {
     id: 1,
-    tokenPrefix: 'jm_enr_AbCd',
+    tokenPrefix: 'jmet_AbCd',
     nodeName: 'gamma',
-    expiresAt: '2026-06-28T09:00:00Z',
+    expiresAt: enrollTokenExpiresAt(),
     used: false,
     usedAt: null,
     usedByNode: '',
@@ -363,26 +368,28 @@ export const handlers = [
     if (denied) return denied
     const body = (await info.request.json().catch(() => ({}))) as { nodeName?: string; ttlMinutes?: number }
     const name = body.nodeName || 'new-node'
+    const ttlMinutes = body.ttlMinutes ?? 60
     const created = enrollTokens.insert({
-      tokenPrefix: `jm_enr_${Math.random().toString(36).slice(2, 6)}`,
+      tokenPrefix: `jmet_${Math.random().toString(36).slice(2, 6)}`,
       nodeName: name,
-      expiresAt: '2026-06-28T09:00:00Z',
+      expiresAt: enrollTokenExpiresAt(ttlMinutes),
       used: false,
       usedAt: null,
       usedByNode: '',
       revoked: false,
       createdAt: NOW,
     })
+    const token = `${created.tokenPrefix}_secret`
     return HttpResponse.json({
-      token: `jm_enr_${created.tokenPrefix}_secret`,
+      token,
       tokenId: created.id,
       tokenPrefix: created.tokenPrefix,
       expiresAt: created.expiresAt,
       nodeName: name,
       controlPlaneGrpc: 'cp.example.com:9100',
       scriptBaseUrl: 'https://cp.example.com',
-      installCommandLinux: `curl -fsSL https://cp.example.com/install.sh | bash -s -- --token jm_enr_${created.tokenPrefix}_secret`,
-      installCommandWindows: `iex (iwr https://cp.example.com/install-worker.ps1 -UseBasicParsing).Content; Install-JianManagerWorker -ControlPlane cp.example.com:9100 -Token jmet_mock`,
+      installCommandLinux: `curl -fsSL https://cp.example.com/install-worker.sh | sh -s -- --control-plane cp.example.com:9100 --token ${token}${name ? ` --name ${name}` : ''}`,
+      installCommandWindows: `iex (iwr https://cp.example.com/install-worker.ps1 -UseBasicParsing).Content; Install-JianManagerWorker -ControlPlane cp.example.com:9100 -Token ${token}${name ? ` -Name ${name}` : ''}`,
     })
   }),
 

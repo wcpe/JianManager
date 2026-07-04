@@ -6,6 +6,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuContent,
 } from '@/components/ui/dropdown-menu'
+import { editorShortcutRows } from './shortcuts'
 
 /**
  * 编辑器迷你 IDE 快捷键速查（FR-073）。
@@ -16,21 +17,7 @@ import {
  */
 export default function EditorShortcutsHelp() {
   const { t } = useTranslation()
-
-  /** 一行速查项：左侧能力说明，右侧键位（键位用 kbd 呈现，不翻译）。 */
-  const rows: { label: string; keys: string }[] = [
-    { label: t('editorIde.search'), keys: 'Ctrl+F' },
-    { label: t('editorIde.replace'), keys: 'Ctrl+Alt+F' },
-    { label: t('editorIde.undo'), keys: 'Ctrl+Z' },
-    { label: t('editorIde.redo'), keys: 'Ctrl+Y / Ctrl+Shift+Z' },
-    { label: t('editorIde.deleteLine'), keys: 'Ctrl+Shift+K' },
-    { label: t('editorIde.copyLine'), keys: 'Ctrl+Shift+D' },
-    { label: t('editorIde.moveLine'), keys: 'Alt+↑ / Alt+↓' },
-    { label: t('editorIde.selectLine'), keys: 'Ctrl+L' },
-    { label: t('editorIde.toggleComment'), keys: 'Ctrl+/' },
-    { label: t('editorIde.toggleBlockComment'), keys: 'Ctrl+Shift+A' },
-    { label: t('editorIde.save'), keys: 'Ctrl+S' },
-  ]
+  const rows = editorShortcutRows(t)
 
   return (
     <DropdownMenu>

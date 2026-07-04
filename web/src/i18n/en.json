@@ -932,7 +932,7 @@
       "tabManualDesc": "If the Worker binary is already deployed, fill in the address and one-time token below and start it to register — no install script needed.",
       "manualConnectTitle": "Connect an already-deployed Worker manually",
       "manualConnectStep1": "1. Control Plane address (set as control-plane in the Worker config)",
-      "manualConnectStep2": "2. One-time enroll token (set as enroll-token in the Worker config)",
+      "manualConnectStep2": "2. One-time enroll token (used only for this registration; not written to worker.yml)",
       "manualConnectStep3": "3. Start the Worker on the target machine (with arguments)",
       "manualConnectHint": "The token is one-time and time-limited; it is invalidated once registration succeeds. The first registration must complete before expiry."
     },

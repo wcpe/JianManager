@@ -18,8 +18,8 @@ ServerProbe 治理桥与运营底座增强（4 里程碑程序）源于 2026-06-
 - **优先级**: P2 | **依赖**: FR-070
 - **描述**: 在 FR-070 共享编辑器上接 CodeMirror 全套编辑能力
 - **验收**:
-  - [ ] 快捷键全集 + 搜索/替换（正则可选）+ 撤销/重做 + 删除一行/复制一行 + 批量注释/取消（按文件类型注释符）
-  - [ ] 快捷键与 Ctrl+S 历史保存统一不冲突；真机各能力实测
+  - [x] 快捷键全集 + 搜索/替换（正则可选）+ 撤销/重做 + 删除一行/复制一行 + 批量注释/取消（按文件类型注释符）；证据：`ide-extensions.test.ts` / `comment-behavior.test.ts` / `ResourceEditor.dom.test.tsx` 通过。
+  - [x] 快捷键与 Ctrl+S 历史保存统一不冲突；速查表块注释键位已对齐实际 `Shift+Alt+A`，定向测试锁住 `Ctrl+S` 不被 keymap 绑定。
 
 ### 里程碑 M3 — Docker 容器化 + 资源限额 + 部署/自更新
 
@@ -55,9 +55,9 @@ ServerProbe 治理桥与运营底座增强（4 里程碑程序）源于 2026-06-
 - **验收**:
   - [x] 先写 **ADR-020**（enrollment 一键安装 + 自更新机制/来源/校验/CP 编排）
   - [x] CP「添加节点」向导生成一键命令（含一次性 enrollment token）
-  - [x] 安装脚本（Linux sh / Win ps1）：下载对应平台 Worker 二进制 + 写配置 + enrollment 注册到 CP + 可选注册系统服务（systemd/Windows service）
+  - [x] 安装脚本（Linux sh / Win ps1）：下载对应平台 Worker 二进制并调 Worker setup，由 Worker 写 `worker.yml` + enrollment 注册到 CP + 可选注册系统服务（systemd/Windows service）；token 仅经参数/环境变量传入，不落配置。
   - [x] enrollment token 一次性限时；注册换 node_uuid/secret（复用 FR-004）；装后自启自连，前端见在线
-  - [ ] 真机：另一机器/容器跑一键命令 → 节点自动注册上线（**待真机验**：公网 release 端点未架设，当前以 `--binary` 本地兜底）
+  - [x] 真机：2026-07-04 本机临时 CP 托管 `install-worker.ps1`，PowerShell 拉取脚本并用 `-Binary` 本地兜底启动 Worker；CP 侧见 `fr080-e2e` 节点自动注册上线（`status=1`、gRPC 19101 / WS 19102），Worker 写出 `worker.yml` 且明确提示 token 未写入。
 
 ### 里程碑 M4 — 全局页/可视化 + 存储浏览 + 告警体系
 

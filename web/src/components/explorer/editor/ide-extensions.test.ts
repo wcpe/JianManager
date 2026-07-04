@@ -10,6 +10,7 @@ import {
   toggleBlockComment,
 } from '@codemirror/commands'
 import { ideKeymap } from './ide-extensions'
+import { editorShortcutRows } from './shortcuts'
 
 describe('ideKeymap', () => {
   const bindings = ideKeymap()
@@ -39,5 +40,12 @@ describe('ideKeymap', () => {
     expect(byKey('Alt-ArrowDown')).toBe(moveLineDown)
     expect(byKey('Alt-ArrowUp')).toBe(moveLineUp)
     expect(byKey('Mod-l')).toBe(selectLine)
+  })
+
+  it('keeps the shortcut help aligned with the actual keymap', () => {
+    const rows = editorShortcutRows((key) => key)
+    const byLabel = (label: string) => rows.find((row) => row.label === label)?.keys
+    expect(byLabel('editorIde.toggleBlockComment')).toBe('Shift+Alt+A')
+    expect(byLabel('editorIde.save')).toBe('Ctrl+S')
   })
 })

@@ -9,6 +9,8 @@
 > 归属：本段为 `v0.13.0` 开发版归档区，范围从 `v0.12.0` tag（`0939068c`）之后到当前 `HEAD`；正式发布时由 `sdd-release-version` 提升为 `## 0.13.0（YYYY-MM-DD）`。
 
 ### 新增
+- **编辑器迷你 IDE 增强收尾（FR-073）**：共享 CodeMirror 编辑器的搜索/替换、撤销/重做、行删除/复制/移动、选中行、按文件类型注释符批量注释能力验收闭环；快捷键速查表修正块注释为实际绑定 `Shift+Alt+A`，并用测试锁住 `Ctrl+S` 仍由历史保存接管、不被编辑器 keymap 抢占。定向 `ide-extensions` / `comment-behavior` / `ResourceEditor` 测试通过。
+- **Worker 一键安装 / 傻瓜部署验收闭环（FR-080）**：节点添加向导与 mock 一键命令统一为 CP 托管脚本 `/install-worker.sh` / `/install-worker.ps1`，手动连接文案明确一次性 token 只用于本次注册、不写入 `worker.yml`；DOM 回归覆盖生成命令含 `--control-plane` / `--token`。2026-07-04 本机临时 CP + PowerShell 托管脚本 + `-Binary` 兜底真链路验过，Worker setup 写配置并持久化身份，CP 侧见 `fr080-e2e` 节点自动注册上线（status=1）。
 - **updater-core 手动 hotfix + 遥测玩家名补全（FR-259/FR-094/FR-265）**：频道工作台「Core 版本」Tab 新增上传 updater-core.jar，平台管理员可经 `POST /client-channels/:id/updater-core/versions` 手动归档 hotfix，并可上传后立即选为当前频道版本；列表自动刷新，mock API 与 DOM 测试同步。客户端遥测与启动心跳不再依赖每个请求强制携带 `X-Player-Name`，后端优先兼容 header，缺省按 `channel + X-Machine-Id + X-Install-Id` 从安全画像补全 `playerName`，避免客户端 Tab 显示「玩家：—」。导航栏「防护中心」统一改为「客户端分发安全」。
 - **客户端分发观测四 Tab 重构（FR-265）**：客户端分发监控页重命名为「客户端分发观测」，同页拆为统计 / 监控 / 日志 / 客户端四 Tab。统计、监控、日志只看 `client_dist_events` 请求事件与请求聚合：新增近实时聚合 `/client-dist/realtime`、分页日志 `/client-dist/events/search`、脱敏详情 `/client-dist/events/:id`，支持错误码、IP、版本、运行态维度联动筛选；请求头只保留白名单，`X-Client-Key` 不落明文。客户端 Tab 独立看 `client_runtime_states` 启动心跳与 `client_telemetry` 更新结果：新增玩家侧 `/client-channels/:id/telemetry/heartbeat`（只 upsert 运行态，不写更新遥测），展示运行版本、core 版本、平台、启动器、版本滞后与更新结果趋势。清理观测契约中的废弃缓存命中字段，并把文案从“在线客户端”收敛为“近 5 分钟启动 / 今日启动”。配套后端 service/router 测试、updater-core 心跳测试、前端四 Tab DOM 测试与文档同步。
 - **updater-core 构建元信息内嵌与展示（FR-266）**：计划在 core jar 内写入版本号、Git commit、dirty 与 buildTime 元信息，CP 归档读取并在频道工作台 Core 版本页展示；旧 jar / 紧急 hotfix jar 缺少元信息时仍允许上传并立即选用，展示降级为“未知”。

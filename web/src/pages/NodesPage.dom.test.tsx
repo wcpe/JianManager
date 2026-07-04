@@ -46,6 +46,26 @@ describe('NodesPage（mock 假后端）', () => {
     await waitFor(() => expect(screen.getAllByText('维护中').length).toBeGreaterThan(0))
   })
 
+  it('添加节点向导生成 CP 托管脚本命令，且手动 token 不落配置', async () => {
+    loginMockUser()
+    stubInstances()
+    const user = userEvent.setup()
+    renderWithProviders(<NodesPage />)
+
+    await user.click(await screen.findByRole('button', { name: '添加节点' }))
+    await user.click(await screen.findByRole('button', { name: '生成一键命令' }))
+
+    await waitFor(() => {
+      const text = document.body.textContent ?? ''
+      expect(text).toContain('/install-worker.sh')
+      expect(text).toContain('--control-plane')
+      expect(text).toContain('--token')
+    })
+
+    await user.click(await screen.findByRole('tab', { name: '手动连接' }))
+    expect(await screen.findByText(/不写入 worker\.yml/)).toBeInTheDocument()
+  })
+
   it('注入 500：节点列表请求失败，列表区不崩溃（无节点行）', async () => {
     loginMockUser()
     stubInstances()

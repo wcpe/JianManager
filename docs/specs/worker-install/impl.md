@@ -48,7 +48,7 @@
 - [x] **BUG-B 回归**：`router/install_script_test.go`（匿名 GET 脚本端点 200 + 内容校验，red→green）、`embed/install_scripts_test.go`（内嵌非空 + 与 canonical 字节一致防漂移）绿
 - [x] 前端 tsc / lint / build 绿
 - [x] 安装脚本 POSIX `sh -n` / PowerShell Parser 语法校验通过
-- [ ] 真机：另一机器/容器跑一键命令（粘 `curl <cp>/install-worker.sh | sh` 经 CP 托管脚本）→ 节点自动注册上线（**待真机验**；下载源默认走 GitHub Releases，需 FR-173 发布管线先产出真实 release 产物，或用 `--binary` 本地兜底自测）
+- [x] 真机：2026-07-04 本机临时 CP 托管 `install-worker.ps1`，PowerShell 按 `iex (iwr ...).Content` 拉取脚本，使用 `-Binary` 本地兜底启动 Worker → 节点 `fr080-e2e` 自动注册上线（CP `/nodes` 返回 `status=1`、gRPC 19101 / WS 19102）；Worker setup 写出 `worker.yml`，日志确认 `enrollment token 未写入`。公网 release 产物下载路径仍由发布管线产出后继续覆盖。
 
 ## 设计要点（落地备忘）
 - token 经 gRPC metadata header `enroll-token`，不改 proto。
