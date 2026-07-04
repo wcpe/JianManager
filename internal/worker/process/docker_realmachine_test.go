@@ -92,6 +92,42 @@ func TestDockerRealMachine_Lifecycle(t *testing.T) {
 	requireContainerGone(t, "jianmanager-"+uuid)
 }
 
+// TestDockerRealMachine_ResourceLimits 真机验证 FR-079：CPU / 内存限额真实写入 Docker HostConfig，
+// 磁盘限额不伪装注入；Docker stats 能读到容器内存上限。
+func TestDockerRealMachine_ResourceLimits(t *testing.T) {
+	mgr := NewManager(t.TempDir())
+	uuid := "realmachine-docker-limits"
+	spec := CommandSpec{
+		UUID:         uuid,
+		Name:         "RealMachine Docker Limits",
+		Image:        realImage,
+		WorkDir:      t.TempDir(),
+		ProcessType:  ProcessTypeDocker,
+		StartCommand: "sleep 60",
+		CPULimit:     1,
+		MemLimitMB:   256,
+		DiskLimitMB:  1024,
+	}
+	mgr.instances[uuid] = &Instance{UUID: uuid, State: StateStopped, strategy: newDockerStrategy(mgr, spec), processType: ProcessTypeDocker}
+	d := mgr.instances[uuid].strategy.(*dockerStrategy)
+
+	require.NoError(t, d.Start(context.Background()), "带资源限额的 docker 真机启动应成功")
+	t.Cleanup(func() { _ = d.Kill(); requireContainerGone(t, "jianmanager-"+uuid) })
+
+	info, err := d.cli.ContainerInspect(context.Background(), d.containerID)
+	require.NoError(t, err)
+	require.NotNil(t, info.HostConfig)
+	require.Equal(t, int64(1_000_000_000), info.HostConfig.NanoCPUs, "1 核应写入 1e9 NanoCPUs")
+	require.Equal(t, int64(256)*1024*1024, info.HostConfig.Memory, "256 MiB 应写入 Memory 字节数")
+	// DiskLimitMB 在 bind-mount 工作目录下仅持久化展示，不能假装已通过 HostConfig 强制限制。
+	require.Zero(t, info.HostConfig.StorageOpt["size"], "磁盘限额当前不注入 HostConfig.StorageOpt")
+
+	require.Eventually(t, func() bool {
+		_, _, limit, ok := d.Stats(context.Background())
+		return ok && limit == int64(256)*1024*1024
+	}, 10*time.Second, 200*time.Millisecond, "Docker stats 应能读到容器内存上限")
+}
+
 // TestDockerRealMachine_ImageManagement 真机跑通镜像管理：列出→拉取→列出含拉取项。
 // 不删除（避免误删本机其它用途镜像）；删除路径由 fake 单测覆盖。
 func TestDockerRealMachine_ImageManagement(t *testing.T) {

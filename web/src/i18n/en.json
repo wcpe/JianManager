@@ -2575,7 +2575,8 @@
     "urlScheme": "Only http/https URLs are allowed",
     "envRef": "Must be an environment variable reference ${VAR_NAME}",
     "host": "Must be a valid hostname or IP",
-    "nonNegativeNumber": "Must be a non-negative number (0 means unlimited)"
+    "nonNegativeNumber": "Must be a non-negative number (0 means unlimited)",
+    "resourceLimitNumber": "Must be a number; empty/0/negative means unlimited"
   },
   "combobox": {
     "searchPlaceholder": "Search or type…",

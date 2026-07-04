@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { useUpdateInstance } from '@/api/instances'
 import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
 import { FieldLabel, FieldError } from '@/components/ui/field-label'
-import { validateNonNegativeNumber } from '@/lib/form-validation'
+import { validateResourceLimitNumber } from '@/lib/form-validation'
 
 interface EditInstanceLimitsDialogProps {
   instanceId: number
@@ -27,7 +27,7 @@ function toField(v: number): string {
 
 /**
  * 实例资源限额编辑器（FR-079）：docker 模式实例的 CPU 核数 / 内存 / 磁盘上限，
- * 留空=不限制（保存为 0）。变更经 PUT /instances/:id 持久化，对下一次启动生效。
+ * 留空/0/负值=不限制。变更经 PUT /instances/:id 持久化，对下一次启动生效。
  * 非 docker 模式不提供编辑，仅提示需切换到 docker 模式。
  */
 export default function EditInstanceLimitsDialog({
@@ -47,9 +47,9 @@ export default function EditInstanceLimitsDialog({
   const [mem, setMem] = useState(toField(memLimitMb))
   const [disk, setDisk] = useState(toField(diskLimitMb))
 
-  const cpuErr = validateNonNegativeNumber(cpu)
-  const memErr = validateNonNegativeNumber(mem)
-  const diskErr = validateNonNegativeNumber(disk)
+  const cpuErr = validateResourceLimitNumber(cpu)
+  const memErr = validateResourceLimitNumber(mem)
+  const diskErr = validateResourceLimitNumber(disk)
   const hasError = !!cpuErr || !!memErr || !!diskErr
 
   const submit = (e: FormEvent) => {
@@ -58,7 +58,7 @@ export default function EditInstanceLimitsDialog({
     update.mutate(
       {
         id: instanceId,
-        // 留空回落 0=清除限制（FR-079）。
+        // 留空回落 0；0/负值均表示不限制（FR-079）。
         body: {
           cpuLimit: cpu.trim() ? Number(cpu) : 0,
           memLimitMb: mem.trim() ? Number(mem) : 0,

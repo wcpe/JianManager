@@ -38,6 +38,7 @@ func TestBuildCreateInstanceRequest(t *testing.T) {
 		Role: model.InstanceRoleProxy, ProcessType: model.ProcessTypeDaemon,
 		StartCommand: "java -jar proxy.jar", JDKID: jdk.ID, WorkDir: "var/servers/lobby-ab12",
 		EnvVars: string(raw), ProbePort: 29940, Status: model.InstanceStatusStopped,
+		Image: "itzg/minecraft-server:latest", CPULimit: 1.5, MemLimitMB: 2048, DiskLimitMB: 10240,
 	}
 	require.NoError(t, db.Create(inst).Error)
 
@@ -52,6 +53,10 @@ func TestBuildCreateInstanceRequest(t *testing.T) {
 	assert.Equal(t, "end", spec.StopCommand, "代理角色派生优雅停止命令 end")
 	assert.Equal(t, int32(29940), spec.ProbePort)
 	assert.Equal(t, "bar", spec.EnvVars["FOO"], "EnvVars JSON 应解出")
+	assert.Equal(t, "itzg/minecraft-server:latest", spec.Image)
+	assert.Equal(t, 1.5, spec.CpuLimit)
+	assert.Equal(t, int64(2048), spec.MemLimitMb)
+	assert.Equal(t, int64(10240), spec.DiskLimitMb)
 }
 
 // TestResyncNode_GracefulPreflight 验证 ResyncNode 的前置容错（无 panic、无副作用）：

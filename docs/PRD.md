@@ -55,7 +55,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-213~221（观测体系重构 + 客户端分发观测 + 共享文件浏览器 + 通知中心：导航{监控/日志/统计}+任务中心移系统 / 站内信+告警合并通知中心 / 分发观测时序底座+监控页+统计扩维 / 文件浏览器抽取+实例卡片迁移+分发文件预览 / 平台级统计页 / 时序剖析增强，关联 ADR-048[统一通知模型] / ADR-049[分发观测聚合，复用 ADR-013] + 增强 FR-060/086）→ FR-213 `docs/specs/file-browser-component/`、FR-215 `docs/specs/observability-ia-redesign/`、FR-216 `docs/specs/notification-center/`、FR-217 `docs/specs/client-dist-observability/`、FR-220 `docs/specs/platform-statistics/`（需 spec，开发中创建）；FR-214/218/219/221 免 spec（前端复用/消费既有）；FIX-1 发布上传复验 + strict/fail-static 等术语中文化（fix 走 sdd-fix-bug，不占 §4）
 - FR-222~224 + FIX-A~D（节点上线流程打通 + worker 生命周期修复 + .yml 约定）：FR-222/223 已由 0.13.0 开发版 FIX-1/2/3 归真闭环；FR-224 已在 v0.12.0 交付；FR-222 `docs/specs/worker-self-setup/`，FR-223/224 免 spec。FIX-A #2 worker 重连重推实例[+ADR-050] / FIX-B #3 终端断连 / FIX-C #4 启停 kill 竞态 / FIX-D 首次上线真机断点（fix 走 sdd-fix-bug，不占 §4）
 - FR-225~232 + FIX-1~6（0.13.0 开发版归档）：调试开关 / 通知-任务联动 / 任务强停+筛选 / JDK 登记重做 / 连通性测试族 / 创建向导页 / 复制双模式 / 前端细节已交付；FIX-1/2/3 已把 FR-222/223 节点上线链路归真闭环；FR-227 `docs/specs/task-force-stop/`、FR-228 `docs/specs/jdk-register-redesign/`、FR-229 `docs/specs/connectivity-selftest/`、FR-231 `docs/specs/instance-clone-modes/`；FIX-4 JDK 下载超时 / FIX-5 JDK 登记卡死 / FIX-6 系统更新进页只读缓存为 0.13.0 修复项（fix 走 sdd-fix-bug，不占 §4）
-- FR-233~247 + FIX-7~9（UI 重塑 + Docker 落地 + 实例规模化 2026-06-30）：FR-233/234/236/237/241/243/246/247 已在 0.13.0 开发版交付；FR-235（实例列表页重设计）、FR-240（导航外壳完整重构）、FR-244（全局动画系统）仍按 §4 状态继续跟踪。合并关系：FR-238→FR-078，FR-239→FR-236，FR-242→FR-241，FR-245→FR-240。FIX-7 生产 SQL 日志静默 / FIX-8 创建实例节点下拉空 / FIX-9 点击实例卡片无反应为 0.13.0 修复项（fix 走 sdd-fix-bug，不占 §4）。计划见 `.tmp/brainstorm-ui-docker-batch-2026-06-30.md`
+- FR-079 + FR-233~247 + FIX-7~9（UI 重塑 + Docker 落地 + 实例规模化 2026-06-30）：FR-079/233/234/236/237/241/243/246/247 已在 0.13.0 开发版交付；FR-235（实例列表页重设计）、FR-240（导航外壳完整重构）、FR-244（全局动画系统）仍按 §4 状态继续跟踪。合并关系：FR-238→FR-078，FR-239→FR-236，FR-242→FR-241，FR-245→FR-240。FIX-7 生产 SQL 日志静默 / FIX-8 创建实例节点下拉空 / FIX-9 点击实例卡片无反应为 0.13.0 修复项（fix 走 sdd-fix-bug，不占 §4）。计划见 `.tmp/brainstorm-ui-docker-batch-2026-06-30.md`
 - FR-264（客户端分发单节点源站安全防护：多维限流 / IP 临时封禁 / key 状态机 / 频道降速保护 / 制品授权收紧 / 启动安全画像 / 独立防护中心）→ `docs/specs/client-dist-security-firewall/spec.md`（已交付@v0.13.0）
 - FR-265（客户端分发观测四 Tab 重构：统计/监控/日志只看请求事件，客户端 Tab 独立看运行态与更新结果；新增运行态心跳表/端点、请求日志脱敏详情、实时聚合；清理废弃缓存命中指标；与 FR-264 并行开发互不覆盖）→ `docs/specs/client-dist-observability-rebuild/spec.md`（已交付@v0.13.0）
 - FR-266（updater-core 构建元信息内嵌与展示：jar 内写版本 / Git commit / dirty / buildTime，CP 归档读取并在 Core 版本页展示，紧急 hotfix 仍可直接上传）→ `docs/specs/updater-core-build-metadata/spec.md`（已交付@v0.13.0）
@@ -141,7 +141,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-076 | 全量 Bukkit 状态探查（异步非侵入）+ WS 按需查询 | — | ✅ 已交付@v0.9.0 |
 | FR-077 | 「服务器状态」专属 tab | — | ✅ 已交付@v0.9.0 |
 | FR-078 | Docker 容器化实例运行 + 镜像管理 + 端口映射 | P1 | ✅ 已交付@v0.13.0 |
-| FR-079 | 实例级资源限额（Docker 模式） | P1 | 🔨 开发中 |
+| FR-079 | 实例级资源限额（Docker 模式） | P1 | ✅ 已交付@v0.13.0 |
 | FR-080 | Worker 一键安装 / 傻瓜部署 | P1 | 🔨 开发中 |
 | FR-081 | 面板自更新（CP/Worker 二进制在线升级） | — | ✅ 已交付@v0.9.0 |
 | FR-082 | 运行时与制品全局页（JDK + 制品库，可视化） | P2 | 🔨 开发中 |

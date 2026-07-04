@@ -18,7 +18,7 @@ import { FieldLabel, FieldError } from '@/components/ui/field-label'
 import { cn } from '@/lib/utils'
 import {
   validateRequired,
-  validateNonNegativeNumber,
+  validateResourceLimitNumber,
   validateFields,
 } from '@/lib/form-validation'
 
@@ -61,6 +61,7 @@ export default function InstanceWizardPage() {
   const [image, setImage] = useState('')
   const [cpuLimit, setCpuLimit] = useState('')
   const [memLimitMb, setMemLimitMb] = useState('')
+  const [diskLimitMb, setDiskLimitMb] = useState('')
   const [startCommand, setStartCommand] = useState('java -Xmx2G -jar server.jar nogui')
   const [autoRestart, setAutoRestart] = useState(true)
   const [groupId, setGroupId] = useState('')
@@ -103,14 +104,15 @@ export default function InstanceWizardPage() {
   ]
 
   const errors = validateFields(
-    { name, nodeId, startCommand, image, cpuLimit, memLimitMb },
+    { name, nodeId, startCommand, image, cpuLimit, memLimitMb, diskLimitMb },
     {
       name: [validateRequired],
       nodeId: [validateRequired],
       startCommand: isDocker ? [] : [validateRequired],
       image: isDocker ? [validateRequired] : [],
-      cpuLimit: isDocker ? [validateNonNegativeNumber] : [],
-      memLimitMb: isDocker ? [validateNonNegativeNumber] : [],
+      cpuLimit: isDocker ? [validateResourceLimitNumber] : [],
+      memLimitMb: isDocker ? [validateResourceLimitNumber] : [],
+      diskLimitMb: isDocker ? [validateResourceLimitNumber] : [],
     },
   )
 
@@ -124,7 +126,7 @@ export default function InstanceWizardPage() {
   const stepValid = (k: StepKey): boolean => {
     if (k === 'basic') return !errors.name && !errors.nodeId
     if (k === 'launch') return !errors.startCommand
-    if (k === 'advanced') return !errors.image && !errors.cpuLimit && !errors.memLimitMb && !dockerChecking && !dockerBlocked
+    if (k === 'advanced') return !errors.image && !errors.cpuLimit && !errors.memLimitMb && !errors.diskLimitMb && !dockerChecking && !dockerBlocked
     return true
   }
 
@@ -173,6 +175,7 @@ export default function InstanceWizardPage() {
       image: isDocker ? image : undefined,
       cpuLimit: isDocker ? (cpuLimit.trim() ? Number(cpuLimit) : 0) : undefined,
       memLimitMb: isDocker ? (memLimitMb.trim() ? Number(memLimitMb) : 0) : undefined,
+      diskLimitMb: isDocker ? (diskLimitMb.trim() ? Number(diskLimitMb) : 0) : undefined,
       envVars: isDocker ? envVarsFromPairs(envPairs) : undefined,
     })
   }
@@ -307,13 +310,20 @@ export default function InstanceWizardPage() {
               <input value={image} onChange={(e) => setImage(e.target.value)} className={cn(inputClass, 'font-mono')} placeholder="itzg/minecraft-server:latest" aria-invalid={!!errors.image} />
             </Field>
             <EnvVarsEditor pairs={envPairs} onChange={setEnvPairs} />
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <Field label={t('instances.cpuLimit')} error={errors.cpuLimit}>
-                <input value={cpuLimit} onChange={(e) => setCpuLimit(e.target.value)} className={inputClass} placeholder="1.5" inputMode="decimal" aria-invalid={!!errors.cpuLimit} />
-              </Field>
-              <Field label={t('instances.memLimit')} error={errors.memLimitMb}>
-                <input value={memLimitMb} onChange={(e) => setMemLimitMb(e.target.value)} className={inputClass} placeholder="2048" inputMode="numeric" aria-invalid={!!errors.memLimitMb} />
-              </Field>
+            <div>
+              <p className="mb-2 text-xs text-muted-foreground">{t('instances.resourceLimitHint')}</p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <Field label={t('instances.cpuLimit')} error={errors.cpuLimit}>
+                  <input value={cpuLimit} onChange={(e) => setCpuLimit(e.target.value)} className={inputClass} placeholder="1.5" inputMode="decimal" aria-invalid={!!errors.cpuLimit} />
+                </Field>
+                <Field label={t('instances.memLimit')} error={errors.memLimitMb}>
+                  <input value={memLimitMb} onChange={(e) => setMemLimitMb(e.target.value)} className={inputClass} placeholder="2048" inputMode="numeric" aria-invalid={!!errors.memLimitMb} />
+                </Field>
+                <Field label={t('instances.diskLimit')} error={errors.diskLimitMb}>
+                  <input value={diskLimitMb} onChange={(e) => setDiskLimitMb(e.target.value)} className={inputClass} placeholder="10240" inputMode="numeric" aria-invalid={!!errors.diskLimitMb} />
+                  <p className="mt-1.5 text-xs text-muted-foreground">{t('instances.diskLimitHint')}</p>
+                </Field>
+              </div>
             </div>
           </div>
         )}
@@ -327,6 +337,9 @@ export default function InstanceWizardPage() {
             <ReviewRow label={t('instanceDetail.startCommand')} value={startCommand} mono />
             <ReviewRow label={t('instances.jdkOptional')} value={jdkLabel} />
             {isDocker && <ReviewRow label={t('instances.dockerImage')} value={image} mono />}
+            {isDocker && <ReviewRow label={t('instances.cpuLimit')} value={cpuLimit || t('instances.unlimited')} />}
+            {isDocker && <ReviewRow label={t('instances.memLimit')} value={memLimitMb || t('instances.unlimited')} />}
+            {isDocker && <ReviewRow label={t('instances.diskLimit')} value={diskLimitMb || t('instances.unlimited')} />}
             <ReviewRow label={t('instanceDetail.autoRestart')} value={autoRestart ? t('common.enabled') : t('common.disabled', '关闭')} />
           </dl>
         )}

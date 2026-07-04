@@ -50,14 +50,24 @@ export function validatePositiveInt(value: string): FieldError {
 }
 
 /**
- * 非负数（资源限额：CPU 核数允许小数、内存/磁盘 MiB）。空串合法（选填）。
- * 0 表示不限制（FR-079），故与 validatePositiveInt 不同——0 放行；负数判错。
+ * 非负数。空串合法（选填）。
+ * 0 放行，负数判错。资源限额请用 validateResourceLimitNumber。
  */
 export function validateNonNegativeNumber(value: string): FieldError {
   const trimmed = value.trim()
   if (trimmed === '') return undefined
   if (!/^\d+(\.\d+)?$/.test(trimmed)) return 'validation.nonNegativeNumber'
   return Number(trimmed) < 0 ? 'validation.nonNegativeNumber' : undefined
+}
+
+/**
+ * 资源限额数字（CPU 核数允许小数，内存/磁盘 MiB 由后端归一化）。空串合法；
+ * 0 与负值均表示不限制（FR-079），因此这里只校验“是不是数字”。
+ */
+export function validateResourceLimitNumber(value: string): FieldError {
+  const trimmed = value.trim()
+  if (trimmed === '') return undefined
+  return /^-?\d+(\.\d+)?$/.test(trimmed) ? undefined : 'validation.resourceLimitNumber'
 }
 
 /**

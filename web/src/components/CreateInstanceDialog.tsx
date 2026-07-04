@@ -21,7 +21,7 @@ import { FieldLabel, FieldError } from '@/components/ui/field-label'
 import {
   validateRequired,
   validateAbsPath,
-  validateNonNegativeNumber,
+  validateResourceLimitNumber,
   validateFields,
   hasErrors,
 } from '@/lib/form-validation'
@@ -54,9 +54,10 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
   const [processType, setProcessType] = useState('daemon')
   // image 仅 docker 模式使用：容器镜像引用（FR-078，ADR-019）。
   const [image, setImage] = useState('')
-  // cpuLimit/memLimitMb 仅 docker 模式使用：资源限额，空=不限制（FR-079，ADR-019）。
+  // cpuLimit/memLimitMb/diskLimitMb 仅 docker 模式使用：资源限额，空/0/负值=不限制（FR-079，ADR-019）。
   const [cpuLimit, setCpuLimit] = useState('')
   const [memLimitMb, setMemLimitMb] = useState('')
+  const [diskLimitMb, setDiskLimitMb] = useState('')
   const [startCommand, setStartCommand] = useState('')
   const [workDir, setWorkDir] = useState('')
   const [autoRestart, setAutoRestart] = useState(true)
@@ -91,16 +92,17 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
   const needWorkDir = type !== 'minecraft_java'
   const isDocker = processType === 'docker'
   const errors = validateFields(
-    { name, nodeId, startCommand, workDir, image, cpuLimit, memLimitMb },
+    { name, nodeId, startCommand, workDir, image, cpuLimit, memLimitMb, diskLimitMb },
     {
       name: [validateRequired],
       nodeId: [validateRequired],
       startCommand: [validateRequired],
       workDir: needWorkDir ? [validateRequired, validateAbsPath] : [],
       image: isDocker ? [validateRequired] : [],
-      // 资源限额选填，仅 docker 模式校验；空=不限制（FR-079）。
-      cpuLimit: isDocker ? [validateNonNegativeNumber] : [],
-      memLimitMb: isDocker ? [validateNonNegativeNumber] : [],
+      // 资源限额选填，仅 docker 模式校验；空/0/负值=不限制（FR-079）。
+      cpuLimit: isDocker ? [validateResourceLimitNumber] : [],
+      memLimitMb: isDocker ? [validateResourceLimitNumber] : [],
+      diskLimitMb: isDocker ? [validateResourceLimitNumber] : [],
     },
   )
 
@@ -125,6 +127,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
     setImage('')
     setCpuLimit('')
     setMemLimitMb('')
+    setDiskLimitMb('')
     setStartCommand('')
     setWorkDir('')
     setAutoRestart(true)
@@ -148,9 +151,10 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
       jdkId: jdkId ? Number(jdkId) : undefined,
       // docker 模式下发镜像（ADR-019）；其它模式不传。
       image: isDocker ? image : undefined,
-      // docker 模式下发资源限额（FR-079）；空=不限制（传 0），非 docker 模式不传。
+      // docker 模式下发资源限额（FR-079）；空传 0，0/负值由后端视为不限制；非 docker 模式不传。
       cpuLimit: isDocker ? (cpuLimit.trim() ? Number(cpuLimit) : 0) : undefined,
       memLimitMb: isDocker ? (memLimitMb.trim() ? Number(memLimitMb) : 0) : undefined,
+      diskLimitMb: isDocker ? (diskLimitMb.trim() ? Number(diskLimitMb) : 0) : undefined,
     })
   }
 
@@ -345,7 +349,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
                   )}
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div>
                     <FieldLabel>{t('instances.cpuLimit')}</FieldLabel>
                     <input
@@ -376,6 +380,22 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
                       <FieldError error={errors.memLimitMb} />
                     ) : (
                       <p className="mt-1 text-xs text-muted-foreground">{t('instances.resourceLimitHint')}</p>
+                    )}
+                  </div>
+                  <div>
+                    <FieldLabel>{t('instances.diskLimit')}</FieldLabel>
+                    <input
+                      value={diskLimitMb}
+                      onChange={(e) => setDiskLimitMb(e.target.value)}
+                      className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
+                      placeholder="10240"
+                      inputMode="numeric"
+                      aria-invalid={!!errors.diskLimitMb}
+                    />
+                    {errors.diskLimitMb ? (
+                      <FieldError error={errors.diskLimitMb} />
+                    ) : (
+                      <p className="mt-1 text-xs text-muted-foreground">{t('instances.diskLimitHint')}</p>
                     )}
                   </div>
                 </div>

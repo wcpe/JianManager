@@ -35,11 +35,19 @@ ServerProbe 治理桥与运营底座增强（4 里程碑程序）源于 2026-06-
 
 #### FR-079: 实例级资源限额（Docker 模式）
 - **优先级**: P1 | **依赖**: FR-078 | **关联 ADR**: ADR-019
-- **描述**: Docker 模式实例的 CPU/内存（/磁盘）上限，UI 设置 + 监控对比
+- **描述**: Docker 模式实例的 CPU / 内存 / 磁盘上限，创建 + 编辑 + Worker 启动注入 + 监控展示形成闭环。
+- **设计约束**:
+  - CPU 上限按「核数」输入（可小数，如 `1.5`），启动容器时换算为 Docker `HostConfig.NanoCPUs`。
+  - 内存上限按 MiB 输入，启动容器时换算为 Docker `HostConfig.Memory`。
+  - 磁盘上限按 MiB 输入；bind mount 工作目录无法用 Docker HostConfig 稳定强制配额，当前版本仅持久化与展示，UI 与文档必须明示「当前版本不强制限制」，禁止伪装已生效。
+  - `0` / 留空 / 缺省 / 负值均表示不限制（服务端归一化为 0）。
 - **验收**:
-  - [ ] 实例模型加资源字段（cpu/mem[/磁盘]）；Docker 启动注入 `--cpus`/`--memory`；UI 设置（FR-072 校验）
-  - [ ] 监控对比 实际占用 vs 上限（FR-060/061 图表，超限标红）；非 Docker 模式提示需 Docker
-  - [ ] 真机：设 1CPU/2G → 容器 cgroup 实际受限（stress 验）
+  - [x] 后端模型、创建、详情、列表、更新完整支持 `cpuLimit` / `memLimitMb` / `diskLimitMb`，并覆盖持久化与 `0`/负值清除限制。
+  - [x] CP 启动下发将三项限额写入 `CreateInstance` gRPC 请求；Worker dockerStrategy 只把 CPU / 内存注入 HostConfig，磁盘不注入虚假限制。
+  - [x] 创建向导、旧创建对话框、实例资源限额编辑器均可填写 / 清除三项限额，并用大白话提示「留空/0 = 不限制」。
+  - [x] 实例列表 / 卡片 / 监控卡合理展示资源限额；Docker 运行指标优先走 Docker stats，内存实际占用可与上限对比，非 Docker 模式提示需 Docker。
+  - [x] 单测 / DOM 测试覆盖创建、更新、下发、HostConfig 注入、UI payload 与非 Docker 提示。
+  - [x] 真机：设 CPU / 内存上限启动容器后，`docker inspect` / Docker SDK inspect 可见 `NanoCPUs` / `Memory` 与设定一致，Docker stats 能看到内存上限；测试容器停删干净。
 
 #### FR-080: Worker 一键安装 / 傻瓜部署
 - **优先级**: P1 | **依赖**: FR-004 | **关联 ADR**: ADR-020

@@ -42,6 +42,9 @@ describe('InstanceWizardPage Docker 创建向导（FR-078）', () => {
     expect(screen.getByDisplayValue('itzg/minecraft-server:latest')).toBeInTheDocument()
     expect(screen.getByDisplayValue('EULA')).toBeInTheDocument()
     expect(screen.getByDisplayValue('TRUE')).toBeInTheDocument()
+    await user.type(screen.getByPlaceholderText('1.5'), '1.5')
+    await user.type(screen.getByPlaceholderText('2048'), '2048')
+    await user.type(screen.getByPlaceholderText('10240'), '10240')
 
     await user.click(screen.getByRole('button', { name: '下一步' }))
     await user.click(screen.getByRole('button', { name: '创建' }))
@@ -54,6 +57,9 @@ describe('InstanceWizardPage Docker 创建向导（FR-078）', () => {
       processType: 'docker',
       startCommand: '',
       image: 'itzg/minecraft-server:latest',
+      cpuLimit: 1.5,
+      memLimitMb: 2048,
+      diskLimitMb: 10240,
       envVars: { EULA: 'TRUE' },
     })
   })

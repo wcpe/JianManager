@@ -141,6 +141,52 @@ func TestInstance_Update_Success(t *testing.T) {
 	assert.Equal(t, "更新后名称", resp["name"])
 }
 
+func TestInstance_DockerResourceLimitsCreateUpdateAndValidate(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	createTestNode(t, db)
+
+	createBody := map[string]interface{}{
+		"nodeId":      1,
+		"name":        "docker-limited",
+		"type":        "minecraft_java",
+		"processType": "docker",
+		"image":       "itzg/minecraft-server:latest",
+		"cpuLimit":    1.5,
+		"memLimitMb":  2048,
+		"diskLimitMb": 10240,
+	}
+	w := makeRequest(r, "POST", "/api/v1/instances", createBody, token)
+	require.Equal(t, http.StatusCreated, w.Code)
+	created := parseJSON(t, w)
+	assert.Equal(t, 1.5, created["cpuLimit"])
+	assert.Equal(t, float64(2048), created["memLimitMb"])
+	assert.Equal(t, float64(10240), created["diskLimitMb"])
+	id := uint(created["id"].(float64))
+
+	updateBody := map[string]interface{}{"cpuLimit": 0, "memLimitMb": 0, "diskLimitMb": 0}
+	w = makeRequest(r, "PUT", "/api/v1/instances/"+itoa(id), updateBody, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	updated := parseJSON(t, w)
+	assert.Equal(t, float64(0), updated["cpuLimit"])
+	assert.Equal(t, float64(0), updated["memLimitMb"])
+	assert.Equal(t, float64(0), updated["diskLimitMb"])
+
+	negativeBody := map[string]interface{}{
+		"nodeId":      1,
+		"name":        "docker-negative",
+		"type":        "minecraft_java",
+		"processType": "docker",
+		"image":       "itzg/minecraft-server:latest",
+		"cpuLimit":    -1,
+	}
+	w = makeRequest(r, "POST", "/api/v1/instances", negativeBody, token)
+	require.Equal(t, http.StatusCreated, w.Code)
+	negative := parseJSON(t, w)
+	assert.Equal(t, float64(0), negative["cpuLimit"])
+}
+
 func TestInstance_Delete_Success(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

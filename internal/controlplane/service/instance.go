@@ -83,6 +83,20 @@ func (s *InstanceService) gracefulStopTimeoutSeconds() int32 {
 	return int32(d.Seconds())
 }
 
+func normalizeCPULimit(v float64) float64 {
+	if v <= 0 {
+		return 0
+	}
+	return v
+}
+
+func normalizeResourceLimitMB(v int64) int64 {
+	if v <= 0 {
+		return 0
+	}
+	return v
+}
+
 // CreateInstanceRequest 创建实例请求。
 type CreateInstanceRequest struct {
 	NodeID           uint               `json:"nodeId" binding:"required"`
@@ -143,6 +157,10 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 	if strings.TrimSpace(req.StartCommand) == "" && req.ProcessType != model.ProcessTypeDocker {
 		return nil, ErrStartCommandRequired
 	}
+
+	req.CPULimit = normalizeCPULimit(req.CPULimit)
+	req.MemLimitMB = normalizeResourceLimitMB(req.MemLimitMB)
+	req.DiskLimitMB = normalizeResourceLimitMB(req.DiskLimitMB)
 
 	// 工作目录系统分配（ADR-007/ADR-010）：MC 实例始终系统分配（忽略用户手填）；
 	// 其它类型（generic）调用方未传则同样系统分配（FR-234 创建向导隐藏工作目录、统一自动生成），
@@ -601,13 +619,13 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 	}
 	// docker 资源限额（FR-079）：传指针即写入（含 0=清除限制）。变更对下一次启动生效（启动时随 spec 定型）。
 	if f.CPULimit != nil {
-		updates["cpu_limit"] = *f.CPULimit
+		updates["cpu_limit"] = normalizeCPULimit(*f.CPULimit)
 	}
 	if f.MemLimitMB != nil {
-		updates["mem_limit_mb"] = *f.MemLimitMB
+		updates["mem_limit_mb"] = normalizeResourceLimitMB(*f.MemLimitMB)
 	}
 	if f.DiskLimitMB != nil {
-		updates["disk_limit_mb"] = *f.DiskLimitMB
+		updates["disk_limit_mb"] = normalizeResourceLimitMB(*f.DiskLimitMB)
 	}
 
 	if len(updates) > 0 {

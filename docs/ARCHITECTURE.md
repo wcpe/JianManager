@@ -330,6 +330,7 @@ Flags:   bit0=compressed(zlib)
 - **管理方式**：`dockerStrategy`（`process/docker.go`）作为 `IProcessCommand` 第三种实现，Worker 经本机 Docker Engine API（`github.com/docker/docker/client`，`FromEnv` 自动发现守护进程）管理容器，不叠 daemon wrapper（隔离由 Docker 守护进程提供）。CP 不直连 Docker，所有容器/镜像操作经 gRPC 委托 Worker。
 - **容器模型**：一个实例 ⇄ 一个容器，命名 `jianmanager-<uuid>`；`tty=false` + 三路 attach（stdin/stdout/stderr）。`Start` 前若本地缺镜像则 `ImagePull` 拉取，随后 `ContainerCreate`→`ContainerAttach`→`ContainerStart`。
 - **工作目录/端口**：系统分配的实例工作目录（ADR-010 数据根的宿主绝对路径）bind-mount 到容器 `/data`，使文件/备份/配置走同一套宿主路径；端口经 `PortBindings` 把容器内端口（MC 约定 25565）发布到宿主端口（FR-032 端口池分配），不引入新网络面。
+- **资源限额（FR-079）**：CP 在实例模型/API 中持久化 `cpuLimit`（核数）、`memLimitMb`、`diskLimitMb`，创建/编辑时 `0`、负值或留空均归一化为不限制；启动下发经 `CreateInstance` proto 传给 Worker。Worker `dockerStrategy` 只把 CPU / 内存写进真实 Docker `HostConfig.NanoCPUs` / `HostConfig.Memory`，Docker stats 优先按容器 cgroup 口径回报 CPU% / 内存实际值 / 内存上限。磁盘限额在当前 bind-mount 工作目录模型下无法可靠强制，故仅持久化与前端展示，不向 `HostConfig.StorageOpt` 假装注入。
 - **stdio**：容器多路复用输出经 `stdcopy.StdCopy` 解复用为 stdout/stderr 路由到 `onOutput`（→ WS 终端 + 日志采集 FR-049）；终端输入与优雅停止命令经 attach 连接写入容器 stdin。
 - **状态机/重启**：容器退出由 `ContainerWait` 异步监听，非正常退出回写 CRASHED 并触发指数退避重启（与 direct 策略一致，统一在 Manager 层记账）。`Stop` 先经 stdin 下发停止命令再 `ContainerStop`（宽限期后 SIGKILL）；`Kill` 用 `ContainerKill`+`ContainerRemove` 确保端口/卷彻底释放。
 - **JDK**：docker 模式不注入宿主 JDK（JAVA_HOME/PATH），JDK 随镜像提供（ADR-008 的 JDK 注入对 docker 不适用）。
@@ -438,7 +439,7 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | group_members | group_id, user_id, role(0=member/1=admin) |
 | group_quotas | group_id(UNIQUE), max_instances, max_bots, max_storage_mb |
 | nodes | uuid(UNIQUE，身份锚定键，ADR-039), name(活跃唯一：部分唯一索引 `uniq_nodes_name_active` WHERE deleted_at IS NULL，软删可释放名), host, grpc_port, ws_port, secret, status(0/1/2), maintenance(bool, cordon 维护模式，与在线/离线正交), os, arch, cpu_cores, memory_mb, disk_total_mb, load_avg1(V2, 系统负载, FR-062), proxy_mode(inherit/custom, 出站代理模式, 默认 inherit, FR-185/ADR-043), proxy_url(节点自定义代理, 仅 custom, 含凭据/API 脱敏), proxy_no_proxy(节点自定义免代理列表, 仅 custom), last_heartbeat, deleted_at |
-| instances | uuid, node_id(FK), name, type, role(proxy/backend/universal, V2), process_type, status, start_command, work_dir(系统分配), env_vars(JSON), auto_start, auto_restart, jdk_id(FK, V2), launch_spec(JSON: jvm_args/core_jar/args/omit_nogui, V2), image(docker 模式镜像引用, FR-078), container_id(docker 模式最近容器 ID), forwarding_secret(V2, Velocity 转发), proxy_online_mode(V2, 代理正版校验), server_port/query_port, probe_port(V2, ServerProbe /metrics 端口, 29940 段), mc_*, tags(JSON) |
+| instances | uuid, node_id(FK), name, type, role(proxy/backend/universal, V2), process_type, status, start_command, work_dir(系统分配), env_vars(JSON), auto_start, auto_restart, jdk_id(FK, V2), launch_spec(JSON: jvm_args/core_jar/args/omit_nogui, V2), image(docker 模式镜像引用, FR-078), container_id(docker 模式最近容器 ID), cpu_limit/mem_limit_mb/disk_limit_mb(docker 资源限额，0=不限制，磁盘仅展示), forwarding_secret(V2, Velocity 转发), proxy_online_mode(V2, 代理正版校验), server_port/query_port, probe_port(V2, ServerProbe /metrics 端口, 29940 段), mc_*, tags(JSON) |
 | group_instances | group_id, instance_id(UNIQUE) |
 | instance_group_nodes (V2, FR-165) | uuid, name, parent_id(自引用 FK, NULL=根), sort, deleted_at（实例组织分组树节点，邻接表表达多级嵌套；正交于用户组/网络群组，仅组织归类，ADR-033）；INDEX(parent_id) |
 | instance_group_members (V2, FR-165) | group_id(FK instance_group_nodes), instance_id(FK)；UNIQUE(group_id, instance_id)（实例-组织分组 M:N，一实例可属多组；删组只解绑、不删实例） |
@@ -715,7 +716,7 @@ database:
 
 > 工作目录与端口由系统分配（不再由用户输入，见 §13.2）；MC 子服用结构化启动（绑定 JDK + 内存 + JVM 参数 + core jar），不再手填启动命令；代理/通用角色字段相应不同。
 >
-> 对话框形态（FR-189）：套 `scrollableDialogContentClass` + `ScrollableDialogBody` 自适应壳（头/脚固定、正文超高内部滚动），宽 `sm:max-w-2xl`；字段按「基本 / 启动 / 高级」分区 + 双列网格缩短高度；**Docker 资源限额相关字段（镜像 / CPU / 内存）仅启动方式=docker 时出现**，非 docker 不占位。「添加节点」对话框同套自适应壳，结果视图用「自动安装 / 手动连接」两 Tab（手动连接=已部署 Worker 凭 CP 地址 + 一次性 token 直接启动注册，复用同一签发结果），复制点统一走 `copyToClipboard`（兼容 HTTP 非安全上下文）。
+> 对话框形态（FR-189）：套 `scrollableDialogContentClass` + `ScrollableDialogBody` 自适应壳（头/脚固定、正文超高内部滚动），宽 `sm:max-w-2xl`；字段按「基本 / 启动 / 高级」分区 + 双列网格缩短高度；**Docker 资源限额相关字段（镜像 / CPU / 内存 / 磁盘）仅启动方式=docker 时出现**，非 docker 不占位，并提示「留空/0 = 不限制」（磁盘仅记录展示）。「添加节点」对话框同套自适应壳，结果视图用「自动安装 / 手动连接」两 Tab（手动连接=已部署 Worker 凭 CP 地址 + 一次性 token 直接启动注册，复用同一签发结果），复制点统一走 `copyToClipboard`（兼容 HTTP 非安全上下文）。
 ```
 
 #### Bot 管理 `/bots`（全局总览，FR-040 / ADR-009：聚合优先、永不全量铺开）

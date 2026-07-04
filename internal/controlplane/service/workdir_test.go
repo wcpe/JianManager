@@ -178,3 +178,72 @@ func TestCreate_DockerAllowsEmptyStartCommand(t *testing.T) {
 	})
 	require.ErrorIs(t, err, ErrStartCommandRequired)
 }
+
+func TestCreate_DockerResourceLimitsPersistAndNormalize(t *testing.T) {
+	db := newInstanceTestDB(t)
+	svc := NewInstanceService(db, nil, nil)
+
+	inst, err := svc.Create(CreateInstanceRequest{
+		NodeID:      1,
+		Name:        "docker-limited",
+		Type:        model.InstanceTypeMinecraftJava,
+		ProcessType: model.ProcessTypeDocker,
+		Image:       "itzg/minecraft-server:latest",
+		CPULimit:    1.5,
+		MemLimitMB:  2048,
+		DiskLimitMB: 10240,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1.5, inst.CPULimit)
+	require.Equal(t, int64(2048), inst.MemLimitMB)
+	require.Equal(t, int64(10240), inst.DiskLimitMB)
+
+	negative, err := svc.Create(CreateInstanceRequest{
+		NodeID:      1,
+		Name:        "docker-negative",
+		Type:        model.InstanceTypeMinecraftJava,
+		ProcessType: model.ProcessTypeDocker,
+		Image:       "itzg/minecraft-server:latest",
+		CPULimit:    -1,
+		MemLimitMB:  -1,
+		DiskLimitMB: -1,
+	})
+	require.NoError(t, err)
+	require.Zero(t, negative.CPULimit)
+	require.Zero(t, negative.MemLimitMB)
+	require.Zero(t, negative.DiskLimitMB)
+}
+
+func TestUpdate_DockerResourceLimitsClearAndNormalize(t *testing.T) {
+	db := newInstanceTestDB(t)
+	svc := NewInstanceService(db, nil, nil)
+	inst, err := svc.Create(CreateInstanceRequest{
+		NodeID:      1,
+		Name:        "docker-update-limits",
+		Type:        model.InstanceTypeMinecraftJava,
+		ProcessType: model.ProcessTypeDocker,
+		Image:       "itzg/minecraft-server:latest",
+		CPULimit:    1,
+		MemLimitMB:  1024,
+		DiskLimitMB: 4096,
+	})
+	require.NoError(t, err)
+
+	zeroCPU := 0.0
+	zeroMem := int64(0)
+	zeroDisk := int64(0)
+	updated, err := svc.Update(inst.ID, UpdateInstanceFields{
+		CPULimit:    &zeroCPU,
+		MemLimitMB:  &zeroMem,
+		DiskLimitMB: &zeroDisk,
+	})
+	require.NoError(t, err)
+	require.Zero(t, updated.CPULimit)
+	require.Zero(t, updated.MemLimitMB)
+	require.Zero(t, updated.DiskLimitMB)
+
+	negativeMem := int64(-1)
+	updated, err = svc.Update(inst.ID, UpdateInstanceFields{MemLimitMB: &negativeMem})
+	require.NoError(t, err)
+	require.Zero(t, updated.MemLimitMB)
+}

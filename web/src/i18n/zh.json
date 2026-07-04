@@ -1025,8 +1025,8 @@
     "diskLimit": "磁盘上限（MiB）",
     "resourceLimit": "资源限额",
     "resourceLimitTitle": "{{name}} 的资源限额",
-    "resourceLimitHint": "留空表示不限制；下次启动时注入容器 cgroup",
-    "diskLimitHint": "留空表示不限制；当前版本仅记录展示，不强制限制",
+    "resourceLimitHint": "留空/0 表示不限制；CPU/内存下次启动注入容器 cgroup",
+    "diskLimitHint": "留空/0 表示不限制；当前版本仅记录展示，不强制限制",
     "resourceLimitDockerOnly": "资源限额需 Docker 模式（direct/daemon 不支持 cgroup 限制）",
     "resourceLimitSaved": "资源限额已保存，下次启动生效",
     "nodePort": "节点:端口",
@@ -2575,7 +2575,8 @@
     "urlScheme": "仅支持 http/https 地址",
     "envRef": "须为环境变量引用形式 ${VAR_NAME}",
     "host": "须为合法主机名或 IP",
-    "nonNegativeNumber": "须为非负数（0 表示不限制）"
+    "nonNegativeNumber": "须为非负数（0 表示不限制）",
+    "resourceLimitNumber": "须填写数字；留空/0/负值表示不限制"
   },
   "combobox": {
     "searchPlaceholder": "搜索或输入…",
