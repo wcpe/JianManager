@@ -526,7 +526,11 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 
 ### 8.2 全局布局（运维控制台 Shell）
 
-登录后默认进入「运维控制台」Shell（`DashboardPage`，见 ADR-009 / FR-037 / FR-061）：左侧为常驻**高密度多级侧栏**（分组可展开），右侧为工作区。下图为布局示意（左栏现已整合为分组多级侧栏）：
+> 当前方向（FR-267~272，见 ADR-055/056/057）：控制台外壳从功能域导航进一步收敛为 **平台 → 节点 → 服务器** 资源主轴。页眉承载节点作用域、面包屑、搜索、集群状态、任务、通知与账户；`JianManager` 品牌固定在侧栏顶部，主题入口固定在侧栏底部。左侧导航只放跨服务器或平台级入口（平台首页 / 服务器 / 群组网络 / 观测 / 平台管理）。页眉节点作用域会联动全部服务器列表、命令面板实例结果与创建实例默认节点。单服能力默认归入 `/instances/:id` 的服务器统一控制台；FR-166 可组合画布、FR-167 超级工作台、FR-168 导播台作为高级拼屏/监看能力保留，不作为单服默认入口。
+
+小屏下桌面侧栏隐藏后由 `MobileConsoleNav` 接管主导航：底部固定显示高频分组，点击分组在底部上方展开同一套 IA 的入口列表，避免手机端失去导航能力。群组网络入口中 `/networks` 使用精确匹配，`/networks/topology` 不再同时点亮「分组管理」。桌面侧栏折叠/展开使用受控宽度动画，抽屉关键帧保持在边界内并以静止态结束，避免越过停止线后回弹。
+
+登录后默认进入「运维控制台」Shell（`DashboardPage`，见 ADR-009 / FR-037 / FR-061）：左侧为常驻**资源主轴高密度侧栏**（分组可展开），右侧为工作区。下图为早期布局示意，当前实现已按 FR-267~272 收敛到平台 → 节点 → 服务器主轴：
 
 ```
 ┌────────────────┬─────────────────────────────────────────┐
@@ -538,44 +542,44 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 │ │  [全部节点▼]│ │   · 其余导航 → 按路由渲染对应页面          │
 │ │  ● Survival│ │   · 未开终端 → 空状态                     │
 │ │ ▾ 观测      │ │                                         │
-│ │ ▾ 运营      │ │   （侧栏可折叠为仅图标轨 w-14）           │
+│ │ ▾ 运营      │ │   （侧栏可折叠为 3.5rem 仅图标轨）        │
 │ │ ▾ 系统      │ │                                         │
 │ │  ·平台与维护│ │                                         │
 │ │  ·账户与审计│ │                                         │
 │ ├────────────┤ │                                         │
-│ │ ●● ☀  主题  │ │  ← 全局主题切换（靛蓝/青绿 + 明暗，FR-164）│
+│ │ ●● ☀  主题  │ │  ← 全局主题切换（Jian绿/青绿 + 明暗，FR-164）│
 │ │ vX.Y · 许可 │ │                                         │
 │ └────────────┘ │                                         │
 └────────────────┴─────────────────────────────────────────┘
 ```
 
-- **左栏（常驻）= 五域多级侧栏（FR-131 / design §7，`ConsoleSidebar`）**：从原 11 个粒度不一的一级精简为 **5 个按运维心智分域的一级**，分组可展开、激活态主色高亮，高频域在上、低频「系统」沉底。
-  - 五域：**总览**（单链接）/ **集群** /（组）**观测** /（组）**运营** /（组）**系统**（内分「平台与维护」「账户与审计」两小节）。
-  - **集群**组展开 = 节点 + 全部实例 + 群组 + 节点切换器（`全部节点` + 各节点，`GET /nodes`）+ 常驻实例树（`GET /instances?nodeId=`；每项状态点：RUNNING 绿 / STARTING·STOPPING 琥珀 / CRASHED 红 / STOPPED 空心 + bot 聚合徽标）。
-  - **观测**组（FR-215：原「监控」域升级改名）= **监控总览**（`/monitor`，FR-169）+ **客户端分发观测**（`/client-dist-monitor`，FR-265：同页四 Tab——统计/监控/日志只看 `client_dist_events` 请求事件与请求聚合，客户端 Tab 独立看 `client_runtime_states` 运行态心跳 + `client_telemetry` 更新结果；消费 `/client-dist/stats`、`/client-dist/realtime`、`/client-dist/events/search|:id`、`/client-dist/clients`，保留频道筛选器与平台管理员降级；文案不承诺“在线客户端”；用平级路径非 `/monitor/*` 嵌套避免「监控总览」NavLink 前缀匹配误高亮）+ **日志**（`/logs`）+ **统计**（`/statistics`，FR-220：**平台级聚合统计**——节点/实例[含 CRASHED]/玩家/客户端分发多维 KPI + 构成分布，全复用既有端点 `metrics/overview`+`nodes`+`instances`+`players`+`client-dist/observability` 前端聚合、零后端改动；分发区块仅平台管理员可见、非管理员降级；与 `/` 旗舰仪表盘 OverviewPage 互补——本页偏整体规模与构成，非此刻资源水位）；**观测域不再有独立告警项**（FR-216 收口：告警已随站内信并入「系统/账户与审计」的统一**通知中心**，FR-215 的告警过渡留位已移除）。**运营**组 = 玩家 + Bot + 客户端分发（`/client-channels`，FR-187 由「系统·平台与维护」迁入，路由不变）+ 模板 + 备份 + 备份存储 + 定时任务；**系统**组 =「平台与维护」（运行时与制品 + 平台存储 + **任务中心**（`/tasks`，FR-215 由观测/原监控域迁入——运维执行流水属维护类）+〔平台管理员〕数据库 + 系统更新）+「账户与审计」（**通知中心**（`/notifications`，FR-216 站内信+告警统一通知流，侧栏入口）+ 用户 + 用户组 + 设置 + 审计 + 开源许可）。告警规则/通道/事件管理页 `/alerts`（`AlertsPage`）仍保留（经通知中心「查看告警详情」或直链可达），仅其侧栏入口归属变化。**观测域同义旧路径**（`/monitoring`→`/monitor`、`/stats`→`/statistics`、`/observability`→`/monitor`）经 SPA 重定向兼容、不 404。
-  - **可折叠图标轨（FR-131）**：可折叠为仅域级图标轨（`w-14`，hover tooltip 显 label，点分组图标即展开侧栏再选子项）；导航区滚动条隐藏但保留滚动（`.scrollbar-none`）。折叠态 / 分组折叠态 / 选中节点持久化 `localStorage`（`stores/console.ts`：`sidebar.collapsed` / `sidebar.collapsedGroups` / `sidebar.selectedNodeId`）。
+- **左栏（常驻）= 资源主轴侧栏（FR-268，`ConsoleSidebar` / `nav-config.ts`）**：一级分组为 **平台首页 / 服务器 / 群组网络 / 观测 / 平台管理**，分组可展开、激活态使用 A+C Jian 绿主色，高频资源入口在上、平台管理入口沉底。
+  - **服务器**组展开 = 全部服务器、节点、超级工作台、导播台。服务器选择不依赖常驻实例树，主要走全部服务器页、节点页、命令面板搜索与 `/instances/:id` 深链。
+  - **群组网络**组展开 = 网络拓扑（`/networks/topology`）与分组管理（`/networks`）。`/networks` 精确匹配，避免拓扑页同时点亮两个入口。
+  - **观测 / 平台管理**承载跨服务器能力：监控总览、日志中心、统计分析、客户端分发监控，以及模板、客户端分发、运行时资产、存储、备份仓库、任务中心、通知中心、用户、用户组、审计、设置、许可、数据库、系统更新等平台级页面。
+  - **可折叠图标轨（FR-131）**：可折叠为 3.5rem 仅域级图标轨（hover tooltip 显 label，点分组图标即展开侧栏再选子项）；导航区滚动条隐藏但保留滚动（`.scrollbar-none`）。折叠态 / 分组折叠态 / 选中节点持久化 `localStorage`（`stores/console.ts`：`sidebar.collapsed` / `sidebar.collapsedGroups` / `sidebar.selectedNodeId`）。
   - **顶部 logo 点击折叠/展开（FR-181，增强 FR-131）**：侧栏顶部 logo（`Boxes` 图标 + `JianManager` 文字）整体为一个 `<button>`，点击复用 `console.toggleSidebar` 收缩/展开；折叠态仅图标仍可点回展开。`aria-label` 描述「将发生的动作」（展开态=收起 / 折叠态=展开，纯函数 `sidebar-logo.ts:logoToggleLabelKey`）。原 `PanelLeftClose`（展开态）与 `PanelLeftOpen`（折叠态导航区顶部）按钮保留为冗余显式控件，三者均调同一 action。
-  - 底部（FR-164/FR-132）：**全局主题切换器** `ThemeSwitcher`——主题色圆点（靛蓝/青绿直选）+ 明暗（lucide 图标 + dropdown 三态直选）；版本号（左下）+ 开源许可入口（右下 → `/licenses`，FR-135）；退出登录已迁至顶栏账户菜单（FR-162）。切语言同步 `<html lang>` 见 `i18n`。
+  - 底部（FR-164/FR-132）：**全局主题切换器** `ThemeSwitcher`——主题色圆点（Jian 绿默认，兼容旧 `indigo` 存储值 / 青绿第二主题）+ 明暗（lucide 图标 + dropdown 三态直选）；版本号（左下）+ 开源许可入口（右下 → `/licenses`，FR-135）；退出登录已迁至顶栏账户菜单（FR-162）。切语言同步 `<html lang>` 见 `i18n`。
 - **顶栏（FR-162，重排 FR-179，`ConsoleHeader`）= 内容区上方全局页眉**（侧栏保持全高，顶栏只占右侧内容列；简约扁平、层次/间距精修）：
-  - **左** = 统一面包屑（FR-134，`PageBreadcrumb` + 纯函数 `lib/breadcrumb.ts`）：按路由渲染「域 › 页面」轨迹（与五域 IA 对齐），父级可点跳转、末级加粗；打开实例工作区时末级补实例名（域 › 全部实例 › <名称>）。面包屑容器 `flex-1 min-w-0` 占据剩余宽度并可截断，把右侧操作区推到右缘（窄屏防翻屏）。
+  - **左** = 节点作用域选择器 + 统一面包屑（FR-134/268，`NodeScopeSelector` + `PageBreadcrumb` + 纯函数 `lib/breadcrumb.ts`）：按资源主轴渲染「平台 › 节点 › 服务器」或页面轨迹，父级可点跳转、末级加粗；打开服务器统一控制台时末级补服务器名。面包屑容器 `flex-1 min-w-0` 占据剩余宽度并可截断，把右侧操作区推到右缘（窄屏防翻屏）。
   - **右（操作区，靠右对齐，FR-179）** = 常驻搜索框 + 集群概览徽标 + **统一通知铃铛**（FR-216）+ 账户菜单。槽位顺序 / 响应式可见性逻辑下沉纯函数 `components/console/header-layout.ts`（`HEADER_RIGHT_SLOTS`/`slotVisibility`/`searchBoxClass`，vitest 覆盖）：
     - **搜索框**（本期占位：UI + `Ctrl/⌘+K` 聚焦，输入暂不联动检索，检索逻辑留后续 FR）由 FR-162 的居中铺中部改为**靠右固定上限宽度**（`w-44 lg:w-56 xl:w-64`）紧贴操作图标，窄屏（<md）隐藏。
     - **集群概览徽标**（在线节点/运行实例/崩溃数，复用 `GET /metrics/overview` + 实例列表本地统计；点击跳转对应筛选：运行/崩溃→`/instances?status=`、在线→`/nodes`）窄屏（<lg）隐藏。
     - **统一通知铃铛**（FR-216，见 ADR-048）：**合并原「站内信收件箱(FR-183)」+「告警铃铛(FR-162)」为单一入口**（`NotificationBell`，原 `inbox`/`alertBell` 两槽并为单 `notifications` 槽）。统一未读计数（`GET /notifications/feed/unread-count` = 本人站内信未读 + 全局告警未读，30s 轮询）+ 下拉只读预览最近混合通知（消息/告警各带来源标识与级别色点，`GET /notifications/feed?pageSize=8`）+「查看全部」跳 `/notifications` 通知中心页。+ **账户菜单**（用户名/角色 + 退出登录）始终显示（窄屏不隐，确保核心能力常驻）。
-- **右 = 工作区（可组合卡片画布，FR-166 / ADR「可组合卡片工作区」取代 ADR-030）**：
-  - 点实例 → 工作区打开该实例的**可拖拽卡片画布**（`components/console/WorkspaceCanvas`，基于 `react-grid-layout`）：**卡片 = 实例 × 功能**，自由摆放 / 调大小 / 流式不重叠；**同时仅一个实例**，点另一个切换。原固定六 Tab 已**取代为画布 + 快捷预设**——卡片类型 = 终端 / 资源（文件+配置合一，承 FR-130）/ 插件 / 监控 / 服务器状态 / 业务·经济·背包（JBIS）/ Bot，逐种复用既有面板组件（卡内容分发 `WorkspaceCardBody`），**画布化后全部既有工作区能力均作为卡片可达，无功能退化**。**监控**卡 = 该实例 FR-060 历史曲线（TPS/MSPT/堆/在线/线程/CPU + 分世界区块）。
+- **右 = 工作区（路由页面 + 服务器统一控制台，FR-166/269）**：
+  - 点实例 → 导航到 `/instances/:id` 并打开**服务器统一控制台**（`InstanceConsolePage`）：固定分区为概览 / 控制台 / 文件配置 / 监控 / 玩家 / 插件 / 备份定时 / 业务 / Bot，顶部状态条提供运行态、节点、端口、在线玩家、TPS/MSPT 与启动 / 停止 / 重启 / 强杀 / 打开终端等操作。FR-166 可组合卡片画布仍保留为超级工作台 / 导播台等高级拼屏能力，不作为单服默认入口。
   - **统一卡壳** `WorkspaceCard`：grip 拖拽手柄（`draggableHandle=".workspace-card-grip"`，仅按住卡头 grip 才移动，卡内终端/编辑器交互不被吞）+ 实例·功能标签 + 全屏（临时最大化单卡）+ 关闭。卡 resize / 全屏切换后派发 `window` resize，触发终端 `fit` 与编辑器 relayout。
   - **惰性挂载**（承 ADR「未挂载卡不建 WS」）：仅渲染当前画布上的卡片，故终端 WS / metrics 轮询只对画布上的卡建立；未加入画布的功能不预渲染。
-  - **预设（个人级 localStorage）**：命名保存画布布局（纯函数 `lib/workspace-preset.ts` 序列化/校验/规整 + `lib/workspace-card.ts` 卡片类型目录，vitest 覆盖）。内置「快捷预设」= **运维台**（默认：大终端 + 状态 + 资源）/ 纯终端 / 资源；用户可「另存为」自定义预设、删除。画布/卡片/预设运行态由 `stores/workspace.ts`（Zustand，按实例 id 记忆，各卡自管 dirty）承载，**不进 URL**（与 `console.ts` 的侧栏/选中态分离）。`/instances/:id` 深链回退页 `InstanceDetailPage` 挂载即 `openInstance` 进同一画布。
+  - **预设（个人级 localStorage）**：命名保存画布布局（纯函数 `lib/workspace-preset.ts` 序列化/校验/规整 + `lib/workspace-card.ts` 卡片类型目录，vitest 覆盖）。内置「快捷预设」= **运维台**（默认：大终端 + 状态 + 资源）/ 纯终端 / 资源；用户可「另存为」自定义预设、删除。画布/卡片/预设运行态由 `stores/workspace.ts`（Zustand，按实例 id 记忆，各卡自管 dirty）承载，**不进 URL**（与 `console.ts` 的侧栏/选中态分离）。`/instances/:id` 由 `InstanceDetailPage` 直接挂载服务器统一控制台；需要拼屏时从超级工作台或导播台进入画布能力。
   - **文件**段 = 共享资源管理器 `components/explorer/ResourceExplorer`（FR-070）：左懒加载目录树（`FileTree`）+ 右目录内容（`FileList` 多选/右键/拖拽源）/ CodeMirror 编辑器（`editor/CodeEditor`，多格式高亮 + Ctrl+S 拦截保存接 FR-051 历史）。交互全集（新建文件夹/重命名/删除/剪切复制粘贴/树内拖拽移动/拖拽上传/单文件流式与多选 zip 批量下载/shift·ctrl·全选多选）抽为纯函数（`selection`/`clipboard`/`paths`/`language`，vitest 覆盖）；删除/回滚走 `DangerConfirm`（FR-059），历史版本经右侧抽屉 `VersionDrawer`。`ResourceExplorer` 接受可选 `config` 能力注入（编辑器插槽 / 左栏插槽 / 配置版本抽屉），不注入即为纯文件资源管理器。**此组件为 FR-071/073/074/075/082/083/084 复用地基**。归档浏览/反编译（FR-075）叠加为右栏互斥面板：`FileList` 双击/右键按 jar/zip→`ArchiveViewer`（内部条目子树 + 点文本条目只读查看 + 点 `.class` 触发反编译）、`.class`→`DecompileViewer`（只读 Java 源码），与文本编辑器三者互斥占用右栏；API client `api/archive.ts`，只读端点不触碰写操作。
   - **共享文件浏览器** `components/file-browser/FileBrowser`（FR-213）：**展示型、数据源经 props 注入、不耦合具体后端**的只读浏览组件——左目录树/列表（`FileBrowserTree`，支持「懒加载分层」与「扁平全量+`tree.ts` 建树」两形态）+ 右内容预览（`FilePreview` 复用 `editor/CodeEditor` 只读多格式高亮；二进制/超大/错误**显式降级**为「不可预览+下载兜底」）。数据/下载/操作全经 `FileBrowserSource`/`FileBrowserAction` 契约注入（组件主体不 import 任何后端 api）；实例工作目录适配器见 `file-browser/sources/instanceSource`（二进制=NUL 字节、超大=1 MiB 阈值判定）。实例「资源卡片」（`console/InstanceResourceCard`）= 「管理」Tab 全功能 `ConfigExplorer`（能力不减）+「浏览」Tab 共享 `FileBrowser`；客户端分发文件预览（FR-214）复用同一组件喂 manifest 数据源（`sources/clientDistSource`，经管理面 sha256 端点读已上传制品文本）。**发布编排页（FR-250）尚未上传时的内容预览另有 `sources/localDraftSource`**——直接读浏览器内 `File` 文本（同一 NUL/1 MiB 降级口径），零网络、无 sha256 依赖。
   - **配置**段 = `components/config-explorer/ConfigExplorer`（FR-071）：**复用 `ResourceExplorer`** 并注入配置能力——打开文件改用 `ConfigFileEditor`（schema 表单/文本双模式 + 跨文件校验 + Ctrl+S 存**配置版本**，FR-031；文本模式复用共享 `CodeEditor` 多格式高亮）；左栏顶部 `FavoritesBar`（收藏书签存 `localStorage`，纯函数 `favorites.ts` + 已发现配置面板 `GET /configs/discover` 递归全部配置，分组纯函数 `discover.ts`）；历史经 `ConfigVersionDrawer`（FR-031 配置版本/diff/回滚）。树/列表本身呈现工作目录全部文件，满足「目录树呈现自动发现的全部配置」。原独立三栏 `ConfigEditor` 已移除。
-  - 其余路由在工作区按路由渲染。**总览页（`OverviewPage`）** = 环形仪表盘 + 跨节点聚合历史曲线（FR-060：总 CPU/内存/在线玩家）+ 密集实例表；**节点页（`NodesPage`，FR-177 主从双栏重做，取代原卡片网格/列表 + 手搓 `fixed inset-0` 模态）** = 左**可收缩节点列表**（窄图标轨 ⇄ 展开，收缩态 `localStorage` 持久；顶集群汇总头复用 `summarizeNodes` + 搜索 + `AddNodeDialog`；行 = 状态点呼吸灯/名/host/mini 水位/实例数，选中高亮、离线置灰）+ 右**选中节点实时详情**（身份块 + 操作 kebab[维护/排空/下线，走 `DangerConfirm`] + `ResourceGauge` CPU/内存/磁盘/负载 + **分段 Tabs**：概览 `NodeOverviewSection` / 实例 `NodeInstanceCompare` / JDK `NodeJDKPanel` / 制品缓存 `NodeArtifactCachePanel`（FR-178 组件改挂分段，抽屉入口下线）/ 端口 `NodePortsPanel` / 监控历史曲线 / 坏节点修复 `NodeRepairPanel`[BUG-A：诊断 + 重 enroll + 清孤儿，接 `/nodes/repair/*`·`/nodes/:id/reenroll|orphans|purge-orphans`，破坏性走 `DangerConfirm`]）；未选节点右栏空态。列表筛选/选中态/收缩态持久抽纯函数 `lib/node-list.ts`（vitest 覆盖）。分段切换稳定工具条、布局不重组（FR-178 §5 抽屉 UX 约束）。**开源许可页（`LicensesPage`，`/licenses`，FR-135）** = 构建期 `scripts/gen-licenses.mjs` 扫描 web + bot-worker(npm) + Go(go-licenses) 生成 `web/public/licenses.json`（静态资源、非 `/api`），页面提供包名搜索 + 运行时/开发分区计数 + 表格 [包名·版本·许可证·作者] + 行内展开许可证全文。
+  - 其余路由在工作区按路由渲染。**总览页（`OverviewPage`）** = 环形仪表盘 + 跨节点聚合历史曲线（FR-060：总 CPU/内存/在线玩家）+ 虚拟渲染密集实例表（mock 模式 1000+ 服务器时仅渲染可视窗口）；**节点页（`NodesPage`，FR-177 主从双栏重做，取代原卡片网格/列表 + 手搓 `fixed inset-0` 模态）** = 左**可收缩节点列表**（窄图标轨 ⇄ 展开，收缩态 `localStorage` 持久；顶集群汇总头复用 `summarizeNodes` + 搜索 + `AddNodeDialog`；行 = 状态点呼吸灯/名/host/mini 水位/实例数，选中高亮、离线置灰）+ 右**选中节点实时详情**（身份块 + 操作 kebab[维护/排空/下线，走 `DangerConfirm`] + `ResourceGauge` CPU/内存/磁盘/负载 + **分段 Tabs**：概览 `NodeOverviewSection` / 实例 `NodeInstanceCompare` / JDK `NodeJDKPanel` / 制品缓存 `NodeArtifactCachePanel`（FR-178 组件改挂分段，抽屉入口下线）/ 端口 `NodePortsPanel` / 监控历史曲线 / 坏节点修复 `NodeRepairPanel`[BUG-A：诊断 + 重 enroll + 清孤儿，接 `/nodes/repair/*`·`/nodes/:id/reenroll|orphans|purge-orphans`，破坏性走 `DangerConfirm`]）；未选节点右栏空态。列表筛选/选中态/收缩态持久抽纯函数 `lib/node-list.ts`（vitest 覆盖）。分段切换稳定工具条、布局不重组（FR-178 §5 抽屉 UX 约束）。**开源许可页（`LicensesPage`，`/licenses`，FR-135）** = 构建期 `scripts/gen-licenses.mjs` 扫描 web + bot-worker(npm) + Go(go-licenses) 生成 `web/public/licenses.json`（静态资源、非 `/api`），页面提供包名搜索 + 运行时/开发分区计数 + 表格 [包名·版本·许可证·作者] + 行内展开许可证全文。
   - **跨实例超级工作台（FR-167，`/super`，集群域独立入口，复用 ADR-034）**：把可组合画布的作用域从「限当前实例」扩展为**跨实例**——同一画布并存任意实例的卡（如 4 个不同实例终端拼监看墙）。两作用域在 `stores/workspace.ts` 清晰并存：单实例画布 `canvasByInstance[id]`（卡省略 instanceId，按实例 id 记忆）与超级工作台 `superCanvas`（**卡显式携带 `instanceId`**）。页面 `components/console/SuperWorkbenchPage` = 左侧可收起**实例库** `InstanceLibrary`（搜索实例 + 实例展开看 6+ 功能；**HTML5 原生 DnD 拖拽源**：拖实例=加该实例默认卡组、拖功能=加单卡、多选批量拖=一次拼监看墙；放置区 dragover 高亮 + 松手落位）+ 右侧跨实例画布（复用同一 `WorkspaceCard` 卡壳与网格、**惰性挂载**未上画布的卡不建 WS）。卡片所属实例名由 `WorkspaceCard` 按 `instanceId` 自解析（每卡可属不同实例）。**跨实例预设**与单实例共享同一份 `userPresets` localStorage（`lib/workspace-preset` 序列化扩为携 `instanceId`，**向后兼容**无 instanceId 的旧预设）。拖拽载荷的序列化/解析与「载荷→卡片」「跨实例卡去重（同实例同功能去重，多实例同功能并存）」抽为纯函数 `lib/instance-library.ts`（vitest 覆盖）。
   - **工作区导播台（FR-168，`/director`，集群域独立入口 / 超级工作台工具栏「导播台」按钮进，ADR-035）**：在多个**场景**（= FR-167 跨实例预设）间像 OBS **瞬切零延迟** + 缩略图条 + 定时轮播。页面 `components/console/DirectorConsolePage`：① **场景缩略图条** `DirectorSceneStrip`（一排场景，点击 / 数字键 1-9 / ←→ 瞬切；三态指示——active 主色脉动 / 预热绿点 / cold 灰点；右侧并发上限滑杆）；② **舞台**把所有**预热场景的画布同时挂载**（`DirectorCanvas`，只读网格复用 `WorkspaceCard` 卡壳），仅 active 可见。**核心 = ADR-035 预热并发模型**：要瞬切零延迟，目标场景的卡 WS 必须**已保活**；但多场景同时全速渲染会过载浏览器（WS 同域 ~6 连接 + 多 xterm/图表重绘吃满 CPU），故——**场景三态状态机**（纯逻辑 `lib/director.ts`，vitest 覆盖 LRU 驱逐 / 状态转移 / 轮播序列）：激活唯一 + **预热是受并发上限约束的集合**（默认保守 3，可配 1~6），新预热超限按 **LRU 驱逐**最久未激活的预热场景（降 cold，下次切换重连）；**非激活降频 / 暂停渲染**——非激活场景的 `DirectorCanvas` 用 `content-visibility:hidden`（浏览器跳过整棵子树布局/绘制）+ 终端经 `lib/director-render.ts` 的 `DirectorRenderProvider active=false` 让 xterm **暂停 render 但 WS 继续收数据进缓冲**（`Terminal.tsx` 加 paused 模式累积输出），切回一次性 flush。**cold 场景不挂载**（不建 WS）。导播台运行态（场景定义 + 状态机 + 轮播）由 `stores/director.ts`（Zustand，场景/上限/轮播间隔 localStorage 持久）承载，**纯前端**——只管理既有终端/监控 WS 的保活与渲染节流，不新增协议、不逾越进程边界（守架构不变量）。**真机多连接压测为硬验收维度**（单元只覆盖状态机逻辑）。
-- **设计系统（FR-061 + FR-163 视觉底座）**：OKLCH token 驱动；主色为**靛蓝 `#6366F1`**（FR-163，替换原 MC 绿）+ 状态色系（success/warning/danger/info，阈值驱动变色，见 `lib/threshold.ts`）+ 13px 密度档位。**设计底座 token（FR-163，`index.css`）**：柔和弱阴影 `shadow-soft` / 主色晕染抬升 `shadow-lift`（hover）/ iOS 缓动 `ease-ios` / 呼吸灯 `animate-breathing`（运行对象脉动光环）/ 大圆角基线（`--radius` 0.75rem，卡片 `rounded-xl`）。**交互细节（FR-176 增强 FR-163）**：卡片/行/chip 原语（`Panel`/`*WorktableCard`/`SummaryChips`/`ConfigRow`/背包格子）hover **只换阴影不位移**（去 `hover:-translate-y`，留 `hover:shadow-lift`，过渡收为 `transition-[box-shadow]`，避免布局抖动）；输入焦点环收敛为 `ring-2 + ring-ring/40`（原 `ring-[3px] + ring-ring/50`，配 `border-ring` 边线，焦点态不糊邻近文字）；全局**主题化细滚动条**（`::-webkit-scrollbar` + Firefox `scrollbar-width: thin`/`scrollbar-color`，配色取中性主题变量 `--muted-foreground` 经 `color-mix`，随明暗 + 双主题自适配；保留 `.scrollbar-none` opt-out）。**统一卡片原语**：`Panel`（分区/容器，新增可选 `icon`/`tone`/`hoverable`）+ `StatCard`（KPI 卡，「按指标混搭」逻辑下沉纯函数 `lib/stat-card.ts`/`lib/tone.ts`）+ `ResourceGauge`/`MiniBar`/`StatusBadge`（`components/ui`）与 `TimeSeriesChart`/`RangePicker`（`components/charts`）；**弃 shadcn `Card` 松散用法**（`card.tsx` 标 `@deprecated`，eslint `no-restricted-imports` 阻断新引入，见 ADR-032）。**全局双主题（FR-163 底座 + FR-164 落地）**：组件层零硬编码品牌色，品牌色全经 CSS 变量（`--primary`/`--primary-foreground`/`--accent`/`--accent-foreground`/`--ring`/`--brand-shadow`/`--chart-1`）。第二主题**青绿 `#14B8A6`** 仅在 `index.css` 用 `[data-theme="teal"]` 与 `[data-theme="teal"].dark` 覆盖这组品牌变量（结构色/状态色不动），靛蓝为默认（无 `data-theme` 即承 `:root`/`.dark`）。**主题色（`colorTheme: indigo|teal`）与明暗（`light|dark|system`）正交、各自 `localStorage` 持久**；纯逻辑下沉 `lib/theme.ts`（`resolveColorTheme`/`colorThemeAttr`/`resolveMode`/`nextMode` + 套用 helper），`stores/theme.ts` 统管两轴。**主题/明暗初始化提到 app 入口**（`main.tsx` 在 React 挂载前 `initThemeFromStorage()` 套 `<html data-theme>` + `.dark`），登录/初始化页也套主题且首屏无闪。一处切（侧栏底部 `ThemeSwitcher`）全站 CSS 变量实时跟变（按钮/曲线/选中态/进度条随主色）。仍基于 shadcn/ui + Tailwind v4 + OKLCH，不引入新框架。
+- **设计系统（FR-061 + FR-163 视觉底座 + FR-267 A+C 收口 + FR-273 组件包）**：CSS 变量 token 驱动；默认亮色为 **A+C Jian 绿 `#158053`**，辅助钴蓝 `#2563EB`，结构色为背景 `#F5F6F8` / 面板 `#FFFFFF` / 边框 `#D7DCE3`，状态色系继续由 success/warning/danger/info 与阈值 helper（见 `@jianmanager/ui/lib/threshold`）驱动。**设计底座 token（`index.css`）**：`--primary: #158053`、`--brand-forest: #158053`、`--brand-cobalt: #2563EB`、`--radius: 0.375rem`、`--workspace-bg-image` 指向 A+C 背景素材；暗色模式按 B 高密度专业运维方向保留更深表面层级。**交互细节（FR-176/244/267）**：卡片/行/chip 原语 hover 只换阴影不位移；输入焦点环使用 `ring-2 + ring-ring/40`；固定顶层进度条 `TopLoadingBar` 在路由切换时一次性重放，React Query 请求/变更忙碌时进入循环加载态；侧栏、顶栏、页面壳和移动导航面板使用轻量过渡/入场动画；`prefers-reduced-motion` 下保留切页/进度条状态反馈动画，仅关闭平滑滚动；全局主题化细滚动条随明暗 + 双主题自适配。**通用组件包**：`web/packages/ui` 以 `@jianmanager/ui` 源码 alias 暴露 Button / Panel / StatCard / StatusBadge / SummaryChips / Table / Form primitives、`RangePicker` / `TimeSeriesChart` / `MonitorChart` / `MetricsOverviewStrip` 等通用 chart，以及 `utils` / `threshold` / `brush` / `chart-hover` / `monitor-metrics` helper；旧 `web/src/components/ui`、第一版通用 chart 与 helper 入口保留兼容 re-export。**控件博物馆**：`web/wiki` 是独立 Vite 子项目，直接消费 `@jianmanager/ui` 展示 Foundation / Actions / Forms / Data / Overlay / Monitoring 控件矩阵。**弃 shadcn `Card` 松散用法**（`card.tsx` 标 `@deprecated`，eslint `no-restricted-imports` 阻断新引入，见 ADR-032）。**全局双主题（FR-164）**：组件层零硬编码品牌色，品牌色全经 CSS 变量（`--primary`/`--primary-foreground`/`--accent`/`--accent-foreground`/`--ring`/`--brand-shadow`/`--chart-1`）。第二主题青绿 `#14B8A6` 仅在 `index.css` 用 `[data-theme="teal"]` 与 `[data-theme="teal"].dark` 覆盖这组品牌变量（结构色/状态色不动）；Jian 绿为默认（无 `data-theme` 即承 `:root`/`.dark`，兼容旧 `colorTheme: indigo` 存储值）。**主题色（`colorTheme: indigo|teal`）与明暗（`light|dark|system`）正交、各自 `localStorage` 持久**；纯逻辑下沉 `lib/theme.ts`，`stores/theme.ts` 统管两轴。**主题/明暗初始化提到 app 入口**（`main.tsx` 在 React 挂载前 `initThemeFromStorage()` 套 `<html data-theme>` + `.dark`），登录/初始化页也套主题且首屏无闪。一处切（侧栏底部 `ThemeSwitcher`）全站 CSS 变量实时跟变（按钮/曲线/选中态/进度条随主色）。仍基于 shadcn/ui + Tailwind v4 + OKLCH，不引入新框架。
 - 暗色/亮色主题与 i18n（zh/en）正常；选中实例/节点为客户端 UI 状态，不进 URL。
-- **响应式基线（FR-163）**：栅格断点沿用 Tailwind `sm/md/lg`（如总览 KPI `grid-cols-2 sm:grid-cols-3 lg:grid-cols-6`），卡片原语 `Panel`/`StatCard` 流式宽度自适应、不破栅格。
+- **响应式基线（FR-163）**：栅格断点沿用 Tailwind `sm/md/lg/xl`（如总览 KPI `grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6`），页面壳 `jm-page-stack` 全宽流式铺满工作区，页眉与工具条允许换行；卡片原语 `Panel`/`StatCard` 流式宽度自适应、不破栅格。移动端工作区底部预留导航安全区，避免底部导航遮挡主要操作。
 
 ### 8.3 页面结构
 
@@ -663,7 +667,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 ```
 
 **操作按钮**: 启动(▶) / 停止(⏸) / 重启(⟳) / 强制终止(🗑) / 一键复制(⧉，仅 backend，V2)
-**点击实例名** → 在运维控制台工作区打开该实例的**可组合卡片画布**（见 §8.2「右=工作区」，FR-166；画布工具栏含启动/停止/重启/强制终止 + 快捷预设 + 添加卡片 + 另存预设）；`/instances/:id` 作为直链兜底保留，`InstanceDetailPage` 挂载即 `openInstance` 进同一画布。
+**点击实例名** → 导航到 `/instances/:id` 并打开该实例的**服务器统一控制台**（见 §8.2「右=工作区」，FR-269；控制台顶部含启动/停止/重启/强制终止 + 打开终端，固定分区含概览 / 控制台 / 文件配置 / 监控 / 玩家 / 插件 / 备份定时 / 业务 / Bot）；FR-166 可组合卡片画布保留在超级工作台 / 导播台作为高级拼屏能力。
 **组织分组视图**（V2，FR-165）: 筛选栏「组织分组」开关切到「左分组树 + 右列表」专用形态（design §4.4）——左树多级嵌套（新建/嵌套子组/折叠优先/选中，节点挂子树聚合去重计数），右列表复用工作台卡 + 组路径面包屑 + 批量「标记入组」，支持把实例拖入左树某组（HTML5 原生 DnD）。与既有多维筛选 + `groupBy` 维度分组**并列正交**，互不破坏。分组树正交于用户组（RBAC）与网络群组（部署），仅 CP 读写（`/instance-groups`，ADR-033）。
 
 **分页/聚合查询地基**（FR-247）：既有 `GET /instances` 一次性返回全量裸数组，实例上千时响应体过大 + 前端全量渲染卡顿。新增两个只读端点作为规模化查询地基（供 FR-235/240/241 消费）：`GET /instances/search`（分页 + 名称子串搜索 + 多维筛选 + 排序，新信封 `{items,total,page,pageSize}`）与 `GET /instances/aggregate`（按状态/节点/角色维度计数，零补全全枚举键）。复用既有权限作用域与筛选语义；`GET /instances` 保持不变，新端点纯增量。
@@ -802,7 +806,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 - **审计日志 `/audit`**: 操作日志表格，按用户/操作/时间筛选
 - **设置 `/settings`**: 系统设置（仅平台管理员）
 - **系统更新 `/system-update`** (V2，FR-081/FR-175/FR-182/ADR-036 §7/ADR-042): 侧栏「设置」组，仅平台管理员可见。更新源默认读 **GitHub Releases**（`update.github_repo`=`wcpe/JianManager` + `channel`：`stable`=`/releases/latest`、`prerelease`=滚动 `latest` tag，feed 为可选回退）。检查更新（CP 自身 + 各节点版本对比，`source` 标更新源，notes 独立说明块）、CP 自更新、单节点升级、全网逐节点编排（rollout 运行中短轮询进度）；**升级前自动备份当前二进制**，CP 与各节点可一键**回滚 v{backupVersion}**到上一版（无备份禁用，FR-182）。升级/回滚均危险操作走统一 `DangerConfirm`（scope=platform）二次确认
-- **群组服 `/networks`** (V2): 拓扑视图（代理 + 已注册后端，含各子服在线人数）；管理 proxy↔backend 注册（别名/优先级/forced-host）；群组软标签筛选与批量启停；「搭建子服 / 搭建代理」向导入口
+- **群组服 `/networks` + `/networks/topology`** (V2): `/networks/topology` 为拓扑视图（代理 + 已注册后端，含各子服在线人数），`/networks` 为群组管理；管理 proxy↔backend 注册（别名/优先级/forced-host）；群组软标签筛选与批量启停；「搭建子服 / 搭建代理」向导入口
 - **玩家管理 `/players`** (V2): 在线玩家（探针事件实时聚合，标注所在子服，BC 跨服感知，FR-066）/封禁记录/白名单三视图；踢出/封禁二次确认 + 原因输入，解封（经探针插件桥 `SendPluginCommand` 执行，FR-067）；探针未连入降级提示。**「实时事件」标签**经 SSE 驱动在线名册 + 事件流
 - **运行时/JDK** (V2): 在节点详情页 `/nodes/:id` 增「JDK」标签——列出已装 JDK、安装指定版本、登记系统已有 JDK、查看被哪些实例占用
 - **运行时与制品全局页 `/runtime-assets`（FR-082）**：系统域平台维护入口，Control Plane 只读聚合 `nodes`/`node_jdks`/`instances`/`assets` 四类现有表，不新增表、proto 或 Worker RPC。JDK 区按 `instances.jdk_id` 生成 `direct` 引用、按同节点 `java_major_version` 解析到同大版本最大 id JDK 生成 `major` 引用；制品区只展示 FR-045 既有 `ref_count`、类型分组、冷热/归档/外置状态与 `client-file` metadata 路径，不臆造实例级制品连接。端点 `GET /api/v1/runtime-assets/overview` 限平台管理员。
@@ -821,10 +825,10 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 #### 流程 2: 日常运维
 
 ```
-登录 → 仪表盘看到实例状态 → 点击实例（进可组合卡片画布，默认运维台布局）
-→ 在终端卡查看日志 → 发送命令
-→ 如需修改文件 → 在资源卡（文件+配置合一）编辑 → 保存（或「+ 添加卡片」加一张资源卡并排）
-→ 如需重启 → 点击工具栏重启按钮
+登录 → 仪表盘看到实例状态 → 点击实例（进入 `/instances/:id` 服务器统一控制台）
+→ 在「控制台」分区查看日志 → 发送命令
+→ 如需修改文件 → 在「文件配置」分区编辑 → 保存
+→ 如需重启 → 点击控制台顶部重启按钮
 ```
 
 #### 流程 3: Bot 压测
@@ -858,17 +862,20 @@ Bot 页面 → 创建压测会话 → 选择目标实例 + bot 数量
 ### 8.6 目录结构
 
 ```
-web/src/
-  api/          # Axios client + per-module API (TanStack Query hooks)
-  ws/           # WebSocket client, provider, hooks
-  stores/       # Zustand (auth, theme, console[选中实例/节点])
-  pages/        # 页面（懒加载）；DashboardPage = 运维控制台 Shell；V2 新增 NetworksPage(群组服拓扑) + 节点详情 JDK 标签
-  components/   # 共享组件 (console[控制台侧栏/可组合卡片画布 WorkspaceCanvas/卡壳/终端面板], ui/shadcn, terminal, chart)
-                # V2: config-editor(表单/原始/版本) · provision-wizard · jdk-manager · clone-dialog · registration-editor
-                # DangerConfirm: 统一危险操作二次确认（高危需输入名校验 + 角色门禁，FR-059）
-  hooks/        # 自定义 hooks
-  i18n/         # 中文 + 英文（danger 命名空间 = 危险操作文案）
-  lib/          # 工具函数（jwt 解码声明、danger 角色门禁判定）
+web/
+  packages/ui/  # @jianmanager/ui 通用 UI/token/charts/helper 源码包（FR-273）
+  wiki/         # 控件博物馆 Vite 子项目，直接消费 @jianmanager/ui（FR-273）
+  src/
+    api/          # Axios client + per-module API (TanStack Query hooks)
+    ws/           # WebSocket client, provider, hooks
+    stores/       # Zustand (auth, theme, console[选中实例/节点])
+    pages/        # 页面（懒加载）；DashboardPage = 运维控制台 Shell；V2 新增 NetworksPage(群组服拓扑) + 节点详情 JDK 标签
+    components/   # 业务/页面组件；ui 与第一版通用 charts 为 @jianmanager/ui 兼容 re-export
+                  # V2: config-editor(表单/原始/版本) · provision-wizard · jdk-manager · clone-dialog · registration-editor
+                  # DangerConfirm: 统一危险操作二次确认（高危需输入名校验 + 角色门禁，FR-059）
+    hooks/        # 自定义 hooks
+    i18n/         # 中文 + 英文（danger 命名空间 = 危险操作文案）
+    lib/          # 应用工具函数；通用 helper 由 @jianmanager/ui 供给
   router.tsx
   route-permissions.ts
 ```
