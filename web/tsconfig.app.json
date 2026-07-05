@@ -19,7 +19,10 @@
     /* Paths */
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@jianmanager/ui": ["./packages/ui/src/index.ts"],
+      "@jianmanager/ui/styles.css": ["./packages/ui/src/styles.css"],
+      "@jianmanager/ui/*": ["./packages/ui/src/*"]
     },
 
     /* Linting */
@@ -28,6 +31,6 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"],
+  "include": ["src", "packages/ui/src"],
   "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

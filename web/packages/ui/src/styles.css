@@ -1,0 +1,141 @@
+@import "tailwindcss";
+
+@source "./**/*.{ts,tsx}";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-destructive: var(--destructive);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-status-success: var(--status-success);
+  --color-status-success-foreground: var(--status-success-foreground);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-foreground: var(--status-warning-foreground);
+  --color-status-danger: var(--status-danger);
+  --color-status-danger-foreground: var(--status-danger-foreground);
+  --color-status-info: var(--status-info);
+  --color-status-info-foreground: var(--status-info-foreground);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) - 3px);
+  --radius-md: calc(var(--radius) - 1px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --shadow-soft: 0 1px 2px rgb(var(--shadow-color) / 0.05), 0 1px 3px -1px rgb(var(--shadow-color) / 0.05);
+  --shadow-lift: 0 6px 16px -5px rgb(var(--shadow-color) / 0.14), 0 2px 6px -3px rgb(var(--shadow-color) / 0.08);
+  --ease-ios: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root {
+  --background: #f5f6f8;
+  --foreground: #172033;
+  --card: #ffffff;
+  --card-foreground: #172033;
+  --popover: #ffffff;
+  --popover-foreground: #172033;
+  --primary: #158053;
+  --primary-foreground: #ffffff;
+  --secondary: #eef2f6;
+  --secondary-foreground: #263244;
+  --muted: #f8fafc;
+  --muted-foreground: #64748b;
+  --accent: #e7f5ed;
+  --accent-foreground: #11613f;
+  --destructive: #dc2626;
+  --border: #d7dce3;
+  --input: #d7dce3;
+  --ring: #158053;
+  --radius: 0.375rem;
+  --shadow-color: 16 24 40;
+  --status-success: #16a34a;
+  --status-success-foreground: #ffffff;
+  --status-warning: #d97706;
+  --status-warning-foreground: #1f2937;
+  --status-danger: #dc2626;
+  --status-danger-foreground: #ffffff;
+  --status-info: #2563eb;
+  --status-info-foreground: #ffffff;
+  --chart-1: #158053;
+  --chart-2: #2563eb;
+  --chart-3: #d97706;
+  --chart-4: #7c3aed;
+  --chart-5: #dc2626;
+}
+
+.dark {
+  --background: #0f141b;
+  --foreground: #e7edf6;
+  --card: #161c24;
+  --card-foreground: #e7edf6;
+  --popover: #171e27;
+  --popover-foreground: #e7edf6;
+  --primary: #7c86ff;
+  --primary-foreground: #101322;
+  --secondary: #202833;
+  --secondary-foreground: #e7edf6;
+  --muted: #1b222d;
+  --muted-foreground: #9aa6b6;
+  --accent: #252c43;
+  --accent-foreground: #e1e5ff;
+  --destructive: #f87171;
+  --border: #2a3442;
+  --input: #344052;
+  --ring: #7c86ff;
+  --shadow-color: 0 0 0;
+  --status-success: #36d58a;
+  --status-success-foreground: #07150f;
+  --status-warning: #f2b84b;
+  --status-warning-foreground: #1a1205;
+  --status-danger: #f87171;
+  --status-danger-foreground: #1f0808;
+  --status-info: #74a8ff;
+  --status-info-foreground: #08111f;
+  --chart-1: #7c86ff;
+  --chart-2: #36d58a;
+  --chart-3: #f2b84b;
+  --chart-4: #d879ff;
+  --chart-5: #f87171;
+}
+
+* {
+  border-color: var(--border);
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.jm-toolbar-surface {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--card) 90%, transparent);
+  box-shadow: var(--shadow-soft);
+}
+
+.dark .jm-toolbar-surface {
+  background: color-mix(in srgb, var(--card) 88%, transparent);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 72%, transparent);
+}

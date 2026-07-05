@@ -31,11 +31,15 @@ export default defineConfig({
   },
   plugins: [react(), tailwindcss()],
   resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
+    alias: [
+      { find: '@jianmanager/ui/styles.css', replacement: path.resolve(__dirname, './packages/ui/src/styles.css') },
+      { find: /^@jianmanager\/ui\/(.+)$/, replacement: `${path.resolve(__dirname, './packages/ui/src')}/$1` },
+      { find: '@jianmanager/ui', replacement: path.resolve(__dirname, './packages/ui/src/index.ts') },
+      { find: '@', replacement: path.resolve(__dirname, './src') },
+    ],
   },
   server: {
+    host: '127.0.0.1',
     port: 5173,
     proxy: {
       '/api': {

@@ -1,0 +1,7 @@
+@import "@jianmanager/ui/styles.css";
+
+@source "./**/*.{ts,tsx}";
+
+body {
+  min-width: 320px;
+}

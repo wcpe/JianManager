@@ -7,6 +7,8 @@
     "dev": "vite",
     "dev:mock": "vite --mode mock",
     "build": "tsc -b && vite build",
+    "wiki:dev": "npm --prefix wiki run dev",
+    "wiki:build": "npm --prefix wiki run build",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
