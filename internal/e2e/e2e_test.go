@@ -24,8 +24,8 @@ import (
 )
 
 const (
-	cpAddr    = "http://127.0.0.1:18080"
-	cpGRPC    = "18100"
+	cpAddr     = "http://127.0.0.1:18080"
+	cpGRPC     = "18100"
 	workerGRPC = "18101"
 	workerWS   = "18102"
 )
@@ -124,6 +124,20 @@ func parseJSONArray(t *testing.T, data []byte) []interface{} {
 	return arr
 }
 
+// issueEnrollToken 通过已认证 CP API 签发本次 Worker 首次注册所需的一次性 token。
+func issueEnrollToken(t *testing.T, client *e2eClient, nodeName string) string {
+	t.Helper()
+	resp, data, err := client.request("POST", "/api/v1/nodes/enroll-token", map[string]interface{}{
+		"nodeName":   nodeName,
+		"ttlMinutes": 5,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, resp.StatusCode, "签发 enrollment token 失败: %s", string(data))
+	token, _ := parseJSON(t, data)["token"].(string)
+	require.NotEmpty(t, token, "enrollment token 为空")
+	return token
+}
+
 // findProjectRoot 向上查找包含 go.mod 的目录。
 func findProjectRoot(t *testing.T) string {
 	t.Helper()
@@ -154,6 +168,9 @@ func findProjectRoot(t *testing.T) string {
 // 启动 CP → setup → 登录 → 建实例 → 启动 → 验证 RUNNING → 停止 → 验证 STOPPED → 删除。
 func TestE2E_InstanceFullLifecycle(t *testing.T) {
 	projectRoot := findProjectRoot(t)
+	tmpRoot := t.TempDir()
+	dataDir := filepath.Join(tmpRoot, "data")
+	serversDir := filepath.Join(tmpRoot, "servers")
 
 	// 1. 启动 Control Plane
 	// 使用内存数据库避免文件残留
@@ -166,6 +183,7 @@ func TestE2E_InstanceFullLifecycle(t *testing.T) {
 		"JIANMANAGER_DATABASE_DRIVER=sqlite",
 		"JIANMANAGER_DATABASE_DSN="+dbDSN,
 		"JIANMANAGER_GRPC_PORT="+cpGRPC,
+		"JIANMANAGER_DATA_DIR="+dataDir,
 		"JIANMANAGER_LOG_LEVEL=info",
 		"JIANMANAGER_LOG_FORMAT=text",
 	)
@@ -178,24 +196,7 @@ func TestE2E_InstanceFullLifecycle(t *testing.T) {
 	// 等待 CP 就绪
 	require.NoError(t, waitForReady(cpAddr, 30*time.Second), "Control Plane 未就绪")
 
-	// 2. 启动 Worker Node
-	workerCmd := exec.Command("go", "run", "./cmd/worker")
-	workerCmd.Dir = projectRoot
-	workerCmd.Env = append(os.Environ(),
-		"JIANMANAGER_CONTROL_PLANE_GRPC=127.0.0.1:"+cpGRPC,
-		"JIANMANAGER_GRPC_PORT="+workerGRPC,
-		"JIANMANAGER_WS_PORT="+workerWS,
-		"JIANMANAGER_NODE_NAME=e2e-worker",
-		"JIANMANAGER_WORK_DIR="+filepath.Join(projectRoot, "e2e-data", "servers"),
-		"JIANMANAGER_JWT_SECRET=e2e-test-secret",
-	)
-	workerCmd.Stdout = os.Stdout
-	workerCmd.Stderr = os.Stderr
-	workerCmd.WaitDelay = 10 * time.Second
-	require.NoError(t, workerCmd.Start(), "启动 Worker 失败")
-	t.Cleanup(func() { stopProcessTree(workerCmd) })
-
-	// 3. Setup 创建管理员（先于节点查询，因为 /nodes 需要认证）
+	// 2. Setup 创建管理员（先于节点注册，因为 Worker 首次注册需要 enrollment token）
 	client := &e2eClient{
 		baseURL: cpAddr,
 		client:  &http.Client{Timeout: 10 * time.Second},
@@ -211,6 +212,26 @@ func TestE2E_InstanceFullLifecycle(t *testing.T) {
 	tokenResp := parseJSON(t, data)
 	client.token = tokenResp["accessToken"].(string)
 	require.NotEmpty(t, client.token, "登录后 accessToken 为空")
+	enrollToken := issueEnrollToken(t, client, "e2e-worker")
+
+	// 3. 启动 Worker Node
+	workerCmd := exec.Command("go", "run", "./cmd/worker")
+	workerCmd.Dir = projectRoot
+	workerCmd.Env = append(os.Environ(),
+		"JIANMANAGER_CONTROL_PLANE_GRPC=127.0.0.1:"+cpGRPC,
+		"JIANMANAGER_GRPC_PORT="+workerGRPC,
+		"JIANMANAGER_WS_PORT="+workerWS,
+		"JIANMANAGER_NODE_NAME=e2e-worker",
+		"JIANMANAGER_DATA_DIR="+dataDir,
+		"JIANMANAGER_WORK_DIR="+serversDir,
+		"JIANMANAGER_ENROLL_TOKEN="+enrollToken,
+		"JIANMANAGER_JWT_SECRET=e2e-test-secret",
+	)
+	workerCmd.Stdout = os.Stdout
+	workerCmd.Stderr = os.Stderr
+	workerCmd.WaitDelay = 10 * time.Second
+	require.NoError(t, workerCmd.Start(), "启动 Worker 失败")
+	t.Cleanup(func() { stopProcessTree(workerCmd) })
 
 	// 等待 Worker 注册到 CP（轮询节点列表，需要认证）
 	var nodeRegistered bool

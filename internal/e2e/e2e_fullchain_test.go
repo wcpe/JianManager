@@ -41,6 +41,9 @@ func setupCluster(t *testing.T, base int) (*e2eClient, uint, string) {
 	workerWSPort := strconv.Itoa(base + 22)
 	addr := "http://127.0.0.1:" + httpPort
 
+	tmpRoot := t.TempDir()
+	dataDir := filepath.Join(tmpRoot, "data")
+	serversDir := filepath.Join(tmpRoot, "servers")
 	dbDSN := "file:e2e-" + strconv.FormatInt(time.Now().UnixNano(), 10) + "?mode=memory&cache=shared"
 
 	cpCmd := exec.Command("go", "run", "./cmd/control-plane")
@@ -50,6 +53,7 @@ func setupCluster(t *testing.T, base int) (*e2eClient, uint, string) {
 		"JIANMANAGER_DATABASE_DRIVER=sqlite",
 		"JIANMANAGER_DATABASE_DSN="+dbDSN,
 		"JIANMANAGER_GRPC_PORT="+cpGRPCPort,
+		"JIANMANAGER_DATA_DIR="+dataDir,
 		"JIANMANAGER_LOG_LEVEL=info",
 		"JIANMANAGER_LOG_FORMAT=text",
 		// 终端 token 由 CP 签发、Worker WS 校验，二者 JWT secret 必须一致。
@@ -62,6 +66,17 @@ func setupCluster(t *testing.T, base int) (*e2eClient, uint, string) {
 	t.Cleanup(func() { stopProcessTree(cpCmd) })
 	require.NoError(t, waitForReady(addr, 40*time.Second), "Control Plane 未就绪")
 
+	client := &e2eClient{baseURL: addr, client: &http.Client{Timeout: 10 * time.Second}}
+	resp, data, err := client.request("POST", "/api/v1/setup", map[string]string{
+		"username": "admin",
+		"password": "e2e-password-123",
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, resp.StatusCode, "setup 失败: %s", string(data))
+	client.token = parseJSON(t, data)["accessToken"].(string)
+	require.NotEmpty(t, client.token, "accessToken 为空")
+	enrollToken := issueEnrollToken(t, client, "e2e-worker")
+
 	workerCmd := exec.Command("go", "run", "./cmd/worker")
 	workerCmd.Dir = projectRoot
 	workerCmd.Env = append(os.Environ(),
@@ -70,7 +85,9 @@ func setupCluster(t *testing.T, base int) (*e2eClient, uint, string) {
 		"JIANMANAGER_WS_PORT="+workerWSPort,
 		"JIANMANAGER_HOST=127.0.0.1", // 注册为回环，使 CP 终端代理稳定回拨 Worker WS
 		"JIANMANAGER_NODE_NAME=e2e-worker",
-		"JIANMANAGER_WORK_DIR="+filepath.Join(projectRoot, "e2e-data", "servers"),
+		"JIANMANAGER_DATA_DIR="+dataDir,
+		"JIANMANAGER_WORK_DIR="+serversDir,
+		"JIANMANAGER_ENROLL_TOKEN="+enrollToken,
 		"JIANMANAGER_JWT_SECRET=e2e-test-secret",
 		// 替身实例进程不响应优雅 stop，缩短超时使停止快速回退强杀（验收 5 需实例尽快停、Bot 随之断开）。
 		"JIANMANAGER_GRACEFUL_STOP_TIMEOUT=2s",
@@ -82,16 +99,6 @@ func setupCluster(t *testing.T, base int) (*e2eClient, uint, string) {
 	workerCmd.WaitDelay = 10 * time.Second
 	require.NoError(t, workerCmd.Start(), "启动 Worker 失败")
 	t.Cleanup(func() { stopProcessTree(workerCmd) })
-
-	client := &e2eClient{baseURL: addr, client: &http.Client{Timeout: 10 * time.Second}}
-	resp, data, err := client.request("POST", "/api/v1/setup", map[string]string{
-		"username": "admin",
-		"password": "e2e-password-123",
-	})
-	require.NoError(t, err)
-	require.Equal(t, http.StatusCreated, resp.StatusCode, "setup 失败: %s", string(data))
-	client.token = parseJSON(t, data)["accessToken"].(string)
-	require.NotEmpty(t, client.token, "accessToken 为空")
 
 	var nodeID uint
 	for i := 0; i < 30; i++ {
