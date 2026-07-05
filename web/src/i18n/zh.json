@@ -2597,6 +2597,20 @@
       "command": "操作"
     }
   },
+  "serverSelector": {
+    "open": "选择服务器",
+    "title": "服务器选择器",
+    "subtitle": "匹配 {{count}} 台服务器，当前仅渲染可视窗口",
+    "search": "搜索服务器",
+    "group_node": "按节点",
+    "group_status": "按状态",
+    "loaded": "已载入 {{count}} 条",
+    "recent": "最近",
+    "favorites": "收藏",
+    "empty": "没有符合条件的服务器",
+    "favoriteName": "收藏 {{name}}",
+    "unfavoriteName": "取消收藏 {{name}}"
+  },
   "licenses": {
     "entry": "开源许可",
     "title": "开源许可",

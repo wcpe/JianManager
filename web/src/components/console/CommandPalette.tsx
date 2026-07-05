@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { Box, CornerDownLeft, Network, Search, Server, Terminal } from 'lucide-react'
 
-import { useInstances } from '@/api/instances'
+import { useSearchInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
@@ -24,7 +24,7 @@ const KIND_ICON = {
 /**
  * 全局命令面板（FR-241，导航外壳 v2 Part A）：Ctrl/⌘+K 或点页眉搜索框打开，
  * 单输入框检索实例/节点/页面/操作并跳转或执行。键盘 ↑↓ 选择、Enter 执行、Esc 关。
- * 纯检索/匹配逻辑下沉 `command-palette.ts`（vitest 覆盖），本组件负责数据源、动作与交互。
+ * 实例结果消费 FR-247 服务端搜索；纯节点/页面/操作匹配逻辑下沉 `command-palette.ts`。
  */
 export default function CommandPalette() {
   const { t } = useTranslation()
@@ -33,7 +33,6 @@ export default function CommandPalette() {
   const role = useAuthStore((s) => s.role)
   const open = useConsoleStore((s) => s.commandPaletteOpen)
   const setOpen = useConsoleStore((s) => s.setCommandPaletteOpen)
-  const openInstance = useConsoleStore((s) => s.openInstance)
   const closeInstance = useConsoleStore((s) => s.closeInstance)
   const toggleSidebar = useConsoleStore((s) => s.toggleSidebar)
   const selectedNodeId = useConsoleStore((s) => s.selectedNodeId)
@@ -44,8 +43,21 @@ export default function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
-  // 实例/节点列表（页眉与侧栏已拉取，此处复用同 queryKey 缓存，不额外加压）。
-  const { data: instances } = useInstances()
+  const trimmedQuery = query.trim()
+  const instanceSearchParams = useMemo(
+    () => ({
+      q: trimmedQuery || undefined,
+      nodeId: selectedNodeId ?? undefined,
+      page: 1,
+      pageSize: 8,
+      sort: 'name' as const,
+      order: 'asc' as const,
+    }),
+    [trimmedQuery, selectedNodeId],
+  )
+
+  // 实例结果走 FR-247 服务端分页搜索；节点/页面/操作仍本地轻量匹配。
+  const { data: instanceSearch, isFetching: searchingInstances } = useSearchInstances(instanceSearchParams, open)
   const { data: nodes } = useNodes()
 
   // 操作类目标（静态）：执行副作用而非跳转。
@@ -65,13 +77,13 @@ export default function CommandPalette() {
   const entries = useMemo(
     () =>
       searchPalette(query, {
-        instances: (instances ?? []).map((i) => ({ id: i.id, name: i.name, uuid: i.uuid, status: i.status, nodeId: i.nodeId })),
+        instances: (instanceSearch?.items ?? []).map((i) => ({ id: i.id, name: i.name, uuid: i.uuid, status: i.status, nodeId: i.nodeId })),
         nodes: (nodes ?? []).map((n) => ({ id: n.id, name: n.name, host: n.host })),
         pages,
         commands,
         nodeScopeId: selectedNodeId,
       }),
-    [query, instances, nodes, pages, commands, selectedNodeId],
+    [query, instanceSearch, nodes, pages, commands, selectedNodeId],
   )
 
   // selected 在渲染期 clamp，避免结果变化后越界（不在 effect 里 setState）。
@@ -107,8 +119,8 @@ export default function CommandPalette() {
   const run = (entry: PaletteEntry) => {
     const [kind, rest] = [entry.kind, entry.key.slice(entry.kind.length + 1)]
     if (kind === 'instance') {
-      openInstance(Number(rest))
-      navigate('/instances')
+      closeInstance()
+      navigate(`/instances/${rest}`)
     } else if (kind === 'node') {
       setSelectedNodeId(Number(rest))
       navigate(`/nodes?node=${rest}`)
@@ -174,7 +186,9 @@ export default function CommandPalette() {
         </div>
 
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-1.5">
-          {entries.length === 0 ? (
+          {searchingInstances && entries.length === 0 ? (
+            <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('common.loading')}</p>
+          ) : entries.length === 0 ? (
             <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('palette.empty')}</p>
           ) : (
             entries.map((entry, i) => {

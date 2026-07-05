@@ -6,7 +6,7 @@ import { AlertTriangle, Bell, Boxes, Check, ChevronDown, Loader2, LogOut, Rotate
 
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
-import { useInstances } from '@/api/instances'
+import { useInstance, useInstanceAggregate } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useMetricOverview } from '@/api/metrics'
 import { useTasks } from '@/api/tasks'
@@ -105,8 +105,7 @@ function TitleArea() {
   const location = useLocation()
   const routeInstanceId = Number(location.pathname.match(/^\/instances\/(\d+)/)?.[1] ?? 0)
   const activeInstanceId = openInstanceId ?? (routeInstanceId > 0 ? routeInstanceId : null)
-  const { data: instances } = useInstances()
-  const openInst = activeInstanceId != null ? instances?.find((i) => i.id === activeInstanceId) : undefined
+  const { data: openInst } = useInstance(activeInstanceId ?? 0)
   // min-w-0 让面包屑可截断，避免长轨迹把右侧操作区挤出页眉（窄屏防翻屏）。
   return (
     <div className="min-w-0 flex-1">
@@ -202,12 +201,12 @@ function ClusterBadge({
 function ClusterBadges() {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  // 复用总览页同款聚合（queryKey 共享缓存，不额外加压）。崩溃数按实例列表本地统计。
+  // 复用总览页同款聚合；崩溃数走 FR-247 聚合，避免页眉为计数拉全量实例。
   const { data: overview } = useMetricOverview('24h')
-  const { data: instances } = useInstances()
+  const { data: aggregate } = useInstanceAggregate()
   const online = overview?.totals.onlineNodeCount ?? 0
   const running = overview?.totals.runningInstances ?? 0
-  const crashed = instances?.filter((i) => i.status === 'CRASHED').length ?? 0
+  const crashed = aggregate?.byStatus.CRASHED ?? 0
 
   return (
     <div className={cn('items-center', visibilityClass(slotVisibility('clusterBadges')))}>

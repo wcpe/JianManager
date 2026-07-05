@@ -12,6 +12,8 @@ vi.mock('@/api/events', () => ({
 vi.mock('@/api/instances', () => ({
   useInstances: () => ({ data: [{ id: 2, uuid: 'i-lobby', name: 'lobby-proxy', status: 'STOPPED' }] }),
   useInstance: () => ({ data: { id: 2, uuid: 'i-lobby', name: 'lobby-proxy', status: 'STOPPED', nodeId: 1, serverPort: 25577 } }),
+  useSearchInstances: () => ({ data: { items: [], total: 0, page: 1, pageSize: 200 }, isLoading: false, isFetching: false }),
+  useInstanceAggregate: () => ({ data: { total: 0, byStatus: { CRASHED: 0 }, byNode: [], byRole: {} } }),
   useStartInstance: () => ({ mutate: () => undefined }),
   useStopInstance: () => ({ mutate: () => undefined }),
   useRestartInstance: () => ({ mutate: () => undefined }),

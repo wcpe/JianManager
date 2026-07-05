@@ -6,7 +6,8 @@ import { renderWithProviders } from '@/test/render'
 import ConsoleHeader from './ConsoleHeader'
 
 vi.mock('@/api/instances', () => ({
-  useInstances: () => ({ data: [{ id: 1, name: 'survival-1', status: 'RUNNING' }] }),
+  useInstance: () => ({ data: { id: 1, name: 'survival-1', status: 'RUNNING' } }),
+  useInstanceAggregate: () => ({ data: { byStatus: { CRASHED: 0 } } }),
 }))
 vi.mock('@/api/nodes', () => ({
   useNodes: () => ({ data: [{ id: 1, name: 'alpha', status: 1 }] }),

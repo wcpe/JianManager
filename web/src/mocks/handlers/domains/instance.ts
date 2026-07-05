@@ -331,6 +331,74 @@ function memberView(instanceId: number) {
   }
 }
 
+function filteredInstances(url: URL): MockInstance[] {
+  const q = url.searchParams.get('q')?.trim().toLowerCase()
+  const nodeId = url.searchParams.get('nodeId')
+  const status = url.searchParams.get('status')
+  const role = url.searchParams.get('role')
+  const groupId = url.searchParams.get('groupId')
+  const env = url.searchParams.get('env')
+  const tag = url.searchParams.get('tag')
+  const networkId = url.searchParams.get('networkId')
+  const groupIds = groupId ? new Set(subtreeInstanceIds(Number(groupId))) : null
+
+  return instances.list((i) => {
+    if (q && !i.name.toLowerCase().includes(q)) return false
+    if (nodeId && String(i.nodeId) !== nodeId) return false
+    if (status && i.status !== status) return false
+    if (role && i.role !== role) return false
+    if (groupIds && !groupIds.has(i.id)) return false
+    const tags = parseTags(i.tags)
+    if (env && !tags.includes(`env:${env}`)) return false
+    if (tag && !tags.includes(tag)) return false
+    // networkId 在假后端无群组关系映射，留作不收敛（仅鉴权/形参占位）。
+    void networkId
+    return true
+  })
+}
+
+function sortedInstances(rows: MockInstance[], url: URL): MockInstance[] {
+  const sort = url.searchParams.get('sort') ?? 'name'
+  const order = url.searchParams.get('order') === 'desc' ? -1 : 1
+  const value = (row: MockInstance) => {
+    if (sort === 'status') return row.status
+    if (sort === 'createdAt') return row.createdAt
+    if (sort === 'nodeId') return row.nodeId
+    return row.name
+  }
+  return [...rows].sort((a, b) => {
+    const av = value(a)
+    const bv = value(b)
+    if (av < bv) return -1 * order
+    if (av > bv) return 1 * order
+    return a.id - b.id
+  })
+}
+
+function pageParam(url: URL): { page: number; pageSize: number } {
+  const page = Math.max(1, Number(url.searchParams.get('page') ?? 1) || 1)
+  const rawSize = Number(url.searchParams.get('pageSize') ?? 50) || 50
+  const pageSize = Math.min(200, Math.max(1, rawSize))
+  return { page, pageSize }
+}
+
+function aggregateRows(rows: MockInstance[]) {
+  const byStatus: Record<string, number> = { RUNNING: 0, STOPPED: 0, CRASHED: 0, STARTING: 0, STOPPING: 0 }
+  const byRole: Record<string, number> = { backend: 0, proxy: 0, universal: 0 }
+  const byNode = new Map<number, number>()
+  for (const row of rows) {
+    byStatus[row.status] = (byStatus[row.status] ?? 0) + 1
+    byRole[row.role] = (byRole[row.role] ?? 0) + 1
+    byNode.set(row.nodeId, (byNode.get(row.nodeId) ?? 0) + 1)
+  }
+  return {
+    total: rows.length,
+    byStatus,
+    byNode: [...byNode.entries()].sort((a, b) => a[0] - b[0]).map(([nodeId, count]) => ({ nodeId, count })),
+    byRole,
+  }
+}
+
 let groupSeq = 100
 let memberSeq = 100
 
@@ -358,6 +426,22 @@ export const handlers = [
       return true
     })
     return HttpResponse.json(rows)
+  }),
+
+  domainRoute('get', '/instances/search', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const rows = sortedInstances(filteredInstances(url), url)
+    const { page, pageSize } = pageParam(url)
+    const start = (page - 1) * pageSize
+    return HttpResponse.json({ items: rows.slice(start, start + pageSize), total: rows.length, page, pageSize })
+  }),
+
+  domainRoute('get', '/instances/aggregate', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json(aggregateRows(filteredInstances(new URL(info.request.url))))
   }),
 
   domainRoute('post', '/instances', async (info) => {

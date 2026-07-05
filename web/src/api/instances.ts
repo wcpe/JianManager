@@ -53,6 +53,34 @@ export interface InstanceListParams {
   tag?: string
 }
 
+export interface InstanceSearchParams extends InstanceListParams {
+  /** 名称子串搜索（FR-247）。 */
+  q?: string
+  sort?: 'name' | 'status' | 'createdAt' | 'nodeId'
+  order?: 'asc' | 'desc'
+  page?: number
+  pageSize?: number
+}
+
+export interface InstanceSearchResult {
+  items: InstanceInfo[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface InstanceNodeCount {
+  nodeId: number
+  count: number
+}
+
+export interface InstanceAggregate {
+  total: number
+  byStatus: Record<string, number>
+  byNode: InstanceNodeCount[]
+  byRole: Record<string, number>
+}
+
 /** 获取实例列表（有过过渡状态实例时自动轮询）。 */
 export function useInstances(params?: InstanceListParams) {
   return useQuery({
@@ -66,6 +94,35 @@ export function useInstances(params?: InstanceListParams) {
       if (instances?.some(i => i.status === 'STARTING' || i.status === 'STOPPING')) return 2000
       return false
     },
+  })
+}
+
+/** 分页搜索实例（FR-247，面向 1000+ 实例）。 */
+export function useSearchInstances(params?: InstanceSearchParams, enabled = true) {
+  return useQuery({
+    queryKey: ['instances', 'search', params],
+    queryFn: async () => {
+      const { data } = await api.get<InstanceSearchResult>('/instances/search', { params })
+      return data
+    },
+    enabled,
+    refetchInterval: (query) => {
+      const instances = query.state.data?.items
+      if (instances?.some(i => i.status === 'STARTING' || i.status === 'STOPPING')) return 2000
+      return false
+    },
+  })
+}
+
+/** 获取实例维度聚合计数（FR-247）。 */
+export function useInstanceAggregate(params?: InstanceListParams & { q?: string }, enabled = true) {
+  return useQuery({
+    queryKey: ['instances', 'aggregate', params],
+    queryFn: async () => {
+      const { data } = await api.get<InstanceAggregate>('/instances/aggregate', { params })
+      return data
+    },
+    enabled,
   })
 }
 

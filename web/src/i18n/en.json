@@ -2597,6 +2597,20 @@
       "command": "Action"
     }
   },
+  "serverSelector": {
+    "open": "Select server",
+    "title": "Server selector",
+    "subtitle": "{{count}} matching servers; only the visible window is rendered",
+    "search": "Search servers",
+    "group_node": "By node",
+    "group_status": "By status",
+    "loaded": "Loaded {{count}} rows",
+    "recent": "Recent",
+    "favorites": "Favorites",
+    "empty": "No matching servers",
+    "favoriteName": "Favorite {{name}}",
+    "unfavoriteName": "Unfavorite {{name}}"
+  },
   "licenses": {
     "entry": "Licenses",
     "title": "Open-source licenses",

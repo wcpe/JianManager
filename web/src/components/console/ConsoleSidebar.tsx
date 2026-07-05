@@ -25,6 +25,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
+import ServerSelector from './ServerSelector'
 import SidebarNavLink from './SidebarNavLink'
 import ThemeSwitcher from './ThemeSwitcher'
 import { logoToggleLabelKey } from './sidebar-logo'
@@ -135,6 +136,12 @@ function SidebarContent({
           </button>
         )}
       </div>
+
+      {!compact && (
+        <div className="shrink-0 border-b bg-card/35 p-2">
+          <ServerSelector />
+        </div>
+      )}
 
       {/* 滚动条隐藏但保留滚动（FR-131）：scrollbar-none 工具类见 index.css */}
       <nav className={cn('min-h-0 flex-1 space-y-1 overflow-y-auto scrollbar-none p-2', compact && 'px-1.5')}>
