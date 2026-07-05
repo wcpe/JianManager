@@ -139,6 +139,36 @@ func TestChannelNotifier_PostFailureOn5xx(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestChannelNotifier_TelegramRequest(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotBody))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	notifier := NewChannelNotifier()
+	notifier.telegramAPIBase = srv.URL
+	rawCfg, _ := json.Marshal(ChannelConfig{Token: "test-token", ChatID: "chat-1"})
+	err := notifier.Send(model.ChannelTypeTelegram, string(rawCfg), sampleNote())
+	require.NoError(t, err)
+
+	assert.Equal(t, "/bottest-token/sendMessage", gotPath)
+	assert.Equal(t, "chat-1", gotBody["chat_id"])
+	assert.Contains(t, gotBody["text"], "CPU 过高")
+}
+
+func TestBuildEmailMessage(t *testing.T) {
+	msg := string(buildEmailMessage("ops@example.com", []string{"a@example.com", "b@example.com"}, "[CRITICAL] CPU 过高", "cpu > 90"))
+	assert.Contains(t, msg, "From: ops@example.com")
+	assert.Contains(t, msg, "To: a@example.com, b@example.com")
+	assert.Contains(t, msg, "Subject: =?UTF-8?B?")
+	assert.Contains(t, msg, "Content-Type: text/plain; charset=UTF-8")
+	assert.Contains(t, msg, "cpu > 90")
+}
+
 func TestSplitRecipients(t *testing.T) {
 	assert.Equal(t, []string{"a@x.com", "b@x.com"}, splitRecipients("a@x.com, b@x.com"))
 	assert.Equal(t, []string{"a@x.com", "b@x.com"}, splitRecipients("a@x.com; b@x.com"))

@@ -2,10 +2,14 @@ package router
 
 import (
 	"net/http"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
 // TestFile_Rename_MissingParams 缺少 oldPath 或 newPath 返回 400。
@@ -113,6 +117,98 @@ func TestAlert_CreateRule_MissingFields(t *testing.T) {
 	}
 	w := makeRequest(r, "POST", "/api/v1/alerts/rules", body, token)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestAlert_ListEvents_QueryParams(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+
+	rule := &model.AlertRule{Name: "r", TargetType: "node", TriggerType: model.AlertTriggerMetric, Level: model.AlertLevelWarn}
+	require.NoError(t, db.Create(rule).Error)
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	mk := func(triggerType, message string, firedAt time.Time) {
+		require.NoError(t, db.Create(&model.AlertEvent{
+			RuleID: rule.ID, Level: model.AlertLevelWarn, TriggerType: triggerType,
+			Message: message, FiredAt: firedAt, LastFiredAt: &firedAt,
+		}).Error)
+	}
+	mk(model.AlertTriggerLogKeyword, "log 1", base.Add(2*time.Hour))
+	mk(model.AlertTriggerLogKeyword, "log 2", base.Add(3*time.Hour))
+	mk(model.AlertTriggerMetric, "metric", base.Add(4*time.Hour))
+
+	from := url.QueryEscape(base.Add(time.Hour).Format(time.RFC3339))
+	to := url.QueryEscape(base.Add(4 * time.Hour).Format(time.RFC3339))
+	path := "/api/v1/alerts/events?triggerType=log_keyword&from=" + from + "&to=" + to + "&page=2&pageSize=1"
+	w := makeRequest(r, "GET", path, nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	resp := parseJSON(t, w)
+	assert.Equal(t, float64(2), resp["total"])
+	items := resp["items"].([]interface{})
+	require.Len(t, items, 1)
+	item := items[0].(map[string]interface{})
+	assert.Equal(t, "log 1", item["message"])
+	assert.Equal(t, model.AlertTriggerLogKeyword, item["triggerType"])
+}
+
+func TestAlert_AckReadAndReadAllRoutes(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+
+	rule := &model.AlertRule{Name: "r", TargetType: "node", TriggerType: model.AlertTriggerMetric, Level: model.AlertLevelWarn}
+	require.NoError(t, db.Create(rule).Error)
+	now := time.Now()
+	mk := func(message string) *model.AlertEvent {
+		e := &model.AlertEvent{RuleID: rule.ID, Level: model.AlertLevelWarn, TriggerType: model.AlertTriggerMetric, Message: message, FiredAt: now, LastFiredAt: &now}
+		require.NoError(t, db.Create(e).Error)
+		return e
+	}
+	e1 := mk("e1")
+	e2 := mk("e2")
+
+	w := makeRequest(r, "POST", "/api/v1/alerts/events/"+itoa(e1.ID)+"/ack", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	acked := parseJSON(t, w)
+	assert.Equal(t, true, acked["acknowledged"])
+	assert.Equal(t, true, acked["read"])
+
+	w = makeRequest(r, "POST", "/api/v1/alerts/events/"+itoa(e2.ID)+"/read", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	e3 := mk("e3")
+	_ = e3
+	w = makeRequest(r, "POST", "/api/v1/alerts/events/read-all", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	w = makeRequest(r, "GET", "/api/v1/alerts/events/unread-count", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	resp := parseJSON(t, w)
+	assert.Equal(t, float64(0), resp["unread"])
+}
+
+func TestAlert_DeleteChannelInUseConflict(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+
+	w := makeRequest(r, "POST", "/api/v1/alerts/channels", map[string]interface{}{
+		"name": "站内", "type": model.ChannelTypeInApp, "config": map[string]interface{}{},
+	}, token)
+	require.Equal(t, http.StatusCreated, w.Code)
+	ch := parseJSON(t, w)
+	chID := uint(ch["id"].(float64))
+
+	w = makeRequest(r, "POST", "/api/v1/alerts/rules", map[string]interface{}{
+		"name": "CPU", "targetType": "node", "channelIds": []uint{chID},
+		"metric": "cpu", "operator": ">", "threshold": 90,
+	}, token)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	w = makeRequest(r, "DELETE", "/api/v1/alerts/channels/"+itoa(chID), nil, token)
+	require.Equal(t, http.StatusConflict, w.Code)
+	resp := parseJSON(t, w)
+	assert.Equal(t, "CHANNEL_IN_USE", resp["error"])
 }
 
 // TestSchedule_CreateListDelete 定时任务创建→列表→删除完整流程。

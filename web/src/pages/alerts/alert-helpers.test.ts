@@ -14,6 +14,7 @@ import {
   isValidHHMM,
   parseChannelIds,
   summarizeRules,
+  targetTypeForTrigger,
 } from './alert-helpers'
 
 describe('levelBadgeClass', () => {
@@ -58,6 +59,14 @@ describe('trigger field visibility', () => {
   it('event match only for player_event', () => {
     expect(triggerUsesEventMatch('player_event')).toBe(true)
     expect(triggerUsesEventMatch('node_offline')).toBe(false)
+  })
+  it('maps trigger target type', () => {
+    expect(targetTypeForTrigger('metric')).toBe('node')
+    expect(targetTypeForTrigger('node_offline')).toBe('node')
+    expect(targetTypeForTrigger('instance_crash')).toBe('instance')
+    expect(targetTypeForTrigger('log_keyword')).toBe('instance')
+    expect(targetTypeForTrigger('player_event')).toBe('instance')
+    expect(targetTypeForTrigger('backup_failed')).toBe('instance')
   })
 })
 

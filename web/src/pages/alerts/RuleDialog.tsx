@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNodes } from '@/api/nodes'
+import { useInstances } from '@/api/instances'
 import {
   useCreateAlertRule,
   useUpdateAlertRule,
@@ -20,6 +22,7 @@ import {
   triggerUsesMetric,
   triggerUsesKeyword,
   triggerUsesEventMatch,
+  targetTypeForTrigger,
   isValidHHMM,
   parseChannelIds,
 } from './alert-helpers'
@@ -40,13 +43,17 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
   const { t } = useTranslation()
   const create = useCreateAlertRule()
   const update = useUpdateAlertRule()
+  const { data: nodes } = useNodes()
+  const { data: instances } = useInstances()
   const isEdit = !!rule
+  const initialTrigger = rule?.triggerType ?? 'metric'
 
   const [form, setForm] = useState({
     name: rule?.name ?? '',
-    triggerType: rule?.triggerType ?? 'metric',
+    triggerType: initialTrigger,
     level: rule?.level ?? 'warn',
-    targetType: rule?.targetType ?? 'node',
+    targetType: rule?.targetType ?? targetTypeForTrigger(initialTrigger),
+    targetId: (rule?.targetId ?? null) as number | null,
     metric: rule?.metric || 'cpu',
     operator: rule?.operator || '>',
     threshold: rule?.threshold ?? 80,
@@ -61,9 +68,14 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
   })
 
   const nameError = form.name.trim() === '' ? t('validation.required') : ''
+  const keywordError = triggerUsesKeyword(form.triggerType) && form.keyword.trim() === '' ? t('validation.required') : ''
   const silenceError =
     !isValidHHMM(form.silenceStart) || !isValidHHMM(form.silenceEnd) ? t('alerts.silenceFormatError') : ''
-  const hasError = !!(nameError || silenceError)
+  const hasError = !!(nameError || keywordError || silenceError)
+  const targetOptions = form.targetType === 'node'
+    ? (nodes ?? []).map((n) => ({ id: n.id, label: n.name }))
+    : (instances ?? []).map((i) => ({ id: i.id, label: i.name }))
+  const targetAllLabel = form.targetType === 'node' ? t('alerts.allNodes') : t('alerts.allInstances')
 
   const toggleChannel = (id: number) => {
     setForm((f) => ({
@@ -94,6 +106,7 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
         triggerType: form.triggerType,
         level: form.level,
         targetType: form.targetType,
+        targetId: form.targetId,
         metric: form.metric,
         operator: form.operator,
         threshold: form.threshold,
@@ -133,7 +146,7 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
             <Select
               value={form.triggerType}
               disabled={isEdit}
-              onValueChange={(v) => setForm({ ...form, triggerType: v })}
+              onValueChange={(v) => setForm({ ...form, triggerType: v, targetType: targetTypeForTrigger(v), targetId: null })}
             >
               <SelectTrigger className="w-full mt-1">
                 <SelectValue />
@@ -164,19 +177,27 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
           </div>
         </div>
 
-        {!isEdit && (
+        {!isEdit ? (
           <div>
-            <FieldLabel>{t('alerts.targetType')}</FieldLabel>
-            <Select value={form.targetType} onValueChange={(v) => setForm({ ...form, targetType: v })}>
-              <SelectTrigger className="w-full mt-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="node">{t('alerts.node')}</SelectItem>
-                <SelectItem value="instance">{t('alerts.instance')}</SelectItem>
-              </SelectContent>
-            </Select>
+            <FieldLabel>{t('alerts.targetScope')}</FieldLabel>
+            <select
+              className="w-full mt-1 p-2 border rounded text-sm"
+              value={form.targetId ?? ''}
+              onChange={(e) => setForm({ ...form, targetId: e.target.value ? Number(e.target.value) : null })}
+            >
+              <option value="">{targetAllLabel}</option>
+              {targetOptions.map((target) => (
+                <option key={target.id} value={target.id}>{target.label}</option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {t(form.targetType === 'node' ? 'alerts.targetNodeHint' : 'alerts.targetInstanceHint')}
+            </p>
           </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            {t('alerts.targetScope')}: {rule?.targetId ? `#${rule.targetId}` : targetAllLabel}
+          </p>
         )}
 
         {triggerUsesMetric(form.triggerType) && (
@@ -221,13 +242,15 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
 
         {triggerUsesKeyword(form.triggerType) && (
           <div>
-            <FieldLabel>{t('alerts.keyword')}</FieldLabel>
+            <FieldLabel required>{t('alerts.keyword')}</FieldLabel>
             <input
-              className="w-full mt-1 p-2 border rounded"
+              className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive"
               placeholder="OutOfMemoryError"
               value={form.keyword}
+              aria-invalid={!!keywordError}
               onChange={(e) => setForm({ ...form, keyword: e.target.value })}
             />
+            <FieldError error={keywordError} />
           </div>
         )}
 

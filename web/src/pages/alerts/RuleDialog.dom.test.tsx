@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
-import { screen, within, waitFor } from '@testing-library/react'
+import { fireEvent, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@/mocks/inject'
+import api from '@/api/client'
 import type { AlertChannelInfo, AlertRuleInfo } from '@/api/alerts'
 import { RuleDialog } from './RuleDialog'
 
@@ -63,6 +64,15 @@ function panelByTitle(title: string): HTMLElement {
   return heading.parentElement as HTMLElement
 }
 
+async function pickSelectOption(trigger: HTMLElement, optionName: string) {
+  HTMLElement.prototype.hasPointerCapture ??= () => false
+  HTMLElement.prototype.setPointerCapture ??= () => {}
+  HTMLElement.prototype.releasePointerCapture ??= () => {}
+  HTMLElement.prototype.scrollIntoView ??= () => {}
+  await userEvent.click(trigger.closest('button') ?? trigger)
+  await userEvent.click(await screen.findByRole('option', { name: optionName }))
+}
+
 describe('RuleDialog（mock 假后端）', () => {
   it('① 创建模式：渲染表单字段（名称 + 静默窗口 + 通道复选）', async () => {
     loginMockUser()
@@ -103,6 +113,31 @@ describe('RuleDialog（mock 假后端）', () => {
     await userEvent.click(within(panel).getByRole('button', { name: '保存' }))
 
     await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+  })
+
+  it('② 切到日志关键字：目标自动改为实例并提交 targetId/keyword', async () => {
+    loginMockUser()
+    const postSpy = vi.spyOn(api, 'post')
+    const onClose = vi.fn()
+    renderWithProviders(<RuleDialog rule={null} channels={seedChannels} onClose={onClose} />)
+
+    const panel = panelByTitle('创建规则')
+    fireEvent.change(within(panel).getAllByRole('textbox')[0], { target: { value: '日志异常告警' } })
+    await pickSelectOption(within(panel).getByText('指标阈值'), '日志关键字')
+
+    const targetSelect = await within(panel).findByDisplayValue('全部实例')
+    fireEvent.change(targetSelect, { target: { value: '1' } })
+    fireEvent.change(within(panel).getByPlaceholderText('OutOfMemoryError'), { target: { value: 'OutOfMemoryError' } })
+    fireEvent.click(within(panel).getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+    expect(postSpy).toHaveBeenCalledWith('/alerts/rules', expect.objectContaining({
+      triggerType: 'log_keyword',
+      targetType: 'instance',
+      targetId: 1,
+      keyword: 'OutOfMemoryError',
+    }))
+    postSpy.mockRestore()
   })
 
   it('② 编辑提交 → PUT /alerts/rules/:id 成功，onClose 被调', async () => {

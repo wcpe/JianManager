@@ -632,6 +632,10 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 
 **数据来源**: `GET /nodes`, `GET /instances`, `GET /alerts/events`, `GET /audit`
 
+#### 告警管理 `/alerts`
+
+`AlertsPage` 保留规则 / 事件 / 通道三 Tab：规则按 `triggerType` 动态展示指标、关键字、玩家事件匹配与节点 / 实例目标选择；事件列表支持级别、触发类型、规则、通道类型、确认 / 恢复、关键字、时间范围与分页筛选；通道页管理 webhook、邮件、钉钉、企业微信、飞书、Discord、Telegram、站内等通道。告警事件仍按 ADR-048 作为认证用户全局可见的运维事件进入统一通知流，确认或全部已读后同时刷新 `/alerts` 与 `/notifications` 读侧缓存。
+
 #### 节点列表 `/nodes`
 
 ```

@@ -27,13 +27,30 @@ describe('AlertsPage（mock 假后端）', () => {
     // 事件 Tab 按钮名含未读角标数字（如「事件1」），用前缀匹配。
     await userEvent.click(screen.getByRole('button', { name: /^事件/ }))
     expect(await screen.findByText(/CPU 使用率 91\.5%/)).toBeInTheDocument()
-    expect(screen.getByText(/异常退出/)).toBeInTheDocument()
+    expect(screen.getAllByText(/异常退出/).length).toBeGreaterThan(0)
 
     // 级别下拉（首个原生 select）选 critical → 仅崩溃事件保留，CPU 事件消失（跨 endpoint 联动）。
     const selects = screen.getAllByRole('combobox')
     await userEvent.selectOptions(selects[0], 'critical')
     await waitFor(() => expect(screen.queryByText(/CPU 使用率 91\.5%/)).not.toBeInTheDocument())
-    expect(screen.getByText(/异常退出/)).toBeInTheDocument()
+    expect(screen.getAllByText(/异常退出/).length).toBeGreaterThan(0)
+  })
+
+  it('② 事件页：按触发类型筛选 instance_crash', async () => {
+    loginMockUser()
+    renderWithProviders(<AlertsPage />)
+    await screen.findByText('CPU 过载告警')
+
+    await userEvent.click(screen.getByRole('button', { name: /^事件/ }))
+    expect(await screen.findByText(/CPU 使用率 91\.5%/)).toBeInTheDocument()
+
+    const triggerSelect = screen.getAllByRole('combobox').find((el): el is HTMLSelectElement =>
+      el instanceof HTMLSelectElement && Array.from(el.options).some((option) => option.value === 'instance_crash'),
+    ) as HTMLSelectElement
+    await userEvent.selectOptions(triggerSelect, 'instance_crash')
+
+    await waitFor(() => expect(screen.queryByText(/CPU 使用率 91\.5%/)).not.toBeInTheDocument())
+    expect(screen.getAllByText(/异常退出/).length).toBeGreaterThan(0)
   })
 
   it('② 创建规则 → 列表联动出现新规则', async () => {

@@ -34,6 +34,15 @@ function panelByTitle(title: string): HTMLElement {
   return heading.parentElement as HTMLElement
 }
 
+async function pickSelectOption(trigger: HTMLElement, optionName: string) {
+  HTMLElement.prototype.hasPointerCapture ??= () => false
+  HTMLElement.prototype.setPointerCapture ??= () => {}
+  HTMLElement.prototype.releasePointerCapture ??= () => {}
+  HTMLElement.prototype.scrollIntoView ??= () => {}
+  await userEvent.click(trigger.closest('button') ?? trigger)
+  await userEvent.click(await screen.findByRole('option', { name: optionName }))
+}
+
 describe('ChannelDialog（mock 假后端）', () => {
   it('① 创建模式：默认站内类型渲染名称字段 + 站内提示', async () => {
     loginMockUser()
@@ -98,6 +107,32 @@ describe('ChannelDialog（mock 假后端）', () => {
     expect(within(panel).getByText('凭证须以 ${ENV_VAR} 形式引用环境变量')).toBeInTheDocument()
     expect(within(panel).getByRole('button', { name: '保存' })).toBeDisabled()
     expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('② Telegram：token/chatId 必填，token 只能使用 ${ENV} 引用', async () => {
+    loginMockUser()
+    const onClose = vi.fn()
+    renderWithProviders(<ChannelDialog channel={null} onClose={onClose} />)
+
+    const panel = panelByTitle('新建通道')
+    await userEvent.type(within(panel).getAllByRole('textbox')[0], 'Telegram 告警')
+    await pickSelectOption(within(panel).getByText('站内通知'), 'Telegram')
+
+    const save = within(panel).getByRole('button', { name: '保存' })
+    expect(save).toBeDisabled()
+    expect(within(panel).getAllByText('此项必填').length).toBeGreaterThanOrEqual(2)
+
+    const token = within(panel).getByPlaceholderText('${JM_TELEGRAM_TOKEN}')
+    await userEvent.type(token, 'plain-token')
+    expect(within(panel).getByText('凭证须以 ${ENV_VAR} 形式引用环境变量')).toBeInTheDocument()
+    expect(save).toBeDisabled()
+
+    await userEvent.clear(token)
+    await userEvent.type(token, '${{JM_TELEGRAM_TOKEN}')
+    await userEvent.type(within(panel).getAllByRole('textbox')[2], '-100123456')
+    await userEvent.click(save)
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
   })
 
   it('③ 注入 500：提交后对话框不关闭、字段保留（非崩溃，错误态）', async () => {

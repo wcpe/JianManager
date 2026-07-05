@@ -1214,7 +1214,7 @@
 ## 告警
 
 > FR-011 阈值告警在 FR-085 扩展为多通道 + 多触发类型 + 分级聚合静默 + 确认历史。
-> 所有端点限平台/组管理员（沿用 protected 分组鉴权）。
+> 所有端点沿用 `protected` 分组：未登录返回 401，认证用户可访问全局告警事件与 `/alerts`；本 FR 不额外按平台/组管理员收紧。
 
 ### 告警规则
 
@@ -1245,7 +1245,8 @@
 - **字段**:
   - `triggerType`: `metric` | `instance_crash` | `node_offline` | `log_keyword` | `player_event` | `backup_failed`（缺省 `metric`）
   - `level`: `info` | `warn` | `critical`（缺省 `warn`）
-  - `keyword`: 仅 `log_keyword` 用；`eventMatch`: 仅 `player_event` 用（`join`/`quit`/`chat`/`cross_server`，空=任意）
+  - `targetType`/`targetId`: `metric`、`node_offline` 使用 `node`；`instance_crash`、`log_keyword`、`player_event`、`backup_failed` 使用 `instance`；`targetId=null` 表示该目标类型全局匹配
+  - `keyword`: 仅 `log_keyword` 用且必填；`eventMatch`: 仅 `player_event` 用（`join`/`quit`/`chat`/`cross_server`，空=任意）
   - `channelIds`: 路由的通知通道 ID 列表（空=不外发，仍入事件库 + 站内）
   - `dedupWindowSec`: 去抖聚合窗口；`silenceStart`/`silenceEnd`: 静默窗口（`HH:MM`，支持跨午夜）
   - `notifyType`/`notifyTarget`: 兼容 FR-011 单 webhook 直发（未配 `channelIds` 时回退）

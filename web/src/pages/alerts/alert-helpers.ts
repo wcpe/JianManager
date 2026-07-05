@@ -72,6 +72,11 @@ export function triggerUsesEventMatch(triggerType: string): boolean {
   return triggerType === 'player_event'
 }
 
+/** 触发类型对应的目标类型。 */
+export function targetTypeForTrigger(triggerType: string): 'node' | 'instance' {
+  return triggerType === 'metric' || triggerType === 'node_offline' ? 'node' : 'instance'
+}
+
 /** 通道类型需要「URL」配置字段（webhook 及各 IM 群机器人）。 */
 export function channelUsesURL(channelType: string): boolean {
   return (

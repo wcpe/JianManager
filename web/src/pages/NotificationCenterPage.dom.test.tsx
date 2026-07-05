@@ -18,8 +18,8 @@ describe('NotificationCenterPage（mock 假后端，统一通知流）', () => {
     expect(await screen.findByText('JDK 安装完成')).toBeInTheDocument()
     expect(screen.getByText('备份失败')).toBeInTheDocument()
     // 告警（alert）：标题取规则名。
-    expect(screen.getByText('CPU 过载告警')).toBeInTheDocument()
-    expect(screen.getByText('实例崩溃告警')).toBeInTheDocument()
+    expect(screen.getAllByText('CPU 过载告警').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('实例崩溃告警').length).toBeGreaterThan(0)
   })
 
   it('② 按类型筛选「消息」→ 只剩站内信、无告警', async () => {
@@ -37,10 +37,10 @@ describe('NotificationCenterPage（mock 假后端，统一通知流）', () => {
   it('② 按类型筛选「告警」→ 只剩告警、无站内信', async () => {
     loginMockUser()
     renderWithProviders(<NotificationCenterPage />)
-    await screen.findByText('CPU 过载告警')
+    await screen.findAllByText('CPU 过载告警')
 
     await userEvent.click(screen.getByRole('button', { name: '告警' }))
-    expect(await screen.findByText('CPU 过载告警')).toBeInTheDocument()
+    expect((await screen.findAllByText('CPU 过载告警')).length).toBeGreaterThan(0)
     expect(screen.queryByText('JDK 安装完成')).toBeNull()
     expect(screen.queryByText('备份失败')).toBeNull()
   })
@@ -60,10 +60,10 @@ describe('NotificationCenterPage（mock 假后端，统一通知流）', () => {
   it('④ 关键字查询命中告警正文', async () => {
     loginMockUser()
     renderWithProviders(<NotificationCenterPage />)
-    await screen.findByText('CPU 过载告警')
+    await screen.findAllByText('CPU 过载告警')
 
     await userEvent.type(screen.getByPlaceholderText('搜索标题或内容…'), 'CPU')
-    expect(await screen.findByText('CPU 过载告警')).toBeInTheDocument()
+    expect((await screen.findAllByText('CPU 过载告警')).length).toBeGreaterThan(0)
     expect(screen.queryByText('JDK 安装完成')).toBeNull()
   })
 
@@ -90,7 +90,8 @@ describe('NotificationCenterPage（mock 假后端，统一通知流）', () => {
   it('告警条目附「查看告警详情」入口', async () => {
     loginMockUser()
     renderWithProviders(<NotificationCenterPage />)
-    const alertRow = (await screen.findByText('CPU 过载告警')).closest('li') as HTMLElement
+    const [alertTitle] = await screen.findAllByText('CPU 过载告警')
+    const alertRow = alertTitle.closest('li') as HTMLElement
     expect(within(alertRow).getByText('查看告警详情')).toBeInTheDocument()
   })
 

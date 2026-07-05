@@ -211,6 +211,8 @@ export function useAcknowledgeEvent() {
       toast.success('告警已确认')
       qc.invalidateQueries({ queryKey: ['alertEvents'] })
       qc.invalidateQueries({ queryKey: ['alertUnread'] })
+      qc.invalidateQueries({ queryKey: ['notificationFeed'] })
+      qc.invalidateQueries({ queryKey: ['notifications'] })
     },
   })
 }
@@ -222,6 +224,8 @@ export function useMarkAllRead() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['alertEvents'] })
       qc.invalidateQueries({ queryKey: ['alertUnread'] })
+      qc.invalidateQueries({ queryKey: ['notificationFeed'] })
+      qc.invalidateQueries({ queryKey: ['notifications'] })
     },
   })
 }

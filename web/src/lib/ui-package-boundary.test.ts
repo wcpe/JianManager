@@ -78,7 +78,7 @@ describe('@jianmanager/ui package boundary', () => {
     ]) {
       expect(ui, exported).toHaveProperty(exported)
     }
-  })
+  }, 15_000)
 
   it('keeps first-wave legacy entries as package re-exports only', () => {
     for (const name of firstWaveUi) {

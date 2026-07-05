@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -13,9 +13,26 @@ import path from 'node:path'
  */
 
 const srcDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const rootDir = path.resolve(srcDir, '..')
+
+function existingSourcePath(base: string): string {
+  for (const suffix of ['', '.tsx', '.ts']) {
+    const candidate = `${base}${suffix}`
+    if (existsSync(candidate)) return candidate
+  }
+  return base
+}
+
+function resolveSourcePath(rel: string): string {
+  const file = path.join(srcDir, rel)
+  const src = readFileSync(file, 'utf8')
+  const pureReexport = src.match(/^\s*(?:\/\*[\s\S]*?\*\/\s*)?export \* from ['"]@jianmanager\/ui\/(.+)['"]/)
+  if (!pureReexport) return file
+  return existingSourcePath(path.join(rootDir, 'packages/ui/src', pureReexport[1]))
+}
 
 function read(rel: string): string {
-  return readFileSync(path.join(srcDir, rel), 'utf8')
+  return readFileSync(resolveSourcePath(rel), 'utf8')
 }
 
 /** 既参与 hover 抬升、又需在 FR-176 去位移的卡片/行原语。 */

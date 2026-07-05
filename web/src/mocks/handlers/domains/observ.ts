@@ -595,6 +595,16 @@ function stringifyChannelIds(ids?: number[]): string {
   return ids && ids.length ? JSON.stringify(ids) : ''
 }
 
+function parseChannelIds(raw?: string): number[] {
+  if (!raw) return []
+  try {
+    const value = JSON.parse(raw)
+    return Array.isArray(value) ? value.filter((id): id is number => typeof id === 'number') : []
+  } catch {
+    return []
+  }
+}
+
 /** 统一通知条目（对齐 api/notification-feed.ts FeedItem）。 */
 interface FeedItemMock {
   source: 'message' | 'alert'
@@ -784,23 +794,36 @@ export const handlers = [
     return HttpResponse.json({ ok: true })
   }),
 
-  // ===== alerts 事件（FR-149） =====
+  // ===== alerts 事件（FR-149/FR-085） =====
   domainRoute('get', '/alerts/events', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     const url = new URL(info.request.url)
     const level = url.searchParams.get('level')
+    const triggerType = url.searchParams.get('triggerType')
     const resolvedParam = url.searchParams.get('resolved')
     const ackParam = url.searchParams.get('acknowledged')
     const ruleId = url.searchParams.get('ruleId')
     const keyword = url.searchParams.get('keyword')
+    const from = url.searchParams.get('from')
+    const to = url.searchParams.get('to')
+    const page = Math.max(1, Number(url.searchParams.get('page') ?? '1'))
+    const pageSize = Math.max(1, Number(url.searchParams.get('pageSize') ?? '50'))
+
     let items = alertEvents.list()
     if (level) items = items.filter((e) => e.level === level)
+    if (triggerType) items = items.filter((e) => e.triggerType === triggerType)
     if (resolvedParam != null) items = items.filter((e) => e.resolved === (resolvedParam === 'true'))
     if (ackParam != null) items = items.filter((e) => e.acknowledged === (ackParam === 'true'))
     if (ruleId) items = items.filter((e) => e.ruleId === Number(ruleId))
     if (keyword) items = items.filter((e) => e.message.includes(keyword))
-    return HttpResponse.json({ items, total: items.length })
+    if (from) items = items.filter((e) => e.firedAt >= from)
+    if (to) items = items.filter((e) => e.firedAt <= to)
+    items = [...items].sort((a, b) => (a.firedAt < b.firedAt ? 1 : -1))
+
+    const total = items.length
+    const start = (page - 1) * pageSize
+    return HttpResponse.json({ items: items.slice(start, start + pageSize), total })
   }),
 
   domainRoute('get', '/alerts/events/unread-count', (info) => {
@@ -814,6 +837,13 @@ export const handlers = [
     if (denied) return denied
     const id = Number(info.params.id)
     alertEvents.update(id, { acknowledged: true, acknowledgedBy: 1, acknowledgedAt: new Date().toISOString(), read: true })
+    return HttpResponse.json({ ok: true })
+  }),
+
+  domainRoute('post', '/alerts/events/:id/read', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    alertEvents.update(Number(info.params.id), { read: true })
     return HttpResponse.json({ ok: true })
   }),
 
@@ -864,7 +894,12 @@ export const handlers = [
   domainRoute('delete', '/alerts/channels/:id', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    alertChannels.remove(Number(info.params.id))
+    const id = Number(info.params.id)
+    const inUse = alertRules.list().some((rule) => parseChannelIds(rule.channelIds).includes(id))
+    if (inUse) {
+      return HttpResponse.json({ error: 'CHANNEL_IN_USE', message: '通道仍被告警规则引用' }, { status: 409 })
+    }
+    alertChannels.remove(id)
     return HttpResponse.json({ ok: true })
   }),
 

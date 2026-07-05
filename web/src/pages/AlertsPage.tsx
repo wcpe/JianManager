@@ -45,6 +45,7 @@ import {
 } from './config-row'
 
 type Tab = 'rules' | 'events' | 'channels'
+const ALERT_TRIGGER_TYPES = ['metric', 'instance_crash', 'node_offline', 'log_keyword', 'player_event', 'backup_failed'] as const
 
 export default function AlertsPage() {
   const { t } = useTranslation()
@@ -119,6 +120,8 @@ function RulesTab() {
   const channelName = (id: number) => channels?.find((c) => c.id === id)?.name ?? `#${id}`
   const channelText = (r: AlertRuleInfo) =>
     parseChannelIds(r.channelIds).map(channelName).join(', ') || (r.notifyTarget ? 'webhook' : '—')
+  const targetText = (r: AlertRuleInfo) =>
+    r.targetId ? `${t(`alerts.${r.targetType}`, r.targetType)} #${r.targetId}` : (r.targetType === 'node' ? t('alerts.allNodes') : t('alerts.allInstances'))
 
   const summary = useMemo(() => summarizeRules(rules ?? []), [rules])
   const visible = useMemo(() => {
@@ -171,7 +174,7 @@ function RulesTab() {
               tone={levelStatusLevel(r.level)}
               title={r.name}
               code={ruleConditionText(r)}
-              subtitle={`${t(`alerts.trigger_${r.triggerType}`, r.triggerType)} · ${channelText(r)}`}
+              subtitle={`${t(`alerts.trigger_${r.triggerType}`, r.triggerType)} · ${targetText(r)} · ${channelText(r)}`}
               meta={
                 formatSilenceWindow(r.silenceStart, r.silenceEnd)
                   ? `${t('alerts.silence')} ${formatSilenceWindow(r.silenceStart, r.silenceEnd)}`
@@ -333,6 +336,16 @@ function EventsTab() {
         </select>
         <select
           className="p-2 border rounded text-sm"
+          value={filter.triggerType ?? ''}
+          onChange={(e) => patchFilter({ triggerType: e.target.value || undefined })}
+        >
+          <option value="">{t('alerts.allTriggerTypes')}</option>
+          {ALERT_TRIGGER_TYPES.map((tt) => (
+            <option key={tt} value={tt}>{t(`alerts.trigger_${tt}`, tt)}</option>
+          ))}
+        </select>
+        <select
+          className="p-2 border rounded text-sm"
           value={filter.resolved === undefined ? '' : String(filter.resolved)}
           onChange={(e) => patchFilter({ resolved: e.target.value === '' ? undefined : e.target.value === 'true' })}
         >
@@ -387,6 +400,7 @@ function EventsTab() {
             <TableRow>
               <TableHead>{t('alerts.firedAt')}</TableHead>
               <TableHead>{t('alerts.level')}</TableHead>
+              <TableHead>{t('alerts.triggerType')}</TableHead>
               <TableHead>{t('alerts.rule')}</TableHead>
               <TableHead>{t('alerts.message')}</TableHead>
               <TableHead>{t('alerts.count')}</TableHead>
@@ -399,6 +413,7 @@ function EventsTab() {
               <TableRow key={e.id} className={e.read ? '' : 'bg-primary/5'}>
                 <TableCell className="whitespace-nowrap">{new Date(e.firedAt).toLocaleString()}</TableCell>
                 <TableCell><LevelBadge level={e.level} /></TableCell>
+                <TableCell>{t(`alerts.trigger_${e.triggerType}`, e.triggerType)}</TableCell>
                 <TableCell>{e.rule?.name ?? `#${e.ruleId}`}</TableCell>
                 <TableCell className="max-w-[360px] truncate" title={e.message}>{e.message}</TableCell>
                 <TableCell>{e.count > 1 ? `×${e.count}` : ''}</TableCell>
@@ -422,7 +437,7 @@ function EventsTab() {
             ))}
             {items.length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} className="text-center text-muted-foreground">
+                <TableCell colSpan={8} className="text-center text-muted-foreground">
                   {t('alerts.emptyEvents')}
                 </TableCell>
               </TableRow>

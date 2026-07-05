@@ -61,12 +61,17 @@ export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {
   const urlError =
     channelUsesURL(type) && (cfg.url ?? '').trim() !== '' && !isEnvRef(cfg.url ?? '') ? t('alerts.envRefRequired') : ''
   const urlMissing = channelUsesURL(type) && (cfg.url ?? '').trim() === '' ? t('validation.required') : ''
+  const tokenMissing = channelIsTelegram(type) && (cfg.token ?? '').trim() === '' ? t('validation.required') : ''
   const tokenError =
     channelIsTelegram(type) && (cfg.token ?? '').trim() !== '' && !isEnvRef(cfg.token ?? '') ? t('alerts.envRefRequired') : ''
+  const chatMissing = channelIsTelegram(type) && (cfg.chatId ?? '').trim() === '' ? t('validation.required') : ''
+  const hostMissing = channelIsEmail(type) && (cfg.host ?? '').trim() === '' ? t('validation.required') : ''
+  const portMissing = channelIsEmail(type) && !cfg.port ? t('validation.required') : ''
+  const toMissing = channelIsEmail(type) && (cfg.to ?? '').trim() === '' ? t('validation.required') : ''
   const passwordError =
     channelIsEmail(type) && (cfg.password ?? '').trim() !== '' && !isEnvRef(cfg.password ?? '') ? t('alerts.envRefRequired') : ''
 
-  const hasError = !!(nameError || urlError || urlMissing || tokenError || passwordError)
+  const hasError = !!(nameError || urlError || urlMissing || tokenMissing || tokenError || chatMissing || hostMissing || portMissing || toMissing || passwordError)
 
   const set = (patch: Partial<ChannelConfig>) => setCfg((c) => ({ ...c, ...patch }))
 
@@ -138,15 +143,16 @@ export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {
                 className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive font-mono text-sm"
                 placeholder="${JM_TELEGRAM_TOKEN}"
                 value={cfg.token ?? ''}
-                aria-invalid={!!tokenError}
+                aria-invalid={!!(tokenMissing || tokenError)}
                 onChange={(e) => set({ token: e.target.value })}
               />
-              <FieldError error={tokenError} />
+              <FieldError error={tokenMissing || tokenError} />
               <p className="text-xs text-muted-foreground mt-1">{t('alerts.envRefHint')}</p>
             </div>
             <div>
               <FieldLabel required>{t('alerts.telegramChatId')}</FieldLabel>
-              <input className="w-full mt-1 p-2 border rounded" value={cfg.chatId ?? ''} onChange={(e) => set({ chatId: e.target.value })} />
+              <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!chatMissing} value={cfg.chatId ?? ''} onChange={(e) => set({ chatId: e.target.value })} />
+              <FieldError error={chatMissing} />
             </div>
           </>
         )}
@@ -156,11 +162,13 @@ export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {
             <div className="grid grid-cols-3 gap-2">
               <div className="col-span-2">
                 <FieldLabel required>{t('alerts.smtpHost')}</FieldLabel>
-                <input className="w-full mt-1 p-2 border rounded" value={cfg.host ?? ''} onChange={(e) => set({ host: e.target.value })} />
+                <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!hostMissing} value={cfg.host ?? ''} onChange={(e) => set({ host: e.target.value })} />
+                <FieldError error={hostMissing} />
               </div>
               <div>
                 <FieldLabel required>{t('alerts.smtpPort')}</FieldLabel>
-                <input type="number" className="w-full mt-1 p-2 border rounded" placeholder="587" value={cfg.port ?? ''} onChange={(e) => set({ port: Number(e.target.value) })} />
+                <input type="number" className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!portMissing} placeholder="587" value={cfg.port ?? ''} onChange={(e) => set({ port: Number(e.target.value) })} />
+                <FieldError error={portMissing} />
               </div>
             </div>
             <div>
@@ -186,7 +194,8 @@ export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {
               </div>
               <div>
                 <FieldLabel required>{t('alerts.smtpTo')}</FieldLabel>
-                <input className="w-full mt-1 p-2 border rounded" placeholder="a@x.com, b@x.com" value={cfg.to ?? ''} onChange={(e) => set({ to: e.target.value })} />
+                <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!toMissing} placeholder="a@x.com, b@x.com" value={cfg.to ?? ''} onChange={(e) => set({ to: e.target.value })} />
+                <FieldError error={toMissing} />
               </div>
             </div>
           </>

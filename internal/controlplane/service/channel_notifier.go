@@ -142,12 +142,16 @@ func resolveEnvRefMaybePlain(ref string) (string, error) {
 // ChannelNotifier 按通道类型把告警通知投递到外部出口（FR-085）。
 // inapp 不在此处理（由 dispatcher 直接落库为站内通知）。
 type ChannelNotifier struct {
-	client *http.Client
+	client          *http.Client
+	telegramAPIBase string
 }
 
 // NewChannelNotifier 创建通道通知器。
 func NewChannelNotifier() *ChannelNotifier {
-	return &ChannelNotifier{client: &http.Client{Timeout: 10 * time.Second}}
+	return &ChannelNotifier{
+		client:          &http.Client{Timeout: 10 * time.Second},
+		telegramAPIBase: "https://api.telegram.org",
+	}
 }
 
 // Send 把一条通知投递到指定通道。解析凭证 ${ENV} → 按类型构造 payload → HTTP/SMTP 投递。
@@ -278,7 +282,7 @@ func discordBody(note AlertNotification) map[string]interface{} {
 
 // sendTelegram 经 Bot API sendMessage 投递。
 func (n *ChannelNotifier) sendTelegram(cfg *ChannelConfig, note AlertNotification) error {
-	api := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", cfg.Token)
+	api := fmt.Sprintf("%s/bot%s/sendMessage", strings.TrimRight(n.telegramAPIBase, "/"), cfg.Token)
 	return n.postJSON(api, map[string]interface{}{
 		"chat_id": cfg.ChatID,
 		"text":    plainText(note),

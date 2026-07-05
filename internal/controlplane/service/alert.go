@@ -65,22 +65,118 @@ var validTriggerTypes = map[string]bool{
 var validLevels = map[string]bool{
 	model.AlertLevelInfo: true, model.AlertLevelWarn: true, model.AlertLevelCritical: true,
 }
+var validTargetTypes = map[string]bool{
+	"node": true, "instance": true,
+}
+var validPlayerEventMatches = map[string]bool{
+	"": true, "join": true, "quit": true, "chat": true, "cross_server": true,
+}
 
-// CreateRule 创建告警规则。校验触发类型/级别合法，按类型填默认值。
-func (s *AlertService) CreateRule(req CreateRuleRequest) (*model.AlertRule, error) {
-	triggerType := req.TriggerType
+// normalizeRuleTypeAndLevel 填充 FR-011 兼容默认值，并校验触发类型/级别枚举。
+func normalizeRuleTypeAndLevel(triggerType, level string) (string, string, error) {
 	if triggerType == "" {
 		triggerType = model.AlertTriggerMetric
 	}
 	if !validTriggerTypes[triggerType] {
-		return nil, fmt.Errorf("非法触发类型: %s", triggerType)
+		return "", "", fmt.Errorf("非法触发类型: %s", triggerType)
 	}
-	level := req.Level
 	if level == "" {
 		level = model.AlertLevelWarn
 	}
 	if !validLevels[level] {
-		return nil, fmt.Errorf("非法告警级别: %s", level)
+		return "", "", fmt.Errorf("非法告警级别: %s", level)
+	}
+	return triggerType, level, nil
+}
+
+// expectedTargetTypeForTrigger 返回触发类型要求的目标类型。
+func expectedTargetTypeForTrigger(triggerType string) string {
+	switch triggerType {
+	case model.AlertTriggerMetric, model.AlertTriggerNodeOffline:
+		return "node"
+	default:
+		return "instance"
+	}
+}
+
+// validateSilenceTime 校验 HH:MM 静默时间，空串表示未设置。
+func validateSilenceTime(value string) error {
+	if value == "" {
+		return nil
+	}
+	if _, ok := parseHHMM(value); !ok {
+		return fmt.Errorf("非法静默时间: %s", value)
+	}
+	return nil
+}
+
+// validateRuleFields 校验规则字段之间的语义约束。
+func validateRuleFields(triggerType, targetType, keyword, eventMatch, silenceStart, silenceEnd string, durationSec, dedupWindowSec int) error {
+	if !validTargetTypes[targetType] {
+		return fmt.Errorf("非法目标类型: %s", targetType)
+	}
+	if want := expectedTargetTypeForTrigger(triggerType); targetType != want {
+		return fmt.Errorf("触发类型 %s 必须使用 %s 目标", triggerType, want)
+	}
+	if durationSec < 0 {
+		return fmt.Errorf("持续时间不能为负")
+	}
+	if dedupWindowSec < 0 {
+		return fmt.Errorf("去抖窗口不能为负")
+	}
+	if err := validateSilenceTime(silenceStart); err != nil {
+		return err
+	}
+	if err := validateSilenceTime(silenceEnd); err != nil {
+		return err
+	}
+	if triggerType == model.AlertTriggerLogKeyword && keyword == "" {
+		return fmt.Errorf("日志关键字不能为空")
+	}
+	if triggerType == model.AlertTriggerPlayerEvent && !validPlayerEventMatches[eventMatch] {
+		return fmt.Errorf("非法玩家事件类型: %s", eventMatch)
+	}
+	return nil
+}
+
+// validateChannelIDs 校验规则引用的通道均存在，避免路由保存悬空引用。
+func (s *AlertService) validateChannelIDs(ids []uint) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	seen := map[uint]struct{}{}
+	unique := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 {
+			return fmt.Errorf("通知通道不存在: %d", id)
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	var count int64
+	if err := s.db.Model(&model.AlertChannel{}).Where("id IN ?", unique).Count(&count).Error; err != nil {
+		return err
+	}
+	if int(count) != len(unique) {
+		return fmt.Errorf("通知通道不存在")
+	}
+	return nil
+}
+
+// CreateRule 创建告警规则。校验触发类型/级别合法，按类型填默认值。
+func (s *AlertService) CreateRule(req CreateRuleRequest) (*model.AlertRule, error) {
+	triggerType, level, err := normalizeRuleTypeAndLevel(req.TriggerType, req.Level)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateRuleFields(triggerType, req.TargetType, req.Keyword, req.EventMatch, req.SilenceStart, req.SilenceEnd, req.DurationSec, req.DedupWindowSec); err != nil {
+		return nil, err
+	}
+	if err := s.validateChannelIDs(req.ChannelIDs); err != nil {
+		return nil, err
 	}
 
 	notifyRecover := true
@@ -146,6 +242,51 @@ type UpdateRuleRequest struct {
 
 // UpdateRule 更新告警规则。
 func (s *AlertService) UpdateRule(id uint, req UpdateRuleRequest) (*model.AlertRule, error) {
+	var current model.AlertRule
+	if err := s.db.First(&current, id).Error; err != nil {
+		return nil, ErrAlertRuleNotFound
+	}
+
+	level := current.Level
+	if level == "" {
+		level = model.AlertLevelWarn
+	}
+	if req.Level != nil {
+		level = *req.Level
+	}
+	if !validLevels[level] {
+		return nil, fmt.Errorf("非法告警级别: %s", level)
+	}
+
+	dedup := current.DedupWindowSec
+	if req.DedupWindowSec != nil {
+		dedup = *req.DedupWindowSec
+	}
+	keyword := current.Keyword
+	if req.Keyword != nil {
+		keyword = *req.Keyword
+	}
+	eventMatch := current.EventMatch
+	if req.EventMatch != nil {
+		eventMatch = *req.EventMatch
+	}
+	silenceStart := current.SilenceStart
+	if req.SilenceStart != nil {
+		silenceStart = *req.SilenceStart
+	}
+	silenceEnd := current.SilenceEnd
+	if req.SilenceEnd != nil {
+		silenceEnd = *req.SilenceEnd
+	}
+	if err := validateRuleFields(ruleTriggerType(&current), current.TargetType, keyword, eventMatch, silenceStart, silenceEnd, current.DurationSec, dedup); err != nil {
+		return nil, err
+	}
+	if req.ChannelIDs != nil {
+		if err := s.validateChannelIDs(*req.ChannelIDs); err != nil {
+			return nil, err
+		}
+	}
+
 	updates := map[string]interface{}{}
 	if req.Enabled != nil {
 		updates["enabled"] = *req.Enabled
@@ -154,9 +295,6 @@ func (s *AlertService) UpdateRule(id uint, req UpdateRuleRequest) (*model.AlertR
 		updates["threshold"] = *req.Threshold
 	}
 	if req.Level != nil {
-		if !validLevels[*req.Level] {
-			return nil, fmt.Errorf("非法告警级别: %s", *req.Level)
-		}
 		updates["level"] = *req.Level
 	}
 	if req.ChannelIDs != nil {
@@ -182,12 +320,8 @@ func (s *AlertService) UpdateRule(id uint, req UpdateRuleRequest) (*model.AlertR
 		updates["event_match"] = *req.EventMatch
 	}
 	if len(updates) > 0 {
-		result := s.db.Model(&model.AlertRule{}).Where("id = ?", id).Updates(updates)
-		if result.Error != nil {
-			return nil, result.Error
-		}
-		if result.RowsAffected == 0 {
-			return nil, ErrAlertRuleNotFound
+		if err := s.db.Model(&current).Updates(updates).Error; err != nil {
+			return nil, err
 		}
 	}
 	var rule model.AlertRule

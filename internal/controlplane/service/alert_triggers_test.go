@@ -2,6 +2,7 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -101,6 +102,31 @@ func TestTriggers_OnBackupFailed(t *testing.T) {
 	var count int64
 	db.Model(&model.AlertEvent{}).Count(&count)
 	assert.Equal(t, int64(1), count)
+}
+
+func TestTriggers_PlayerEventMatchFiltering(t *testing.T) {
+	db := newTriggersTestDB(t)
+	tr := NewAlertEventTriggers(db, NewAlertDispatcher(db), nil, nil)
+	require.NoError(t, db.Create(&model.AlertRule{
+		Name: "chat", Enabled: true, TriggerType: model.AlertTriggerPlayerEvent, EventMatch: "chat",
+	}).Error)
+
+	ch := make(chan PlayerEvent, 2)
+	go tr.consumePlayerEvents(ch)
+	ch <- PlayerEvent{InstanceID: 9, InstanceName: "smp", Type: "player_join", PlayerName: "Steve"}
+	ch <- PlayerEvent{InstanceID: 9, InstanceName: "smp", Type: "chat", PlayerName: "Steve", Message: "hello"}
+	close(ch)
+
+	require.Eventually(t, func() bool {
+		var count int64
+		db.Model(&model.AlertEvent{}).Count(&count)
+		return count == 1
+	}, time.Second, 10*time.Millisecond)
+
+	var event model.AlertEvent
+	require.NoError(t, db.First(&event).Error)
+	assert.Equal(t, model.AlertTriggerPlayerEvent, event.TriggerType)
+	assert.Contains(t, event.Message, "hello")
 }
 
 func TestPlayerEventSubtype(t *testing.T) {

@@ -13,6 +13,10 @@ import (
 func TestAlertService_CreateRule_MultiType(t *testing.T) {
 	db := newAlertTestDB(t)
 	svc := NewAlertService(db)
+	inApp := model.AlertChannel{Name: "in-app", Type: model.ChannelTypeInApp, Enabled: true}
+	webhook := model.AlertChannel{Name: "webhook", Type: model.ChannelTypeWebhook, Enabled: true}
+	require.NoError(t, db.Create(&inApp).Error)
+	require.NoError(t, db.Create(&webhook).Error)
 
 	// 日志关键字触发规则（FR-085）。
 	rule, err := svc.CreateRule(CreateRuleRequest{
@@ -21,7 +25,7 @@ func TestAlertService_CreateRule_MultiType(t *testing.T) {
 		Level:       model.AlertLevelCritical,
 		TargetType:  "instance",
 		Keyword:     "OutOfMemoryError",
-		ChannelIDs:  []uint{1, 2},
+		ChannelIDs:  []uint{inApp.ID, webhook.ID},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, model.AlertTriggerLogKeyword, rule.TriggerType)
@@ -50,15 +54,58 @@ func TestAlertService_CreateRule_DefaultsMetric(t *testing.T) {
 	assert.True(t, rule.NotifyRecover)
 }
 
+func TestAlertService_CreateRule_Validation(t *testing.T) {
+	db := newAlertTestDB(t)
+	svc := NewAlertService(db)
+
+	valid := CreateRuleRequest{Name: "r", TargetType: "node", Metric: "cpu", Operator: ">", Threshold: 90}
+	cases := []struct {
+		name string
+		mut  func(*CreateRuleRequest)
+	}{
+		{"非法目标类型", func(r *CreateRuleRequest) { r.TargetType = "cluster" }},
+		{"指标规则必须绑定节点目标", func(r *CreateRuleRequest) { r.TargetType = "instance" }},
+		{"节点离线规则必须绑定节点目标", func(r *CreateRuleRequest) { r.TriggerType = model.AlertTriggerNodeOffline; r.TargetType = "instance" }},
+		{"实例崩溃规则必须绑定实例目标", func(r *CreateRuleRequest) { r.TriggerType = model.AlertTriggerInstanceCrash; r.TargetType = "node" }},
+		{"去抖窗口不能为负", func(r *CreateRuleRequest) { r.DedupWindowSec = -1 }},
+		{"持续时间不能为负", func(r *CreateRuleRequest) { r.DurationSec = -1 }},
+		{"静默开始时间格式非法", func(r *CreateRuleRequest) { r.SilenceStart = "9:00" }},
+		{"静默结束时间格式非法", func(r *CreateRuleRequest) { r.SilenceEnd = "24:00" }},
+		{"不存在的通道不能引用", func(r *CreateRuleRequest) { r.ChannelIDs = []uint{404} }},
+		{"日志关键字不能为空", func(r *CreateRuleRequest) { r.TriggerType = model.AlertTriggerLogKeyword; r.TargetType = "instance" }},
+		{"玩家事件匹配类型非法", func(r *CreateRuleRequest) {
+			r.TriggerType = model.AlertTriggerPlayerEvent
+			r.TargetType = "instance"
+			r.EventMatch = "death"
+		}},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			req := valid
+			tt.mut(&req)
+			_, err := svc.CreateRule(req)
+			require.Error(t, err)
+		})
+	}
+
+	_, err := svc.CreateRule(CreateRuleRequest{
+		Name: "player", TriggerType: model.AlertTriggerPlayerEvent, TargetType: "instance", EventMatch: "chat",
+	})
+	require.NoError(t, err)
+}
+
 func TestAlertService_UpdateRule(t *testing.T) {
 	db := newAlertTestDB(t)
 	svc := NewAlertService(db)
 	rule, err := svc.CreateRule(CreateRuleRequest{Name: "r", TargetType: "node", Metric: "cpu", Operator: ">", Threshold: 90})
 	require.NoError(t, err)
+	channel := model.AlertChannel{Name: "in-app", Type: model.ChannelTypeInApp, Enabled: true}
+	require.NoError(t, db.Create(&channel).Error)
 
 	off := false
 	newLevel := model.AlertLevelCritical
-	chs := []uint{3}
+	chs := []uint{channel.ID}
 	silence := "23:00"
 	updated, err := svc.UpdateRule(rule.ID, UpdateRuleRequest{
 		Enabled: &off, Level: &newLevel, ChannelIDs: &chs, SilenceStart: &silence,
@@ -66,12 +113,45 @@ func TestAlertService_UpdateRule(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, updated.Enabled)
 	assert.Equal(t, model.AlertLevelCritical, updated.Level)
-	assert.Equal(t, "[3]", updated.ChannelIDs)
+	assert.Equal(t, "[1]", updated.ChannelIDs)
 	assert.Equal(t, "23:00", updated.SilenceStart)
 
 	// 不存在的规则。
 	_, err = svc.UpdateRule(99999, UpdateRuleRequest{Enabled: &off})
 	require.ErrorIs(t, err, ErrAlertRuleNotFound)
+}
+
+func TestAlertService_UpdateRule_Validation(t *testing.T) {
+	db := newAlertTestDB(t)
+	svc := NewAlertService(db)
+	rule, err := svc.CreateRule(CreateRuleRequest{
+		Name: "log", TriggerType: model.AlertTriggerLogKeyword, TargetType: "instance", Keyword: "ERROR",
+	})
+	require.NoError(t, err)
+
+	badDedup := -1
+	_, err = svc.UpdateRule(rule.ID, UpdateRuleRequest{DedupWindowSec: &badDedup})
+	require.Error(t, err)
+
+	badSilence := "25:00"
+	_, err = svc.UpdateRule(rule.ID, UpdateRuleRequest{SilenceStart: &badSilence})
+	require.Error(t, err)
+
+	missingChannel := []uint{404}
+	_, err = svc.UpdateRule(rule.ID, UpdateRuleRequest{ChannelIDs: &missingChannel})
+	require.Error(t, err)
+
+	emptyKeyword := ""
+	_, err = svc.UpdateRule(rule.ID, UpdateRuleRequest{Keyword: &emptyKeyword})
+	require.Error(t, err)
+
+	playerRule, err := svc.CreateRule(CreateRuleRequest{
+		Name: "player", TriggerType: model.AlertTriggerPlayerEvent, TargetType: "instance", EventMatch: "join",
+	})
+	require.NoError(t, err)
+	badEventMatch := "death"
+	_, err = svc.UpdateRule(playerRule.ID, UpdateRuleRequest{EventMatch: &badEventMatch})
+	require.Error(t, err)
 }
 
 func TestAlertService_AcknowledgeAndRead(t *testing.T) {

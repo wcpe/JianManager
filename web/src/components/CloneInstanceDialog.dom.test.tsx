@@ -38,10 +38,14 @@ beforeAll(() => {
 function CloneHarness() {
   const [mounted, setMounted] = useState(true)
   const { data: instances } = useInstances()
+  const visibleInstances = (instances ?? []).filter((i) =>
+    ['survival-1', 'survival-clone', 'clone-fail'].includes(i.name),
+  )
   return (
     <div>
+      <output aria-label="instances-count">{instances?.length ?? 0}</output>
       <ul aria-label="instances-list">
-        {(instances ?? []).map((i) => (
+        {visibleInstances.map((i) => (
           <li key={i.id}>{i.name}</li>
         ))}
       </ul>
@@ -74,14 +78,14 @@ describe('CloneInstanceDialog（mock 假后端，复制子服流程）', () => {
     const list = screen.getByLabelText('instances-list')
     // 等 seed 实例列表到位再取基线数量（query 异步解析）。
     await waitFor(() => expect(within(list).getByText('survival-1')).toBeInTheDocument())
-    const baseCount = within(list).getAllByRole('listitem').length
+    const baseCount = Number(screen.getByLabelText('instances-count').textContent ?? '0')
 
     await user.click(screen.getByRole('button', { name: '预检' }))
 
     // dryRun 返回 allocated（端口/目录），渲染「将分配」预览块；mock 端口=25566、目录=/srv/instances/...
     expect(await screen.findByText(/将分配/)).toBeInTheDocument()
     // 预检不落库：实例数量不变，对话框仍在。
-    expect(within(list).getAllByRole('listitem').length).toBe(baseCount)
+    expect(Number(screen.getByLabelText('instances-count').textContent ?? '0')).toBe(baseCount)
     expect(screen.getByText('复制子服 — survival-1')).toBeInTheDocument()
   })
 
