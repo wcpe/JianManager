@@ -16,10 +16,12 @@ export interface PaletteEntry {
 }
 
 export interface PaletteSources {
-  instances: { id: number; name: string; uuid: string; status: string }[]
+  instances: { id: number; name: string; uuid: string; status: string; nodeId?: number }[]
   nodes: { id: number; name: string; host: string }[]
   pages: { to: string; label: string }[]
   commands: { id: string; label: string }[]
+  /** 页眉节点作用域：只收敛实例结果；节点本身仍可全局搜索以便切换作用域。 */
+  nodeScopeId?: number | null
 }
 
 /** 子串命中（大小写不敏感）。空查询恒真（用于默认列表）。 */
@@ -37,6 +39,7 @@ export function searchPalette(rawQuery: string, src: PaletteSources, limitPer = 
   const out: PaletteEntry[] = []
 
   for (const i of src.instances) {
+    if (src.nodeScopeId != null && i.nodeId !== src.nodeScopeId) continue
     if (hit(i.name, q) || hit(i.uuid, q)) {
       out.push({ kind: 'instance', key: `instance:${i.id}`, label: i.name, sublabel: i.uuid.slice(0, 8), status: i.status })
       if (countKind(out, 'instance') >= limitPer) break

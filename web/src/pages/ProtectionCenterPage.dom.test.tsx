@@ -60,9 +60,12 @@ describe('ProtectionCenterPage', () => {
       })),
     )
 
-    renderWithProviders(<ProtectionCenterPage />)
+    const { container } = renderWithProviders(<ProtectionCenterPage />)
 
+    expect(container.firstElementChild).toHaveAttribute('data-page', 'client-dist-security')
+    expect(container.firstElementChild).toHaveClass('jm-page-stack')
     expect(screen.getByRole('heading', { name: '客户端分发安全' })).toBeInTheDocument()
+    expect(screen.getByRole('tablist')).toHaveClass('jm-toolbar-surface')
     expect(screen.queryByRole('tab', { name: '遥测告知' })).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('tab', { name: '日志详情' }))
 

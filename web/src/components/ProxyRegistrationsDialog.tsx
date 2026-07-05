@@ -8,7 +8,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table'
+} from '@jianmanager/ui/components/table'
 import { useInstances } from '@/api/instances'
 import {
   useRegistrations,
@@ -16,10 +16,10 @@ import {
   useDeleteRegistration,
 } from '@/api/registrations'
 import { useResyncProxy } from '@/api/proxy'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
-import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
+import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateHost } from '@/lib/form-validation'
 
 interface ProxyRegistrationsDialogProps {

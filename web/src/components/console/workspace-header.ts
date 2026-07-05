@@ -6,7 +6,7 @@
  * 色调复用 FR-061 `instanceStatusLevel` 与 FR-163 `Tone`，保证页眉与卡片/徽章同色系。
  */
 import { Box, Boxes, Route } from 'lucide-react'
-import { instanceStatusLevel, type StatusLevel } from '@/lib/threshold'
+import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui'
 import type { Tone } from '@/lib/tone'
 
 /** 群组服角色（FR-032）：proxy / backend / 其余按 universal 处理。 */

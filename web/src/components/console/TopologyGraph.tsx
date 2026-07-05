@@ -10,8 +10,8 @@ import {
   type LaidNode,
   type ProxyRegistrations,
 } from '@/lib/topology'
-import { instanceStatusLevel, statusColorVar } from '@/lib/threshold'
-import { cn } from '@/lib/utils'
+import { instanceStatusLevel, statusColorVar } from '@jianmanager/ui'
+import { cn } from '@jianmanager/ui'
 
 /** 拓扑节点盒尺寸（像素）。 */
 const NODE_W = 168

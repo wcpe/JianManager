@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Search, X, Loader2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
 import { searchFiles, type SearchHit, type SearchMode } from '@/api/files'
 
 /** 「索引中」自动重试间隔（毫秒，FR-113）。 */

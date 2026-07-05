@@ -1,16 +1,17 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router'
+import { useLocation, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Bell, Boxes, Loader2, LogOut, RotateCw, Search, Server, UserRound } from 'lucide-react'
+import { AlertTriangle, Bell, Boxes, Check, ChevronDown, Loader2, LogOut, RotateCw, Search, Server, UserRound } from 'lucide-react'
 
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
 import { useInstances } from '@/api/instances'
+import { useNodes } from '@/api/nodes'
 import { useMetricOverview } from '@/api/metrics'
 import { useTasks } from '@/api/tasks'
 import { useNotificationFeed, useFeedUnreadCount, type FeedItem } from '@/api/notification-feed'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 import PageBreadcrumb from './PageBreadcrumb'
 import { searchBoxClass, slotVisibility, visibilityClass } from './header-layout'
 import {
@@ -19,7 +20,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+} from '@jianmanager/ui/components/dropdown-menu'
 
 /** 角色值 → i18n key（复用 users.* 角色文案，避免重复维护）。 */
 const ROLE_LABEL_KEY: Record<number, string> = {
@@ -38,9 +39,10 @@ const ROLE_LABEL_KEY: Record<number, string> = {
  */
 export default function ConsoleHeader() {
   return (
-    <header className="flex h-12 shrink-0 items-center gap-3 border-b bg-card/40 px-3 sm:px-4">
+    <header data-slot="console-header" className="jm-console-header flex h-14 shrink-0 items-center gap-2 border-b px-3 text-[13px] backdrop-blur-xl sm:px-4">
+      <NodeScopeSelector />
       <TitleArea />
-      {/* 右侧操作区：ml-auto 推到右缘，搜索靠右紧贴操作图标（FR-179）。 */}
+      {/* 右侧操作区：搜索、集群状态、任务、通知与账户（FR-268）。 */}
       <div className="ml-auto flex items-center gap-2 sm:gap-3">
         <SearchBox />
         <div className="flex items-center gap-0.5 sm:gap-1">
@@ -55,14 +57,56 @@ export default function ConsoleHeader() {
   )
 }
 
+/** 节点作用域选择器（FR-268）：全部节点 / 单节点，影响用户上下文理解。 */
+function NodeScopeSelector() {
+  const { t } = useTranslation()
+  const selectedNodeId = useConsoleStore((s) => s.selectedNodeId)
+  const setSelectedNodeId = useConsoleStore((s) => s.setSelectedNodeId)
+  const { data: nodes = [] } = useNodes({ refetchInterval: 30_000 })
+  const selected = nodes.find((n) => n.id === selectedNodeId)
+  const label = selected?.name ?? t('console.allNodes')
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={t('header.nodeScope')}
+          className="flex h-9 max-w-[180px] items-center gap-1.5 rounded-md border bg-card/90 px-2.5 text-xs text-foreground shadow-soft transition-colors hover:bg-muted/60"
+        >
+          <span className={cn('size-1.5 rounded-full', selected ? 'bg-status-success' : 'bg-primary')} />
+          <span className="truncate">{label}</span>
+          <ChevronDown className="size-3.5 text-muted-foreground" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuItem onClick={() => setSelectedNodeId(null)}>
+          <span className="flex-1">{t('console.allNodes')}</span>
+          {selectedNodeId == null && <Check className="size-3.5" />}
+        </DropdownMenuItem>
+        {nodes.map((node) => (
+          <DropdownMenuItem key={node.id} onClick={() => setSelectedNodeId(node.id)}>
+            <span className={cn('size-1.5 rounded-full', node.status === 1 ? 'bg-status-success' : 'bg-muted-foreground/50')} />
+            <span className="min-w-0 flex-1 truncate">{node.name}</span>
+            {selectedNodeId === node.id && <Check className="size-3.5" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 /**
  * 左侧面包屑（FR-134 + FR-162）：打开实例工作区时末级补实例名（域›实例›名称），
  * 否则按路由渲染「域 › 页面」轨迹。统一页头组件 `PageBreadcrumb` 承载。
  */
 function TitleArea() {
   const openInstanceId = useConsoleStore((s) => s.openInstanceId)
+  const location = useLocation()
+  const routeInstanceId = Number(location.pathname.match(/^\/instances\/(\d+)/)?.[1] ?? 0)
+  const activeInstanceId = openInstanceId ?? (routeInstanceId > 0 ? routeInstanceId : null)
   const { data: instances } = useInstances()
-  const openInst = openInstanceId != null ? instances?.find((i) => i.id === openInstanceId) : undefined
+  const openInst = activeInstanceId != null ? instances?.find((i) => i.id === activeInstanceId) : undefined
   // min-w-0 让面包屑可截断，避免长轨迹把右侧操作区挤出页眉（窄屏防翻屏）。
   return (
     <div className="min-w-0 flex-1">
@@ -87,7 +131,7 @@ function SearchBox() {
         type="button"
         onClick={() => openPalette(true)}
         aria-label={t('header.searchPlaceholder')}
-        className="flex h-8 w-full items-center gap-2 rounded-lg bg-muted/60 pl-2.5 pr-2 text-sm text-muted-foreground transition-colors hover:bg-muted"
+        className="flex h-9 w-full items-center gap-2 rounded-md border bg-card/90 pl-2.5 pr-2 text-sm text-muted-foreground shadow-soft transition-colors hover:bg-muted/55"
       >
         <Search className="size-4 shrink-0" />
         <span className="min-w-0 flex-1 truncate text-left">{t('header.searchPlaceholder')}</span>
@@ -119,7 +163,7 @@ function RefreshButton() {
       onClick={refresh}
       aria-label={t('header.refresh')}
       title={t('header.refresh')}
-      className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
     >
       <RotateCw className={cn('size-4', spinning && 'animate-spin')} />
     </button>
@@ -146,7 +190,7 @@ function ClusterBadge({
       onClick={onClick}
       title={`${label}: ${value}`}
       aria-label={`${label}: ${value}`}
-      className="flex items-center gap-1 rounded-lg px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+      className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
     >
       <Icon className={cn('size-3.5', danger && 'text-status-danger')} />
       <span className={cn('tabular-nums', danger && 'font-medium text-status-danger')}>{value}</span>
@@ -203,7 +247,7 @@ function TaskProgress() {
       onClick={() => navigate('/tasks')}
       title={label}
       aria-label={label}
-      className="flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-xs text-primary transition-colors hover:bg-accent/60"
+      className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-primary transition-colors hover:bg-accent/60"
     >
       <Loader2 className="size-3.5 animate-spin" />
       <span className="font-medium tabular-nums">{active.length}</span>
@@ -238,7 +282,7 @@ function NotificationBell() {
         <button
           type="button"
           aria-label={t('header.notifications')}
-          className="relative rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+          className="relative rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
         >
           <Bell className="size-4" />
           {unread > 0 && (
@@ -322,7 +366,7 @@ function AccountMenu() {
         <button
           type="button"
           aria-label={t('header.account')}
-          className="flex items-center gap-1.5 rounded-lg px-1.5 py-1 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+          className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
         >
           <span className="grid size-6 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
             <UserRound className="size-3.5" />

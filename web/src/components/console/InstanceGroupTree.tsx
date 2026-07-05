@@ -17,16 +17,16 @@ import {
   groupBranchKey,
   type VisibleGroupRow,
 } from './instance-group-tree'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogFooter,
-} from '@/components/ui/dialog'
-import { cn } from '@/lib/utils'
+} from '@jianmanager/ui/components/dialog'
+import { cn } from '@jianmanager/ui'
 
 /** 拖拽实例入组时 dataTransfer 的自定义 MIME（与浏览器文本拖拽区分）。 */
 export const INSTANCE_DND_MIME = 'application/x-jm-instance-id'

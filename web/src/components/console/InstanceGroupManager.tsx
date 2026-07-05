@@ -13,18 +13,18 @@ import {
 import { InstanceWorktableCard } from './InstanceWorktableCard'
 import { InstanceGroupTree, INSTANCE_DND_MIME } from './InstanceGroupTree'
 import { groupPathOf } from './instance-group-path'
-import { Panel } from '@/components/ui/panel'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { Button } from '@jianmanager/ui/components/button'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
-import { cn } from '@/lib/utils'
+} from '@jianmanager/ui/components/select'
+import { cn } from '@jianmanager/ui'
 
 /**
  * 实例多级分组完整视图（FR-165，design §4.4）：左 = 分组树，右 = 选中组（含子树）的实例列表。

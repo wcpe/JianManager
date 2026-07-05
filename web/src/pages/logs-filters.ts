@@ -3,7 +3,7 @@
  * 级别配色归一、时间范围预设、导出范围裁剪、虚拟滚动窗口计算——抽为纯函数便于 vitest 覆盖，
  * UI 组件只做渲染与状态编排。
  */
-import type { StatusLevel } from '@/lib/threshold'
+import type { StatusLevel } from '@jianmanager/ui'
 import type { LogQueryParams } from '@/api/logs'
 
 /**

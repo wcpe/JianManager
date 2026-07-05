@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { LayoutGrid, List } from 'lucide-react'
 
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 import { toneChipClass, type Tone } from '@/lib/tone'
 
 /**

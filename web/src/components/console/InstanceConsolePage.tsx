@@ -1,0 +1,371 @@
+import { useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { Activity, AlertTriangle, Boxes, Gauge, HardDrive, Layers, Play, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
+
+import { useInstance, useKillInstance, useRestartInstance, useStartInstance, useStopInstance } from '@/api/instances'
+import { useInstanceMetrics } from '@/api/metrics'
+import { useLogs } from '@/api/logs'
+import { useNodes } from '@/api/nodes'
+import { useServerState } from '@/api/serverState'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { Button } from '@jianmanager/ui/components/button'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
+import { cn } from '@jianmanager/ui'
+import type { CardType } from '@/lib/workspace-card'
+import WorkspaceCardBody from './WorkspaceCardBody'
+
+type TabKey = 'overview' | 'terminal' | 'resource' | 'metrics' | 'players' | 'plugins' | 'backup' | 'business' | 'bot'
+
+const TAB_CARD_TYPE: Partial<Record<TabKey, CardType>> = {
+  terminal: 'terminal',
+  resource: 'resource',
+  metrics: 'metrics',
+  plugins: 'plugins',
+  business: 'business',
+  bot: 'bot',
+}
+
+const TAB_KEYS: TabKey[] = ['overview', 'terminal', 'resource', 'metrics', 'players', 'plugins', 'backup', 'business', 'bot']
+
+const TAB_LABEL_KEY: Record<TabKey, string> = {
+  overview: 'serverConsole.overview',
+  terminal: 'serverConsole.console',
+  resource: 'serverConsole.filesConfig',
+  metrics: 'serverConsole.metrics',
+  players: 'serverConsole.players',
+  plugins: 'serverConsole.plugins',
+  backup: 'serverConsole.backupSchedule',
+  business: 'serverConsole.business',
+  bot: 'serverConsole.bot',
+}
+
+interface InstanceConsolePageProps {
+  instanceId: number
+}
+
+/** 服务器统一控制台（FR-269）：固定分区的单服默认入口。 */
+export default function InstanceConsolePage({ instanceId }: InstanceConsolePageProps) {
+  const { t } = useTranslation()
+  const [activeTab, setActiveTab] = useState<TabKey>('overview')
+  const { data: instance } = useInstance(instanceId)
+  const { data: nodes = [] } = useNodes({ refetchInterval: 30_000 })
+  const { data: metrics } = useInstanceMetrics(instanceId, true)
+  const { data: serverState } = useServerState(instanceId, true, 15_000)
+  const { data: logs } = useLogs({ source: 'instance', instanceId, page: 1, pageSize: 8 }, { refetchInterval: 10_000 })
+  const restart = useRestartInstance()
+  const stop = useStopInstance()
+  const start = useStartInstance()
+  const kill = useKillInstance()
+
+  const node = nodes.find((n) => n.id === instance?.nodeId)
+  const online = serverState?.state?.server?.onlinePlayers ?? metrics?.onlinePlayers ?? 0
+  const maxPlayers = serverState?.state?.server?.maxPlayers ?? 200
+  const watchItems = useMemo(() => buildWatchItems({ status: instance?.status, metrics, probeConnected: serverState?.connected }), [instance?.status, metrics, serverState?.connected])
+
+  if (!instance) {
+    return <div className="rounded-lg border bg-card p-6 text-sm text-muted-foreground shadow-soft">{t('serverConsole.noInstance')}</div>
+  }
+
+  const canStart = instance.status === 'STOPPED' || instance.status === 'CRASHED'
+  const canControl = instance.status === 'RUNNING' || instance.status === 'STARTING' || instance.status === 'STOPPING'
+
+  return (
+    <div data-page="instance-console" className="jm-page-stack min-h-full w-full text-[13px] text-foreground">
+      <div className="w-full space-y-3">
+        <header className="rounded-lg border bg-card/95 p-3 shadow-soft backdrop-blur-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <StatusBadge status={instance.status} />
+                <h1 className="truncate text-lg font-semibold tracking-tight">{t('serverConsole.title')} / {instance.name}</h1>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">{t('serverConsole.subtitle')}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {canStart && (
+                <Button size="sm" onClick={() => start.mutate(instance.id)}>
+                  <Play className="size-3.5" />
+                  {t('instances.start')}
+                </Button>
+              )}
+              <Button size="sm" variant="outline" disabled={!canControl} onClick={() => restart.mutate(instance.id)}>
+                <RotateCw className="size-3.5" />
+                {t('serverConsole.restart')}
+              </Button>
+              <Button size="sm" variant="outline" disabled={!canControl} onClick={() => stop.mutate(instance.id)}>
+                <Square className="size-3.5" />
+                {t('serverConsole.stop')}
+              </Button>
+              <Button size="sm" variant="destructive" disabled={!canControl} onClick={() => kill.mutate(instance.id)}>
+                <AlertTriangle className="size-3.5" />
+                {t('serverConsole.kill')}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setActiveTab('terminal')}>
+                <TerminalSquare className="size-3.5" />
+                {t('serverConsole.openTerminal')}
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-2 md:grid-cols-3 xl:grid-cols-6">
+            <MetaCell label={t('serverConsole.node')} value={node?.name ?? t('console.unknownNode', { id: instance.nodeId })} />
+            <MetaCell label={t('serverConsole.port')} value={`:${instance.serverPort || '—'}`} mono />
+            <MetaCell label={t('serverConsole.online')} value={`${online}/${maxPlayers}`} mono />
+            <MetaCell label={t('serverConsole.tps')} value={formatNumber(metrics?.tps, 1)} mono tone={metrics?.tps != null && metrics.tps < 18 ? 'warn' : 'ok'} />
+            <MetaCell label={t('serverConsole.mspt')} value={`${formatNumber(metrics?.msptMillis, 0)}ms`} mono tone={metrics?.msptMillis != null && metrics.msptMillis > 50 ? 'danger' : 'ok'} />
+            <MetaCell label="UUID" value={instance.uuid.slice(0, 8)} mono />
+          </div>
+        </header>
+
+        <nav className="flex gap-1 overflow-x-auto rounded-lg border bg-card/95 px-2 pt-2 shadow-soft backdrop-blur-sm">
+          {TAB_KEYS.map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setActiveTab(key)}
+              className={cn(
+                'shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors',
+                activeTab === key
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {t(TAB_LABEL_KEY[key])}
+            </button>
+          ))}
+        </nav>
+
+        {activeTab === 'overview' ? (
+          <OverviewPanel
+            instanceId={instance.id}
+            metrics={metrics}
+            online={online}
+            maxPlayers={maxPlayers}
+            nodeDiskUsage={node?.diskUsage}
+            logs={logs?.items ?? []}
+            watchItems={watchItems}
+            probeConnected={serverState?.connected ?? false}
+          />
+        ) : TAB_CARD_TYPE[activeTab] ? (
+          <div className="min-h-[520px] rounded-lg border bg-card shadow-soft">
+            <WorkspaceCardBody instanceId={instance.id} type={TAB_CARD_TYPE[activeTab]!} />
+          </div>
+        ) : (
+          <PlaceholderPanel tab={activeTab} />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const statusClass = status === 'RUNNING'
+    ? 'bg-status-success'
+    : status === 'CRASHED'
+      ? 'bg-status-danger'
+      : status === 'STARTING' || status === 'STOPPING'
+        ? 'bg-status-warning'
+        : 'bg-muted-foreground/50'
+  return (
+    <Badge variant="outline" className="rounded-md bg-card font-mono text-[11px]">
+      <span className={cn('size-1.5 rounded-full', statusClass)} />
+      {status}
+    </Badge>
+  )
+}
+
+function MetaCell({ label, value, mono, tone }: { label: string; value: string; mono?: boolean; tone?: 'ok' | 'warn' | 'danger' }) {
+  return (
+    <div className="rounded-md border bg-muted/70 px-2 py-1.5">
+      <p className="text-[11px] text-muted-foreground">{label}</p>
+      <p className={cn('mt-0.5 truncate font-medium', mono && 'font-mono tabular-nums', tone === 'ok' && 'text-status-success', tone === 'warn' && 'text-status-warning', tone === 'danger' && 'text-status-danger')}>{value}</p>
+    </div>
+  )
+}
+
+function OverviewPanel({
+  metrics,
+  online,
+  maxPlayers,
+  nodeDiskUsage,
+  logs,
+  watchItems,
+  probeConnected,
+}: {
+  instanceId: number
+  metrics?: { tps: number; msptMillis: number; memoryMb: number; heapMaxMb: number; cpuPercent: number; onlinePlayers: number; probeAvailable: boolean }
+  online: number
+  maxPlayers: number
+  nodeDiskUsage?: number
+  logs: Array<{ id: number; level: string; message: string; time: string }>
+  watchItems: string[]
+  probeConnected: boolean
+}) {
+  const { t } = useTranslation()
+  const memoryPct = metrics?.heapMaxMb ? Math.min(100, Math.round((metrics.memoryMb / metrics.heapMaxMb) * 100)) : 0
+  const cpuPct = Math.round(metrics?.cpuPercent ?? 0)
+  const diskPct = Math.round(nodeDiskUsage ?? 0)
+  const alertCount = watchItems.length
+  const spark = buildSparkValues(metrics?.tps ?? 19.8, metrics?.msptMillis ?? 35)
+
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
+        <KpiCard icon={Gauge} label={t('serverConsole.cpu')} value={`${cpuPct}%`} progress={cpuPct} />
+        <KpiCard icon={HardDrive} label={t('serverConsole.memory')} value={`${memoryPct}%`} sub={`${formatNumber(metrics?.memoryMb, 0)} / ${formatNumber(metrics?.heapMaxMb, 0)} MB`} progress={memoryPct} />
+        <KpiCard icon={Activity} label={t('serverConsole.tps')} value={formatNumber(metrics?.tps, 1)} progress={Math.min(100, ((metrics?.tps ?? 0) / 20) * 100)} />
+        <KpiCard icon={Users} label={t('serverConsole.online')} value={`${online}/${maxPlayers}`} progress={maxPlayers > 0 ? (online / maxPlayers) * 100 : 0} />
+        <KpiCard icon={Layers} label={t('serverConsole.disk')} value={`${diskPct}%`} progress={diskPct} />
+        <KpiCard icon={AlertTriangle} label={t('serverConsole.alerts')} value={String(alertCount)} danger={alertCount > 0} progress={alertCount > 0 ? 100 : 0} />
+      </div>
+
+      {!probeConnected && (
+        <div className="rounded-md border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-xs text-status-warning">
+          {t('serverConsole.probeUnavailable')}
+        </div>
+      )}
+
+      <div className="grid gap-3 xl:grid-cols-[1.2fr_1fr_0.9fr]">
+        <section className="rounded-lg border bg-card p-3 shadow-soft">
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-sm font-semibold">TPS / MSPT</h2>
+            <span className="font-mono text-[11px] text-muted-foreground">mock-api</span>
+          </div>
+          <div className="grid h-44 grid-cols-24 items-end gap-1 border border-dashed bg-muted/70 p-2">
+            {spark.map((v, i) => (
+              <span key={i} className="rounded-t-sm bg-primary/75" style={{ height: `${v}%` }} />
+            ))}
+          </div>
+        </section>
+
+        <section className="rounded-lg border bg-card p-3 shadow-soft">
+          <h2 className="mb-2 text-sm font-semibold">{t('serverConsole.recentEvents')}</h2>
+          <div className="space-y-1.5">
+            {logs.slice(0, 5).map((log) => (
+              <div key={log.id} className="flex items-start gap-2 rounded-md border bg-muted/70 px-2 py-1.5 text-xs">
+                <span className={cn('mt-1 size-1.5 shrink-0 rounded-full', log.level === 'error' ? 'bg-status-danger' : log.level === 'warn' ? 'bg-status-warning' : 'bg-status-info')} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate">{log.message}</p>
+                  <p className="font-mono text-[10px] text-muted-foreground">{new Date(log.time).toLocaleTimeString()}</p>
+                </div>
+              </div>
+            ))}
+            {logs.length === 0 && <p className="text-xs text-muted-foreground">{t('serverConsole.noLogs')}</p>}
+          </div>
+        </section>
+
+        <section className="rounded-lg border bg-card p-3 shadow-soft">
+          <h2 className="mb-2 text-sm font-semibold">{t('serverConsole.watchItems')}</h2>
+          <div className="space-y-1.5">
+            {watchItems.map((item) => (
+              <div key={item} className="flex items-center gap-2 rounded-md border bg-muted/70 px-2 py-1.5 text-xs">
+                <AlertTriangle className="size-3.5 text-status-warning" />
+                <span>{item}</span>
+              </div>
+            ))}
+            {watchItems.length === 0 && (
+              <div className="flex items-center gap-2 rounded-sm border border-status-success/35 bg-status-success/10 px-2 py-1.5 text-xs text-status-success">
+                <span className="size-1.5 rounded-full bg-status-success" />
+                <span>运行状态正常</span>
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <section className="rounded-lg border bg-card p-3 shadow-soft">
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="text-sm font-semibold">{t('serverConsole.logsPreview')}</h2>
+          <span className="text-[11px] text-muted-foreground">tail -n 8</span>
+        </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-32">Time</TableHead>
+              <TableHead className="w-20">Level</TableHead>
+              <TableHead>Message</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {logs.slice(0, 8).map((log) => (
+              <TableRow key={log.id}>
+                <TableCell className="font-mono text-xs text-muted-foreground">{new Date(log.time).toLocaleTimeString()}</TableCell>
+                <TableCell className="font-mono text-xs uppercase">{log.level}</TableCell>
+                <TableCell className="max-w-0 truncate">{log.message}</TableCell>
+              </TableRow>
+            ))}
+            {logs.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={3} className="text-center text-muted-foreground">{t('serverConsole.noLogs')}</TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </section>
+    </div>
+  )
+}
+
+function KpiCard({ icon: Icon, label, value, sub, progress, danger }: { icon: LucideIcon; label: string; value: string; sub?: string; progress: number; danger?: boolean }) {
+  return (
+    <div className="rounded-lg border bg-card p-2 shadow-soft">
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-[11px] text-muted-foreground">{label}</p>
+          <p className={cn('mt-0.5 font-mono text-lg font-semibold tabular-nums', danger && 'text-status-danger')}>{value}</p>
+          {sub && <p className="truncate text-[10px] text-muted-foreground">{sub}</p>}
+        </div>
+        <Icon className={cn('size-4 shrink-0', danger ? 'text-status-danger' : 'text-primary')} />
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-sm bg-muted">
+        <div className={cn('h-full rounded-sm', danger ? 'bg-status-danger' : progress > 80 ? 'bg-status-warning' : 'bg-primary')} style={{ width: `${Math.max(4, Math.min(100, progress))}%` }} />
+      </div>
+    </div>
+  )
+}
+
+function PlaceholderPanel({ tab }: { tab: TabKey }) {
+  const { t } = useTranslation()
+  return (
+    <div className="rounded-lg border bg-card p-6 shadow-soft">
+      <div className="flex items-center gap-2 text-sm font-semibold">
+        {tab === 'players' ? <Users className="size-4 text-primary" /> : <Boxes className="size-4 text-primary" />}
+        {t(TAB_LABEL_KEY[tab])}
+      </div>
+      <p className="mt-2 text-sm text-muted-foreground">{t('serverConsole.placeholderTitle')}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{t('serverConsole.placeholderHint')}</p>
+    </div>
+  )
+}
+
+function formatNumber(value: number | undefined, digits: number) {
+  if (value == null || Number.isNaN(value)) return '—'
+  return value.toFixed(digits)
+}
+
+function buildSparkValues(tps: number, mspt: number) {
+  return Array.from({ length: 24 }, (_, i) => {
+    const wave = Math.sin(i / 2.2) * 12 + Math.cos(i / 3.7) * 8
+    const base = Math.max(24, Math.min(92, tps * 4 + wave - Math.max(0, mspt - 45) / 2))
+    return Math.round(base)
+  })
+}
+
+function buildWatchItems({
+  status,
+  metrics,
+  probeConnected,
+}: {
+  status?: string
+  metrics?: { tps: number; msptMillis: number; cpuPercent: number; probeAvailable: boolean }
+  probeConnected?: boolean
+}) {
+  const items: string[] = []
+  if (status === 'CRASHED') items.push('服务器处于崩溃状态，请检查启动日志')
+  if (status === 'STARTING' || status === 'STOPPING') items.push('服务器处于过渡态，操作按钮已收敛')
+  if (metrics?.tps != null && metrics.tps < 18) items.push('TPS 低于 18，建议检查插件或实体数量')
+  if (metrics?.msptMillis != null && metrics.msptMillis > 50) items.push('MSPT 超过 50ms，主线程可能卡顿')
+  if (metrics?.cpuPercent != null && metrics.cpuPercent > 85) items.push('CPU 使用率偏高')
+  if (!probeConnected) items.push('ServerProbe 未连接，部分运行态数据不可用')
+  return items
+}

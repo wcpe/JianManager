@@ -8,20 +8,20 @@ import {
   type BackupStorage,
   type CreateBackupStorageBody,
 } from '@/api/backupStorages'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { Button } from '@jianmanager/ui/components/button'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
+import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
-import { scrollableDialogContentClass, ScrollableDialogBody } from '@/components/ui/scrollable-dialog'
-import { FieldLabel, FieldError } from '@/components/ui/field-label'
+} from '@jianmanager/ui/components/dialog'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
+import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired, validateEnvRef, validateFields, hasErrors } from '@/lib/form-validation'
 import DangerConfirm from '@/components/DangerConfirm'
 

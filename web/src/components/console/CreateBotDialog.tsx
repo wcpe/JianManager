@@ -4,24 +4,24 @@ import { useCreateBot } from '@/api/bots'
 import { useInstance } from '@/api/instances'
 import { useNode } from '@/api/nodes'
 import { suggestBotServer } from './bot-list'
-import { Button } from '@/components/ui/button'
+import { Button } from '@jianmanager/ui/components/button'
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
+} from '@jianmanager/ui/components/dialog'
+import { Input } from '@jianmanager/ui/components/input'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
-import { scrollableDialogContentClass, ScrollableDialogBody } from '@/components/ui/scrollable-dialog'
-import { FieldLabel, FieldError } from '@/components/ui/field-label'
+} from '@jianmanager/ui/components/select'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
+import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired, validateHost, validatePort, validateFields, hasErrors } from '@/lib/form-validation'
 
 /**

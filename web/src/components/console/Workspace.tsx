@@ -1,9 +1,9 @@
-import { Routes, Route, Navigate, useLocation } from 'react-router'
-import { Suspense, lazy, useEffect, useRef } from 'react'
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router'
+import { Suspense, lazy, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useConsoleStore } from '@/stores/console'
-import WorkspaceCanvas from './WorkspaceCanvas'
 import WorkspaceEmpty from './WorkspaceEmpty'
+import InstanceConsolePage from './InstanceConsolePage'
 
 const OverviewPage = lazy(() => import('@/pages/OverviewPage'))
 const MonitoringPage = lazy(() => import('@/pages/MonitoringPage'))
@@ -39,9 +39,9 @@ const NotificationCenterPage = lazy(() => import('@/pages/NotificationCenterPage
 const SuperWorkbenchPage = lazy(() => import('./SuperWorkbenchPage'))
 const DirectorConsolePage = lazy(() => import('./DirectorConsolePage'))
 /**
- * 运维控制台右侧工作区（ADR-009 / FR-037 / FR-039 / FR-166 / FR-167）。
- * 打开实例时渲染可组合卡片画布 {@link WorkspaceCanvas}（卡片=实例×功能，可拖拽/调大小/存预设）；
- * 否则按路由渲染对应页面，既有页面不变。同一时刻仅一个实例画布，切换实例即换 instanceId。
+ * 运维控制台右侧工作区（ADR-009 / FR-037 / FR-039 / FR-166 / FR-167 / FR-269）。
+ * 打开服务器时默认渲染固定分区的服务器统一控制台；可组合卡片画布保留为高级拼屏能力。
+ * 否则按路由渲染对应页面，既有页面不变。同一时刻仅一个打开的服务器上下文。
  * 跨实例超级工作台（FR-167）走 `/super`，全幅渲染（自带左侧实例库 + 画布，无统一内边距）。
  * 工作区导播台（FR-168）走 `/director`，同为全幅（场景舞台 + 缩略图条，多预设预热瞬切）。
  */
@@ -50,19 +50,25 @@ export default function Workspace() {
   const openInstanceId = useConsoleStore((s) => s.openInstanceId)
   const closeInstance = useConsoleStore((s) => s.closeInstance)
   const location = useLocation()
-  const lastPathRef = useRef(location.pathname)
+  const navigate = useNavigate()
+  const isInstanceRoute = /^\/instances\/\d+/.test(location.pathname)
+  const routeKey = `${location.pathname}${location.search}`
 
-  // 打开实例工作区不改 URL；但侧栏导航切页时路由会变。此处监听路由变化即关闭工作区，
-  // 让导航能正常切到目标页面（此前 openInstanceId 非空会永久覆盖路由内容，无法切页）。
+  // 打开实例时统一落到深链，避免页面仍停在 /instances 导致侧栏、面包屑和工作区语义错位。
   useEffect(() => {
-    if (location.pathname !== lastPathRef.current) {
-      lastPathRef.current = location.pathname
-      if (openInstanceId !== null) closeInstance()
-    }
-  }, [location.pathname, openInstanceId, closeInstance])
+    if (openInstanceId === null) return
+
+    const target = `/instances/${openInstanceId}`
+    if (location.pathname !== target) navigate(target)
+    closeInstance()
+  }, [openInstanceId, location.pathname, navigate, closeInstance])
 
   if (openInstanceId !== null) {
-    return <WorkspaceCanvas instanceId={openInstanceId} />
+    return (
+      <div className="h-full w-full overflow-auto p-3">
+        <InstanceConsolePage instanceId={openInstanceId} />
+      </div>
+    )
   }
 
   // 超级工作台全幅（自带实例库 + 画布），不套统一内边距与滚动壳。
@@ -85,49 +91,52 @@ export default function Workspace() {
 
   return (
     <Suspense fallback={<div className="p-6 text-muted-foreground">{t('common.loading')}</div>}>
-      <div className="h-full overflow-auto p-6 [scrollbar-gutter:stable]">
-        <Routes>
-          <Route index element={<OverviewPage />} />
-          <Route path="monitor" element={<MonitoringPage />} />
-          <Route path="nodes" element={<NodesPage />} />
-          <Route path="instances" element={<InstancesPage />} />
-          <Route path="instances/new" element={<InstanceWizardPage />} />
-          <Route path="instances/:id" element={<InstanceDetailPage />} />
-          <Route path="networks" element={<NetworksPage />} />
-          <Route path="players" element={<PlayersPage />} />
-          <Route path="bots" element={<BotsPage />} />
-          <Route path="alerts" element={<AlertsPage />} />
-          <Route path="users" element={<UsersPage />} />
-          <Route path="groups" element={<GroupsPage />} />
-          <Route path="templates" element={<TemplatesPage />} />
-          <Route path="runtime-assets" element={<RuntimeAssetsPage />} />
-          <Route path="schedules" element={<SchedulesPage />} />
-          <Route path="backups" element={<BackupsPage />} />
-          <Route path="backup-storages" element={<BackupStoragesPage />} />
-          <Route path="audit" element={<AuditPage />} />
-          <Route path="tasks" element={<TasksPage />} />
-          {/* 通知中心（FR-216）：站内信 + 告警合并的统一通知流页。 */}
-          <Route path="notifications" element={<NotificationCenterPage />} />
-          <Route path="client-channels" element={<ClientChannelsPage />} />
-          <Route path="client-dist-security" element={<ProtectionCenterPage />} />
-          <Route path="client-channels/:id/publish" element={<ClientPublishPage />} />
-          <Route path="logs" element={<LogsPage />} />
-          {/* 观测·统计占位页（FR-215）；实质内容由 FR-220 补齐。 */}
-          <Route path="statistics" element={<StatisticsPage />} />
-          {/* 观测·客户端分发监控页（FR-218）：消费 FR-217 观测底座出时序趋势 + 分布/榜单，总览 + 频道筛选。
-              用平级路径（非 /monitor/* 嵌套）避免侧栏「监控总览」NavLink 前缀匹配误高亮。 */}
-          <Route path="client-dist-monitor" element={<ClientDistMonitoringPage />} />
-          {/* 观测域同义旧链接重定向兼容（FR-215）：避免外部/手输旧路径 404。 */}
-          <Route path="monitoring" element={<Navigate to="/monitor" replace />} />
-          <Route path="stats" element={<Navigate to="/statistics" replace />} />
-          <Route path="observability" element={<Navigate to="/monitor" replace />} />
-          <Route path="storage" element={<StoragePage />} />
-          <Route path="settings" element={<SettingsPage />} />
-          <Route path="database" element={<DatabasePage />} />
-          <Route path="system-update" element={<SystemUpdatePage />} />
-          <Route path="licenses" element={<LicensesPage />} />
-          <Route path="*" element={<WorkspaceEmpty />} />
-        </Routes>
+      <div className={isInstanceRoute ? 'jm-workspace-bg h-full w-full overflow-auto p-3 [scrollbar-gutter:stable]' : 'jm-workspace-bg h-full w-full overflow-auto p-3 [scrollbar-gutter:stable] sm:p-5 lg:p-6'}>
+        <div key={routeKey} data-slot="workspace-route-transition" className="jm-route-transition min-h-full">
+          <Routes>
+            <Route index element={<OverviewPage />} />
+            <Route path="monitor" element={<MonitoringPage />} />
+            <Route path="nodes" element={<NodesPage />} />
+            <Route path="instances" element={<InstancesPage />} />
+            <Route path="instances/new" element={<InstanceWizardPage />} />
+            <Route path="instances/:id" element={<InstanceDetailPage />} />
+            <Route path="networks" element={<NetworksPage />} />
+            <Route path="networks/topology" element={<NetworksPage />} />
+            <Route path="players" element={<PlayersPage />} />
+            <Route path="bots" element={<BotsPage />} />
+            <Route path="alerts" element={<AlertsPage />} />
+            <Route path="users" element={<UsersPage />} />
+            <Route path="groups" element={<GroupsPage />} />
+            <Route path="templates" element={<TemplatesPage />} />
+            <Route path="runtime-assets" element={<RuntimeAssetsPage />} />
+            <Route path="schedules" element={<SchedulesPage />} />
+            <Route path="backups" element={<BackupsPage />} />
+            <Route path="backup-storages" element={<BackupStoragesPage />} />
+            <Route path="audit" element={<AuditPage />} />
+            <Route path="tasks" element={<TasksPage />} />
+            {/* 通知中心（FR-216）：站内信 + 告警合并的统一通知流页。 */}
+            <Route path="notifications" element={<NotificationCenterPage />} />
+            <Route path="client-channels" element={<ClientChannelsPage />} />
+            <Route path="client-dist-security" element={<ProtectionCenterPage />} />
+            <Route path="client-channels/:id/publish" element={<ClientPublishPage />} />
+            <Route path="logs" element={<LogsPage />} />
+            {/* 观测·统计占位页（FR-215）；实质内容由 FR-220 补齐。 */}
+            <Route path="statistics" element={<StatisticsPage />} />
+            {/* 观测·客户端分发监控页（FR-218）：消费 FR-217 观测底座出时序趋势 + 分布/榜单，总览 + 频道筛选。
+                用平级路径（非 /monitor/* 嵌套）避免侧栏「监控总览」NavLink 前缀匹配误高亮。 */}
+            <Route path="client-dist-monitor" element={<ClientDistMonitoringPage />} />
+            {/* 观测域同义旧链接重定向兼容（FR-215）：避免外部/手输旧路径 404。 */}
+            <Route path="monitoring" element={<Navigate to="/monitor" replace />} />
+            <Route path="stats" element={<Navigate to="/statistics" replace />} />
+            <Route path="observability" element={<Navigate to="/monitor" replace />} />
+            <Route path="storage" element={<StoragePage />} />
+            <Route path="settings" element={<SettingsPage />} />
+            <Route path="database" element={<DatabasePage />} />
+            <Route path="system-update" element={<SystemUpdatePage />} />
+            <Route path="licenses" element={<LicensesPage />} />
+            <Route path="*" element={<WorkspaceEmpty />} />
+          </Routes>
+        </div>
       </div>
     </Suspense>
   )

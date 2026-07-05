@@ -3,9 +3,9 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useUpdateInstance } from '@/api/instances'
 import { useNodeJDKs } from '@/api/jdks'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
-import { FieldLabel } from '@/components/ui/field-label'
-import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import { FieldLabel } from '@jianmanager/ui/components/field-label'
+import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 
 interface EditInstanceConfigDialogProps {
   instanceId: number

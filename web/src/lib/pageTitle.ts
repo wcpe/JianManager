@@ -9,7 +9,7 @@ const SEGMENT_TITLE_KEYS: Record<string, string> = {
   monitor: 'nav.monitoring',
   nodes: 'nav.nodes',
   instances: 'nav.allInstances',
-  networks: 'nav.networks',
+  networks: 'nav.networkTopology',
   players: 'nav.players',
   bots: 'nav.bots',
   alerts: 'nav.alerts',
@@ -35,10 +35,12 @@ const SEGMENT_TITLE_KEYS: Record<string, string> = {
 
 /**
  * 据 pathname 取页面标题 i18n key：
- * 根路径 → 仪表盘；已知首段 → 对应区标题；未知 → 空串（调用方回退到通用「控制台」）。
+ * 根路径 → 平台首页；已知首段 → 对应区标题；未知 → 空串（调用方回退到通用「控制台」）。
  */
 export function consoleTitleKey(pathname: string): string {
-  const seg = pathname.split('/').filter(Boolean)[0]
-  if (!seg) return 'nav.dashboard'
+  const segs = pathname.split('/').filter(Boolean)
+  if (segs[0] === 'networks') return segs[1] === 'topology' ? 'nav.networkTopology' : 'nav.groupManagement'
+  const seg = segs[0]
+  if (!seg) return 'nav.platformHome'
   return SEGMENT_TITLE_KEYS[seg] ?? ''
 }

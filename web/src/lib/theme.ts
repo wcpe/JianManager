@@ -6,7 +6,7 @@
  * 保证「明暗初始化提到入口、登录页也套」与首屏无闪一处实现、不重复。
  */
 
-/** 主题色：靛蓝为默认（无 data-theme，承 FR-163 根变量）；青绿为第二主题。 */
+/** 主题色：Jian 绿为默认（兼容旧 indigo 存储值，无 data-theme，承根变量）；青绿为第二主题。 */
 export type ColorTheme = 'indigo' | 'teal'
 
 /** 明暗偏好三态。 */
@@ -21,7 +21,7 @@ export const MODE_KEY = 'theme'
 /** 主题色持久键。 */
 export const COLOR_THEME_KEY = 'colorTheme'
 
-/** 将任意持久值/输入归一为合法主题色，未知回退 indigo（默认主题）。 */
+/** 将任意持久值/输入归一为合法主题色，未知回退 indigo（默认品牌主题）。 */
 export function resolveColorTheme(value: string | null | undefined): ColorTheme {
   return value === 'teal' ? 'teal' : 'indigo'
 }

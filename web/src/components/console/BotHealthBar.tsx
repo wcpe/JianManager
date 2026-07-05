@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { healthBreakdown, type HealthKind } from './bot-health'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 
 /** 健康段类型 → 配色（绿/琥珀/红/灰），用 FR-163 状态 token。 */
 const SEG_COLOR: Record<HealthKind, string> = {

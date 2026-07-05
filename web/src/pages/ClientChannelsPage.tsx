@@ -34,9 +34,9 @@ import {
   type ReadinessStep,
   type ReadinessStepId,
 } from '@/lib/client-readiness'
-import { cn } from '@/lib/utils'
-import { Badge } from '@/components/ui/badge'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { cn } from '@jianmanager/ui'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import {
   Dialog,
   DialogContent,
@@ -44,10 +44,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
-import { scrollableDialogContentClass, ScrollableDialogBody } from '@/components/ui/scrollable-dialog'
-import { Button } from '@/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+} from '@jianmanager/ui/components/dialog'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
+import { Button } from '@jianmanager/ui/components/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
 import DangerConfirm from '@/components/DangerConfirm'
 import ClientVersionsPanel from '@/components/ClientVersionsPanel'
 import ClientStatsPanel from '@/components/ClientStatsPanel'
@@ -103,13 +103,13 @@ export default function ClientChannelsPage() {
   const isEmpty = list.length === 0 && !isLoading
 
   return (
-    <div className="space-y-6">
+    <div data-page="client-channels" className="jm-page-stack space-y-4">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="jm-page-title flex items-center gap-2">
             <DownloadCloud className="size-6" /> {t('clientChannels.title', '客户端分发')}
           </h1>
-          <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+          <p className="jm-page-subtitle">
             {t('clientChannels.subtitle', '管理客户端分发频道与拉取密钥。每服一个频道，密钥用于玩家侧更新器拉取。')}
           </p>
         </div>
@@ -360,7 +360,7 @@ function ChannelWorkbench({
   }
 
   return (
-    <div className="space-y-6">
+    <div data-page="client-channel-workbench" className="jm-page-stack space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <button
@@ -371,7 +371,7 @@ function ChannelWorkbench({
             <ChevronLeft className="size-5" />
           </button>
           <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
+            <h1 className="jm-page-title flex items-center gap-2">
               <KeyRound className="size-5" /> {detail?.name ?? channelId}
             </h1>
             <p className="text-xs text-muted-foreground font-mono mt-1">{channelId}</p>

@@ -8,6 +8,7 @@ import { mockInject } from '@/mocks/inject'
 import { server } from '@/mocks/server'
 import { API } from '@/mocks/api'
 import NetworksPage from './NetworksPage'
+import { NAV_GROUPS } from '@/components/console/nav-config'
 
 /**
  * NetworksPage 强断言纵切（FR-203 群组服网络域）：验种子渲染 + 创建联动 + 错误注入。
@@ -20,9 +21,27 @@ beforeEach(() => {
 })
 
 describe('NetworksPage（mock 假后端）', () => {
-  it('① 渲染出种子群组（名称 + 成员数）', async () => {
-    renderWithProviders(<NetworksPage />, { route: '/networks' })
+  it('拓扑深链直接渲染拓扑视图，避免两个侧栏入口落到同一列表', async () => {
+    renderWithProviders(<NetworksPage />, { route: '/networks/topology' })
 
+    expect(await screen.findByText('群组服拓扑')).toBeInTheDocument()
+    expect(screen.queryByText('survival')).not.toBeInTheDocument()
+  })
+
+  it('侧栏群组网络两个入口分别指向分组管理与拓扑页', () => {
+    const group = NAV_GROUPS.find((item) => item.key === 'groupNetwork')
+    const targets = group?.children?.map((item) => item.to)
+
+    expect(targets).toEqual(['/networks/topology', '/networks'])
+  })
+
+  it('① 渲染出种子群组（名称 + 成员数）', async () => {
+    const { container } = renderWithProviders(<NetworksPage />, { route: '/networks' })
+
+    expect(container.firstElementChild).toHaveAttribute('data-page', 'networks')
+    expect(container.firstElementChild).toHaveClass('jm-page-stack')
+    expect(screen.getByRole('button', { name: '创建群组' })).toHaveAttribute('data-slot', 'button')
+    expect(screen.getByRole('button', { name: /列表/ }).parentElement).toHaveClass('jm-toolbar-surface')
     expect(await screen.findByText('survival')).toBeInTheDocument()
     expect(screen.getByText('creative')).toBeInTheDocument()
     expect(screen.getByText('minigames')).toBeInTheDocument()

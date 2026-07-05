@@ -13,11 +13,11 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
-import { scrollableDialogContentClass, ScrollableDialogBody } from '@/components/ui/scrollable-dialog'
-import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
-import { FieldLabel, FieldError } from '@/components/ui/field-label'
+} from '@jianmanager/ui/components/dialog'
+import { Button } from '@jianmanager/ui/components/button'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
+import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import {
   validateRequired,
   validateAbsPath,

@@ -3,14 +3,15 @@ import { useTranslation } from 'react-i18next'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
 import { useMetricOverview } from '@/api/metrics'
-import { Panel } from '@/components/ui/panel'
-import { StatCard } from '@/components/ui/stat-card'
-import { ResourceGauge } from '@/components/ui/gauge'
-import { StatusBadge } from '@/components/ui/status-badge'
-import { TimeSeriesChart, type ChartSeries } from '@/components/charts/TimeSeriesChart'
-import { RangePicker, type MetricRange } from '@/components/charts/RangePicker'
-import { instanceStatusLevel } from '@/lib/threshold'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { StatCard } from '@jianmanager/ui/components/stat-card'
+import { ResourceGauge } from '@jianmanager/ui/components/gauge'
+import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui'
+import { RangePicker, type MetricRange } from '@jianmanager/ui'
+import { instanceStatusLevel } from '@jianmanager/ui'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
+import { useVirtualRows } from '@/lib/virtual-list'
 
 /** 字节 → 紧凑可读（G/M/K）。 */
 function fmtBytes(b: number): string {
@@ -27,6 +28,18 @@ export default function OverviewPage() {
   const { data: nodes } = useNodes()
   const { data: instances } = useInstances()
   const { data: overview } = useMetricOverview(range)
+  const instanceRows = instances ?? []
+  const {
+    containerRef: instanceContainerRef,
+    onScroll: handleInstanceScroll,
+    range: instanceRange,
+  } = useVirtualRows({
+    total: instanceRows.length,
+    itemSize: 42,
+    overscan: 8,
+    fallbackViewportSize: 420,
+  })
+  const visibleInstances = instanceRows.slice(instanceRange.start, instanceRange.end)
 
   const totals = overview?.totals
   const memPct = totals && totals.memTotalBytes > 0 ? (totals.memUsedBytes / totals.memTotalBytes) * 100 : 0
@@ -39,14 +52,14 @@ export default function OverviewPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold">{t('dashboard.title')}</h1>
+    <div data-page="overview" className="jm-page-stack space-y-4">
+      <div className="jm-page-header">
+        <h1 className="jm-page-title">{t('dashboard.title')}</h1>
         <RangePicker value={range} onChange={setRange} />
       </div>
 
       {/* 顶部：环形仪表盘 + 统计块 */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
         <Panel bodyClassName="flex items-center justify-center py-3">
           <ResourceGauge label={t('dashboard.totalCpu')} value={totals?.cpuPct ?? 0} unit="%" />
         </Panel>
@@ -84,34 +97,52 @@ export default function OverviewPage() {
       </div>
 
       {/* 底部：密集实例表 */}
-      <Panel title={t('dashboard.instanceList')} bodyClassName="p-0">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>{t('instances.name')}</TableHead>
-              <TableHead>{t('instances.type')}</TableHead>
-              <TableHead>{t('instances.status')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {instances?.map((inst) => (
-              <TableRow key={inst.id}>
-                <TableCell className="font-medium">{inst.name}</TableCell>
-                <TableCell className="text-muted-foreground">{inst.type}</TableCell>
-                <TableCell>
-                  <StatusBadge level={instanceStatusLevel(inst.status)} label={inst.status} />
-                </TableCell>
-              </TableRow>
-            ))}
-            {(!instances || instances.length === 0) && (
+      <Panel title={t('dashboard.instanceList')} bodyClassName="p-0" className="overflow-hidden">
+        <div
+          ref={instanceContainerRef}
+          onScroll={handleInstanceScroll}
+          data-testid="overview-instances-virtual"
+          data-total-count={instanceRows.length}
+          className="max-h-[420px] overflow-auto"
+        >
+          <Table>
+            <TableHeader className="sticky top-0 z-10 bg-card">
               <TableRow>
-                <TableCell colSpan={3} className="h-16 text-center text-muted-foreground">
-                  {t('instances.empty')}
-                </TableCell>
+                <TableHead>{t('instances.name')}</TableHead>
+                <TableHead>{t('instances.type')}</TableHead>
+                <TableHead>{t('instances.status')}</TableHead>
               </TableRow>
-            )}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {instanceRange.before > 0 && (
+                <TableRow aria-hidden="true">
+                  <TableCell colSpan={3} className="p-0" style={{ height: instanceRange.before }} />
+                </TableRow>
+              )}
+              {visibleInstances.map((inst) => (
+                <TableRow key={inst.id} data-testid="overview-instance-row">
+                  <TableCell className="font-medium">{inst.name}</TableCell>
+                  <TableCell className="text-muted-foreground">{inst.type}</TableCell>
+                  <TableCell>
+                    <StatusBadge level={instanceStatusLevel(inst.status)} label={inst.status} />
+                  </TableCell>
+                </TableRow>
+              ))}
+              {instanceRange.after > 0 && (
+                <TableRow aria-hidden="true">
+                  <TableCell colSpan={3} className="p-0" style={{ height: instanceRange.after }} />
+                </TableRow>
+              )}
+              {instanceRows.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={3} className="h-16 text-center text-muted-foreground">
+                    {t('instances.empty')}
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
       </Panel>
     </div>
   )

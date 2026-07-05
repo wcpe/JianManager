@@ -1,5 +1,5 @@
 import type { NodeInfo } from '@/api/nodes'
-import type { ComboboxOption } from '@/components/ui/combobox'
+import type { ComboboxOption } from '@jianmanager/ui/components/combobox'
 
 /** buildNodeOptions 仅需节点的标识与状态字段（结构化子集，便于解耦与纯函数测试）。 */
 export type NodeOptionInput = Pick<NodeInfo, 'id' | 'name' | 'status'> & { maintenance?: boolean }
@@ -19,6 +19,10 @@ export interface NodeStatusLabels {
  * 原 `filter(status===1)` 致节点离线或尚未上报心跳时下拉为空且无任何提示（用户报「节点选不了、都是空的」）。
  * 状态与维护态标注在标签上，离线节点可选但一目了然。
  */
+export function initialWizardNodeId(searchNode: string | null, selectedNodeId: number | null): string {
+  return searchNode ?? (selectedNodeId == null ? '' : String(selectedNodeId))
+}
+
 export function buildNodeOptions(
   nodes: NodeOptionInput[] | undefined,
   labels: NodeStatusLabels,

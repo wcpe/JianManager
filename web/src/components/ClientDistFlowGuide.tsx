@@ -9,7 +9,7 @@ import {
   Rocket,
   Route,
 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 
 /**
  * 客户端分发端到端流程图（FR-194，纯前端，增强 FR-187）。

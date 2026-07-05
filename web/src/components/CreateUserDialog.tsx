@@ -3,9 +3,9 @@ import { useTranslation } from 'react-i18next'
 import { useQueryClient, useMutation } from '@tanstack/react-query'
 import api from '@/api/client'
 import { type UserInfo } from '@/api/users'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
-import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
-import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired, minLength, validateFields, hasErrors } from '@/lib/form-validation'
 
 interface CreateUserDialogProps {

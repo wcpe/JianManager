@@ -1,9 +1,9 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUpdateUser, type UserInfo } from '@/api/users'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
-import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
-import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { minLength } from '@/lib/form-validation'
 
 // 与初始化/创建用户的密码下限一致（BUG-022）。

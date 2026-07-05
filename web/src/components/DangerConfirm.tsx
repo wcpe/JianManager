@@ -8,10 +8,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+} from '@jianmanager/ui/components/dialog'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Label } from '@jianmanager/ui/components/label'
 import { useDangerPermission, type DangerScope } from '@/lib/danger'
 
 /**

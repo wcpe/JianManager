@@ -4,11 +4,11 @@ import { useTranslation } from 'react-i18next'
 import { useLogin } from '@/api/auth'
 import { useSetupStatus } from '@/api/setup'
 import { useAuthStore } from '@/stores/auth'
-import { Panel } from '@/components/ui/panel'
-import { Input } from '@/components/ui/input'
-import { PasswordInput } from '@/components/ui/password-input'
-import { Label } from '@/components/ui/label'
-import { Button } from '@/components/ui/button'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { Input } from '@jianmanager/ui/components/input'
+import { PasswordInput } from '@jianmanager/ui/components/password-input'
+import { Label } from '@jianmanager/ui/components/label'
+import { Button } from '@jianmanager/ui/components/button'
 
 export default function LoginPage() {
   const { t } = useTranslation()

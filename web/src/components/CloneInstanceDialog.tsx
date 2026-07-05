@@ -3,11 +3,11 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useInstances } from '@/api/instances'
 import { useCloneInstance, type CloneResult } from '@/api/clone'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
-import { Checkbox } from '@/components/ui/checkbox'
-import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
+import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired } from '@/lib/form-validation'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 
 /** 把逗号/换行分隔的 glob 串解析为数组（FR-231 高级复制筛选）。 */
 const parseGlobs = (s: string) => s.split(/[\n,]/).map((x) => x.trim()).filter(Boolean)

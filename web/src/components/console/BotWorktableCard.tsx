@@ -1,12 +1,12 @@
 import { useTranslation } from 'react-i18next'
 import { Bot, Server, Activity, Box, ChevronDown, ChevronRight } from 'lucide-react'
 import type { BotSummaryGroup } from '@/api/bots'
-import { Checkbox } from '@/components/ui/checkbox'
-import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
+import { Badge } from '@jianmanager/ui/components/badge'
 import { BotHealthBar } from './BotHealthBar'
 import type { GroupByDim } from '@/pages/bots-overview'
 import { toneChipClass, type Tone } from '@/lib/tone'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 
 /** 分组维度 → 图标 + 图标块色调。 */
 function dimVisual(dim: GroupByDim): { icon: typeof Bot; tone: Tone } {

@@ -20,10 +20,10 @@ import {
   type StorageOverview,
 } from '@/api/storage'
 import { useAuthStore } from '@/stores/auth'
-import { Panel } from '@/components/ui/panel'
-import { Button } from '@/components/ui/button'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { cn } from '@/lib/utils'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { Button } from '@jianmanager/ui/components/button'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
+import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/DangerConfirm'
 import {
   formatBytes,

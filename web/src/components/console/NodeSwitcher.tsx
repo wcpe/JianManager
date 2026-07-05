@@ -8,7 +8,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
+} from '@jianmanager/ui/components/select'
 
 /** 哨兵值：表示「全部节点」（shadcn Select 仅接受字符串 value）。 */
 const ALL = 'all'

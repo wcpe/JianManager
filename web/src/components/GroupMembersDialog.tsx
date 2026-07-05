@@ -2,9 +2,9 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useGroups, useAddGroupMember, useRemoveGroupMember } from '@/api/groups'
 import { useUsers } from '@/api/users'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
-import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
-import { Button } from '@/components/ui/button'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { Button } from '@jianmanager/ui/components/button'
 
 interface GroupMembersDialogProps {
   /** 目标组 ID（从实时 useGroups 读取，使增删成员即时反映）。 */

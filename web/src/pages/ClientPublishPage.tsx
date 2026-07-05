@@ -36,9 +36,9 @@ import {
   type LocalUnit,
   type FileSystemEntryLike,
 } from '@/lib/client-publish-wizard'
-import { cn } from '@/lib/utils'
-import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
+import { cn } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import DangerConfirm from '@/components/DangerConfirm'
 import FileExplorer from '@/components/FileExplorer'
 import CleanScopeEditor from '@/components/CleanScopeEditor'

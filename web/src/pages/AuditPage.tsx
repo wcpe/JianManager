@@ -3,17 +3,17 @@ import { useTranslation } from 'react-i18next'
 import { ChevronRight, Download } from 'lucide-react'
 import { useAuditLogs, type AuditLogInfo } from '@/api/audit'
 import { useUsers } from '@/api/users'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Panel } from '@/components/ui/panel'
-import { cn } from '@/lib/utils'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { cn } from '@jianmanager/ui'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
+} from '@jianmanager/ui/components/select'
 import {
   AUDIT_PAGE_STEP,
   DEFAULT_AUDIT_FILTER,

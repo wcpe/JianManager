@@ -24,7 +24,7 @@ import {
   type ManifestFileLike,
   type TreeDir,
 } from '@/lib/client-publish-wizard'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 
 // ── 颜色映射 ──────────────────────────────────────────────────────────
 

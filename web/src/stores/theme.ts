@@ -26,7 +26,7 @@ interface ThemeState {
   theme: ThemeMode
   /** 解析后的实际明暗（system 落到具体值） */
   resolvedTheme: ResolvedMode
-  /** 主题色：靛蓝（默认）/ 青绿 */
+  /** 主题色：Jian 绿（默认，兼容 indigo 存储值）/ 青绿 */
   colorTheme: ColorTheme
   setTheme: (theme: ThemeMode) => void
   setColorTheme: (color: ColorTheme) => void

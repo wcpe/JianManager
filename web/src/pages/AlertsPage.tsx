@@ -17,9 +17,9 @@ import {
   type EventQuery,
 } from '@/api/alerts'
 import DangerConfirm from '@/components/DangerConfirm'
-import { Panel } from '@/components/ui/panel'
-import { StatusBadge } from '@/components/ui/status-badge'
-import { Button } from '@/components/ui/button'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { Button } from '@jianmanager/ui/components/button'
 import {
   Table,
   TableBody,
@@ -27,7 +27,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table'
+} from '@jianmanager/ui/components/table'
 import { RuleDialog } from './alerts/RuleDialog'
 import { ChannelDialog } from './alerts/ChannelDialog'
 import {

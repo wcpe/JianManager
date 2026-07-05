@@ -22,7 +22,11 @@ describe('NodesPage（mock 假后端）', () => {
   it('渲染 seed 节点列表（alpha / beta）', async () => {
     loginMockUser()
     stubInstances()
-    renderWithProviders(<NodesPage />)
+    const { container } = renderWithProviders(<NodesPage />)
+    expect(container.firstElementChild).toHaveAttribute('data-page', 'nodes')
+    expect(container.firstElementChild).toHaveClass('jm-page-stack')
+    expect(container.firstElementChild).toHaveClass('flex-col')
+    expect(container.firstElementChild).toHaveClass('lg:flex-row')
 
     // beta 仅列表出现（唯一，作 await 锚点）；alpha 为首个、进页默认选中（FR-232）→ 列表 + 详情各一处，故 getAllByText。
     expect(await screen.findByText('beta')).toBeInTheDocument()

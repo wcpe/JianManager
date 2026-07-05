@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { Loader2, CheckCircle2, XCircle, Wifi } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Button } from '@jianmanager/ui/components/button'
 import { usePingNode } from '@/api/diagnostics'
 
 /**

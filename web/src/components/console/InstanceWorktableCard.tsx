@@ -8,12 +8,12 @@ import {
 } from '@/api/instances'
 import { useInstanceMetrics } from '@/api/metrics'
 import { useConsoleStore } from '@/stores/console'
-import { MiniBar } from '@/components/ui/mini-bar'
-import { Button } from '@/components/ui/button'
-import { StatusBadge } from '@/components/ui/status-badge'
-import { instanceStatusLevel, type StatusLevel } from '@/lib/threshold'
+import { MiniBar } from '@jianmanager/ui/components/mini-bar'
+import { Button } from '@jianmanager/ui/components/button'
+import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui'
 import { toneChipClass, type Tone } from '@/lib/tone'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 
 /** 实例状态 → 图标块语义色调（与状态徽章同色系，运行=主色块）。 */
 function statusTone(status: string): Tone {

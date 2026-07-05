@@ -37,24 +37,24 @@ import {
   type MarketIcon,
 } from '@/lib/template-apply'
 import type { Tone } from '@/lib/tone'
-import { Panel } from '@/components/ui/panel'
-import { StatCard } from '@/components/ui/stat-card'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { StatCard } from '@jianmanager/ui/components/stat-card'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Textarea } from '@jianmanager/ui/components/textarea'
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
-import { scrollableDialogContentClass, ScrollableDialogBody } from '@/components/ui/scrollable-dialog'
-import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
-import { FieldLabel, FieldError } from '@/components/ui/field-label'
+} from '@jianmanager/ui/components/dialog'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
+import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired, validateUrl, validateAbsPath, validateFields, hasErrors } from '@/lib/form-validation'
 import { copyToClipboard } from '@/lib/clipboard'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/DangerConfirm'
 
 /** 市场图标语义名 → lucide 组件（纯函数派生图标，组件侧落地）。 */

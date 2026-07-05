@@ -2,30 +2,30 @@ import { describe, it, expect } from 'vitest'
 import { breadcrumbTrail } from './breadcrumb'
 
 describe('breadcrumbTrail', () => {
-  it('根路径 → 单节点总览（无 to）', () => {
-    expect(breadcrumbTrail('/')).toEqual([{ labelKey: 'nav.dashboard' }])
-    expect(breadcrumbTrail('')).toEqual([{ labelKey: 'nav.dashboard' }])
+  it('根路径 → 平台首页（无 to）', () => {
+    expect(breadcrumbTrail('/')).toEqual([{ labelKey: 'nav.platformHome' }])
+    expect(breadcrumbTrail('')).toEqual([{ labelKey: 'nav.platformHome' }])
   })
 
   it('顶层列表页 → [域(无 to), 页面(无 to，当前页)]', () => {
     expect(breadcrumbTrail('/instances')).toEqual([
-      { labelKey: 'nav.cluster' },
+      { labelKey: 'nav.servers' },
       { labelKey: 'nav.allInstances' },
     ])
-    // 告警管理页归「系统」域（FR-216：告警随通知中心收口到系统/账户与审计）。
+    // 告警管理页随平台管理域收口。
     expect(breadcrumbTrail('/alerts')).toEqual([
-      { labelKey: 'nav.system' },
+      { labelKey: 'nav.platformManagement' },
       { labelKey: 'nav.alerts' },
     ])
   })
 
-  it('集群域 超级工作台 / 导播台 与导航文案一致（FR-245 补漏）', () => {
+  it('服务器域 超级工作台 / 导播台 与导航文案一致（FR-254）', () => {
     expect(breadcrumbTrail('/super')).toEqual([
-      { labelKey: 'nav.cluster' },
+      { labelKey: 'nav.servers' },
       { labelKey: 'nav.superWorkbench' },
     ])
     expect(breadcrumbTrail('/director')).toEqual([
-      { labelKey: 'nav.cluster' },
+      { labelKey: 'nav.servers' },
       { labelKey: 'nav.director' },
     ])
   })
@@ -37,9 +37,9 @@ describe('breadcrumbTrail', () => {
     ])
   })
 
-  it('通知中心归「系统」域（FR-216）', () => {
+  it('通知中心归「平台管理」域（FR-254）', () => {
     expect(breadcrumbTrail('/notifications')).toEqual([
-      { labelKey: 'nav.system' },
+      { labelKey: 'nav.platformManagement' },
       { labelKey: 'nav.notifications' },
     ])
   })
@@ -59,27 +59,27 @@ describe('breadcrumbTrail', () => {
     ])
   })
 
-  it('任务中心归「系统」域（FR-215 迁出观测）', () => {
+  it('任务中心归「平台管理」域（FR-254）', () => {
     expect(breadcrumbTrail('/tasks')).toEqual([
-      { labelKey: 'nav.system' },
+      { labelKey: 'nav.platformManagement' },
       { labelKey: 'nav.tasks' },
     ])
   })
 
   it('子路由 → 页面节点可点回列表（末级名称由调用方补）', () => {
     expect(breadcrumbTrail('/instances/42')).toEqual([
-      { labelKey: 'nav.cluster' },
+      { labelKey: 'nav.servers' },
       { labelKey: 'nav.allInstances', to: '/instances' },
     ])
   })
 
-  it('系统域页面归「系统」', () => {
+  it('平台管理域页面归「平台管理」', () => {
     expect(breadcrumbTrail('/users')).toEqual([
-      { labelKey: 'nav.system' },
+      { labelKey: 'nav.platformManagement' },
       { labelKey: 'nav.users' },
     ])
     expect(breadcrumbTrail('/licenses')).toEqual([
-      { labelKey: 'nav.system' },
+      { labelKey: 'nav.platformManagement' },
       { labelKey: 'licenses.title' },
     ])
   })

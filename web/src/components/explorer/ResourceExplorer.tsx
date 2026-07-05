@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useQueryClient } from '@tanstack/react-query'
 import { History, Save, X } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Button } from '@jianmanager/ui/components/button'
 import DangerConfirm from '@/components/DangerConfirm'
 import {
   fetchFileList,

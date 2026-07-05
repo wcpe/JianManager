@@ -6,16 +6,16 @@ import {
   type AlertRuleInfo,
   type AlertChannelInfo,
 } from '@/api/alerts'
-import { FieldLabel, FieldError } from '@/components/ui/field-label'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
-import { Checkbox } from '@/components/ui/checkbox'
+import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
+} from '@jianmanager/ui/components/select'
 import {
   triggerUsesMetric,
   triggerUsesKeyword,

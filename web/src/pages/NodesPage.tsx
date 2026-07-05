@@ -21,24 +21,24 @@ import {
 import { useInstances } from '@/api/instances'
 import api from '@/api/client'
 import { useMetricSeries, type MetricSeriesResponse } from '@/api/metrics'
-import { Badge } from '@/components/ui/badge'
-import { Panel } from '@/components/ui/panel'
-import { Input } from '@/components/ui/input'
-import { MiniBar } from '@/components/ui/mini-bar'
-import { StatusBadge } from '@/components/ui/status-badge'
-import { ResourceGauge } from '@/components/ui/gauge'
-import { StatCard } from '@/components/ui/stat-card'
-import { SummaryChips, type SummaryChip } from '@/components/ui/summary-chips'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { Input } from '@jianmanager/ui/components/input'
+import { MiniBar } from '@jianmanager/ui/components/mini-bar'
+import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { ResourceGauge } from '@jianmanager/ui/components/gauge'
+import { StatCard } from '@jianmanager/ui/components/stat-card'
+import { SummaryChips, type SummaryChip } from '@jianmanager/ui/components/summary-chips'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-} from '@/components/ui/dropdown-menu'
-import { TimeSeriesChart, type ChartSeries } from '@/components/charts/TimeSeriesChart'
-import { RangePicker, type MetricRange } from '@/components/charts/RangePicker'
-import { resourceLevel } from '@/lib/threshold'
+} from '@jianmanager/ui/components/dropdown-menu'
+import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui'
+import { RangePicker, type MetricRange } from '@jianmanager/ui'
+import { resourceLevel } from '@jianmanager/ui'
 import { summarizeNodes } from '@/lib/node-summary'
 import {
   nodeStatusLevel,
@@ -48,7 +48,7 @@ import {
   persistNodeListCollapsed,
 } from '@/lib/node-list'
 import { toneChipClass } from '@/lib/tone'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 
 import NodeJDKPanel from '@/components/NodeJDKPanel'
 import NodePortsPanel from '@/components/NodePortsPanel'
@@ -57,7 +57,7 @@ import NodeProxyPanel from '@/components/NodeProxyPanel'
 import NodeRepairPanel from '@/components/NodeRepairPanel'
 import DangerConfirm from '@/components/DangerConfirm'
 import AddNodeDialog from '@/components/AddNodeDialog'
-import { Button } from '@/components/ui/button'
+import { Button } from '@jianmanager/ui/components/button'
 
 /** 将字节数格式化为人类可读的大小（B/KB/MB/GB）。 */
 function formatBytes(bytes: number): string {
@@ -450,12 +450,12 @@ export default function NodesPage() {
   const gauge = (pct: number | null) => (pct === null ? '--' : `${pct.toFixed(0)}%`)
 
   return (
-    <div className="flex h-[calc(100vh-7rem)] min-h-0 gap-3">
+    <div data-page="nodes" className="jm-page-stack flex h-auto min-h-0 flex-col gap-3 lg:h-[calc(100vh-8.25rem)] lg:flex-row">
       {/* 左栏：可收缩节点列表（窄图标轨 ⇄ 展开），收缩态持久 */}
       <aside
         className={cn(
-          'flex min-h-0 shrink-0 flex-col rounded-xl border bg-card transition-[width] duration-200 ease-ios',
-          collapsed ? 'w-14' : 'w-72',
+          'flex min-h-0 shrink-0 flex-col rounded-lg border bg-card/95 shadow-soft backdrop-blur-sm transition-[width] duration-200 ease-ios',
+          collapsed ? 'w-full lg:w-14' : 'w-full lg:w-72',
         )}
       >
         {collapsed ? (
@@ -553,7 +553,7 @@ export default function NodesPage() {
             onDelete={() => setPending({ kind: 'delete', node: selected })}
           />
         ) : (
-          <div className="grid h-full place-items-center rounded-xl border border-dashed bg-card/40">
+          <div className="grid h-full place-items-center rounded-lg border border-dashed bg-card/50 shadow-soft">
             <div className="flex flex-col items-center gap-2 text-center text-muted-foreground">
               <Server className="size-8 opacity-40" />
               <p className="text-sm">{t('nodes.selectHint')}</p>

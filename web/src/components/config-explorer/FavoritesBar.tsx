@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Star, ChevronDown, ChevronRight, FileText, Search } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 import { useConfigDiscover } from '@/api/configs'
 import { groupDiscovered, baseNameOf } from './discover'
 

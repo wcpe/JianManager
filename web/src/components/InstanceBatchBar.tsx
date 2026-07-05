@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useInstanceBatch, type InstanceBatchAction, type InstanceBatchResult } from '@/api/instances'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
 import {
   Dialog,
   DialogContent,
@@ -11,7 +11,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
+} from '@jianmanager/ui/components/dialog'
 
 /** 批量栏所需的选中实例最小信息（含状态，用于状态感知禁用与失败明细，FR-058/FR-139）。 */
 export interface BatchSelectedInstance {

@@ -7,10 +7,10 @@ import { useOnlinePlayers } from '@/api/players'
 import { useMetricOverview } from '@/api/metrics'
 import { useClientDistObservability } from '@/api/clientStats'
 import { useAuthStore } from '@/stores/auth'
-import { Panel } from '@/components/ui/panel'
-import { StatCard } from '@/components/ui/stat-card'
-import { MiniBar } from '@/components/ui/mini-bar'
-import { RangePicker, type MetricRange } from '@/components/charts/RangePicker'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { StatCard } from '@jianmanager/ui/components/stat-card'
+import { MiniBar } from '@jianmanager/ui/components/mini-bar'
+import { RangePicker, type MetricRange } from '@jianmanager/ui'
 import { summarizeInstances } from '@/lib/instance-summary'
 import { summarizeNodes } from '@/lib/node-summary'
 import { tallyBy, summarizeProbeReachability, type DistBucket } from '@/lib/platform-stats'
@@ -33,6 +33,8 @@ function toObsRange(r: MetricRange): ObsRange {
       return '30d'
     case '90d':
       return '90d'
+    case '1y':
+      return '180d'
     default:
       return '7d'
   }

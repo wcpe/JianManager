@@ -30,6 +30,16 @@ describe('LogsPage（mock 假后端）', () => {
     expect(screen.getByText(/heartbeat sent to control-plane/)).toBeInTheDocument()
   })
 
+  it('1000+ 一年日志数据下只渲染可视窗口', async () => {
+    loginMockUser()
+    renderWithProviders(<LogsPage />)
+
+    const surface = await screen.findByTestId('logs-virtual')
+    expect(Number(surface.dataset.totalCount)).toBeGreaterThanOrEqual(1000)
+    expect(await screen.findByText(/12004/)).toBeInTheDocument()
+    expect(screen.queryAllByTestId('log-row').length).toBeLessThan(40)
+  })
+
   it('② 关键字筛选 → 列表联动收敛', async () => {
     loginMockUser()
     renderWithProviders(<LogsPage />)

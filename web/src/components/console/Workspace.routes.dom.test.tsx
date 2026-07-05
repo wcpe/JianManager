@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { useConsoleStore } from '@/stores/console'
@@ -17,13 +17,23 @@ describe('Workspace 观测路由与重定向（FR-215/FR-220）', () => {
   })
 
   it('/statistics 渲染统计页（FR-220 平台聚合）', async () => {
-    renderWithProviders(<Workspace />, { route: '/statistics' })
+    const { container } = renderWithProviders(<Workspace />, { route: '/statistics' })
     expect(await screen.findByRole('heading', { name: '统计' })).toBeInTheDocument()
+    expect(container.querySelector('[data-slot="workspace-route-transition"]')).toBeInTheDocument()
   })
 
   it('/stats 重定向到 /statistics（旧链接不 404）', async () => {
     renderWithProviders(<Workspace />, { route: '/stats' })
     expect(await screen.findByRole('heading', { name: '统计' })).toBeInTheDocument()
     expect(window.location.pathname).toBe('/statistics')
+  })
+
+  it('打开实例工作区时同步到实例深链，避免 URL、侧栏和面包屑错位', async () => {
+    useConsoleStore.setState({ openInstanceId: 1 })
+
+    renderWithProviders(<Workspace />, { route: '/instances' })
+
+    await waitFor(() => expect(window.location.pathname).toBe('/instances/1'))
+    await waitFor(() => expect(useConsoleStore.getState().openInstanceId).toBeNull())
   })
 })

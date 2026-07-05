@@ -11,8 +11,8 @@ import {
 } from '@/api/nodeRuntime'
 import { formatCacheBytes, capGiBToBytes, capBytesToGiB, describeCap } from '@/lib/artifact-cache'
 import { copyToClipboard } from '@/lib/clipboard'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
 import DangerConfirm from '@/components/DangerConfirm'
 
 /**

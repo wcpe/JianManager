@@ -33,14 +33,14 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Panel } from '@/components/ui/panel'
-import { StatusBadge } from '@/components/ui/status-badge'
-import { scrollableDialogContentClass, ScrollableDialogBody } from '@/components/ui/scrollable-dialog'
-import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
-import { FieldLabel } from '@/components/ui/field-label'
+} from '@jianmanager/ui/components/dialog'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
+import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { FieldLabel } from '@jianmanager/ui/components/field-label'
 import {
   Table,
   TableBody,
@@ -48,7 +48,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table'
+} from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/DangerConfirm'
 
 export default function SchedulesPage() {

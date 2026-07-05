@@ -5,24 +5,24 @@ import { Download, Radio } from 'lucide-react'
 import { useLogs, exportLogs, type LogQueryParams } from '@/api/logs'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Panel } from '@/components/ui/panel'
-import { StatusBadge } from '@/components/ui/status-badge'
-import { cn } from '@/lib/utils'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { cn } from '@jianmanager/ui'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+} from '@jianmanager/ui/components/dropdown-menu'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
+} from '@jianmanager/ui/components/select'
 import {
   logLevelStatus,
   timeRangeToParams,
@@ -112,9 +112,9 @@ export default function LogsPage() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t('logs.title')}</h1>
+    <div data-page="logs" className="jm-page-stack flex h-full min-h-0 flex-col gap-4">
+      <div className="jm-page-header">
+        <h1 className="jm-page-title">{t('logs.title')}</h1>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" size="sm" disabled={exporting || total === 0}>
@@ -137,7 +137,7 @@ export default function LogsPage() {
       </div>
 
       {/* 强筛选工具栏 */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
         {/* 级别快速 pill（全部 + 四级） */}
         <div className="flex items-center gap-1">
           <LevelPill active={level === ''} onClick={() => resetTo(setLevel)('')}>
@@ -253,7 +253,7 @@ export default function LogsPage() {
           className="min-h-0 flex-1"
           bodyClassName="flex min-h-0 flex-col p-0"
         >
-          <LogTimeline items={items} follow={follow} />
+          <LogTimeline items={items} total={total} follow={follow} />
           <LogFooter
             follow={follow}
             total={total}
@@ -314,9 +314,11 @@ function LevelPill({
  */
 function LogTimeline({
   items,
+  total,
   follow,
 }: {
   items: import('@/api/logs').LogEntry[]
+  total: number
   follow: boolean
 }) {
   const { t } = useTranslation()
@@ -355,6 +357,8 @@ function LogTimeline({
     <div
       ref={containerRef}
       onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
+      data-testid="logs-virtual"
+      data-total-count={total}
       className="min-h-0 flex-1 overflow-y-auto"
       style={{ maxHeight: VIEWPORT_HEIGHT }}
     >
@@ -372,6 +376,7 @@ function LogRow({ log }: { log: import('@/api/logs').LogEntry }) {
   const { t } = useTranslation()
   return (
     <div
+      data-testid="log-row"
       className="flex items-center gap-3 border-b border-border/60 px-3 text-xs transition-colors hover:bg-accent/50"
       style={{ height: ROW_HEIGHT }}
     >

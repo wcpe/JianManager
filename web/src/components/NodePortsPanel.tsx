@@ -6,7 +6,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table'
+} from '@jianmanager/ui/components/table'
 import { useNodePorts } from '@/api/ports'
 
 /** 节点端口占用面板（FR-032）：展示系统已分配的 server/query 端口与分配范围（RCON 已退役 FR-067）。 */

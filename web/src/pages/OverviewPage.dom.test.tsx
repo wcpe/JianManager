@@ -37,10 +37,21 @@ beforeEach(() => {
 
 describe('OverviewPage（mock 假后端）', () => {
   it('底部实例表渲染种子实例', async () => {
-    renderWithProviders(<OverviewPage />, { route: '/' })
+    const { container } = renderWithProviders(<OverviewPage />, { route: '/' })
+    expect(container.firstElementChild).toHaveAttribute('data-page', 'overview')
+    expect(container.firstElementChild).toHaveClass('jm-page-stack')
     expect(await screen.findByText('survival-1')).toBeInTheDocument()
     expect(screen.getByText('lobby-proxy')).toBeInTheDocument()
     expect(screen.getByText('creative-1')).toBeInTheDocument()
+  })
+
+  it('1000+ mock 实例下底部实例表只渲染可视窗口', async () => {
+    renderWithProviders(<OverviewPage />, { route: '/' })
+
+    const surface = await screen.findByTestId('overview-instances-virtual')
+    await waitFor(() => expect(Number(surface.dataset.totalCount)).toBeGreaterThanOrEqual(1000))
+    expect(await screen.findByText('survival-1')).toBeInTheDocument()
+    expect(screen.queryAllByTestId('overview-instance-row').length).toBeLessThan(80)
   })
 
   it('注入实例列表空态 → 表体显示「暂无实例」', async () => {

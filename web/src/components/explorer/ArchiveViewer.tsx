@@ -10,7 +10,7 @@ import {
   Loader2,
   X,
 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Button } from '@jianmanager/ui/components/button'
 import {
   listArchiveEntries,
   readArchiveEntry,
@@ -20,7 +20,7 @@ import {
 } from '@/api/archive'
 import CodeEditor from './editor/CodeEditor'
 import { buildEntryTree, type EntryNode } from './archive-tree'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 
 /**
  * 归档浏览与反编译视图（FR-075，复用 FR-070 只读编辑器）。

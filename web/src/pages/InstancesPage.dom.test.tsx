@@ -7,6 +7,7 @@ import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@/mocks/inject'
 import { server } from '@/mocks/server'
 import { API } from '@/mocks/api'
+import { useConsoleStore } from '@/stores/console'
 import InstancesPage from './InstancesPage'
 
 /**
@@ -16,6 +17,7 @@ import InstancesPage from './InstancesPage'
  */
 beforeEach(() => {
   loginMockUser()
+  useConsoleStore.setState({ selectedNodeId: null })
   // InstancesPage 顶层拉 /nodes 与 /networks（它域）；隔离测试用空集桩占位。
   server.use(
     http.get(API('/nodes'), () => HttpResponse.json([{ id: 1, name: 'node-a' }, { id: 2, name: 'node-b' }])),
@@ -31,11 +33,33 @@ async function switchToListView(user: ReturnType<typeof userEvent.setup>) {
 describe('InstancesPage（mock 假后端）', () => {
   it('渲染种子实例（名称可见）', async () => {
     const user = userEvent.setup()
-    renderWithProviders(<InstancesPage />, { route: '/instances' })
+    const { container } = renderWithProviders(<InstancesPage />, { route: '/instances' })
+    expect(container.firstElementChild).toHaveAttribute('data-page', 'instances')
+    expect(container.firstElementChild).toHaveClass('jm-page-stack')
     await switchToListView(user)
     expect(await screen.findByText('survival-1')).toBeInTheDocument()
     expect(screen.getByText('lobby-proxy')).toBeInTheDocument()
     expect(screen.getByText('creative-1')).toBeInTheDocument()
+  })
+
+  it('1000+ mock 实例下默认卡片视图只渲染可视窗口', async () => {
+    renderWithProviders(<InstancesPage />, { route: '/instances' })
+
+    const surface = await screen.findByTestId('instances-card-virtual')
+    expect(Number(surface.dataset.totalCount)).toBeGreaterThanOrEqual(1000)
+    expect(await screen.findByText('survival-1')).toBeInTheDocument()
+    expect(screen.queryAllByTestId('instances-card-virtual-item').length).toBeLessThan(80)
+  })
+
+  it('页眉节点作用域会收敛全部服务器列表', async () => {
+    useConsoleStore.setState({ selectedNodeId: 2 })
+    const user = userEvent.setup()
+    renderWithProviders(<InstancesPage />, { route: '/instances' })
+    await switchToListView(user)
+
+    expect(await screen.findByText('creative-1')).toBeInTheDocument()
+    expect(screen.queryByText('survival-1')).not.toBeInTheDocument()
+    expect(screen.queryByText('lobby-proxy')).not.toBeInTheDocument()
   })
 
   it('启动已停止实例 → 行内出现「停止」操作（状态联动 RUNNING）', async () => {

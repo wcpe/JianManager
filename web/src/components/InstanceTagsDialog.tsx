@@ -3,15 +3,15 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useUpdateInstance } from '@/api/instances'
 import { ENV_TAG_PREFIX } from '@/components/console/instance-grouping'
-import { Badge } from '@/components/ui/badge'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
+} from '@jianmanager/ui/components/select'
 
 interface InstanceTagsDialogProps {
   instanceId: number

@@ -126,6 +126,17 @@ interface LogRow {
 
 const NOW = Date.now()
 const iso = (offsetMs: number): string => new Date(NOW + offsetMs).toISOString()
+const YEAR_MS = 365 * 86_400_000
+const MOCK_INSTANCE_COUNT = 1200
+const MOCK_LOG_COUNT = 12_000
+const MOCK_TASK_COUNT = 1500
+const MOCK_FEED_COUNT = 1200
+
+const TASK_KIND_POOL = ['jdk_install', 'instance_backup', 'runtime_install', 'client_publish', 'node_repair'] as const
+const TASK_STATE_POOL: Task['state'][] = ['pending', 'running', 'succeeded', 'failed', 'canceled']
+const LOG_LEVEL_POOL = ['debug', 'info', 'warn', 'error'] as const
+const LOG_SOURCE_POOL = ['instance', 'control_plane', 'worker'] as const
+const NOTIFICATION_LEVEL_POOL: Notification['level'][] = ['info', 'success', 'warning', 'error']
 
 // ── 集合声明 + 种子（import 即播种，resetDb 重播；唯一声明处） ──
 
@@ -180,42 +191,7 @@ const alertRules = db<AlertRule>('alertRules', () => [
   },
 ])
 
-const alertEvents = db<AlertEvent>('alertEvents', () => [
-  {
-    id: 1,
-    ruleId: 1,
-    targetId: 1,
-    level: 'warn',
-    triggerType: 'metric',
-    value: 91.5,
-    message: '节点 node-1 CPU 使用率 91.5% 超过阈值 85%',
-    count: 3,
-    resolved: false,
-    firedAt: iso(-3600000),
-    lastFiredAt: iso(-600000),
-    acknowledged: false,
-    read: false,
-    rule: { name: 'CPU 过载告警' },
-  },
-  {
-    id: 2,
-    ruleId: 2,
-    targetId: 1,
-    level: 'critical',
-    triggerType: 'instance_crash',
-    value: 0,
-    message: '实例 survival 异常退出（exit code 1）',
-    count: 1,
-    resolved: true,
-    firedAt: iso(-7200000),
-    resolvedAt: iso(-7000000),
-    acknowledged: true,
-    acknowledgedBy: 1,
-    acknowledgedAt: iso(-6900000),
-    read: true,
-    rule: { name: '实例崩溃告警' },
-  },
-])
+const alertEvents = db<AlertEvent>('alertEvents', seedAlertEvents)
 
 const alertChannels = db<AlertChannel>('alertChannels', () => [
   {
@@ -238,135 +214,294 @@ const alertChannels = db<AlertChannel>('alertChannels', () => [
   },
 ])
 
-const notifications = db<Notification>('notifications', () => [
-  {
-    id: 1,
-    userId: 1,
-    level: 'success',
-    title: 'JDK 安装完成',
-    body: 'node-1 上 Temurin 21 安装成功',
-    taskId: 'task-jdk-1',
-    createdAt: iso(-1800000),
-  },
-  {
-    id: 2,
-    userId: 1,
-    level: 'error',
-    title: '备份失败',
-    body: '实例 survival 备份失败：磁盘空间不足',
-    createdAt: iso(-900000),
-  },
-  {
-    id: 3,
-    userId: 1,
-    level: 'info',
-    title: '节点已上线',
-    body: 'node-2 已注册并上线',
-    readAt: iso(-600000),
-    createdAt: iso(-1200000),
-  },
-])
+const notifications = db<Notification>('notifications', seedNotifications)
+const tasks = db<Task>('tasks', seedTasks)
+const taskLogs = db<TaskLog>('taskLogs', seedTaskLogs)
+const logs = db<LogRow>('logs', seedLogs)
 
-const tasks = db<Task>('tasks', () => [
-  {
-    id: 1,
-    taskId: 'task-jdk-1',
-    nodeId: 1,
-    kind: 'jdk_install',
-    state: 'succeeded',
-    progress: 100,
-    title: '安装 JDK Temurin 21',
-    detail: 'node-1',
-    error: '',
-    result: JSON.stringify({ vendor: 'temurin', version: '21' }),
-    createdBy: 1,
-    createdAt: iso(-3600000),
-    updatedAt: iso(-3000000),
-  },
-  {
-    id: 2,
-    taskId: 'task-backup-2',
-    nodeId: 1,
-    kind: 'instance_backup',
-    state: 'running',
-    progress: 45,
-    title: '备份实例 survival',
-    detail: '打包世界文件',
-    error: '',
-    result: '',
-    createdBy: 1,
-    createdAt: iso(-300000),
-    updatedAt: iso(-30000),
-  },
-  {
-    id: 3,
-    taskId: 'task-runtime-3',
-    nodeId: 2,
-    kind: 'runtime_install',
-    state: 'failed',
-    progress: 70,
-    title: '安装便携运行时',
-    detail: 'node-2',
-    error: '下载校验失败：sha256 不匹配',
-    result: '',
-    createdBy: 1,
-    createdAt: iso(-7200000),
-    updatedAt: iso(-7100000),
-  },
-])
+function seedAlertEvents(): AlertEvent[] {
+  const base: AlertEvent[] = [
+    {
+      id: 1,
+      ruleId: 1,
+      targetId: 1,
+      level: 'warn',
+      triggerType: 'metric',
+      value: 91.5,
+      message: '节点 node-1 CPU 使用率 91.5% 超过阈值 85%',
+      count: 3,
+      resolved: false,
+      firedAt: iso(-3_600_000),
+      lastFiredAt: iso(-600_000),
+      acknowledged: false,
+      read: false,
+      rule: { name: 'CPU 过载告警' },
+    },
+    {
+      id: 2,
+      ruleId: 2,
+      targetId: 1,
+      level: 'critical',
+      triggerType: 'instance_crash',
+      value: 0,
+      message: '实例 survival 异常退出（exit code 1）',
+      count: 1,
+      resolved: true,
+      firedAt: iso(-7_200_000),
+      resolvedAt: iso(-7_000_000),
+      acknowledged: true,
+      acknowledgedBy: 1,
+      acknowledgedAt: iso(-6_900_000),
+      read: true,
+      rule: { name: '实例崩溃告警' },
+    },
+  ]
 
-const taskLogs = db<TaskLog>('taskLogs', () => [
-  { id: 1, taskId: 'task-jdk-1', seq: 1, line: '[info] 开始下载 Temurin 21', ts: iso(-3600000) },
-  { id: 2, taskId: 'task-jdk-1', seq: 2, line: '[info] 解压到 /opt/jdk/temurin-21', ts: iso(-3300000) },
-  { id: 3, taskId: 'task-jdk-1', seq: 3, line: '[info] 安装完成', ts: iso(-3000000) },
-  { id: 4, taskId: 'task-runtime-3', seq: 1, line: '[info] 开始下载运行时包', ts: iso(-7200000) },
-  { id: 5, taskId: 'task-runtime-3', seq: 2, line: '[error] sha256 校验失败', ts: iso(-7100000) },
-])
+  const generated: AlertEvent[] = []
+  for (let i = 3; i <= MOCK_FEED_COUNT + 2; i++) {
+    const critical = i % 9 === 0
+    const offset = -Math.floor(((i - 2) / MOCK_FEED_COUNT) * YEAR_MS)
+    generated.push({
+      id: i,
+      ruleId: critical ? 2 : 1,
+      targetId: ((i - 1) % MOCK_INSTANCE_COUNT) + 1,
+      level: critical ? 'critical' : 'warn',
+      triggerType: critical ? 'instance_crash' : 'metric',
+      value: critical ? 0 : 75 + (i % 25),
+      message: critical
+        ? `实例 server-${String(((i - 1) % MOCK_INSTANCE_COUNT) + 1).padStart(4, '0')} 异常退出`
+        : `节点 node-${(i % 2) + 1} 资源水位超过阈值 ${75 + (i % 25)}%`,
+      count: 1 + (i % 5),
+      resolved: i % 3 !== 0,
+      firedAt: iso(offset),
+      lastFiredAt: iso(offset + 600_000),
+      resolvedAt: i % 3 !== 0 ? iso(offset + 1_800_000) : undefined,
+      acknowledged: i % 4 !== 0,
+      acknowledgedBy: i % 4 !== 0 ? 1 : undefined,
+      acknowledgedAt: i % 4 !== 0 ? iso(offset + 900_000) : undefined,
+      read: i % 6 !== 0,
+      rule: { name: critical ? '实例崩溃告警' : 'CPU 过载告警' },
+    })
+  }
+  return [...base, ...generated]
+}
 
-const logs = db<LogRow>('logs', () => [
-  {
-    id: 1,
-    source: 'instance',
-    level: 'info',
-    instanceId: 1,
-    instanceUuid: 'inst-survival',
-    nodeId: 1,
-    stream: 'stdout',
-    message: '[Server] Done (12.3s)! For help, type "help"',
-    time: iso(-120000),
-  },
-  {
-    id: 2,
-    source: 'instance',
-    level: 'warn',
-    instanceId: 1,
-    instanceUuid: 'inst-survival',
-    nodeId: 1,
-    stream: 'stdout',
-    message: "[Server] Can't keep up! Is the server overloaded? Running 2500ms behind",
-    time: iso(-90000),
-  },
-  {
-    id: 3,
-    source: 'control_plane',
-    level: 'error',
-    instanceId: 0,
-    instanceUuid: '',
-    nodeId: 0,
-    message: 'failed to dispatch backup: disk full',
-    time: iso(-60000),
-  },
-  {
-    id: 4,
-    source: 'worker',
-    level: 'debug',
-    instanceId: 0,
-    instanceUuid: '',
-    nodeId: 1,
-    message: 'heartbeat sent to control-plane',
-    time: iso(-30000),
-  },
-])
+function seedNotifications(): Notification[] {
+  const base: Notification[] = [
+    {
+      id: 1,
+      userId: 1,
+      level: 'success',
+      title: 'JDK 安装完成',
+      body: 'node-1 上 Temurin 21 安装成功',
+      taskId: 'task-jdk-1',
+      createdAt: iso(-1_800_000),
+    },
+    {
+      id: 2,
+      userId: 1,
+      level: 'error',
+      title: '备份失败',
+      body: '实例 survival 备份失败：磁盘空间不足',
+      createdAt: iso(-900_000),
+    },
+    {
+      id: 3,
+      userId: 1,
+      level: 'info',
+      title: '节点已上线',
+      body: 'node-2 已注册并上线',
+      readAt: iso(-600_000),
+      createdAt: iso(-1_200_000),
+    },
+  ]
+
+  const generated: Notification[] = []
+  for (let i = 4; i <= MOCK_FEED_COUNT + 3; i++) {
+    const offset = -Math.floor(((i - 3) / MOCK_FEED_COUNT) * YEAR_MS)
+    const level = NOTIFICATION_LEVEL_POOL[i % NOTIFICATION_LEVEL_POOL.length]
+    generated.push({
+      id: i,
+      userId: 1,
+      level,
+      title: `批量运维事件 ${i - 3}`,
+      body: `server-${String(((i - 1) % MOCK_INSTANCE_COUNT) + 1).padStart(4, '0')} 的 ${TASK_KIND_POOL[i % TASK_KIND_POOL.length]} 已记录`,
+      taskId: i % 5 === 0 ? `task-scale-${i}` : undefined,
+      readAt: i % 4 === 0 ? iso(offset + 120_000) : undefined,
+      createdAt: iso(offset),
+    })
+  }
+  return [...base, ...generated]
+}
+
+function seedTasks(): Task[] {
+  const base: Task[] = [
+    {
+      id: 1,
+      taskId: 'task-jdk-1',
+      nodeId: 1,
+      kind: 'jdk_install',
+      state: 'succeeded',
+      progress: 100,
+      title: '安装 JDK Temurin 21',
+      detail: 'node-1',
+      error: '',
+      result: JSON.stringify({ vendor: 'temurin', version: '21' }),
+      createdBy: 1,
+      createdAt: iso(-3_600_000),
+      updatedAt: iso(-3_000_000),
+    },
+    {
+      id: 2,
+      taskId: 'task-backup-2',
+      nodeId: 1,
+      kind: 'instance_backup',
+      state: 'running',
+      progress: 45,
+      title: '备份实例 survival',
+      detail: '打包世界文件',
+      error: '',
+      result: '',
+      createdBy: 1,
+      createdAt: iso(-300_000),
+      updatedAt: iso(-30_000),
+    },
+    {
+      id: 3,
+      taskId: 'task-runtime-3',
+      nodeId: 2,
+      kind: 'runtime_install',
+      state: 'failed',
+      progress: 70,
+      title: '安装便携运行时',
+      detail: 'node-2',
+      error: '下载校验失败：sha256 不匹配',
+      result: '',
+      createdBy: 1,
+      createdAt: iso(-7_200_000),
+      updatedAt: iso(-7_100_000),
+    },
+  ]
+
+  const generated: Task[] = []
+  for (let i = 4; i <= MOCK_TASK_COUNT + 3; i++) {
+    const state = TASK_STATE_POOL[i % TASK_STATE_POOL.length]
+    const kind = TASK_KIND_POOL[i % TASK_KIND_POOL.length]
+    const offset = -Math.floor(((i - 3) / MOCK_TASK_COUNT) * YEAR_MS)
+    const progress = state === 'succeeded' ? 100 : state === 'pending' ? 0 : 10 + (i % 85)
+    generated.push({
+      id: i,
+      taskId: `task-scale-${i}`,
+      nodeId: i % 2 === 0 ? 2 : 1,
+      kind,
+      state,
+      progress,
+      title: `${kind} 批量任务 ${i - 3}`,
+      detail: `server-${String(((i - 1) % MOCK_INSTANCE_COUNT) + 1).padStart(4, '0')}`,
+      error: state === 'failed' ? '模拟失败：节点返回非零退出码' : '',
+      result: state === 'succeeded' ? JSON.stringify({ ok: true, batch: i }) : '',
+      cancelRequested: state === 'running' && i % 7 === 0,
+      createdBy: 1,
+      createdAt: iso(offset),
+      updatedAt: iso(offset + 300_000),
+    })
+  }
+  return [...base, ...generated]
+}
+
+function seedTaskLogs(): TaskLog[] {
+  const base: TaskLog[] = [
+    { id: 1, taskId: 'task-jdk-1', seq: 1, line: '[info] 开始下载 Temurin 21', ts: iso(-3_600_000) },
+    { id: 2, taskId: 'task-jdk-1', seq: 2, line: '[info] 解压到 /opt/jdk/temurin-21', ts: iso(-3_300_000) },
+    { id: 3, taskId: 'task-jdk-1', seq: 3, line: '[info] 安装完成', ts: iso(-3_000_000) },
+    { id: 4, taskId: 'task-runtime-3', seq: 1, line: '[info] 开始下载运行时包', ts: iso(-7_200_000) },
+    { id: 5, taskId: 'task-runtime-3', seq: 2, line: '[error] sha256 校验失败', ts: iso(-7_100_000) },
+  ]
+
+  const generated: TaskLog[] = []
+  for (let task = 4; task <= 260; task++) {
+    for (let seq = 1; seq <= 4; seq++) {
+      const id = 5 + (task - 4) * 4 + seq
+      generated.push({
+        id,
+        taskId: `task-scale-${task}`,
+        seq,
+        line: `[info] 执行批量任务 ${task - 3} 步骤 ${seq}/4`,
+        ts: iso(-Math.floor((task / 260) * YEAR_MS) + seq * 60_000),
+      })
+    }
+  }
+  return [...base, ...generated]
+}
+
+function seedLogs(): LogRow[] {
+  const base: LogRow[] = [
+    {
+      id: 1,
+      source: 'instance',
+      level: 'info',
+      instanceId: 1,
+      instanceUuid: 'inst-survival',
+      nodeId: 1,
+      stream: 'stdout',
+      message: '[Server] Done (12.3s)! For help, type "help"',
+      time: iso(-120_000),
+    },
+    {
+      id: 2,
+      source: 'instance',
+      level: 'warn',
+      instanceId: 1,
+      instanceUuid: 'inst-survival',
+      nodeId: 1,
+      stream: 'stdout',
+      message: "[Server] Can't keep up! Is the server overloaded? Running 2500ms behind",
+      time: iso(-90_000),
+    },
+    {
+      id: 3,
+      source: 'control_plane',
+      level: 'error',
+      instanceId: 0,
+      instanceUuid: '',
+      nodeId: 0,
+      message: 'failed to dispatch backup: disk full',
+      time: iso(-60_000),
+    },
+    {
+      id: 4,
+      source: 'worker',
+      level: 'debug',
+      instanceId: 0,
+      instanceUuid: '',
+      nodeId: 1,
+      message: 'heartbeat sent to control-plane',
+      time: iso(-30_000),
+    },
+  ]
+
+  const generated: LogRow[] = []
+  for (let i = 5; i <= MOCK_LOG_COUNT + 4; i++) {
+    const instanceId = ((i - 1) % MOCK_INSTANCE_COUNT) + 1
+    const source = LOG_SOURCE_POOL[i % LOG_SOURCE_POOL.length]
+    const level = LOG_LEVEL_POOL[i % LOG_LEVEL_POOL.length]
+    const offset = -Math.floor(((i - 4) / MOCK_LOG_COUNT) * YEAR_MS)
+    generated.push({
+      id: i,
+      source,
+      level,
+      instanceId: source === 'instance' ? instanceId : 0,
+      instanceUuid: source === 'instance' ? `i-scale-${instanceId}` : '',
+      nodeId: i % 2 === 0 ? 2 : 1,
+      stream: source === 'instance' ? (i % 13 === 0 ? 'stderr' : 'stdout') : undefined,
+      message: source === 'instance'
+        ? `[Server ${instanceId}] ${level.toUpperCase()} tick=${i} players=${i % 80}`
+        : `${source} ${level} event ${i}`,
+      time: iso(offset),
+    })
+  }
+  return [...base, ...generated]
+}
 
 // ── 指标时序生成（无独立集合，纯派生让图表有内容） ──
 
@@ -393,15 +528,21 @@ function makeSeriesPoints(
 /** 把 range 字符串映射为（点数, 步长 ms）。覆盖前端 RangePicker 常见档。 */
 function rangePlan(range: string): { count: number; step: number } {
   switch (range) {
-    case '15m':
-      return { count: 15, step: 60_000 }
     case '1h':
-      return { count: 30, step: 120_000 }
+      return { count: 60, step: 60_000 }
+    case '6h':
+      return { count: 72, step: 5 * 60_000 }
     case '7d':
-      return { count: 28, step: 6 * 3600_000 }
+      return { count: 168, step: 3600_000 }
+    case '30d':
+      return { count: 180, step: 4 * 3600_000 }
+    case '90d':
+      return { count: 180, step: 12 * 3600_000 }
+    case '1y':
+      return { count: 365, step: 24 * 3600_000 }
     case '24h':
     default:
-      return { count: 24, step: 3600_000 }
+      return { count: 96, step: 15 * 60_000 }
   }
 }
 
@@ -515,12 +656,12 @@ export const handlers = [
       totals: {
         nodeCount: 2,
         onlineNodeCount: 2,
-        runningInstances: 3,
+        runningInstances: 720,
         cpuPct: 47,
         loadAvg: 38,
-        memUsedBytes: 12 * GIB,
-        memTotalBytes: 32 * GIB,
-        onlinePlayers: 18,
+        memUsedBytes: 120 * GIB,
+        memTotalBytes: 320 * GIB,
+        onlinePlayers: 3180,
       },
       resolution: 'raw',
       trends: [
@@ -870,6 +1011,8 @@ export const handlers = [
     const nodeId = url.searchParams.get('nodeId')
     const instanceId = url.searchParams.get('instanceId')
     const keyword = url.searchParams.get('keyword')
+    const from = url.searchParams.get('from')
+    const to = url.searchParams.get('to')
     const page = Number(url.searchParams.get('page') ?? '1')
     const pageSize = Number(url.searchParams.get('pageSize') ?? '100')
 
@@ -879,6 +1022,8 @@ export const handlers = [
     if (nodeId) items = items.filter((l) => l.nodeId === Number(nodeId))
     if (instanceId) items = items.filter((l) => l.instanceId === Number(instanceId))
     if (keyword) items = items.filter((l) => l.message.includes(keyword))
+    if (from) items = items.filter((l) => l.time >= from)
+    if (to) items = items.filter((l) => l.time <= to)
 
     const total = items.length
     const start = (page - 1) * pageSize

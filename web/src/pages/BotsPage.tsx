@@ -30,28 +30,28 @@ import {
 import { BotHealthBar } from '@/components/console/BotHealthBar'
 import { BotWorktableCard } from '@/components/console/BotWorktableCard'
 import DangerConfirm from '@/components/DangerConfirm'
-import { ViewToggle, type ViewMode } from '@/components/ui/view-toggle'
+import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
 import { Plus } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Checkbox } from '@/components/ui/checkbox'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
+} from '@jianmanager/ui/components/dialog'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
-import { scrollableDialogContentClass, ScrollableDialogBody } from '@/components/ui/scrollable-dialog'
-import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
-import { FieldLabel, FieldError } from '@/components/ui/field-label'
+} from '@jianmanager/ui/components/select'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
+import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired, validateHost, validatePort, validateFields, hasErrors } from '@/lib/form-validation'
 import {
   Table,
@@ -60,8 +60,8 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table'
-import { cn } from '@/lib/utils'
+} from '@jianmanager/ui/components/table'
+import { cn } from '@jianmanager/ui'
 
 const SENTINEL_ALL = 'all'
 

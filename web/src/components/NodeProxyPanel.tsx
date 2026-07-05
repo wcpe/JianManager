@@ -3,8 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Globe } from 'lucide-react'
 import { useNodeProxy, useUpdateNodeProxy, type NodeProxyView } from '@/api/nodes'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
 
 /**
  * 节点出站代理面板（FR-185，见 ADR-043）：单选「继承全局 / 自定义」，自定义展开 URL + no_proxy。

@@ -59,7 +59,7 @@ export interface MockGroupMembership {
 }
 
 // 集合在所属域 handler 模块顶层带 seedFn 唯一声明（import 即播种，resetDb 重播）。
-const instances = db<MockInstance>('instances', () => [
+const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
   {
     id: 1,
     uuid: 'i-survival',
@@ -129,7 +129,153 @@ const instances = db<MockInstance>('instances', () => [
     tags: '["env:test","creative"]',
     createdAt: '2026-01-03T00:00:00Z',
   },
-])
+  {
+    id: 10,
+    uuid: 'i-survival-proxy',
+    nodeId: 1,
+    name: 'survival-proxy',
+    type: 'minecraft_proxy',
+    role: 'proxy',
+    processType: 'daemon',
+    status: 'RUNNING',
+    startCommand: 'java -jar velocity.jar',
+    workDir: '/servers/survival-proxy',
+    image: '',
+    cpuLimit: 0,
+    memLimitMb: 0,
+    diskLimitMb: 0,
+    serverPort: 25570,
+    autoStart: true,
+    autoRestart: true,
+    tags: '["env:prod","survival","edge"]',
+    createdAt: '2026-01-10T00:00:00Z',
+  },
+  {
+    id: 11,
+    uuid: 'i-survival-lobby',
+    nodeId: 1,
+    name: 'survival-lobby',
+    type: 'minecraft_java',
+    role: 'backend',
+    processType: 'daemon',
+    status: 'RUNNING',
+    startCommand: 'java -Xmx2G -jar paper.jar nogui',
+    workDir: '/servers/survival-lobby',
+    image: '',
+    cpuLimit: 0,
+    memLimitMb: 0,
+    diskLimitMb: 0,
+    serverPort: 25566,
+    autoStart: true,
+    autoRestart: true,
+    tags: '["env:prod","survival","lobby"]',
+    createdAt: '2026-01-11T00:00:00Z',
+  },
+  {
+    id: 12,
+    uuid: 'i-survival-world',
+    nodeId: 2,
+    name: 'survival-world',
+    type: 'minecraft_java',
+    role: 'backend',
+    processType: 'docker',
+    status: 'CRASHED',
+    startCommand: 'java -Xmx4G -jar paper.jar nogui',
+    workDir: '/servers/survival-world',
+    image: 'itzg/minecraft-server:latest',
+    cpuLimit: 2,
+    memLimitMb: 4096,
+    diskLimitMb: 0,
+    serverPort: 25567,
+    autoStart: false,
+    autoRestart: true,
+    tags: '["env:prod","survival","world"]',
+    createdAt: '2026-01-12T00:00:00Z',
+  },
+  {
+    id: 20,
+    uuid: 'i-creative-proxy',
+    nodeId: 1,
+    name: 'creative-proxy',
+    type: 'minecraft_proxy',
+    role: 'proxy',
+    processType: 'daemon',
+    status: 'RUNNING',
+    startCommand: 'java -jar velocity.jar',
+    workDir: '/servers/creative-proxy',
+    image: '',
+    cpuLimit: 0,
+    memLimitMb: 0,
+    diskLimitMb: 0,
+    serverPort: 25580,
+    autoStart: true,
+    autoRestart: true,
+    tags: '["env:test","creative","edge"]',
+    createdAt: '2026-01-20T00:00:00Z',
+  },
+  {
+    id: 21,
+    uuid: 'i-creative-plot',
+    nodeId: 1,
+    name: 'creative-plot',
+    type: 'minecraft_java',
+    role: 'backend',
+    processType: 'daemon',
+    status: 'STOPPED',
+    startCommand: 'java -Xmx2G -jar paper.jar nogui',
+    workDir: '/servers/creative-plot',
+    image: '',
+    cpuLimit: 0,
+    memLimitMb: 0,
+    diskLimitMb: 0,
+    serverPort: 25581,
+    autoStart: false,
+    autoRestart: true,
+    tags: '["env:test","creative","plot"]',
+    createdAt: '2026-01-21T00:00:00Z',
+  },
+]
+
+const INSTANCE_SEED_SIZE = 1200
+const STATUS_POOL = ['RUNNING', 'STOPPED', 'CRASHED', 'STARTING', 'STOPPING'] as const
+const ENV_POOL = ['prod', 'test', 'dev'] as const
+
+function buildGeneratedInstance(id: number): MockInstance {
+  const role = id % 11 === 0 ? 'proxy' : id % 7 === 0 ? 'universal' : 'backend'
+  const env = ENV_POOL[id % ENV_POOL.length]
+  const status = STATUS_POOL[id % STATUS_POOL.length]
+  const name = role === 'proxy' ? `proxy-${id.toString().padStart(4, '0')}` : `server-${id.toString().padStart(4, '0')}`
+  return {
+    id,
+    uuid: `i-scale-${id}`,
+    nodeId: id % 2 === 0 ? 2 : 1,
+    name,
+    type: role === 'proxy' ? 'minecraft_proxy' : 'minecraft_java',
+    role,
+    processType: id % 4 === 0 ? 'docker' : 'daemon',
+    status,
+    startCommand: role === 'proxy' ? 'java -jar velocity.jar' : 'java -Xmx2G -jar paper.jar nogui',
+    workDir: `/servers/${name}`,
+    image: id % 4 === 0 ? 'itzg/minecraft-server:latest' : '',
+    cpuLimit: id % 4 === 0 ? 1 + (id % 4) * 0.5 : 0,
+    memLimitMb: id % 4 === 0 ? 2048 + (id % 3) * 1024 : 0,
+    diskLimitMb: 0,
+    serverPort: 25565 + id,
+    autoStart: id % 3 === 0,
+    autoRestart: id % 5 !== 0,
+    tags: JSON.stringify([`env:${env}`, role === 'proxy' ? 'edge' : 'survival']),
+    createdAt: new Date(Date.UTC(2026, 0, 1 + (id % 28))).toISOString(),
+  }
+}
+
+function seedInstances(): MockInstance[] {
+  const rows = new Map<number, MockInstance>()
+  for (let id = 1; id <= INSTANCE_SEED_SIZE; id++) rows.set(id, buildGeneratedInstance(id))
+  for (const row of INSTANCE_SEED_OVERRIDES) rows.set(row.id, row)
+  return [...rows.values()].sort((a, b) => a.id - b.id)
+}
+
+const instances = db<MockInstance>('instances', seedInstances)
 
 const instanceGroups = db<MockInstanceGroup>('instanceGroups', () => [
   { id: 1, uuid: 'g-asia', name: '亚洲区', parentId: null, sort: 0 },

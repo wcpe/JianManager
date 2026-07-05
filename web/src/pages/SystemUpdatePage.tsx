@@ -16,9 +16,9 @@ import {
   type RolloutNodeState,
 } from '@/api/selfUpdate'
 import { useAuthStore } from '@/stores/auth'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { Button } from '@jianmanager/ui/components/button'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/DangerConfirm'
 import { ReleaseNotes } from '@/components/ReleaseNotes'
 import { formatRelativeTime } from '@/lib/relative-time'

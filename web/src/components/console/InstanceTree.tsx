@@ -10,7 +10,7 @@ import { groupInstances, type GroupDimension } from './instance-grouping'
 import { indexBotBadgesByInstance, type InstanceBotBadge as BadgeData } from './bot-list'
 import InstanceStatusDot from './InstanceStatusDot'
 import InstanceBotBadge from './InstanceBotBadge'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 
 /**
  * 常驻实例树（FR-069 树形化）。

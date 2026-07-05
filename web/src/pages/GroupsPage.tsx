@@ -6,8 +6,8 @@ import CreateGroupDialog from '@/components/CreateGroupDialog'
 import GroupEditDialog from '@/components/GroupEditDialog'
 import GroupMembersDialog from '@/components/GroupMembersDialog'
 import DangerConfirm from '@/components/DangerConfirm'
-import { Button } from '@/components/ui/button'
-import { Panel } from '@/components/ui/panel'
+import { Button } from '@jianmanager/ui/components/button'
+import { Panel } from '@jianmanager/ui/components/panel'
 
 export default function GroupsPage() {
   const { t } = useTranslation()

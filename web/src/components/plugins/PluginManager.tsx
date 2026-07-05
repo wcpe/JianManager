@@ -7,8 +7,8 @@ import {
   useTogglePlugin,
   type PluginInfo,
 } from '@/api/plugins'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
+import { Button } from '@jianmanager/ui/components/button'
+import { Badge } from '@jianmanager/ui/components/badge'
 import {
   Table,
   TableBody,
@@ -16,14 +16,14 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table'
+} from '@jianmanager/ui/components/table'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
+} from '@jianmanager/ui/components/select'
 import DangerConfirm from '@/components/DangerConfirm'
 
 /** 插件/模组单服管理面板（FR-052）：列表 + 启用/禁用 + 上传 + 删除（二次确认）。 */

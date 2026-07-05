@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUpdateGroup, useUpdateGroupQuota, type GroupInfo } from '@/api/groups'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
-import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired } from '@/lib/form-validation'
 
 interface GroupEditDialogProps {

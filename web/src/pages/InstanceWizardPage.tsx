@@ -7,15 +7,16 @@ import { ArrowLeft, Boxes, ChevronLeft, ChevronRight, Check, Plus, X } from 'luc
 import api from '@/api/client'
 import { useNodes } from '@/api/nodes'
 import { useNodeDockerCheck } from '@/api/docker'
-import { buildNodeOptions } from './instance-wizard-options'
+import { buildNodeOptions, initialWizardNodeId } from './instance-wizard-options'
 import { useGroups } from '@/api/groups'
 import { useTemplates } from '@/api/templates'
 import { useNodeJDKs } from '@/api/jdks'
-import { Panel } from '@/components/ui/panel'
-import { Button } from '@/components/ui/button'
-import { Combobox, type ComboboxOption } from '@/components/ui/combobox'
-import { FieldLabel, FieldError } from '@/components/ui/field-label'
-import { cn } from '@/lib/utils'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { Button } from '@jianmanager/ui/components/button'
+import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
+import { useConsoleStore } from '@/stores/console'
+import { cn } from '@jianmanager/ui'
 import {
   validateRequired,
   validateResourceLimitNumber,
@@ -53,9 +54,10 @@ export default function InstanceWizardPage() {
   const { data: nodes } = useNodes()
   const { data: groups } = useGroups()
   const { data: templates } = useTemplates()
+  const selectedNodeId = useConsoleStore((s) => s.selectedNodeId)
 
   const [name, setName] = useState('')
-  const [nodeId, setNodeId] = useState(searchParams.get('node') ?? '')
+  const [nodeId, setNodeId] = useState(initialWizardNodeId(searchParams.get('node'), selectedNodeId))
   const [type, setType] = useState('minecraft_java')
   const [processType, setProcessType] = useState('daemon')
   const [image, setImage] = useState('')

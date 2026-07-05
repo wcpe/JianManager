@@ -1,11 +1,11 @@
 import { useTranslation } from 'react-i18next'
 import { Keyboard } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Button } from '@jianmanager/ui/components/button'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
-} from '@/components/ui/dropdown-menu'
+} from '@jianmanager/ui/components/dropdown-menu'
 import { editorShortcutRows } from './shortcuts'
 
 /**

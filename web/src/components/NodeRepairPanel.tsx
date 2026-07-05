@@ -10,7 +10,7 @@ import {
   usePurgeOrphans,
   type ReenrollResult,
 } from '@/api/nodeRepair'
-import { Button } from '@/components/ui/button'
+import { Button } from '@jianmanager/ui/components/button'
 import DangerConfirm from '@/components/DangerConfirm'
 import { copyToClipboard } from '@/lib/clipboard'
 

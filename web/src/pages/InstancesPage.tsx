@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useSearchParams, useNavigate } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight, ChevronDown, Zap, Globe, Plus, FolderTree } from 'lucide-react'
@@ -37,27 +37,27 @@ import {
   type GroupDimension,
 } from '@/components/console/instance-grouping'
 import { summarizeInstances, summaryFilterStatus, type SummaryFilterKey } from '@/lib/instance-summary'
-import { Badge } from '@/components/ui/badge'
-import { StatusBadge } from '@/components/ui/status-badge'
-import { SummaryChips, type SummaryChip } from '@/components/ui/summary-chips'
-import { ViewToggle, type ViewMode } from '@/components/ui/view-toggle'
-import { instanceStatusLevel } from '@/lib/threshold'
-import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { SummaryChips, type SummaryChip } from '@jianmanager/ui/components/summary-chips'
+import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
+import { instanceStatusLevel } from '@jianmanager/ui'
+import { Button } from '@jianmanager/ui/components/button'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-} from '@/components/ui/dropdown-menu'
+} from '@jianmanager/ui/components/dropdown-menu'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
+} from '@jianmanager/ui/components/select'
 import {
   Table,
   TableBody,
@@ -65,7 +65,8 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table'
+} from '@jianmanager/ui/components/table'
+import { useVirtualRows } from '@/lib/virtual-list'
 
 /** Radix Select 不允许空字符串 value，用哨兵值表示「全部 / 不过滤」。 */
 const ALL = '__all__'
@@ -102,11 +103,14 @@ export default function InstancesPage() {
   // proxy 行 inline 展开已注册 backend 的代理 id 集合（FR-136）。
   const [expandedProxies, setExpandedProxies] = useState<Set<number>>(new Set())
 
-  // 多维筛选状态（FR-047）：群组 / 环境 / 标签 / 节点 / 状态任意组合，下发后端过滤。
+  // 多维筛选状态（FR-047 / FR-268）：群组 / 环境 / 标签 / 节点 / 状态任意组合，下发后端过滤。
   const [networkId, setNetworkId] = useState<string>(ALL)
   const [env, setEnv] = useState<string>(ALL)
   const [tag, setTag] = useState<string>(ALL)
-  const [nodeId, setNodeId] = useState<string>(ALL)
+  const selectedNodeId = useConsoleStore((s) => s.selectedNodeId)
+  const setSelectedNodeId = useConsoleStore((s) => s.setSelectedNodeId)
+  const nodeId = selectedNodeId == null ? ALL : String(selectedNodeId)
+  const setNodeFilter = (value: string) => setSelectedNodeId(value === ALL ? null : Number(value))
   // 顶栏集群徽标（FR-162）点击带 ?status= 跳转筛选。挂载时取初值；URL 变化时同步——
   // 用 React 推荐的渲染期「随外部值调整 state」模式（存上一次值比对，避免 effect 内 setState）。
   // 完整 URL 可寻址（全维度筛选进 URL、深链还原）归 FR-128，此处仅最小启用胶水。
@@ -159,14 +163,18 @@ export default function InstancesPage() {
     [allInstances, instances, selectedIds],
   )
 
-  const envOptions = useMemo(() => collectEnvs(allInstances ?? []), [allInstances])
-  const tagOptions = useMemo(() => collectTags(allInstances ?? []), [allInstances])
+  const scopedAllInstances = useMemo(
+    () => (selectedNodeId == null ? (allInstances ?? []) : (allInstances ?? []).filter((i) => i.nodeId === selectedNodeId)),
+    [allInstances, selectedNodeId],
+  )
+  const envOptions = useMemo(() => collectEnvs(scopedAllInstances), [scopedAllInstances])
+  const tagOptions = useMemo(() => collectTags(scopedAllInstances), [scopedAllInstances])
   const nodeName = (id: number) => nodes?.find((n) => n.id === id)?.name ?? t('console.unknownNode', { id })
 
   const groups = useMemo(() => groupInstances(instances ?? [], groupBy), [instances, groupBy])
 
-  // 汇总头计数走未过滤全集，给「集群整体」一屏速览（FR-136）。
-  const counts = useMemo(() => summarizeInstances(allInstances ?? []), [allInstances])
+  // 汇总头计数随页眉节点作用域收敛，但不受状态/标签等本页细筛选影响。
+  const counts = useMemo(() => summarizeInstances(scopedAllInstances), [scopedAllInstances])
 
   const hasActiveFilter =
     networkId !== ALL || env !== ALL || tag !== ALL || nodeId !== ALL || statusFilter !== ALL
@@ -174,7 +182,7 @@ export default function InstancesPage() {
     setNetworkId(ALL)
     setEnv(ALL)
     setTag(ALL)
-    setNodeId(ALL)
+    setSelectedNodeId(null)
     setStatusFilter(ALL)
   }
 
@@ -395,9 +403,9 @@ export default function InstancesPage() {
   }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">{t('instances.title')}</h1>
+    <div data-page="instances" className="jm-page-stack space-y-4">
+      <div className="jm-page-header">
+        <h1 className="jm-page-title">{t('instances.title')}</h1>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setShowProvision(true)}>
             <Zap className="size-4" /> {t('provision.entry')}
@@ -412,7 +420,7 @@ export default function InstancesPage() {
       </div>
 
       {/* 汇总头：运行/停止/崩溃计数，可点设筛选（FR-136） + 视图切换 */}
-      <div className="mb-3 flex items-center gap-2">
+      <div className="flex items-center gap-2">
         <SummaryChips chips={summaryChips} className="flex-1" />
         <ViewToggle
           value={view}
@@ -423,7 +431,7 @@ export default function InstancesPage() {
       </div>
 
       {/* 多维筛选 + 分组视图（FR-047） */}
-      <div className="flex flex-wrap items-center gap-2 mb-4">
+      <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
         <FilterSelect
           label={t('grouping.filterNetwork')}
           value={networkId}
@@ -445,7 +453,7 @@ export default function InstancesPage() {
         <FilterSelect
           label={t('grouping.filterNode')}
           value={nodeId}
-          onChange={setNodeId}
+          onChange={setNodeFilter}
           options={(nodes ?? []).map((n) => ({ value: String(n.id), label: n.name }))}
         />
         <FilterSelect
@@ -547,25 +555,16 @@ export default function InstancesPage() {
               hasActiveFilter={hasActiveFilter}
             />
           ) : groupBy === 'none' ? (
-            <div className="border rounded-lg">
-              <Table>
-                <InstanceTableHeader t={t} allSelected={allSelected} onToggleAll={toggleAll} />
-                <TableBody>
-                  {(instances ?? []).map(renderRow)}
-                  {(!instances || instances.length === 0) && (
-                    <TableRow>
-                      <TableCell colSpan={8} className="text-center text-muted-foreground">
-                        {hasActiveFilter ? t('grouping.noMatch') : t('instances.empty')}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+            <VirtualizedInstanceTable
+              instances={instances ?? []}
+              header={<InstanceTableHeader t={t} allSelected={allSelected} onToggleAll={toggleAll} />}
+              renderRow={renderRow}
+              emptyLabel={hasActiveFilter ? t('grouping.noMatch') : t('instances.empty')}
+            />
           ) : (
             <div className="space-y-4">
               {groups.map((g) => (
-                <div key={g.key || '__none__'} className="border rounded-lg">
+                <div key={g.key || '__none__'} className="overflow-hidden rounded-lg border bg-card/95 shadow-soft">
                   <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 border-b">
                     <span className="font-medium text-sm">{groupLabel(g.key)}</span>
                     <Badge variant="outline" className="font-normal">{g.instances.length}</Badge>
@@ -610,6 +609,64 @@ export default function InstancesPage() {
   )
 }
 
+function VirtualizedInstanceTable({
+  instances,
+  header,
+  renderRow,
+  emptyLabel,
+}: {
+  instances: InstanceInfo[]
+  header: React.ReactNode
+  renderRow: (inst: InstanceInfo) => React.ReactNode
+  emptyLabel: string
+}) {
+  const {
+    containerRef,
+    onScroll,
+    range,
+  } = useVirtualRows({
+    total: instances.length,
+    itemSize: 44,
+    overscan: 10,
+    fallbackViewportSize: 520,
+  })
+  const visible = instances.slice(range.start, range.end)
+
+  return (
+    <div
+      ref={containerRef}
+      onScroll={onScroll}
+      data-testid="instances-table-virtual"
+      data-total-count={instances.length}
+      className="max-h-[calc(100vh-20rem)] min-h-72 overflow-auto rounded-lg border bg-card/95 shadow-soft"
+    >
+      <Table>
+        {header}
+        <TableBody>
+          {range.before > 0 && (
+            <TableRow aria-hidden="true">
+              <TableCell colSpan={8} className="p-0" style={{ height: range.before }} />
+            </TableRow>
+          )}
+          {visible.map(renderRow)}
+          {range.after > 0 && (
+            <TableRow aria-hidden="true">
+              <TableCell colSpan={8} className="p-0" style={{ height: range.after }} />
+            </TableRow>
+          )}
+          {instances.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={8} className="text-center text-muted-foreground">
+                {emptyLabel}
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
 /**
  * 卡片视图（FR-136 工作台卡）：平铺或按分组维度分段渲染工作台卡网格。
  * 分组维度非 none 时每组一段（组头 + 该组卡片网格）。
@@ -631,17 +688,7 @@ function CardView({
 }) {
   const { t } = useTranslation()
   const grid = (list: InstanceInfo[]) => (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      {list.map((inst) => (
-        <InstanceWorktableCard
-          key={inst.id}
-          inst={inst}
-          nodeName={nodeName(inst.nodeId)}
-          roleBadge={<RoleBadge role={inst.role} compact />}
-          menu={buildMenu(inst)}
-        />
-      ))}
-    </div>
+    <VirtualizedCardGrid instances={list} nodeName={nodeName} buildMenu={buildMenu} />
   )
 
   const totalCount = groups.reduce((sum, g) => sum + g.instances.length, 0)
@@ -667,6 +714,91 @@ function CardView({
           {grid(g.instances)}
         </div>
       ))}
+    </div>
+  )
+}
+
+const CARD_ROW_HEIGHT = 244
+
+function readCardColumns(): number {
+  if (typeof window === 'undefined') return 3
+  if (window.innerWidth >= 1280) return 3
+  if (window.innerWidth >= 640) return 2
+  return 1
+}
+
+function useCardColumns(): number {
+  const [columns, setColumns] = useState(readCardColumns)
+
+  useEffect(() => {
+    const update = () => setColumns(readCardColumns())
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
+
+  return columns
+}
+
+function VirtualizedCardGrid({
+  instances,
+  nodeName,
+  buildMenu,
+}: {
+  instances: InstanceInfo[]
+  nodeName: (id: number) => string
+  buildMenu: (inst: InstanceInfo) => React.ReactNode
+}) {
+  const columns = useCardColumns()
+  const rowCount = Math.ceil(instances.length / columns)
+  const {
+    containerRef,
+    onScroll,
+    range,
+    totalSize,
+  } = useVirtualRows({
+    total: rowCount,
+    itemSize: CARD_ROW_HEIGHT,
+    overscan: 4,
+    fallbackViewportSize: 720,
+  })
+  const rows = []
+  for (let rowIndex = range.start; rowIndex < range.end; rowIndex++) {
+    const rowItems = instances.slice(rowIndex * columns, rowIndex * columns + columns)
+    rows.push({ rowIndex, rowItems })
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      onScroll={onScroll}
+      data-testid="instances-card-virtual"
+      data-total-count={instances.length}
+      className="max-h-[calc(100vh-18rem)] min-h-96 overflow-auto pr-1"
+    >
+      <div className="relative" style={{ height: totalSize }}>
+        {rows.map(({ rowIndex, rowItems }) => (
+          <div
+            key={rowIndex}
+            className="absolute inset-x-0 grid gap-4"
+            style={{
+              top: rowIndex * CARD_ROW_HEIGHT,
+              minHeight: CARD_ROW_HEIGHT - 16,
+              gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+            }}
+          >
+            {rowItems.map((inst) => (
+              <div key={inst.id} data-testid="instances-card-virtual-item">
+                <InstanceWorktableCard
+                  inst={inst}
+                  nodeName={nodeName(inst.nodeId)}
+                  roleBadge={<RoleBadge role={inst.role} compact />}
+                  menu={buildMenu(inst)}
+                />
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

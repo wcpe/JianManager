@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { Gauge, Trash2, Zap } from 'lucide-react'
 import { useDirectorStore } from '@/stores/director'
 import { MAX_PREHEAT_LIMIT, MIN_PREHEAT_LIMIT, sceneStatus, type SceneStatus } from '@/lib/director'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 
 /**
  * 导播台缩略图条（FR-168）：一排场景，点击瞬切；显三态（active/预热/cold）+ 序号（快捷键提示）。

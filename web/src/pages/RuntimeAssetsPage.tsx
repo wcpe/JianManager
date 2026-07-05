@@ -11,12 +11,12 @@ import {
   type AssetType,
   type JDKMatrixItem,
 } from '@/api/runtimeAssets'
-import { Panel } from '@/components/ui/panel'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { instanceStatusLevel, type StatusLevel } from '@/lib/threshold'
-import { cn } from '@/lib/utils'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
+import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui'
+import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/DangerConfirm'
 import {
   formatBytes,

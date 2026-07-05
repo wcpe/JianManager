@@ -12,11 +12,11 @@ import {
   type FeedLevel,
   type FeedQuery,
 } from '@/api/notification-feed'
-import { Panel } from '@/components/ui/panel'
-import { StatusBadge } from '@/components/ui/status-badge'
-import { Button } from '@/components/ui/button'
-import type { StatusLevel } from '@/lib/threshold'
-import { cn } from '@/lib/utils'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { Button } from '@jianmanager/ui/components/button'
+import type { StatusLevel } from '@jianmanager/ui'
+import { cn } from '@jianmanager/ui'
 
 /** 统一通知级别 → StatusBadge 等级。error→danger、success/warning/info 同名直映。 */
 function feedLevelStatus(level: FeedLevel): StatusLevel {
@@ -60,16 +60,16 @@ export default function NotificationCenterPage() {
   ]
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">{t('notificationCenter.title')}</h1>
+    <div data-page="notifications" className="jm-page-stack space-y-4">
+      <div className="jm-page-header">
+        <h1 className="jm-page-title">{t('notificationCenter.title')}</h1>
         <Button variant="outline" size="sm" onClick={() => markAll.mutate()} disabled={markAll.isPending}>
           {t('notificationCenter.markAllRead')}
         </Button>
       </div>
 
       {/* 类型筛选 + 仅未读 + 关键字 */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
         <div className="flex gap-1 rounded-lg border p-0.5">
           {sourceTabs.map((tab) => (
             <button

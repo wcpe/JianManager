@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Folder, FolderUp, RefreshCw, Check } from 'lucide-react'
 import { useBrowseDir } from '@/api/nodeRuntime'
-import { Button } from '@/components/ui/button'
+import { Button } from '@jianmanager/ui/components/button'
 
 /** 节点目录选择器（FR-178）：逐级浏览节点上的目录、选定一个绝对路径用于 JDK 登记。 */
 interface DirectoryPickerProps {

@@ -4,7 +4,7 @@ import { ChevronRight } from 'lucide-react'
 
 import { useConsoleStore } from '@/stores/console'
 import { breadcrumbTrail } from '@/lib/breadcrumb'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 
 /**
  * 统一页头/面包屑（FR-134 + FR-162）：据当前路由渲染「域 › 页面 [› 末级]」轨迹，

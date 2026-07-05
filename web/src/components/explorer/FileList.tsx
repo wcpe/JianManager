@@ -11,19 +11,19 @@ import {
   Scissors,
   Copy,
 } from 'lucide-react'
-import { Checkbox } from '@/components/ui/checkbox'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
   ContextMenu,
   ContextMenuTrigger,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
-} from '@/components/ui/context-menu'
+} from '@jianmanager/ui/components/context-menu'
 import type { FileInfo } from '@/api/files'
 import { isArchiveName, isClassName } from '@/api/archive'
 import type { SelectionState, ClickModifiers } from './selection'
 import { isSelected } from './selection'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 
 interface FileListProps {
   files: FileInfo[]

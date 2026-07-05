@@ -5,8 +5,8 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import { Button } from '@/components/ui/button'
+} from '@jianmanager/ui/components/dropdown-menu'
+import { Button } from '@jianmanager/ui/components/button'
 import { useDirectorStore } from '@/stores/director'
 import type { WorkspacePreset } from '@/lib/workspace-preset'
 

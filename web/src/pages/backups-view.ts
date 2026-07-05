@@ -5,7 +5,7 @@
  * 备份状态码与后端 model.BackupStatus 对齐：0 待处理 / 1 进行中 / 2 完成 / 3 失败。
  * 备份模式与 model.BackupMode 对齐：0 全量 / 1 增量。
  */
-import type { StatusLevel } from '@/lib/threshold'
+import type { StatusLevel } from '@jianmanager/ui'
 
 /** 备份状态码。 */
 export const BACKUP_PENDING = 0

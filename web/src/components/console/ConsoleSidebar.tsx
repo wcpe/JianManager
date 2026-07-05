@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useLocation } from 'react-router'
 import {
@@ -17,42 +18,95 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
 import { changeLanguage } from '@/i18n'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+} from '@jianmanager/ui/components/dropdown-menu'
 import SidebarNavLink from './SidebarNavLink'
-import NodeSwitcher from './NodeSwitcher'
-import InstanceTree from './InstanceTree'
 import ThemeSwitcher from './ThemeSwitcher'
 import { logoToggleLabelKey } from './sidebar-logo'
 import { navGroupsForRole, type NavGroup, type NavSection } from './nav-config'
 
-/** 「系统」小节小标题图标（仅视觉，折叠态不显）。 */
+/** 分节小标题图标（仅视觉，折叠态不显）。 */
 const SECTION_ICON: Record<string, LucideIcon> = {
-  'nav.sysPlatform': Wrench,
-  'nav.sysAccount': ShieldCheck,
+  'nav.contentDistribution': Wrench,
+  'nav.storageRuntime': Boxes,
+  'nav.taskNotification': ShieldCheck,
+  'nav.accountAudit': ShieldCheck,
+  'nav.admin': Wrench,
 }
+const SIDEBAR_CONTENT_SWAP_MS = 320
 
 /**
- * 运维控制台左侧栏（ADR-009 / FR-037 / FR-131 / design §7）：常驻五域侧栏。
- * 定高 flex column；分组导航区占据剩余高度并整体滚动（滚动条隐藏，FR-131），
- * 「集群·实例」展开时内嵌节点切换 + 实例树；可折叠为仅图标轨（hover tooltip 显 label）。
- * 底部全局主题切换器（FR-164）+ 版本/开源许可固定可见。
+ * 运维控制台左侧栏（FR-268 / ADR-055）：常驻资源主轴侧栏。
+ * 定高 flex column；分组导航区占据剩余高度并整体滚动（滚动条隐藏，FR-131）。
+ * 侧栏只放跨服务器 / 平台级入口；服务器选择交给全部服务器页、节点页与全局搜索。
+ * 底部保留主题、语言、版本与开源许可。
  */
 export default function ConsoleSidebar() {
-  const { t } = useTranslation()
   const role = useAuthStore((s) => s.role)
-  const groups = navGroupsForRole(role)
+  const groups = useMemo(() => navGroupsForRole(role), [role])
   const collapsed = useConsoleStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useConsoleStore((s) => s.toggleSidebar)
+  const [renderCollapsed, setRenderCollapsed] = useState(collapsed)
+
+  useEffect(() => {
+    const delay = collapsed ? SIDEBAR_CONTENT_SWAP_MS : 0
+    const timer = window.setTimeout(() => setRenderCollapsed(collapsed), delay)
+    return () => window.clearTimeout(timer)
+  }, [collapsed])
 
   return (
-    <aside className={cn('flex h-full min-h-0 flex-col border-r bg-card/40 transition-[width] duration-200 ease-ios', collapsed ? 'w-14' : 'w-60')}>
-      <div className={cn('flex shrink-0 items-center border-b py-3', collapsed ? 'justify-center px-2' : 'gap-2 px-4')}>
+    <aside
+      data-slot="console-sidebar"
+      data-state={collapsed ? 'collapsed' : 'expanded'}
+      className="jm-console-sidebar hidden h-full min-h-0 shrink-0 sm:block"
+    >
+      <div
+        data-slot="sidebar-drawer"
+        data-state={collapsed ? 'collapsed' : 'expanded'}
+        className="jm-sidebar-drawer flex h-full min-h-0 flex-col"
+      >
+        <SidebarContent
+          active={!renderCollapsed}
+          collapsed={collapsed}
+          compact={false}
+          groups={groups}
+          toggleSidebar={toggleSidebar}
+        />
+        <SidebarContent
+          active={renderCollapsed}
+          collapsed={collapsed}
+          compact
+          groups={groups}
+          toggleSidebar={toggleSidebar}
+        />
+      </div>
+    </aside>
+  )
+}
+
+function SidebarContent({
+  active,
+  collapsed,
+  compact,
+  groups,
+  toggleSidebar,
+}: {
+  active: boolean
+  collapsed: boolean
+  compact: boolean
+  groups: NavGroup[]
+  toggleSidebar: () => void
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <div data-mode={compact ? 'collapsed' : 'expanded'} aria-hidden={!active} inert={!active ? true : undefined} className="jm-sidebar-mode">
+      <div className={cn('flex shrink-0 items-center border-b py-3.5', compact ? 'justify-center px-2' : 'gap-2 px-3.5')}>
         {/* logo 整体可点折叠/展开（FR-181，复用 toggleSidebar）：折叠态仅图标仍可点回展开。 */}
         <button
           type="button"
@@ -60,22 +114,22 @@ export default function ConsoleSidebar() {
           aria-label={t(logoToggleLabelKey(collapsed))}
           title={t(logoToggleLabelKey(collapsed))}
           className={cn(
-            'flex min-w-0 items-center rounded transition-colors hover:bg-accent/60',
-            collapsed ? 'justify-center' : 'flex-1 gap-2 px-1 -mx-1',
+            'flex min-w-0 items-center rounded-md transition-colors hover:bg-accent/60',
+            compact ? 'justify-center' : 'flex-1 gap-2 px-1.5 py-1 -mx-1.5',
           )}
         >
-          <span className="grid size-6 shrink-0 place-items-center rounded bg-primary text-primary-foreground">
-            <Boxes className="size-4" />
+          <span className="grid size-8 shrink-0 place-items-center rounded-md border border-primary/15 bg-card shadow-soft">
+            <img src="/brand/jianmanager-mark.svg" alt="" aria-hidden="true" className="size-7" />
           </span>
-          {!collapsed && <h2 className="min-w-0 flex-1 truncate text-left text-base font-bold tracking-tight">JianManager</h2>}
+          {!compact && <h2 className="min-w-0 flex-1 truncate text-left text-base font-bold tracking-tight text-foreground">JianManager</h2>}
         </button>
-        {!collapsed && (
+        {!compact && (
           <button
             type="button"
             onClick={toggleSidebar}
             aria-label={t('nav.collapseSidebar')}
             title={t('nav.collapseSidebar')}
-            className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+            className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
           >
             <PanelLeftClose className="size-4" />
           </button>
@@ -83,8 +137,8 @@ export default function ConsoleSidebar() {
       </div>
 
       {/* 滚动条隐藏但保留滚动（FR-131）：scrollbar-none 工具类见 index.css */}
-      <nav className={cn('min-h-0 flex-1 space-y-0.5 overflow-y-auto scrollbar-none p-2', collapsed && 'px-1.5')}>
-        {collapsed && (
+      <nav className={cn('min-h-0 flex-1 space-y-1 overflow-y-auto scrollbar-none p-2', compact && 'px-1.5')}>
+        {compact && (
           <button
             type="button"
             onClick={toggleSidebar}
@@ -96,7 +150,7 @@ export default function ConsoleSidebar() {
           </button>
         )}
         {groups.map((g) =>
-          collapsed ? (
+          compact ? (
             <CollapsedGroup key={g.key} group={g} />
           ) : g.to ? (
             <LeafGroup key={g.key} group={g} />
@@ -106,8 +160,8 @@ export default function ConsoleSidebar() {
         )}
       </nav>
 
-      <SidebarFooter collapsed={collapsed} />
-    </aside>
+      <SidebarFooter collapsed={compact} />
+    </div>
   )
 }
 
@@ -125,7 +179,7 @@ function CollapsedGroup({ group }: { group: NavGroup }) {
 
   const cls = cn(
     'grid w-full place-items-center rounded-md py-2 transition-colors',
-    active ? 'bg-primary/15 text-primary' : 'text-foreground/80 hover:bg-accent/60 hover:text-foreground',
+    active ? 'bg-accent text-primary shadow-[inset_3px_0_0_var(--primary)]' : 'text-foreground/80 hover:bg-accent/60 hover:text-foreground',
   )
 
   if (group.to) {
@@ -162,6 +216,7 @@ function ExpandableGroup({ group }: { group: NavGroup }) {
   const collapsed = useConsoleStore((s) => s.collapsedGroups[group.key])
   const toggleGroup = useConsoleStore((s) => s.toggleGroup)
   const Icon = group.icon
+  const groupClosed = Boolean(collapsed)
   const hasActiveChild = groupRoutes(group).some((r) => pathname === r || pathname.startsWith(r + '/'))
 
   return (
@@ -169,31 +224,28 @@ function ExpandableGroup({ group }: { group: NavGroup }) {
       <button
         type="button"
         onClick={() => toggleGroup(group.key)}
-        aria-expanded={!collapsed}
+        aria-expanded={!groupClosed}
         className={cn(
           'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-colors hover:bg-accent/60',
-          hasActiveChild ? 'font-medium text-foreground' : 'text-foreground/80',
+          hasActiveChild ? 'bg-card/70 font-semibold text-foreground shadow-soft' : 'text-foreground/80',
         )}
       >
         <Icon className="size-4 shrink-0" />
         <span className="flex-1 truncate text-left">{t(group.labelKey)}</span>
-        {collapsed ? <ChevronRight className="size-3.5 opacity-60" /> : <ChevronDown className="size-3.5 opacity-60" />}
+        {groupClosed ? <ChevronRight className="size-3.5 opacity-60" /> : <ChevronDown className="size-3.5 opacity-60" />}
       </button>
 
-      {!collapsed && (
-        <div className="mt-0.5 space-y-0.5">
+      <div
+        data-slot="sidebar-nav-group-content"
+        data-state={groupClosed ? 'closed' : 'open'}
+        aria-hidden={groupClosed}
+        className="jm-sidebar-group-content mt-0.5"
+      >
+        <div className="jm-sidebar-group-content-inner space-y-0.5">
           {group.children?.map((c) => <SidebarNavLink key={c.to} {...c} nested />)}
-          {group.instances && (
-            <div className="mt-1 space-y-1 pl-2">
-              <NodeSwitcher />
-              <div className="max-h-[40vh] overflow-y-auto scrollbar-none">
-                <InstanceTree />
-              </div>
-            </div>
-          )}
           {group.sections?.map((sec) => <SidebarSection key={sec.labelKey} section={sec} />)}
         </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -224,7 +276,7 @@ function SidebarFooter({ collapsed }: { collapsed: boolean }) {
   const closeInstance = useConsoleStore((s) => s.closeInstance)
 
   return (
-    <div className={cn('shrink-0 space-y-1.5 border-t p-2', collapsed && 'px-1.5')}>
+    <div className={cn('shrink-0 space-y-1.5 border-t bg-card/45 p-2 backdrop-blur-sm', collapsed && 'px-1.5')}>
       <div className={cn('flex items-center gap-2', collapsed && 'flex-col gap-1.5')}>
         <ThemeSwitcher compact={collapsed} />
         <LanguageSwitcher compact={collapsed} />
@@ -232,7 +284,10 @@ function SidebarFooter({ collapsed }: { collapsed: boolean }) {
 
       {!collapsed && (
         <div className="flex items-center justify-between gap-2 px-1">
-          <span className="text-[11px] text-muted-foreground/70">v{__APP_VERSION__}</span>
+          <span className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground/80">
+            <span className="size-1.5 rounded-full bg-status-success" />
+            v{__APP_VERSION__}
+          </span>
           <Link
             to="/licenses"
             onClick={() => closeInstance()}

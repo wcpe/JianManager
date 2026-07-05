@@ -12,15 +12,15 @@ import {
   type TreeDir,
   type TreeFile,
 } from '@/lib/client-publish-wizard'
-import { cn } from '@/lib/utils'
-import { Badge } from '@/components/ui/badge'
+import { cn } from '@jianmanager/ui'
+import { Badge } from '@jianmanager/ui/components/badge'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
+} from '@jianmanager/ui/components/select'
 
 /** 平台「全部」哨兵（Radix Select 不允许空字符串值，回写时映射回 ""）。 */
 const PLATFORM_ALL = '__all__'

@@ -8,8 +8,8 @@ import { useInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
-import { cn } from '@/lib/utils'
-import { instanceStatusLevel } from '@/lib/threshold'
+import { cn } from '@jianmanager/ui'
+import { instanceStatusLevel } from '@jianmanager/ui'
 import { flatNavItems } from './nav-config'
 import { searchPalette, type PaletteEntry } from './command-palette'
 
@@ -36,6 +36,8 @@ export default function CommandPalette() {
   const openInstance = useConsoleStore((s) => s.openInstance)
   const closeInstance = useConsoleStore((s) => s.closeInstance)
   const toggleSidebar = useConsoleStore((s) => s.toggleSidebar)
+  const selectedNodeId = useConsoleStore((s) => s.selectedNodeId)
+  const setSelectedNodeId = useConsoleStore((s) => s.setSelectedNodeId)
 
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState(0)
@@ -63,12 +65,13 @@ export default function CommandPalette() {
   const entries = useMemo(
     () =>
       searchPalette(query, {
-        instances: (instances ?? []).map((i) => ({ id: i.id, name: i.name, uuid: i.uuid, status: i.status })),
+        instances: (instances ?? []).map((i) => ({ id: i.id, name: i.name, uuid: i.uuid, status: i.status, nodeId: i.nodeId })),
         nodes: (nodes ?? []).map((n) => ({ id: n.id, name: n.name, host: n.host })),
         pages,
         commands,
+        nodeScopeId: selectedNodeId,
       }),
-    [query, instances, nodes, pages, commands],
+    [query, instances, nodes, pages, commands, selectedNodeId],
   )
 
   // selected 在渲染期 clamp，避免结果变化后越界（不在 effect 里 setState）。
@@ -107,6 +110,7 @@ export default function CommandPalette() {
       openInstance(Number(rest))
       navigate('/instances')
     } else if (kind === 'node') {
+      setSelectedNodeId(Number(rest))
       navigate(`/nodes?node=${rest}`)
       closeInstance()
     } else if (kind === 'page') {

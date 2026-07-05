@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 import FileBrowserTree from './FileBrowserTree'
 import FilePreview from './FilePreview'
 import type { FileBrowserAction, FileBrowserSource, FileEntry, PreviewContent } from './types'

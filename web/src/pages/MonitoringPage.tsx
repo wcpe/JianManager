@@ -2,11 +2,11 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
-import type { MetricResolution } from '@/api/metrics'
-import { Panel } from '@/components/ui/panel'
-import { RangePicker, ResolutionPicker, type MetricRange } from '@/components/charts/RangePicker'
-import { MonitorSkeleton, type MonitorSource } from '@/components/charts/MonitorSkeleton'
-import { MetricsOverviewStrip } from '@/components/charts/MetricsOverviewStrip'
+import { useMetricOverview, useMetricSeries } from '@/api/metrics'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { RangePicker, ResolutionPicker, type MetricRange, type MetricResolution } from '@jianmanager/ui'
+import { MonitorSkeleton, type MonitorSource } from '@jianmanager/ui'
+import { MetricsOverviewStrip } from '@jianmanager/ui'
 import { MetricComparePanel } from '@/components/charts/MetricComparePanel'
 import { DrillTargetPicker, targetKey, type DrillTarget } from '@/components/charts/DrillTargetPicker'
 import { useTargetSeries } from '@/components/charts/use-target-series'
@@ -15,13 +15,42 @@ import {
   INSTANCE_CHART_DEFS,
   PLATFORM_CHART_DEFS,
   type MetricChartDef,
-} from '@/lib/monitor-metrics'
+  type RawSeries,
+} from '@jianmanager/ui'
 
 /** 据 target 选用的图定义集（平台 4 / 节点 6 / 实例 6）。 */
 function defsFor(kind: DrillTarget['kind']): MetricChartDef[] {
   if (kind === 'node') return NODE_CHART_DEFS
   if (kind === 'instance') return INSTANCE_CHART_DEFS
   return PLATFORM_CHART_DEFS
+}
+
+function useMonitorSeries(
+  source: MonitorSource,
+  range: MetricRange,
+  resolution: MetricResolution,
+): { series: RawSeries[]; isLoading: boolean } {
+  const isPlatform = source.kind === 'platform'
+  const targetId = isPlatform ? '' : source.uuid
+  const scope = source.kind === 'instance' ? 'instance' : 'node'
+
+  const overview = useMetricOverview(range, resolution)
+  const seriesQ = useMetricSeries({ scope, targetId, range, resolution, enabled: !isPlatform && !!targetId })
+
+  if (isPlatform) {
+    const series: RawSeries[] = (overview.data?.trends ?? []).map((trend) => ({
+      metricKey: trend.metricKey,
+      points: trend.points.map((point) => ({ ts: point.ts, value: point.avg })),
+    }))
+    return { series, isLoading: overview.isLoading }
+  }
+
+  const series: RawSeries[] = (seriesQ.data?.series ?? []).map((item) => ({
+    metricKey: item.metricKey,
+    world: item.world,
+    points: item.points.map((point) => ({ ts: point.ts, value: point.avg })),
+  }))
+  return { series, isLoading: seriesQ.isLoading }
 }
 
 /**
@@ -73,9 +102,9 @@ export default function MonitoringPage() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold">{t('monitor.title')}</h1>
+    <div data-page="monitoring" className="jm-page-stack space-y-4">
+      <div className="jm-page-header flex-wrap">
+        <h1 className="jm-page-title">{t('monitor.title')}</h1>
         <div className="flex flex-wrap items-center gap-2">
           <ResolutionPicker value={resolution} onChange={setResolution} />
           <RangePicker value={range} onChange={setRange} />
@@ -113,6 +142,7 @@ export default function MonitoringPage() {
         defaultRange={range}
         resolution={resolution}
         worldFilter={worldFilter}
+        useSeries={useMonitorSeries}
       />
     </div>
   )

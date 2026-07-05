@@ -2,9 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { consoleTitleKey } from './pageTitle'
 
 describe('consoleTitleKey', () => {
-  it('根路径映射到仪表盘', () => {
-    expect(consoleTitleKey('/')).toBe('nav.dashboard')
-    expect(consoleTitleKey('')).toBe('nav.dashboard')
+  it('根路径映射到平台首页', () => {
+    expect(consoleTitleKey('/')).toBe('nav.platformHome')
+    expect(consoleTitleKey('')).toBe('nav.platformHome')
   })
 
   it('顶层路由映射到对应区标题', () => {

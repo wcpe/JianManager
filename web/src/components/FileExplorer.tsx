@@ -39,9 +39,9 @@ import {
   type TreeDir,
   type TreeFile,
 } from '@/lib/client-publish-wizard'
-import { cn } from '@/lib/utils'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import { cn } from '@jianmanager/ui'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { Button } from '@jianmanager/ui/components/button'
 import {
   Dialog,
   DialogContent,
@@ -49,14 +49,14 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
+} from '@jianmanager/ui/components/dialog'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
+} from '@jianmanager/ui/components/select'
 import DangerConfirm from '@/components/DangerConfirm'
 
 /** 平台「全部」哨兵（Radix Select 不允许空字符串值，回写时映射回 ""）。 */

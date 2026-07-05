@@ -3,8 +3,8 @@ import { searchPalette, type PaletteSources } from './command-palette'
 
 const src: PaletteSources = {
   instances: [
-    { id: 1, name: 'lobby', uuid: 'aaaa1111-x', status: 'RUNNING' },
-    { id: 2, name: 'survival', uuid: 'bbbb2222-y', status: 'STOPPED' },
+    { id: 1, name: 'lobby', uuid: 'aaaa1111-x', status: 'RUNNING', nodeId: 10 },
+    { id: 2, name: 'survival', uuid: 'bbbb2222-y', status: 'STOPPED', nodeId: 11 },
   ],
   nodes: [
     { id: 10, name: 'node-tokyo', host: '10.0.0.1' },
@@ -40,6 +40,12 @@ describe('searchPalette', () => {
     expect(r.map((e) => e.key)).toEqual(['node:11'])
   })
 
+  it('节点作用域只限制实例结果，不限制节点跳转结果', () => {
+    const r = searchPalette('', { ...src, nodeScopeId: 11 })
+    expect(r.filter((e) => e.kind === 'instance').map((e) => e.key)).toEqual(['instance:2'])
+    expect(r.filter((e) => e.kind === 'node').map((e) => e.key)).toEqual(['node:10', 'node:11'])
+  })
+
   it('按页面文案命中', () => {
     const r = searchPalette('全部实例', src)
     expect(r.map((e) => e.key)).toEqual(['page:/instances'])
@@ -47,7 +53,7 @@ describe('searchPalette', () => {
 
   it('每类按 limitPer 截断', () => {
     const many: PaletteSources = {
-      instances: Array.from({ length: 20 }, (_, i) => ({ id: i, name: `inst${i}`, uuid: `u${i}`, status: 'RUNNING' })),
+      instances: Array.from({ length: 20 }, (_, i) => ({ id: i, name: `inst${i}`, uuid: `u${i}`, status: 'RUNNING', nodeId: 10 })),
       nodes: [],
       pages: [],
       commands: [],

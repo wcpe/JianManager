@@ -2,18 +2,18 @@ import { useTranslation } from 'react-i18next'
 import { Check, Monitor, Moon, Sun, type LucideIcon } from 'lucide-react'
 
 import { useThemeStore } from '@/stores/theme'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 import type { ColorTheme, ThemeMode } from '@/lib/theme'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+} from '@jianmanager/ui/components/dropdown-menu'
 
 /** 主题色圆点配置：色值固定（用于色样预览，非品牌变量），命中态描边走当前主色变量。 */
 const COLOR_DOTS: Array<{ value: ColorTheme; swatch: string; labelKey: string }> = [
-  { value: 'indigo', swatch: '#6366F1', labelKey: 'colorTheme.indigo' },
+  { value: 'indigo', swatch: '#158053', labelKey: 'colorTheme.indigo' },
   { value: 'teal', swatch: '#14B8A6', labelKey: 'colorTheme.teal' },
 ]
 
@@ -26,7 +26,7 @@ const MODE_OPTIONS: Array<{ value: ThemeMode; icon: LucideIcon; labelKey: string
 
 /**
  * 全局主题切换器（FR-164）：侧栏底部一处切，全站 CSS 变量实时跟变。
- * 左 = 主题色圆点（靛蓝/青绿直选，复用 preview.html `.dotc` 观感：命中态主色描边）；
+ * 左 = 主题色圆点（Jian 绿/青绿直选，复用 preview.html `.dotc` 观感：命中态主色描边）；
  * 右 = 明暗（图标 + dropdown 三态直选）。主题色与明暗正交、各自 localStorage 持久。
  * 折叠态（compact）下隐藏文字标签、仅留圆点与图标，适配仅图标轨。
  */

@@ -7,17 +7,17 @@ import {
   type DbColumn,
   type DbRowsParams,
 } from '@/api/db'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 import { normalizeColumns, normalizeRows, shouldShowEmptyRow } from './rows-view'
-import { Input } from '@/components/ui/input'
-import { Button } from '@/components/ui/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Button } from '@jianmanager/ui/components/button'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
+} from '@jianmanager/ui/components/select'
 import {
   Table,
   TableBody,
@@ -25,7 +25,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table'
+} from '@jianmanager/ui/components/table'
 
 /** 敏感列前端兜底打码占位（后端应已脱敏，此处双重保险）。 */
 const MASKED = '******'

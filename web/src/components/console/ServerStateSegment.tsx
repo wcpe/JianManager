@@ -11,9 +11,9 @@ import {
   type ListenersSection,
   type WorldEntry,
 } from '@/api/serverState'
-import { Panel } from '@/components/ui/panel'
-import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { Button } from '@jianmanager/ui/components/button'
+import { cn } from '@jianmanager/ui'
 
 /** 默认折叠阈值：有界列表超过此数量时默认仅展示前 N 行，余下点「展开全部」纯前端切片（不二次请求）。 */
 const COLLAPSE_THRESHOLD = 20

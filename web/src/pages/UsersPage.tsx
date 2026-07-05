@@ -5,9 +5,9 @@ import { useUsers, useDeleteUser, useUpdateUser, type UserInfo } from '@/api/use
 import DangerConfirm from '@/components/DangerConfirm'
 import CreateUserDialog from '@/components/CreateUserDialog'
 import EditUserDialog from '@/components/EditUserDialog'
-import { Button } from '@/components/ui/button'
-import { Panel } from '@/components/ui/panel'
-import { StatusBadge } from '@/components/ui/status-badge'
+import { Button } from '@jianmanager/ui/components/button'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import {
   Table,
   TableBody,
@@ -15,7 +15,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table'
+} from '@jianmanager/ui/components/table'
 import {
   ConfigRow,
   ConfigSwitch,
@@ -52,9 +52,9 @@ export default function UsersPage() {
   const toggleStatus = (u: UserInfo) => updateUser.mutate({ id: u.id, status: u.status === 0 ? 1 : 0 })
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">{t('users.title')}</h1>
+    <div data-page="users" className="jm-page-stack space-y-4">
+      <div className="jm-page-header">
+        <h1 className="jm-page-title">{t('users.title')}</h1>
         <div className="flex items-center gap-2">
           <ConfigViewToggle view={view} onChange={setView} cardLabel={t('common.cardView')} listLabel={t('common.listView')} />
           <Button onClick={() => setShowCreate(true)}>+ {t('users.createUser')}</Button>

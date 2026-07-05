@@ -13,47 +13,43 @@ export interface Crumb {
 
 /** 路由首段 → 所属域（域不可直接导航，仅作上下文，故无 to）。 */
 const SEGMENT_DOMAIN: Record<string, string> = {
-  // 集群
-  nodes: 'nav.cluster',
-  instances: 'nav.cluster',
-  networks: 'nav.cluster',
-  super: 'nav.cluster',
-  director: 'nav.cluster',
-  // 观测（FR-215：原「监控」域改名「观测」，下设 监控/日志/统计）
+  // 服务器域（FR-254）：节点、全部服务器、超级工作台、导播台。
+  nodes: 'nav.servers',
+  instances: 'nav.servers',
+  super: 'nav.servers',
+  director: 'nav.servers',
+  // 群组网络。
+  networks: 'nav.groupNetwork',
+  // 观测。
   monitor: 'nav.observability',
   'client-dist-monitor': 'nav.observability',
   logs: 'nav.observability',
   statistics: 'nav.observability',
-  // 运营
-  players: 'nav.operations',
-  bots: 'nav.operations',
-  templates: 'nav.operations',
-  backups: 'nav.operations',
-  'backup-storages': 'nav.operations',
-  schedules: 'nav.operations',
-  'client-channels': 'nav.operations',
-  // 系统
-  'runtime-assets': 'nav.system',
-  storage: 'nav.system',
-  // 任务中心由观测(原监控)迁入「系统·平台与维护」（FR-215）
-  tasks: 'nav.system',
-  // 通知中心 + 告警管理页归系统域（FR-216：告警随通知中心收口到系统/账户与审计）
-  notifications: 'nav.system',
-  alerts: 'nav.system',
-  database: 'nav.system',
-  'system-update': 'nav.system',
-  users: 'nav.system',
-  groups: 'nav.system',
-  settings: 'nav.system',
-  audit: 'nav.system',
-  licenses: 'nav.system',
+  // 平台管理。
+  templates: 'nav.platformManagement',
+  backups: 'nav.platformManagement',
+  'backup-storages': 'nav.platformManagement',
+  schedules: 'nav.platformManagement',
+  'client-channels': 'nav.platformManagement',
+  'runtime-assets': 'nav.platformManagement',
+  storage: 'nav.platformManagement',
+  tasks: 'nav.platformManagement',
+  notifications: 'nav.platformManagement',
+  alerts: 'nav.platformManagement',
+  database: 'nav.platformManagement',
+  'system-update': 'nav.platformManagement',
+  users: 'nav.platformManagement',
+  groups: 'nav.platformManagement',
+  settings: 'nav.platformManagement',
+  audit: 'nav.platformManagement',
+  licenses: 'nav.platformManagement',
 }
 
 /** 路由首段 → 页面标题 i18n key（叶子，可点回到该列表页）。 */
 const SEGMENT_PAGE: Record<string, string> = {
   nodes: 'nav.nodes',
   instances: 'nav.allInstances',
-  networks: 'nav.networks',
+  networks: 'nav.networkTopology',
   super: 'nav.superWorkbench',
   director: 'nav.director',
   monitor: 'nav.monitoring',
@@ -83,15 +79,20 @@ const SEGMENT_PAGE: Record<string, string> = {
 
 /**
  * 据 pathname 计算面包屑轨迹：
- * - 根路径 `/` → 单节点「总览」（无 to，已在当前页）。
+ * - 根路径 `/` → 「平台首页」（无 to，已在当前页）。
  * - 已知首段 → [域(无 to), 页面(有 to 回列表)]；若有更深子段（如 /instances/:id）则页面节点可点、末节点由调用方补具体名称。
  * - 未知首段 → 空数组（调用方回退通用标题）。
  */
 export function breadcrumbTrail(pathname: string): Crumb[] {
   const segs = pathname.split('/').filter(Boolean)
-  if (segs.length === 0) return [{ labelKey: 'nav.dashboard' }]
+  if (segs.length === 0) return [{ labelKey: 'nav.platformHome' }]
 
   const first = segs[0]
+  if (first === 'networks') {
+    const pageKey = segs[1] === 'topology' ? 'nav.networkTopology' : 'nav.groupManagement'
+    return [{ labelKey: 'nav.groupNetwork' }, { labelKey: pageKey }]
+  }
+
   const domainKey = SEGMENT_DOMAIN[first]
   const pageKey = SEGMENT_PAGE[first]
   if (!pageKey) return []

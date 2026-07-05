@@ -4,10 +4,10 @@ import { toast } from 'sonner'
 import { useMetricSeries, type MetricSeries, useInstanceMetrics } from '@/api/metrics'
 import { useInstance } from '@/api/instances'
 import { useProbeUpdateStatus, useUpdateProbe } from '@/api/probe'
-import { Panel } from '@/components/ui/panel'
-import { Button } from '@/components/ui/button'
-import { TimeSeriesChart, type ChartSeries } from '@/components/charts/TimeSeriesChart'
-import { RangePicker, type MetricRange } from '@/components/charts/RangePicker'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { Button } from '@jianmanager/ui/components/button'
+import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui'
+import { RangePicker, type MetricRange } from '@jianmanager/ui'
 
 /**
  * 探针在线更新卡（FR-068）：展示探针连接状态 + 内嵌最新版本 + 上次推送时间，

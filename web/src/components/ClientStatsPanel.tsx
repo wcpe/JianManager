@@ -8,14 +8,14 @@ import {
   type ObservabilityVersionDist,
   type ObservabilityLagDist,
 } from '@/api/clientDistObservability'
-import { TimeSeriesChart, type ChartSeries } from '@/components/charts/TimeSeriesChart'
+import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
+} from '@jianmanager/ui/components/select'
 
 /** 字节数转人类可读。 */
 function formatBytes(n: number): string {

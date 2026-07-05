@@ -1,12 +1,12 @@
 import { useTranslation } from 'react-i18next'
 import { Server, Cpu, MemoryStick, HardDrive, Box, ChevronDown, ChevronRight } from 'lucide-react'
 import type { NodeInfo } from '@/api/nodes'
-import { MiniBar } from '@/components/ui/mini-bar'
-import { Badge } from '@/components/ui/badge'
-import { StatusBadge } from '@/components/ui/status-badge'
+import { MiniBar } from '@jianmanager/ui/components/mini-bar'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { toneChipClass } from '@/lib/tone'
-import type { StatusLevel } from '@/lib/threshold'
-import { cn } from '@/lib/utils'
+import type { StatusLevel } from '@jianmanager/ui'
+import { cn } from '@jianmanager/ui'
 
 /** 节点状态码 → 状态等级（1 在线=正常 / 2 启动中=警告 / 0 离线=危险）。 */
 function nodeStatusLevel(status: number): StatusLevel {

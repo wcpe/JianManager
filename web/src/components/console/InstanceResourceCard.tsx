@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Download } from 'lucide-react'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@jianmanager/ui/components/tabs'
 import ConfigExplorer from '@/components/config-explorer/ConfigExplorer'
 import FileBrowser, { type FileBrowserAction } from '@/components/file-browser/FileBrowser'
 import { instanceFileSource } from '@/components/file-browser/sources/instanceSource'

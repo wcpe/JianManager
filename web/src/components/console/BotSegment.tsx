@@ -22,17 +22,17 @@ import {
 import BotStatusDot from './BotStatusDot'
 import CreateBotDialog from './CreateBotDialog'
 import DangerConfirm from '@/components/DangerConfirm'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Checkbox } from '@/components/ui/checkbox'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
-import { cn } from '@/lib/utils'
+} from '@jianmanager/ui/components/select'
+import { cn } from '@jianmanager/ui'
 
 const PAGE_SIZE = 50
 

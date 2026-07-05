@@ -41,12 +41,12 @@ function persist(key: string, value: string | null): void {
 
 /**
  * 运维控制台的客户端 UI 状态（ADR-009 / FR-037 / FR-039 / FR-131 / FR-166）。
- * 存「当前选中节点」「当前在工作区打开的实例」「侧栏折叠/分组折叠态」，不进 URL，
- * 避免与既有 `/instances/:id` 详情路由语义冲突。侧栏折叠态/分组态/选中节点持久化 localStorage（FR-131）。
+ * 存「页眉节点作用域」「当前在工作区打开的实例」「侧栏折叠/分组折叠态」，不进 URL，
+ * 避免与既有 `/instances/:id` 详情路由语义冲突。侧栏折叠态/分组态/节点作用域持久化 localStorage（FR-131/FR-268）。
  * 打开实例后的画布/卡片/预设状态由 `stores/workspace.ts` 承载（FR-166 可组合卡片工作区）。
  */
 interface ConsoleState {
-  /** 实例树节点筛选：null = 全部节点，否则为某节点 id（持久） */
+  /** 页眉节点作用域：null = 全部节点，否则为某节点 id（持久） */
   selectedNodeId: number | null
   /** 工作区当前打开的实例 id；null = 未打开任何实例 */
   openInstanceId: number | null

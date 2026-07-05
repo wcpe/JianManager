@@ -18,29 +18,29 @@ import {
   type RuntimeUpdateSeriesPoint,
 } from '@/api/clientRuntimeStates'
 import { useAuthStore } from '@/stores/auth'
-import { Panel } from '@/components/ui/panel'
-import { StatCard } from '@/components/ui/stat-card'
-import { MiniBar } from '@/components/ui/mini-bar'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { RangePicker, type MetricRange } from '@/components/charts/RangePicker'
-import { TimeSeriesChart, type ChartSeries } from '@/components/charts/TimeSeriesChart'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { StatCard } from '@jianmanager/ui/components/stat-card'
+import { MiniBar } from '@jianmanager/ui/components/mini-bar'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { Button } from '@jianmanager/ui/components/button'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
+import { RangePicker, type MetricRange } from '@jianmanager/ui'
+import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
+} from '@jianmanager/ui/components/dialog'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
+} from '@jianmanager/ui/components/select'
 import type { DistBucket } from '@/lib/platform-stats'
 
 const ROLE_PLATFORM_ADMIN = 10
@@ -68,6 +68,8 @@ function toApiRange(r: MetricRange): string {
       return '30d'
     case '90d':
       return '90d'
+    case '1y':
+      return '180d'
     default:
       return '7d'
   }
@@ -85,6 +87,8 @@ function toStatsDays(r: MetricRange): number {
       return 30
     case '90d':
       return 90
+    case '1y':
+      return 180
     default:
       return 7
   }
@@ -609,11 +613,11 @@ export default function ClientDistMonitoringPage() {
   )
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <div data-page="client-dist-monitor" className="jm-page-stack space-y-4">
+      <div className="jm-page-header flex-wrap">
         <div>
-          <h1 className="text-xl font-bold">{t('clientDistMonitor.title')}</h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">{t('clientDistMonitor.subtitle')}</p>
+          <h1 className="jm-page-title">{t('clientDistMonitor.title')}</h1>
+          <p className="jm-page-subtitle">{t('clientDistMonitor.subtitle')}</p>
         </div>
         <div className="flex items-center gap-2">
           {isPlatformAdmin && channelPicker}

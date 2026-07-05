@@ -1,19 +1,21 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useSearchParams } from 'react-router'
+import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { useQueries } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Network, GitBranch, List } from 'lucide-react'
 import api from '@/api/client'
 import DangerConfirm from '@/components/DangerConfirm'
-import { Panel } from '@/components/ui/panel'
-import { Checkbox } from '@/components/ui/checkbox'
-import { StatusBadge } from '@/components/ui/status-badge'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@/components/ui/scrollable-dialog'
-import { FieldLabel, FieldError } from '@/components/ui/field-label'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { StatusBadge } from '@jianmanager/ui/components/status-badge'
+import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired } from '@/lib/form-validation'
-import { instanceStatusLevel, statusColorVar } from '@/lib/threshold'
-import { cn } from '@/lib/utils'
+import { instanceStatusLevel, statusColorVar } from '@jianmanager/ui'
+import { cn } from '@jianmanager/ui'
 import { memberHealth, type MemberHealth } from '@/lib/topology'
 import TopologyGraph from '@/components/console/TopologyGraph'
 import { useInstances } from '@/api/instances'
@@ -50,17 +52,22 @@ export default function NetworksPage() {
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<NetworkSummary | null>(null)
   const del = useDeleteNetwork()
+  const location = useLocation()
+  const navigate = useNavigate()
 
   // 详情与视图存入 URL，支持深链 / 刷新还原（FR-145 可寻址；完整可寻址归 FR-128）。
   const [searchParams, setSearchParams] = useSearchParams()
   const detailId = searchParams.get('network') ? Number(searchParams.get('network')) : null
-  const view = searchParams.get('view') === 'topology' ? 'topology' : 'list'
+  const view =
+    location.pathname.startsWith('/networks/topology') || searchParams.get('view') === 'topology'
+      ? 'topology'
+      : 'list'
 
   const setView = (v: 'list' | 'topology') => {
     const next = new URLSearchParams(searchParams)
-    if (v === 'topology') next.set('view', 'topology')
-    else next.delete('view')
-    setSearchParams(next, { replace: true })
+    next.delete('view')
+    const search = next.toString()
+    navigate({ pathname: v === 'topology' ? '/networks/topology' : '/networks', search: search ? `?${search}` : '' })
   }
   const openDetail = (id: number) => {
     const next = new URLSearchParams(searchParams)
@@ -83,11 +90,14 @@ export default function NetworksPage() {
   }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <h1 className="text-2xl font-bold">{t('networks.title')}</h1>
+    <div data-page="networks" className="jm-page-stack space-y-4">
+      <div className="jm-page-header">
+        <div>
+          <h1 className="jm-page-title">{t('networks.title')}</h1>
+          <p className="jm-page-subtitle">{t('networks.subtitle')}</p>
+        </div>
         <div className="flex items-center gap-2">
-          <div className="inline-flex rounded-md border p-0.5">
+          <div className="jm-toolbar-surface inline-flex items-center gap-1 p-1">
             <ViewTab active={view === 'list'} onClick={() => setView('list')} icon={<List className="size-3.5" />}>
               {t('networks.viewList')}
             </ViewTab>
@@ -95,16 +105,11 @@ export default function NetworksPage() {
               {t('networks.viewTopology')}
             </ViewTab>
           </div>
-          <button
-            onClick={() => setCreateOpen(true)}
-            className="px-3 py-2 text-sm bg-primary text-primary-foreground rounded-md transition-colors hover:bg-primary/90"
-          >
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
             {t('networks.create')}
-          </button>
+          </Button>
         </div>
       </div>
-      <p className="text-xs text-muted-foreground mb-4">{t('networks.subtitle')}</p>
-
       {view === 'topology' ? (
         <Panel
           title={t('networks.topoTitle')}
@@ -148,17 +153,20 @@ function ViewTab({
   children: React.ReactNode
 }) {
   return (
-    <button
+    <Button
+      type="button"
+      size="xs"
+      variant={active ? 'default' : 'ghost'}
       onClick={onClick}
       aria-pressed={active}
       className={cn(
-        'inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors',
-        active ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
+        'h-7 px-2.5',
+        active ? 'shadow-soft' : 'text-muted-foreground hover:text-foreground',
       )}
     >
       {icon}
       {children}
-    </button>
+    </Button>
   )
 }
 
@@ -208,12 +216,12 @@ function NetworkList({
                 {n.description && <p className="mt-0.5 truncate text-sm text-muted-foreground">{n.description}</p>}
               </button>
               <div className="flex shrink-0 items-center gap-3">
-                <button className="text-xs text-primary hover:underline" onClick={() => onView(n.id)}>
+                <Button size="xs" variant="ghost" className="text-primary hover:text-primary" onClick={() => onView(n.id)}>
                   {t('networks.manage')}
-                </button>
-                <button className="text-xs text-status-danger hover:underline" onClick={() => onDelete(n)}>
+                </Button>
+                <Button size="xs" variant="ghost" className="text-status-danger hover:text-status-danger" onClick={() => onDelete(n)}>
                   {t('common.delete')}
-                </button>
+                </Button>
               </div>
             </div>
             <div className="mt-2.5">
@@ -326,10 +334,10 @@ function CreateNetworkModal({ onClose }: { onClose: () => void }) {
         <form onSubmit={submit} className="space-y-3">
           <div>
             <FieldLabel required>{t('networks.name')}</FieldLabel>
-            <input
+            <Input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
+              className="mt-1"
               placeholder="survival"
               aria-invalid={!!nameError}
             />
@@ -337,19 +345,19 @@ function CreateNetworkModal({ onClose }: { onClose: () => void }) {
           </div>
           <div>
             <FieldLabel>{t('networks.description')}</FieldLabel>
-            <input
+            <Input
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
+              className="mt-1"
             />
           </div>
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-md hover:bg-accent">
+            <Button type="button" variant="outline" onClick={onClose}>
               {t('common.cancel')}
-            </button>
-            <button type="submit" disabled={create.isPending || !!nameError} className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50">
+            </Button>
+            <Button type="submit" disabled={create.isPending || !!nameError}>
               {create.isPending ? t('common.creating') : t('common.create')}
-            </button>
+            </Button>
           </div>
         </form>
       </div>
@@ -414,7 +422,7 @@ function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose
   return (
     <div className={MODAL_OVERLAY} onClick={onClose}>
       <div
-        className="flex max-h-[88vh] w-full max-w-4xl flex-col rounded-xl border bg-card text-card-foreground shadow-lift"
+        className="flex max-h-[88vh] w-full max-w-4xl flex-col rounded-lg border bg-card text-card-foreground shadow-lift"
         onClick={(e) => e.stopPropagation()}
       >
         {/* 头部 */}
@@ -437,23 +445,27 @@ function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose
             )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <button
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
               onClick={() => runBatch('start')}
               disabled={action.isPending}
-              className="rounded-md border px-2.5 py-1.5 text-xs hover:bg-accent disabled:opacity-50"
             >
               {t('networks.batchStart')}
-            </button>
-            <button
+            </Button>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
               onClick={() => runBatch('stop')}
               disabled={action.isPending}
-              className="rounded-md border px-2.5 py-1.5 text-xs hover:bg-accent disabled:opacity-50"
             >
               {t('networks.batchStop')}
-            </button>
-            <button onClick={onClose} className="text-sm text-muted-foreground hover:text-foreground">
+            </Button>
+            <Button type="button" size="xs" variant="ghost" onClick={onClose} className="text-muted-foreground">
               {t('common.close')}
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -483,12 +495,15 @@ function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose
                         <span className="truncate text-sm font-medium">{m.name}</span>
                         <span className="shrink-0 text-[11px] text-muted-foreground">{roleLabel(m.role)}</span>
                       </div>
-                      <button
-                        className="shrink-0 text-xs text-status-danger hover:underline"
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        className="shrink-0 text-status-danger hover:text-status-danger"
                         onClick={() => removeMember.mutate(m.instanceId)}
                       >
                         {t('networks.removeMember')}
-                      </button>
+                      </Button>
                     </li>
                   ))}
                 </ul>
@@ -502,11 +517,11 @@ function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose
               <span className="text-xs font-semibold tracking-wide text-muted-foreground">
                 {t('networks.addMembers')}
               </span>
-              <input
+              <Input
                 value={candFilter}
                 onChange={(e) => setCandFilter(e.target.value)}
                 placeholder={t('networks.filterCandidates')}
-                className="w-36 rounded-md border bg-background px-2 py-1 text-xs"
+                className="h-7 w-36 text-xs"
               />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-2">
@@ -544,13 +559,14 @@ function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose
               )}
             </div>
             <div className="flex shrink-0 justify-end border-t p-3">
-              <button
+              <Button
+                type="button"
+                size="xs"
                 onClick={addSelected}
                 disabled={selected.length === 0 || addMembers.isPending}
-                className="rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
               >
                 {t('networks.addSelected', { count: selected.length })}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

@@ -1,27 +1,20 @@
-import { useEffect } from 'react'
 import { useParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { useConsoleStore } from '@/stores/console'
+
+import InstanceConsolePage from '@/components/console/InstanceConsolePage'
 
 /**
- * 实例详情路由（`/instances/:id`）——深链入口（FR-166）。
- *
- * 工作区已从固定六 Tab 升级为可组合卡片画布（{@link WorkspaceCanvas}，ADR「可组合卡片工作区」
- * 取代 ADR-030）。控制台内打开实例统一走 `openInstance`（console store）渲染画布；
- * 本路由仅作直链/书签回退，挂载时把实例打开进画布，行为与控制台内一致。
+ * 服务器详情路由（`/instances/:id`，FR-269）：单服默认入口为固定分区的服务器统一控制台。
+ * FR-166 可组合画布仍保留在高级工作区/导播台路径，不再作为该深链的唯一渲染结果。
  */
 export default function InstanceDetailPage() {
   const { id } = useParams<{ id: string }>()
   const { t } = useTranslation()
-  const openInstance = useConsoleStore((s) => s.openInstance)
+  const instanceId = Number(id)
 
-  useEffect(() => {
-    const instanceId = Number(id)
-    if (Number.isFinite(instanceId) && instanceId > 0) {
-      openInstance(instanceId)
-    }
-  }, [id, openInstance])
+  if (!Number.isFinite(instanceId) || instanceId <= 0) {
+    return <p className="text-muted-foreground">{t('serverConsole.noInstance')}</p>
+  }
 
-  // 画布由 Workspace 在 openInstanceId 置位后接管渲染；此处仅在切换间隙显示占位。
-  return <p className="text-muted-foreground">{t('common.loading')}</p>
+  return <InstanceConsolePage instanceId={instanceId} />
 }

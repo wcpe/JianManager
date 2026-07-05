@@ -2,11 +2,11 @@ import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { Coins, Loader2, RefreshCw, Search, ShieldAlert } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Panel } from '@/components/ui/panel'
-import { StatCard } from '@/components/ui/stat-card'
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { StatCard } from '@jianmanager/ui/components/stat-card'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@jianmanager/ui/components/tabs'
 import {
   Table,
   TableHeader,
@@ -14,8 +14,8 @@ import {
   TableRow,
   TableHead,
   TableCell,
-} from '@/components/ui/table'
-import { cn } from '@/lib/utils'
+} from '@jianmanager/ui/components/table'
+import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/DangerConfirm'
 import { dispatchBusiness, fetchBusinessManifest, type BusinessResult } from '@/api/business'
 import {

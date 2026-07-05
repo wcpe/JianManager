@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next'
 import { Bot } from 'lucide-react'
-import { Badge } from '@/components/ui/badge'
-import { cn } from '@/lib/utils'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { cn } from '@jianmanager/ui'
 import type { InstanceBotBadge as BadgeData } from './bot-list'
 
 /**

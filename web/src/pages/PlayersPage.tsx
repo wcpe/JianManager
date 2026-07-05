@@ -8,15 +8,15 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table'
+} from '@jianmanager/ui/components/table'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
-import { Checkbox } from '@/components/ui/checkbox'
+} from '@jianmanager/ui/components/select'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import DangerConfirm from '@/components/DangerConfirm'
 import { useInstances } from '@/api/instances'
 import {

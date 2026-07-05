@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next'
 import { Download, FileQuestion, FileWarning, Loader2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Button } from '@jianmanager/ui/components/button'
 import CodeEditor from '@/components/explorer/editor/CodeEditor'
 import type { FileEntry, PreviewContent } from './types'
 

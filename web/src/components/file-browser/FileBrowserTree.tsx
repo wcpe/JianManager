@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight, File, Folder, FolderOpen, Loader2, MoreVertical } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+} from '@jianmanager/ui/components/dropdown-menu'
 import type { FileBrowserAction, FileBrowserSource, FileEntry } from './types'
 import { buildTree, type BrowserTreeDir, type BrowserTreeFile } from './tree'
 

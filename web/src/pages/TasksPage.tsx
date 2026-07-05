@@ -4,20 +4,20 @@ import { useSearchParams } from 'react-router'
 import { ChevronRight, Ban, Loader2 } from 'lucide-react'
 import { useTasks, useTask, useCancelTask, isTerminalTask, type Task, type TaskState } from '@/api/tasks'
 import { useNodes } from '@/api/nodes'
-import { Badge } from '@/components/ui/badge'
-import { Panel } from '@/components/ui/panel'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
+} from '@jianmanager/ui/components/select'
 import DangerConfirm from '@/components/DangerConfirm'
 import { toast } from 'sonner'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 
 /** 任务状态 → Badge 变体与文案键。 */
 const STATE_META: Record<TaskState, { variant: 'default' | 'secondary' | 'destructive' | 'outline'; key: string }> = {
@@ -70,13 +70,13 @@ export default function TasksPage() {
   const resetFilters = () => { setStateF(''); setKindF(''); setNodeF(''); setKeyword(''); setTimeF(''); setSince(undefined) }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold">{t('tasks.title')}</h1>
+    <div data-page="tasks" className="jm-page-stack space-y-4">
+      <div className="jm-page-header">
+        <h1 className="jm-page-title">{t('tasks.title')}</h1>
       </div>
 
       {/* 筛选条（FR-227） */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
         <Input
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}

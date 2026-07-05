@@ -7,12 +7,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-} from '@/components/ui/dropdown-menu'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { StatusBadge } from '@/components/ui/status-badge'
+} from '@jianmanager/ui/components/dropdown-menu'
+import { Button } from '@jianmanager/ui/components/button'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { toneChipClass } from '@/lib/tone'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 import PromptDialog from '@/components/explorer/PromptDialog'
 import { ALL_CARD_TYPES, builtinPresets, type WorkspacePreset } from '@/lib/workspace-preset'
 import { cardTypeDef, type CardType } from '@/lib/workspace-card'

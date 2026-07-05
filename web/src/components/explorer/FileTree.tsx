@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ChevronRight, ChevronDown, Folder, FolderOpen } from 'lucide-react'
 import { fetchFileList } from '@/api/files'
 import { joinPath } from './paths'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 
 /** 树节点（懒加载：children 为 undefined 表示未展开/未加载）。 */
 interface TreeNode {

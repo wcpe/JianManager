@@ -25,20 +25,20 @@ import {
   type SecurityLevel,
   type SecurityTargetType,
 } from '@/api/clientDistSecurity'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Panel } from '@/components/ui/panel'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Panel } from '@jianmanager/ui/components/panel'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Textarea } from '@/components/ui/textarea'
+} from '@jianmanager/ui/components/select'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
+import { Textarea } from '@jianmanager/ui/components/textarea'
 
 const EMPTY = '—'
 
@@ -76,16 +76,19 @@ function EmptyState({ text }: { text: string }) {
 
 function TrustNotice() {
   return (
-    <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-100">
-      玩家名、machineId、installId 均由客户端上报，可能被伪造或篡改；它们仅用于画像、分组与人工研判，不能作为可信授权或唯一封禁主键。
+    <div className="flex gap-2 rounded-lg border border-status-warning/35 bg-status-warning/10 px-4 py-3 text-sm text-foreground shadow-soft">
+      <ShieldAlert className="mt-0.5 size-4 shrink-0 text-status-warning" />
+      <span>
+        玩家名、machineId、installId 均由客户端上报，可能被伪造或篡改；它们仅用于画像、分组与人工研判，不能作为可信授权或唯一封禁主键。
+      </span>
     </div>
   )
 }
 
 function KpiCard({ title, value, hint }: { title: string; value: string | number; hint: string }) {
   return (
-    <div className="rounded-xl border bg-card p-4 shadow-soft">
-      <div className="text-xs text-muted-foreground">{title}</div>
+    <div className="rounded-lg border bg-card/95 p-4 shadow-soft">
+      <div className="text-xs font-medium text-muted-foreground">{title}</div>
       <div className="mt-2 text-2xl font-semibold tabular-nums">{value}</div>
       <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
     </div>
@@ -100,7 +103,7 @@ function RankList({ title, items }: { title: string; items: { subject: string; c
       ) : (
         <ul className="space-y-2">
           {items.slice(0, 8).map((item) => (
-            <li key={item.subject} className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm">
+            <li key={item.subject} className="flex items-center justify-between gap-3 rounded-md border bg-muted/25 px-3 py-2 text-sm">
               <span className="min-w-0 truncate font-medium">{item.subject || EMPTY}</span>
               <span className="shrink-0 text-muted-foreground">
                 {item.count} 次{item.bytes ? ` · ${fmtBytes(item.bytes)}` : ''}
@@ -699,27 +702,27 @@ function GroupsTab() {
 
 export default function ProtectionCenterPage() {
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div data-page="client-dist-security" className="jm-page-stack space-y-4">
+      <div className="jm-page-header">
         <div>
           <div className="flex items-center gap-2">
-            <ShieldCheck className="size-6 text-primary" />
-            <h1 className="text-2xl font-semibold tracking-tight">客户端分发安全</h1>
+            <ShieldCheck className="size-5 text-primary" />
+            <h1 className="jm-page-title">客户端分发安全</h1>
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">客户端分发安全总览、全量日志、画像剖析、封禁与降级管理。</p>
+          <p className="jm-page-subtitle">客户端分发安全总览、全量日志、画像剖析、封禁与降级管理。</p>
         </div>
-        <Badge variant="outline" className="mt-1"><ShieldAlert className="size-3" /> FR-264</Badge>
+        <Badge variant="outline"><ShieldAlert className="size-3" /> FR-264</Badge>
       </div>
       <Tabs defaultValue="overview" className="space-y-4">
-        <TabsList className="flex h-auto w-full flex-wrap justify-start">
-          <TabsTrigger value="overview">安全总览</TabsTrigger>
-          <TabsTrigger value="events">异常请求</TabsTrigger>
-          <TabsTrigger value="logs">日志详情</TabsTrigger>
-          <TabsTrigger value="profiles">客户端画像</TabsTrigger>
-          <TabsTrigger value="ip">IP 剖析</TabsTrigger>
-          <TabsTrigger value="actions">封禁与降级</TabsTrigger>
-          <TabsTrigger value="players">玩家名剖析</TabsTrigger>
-          <TabsTrigger value="groups">安全分组</TabsTrigger>
+        <TabsList className="jm-toolbar-surface flex h-auto w-full flex-wrap justify-start gap-1 p-1">
+          <TabsTrigger className="flex-none" value="overview">安全总览</TabsTrigger>
+          <TabsTrigger className="flex-none" value="events">异常请求</TabsTrigger>
+          <TabsTrigger className="flex-none" value="logs">日志详情</TabsTrigger>
+          <TabsTrigger className="flex-none" value="profiles">客户端画像</TabsTrigger>
+          <TabsTrigger className="flex-none" value="ip">IP 剖析</TabsTrigger>
+          <TabsTrigger className="flex-none" value="actions">封禁与降级</TabsTrigger>
+          <TabsTrigger className="flex-none" value="players">玩家名剖析</TabsTrigger>
+          <TabsTrigger className="flex-none" value="groups">安全分组</TabsTrigger>
         </TabsList>
         <TabsContent value="overview"><OverviewTab /></TabsContent>
         <TabsContent value="events"><EventsTab /></TabsContent>

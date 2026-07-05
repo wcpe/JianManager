@@ -2,7 +2,7 @@ import { useTranslation } from 'react-i18next'
 import { useInstance } from '@/api/instances'
 import { useTerminalToken } from '@/api/terminal'
 import TerminalComponent from '@/components/Terminal'
-import { Button } from '@/components/ui/button'
+import { Button } from '@jianmanager/ui/components/button'
 
 /**
  * 工作区终端面板：为单个实例打开终端（ADR-009 / FR-037）。

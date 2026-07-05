@@ -6,13 +6,13 @@ import { Palette, ScrollText, Cpu, Archive, Lock, ShieldAlert, Network, type Luc
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import { changeLanguage } from '@/i18n'
-import { cn } from '@/lib/utils'
+import { cn } from '@jianmanager/ui'
 import { useSettings, useUpdateSettings, type SettingItem } from '@/api/settings'
 import { diffSettings, hasUnsavedChanges } from './settings-form'
-import { Panel } from '@/components/ui/panel'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Badge } from '@jianmanager/ui/components/badge'
 import { OutboundTestButton } from '@/components/OutboundTestButton'
 import {
   Dialog,
@@ -21,14 +21,14 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog'
+} from '@jianmanager/ui/components/dialog'
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
+} from '@jianmanager/ui/components/select'
 
 type Theme = 'light' | 'dark' | 'system'
 
@@ -113,15 +113,15 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div data-page="settings" className="jm-page-stack space-y-4">
       <div>
-        <h1 className="text-xl font-bold">{t('settings.title')}</h1>
-        <p className="text-xs text-muted-foreground">{t('settings.subtitle')}</p>
+        <h1 className="jm-page-title">{t('settings.title')}</h1>
+        <p className="jm-page-subtitle">{t('settings.subtitle')}</p>
       </div>
 
-      <div className="flex gap-6">
+      <div className="flex gap-4">
         {/* 内部侧边栏：分类导航 */}
-        <aside className="w-44 shrink-0">
+        <aside className="w-44 shrink-0 rounded-lg border bg-card/80 p-2 shadow-soft">
           <nav className="space-y-0.5">
             {categories.map((c) => {
               const Icon = CATEGORY_ICON[c]

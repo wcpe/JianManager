@@ -5,11 +5,11 @@ import { ArrowLeft, ChevronDown, ChevronRight, Package, ScrollText, Search, Wren
 
 import { useLicenses, type LicenseDependency } from '@/api/licenses'
 import { depKey, filterByName, partitionDeps } from '@/lib/licenses'
-import { Panel } from '@/components/ui/panel'
-import { StatCard } from '@/components/ui/stat-card'
-import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
+import { Panel } from '@jianmanager/ui/components/panel'
+import { StatCard } from '@jianmanager/ui/components/stat-card'
+import { Input } from '@jianmanager/ui/components/input'
+import { Badge } from '@jianmanager/ui/components/badge'
+import { Button } from '@jianmanager/ui/components/button'
 import {
   Table,
   TableBody,
@@ -17,7 +17,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table'
+} from '@jianmanager/ui/components/table'
 
 /** 开源许可与依赖清单页（FR-135）：搜索 + 运行时/开发分区计数（StatCard）+ 表格 + 行内展开许可证全文。 */
 export default function LicensesPage() {
