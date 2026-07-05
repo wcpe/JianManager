@@ -48,16 +48,16 @@ Worker `SearchFiles` 行为（ADR-024）：
 
 ## 验收标准（对应 PRD FR-113）
 
-- [ ] 首建移出查询关键路径（后台异步），查询不同步全量重建；小目录有界快路径仍同步出结果
-- [ ] 查询时索引未就绪返回 `indexing=true`，前端给「索引中」进度并自动重试
+- [x] 首建移出查询关键路径（后台异步），查询不同步全量重建；小目录有界快路径仍同步出结果
+- [x] 查询时索引未就绪返回 `indexing=true`，前端给「索引中」进度并自动重试
 - [ ] 真机：大目录首查不卡 UI、结果一致
 
 ## 任务
 
-- [ ] proto 加 `indexing` 字段 + protoc 重生成 workerpb
-- [ ] Worker `search.Index`：就绪态（`ready`/`building`/`builtCh`）+ `EnsureBuilding`/`Ready`/`WaitReady`（测试钩子 `buildStartHook`）
-- [ ] Worker `SearchFiles`：未就绪后台构建 + 快路径，置 `indexing`
-- [ ] 单测：未就绪首查 `indexing=true`、放行构建后就绪查询出命中；小目录首查同步出结果（既有用例不破）
-- [ ] CP `SearchResult.Indexing` 透传
-- [ ] 前端 `searchFiles` 类型 + `SearchPanel` 索引中态 + 自动重试 + i18n
-- [ ] 文档同步：API.md、CHANGELOG
+- [x] proto 加 `indexing` 字段 + protoc 重生成 workerpb
+- [x] Worker `search.Index`：就绪态（`ready`/`building`/`builtCh`）+ `EnsureBuilding`/`Ready`/`WaitReady`（测试钩子 `buildStartHook`）
+- [x] Worker `SearchFiles`：未就绪后台构建 + 快路径，置 `indexing`
+- [x] 单测：未就绪首查 `indexing=true`、放行构建后就绪查询出命中；小目录首查同步出结果（既有用例不破）
+- [x] CP `SearchResult.Indexing` 透传
+- [x] 前端 `searchFiles` 类型 + `SearchPanel` 索引中态 + 自动重试 + i18n
+- [x] 文档同步：API.md、CHANGELOG

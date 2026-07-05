@@ -97,6 +97,15 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose }: SearchPa
     runSearchRef.current = runSearch
   }, [runSearch])
 
+  // 输入/模式一变，立即作废旧请求与旧的「索引中」重试；后续新查询仍走下方防抖。
+  useEffect(() => {
+    reqSeq.current += 1
+    if (retryTimer.current) {
+      clearTimeout(retryTimer.current)
+      retryTimer.current = null
+    }
+  }, [query, mode])
+
   // 输入/模式变化后防抖触发查询。
   useEffect(() => {
     const id = setTimeout(() => void runSearch(query, mode), 300)

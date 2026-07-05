@@ -9,6 +9,7 @@
 > 归属：本段为 `v0.13.0` 开发版归档区，范围从 `v0.12.0` tag（`0939068c`）之后到当前 `HEAD`；正式发布时由 `sdd-release-version` 提升为 `## 0.13.0（YYYY-MM-DD）`。
 
 ### 新增
+- **全文索引后台化与进度收口（FR-113）**：补齐 Worker 首建后台化、`SearchFiles.indexing` 经 CP 透传与前端「索引中」自动重试的回归守护；SearchPanel 在用户修改 query/模式时立即作废旧重试，避免旧查询覆盖新结果。规格同步保留大目录真机首查不卡 UI 与结果一致性待主控最终验收。
 - **编辑器迷你 IDE 增强收尾（FR-073）**：共享 CodeMirror 编辑器的搜索/替换、撤销/重做、行删除/复制/移动、选中行、按文件类型注释符批量注释能力验收闭环；快捷键速查表修正块注释为实际绑定 `Shift+Alt+A`，并用测试锁住 `Ctrl+S` 仍由历史保存接管、不被编辑器 keymap 抢占。定向 `ide-extensions` / `comment-behavior` / `ResourceEditor` 测试通过。
 - **Worker 一键安装 / 傻瓜部署验收闭环（FR-080）**：节点添加向导与 mock 一键命令统一为 CP 托管脚本 `/install-worker.sh` / `/install-worker.ps1`，手动连接文案明确一次性 token 只用于本次注册、不写入 `worker.yml`；DOM 回归覆盖生成命令含 `--control-plane` / `--token`。2026-07-04 本机临时 CP + PowerShell 托管脚本 + `-Binary` 兜底真链路验过，Worker setup 写配置并持久化身份，CP 侧见 `fr080-e2e` 节点自动注册上线（status=1）。
 - **运行时与制品全局页收口（FR-082）**：新增 `/runtime-assets` 全局页与 `GET /runtime-assets/overview` 聚合端点，按节点展示 JDK 矩阵与实例引用，并区分 `direct`/`major` 绑定 chip；制品区按类型展示占用、引用数、冷热/归档状态，支持类型/仅被引用/关键字筛选，并显示 `client-file` 的客户端路径/codec。端点限平台管理员（未登录 401、普通成员 403），mock 假后端补齐 direct/major seed 与 client-file seed；后端 service/router 测试和前端纯函数/DOM 测试覆盖。
