@@ -1470,11 +1470,16 @@
 {
   "base": "/abs/path/to/data",
   "dirs": [
+    { "path": "bin", "label": "bin", "size": 0, "fileCount": 0, "exists": true, "clearable": false },
+    { "path": "etc", "label": "etc", "size": 0, "fileCount": 0, "exists": true, "clearable": false },
+    { "path": "opt/jdks", "label": "jdks", "size": 320000000, "fileCount": 240, "exists": true, "clearable": false },
+    { "path": "var/servers", "label": "servers", "size": 1048576, "fileCount": 30, "exists": true, "clearable": false },
+    { "path": "var/log", "label": "log", "size": 8192, "fileCount": 3, "exists": true, "clearable": false },
     { "path": "var/artifacts", "label": "artifacts", "size": 48234123, "fileCount": 12, "exists": true, "clearable": false },
-    { "path": "cache", "label": "cache", "size": 1024, "fileCount": 2, "exists": true, "clearable": true }
+    { "path": "cache", "label": "cache", "size": 4096, "fileCount": 2, "exists": true, "clearable": true }
   ],
-  "totalSize": 48235147,
-  "totalFiles": 14,
+  "totalSize": 369294987,
+  "totalFiles": 287,
   "archive": { "hotCount": 3, "archivedCount": 1, "externalCount": 0, "hotSize": 48234123, "archivedSize": 2048, "externalSize": 0 }
 }
 ```
@@ -1501,6 +1506,57 @@
 - **权限**: 平台管理员
 - **响应 200**: `{ "removed": 2 }`（删除的条目数）
 - **错误**: 401/403；500 `INTERNAL_ERROR`
+
+---
+
+## 数据库资源管理器（FR-084）
+
+> 只读浏览 Control Plane 自身数据库（表清单 + 分页行数据）。严守「数据库仅 Control Plane 可读写」不变量：只执行元数据读取与 `SELECT`，无写入、导出、执行 SQL、删除或迁移端点；全部端点限平台管理员。
+
+### GET /api/v1/db/tables
+- **描述**: 列出 Control Plane 当前数据库全部表及行数；表名按稳定顺序返回
+- **关联 FR**: FR-084
+- **权限**: 平台管理员
+- **响应 200**:
+```json
+{
+  "tables": [
+    { "name": "users", "rowCount": 3 },
+    { "name": "instances", "rowCount": 12 }
+  ]
+}
+```
+- **错误**: 401（未登录）；403（已登录但非平台管理员）；500 `INTERNAL_ERROR`
+
+### GET /api/v1/db/tables/:name/rows
+- **描述**: 分页只读查询某表行数据，并返回列定义；敏感列在服务端脱敏后返回
+- **关联 FR**: FR-084
+- **权限**: 平台管理员
+- **Query**:
+  - `page`: 页码，从 1 起，默认 1
+  - `pageSize`: 每页行数，默认 50，最大 200（越界钳制）
+  - `sort`: 排序列名，必须命中该表列白名单；非法列忽略
+  - `order`: `asc` / `desc`，默认 `asc`
+  - `filterColumn` + `filterValue`: 简单过滤；列名必须命中列白名单，过滤值参数化绑定
+- **脱敏规则**: 列名（不区分大小写）命中 `password`、`passwd`、`secret`、`token`、`node_secret`、`private_key`、`priv_key`、`sign_priv`、`salt`、`api_key`、`access_key`、`credential`、`pull_key`、`key_hash` 任一片段时，非空值替换为 `******`
+- **响应 200**:
+```json
+{
+  "table": "users",
+  "columns": [
+    { "name": "id", "type": "integer", "sensitive": false },
+    { "name": "username", "type": "text", "sensitive": false },
+    { "name": "password_hash", "type": "text", "sensitive": true }
+  ],
+  "rows": [
+    { "id": 1, "username": "admin", "password_hash": "******" }
+  ],
+  "page": 1,
+  "pageSize": 50,
+  "total": 3
+}
+```
+- **错误**: 401；403；404 `TABLE_NOT_FOUND`（表名不在白名单）；500 `INTERNAL_ERROR`
 
 ---
 

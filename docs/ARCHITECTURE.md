@@ -502,6 +502,10 @@ database:
   # dsn: "user:pass@tcp(127.0.0.1:3306)/jianmanager?charset=utf8mb4&parseTime=true"
 ```
 
+### 数据库资源管理器（FR-084）
+
+Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不直接连接数据库。FR-084 在该边界内新增只读资源管理器：`DBBrowseService` 复用当前进程的 `*gorm.DB`，通过 GORM migrator 枚举表/列，通过白名单校验后的 `db.Table(name)` 执行分页 `SELECT`。表名、排序列、过滤列必须命中元数据白名单；过滤值参数化绑定，不拼接用户输入；列名命中密码、密钥、token、secret、node_secret 等敏感片段时由服务端替换为 `******` 后再返回。该能力无写入、迁移、导出、执行 SQL 入口，REST handler 全部挂平台管理员权限组并返回 401/403 对齐其他平台级资源。
+
 ## 8. 前端架构
 
 ### 8.1 技术栈
@@ -942,6 +946,7 @@ data/
 
 - 登记路径**按数据根相对存储**（如 `var/servers/hub-a1b2c3d4`），整体拷到另一机器后仍自洽。
 - Worker 收到 CP 下发的相对工作目录后，按本节点数据根解析为绝对路径并创建。
+- **平台存储资源管理器（FR-083）**：Control Plane 提供只读数据根浏览与占用统计，固定展示 `bin`、`etc`、`opt/jdks`、`var/servers`、`var/log`、`var/artifacts`、`cache` 七类 FHS 子目录；缺失目录仍在概览中以 `exists=false` 列出。浏览端点只列直接子项、不读文件内容，路径经数据根边界校验，`cache/` 是唯一可受控清理的目录。全部端点限平台管理员，且只触达 CP 本机数据根；Worker 本机目录仍经节点/实例文件能力访问。
 
 ### 11.2 出站网络代理（每进程 HTTP/SOCKS5，FR-174 / ADR-037；可视化配置 + 下发 FR-185 / ADR-043）
 

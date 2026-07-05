@@ -1,6 +1,6 @@
 import { HttpResponse } from 'msw'
 import { domainRoute } from '@/mocks/inject'
-import { requireAuth } from '@/mocks/auth-middleware'
+import { requireAuth, requirePlatformAdmin } from '@/mocks/auth-middleware'
 import { db } from '@/mocks/db'
 
 /**
@@ -357,7 +357,7 @@ export const handlers = [
 
   // 列出 CP 数据库全部表及行数（仅平台管理员，requireAuth 兜底）。
   domainRoute('get', '/db/tables', (info) => {
-    const denied = requireAuth(info)
+    const denied = requirePlatformAdmin(info)
     if (denied) return denied
     const tables = dbTables.list().map((t) => ({ name: t.name, rowCount: t.rows.length }))
     return HttpResponse.json({ tables })
@@ -365,7 +365,7 @@ export const handlers = [
 
   // 分页查询某表的行（敏感列脱敏 + 排序 + 简单过滤）。
   domainRoute('get', '/db/tables/:name/rows', (info) => {
-    const denied = requireAuth(info)
+    const denied = requirePlatformAdmin(info)
     if (denied) return denied
     const name = (info.params as { name: string }).name
     const tbl = dbTables.find((t) => t.name === name)

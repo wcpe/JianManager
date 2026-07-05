@@ -1,6 +1,6 @@
 import { HttpResponse } from 'msw'
 import { domainRoute } from '@/mocks/inject'
-import { requireAuth } from '@/mocks/auth-middleware'
+import { requireAuth, requirePlatformAdmin } from '@/mocks/auth-middleware'
 import { db } from '@/mocks/db'
 
 /**
@@ -395,7 +395,7 @@ export const handlers = [
 
   // ---- 存储概览（GET /storage/overview）----。dirs/总计实时从 storageDirs 派生，故 cache 清理后概览随之变化。
   domainRoute('get', '/storage/overview', (info) => {
-    const denied = requireAuth(info)
+    const denied = requirePlatformAdmin(info)
     if (denied) return denied
     const dirs = storageDirs.list()
     return HttpResponse.json({
@@ -409,7 +409,7 @@ export const handlers = [
 
   // ---- 数据根目录浏览（GET /storage/files?path=）----
   domainRoute('get', '/storage/files', (info) => {
-    const denied = requireAuth(info)
+    const denied = requirePlatformAdmin(info)
     if (denied) return denied
     const path = queryPath(info.request)
     return HttpResponse.json(listStorageDir(path))
@@ -417,7 +417,7 @@ export const handlers = [
 
   // ---- 缓存清理（POST /storage/cache/clear）：清空 cache 子项，概览随之归零联动 ----
   domainRoute('post', '/storage/cache/clear', (info) => {
-    const denied = requireAuth(info)
+    const denied = requirePlatformAdmin(info)
     if (denied) return denied
     const cache = storageDirs.find((d) => d.path === 'cache')
     const removed = cache?.fileCount ?? 0
@@ -455,21 +455,27 @@ interface StorageFileRow {
 }
 
 const storageDirs = db<StorageDirRow>('storageDirs', () => [
-  { id: 1, path: 'var/artifacts', label: 'artifacts', size: 48_234_123, fileCount: 12, exists: true, clearable: false },
-  { id: 2, path: 'opt/jdks', label: 'jdks', size: 320_000_000, fileCount: 240, exists: true, clearable: false },
-  { id: 3, path: 'var/servers', label: 'servers', size: 1_048_576, fileCount: 30, exists: true, clearable: false },
-  { id: 4, path: 'cache', label: 'cache', size: 4096, fileCount: 2, exists: true, clearable: true },
+  { id: 1, path: 'bin', label: 'bin', size: 0, fileCount: 0, exists: true, clearable: false },
+  { id: 2, path: 'etc', label: 'etc', size: 0, fileCount: 0, exists: true, clearable: false },
+  { id: 3, path: 'opt/jdks', label: 'jdks', size: 320_000_000, fileCount: 240, exists: true, clearable: false },
+  { id: 4, path: 'var/servers', label: 'servers', size: 1_048_576, fileCount: 30, exists: true, clearable: false },
   { id: 5, path: 'var/log', label: 'log', size: 8192, fileCount: 3, exists: true, clearable: false },
+  { id: 6, path: 'var/artifacts', label: 'artifacts', size: 48_234_123, fileCount: 12, exists: true, clearable: false },
+  { id: 7, path: 'cache', label: 'cache', size: 4096, fileCount: 2, exists: true, clearable: true },
 ])
 
 const storageFiles = db<StorageFileRow>('storageFiles', () => [
-  { id: 1, parent: '', name: 'var', isDir: true, size: 0, modTime: FILES_SEED_TIME },
-  { id: 2, parent: '', name: 'opt', isDir: true, size: 0, modTime: FILES_SEED_TIME },
-  { id: 3, parent: '', name: 'cache', isDir: true, size: 0, modTime: FILES_SEED_TIME },
-  { id: 4, parent: 'var', name: 'artifacts', isDir: true, size: 0, modTime: FILES_SEED_TIME },
-  { id: 5, parent: 'var', name: 'log', isDir: true, size: 0, modTime: FILES_SEED_TIME },
-  { id: 6, parent: 'cache', name: 'tmp-build.log', isDir: false, size: 2048, modTime: FILES_SEED_TIME },
-  { id: 7, parent: 'cache', name: 'resolve.json', isDir: false, size: 2048, modTime: FILES_SEED_TIME },
+  { id: 1, parent: '', name: 'bin', isDir: true, size: 0, modTime: FILES_SEED_TIME },
+  { id: 2, parent: '', name: 'etc', isDir: true, size: 0, modTime: FILES_SEED_TIME },
+  { id: 3, parent: '', name: 'opt', isDir: true, size: 0, modTime: FILES_SEED_TIME },
+  { id: 4, parent: '', name: 'var', isDir: true, size: 0, modTime: FILES_SEED_TIME },
+  { id: 5, parent: '', name: 'cache', isDir: true, size: 0, modTime: FILES_SEED_TIME },
+  { id: 6, parent: 'opt', name: 'jdks', isDir: true, size: 0, modTime: FILES_SEED_TIME },
+  { id: 7, parent: 'var', name: 'artifacts', isDir: true, size: 0, modTime: FILES_SEED_TIME },
+  { id: 8, parent: 'var', name: 'log', isDir: true, size: 0, modTime: FILES_SEED_TIME },
+  { id: 9, parent: 'var', name: 'servers', isDir: true, size: 0, modTime: FILES_SEED_TIME },
+  { id: 10, parent: 'cache', name: 'tmp-build.log', isDir: false, size: 2048, modTime: FILES_SEED_TIME },
+  { id: 11, parent: 'cache', name: 'resolve.json', isDir: false, size: 2048, modTime: FILES_SEED_TIME },
 ])
 
 /** 投影数据根某目录的直接子项（目录在前再按名排序，对齐 StorageFileEntry）。 */

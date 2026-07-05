@@ -9,21 +9,31 @@ import { useAuthStore } from '@/stores/auth'
 import DatabasePage from './DatabasePage'
 
 /**
- * DatabasePage 强断言（FR-205 配置数据库域）：验 db 域 mock 联动 + 错误注入。
- * 本页仅平台管理员（role=10）可达，故登录时用内嵌 role=10 的 fakeJWT，
- * 既让 auth store 解出 role=10，又让 requireAuth 凭同一 token 放行受保护的 /db/* 端点。
+ * DatabasePage 强断言：验 db 域 mock 联动 + 平台管理员权限边界。
+ * fakeJWT payload 仅驱动前端 store；mock 端必须以 session 绑定用户为准，避免伪造 payload 越权。
  */
-const ADMIN_TOKEN = `mock.${btoa(
-  JSON.stringify({ userId: 1, username: 'admin', role: 10, exp: Math.floor(Date.now() / 1000) + 900 }),
-)}.sig`
+const makeToken = (userId: number, username: string, role: number) =>
+  `mock.${btoa(JSON.stringify({ userId, username, role, exp: Math.floor(Date.now() / 1000) + 900 }))}.sig`
+
+function loginWithSessionUser(tokenRole: number, sessionUserId: number, username = 'admin') {
+  const token = makeToken(sessionUserId, username, tokenRole)
+  db<Session>('sessions').insert({ accessToken: token, refreshToken: `r-${sessionUserId}`, userId: sessionUserId })
+  useAuthStore.getState().login(token, `r-${sessionUserId}`)
+}
 
 function loginPlatformAdmin() {
-  db<Session>('sessions').insert({ accessToken: ADMIN_TOKEN, refreshToken: 'r-admin', userId: 1 })
-  useAuthStore.getState().login(ADMIN_TOKEN, 'r-admin')
+  loginWithSessionUser(10, 1, 'admin')
+}
+
+function loginAsForgedAdminPayloadForMember() {
+  loginWithSessionUser(10, 2, 'operator')
 }
 
 describe('DatabasePage（mock 假后端）', () => {
   beforeEach(() => {
+    if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {}
+    if (!Element.prototype.hasPointerCapture) Element.prototype.hasPointerCapture = () => false
+    if (!Element.prototype.setPointerCapture) Element.prototype.setPointerCapture = () => {}
     loginPlatformAdmin()
   })
 
@@ -48,6 +58,41 @@ describe('DatabasePage（mock 假后端）', () => {
     expect(screen.getByText('creative')).toBeInTheDocument()
     // 切表后旧表的行不再渲染。
     expect(screen.queryByText('operator')).not.toBeInTheDocument()
+  })
+
+  it('过滤 username=operator 后仅保留匹配行，并可按 id 倒序排序', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<DatabasePage />)
+    expect(await screen.findByText('admin')).toBeInTheDocument()
+
+    await user.click(screen.getAllByRole('combobox')[0]!)
+    await user.click(await screen.findByRole('option', { name: 'username' }))
+    await user.type(screen.getByPlaceholderText('过滤关键字…'), 'operator')
+    await user.click(screen.getByRole('button', { name: '过滤' }))
+
+    expect(await screen.findByText('operator')).toBeInTheDocument()
+    expect(screen.queryByText('admin')).not.toBeInTheDocument()
+
+    await user.click(screen.getByText('清除'))
+    expect(await screen.findByText('admin')).toBeInTheDocument()
+    await user.click(screen.getByText('id'))
+    await user.click(screen.getByText('id'))
+    const dataRows = screen
+      .getAllByRole('row')
+      .map((row) => row.textContent ?? '')
+      .filter((text) => text.includes('admin') || text.includes('operator'))
+    expect(dataRows[0]).toContain('operator')
+    expect(dataRows[1]).toContain('admin')
+  })
+
+  it('伪造管理员 payload 但 session 绑定普通成员时，mock 接口拒绝且不泄露表清单', async () => {
+    useAuthStore.getState().logout()
+    loginAsForgedAdminPayloadForMember()
+    renderWithProviders(<DatabasePage />)
+
+    expect(await screen.findByText('加载表清单失败')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /users/ })).not.toBeInTheDocument()
+    expect(screen.queryByText('admin')).not.toBeInTheDocument()
   })
 
   it('注入 500（GET /db/tables）→ 显示加载表清单失败错误态', async () => {
