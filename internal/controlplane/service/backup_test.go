@@ -1,14 +1,17 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"gorm.io/gorm"
 
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
@@ -17,6 +20,23 @@ import (
 type stubSettings map[string]string
 
 func (s stubSettings) EffectiveValue(key string) string { return s[key] }
+
+type fakeBackupWorker struct {
+	workerpb.WorkerServiceClient
+	createReq  *workerpb.CreateBackupRequest
+	createResp *workerpb.CreateBackupResponse
+	restoreReq *workerpb.RestoreBackupRequest
+}
+
+func (f *fakeBackupWorker) CreateBackup(_ context.Context, in *workerpb.CreateBackupRequest, _ ...grpc.CallOption) (*workerpb.CreateBackupResponse, error) {
+	f.createReq = in
+	return f.createResp, nil
+}
+
+func (f *fakeBackupWorker) RestoreBackup(_ context.Context, in *workerpb.RestoreBackupRequest, _ ...grpc.CallOption) (*workerpb.RestoreBackupResponse, error) {
+	f.restoreReq = in
+	return &workerpb.RestoreBackupResponse{Success: true, RestoredFiles: 3}, nil
+}
 
 // makeBackupAt 写一条已完成备份并把 CreatedAt 校准到指定时刻（用 Update 绕过 gorm autoCreateTime）。
 func makeBackupAt(t *testing.T, db *gorm.DB, instanceID uint, createdAt time.Time) *model.Backup {
@@ -38,7 +58,7 @@ func newBackupTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Backup{}))
+	require.NoError(t, db.AutoMigrate(&model.Backup{}, &model.Node{}, &model.Instance{}))
 	return db
 }
 
@@ -108,6 +128,88 @@ func TestResolveChain(t *testing.T) {
 	require.Equal(t, inc2.ID, chain[2].ID)
 }
 
+// TestBackupChainRestoreArgs_PreservesChecksums 恢复链请求参数必须带上每段归档校验和。
+func TestBackupChainRestoreArgs_PreservesChecksums(t *testing.T) {
+	chain := []model.Backup{
+		{FilePath: "var/backups/full.tar.gz", StorageKey: "inst/full.tar.gz", Checksum: "aaa"},
+		{FilePath: "var/backups/inc.tar.gz", StorageKey: "inst/inc.tar.gz", Checksum: "bbb"},
+	}
+
+	relPaths, storageKeys, checksums := backupChainRestoreArgs(chain)
+
+	require.Equal(t, []string{"var/backups/full.tar.gz", "var/backups/inc.tar.gz"}, relPaths)
+	require.Equal(t, []string{"inst/full.tar.gz", "inst/inc.tar.gz"}, storageKeys)
+	require.Equal(t, []string{"aaa", "bbb"}, checksums)
+}
+
+func TestBackupExecuteBackup_PersistsWorkerChecksum(t *testing.T) {
+	db := newBackupTestDB(t)
+	pool := cpgrpc.NewClientPool()
+	node := &model.Node{UUID: "node-1", Name: "alpha", Host: "127.0.0.1", GRPCPort: 9001, WSPort: 9002, Secret: "s"}
+	require.NoError(t, db.Create(node).Error)
+	inst := &model.Instance{
+		UUID: "inst-1", NodeID: node.ID, Name: "survival", Type: model.InstanceTypeMinecraftJava,
+		Role: model.InstanceRoleBackend, ProcessType: model.ProcessTypeDirect, Status: model.InstanceStatusStopped,
+		StartCommand: "java -jar server.jar",
+	}
+	require.NoError(t, db.Create(inst).Error)
+
+	checksum := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	fake := &fakeBackupWorker{createResp: &workerpb.CreateBackupResponse{
+		Success: true, RelPath: "var/backups/inst-1/full.tar.gz", SizeBytes: 1024, FileCount: 1,
+		Manifest:       []*workerpb.BackupManifestEntry{entry("server.properties", 12, 100)},
+		ChecksumSha256: checksum, ChecksumAlgo: "sha256",
+	}}
+	pool.SetWorkerClientForTest(node.UUID, fake)
+	svc := NewBackupService(db, pool)
+	backup := &model.Backup{InstanceID: inst.ID, Name: "full", Type: model.BackupTypeManual, Mode: model.BackupModeFull, Status: model.BackupStatusPending}
+	require.NoError(t, db.Create(backup).Error)
+
+	svc.executeBackup(backup)
+
+	var saved model.Backup
+	require.NoError(t, db.First(&saved, backup.ID).Error)
+	require.Equal(t, model.BackupStatusCompleted, saved.Status)
+	require.Equal(t, checksum, saved.Checksum)
+	require.Equal(t, "sha256", saved.ChecksumAlgo)
+	require.Equal(t, "inst-1", fake.createReq.InstanceUuid)
+	require.Equal(t, backup.UUID, fake.createReq.BackupUuid)
+}
+
+func TestBackupExecuteRestore_PassesStorageKeysAndChecksums(t *testing.T) {
+	db := newBackupTestDB(t)
+	pool := cpgrpc.NewClientPool()
+	node := &model.Node{UUID: "node-restore", Name: "alpha", Host: "127.0.0.1", GRPCPort: 9001, WSPort: 9002, Secret: "s"}
+	require.NoError(t, db.Create(node).Error)
+	inst := &model.Instance{
+		UUID: "inst-restore", NodeID: node.ID, Name: "survival", Type: model.InstanceTypeMinecraftJava,
+		Role: model.InstanceRoleBackend, ProcessType: model.ProcessTypeDirect, Status: model.InstanceStatusStopped,
+		StartCommand: "java -jar server.jar",
+	}
+	require.NoError(t, db.Create(inst).Error)
+	full := makeBackup(t, db, inst.ID, model.BackupModeFull, nil, nil)
+	full.FilePath = "var/backups/full.tar.gz"
+	full.StorageKey = "remote/full.tar.gz"
+	full.Checksum = "aaa"
+	require.NoError(t, db.Save(full).Error)
+	inc := makeBackup(t, db, inst.ID, model.BackupModeIncremental, &full.ID, nil)
+	inc.FilePath = "var/backups/inc.tar.gz"
+	inc.StorageKey = "remote/inc.tar.gz"
+	inc.Checksum = "bbb"
+	require.NoError(t, db.Save(inc).Error)
+	fake := &fakeBackupWorker{}
+	pool.SetWorkerClientForTest(node.UUID, fake)
+	svc := NewBackupService(db, pool)
+
+	svc.executeRestore(inc, []model.Backup{*full, *inc})
+
+	require.NotNil(t, fake.restoreReq)
+	require.Equal(t, "inst-restore", fake.restoreReq.InstanceUuid)
+	require.Equal(t, []string{"var/backups/full.tar.gz", "var/backups/inc.tar.gz"}, fake.restoreReq.RelPaths)
+	require.Equal(t, []string{"remote/full.tar.gz", "remote/inc.tar.gz"}, fake.restoreReq.StorageKeys)
+	require.Equal(t, []string{"aaa", "bbb"}, fake.restoreReq.ChecksumSha256)
+}
+
 // TestResolveChain_BrokenParent 父备份缺失时报链断裂。
 func TestResolveChain_BrokenParent(t *testing.T) {
 	db := newBackupTestDB(t)
@@ -144,7 +246,7 @@ func TestChainManifest_MergesLatestFingerprint(t *testing.T) {
 		m[e.Path] = e
 	}
 	require.Len(t, m, 3)
-	require.Equal(t, int64(5), m["a.txt"].Size)   // 取最新（增量覆盖全量）
+	require.Equal(t, int64(5), m["a.txt"].Size) // 取最新（增量覆盖全量）
 	require.Equal(t, int64(200), m["a.txt"].ModTime)
 	require.Contains(t, m, "c.txt")
 }
@@ -173,8 +275,8 @@ func TestPruneExpired_RemovesOldKeepsRecent(t *testing.T) {
 	svc.SetSettingsReader(stubSettings{SettingKeyBackupRetentionDays: "30"})
 
 	now := time.Now()
-	old1 := makeBackupAt(t, db, 1, now.AddDate(0, 0, -40)) // 超 30 天
-	old2 := makeBackupAt(t, db, 1, now.AddDate(0, 0, -31)) // 超 30 天
+	old1 := makeBackupAt(t, db, 1, now.AddDate(0, 0, -40))   // 超 30 天
+	old2 := makeBackupAt(t, db, 1, now.AddDate(0, 0, -31))   // 超 30 天
 	recent := makeBackupAt(t, db, 1, now.AddDate(0, 0, -10)) // 未超期
 	require.Equal(t, int64(3), countBackups(t, db))
 
@@ -217,6 +319,6 @@ func TestPruneExpired_KeepsChainWhenChildNotExpired(t *testing.T) {
 	require.NoError(t, db.Model(&model.Backup{}).Where("id = ?", inc.ID).Update("created_at", now.AddDate(0, 0, -5)).Error)
 
 	deleted := svc.pruneExpiredOnce()
-	require.Equal(t, 0, deleted)                 // 基被拒删，子未超期不在裁剪集
+	require.Equal(t, 0, deleted)                    // 基被拒删，子未超期不在裁剪集
 	require.Equal(t, int64(2), countBackups(t, db)) // 链完整保留
 }

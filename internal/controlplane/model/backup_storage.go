@@ -44,6 +44,10 @@ type BackupStorage struct {
 	// UseSSL S3 是否启用 TLS。默认由应用层（router/service）设为 true；
 	// 不用 gorm default:true，否则 GORM 会把显式 false（零值）覆盖回 true。
 	UseSSL bool `json:"useSsl"`
+	// LastTest* 保存已落库后端最近一次连通性测试结果；表单临时测试不写入。
+	LastTestAt      *time.Time `json:"lastTestAt,omitempty"`
+	LastTestOk      bool       `json:"lastTestOk"`
+	LastTestMessage string     `gorm:"type:varchar(255)" json:"lastTestMessage"`
 	// BackupCount/UsedBytes 为 FR-152 列表聚合展示字段，不落库。
 	BackupCount int64          `gorm:"-" json:"backupCount"`
 	UsedBytes   int64          `gorm:"-" json:"usedBytes"`

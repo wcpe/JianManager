@@ -2,8 +2,14 @@ package service
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/ssh"
 	"gorm.io/gorm"
 
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
@@ -31,6 +38,8 @@ var (
 	// ErrCredentialNotEnvRef 凭证未以 ${ENV_VAR} 形式引用（禁止硬编码明文）。
 	ErrCredentialNotEnvRef = errors.New("凭证必须以 ${ENV_VAR} 形式引用环境变量")
 )
+
+const backupStorageProbeTimeout = 2 * time.Second
 
 // envRefPattern 匹配整串恰为一个 ${VAR} 引用（VAR 为字母/数字/下划线）。
 var envRefPattern = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$`)
@@ -154,6 +163,12 @@ func (s *BackupStorageService) GetByID(id uint) (*model.BackupStorage, error) {
 	return &st, nil
 }
 
+type BackupStorageTestResult struct {
+	Ok        bool   `json:"ok"`
+	Message   string `json:"message"`
+	LatencyMs int64  `json:"latencyMs"`
+}
+
 // Delete 删除存储后端；被备份引用时拒绝（保护远程恢复链路）。
 func (s *BackupStorageService) Delete(id uint) error {
 	if _, err := s.GetByID(id); err != nil {
@@ -167,6 +182,53 @@ func (s *BackupStorageService) Delete(id uint) error {
 		return fmt.Errorf("%w: 当前被 %d 个备份引用", ErrStorageInUse, refs)
 	}
 	return s.db.Delete(&model.BackupStorage{}, id).Error
+}
+
+// TestCandidate 校验一个未保存的存储后端配置；不写入数据库。
+func (s *BackupStorageService) TestCandidate(st model.BackupStorage) BackupStorageTestResult {
+	start := time.Now()
+	result := s.validateCandidate(st)
+	result.LatencyMs = time.Since(start).Milliseconds()
+	return result
+}
+
+func (s *BackupStorageService) validateCandidate(st model.BackupStorage) BackupStorageTestResult {
+	if !model.ValidBackupStorageType(st.Type) {
+		return BackupStorageTestResult{Ok: false, Message: ErrInvalidStorageType.Error()}
+	}
+	if err := validateCredentialRefs(&st); err != nil {
+		return BackupStorageTestResult{Ok: false, Message: err.Error()}
+	}
+	ak, err := resolveEnvRef(st.AccessKeyEnv)
+	if err != nil {
+		return BackupStorageTestResult{Ok: false, Message: err.Error()}
+	}
+	sk, err := resolveEnvRef(st.SecretKeyEnv)
+	if err != nil {
+		return BackupStorageTestResult{Ok: false, Message: err.Error()}
+	}
+	if err := probeBackupStorage(st, ak, sk); err != nil {
+		return BackupStorageTestResult{Ok: false, Message: err.Error()}
+	}
+	return BackupStorageTestResult{Ok: true, Message: "连接正常"}
+}
+
+// TestSaved 测试已保存的存储后端，并持久化最近一次测试结果。
+func (s *BackupStorageService) TestSaved(id uint) (BackupStorageTestResult, error) {
+	st, err := s.GetByID(id)
+	if err != nil {
+		return BackupStorageTestResult{}, err
+	}
+	result := s.TestCandidate(*st)
+	now := time.Now().UTC()
+	if err := s.db.Model(&model.BackupStorage{}).Where("id = ?", id).Updates(map[string]any{
+		"last_test_at":      &now,
+		"last_test_ok":      result.Ok,
+		"last_test_message": result.Message,
+	}).Error; err != nil {
+		return BackupStorageTestResult{}, err
+	}
+	return result, nil
 }
 
 // ResolveSpec 把存储后端 ID 解析为下发 Worker 的传输参数，凭证从 ${ENV_VAR} 取明文。
@@ -383,4 +445,227 @@ func resolveEnvRef(ref string) (string, error) {
 		return "", fmt.Errorf("%w: %s", ErrCredentialEnvMissing, m[1])
 	}
 	return val, nil
+}
+
+func probeBackupStorage(st model.BackupStorage, accessKey, secretKey string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), backupStorageProbeTimeout)
+	defer cancel()
+	switch st.Type {
+	case model.BackupStorageS3:
+		return probeS3Storage(ctx, st, accessKey, secretKey)
+	case model.BackupStorageWebDAV:
+		return probeWebDAVStorage(ctx, st, accessKey, secretKey)
+	case model.BackupStorageSFTP:
+		return probeSFTPStorage(ctx, st, accessKey, secretKey)
+	default:
+		return ErrInvalidStorageType
+	}
+}
+
+func probeS3Storage(ctx context.Context, st model.BackupStorage, accessKey, secretKey string) error {
+	if strings.TrimSpace(st.Bucket) == "" {
+		return fmt.Errorf("S3 缺少 bucket")
+	}
+	u, err := backupStorageProbeURL(st.Endpoint, st.UseSSL)
+	if err != nil {
+		return fmt.Errorf("S3 endpoint 无效: %w", err)
+	}
+	appendProbePath(u, st.Bucket)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, u.String(), nil)
+	if err != nil {
+		return fmt.Errorf("S3 探测失败: %w", err)
+	}
+	if accessKey != "" || secretKey != "" {
+		region := st.Region
+		if region == "" {
+			region = "us-east-1"
+		}
+		signS3Probe(req, region, accessKey, secretKey)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("S3 连接失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusBadRequest {
+		return fmt.Errorf("S3 bucket 不可访问: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func probeWebDAVStorage(ctx context.Context, st model.BackupStorage, user, pass string) error {
+	u, err := backupStorageProbeURL(st.Endpoint, true)
+	if err != nil {
+		return fmt.Errorf("WebDAV endpoint 无效: %w", err)
+	}
+	if strings.TrimSpace(st.Prefix) != "" {
+		appendProbePath(u, st.Prefix)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodOptions, u.String(), nil)
+	if err != nil {
+		return fmt.Errorf("WebDAV 探测失败: %w", err)
+	}
+	if user != "" || pass != "" {
+		req.SetBasicAuth(user, pass)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("WebDAV 连接失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= http.StatusBadRequest {
+		return fmt.Errorf("WebDAV 不可访问: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func probeSFTPStorage(ctx context.Context, st model.BackupStorage, user, pass string) error {
+	if strings.TrimSpace(user) == "" {
+		return fmt.Errorf("SFTP 缺少用户名")
+	}
+	addr, err := sftpProbeAddr(st.Endpoint)
+	if err != nil {
+		return err
+	}
+	cfg := &ssh.ClientConfig{
+		User:            user,
+		Auth:            []ssh.AuthMethod{ssh.Password(pass)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         backupStorageProbeTimeout,
+	}
+	conn, err := (&net.Dialer{Timeout: backupStorageProbeTimeout}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return fmt.Errorf("SFTP 连接失败: %w", err)
+	}
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	if err != nil {
+		_ = conn.Close()
+		return fmt.Errorf("SFTP 握手失败: %w", err)
+	}
+	client := ssh.NewClient(sshConn, chans, reqs)
+	_ = client.Close()
+	return nil
+}
+
+func backupStorageProbeURL(endpoint string, useSSL bool) (*url.URL, error) {
+	ep := strings.TrimSpace(endpoint)
+	if ep == "" {
+		return nil, fmt.Errorf("缺少 endpoint")
+	}
+	if !strings.Contains(ep, "://") {
+		scheme := "https"
+		if !useSSL {
+			scheme = "http"
+		}
+		ep = scheme + "://" + ep
+	}
+	u, err := url.Parse(ep)
+	if err != nil {
+		return nil, err
+	}
+	if u.Host == "" {
+		return nil, fmt.Errorf("缺少 host")
+	}
+	return u, nil
+}
+
+func appendProbePath(u *url.URL, part string) {
+	prefix := strings.TrimRight(u.Path, "/")
+	next := strings.TrimLeft(strings.TrimSpace(part), "/")
+	if next == "" {
+		u.Path = prefix
+		return
+	}
+	u.Path = prefix + "/" + next
+}
+
+func sftpProbeAddr(endpoint string) (string, error) {
+	ep := strings.TrimSpace(endpoint)
+	if ep == "" {
+		return "", fmt.Errorf("SFTP 缺少 endpoint")
+	}
+	if _, _, err := net.SplitHostPort(ep); err == nil {
+		return ep, nil
+	}
+	return net.JoinHostPort(ep, "22"), nil
+}
+
+const s3ProbeEmptyPayloadHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+func signS3Probe(req *http.Request, region, accessKey, secretKey string) {
+	now := time.Now().UTC()
+	amzDate := now.Format("20060102T150405Z")
+	dateStamp := now.Format("20060102")
+	req.Header.Set("Host", req.URL.Host)
+	req.Header.Set("X-Amz-Date", amzDate)
+	req.Header.Set("X-Amz-Content-Sha256", s3ProbeEmptyPayloadHash)
+
+	canonicalHeaders := fmt.Sprintf("host:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n",
+		req.URL.Host, s3ProbeEmptyPayloadHash, amzDate)
+	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
+	canonicalRequest := strings.Join([]string{
+		req.Method,
+		req.URL.EscapedPath(),
+		canonicalS3ProbeQuery(req.URL.Query()),
+		canonicalHeaders,
+		signedHeaders,
+		s3ProbeEmptyPayloadHash,
+	}, "\n")
+	scope := strings.Join([]string{dateStamp, region, "s3", "aws4_request"}, "/")
+	stringToSign := strings.Join([]string{
+		"AWS4-HMAC-SHA256",
+		amzDate,
+		scope,
+		s3ProbeSHA256Hex([]byte(canonicalRequest)),
+	}, "\n")
+	signature := hex.EncodeToString(s3ProbeHMACSHA256(deriveS3ProbeKey(secretKey, dateStamp, region), []byte(stringToSign)))
+	req.Header.Set("Authorization", fmt.Sprintf(
+		"AWS4-HMAC-SHA256 Credential=%s/%s, SignedHeaders=%s, Signature=%s",
+		accessKey,
+		scope,
+		signedHeaders,
+		signature,
+	))
+}
+
+func canonicalS3ProbeQuery(q url.Values) string {
+	keys := make([]string, 0, len(q))
+	for k := range q {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	first := true
+	for _, k := range keys {
+		values := append([]string(nil), q[k]...)
+		sort.Strings(values)
+		for _, v := range values {
+			if !first {
+				b.WriteByte('&')
+			}
+			b.WriteString(url.QueryEscape(k))
+			b.WriteByte('=')
+			b.WriteString(url.QueryEscape(v))
+			first = false
+		}
+	}
+	return b.String()
+}
+
+func deriveS3ProbeKey(secretKey, dateStamp, region string) []byte {
+	kDate := s3ProbeHMACSHA256([]byte("AWS4"+secretKey), []byte(dateStamp))
+	kRegion := s3ProbeHMACSHA256(kDate, []byte(region))
+	kService := s3ProbeHMACSHA256(kRegion, []byte("s3"))
+	return s3ProbeHMACSHA256(kService, []byte("aws4_request"))
+}
+
+func s3ProbeHMACSHA256(key, data []byte) []byte {
+	h := hmac.New(sha256.New, key)
+	_, _ = h.Write(data)
+	return h.Sum(nil)
+}
+
+func s3ProbeSHA256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }

@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -124,10 +126,11 @@ func TestWriteBackupArchive_FullCapturesAllFiles(t *testing.T) {
 	writeFile(t, work, "world/level.dat", "world-data", now)
 
 	archive := filepath.Join(t.TempDir(), "full.tar.gz")
-	manifest, packed, size, err := writeBackupArchive(archive, work, nil, false)
+	manifest, packed, size, checksum, err := writeBackupArchive(archive, work, nil, false)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), packed)
 	require.Greater(t, size, int64(0))
+	require.Len(t, checksum, 64)
 
 	m := manifestMap(manifest)
 	require.Contains(t, m, "server.properties")
@@ -144,7 +147,7 @@ func TestWriteBackupArchive_IncrementalSkipsUnchanged(t *testing.T) {
 
 	// 第一次全量，拿到基准清单。
 	base := filepath.Join(t.TempDir(), "base.tar.gz")
-	baseManifest, _, _, err := writeBackupArchive(base, work, nil, false)
+	baseManifest, _, _, _, err := writeBackupArchive(base, work, nil, false)
 	require.NoError(t, err)
 
 	// 改动 a.txt（内容变长 + mtime 变），b.txt 不动。
@@ -152,7 +155,7 @@ func TestWriteBackupArchive_IncrementalSkipsUnchanged(t *testing.T) {
 	writeFile(t, work, "a.txt", "aaaa-changed", later)
 
 	inc := filepath.Join(t.TempDir(), "inc.tar.gz")
-	incManifest, packed, _, err := writeBackupArchive(inc, work, manifestMap(baseManifest), true)
+	incManifest, packed, _, _, err := writeBackupArchive(inc, work, manifestMap(baseManifest), true)
 	require.NoError(t, err)
 	// 仅 a.txt 被打包。
 	require.Equal(t, int64(1), packed)
@@ -168,14 +171,14 @@ func TestRestoreChain_FullThenIncremental(t *testing.T) {
 	writeFile(t, work, "edit.txt", "old", now)
 
 	full := filepath.Join(t.TempDir(), "full.tar.gz")
-	baseManifest, _, _, err := writeBackupArchive(full, work, nil, false)
+	baseManifest, _, _, _, err := writeBackupArchive(full, work, nil, false)
 	require.NoError(t, err)
 
 	// 增量：仅 edit.txt 改为 new。
 	later := now.Add(time.Hour)
 	writeFile(t, work, "edit.txt", "new-content", later)
 	inc := filepath.Join(t.TempDir(), "inc.tar.gz")
-	_, packed, _, err := writeBackupArchive(inc, work, manifestMap(baseManifest), true)
+	_, packed, _, _, err := writeBackupArchive(inc, work, manifestMap(baseManifest), true)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), packed)
 
@@ -195,6 +198,24 @@ func TestRestoreChain_FullThenIncremental(t *testing.T) {
 	edit, err := os.ReadFile(filepath.Join(restore, "edit.txt"))
 	require.NoError(t, err)
 	require.Equal(t, "new-content", string(edit))
+}
+
+// TestBackupChecksum_VerifiesArchiveDigest 固化备份归档 SHA-256：创建时登记，恢复前可校验。
+func TestBackupChecksum_VerifiesArchiveDigest(t *testing.T) {
+	work := t.TempDir()
+	writeFile(t, work, "server.properties", "a=1", time.Unix(1_700_000_000, 0))
+
+	archive := filepath.Join(t.TempDir(), "full.tar.gz")
+	_, _, _, checksum, err := writeBackupArchive(archive, work, nil, false)
+	require.NoError(t, err)
+
+	body, err := os.ReadFile(archive)
+	require.NoError(t, err)
+	raw := sha256.Sum256(body)
+	require.Equal(t, hex.EncodeToString(raw[:]), checksum)
+	require.NoError(t, verifyBackupChecksum(archive, checksum))
+	require.Error(t, verifyBackupChecksum(archive, "deadbeef"))
+	require.NoError(t, verifyBackupChecksum(archive, ""))
 }
 
 // TestExtractBackupArchive_RejectsZipSlip 解压拒绝越界条目（路径穿越防御）。

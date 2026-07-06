@@ -68,6 +68,8 @@ export default function BackupsPage() {
     id ? (storages ?? []).find((s) => s.id === id)?.name ?? `#${id}` : t('backups.localStorage', '本地')
   const parentName = (b: BackupInfo) =>
     b.parentId !== undefined ? backupById.get(b.parentId)?.name ?? `#${b.parentId}` : undefined
+  const checksumLabel = (b: BackupInfo) =>
+    b.checksum ? `${b.checksum.slice(0, 12)}...` : t('backups.checksumMissing', '未记录')
 
   const handleCreate = async (incremental: boolean) => {
     if (!selectedInstance) return
@@ -208,6 +210,7 @@ export default function BackupsPage() {
                     meta={
                       <>
                         <div>{formatSizeMb(b.fileSizeMb)}</div>
+                        <div title={b.checksum}>{checksumLabel(b)}</div>
                         <div>{new Date(b.createdAt).toLocaleString()}</div>
                       </>
                     }
@@ -247,6 +250,7 @@ export default function BackupsPage() {
                     <TableHead>{t('backups.mode', '模式')}</TableHead>
                     <TableHead>{t('backups.size', '大小')}</TableHead>
                     <TableHead>{t('backups.storageLocation', '存储位置')}</TableHead>
+                    <TableHead>{t('backups.checksum', '校验和')}</TableHead>
                     <TableHead>{t('backups.status', '状态')}</TableHead>
                     <TableHead>{t('backups.time', '时间')}</TableHead>
                     <TableHead className="text-right">{t('common.actions', '操作')}</TableHead>
@@ -268,6 +272,7 @@ export default function BackupsPage() {
                       </TableCell>
                       <TableCell>{formatSizeMb(b.fileSizeMb)}</TableCell>
                       <TableCell>{storageName(b.storageId)}</TableCell>
+                      <TableCell className="font-mono text-xs" title={b.checksum}>{checksumLabel(b)}</TableCell>
                       <TableCell>{statusBadge(b)}</TableCell>
                       <TableCell className="text-muted-foreground">{new Date(b.createdAt).toLocaleString()}</TableCell>
                       <TableCell className="text-right whitespace-nowrap">

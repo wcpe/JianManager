@@ -6,6 +6,7 @@ import {
   useCreateBackupStorage,
   useDeleteBackupStorage,
   useTestBackupStorage,
+  useTestBackupStorageDraft,
   type BackupStorage,
   type BackupStorageTestResult,
   type CreateBackupStorageBody,
@@ -59,12 +60,16 @@ export default function BackupStoragesPage() {
   const create = useCreateBackupStorage()
   const del = useDeleteBackupStorage()
   const testStorage = useTestBackupStorage()
+  const testDraft = useTestBackupStorageDraft()
   const [form, setForm] = useState<CreateBackupStorageBody>(emptyForm)
+  const [draftTestResult, setDraftTestResult] = useState<BackupStorageTestResult | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
-  const [testResults, setTestResults] = useState<Record<number, BackupStorageTestResult>>({})
 
-  const set = (k: keyof CreateBackupStorageBody, v: string | boolean) => setForm((f) => ({ ...f, [k]: v }))
+  const set = (k: keyof CreateBackupStorageBody, v: string | boolean) => {
+    setDraftTestResult(null)
+    setForm((f) => ({ ...f, [k]: v }))
+  }
 
   // 凭证须为 ${ENV_VAR} 形式（config-files.md），名称必填（FR-072）。
   const errors = validateFields(
@@ -106,19 +111,30 @@ export default function BackupStoragesPage() {
     setDeleteTarget(null)
   }
 
-  const handleTest = async (id: number) => {
-    try {
-      const { result } = await testStorage.mutateAsync(id)
-      setTestResults((prev) => ({ ...prev, [id]: result }))
-      if (result.ok) {
-        toast.success(t('backupStorages.testSuccess', '连接成功'))
-      } else {
-        toast.error(result.message || t('backupStorages.testFailed', '连接失败'))
-      }
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
-      toast.error(msg || t('backupStorages.testFailed', '连接失败'))
-    }
+  const handleTestDraft = () => {
+    if (hasErrors(errors)) return
+    testDraft.mutate(form, {
+      onSuccess: (result) => {
+        setDraftTestResult(result)
+        if (result.ok) toast.success(result.message)
+        else toast.error(result.message)
+      },
+      onError: () => {
+        const message = t('backupStorages.testFailed', '测试连接失败')
+        setDraftTestResult({ ok: false, message })
+        toast.error(message)
+      },
+    })
+  }
+
+  const handleTest = (id: number) => {
+    testStorage.mutate(id, {
+      onSuccess: (result) => {
+        if (result.ok) toast.success(result.message)
+        else toast.error(result.message)
+      },
+      onError: () => toast.error(t('backupStorages.testFailed', '测试连接失败')),
+    })
   }
 
   return (
@@ -130,13 +146,13 @@ export default function BackupStoragesPage() {
         </div>
         <button
           className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-          onClick={() => { setForm(emptyForm); setShowForm(true) }}
+          onClick={() => { setForm(emptyForm); setDraftTestResult(null); setShowForm(true) }}
         >
           {t('backupStorages.add', '新增存储后端')}
         </button>
       </div>
 
-      <Dialog open={showForm} onOpenChange={(o) => setShowForm(o)}>
+      <Dialog open={showForm} onOpenChange={(o) => { setShowForm(o); if (!o) setDraftTestResult(null) }}>
         <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
           <DialogHeader>
             <DialogTitle>{t('backupStorages.add', '新增存储后端')}</DialogTitle>
@@ -201,9 +217,25 @@ export default function BackupStoragesPage() {
               </div>
             </ScrollableDialogBody>
           </form>
+          {draftTestResult && (
+            <p
+              role="status"
+              className={`text-sm ${draftTestResult.ok ? 'text-status-success' : 'text-status-danger'}`}
+            >
+              {draftTestResult.message}
+            </p>
+          )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setShowForm(false)}>
               {t('backupStorages.cancel', '取消')}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleTestDraft}
+              disabled={testDraft.isPending || hasErrors(errors)}
+            >
+              {t('backupStorages.testConnection', '测试连接')}
             </Button>
             <Button type="submit" form="backup-storage-form" disabled={create.isPending || hasErrors(errors)}>
               {t('backupStorages.create', '创建')}
@@ -220,55 +252,50 @@ export default function BackupStoragesPage() {
               <TableHead>{t('backupStorages.type', '类型')}</TableHead>
               <TableHead>{t('backupStorages.endpoint', 'Endpoint')}</TableHead>
               <TableHead>{t('backupStorages.prefix', '前缀')}</TableHead>
+              <TableHead>{t('backupStorages.capacity', '容量')}</TableHead>
+              <TableHead>{t('backupStorages.lastTest', '最近测试')}</TableHead>
               <TableHead>{t('backupStorages.accessKeyEnv', 'Access Key 环境变量')}</TableHead>
-              <TableHead className="text-right">{t('backupStorages.backupCount', '备份数')}</TableHead>
-              <TableHead className="text-right">{t('backupStorages.usedSpace', '已用空间')}</TableHead>
               <TableHead className="text-right">{t('backupStorages.actions', '操作')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {(storages ?? []).map((s: BackupStorage) => {
-              const result = testResults[s.id]
-              const testing = testStorage.isPending && testStorage.variables === s.id
-              return (
-                <TableRow key={s.id}>
-                  <TableCell className="font-medium">{s.name}</TableCell>
-                  <TableCell><Badge variant="outline">{s.type.toUpperCase()}</Badge></TableCell>
-                  <TableCell className="font-mono text-xs">{s.endpoint}{s.bucket ? ` / ${s.bucket}` : ''}</TableCell>
-                  <TableCell>{s.prefix || '-'}</TableCell>
-                  <TableCell className="font-mono text-xs">{s.accessKeyEnv || '-'}</TableCell>
-                  <TableCell className="text-right tabular-nums">{s.backupCount ?? 0}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatBytes(s.usedBytes)}</TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      {result && (
-                        <span className={result.ok ? 'text-xs text-status-success' : 'text-xs text-status-danger'}>
-                          {result.ok
-                            ? t('backupStorages.testOkWithLatency', '连通 {{latency}} ms', { latency: result.latencyMs })
-                            : result.message}
-                        </span>
-                      )}
-                      <Button
-                        variant="outline"
-                        size="xs"
-                        disabled={testing}
-                        onClick={() => handleTest(s.id)}
-                      >
-                        {testing ? t('backupStorages.testing', '测试中…') : t('backupStorages.testConnection', '测试连接')}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        className="text-status-danger hover:text-status-danger"
-                        onClick={() => setDeleteTarget(s.id)}
-                      >
-                        {t('common.delete', '删除')}
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )
-            })}
+            {(storages ?? []).map((s: BackupStorage) => (
+              <TableRow key={s.id}>
+                <TableCell className="font-medium">{s.name}</TableCell>
+                <TableCell><Badge variant="outline">{s.type.toUpperCase()}</Badge></TableCell>
+                <TableCell className="font-mono text-xs">{s.endpoint}{s.bucket ? ` / ${s.bucket}` : ''}</TableCell>
+                <TableCell>{s.prefix || '-'}</TableCell>
+                <TableCell className="text-xs">
+                  {formatBytes(s.usedBytes)} · {t('backupStorages.backupCount', '{{count}} 个备份', { count: s.backupCount })}
+                </TableCell>
+                <TableCell className="text-xs">
+                  {s.lastTestAt ? (
+                    <span className={s.lastTestOk ? 'text-status-success' : 'text-status-danger'}>
+                      {s.lastTestMessage || (s.lastTestOk ? t('backupStorages.testOk', '连接正常') : t('backupStorages.testFailed', '测试失败'))}
+                    </span>
+                  ) : '-'}
+                </TableCell>
+                <TableCell className="font-mono text-xs">{s.accessKeyEnv || '-'}</TableCell>
+                <TableCell className="text-right">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => handleTest(s.id)}
+                    disabled={testStorage.isPending && testStorage.variables === s.id}
+                  >
+                    {t('backupStorages.test', '测试')}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="text-status-danger hover:text-status-danger"
+                    onClick={() => setDeleteTarget(s.id)}
+                  >
+                    {t('common.delete', '删除')}
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
             {(!storages || storages.length === 0) && !isLoading && (
               <TableRow>
                 <TableCell colSpan={8} className="h-16 text-center text-muted-foreground">{t('backupStorages.empty', '暂无存储后端')}</TableCell>

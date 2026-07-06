@@ -21,6 +21,10 @@ export interface BackupInfo {
   storageId?: number
   /** 远程对象键；本地备份为空（FR-057） */
   storageKey?: string
+  /** 归档 SHA-256，用于恢复前完整性校验（FR-171） */
+  checksum?: string
+  /** 校验算法，当前固定 sha256（FR-171） */
+  checksumAlgo?: string
   createdAt: string
 }
 

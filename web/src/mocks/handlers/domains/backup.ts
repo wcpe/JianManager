@@ -26,6 +26,8 @@ const backups = db<BackupInfo>('backups', () => [
     type: 1, // 定时触发
     mode: 0, // 全量
     status: 2, // 已完成
+    checksum: 'a'.repeat(64),
+    checksumAlgo: 'sha256',
     createdAt: '2026-06-01T02:00:00Z',
   },
   {
@@ -39,6 +41,8 @@ const backups = db<BackupInfo>('backups', () => [
     mode: 1, // 增量
     status: 2, // 已完成
     parentId: 1, // 挂在全量备份 #1 后形成链
+    checksum: 'b'.repeat(64),
+    checksumAlgo: 'sha256',
     createdAt: '2026-06-02T02:00:00Z',
   },
   {
@@ -53,6 +57,8 @@ const backups = db<BackupInfo>('backups', () => [
     status: 2,
     storageId: 1, // 远程 S3 存储
     storageKey: 'inst-2/full-3.tar.zst',
+    checksum: 'c'.repeat(64),
+    checksumAlgo: 'sha256',
     createdAt: '2026-06-03T02:00:00Z',
   },
 ])
@@ -69,6 +75,9 @@ const backupStorages = db<BackupStorage>('backupStorages', () => [
     accessKeyEnv: '${JIANMANAGER_BACKUP_S3_AK}',
     secretKeyEnv: '${JIANMANAGER_BACKUP_S3_SK}',
     useSsl: true,
+    lastTestAt: '2026-06-01T00:00:00Z',
+    lastTestOk: true,
+    lastTestMessage: '连接正常',
     backupCount: 1,
     usedBytes: 268435456,
     createdAt: '2026-05-20T08:00:00Z',
@@ -84,6 +93,9 @@ const backupStorages = db<BackupStorage>('backupStorages', () => [
     accessKeyEnv: '${JIANMANAGER_BACKUP_SFTP_USER}',
     secretKeyEnv: '${JIANMANAGER_BACKUP_SFTP_PASS}',
     useSsl: false,
+    lastTestAt: undefined,
+    lastTestOk: false,
+    lastTestMessage: '',
     backupCount: 0,
     usedBytes: 0,
     createdAt: '2026-05-21T08:00:00Z',
@@ -173,6 +185,8 @@ export const handlers = [
       mode: body.incremental ? 1 : 0,
       status: 2, // mock 立即完成，便于联动断言
       storageId: body.storageId,
+      checksum: 'd'.repeat(64),
+      checksumAlgo: 'sha256',
       createdAt: now,
     })
     return HttpResponse.json(created, { status: 201 })
@@ -219,6 +233,8 @@ export const handlers = [
       accessKeyEnv: body.accessKeyEnv ?? '',
       secretKeyEnv: body.secretKeyEnv ?? '',
       useSsl: body.useSsl ?? true,
+      lastTestOk: false,
+      lastTestMessage: '',
       backupCount: 0,
       usedBytes: 0,
       createdAt: new Date().toISOString(),
@@ -226,16 +242,33 @@ export const handlers = [
     return HttpResponse.json(created, { status: 201 })
   }),
 
+  domainRoute('post', '/backup-storages/test', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    await info.request.json().catch(() => ({}))
+    return HttpResponse.json({ ok: true, message: '连接正常', latencyMs: 8 })
+  }),
+
   domainRoute('post', '/backup-storages/:id/test', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     const id = Number(info.params.id)
-    const storage = backupStorages.get(id)
-    if (!storage) return HttpResponse.json({ error: 'NOT_FOUND', message: '存储后端不存在' }, { status: 404 })
     if (id === 2) {
-      return HttpResponse.json({ ok: false, message: '认证失败：请检查环境变量凭证', errorCode: 'AUTH_FAILED', latencyMs: 18, nodeUuid: 'mock-node-1' })
+      const failed = backupStorages.update(id, {
+        lastTestAt: new Date().toISOString(),
+        lastTestOk: false,
+        lastTestMessage: '认证失败：请检查环境变量凭证',
+      })
+      return HttpResponse.json({ ok: false, message: failed?.lastTestMessage ?? '认证失败：请检查环境变量凭证', errorCode: 'AUTH_FAILED', latencyMs: 18, nodeUuid: 'mock-node-1' })
     }
-    return HttpResponse.json({ ok: true, message: '连接成功', latencyMs: 32, nodeUuid: 'mock-node-1' })
+    const existing = backupStorages.get(id)
+    if (!existing) return HttpResponse.json({ error: 'NOT_FOUND', message: '存储后端不存在' }, { status: 404 })
+    const updated = backupStorages.update(id, {
+      lastTestAt: new Date().toISOString(),
+      lastTestOk: true,
+      lastTestMessage: '连接正常',
+    })
+    return HttpResponse.json({ ok: updated?.lastTestOk ?? true, message: updated?.lastTestMessage ?? '连接正常' })
   }),
 
   domainRoute('delete', '/backup-storages/:id', (info) => {

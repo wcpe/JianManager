@@ -44,6 +44,7 @@ describe('BackupsPage（mock）', () => {
 
     expect(await screen.findByText('full-2026-06-01T02:00:00')).toBeInTheDocument()
     expect(screen.getByText('inc-2026-06-02T02:00:00')).toBeInTheDocument()
+    expect(screen.getByText('aaaaaaaaaaaa...')).toBeInTheDocument()
   })
 
   it('创建全量备份 → 列表联动新增（POST 写联动）', async () => {

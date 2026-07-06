@@ -16,6 +16,9 @@ export interface BackupStorage {
   /** Secret Key 的环境变量引用 */
   secretKeyEnv: string
   useSsl: boolean
+  lastTestAt?: string
+  lastTestOk: boolean
+  lastTestMessage: string
   /** 已完成备份份数（后端聚合，不落库存储记录）。 */
   backupCount: number
   /** 已完成备份占用字节数（后端聚合，不落库存储记录）。 */
@@ -27,7 +30,7 @@ export interface BackupStorageTestResult {
   ok: boolean
   message: string
   errorCode?: string
-  latencyMs: number
+  latencyMs?: number
   nodeUuid?: string
 }
 
@@ -71,10 +74,16 @@ export function useDeleteBackupStorage() {
 }
 
 export function useTestBackupStorage() {
+  const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (id: number) => {
-      const { data } = await api.post<BackupStorageTestResult>(`/backup-storages/${id}/test`)
-      return { id, result: data }
-    },
+    mutationFn: (id: number) => api.post<BackupStorageTestResult>(`/backup-storages/${id}/test`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['backup-storages'] }),
+  })
+}
+
+export function useTestBackupStorageDraft() {
+  return useMutation({
+    mutationFn: (body: CreateBackupStorageBody) =>
+      api.post<BackupStorageTestResult>('/backup-storages/test', body).then((r) => r.data),
   })
 }

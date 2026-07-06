@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +21,8 @@ import (
 // backupsSubdir 是节点数据根下存放备份归档的子目录（相对数据根）。
 // 备份归档与制品库（var/artifacts）平级，整类便于浏览/迁移/归档。
 const backupsSubdir = "var/backups"
+
+const backupChecksumAlgo = "sha256"
 
 // backupRuntimeExcludes 备份时排除的运行态/可再生文件，与 FR-036 一键复制的排除一致。
 // 关键：运行中的服务端对 world/session.lock 持有独占锁，Windows 上读它会报
@@ -57,18 +61,20 @@ func (s *Server) CreateBackup(ctx context.Context, req *workerpb.CreateBackupReq
 		return &workerpb.CreateBackupResponse{Success: false, Error: fmt.Sprintf("创建备份目录失败: %v", err)}, nil
 	}
 
-	manifest, packed, size, err := writeBackupArchive(absPath, workDir, base, req.Incremental)
+	manifest, packed, size, checksum, err := writeBackupArchive(absPath, workDir, base, req.Incremental)
 	if err != nil {
 		_ = os.Remove(absPath)
 		return &workerpb.CreateBackupResponse{Success: false, Error: err.Error()}, nil
 	}
 
 	resp := &workerpb.CreateBackupResponse{
-		Success:   true,
-		RelPath:   relPath,
-		SizeBytes: size,
-		FileCount: packed,
-		Manifest:  manifest,
+		Success:        true,
+		RelPath:        relPath,
+		SizeBytes:      size,
+		FileCount:      packed,
+		Manifest:       manifest,
+		ChecksumSha256: checksum,
+		ChecksumAlgo:   backupChecksumAlgo,
 	}
 
 	// 远程存储：打包完成后上传归档（FR-057）。本地备份（storage 空或 local）不上传。
@@ -136,6 +142,9 @@ func (s *Server) RestoreBackup(ctx context.Context, req *workerpb.RestoreBackupR
 					return &workerpb.RestoreBackupResponse{Success: false, Error: fmt.Sprintf("拉取远程归档失败: %v", derr)}, nil
 				}
 			}
+		}
+		if err := verifyBackupChecksum(abs, checksumAt(req.ChecksumSha256, i)); err != nil {
+			return &workerpb.RestoreBackupResponse{Success: false, Error: err.Error()}, nil
 		}
 		n, err := extractBackupArchive(abs, workDir)
 		if err != nil {
@@ -236,13 +245,14 @@ func backupRelPath(instanceUUID, backupUUID string) string {
 
 // writeBackupArchive 遍历 workDir 写出 tar.gz 归档。
 // base 非空（增量）时仅打包新增或变化的常规文件；始终返回工作目录的完整清单。
-// 返回：完整清单、本次实际打包文件数、归档字节数。
-func writeBackupArchive(absArchive, workDir string, base map[string]*workerpb.BackupManifestEntry, incremental bool) ([]*workerpb.BackupManifestEntry, int64, int64, error) {
+// 返回：完整清单、本次实际打包文件数、归档字节数、归档 SHA-256。
+func writeBackupArchive(absArchive, workDir string, base map[string]*workerpb.BackupManifestEntry, incremental bool) ([]*workerpb.BackupManifestEntry, int64, int64, string, error) {
 	out, err := os.Create(absArchive)
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("创建归档失败: %w", err)
+		return nil, 0, 0, "", fmt.Errorf("创建归档失败: %w", err)
 	}
-	gz := gzip.NewWriter(out)
+	sum := sha256.New()
+	gz := gzip.NewWriter(io.MultiWriter(out, sum))
 	tw := tar.NewWriter(gz)
 
 	manifest := []*workerpb.BackupManifestEntry{}
@@ -306,23 +316,58 @@ func writeBackupArchive(absArchive, workDir string, base map[string]*workerpb.Ba
 	gzErr := gz.Close()
 	closeErr := out.Close()
 	if walkErr != nil {
-		return nil, 0, 0, fmt.Errorf("打包工作目录失败: %w", walkErr)
+		return nil, 0, 0, "", fmt.Errorf("打包工作目录失败: %w", walkErr)
 	}
 	if tarErr != nil {
-		return nil, 0, 0, fmt.Errorf("关闭 tar 失败: %w", tarErr)
+		return nil, 0, 0, "", fmt.Errorf("关闭 tar 失败: %w", tarErr)
 	}
 	if gzErr != nil {
-		return nil, 0, 0, fmt.Errorf("关闭 gzip 失败: %w", gzErr)
+		return nil, 0, 0, "", fmt.Errorf("关闭 gzip 失败: %w", gzErr)
 	}
 	if closeErr != nil {
-		return nil, 0, 0, fmt.Errorf("写入归档失败: %w", closeErr)
+		return nil, 0, 0, "", fmt.Errorf("写入归档失败: %w", closeErr)
 	}
 
 	st, err := os.Stat(absArchive)
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("读取归档大小失败: %w", err)
+		return nil, 0, 0, "", fmt.Errorf("读取归档大小失败: %w", err)
 	}
-	return manifest, packed, st.Size(), nil
+	return manifest, packed, st.Size(), hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+func checksumAt(checksums []string, index int) string {
+	if index < len(checksums) {
+		return strings.TrimSpace(checksums[index])
+	}
+	return ""
+}
+
+func verifyBackupChecksum(absArchive, expected string) error {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return nil
+	}
+	got, err := fileSHA256(absArchive)
+	if err != nil {
+		return fmt.Errorf("读取备份校验和失败: %w", err)
+	}
+	if !strings.EqualFold(got, expected) {
+		return fmt.Errorf("备份校验失败: %s", filepath.Base(absArchive))
+	}
+	return nil
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	sum := sha256.New()
+	if _, err := io.Copy(sum, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(sum.Sum(nil)), nil
 }
 
 // extractBackupArchive 解压 tar.gz 归档到 workDir（覆盖同名文件），返回写入文件数。

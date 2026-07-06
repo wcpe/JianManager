@@ -2,10 +2,12 @@ package router
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
@@ -54,24 +56,45 @@ func TestBackupStorage_LocalStats(t *testing.T) {
 	require.Equal(t, float64(1), resp["backupCount"])
 }
 
-func TestBackupStorage_TestConnectionNoWorker(t *testing.T) {
+func TestBackupStorage_TestCandidateAndSaved(t *testing.T) {
+	t.Setenv("JM_TEST_BK_AK", "ak")
+	t.Setenv("JM_TEST_BK_SK", "sk")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodHead, r.Method)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
 	token := getAdminToken(t, r)
-
-	body := map[string]interface{}{
-		"name":     "DAV 归档",
-		"type":     "webdav",
-		"endpoint": "https://dav.local/backups",
+	body := map[string]any{
+		"name": "s3", "type": "s3", "endpoint": server.URL, "bucket": "b",
+		"accessKeyEnv": "${JM_TEST_BK_AK}", "secretKeyEnv": "${JM_TEST_BK_SK}",
 	}
-	w := makeRequest(r, "POST", "/api/v1/backup-storages", body, token)
-	require.Equal(t, http.StatusCreated, w.Code)
-	created := parseJSON(t, w)
-	id := itoa(uint(created["id"].(float64)))
 
-	w = makeRequest(r, "POST", "/api/v1/backup-storages/"+id+"/test", nil, token)
-	require.Equal(t, http.StatusOK, w.Code)
-	resp := parseJSON(t, w)
-	require.Equal(t, false, resp["ok"])
-	require.Equal(t, "NO_WORKER", resp["errorCode"])
+	testOnly := makeRequest(r, http.MethodPost, "/api/v1/backup-storages/test", body, token)
+	require.Equal(t, http.StatusOK, testOnly.Code)
+	testOnlyBody := parseJSON(t, testOnly)
+	assert.True(t, testOnlyBody["ok"].(bool))
+	assert.GreaterOrEqual(t, testOnlyBody["latencyMs"].(float64), float64(0))
+
+	created := makeRequest(r, http.MethodPost, "/api/v1/backup-storages", body, token)
+	require.Equal(t, http.StatusCreated, created.Code)
+	id := uint(parseJSON(t, created)["id"].(float64))
+
+	saved := makeRequest(r, http.MethodPost, "/api/v1/backup-storages/"+itoa(id)+"/test", nil, token)
+	require.Equal(t, http.StatusOK, saved.Code)
+	savedBody := parseJSON(t, saved)
+	assert.True(t, savedBody["ok"].(bool))
+	assert.GreaterOrEqual(t, savedBody["latencyMs"].(float64), float64(0))
+
+	list := makeRequest(r, http.MethodGet, "/api/v1/backup-storages", nil, token)
+	require.Equal(t, http.StatusOK, list.Code)
+	rows := parseJSONArray(t, list)
+	require.Len(t, rows, 1)
+	row := rows[0].(map[string]any)
+	assert.NotEmpty(t, row["lastTestAt"])
+	assert.Equal(t, true, row["lastTestOk"])
+	assert.Equal(t, float64(0), row["backupCount"])
+	assert.Equal(t, float64(0), row["usedBytes"])
 }

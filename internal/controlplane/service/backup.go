@@ -186,11 +186,13 @@ func (s *BackupService) executeBackup(backup *model.Backup) {
 
 	manifestJSON, _ := json.Marshal(resp.Manifest)
 	s.db.Model(backup).Updates(map[string]interface{}{
-		"status":       model.BackupStatusCompleted,
-		"file_size_mb": float64(resp.SizeBytes) / (1024 * 1024),
-		"file_path":    resp.RelPath,
-		"manifest":     string(manifestJSON),
-		"storage_key":  resp.StorageKey,
+		"status":        model.BackupStatusCompleted,
+		"file_size_mb":  float64(resp.SizeBytes) / (1024 * 1024),
+		"file_path":     resp.RelPath,
+		"manifest":      string(manifestJSON),
+		"storage_key":   resp.StorageKey,
+		"checksum":      resp.ChecksumSha256,
+		"checksum_algo": resp.ChecksumAlgo,
 	})
 
 	slog.Info("备份已完成", "backupId", backup.UUID, "instanceId", backup.InstanceID,
@@ -269,12 +271,7 @@ func (s *BackupService) executeRestore(backup *model.Backup, chain []model.Backu
 		return
 	}
 
-	relPaths := make([]string, 0, len(chain))
-	storageKeys := make([]string, 0, len(chain))
-	for _, b := range chain {
-		relPaths = append(relPaths, b.FilePath)
-		storageKeys = append(storageKeys, b.StorageKey)
-	}
+	relPaths, storageKeys, checksums := backupChainRestoreArgs(chain)
 
 	spec, serr := s.storageSpec(backup.StorageID)
 	if serr != nil {
@@ -286,10 +283,11 @@ func (s *BackupService) executeRestore(backup *model.Backup, chain []model.Backu
 	defer cancel()
 
 	resp, err := client.Worker.RestoreBackup(ctx, &workerpb.RestoreBackupRequest{
-		InstanceUuid: instance.UUID,
-		RelPaths:     relPaths,
-		Storage:      spec,
-		StorageKeys:  storageKeys,
+		InstanceUuid:   instance.UUID,
+		RelPaths:       relPaths,
+		Storage:        spec,
+		StorageKeys:    storageKeys,
+		ChecksumSha256: checksums,
 	})
 	if err != nil {
 		slog.Error("恢复执行失败", "backupId", backup.UUID, "error", err)
@@ -302,6 +300,18 @@ func (s *BackupService) executeRestore(backup *model.Backup, chain []model.Backu
 
 	slog.Info("恢复已完成", "backupId", backup.UUID, "instanceId", backup.InstanceID,
 		"chainLen", len(chain), "restoredFiles", resp.RestoredFiles, "workDir", instance.WorkDir)
+}
+
+func backupChainRestoreArgs(chain []model.Backup) ([]string, []string, []string) {
+	relPaths := make([]string, 0, len(chain))
+	storageKeys := make([]string, 0, len(chain))
+	checksums := make([]string, 0, len(chain))
+	for _, b := range chain {
+		relPaths = append(relPaths, b.FilePath)
+		storageKeys = append(storageKeys, b.StorageKey)
+		checksums = append(checksums, b.Checksum)
+	}
+	return relPaths, storageKeys, checksums
 }
 
 // Delete 删除备份。被增量子备份引用时拒绝，避免割裂备份链使后续增量不可恢复。

@@ -27,7 +27,7 @@ func TestWriteBackupArchive_ExcludesRuntimeFiles(t *testing.T) {
 	mk("server.pid", "123")
 
 	arch := filepath.Join(t.TempDir(), "b.tar.gz")
-	manifest, packed, _, err := writeBackupArchive(arch, work, nil, false)
+	manifest, packed, _, _, err := writeBackupArchive(arch, work, nil, false)
 	require.NoError(t, err)
 
 	got := map[string]bool{}

@@ -2,12 +2,21 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
 	"gorm.io/gorm"
 
@@ -197,4 +206,202 @@ func TestDelete_OK(t *testing.T) {
 
 	_, err = svc.GetByID(st.ID)
 	require.ErrorIs(t, err, ErrStorageNotFound)
+}
+
+func TestList_IncludesUsageAndLastTest(t *testing.T) {
+	db := newStorageTestDB(t)
+	svc := NewBackupStorageService(db)
+	st, err := svc.Create(&model.BackupStorage{
+		Name: "s3", Type: model.BackupStorageS3, Endpoint: "s3.local", Bucket: "b",
+		AccessKeyEnv: "${AK}", SecretKeyEnv: "${SK}",
+	})
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	require.NoError(t, db.Model(&model.BackupStorage{}).Where("id = ?", st.ID).Updates(map[string]any{
+		"last_test_at":      now,
+		"last_test_ok":      true,
+		"last_test_message": "连接正常",
+	}).Error)
+	require.NoError(t, db.Create(&model.Backup{InstanceID: 1, Name: "bk1", StorageID: &st.ID, FileSizeMB: 1.5}).Error)
+	require.NoError(t, db.Create(&model.Backup{InstanceID: 1, Name: "bk2", StorageID: &st.ID, FileSizeMB: 2}).Error)
+
+	items, err := svc.List()
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	require.Equal(t, int64(2), items[0].BackupCount)
+	require.Equal(t, int64(3670016), items[0].UsedBytes)
+	require.True(t, items[0].LastTestOk)
+	require.Equal(t, "连接正常", items[0].LastTestMessage)
+	require.NotNil(t, items[0].LastTestAt)
+}
+
+func TestTestSaved_UpdatesLastTestWithoutLeakingSecret(t *testing.T) {
+	t.Setenv("JM_TEST_BK_AK", "ak-secret")
+	t.Setenv("JM_TEST_BK_SK", "sk-secret")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodHead, r.Method)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	db := newStorageTestDB(t)
+	svc := NewBackupStorageService(db)
+	st, err := svc.Create(&model.BackupStorage{
+		Name: "s3", Type: model.BackupStorageS3, Endpoint: server.URL, Bucket: "b",
+		AccessKeyEnv: "${JM_TEST_BK_AK}", SecretKeyEnv: "${JM_TEST_BK_SK}",
+	})
+	require.NoError(t, err)
+
+	result, err := svc.TestSaved(st.ID)
+	require.NoError(t, err)
+	require.True(t, result.Ok)
+	require.GreaterOrEqual(t, result.LatencyMs, int64(0))
+	require.NotContains(t, result.Message, "ak-secret")
+	require.NotContains(t, result.Message, "sk-secret")
+
+	updated, err := svc.GetByID(st.ID)
+	require.NoError(t, err)
+	require.True(t, updated.LastTestOk)
+	require.NotNil(t, updated.LastTestAt)
+}
+
+func TestTestCandidate_ProbesS3Endpoint(t *testing.T) {
+	t.Setenv("JM_TEST_BK_AK", "ak")
+	t.Setenv("JM_TEST_BK_SK", "sk")
+	var called atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodHead, r.Method)
+		require.Equal(t, "/backups", r.URL.Path)
+		require.Contains(t, r.Header.Get("Authorization"), "AWS4-HMAC-SHA256 Credential=ak/")
+		called.Store(true)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	svc := NewBackupStorageService(newStorageTestDB(t))
+	result := svc.TestCandidate(model.BackupStorage{
+		Type: model.BackupStorageS3, Endpoint: server.URL, Bucket: "backups",
+		AccessKeyEnv: "${JM_TEST_BK_AK}", SecretKeyEnv: "${JM_TEST_BK_SK}",
+	})
+
+	require.True(t, result.Ok, result.Message)
+	require.True(t, called.Load(), "应实际探测 S3 endpoint")
+}
+
+func TestTestCandidate_ReportsS3ConnectionFailure(t *testing.T) {
+	t.Setenv("JM_TEST_BK_AK", "ak")
+	t.Setenv("JM_TEST_BK_SK", "sk")
+	endpoint := unusedTCPAddr(t)
+
+	svc := NewBackupStorageService(newStorageTestDB(t))
+	result := svc.TestCandidate(model.BackupStorage{
+		Type: model.BackupStorageS3, Endpoint: "http://" + endpoint, Bucket: "backups",
+		AccessKeyEnv: "${JM_TEST_BK_AK}", SecretKeyEnv: "${JM_TEST_BK_SK}",
+	})
+
+	require.False(t, result.Ok)
+	require.Contains(t, result.Message, "S3")
+}
+
+func TestTestCandidate_ProbesWebDAVEndpointWithBasicAuth(t *testing.T) {
+	t.Setenv("JM_TEST_DAV_USER", "u")
+	t.Setenv("JM_TEST_DAV_PASS", "p")
+	var called atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, http.MethodOptions, r.Method)
+		user, pass, ok := r.BasicAuth()
+		require.True(t, ok)
+		require.Equal(t, "u", user)
+		require.Equal(t, "p", pass)
+		called.Store(true)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	svc := NewBackupStorageService(newStorageTestDB(t))
+	result := svc.TestCandidate(model.BackupStorage{
+		Type: model.BackupStorageWebDAV, Endpoint: server.URL,
+		AccessKeyEnv: "${JM_TEST_DAV_USER}", SecretKeyEnv: "${JM_TEST_DAV_PASS}",
+	})
+
+	require.True(t, result.Ok, result.Message)
+	require.True(t, called.Load(), "应实际探测 WebDAV endpoint")
+}
+
+func TestTestCandidate_ProbesSFTPSSH(t *testing.T) {
+	t.Setenv("JM_TEST_SFTP_USER", "jm")
+	t.Setenv("JM_TEST_SFTP_PASS", "secret")
+	endpoint, calls := startTestSSHServer(t, "jm", "secret")
+
+	svc := NewBackupStorageService(newStorageTestDB(t))
+	result := svc.TestCandidate(model.BackupStorage{
+		Type: model.BackupStorageSFTP, Endpoint: endpoint,
+		AccessKeyEnv: "${JM_TEST_SFTP_USER}", SecretKeyEnv: "${JM_TEST_SFTP_PASS}",
+	})
+
+	require.True(t, result.Ok, result.Message)
+	require.GreaterOrEqual(t, calls.Load(), int64(1), "应实际建立 SSH 握手")
+}
+
+func unusedTCPAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+	return addr
+}
+
+func startTestSSHServer(t *testing.T, user, pass string) (string, *atomic.Int64) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+
+	signer, err := ssh.NewSignerFromKey(testHostKey(t))
+	require.NoError(t, err)
+	cfg := &ssh.ServerConfig{
+		PasswordCallback: func(meta ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+			if meta.User() == user && string(password) == pass {
+				return nil, nil
+			}
+			return nil, errors.New("认证失败")
+		},
+	}
+	cfg.AddHostKey(signer)
+	var calls atomic.Int64
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			calls.Add(1)
+			go handleTestSSHConn(conn, cfg)
+		}
+	}()
+	return ln.Addr().String(), &calls
+}
+
+func handleTestSSHConn(conn net.Conn, cfg *ssh.ServerConfig) {
+	sshConn, chans, reqs, err := ssh.NewServerConn(conn, cfg)
+	if err != nil {
+		_ = conn.Close()
+		return
+	}
+	go ssh.DiscardRequests(reqs)
+	go func() {
+		for ch := range chans {
+			_ = ch.Reject(ssh.UnknownChannelType, "测试服务不接受会话")
+		}
+	}()
+	_ = sshConn.Wait()
+}
+
+func testHostKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	return key
 }

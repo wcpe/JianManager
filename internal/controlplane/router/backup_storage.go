@@ -74,6 +74,51 @@ func (h *BackupStorageHandler) Create(c *gin.Context) {
 	c.JSON(http.StatusCreated, created)
 }
 
+func storageFromRequest(req createStorageRequest) model.BackupStorage {
+	st := model.BackupStorage{
+		Name:         req.Name,
+		Type:         model.BackupStorageType(req.Type),
+		Endpoint:     req.Endpoint,
+		Bucket:       req.Bucket,
+		Region:       req.Region,
+		Prefix:       req.Prefix,
+		AccessKeyEnv: req.AccessKeyEnv,
+		SecretKeyEnv: req.SecretKeyEnv,
+		UseSSL:       true,
+	}
+	if req.UseSSL != nil {
+		st.UseSSL = *req.UseSSL
+	}
+	return st
+}
+
+func (h *BackupStorageHandler) TestCandidate(c *gin.Context) {
+	var req createStorageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
+		return
+	}
+	result := h.svc.TestCandidate(storageFromRequest(req))
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *BackupStorageHandler) TestSaved(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	result, err := h.svc.TestSaved(id)
+	if err != nil {
+		if errors.Is(err, service.ErrStorageNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 func (h *BackupStorageHandler) Delete(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -141,10 +186,11 @@ func (h *BackupStorageHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	g := rg.Group("/backup-storages")
 	{
 		g.GET("", h.List)
+		g.POST("/test", h.TestCandidate)
 		g.POST("", h.Create)
 		g.GET("/local/stats", h.LocalStats)
 		g.GET("/:id/stats", h.Stats)
-		g.POST("/:id/test", h.TestConnection)
+		g.POST("/:id/test", h.TestSaved)
 		g.DELETE("/:id", h.Delete)
 	}
 }

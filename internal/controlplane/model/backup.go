@@ -53,9 +53,13 @@ type Backup struct {
 	// StorageID 远程存储后端 ID；nil 表示存于节点本地数据根（FR-057）。
 	StorageID *uint `gorm:"index" json:"storageId,omitempty"`
 	// StorageKey 上传到远程后端的对象键；本地备份为空（FR-057）。
-	StorageKey string         `gorm:"type:varchar(512)" json:"storageKey,omitempty"`
-	CreatedAt  time.Time      `json:"createdAt"`
-	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+	StorageKey string `gorm:"type:varchar(512)" json:"storageKey,omitempty"`
+	// Checksum 归档 tar.gz 的 SHA-256，用于恢复前完整性校验（FR-171）。
+	Checksum string `gorm:"type:char(64)" json:"checksum,omitempty"`
+	// ChecksumAlgo 校验算法，当前固定 sha256（FR-171）。
+	ChecksumAlgo string         `gorm:"type:varchar(16)" json:"checksumAlgo,omitempty"`
+	CreatedAt    time.Time      `json:"createdAt"`
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // BeforeCreate 创建前自动生成 UUID。
