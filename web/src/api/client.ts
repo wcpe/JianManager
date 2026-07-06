@@ -7,6 +7,16 @@ const api = axios.create({
   timeout: 10000,
 })
 
+/** mock 模式暴露请求路径给真浏览器 benchmark，避免依赖 Service Worker 网络事件。 */
+function recordMockRequestPath(url?: string): void {
+  if (!import.meta.env.VITE_MOCK || typeof window === 'undefined' || !url) return
+  const basePath = String(api.defaults.baseURL ?? '').replace(/\/$/, '')
+  const raw = url.startsWith('/api/') ? url : url.startsWith('/') ? `${basePath}${url}` : `${basePath}/${url}`
+  const path = new URL(raw, window.location.origin).pathname
+  const win = window as Window & { __jmApiRequestPaths?: string[] }
+  win.__jmApiRequestPaths = [...(win.__jmApiRequestPaths ?? []), path]
+}
+
 /**
  * 共享的刷新 promise：并发请求只触发一次 /auth/refresh，避免重复刷新产生竞态（与后端行锁互补）。
  * 请求前主动刷新（BUG-008）与响应 401 被动刷新复用同一把闸。
@@ -39,6 +49,7 @@ function refreshTokens(): Promise<string> {
 // 避免登录态下加载期出现一条无谓的 401（BUG-008）。刷新失败时不阻断本次请求——
 // 让其照常发出并由响应 401 拦截器统一处理（跳登录），避免请求层吞掉错误。
 api.interceptors.request.use(async (config) => {
+  recordMockRequestPath(config.url)
   let token = localStorage.getItem('accessToken')
   if (token && isTokenExpired(token) && localStorage.getItem('refreshToken')) {
     try {

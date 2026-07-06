@@ -4,8 +4,8 @@ import { login } from './helpers'
 test.describe('登录（mock 模式）', () => {
   test('正确凭据 → 进入控制台仪表盘', async ({ page }) => {
     await login(page)
-    await expect(page).toHaveURL('http://localhost:5173/')
-    await expect(page.getByRole('heading', { name: '仪表盘' })).toBeVisible()
+    expect(new URL(page.url()).pathname).toBe('/')
+    await expect(page.getByRole('heading', { name: '平台首页' })).toBeVisible()
   })
 
   test('错误凭据 → 显示错误提示且停留登录页（不整页刷新）', async ({ page }) => {

@@ -84,13 +84,14 @@ async function expectVirtualRendering(page: Page, route: BenchRoute): Promise<vo
 }
 
 /** 检查主工作区是否出现横向溢出。 */
-async function expectNoWorkspaceOverflow(page: Page, label: string): Promise<void> {
+async function expectNoWorkspaceOverflow(page: Page, label: string, pageSelector = '[data-page="overview"]'): Promise<void> {
   const overflow = await page.evaluate(() => {
-    const workspace = document.querySelector('[data-page="overview"]')?.closest('.jm-workspace-bg') as HTMLElement | null
+    const workspace = document.querySelector('[data-overflow-probe="true"]')?.closest('.jm-workspace-bg') as HTMLElement | null
     if (!workspace) return 0
     return workspace.scrollWidth - workspace.clientWidth
   })
-  expect(overflow, `${label} 首页横向溢出像素`).toBeLessThanOrEqual(2)
+  expect(overflow, `${label} 主工作区横向溢出像素`).toBeLessThanOrEqual(2)
+  await page.locator(pageSelector).evaluate((el) => el.removeAttribute('data-overflow-probe'))
 }
 
 async function animationDurationMs(page: Page, selector: string): Promise<number> {
@@ -286,13 +287,69 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
     })
   })
 
+  test('全部服务器首屏只走分页端点，返回后恢复滚动并附截图', async ({ page }) => {
+    await page.goto('/instances?status=RUNNING&pageSize=50')
+    await expect(page.locator('[data-page="instances"]'), '全部服务器页就绪').toBeVisible()
+    const surface = page.locator('[data-testid="instances-card-virtual"]')
+    await expect(surface, '实例卡片虚拟列表存在').toBeVisible()
+    const collectInstancePaths = () =>
+      page.evaluate(() =>
+        ((window as Window & { __jmApiRequestPaths?: string[] }).__jmApiRequestPaths ?? []).filter((path) => path.startsWith('/api/v1/instances')),
+      )
+    await expect.poll(
+      async () => {
+        const paths = await collectInstancePaths()
+        return paths.includes('/api/v1/instances/search') && paths.includes('/api/v1/instances/aggregate')
+      },
+      { message: '首屏请求分页搜索与聚合端点' },
+    ).toBe(true)
+    const instancePaths = await collectInstancePaths()
+    expect(instancePaths.filter((path) => path === '/api/v1/instances'), '首屏不请求裸实例全集').toHaveLength(0)
+
+    await surface.evaluate((el) => {
+      el.scrollTop = 352
+      el.dispatchEvent(new Event('scroll', { bubbles: true }))
+    })
+    await expect.poll(async () => surface.evaluate((el) => Math.round(el.scrollTop)), { message: '滚动位置写入前置条件' }).toBe(352)
+    await test.info().attach('instances-card-before-detail', {
+      body: await page.screenshot(),
+      contentType: 'image/png',
+    })
+
+    await page.goto('/instances/1')
+    await expect(page.locator('[data-page="instance-console"]'), '实例详情深链就绪').toBeVisible()
+    await page.goBack()
+    await expect(page.locator('[data-page="instances"]'), '返回全部服务器页就绪').toBeVisible()
+    const restored = page.locator('[data-testid="instances-card-virtual"]')
+    await expect.poll(async () => restored.evaluate((el) => Math.round(el.scrollTop)), { message: '返回后恢复列表滚动位置' }).toBeGreaterThanOrEqual(300)
+    await test.info().attach('instances-card-after-back', {
+      body: await page.screenshot(),
+      contentType: 'image/png',
+    })
+  })
+
   test('平台首页响应式不产生横向溢出', async ({ page }) => {
     for (const viewport of OVERVIEW_RESPONSIVE_VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height })
       await page.goto('/')
       await expect(page.locator('[data-page="overview"]'), `${viewport.label} 首页就绪`).toBeVisible()
       await expectVirtualRendering(page, ROUTES[0])
+      await page.locator('[data-page="overview"]').evaluate((el) => el.setAttribute('data-overflow-probe', 'true'))
       await expectNoWorkspaceOverflow(page, viewport.label)
+    }
+  })
+
+  test('关键页面桌面和移动端均不产生横向溢出', async ({ page }) => {
+    for (const viewport of OVERVIEW_RESPONSIVE_VIEWPORTS) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height })
+      for (const route of ROUTES) {
+        await page.goto(route.href)
+        const ready = page.locator(route.readySelector)
+        await expect(ready, `${viewport.label} ${route.label} 页面就绪`).toBeVisible()
+        await expectVirtualRendering(page, route)
+        await ready.evaluate((el) => el.setAttribute('data-overflow-probe', 'true'))
+        await expectNoWorkspaceOverflow(page, `${viewport.label} ${route.label}`, route.readySelector)
+      }
     }
   })
 

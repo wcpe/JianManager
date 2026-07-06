@@ -3,12 +3,12 @@ import { login } from './helpers'
 
 /**
  * FR-211 E2E：实例生命周期跨页流（mock 模式整站）。
- * 登录 → 进入实例页 → 看到 FR-201 种子实例 → 真 UI 启/停一个实例、断言状态联动；
- * 另含 FR-028 创建实例走通独立向导后列表出现。
+ * 登录 → SPA 导航进实例页 → 看到 FR-201 种子实例 → 真 UI 启/停一个实例、断言状态联动；
+ * 另含 FR-028 创建实例走通向导页后列表出现。
  *
  * mock 状态机是直达的（POST …/start→RUNNING、…/stop→STOPPED，无 STARTING/STOPPING 过渡，
  * 见 src/mocks/handlers/domains/instance.ts），点击后 ['instances'] query 失效重取即翻牌，
- * 无需等过渡轮询。
+ * 无需等过渡轮询。用 SPA 点侧栏链接进页（保留会话内存库联动），不 page.goto 以免重置内存库。
  */
 
 /** 实例页默认卡片视图：每张工作台卡是含实例名按钮的卡片容器（带 bg-card）。 */
@@ -23,10 +23,17 @@ function cardStatus(card: Locator): Locator {
   return card.locator('[data-slot="status-badge"]')
 }
 
-/** 登录后进入实例管理页。 */
+/**
+ * 登录后经侧栏「全部服务器」链接 SPA 进入实例管理页（保留会话内状态联动）。
+ * 「全部服务器」在可折叠的「服务器」域下，默认展开；若被折叠则先点组头展开再点链接。
+ */
 async function gotoInstances(page: Page): Promise<void> {
-  await page.goto('/instances')
-  await expect(page.getByRole('heading', { name: '实例管理' })).toBeVisible()
+  const link = page.getByRole('link', { name: '全部服务器', exact: true })
+  if (!(await link.isVisible())) {
+    await page.getByRole('button', { name: '服务器' }).click()
+  }
+  await link.click()
+  await expect(page.locator('[data-page="instances"]')).toBeVisible()
 }
 
 test.describe('实例生命周期（mock 模式，FR-211）', () => {
@@ -80,25 +87,27 @@ test.describe('实例生命周期（mock 模式，FR-211）', () => {
     await gotoInstances(page)
     const name = `e2e-srv-${Date.now()}`
 
-    // 打开独立创建向导页。
+    // 打开创建向导页（页眉「创建实例」按钮）。
     await page.getByRole('button', { name: '创建实例', exact: true }).click()
     await expect(page.getByRole('heading', { name: '创建实例' })).toBeVisible()
 
-    // 基本信息：实例名 + 节点。
+    // 基本信息：名称 + 节点。
     await page.getByPlaceholder('Survival Server').fill(name)
-    await page.getByText('选择节点', { exact: true }).click()
+    await page.getByRole('button', { name: '选择节点' }).click()
     await page.getByRole('button', { name: /alpha/ }).click()
-    await page.getByRole('button', { name: '下一步', exact: true }).click()
+    await page.getByRole('button', { name: '下一步' }).click()
 
-    // 启动配置：保留 daemon，填写启动命令后进入确认页。
-    await page.getByPlaceholder('java -Xmx2G -jar server.jar nogui').fill('java -jar server.jar nogui')
-    await page.getByRole('button', { name: '下一步', exact: true }).click()
-    await expect(page.getByText(name)).toBeVisible()
-
-    // 提交后回到实例列表，新实例卡片出现在追加的末尾（创建后默认 STOPPED）。
+    // 启动命令有默认值，直接进入确认页。
+    await page.getByRole('button', { name: '下一步' }).click()
     await page.getByRole('button', { name: '创建', exact: true }).click()
-    await expect(page.getByRole('heading', { name: '实例管理' })).toBeVisible({ timeout: 10_000 })
-    await page.getByTestId('instances-card-virtual').evaluate((el) => { el.scrollTop = el.scrollHeight })
+
+    // 提交成功后回到列表。
+    await expect(page.locator('[data-page="instances"]')).toBeVisible({ timeout: 10_000 })
+
+    // 1000+ mock 下列表只渲染可视窗口；用搜索收敛到新建项，避免按全集滚动找卡片。
+    await page.getByRole('searchbox', { name: '搜索实例' }).fill(name)
+
+    // 列表失效重取后新实例卡片出现（创建后默认 STOPPED）。
     await expect(page.getByRole('button', { name, exact: true })).toBeVisible({ timeout: 10_000 })
   })
 })

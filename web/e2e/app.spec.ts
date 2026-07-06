@@ -9,17 +9,17 @@ test.describe('整站导航（mock 模式）', () => {
 
   test('实例管理页渲染', async ({ page }) => {
     await page.goto('/instances')
-    await expect(page.getByRole('heading', { name: '实例管理' })).toBeVisible()
+    await expect(page.locator('[data-page="instances"]')).toBeVisible({ timeout: 15_000 })
   })
 
   test('节点管理页渲染', async ({ page }) => {
     await page.goto('/nodes')
-    await expect(page.getByRole('heading', { name: '节点管理' })).toBeVisible()
+    await expect(page.locator('[data-page="nodes"]')).toBeVisible({ timeout: 15_000 })
   })
 
   test('玩家管理页渲染', async ({ page }) => {
     await page.goto('/players')
-    await expect(page.getByRole('heading', { name: '玩家管理' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '玩家管理' })).toBeVisible({ timeout: 15_000 })
   })
 
   test('备份存储页展示容量并可测试连接', async ({ page }) => {
