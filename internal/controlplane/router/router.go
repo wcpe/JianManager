@@ -191,7 +191,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		fileHandler.RegisterRoutes(protected)
 
 		// 插件/模组单服管理（FR-052）：实例级隔离，复用 file gRPC 完成文件操作。
-		pluginHandler := NewPluginHandler(svcs.Plugin, svcs.Authz)
+		pluginHandler := NewPluginHandler(svcs.Plugin, svcs.Authz, svcs.Audit)
 		pluginHandler.RegisterRoutes(protected)
 
 		configHandler := NewConfigHandler(svcs.Config, svcs.Authz)

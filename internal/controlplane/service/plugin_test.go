@@ -1,9 +1,12 @@
 package service
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -21,18 +24,20 @@ import (
 // fakeWorkerOps 是 pluginWorkerOps 的内存伪实现：以 dir → (filename → 内容存在性) 模拟实例文件树，
 // 记录 Write/Delete/Rename 调用，供端到端覆盖 List/Upload/Delete/Toggle 的 gRPC 链路。
 type fakeWorkerOps struct {
+	mu sync.Mutex
 	// files[dir] = 文件名集合（值为字节大小，仅用于断言展示）。
 	files map[string]map[string]int64
 	// listErrDirs 中的目录在 ListFiles 时返回错误（模拟目录不存在）。
-	listErrDirs   map[string]bool
-	writes        []string
-	writeContents map[string][]byte
-	deletes       []string
-	renames       [][2]string
+	listErrDirs map[string]bool
+	contents    map[string][]byte
+	writeErrors map[string]string
+	writes      []string
+	deletes     []string
+	renames     [][2]string
 }
 
 func newFakeWorker() *fakeWorkerOps {
-	return &fakeWorkerOps{files: map[string]map[string]int64{}, listErrDirs: map[string]bool{}}
+	return &fakeWorkerOps{files: map[string]map[string]int64{}, listErrDirs: map[string]bool{}, contents: map[string][]byte{}, writeErrors: map[string]string{}}
 }
 
 func (f *fakeWorkerOps) put(dir, name string, size int64) {
@@ -42,7 +47,14 @@ func (f *fakeWorkerOps) put(dir, name string, size int64) {
 	f.files[dir][name] = size
 }
 
+func (f *fakeWorkerOps) putContent(dir, name string, content []byte) {
+	f.put(dir, name, int64(len(content)))
+	f.contents[dir+"/"+name] = content
+}
+
 func (f *fakeWorkerOps) ListFiles(_ context.Context, in *workerpb.ListFilesRequest, _ ...grpc.CallOption) (*workerpb.ListFilesResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.listErrDirs[in.Path] {
 		return nil, context.DeadlineExceeded // 任意错误即可，被调用方当作「目录不存在」
 	}
@@ -53,26 +65,48 @@ func (f *fakeWorkerOps) ListFiles(_ context.Context, in *workerpb.ListFilesReque
 	return resp, nil
 }
 
-func (f *fakeWorkerOps) WriteFile(_ context.Context, in *workerpb.WriteFileRequest, _ ...grpc.CallOption) (*workerpb.WriteFileResponse, error) {
-	f.writes = append(f.writes, in.Path)
-	if f.writeContents == nil {
-		f.writeContents = map[string][]byte{}
+func (f *fakeWorkerOps) ReadFile(_ context.Context, in *workerpb.ReadFileRequest, _ ...grpc.CallOption) (*workerpb.ReadFileResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	content, ok := f.contents[in.Path]
+	if !ok {
+		return nil, context.DeadlineExceeded
 	}
-	f.writeContents[in.Path] = append([]byte(nil), in.Content...)
+	return &workerpb.ReadFileResponse{Content: content}, nil
+}
+
+func (f *fakeWorkerOps) WriteFile(_ context.Context, in *workerpb.WriteFileRequest, _ ...grpc.CallOption) (*workerpb.WriteFileResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.writes = append(f.writes, in.Path)
+	if msg := f.writeErrors[in.InstanceUuid+"/"+in.Path]; msg != "" {
+		return &workerpb.WriteFileResponse{Success: false, Error: msg}, nil
+	}
+	if msg := f.writeErrors[in.Path]; msg != "" {
+		return &workerpb.WriteFileResponse{Success: false, Error: msg}, nil
+	}
+	parts := strings.SplitN(in.Path, "/", 2)
+	if len(parts) == 2 {
+		f.put(parts[0], parts[1], int64(len(in.Content)))
+	}
 	return &workerpb.WriteFileResponse{Success: true}, nil
 }
 
 func (f *fakeWorkerOps) DeleteFile(_ context.Context, in *workerpb.DeleteFileRequest, _ ...grpc.CallOption) (*workerpb.DeleteFileResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.deletes = append(f.deletes, in.Path)
 	return &workerpb.DeleteFileResponse{Success: true}, nil
 }
 
 func (f *fakeWorkerOps) RenameFile(_ context.Context, in *workerpb.RenameFileRequest, _ ...grpc.CallOption) (*workerpb.RenameFileResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.renames = append(f.renames, [2]string{in.OldPath, in.NewPath})
 	return &workerpb.RenameFileResponse{Success: true}, nil
 }
 
-// TestParsePluginEntry 覆盖启用/禁用识别、非 jar 过滤、大小写与 .disabled 剥离。
+// TestParsePluginEntry 覆盖启用/禁用识别、非法后缀过滤、大小写与 .disabled 剥离。
 func TestParsePluginEntry(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -85,6 +119,8 @@ func TestParsePluginEntry(t *testing.T) {
 		{"启用插件", "EssentialsX.jar", "plugins", true, "EssentialsX.jar", true},
 		{"禁用插件", "EssentialsX.jar.disabled", "plugins", true, "EssentialsX.jar", false},
 		{"模组目录", "fabric-api.jar", "mods", true, "fabric-api.jar", true},
+		{"资源包目录", "HighResPack.zip", "resourcepacks", true, "HighResPack.zip", true},
+		{"禁用数据包", "SpawnTweaks.zip.disabled", "datapacks", true, "SpawnTweaks.zip", false},
 		{"大写扩展名", "Foo.JAR", "plugins", true, "Foo.JAR", true},
 		{"非 jar 文件忽略", "config.yml", "plugins", false, "", false},
 		{"无扩展名忽略", "README", "plugins", false, "", false},
@@ -134,20 +170,33 @@ func TestValidatePluginName(t *testing.T) {
 	}
 }
 
-// TestNormalizeDir 验证目录归一：仅 plugins/mods，其余回落 plugins。
+// TestNormalizeDir 验证目录归一：仅四个受控目录保留，其余回落 plugins。
 func TestNormalizeDir(t *testing.T) {
 	require.Equal(t, "plugins", normalizeDir(""))
 	require.Equal(t, "plugins", normalizeDir("plugins"))
 	require.Equal(t, "mods", normalizeDir("mods"))
+	require.Equal(t, "resourcepacks", normalizeDir("resourcepacks"))
+	require.Equal(t, "datapacks", normalizeDir("datapacks"))
 	require.Equal(t, "plugins", normalizeDir("../etc")) // 非法目录回落
 	require.Equal(t, "plugins", normalizeDir("worlds"))
+}
+
+func TestValidatePluginFileName_ByDir(t *testing.T) {
+	require.NoError(t, validatePluginFileName("plugins", "EssentialsX.jar"))
+	require.NoError(t, validatePluginFileName("mods", "fabric-api.jar"))
+	require.NoError(t, validatePluginFileName("resourcepacks", "HighResPack.zip"))
+	require.NoError(t, validatePluginFileName("datapacks", "SpawnTweaks.zip"))
+
+	require.ErrorIs(t, validatePluginFileName("plugins", "HighResPack.zip"), ErrInvalidPluginName)
+	require.ErrorIs(t, validatePluginFileName("resourcepacks", "EssentialsX.jar"), ErrInvalidPluginName)
+	require.ErrorIs(t, validatePluginFileName("datapacks", "SpawnTweaks.zip.disabled"), ErrInvalidPluginName)
 }
 
 func newPluginTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/plugin.db"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Instance{}, &model.Node{}, &model.Asset{}))
+	require.NoError(t, db.AutoMigrate(&model.Instance{}, &model.Node{}))
 	// Windows 上需显式关闭底层连接，否则 TempDir 清理因文件占用失败。
 	t.Cleanup(func() {
 		if sqlDB, err := db.DB(); err == nil && sqlDB != nil {
@@ -232,11 +281,13 @@ func TestPluginService_List_AggregatesAndDetectsStatus(t *testing.T) {
 	fake.put("plugins", "WorldEdit.jar.disabled", 200)
 	fake.put("plugins", "config.yml", 5) // 非 jar，忽略
 	fake.put("mods", "fabric-api.jar", 300)
+	fake.put("resourcepacks", "HighResPack.zip", 400)
+	fake.put("datapacks", "SpawnTweaks.zip.disabled", 500)
 	fake.listErrDirs["mods"] = false
 
 	list, err := svc.List(id)
 	require.NoError(t, err)
-	require.Len(t, list, 3)
+	require.Len(t, list, 5)
 
 	byName := map[string]PluginInfo{}
 	for _, p := range list {
@@ -247,15 +298,66 @@ func TestPluginService_List_AggregatesAndDetectsStatus(t *testing.T) {
 	require.False(t, byName["WorldEdit.jar"].Enabled) // .disabled 已剥离且标记禁用
 	require.True(t, byName["fabric-api.jar"].Enabled)
 	require.Equal(t, "mods", byName["fabric-api.jar"].Dir)
+	require.True(t, byName["HighResPack.zip"].Enabled)
+	require.Equal(t, "resourcepacks", byName["HighResPack.zip"].Dir)
+	require.False(t, byName["SpawnTweaks.zip"].Enabled)
+	require.Equal(t, "datapacks", byName["SpawnTweaks.zip"].Dir)
 }
 
 func TestPluginService_List_MissingDirsEmpty(t *testing.T) {
 	svc, fake, id := newPluginSvcWithFake(t, nil)
 	fake.listErrDirs["plugins"] = true
 	fake.listErrDirs["mods"] = true
+	fake.listErrDirs["resourcepacks"] = true
+	fake.listErrDirs["datapacks"] = true
 	list, err := svc.List(id)
 	require.NoError(t, err)
 	require.Empty(t, list)
+}
+
+func TestPluginService_List_ParsesMetadata(t *testing.T) {
+	svc, fake, id := newPluginSvcWithFake(t, nil)
+	fake.putContent("plugins", "MetaPlugin.jar", zipBytes(t, map[string]string{
+		"plugin.yml": "name: MetaPlugin\nversion: 1.2.3\nauthor: OpsTeam\ndepend: [Vault, PlaceholderAPI]\n",
+	}))
+	fake.putContent("mods", "FabricThing.jar", zipBytes(t, map[string]string{
+		"fabric.mod.json": `{"version":"4.5.6","authors":[{"name":"FabricOps"}],"depends":{"fabricloader":">=0.15","minecraft":"1.20.4"}}`,
+	}))
+	fake.putContent("mods", "ForgeThing.jar", zipBytes(t, map[string]string{
+		"META-INF/mods.toml": `
+[[mods]]
+modId="forge_thing"
+version="9.8.7"
+authors="ForgeOps"
+
+[[dependencies.forge_thing]]
+modId="forge"
+
+[[dependencies.forge_thing]]
+modId="minecraft"
+`,
+	}))
+	fake.putContent("resourcepacks", "HighResPack.zip", zipBytes(t, map[string]string{
+		"pack.mcmeta": `{"pack":{"pack_format":15,"description":"High resolution pack"}}`,
+	}))
+
+	list, err := svc.List(id)
+	require.NoError(t, err)
+	byName := map[string]PluginInfo{}
+	for _, p := range list {
+		byName[p.Name] = p
+	}
+
+	require.Equal(t, "1.2.3", byName["MetaPlugin.jar"].Version)
+	require.Equal(t, "OpsTeam", byName["MetaPlugin.jar"].Author)
+	require.ElementsMatch(t, []string{"Vault", "PlaceholderAPI"}, byName["MetaPlugin.jar"].Dependencies)
+	require.Equal(t, "4.5.6", byName["FabricThing.jar"].Version)
+	require.Equal(t, "FabricOps", byName["FabricThing.jar"].Author)
+	require.ElementsMatch(t, []string{"fabricloader", "minecraft"}, byName["FabricThing.jar"].Dependencies)
+	require.Equal(t, "9.8.7", byName["ForgeThing.jar"].Version)
+	require.Equal(t, "ForgeOps", byName["ForgeThing.jar"].Author)
+	require.ElementsMatch(t, []string{"forge", "minecraft"}, byName["ForgeThing.jar"].Dependencies)
+	require.Equal(t, "pack_format 15", byName["HighResPack.zip"].Version)
 }
 
 // TestPluginService_Upload_IngestsAndDeploys 验证上传先入制品库（去重）再部署到目标目录。
@@ -278,73 +380,142 @@ func TestPluginService_Upload_IngestsAndDeploys(t *testing.T) {
 	require.Equal(t, "mods/EssentialsX.jar", fake.writes[1])
 }
 
-func TestPluginService_BatchDeploy_WritesPluginAssetsToInstances(t *testing.T) {
-	db := newPluginTestDB(t)
-	assetSvc := newPluginAssetSvcForPlugin(t, db)
-	assetA, err := assetSvc.Ingest(strings.NewReader("ess-bytes"), IngestParams{Type: model.AssetTypePlugin, Filename: "EssentialsX.jar"})
-	require.NoError(t, err)
-	assetB, err := assetSvc.Ingest(strings.NewReader("we-bytes"), IngestParams{Type: model.AssetTypePlugin, Filename: "WorldEdit.jar"})
-	require.NoError(t, err)
-
-	nodeA, instA := createPluginBatchTarget(t, db, "node-a", "inst-a")
-	nodeB, instB := createPluginBatchTarget(t, db, "node-b", "inst-b")
-	workerA := newFakeWorker()
-	workerB := newFakeWorker()
-	svc := NewPluginService(db, cpgrpc.NewClientPool(), assetSvc)
-	svc.workerResolver = func(nodeUUID string) (pluginWorkerOps, bool) {
-		workers := map[string]*fakeWorkerOps{nodeA.UUID: workerA, nodeB.UUID: workerB}
-		w, ok := workers[nodeUUID]
-		return w, ok
+func TestPluginService_Upload_ZipManagedDirs(t *testing.T) {
+	cases := []struct {
+		name string
+		dir  string
+		file string
+		want string
+	}{
+		{"资源包目录", "resourcepacks", "HighResPack.zip", "resourcepacks/HighResPack.zip"},
+		{"数据包目录", "datapacks", "SpawnTweaks.zip", "datapacks/SpawnTweaks.zip"},
 	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			svc, fake, id := newPluginSvcWithFake(t, nil)
 
-	res, err := svc.BatchDeploy(PluginBatchDeployRequest{AssetIDs: []uint{assetA.ID, assetB.ID}, IDs: []uint{instA.ID, instB.ID}}, nil, false)
-	require.NoError(t, err)
-	require.Equal(t, 2, res.Total)
-	require.Equal(t, 2, res.Success)
-	require.Equal(t, 0, res.Failed)
-	require.Equal(t, 0, res.Skipped)
-	require.ElementsMatch(t, []string{"plugins/EssentialsX.jar", "plugins/WorldEdit.jar"}, workerA.writes)
-	require.ElementsMatch(t, []string{"plugins/EssentialsX.jar", "plugins/WorldEdit.jar"}, workerB.writes)
-	require.Equal(t, []byte("ess-bytes"), workerA.writeContents["plugins/EssentialsX.jar"])
-	require.Equal(t, []byte("we-bytes"), workerB.writeContents["plugins/WorldEdit.jar"])
+			_, err := svc.Upload(id, c.dir, c.file, []byte("zip-bytes"))
+			require.NoError(t, err)
+			require.Equal(t, []string{c.want}, fake.writes)
+		})
+	}
 }
 
-func TestPluginService_BatchDeploy_RejectsNonPluginAsset(t *testing.T) {
-	db := newPluginTestDB(t)
-	assetSvc := newPluginAssetSvcForPlugin(t, db)
-	asset, err := assetSvc.Ingest(strings.NewReader("core-bytes"), IngestParams{Type: model.AssetTypeCore, Filename: "paper.jar"})
-	require.NoError(t, err)
-	_, inst := createPluginBatchTarget(t, db, "node-a", "inst-a")
-	svc := NewPluginService(db, cpgrpc.NewClientPool(), assetSvc)
+func TestPluginService_Upload_RejectsExistingFileUnlessOverwrite(t *testing.T) {
+	svc, fake, id := newPluginSvcWithFake(t, nil)
+	fake.put("plugins", "EssentialsX.jar", 1)
+	fake.put("plugins", "WorldEdit.jar.disabled", 1)
 
-	_, err = svc.BatchDeploy(PluginBatchDeployRequest{AssetIDs: []uint{asset.ID}, IDs: []uint{inst.ID}}, nil, false)
-	require.ErrorIs(t, err, ErrInvalidPluginAsset)
+	_, err := svc.Upload(id, "plugins", "EssentialsX.jar", []byte("jar-bytes"))
+	require.ErrorIs(t, err, ErrPluginFileExists)
+
+	_, err = svc.Upload(id, "plugins", "WorldEdit.jar", []byte("jar-bytes"))
+	require.ErrorIs(t, err, ErrPluginFileExists)
+
+	_, err = svc.Upload(id, "plugins", "EssentialsX.jar", []byte("jar-bytes"), WithPluginOverwrite(true))
+	require.NoError(t, err)
+	require.Equal(t, []string{"plugins/EssentialsX.jar"}, fake.writes)
 }
 
-func TestPluginService_BatchDeploy_ScopeSkipsUnauthorizedIDs(t *testing.T) {
-	db := newPluginTestDB(t)
-	assetSvc := newPluginAssetSvcForPlugin(t, db)
-	asset, err := assetSvc.Ingest(strings.NewReader("plugin-bytes"), IngestParams{Type: model.AssetTypePlugin, Filename: "Only.jar"})
+func TestPluginService_BatchDeploy_WritesAssetToMultipleInstances(t *testing.T) {
+	assetSvc := newAssetSvcForPlugin(t)
+	asset, err := assetSvc.Ingest(strings.NewReader("jar-bytes"), IngestParams{
+		Type:     model.AssetTypePlugin,
+		Name:     "EssentialsX",
+		Filename: "EssentialsX.jar",
+	})
 	require.NoError(t, err)
-	nodeA, instA := createPluginBatchTarget(t, db, "node-a", "inst-a")
-	_, instB := createPluginBatchTarget(t, db, "node-b", "inst-b")
-	workerA := newFakeWorker()
-	svc := NewPluginService(db, cpgrpc.NewClientPool(), assetSvc)
-	svc.workerResolver = func(nodeUUID string) (pluginWorkerOps, bool) {
-		if nodeUUID == nodeA.UUID {
-			return workerA, true
+	svc, fake, firstID := newPluginSvcWithFake(t, assetSvc)
+	var first model.Instance
+	require.NoError(t, svc.db.First(&first, firstID).Error)
+	second := model.Instance{UUID: "inst-second", NodeID: first.NodeID, Name: "srv2", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDirect, StartCommand: "x", WorkDir: "/srv/srv2"}
+	require.NoError(t, svc.db.Create(&second).Error)
+
+	result, err := svc.BatchDeploy(PluginBatchDeployRequest{
+		AssetIDs:  []uint{asset.ID},
+		Target:    PluginBatchTarget{IDs: []uint{firstID, second.ID}},
+		Overwrite: true,
+	}, nil, false)
+
+	require.NoError(t, err)
+	require.Equal(t, 2, result.RequestedInstances)
+	require.Equal(t, 1, result.RequestedAssets)
+	require.Equal(t, 2, result.Succeeded)
+	require.Zero(t, result.Failed)
+	require.ElementsMatch(t, []string{"plugins/EssentialsX.jar", "plugins/EssentialsX.jar"}, fake.writes)
+}
+
+func TestPluginService_BatchDeploy_SkipsInvisibleTargets(t *testing.T) {
+	assetSvc := newAssetSvcForPlugin(t)
+	asset, err := assetSvc.Ingest(strings.NewReader("jar-bytes"), IngestParams{Type: model.AssetTypePlugin, Filename: "EssentialsX.jar"})
+	require.NoError(t, err)
+	svc, _, id := newPluginSvcWithFake(t, assetSvc)
+
+	result, err := svc.BatchDeploy(PluginBatchDeployRequest{
+		AssetIDs: []uint{asset.ID},
+		Target:   PluginBatchTarget{IDs: []uint{id, id + 999}},
+	}, []uint{id}, true)
+
+	require.NoError(t, err)
+	require.Equal(t, 2, result.RequestedInstances)
+	require.Equal(t, 1, result.Succeeded)
+	require.Equal(t, 1, result.Skipped)
+}
+
+func TestPluginService_BatchDeploy_AggregatesPartialWorkerFailure(t *testing.T) {
+	assetSvc := newAssetSvcForPlugin(t)
+	asset, err := assetSvc.Ingest(strings.NewReader("jar-bytes"), IngestParams{Type: model.AssetTypePlugin, Filename: "EssentialsX.jar"})
+	require.NoError(t, err)
+	svc, fake, firstID := newPluginSvcWithFake(t, assetSvc)
+	var first model.Instance
+	require.NoError(t, svc.db.First(&first, firstID).Error)
+	second := model.Instance{UUID: "inst-second", NodeID: first.NodeID, Name: "srv2", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDirect, StartCommand: "x", WorkDir: "/srv/srv2"}
+	require.NoError(t, svc.db.Create(&second).Error)
+	fake.writeErrors["inst-second/plugins/EssentialsX.jar"] = "磁盘空间不足"
+
+	result, err := svc.BatchDeploy(PluginBatchDeployRequest{
+		AssetIDs:  []uint{asset.ID},
+		Target:    PluginBatchTarget{IDs: []uint{firstID, second.ID}},
+		Overwrite: true,
+	}, nil, false)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Succeeded)
+	require.Equal(t, 1, result.Failed)
+	require.Len(t, result.Results, 2)
+	require.Contains(t, result.Results, PluginBatchDeployItem{InstanceID: firstID, AssetID: asset.ID, OK: true})
+	var failed PluginBatchDeployItem
+	for _, item := range result.Results {
+		if !item.OK {
+			failed = item
 		}
-		return nil, false
 	}
+	require.Equal(t, second.ID, failed.InstanceID)
+	require.Contains(t, failed.Error, "磁盘空间不足")
+}
 
-	res, err := svc.BatchDeploy(PluginBatchDeployRequest{AssetIDs: []uint{asset.ID}, IDs: []uint{instA.ID, instB.ID}}, []uint{instA.ID}, true)
+func TestPluginService_BatchDeploy_RejectsExistingFileUnlessOverwrite(t *testing.T) {
+	assetSvc := newAssetSvcForPlugin(t)
+	asset, err := assetSvc.Ingest(strings.NewReader("jar-bytes"), IngestParams{Type: model.AssetTypePlugin, Filename: "EssentialsX.jar"})
 	require.NoError(t, err)
-	require.Equal(t, 2, res.Total)
-	require.Equal(t, 1, res.Success)
-	require.Equal(t, 1, res.Skipped)
-	require.Equal(t, []string{"plugins/Only.jar"}, workerA.writes)
-	require.Len(t, res.Results, 1)
-	require.Equal(t, instA.ID, res.Results[0].ID)
+	svc, fake, id := newPluginSvcWithFake(t, assetSvc)
+	fake.put("plugins", "EssentialsX.jar", 1)
+
+	result, err := svc.BatchDeploy(PluginBatchDeployRequest{
+		AssetIDs: []uint{asset.ID},
+		Target:   PluginBatchTarget{IDs: []uint{id}},
+	}, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Failed)
+	require.Contains(t, result.Results[0].Error, "文件已存在")
+
+	result, err = svc.BatchDeploy(PluginBatchDeployRequest{
+		AssetIDs:  []uint{asset.ID},
+		Target:    PluginBatchTarget{IDs: []uint{id}},
+		Overwrite: true,
+	}, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Succeeded)
 }
 
 // TestPluginService_Delete_ResolvesDisabledName 验证删除能命中禁用态文件名。
@@ -380,20 +551,14 @@ func TestPluginService_Toggle_BothDirections(t *testing.T) {
 	require.Equal(t, [2]string{"plugins/EssentialsX.jar.disabled", "plugins/EssentialsX.jar"}, fake.renames[1])
 }
 
-func createPluginBatchTarget(t *testing.T, db *gorm.DB, nodeUUID, instanceUUID string) (*model.Node, *model.Instance) {
-	t.Helper()
-	node := &model.Node{UUID: nodeUUID, Status: model.NodeStatusOnline}
-	require.NoError(t, db.Create(node).Error)
-	inst := &model.Instance{UUID: instanceUUID, NodeID: node.ID, Name: instanceUUID, Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDirect, StartCommand: "x", WorkDir: "/srv/" + instanceUUID}
-	require.NoError(t, db.Create(inst).Error)
-	return node, inst
-}
+func TestPluginService_Toggle_ZipManagedDir(t *testing.T) {
+	svc, fake, id := newPluginSvcWithFake(t, nil)
+	fake.put("resourcepacks", "HighResPack.zip", 1)
 
-func newPluginAssetSvcForPlugin(t *testing.T, db *gorm.DB) *AssetService {
-	t.Helper()
-	root, err := dataroot.Init(filepath.Join(t.TempDir(), "data"))
+	enabled, err := svc.Toggle(id, "resourcepacks", "HighResPack.zip")
 	require.NoError(t, err)
-	return NewAssetService(db, root)
+	require.False(t, enabled)
+	require.Equal(t, [2]string{"resourcepacks/HighResPack.zip", "resourcepacks/HighResPack.zip.disabled"}, fake.renames[0])
 }
 
 // newAssetSvcForPlugin 构建一个独立的制品库服务（独立 DB + 临时数据根），供上传去重测试使用。
@@ -410,4 +575,18 @@ func newAssetSvcForPlugin(t *testing.T) *AssetService {
 	root, err := dataroot.Init(filepath.Join(t.TempDir(), "data"))
 	require.NoError(t, err)
 	return NewAssetService(db, root)
+}
+
+func zipBytes(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, content := range files {
+		w, err := zw.Create(name)
+		require.NoError(t, err)
+		_, err = w.Write([]byte(content))
+		require.NoError(t, err)
+	}
+	require.NoError(t, zw.Close())
+	return buf.Bytes()
 }

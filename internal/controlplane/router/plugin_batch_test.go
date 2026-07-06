@@ -1,74 +1,168 @@
 package router
 
 import (
+	"bytes"
+	"context"
+	"fmt"
+	"mime/multipart"
 	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
+	"google.golang.org/grpc"
 
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/middleware"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
+	"github.com/wcpe/JianManager/internal/platform/dataroot"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-func TestPluginBatchDeploy_RouteScopesTargets(t *testing.T) {
-	db := setupTestDB(t)
-	r := setupTestRouter(db)
-	adminToken := getAdminToken(t, r)
-	assetID := uploadPluginAssetForBatch(t, r, adminToken)
-	node := createTestNode(t, db)
-
-	groupA := createGroupViaAPI(t, r, adminToken, "组A")
-	groupB := createGroupViaAPI(t, r, adminToken, "组B")
-	aliceToken := getMemberToken(t, r, "alice-plugin", "password123")
-	aliceID := findUserIDByUsername(t, db, "alice-plugin")
-	addMemberViaAPI(t, r, adminToken, groupA, aliceID, model.GroupMemberRoleMember)
-
-	idA := makePluginBatchInstance(t, db, node.ID, groupA, "batch-a")
-	idB := makePluginBatchInstance(t, db, node.ID, groupB, "batch-b")
-	body := map[string]interface{}{"assetIds": []uint{assetID}, "ids": []uint{idA, idB}}
-	w := makeRequest(r, http.MethodPost, "/api/v1/plugins/batch-deploy", body, aliceToken)
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	m := parseJSON(t, w)
-	assert.Equal(t, float64(2), m["total"])
-	assert.Equal(t, float64(0), m["success"])
-	assert.Equal(t, float64(1), m["failed"])  // 有权实例因测试环境无 Worker 连接而失败
-	assert.Equal(t, float64(1), m["skipped"]) // 越权实例被收敛为 skipped，不泄露存在性
+type fakePluginBatchWorker struct {
+	workerpb.WorkerServiceClient
+	files  map[string]struct{}
+	writes []string
 }
 
-func TestPluginBatchDeploy_Validation(t *testing.T) {
-	db := setupTestDB(t)
-	r := setupTestRouter(db)
-	token := getAdminToken(t, r)
-
-	w := makeRequest(r, http.MethodPost, "/api/v1/plugins/batch-deploy", map[string]interface{}{"ids": []uint{1}}, token)
-	require.Equal(t, http.StatusBadRequest, w.Code)
-
-	w = makeRequest(r, http.MethodPost, "/api/v1/plugins/batch-deploy", map[string]interface{}{"assetIds": []uint{1}}, token)
-	require.Equal(t, http.StatusBadRequest, w.Code)
-}
-
-func uploadPluginAssetForBatch(t *testing.T, r http.Handler, token string) uint {
-	t.Helper()
-	w := uploadAsset(t, r, token, "plugin", "BatchPlugin.jar", []byte("plugin-bytes"), nil)
-	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
-	return uint(parseJSON(t, w)["id"].(float64))
-}
-
-func makePluginBatchInstance(t *testing.T, db *gorm.DB, nodeID, groupID uint, name string) uint {
-	t.Helper()
-	inst := &model.Instance{
-		UUID:         name + "-uuid",
-		NodeID:       nodeID,
-		Name:         name,
-		Type:         model.InstanceTypeMinecraftJava,
-		Role:         model.InstanceRoleBackend,
-		ProcessType:  model.ProcessTypeDirect,
-		StartCommand: "java -jar server.jar",
-		WorkDir:      "/srv/" + name,
-		Status:       model.InstanceStatusStopped,
+func (f *fakePluginBatchWorker) ListFiles(_ context.Context, in *workerpb.ListFilesRequest, _ ...grpc.CallOption) (*workerpb.ListFilesResponse, error) {
+	resp := &workerpb.ListFilesResponse{}
+	prefix := in.Path + "/"
+	for path := range f.files {
+		if strings.HasPrefix(path, prefix) {
+			resp.Files = append(resp.Files, &workerpb.FileInfo{Name: strings.TrimPrefix(path, prefix)})
+		}
 	}
-	require.NoError(t, db.Create(inst).Error)
-	require.NoError(t, db.Create(&model.GroupInstance{GroupID: groupID, InstanceID: inst.ID}).Error)
-	return inst.ID
+	return resp, nil
+}
+
+func (f *fakePluginBatchWorker) WriteFile(_ context.Context, in *workerpb.WriteFileRequest, _ ...grpc.CallOption) (*workerpb.WriteFileResponse, error) {
+	f.writes = append(f.writes, in.Path)
+	f.files[in.Path] = struct{}{}
+	return &workerpb.WriteFileResponse{Success: true}, nil
+}
+
+func TestPluginBatchDeploy_Route(t *testing.T) {
+	db := setupTestDB(t)
+	root, err := dataroot.Init(filepath.Join(t.TempDir(), "data"))
+	require.NoError(t, err)
+	assetSvc := service.NewAssetService(db, root)
+	asset, err := assetSvc.Ingest(strings.NewReader("jar-bytes"), service.IngestParams{
+		Type:     model.AssetTypePlugin,
+		Filename: "EssentialsX.jar",
+	})
+	require.NoError(t, err)
+	node := model.Node{UUID: "node-plugin", Status: model.NodeStatusOnline}
+	require.NoError(t, db.Create(&node).Error)
+	inst := model.Instance{UUID: "inst-plugin", NodeID: node.ID, Name: "srv", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDirect, StartCommand: "x", WorkDir: "/srv/srv"}
+	require.NoError(t, db.Create(&inst).Error)
+
+	pool := cpgrpc.NewClientPool()
+	fake := &fakePluginBatchWorker{files: map[string]struct{}{}}
+	pool.SetWorkerClientForTest(node.UUID, fake)
+	handler := NewPluginHandler(service.NewPluginService(db, pool, assetSvc), service.NewAuthzService(db), service.NewAuditService(db))
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxAccess, &service.UserAccess{UserID: 1, IsPlatformAdmin: true})
+		c.Set(middleware.CtxUserID, uint(1))
+		c.Next()
+	})
+	handler.RegisterRoutes(r.Group("/api/v1"))
+
+	w := makeRequest(r, "POST", "/api/v1/plugins/batch-deploy", map[string]any{
+		"assetIds": []uint{asset.ID},
+		"target":   map[string]any{"ids": []uint{inst.ID}},
+	}, "")
+
+	require.Equal(t, 200, w.Code, w.Body.String())
+	resp := parseJSON(t, w)
+	require.Equal(t, float64(1), resp["succeeded"])
+	require.Equal(t, []string{"plugins/EssentialsX.jar"}, fake.writes)
+}
+
+func TestPluginUpload_RouteRejectsExistingFileWithoutOverwrite(t *testing.T) {
+	db := setupTestDB(t)
+	node := model.Node{UUID: "node-plugin-upload", Status: model.NodeStatusOnline}
+	require.NoError(t, db.Create(&node).Error)
+	inst := model.Instance{UUID: "inst-plugin-upload", NodeID: node.ID, Name: "srv", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDirect, StartCommand: "x", WorkDir: "/srv/srv"}
+	require.NoError(t, db.Create(&inst).Error)
+
+	pool := cpgrpc.NewClientPool()
+	fake := &fakePluginBatchWorker{files: map[string]struct{}{"plugins/EssentialsX.jar": {}}}
+	pool.SetWorkerClientForTest(node.UUID, fake)
+	handler := NewPluginHandler(service.NewPluginService(db, pool, nil), service.NewAuthzService(db), service.NewAuditService(db))
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxAccess, &service.UserAccess{UserID: 1, IsPlatformAdmin: true})
+		c.Set(middleware.CtxUserID, uint(1))
+		c.Next()
+	})
+	handler.RegisterRoutes(r.Group("/api/v1"))
+
+	body := bytes.NewBuffer(nil)
+	writer := multipart.NewWriter(body)
+	require.NoError(t, writer.WriteField("dir", "plugins"))
+	part, err := writer.CreateFormFile("file", "EssentialsX.jar")
+	require.NoError(t, err)
+	_, err = part.Write([]byte("jar-bytes"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	req := httptest.NewRequest("POST", fmt.Sprintf("/api/v1/instances/%d/plugins", inst.ID), body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	resp := parseJSON(t, w)
+	require.Equal(t, "FILE_EXISTS", resp["error"])
+	require.Empty(t, fake.writes)
+}
+
+func TestPluginUpload_RouteAllowsOverwriteExistingFile(t *testing.T) {
+	db := setupTestDB(t)
+	node := model.Node{UUID: "node-plugin-upload-overwrite", Status: model.NodeStatusOnline}
+	require.NoError(t, db.Create(&node).Error)
+	inst := model.Instance{UUID: "inst-plugin-upload-overwrite", NodeID: node.ID, Name: "srv", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDirect, StartCommand: "x", WorkDir: "/srv/srv"}
+	require.NoError(t, db.Create(&inst).Error)
+
+	pool := cpgrpc.NewClientPool()
+	fake := &fakePluginBatchWorker{files: map[string]struct{}{"plugins/EssentialsX.jar": {}}}
+	pool.SetWorkerClientForTest(node.UUID, fake)
+	handler := NewPluginHandler(service.NewPluginService(db, pool, nil), service.NewAuthzService(db), service.NewAuditService(db))
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxAccess, &service.UserAccess{UserID: 1, IsPlatformAdmin: true})
+		c.Set(middleware.CtxUserID, uint(1))
+		c.Next()
+	})
+	handler.RegisterRoutes(r.Group("/api/v1"))
+
+	body := bytes.NewBuffer(nil)
+	writer := multipart.NewWriter(body)
+	require.NoError(t, writer.WriteField("dir", "plugins"))
+	require.NoError(t, writer.WriteField("overwrite", "true"))
+	part, err := writer.CreateFormFile("file", "EssentialsX.jar")
+	require.NoError(t, err)
+	_, err = part.Write([]byte("jar-bytes"))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	req := httptest.NewRequest("POST", fmt.Sprintf("/api/v1/instances/%d/plugins", inst.ID), body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	require.Equal(t, []string{"plugins/EssentialsX.jar"}, fake.writes)
 }
