@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"gorm.io/gorm"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
@@ -167,8 +169,12 @@ func (s *ClientVersionService) PublishVersion(channelID string, p PublishVersion
 	if err := validateCleanExclude(p.CleanExclude); err != nil {
 		return nil, err
 	}
+	files, err := s.withPatchArtifacts(channelID, p.Files)
+	if err != nil {
+		return nil, err
+	}
 
-	filesJSON, err := json.Marshal(p.Files)
+	filesJSON, err := json.Marshal(files)
 	if err != nil {
 		return nil, fmt.Errorf("序列化文件清单失败: %w", err)
 	}
@@ -240,6 +246,331 @@ func (s *ClientVersionService) PublishVersion(channelID string, p PublishVersion
 		return nil, err
 	}
 	return &version, nil
+}
+
+const (
+	manifestPatchCodec              = "zstd-patch"
+	patchInMemoryFallbackMaxBytes   = 64 << 20
+	manifestContentTempFileTemplate = "client-patch-*.content"
+	manifestPatchTempFileTemplate   = "client-patch-*.zst"
+)
+
+func (s *ClientVersionService) withPatchArtifacts(channelID string, files []ManifestFile) ([]ManifestFile, error) {
+	out := append([]ManifestFile(nil), files...)
+	ch, err := s.getChannel(channelID)
+	if err != nil {
+		return nil, err
+	}
+	if ch.CurrentVersion <= 0 {
+		return out, nil
+	}
+	prev, err := s.findVersion(channelID, ch.CurrentVersion)
+	if errors.Is(err, ErrVersionNotFound) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	prevFiles, _, _, _, err := decodeVersionSnapshot(prev)
+	if err != nil {
+		return nil, err
+	}
+	prevByKey := make(map[string]ManifestFile, len(prevFiles))
+	for _, f := range prevFiles {
+		prevByKey[manifestFilePatchKey(f)] = f
+	}
+	for i := range out {
+		if out[i].Patch != nil || out[i].Sync != "strict" || out[i].Artifact.SHA256 == "" {
+			continue
+		}
+		prevFile, ok := prevByKey[manifestFilePatchKey(out[i])]
+		if !ok || prevFile.SHA256 == "" || prevFile.SHA256 == out[i].SHA256 || prevFile.Artifact.SHA256 == "" {
+			continue
+		}
+		patch, ok, err := s.buildPatchArtifact(prevFile, out[i])
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			out[i].Patch = patch
+		}
+	}
+	return out, nil
+}
+
+func manifestFilePatchKey(f ManifestFile) string {
+	return f.Path + "\x00" + f.Platform
+}
+
+func (s *ClientVersionService) buildPatchArtifact(oldFile, newFile ManifestFile) (*ManifestPatch, bool, error) {
+	oldPath, cleanupOld, ok, err := s.manifestFileContentPath(oldFile)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	defer cleanupOld()
+	newPath, cleanupNew, ok, err := s.manifestFileContentPath(newFile)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	defer cleanupNew()
+	patchPath, cleanupPatch, ok, err := s.buildPatchFile(oldPath, newPath, oldFile.Size, newFile.Size)
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	defer cleanupPatch()
+	asset, err := s.ingestPatchArtifactFromPath(newFile, oldFile.SHA256, newFile.SHA256, patchPath)
+	if err != nil {
+		return nil, false, err
+	}
+	return &ManifestPatch{
+		OldSHA256: oldFile.SHA256,
+		NewSHA256: newFile.SHA256,
+		Artifact:  ManifestArtifact{SHA256: asset.SHA256, Size: asset.Size, Codec: manifestPatchCodec},
+	}, true, nil
+}
+
+func (s *ClientVersionService) buildPatchFile(oldPath, newPath string, oldSize, newSize int64) (string, func(), bool, error) {
+	if zstdPath, err := exec.LookPath("zstd"); err == nil {
+		return s.buildPatchFileWithZstdCommand(zstdPath, oldPath, newPath)
+	}
+	if oldSize > patchInMemoryFallbackMaxBytes || newSize > patchInMemoryFallbackMaxBytes {
+		return "", nil, false, nil
+	}
+	oldContent, err := os.ReadFile(oldPath)
+	if err != nil {
+		return "", nil, false, nil
+	}
+	newContent, err := os.ReadFile(newPath)
+	if err != nil {
+		return "", nil, false, nil
+	}
+	patchBytes, err := encodeZstdPatch(oldContent, newContent)
+	if err != nil {
+		return "", nil, false, err
+	}
+	patchPath, cleanup, err := s.writePatchTempFile(patchBytes)
+	if err != nil {
+		return "", nil, false, err
+	}
+	return patchPath, cleanup, true, nil
+}
+
+func (s *ClientVersionService) buildPatchFileWithZstdCommand(zstdPath, oldPath, newPath string) (string, func(), bool, error) {
+	patchPath, cleanup, err := s.createPatchTempFile()
+	if err != nil {
+		return "", nil, false, err
+	}
+	cmd := exec.Command(zstdPath, "--patch-from="+oldPath, "-q", "-f", "-o", patchPath, newPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		cleanup()
+		return "", nil, false, fmt.Errorf("执行 zstd patch-from 失败: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return patchPath, cleanup, true, nil
+}
+
+func encodeZstdPatch(oldContent, newContent []byte) ([]byte, error) {
+	enc, err := zstd.NewWriter(nil, zstd.WithEncoderDictRaw(0, oldContent))
+	if err != nil {
+		return nil, fmt.Errorf("创建 zstd patch 编码器失败: %w", err)
+	}
+	patchBytes := enc.EncodeAll(newContent, nil)
+	if err := enc.Close(); err != nil {
+		return nil, fmt.Errorf("关闭 zstd patch 编码器失败: %w", err)
+	}
+	return patchBytes, nil
+}
+
+func (s *ClientVersionService) ingestPatchArtifactFromPath(f ManifestFile, oldSHA, newSHA, patchPath string) (*model.Asset, error) {
+	meta, _ := json.Marshal(map[string]string{
+		"codec":     manifestPatchCodec,
+		"oldSha256": oldSHA,
+		"newSha256": newSHA,
+	})
+	return s.assets.IngestFromPath(patchPath, IngestParams{
+		Type:     model.AssetTypeClientFile,
+		Filename: patchFilename(f),
+		Metadata: string(meta),
+	})
+}
+
+func patchFilename(f ManifestFile) string {
+	name := strings.ReplaceAll(f.Path, "/", "-")
+	if name == "" {
+		name = f.SHA256
+	}
+	return name + ".patch.zst"
+}
+
+func (s *ClientVersionService) writePatchTempFile(patch []byte) (string, func(), error) {
+	patchPath, cleanup, err := s.createPatchTempFile()
+	if err != nil {
+		return "", nil, err
+	}
+	if err := os.WriteFile(patchPath, patch, 0o644); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("写入 zstd patch 临时文件失败: %w", err)
+	}
+	return patchPath, cleanup, nil
+}
+
+func (s *ClientVersionService) createPatchTempFile() (string, func(), error) {
+	tmp, err := os.CreateTemp(s.patchTempDir(), manifestPatchTempFileTemplate)
+	if err != nil {
+		return "", nil, fmt.Errorf("创建 zstd patch 临时文件失败: %w", err)
+	}
+	path := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", nil, fmt.Errorf("关闭 zstd patch 临时文件失败: %w", err)
+	}
+	return path, func() { _ = os.Remove(path) }, nil
+}
+
+func (s *ClientVersionService) manifestFileContentPath(f ManifestFile) (string, func(), bool, error) {
+	asset, absPath, err := s.OpenArtifact(f.Artifact.SHA256)
+	if errors.Is(err, ErrAssetNotFound) {
+		return "", nil, false, nil
+	}
+	if err != nil {
+		return "", nil, false, err
+	}
+	if asset.Type != model.AssetTypeClientFile {
+		return "", nil, false, nil
+	}
+	codec := strings.ToLower(strings.TrimSpace(f.Artifact.Codec))
+	if codec == "" || codec == "none" {
+		if f.Size > 0 && asset.Size != f.Size {
+			return "", nil, false, nil
+		}
+		if f.SHA256 != "" && !strings.EqualFold(asset.SHA256, f.SHA256) {
+			return "", nil, false, nil
+		}
+		return absPath, func() {}, true, nil
+	}
+	return s.materializeManifestFileContent(absPath, f)
+}
+
+func (s *ClientVersionService) materializeManifestFileContent(absPath string, f ManifestFile) (string, func(), bool, error) {
+	src, err := os.Open(absPath)
+	if err != nil {
+		return "", nil, false, nil
+	}
+	defer src.Close()
+
+	reader, closeReader, ok, err := decodedManifestArtifactReader(src, f.Artifact.Codec)
+	if err != nil || !ok {
+		return "", nil, ok, err
+	}
+	defer closeReader()
+
+	tmp, err := os.CreateTemp(s.patchTempDir(), manifestContentTempFileTemplate)
+	if err != nil {
+		return "", nil, false, fmt.Errorf("创建 manifest 内容临时文件失败: %w", err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpPath) }
+	sha := sha256.New()
+	size, copyErr := io.Copy(io.MultiWriter(tmp, sha), reader)
+	closeErr := tmp.Close()
+	if copyErr != nil {
+		cleanup()
+		return "", nil, false, fmt.Errorf("解码 manifest 内容失败: %w", copyErr)
+	}
+	if closeErr != nil {
+		cleanup()
+		return "", nil, false, fmt.Errorf("关闭 manifest 内容临时文件失败: %w", closeErr)
+	}
+	if f.Size > 0 && size != f.Size {
+		cleanup()
+		return "", nil, false, nil
+	}
+	if f.SHA256 != "" && !strings.EqualFold(hex.EncodeToString(sha.Sum(nil)), f.SHA256) {
+		cleanup()
+		return "", nil, false, nil
+	}
+	return tmpPath, cleanup, true, nil
+}
+
+func decodedManifestArtifactReader(raw io.Reader, codec string) (io.Reader, func(), bool, error) {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "", "none":
+		return raw, func() {}, true, nil
+	case "zstd":
+		dec, err := zstd.NewReader(raw)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		return dec, dec.Close, true, nil
+	default:
+		return nil, nil, false, nil
+	}
+}
+
+func (s *ClientVersionService) patchTempDir() string {
+	if s.assets != nil && s.assets.root != nil {
+		dir := s.assets.root.CacheDir()
+		if err := os.MkdirAll(dir, 0o755); err == nil {
+			return dir
+		}
+	}
+	return os.TempDir()
+}
+
+func (s *ClientVersionService) readManifestFileContent(f ManifestFile) ([]byte, bool, error) {
+	asset, absPath, err := s.OpenArtifact(f.Artifact.SHA256)
+	if errors.Is(err, ErrAssetNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if asset.Type != model.AssetTypeClientFile {
+		return nil, false, nil
+	}
+	raw, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, false, nil
+	}
+	content, ok, err := decodeManifestArtifact(raw, f.Artifact.Codec)
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	if f.Size > 0 && int64(len(content)) != f.Size {
+		return nil, false, nil
+	}
+	if f.SHA256 != "" && !strings.EqualFold(sha256BytesHex(content), f.SHA256) {
+		return nil, false, nil
+	}
+	return content, true, nil
+}
+
+func decodeManifestArtifact(raw []byte, codec string) ([]byte, bool, error) {
+	switch strings.ToLower(strings.TrimSpace(codec)) {
+	case "", "none":
+		return raw, true, nil
+	case "zstd":
+		dec, err := zstd.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			return nil, false, err
+		}
+		defer dec.Close()
+		out, err := io.ReadAll(dec)
+		if err != nil {
+			return nil, false, err
+		}
+		return out, true, nil
+	default:
+		return nil, false, nil
+	}
+}
+
+func sha256BytesHex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // BuildManifest 组装频道 latest 的 manifest（contract §2）。FR-256 起不再签名。
@@ -665,6 +996,30 @@ func validateManifestFiles(files []ManifestFile) error {
 		if f.Sync != "ignore" && f.Artifact.SHA256 == "" {
 			return fmt.Errorf("%w: %q 缺 artifact.sha256", ErrInvalidVersionFiles, f.Path)
 		}
+		if f.Patch != nil {
+			if err := validateManifestPatch(f); err != nil {
+				return fmt.Errorf("%w: %q %v", ErrInvalidVersionFiles, f.Path, err)
+			}
+		}
+	}
+	return nil
+}
+
+func validateManifestPatch(f ManifestFile) error {
+	if f.Patch.OldSHA256 == "" {
+		return errors.New("缺 patch.oldSha256")
+	}
+	if f.Patch.NewSHA256 == "" {
+		return errors.New("缺 patch.newSha256")
+	}
+	if f.Patch.NewSHA256 != f.SHA256 {
+		return errors.New("patch.newSha256 必须等于文件 sha256")
+	}
+	if f.Patch.Artifact.SHA256 == "" {
+		return errors.New("缺 patch.artifact.sha256")
+	}
+	if f.Patch.Artifact.Codec != manifestPatchCodec {
+		return errors.New("patch.artifact.codec 必须为 zstd-patch")
 	}
 	return nil
 }

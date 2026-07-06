@@ -108,27 +108,30 @@ func NewBotService(db *gorm.DB, pool *grpc.ClientPool) *BotService {
 
 // CreateBotRequest 创建 Bot 请求。
 type CreateBotRequest struct {
-	InstanceID uint   `json:"instanceId" binding:"required"`
-	Name       string `json:"name" binding:"required"`
-	Config     string `json:"config"` // JSON
-	Behavior   string `json:"behavior"`
+	InstanceID      uint            `json:"instanceId" binding:"required"`
+	Name            string          `json:"name" binding:"required"`
+	Config          string          `json:"config"` // JSON
+	Behavior        string          `json:"behavior"`
+	BehaviorConfig  json.RawMessage `json:"behaviorConfig,omitempty"`
+	StressSessionID *uint           `json:"-"`
 }
 
 // Create 创建 Bot 并委托 Worker 启动 Mineflayer 连接。
 func (s *BotService) Create(req CreateBotRequest) (*model.Bot, error) {
 	bot := &model.Bot{
-		InstanceID: req.InstanceID,
-		Name:       req.Name,
-		Config:     req.Config,
-		Behavior:   req.Behavior,
-		Status:     model.BotStatusPending,
+		InstanceID:      req.InstanceID,
+		Name:            req.Name,
+		Config:          req.Config,
+		Behavior:        req.Behavior,
+		Status:          model.BotStatusPending,
+		StressSessionID: req.StressSessionID,
 	}
 	if err := s.db.Create(bot).Error; err != nil {
 		return nil, fmt.Errorf("创建 Bot 失败: %w", err)
 	}
 
 	// 委托 Worker 创建 Bot 连接（失败不阻塞 DB 创建，记 warning）
-	if err := s.delegateCreateBot(bot); err != nil {
+	if err := s.delegateCreateBot(bot, req.BehaviorConfig); err != nil {
 		slog.Warn("委托 Worker 创建 Bot 失败", "botID", bot.ID, "error", err)
 	}
 
@@ -181,7 +184,7 @@ func (s *BotService) UpdateBehavior(id uint, behavior string) error {
 }
 
 // delegateCreateBot 委托 Worker 创建 Bot 连接。
-func (s *BotService) delegateCreateBot(bot *model.Bot) error {
+func (s *BotService) delegateCreateBot(bot *model.Bot, behaviorConfig json.RawMessage) error {
 	client, instance, err := s.getWorkerClient(bot.InstanceID)
 	if err != nil {
 		return err
@@ -194,15 +197,16 @@ func (s *BotService) delegateCreateBot(bot *model.Bot) error {
 	host, port, conn := botConnTarget(bot, instance)
 
 	resp, err := client.Worker.CreateBot(ctx, &workerpb.CreateBotRequest{
-		BotUuid:      bot.UUID,
-		InstanceUuid: instance.UUID,
-		Name:         bot.Name,
-		Host:         host,
-		Port:         int32(port),
-		Username:     conn.Username,
-		Version:      conn.Version,
-		Auth:         conn.Auth,
-		Behavior:     bot.Behavior,
+		BotUuid:        bot.UUID,
+		InstanceUuid:   instance.UUID,
+		Name:           bot.Name,
+		Host:           host,
+		Port:           int32(port),
+		Username:       conn.Username,
+		Version:        conn.Version,
+		Auth:           conn.Auth,
+		Behavior:       bot.Behavior,
+		BehaviorConfig: string(behaviorConfig),
 	})
 	if err != nil {
 		return fmt.Errorf("gRPC CreateBot 失败: %w", err)
@@ -274,6 +278,27 @@ func (s *BotService) SendCommand(id uint, command string) error {
 		return fmt.Errorf("Worker SendBotCommand 失败: %s", resp.Error)
 	}
 	return nil
+}
+
+// StreamEvents 订阅单个 Bot 在所属 Worker 上的实时事件流（FR-041）。
+func (s *BotService) StreamEvents(ctx context.Context, id uint) (*model.Bot, workerpb.WorkerService_StreamBotEventsClient, error) {
+	var bot model.Bot
+	if err := s.db.First(&bot, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, ErrBotNotFound
+		}
+		return nil, nil, err
+	}
+
+	client, _, err := s.getWorkerClient(bot.InstanceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	stream, err := client.Worker.StreamBotEvents(ctx, &workerpb.StreamBotEventsRequest{BotUuid: bot.UUID})
+	if err != nil {
+		return nil, nil, fmt.Errorf("gRPC StreamBotEvents 失败: %w", err)
+	}
+	return &bot, stream, nil
 }
 
 // delegateDeleteBot 委托 Worker 停止 Bot。

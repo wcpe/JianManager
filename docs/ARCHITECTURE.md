@@ -343,9 +343,9 @@ Flags:   bit0=compressed(zlib)
 
 ```
 Go → Node.js (stdin, JSON 行):
-  {"cmd":"create-bots","bots":[...]}
+  {"cmd":"create-bots","bots":[{"id":"b1","behavior":"idle","behaviorConfig":{...}}]}
   {"cmd":"stop-bots","botIds":[...]}
-  {"cmd":"set-behavior","botId":"b1","behavior":"follow","target":"player"}
+  {"cmd":"set-behavior","botId":"b1","behavior":"follow","target":"player","config":{...}}
   {"cmd":"send-command","botId":"b1","command":"say hello"}
   {"cmd":"run-script","scriptId":"s1","botIds":["b1"],"steps":[...]}
   {"cmd":"stop-script","scriptId":"s1"}
@@ -358,6 +358,8 @@ Node.js → Go (stdout, JSON 行):
   {"evt":"bot-error","botId":"b1","error":"ECONNREFUSED"}
   {"evt":"script-progress","scriptId":"s1","status":"running","progress":50}
 ```
+
+Bot 压测 YAML 编排（FR-274）保持单一解析点：Control Plane 接收 JSON 请求体中的 `orchestrationYaml`，负责 YAML 解析、语义校验、原文持久化与 `orchestrationSummary` 摘要生成；启动会话时将规范化后的阶段、循环、错峰和 custom steps 序列化进既有 gRPC `behavior_config` 字段，并把 Bot 行为置为 `orchestrated`。Worker Node 不解析 YAML，也不重建编排语义，只把 `behavior_config` 透传到 bot-worker 的 IPC `behaviorConfig`。bot-worker 的 `orchestrated` 行为按 `startDelayMs` 错峰启动、按阶段切换内部 `idle/follow/patrol/guard/custom` 行为，并通过 `bot-event` 上报 `orchestration-phase` 事件供真实环境验收确认。
 
 ### 6.5 客户端 OTA 公网分发端点（玩家 updater ↔ Control Plane，FR-087 / ADR-022/023）
 
@@ -376,7 +378,7 @@ Control Plane 新增一类**面向玩家公网**的 HTTP 分发端点（客户�
 
 ### 6.6 客户端 OTA 更新器（玩家侧两件套纯 JVM jar，`client-updater/`，FR-089/090/091 / ADR-021）
 
-启动器经 `-javaagent:wedge.jar=<gameDir>` 注入。**楔子（wedge，Java 8，~30KB 稳定件随基础包分发，代码冻结见 [ADR-054](../adr/054-updater-arch-simplification.md) §4）** premain 自定位、读同目录 `jm-updater.json`、**gradle-wrapper 模式**：只接受 API 根 `endpoint`（如 `/api/v1`），据 `endpoint + channel` 自动拼接 updater-core 端点并拉取 updater-core jar（JDK 原生 `HttpURLConnection` + `MessageDigest` SHA-256 校验，本地 `.jm-updater/core/` 保留 3 版用于回滚）→ 以独立 `URLClassLoader` **内存加载** selected core（不锁原 jar）→ 反射 `Core.run(ctx)`（入口签名冻结 `Core.run(Map<String,String>)`，ctx 含 `configJson` 原文透传供 core 后续扩展解析不改楔子）→ 同步等待 + 超时，全程 **fail-open**（任何异常都放行游戏）。楔子**永不接触 manifest**。**updater-core（Java 8，兼容低版本游戏 JVM；fat jar 自含 zstd-jni，~2MB 去掉 BouncyCastle）** 拉 manifest（不再验签）→ 文件级 reconcile（增量/减量、托管区/玩家区隔离、**流式下载 + sha256 完整性校验 + HTTP Range 断点续传**，FR-257）→ 端点不可达 **fail-static** 带本地版本放行。HTTP 用 `HttpURLConnection`（Java 8 无 `java.net.http`）。两件套包名 `top.wcpe.mc.jm.updater.{wedge,core}`。
+启动器经 `-javaagent:wedge.jar=<gameDir>` 注入。**楔子（wedge，Java 8，~30KB 稳定件随基础包分发，代码冻结见 [ADR-054](../adr/054-updater-arch-simplification.md) §4）** premain 自定位、读同目录 `jm-updater.json`、**gradle-wrapper 模式**：只接受 API 根 `endpoint`（如 `/api/v1`），据 `endpoint + channel` 自动拼接 updater-core 端点并拉取 updater-core jar（JDK 原生 `HttpURLConnection` + `MessageDigest` SHA-256 校验，本地 `.jm-updater/core/` 保留 3 版用于回滚）→ 以独立 `URLClassLoader` **内存加载** selected core（不锁原 jar）→ 反射 `Core.run(ctx)`（入口签名冻结 `Core.run(Map<String,String>)`，ctx 含 `configJson` 原文透传供 core 后续扩展解析不改楔子）→ 同步等待 + 超时，全程 **fail-open**（任何异常都放行游戏）。楔子**永不接触 manifest**。**updater-core（Java 8，兼容低版本游戏 JVM；fat jar 自含 zstd-jni，~2MB 去掉 BouncyCastle）** 拉 manifest（不再验签）→ 文件级 reconcile（增量/减量、托管区/玩家区隔离、**流式下载 + sha256 完整性校验 + HTTP Range 断点续传**，FR-257；FR-098 起本地旧文件 hash 命中时优先应用 manifest 可选 zstd patch，失败回退完整 artifact）→ 端点不可达 **fail-static** 带本地版本放行。HTTP 用 `HttpURLConnection`（Java 8 无 `java.net.http`）。两件套包名 `top.wcpe.mc.jm.updater.{wedge,core}`。
 
 **清理范围 manifest 字段（FR-255，增强 FR-191/088）**：manifest `managedDirs`（托管/自动清理目录）支持嵌套路径串（如 `config/foo`，客户端前缀匹配）；含哨兵 `"*"` 时语义 = **清空整个 gameDir**——删除清单未列的一切，**除**内置玩家区安全清单 `PLAYER_ZONE`（`saves/ screenshots/ logs/ crash-reports/ options.txt` 等纵深防御永不删）+ 运营自定义追加排除 `cleanExclude`（`string[]`，命中前缀永不删，叠加在 `PLAYER_ZONE` 之上）。`cleanExclude` 空则省略（`omitempty`，老 manifest JSON 不变、向后兼容，schemaVersion 维持 1）。删除判定：`isUnderManaged && !isPlayerZone && !isExcluded` 才删。发布页 meta 步提供目录树勾选（由草稿文件派生）+ clean-all 开关 + 自定义排除标签输入；clean-all 发布强制 `DangerConfirm` 二次确认。
 
@@ -418,7 +420,8 @@ User ──M:N──▶ Group (GroupMember)
 Group ──1:N──▶ GroupQuota
 Group ──M:N──▶ Instance (GroupInstance, UNIQUE instance_id)
 Node ──1:N──▶ Instance
-Instance ──1:N──▶ Backup / Schedule / Bot
+Instance ──1:N──▶ Backup / Schedule / Bot / BotStressSession
+BotStressSession ──1:N──▶ Bot (stress_session_id, 可空)
 Backup ──N:1──▶ Backup (parent_id, 增量备份链, V2)
 Backup ──N:1──▶ BackupStorage (storage_id, 远程存储位置, V2)
 Instance(proxy) ──M:N──▶ Instance(backend)   # V2 ServerRegistration: alias/priority/forced_host
@@ -447,7 +450,8 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | group_instances | group_id, instance_id(UNIQUE) |
 | instance_group_nodes (V2, FR-165) | uuid, name, parent_id(自引用 FK, NULL=根), sort, deleted_at（实例组织分组树节点，邻接表表达多级嵌套；正交于用户组/网络群组，仅组织归类，ADR-033）；INDEX(parent_id) |
 | instance_group_members (V2, FR-165) | group_id(FK instance_group_nodes), instance_id(FK)；UNIQUE(group_id, instance_id)（实例-组织分组 M:N，一实例可属多组；删组只解绑、不删实例） |
-| bots | uuid, instance_id(FK), name, status, config(JSON), behavior, worker_id |
+| bot_stress_sessions | uuid, instance_id(FK), name, name_prefix, status(pending/running/stopped/error), bot_count, behavior, config(JSON), orchestration_yaml(TEXT), orchestration_summary(JSON), succeeded, failed, last_error, started_at, ended_at |
+| bots | uuid, instance_id(FK), stress_session_id(FK，可空), name, status, config(JSON), behavior, worker_id |
 | backups | uuid, instance_id(FK), name, file_path, file_size_mb, type(0/1), mode(0 全量/1 增量, V2), status(0/1/2/3), parent_id(FK self, 备份链, V2), manifest(JSON 文件清单, V2), storage_id(FK, V2), storage_key(远程对象键, V2) |
 | backup_storages | name(UNIQUE), type(local/s3/sftp/webdav), endpoint, bucket, region, prefix, access_key_env(${ENV_VAR}), secret_key_env(${ENV_VAR}), use_ssl (V2, FR-057)；API 响应派生 `backup_count`/`used_bytes`（FR-152，不落库，按已完成 backups 聚合） |
 | schedules | uuid, instance_id(FK), name, cron_expr, action, payload, enabled |
@@ -758,7 +762,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 └──────────────────────────────────────────────────────────────┘
 ```
 
-> 健康条仅「在线 vs 其余」两段（摘要分组只给 `online`=connected + `total`）。「在控制台打开」(仅实例分组) → `console store.openInstance(id)` + 跳 `/`，回到控制台工作区。单 Bot 实时遥测/详情面板见 FR-041，控制台内 per-instance Bot 段见 FR-039，压测会话编排见 FR-042（本页仅占位入口）。
+> 健康条仅「在线 vs 其余」两段（摘要分组只给 `online`=connected + `total`）。「在控制台打开」(仅实例分组) → `console store.openInstance(id)` + 跳 `/`，回到控制台工作区。单 Bot 行可打开实时遥测/详情面板（SSE `/bots/:id/events` + `SendBotCommand`），压测会话以持久化会话聚合展示与批量启停；含 YAML 编排的会话展示阶段数、循环、总时长与行为摘要，并可打开详情查看原始 YAML。控制台内 per-instance Bot 段见 FR-039。
 
 #### 用户管理 `/users`
 
@@ -843,7 +847,9 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 
 ```
 Bot 页面 → 创建压测会话 → 选择目标实例 + bot 数量
-→ 开始压测 → 观察 bot 陆续上线
+→ 填写 YAML 编排（可留空回退旧 behavior）→ CP 校验并保存原始 YAML + 摘要
+→ 开始压测 → CP 下发 orchestrated behavior_config，Worker 透传，bot-worker 按阶段执行
+→ 观察 bot 陆续上线
 → 查看 bot 状态（位置/血量/行为）
 → 结束压测 → bot 批量下线
 ```
@@ -905,7 +911,7 @@ web/
 bot-worker/src/
   ipc/          # stdin/stdout JSON 行协议
   bot/          # Mineflayer 连接、重连、生命周期
-  behavior/     # 行为引擎 (Tick 250ms): follow, guard, patrol, idle, custom
+  behavior/     # 行为引擎 (Tick 250ms): follow, guard, patrol, idle, custom, orchestrated
   script/       # 脚本执行器 + 进度上报
   debug/        # 交互式调试会话
   pathfinder/   # mineflayer-pathfinder 封装
@@ -914,6 +920,8 @@ bot-worker/src/
 ```
 
 容量：50 bots/worker, 256 workers max ≈ 12,800 bots
+
+`orchestrated` 是组合行为，不直接解析 YAML：它只消费 Control Plane 已规范化的 `behaviorConfig`，按阶段创建并切换既有行为类。`custom` 阶段继续复用现有步骤执行器字段，Go 侧把 YAML 的 `durationMs` 映射为 bot-worker 已支持的 `duration`，避免两端维护两套 YAML 语义。
 
 ## 10. 状态机
 

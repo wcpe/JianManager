@@ -21,6 +21,7 @@ final class TestFixtures {
         String manifestJson;
         boolean manifestUnreachable;
         final Map<String, byte[]> artifacts = new HashMap<>();
+        final List<String> artifactFetches = new ArrayList<>();
         int artifactFetchCount;
 
         @Override
@@ -46,6 +47,7 @@ final class TestFixtures {
         @Override
         public InputStream fetchArtifactStream(String artifactSha256, long offset) throws IOException {
             artifactFetchCount++;
+            artifactFetches.add(artifactSha256);
             lastStreamOffset = offset;
             byte[] data = artifacts.get(artifactSha256);
             if (data == null) {

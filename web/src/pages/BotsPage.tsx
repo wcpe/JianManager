@@ -4,13 +4,24 @@ import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import {
   useBots,
+  useBot,
+  useBotEvents,
   useBotSummary,
   useBotBatch,
   useCreateBot,
+  useBotStressSessions,
+  useBotStressSession,
+  useCreateBotStressSession,
+  useStartBotStressSession,
+  useStopBotStressSession,
+  useSendBotCommand,
   type BotInfo,
+  type BotRealtimeEvent,
   type BotSummaryGroup,
   type BotBatchAction,
   type BotListParams,
+  type BotStressSessionCounts,
+  type BotStressOrchestrationSummary,
 } from '@/api/bots'
 import { useInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
@@ -31,7 +42,7 @@ import { BotHealthBar } from '@/components/console/BotHealthBar'
 import { BotWorktableCard } from '@/components/console/BotWorktableCard'
 import DangerConfirm from '@/components/DangerConfirm'
 import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
-import { Plus } from 'lucide-react'
+import { Activity, Plus, Send } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
@@ -67,6 +78,30 @@ const SENTINEL_ALL = 'all'
 
 const BEHAVIOR_OPTIONS = ['idle', 'guard', 'follow', 'patrol'] as const
 
+const DEFAULT_ORCHESTRATION_YAML = `loop: true
+staggerMs: 500
+phases:
+  - durationSec: 60
+    behavior: idle
+  - durationSec: 120
+    behavior: patrol
+    target: "0,64,0;8,64,8"
+  - durationSec: 60
+    behavior: guard
+  - durationSec: 90
+    behavior: custom
+    steps:
+      - type: chat
+        message: hello
+      - type: wait
+        durationMs: 3000
+      - type: move
+        pos:
+          x: 0
+          y: 64
+          z: 0
+`
+
 /**
  * 全局 Bot 管理页（FR-040 / ADR-009）。
  * 聚合优先、永不全量铺开：页顶概览卡片 + 分组总览（默认按实例），每组一行（实例/节点/健康条/总数/批量），
@@ -75,10 +110,12 @@ const BEHAVIOR_OPTIONS = ['idle', 'guard', 'follow', 'patrol'] as const
 export default function BotsPage() {
   const { t } = useTranslation()
   const [showCreate, setShowCreate] = useState(false)
+  const [showStress, setShowStress] = useState(false)
   const [search, setSearch] = useState('')
   const [nodeId, setNodeId] = useState<number | null>(null)
   const [status, setStatus] = useState<string>('')
   const [groupBy, setGroupBy] = useState<GroupByDim>('instance')
+  const [detailBotId, setDetailBotId] = useState<number | null>(null)
   // 工作台卡 ⇄ 列表视图（FR-147，§4.5）；运行实体默认卡片。
   const [view, setView] = useState<ViewMode>('card')
 
@@ -121,7 +158,7 @@ export default function BotsPage() {
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold">{t('bots.title')}</h1>
         <div className="flex gap-2">
-          <Button variant="outline" disabled title={t('bots.stressTestSoon')}>
+          <Button variant="outline" onClick={() => setShowStress(true)}>
             {t('bots.stressTest')}
           </Button>
           <Button onClick={() => setShowCreate(true)}>
@@ -151,6 +188,8 @@ export default function BotsPage() {
         onView={setView}
       />
 
+      <StressSessionsPanel />
+
       {/* key=groupBy：维度切换时重挂 GroupOverview，自然复位其展开/选择状态（避免 effect 内 setState） */}
       <GroupOverview
         key={groupBy}
@@ -159,9 +198,12 @@ export default function BotsPage() {
         baseFilter={filter}
         loading={activeSummary.isLoading}
         view={view}
+        onOpenBot={setDetailBotId}
       />
 
       <CreateBotDialog open={showCreate} onOpenChange={setShowCreate} />
+      <StressSessionDialog open={showStress} onOpenChange={setShowStress} />
+      <BotDetailDialog botId={detailBotId} onOpenChange={(open) => { if (!open) setDetailBotId(null) }} />
     </div>
   )
 }
@@ -335,6 +377,394 @@ function Toolbar({
   )
 }
 
+/** 压测会话列表：展示持久化会话状态，并提供启动/停止编排入口。 */
+function StressSessionsPanel() {
+  const { t } = useTranslation()
+  const [page, setPage] = useState(1)
+  const [detailSessionId, setDetailSessionId] = useState<number | null>(null)
+  const pageSize = 10
+  const sessions = useBotStressSessions({ page, pageSize })
+  const startSession = useStartBotStressSession()
+  const stopSession = useStopBotStressSession()
+  const items = sessions.data?.items ?? []
+  const total = sessions.data?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
+
+  if (items.length === 0 && !sessions.isLoading) return null
+
+  const run = (kind: 'start' | 'stop', id: number) => {
+    const mutation = kind === 'start' ? startSession : stopSession
+    mutation.mutate(id, {
+      onError: () => toast.error(t('bots.stressActionFailed')),
+    })
+  }
+
+  return (
+    <div className="mb-3 rounded-lg border bg-card">
+      <div className="flex items-center justify-between border-b px-3 py-2">
+        <h2 className="text-sm font-semibold">{t('bots.stressSessions')}</h2>
+        <span className="text-xs text-muted-foreground">{t('bots.stressSessionCount', { count: items.length })}</span>
+      </div>
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader className="bg-muted/40">
+            <TableRow>
+              <TableHead>{t('bots.namePrefix')}</TableHead>
+              <TableHead>{t('bots.instance')}</TableHead>
+              <TableHead>{t('bots.status')}</TableHead>
+              <TableHead className="text-right">{t('bots.count')}</TableHead>
+              <TableHead>{t('bots.orchestrationSummary')}</TableHead>
+              <TableHead className="text-right">{t('bots.statusDistribution')}</TableHead>
+              <TableHead className="text-right">{t('bots.actions')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {items.map((session) => (
+              <TableRow key={session.id}>
+                <TableCell className="font-medium">{session.namePrefix}</TableCell>
+                <TableCell>{session.instanceId}</TableCell>
+                <TableCell>{t(`bots.stressStatus_${session.status}`, session.status)}</TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {session.counts.total}/{session.count}
+                </TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {formatOrchestrationSummary(session.orchestrationSummary, t)}
+                </TableCell>
+                <TableCell>
+                  <StressStatusDistribution counts={session.counts} />
+                </TableCell>
+                <TableCell>
+                  <div className="flex justify-end gap-1">
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={session.status !== 'pending' || startSession.isPending}
+                      onClick={() => run('start', session.id)}
+                    >
+                      {t('bots.startSession')}
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={session.status === 'stopped' || stopSession.isPending}
+                      onClick={() => run('stop', session.id)}
+                    >
+                      {t('bots.stopSession')}
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      disabled={!session.orchestrationSummary?.enabled}
+                      onClick={() => setDetailSessionId(session.id)}
+                    >
+                      {t('bots.viewOrchestration')}
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+      <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
+        <span>{t('bots.totalCount', { count: total })}</span>
+        <div className="flex items-center gap-2">
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={page <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+          >
+            {t('bots.prevPage')}
+          </Button>
+          <span>{t('bots.pageOf', { page, totalPages })}</span>
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={page >= totalPages}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          >
+            {t('bots.nextPage')}
+          </Button>
+        </div>
+      </div>
+      <StressSessionDetailDialog
+        sessionId={detailSessionId}
+        onOpenChange={(open) => {
+          if (!open) setDetailSessionId(null)
+        }}
+      />
+    </div>
+  )
+}
+
+function StressStatusDistribution({ counts }: { counts: BotStressSessionCounts }) {
+  const { t } = useTranslation()
+  const entries = Object.entries(counts.byStatus).filter(([, count]) => count > 0)
+  if (entries.length === 0) {
+    return <span className="block text-right text-xs text-muted-foreground">—</span>
+  }
+  return (
+    <div className="flex flex-wrap justify-end gap-1">
+      {entries.map(([status, count]) => (
+        <span key={status} className="rounded border px-1.5 py-0.5 text-xs">
+          {t(`bots.status_${status}`, status)} {count}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function formatOrchestrationSummary(
+  summary: BotStressOrchestrationSummary | undefined,
+  t: ReturnType<typeof useTranslation>['t'],
+) {
+  if (!summary?.enabled) return t('bots.orchestrationNotConfigured')
+  return [
+    t('bots.orchestrationPhaseCount', { count: summary.phaseCount }),
+    summary.loop ? t('bots.orchestrationLoop') : t('bots.orchestrationNoLoop'),
+    t('bots.orchestrationDurationSec', { seconds: summary.durationSec }),
+    summary.behaviors.join('/'),
+  ].join(' · ')
+}
+
+function StressSessionDetailDialog({
+  sessionId,
+  onOpenChange,
+}: {
+  sessionId: number | null
+  onOpenChange: (open: boolean) => void
+}) {
+  const { t } = useTranslation()
+  const open = sessionId !== null
+  const { data: session, isLoading } = useBotStressSession(sessionId)
+  const connected = session?.counts.byStatus.connected ?? 0
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
+        <DialogHeader>
+          <DialogTitle>{t('bots.viewOrchestration')}</DialogTitle>
+        </DialogHeader>
+        <ScrollableDialogBody className="space-y-4 py-1">
+          {isLoading && <p className="text-sm text-muted-foreground">{t('common.loading')}</p>}
+          {session && (
+            <>
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <BotMetric label={t('bots.status')} value={t(`bots.stressStatus_${session.status}`, session.status)} />
+                <BotMetric label={t('bots.count')} value={`${session.counts.total}/${session.count}`} />
+                <BotMetric label={t('bots.connected')} value={String(connected)} />
+                <BotMetric
+                  label={t('bots.orchestrationSummary')}
+                  value={formatOrchestrationSummary(session.orchestrationSummary, t)}
+                />
+              </div>
+              <div className="space-y-2">
+                <FieldLabel>{t('bots.orchestrationYaml')}</FieldLabel>
+                <pre className="max-h-96 overflow-auto rounded-md border bg-muted/30 p-3 text-xs leading-5 whitespace-pre-wrap">
+                  {session.orchestrationYaml || t('bots.orchestrationNotConfigured')}
+                </pre>
+              </div>
+            </>
+          )}
+        </ScrollableDialogBody>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function StressSessionDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const { t } = useTranslation()
+  const { data: instances } = useInstances()
+  const createSession = useCreateBotStressSession()
+  const [instanceId, setInstanceId] = useState('')
+  const [count, setCount] = useState('20')
+  const [namePrefix, setNamePrefix] = useState('stress')
+  const [server, setServer] = useState('')
+  const [port, setPort] = useState('25565')
+  const [auth, setAuth] = useState('offline')
+  const [behavior, setBehavior] = useState('idle')
+  const [orchestrationYaml, setOrchestrationYaml] = useState(DEFAULT_ORCHESTRATION_YAML)
+  const [error, setError] = useState('')
+
+  const instanceOptions: ComboboxOption[] = (instances ?? []).map((inst) => ({
+    value: String(inst.id),
+    label: inst.name,
+  }))
+  const parsedCount = Number(count)
+  const errors = validateFields(
+    { instanceId, count, namePrefix, server, port },
+    {
+      instanceId: [validateRequired],
+      count: [validateRequired, (v) => (Number(v) >= 1 && Number(v) <= 5000 ? '' : t('bots.countRange'))],
+      namePrefix: [validateRequired],
+      server: [validateRequired, validateHost],
+      port: [validateRequired, validatePort],
+    },
+  )
+
+  const reset = () => {
+    setInstanceId('')
+    setCount('20')
+    setNamePrefix('stress')
+    setServer('')
+    setPort('25565')
+    setAuth('offline')
+    setBehavior('idle')
+    setOrchestrationYaml(DEFAULT_ORCHESTRATION_YAML)
+    setError('')
+  }
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    if (hasErrors(errors)) return
+    setError('')
+    createSession.mutate(
+      {
+        instanceId: Number(instanceId),
+        count: parsedCount,
+        behavior,
+        namePrefix,
+        config: { server, port: Number(port), auth },
+        orchestrationYaml: orchestrationYaml.trim() ? orchestrationYaml : undefined,
+      },
+      {
+        onSuccess: () => {
+          onOpenChange(false)
+          reset()
+        },
+        onError: (err: unknown) => {
+          const msg =
+            err instanceof Error && 'response' in err
+              ? (err as { response?: { data?: { message?: string } } }).response?.data?.message
+              : undefined
+          setError(msg || t('bots.stressCreateFailed'))
+        },
+      },
+    )
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
+        <DialogHeader>
+          <DialogTitle>{t('bots.createStressSession')}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+          <ScrollableDialogBody className="space-y-3 py-1">
+            {error && <div className="rounded bg-destructive/10 p-2 text-sm text-destructive">{error}</div>}
+            <div className="space-y-1">
+              <FieldLabel required>{t('bots.instance')}</FieldLabel>
+              <Combobox
+                options={instanceOptions}
+                value={instanceId}
+                onChange={(v: string) => {
+                  setInstanceId(v)
+                  const inst = instances?.find((i) => String(i.id) === v)
+                  if (inst) {
+                    setServer('127.0.0.1')
+                    setPort(String(inst.serverPort && inst.serverPort > 0 ? inst.serverPort : 25565))
+                  }
+                }}
+                allowCustom={false}
+                placeholder={t('bots.selectInstance')}
+                invalid={!!errors.instanceId}
+              />
+              <FieldError error={errors.instanceId} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <FieldLabel required>{t('bots.namePrefix')}</FieldLabel>
+                <Input aria-label={t('bots.namePrefix')} value={namePrefix} onChange={(e) => setNamePrefix(e.target.value)} />
+                <FieldError error={errors.namePrefix} />
+              </div>
+              <div className="space-y-1">
+                <FieldLabel required>{t('bots.count')}</FieldLabel>
+                <Input aria-label={t('bots.count')} value={count} type="number" onChange={(e) => setCount(e.target.value)} />
+                <FieldError error={errors.count} />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="col-span-2 space-y-1">
+                <FieldLabel required>{t('bots.serverAddr')}</FieldLabel>
+                <Input aria-label={t('bots.serverAddr')} value={server} onChange={(e) => setServer(e.target.value)} aria-invalid={!!errors.server} />
+                <FieldError error={errors.server} />
+              </div>
+              <div className="space-y-1">
+                <FieldLabel required>{t('bots.port')}</FieldLabel>
+                <Input aria-label={t('bots.port')} value={port} onChange={(e) => setPort(e.target.value)} type="number" aria-invalid={!!errors.port} />
+                <FieldError error={errors.port} />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <FieldLabel>{t('bots.authMethod')}</FieldLabel>
+                <Select value={auth} onValueChange={setAuth}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="offline">{t('bots.offline')}</SelectItem>
+                    <SelectItem value="microsoft">{t('bots.microsoft')}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <FieldLabel>{t('bots.initialBehavior')}</FieldLabel>
+                <Select value={behavior} onValueChange={setBehavior}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {BEHAVIOR_OPTIONS.map((b) => (
+                      <SelectItem key={b} value={b}>{t(`bots.${b}`)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <FieldLabel>{t('bots.orchestrationYaml')}</FieldLabel>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  onClick={() => setOrchestrationYaml(DEFAULT_ORCHESTRATION_YAML)}
+                >
+                  {t('bots.restoreTemplate')}
+                </Button>
+              </div>
+              <textarea
+                aria-label={t('bots.orchestrationYaml')}
+                className="min-h-72 w-full resize-y rounded-md border border-input bg-transparent px-3 py-2 font-mono text-sm leading-5 shadow-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/40"
+                value={orchestrationYaml}
+                onChange={(e) => setOrchestrationYaml(e.target.value)}
+                spellCheck={false}
+              />
+            </div>
+          </ScrollableDialogBody>
+          <DialogFooter className="pt-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                onOpenChange(false)
+                reset()
+              }}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button type="submit" disabled={createSession.isPending || hasErrors(errors)}>
+              {createSession.isPending ? t('common.creating') : t('common.create')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /** 分组总览：每组一卡/行（含多段健康条 + 总数 + 批量 + 展开窥视 + 在控制台打开）。 */
 function GroupOverview({
   groupBy,
@@ -342,12 +772,14 @@ function GroupOverview({
   baseFilter,
   loading,
   view,
+  onOpenBot,
 }: {
   groupBy: GroupByDim
   groups: BotSummaryGroup[]
   baseFilter: OverviewFilter
   loading: boolean
   view: ViewMode
+  onOpenBot: (id: number) => void
 }) {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -397,7 +829,7 @@ function GroupOverview({
               onToggleExpand={() => toggleExpand(group.key)}
               actions={<GroupActions groupBy={groupBy} group={group} baseFilter={baseFilter} />}
             >
-              <GroupPeek params={groupFilter(groupBy, group, baseFilter)} />
+              <GroupPeek params={groupFilter(groupBy, group, baseFilter)} onOpenBot={onOpenBot} />
             </BotWorktableCard>
           ))}
         </div>
@@ -424,6 +856,7 @@ function GroupOverview({
                   onCheck={() => toggle(group.key)}
                   expanded={expanded === group.key}
                   onToggleExpand={() => toggleExpand(group.key)}
+                  onOpenBot={onOpenBot}
                 />
               ))}
             </TableBody>
@@ -472,6 +905,7 @@ function GroupRow({
   onCheck,
   expanded,
   onToggleExpand,
+  onOpenBot,
 }: {
   groupBy: GroupByDim
   group: BotSummaryGroup
@@ -480,6 +914,7 @@ function GroupRow({
   onCheck: () => void
   expanded: boolean
   onToggleExpand: () => void
+  onOpenBot: (id: number) => void
 }) {
   const { t } = useTranslation()
 
@@ -512,7 +947,7 @@ function GroupRow({
       {expanded && (
         <TableRow className="bg-muted/30 hover:bg-muted/30">
           <TableCell colSpan={5} className="p-0">
-            <GroupPeek params={groupFilter(groupBy, group, baseFilter)} />
+            <GroupPeek params={groupFilter(groupBy, group, baseFilter)} onOpenBot={onOpenBot} />
           </TableCell>
         </TableRow>
       )}
@@ -770,7 +1205,7 @@ function BehaviorConfigDialog({
 }
 
 /** 展开窥视：仅拉该组首页 Bot（分页，绝不全量），用于核对组内成员。 */
-function GroupPeek({ params }: { params: BotListParams }) {
+function GroupPeek({ params, onOpenBot }: { params: BotListParams; onOpenBot: (id: number) => void }) {
   const { t } = useTranslation()
   const [page, setPage] = useState(1)
   const peekSize = 10
@@ -791,7 +1226,7 @@ function GroupPeek({ params }: { params: BotListParams }) {
     <div className="px-4 py-3">
       <ul className="divide-y text-sm">
         {items.map((bot) => (
-          <PeekRow key={bot.id} bot={bot} />
+          <PeekRow key={bot.id} bot={bot} onOpen={() => onOpenBot(bot.id)} />
         ))}
       </ul>
       <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
@@ -828,12 +1263,14 @@ const STATUS_COLOR: Record<string, string> = {
   pending: 'text-muted-foreground',
 }
 
-/** 窥视行：单个 Bot 的名称 / 状态 / 行为（只读，单 Bot 详情见 FR-041）。 */
-function PeekRow({ bot }: { bot: BotInfo }) {
+/** 窥视行：单个 Bot 的名称 / 状态 / 行为，并可打开实时详情。 */
+function PeekRow({ bot, onOpen }: { bot: BotInfo; onOpen: () => void }) {
   const { t } = useTranslation()
   return (
     <li className="flex items-center justify-between py-1.5">
-      <span className="truncate font-medium">{bot.name}</span>
+      <button type="button" onClick={onOpen} className="truncate text-left font-medium hover:underline">
+        {bot.name}
+      </button>
       <div className="flex items-center gap-4">
         <span className={cn('text-xs', STATUS_COLOR[bot.status] ?? 'text-muted-foreground')}>
           {t(`bots.status_${bot.status}`, bot.status)}
@@ -841,9 +1278,137 @@ function PeekRow({ bot }: { bot: BotInfo }) {
         <span className="w-16 text-right text-xs text-muted-foreground">
           {t(`bots.${bot.behavior}`, bot.behavior)}
         </span>
+        <Button size="xs" variant="ghost" onClick={onOpen}>
+          <Activity className="size-3" />
+          {t('bots.detail')}
+        </Button>
       </div>
     </li>
   )
+}
+
+function BotDetailDialog({ botId, onOpenChange }: { botId: number | null; onOpenChange: (open: boolean) => void }) {
+  const { t } = useTranslation()
+  const { data: bot } = useBot(botId ?? 0)
+  const realtime = useBotEvents(botId)
+  const sendCommand = useSendBotCommand()
+  const [command, setCommand] = useState('')
+  const open = botId !== null
+
+  const status = realtime.status || bot?.status || ''
+  const behavior = realtime.behavior || bot?.behavior || ''
+  const health = realtime.health
+  const food = realtime.food
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    const text = command.trim()
+    if (!botId || !text) return
+    sendCommand.mutate(
+      { id: botId, command: text },
+      {
+        onSuccess: () => setCommand(''),
+        onError: () => toast.error(t('bots.commandFailed')),
+      },
+    )
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
+        <DialogHeader>
+          <DialogTitle>{bot ? bot.name : t('bots.detail')}</DialogTitle>
+        </DialogHeader>
+        <ScrollableDialogBody className="space-y-4 py-1">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <BotMetric label={t('bots.status')} value={status ? t(`bots.status_${status}`, status) : '—'} />
+            <BotMetric label={t('bots.behavior')} value={behavior ? t(`bots.${behavior}`, behavior) : '—'} />
+            <BotMetric label={t('bots.health')} value={health == null ? '—' : String(Math.round(health))} />
+            <BotMetric label={t('bots.food')} value={food == null ? '—' : String(food)} />
+          </div>
+
+          {realtime.position && (
+            <div className="rounded-lg border px-3 py-2 text-sm text-muted-foreground">
+              {t('bots.position')}: {formatPosition(realtime.position)}
+            </div>
+          )}
+
+          <form onSubmit={submit} className="flex gap-2">
+            <Input
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              placeholder={t('bots.commandPlaceholder')}
+            />
+            <Button type="submit" disabled={!command.trim() || sendCommand.isPending}>
+              <Send className="size-4" />
+              {t('bots.sendCommand')}
+            </Button>
+          </form>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-medium">{t('bots.realtimeEvents')}</span>
+              <span className="text-xs text-muted-foreground">
+                {realtime.connected ? t('bots.streamConnected') : t('bots.streamConnecting')}
+              </span>
+            </div>
+            <div className="max-h-72 overflow-auto rounded-lg border">
+              {realtime.events.length === 0 ? (
+                <p className="px-3 py-6 text-center text-sm text-muted-foreground">{t('bots.noEvents')}</p>
+              ) : (
+                <ul className="divide-y text-sm">
+                  {realtime.events.map((event, index) => (
+                    <li key={`${event.timestamp}-${index}`} className="px-3 py-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="font-medium">{t(`bots.event_${event.type}`, event.type)}</span>
+                        <span className="text-xs text-muted-foreground">{formatEventTime(event.timestamp)}</span>
+                      </div>
+                      <p className="mt-1 break-words text-muted-foreground">{formatBotEvent(event)}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </ScrollableDialogBody>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function BotMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border px-3 py-2">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 truncate font-medium">{value}</p>
+    </div>
+  )
+}
+
+function formatPosition(pos: { x: number; y: number; z: number }) {
+  return `${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}`
+}
+
+function formatEventTime(timestamp: number) {
+  const value = timestamp > 10_000_000_000 ? timestamp : timestamp * 1000
+  return new Date(value).toLocaleTimeString()
+}
+
+function formatBotEvent(event: BotRealtimeEvent) {
+  const data = event.data
+  if (event.type === 'chat') {
+    return `${data.username ?? ''}: ${data.message ?? ''}`.trim()
+  }
+  if (event.type === 'error') {
+    return String(data.error ?? '')
+  }
+  if (event.type === 'behavior-changed') {
+    return String(data.behavior ?? '')
+  }
+  if (event.type === 'command-sent') {
+    return String(data.command ?? '')
+  }
+  return JSON.stringify(data)
 }
 
 interface CreateBotDialogProps {

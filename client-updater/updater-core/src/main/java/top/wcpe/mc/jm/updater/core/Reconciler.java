@@ -177,6 +177,10 @@ final class Reconciler {
             result.skipped++;
             return;
         }
+        if (exists && tryPatchAndPlace(entry, target)) {
+            result.downloaded++;
+            return;
+        }
 
         // 流式下载并原子放置（FR-257：64KB 缓冲，不再全量读进 byte[]）。
         downloadAndPlace(entry, target);
@@ -204,6 +208,10 @@ final class Reconciler {
     private static final String DL_TMP_SUFFIX = ".jmtmp.dl";
     /** 解压输出临时后缀（仅 zstd 路径用）。 */
     private static final String OUT_TMP_SUFFIX = ".jmtmp.out";
+    /** patch 下载临时后缀。 */
+    private static final String PATCH_TMP_SUFFIX = ".jmtmp.patch";
+    /** zstd-jni raw dict API 需要 byte[]；超过此阈值直接回退完整制品，避免旧文件进 Java 堆。 */
+    private static final long PATCH_DICT_HEAP_LIMIT = 64L * 1024L * 1024L;
 
     /**
      * 流式下载制品 → 校验 → 解压 → 原子放置（FR-257）。
@@ -245,6 +253,81 @@ final class Reconciler {
 
         // 3. 按 codec 放置：none 直接 rename；zstd 流式解压后再 rename。
         placeDecoded(dlTmp, target, entry);
+    }
+
+    /** 本地旧文件 hash 命中时优先应用 patch；任一 patch 错误都回退完整制品。 */
+    private boolean tryPatchAndPlace(Manifest.FileEntry entry, Path target) {
+        if (!entry.hasPatch()) {
+            return false;
+        }
+        try {
+            String localSha = Hashes.sha256(target);
+            if (!localSha.equalsIgnoreCase(entry.patchOldSha256)) {
+                return false;
+            }
+            applyPatchAndPlace(entry, target);
+            return true;
+        } catch (IOException e) {
+            log.warn("patch 应用失败，回退完整制品 " + entry.path + ": " + e.getMessage());
+            return false;
+        }
+    }
+
+    /** 下载 patch 制品 → 用旧文件作字典解码 → 校验新文件 sha256 → 原子替换。 */
+    private void applyPatchAndPlace(Manifest.FileEntry entry, Path target) throws IOException {
+        Path patchTmp = target.resolveSibling(target.getFileName() + PATCH_TMP_SUFFIX);
+        Path outTmp = target.resolveSibling(target.getFileName() + OUT_TMP_SUFFIX);
+        try {
+            downloadPatchArtifact(entry, patchTmp);
+            decodePatchToOutput(entry, target, patchTmp, outTmp);
+            atomicMove(outTmp, target);
+        } finally {
+            Files.deleteIfExists(patchTmp);
+            Files.deleteIfExists(outTmp);
+        }
+    }
+
+    private void downloadPatchArtifact(Manifest.FileEntry entry, Path patchTmp) throws IOException {
+        reporter.beginFile(entry.path);
+        LongConsumer onBytes = reporter.sink();
+        try (InputStream net = transport.fetchArtifactStream(entry.patchArtifactSha256, 0);
+             OutputStream out = Files.newOutputStream(patchTmp,
+                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
+            byte[] buf = new byte[STREAM_BUF];
+            int n;
+            while ((n = net.read(buf)) != -1) {
+                out.write(buf, 0, n);
+                onBytes.accept((long) n);
+            }
+        }
+        if (!Hashes.sha256(patchTmp).equalsIgnoreCase(entry.patchArtifactSha256)) {
+            throw new IOException("patch 制品 hash 不符 期望=" + entry.patchArtifactSha256);
+        }
+    }
+
+    private void decodePatchToOutput(Manifest.FileEntry entry, Path oldContent, Path patchTmp, Path outTmp)
+            throws IOException {
+        long oldSize = Files.size(oldContent);
+        if (oldSize > PATCH_DICT_HEAP_LIMIT) {
+            throw new IOException("patch 字典文件过大");
+        }
+        byte[] oldBytes = Files.readAllBytes(oldContent);
+        MessageDigest md = newSha256Digest();
+        try (InputStream fileIn = Files.newInputStream(patchTmp);
+             InputStream decoded = Codec.decodePatchStream(fileIn, entry.patchArtifactCodec, oldBytes);
+             DigestInputStream din = new DigestInputStream(decoded, md);
+             OutputStream out = Files.newOutputStream(outTmp,
+                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
+            byte[] buf = new byte[STREAM_BUF];
+            int n;
+            while ((n = din.read(buf)) != -1) {
+                out.write(buf, 0, n);
+            }
+        }
+        String actual = Hashes.hex(md.digest());
+        if (!actual.equalsIgnoreCase(entry.patchNewSha256) || !actual.equalsIgnoreCase(entry.sha256)) {
+            throw new IOException("patch 后 sha256 校验失败 期望=" + entry.sha256 + " 实际=" + actual);
+        }
     }
 
     /**

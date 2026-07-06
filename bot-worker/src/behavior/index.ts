@@ -5,10 +5,16 @@
 
 import { Behavior } from './base.js'
 import { CustomBehavior, type CustomBehaviorConfig } from './custom.js'
+import { OrchestratedBehavior, type OrchestratedBehaviorConfig } from './orchestrated.js'
+import { parseBehaviorTargetPoints } from './targets.js'
 
 export { Behavior } from './base.js'
 export { CustomBehavior } from './custom.js'
+export { OrchestratedBehavior } from './orchestrated.js'
 export type { BehaviorStep, CustomBehaviorConfig } from './custom.js'
+export type { OrchestratedBehaviorConfig } from './orchestrated.js'
+export { parseBehaviorTargetPoints } from './targets.js'
+export type { BehaviorPoint } from './targets.js'
 
 /**
  * 空闲行为：Bot 站立不动。
@@ -164,21 +170,38 @@ export class GuardBehavior extends Behavior {
 export function createBehavior(
   botId: string,
   type: string,
-  targetOrConfig?: string | CustomBehaviorConfig
+  targetOrConfig?: string | CustomBehaviorConfig | OrchestratedBehaviorConfig
 ): Behavior {
   switch (type) {
     case 'follow':
       return new FollowBehavior(botId, typeof targetOrConfig === 'string' ? targetOrConfig : '')
-    case 'patrol':
-      return new PatrolBehavior(botId)
-    case 'guard':
-      return new GuardBehavior(botId)
+    case 'patrol': {
+      const behavior = new PatrolBehavior(botId)
+      if (typeof targetOrConfig === 'string') {
+        behavior.setWaypoints(parseBehaviorTargetPoints(targetOrConfig))
+      }
+      return behavior
+    }
+    case 'guard': {
+      const behavior = new GuardBehavior(botId)
+      if (typeof targetOrConfig === 'string') {
+        const [guardPos] = parseBehaviorTargetPoints(targetOrConfig)
+        if (guardPos) behavior.setGuardPosition(guardPos)
+      }
+      return behavior
+    }
     case 'custom': {
       const config = targetOrConfig && typeof targetOrConfig === 'object'
         ? targetOrConfig as CustomBehaviorConfig
         : { steps: [] }
       return new CustomBehavior(botId, config)
     }
+    case 'orchestrated':
+      return new OrchestratedBehavior(
+        botId,
+        targetOrConfig as OrchestratedBehaviorConfig,
+        createBehavior
+      )
     case 'idle':
     default:
       return new IdleBehavior(botId)

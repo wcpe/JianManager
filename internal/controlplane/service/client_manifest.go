@@ -26,6 +26,16 @@ type ManifestArtifact struct {
 	Codec string `json:"codec"`
 }
 
+// ManifestPatch manifest 单文件的 zstd patch-from 增量制品引用（FR-098）。
+type ManifestPatch struct {
+	// OldSHA256 patch 适用的本地旧文件原始内容 hash。
+	OldSHA256 string `json:"oldSha256"`
+	// NewSHA256 patch 应产出的新文件原始内容 hash，通常等于 files[].sha256。
+	NewSHA256 string `json:"newSha256"`
+	// Artifact patch 制品引用，codec 固定为 zstd-patch。
+	Artifact ManifestArtifact `json:"artifact"`
+}
+
 // ManifestFile manifest 单文件条目（contract §2 files[]）。
 // sha256/md5/size 描述**解压后原始内容**（强校验/快筛）；artifact 描述下载制品（压缩态）。
 type ManifestFile struct {
@@ -43,6 +53,8 @@ type ManifestFile struct {
 	Platform string `json:"platform"`
 	// Artifact 下载制品引用。
 	Artifact ManifestArtifact `json:"artifact"`
+	// Patch 可选 patch-from 增量制品；客户端无法应用时回退 Artifact。
+	Patch *ManifestPatch `json:"patch,omitempty"`
 }
 
 // ValidSyncMode 报告 sync 取值是否合法（strict|once|ignore）。
@@ -93,16 +105,16 @@ type ManifestAgent struct {
 // 类型名保留「Signed」以兼容既有引用（FR-256 起不再签名，sig 段已去）。
 // MarshalJSON 走 manifestToTree 单一真源：全平台文件 platform 统一为 JSON null。
 type SignedManifest struct {
-	SchemaVersion int            `json:"schemaVersion"`
-	Channel       string         `json:"channel"`
-	Version       int            `json:"version"`
-	IssuedAt      string         `json:"issuedAt"`
-	ManagedDirs   []string       `json:"managedDirs"`
+	SchemaVersion int      `json:"schemaVersion"`
+	Channel       string   `json:"channel"`
+	Version       int      `json:"version"`
+	IssuedAt      string   `json:"issuedAt"`
+	ManagedDirs   []string `json:"managedDirs"`
 	// CleanExclude 运营自定义追加排除（FR-255）：命中前缀的路径永不删（叠加在 PLAYER_ZONE 之上）。
 	// 空则省略（omitempty）——老 manifest canonical 字节不变，schemaVersion 维持 1（方案 A）。
 	CleanExclude []string       `json:"cleanExclude,omitempty"`
-	Files         []ManifestFile `json:"files"`
-	Agent         *ManifestAgent `json:"agent,omitempty"`
+	Files        []ManifestFile `json:"files"`
+	Agent        *ManifestAgent `json:"agent,omitempty"`
 }
 
 // MarshalJSON 从 manifestToTree 生成响应 JSON，确保全平台 platform 输出为 null（见 SignedManifest 文档）。
@@ -143,7 +155,7 @@ func stringsToTree(ss []string) []any {
 func filesToTree(files []ManifestFile) []any {
 	out := make([]any, len(files))
 	for i, f := range files {
-		out[i] = map[string]any{
+		item := map[string]any{
 			"path":     f.Path,
 			"sha256":   f.SHA256,
 			"md5":      f.MD5,
@@ -156,6 +168,18 @@ func filesToTree(files []ManifestFile) []any {
 				"codec":  f.Artifact.Codec,
 			},
 		}
+		if f.Patch != nil {
+			item["patch"] = map[string]any{
+				"oldSha256": f.Patch.OldSHA256,
+				"newSha256": f.Patch.NewSHA256,
+				"artifact": map[string]any{
+					"sha256": f.Patch.Artifact.SHA256,
+					"size":   f.Patch.Artifact.Size,
+					"codec":  f.Patch.Artifact.Codec,
+				},
+			}
+		}
+		out[i] = item
 	}
 	return out
 }

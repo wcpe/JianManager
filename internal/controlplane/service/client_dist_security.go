@@ -870,6 +870,9 @@ func manifestFilesContainSHA(files []ManifestFile, sha string) bool {
 		if f.Artifact.SHA256 == sha {
 			return true
 		}
+		if f.Patch != nil && f.Patch.Artifact.SHA256 == sha {
+			return true
+		}
 	}
 	return false
 }

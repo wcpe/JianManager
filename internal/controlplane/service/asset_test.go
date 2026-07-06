@@ -208,6 +208,11 @@ func TestDelete_RejectsPublishedClientFile(t *testing.T) {
 		Sync:     "strict",
 		Platform: "",
 		Artifact: ManifestArtifact{SHA256: asset.SHA256, Size: asset.Size, Codec: "none"},
+		Patch: &ManifestPatch{
+			OldSHA256: "old-raw-sha",
+			NewSHA256: "raw-sha",
+			Artifact:  ManifestArtifact{SHA256: asset.SHA256, Size: asset.Size, Codec: "zstd-patch"},
+		},
 	}}
 	raw, err := json.Marshal(files)
 	require.NoError(t, err)
@@ -218,7 +223,7 @@ func TestDelete_RejectsPublishedClientFile(t *testing.T) {
 	var inUse *AssetInUseError
 	require.ErrorAs(t, err, &inUse)
 	require.Equal(t, AssetInUsePublishedClientFile, inUse.Reason)
-	require.Equal(t, int64(1), inUse.Count)
+	require.Equal(t, int64(2), inUse.Count)
 	require.FileExists(t, svc.AbsPath(asset))
 }
 

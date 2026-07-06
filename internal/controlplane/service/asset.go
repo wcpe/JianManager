@@ -379,6 +379,9 @@ func (s *AssetService) countClientVersionReferences(sha string) (int64, error) {
 			if f.Artifact.SHA256 == sha {
 				count++
 			}
+			if f.Patch != nil && f.Patch.Artifact.SHA256 == sha {
+				count++
+			}
 		}
 	}
 	return count, nil

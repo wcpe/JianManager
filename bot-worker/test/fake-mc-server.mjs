@@ -23,6 +23,7 @@ function arg(name, def) {
 
 const PORT = parseInt(arg('port', '25599'), 10)
 const VERSION = arg('version', '1.8.9')
+const MAX_PLAYERS = parseInt(arg('max-players', '100'), 10)
 
 /** username -> client, the live "online players" set the `list` command reports. */
 const players = new Map()
@@ -34,7 +35,7 @@ const server = createServer({
   port: PORT,
   version: VERSION,
   motd: 'JianManager E2E fake server',
-  maxPlayers: 20,
+  maxPlayers: MAX_PLAYERS,
 })
 
 server.on('connection', (client) => {
@@ -60,7 +61,7 @@ server.on('login', (client) => {
     gameMode: 0,
     dimension: 0,
     difficulty: 0,
-    maxPlayers: 20,
+    maxPlayers: MAX_PLAYERS,
     reducedDebugInfo: false,
   })
   client.write('position', { x: 0, y: 64, z: 0, yaw: 0, pitch: 0, flags: 0x00 })
@@ -100,7 +101,7 @@ process.stdin.on('data', (chunk) => {
 function handleConsole(line) {
   if (line === 'list') {
     const names = [...players.keys()]
-    console.log(`There are ${names.length} of a max of 20 players online: ${names.join(', ')}`)
+    console.log(`There are ${names.length} of a max of ${MAX_PLAYERS} players online: ${names.join(', ')}`)
   } else if (line.startsWith('say ')) {
     console.log(`[Server] ${line.slice(4)}`)
   } else if (line === 'stop') {

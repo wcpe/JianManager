@@ -55,6 +55,10 @@ type Server struct {
 	// botMgr 管理本节点 Bot（spawn bot-worker Node 子进程，stdin/stdout IPC）。参见 ADR-006。
 	// 为 nil 表示本节点未启用 Bot 能力，相关 RPC 返回明确错误。由 SetBotManager 注入。
 	botMgr *bot.Manager
+	// botEventMu 保护 botEventSubs，StreamBotEvents 订阅/取消订阅时加锁。
+	botEventMu     sync.Mutex
+	botEventSubs   []chan *bot.BotWorkerEvent
+	botEventCancel func()
 
 	// eventMu 保护 eventSubs，StreamInstanceEvents 订阅/取消订阅时加锁。
 	eventMu   sync.Mutex
@@ -654,7 +658,42 @@ func (s *Server) StreamInstanceEvents(req *workerpb.StreamInstanceEventsRequest,
 // Bot 状态（connecting/connected/disconnected）由 CP 经 ListBots 拉取回填（懒拉取，见 BotService.refreshStatus）。
 
 // SetBotManager 注入 Bot 管理器，由 Worker 主进程在启动时设置。
-func (s *Server) SetBotManager(m *bot.Manager) { s.botMgr = m }
+func (s *Server) SetBotManager(m *bot.Manager) {
+	s.botEventMu.Lock()
+	if s.botEventCancel != nil {
+		s.botEventCancel()
+		s.botEventCancel = nil
+	}
+	s.botMgr = m
+	s.botEventMu.Unlock()
+
+	if m == nil {
+		return
+	}
+	events, cancel := m.SubscribeEvents(128)
+	s.botEventMu.Lock()
+	s.botEventCancel = cancel
+	s.botEventMu.Unlock()
+
+	go func() {
+		for event := range events {
+			s.dispatchBotEvent(event)
+		}
+	}()
+}
+
+// dispatchBotEvent 把 bot-worker 事件非阻塞地扇出给所有 StreamBotEvents 订阅者。
+func (s *Server) dispatchBotEvent(event *bot.BotWorkerEvent) {
+	s.botEventMu.Lock()
+	defer s.botEventMu.Unlock()
+	for _, ch := range s.botEventSubs {
+		select {
+		case ch <- event:
+		default:
+			// 慢订阅者跳过本帧，避免阻塞 bot-worker stdout 读取循环。
+		}
+	}
+}
 
 // SetSearchIgnore 设置全文搜索的追加忽略规则（worker.yml search.ignore，FR-074）。
 // 叠加在内置默认忽略集之上，由 Worker 主进程在启动时按配置注入。须在首次 SearchFiles 前调用。
@@ -760,4 +799,159 @@ func (s *Server) ListBots(ctx context.Context, req *workerpb.ListBotsRequest) (*
 		out = append(out, info)
 	}
 	return &workerpb.ListBotsResponse{Bots: out}, nil
+}
+
+// StreamBotEvents 推送 Bot 实时状态与行为事件（FR-041）。
+func (s *Server) StreamBotEvents(req *workerpb.StreamBotEventsRequest, stream workerpb.WorkerService_StreamBotEventsServer) error {
+	if s.botMgr == nil {
+		return fmt.Errorf("本节点未启用 Bot 能力")
+	}
+
+	filter := req.BotUuid
+	ch := make(chan *bot.BotWorkerEvent, 128)
+	s.botEventMu.Lock()
+	s.botEventSubs = append(s.botEventSubs, ch)
+	s.botEventMu.Unlock()
+	defer func() {
+		s.botEventMu.Lock()
+		for i, sub := range s.botEventSubs {
+			if sub == ch {
+				s.botEventSubs = append(s.botEventSubs[:i], s.botEventSubs[i+1:]...)
+				break
+			}
+		}
+		s.botEventMu.Unlock()
+		close(ch)
+	}()
+
+	slog.Info("StreamBotEvents 订阅开始", "botUuid", filter)
+	if err := s.sendBotStateSnapshot(filter, stream); err != nil {
+		return err
+	}
+
+	ctx := stream.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case event, ok := <-ch:
+			if !ok {
+				return nil
+			}
+			for _, pbEvt := range botWorkerEventToProto(event, filter) {
+				if err := stream.Send(pbEvt); err != nil {
+					return err
+				}
+			}
+		}
+	}
+}
+
+func (s *Server) sendBotStateSnapshot(filter string, stream workerpb.WorkerService_StreamBotEventsServer) error {
+	bots := s.botMgr.GetBots()
+	for _, b := range bots {
+		if filter != "" && b.ID != filter {
+			continue
+		}
+		data, err := json.Marshal(botStateEventData(b))
+		if err != nil {
+			continue
+		}
+		if err := stream.Send(&workerpb.BotEvent{
+			BotUuid:   b.ID,
+			Type:      "state",
+			Data:      string(data),
+			Timestamp: time.Now().UnixMilli(),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func botWorkerEventToProto(event *bot.BotWorkerEvent, filter string) []*workerpb.BotEvent {
+	now := time.Now().UnixMilli()
+	switch event.Evt {
+	case "bot-state":
+		events := make([]*workerpb.BotEvent, 0, len(event.Bots))
+		for i := range event.Bots {
+			bs := event.Bots[i]
+			if filter != "" && bs.ID != filter {
+				continue
+			}
+			data, err := json.Marshal(botStateEventData(&bs))
+			if err != nil {
+				continue
+			}
+			events = append(events, &workerpb.BotEvent{
+				BotUuid:   bs.ID,
+				Type:      "state",
+				Data:      string(data),
+				Timestamp: now,
+			})
+		}
+		return events
+	case "bot-event":
+		if filter != "" && event.BotID != filter {
+			return nil
+		}
+		data := string(event.Data)
+		if data == "" {
+			data = "{}"
+		}
+		return []*workerpb.BotEvent{{
+			BotUuid:   event.BotID,
+			Type:      event.Type,
+			Data:      data,
+			Timestamp: now,
+		}}
+	case "bot-error":
+		if filter != "" && event.BotID != filter {
+			return nil
+		}
+		data, _ := json.Marshal(map[string]string{"error": event.Error})
+		return []*workerpb.BotEvent{{
+			BotUuid:   event.BotID,
+			Type:      "error",
+			Data:      string(data),
+			Timestamp: now,
+		}}
+	case "script-progress":
+		if filter != "" && event.BotID != filter {
+			return nil
+		}
+		data, _ := json.Marshal(map[string]any{
+			"scriptId": event.ScriptID,
+			"progress": event.Progress,
+			"total":    event.Total,
+			"status":   event.Status,
+			"step":     event.Step,
+		})
+		return []*workerpb.BotEvent{{
+			BotUuid:   event.BotID,
+			Type:      "script-progress",
+			Data:      string(data),
+			Timestamp: now,
+		}}
+	default:
+		return nil
+	}
+}
+
+func botStateEventData(state *bot.BotState) map[string]any {
+	data := map[string]any{
+		"status":   state.Status,
+		"name":     state.Name,
+		"behavior": state.Behavior,
+	}
+	if state.Health != 0 {
+		data["health"] = state.Health
+	}
+	if state.Food != 0 {
+		data["food"] = state.Food
+	}
+	if state.Position != nil {
+		data["position"] = state.Position
+	}
+	return data
 }

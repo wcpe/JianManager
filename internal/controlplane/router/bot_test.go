@@ -1,15 +1,24 @@
 package router
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"gorm.io/gorm"
 
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/middleware"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/controlplane/service"
+	workerpb "github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // makeBot 直接向库插入一个指定状态/行为的 Bot，返回其 ID。
@@ -38,6 +47,75 @@ func parseBotList(t *testing.T, w *httptest.ResponseRecorder) (items []interface
 	return
 }
 
+type fakeBotEventWorker struct {
+	workerpb.WorkerServiceClient
+	events []*workerpb.BotEvent
+}
+
+func (f *fakeBotEventWorker) StreamBotEvents(context.Context, *workerpb.StreamBotEventsRequest, ...grpc.CallOption) (workerpb.WorkerService_StreamBotEventsClient, error) {
+	return &fakeBotEventStream{events: f.events}, nil
+}
+
+type fakeBotEventStream struct {
+	grpc.ClientStream
+	events []*workerpb.BotEvent
+	index  int
+}
+
+func (s *fakeBotEventStream) Recv() (*workerpb.BotEvent, error) {
+	if s.index >= len(s.events) {
+		return nil, io.EOF
+	}
+	evt := s.events[s.index]
+	s.index++
+	return evt, nil
+}
+
+func TestBot_Events_SSE(t *testing.T) {
+	db := setupTestDB(t)
+	node := createTestNode(t, db)
+	inst := &model.Instance{
+		NodeID:       node.ID,
+		Name:         "inst",
+		Type:         model.InstanceTypeMinecraftJava,
+		ProcessType:  model.ProcessTypeDirect,
+		StartCommand: "java -jar server.jar",
+		ServerPort:   25565,
+	}
+	require.NoError(t, db.Create(inst).Error)
+	bot := &model.Bot{InstanceID: inst.ID, Name: "GuardBot", Status: model.BotStatusConnected}
+	require.NoError(t, db.Create(bot).Error)
+
+	pool := cpgrpc.NewClientPool()
+	pool.SetWorkerClientForTest(node.UUID, &fakeBotEventWorker{events: []*workerpb.BotEvent{{
+		BotUuid:   bot.UUID,
+		Type:      "chat",
+		Data:      `{"message":"hello"}`,
+		Timestamp: 123,
+	}}})
+
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(func(c *gin.Context) {
+		c.Set(middleware.CtxAccess, &service.UserAccess{IsPlatformAdmin: true})
+		c.Next()
+	})
+	NewBotHandler(service.NewBotService(db, pool), service.NewAuthzService(db)).RegisterRoutes(r.Group("/api/v1"))
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bots/"+itoa(bot.ID)+"/events", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
+	body := w.Body.String()
+	assert.Contains(t, body, "event: init")
+	assert.Contains(t, body, "event: bot")
+	assert.Contains(t, body, `"type":"chat"`)
+	assert.Contains(t, body, `"message":"hello"`)
+	assert.False(t, strings.Contains(body, "STREAM_UNAVAILABLE"))
+}
+
 // --- 分页 ---
 
 func TestBot_List_Pagination(t *testing.T) {
@@ -49,12 +127,12 @@ func TestBot_List_Pagination(t *testing.T) {
 	createBotsInDB(t, db, inst, 25)
 
 	tests := []struct {
-		name          string
-		query         string
-		wantItems     int
-		wantTotal     int
-		wantPage      int
-		wantPageSize  int
+		name         string
+		query        string
+		wantItems    int
+		wantTotal    int
+		wantPage     int
+		wantPageSize int
 	}{
 		{"默认分页", "", 20, 25, 1, 20},
 		{"第二页", "?page=2&pageSize=20", 5, 25, 2, 20},
@@ -158,9 +236,9 @@ func TestBot_Summary_GroupBy(t *testing.T) {
 		groupBy    string
 		wantGroups int
 		// 校验某个 key 的 total/online
-		checkKey    string
-		wantTotal   float64
-		wantOnline  float64
+		checkKey   string
+		wantTotal  float64
+		wantOnline float64
 	}{
 		{"按实例", "instance", 2, itoa(instA), 2, 1},
 		{"按节点", "node", 2, itoa(nodeB.ID), 1, 1},

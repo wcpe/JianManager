@@ -62,6 +62,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-266（updater-core 构建元信息内嵌与展示：jar 内写版本 / Git commit / dirty / buildTime，CP 归档读取并在 Core 版本页展示，紧急 hotfix 仍可直接上传）→ `docs/specs/updater-core-build-metadata/spec.md`（已交付@v0.13.0）
 - FR-267~272（高密度控制台重塑 2026-07-02）：A+C Jian 绿默认视觉底座 / 页眉节点作用域 + 侧栏 IA + 页面归位 / 服务器统一控制台 `/instances/:id` / 节点控制台与高密度服务器列表 / 平台首页高密度总览 / 全站 A+C 皮肤收口 → `docs/specs/console-redesign/design.md`（已交付@v0.13.0）；关联 ADR-055/056/057；使用既有 mock-api 完成前端原型，不新增真实后端接口。
 - FR-273（通用组件包与控件博物馆）：抽出 `@jianmanager/ui` 通用 UI/token/charts 包，主应用消费组件包，并新增 `web/wiki` 控件博物馆展示第一版控件与常用状态矩阵 → `docs/specs/component-package-wiki/spec.md`；关联 ADR-058。
+- FR-274（Bot 压测会话 YAML 动作编排与 50 Bot 稳定验收，增强 FR-042）→ `docs/specs/bot-stress-yaml-orchestration/spec.md`
 - 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
 
 | 编号 | 需求 | 优先级 | 状态 |
@@ -106,8 +107,8 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-038 | Bot 规模化后端 API | — | ✅ 已交付@v0.3.0 |
 | FR-039 | 控制台实例内 Bot 管理段 | — | ✅ 已交付@v0.3.0 |
 | FR-040 | 全局 Bot 管理页重构 | — | ✅ 已交付@v0.3.0 |
-| FR-041 | Bot 实时遥测与单 Bot 详情面板（含 StreamBotEvents 与位置/血量/背包等富详情） | P2 | ⏸️ 已延后 |
-| FR-042 | Bot 压测会话编排 UI（含 `/api/v1/bots/stress-test` 后端会话 API） | P2 | ⏸️ 已延后 |
+| FR-041 | Bot 实时遥测与单 Bot 详情面板 | P2 | ✅ 已交付@v0.13.0 |
+| FR-042 | Bot 压测会话编排 UI | P2 | ✅ 已交付@v0.13.0 |
 | FR-043 | 全链路运维打通（节点→实例→终端→Bot 进服） | — | ✅ 已交付@v0.3.0 |
 | FR-044 | 项目自包含便携运行时（FHS 数据根 + 核心缓存） | — | ✅ 已交付@v0.3.0 |
 | FR-045 | 制品库（内容寻址 + 完整性校验） | — | ✅ 已交付@v0.3.0 |
@@ -163,7 +164,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-095 | 分发统计后台 | — | ✅ 已交付@v0.8.0 |
 | FR-096 | 分发端点应用层（L7）防护 | — | ✅ 已交付@v0.8.0 |
 | FR-097 | 自有 `.jmpack` 打包（压缩 + 签名，格式删除） | — | ❌ 已废弃（见 ADR-054） |
-| FR-098 | 块级二进制 diff 增量发布 | P2 | ⏸️ 已延后 |
+| FR-098 | 块级二进制 diff 增量发布 | P2 | ✅ 已交付@v0.13.0 |
 | FR-099 | 客户端 OTA 更新进度窗口（进度条 + 速度 + ETA） | — | ✅ 已交付@v0.8.0 |
 | FR-103 | 插件桥（Bukkit/BC 插件 WS 连入，旧自写） | — | ❌ 已废弃（ADR-014） |
 | FR-107 | 后台客户端更新器接入指引 | — | ✅ 已交付@v0.8.0 |
@@ -329,6 +330,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-271 | 平台首页高密度总览：平台首页按节点、服务器、异常、任务、资源、告警等维度重排为一屏速扫总览 | P1 | ✅ 已交付@v0.13.0 |
 | FR-272 | 全站页面归位与 A+C 皮肤收口：把玩家、插件、备份、定时、Bot、业务等单服能力收进服务器控制台，平台级页面归入平台管理，并统一 A+C Jian 绿默认高密度外观 | P1 | ✅ 已交付@v0.13.0 |
 | FR-273 | 通用组件包与控件博物馆：抽出 `@jianmanager/ui` 通用 UI/token/charts 包，主应用从包引入共享控件，并新增 `web/wiki` 控件博物馆展示第一版通用控件与常用状态矩阵（需 spec + ADR-058；不抽业务组件、不新增后端接口） | — | ✅ 已交付@v0.13.0 |
+| FR-274 | Bot 压测会话 YAML 动作编排与 50 Bot 稳定验收（增强 FR-042）→ `docs/specs/bot-stress-yaml-orchestration/spec.md` | P2 | 🔨 开发中 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 

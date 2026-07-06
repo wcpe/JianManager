@@ -78,6 +78,8 @@ type Manager struct {
 	cancel    context.CancelFunc
 	bots      map[string]*BotState
 	onEvent   EventCallback
+	eventSubs map[uint64]chan *BotWorkerEvent
+	nextSubID uint64
 	prewarm   int
 	botWorker string // bot-worker 脚本路径
 }
@@ -92,6 +94,7 @@ type ManagerConfig struct {
 func NewManager(config ManagerConfig) *Manager {
 	return &Manager{
 		bots:      make(map[string]*BotState),
+		eventSubs: make(map[uint64]chan *BotWorkerEvent),
 		prewarm:   config.PrewarmCount,
 		botWorker: config.BotWorkerPath,
 	}
@@ -102,6 +105,37 @@ func (m *Manager) SetEventCallback(cb EventCallback) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.onEvent = cb
+}
+
+// SubscribeEvents 订阅 Bot Worker 事件。
+// 返回的 cancel 会移除订阅并关闭事件通道；慢订阅者会丢帧，不会阻塞 stdout 读取循环。
+func (m *Manager) SubscribeEvents(buffer int) (<-chan *BotWorkerEvent, func()) {
+	if buffer <= 0 {
+		buffer = 1
+	}
+	ch := make(chan *BotWorkerEvent, buffer)
+
+	m.mu.Lock()
+	if m.eventSubs == nil {
+		m.eventSubs = make(map[uint64]chan *BotWorkerEvent)
+	}
+	id := m.nextSubID
+	m.nextSubID++
+	m.eventSubs[id] = ch
+	m.mu.Unlock()
+
+	var once sync.Once
+	cancel := func() {
+		once.Do(func() {
+			m.mu.Lock()
+			if sub, ok := m.eventSubs[id]; ok {
+				delete(m.eventSubs, id)
+				close(sub)
+			}
+			m.mu.Unlock()
+		})
+	}
+	return ch, cancel
 }
 
 // Start 启动 Bot Worker 子进程。
@@ -330,9 +364,19 @@ func (m *Manager) handleEvent(event *BotWorkerEvent) {
 	}
 
 	cb := m.onEvent
+	m.dispatchEventLocked(event)
 	m.mu.Unlock()
 
 	if cb != nil {
 		cb(event)
+	}
+}
+
+func (m *Manager) dispatchEventLocked(event *BotWorkerEvent) {
+	for _, ch := range m.eventSubs {
+		select {
+		case ch <- event:
+		default:
+		}
 	}
 }

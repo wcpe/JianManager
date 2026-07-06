@@ -17,47 +17,48 @@ type Services struct {
 	Node       *service.NodeService
 	NodeRepair *service.NodeRepairService
 	// NodeProxy 节点级出站代理管控（FR-185，见 ADR-043）；nil 时节点代理端点关闭。
-	NodeProxy     *service.NodeProxyService
-	Instance      *service.InstanceService
-	InstanceBatch *service.InstanceBatchService
-	InstanceGroup *service.InstanceGroupService
-	JDK           *service.JDKService
-	NodeRuntime   *service.NodeRuntimeService
-	Diagnostics   *service.DiagnosticsService
-	DockerImage   *service.DockerImageService
-	Terminal      *service.TerminalService
-	File          *service.FileService
-	FileVersion   *service.FileVersionService
-	Plugin        *service.PluginService
-	Player        *service.PlayerService
-	PlayerEvent   *service.PlayerEventService
-	ServerState   *service.ServerStateService
-	Business      *service.BusinessService
-	BusinessEvent *service.BusinessEventService
-	Config        *service.ConfigService
-	Bot           *service.BotService
-	Alert         *service.AlertService
-	AlertChannel  *service.AlertChannelService
-	Schedule      *service.ScheduleService
-	Backup        *service.BackupService
-	BackupStorage *service.BackupStorageService
-	Template      *service.TemplateService
-	Audit         *service.AuditService
-	Authz         *service.AuthzService
-	Event         *service.EventService
-	Asset         *service.AssetService
-	Core          *service.CoreService
-	Provision     *service.ProvisionService
-	Proxy         *service.ProxyService
-	Clone         *service.CloneService
-	Registration  *service.RegistrationService
-	Network       *service.NetworkService
-	Log           *service.LogService
-	Metric        *service.MetricService
-	Settings      *service.SettingsService
-	ProbeUpdate   *service.ProbeUpdateService
-	ClientChannel *service.ClientChannelService
-	ClientVersion *service.ClientVersionService
+	NodeProxy        *service.NodeProxyService
+	Instance         *service.InstanceService
+	InstanceBatch    *service.InstanceBatchService
+	InstanceGroup    *service.InstanceGroupService
+	JDK              *service.JDKService
+	NodeRuntime      *service.NodeRuntimeService
+	Diagnostics      *service.DiagnosticsService
+	DockerImage      *service.DockerImageService
+	Terminal         *service.TerminalService
+	File             *service.FileService
+	FileVersion      *service.FileVersionService
+	Plugin           *service.PluginService
+	Player           *service.PlayerService
+	PlayerEvent      *service.PlayerEventService
+	ServerState      *service.ServerStateService
+	Business         *service.BusinessService
+	BusinessEvent    *service.BusinessEventService
+	Config           *service.ConfigService
+	Bot              *service.BotService
+	BotStressSession *service.BotStressSessionService
+	Alert            *service.AlertService
+	AlertChannel     *service.AlertChannelService
+	Schedule         *service.ScheduleService
+	Backup           *service.BackupService
+	BackupStorage    *service.BackupStorageService
+	Template         *service.TemplateService
+	Audit            *service.AuditService
+	Authz            *service.AuthzService
+	Event            *service.EventService
+	Asset            *service.AssetService
+	Core             *service.CoreService
+	Provision        *service.ProvisionService
+	Proxy            *service.ProxyService
+	Clone            *service.CloneService
+	Registration     *service.RegistrationService
+	Network          *service.NetworkService
+	Log              *service.LogService
+	Metric           *service.MetricService
+	Settings         *service.SettingsService
+	ProbeUpdate      *service.ProbeUpdateService
+	ClientChannel    *service.ClientChannelService
+	ClientVersion    *service.ClientVersionService
 	// ClientChunkUpload 大文件分块上传（FR-251，增强 FR-088）；nil 时分块端点关闭、前端回退单次上传。
 	ClientChunkUpload  *service.ChunkedUploadService
 	ClientMachine      *service.ClientMachineService
@@ -195,6 +196,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		configHandler := NewConfigHandler(svcs.Config, svcs.Authz)
 		configHandler.RegisterRoutes(protected)
+
+		if svcs.BotStressSession != nil {
+			botStressSessionHandler := NewBotStressSessionHandler(svcs.BotStressSession, svcs.Authz)
+			botStressSessionHandler.RegisterRoutes(protected)
+		}
 
 		botHandler := NewBotHandler(svcs.Bot, svcs.Authz)
 		botHandler.RegisterRoutes(protected)

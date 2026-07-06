@@ -62,31 +62,31 @@
 
 > **工程整治**（chore/ref，不占 FR 号，走 sdd-refactor-code/手工）：① 前端路由级代码分割（#13，PluginManager 798KB/index 411KB，路由 `lazy()` 拆分）；② `.gitattributes` 规范换行与生成代码合并（#17/#18，`*.pb.go merge=union linguist-generated` + `eol=lf`）；③ 内嵌 CFR + 镜像探针/CFR 嵌入校验（#14/#20，发版 `make embed-cfr` + 镜像构建显式校验）。
 
-## 3. 已延后（deferred）
+## 3. 已交付 / 已延后（delivered / deferred）
 
 #### FR-041: Bot 实时遥测与单 Bot 详情面板
-- **优先级**: P2 | **状态**: 已延后 | **依赖**: FR-039（控制台 Bot 段）, FR-009（Bot 平台） | **关联 API**: SSE `/instances/:id/bots/events`（新增）, gRPC StreamBotEvents / SendBotCommand（已存在）
+- **优先级**: P2 | **状态**: 已交付@v0.13.0 | **依赖**: FR-039（控制台 Bot 段）, FR-009（Bot 平台） | **关联 API**: SSE `/bots/:id/events`, gRPC StreamBotEvents / SendBotCommand
 - **描述**: 将 Bot 实时事件（StreamBotEvents：血量/饥饿/位置/聊天）从 Worker 经 Control Plane 推送到浏览器，提供单 bot 详情面板
 - **验收**:
-  - [ ] Control Plane 将 Worker 的 StreamBotEvents 经 SSE/WS 代理推送到浏览器（参照实例事件 SSE）
-  - [ ] 点击单个 bot 打开详情面板，实时显示血量/饥饿/位置/行为
-  - [ ] 显示 bot 聊天/事件日志滚动流
-  - [ ] 面板可向 bot 发送指令（SendBotCommand）
-  - [ ] 仅订阅当前查看的 bot/实例，避免上万 bot 全量推送
+  - [x] Control Plane 将 Worker 的 StreamBotEvents 经 SSE 代理推送到浏览器（参照实例事件 SSE）
+  - [x] 点击单个 bot 打开详情面板，实时显示血量/饥饿/位置/行为
+  - [x] 显示 bot 聊天/事件日志滚动流
+  - [x] 面板可向 bot 发送指令（SendBotCommand）
+  - [x] 仅订阅当前查看的 bot，避免上万 bot 全量推送
 
 #### FR-042: Bot 压测会话编排 UI
-- **优先级**: P2 | **状态**: 已延后 | **依赖**: FR-038（Bot 规模化 API）, FR-040（全局 Bot 页）, FR-009（Bot 平台） | **关联 API**: 复用 FR-009 压测后端 + FR-038 摘要/批量
-- **描述**: 为既有压测后端（FR-009）提供前端编排：创建压测会话（目标实例+数量）、批量上线/下线、按会话聚合监控
+- **优先级**: P2 | **状态**: 已交付@v0.13.0 | **依赖**: FR-038（Bot 规模化 API）, FR-040（全局 Bot 页）, FR-009（Bot 平台） | **关联 API**: `/bots/stress-sessions` + FR-038 摘要/批量
+- **描述**: 提供持久化压测会话后端 API 与前端编排：创建压测会话（目标实例+数量）、批量上线/下线、按会话聚合监控
 - **验收**:
-  - [ ] 从全局 Bot 页「压测」入口创建会话：选目标实例 + bot 数量 + 初始行为
-  - [ ] 启动会话后 bot 批量上线，页面按会话聚合显示上线进度与状态分布
-  - [ ] 可结束会话批量下线
-  - [ ] 压测会话作为一个聚合单元展示，不逐个铺开上万 bot
+  - [x] 从全局 Bot 页「压测」入口创建会话：选目标实例 + bot 数量 + 初始行为
+  - [x] 启动会话后 bot 批量上线，页面按会话聚合显示上线进度与状态分布
+  - [x] 可结束会话批量下线
+  - [x] 压测会话作为一个聚合单元展示，不逐个铺开上万 bot
 
 #### FR-098: 块级二进制 diff 增量发布
-- **优先级**: P2 | **状态**: 已延后（首期 FR-090 做文件级增量） | **依赖**: FR-090、FR-097 | **关联 ADR**: ADR-021
-- **描述**: 对变化的大文件只传内部差异（zstd patch-from）——发布侧算 patch 入库、manifest 提供 patch 引用、客户端应用 patch；在文件级增量之上进一步最小化传输。复用 FR-097 容器（启用 diff flag）
-- **验收（延后细化）**:
-  - [ ] 发布侧：相对上版算文件块级 patch（zstd patch-from），patch 内容寻址入库
-  - [ ] manifest 文件项带 patch 引用（oldhash→newhash）
-  - [ ] 客户端：有旧文件 + 有 patch 则下 patch 应用，否则下全量；应用后 sha256 校验
+- **优先级**: P2 | **状态**: 已交付@v0.13.0 | **依赖**: FR-087、FR-257、ADR-054 | **关联 ADR**: ADR-021、ADR-054
+- **描述**: 对变化的大文件只传内部差异（zstd patch-from）——发布侧相对上一版同路径文件算 patch 入库，manifest 在完整 artifact 旁提供可选 patch 引用，客户端有匹配旧文件时应用 patch，失败或不匹配回退完整 artifact。在文件级增量之上进一步最小化传输。**不复活已废弃的 FR-097 `.jmpack` 容器**，patch 仍走现有单文件 `client-file` 制品与 `/client-artifacts/:sha256`。
+- **验收**:
+  - [x] 发布侧：相对上版算文件块级 patch（zstd patch-from），patch 内容寻址入库
+  - [x] manifest 文件项带 patch 引用（oldhash→newhash）
+  - [x] 客户端：有旧文件 + 有 patch 则下 patch 应用，否则下全量；应用后 sha256 校验

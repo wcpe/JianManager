@@ -20,6 +20,11 @@ func sampleSignedManifest() *SignedManifest {
 				Path: "mods/foo.jar", SHA256: "ab12", MD5: "cd34", Size: 123456,
 				Sync: "strict", Platform: "",
 				Artifact: ManifestArtifact{SHA256: "ef56", Size: 45678, Codec: "zstd"},
+				Patch: &ManifestPatch{
+					OldSHA256: "old12",
+					NewSHA256: "ab12",
+					Artifact:  ManifestArtifact{SHA256: "patch56", Size: 1234, Codec: "zstd-patch"},
+				},
 			},
 			{
 				Path: "config/opt.txt", SHA256: "9988", MD5: "7766", Size: 12,
@@ -68,6 +73,12 @@ func TestSignedManifest_JSONStructureMatchesContract(t *testing.T) {
 	for _, k := range []string{"sha256", "size", "codec"} {
 		require.Contains(t, art, k, "artifact 须含契约字段 %s", k)
 	}
+	patch := f0["patch"].(map[string]any)
+	require.Equal(t, "old12", patch["oldSha256"])
+	require.Equal(t, "ab12", patch["newSha256"])
+	patchArt := patch["artifact"].(map[string]any)
+	require.Equal(t, "patch56", patchArt["sha256"])
+	require.Equal(t, "zstd-patch", patchArt["codec"])
 
 	// FR-256 起 manifest 不再含 sig 段。
 	require.NotContains(t, obj, "sig", "manifest 不应再含签名段")

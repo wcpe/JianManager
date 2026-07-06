@@ -93,6 +93,7 @@ func main() {
 	})
 	configSvc := service.NewConfigService(db, pool)
 	botSvc := service.NewBotService(db, pool)
+	botStressSessionSvc := service.NewBotStressSessionService(db, botSvc)
 	alertSvc := service.NewAlertService(db)
 	alertChannelSvc := service.NewAlertChannelService(db)
 	scheduleSvc := service.NewScheduleService(db)
@@ -360,6 +361,7 @@ func main() {
 		BusinessEvent:           businessEventSvc,
 		Config:                  configSvc,
 		Bot:                     botSvc,
+		BotStressSession:        botStressSessionSvc,
 		Alert:                   alertSvc,
 		AlertChannel:            alertChannelSvc,
 		Schedule:                scheduleSvc,

@@ -1,4 +1,5 @@
 import { db } from '@/mocks/db'
+import { useAuthStore } from '@/stores/auth'
 import type { Session } from '@/mocks/handlers/domains/auth'
 
 /**
@@ -9,5 +10,5 @@ import type { Session } from '@/mocks/handlers/domains/auth'
  */
 export function loginMockUser(token = 'test-access-token'): void {
   db<Session>('sessions').insert({ accessToken: token, refreshToken: 'test-refresh-token', userId: 1 })
-  localStorage.setItem('accessToken', token)
+  useAuthStore.getState().login(token, 'test-refresh-token')
 }

@@ -20,6 +20,10 @@
  */
 
 import type { CustomBehaviorConfig } from '../behavior/custom.js'
+import type { OrchestratedBehaviorConfig } from '../behavior/orchestrated.js'
+
+/** 行为配置载荷。 */
+export type BehaviorConfig = CustomBehaviorConfig | OrchestratedBehaviorConfig
 
 /** Worker Node → Bot Worker 的命令。 */
 export type IpcCommand =
@@ -48,8 +52,8 @@ export interface SetBehaviorCommand {
   botId: string
   behavior: string
   target?: string
-  /** custom 行为的配置（behavior='custom' 时使用）。 */
-  config?: CustomBehaviorConfig
+  /** custom/orchestrated 行为的配置。 */
+  config?: BehaviorConfig
 }
 
 /** 向 Bot 发送命令。 */
@@ -92,7 +96,7 @@ export interface BotConfig {
   version?: string
   auth?: 'offline' | 'microsoft'
   behavior?: string
-  /** custom 行为的配置。 */
-  behaviorConfig?: CustomBehaviorConfig
+  /** custom/orchestrated 行为的配置。 */
+  behaviorConfig?: BehaviorConfig
   server?: string
 }

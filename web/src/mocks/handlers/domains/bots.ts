@@ -19,6 +19,7 @@ export interface BotRow {
   id: number
   uuid: string
   instanceId: number
+  stressSessionId?: number
   /** 所属节点 ID，供 GET /bots/summary?groupBy=node 聚合（BotInfo 不含此字段，仅 mock 内部用于分组）。 */
   nodeId: number
   name: string
@@ -30,7 +31,35 @@ export interface BotRow {
   updatedAt: string
 }
 
+interface BotStressSessionRow {
+  id: number
+  uuid: string
+  instanceId: number
+  count: number
+  behavior: string
+  namePrefix: string
+  config?: Record<string, unknown>
+  orchestrationYaml?: string
+  orchestrationSummary?: OrchestrationSummary
+  status: string
+  startedAt?: string | null
+  stoppedAt?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+interface OrchestrationSummary {
+  enabled: boolean
+  loop: boolean
+  staggerMs: number
+  phaseCount: number
+  durationSec: number
+  behaviors: string[]
+}
+
 const NOW = '2026-06-28T00:00:00Z'
+const encoder = new TextEncoder()
+const botEventControllers = new Map<number, Set<ReadableStreamDefaultController<Uint8Array>>>()
 
 /** 实例 ID → 可读名映射，仅供 summary 分组 label 渲染（不跨域读 db('instances')，保持本域自洽）。 */
 const INSTANCE_LABELS: Record<number, string> = { 1: '生存服', 2: '空岛服' }
@@ -55,8 +84,11 @@ const bots = db<BotRow>('bots', () => [
   bot({ id: 3, instanceId: 2, nodeId: 2, name: 'PatrolBot', status: 'error', behavior: 'patrol', config: { server: '127.0.0.1', port: 25566, auth: 'offline' } }),
 ])
 
+const stressSessions = db<BotStressSessionRow>('botStressSessions', () => [])
+
 export function seed(): void {
   bots.seed()
+  stressSessions.seed()
 }
 
 /** 列表 / summary 共用的多维筛选（与 BotListParams 维度一致）。 */
@@ -116,6 +148,48 @@ function groupRows(rows: BotRow[], dim: string): SummaryGroup[] {
 
 const GROUP_DIMS = new Set(['instance', 'node', 'status', 'behavior'])
 
+function pushBotEvent(botId: number, type: string, data: Record<string, unknown>): void {
+  const row = bots.get(botId)
+  if (!row) return
+  const payload = {
+    botId,
+    botUuid: row.uuid,
+    type,
+    data,
+    timestamp: Date.now(),
+  }
+  const bytes = encoder.encode(`event: bot\ndata: ${JSON.stringify(payload)}\n\n`)
+  for (const c of botEventControllers.get(botId) ?? []) {
+    try {
+      c.enqueue(bytes)
+    } catch {
+      botEventControllers.get(botId)?.delete(c)
+    }
+  }
+}
+
+function stressCounts(sessionId: number): { total: number; byStatus: Record<string, number> } {
+  const rows = bots.list((b) => b.stressSessionId === sessionId)
+  return { total: rows.length, byStatus: countByStatus(rows) }
+}
+
+function summarizeOrchestration(raw?: string): OrchestrationSummary | undefined {
+  if (!raw?.includes('phases:')) return undefined
+  const behaviorMatches = [...raw.matchAll(/^\s*behavior:\s*"?([^"\s#]+)"?/gm)]
+  const durationMatches = [...raw.matchAll(/^\s*durationSec:\s*(\d+)/gm)]
+  const behaviors = [...new Set(behaviorMatches.map((m) => m[1]))]
+  const durations = durationMatches.map((m) => Number(m[1]))
+  const stagger = raw.match(/^\s*staggerMs:\s*(\d+)/m)
+  return {
+    enabled: true,
+    loop: /^\s*loop:\s*true\s*$/m.test(raw),
+    staggerMs: stagger ? Number(stagger[1]) : 0,
+    phaseCount: Math.max(durations.length, behaviors.length),
+    durationSec: durations.reduce((sum, value) => sum + value, 0),
+    behaviors,
+  }
+}
+
 export const handlers = [
   // GET /bots/summary：注册在 /bots 之前，避免 :id 通配吞掉 "summary"（MSW 按顺序匹配）。
   domainRoute('get', '/bots/summary', (info) => {
@@ -165,6 +239,132 @@ export const handlers = [
     return HttpResponse.json(created, { status: 201 })
   }),
 
+  domainRoute('get', '/bots/stress-sessions', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const page = Math.max(1, Number(url.searchParams.get('page') ?? 1) || 1)
+    const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get('pageSize') ?? 20) || 20))
+    const rows = stressSessions.list()
+    const start = (page - 1) * pageSize
+    return HttpResponse.json({
+      items: rows.slice(start, start + pageSize).map((row) => ({ ...row, counts: stressCounts(row.id) })),
+      total: rows.length,
+      page,
+      pageSize,
+    })
+  }),
+
+  domainRoute('post', '/bots/stress-sessions', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json()) as {
+      instanceId: number
+      count: number
+      behavior: string
+      namePrefix: string
+      config?: Record<string, unknown>
+      orchestrationYaml?: string
+    }
+    const orchestrationSummary = summarizeOrchestration(body.orchestrationYaml)
+    if (!body.instanceId || body.count < 1 || (!body.behavior && !orchestrationSummary) || !body.namePrefix) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '参数错误' }, { status: 400 })
+    }
+    const row = stressSessions.insert({
+      uuid: `stress-${Date.now()}`,
+      instanceId: body.instanceId,
+      count: body.count,
+      behavior: body.behavior || orchestrationSummary?.behaviors[0] || 'idle',
+      namePrefix: body.namePrefix,
+      config: body.config,
+      orchestrationYaml: body.orchestrationYaml,
+      orchestrationSummary,
+      status: 'pending',
+      startedAt: null,
+      stoppedAt: null,
+      createdAt: NOW,
+      updatedAt: NOW,
+    })
+    return HttpResponse.json({ ...row, counts: stressCounts(row.id) }, { status: 201 })
+  }),
+
+  domainRoute('get', '/bots/stress-sessions/:id', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const row = stressSessions.get(id)
+    if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
+    return HttpResponse.json({ ...row, counts: stressCounts(id) })
+  }),
+
+  domainRoute('post', '/bots/stress-sessions/:id/start', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const row = stressSessions.get(id)
+    if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
+    const existing = bots.list((b) => b.stressSessionId === id)
+    if (existing.length === 0) {
+      for (let i = 1; i <= row.count; i++) {
+        bots.insert({
+          uuid: `stress-bot-${Date.now()}-${i}`,
+          instanceId: row.instanceId,
+          stressSessionId: id,
+          nodeId: 1,
+          name: `${row.namePrefix}-${String(i).padStart(3, '0')}`,
+          status: 'pending',
+          config: JSON.stringify(row.config ?? {}),
+          behavior: row.orchestrationSummary?.enabled ? 'orchestrated' : row.behavior,
+          workerId: 'node-1',
+          createdAt: NOW,
+          updatedAt: NOW,
+        })
+      }
+    } else {
+      for (const b of existing) bots.update(b.id, { status: 'connecting' })
+    }
+    const updated = stressSessions.update(id, { status: 'running', startedAt: NOW, stoppedAt: null })!
+    return HttpResponse.json({ ...updated, counts: stressCounts(id) })
+  }),
+
+  domainRoute('post', '/bots/stress-sessions/:id/stop', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const row = stressSessions.get(id)
+    if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
+    for (const b of bots.list((bot) => bot.stressSessionId === id)) {
+      bots.update(b.id, { status: 'stopped' })
+    }
+    const updated = stressSessions.update(id, { status: 'stopped', stoppedAt: NOW })!
+    return HttpResponse.json({ ...updated, counts: stressCounts(id) })
+  }),
+
+  domainRoute('get', '/bots/:id/events', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const row = bots.get(id)
+    if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: 'Bot 不存在' }, { status: 404 })
+    let ref: ReadableStreamDefaultController<Uint8Array>
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        ref = controller
+        const set = botEventControllers.get(id) ?? new Set<ReadableStreamDefaultController<Uint8Array>>()
+        set.add(controller)
+        botEventControllers.set(id, set)
+        const init = { botId: id, botUuid: row.uuid, type: 'state', data: { status: row.status, behavior: row.behavior, health: 20, food: 20 }, timestamp: Date.now() }
+        controller.enqueue(encoder.encode(`event: bot\ndata: ${JSON.stringify(init)}\n\n`))
+      },
+      cancel() {
+        botEventControllers.get(id)?.delete(ref)
+      },
+    })
+    return new HttpResponse(stream, {
+      headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
+    })
+  }),
+
   domainRoute('get', '/bots/:id', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -200,6 +400,7 @@ export const handlers = [
     if (!bots.get(id)) return HttpResponse.json({ error: 'NOT_FOUND', message: 'Bot 不存在' }, { status: 404 })
     const { command } = (await info.request.json()) as { command?: string }
     if (!command) return HttpResponse.json({ error: 'INVALID_REQUEST', message: '缺 command' }, { status: 400 })
+    pushBotEvent(id, 'command-sent', { command })
     return HttpResponse.json({ message: '已发送' })
   }),
 

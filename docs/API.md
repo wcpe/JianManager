@@ -1143,6 +1143,24 @@
 - **描述**: Bot 基础详情（DB 基础字段 + 读取时经 Worker `ListBots` 懒回填 `status`）；位置/血量/背包/事件流等富遥测归 FR-041，当前 HTTP 详情不承诺返回
 - **关联 FR**: FR-009（基础详情）, FR-041（富遥测延后）
 
+### GET /api/v1/bots/:id/events
+- **描述**: 单 Bot 实时事件 SSE（状态、血量、饥饿、位置、聊天/行为事件）
+- **关联 FR**: FR-041
+- **权限**: `bot:read`（按 Bot 所属实例隔离）
+- **事件**:
+  - `event: init`：`{ "botId": 1, "botUuid": "..." }`
+  - `event: bot`：
+    ```json
+    {
+      "botId": 1,
+      "botUuid": "uuid",
+      "type": "state",
+      "data": { "status": "connected", "health": 20, "food": 20, "behavior": "guard", "position": { "x": 0, "y": 64, "z": 0 } },
+      "timestamp": 1780000000000
+    }
+    ```
+- **错误**: 403 `FORBIDDEN`；404 `NOT_FOUND`；503 `STREAM_UNAVAILABLE`
+
 ### POST /api/v1/bots/:id/behavior
 - **描述**: 切换 Bot 行为模式
 - **关联 FR**: FR-009
@@ -1155,9 +1173,117 @@
 - **响应**: `200 { "message": "已发送" }`
 - **错误**: 400 `INVALID_REQUEST`（缺 command）；404 `NOT_FOUND`（Bot 不存在/无权访问）；503 `COMMAND_FAILED`（Worker 未连接/委托失败）
 
-### Bot 压测会话（FR-042，延后）
-- **状态**: 当前未开放 HTTP 端点；`POST /api/v1/bots/stress-test` 归 FR-042 后续实现，FR-009 不以压测会话作为通过条件
-- **说明**: 当前 `/bots` 页面仅保留禁用态「压测」入口；如需创建压测会话，需先落地 FR-042 的后端会话 API 与 UI 编排
+### POST /api/v1/bots/stress-sessions
+- **描述**: 创建持久化 Bot 压测会话，支持 YAML 动作编排。
+- **关联 FR**: FR-042 / FR-274
+- **权限**: `bot:manage`（资源级按目标实例隔离）
+- **兼容别名**: `POST /api/v1/bots/stress-test`
+- **请求**:
+  ```json
+  {
+    "instanceId": 1,
+    "count": 50,
+    "behavior": "idle",
+    "namePrefix": "load",
+    "config": { "server": "127.0.0.1", "port": 25565, "auth": "offline" },
+    "orchestrationYaml": "loop: true\nstaggerMs: 500\nphases:\n  - durationSec: 60\n    behavior: idle\n"
+  }
+  ```
+  - `instanceId`: 必填。
+  - `count`: 范围保持 `1..5000`，FR-274 真实验收固定使用 50。
+  - `namePrefix`: 必填，启动时生成 Bot 名称前缀，形如 `load-001`。
+  - `config`: 保持现有 Bot 连接配置 JSON。
+  - `behavior`: 在 `orchestrationYaml` 为空时必填；在 `orchestrationYaml` 非空时可省略，响应中的 `behavior` 取首个阶段行为。
+  - `orchestrationYaml`: 可选；非空时必须通过 YAML 编排校验。
+- **响应**: `201`
+  ```json
+  {
+    "id": 1,
+    "uuid": "uuid",
+    "instanceId": 1,
+    "count": 50,
+    "behavior": "idle",
+    "namePrefix": "load",
+    "config": { "server": "127.0.0.1", "port": 25565, "auth": "offline" },
+    "orchestrationYaml": "loop: true\nstaggerMs: 500\nphases:\n  - durationSec: 60\n    behavior: idle\n",
+    "orchestrationSummary": {
+      "enabled": true,
+      "loop": true,
+      "staggerMs": 500,
+      "phaseCount": 1,
+      "durationSec": 60,
+      "behaviors": ["idle"]
+    },
+    "status": "pending",
+    "startedAt": null,
+    "stoppedAt": null,
+    "createdAt": "datetime",
+    "updatedAt": "datetime",
+    "counts": { "total": 0, "byStatus": {} }
+  }
+  ```
+- **错误**:
+  - 400 `INVALID_REQUEST`：参数缺失、数量越界、旧模式缺 `behavior`、YAML 语法错误或编排语义非法。
+  - 403 `FORBIDDEN`：无权管理目标实例。
+
+### GET /api/v1/bots/stress-sessions
+- **描述**: 分页列出压测会话，返回会话状态、关联 Bot 聚合计数和编排摘要。
+- **关联 FR**: FR-042 / FR-274
+- **权限**: `bot:read`（按可访问实例集合收敛）
+- **Query**: `?page=1&pageSize=20`
+- **响应**:
+  ```json
+  {
+    "items": [
+      {
+        "id": 1,
+        "instanceId": 1,
+        "count": 50,
+        "behavior": "idle",
+        "namePrefix": "load",
+        "status": "running",
+        "orchestrationSummary": {
+          "enabled": true,
+          "loop": true,
+          "staggerMs": 500,
+          "phaseCount": 4,
+          "durationSec": 330,
+          "behaviors": ["idle", "patrol", "guard", "custom"]
+        },
+        "counts": { "total": 50, "byStatus": { "connected": 50 } }
+      }
+    ],
+    "total": 1,
+    "page": 1,
+    "pageSize": 20
+  }
+  ```
+
+### GET /api/v1/bots/stress-sessions/:id
+- **描述**: 查询单个压测会话详情，返回持久化 YAML。
+- **关联 FR**: FR-042 / FR-274
+- **权限**: `bot:read`（按会话目标实例隔离）
+- **响应**: `200` 同创建响应。
+- **错误**:
+  - 403 `FORBIDDEN`：无读取权限。
+  - 404 `NOT_FOUND`：会话不存在或无权访问。
+
+### POST /api/v1/bots/stress-sessions/:id/start
+- **描述**: 启动压测会话，按会话配置批量创建并上线 Bot；含 YAML 编排时下发 `orchestrated` 行为和 `behavior_config`。
+- **关联 FR**: FR-042 / FR-274
+- **权限**: `bot:manage`（按会话目标实例隔离）
+- **响应**: `200` 会话视图，含 `counts` 和 `orchestrationSummary`。
+- **错误**:
+  - 400 `INVALID_REQUEST`：会话状态不允许启动或持久化编排无法解析。
+  - 404 `NOT_FOUND`：会话不存在或无权访问。
+
+### POST /api/v1/bots/stress-sessions/:id/stop
+- **描述**: 停止压测会话，将会话关联 Bot 批量置为 `stopped`
+- **关联 FR**: FR-042 / FR-274
+- **权限**: `bot:manage`（按会话目标实例隔离）
+- **响应**: `200` 会话视图，含 `counts` 和 `orchestrationSummary`。
+- **错误**:
+  - 404 `NOT_FOUND`：会话不存在或无权访问。
 
 ---
 

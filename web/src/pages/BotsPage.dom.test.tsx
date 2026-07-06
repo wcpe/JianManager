@@ -1,5 +1,5 @@
 import { beforeAll, describe, it, expect } from 'vitest'
-import { screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
@@ -113,5 +113,155 @@ describe('BotsPage（mock 假后端）', () => {
     expect(await screen.findByText('暂无 Bot')).toBeInTheDocument()
     // 仍在 /bots，未被整页跳转。
     expect(window.location.pathname).toBe('/bots')
+  })
+
+  it('④ 单 Bot 详情接收实时状态并发送命令', async () => {
+    loginMockUser()
+    stubCrossDomain()
+    renderWithProviders(<BotsPage />, { route: '/bots' })
+
+    await userEvent.click(await screen.findByText('生存服'))
+    await userEvent.click(await screen.findByText('GuardBot'))
+    const dialog = await screen.findByRole('dialog')
+
+    expect(within(dialog).getByText('GuardBot')).toBeInTheDocument()
+    await waitFor(() => expect(within(dialog).getAllByText('已连接').length).toBeGreaterThan(0))
+
+    await userEvent.type(within(dialog).getByPlaceholderText('输入聊天或控制命令'), '/say hi')
+    await userEvent.click(within(dialog).getByRole('button', { name: /发送/ }))
+
+    expect(await within(dialog).findByText('命令已发送')).toBeInTheDocument()
+    expect(await within(dialog).findByText('/say hi')).toBeInTheDocument()
+  })
+
+  it('⑤ 创建并启动压测会话，展示聚合状态分布', async () => {
+    loginMockUser()
+    stubCrossDomain()
+    renderWithProviders(<BotsPage />, { route: '/bots' })
+
+    await userEvent.click(await screen.findByRole('button', { name: '压测' }))
+    const dialog = await screen.findByRole('dialog')
+    await userEvent.click(within(dialog).getByText('选择实例'))
+    await userEvent.click(await screen.findByRole('button', { name: '生存服' }))
+    await userEvent.clear(within(dialog).getByLabelText('总数'))
+    await userEvent.type(within(dialog).getByLabelText('总数'), '2')
+    await userEvent.click(within(dialog).getByRole('button', { name: /^创建$/ }))
+
+    const prefix = await screen.findByText('stress')
+    const row = prefix.closest('tr') as HTMLElement
+    expect(within(row).getByText('等待中')).toBeInTheDocument()
+
+    await userEvent.click(within(row).getByRole('button', { name: '启动' }))
+
+    await waitFor(() => expect(within(row).getByText('2/2')).toBeInTheDocument())
+    expect(within(row).getByText('等待中 2')).toBeInTheDocument()
+  })
+
+  it('⑥ 压测会话对话框提供 YAML 模板并可恢复', async () => {
+    loginMockUser()
+    stubCrossDomain()
+    renderWithProviders(<BotsPage />, { route: '/bots' })
+
+    await userEvent.click(await screen.findByRole('button', { name: '压测' }))
+    const dialog = await screen.findByRole('dialog')
+    const yaml = within(dialog).getByLabelText('YAML 编排') as HTMLTextAreaElement
+
+    expect(yaml.value).toContain('phases:')
+
+    fireEvent.change(yaml, { target: { value: 'loop: false\nphases: []\n' } })
+    expect(yaml.value).toBe('loop: false\nphases: []\n')
+
+    await userEvent.click(within(dialog).getByRole('button', { name: '恢复模板' }))
+    expect(yaml.value).toContain('phases:')
+    expect(yaml.value).toContain('behavior: patrol')
+  })
+
+  it('⑦ 创建 YAML 压测会话会提交编排并展示摘要与详情', async () => {
+    loginMockUser()
+    stubCrossDomain()
+    let payload: Record<string, unknown> | undefined
+    let created: Record<string, unknown> | undefined
+    server.use(
+      http.post(API('/bots/stress-sessions'), async (info) => {
+        payload = (await info.request.json()) as Record<string, unknown>
+        created = {
+          id: 99,
+          uuid: 'stress-yaml-99',
+          instanceId: payload.instanceId,
+          count: payload.count,
+          behavior: 'idle',
+          namePrefix: payload.namePrefix,
+          config: payload.config,
+          orchestrationYaml: payload.orchestrationYaml,
+          orchestrationSummary: {
+            enabled: true,
+            loop: true,
+            staggerMs: 500,
+            phaseCount: 4,
+            durationSec: 330,
+            behaviors: ['idle', 'patrol', 'guard', 'custom'],
+          },
+          status: 'pending',
+          startedAt: null,
+          stoppedAt: null,
+          createdAt: '2026-06-28T00:00:00Z',
+          updatedAt: '2026-06-28T00:00:00Z',
+          counts: { total: 0, byStatus: {} },
+        }
+        return HttpResponse.json(created, { status: 201 })
+      }),
+      http.get(API('/bots/stress-sessions'), () =>
+        HttpResponse.json({
+          items: created ? [created] : [],
+          total: created ? 1 : 0,
+          page: 1,
+          pageSize: 20,
+        }),
+      ),
+      http.get(API('/bots/stress-sessions/99'), () =>
+        HttpResponse.json({
+          id: 99,
+          uuid: 'stress-yaml-99',
+          instanceId: 1,
+          count: 20,
+          behavior: 'idle',
+          namePrefix: 'stress',
+          config: { server: '127.0.0.1', port: 25565, auth: 'offline' },
+          orchestrationYaml: payload?.orchestrationYaml,
+          orchestrationSummary: {
+            enabled: true,
+            loop: true,
+            staggerMs: 500,
+            phaseCount: 4,
+            durationSec: 330,
+            behaviors: ['idle', 'patrol', 'guard', 'custom'],
+          },
+          status: 'pending',
+          startedAt: null,
+          stoppedAt: null,
+          createdAt: '2026-06-28T00:00:00Z',
+          updatedAt: '2026-06-28T00:00:00Z',
+          counts: { total: 0, byStatus: {} },
+        }),
+      ),
+    )
+
+    renderWithProviders(<BotsPage />, { route: '/bots' })
+
+    await userEvent.click(await screen.findByRole('button', { name: '压测' }))
+    const dialog = await screen.findByRole('dialog')
+    await userEvent.click(within(dialog).getByText('选择实例'))
+    await userEvent.click(await screen.findByRole('button', { name: '生存服' }))
+    await userEvent.click(within(dialog).getByRole('button', { name: /^创建$/ }))
+
+    await waitFor(() => expect(payload?.orchestrationYaml).toContain('phases:'))
+    const row = (await screen.findByText('stress')).closest('tr') as HTMLElement
+    expect(within(row).getByText('4 阶段 · 循环 · 330s · idle/patrol/guard/custom')).toBeInTheDocument()
+
+    await userEvent.click(within(row).getByRole('button', { name: '查看编排' }))
+    const detail = await screen.findByRole('dialog')
+    expect(within(detail).getByText('YAML 编排')).toBeInTheDocument()
+    expect(within(detail).getByText(/staggerMs: 500/)).toBeInTheDocument()
+    expect(within(detail).getByText(/behavior: custom/)).toBeInTheDocument()
   })
 })

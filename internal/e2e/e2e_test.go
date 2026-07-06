@@ -221,6 +221,7 @@ func TestE2E_InstanceFullLifecycle(t *testing.T) {
 		"JIANMANAGER_CONTROL_PLANE_GRPC=127.0.0.1:"+cpGRPC,
 		"JIANMANAGER_GRPC_PORT="+workerGRPC,
 		"JIANMANAGER_WS_PORT="+workerWS,
+		"JIANMANAGER_HOST=127.0.0.1",
 		"JIANMANAGER_NODE_NAME=e2e-worker",
 		"JIANMANAGER_DATA_DIR="+dataDir,
 		"JIANMANAGER_WORK_DIR="+serversDir,

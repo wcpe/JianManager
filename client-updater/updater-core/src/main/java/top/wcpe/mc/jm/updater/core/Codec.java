@@ -41,6 +41,14 @@ final class Codec {
         throw new IOException("不支持的 codec: " + codec);
     }
 
+    /** 按 zstd 字典解 patch-from 制品，字典即本地旧文件内容。 */
+    static InputStream decodePatchStream(InputStream patch, String codec, byte[] oldContent) throws IOException {
+        if (!"zstd-patch".equalsIgnoreCase(codec)) {
+            throw new IOException("不支持的 patch codec: " + codec);
+        }
+        return new ZstdInputStream(patch).setDict(oldContent);
+    }
+
     private static byte[] decompressZstd(byte[] compressed) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream(Math.max(64, compressed.length * 3));
         try (InputStream in = new ZstdInputStream(new ByteArrayInputStream(compressed))) {

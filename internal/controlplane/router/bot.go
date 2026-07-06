@@ -1,7 +1,10 @@
 package router
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -348,6 +351,76 @@ func (h *BotHandler) SendCommand(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已发送"})
 }
 
+// Events SSE 推送单个 Bot 的实时状态、聊天和行为事件（FR-041）。
+func (h *BotHandler) Events(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+
+	access := getAccess(c)
+	if access == nil || !access.HasPermission(service.PermBotRead) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
+	}
+	ok, err := h.authz.CanAccessBot(access, id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "Bot 不存在"})
+		return
+	}
+
+	bot, grpcStream, err := h.botSvc.StreamEvents(c.Request.Context(), id)
+	if err != nil {
+		if errors.Is(err, service.ErrBotNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "Bot 不存在"})
+			return
+		}
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "STREAM_UNAVAILABLE", "message": err.Error()})
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+
+	initBytes, _ := json.Marshal(gin.H{"botId": bot.ID, "botUuid": bot.UUID})
+	fmt.Fprintf(c.Writer, "event: init\ndata: %s\n\n", initBytes)
+	c.Writer.Flush()
+
+	for {
+		evt, err := grpcStream.Recv()
+		if err != nil {
+			slog.Debug("Bot 事件流结束", "botID", id, "err", err)
+			return
+		}
+		payload := json.RawMessage(evt.Data)
+		if !json.Valid(payload) {
+			payload = json.RawMessage("{}")
+		}
+		data, err := json.Marshal(gin.H{
+			"botId":     bot.ID,
+			"botUuid":   evt.BotUuid,
+			"type":      evt.Type,
+			"data":      payload,
+			"timestamp": evt.Timestamp,
+		})
+		if err != nil {
+			continue
+		}
+		if _, err := fmt.Fprintf(c.Writer, "event: bot\ndata: %s\n\n", data); err != nil {
+			slog.Debug("Bot 事件 SSE 写入失败", "botID", id, "err", err)
+			return
+		}
+		c.Writer.Flush()
+	}
+}
+
 func (h *BotHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	bots := rg.Group("/bots")
 	{
@@ -355,6 +428,7 @@ func (h *BotHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		bots.GET("/summary", h.Summary)
 		bots.POST("", h.Create)
 		bots.POST("/batch", h.Batch)
+		bots.GET("/:id/events", h.Events)
 		bots.GET("/:id", h.Get)
 		bots.DELETE("/:id", h.Delete)
 		bots.POST("/:id/behavior", h.UpdateBehavior)

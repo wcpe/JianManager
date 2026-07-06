@@ -29,9 +29,20 @@ final class Manifest {
         final long artifactSize;
         /** zstd | none。 */
         final String artifactCodec;
+        /** patch-from 适用的本地旧文件 hash；null=无 patch。 */
+        final String patchOldSha256;
+        /** patch-from 产出的新文件 hash。 */
+        final String patchNewSha256;
+        /** patch 制品自身 hash（下载寻址 key）。 */
+        final String patchArtifactSha256;
+        final long patchArtifactSize;
+        /** zstd-patch。 */
+        final String patchArtifactCodec;
 
         FileEntry(String path, String sha256, String md5, long size, String sync,
-                  String platform, String artifactSha256, long artifactSize, String artifactCodec) {
+                  String platform, String artifactSha256, long artifactSize, String artifactCodec,
+                  String patchOldSha256, String patchNewSha256,
+                  String patchArtifactSha256, long patchArtifactSize, String patchArtifactCodec) {
             this.path = path;
             this.sha256 = sha256;
             this.md5 = md5;
@@ -41,6 +52,15 @@ final class Manifest {
             this.artifactSha256 = artifactSha256;
             this.artifactSize = artifactSize;
             this.artifactCodec = artifactCodec;
+            this.patchOldSha256 = patchOldSha256;
+            this.patchNewSha256 = patchNewSha256;
+            this.patchArtifactSha256 = patchArtifactSha256;
+            this.patchArtifactSize = patchArtifactSize;
+            this.patchArtifactCodec = patchArtifactCodec;
+        }
+
+        boolean hasPatch() {
+            return patchOldSha256 != null && patchNewSha256 != null && patchArtifactSha256 != null;
         }
     }
 
@@ -140,6 +160,24 @@ final class Manifest {
                     artSize = asLong(a.get("size"), 0);
                     artCodec = a.get("codec") == null ? "none" : String.valueOf(a.get("codec"));
                 }
+                String patchOldSha = null;
+                String patchNewSha = null;
+                String patchArtSha = null;
+                long patchArtSize = 0;
+                String patchArtCodec = null;
+                Object patch = f.get("patch");
+                if (patch instanceof Map) {
+                    Map<String, Object> p = (Map<String, Object>) patch;
+                    patchOldSha = (String) p.get("oldSha256");
+                    patchNewSha = (String) p.get("newSha256");
+                    Object patchArt = p.get("artifact");
+                    if (patchArt instanceof Map) {
+                        Map<String, Object> a = (Map<String, Object>) patchArt;
+                        patchArtSha = (String) a.get("sha256");
+                        patchArtSize = asLong(a.get("size"), 0);
+                        patchArtCodec = a.get("codec") == null ? "zstd-patch" : String.valueOf(a.get("codec"));
+                    }
+                }
                 files.add(new FileEntry(
                         (String) f.get("path"),
                         (String) f.get("sha256"),
@@ -147,7 +185,8 @@ final class Manifest {
                         asLong(f.get("size"), 0),
                         f.get("sync") == null ? "strict" : String.valueOf(f.get("sync")),
                         (String) f.get("platform"),
-                        artSha, artSize, artCodec));
+                        artSha, artSize, artCodec,
+                        patchOldSha, patchNewSha, patchArtSha, patchArtSize, patchArtCodec));
             }
         }
 

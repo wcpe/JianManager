@@ -1,5 +1,7 @@
+import { useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import api from '@/api/client'
+import api, { ensureFreshToken } from '@/api/client'
+import { useAuthStore } from '@/stores/auth'
 
 export interface BotConfig {
   server: string
@@ -19,6 +21,74 @@ export interface BotInfo {
   workerId: string
   createdAt: string
   updatedAt: string
+}
+
+/** Bot 实时事件（SSE event: bot）。 */
+export interface BotRealtimeEvent {
+  botId: number
+  botUuid: string
+  type: string
+  data: Record<string, unknown>
+  timestamp: number
+}
+
+/** 单 Bot 实时状态。 */
+export interface BotRealtimeState {
+  status?: string
+  health?: number
+  food?: number
+  behavior?: string
+  position?: { x: number; y: number; z: number }
+  events: BotRealtimeEvent[]
+  connected: boolean
+}
+
+export interface BotStressSessionCounts {
+  total: number
+  byStatus: Record<string, number>
+}
+
+export interface BotStressOrchestrationSummary {
+  enabled: boolean
+  loop: boolean
+  staggerMs: number
+  phaseCount: number
+  durationSec: number
+  behaviors: string[]
+}
+
+export interface BotStressSession {
+  id: number
+  uuid: string
+  instanceId: number
+  count: number
+  behavior: string
+  namePrefix: string
+  config?: BotConfig
+  orchestrationYaml?: string
+  orchestrationSummary?: BotStressOrchestrationSummary
+  status: string
+  startedAt?: string | null
+  stoppedAt?: string | null
+  createdAt: string
+  updatedAt: string
+  counts: BotStressSessionCounts
+}
+
+export interface BotStressSessionListResponse {
+  items: BotStressSession[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface CreateBotStressSessionRequest {
+  instanceId: number
+  count: number
+  behavior?: string
+  namePrefix: string
+  config?: BotConfig
+  orchestrationYaml?: string
 }
 
 export interface CreateBotRequest {
@@ -169,4 +239,180 @@ export function useBotBatch() {
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['bots'] }),
   })
+}
+
+/** 查询 Bot 压测会话列表。 */
+export function useBotStressSessions(params?: { page?: number; pageSize?: number }) {
+  return useQuery({
+    queryKey: ['bots', 'stress-sessions', params],
+    queryFn: async () => {
+      const { data } = await api.get<BotStressSessionListResponse>('/bots/stress-sessions', { params })
+      return data
+    },
+  })
+}
+
+/** 查询单个 Bot 压测会话详情。 */
+export function useBotStressSession(id: number | null) {
+  return useQuery({
+    queryKey: ['bots', 'stress-sessions', id],
+    queryFn: async () => {
+      const { data } = await api.get<BotStressSession>(`/bots/stress-sessions/${id}`)
+      return data
+    },
+    enabled: id !== null,
+  })
+}
+
+/** 创建 Bot 压测会话。 */
+export function useCreateBotStressSession() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (payload: CreateBotStressSessionRequest) => {
+      const { data } = await api.post<BotStressSession>('/bots/stress-sessions', payload)
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['bots', 'stress-sessions'] }),
+  })
+}
+
+/** 启动 Bot 压测会话。 */
+export function useStartBotStressSession() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const { data } = await api.post<BotStressSession>(`/bots/stress-sessions/${id}/start`)
+      return data
+    },
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ['bots'] })
+      qc.invalidateQueries({ queryKey: ['bots', 'stress-sessions'] })
+      qc.invalidateQueries({ queryKey: ['bots', 'stress-sessions', id] })
+    },
+  })
+}
+
+/** 停止 Bot 压测会话。 */
+export function useStopBotStressSession() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const { data } = await api.post<BotStressSession>(`/bots/stress-sessions/${id}/stop`)
+      return data
+    },
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ['bots'] })
+      qc.invalidateQueries({ queryKey: ['bots', 'stress-sessions'] })
+      qc.invalidateQueries({ queryKey: ['bots', 'stress-sessions', id] })
+    },
+  })
+}
+
+/** 向单个 Bot 发送聊天/控制命令。 */
+export function useSendBotCommand() {
+  return useMutation({
+    mutationFn: ({ id, command }: { id: number; command: string }) =>
+      api.post(`/bots/${id}/command`, { command }),
+  })
+}
+
+/** 订阅单个 Bot 的实时事件流（FR-041）。 */
+export function useBotEvents(botId: number | null): BotRealtimeState {
+  const [state, setState] = useState<BotRealtimeState>({ connected: false, events: [] })
+  const mounted = useRef(true)
+
+  useEffect(() => {
+    mounted.current = true
+    if (!botId || !useAuthStore.getState().accessToken) {
+      queueMicrotask(() => setState({ connected: false, events: [] }))
+      return
+    }
+
+    queueMicrotask(() => setState({ connected: false, events: [] }))
+    const controller = new AbortController()
+    const base = api.defaults.baseURL || ''
+    const url = `${base}/bots/${botId}/events`
+
+    const applyEvent = (evt: BotRealtimeEvent) => {
+      setState((cur) => {
+        const next: BotRealtimeState = {
+          ...cur,
+          connected: true,
+          events: evt.type === 'state' ? cur.events : [evt, ...cur.events].slice(0, 100),
+        }
+        if (evt.type === 'state') {
+          const data = evt.data
+          next.status = typeof data.status === 'string' ? data.status : next.status
+          next.behavior = typeof data.behavior === 'string' ? data.behavior : next.behavior
+          next.health = typeof data.health === 'number' ? data.health : next.health
+          next.food = typeof data.food === 'number' ? data.food : next.food
+          if (data.position && typeof data.position === 'object') {
+            next.position = data.position as BotRealtimeState['position']
+          }
+        }
+        return next
+      })
+    }
+
+    async function connect() {
+      try {
+        const token = await ensureFreshToken()
+        if (!token || controller.signal.aborted) return
+        const resp = await fetch(url, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        })
+        if (!resp.ok || !resp.body) {
+          scheduleReconnect()
+          return
+        }
+
+        const reader = resp.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let currentEvent = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) {
+            scheduleReconnect()
+            break
+          }
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              currentEvent = line.slice(7).trim()
+              continue
+            }
+            if (line.startsWith('data: ') && currentEvent === 'bot') {
+              try {
+                applyEvent(JSON.parse(line.slice(6)) as BotRealtimeEvent)
+              } catch {
+                // 忽略坏帧，保持事件流不断。
+              }
+            }
+          }
+        }
+      } catch {
+        scheduleReconnect()
+      }
+    }
+
+    function scheduleReconnect() {
+      if (controller.signal.aborted || !mounted.current) return
+      setState((cur) => ({ ...cur, connected: false }))
+      window.setTimeout(connect, 5000)
+    }
+
+    connect()
+    return () => {
+      mounted.current = false
+      controller.abort()
+    }
+  }, [botId])
+
+  return state
 }

@@ -45,6 +45,15 @@ updater-core ──GET /manifest(latest,带 key+machineId)──→ JM 分发后
         "sha256": "ef56…",            // 制品自身 hash = 下载寻址 key
         "size": 45678,                // 制品（压缩后）大小
         "codec": "zstd"               // "zstd" | "none"
+      },
+      "patch": {                      // 可选；FR-098 zstd patch-from 增量制品
+        "oldSha256": "0011…",         // patch 适用的本地旧文件原始内容 hash
+        "newSha256": "ab12…",         // patch 应产出的新文件原始内容 hash（等于 files[].sha256）
+        "artifact": {
+          "sha256": "7788…",          // patch 制品自身 hash = 下载寻址 key
+          "size": 1234,
+          "codec": "zstd-patch"
+        }
       }
     }
     // …
@@ -67,6 +76,7 @@ updater-core ──GET /manifest(latest,带 key+machineId)──→ JM 分发后
 - **path**：统一 POSIX `/`、相对 gameDir、不得逃逸（`..` 拒绝）；不得落入玩家区（见 §6.4）。
 - **platform**：updater 只取 `platform==本机` 或 `platform==null` 的文件；JRE/natives 等用平台专属项。
 - **sync**：`strict` 文件被 reconcile 强制与 manifest 一致；`once` 仅当本地缺失才写（玩家可改的整合包配置）；`ignore` 列出但不增不删（仅供展示/审计）。
+- **patch**：可选加速路径，完整 `artifact` 必须始终保留。客户端本地文件 sha256 等于 `patch.oldSha256` 时可下载 `patch.artifact` 并以本地旧文件作 zstd 字典解出目标内容；patch 下载、解码或 `newSha256` 校验失败时必须回退完整 `artifact`。旧 updater-core 忽略未知 `patch` 字段，仍走完整制品。
 - **减量**：仅在 `managedDirs` 内、对 `sync!=once&&!=ignore` 的文件，删除"本地有但 manifest 未列"的；`managedDirs` 含 `"*"` 时表示 clean-all（整个 gameDir 托管），但仍受玩家区与 `cleanExclude` 保护。
 - **cleanExclude**：运营自定义追加排除前缀，命中路径永不删；空则省略，老 manifest JSON 不变。
 

@@ -31,11 +31,12 @@ const (
 
 // BotFilter Bot 查询筛选条件，列表/摘要/批量目标解析共用。
 type BotFilter struct {
-	InstanceID *uint
-	NodeID     *uint
-	Status     *model.BotStatus
-	Behavior   *string
-	Keyword    string // 匹配 name 或 uuid
+	InstanceID      *uint
+	StressSessionID *uint
+	NodeID          *uint
+	Status          *model.BotStatus
+	Behavior        *string
+	Keyword         string // 匹配 name 或 uuid
 }
 
 // BotFilterIn 批量请求体中的筛选 DTO（JSON 可绑定），经 ToFilter 转为内部 BotFilter。
@@ -140,6 +141,9 @@ func applyFilter(q *gorm.DB, f BotFilter, scopeIDs []uint, scope bool) *gorm.DB 
 	}
 	if f.InstanceID != nil {
 		q = q.Where("bots.instance_id = ?", *f.InstanceID)
+	}
+	if f.StressSessionID != nil {
+		q = q.Where("bots.stress_session_id = ?", *f.StressSessionID)
 	}
 	if f.NodeID != nil {
 		// Bot 无 node_id 列，经实例联表收敛到该节点下的实例
@@ -455,9 +459,9 @@ func (s *BotService) Batch(req BotBatchRequest, scopeIDs []uint, scope bool) (*B
 
 	// 有界并发委托，按 Bot 各自所属节点路由
 	var (
-		mu     sync.Mutex
-		wg     sync.WaitGroup
-		sem    = make(chan struct{}, batchConcurrency)
+		mu  sync.Mutex
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, batchConcurrency)
 	)
 	for i := range bots {
 		bot := bots[i]

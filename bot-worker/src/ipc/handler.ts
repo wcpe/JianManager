@@ -13,13 +13,13 @@
 
 import { createBot, type Bot } from 'mineflayer'
 import { sendEvent } from '../index.js'
-import { createBehavior, type Behavior, type CustomBehaviorConfig } from '../behavior/index.js'
+import { createBehavior, type Behavior } from '../behavior/index.js'
 import { ScriptRunner } from '../script/index.js'
 import { PrewarmPool } from '../state/prewarm.js'
 import { CapacityLimiter } from '../state/capacity.js'
 import { StateReporter, type BotStateSnapshot } from '../state/index.js'
 import { HealthCheck } from '../health/index.js'
-import type { IpcCommand, BotConfig } from './types.js'
+import type { IpcCommand, BotConfig, BehaviorConfig } from './types.js'
 
 /** 活跃的 Bot 实例。 */
 interface BotInstance {
@@ -182,6 +182,11 @@ function connectBot(botId: string, config: BotConfig): void {
       sendEvent({ evt: 'bot-event', botId, type: 'spawn', data: {} })
     })
 
+    mcBot.on('chat', (username: string, message: string) => {
+      if (username === mcBot.username) return
+      sendEvent({ evt: 'bot-event', botId, type: 'chat', data: { username, message } })
+    })
+
     mcBot.on('kicked', (reason: string) => {
       if (instance) {
         instance.status = 'disconnected'
@@ -254,7 +259,7 @@ function setBehavior(
   botId: string,
   behaviorType: string,
   target?: string,
-  config?: CustomBehaviorConfig
+  config?: BehaviorConfig
 ): void {
   const instance = bots.get(botId)
   if (!instance) {
@@ -264,8 +269,8 @@ function setBehavior(
 
   instance.behavior.stop()
 
-  const newBehavior = behaviorType === 'custom' && config
-    ? createBehavior(botId, 'custom', config)
+  const newBehavior = config
+    ? createBehavior(botId, behaviorType, config)
     : createBehavior(botId, behaviorType, target)
 
   if (instance.mcBot) {

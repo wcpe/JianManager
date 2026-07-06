@@ -5,8 +5,8 @@ import type { BotListParams, BotSummary, BotSummaryGroup } from '@/api/bots'
  * 抽成无 React 依赖的模块以便单测（参照 console/instance-tree.ts 约定）。
  */
 
-/** 后端 Bot 状态枚举（model.BotStatus）。`disconnected` 不是后端真实状态，故不在此列。 */
-export const BOT_STATUSES = ['pending', 'connecting', 'connected', 'error', 'stopped'] as const
+/** 后端 Bot 状态枚举（model.BotStatus）。 */
+export const BOT_STATUSES = ['pending', 'connecting', 'connected', 'disconnected', 'error', 'stopped'] as const
 export type BotStatusKind = (typeof BOT_STATUSES)[number]
 
 /** 概览卡片用的状态计数：在线=connected，连接中=connecting，异常=error。 */

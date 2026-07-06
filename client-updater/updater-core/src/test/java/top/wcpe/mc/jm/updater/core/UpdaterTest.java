@@ -3,11 +3,14 @@ package top.wcpe.mc.jm.updater.core;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.github.luben.zstd.Zstd;
+
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -40,6 +43,29 @@ class UpdaterTest {
         Map<String, Object> manifest = TestFixtures.buildManifest(
                 "skyblock-s1", version, managedDirs, specs, transport);
         transport.manifestJson = Json.canonical(manifest);
+    }
+
+    @SuppressWarnings("unchecked")
+    private String attachPatch(Map<String, Object> manifest, TestFixtures.MemoryTransport transport,
+                               byte[] oldContent, byte[] newContent, boolean corruptPatch) {
+        Map<String, Object> file = (Map<String, Object>) ((List<Object>) manifest.get("files")).get(0);
+        byte[] patch = Zstd.compressUsingDict(newContent, oldContent, 3);
+        if (corruptPatch) {
+            patch = bytes("not a valid zstd patch");
+        }
+        String patchSha = Hashes.sha256(patch);
+        transport.artifacts.put(patchSha, patch);
+
+        Map<String, Object> patchObj = new LinkedHashMap<>();
+        patchObj.put("oldSha256", Hashes.sha256(oldContent));
+        patchObj.put("newSha256", Hashes.sha256(newContent));
+        Map<String, Object> artifact = new LinkedHashMap<>();
+        artifact.put("sha256", patchSha);
+        artifact.put("size", (long) patch.length);
+        artifact.put("codec", "zstd-patch");
+        patchObj.put("artifact", artifact);
+        file.put("patch", patchObj);
+        return patchSha;
     }
 
     @Test
@@ -78,6 +104,82 @@ class UpdaterTest {
 
         assertEquals(Updater.OK, rc);
         assertEquals(0, transport.artifactFetchCount, "md5/size 快筛命中应跳过下载");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void patchAppliedWhenLocalOldHashMatches(@TempDir Path gameDir) throws Exception {
+        TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
+        byte[] oldContent = bytes("resource pack v1 shared shared shared");
+        byte[] newContent = bytes("resource pack v2 shared shared shared");
+        Files.createDirectories(gameDir.resolve("mods"));
+        Files.write(gameDir.resolve("mods/big.bin"), oldContent);
+
+        Map<String, Object> manifest = TestFixtures.buildManifest("skyblock-s1", 2,
+                Collections.singletonList("mods"),
+                Collections.singletonList(new TestFixtures.FileSpec("mods/big.bin", newContent)), transport);
+        String patchSha = attachPatch(manifest, transport, oldContent, newContent, false);
+        String fullSha = (String) ((Map<String, Object>) ((Map<String, Object>)
+                ((List<Object>) manifest.get("files")).get(0)).get("artifact")).get("sha256");
+        transport.manifestJson = Json.canonical(manifest);
+
+        int rc = updater(gameDir, transport).run();
+
+        assertEquals(Updater.OK, rc);
+        assertArrayEquals(newContent, Files.readAllBytes(gameDir.resolve("mods/big.bin")));
+        assertEquals(Collections.singletonList(patchSha), transport.artifactFetches,
+                "本地旧文件匹配时应只拉 patch，不拉全量制品 " + fullSha);
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void patchSkippedWhenLocalOldHashDoesNotMatch(@TempDir Path gameDir) throws Exception {
+        TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
+        byte[] oldContent = bytes("resource pack v1 shared shared shared");
+        byte[] localContent = bytes("player edited local content");
+        byte[] newContent = bytes("resource pack v2 shared shared shared");
+        Files.createDirectories(gameDir.resolve("mods"));
+        Files.write(gameDir.resolve("mods/big.bin"), localContent);
+
+        Map<String, Object> manifest = TestFixtures.buildManifest("skyblock-s1", 2,
+                Collections.singletonList("mods"),
+                Collections.singletonList(new TestFixtures.FileSpec("mods/big.bin", newContent)), transport);
+        attachPatch(manifest, transport, oldContent, newContent, false);
+        String fullSha = (String) ((Map<String, Object>) ((Map<String, Object>)
+                ((List<Object>) manifest.get("files")).get(0)).get("artifact")).get("sha256");
+        transport.manifestJson = Json.canonical(manifest);
+
+        int rc = updater(gameDir, transport).run();
+
+        assertEquals(Updater.OK, rc);
+        assertArrayEquals(newContent, Files.readAllBytes(gameDir.resolve("mods/big.bin")));
+        assertEquals(Collections.singletonList(fullSha), transport.artifactFetches,
+                "本地旧文件不匹配时应跳过 patch 并回退全量制品");
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void corruptPatchFallsBackToFullArtifact(@TempDir Path gameDir) throws Exception {
+        TestFixtures.MemoryTransport transport = new TestFixtures.MemoryTransport();
+        byte[] oldContent = bytes("resource pack v1 shared shared shared");
+        byte[] newContent = bytes("resource pack v2 shared shared shared");
+        Files.createDirectories(gameDir.resolve("mods"));
+        Files.write(gameDir.resolve("mods/big.bin"), oldContent);
+
+        Map<String, Object> manifest = TestFixtures.buildManifest("skyblock-s1", 2,
+                Collections.singletonList("mods"),
+                Collections.singletonList(new TestFixtures.FileSpec("mods/big.bin", newContent)), transport);
+        String patchSha = attachPatch(manifest, transport, oldContent, newContent, true);
+        String fullSha = (String) ((Map<String, Object>) ((Map<String, Object>)
+                ((List<Object>) manifest.get("files")).get(0)).get("artifact")).get("sha256");
+        transport.manifestJson = Json.canonical(manifest);
+
+        int rc = updater(gameDir, transport).run();
+
+        assertEquals(Updater.OK, rc);
+        assertArrayEquals(newContent, Files.readAllBytes(gameDir.resolve("mods/big.bin")));
+        assertEquals(Arrays.asList(patchSha, fullSha), transport.artifactFetches,
+                "patch 损坏时应先尝试 patch，再回退全量制品");
     }
 
     @Test
