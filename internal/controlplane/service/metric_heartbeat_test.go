@@ -113,6 +113,52 @@ func TestMetric_IngestHeartbeat_ProbeUnavailableWritesNull(t *testing.T) {
 	require.Nil(t, findSeries(instSeries, model.MetricInstHeapUsed, ""))
 }
 
+func TestMetric_IngestHeartbeat_ProcessTop(t *testing.T) {
+	svc := newMetricSvc(t)
+	require.NoError(t, svc.db.AutoMigrate(&model.Node{}, &model.Instance{}))
+	require.NoError(t, svc.db.Create(&model.Instance{
+		UUID: "inst-1", Name: "survival", NodeID: 1, Type: model.InstanceTypeGeneric,
+		ProcessType: model.ProcessTypeDirect, StartCommand: "sleep",
+	}).Error)
+	base := metricBase()
+
+	require.NoError(t, svc.ingestHeartbeatAt(&workerpb.HeartbeatRequest{
+		NodeUuid: "node-1",
+		ProcessMetrics: []*workerpb.ProcessMetricSample{
+			{InstanceUuid: "inst-1", Pid: 10, Name: "java", CpuPercent: 20, RssBytes: 100, CommandSummary: "java -jar server.jar", SampledAtUnixMs: base.UnixMilli()},
+			{InstanceUuid: "inst-1", Pid: 11, Name: "worker", CpuPercent: 30, RssBytes: 50, SampledAtUnixMs: base.UnixMilli()},
+		},
+	}, base))
+
+	got, err := svc.QueryProcessTop(ProcessTopQuery{InstanceUUID: "inst-1", Sort: "cpu", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.Equal(t, int32(11), got[0].PID)
+	require.Equal(t, uint(1), got[0].InstanceID)
+	require.Equal(t, "node-1", got[0].NodeUUID)
+}
+
+func TestMetric_QueryProcessTop_UsesLatestSamplePerInstance(t *testing.T) {
+	svc := newMetricSvc(t)
+	require.NoError(t, svc.db.AutoMigrate(&model.Node{}, &model.Instance{}))
+	require.NoError(t, svc.db.Create(&[]model.Instance{
+		{UUID: "inst-a", Name: "survival", NodeID: 1, Type: model.InstanceTypeGeneric, ProcessType: model.ProcessTypeDirect, StartCommand: "sleep"},
+		{UUID: "inst-b", Name: "lobby", NodeID: 1, Type: model.InstanceTypeGeneric, ProcessType: model.ProcessTypeDirect, StartCommand: "sleep"},
+	}).Error)
+	base := metricBase()
+
+	require.NoError(t, svc.IngestProcessMetrics("node-1", []*workerpb.ProcessMetricSample{
+		{InstanceUuid: "inst-a", Pid: 10, Name: "java", CpuPercent: 20, SampledAtUnixMs: base.UnixMilli()},
+		{InstanceUuid: "inst-b", Pid: 20, Name: "java", CpuPercent: 30, SampledAtUnixMs: base.Add(10 * time.Second).UnixMilli()},
+	}, base))
+
+	got, err := svc.QueryProcessTop(ProcessTopQuery{NodeUUID: "node-1", Sort: "cpu", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	require.Equal(t, int32(20), got[0].PID)
+	require.Equal(t, int32(10), got[1].PID)
+}
+
 func TestMetric_IngestHeartbeat_NetworkRateFromCumulative(t *testing.T) {
 	svc := newMetricSvc(t)
 	base := metricBase()
@@ -202,7 +248,7 @@ func TestMetric_Overview(t *testing.T) {
 	require.Equal(t, 3, ov.Totals.NodeCount)
 	require.Equal(t, 2, ov.Totals.OnlineNodeCount)
 	require.Equal(t, 1, ov.Totals.RunningInstances)
-	require.InDelta(t, 50.0, ov.Totals.CPUPct, 1e-4) // (40+60)/2，float32 源值留容差
+	require.InDelta(t, 50.0, ov.Totals.CPUPct, 1e-4)  // (40+60)/2，float32 源值留容差
 	require.InDelta(t, 50.0, ov.Totals.LoadAvg, 1e-9) // 负载利用率均值 (25+75)/2
 	require.Equal(t, int64(3072)*1024*1024, ov.Totals.MemUsedBytes)
 	require.Equal(t, int64(8), ov.Totals.OnlinePlayers) // 5+3 最近样本

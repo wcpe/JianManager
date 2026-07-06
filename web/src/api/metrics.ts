@@ -150,3 +150,40 @@ export function useMetricOverview(range: MetricRange, resolution?: MetricResolut
     refetchInterval: 30_000,
   })
 }
+
+export interface ProcessTopItem {
+  instanceId: number
+  instanceUuid: string
+  nodeUuid: string
+  pid: number
+  name: string
+  cpuPercent: number
+  rssBytes: number
+  readBytesPerSec: number
+  writeBytesPerSec: number
+  user: string
+  commandSummary: string
+  sampledAt: string
+}
+
+export function useProcessTop(params: {
+  instanceId?: number
+  nodeId?: string
+  sort?: 'cpu' | 'memory' | 'io'
+  limit?: number
+  enabled?: boolean
+}) {
+  const { instanceId, nodeId, sort = 'cpu', limit = 10, enabled = true } = params
+  return useQuery({
+    queryKey: ['processTop', instanceId ?? '', nodeId ?? '', sort, limit],
+    queryFn: async () => {
+      const q = new URLSearchParams({ sort, limit: String(limit) })
+      if (instanceId) q.set('instanceId', String(instanceId))
+      if (nodeId) q.set('nodeId', nodeId)
+      const { data } = await api.get<ProcessTopItem[]>(`/metrics/processes/top?${q.toString()}`)
+      return data
+    },
+    enabled,
+    refetchInterval: enabled ? 30_000 : false,
+  })
+}

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight, Download } from 'lucide-react'
-import { useAuditLogs, type AuditLogInfo } from '@/api/audit'
+import { exportAuditLogs, useAuditLogs, type AuditLogInfo } from '@/api/audit'
 import { useUsers } from '@/api/users'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
@@ -19,7 +19,6 @@ import {
   DEFAULT_AUDIT_FILTER,
   toAuditParams,
   formatAuditDetail,
-  auditRowsToNDJSON,
   type AuditFilterState,
 } from './audit-filters'
 
@@ -29,8 +28,8 @@ const SENTINEL_ALL = '__all__'
 /**
  * 审计日志查询页（FR-015 + FR-158）。
  * 套「流水检索」范式：强筛选（用户/操作/目标类型/时间范围）→ 时间线行；行可展开看变更详情（detail）。
- * 「导出」客户端序列化当前结果为 NDJSON；「加载更多」递增 limit、「清空」恢复默认。
- * 注：后端 /audit 暂未返回命中总数，分页沿用「已加载/加载更多」（真实总数+分页待后端补）。
+ * 「导出」走后端 NDJSON 白名单导出；「加载更多」扩大 pageSize；「清空」恢复默认。
+ * 后端分页 envelope 返回真实 total，页面展示已加载数与命中总数。
  */
 export default function AuditPage() {
   const { t } = useTranslation()
@@ -44,14 +43,14 @@ export default function AuditPage() {
     setFilter((prev) => ({ ...prev, limit: DEFAULT_AUDIT_FILTER.limit, ...next }))
 
   const params = toAuditParams(filter)
-  const { data: logs, isLoading, isError } = useAuditLogs(params)
+  const { data: page, isLoading, isError } = useAuditLogs(params)
+  const logs = page?.items ?? []
 
-  // 命中数等于当前 limit 时，可能还有更多，允许继续加载。
-  const canLoadMore = !!logs && logs.length >= filter.limit
+  const canLoadMore = !!page && logs.length < page.total
 
-  const handleExport = () => {
-    if (!logs || logs.length === 0) return
-    const blob = new Blob([auditRowsToNDJSON(logs)], { type: 'application/x-ndjson' })
+  const handleExport = async () => {
+    if (logs.length === 0) return
+    const blob = await exportAuditLogs(params)
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -69,7 +68,7 @@ export default function AuditPage() {
             variant="outline"
             size="sm"
             onClick={handleExport}
-            disabled={!logs || logs.length === 0}
+            disabled={logs.length === 0}
           >
             <Download className="size-3.5" />
             {t('audit.export')}
@@ -126,7 +125,7 @@ export default function AuditPage() {
         />
       </div>
 
-      {isLoading && !logs ? (
+      {isLoading && !page ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
       ) : isError ? (
         <p className="text-destructive">{t('audit.loadError')}</p>
@@ -142,7 +141,7 @@ export default function AuditPage() {
               <span className="min-w-0 flex-1">{t('audit.target')}</span>
               <span className="w-28 shrink-0">{t('audit.ip')}</span>
             </div>
-            {!logs || logs.length === 0 ? (
+            {logs.length === 0 ? (
               <p className="px-3 py-10 text-center text-sm text-muted-foreground">{t('audit.empty')}</p>
             ) : (
               logs.map((log) => (
@@ -158,7 +157,7 @@ export default function AuditPage() {
 
           {/* 加载更多 */}
           <div className="flex items-center justify-between text-sm text-muted-foreground">
-            <span>{t('audit.totalCount', { count: logs?.length ?? 0 })}</span>
+            <span>{t('audit.loadedCount', { loaded: logs.length, total: page?.total ?? logs.length })}</span>
             <Button
               variant="outline"
               size="sm"

@@ -18,6 +18,7 @@ func newMetricSvc(t *testing.T) *MetricService {
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
 		&model.MetricSeries{}, &model.MetricSampleRaw{},
+		&model.ProcessMetricSnapshot{},
 		&model.MetricRollup5m{}, &model.MetricRollup1h{},
 	))
 	return NewMetricService(db)
@@ -166,6 +167,22 @@ func TestMetric_PurgeTTL(t *testing.T) {
 	var rawCount int64
 	require.NoError(t, svc.db.Model(&model.MetricSampleRaw{}).Count(&rawCount).Error)
 	require.Equal(t, int64(1), rawCount, "超 48h 原始样本被清理，近端保留")
+}
+
+func TestMetric_PurgeTTL_RemovesProcessSnapshots(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	require.NoError(t, svc.db.Create(&[]model.ProcessMetricSnapshot{
+		{NodeUUID: "node-1", InstanceUUID: "old", PID: 10, SampledAt: base.Add(-50 * time.Hour)},
+		{NodeUUID: "node-1", InstanceUUID: "new", PID: 11, SampledAt: base.Add(-time.Hour)},
+	}).Error)
+
+	require.NoError(t, svc.RollupAndPurge(base))
+
+	var rows []model.ProcessMetricSnapshot
+	require.NoError(t, svc.db.Order("id").Find(&rows).Error)
+	require.Len(t, rows, 1)
+	require.Equal(t, int32(11), rows[0].PID)
 }
 
 func TestMetric_QueryAutoResolutionPicksTier(t *testing.T) {

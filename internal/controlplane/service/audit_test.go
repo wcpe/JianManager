@@ -107,3 +107,38 @@ func TestAuditService_List_WithActionFilter(t *testing.T) {
 	assert.Len(t, result, 1)
 	assert.Equal(t, "instance.start", result[0].Action)
 }
+
+func TestAuditService_ListPage_ReturnsEnvelope(t *testing.T) {
+	db := setupAuditTestDB(t)
+	svc := NewAuditService(db)
+
+	user := &model.User{
+		UUID:     "test-user-uuid-3",
+		Username: "testuser3",
+		Password: "hashed",
+		Role:     model.RolePlatformAdmin,
+		Status:   model.UserStatusActive,
+	}
+	require.NoError(t, db.Create(user).Error)
+
+	base := time.Now().Add(-10 * time.Minute)
+	for i := 0; i < 5; i++ {
+		require.NoError(t, db.Create(&model.AuditLog{
+			UUID:       fmt.Sprintf("page-log-%d", i),
+			UserID:     user.ID,
+			Action:     "instance.start",
+			TargetType: "instance",
+			TargetID:   fmt.Sprintf("%d", i),
+			CreatedAt:  base.Add(time.Duration(i) * time.Minute),
+		}).Error)
+	}
+
+	page, err := svc.ListPage(AuditFilter{Page: 2, PageSize: 2})
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), page.Total)
+	assert.Equal(t, 2, page.Page)
+	assert.Equal(t, 2, page.PageSize)
+	require.Len(t, page.Items, 2)
+	assert.Equal(t, "2", page.Items[0].TargetID)
+	assert.Equal(t, "1", page.Items[1].TargetID)
+}

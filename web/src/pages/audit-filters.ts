@@ -41,7 +41,7 @@ export function toRFC3339(local: string): string | undefined {
 }
 
 /**
- * 把筛选状态规整为 `GET /audit` 的 query 参数（FR-015）。
+ * 把筛选状态规整为 `GET /audit` 的 query 参数（FR-015 / FR-172）。
  * 留空 / 非法的维度一律省略，时间转为 RFC3339。
  */
 export function toAuditParams(filter: AuditFilterState): AuditQueryParams {
@@ -65,7 +65,10 @@ export function toAuditParams(filter: AuditFilterState): AuditQueryParams {
   const to = toRFC3339(filter.to)
   if (to) params.to = to
 
-  if (filter.limit > 0) params.limit = filter.limit
+  if (filter.limit > 0) {
+    params.page = 1
+    params.pageSize = filter.limit
+  }
 
   return params
 }
@@ -85,8 +88,8 @@ export function formatAuditDetail(detail: string | undefined): string {
 }
 
 /**
- * 把已加载的审计行序列化为 NDJSON（FR-158 审计导出）。
- * 客户端导出当前结果集（后端暂无导出端点）：每行一条对象，扁平化 username 便于检阅。
+ * 把审计行序列化为 NDJSON；保留给纯函数测试与旧调用兼容。
+ * 每行一条对象，扁平化 username 便于检阅。
  */
 export function auditRowsToNDJSON(rows: AuditLogInfo[]): string {
   return rows

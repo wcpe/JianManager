@@ -161,6 +161,7 @@ func (h *Heartbeat) sendHeartbeat() error {
 			})
 		}
 		req.InstanceMetrics = collectInstanceMetrics(states)
+		req.ProcessMetrics = collectProcessMetrics(states)
 	}
 
 	// 附加运行中长任务进度快照（FR-183，见 ADR-040）。

@@ -43,13 +43,27 @@ type AuditFilter struct {
 	From       *time.Time
 	To         *time.Time
 	Limit      int
+	Page       int
+	PageSize   int
 }
 
-// List 查询审计日志列表。
-func (s *AuditService) List(filter AuditFilter) ([]model.AuditLog, error) {
-	var logs []model.AuditLog
-	q := s.db.Model(&model.AuditLog{}).Preload("User")
+type AuditPage struct {
+	Items    []model.AuditLog `json:"items"`
+	Total    int64            `json:"total"`
+	Page     int              `json:"page"`
+	PageSize int              `json:"pageSize"`
+}
 
+type auditExportCursor struct {
+	createdAt time.Time
+	id        uint
+	set       bool
+}
+
+const defaultAuditExportBatchSize = 200
+
+func (s *AuditService) auditQuery(filter AuditFilter) *gorm.DB {
+	q := s.db.Model(&model.AuditLog{}).Preload("User")
 	if filter.UserID != nil {
 		q = q.Where("user_id = ?", *filter.UserID)
 	}
@@ -65,14 +79,105 @@ func (s *AuditService) List(filter AuditFilter) ([]model.AuditLog, error) {
 	if filter.To != nil {
 		q = q.Where("created_at <= ?", *filter.To)
 	}
+	return q
+}
 
+// List 查询审计日志列表，保留旧 limit 数组响应语义。
+func (s *AuditService) List(filter AuditFilter) ([]model.AuditLog, error) {
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = 100
 	}
-
-	if err := q.Order("created_at DESC").Limit(limit).Find(&logs).Error; err != nil {
+	var logs []model.AuditLog
+	if err := s.auditQuery(filter).Order("created_at DESC, id DESC").Limit(limit).Find(&logs).Error; err != nil {
 		return nil, err
 	}
 	return logs, nil
+}
+
+// ListPage 分页查询审计日志，供新版审计页使用。
+func (s *AuditService) ListPage(filter AuditFilter) (AuditPage, error) {
+	page, pageSize := normalizeAuditPage(filter.Page, filter.PageSize)
+	var total int64
+	if err := s.auditQuery(filter).Count(&total).Error; err != nil {
+		return AuditPage{}, err
+	}
+	var logs []model.AuditLog
+	err := s.auditQuery(filter).
+		Order("created_at DESC, id DESC").
+		Offset((page - 1) * pageSize).
+		Limit(pageSize).
+		Find(&logs).Error
+	if err != nil {
+		return AuditPage{}, err
+	}
+	return AuditPage{Items: logs, Total: total, Page: page, PageSize: pageSize}, nil
+}
+
+// Export 查询全部匹配的审计日志，不受列表分页参数影响。
+func (s *AuditService) Export(filter AuditFilter) ([]model.AuditLog, error) {
+	var logs []model.AuditLog
+	err := s.StreamExport(filter, defaultAuditExportBatchSize, func(log model.AuditLog) error {
+		logs = append(logs, log)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return logs, nil
+}
+
+// StreamExport 分批遍历全部匹配的审计日志，不受列表分页参数影响。
+func (s *AuditService) StreamExport(filter AuditFilter, batchSize int, handle func(model.AuditLog) error) error {
+	if batchSize <= 0 {
+		batchSize = defaultAuditExportBatchSize
+	}
+	filter.Limit = 0
+	filter.Page = 0
+	filter.PageSize = 0
+	cursor := auditExportCursor{}
+	for {
+		logs, err := s.exportBatch(filter, batchSize, cursor)
+		if err != nil {
+			return err
+		}
+		if len(logs) == 0 {
+			return nil
+		}
+		for _, log := range logs {
+			if err := handle(log); err != nil {
+				return err
+			}
+		}
+		last := logs[len(logs)-1]
+		cursor = auditExportCursor{createdAt: last.CreatedAt, id: last.ID, set: true}
+		if len(logs) < batchSize {
+			return nil
+		}
+	}
+}
+
+func (s *AuditService) exportBatch(filter AuditFilter, batchSize int, cursor auditExportCursor) ([]model.AuditLog, error) {
+	q := s.auditQuery(filter).Order("created_at DESC, id DESC").Limit(batchSize)
+	if cursor.set {
+		q = q.Where("created_at < ? OR (created_at = ? AND id < ?)", cursor.createdAt, cursor.createdAt, cursor.id)
+	}
+	var logs []model.AuditLog
+	if err := q.Find(&logs).Error; err != nil {
+		return nil, err
+	}
+	return logs, nil
+}
+
+func normalizeAuditPage(page, pageSize int) (int, int) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 50
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	return page, pageSize
 }

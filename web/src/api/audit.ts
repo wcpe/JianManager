@@ -27,6 +27,15 @@ export interface AuditQueryParams {
   /** 结束时间（RFC3339，含时区）。 */
   to?: string
   limit?: number
+  page?: number
+  pageSize?: number
+}
+
+export interface AuditLogPage {
+  items: AuditLogInfo[]
+  total: number
+  page: number
+  pageSize: number
 }
 
 /**
@@ -38,9 +47,23 @@ export function useAuditLogs(params?: AuditQueryParams) {
   return useQuery({
     queryKey: ['audit', params],
     queryFn: async () => {
-      const { data } = await api.get<AuditLogInfo[]>('/audit', { params })
+      const { data } = await api.get<AuditLogPage | AuditLogInfo[]>('/audit', { params })
+      if (Array.isArray(data)) {
+        return { items: data, total: data.length, page: 1, pageSize: data.length }
+      }
       return data
     },
     placeholderData: (prev) => prev,
   })
+}
+
+export async function exportAuditLogs(params?: AuditQueryParams): Promise<Blob> {
+  const exportParams = params ? { ...params } : undefined
+  if (exportParams) {
+    delete exportParams.page
+    delete exportParams.pageSize
+    delete exportParams.limit
+  }
+  const { data } = await api.get<Blob>('/audit/export', { params: exportParams, responseType: 'blob' })
+  return data
 }

@@ -92,7 +92,7 @@ describe('MonitoringPage（mock 假后端）', () => {
     // 平台主图网格标题「负载/内存」唯一（概览/对比用「1 分钟/已用」别名，不冲突），证明骨架挂载。
     // CPU/在线玩家 因 FR-221 概览/对比也用同名，故仅断言「至少出现一次」。
     expect(await screen.findByText('负载')).toBeInTheDocument()
-    expect(screen.getByText('内存')).toBeInTheDocument()
+    expect(screen.getAllByText('内存').length).toBeGreaterThan(0)
     expect(screen.getAllByText('CPU').length).toBeGreaterThan(0)
     expect(screen.getAllByText('在线玩家').length).toBeGreaterThan(0)
   })
@@ -131,6 +131,29 @@ describe('MonitoringPage（mock 假后端）', () => {
     expect(screen.getByRole('tab', { name: '5 分钟' })).toBeInTheDocument()
     // 对比初始空选 → 提示语在位。
     expect(screen.getByText('勾选上方指标以叠加对比')).toBeInTheDocument()
+  })
+
+  it('③ 下钻到实例后展示进程 TOP10（FR-170）', async () => {
+    const user = userEvent.setup()
+    loginMockUser()
+    renderWithProviders(<MonitoringPage />)
+
+    const nodeDrill = (await screen.findByLabelText('下钻到实例')) as HTMLSelectElement
+    await user.selectOptions(nodeDrill, 'node-1-uuid')
+    const instanceDrill = (await screen.findByRole('combobox', { name: '下钻到实例' })) as HTMLSelectElement
+    await user.selectOptions(instanceDrill, 'inst-1-uuid')
+
+    expect(await screen.findByText('进程 TOP10')).toBeInTheDocument()
+    expect((await screen.findAllByText('java -Xmx4G -jar server.jar')).length).toBeGreaterThan(0)
+    expect(screen.getAllByText('minecraft').length).toBeGreaterThan(0)
+    expect(screen.getByText('1.5 MiB/s')).toBeInTheDocument()
+
+    const row = screen.getAllByTestId('process-top-row')[0]
+    await user.hover(row)
+    const detail = within(row).getByTestId('process-top-hover')
+    expect(within(detail).getByText('采样时间')).toBeInTheDocument()
+    expect(within(detail).getByText('IO 读/写')).toBeInTheDocument()
+    expect(within(detail).getByText('1.0 MiB/s · 512.0 KiB/s')).toBeInTheDocument()
   })
 
   it('④ 注入 500（/metrics/overview）→ 页面不崩溃，骨架仍在', async () => {

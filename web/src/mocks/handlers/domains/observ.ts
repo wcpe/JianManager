@@ -546,7 +546,8 @@ function rangePlan(range: string): { count: number; step: number } {
   }
 }
 
-const GIB = 1024 * 1024 * 1024
+const MIB = 1024 * 1024
+const GIB = 1024 * MIB
 
 /** 节点序列：CPU%/负载/内存/磁盘/网络（metricKey 对齐 lib/monitor-metrics NODE_CHART_DEFS）。 */
 function nodeSeries(range: string) {
@@ -569,7 +570,7 @@ function nodeSeries(range: string) {
   ]
 }
 
-/** 实例序列：TPS/MSPT/堆/线程/玩家 + 分世界区块（world 非空）。 */
+/** 实例序列：TPS/MSPT/堆/线程/玩家/CPU + 分世界区块（world 非空）。 */
 function instanceSeries(range: string) {
   const { count, step } = rangePlan(range)
   const mk = (key: string, unit: string, base: number, amp: number, world = '') => ({
@@ -585,6 +586,7 @@ function instanceSeries(range: string) {
     mk('inst_heap_max', 'bytes', 4 * GIB, 0),
     mk('inst_threads', '', 80, 20),
     mk('inst_players_online', '', 12, 8),
+    mk('inst_cpu_pct', '%', 42, 25),
     mk('world_loaded_chunks', '', 600, 200, 'world'),
     mk('world_loaded_chunks', '', 200, 80, 'world_nether'),
   ]
@@ -702,6 +704,42 @@ export const handlers = [
       to: iso(0),
       series,
     })
+  }),
+
+  domainRoute('get', '/metrics/processes/top', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const now = new Date().toISOString()
+    return HttpResponse.json([
+      {
+        instanceId: Number(new URL(info.request.url).searchParams.get('instanceId') ?? 1),
+        instanceUuid: 'inst-1',
+        nodeUuid: 'node-a',
+        pid: 24512,
+        name: 'java',
+        cpuPercent: 42.5,
+        rssBytes: 2.4 * GIB,
+        readBytesPerSec: 1024 * 1024,
+        writeBytesPerSec: 512 * 1024,
+        user: 'minecraft',
+        commandSummary: 'java -Xmx4G -jar server.jar',
+        sampledAt: now,
+      },
+      {
+        instanceId: Number(new URL(info.request.url).searchParams.get('instanceId') ?? 1),
+        instanceUuid: 'inst-1',
+        nodeUuid: 'node-a',
+        pid: 24518,
+        name: 'wrapper',
+        cpuPercent: 3.1,
+        rssBytes: 80 * MIB,
+        readBytesPerSec: 64 * 1024,
+        writeBytesPerSec: 16 * 1024,
+        user: 'minecraft',
+        commandSummary: 'jm-worker-daemon',
+        sampledAt: now,
+      },
+    ])
   }),
 
   domainRoute('get', '/nodes/:id/metrics', (info) => {

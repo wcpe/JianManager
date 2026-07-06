@@ -120,6 +120,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.LogEntry{},
 		&model.MetricSeries{},
 		&model.MetricSampleRaw{},
+		&model.ProcessMetricSnapshot{},
 		&model.MetricRollup5m{},
 		&model.MetricRollup1h{},
 		&model.PlatformSetting{},

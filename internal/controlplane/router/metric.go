@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ func (h *MetricHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	m := rg.Group("/metrics")
 	m.GET("/series", h.Series)
 	m.GET("/overview", h.Overview)
+	m.GET("/processes/top", h.ProcessTop)
 }
 
 var metricRangeDurations = map[string]time.Duration{
@@ -146,6 +148,71 @@ func (h *MetricHandler) Overview(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, ov)
+}
+
+// ProcessTop 返回受管实例进程 TOPN 快照（FR-170）。
+func (h *MetricHandler) ProcessTop(c *gin.Context) {
+	access := getAccess(c)
+	if access == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
+	}
+
+	q := service.ProcessTopQuery{
+		NodeUUID: c.Query("nodeId"),
+		Sort:     c.DefaultQuery("sort", "cpu"),
+		Limit:    parseProcessTopLimit(c.Query("limit")),
+	}
+	if q.Sort != "cpu" && q.Sort != "memory" && q.Sort != "io" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_SORT", "message": "sort 必须为 cpu、memory 或 io"})
+		return
+	}
+
+	if instanceID := c.Query("instanceId"); instanceID != "" {
+		id64, err := strconv.ParseUint(instanceID, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_INSTANCE", "message": "instanceId 非法"})
+			return
+		}
+		id := uint(id64)
+		allowed, err := h.authz.CanAccessInstance(access, id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "无权访问该实例进程指标"})
+			return
+		}
+		uuid, found, err := h.metricSvc.ResolveInstanceUUID(id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+			return
+		}
+		if !found {
+			c.JSON(http.StatusNotFound, gin.H{"error": "TARGET_NOT_FOUND", "message": "实例不存在"})
+			return
+		}
+		q.InstanceUUID = uuid
+	} else if !access.IsPlatformAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "请指定可访问的 instanceId"})
+		return
+	}
+
+	items, err := h.metricSvc.QueryProcessTop(q)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return
+	}
+	c.JSON(http.StatusOK, items)
+}
+
+func parseProcessTopLimit(raw string) int {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 || n > 50 {
+		return 10
+	}
+	return n
 }
 
 // parseMetricRange 解析查询区间：优先 from/to（RFC3339），否则按 range 枚举回退、默认 24h。

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,6 +86,19 @@ type netCounters struct {
 // NewMetricService 创建时序指标服务。
 func NewMetricService(db *gorm.DB) *MetricService {
 	return &MetricService{db: db, lastNet: map[string]netCounters{}}
+}
+
+// ResolveInstanceUUID 由数值实例 ID 取 UUID，供进程 TOPN 查询过滤。
+func (s *MetricService) ResolveInstanceUUID(id uint) (string, bool, error) {
+	var inst model.Instance
+	err := s.db.Select("uuid").First(&inst, id).Error
+	if err == nil {
+		return inst.UUID, true, nil
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", false, nil
+	}
+	return "", false, err
 }
 
 // NodeExists 判断节点 UUID 是否存在（查询目标存在性校验用）。
@@ -239,7 +253,158 @@ func (s *MetricService) ingestHeartbeatAt(req *workerpb.HeartbeatRequest, now ti
 		}
 	}
 
-	return s.Ingest(samples)
+	if err := s.Ingest(samples); err != nil {
+		return err
+	}
+	return s.IngestProcessMetrics(req.NodeUuid, req.ProcessMetrics, now)
+}
+
+// ProcessTopQuery 进程 TOPN 查询参数（FR-170）。
+type ProcessTopQuery struct {
+	InstanceUUID string
+	NodeUUID     string
+	Sort         string
+	Limit        int
+}
+
+// ProcessTopItem 进程 TOPN 返回项（FR-170）。
+type ProcessTopItem struct {
+	InstanceID       uint      `json:"instanceId"`
+	InstanceUUID     string    `json:"instanceUuid"`
+	NodeUUID         string    `json:"nodeUuid"`
+	PID              int32     `json:"pid"`
+	Name             string    `json:"name"`
+	CPUPercent       float64   `json:"cpuPercent"`
+	RSSBytes         uint64    `json:"rssBytes"`
+	ReadBytesPerSec  uint64    `json:"readBytesPerSec"`
+	WriteBytesPerSec uint64    `json:"writeBytesPerSec"`
+	User             string    `json:"user"`
+	CommandSummary   string    `json:"commandSummary"`
+	SampledAt        time.Time `json:"sampledAt"`
+}
+
+// IngestProcessMetrics 保存一次心跳中的受管实例进程 TOPN 快照。
+func (s *MetricService) IngestProcessMetrics(nodeUUID string, samples []*workerpb.ProcessMetricSample, fallback time.Time) error {
+	if nodeUUID == "" || len(samples) == 0 {
+		return nil
+	}
+	rows := make([]model.ProcessMetricSnapshot, 0, len(samples))
+	for _, sm := range samples {
+		if sm == nil || sm.InstanceUuid == "" || sm.Pid <= 0 {
+			continue
+		}
+		sampledAt := fallback
+		if sm.SampledAtUnixMs > 0 {
+			sampledAt = time.UnixMilli(sm.SampledAtUnixMs)
+		}
+		rows = append(rows, model.ProcessMetricSnapshot{
+			NodeUUID:         nodeUUID,
+			InstanceUUID:     sm.InstanceUuid,
+			PID:              sm.Pid,
+			Name:             trimMetricText(sm.Name, 128),
+			CPUPercent:       sm.CpuPercent,
+			RSSBytes:         sm.RssBytes,
+			ReadBytesPerSec:  sm.ReadBytesPerSec,
+			WriteBytesPerSec: sm.WriteBytesPerSec,
+			User:             trimMetricText(sm.User, 128),
+			CommandSummary:   trimMetricText(sm.CommandSummary, 160),
+			SampledAt:        sampledAt.UTC(),
+		})
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return s.db.Create(&rows).Error
+}
+
+// QueryProcessTop 返回最新一拍进程快照中的 TOPN。
+func (s *MetricService) QueryProcessTop(q ProcessTopQuery) ([]ProcessTopItem, error) {
+	limit := q.Limit
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	latestQuery := s.db.Model(&model.ProcessMetricSnapshot{})
+	if q.InstanceUUID != "" {
+		latestQuery = latestQuery.Where("instance_uuid = ?", q.InstanceUUID)
+	}
+	if q.NodeUUID != "" {
+		latestQuery = latestQuery.Where("node_uuid = ?", q.NodeUUID)
+	}
+	order := "cpu_percent DESC, rss_bytes DESC"
+	switch q.Sort {
+	case "memory":
+		order = "rss_bytes DESC, cpu_percent DESC"
+	case "io":
+		order = "(read_bytes_per_sec + write_bytes_per_sec) DESC, cpu_percent DESC"
+	}
+
+	var rows []model.ProcessMetricSnapshot
+	latestQuery = latestQuery.Select("instance_uuid, MAX(sampled_at) AS sampled_at").Group("instance_uuid")
+	query := s.db.Table("process_metric_snapshots AS p").
+		Select("p.*").
+		Joins("JOIN (?) AS latest ON p.instance_uuid = latest.instance_uuid AND p.sampled_at = latest.sampled_at", latestQuery)
+	if q.InstanceUUID != "" {
+		query = query.Where("p.instance_uuid = ?", q.InstanceUUID)
+	}
+	if q.NodeUUID != "" {
+		query = query.Where("p.node_uuid = ?", q.NodeUUID)
+	}
+	if err := query.Order(order).Limit(limit).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	ids, err := s.instanceIDsByUUID(rows)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ProcessTopItem, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, ProcessTopItem{
+			InstanceID:       ids[row.InstanceUUID],
+			InstanceUUID:     row.InstanceUUID,
+			NodeUUID:         row.NodeUUID,
+			PID:              row.PID,
+			Name:             row.Name,
+			CPUPercent:       row.CPUPercent,
+			RSSBytes:         row.RSSBytes,
+			ReadBytesPerSec:  row.ReadBytesPerSec,
+			WriteBytesPerSec: row.WriteBytesPerSec,
+			User:             row.User,
+			CommandSummary:   row.CommandSummary,
+			SampledAt:        row.SampledAt,
+		})
+	}
+	return out, nil
+}
+
+func (s *MetricService) instanceIDsByUUID(rows []model.ProcessMetricSnapshot) (map[string]uint, error) {
+	uuids := make([]string, 0, len(rows))
+	seen := map[string]struct{}{}
+	for _, row := range rows {
+		if _, ok := seen[row.InstanceUUID]; !ok {
+			seen[row.InstanceUUID] = struct{}{}
+			uuids = append(uuids, row.InstanceUUID)
+		}
+	}
+	if len(uuids) == 0 {
+		return map[string]uint{}, nil
+	}
+	var instances []model.Instance
+	if err := s.db.Select("id", "uuid").Where("uuid IN ?", uuids).Find(&instances).Error; err != nil {
+		return nil, err
+	}
+	out := map[string]uint{}
+	for _, inst := range instances {
+		out[inst.UUID] = inst.ID
+	}
+	return out, nil
+}
+
+func trimMetricText(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= max {
+		return s
+	}
+	return s[:max]
 }
 
 // ensureSeries 按 (node,instance,scope,metric_key,world) 身份找到或创建序列，返回 ID。
@@ -691,6 +856,10 @@ func (s *MetricService) purge(now time.Time) error {
 	}
 	if err := s.db.Where("bucket_ts < ?", now.Add(-metric1hRetention)).
 		Delete(&model.MetricRollup1h{}).Error; err != nil {
+		return err
+	}
+	if err := s.db.Where("sampled_at < ?", now.Add(-metricRawRetention)).
+		Delete(&model.ProcessMetricSnapshot{}).Error; err != nil {
 		return err
 	}
 	return nil

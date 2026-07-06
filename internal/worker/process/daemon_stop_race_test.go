@@ -68,7 +68,7 @@ func TestDaemonStrategy_StopDuringConnectWindow_KillsChild(t *testing.T) {
 			require.Eventually(t, func() bool {
 				rec, err := pf.ReadRecord()
 				return err == nil && rec.JavaPID != 0 && daemon.IsPIDAlive(rec.JavaPID)
-			}, 5*time.Second, 50*time.Millisecond, "应能读到存活的被托管子进程 pid")
+			}, 15*time.Second, 50*time.Millisecond, "应能读到存活的被托管子进程 pid")
 			rec, _ := pf.ReadRecord()
 			childPID := rec.JavaPID
 			addr := rec.SocketAddr

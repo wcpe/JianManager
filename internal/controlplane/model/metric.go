@@ -78,6 +78,25 @@ type MetricSampleRaw struct {
 	Value    *float64  `json:"value"`
 }
 
+// ProcessMetricSnapshot 受管实例进程 TOPN 短期快照（FR-170）。
+type ProcessMetricSnapshot struct {
+	ID uint `gorm:"primaryKey" json:"id"`
+	// NodeUUID 所属节点。
+	NodeUUID string `gorm:"type:varchar(64);not null;index:idx_process_metric_node_sampled,priority:1" json:"nodeUuid"`
+	// InstanceUUID 受管实例 UUID。
+	InstanceUUID     string    `gorm:"type:varchar(64);not null;index:idx_process_metric_instance_sampled,priority:1" json:"instanceUuid"`
+	PID              int32     `gorm:"not null" json:"pid"`
+	Name             string    `gorm:"type:varchar(128)" json:"name"`
+	CPUPercent       float64   `json:"cpuPercent"`
+	RSSBytes         uint64    `json:"rssBytes"`
+	ReadBytesPerSec  uint64    `json:"readBytesPerSec"`
+	WriteBytesPerSec uint64    `json:"writeBytesPerSec"`
+	User             string    `gorm:"type:varchar(128)" json:"user"`
+	CommandSummary   string    `gorm:"type:varchar(160)" json:"commandSummary"`
+	SampledAt        time.Time `gorm:"not null;index:idx_process_metric_instance_sampled,priority:2;index:idx_process_metric_node_sampled,priority:2" json:"sampledAt"`
+	CreatedAt        time.Time `json:"createdAt"`
+}
+
 // MetricRollup5m 5 分钟降采样档（留 ~30d）。仅在桶内有非空样本时生成，缺测为缺桶。
 type MetricRollup5m struct {
 	ID       uint      `gorm:"primaryKey" json:"id"`

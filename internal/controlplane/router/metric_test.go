@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 func seedNodeCPU(t *testing.T, db *gorm.DB, nodeUUID string, v float64) {
@@ -108,5 +110,35 @@ func TestMetricSeries_InstanceForbidden(t *testing.T) {
 	}
 	if got := parseJSON(t, w)["error"]; got != "FORBIDDEN" {
 		t.Fatalf("期望 FORBIDDEN，得 %v", got)
+	}
+}
+
+func TestMetricProcessTop_InstanceOK(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	inst := &model.Instance{
+		NodeID: node.ID, Name: "i1", Type: model.InstanceTypeMinecraftJava,
+		ProcessType: model.ProcessTypeDaemon, StartCommand: "java -jar s.jar",
+	}
+	if err := db.Create(inst).Error; err != nil {
+		t.Fatalf("创建实例失败: %v", err)
+	}
+	ms := service.NewMetricService(db)
+	err := ms.IngestProcessMetrics(node.UUID, []*workerpb.ProcessMetricSample{
+		{InstanceUuid: inst.UUID, Pid: 12, Name: "java", CpuPercent: 72, RssBytes: 1024, SampledAtUnixMs: time.Now().UTC().UnixMilli()},
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("写入进程指标失败: %v", err)
+	}
+
+	w := makeRequest(r, "GET", "/api/v1/metrics/processes/top?instanceId="+strconv.Itoa(int(inst.ID)), nil, token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("期望 200，得 %d，body=%s", w.Code, w.Body.String())
+	}
+	rows := parseJSONArray(t, w)
+	if len(rows) != 1 {
+		t.Fatalf("期望一条进程数据，得 %v", rows)
 	}
 }

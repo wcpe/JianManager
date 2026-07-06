@@ -132,6 +132,7 @@ type InstanceSnapshot struct {
 	UUID      string
 	State     string // STOPPED, STARTING, RUNNING, STOPPING, CRASHED
 	ProbePort int    // ServerProbe /metrics 端口；>0 且 RUNNING 时心跳采集器自采富指标（FR-060）
+	PID       int    // 受管实例根进程 PID；>0 时心跳可采集进程 TOPN（FR-170）
 }
 
 // GetAllInstanceStates 返回所有实例的状态快照（用于心跳上报）。
@@ -147,10 +148,15 @@ func (m *Manager) GetAllInstanceStates() []InstanceSnapshot {
 		if inst.State == StateRunning && inst.strategy != nil && inst.strategy.State() == StateCrashed {
 			state = StateCrashed
 		}
+		pid := 0
+		if inst.strategy != nil {
+			pid = inst.strategy.GetPID()
+		}
 		states = append(states, InstanceSnapshot{
 			UUID:      uuid,
 			State:     string(state),
 			ProbePort: inst.ProbePort,
+			PID:       pid,
 		})
 	}
 	return states

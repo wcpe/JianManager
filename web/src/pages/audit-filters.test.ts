@@ -24,27 +24,28 @@ describe('toRFC3339', () => {
 
   it('converts a datetime-local value to RFC3339 with timezone', () => {
     const out = toRFC3339('2026-06-22T10:30')
-    // datetime-local is local time; toISOString yields a Z-suffixed RFC3339 string.
+    // datetime-local 是本地时间；toISOString 会输出 Z 结尾的 RFC3339 字符串。
     expect(out).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/)
-    // Round-trips back to the same instant the local string referenced.
+    // 再解析时应回到同一个时间点。
     expect(new Date(out as string).getTime()).toBe(new Date('2026-06-22T10:30').getTime())
   })
 })
 
 describe('toAuditParams', () => {
   it('omits every dimension for the default (empty) filter', () => {
-    expect(toAuditParams(DEFAULT_AUDIT_FILTER)).toEqual({ limit: 100 })
+    expect(toAuditParams(DEFAULT_AUDIT_FILTER)).toEqual({ page: 1, pageSize: 100 })
   })
 
   it('omits blank text fields', () => {
-    expect(toAuditParams(state({ action: '   ', targetType: '' }))).toEqual({ limit: 100 })
+    expect(toAuditParams(state({ action: '   ', targetType: '' }))).toEqual({ page: 1, pageSize: 100 })
   })
 
   it('keeps set text fields trimmed', () => {
     expect(toAuditParams(state({ action: ' instance.start ', targetType: 'instance' }))).toEqual({
       action: 'instance.start',
       targetType: 'instance',
-      limit: 100,
+      page: 1,
+      pageSize: 100,
     })
   })
 
@@ -66,7 +67,7 @@ describe('toAuditParams', () => {
   })
 
   it('carries an enlarged limit through (load-more)', () => {
-    expect(toAuditParams(state({ limit: 300 })).limit).toBe(300)
+    expect(toAuditParams(state({ limit: 300 })).pageSize).toBe(300)
   })
 })
 

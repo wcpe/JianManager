@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNodes } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
-import { useMetricOverview, useMetricSeries } from '@/api/metrics'
+import { useMetricOverview, useMetricSeries, useProcessTop, type ProcessTopItem } from '@/api/metrics'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { RangePicker, ResolutionPicker, type MetricRange, type MetricResolution } from '@jianmanager/ui'
 import { MonitorSkeleton, type MonitorSource } from '@jianmanager/ui'
@@ -23,6 +23,82 @@ function defsFor(kind: DrillTarget['kind']): MetricChartDef[] {
   if (kind === 'node') return NODE_CHART_DEFS
   if (kind === 'instance') return INSTANCE_CHART_DEFS
   return PLATFORM_CHART_DEFS
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '--'
+  const units = ['B', 'KiB', 'MiB', 'GiB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit++
+  }
+  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`
+}
+
+function formatRate(read: number, write: number): string {
+  const total = read + write
+  return total > 0 ? `${formatBytes(total)}/s` : '--'
+}
+
+function formatTime(value: string): string {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '--' : date.toLocaleString()
+}
+
+function ProcessTopPanel({ rows }: { rows: ProcessTopItem[] }) {
+  const { t } = useTranslation()
+  return (
+    <Panel title={t('monitor.processTop', '进程 TOP10')}>
+      {rows.length === 0 ? (
+        <p className="py-5 text-center text-sm text-muted-foreground">{t('monitor.processTopEmpty', '暂无进程采样')}</p>
+      ) : (
+        <div className="divide-y divide-border text-xs">
+          {rows.map((row) => (
+            <div
+              key={`${row.pid}-${row.sampledAt}`}
+              tabIndex={0}
+              data-testid="process-top-row"
+              aria-label={t('monitor.processTopRow', { pid: row.pid, name: row.name, defaultValue: `进程 ${row.pid} ${row.name}` })}
+              className="group relative grid grid-cols-[72px_80px_1fr_80px_90px_90px] items-center gap-3 py-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <span className="font-mono text-muted-foreground">PID {row.pid}</span>
+              <span className="truncate text-muted-foreground" title={row.user || '--'}>{row.user || '--'}</span>
+              <span className="min-w-0 truncate" title={row.commandSummary || row.name}>
+                {row.commandSummary || row.name || '--'}
+              </span>
+              <span className="font-mono tabular-nums">{row.cpuPercent.toFixed(1)}%</span>
+              <span className="font-mono tabular-nums">{formatBytes(row.rssBytes)}</span>
+              <span className="font-mono tabular-nums">{formatRate(row.readBytesPerSec, row.writeBytesPerSec)}</span>
+              <div
+                data-testid="process-top-hover"
+                className="pointer-events-none absolute right-0 top-[calc(100%-0.25rem)] z-30 w-80 rounded-md border bg-popover p-3 text-popover-foreground opacity-0 shadow-soft transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+              >
+                <div className="mb-2 min-w-0 truncate font-medium">{row.commandSummary || row.name || '--'}</div>
+                <dl className="grid grid-cols-[92px_1fr] gap-x-3 gap-y-1 text-[11px]">
+                  <dt className="text-muted-foreground">{t('monitor.processPid', 'PID')}</dt>
+                  <dd className="font-mono tabular-nums">{row.pid}</dd>
+                  <dt className="text-muted-foreground">{t('monitor.processUser', '用户')}</dt>
+                  <dd>{row.user || '--'}</dd>
+                  <dt className="text-muted-foreground">{t('monitor.processSampledAt', '采样时间')}</dt>
+                  <dd>{formatTime(row.sampledAt)}</dd>
+                  <dt className="text-muted-foreground">{t('monitor.processCpu', 'CPU')}</dt>
+                  <dd className="font-mono tabular-nums">{row.cpuPercent.toFixed(1)}%</dd>
+                  <dt className="text-muted-foreground">{t('monitor.processMemory', '内存')}</dt>
+                  <dd className="font-mono tabular-nums">{formatBytes(row.rssBytes)}</dd>
+                  <dt className="text-muted-foreground">{t('monitor.processIo', 'IO 读/写')}</dt>
+                  <dd className="font-mono tabular-nums">
+                    {formatBytes(row.readBytesPerSec)}/s · {formatBytes(row.writeBytesPerSec)}/s
+                  </dd>
+                </dl>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Panel>
+  )
 }
 
 function useMonitorSeries(
@@ -73,6 +149,13 @@ export default function MonitoringPage() {
   const [compareSel, setCompareSel] = useState<string[]>([])
 
   const tKey = targetKey(target)
+  const currentInstance = target.kind === 'instance' ? (instances ?? []).find((i) => i.uuid === target.uuid) : undefined
+  const currentNodeUUID = target.kind === 'node' ? target.uuid : undefined
+  const { data: processTop = [] } = useProcessTop({
+    instanceId: currentInstance?.id,
+    nodeId: currentNodeUUID,
+    enabled: target.kind !== 'instance' || !!currentInstance,
+  })
 
   // 概览/对比/主图共享的数据源描述（MonitorSource 与 SeriesTarget 同构）。
   const source: MonitorSource =
@@ -131,6 +214,8 @@ export default function MonitoringPage() {
       <Panel title={t('monitor.compare.title')}>
         <MetricComparePanel kind={target.kind} raw={raw} selected={compareSel} onToggle={toggleCompare} />
       </Panel>
+
+      <ProcessTopPanel rows={processTop} />
 
       <Panel bodyClassName="px-3 py-2 text-[11px] text-muted-foreground">{t('monitor.hint')}</Panel>
 
