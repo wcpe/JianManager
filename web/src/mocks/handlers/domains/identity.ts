@@ -142,6 +142,21 @@ function notFound(): Response {
   return HttpResponse.json({ error: 'NOT_FOUND', message: '资源不存在' }, { status: 404 })
 }
 
+function filterAuditRows(url: URL): AuditLog[] {
+  const userId = url.searchParams.get('userId')
+  const action = url.searchParams.get('action')
+  const targetType = url.searchParams.get('targetType')
+  const from = url.searchParams.get('from')
+  const to = url.searchParams.get('to')
+  let rows = audit.list()
+  if (userId) rows = rows.filter((r) => String(r.userId) === userId)
+  if (action) rows = rows.filter((r) => r.action.includes(action))
+  if (targetType) rows = rows.filter((r) => r.targetType === targetType)
+  if (from) rows = rows.filter((r) => r.createdAt >= from)
+  if (to) rows = rows.filter((r) => r.createdAt <= to)
+  return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+}
+
 export const handlers = [
   // --- setup（公开，无需 requireAuth；/setup/status 由地基 auth.ts 提供，此处只加 POST /setup）---
   domainRoute('post', '/setup', async ({ request }) => {
@@ -281,27 +296,29 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 })
   }),
 
-  // --- audit（支持 userId/action/targetType/from/to/limit 筛选）---
+  // --- audit（支持 userId/action/targetType/from/to/page/pageSize/limit 筛选）---
   domainRoute('get', '/audit', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     const url = new URL(info.request.url)
-    const userId = url.searchParams.get('userId')
-    const action = url.searchParams.get('action')
-    const targetType = url.searchParams.get('targetType')
-    const from = url.searchParams.get('from')
-    const to = url.searchParams.get('to')
+    const rows = filterAuditRows(url)
+    if (url.searchParams.has('page') || url.searchParams.has('pageSize')) {
+      const page = Math.max(1, Number(url.searchParams.get('page') ?? '1'))
+      const pageSize = Math.min(500, Math.max(1, Number(url.searchParams.get('pageSize') ?? '50')))
+      const start = (page - 1) * pageSize
+      return HttpResponse.json({ items: rows.slice(start, start + pageSize), total: rows.length, page, pageSize })
+    }
     const limit = Number(url.searchParams.get('limit') ?? '100')
+    return HttpResponse.json(rows.slice(0, limit))
+  }),
 
-    let rows = audit.list()
-    if (userId) rows = rows.filter((r) => String(r.userId) === userId)
-    if (action) rows = rows.filter((r) => r.action.includes(action))
-    if (targetType) rows = rows.filter((r) => r.targetType === targetType)
-    if (from) rows = rows.filter((r) => r.createdAt >= from)
-    if (to) rows = rows.filter((r) => r.createdAt <= to)
-    // 默认按时间倒序（新在前），与「时间线」语义一致。
-    rows = rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit)
-    return HttpResponse.json(rows)
+  domainRoute('get', '/audit/export', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const rows = filterAuditRows(url)
+    const body = rows.map((r) => JSON.stringify(r)).join('\n')
+    return new HttpResponse(body, { headers: { 'Content-Type': 'application/x-ndjson' } })
   }),
 ]
 

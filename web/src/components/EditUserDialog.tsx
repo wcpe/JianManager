@@ -1,7 +1,18 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useUpdateUser, type UserInfo } from '@/api/users'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  ScrollableDialogBody,
+  scrollableDialogContentClass,
+} from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
+import { Button } from '@jianmanager/ui/components/button'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { minLength } from '@/lib/form-validation'
@@ -52,55 +63,54 @@ export default function EditUserDialog({ user, onClose }: EditUserDialogProps) {
   }
 
   return (
-    <div className={MODAL_OVERLAY}>
-      <div className={`${MODAL_PANEL} max-w-sm`}>
-        <h2 className="text-lg font-bold mb-4">{t('users.editUser', { name: user.username })}</h2>
+    <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-sm`}>
+        <DialogHeader>
+          <DialogTitle>{t('users.editUser', { name: user.username })}</DialogTitle>
+        </DialogHeader>
 
         {error && (
           <div className="mb-3 p-2 text-sm text-destructive bg-destructive/10 rounded">{error}</div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div>
-            <FieldLabel>{t('users.role')}</FieldLabel>
-            <div className="mt-1">
-              <Combobox options={roleOptions} value={role} onChange={setRole} allowCustom={false} />
+        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+          <ScrollableDialogBody className="space-y-3">
+            <div>
+              <FieldLabel>{t('users.role')}</FieldLabel>
+              <div className="mt-1">
+                <Combobox options={roleOptions} value={role} onChange={setRole} allowCustom={false} />
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">{t('users.roleHint')}</p>
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">{t('users.roleHint')}</p>
-          </div>
 
-          <div>
-            <FieldLabel>{t('users.resetPassword')}</FieldLabel>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={t('users.resetPasswordPlaceholder')}
-              autoComplete="new-password"
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
-              aria-invalid={!!passwordError}
-            />
-            <FieldError error={passwordError} values={{ min: PASSWORD_MIN }} />
-          </div>
+            <div>
+              <FieldLabel>{t('users.resetPassword')}</FieldLabel>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={t('users.resetPasswordPlaceholder')}
+                autoComplete="new-password"
+                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
+                aria-invalid={!!passwordError}
+              />
+              <FieldError error={passwordError} values={{ min: PASSWORD_MIN }} />
+            </div>
+          </ScrollableDialogBody>
 
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-sm border rounded-md hover:bg-accent"
-            >
+          <DialogFooter className="pt-4">
+            <Button type="button" variant="outline" onClick={onClose}>
               {t('common.cancel')}
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
               disabled={update.isPending || !!passwordError}
-              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50"
             >
               {update.isPending ? t('common.saving') : t('common.save')}
-            </button>
-          </div>
+            </Button>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

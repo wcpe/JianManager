@@ -39,7 +39,7 @@ describe('UsersPage（mock 假后端）', () => {
     renderWithProviders(<UsersPage />)
     await screen.findByText('admin')
     const user = userEvent.setup()
-    // 打开创建对话框（标题「创建用户」所在的 modal 面板）。
+    // 打开创建对话框（标题「创建用户」所在的共享 Dialog）。
     await user.click(screen.getByRole('button', { name: /创建用户/ }))
     const dialog = await screen.findByRole('dialog', { name: '创建用户' })
     // FR-026：创建用户弹窗必须走 shadcn Dialog，并用可访问 label 关联 Input。
@@ -48,6 +48,26 @@ describe('UsersPage（mock 假后端）', () => {
     await user.click(within(dialog).getByRole('button', { name: '创建' }))
     // 重查后表格新增 newbie 行。
     expect(await screen.findByText('newbie')).toBeInTheDocument()
+  })
+
+  it('创建与编辑用户对话框走共享 Dialog 并支持 Esc 关闭', async () => {
+    loginMockUser()
+    renderWithProviders(<UsersPage />)
+    await screen.findByText('admin')
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: /创建用户/ }))
+    const createHeading = await screen.findByRole('heading', { name: '创建用户' })
+    expect(createHeading.closest('[role="dialog"]')).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('heading', { name: '创建用户' })).not.toBeInTheDocument())
+
+    const adminRow = screen.getByText('admin').closest('tr')!
+    await user.click(within(adminRow).getByRole('button', { name: '编辑' }))
+    const editHeading = await screen.findByRole('heading', { name: '编辑用户「admin」' })
+    expect(editHeading.closest('[role="dialog"]')).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('heading', { name: '编辑用户「admin」' })).not.toBeInTheDocument())
   })
 
   it('删除用户 → 该行从列表消失（DELETE /users/:id 联动）', async () => {

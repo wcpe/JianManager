@@ -12,6 +12,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
+import {
+  ScrollableDialogBody,
+  scrollableDialogContentClass,
+} from '@jianmanager/ui/components/scrollable-dialog'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { Input } from '@jianmanager/ui/components/input'
 import { validateRequired, minLength, validateFields, hasErrors } from '@/lib/form-validation'
@@ -90,52 +94,56 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
     resetForm()
   }
 
+  if (!open) return null
+
   return (
-    <Dialog open={open} onOpenChange={(v: boolean) => { if (!v) handleClose() }}>
-      <DialogContent className="sm:max-w-sm">
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <DialogHeader>
-            <DialogTitle>{t('users.createUser')}</DialogTitle>
-          </DialogHeader>
+    <Dialog open={open} onOpenChange={(next) => { if (!next) handleClose() }}>
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-sm`}>
+        <DialogHeader>
+          <DialogTitle>{t('users.createUser')}</DialogTitle>
+        </DialogHeader>
 
-          {error && (
-            <div className="rounded bg-destructive/10 p-2 text-sm text-destructive">{error}</div>
-          )}
+        {error && (
+          <div className="mb-3 rounded bg-destructive/10 p-2 text-sm text-destructive">{error}</div>
+        )}
 
-          <div>
-            <FieldLabel htmlFor="create-user-username" required>{t('users.username')}</FieldLabel>
-            <Input
-              id="create-user-username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              className="mt-1"
-              aria-invalid={!!errors.username}
-            />
-            <FieldError error={errors.username} values={{ min: USERNAME_MIN }} />
-          </div>
-
-          <div>
-            <FieldLabel htmlFor="create-user-password" required>{t('login.password')}</FieldLabel>
-            <Input
-              id="create-user-password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="mt-1"
-              aria-invalid={!!errors.password}
-            />
-            <FieldError error={errors.password} values={{ min: PASSWORD_MIN }} />
-          </div>
-
-          <div>
-            <FieldLabel>{t('users.role')}</FieldLabel>
-            <div className="mt-1">
-              <Combobox options={roleOptions} value={role} onChange={setRole} allowCustom={false} />
+        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+          <ScrollableDialogBody className="space-y-3">
+            <div>
+              <FieldLabel htmlFor="create-user-username" required>{t('users.username')}</FieldLabel>
+              <Input
+                id="create-user-username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="mt-1"
+                aria-invalid={!!errors.username}
+              />
+              <FieldError error={errors.username} values={{ min: USERNAME_MIN }} />
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">{t(`users.roleDesc_${role}`)}</p>
-          </div>
 
-          <DialogFooter className="pt-2">
+            <div>
+              <FieldLabel htmlFor="create-user-password" required>{t('login.password')}</FieldLabel>
+              <Input
+                id="create-user-password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="mt-1"
+                aria-invalid={!!errors.password}
+              />
+              <FieldError error={errors.password} values={{ min: PASSWORD_MIN }} />
+            </div>
+
+            <div>
+              <FieldLabel>{t('users.role')}</FieldLabel>
+              <div className="mt-1">
+                <Combobox options={roleOptions} value={role} onChange={setRole} allowCustom={false} />
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">{t(`users.roleDesc_${role}`)}</p>
+            </div>
+          </ScrollableDialogBody>
+
+          <DialogFooter className="pt-4">
             <Button type="button" variant="outline" onClick={handleClose}>
               {t('common.cancel')}
             </Button>

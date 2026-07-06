@@ -1,6 +1,17 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { Fragment, useId, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { Button } from '@jianmanager/ui/components/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
+import { Input } from '@jianmanager/ui/components/input'
+import { Label } from '@jianmanager/ui/components/label'
 import {
   Table,
   TableBody,
@@ -34,6 +45,18 @@ import {
 } from '@/api/players'
 
 type Tab = 'online' | 'live' | 'bans' | 'whitelist'
+type EventFilter = 'all' | PlayerEvent['type']
+type PlayerActionKind = 'kick' | 'ban'
+type ConfirmState =
+  | { kind: PlayerActionKind; mode: 'single'; player: OnlinePlayer }
+  | { kind: PlayerActionKind; mode: 'batch' }
+
+const PLAYER_EVENT_FILTERS: EventFilter[] = ['all', 'player_join', 'player_quit', 'chat', 'cross_server', 'connected', 'disconnected']
+const ALL_SERVERS = 'all'
+
+function playerKey(player: OnlinePlayer) {
+  return `${player.instanceId}:${player.name}`
+}
 
 /** 玩家管理页（FR-054 + FR-066 实时事件）：经各后端探针聚合在线玩家、踢/封/解封、白名单与封禁记录（FR-067 退役 RCON）。 */
 export default function PlayersPage() {
@@ -69,26 +92,125 @@ export default function PlayersPage() {
 
 function OnlineTab() {
   const { t } = useTranslation()
+  const reasonId = useId()
   const { data, isLoading } = useOnlinePlayers()
   const kick = useKickPlayer()
   const ban = useBanPlayer()
-  const [confirm, setConfirm] = useState<{ kind: 'kick' | 'ban'; player: OnlinePlayer } | null>(null)
+  const [confirm, setConfirm] = useState<ConfirmState | null>(null)
   const [reason, setReason] = useState('')
+  const [serverFilter, setServerFilter] = useState(ALL_SERVERS)
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(() => new Set())
 
-  const unavailable = (data?.backends || []).filter((b) => !b.available)
+  const players = useMemo(() => data?.players ?? [], [data?.players])
+  const backends = useMemo(() => data?.backends ?? [], [data?.backends])
+  const unavailable = backends.filter((b) => !b.available)
+  const pending = kick.isPending || ban.isPending
+  const serverOptions = useMemo(() => {
+    const servers = new Map<number, string>()
+    for (const backend of backends) servers.set(backend.instanceId, backend.instanceName)
+    for (const player of players) servers.set(player.instanceId, player.instanceName)
+    return Array.from(servers, ([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name))
+  }, [backends, players])
+  const visiblePlayers = useMemo(
+    () => players.filter((p) => serverFilter === ALL_SERVERS || String(p.instanceId) === serverFilter),
+    [players, serverFilter],
+  )
+  const groupedPlayers = useMemo(
+    () =>
+      serverOptions
+        .filter((server) => serverFilter === ALL_SERVERS || String(server.id) === serverFilter)
+        .map((server) => ({
+          ...server,
+          players: visiblePlayers.filter((p) => p.instanceId === server.id),
+        }))
+        .filter((server) => server.players.length > 0),
+    [serverFilter, serverOptions, visiblePlayers],
+  )
+  const selectedPlayers = useMemo(() => players.filter((p) => selectedKeys.has(playerKey(p))), [players, selectedKeys])
+  const selectedNames = useMemo(() => {
+    const names = new Set<string>()
+    for (const player of selectedPlayers) names.add(player.name)
+    return Array.from(names)
+  }, [selectedPlayers])
+  const selectedServerCount = new Set(selectedPlayers.map((p) => p.instanceId)).size
+  const visibleSelected = visiblePlayers.length > 0 && visiblePlayers.every((p) => selectedKeys.has(playerKey(p)))
 
-  const runAction = () => {
-    if (!confirm) return
-    const args = { name: confirm.player.name, scope: { reason: reason || undefined } }
-    const onSuccess = (res: PlayerActionResult) => {
-      toast.success(t('players.actionResult', { succeeded: res.succeeded, failed: res.failed }))
-      setConfirm(null)
-      setReason('')
-    }
-    const onError = () => toast.error(t('common.error'))
-    if (confirm.kind === 'kick') kick.mutate(args, { onSuccess, onError })
-    else ban.mutate(args, { onSuccess, onError })
+  const closeConfirm = () => {
+    setConfirm(null)
+    setReason('')
   }
+
+  const togglePlayer = (player: OnlinePlayer, checked: boolean) => {
+    setSelectedKeys((current) => {
+      const next = new Set(current)
+      if (checked) next.add(playerKey(player))
+      else next.delete(playerKey(player))
+      return next
+    })
+  }
+
+  const toggleVisiblePlayers = (checked: boolean) => {
+    setSelectedKeys((current) => {
+      const next = new Set(current)
+      for (const player of visiblePlayers) {
+        if (checked) next.add(playerKey(player))
+        else next.delete(playerKey(player))
+      }
+      return next
+    })
+  }
+
+  const openBatchConfirm = (kind: PlayerActionKind) => {
+    if (selectedPlayers.length === 0) return
+    setConfirm({ kind, mode: 'batch' })
+  }
+
+  const runAction = async () => {
+    if (!confirm) return
+    const names = confirm.mode === 'single' ? [confirm.player.name] : selectedNames
+    if (names.length === 0) {
+      closeConfirm()
+      return
+    }
+    const mutation = confirm.kind === 'kick' ? kick : ban
+    let succeeded = 0
+    let failed = 0
+    for (const name of names) {
+      try {
+        const res: PlayerActionResult = await mutation.mutateAsync({
+          name,
+          scope: { reason: reason || undefined },
+        })
+        succeeded += res.succeeded
+        failed += res.failed
+      } catch {
+        failed += 1
+      }
+    }
+    const message = t('players.actionResult', { succeeded, failed })
+    if (failed > 0) toast.error(message)
+    else toast.success(message)
+    if (confirm.mode === 'batch') setSelectedKeys(new Set())
+    closeConfirm()
+  }
+
+  const confirmTitle = !confirm
+    ? ''
+    : confirm.mode === 'batch'
+      ? confirm.kind === 'kick' ? t('players.batchKickTitle') : t('players.batchBanTitle')
+      : confirm.kind === 'kick' ? t('players.kickTitle') : t('players.banTitle')
+  const confirmDescription = !confirm
+    ? ''
+    : confirm.mode === 'batch'
+      ? confirm.kind === 'kick'
+        ? t('players.batchKickConfirm', { count: selectedPlayers.length, servers: selectedServerCount })
+        : t('players.batchBanConfirm', { count: selectedPlayers.length, servers: selectedServerCount })
+      : t('players.confirmTarget', { player: confirm.player.name, server: confirm.player.instanceName })
+  const confirmLabel = !confirm
+    ? ''
+    : confirm.mode === 'batch'
+      ? confirm.kind === 'kick' ? t('players.batchKick') : t('players.batchBan')
+      : confirm.kind === 'kick' ? t('players.kick') : t('players.ban')
 
   return (
     <div>
@@ -101,76 +223,141 @@ function OnlineTab() {
       {isLoading ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
       ) : (
-        <div className="border rounded-lg">
-          <Table>
-            <TableHeader className="bg-muted/50">
-              <TableRow>
-                <TableHead>{t('players.playerName')}</TableHead>
-                <TableHead>{t('players.subserver')}</TableHead>
-                <TableHead className="text-right">{t('common.actions')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data?.players.map((p) => (
-                <TableRow key={`${p.instanceId}-${p.name}`}>
-                  <TableCell className="font-medium">{p.name}</TableCell>
-                  <TableCell className="text-muted-foreground">{p.instanceName}</TableCell>
-                  <TableCell className="text-right space-x-3">
-                    <button className="text-xs text-amber-600 hover:underline" onClick={() => setConfirm({ kind: 'kick', player: p })}>
-                      {t('players.kick')}
-                    </button>
-                    <button className="text-xs text-red-600 hover:underline" onClick={() => setConfirm({ kind: 'ban', player: p })}>
-                      {t('players.ban')}
-                    </button>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {(!data || data.players.length === 0) && (
-                <TableRow>
-                  <TableCell colSpan={3} className="text-center text-muted-foreground">
-                    {t('players.noOnline')}
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-
-      {confirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-background border rounded-lg p-6 w-full max-w-md shadow-lg">
-            <h2 className="text-lg font-bold mb-1">
-              {confirm.kind === 'kick' ? t('players.kickTitle') : t('players.banTitle')}
-            </h2>
-            <p className="text-sm text-muted-foreground mb-3">
-              {t('players.confirmTarget', { player: confirm.player.name, server: confirm.player.instanceName })}
-            </p>
-            <label className="text-sm font-medium">{t('players.reason')}</label>
-            <input
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              className="w-full mt-1 mb-4 px-3 py-2 border rounded-md bg-background text-sm"
-              placeholder={t('players.reasonPlaceholder')}
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => { setConfirm(null); setReason('') }}
-                className="px-4 py-2 text-sm border rounded-md hover:bg-accent"
+        <>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <label className="text-sm font-medium">{t('players.serverFilter')}</label>
+            <Select value={serverFilter} onValueChange={setServerFilter}>
+              <SelectTrigger size="sm" className="w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_SERVERS}>{t('players.allServers')}</SelectItem>
+                {serverOptions.map((server) => (
+                  <SelectItem key={server.id} value={String(server.id)}>
+                    {server.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                {t('players.selectedCount', { count: selectedPlayers.length })}
+              </span>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={selectedPlayers.length === 0 || pending}
+                onClick={() => openBatchConfirm('kick')}
               >
-                {t('common.cancel')}
-              </button>
-              <button
-                onClick={runAction}
-                disabled={kick.isPending || ban.isPending}
-                className="px-4 py-2 text-sm bg-destructive text-white rounded-md disabled:opacity-50"
+                {t('players.batchKick')}
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={selectedPlayers.length === 0 || pending}
+                onClick={() => openBatchConfirm('ban')}
               >
-                {confirm.kind === 'kick' ? t('players.kick') : t('players.ban')}
-              </button>
+                {t('players.batchBan')}
+              </Button>
             </div>
           </div>
-        </div>
+
+          <div className="border rounded-lg">
+            <Table>
+              <TableHeader className="bg-muted/50">
+                <TableRow>
+                  <TableHead className="w-10">
+                    <Checkbox
+                      checked={visibleSelected}
+                      disabled={visiblePlayers.length === 0}
+                      onCheckedChange={(v) => toggleVisiblePlayers(v === true)}
+                      aria-label={t('players.selectVisible')}
+                    />
+                  </TableHead>
+                  <TableHead>{t('players.playerName')}</TableHead>
+                  <TableHead>{t('players.subserver')}</TableHead>
+                  <TableHead className="text-right">{t('common.actions')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {groupedPlayers.map((group) => (
+                  <Fragment key={group.id}>
+                    <TableRow className="bg-muted/25 hover:bg-muted/25">
+                      <TableCell colSpan={4} className="text-xs font-medium text-muted-foreground">
+                        {t('players.serverGroupLabel', { server: group.name, count: group.players.length })}
+                      </TableCell>
+                    </TableRow>
+                    {group.players.map((p) => (
+                      <TableRow key={`${p.instanceId}-${p.name}`} data-state={selectedKeys.has(playerKey(p)) ? 'selected' : undefined}>
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedKeys.has(playerKey(p))}
+                            onCheckedChange={(v) => togglePlayer(p, v === true)}
+                            aria-label={t('players.selectPlayer', { player: p.name, server: p.instanceName })}
+                          />
+                        </TableCell>
+                        <TableCell className="font-medium">{p.name}</TableCell>
+                        <TableCell className="text-muted-foreground">{p.instanceName}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            <Button size="xs" variant="destructive" disabled={pending} onClick={() => setConfirm({ kind: 'kick', mode: 'single', player: p })}>
+                              {t('players.kick')}
+                            </Button>
+                            <Button size="xs" variant="destructive" disabled={pending} onClick={() => setConfirm({ kind: 'ban', mode: 'single', player: p })}>
+                              {t('players.ban')}
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </Fragment>
+                ))}
+                {players.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center text-muted-foreground">
+                      {t('players.noOnline')}
+                    </TableCell>
+                  </TableRow>
+                )}
+                {players.length > 0 && visiblePlayers.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center text-muted-foreground">
+                      {t('players.noOnline')}
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </>
       )}
+
+      <Dialog open={confirm !== null} onOpenChange={(open) => { if (!open) closeConfirm() }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{confirmTitle}</DialogTitle>
+            <DialogDescription>{confirmDescription}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor={reasonId}>{t('players.reason')}</Label>
+            <Input
+              id={reasonId}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={t('players.reasonPlaceholder')}
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeConfirm}>
+              {t('common.cancel')}
+            </Button>
+            <Button variant="destructive" onClick={runAction} disabled={pending}>
+              {confirmLabel}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -186,13 +373,27 @@ function LiveTab() {
   const [instanceId, setInstanceId] = useState<number | null>(null)
   const effectiveId = instanceId ?? list[0]?.id ?? null
   const { connected, roster, events } = usePlayerEvents(effectiveId)
+  const [eventFilter, setEventFilter] = useState<EventFilter>('all')
+  const [clearedBefore, setClearedBefore] = useState(0)
+  const [pausedEvents, setPausedEvents] = useState<PlayerEvent[] | null>(null)
+  const visibleEvents = (pausedEvents ?? events)
+    .filter((e) => e.timestamp >= clearedBefore)
+    .filter((e) => eventFilter === 'all' || e.type === eventFilter)
+  const paused = pausedEvents !== null
+
+  const togglePause = () => setPausedEvents(paused ? null : events)
+  const clearEvents = () => {
+    const source = pausedEvents ?? events
+    setClearedBefore(Math.max(0, ...source.map((e) => e.timestamp)) + 1)
+    if (paused) setPausedEvents([])
+  }
 
   return (
     <div>
       <div className="flex items-center gap-2 mb-4">
         <label className="text-sm font-medium">{t('players.liveSelectInstance')}</label>
         <Select
-          value={effectiveId === null ? undefined : String(effectiveId)}
+          value={effectiveId === null ? '' : String(effectiveId)}
           onValueChange={(v) => setInstanceId(Number(v))}
           disabled={list.length === 0}
         >
@@ -254,12 +455,34 @@ function LiveTab() {
 
             {/* 事件流 */}
             <div className="border rounded-lg">
-              <div className="px-3 py-2 border-b bg-muted/50 text-sm font-medium">{t('players.liveEventsTitle')}</div>
-              {events.length === 0 ? (
+              <div className="flex flex-wrap items-center gap-2 border-b bg-muted/50 px-3 py-2">
+                <div className="text-sm font-medium">{t('players.liveEventsTitle')}</div>
+                <div className="ml-auto flex flex-wrap items-center gap-2">
+                  <Select value={eventFilter} onValueChange={(v) => setEventFilter(v as EventFilter)}>
+                    <SelectTrigger size="sm" className="w-32">
+                      <SelectValue aria-label={t('players.liveFilter')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PLAYER_EVENT_FILTERS.map((type) => (
+                        <SelectItem key={type} value={type}>
+                          {type === 'all' ? t('players.liveFilterAll') : t(`players.evt_${type}`, { defaultValue: type })}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <button className="text-xs text-muted-foreground hover:text-foreground" onClick={togglePause}>
+                    {paused ? t('players.liveResume') : t('players.livePause')}
+                  </button>
+                  <button className="text-xs text-muted-foreground hover:text-foreground" onClick={clearEvents}>
+                    {t('players.liveClear')}
+                  </button>
+                </div>
+              </div>
+              {visibleEvents.length === 0 ? (
                 <p className="text-center text-muted-foreground text-sm py-6">{t('players.liveNoEvents')}</p>
               ) : (
                 <ul className="divide-y max-h-[420px] overflow-auto text-sm">
-                  {events.map((e, idx) => (
+                  {visibleEvents.map((e, idx) => (
                     <li key={`${e.timestamp}-${idx}`} className="px-3 py-2 flex items-start gap-2">
                       <EventBadge type={e.type} />
                       <span className="flex-1">
@@ -448,7 +671,7 @@ function WhitelistTab() {
       <div className="flex items-center gap-2 mb-4">
         <label className="text-sm font-medium">{t('players.selectBackend')}</label>
         <Select
-          value={effectiveId === null ? undefined : String(effectiveId)}
+          value={effectiveId === null ? '' : String(effectiveId)}
           onValueChange={(v) => setInstanceId(Number(v))}
           disabled={backends.length === 0}
         >

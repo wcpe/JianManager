@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { beforeAll, describe, it, expect, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
@@ -26,11 +26,100 @@ function loginMockAdmin(): void {
 }
 
 describe('PlayersPage（mock 假后端）', () => {
+  beforeAll(() => {
+    Object.defineProperty(HTMLElement.prototype, 'hasPointerCapture', { configurable: true, value: () => false })
+    Object.defineProperty(HTMLElement.prototype, 'setPointerCapture', { configurable: true, value: () => undefined })
+    Object.defineProperty(HTMLElement.prototype, 'releasePointerCapture', { configurable: true, value: () => undefined })
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: () => undefined })
+  })
+
   it('渲染 seed 在线玩家', async () => {
     loginMockUser()
     renderWithProviders(<PlayersPage />, { route: '/players' })
     expect(await screen.findByText('Alice')).toBeInTheDocument()
     expect(screen.getByText('Bob')).toBeInTheDocument()
+  })
+
+  it('踢出确认弹窗使用共享 Dialog，取消后关闭并重置原因', async () => {
+    const user = userEvent.setup()
+    loginMockAdmin()
+    renderWithProviders(<PlayersPage />, { route: '/players' })
+
+    const row = (await screen.findByText('Alice')).closest('tr') as HTMLElement
+    await user.click(within(row).getByRole('button', { name: '踢出' }))
+
+    const dialog = await screen.findByRole('dialog', { name: '踢出玩家' })
+    expect(within(dialog).getByText('确认对玩家 Alice（子服 lobby）执行此操作？')).toBeInTheDocument()
+    await user.type(within(dialog).getByPlaceholderText('可选，写明封禁/踢出原因'), '临时测试')
+    await user.click(within(dialog).getByRole('button', { name: '取消' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '踢出玩家' })).not.toBeInTheDocument())
+    await user.click(within(row).getByRole('button', { name: '踢出' }))
+    expect(await screen.findByPlaceholderText('可选，写明封禁/踢出原因')).toHaveValue('')
+  })
+
+  it('封禁确认弹窗确认后写入封禁记录', async () => {
+    const user = userEvent.setup()
+    loginMockAdmin()
+    renderWithProviders(<PlayersPage />, { route: '/players' })
+
+    const row = (await screen.findByText('Bob')).closest('tr') as HTMLElement
+    await user.click(within(row).getByRole('button', { name: '封禁' }))
+
+    const dialog = await screen.findByRole('dialog', { name: '封禁玩家' })
+    await user.type(within(dialog).getByPlaceholderText('可选，写明封禁/踢出原因'), '违规行为')
+    await user.click(within(dialog).getByRole('button', { name: '封禁' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '封禁玩家' })).not.toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: '封禁记录' }))
+    const banRow = (await screen.findByText('Bob')).closest('tr') as HTMLElement
+    expect(within(banRow).getByText('违规行为')).toBeInTheDocument()
+    expect(within(banRow).getByText('生效中')).toBeInTheDocument()
+  })
+
+  it('勾选两个在线玩家后可批量踢出确认并批量封禁', async () => {
+    const user = userEvent.setup()
+    loginMockAdmin()
+    renderWithProviders(<PlayersPage />, { route: '/players' })
+
+    await user.click(await screen.findByRole('checkbox', { name: '选择玩家 Alice（lobby）' }))
+    await user.click(screen.getByRole('checkbox', { name: '选择玩家 Bob（survival）' }))
+
+    await user.click(screen.getByRole('button', { name: '批量踢出' }))
+    const kickDialog = await screen.findByRole('dialog', { name: '批量踢出玩家' })
+    expect(within(kickDialog).getByText('已选择 2 名玩家，涉及 2 个子服。')).toBeInTheDocument()
+    await user.click(within(kickDialog).getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '批量踢出玩家' })).not.toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: '批量封禁' }))
+    const banDialog = await screen.findByRole('dialog', { name: '批量封禁玩家' })
+    expect(within(banDialog).getByText('已选择 2 名玩家，涉及 2 个子服；封禁按玩家名全局执行，同名多服只提交一次。')).toBeInTheDocument()
+    await user.type(within(banDialog).getByPlaceholderText('可选，写明封禁/踢出原因'), '批量违规')
+    await user.click(within(banDialog).getByRole('button', { name: '批量封禁' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '批量封禁玩家' })).not.toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: '封禁记录' }))
+    for (const player of ['Alice', 'Bob']) {
+      const row = (await screen.findByText(player)).closest('tr') as HTMLElement
+      expect(within(row).getByText('批量违规')).toBeInTheDocument()
+      expect(within(row).getByText('生效中')).toBeInTheDocument()
+    }
+  })
+
+  it('按子服筛选会收敛在线玩家与分组计数', async () => {
+    const user = userEvent.setup()
+    loginMockAdmin()
+    renderWithProviders(<PlayersPage />, { route: '/players' })
+
+    expect(await screen.findByText('Alice')).toBeInTheDocument()
+    expect(screen.getByText('Bob')).toBeInTheDocument()
+
+    await user.click(screen.getAllByRole('combobox')[0]!)
+    await user.click(await screen.findByRole('option', { name: 'survival' }))
+
+    expect(screen.queryByText('Alice')).not.toBeInTheDocument()
+    expect(screen.getByText('Bob')).toBeInTheDocument()
+    expect(screen.getByText('survival · 1 人')).toBeInTheDocument()
   })
 
   it('解封写操作 → 封禁记录状态联动（生效中 → 已解除）', async () => {
@@ -57,12 +146,55 @@ describe('PlayersPage（mock 假后端）', () => {
 
   it('注入 500 → 在线列表降级为空态，不崩溃（页面标题仍在）', async () => {
     mockInject('get', '/players', { kind: 'status', status: 500 })
-    loginMockUser()
+    loginMockAdmin()
     renderWithProviders(<PlayersPage />, { route: '/players' })
 
     // 标题始终渲染（未整页崩溃/刷新）。
     expect(screen.getByRole('heading', { name: '玩家管理' })).toBeInTheDocument()
     // 加载失败后优雅降级为空态文案。
     expect(await screen.findByText('暂无在线玩家')).toBeInTheDocument()
+  })
+
+  it('实时事件支持暂停、过滤与清空控件', async () => {
+    const user = userEvent.setup()
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = vi.fn(async () =>
+      new Response(
+        [
+          'event: init',
+          'data: {"connected":true,"players":[{"name":"Alice","server":"lobby"}]}',
+          '',
+          'event: player',
+          'data: {"instanceUuid":"inst-1","instanceId":1,"instanceName":"lobby","type":"player_join","timestamp":1816999999,"playerName":"Carl","server":"lobby"}',
+          '',
+          'event: player',
+          'data: {"instanceUuid":"inst-1","instanceId":1,"instanceName":"lobby","type":"chat","timestamp":1817000000,"playerName":"Alice","message":"hi"}',
+          '',
+        ].join('\n'),
+      ),
+    ) as unknown as typeof fetch
+    loginMockAdmin()
+    renderWithProviders(<PlayersPage />, { route: '/players' })
+
+    try {
+      await user.click(screen.getByRole('button', { name: '实时事件' }))
+      expect(await screen.findByText('事件流')).toBeInTheDocument()
+      const eventPanel = screen.getByText('事件流').closest('.border') as HTMLElement
+      expect(await within(eventPanel).findByText('Carl')).toBeInTheDocument()
+      expect(await within(eventPanel).findByText(/hi/)).toBeInTheDocument()
+
+      await user.click(screen.getAllByRole('combobox')[1]!)
+      await user.click(await screen.findByRole('option', { name: '发言' }))
+      expect(within(eventPanel).queryByText('Carl')).not.toBeInTheDocument()
+      expect(within(eventPanel).getByText(/hi/)).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: '暂停' }))
+      expect(screen.getByRole('button', { name: '继续' })).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: '清空' }))
+      expect(await screen.findByText('暂无事件')).toBeInTheDocument()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 })

@@ -2,7 +2,17 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useGroups, useAddGroupMember, useRemoveGroupMember } from '@/api/groups'
 import { useUsers } from '@/api/users'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  ScrollableDialogBody,
+  scrollableDialogContentClass,
+} from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { Button } from '@jianmanager/ui/components/button'
 
@@ -29,63 +39,67 @@ export default function GroupMembersDialog({ groupId, onClose }: GroupMembersDia
     .map((u) => ({ value: String(u.id), label: u.username }))
 
   return (
-    <div className={MODAL_OVERLAY}>
-      <div className={`${MODAL_PANEL} max-w-md`}>
-        <h2 className="text-lg font-bold mb-4">{t('groups.manageMembers', { name: group?.name ?? '' })}</h2>
+    <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-md`}>
+        <DialogHeader>
+          <DialogTitle>{t('groups.manageMembers', { name: group?.name ?? '' })}</DialogTitle>
+        </DialogHeader>
 
-        <div className="space-y-2 mb-4 max-h-60 overflow-y-auto">
-          {(group?.members ?? []).map((m) => (
-            <div key={m.id} className="flex items-center justify-between rounded border px-3 py-1.5 text-sm">
-              <span>
-                {m.user?.username ?? `${t('groups.userPrefix')}${m.userId}`}
-                {m.role === 1 && <span className="ml-1 text-xs text-muted-foreground">({t('groups.admin')})</span>}
-              </span>
-              <Button
-                variant="ghost"
-                size="xs"
-                className="text-red-600 hover:text-red-700"
-                disabled={removeMember.isPending}
-                onClick={() => removeMember.mutate({ id: groupId, userId: m.userId })}
-              >
-                {t('groups.removeMember')}
-              </Button>
-            </div>
-          ))}
-          {(group?.members ?? []).length === 0 && (
-            <p className="text-sm text-muted-foreground">{t('groups.noMembers')}</p>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <div className="flex-1">
-            <Combobox
-              options={candidates}
-              value={pick}
-              onChange={setPick}
-              allowCustom={false}
-              placeholder={t('groups.selectUser')}
-            />
+        <ScrollableDialogBody className="space-y-4">
+          <div className="space-y-2">
+            {(group?.members ?? []).map((m) => (
+              <div key={m.id} className="flex items-center justify-between rounded border px-3 py-1.5 text-sm">
+                <span>
+                  {m.user?.username ?? `${t('groups.userPrefix')}${m.userId}`}
+                  {m.role === 1 && <span className="ml-1 text-xs text-muted-foreground">({t('groups.admin')})</span>}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="text-red-600 hover:text-red-700"
+                  disabled={removeMember.isPending}
+                  onClick={() => removeMember.mutate({ id: groupId, userId: m.userId })}
+                >
+                  {t('groups.removeMember')}
+                </Button>
+              </div>
+            ))}
+            {(group?.members ?? []).length === 0 && (
+              <p className="text-sm text-muted-foreground">{t('groups.noMembers')}</p>
+            )}
           </div>
-          <Button
-            size="sm"
-            disabled={!pick || addMember.isPending}
-            onClick={() => {
-              if (pick) {
-                addMember.mutate({ id: groupId, userId: Number(pick) })
-                setPick('')
-              }
-            }}
-          >
-            {t('groups.addMember')}
-          </Button>
-        </div>
 
-        <div className="flex justify-end pt-4">
-          <button onClick={onClose} className="px-4 py-2 text-sm border rounded-md hover:bg-accent">
+          <div className="flex items-center gap-2">
+            <div className="flex-1">
+              <Combobox
+                options={candidates}
+                value={pick}
+                onChange={setPick}
+                allowCustom={false}
+                placeholder={t('groups.selectUser')}
+              />
+            </div>
+            <Button
+              size="sm"
+              disabled={!pick || addMember.isPending}
+              onClick={() => {
+                if (pick) {
+                  addMember.mutate({ id: groupId, userId: Number(pick) })
+                  setPick('')
+                }
+              }}
+            >
+              {t('groups.addMember')}
+            </Button>
+          </div>
+        </ScrollableDialogBody>
+
+        <DialogFooter className="pt-4">
+          <Button type="button" variant="outline" onClick={onClose}>
             {t('common.close')}
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

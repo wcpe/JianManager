@@ -48,6 +48,32 @@ describe('GroupsPage（mock 假后端）', () => {
     expect(await screen.findByText('测试组')).toBeInTheDocument()
   })
 
+  it('创建、编辑与成员管理用户组对话框走共享 Dialog 并支持 Esc 关闭', async () => {
+    loginMockUser()
+    renderWithProviders(<GroupsPage />)
+    await screen.findByText('默认组')
+    const user = userEvent.setup()
+
+    await user.click(screen.getByRole('button', { name: /创建用户组/ }))
+    const createHeading = await screen.findByRole('heading', { name: '创建用户组' })
+    expect(createHeading.closest('[role="dialog"]')).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('heading', { name: '创建用户组' })).not.toBeInTheDocument())
+
+    const defaultPanel = screen.getByText('默认组').closest('[data-slot="panel"]') as HTMLElement
+    await user.click(within(defaultPanel).getByRole('button', { name: '编辑' }))
+    const editHeading = await screen.findByRole('heading', { name: '编辑用户组「默认组」' })
+    expect(editHeading.closest('[role="dialog"]')).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('heading', { name: '编辑用户组「默认组」' })).not.toBeInTheDocument())
+
+    await user.click(within(defaultPanel).getByRole('button', { name: '成员' }))
+    const membersHeading = await screen.findByRole('heading', { name: '管理「默认组」成员' })
+    expect(membersHeading.closest('[role="dialog"]')).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('heading', { name: '管理「默认组」成员' })).not.toBeInTheDocument())
+  })
+
   it('删除用户组 → 该项从列表消失（DELETE /groups/:id 联动）', async () => {
     loginPlatformAdmin()
     renderWithProviders(<GroupsPage />)

@@ -9,6 +9,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
+import {
+  ScrollableDialogBody,
+  scrollableDialogContentClass,
+} from '@jianmanager/ui/components/scrollable-dialog'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { Input } from '@jianmanager/ui/components/input'
 import { Textarea } from '@jianmanager/ui/components/textarea'
@@ -57,42 +61,46 @@ export default function CreateGroupDialog({ open, onClose }: CreateGroupDialogPr
     resetForm()
   }
 
+  if (!open) return null
+
   return (
-    <Dialog open={open} onOpenChange={(v: boolean) => { if (!v) handleClose() }}>
-      <DialogContent className="sm:max-w-sm">
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <DialogHeader>
-            <DialogTitle>{t('groups.createGroup')}</DialogTitle>
-          </DialogHeader>
+    <Dialog open={open} onOpenChange={(next) => { if (!next) handleClose() }}>
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-sm`}>
+        <DialogHeader>
+          <DialogTitle>{t('groups.createGroup')}</DialogTitle>
+        </DialogHeader>
 
-          {error && (
-            <div className="rounded bg-destructive/10 p-2 text-sm text-destructive">{error}</div>
-          )}
+        {error && (
+          <div className="mb-3 rounded bg-destructive/10 p-2 text-sm text-destructive">{error}</div>
+        )}
 
-          <div>
-            <FieldLabel htmlFor="create-group-name" required>{t('common.name')}</FieldLabel>
-            <Input
-              id="create-group-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="mt-1"
-              aria-invalid={!!nameError}
-            />
-            <FieldError error={nameError} />
-          </div>
+        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+          <ScrollableDialogBody className="space-y-3">
+            <div>
+              <FieldLabel htmlFor="create-group-name" required>{t('common.name')}</FieldLabel>
+              <Input
+                id="create-group-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="mt-1"
+                aria-invalid={!!nameError}
+              />
+              <FieldError error={nameError} />
+            </div>
 
-          <div>
-            <FieldLabel htmlFor="create-group-description">{t('groups.description')}</FieldLabel>
-            <Textarea
-              id="create-group-description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={3}
-              className="mt-1"
-            />
-          </div>
+            <div>
+              <FieldLabel htmlFor="create-group-description">{t('groups.description')}</FieldLabel>
+              <Textarea
+                id="create-group-description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={3}
+                className="mt-1"
+              />
+            </div>
+          </ScrollableDialogBody>
 
-          <DialogFooter className="pt-2">
+          <DialogFooter className="pt-4">
             <Button type="button" variant="outline" onClick={handleClose}>
               {t('common.cancel')}
             </Button>
