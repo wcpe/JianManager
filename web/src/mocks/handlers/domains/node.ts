@@ -87,6 +87,20 @@ interface MockAsset {
   lastUsedAt: string | null
 }
 
+/** 假后端 Worker 二进制缓存条目（字段同 web/src/api/selfUpdate.ts WorkerAssetCacheEntry）。 */
+interface MockWorkerAsset {
+  id: string
+  version: string
+  os: string
+  arch: string
+  cached: boolean
+  sha256: string
+  size: number
+  sourceUrl: string
+  cachedAt: string
+  lastError: string
+}
+
 /** runtime-assets 聚合只需要实例的 JDK 绑定子集，避免跨域 mock 强耦合。 */
 interface MockRuntimeInstanceRef {
   id: number
@@ -99,6 +113,8 @@ interface MockRuntimeInstanceRef {
 }
 
 const NOW = '2026-06-28T08:00:00Z'
+/** 更新源 mock 最新版本。 */
+const FEED_LATEST = '0.10.0'
 
 /** 生成从当前时间起算的接入 token 过期时间，避免 mock seed 随日期推进变成过期样例。 */
 function enrollTokenExpiresAt(ttlMinutes = 60) {
@@ -256,6 +272,33 @@ const assets = db<MockAsset>('assets', () => [
   },
 ])
 
+const workerAssets = db<MockWorkerAsset>('worker-assets', () => [
+  {
+    id: 'linux/amd64',
+    version: '0.9.0',
+    os: 'linux',
+    arch: 'amd64',
+    cached: true,
+    sha256: '0123456789abcdef'.repeat(4),
+    size: 1024 * 1024,
+    sourceUrl: 'https://github.com/wxys233/jianmanager/releases/download/v0.10.0/worker-linux-amd64',
+    cachedAt: '2026-07-06T05:00:00Z',
+    lastError: '',
+  },
+  {
+    id: 'windows/amd64',
+    version: '0.9.0',
+    os: 'windows',
+    arch: 'amd64',
+    cached: false,
+    sha256: '',
+    size: 0,
+    sourceUrl: 'https://github.com/wxys233/jianmanager/releases/download/v0.10.0/worker-windows-amd64.exe',
+    cachedAt: '',
+    lastError: 'sha256 校验失败',
+  },
+])
+
 /** 一个 NodeInfo 视图（剔除 mock 内部字段 workerVersion/backupVersion）。 */
 function toNodeInfo(n: MockNode) {
   const { workerVersion: _w, backupVersion: _b, ...info } = n
@@ -264,10 +307,34 @@ function toNodeInfo(n: MockNode) {
   return info
 }
 
+function workerAssetId(os: string, arch: string) {
+  return `${os}/${arch}`
+}
+
+function toWorkerAssetInfo(a: MockWorkerAsset) {
+  const { id: _id, ...info } = a
+  void _id
+  return info
+}
+
+function cacheWorkerAsset(os: string, arch: string) {
+  const id = workerAssetId(os, arch)
+  const patch = {
+    version: cp.currentVersion,
+    os,
+    arch,
+    cached: true,
+    sha256: 'fedcba9876543210'.repeat(4),
+    size: 2 * 1024 * 1024,
+    sourceUrl: `https://github.com/wxys233/jianmanager/releases/download/v0.10.0/worker-${os}-${arch}`,
+    cachedAt: '2026-07-06T06:00:00Z',
+    lastError: '',
+  }
+  return workerAssets.update(id, patch) ?? workerAssets.insert({ id, ...patch })
+}
+
 /** CP（Control Plane）自身 mock 版本状态，升级/回滚后变更，check 即反映（FR-081）。 */
 const cp = { currentVersion: '0.9.0', backupVersion: '0.8.0' as string | undefined }
-/** 更新源 mock 最新版本。 */
-const FEED_LATEST = '0.10.0'
 
 /** 全网升级编排进度快照（FR-081），upgrade-all 触发后填充。 */
 interface MockRollout {
@@ -410,6 +477,7 @@ export const handlers = [
       createdAt: NOW,
     })
     const token = `${created.tokenPrefix}_secret`
+    const workerDownload = `https://cp.example.com/worker-assets/${FEED_LATEST}/{os}/{arch}/worker?token=mock-worker-install`
     return HttpResponse.json({
       token,
       tokenId: created.id,
@@ -418,8 +486,8 @@ export const handlers = [
       nodeName: name,
       controlPlaneGrpc: 'cp.example.com:9100',
       scriptBaseUrl: 'https://cp.example.com',
-      installCommandLinux: `curl -fsSL https://cp.example.com/install-worker.sh | sh -s -- --control-plane cp.example.com:9100 --token ${token}${name ? ` --name ${name}` : ''}`,
-      installCommandWindows: `iex (iwr https://cp.example.com/install-worker.ps1 -UseBasicParsing).Content; Install-JianManagerWorker -ControlPlane cp.example.com:9100 -Token ${token}${name ? ` -Name ${name}` : ''}`,
+      installCommandLinux: `curl -fsSL https://cp.example.com/install-worker.sh | sh -s -- --control-plane cp.example.com:9100 --token ${token}${name ? ` --name ${name}` : ''} --download-url '${workerDownload}'`,
+      installCommandWindows: `iex (iwr https://cp.example.com/install-worker.ps1 -UseBasicParsing).Content; Install-JianManagerWorker -ControlPlane cp.example.com:9100 -Token ${token}${name ? ` -Name ${name}` : ''} -DownloadUrl '${workerDownload}'`,
     })
   }),
 
@@ -739,6 +807,22 @@ export const handlers = [
     const denied = requireAuth(info)
     if (denied) return denied
     return HttpResponse.json(buildCheckResult(false))
+  }),
+
+  domainRoute('get', '/self-update/worker-assets', (info) => {
+    const denied = requirePlatformAdmin(info)
+    if (denied) return denied
+    return HttpResponse.json(workerAssets.list().map(toWorkerAssetInfo))
+  }),
+
+  domainRoute('post', '/self-update/worker-assets/cache', async (info) => {
+    const denied = requirePlatformAdmin(info)
+    if (denied) return denied
+    const body = (await info.request.json()) as { os?: string; arch?: string }
+    if (!body.os || !body.arch) {
+      return HttpResponse.json({ error: 'INVALID_ARGUMENT', message: '平台参数不完整' }, { status: 400 })
+    }
+    return HttpResponse.json(toWorkerAssetInfo(cacheWorkerAsset(body.os, body.arch)))
   }),
 
   domainRoute('post', '/self-update/control-plane/upgrade', async (info) => {

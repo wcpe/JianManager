@@ -3,12 +3,16 @@ package router
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"path/filepath"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/JianManager/internal/controlplane/middleware"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
+	"github.com/wcpe/JianManager/internal/version"
 )
 
 // SelfUpdateHandler 面板自更新路由（FR-081，见 ADR-020 §4）。
@@ -34,6 +38,11 @@ type upgradeAllRequest struct {
 	Version string `json:"version"`
 	// NodeIDs 限定升级的节点；留空=全部在线节点。
 	NodeIDs []uint `json:"nodeIds"`
+}
+
+type cacheWorkerAssetRequest struct {
+	OS   string `json:"os"`
+	Arch string `json:"arch"`
 }
 
 // Check GET /self-update/check — 返回服务端缓存的上次检查结果（FR-186）。
@@ -90,7 +99,7 @@ func (h *SelfUpdateHandler) UpgradeNode(c *gin.Context) {
 	var req upgradeRequest
 	_ = c.ShouldBindJSON(&req)
 
-	from, to, err := h.svc.UpgradeNode(c.Request.Context(), id, req.Version)
+	from, to, err := h.svc.UpgradeNodeWithBaseURL(c.Request.Context(), id, req.Version, selfUpdateRequestBaseURL(c))
 	if err != nil {
 		h.respondUpgradeError(c, err)
 		return
@@ -130,7 +139,7 @@ func (h *SelfUpdateHandler) UpgradeAll(c *gin.Context) {
 	var req upgradeAllRequest
 	_ = c.ShouldBindJSON(&req)
 
-	ro, err := h.svc.StartRollout(c.Request.Context(), req.NodeIDs, req.Version)
+	ro, err := h.svc.StartRolloutWithBaseURL(c.Request.Context(), req.NodeIDs, req.Version, selfUpdateRequestBaseURL(c))
 	if err != nil {
 		if errors.Is(err, service.ErrUpdateNotConfigured) {
 			c.JSON(http.StatusConflict, gin.H{"error": "UPDATE_NOT_CONFIGURED", "message": "未配置更新源"})
@@ -146,6 +155,70 @@ func (h *SelfUpdateHandler) UpgradeAll(c *gin.Context) {
 // Rollout GET /self-update/rollout — 查询当前/最近一次全网升级进度。
 func (h *SelfUpdateHandler) Rollout(c *gin.Context) {
 	c.JSON(http.StatusOK, h.svc.RolloutSnapshot())
+}
+
+// ListWorkerAssets GET /self-update/worker-assets — 查看 CP 本地 Worker 二进制缓存元信息（FR-190）。
+func (h *SelfUpdateHandler) ListWorkerAssets(c *gin.Context) {
+	items, err := h.svc.ListWorkerAssets()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "WORKER_ASSET_LIST_FAILED", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, items)
+}
+
+// CacheWorkerAsset POST /self-update/worker-assets/cache — 手动预缓存目标平台 Worker 二进制（FR-190）。
+func (h *SelfUpdateHandler) CacheWorkerAsset(c *gin.Context) {
+	var req cacheWorkerAssetRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求体无效"})
+		return
+	}
+	entry, err := h.svc.EnsureWorkerAsset(c.Request.Context(), strings.TrimSpace(req.OS), strings.TrimSpace(req.Arch))
+	if err != nil {
+		h.respondWorkerAssetError(c, err)
+		return
+	}
+	h.recordAudit(c, "self_update.worker_asset_cache", map[string]any{
+		"version": entry.Version,
+		"os":      entry.OS,
+		"arch":    entry.Arch,
+		"size":    entry.Size,
+	})
+	c.JSON(http.StatusOK, entry)
+}
+
+// DownloadWorkerAsset GET /worker-assets/:version/:os/:arch/worker — 短 token 保护的 Worker 二进制下载端点（FR-190）。
+func (h *SelfUpdateHandler) DownloadWorkerAsset(c *gin.Context) {
+	assetVersion := c.Param("version")
+	goos := c.Param("os")
+	goarch := c.Param("arch")
+	token := c.Query("token")
+	scope, err := h.svc.ValidateWorkerAssetToken(token, service.WorkerAssetTokenScope{
+		Version: assetVersion,
+		OS:      goos,
+		Arch:    goarch,
+	})
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "INVALID_WORKER_ASSET_TOKEN", "message": "Worker 二进制下载 token 无效"})
+		return
+	}
+	file, entry, err := h.svc.OpenWorkerAsset(assetVersion, goos, goarch)
+	if errors.Is(err, service.ErrWorkerAssetNotCached) && scope.Purpose == service.WorkerAssetPurposeInstall && assetVersion == version.Version {
+		if _, ensureErr := h.svc.EnsureWorkerAsset(c.Request.Context(), goos, goarch); ensureErr != nil {
+			h.respondWorkerAssetError(c, ensureErr)
+			return
+		}
+		file, entry, err = h.svc.OpenWorkerAsset(assetVersion, goos, goarch)
+	}
+	if err != nil {
+		h.respondWorkerAssetError(c, err)
+		return
+	}
+	defer file.Close()
+	c.Header("Content-Type", "application/octet-stream")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(entry.Path)))
+	http.ServeContent(c.Writer, c.Request, filepath.Base(entry.Path), entry.CachedAt, file)
 }
 
 // respondUpgradeError 把升级错误映射为合适的 HTTP 状态码。
@@ -165,6 +238,21 @@ func (h *SelfUpdateHandler) respondUpgradeError(c *gin.Context, err error) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "NODE_OFFLINE", "message": "节点未连接"})
 	default:
 		c.JSON(http.StatusBadGateway, gin.H{"error": "UPDATE_FAILED", "message": err.Error()})
+	}
+}
+
+func (h *SelfUpdateHandler) respondWorkerAssetError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrUpdateNotConfigured):
+		c.JSON(http.StatusConflict, gin.H{"error": "UPDATE_NOT_CONFIGURED", "message": "未配置更新源"})
+	case errors.Is(err, service.ErrUpdateNoArtifact):
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "UPDATE_NO_ARTIFACT", "message": "更新源无匹配本平台的 Worker 制品"})
+	case errors.Is(err, service.ErrWorkerAssetNotCached):
+		c.JSON(http.StatusNotFound, gin.H{"error": "WORKER_ASSET_NOT_CACHED", "message": "Worker 二进制资产未缓存"})
+	case errors.Is(err, service.ErrWorkerAssetTokenInvalid):
+		c.JSON(http.StatusForbidden, gin.H{"error": "INVALID_WORKER_ASSET_TOKEN", "message": "Worker 二进制下载 token 无效"})
+	default:
+		c.JSON(http.StatusBadGateway, gin.H{"error": "WORKER_ASSET_FAILED", "message": err.Error()})
 	}
 }
 
@@ -196,5 +284,20 @@ func (h *SelfUpdateHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		su.POST("/nodes/:id/rollback", h.RollbackNode)
 		su.POST("/nodes/upgrade-all", h.UpgradeAll)
 		su.GET("/rollout", h.Rollout)
+		su.GET("/worker-assets", h.ListWorkerAssets)
+		su.POST("/worker-assets/cache", h.CacheWorkerAsset)
 	}
+}
+
+// RegisterDownloadRoutes 注册无需 JWT 的 Worker 二进制下载端点；访问由短 token 收敛。
+func (h *SelfUpdateHandler) RegisterDownloadRoutes(r gin.IRouter) {
+	r.GET("/worker-assets/:version/:os/:arch/worker", h.DownloadWorkerAsset)
+}
+
+func selfUpdateRequestBaseURL(c *gin.Context) string {
+	scheme := "http"
+	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s", scheme, c.Request.Host)
 }

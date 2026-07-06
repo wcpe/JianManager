@@ -99,6 +99,10 @@ type SelfUpdateService struct {
 	rolloutMu sync.Mutex
 	rollout   *Rollout
 
+	// workerAssetTokenKey 是进程内 Worker 资产短 token 签名密钥；CP 重启后旧 token 自然失效。
+	workerAssetTokenKey []byte
+	workerAssetTokenMu  sync.Mutex
+
 	// 以下为可注入测试桩；生产为 nil 时走真实现。
 	feedFetcher    func(ctx context.Context) (*Feed, error)                      // 覆盖 FetchFeed
 	cpUpgradeFn    func(art *FeedArtifact) error                                 // 覆盖 CP 自身下载替换重启
@@ -484,12 +488,19 @@ func (s *SelfUpdateService) UpgradeControlPlane(ctx context.Context, wantVersion
 // UpgradeNode 经 gRPC 令目标节点升级：选节点平台制品 → 下发 UpgradeWorker。
 // 返回 (fromVersion, toVersion, error)。
 func (s *SelfUpdateService) UpgradeNode(ctx context.Context, nodeID uint, wantVersion string) (string, string, error) {
+	return s.UpgradeNodeWithBaseURL(ctx, nodeID, wantVersion, "")
+}
+
+// UpgradeNodeWithBaseURL 经 gRPC 令目标节点升级，并把 CP-local Worker 资产下载 URL 下发给 Worker（FR-190）。
+// baseURL 必须是 Worker 可访问的 CP HTTP 基址（通常由发起升级请求的 Host 推断）。
+func (s *SelfUpdateService) UpgradeNodeWithBaseURL(ctx context.Context, nodeID uint, wantVersion, baseURL string) (string, string, error) {
 	var node model.Node
 	if err := s.db.First(&node, nodeID).Error; err != nil {
 		return "", "", fmt.Errorf("节点不存在: %w", err)
 	}
 	// 先校验更新源已配置——未配源对任何节点都无法升级，应先于节点在线状态报错。
-	if _, err := s.resolveRelease(ctx); err != nil {
+	feed, err := s.resolveRelease(ctx)
+	if err != nil {
 		return "", "", err
 	}
 	client, ok := s.pool.Get(node.UUID)
@@ -507,7 +518,31 @@ func (s *SelfUpdateService) UpgradeNode(ctx context.Context, nodeID uint, wantVe
 		cancel()
 	}
 
-	feed, art, err := s.resolveArtifact(ctx, ComponentWorker, goos, goarch, wantVersion)
+	if wantVersion != "" && versionDiffers(wantVersion, feed.Version) {
+		return "", "", fmt.Errorf("更新源当前版本为 %s，无法升级到指定的 %s", feed.Version, wantVersion)
+	}
+	if versionDiffers(version.Version, feed.Version) {
+		return "", "", fmt.Errorf("Worker 资产版本必须与 CP 当前版本一致: cp=%s feed=%s", version.Version, feed.Version)
+	}
+	art, ok := SelectArtifact(feed, ComponentWorker, goos, goarch)
+	if !ok {
+		return "", "", ErrUpdateNoArtifact
+	}
+	entry, err := s.ensureWorkerAssetFromArtifact(ctx, feed.Version, goos, goarch, art)
+	if err != nil {
+		return "", "", err
+	}
+	token, err := s.IssueWorkerAssetToken(WorkerAssetTokenScope{
+		Version:  entry.Version,
+		OS:       entry.OS,
+		Arch:     entry.Arch,
+		Purpose:  WorkerAssetPurposeUpgrade,
+		NodeUUID: node.UUID,
+	})
+	if err != nil {
+		return "", "", err
+	}
+	downloadURL, err := s.BuildWorkerAssetDownloadURL(baseURL, entry.Version, entry.OS, entry.Arch, token)
 	if err != nil {
 		return "", "", err
 	}
@@ -515,8 +550,8 @@ func (s *SelfUpdateService) UpgradeNode(ctx context.Context, nodeID uint, wantVe
 	upctx, cancel := context.WithTimeout(ctx, 12*time.Minute)
 	defer cancel()
 	resp, err := client.Worker.UpgradeWorker(upctx, &workerpb.UpgradeWorkerRequest{
-		DownloadUrl:   art.URL,
-		Sha256:        art.SHA256,
+		DownloadUrl:   downloadURL,
+		Sha256:        entry.SHA256,
 		TargetVersion: feed.Version,
 		AllowInsecure: s.cfg.AllowInsecure,
 	})
@@ -559,6 +594,11 @@ type Rollout struct {
 // StartRollout 对给定节点（nodeIDs 空=全部在线节点）发起逐节点串行升级，异步执行。
 // 同一时刻只允许一个 rollout 运行中（再次发起返回错误）。返回当前 rollout 快照。
 func (s *SelfUpdateService) StartRollout(ctx context.Context, nodeIDs []uint, wantVersion string) (*Rollout, error) {
+	return s.StartRolloutWithBaseURL(ctx, nodeIDs, wantVersion, "")
+}
+
+// StartRolloutWithBaseURL 对给定节点发起逐节点升级，并把同一个 CP HTTP 基址用于 FR-190 资产下发。
+func (s *SelfUpdateService) StartRolloutWithBaseURL(ctx context.Context, nodeIDs []uint, wantVersion, baseURL string) (*Rollout, error) {
 	if !s.Configured() {
 		return nil, ErrUpdateNotConfigured
 	}
@@ -590,7 +630,7 @@ func (s *SelfUpdateService) StartRollout(ctx context.Context, nodeIDs []uint, wa
 	s.rollout = ro
 	s.rolloutMu.Unlock()
 
-	go s.runRollout(targets, wantVersion)
+	go s.runRollout(targets, wantVersion, baseURL)
 	return s.RolloutSnapshot(), nil
 }
 
@@ -615,13 +655,13 @@ func (s *SelfUpdateService) selectRolloutTargets(nodeIDs []uint) ([]model.Node, 
 }
 
 // runRollout 逐节点串行升级；单节点失败不阻断后续，记 failed + error。
-func (s *SelfUpdateService) runRollout(targets []model.Node, wantVersion string) {
+func (s *SelfUpdateService) runRollout(targets []model.Node, wantVersion, baseURL string) {
 	for _, n := range targets {
 		s.updateRolloutNode(n.ID, func(ns *RolloutNodeState) {
 			ns.State = "upgrading"
 			ns.Attempts++
 		})
-		from, to, err := s.upgradeNodeForRollout(n.ID, wantVersion)
+		from, to, err := s.upgradeNodeForRollout(n.ID, wantVersion, baseURL)
 		s.updateRolloutNode(n.ID, func(ns *RolloutNodeState) {
 			ns.FromVersion = from
 			ns.ToVersion = to
@@ -644,11 +684,11 @@ func (s *SelfUpdateService) runRollout(targets []model.Node, wantVersion string)
 }
 
 // upgradeNodeForRollout 是 rollout 内对单节点的升级调用；测试可经 nodeUpgradeFn 覆盖。
-func (s *SelfUpdateService) upgradeNodeForRollout(nodeID uint, wantVersion string) (string, string, error) {
+func (s *SelfUpdateService) upgradeNodeForRollout(nodeID uint, wantVersion, baseURL string) (string, string, error) {
 	if s.nodeUpgradeFn != nil {
 		return s.nodeUpgradeFn(nodeID, wantVersion)
 	}
-	return s.UpgradeNode(context.Background(), nodeID, wantVersion)
+	return s.UpgradeNodeWithBaseURL(context.Background(), nodeID, wantVersion, baseURL)
 }
 
 // updateRolloutNode 在锁内更新指定节点的 rollout 状态并重算聚合计数。

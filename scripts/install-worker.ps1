@@ -33,8 +33,8 @@ function Install-JianManagerWorker {
         [string]$Name = "",
         # 本地已拷贝的 Worker 二进制路径（离线/内网兜底，跳过下载）。
         [string]$Binary = "",
-        # Worker 二进制下载基址/地址（可选）。缺省走 GitHub Releases latest
-        # （ADR-036 产物命名契约：worker-<os>-<arch>.exe）；离线/内网用 -Binary 或 -DownloadUrl 覆盖。
+        # Worker 二进制下载基址/地址（可选）。面板一键命令默认传入 CP-local 地址；
+        # 脚本直接运行时回退 GitHub Releases latest（ADR-036 产物命名契约：worker-<os>-<arch>.exe）。
         [string]$DownloadUrl = "https://github.com/wcpe/jianmanager/releases/latest/download",
         # 安装目录（默认 C:\JianManager）。
         [string]$InstallDir = "C:\JianManager",
@@ -107,8 +107,9 @@ function Install-JianManagerWorker {
         Write-Host "      已存在完整二进制，跳过下载 ($binPath)"
     } elseif ($DownloadUrl) {
         $url = $DownloadUrl
-        # ADR-036 产物命名契约: <base>/worker-windows-<arch>.exe；若已指向具体产物文件则原样用。
-        if ($url -notlike "*worker-*") {
+        $url = $url.Replace("{os}", "windows").Replace("{arch}", $arch)
+        # ADR-036 产物命名契约: <base>/worker-windows-<arch>.exe；若已指向具体产物文件或 CP-local worker-assets 端点则原样用。
+        if (($url -notlike "*worker-*") -and ($url -notlike "*/worker-assets/*/worker*")) {
             $url = $url.TrimEnd("/") + "/worker-windows-$arch.exe"
         }
         Write-Host "      下载: $url"

@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { toast } from 'sonner'
 import { renderWithProviders } from '@/test/render'
 import { db } from '@/mocks/db'
 import { server } from '@/mocks/server'
@@ -9,6 +10,9 @@ import { API } from '@/mocks/api'
 import { useAuthStore } from '@/stores/auth'
 import { mockInject } from '@/mocks/inject'
 import type { Session } from '@/mocks/handlers/domains/auth'
+import i18n from '@/i18n'
+import zh from '@/i18n/zh.json'
+import en from '@/i18n/en.json'
 import SystemUpdatePage from './SystemUpdatePage'
 
 /**
@@ -28,7 +32,100 @@ function loginPlatformAdmin() {
   useAuthStore.getState().login(token, 'r-admin')
 }
 
+const requiredSystemUpdateKeys = [
+  'cacheState',
+  'cacheWorkerAsset',
+  'cachedAt',
+  'checkFailed',
+  'checkUpdate',
+  'checking',
+  'controlPlane',
+  'cpRollbackConfirm',
+  'cpRollbackConfirmDesc',
+  'cpRollbackFailed',
+  'cpRollbackStarted',
+  'cpUpgradeConfirm',
+  'cpUpgradeConfirmDesc',
+  'cpUpgradeFailed',
+  'cpUpgradeStarted',
+  'current',
+  'detail',
+  'feedLatest',
+  'forbidden',
+  'lastChecked',
+  'lastError',
+  'latestVersion',
+  'noArtifact',
+  'noBackup',
+  'noNodes',
+  'nodeFailed',
+  'nodePending',
+  'nodeRollbackConfirm',
+  'nodeRollbackConfirmDesc',
+  'nodeRollbackFailed',
+  'nodeRolledBack',
+  'nodeSucceeded',
+  'nodeUpgradeConfirm',
+  'nodeUpgradeConfirmDesc',
+  'nodeUpgradeFailed',
+  'nodeUpgraded',
+  'nodeUpgrading',
+  'nodes',
+  'notCheckedYet',
+  'notConfigured',
+  'offline',
+  'online',
+  'platform',
+  'releaseNotes',
+  'rollback',
+  'rollbackTo',
+  'rolloutFailedCount',
+  'rolloutInProgress',
+  'rolloutPending',
+  'rolloutStartFailed',
+  'rolloutStarted',
+  'rolloutSucceeded',
+  'rolloutTarget',
+  'rolloutTitle',
+  'rolloutTotal',
+  'size',
+  'stateCompleted',
+  'stateIdle',
+  'stateRunning',
+  'subtitle',
+  'title',
+  'upToDate',
+  'updatable',
+  'updateState',
+  'upgrade',
+  'upgradeAll',
+  'upgradeAllConfirm',
+  'upgradeAllConfirmDesc',
+  'version',
+  'versionChange',
+  'workerAssetCacheFailed',
+  'workerAssetCached',
+  'workerAssetCachedState',
+  'workerAssetMissingState',
+  'workerAssetsEmpty',
+  'workerAssetsLoadFailed',
+  'workerAssetsSubtitle',
+  'workerAssetsTitle',
+] as const
+
 describe('SystemUpdatePage（mock 假后端）', () => {
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await i18n.changeLanguage('zh')
+  })
+
+  it('systemUpdate i18n 键在中英文环境完整，避免英文回落到中文默认值', () => {
+    for (const [lang, dict] of Object.entries({ zh, en })) {
+      const missing = requiredSystemUpdateKeys.filter((key) => !(key in dict.systemUpdate))
+      expect(missing, `${lang} missing systemUpdate keys`).toEqual([])
+    }
+  })
+
   it('渲染 seed 版本对比（CP 控制台 + 各节点）', async () => {
     loginPlatformAdmin()
     renderWithProviders(<SystemUpdatePage />)
@@ -66,6 +163,123 @@ describe('SystemUpdatePage（mock 假后端）', () => {
     expect(refreshCalls).toBe(0)
   })
 
+  it('显示 Worker 二进制缓存状态', async () => {
+    loginPlatformAdmin()
+    renderWithProviders(<SystemUpdatePage />)
+
+    const panel = await screen.findByRole('region', { name: 'Worker 二进制缓存' })
+    expect(within(panel).getByText('linux/amd64')).toBeInTheDocument()
+    expect(within(panel).getByText('windows/amd64')).toBeInTheDocument()
+    expect(await within(panel).findByText('0123456789abcdef'.repeat(4))).toBeInTheDocument()
+    expect(within(panel).getByText('1.0 MB')).toBeInTheDocument()
+    expect(within(panel).getByText(/2026-07-06/)).toBeInTheDocument()
+    expect(within(panel).getByText('sha256 校验失败')).toBeInTheDocument()
+  })
+
+  it('Worker 二进制缓存按版本匹配，旧版本缓存不遮住当前版本缺失', async () => {
+    loginPlatformAdmin()
+    server.use(
+      http.get(API('/self-update/check'), () =>
+        HttpResponse.json({
+          configured: true,
+          latestVersion: '0.13.0',
+          notes: '',
+          source: 'feed',
+          controlPlane: { online: true, currentVersion: '0.12.0', os: 'linux', arch: 'amd64', updateAvailable: true, artifactAvailable: true },
+          nodes: [{ nodeId: 1, name: 'alpha', online: true, currentVersion: '0.12.0', os: 'linux', arch: 'amd64', updateAvailable: false, artifactAvailable: true }],
+          cached: true,
+        }),
+      ),
+      http.get(API('/self-update/worker-assets'), () =>
+        HttpResponse.json([
+          { version: '0.11.0', os: 'linux', arch: 'amd64', cached: true, sha256: 'a'.repeat(64), size: 100, cachedAt: '2026-07-01T00:00:00Z' },
+        ]),
+      ),
+    )
+    renderWithProviders(<SystemUpdatePage />)
+
+    const panel = await screen.findByRole('region', { name: 'Worker 二进制缓存' })
+    const linuxRow = within(panel).getByText('linux/amd64').closest('tr') as HTMLElement
+    expect(within(linuxRow).getByText('0.12.0')).toBeInTheDocument()
+    expect(within(linuxRow).getByText('未缓存')).toBeInTheDocument()
+    expect(within(linuxRow).queryByText('a'.repeat(64))).not.toBeInTheDocument()
+  })
+
+  it('点击预缓存后刷新 Worker 二进制缓存状态', async () => {
+    loginPlatformAdmin()
+    const user = userEvent.setup()
+    renderWithProviders(<SystemUpdatePage />)
+
+    const panel = await screen.findByRole('region', { name: 'Worker 二进制缓存' })
+    const windowsRow = within(panel).getByText('windows/amd64').closest('tr') as HTMLElement
+    expect(within(windowsRow).getByText('未缓存')).toBeInTheDocument()
+
+    await user.click(within(windowsRow).getByRole('button', { name: '预缓存' }))
+
+    await waitFor(() => {
+      const refreshedRow = within(panel).getByText('windows/amd64').closest('tr') as HTMLElement
+      expect(within(refreshedRow).getByText('已缓存')).toBeInTheDocument()
+      expect(within(refreshedRow).getByText('fedcba9876543210'.repeat(4))).toBeInTheDocument()
+      expect(within(refreshedRow).queryByText('sha256 校验失败')).not.toBeInTheDocument()
+    })
+  })
+
+  it('CP 升级要求输入目标版本后才允许确认', async () => {
+    loginPlatformAdmin()
+    const user = userEvent.setup()
+    let upgradeCalls = 0
+    server.use(
+      http.post(API('/self-update/control-plane/upgrade'), () => {
+        upgradeCalls++
+        return HttpResponse.json({ status: 'accepted', fromVersion: '0.9.0', toVersion: '0.10.0' }, { status: 202 })
+      }),
+    )
+    renderWithProviders(<SystemUpdatePage />)
+
+    await screen.findByText('Control Plane（控制台）')
+    await user.click(screen.getAllByRole('button', { name: '升级' })[0]!)
+
+    const dialog = await screen.findByRole('dialog')
+    const confirm = within(dialog).getByRole('button', { name: '升级' })
+    expect(confirm).toBeDisabled()
+
+    await user.type(within(dialog).getByPlaceholderText('0.10.0'), 'wrong')
+    expect(confirm).toBeDisabled()
+
+    await user.clear(within(dialog).getByPlaceholderText('0.10.0'))
+    await user.type(within(dialog).getByPlaceholderText('0.10.0'), '0.10.0')
+    expect(confirm).toBeEnabled()
+    await user.click(confirm)
+
+    await waitFor(() => expect(upgradeCalls).toBe(1))
+  })
+
+  it('CP 回滚要求输入备份版本后才允许确认', async () => {
+    loginPlatformAdmin()
+    const user = userEvent.setup()
+    let rollbackCalls = 0
+    server.use(
+      http.post(API('/self-update/control-plane/rollback'), () => {
+        rollbackCalls++
+        return HttpResponse.json({ status: 'accepted', fromVersion: '0.9.0', toVersion: '0.8.0' }, { status: 202 })
+      }),
+    )
+    renderWithProviders(<SystemUpdatePage />)
+
+    await screen.findByText('Control Plane（控制台）')
+    await user.click(screen.getAllByRole('button', { name: '回滚 v0.8.0' })[0]!)
+
+    const dialog = await screen.findByRole('dialog')
+    const confirm = within(dialog).getByRole('button', { name: '回滚' })
+    expect(confirm).toBeDisabled()
+
+    await user.type(within(dialog).getByPlaceholderText('0.8.0'), '0.8.0')
+    expect(confirm).toBeEnabled()
+    await user.click(confirm)
+
+    await waitFor(() => expect(rollbackCalls).toBe(1))
+  })
+
   it('升级节点后，check 联动反映新版本', async () => {
     loginPlatformAdmin()
     const user = userEvent.setup()
@@ -85,6 +299,45 @@ describe('SystemUpdatePage（mock 假后端）', () => {
       const row = (screen.getByText('alpha')).closest('tr') as HTMLElement
       expect(within(row).getByText('0.10.0')).toBeInTheDocument()
     })
+  })
+
+  it('回滚节点后，check 联动反映备份版本', async () => {
+    loginPlatformAdmin()
+    const user = userEvent.setup()
+    renderWithProviders(<SystemUpdatePage />)
+
+    const alphaRow = (await screen.findByText('alpha')).closest('tr') as HTMLElement
+    await waitFor(() => expect(within(alphaRow).getByText('0.9.0')).toBeInTheDocument())
+
+    await user.click(within(alphaRow).getByRole('button', { name: '回滚 v0.8.0' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: '回滚' }))
+
+    await waitFor(() => {
+      const row = (screen.getByText('alpha')).closest('tr') as HTMLElement
+      expect(within(row).getByText('0.8.0')).toBeInTheDocument()
+    })
+  })
+
+  it('英文环境发起全网升级失败 toast 使用动作失败文案，而非失败数量文案', async () => {
+    await i18n.changeLanguage('en')
+    loginPlatformAdmin()
+    const user = userEvent.setup()
+    const toastError = vi.spyOn(toast, 'error')
+    server.use(
+      http.post(API('/self-update/nodes/upgrade-all'), () =>
+        HttpResponse.json({}, { status: 500 }),
+      ),
+    )
+    renderWithProviders(<SystemUpdatePage />)
+
+    await screen.findByText('Control Plane')
+    await user.click(screen.getByRole('button', { name: 'Upgrade all' }))
+    const dialog = await screen.findByRole('dialog')
+    await user.click(within(dialog).getByRole('button', { name: 'Upgrade all' }))
+
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith('Failed to start fleet-wide upgrade'))
+    expect(toastError).not.toHaveBeenCalledWith(expect.stringContaining('{{n}}'))
   })
 
   it('注入 500：检查失败显示错误态', async () => {

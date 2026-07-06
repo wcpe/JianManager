@@ -30,6 +30,8 @@ describe('RuntimeAssetsPage（mock 假后端）', () => {
     expect(screen.getByText('lobby-proxy')).toBeInTheDocument()
     expect(screen.getByText('直接')).toBeInTheDocument()
     expect(screen.getByText('大版本')).toBeInTheDocument()
+    const paperRow = screen.getByText('paper-1.20.4').closest('tr') as HTMLElement
+    expect(within(paperRow).getByRole('button', { name: '删除' })).toBeDisabled()
   })
 
   it('支持制品类型、仅被引用与关键字筛选，并展示 client-file 客户端路径', async () => {

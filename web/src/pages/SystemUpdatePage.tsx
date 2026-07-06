@@ -1,17 +1,20 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { RefreshCw, ArrowUpCircle, ArrowDownCircle, ServerCog, AlertCircle, CheckCircle2, Clock } from 'lucide-react'
+import { RefreshCw, ArrowUpCircle, ArrowDownCircle, ServerCog, AlertCircle, CheckCircle2, Clock, Download } from 'lucide-react'
 import {
   useSelfUpdateCheck,
   useRefreshSelfUpdateCheck,
   useRollout,
+  useWorkerAssets,
+  useCacheWorkerAsset,
   useUpgradeControlPlane,
   useUpgradeNode,
   useUpgradeAll,
   useRollbackControlPlane,
   useRollbackNode,
   type ComponentStatus,
+  type WorkerAssetCacheEntry,
   type Rollout,
   type RolloutNodeState,
 } from '@/api/selfUpdate'
@@ -21,6 +24,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/DangerConfirm'
 import { ReleaseNotes } from '@/components/ReleaseNotes'
+import { formatCacheBytes } from '@/lib/artifact-cache'
 import { formatRelativeTime } from '@/lib/relative-time'
 
 /** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
@@ -28,6 +32,37 @@ const ROLE_PLATFORM_ADMIN = 10
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
+
+type WorkerAssetRow = WorkerAssetCacheEntry & { key: string }
+
+const workerAssetKey = (version: string, os: string, arch: string) => `${version}/${os}/${arch}`
+
+function buildWorkerAssetRows(
+  nodes: ComponentStatus[],
+  assets: WorkerAssetCacheEntry[],
+  version: string,
+): WorkerAssetRow[] {
+  const rows = new Map<string, WorkerAssetRow>()
+  for (const asset of assets) {
+    if (asset.version === version) {
+      rows.set(workerAssetKey(asset.version, asset.os, asset.arch), {
+        ...asset,
+        key: workerAssetKey(asset.version, asset.os, asset.arch),
+      })
+    }
+  }
+  for (const node of nodes) {
+    const key = workerAssetKey(version, node.os, node.arch)
+    if (!rows.has(key)) {
+      rows.set(key, { key, version, os: node.os, arch: node.arch, cached: false, sha256: '', size: 0, cachedAt: '', lastError: '' })
+    }
+  }
+  return Array.from(rows.values()).sort((a, b) => a.key.localeCompare(b.key))
+}
+
+function formatWorkerAssetTime(value?: string) {
+  return value ? value.replace('T', ' ').replace(/(\.\d+)?Z$/, ' UTC') : '-'
+}
 
 /**
  * 面板自更新页（FR-081，见 ADR-020）。
@@ -87,7 +122,7 @@ export default function SystemUpdatePage() {
           toast.success(t('systemUpdate.rolloutStarted', '全网升级已发起'))
           void rolloutQ.refetch()
         },
-        onError: (e) => toast.error(errMsg(e, t('systemUpdate.rolloutFailed', '发起全网升级失败'))),
+        onError: (e) => toast.error(errMsg(e, t('systemUpdate.rolloutStartFailed', '发起全网升级失败'))),
       },
     )
   }
@@ -170,6 +205,7 @@ export default function SystemUpdatePage() {
           <NodesSection
             nodes={result.nodes ?? []}
             latest={result.latestVersion}
+            workerAssetVersion={result.controlPlane.currentVersion || result.latestVersion}
             rolloutRunning={rolloutRunning}
             onUpgradeAll={() => setConfirmAll(true)}
             onUpgraded={() => refresh.mutate(undefined)}
@@ -277,6 +313,7 @@ function ControlPlaneCard({ cp, latest, onUpgraded }: { cp: ComponentStatus; lat
         description={t('systemUpdate.cpUpgradeConfirmDesc', '将下载新版二进制、sha256 校验后替换并平滑重启控制台。重启期间 Web 短暂不可用，重连后即为新版本。')}
         scope="platform"
         confirmLabel={t('systemUpdate.upgrade', '升级')}
+        confirmText={latest}
         onConfirm={doUpgrade}
         onCancel={() => setConfirm(false)}
       />
@@ -287,6 +324,7 @@ function ControlPlaneCard({ cp, latest, onUpgraded }: { cp: ComponentStatus; lat
         description={t('systemUpdate.cpRollbackConfirmDesc', '将把控制台换回升级前备份（v{{v}}）、sha256 校验后替换并平滑重启。重启期间 Web 短暂不可用，重连后即为旧版本。', { v: cp.backupVersion })}
         scope="platform"
         confirmLabel={t('systemUpdate.rollback', '回滚')}
+        confirmText={cp.backupVersion}
         onConfirm={doRollback}
         onCancel={() => setConfirmRollback(false)}
       />
@@ -298,12 +336,14 @@ function ControlPlaneCard({ cp, latest, onUpgraded }: { cp: ComponentStatus; lat
 function NodesSection({
   nodes,
   latest,
+  workerAssetVersion,
   rolloutRunning,
   onUpgradeAll,
   onUpgraded,
 }: {
   nodes: ComponentStatus[]
   latest: string
+  workerAssetVersion: string
   rolloutRunning: boolean
   onUpgradeAll: () => void
   onUpgraded: () => void
@@ -320,6 +360,8 @@ function NodesSection({
           {rolloutRunning ? t('systemUpdate.rolloutInProgress', '升级进行中…') : t('systemUpdate.upgradeAll', '全网升级')}
         </Button>
       </div>
+
+      <WorkerAssetsPanel nodes={nodes} version={workerAssetVersion} />
 
       <div className="overflow-hidden rounded-lg border">
         <Table>
@@ -349,6 +391,125 @@ function NodesSection({
       </div>
     </div>
   )
+}
+
+/** Worker 二进制 CP 代理缓存状态：按节点平台展示，并允许手动预缓存。 */
+function WorkerAssetsPanel({ nodes, version }: { nodes: ComponentStatus[]; version: string }) {
+  const { t } = useTranslation()
+  const assets = useWorkerAssets()
+  const cacheAsset = useCacheWorkerAsset()
+  const rows = buildWorkerAssetRows(nodes, assets.data ?? [], version)
+  const busyKey = cacheAsset.isPending
+    ? workerAssetKey(version, cacheAsset.variables?.os ?? '', cacheAsset.variables?.arch ?? '')
+    : ''
+  const title = t('systemUpdate.workerAssetsTitle', 'Worker 二进制缓存')
+
+  const doCache = (row: WorkerAssetRow) => {
+    cacheAsset.mutate(
+      { os: row.os, arch: row.arch },
+      {
+        onSuccess: () => toast.success(t('systemUpdate.workerAssetCached', 'Worker 二进制已预缓存')),
+        onError: (e) => toast.error(errMsg(e, t('systemUpdate.workerAssetCacheFailed', 'Worker 二进制预缓存失败'))),
+      },
+    )
+  }
+
+  return (
+    <section role="region" aria-label={title} className="rounded-lg border">
+      <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
+        <div>
+          <h3 className="text-sm font-semibold">{title}</h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {t('systemUpdate.workerAssetsSubtitle', 'CP 本地缓存状态，按节点平台聚合。')}
+          </p>
+        </div>
+        {assets.isFetching && <RefreshCw className="size-4 animate-spin text-muted-foreground" />}
+      </div>
+
+      {assets.isError && (
+        <div className="mx-4 mt-3 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <AlertCircle className="mt-0.5 size-4 shrink-0" />
+          <span>{errMsg(assets.error, t('systemUpdate.workerAssetsLoadFailed', 'Worker 二进制缓存状态加载失败'))}</span>
+        </div>
+      )}
+
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader className="bg-muted/50">
+            <TableRow>
+              <TableHead>{t('systemUpdate.platform', '平台')}</TableHead>
+              <TableHead>{t('systemUpdate.version', '版本')}</TableHead>
+              <TableHead>{t('systemUpdate.cacheState', '缓存')}</TableHead>
+              <TableHead>sha256</TableHead>
+              <TableHead>{t('systemUpdate.size', '大小')}</TableHead>
+              <TableHead>{t('systemUpdate.cachedAt', '缓存时间')}</TableHead>
+              <TableHead>{t('systemUpdate.lastError', '最近错误')}</TableHead>
+              <TableHead className="text-right">{t('common.actions', '操作')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => (
+              <WorkerAssetTableRow
+                key={row.key}
+                row={row}
+                pending={busyKey === row.key}
+                onCache={doCache}
+              />
+            ))}
+            {rows.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={8} className="h-14 text-center text-muted-foreground">
+                  {t('systemUpdate.workerAssetsEmpty', '暂无节点平台')}
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </section>
+  )
+}
+
+/** 单个平台的 Worker 缓存状态行。 */
+function WorkerAssetTableRow({
+  row,
+  pending,
+  onCache,
+}: {
+  row: WorkerAssetRow
+  pending: boolean
+  onCache: (row: WorkerAssetRow) => void
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <TableRow>
+      <TableCell className="whitespace-nowrap font-mono text-xs">{row.os}/{row.arch}</TableCell>
+      <TableCell className="whitespace-nowrap font-mono text-xs">{row.version || '-'}</TableCell>
+      <TableCell><WorkerAssetCacheBadge cached={row.cached} /></TableCell>
+      <TableCell className="min-w-48 max-w-80 break-all font-mono text-[11px]">{row.sha256 || '-'}</TableCell>
+      <TableCell className="whitespace-nowrap font-mono text-xs">{formatCacheBytes(row.size)}</TableCell>
+      <TableCell className="whitespace-nowrap font-mono text-xs">{formatWorkerAssetTime(row.cachedAt)}</TableCell>
+      <TableCell className={row.lastError ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'}>
+        {row.lastError || '-'}
+      </TableCell>
+      <TableCell className="text-right">
+        <Button size="sm" variant="ghost" className="h-7 px-2" disabled={pending} onClick={() => onCache(row)}>
+          {pending ? <RefreshCw className="size-4 animate-spin" /> : <Download className="size-4" />}
+          {t('systemUpdate.cacheWorkerAsset', '预缓存')}
+        </Button>
+      </TableCell>
+    </TableRow>
+  )
+}
+
+/** Worker 缓存命中状态徽章。 */
+function WorkerAssetCacheBadge({ cached }: { cached: boolean }) {
+  const { t } = useTranslation()
+  if (cached) {
+    return <Badge variant="outline" className="border-emerald-500/40 text-emerald-600">{t('systemUpdate.workerAssetCachedState', '已缓存')}</Badge>
+  }
+  return <Badge variant="outline" className="text-muted-foreground">{t('systemUpdate.workerAssetMissingState', '未缓存')}</Badge>
 }
 
 /** 单个节点行：版本对比 + 升级 + 回滚（有备份时）。 */
@@ -501,7 +662,7 @@ function RolloutPanel({ rollout }: { rollout: Rollout }) {
         <span>{t('systemUpdate.rolloutTarget', '目标版本')}：<span className="font-mono text-foreground">{rollout.targetVersion || t('systemUpdate.feedLatest', '源最新')}</span></span>
         <span>{t('systemUpdate.rolloutTotal', '共 {{n}} 个', { n: rollout.total })}</span>
         <span className="text-emerald-600">{t('systemUpdate.rolloutSucceeded', '成功 {{n}}', { n: rollout.succeeded })}</span>
-        <span className="text-destructive">{t('systemUpdate.rolloutFailed', '失败 {{n}}', { n: rollout.failed })}</span>
+        <span className="text-destructive">{t('systemUpdate.rolloutFailedCount', '失败 {{n}}', { n: rollout.failed })}</span>
         <span>{t('systemUpdate.rolloutPending', '待处理 {{n}}', { n: rollout.pending })}</span>
       </div>
 

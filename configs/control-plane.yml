@@ -38,7 +38,7 @@ file_version:
 enroll:
   advertise_grpc: ""    # 对外公布的 CP gRPC 地址 host:port（留空=请求 Host + grpc.port）
   script_base_url: ""   # 安装脚本下载基址 scheme://host（留空=请求 scheme://Host）
-  binary_url: ""        # Worker 二进制下载地址（留空=脚本经 --binary 指向本地二进制兜底）
+  binary_url: ""        # Worker 二进制下载地址（留空=签发 CP-local Worker 资产 URL；离线可用脚本 --binary）
 
 # 面板自更新：CP/Worker 二进制在线升级（FR-081 / FR-175 / FR-182，见 ADR-036 §7、ADR-039）。
 # 均有默认值，可整体省略。默认读 GitHub Releases 源（github_repo=wcpe/JianManager + channel=stable），开箱即可在线升级。

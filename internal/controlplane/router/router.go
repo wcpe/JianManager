@@ -1,6 +1,8 @@
 package router
 
 import (
+	"strings"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/JianManager/internal/controlplane/embed"
@@ -87,7 +89,13 @@ type Services struct {
 
 // Setup 创建并配置 Gin 路由引擎。
 func Setup(svcs *Services, jwtSecret string) *gin.Engine {
-	r := gin.Default()
+	r := gin.New()
+	r.Use(gin.LoggerWithConfig(gin.LoggerConfig{
+		Skip: func(c *gin.Context) bool {
+			return strings.HasPrefix(c.Request.URL.Path, "/worker-assets/")
+		},
+	}))
+	r.Use(gin.Recovery())
 
 	api := r.Group("/api/v1")
 	api.Use(middleware.RateLimit(10, 20)) // 10 请求/秒，桶容量 20
@@ -397,7 +405,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 节点 enrollment token（一键安装 / 傻瓜部署）：签发一次性准入凭据 + 一键命令，
 		// 限平台管理员（FR-080，见 ADR-020）。签发/吊销写审计，明文绝不入审计。
 		if svcs.EnrollToken != nil {
-			enrollTokenHandler := NewEnrollTokenHandler(svcs.EnrollToken, svcs.Audit, svcs.EnrollInstall)
+			enrollTokenHandler := NewEnrollTokenHandler(svcs.EnrollToken, svcs.Audit, svcs.EnrollInstall, svcs.SelfUpdate)
 			enrollTokenHandler.RegisterRoutes(admin)
 		}
 		// 数据库资源管理器只读浏览（FR-084）：CP 独有数据源，仅平台管理员；只读 + 敏感列脱敏。
@@ -417,6 +425,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	// Worker 一键安装脚本匿名静态端点（FR-080，见 ADR-020 §2）：一键命令 `curl <cp>/install-worker.sh | sh`
 	// 依赖 CP 自托管这两个脚本。显式注册（根路径、非 /api/v1）以先于下方 SPA NoRoute 回退命中。
 	registerInstallScriptRoutes(r)
+
+	// Worker 二进制 CP-local 下载端点（FR-190）：匿名路径由短 token 保护，先于 SPA NoRoute 注册。
+	if svcs.SelfUpdate != nil {
+		NewSelfUpdateHandler(svcs.SelfUpdate, svcs.Audit).RegisterDownloadRoutes(r)
+	}
 
 	// 前端静态文件（go:embed 嵌入）
 	embed.RegisterStaticRoutes(r)

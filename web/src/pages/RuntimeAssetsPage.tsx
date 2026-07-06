@@ -233,6 +233,7 @@ function JDKCard({ jdk }: { jdk: JDKMatrixItem }) {
           variant="ghost"
           size="icon-xs"
           className="text-muted-foreground hover:text-destructive"
+          disabled={del.isPending}
           onClick={() => setConfirming(true)}
           aria-label={t('common.delete')}
         >
@@ -516,8 +517,10 @@ function AssetRow({ asset, pluginAssets }: { asset: AssetInfo; pluginAssets: Ass
             variant="ghost"
             size="icon-xs"
             className="text-muted-foreground hover:text-destructive"
+            disabled={referenced || del.isPending}
             onClick={() => setConfirming(true)}
             aria-label={t('common.delete')}
+            title={referenced ? t('runtimeAssets.assetDeleteReferenced', { count: asset.refCount }) : undefined}
           >
             <Trash2 />
           </Button>

@@ -41,6 +41,19 @@ export interface CheckResult {
   checkedAt?: string
 }
 
+/** Worker 二进制 CP 代理缓存条目（FR-190）。 */
+export interface WorkerAssetCacheEntry {
+  version: string
+  os: string
+  arch: string
+  cached: boolean
+  sha256: string
+  size: number
+  sourceUrl?: string
+  cachedAt?: string
+  lastError?: string
+}
+
 /** rollout 中单个节点的升级状态。 */
 export interface RolloutNodeState {
   nodeId: number
@@ -147,6 +160,37 @@ export function useRollout() {
       return data
     },
     refetchInterval: (query) => (query.state.data?.state === 'running' ? 2000 : false),
+  })
+}
+
+/** 查看 CP 本地 Worker 二进制缓存状态（FR-190）。 */
+export function useWorkerAssets() {
+  return useQuery({
+    queryKey: ['self-update', 'worker-assets'],
+    queryFn: async () => {
+      const { data } = await api.get<WorkerAssetCacheEntry[]>('/self-update/worker-assets')
+      return data
+    },
+    retry: false,
+    refetchOnWindowFocus: false,
+  })
+}
+
+/** 手动预缓存指定节点平台的 Worker 二进制（FR-190）。 */
+export function useCacheWorkerAsset() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ os, arch }: { os: string; arch: string }) => {
+      const { data } = await api.post<WorkerAssetCacheEntry>('/self-update/worker-assets/cache', { os, arch })
+      return data
+    },
+    onSuccess: (data) => {
+      qc.setQueryData<WorkerAssetCacheEntry[]>(['self-update', 'worker-assets'], (old) => {
+        const items = old ?? []
+        const next = items.filter((it) => it.version !== data.version || it.os !== data.os || it.arch !== data.arch)
+        return [...next, data]
+      })
+    },
   })
 }
 

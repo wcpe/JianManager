@@ -95,8 +95,7 @@ type EnrollConfig struct {
 	// 一键命令据此拼 <base>/install-worker.sh 与 <base>/install-worker.ps1。
 	ScriptBaseURL string `mapstructure:"script_base_url"`
 	// BinaryURL Worker 二进制下载基址/地址，写入一键命令的 --download-url。
-	// 默认 GitHub Releases latest（ADR-036 产物命名契约 worker-<os>-<arch>[.exe]），一键命令开箱即下载；
-	// 内网/私有源可覆盖；显式置空则一键命令不带 --download-url，运营改用脚本 --binary 本地兜底。
+	// 默认空表示由 FR-190 CP-local Worker 资产端点签发短期下载 URL；内网/私有源可覆盖。
 	BinaryURL string `mapstructure:"binary_url"`
 }
 
@@ -199,11 +198,10 @@ func Load(path string) (*Config, error) {
 	// 拉取密钥可逆加密密钥（FR-192）：默认空（dev 回退内置密钥；生产未配则密钥不可查看，不阻断）。
 	v.SetDefault("client_dist.key_enc_secret", "")
 	// 节点 enrollment 一键安装（FR-080）：CP 地址/脚本基址默认空，由签发请求 Host 推断。
-	// 二进制源默认指向 GitHub Releases latest（ADR-036 产物命名契约 worker-<os>-<arch>[.exe]），
-	// 使一键命令开箱即下载、无需 --binary；内网/私有源经 enroll.binary_url 覆盖。
+	// 二进制源默认空，由 FR-190 CP-local Worker 资产端点签发短期下载 URL；私有源经 enroll.binary_url 覆盖。
 	v.SetDefault("enroll.advertise_grpc", "")
 	v.SetDefault("enroll.script_base_url", "")
-	v.SetDefault("enroll.binary_url", "https://github.com/wcpe/jianmanager/releases/latest/download")
+	v.SetDefault("enroll.binary_url", "")
 	// 面板自更新（FR-081 / FR-175）：默认读 GitHub Releases 源（ADR-036 §7），开箱即可在线升级。
 	// github_repo 默认官方仓库、channel 默认 stable（取最新正式 release）；token 默认空（匿名 60 次/时够手动用）。
 	// feed_url/binary_base_url 为可选回退（github_repo 空且 feed_url 非空时走原 feed 路径）；仅允许 https。

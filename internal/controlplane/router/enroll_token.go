@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/JianManager/internal/controlplane/middleware"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
+	"github.com/wcpe/JianManager/internal/version"
 )
 
 // EnrollInstallConfig 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
@@ -22,7 +24,7 @@ type EnrollInstallConfig struct {
 	GRPCPort int
 	// ScriptBaseURL 安装脚本下载基址（scheme://host）。留空则用请求 scheme://Host。
 	ScriptBaseURL string
-	// BinaryURL Worker 二进制下载地址（可选）。非空则并入一键命令的 --download-url。
+	// BinaryURL Worker 二进制下载地址（可选）。非空则覆盖 FR-190 CP-local 默认下载 URL。
 	BinaryURL string
 }
 
@@ -32,11 +34,12 @@ type EnrollTokenHandler struct {
 	svc     *service.EnrollTokenService
 	audit   *service.AuditService
 	install EnrollInstallConfig
+	update  *service.SelfUpdateService
 }
 
 // NewEnrollTokenHandler 创建 enrollment token 路由处理器。
-func NewEnrollTokenHandler(svc *service.EnrollTokenService, audit *service.AuditService, install EnrollInstallConfig) *EnrollTokenHandler {
-	return &EnrollTokenHandler{svc: svc, audit: audit, install: install}
+func NewEnrollTokenHandler(svc *service.EnrollTokenService, audit *service.AuditService, install EnrollInstallConfig, update *service.SelfUpdateService) *EnrollTokenHandler {
+	return &EnrollTokenHandler{svc: svc, audit: audit, install: install, update: update}
 }
 
 // issueEnrollTokenRequest 签发请求体（全部可选）。
@@ -64,6 +67,11 @@ func (h *EnrollTokenHandler) Issue(c *gin.Context) {
 
 	grpcAddr := h.resolveGRPCAddr(c)
 	scriptBase := h.resolveScriptBase(c)
+	linuxDownloadURL, windowsDownloadURL, err := h.installDownloadURLs(scriptBase)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "签发 Worker 下载 token 失败"})
+		return
+	}
 
 	h.recordAudit(c, "node.enroll_token.create", map[string]any{
 		"tokenId":     tok.ID,
@@ -80,8 +88,8 @@ func (h *EnrollTokenHandler) Issue(c *gin.Context) {
 		"nodeName":              tok.NodeName,
 		"controlPlaneGrpc":      grpcAddr,
 		"scriptBaseUrl":         scriptBase, // CP 托管安装脚本的基址，供前端拼「手动安装步骤」兜底命令
-		"installCommandLinux":   buildLinuxInstallCommand(scriptBase, grpcAddr, plaintext, tok.NodeName, h.install.BinaryURL),
-		"installCommandWindows": buildWindowsInstallCommand(scriptBase, grpcAddr, plaintext, tok.NodeName, h.install.BinaryURL),
+		"installCommandLinux":   buildLinuxInstallCommand(scriptBase, grpcAddr, plaintext, tok.NodeName, linuxDownloadURL),
+		"installCommandWindows": buildWindowsInstallCommand(scriptBase, grpcAddr, plaintext, tok.NodeName, windowsDownloadURL),
 	})
 }
 
@@ -138,6 +146,38 @@ func (h *EnrollTokenHandler) resolveScriptBase(c *gin.Context) string {
 	return fmt.Sprintf("%s://%s", scheme, c.Request.Host)
 }
 
+func (h *EnrollTokenHandler) installDownloadURLs(scriptBase string) (string, string, error) {
+	if h.install.BinaryURL != "" || h.update == nil {
+		return h.install.BinaryURL, h.install.BinaryURL, nil
+	}
+	downloadURL, err := h.buildInstallWorkerAssetURLTemplate(scriptBase)
+	if err != nil {
+		return "", "", err
+	}
+	return downloadURL, downloadURL, nil
+}
+
+func (h *EnrollTokenHandler) buildInstallWorkerAssetURLTemplate(scriptBase string) (string, error) {
+	token, err := h.update.IssueWorkerAssetToken(service.WorkerAssetTokenScope{
+		Version: version.Version,
+		OS:      "*",
+		Arch:    "*",
+		Purpose: service.WorkerAssetPurposeInstall,
+	})
+	if err != nil {
+		return "", err
+	}
+	base := strings.TrimRight(strings.TrimSpace(scriptBase), "/")
+	if base == "" {
+		return "", errors.New("CP Worker 资产下载基址为空")
+	}
+	return fmt.Sprintf("%s/worker-assets/%s/{os}/{arch}/worker?token=%s",
+		base,
+		url.PathEscape(version.Version),
+		url.QueryEscape(token),
+	), nil
+}
+
 // currentUserID 取当前登录用户 ID（审计用）；缺失返回 0。
 func (h *EnrollTokenHandler) currentUserID(c *gin.Context) uint {
 	v, _ := c.Get(middleware.CtxUserID)
@@ -187,7 +227,7 @@ func buildLinuxInstallCommand(scriptBase, grpcAddr, token, nodeName, binaryURL s
 		fmt.Fprintf(&b, " --name %s", nodeName)
 	}
 	if binaryURL != "" {
-		fmt.Fprintf(&b, " --download-url %s", binaryURL)
+		fmt.Fprintf(&b, " --download-url %s", shellSingleQuote(binaryURL))
 	}
 	return b.String()
 }
@@ -204,7 +244,15 @@ func buildWindowsInstallCommand(scriptBase, grpcAddr, token, nodeName, binaryURL
 		fmt.Fprintf(&b, " -Name %s", nodeName)
 	}
 	if binaryURL != "" {
-		fmt.Fprintf(&b, " -DownloadUrl %s", binaryURL)
+		fmt.Fprintf(&b, " -DownloadUrl %s", powershellSingleQuote(binaryURL))
 	}
 	return b.String()
+}
+
+func shellSingleQuote(v string) string {
+	return "'" + strings.ReplaceAll(v, "'", "'\"'\"'") + "'"
+}
+
+func powershellSingleQuote(v string) string {
+	return "'" + strings.ReplaceAll(v, "'", "''") + "'"
 }
