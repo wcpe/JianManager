@@ -1,8 +1,11 @@
+import { useState, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useInstance } from '@/api/instances'
 import { useTerminalToken } from '@/api/terminal'
 import TerminalComponent from '@/components/Terminal'
 import { Button } from '@jianmanager/ui/components/button'
+import { cn } from '@jianmanager/ui'
+import { Eye, Maximize2, Minimize2, Pencil, RotateCcw, Search, ZoomIn, ZoomOut } from 'lucide-react'
 
 /**
  * 工作区终端面板：为单个实例打开终端（ADR-009 / FR-037）。
@@ -22,6 +25,10 @@ interface TerminalPaneProps {
 
 export default function TerminalPane({ instanceId, hideHeader = false }: TerminalPaneProps) {
   const { t } = useTranslation()
+  const [reconnectKey, setReconnectKey] = useState(0)
+  const [fullscreen, setFullscreen] = useState(false)
+  const [fontSize, setFontSize] = useState(14)
+  const [terminalSearchOpen, setTerminalSearchOpen] = useState(false)
   const { data: instance } = useInstance(instanceId)
   const status = instance?.status ?? ''
   const isRunning = status === 'RUNNING'
@@ -33,9 +40,19 @@ export default function TerminalPane({ instanceId, hideHeader = false }: Termina
   // （enabled=false 连 token 都不取），避免对停机/加载中实例无谓拨号或闪现终端。
   const canAttach = !!status && !isStopped
   const { data: tokenData, isLoading, error } = useTerminalToken(instanceId, 'write', canAttach)
+  const adjustFont = (delta: number) => setFontSize((value) => Math.min(20, Math.max(11, value + delta)))
+  const handlePaneKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+      event.preventDefault()
+      setTerminalSearchOpen(true)
+    } else if (event.key === 'Escape' && terminalSearchOpen) {
+      event.preventDefault()
+      setTerminalSearchOpen(false)
+    }
+  }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className={cn('flex h-full flex-col bg-background', fullscreen && 'fixed inset-4 z-50 rounded-xl border shadow-2xl')} onKeyDown={handlePaneKeyDown}>
       {/* 工具栏：面包屑 + 禁用占位按钮（分段模式下由父组件承载，隐藏） */}
       {!hideHeader && (
         <div className="flex items-center justify-between border-b px-4 py-2">
@@ -52,6 +69,51 @@ export default function TerminalPane({ instanceId, hideHeader = false }: Termina
               {t('console.director')}
             </Button>
           </div>
+        </div>
+      )}
+
+      {canAttach && (
+        <div className="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-lg border bg-card/95 px-3 py-2 text-xs shadow-soft">
+          <span
+            className={cn(
+              'inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium',
+              isRunning ? 'bg-status-success/10 text-status-success' : 'bg-muted text-muted-foreground',
+            )}
+          >
+            {isRunning ? <Pencil className="size-3" /> : <Eye className="size-3" />}
+            {isRunning ? t('instanceDetail.terminalWritable') : t('instanceDetail.terminalReadOnlyBadge')}
+          </span>
+          <Button size="sm" variant="outline" className="h-7 rounded-full px-2.5 text-xs" onClick={() => setReconnectKey((v) => v + 1)}>
+            <RotateCcw className="mr-1 size-3.5" />
+            {t('instanceDetail.terminalReconnect')}
+          </Button>
+          <Button
+            size="icon"
+            variant="outline"
+            className="size-7 rounded-full"
+            onClick={() => setTerminalSearchOpen(true)}
+            aria-label={t('instanceDetail.terminalSearchOpen', { defaultValue: '搜索终端' })}
+            aria-pressed={terminalSearchOpen}
+          >
+            <Search className="size-3.5" />
+          </Button>
+          <Button size="icon" variant="outline" className="size-7 rounded-full" onClick={() => adjustFont(-1)} aria-label={t('instanceDetail.terminalFontDown')}>
+            <ZoomOut className="size-3.5" />
+          </Button>
+          <span className="min-w-9 text-center font-mono tabular-nums text-muted-foreground">{fontSize}px</span>
+          <Button size="icon" variant="outline" className="size-7 rounded-full" onClick={() => adjustFont(1)} aria-label={t('instanceDetail.terminalFontUp')}>
+            <ZoomIn className="size-3.5" />
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto h-7 rounded-full px-2.5 text-xs"
+            onClick={() => setFullscreen((v) => !v)}
+            aria-pressed={fullscreen}
+          >
+            {fullscreen ? <Minimize2 className="mr-1 size-3.5" /> : <Maximize2 className="mr-1 size-3.5" />}
+            {fullscreen ? t('instanceDetail.terminalExitFullscreen') : t('instanceDetail.terminalFullscreen')}
+          </Button>
         </div>
       )}
 
@@ -85,12 +147,15 @@ export default function TerminalPane({ instanceId, hideHeader = false }: Termina
           </div>
         ) : (
           <TerminalComponent
-            key={instanceId}
+            key={`${instanceId}:${reconnectKey}`}
             instanceId={String(instanceId)}
             wsUrl={tokenData?.wsUrl}
             token={tokenData?.token}
             readOnly={!isRunning}
             isLoading={isLoading}
+            fontSize={fontSize}
+            searchOpen={terminalSearchOpen}
+            onSearchOpenChange={setTerminalSearchOpen}
           />
         )}
       </div>

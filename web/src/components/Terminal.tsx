@@ -1,9 +1,10 @@
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useRef, useCallback, useState, type KeyboardEvent } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { useDirectorRender } from '@/lib/director-render'
 import { copyToClipboard } from '@/lib/clipboard'
+import { useTranslation } from 'react-i18next'
 
 interface TerminalComponentProps {
   instanceId: string
@@ -12,6 +13,12 @@ interface TerminalComponentProps {
   readOnly?: boolean
   /** token 正在加载中，显示占位而非尝试连接 */
   isLoading?: boolean
+  /** 终端字号（由外层工具栏控制）。 */
+  fontSize?: number
+  /** 外层工具栏控制的搜索框开关。 */
+  searchOpen?: boolean
+  /** 搜索框开关变更回调。 */
+  onSearchOpenChange?: (open: boolean) => void
 }
 
 const MAX_RETRIES = 3
@@ -42,7 +49,95 @@ const PLAYER_ARG_COMMANDS = new Set([
 ])
 const SELECTORS = ['@a', '@p', '@r', '@e', '@s']
 
-export default function TerminalComponent({ instanceId, wsUrl, token, readOnly = false, isLoading = false }: TerminalComponentProps) {
+type TerminalSearchMatch = {
+  line: number
+  start: number
+  end: number
+}
+
+const findSearchMatches = (lines: string[], query: string): TerminalSearchMatch[] => {
+  const needle = query.trim().toLocaleLowerCase()
+  if (!needle) return []
+  const matches: TerminalSearchMatch[] = []
+  for (let line = 0; line < lines.length; line++) {
+    const haystack = lines[line].toLocaleLowerCase()
+    let index = haystack.indexOf(needle)
+    while (index >= 0) {
+      matches.push({ line, start: index, end: index + needle.length })
+      index = haystack.indexOf(needle, index + needle.length)
+    }
+  }
+  return matches
+}
+
+const clearSearchMarks = (root: HTMLElement) => {
+  root.querySelectorAll('mark[data-terminal-search-match="true"]').forEach((mark) => {
+    mark.replaceWith(document.createTextNode(mark.textContent ?? ''))
+  })
+  root.normalize()
+}
+
+const highlightTextNode = (
+  node: Text,
+  nodeStart: number,
+  matches: TerminalSearchMatch[],
+  current: TerminalSearchMatch | undefined,
+) => {
+  const text = node.nodeValue ?? ''
+  const fragment = document.createDocumentFragment()
+  let cursor = 0
+  for (const match of matches) {
+    const start = Math.max(match.start - nodeStart, 0)
+    const end = Math.min(match.end - nodeStart, text.length)
+    if (end <= cursor || start >= text.length) continue
+    if (start > cursor) fragment.append(document.createTextNode(text.slice(cursor, start)))
+    const mark = document.createElement('mark')
+    mark.dataset.terminalSearchMatch = 'true'
+    if (current && match.line === current.line && match.start === current.start && match.end === current.end) {
+      mark.dataset.terminalSearchCurrent = 'true'
+      mark.className = 'rounded bg-amber-300 px-0.5 text-black ring-1 ring-amber-100'
+    } else {
+      mark.className = 'rounded bg-yellow-300/60 px-0.5 text-black'
+    }
+    mark.textContent = text.slice(start, end)
+    fragment.append(mark)
+    cursor = end
+  }
+  if (cursor < text.length) fragment.append(document.createTextNode(text.slice(cursor)))
+  if (fragment.childNodes.length > 0) node.replaceWith(fragment)
+}
+
+const highlightRowMatches = (
+  row: HTMLElement,
+  matches: TerminalSearchMatch[],
+  current: TerminalSearchMatch | undefined,
+) => {
+  const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT)
+  const nodes: Array<{ node: Text; start: number; end: number }> = []
+  let offset = 0
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text
+    const text = node.nodeValue ?? ''
+    nodes.push({ node, start: offset, end: offset + text.length })
+    offset += text.length
+  }
+  for (const { node, start, end } of nodes) {
+    const nodeMatches = matches.filter((match) => match.start < end && match.end > start)
+    if (nodeMatches.length > 0) highlightTextNode(node, start, nodeMatches, current)
+  }
+}
+
+export default function TerminalComponent({
+  instanceId,
+  wsUrl,
+  token,
+  readOnly = false,
+  isLoading = false,
+  fontSize = 14,
+  searchOpen,
+  onSearchOpenChange,
+}: TerminalComponentProps) {
+  const { t } = useTranslation()
   const terminalRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -89,6 +184,29 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
   // 右键菜单
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [internalSearchOpen, setInternalSearchOpen] = useState(false)
+  const searchVisible = searchOpen ?? internalSearchOpen
+  const [searchQuery, setSearchQuery] = useState('')
+  const searchQueryRef = useRef('')
+  const [searchMatches, setSearchMatches] = useState<TerminalSearchMatch[]>([])
+  const [searchCurrentIndex, setSearchCurrentIndex] = useState(0)
+  const searchMatchesRef = useRef<TerminalSearchMatch[]>([])
+  const searchCurrentIndexRef = useRef(0)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const searchHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const searchVisibleRef = useRef(searchVisible)
+  const setSearchVisibleRef = useRef<(open: boolean) => void>(() => {})
+  const refreshSearchRef = useRef<(query: string, targetIndex?: number) => void>(() => {})
+  const scheduleSearchHighlightRef = useRef<() => void>(() => {})
+  const setSearchVisible = useCallback((open: boolean) => setSearchVisibleRef.current(open), [])
+
+  useEffect(() => {
+    searchVisibleRef.current = searchVisible
+  }, [searchVisible])
+
+  useEffect(() => {
+    searchQueryRef.current = searchQuery
+  }, [searchQuery])
 
   // 把一行命令下发并入历史
   const submitLine = useCallback(() => {
@@ -155,6 +273,111 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
     return text
   }, [])
 
+  const getSearchableLines = useCallback(() => {
+    const buffer = termRef.current?.buffer.active
+    const lines: string[] = []
+    if (buffer) {
+      for (let i = 0; i < buffer.length; i++) {
+        lines.push(buffer.getLine(i)?.translateToString(true) ?? '')
+      }
+    }
+    if (lineBufRef.current) lines.push(lineBufRef.current)
+    return lines
+  }, [])
+
+  const clearVisibleSearchHighlights = useCallback(() => {
+    const root = terminalRef.current
+    if (!root) return
+    clearSearchMarks(root)
+  }, [])
+
+  useEffect(() => {
+    scheduleSearchHighlightRef.current = () => {
+      if (searchHighlightTimerRef.current) clearTimeout(searchHighlightTimerRef.current)
+      searchHighlightTimerRef.current = setTimeout(() => {
+        const root = terminalRef.current
+        const term = termRef.current
+        if (!root || !term) return
+        clearSearchMarks(root)
+        const matches = searchMatchesRef.current
+        const query = searchQueryRef.current.trim()
+        if (!query || matches.length === 0 || !searchVisibleRef.current) return
+        const current = matches[searchCurrentIndexRef.current]
+        const viewportY = term.buffer.active.viewportY ?? 0
+        const rows = root.querySelectorAll<HTMLElement>('.xterm-rows > div')
+        rows.forEach((row, rowIndex) => {
+          const line = viewportY + rowIndex
+          const rowMatches = matches.filter((match) => match.line === line)
+          if (rowMatches.length > 0) highlightRowMatches(row, rowMatches, current)
+        })
+      }, 0)
+    }
+  }, [])
+
+  const refreshSearch = useCallback((query: string, targetIndex = 0) => {
+    const matches = findSearchMatches(getSearchableLines(), query)
+    const currentIndex = matches.length > 0 ? Math.max(0, Math.min(targetIndex, matches.length - 1)) : 0
+    searchMatchesRef.current = matches
+    searchCurrentIndexRef.current = currentIndex
+    setSearchMatches(matches)
+    setSearchCurrentIndex(currentIndex)
+    if (matches.length > 0) termRef.current?.scrollToLine(matches[currentIndex].line)
+    scheduleSearchHighlightRef.current()
+  }, [getSearchableLines])
+
+  useEffect(() => {
+    refreshSearchRef.current = refreshSearch
+  }, [refreshSearch])
+
+  useEffect(() => {
+    setSearchVisibleRef.current = (open: boolean) => {
+      if (searchOpen === undefined) setInternalSearchOpen(open)
+      onSearchOpenChange?.(open)
+      if (open) refreshSearchRef.current(searchQueryRef.current, searchCurrentIndexRef.current)
+    }
+  }, [onSearchOpenChange, searchOpen])
+
+  useEffect(() => {
+    if (!searchVisible) {
+      clearVisibleSearchHighlights()
+      return
+    }
+    searchInputRef.current?.focus()
+    searchInputRef.current?.select()
+    refreshSearchRef.current(searchQueryRef.current, searchCurrentIndexRef.current)
+  }, [clearVisibleSearchHighlights, searchVisible])
+
+  const closeSearch = useCallback(() => {
+    setSearchVisible(false)
+    termRef.current?.focus()
+  }, [setSearchVisible])
+
+  const updateSearchQuery = useCallback((query: string) => {
+    setSearchQuery(query)
+    searchQueryRef.current = query
+    refreshSearch(query, 0)
+  }, [refreshSearch])
+
+  const moveSearchMatch = useCallback((delta: number) => {
+    const matches = searchMatchesRef.current
+    if (matches.length === 0) return
+    const nextIndex = (searchCurrentIndexRef.current + delta + matches.length) % matches.length
+    searchCurrentIndexRef.current = nextIndex
+    setSearchCurrentIndex(nextIndex)
+    termRef.current?.scrollToLine(matches[nextIndex].line)
+    scheduleSearchHighlightRef.current()
+  }, [])
+
+  const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeSearch()
+    } else if (event.key === 'Enter') {
+      event.preventDefault()
+      moveSearchMatch(event.shiftKey ? -1 : 1)
+    }
+  }
+
   // 复制全部日志到剪贴板
   const copyAll = useCallback(() => {
     const text = getAllText()
@@ -200,6 +423,7 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
             if (pendingRef.current.length > PENDING_MAX) pendingRef.current.shift()
           } else {
             termRef.current?.write(out)
+            if (searchVisibleRef.current && searchQueryRef.current.trim()) scheduleSearchHighlightRef.current()
           }
           // 解析在线玩家：逐完整行匹配加入/离开/list 输出
           parseBufRef.current += text
@@ -224,6 +448,7 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
             if (pendingRef.current.length > PENDING_MAX) pendingRef.current.shift()
           } else {
             termRef.current?.write(line)
+            if (searchVisibleRef.current && searchQueryRef.current.trim()) scheduleSearchHighlightRef.current()
           }
         }
       } catch {
@@ -257,7 +482,7 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
     const term = new Terminal({
       cursorBlink: true,
       disableStdin: false,
-      fontSize: 14,
+      fontSize,
       fontFamily: 'Consolas, Monaco, monospace',
       theme: { background: '#1a1b26', foreground: '#a9b1d6', cursor: '#c0caf5' },
     })
@@ -267,6 +492,23 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
     term.open(terminalRef.current)
     fitAddon.fit()
     termRef.current = term
+
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type === 'keydown' && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+        event.preventDefault()
+        setSearchVisibleRef.current(true)
+        return false
+      }
+      if (event.type === 'keydown' && event.key === 'Escape' && searchVisibleRef.current) {
+        event.preventDefault()
+        setSearchVisibleRef.current(false)
+        return false
+      }
+      return true
+    })
+    const searchScrollDisposable = term.onScroll(() => {
+      if (searchVisibleRef.current && searchQueryRef.current.trim()) scheduleSearchHighlightRef.current()
+    })
 
     // Tab 补全：命令首词 / 玩家命令的玩家名 + 选择器
     const complete = () => {
@@ -347,25 +589,97 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
       cleanupRef.current = true
       if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
       if (stableTimerRef.current) clearTimeout(stableTimerRef.current)
+      if (searchHighlightTimerRef.current) clearTimeout(searchHighlightTimerRef.current)
+      searchScrollDisposable.dispose()
       wsRef.current?.close()
       term.dispose()
     }
     // 故意不依赖 readOnly：实例状态变化不重建终端/不断连。
-  }, [instanceId, connect, isLoading, wsUrl, token, submitLine, replaceLine, copySelection])
+  }, [instanceId, connect, isLoading, wsUrl, token, submitLine, replaceLine, copySelection, fontSize])
 
   if (isLoading) {
     return (
       <div className="w-full h-full min-h-[400px] bg-[#1a1b26] rounded-md flex items-center justify-center">
         <div className="flex items-center gap-2 text-gray-400 text-sm">
           <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
-          连接中…
+          {t('instanceDetail.connecting')}
         </div>
       </div>
     )
   }
 
+  const handleMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    const current = document.activeElement as HTMLElement | null
+    const index = Math.max(0, items.findIndex((item) => item === current))
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setMenu(null)
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      items[(index + 1) % items.length]?.focus()
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      items[(index - 1 + items.length) % items.length]?.focus()
+    }
+  }
+
   return (
     <div className="relative flex h-full min-h-[400px] w-full gap-0">
+      {searchVisible && (
+        <div
+          role="search"
+          aria-label={t('instanceDetail.terminalSearchOpen', { defaultValue: '搜索终端' })}
+          className="absolute left-2 top-2 z-20 flex max-w-[calc(100%-4rem)] items-center gap-2 rounded-md border border-white/10 bg-[#1f2030] px-2 py-1 text-xs text-gray-200 shadow-lg"
+        >
+          <input
+            ref={searchInputRef}
+            type="search"
+            value={searchQuery}
+            onChange={(event) => updateSearchQuery(event.target.value)}
+            onFocus={() => refreshSearch(searchQuery, searchCurrentIndexRef.current)}
+            onKeyDown={handleSearchKeyDown}
+            aria-label={t('instanceDetail.terminalSearchInput', { defaultValue: '搜索终端输入' })}
+            placeholder={t('instanceDetail.terminalSearchPlaceholder', { defaultValue: '搜索终端输出' })}
+            className="h-7 w-52 max-w-[50vw] rounded border border-white/10 bg-[#16161e] px-2 text-xs text-gray-100 outline-none focus:border-primary"
+          />
+          <span role="status" aria-live="polite" className="whitespace-nowrap text-gray-400">
+            {searchQuery.trim()
+              ? t('instanceDetail.terminalSearchPosition', {
+                  current: searchMatches.length > 0 ? searchCurrentIndex + 1 : 0,
+                  count: searchMatches.length,
+                  defaultValue: '{{current}} / {{count}} matches',
+                })
+              : t('instanceDetail.terminalSearchReady', { defaultValue: '输入关键字搜索' })}
+          </span>
+          <button
+            type="button"
+            onClick={() => moveSearchMatch(-1)}
+            disabled={searchMatches.length === 0}
+            aria-label={t('instanceDetail.terminalSearchPrevious', { defaultValue: '上一条匹配' })}
+            className="rounded px-1.5 py-0.5 text-gray-300 hover:bg-white/10 hover:text-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            ↑
+          </button>
+          <button
+            type="button"
+            onClick={() => moveSearchMatch(1)}
+            disabled={searchMatches.length === 0}
+            aria-label={t('instanceDetail.terminalSearchNext', { defaultValue: '下一条匹配' })}
+            className="rounded px-1.5 py-0.5 text-gray-300 hover:bg-white/10 hover:text-gray-100 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            ↓
+          </button>
+          <button
+            type="button"
+            onClick={closeSearch}
+            aria-label={t('instanceDetail.terminalSearchClose', { defaultValue: '关闭终端搜索' })}
+            className="rounded px-1.5 py-0.5 text-gray-400 hover:bg-white/10 hover:text-gray-100"
+          >
+            x
+          </button>
+        </div>
+      )}
       {/* 终端区：支持鼠标拖选复制；右键弹出菜单 */}
       <div
         ref={terminalRef}
@@ -378,18 +692,19 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
         type="button"
         onClick={() => setDrawerOpen((v) => !v)}
         className="absolute right-1 top-1 z-10 rounded bg-white/10 px-2 py-0.5 text-xs text-gray-300 hover:bg-white/20"
-        title="历史命令"
+        title={t('instanceDetail.terminalHistory')}
+        aria-label={t('instanceDetail.terminalHistory')}
       >
-        {drawerOpen ? '▶' : '◀'} 历史
+        {drawerOpen ? '▶' : '◀'} {t('instanceDetail.terminalHistory')}
       </button>
 
       {/* 历史命令抽屉 */}
       {drawerOpen && (
         <div className="flex w-56 flex-col rounded-md border-l border-white/10 bg-[#16161e]">
-          <div className="border-b border-white/10 px-3 py-2 text-xs font-medium text-gray-300">历史命令（点重发）</div>
+          <div className="border-b border-white/10 px-3 py-2 text-xs font-medium text-gray-300">{t('instanceDetail.terminalHistoryTitle')}</div>
           <div className="min-h-0 flex-1 overflow-y-auto p-1">
             {history.length === 0 ? (
-              <div className="p-2 text-xs text-gray-500">暂无</div>
+              <div className="p-2 text-xs text-gray-500">{t('instanceDetail.terminalHistoryEmpty')}</div>
             ) : (
               [...history].reverse().map((cmd, i) => (
                 <button
@@ -412,16 +727,20 @@ export default function TerminalComponent({ instanceId, wsUrl, token, readOnly =
         <>
           <div className="fixed inset-0 z-20" onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null) }} />
           <div
+            role="menu"
+            aria-label={t('instanceDetail.terminalMenu')}
+            tabIndex={-1}
+            onKeyDown={handleMenuKeyDown}
             className="fixed z-30 min-w-36 rounded-md border border-white/10 bg-[#1f2030] py-1 text-sm text-gray-200 shadow-lg"
             style={{ left: menu.x, top: menu.y }}
           >
-            <button type="button" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { copySelection(); setMenu(null) }}>复制选中</button>
-            <button type="button" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { selectAll(); setMenu(null) }}>全选</button>
-            <button type="button" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { copyAll(); setMenu(null) }}>复制全部</button>
-            <button type="button" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { saveLog(); setMenu(null) }}>保存日志</button>
+            <button type="button" role="menuitem" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { copySelection(); setMenu(null) }}>{t('instanceDetail.terminalCopySelection')}</button>
+            <button type="button" role="menuitem" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { selectAll(); setMenu(null) }}>{t('instanceDetail.terminalSelectAll')}</button>
+            <button type="button" role="menuitem" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { copyAll(); setMenu(null) }}>{t('instanceDetail.terminalCopyAll')}</button>
+            <button type="button" role="menuitem" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { saveLog(); setMenu(null) }}>{t('instanceDetail.terminalSaveLog')}</button>
             <div className="my-1 border-t border-white/10" />
-            <button type="button" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { pasteClipboard(); setMenu(null) }}>粘贴</button>
-            <button type="button" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { termRef.current?.clear(); setMenu(null) }}>清屏</button>
+            <button type="button" role="menuitem" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { pasteClipboard(); setMenu(null) }}>{t('instanceDetail.terminalPaste')}</button>
+            <button type="button" role="menuitem" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { termRef.current?.clear(); setMenu(null) }}>{t('instanceDetail.terminalClear')}</button>
           </div>
         </>
       )}
