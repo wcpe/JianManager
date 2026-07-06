@@ -1,5 +1,6 @@
 import { Fragment, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router'
 import { ChevronRight, FolderTree, Tag } from 'lucide-react'
 import { toast } from 'sonner'
 import { useInstances, type InstanceInfo } from '@/api/instances'
@@ -33,6 +34,7 @@ import { cn } from '@jianmanager/ui'
  */
 export function InstanceGroupManager() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>([])
 
@@ -114,6 +116,7 @@ export function InstanceGroupManager() {
                   nodeName={nodeName(inst.nodeId)}
                   roleBadge={null}
                   menu={null}
+                  onOpen={(id) => navigate(`/instances/${id}`)}
                 />
               </DraggableInstance>
             ))}

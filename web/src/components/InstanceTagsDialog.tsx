@@ -4,7 +4,18 @@ import { toast } from 'sonner'
 import { useUpdateInstance } from '@/api/instances'
 import { ENV_TAG_PREFIX } from '@/components/console/instance-grouping'
 import { Badge } from '@jianmanager/ui/components/badge'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  ScrollableDialogBody,
+  scrollableDialogContentClass,
+} from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
+import { Button } from '@jianmanager/ui/components/button'
 import {
   Select,
   SelectContent,
@@ -75,77 +86,76 @@ export default function InstanceTagsDialog({ instanceId, instanceName, tags, onC
   }
 
   return (
-    <div className={MODAL_OVERLAY}>
-      <div className={`${MODAL_PANEL} max-w-md`}>
-        <h2 className="text-lg font-bold mb-4">{t('grouping.tagsTitle', { name: instanceName })}</h2>
-        <form onSubmit={submit} className="space-y-4">
-          <div>
-            <label className="text-sm font-medium">{t('grouping.environment')}</label>
-            <Select value={env} onValueChange={setEnv}>
-              <SelectTrigger className="w-full mt-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ENV_NONE}>{t('grouping.envNone')}</SelectItem>
-                {ENV_VALUES.map((e) => (
-                  <SelectItem key={e} value={e}>
-                    {t(`grouping.env_${e}`, { defaultValue: e })}
-                  </SelectItem>
+    <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-md`}>
+        <DialogHeader>
+          <DialogTitle>{t('grouping.tagsTitle', { name: instanceName })}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+          <ScrollableDialogBody className="space-y-4">
+            <div>
+              <label className="text-sm font-medium">{t('grouping.environment')}</label>
+              <Select value={env} onValueChange={setEnv}>
+                <SelectTrigger className="w-full mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ENV_NONE}>{t('grouping.envNone')}</SelectItem>
+                  {ENV_VALUES.map((e) => (
+                    <SelectItem key={e} value={e}>
+                      {t(`grouping.env_${e}`, { defaultValue: e })}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium">{t('grouping.freeTags')}</label>
+              <div className="mt-1 flex flex-wrap gap-1 min-h-8">
+                {freeTags.length === 0 && <span className="text-xs text-muted-foreground py-1">{t('grouping.noTags')}</span>}
+                {freeTags.map((tg) => (
+                  <Badge key={tg} variant="secondary" className="font-normal gap-1">
+                    {tg}
+                    <button
+                      type="button"
+                      onClick={() => setFreeTags((prev) => prev.filter((x) => x !== tg))}
+                      className="text-muted-foreground hover:text-foreground"
+                      aria-label={t('grouping.removeTag')}
+                    >
+                      ×
+                    </button>
+                  </Badge>
                 ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div>
-            <label className="text-sm font-medium">{t('grouping.freeTags')}</label>
-            <div className="mt-1 flex flex-wrap gap-1 min-h-8">
-              {freeTags.length === 0 && <span className="text-xs text-muted-foreground py-1">{t('grouping.noTags')}</span>}
-              {freeTags.map((tg) => (
-                <Badge key={tg} variant="secondary" className="font-normal gap-1">
-                  {tg}
-                  <button
-                    type="button"
-                    onClick={() => setFreeTags((prev) => prev.filter((x) => x !== tg))}
-                    className="text-muted-foreground hover:text-foreground"
-                    aria-label={t('grouping.removeTag')}
-                  >
-                    ×
-                  </button>
-                </Badge>
-              ))}
+              </div>
+              <div className="mt-2 flex gap-2">
+                <input
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={onDraftKey}
+                  placeholder={t('grouping.addTagPlaceholder')}
+                  className="flex-1 px-3 py-2 border rounded-md bg-background text-sm"
+                />
+                <Button type="button" variant="outline" onClick={addDraft}>
+                  {t('grouping.addTag')}
+                </Button>
+              </div>
             </div>
-            <div className="mt-2 flex gap-2">
-              <input
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={onDraftKey}
-                placeholder={t('grouping.addTagPlaceholder')}
-                className="flex-1 px-3 py-2 border rounded-md bg-background text-sm"
-              />
-              <button
-                type="button"
-                onClick={addDraft}
-                className="px-3 py-2 text-sm border rounded-md hover:bg-accent"
-              >
-                {t('grouping.addTag')}
-              </button>
-            </div>
-          </div>
+          </ScrollableDialogBody>
 
-          <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-md hover:bg-accent">
+          <DialogFooter className="pt-4">
+            <Button type="button" variant="outline" onClick={onClose}>
               {t('common.cancel')}
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
               disabled={update.isPending}
-              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50"
             >
               {update.isPending ? t('common.saving') : t('common.save')}
-            </button>
-          </div>
+            </Button>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

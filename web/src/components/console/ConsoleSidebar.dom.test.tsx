@@ -84,6 +84,13 @@ describe('ConsoleSidebar 高密度控制台 IA（FR-268）', () => {
     expect(screen.getByRole('link', { name: '分组管理' })).not.toHaveAttribute('aria-current')
   })
 
+  it('实例详情路由会点亮服务器分组和全部服务器入口', () => {
+    renderWithProviders(<ConsoleSidebar />, { route: '/instances/2' })
+
+    expect(screen.getByRole('button', { name: '服务器' })).toHaveAttribute('data-active', 'true')
+    expect(screen.getByRole('link', { name: '全部服务器' })).toHaveAttribute('aria-current', 'page')
+  })
+
   it('/networks 只高亮分组管理，不高亮网络拓扑', () => {
     renderWithProviders(<ConsoleSidebar />, { route: '/networks' })
 

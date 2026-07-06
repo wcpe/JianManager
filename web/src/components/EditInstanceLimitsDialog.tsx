@@ -2,7 +2,18 @@ import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useUpdateInstance } from '@/api/instances'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  ScrollableDialogBody,
+  scrollableDialogContentClass,
+} from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
+import { Button } from '@jianmanager/ui/components/button'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateResourceLimitNumber } from '@/lib/form-validation'
 
@@ -75,79 +86,84 @@ export default function EditInstanceLimitsDialog({
   }
 
   return (
-    <div className={MODAL_OVERLAY}>
-      <div className={`${MODAL_PANEL} max-w-md`}>
-        <h2 className="text-lg font-bold mb-4">{t('instances.resourceLimitTitle', { name: instanceName })}</h2>
+    <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-md`}>
+        <DialogHeader>
+          <DialogTitle>{t('instances.resourceLimitTitle', { name: instanceName })}</DialogTitle>
+        </DialogHeader>
 
         {!isDocker ? (
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">{t('instances.resourceLimitDockerOnly')}</p>
-            <div className="flex justify-end">
-              <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-md hover:bg-accent">
+          <>
+            <ScrollableDialogBody>
+              <p className="text-sm text-muted-foreground">{t('instances.resourceLimitDockerOnly')}</p>
+            </ScrollableDialogBody>
+            <DialogFooter className="pt-4">
+              <Button type="button" variant="outline" onClick={onClose}>
                 {t('common.close')}
-              </button>
-            </div>
-          </div>
+              </Button>
+            </DialogFooter>
+          </>
         ) : (
-          <form onSubmit={submit} className="space-y-4">
-            <div>
-              <FieldLabel>{t('instances.cpuLimit')}</FieldLabel>
-              <input
-                value={cpu}
-                onChange={(e) => setCpu(e.target.value)}
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
-                placeholder="1.5"
-                inputMode="decimal"
-                aria-invalid={!!cpuErr}
-              />
-              {cpuErr ? <FieldError error={cpuErr} /> : (
-                <p className="mt-1 text-xs text-muted-foreground">{t('instances.resourceLimitHint')}</p>
-              )}
-            </div>
-            <div>
-              <FieldLabel>{t('instances.memLimit')}</FieldLabel>
-              <input
-                value={mem}
-                onChange={(e) => setMem(e.target.value)}
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
-                placeholder="2048"
-                inputMode="numeric"
-                aria-invalid={!!memErr}
-              />
-              {memErr ? <FieldError error={memErr} /> : (
-                <p className="mt-1 text-xs text-muted-foreground">{t('instances.resourceLimitHint')}</p>
-              )}
-            </div>
-            <div>
-              <FieldLabel>{t('instances.diskLimit')}</FieldLabel>
-              <input
-                value={disk}
-                onChange={(e) => setDisk(e.target.value)}
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
-                placeholder="10240"
-                inputMode="numeric"
-                aria-invalid={!!diskErr}
-              />
-              {diskErr ? <FieldError error={diskErr} /> : (
-                <p className="mt-1 text-xs text-muted-foreground">{t('instances.diskLimitHint')}</p>
-              )}
-            </div>
+          <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+            <ScrollableDialogBody className="space-y-4">
+              <div>
+                <FieldLabel>{t('instances.cpuLimit')}</FieldLabel>
+                <input
+                  value={cpu}
+                  onChange={(e) => setCpu(e.target.value)}
+                  className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
+                  placeholder="1.5"
+                  inputMode="decimal"
+                  aria-invalid={!!cpuErr}
+                />
+                {cpuErr ? <FieldError error={cpuErr} /> : (
+                  <p className="mt-1 text-xs text-muted-foreground">{t('instances.resourceLimitHint')}</p>
+                )}
+              </div>
+              <div>
+                <FieldLabel>{t('instances.memLimit')}</FieldLabel>
+                <input
+                  value={mem}
+                  onChange={(e) => setMem(e.target.value)}
+                  className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
+                  placeholder="2048"
+                  inputMode="numeric"
+                  aria-invalid={!!memErr}
+                />
+                {memErr ? <FieldError error={memErr} /> : (
+                  <p className="mt-1 text-xs text-muted-foreground">{t('instances.resourceLimitHint')}</p>
+                )}
+              </div>
+              <div>
+                <FieldLabel>{t('instances.diskLimit')}</FieldLabel>
+                <input
+                  value={disk}
+                  onChange={(e) => setDisk(e.target.value)}
+                  className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
+                  placeholder="10240"
+                  inputMode="numeric"
+                  aria-invalid={!!diskErr}
+                />
+                {diskErr ? <FieldError error={diskErr} /> : (
+                  <p className="mt-1 text-xs text-muted-foreground">{t('instances.diskLimitHint')}</p>
+                )}
+              </div>
+            </ScrollableDialogBody>
 
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-md hover:bg-accent">
+            <DialogFooter className="pt-4">
+              <Button type="button" variant="outline" onClick={onClose}>
                 {t('common.cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
                 type="submit"
                 disabled={update.isPending || hasError}
-                className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50"
               >
                 {update.isPending ? t('common.saving') : t('common.save')}
-              </button>
-            </div>
+              </Button>
+            </DialogFooter>
           </form>
         )}
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

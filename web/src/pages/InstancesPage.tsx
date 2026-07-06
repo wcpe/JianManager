@@ -1,15 +1,17 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
-import { useSearchParams, useNavigate } from 'react-router'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { ChevronRight, ChevronDown, Zap, Globe, Plus, FolderTree } from 'lucide-react'
+import { ArrowUpDown, ChevronRight, ChevronDown, Zap, Globe, Plus, FolderTree, Search, SlidersHorizontal } from 'lucide-react'
 import {
-  useInstances,
+  useInfiniteInstanceSearch,
+  useInstanceAggregate,
   useStartInstance,
   useStopInstance,
   useRestartInstance,
   useDeleteInstance,
   useKillInstance,
   type InstanceListParams,
+  type InstanceSearchParams,
   type InstanceInfo,
 } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
@@ -41,9 +43,10 @@ import { Badge } from '@jianmanager/ui/components/badge'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { SummaryChips, type SummaryChip } from '@jianmanager/ui/components/summary-chips'
 import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
-import { instanceStatusLevel } from '@jianmanager/ui'
+import { cn, instanceStatusLevel } from '@jianmanager/ui'
 import { Button } from '@jianmanager/ui/components/button'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
+import { Input } from '@jianmanager/ui/components/input'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -70,12 +73,101 @@ import { useVirtualRows } from '@/lib/virtual-list'
 
 /** Radix Select 不允许空字符串 value，用哨兵值表示「全部 / 不过滤」。 */
 const ALL = '__all__'
+const SCROLL_KEY_PREFIX = 'jm.instances.scroll:'
+
+type InstanceUrlState = Partial<{
+  q: string
+  status: string
+  page: string
+  view: ViewMode
+  groupBy: GroupDimension
+  sort: InstanceSortKey
+  order: InstanceSortOrder
+  pageSize: string
+  orgView: boolean
+  networkId: string
+  env: string
+  tag: string
+  nodeId: string
+}>
+
+type InstanceSortKey = NonNullable<InstanceSearchParams['sort']>
+type InstanceSortOrder = NonNullable<InstanceSearchParams['order']>
+
+const INSTANCE_SORT_KEYS: InstanceSortKey[] = ['name', 'status', 'createdAt', 'nodeId']
+const INSTANCE_PAGE_SIZES = [50, 100, 200] as const
+
+function readViewMode(searchParams: URLSearchParams): ViewMode {
+  return searchParams.get('view') === 'list' ? 'list' : 'card'
+}
+
+function readGroupDimension(searchParams: URLSearchParams): GroupDimension {
+  const value = searchParams.get('groupBy')
+  if (value === 'node' || value === 'env' || value === 'status') return value
+  return 'none'
+}
+
+function readSortKey(searchParams: URLSearchParams): InstanceSortKey {
+  const value = searchParams.get('sort')
+  return INSTANCE_SORT_KEYS.includes(value as InstanceSortKey) ? (value as InstanceSortKey) : 'createdAt'
+}
+
+function readSortOrder(searchParams: URLSearchParams): InstanceSortOrder {
+  return searchParams.get('order') === 'desc' ? 'desc' : 'asc'
+}
+
+function readPageSize(searchParams: URLSearchParams): number {
+  const value = Number(searchParams.get('pageSize'))
+  return INSTANCE_PAGE_SIZES.includes(value as (typeof INSTANCE_PAGE_SIZES)[number]) ? value : 200
+}
+
+function readPage(searchParams: URLSearchParams): number {
+  const value = Number(searchParams.get('page'))
+  return Number.isInteger(value) && value > 0 ? value : 1
+}
+
+function readParamOrAll(searchParams: URLSearchParams, key: string): string {
+  return searchParams.get(key) ?? ALL
+}
+
+function writeParam(searchParams: URLSearchParams, key: string, value: string, defaultValue = ALL) {
+  const next = value.trim()
+  if (next === '' || next === defaultValue) searchParams.delete(key)
+  else searchParams.set(key, next)
+}
+
+function writeInstanceUrlState(searchParams: URLSearchParams, updates: InstanceUrlState) {
+  if (updates.q !== undefined) writeParam(searchParams, 'q', updates.q, '')
+  if (updates.status !== undefined) writeParam(searchParams, 'status', updates.status)
+  if (updates.page !== undefined) writeParam(searchParams, 'page', updates.page, '1')
+  if (updates.view !== undefined) writeParam(searchParams, 'view', updates.view, 'card')
+  if (updates.groupBy !== undefined) writeParam(searchParams, 'groupBy', updates.groupBy, 'none')
+  if (updates.sort !== undefined) writeParam(searchParams, 'sort', updates.sort, 'createdAt')
+  if (updates.order !== undefined) writeParam(searchParams, 'order', updates.order, 'asc')
+  if (updates.pageSize !== undefined) writeParam(searchParams, 'pageSize', updates.pageSize, '200')
+  if (updates.orgView !== undefined) {
+    if (updates.orgView) searchParams.set('orgView', '1')
+    else searchParams.delete('orgView')
+  }
+  if (updates.networkId !== undefined) writeParam(searchParams, 'networkId', updates.networkId)
+  if (updates.env !== undefined) writeParam(searchParams, 'env', updates.env)
+  if (updates.tag !== undefined) writeParam(searchParams, 'tag', updates.tag)
+  if (updates.nodeId !== undefined) writeParam(searchParams, 'nodeId', updates.nodeId)
+}
 
 export default function InstancesPage() {
   const { t } = useTranslation()
-  // 点实例名进统一的「运维控制台」（终端/文件/配置/Bot），不再跳老的实例详情页。
-  const openInstance = useConsoleStore((s) => s.openInstance)
   const navigate = useNavigate()
+  // 实例入口直接写入 URL，避免列表页点击依赖临时 store 再由 Workspace 二次同步。
+  const openInstance = useCallback((id: number) => navigate(`/instances/${id}`), [navigate])
+  const location = useLocation()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const hadUrlNodeRef = useRef(searchParams.has('nodeId'))
+  const updateUrl = useCallback((updates: InstanceUrlState) => {
+    const next = new URLSearchParams(searchParams)
+    writeInstanceUrlState(next, updates)
+    setSearchParams(next)
+  }, [searchParams, setSearchParams])
   const [showProvision, setShowProvision] = useState(false)
   const [showProvisionProxy, setShowProvisionProxy] = useState(false)
   const [manageProxy, setManageProxy] = useState<{ id: number; name: string } | null>(null)
@@ -96,34 +188,66 @@ export default function InstancesPage() {
   // 批量操作选中的实例 ID 集合（FR-058）。
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   // 工作台卡 ⇄ 列表视图（FR-136，§4.5）；运行实体默认卡片。
-  const [view, setView] = useState<ViewMode>('card')
+  const [view, setView] = useState<ViewMode>(() => readViewMode(searchParams))
   // 组织分组视图开关（FR-165，§4.4）：开启后切到「左分组树 + 右列表」专用形态，
   // 与既有筛选/groupBy 分组并列、互不破坏；关闭回到原平铺/分组视图。
-  const [orgView, setOrgView] = useState(false)
+  const [orgView, setOrgView] = useState(() => searchParams.get('orgView') === '1')
   // proxy 行 inline 展开已注册 backend 的代理 id 集合（FR-136）。
   const [expandedProxies, setExpandedProxies] = useState<Set<number>>(new Set())
 
   // 多维筛选状态（FR-047 / FR-268）：群组 / 环境 / 标签 / 节点 / 状态任意组合，下发后端过滤。
-  const [networkId, setNetworkId] = useState<string>(ALL)
-  const [env, setEnv] = useState<string>(ALL)
-  const [tag, setTag] = useState<string>(ALL)
+  const [searchQuery, setSearchQuery] = useState(() => searchParams.get('q') ?? '')
+  const [networkId, setNetworkId] = useState<string>(() => readParamOrAll(searchParams, 'networkId'))
+  const [env, setEnv] = useState<string>(() => readParamOrAll(searchParams, 'env'))
+  const [tag, setTag] = useState<string>(() => readParamOrAll(searchParams, 'tag'))
   const selectedNodeId = useConsoleStore((s) => s.selectedNodeId)
   const setSelectedNodeId = useConsoleStore((s) => s.setSelectedNodeId)
   const nodeId = selectedNodeId == null ? ALL : String(selectedNodeId)
-  const setNodeFilter = (value: string) => setSelectedNodeId(value === ALL ? null : Number(value))
-  // 顶栏集群徽标（FR-162）点击带 ?status= 跳转筛选。挂载时取初值；URL 变化时同步——
-  // 用 React 推荐的渲染期「随外部值调整 state」模式（存上一次值比对，避免 effect 内 setState）。
-  // 完整 URL 可寻址（全维度筛选进 URL、深链还原）归 FR-128，此处仅最小启用胶水。
-  const [searchParams] = useSearchParams()
-  const urlStatus = searchParams.get('status')
-  const [statusFilter, setStatusFilter] = useState<string>(urlStatus ?? ALL)
-  const [prevUrlStatus, setPrevUrlStatus] = useState(urlStatus)
-  if (urlStatus !== prevUrlStatus) {
-    setPrevUrlStatus(urlStatus)
-    if (urlStatus) setStatusFilter(urlStatus)
+  const setNodeFilter = (value: string) => {
+    setSelectedNodeId(value === ALL ? null : Number(value))
+    updateUrl({ nodeId: value, page: '1' })
   }
+  const [statusFilter, setStatusFilter] = useState<string>(() => readParamOrAll(searchParams, 'status'))
   // 分组视图维度。
-  const [groupBy, setGroupBy] = useState<GroupDimension>('none')
+  const [groupBy, setGroupBy] = useState<GroupDimension>(() => readGroupDimension(searchParams))
+  const [sortKey, setSortKey] = useState<InstanceSortKey>(() => readSortKey(searchParams))
+  const [sortOrder, setSortOrder] = useState<InstanceSortOrder>(() => readSortOrder(searchParams))
+  const [page, setPage] = useState(() => readPage(searchParams))
+  const [pageSize, setPageSize] = useState(() => readPageSize(searchParams))
+  const [filtersCollapsed, setFiltersCollapsed] = useState(false)
+  const scrollStorageKey = useMemo(
+    () => `${SCROLL_KEY_PREFIX}${location.pathname}${location.search}`,
+    [location.pathname, location.search],
+  )
+
+  useEffect(() => {
+    const nextParams = new URLSearchParams(location.search)
+    let cancelled = false
+    queueMicrotask(() => {
+      if (cancelled) return
+      setSearchQuery(nextParams.get('q') ?? '')
+      setNetworkId(readParamOrAll(nextParams, 'networkId'))
+      setEnv(readParamOrAll(nextParams, 'env'))
+      setTag(readParamOrAll(nextParams, 'tag'))
+      setStatusFilter(readParamOrAll(nextParams, 'status'))
+      setView(readViewMode(nextParams))
+      setGroupBy(readGroupDimension(nextParams))
+      setSortKey(readSortKey(nextParams))
+      setSortOrder(readSortOrder(nextParams))
+      setPage(readPage(nextParams))
+      setPageSize(readPageSize(nextParams))
+      setOrgView(nextParams.get('orgView') === '1')
+
+      const hasNode = nextParams.has('nodeId')
+      if (hasNode) {
+        setSelectedNodeId(Number(nextParams.get('nodeId')))
+      } else if (hadUrlNodeRef.current) {
+        setSelectedNodeId(null)
+      }
+      hadUrlNodeRef.current = hasNode
+    })
+    return () => { cancelled = true }
+  }, [location.search, setSelectedNodeId])
 
   const params: InstanceListParams = useMemo(() => {
     const p: InstanceListParams = {}
@@ -135,9 +259,28 @@ export default function InstancesPage() {
     return p
   }, [networkId, env, tag, nodeId, statusFilter])
 
-  const { data: instances, isLoading } = useInstances(params)
-  // 未过滤集合：用于填充环境/标签下拉选项 + 汇总头计数（避免随筛选自我收敛）。
-  const { data: allInstances } = useInstances()
+  const instanceSearchParams: Omit<InstanceSearchParams, 'page'> = useMemo(() => ({
+    ...params,
+    ...(searchQuery.trim() ? { q: searchQuery.trim() } : {}),
+    pageSize,
+    sort: sortKey,
+    order: sortOrder,
+  }), [pageSize, params, searchQuery, sortKey, sortOrder])
+  const {
+    data: searchData,
+    isLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteInstanceSearch(instanceSearchParams, page)
+  const instances = useMemo(() => searchData?.pages.flatMap((p) => p.items) ?? [], [searchData])
+  const totalCount = searchData?.pages[0]?.total ?? instances.length
+  const aggregateParams = useMemo(() => {
+    const next: InstanceListParams = { ...params }
+    delete next.status
+    return next
+  }, [params])
+  const { data: aggregate } = useInstanceAggregate(aggregateParams)
   const { data: nodes } = useNodes()
   const { data: networks } = useNetworks()
 
@@ -157,39 +300,110 @@ export default function InstancesPage() {
   // 选中实例的 {id,name,status}，供批量栏做状态感知禁用与部分失败明细（FR-139）。
   const selectedInstances = useMemo(
     () =>
-      (allInstances ?? instances ?? [])
+      instances
         .filter((i) => selectedIds.includes(i.id))
         .map((i) => ({ id: i.id, name: i.name, status: i.status })),
-    [allInstances, instances, selectedIds],
+    [instances, selectedIds],
   )
 
   const scopedAllInstances = useMemo(
-    () => (selectedNodeId == null ? (allInstances ?? []) : (allInstances ?? []).filter((i) => i.nodeId === selectedNodeId)),
-    [allInstances, selectedNodeId],
+    () => (selectedNodeId == null ? instances : instances.filter((i) => i.nodeId === selectedNodeId)),
+    [instances, selectedNodeId],
   )
   const envOptions = useMemo(() => collectEnvs(scopedAllInstances), [scopedAllInstances])
   const tagOptions = useMemo(() => collectTags(scopedAllInstances), [scopedAllInstances])
   const nodeName = (id: number) => nodes?.find((n) => n.id === id)?.name ?? t('console.unknownNode', { id })
 
-  const groups = useMemo(() => groupInstances(instances ?? [], groupBy), [instances, groupBy])
+  const groups = useMemo(() => groupInstances(instances, groupBy), [instances, groupBy])
 
   // 汇总头计数随页眉节点作用域收敛，但不受状态/标签等本页细筛选影响。
-  const counts = useMemo(() => summarizeInstances(scopedAllInstances), [scopedAllInstances])
+  const counts = useMemo(() => {
+    if (!aggregate) return summarizeInstances(scopedAllInstances)
+    const byStatus = aggregate.byStatus
+    return {
+      total: aggregate.total,
+      running: (byStatus.RUNNING ?? 0) + (byStatus.STARTING ?? 0) + (byStatus.STOPPING ?? 0),
+      stopped: byStatus.STOPPED ?? 0,
+      crashed: byStatus.CRASHED ?? 0,
+    }
+  }, [aggregate, scopedAllInstances])
+
+  const loadMoreInstances = useCallback(() => {
+    if (hasNextPage && !isFetchingNextPage) {
+      void fetchNextPage()
+    }
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage])
+
+  const setSearchQueryFilter = (value: string) => {
+    setSearchQuery(value)
+    updateUrl({ q: value, page: '1' })
+  }
+  const setNetworkFilter = (value: string) => {
+    setNetworkId(value)
+    updateUrl({ networkId: value, page: '1' })
+  }
+  const setEnvFilter = (value: string) => {
+    setEnv(value)
+    updateUrl({ env: value, page: '1' })
+  }
+  const setTagFilter = (value: string) => {
+    setTag(value)
+    updateUrl({ tag: value, page: '1' })
+  }
+  const setStatusFilterParam = (value: string) => {
+    setStatusFilter(value)
+    updateUrl({ status: value, page: '1' })
+  }
+  const setViewParam = (value: ViewMode) => {
+    setView(value)
+    updateUrl({ view: value })
+  }
+  const setGroupByParam = (value: GroupDimension) => {
+    setGroupBy(value)
+    updateUrl({ groupBy: value, page: '1' })
+  }
+  const setSortKeyParam = (value: InstanceSortKey) => {
+    setSortKey(value)
+    updateUrl({ sort: value, page: '1' })
+  }
+  const setSortOrderParam = (value: InstanceSortOrder) => {
+    setSortOrder(value)
+    updateUrl({ order: value, page: '1' })
+  }
+  const setTableSortParam = (value: InstanceSortKey) => {
+    const nextOrder = sortKey === value && sortOrder === 'asc' ? 'desc' : 'asc'
+    setSortKey(value)
+    setSortOrder(nextOrder)
+    updateUrl({ sort: value, order: nextOrder, page: '1' })
+  }
+  const setPageSizeParam = (value: string) => {
+    const parsed = Number(value)
+    const next = INSTANCE_PAGE_SIZES.includes(parsed as (typeof INSTANCE_PAGE_SIZES)[number]) ? parsed : 200
+    setPageSize(next)
+    updateUrl({ pageSize: String(next), page: '1' })
+  }
+  const setOrgViewParam = (value: boolean) => {
+    setOrgView(value)
+    updateUrl({ orgView: value })
+  }
 
   const hasActiveFilter =
-    networkId !== ALL || env !== ALL || tag !== ALL || nodeId !== ALL || statusFilter !== ALL
+    searchQuery.trim() !== '' || networkId !== ALL || env !== ALL || tag !== ALL || nodeId !== ALL || statusFilter !== ALL
   const resetFilters = () => {
+    setSearchQuery('')
     setNetworkId(ALL)
     setEnv(ALL)
     setTag(ALL)
     setSelectedNodeId(null)
     setStatusFilter(ALL)
+    updateUrl({ q: '', networkId: ALL, env: ALL, tag: ALL, nodeId: ALL, status: ALL, page: '1' })
   }
 
   // 汇总 chip 点击 → 设状态筛选（再点同项=清空），可发现「不正常的」（§6.3 #4）。
   const applySummaryFilter = (key: SummaryFilterKey) => {
     const target = summaryFilterStatus(key)
-    setStatusFilter((cur) => (cur === (target ?? ALL) ? ALL : (target ?? ALL)))
+    const next = statusFilter === (target ?? ALL) ? ALL : (target ?? ALL)
+    setStatusFilterParam(next)
   }
   const summaryChips: SummaryChip[] = [
     {
@@ -269,7 +483,7 @@ export default function InstancesPage() {
       return next
     })
 
-  const renderRow = (inst: NonNullable<typeof instances>[number]) => {
+  const renderRow = (inst: InstanceInfo) => {
     const st = statusConfig[inst.status] || statusConfig.STOPPED
     const instEnv = envOf(inst)
     const free = freeTagsOf(inst)
@@ -424,77 +638,134 @@ export default function InstancesPage() {
         <SummaryChips chips={summaryChips} className="flex-1" />
         <ViewToggle
           value={view}
-          onChange={setView}
+          onChange={setViewParam}
           cardLabel={t('grouping.viewCard')}
           listLabel={t('grouping.viewList')}
         />
       </div>
 
-      {/* 多维筛选 + 分组视图（FR-047） */}
-      <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
-        <FilterSelect
-          label={t('grouping.filterNetwork')}
-          value={networkId}
-          onChange={setNetworkId}
-          options={(networks ?? []).map((n) => ({ value: String(n.id), label: n.name }))}
-        />
-        <FilterSelect
-          label={t('grouping.filterEnv')}
-          value={env}
-          onChange={setEnv}
-          options={envOptions.map((e) => ({ value: e, label: t(`grouping.env_${e}`, { defaultValue: e }) }))}
-        />
-        <FilterSelect
-          label={t('grouping.filterTag')}
-          value={tag}
-          onChange={setTag}
-          options={tagOptions.map((tg) => ({ value: tg, label: tg }))}
-        />
-        <FilterSelect
-          label={t('grouping.filterNode')}
-          value={nodeId}
-          onChange={setNodeFilter}
-          options={(nodes ?? []).map((n) => ({ value: String(n.id), label: n.name }))}
-        />
-        <FilterSelect
-          label={t('grouping.filterStatus')}
-          value={statusFilter}
-          onChange={setStatusFilter}
-          options={Object.entries(statusConfig).map(([k, v]) => ({ value: k, label: v.text }))}
-        />
-
-        <div className="ml-auto flex items-center gap-2">
-          {hasActiveFilter && (
-            <Button variant="ghost" size="sm" onClick={resetFilters} className="text-muted-foreground">
-              {t('grouping.clearFilters')}
-            </Button>
-          )}
-          {/* 组织分组视图开关（FR-165，§4.4）：与 groupBy 维度分组并列。 */}
+      {/* 多维筛选 + 分组视图（FR-047/137）：sticky + 可折叠，避免长筛选条在移动端翻屏。 */}
+      <div className="sticky top-16 z-20 jm-toolbar-surface space-y-2 p-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative min-w-52 flex-1 sm:flex-none">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              type="search"
+              aria-label="搜索实例"
+              value={searchQuery}
+              onChange={(event) => setSearchQueryFilter(event.target.value)}
+              placeholder="搜索实例 / host / 标签"
+              className="h-8 pl-8"
+            />
+          </div>
+          <Select value={sortKey} onValueChange={(v) => setSortKeyParam(v as InstanceSortKey)}>
+            <SelectTrigger size="sm" className="w-36" aria-label={t('grouping.sortBy')}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="createdAt">{t('grouping.sort_createdAt')}</SelectItem>
+              <SelectItem value="name">{t('grouping.sort_name')}</SelectItem>
+              <SelectItem value="status">{t('grouping.sort_status')}</SelectItem>
+              <SelectItem value="nodeId">{t('grouping.sort_nodeId')}</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={sortOrder} onValueChange={(v) => setSortOrderParam(v as InstanceSortOrder)}>
+            <SelectTrigger size="sm" className="w-28" aria-label={t('grouping.sortOrder')}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="asc">{t('grouping.orderAsc')}</SelectItem>
+              <SelectItem value="desc">{t('grouping.orderDesc')}</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select value={String(pageSize)} onValueChange={setPageSizeParam}>
+            <SelectTrigger size="sm" className="w-28" aria-label={t('grouping.pageSize')}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {INSTANCE_PAGE_SIZES.map((size) => (
+                <SelectItem key={size} value={String(size)}>
+                  {t('grouping.pageSizeValue', { count: size })}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button
-            variant={orgView ? 'default' : 'outline'}
+            variant="outline"
             size="sm"
-            onClick={() => setOrgView((v) => !v)}
-            aria-pressed={orgView}
+            onClick={() => setFiltersCollapsed((v) => !v)}
+            aria-expanded={!filtersCollapsed}
+            aria-controls="instances-advanced-filters"
           >
-            <FolderTree className="size-4" /> {t('instanceGroups.orgView')}
+            <SlidersHorizontal className="size-4" />
+            {filtersCollapsed ? t('grouping.showFilters') : t('grouping.hideFilters')}
           </Button>
-          {!orgView && (
-            <>
-              <span className="text-sm text-muted-foreground">{t('grouping.groupBy')}</span>
-              <Select value={groupBy} onValueChange={(v) => setGroupBy(v as GroupDimension)}>
-                <SelectTrigger size="sm" className="w-32">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">{t('grouping.dim_none')}</SelectItem>
-                  <SelectItem value="node">{t('grouping.dim_node')}</SelectItem>
-                  <SelectItem value="env">{t('grouping.dim_env')}</SelectItem>
-                  <SelectItem value="status">{t('grouping.dim_status')}</SelectItem>
-                </SelectContent>
-              </Select>
-            </>
-          )}
+          <div className="ml-auto flex items-center gap-2">
+            {hasActiveFilter && (
+              <Button variant="ghost" size="sm" onClick={resetFilters} className="text-muted-foreground">
+                {t('grouping.clearFilters')}
+              </Button>
+            )}
+            <Button
+              variant={orgView ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setOrgViewParam(!orgView)}
+              aria-pressed={orgView}
+            >
+              <FolderTree className="size-4" /> {t('instanceGroups.orgView')}
+            </Button>
+          </div>
         </div>
+        {!filtersCollapsed && (
+          <div id="instances-advanced-filters" className="flex flex-wrap items-center gap-2">
+            <FilterSelect
+              label={t('grouping.filterNetwork')}
+              value={networkId}
+              onChange={setNetworkFilter}
+              options={(networks ?? []).map((n) => ({ value: String(n.id), label: n.name }))}
+            />
+            <FilterSelect
+              label={t('grouping.filterEnv')}
+              value={env}
+              onChange={setEnvFilter}
+              options={envOptions.map((e) => ({ value: e, label: t(`grouping.env_${e}`, { defaultValue: e }) }))}
+            />
+            <FilterSelect
+              label={t('grouping.filterTag')}
+              value={tag}
+              onChange={setTagFilter}
+              options={tagOptions.map((tg) => ({ value: tg, label: tg }))}
+            />
+            <FilterSelect
+              label={t('grouping.filterNode')}
+              value={nodeId}
+              onChange={setNodeFilter}
+              options={(nodes ?? []).map((n) => ({ value: String(n.id), label: n.name }))}
+            />
+            <FilterSelect
+              label={t('grouping.filterStatus')}
+              value={statusFilter}
+              onChange={setStatusFilterParam}
+              options={Object.entries(statusConfig).map(([k, v]) => ({ value: k, label: v.text }))}
+            />
+            {!orgView && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">{t('grouping.groupBy')}</span>
+                <Select value={groupBy} onValueChange={(v) => setGroupByParam(v as GroupDimension)}>
+                  <SelectTrigger size="sm" className="w-32">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">{t('grouping.dim_none')}</SelectItem>
+                    <SelectItem value="node">{t('grouping.dim_node')}</SelectItem>
+                    <SelectItem value="env">{t('grouping.dim_env')}</SelectItem>
+                    <SelectItem value="status">{t('grouping.dim_status')}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <ProvisionServerDialog open={showProvision} onClose={() => setShowProvision(false)} />
@@ -549,38 +820,55 @@ export default function InstancesPage() {
             <CardView
               groupBy={groupBy}
               groups={groups}
+              totalCount={totalCount}
+              onNeedMore={loadMoreInstances}
+              scrollStorageKey={scrollStorageKey}
               groupLabel={groupLabel}
               nodeName={nodeName}
               buildMenu={buildMenu}
               hasActiveFilter={hasActiveFilter}
+              onOpenInstance={openInstance}
             />
           ) : groupBy === 'none' ? (
             <VirtualizedInstanceTable
-              instances={instances ?? []}
-              header={<InstanceTableHeader t={t} allSelected={allSelected} onToggleAll={toggleAll} />}
+              instances={instances}
+              totalCount={totalCount}
+              onNeedMore={loadMoreInstances}
+              scrollStorageKey={scrollStorageKey}
+              header={
+                <InstanceTableHeader
+                  t={t}
+                  allSelected={allSelected}
+                  onToggleAll={toggleAll}
+                  sortKey={sortKey}
+                  sortOrder={sortOrder}
+                  onSort={setTableSortParam}
+                />
+              }
               renderRow={renderRow}
               emptyLabel={hasActiveFilter ? t('grouping.noMatch') : t('instances.empty')}
             />
           ) : (
-            <div className="space-y-4">
-              {groups.map((g) => (
-                <div key={g.key || '__none__'} className="overflow-hidden rounded-lg border bg-card/95 shadow-soft">
-                  <div className="flex items-center gap-2 px-4 py-2 bg-muted/50 border-b">
-                    <span className="font-medium text-sm">{groupLabel(g.key)}</span>
-                    <Badge variant="outline" className="font-normal">{g.instances.length}</Badge>
-                  </div>
-                  <Table>
-                    <InstanceTableHeader t={t} allSelected={allSelected} onToggleAll={toggleAll} />
-                    <TableBody>{g.instances.map(renderRow)}</TableBody>
-                  </Table>
-                </div>
-              ))}
-              {groups.length === 0 && (
-                <p className="text-center text-muted-foreground py-8">
-                  {hasActiveFilter ? t('grouping.noMatch') : t('instances.empty')}
-                </p>
-              )}
-            </div>
+            <VirtualizedGroupedInstanceTable
+              groups={groups}
+              totalCount={totalCount}
+              loadedCount={instances.length}
+              onNeedMore={loadMoreInstances}
+              scrollStorageKey={scrollStorageKey}
+              header={
+                <InstanceTableHeader
+                  t={t}
+                  allSelected={allSelected}
+                  onToggleAll={toggleAll}
+                  sortKey={sortKey}
+                  sortOrder={sortOrder}
+                  onSort={setTableSortParam}
+                />
+              }
+              renderRow={renderRow}
+              groupLabel={groupLabel}
+              emptyLabel={hasActiveFilter ? t('grouping.noMatch') : t('instances.empty')}
+            />
           )}
         </div>
       )}
@@ -609,35 +897,66 @@ export default function InstancesPage() {
   )
 }
 
-function VirtualizedInstanceTable({
-  instances,
+type GroupedInstanceRow =
+  | { kind: 'group'; key: string; label: string; count: number }
+  | { kind: 'instance'; key: string; instance: InstanceInfo }
+
+function buildGroupedInstanceRows(
+  groups: { key: string; instances: InstanceInfo[] }[],
+  groupLabel: (key: string) => string,
+): GroupedInstanceRow[] {
+  return groups.flatMap((group) => [
+    { kind: 'group' as const, key: `group:${group.key || '__none__'}`, label: groupLabel(group.key), count: group.instances.length },
+    ...group.instances.map((instance) => ({ kind: 'instance' as const, key: `instance:${instance.id}`, instance })),
+  ])
+}
+
+function VirtualizedGroupedInstanceTable({
+  groups,
+  totalCount,
+  loadedCount,
+  onNeedMore,
+  scrollStorageKey,
   header,
   renderRow,
+  groupLabel,
   emptyLabel,
 }: {
-  instances: InstanceInfo[]
+  groups: { key: string; instances: InstanceInfo[] }[]
+  totalCount: number
+  loadedCount: number
+  onNeedMore: () => void
+  scrollStorageKey: string
   header: React.ReactNode
   renderRow: (inst: InstanceInfo) => React.ReactNode
+  groupLabel: (key: string) => string
   emptyLabel: string
 }) {
+  const rows = useMemo(() => buildGroupedInstanceRows(groups, groupLabel), [groupLabel, groups])
   const {
     containerRef,
     onScroll,
     range,
   } = useVirtualRows({
-    total: instances.length,
+    total: rows.length,
     itemSize: 44,
     overscan: 10,
     fallbackViewportSize: 520,
   })
-  const visible = instances.slice(range.start, range.end)
+  const handleScroll = useStoredVirtualScroll(containerRef, onScroll, scrollStorageKey)
+
+  useEffect(() => {
+    if (range.end + 20 >= rows.length && loadedCount < totalCount) {
+      onNeedMore()
+    }
+  }, [loadedCount, onNeedMore, range.end, rows.length, totalCount])
 
   return (
     <div
       ref={containerRef}
-      onScroll={onScroll}
+      onScroll={handleScroll}
       data-testid="instances-table-virtual"
-      data-total-count={instances.length}
+      data-total-count={totalCount}
       className="max-h-[calc(100vh-20rem)] min-h-72 overflow-auto rounded-lg border bg-card/95 shadow-soft"
     >
       <Table>
@@ -648,13 +967,24 @@ function VirtualizedInstanceTable({
               <TableCell colSpan={8} className="p-0" style={{ height: range.before }} />
             </TableRow>
           )}
-          {visible.map(renderRow)}
+          {rows.slice(range.start, range.end).map((row) => row.kind === 'group' ? (
+            <TableRow key={row.key} data-testid="instances-group-row" className="sticky top-9 z-10 bg-muted/80 backdrop-blur">
+              <TableCell colSpan={8} className="h-11 px-4 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">{row.label}</span>
+                  <Badge variant="outline" className="font-normal">{row.count}</Badge>
+                </div>
+              </TableCell>
+            </TableRow>
+          ) : (
+            <Fragment key={row.key}>{renderRow(row.instance)}</Fragment>
+          ))}
           {range.after > 0 && (
             <TableRow aria-hidden="true">
               <TableCell colSpan={8} className="p-0" style={{ height: range.after }} />
             </TableRow>
           )}
-          {instances.length === 0 && (
+          {rows.length === 0 && (
             <TableRow>
               <TableCell colSpan={8} className="text-center text-muted-foreground">
                 {emptyLabel}
@@ -667,6 +997,116 @@ function VirtualizedInstanceTable({
   )
 }
 
+function VirtualizedInstanceTable({
+  instances,
+  totalCount,
+  onNeedMore,
+  scrollStorageKey,
+  header,
+  renderRow,
+  emptyLabel,
+}: {
+  instances: InstanceInfo[]
+  totalCount: number
+  onNeedMore: () => void
+  scrollStorageKey: string
+  header: React.ReactNode
+  renderRow: (inst: InstanceInfo) => React.ReactNode
+  emptyLabel: string
+}) {
+  const {
+    containerRef,
+    onScroll,
+    range,
+  } = useVirtualRows({
+    total: totalCount,
+    itemSize: 44,
+    overscan: 10,
+    fallbackViewportSize: 520,
+  })
+  const handleScroll = useStoredVirtualScroll(containerRef, onScroll, scrollStorageKey)
+
+  useEffect(() => {
+    if (range.end + 20 >= instances.length && instances.length < totalCount) {
+      onNeedMore()
+    }
+  }, [instances.length, onNeedMore, range.end, totalCount])
+
+  const visible = []
+  for (let index = range.start; index < range.end; index++) {
+    visible.push({ index, inst: instances[index] })
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      onScroll={handleScroll}
+      data-testid="instances-table-virtual"
+      data-total-count={totalCount}
+      className="max-h-[calc(100vh-20rem)] min-h-72 overflow-auto rounded-lg border bg-card/95 shadow-soft"
+    >
+      <Table>
+        {header}
+        <TableBody>
+          {range.before > 0 && (
+            <TableRow aria-hidden="true">
+              <TableCell colSpan={8} className="p-0" style={{ height: range.before }} />
+            </TableRow>
+          )}
+          {visible.map(({ index, inst }) => (
+            <Fragment key={inst?.id ?? `placeholder-${index}`}>
+              {inst ? renderRow(inst) : (
+                <TableRow aria-hidden="true">
+                  <TableCell colSpan={8} className="p-0" style={{ height: 44 }} />
+                </TableRow>
+              )}
+            </Fragment>
+          ))}
+          {range.after > 0 && (
+            <TableRow aria-hidden="true">
+              <TableCell colSpan={8} className="p-0" style={{ height: range.after }} />
+            </TableRow>
+          )}
+          {totalCount === 0 && (
+            <TableRow>
+              <TableCell colSpan={8} className="text-center text-muted-foreground">
+                {emptyLabel}
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+    </div>
+  )
+}
+
+function useStoredVirtualScroll(
+  containerRef: React.RefObject<HTMLDivElement | null>,
+  onScroll: () => void,
+  storageKey: string,
+) {
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const saved = Number(sessionStorage.getItem(storageKey) ?? 0)
+    if (!Number.isFinite(saved) || saved <= 0) return
+
+    const frame = window.requestAnimationFrame(() => {
+      el.scrollTop = saved
+      onScroll()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [containerRef, onScroll, storageKey])
+
+  return useCallback(() => {
+    onScroll()
+    const el = containerRef.current
+    if (!el) return
+    if (el.scrollTop <= 0) sessionStorage.removeItem(storageKey)
+    else sessionStorage.setItem(storageKey, String(Math.round(el.scrollTop)))
+  }, [containerRef, onScroll, storageKey])
+}
+
 /**
  * 卡片视图（FR-136 工作台卡）：平铺或按分组维度分段渲染工作台卡网格。
  * 分组维度非 none 时每组一段（组头 + 该组卡片网格）。
@@ -674,25 +1114,41 @@ function VirtualizedInstanceTable({
 function CardView({
   groupBy,
   groups,
+  totalCount,
+  onNeedMore,
+  scrollStorageKey,
   groupLabel,
   nodeName,
   buildMenu,
   hasActiveFilter,
+  onOpenInstance,
 }: {
   groupBy: GroupDimension
   groups: { key: string; instances: InstanceInfo[] }[]
+  totalCount: number
+  onNeedMore: () => void
+  scrollStorageKey: string
   groupLabel: (key: string) => string
   nodeName: (id: number) => string
   buildMenu: (inst: InstanceInfo) => React.ReactNode
   hasActiveFilter: boolean
+  onOpenInstance: (id: number) => void
 }) {
   const { t } = useTranslation()
-  const grid = (list: InstanceInfo[]) => (
-    <VirtualizedCardGrid instances={list} nodeName={nodeName} buildMenu={buildMenu} />
+  const grid = (list: InstanceInfo[], count = list.length, onMore: () => void = () => {}, key = scrollStorageKey) => (
+    <VirtualizedCardGrid
+      instances={list}
+      totalCount={count}
+      onNeedMore={onMore}
+      scrollStorageKey={key}
+      nodeName={nodeName}
+      buildMenu={buildMenu}
+      onOpenInstance={onOpenInstance}
+    />
   )
 
-  const totalCount = groups.reduce((sum, g) => sum + g.instances.length, 0)
-  if (totalCount === 0) {
+  const loadedTotal = groups.reduce((sum, g) => sum + g.instances.length, 0)
+  if (totalCount === 0 && loadedTotal === 0) {
     return (
       <p className="text-center text-muted-foreground py-8">
         {hasActiveFilter ? t('grouping.noMatch') : t('instances.empty')}
@@ -701,7 +1157,7 @@ function CardView({
   }
 
   if (groupBy === 'none') {
-    return grid(groups[0]?.instances ?? [])
+    return grid(groups[0]?.instances ?? [], totalCount, onNeedMore)
   }
   return (
     <div className="space-y-4">
@@ -711,7 +1167,7 @@ function CardView({
             <span className="text-sm font-medium">{groupLabel(g.key)}</span>
             <Badge variant="outline" className="font-normal">{g.instances.length}</Badge>
           </div>
-          {grid(g.instances)}
+          {grid(g.instances, g.instances.length, () => undefined, `${scrollStorageKey}:group:${g.key || '__none__'}`)}
         </div>
       ))}
     </div>
@@ -741,15 +1197,23 @@ function useCardColumns(): number {
 
 function VirtualizedCardGrid({
   instances,
+  totalCount,
+  onNeedMore,
+  scrollStorageKey,
   nodeName,
   buildMenu,
+  onOpenInstance,
 }: {
   instances: InstanceInfo[]
+  totalCount: number
+  onNeedMore: () => void
+  scrollStorageKey: string
   nodeName: (id: number) => string
   buildMenu: (inst: InstanceInfo) => React.ReactNode
+  onOpenInstance: (id: number) => void
 }) {
   const columns = useCardColumns()
-  const rowCount = Math.ceil(instances.length / columns)
+  const rowCount = Math.ceil(totalCount / columns)
   const {
     containerRef,
     onScroll,
@@ -761,18 +1225,31 @@ function VirtualizedCardGrid({
     overscan: 4,
     fallbackViewportSize: 720,
   })
+  const handleScroll = useStoredVirtualScroll(containerRef, onScroll, scrollStorageKey)
+
+  useEffect(() => {
+    if (range.end * columns + 20 >= instances.length && instances.length < totalCount) {
+      onNeedMore()
+    }
+  }, [columns, instances.length, onNeedMore, range.end, totalCount])
+
   const rows = []
   for (let rowIndex = range.start; rowIndex < range.end; rowIndex++) {
-    const rowItems = instances.slice(rowIndex * columns, rowIndex * columns + columns)
+    const startIndex = rowIndex * columns
+    const rowItems: Array<{ index: number; inst?: InstanceInfo }> = []
+    for (let offset = 0; offset < columns; offset++) {
+      const index = startIndex + offset
+      if (index < totalCount) rowItems.push({ index, inst: instances[index] })
+    }
     rows.push({ rowIndex, rowItems })
   }
 
   return (
     <div
       ref={containerRef}
-      onScroll={onScroll}
+      onScroll={handleScroll}
       data-testid="instances-card-virtual"
-      data-total-count={instances.length}
+      data-total-count={totalCount}
       className="max-h-[calc(100vh-18rem)] min-h-96 overflow-auto pr-1"
     >
       <div className="relative" style={{ height: totalSize }}>
@@ -786,14 +1263,19 @@ function VirtualizedCardGrid({
               gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
             }}
           >
-            {rowItems.map((inst) => (
-              <div key={inst.id} data-testid="instances-card-virtual-item">
-                <InstanceWorktableCard
-                  inst={inst}
-                  nodeName={nodeName(inst.nodeId)}
-                  roleBadge={<RoleBadge role={inst.role} compact />}
-                  menu={buildMenu(inst)}
-                />
+            {rowItems.map(({ index, inst }) => (
+              <div key={inst?.id ?? `placeholder-${index}`} data-testid="instances-card-virtual-item">
+                {inst ? (
+                  <InstanceWorktableCard
+                    inst={inst}
+                    nodeName={nodeName(inst.nodeId)}
+                    roleBadge={<RoleBadge role={inst.role} compact />}
+                    menu={buildMenu(inst)}
+                    onOpen={onOpenInstance}
+                  />
+                ) : (
+                  <div className="h-[228px] rounded-lg border border-dashed bg-card/70" aria-hidden="true" />
+                )}
               </div>
             ))}
           </div>
@@ -806,7 +1288,7 @@ function VirtualizedCardGrid({
 /** proxy 行 inline 展开的已注册 backend 摘要（FR-136），用既有 useRegistrations。 */
 function BackendsInline({ proxyId }: { proxyId: number }) {
   const { t } = useTranslation()
-  const openInstance = useConsoleStore((s) => s.openInstance)
+  const navigate = useNavigate()
   const { data, isLoading } = useRegistrations(proxyId)
 
   if (isLoading) {
@@ -831,7 +1313,7 @@ function BackendsInline({ proxyId }: { proxyId: number }) {
                 <button
                   type="button"
                   className="font-medium text-primary hover:underline"
-                  onClick={() => openInstance(b.id)}
+                  onClick={() => navigate(`/instances/${b.id}`)}
                 >
                   {b.name}
                 </button>
@@ -888,10 +1370,16 @@ function InstanceTableHeader({
   t,
   allSelected,
   onToggleAll,
+  sortKey,
+  sortOrder,
+  onSort,
 }: {
-  t: (k: string) => string
+  t: (k: string, options?: Record<string, unknown>) => string
   allSelected: boolean
   onToggleAll: () => void
+  sortKey: InstanceSortKey
+  sortOrder: InstanceSortOrder
+  onSort: (key: InstanceSortKey) => void
 }) {
   return (
     <TableHeader className="bg-muted/50">
@@ -899,15 +1387,64 @@ function InstanceTableHeader({
         <TableHead className="w-10">
           <Checkbox checked={allSelected} onCheckedChange={onToggleAll} aria-label={t('instanceBatch.selectAll')} />
         </TableHead>
-        <TableHead>{t('instances.name')}</TableHead>
+        <SortableTableHead
+          label={t('instances.name')}
+          sortValue="name"
+          currentSort={sortKey}
+          currentOrder={sortOrder}
+          onSort={onSort}
+        />
         <TableHead>{t('instances.type')}</TableHead>
-        <TableHead>{t('instances.nodePort')}</TableHead>
+        <SortableTableHead
+          label={t('instances.nodePort')}
+          sortValue="nodeId"
+          currentSort={sortKey}
+          currentOrder={sortOrder}
+          onSort={onSort}
+        />
         <TableHead>{t('instances.role')}</TableHead>
         <TableHead>{t('grouping.tagsColumn')}</TableHead>
-        <TableHead>{t('instances.status')}</TableHead>
+        <SortableTableHead
+          label={t('instances.status')}
+          sortValue="status"
+          currentSort={sortKey}
+          currentOrder={sortOrder}
+          onSort={onSort}
+        />
         <TableHead>{t('instances.actions')}</TableHead>
       </TableRow>
     </TableHeader>
+  )
+}
+
+function SortableTableHead({
+  label,
+  sortValue,
+  currentSort,
+  currentOrder,
+  onSort,
+}: {
+  label: string
+  sortValue: InstanceSortKey
+  currentSort: InstanceSortKey
+  currentOrder: InstanceSortOrder
+  onSort: (key: InstanceSortKey) => void
+}) {
+  const { t } = useTranslation()
+  const active = currentSort === sortValue
+  const orderLabel = currentOrder === 'desc' ? t('grouping.orderDesc') : t('grouping.orderAsc')
+  return (
+    <TableHead aria-sort={active ? (currentOrder === 'desc' ? 'descending' : 'ascending') : 'none'}>
+      <button
+        type="button"
+        onClick={() => onSort(sortValue)}
+        aria-label={active ? t('grouping.sortHeaderActive', { label, order: orderLabel }) : t('grouping.sortHeader', { label })}
+        className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-left transition-colors hover:bg-accent/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+      >
+        <span>{label}</span>
+        <ArrowUpDown className={cn('size-3.5', active ? 'text-primary' : 'text-muted-foreground/60')} aria-hidden="true" />
+      </button>
+    </TableHead>
   )
 }
 
@@ -931,7 +1468,7 @@ function FilterSelect({
   const { t } = useTranslation()
   return (
     <Select value={value} onValueChange={onChange} disabled={options.length === 0}>
-      <SelectTrigger size="sm" className="w-40">
+      <SelectTrigger size="sm" className="w-40" aria-label={label}>
         <SelectValue placeholder={label} />
       </SelectTrigger>
       <SelectContent>

@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { Box, CornerDownLeft, Network, Search, Server, Terminal } from 'lucide-react'
 
-import { useSearchInstances } from '@/api/instances'
+import { useInstanceSearch } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
@@ -33,7 +33,6 @@ export default function CommandPalette() {
   const role = useAuthStore((s) => s.role)
   const open = useConsoleStore((s) => s.commandPaletteOpen)
   const setOpen = useConsoleStore((s) => s.setCommandPaletteOpen)
-  const closeInstance = useConsoleStore((s) => s.closeInstance)
   const toggleSidebar = useConsoleStore((s) => s.toggleSidebar)
   const selectedNodeId = useConsoleStore((s) => s.selectedNodeId)
   const setSelectedNodeId = useConsoleStore((s) => s.setSelectedNodeId)
@@ -57,7 +56,7 @@ export default function CommandPalette() {
   )
 
   // 实例结果走 FR-247 服务端分页搜索；节点/页面/操作仍本地轻量匹配。
-  const { data: instanceSearch, isFetching: searchingInstances } = useSearchInstances(instanceSearchParams, open)
+  const { data: instanceSearch, isFetching: searchingInstances } = useInstanceSearch(instanceSearchParams, open)
   const { data: nodes } = useNodes()
 
   // 操作类目标（静态）：执行副作用而非跳转。
@@ -119,15 +118,12 @@ export default function CommandPalette() {
   const run = (entry: PaletteEntry) => {
     const [kind, rest] = [entry.kind, entry.key.slice(entry.kind.length + 1)]
     if (kind === 'instance') {
-      closeInstance()
       navigate(`/instances/${rest}`)
     } else if (kind === 'node') {
       setSelectedNodeId(Number(rest))
       navigate(`/nodes?node=${rest}`)
-      closeInstance()
     } else if (kind === 'page') {
       navigate(rest)
-      closeInstance()
     } else if (kind === 'command') {
       if (rest === 'refresh') void queryClient.invalidateQueries()
       else if (rest === 'toggle-sidebar') toggleSidebar()

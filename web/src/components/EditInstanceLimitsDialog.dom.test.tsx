@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
@@ -8,6 +8,30 @@ import { API } from '@/mocks/api'
 import EditInstanceLimitsDialog from './EditInstanceLimitsDialog'
 
 describe('EditInstanceLimitsDialog 资源限额编辑器（FR-079）', () => {
+  it('具备共享 Dialog 语义并支持 Esc 关闭', async () => {
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+
+    renderWithProviders(
+      <EditInstanceLimitsDialog
+        instanceId={7}
+        instanceName="docker-mc"
+        processType="docker"
+        cpuLimit={0}
+        memLimitMb={0}
+        diskLimitMb={0}
+        onClose={onClose}
+      />,
+    )
+
+    const heading = await screen.findByRole('heading', { name: 'docker-mc 的资源限额' })
+    expect(heading.closest('[role="dialog"]')).toBeInTheDocument()
+
+    await user.keyboard('{Escape}')
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+  })
+
   it('Docker 模式提交 CPU / 内存 / 磁盘限额，留空字段按 0 清除', async () => {
     const user = userEvent.setup()
     let payload: Record<string, unknown> | undefined

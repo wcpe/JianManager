@@ -41,15 +41,13 @@ function persist(key: string, value: string | null): void {
 
 /**
  * 运维控制台的客户端 UI 状态（ADR-009 / FR-037 / FR-039 / FR-131 / FR-166）。
- * 存「页眉节点作用域」「当前在工作区打开的实例」「侧栏折叠/分组折叠态」，不进 URL，
- * 避免与既有 `/instances/:id` 详情路由语义冲突。侧栏折叠态/分组态/节点作用域持久化 localStorage（FR-131/FR-268）。
+ * 存「页眉节点作用域」「侧栏折叠/分组折叠态」。实例视图一律由 `/instances/:id`
+ * 深链承载，避免 URL 与工作区状态双轨漂移。侧栏折叠态/分组态/节点作用域持久化 localStorage（FR-131/FR-268）。
  * 打开实例后的画布/卡片/预设状态由 `stores/workspace.ts` 承载（FR-166 可组合卡片工作区）。
  */
 interface ConsoleState {
   /** 页眉节点作用域：null = 全部节点，否则为某节点 id（持久） */
   selectedNodeId: number | null
-  /** 工作区当前打开的实例 id；null = 未打开任何实例 */
-  openInstanceId: number | null
   /** 多级侧栏中被折叠的分组 key 集合（FR-061/FR-131）；默认展开，记录已折叠者（持久）。 */
   collapsedGroups: Record<string, boolean>
   /** 侧栏是否折叠为仅图标轨（FR-131，持久）。 */
@@ -57,8 +55,6 @@ interface ConsoleState {
   /** 全局命令面板是否打开（FR-241 Ctrl+K，不持久）。 */
   commandPaletteOpen: boolean
   setSelectedNodeId: (nodeId: number | null) => void
-  openInstance: (instanceId: number) => void
-  closeInstance: () => void
   /** 切换侧栏分组展开/折叠（FR-061/FR-131）。 */
   toggleGroup: (key: string) => void
   /** 切换侧栏折叠态（仅图标轨 ⇄ 展开，FR-131）。 */
@@ -69,7 +65,6 @@ interface ConsoleState {
 
 export const useConsoleStore = create<ConsoleState>((set) => ({
   selectedNodeId: loadSelectedNode(),
-  openInstanceId: null,
   collapsedGroups: loadJSON<Record<string, boolean>>(COLLAPSED_GROUPS_KEY, {}),
   sidebarCollapsed: loadBool(SIDEBAR_COLLAPSED_KEY, false),
   commandPaletteOpen: false,
@@ -77,8 +72,6 @@ export const useConsoleStore = create<ConsoleState>((set) => ({
     persist(SELECTED_NODE_KEY, nodeId === null ? null : String(nodeId))
     set({ selectedNodeId: nodeId })
   },
-  openInstance: (instanceId) => set({ openInstanceId: instanceId }),
-  closeInstance: () => set({ openInstanceId: null }),
   toggleGroup: (key) =>
     set((s) => {
       const next = { ...s.collapsedGroups, [key]: !s.collapsedGroups[key] }

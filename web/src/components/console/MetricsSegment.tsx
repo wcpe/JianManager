@@ -6,8 +6,9 @@ import { useInstance } from '@/api/instances'
 import { useProbeUpdateStatus, useUpdateProbe } from '@/api/probe'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
-import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui'
+import { TimeSeriesChart, type ChartReferenceLine, type ChartSeries } from '@jianmanager/ui'
 import { RangePicker, type MetricRange } from '@jianmanager/ui'
+import { cn } from '@jianmanager/ui'
 
 function formatProbeCacheBytes(bytes: number) {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
@@ -56,6 +57,11 @@ function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
         </div>
       </div>
       {!st.embeddedAvailable && <div className="px-2 pb-2 text-xs text-muted-foreground">{t('probe.notEmbedded')}</div>}
+      {!st.probeConnected && st.embeddedAvailable && (
+        <div className="mx-2 mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+          {t('probe.installHint')}
+        </div>
+      )}
     </Panel>
   )
 }
@@ -115,6 +121,80 @@ function ResourceLimitCard({ instanceId }: { instanceId: number }) {
   )
 }
 
+function HealthStrip({ instanceId }: { instanceId: number }) {
+  const { t } = useTranslation()
+  const { data: inst } = useInstance(instanceId)
+  const isRunning = inst?.status === 'RUNNING'
+  const { data: metrics } = useInstanceMetrics(instanceId, isRunning)
+  if (!inst) return null
+  if (!isRunning) {
+    return (
+      <Panel title={t('metrics.currentHealth')}>
+        <div className="p-3 text-xs text-muted-foreground">{t('metrics.stoppedFolded')}</div>
+      </Panel>
+    )
+  }
+  if (!metrics) return null
+  return (
+    <Panel title={t('metrics.currentHealth')}>
+      <div className="grid grid-cols-1 gap-2 p-2 text-xs sm:grid-cols-3">
+        <HealthPill label={t('metrics.tps')} value={metrics.tps.toFixed(1)} level={tpsLevel(metrics.tps)} />
+        <HealthPill label={t('metrics.mspt')} value={`${metrics.msptMillis.toFixed(0)}ms`} level={msptLevel(metrics.msptMillis)} />
+        <HealthPill label={t('metrics.cpu')} value={`${metrics.cpuPercent.toFixed(0)}%`} level={cpuLevel(metrics.cpuPercent)} />
+      </div>
+    </Panel>
+  )
+}
+
+function HealthPill({ label, value, level }: { label: string; value: string; level: HealthLevel }) {
+  const tone = {
+    ok: 'border-status-success/40 bg-status-success/10 text-status-success',
+    warn: 'border-amber-400 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-200',
+    danger: 'border-status-danger/40 bg-status-danger/10 text-status-danger',
+  }[level]
+  return (
+    <div className={cn('rounded-md border px-3 py-2', tone)} data-health-level={level}>
+      <p className="text-muted-foreground">{label}</p>
+      <p className="mt-1 text-base font-semibold tabular-nums">{value}</p>
+    </div>
+  )
+}
+
+type HealthLevel = 'ok' | 'warn' | 'danger'
+
+function tpsLevel(value: number): HealthLevel {
+  if (value < 16) return 'danger'
+  if (value < 18) return 'warn'
+  return 'ok'
+}
+
+function msptLevel(value: number): HealthLevel {
+  if (value > 75) return 'danger'
+  if (value > 50) return 'warn'
+  return 'ok'
+}
+
+function cpuLevel(value: number): HealthLevel {
+  if (value >= 90) return 'danger'
+  if (value >= 75) return 'warn'
+  return 'ok'
+}
+
+const tpsThresholds = (t: ReturnType<typeof useTranslation>['t']): ChartReferenceLine[] => [
+  { value: 18, label: t('metrics.thresholdTpsWarn'), color: 'var(--status-warning)' },
+  { value: 16, label: t('metrics.thresholdTpsDanger'), color: 'var(--status-danger)' },
+]
+
+const msptThresholds = (t: ReturnType<typeof useTranslation>['t']): ChartReferenceLine[] => [
+  { value: 50, label: t('metrics.thresholdMsptWarn'), color: 'var(--status-warning)' },
+  { value: 75, label: t('metrics.thresholdMsptDanger'), color: 'var(--status-danger)' },
+]
+
+const cpuThresholds = (t: ReturnType<typeof useTranslation>['t']): ChartReferenceLine[] => [
+  { value: 75, label: t('metrics.thresholdCpuWarn'), color: 'var(--status-warning)' },
+  { value: 90, label: t('metrics.thresholdCpuDanger'), color: 'var(--status-danger)' },
+]
+
 /** 字节 → G/M/K。 */
 function fmtBytes(b: number): string {
   if (!Number.isFinite(b) || b <= 0) return '0'
@@ -157,13 +237,24 @@ export default function MetricsSegment({ instanceUuid, instanceId }: { instanceU
         <RangePicker value={range} onChange={setRange} />
       </div>
       <ProbeUpdateCard instanceId={instanceId} />
+      <HealthStrip instanceId={instanceId} />
       <ResourceLimitCard instanceId={instanceId} />
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
         <Panel title={t('metrics.tps')}>
-          <TimeSeriesChart series={one('inst_tps', t('metrics.tps'))} height={160} valueFormatter={(v) => v.toFixed(1)} />
+          <TimeSeriesChart
+            series={one('inst_tps', t('metrics.tps'))}
+            height={160}
+            valueFormatter={(v) => v.toFixed(1)}
+            referenceLines={tpsThresholds(t)}
+          />
         </Panel>
         <Panel title={t('metrics.mspt')}>
-          <TimeSeriesChart series={one('inst_mspt', t('metrics.mspt'))} height={160} valueFormatter={(v) => `${v.toFixed(1)}ms`} />
+          <TimeSeriesChart
+            series={one('inst_mspt', t('metrics.mspt'))}
+            height={160}
+            valueFormatter={(v) => `${v.toFixed(1)}ms`}
+            referenceLines={msptThresholds(t)}
+          />
         </Panel>
         <Panel title={t('metrics.heap')}>
           <TimeSeriesChart
@@ -179,7 +270,12 @@ export default function MetricsSegment({ instanceUuid, instanceId }: { instanceU
           <TimeSeriesChart series={one('inst_threads', t('metrics.threads'))} height={160} valueFormatter={(v) => v.toFixed(0)} />
         </Panel>
         <Panel title={t('metrics.cpu')}>
-          <TimeSeriesChart series={one('inst_cpu_pct', t('metrics.cpu'))} height={160} valueFormatter={(v) => `${v.toFixed(0)}%`} />
+          <TimeSeriesChart
+            series={one('inst_cpu_pct', t('metrics.cpu'))}
+            height={160}
+            valueFormatter={(v) => `${v.toFixed(0)}%`}
+            referenceLines={cpuThresholds(t)}
+          />
         </Panel>
         <Panel title={t('metrics.worldChunks')}>
           <TimeSeriesChart series={byWorld('world_loaded_chunks')} height={160} valueFormatter={(v) => v.toFixed(0)} />

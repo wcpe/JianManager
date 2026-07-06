@@ -16,7 +16,17 @@ import {
   useDeleteRegistration,
 } from '@/api/registrations'
 import { useResyncProxy } from '@/api/proxy'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  ScrollableDialogBody,
+  scrollableDialogContentClass,
+} from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
+import { Button } from '@jianmanager/ui/components/button'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
@@ -89,92 +99,97 @@ export default function ProxyRegistrationsDialog({ proxyId, proxyName, onClose }
   }
 
   return (
-    <div className={MODAL_OVERLAY}>
-      <div className={`${MODAL_PANEL} max-w-2xl`}>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-bold">{t('proxy.manageTitle', { name: proxyName })}</h2>
-          <div className="flex items-center gap-3">
-            <button onClick={doResync} disabled={resync.isPending}
-              className="text-xs px-2 py-1 border rounded-md hover:bg-accent disabled:opacity-50">
-              {t('proxy.resync')}
-            </button>
-            <button onClick={onClose} className="text-sm text-muted-foreground hover:text-foreground">{t('common.close')}</button>
-          </div>
-        </div>
-
-        <div className="border rounded-md mb-4">
-          <Table>
-            <TableHeader className="bg-muted/50">
-              <TableRow>
-                <TableHead>{t('proxy.alias')}</TableHead>
-                <TableHead>{t('proxy.backend')}</TableHead>
-                <TableHead>{t('proxy.priority')}</TableHead>
-                <TableHead>{t('proxy.forcedHost')}</TableHead>
-                <TableHead className="text-right">{t('common.actions')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {regs?.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="font-medium">{r.alias}</TableCell>
-                  <TableCell>{r.backend?.name || `#${r.backendId}`}</TableCell>
-                  <TableCell>{r.priority}</TableCell>
-                  <TableCell className="text-muted-foreground">{r.forcedHost || '--'}</TableCell>
-                  <TableCell className="text-right">
-                    <button className="text-xs text-red-600 hover:underline"
-                      onClick={() => del.mutate(r.id, { onSuccess: () => toast.success(t('proxy.unregistered')) })}>
-                      {t('proxy.unregister')}
-                    </button>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {regs && regs.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground">{t('proxy.noBackends')}</TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </div>
-
-        <h3 className="text-sm font-medium mb-2">{t('proxy.registerBackend')}</h3>
-        <form onSubmit={add} className="grid grid-cols-2 gap-3 items-start">
-          <div>
-            <FieldLabel required className="text-xs text-muted-foreground font-normal">{t('proxy.backend')}</FieldLabel>
-            <div className="mt-1">
-              <Combobox
-                options={backendOptions}
-                value={backendId}
-                onChange={setBackendId}
-                allowCustom={false}
-                placeholder={t('proxy.selectBackend')}
-              />
+    <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`} showCloseButton={false}>
+        <DialogHeader>
+          <div className="flex items-center justify-between gap-3">
+            <DialogTitle>{t('proxy.manageTitle', { name: proxyName })}</DialogTitle>
+            <div className="flex items-center gap-3">
+              <Button type="button" size="xs" variant="outline" onClick={doResync} disabled={resync.isPending}>
+                {t('proxy.resync')}
+              </Button>
+              <Button type="button" size="xs" variant="ghost" onClick={onClose} className="text-muted-foreground">
+                {t('common.close')}
+              </Button>
             </div>
           </div>
-          <div>
-            <FieldLabel className="text-xs text-muted-foreground font-normal">{t('proxy.alias')} ({t('proxy.aliasOptional')})</FieldLabel>
-            <input value={alias} onChange={(e) => setAlias(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm" placeholder="lobby" />
+        </DialogHeader>
+
+        <ScrollableDialogBody className="space-y-4 py-2">
+          <div className="border rounded-md mb-4">
+            <Table>
+              <TableHeader className="bg-muted/50">
+                <TableRow>
+                  <TableHead>{t('proxy.alias')}</TableHead>
+                  <TableHead>{t('proxy.backend')}</TableHead>
+                  <TableHead>{t('proxy.priority')}</TableHead>
+                  <TableHead>{t('proxy.forcedHost')}</TableHead>
+                  <TableHead className="text-right">{t('common.actions')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {regs?.map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell className="font-medium">{r.alias}</TableCell>
+                    <TableCell>{r.backend?.name || `#${r.backendId}`}</TableCell>
+                    <TableCell>{r.priority}</TableCell>
+                    <TableCell className="text-muted-foreground">{r.forcedHost || '--'}</TableCell>
+                    <TableCell className="text-right">
+                      <button className="text-xs text-red-600 hover:underline"
+                        onClick={() => del.mutate(r.id, { onSuccess: () => toast.success(t('proxy.unregistered')) })}>
+                        {t('proxy.unregister')}
+                      </button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {regs && regs.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center text-muted-foreground">{t('proxy.noBackends')}</TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
           </div>
-          <div>
-            <FieldLabel className="text-xs text-muted-foreground font-normal">{t('proxy.forcedHost')}</FieldLabel>
-            <input value={forcedHost} onChange={(e) => setForcedHost(e.target.value)}
-              aria-invalid={!!forcedHostError}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive" placeholder="play.example.com" />
-            <FieldError error={forcedHostError} />
-          </div>
-          <div className="flex items-center justify-between pt-6">
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox checked={restricted} onCheckedChange={(v) => setRestricted(v === true)} aria-label={t('proxy.restricted')} />
-              {t('proxy.restricted')}
-            </label>
-            <button type="submit" disabled={create.isPending || !backendId || !!forcedHostError}
-              className="px-3 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50">
-              {t('proxy.register')}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+
+          <h3 className="text-sm font-medium mb-2">{t('proxy.registerBackend')}</h3>
+          <form onSubmit={add} className="grid grid-cols-2 gap-3 items-start">
+            <div>
+              <FieldLabel required className="text-xs text-muted-foreground font-normal">{t('proxy.backend')}</FieldLabel>
+              <div className="mt-1">
+                <Combobox
+                  options={backendOptions}
+                  value={backendId}
+                  onChange={setBackendId}
+                  allowCustom={false}
+                  placeholder={t('proxy.selectBackend')}
+                />
+              </div>
+            </div>
+            <div>
+              <FieldLabel className="text-xs text-muted-foreground font-normal">{t('proxy.alias')} ({t('proxy.aliasOptional')})</FieldLabel>
+              <input value={alias} onChange={(e) => setAlias(e.target.value)}
+                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm" placeholder="lobby" />
+            </div>
+            <div>
+              <FieldLabel className="text-xs text-muted-foreground font-normal">{t('proxy.forcedHost')}</FieldLabel>
+              <input value={forcedHost} onChange={(e) => setForcedHost(e.target.value)}
+                aria-invalid={!!forcedHostError}
+                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive" placeholder="play.example.com" />
+              <FieldError error={forcedHostError} />
+            </div>
+            <div className="flex items-center justify-between pt-6">
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox checked={restricted} onCheckedChange={(v) => setRestricted(v === true)} aria-label={t('proxy.restricted')} />
+                {t('proxy.restricted')}
+              </label>
+              <button type="submit" disabled={create.isPending || !backendId || !!forcedHostError}
+                className="px-3 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50">
+                {t('proxy.register')}
+              </button>
+            </div>
+          </form>
+        </ScrollableDialogBody>
+      </DialogContent>
+    </Dialog>
   )
 }

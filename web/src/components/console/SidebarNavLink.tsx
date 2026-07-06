@@ -1,7 +1,6 @@
 import { NavLink } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import type { LucideIcon } from 'lucide-react'
-import { useConsoleStore } from '@/stores/console'
 import { cn } from '@jianmanager/ui'
 
 /** 侧栏导航项（多级侧栏共用）。 */
@@ -19,15 +18,11 @@ export default function SidebarNavLink({
   nested = false,
 }: NavEntry & { nested?: boolean }) {
   const { t } = useTranslation()
-  const closeInstance = useConsoleStore((s) => s.closeInstance)
   const exact = to === '/' || to === '/networks'
   return (
     <NavLink
       to={to}
       end={exact}
-      // 点击导航即关闭实例工作区：同路由（如控制台从实例页打开后再点「实例」）路由不变，
-      // 仅靠 Workspace 的 pathname 监听不会关闭，这里显式关闭兜底。
-      onClick={() => closeInstance()}
       className={({ isActive }) =>
         cn(
           'jm-nav-link group relative flex items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px]',

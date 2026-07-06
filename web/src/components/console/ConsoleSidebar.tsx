@@ -177,7 +177,6 @@ function CollapsedGroup({ group }: { group: NavGroup }) {
   const { t } = useTranslation()
   const { pathname } = useLocation()
   const toggleSidebar = useConsoleStore((s) => s.toggleSidebar)
-  const closeInstance = useConsoleStore((s) => s.closeInstance)
   const Icon = group.icon
   const childRoutes = groupRoutes(group)
   const active = group.to
@@ -191,7 +190,7 @@ function CollapsedGroup({ group }: { group: NavGroup }) {
 
   if (group.to) {
     return (
-      <Link to={group.to} onClick={() => closeInstance()} aria-label={t(group.labelKey)} title={t(group.labelKey)} className={cls}>
+      <Link to={group.to} aria-label={t(group.labelKey)} title={t(group.labelKey)} className={cls}>
         <Icon className="size-4" />
       </Link>
     )
@@ -232,6 +231,7 @@ function ExpandableGroup({ group }: { group: NavGroup }) {
         type="button"
         onClick={() => toggleGroup(group.key)}
         aria-expanded={!groupClosed}
+        data-active={hasActiveChild ? 'true' : 'false'}
         className={cn(
           'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-[13px] transition-colors hover:bg-accent/60',
           hasActiveChild ? 'bg-card/70 font-semibold text-foreground shadow-soft' : 'text-foreground/80',
@@ -280,7 +280,6 @@ function SidebarSection({ section }: { section: NavSection }) {
  */
 function SidebarFooter({ collapsed }: { collapsed: boolean }) {
   const { t } = useTranslation()
-  const closeInstance = useConsoleStore((s) => s.closeInstance)
 
   return (
     <div className={cn('shrink-0 space-y-1.5 border-t bg-card/45 p-2 backdrop-blur-sm', collapsed && 'px-1.5')}>
@@ -297,7 +296,6 @@ function SidebarFooter({ collapsed }: { collapsed: boolean }) {
           </span>
           <Link
             to="/licenses"
-            onClick={() => closeInstance()}
             className="flex items-center gap-1 rounded text-[11px] text-muted-foreground/70 transition-colors hover:text-foreground hover:underline"
           >
             <Scale className="size-3 shrink-0" />

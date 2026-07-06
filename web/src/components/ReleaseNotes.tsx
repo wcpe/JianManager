@@ -1,6 +1,16 @@
-import { type ReactNode, type AnchorHTMLAttributes } from 'react'
+import { useState, type ReactNode, type AnchorHTMLAttributes } from 'react'
+import { useTranslation } from 'react-i18next'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
+import { Button } from '@jianmanager/ui/components/button'
 import { isSafeExternalLink, confirmOpenMessage } from './release-notes-link'
 
 /** ReleaseNotes 的 props。 */
@@ -16,33 +26,60 @@ interface ReleaseNotesProps {
  * 链接不在应用内直跳，经「宿主确认」后在新标签打开（{@link isSafeExternalLink}）。
  */
 export function ReleaseNotes({ markdown }: ReleaseNotesProps) {
+  const { t } = useTranslation()
+  const [externalHref, setExternalHref] = useState<string | null>(null)
+  const openExternal = () => {
+    if (!externalHref) return
+    window.open(externalHref, '_blank', 'noopener,noreferrer')
+    setExternalHref(null)
+  }
+
   return (
-    <div className="markdown-body max-h-72 overflow-auto text-sm text-foreground">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-        {markdown}
-      </ReactMarkdown>
-    </div>
+    <>
+      <div className="markdown-body max-h-72 overflow-auto text-sm text-foreground">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={createMarkdownComponents(setExternalHref)}>
+          {markdown}
+        </ReactMarkdown>
+      </div>
+      <Dialog open={externalHref !== null} onOpenChange={(open) => { if (!open) setExternalHref(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('releaseNotes.openExternalTitle')}</DialogTitle>
+            <DialogDescription className="whitespace-pre-wrap">
+              {externalHref ? confirmOpenMessage(externalHref) : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setExternalHref(null)}>
+              {t('common.cancel')}
+            </Button>
+            <Button onClick={openExternal}>
+              {t('releaseNotes.openExternal')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
-/** 点击外链：阻止默认导航，经 window.confirm 确认后在新标签打开（noopener）。 */
-function handleExternalClick(href: string, e: React.MouseEvent) {
+/** 点击外链：阻止默认导航，经共享 Dialog 确认后在新标签打开（noopener）。 */
+function handleExternalClick(href: string, e: React.MouseEvent, confirmOpen: (href: string) => void) {
   e.preventDefault()
   if (!isSafeExternalLink(href)) return
-  if (window.confirm(confirmOpenMessage(href))) {
-    window.open(href, '_blank', 'noopener,noreferrer')
-  }
+  confirmOpen(href)
 }
 
 /**
  * 自定义渲染器：全部用主题 token 着色，与暗/亮 + 双主题随 CSS 变量切换；
  * 链接走宿主确认；代码块/行内代码、标题、列表、表格、引用均显式样式（markdown-body 无外部 CSS）。
  */
-const mdComponents: Components = {
+function createMarkdownComponents(confirmOpen: (href: string) => void): Components {
+  return {
   a: ({ href, children, ...rest }: AnchorHTMLAttributes<HTMLAnchorElement> & { children?: ReactNode }) => (
     <a
       href={href}
-      onClick={(e) => href && handleExternalClick(href, e)}
+      onClick={(e) => href && handleExternalClick(href, e, confirmOpen)}
       className="text-primary underline underline-offset-2 hover:opacity-80 cursor-pointer"
       {...rest}
     >
@@ -76,4 +113,5 @@ const mdComponents: Components = {
   th: ({ children }) => <th className="border border-border bg-muted/60 px-2 py-1 text-left font-medium">{children}</th>,
   td: ({ children }) => <td className="border border-border px-2 py-1">{children}</td>,
   img: ({ src, alt }) => <img src={typeof src === 'string' ? src : undefined} alt={alt} className="my-2 max-w-full rounded" />,
+  }
 }

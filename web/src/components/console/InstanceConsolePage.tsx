@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
+import { useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { Activity, AlertTriangle, Boxes, Gauge, HardDrive, Layers, Play, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
 
@@ -7,10 +8,10 @@ import { useInstanceMetrics } from '@/api/metrics'
 import { useLogs } from '@/api/logs'
 import { useNodes } from '@/api/nodes'
 import { useServerState } from '@/api/serverState'
-import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
+import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
-import { cn } from '@jianmanager/ui'
+import { cn, instanceStatusLevel } from '@jianmanager/ui'
 import type { CardType } from '@/lib/workspace-card'
 import WorkspaceCardBody from './WorkspaceCardBody'
 
@@ -43,10 +44,16 @@ interface InstanceConsolePageProps {
   instanceId: number
 }
 
+function readActiveTab(searchParams: URLSearchParams): TabKey {
+  const tab = searchParams.get('tab')
+  return TAB_KEYS.includes(tab as TabKey) ? (tab as TabKey) : 'overview'
+}
+
 /** 服务器统一控制台（FR-269）：固定分区的单服默认入口。 */
 export default function InstanceConsolePage({ instanceId }: InstanceConsolePageProps) {
   const { t } = useTranslation()
-  const [activeTab, setActiveTab] = useState<TabKey>('overview')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const activeTab = readActiveTab(searchParams)
   const { data: instance } = useInstance(instanceId)
   const { data: nodes = [] } = useNodes({ refetchInterval: 30_000 })
   const { data: metrics } = useInstanceMetrics(instanceId, true)
@@ -68,6 +75,12 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
 
   const canStart = instance.status === 'STOPPED' || instance.status === 'CRASHED'
   const canControl = instance.status === 'RUNNING' || instance.status === 'STARTING' || instance.status === 'STOPPING'
+  const setActiveTab = (tab: TabKey) => {
+    const next = new URLSearchParams(searchParams)
+    if (tab === 'overview') next.delete('tab')
+    else next.set('tab', tab)
+    setSearchParams(next)
+  }
 
   return (
     <div data-page="instance-console" className="jm-page-stack min-h-full w-full text-[13px] text-foreground">
@@ -76,7 +89,11 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <StatusBadge status={instance.status} />
+                <StatusBadge
+                  level={instanceStatusLevel(instance.status)}
+                  label={t(`instances.${instance.status.toLowerCase()}`, instance.status)}
+                  pulse={instance.status === 'STARTING' || instance.status === 'STOPPING'}
+                />
                 <h1 className="truncate text-lg font-semibold tracking-tight">{t('serverConsole.title')} / {instance.name}</h1>
               </div>
               <p className="mt-1 text-xs text-muted-foreground">{t('serverConsole.subtitle')}</p>
@@ -123,6 +140,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
               key={key}
               type="button"
               onClick={() => setActiveTab(key)}
+              aria-pressed={activeTab === key}
               className={cn(
                 'shrink-0 border-b-2 px-3 py-2 text-xs font-medium transition-colors',
                 activeTab === key
@@ -155,22 +173,6 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
         )}
       </div>
     </div>
-  )
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const statusClass = status === 'RUNNING'
-    ? 'bg-status-success'
-    : status === 'CRASHED'
-      ? 'bg-status-danger'
-      : status === 'STARTING' || status === 'STOPPING'
-        ? 'bg-status-warning'
-        : 'bg-muted-foreground/50'
-  return (
-    <Badge variant="outline" className="rounded-md bg-card font-mono text-[11px]">
-      <span className={cn('size-1.5 rounded-full', statusClass)} />
-      {status}
-    </Badge>
   )
 }
 
@@ -281,9 +283,9 @@ function OverviewPanel({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-32">Time</TableHead>
-              <TableHead className="w-20">Level</TableHead>
-              <TableHead>Message</TableHead>
+              <TableHead className="w-32">{t('serverConsole.logTime')}</TableHead>
+              <TableHead className="w-20">{t('serverConsole.logLevel')}</TableHead>
+              <TableHead>{t('serverConsole.logMessage')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>

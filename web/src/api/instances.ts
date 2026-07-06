@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '@/api/client'
 
@@ -97,17 +97,43 @@ export function useInstances(params?: InstanceListParams) {
   })
 }
 
-/** 分页搜索实例（FR-247，面向 1000+ 实例）。 */
-export function useSearchInstances(params?: InstanceSearchParams, enabled = true) {
+/** 分页搜索实例（FR-235）：用于 1000+ 实例页面，避免首屏拉取全集。 */
+export function useInstanceSearch(params: InstanceSearchParams = {}, enabled = true) {
   return useQuery({
     queryKey: ['instances', 'search', params],
+    enabled,
     queryFn: async () => {
       const { data } = await api.get<InstanceSearchResult>('/instances/search', { params })
       return data
     },
-    enabled,
     refetchInterval: (query) => {
       const instances = query.state.data?.items
+      if (instances?.some(i => i.status === 'STARTING' || i.status === 'STOPPING')) return 2000
+      return false
+    },
+  })
+}
+
+/** 分页搜索实例（FR-247，面向 1000+ 实例）。 */
+export const useSearchInstances = useInstanceSearch
+
+/** 无限分页实例搜索（FR-235）：滚动到未加载区域时按页补齐。 */
+export function useInfiniteInstanceSearch(params: Omit<InstanceSearchParams, 'page'>, initialPage = 1) {
+  return useInfiniteQuery({
+    queryKey: ['instances', 'search', 'infinite', params, initialPage],
+    initialPageParam: initialPage,
+    queryFn: async ({ pageParam }) => {
+      const { data } = await api.get<InstanceSearchResult>('/instances/search', {
+        params: { ...params, page: pageParam },
+      })
+      return data
+    },
+    getNextPageParam: (lastPage) => {
+      const loaded = lastPage.page * lastPage.pageSize
+      return loaded < lastPage.total ? lastPage.page + 1 : undefined
+    },
+    refetchInterval: (query) => {
+      const instances = query.state.data?.pages.flatMap((p) => p.items)
       if (instances?.some(i => i.status === 'STARTING' || i.status === 'STOPPING')) return 2000
       return false
     },

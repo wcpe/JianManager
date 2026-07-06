@@ -15,7 +15,7 @@ const recent = { id: 3, name: 'creative-1', uuid: 'i-creative', nodeId: 2, statu
 describe('ServerSelector DOM', () => {
   beforeEach(() => {
     loginMockUser()
-    useConsoleStore.setState({ selectedNodeId: null, openInstanceId: null })
+    useConsoleStore.setState({ selectedNodeId: null })
     localStorage.setItem('server-selector.favorites', JSON.stringify([favorite]))
     localStorage.setItem('server-selector.recent', JSON.stringify([recent]))
   })

@@ -7,7 +7,7 @@ import ConsoleHeader from './ConsoleHeader'
 
 vi.mock('@/api/instances', () => ({
   useInstance: () => ({ data: { id: 1, name: 'survival-1', status: 'RUNNING' } }),
-  useInstanceAggregate: () => ({ data: { byStatus: { CRASHED: 0 } } }),
+  useInstanceAggregate: () => ({ data: { total: 1, byStatus: { CRASHED: 0 }, byNode: [], byRole: {} } }),
 }))
 vi.mock('@/api/nodes', () => ({
   useNodes: () => ({ data: [{ id: 1, name: 'alpha', status: 1 }] }),

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router'
 import GridLayout, { WidthProvider, type Layout } from 'react-grid-layout'
 import {
   useInstance,
@@ -9,7 +10,6 @@ import {
   useKillInstance,
 } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
-import { useConsoleStore } from '@/stores/console'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { GRID_COLS, GRID_ROW_HEIGHT, cardTypeDef, type CardType } from '@/lib/workspace-card'
 import { cardsToLayout, type PlacedCard } from '@/lib/workspace-preset'
@@ -50,9 +50,9 @@ function nudgeRelayout(): void {
 
 export default function WorkspaceCanvas({ instanceId }: WorkspaceCanvasProps) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const { data: instance } = useInstance(instanceId)
   const { data: nodes } = useNodes()
-  const closeInstance = useConsoleStore((s) => s.closeInstance)
 
   const start = useStartInstance()
   const stop = useStopInstance()
@@ -133,7 +133,7 @@ export default function WorkspaceCanvas({ instanceId }: WorkspaceCanvasProps) {
         onAddCard={(type: CardType) => addCard(instanceId, type)}
         onSavePreset={(name) => savePresetAs(instanceId, name)}
         onDeletePreset={deleteUserPreset}
-        onClose={closeInstance}
+        onClose={() => navigate('/instances')}
       />
 
       <div className="min-h-0 flex-1 overflow-auto">

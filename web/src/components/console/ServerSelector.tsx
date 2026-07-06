@@ -32,7 +32,6 @@ export default function ServerSelector() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const selectedNodeId = useConsoleStore((s) => s.selectedNodeId)
-  const closeInstance = useConsoleStore((s) => s.closeInstance)
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [groupBy, setGroupBy] = useState<GroupBy>('node')
@@ -78,7 +77,6 @@ export default function ServerSelector() {
     const next = upsertStored(recent, stored, 8)
     setRecent(next)
     saveStored(RECENT_KEY, next)
-    closeInstance()
     setOpen(false)
     navigate(`/instances/${instance.id}`)
   }

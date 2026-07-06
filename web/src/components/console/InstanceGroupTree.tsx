@@ -15,8 +15,10 @@ import {
   buildGroupTree,
   flattenVisibleGroups,
   groupBranchKey,
+  type GroupTreeNode,
   type VisibleGroupRow,
 } from './instance-group-tree'
+import { useVirtualRows } from '@/lib/virtual-list'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import {
@@ -30,6 +32,21 @@ import { cn } from '@jianmanager/ui'
 
 /** 拖拽实例入组时 dataTransfer 的自定义 MIME（与浏览器文本拖拽区分）。 */
 export const INSTANCE_DND_MIME = 'application/x-jm-instance-id'
+
+const GROUP_TREE_ROW_HEIGHT = 34
+
+function normalizeGroupQuery(value: string): string {
+  return value.trim().toLocaleLowerCase()
+}
+
+function flattenSearchGroups(tree: GroupTreeNode[], query: string): VisibleGroupRow[] {
+  const collect = (node: GroupTreeNode): VisibleGroupRow[] => {
+    const childRows = node.children.flatMap(collect)
+    if (!node.name.toLocaleLowerCase().includes(query) && childRows.length === 0) return []
+    return [{ ...node, hasChildren: node.children.length > 0 }, ...childRows]
+  }
+  return tree.flatMap(collect)
+}
 
 /**
  * 实例组织分组树（FR-165，design §4.4 左树 / ADR-033）。
@@ -65,11 +82,24 @@ export function InstanceGroupTree({
   const [name, setName] = useState('')
   // 拖拽悬停高亮的组 id（拖实例经过时反馈可放置）。
   const [dropTarget, setDropTarget] = useState<number | null>(null)
+  const [query, setQuery] = useState('')
 
-  const rows = useMemo<VisibleGroupRow[]>(() => {
-    const tree = buildGroupTree(groups ?? [])
-    return flattenVisibleGroups(tree, collapsedGroups)
-  }, [groups, collapsedGroups])
+  const tree = useMemo(() => buildGroupTree(groups ?? []), [groups])
+  const normalizedQuery = useMemo(() => normalizeGroupQuery(query), [query])
+  const rows = useMemo<VisibleGroupRow[]>(
+    () =>
+      normalizedQuery.length > 0
+        ? flattenSearchGroups(tree, normalizedQuery)
+        : flattenVisibleGroups(tree, collapsedGroups),
+    [collapsedGroups, normalizedQuery, tree],
+  )
+  const { containerRef, onScroll, range } = useVirtualRows({
+    total: rows.length,
+    itemSize: GROUP_TREE_ROW_HEIGHT,
+    overscan: 8,
+    fallbackViewportSize: 420,
+  })
+  const virtualRows = rows.slice(range.start, range.end)
 
   const openCreateRoot = () => {
     setName('')
@@ -146,11 +176,28 @@ export function InstanceGroupTree({
           <FolderPlus className="size-3.5" /> {t('instanceGroups.newRoot')}
         </Button>
       </div>
+      <div className="px-1 pb-2">
+        <Input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder={t('instanceGroups.searchPlaceholder')}
+          aria-label={t('instanceGroups.searchLabel')}
+          className="h-8"
+        />
+      </div>
 
-      <div className="min-h-0 flex-1 space-y-0.5 overflow-auto pr-1">
+      <div
+        ref={containerRef}
+        onScroll={onScroll}
+        role="tree"
+        aria-label={t('instanceGroups.treeTitle')}
+        className="min-h-0 flex-1 space-y-0.5 overflow-auto pr-1"
+      >
         {/* 「全部实例」根行：选中=清空组筛选 */}
         <button
           type="button"
+          role="treeitem"
+          aria-selected={selectedGroupId === null}
           onClick={() => onSelect(null)}
           className={cn(
             'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm',
@@ -164,25 +211,39 @@ export function InstanceGroupTree({
         {isLoading ? (
           <p className="px-2 py-2 text-xs text-muted-foreground">{t('common.loading')}</p>
         ) : rows.length === 0 ? (
-          <p className="px-2 py-3 text-xs text-muted-foreground">{t('instanceGroups.empty')}</p>
+          normalizedQuery ? (
+            <p className="px-2 py-3 text-xs text-muted-foreground">{t('instanceGroups.noSearchResults')}</p>
+          ) : (
+            <div className="space-y-2 px-2 py-3">
+              <p className="text-xs font-medium text-foreground">{t('instanceGroups.empty')}</p>
+              <p className="text-xs text-muted-foreground">{t('instanceGroups.emptyHint')}</p>
+              <Button type="button" size="xs" variant="outline" onClick={openCreateRoot}>
+                <FolderPlus className="size-3.5" /> {t('instanceGroups.emptyCta')}
+              </Button>
+            </div>
+          )
         ) : (
-          rows.map((row) => (
-            <GroupRow
-              key={row.id}
-              row={row}
-              selected={selectedGroupId === row.id}
-              collapsed={!!collapsedGroups[groupBranchKey(row.id)]}
-              isDropTarget={dropTarget === row.id}
-              onSelect={() => onSelect(row.id)}
-              onToggle={() => toggleGroup(groupBranchKey(row.id))}
-              onCreateChild={() => openCreateChild(row)}
-              onRename={() => openRename(row)}
-              onDelete={() => handleDelete(row)}
-              onDragEnter={() => setDropTarget(row.id)}
-              onDragLeaveTarget={() => setDropTarget((cur) => (cur === row.id ? null : cur))}
-              onDropInstances={(ids) => handleDropInstances(row.id, ids)}
-            />
-          ))
+          <>
+            {range.before > 0 && <div aria-hidden="true" style={{ height: range.before }} />}
+            {virtualRows.map((row) => (
+              <GroupRow
+                key={row.id}
+                row={row}
+                selected={selectedGroupId === row.id}
+                collapsed={!!collapsedGroups[groupBranchKey(row.id)]}
+                isDropTarget={dropTarget === row.id}
+                onSelect={() => onSelect(row.id)}
+                onToggle={() => toggleGroup(groupBranchKey(row.id))}
+                onCreateChild={() => openCreateChild(row)}
+                onRename={() => openRename(row)}
+                onDelete={() => handleDelete(row)}
+                onDragEnter={() => setDropTarget(row.id)}
+                onDragLeaveTarget={() => setDropTarget((cur) => (cur === row.id ? null : cur))}
+                onDropInstances={(ids) => handleDropInstances(row.id, ids)}
+              />
+            ))}
+            {range.after > 0 && <div aria-hidden="true" style={{ height: range.after }} />}
+          </>
         )}
       </div>
 
@@ -257,14 +318,32 @@ function GroupRow({
     return []
   }
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.target !== e.currentTarget) return
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      onSelect()
+    } else if (e.key === ' ') {
+      e.preventDefault()
+      if (row.hasChildren) onToggle()
+      else onSelect()
+    }
+  }
+
   return (
     <div
+      role="treeitem"
+      tabIndex={0}
+      aria-level={row.depth + 1}
+      aria-selected={selected}
+      aria-expanded={row.hasChildren ? !collapsed : undefined}
       className={cn(
         'group flex items-center gap-1 rounded-md',
         selected ? 'bg-accent' : 'hover:bg-accent/50',
         isDropTarget && 'ring-2 ring-primary ring-inset',
       )}
       style={{ paddingLeft: row.depth * 14 }}
+      onKeyDown={handleKeyDown}
       onDragOver={(e) => {
         if (e.dataTransfer.types.includes(INSTANCE_DND_MIME)) {
           e.preventDefault()

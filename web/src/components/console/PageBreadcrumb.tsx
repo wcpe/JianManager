@@ -2,7 +2,6 @@ import { useTranslation } from 'react-i18next'
 import { Link, useLocation } from 'react-router'
 import { ChevronRight } from 'lucide-react'
 
-import { useConsoleStore } from '@/stores/console'
 import { breadcrumbTrail } from '@/lib/breadcrumb'
 import { cn } from '@jianmanager/ui'
 
@@ -16,7 +15,6 @@ import { cn } from '@jianmanager/ui'
 export default function PageBreadcrumb({ leaf }: { leaf?: string }) {
   const { t } = useTranslation()
   const { pathname } = useLocation()
-  const closeInstance = useConsoleStore((s) => s.closeInstance)
   const trail = breadcrumbTrail(pathname)
 
   if (trail.length === 0 && !leaf) {
@@ -43,7 +41,6 @@ export default function PageBreadcrumb({ leaf }: { leaf?: string }) {
             <Link
               key={it.key}
               to={it.to}
-              onClick={() => closeInstance()}
               className="shrink-0 truncate text-muted-foreground transition-colors hover:text-foreground"
             >
               {it.text}

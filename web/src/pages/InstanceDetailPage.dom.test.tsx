@@ -5,7 +5,6 @@ import { Routes, Route } from 'react-router'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@/mocks/inject'
-import { useConsoleStore } from '@/stores/console'
 import InstanceDetailPage from './InstanceDetailPage'
 
 /**
@@ -23,7 +22,6 @@ function renderDetail(route: string) {
 
 beforeEach(() => {
   loginMockUser()
-  useConsoleStore.setState({ openInstanceId: null })
 })
 
 describe('InstanceDetailPage（mock 深链）', () => {
@@ -31,8 +29,7 @@ describe('InstanceDetailPage（mock 深链）', () => {
     renderDetail('/instances/1')
 
     expect(await screen.findByText(/服务器控制台 \/ survival-1/)).toBeInTheDocument()
-    expect(screen.getByText('RUNNING')).toBeInTheDocument()
-    expect(useConsoleStore.getState().openInstanceId).toBeNull()
+    expect(screen.getByText('运行', { selector: '[data-slot="status-badge"]' })).toBeInTheDocument()
   })
 
   it('对停止实例深链后启动 → 控制台状态联动为 RUNNING', async () => {
@@ -40,11 +37,11 @@ describe('InstanceDetailPage（mock 深链）', () => {
     renderDetail('/instances/2')
 
     expect(await screen.findByText(/服务器控制台 \/ lobby-proxy/)).toBeInTheDocument()
-    expect(screen.getByText('STOPPED')).toBeInTheDocument()
+    expect(screen.getByText('停止', { selector: '[data-slot="status-badge"]' })).toBeInTheDocument()
 
     await user.click(await screen.findByRole('button', { name: /启动/ }))
 
-    await waitFor(() => expect(screen.getByText('RUNNING')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('运行', { selector: '[data-slot="status-badge"]' })).toBeInTheDocument())
   })
 
   it('注入 500 → 控制台显示空态且页面不崩溃', async () => {

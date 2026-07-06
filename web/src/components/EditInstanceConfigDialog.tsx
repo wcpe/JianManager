@@ -3,7 +3,18 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useUpdateInstance } from '@/api/instances'
 import { useNodeJDKs } from '@/api/jdks'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  ScrollableDialogBody,
+  scrollableDialogContentClass,
+} from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
+import { Button } from '@jianmanager/ui/components/button'
 import { FieldLabel } from '@jianmanager/ui/components/field-label'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 
@@ -66,50 +77,53 @@ export default function EditInstanceConfigDialog({
   }
 
   return (
-    <div className={MODAL_OVERLAY}>
-      <div className={`${MODAL_PANEL} max-w-md`}>
-        <h2 className="mb-4 text-lg font-bold">{t('instances.editConfigTitle', { name: instanceName })}</h2>
-        <form onSubmit={submit} className="space-y-4">
-          <div>
-            <FieldLabel>{t('instanceDetail.startCommand')}</FieldLabel>
-            <input
-              value={cmd}
-              onChange={(e) => setCmd(e.target.value)}
-              className="mt-1 w-full rounded-md border bg-background px-3 py-2 font-mono text-sm"
-              placeholder="java -Xmx2G -jar server.jar nogui"
-            />
-          </div>
-          <div>
-            <FieldLabel>{t('instances.jdkBinding')}</FieldLabel>
-            <div className="mt-1">
-              <Combobox
-                options={jdkOptions}
-                value={jdk}
-                onChange={setJdk}
-                allowCustom={false}
-                placeholder={t('instances.jdkSystemDefault')}
+    <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-md`}>
+        <DialogHeader>
+          <DialogTitle>{t('instances.editConfigTitle', { name: instanceName })}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+          <ScrollableDialogBody className="space-y-4">
+            <div>
+              <FieldLabel>{t('instanceDetail.startCommand')}</FieldLabel>
+              <input
+                value={cmd}
+                onChange={(e) => setCmd(e.target.value)}
+                className="mt-1 w-full rounded-md border bg-background px-3 py-2 font-mono text-sm"
+                placeholder="java -Xmx2G -jar server.jar nogui"
               />
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">{t('instances.jdkBindingHint')}</p>
-          </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={restart} onChange={(e) => setRestart(e.target.checked)} />
-            {t('instanceDetail.autoRestart')}
-          </label>
-          <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={onClose} className="rounded-md border px-4 py-2 text-sm hover:bg-accent">
+            <div>
+              <FieldLabel>{t('instances.jdkBinding')}</FieldLabel>
+              <div className="mt-1">
+                <Combobox
+                  options={jdkOptions}
+                  value={jdk}
+                  onChange={setJdk}
+                  allowCustom={false}
+                  placeholder={t('instances.jdkSystemDefault')}
+                />
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">{t('instances.jdkBindingHint')}</p>
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={restart} onChange={(e) => setRestart(e.target.checked)} />
+              {t('instanceDetail.autoRestart')}
+            </label>
+          </ScrollableDialogBody>
+          <DialogFooter className="pt-4">
+            <Button type="button" variant="outline" onClick={onClose}>
               {t('common.cancel')}
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
               disabled={update.isPending}
-              className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground disabled:opacity-50"
             >
               {update.isPending ? t('common.saving') : t('common.save')}
-            </button>
-          </div>
+            </Button>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

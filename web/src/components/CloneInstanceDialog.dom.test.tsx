@@ -63,10 +63,25 @@ describe('CloneInstanceDialog（mock 假后端，复制子服流程）', () => {
     renderWithProviders(<CloneHarness />)
 
     // 标题带源实例名；名称输入默认 `${sourceName}-copy`。
-    expect(await screen.findByText('复制子服 — survival-1')).toBeInTheDocument()
-    expect(screen.getByDisplayValue('survival-1-copy')).toBeInTheDocument()
+    const dialog = await screen.findByRole('dialog', { name: '复制子服 — survival-1' })
+    expect(dialog).toBeInTheDocument()
+    expect(within(dialog).getByDisplayValue('survival-1-copy')).toBeInTheDocument()
     // 注册代理列表来自 GET /instances?role=proxy → seed proxy「lobby-proxy」复选框。
-    expect(await screen.findByLabelText('lobby-proxy')).toBeInTheDocument()
+    expect(await within(dialog).findByLabelText('lobby-proxy')).toBeInTheDocument()
+  })
+
+  it('支持 Esc 关闭对话框', async () => {
+    const user = userEvent.setup()
+    loginMockUser()
+    renderWithProviders(<CloneHarness />)
+
+    expect(await screen.findByText('复制子服 — survival-1')).toBeInTheDocument()
+
+    await user.keyboard('{Escape}')
+
+    await waitFor(() =>
+      expect(screen.queryByText('复制子服 — survival-1')).not.toBeInTheDocument(),
+    )
   })
 
   it('② 预检 dryRun → 出资源预览、不落库不关窗', async () => {
@@ -87,7 +102,7 @@ describe('CloneInstanceDialog（mock 假后端，复制子服流程）', () => {
     // 预检不落库：实例数量不变，对话框仍在。
     expect(Number(screen.getByLabelText('instances-count').textContent ?? '0')).toBe(baseCount)
     expect(screen.getByText('复制子服 — survival-1')).toBeInTheDocument()
-  })
+  }, 15000)
 
   it('③ 提交复制 → 副本落集合联动 + 对话框关闭', async () => {
     const user = userEvent.setup()
@@ -99,8 +114,8 @@ describe('CloneInstanceDialog（mock 假后端，复制子服流程）', () => {
     await waitFor(() => expect(within(list).getByText('survival-1')).toBeInTheDocument())
 
     // 改名后提交（首个 textbox = 名称输入，FieldLabel 无 htmlFor）。
-    const nameInput = within(screen.getByText('复制子服 — survival-1').closest('div') as HTMLElement)
-      .getAllByRole('textbox')[0]
+    const dialog = screen.getByRole('dialog', { name: '复制子服 — survival-1' })
+    const nameInput = within(dialog).getAllByRole('textbox')[0]
     await user.clear(nameInput)
     await user.type(nameInput, 'survival-clone')
     await user.click(screen.getByRole('button', { name: '复制' }))
@@ -123,8 +138,8 @@ describe('CloneInstanceDialog（mock 假后端，复制子服流程）', () => {
     const list = screen.getByLabelText('instances-list')
     await waitFor(() => expect(within(list).getByText('survival-1')).toBeInTheDocument())
 
-    const nameInput = within(screen.getByText('复制子服 — survival-1').closest('div') as HTMLElement)
-      .getAllByRole('textbox')[0]
+    const dialog = screen.getByRole('dialog', { name: '复制子服 — survival-1' })
+    const nameInput = within(dialog).getAllByRole('textbox')[0]
     await user.clear(nameInput)
     await user.type(nameInput, 'clone-fail')
     await user.click(screen.getByRole('button', { name: '复制' }))

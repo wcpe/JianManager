@@ -11,7 +11,17 @@ import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  ScrollableDialogBody,
+  scrollableDialogContentClass,
+} from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired } from '@/lib/form-validation'
 import { instanceStatusLevel, statusColorVar } from '@jianmanager/ui'
@@ -328,40 +338,44 @@ function CreateNetworkModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className={MODAL_OVERLAY}>
-      <div className={`${MODAL_PANEL} max-w-md`}>
-        <h2 className="text-lg font-bold mb-4">{t('networks.create')}</h2>
-        <form onSubmit={submit} className="space-y-3">
-          <div>
-            <FieldLabel required>{t('networks.name')}</FieldLabel>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="mt-1"
-              placeholder="survival"
-              aria-invalid={!!nameError}
-            />
-            <FieldError error={nameError} />
-          </div>
-          <div>
-            <FieldLabel>{t('networks.description')}</FieldLabel>
-            <Input
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              className="mt-1"
-            />
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
+    <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-md`}>
+        <DialogHeader>
+          <DialogTitle>{t('networks.create')}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
+          <ScrollableDialogBody className="space-y-3">
+            <div>
+              <FieldLabel required>{t('networks.name')}</FieldLabel>
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="mt-1"
+                placeholder="survival"
+                aria-invalid={!!nameError}
+              />
+              <FieldError error={nameError} />
+            </div>
+            <div>
+              <FieldLabel>{t('networks.description')}</FieldLabel>
+              <Input
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="mt-1"
+              />
+            </div>
+          </ScrollableDialogBody>
+          <DialogFooter className="pt-4">
             <Button type="button" variant="outline" onClick={onClose}>
               {t('common.cancel')}
             </Button>
             <Button type="submit" disabled={create.isPending || !!nameError}>
               {create.isPending ? t('common.creating') : t('common.create')}
             </Button>
-          </div>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -420,15 +434,15 @@ function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose
   }
 
   return (
-    <div className={MODAL_OVERLAY} onClick={onClose}>
-      <div
-        className="flex max-h-[88vh] w-full max-w-4xl flex-col rounded-lg border bg-card text-card-foreground shadow-lift"
-        onClick={(e) => e.stopPropagation()}
+    <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
+      <DialogContent
+        className="flex max-h-[88vh] w-full max-w-4xl flex-col gap-0 overflow-hidden p-0"
+        showCloseButton={false}
       >
         {/* 头部 */}
         <div className="flex shrink-0 items-center justify-between gap-3 border-b px-5 py-3.5">
           <div className="min-w-0">
-            <h2 className="truncate text-lg font-bold">{detail?.name}</h2>
+            <DialogTitle className="truncate text-lg font-bold">{detail?.name}</DialogTitle>
             {health && (
               <p className="mt-0.5 text-xs text-muted-foreground">
                 {t('networks.memberCount', { count: health.total })}
@@ -570,7 +584,7 @@ function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

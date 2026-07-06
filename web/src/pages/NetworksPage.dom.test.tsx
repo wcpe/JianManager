@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
@@ -57,12 +57,29 @@ describe('NetworksPage（mock 假后端）', () => {
 
     await user.click(screen.getByRole('button', { name: '创建群组' }))
     // 模态打开：唯一 placeholder=survival 的名称输入框；提交按钮名「创建」(≠ 打开按钮「创建群组」)。
-    await screen.findByRole('heading', { name: '创建群组' })
-    await user.type(screen.getByPlaceholderText('survival'), 'hardcore')
-    await user.click(screen.getByRole('button', { name: '创建' }))
+    const dialog = await screen.findByRole('dialog', { name: '创建群组' })
+    await user.type(within(dialog).getByPlaceholderText('survival'), 'hardcore')
+    await user.click(within(dialog).getByRole('button', { name: '创建' }))
 
     // 创建成功 → invalidate ['networks'] → 列表重拉，新群组出现。
     expect(await screen.findByText('hardcore')).toBeInTheDocument()
+  })
+
+  it('②-1 创建与详情弹窗走共享 Dialog 并支持 Esc 关闭', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<NetworksPage />, { route: '/networks' })
+    await screen.findByText('survival')
+
+    await user.click(screen.getByRole('button', { name: '创建群组' }))
+    expect(await screen.findByRole('dialog', { name: '创建群组' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '创建群组' })).not.toBeInTheDocument())
+
+    const survivalCard = screen.getByText('survival').closest('[data-slot="panel"]') as HTMLElement
+    await user.click(within(survivalCard).getByRole('button', { name: '管理' }))
+    expect(await screen.findByRole('dialog', { name: 'survival' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'survival' })).not.toBeInTheDocument())
   })
 
   it('② 注册 proxy↔backend → registrations 联动反映（M:N 同后端多代理）', async () => {

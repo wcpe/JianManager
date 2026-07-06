@@ -101,10 +101,9 @@ function NodeScopeSelector() {
  * 否则按路由渲染「域 › 页面」轨迹。统一页头组件 `PageBreadcrumb` 承载。
  */
 function TitleArea() {
-  const openInstanceId = useConsoleStore((s) => s.openInstanceId)
   const location = useLocation()
   const routeInstanceId = Number(location.pathname.match(/^\/instances\/(\d+)/)?.[1] ?? 0)
-  const activeInstanceId = openInstanceId ?? (routeInstanceId > 0 ? routeInstanceId : null)
+  const activeInstanceId = routeInstanceId > 0 ? routeInstanceId : null
   const { data: openInst } = useInstance(activeInstanceId ?? 0)
   // min-w-0 让面包屑可截断，避免长轨迹把右侧操作区挤出页眉（窄屏防翻屏）。
   return (

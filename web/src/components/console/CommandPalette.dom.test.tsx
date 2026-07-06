@@ -34,7 +34,7 @@ const instance = {
 describe('CommandPalette DOM', () => {
   beforeEach(() => {
     loginMockUser()
-    useConsoleStore.setState({ commandPaletteOpen: true, selectedNodeId: null, openInstanceId: null })
+    useConsoleStore.setState({ commandPaletteOpen: true, selectedNodeId: null })
   })
 
   it('输入关键字走服务端实例搜索，并跳转到 /instances/:id', async () => {

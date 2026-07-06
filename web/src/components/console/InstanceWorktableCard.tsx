@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next'
+import { useNavigate } from 'react-router'
 import { Cpu, MemoryStick, Users, Zap, Play, Square, RotateCw, Route, Box } from 'lucide-react'
 import {
   useStartInstance,
@@ -7,7 +8,6 @@ import {
   type InstanceInfo,
 } from '@/api/instances'
 import { useInstanceMetrics } from '@/api/metrics'
-import { useConsoleStore } from '@/stores/console'
 import { MiniBar } from '@jianmanager/ui/components/mini-bar'
 import { Button } from '@jianmanager/ui/components/button'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
@@ -40,6 +40,7 @@ export function InstanceWorktableCard({
   nodeName,
   roleBadge,
   menu,
+  onOpen,
 }: {
   inst: InstanceInfo
   /** 所属节点名（由列表统一解析后传入，避免卡内各自查节点表）。 */
@@ -48,9 +49,12 @@ export function InstanceWorktableCard({
   roleBadge: React.ReactNode
   /** 「⋯」次要操作菜单元素（标签/限额/克隆/删除，由页面渲染）。 */
   menu: React.ReactNode
+  /** 打开实例控制台；默认跳转实例深链，列表页可传入自定义跳转。 */
+  onOpen?: (id: number) => void
 }) {
   const { t } = useTranslation()
-  const openInstance = useConsoleStore((s) => s.openInstance)
+  const navigate = useNavigate()
+  const openConsole = onOpen ?? ((id: number) => navigate(`/instances/${id}`))
   const start = useStartInstance()
   const stop = useStopInstance()
   const restart = useRestartInstance()
@@ -77,7 +81,7 @@ export function InstanceWorktableCard({
   return (
     <div
       className="group flex cursor-pointer flex-col rounded-xl border bg-card p-4 text-card-foreground shadow-soft transition-[box-shadow] duration-300 ease-ios hover:shadow-lift"
-      onClick={() => openInstance(inst.id)}
+      onClick={() => openConsole(inst.id)}
     >
       {/* 头部：图标块 + 名称 + 状态（运行呼吸灯）+ 菜单 */}
       <div className="flex items-center gap-3">
@@ -90,7 +94,7 @@ export function InstanceWorktableCard({
             className="block max-w-full truncate text-left text-sm font-semibold hover:text-primary"
             onClick={(e) => {
               e.stopPropagation()
-              openInstance(inst.id)
+              openConsole(inst.id)
             }}
             title={inst.name}
           >

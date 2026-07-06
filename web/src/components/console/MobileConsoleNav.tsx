@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next'
 import { ChevronDown } from 'lucide-react'
 
 import { useAuthStore } from '@/stores/auth'
-import { useConsoleStore } from '@/stores/console'
 import { cn } from '@jianmanager/ui'
 import { navGroupsForRole, type NavGroup, type NavSection } from './nav-config'
 
@@ -26,7 +25,6 @@ function isRouteActive(pathname: string, to: string): boolean {
 export default function MobileConsoleNav() {
   const { t } = useTranslation()
   const role = useAuthStore((s) => s.role)
-  const closeInstance = useConsoleStore((s) => s.closeInstance)
   const groups = navGroupsForRole(role)
   const location = useLocation()
   const [openKey, setOpenKey] = useState<string | null>(null)
@@ -109,7 +107,6 @@ export default function MobileConsoleNav() {
                 to={item.to}
                 end={item.to === '/' || item.to === '/networks'}
                 onClick={() => {
-                  closeInstance()
                   closePanel()
                 }}
                 className={linkClass}
@@ -135,7 +132,6 @@ export default function MobileConsoleNav() {
                 key={group.key}
                 to={group.to}
                 onClick={() => {
-                  closeInstance()
                   closePanel()
                 }}
                 className={cn(
@@ -180,7 +176,6 @@ function MobileSection({
   onNavigate: () => void
 }) {
   const { t } = useTranslation()
-  const closeInstance = useConsoleStore((s) => s.closeInstance)
   return (
     <div className="space-y-1">
       <div className="px-3 pt-2 text-[11px] font-medium text-muted-foreground/70">{t(section.labelKey)}</div>
@@ -190,7 +185,6 @@ function MobileSection({
           to={item.to}
           end={item.to === '/' || item.to === '/networks'}
           onClick={() => {
-            closeInstance()
             onNavigate()
           }}
           className={({ isActive }) =>

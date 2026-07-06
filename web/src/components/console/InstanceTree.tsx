@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useLocation, useNavigate } from 'react-router'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useInstances, type InstanceInfo } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
@@ -143,15 +144,15 @@ function TreeBranch({
 }
 
 function InstanceRow({ instance, botBadge }: { instance: InstanceInfo; botBadge: BadgeData | undefined }) {
-  const openInstanceId = useConsoleStore((s) => s.openInstanceId)
-  const openInstance = useConsoleStore((s) => s.openInstance)
-  const isActive = openInstanceId === instance.id
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const isActive = pathname === `/instances/${instance.id}`
 
   return (
     <li>
       <button
         type="button"
-        onClick={() => openInstance(instance.id)}
+        onClick={() => navigate(`/instances/${instance.id}`)}
         className={cn(
           'flex w-full items-center gap-2 rounded-md py-1.5 pl-7 pr-3 text-left text-sm',
           isActive ? 'bg-accent font-medium' : 'hover:bg-accent/50',

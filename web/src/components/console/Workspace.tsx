@@ -1,9 +1,7 @@
-import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router'
-import { Suspense, lazy, useEffect } from 'react'
+import { Routes, Route, Navigate, useLocation } from 'react-router'
+import { Suspense, lazy } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useConsoleStore } from '@/stores/console'
 import WorkspaceEmpty from './WorkspaceEmpty'
-import InstanceConsolePage from './InstanceConsolePage'
 
 const OverviewPage = lazy(() => import('@/pages/OverviewPage'))
 const MonitoringPage = lazy(() => import('@/pages/MonitoringPage'))
@@ -47,29 +45,9 @@ const DirectorConsolePage = lazy(() => import('./DirectorConsolePage'))
  */
 export default function Workspace() {
   const { t } = useTranslation()
-  const openInstanceId = useConsoleStore((s) => s.openInstanceId)
-  const closeInstance = useConsoleStore((s) => s.closeInstance)
   const location = useLocation()
-  const navigate = useNavigate()
   const isInstanceRoute = /^\/instances\/\d+/.test(location.pathname)
   const routeKey = `${location.pathname}${location.search}`
-
-  // 打开实例时统一落到深链，避免页面仍停在 /instances 导致侧栏、面包屑和工作区语义错位。
-  useEffect(() => {
-    if (openInstanceId === null) return
-
-    const target = `/instances/${openInstanceId}`
-    if (location.pathname !== target) navigate(target)
-    closeInstance()
-  }, [openInstanceId, location.pathname, navigate, closeInstance])
-
-  if (openInstanceId !== null) {
-    return (
-      <div className="h-full w-full overflow-auto p-3">
-        <InstanceConsolePage instanceId={openInstanceId} />
-      </div>
-    )
-  }
 
   // 超级工作台全幅（自带实例库 + 画布），不套统一内边距与滚动壳。
   if (location.pathname === '/super' || location.pathname.startsWith('/super/')) {

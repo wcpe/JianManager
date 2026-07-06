@@ -264,7 +264,7 @@ function buildGeneratedInstance(id: number): MockInstance {
     autoStart: id % 3 === 0,
     autoRestart: id % 5 !== 0,
     tags: JSON.stringify([`env:${env}`, role === 'proxy' ? 'edge' : 'survival']),
-    createdAt: new Date(Date.UTC(2026, 0, 1 + (id % 28))).toISOString(),
+    createdAt: new Date(Date.UTC(2026, 2, 1 + id)).toISOString(),
   }
 }
 
@@ -297,6 +297,54 @@ function parseTags(raw: string): string[] {
   } catch {
     return []
   }
+}
+
+function filterInstancesByQuery(url: URL): MockInstance[] {
+  const nodeId = url.searchParams.get('nodeId')
+  const status = url.searchParams.get('status')
+  const role = url.searchParams.get('role')
+  const env = url.searchParams.get('env')
+  const tag = url.searchParams.get('tag')
+  const networkId = url.searchParams.get('networkId')
+  const q = (url.searchParams.get('q') ?? '').trim().toLowerCase()
+  return instances.list((i) => {
+    if (nodeId && String(i.nodeId) !== nodeId) return false
+    if (status && i.status !== status) return false
+    if (role && i.role !== role) return false
+    if (q && !i.name.toLowerCase().includes(q)) return false
+    const tags = parseTags(i.tags)
+    if (env && !tags.includes(`env:${env}`)) return false
+    if (tag && !tags.includes(tag)) return false
+    // networkId 在假后端无群组关系映射，留作不收敛（仅鉴权/形参占位）。
+    void networkId
+    return true
+  })
+}
+
+function searchNumber(url: URL, key: string, fallback: number): number {
+  const value = Number(url.searchParams.get(key))
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function sortInstances(rows: MockInstance[], url: URL): MockInstance[] {
+  const sort = url.searchParams.get('sort') ?? 'name'
+  const order = url.searchParams.get('order') === 'desc' ? -1 : 1
+  const byText = (a: string, b: string) => a.localeCompare(b, 'zh-CN')
+  const sorted = [...rows].sort((a, b) => {
+    if (sort === 'status') return byText(a.status, b.status) * order || (a.id - b.id)
+    if (sort === 'createdAt') return byText(a.createdAt, b.createdAt) * order || (a.id - b.id)
+    if (sort === 'nodeId') return (a.nodeId - b.nodeId) * order || (a.id - b.id)
+    return byText(a.name, b.name) * order || (a.id - b.id)
+  })
+  return sorted
+}
+
+function countBy(rows: MockInstance[], key: 'status' | 'role'): Record<string, number> {
+  return rows.reduce<Record<string, number>>((acc, row) => {
+    const value = row[key]
+    acc[value] = (acc[value] ?? 0) + 1
+    return acc
+  }, {})
 }
 
 /** 子树（含自身及所有后代）去重的实例 ID 集合，对应 instanceCount / GET …/instances 语义。 */
@@ -404,6 +452,41 @@ let memberSeq = 100
 
 export const handlers = [
   // ---- 实例 CRUD ----
+  domainRoute('get', '/instances/search', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const page = searchNumber(url, 'page', 1)
+    const pageSize = Math.min(searchNumber(url, 'pageSize', 50), 200)
+    const rows = sortInstances(filterInstancesByQuery(url), url)
+    const start = (page - 1) * pageSize
+    return HttpResponse.json({
+      items: rows.slice(start, start + pageSize),
+      total: rows.length,
+      page,
+      pageSize,
+    })
+  }),
+
+  domainRoute('get', '/instances/aggregate', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const rows = filterInstancesByQuery(url)
+    const byNode = [...rows.reduce<Map<number, number>>((acc, row) => {
+      acc.set(row.nodeId, (acc.get(row.nodeId) ?? 0) + 1)
+      return acc
+    }, new Map()).entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([nodeId, count]) => ({ nodeId, count }))
+    return HttpResponse.json({
+      total: rows.length,
+      byStatus: countBy(rows, 'status'),
+      byNode,
+      byRole: countBy(rows, 'role'),
+    })
+  }),
+
   domainRoute('get', '/instances', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
