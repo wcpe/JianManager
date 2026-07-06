@@ -5,6 +5,7 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceLine,
   Tooltip,
   XAxis,
   YAxis,
@@ -17,6 +18,12 @@ export interface ChartSeries {
   /** 线色，默认按序取 --chart-1..5。 */
   color?: string
   points: { ts: string; value: number | null }[]
+}
+
+export interface ChartReferenceLine {
+  value: number
+  label: string
+  color?: string
 }
 
 const CHART_COLORS = [
@@ -49,6 +56,7 @@ export function TimeSeriesChart({
   valueFormatter,
   emptyHint,
   yDomain = ['auto', 'auto'],
+  referenceLines = [],
 }: {
   series: ChartSeries[]
   height?: number
@@ -56,6 +64,8 @@ export function TimeSeriesChart({
   emptyHint?: string
   /** Y 轴范围。默认 ['auto','auto'] 自适应数据，使 TPS/MSPT 等窄幅指标不被 0 基线压成直线（FR-148）；占比类指标可传 [0, 100]。 */
   yDomain?: [number | 'auto' | 'dataMin' | 'dataMax', number | 'auto' | 'dataMin' | 'dataMax']
+  /** 可选阈值线；仅调用方明确传入时渲染，避免影响其它图表。 */
+  referenceLines?: ChartReferenceLine[]
 }) {
   const { t } = useTranslation()
   const { data, spanMs } = useMemo(() => {
@@ -108,55 +118,85 @@ export function TimeSeriesChart({
   const tickFormatter = makeTickFormatter(spanMs)
 
   return (
-    <div ref={containerRef} style={{ height, width: '100%' }}>
-      {width > 0 && (
-        <LineChart width={width} height={height} data={data} margin={{ top: 6, right: 12, bottom: 0, left: 4 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-          <XAxis
-            dataKey="ts"
-            tickFormatter={tickFormatter}
-            tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
-            stroke="var(--border)"
-            minTickGap={32}
-          />
-          <YAxis
-            domain={yDomain}
-            tickFormatter={(v: number) => fmt(v)}
-            tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
-            stroke="var(--border)"
-            width={48}
-          />
-          <Tooltip
-            contentStyle={{
-              background: 'var(--popover)',
-              border: '1px solid var(--border)',
-              borderRadius: 8,
-              fontSize: 12,
-              color: 'var(--popover-foreground)',
-            }}
-            labelFormatter={(ts) => new Date(String(ts)).toLocaleString()}
-            formatter={(value, name) => {
-              const num = typeof value === 'number' ? value : Number(value)
-              return [Number.isFinite(num) ? fmt(num) : '—', name]
-            }}
-          />
-          {series.length > 1 && (
-            <Legend wrapperStyle={{ fontSize: 11 }} iconType="plainline" iconSize={12} />
-          )}
-          {series.map((s, i) => (
-            <Line
-              key={s.key}
-              type="monotone"
-              dataKey={s.key}
-              name={s.name}
-              stroke={s.color ?? CHART_COLORS[i % CHART_COLORS.length]}
-              strokeWidth={1.5}
-              dot={false}
-              connectNulls={false}
-              isAnimationActive={false}
+    <div className="space-y-1">
+      <div ref={containerRef} style={{ height, width: '100%' }}>
+        {width > 0 && (
+          <LineChart width={width} height={height} data={data} margin={{ top: 6, right: 12, bottom: 0, left: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+            <XAxis
+              dataKey="ts"
+              tickFormatter={tickFormatter}
+              tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
+              stroke="var(--border)"
+              minTickGap={32}
             />
+            <YAxis
+              domain={yDomain}
+              tickFormatter={(v: number) => fmt(v)}
+              tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
+              stroke="var(--border)"
+              width={48}
+            />
+            <Tooltip
+              contentStyle={{
+                background: 'var(--popover)',
+                border: '1px solid var(--border)',
+                borderRadius: 8,
+                fontSize: 12,
+                color: 'var(--popover-foreground)',
+              }}
+              labelFormatter={(ts) => new Date(String(ts)).toLocaleString()}
+              formatter={(value, name) => {
+                const num = typeof value === 'number' ? value : Number(value)
+                return [Number.isFinite(num) ? fmt(num) : '—', name]
+              }}
+            />
+            {series.length > 1 && (
+              <Legend wrapperStyle={{ fontSize: 11 }} iconType="plainline" iconSize={12} />
+            )}
+            {referenceLines.map((line) => (
+              <ReferenceLine
+                key={`${line.label}-${line.value}`}
+                y={line.value}
+                stroke={line.color ?? 'var(--muted-foreground)'}
+                strokeDasharray="4 4"
+                ifOverflow="extendDomain"
+                label={{
+                  value: line.label,
+                  position: 'insideTopRight',
+                  fill: line.color ?? 'var(--muted-foreground)',
+                  fontSize: 11,
+                }}
+              />
+            ))}
+            {series.map((s, i) => (
+              <Line
+                key={s.key}
+                type="monotone"
+                dataKey={s.key}
+                name={s.name}
+                stroke={s.color ?? CHART_COLORS[i % CHART_COLORS.length]}
+                strokeWidth={1.5}
+                dot={false}
+                connectNulls={false}
+                isAnimationActive={false}
+              />
+            ))}
+          </LineChart>
+        )}
+      </div>
+      {referenceLines.length > 0 && (
+        <div className="flex flex-wrap gap-x-3 gap-y-1 px-1 text-[10px] text-muted-foreground">
+          {referenceLines.map((line) => (
+            <span key={`${line.label}-${line.value}`} className="inline-flex items-center gap-1">
+              <span
+                className="h-px w-4 border-t border-dashed"
+                style={{ borderColor: line.color ?? 'var(--muted-foreground)' }}
+              />
+              {line.label}
+            </span>
           ))}
-        </LineChart>
+        </div>
       )}
     </div>
   )

@@ -42,13 +42,23 @@
   --radius-xl: calc(var(--radius) + 4px);
   --radius-2xl: calc(var(--radius) + 8px);
 
-  /* 设计底座（FR-163）：柔和弱阴影 + 主色晕染抬升 + iOS 缓动 + 呼吸灯。
+  /* 设计底座（FR-163）：柔和弱阴影 + 主色晕染抬升 + 统一动效 token + 呼吸灯。
      品牌相关取值（--brand-shadow）经变量路由，FR-164 第二主题仅覆盖变量即可换肤。 */
   --shadow-soft: 0 1px 2px rgb(var(--shadow-color) / 0.05), 0 1px 3px -1px rgb(var(--shadow-color) / 0.05);
   --shadow-lift: 0 6px 16px -5px rgb(var(--shadow-color) / 0.14), 0 2px 6px -3px rgb(var(--shadow-color) / 0.08);
-  --ease-ios: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-duration-fast: 120ms;
+  --motion-duration-normal: 180ms;
+  --motion-duration-slow: 320ms;
+  --motion-duration-route: 360ms;
+  --motion-duration-progress-route: 720ms;
+  --motion-duration-progress-busy: 1100ms;
+  --motion-duration-progress-done: 240ms;
+  --motion-delay-sidebar-mode: 80ms;
+  --motion-easing-standard: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-easing-emphasized: ease-out;
+  --ease-ios: var(--motion-easing-standard);
   --animate-breathing: breathing 1.8s ease-in-out infinite;
-  --animate-top-progress: top-progress 0.8s ease-out forwards;
+  --animate-top-progress: top-progress var(--motion-duration-progress-route) var(--motion-easing-emphasized) forwards;
 }
 
 :root {
@@ -333,7 +343,7 @@ body {
 .jm-console-shell {
   --sidebar-collapsed-width: 3.5rem;
   --sidebar-expanded-width: 15rem;
-  --sidebar-motion-duration: 320ms;
+  --sidebar-motion-duration: var(--motion-duration-slow);
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--card) 82%, transparent), transparent 38%),
     var(--background);
@@ -343,7 +353,7 @@ body {
   background: color-mix(in srgb, var(--primary) 14%, transparent);
   opacity: 0;
   transform: translateZ(0);
-  transition: opacity 120ms var(--ease-ios);
+  transition: opacity var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .jm-top-loading-track[data-visible='true'] {
@@ -363,16 +373,16 @@ body {
 }
 
 .jm-top-loading-bar[data-visible='true'][data-mode='route'] {
-  animation: top-progress 720ms ease-out forwards;
+  animation: top-progress var(--motion-duration-progress-route) var(--motion-easing-emphasized) forwards;
 }
 
 .jm-top-loading-bar[data-visible='true'][data-mode='busy'] {
   transform-origin: left center;
-  animation: top-progress-busy 1100ms var(--ease-ios) infinite;
+  animation: top-progress-busy var(--motion-duration-progress-busy) var(--motion-easing-standard) infinite;
 }
 
 .jm-top-loading-bar[data-visible='true'][data-mode='done'] {
-  animation: top-progress-done 240ms ease-out forwards;
+  animation: top-progress-done var(--motion-duration-progress-done) var(--motion-easing-emphasized) forwards;
 }
 
 .jm-console-sidebar {
@@ -407,7 +417,7 @@ body {
   position: relative;
   transform: translateZ(0);
   transform-origin: left center;
-  transition: width var(--sidebar-motion-duration) var(--ease-ios);
+  transition: width var(--sidebar-motion-duration) var(--motion-easing-standard);
   width: var(--sidebar-expanded-width);
   will-change: width;
   z-index: 20;
@@ -423,8 +433,8 @@ body {
   transform: translateX(0) scale(1);
   transform-origin: left center;
   transition:
-    opacity 180ms var(--ease-ios),
-    transform var(--sidebar-motion-duration) var(--ease-ios);
+    opacity var(--motion-duration-normal) var(--motion-easing-standard),
+    transform var(--sidebar-motion-duration) var(--motion-easing-standard);
   width: 15rem;
 }
 
@@ -436,8 +446,8 @@ body {
 .jm-sidebar-mode[data-mode='collapsed'] {
   transform: translateX(-0.45rem) scale(0.97);
   transition:
-    opacity 180ms var(--ease-ios) 80ms,
-    transform var(--sidebar-motion-duration) var(--ease-ios);
+    opacity var(--motion-duration-normal) var(--motion-easing-standard) var(--motion-delay-sidebar-mode),
+    transform var(--sidebar-motion-duration) var(--motion-easing-standard);
   width: var(--sidebar-collapsed-width);
 }
 
@@ -477,7 +487,7 @@ body {
 .jm-console-shell[data-sidebar-motion='collapsing'] .jm-console-content {
   pointer-events: none;
   transform: translate3d(calc(var(--sidebar-collapsed-width) - var(--sidebar-expanded-width)), 0, 0);
-  transition: transform var(--sidebar-motion-duration) var(--ease-ios);
+  transition: transform var(--sidebar-motion-duration) var(--motion-easing-standard);
   will-change: transform;
 }
 
@@ -486,8 +496,8 @@ body {
   pointer-events: none;
   transform: translate3d(calc(var(--sidebar-expanded-width) - var(--sidebar-collapsed-width)), 0, 0);
   transition:
-    clip-path var(--sidebar-motion-duration) var(--ease-ios),
-    transform var(--sidebar-motion-duration) var(--ease-ios);
+    clip-path var(--sidebar-motion-duration) var(--motion-easing-standard),
+    transform var(--sidebar-motion-duration) var(--motion-easing-standard);
   will-change: clip-path, transform;
 }
 
@@ -499,9 +509,9 @@ body {
   transform-origin: top center;
   visibility: visible;
   transition:
-    grid-template-rows 180ms var(--ease-ios),
-    opacity 140ms var(--ease-ios),
-    transform 180ms var(--ease-ios),
+    grid-template-rows var(--motion-duration-normal) var(--motion-easing-standard),
+    opacity var(--motion-duration-fast) var(--motion-easing-standard),
+    transform var(--motion-duration-normal) var(--motion-easing-standard),
     visibility 0s linear 0s;
 }
 
@@ -512,10 +522,10 @@ body {
   transform: translateY(-4px);
   visibility: hidden;
   transition:
-    grid-template-rows 170ms var(--ease-ios),
-    opacity 130ms var(--ease-ios),
-    transform 170ms var(--ease-ios),
-    visibility 0s linear 170ms;
+    grid-template-rows var(--motion-duration-normal) var(--motion-easing-standard),
+    opacity var(--motion-duration-fast) var(--motion-easing-standard),
+    transform var(--motion-duration-normal) var(--motion-easing-standard),
+    visibility 0s linear var(--motion-duration-normal);
 }
 
 .jm-sidebar-group-content-inner {
@@ -527,10 +537,10 @@ body {
   overflow: hidden;
   transform: translateZ(0);
   transition:
-    background-color 150ms var(--ease-ios),
-    color 150ms var(--ease-ios),
-    opacity 150ms var(--ease-ios),
-    transform 220ms var(--ease-ios);
+    background-color var(--motion-duration-fast) var(--motion-easing-standard),
+    color var(--motion-duration-fast) var(--motion-easing-standard),
+    opacity var(--motion-duration-fast) var(--motion-easing-standard),
+    transform var(--motion-duration-progress-done) var(--motion-easing-standard);
   will-change: background-color, color, transform;
 }
 
@@ -545,7 +555,7 @@ body {
   opacity: 0;
   transform: scaleY(0.2);
   transform-origin: center;
-  transition: opacity 150ms var(--ease-ios), transform 150ms var(--ease-ios);
+  transition: opacity var(--motion-duration-fast) var(--motion-easing-standard), transform var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .jm-nav-link[aria-current='page']::before {
@@ -558,8 +568,8 @@ body {
   position: relative;
   z-index: 1;
   transition:
-    opacity 170ms var(--ease-ios),
-    transform 240ms var(--ease-ios);
+    opacity var(--motion-duration-normal) var(--motion-easing-standard),
+    transform var(--motion-duration-progress-done) var(--motion-easing-standard);
 }
 
 .jm-sidebar-drawer[data-state='collapsed'] .jm-sidebar-mode[data-mode='expanded'] .jm-nav-link {
@@ -576,7 +586,7 @@ body {
 }
 
 .jm-sidebar-mode[data-mode='collapsed'] :is(svg, img) {
-  transition: transform 240ms var(--ease-ios), opacity 170ms var(--ease-ios);
+  transition: transform var(--motion-duration-progress-done) var(--motion-easing-standard), opacity var(--motion-duration-normal) var(--motion-easing-standard);
 }
 
 .jm-sidebar-drawer[data-state='expanded'] .jm-sidebar-mode[data-mode='collapsed'] :is(svg, img) {
@@ -586,10 +596,10 @@ body {
 
 [data-slot='panel'] {
   transition:
-    background-color 160ms var(--ease-ios),
-    border-color 160ms var(--ease-ios),
-    box-shadow 160ms var(--ease-ios),
-    color 160ms var(--ease-ios);
+    background-color var(--motion-duration-normal) var(--motion-easing-standard),
+    border-color var(--motion-duration-normal) var(--motion-easing-standard),
+    box-shadow var(--motion-duration-normal) var(--motion-easing-standard),
+    color var(--motion-duration-normal) var(--motion-easing-standard);
 }
 
 .jm-console-header {
@@ -597,7 +607,7 @@ body {
     linear-gradient(90deg, color-mix(in srgb, var(--card) 94%, transparent), color-mix(in srgb, var(--card) 84%, transparent)),
     color-mix(in srgb, var(--card) 92%, transparent);
   box-shadow: 0 1px 0 color-mix(in srgb, var(--border) 82%, transparent), 0 14px 28px -30px rgb(var(--shadow-color) / 0.35);
-  transition: background-color 180ms var(--ease-ios), box-shadow 180ms var(--ease-ios);
+  transition: background-color var(--motion-duration-normal) var(--motion-easing-standard), box-shadow var(--motion-duration-normal) var(--motion-easing-standard);
 }
 
 .jm-console-main {
@@ -608,11 +618,11 @@ body {
   width: 100%;
   min-width: 0;
   max-width: none;
-  animation: jm-page-in 180ms var(--ease-ios);
+  animation: jm-page-in var(--motion-duration-normal) var(--motion-easing-standard);
 }
 
 .jm-route-transition {
-  animation: jm-route-enter 360ms var(--ease-ios);
+  animation: jm-route-enter var(--motion-duration-route) var(--motion-easing-standard);
   transform-origin: top center;
   will-change: opacity, transform;
 }
@@ -651,7 +661,7 @@ body {
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--card) 90%, transparent);
   box-shadow: var(--shadow-soft);
-  transition: background-color 160ms var(--ease-ios), border-color 160ms var(--ease-ios), box-shadow 160ms var(--ease-ios);
+  transition: background-color var(--motion-duration-normal) var(--motion-easing-standard), border-color var(--motion-duration-normal) var(--motion-easing-standard), box-shadow var(--motion-duration-normal) var(--motion-easing-standard);
 }
 
 .jm-toolbar-surface:hover {
@@ -665,12 +675,12 @@ body {
 }
 
 .jm-mobile-nav-panel[data-state='open'] {
-  animation: jm-panel-up 180ms var(--ease-ios);
+  animation: jm-panel-up var(--motion-duration-normal) var(--motion-easing-standard);
   opacity: 1;
 }
 
 .jm-mobile-nav-panel[data-state='closed'] {
-  animation: jm-panel-down 160ms var(--ease-ios);
+  animation: jm-panel-down var(--motion-duration-normal) var(--motion-easing-standard);
   opacity: 0;
   pointer-events: none;
 }

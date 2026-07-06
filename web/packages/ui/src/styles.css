@@ -40,7 +40,17 @@
   --radius-xl: calc(var(--radius) + 4px);
   --shadow-soft: 0 1px 2px rgb(var(--shadow-color) / 0.05), 0 1px 3px -1px rgb(var(--shadow-color) / 0.05);
   --shadow-lift: 0 6px 16px -5px rgb(var(--shadow-color) / 0.14), 0 2px 6px -3px rgb(var(--shadow-color) / 0.08);
-  --ease-ios: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-duration-fast: 120ms;
+  --motion-duration-normal: 180ms;
+  --motion-duration-slow: 320ms;
+  --motion-duration-route: 360ms;
+  --motion-duration-progress-route: 720ms;
+  --motion-duration-progress-busy: 1100ms;
+  --motion-duration-progress-done: 240ms;
+  --motion-delay-sidebar-mode: 80ms;
+  --motion-easing-standard: cubic-bezier(0.16, 1, 0.3, 1);
+  --motion-easing-emphasized: ease-out;
+  --ease-ios: var(--motion-easing-standard);
 }
 
 :root {
@@ -133,6 +143,7 @@ body {
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--card) 90%, transparent);
   box-shadow: var(--shadow-soft);
+  transition: background-color var(--motion-duration-normal) var(--motion-easing-standard), border-color var(--motion-duration-normal) var(--motion-easing-standard), box-shadow var(--motion-duration-normal) var(--motion-easing-standard);
 }
 
 .dark .jm-toolbar-surface {

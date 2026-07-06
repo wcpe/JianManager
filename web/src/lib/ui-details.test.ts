@@ -35,6 +35,10 @@ function read(rel: string): string {
   return readFileSync(resolveSourcePath(rel), 'utf8')
 }
 
+function readUiStyles(): string {
+  return readFileSync(path.join(rootDir, 'packages/ui/src/styles.css'), 'utf8')
+}
+
 /** 既参与 hover 抬升、又需在 FR-176 去位移的卡片/行原语。 */
 const HOVER_CARD_FILES = [
   'components/ui/panel.tsx',
@@ -110,5 +114,34 @@ describe('FR-176 ③ 全局主题化细滚动条', () => {
   it('保留既有 .scrollbar-none（隐藏滚动能力不受影响）', () => {
     expect(css).toMatch(/\.scrollbar-none/)
     expect(css).toMatch(/\.scrollbar-none::-webkit-scrollbar/)
+  })
+})
+
+describe('FR-244 全局动画 token 化', () => {
+  const appCss = read('index.css')
+  const uiCss = readUiStyles()
+
+  it('应用与组件包共同暴露 motion duration 与 easing token', () => {
+    for (const css of [appCss, uiCss]) {
+      expect(css).toMatch(/--motion-duration-fast:\s*120ms/)
+      expect(css).toMatch(/--motion-duration-normal:\s*180ms/)
+      expect(css).toMatch(/--motion-duration-slow:\s*320ms/)
+      expect(css).toMatch(/--motion-easing-standard:\s*cubic-bezier\(0\.16,\s*1,\s*0\.3,\s*1\)/)
+      expect(css).toMatch(/--motion-easing-emphasized:\s*ease-out/)
+      expect(css).toMatch(/--ease-ios:\s*var\(--motion-easing-standard\)/)
+    }
+  })
+
+  it('侧栏、顶部进度条、路由过渡使用统一 token', () => {
+    expect(appCss).toMatch(/--sidebar-motion-duration:\s*var\(--motion-duration-slow\)/)
+    expect(appCss).toMatch(/\.jm-top-loading-track[\s\S]*transition:\s*opacity var\(--motion-duration-fast\) var\(--motion-easing-standard\)/)
+    expect(appCss).toMatch(/animation:\s*top-progress var\(--motion-duration-progress-route\) var\(--motion-easing-emphasized\) forwards/)
+    expect(appCss).toMatch(/\.jm-route-transition[\s\S]*animation:\s*jm-route-enter var\(--motion-duration-route\) var\(--motion-easing-standard\)/)
+  })
+
+  it('抽屉和工具条交互不再直接写散落毫秒值', () => {
+    expect(appCss).toMatch(/\.jm-sidebar-group-content[\s\S]*grid-template-rows var\(--motion-duration-normal\)/)
+    expect(appCss).toMatch(/\.jm-mobile-nav-panel\[data-state='open'\][\s\S]*animation:\s*jm-panel-up var\(--motion-duration-normal\) var\(--motion-easing-standard\)/)
+    expect(appCss).toMatch(/\.jm-toolbar-surface[\s\S]*transition:\s*background-color var\(--motion-duration-normal\) var\(--motion-easing-standard\)/)
   })
 })
