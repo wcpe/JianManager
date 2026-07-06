@@ -130,7 +130,7 @@ func (s *BusinessEventService) applyEconomy(nodeUUID string, evt *workerpb.Plugi
 		return err
 	}
 	// 结构化镜像 upsert（node→zone 维度，seq 单调推进，乱序/旧事件不回退余额）。
-	return s.upsertMirror(nodeUUID, d, ledgerID, seq, currencyID, occurredAt)
+	return s.upsertMirror(nodeUUID, evt.InstanceUuid, d, ledgerID, seq, currencyID, occurredAt)
 }
 
 // appendLedger 追加经济变更审计行；按 ledgerId 去重（重发不重复留痕）。
@@ -162,10 +162,11 @@ func (s *BusinessEventService) appendLedger(
 // 聚合维度 (NodeUUID, ZoneID, PlayerName, Currency) 唯一——node→zone 确保跨区同名玩家独立镜像，不串味/不重复计数。
 // 用 OnConflict + WHERE 守卫保证单调性；首见组合直接插入。
 func (s *BusinessEventService) upsertMirror(
-	nodeUUID string, d economyEventData, ledgerID, seq int64, currencyID int, occurredAt int64,
+	nodeUUID, instanceUUID string, d economyEventData, ledgerID, seq int64, currencyID int, occurredAt int64,
 ) error {
 	row := &model.EconomyBalanceMirror{
 		NodeUUID:      nodeUUID,
+		InstanceUUID:  instanceUUID,
 		ZoneID:        d.ZoneID,
 		PlayerName:    d.PlayerName,
 		Currency:      d.Currency,
@@ -194,9 +195,10 @@ func (s *BusinessEventService) upsertMirror(
 
 // BusinessEventQuery 业务事件流查询条件（读端点）。
 type BusinessEventQuery struct {
-	Domain   string // 必填：按业务域过滤（economy…）
-	NodeUUID string // 可选：按来源节点过滤
-	Limit    int    // 取最近 N 条（默认/上限收敛见实现）
+	Domain        string   // 必填：按业务域过滤（economy…）
+	NodeUUID      string   // 可选：按来源节点过滤
+	InstanceUUIDs []string // nil 表示平台管理员不收敛；空切片表示无可见实例
+	Limit         int      // 取最近 N 条（默认/上限收敛见实现）
 }
 
 // ListBusinessEvents 按域倒序取最近业务事件（通用 envelope 视图，插件无关）。
@@ -208,6 +210,7 @@ func (s *BusinessEventService) ListBusinessEvents(q BusinessEventQuery) ([]model
 	if q.NodeUUID != "" {
 		tx = tx.Where("node_uuid = ?", q.NodeUUID)
 	}
+	tx = applyInstanceUUIDScope(tx, q.InstanceUUIDs)
 	var out []model.BusinessEvent
 	if err := tx.Order("id DESC").Limit(clampLimit(q.Limit)).Find(&out).Error; err != nil {
 		return nil, err
@@ -217,11 +220,12 @@ func (s *BusinessEventService) ListBusinessEvents(q BusinessEventQuery) ([]model
 
 // EconomyMirrorQuery 经济镜像查询条件。
 type EconomyMirrorQuery struct {
-	PlayerName string // 可选：按玩家名过滤（跨区会返回该玩家在各 node→zone 的多行）
-	Currency   string // 可选：按货币 identifier 过滤
-	NodeUUID   string // 可选：按节点过滤
-	ZoneID     string // 可选：按区过滤
-	Limit      int
+	PlayerName    string   // 可选：按玩家名过滤（跨区会返回该玩家在各 node→zone 的多行）
+	Currency      string   // 可选：按货币 identifier 过滤
+	NodeUUID      string   // 可选：按节点过滤
+	ZoneID        string   // 可选：按区过滤
+	InstanceUUIDs []string // nil 表示平台管理员不收敛；空切片表示无可见实例
+	Limit         int
 }
 
 // ListEconomyMirror 查经济镜像最新余额（按 node→zone 维度逐行，跨区同名玩家分行不混）。
@@ -239,6 +243,7 @@ func (s *BusinessEventService) ListEconomyMirror(q EconomyMirrorQuery) ([]model.
 	if q.ZoneID != "" {
 		tx = tx.Where("zone_id = ?", q.ZoneID)
 	}
+	tx = applyInstanceUUIDScope(tx, q.InstanceUUIDs)
 	var out []model.EconomyBalanceMirror
 	if err := tx.Order("player_name ASC, currency ASC, node_uuid ASC, zone_id ASC").
 		Limit(clampLimit(q.Limit)).Find(&out).Error; err != nil {
@@ -263,6 +268,11 @@ type EconomyAggregateRow struct {
 //
 // 返回逐 (node, zone) 行而非合计：跨区是否相加由调用方/前端按业务语义决定（见 [EconomyAggregateRow]）。
 func (s *BusinessEventService) AggregateEconomyByZone(playerName, currency string) ([]EconomyAggregateRow, error) {
+	return s.AggregateEconomyByZoneScoped(playerName, currency, nil)
+}
+
+// AggregateEconomyByZoneScoped 按实例可见范围取跨区余额明细。
+func (s *BusinessEventService) AggregateEconomyByZoneScoped(playerName, currency string, instanceUUIDs []string) ([]EconomyAggregateRow, error) {
 	if strings.TrimSpace(playerName) == "" {
 		return nil, errors.New("playerName 必填")
 	}
@@ -270,6 +280,7 @@ func (s *BusinessEventService) AggregateEconomyByZone(playerName, currency strin
 	if currency != "" {
 		tx = tx.Where("currency = ?", currency)
 	}
+	tx = applyInstanceUUIDScope(tx, instanceUUIDs)
 	var out []EconomyAggregateRow
 	if err := tx.Select("player_name", "currency", "node_uuid", "zone_id", "balance").
 		Order("currency ASC, node_uuid ASC, zone_id ASC").Scan(&out).Error; err != nil {
@@ -280,10 +291,11 @@ func (s *BusinessEventService) AggregateEconomyByZone(playerName, currency strin
 
 // EconomyLeaderboardQuery 经济排行查询条件（FR-123，旁路实现：mce 无 leaderboard API）。
 type EconomyLeaderboardQuery struct {
-	Currency string // 必填：排行锚定单一货币（跨货币余额不可比）
-	ZoneID   string // 可选：限定某区
-	NodeUUID string // 可选：限定某节点
-	Limit    int    // Top-N，复用 clampLimit（默认 100，上限 500）
+	Currency      string   // 必填：排行锚定单一货币（跨货币余额不可比）
+	ZoneID        string   // 可选：限定某区
+	NodeUUID      string   // 可选：限定某节点
+	InstanceUUIDs []string // nil 表示平台管理员不收敛；空切片表示无可见实例
+	Limit         int      // Top-N，复用 clampLimit（默认 100，上限 500）
 }
 
 // EconomyLeaderboardRow 排行一行：某 (node, zone) 内某玩家某货币的余额 + 名次。
@@ -315,6 +327,7 @@ func (s *BusinessEventService) LeaderboardEconomy(q EconomyLeaderboardQuery) ([]
 	if q.NodeUUID != "" {
 		tx = tx.Where("node_uuid = ?", q.NodeUUID)
 	}
+	tx = applyInstanceUUIDScope(tx, q.InstanceUUIDs)
 	var rows []EconomyLeaderboardRow
 	if err := tx.Select("player_name", "currency", "node_uuid", "zone_id", "balance").
 		Order(balanceNumericDescExpr(s.db) + ", player_name ASC").
@@ -334,6 +347,28 @@ func balanceNumericDescExpr(db *gorm.DB) string {
 		return "CAST(balance AS DECIMAL(65,18)) DESC"
 	}
 	return "CAST(balance AS REAL) DESC"
+}
+
+// InstanceUUIDsByIDs 将授权层给出的实例 ID 集合转换为业务事件表使用的 UUID 集合。
+func (s *BusinessEventService) InstanceUUIDsByIDs(ids []uint) ([]string, error) {
+	if len(ids) == 0 {
+		return []string{}, nil
+	}
+	var uuids []string
+	if err := s.db.Model(&model.Instance{}).Where("id IN ?", ids).Pluck("uuid", &uuids).Error; err != nil {
+		return nil, err
+	}
+	return uuids, nil
+}
+
+func applyInstanceUUIDScope(tx *gorm.DB, instanceUUIDs []string) *gorm.DB {
+	if instanceUUIDs == nil {
+		return tx
+	}
+	if len(instanceUUIDs) == 0 {
+		return tx.Where("1 = 0")
+	}
+	return tx.Where("instance_uuid IN ?", instanceUUIDs)
 }
 
 // clampLimit 收敛查询条数到 [1, businessEventMaxLimit]，缺省取 businessEventDefaultLimit。

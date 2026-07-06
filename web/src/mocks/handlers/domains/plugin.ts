@@ -28,6 +28,9 @@ interface PluginRow {
   enabled: boolean
   size: number
   modTime: number
+  version?: string
+  author?: string
+  dependencies?: string[]
 }
 
 /** 批量部署只需要制品库资产的插件子集字段。 */
@@ -52,6 +55,12 @@ interface PluginBatchDeployMockRequest {
   assetIds?: number[]
   ids?: number[]
   filter?: Partial<Pick<PluginTargetInstance, 'nodeId' | 'role' | 'status'>> & { q?: string }
+  target?: {
+    ids?: number[]
+    filter?: Partial<Pick<PluginTargetInstance, 'nodeId' | 'role' | 'status'>> & { q?: string }
+  }
+  destination?: string
+  overwrite?: boolean
 }
 
 /** 封禁记录行（匹配 @/api/players.ts BanRecord）。 */
@@ -106,12 +115,26 @@ interface BusinessEventEntity {
   createdAt: string
 }
 
+interface InventorySnapshotEntity {
+  id: number
+  instanceId: number
+  player: string
+  exists: boolean
+  online: boolean
+  dataVersion: number
+  inventory: Array<Record<string, unknown>>
+  enderChest: Array<Record<string, unknown>>
+  basicAttrs: Record<string, unknown>
+}
+
 // ======================== 集合声明（唯一带 seedFn 处） ========================
 
 const plugins = db<PluginRow>('plugins', () => [
-  { id: 1, instanceId: 1, name: 'EssentialsX.jar', dir: 'plugins', enabled: true, size: 1_048_576, modTime: 1_710_000_000 },
-  { id: 2, instanceId: 1, name: 'WorldEdit.jar', dir: 'plugins', enabled: true, size: 2_097_152, modTime: 1_710_100_000 },
-  { id: 3, instanceId: 1, name: 'OldMod.jar', dir: 'mods', enabled: false, size: 524_288, modTime: 1_709_000_000 },
+  { id: 1, instanceId: 1, name: 'EssentialsX.jar', dir: 'plugins', enabled: true, size: 1_048_576, modTime: 1_710_000_000, version: '2.21.0', author: 'EssentialsX' },
+  { id: 2, instanceId: 1, name: 'WorldEdit.jar', dir: 'plugins', enabled: true, size: 2_097_152, modTime: 1_710_100_000, version: '7.3.0', author: 'EngineHub' },
+  { id: 3, instanceId: 1, name: 'OldMod.jar', dir: 'mods', enabled: false, size: 524_288, modTime: 1_709_000_000, version: '1.0.0', dependencies: ['fabric-api'] },
+  { id: 4, instanceId: 1, name: 'HighResPack.zip', dir: 'resourcepacks', enabled: true, size: 12_582_912, modTime: 1_710_200_000, version: '1.20.4', author: 'Jian' },
+  { id: 5, instanceId: 1, name: 'SpawnTweaks.zip', dir: 'datapacks', enabled: true, size: 262_144, modTime: 1_710_300_000, version: '3', author: 'ops' },
 ])
 
 const bans = db<BanRow>('bans', () => [
@@ -208,6 +231,26 @@ const businessEvents = db<BusinessEventEntity>('businessEvents', () => [
   },
 ])
 
+const inventorySnapshots = db<InventorySnapshotEntity>('inventorySnapshots', () => [
+  {
+    id: 1,
+    instanceId: 1,
+    player: 'Steve',
+    exists: true,
+    online: false,
+    dataVersion: 42,
+    inventory: [
+      { slot: 0, material: 'DIAMOND_SWORD', amount: 1, displayName: '锋利之刃', nbtBase64: 'mock-sword' },
+      { slot: 8, material: 'COOKED_BEEF', amount: 32, nbtBase64: 'mock-beef' },
+      { slot: 12, material: 'TORCH', amount: 64, nbtBase64: 'mock-torch' },
+    ],
+    enderChest: [
+      { slot: 0, material: 'ENDER_PEARL', amount: 16, nbtBase64: 'mock-pearl' },
+    ],
+    basicAttrs: { health: 20, foodLevel: 18, xpLevel: 30, xpProgress: 0.5, xpTotal: 1395, gameMode: 'SURVIVAL' },
+  },
+])
+
 // ======================== 辅助：业务能力清单 ========================
 
 /** 默认业务能力清单：经济域含只读 balance / leaderboard + 写 transfer / deposit / withdraw（贴合 BusinessSegment 渲染）。 */
@@ -223,16 +266,23 @@ function defaultManifest() {
           { action: 'withdraw', args: ['player', 'currency', 'amount'], readOnly: false },
         ],
       },
+      inventory: {
+        actions: [
+          { action: 'view', args: ['player'], readOnly: true },
+          { action: 'writeBasicAttrs', args: ['player', 'base', 'edited'], readOnly: false },
+        ],
+      },
     },
   }
 }
 
 function selectBatchTargets(body: PluginBatchDeployMockRequest) {
   const rows = db<PluginTargetInstance>('instances').list()
-  if (body.ids && body.ids.length > 0) {
-    return rows.filter((inst) => body.ids?.includes(inst.id))
+  const ids = body.ids ?? body.target?.ids
+  if (ids && ids.length > 0) {
+    return rows.filter((inst) => ids.includes(inst.id))
   }
-  const filter = body.filter
+  const filter = body.filter ?? body.target?.filter
   if (!filter) return []
   return rows.filter((inst) => {
     if (filter.nodeId !== undefined && inst.nodeId !== Number(filter.nodeId)) return false
@@ -243,70 +293,66 @@ function selectBatchTargets(body: PluginBatchDeployMockRequest) {
   })
 }
 
+function asText(value: unknown): string {
+  return typeof value === 'string' ? value : ''
+}
+
+function mockPluginAssetName(assetId: number): string {
+  const names: Record<number, string> = {
+    2: 'ViaVersion-5.0.1.jar',
+  }
+  return names[assetId] ?? `plugin-${assetId}.jar`
+}
+
+const MANAGED_PLUGIN_DIRS = ['plugins', 'mods', 'resourcepacks', 'datapacks'] as const
+
+type ManagedPluginDir = (typeof MANAGED_PLUGIN_DIRS)[number]
+
+const PLUGIN_DIR_EXT: Record<ManagedPluginDir, string> = {
+  plugins: '.jar',
+  mods: '.jar',
+  resourcepacks: '.zip',
+  datapacks: '.zip',
+}
+
+function isManagedPluginDir(value: string): value is ManagedPluginDir {
+  return (MANAGED_PLUGIN_DIRS as readonly string[]).includes(value)
+}
+
+function normalizePluginDir(value: FormDataEntryValue | string | null): ManagedPluginDir {
+  const dir = typeof value === 'string' ? value : ''
+  return isManagedPluginDir(dir) ? dir : 'plugins'
+}
+
+function pluginUploadName(file: FormDataEntryValue | null, dir: ManagedPluginDir): string {
+  if (typeof file === 'string' && file) return file
+  const fileLike = file as { name?: unknown } | null
+  if (typeof fileLike?.name === 'string' && fileLike.name) return fileLike.name
+  return `uploaded-${plugins.list().length + 1}${PLUGIN_DIR_EXT[dir]}`
+}
+
+function pluginUploadSize(file: FormDataEntryValue | null): number {
+  const fileLike = file as { size?: unknown } | null
+  return typeof fileLike?.size === 'number' ? fileLike.size : 0
+}
+
+function isValidPluginUploadName(dir: ManagedPluginDir, name: string): boolean {
+  return (
+    name !== '' &&
+    !name.includes('/') &&
+    !name.includes('\\') &&
+    !name.includes('..') &&
+    !name.endsWith('.disabled') &&
+    name.toLowerCase().endsWith(PLUGIN_DIR_EXT[dir])
+  )
+}
+
 // ======================== Handlers ========================
 
 export const handlers = [
   // ---------- 插件 / 模组 ----------
 
-  // 从制品库选择 type=plugin 资产，批量部署到多个实例 plugins/ 目录（FR-053）。
-  domainRoute('post', '/plugins/batch-deploy', async (info) => {
-    const denied = requireAuth(info)
-    if (denied) return denied
-    const body = (await info.request.json().catch(() => ({}))) as PluginBatchDeployMockRequest
-    const assetIds = body.assetIds ?? []
-    if (assetIds.length === 0) {
-      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '请选择插件制品' }, { status: 400 })
-    }
-    if ((body.ids?.length ?? 0) > 0 && body.filter) {
-      return HttpResponse.json({ error: 'INVALID_REQUEST', message: 'ids 与 filter 只能指定一个' }, { status: 400 })
-    }
-    if ((body.ids?.length ?? 0) === 0 && !body.filter) {
-      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '请选择目标实例' }, { status: 400 })
-    }
-
-    const assets = db<PluginAssetRow>('assets')
-    const selectedAssets = assetIds.map((id) => assets.get(id))
-    if (selectedAssets.some((asset) => !asset)) {
-      return HttpResponse.json({ error: 'NOT_FOUND', message: '插件制品不存在' }, { status: 404 })
-    }
-    if (selectedAssets.some((asset) => asset?.type !== 'plugin')) {
-      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '只能部署插件类型制品' }, { status: 400 })
-    }
-
-    const targets = selectBatchTargets(body)
-    const skipped = Math.max((body.ids?.length ?? targets.length) - targets.length, 0)
-    if (targets.length === 0) {
-      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '没有可部署的目标实例' }, { status: 400 })
-    }
-
-    for (const inst of targets) {
-      for (const asset of selectedAssets) {
-        if (!asset) continue
-        const name = asset.filename || asset.name
-        const exists = plugins.find((p) => p.instanceId === inst.id && p.dir === 'plugins' && p.name === name)
-        if (!exists) {
-          plugins.insert({
-            instanceId: inst.id,
-            name,
-            dir: 'plugins',
-            enabled: true,
-            size: asset.size,
-            modTime: Math.floor(Date.now() / 1000),
-          })
-        }
-      }
-    }
-
-    return HttpResponse.json({
-      total: targets.length + skipped,
-      success: targets.length,
-      failed: 0,
-      skipped,
-      results: targets.map((inst) => ({ id: inst.id, name: inst.name, skipped: false })),
-    })
-  }),
-
-  // 列出某实例 plugins/ 与 mods/ 插件（按 instanceId 过滤）。
+  // 列出某实例 plugins/mods/resourcepacks/datapacks 制品（按 instanceId 过滤）。
   domainRoute('get', '/instances/:id/plugins', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -321,18 +367,34 @@ export const handlers = [
     const id = Number(info.params.id)
     const form = await info.request.formData()
     const file = form.get('file')
-    const dir = (form.get('dir') as string) || 'plugins'
-    const name =
-      file instanceof File && file.name ? file.name : `uploaded-${plugins.list().length + 1}.jar`
+    const dir = normalizePluginDir(form.get('dir'))
+    const overwrite = form.get('overwrite') === 'true'
+    const name = pluginUploadName(file, dir)
+    const size = pluginUploadSize(file)
+    if (!isValidPluginUploadName(dir, name)) {
+      return HttpResponse.json({ error: 'INVALID_NAME', message: '非法的插件文件名' }, { status: 400 })
+    }
+    const existing = plugins.find((p) => p.instanceId === id && p.dir === dir && p.name === name)
+    if (existing && !overwrite) {
+      return HttpResponse.json({ error: 'FILE_EXISTS', message: '插件文件已存在' }, { status: 409 })
+    }
+    if (existing && overwrite) {
+      plugins.update(existing.id, {
+        enabled: true,
+        size: size || existing.size,
+        modTime: Math.floor(Date.now() / 1000),
+      })
+      return HttpResponse.json({ name, dir, deployed: true, overwritten: true }, { status: 201 })
+    }
     const row = plugins.insert({
       instanceId: id,
       name,
       dir,
       enabled: true,
-      size: file instanceof File ? file.size : 0,
+      size,
       modTime: Math.floor(Date.now() / 1000),
     })
-    return HttpResponse.json({ name: row.name, dir: row.dir, deployed: true })
+    return HttpResponse.json({ name: row.name, dir: row.dir, deployed: true }, { status: 201 })
   }),
 
   // 删除插件：从列表移除（写操作联动）。name 在 URL，dir 在 query。
@@ -341,7 +403,7 @@ export const handlers = [
     if (denied) return denied
     const id = Number(info.params.id)
     const name = decodeURIComponent(String(info.params.name))
-    const dir = new URL(info.request.url).searchParams.get('dir') || 'plugins'
+    const dir = normalizePluginDir(new URL(info.request.url).searchParams.get('dir'))
     const target = plugins.find((p) => p.instanceId === id && p.name === name && p.dir === dir)
     if (target) plugins.remove(target.id)
     return HttpResponse.json({ deleted: true })
@@ -353,13 +415,94 @@ export const handlers = [
     if (denied) return denied
     const id = Number(info.params.id)
     const name = decodeURIComponent(String(info.params.name))
-    const dir = new URL(info.request.url).searchParams.get('dir') || 'plugins'
+    const dir = normalizePluginDir(new URL(info.request.url).searchParams.get('dir'))
     const target = plugins.find((p) => p.instanceId === id && p.name === name && p.dir === dir)
     if (!target) {
       return HttpResponse.json({ error: 'NOT_FOUND', message: '插件不存在' }, { status: 404 })
     }
     plugins.update(target.id, { enabled: !target.enabled })
     return HttpResponse.json({ enabled: !target.enabled })
+  }),
+
+  // 批量部署：从制品库选择插件资产，写入多个目标实例的 plugins/ 或 mods/。
+  domainRoute('post', '/plugins/batch-deploy', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json().catch(() => ({}))) as PluginBatchDeployMockRequest
+    const assetIds = body.assetIds ?? []
+    const ids = body.ids ?? body.target?.ids ?? []
+    const filter = body.filter ?? body.target?.filter
+    if (assetIds.length === 0) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '请选择插件制品' }, { status: 400 })
+    }
+    if (ids.length > 0 && filter) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: 'ids 与 filter 只能指定一个' }, { status: 400 })
+    }
+    if (ids.length === 0 && !filter) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '请选择目标实例' }, { status: 400 })
+    }
+
+    const assets = db<PluginAssetRow>('assets')
+    const selectedAssets = assetIds.map((id) => assets.get(id))
+    if (selectedAssets.some((asset) => !asset)) {
+      return HttpResponse.json({ error: 'NOT_FOUND', message: '插件制品不存在' }, { status: 404 })
+    }
+    if (selectedAssets.some((asset) => asset?.type !== 'plugin')) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '只能部署插件类型制品' }, { status: 400 })
+    }
+
+    const targets = selectBatchTargets(body)
+    const skipped = Math.max(ids.length - targets.length, 0)
+    if (targets.length === 0) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '没有可部署的目标实例' }, { status: 400 })
+    }
+
+    const dir = normalizePluginDir(body.destination ?? 'plugins')
+    const results: Array<{ id: number; name: string; skipped: boolean; reason?: string; error?: string }> = []
+    let success = 0
+    let failed = 0
+    for (const inst of targets) {
+      const errors: string[] = []
+      for (const asset of selectedAssets) {
+        if (!asset) continue
+        const name = asset.filename || asset.name || mockPluginAssetName(asset.id)
+        const existing = plugins.find((p) => p.instanceId === inst.id && p.dir === dir && p.name === name)
+        if (existing && !body.overwrite) {
+          errors.push(`${name} 已存在`)
+          continue
+        }
+        if (existing) {
+          plugins.update(existing.id, { enabled: true, modTime: Math.floor(Date.now() / 1000) })
+        } else {
+          plugins.insert({
+            instanceId: inst.id,
+            name,
+            dir,
+            enabled: true,
+            size: asset.size,
+            modTime: Math.floor(Date.now() / 1000),
+          })
+        }
+      }
+      if (errors.length > 0) {
+        failed += 1
+        results.push({ id: inst.id, name: inst.name, skipped: false, error: errors.join('；') })
+      } else {
+        success += 1
+        results.push({ id: inst.id, name: inst.name, skipped: false })
+      }
+    }
+
+    return HttpResponse.json({
+      total: targets.length + skipped,
+      success,
+      failed,
+      skipped,
+      results,
+      requestedInstances: targets.length + skipped,
+      requestedAssets: assetIds.length,
+      succeeded: success,
+    })
   }),
 
   // ---------- 探针在线更新 ----------
@@ -597,7 +740,7 @@ export const handlers = [
       write?: boolean
       reason?: string
     }
-    let payload: Record<string, string> = {}
+    let payload: Record<string, unknown>
     try {
       payload = JSON.parse(body.payload || '{}')
     } catch {
@@ -606,22 +749,52 @@ export const handlers = [
 
     let output: unknown = { ok: true, action: body.action }
 
-    if (body.domain === 'economy' && body.action === 'balance') {
+    if (body.domain === 'inventory' && body.action === 'view') {
+      const player = asText(payload.player)
+      const row = inventorySnapshots.find((r) => r.instanceId === id && r.player === player)
+      output = row
+        ? {
+            exists: row.exists,
+            player: row.player,
+            online: row.online,
+            dataVersion: row.dataVersion,
+            inventory: row.inventory,
+            enderChest: row.enderChest,
+            basicAttrs: row.basicAttrs,
+          }
+        : { exists: false, player, online: false, dataVersion: 0, inventory: [], enderChest: [], basicAttrs: null }
+    } else if (body.write && body.domain === 'inventory' && body.action === 'writeBasicAttrs') {
+      const player = asText(payload.player)
+      const row = inventorySnapshots.find((r) => r.instanceId === id && r.player === player)
+      const edited = payload.edited as { basicAttrs?: Record<string, unknown> } | undefined
+      const basicAttrs = edited?.basicAttrs
+      if (row && basicAttrs) {
+        const nextVersion = row.dataVersion + 1
+        inventorySnapshots.update(row.id, { basicAttrs, dataVersion: nextVersion })
+        output = { success: true, online: row.online, newDataVersion: nextVersion, errorCode: '' }
+      } else {
+        output = { success: false, online: false, newDataVersion: 0, errorCode: 'PLAYER_NOT_FOUND' }
+      }
+    } else if (body.domain === 'economy' && body.action === 'balance') {
+      const player = asText(payload.player)
+      const currency = asText(payload.currency)
       const row = economyMirror.find(
-        (r) => r.playerName === payload.player && r.currency === payload.currency,
+        (r) => r.playerName === player && r.currency === currency,
       )
-      output = { player: payload.player, currency: payload.currency, balance: row?.balance ?? '0' }
+      output = { player, currency, balance: row?.balance ?? '0' }
     } else if (body.write && body.domain === 'economy') {
       // 写动作联动：deposit 加额、withdraw 扣额（按字符串数值简化处理，mock 不追求 BigDecimal 精度）。
-      const target = body.action === 'transfer' ? payload.to : payload.player
-      const row = economyMirror.find((r) => r.playerName === target && r.currency === payload.currency)
+      const target = body.action === 'transfer' ? asText(payload.to) : asText(payload.player)
+      const currency = asText(payload.currency)
+      const amount = asText(payload.amount)
+      const row = economyMirror.find((r) => r.playerName === target && r.currency === currency)
       if (row) {
-        const delta = body.action === 'withdraw' ? -Number(payload.amount) : Number(payload.amount)
+        const delta = body.action === 'withdraw' ? -Number(amount) : Number(amount)
         const next = (Number(row.balance) + delta).toFixed(2)
         economyMirror.update(row.id, { balance: next })
-        output = { player: target, currency: payload.currency, balance: next }
+        output = { player: target, currency, balance: next }
       } else {
-        output = { player: target, currency: payload.currency, applied: true }
+        output = { player: target, currency, applied: true }
       }
     }
 

@@ -274,6 +274,28 @@ func TestIngest_BadEconomyDataStillEnvelopes(t *testing.T) {
 	assert.Equal(t, int64(0), mirrorCount, "坏 data 不落结构化镜像")
 }
 
+// TestIngest_InventoryEventsDedup 落背包追踪事件通用 envelope，并按 domain+dedupKey 去重。
+func TestIngest_InventoryEventsDedup(t *testing.T) {
+	db := newBusinessEventTestDB(t)
+	svc := NewBusinessEventService(db)
+	evt := &workerpb.PluginEvent{
+		InstanceUuid: "inst-1",
+		Type:         "DROP",
+		Domain:       "inventory",
+		DedupKey:     "player-1:DROP:1719000000000:1",
+		RawJson:      `{"domain":"inventory","event":"tracked_item_action","data":{"playerUuid":"player-1","action":"DROP"}}`,
+		Timestamp:    1_719_000_000_000,
+	}
+	svc.Ingest("node-1", evt)
+	svc.Ingest("node-1", evt)
+
+	events, err := svc.ListBusinessEvents(BusinessEventQuery{Domain: "inventory"})
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	assert.Equal(t, "DROP", events[0].Action)
+	assert.Equal(t, evt.DedupKey, events[0].DedupKey)
+}
+
 // TestListBusinessEvents 按域过滤倒序取最近事件。
 func TestListBusinessEvents(t *testing.T) {
 	db := newBusinessEventTestDB(t)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -118,8 +119,33 @@ func (h *BusinessHandler) recordWriteAudit(c *gin.Context, instanceID uint, req 
 		"reason":      req.Reason,
 		"available":   res.Available,
 	}
+	if req.Domain == "inventory" && req.Action == "writeBasicAttrs" {
+		for k, v := range inventoryWriteAuditDetail(req.Payload) {
+			detail[k] = v
+		}
+	}
 	raw, _ := json.Marshal(detail)
 	_ = h.audit.Record(getUserID(c), "business.write", "instance", strconv.FormatUint(uint64(instanceID), 10), string(raw), c.ClientIP())
+}
+
+func inventoryWriteAuditDetail(payload string) map[string]any {
+	var body struct {
+		Player string `json:"player"`
+		Edited struct {
+			BasicAttrs map[string]any `json:"basicAttrs"`
+		} `json:"edited"`
+	}
+	if err := json.Unmarshal([]byte(payload), &body); err != nil {
+		return nil
+	}
+	out := map[string]any{"player": body.Player}
+	fields := make([]string, 0, len(body.Edited.BasicAttrs))
+	for k := range body.Edited.BasicAttrs {
+		fields = append(fields, k)
+	}
+	sort.Strings(fields)
+	out["fields"] = fields
+	return out
 }
 
 // getUserID 取当前操作用户 ID。

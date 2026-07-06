@@ -1,13 +1,23 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
-import { Backpack, Heart, Drumstick, Sparkles, Gamepad2, Loader2, RefreshCw, Search, WifiOff } from 'lucide-react'
+import { Backpack, Heart, Drumstick, Sparkles, Gamepad2, Loader2, RefreshCw, Search, ShieldAlert, WifiOff } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
 import { Input } from '@jianmanager/ui/components/input'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@jianmanager/ui/components/tabs'
 import { cn } from '@jianmanager/ui'
+import DangerConfirm from '@/components/DangerConfirm'
+import type { BusinessResult } from '@/api/business'
 import { dispatchBusiness, fetchBusinessManifest } from '@/api/business'
 import {
   parseInventoryView,
@@ -15,6 +25,7 @@ import {
   INVENTORY_SLOTS,
   ENDER_CHEST_SLOTS,
   SLOTS_PER_ROW,
+  type BasicAttrs,
   type InventoryView,
   type RawItemSlot,
 } from './inventory-view'
@@ -24,7 +35,7 @@ import {
  *
  * 玩家背包快照查看：经 FR-125 探针背包 Provider 的只读 `inventory.view` 动作（dispatchBusiness 透传）取结构化视图，
  * 解析为格子视图（背包格子）按槽位渲染（设计 §3「背包格子」）。区别于经济页：背包域无金额、以 nbtBase64 为写真源。
- * 远程发/收物品（写动作）须二次确认，属 FR-127 后续；本段聚焦快照查看 + 物品清单展示 + 离线态如实呈现（不谎报）。
+ * 本轮只开放基础属性写：物品发放/回收等结构化写仍待 AllinInventorySync 导出可消费门面。
  * 背包能力不可用时优雅降级（复用 business manifest 发现 inventory 域）。视觉为靛蓝圆角范式（FR-163）。
  */
 interface InventorySegmentProps {
@@ -35,15 +46,17 @@ interface InventorySegmentProps {
 export default function InventorySegment({ instanceId }: InventorySegmentProps) {
   const { t } = useTranslation()
 
-  // 背包能力发现：复用 business manifest，检查是否存在 inventory 域（探针未连 / 无背包插件则降级）。
+  // 背包能力发现：复用 business manifest，按 action 精确判断可用能力（探针未连 / 无背包插件则降级）。
   const manifestQuery = useQuery({
     queryKey: ['business-manifest', instanceId],
     queryFn: () => fetchBusinessManifest(instanceId),
     enabled: !!instanceId,
   })
   const inventoryAvailable = useMemo(() => {
-    const m = manifestQuery.data
-    return !!m?.available && !!m.output?.domains?.inventory
+    return hasInventoryAction(manifestQuery.data?.output, 'view') && !!manifestQuery.data?.available
+  }, [manifestQuery.data])
+  const canWriteBasicAttrs = useMemo(() => {
+    return hasInventoryAction(manifestQuery.data?.output, 'writeBasicAttrs') && !!manifestQuery.data?.available
   }, [manifestQuery.data])
 
   const [player, setPlayer] = useState('')
@@ -140,16 +153,43 @@ export default function InventorySegment({ instanceId }: InventorySegmentProps) 
             </div>
           )}
 
-          {view && view.exists && <InventoryDetail view={view} />}
+          {view && view.exists && (
+            <InventoryDetail
+              instanceId={instanceId}
+              view={view}
+              canWriteBasicAttrs={canWriteBasicAttrs}
+              onWritten={() => void viewQuery.refetch()}
+            />
+          )}
         </div>
       )}
     </div>
   )
 }
 
+function hasInventoryAction(output: unknown, action: string): boolean {
+  if (typeof output !== 'object' || output === null) return false
+  const domains = (output as { domains?: Record<string, unknown> }).domains
+  const inventory = domains?.inventory
+  if (typeof inventory !== 'object' || inventory === null) return false
+  const actions = (inventory as { actions?: Array<{ action?: unknown }> }).actions
+  return Array.isArray(actions) && actions.some((item) => item.action === action)
+}
+
 /** 背包详情：在线态 + 基础属性卡 + 背包/末影箱格子视图。 */
-function InventoryDetail({ view }: { view: InventoryView }) {
+function InventoryDetail({
+  instanceId,
+  view,
+  canWriteBasicAttrs,
+  onWritten,
+}: {
+  instanceId: number
+  view: InventoryView
+  canWriteBasicAttrs: boolean
+  onWritten: () => void
+}) {
   const { t } = useTranslation()
+  const [editing, setEditing] = useState(false)
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto">
       {/* 在线态：在线即时生效；离线写下次登录生效（如实呈现，FR-126/127） */}
@@ -166,6 +206,17 @@ function InventoryDetail({ view }: { view: InventoryView }) {
           <span className="text-muted-foreground">
             {t('inventory.dataVersion')}: <span className="tabular-nums">{view.dataVersion}</span>
           </span>
+        )}
+        {view.basicAttrs && canWriteBasicAttrs && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto h-7 rounded-full px-3 text-xs"
+            onClick={() => setEditing(true)}
+          >
+            <ShieldAlert className="mr-1 size-3.5" />
+            {t('inventory.editBasicAttrs')}
+          </Button>
         )}
       </div>
 
@@ -198,6 +249,16 @@ function InventoryDetail({ view }: { view: InventoryView }) {
         </div>
       )}
 
+      {view.basicAttrs && canWriteBasicAttrs && (
+        <BasicAttrsDialog
+          open={editing}
+          instanceId={instanceId}
+          view={view}
+          onOpenChange={setEditing}
+          onWritten={onWritten}
+        />
+      )}
+
       {/* 背包 / 末影箱格子 */}
       <Tabs defaultValue="inventory" className="flex flex-col gap-3">
         <TabsList className="self-start rounded-full">
@@ -219,6 +280,224 @@ function InventoryDetail({ view }: { view: InventoryView }) {
       </Tabs>
     </div>
   )
+}
+
+interface PendingBasicAttrsWrite {
+  next: BasicAttrs
+  reason: string
+  operationId: string
+}
+
+/** 基础属性写入弹窗：表单在 Dialog 内，真实写动作再经 DangerConfirm 二次确认。 */
+function BasicAttrsDialog({
+  open,
+  instanceId,
+  view,
+  onOpenChange,
+  onWritten,
+}: {
+  open: boolean
+  instanceId: number
+  view: InventoryView
+  onOpenChange: (open: boolean) => void
+  onWritten: () => void
+}) {
+  const { t } = useTranslation()
+  const [form, setForm] = useState(() => attrsToForm(view.basicAttrs))
+  const [reason, setReason] = useState('')
+  const [pending, setPending] = useState<PendingBasicAttrsWrite | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [result, setResult] = useState<BusinessResult | null>(null)
+  const [error, setError] = useState('')
+  const openRef = useRef(false)
+  const playerRef = useRef(view.player)
+
+  useEffect(() => {
+    const shouldReset = open && (!openRef.current || playerRef.current !== view.player)
+    openRef.current = open
+    if (!shouldReset) return
+    playerRef.current = view.player
+    setForm(attrsToForm(view.basicAttrs))
+    setReason('')
+    setPending(null)
+    setResult(null)
+    setError('')
+  }, [open, view.basicAttrs, view.player])
+
+  const nextAttrs = useMemo(() => formToAttrs(form, view.basicAttrs), [form, view.basicAttrs])
+  const invalid = nextAttrs === null
+
+  const requestWrite = () => {
+    if (!nextAttrs) {
+      setError(t('inventory.basicAttrsInvalid'))
+      return
+    }
+    setError('')
+    setPending({
+      next: nextAttrs,
+      reason: reason.trim(),
+      operationId: crypto.randomUUID(),
+    })
+  }
+
+  const dispatchWrite = useCallback(
+    async (write: PendingBasicAttrsWrite) => {
+      setSubmitting(true)
+      setError('')
+      setResult(null)
+      try {
+        const payload = JSON.stringify({
+          player: view.player,
+          base: { dataVersion: view.dataVersion, basicAttrs: view.basicAttrs },
+          edited: { dataVersion: view.dataVersion, basicAttrs: write.next },
+        })
+        const res = await dispatchBusiness(instanceId, 'inventory', 'writeBasicAttrs', payload, {
+          write: true,
+          operationId: write.operationId,
+          reason: write.reason || undefined,
+        })
+        setResult(res)
+        if (res.available) onWritten()
+      } catch (err: unknown) {
+        const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+        setError(msg || t('inventory.writeFailed'))
+      } finally {
+        setSubmitting(false)
+      }
+    },
+    [instanceId, onWritten, t, view.basicAttrs, view.dataVersion, view.player],
+  )
+
+  return (
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className={cn(scrollableDialogContentClass, 'sm:max-w-lg')}>
+          <DialogHeader>
+            <DialogTitle>{t('inventory.editBasicAttrs')}</DialogTitle>
+          </DialogHeader>
+          <ScrollableDialogBody className="space-y-3">
+            <p className="text-xs text-muted-foreground">{t('inventory.basicAttrsWriteHint')}</p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <NumberField label={t('inventory.health')} value={form.health} onChange={(v) => setForm((f) => ({ ...f, health: v }))} />
+              <NumberField label={t('inventory.foodLevel')} value={form.foodLevel} onChange={(v) => setForm((f) => ({ ...f, foodLevel: v }))} />
+              <NumberField label={t('inventory.xpLevel')} value={form.xpLevel} onChange={(v) => setForm((f) => ({ ...f, xpLevel: v }))} />
+              <NumberField label={t('inventory.xpProgress')} value={form.xpProgress} onChange={(v) => setForm((f) => ({ ...f, xpProgress: v }))} />
+              <NumberField label={t('inventory.xpTotal')} value={form.xpTotal} onChange={(v) => setForm((f) => ({ ...f, xpTotal: v }))} />
+              <TextField label={t('inventory.gameMode')} value={form.gameMode} onChange={(v) => setForm((f) => ({ ...f, gameMode: v }))} />
+            </div>
+            <TextField
+              label={t('inventory.reason')}
+              value={reason}
+              onChange={setReason}
+              placeholder={t('inventory.reasonPlaceholder')}
+            />
+            {invalid && <p className="text-xs text-status-danger">{t('inventory.basicAttrsInvalid')}</p>}
+            {error && <p className="text-xs text-status-danger">{error}</p>}
+            {result && (
+              <div className="rounded-lg border bg-muted/30 p-3 text-xs">
+                {!result.available ? (
+                  <p className="text-status-danger">{result.error || t('inventory.writeFailed')}</p>
+                ) : (
+                  <p className="text-status-success">{resultMessage(result.output, t)}</p>
+                )}
+              </div>
+            )}
+          </ScrollableDialogBody>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button onClick={requestWrite} disabled={invalid || submitting}>
+              {submitting && <Loader2 className="mr-1 size-3.5 animate-spin" />}
+              {t('inventory.submitBasicAttrs')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <DangerConfirm
+        open={pending !== null}
+        title={t('inventory.confirmBasicAttrsTitle')}
+        description={t('inventory.confirmBasicAttrsDesc', { player: view.player })}
+        confirmLabel={t('inventory.confirmBasicAttrs')}
+        scope="group"
+        onConfirm={() => {
+          const write = pending
+          setPending(null)
+          if (write) void dispatchWrite(write)
+        }}
+        onCancel={() => setPending(null)}
+      />
+    </>
+  )
+}
+
+function NumberField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label className="flex flex-col gap-1 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <Input value={value} onChange={(e) => onChange(e.target.value)} inputMode="decimal" className="h-8 text-xs" />
+    </label>
+  )
+}
+
+function TextField({
+  label,
+  value,
+  onChange,
+  placeholder,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+}) {
+  return (
+    <label className="flex flex-col gap-1 text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className="h-8 text-xs" />
+    </label>
+  )
+}
+
+function attrsToForm(attrs: BasicAttrs | null) {
+  return {
+    health: String(attrs?.health ?? 0),
+    foodLevel: String(attrs?.foodLevel ?? 0),
+    xpLevel: String(attrs?.xpLevel ?? 0),
+    xpProgress: String(attrs?.xpProgress ?? 0),
+    xpTotal: String(attrs?.xpTotal ?? 0),
+    gameMode: attrs?.gameMode ?? '',
+  }
+}
+
+function formToAttrs(form: ReturnType<typeof attrsToForm>, fallback: BasicAttrs | null): BasicAttrs | null {
+  const health = toFiniteNumber(form.health)
+  const foodLevel = toFiniteNumber(form.foodLevel)
+  const xpLevel = toFiniteNumber(form.xpLevel)
+  const xpProgress = toFiniteNumber(form.xpProgress)
+  const xpTotal = toFiniteNumber(form.xpTotal)
+  if (health === null || foodLevel === null || xpLevel === null || xpProgress === null || xpTotal === null) return null
+  return {
+    health,
+    foodLevel,
+    xpLevel,
+    xpProgress,
+    xpTotal,
+    gameMode: form.gameMode.trim() || fallback?.gameMode || '',
+  }
+}
+
+function toFiniteNumber(value: string): number | null {
+  const n = Number(value)
+  return Number.isFinite(n) && n >= 0 ? n : null
+}
+
+function resultMessage(output: unknown, t: (key: string, opts?: Record<string, unknown>) => string): string {
+  if (typeof output !== 'object' || output === null) return t('inventory.writeSuccess')
+  const o = output as Record<string, unknown>
+  if (o.success === false) return String(o.errorCode || t('inventory.writeFailed'))
+  if (o.online === false) return t('inventory.writePendingLogin')
+  return t('inventory.writeSuccess')
 }
 
 /** 物品格子网格（背包格子）：定长槽位、每行 9 格、空槽虚线占位、有物品显示材质简称 + 数量角标 + hover 详情。 */

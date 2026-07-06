@@ -68,6 +68,39 @@ func TestBusinessDispatch_Write_AdminDegradeAndAudit(t *testing.T) {
 	assert.Equal(t, "活动补偿", detail["reason"])
 }
 
+// TestBusinessDispatch_InventoryBasicAttrsAudit 背包基础属性写审计应记录玩家、字段与回执状态（FR-126）。
+func TestBusinessDispatch_InventoryBasicAttrsAudit(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	admin := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	g := createGroupViaAPI(t, r, admin, "g1")
+	instID := createInstanceViaAPI(t, r, admin, node.ID, g)
+
+	payload := `{"player":"Steve","base":{"dataVersion":42,"basicAttrs":{"health":20}},"edited":{"dataVersion":42,"basicAttrs":{"health":18,"foodLevel":20}}}`
+	body := map[string]any{
+		"domain": "inventory", "action": "writeBasicAttrs",
+		"payload":     payload,
+		"write":       true,
+		"operationId": "inventory-op-1",
+		"reason":      "测试调整",
+	}
+	w := makeRequest(r, "POST", "/api/v1/instances/"+itoa(instID)+"/business", body, admin)
+	require.Equalf(t, http.StatusOK, w.Code, "背包基础属性写应 200 降级而非 5xx: %s", w.Body.String())
+
+	var logs []model.AuditLog
+	require.NoError(t, db.Where("action = ?", "business.write").Find(&logs).Error)
+	require.Len(t, logs, 1)
+	var detail map[string]any
+	require.NoError(t, json.Unmarshal([]byte(logs[0].Detail), &detail))
+	assert.Equal(t, "inventory", detail["domain"])
+	assert.Equal(t, "writeBasicAttrs", detail["action"])
+	assert.Equal(t, "Steve", detail["player"])
+	assert.Equal(t, "inventory-op-1", detail["operationId"])
+	assert.Equal(t, false, detail["available"])
+	assert.Equal(t, []any{"foodLevel", "health"}, detail["fields"])
+}
+
 // TestBusinessDispatch_Read_NoBusinessWriteAudit 读动作（write=false）走 instance:operate，不记 business.write 审计（FR-121）。
 func TestBusinessDispatch_Read_NoBusinessWriteAudit(t *testing.T) {
 	db := setupTestDB(t)

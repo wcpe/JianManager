@@ -43,6 +43,8 @@ type EconomyBalanceMirror struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 	// NodeUUID 余额所在节点（聚合 node→zone 维度起点）。
 	NodeUUID string `gorm:"column:node_uuid;type:varchar(64);not null;uniqueIndex:idx_ebm_scope,priority:1" json:"nodeUuid"`
+	// InstanceUUID 余额来源实例，用于业务汇聚读视图按用户组做资源级隔离。
+	InstanceUUID string `gorm:"column:instance_uuid;type:varchar(64);index" json:"instanceUuid"`
 	// ZoneID mce 区 ID（CoreLib zoneId）；跨区同名玩家独立隔离的关键维度。
 	ZoneID string `gorm:"column:zone_id;type:varchar(64);not null;uniqueIndex:idx_ebm_scope,priority:2" json:"zoneId"`
 	// PlayerName 玩家名（区分大小写，mce 口径）。
@@ -60,7 +62,7 @@ type EconomyBalanceMirror struct {
 	// LastEntryType 最近一次变更的入账类型（DEPOSIT/WITHDRAW/…）。
 	LastEntryType string `gorm:"column:last_entry_type;type:varchar(32)" json:"lastEntryType"`
 	// OccurredAt 最近一次变更的业务发生时间（epoch 毫秒）。
-	OccurredAt int64 `gorm:"column:occurred_at;default:0;not null" json:"occurredAt"`
+	OccurredAt int64     `gorm:"column:occurred_at;default:0;not null" json:"occurredAt"`
 	UpdatedAt  time.Time `json:"updatedAt"`
 }
 
