@@ -13,7 +13,7 @@ FR-081 自更新已交付（CP/Worker 二进制热替换 + 平滑重启），但
 ### 范围内
 - **更新内容展示**：SystemUpdatePage 把 `CheckResult.notes`（GitHub release body，即 CHANGELOG 段）渲染为可读区域（标题 + 正文，长则可折叠），CP 与各节点升级前可见目标版本说明。
 - **单版本二进制备份**：CP/Worker 在 `ReplaceExecutable` 前，把当前二进制连同版本号备份到数据根 `cache/`（如 `cache/selfupdate-backup/<component>.bin`），**只保留一份**（新备份覆盖旧），带 sidecar 元数据（version、时间、sha256）。
-- **一键回滚上一版**：CP 自回滚（备份→替换→重启）；Worker 回滚经 CP gRPC 编排（mirror 升级链路）。SystemUpdatePage 每组件（CP + 各节点）一个「回滚到 vX」按钮，DangerConfirm + scope=platform；无备份则禁用并提示。
+- **一键回滚上一版**：CP 自回滚（备份→替换→重启）；Worker 回滚经 CP gRPC 编排（mirror 升级链路）。SystemUpdatePage 每组件（CP + 各节点）一个「回滚到 vX」按钮，DangerConfirm + scope=platform；CP 回滚额外要求输入备份版本后才能确认；无备份则禁用并提示。
 - **FR-173/175 收口**（同 worktree 小改）：`release.yml` 与 `selfupdate_github.go` 把 `nightly`→`latest`；`github_repo` 默认校准 `wcpe/JianManager`。
 
 ### 非目标
@@ -48,7 +48,7 @@ FR-081 自更新已交付（CP/Worker 二进制热替换 + 平滑重启），但
 - [ ] 升级流程替换前 `BackupCurrent`（CP + Worker）
 - [ ] CP service/router 回滚端点（CP 自回滚 + 节点 gRPC 回滚）+ 审计 + RBAC
 - [ ] Worker gRPC 回滚 op（加性）
-- [ ] SystemUpdatePage：更新内容块 + 回滚按钮 + DangerConfirm + i18n
+- [ ] SystemUpdatePage：更新内容块 + 回滚按钮 + DangerConfirm + CP 回滚输入备份版本强确认 + i18n
 - [ ] nightly→latest（release.yml + selfupdate_github.go + config 默认）
 - [ ] doc-sync：API.md（回滚端点）、ARCHITECTURE（自更新章节）、CHANGELOG、PRD FR-182 行
 

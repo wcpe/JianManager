@@ -43,20 +43,23 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 **活跃 FR 详细规格索引**（PRD 只留索引行，详情见 spec）：
 - FR-128~162（控制台体验与可寻址性增强）→ `docs/specs/console-ux-enhancement/spec.md`
 - FR-124~127（JBIS 背包域）→ `docs/specs/business-integration/fr-124-127-inventory.md`
+- FR-046（Sponge 子服支持）→ `docs/specs/provision-sponge/spec.md`（草拟，待审核）
+- FR-114（探针依赖内联 / 缓存预置）→ `docs/specs/probe-dependency-cache/spec.md`（开发中，Worker 侧缓存预置已落地，断网真机待验）
 - FR-073 / 078 / 079 / 080 / 082 / 083 / 084 / 085（ServerProbe 治理桥运营底座在途）→ `docs/specs/serverprobe-ops-inflight/spec.md`
 - FR-003 / 041 / 042 / 046 / 059 / 098 / 113 / 114（在途杂项 / 归真 / 延后）→ `docs/specs/inflight-backlog/spec.md`
 - FR-053（插件批量部署多服）→ `docs/specs/plugin-batch-deploy/spec.md` + `api.md`
 - FR-163~169（前端整体重设计:视觉底座 / 双主题 / 多级分组 / 可组合工作区+超级工作台+导播台 / 监控升级）→ `docs/specs/ui-redesign/design.md`(+ 原型 `preview.html`)
 - FR-173~175（CI 发布管线 / 出站网络代理 / 自更新对接 GitHub Releases，关联 ADR-036/037）→ `docs/specs/release-pipeline/`、`docs/specs/network-proxy/`、`docs/specs/self-update-github/`（开发中创建）
 - FR-176~184（节点与运行时 UI 重做 / 自更新增强 / 全局任务中心 / jmctl 紧急控制台，关联 ADR-039/040/041/042 + ADR-036 更新）→ FR-182 `docs/specs/self-update-enhancement/spec.md`、FR-183 `docs/specs/task-center/spec.md`、FR-184 `docs/specs/emergency-cli/spec.md`（已落审）；FR-176/179/180/181 免 spec；FR-177 `docs/specs/node-page-redesign/spec.md`、FR-178 `docs/specs/node-runtime-panels/spec.md`（W2，已自审）
-- FR-185~190（出站代理面板化+节点级下发 / 更新页服务端缓存+markdown / 客户端分发迁运营+全流程向导重做 / 全站模态纪律+复制兜底 / 重度模态重做 / Worker 二进制 CP 下发，关联 ADR-043 + FR-190 待补 ADR + 增强 FR-174/182/086/072/009/004）→ FR-185 `docs/specs/proxy-visual-config/`、FR-186 `docs/specs/update-page-cache/`、FR-187 `docs/specs/client-dist-redesign/`、FR-189 `docs/specs/heavy-modal-redesign/`（需 spec，开发中创建）；FR-188 免 spec（规则 + 全站审计改造 + 复制兜底）；FR-190 待补 spec / ADR（本波后单独做，不预占编号）
+- FR-185~190（出站代理面板化+节点级下发 / 更新页服务端缓存+markdown / 客户端分发迁运营+全流程向导重做 / 全站模态纪律+复制兜底 / 重度模态重做 / Worker 二进制 CP 下发，关联 ADR-043 + 增强 FR-174/182/086/072/009/004）→ FR-185 `docs/specs/proxy-visual-config/`、FR-186 `docs/specs/update-page-cache/`、FR-187 `docs/specs/client-dist-redesign/`、FR-189 `docs/specs/heavy-modal-redesign/`；FR-188 免 spec（规则 + 全站审计改造 + 复制兜底）；FR-190 `docs/specs/worker-binary-cp-cache/spec.md` + `docs/adr/059-worker-binary-cp-cache-distribution.md`（开发中）
 - FR-191~194（客户端分发二轮重做：发布文件树+zip 上传 / 拉取密钥可查看 / updater-core 版本管理 / 端到端流程图，关联 ADR-044[FR-192 修订 ADR-022①] / ADR-045[FR-193 补充 ADR-021] + 增强 FR-187/086/091）→ FR-191 `docs/specs/client-dist-publish-redesign/`、FR-192 `docs/specs/pull-key-viewable/`、FR-193 `docs/specs/updater-core-version-mgmt/`（需 spec，开发中创建）；FR-194 免 spec（前端流程图）；BUG-D 面包屑域名 / BUG-E 就绪度 CTA 不弹窗（fix，不占 §4）
 - FR-196~212（前端 mock API 与测试基座：MSW v2 内存假后端[有状态、跨 endpoint 全联动] + 双运行形态[`VITE_MOCK` 整站 mock 模式 + jsdom/@testing-library 强断言测试] + 成功默认/按需注入错误 + 实时流全仿真[WS 终端 / SSE 日志·事件·指标] + Playwright E2E + CI 门禁，关联新 ADR-047）→ FR-196/197/198/211/212 `docs/specs/frontend-mock-api/spec.md`（**需 spec**，地基三条＋域簇范式契约＋E2E/CI，开发中创建）；FR-199~210 **免 spec**（域簇机械套用 FR-196/197/198 既定范式 + 既有 `docs/API.md` / `web/src/api/*.ts` 类型契约，不引入新模型/新契约/新 ADR）；FR-211 Playwright E2E（mock 模式整站）+ FR-212 CI 前端质量门禁（PR/push 拦截 lint+vitest+E2E，扩 `release.yml` test 闸）；登录失败整页刷新 = fix 走 `sdd-fix-bug`（不占 §4），其页面级回归并入 FR-199
 - BUG-A 节点重名覆盖（修 FR-004 注册身份匹配缺陷，见 ADR-039）：注册改 UUID 锚定三级匹配 + 节点名活跃唯一 + 坏节点检测/修复后端（`NodeRepairService` + `/nodes/repair/*`、`/nodes/:id/reenroll|orphans|purge-orphans`）随 ADR-039 fix 提交落地；坏节点修复**可视化入口**随 FR-177 节点页重做。属缺陷修复（非新 FR），不占 §4 FR 编号
 - FR-213~221（观测体系重构 + 客户端分发观测 + 共享文件浏览器 + 通知中心：导航{监控/日志/统计}+任务中心移系统 / 站内信+告警合并通知中心 / 分发观测时序底座+监控页+统计扩维 / 文件浏览器抽取+实例卡片迁移+分发文件预览 / 平台级统计页 / 时序剖析增强，关联 ADR-048[统一通知模型] / ADR-049[分发观测聚合，复用 ADR-013] + 增强 FR-060/086）→ FR-213 `docs/specs/file-browser-component/`、FR-215 `docs/specs/observability-ia-redesign/`、FR-216 `docs/specs/notification-center/`、FR-217 `docs/specs/client-dist-observability/`、FR-220 `docs/specs/platform-statistics/`（需 spec，开发中创建）；FR-214/218/219/221 免 spec（前端复用/消费既有）；FIX-1 发布上传复验 + strict/fail-static 等术语中文化（fix 走 sdd-fix-bug，不占 §4）
 - FR-222~224 + FIX-A~D（节点上线流程打通 + worker 生命周期修复 + .yml 约定）：FR-222/223 已由 0.13.0 开发版 FIX-1/2/3 归真闭环；FR-224 已在 v0.12.0 交付；FR-222 `docs/specs/worker-self-setup/`，FR-223/224 免 spec。FIX-A #2 worker 重连重推实例[+ADR-050] / FIX-B #3 终端断连 / FIX-C #4 启停 kill 竞态 / FIX-D 首次上线真机断点（fix 走 sdd-fix-bug，不占 §4）
 - FR-225~232 + FIX-1~6（0.13.0 开发版归档）：调试开关 / 通知-任务联动 / 任务强停+筛选 / JDK 登记重做 / 连通性测试族 / 创建向导页 / 复制双模式 / 前端细节已交付；FIX-1/2/3 已把 FR-222/223 节点上线链路归真闭环；FR-227 `docs/specs/task-force-stop/`、FR-228 `docs/specs/jdk-register-redesign/`、FR-229 `docs/specs/connectivity-selftest/`、FR-231 `docs/specs/instance-clone-modes/`；FIX-4 JDK 下载超时 / FIX-5 JDK 登记卡死 / FIX-6 系统更新进页只读缓存为 0.13.0 修复项（fix 走 sdd-fix-bug，不占 §4）
-- FR-079 + FR-233~247 + FIX-7~9（UI 重塑 + Docker 落地 + 实例规模化 2026-06-30）：FR-079/233/234/236/237/240/241/243/246/247 已在 0.13.0 开发版交付；FR-235（实例列表页重设计）、FR-244（全局动画系统）仍按 §4 状态继续跟踪。合并关系：FR-238→FR-078，FR-239→FR-236，FR-242→FR-241，FR-245→FR-240。FIX-7 生产 SQL 日志静默 / FIX-8 创建实例节点下拉空 / FIX-9 点击实例卡片无反应为 0.13.0 修复项（fix 走 sdd-fix-bug，不占 §4）。计划见 `.tmp/brainstorm-ui-docker-batch-2026-06-30.md`
+- FR-079 + FR-233~247 + FIX-7~9（UI 重塑 + Docker 落地 + 实例规模化 2026-06-30）：FR-079/233/234/236/237/240/241/243/246/247 已在 0.13.0 开发版交付；FR-235（实例列表页重设计）、FR-244（全局动画系统）仍按 §4 状态继续跟踪。FR-235/133/137/244 本轮消费 FR-247 的服务端分页地基，规格见 `docs/specs/instance-list-redesign/spec.md`（已审核，首批实现落地）。合并关系：FR-238→FR-078，FR-239→FR-236，FR-242→FR-241，FR-245→FR-240。FIX-7 生产 SQL 日志静默 / FIX-8 创建实例节点下拉空 / FIX-9 点击实例卡片无反应为 0.13.0 修复项（fix 走 sdd-fix-bug，不占 §4）。计划见 `.tmp/brainstorm-ui-docker-batch-2026-06-30.md`
+- FR-170（进程粒度监控采集）→ `docs/specs/process-metrics/spec.md` + `docs/adr/060-process-granularity-metrics.md`（开发中，首批已落地）；FR-171/172（备份校验和 / 审计分页导出）→ `docs/specs/backup-audit-backend/spec.md`（开发中，首批已落地）；FR-152（备份存储测试连接 + 容量展示）→ `docs/specs/backup-storage-test-capacity/spec.md`（开发中，首批已落地）
 - FR-264（客户端分发单节点源站安全防护：多维限流 / IP 临时封禁 / key 状态机 / 频道降速保护 / 制品授权收紧 / 启动安全画像 / 独立防护中心）→ `docs/specs/client-dist-security-firewall/spec.md`（已交付@v0.13.0）
 - FR-265（客户端分发观测四 Tab 重构：统计/监控/日志只看请求事件，客户端 Tab 独立看运行态与更新结果；新增运行态心跳表/端点、请求日志脱敏详情、实时聚合；清理废弃缓存命中指标；与 FR-264 并行开发互不覆盖）→ `docs/specs/client-dist-observability-rebuild/spec.md`（已交付@v0.13.0）
 - FR-266（updater-core 构建元信息内嵌与展示：jar 内写版本 / Git commit / dirty / buildTime，CP 归档读取并在 Core 版本页展示，紧急 hotfix 仍可直接上传）→ `docs/specs/updater-core-build-metadata/spec.md`（已交付@v0.13.0）
@@ -112,14 +115,14 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-043 | 全链路运维打通（节点→实例→终端→Bot 进服） | — | ✅ 已交付@v0.3.0 |
 | FR-044 | 项目自包含便携运行时（FHS 数据根 + 核心缓存） | — | ✅ 已交付@v0.3.0 |
 | FR-045 | 制品库（内容寻址 + 完整性校验） | — | ✅ 已交付@v0.3.0 |
-| FR-046 | Sponge 子服支持 | P2 | 🔨 开发中 |
+| FR-046 | Sponge 子服支持 | P2 | 🚧 实现中（核心解析/通用 provision 入口/前端向导已落地） |
 | FR-047 | 环境/标签多维分组筛选 | — | ✅ 已交付@v0.4.0 |
 | FR-048 | 节点维护模式与主动下线 | — | ✅ 已交付@v0.4.0 |
 | FR-049 | 日志持久化、归档与保留 | — | ✅ 已交付@v0.4.0 |
 | FR-050 | 日志检索与过滤 | — | ✅ 已交付@v0.4.0 |
 | FR-051 | 通用文件改前自动备份与版本回滚 | — | ✅ 已交付@v0.4.0 |
 | FR-052 | 插件/模组单服管理 | — | ✅ 已交付@v0.4.0 |
-| FR-053 | 插件批量部署多服 | — | ✅ 已交付@v0.13.0 |
+| FR-053 | 插件批量部署多服 | P1 | 🚧 实现中（后端 API/服务/审计与前端批量部署对话框已落地，真浏览器结果截图已补） |
 | FR-054 | 玩家管理（RCON） | — | ✅ 已交付@v0.4.0 |
 | FR-055 | 玩家管理插件桥增强 | — | ❌ 已废弃（ADR-014） |
 | FR-056 | 增量备份 | — | ✅ 已交付@v0.4.0 |
@@ -184,44 +187,44 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-121 | 业务写横切硬化（幂等 + 二次确认 + 审计，JBIS M2） | — | ✅ 已交付@v0.10.0 |
 | FR-122 | 经济汇聚与多区聚合（JBIS M2） | — | ✅ 已交付@v0.10.0 |
 | FR-123 | 经济定制页（JBIS M2） | — | ✅ 已交付@v0.10.0 |
-| FR-124 | 扩 AllinInventorySync api 导出读写门面 | P2 | 📋 计划 |
-| FR-125 | 背包 Provider | P2 | 📋 计划 |
-| FR-126 | 背包汇聚与存储 | P2 | 📋 计划 |
-| FR-127 | 背包定制页 | P2 | 📋 计划 |
-| FR-128 | 导航与视图状态可寻址化 + 滚动位置恢复 | P1 | 📋 计划 |
+| FR-124 | 扩 AllinInventorySync api 导出读写门面 | P2 | 🔨 开发中（AIS 2.0.0 边界已登记） |
+| FR-125 | 背包 Provider | P2 | 🔨 开发中（读视图/基础属性写/追踪事件边界已登记） |
+| FR-126 | 背包汇聚与存储 | P2 | 🔨 开发中（事件去重、基础属性写审计与业务事件读视图实例级权限收敛已落地） |
+| FR-127 | 背包定制页 | P2 | 🔨 开发中（快照查看与基础属性写 UI 已落地） |
+| FR-128 | 导航与视图状态可寻址化 + 滚动位置恢复 | P1 | 🔨 开发中（实例列表/卡片/侧栏树入口直达 `/instances/:id`，`openInstanceId` 兼容桥已移除；列表筛选排序与详情 Tab URL 化、滚动恢复首批已落地） |
 | FR-129 | 实例工作区分屏面板化 | — | ❌ 已废弃（并入 FR-166 可组合卡片画布） |
 | FR-130 | 文件与配置合并为统一资源面板 | — | ❌ 已废弃（并入 FR-166 资源卡） |
 | FR-131 | 侧边栏可折叠图标轨 + 隐藏滚动条 + 布局持久化 | P2 | ✅ 已交付@v0.10.0 |
 | FR-132 | 侧栏底部控件图标化（主题/语言/退出）+ 三态直选 + 底部布局 | P2 | ✅ 已交付@v0.10.0 |
-| FR-133 | 实例树搜索/虚拟化/折叠保留/激活态/空态/a11y | P2 | 📋 计划 |
+| FR-133 | 实例树搜索/虚拟化/折叠保留/激活态/空态/a11y | P2 | 🔨 开发中（实例分组树搜索、a11y 键盘与虚拟渲染首批已落地） |
 | FR-134 | 统一页头与面包屑组件 | P3 | ✅ 已交付@v0.10.0 |
 | FR-135 | 开源许可与依赖清单页（独立页，照参考图布局） | P2 | ✅ 已交付@v0.10.0 |
 | FR-136 | 实例列表汇总头 + 节点/端口列 + 角色徽标 + proxy↔backend inline | P2 | ✅ 已交付@v0.10.0 |
-| FR-137 | 实例列表搜索/排序 + 筛选吸顶可折叠 + 分组单表 | P2 | 📋 计划 |
+| FR-137 | 实例列表搜索/排序 + 筛选吸顶可折叠 + 分组单表 | P2 | 🔨 开发中（搜索/排序/分页大小 URL 化，筛选工具条吸顶折叠与分组单表虚拟渲染已落地） |
 | FR-138 | 单实例操作可发现性与反馈 | — | ✅ 已交付@v0.10.0 |
 | FR-139 | 批量操作增强 | — | ✅ 已交付@v0.10.0 |
-| FR-140 | 终端体验增强 | P2 | 📋 计划 |
-| FR-141 | 资源管理器与配置编辑器增强 | P2 | 📋 计划 |
-| FR-142 | 详情页监控与探针增强 | P2 | 📋 计划 |
-| FR-143 | 插件/模组/资源包/数据包管理增强 | P2 | 📋 计划 |
+| FR-140 | 终端体验增强 | P2 | 🔨 开发中（重连/全屏/字号/读写徽标/菜单 a11y 与 Ctrl/Cmd+F 搜索计数、当前定位、上下切换和可见区高亮已落地） |
+| FR-141 | 资源管理器与配置编辑器增强 | P2 | 🔨 开发中（CodeMirror 暗色跟随、目录树 a11y 键盘导航/虚拟化、二进制与超大文件下载降级、搜索片段高亮与目录/扩展名范围、版本 diff 增删着色、批量粘贴/移动进度、配置表单分组与即时校验已落地） |
+| FR-142 | 详情页监控与探针增强 | P2 | 🔨 开发中（探针指引与当前指标阈值色条已落地） |
+| FR-143 | 插件/模组/资源包/数据包管理增强 | P2 | 🔨 开发中（四目录后端校验/覆盖语义、基础元信息解析、分区/元信息展示/重启提示、拖拽上传进度、同名覆盖确认与市场入口预留已落地） |
 | FR-144 | 节点页直观化 | P2 | ✅ 已交付@v0.10.0 |
 | FR-145 | 群组管理可寻址双栏 + proxy↔backend 拓扑 | P2 | ✅ 已交付@v0.10.0 |
-| FR-146 | 玩家管理增强 | P2 | 📋 计划 |
+| FR-146 | 玩家管理增强 | P2 | 🔨 开发中（实时事件暂停/过滤/清空、子服筛选、行勾选批量踢/封与全局封禁已落地） |
 | FR-147 | Bot 规模化管理增强 | P2 | ✅ 已交付@v0.10.0 |
 | FR-148 | 趋势图增强 | — | ✅ 已交付@v0.10.0 |
 | FR-149 | 告警增强 | — | ✅ 已交付@v0.10.0 |
 | FR-150 | 日志中心增强 | P2 | ✅ 已交付@v0.10.0 |
 | FR-151 | 备份页增强 | P2 | ✅ 已交付@v0.10.0 |
-| FR-152 | 备份存储测试连接 + 容量展示 | P2 | ✅ 已交付@v0.13.0 |
+| FR-152 | 备份存储测试连接 + 容量展示 | P2 | 🔨 开发中（测试端点、容量聚合、最近测试状态、latencyMs、S3 SigV4/WebDAV/SFTP 短超时探测与表单/行浏览器验收已落地，真实端点待真机） |
 | FR-153 | 计划任务增强 | — | ✅ 已交付@v0.10.0 |
 | FR-154 | 模板应用到实例 + 变量填充预览 | P2 | ✅ 已交付@v0.10.0 |
-| FR-155 | 平台资产与更新页增强 | P2 | 📋 计划 |
+| FR-155 | 平台资产与更新页增强 | P2 | 🔨 开发中（被引用制品禁删前移、拉取密钥过期预警、数据库敏感列禁排序/过滤+标注、系统更新页 i18n 与 CP 升级/回滚强确认已落地） |
 | FR-156 | 用户与组管理能力补齐 | — | ✅ 已交付@v0.10.0 |
 | FR-157 | 认证体验增强 | — | ✅ 已交付@v0.10.0 |
 | FR-158 | 设置与审计页增强 | P2 | ✅ 已交付@v0.10.0 |
-| FR-159 | 共享对话框统一 | P2 | 📋 计划 |
-| FR-160 | 共享基件统一（ref 重构） | P2 | 📋 计划 |
-| FR-161 | 全局响应式与防翻屏基线 | P2 | 📋 计划 |
+| FR-159 | 共享对话框统一 | P2 | 🔨 开发中（玩家踢/封、资源编辑器未保存确认、更新说明外链确认、搭建向导（代理/后端子服）、实例复制、群组网络、代理后端注册、告警规则/通道弹窗、实例标签/配置/限额、用户/用户组管理弹窗与 forwarding secret 持久面板已迁共享 Dialog） |
+| FR-160 | 共享基件统一（ref 重构） | P2 | 🔨 开发中（统一控制台状态徽标、日志表头 i18n 与原生 confirm 移除首批已落地） |
+| FR-161 | 全局响应式与防翻屏基线 | P2 | 🔨 开发中（实例长列表虚拟渲染、筛选吸顶折叠、分组树虚拟渲染与关键页面防横向溢出 benchmark 已落地） |
 | FR-162 | 全局页眉/顶栏（基础信息 + 搜索占位） | P2 | ✅ 已交付@v0.10.0 |
 | FR-163 | 视觉底座与设计系统（统一 Panel/StatCard 组件、弃 shadcn Card 松散用法、靛蓝圆角灵动 + 响应式基线） | P1 | ✅ 已交付@v0.10.0 |
 | FR-164 | 全局双主题（靛蓝 / 青绿）+ 明暗模式（CSS 变量驱动 + 一处切换全站 + 持久） | P1 | ✅ 已交付@v0.10.0 |
@@ -230,9 +233,9 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-167 | 跨实例超级工作台（任意实例卡片拼合 + 实例库拖拽） | P2 | ✅ 已交付@v0.10.0 |
 | FR-168 | 工作区导播台（多路 WS 预热 + 瞬切 + 定时轮播 + 并发上限 + 非激活降频） | P2 | ✅ 已交付@v0.10.0 |
 | FR-169 | 监控页升级（平台/节点/实例 6 指标 + 每图时间筛选 + brush 拖拽轴 + hover 浮窗 + 实时，扩 FR-060/061） | P1 | ✅ 已交付@v0.10.0 |
-| FR-170 | 进程粒度监控采集（Worker 采每进程 CPU/内存/IO + CP 存储 + 监控页 hover 进程 TOP10）——FR-169 拆出 | P2 | 📋 计划 |
-| FR-171 | 备份完整性校验和（model.Backup 加 checksum + 创建时计算 + 列表/详情展示）——FR-151 拆出 | P3 | 📋 计划 |
-| FR-172 | 审计日志服务端分页与导出（GET /audit 加分页 + 总数 + 导出 endpoint）——FR-158 拆出 | P3 | 📋 计划 |
+| FR-170 | 进程粒度监控采集（Worker 采每进程 CPU/内存/IO + CP 存储 + 监控页 hover 进程 TOP10）——FR-169 拆出 | P2 | 🔨 开发中（Worker/CP/API/监控页首批已落地，进程 TTL 与每实例最新查询已补，真机采集待验） |
+| FR-171 | 备份完整性校验和（model.Backup 加 checksum + 创建时计算 + 列表/详情展示）——FR-151 拆出 | P3 | 🔨 开发中（Worker sha256、CP 落库、恢复传参、列表展示与浏览器截图已落地，远程校验真机待补） |
+| FR-172 | 审计日志服务端分页与导出（GET /audit 加分页 + 总数 + 导出 endpoint）——FR-158 拆出 | P3 | 🔨 开发中（分页 envelope、真实 total 展示、NDJSON 流式导出、format 契约校验、字段白名单、导出成功/失败审计与浏览器截图已落地） |
 | FR-173 | CI/CD 发布管线（GitHub Actions：push→滚动预发布[取 CHANGELOG Unreleased]、tag→正式 release[取版本段]；交叉编译 CP+Worker linux/amd64+windows/amd64 含 go:embed 前端；产物 + checksums.txt 上传 release；ldflags 注入版本，见 ADR-036） | P1 | ✅ 已交付@v0.11.0 |
 | FR-174 | 出站网络代理（CP/Worker 每进程可配 HTTP/SOCKS5 + no_proxy，共享出站 HTTP 客户端工厂，覆盖自更新/JDK/服务端 jar/CFR/GitHub API 下载；留空=直连，见 ADR-037） | P1 | ✅ 已交付@v0.11.0 |
 | FR-175 | 自更新对接 GitHub Releases（增强 FR-081：原生 GitHub Releases API 解析 + stable/prerelease 渠道 + checksums sha256 校验 + 经 FR-174 代理下载；取代 ADR-020 §4 feed 立场，见 ADR-036） | P1 | ✅ 已交付@v0.11.0 |
@@ -250,7 +253,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-187 | 客户端分发迁「运营」域 + 全流程向导重做（就绪度步骤器 + 空状态引导卡 + 发布版本向导分步 + 建频道/密钥全模态化；后端 API 不变、纯前端重做；增强 FR-086 线） | P1 | ✅ 已交付@v0.12.0 |
 | FR-188 | 全站模态框纪律（立 `.claude/rules/ui-modals.md`：禁「点击新增→内联展开/布局重排表单」、强制内容自适应模态复用 FR-072；全站违规页审计改造 + 复制按钮 HTTP 非安全上下文兜底[共享 util]，行为不变） | P1 | ✅ 已交付@v0.12.0 |
 | FR-189 | 重度模态重做（创建实例 + 添加节点：自适应壳修溢出 + 基本/启动/高级 分区或 Tab + Docker 字段条件显隐 + AddNode「自动安装/手动连接」Tab；增强 FR-009/FR-004 对话框，遵循 ui-modals） | P1 | ✅ 已交付@v0.12.0 |
-| FR-190 | Worker 二进制由 CP 代理缓存下发（CP 经出站代理拉「与自身同版本」worker 资产→缓存→LAN 下发；装机脚本与 UpgradeNode 改走 CP，解内网无 GitHub + latest 与 CP 版本错位；待补 spec / ADR） | P1 | 📋 计划 |
+| FR-190 | Worker 二进制由 CP 代理缓存下发（CP 经出站代理拉「与自身同版本」worker 资产→缓存→LAN 下发；装机脚本与 UpgradeNode 改走 CP，解内网无 GitHub + latest 与 CP 版本错位） | P1 | 🔨 开发中（缓存/下载/UpgradeNode/系统更新页/安装命令默认 CP-local、升级 token 绑定 nodeUuid 与缓存表按版本匹配已落地，真机内网验收待补） |
 | FR-191 | 客户端分发发布/上传/预览定向重做（发布/上传改**独立页面**[非模态，根治点外面关闭丢上传草稿]+上传即锁定文件内容；支持上传 zip 自动按包内结构编排目录；配置/审阅/详情改 Minecraft 文件树预览，内容只读、仅可编排路径/目录/sync/platform；增强 FR-187/088） | P1 | ✅ 已交付@v0.12.0 |
 | FR-192 | 拉取密钥可查看/可编辑（密钥可逆加密存储[env 密钥]，管理员频道页查看明文+复制+**手动设/改密钥值**；**删「轮换」**[换值会断已分发客户端]、**保留「吊销」但强警告二次确认**；老哈希密钥不可查；修订 ADR-022 决策①，见 ADR-044） | P1 | ✅ 已交付@v0.12.0 |
 | FR-193 | updater-core 默认随 CP 内嵌静默驱动（楔子+updater-core 用 CP 自带默认版本，manifest `agent.core` 由 CP 内嵌 updater-core 自动产出；**运营不上传/不管理**，删「更新器版本」管理页；CP 自更新时默认更新器随之更新；增强 FR-091/FR-107，见 ADR-045[改写为 CP 默认]） | P1 | ✅ 已交付@v0.12.0 |
@@ -295,13 +298,13 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-232 | 前端交互细节集：节点页进入默认选中第一个节点；页眉刷新图标刷新当前页数据（非整页 reload）（增强 FR-177/179，免 spec） | P2 | ✅ 已交付@v0.13.0 |
 | FR-233 | 实例配置随时编辑：实例详情/工作区提供配置编辑（启动命令 / JVM 参数 / JDK / 环境变量 / 资源限额 / 自动重启等），保存即持久化并提示重启生效；今 `InstanceDetailPage` 仅深链跳画布、无编辑能力（feat，需 spec：新 PATCH /instances/:id 契约 + 跨 CP/web、worker 重读配置） | P1 | ✅ 已交付@v0.13.0 |
 | FR-234 | 创建实例向导优化：启动命令预填可改示例（如 `java -Xmx2G -jar server.jar nogui`）+ 提示 jar 名/放置位置 + 彻底隐藏工作目录（系统分配，对齐 ADR-007/008）（增强 FR-230，免 spec） | P1 | ✅ 已交付@v0.13.0 |
-| FR-235 | 实例列表页重设计（面向 1000+ 实例）：卡片 + 列表重做（信息密度 / 美观 / 点击进详情），大规模下虚拟化 + 分组 + 搜索筛选；消费 FR-247 服务端搜索/分页（增强 FR-165/163，需 spec，依赖 FR-247/246/240） | P1 | 📋 计划 |
+| FR-235 | 实例列表页重设计（面向 1000+ 实例）：卡片 + 列表重做（信息密度 / 美观 / 点击进详情），大规模下虚拟化 + 分组 + 搜索筛选；消费 FR-247 服务端搜索/分页（增强 FR-165/163，需 spec，依赖 FR-247/246/240） | P1 | 🔨 开发中（服务端分页搜索、聚合、卡片/列表/分组单表虚拟渲染与直接深链入口已落地） |
 | FR-236 | 一键搭建模态优化 + Docker 傻瓜建服：建后端服 / 建代理两模态遵循 ui-modals + 大白话；并入 Docker 一键建服（预置镜像 `itzg/minecraft-server` + 端口 + 一键起）（增强 FR-035/078，需 spec，含原 FR-239） | P1 | ✅ 已交付@v0.13.0 |
 | FR-237 | 节点 Docker 可用性检测 + 未装引导：Worker 探测 docker 是否安装/可用，CP/UI 展示状态，未装给安装引导，docker 建服前先测不通即提示不卡死（feat，需 spec：worker 探测 RPC + 跨模块，关联 FR-229 连通性族） | P1 | ✅ 已交付@v0.13.0 |
 | FR-240 | 导航外壳 + 实例选择器重构（面向 1000+ 实例）：先出 2-3 布局原型经确认 → 实现；实例选择支持搜索 / 虚拟列表 / 分组 / 最近&收藏；并入面包屑文案与路由映射纠错（今实例页面包屑文字与实际页不符；此项排最后做）（增强 FR-131/162/134，需 spec + 原型审核，含原 FR-245） | P1 | ✅ 已交付@v0.13.0 |
 | FR-241 | 全局搜索 / 命令面板（快捷跳转）：Ctrl/⌘+K 唤起，搜实例/节点/页面/操作并跳转（今页眉搜索框为占位）；并入页眉集群徽标 → 可滚动实例选择弹层 + 点击进入；面向 1000+ 走服务端搜索（feat，需 spec：搜索契约，依赖 FR-247，含原 FR-242） | P1 | ✅ 已交付@v0.13.0 |
 | FR-243 | 页眉顶部加载进度条 + 路由切换过渡：切页弹一次顶部进度条（nprogress 式）+ 统一路由过渡反馈（今无）（feat，免 spec） | P2 | ✅ 已交付@v0.13.0 |
-| FR-244 | 全局动画系统统一：修「稀碎卡顿 / 无动画」——统一 hover / 展开 / 弹层 / 路由过渡（今无 framer-motion、散用 CSS transition）（增强 FR-163/176，免 spec） | P2 | 📋 计划 |
+| FR-244 | 全局动画系统统一：修「稀碎卡顿 / 无动画」——统一 hover / 展开 / 弹层 / 路由过渡（今无 framer-motion、散用 CSS transition）（增强 FR-163/176；本轮随 `docs/specs/instance-list-redesign/spec.md` 草拟审核） | P2 | 🔨 开发中（motion token、顶部进度条、路由/侧栏/抽屉主链路动画收敛已落地） |
 | FR-246 | 全站卡片范式提质 + 节点页卡片重设计：统一卡片圆角 / 边角 / 阴影 / 间距（修「连接感 / 阴影太假 / 圆角不符 / 边角瑕疵」）并全站贯彻 + 节点页卡片信息密度重做（增强 FR-163/176/177 落地质量，需 spec：圈定全站范围 + 范式） | P1 | ✅ 已交付@v0.13.0 |
 | FR-247 | 实例规模化后端（1000+）：服务端实例搜索 / 分页 / 分组聚合 API（今前端全量拉、1000+ 撑不住），为列表页 / 导航实例选择器 / 全局搜索 / 页眉弹层提供统一数据地基（feat，需 spec：新查询契约 + 索引 + 多前端面消费）→ `docs/specs/instance-scale-backend/spec.md` | P1 | ✅ 已交付@v0.13.0 |
 | FR-248 | OTA 签名密钥自动生成与面板公钥展示：CP 启动时未注入 env 私钥则自动生成 Ed25519 密钥对并持久化到数据根文件（env 注入优先、双轨），面板展示公钥供运营者配到客户端；修订 ADR-022/038（增强 FR-087，需 spec + ADR-052）→ `docs/specs/client-sign-key-autogen/spec.md` | — | ❌ 已废弃（验签已去，见 ADR-054） |

@@ -166,7 +166,7 @@ internal/worker/
   3. **token 新建**：否则视为新节点，凭有效 enrollment token 准入；若上报名与既有节点撞名 → `AlreadyExists` 拒绝（提示改名），绝不覆写。
 - **节点名活跃唯一**：身份由 UUID 锚定，`name` 降为可变标签但活跃节点间唯一——`database.AutoMigrate` 对存量重名活跃节点先去重（追加 `-dup-<id>` 后缀）再建「部分唯一索引」（仅约束 `deleted_at IS NULL` 的活跃行），软删除节点可释放其名供新节点复用（见 ADR-039 §3）。
 - **坏节点检测/修复（见 ADR-039 §2）**：`NodeRepairService` 提供检测疑似被串改/重名节点（只读诊断）、把被挤占机器作为新节点重新 enroll（轮换 UUID/secret）、清理孤立 JDK/实例引用；破坏性操作需二次确认（`confirm=true`）并入审计（FR-015/FR-059）。HTTP 入口见 API.md 节点修复章节（UI 入口随 FR-177）。
-- **一键安装脚本**：`scripts/install-worker.sh`（Linux/macOS）/ `install-worker.ps1`（Windows）由平台分发，幂等完成「下载或拷贝二进制 → 写 worker.yml → 以 enroll token 首注册 → 可选注册 systemd / Windows 服务（开机自启、常驻自连）」。enroll token 仅经命令行/环境变量传入、绝不写入 `worker.yml`。公网 release 端点未架设前以 `--binary` 本地二进制兜底。
+- **一键安装脚本**：`scripts/install-worker.sh`（Linux/macOS）/ `install-worker.ps1`（Windows）由平台分发，幂等完成「下载或拷贝二进制 → 写 worker.yml → 以 enroll token 首注册 → 可选注册 systemd / Windows 服务（开机自启、常驻自连）」。enroll token 仅经命令行/环境变量传入、绝不写入 `worker.yml`。FR-190 起添加节点一键命令默认签发 CP-local `/worker-assets/:version/{os}/{arch}/worker?token=...` 下载 URL 模板，脚本按运行时平台替换；`enroll.binary_url` 仍可显式覆盖，离线场景保留 `--binary` 本地二进制兜底。
 - **CP 静态托管安装脚本**：脚本经 `go:embed` 内嵌进 CP 二进制（`internal/controlplane/embed/install_scripts.go`，源由 `make embed-install-scripts` 从 canonical `scripts/` 同步、字节一致由测试守护），CP 以**匿名**路由 `GET /install-worker.sh`、`GET /install-worker.ps1`（根路径、先于 SPA 回退）下发。一键命令 `curl <cp>/install-worker.sh | sh` 据此可拉（此前 CP 不托管这两路径致 curl 404、一键安装失败）。匿名安全：脚本无机密，准入凭据在命令参数里，与签发 token 的管理员 JWT 端点暴露面隔离。
 - **面板「添加节点」向导**：CP `POST /nodes/enroll-token` 签发 token 并返回 Linux/Windows 一键命令 + `scriptBaseUrl`（CP 托管脚本基址），前端节点页展示一键命令（复制）+「手动安装步骤」分步兜底命令，供运维粘贴到目标机器执行。
 
@@ -243,8 +243,9 @@ Browser → Worker Node (WS ws://worker:port/ws/terminal?token=xxx)
 ### 6.2.1 监控探针 ServerProbe（Worker 抓 `/metrics`，FR-010 / ADR-014）
 
 ServerProbe 是第三方监控探针（TabooLib，单 jar 多端 Bukkit+BungeeCord），作 git 子模块引入 `third_party/ServerProbe`。
-CP 经 `go:embed` 内嵌探针 jar 与 FR-114 离线运行库缓存（`internal/controlplane/embed/probe/`，`make embed-probe` 目标可选构建），其中 `probe-libraries.zip` 由父仓 `scripts/probe-offline-cache.go` 从探针 jar 内 `META-INF/taboolib/*.properties` 解析 TabooLib/Kotlin 依赖并按 Maven layout 预置。
-建服 provision 时经 gRPC `DeployServerProbe(jar, config_yaml, libraries_zip)` 把 jar 与最小 config.yml 写入实例 `plugins/`，并把 `libraries_zip` 解压到实例根 `libraries/`，避免探针首启再联网拉 TabooLib/Kotlin 运行时。
+CP 经 `go:embed` 内嵌探针 jar 与构建期运行库缓存（`internal/controlplane/embed/probe/`，`make embed-probe` 目标可选构建）。
+建服 provision 时经 gRPC `DeployServerProbe(jar, config_yaml, libraries_zip)` 把 jar 与最小 config.yml 写入实例 `plugins/`，并把 TabooLib/Kotlin 运行库缓存解压到实例工作目录的 Maven local repository（默认 `libraries/`）。
+Worker 对运行库缓存只接受 `libraries/` 根路径，拒绝绝对路径、路径穿越、反斜杠路径和超体积条目；预置失败会让 `DeployServerProbe` 返回明确错误，避免慢网/离线首启时才暴露依赖下载问题（FR-114）。
 
 每实例系统分配一个 probe 端口（默认 29940 段，同节点唯一）；config.yml 仅开启 `/metrics`、绑定 `127.0.0.1`、监听分配端口。
 Worker 抓取链路完全在本机回环、无对外网络面、无 token；依赖缓存 zip 仅接受 `libraries/` 根路径，拒绝绝对路径、路径穿越、反斜杠路径和超体积条目：
@@ -452,8 +453,9 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | instance_group_members (V2, FR-165) | group_id(FK instance_group_nodes), instance_id(FK)；UNIQUE(group_id, instance_id)（实例-组织分组 M:N，一实例可属多组；删组只解绑、不删实例） |
 | bot_stress_sessions | uuid, instance_id(FK), name, name_prefix, status(pending/running/stopped/error), bot_count, behavior, config(JSON), orchestration_yaml(TEXT), orchestration_summary(JSON), succeeded, failed, last_error, started_at, ended_at |
 | bots | uuid, instance_id(FK), stress_session_id(FK，可空), name, status, config(JSON), behavior, worker_id |
-| backups | uuid, instance_id(FK), name, file_path, file_size_mb, type(0/1), mode(0 全量/1 增量, V2), status(0/1/2/3), parent_id(FK self, 备份链, V2), manifest(JSON 文件清单, V2), storage_id(FK, V2), storage_key(远程对象键, V2) |
-| backup_storages | name(UNIQUE), type(local/s3/sftp/webdav), endpoint, bucket, region, prefix, access_key_env(${ENV_VAR}), secret_key_env(${ENV_VAR}), use_ssl (V2, FR-057)；API 响应派生 `backup_count`/`used_bytes`（FR-152，不落库，按已完成 backups 聚合） |
+| backups | uuid, instance_id(FK), name, file_path, file_size_mb, type(0/1), mode(0 全量/1 增量, V2), status(0/1/2/3), parent_id(FK self, 备份链, V2), manifest(JSON 文件清单, V2), storage_id(FK, V2), storage_key(远程对象键, V2), checksum/checksum_algo(归档完整性, FR-171) |
+| process_metric_snapshots | node_uuid, instance_uuid, pid, name, cpu_percent, rss_bytes, read_bytes_per_sec, write_bytes_per_sec, user, command_summary(截断脱敏), sampled_at（受管实例进程 TOPN 短期快照，按 48h TTL 清理，FR-170） |
+| backup_storages | name(UNIQUE), type(local/s3/sftp/webdav), endpoint, bucket, region, prefix, access_key_env(${ENV_VAR}), secret_key_env(${ENV_VAR}), use_ssl, last_test_at/last_test_ok/last_test_message（FR-057/FR-152；backupCount/usedBytes 从 backups 聚合） |
 | schedules | uuid, instance_id(FK), name, cron_expr, action, payload, enabled |
 | schedule_execution_logs | schedule_id(FK), action, status, error, started_at, finished_at |
 | alert_rules | uuid, name, trigger_type(V2: metric/instance_crash/node_offline/log_keyword/player_event/backup_failed), level(V2: info/warn/critical), target_type, target_id, metric, operator, threshold, duration_sec, keyword(V2 日志关键字), event_match(V2 玩家事件子类型), channel_ids(V2 JSON 路由通道), dedup_window_sec(V2 去抖), silence_start/silence_end(V2 静默窗口 HH:MM), notify_recover(V2), notify_type, notify_target(FR-011 兼容), enabled |
@@ -464,7 +466,7 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | metric_rollup_5m (V2) | series_id(FK), bucket_ts, avg/min/max/last/count；留 ~30d |
 | metric_rollup_1h (V2) | series_id(FK), bucket_ts, avg/min/max/last/count；留 ≥1y |
 | templates | uuid, name, type, description, start_command, default_work_dir, download_url, config_files(JSON) |
-| audit_logs | user_id, action, target_type, target_id, detail(JSON), ip |
+| audit_logs | user_id, action, target_type, target_id, detail(JSON), ip（FR-172 分页 envelope 走服务端 total；NDJSON 导出按批次流式输出白名单字段，`audit.export` detail 仅记录格式、过滤摘要与成功/失败状态） |
 | networks (V2) | uuid, name, description（非独占软标签） |
 | network_members (V2) | network_id(FK), instance_id(FK)（M:N，一个子服可属多群组） |
 | server_registrations (V2) | proxy_id(FK), backend_id(FK), alias, priority, forced_host, restricted, enabled；UNIQUE(proxy_id, alias) |
@@ -575,7 +577,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
     - **集群概览徽标**（在线节点/运行实例/崩溃数，复用 `GET /metrics/overview` + 实例列表本地统计；点击跳转对应筛选：运行/崩溃→`/instances?status=`、在线→`/nodes`）窄屏（<lg）隐藏。
     - **统一通知铃铛**（FR-216，见 ADR-048）：**合并原「站内信收件箱(FR-183)」+「告警铃铛(FR-162)」为单一入口**（`NotificationBell`，原 `inbox`/`alertBell` 两槽并为单 `notifications` 槽）。统一未读计数（`GET /notifications/feed/unread-count` = 本人站内信未读 + 全局告警未读，30s 轮询）+ 下拉只读预览最近混合通知（消息/告警各带来源标识与级别色点，`GET /notifications/feed?pageSize=8`）+「查看全部」跳 `/notifications` 通知中心页。+ **账户菜单**（用户名/角色 + 退出登录）始终显示（窄屏不隐，确保核心能力常驻）。
 - **右 = 工作区（路由页面 + 服务器统一控制台，FR-166/269）**：
-  - 点实例 → 导航到 `/instances/:id` 并打开**服务器统一控制台**（`InstanceConsolePage`）：固定分区为概览 / 控制台 / 文件配置 / 监控 / 玩家 / 插件 / 备份定时 / 业务 / Bot，顶部状态条提供运行态、节点、端口、在线玩家、TPS/MSPT 与启动 / 停止 / 重启 / 强杀 / 打开终端等操作。FR-166 可组合卡片画布仍保留为超级工作台 / 导播台等高级拼屏能力，不作为单服默认入口。
+  - 点实例 → 直接导航到 `/instances/:id` 并打开**服务器统一控制台**（`InstanceConsolePage`）：固定分区为概览 / 控制台 / 文件配置 / 监控 / 玩家 / 插件 / 备份定时 / 业务 / Bot，激活分区写入 `?tab=`，刷新可还原；顶部状态条提供运行态、节点、端口、在线玩家、TPS/MSPT 与启动 / 停止 / 重启 / 强杀 / 打开终端等操作。FR-166 可组合卡片画布仍保留为超级工作台 / 导播台等高级拼屏能力，不作为单服默认入口。
   - **统一卡壳** `WorkspaceCard`：grip 拖拽手柄（`draggableHandle=".workspace-card-grip"`，仅按住卡头 grip 才移动，卡内终端/编辑器交互不被吞）+ 实例·功能标签 + 全屏（临时最大化单卡）+ 关闭。卡 resize / 全屏切换后派发 `window` resize，触发终端 `fit` 与编辑器 relayout。
   - **惰性挂载**（承 ADR「未挂载卡不建 WS」）：仅渲染当前画布上的卡片，故终端 WS / metrics 轮询只对画布上的卡建立；未加入画布的功能不预渲染。
   - **预设（个人级 localStorage）**：命名保存画布布局（纯函数 `lib/workspace-preset.ts` 序列化/校验/规整 + `lib/workspace-card.ts` 卡片类型目录，vitest 覆盖）。内置「快捷预设」= **运维台**（默认：大终端 + 状态 + 资源）/ 纯终端 / 资源；用户可「另存为」自定义预设、删除。画布/卡片/预设运行态由 `stores/workspace.ts`（Zustand，按实例 id 记忆，各卡自管 dirty）承载，**不进 URL**（与 `console.ts` 的侧栏/选中态分离）。`/instances/:id` 由 `InstanceDetailPage` 直接挂载服务器统一控制台；需要拼屏时从超级工作台或导播台进入画布能力。
@@ -585,7 +587,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
   - 其余路由在工作区按路由渲染。**总览页（`OverviewPage`）** = 环形仪表盘 + 跨节点聚合历史曲线（FR-060：总 CPU/内存/在线玩家）+ 虚拟渲染密集实例表（mock 模式 1000+ 服务器时仅渲染可视窗口）；**节点页（`NodesPage`，FR-177 主从双栏重做，取代原卡片网格/列表 + 手搓 `fixed inset-0` 模态）** = 左**可收缩节点列表**（窄图标轨 ⇄ 展开，收缩态 `localStorage` 持久；顶集群汇总头复用 `summarizeNodes` + 搜索 + `AddNodeDialog`；行 = 状态点呼吸灯/名/host/mini 水位/实例数，选中高亮、离线置灰）+ 右**选中节点实时详情**（身份块 + 操作 kebab[维护/排空/下线，走 `DangerConfirm`] + `ResourceGauge` CPU/内存/磁盘/负载 + **分段 Tabs**：概览 `NodeOverviewSection` / 实例 `NodeInstanceCompare` / JDK `NodeJDKPanel` / 制品缓存 `NodeArtifactCachePanel`（FR-178 组件改挂分段，抽屉入口下线）/ 端口 `NodePortsPanel` / 监控历史曲线 / 坏节点修复 `NodeRepairPanel`[BUG-A：诊断 + 重 enroll + 清孤儿，接 `/nodes/repair/*`·`/nodes/:id/reenroll|orphans|purge-orphans`，破坏性走 `DangerConfirm`]）；未选节点右栏空态。列表筛选/选中态/收缩态持久抽纯函数 `lib/node-list.ts`（vitest 覆盖）。分段切换稳定工具条、布局不重组（FR-178 §5 抽屉 UX 约束）。**开源许可页（`LicensesPage`，`/licenses`，FR-135）** = 构建期 `scripts/gen-licenses.mjs` 扫描 web + bot-worker(npm) + Go(go-licenses) 生成 `web/public/licenses.json`（静态资源、非 `/api`），页面提供包名搜索 + 运行时/开发分区计数 + 表格 [包名·版本·许可证·作者] + 行内展开许可证全文。
   - **跨实例超级工作台（FR-167，`/super`，集群域独立入口，复用 ADR-034）**：把可组合画布的作用域从「限当前实例」扩展为**跨实例**——同一画布并存任意实例的卡（如 4 个不同实例终端拼监看墙）。两作用域在 `stores/workspace.ts` 清晰并存：单实例画布 `canvasByInstance[id]`（卡省略 instanceId，按实例 id 记忆）与超级工作台 `superCanvas`（**卡显式携带 `instanceId`**）。页面 `components/console/SuperWorkbenchPage` = 左侧可收起**实例库** `InstanceLibrary`（搜索实例 + 实例展开看 6+ 功能；**HTML5 原生 DnD 拖拽源**：拖实例=加该实例默认卡组、拖功能=加单卡、多选批量拖=一次拼监看墙；放置区 dragover 高亮 + 松手落位）+ 右侧跨实例画布（复用同一 `WorkspaceCard` 卡壳与网格、**惰性挂载**未上画布的卡不建 WS）。卡片所属实例名由 `WorkspaceCard` 按 `instanceId` 自解析（每卡可属不同实例）。**跨实例预设**与单实例共享同一份 `userPresets` localStorage（`lib/workspace-preset` 序列化扩为携 `instanceId`，**向后兼容**无 instanceId 的旧预设）。拖拽载荷的序列化/解析与「载荷→卡片」「跨实例卡去重（同实例同功能去重，多实例同功能并存）」抽为纯函数 `lib/instance-library.ts`（vitest 覆盖）。
   - **工作区导播台（FR-168，`/director`，集群域独立入口 / 超级工作台工具栏「导播台」按钮进，ADR-035）**：在多个**场景**（= FR-167 跨实例预设）间像 OBS **瞬切零延迟** + 缩略图条 + 定时轮播。页面 `components/console/DirectorConsolePage`：① **场景缩略图条** `DirectorSceneStrip`（一排场景，点击 / 数字键 1-9 / ←→ 瞬切；三态指示——active 主色脉动 / 预热绿点 / cold 灰点；右侧并发上限滑杆）；② **舞台**把所有**预热场景的画布同时挂载**（`DirectorCanvas`，只读网格复用 `WorkspaceCard` 卡壳），仅 active 可见。**核心 = ADR-035 预热并发模型**：要瞬切零延迟，目标场景的卡 WS 必须**已保活**；但多场景同时全速渲染会过载浏览器（WS 同域 ~6 连接 + 多 xterm/图表重绘吃满 CPU），故——**场景三态状态机**（纯逻辑 `lib/director.ts`，vitest 覆盖 LRU 驱逐 / 状态转移 / 轮播序列）：激活唯一 + **预热是受并发上限约束的集合**（默认保守 3，可配 1~6），新预热超限按 **LRU 驱逐**最久未激活的预热场景（降 cold，下次切换重连）；**非激活降频 / 暂停渲染**——非激活场景的 `DirectorCanvas` 用 `content-visibility:hidden`（浏览器跳过整棵子树布局/绘制）+ 终端经 `lib/director-render.ts` 的 `DirectorRenderProvider active=false` 让 xterm **暂停 render 但 WS 继续收数据进缓冲**（`Terminal.tsx` 加 paused 模式累积输出），切回一次性 flush。**cold 场景不挂载**（不建 WS）。导播台运行态（场景定义 + 状态机 + 轮播）由 `stores/director.ts`（Zustand，场景/上限/轮播间隔 localStorage 持久）承载，**纯前端**——只管理既有终端/监控 WS 的保活与渲染节流，不新增协议、不逾越进程边界（守架构不变量）。**真机多连接压测为硬验收维度**（单元只覆盖状态机逻辑）。
-- **设计系统（FR-061 + FR-163 视觉底座 + FR-267 A+C 收口 + FR-273 组件包）**：CSS 变量 token 驱动；默认亮色为 **A+C Jian 绿 `#158053`**，辅助钴蓝 `#2563EB`，结构色为背景 `#F5F6F8` / 面板 `#FFFFFF` / 边框 `#D7DCE3`，状态色系继续由 success/warning/danger/info 与阈值 helper（见 `@jianmanager/ui/lib/threshold`）驱动。**设计底座 token（`index.css`）**：`--primary: #158053`、`--brand-forest: #158053`、`--brand-cobalt: #2563EB`、`--radius: 0.375rem`、`--workspace-bg-image` 指向 A+C 背景素材；暗色模式按 B 高密度专业运维方向保留更深表面层级。**交互细节（FR-176/244/267）**：卡片/行/chip 原语 hover 只换阴影不位移；输入焦点环使用 `ring-2 + ring-ring/40`；固定顶层进度条 `TopLoadingBar` 在路由切换时一次性重放，React Query 请求/变更忙碌时进入循环加载态；侧栏、顶栏、页面壳和移动导航面板使用轻量过渡/入场动画；`prefers-reduced-motion` 下保留切页/进度条状态反馈动画，仅关闭平滑滚动；全局主题化细滚动条随明暗 + 双主题自适配。**通用组件包**：`web/packages/ui` 以 `@jianmanager/ui` 源码 alias 暴露 Button / Panel / StatCard / StatusBadge / SummaryChips / Table / Form primitives、`RangePicker` / `TimeSeriesChart` / `MonitorChart` / `MetricsOverviewStrip` 等通用 chart，以及 `utils` / `threshold` / `brush` / `chart-hover` / `monitor-metrics` helper；旧 `web/src/components/ui`、第一版通用 chart 与 helper 入口保留兼容 re-export。**控件博物馆**：`web/wiki` 是独立 Vite 子项目，直接消费 `@jianmanager/ui` 展示 Foundation / Actions / Forms / Data / Overlay / Monitoring 控件矩阵。**弃 shadcn `Card` 松散用法**（`card.tsx` 标 `@deprecated`，eslint `no-restricted-imports` 阻断新引入，见 ADR-032）。**全局双主题（FR-164）**：组件层零硬编码品牌色，品牌色全经 CSS 变量（`--primary`/`--primary-foreground`/`--accent`/`--accent-foreground`/`--ring`/`--brand-shadow`/`--chart-1`）。第二主题青绿 `#14B8A6` 仅在 `index.css` 用 `[data-theme="teal"]` 与 `[data-theme="teal"].dark` 覆盖这组品牌变量（结构色/状态色不动）；Jian 绿为默认（无 `data-theme` 即承 `:root`/`.dark`，兼容旧 `colorTheme: indigo` 存储值）。**主题色（`colorTheme: indigo|teal`）与明暗（`light|dark|system`）正交、各自 `localStorage` 持久**；纯逻辑下沉 `lib/theme.ts`，`stores/theme.ts` 统管两轴。**主题/明暗初始化提到 app 入口**（`main.tsx` 在 React 挂载前 `initThemeFromStorage()` 套 `<html data-theme>` + `.dark`），登录/初始化页也套主题且首屏无闪。一处切（侧栏底部 `ThemeSwitcher`）全站 CSS 变量实时跟变（按钮/曲线/选中态/进度条随主色）。仍基于 shadcn/ui + Tailwind v4 + OKLCH，不引入新框架。
+- **设计系统（FR-061 + FR-163 视觉底座 + FR-267 A+C 收口 + FR-273 组件包）**：CSS 变量 token 驱动；默认亮色为 **A+C Jian 绿 `#158053`**，辅助钴蓝 `#2563EB`，结构色为背景 `#F5F6F8` / 面板 `#FFFFFF` / 边框 `#D7DCE3`，状态色系继续由 success/warning/danger/info 与阈值 helper（见 `@jianmanager/ui/lib/threshold`）驱动。**设计底座 token（`index.css`）**：`--primary: #158053`、`--brand-forest: #158053`、`--brand-cobalt: #2563EB`、`--radius: 0.375rem`、`--workspace-bg-image` 指向 A+C 背景素材；暗色模式按 B 高密度专业运维方向保留更深表面层级。**交互细节（FR-176/244/267）**：卡片/行/chip 原语 hover 只换阴影不位移；输入焦点环使用 `ring-2 + ring-ring/40`；全局 motion token（`--motion-duration-fast/normal/slow/route`、`--motion-easing-standard/emphasized`）在 app 与 `@jianmanager/ui` 两侧暴露，侧栏、顶栏、路由、移动导航面板、工具条与固定顶层进度条 `TopLoadingBar` 均引用同一时长/缓动；React Query 请求/变更忙碌时进度条进入循环加载态；`prefers-reduced-motion` 下保留切页/进度条状态反馈动画，仅关闭平滑滚动；全局主题化细滚动条随明暗 + 双主题自适配。**通用组件包**：`web/packages/ui` 以 `@jianmanager/ui` 源码 alias 暴露 Button / Panel / StatCard / StatusBadge / SummaryChips / Table / Form primitives、`RangePicker` / `TimeSeriesChart` / `MonitorChart` / `MetricsOverviewStrip` 等通用 chart，以及 `utils` / `threshold` / `brush` / `chart-hover` / `monitor-metrics` helper；旧 `web/src/components/ui`、第一版通用 chart 与 helper 入口保留兼容 re-export。**控件博物馆**：`web/wiki` 是独立 Vite 子项目，直接消费 `@jianmanager/ui` 展示 Foundation / Actions / Forms / Data / Overlay / Monitoring 控件矩阵。**弃 shadcn `Card` 松散用法**（`card.tsx` 标 `@deprecated`，eslint `no-restricted-imports` 阻断新引入，见 ADR-032）。**全局双主题（FR-164）**：组件层零硬编码品牌色，品牌色全经 CSS 变量（`--primary`/`--primary-foreground`/`--accent`/`--accent-foreground`/`--ring`/`--brand-shadow`/`--chart-1`）。第二主题青绿 `#14B8A6` 仅在 `index.css` 用 `[data-theme="teal"]` 与 `[data-theme="teal"].dark` 覆盖这组品牌变量（结构色/状态色不动）；Jian 绿为默认（无 `data-theme` 即承 `:root`/`.dark`，兼容旧 `colorTheme: indigo` 存储值）。**主题色（`colorTheme: indigo|teal`）与明暗（`light|dark|system`）正交、各自 `localStorage` 持久**；纯逻辑下沉 `lib/theme.ts`，`stores/theme.ts` 统管两轴。**主题/明暗初始化提到 app 入口**（`main.tsx` 在 React 挂载前 `initThemeFromStorage()` 套 `<html data-theme>` + `.dark`），登录/初始化页也套主题且首屏无闪。一处切（侧栏底部 `ThemeSwitcher`）全站 CSS 变量实时跟变（按钮/曲线/选中态/进度条随主色）。仍基于 shadcn/ui + Tailwind v4 + OKLCH，不引入新框架。
 - 暗色/亮色主题与 i18n（zh/en）正常；选中实例/节点为客户端 UI 状态，不进 URL。
 - **响应式基线（FR-163）**：栅格断点沿用 Tailwind `sm/md/lg/xl`（如总览 KPI `grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6`），页面壳 `jm-page-stack` 全宽流式铺满工作区，页眉与工具条允许换行；卡片原语 `Panel`/`StatCard` 流式宽度自适应、不破栅格。移动端工作区底部预留导航安全区，避免底部导航遮挡主要操作。
 
@@ -680,9 +682,9 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 
 **操作按钮**: 启动(▶) / 停止(⏸) / 重启(⟳) / 强制终止(🗑) / 一键复制(⧉，仅 backend，V2)
 **点击实例名** → 导航到 `/instances/:id` 并打开该实例的**服务器统一控制台**（见 §8.2「右=工作区」，FR-269；控制台顶部含启动/停止/重启/强制终止 + 打开终端，固定分区含概览 / 控制台 / 文件配置 / 监控 / 玩家 / 插件 / 备份定时 / 业务 / Bot）；FR-166 可组合卡片画布保留在超级工作台 / 导播台作为高级拼屏能力。
-**组织分组视图**（V2，FR-165）: 筛选栏「组织分组」开关切到「左分组树 + 右列表」专用形态（design §4.4）——左树多级嵌套（新建/嵌套子组/折叠优先/选中，节点挂子树聚合去重计数），右列表复用工作台卡 + 组路径面包屑 + 批量「标记入组」，支持把实例拖入左树某组（HTML5 原生 DnD）。与既有多维筛选 + `groupBy` 维度分组**并列正交**，互不破坏。分组树正交于用户组（RBAC）与网络群组（部署），仅 CP 读写（`/instance-groups`，ADR-033）。
+**组织分组视图**（V2，FR-165/133）: 筛选栏「组织分组」开关切到「左分组树 + 右列表」专用形态（design §4.4）——左树多级嵌套（新建/嵌套子组/折叠优先/选中，节点挂子树聚合去重计数），补名称搜索、匹配上下文展示、虚拟渲染、`role=tree/treeitem`、`aria-selected/expanded` 与 Enter/Space 键盘操作；右列表复用工作台卡 + 组路径面包屑 + 批量「标记入组」，支持把实例拖入左树某组（HTML5 原生 DnD）。与既有多维筛选 + `groupBy` 维度分组**并列正交**，互不破坏。分组树正交于用户组（RBAC）与网络群组（部署），仅 CP 读写（`/instance-groups`，ADR-033）。
 
-**分页/聚合查询地基**（FR-247）：既有 `GET /instances` 一次性返回全量裸数组，实例上千时响应体过大 + 前端全量渲染卡顿。新增两个只读端点作为规模化查询地基（供 FR-235/240/241 消费）：`GET /instances/search`（分页 + 名称子串搜索 + 多维筛选 + 排序，新信封 `{items,total,page,pageSize}`）与 `GET /instances/aggregate`（按状态/节点/角色维度计数，零补全全枚举键）。复用既有权限作用域与筛选语义；`GET /instances` 保持不变，新端点纯增量。
+**分页/聚合查询地基**（FR-247/235/137/128）：既有 `GET /instances` 一次性返回全量裸数组，实例上千时响应体过大 + 前端全量渲染卡顿。新增两个只读端点作为规模化查询地基（供 FR-235/240/241 消费）：`GET /instances/search`（分页 + 名称子串搜索 + 多维筛选 + 排序，新信封 `{items,total,page,pageSize}`）与 `GET /instances/aggregate`（按状态/节点/角色维度计数，零补全全枚举键）。`/instances` 主页面已消费这两个端点：搜索/状态/节点/网络/环境/标签/视图/分组/排序/方向/pageSize 写入 URL，卡片视图、平铺表格与分组单表均用 `useVirtualRows` 只挂载可视窗口并按需翻页，分组列表用 sticky 组头避免每组重复表头；滚动位置按 `pathname+search` 存 sessionStorage。复用既有权限作用域与筛选语义；`GET /instances` 保持不变，仍供尚未迁移的页面使用。
 
 #### 实例工作区（可组合卡片画布，取代固定 Tab）
 
@@ -964,7 +966,7 @@ data/
 │   ├── artifact-cache/ # 节点制品缓存：<sha256[:2]>/<sha256>(+.meta)（Worker 本地派生，FR-178）
 │   ├── log/          # 运行日志
 │   └── artifacts/    # 制品库（内容寻址，见 §14 / ADR-011；含 client-file 与 client-updater-core 归档；CP 全局，区别于上方节点本地缓存）
-└── cache/            # 临时：下载中转/解压；client-uploads/<uploadId>/ 为大文件分块上传临时分片区（FR-251，complete 拼装喂 CAS 后清理，CP 重启清残留）
+└── cache/            # 临时/派生缓存：下载中转/解压；worker-assets/<version>/<os>-<arch>/ 为 FR-190 Worker 二进制 CP 代理缓存；client-uploads/<uploadId>/ 为大文件分块上传临时分片区（FR-251，complete 拼装喂 CAS 后清理，CP 重启清残留）
 ```
 
 - 登记路径**按数据根相对存储**（如 `var/servers/hub-a1b2c3d4`），整体拷到另一机器后仍自洽。
@@ -978,10 +980,10 @@ CP 与各 Worker 的**所有出站下载**统一收口到共享出站 HTTP 客�
 | 进程 | 出站点 | 用途 |
 |---|---|---|
 | CP + Worker | `internal/platform/selfupdate.DownloadWith` | 自更新二进制下载（`Download` 保留为 DefaultClient 薄包装，生产走 `DownloadWith`） |
-| CP | `service.SelfUpdateService`（`resolveRelease`：GitHub Releases API / feed 回退 + CP 自升下载 + 升级前备份/回滚，FR-175/FR-182/ADR-036 §7/ADR-042） | 更新源解析（默认 GitHub Releases，feed 回退）+ CP 自身升级/回滚 |
-| CP | `service.CoreService` | PaperMC API 解析服务端核心版本/构建 |
+| CP | `service.SelfUpdateService`（`resolveRelease`：GitHub Releases API / feed 回退 + CP 自升下载 + 升级前备份/回滚，FR-175/FR-182/ADR-036 §7/ADR-042；`EnsureWorkerAsset`：FR-190 Worker 二进制缓存） | 更新源解析（默认 GitHub Releases，feed 回退）+ CP 自身升级/回滚 + Worker 二进制 CP 代理缓存 |
+| CP | `service.CoreService` | PaperMC API 与 Sponge 官方 Maven metadata 解析服务端核心版本/构建 |
 | CP | `service.AssetService.IngestFromURL` | 远端制品（服务端核心等）下载入库 |
-| Worker | `grpc.Server.UpgradeWorker` | Worker 升级二进制下载 |
+| Worker | `grpc.Server.UpgradeWorker` | Worker 升级二进制下载；FR-190 起下载 URL 由 CP-local `/worker-assets/:version/:os/:arch/worker?token=...` 提供，Worker 无需访问公网 release 源 |
 | Worker | `jdk.Manager`（`downloadAndExtract` / Zulu 元数据 API / foojay disco API） | JDK 归档下载 + foojay 版本目录/下载源解析（FR-178） |
 | Worker | `worker/grpc.DownloadCore`（`downloadFile`，经 `artifactcache` 命中复用） | 服务端 jar 下载到实例工作目录（FR-178 缓存命中即免下载） |
 | Worker | `decompiler.Provider` | CFR 反编译器按需下载（Maven Central） |

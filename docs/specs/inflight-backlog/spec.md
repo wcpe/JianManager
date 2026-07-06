@@ -28,7 +28,7 @@
 ## 2. 计划 / 在途（todo / 开发中）
 
 #### FR-046: Sponge 子服支持
-- **优先级**: P2 | **状态**: 计划 | **依赖**: FR-033, FR-034 | **关联 ADR**: ADR-007, ADR-008 | **关联 API**: `POST /instances`（role=backend, type=sponge）, `GET /cores` | **Spec**: `docs/specs/provision-sponge/`
+- **优先级**: P2 | **状态**: 计划 | **依赖**: FR-033, FR-034 | **关联 ADR**: ADR-007, ADR-008 | **关联 API**: `POST /instances`（role=backend, type=sponge）, `GET /cores` | **Spec**: `docs/specs/provision-sponge/spec.md`（草拟，待审核）
 - **描述**: 扩展建服向导，支持 SpongeVanilla / SpongeForge 后端子服，自动获取核心、系统分配目录与端口、结构化启动
 - **验收**:
   - [ ] 建服向导核心类型新增 SpongeVanilla / SpongeForge，按 MC 版本从官方源获取核心 jar（优先制品库命中）
@@ -38,8 +38,15 @@
   - [ ] i18n + 主题正常
 
 #### FR-053: 插件批量部署多服
-- **状态**: 已迁出到专属规格（已交付@v0.13.0）
-- **规格真源**: `docs/specs/plugin-batch-deploy/spec.md` 与 `api.md`
+- **优先级**: P1 | **状态**: 计划 | **依赖**: FR-052, FR-058 | **关联 API**: `POST /plugins/batch-deploy` | **Spec**: `docs/specs/plugin-batch-deploy/spec.md`（草拟，待审核）
+- **描述**: 从制品库选插件，批量部署到选定的多个实例，返回成功/失败汇总
+- **验收**:
+  - [ ] 从制品库（type=plugin）选一个或多个插件
+  - [ ] 选目标实例集（按筛选或勾选），批量部署
+  - [ ] 经 gRPC 扇出到各 Worker，返回每实例成功/失败 + 汇总
+  - [ ] 权限隔离：仅部署到有权实例
+  - [ ] 危险操作二次确认 + 审计
+  - [ ] i18n + 主题正常
 
 #### FR-113: 全文索引后台化与进度
 - **优先级**: P2 | **状态**: 开发中（本 worktree 已补自动化回归；待主控真机验收） | **关联 FR**: FR-074 | **关联 ADR**: ADR-017, ADR-024
@@ -50,8 +57,8 @@
   - [ ] 真机：大目录首查不卡 UI、结果一致
 
 #### FR-114: 探针依赖内联/缓存预置
-- **优先级**: P3 | **状态**: 开发中（离线缓存链路已落地，待断网真机 enable） | **关联 FR**: FR-065, FR-068, ADR-016
-- **描述**: 探针首启联网拉 TabooLib/Kotlin 依赖（~30s+），慢网/离线首启探针失败。父仓 `make embed-probe` 生成 `ServerProbe.jar`、`probe-libraries.zip` 与 `probe.json`，CP 建服部署与在线更新均随 `DeployServerProbe.libraries_zip` 下发缓存包，Worker 解压到实例根 `libraries/`。
+- **优先级**: P3 | **状态**: 计划 | **关联 FR**: FR-065, ADR-016 | **Spec**: `docs/specs/probe-dependency-cache/spec.md`（草拟，待审核）
+- **描述**: 探针首启联网拉 TabooLib 依赖（~30s+），慢网/离线首启探针失败
 - **验收**:
   - [x] Worker 侧 TabooLib/Kotlin 缓存预置：`libraries_zip` 只接受 `libraries/` 根路径并解压到实例工作目录根
   - [x] 构建链路：父仓 Go 工具从探针 jar 内 `env.properties`/`version.properties` 解析依赖，按 Maven layout 下载、写本地 sha1、生成稳定 zip 与 probe.json

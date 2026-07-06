@@ -28,7 +28,7 @@
 - 一键命令形态（面板生成、可直接粘贴）：
   - Linux：`curl -fsSL <cp>/install-worker.sh | sh -s -- --control-plane <cp-grpc> --token <jmet_...> [--name ...] [--service]`
   - Windows：`iex (iwr <cp>/install-worker.ps1 -UseBasicParsing).Content; Install-JianManagerWorker -ControlPlane <cp-grpc> -Token <jmet_...> [-Name ...] [-Service]`（PowerShell 等价；必须喂 `.Content` 内容字符串，`| iex` 管道响应对象会损坏 UTF-8 正文，FIX-1）
-- **实现落地**：签发端点 `POST /api/v1/nodes/enroll-token`（+ `GET /nodes/enroll-tokens`、`DELETE /nodes/enroll-tokens/:id`，均限平台管理员）。一键命令里的 CP gRPC 地址与脚本下载基址默认由签发请求 Host 推断，可经 CP 配置 `enroll.advertise_grpc` / `enroll.script_base_url` 显式覆盖；`enroll.binary_url` 非空则并入命令的 `--download-url`（缺省走脚本 `--binary` 本地兜底）。本地身份文件实现为 `internal/worker/register/identity.go`（原子写 + 0600）。
+- **实现落地**：签发端点 `POST /api/v1/nodes/enroll-token`（+ `GET /nodes/enroll-tokens`、`DELETE /nodes/enroll-tokens/:id`，均限平台管理员）。一键命令里的 CP gRPC 地址与脚本下载基址默认由签发请求 Host 推断，可经 CP 配置 `enroll.advertise_grpc` / `enroll.script_base_url` 显式覆盖；FR-190 起缺省签发 CP-local Worker 资产 `--download-url`，`enroll.binary_url` 非空时作为显式覆盖源并入命令。本地身份文件实现为 `internal/worker/register/identity.go`（原子写 + 0600）。
 
 ### 3. Worker 侧 enrollment 与凭据持久化
 
@@ -57,7 +57,7 @@
 - 新增表 `node_enroll_tokens`（哈希、过期、消费状态、预设名）；AutoMigrate 自动建表。
 - `Register` RPC 行为分叉：新节点（name 未命中）**必须**带有效 enrollment token；老节点（name 命中）重注册不强制 token。该分叉需在 handler 内明确实现并测试覆盖（有效/过期/已消费/缺失/老节点重注册五条路径）。
 - Worker 新增本地身份文件 `etc/node-identity.json`（数据根内），迁移节点数据根即迁移身份；删除该文件 + 节点在 CP 仍存在 → 下次启动会因无 token 且 name 命中而走重注册（仍可上线），无 token 且 name 未命中（如改了名）则首注册失败。
-- 安装脚本要求目标机器有基础工具（`curl`/`iwr`、`sh`/`pwsh`）；二进制下载源在本 FR 未架设公网 release 时，脚本以 `--binary` 本地路径兜底（真机自测路径），公网分发端点留作后续。
+- 安装脚本要求目标机器有基础工具（`curl`/`iwr`、`sh`/`pwsh`）；FR-190 起默认二进制来源收敛为 CP-local Worker 资产 URL，脚本仍以 `--binary` 本地路径作为离线兜底。
 - 「自助注册可被陌生进程白嫖」的风险**对新节点已封堵**，但对「伪造已存在节点名重注册」仍开放（需 node_secret 才能心跳，但重注册本身不验 secret）——这是为不破网做的有意权衡，彻底收口留后续 FR。
 
 ## 替代方案

@@ -251,12 +251,12 @@
     "nodeName": "",
     "controlPlaneGrpc": "cp-host:9100",
     "scriptBaseUrl": "https://cp-host",
-    "installCommandLinux": "curl -fsSL https://cp-host/install-worker.sh | sh -s -- --control-plane cp-host:9100 --token jmet_xxx",
-    "installCommandWindows": "iex (iwr https://cp-host/install-worker.ps1 -UseBasicParsing).Content; Install-JianManagerWorker -ControlPlane cp-host:9100 -Token jmet_xxx"
+    "installCommandLinux": "curl -fsSL https://cp-host/install-worker.sh | sh -s -- --control-plane cp-host:9100 --token jmet_xxx --download-url 'https://cp-host/worker-assets/v0.13.0/{os}/{arch}/worker?token=...'",
+    "installCommandWindows": "iex (iwr https://cp-host/install-worker.ps1 -UseBasicParsing).Content; Install-JianManagerWorker -ControlPlane cp-host:9100 -Token jmet_xxx -DownloadUrl 'https://cp-host/worker-assets/v0.13.0/{os}/{arch}/worker?token=...'"
   }
   ```
 - token **落库只存 SHA-256 哈希**，明文一次性返回、不可二次读取；`controlPlaneGrpc`/`scriptBaseUrl` 由 CP 据请求 Host 推断，可经 `enroll.advertise_grpc`/`enroll.script_base_url` 配置覆盖。`scriptBaseUrl` 为 CP 托管脚本基址，前端据此拼「手动安装步骤」分步兜底命令
-- 一键命令的脚本由 CP 托管（见上 `GET /install-worker.{sh,ps1}`）；二进制下载基址默认 GitHub Releases latest（`enroll.binary_url`，ADR-036 契约 `worker-<os>-<arch>[.exe]`），开箱即下载，可覆盖为内网源或置空改用脚本 `--binary` 本地兜底
+- 一键命令的脚本由 CP 托管（见上 `GET /install-worker.{sh,ps1}`）；二进制下载默认签发 CP-local Worker 资产 URL 模板（FR-190，`/worker-assets/:version/{os}/{arch}/worker?token=...`，脚本按运行时平台替换），`enroll.binary_url` 非空时可显式覆盖为内网源，离线场景仍可用脚本 `--binary` 本地兜底
 - **审计**: `node.enroll_token.create`（detail 仅含 tokenId/tokenPrefix/nodeName/expiresAt，绝不含明文）
 
 ### GET /api/v1/nodes/enroll-tokens
@@ -511,6 +511,33 @@
   `totals` 取 Node/Instance 表当前值 + 各实例最近 2min 在线人数合计。
 - **错误**: 400 `INVALID_RANGE`/`INVALID_RESOLUTION`；403 `FORBIDDEN`
 
+### GET /api/v1/metrics/processes/top
+- **描述**: 返回受管实例进程 TOPN 最新快照。Worker 只上报受 JianManager 管理的实例根进程及子进程，命令摘要已截断/脱敏，不返回完整命令行或环境变量
+- **关联 FR**: FR-170 ｜ **关联 ADR**: ADR-060
+- **权限**: 登录；指定 `instanceId` 时按 `instance.read` 收敛；未指定 `instanceId` 的全局/节点视图仅平台管理员可用
+- **Query**: `instanceId?`（数值 ID）、`nodeId?`（node_uuid）、`sort=cpu|memory|io`（默认 cpu）、`limit=1..50`（默认 10）
+  - `instanceId` 与 `nodeId` 均为空时返回平台范围进程 TOPN，仅平台管理员可用
+- **响应**:
+  ```json
+  [
+    {
+      "instanceId": 1,
+      "instanceUuid": "uuid",
+      "nodeUuid": "node-uuid",
+      "pid": 1234,
+      "name": "java",
+      "cpuPercent": 42.5,
+      "rssBytes": 536870912,
+      "readBytesPerSec": 0,
+      "writeBytesPerSec": 0,
+      "user": "minecraft",
+      "commandSummary": "java -Xmx4G -jar server.jar",
+      "sampledAt": "2026-07-06T12:00:00Z"
+    }
+  ]
+  ```
+- **错误**: 400 `INVALID_SORT`/`INVALID_INSTANCE`；403 `FORBIDDEN`；404 `TARGET_NOT_FOUND`
+
 ### GET /api/v1/players
 - **描述**: 在线玩家列表，经 ServerProbe 探针事件实时聚合（FR-066/067），每个玩家标注所在子服（BC 跨服感知）；按可访问实例集合收敛
 - **权限**: `instance.read`
@@ -559,7 +586,8 @@
   - 写动作时 CP 向 payload 注入 `taskId`/`operator`/`operatorId`/`nodeId`/`reason`（仅当业务方未显式同名入参时），使插件审计流水记录操作者（哪个管理员/哪个节点/为什么）
 - **响应**: `200`，`{ "instanceId":3, "domain":"economy", "action":"balance", "available":true, "output": {...业务结果JSON...}, "error":"" }`
   - `available=false`：探针未连入/域不可用/Provider 执行失败 → `output` 为 `null` + `error` 说明（HTTP 200，降级不 5xx）
-- **审计**: 写动作记 `business.write`（detail 含 domain/action/operationId/reason/available）；审计中间件兜底记 `business.dispatch`（覆盖读+写）
+- **背包域当前写能力**: `domain=inventory, action=writeBasicAttrs` 写玩家基础属性；payload 形如 `{player, base:{dataVersion,basicAttrs}, edited:{dataVersion,basicAttrs}}`。物品发放/回收因 AllinInventorySync 2.0.0 未导出可外部消费的结构化物品写门面，当前不在 manifest 中
+- **审计**: 写动作记 `business.write`（detail 含 domain/action/operationId/reason/available）；`inventory.writeBasicAttrs` 额外记录 `player` 与变更字段列表 `fields`；审计中间件兜底记 `business.dispatch`（覆盖读+写）
 - **错误**: `400 INVALID_REQUEST`（缺 domain/action 或 payload 非法 JSON）、`403 FORBIDDEN`（读缺 `instance.operate` / 写缺 `instance.business.write`）、`404 NOT_FOUND`（实例不可见/不存在）
 - **关联 FR**: FR-116, FR-121 ｜ **关联 ADR**: ADR-026, ADR-027, ADR-029
 
@@ -571,29 +599,29 @@
 - **错误**: `403 FORBIDDEN`（无 `instance.read`）、`404 NOT_FOUND`（实例不可见/不存在）
 - **关联 FR**: FR-116 ｜ **关联 ADR**: ADR-026, ADR-027
 
-### GET /api/v1/instances/:id/business/economy/mirror
+### GET /api/v1/business/economy/mirror
 - **描述**: 经济余额镜像（FR-122，CP 自有汇聚镜像、非业务真源）：逐 `node→zone` 行返回最新余额（跨区同名玩家分行不混）。Query `?player=&currency=&node=&zone=&limit=`（任意组合过滤）
-- **权限**: `instance.read`
-- **响应**: `{ "balances":[{ "nodeUuid":"","zoneId":"0","playerName":"Steve","currency":"coin","currencyId":1,"balance":"100.00","lastSeq":3,"lastLedgerId":7,"occurredAt":0 }] }`（余额字符串承载 BigDecimal，禁浮点）
+- **权限**: `instance.read`；非平台管理员按当前用户可访问实例 UUID 下沉过滤
+- **响应**: `{ "balances":[{ "nodeUuid":"","instanceUuid":"","zoneId":"0","playerName":"Steve","currency":"coin","currencyId":1,"balance":"100.00","lastSeq":3,"lastLedgerId":7,"occurredAt":0 }] }`（余额字符串承载 BigDecimal，禁浮点）
 - **关联 FR**: FR-122 ｜ **关联 ADR**: ADR-028
 
-### GET /api/v1/instances/:id/business/economy/aggregate
+### GET /api/v1/business/economy/aggregate
 - **描述**: 跨区经济聚合明细（FR-122）：按 `player`+`currency` 逐 `node→zone` 返回**不盲目求和**（mce 账户按 zone 隔离，是否相加由调用方按业务语义定）。Query `?player=&currency=`
-- **权限**: `instance.read`
+- **权限**: `instance.read`；非平台管理员按当前用户可访问实例 UUID 下沉过滤
 - **响应**: `{ "rows":[{ "nodeUuid":"","zoneId":"0","balance":"100.00" }] }`
 - **关联 FR**: FR-122 ｜ **关联 ADR**: ADR-028
 
-### GET /api/v1/instances/:id/business/economy/leaderboard
+### GET /api/v1/business/economy/leaderboard
 - **描述**: 某货币余额倒序 Top-N（FR-123 旁路排行：mce 无 leaderboard API，从 JM 自有镜像表派生、不穿透探针；按 DB 方言数值 CAST 排序，避免 BigDecimal 字符串字典序错排）。逐 `node→zone` 行参与排行
-- **权限**: `instance.read`
+- **权限**: `instance.read`；非平台管理员按当前用户可访问实例 UUID 下沉过滤
 - **请求**: Query `?currency=（必填）&zone=&node=&limit=`（默认 100，上限 500）
 - **响应**: `{ "currency":"coin", "rows":[{ "rank":1,"playerName":"Steve","currency":"coin","nodeUuid":"","zoneId":"0","balance":"100.00" }] }`
 - **关联 FR**: FR-123 ｜ **关联 ADR**: ADR-028
 
-### GET /api/v1/instances/:id/business/events
+### GET /api/v1/business/events
 - **描述**: 通用业务事件流（FR-122，按 `(domain,dedupKey)` 去重的 envelope 表，CP 自有汇聚）。经济流水由 `?domain=economy` 过滤后前端解析信封。Query `?domain=&node=&limit=`
-- **权限**: `instance.read`
-- **响应**: `{ "events":[{ "domain":"economy","dedupKey":"<ledgerId>","action":"","nodeUuid":"","operator":"","payloadJson":"{...}","occurredAt":0 }] }`
+- **权限**: `instance.read`；非平台管理员按当前用户可访问实例 UUID 下沉过滤
+- **响应**: `{ "events":[{ "domain":"economy","dedupKey":"<ledgerId>","action":"","nodeUuid":"","instanceUuid":"","operator":"","payloadJson":"{...}","occurredAt":0 }] }`
 - **关联 FR**: FR-122 ｜ **关联 ADR**: ADR-028
 
 ### POST /api/v1/players/:name/kick
@@ -639,17 +667,23 @@
 ### GET /api/v1/cores
 - **描述**: 查询服务端核心可用版本/构建。无 `mcVersion` 返回版本列表；带 `mcVersion` 返回下载信息
 - **权限**: 平台管理员
-- **Query**: `type=paper`（默认）/`velocity`/`waterfall`（PaperMC API）/`bungeecord`（md-5 Jenkins，仅 `latest`）/`spongevanilla`/`spongeforge`（Sponge 官方 Maven + Forge 官方 Maven）、`mcVersion`、`build`（可选，缺省最新）
+- **Query**: `type=paper`（默认）/`velocity`/`waterfall`（PaperMC API）/`bungeecord`（md-5 Jenkins，仅 `latest`）/`spongevanilla`（Sponge 官方 Maven metadata）、`mcVersion`、`build`（可选，PaperMC 缺省最新；SpongeVanilla 按 MC 版本取最新 artifact）
 - **响应（带 mcVersion）**: `{ "type":"paper","mcVersion":"1.21.1","build":196,"filename":"...","downloadUrl":"...","sha256":"..." }`
-- **SpongeForge 响应扩展**: `runtime={ "distribution":"spongeforge", "modFilename":"SpongeForge.jar", "forgeInstallerUrl":"https://maven.minecraftforge.net/.../forge-...-installer.jar", "forgeVersion":"1.21.1-52.1.5", "launchJar":"forge-1.21.1-52.1.5-server.jar" }`
-- **关联 FR**: FR-034 / FR-046
+- **关联 FR**: FR-034, FR-046
+
+### POST /api/v1/instances/provision/server
+- **描述**: 一键搭建后端子服：支持 `paper`、`spongevanilla` 等非代理核心；解析核心 → 分配端口 → 系统分配目录 + 结构化启动 → 下载核心 + 写 eula/server.properties，返回实例（STOPPED，可一键启动）
+- **权限**: 平台管理员
+- **请求**: `{ "nodeId":1,"name":"lobby","coreType":"spongevanilla","mcVersion":"1.21.1","build":0,"jdkId":1,"memoryMb":4096,"jvmArgs":["-XX:+UseG1GC"],"groupId":0,"onlineMode":false }`（`onlineMode` 缺省 false=代理就绪/离线；独立正版服可传 true）
+- **响应**: `201` 创建的 Instance；`502 PROVISION_FAILED`（含已创建实例供重试/删除）；代理核心会返回 `422 PROVISION_FAILED`
+- **关联 FR**: FR-034, FR-046
 
 ### POST /api/v1/instances/provision/bukkit
-- **描述**: 一键搭建后端子服：解析 Paper/SpongeVanilla/SpongeForge 核心 → 分配端口 → 系统分配目录 + 结构化启动 → 下载核心或安装 Forge+SpongeForge mod → 写 eula/server.properties，返回实例（STOPPED，可一键启动）。历史路径名保留 `bukkit` 兼容既有调用，创建出的实例 `type` 仍为 `minecraft_java`、`role=backend`
+- **描述**: 旧 Paper/Bukkit 兼容入口，内部复用 `POST /instances/provision/server`；新增前端能力不再通过该入口创建 SpongeVanilla
 - **权限**: 平台管理员
-- **请求**: `{ "nodeId":1,"name":"lobby","coreType":"paper|spongevanilla|spongeforge","mcVersion":"1.21.1","build":0,"jdkId":1,"memoryMb":4096,"jvmArgs":["-XX:+UseG1GC"],"groupId":0,"onlineMode":false }`（`onlineMode` 缺省 false=代理就绪/离线；独立正版服可传 true）
+- **请求**: `{ "nodeId":1,"name":"lobby","coreType":"paper","mcVersion":"1.21.1","build":0,"jdkId":1,"memoryMb":4096,"jvmArgs":["-XX:+UseG1GC"],"groupId":0,"onlineMode":false }`（`onlineMode` 缺省 false=代理就绪/离线；独立正版服可传 true）
 - **响应**: `201` 创建的 Instance；`502 PROVISION_FAILED`（含已创建实例供重试/删除）
-- **关联 FR**: FR-034 / FR-046 | **Spec**: `docs/specs/provision-sponge/`
+- **关联 FR**: FR-034, FR-046
 
 ### POST /api/v1/instances/provision/proxy
 - **描述**: 一键搭建代理（role=proxy）：velocity/waterfall（PaperMC）/bungeecord（md-5 Jenkins），分配监听端口/目录，下载核心，生成转发配置；Velocity 生成 forwarding secret 并返回一次
@@ -849,9 +883,9 @@
 
 ### POST /api/v1/instances/:id/files/search
 - **描述**: 跨文件全文搜索 / 文件名快速打开。CP 仅经 gRPC 把查询转发到目标节点 Worker；索引是 Worker 本地派生资产（落数据根 `var/index/`，不进 CP 数据库，见 ADR-017）。索引**首建后台异步**（FR-113，见 ADR-024）：未就绪时本次返回 `indexing=true`（空命中），调用方稍后用同一查询重试；已就绪时查询前增量更新索引（指纹比对增/改/删），再倒排取候选文件、候选内精确行扫描返回命中
-- **关联 FR**: FR-074, FR-113
+- **关联 FR**: FR-074, FR-113, FR-141
 - **权限**: `instance.file`（可访问实例）
-- **请求**: `{ "query": "string", "mode": "content", "maxResults": 200 }`。`query` 必填；`mode` 取 `content`（默认，全文）或 `filename`（文件名子串匹配，行号为 0）；`maxResults<=0` 时由 Worker 取默认上限
+- **请求**: `{ "query": "string", "mode": "content", "maxResults": 200, "rootPath": "plugins", "extensions": [".yml", ".json"] }`。`query` 必填；`mode` 取 `content`（默认，全文）或 `filename`（文件名子串匹配，行号为 0）；`maxResults<=0` 时由 Worker 取默认上限；`rootPath` 可选，限定相对目录范围（禁止 `..`/前导 `/`）；`extensions` 可选，限定扩展名范围（服务端规范化为 `.ext`）
 - **响应**: `200`，`{ "hits": [{ "path": "plugins/config.yml", "line": 12, "snippet": "命中行片段" }], "truncated": false, "indexing": false }`。`path` 相对工作目录、以 `/` 分隔；`line` 1 起（filename 模式为 0）；`snippet` 仅 content 模式有值；`truncated=true` 表示命中达上限被截断；`indexing=true` 表示索引首建未就绪（`hits` 为空，应稍后用同一查询重试，FR-113）
 - **错误**: `400 INVALID_REQUEST`（缺 query）；`404 NOT_FOUND`（实例不存在/无权限）；`422 BUSINESS_ERROR`（节点离线/工作目录未设置/搜索失败）
 
@@ -965,75 +999,47 @@
 
 ---
 
-## 插件 / 模组（单服）
+## 插件 / 模组
 
-> 复用文件 gRPC（ListFiles/WriteFile/RenameFile/DeleteFile）在实例 `plugins/` 与 `mods/` 目录上操作；启用态文件名 `*.jar`，禁用态 `*.jar.disabled`。实例级隔离（AuthzService），写操作经审计中间件记录（`plugin.deploy`/`plugin.delete`/`plugin.toggle`）。
+> 复用文件 gRPC（ListFiles/ReadFile/WriteFile/RenameFile/DeleteFile）在实例 `plugins/`、`mods/`、`resourcepacks/`、`datapacks/` 目录上操作；`plugins/mods` 接受 `.jar`，`resourcepacks/datapacks` 接受 `.zip`，禁用态统一追加 `.disabled`。列表会有界读取 jar/zip 内 `plugin.yml`、`bungee.yml`、`fabric.mod.json`、`mods.toml`、`pack.mcmeta` 提取版本、作者与依赖摘要，解析失败仅降级为空。实例级隔离（AuthzService），写操作经审计中间件记录（`plugin.deploy`/`plugin.delete`/`plugin.toggle`/`plugin.batch_deploy`）。
 
 ### GET /api/v1/instances/:id/plugins
-- **描述**: 列出实例 `plugins/` 与 `mods/` 目录的插件 jar，识别启用/禁用状态（目录不存在视为空）
-- **关联 FR**: FR-052
+- **描述**: 列出实例四个受控目录的 jar/zip 制品，识别启用/禁用状态（目录不存在视为空），并尽量返回制品内元信息
+- **关联 FR**: FR-052, FR-143
 - **权限**: 实例可访问（成员仅限有权实例）
-- **响应**: `[{ "name": "EssentialsX.jar", "dir": "plugins", "enabled": true, "size": 1024, "modTime": 1710000000 }]`
+- **响应**: `[{ "name": "EssentialsX.jar", "dir": "plugins", "enabled": true, "size": 1024, "modTime": 1710000000, "version": "2.20.1", "author": "EssentialsX", "dependencies": ["Vault"] }]`
 
 ### POST /api/v1/instances/:id/plugins
-- **描述**: 上传插件（multipart）。先入制品库（FR-045，`type=plugin`，sha256 去重）再部署到目标目录
-- **关联 FR**: FR-052, FR-045
+- **描述**: 上传单服制品（multipart）。jar 制品先入制品库（FR-045，`type=plugin`，sha256 去重）再部署到目标目录；zip 资源包/数据包直接写入受控目录
+- **关联 FR**: FR-052, FR-045, FR-143
 - **权限**: 实例可管理
-- **表单**: `file`（必填，.jar）、`dir`（可选，`plugins`|`mods`，默认 `plugins`）
+- **表单**: `file`（必填；`plugins/mods` 为 `.jar`，`resourcepacks/datapacks` 为 `.zip`）、`dir`（可选，`plugins`|`mods`|`resourcepacks`|`datapacks`，默认 `plugins`）、`overwrite`（可选，`true`/`1` 时覆盖同名文件）
 - **响应**: `201 { "message": "已上传", "asset": { ...Asset } }`
+- **错误**: `409 FILE_EXISTS`（同名文件已存在且未允许覆盖）
 
 ### DELETE /api/v1/instances/:id/plugins/:name
-- **描述**: 删除指定插件（同时匹配启用/禁用文件名）。二次确认在前端完成
-- **关联 FR**: FR-052
+- **描述**: 删除指定制品（同时匹配启用/禁用文件名）。二次确认在前端完成
+- **关联 FR**: FR-052, FR-143
 - **权限**: 实例可管理
-- **Query**: `?dir=plugins|mods`（可选，默认 `plugins`）
+- **Query**: `?dir=plugins|mods|resourcepacks|datapacks`（可选，默认 `plugins`）
 - **路径参数**: `name` 为展示名（不含 `.disabled`）
 
 ### POST /api/v1/instances/:id/plugins/:name/toggle
-- **描述**: 启用/禁用插件（在 `.jar` 与 `.jar.disabled` 间重命名，不删除文件）
-- **关联 FR**: FR-052
+- **描述**: 启用/禁用制品（在原文件名与 `.disabled` 后缀之间重命名，不删除文件）
+- **关联 FR**: FR-052, FR-143
 - **权限**: 实例可管理
-- **Query**: `?dir=plugins|mods`（可选，默认 `plugins`）
+- **Query**: `?dir=plugins|mods|resourcepacks|datapacks`（可选，默认 `plugins`）
 - **响应**: `{ "message": "已切换", "enabled": false }`
 
 ### POST /api/v1/plugins/batch-deploy
-- **描述**: 从制品库选择一个或多个 `type=plugin` 资产，批量部署到多个实例的 `plugins/` 目录（不部署 `mods/`）
-- **关联 FR**: FR-053, FR-045, FR-052
-- **权限**: 实例可管理；平台管理员可跨实例，普通成员只会部署到其有权管理的实例
-- **审计动作**: `plugin.batchDeploy`
-- **请求**:
-  ```json
-  {
-    "assetIds": [101, 102],
-    "ids": [1, 2, 3]
-  }
-  ```
-  或：
-  ```json
-  {
-    "assetIds": [101],
-    "filter": { "nodeId": 1, "status": "STOPPED", "role": "backend" }
-  }
-  ```
-- **响应**:
-  ```json
-  {
-    "total": 3,
-    "success": 2,
-    "failed": 1,
-    "skipped": 0,
-    "results": [
-      { "id": 1, "name": "lobby", "skipped": false },
-      { "id": 2, "name": "survival", "skipped": false },
-      { "id": 3, "name": "proxy", "skipped": false, "error": "节点未连接" }
-    ]
-  }
-  ```
-- **计数口径**: `total/success/failed/skipped` 按实例计数；多插件部署到同一实例仍计 1 个实例结果
-- **行为约束**:
-  - `assetIds` 必须全部存在且 `type=plugin`；文件名使用制品原文件名并强制 `.jar`
-  - `ids` 与 `filter` 二选一；后端按实例管理权限收敛目标，越权目标不泄露
-  - CP 读取制品内容后复用 Worker `WriteFile` 写入 `plugins/<filename>.jar`，不新增 Worker RPC
+- **描述**: 从制品库选择 `type=plugin` 的一个或多个 jar，批量部署到多个实例的 `plugins/` 或 `mods/` 目录；同步返回逐实例/逐插件结果
+- **关联 FR**: FR-053, FR-045
+- **权限**: `instance:write`，目标实例按 AuthzService 可访问集合收敛；显式 ids 中不存在或越权目标计入 `skipped`
+- **请求**: `{ "assetIds":[1,2], "target": { "ids":[10,11], "filter": { "status":"STOPPED", "role":"backend", "nodeId":1 } }, "destination":"plugins", "overwrite":false }`
+  - `target.ids` 与 `target.filter` 二选一；单次可见目标上限 500
+  - `destination`: `plugins` / `mods`，非法或空值回落到 `plugins`
+  - `overwrite=false` 时同名文件已存在会返回该条失败；`overwrite=true` 允许覆盖
+- **响应**: `{ "requestedInstances":2, "requestedAssets":2, "succeeded":3, "failed":1, "skipped":0, "results":[{ "instanceId":10, "assetId":1, "ok":true }, { "instanceId":11, "assetId":2, "ok":false, "error":"文件已存在: plugins/Foo.jar" }] }`
 
 ---
 
@@ -1334,58 +1340,52 @@
 ## 备份
 
 ### GET /api/v1/instances/:id/backups
-- **描述**: 实例备份列表（含 `mode` 全量/增量、`parentId` 备份链、`storageId` 存储位置）
-- **关联 FR**: FR-013, FR-056, FR-057
+- **描述**: 实例备份列表（含 `mode` 全量/增量、`parentId` 备份链、`storageId` 存储位置、`checksum`/`checksumAlgo` 完整性校验字段；历史备份可能为空）
+- **关联 FR**: FR-013, FR-056, FR-057, FR-171
 
 ### POST /api/v1/instances/:id/backups
-- **描述**: 创建备份。`incremental=true` 时挂到该实例最近一次已完成备份后形成备份链（仅打包变化文件）；`storageId` 指定远程存储后端，缺省存于节点本地
-- **关联 FR**: FR-013, FR-056, FR-057
+- **描述**: 创建备份。`incremental=true` 时挂到该实例最近一次已完成备份后形成备份链（仅打包变化文件）；`storageId` 指定远程存储后端，缺省存于节点本地；Worker 完成后返回并持久化归档 SHA-256
+- **关联 FR**: FR-013, FR-056, FR-057, FR-171
 - **请求**: `{ "name": "string", "incremental": false, "storageId": 0 }`
 - **错误**: 422 `BUSINESS_ERROR`（增量但无可作基准的已完成全量备份）
 
 ### POST /api/v1/backups/:id/restore
-- **描述**: 恢复备份。增量备份沿父链回溯解析整链（全量基 + 各增量），委托 Worker 按序回放；远程备份先拉回本地再回放
-- **关联 FR**: FR-013, FR-056, FR-057
+- **描述**: 恢复备份。增量备份沿父链回溯解析整链（全量基 + 各增量），委托 Worker 按序回放；远程备份先拉回本地再回放；有 `checksum` 的归档在解压前校验，不一致则拒绝恢复
+- **关联 FR**: FR-013, FR-056, FR-057, FR-171
 
 ### DELETE /api/v1/backups/:id
 - **描述**: 删除备份。被增量子备份依赖时拒绝（422），避免割裂备份链
 - **关联 FR**: FR-013, FR-056
 
 ### GET /api/v1/backup-storages
-- **描述**: 备份远程存储后端列表（凭证以 `${ENV_VAR}` 引用，不返回明文）。返回项包含只读统计字段 `backupCount`（已完成备份份数）与 `usedBytes`（已完成备份文件大小合计，字节）。
+- **描述**: 备份远程存储后端列表（凭证以 `${ENV_VAR}` 引用，不返回明文），并返回容量聚合与最近一次人工测试结果
 - **权限**: 平台管理员
 - **关联 FR**: FR-057, FR-152
+- **响应加性字段**: `backupCount`、`usedBytes`、`lastTestAt`、`lastTestOk`、`lastTestMessage`
 
 ### POST /api/v1/backup-storages
 - **描述**: 创建远程存储后端（`type` ∈ s3/sftp/webdav）。凭证字段须为 `${ENV_VAR}` 引用，明文/非法类型回 422
 - **权限**: 平台管理员
-- **关联 FR**: FR-057
+- **关联 FR**: FR-057, FR-152
 - **请求**: `{ "name": "string", "type": "s3", "endpoint": "", "bucket": "", "region": "", "prefix": "", "accessKeyEnv": "${VAR}", "secretKeyEnv": "${VAR}", "useSsl": true }`
 
-### GET /api/v1/backup-storages/:id/stats
-- **描述**: 查询单个远程存储后端的只读统计。`backupCount` 来自已完成备份记录数，`usedBytes` 来自已完成备份大小合计（字节）。
+### POST /api/v1/backup-storages/test
+- **描述**: 测试未保存的存储后端配置；不创建记录，不写 `lastTest*`。S3 使用短超时 SigV4 `HEAD bucket`，WebDAV 使用 `OPTIONS`，SFTP 建立 SSH 握手
 - **权限**: 平台管理员
 - **关联 FR**: FR-152
-- **响应**: `{ "backupCount": 3, "usedBytes": 1073741824 }`
-- **错误**: `404 NOT_FOUND`
+- **请求**: 同 `POST /api/v1/backup-storages`
+- **响应**: `{ "ok": true, "message": "连接正常", "latencyMs": 0 }`
 
 ### POST /api/v1/backup-storages/:id/test
-- **描述**: 测试远程存储后端连通性。Control Plane 选择在线 Worker，通过 Worker gRPC `TestStorageBackend` 使用已保存配置做小对象上传→下载校验→删除探测，并返回延迟与失败原因；凭证仍只按 `${ENV_VAR}` 在 Worker 环境解析，不返回明文。
+- **描述**: 测试已保存的存储后端，并更新 `lastTestAt`、`lastTestOk`、`lastTestMessage`；探测方式同未保存配置测试
 - **权限**: 平台管理员
 - **关联 FR**: FR-152
-- **响应**: `{ "ok": true, "message": "连接成功", "errorCode": "", "latencyMs": 42, "nodeUuid": "node-uuid" }`
-- **失败语义**: 后端不可达、无在线 Worker、凭证环境变量缺失或存储端错误均返回 HTTP 200 且 `ok=false`，`errorCode` 使用 `NO_WORKER` / `WORKER_UNAVAILABLE` / `UNSUPPORTED_STORAGE` / `PING_FAILED` 等枚举；`id` 不存在仍返回 `404 NOT_FOUND`。
-
-### GET /api/v1/backup-storages/local/stats
-- **描述**: 查询节点本地默认备份统计。本地备份位于数据根 `var/backups`；`backupCount` 来自本地备份记录，`usedBytes` 优先按目录实际文件大小扫描。
-- **权限**: 平台管理员
-- **关联 FR**: FR-152
-- **响应**: `{ "backupCount": 2, "usedBytes": 524288000 }`
+- **响应**: `{ "ok": true, "message": "连接正常", "latencyMs": 0 }`
 
 ### DELETE /api/v1/backup-storages/:id
 - **描述**: 删除远程存储后端。被备份引用时拒绝（422）
 - **权限**: 平台管理员
-- **关联 FR**: FR-057
+- **关联 FR**: FR-057, FR-152
 
 ---
 
@@ -1743,10 +1743,26 @@
 
 ### GET /api/v1/audit
 - **描述**: 审计日志列表（平台管理员）
-- **关联 FR**: FR-015
-- **Query**: `?userId=xxx&action=instance.start&targetType=instance&from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z&limit=100`
+- **关联 FR**: FR-015, FR-172
+- **Query**: `?userId=xxx&action=instance.start&targetType=instance&from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z&page=1&pageSize=50`
 - **参数说明**:
   - `from`/`to`: RFC3339 格式时间，按 created_at 筛选范围
+  - `page`/`pageSize`: 传入任一分页参数时返回分页 envelope；`pageSize` 上限 200
+  - `limit`: 仅旧数组模式兼容使用；新前端应使用 `page/pageSize`
+- **响应**:
+  - 分页模式：`{ "items": [AuditLogInfo], "total": 123, "page": 1, "pageSize": 50 }`
+  - 旧数组模式：`AuditLogInfo[]`
+
+### GET /api/v1/audit/export
+- **描述**: 按过滤条件导出审计日志 NDJSON（平台管理员）
+- **关联 FR**: FR-172
+- **Query**: `?format=ndjson&userId=xxx&action=instance.start&targetType=instance&from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z`
+- **参数说明**:
+  - `format`: 当前仅支持 `ndjson`；传其它值返回 `400 UNSUPPORTED_FORMAT`
+  - `page`、`pageSize`、`limit` 会被忽略，导出始终按过滤条件导出全量匹配记录
+- **响应**: `application/x-ndjson`，服务端按批次流式写出，每行一条白名单 JSON
+- **字段白名单**: `id`、`createdAt`、`userId`、`username`、`action`、`targetType`、`targetId`、`ip`
+- **审计**: 导出行为写入 `audit.export`，detail 记录 `format`、过滤条件摘要与 `success/failure` 状态
 
 ---
 
@@ -2031,12 +2047,13 @@
 
 ---
 
-## 面板自更新（FR-081 / FR-175 / FR-182 / FR-186）
+## 面板自更新（FR-081 / FR-175 / FR-182 / FR-186 / FR-190）
 
 > Control Plane 与各节点 Worker 的二进制在线升级与回滚（ADR-020 / ADR-036 §7 / ADR-042）。均挂运营者浏览器 JWT 入口、**仅平台管理员**。
 > **更新源**（FR-175，见 ADR-036 §7）：默认**原生读 GitHub Releases API**（`control-plane.yml` 的 `update.github_repo`，默认 `wcpe/JianManager`），`update.channel` 选 `stable`（取 `/releases/latest` 最新正式）或 `prerelease`（取滚动 `latest` 预发布，FR-182 由 `nightly` 改名）；sha256 取自 release 的 `checksums.txt` 资产（ADR-036 §2 契约），资产名按 ADR-036 §1 命名 `<component>-<os>-<arch>[.exe]` 反解。`update.github_token` 可选，提升 GitHub API 限流额度（匿名 60 次/时）。`github_repo` 为空且 `feed_url` 非空时**回退**原 feed JSON 路径（FR-081）；二者均空即未配置。下载经 FR-174 出站代理。
 > 升级类操作写审计（detail 仅含版本/节点元数据，绝不含下载 url 或凭据）。升级流程：下载目标版本制品 → **sha256 校验** → 替换二进制 → 平滑重启；Worker 升级经 CP gRPC 编排（`GetVersion`/`UpgradeWorker`），daemon 模式下不杀运行中的游戏服。
 > **升级前自动备份 + 一键回滚**（FR-182，见 ADR-042）：升级（CP 自升 / 节点升）在替换前把当前二进制 + 版本/sha256 备份到数据根 `cache/selfupdate-backup/<component>`（每组件单份，覆盖上一份）。`check` 透出各组件 `backupVersion`，可一键回滚到上一版（校验备份 sha256 → 换回 → 平滑重启）；节点回滚经 gRPC `UpgradeWorker(action=rollback)`，Worker 走本地备份不下载。无备份返回 `UPDATE_NO_BACKUP`。
+> **Worker 二进制 CP 代理缓存下发**（FR-190，见 ADR-059）：节点升级前，CP 按当前 `version.Version + os + arch` 从 self-update feed/GitHub release artifact 下载并 sha256 校验 Worker 二进制，缓存到数据根 `cache/worker-assets/<version>/<os>-<arch>/`，再向 Worker 下发 CP-local 下载 URL + sha256；Worker 升级无需访问公网 release 源。CP-local 下载 URL 使用短期 query token，审计不记录 token 明文；`purpose=upgrade` token 必须绑定 `nodeUuid`，安装 token 与升级 token 分开签发。
 
 ### GET /api/v1/self-update/check
 - **描述**: 返回**服务端缓存的上次成功检查结果**（FR-186），**不触发 live 网络调用**（毫秒级返回，进系统更新页即时回显）。缓存空时返回 `cached:false` 的最小结果（仅当前 `configured`/`source` + CP 本机当前版本），由前端据此触发一次 `refresh`。live 检查走 `POST /self-update/check/refresh`
@@ -2072,9 +2089,9 @@
 - **审计**: `self_update.control_plane_rollback`
 
 ### POST /api/v1/self-update/nodes/:id/upgrade
-- **描述**: 经 gRPC 令目标节点下载校验替换并重启 Worker（daemon 模式下游戏服不掉）
+- **描述**: 经 gRPC 令目标节点下载校验替换并重启 Worker（daemon 模式下游戏服不掉）。FR-190 起，CP 会先预缓存与当前 CP 版本一致的目标平台 Worker 资产，签发短期下载 token，并把 CP-local URL + sha256 下发给 Worker；若更新源版本与 CP 当前版本不一致则拒绝，避免节点拿到与控制面协议错位的 Worker
 - **权限**: 平台管理员
-- **关联 FR**: FR-081、FR-175
+- **关联 FR**: FR-081、FR-175、FR-190
 - **请求**: `{ "version": "可选，留空取更新源最新" }`
 - **响应** (202): `{ "status": "upgrading", "nodeId", "fromVersion", "toVersion" }`
 - **错误**: 409 `UPDATE_NOT_CONFIGURED` | 422 `UPDATE_NO_ARTIFACT` | 429 `UPDATE_RATE_LIMITED` | 503 `NODE_OFFLINE`（节点未连接）| 502 `UPDATE_FAILED`
@@ -2103,6 +2120,29 @@
 - **权限**: 平台管理员
 - **关联 FR**: FR-081
 - **响应** (200): `{ "rolloutId", "targetVersion", "state"(idle|running|completed), "startedAt", "finishedAt", "total", "succeeded", "failed", "pending", "nodes": [ { "nodeId", "name", "state"(pending|upgrading|succeeded|failed), "fromVersion", "toVersion", "error", "attempts" } ] }`
+
+### GET /api/v1/self-update/worker-assets
+- **描述**: 查看 CP 本地已缓存的 Worker 二进制资产元信息（FR-190）。仅列缓存目录中已有 metadata 的条目；若文件损坏或 sha256 不符，`cached=false` 并返回 `lastError`
+- **权限**: 平台管理员
+- **关联 FR**: FR-190
+- **响应** (200): `[ { "version", "os", "arch", "cached", "sha256", "size", "sourceUrl", "cachedAt", "lastError" } ]`
+- **错误**: 500 `WORKER_ASSET_LIST_FAILED`
+
+### POST /api/v1/self-update/worker-assets/cache
+- **描述**: 手动预缓存目标平台 Worker 二进制资产（FR-190）。CP 按当前 `version.Version` 在更新源中匹配 `component=worker, os, arch`，下载经当前 CP 出站代理，sha256 校验通过后落 `cache/worker-assets`
+- **权限**: 平台管理员
+- **关联 FR**: FR-190
+- **请求**: `{ "os": "linux", "arch": "amd64" }`
+- **响应** (200): `{ "version", "os", "arch", "cached": true, "sha256", "size", "sourceUrl", "cachedAt" }`
+- **错误**: 409 `UPDATE_NOT_CONFIGURED` | 422 `UPDATE_NO_ARTIFACT` | 502 `WORKER_ASSET_FAILED`
+- **审计**: `self_update.worker_asset_cache`（记录 version/os/arch/size，不记录下载 token）
+
+### GET /worker-assets/:version/:os/:arch/worker
+- **描述**: Worker 二进制 CP-local 下载端点（FR-190）。该端点不走 JWT，必须携带 CP 签发的短期 query token：`?token=<opaque>`。升级 token 绑定 `version/os/arch/purpose/nodeUuid`；安装 token 绑定 `version/purpose` 并允许 `os/arch` 通配，供安装脚本运行时替换平台模板；默认 TTL 10 分钟。`purpose=install` 且当前版本缓存未命中时，CP 会按更新源即时拉取、校验并缓存后下发。响应为二进制文件流
+- **权限**: 短期 Worker 资产下载 token
+- **关联 FR**: FR-190
+- **响应** (200): `application/octet-stream`
+- **错误**: 403 `INVALID_WORKER_ASSET_TOKEN` | 404 `WORKER_ASSET_NOT_CACHED` | 409 `UPDATE_NOT_CONFIGURED` | 422 `UPDATE_NO_ARTIFACT` | 502 `WORKER_ASSET_FAILED`
 
 ---
 

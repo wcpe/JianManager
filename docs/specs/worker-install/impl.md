@@ -30,8 +30,8 @@
 - [x] `scripts/install-worker.sh`（Linux/macOS）
 - [x] `scripts/install-worker.ps1`（Windows）
 - [x] **BUG-B 修复**：CP 经 `go:embed` 内嵌脚本（`internal/controlplane/embed/install_scripts.go`，源 `embed/install-scripts/`，`make embed-install-scripts` 从 canonical `scripts/` 同步）并匿名托管 `GET /install-worker.sh`、`GET /install-worker.ps1`（`router/install_script.go`，根路径、先于 SPA 回退），修「一键命令 curl `<cp>/install-worker.sh` 404」根因。内嵌副本与 canonical 字节一致由 `embed/install_scripts_test.go` 守护；签发响应补 `scriptBaseUrl` 供前端拼手动步骤
-- [x] 下载资产名 + 默认基址对齐 ADR-036 GitHub Releases 契约（`worker-<os>-<arch>[.exe]`，开箱即下载，`--binary` 兜底保留）
-- [x] CP `enroll.binary_url` 默认指向 GitHub Releases latest，一键命令默认带 `--download-url`；单测覆盖命令含下载基址
+- [x] 下载资产名对齐 ADR-036 GitHub Releases 契约（`worker-<os>-<arch>[.exe]`），FR-190 起默认基址改为 CP-local Worker 资产 URL，`--binary` 兜底保留
+- [x] FR-190 起一键命令默认签发 CP-local Worker 资产 `--download-url`；`enroll.binary_url` 仅作为显式覆盖源保留，单测覆盖默认 CP-local 与覆盖源两条路径
 
 ### 前端（web）
 - [x] 「添加节点」向导：调签发端点 → 展示一键命令（复制）+ token 一次性提示
@@ -48,7 +48,7 @@
 - [x] **BUG-B 回归**：`router/install_script_test.go`（匿名 GET 脚本端点 200 + 内容校验，red→green）、`embed/install_scripts_test.go`（内嵌非空 + 与 canonical 字节一致防漂移）绿
 - [x] 前端 tsc / lint / build 绿
 - [x] 安装脚本 POSIX `sh -n` / PowerShell Parser 语法校验通过
-- [x] 真机：2026-07-04 本机临时 CP 托管 `install-worker.ps1`，PowerShell 按 `iex (iwr ...).Content` 拉取脚本，使用 `-Binary` 本地兜底启动 Worker → 节点 `fr080-e2e` 自动注册上线（CP `/nodes` 返回 `status=1`、gRPC 19101 / WS 19102）；Worker setup 写出 `worker.yml`，日志确认 `enrollment token 未写入`。公网 release 产物下载路径仍由发布管线产出后继续覆盖。
+- [x] 真机：2026-07-04 本机临时 CP 托管 `install-worker.ps1`，PowerShell 按 `iex (iwr ...).Content` 拉取脚本，使用 `-Binary` 本地兜底启动 Worker → 节点 `fr080-e2e` 自动注册上线（CP `/nodes` 返回 `status=1`、gRPC 19101 / WS 19102）；Worker setup 写出 `worker.yml`，日志确认 `enrollment token 未写入`。FR-190 的 CP-local 资产下载真机链路待 release 资产可用环境继续覆盖。
 
 ## 设计要点（落地备忘）
 - token 经 gRPC metadata header `enroll-token`，不改 proto。

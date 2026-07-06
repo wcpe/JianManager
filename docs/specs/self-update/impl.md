@@ -48,7 +48,7 @@
 
 - `web/src/api/selfUpdate.ts`：`useSelfUpdateCheck`（手动触发，`enabled:false`）/ `useUpgradeControlPlane` / `useUpgradeNode` / `useUpgradeAll` / `useRollout`（rollout 运行中 2s 自动短轮询）hooks。
 - 独立页 `web/src/pages/SystemUpdatePage.tsx`，挂侧栏「设置」组（`navGroupsForRole` 注入 `nav.systemUpdate`，仅平台管理员可见）+ 路由 `/system-update`（`Workspace.tsx`）+ 页面角色兜底——与既有 Database/Storage 等平台管理员页一致的范式，而非内嵌 NodesPage 对话框。页面：头部「检查更新」按钮、CP 卡片（当前 vs 最新 + 自更新）、节点表（逐行当前版本 + 版本对比徽章 + 单节点升级）+「全网升级」、rollout 进度面板（聚合计数 + 逐节点状态）。
-- 升级均走统一 `DangerConfirm`（`scope=platform`）二次确认（FR-059）。
+- 升级均走统一 `DangerConfirm`（`scope=platform`）二次确认（FR-059）；CP 自更新额外要求输入目标版本后才能确认。
 - i18n：仅加 `systemUpdate.*` 块 + `nav.systemUpdate` 键（zh + en）。
 
 ## 测试先行（TDD）
