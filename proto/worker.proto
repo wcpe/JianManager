@@ -207,6 +207,7 @@ message HeartbeatRequest {
   repeated InstanceMetricSample instance_metrics = 10;  // 每实例 ServerProbe 快照（FR-060 时序）
   double load_avg1 = 11;  // 节点 1 分钟 load average（FR-062；gopsutil 跨平台，取不到为 0）
   repeated TaskSnapshot tasks = 12;  // 运行中长任务进度快照（FR-183 任务中心，见 ADR-040）
+  repeated ProcessMetricSample process_metrics = 13; // 受管实例进程 TOPN 快照（FR-170）
 }
 
 // TaskSnapshot 心跳负载里携带的一条运行中长任务进度快照（FR-183，见 ADR-040）。
@@ -241,6 +242,20 @@ message InstanceMetricSample {
   double cpu_load = 9;        // 0~1 系统 CPU；<0 不可用
   double uptime_seconds = 10;
   repeated WorldMetric worlds = 11;
+}
+
+// ProcessMetricSample 受管实例进程 TOPN 快照（FR-170）。
+message ProcessMetricSample {
+  string instance_uuid = 1;
+  int32 pid = 2;
+  string name = 3;
+  double cpu_percent = 4;
+  uint64 rss_bytes = 5;
+  uint64 read_bytes_per_sec = 6;
+  uint64 write_bytes_per_sec = 7;
+  string user = 8;
+  string command_summary = 9;
+  int64 sampled_at_unix_ms = 10;
 }
 
 message HeartbeatResponse {
@@ -1014,6 +1029,8 @@ message CreateBackupResponse {
   int64 file_count = 5;              // 本次实际打包文件数（增量为变化文件数）
   repeated BackupManifestEntry manifest = 6; // 本次备份后实例工作目录的完整清单（供下次增量比对与链回放）
   string storage_key = 7;            // 上传到远程后的对象键（本地备份为空）
+  string checksum_sha256 = 8;        // 归档 tar.gz 的 SHA-256，供 CP 持久化与恢复前校验
+  string checksum_algo = 9;          // 校验算法，当前固定 sha256，便于后续兼容扩展
 }
 
 message RestoreBackupRequest {
@@ -1021,6 +1038,7 @@ message RestoreBackupRequest {
   repeated string rel_paths = 2;     // 备份链归档相对路径，按顺序回放（全量基在前，增量依次在后）
   StorageBackendSpec storage = 3;    // 非空且 type!=local 时，归档先从远程拉回本地再回放
   repeated string storage_keys = 4;  // 与 rel_paths 对应的远程对象键（远程恢复用）
+  repeated string checksum_sha256 = 5; // 与 rel_paths 对应的 SHA-256；为空时兼容旧备份跳过校验
 }
 
 message RestoreBackupResponse {
