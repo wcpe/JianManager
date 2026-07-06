@@ -46,6 +46,7 @@ export interface FieldSchema {
   type: string
   default: string
   description: string
+  group?: string
   choices?: string[]
 }
 

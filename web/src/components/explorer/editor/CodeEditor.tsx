@@ -22,6 +22,7 @@ import {
 } from '@codemirror/language'
 import { languageExtensionFor } from '../language'
 import { ideExtensions } from './ide-extensions'
+import { useThemeStore } from '@/stores/theme'
 
 /**
  * 共享 CodeMirror 6 编辑器（FR-070 编辑器基础）。
@@ -76,6 +77,7 @@ export default function CodeEditor({
   const viewRef = useRef<EditorView | null>(null)
   const onChangeRef = useRef(onChange)
   const onSaveRef = useRef(onSave)
+  const resolvedTheme = useThemeStore((s) => s.resolvedTheme)
 
   useEffect(() => {
     onChangeRef.current = onChange
@@ -119,13 +121,36 @@ export default function CodeEditor({
         if (u.docChanged) onChangeRef.current?.(u.state.doc.toString())
       }),
       EditorView.theme({
-        '&': { height: '100%', fontSize: '13px' },
+        '&': {
+          height: '100%',
+          fontSize: '13px',
+          color: 'var(--foreground)',
+          backgroundColor: 'var(--background)',
+        },
         '.cm-scroller': { fontFamily: 'Consolas, Monaco, monospace', overflow: 'auto' },
+        '.cm-content': { caretColor: 'var(--primary)' },
+        '.cm-cursor': { borderLeftColor: 'var(--primary)' },
+        '.cm-gutters': {
+          backgroundColor: 'var(--muted)',
+          color: 'var(--muted-foreground)',
+          borderRightColor: 'var(--border)',
+        },
+        '.cm-activeLine, .cm-activeLineGutter': {
+          backgroundColor: 'color-mix(in srgb, var(--accent) 60%, transparent)',
+        },
+        '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
+          backgroundColor: 'color-mix(in srgb, var(--primary) 24%, transparent)',
+        },
         // 搜索/替换面板（FR-073）：紧凑排版，按钮可换行，短宽度面板不溢出。
-        '.cm-panels': { fontSize: '12px' },
+        '.cm-panels': {
+          fontSize: '12px',
+          color: 'var(--popover-foreground)',
+          backgroundColor: 'var(--popover)',
+          borderColor: 'var(--border)',
+        },
         '.cm-search': { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '4px' },
         '.cm-search label': { display: 'inline-flex', alignItems: 'center', gap: '2px' },
-      }),
+      }, { dark: resolvedTheme === 'dark' }),
     ]
 
     const view = new EditorView({
@@ -139,7 +164,7 @@ export default function CodeEditor({
     }
     // value 故意不入依赖：输入时由下方 effect 判等同步，避免每次按键重建丢光标。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filename, readOnly])
+  }, [filename, readOnly, resolvedTheme])
 
   useEffect(() => {
     const view = viewRef.current
@@ -163,5 +188,5 @@ export default function CodeEditor({
     view.focus()
   }, [gotoLine, gotoNonce, value])
 
-  return <div ref={hostRef} className="h-full overflow-hidden text-left" />
+  return <div ref={hostRef} className="h-full overflow-hidden text-left" data-editor-theme={resolvedTheme} />
 }

@@ -71,6 +71,24 @@ describe('ConfigFileEditor（mock 假后端）', () => {
     await waitFor(() => expect(onAfterSave).toHaveBeenCalled())
   })
 
+  it('表单模式按字段组展示，并即时校验整数输入', async () => {
+    const user = userEvent.setup()
+    renderEditor()
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '表单' })).toBeEnabled())
+    await user.click(screen.getByRole('button', { name: '表单' }))
+
+    expect(await screen.findByRole('group', { name: '网络与身份' })).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: '展示与容量' })).toBeInTheDocument()
+
+    const maxPlayers = screen.getByLabelText('max-players')
+    await user.clear(maxPlayers)
+    await user.type(maxPlayers, 'abc')
+
+    expect(await screen.findByText('请输入整数')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /保存/ })).toBeDisabled()
+  })
+
   it('注入 500（GET configs/read）→ 显示错误态而非崩溃', async () => {
     mockInject('get', '/instances/:id/configs/read', { kind: 'status', status: 500 })
     renderEditor()

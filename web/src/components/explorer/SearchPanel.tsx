@@ -23,10 +23,42 @@ interface SearchPanelProps {
   onClose: () => void
 }
 
+function normalizeRootPath(raw: string): string {
+  return raw.trim().replace(/^\/+|\/+$/g, '')
+}
+
+function parseExtensions(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean)
+    .map((part) => (part.startsWith('.') ? part : `.${part}`))
+}
+
+function highlightMatch(text: string, query: string) {
+  const trimmed = query.trim()
+  if (!trimmed) return text
+  const lowerText = text.toLowerCase()
+  const lowerQuery = trimmed.toLowerCase()
+  const index = lowerText.indexOf(lowerQuery)
+  if (index < 0) return text
+  return (
+    <>
+      {text.slice(0, index)}
+      <mark className="rounded bg-amber-200 px-0.5 text-amber-950 dark:bg-amber-500/30 dark:text-amber-100">
+        {text.slice(index, index + trimmed.length)}
+      </mark>
+      {text.slice(index + trimmed.length)}
+    </>
+  )
+}
+
 export default function SearchPanel({ instanceId, onOpenHit, onClose }: SearchPanelProps) {
   const { t } = useTranslation()
   const [query, setQuery] = useState('')
   const [mode, setMode] = useState<SearchMode>('content')
+  const [rootPath, setRootPath] = useState('')
+  const [extensionText, setExtensionText] = useState('')
   const [hits, setHits] = useState<SearchHit[]>([])
   const [truncated, setTruncated] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -39,10 +71,10 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose }: SearchPa
   // 「索引中」自动重试计时器：新查询或卸载时清除，避免旧查询的重试覆盖。
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // 指向最新 runSearch，供「索引中」重试间接调用（避免 useCallback 递归自引用）。
-  const runSearchRef = useRef<(q: string, m: SearchMode) => void>(() => {})
+  const runSearchRef = useRef<(q: string, m: SearchMode, root: string, ext: string) => void>(() => {})
 
   const runSearch = useCallback(
-    async (q: string, m: SearchMode) => {
+    async (q: string, m: SearchMode, root: string, ext: string) => {
       // 新一次查询取消上一次的「索引中」重试。
       if (retryTimer.current) {
         clearTimeout(retryTimer.current)
@@ -61,7 +93,10 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose }: SearchPa
       setLoading(true)
       setError('')
       try {
-        const res = await searchFiles(instanceId, trimmed, m)
+        const res = await searchFiles(instanceId, trimmed, m, 200, {
+          rootPath: normalizeRootPath(root),
+          extensions: parseExtensions(ext),
+        })
         if (seq !== reqSeq.current) return
         if (res.indexing) {
           // 索引首建中：本次无结果，显示进度并稍后用同一查询自动重试。
@@ -69,7 +104,7 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose }: SearchPa
           setHits([])
           setTruncated(false)
           setSearched(true)
-          retryTimer.current = setTimeout(() => runSearchRef.current(q, m), INDEXING_RETRY_MS)
+          retryTimer.current = setTimeout(() => runSearchRef.current(q, m, root, ext), INDEXING_RETRY_MS)
           return
         }
         setIndexing(false)
@@ -108,9 +143,9 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose }: SearchPa
 
   // 输入/模式变化后防抖触发查询。
   useEffect(() => {
-    const id = setTimeout(() => void runSearch(query, mode), 300)
+    const id = setTimeout(() => void runSearch(query, mode, rootPath, extensionText), 300)
     return () => clearTimeout(id)
-  }, [query, mode, runSearch])
+  }, [query, mode, rootPath, extensionText, runSearch])
 
   // 卸载时清除待执行的「索引中」重试。
   useEffect(() => () => {
@@ -131,7 +166,7 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose }: SearchPa
               placeholder={t('search.placeholder')}
               className="h-7 pl-7 text-xs"
               onKeyDown={(e) => {
-                if (e.key === 'Enter') void runSearch(query, mode)
+                if (e.key === 'Enter') void runSearch(query, mode, rootPath, extensionText)
                 if (e.key === 'Escape') onClose()
               }}
             />
@@ -167,6 +202,22 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose }: SearchPa
             <Loader2 className="ml-1 size-3.5 animate-spin text-muted-foreground" />
           )}
         </div>
+        <div className="grid gap-1 sm:grid-cols-2">
+          <Input
+            aria-label={t('search.scopeDir')}
+            value={rootPath}
+            onChange={(e) => setRootPath(e.target.value)}
+            placeholder={t('search.scopeDirPlaceholder')}
+            className="h-6 text-xs"
+          />
+          <Input
+            aria-label={t('search.scopeExt')}
+            value={extensionText}
+            onChange={(e) => setExtensionText(e.target.value)}
+            placeholder={t('search.scopeExtPlaceholder')}
+            className="h-6 text-xs"
+          />
+        </div>
       </div>
 
       {/* 结果列表 */}
@@ -194,7 +245,7 @@ export default function SearchPanel({ instanceId, onOpenHit, onClose }: SearchPa
                   </span>
                   {h.snippet && (
                     <span className="w-full truncate font-mono text-[11px] text-muted-foreground">
-                      {h.snippet}
+                      {highlightMatch(h.snippet, query)}
                     </span>
                   )}
                 </button>

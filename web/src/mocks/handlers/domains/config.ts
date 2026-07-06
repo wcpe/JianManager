@@ -64,10 +64,10 @@ const SERVER_PROPERTIES_SCHEMA = JSON.stringify({
   description: 'Minecraft 服务端核心配置',
   format: 'properties',
   fields: {
-    'server-port': { key: 'server-port', type: 'int', default: '25565', description: '监听端口' },
-    'online-mode': { key: 'online-mode', type: 'bool', default: 'true', description: '正版验证' },
-    motd: { key: 'motd', type: 'string', default: 'A Minecraft Server', description: '服务器描述' },
-    'max-players': { key: 'max-players', type: 'int', default: '20', description: '最大玩家数' },
+    'server-port': { key: 'server-port', type: 'int', default: '25565', description: '监听端口', group: '网络与身份' },
+    'online-mode': { key: 'online-mode', type: 'bool', default: 'true', description: '正版验证', group: '网络与身份' },
+    motd: { key: 'motd', type: 'string', default: 'A Minecraft Server', description: '服务器描述', group: '展示与容量' },
+    'max-players': { key: 'max-players', type: 'int', default: '20', description: '最大玩家数', group: '展示与容量' },
   },
 })
 
@@ -380,12 +380,13 @@ export const handlers = [
     const filterValue = url.searchParams.get('filterValue') ?? ''
     const sensitiveCols = new Set(tbl.columns.filter((c) => c.sensitive).map((c) => c.name))
     const validCol = (col: string) => tbl.columns.some((c) => c.name === col)
+    const queryableCol = (col: string) => validCol(col) && !sensitiveCols.has(col)
 
     let rows = [...tbl.rows]
-    if (filterColumn && validCol(filterColumn) && filterValue) {
+    if (filterColumn && queryableCol(filterColumn) && filterValue) {
       rows = rows.filter((r) => String(r[filterColumn] ?? '').includes(filterValue))
     }
-    if (sort && validCol(sort)) {
+    if (sort && queryableCol(sort)) {
       rows.sort((a, b) => {
         const av = String(a[sort] ?? '')
         const bv = String(b[sort] ?? '')

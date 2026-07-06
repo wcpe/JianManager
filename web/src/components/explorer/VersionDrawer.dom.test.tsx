@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
 import { mockInject } from '@/mocks/inject'
 import { loginMockUser } from '@/test/auth'
+import { server } from '@/mocks/server'
+import { API } from '@/mocks/api'
 import VersionDrawer from './VersionDrawer'
 
 /**
@@ -72,6 +75,36 @@ describe('文件历史版本抽屉（mock 假后端，FR-204）', () => {
     expect(screen.getByText('#2')).toBeInTheDocument()
     // 确认弹窗已关闭（「回滚文件」标题消失），但抽屉 Sheet 仍在。
     await waitFor(() => expect(screen.queryByText('回滚文件')).not.toBeInTheDocument())
+  })
+
+  it('diff 增删行使用语义颜色区分', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    server.use(
+      http.get(API('/instances/:id/files/versions'), () =>
+        HttpResponse.json([
+          { id: 1, filePath: FILE, size: 12, authorId: 1, createdAt: '2026-07-01T00:00:00Z' },
+          { id: 2, filePath: FILE, size: 13, authorId: 1, createdAt: '2026-07-02T00:00:00Z' },
+        ]),
+      ),
+      http.get(API('/instances/:id/files/diff'), () =>
+        HttpResponse.json({
+          fromVersionId: 1,
+          toVersionId: 2,
+          binary: false,
+          unifiedDiff: '--- #1\n+++ #2\n@@\n-old-value\n+new-value\n unchanged',
+        }),
+      ),
+    )
+    renderDrawer()
+
+    const fromRow = (await screen.findByText('#1')).closest('li') as HTMLElement
+    const toRow = screen.getByText('#2').closest('li') as HTMLElement
+    await user.click(within(fromRow).getByRole('button', { name: '从' }))
+    await user.click(within(toRow).getByRole('button', { name: '到' }))
+
+    expect(await screen.findByText('-old-value')).toHaveClass('text-rose-700')
+    expect(screen.getByText('+new-value')).toHaveClass('text-emerald-700')
   })
 
   it('版本端点注入 500：显示「加载版本失败」错误态（不崩溃）', async () => {

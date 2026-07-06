@@ -182,6 +182,30 @@ func TestTableRows_Filter(t *testing.T) {
 	require.Equal(t, int64(3), resBad.Total)
 }
 
+// TableRows 忽略敏感列排序/过滤，避免在 SQL 层暴露密文可探测面。
+func TestTableRows_IgnoresSensitiveSortAndFilter(t *testing.T) {
+	svc, db := newDBBrowseTestService(t)
+	require.NoError(t, db.Create(&dbBrowseTestRow{ID: 1, Name: "alpha", NodeSecret: "z-secret"}).Error)
+	require.NoError(t, db.Create(&dbBrowseTestRow{ID: 2, Name: "beta", NodeSecret: "a-secret"}).Error)
+
+	filtered, err := svc.TableRows("db_browse_test_rows", DBRowsParams{
+		FilterColumn: "node_secret",
+		FilterValue:  "z-secret",
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(2), filtered.Total)
+	require.Len(t, filtered.Rows, 2)
+
+	sorted, err := svc.TableRows("db_browse_test_rows", DBRowsParams{
+		Sort:  "node_secret",
+		Order: "asc",
+	})
+	require.NoError(t, err)
+	require.Len(t, sorted.Rows, 2)
+	require.EqualValues(t, 1, sorted.Rows[0]["id"])
+	require.EqualValues(t, 2, sorted.Rows[1]["id"])
+}
+
 // TableRows 对不存在/非白名单表名返回 ErrTableNotFound（拒绝任意标识符）。
 func TestTableRows_UnknownTableRejected(t *testing.T) {
 	svc, _ := newDBBrowseTestService(t)

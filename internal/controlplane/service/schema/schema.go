@@ -15,6 +15,7 @@ type FieldSchema struct {
 	Type        string `json:"type"` // string/int/bool/list
 	Default     string `json:"default"`
 	Description string `json:"description"`
+	Group       string `json:"group,omitempty"`
 	// Choices 类型为 list 时可选，限定可选值。
 	Choices []string `json:"choices,omitempty"`
 }
@@ -121,21 +122,21 @@ func ServerPropertiesModel() ModelSchema {
 		Description: "Minecraft Java 版服务端核心配置",
 		Format:      "properties",
 		Fields: map[string]FieldSchema{
-			"server-port":      {Key: "server-port", Type: "int", Default: "25565", Description: "服务端监听端口"},
-			"server-ip":        {Key: "server-ip", Type: "string", Default: "", Description: "绑定 IP，留空表示全部接口"},
-			"motd":             {Key: "motd", Type: "string", Default: "A Minecraft Server", Description: "每日消息"},
-			"max-players":      {Key: "max-players", Type: "int", Default: "20", Description: "最大在线人数"},
-			"online-mode":      {Key: "online-mode", Type: "bool", Default: "true", Description: "正版验证，开启时玩家需登录 Mojang 账号"},
-			"view-distance":    {Key: "view-distance", Type: "int", Default: "10", Description: "视距（区块）"},
-			"difficulty":       {Key: "difficulty", Type: "string", Default: "easy", Description: "难度", Choices: []string{"peaceful", "easy", "normal", "hard"}},
-			"gamemode":         {Key: "gamemode", Type: "string", Default: "survival", Description: "默认游戏模式", Choices: []string{"survival", "creative", "adventure", "spectator"}},
-			"white-list":       {Key: "white-list", Type: "bool", Default: "false", Description: "是否启用白名单"},
-			"enable-rcon":      {Key: "enable-rcon", Type: "bool", Default: "false", Description: "启用 RCON 远程控制"},
-			"rcon.port":        {Key: "rcon.port", Type: "int", Default: "25575", Description: "RCON 端口"},
-			"rcon.password":    {Key: "rcon.password", Type: "string", Default: "", Description: "RCON 密码（启用 RCON 时必填）"},
-			"enable-query":     {Key: "enable-query", Type: "bool", Default: "false", Description: "启用 GameSpy4 查询协议"},
-			"query.port":       {Key: "query.port", Type: "int", Default: "25565", Description: "查询协议端口"},
-			"spawn-protection": {Key: "spawn-protection", Type: "int", Default: "16", Description: "出生点保护半径（0 关闭）"},
+			"server-port":      {Key: "server-port", Type: "int", Default: "25565", Description: "服务端监听端口", Group: "网络与身份"},
+			"server-ip":        {Key: "server-ip", Type: "string", Default: "", Description: "绑定 IP，留空表示全部接口", Group: "网络与身份"},
+			"motd":             {Key: "motd", Type: "string", Default: "A Minecraft Server", Description: "每日消息", Group: "展示与容量"},
+			"max-players":      {Key: "max-players", Type: "int", Default: "20", Description: "最大在线人数", Group: "展示与容量"},
+			"online-mode":      {Key: "online-mode", Type: "bool", Default: "true", Description: "正版验证，开启时玩家需登录 Mojang 账号", Group: "网络与身份"},
+			"view-distance":    {Key: "view-distance", Type: "int", Default: "10", Description: "视距（区块）", Group: "展示与容量"},
+			"difficulty":       {Key: "difficulty", Type: "string", Default: "easy", Description: "难度", Group: "展示与容量", Choices: []string{"peaceful", "easy", "normal", "hard"}},
+			"gamemode":         {Key: "gamemode", Type: "string", Default: "survival", Description: "默认游戏模式", Group: "展示与容量", Choices: []string{"survival", "creative", "adventure", "spectator"}},
+			"white-list":       {Key: "white-list", Type: "bool", Default: "false", Description: "是否启用白名单", Group: "展示与容量"},
+			"enable-rcon":      {Key: "enable-rcon", Type: "bool", Default: "false", Description: "启用 RCON 远程控制", Group: "远程控制"},
+			"rcon.port":        {Key: "rcon.port", Type: "int", Default: "25575", Description: "RCON 端口", Group: "远程控制"},
+			"rcon.password":    {Key: "rcon.password", Type: "string", Default: "", Description: "RCON 密码（启用 RCON 时必填）", Group: "远程控制"},
+			"enable-query":     {Key: "enable-query", Type: "bool", Default: "false", Description: "启用 GameSpy4 查询协议", Group: "远程控制"},
+			"query.port":       {Key: "query.port", Type: "int", Default: "25565", Description: "查询协议端口", Group: "远程控制"},
+			"spawn-protection": {Key: "spawn-protection", Type: "int", Default: "16", Description: "出生点保护半径（0 关闭）", Group: "展示与容量"},
 		},
 	}
 }

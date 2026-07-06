@@ -27,6 +27,26 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+function diffLineClass(line: string): string {
+  if (line.startsWith('---') || line.startsWith('+++')) return 'text-sky-700 dark:text-sky-300'
+  if (line.startsWith('@@')) return 'text-violet-700 dark:text-violet-300'
+  if (line.startsWith('+')) return 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+  if (line.startsWith('-')) return 'bg-rose-500/10 text-rose-700 dark:text-rose-300'
+  return 'text-muted-foreground'
+}
+
+function UnifiedDiff({ diff }: { diff: string }) {
+  return (
+    <pre className="font-mono text-[10px] leading-5">
+      {diff.split('\n').map((line, index) => (
+        <span key={`${index}:${line}`} className={`block whitespace-pre-wrap px-1 ${diffLineClass(line)}`}>
+          {line || ' '}
+        </span>
+      ))}
+    </pre>
+  )
+}
+
 export default function VersionDrawer({
   instanceId,
   filePath,
@@ -135,7 +155,7 @@ export default function VersionDrawer({
               ) : diffQ.data?.binary ? (
                 <p className="text-xs text-muted-foreground">{t('fileVersions.binary')}</p>
               ) : diffQ.data ? (
-                <pre className="whitespace-pre-wrap font-mono text-[10px]">{diffQ.data.unifiedDiff}</pre>
+                <UnifiedDiff diff={diffQ.data.unifiedDiff} />
               ) : (
                 <p className="text-xs text-destructive">{diffQ.error ? (diffQ.error as Error).message : ''}</p>
               )}

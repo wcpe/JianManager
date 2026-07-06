@@ -85,6 +85,20 @@ describe('DatabasePage（mock 假后端）', () => {
     expect(dataRows[1]).toContain('admin')
   })
 
+  it('敏感列只展示脱敏标注，不能作为过滤列或排序列', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<DatabasePage />)
+    expect(await screen.findByText('admin')).toBeInTheDocument()
+
+    expect(screen.getByRole('columnheader', { name: /password_hash.*敏感列/ })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    )
+
+    await user.click(screen.getAllByRole('combobox')[0]!)
+    expect(screen.queryByRole('option', { name: 'password_hash' })).not.toBeInTheDocument()
+  })
+
   it('伪造管理员 payload 但 session 绑定普通成员时，mock 接口拒绝且不泄露表清单', async () => {
     useAuthStore.getState().logout()
     loginAsForgedAdminPayloadForMember()

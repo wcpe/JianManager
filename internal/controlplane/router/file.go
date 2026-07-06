@@ -332,9 +332,11 @@ func (h *FileHandler) Rename(c *gin.Context) {
 
 // searchRequest 全文搜索 / 文件名快速打开请求（FR-074）。
 type searchRequest struct {
-	Query      string `json:"query" binding:"required"`
-	Mode       string `json:"mode"`       // content（默认）| filename
-	MaxResults int    `json:"maxResults"` // 命中上限；<=0 时由 Worker 取默认
+	Query      string   `json:"query" binding:"required"`
+	Mode       string   `json:"mode"`       // content（默认）| filename
+	MaxResults int      `json:"maxResults"` // 命中上限；<=0 时由 Worker 取默认
+	RootPath   string   `json:"rootPath"`   // 可选：限定相对目录范围
+	Extensions []string `json:"extensions"` // 可选：限定扩展名范围
 }
 
 // Search 全文搜索 / 文件名快速打开（FR-074，见 ADR-017）。
@@ -356,7 +358,10 @@ func (h *FileHandler) Search(c *gin.Context) {
 		return
 	}
 
-	res, err := h.fileSvc.SearchFiles(id, req.Query, req.Mode, req.MaxResults)
+	res, err := h.fileSvc.SearchFiles(id, req.Query, req.Mode, req.MaxResults, service.SearchScope{
+		RootPath:   req.RootPath,
+		Extensions: req.Extensions,
+	})
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return

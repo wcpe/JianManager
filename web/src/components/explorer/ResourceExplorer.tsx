@@ -2,8 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useQueryClient } from '@tanstack/react-query'
-import { History, Save, X } from 'lucide-react'
+import { Download, FileQuestion, History, Save, X } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
 import DangerConfirm from '@/components/DangerConfirm'
 import {
   fetchFileList,
@@ -40,6 +48,7 @@ import {
   planPaste,
   type Clipboard,
   type ClipboardEntry,
+  type PasteOp,
 } from './clipboard'
 import { joinPath, baseName, isValidName } from './paths'
 import { needsDiscardConfirm } from './discard-guard'
@@ -117,6 +126,126 @@ interface OpenFile {
   gotoNonce?: number
 }
 
+type BlockedPreviewReason = 'binary' | 'too-large'
+
+interface BlockedPreview {
+  path: string
+  name: string
+  size: number
+  reason: BlockedPreviewReason
+}
+
+interface BatchFailure {
+  path: string
+  message: string
+}
+
+interface BatchOperationState {
+  label: string
+  total: number
+  completed: number
+  skipped: number
+  failed: BatchFailure[]
+  done: boolean
+}
+
+const TEXT_EDIT_LIMIT_BYTES = 1024 * 1024
+
+const BINARY_PREVIEW_EXTENSIONS = new Set([
+  '.bin',
+  '.class',
+  '.dat',
+  '.db',
+  '.dll',
+  '.dylib',
+  '.exe',
+  '.gif',
+  '.gz',
+  '.ico',
+  '.jpeg',
+  '.jpg',
+  '.mp3',
+  '.mp4',
+  '.ogg',
+  '.pdf',
+  '.png',
+  '.rar',
+  '.so',
+  '.sqlite',
+  '.webp',
+  '.xz',
+  '.7z',
+])
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
+function fileExt(name: string): string {
+  const dot = name.lastIndexOf('.')
+  return dot >= 0 ? name.slice(dot).toLowerCase() : ''
+}
+
+function blockedPreviewFor(file: FileInfo, path: string): BlockedPreview | null {
+  if (file.isDir) return null
+  if (BINARY_PREVIEW_EXTENSIONS.has(fileExt(file.name))) {
+    return { path, name: file.name, size: file.size, reason: 'binary' }
+  }
+  if (file.size > TEXT_EDIT_LIMIT_BYTES) {
+    return { path, name: file.name, size: file.size, reason: 'too-large' }
+  }
+  return null
+}
+
+function errorMessage(err: unknown): string {
+  const data = (err as { response?: { data?: { message?: string; error?: string } } })?.response?.data
+  return data?.message || data?.error || (err instanceof Error ? err.message : '')
+}
+
+function BatchOperationNotice({
+  state,
+  onDismiss,
+}: {
+  state: BatchOperationState | null
+  onDismiss: () => void
+}) {
+  const { t } = useTranslation()
+  if (!state) return null
+  const failed = state.failed.length
+  return (
+    <div
+      role="status"
+      className="border-b bg-muted/20 px-3 py-2 text-xs text-muted-foreground"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="space-y-1">
+          <div className="font-medium text-foreground">
+            {t('files.batchProgress', { label: state.label, completed: state.completed, total: state.total })}
+            {failed > 0 && <span className="ml-2 text-destructive">{t('files.batchFailed', { count: failed })}</span>}
+            {state.skipped > 0 && <span className="ml-2">{t('files.batchSkipped', { count: state.skipped })}</span>}
+          </div>
+          {failed > 0 && (
+            <ul className="space-y-0.5">
+              {state.failed.map((item) => (
+                <li key={item.path} className="font-mono text-[11px] text-destructive">
+                  {item.path}: {item.message || t('common.error')}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        {state.done && (
+          <button type="button" className="shrink-0 text-primary hover:underline" onClick={onDismiss}>
+            {t('common.close')}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function ResourceExplorer({ instanceId, config, openPathRef }: ResourceExplorerProps) {
   const { t } = useTranslation()
   const qc = useQueryClient()
@@ -134,9 +263,11 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
   // 选中态 + 剪贴板。
   const [selection, setSelection] = useState<SelectionState>(emptySelection)
   const [clipboard, setClipboard] = useState<Clipboard | null>(null)
+  const [batchOperation, setBatchOperation] = useState<BatchOperationState | null>(null)
 
   // 编辑器打开的文件。
   const [openFile, setOpenFile] = useState<OpenFile | null>(null)
+  const [blockedPreview, setBlockedPreview] = useState<BlockedPreview | null>(null)
   // 始终持最新 openFile，供事件回调读「未保存」态而不必把 openFile 列入各 useCallback 依赖。
   const openFileRef = useRef<OpenFile | null>(null)
   useEffect(() => {
@@ -147,15 +278,22 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
   const setConfigDirty = useCallback((d: boolean) => {
     configDirtyRef.current = d
   }, [])
+  const [discardAction, setDiscardAction] = useState<{ action: () => void } | null>(null)
+
   // 切换/关闭文件前若有未保存草稿则二次确认，避免静默丢失编辑（BUG-018）。
-  const confirmDiscard = useCallback(
-    (nextPath?: string): boolean => {
-      if (needsDiscardConfirm(openFileRef.current, configDirtyRef.current, nextPath)) {
-        return window.confirm(t('files.unsavedConfirm'))
+  const hasDiscardConflict = useCallback(
+    (nextPath?: string): boolean => needsDiscardConfirm(openFileRef.current, configDirtyRef.current, nextPath),
+    [],
+  )
+  const runOrAskDiscard = useCallback(
+    (action: () => void, nextPath?: string) => {
+      if (hasDiscardConflict(nextPath)) {
+        setDiscardAction({ action })
+        return
       }
-      return true
+      action()
     },
-    [t],
+    [hasDiscardConflict],
   )
 
   // 搜索面板开关（FR-074）。打开时占据文件列表列。
@@ -231,12 +369,12 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
 
   // ---- 打开（双击 / 收藏·发现面板点选）----
   // 配置模式下编辑器自行读取内容（走配置端点），故只记录打开路径，不预读。
-  const openByPath = useCallback(
+  const openByPathNow = useCallback(
     async (path: string, name: string) => {
-      if (!confirmDiscard(path)) return
       // 打开文本编辑器即关闭归档/反编译视图（右栏互斥）。
       setArchiveFor(null)
       setDecompileFor(null)
+      setBlockedPreview(null)
       if (configMode) {
         setOpenFile({ path, name, saved: '', draft: '' })
         return
@@ -248,7 +386,13 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
         toast.error(t('files.loadFailed'))
       }
     },
-    [configMode, instanceId, t, confirmDiscard],
+    [configMode, instanceId, t],
+  )
+  const openByPath = useCallback(
+    (path: string, name: string) => {
+      runOrAskDiscard(() => { void openByPathNow(path, name) }, path)
+    },
+    [openByPathNow, runOrAskDiscard],
   )
 
   const openEntry = useCallback(
@@ -257,16 +401,28 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
         navigate(joinPath(currentDir, file.name))
         return
       }
-      await openByPath(joinPath(currentDir, file.name), file.name)
+      const path = joinPath(currentDir, file.name)
+      const blocked = configMode ? null : blockedPreviewFor(file, path)
+      if (blocked) {
+        runOrAskDiscard(() => {
+          setOpenFile(null)
+          setArchiveFor(null)
+          setDecompileFor(null)
+          setBlockedPreview(blocked)
+        }, path)
+        return
+      }
+      openByPath(path, file.name)
     },
-    [currentDir, navigate, openByPath],
+    [configMode, currentDir, navigate, openByPath, runOrAskDiscard],
   )
 
   // 搜索命中点击：打开文件并定位到行（FR-074）。filename 模式 line=0 即仅打开不定位。
   // 配置模式下编辑器自行读取内容（不接 gotoLine，仅打开文件）。
-  const openSearchHit = useCallback(
+  const openSearchHitNow = useCallback(
     async (path: string, line: number) => {
       const name = path.split('/').pop() || path
+      setBlockedPreview(null)
       if (configMode) {
         setOpenFile({ path, name, saved: '', draft: '' })
         return
@@ -287,6 +443,12 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
     },
     [configMode, instanceId, t],
   )
+  const openSearchHit = useCallback(
+    (path: string, line: number) => {
+      runOrAskDiscard(() => { void openSearchHitNow(path, line) }, path)
+    },
+    [openSearchHitNow, runOrAskDiscard],
+  )
 
   // 暴露「按路径打开」给外部（收藏/发现面板）。
   useEffect(() => {
@@ -300,20 +462,24 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
   // ---- 归档浏览 / 反编译（FR-075）----
   // 三类右栏内容（文本编辑器 / 归档浏览 / 反编译）互斥：打开一个即关闭其余。
   const openArchive = useCallback((file: FileInfo) => {
-    if (!confirmDiscard()) return
     const path = joinPath(currentDir, file.name)
-    setOpenFile(null)
-    setDecompileFor(null)
-    setArchiveFor({ path, name: file.name })
-  }, [currentDir, confirmDiscard])
+    runOrAskDiscard(() => {
+      setOpenFile(null)
+      setBlockedPreview(null)
+      setDecompileFor(null)
+      setArchiveFor({ path, name: file.name })
+    })
+  }, [currentDir, runOrAskDiscard])
 
   const openDecompile = useCallback((file: FileInfo) => {
-    if (!confirmDiscard()) return
     const path = joinPath(currentDir, file.name)
-    setOpenFile(null)
-    setArchiveFor(null)
-    setDecompileFor({ path, name: file.name })
-  }, [currentDir, confirmDiscard])
+    runOrAskDiscard(() => {
+      setOpenFile(null)
+      setBlockedPreview(null)
+      setArchiveFor(null)
+      setDecompileFor({ path, name: file.name })
+    })
+  }, [currentDir, runOrAskDiscard])
 
   // ---- 保存（Ctrl+S）----
   const saveOpenFile = useCallback(async () => {
@@ -384,6 +550,7 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
       await Promise.all(paths.map((p) => deleteFile(instanceId, p)))
       // 若删除的是当前打开的文件/归档/反编译目标，关闭对应右栏（避免展示已删条目）。
       if (openFile && paths.includes(openFile.path)) setOpenFile(null)
+      if (blockedPreview && paths.includes(blockedPreview.path)) setBlockedPreview(null)
       if (archiveFor && paths.includes(archiveFor.path)) setArchiveFor(null)
       if (decompileFor && paths.includes(decompileFor.path)) setDecompileFor(null)
       toast.success(t('files.deleted'))
@@ -391,7 +558,7 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
     } catch {
       toast.error(t('files.deleteFailed'))
     }
-  }, [deleteTargets, instanceId, openFile, archiveFor, decompileFor, refreshAll, t])
+  }, [deleteTargets, instanceId, openFile, blockedPreview, archiveFor, decompileFor, refreshAll, t])
 
   // ---- 上传（拖拽 / 按钮，批量逐文件）----
   const handleUpload = useCallback(
@@ -454,6 +621,34 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
     [entriesFor],
   )
 
+  const runFileOps = useCallback(
+    async (
+      label: string,
+      ops: PasteOp[],
+      skipped: number,
+      action: (op: PasteOp) => Promise<void>,
+    ): Promise<BatchFailure[]> => {
+      const failures: BatchFailure[] = []
+      setBatchOperation({ label, total: ops.length, completed: 0, skipped, failed: [], done: false })
+      for (const op of ops) {
+        try {
+          await action(op)
+        } catch (err) {
+          failures.push({ path: op.from, message: errorMessage(err) })
+        } finally {
+          setBatchOperation((prev) => (
+            prev
+              ? { ...prev, completed: Math.min(prev.completed + 1, prev.total), failed: [...failures] }
+              : prev
+          ))
+        }
+      }
+      setBatchOperation((prev) => (prev ? { ...prev, completed: ops.length, failed: [...failures], done: true } : prev))
+      return failures
+    },
+    [],
+  )
+
   /** 在目标目录粘贴剪贴板内容（move=rename；copy=read+write，仅文件）。 */
   const pasteInto = useCallback(
     async (targetDir: string) => {
@@ -475,25 +670,25 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
         toast.error(t('files.pasteNothing'))
         return
       }
-      try {
-        for (const op of plan.ops) {
-          if (op.kind === 'move') {
-            await renameFile(instanceId, op.from, op.to)
-          } else {
-            // 复制：读源写目标（仅文件，目录已在 planPaste 中剔除）。
-            const content = await readFileContent(instanceId, op.from)
-            await writeFileContent(instanceId, op.to, content)
-          }
+      const failures = await runFileOps(t('files.paste'), plan.ops, plan.skipped.length, async (op) => {
+        if (op.kind === 'move') {
+          await renameFile(instanceId, op.from, op.to)
+          return
         }
-        // 剪切粘贴后清空剪贴板（移动后源已不存在）。
-        if (clipboard.mode === 'cut') setClipboard(null)
-        toast.success(t('files.pasteSuccess'))
-        refreshAll()
-      } catch {
-        toast.error(t('files.pasteFailed'))
+        // 复制：读源写目标（仅文件，目录已在 planPaste 中剔除）。
+        const content = await readFileContent(instanceId, op.from)
+        await writeFileContent(instanceId, op.to, content)
+      })
+      if (clipboard.mode === 'cut') {
+        const failedPaths = new Set(failures.map((failure) => failure.path))
+        setClipboard(failures.length > 0 ? cutEntries(clipboard.entries.filter((entry) => failedPaths.has(entry.path))) : null)
       }
+      if (failures.length === 0) toast.success(t('files.pasteSuccess'))
+      else if (failures.length < plan.ops.length) toast.warning(t('files.pastePartialFailed'))
+      else toast.error(t('files.pasteFailed'))
+      refreshAll()
     },
-    [clipboard, currentDir, existingNames, instanceId, refreshAll, t],
+    [clipboard, currentDir, existingNames, instanceId, refreshAll, runFileOps, t],
   )
 
   // 拖拽源：记录被拖动的文件名集合（拖单个未选中项时仅拖该项）。
@@ -528,16 +723,16 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
           toast.error(t('files.pasteNothing'))
           return
         }
-        try {
-          for (const op of plan.ops) await renameFile(instanceId, op.from, op.to)
-          toast.success(t('files.moveSuccess'))
-          refreshAll()
-        } catch {
-          toast.error(t('files.moveFailed'))
-        }
+        const failures = await runFileOps(t('files.move'), plan.ops, plan.skipped.length, (op) =>
+          renameFile(instanceId, op.from, op.to),
+        )
+        if (failures.length === 0) toast.success(t('files.moveSuccess'))
+        else if (failures.length < plan.ops.length) toast.warning(t('files.movePartialFailed'))
+        else toast.error(t('files.moveFailed'))
+        refreshAll()
       })()
     },
-    [dragName, selection, entriesFor, instanceId, refreshAll, t],
+    [dragName, selection, entriesFor, instanceId, refreshAll, runFileOps, t],
   )
 
   const dirty = openFile !== null && openFile.draft !== openFile.saved
@@ -577,12 +772,14 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
           searchActive={searchOpen}
         />
 
+        <BatchOperationNotice state={batchOperation} onDismiss={() => setBatchOperation(null)} />
+
         <div className="flex min-h-0 flex-1">
           {/* 目录内容列表 / 搜索面板。打开归档/反编译查看器时**整列收起**——目录树仍在左栏可导航，
               查看器（ArchiveViewer flex-1 / DecompileViewer flex-1）占满右栏，避免树｜列表｜查看器三栏挤（FR-111）。
               打开文本编辑器时与编辑器并排 w-1/2（编辑场景需对照文件列表，保留）。 */}
           {!archiveFor && !decompileFor && (
-            <div className={openFile ? 'flex w-1/2 flex-col border-r' : 'flex flex-1 flex-col'}>
+            <div className={openFile || blockedPreview ? 'flex w-1/2 flex-col border-r' : 'flex flex-1 flex-col'}>
               {searchOpen ? (
                 <SearchPanel
                   instanceId={instanceId}
@@ -615,12 +812,12 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
           {openFile &&
             (config ? (
               <div className="flex w-1/2 min-w-0 flex-col">
-                {/* eslint-disable-next-line react-hooks/refs -- confirmDiscard/setConfigDirty 仅在回调内访问 ref，renderEditor 渲染期不读 ref 值 */}
+                {/* eslint-disable-next-line react-hooks/refs -- runOrAskDiscard/setConfigDirty 仅在回调内访问 ref，renderEditor 渲染期不读 ref 值 */}
                 {config.renderEditor({
                   instanceId,
                   path: openFile.path,
                   name: openFile.name,
-                  onClose: () => { if (confirmDiscard()) setOpenFile(null) },
+                  onClose: () => runOrAskDiscard(() => setOpenFile(null)),
                   onAfterSave: refreshAll,
                   onOpenVersions: () => setVersionFor(openFile.path),
                   onDirtyChange: setConfigDirty,
@@ -657,7 +854,7 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
                       variant="ghost"
                       className="h-7 px-1.5"
                       title={t('common.close')}
-                      onClick={() => { if (confirmDiscard()) setOpenFile(null) }}
+                      onClick={() => runOrAskDiscard(() => setOpenFile(null))}
                     >
                       <X className="size-3.5" />
                     </Button>
@@ -675,6 +872,44 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
                 </div>
               </div>
             ))}
+
+          {blockedPreview && (
+            <div className="flex w-1/2 min-w-0 flex-col">
+              <div className="flex items-center justify-between border-b bg-muted/30 px-2 py-1 text-sm">
+                <span className="truncate font-medium">{blockedPreview.name}</span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-1.5"
+                  title={t('common.close')}
+                  onClick={() => setBlockedPreview(null)}
+                >
+                  <X className="size-3.5" />
+                </Button>
+              </div>
+              <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+                <FileQuestion className="size-8 text-muted-foreground" />
+                <p className="max-w-sm text-sm text-muted-foreground">
+                  {blockedPreview.reason === 'binary'
+                    ? t('fileBrowser.binaryNotice')
+                    : t('fileBrowser.tooLargeNotice', { size: formatBytes(blockedPreview.size) })}
+                </p>
+                <p className="font-mono text-xs text-muted-foreground">{blockedPreview.path}</p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-1"
+                  onClick={() => {
+                    void downloadFile(instanceId, blockedPreview.path).catch(() =>
+                      toast.error(t('files.downloadFailed')),
+                    )
+                  }}
+                >
+                  <Download className="size-3.5" /> {t('files.download')}
+                </Button>
+              </div>
+            </div>
+          )}
 
           {/* 归档浏览（jar/zip）：内部条目树 + 只读查看/反编译（FR-075）。 */}
           {archiveFor && (
@@ -728,6 +963,30 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
         onConfirm={() => void confirmDelete()}
         onCancel={() => setDeleteTargets(null)}
       />
+
+      <Dialog open={discardAction !== null} onOpenChange={(open) => { if (!open) setDiscardAction(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('files.unsavedTitle')}</DialogTitle>
+            <DialogDescription>{t('files.unsavedConfirm')}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDiscardAction(null)}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                const action = discardAction?.action
+                setDiscardAction(null)
+                action?.()
+              }}
+            >
+              {t('common.confirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 历史版本抽屉：配置模式用配置版本抽屉（FR-031），否则文件版本抽屉（FR-051）。 */}
       {config ? (

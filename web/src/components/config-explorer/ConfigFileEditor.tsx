@@ -13,6 +13,7 @@ import {
   useCrossCheck,
   type ValidationIssue,
   type ModelSchema,
+  type FieldSchema,
   type CrossCheckIssue,
 } from '@/api/configs'
 
@@ -44,6 +45,39 @@ interface ConfigFileEditorProps {
 }
 
 type EditMode = 'text' | 'form'
+
+type FieldEntry = { key: string; schema: FieldSchema }
+type FieldGroup = { name: string; fields: FieldEntry[] }
+
+function fieldGroupName(key: string, schema: FieldSchema, fallback: string): string {
+  if (schema.group) return schema.group
+  const dot = key.indexOf('.')
+  return dot > 0 ? key.slice(0, dot) : fallback
+}
+
+function groupSchemaFields(schema: ModelSchema, fallback: string): FieldGroup[] {
+  const groups: FieldGroup[] = []
+  const byName = new Map<string, FieldGroup>()
+  for (const [key, fs] of Object.entries(schema.fields)) {
+    const name = fieldGroupName(key, fs, fallback)
+    let group = byName.get(name)
+    if (!group) {
+      group = { name, fields: [] }
+      byName.set(name, group)
+      groups.push(group)
+    }
+    group.fields.push({ key, schema: fs })
+  }
+  return groups
+}
+
+function fieldErrorKey(fs: FieldSchema, value: string): string | null {
+  const trimmed = value.trim()
+  if (fs.type === 'int' && !/^-?\d+$/.test(trimmed)) return 'invalidInt'
+  if (fs.type === 'bool' && value !== 'true' && value !== 'false') return 'invalidBool'
+  if (fs.choices?.length && !fs.choices.includes(value)) return 'invalidChoice'
+  return null
+}
 
 export default function ConfigFileEditor({
   instanceId,
@@ -103,8 +137,22 @@ export default function ConfigFileEditor({
     () => Object.keys(formDraft).filter((k) => formDraft[k] !== (valueByKey[k] ?? schema?.fields[k]?.default ?? '')),
     [formDraft, valueByKey, schema],
   )
+  const fieldGroups = useMemo(
+    () => (schema ? groupSchemaFields(schema, t('configExplorer.defaultGroup')) : []),
+    [schema, t],
+  )
+  const formErrors = useMemo(() => {
+    if (!schema) return {}
+    const out: Record<string, string> = {}
+    for (const [key, fs] of Object.entries(schema.fields)) {
+      const err = fieldErrorKey(fs, formDraft[key] ?? '')
+      if (err) out[key] = t(`configExplorer.${err}`)
+    }
+    return out
+  }, [formDraft, schema, t])
   const formDirty = changedFields.length > 0
   const dirty = mode === 'text' ? textDirty : formDirty
+  const formInvalid = mode === 'form' && Object.keys(formErrors).length > 0
   const saving = writeMut.isPending || writeFieldsMut.isPending
 
   // 把内部 dirty 上报给资源管理器，供切换/关闭守卫判断（BUG-018 #36）；卸载时复位为干净。
@@ -114,7 +162,7 @@ export default function ConfigFileEditor({
   useEffect(() => () => onDirtyChange(false), [onDirtyChange])
 
   const handleSave = () => {
-    if (!dirty || saving) return
+    if (!dirty || saving || formInvalid) return
     if (mode === 'text') {
       writeMut.mutate(
         { path, content: draft, message },
@@ -201,50 +249,70 @@ export default function ConfigFileEditor({
         ) : (
           <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
             {schema?.description && <p className="text-xs text-muted-foreground">{schema.description}</p>}
-            {schema &&
-              Object.entries(schema.fields).map(([key, fs]) => {
-                const val = formDraft[key] ?? ''
-                const onChange = (v: string) => setFormDraft((d) => ({ ...d, [key]: v }))
-                return (
-                  <div key={key} className="grid grid-cols-3 items-start gap-2">
-                    <label className="break-all pt-1.5 font-mono text-xs" title={fs.description}>
-                      {key}
-                    </label>
-                    <div className="col-span-2 space-y-1">
-                      {fs.type === 'bool' ? (
-                        <select
-                          className="w-full rounded bg-muted px-2 py-1.5 text-xs"
-                          value={val === 'true' ? 'true' : 'false'}
-                          onChange={(e) => onChange(e.target.value)}
-                        >
-                          <option value="true">true</option>
-                          <option value="false">false</option>
-                        </select>
-                      ) : fs.choices && fs.choices.length > 0 ? (
-                        <select
-                          className="w-full rounded bg-muted px-2 py-1.5 text-xs"
-                          value={val}
-                          onChange={(e) => onChange(e.target.value)}
-                        >
-                          {fs.choices.map((c) => (
-                            <option key={c} value={c}>
-                              {c}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <input
-                          type={fs.type === 'int' ? 'number' : 'text'}
-                          className="w-full rounded bg-muted px-2 py-1.5 text-xs"
-                          value={val}
-                          onChange={(e) => onChange(e.target.value)}
-                        />
-                      )}
-                      {fs.description && <p className="text-[10px] text-muted-foreground">{fs.description}</p>}
+            {fieldGroups.map((group) => (
+              <fieldset key={group.name} className="space-y-2 rounded-md border bg-card/35 p-3">
+                <legend className="px-1 text-xs font-medium text-muted-foreground">{group.name}</legend>
+                {group.fields.map(({ key, schema: fs }) => {
+                  const val = formDraft[key] ?? ''
+                  const inputId = `config-field-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`
+                  const error = formErrors[key]
+                  const errorId = `${inputId}-error`
+                  const onChange = (v: string) => setFormDraft((d) => ({ ...d, [key]: v }))
+                  return (
+                    <div key={key} className="grid grid-cols-3 items-start gap-2">
+                      <label htmlFor={inputId} className="break-all pt-1.5 font-mono text-xs" title={fs.description}>
+                        {key}
+                      </label>
+                      <div className="col-span-2 space-y-1">
+                        {fs.type === 'bool' ? (
+                          <select
+                            id={inputId}
+                            className="w-full rounded bg-muted px-2 py-1.5 text-xs"
+                            value={val === 'true' ? 'true' : 'false'}
+                            onChange={(e) => onChange(e.target.value)}
+                          >
+                            <option value="true">true</option>
+                            <option value="false">false</option>
+                          </select>
+                        ) : fs.choices && fs.choices.length > 0 ? (
+                          <select
+                            id={inputId}
+                            aria-invalid={!!error}
+                            aria-describedby={error ? errorId : undefined}
+                            className="w-full rounded bg-muted px-2 py-1.5 text-xs"
+                            value={val}
+                            onChange={(e) => onChange(e.target.value)}
+                          >
+                            {fs.choices.map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            id={inputId}
+                            type="text"
+                            inputMode={fs.type === 'int' ? 'numeric' : undefined}
+                            aria-invalid={!!error}
+                            aria-describedby={error ? errorId : undefined}
+                            className="w-full rounded bg-muted px-2 py-1.5 text-xs"
+                            value={val}
+                            onChange={(e) => onChange(e.target.value)}
+                          />
+                        )}
+                        {error && (
+                          <p id={errorId} className="text-[10px] text-destructive">
+                            {error}
+                          </p>
+                        )}
+                        {fs.description && <p className="text-[10px] text-muted-foreground">{fs.description}</p>}
+                      </div>
                     </div>
-                  </div>
-                )
-              })}
+                  )
+                })}
+              </fieldset>
+            ))}
           </div>
         )}
 
@@ -290,7 +358,7 @@ export default function ConfigFileEditor({
           <Button size="sm" variant="outline" disabled={!dirty || saving} onClick={handleRevert}>
             {t('configExplorer.revert')}
           </Button>
-          <Button size="sm" className="gap-1" disabled={!dirty || saving} onClick={handleSave}>
+          <Button size="sm" className="gap-1" disabled={!dirty || saving || formInvalid} onClick={handleSave}>
             <Save className="size-3.5" /> {saving ? t('configExplorer.saving') : t('common.save')}
           </Button>
         </div>

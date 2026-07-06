@@ -139,9 +139,13 @@ func (s *DBBrowseService) TableRows(table string, p DBRowsParams) (*DBRowsResult
 	if err != nil {
 		return nil, err
 	}
-	colSet := make(map[string]struct{}, len(cols))
+	colSet := make(map[string]DBColumn, len(cols))
 	for _, c := range cols {
-		colSet[c.Name] = struct{}{}
+		colSet[c.Name] = c
+	}
+	isQueryableColumn := func(name string) bool {
+		c, ok := colSet[name]
+		return ok && !c.Sensitive
 	}
 
 	page := p.Page
@@ -159,7 +163,7 @@ func (s *DBBrowseService) TableRows(table string, p DBRowsParams) (*DBRowsResult
 	// 基础查询 + 可选过滤（列名校验后用反引号包裹，值参数化绑定）。
 	base := s.db.Table(table)
 	if p.FilterColumn != "" && p.FilterValue != "" {
-		if _, ok := colSet[p.FilterColumn]; ok {
+		if isQueryableColumn(p.FilterColumn) {
 			base = base.Where(quoteIdent(p.FilterColumn)+" LIKE ?", "%"+p.FilterValue+"%")
 		}
 	}
@@ -172,7 +176,7 @@ func (s *DBBrowseService) TableRows(table string, p DBRowsParams) (*DBRowsResult
 	q := base
 	// 排序列校验后才应用；非法列忽略（回退默认顺序）。
 	if p.Sort != "" {
-		if _, ok := colSet[p.Sort]; ok {
+		if isQueryableColumn(p.Sort) {
 			dir := "ASC"
 			if strings.EqualFold(p.Order, "desc") {
 				dir = "DESC"

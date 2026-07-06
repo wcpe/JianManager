@@ -119,6 +119,13 @@ export interface SearchResult {
   indexing: boolean
 }
 
+export interface SearchScope {
+  /** 限定在该相对目录内搜索，空表示全工作目录。 */
+  rootPath?: string
+  /** 限定文件扩展名，形如 .yml。空表示不限。 */
+  extensions?: string[]
+}
+
 /**
  * 跨文件全文搜索 / 文件名快速打开（FR-074，POST /files/search）。
  * 转发到 Worker 本地倒排索引查询，返回命中文件+行+片段。
@@ -128,11 +135,14 @@ export async function searchFiles(
   query: string,
   mode: SearchMode = 'content',
   maxResults = 200,
+  scope: SearchScope = {},
 ): Promise<SearchResult> {
   const { data } = await api.post<SearchResult>(`/instances/${instanceId}/files/search`, {
     query,
     mode,
     maxResults,
+    rootPath: scope.rootPath,
+    extensions: scope.extensions,
   })
   return data
 }

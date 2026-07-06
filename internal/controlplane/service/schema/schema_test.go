@@ -95,6 +95,9 @@ func TestServerPropertiesModel_HasCoreKeys(t *testing.T) {
 			t.Fatalf("server.properties schema 缺少字段 %s", k)
 		}
 	}
+	if m.Fields["server-port"].Group != "网络与身份" || m.Fields["max-players"].Group != "展示与容量" {
+		t.Fatalf("server.properties schema 缺少表单分组元数据: %+v", m.Fields)
+	}
 }
 
 func TestCrossFileConsistency_PortUnique(t *testing.T) {

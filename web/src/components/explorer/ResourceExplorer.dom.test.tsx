@@ -1,10 +1,14 @@
-import { describe, it, expect } from 'vitest'
-import { screen, waitFor } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { useEffect } from 'react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
 import { mockInject } from '@/mocks/inject'
 import { loginMockUser } from '@/test/auth'
-import ResourceExplorer from './ResourceExplorer'
+import { server } from '@/mocks/server'
+import { API } from '@/mocks/api'
+import ResourceExplorer, { type ConfigCapabilities } from './ResourceExplorer'
 
 /**
  * 资源管理器（文件管理器主视图）强断言（FR-204 文件归档域）。
@@ -39,6 +43,133 @@ describe('ResourceExplorer（mock 假后端）', () => {
     expect(screen.getByText('Essentials.jar')).toBeInTheDocument()
   })
 
+  it('目录树支持 role=tree 与键盘下钻', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    renderWithProviders(<ResourceExplorer instanceId={1} />)
+
+    const tree = await screen.findByRole('tree', { name: '文件目录树' })
+    const root = within(tree).getByRole('treeitem', { name: '/' })
+    root.focus()
+
+    await user.keyboard('{ArrowDown}')
+    const plugins = within(tree).getByRole('treeitem', { name: /plugins/ })
+    expect(plugins).toHaveFocus()
+
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(plugins).toHaveAttribute('aria-selected', 'true'))
+    expect(await screen.findByText('config.yml')).toBeInTheDocument()
+  })
+
+  it('大目录树只渲染可视窗口', async () => {
+    loginMockUser()
+    server.use(
+      http.get(API('/instances/:id/files'), ({ request }) => {
+        const path = new URL(request.url).searchParams.get('path') ?? ''
+        if (path !== '') return HttpResponse.json([])
+        return HttpResponse.json(
+          Array.from({ length: 300 }, (_, index) => ({
+            name: `dir-${String(index).padStart(3, '0')}`,
+            isDir: true,
+            size: 0,
+            modTime: 1_700_000_000,
+          })),
+        )
+      }),
+    )
+    renderWithProviders(<ResourceExplorer instanceId={1} />)
+
+    const tree = await screen.findByRole('tree', { name: '文件目录树' })
+    expect(await within(tree).findByRole('treeitem', { name: /dir-000/ })).toBeInTheDocument()
+    expect(within(tree).getAllByRole('treeitem').length).toBeLessThan(80)
+    expect(within(tree).queryByRole('treeitem', { name: /dir-299/ })).not.toBeInTheDocument()
+  })
+
+  it('二进制与超大文件不触发文本读取并保留下载入口', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    const readSpy = vi.fn()
+    server.use(
+      http.get(API('/instances/:id/files'), () =>
+        HttpResponse.json([
+          { name: 'large.log', isDir: false, size: 2 * 1024 * 1024, modTime: 1_700_000_000 },
+          { name: 'icon.png', isDir: false, size: 128 * 1024, modTime: 1_700_000_000 },
+        ]),
+      ),
+      http.get(API('/instances/:id/files/read'), () => {
+        readSpy()
+        return HttpResponse.text('不应读取')
+      }),
+    )
+    renderWithProviders(<ResourceExplorer instanceId={1} />)
+
+    await user.dblClick(await screen.findByText('large.log'))
+    expect(await screen.findByText(/文件过大/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '下载' })).toBeInTheDocument()
+
+    await user.dblClick(await screen.findByText('icon.png'))
+    expect(await screen.findByText(/二进制文件/)).toBeInTheDocument()
+    expect(readSpy).not.toHaveBeenCalled()
+  })
+
+  it('粘贴移动串行执行并展示部分失败明细', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    server.use(
+      http.post(API('/instances/:id/files/rename'), async ({ request }) => {
+        const body = await request.json() as { oldPath: string; newPath: string }
+        if (body.oldPath === 'world') {
+          return HttpResponse.json({ error: 'MOVE_FAILED', message: 'world 被锁定' }, { status: 500 })
+        }
+        return HttpResponse.json({ ok: true })
+      }),
+    )
+    renderWithProviders(<ResourceExplorer instanceId={1} />)
+
+    await screen.findByText('server.properties')
+    await user.click(screen.getByRole('checkbox', { name: 'server.properties' }))
+    await user.click(screen.getByRole('checkbox', { name: 'world' }))
+
+    const serverRow = screen.getByText('server.properties').closest('li') as HTMLElement
+    await user.pointer({ keys: '[MouseRight]', target: serverRow })
+    await user.click(await screen.findByRole('menuitem', { name: /剪切/ }))
+
+    for (const plugins of screen.getAllByText('plugins')) {
+      await user.dblClick(plugins)
+    }
+    expect(await screen.findByText('config.yml')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /粘贴/ }))
+
+    const status = await screen.findByRole('status')
+    await waitFor(() => expect(status).toHaveTextContent('已完成 2/2'))
+    expect(status).toHaveTextContent('失败 1')
+    expect(status).toHaveTextContent('world 被锁定')
+  })
+
+  it('配置编辑器未保存关闭时使用共享 Dialog 确认', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    const config: ConfigCapabilities = {
+      renderEditor: ({ onDirtyChange, onClose }) => <DirtyConfigEditor onDirtyChange={onDirtyChange} onClose={onClose} />,
+      renderVersionDrawer: () => null,
+    }
+    renderWithProviders(<ResourceExplorer instanceId={1} config={config} />)
+
+    await user.dblClick(await screen.findByText('server.properties'))
+    await user.click(await screen.findByRole('button', { name: '关闭配置' }))
+
+    const dialog = await screen.findByRole('dialog', { name: '有未保存的修改' })
+    expect(within(dialog).getByText('有未保存的修改，确定放弃并继续？')).toBeInTheDocument()
+
+    await user.click(within(dialog).getByRole('button', { name: '取消' }))
+    expect(screen.getByRole('button', { name: '关闭配置' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '关闭配置' }))
+    await user.click(within(await screen.findByRole('dialog', { name: '有未保存的修改' })).getByRole('button', { name: '确认' }))
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: '关闭配置' })).not.toBeInTheDocument())
+  })
+
   it('注入 500：目录加载失败显示错误态（不崩溃）', async () => {
     loginMockUser()
     mockInject('get', '/instances/:id/files', { kind: 'status', status: 500 })
@@ -50,3 +181,18 @@ describe('ResourceExplorer（mock 假后端）', () => {
     expect(screen.queryByText('server.properties')).not.toBeInTheDocument()
   })
 })
+
+function DirtyConfigEditor({
+  onDirtyChange,
+  onClose,
+}: {
+  onDirtyChange: (dirty: boolean) => void
+  onClose: () => void
+}) {
+  useEffect(() => {
+    onDirtyChange(true)
+    return () => onDirtyChange(false)
+  }, [onDirtyChange])
+
+  return <button onClick={onClose}>关闭配置</button>
+}

@@ -148,6 +148,7 @@ function TableRowsView({ table }: { table: string }) {
     for (const c of columns) if (c.sensitive) s.add(c.name)
     return s
   }, [columns])
+  const filterableColumns = useMemo(() => columns.filter((c) => !c.sensitive), [columns])
 
   const total = data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
@@ -194,7 +195,7 @@ function TableRowsView({ table }: { table: string }) {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={NO_FILTER_COLUMN}>{t('database.noFilter')}</SelectItem>
-            {columns.map((c) => (
+            {filterableColumns.map((c) => (
               <SelectItem key={c.name} value={c.name}>
                 {c.name}
               </SelectItem>
@@ -241,6 +242,7 @@ function TableRowsView({ table }: { table: string }) {
                     key={c.name}
                     column={c}
                     sorted={sort === c.name ? order : null}
+                    sortable={!c.sensitive}
                     onClick={() => toggleSort(c.name)}
                   />
                 ))}
@@ -328,16 +330,32 @@ function TableRowsView({ table }: { table: string }) {
 function ColumnHead({
   column,
   sorted,
+  sortable,
   onClick,
 }: {
   column: DbColumn
   sorted: 'asc' | 'desc' | null
+  sortable: boolean
   onClick: () => void
 }) {
+  const { t } = useTranslation()
+
   return (
-    <TableHead className="cursor-pointer select-none" onClick={onClick}>
+    <TableHead
+      aria-disabled={!sortable}
+      className={cn(
+        'select-none',
+        sortable ? 'cursor-pointer' : 'cursor-not-allowed opacity-70',
+      )}
+      onClick={sortable ? onClick : undefined}
+    >
       <span className="inline-flex items-center gap-1">
         <span className="font-mono">{column.name}</span>
+        {column.sensitive && (
+          <span className="rounded border border-status-warning/40 bg-status-warning/10 px-1 py-0.5 text-[10px] font-medium text-status-warning">
+            {t('database.sensitiveColumn')}
+          </span>
+        )}
         {sorted === 'asc' && <ArrowUp className="size-3" />}
         {sorted === 'desc' && <ArrowDown className="size-3" />}
       </span>

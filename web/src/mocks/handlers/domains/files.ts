@@ -110,6 +110,15 @@ function queryPath(request: Request, key = 'path'): string {
   return (new URL(request.url).searchParams.get(key) ?? '').replace(/^\/+|\/+$/g, '')
 }
 
+function matchesSearchScope(path: string, root: string, extensions: Set<string>): boolean {
+  if (root && path !== root && !path.startsWith(`${root}/`)) return false
+  if (extensions.size === 0) return true
+  const slash = path.lastIndexOf('/')
+  const name = slash >= 0 ? path.slice(slash + 1) : path
+  const dot = name.lastIndexOf('.')
+  return dot >= 0 && extensions.has(name.slice(dot).toLowerCase())
+}
+
 /** 写文件：存在则覆盖（先快照旧内容入 fileVersions，FR-051 联动），否则新建；自动补建缺失父目录。 */
 function writeNode(instanceId: number, path: string, content: string): void {
   const existing = getNode(instanceId, path)
@@ -235,15 +244,20 @@ export const handlers = [
     const denied = requireAuth(info)
     if (denied) return denied
     const instanceId = Number((info.params as { id: string }).id)
-    const { query, mode = 'content' } = (await info.request.json()) as {
+    const { query, mode = 'content', rootPath = '', extensions = [] } = (await info.request.json()) as {
       query: string
       mode?: 'content' | 'filename'
       maxResults?: number
+      rootPath?: string
+      extensions?: string[]
     }
     const q = (query ?? '').toLowerCase()
+    const root = rootPath.replace(/^\/+|\/+$/g, '')
+    const exts = new Set(extensions.map((ext) => ext.toLowerCase()).map((ext) => (ext.startsWith('.') ? ext : `.${ext}`)))
     const hits: Array<{ path: string; line: number; snippet: string }> = []
     if (q) {
       for (const f of files.list((x) => x.instanceId === instanceId && !x.isDir)) {
+        if (!matchesSearchScope(f.path, root, exts)) continue
         if (mode === 'filename') {
           if (f.path.toLowerCase().includes(q)) hits.push({ path: f.path, line: 0, snippet: '' })
           continue

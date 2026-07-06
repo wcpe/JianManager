@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, screen } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import SearchPanel from './SearchPanel'
 import { searchFiles } from '@/api/files'
@@ -9,6 +10,43 @@ vi.mock('@/api/files', () => ({
 }))
 
 const mockedSearchFiles = vi.mocked(searchFiles)
+
+describe('SearchPanel', () => {
+  beforeEach(() => {
+    mockedSearchFiles.mockReset()
+  })
+
+  it('提交目录与扩展名范围并高亮片段命中', async () => {
+    const user = userEvent.setup()
+    mockedSearchFiles.mockResolvedValue({
+      hits: [
+        {
+          path: 'plugins/Essentials/config.yml',
+          line: 2,
+          snippet: 'enableFeature: true',
+        },
+      ],
+      truncated: false,
+      indexing: false,
+    })
+
+    renderWithProviders(<SearchPanel instanceId={1} onOpenHit={vi.fn()} onClose={vi.fn()} />)
+
+    await user.type(screen.getByPlaceholderText('输入关键字搜索文件内容…'), 'feature')
+    await user.type(screen.getByLabelText('目录范围'), 'plugins')
+    await user.type(screen.getByLabelText('扩展名范围'), '.yml,.yaml')
+
+    expect(await screen.findByText('plugins/Essentials/config.yml')).toBeInTheDocument()
+    const snippet = screen.getByText((_, node) => node?.textContent === 'enableFeature: true')
+    expect(within(snippet).getByText('Feature')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(mockedSearchFiles).toHaveBeenLastCalledWith(1, 'feature', 'content', 200, {
+        rootPath: 'plugins',
+        extensions: ['.yml', '.yaml'],
+      })
+    })
+  })
+})
 
 describe('SearchPanel 索引中态（FR-113）', () => {
   beforeEach(() => {
@@ -92,7 +130,10 @@ describe('SearchPanel 索引中态（FR-113）', () => {
       await vi.advanceTimersByTimeAsync(200)
     })
     expect(mockedSearchFiles).toHaveBeenCalledTimes(2)
-    expect(mockedSearchFiles).toHaveBeenLastCalledWith(1, 'new', 'content')
+    expect(mockedSearchFiles).toHaveBeenLastCalledWith(1, 'new', 'content', 200, {
+      rootPath: '',
+      extensions: [],
+    })
     expect(screen.getByText('new.yml')).toBeInTheDocument()
     expect(screen.queryByText('old.yml')).not.toBeInTheDocument()
   })

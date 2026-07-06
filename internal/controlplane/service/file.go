@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -260,12 +261,24 @@ type SearchResult struct {
 	Indexing bool `json:"indexing"`
 }
 
+// SearchScope 限定跨文件搜索范围；CP 层过滤 Worker 返回的命中，避免新增 gRPC 字段。
+type SearchScope struct {
+	RootPath   string   `json:"rootPath"`
+	Extensions []string `json:"extensions"`
+}
+
 // SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
 // CP 仅经 gRPC 把查询转发到目标节点 Worker（索引是 Worker 本地资产，CP 不持有）。
 // mode 为 content（默认全文）或 filename（文件名快速打开）；maxResults<=0 时由 Worker 取默认。
-func (s *FileService) SearchFiles(instanceID uint, query, mode string, maxResults int) (*SearchResult, error) {
+func (s *FileService) SearchFiles(instanceID uint, query, mode string, maxResults int, scope SearchScope) (*SearchResult, error) {
 	if mode != "filename" {
 		mode = "content"
+	}
+	scope = normalizeSearchScope(scope)
+	if scope.RootPath != "" {
+		if err := validatePath(scope.RootPath); err != nil {
+			return nil, err
+		}
 	}
 	instance, node, err := s.getInstanceAndNode(instanceID)
 	if err != nil {
@@ -277,6 +290,13 @@ func (s *FileService) SearchFiles(instanceID uint, query, mode string, maxResult
 		return nil, ErrNodeNotConnected
 	}
 
+	workerMaxResults := maxResults
+	if hasSearchScope(scope) && maxResults > 0 && maxResults < 1000 {
+		workerMaxResults = maxResults * 5
+		if workerMaxResults > 1000 {
+			workerMaxResults = 1000
+		}
+	}
 	// 索引增量 + 大目录扫描可能略耗时，给较宽超时（仍受请求级取消约束）。
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -285,7 +305,7 @@ func (s *FileService) SearchFiles(instanceID uint, query, mode string, maxResult
 		InstanceUuid: instance.UUID,
 		Query:        query,
 		Mode:         mode,
-		MaxResults:   int32(maxResults),
+		MaxResults:   int32(workerMaxResults),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("搜索失败: %w", err)
@@ -295,7 +315,57 @@ func (s *FileService) SearchFiles(instanceID uint, query, mode string, maxResult
 	for i, h := range resp.Hits {
 		hits[i] = SearchHit{Path: h.Path, Line: int(h.Line), Snippet: h.Snippet}
 	}
+	if hasSearchScope(scope) {
+		hits, resp.Truncated = filterSearchHits(hits, maxResults, scope, resp.Truncated)
+	}
 	return &SearchResult{Hits: hits, Truncated: resp.Truncated, Indexing: resp.Indexing}, nil
+}
+
+func normalizeSearchScope(scope SearchScope) SearchScope {
+	scope.RootPath = strings.Trim(strings.ReplaceAll(scope.RootPath, "\\", "/"), "/ ")
+	out := make([]string, 0, len(scope.Extensions))
+	seen := map[string]bool{}
+	for _, ext := range scope.Extensions {
+		ext = strings.ToLower(strings.TrimSpace(ext))
+		if ext == "" {
+			continue
+		}
+		if !strings.HasPrefix(ext, ".") {
+			ext = "." + ext
+		}
+		if seen[ext] {
+			continue
+		}
+		seen[ext] = true
+		out = append(out, ext)
+	}
+	scope.Extensions = out
+	return scope
+}
+
+func hasSearchScope(scope SearchScope) bool {
+	return scope.RootPath != "" || len(scope.Extensions) > 0
+}
+
+func filterSearchHits(hits []SearchHit, maxResults int, scope SearchScope, truncated bool) ([]SearchHit, bool) {
+	exts := map[string]bool{}
+	for _, ext := range scope.Extensions {
+		exts[ext] = true
+	}
+	filtered := make([]SearchHit, 0, len(hits))
+	for _, hit := range hits {
+		if scope.RootPath != "" && hit.Path != scope.RootPath && !strings.HasPrefix(hit.Path, scope.RootPath+"/") {
+			continue
+		}
+		if len(exts) > 0 && !exts[strings.ToLower(path.Ext(hit.Path))] {
+			continue
+		}
+		filtered = append(filtered, hit)
+	}
+	if maxResults > 0 && len(filtered) > maxResults {
+		return filtered[:maxResults], true
+	}
+	return filtered, truncated
 }
 
 // ArchiveEntry 归档（jar/zip）内的单个条目（FR-075）。
