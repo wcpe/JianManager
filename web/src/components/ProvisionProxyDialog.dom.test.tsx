@@ -13,7 +13,7 @@ import ProvisionProxyDialog from './ProvisionProxyDialog'
  * ProvisionProxyDialog 强断言（FR-202 供给/部署流程，POST /instances/provision/proxy）。
  * 搭建代理对话框依赖跨域 nodes（GET /nodes）+ groups（GET /groups）+ cores（GET /cores）seed handler。
  * 三条统一断言：① 打开 → 渲染可选节点 + 代理版本列表；② 填表提交 → 代理实例落 instances 集合联动 +
- * 对话框关闭；③ 注入端点 500 → 不崩溃、对话框不误关、集合不新增。
+ * forwarding secret 持久展示；③ 注入端点 500 → 不崩溃、对话框不误关、集合不新增。
  *
  * 注：POST /instances/provision/proxy 在 network.ts 与 provision.ts 各注册一次；MSW 取首个匹配
  * （import.meta.glob 字母序 network < provision），故由 network.ts 服务，返回 { instance, ... }，
@@ -82,7 +82,7 @@ describe('ProvisionProxyDialog（mock 假后端，搭建代理流程）', () => 
     expect(screen.getByRole('button', { name: '3.2.0-SNAPSHOT' })).toBeInTheDocument()
   })
 
-  it('② 填写并提交 → 代理实例集合联动新增 + 对话框关闭', async () => {
+  it('② 填写并提交 → 代理实例集合联动新增 + forwarding secret 持久展示', async () => {
     const user = userEvent.setup()
     loginMockUser()
     renderWithProviders(<ProxyHarness />)
@@ -99,10 +99,13 @@ describe('ProvisionProxyDialog（mock 假后端，搭建代理流程）', () => 
 
     // 联动：POST /instances/provision/proxy 落 instances 集合（role=proxy）→ 失效重取 → 列表出现。
     await waitFor(() => expect(within(list).getByText('edge-proxy')).toBeInTheDocument())
+    expect(await screen.findByRole('heading', { name: 'Forwarding secret' })).toBeInTheDocument()
+    expect(screen.getByText('mock-forwarding-secret')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '复制 secret' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '完成' }))
     await waitFor(() =>
-      expect(
-        screen.queryByText('搭建代理（BungeeCord/Waterfall/Velocity）'),
-      ).not.toBeInTheDocument(),
+      expect(screen.queryByText('Forwarding secret')).not.toBeInTheDocument(),
     )
   })
 

@@ -4,8 +4,16 @@ import { toast } from 'sonner'
 import { useNodes } from '@/api/nodes'
 import { useGroups } from '@/api/groups'
 import { useNodeJDKs } from '@/api/jdks'
-import { useCoreVersions, useResolvedCore, useProvisionBukkit } from '@/api/provision'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import { useCoreVersions, useResolvedCore, useProvisionServer } from '@/api/provision'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@jianmanager/ui/components/select'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
@@ -19,7 +27,7 @@ interface ProvisionServerDialogProps {
 
 /**
  * 一键搭建后端子服向导：用户只需选核心/版本/资源，端口与工作目录由系统分配，
- * 核心由后端按 coreType 解析下载并写入基础配置。
+ * 核心由后端解析并写入基础配置（FR-034/FR-046）。
  */
 export default function ProvisionServerDialog({ open, onClose }: ProvisionServerDialogProps) {
   const { t } = useTranslation()
@@ -48,7 +56,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
     buildNum,
   )
 
-  const provision = useProvisionBukkit()
+  const provision = useProvisionServer()
 
   // 系统可获取项 → 下拉选项（FR-072）。版本允许自定义（PaperMC 列表外的版本）。
   const nodeOptions: ComboboxOption[] = (nodes ?? [])
@@ -60,12 +68,6 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
     label: `${j.vendor} ${j.majorVersion} (${j.version})`,
   }))
   const groupOptions: ComboboxOption[] = (groups ?? []).map((g) => ({ value: String(g.id), label: g.name }))
-
-  const handleCoreTypeChange = (value: string) => {
-    setCoreType(value)
-    setMcVersion('')
-    setBuild('')
-  }
 
   const errors = validateFields(
     { name, nodeId, mcVersion, memoryMb },
@@ -100,6 +102,12 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
     setGroupId('')
     setOnlineMode(false)
     jdkDefaultNodeRef.current = ''
+  }
+
+  const changeCoreType = (next: string) => {
+    setCoreType(next)
+    setMcVersion('')
+    setBuild('')
   }
 
   const close = () => {
@@ -146,12 +154,19 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
   if (!open) return null
 
   return (
-    <div className={MODAL_OVERLAY}>
-      <div className={`${MODAL_PANEL} max-w-md`}>
-        <h2 className="text-lg font-bold mb-1">{t('provision.title')}</h2>
-        <p className="text-xs text-muted-foreground mb-4">{t('provision.systemAssigned')}</p>
+    <Dialog open={open} onOpenChange={(next) => { if (!next) close() }}>
+      <DialogContent
+        showCloseButton={false}
+        onPointerDownOutside={(event) => event.preventDefault()}
+        className={`${scrollableDialogContentClass} sm:max-w-md`}
+      >
+        <DialogHeader>
+          <DialogTitle>{t('provision.title')}</DialogTitle>
+          <DialogDescription className="text-xs">{t('provision.systemAssigned')}</DialogDescription>
+        </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-3">
+        <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+          <ScrollableDialogBody className="space-y-3 py-2">
           <div>
             <FieldLabel required>{t('instances.instanceName')}</FieldLabel>
             <input
@@ -182,7 +197,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
           <div className="grid grid-cols-2 gap-3">
             <div>
               <FieldLabel>{t('provision.coreType')}</FieldLabel>
-              <Select value={coreType} onValueChange={handleCoreTypeChange}>
+              <Select value={coreType} onValueChange={changeCoreType}>
                 <SelectTrigger className="w-full mt-1">
                   <SelectValue />
                 </SelectTrigger>
@@ -300,8 +315,9 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
             </label>
             <p className="mt-1 text-xs text-muted-foreground">{t('provision.onlineModeHint')}</p>
           </div>
+          </ScrollableDialogBody>
 
-          <div className="flex justify-end gap-2 pt-2">
+          <DialogFooter className="flex-row justify-end pt-2">
             <button
               type="button"
               onClick={close}
@@ -316,9 +332,9 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
             >
               {provision.isPending ? t('provision.provisioning') : t('provision.submit')}
             </button>
-          </div>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

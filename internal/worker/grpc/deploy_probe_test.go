@@ -5,8 +5,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -142,6 +146,140 @@ func makeProbeLibrariesZip(t *testing.T, files map[string]string) []byte {
 	return buf.Bytes()
 }
 
+// TestDeployServerProbe_PrefetchesTabooLibLibraries 验证部署探针时会按 jar 元数据把 TabooLib 运行期依赖预置到实例 libraries 目录。
+func TestDeployServerProbe_PrefetchesTabooLibLibraries(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)
+	ctx := context.Background()
+	const uuid = "33333333-3333-3333-3333-333333333333"
+	workDir := filepath.Join(tmp, "inst")
+	requireCreatedProbeInstance(t, srv, ctx, uuid, workDir)
+
+	repo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, ".jar"):
+			_, _ = w.Write([]byte("taboolib-module-jar"))
+		case strings.HasSuffix(r.URL.Path, ".pom"):
+			_, _ = w.Write([]byte("<project/>"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer repo.Close()
+
+	resp, err := srv.DeployServerProbe(ctx, &workerpb.DeployServerProbeRequest{
+		InstanceUuid: uuid,
+		Jar:          makeProbeJar(t, repo.URL, "libraries", "basic-configuration"),
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Success, resp.Error)
+
+	cachedJar := filepath.Join(workDir, "libraries", "io", "izzel", "taboolib", "basic-configuration", "6.3.0-test", "basic-configuration-6.3.0-test.jar")
+	got, err := os.ReadFile(cachedJar)
+	require.NoError(t, err)
+	assert.Equal(t, "taboolib-module-jar", string(got))
+}
+
+func TestDeployServerProbe_UsesCachedTabooLibLibrariesWhenRepoOffline(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)
+	ctx := context.Background()
+	const uuid = "55555555-5555-5555-5555-555555555555"
+	workDir := filepath.Join(tmp, "inst")
+	requireCreatedProbeInstance(t, srv, ctx, uuid, workDir)
+
+	var jarHits int
+	repo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, ".jar"):
+			jarHits++
+			_, _ = w.Write([]byte("cached-taboolib-module"))
+		case strings.HasSuffix(r.URL.Path, ".pom"):
+			_, _ = w.Write([]byte("<project/>"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	jar := makeProbeJar(t, repo.URL, "libraries", "basic-configuration")
+
+	first, err := srv.DeployServerProbe(ctx, &workerpb.DeployServerProbeRequest{InstanceUuid: uuid, Jar: jar})
+	require.NoError(t, err)
+	require.True(t, first.Success, first.Error)
+	repo.Close()
+
+	second, err := srv.DeployServerProbe(ctx, &workerpb.DeployServerProbeRequest{InstanceUuid: uuid, Jar: jar})
+	require.NoError(t, err)
+	require.True(t, second.Success, second.Error)
+	require.Equal(t, 1, jarHits, "已预置的探针依赖不应在离线重部署时重复访问远端仓库")
+}
+
+// TestDeployServerProbe_DependencyPrefetchDiagnostics 覆盖缺依赖诊断和缓存目录越界保护。
+func TestDeployServerProbe_DependencyPrefetchDiagnostics(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)
+	ctx := context.Background()
+	const uuid = "44444444-4444-4444-4444-444444444444"
+	workDir := filepath.Join(tmp, "inst")
+	requireCreatedProbeInstance(t, srv, ctx, uuid, workDir)
+
+	repo := httptest.NewServer(http.NotFoundHandler())
+	defer repo.Close()
+
+	t.Run("下载失败返回明确诊断", func(t *testing.T) {
+		resp, err := srv.DeployServerProbe(ctx, &workerpb.DeployServerProbeRequest{
+			InstanceUuid: uuid,
+			Jar:          makeProbeJar(t, repo.URL, "libraries", "basic-configuration"),
+		})
+		require.NoError(t, err)
+		assert.False(t, resp.Success)
+		assert.Contains(t, resp.Error, "预置探针依赖失败")
+		assert.Contains(t, resp.Error, "io.izzel.taboolib:basic-configuration:6.3.0-test")
+	})
+
+	t.Run("拒绝越界缓存目录", func(t *testing.T) {
+		resp, err := srv.DeployServerProbe(ctx, &workerpb.DeployServerProbeRequest{
+			InstanceUuid: uuid,
+			Jar:          makeProbeJar(t, repo.URL, "../outside", "basic-configuration"),
+		})
+		require.NoError(t, err)
+		assert.False(t, resp.Success)
+		assert.Contains(t, resp.Error, "探针依赖缓存目录越界")
+		assert.NoDirExists(t, filepath.Join(tmp, "outside"))
+	})
+}
+
+func requireCreatedProbeInstance(t *testing.T, srv *Server, ctx context.Context, uuid string, workDir string) {
+	t.Helper()
+	createResp, err := srv.CreateInstance(ctx, &workerpb.CreateInstanceRequest{
+		InstanceUuid: uuid,
+		Name:         "probe",
+		StartCommand: "noop",
+		WorkDir:      workDir,
+		ProcessType:  "direct",
+	})
+	require.NoError(t, err)
+	require.True(t, createResp.Success, createResp.Error)
+}
+
+func makeProbeJar(t *testing.T, repoURL string, fileLibs string, modules string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	writeZipEntry(t, zw, "META-INF/taboolib/env.properties", fmt.Sprintf(`
+repo-central=%s
+repo-taboolib=%s
+file-libs=%s
+module=%s
+`, repoURL, repoURL, fileLibs, modules))
+	writeZipEntry(t, zw, "META-INF/taboolib/version.properties", `
+kotlin=null
+kotlin-coroutines=null
+taboolib=6.3.0-test
+`)
+	require.NoError(t, zw.Close())
+	return buf.Bytes()
+}
+
 func makeProbeZipWithDeclaredSize(t *testing.T, name string, size uint32) []byte {
 	t.Helper()
 	b := makeProbeLibrariesZip(t, map[string]string{name: "small"})
@@ -149,4 +287,12 @@ func makeProbeZipWithDeclaredSize(t *testing.T, name string, size uint32) []byte
 	require.NotEqual(t, -1, idx, "zip central directory not found")
 	binary.LittleEndian.PutUint32(b[idx+24:idx+28], size)
 	return b
+}
+
+func writeZipEntry(t *testing.T, zw *zip.Writer, name string, body string) {
+	t.Helper()
+	w, err := zw.Create(name)
+	require.NoError(t, err)
+	_, err = w.Write([]byte(body))
+	require.NoError(t, err)
 }

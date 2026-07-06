@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
@@ -345,10 +346,15 @@ const serverProbeJarName = "ServerProbe.jar"
 
 // DeployServerProbe 将 ServerProbe 探针 jar 与 config.yml 写入实例 plugins 目录（FR-010 建服自动部署）。
 // jar 为空（CP 未捆绑探针）时仅写 config，便于运维后续手动放入 jar 即按分配端口开启 /metrics；实例须已注册。
-func (s *Server) DeployServerProbe(_ context.Context, req *workerpb.DeployServerProbeRequest) (*workerpb.DeployServerProbeResponse, error) {
+func (s *Server) DeployServerProbe(ctx context.Context, req *workerpb.DeployServerProbeRequest) (*workerpb.DeployServerProbeResponse, error) {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)
 	if !exists {
 		return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("实例 %s 未注册", req.InstanceUuid)}, nil
+	}
+	if len(req.Jar) > 0 {
+		if err := s.prepareServerProbeDependencies(ctx, inst.WorkDir, req.Jar); err != nil {
+			return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("预置探针依赖失败: %v", err)}, nil
+		}
 	}
 	pluginsDir := filepath.Join(inst.WorkDir, "plugins")
 	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
@@ -374,6 +380,308 @@ func (s *Server) DeployServerProbe(_ context.Context, req *workerpb.DeployServer
 		}
 	}
 	return &workerpb.DeployServerProbeResponse{Success: true}, nil
+}
+
+const (
+	defaultProbeLibraryDir        = "libraries"
+	probeMetadataMaxBytes         = 64 * 1024
+	probeDependencyMaxBytes int64 = 64 * 1024 * 1024
+)
+
+type probeRuntimeMeta struct {
+	fileLibs                string
+	repoCentral             string
+	repoTabooLib            string
+	tabooLibVersion         string
+	kotlinVersion           string
+	kotlinCoroutinesVersion string
+	modules                 []string
+}
+
+type mavenDependency struct {
+	group    string
+	artifact string
+	version  string
+	repo     string
+}
+
+func (s *Server) prepareServerProbeDependencies(ctx context.Context, workDir string, jar []byte) error {
+	meta, ok, err := readProbeRuntimeMeta(jar)
+	if err != nil || !ok {
+		return err
+	}
+	cacheDir, err := probeLibraryDir(workDir, meta.fileLibs)
+	if err != nil {
+		return err
+	}
+	for _, dep := range meta.dependencies() {
+		if err := s.ensureMavenDependency(ctx, cacheDir, dep); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readProbeRuntimeMeta(jar []byte) (probeRuntimeMeta, bool, error) {
+	zr, err := zip.NewReader(bytes.NewReader(jar), int64(len(jar)))
+	if err != nil {
+		return probeRuntimeMeta{}, false, nil
+	}
+	envText, ok, err := readZipText(zr, "META-INF/taboolib/env.properties")
+	if err != nil || !ok {
+		return probeRuntimeMeta{}, ok, err
+	}
+	versionText, ok, err := readZipText(zr, "META-INF/taboolib/version.properties")
+	if err != nil || !ok {
+		return probeRuntimeMeta{}, ok, err
+	}
+	env := parseProbeProperties(envText)
+	version := parseProbeProperties(versionText)
+	meta := probeRuntimeMeta{
+		fileLibs:                envValue(env, "file-libs", defaultProbeLibraryDir),
+		repoCentral:             strings.TrimSpace(env["repo-central"]),
+		repoTabooLib:            strings.TrimSpace(env["repo-taboolib"]),
+		tabooLibVersion:         strings.TrimSpace(version["taboolib"]),
+		kotlinVersion:           strings.TrimSpace(version["kotlin"]),
+		kotlinCoroutinesVersion: strings.TrimSpace(version["kotlin-coroutines"]),
+		modules:                 splitProbeModules(env["module"]),
+	}
+	return meta, true, nil
+}
+
+func readZipText(zr *zip.Reader, name string) (string, bool, error) {
+	for _, f := range zr.File {
+		if f.Name != name {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return "", true, err
+		}
+		defer rc.Close()
+		b, err := io.ReadAll(io.LimitReader(rc, probeMetadataMaxBytes+1))
+		if err != nil {
+			return "", true, err
+		}
+		if len(b) > probeMetadataMaxBytes {
+			return "", true, fmt.Errorf("探针元数据 %s 超出大小上限", name)
+		}
+		return string(b), true, nil
+	}
+	return "", false, nil
+}
+
+func parseProbeProperties(text string) map[string]string {
+	props := make(map[string]string)
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "!") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			key, val, ok = strings.Cut(line, ":")
+		}
+		if ok {
+			props[strings.TrimSpace(key)] = strings.TrimSpace(val)
+		}
+	}
+	return props
+}
+
+func envValue(props map[string]string, key string, fallback string) string {
+	if val := strings.TrimSpace(props[key]); val != "" {
+		return val
+	}
+	return fallback
+}
+
+func splitProbeModules(raw string) []string {
+	var out []string
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func probeLibraryDir(workDir string, fileLibs string) (string, error) {
+	fileLibs = strings.TrimSpace(fileLibs)
+	if fileLibs == "" {
+		fileLibs = defaultProbeLibraryDir
+	}
+	if filepath.IsAbs(fileLibs) {
+		return "", fmt.Errorf("探针依赖缓存目录必须是实例内相对路径: %s", fileLibs)
+	}
+	clean := filepath.Clean(fileLibs)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("探针依赖缓存目录越界: %s", fileLibs)
+	}
+	return filepath.Join(workDir, clean), nil
+}
+
+func (m probeRuntimeMeta) dependencies() []mavenDependency {
+	var deps []mavenDependency
+	if isEnabledVersion(m.kotlinVersion) {
+		deps = append(deps,
+			mavenDependency{
+				group:    "org.jetbrains.kotlin",
+				artifact: "kotlin-stdlib",
+				version:  m.kotlinVersion,
+				repo:     m.repoCentral,
+			},
+			mavenDependency{
+				group:    "org.jetbrains.kotlin",
+				artifact: "kotlin-stdlib-jdk8",
+				version:  m.kotlinVersion,
+				repo:     m.repoCentral,
+			},
+		)
+	}
+	if isEnabledVersion(m.kotlinCoroutinesVersion) {
+		deps = append(deps, mavenDependency{
+			group:    "org.jetbrains.kotlinx",
+			artifact: "kotlinx-coroutines-core-jvm",
+			version:  m.kotlinCoroutinesVersion,
+			repo:     m.repoCentral,
+		})
+	}
+	if !isEnabledVersion(m.tabooLibVersion) {
+		return deps
+	}
+	for _, module := range m.modules {
+		deps = append(deps, mavenDependency{
+			group:    "io.izzel.taboolib",
+			artifact: module,
+			version:  m.tabooLibVersion,
+			repo:     m.repoTabooLib,
+		})
+	}
+	return deps
+}
+
+func isEnabledVersion(version string) bool {
+	version = strings.TrimSpace(version)
+	return version != "" && version != "null" && version != "skip"
+}
+
+func (s *Server) ensureMavenDependency(ctx context.Context, cacheDir string, dep mavenDependency) error {
+	if err := dep.validate(); err != nil {
+		return err
+	}
+	for _, ext := range []string{"pom", "jar"} {
+		target := filepath.Join(cacheDir, dep.localPath(ext))
+		if hasNonEmptyFile(target) {
+			continue
+		}
+		source := dep.remoteURL(ext)
+		if err := downloadProbeDependency(ctx, s.outboundClient(), source, target); err != nil {
+			return fmt.Errorf("%s:%s:%s %s 下载失败: %w", dep.group, dep.artifact, dep.version, ext, err)
+		}
+	}
+	return nil
+}
+
+func (d mavenDependency) validate() error {
+	for _, part := range []string{d.group, d.artifact, d.version} {
+		if part == "" || strings.ContainsAny(part, `/\`) || strings.Contains(part, "..") {
+			return fmt.Errorf("非法 Maven 坐标: %s:%s:%s", d.group, d.artifact, d.version)
+		}
+	}
+	if strings.TrimSpace(d.repo) == "" {
+		return fmt.Errorf("依赖 %s:%s:%s 缺少仓库地址", d.group, d.artifact, d.version)
+	}
+	return nil
+}
+
+func (d mavenDependency) localPath(ext string) string {
+	groupPath := strings.ReplaceAll(d.group, ".", string(filepath.Separator))
+	name := fmt.Sprintf("%s-%s.%s", d.artifact, d.version, ext)
+	return filepath.Join(groupPath, d.artifact, d.version, name)
+}
+
+func (d mavenDependency) remoteURL(ext string) string {
+	segments := append(strings.Split(d.group, "."), d.artifact, d.version)
+	segments = append(segments, fmt.Sprintf("%s-%s.%s", d.artifact, d.version, ext))
+	for i, segment := range segments {
+		segments[i] = url.PathEscape(segment)
+	}
+	return strings.TrimRight(d.repo, "/") + "/" + strings.Join(segments, "/")
+}
+
+func hasNonEmptyFile(path string) bool {
+	st, err := os.Stat(path)
+	return err == nil && st.Size() > 0
+}
+
+func downloadProbeDependency(ctx context.Context, client *http.Client, sourceURL string, target string) error {
+	client = probeDependencyHTTPClient(client)
+	resp, err := requestProbeDependency(ctx, client, sourceURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return writeProbeDependency(resp, target)
+}
+
+func probeDependencyHTTPClient(client *http.Client) *http.Client {
+	if client == nil {
+		return &http.Client{Timeout: 5 * time.Minute}
+	}
+	if client.Timeout == 0 {
+		c := *client
+		c.Timeout = 5 * time.Minute
+		return &c
+	}
+	return client
+}
+
+func requestProbeDependency(ctx context.Context, client *http.Client, sourceURL string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	if resp.ContentLength > probeDependencyMaxBytes {
+		resp.Body.Close()
+		return nil, fmt.Errorf("文件超过大小上限")
+	}
+	return resp, nil
+}
+
+func writeProbeDependency(resp *http.Response, target string) error {
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	tmp := target + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	n, copyErr := io.Copy(f, io.LimitReader(resp.Body, probeDependencyMaxBytes+1))
+	closeErr := f.Close()
+	if copyErr != nil {
+		_ = os.Remove(tmp)
+		return copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmp)
+		return closeErr
+	}
+	if n > probeDependencyMaxBytes {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("文件超过大小上限")
+	}
+	return os.Rename(tmp, target)
 }
 
 // downloadFile 流式下载 url 到 destPath，边写边算 sha256，返回字节数与 hex 小写摘要。

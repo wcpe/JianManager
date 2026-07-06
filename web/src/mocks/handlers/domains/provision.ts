@@ -1,4 +1,4 @@
-import { HttpResponse } from 'msw'
+import { HttpResponse, type HttpResponseResolver } from 'msw'
 import { domainRoute } from '@/mocks/inject'
 import { db } from '@/mocks/db'
 import { requireAuth } from '@/mocks/auth-middleware'
@@ -7,7 +7,7 @@ import { requireAuth } from '@/mocks/auth-middleware'
  * 供给与模板域 mock handler（FR-202）。
  * 覆盖三个 api 模块的端点：
  *  - templates.ts：GET/POST /templates、DELETE /templates/:id
- *  - provision.ts：GET /cores（版本列表 / 解析下载信息）、POST /instances/provision/bukkit、POST /instances/provision/proxy
+ *  - provision.ts：GET /cores（版本列表 / 解析下载信息）、POST /instances/provision/server、POST /instances/provision/proxy
  *  - clone.ts：POST /instances/:id/clone
  * 结构照 spec §7：domainRoute 注册每个端点、db('<集合>') 读写、受保护端点首行 requireAuth。
  */
@@ -95,6 +95,36 @@ function coreFilename(type: string, mcVersion: string, build: number): string {
   return `${type}-${mcVersion}-${build}.jar`
 }
 
+const provisionBackend: HttpResponseResolver = async (info) => {
+  const denied = requireAuth(info)
+  if (denied) return denied
+  const body = (await info.request.json()) as {
+    nodeId: number
+    name: string
+    coreType: string
+    mcVersion: string
+    groupId?: number
+  }
+  // 写入共享 instances 集合（与实例域联动：provision 后实例列表应出现该实例）。
+  const inst = db<{ id: number; [k: string]: unknown }>('instances').insert({
+    uuid: `i-${body.name}-${Date.now()}`,
+    nodeId: body.nodeId,
+    name: body.name,
+    type: 'minecraft_java',
+    role: 'backend',
+    processType: 'daemon',
+    status: 'STOPPED',
+    startCommand: `java -jar ${body.coreType}.jar nogui`,
+    workDir: `/srv/instances/${body.name}`,
+    serverPort: 25565,
+    autoStart: false,
+    autoRestart: true,
+    tags: '',
+    createdAt: new Date().toISOString(),
+  })
+  return HttpResponse.json(inst, { status: 201 })
+}
+
 export const handlers = [
   // ── 模板 ──────────────────────────────────────────────
   domainRoute('get', '/templates', (info) => {
@@ -173,36 +203,9 @@ export const handlers = [
     })
   }),
 
-  // ── 供给：一键搭建 Paper 后端 ────────────────────────
-  domainRoute('post', '/instances/provision/bukkit', async (info) => {
-    const denied = requireAuth(info)
-    if (denied) return denied
-    const body = (await info.request.json()) as {
-      nodeId: number
-      name: string
-      coreType: string
-      mcVersion: string
-      groupId?: number
-    }
-    // 写入共享 instances 集合（与实例域联动：provision 后实例列表应出现该实例）。
-    const inst = db<{ id: number; [k: string]: unknown }>('instances').insert({
-      uuid: `i-${body.name}-${Date.now()}`,
-      nodeId: body.nodeId,
-      name: body.name,
-      type: 'minecraft_java',
-      role: 'backend',
-      processType: 'daemon',
-      status: 'STOPPED',
-      startCommand: `java -jar ${body.coreType}.jar nogui`,
-      workDir: `/srv/instances/${body.name}`,
-      serverPort: 25565,
-      autoStart: false,
-      autoRestart: true,
-      tags: '',
-      createdAt: new Date().toISOString(),
-    })
-    return HttpResponse.json(inst, { status: 201 })
-  }),
+  // ── 供给：一键搭建后端 ───────────────────────────────
+  domainRoute('post', '/instances/provision/server', provisionBackend),
+  domainRoute('post', '/instances/provision/bukkit', provisionBackend),
 
   // ── 供给：一键搭建代理 ───────────────────────────────
   domainRoute('post', '/instances/provision/proxy', async (info) => {

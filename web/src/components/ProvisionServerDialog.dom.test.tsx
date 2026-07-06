@@ -13,7 +13,7 @@ import { useInstances } from '@/api/instances'
 import ProvisionServerDialog from './ProvisionServerDialog'
 
 /**
- * ProvisionServerDialog 强断言（FR-202/FR-046 供给/部署流程，POST /instances/provision/bukkit）。
+ * ProvisionServerDialog 强断言（FR-202/FR-046 供给/部署流程，POST /instances/provision/server）。
  * 部署对话框依赖跨域 nodes（GET /nodes）+ groups（GET /groups）+ cores（GET /cores）seed handler，
  * 均已在主 mock 树（node.ts / identity.ts / provision.ts）。统一断言：
  * ① 打开对话框 → 渲染可选节点（Combobox 列出在线节点）+ 版本列表（GET /cores）；
@@ -41,7 +41,7 @@ beforeAll(() => {
 
 /**
  * 部署流程测试壳：渲染对话框 + 一个由 useInstances() 驱动的实例名列表 + Toaster。
- * 部署成功后 useProvisionBukkit 失效 ['instances']，列表重取应出现新实例（集合联动），
+ * 部署成功后 useProvisionServer 失效 ['instances']，列表重取应出现新实例（集合联动），
  * 且对话框 onClose 后卸载——两者共同构成「部署成功」的强信号。
  */
 function DeployHarness() {
@@ -91,9 +91,7 @@ describe('ProvisionServerDialog（mock 假后端，部署流程）', () => {
     loginMockUser()
     renderWithProviders(<DeployHarness />)
 
-    const dialog = await screen.findByText('一键搭建后端子服')
-    const panel = dialog.closest('div') as HTMLElement
-    expect(panel).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: '一键搭建后端子服' })).toBeInTheDocument()
 
     // 节点 Combobox：seed 节点 alpha（status=1）可选，beta（status=0 离线）被过滤掉。
     await user.click(screen.getByText('选择节点'))
@@ -106,6 +104,18 @@ describe('ProvisionServerDialog（mock 假后端，部署流程）', () => {
     await user.click(screen.getByText('选择版本'))
     expect(await screen.findByRole('button', { name: '1.21.1' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '1.20.6' })).toBeInTheDocument()
+  })
+
+  it('①-1 Esc 关闭一键搭建后端子服对话框', async () => {
+    const user = userEvent.setup()
+    loginMockUser()
+    renderWithProviders(<DeployHarness />)
+
+    expect(await screen.findByRole('dialog', { name: '一键搭建后端子服' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: '一键搭建后端子服' })).not.toBeInTheDocument(),
+    )
   })
 
   it('② 填写并提交 → 实例集合联动新增 + 对话框关闭', async () => {
@@ -127,7 +137,7 @@ describe('ProvisionServerDialog（mock 假后端，部署流程）', () => {
     // 提交（按钮文案=搭建）
     await user.click(screen.getByRole('button', { name: '搭建' }))
 
-    // 联动：POST /instances/provision/bukkit 落 instances 集合 → 失效重取 → 列表出现新实例。
+    // 联动：POST /instances/provision/server 落 instances 集合 → 失效重取 → 列表出现新实例。
     await waitFor(() => expect(within(list).getByText('deploy-paper')).toBeInTheDocument())
     // 对话框关闭（onSuccess→close()→open=false→卸载）。
     await waitFor(() =>
@@ -140,7 +150,7 @@ describe('ProvisionServerDialog（mock 假后端，部署流程）', () => {
     loginMockUser()
     let payload: Record<string, unknown> | undefined
     server.use(
-      http.post(API('/instances/provision/bukkit'), async ({ request }) => {
+      http.post(API('/instances/provision/server'), async ({ request }) => {
         payload = await request.json() as Record<string, unknown>
         return HttpResponse.json({
           id: 901,
@@ -175,7 +185,7 @@ describe('ProvisionServerDialog（mock 假后端，部署流程）', () => {
     loginMockUser()
     let payload: Record<string, unknown> | undefined
     server.use(
-      http.post(API('/instances/provision/bukkit'), async ({ request }) => {
+      http.post(API('/instances/provision/server'), async ({ request }) => {
         payload = await request.json() as Record<string, unknown>
         return HttpResponse.json({
           id: 902,
@@ -209,7 +219,7 @@ describe('ProvisionServerDialog（mock 假后端，部署流程）', () => {
   it('⑤ 注入部署端点 500 → 不崩溃、对话框不误关、实例集合不新增', async () => {
     const user = userEvent.setup()
     loginMockUser()
-    mockInject('post', '/instances/provision/bukkit', { kind: 'status', status: 500 })
+    mockInject('post', '/instances/provision/server', { kind: 'status', status: 500 })
     renderWithProviders(<DeployHarness />)
 
     await screen.findByText('一键搭建后端子服')

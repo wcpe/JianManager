@@ -57,8 +57,8 @@ export function useResolvedCore(coreType: string, mcVersion: string, build: numb
   })
 }
 
-/** 一键搭建后端子服请求体（对应后端 service.ProvisionBukkitRequest）。 */
-export interface ProvisionBukkitBody {
+/** 一键搭建后端子服请求体（对应后端 service.ProvisionServerRequest）。 */
+export interface ProvisionServerBody {
   nodeId: number
   name: string
   coreType: string
@@ -76,6 +76,21 @@ export interface ProvisionBukkitBody {
  * 一键搭建后端子服：后端解析核心 → 分配端口/工作目录 → 结构化启动 →
  * 下载核心 + 写基础配置，返回创建的实例（STOPPED，可一键启动）。
  */
+export function useProvisionServer() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: ProvisionServerBody) =>
+      api.post<InstanceInfo>('/instances/provision/server', body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['instances'] })
+    },
+  })
+}
+
+/** 一键搭建 Paper 子服请求体（旧 /bukkit 入口兼容）。 */
+export type ProvisionBukkitBody = ProvisionServerBody
+
+/** 旧 Paper 后端子服入口兼容，新增代码优先使用 useProvisionServer。 */
 export function useProvisionBukkit() {
   const qc = useQueryClient()
   return useMutation({

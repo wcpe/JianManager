@@ -39,8 +39,8 @@ func NewProvisionService(db *gorm.DB, pool *cpgrpc.ClientPool, instance *Instanc
 	return &ProvisionService{db: db, pool: pool, instance: instance, core: core, bridge: bridge}
 }
 
-// ProvisionBukkitRequest 一键搭建后端子服请求。
-type ProvisionBukkitRequest struct {
+// ProvisionServerRequest 一键搭建后端子服请求。
+type ProvisionServerRequest struct {
 	NodeID    uint     `json:"nodeId" binding:"required"`
 	Name      string   `json:"name" binding:"required,min=1,max=128"`
 	CoreType  string   `json:"coreType" binding:"required"` // paper / spongevanilla / spongeforge
@@ -54,9 +54,15 @@ type ProvisionBukkitRequest struct {
 	OnlineMode *bool `json:"onlineMode"`
 }
 
-// ProvisionBukkit 端到端搭建一个后端子服，返回创建的实例（STOPPED，可一键启动）。
-// 历史方法名/API 路径保留 bukkit 兼容既有调用，coreType 可选 Paper/SpongeVanilla/SpongeForge。
-func (p *ProvisionService) ProvisionBukkit(ctx context.Context, req ProvisionBukkitRequest) (*model.Instance, error) {
+// ProvisionBukkitRequest 保留旧 /instances/provision/bukkit 的请求体兼容。
+type ProvisionBukkitRequest = ProvisionServerRequest
+
+// ProvisionServer 端到端搭建一个后端子服，返回创建的实例（STOPPED，可一键启动）。
+// coreType 可选 Paper/SpongeVanilla/SpongeForge；代理核心必须走代理搭建入口。
+func (p *ProvisionService) ProvisionServer(ctx context.Context, req ProvisionServerRequest) (*model.Instance, error) {
+	if IsProxyCore(req.CoreType) {
+		return nil, fmt.Errorf("代理核心请使用代理搭建入口: %s", req.CoreType)
+	}
 	core, err := p.core.ResolveBuild(ctx, req.CoreType, req.MCVersion, req.Build)
 	if err != nil {
 		return nil, err
@@ -103,7 +109,7 @@ func (p *ProvisionService) ProvisionBukkit(ctx context.Context, req ProvisionBuk
 	return inst, nil
 }
 
-func launchSpecForProvision(req ProvisionBukkitRequest, core *CoreInfo) (LaunchSpec, error) {
+func launchSpecForProvision(req ProvisionServerRequest, core *CoreInfo) (LaunchSpec, error) {
 	spec := LaunchSpec{MemoryMb: req.MemoryMb, JvmArgs: req.JvmArgs, CoreJar: provisionCoreJar}
 	if core != nil && core.Runtime != nil && core.Runtime.Distribution == "spongeforge" {
 		if strings.TrimSpace(core.Runtime.LaunchJar) == "" {
@@ -112,6 +118,11 @@ func launchSpecForProvision(req ProvisionBukkitRequest, core *CoreInfo) (LaunchS
 		spec.CoreJar = core.Runtime.LaunchJar
 	}
 	return spec, nil
+}
+
+// ProvisionBukkit 端到端搭建一个 Paper 后端子服，保留旧入口兼容。
+func (p *ProvisionService) ProvisionBukkit(ctx context.Context, req ProvisionBukkitRequest) (*model.Instance, error) {
+	return p.ProvisionServer(ctx, req)
 }
 
 // NodePorts 返回某节点的端口占用与分配范围（FR-032：系统分配端口的可视化）。

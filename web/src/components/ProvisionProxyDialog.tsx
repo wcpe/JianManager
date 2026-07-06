@@ -1,15 +1,25 @@
 import { useState, useEffect, useRef, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Copy } from 'lucide-react'
 import { toast } from 'sonner'
 import { useNodes } from '@/api/nodes'
 import { useGroups } from '@/api/groups'
 import { useNodeJDKs } from '@/api/jdks'
 import { useCoreVersions, useResolvedCore } from '@/api/provision'
 import { useProvisionProxy } from '@/api/proxy'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
+import { Button } from '@jianmanager/ui/components/button'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
+import { copyToClipboard } from '@/lib/clipboard'
 import { validateRequired, validatePositiveInt, validateFields, hasErrors } from '@/lib/form-validation'
 
 interface ProvisionProxyDialogProps {
@@ -36,6 +46,7 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
   const [jvmArgs, setJvmArgs] = useState('')
   const [groupId, setGroupId] = useState('')
   const [onlineMode, setOnlineMode] = useState(true) // 默认正版网络
+  const [forwardingSecret, setForwardingSecret] = useState('')
 
   const { data: jdks } = useNodeJDKs(nodeId ? Number(nodeId) : 0)
   // bungeecord 无版本选择（仅 latest）；velocity/waterfall 走 PaperMC 版本列表。
@@ -84,10 +95,15 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
 
   const reset = () => {
     setName(''); setNodeId(''); setProxyType('velocity'); setVersion('')
-    setJdkId(''); setMemoryMb('1024'); setJvmArgs(''); setGroupId('')
+    setJdkId(''); setMemoryMb('1024'); setJvmArgs(''); setGroupId(''); setOnlineMode(true); setForwardingSecret('')
     jdkDefaultNodeRef.current = ''
   }
   const close = () => { onClose(); reset() }
+  const copySecret = async () => {
+    const ok = await copyToClipboard(forwardingSecret)
+    if (ok) toast.success(t('proxy.secretCopied'))
+    else toast.error(t('proxy.secretCopyFailed'))
+  }
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
@@ -109,10 +125,11 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
         onSuccess: (res) => {
           toast.success(t('proxy.success', { name }))
           if (res.forwardingSecret) {
-            toast.info(t('proxy.secretSaved', { secret: res.forwardingSecret }), { duration: 15000 })
+            setForwardingSecret(res.forwardingSecret)
+          } else {
+            close()
           }
           ;(res.warnings || []).forEach((w) => toast.warning(w))
-          close()
         },
         onError: (err: Error & { response?: { data?: { message?: string } } }) => {
           toast.error(err.response?.data?.message || t('proxy.failed'))
@@ -121,13 +138,31 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
     )
   }
 
-  if (!open) return null
-
   return (
-    <div className={MODAL_OVERLAY}>
-      <div className={`${MODAL_PANEL} max-w-md`}>
-        <h2 className="text-lg font-bold mb-1">{t('proxy.title')}</h2>
-        <p className="text-xs text-muted-foreground mb-4">{t('provision.systemAssigned')}</p>
+    <Dialog open={open} onOpenChange={(next) => { if (!next) close() }}>
+      <DialogContent className="max-h-[90vh] max-w-md overflow-y-auto">
+        {forwardingSecret ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>{t('proxy.secretTitle')}</DialogTitle>
+              <DialogDescription>{t('proxy.secretDesc')}</DialogDescription>
+            </DialogHeader>
+            <div className="rounded-md border bg-muted/40 p-3 font-mono text-sm break-all">
+              {forwardingSecret}
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={copySecret}>
+                <Copy className="size-4" /> {t('proxy.copySecret')}
+              </Button>
+              <Button type="button" onClick={close}>{t('common.done')}</Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle>{t('proxy.title')}</DialogTitle>
+              <DialogDescription>{t('provision.systemAssigned')}</DialogDescription>
+            </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
@@ -233,16 +268,17 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
-            <button type="button" onClick={close} className="px-4 py-2 text-sm border rounded-md hover:bg-accent">
+            <Button type="button" variant="outline" onClick={close}>
               {t('common.cancel')}
-            </button>
-            <button type="submit" disabled={provision.isPending || hasErrors(errors)}
-              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50">
+            </Button>
+            <Button type="submit" disabled={provision.isPending || hasErrors(errors)}>
               {provision.isPending ? t('proxy.provisioning') : t('proxy.submit')}
-            </button>
+            </Button>
           </div>
         </form>
-      </div>
-    </div>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
