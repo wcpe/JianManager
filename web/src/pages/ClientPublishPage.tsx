@@ -127,10 +127,9 @@ export default function ClientPublishPage() {
   const [searchParams, setSearchParams] = useSearchParams()
 
   // 步骤同步 URL ?step=xxx，支持浏览器前进/后退（鼠标侧键）。
-  const validSteps: PublishStepId[] = ['files', 'configure', 'meta', 'review']
   const urlStep = searchParams.get('step') as PublishStepId | null
   const [step, setStepState] = useState<PublishStepId>(
-    urlStep && validSteps.includes(urlStep) ? urlStep : 'files',
+    urlStep && PUBLISH_STEPS.includes(urlStep) ? urlStep : 'files',
   )
   const setStep = useCallback((s: PublishStepId) => {
     setStepState(s)
@@ -140,7 +139,7 @@ export default function ClientPublishPage() {
   useEffect(() => {
     /* eslint-disable react-hooks/set-state-in-effect */
     const s = searchParams.get('step') as PublishStepId | null
-    if (s && validSteps.includes(s) && s !== step) setStepState(s)
+    if (s && PUBLISH_STEPS.includes(s) && s !== step) setStepState(s)
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [searchParams, step])
   const [drafts, setDrafts] = useState<DraftFile[]>([])

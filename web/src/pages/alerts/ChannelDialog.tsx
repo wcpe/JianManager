@@ -7,7 +7,13 @@ import {
   type ChannelConfig,
 } from '@/api/alerts'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
+import { Button } from '@jianmanager/ui/components/button'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
   Select,
@@ -87,9 +93,11 @@ export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {
   }
 
   return (
-    <div className={MODAL_OVERLAY} onClick={onClose}>
-      <div className={`${MODAL_PANEL} max-w-md space-y-3`} onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-lg font-bold">{isEdit ? t('alerts.editChannel') : t('alerts.createChannel')}</h2>
+    <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
+      <DialogContent className="max-h-[90vh] max-w-md overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{isEdit ? t('alerts.editChannel') : t('alerts.createChannel')}</DialogTitle>
+        </DialogHeader>
 
         <div>
           <FieldLabel required>{t('alerts.channelName')}</FieldLabel>
@@ -207,18 +215,18 @@ export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {
         </label>
 
         <div className="flex gap-2 pt-2">
-          <button
-            className="px-4 py-2 bg-primary text-primary-foreground rounded-md disabled:opacity-50"
+          <Button
+            type="button"
             disabled={hasError || create.isPending || update.isPending}
             onClick={handleSubmit}
           >
             {t('common.save')}
-          </button>
-          <button className="px-4 py-2 border rounded-md" onClick={onClose}>
+          </Button>
+          <Button type="button" variant="outline" onClick={onClose}>
             {t('common.cancel')}
-          </button>
+          </Button>
         </div>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

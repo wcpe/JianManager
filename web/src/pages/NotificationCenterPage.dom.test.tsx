@@ -30,8 +30,8 @@ describe('NotificationCenterPage（mock 假后端，统一通知流）', () => {
     await userEvent.click(screen.getByRole('button', { name: '消息' }))
     expect(await screen.findByText('JDK 安装完成')).toBeInTheDocument()
     // 告警规则名不应再出现。
-    expect(screen.queryByText('CPU 过载告警')).toBeNull()
-    expect(screen.queryByText('实例崩溃告警')).toBeNull()
+    expect(screen.queryAllByText('CPU 过载告警')).toHaveLength(0)
+    expect(screen.queryAllByText('实例崩溃告警')).toHaveLength(0)
   })
 
   it('② 按类型筛选「告警」→ 只剩告警、无站内信', async () => {
@@ -41,8 +41,8 @@ describe('NotificationCenterPage（mock 假后端，统一通知流）', () => {
 
     await userEvent.click(screen.getByRole('button', { name: '告警' }))
     expect((await screen.findAllByText('CPU 过载告警')).length).toBeGreaterThan(0)
-    expect(screen.queryByText('JDK 安装完成')).toBeNull()
-    expect(screen.queryByText('备份失败')).toBeNull()
+    expect(screen.queryAllByText('JDK 安装完成')).toHaveLength(0)
+    expect(screen.queryAllByText('备份失败')).toHaveLength(0)
   })
 
   it('③ 仅未读筛选 → 已读条目（节点已上线）不显示', async () => {

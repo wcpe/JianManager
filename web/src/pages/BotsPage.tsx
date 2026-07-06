@@ -25,7 +25,6 @@ import {
 } from '@/api/bots'
 import { useInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
-import { useConsoleStore } from '@/stores/console'
 import {
   statusCounts,
   toListParams,
@@ -879,11 +878,7 @@ function GroupActions({
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const openInstance = useConsoleStore((s) => s.openInstance)
-  const openInConsole = () => {
-    openInstance(Number(group.key))
-    navigate('/')
-  }
+  const openInConsole = () => navigate(`/instances/${group.key}`)
   return (
     <>
       {groupBy === 'instance' && (

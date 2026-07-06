@@ -9,7 +9,7 @@ import AlertsPage from './AlertsPage'
 /**
  * AlertsPage 强断言（FR-208 可观测日志域）：验种子规则/事件/通道渲染、写操作联动、错误注入。
  * 渲染前 loginMockUser() 让 requireAuth 保护的 alerts 端点放行。
- * RuleDialog 是自绘模态（MODAL_PANEL，无 role=dialog），故按标题文案锁定其面板再取字段。
+ * RuleDialog/ChannelDialog 统一走共享 Dialog，必须有 role=dialog 并支持 Esc 关闭。
  */
 describe('AlertsPage（mock 假后端）', () => {
   it('① 渲染出种子告警规则', async () => {
@@ -59,14 +59,29 @@ describe('AlertsPage（mock 假后端）', () => {
     await screen.findByText('CPU 过载告警')
 
     await userEvent.click(screen.getByRole('button', { name: /创建规则/ }))
-    // 自绘模态：以标题「创建规则」定位面板，再取其内首个文本框（规则名称）。
     const heading = await screen.findByRole('heading', { name: '创建规则' })
-    const panel = heading.parentElement as HTMLElement
+    const panel = heading.closest('[role="dialog"]') as HTMLElement
+    expect(panel).toBeInTheDocument()
     const nameInput = within(panel).getAllByRole('textbox')[0]
     await userEvent.type(nameInput, 'TPS 过低告警')
     await userEvent.click(within(panel).getByRole('button', { name: '保存' }))
 
     expect(await screen.findByText('TPS 过低告警')).toBeInTheDocument()
+  })
+
+  it('② 创建通道对话框有共享 Dialog 语义并支持 Esc 关闭', async () => {
+    loginMockUser()
+    renderWithProviders(<AlertsPage />)
+    await screen.findByText('CPU 过载告警')
+
+    await userEvent.click(screen.getByRole('button', { name: /^通道/ }))
+    await userEvent.click(screen.getByRole('button', { name: /新建通道/ }))
+    const heading = await screen.findByRole('heading', { name: '新建通道' })
+    const dialog = heading.closest('[role="dialog"]') as HTMLElement
+    expect(dialog).toBeInTheDocument()
+
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('heading', { name: '新建通道' })).not.toBeInTheDocument())
   })
 
   it('③ 注入 500 → 规则列表显示空态（非崩溃）', async () => {

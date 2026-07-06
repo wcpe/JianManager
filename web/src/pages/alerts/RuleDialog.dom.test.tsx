@@ -9,8 +9,8 @@ import type { AlertChannelInfo, AlertRuleInfo } from '@/api/alerts'
 import { RuleDialog } from './RuleDialog'
 
 /**
- * RuleDialog 强断言（FR-208 告警规则对话框）：直接渲染组件并传 props（自绘模态，
- * 无 role=dialog，故按标题 <h2> 锁面板再取字段）。覆盖：字段渲染 + 编辑回填、
+ * RuleDialog 强断言（FR-208 告警规则对话框）：直接渲染组件并传 props。
+ * 共享 Dialog 语义由 role=dialog 锁定，再取字段。覆盖：字段渲染 + 编辑回填、
  * 创建/更新提交成功（POST/PUT 命中、onClose 回调被调）、500 注入显错误态不崩。
  * 渲染前 loginMockUser() 让 requireAuth 保护的 /alerts/* 端点放行。
  *
@@ -58,10 +58,10 @@ const existingRule: AlertRuleInfo = {
   createdAt: new Date().toISOString(),
 }
 
-/** 取模态面板（<h2> 标题的父 div）。 */
+/** 取共享 Dialog 面板。 */
 function panelByTitle(title: string): HTMLElement {
   const heading = screen.getByRole('heading', { name: title })
-  return heading.parentElement as HTMLElement
+  return heading.closest('[role="dialog"]') as HTMLElement
 }
 
 async function pickSelectOption(trigger: HTMLElement, optionName: string) {

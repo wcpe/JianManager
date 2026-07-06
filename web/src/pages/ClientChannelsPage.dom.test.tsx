@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@/mocks/inject'
+import { server } from '@/mocks/server'
+import { API } from '@/mocks/api'
 import ClientChannelsPage from './ClientChannelsPage'
 
 /**
@@ -39,6 +42,51 @@ describe('ClientChannelsPage（mock 假后端）', () => {
     expect(await screen.findByRole('heading', { name: /创造三区/ })).toBeInTheDocument()
   })
 
+  it('拉取密钥列表标识已过期与即将过期', async () => {
+    loginMockUser()
+    const now = Date.now()
+    server.use(
+      http.get(API('/client-channels/:channelId'), () =>
+        HttpResponse.json({
+          id: 1,
+          channelId: 'skyblock-s1',
+          name: '空岛一区',
+          description: '空岛生存主分发频道',
+          currentVersion: 2,
+          createdAt: '2026-06-01T08:00:00Z',
+          updatedAt: '2026-06-20T08:00:00Z',
+          keys: [
+            {
+              id: 10,
+              name: '过期包',
+              keyPrefix: 'jmck_old',
+              revoked: false,
+              expiresAt: new Date(now - 24 * 60 * 60 * 1000).toISOString(),
+              lastUsedAt: null,
+              createdAt: '2026-06-01T09:00:00Z',
+              revealable: true,
+            },
+            {
+              id: 11,
+              name: '即将过期包',
+              keyPrefix: 'jmck_soon',
+              revoked: false,
+              expiresAt: new Date(now + 2 * 24 * 60 * 60 * 1000).toISOString(),
+              lastUsedAt: null,
+              createdAt: '2026-06-01T09:00:00Z',
+              revealable: true,
+            },
+          ],
+        }),
+      ),
+    )
+
+    renderWithProviders(<ClientChannelsPage />, { route: '/client-channels?channel=skyblock-s1&tab=keys' })
+
+    expect(await screen.findByText('过期包')).toBeInTheDocument()
+    expect(screen.getByText('已过期')).toBeInTheDocument()
+    expect(screen.getByText('即将过期')).toBeInTheDocument()
+  })
 
   it('注入 500 → 列表显示错误态（不崩溃）', async () => {
     loginMockUser()

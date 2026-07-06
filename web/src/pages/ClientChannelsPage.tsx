@@ -57,8 +57,17 @@ import ClientDistFlowGuide from '@/components/ClientDistFlowGuide'
 
 type ErrResp = { response?: { data?: { message?: string } } }
 const errMsg = (e: unknown, fallback: string) => (e as ErrResp)?.response?.data?.message || fallback
+const KEY_EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000
 const formatKeyExpiresAt = (value: string | null, neverLabel: string) => value ? new Date(value).toLocaleString() : neverLabel
 const toDatetimeLocal = (value: string | null) => value ? new Date(value).toISOString().slice(0, 16) : ''
+const keyExpiryState = (value: string | null, now = Date.now()) => {
+  if (!value) return 'none'
+  const expiresAt = new Date(value).getTime()
+  if (Number.isNaN(expiresAt)) return 'none'
+  if (expiresAt <= now) return 'expired'
+  if (expiresAt - now <= KEY_EXPIRING_SOON_MS) return 'expiring'
+  return 'active'
+}
 
 /** 工作台分段标识，与就绪度步骤 CTA 联动跳转。 */
 type WorkbenchTab = 'keys' | 'versions' | 'core' | 'stats' | 'guide'
@@ -626,48 +635,65 @@ function KeysSegment({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {keys.map((k) => (
-              <TableRow key={k.id}>
-                <TableCell className="font-medium">{k.name}</TableCell>
-                <TableCell className="font-mono text-xs">{k.keyPrefix}…</TableCell>
-                <TableCell>
-                  {k.revoked ? (
-                    <Badge variant="outline" className="border-destructive/40 text-destructive">
-                      {t('clientChannels.statusRevoked', '已吊销')}
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline">{t('clientChannels.statusActive', '有效')}</Badge>
-                  )}
-                </TableCell>
-                <TableCell className="text-xs">{formatKeyExpiresAt(k.expiresAt, t('clientChannels.neverExpires', '永不过期'))}</TableCell>
-                <TableCell className="text-xs">{k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleString() : '-'}</TableCell>
-                <TableCell>
-                  <div className="flex justify-end gap-1">
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      onClick={() => doReveal(k)}
-                      disabled={!k.revealable || revealKey.isPending}
-                      title={k.revealable ? undefined : t('clientChannels.notRevealable')}
-                    >
-                      <Eye className="size-3.5" /> {t('clientChannels.reveal', '查看')}
-                    </Button>
-                    <Button variant="ghost" size="xs" onClick={() => setEditTarget(k)} disabled={k.revoked}>
-                      <Pencil className="size-3.5" /> {t('common.edit', '编辑')}
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      className="text-status-danger hover:text-status-danger"
-                      onClick={() => setRevokeTarget(k)}
-                      disabled={k.revoked}
-                    >
-                      <Ban className="size-3.5" /> {t('clientChannels.revoke', '吊销')}
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
+            {keys.map((k) => {
+              const expiryState = keyExpiryState(k.expiresAt)
+              return (
+                <TableRow key={k.id}>
+                  <TableCell className="font-medium">{k.name}</TableCell>
+                  <TableCell className="font-mono text-xs">{k.keyPrefix}…</TableCell>
+                  <TableCell>
+                    {k.revoked ? (
+                      <Badge variant="outline" className="border-destructive/40 text-destructive">
+                        {t('clientChannels.statusRevoked', '已吊销')}
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline">{t('clientChannels.statusActive', '有效')}</Badge>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span>{formatKeyExpiresAt(k.expiresAt, t('clientChannels.neverExpires', '永不过期'))}</span>
+                      {expiryState === 'expired' && (
+                        <Badge variant="outline" className="border-status-danger/50 bg-status-danger/10 text-status-danger">
+                          {t('clientChannels.expired', '已过期')}
+                        </Badge>
+                      )}
+                      {expiryState === 'expiring' && (
+                        <Badge variant="outline" className="border-status-warning/50 bg-status-warning/10 text-status-warning">
+                          {t('clientChannels.expiringSoon', '即将过期')}
+                        </Badge>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell className="text-xs">{k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleString() : '-'}</TableCell>
+                  <TableCell>
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => doReveal(k)}
+                        disabled={!k.revealable || revealKey.isPending}
+                        title={k.revealable ? undefined : t('clientChannels.notRevealable')}
+                      >
+                        <Eye className="size-3.5" /> {t('clientChannels.reveal', '查看')}
+                      </Button>
+                      <Button variant="ghost" size="xs" onClick={() => setEditTarget(k)} disabled={k.revoked}>
+                        <Pencil className="size-3.5" /> {t('common.edit', '编辑')}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        className="text-status-danger hover:text-status-danger"
+                        onClick={() => setRevokeTarget(k)}
+                        disabled={k.revoked}
+                      >
+                        <Ban className="size-3.5" /> {t('clientChannels.revoke', '吊销')}
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
             {keys.length === 0 && !loading && (
               <TableRow>
                 <TableCell colSpan={6} className="h-16 text-center text-muted-foreground">
