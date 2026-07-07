@@ -26,7 +26,10 @@ test.describe('整站导航（mock 模式）', () => {
     await page.goto('/backup-storages')
     await expect(page.getByRole('heading', { name: '备份存储后端' })).toBeVisible()
     await expect(page.getByText('256 MB')).toBeVisible()
-    await page.getByRole('button', { name: '测试连接' }).first().click()
-    await expect(page.getByText('连通 32 ms')).toBeVisible()
+    // 行内测试连接：行按钮名为「测试」（「测试连接」是创建表单内的按钮，此处表单未开）。
+    await page.getByRole('button', { name: '测试', exact: true }).first().click()
+    // 成功 → toast 显示后端 message（mock `/backup-storages/:id/test` 返回「连接正常」）。
+    // 原断言「连通 32 ms」为陈旧文案（前端 handleTest 用 toast.success(result.message)，从不渲染延迟毫秒）。
+    await expect(page.getByText('连接正常').first()).toBeVisible()
   })
 })
