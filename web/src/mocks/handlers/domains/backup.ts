@@ -253,14 +253,6 @@ export const handlers = [
     const denied = requireAuth(info)
     if (denied) return denied
     const id = Number(info.params.id)
-    if (id === 2) {
-      const failed = backupStorages.update(id, {
-        lastTestAt: new Date().toISOString(),
-        lastTestOk: false,
-        lastTestMessage: '认证失败：请检查环境变量凭证',
-      })
-      return HttpResponse.json({ ok: false, message: failed?.lastTestMessage ?? '认证失败：请检查环境变量凭证', errorCode: 'AUTH_FAILED', latencyMs: 18, nodeUuid: 'mock-node-1' })
-    }
     const existing = backupStorages.get(id)
     if (!existing) return HttpResponse.json({ error: 'NOT_FOUND', message: '存储后端不存在' }, { status: 404 })
     const updated = backupStorages.update(id, {

@@ -158,7 +158,7 @@ export default function PluginManager({ instanceId }: PluginManagerProps) {
             {t('plugins.upload')}
           </Button>
           <Button size="sm" variant="outline" onClick={() => setBatchDeployOpen(true)}>
-            {t('plugins.batchDeploy')}
+            {t('plugins.batchDeploy.action')}
           </Button>
           <Button size="sm" variant="outline" disabled title={t('plugins.marketSoon')}>
             <Store className="mr-1 size-3.5" aria-hidden="true" />

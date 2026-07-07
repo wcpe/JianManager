@@ -84,7 +84,7 @@ describe('SearchPanel 索引中态（FR-113）', () => {
     })
     expect(mockedSearchFiles).toHaveBeenCalledTimes(2)
     expect(screen.getByText('server.properties')).toBeInTheDocument()
-    expect(screen.getByText('online-mode=false')).toBeInTheDocument()
+    expect(screen.getByText((_, node) => node?.textContent === 'online-mode=false')).toBeInTheDocument()
   })
 
   it('用户修改 query 后，旧的索引中重试不会覆盖新查询结果', async () => {

@@ -223,10 +223,10 @@ func TestList_IncludesUsageAndLastTest(t *testing.T) {
 		"last_test_ok":      true,
 		"last_test_message": "连接正常",
 	}).Error)
-	require.NoError(t, db.Create(&model.Backup{InstanceID: 1, Name: "bk1", StorageID: &st.ID, FileSizeMB: 1.5}).Error)
-	require.NoError(t, db.Create(&model.Backup{InstanceID: 1, Name: "bk2", StorageID: &st.ID, FileSizeMB: 2}).Error)
+	require.NoError(t, db.Create(&model.Backup{InstanceID: 1, Name: "bk1", StorageID: &st.ID, FileSizeMB: 1.5, Status: model.BackupStatusCompleted}).Error)
+	require.NoError(t, db.Create(&model.Backup{InstanceID: 1, Name: "bk2", StorageID: &st.ID, FileSizeMB: 2, Status: model.BackupStatusCompleted}).Error)
 
-	items, err := svc.List()
+	items, err := svc.ListWithStats()
 	require.NoError(t, err)
 	require.Len(t, items, 1)
 	require.Equal(t, int64(2), items[0].BackupCount)

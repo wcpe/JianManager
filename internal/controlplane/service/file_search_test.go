@@ -45,7 +45,7 @@ func TestFileService_SearchFiles_透传Indexing(t *testing.T) {
 	worker := &fakeFileSearchWorker{resp: &workerpb.SearchFilesResponse{Indexing: true}}
 	svc, inst := seedFileSearchService(t, worker)
 
-	res, err := svc.SearchFiles(inst.ID, "online-mode", "filename", 25)
+	res, err := svc.SearchFiles(inst.ID, "online-mode", "filename", 25, SearchScope{})
 	require.NoError(t, err)
 	require.True(t, res.Indexing)
 	require.False(t, res.Truncated)
@@ -60,7 +60,7 @@ func TestFileService_SearchFiles_委托错误(t *testing.T) {
 	worker := &fakeFileSearchWorker{err: errors.New("worker boom")}
 	svc, inst := seedFileSearchService(t, worker)
 
-	res, err := svc.SearchFiles(inst.ID, "online-mode", "content", 10)
+	res, err := svc.SearchFiles(inst.ID, "online-mode", "content", 10, SearchScope{})
 	require.Nil(t, res)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "搜索失败")
