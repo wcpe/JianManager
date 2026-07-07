@@ -3,7 +3,21 @@ package service
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
+
+func TestLaunchSpecForProvision_SpongeForgeKeepsMinecraftJavaLaunchModel(t *testing.T) {
+	core := &CoreInfo{Runtime: &CoreRuntimeInfo{Distribution: "spongeforge", LaunchJar: "forge-1.21.1-52.1.5-server.jar"}}
+	spec, err := launchSpecForProvision(ProvisionBukkitRequest{MemoryMb: 4096, JvmArgs: []string{"-XX:+UseG1GC"}}, core)
+	require.NoError(t, err)
+	require.Equal(t, "forge-1.21.1-52.1.5-server.jar", spec.CoreJar)
+	require.Equal(t, 4096, spec.MemoryMb)
+	require.Equal(t, []string{"-XX:+UseG1GC"}, spec.JvmArgs)
+
+	_, err = launchSpecForProvision(ProvisionBukkitRequest{}, &CoreInfo{Runtime: &CoreRuntimeInfo{Distribution: "spongeforge"}})
+	require.Error(t, err)
+}
 
 func TestBuildServerProperties(t *testing.T) {
 	props := buildServerProperties(25566, 25566, false)

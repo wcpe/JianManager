@@ -2,6 +2,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 import type { InstanceInfo } from '@/api/instances'
 
+/** SpongeForge 等核心的运行时附加信息，旧响应可不返回。 */
+export interface CoreRuntimeInfo {
+  distribution?: string
+  modFilename?: string
+  forgeInstallerUrl?: string
+  forgeVersion?: string
+  launchJar?: string
+}
+
 /** 解析出的可下载核心构建信息（对应后端 service.CoreInfo）。 */
 export interface CoreInfo {
   type: string
@@ -10,6 +19,7 @@ export interface CoreInfo {
   filename: string
   downloadUrl: string
   sha256: string
+  runtime?: CoreRuntimeInfo
 }
 
 interface CoreVersionsResp {
@@ -47,7 +57,7 @@ export function useResolvedCore(coreType: string, mcVersion: string, build: numb
   })
 }
 
-/** 一键搭建 Paper 子服请求体（对应后端 service.ProvisionBukkitRequest）。 */
+/** 一键搭建后端子服请求体（对应后端 service.ProvisionBukkitRequest）。 */
 export interface ProvisionBukkitBody {
   nodeId: number
   name: string
@@ -63,7 +73,7 @@ export interface ProvisionBukkitBody {
 }
 
 /**
- * 一键搭建 Paper 后端子服：后端解析核心 → 分配端口/工作目录 → 结构化启动 →
+ * 一键搭建后端子服：后端解析核心 → 分配端口/工作目录 → 结构化启动 →
  * 下载核心 + 写基础配置，返回创建的实例（STOPPED，可一键启动）。
  */
 export function useProvisionBukkit() {

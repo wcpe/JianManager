@@ -76,9 +76,23 @@ export function seed(): void {
 /** 假核心版本表：按核心类型给出新→旧版本，供 GET /cores 的版本列表分支返回。 */
 const CORE_VERSIONS: Record<string, string[]> = {
   paper: ['1.21.1', '1.21', '1.20.6'],
+  spongevanilla: ['1.21.1', '1.20.2'],
+  spongeforge: ['1.20.1', '1.19.4'],
   velocity: ['3.3.0-SNAPSHOT', '3.2.0-SNAPSHOT'],
   waterfall: ['1.21', '1.20'],
   bungeecord: ['latest'],
+}
+
+const LATEST_BUILDS: Record<string, number> = {
+  paper: 196,
+  spongevanilla: 12,
+  spongeforge: 7,
+}
+
+function coreFilename(type: string, mcVersion: string, build: number): string {
+  if (type === 'spongevanilla') return `spongevanilla-${mcVersion}-${build}-universal.jar`
+  if (type === 'spongeforge') return `spongeforge-${mcVersion}-${build}-universal.jar`
+  return `${type}-${mcVersion}-${build}.jar`
 }
 
 export const handlers = [
@@ -138,14 +152,24 @@ export const handlers = [
       return HttpResponse.json({ type, versions: CORE_VERSIONS[type] ?? ['1.21.1', '1.20.6'] })
     }
     const buildParam = url.searchParams.get('build')
-    const build = buildParam ? Number(buildParam) : 196
+    const build = buildParam ? Number(buildParam) : (LATEST_BUILDS[type] ?? 196)
+    const filename = coreFilename(type, mcVersion, build)
     return HttpResponse.json({
       type,
       mcVersion,
       build,
-      filename: `${type}-${mcVersion}-${build}.jar`,
-      downloadUrl: `https://example.com/${type}/${mcVersion}/${build}.jar`,
+      filename,
+      downloadUrl: `https://example.com/${type}/${mcVersion}/${filename}`,
       sha256: 'a'.repeat(64),
+      runtime: type === 'spongeforge'
+        ? {
+            distribution: 'spongeforge',
+            modFilename: 'SpongeForge.jar',
+            forgeInstallerUrl: `https://example.com/forge/${mcVersion}/forge-installer.jar`,
+            forgeVersion: `${mcVersion}-mock`,
+            launchJar: 'forge-server.jar',
+          }
+        : undefined,
     })
   }),
 

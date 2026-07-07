@@ -18,8 +18,8 @@ interface ProvisionServerDialogProps {
 }
 
 /**
- * 一键搭建 Paper 子服向导：用户只需选版本/资源，端口与工作目录由系统分配，
- * 核心由后端从 PaperMC 下载并写入基础配置（FR-034）。
+ * 一键搭建后端子服向导：用户只需选核心/版本/资源，端口与工作目录由系统分配，
+ * 核心由后端按 coreType 解析下载并写入基础配置。
  */
 export default function ProvisionServerDialog({ open, onClose }: ProvisionServerDialogProps) {
   const { t } = useTranslation()
@@ -28,7 +28,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
 
   const [name, setName] = useState('')
   const [nodeId, setNodeId] = useState('')
-  const coreType = 'paper' // 目前仅支持 paper，后续可扩展 purpur/spigot
+  const [coreType, setCoreType] = useState('paper')
   const [mcVersion, setMcVersion] = useState('')
   const [build, setBuild] = useState('')
   const [jdkId, setJdkId] = useState('')
@@ -61,6 +61,12 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
   }))
   const groupOptions: ComboboxOption[] = (groups ?? []).map((g) => ({ value: String(g.id), label: g.name }))
 
+  const handleCoreTypeChange = (value: string) => {
+    setCoreType(value)
+    setMcVersion('')
+    setBuild('')
+  }
+
   const errors = validateFields(
     { name, nodeId, mcVersion, memoryMb },
     {
@@ -85,6 +91,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
   const resetForm = () => {
     setName('')
     setNodeId('')
+    setCoreType('paper')
     setMcVersion('')
     setBuild('')
     setJdkId('')
@@ -175,14 +182,19 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
           <div className="grid grid-cols-2 gap-3">
             <div>
               <FieldLabel>{t('provision.coreType')}</FieldLabel>
-              <Select value={coreType} disabled>
+              <Select value={coreType} onValueChange={handleCoreTypeChange}>
                 <SelectTrigger className="w-full mt-1">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="paper">Paper</SelectItem>
+                  <SelectItem value="spongevanilla">{t('provision.coreTypeSpongeVanilla')}</SelectItem>
+                  <SelectItem value="spongeforge">{t('provision.coreTypeSpongeForge')}</SelectItem>
                 </SelectContent>
               </Select>
+              {coreType === 'spongeforge' && (
+                <p className="mt-1 text-xs text-muted-foreground">{t('provision.spongeForgeHint')}</p>
+              )}
             </div>
             <div>
               <FieldLabel required>{t('provision.mcVersion')}</FieldLabel>

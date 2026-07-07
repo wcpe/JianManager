@@ -18,11 +18,11 @@ import (
 )
 
 // provisionCoreJar 是一键搭建时核心 jar 在工作目录内的固定文件名，
-// 使结构化启动命令与具体 Paper 构建文件名解耦。
+// 使结构化启动命令与具体 Paper/SpongeVanilla 构建文件名解耦。
 const provisionCoreJar = "server.jar"
 
-// ProvisionService 一键搭建 MC 子服（FR-034）：解析核心 → 分配端口/目录 →
-// 结构化启动 → 下载核心 + 写基础配置。串起 FR-032/033/034/044/045 的运行时底座。
+// ProvisionService 一键搭建 MC 子服（FR-034/046）：解析核心 → 分配端口/目录 →
+// 结构化启动 → 下载/安装核心 + 写基础配置。串起 FR-032/033/034/044/045/046 的运行时底座。
 type ProvisionService struct {
 	db       *gorm.DB
 	pool     *cpgrpc.ClientPool
@@ -39,11 +39,11 @@ func NewProvisionService(db *gorm.DB, pool *cpgrpc.ClientPool, instance *Instanc
 	return &ProvisionService{db: db, pool: pool, instance: instance, core: core, bridge: bridge}
 }
 
-// ProvisionBukkitRequest 一键搭建 Paper 后端子服请求。
+// ProvisionBukkitRequest 一键搭建后端子服请求。
 type ProvisionBukkitRequest struct {
 	NodeID    uint     `json:"nodeId" binding:"required"`
 	Name      string   `json:"name" binding:"required,min=1,max=128"`
-	CoreType  string   `json:"coreType" binding:"required"` // 目前支持 paper
+	CoreType  string   `json:"coreType" binding:"required"` // paper / spongevanilla / spongeforge
 	MCVersion string   `json:"mcVersion" binding:"required"`
 	Build     int      `json:"build"` // 0 = 最新构建
 	JDKID     uint     `json:"jdkId"`
@@ -54,7 +54,8 @@ type ProvisionBukkitRequest struct {
 	OnlineMode *bool `json:"onlineMode"`
 }
 
-// ProvisionBukkit 端到端搭建一个 Paper 后端子服，返回创建的实例（STOPPED，可一键启动）。
+// ProvisionBukkit 端到端搭建一个后端子服，返回创建的实例（STOPPED，可一键启动）。
+// 历史方法名/API 路径保留 bukkit 兼容既有调用，coreType 可选 Paper/SpongeVanilla/SpongeForge。
 func (p *ProvisionService) ProvisionBukkit(ctx context.Context, req ProvisionBukkitRequest) (*model.Instance, error) {
 	core, err := p.core.ResolveBuild(ctx, req.CoreType, req.MCVersion, req.Build)
 	if err != nil {
@@ -66,7 +67,11 @@ func (p *ProvisionService) ProvisionBukkit(ctx context.Context, req ProvisionBuk
 		return nil, err
 	}
 
-	specJSON, err := json.Marshal(LaunchSpec{MemoryMb: req.MemoryMb, JvmArgs: req.JvmArgs, CoreJar: provisionCoreJar})
+	spec, err := launchSpecForProvision(req, core)
+	if err != nil {
+		return nil, err
+	}
+	specJSON, err := json.Marshal(spec)
 	if err != nil {
 		return nil, err
 	}
@@ -74,18 +79,18 @@ func (p *ProvisionService) ProvisionBukkit(ctx context.Context, req ProvisionBuk
 	// 创建实例：系统分配工作目录 + 结构化启动 + 绑定 JDK + 端口；daemon 启动不杀服（ADR-003）。
 	// Create 内部会派生 java 启动命令并把实例注册到 Worker（创建工作目录）。
 	inst, err := p.instance.Create(CreateInstanceRequest{
-		NodeID:       req.NodeID,
-		Name:         req.Name,
-		Type:         model.InstanceTypeMinecraftJava,
-		Role:         model.InstanceRoleBackend,
-		ProcessType:  model.ProcessTypeDaemon,
-		JDKID:        req.JDKID,
-		LaunchSpec:   string(specJSON),
-		ServerPort:   ports.ServerPort,
-		QueryPort:    ports.QueryPort,
-		ProbePort:    ports.ProbePort,
-		AutoRestart:  true,
-		GroupID:      req.GroupID,
+		NodeID:      req.NodeID,
+		Name:        req.Name,
+		Type:        model.InstanceTypeMinecraftJava,
+		Role:        model.InstanceRoleBackend,
+		ProcessType: model.ProcessTypeDaemon,
+		JDKID:       req.JDKID,
+		LaunchSpec:  string(specJSON),
+		ServerPort:  ports.ServerPort,
+		QueryPort:   ports.QueryPort,
+		ProbePort:   ports.ProbePort,
+		AutoRestart: true,
+		GroupID:     req.GroupID,
 	})
 	if err != nil {
 		return nil, err
@@ -96,6 +101,17 @@ func (p *ProvisionService) ProvisionBukkit(ctx context.Context, req ProvisionBuk
 		return inst, fmt.Errorf("子服搭建失败: %w", err)
 	}
 	return inst, nil
+}
+
+func launchSpecForProvision(req ProvisionBukkitRequest, core *CoreInfo) (LaunchSpec, error) {
+	spec := LaunchSpec{MemoryMb: req.MemoryMb, JvmArgs: req.JvmArgs, CoreJar: provisionCoreJar}
+	if core != nil && core.Runtime != nil && core.Runtime.Distribution == "spongeforge" {
+		if strings.TrimSpace(core.Runtime.LaunchJar) == "" {
+			return LaunchSpec{}, fmt.Errorf("SpongeForge 缺少 Forge 启动 jar")
+		}
+		spec.CoreJar = core.Runtime.LaunchJar
+	}
+	return spec, nil
 }
 
 // NodePorts 返回某节点的端口占用与分配范围（FR-032：系统分配端口的可视化）。
@@ -114,7 +130,7 @@ func (p *ProvisionService) NodePorts(nodeID uint) (*NodePortsResult, error) {
 	return &NodePortsResult{NodeID: nodeID, Ranges: DefaultPortRanges(), Occupied: usage}, nil
 }
 
-// provisionOnWorker 在 Worker 上下载核心 jar 并写入 eula.txt / server.properties。
+// provisionOnWorker 在 Worker 上下载/安装核心并写入 eula.txt / server.properties。
 func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.Instance, core *CoreInfo, onlineMode bool) error {
 	var node model.Node
 	if err := p.db.First(&node, inst.NodeID).Error; err != nil {
@@ -125,19 +141,14 @@ func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.In
 		return fmt.Errorf("节点 %s 未连接", node.UUID)
 	}
 
-	dlCtx, cancel := context.WithTimeout(ctx, 16*time.Minute)
-	defer cancel()
-	dl, err := client.Worker.DownloadCore(dlCtx, &workerpb.DownloadCoreRequest{
-		InstanceUuid: inst.UUID,
-		DestFilename: provisionCoreJar,
-		DownloadUrl:  core.DownloadURL,
-		Sha256:       core.SHA256,
-	})
-	if err != nil {
-		return fmt.Errorf("下载核心失败: %w", err)
-	}
-	if !dl.Success {
-		return fmt.Errorf("下载核心失败: %s", dl.Error)
+	if isSpongeForgeCore(core) {
+		if err := p.installSpongeForge(ctx, client, inst, core); err != nil {
+			return err
+		}
+	} else {
+		if err := p.downloadSingleCore(ctx, client, inst, core); err != nil {
+			return err
+		}
 	}
 
 	cfgCtx, cancel2 := context.WithTimeout(ctx, 15*time.Second)
@@ -165,11 +176,12 @@ func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.In
 	if jar := cpembed.ServerProbeJar(); len(jar) > 0 {
 		probeCtx, cancel3 := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel3()
-		dp, derr := client.Worker.DeployServerProbe(probeCtx, &workerpb.DeployServerProbeRequest{
-			InstanceUuid: inst.UUID,
-			Jar:          jar,
-			ConfigYaml:   buildServerProbeConfig(inst.ProbePort, p.bridgeConfigBlock(inst.UUID, node.WSPort)),
-		})
+		dp, derr := client.Worker.DeployServerProbe(probeCtx, buildDeployServerProbeRequest(
+			inst.UUID,
+			jar,
+			embeddedProbeLibrariesZip(inst.UUID),
+			buildServerProbeConfig(inst.ProbePort, p.bridgeConfigBlock(inst.UUID, node.WSPort)),
+		))
 		switch {
 		case derr != nil:
 			slog.Warn("部署 ServerProbe 探针失败（不阻断建服）", "instance", inst.UUID, "err", derr)
@@ -178,6 +190,77 @@ func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.In
 		}
 	}
 	return nil
+}
+
+func (p *ProvisionService) downloadSingleCore(ctx context.Context, client *cpgrpc.Client, inst *model.Instance, core *CoreInfo) error {
+	dlCtx, cancel := context.WithTimeout(ctx, 16*time.Minute)
+	defer cancel()
+	dl, err := client.Worker.DownloadCore(dlCtx, &workerpb.DownloadCoreRequest{
+		InstanceUuid: inst.UUID,
+		DestFilename: provisionCoreJar,
+		DownloadUrl:  core.DownloadURL,
+		Sha256:       core.SHA256,
+	})
+	if err != nil {
+		return fmt.Errorf("下载核心失败: %w", err)
+	}
+	if !dl.Success {
+		return fmt.Errorf("下载核心失败: %s", dl.Error)
+	}
+	return nil
+}
+
+func (p *ProvisionService) installSpongeForge(ctx context.Context, client *cpgrpc.Client, inst *model.Instance, core *CoreInfo) error {
+	rt := core.Runtime
+	if rt == nil || strings.TrimSpace(rt.ForgeInstallerURL) == "" {
+		return fmt.Errorf("SpongeForge 缺少 Forge installer")
+	}
+	installCtx, cancel := context.WithTimeout(ctx, 25*time.Minute)
+	defer cancel()
+	resp, err := client.Worker.InstallForgeServer(installCtx, &workerpb.InstallForgeServerRequest{
+		InstanceUuid:         inst.UUID,
+		ForgeInstallerUrl:    rt.ForgeInstallerURL,
+		SpongeforgeUrl:       core.DownloadURL,
+		SpongeforgeSha256:    core.SHA256,
+		SpongeforgeFilename:  stringOr(rt.ModFilename, "SpongeForge.jar"),
+		LaunchJar:            rt.LaunchJar,
+		ForgeInstallerSha256: "",
+	})
+	if err != nil {
+		return fmt.Errorf("安装 SpongeForge 失败: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("安装 SpongeForge 失败: %s", resp.Error)
+	}
+	return nil
+}
+
+func isSpongeForgeCore(core *CoreInfo) bool {
+	return core != nil && (project(core.Type) == "spongeforge" || (core.Runtime != nil && core.Runtime.Distribution == "spongeforge"))
+}
+
+func buildDeployServerProbeRequest(instanceUUID string, jar, librariesZip []byte, configYaml string) *workerpb.DeployServerProbeRequest {
+	return &workerpb.DeployServerProbeRequest{
+		InstanceUuid: instanceUUID,
+		Jar:          jar,
+		ConfigYaml:   configYaml,
+		LibrariesZip: librariesZip,
+	}
+}
+
+func embeddedProbeLibrariesZip(instanceUUID string) []byte {
+	libs := cpembed.ServerProbeLibrariesZip()
+	if len(libs) == 0 {
+		slog.Warn("ServerProbe 探针依赖缓存未内嵌，首启可能联网拉依赖", "instance", instanceUUID)
+	}
+	return libs
+}
+
+func stringOr(v, fallback string) string {
+	if strings.TrimSpace(v) != "" {
+		return v
+	}
+	return fallback
 }
 
 // buildServerProbeConfig 生成实例的 ServerProbe config.yml：仅本机开启 /metrics 端点于分配的
@@ -216,11 +299,11 @@ func (p *ProvisionService) bridgeConfigBlock(instanceUUID string, wsPort int) st
 }
 
 // buildServerProperties 生成基础 server.properties：分配的 server-port、按 onlineMode 设正版校验
-//（代理转发场景传 false）与 query。RCON 已退役（FR-067，见 ADR-016）：治理改走 ServerProbe 探针，
+// （代理转发场景传 false）与 query。RCON 已退役（FR-067，见 ADR-016）：治理改走 ServerProbe 探针，
 // 不再开启 rcon，去除额外暴露面。
 func buildServerProperties(serverPort, queryPort int, onlineMode bool) string {
 	var b strings.Builder
-	b.WriteString("# 由 JianManager 一键开服生成（FR-034）\n")
+	b.WriteString("# 由 JianManager 一键开服生成（FR-034/046）\n")
 	fmt.Fprintf(&b, "server-port=%d\n", serverPort)
 	fmt.Fprintf(&b, "online-mode=%t\n", onlineMode)
 	b.WriteString("enable-query=true\n")
