@@ -526,13 +526,13 @@
 - **关联 FR**: FR-066
 
 ### GET /api/v1/instances/:id/probe/update
-- **描述**: 探针在线更新状态（FR-068）：探针连接状态 + CP 内嵌最新探针版本/指纹 + 上次推送时间
+- **描述**: 探针在线更新状态（FR-068/FR-114）：探针连接状态 + CP 内嵌最新探针版本/指纹 + 上次推送时间；构建跑过 `make embed-probe` 时 CP 同时内嵌探针运行库缓存包，推送阶段随 gRPC 下发
 - **权限**: `instance.read`
 - **响应**: `{ "instanceId":3, "instanceUuid":"...", "probeConnected":true, "embeddedVersion":"0.1.0", "embeddedFingerprint":"<sha256 前缀>", "embeddedAvailable":true, "lastPushedAt":"2026-06-22T10:00:00Z" }`（`embeddedAvailable=false` 表示本次构建未 `make embed-probe`，无可推 jar）
 - **关联 FR**: FR-068 ｜ **关联 ADR**: ADR-016
 
 ### POST /api/v1/instances/:id/probe/update
-- **描述**: 把 CP 内嵌最新探针 jar 经 gRPC `DeployServerProbe` 推到该实例 plugins 目录（**下次重启生效**）；`restart=true` 时推送后立即重启实例使其生效（FR-068）
+- **描述**: 把 CP 内嵌最新探针 jar 经 gRPC `DeployServerProbe` 推到该实例 `plugins/` 目录，并同步下发 FR-114 `libraries_zip` 到实例根 `libraries/`（**下次重启生效**）；`restart=true` 时推送后立即重启实例使其生效（FR-068/FR-114）
 - **权限**: `instance.operate` ｜ **审计**: `instance.probe.update`
 - **请求**: `{ "restart": false }`
 - **响应**: `{ "instanceId":3, "deployed":true, "restarted":false, "probeConnected":true, "embeddedVersion":"0.1.0", "message":"已推送，下次重启生效" }`
@@ -639,16 +639,17 @@
 ### GET /api/v1/cores
 - **描述**: 查询服务端核心可用版本/构建。无 `mcVersion` 返回版本列表；带 `mcVersion` 返回下载信息
 - **权限**: 平台管理员
-- **Query**: `type=paper`（默认）/`velocity`/`waterfall`（PaperMC API）/`bungeecord`（md-5 Jenkins，仅 `latest`）、`mcVersion`、`build`（可选，缺省最新）
+- **Query**: `type=paper`（默认）/`velocity`/`waterfall`（PaperMC API）/`bungeecord`（md-5 Jenkins，仅 `latest`）/`spongevanilla`/`spongeforge`（Sponge 官方 Maven + Forge 官方 Maven）、`mcVersion`、`build`（可选，缺省最新）
 - **响应（带 mcVersion）**: `{ "type":"paper","mcVersion":"1.21.1","build":196,"filename":"...","downloadUrl":"...","sha256":"..." }`
-- **关联 FR**: FR-034
+- **SpongeForge 响应扩展**: `runtime={ "distribution":"spongeforge", "modFilename":"SpongeForge.jar", "forgeInstallerUrl":"https://maven.minecraftforge.net/.../forge-...-installer.jar", "forgeVersion":"1.21.1-52.1.5", "launchJar":"forge-1.21.1-52.1.5-server.jar" }`
+- **关联 FR**: FR-034 / FR-046
 
 ### POST /api/v1/instances/provision/bukkit
-- **描述**: 一键搭建 Paper 后端子服：解析核心 → 分配端口 → 系统分配目录 + 结构化启动 → 下载核心 + 写 eula/server.properties，返回实例（STOPPED，可一键启动）
+- **描述**: 一键搭建后端子服：解析 Paper/SpongeVanilla/SpongeForge 核心 → 分配端口 → 系统分配目录 + 结构化启动 → 下载核心或安装 Forge+SpongeForge mod → 写 eula/server.properties，返回实例（STOPPED，可一键启动）。历史路径名保留 `bukkit` 兼容既有调用，创建出的实例 `type` 仍为 `minecraft_java`、`role=backend`
 - **权限**: 平台管理员
-- **请求**: `{ "nodeId":1,"name":"lobby","coreType":"paper","mcVersion":"1.21.1","build":0,"jdkId":1,"memoryMb":4096,"jvmArgs":["-XX:+UseG1GC"],"groupId":0,"onlineMode":false }`（`onlineMode` 缺省 false=代理就绪/离线；独立正版服可传 true）
+- **请求**: `{ "nodeId":1,"name":"lobby","coreType":"paper|spongevanilla|spongeforge","mcVersion":"1.21.1","build":0,"jdkId":1,"memoryMb":4096,"jvmArgs":["-XX:+UseG1GC"],"groupId":0,"onlineMode":false }`（`onlineMode` 缺省 false=代理就绪/离线；独立正版服可传 true）
 - **响应**: `201` 创建的 Instance；`502 PROVISION_FAILED`（含已创建实例供重试/删除）
-- **关联 FR**: FR-034
+- **关联 FR**: FR-034 / FR-046 | **Spec**: `docs/specs/provision-sponge/`
 
 ### POST /api/v1/instances/provision/proxy
 - **描述**: 一键搭建代理（role=proxy）：velocity/waterfall（PaperMC）/bungeecord（md-5 Jenkins），分配监听端口/目录，下载核心，生成转发配置；Velocity 生成 forwarding secret 并返回一次
@@ -995,6 +996,45 @@
 - **Query**: `?dir=plugins|mods`（可选，默认 `plugins`）
 - **响应**: `{ "message": "已切换", "enabled": false }`
 
+### POST /api/v1/plugins/batch-deploy
+- **描述**: 从制品库选择一个或多个 `type=plugin` 资产，批量部署到多个实例的 `plugins/` 目录（不部署 `mods/`）
+- **关联 FR**: FR-053, FR-045, FR-052
+- **权限**: 实例可管理；平台管理员可跨实例，普通成员只会部署到其有权管理的实例
+- **审计动作**: `plugin.batchDeploy`
+- **请求**:
+  ```json
+  {
+    "assetIds": [101, 102],
+    "ids": [1, 2, 3]
+  }
+  ```
+  或：
+  ```json
+  {
+    "assetIds": [101],
+    "filter": { "nodeId": 1, "status": "STOPPED", "role": "backend" }
+  }
+  ```
+- **响应**:
+  ```json
+  {
+    "total": 3,
+    "success": 2,
+    "failed": 1,
+    "skipped": 0,
+    "results": [
+      { "id": 1, "name": "lobby", "skipped": false },
+      { "id": 2, "name": "survival", "skipped": false },
+      { "id": 3, "name": "proxy", "skipped": false, "error": "节点未连接" }
+    ]
+  }
+  ```
+- **计数口径**: `total/success/failed/skipped` 按实例计数；多插件部署到同一实例仍计 1 个实例结果
+- **行为约束**:
+  - `assetIds` 必须全部存在且 `type=plugin`；文件名使用制品原文件名并强制 `.jar`
+  - `ids` 与 `filter` 二选一；后端按实例管理权限收敛目标，越权目标不泄露
+  - CP 读取制品内容后复用 Worker `WriteFile` 写入 `plugins/<filename>.jar`，不新增 Worker RPC
+
 ---
 
 ## Bot
@@ -1100,8 +1140,8 @@
 - **关联 FR**: FR-009
 
 ### GET /api/v1/bots/:id
-- **描述**: Bot 详情（位置/血量/背包等）
-- **关联 FR**: FR-009
+- **描述**: Bot 基础详情（DB 基础字段 + 读取时经 Worker `ListBots` 懒回填 `status`）；位置/血量/背包/事件流等富遥测归 FR-041，当前 HTTP 详情不承诺返回
+- **关联 FR**: FR-009（基础详情）, FR-041（富遥测延后）
 
 ### POST /api/v1/bots/:id/behavior
 - **描述**: 切换 Bot 行为模式
@@ -1115,17 +1155,9 @@
 - **响应**: `200 { "message": "已发送" }`
 - **错误**: 400 `INVALID_REQUEST`（缺 command）；404 `NOT_FOUND`（Bot 不存在/无权访问）；503 `COMMAND_FAILED`（Worker 未连接/委托失败）
 
-### POST /api/v1/bots/stress-test
-- **描述**: 创建压测会话
-- **关联 FR**: FR-009
-- **请求**:
-  ```json
-  {
-    "instanceId": 1,
-    "count": 50,
-    "config": { "server": "mc.example.com", "port": 25565, "auth": "offline" }
-  }
-  ```
+### Bot 压测会话（FR-042，延后）
+- **状态**: 当前未开放 HTTP 端点；`POST /api/v1/bots/stress-test` 归 FR-042 后续实现，FR-009 不以压测会话作为通过条件
+- **说明**: 当前 `/bots` 页面仅保留禁用态「压测」入口；如需创建压测会话，需先落地 FR-042 的后端会话 API 与 UI 编排
 
 ---
 
@@ -1194,15 +1226,35 @@
 - **关联 FR**: FR-013, FR-056
 
 ### GET /api/v1/backup-storages
-- **描述**: 备份远程存储后端列表（凭证以 `${ENV_VAR}` 引用，不返回明文）
+- **描述**: 备份远程存储后端列表（凭证以 `${ENV_VAR}` 引用，不返回明文）。返回项包含只读统计字段 `backupCount`（已完成备份份数）与 `usedBytes`（已完成备份文件大小合计，字节）。
 - **权限**: 平台管理员
-- **关联 FR**: FR-057
+- **关联 FR**: FR-057, FR-152
 
 ### POST /api/v1/backup-storages
 - **描述**: 创建远程存储后端（`type` ∈ s3/sftp/webdav）。凭证字段须为 `${ENV_VAR}` 引用，明文/非法类型回 422
 - **权限**: 平台管理员
 - **关联 FR**: FR-057
 - **请求**: `{ "name": "string", "type": "s3", "endpoint": "", "bucket": "", "region": "", "prefix": "", "accessKeyEnv": "${VAR}", "secretKeyEnv": "${VAR}", "useSsl": true }`
+
+### GET /api/v1/backup-storages/:id/stats
+- **描述**: 查询单个远程存储后端的只读统计。`backupCount` 来自已完成备份记录数，`usedBytes` 来自已完成备份大小合计（字节）。
+- **权限**: 平台管理员
+- **关联 FR**: FR-152
+- **响应**: `{ "backupCount": 3, "usedBytes": 1073741824 }`
+- **错误**: `404 NOT_FOUND`
+
+### POST /api/v1/backup-storages/:id/test
+- **描述**: 测试远程存储后端连通性。Control Plane 选择在线 Worker，通过 Worker gRPC `TestStorageBackend` 使用已保存配置做小对象上传→下载校验→删除探测，并返回延迟与失败原因；凭证仍只按 `${ENV_VAR}` 在 Worker 环境解析，不返回明文。
+- **权限**: 平台管理员
+- **关联 FR**: FR-152
+- **响应**: `{ "ok": true, "message": "连接成功", "errorCode": "", "latencyMs": 42, "nodeUuid": "node-uuid" }`
+- **失败语义**: 后端不可达、无在线 Worker、凭证环境变量缺失或存储端错误均返回 HTTP 200 且 `ok=false`，`errorCode` 使用 `NO_WORKER` / `WORKER_UNAVAILABLE` / `UNSUPPORTED_STORAGE` / `PING_FAILED` 等枚举；`id` 不存在仍返回 `404 NOT_FOUND`。
+
+### GET /api/v1/backup-storages/local/stats
+- **描述**: 查询节点本地默认备份统计。本地备份位于数据根 `var/backups`；`backupCount` 来自本地备份记录，`usedBytes` 优先按目录实际文件大小扫描。
+- **权限**: 平台管理员
+- **关联 FR**: FR-152
+- **响应**: `{ "backupCount": 2, "usedBytes": 524288000 }`
 
 ### DELETE /api/v1/backup-storages/:id
 - **描述**: 删除远程存储后端。被备份引用时拒绝（422）

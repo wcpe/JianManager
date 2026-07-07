@@ -1,6 +1,6 @@
 # 功能规格：在途杂项 / 归真 / 延后（散单 FR）
 
-> 状态：开发中 / 计划 / 已延后（逐 FR 标）　·　关联 PRD：FR-003, FR-041, FR-042, FR-046, FR-053, FR-059, FR-098, FR-113, FR-114
+> 状态：开发中 / 计划 / 已延后（逐 FR 标）　·　关联 PRD：FR-003, FR-041, FR-042, FR-046, FR-059, FR-098, FR-113, FR-114
 >
 > 本 spec 收容不归属某个大程序、但仍活跃（在途 / 计划 / 已延后 / 归真）的散单 FR 详情，PRD §4 仅留一行索引。
 
@@ -38,15 +38,8 @@
   - [ ] i18n + 主题正常
 
 #### FR-053: 插件批量部署多服
-- **优先级**: P1 | **状态**: 计划 | **依赖**: FR-052, FR-058 | **关联 API**: `POST /plugins/batch-deploy`
-- **描述**: 从制品库选插件，批量部署到选定的多个实例，返回成功/失败汇总
-- **验收**:
-  - [ ] 从制品库（type=plugin）选一个或多个插件
-  - [ ] 选目标实例集（按筛选或勾选），批量部署
-  - [ ] 经 gRPC 扇出到各 Worker，返回每实例成功/失败 + 汇总
-  - [ ] 权限隔离：仅部署到有权实例
-  - [ ] 危险操作二次确认 + 审计
-  - [ ] i18n + 主题正常
+- **状态**: 已迁出到专属规格（已交付@v0.13.0）
+- **规格真源**: `docs/specs/plugin-batch-deploy/spec.md` 与 `api.md`
 
 #### FR-113: 全文索引后台化与进度
 - **优先级**: P2 | **状态**: 开发中（本 worktree 已补自动化回归；待主控真机验收） | **关联 FR**: FR-074 | **关联 ADR**: ADR-017, ADR-024
@@ -57,12 +50,15 @@
   - [ ] 真机：大目录首查不卡 UI、结果一致
 
 #### FR-114: 探针依赖内联/缓存预置
-- **优先级**: P3 | **状态**: 计划 | **关联 FR**: FR-065, ADR-016
-- **描述**: 探针首启联网拉 TabooLib 依赖（~30s+），慢网/离线首启探针失败
+- **优先级**: P3 | **状态**: 开发中（离线缓存链路已落地，待断网真机 enable） | **关联 FR**: FR-065, FR-068, ADR-016
+- **描述**: 探针首启联网拉 TabooLib/Kotlin 依赖（~30s+），慢网/离线首启探针失败。父仓 `make embed-probe` 生成 `ServerProbe.jar`、`probe-libraries.zip` 与 `probe.json`，CP 建服部署与在线更新均随 `DeployServerProbe.libraries_zip` 下发缓存包，Worker 解压到实例根 `libraries/`。
 - **验收**:
-  - [ ] 探针 jar 内联依赖或 Worker 侧 TabooLib 缓存预置
-  - [ ] 离线/慢网首启探针可用
-  - [ ] 真机：断网首启探针正常 enable
+  - [x] Worker 侧 TabooLib/Kotlin 缓存预置：`libraries_zip` 只接受 `libraries/` 根路径并解压到实例工作目录根
+  - [x] 构建链路：父仓 Go 工具从探针 jar 内 `env.properties`/`version.properties` 解析依赖，按 Maven layout 下载、写本地 sha1、生成稳定 zip 与 probe.json
+  - [x] CP 下发：建服自动部署与在线更新 helper 均携带 `LibrariesZip`，缺缓存时告警但保持旧行为
+  - [x] 安全防护：路径穿越、绝对路径、反斜杠路径、超大条目/总量/条目数拒绝
+  - [x] 前端探针更新卡展示离线依赖缓存大小与短指纹，可在真实浏览器监控分区验收
+  - [ ] 真机：断网首启探针正常 enable，`libraries/` 不再触发首启联网下载
 
 > **工程整治**（chore/ref，不占 FR 号，走 sdd-refactor-code/手工）：① 前端路由级代码分割（#13，PluginManager 798KB/index 411KB，路由 `lazy()` 拆分）；② `.gitattributes` 规范换行与生成代码合并（#17/#18，`*.pb.go merge=union linguist-generated` + `eol=lf`）；③ 内嵌 CFR + 镜像探针/CFR 嵌入校验（#14/#20，发版 `make embed-cfr` + 镜像构建显式校验）。
 

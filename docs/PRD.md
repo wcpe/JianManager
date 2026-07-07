@@ -44,7 +44,8 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-128~162（控制台体验与可寻址性增强）→ `docs/specs/console-ux-enhancement/spec.md`
 - FR-124~127（JBIS 背包域）→ `docs/specs/business-integration/fr-124-127-inventory.md`
 - FR-073 / 078 / 079 / 080 / 082 / 083 / 084 / 085（ServerProbe 治理桥运营底座在途）→ `docs/specs/serverprobe-ops-inflight/spec.md`
-- FR-003 / 041 / 042 / 046 / 053 / 059 / 098 / 113 / 114（在途杂项 / 归真 / 延后）→ `docs/specs/inflight-backlog/spec.md`
+- FR-003 / 041 / 042 / 046 / 059 / 098 / 113 / 114（在途杂项 / 归真 / 延后）→ `docs/specs/inflight-backlog/spec.md`
+- FR-053（插件批量部署多服）→ `docs/specs/plugin-batch-deploy/spec.md` + `api.md`
 - FR-163~169（前端整体重设计:视觉底座 / 双主题 / 多级分组 / 可组合工作区+超级工作台+导播台 / 监控升级）→ `docs/specs/ui-redesign/design.md`(+ 原型 `preview.html`)
 - FR-173~175（CI 发布管线 / 出站网络代理 / 自更新对接 GitHub Releases，关联 ADR-036/037）→ `docs/specs/release-pipeline/`、`docs/specs/network-proxy/`、`docs/specs/self-update-github/`（开发中创建）
 - FR-176~184（节点与运行时 UI 重做 / 自更新增强 / 全局任务中心 / jmctl 紧急控制台，关联 ADR-039/040/041/042 + ADR-036 更新）→ FR-182 `docs/specs/self-update-enhancement/spec.md`、FR-183 `docs/specs/task-center/spec.md`、FR-184 `docs/specs/emergency-cli/spec.md`（已落审）；FR-176/179/180/181 免 spec；FR-177 `docs/specs/node-page-redesign/spec.md`、FR-178 `docs/specs/node-runtime-panels/spec.md`（W2，已自审）
@@ -105,19 +106,19 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-038 | Bot 规模化后端 API | — | ✅ 已交付@v0.3.0 |
 | FR-039 | 控制台实例内 Bot 管理段 | — | ✅ 已交付@v0.3.0 |
 | FR-040 | 全局 Bot 管理页重构 | — | ✅ 已交付@v0.3.0 |
-| FR-041 | Bot 实时遥测与单 Bot 详情面板 | P2 | ⏸️ 已延后 |
-| FR-042 | Bot 压测会话编排 UI | P2 | ⏸️ 已延后 |
+| FR-041 | Bot 实时遥测与单 Bot 详情面板（含 StreamBotEvents 与位置/血量/背包等富详情） | P2 | ⏸️ 已延后 |
+| FR-042 | Bot 压测会话编排 UI（含 `/api/v1/bots/stress-test` 后端会话 API） | P2 | ⏸️ 已延后 |
 | FR-043 | 全链路运维打通（节点→实例→终端→Bot 进服） | — | ✅ 已交付@v0.3.0 |
 | FR-044 | 项目自包含便携运行时（FHS 数据根 + 核心缓存） | — | ✅ 已交付@v0.3.0 |
 | FR-045 | 制品库（内容寻址 + 完整性校验） | — | ✅ 已交付@v0.3.0 |
-| FR-046 | Sponge 子服支持 | P2 | 📋 计划 |
+| FR-046 | Sponge 子服支持 | P2 | 🔨 开发中 |
 | FR-047 | 环境/标签多维分组筛选 | — | ✅ 已交付@v0.4.0 |
 | FR-048 | 节点维护模式与主动下线 | — | ✅ 已交付@v0.4.0 |
 | FR-049 | 日志持久化、归档与保留 | — | ✅ 已交付@v0.4.0 |
 | FR-050 | 日志检索与过滤 | — | ✅ 已交付@v0.4.0 |
 | FR-051 | 通用文件改前自动备份与版本回滚 | — | ✅ 已交付@v0.4.0 |
 | FR-052 | 插件/模组单服管理 | — | ✅ 已交付@v0.4.0 |
-| FR-053 | 插件批量部署多服 | P1 | 📋 计划 |
+| FR-053 | 插件批量部署多服 | — | ✅ 已交付@v0.13.0 |
 | FR-054 | 玩家管理（RCON） | — | ✅ 已交付@v0.4.0 |
 | FR-055 | 玩家管理插件桥增强 | — | ❌ 已废弃（ADR-014） |
 | FR-056 | 增量备份 | — | ✅ 已交付@v0.4.0 |
@@ -172,7 +173,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-111 | 归档/反编译查看器布局优化 | — | ✅ 已交付@v0.9.1 |
 | FR-112 | 平台/运维导航信息架构统一 | — | ✅ 已交付@v0.9.1 |
 | FR-113 | 全文索引后台化与进度 | P2 | ✅ 已交付@v0.13.0 |
-| FR-114 | 探针依赖内联/缓存预置 | P3 | 📋 计划 |
+| FR-114 | 探针依赖内联/缓存预置 | P3 | 🔨 开发中 |
 | FR-115 | 业务桥 Worker 脊柱（JBIS M1） | — | ✅ 已交付@v0.10.0 |
 | FR-116 | CP 业务编排与汇聚脊柱（JBIS M1） | — | ✅ 已交付@v0.10.0 |
 | FR-117 | ServerProbe 业务对接层骨架（JBIS M1） | — | ✅ 已交付@v0.10.0 |
@@ -210,7 +211,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-149 | 告警增强 | — | ✅ 已交付@v0.10.0 |
 | FR-150 | 日志中心增强 | P2 | ✅ 已交付@v0.10.0 |
 | FR-151 | 备份页增强 | P2 | ✅ 已交付@v0.10.0 |
-| FR-152 | 备份存储测试连接 + 容量展示 | P2 | 📋 计划 |
+| FR-152 | 备份存储测试连接 + 容量展示 | P2 | ✅ 已交付@v0.13.0 |
 | FR-153 | 计划任务增强 | — | ✅ 已交付@v0.10.0 |
 | FR-154 | 模板应用到实例 + 变量填充预览 | P2 | ✅ 已交付@v0.10.0 |
 | FR-155 | 平台资产与更新页增强 | P2 | 📋 计划 |

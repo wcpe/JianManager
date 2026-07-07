@@ -188,30 +188,33 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 实例事件流：StreamInstanceEvents (server stream)
   - 同一流承载两类事件：`state_change`（状态转换）与 `stdout`/`stderr`（进程输出）。Worker 进程输出回调分流为「WS 终端广播 + 事件流上报」两路，互不阻塞。CP 侧 EventService 把 `stdout`/`stderr` 经 LogService 落库（日志中心 FR-049），`state_change` 经 SSE 推前端
 - 文件操作：ListFiles, ReadFile, WriteFile, DeleteFile, RenameFile（跨目录即移动）, UploadFile (client stream), DownloadFile (server stream), DownloadArchive (server stream), SearchFiles
+  - `WriteFile` 是实例工作目录内受限写入能力；FR-053 插件批量部署由 CP 读取制品库插件字节后复用该 RPC 扇出写入 `plugins/`，不为批量插件部署新增 Worker RPC。
   - `DownloadArchive` 把选中的文件/目录（目录递归，仅常规文件）即时打包为 zip 边遍历边分片流式返回（每条目经 `validatePath` 防越界/zip-slip，~32KiB 分片，不缓冲整包）；CP `FileHandler.DownloadArchive` 逐帧 `Recv` 写响应并 `Flush`，转为 HTTP `application/zip`（批量下载，FR-070）。资源管理器树内拖拽「移动」复用 `RenameFile`，无独立 move RPC
   - `SearchFiles` 对实例工作目录做全文搜索 / 文件名快速打开（FR-074，见 ADR-017）。索引是 **Worker 本地派生资产**（落数据根 `var/index/<instance-uuid>/`，**不进 CP 数据库**）：Worker 每实例持有一份倒排索引（token→文件集合）+ 文件指纹表，查询前按指纹比对增量更新（增/改/删）再倒排取候选、候选内精确行扫描；`mode=filename` 走文件名子串匹配（行号 0）。CP 仅经 gRPC 转发查询、不持有索引
 - 归档浏览与反编译（FR-075；见 ADR-018）：ListArchiveEntries, ReadArchiveEntry, DecompileClass
   - `ListArchiveEntries`/`ReadArchiveEntry` 用 Go `archive/zip` **只读**列举/读取 jar/zip 内部条目（不起进程、零落盘，条目名经 zip-slip 校验，条目数/单条目字节有上限超出截断，内容嗅探 NUL 判二进制）；`DecompileClass` 经实例绑定 JDK（或系统候选 JDK / `JAVA_HOME` 兜底）**受控 exec** CFR 单 jar 把 `.class`/`.jar`（或 jar 内某 `.class` 抽临时文件）反编译为 Java 源码——CFR 仅静态分析字节码、不加载/运行目标代码，`context` 超时 + 输入体积上限 + 输出截断 + 失败/降级以 `success=false`+结构化 error 返回（不抛错）。CP 加性端点 `GET .../files/archive/entries`、`GET .../files/archive/read`（octet-stream + `X-Truncated`/`X-Binary` 头）、`POST .../files/decompile`，均复用文件「查看」级权限。CFR 分发：配置路径 > 内嵌（`make embed-cfr`，gitignore 不入库）> 数据根缓存 `var/tools/cfr-<ver>.jar` > Maven Central 按需下载（sha256 pin）
 - 终端：IssueTerminalToken
-- Bot：CreateBot, DeleteBot, ListBots, StreamBotEvents (server stream), SendBotCommand
-- 探针部署：DeployServerProbe（CP 内嵌 ServerProbe jar + 生成的 config.yml 经 gRPC 下发到实例 plugins 目录，FR-010；见 ADR-014）。**在线更新**（FR-068）复用本 RPC 推最新内嵌 jar（下次重启生效，可选推送并重启），经 `GET/POST /instances/:id/probe/update`
+- Bot：CreateBot, DeleteBot, ListBots, SetBotBehavior, SendBotCommand；`StreamBotEvents`/富遥测归 FR-041 后续实现，当前 Worker gRPC 以 `ListBots` 快照 + CP 读取时懒回填状态为准
+- 探针部署：DeployServerProbe（CP 内嵌 ServerProbe jar + 生成的 config.yml + 运行库缓存 `libraries_zip` 经 gRPC 下发，FR-010/FR-114；见 ADR-014/016）。Worker 写入实例 `plugins/` 并把缓存包解压到实例根 `libraries/`，**在线更新**（FR-068）复用本 RPC 推最新内嵌 jar 与缓存（下次重启生效，可选推送并重启），经 `GET/POST /instances/:id/probe/update`
 - 插件桥（FR-065；见 ADR-016）：StreamPluginEvents (server stream，CP 订阅某实例/全部探针经反向 WS 上报的事件流 connected/disconnected/heartbeat/玩家事件)、SendPluginCommand（CP 经 Worker 向探针下发治理/查询指令）、QueryServerState（查询子服全状态骨架）。地基阶段真实承载 connected/disconnected/heartbeat 与通道层，业务事件/治理执行语义留 FR-066/067
   - **JBIS 业务事件汇聚上行（FR-122；见 ADR-027/028）**：同一条 StreamPluginEvents 流复用承载 `domain` 非空的业务域事件（PluginEvent 的 `domain`/`dedup_key`/`raw_json` 字段，Worker 透传不消费语义）。CP 侧 `PlayerEventService` 据 `domain` 分流：玩家/监控事件走在线名册 + SSE，业务事件交 `BusinessEventService` 按 (domain,dedup_key) 去重落 `business_events` 通用信封，经济域(`economy`)再解析信封维护 `economy_balance_mirrors`(node→zone 维度、seq 单调)+`economy_ledger_entries`(审计)。探针侧由 mce `PlayerEconomyChangeEvent`/`PlayerEconomyCatchupEvent` 折算上报（覆盖 web 后台/跨服一切余额变更），currencyId Int→identifier 折算保证跨服聚合不串味。CP 插件无关、只认信封
 - 指标：GetNodeMetrics, GetInstanceMetrics（请求带 probe_port，Worker 抓 ServerProbe `/metrics`；**RCON 已退役（FR-067/ADR-016）**——探针未就绪时富指标 N/A，不再回退 RCON）——用于**实时**面板的 CP 主动拉取；**历史时序**（FR-060）改由 Worker 心跳推送 `instance_metrics`，二者互补
 - 玩家管理：SendPluginCommand（FR-067/ADR-016；CP 经 Worker 反向 WS 向探针下发踢/封/解封/白名单治理指令，探针经服务端 API 执行；在线列表经探针事件聚合）。**RCON 路径已退役**，`ExecRconCommand`/`rcon_client` 移除；探针未连入时优雅降级
 - 配置 (V2)：ListConfigFiles, ReadConfig, WriteConfig, ListConfigVersions, RollbackConfig
-- 运行时 (V2)：ListJDKs, InstallJDK, RemoveJDK, JDKCatalog, DownloadCore, ListArtifactCache, EvictArtifactCache, ClearArtifactCache, SetArtifactCacheCap, BrowseDir
+- 运行时 (V2)：ListJDKs, InstallJDK, RemoveJDK, JDKCatalog, DownloadCore, InstallForgeServer, ListArtifactCache, EvictArtifactCache, ClearArtifactCache, SetArtifactCacheCap, BrowseDir
   - `InstallJDK` 携带 `mirror_base`（CP 从平台设置 `jdk.mirror.<vendor>` 取生效值后下发；Worker 用它构造下载 URL，使运行时配置的镜像源真生效，FR-033/FR-063；为空回退 Worker 本地 env/官方默认源）
   - `InstallJDK` 加性携带 `task_id`（FR-183/ADR-040）：非空时走**异步**——Worker 登记内存任务表、`go` 后台下载（带字节进度计数）、RPC 立即返回 `task_id`（不再阻塞最长 20min），进度/日志/终态经心跳 `tasks` 上报，CP 据终态落 `NodeJDK` + 发站内信；为空回退同步路径（向后兼容）
   - `InstallJDK` 加性携带 `version`（FR-178）：非空时 Worker 经 **foojay disco API** 按具体版本解析下载源；为空取该大版本最新 GA
   - `JDKCatalog`（FR-178）：Worker 经 foojay disco `/packages` 查某发行版可选具体版本（扩厂商至 Liberica/Microsoft/Semeru/GraalVM… + 保留 Temurin/Corretto/Zulu 直链回退），CP 代理喂前端版本选择器；`buildDownloadURLV` 在 `internal/worker/jdk/foojay.go` 统一「直链回退 vs foojay 解析」分流
   - **节点制品缓存**（FR-178，`internal/worker/artifactcache`）：`DownloadCore` 改为**内容寻址缓存命中复用**——按 `sha256` 命中即从 `var/artifact-cache/` 秒拷到实例工作目录（免网络、`touch` lastUsed），未命中下载校验后存入缓存再拷；`sha256` 为空不缓存（缓存键必须是 sha256）。**范围写死：仅服务端核心 jar，不缓存插件/其它下载路径**。`ListArtifactCache`/`EvictArtifactCache`/`ClearArtifactCache`/`SetArtifactCacheCap` 经 CP 端点（仅平台管理员 + 审计，CP 用 asset 表按 sha256 补全 name/version）管理这份缓存；容量上限 `artifact_cache.max_bytes`（worker.yml + CP 运行时下发）触发按 `lastUsedAt` 升序 LRU 淘汰；写用临时文件 + 原子 rename 并发安全
+  - **SpongeForge 安装**（FR-046）：`InstallForgeServer` 仅服务 `coreType=spongeforge`，Worker 在实例工作目录下载 Forge installer 到 `.jianmanager/forge-installer.jar`，使用实例绑定 JDK 执行 `--installServer`，再把 SpongeForge universal jar 写入 `mods/SpongeForge.jar`；CP 仍先创建 `type=minecraft_java` / `role=backend` 实例，并以 `LaunchSpec.CoreJar=forge-<mc>-<forge>-server.jar` 结构化启动。该 RPC 不暴露任意路径写入能力，所有产物限制在实例工作目录内
   - `BrowseDir`（FR-178）：只读列出节点某绝对路径下的子目录（空路径返回盘符/根），经 CP 端点 `GET /nodes/:id/browse`（仅平台管理员、防穿越）供前端 JDK 路径登记目录选择器逐级浏览
 - 复制 (V2)：CloneWorkDir（本机复制源工作目录到目标，排除运行态文件）
-  - 搭建子服/代理由 Control Plane 编排：分配端口/目录 → CreateInstance → DownloadCore → WriteConfig，不另设 worker 端 Provision RPC
-- 备份 (V2)：CreateBackup, RestoreBackup（FR-056/057）
+  - 搭建子服/代理由 Control Plane 编排：分配端口/目录 → CreateInstance → DownloadCore 或 InstallForgeServer → WriteConfig，不另设通用 worker 端 Provision RPC
+- 备份 (V2)：CreateBackup, RestoreBackup, TestStorageBackend（FR-056/057/152）
   - Worker 把工作目录打 tar.gz 落数据根 `var/backups/<instanceUUID>/`，据 base_manifest 做增量差异，始终回传完整文件清单供 CP 维护链/基准
   - 恢复按链顺序（全量基 + 各增量）回放；远程后端（S3/SFTP/WebDAV）由 Worker 持 CP 下发的 StorageBackendSpec 直传/拉回，凭证由 CP 从 `${ENV_VAR}` 解析后下发（Worker 不读环境/不碰 DB）
+  - `TestStorageBackend` 仅做连通性与容量探测：CP 选择在线 Worker 下发已保存的后端规格，Worker 侧用同一 `internal/worker/storage` 抽象执行 `Ping`/`Stat`。S3/WebDAV/SFTP 通过小对象写入→读取→删除验证读写权限；失败以业务错误码回 CP，HTTP 层仍返回 `ok=false` 供前端行内展示。
 
 ### 6.2 WebSocket（浏览器 ↔ Worker Node）
 
@@ -240,14 +243,15 @@ Browser → Worker Node (WS ws://worker:port/ws/terminal?token=xxx)
 ### 6.2.1 监控探针 ServerProbe（Worker 抓 `/metrics`，FR-010 / ADR-014）
 
 ServerProbe 是第三方监控探针（TabooLib，单 jar 多端 Bukkit+BungeeCord），作 git 子模块引入 `third_party/ServerProbe`。
-CP 经 `go:embed` 内嵌探针 jar（`internal/controlplane/embed/probe/`，`make embed-probe` 目标可选构建），
-建服 provision 时经 gRPC `DeployServerProbe(jar, config_yaml)` 把 jar 与最小 config.yml 写入实例 `plugins/`。
+CP 经 `go:embed` 内嵌探针 jar 与 FR-114 离线运行库缓存（`internal/controlplane/embed/probe/`，`make embed-probe` 目标可选构建），其中 `probe-libraries.zip` 由父仓 `scripts/probe-offline-cache.go` 从探针 jar 内 `META-INF/taboolib/*.properties` 解析 TabooLib/Kotlin 依赖并按 Maven layout 预置。
+建服 provision 时经 gRPC `DeployServerProbe(jar, config_yaml, libraries_zip)` 把 jar 与最小 config.yml 写入实例 `plugins/`，并把 `libraries_zip` 解压到实例根 `libraries/`，避免探针首启再联网拉 TabooLib/Kotlin 运行时。
 
 每实例系统分配一个 probe 端口（默认 29940 段，同节点唯一）；config.yml 仅开启 `/metrics`、绑定 `127.0.0.1`、监听分配端口。
-Worker 抓取链路完全在本机回环、无对外网络面、无 token：
+Worker 抓取链路完全在本机回环、无对外网络面、无 token；依赖缓存 zip 仅接受 `libraries/` 根路径，拒绝绝对路径、路径穿越、反斜杠路径和超体积条目：
 
 ```
-provision → CP DeployServerProbe(jar+config) → Worker 写 plugins/ServerProbe.jar + plugins/ServerProbe/config.yml
+provision → CP DeployServerProbe(jar+config+libraries_zip)
+          → Worker 写 plugins/ServerProbe.jar + plugins/ServerProbe/config.yml + libraries/**
 GetInstanceMetrics(req) → Worker → HTTP GET http://127.0.0.1:<probe_port>/metrics → 解析 serverprobe_* → 富指标
                                   ↓ 探针未就绪/抓取失败
                                   富指标 N/A（RCON 已退役 FR-067/ADR-016，不再回退）
@@ -445,7 +449,7 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | instance_group_members (V2, FR-165) | group_id(FK instance_group_nodes), instance_id(FK)；UNIQUE(group_id, instance_id)（实例-组织分组 M:N，一实例可属多组；删组只解绑、不删实例） |
 | bots | uuid, instance_id(FK), name, status, config(JSON), behavior, worker_id |
 | backups | uuid, instance_id(FK), name, file_path, file_size_mb, type(0/1), mode(0 全量/1 增量, V2), status(0/1/2/3), parent_id(FK self, 备份链, V2), manifest(JSON 文件清单, V2), storage_id(FK, V2), storage_key(远程对象键, V2) |
-| backup_storages | name(UNIQUE), type(local/s3/sftp/webdav), endpoint, bucket, region, prefix, access_key_env(${ENV_VAR}), secret_key_env(${ENV_VAR}), use_ssl (V2, FR-057) |
+| backup_storages | name(UNIQUE), type(local/s3/sftp/webdav), endpoint, bucket, region, prefix, access_key_env(${ENV_VAR}), secret_key_env(${ENV_VAR}), use_ssl (V2, FR-057)；API 响应派生 `backup_count`/`used_bytes`（FR-152，不落库，按已完成 backups 聚合） |
 | schedules | uuid, instance_id(FK), name, cron_expr, action, payload, enabled |
 | schedule_execution_logs | schedule_id(FK), action, status, error, started_at, finished_at |
 | alert_rules | uuid, name, trigger_type(V2: metric/instance_crash/node_offline/log_keyword/player_event/backup_failed), level(V2: info/warn/critical), target_type, target_id, metric, operator, threshold, duration_sec, keyword(V2 日志关键字), event_match(V2 玩家事件子类型), channel_ids(V2 JSON 路由通道), dedup_window_sec(V2 去抖), silence_start/silence_end(V2 静默窗口 HH:MM), notify_recover(V2), notify_type, notify_target(FR-011 兼容), enabled |
@@ -1009,7 +1013,7 @@ proxy:
 
 `.github/workflows/release.yml` 在 `ubuntu-latest` 全程交叉编译产出 GitHub Releases 制品，三 job 串联：
 
-- **prepare-embeds**（一次性产出全部 `go:embed` 资产，平台无关跨 matrix 复用）：`submodules: recursive` 拉取 `third_party/ServerProbe`，装 Go / Node20 / JDK21；构前端（`gen-licenses` → `vite build` → 复制到 `internal/controlplane/embed/dist/`）+ 内嵌探针 jar（`embed-probe`）+ 客户端更新器两件套（`embed-client-updater`，以 `--release 8` 在 JDK21 上构 Java8 字节码）+ CFR 反编译器（`embed-cfr`，sha256 pin 与 `decompiler/cfr.go` 常量一致）；embed 目录作 job artifact 上传。该 job 顺带解析触发类型算出注入版本经 job output 下传（正式=去前缀 tag `vX.Y.Z`，预发布=`0.0.0-dev+<shortsha>`）。
+- **prepare-embeds**（一次性产出全部 `go:embed` 资产，平台无关跨 matrix 复用）：`submodules: recursive` 拉取 `third_party/ServerProbe`，装 Go / Node20 / JDK21；构前端（`gen-licenses` → `vite build` → 复制到 `internal/controlplane/embed/dist/`）+ 内嵌探针 jar 与离线依赖缓存（`embed-probe` 生成 `ServerProbe.jar`、`probe-libraries.zip`、`probe.json`）+ 客户端更新器两件套（`embed-client-updater`，以 `--release 8` 在 JDK21 上构 Java8 字节码）+ CFR 反编译器（`embed-cfr`，sha256 pin 与 `decompiler/cfr.go` 常量一致）；embed 目录作 job artifact 上传。该 job 顺带解析触发类型算出注入版本经 job output 下传（正式=去前缀 tag `vX.Y.Z`，预发布=`0.0.0-dev+<shortsha>`）。
 - **build**（matrix `linux/amd64` + `windows/amd64`）：下载 embed artifact 还原到 `internal/**/embed/`，`GOOS/GOARCH go build -ldflags "-X .../internal/version.Version=<v>"` 编 control-plane 与 worker（共 4 个二进制），命名 `<component>-<os>-<arch>[.exe]`（ADR-036 §1）。
 - **release**：汇总 4 二进制 + 生成 `checksums.txt`（每件 sha256，ADR-036 §2），用 `scripts/changelog-extract.mjs` 取发布说明——push tag `v*` → 正式 release（取该版本段，`prerelease=false`）；push `master` → 覆盖固定 tag `latest` 预发布（FR-182 由 `nightly` 改名，取 `[Unreleased]` 段，`prerelease=true`，先删旧 release 再重建以仅保留本次产物）。
 
@@ -1063,3 +1067,10 @@ proxy:
 ### 14.4 API 与鉴权
 - `GET /assets`（按 type 筛选、分页）、`GET /assets/:id`、`POST /assets`（上传/登记）、`DELETE /assets/:id`。
 - 平台级共享资源，统一由平台管理员管理（同节点/模板的平台管理员收敛）。
+
+### 14.5 插件批量部署（FR-053）
+- 批量部署入口 `POST /plugins/batch-deploy` 从制品库选择 `type=plugin` 资产，并指定实例 ID 集或实例筛选条件。
+- Control Plane 先校验资产类型与文件名，再按实例管理权限收敛目标集合；普通成员的越权实例不返回存在性细节。
+- 部署只写入实例工作目录下的 `plugins/`，不处理 `mods/`。CP 读取制品内容后复用 Worker V2 `WriteFile` 写入 `plugins/<asset-file>.jar`，避免新增 Worker RPC。
+- 并发编排沿用实例批量操作的 fan-out 模式，响应按实例聚合 `success/failed/skipped`；计数口径是“实例”，不是“实例 × 插件”。
+- 写操作经审计中间件记录 `plugin.batchDeploy`，审计详情只记录资产 ID、实例数量与结果汇总，不记录制品字节。

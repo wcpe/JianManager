@@ -219,10 +219,16 @@
   - [ ] 展示校验和；增量行显示父备份，删父备份警告「N 个增量依赖」
 
 #### FR-152: 备份存储测试连接 + 容量展示
-- **优先级**: P2 | **依赖**: 无 | **来源**: 走查 #90
-- **描述**: 备份存储后端加「测试连接」、列表显示已用容量/已存份数
+- **优先级**: P2 | **依赖**: FR-057（远程存储后端） | **来源**: 走查 #90
+- **描述**: 备份存储后端列表展示每个远程后端的已完成备份份数与已用空间，并提供行内「测试连接」按钮；测试由在线 Worker 通过新增 `TestStorageBackend` gRPC 对 S3/SFTP/WebDAV 做小对象上传→下载校验→删除探测，CP 不落明文凭证、不直接访问远程后端。
+- **契约**:
+  - `GET /api/v1/backup-storages` 返回项新增只读聚合字段 `backupCount` / `usedBytes`；远程后端统计来自 CP 已落库 `backups.storage_id` + `status=completed` + `file_size_mb` 聚合。
+  - `GET /api/v1/backup-storages/:id/stats` 返回单个远程后端 `{backupCount, usedBytes}`；`GET /api/v1/backup-storages/local/stats` 返回本地备份统计，份数来自本地备份记录，容量优先扫描 CP 数据根 `var/backups` 实际文件大小。
+  - `POST /api/v1/backup-storages/:id/test` 返回 `{ok,message,errorCode?,latencyMs,nodeUuid?}`；无在线 Worker、凭证环境变量缺失、Worker 探测失败均返回 200 + `ok=false` 供前端即时展示失败原因。
 - **验收**:
-  - [ ] 表单与行各有「测试连接」即时反馈成功/失败原因；列表显示每后端备份数/已用空间
+  - [x] 行内「测试连接」即时反馈成功/失败原因；失败不泄露密钥明文。
+  - [x] 列表显示每远程后端备份数与已用空间，前端 i18n / mock / DOM 测试覆盖成功和失败反馈。
+  - [x] 真浏览器 E2E 已完成；过程性截图作为本地证据不入库。
 
 #### FR-153: 计划任务增强
 - **优先级**: P2 | **依赖**: 无 | **来源**: 走查 #95 + #91 可视化部分（校验 bug 见 BUG-020）
