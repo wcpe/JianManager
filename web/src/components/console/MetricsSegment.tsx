@@ -9,8 +9,14 @@ import { Button } from '@jianmanager/ui/components/button'
 import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui'
 import { RangePicker, type MetricRange } from '@jianmanager/ui'
 
+function formatProbeCacheBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+  const mib = bytes / 1024 / 1024
+  return mib >= 1 ? `${mib.toFixed(1)} MiB` : `${Math.round(bytes / 1024)} KiB`
+}
+
 /**
- * 探针在线更新卡（FR-068）：展示探针连接状态 + 内嵌最新版本 + 上次推送时间，
+ * 探针在线更新卡（FR-068/FR-114）：展示探针连接状态 + 内嵌最新版本 + 离线依赖缓存 + 上次推送时间，
  * 「更新探针」推送内嵌 jar（下次重启生效），「更新并重启」推送后立即重启实例生效。
  */
 function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
@@ -31,6 +37,9 @@ function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
         </span>
         <span className="text-muted-foreground">
           {t('probe.embeddedVersion')}: {st.embeddedAvailable ? st.embeddedVersion || '—' : 'N/A'}
+        </span>
+        <span className={st.librariesAvailable ? 'text-muted-foreground' : 'text-status-warning'}>
+          {t('probe.offlineCache')}: {st.librariesAvailable ? t('probe.offlineCacheReady', { size: formatProbeCacheBytes(st.librariesBytes), sha: st.librariesShortSha || '—' }) : t('probe.offlineCacheMissing')}
         </span>
         {st.lastPushedAt && (
           <span className="text-muted-foreground">

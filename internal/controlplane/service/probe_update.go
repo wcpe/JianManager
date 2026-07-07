@@ -13,7 +13,6 @@ import (
 	cpembed "github.com/wcpe/JianManager/internal/controlplane/embed"
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
-	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // 探针在线更新（FR-068，见 ADR-016）：把 CP 内嵌的最新 ServerProbe jar 经已有 gRPC
@@ -79,6 +78,9 @@ type ProbeUpdateStatus struct {
 	EmbeddedVersion     string     `json:"embeddedVersion"`
 	EmbeddedFingerprint string     `json:"embeddedFingerprint"`
 	EmbeddedAvailable   bool       `json:"embeddedAvailable"`
+	LibrariesAvailable  bool       `json:"librariesAvailable"`
+	LibrariesBytes      int        `json:"librariesBytes"`
+	LibrariesShortSha   string     `json:"librariesShortSha"`
 	LastPushedAt        *time.Time `json:"lastPushedAt"`
 }
 
@@ -90,6 +92,9 @@ type ProbeUpdateResult struct {
 	ProbeConnected      bool   `json:"probeConnected"`
 	EmbeddedVersion     string `json:"embeddedVersion"`
 	EmbeddedFingerprint string `json:"embeddedFingerprint"`
+	LibrariesAvailable  bool   `json:"librariesAvailable"`
+	LibrariesBytes      int    `json:"librariesBytes"`
+	LibrariesShortSha   string `json:"librariesShortSha"`
 	Message             string `json:"message"`
 }
 
@@ -137,6 +142,9 @@ func (s *ProbeUpdateService) Status(instanceID uint) (*ProbeUpdateStatus, error)
 		EmbeddedVersion:     info.Version,
 		EmbeddedFingerprint: info.Fingerprint,
 		EmbeddedAvailable:   info.Available,
+		LibrariesAvailable:  info.LibrariesAvailable,
+		LibrariesBytes:      info.LibrariesBytes,
+		LibrariesShortSha:   info.LibrariesShortSha,
 		LastPushedAt:        s.lastPushedAt(inst.UUID),
 	}, nil
 }
@@ -163,6 +171,9 @@ func (s *ProbeUpdateService) Update(instanceID uint) (*ProbeUpdateResult, error)
 		ProbeConnected:      s.isConnected(inst.UUID),
 		EmbeddedVersion:     info.Version,
 		EmbeddedFingerprint: info.Fingerprint,
+		LibrariesAvailable:  info.LibrariesAvailable,
+		LibrariesBytes:      info.LibrariesBytes,
+		LibrariesShortSha:   info.LibrariesShortSha,
 		Message:             "探针 jar 已就位，下次重启生效",
 	}, nil
 }
@@ -273,11 +284,12 @@ func (s *ProbeUpdateService) deployTo(inst *model.Instance) error {
 	ctx, cancel := context.WithTimeout(context.Background(), probeDeployTimeout)
 	defer cancel()
 
-	resp, err := client.Worker.DeployServerProbe(ctx, &workerpb.DeployServerProbeRequest{
-		InstanceUuid: inst.UUID,
-		Jar:          jar,
-		ConfigYaml:   buildServerProbeConfig(inst.ProbePort, s.bridgeBlock(inst.UUID, inst.Node.WSPort)),
-	})
+	resp, err := client.Worker.DeployServerProbe(ctx, buildDeployServerProbeRequest(
+		inst.UUID,
+		jar,
+		embeddedProbeLibrariesZip(inst.UUID),
+		buildServerProbeConfig(inst.ProbePort, s.bridgeBlock(inst.UUID, inst.Node.WSPort)),
+	))
 	if err != nil {
 		return fmt.Errorf("gRPC DeployServerProbe 失败: %w", err)
 	}

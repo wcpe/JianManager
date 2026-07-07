@@ -29,6 +29,16 @@ func ServerProbeJar() []byte {
 	return b
 }
 
+// ServerProbeLibrariesZip 返回内嵌的 ServerProbe 运行库缓存包（FR-114）。
+// zip 内根路径为 libraries/，Worker 解压到实例工作目录根，避免探针首启联网拉依赖。
+func ServerProbeLibrariesZip() []byte {
+	b, err := probeFS.ReadFile("probe/probe-libraries.zip")
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
 // ProbeJarInfo 描述内嵌探针 jar 的元信息，供 FR-068 在线更新展示版本对比。
 type ProbeJarInfo struct {
 	// Available 为 false 表示 CP 未内嵌探针 jar（未跑 make embed-probe），无法推送更新。
@@ -40,20 +50,39 @@ type ProbeJarInfo struct {
 	Fingerprint string `json:"fingerprint"`
 	// SizeBytes 为 jar 字节数（jar 缺失为 0）。
 	SizeBytes int `json:"sizeBytes"`
+	// LibrariesAvailable 为 true 表示 CP 同时内嵌了 FR-114 探针运行库缓存包。
+	LibrariesAvailable bool `json:"librariesAvailable"`
+	// LibrariesBytes 为运行库缓存包字节数（缺失为 0）。
+	LibrariesBytes int `json:"librariesBytes"`
+	// LibrariesShortSha 为运行库缓存包 SHA-256 的前 8 位短指纹（缺失为空）。
+	LibrariesShortSha string `json:"librariesShortSha"`
 }
 
-// ServerProbeJarInfo 返回内嵌探针 jar 的元信息（版本 + 短指纹 + 大小）。
-// jar 未内嵌时返回 Available=false、其余零值。
+// ServerProbeJarInfo 返回内嵌探针 jar 与运行库缓存包的元信息。
+// jar 未内嵌时返回 Available=false；运行库缓存可独立展示其大小与短指纹。
 func ServerProbeJarInfo() ProbeJarInfo {
+	libs := ServerProbeLibrariesZip()
+	info := ProbeJarInfo{
+		Version:            ProbeEmbeddedVersion,
+		LibrariesAvailable: len(libs) > 0,
+		LibrariesBytes:     len(libs),
+		LibrariesShortSha:  shortSHA256(libs),
+	}
 	b := ServerProbeJar()
 	if len(b) == 0 {
-		return ProbeJarInfo{Available: false, Version: ProbeEmbeddedVersion}
+		return info
 	}
 	sum := sha256.Sum256(b)
-	return ProbeJarInfo{
-		Available:   true,
-		Version:     ProbeEmbeddedVersion,
-		Fingerprint: hex.EncodeToString(sum[:])[:8],
-		SizeBytes:   len(b),
+	info.Available = true
+	info.Fingerprint = hex.EncodeToString(sum[:])[:8]
+	info.SizeBytes = len(b)
+	return info
+}
+
+func shortSHA256(b []byte) string {
+	if len(b) == 0 {
+		return ""
 	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])[:8]
 }

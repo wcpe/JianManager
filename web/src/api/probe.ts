@@ -9,6 +9,9 @@ export interface ProbeUpdateStatus {
   embeddedVersion: string
   embeddedFingerprint: string
   embeddedAvailable: boolean
+  librariesAvailable: boolean
+  librariesBytes: number
+  librariesShortSha: string
   lastPushedAt: string | null
 }
 
@@ -20,6 +23,9 @@ export interface ProbeUpdateResult {
   probeConnected: boolean
   embeddedVersion: string
   embeddedFingerprint: string
+  librariesAvailable: boolean
+  librariesBytes: number
+  librariesShortSha: string
   message: string
 }
 

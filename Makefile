@@ -40,13 +40,14 @@ embed-install-scripts:
 	cp scripts/install-worker.sh internal/controlplane/embed/install-scripts/install-worker.sh
 	cp scripts/install-worker.ps1 internal/controlplane/embed/install-scripts/install-worker.ps1
 
-# 构建 ServerProbe 探针 jar 并注入 CP 内嵌目录（FR-010 建服自动部署，可选）。
+# 构建 ServerProbe 探针 jar 与离线依赖缓存并注入 CP 内嵌目录（FR-010/FR-114，可选）。
 # 需 JDK 21（设 JAVA_HOME 指向 JDK21）+ 子模块已拉取（git submodule update --init）。
 # 不跑此目标时 CP 不捆绑探针，建服时自动部署优雅跳过，不影响其它构建。
 embed-probe:
 	cd third_party/ServerProbe && ./gradlew :plugin:jar :plugin:taboolibMainTask
 	mkdir -p internal/controlplane/embed/probe
 	cp third_party/ServerProbe/plugin/build/libs/ServerProbe-*.jar internal/controlplane/embed/probe/ServerProbe.jar
+	go run ./scripts/probe-offline-cache.go --probe-jar internal/controlplane/embed/probe/ServerProbe.jar --output-zip internal/controlplane/embed/probe/probe-libraries.zip --output-info internal/controlplane/embed/probe/probe.json
 
 # 构建客户端 OTA 更新器两件套 jar 并注入 CP 内嵌目录（FR-107 运营方接入指引，可选）。
 # 需 client-updater 可构建（toolchain 解析 Java 8）。不跑此目标时 CP 不捆绑更新器 jar，
