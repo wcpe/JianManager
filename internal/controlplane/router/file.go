@@ -75,8 +75,8 @@ func (h *FileHandler) Read(c *gin.Context) {
 }
 
 type writeRequest struct {
-	Path    string `json:"path" binding:"required"`
-	Content string `json:"content" binding:"required"`
+	Path    string  `json:"path" binding:"required"`
+	Content *string `json:"content" binding:"required"`
 }
 
 // Write 写入文件。
@@ -105,7 +105,7 @@ func (h *FileHandler) Write(c *gin.Context) {
 		return
 	}
 
-	if err := h.fileSvc.WriteFile(id, req.Path, []byte(req.Content)); err != nil {
+	if err := h.fileSvc.WriteFile(id, req.Path, []byte(*req.Content)); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return
 	}

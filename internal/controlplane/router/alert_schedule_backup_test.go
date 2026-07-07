@@ -1,16 +1,32 @@
 package router
 
 import (
+	"bytes"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
+
+// TestFile_WriteRequest_AllowsEmptyContent 验证写文件请求允许空内容。
+func TestFile_WriteRequest_AllowsEmptyContent(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/files/write", bytes.NewBufferString(`{"path":"empty-created.txt","content":""}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	var req writeRequest
+	require.NoError(t, c.ShouldBindJSON(&req))
+	assert.Equal(t, "empty-created.txt", req.Path)
+	require.NotNil(t, req.Content)
+	assert.Equal(t, "", *req.Content)
+}
 
 // TestFile_Rename_MissingParams 缺少 oldPath 或 newPath 返回 400。
 func TestFile_Rename_MissingParams(t *testing.T) {
