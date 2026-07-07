@@ -36,6 +36,24 @@ func TestSetup_CreateAdmin_AlreadyExists(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, w.Code)
 }
 
+func TestSetup_CreateAdmin_InvalidUsername(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+
+	body := map[string]string{"username": "bad-name", "password": "password123"}
+	w := makeRequest(r, "POST", "/api/v1/setup", body, "")
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestSetup_CreateAdmin_UsernameAllowsUnderscore(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+
+	body := map[string]string{"username": "admin_user", "password": "password123"}
+	w := makeRequest(r, "POST", "/api/v1/setup", body, "")
+	assert.Equal(t, http.StatusCreated, w.Code)
+}
+
 func TestSetup_Status(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

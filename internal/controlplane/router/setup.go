@@ -40,10 +40,29 @@ type setupRequest struct {
 	Password string `json:"password" binding:"required,min=8,max=128"`
 }
 
+// validSetupUsername 校验首次管理员用户名：仅允许 ASCII 字母、数字与下划线。
+func validSetupUsername(username string) bool {
+	for _, r := range username {
+		if r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // CreateAdmin 创建初始管理员并返回 Token。
 func (h *SetupHandler) CreateAdmin(c *gin.Context) {
 	var req setupRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "INVALID_REQUEST",
+			"message": "请求参数错误",
+		})
+		return
+	}
+
+	if !validSetupUsername(req.Username) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "INVALID_REQUEST",
 			"message": "请求参数错误",
