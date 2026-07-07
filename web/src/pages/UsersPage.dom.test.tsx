@@ -41,11 +41,10 @@ describe('UsersPage（mock 假后端）', () => {
     const user = userEvent.setup()
     // 打开创建对话框（标题「创建用户」所在的 modal 面板）。
     await user.click(screen.getByRole('button', { name: /创建用户/ }))
-    const heading = await screen.findByRole('heading', { name: '创建用户' })
-    const dialog = heading.closest('div.fixed') as HTMLElement
-    // 对话框字段无 label 关联：用户名=唯一 textbox，密码=唯一 password 输入。
-    await user.type(within(dialog).getByRole('textbox'), 'newbie')
-    await user.type(dialog.querySelector('input[type="password"]') as HTMLInputElement, 'newbie123')
+    const dialog = await screen.findByRole('dialog', { name: '创建用户' })
+    // FR-026：创建用户弹窗必须走 shadcn Dialog，并用可访问 label 关联 Input。
+    await user.type(within(dialog).getByLabelText(/用户名/), 'newbie')
+    await user.type(within(dialog).getByLabelText(/密码/), 'newbie123')
     await user.click(within(dialog).getByRole('button', { name: '创建' }))
     // 重查后表格新增 newbie 行。
     expect(await screen.findByText('newbie')).toBeInTheDocument()

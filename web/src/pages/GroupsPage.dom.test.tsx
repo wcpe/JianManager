@@ -40,10 +40,10 @@ describe('GroupsPage（mock 假后端）', () => {
     await screen.findByText('默认组')
     const user = userEvent.setup()
     await user.click(screen.getByRole('button', { name: /创建用户组/ }))
-    const heading = await screen.findByRole('heading', { name: '创建用户组' })
-    const dialog = heading.closest('div.fixed') as HTMLElement
-    // 名称字段无 label 关联：取对话框内第一个 textbox（名称 input，描述为 textarea 在其后）。
-    await user.type(within(dialog).getAllByRole('textbox')[0], '测试组')
+    const dialog = await screen.findByRole('dialog', { name: '创建用户组' })
+    // FR-026：创建用户组弹窗必须走 shadcn Dialog，并用可访问 label 关联 Input/Textarea。
+    await user.type(within(dialog).getByLabelText(/名称/), '测试组')
+    expect(within(dialog).getByLabelText('描述')).toBeInTheDocument()
     await user.click(within(dialog).getByRole('button', { name: '创建' }))
     expect(await screen.findByText('测试组')).toBeInTheDocument()
   })

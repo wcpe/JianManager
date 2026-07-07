@@ -3,9 +3,17 @@ import { useTranslation } from 'react-i18next'
 import { useQueryClient, useMutation } from '@tanstack/react-query'
 import api from '@/api/client'
 import { type UserInfo } from '@/api/users'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import { Button } from '@jianmanager/ui/components/button'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
+import { Input } from '@jianmanager/ui/components/input'
 import { validateRequired, minLength, validateFields, hasErrors } from '@/lib/form-validation'
 
 interface CreateUserDialogProps {
@@ -77,36 +85,43 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
     create.mutate({ username, password, role })
   }
 
-  if (!open) return null
+  const handleClose = () => {
+    onClose()
+    resetForm()
+  }
 
   return (
-    <div className={MODAL_OVERLAY}>
-      <div className={`${MODAL_PANEL} max-w-sm`}>
-        <h2 className="text-lg font-bold mb-4">{t('users.createUser')}</h2>
-
-        {error && (
-          <div className="mb-3 p-2 text-sm text-destructive bg-destructive/10 rounded">{error}</div>
-        )}
-
+    <Dialog open={open} onOpenChange={(v: boolean) => { if (!v) handleClose() }}>
+      <DialogContent className="sm:max-w-sm">
         <form onSubmit={handleSubmit} className="space-y-3">
+          <DialogHeader>
+            <DialogTitle>{t('users.createUser')}</DialogTitle>
+          </DialogHeader>
+
+          {error && (
+            <div className="rounded bg-destructive/10 p-2 text-sm text-destructive">{error}</div>
+          )}
+
           <div>
-            <FieldLabel required>{t('users.username')}</FieldLabel>
-            <input
+            <FieldLabel htmlFor="create-user-username" required>{t('users.username')}</FieldLabel>
+            <Input
+              id="create-user-username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
+              className="mt-1"
               aria-invalid={!!errors.username}
             />
             <FieldError error={errors.username} values={{ min: USERNAME_MIN }} />
           </div>
 
           <div>
-            <FieldLabel required>{t('login.password')}</FieldLabel>
-            <input
+            <FieldLabel htmlFor="create-user-password" required>{t('login.password')}</FieldLabel>
+            <Input
+              id="create-user-password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
+              className="mt-1"
               aria-invalid={!!errors.password}
             />
             <FieldError error={errors.password} values={{ min: PASSWORD_MIN }} />
@@ -120,24 +135,16 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
             <p className="mt-1 text-xs text-muted-foreground">{t(`users.roleDesc_${role}`)}</p>
           </div>
 
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={() => { onClose(); resetForm() }}
-              className="px-4 py-2 text-sm border rounded-md hover:bg-accent"
-            >
+          <DialogFooter className="pt-2">
+            <Button type="button" variant="outline" onClick={handleClose}>
               {t('common.cancel')}
-            </button>
-            <button
-              type="submit"
-              disabled={create.isPending || hasErrors(errors)}
-              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50"
-            >
+            </Button>
+            <Button type="submit" disabled={create.isPending || hasErrors(errors)}>
               {create.isPending ? t('common.creating') : t('common.create')}
-            </button>
-          </div>
+            </Button>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }

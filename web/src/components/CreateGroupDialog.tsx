@@ -1,8 +1,17 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useCreateGroup } from '@/api/groups'
-import { MODAL_OVERLAY, MODAL_PANEL } from '@jianmanager/ui/components/scrollable-dialog'
+import { Button } from '@jianmanager/ui/components/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
+import { Input } from '@jianmanager/ui/components/input'
+import { Textarea } from '@jianmanager/ui/components/textarea'
 import { validateRequired } from '@/lib/form-validation'
 
 interface CreateGroupDialogProps {
@@ -43,57 +52,56 @@ export default function CreateGroupDialog({ open, onClose }: CreateGroupDialogPr
     )
   }
 
-  if (!open) return null
+  const handleClose = () => {
+    onClose()
+    resetForm()
+  }
 
   return (
-    <div className={MODAL_OVERLAY}>
-      <div className={`${MODAL_PANEL} max-w-sm`}>
-        <h2 className="text-lg font-bold mb-4">{t('groups.createGroup')}</h2>
-
-        {error && (
-          <div className="mb-3 p-2 text-sm text-destructive bg-destructive/10 rounded">{error}</div>
-        )}
-
+    <Dialog open={open} onOpenChange={(v: boolean) => { if (!v) handleClose() }}>
+      <DialogContent className="sm:max-w-sm">
         <form onSubmit={handleSubmit} className="space-y-3">
+          <DialogHeader>
+            <DialogTitle>{t('groups.createGroup')}</DialogTitle>
+          </DialogHeader>
+
+          {error && (
+            <div className="rounded bg-destructive/10 p-2 text-sm text-destructive">{error}</div>
+          )}
+
           <div>
-            <FieldLabel required>{t('common.name')}</FieldLabel>
-            <input
+            <FieldLabel htmlFor="create-group-name" required>{t('common.name')}</FieldLabel>
+            <Input
+              id="create-group-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
+              className="mt-1"
               aria-invalid={!!nameError}
             />
             <FieldError error={nameError} />
           </div>
 
           <div>
-            <FieldLabel>{t('groups.description', 'Description')}</FieldLabel>
-            <textarea
+            <FieldLabel htmlFor="create-group-description">{t('groups.description')}</FieldLabel>
+            <Textarea
+              id="create-group-description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm"
               rows={3}
+              className="mt-1"
             />
           </div>
 
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              onClick={() => { onClose(); resetForm() }}
-              className="px-4 py-2 text-sm border rounded-md hover:bg-accent"
-            >
+          <DialogFooter className="pt-2">
+            <Button type="button" variant="outline" onClick={handleClose}>
               {t('common.cancel')}
-            </button>
-            <button
-              type="submit"
-              disabled={create.isPending || !!nameError}
-              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50"
-            >
+            </Button>
+            <Button type="submit" disabled={create.isPending || !!nameError}>
               {create.isPending ? t('common.creating') : t('common.create')}
-            </button>
-          </div>
+            </Button>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   )
 }
