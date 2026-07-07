@@ -71,6 +71,8 @@ func determineAction(method, path string) string {
 		return "instance.restart"
 	case method == "POST" && strings.Contains(path, "/instances") && strings.HasSuffix(path, "/kill"):
 		return "instance.kill"
+	case method == "POST" && strings.HasSuffix(path, "/plugins/batch-deploy"):
+		return "plugin.batchDeploy"
 	case method == "POST" && strings.Contains(path, "/plugins") && strings.HasSuffix(path, "/toggle"):
 		return "plugin.toggle"
 	case method == "POST" && strings.Contains(path, "/plugins"):
@@ -128,6 +130,8 @@ func determineTarget(path string) (targetType, targetID string) {
 	path = strings.TrimPrefix(path, "/api/v1")
 
 	switch {
+	case strings.HasSuffix(path, "/plugins/batch-deploy"):
+		return "plugin", "batch-deploy"
 	case strings.Contains(path, "/instances/"):
 		return "instance", extractID(path, "/instances/")
 	case strings.Contains(path, "/users/"):

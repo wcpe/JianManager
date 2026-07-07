@@ -7,7 +7,7 @@ import { requireAuth } from '@/mocks/auth-middleware'
  * 插件 / 玩家 / 经济 / 业务 / 探针域 mock handler（FR-206 域簇，照 spec §7 范式）。
  *
  * 覆盖端点：
- *   - 插件（@/api/plugins.ts）：列表 / 上传 / 删除 / 启用禁用切换
+ *   - 插件（@/api/plugins.ts）：列表 / 上传 / 删除 / 启用禁用切换 / 制品批量部署
  *   - 探针更新（@/api/probe.ts）：状态查询 / 推送
  *   - 玩家（@/api/players.ts）：在线列表 / 踢封解封 / 封禁记录 / 单后端白名单查改
  *   - 经济（@/api/economy.ts）：余额镜像 / 排行 / 业务事件流（流水）
@@ -28,6 +28,30 @@ interface PluginRow {
   enabled: boolean
   size: number
   modTime: number
+}
+
+/** 批量部署只需要制品库资产的插件子集字段。 */
+interface PluginAssetRow {
+  id: number
+  type: string
+  name: string
+  filename: string
+  size: number
+}
+
+/** 批量部署只需要实例列表的可见目标字段。 */
+interface PluginTargetInstance {
+  id: number
+  nodeId: number
+  name: string
+  role: string
+  status: string
+}
+
+interface PluginBatchDeployMockRequest {
+  assetIds?: number[]
+  ids?: number[]
+  filter?: Partial<Pick<PluginTargetInstance, 'nodeId' | 'role' | 'status'>> & { q?: string }
 }
 
 /** 封禁记录行（匹配 @/api/players.ts BanRecord）。 */
@@ -203,10 +227,84 @@ function defaultManifest() {
   }
 }
 
+function selectBatchTargets(body: PluginBatchDeployMockRequest) {
+  const rows = db<PluginTargetInstance>('instances').list()
+  if (body.ids && body.ids.length > 0) {
+    return rows.filter((inst) => body.ids?.includes(inst.id))
+  }
+  const filter = body.filter
+  if (!filter) return []
+  return rows.filter((inst) => {
+    if (filter.nodeId !== undefined && inst.nodeId !== Number(filter.nodeId)) return false
+    if (filter.role && inst.role !== filter.role) return false
+    if (filter.status && inst.status !== filter.status) return false
+    if (filter.q && !inst.name.toLowerCase().includes(filter.q.toLowerCase())) return false
+    return true
+  })
+}
+
 // ======================== Handlers ========================
 
 export const handlers = [
   // ---------- 插件 / 模组 ----------
+
+  // 从制品库选择 type=plugin 资产，批量部署到多个实例 plugins/ 目录（FR-053）。
+  domainRoute('post', '/plugins/batch-deploy', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json().catch(() => ({}))) as PluginBatchDeployMockRequest
+    const assetIds = body.assetIds ?? []
+    if (assetIds.length === 0) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '请选择插件制品' }, { status: 400 })
+    }
+    if ((body.ids?.length ?? 0) > 0 && body.filter) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: 'ids 与 filter 只能指定一个' }, { status: 400 })
+    }
+    if ((body.ids?.length ?? 0) === 0 && !body.filter) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '请选择目标实例' }, { status: 400 })
+    }
+
+    const assets = db<PluginAssetRow>('assets')
+    const selectedAssets = assetIds.map((id) => assets.get(id))
+    if (selectedAssets.some((asset) => !asset)) {
+      return HttpResponse.json({ error: 'NOT_FOUND', message: '插件制品不存在' }, { status: 404 })
+    }
+    if (selectedAssets.some((asset) => asset?.type !== 'plugin')) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '只能部署插件类型制品' }, { status: 400 })
+    }
+
+    const targets = selectBatchTargets(body)
+    const skipped = Math.max((body.ids?.length ?? targets.length) - targets.length, 0)
+    if (targets.length === 0) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '没有可部署的目标实例' }, { status: 400 })
+    }
+
+    for (const inst of targets) {
+      for (const asset of selectedAssets) {
+        if (!asset) continue
+        const name = asset.filename || asset.name
+        const exists = plugins.find((p) => p.instanceId === inst.id && p.dir === 'plugins' && p.name === name)
+        if (!exists) {
+          plugins.insert({
+            instanceId: inst.id,
+            name,
+            dir: 'plugins',
+            enabled: true,
+            size: asset.size,
+            modTime: Math.floor(Date.now() / 1000),
+          })
+        }
+      }
+    }
+
+    return HttpResponse.json({
+      total: targets.length + skipped,
+      success: targets.length,
+      failed: 0,
+      skipped,
+      results: targets.map((inst) => ({ id: inst.id, name: inst.name, skipped: false })),
+    })
+  }),
 
   // 列出某实例 plugins/ 与 mods/ 插件（按 instanceId 过滤）。
   domainRoute('get', '/instances/:id/plugins', (info) => {
@@ -277,6 +375,9 @@ export const handlers = [
       embeddedVersion: '0.1.0',
       embeddedFingerprint: 'abc123',
       embeddedAvailable: true,
+      librariesAvailable: true,
+      librariesBytes: 5_692_115,
+      librariesShortSha: '20894081',
       lastPushedAt: '2026-06-22T10:00:00Z',
     })
   }),
@@ -293,6 +394,9 @@ export const handlers = [
       probeConnected: true,
       embeddedVersion: '0.1.0',
       embeddedFingerprint: 'abc123',
+      librariesAvailable: true,
+      librariesBytes: 5_692_115,
+      librariesShortSha: '20894081',
       message: body.restart ? '已推送并重启' : '已推送，下次重启生效',
     })
   }),

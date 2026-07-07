@@ -9,8 +9,8 @@ import type { Session } from '@/mocks/handlers/domains/auth'
 import RuntimeAssetsPage from './RuntimeAssetsPage'
 
 /**
- * RuntimeAssetsPage 强断言（FR-200）：①渲染 seed JDK/制品 ②删 JDK→overview 联动减少 ③注入 500→错误态。
- * 该页仅调本域 GET /runtime-assets/overview + DELETE /nodes/:id/jdks/:jid（无跨域请求）。
+ * RuntimeAssetsPage 强断言（FR-200/FR-053）：①渲染 seed JDK/制品 ②删 JDK→overview 联动减少
+ * ③插件制品批量部署到多实例 plugins/ 目录 ④注入 500→错误态。
  */
 describe('RuntimeAssetsPage（mock 假后端）', () => {
   it('渲染 seed 的 JDK 矩阵与制品', async () => {
@@ -77,6 +77,35 @@ describe('RuntimeAssetsPage（mock 假后端）', () => {
     await waitFor(() => expect(screen.queryByText('17.0.11+9')).not.toBeInTheDocument())
     // 另一个 JDK 仍在。
     expect(screen.getByText('21.0.3+9')).toBeInTheDocument()
+  })
+
+  it('从插件制品行批量部署到多个实例的 plugins 目录', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    renderWithProviders(<RuntimeAssetsPage />)
+
+    expect(await screen.findByText('ViaVersion')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '批量部署' }))
+
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('批量部署插件到实例')).toBeInTheDocument()
+    expect(within(dialog).getByLabelText(/ViaVersion/)).toBeChecked()
+
+    const targetSearch = within(dialog).getByPlaceholderText('搜索实例名称')
+    await user.type(targetSearch, 'survival-1')
+    await user.click(await within(dialog).findByLabelText(/survival-1/))
+    await user.clear(targetSearch)
+    await user.type(targetSearch, 'lobby-proxy')
+    await user.click(await within(dialog).findByLabelText(/lobby-proxy/))
+    await user.click(within(dialog).getByRole('button', { name: '部署到 2 个实例' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('1 个插件制品写入 2 个实例')
+    await user.click(within(dialog).getByRole('button', { name: '确认部署' }))
+
+    expect(await within(dialog).findByText('结果：成功 2 / 跳过 0 / 失败 0')).toBeInTheDocument()
+    const rows = db<{ instanceId: number; name: string; dir: string }>('plugins').list(
+      (p) => p.name === 'ViaVersion-5.0.1.jar' && p.dir === 'plugins',
+    )
+    expect(rows.map((p) => p.instanceId).sort()).toEqual([1, 2])
   })
 
   it('普通成员访问 overview 被拒绝，不泄露聚合数据', async () => {

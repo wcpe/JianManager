@@ -11,9 +11,13 @@ import {
   type AssetType,
   type JDKMatrixItem,
 } from '@/api/runtimeAssets'
+import { useSearchInstances } from '@/api/instances'
+import { useBatchDeployPlugins, type PluginBatchDeployResult } from '@/api/plugins'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui'
 import { cn } from '@jianmanager/ui'
@@ -318,6 +322,7 @@ function AssetSection({
   const { t } = useTranslation()
   const [filter, setFilter] = useState<AssetFilter>(DEFAULT_ASSET_FILTER)
   const filtered = filterAssetGroups(groups, filter)
+  const pluginAssets = groups.find((g) => g.type === 'plugin')?.items ?? []
 
   return (
     <section className="space-y-3">
@@ -410,7 +415,7 @@ function AssetSection({
               </TableHeader>
               <TableBody>
                 {g.items.map((a) => (
-                  <AssetRow key={a.id} asset={a} />
+                  <AssetRow key={a.id} asset={a} pluginAssets={pluginAssets} />
                 ))}
               </TableBody>
             </Table>
@@ -431,10 +436,11 @@ function parseAssetMetadata(raw: string): { path?: string; codec?: string } {
   }
 }
 
-function AssetRow({ asset }: { asset: AssetInfo }) {
+function AssetRow({ asset, pluginAssets }: { asset: AssetInfo; pluginAssets: AssetInfo[] }) {
   const { t } = useTranslation()
   const del = useDeleteAsset()
   const [confirming, setConfirming] = useState(false)
+  const [deployOpen, setDeployOpen] = useState(false)
   const referenced = asset.refCount > 0
 
   const onDelete = () => {
@@ -500,15 +506,30 @@ function AssetRow({ asset }: { asset: AssetInfo }) {
         </span>
       </TableCell>
       <TableCell className="text-right">
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          className="text-muted-foreground hover:text-destructive"
-          onClick={() => setConfirming(true)}
-          aria-label={t('common.delete')}
-        >
-          <Trash2 />
-        </Button>
+        <div className="flex justify-end gap-1">
+          {asset.type === 'plugin' && (
+            <Button variant="outline" size="xs" onClick={() => setDeployOpen(true)}>
+              {t('plugins.batchDeploy.action')}
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            className="text-muted-foreground hover:text-destructive"
+            onClick={() => setConfirming(true)}
+            aria-label={t('common.delete')}
+          >
+            <Trash2 />
+          </Button>
+        </div>
+        {asset.type === 'plugin' && deployOpen && (
+          <PluginBatchDeployDialog
+            open={deployOpen}
+            initialAsset={asset}
+            pluginAssets={pluginAssets}
+            onOpenChange={setDeployOpen}
+          />
+        )}
         <DangerConfirm
           open={confirming}
           title={t('runtimeAssets.assetDeleteConfirm', { name: asset.name || asset.filename })}
@@ -523,5 +544,171 @@ function AssetRow({ asset }: { asset: AssetInfo }) {
         />
       </TableCell>
     </TableRow>
+  )
+}
+
+function PluginBatchDeployDialog({
+  open,
+  initialAsset,
+  pluginAssets,
+  onOpenChange,
+}: {
+  open: boolean
+  initialAsset: AssetInfo
+  pluginAssets: AssetInfo[]
+  onOpenChange: (open: boolean) => void
+}) {
+  const { t } = useTranslation()
+  const deploy = useBatchDeployPlugins()
+  const [targetQuery, setTargetQuery] = useState('')
+  const { data: instanceSearch, isLoading } = useSearchInstances(
+    { q: targetQuery || undefined, page: 1, pageSize: 200, sort: 'name', order: 'asc' },
+    open,
+  )
+  const instances = instanceSearch?.items ?? []
+  const [selectedAssetIds, setSelectedAssetIds] = useState<number[]>([initialAsset.id])
+  const [selectedInstanceIds, setSelectedInstanceIds] = useState<number[]>([])
+  const [confirmOpen, setConfirmOpen] = useState(false)
+
+  const toggleAsset = (id: number, checked: boolean) => {
+    setSelectedAssetIds((ids) => (checked ? [...new Set([...ids, id])] : ids.filter((item) => item !== id)))
+  }
+  const toggleInstance = (id: number, checked: boolean) => {
+    setSelectedInstanceIds((ids) => (checked ? [...new Set([...ids, id])] : ids.filter((item) => item !== id)))
+  }
+  const submit = () => {
+    if (selectedAssetIds.length === 0 || selectedInstanceIds.length === 0) return
+    setConfirmOpen(true)
+  }
+  const confirmDeploy = () => {
+    deploy.mutate({ assetIds: selectedAssetIds, ids: selectedInstanceIds })
+    setConfirmOpen(false)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-3xl`}>
+        <DialogHeader>
+          <DialogTitle>{t('plugins.batchDeploy.title')}</DialogTitle>
+          <DialogDescription>{t('plugins.batchDeploy.description')}</DialogDescription>
+        </DialogHeader>
+        <ScrollableDialogBody className="grid gap-4 py-2 md:grid-cols-2">
+          <section className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-medium">{t('plugins.batchDeploy.assets')}</h3>
+              <span className="text-xs text-muted-foreground">
+                {t('plugins.batchDeploy.selectedAssets', { count: selectedAssetIds.length })}
+              </span>
+            </div>
+            <div className="space-y-2 rounded border p-2">
+              {pluginAssets.map((asset) => (
+                <label key={asset.id} className="flex cursor-pointer items-start gap-2 rounded p-2 hover:bg-muted/60">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={selectedAssetIds.includes(asset.id)}
+                    onChange={(e) => toggleAsset(asset.id, e.target.checked)}
+                  />
+                  <span className="min-w-0 text-sm">
+                    <span className="block font-medium">{asset.name || asset.filename}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {asset.filename} · {formatBytes(asset.size)}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </section>
+
+          <section className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-medium">{t('plugins.batchDeploy.targets')}</h3>
+              <span className="text-xs text-muted-foreground">
+                {t('plugins.batchDeploy.selectedTargets', { count: selectedInstanceIds.length })}
+              </span>
+            </div>
+            <Input
+              value={targetQuery}
+              onChange={(e) => setTargetQuery(e.target.value)}
+              placeholder={t('plugins.batchDeploy.targetSearch')}
+              className="h-8 text-xs"
+            />
+            <div className="max-h-72 space-y-2 overflow-auto rounded border p-2">
+              {isLoading && (
+                <p className="p-2 text-sm text-muted-foreground">{t('plugins.batchDeploy.loadingTargets')}</p>
+              )}
+              {!isLoading && instances.length === 0 && (
+                <p className="p-2 text-sm text-muted-foreground">{t('plugins.batchDeploy.noTargets')}</p>
+              )}
+              {instances.map((inst) => (
+                <label key={inst.id} className="flex cursor-pointer items-start gap-2 rounded p-2 hover:bg-muted/60">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={selectedInstanceIds.includes(inst.id)}
+                    onChange={(e) => toggleInstance(inst.id, e.target.checked)}
+                  />
+                  <span className="min-w-0 text-sm">
+                    <span className="block font-medium">{inst.name}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      #{inst.id} · {inst.status} · {t('runtimeAssets.node')} {inst.nodeId}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </section>
+          {confirmOpen && (
+            <div
+              role="alert"
+              className="rounded border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive md:col-span-2"
+            >
+              <div className="font-medium">{t('plugins.batchDeploy.confirmTitle')}</div>
+              <p className="mt-1 text-xs">
+                {t('plugins.batchDeploy.confirmDescription', {
+                  assetCount: selectedAssetIds.length,
+                  instanceCount: selectedInstanceIds.length,
+                })}
+              </p>
+            </div>
+          )}
+          {deploy.data && <PluginBatchDeployResultPanel result={deploy.data} />}
+        </ScrollableDialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            {t('common.cancel')}
+          </Button>
+          <Button
+            variant={confirmOpen ? 'destructive' : 'default'}
+            onClick={confirmOpen ? confirmDeploy : submit}
+            disabled={deploy.isPending || selectedAssetIds.length === 0 || selectedInstanceIds.length === 0}
+          >
+            {deploy.isPending
+              ? t('plugins.batchDeploy.submitting')
+              : confirmOpen
+                ? t('plugins.batchDeploy.confirmLabel')
+                : t('plugins.batchDeploy.submit', { count: selectedInstanceIds.length })}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function PluginBatchDeployResultPanel({ result }: { result: PluginBatchDeployResult }) {
+  const { t } = useTranslation()
+  return (
+    <div role="status" className="rounded border border-status-success/30 bg-status-success/10 p-3 text-xs md:col-span-2">
+      <div className="font-medium text-status-success">
+        {t('plugins.batchDeploy.result', { success: result.success, skipped: result.skipped, failed: result.failed })}
+      </div>
+      <div className="mt-1 text-muted-foreground">
+        {result.results.map((item) => (
+          <span key={item.id} className="mr-3 inline-block">
+            {item.name}: {item.error || item.reason || t('plugins.batchDeploy.ok')}
+          </span>
+        ))}
+      </div>
+    </div>
   )
 }

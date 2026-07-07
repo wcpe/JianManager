@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -23,10 +24,11 @@ type fakeWorkerOps struct {
 	// files[dir] = 文件名集合（值为字节大小，仅用于断言展示）。
 	files map[string]map[string]int64
 	// listErrDirs 中的目录在 ListFiles 时返回错误（模拟目录不存在）。
-	listErrDirs map[string]bool
-	writes      []string
-	deletes     []string
-	renames     [][2]string
+	listErrDirs   map[string]bool
+	writes        []string
+	writeContents map[string][]byte
+	deletes       []string
+	renames       [][2]string
 }
 
 func newFakeWorker() *fakeWorkerOps {
@@ -53,6 +55,10 @@ func (f *fakeWorkerOps) ListFiles(_ context.Context, in *workerpb.ListFilesReque
 
 func (f *fakeWorkerOps) WriteFile(_ context.Context, in *workerpb.WriteFileRequest, _ ...grpc.CallOption) (*workerpb.WriteFileResponse, error) {
 	f.writes = append(f.writes, in.Path)
+	if f.writeContents == nil {
+		f.writeContents = map[string][]byte{}
+	}
+	f.writeContents[in.Path] = append([]byte(nil), in.Content...)
 	return &workerpb.WriteFileResponse{Success: true}, nil
 }
 
@@ -116,11 +122,11 @@ func TestValidatePluginName(t *testing.T) {
 	}
 
 	invalid := []string{
-		"",                       // 空
-		"../EssentialsX.jar",     // 路径遍历
-		"sub/dir/plugin.jar",     // 含分隔符
-		"sub\\dir\\plugin.jar",   // Windows 分隔符
-		"config.yml",             // 非 jar
+		"",                         // 空
+		"../EssentialsX.jar",       // 路径遍历
+		"sub/dir/plugin.jar",       // 含分隔符
+		"sub\\dir\\plugin.jar",     // Windows 分隔符
+		"config.yml",               // 非 jar
 		"EssentialsX.jar.disabled", // 展示名不应带 .disabled
 	}
 	for _, n := range invalid {
@@ -141,7 +147,7 @@ func newPluginTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(t.TempDir()+"/plugin.db"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Instance{}, &model.Node{}))
+	require.NoError(t, db.AutoMigrate(&model.Instance{}, &model.Node{}, &model.Asset{}))
 	// Windows 上需显式关闭底层连接，否则 TempDir 清理因文件占用失败。
 	t.Cleanup(func() {
 		if sqlDB, err := db.DB(); err == nil && sqlDB != nil {
@@ -272,6 +278,75 @@ func TestPluginService_Upload_IngestsAndDeploys(t *testing.T) {
 	require.Equal(t, "mods/EssentialsX.jar", fake.writes[1])
 }
 
+func TestPluginService_BatchDeploy_WritesPluginAssetsToInstances(t *testing.T) {
+	db := newPluginTestDB(t)
+	assetSvc := newPluginAssetSvcForPlugin(t, db)
+	assetA, err := assetSvc.Ingest(strings.NewReader("ess-bytes"), IngestParams{Type: model.AssetTypePlugin, Filename: "EssentialsX.jar"})
+	require.NoError(t, err)
+	assetB, err := assetSvc.Ingest(strings.NewReader("we-bytes"), IngestParams{Type: model.AssetTypePlugin, Filename: "WorldEdit.jar"})
+	require.NoError(t, err)
+
+	nodeA, instA := createPluginBatchTarget(t, db, "node-a", "inst-a")
+	nodeB, instB := createPluginBatchTarget(t, db, "node-b", "inst-b")
+	workerA := newFakeWorker()
+	workerB := newFakeWorker()
+	svc := NewPluginService(db, cpgrpc.NewClientPool(), assetSvc)
+	svc.workerResolver = func(nodeUUID string) (pluginWorkerOps, bool) {
+		workers := map[string]*fakeWorkerOps{nodeA.UUID: workerA, nodeB.UUID: workerB}
+		w, ok := workers[nodeUUID]
+		return w, ok
+	}
+
+	res, err := svc.BatchDeploy(PluginBatchDeployRequest{AssetIDs: []uint{assetA.ID, assetB.ID}, IDs: []uint{instA.ID, instB.ID}}, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, 2, res.Total)
+	require.Equal(t, 2, res.Success)
+	require.Equal(t, 0, res.Failed)
+	require.Equal(t, 0, res.Skipped)
+	require.ElementsMatch(t, []string{"plugins/EssentialsX.jar", "plugins/WorldEdit.jar"}, workerA.writes)
+	require.ElementsMatch(t, []string{"plugins/EssentialsX.jar", "plugins/WorldEdit.jar"}, workerB.writes)
+	require.Equal(t, []byte("ess-bytes"), workerA.writeContents["plugins/EssentialsX.jar"])
+	require.Equal(t, []byte("we-bytes"), workerB.writeContents["plugins/WorldEdit.jar"])
+}
+
+func TestPluginService_BatchDeploy_RejectsNonPluginAsset(t *testing.T) {
+	db := newPluginTestDB(t)
+	assetSvc := newPluginAssetSvcForPlugin(t, db)
+	asset, err := assetSvc.Ingest(strings.NewReader("core-bytes"), IngestParams{Type: model.AssetTypeCore, Filename: "paper.jar"})
+	require.NoError(t, err)
+	_, inst := createPluginBatchTarget(t, db, "node-a", "inst-a")
+	svc := NewPluginService(db, cpgrpc.NewClientPool(), assetSvc)
+
+	_, err = svc.BatchDeploy(PluginBatchDeployRequest{AssetIDs: []uint{asset.ID}, IDs: []uint{inst.ID}}, nil, false)
+	require.ErrorIs(t, err, ErrInvalidPluginAsset)
+}
+
+func TestPluginService_BatchDeploy_ScopeSkipsUnauthorizedIDs(t *testing.T) {
+	db := newPluginTestDB(t)
+	assetSvc := newPluginAssetSvcForPlugin(t, db)
+	asset, err := assetSvc.Ingest(strings.NewReader("plugin-bytes"), IngestParams{Type: model.AssetTypePlugin, Filename: "Only.jar"})
+	require.NoError(t, err)
+	nodeA, instA := createPluginBatchTarget(t, db, "node-a", "inst-a")
+	_, instB := createPluginBatchTarget(t, db, "node-b", "inst-b")
+	workerA := newFakeWorker()
+	svc := NewPluginService(db, cpgrpc.NewClientPool(), assetSvc)
+	svc.workerResolver = func(nodeUUID string) (pluginWorkerOps, bool) {
+		if nodeUUID == nodeA.UUID {
+			return workerA, true
+		}
+		return nil, false
+	}
+
+	res, err := svc.BatchDeploy(PluginBatchDeployRequest{AssetIDs: []uint{asset.ID}, IDs: []uint{instA.ID, instB.ID}}, []uint{instA.ID}, true)
+	require.NoError(t, err)
+	require.Equal(t, 2, res.Total)
+	require.Equal(t, 1, res.Success)
+	require.Equal(t, 1, res.Skipped)
+	require.Equal(t, []string{"plugins/Only.jar"}, workerA.writes)
+	require.Len(t, res.Results, 1)
+	require.Equal(t, instA.ID, res.Results[0].ID)
+}
+
 // TestPluginService_Delete_ResolvesDisabledName 验证删除能命中禁用态文件名。
 func TestPluginService_Delete_ResolvesDisabledName(t *testing.T) {
 	svc, fake, id := newPluginSvcWithFake(t, nil)
@@ -303,6 +378,22 @@ func TestPluginService_Toggle_BothDirections(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, enabled)
 	require.Equal(t, [2]string{"plugins/EssentialsX.jar.disabled", "plugins/EssentialsX.jar"}, fake.renames[1])
+}
+
+func createPluginBatchTarget(t *testing.T, db *gorm.DB, nodeUUID, instanceUUID string) (*model.Node, *model.Instance) {
+	t.Helper()
+	node := &model.Node{UUID: nodeUUID, Status: model.NodeStatusOnline}
+	require.NoError(t, db.Create(node).Error)
+	inst := &model.Instance{UUID: instanceUUID, NodeID: node.ID, Name: instanceUUID, Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDirect, StartCommand: "x", WorkDir: "/srv/" + instanceUUID}
+	require.NoError(t, db.Create(inst).Error)
+	return node, inst
+}
+
+func newPluginAssetSvcForPlugin(t *testing.T, db *gorm.DB) *AssetService {
+	t.Helper()
+	root, err := dataroot.Init(filepath.Join(t.TempDir(), "data"))
+	require.NoError(t, err)
+	return NewAssetService(db, root)
 }
 
 // newAssetSvcForPlugin 构建一个独立的制品库服务（独立 DB + 临时数据根），供上传去重测试使用。

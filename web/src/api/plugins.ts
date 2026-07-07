@@ -17,6 +17,32 @@ export interface PluginInfo {
   modTime: number
 }
 
+export interface PluginBatchDeployRequest {
+  /** 从制品库选择的 type=plugin 资产 ID。 */
+  assetIds: number[]
+  /** 显式目标实例 ID；与 filter 二选一。 */
+  ids?: number[]
+  /** 后端批量筛选条件；与 ids 二选一。 */
+  filter?: Record<string, unknown>
+}
+
+export interface PluginBatchDeployInstanceResult {
+  id: number
+  name: string
+  skipped: boolean
+  reason?: string
+  error?: string
+}
+
+export interface PluginBatchDeployResult {
+  /** 计数口径为实例。 */
+  total: number
+  success: number
+  failed: number
+  skipped: number
+  results: PluginBatchDeployInstanceResult[]
+}
+
 /** 列出实例 plugins/ 与 mods/ 目录插件（含启用/禁用状态）。 */
 export function usePlugins(instanceId: number) {
   return useQuery({
@@ -48,6 +74,24 @@ export function useUploadPlugin(instanceId: number) {
     },
     onError: (err: Error & { response?: { data?: { message?: string } } }) => {
       toast.error(err.response?.data?.message || i18n.t('plugins.uploadFailed'))
+    },
+  })
+}
+
+/** 从制品库选择插件资产，批量部署到多个实例的 plugins/ 目录。 */
+export function useBatchDeployPlugins() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (payload: PluginBatchDeployRequest) => {
+      const { data } = await api.post<PluginBatchDeployResult>('/plugins/batch-deploy', payload)
+      return data
+    },
+    onSuccess: (data) => {
+      toast.success(i18n.t('plugins.batchDeploy.successToast', { success: data.success, skipped: data.skipped, failed: data.failed }))
+      qc.invalidateQueries({ queryKey: ['plugins'] })
+    },
+    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
+      toast.error(err.response?.data?.message || i18n.t('plugins.batchDeploy.failedToast'))
     },
   })
 }

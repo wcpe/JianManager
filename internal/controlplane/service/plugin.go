@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -22,6 +24,14 @@ var (
 	ErrInvalidPluginName = errors.New("非法的插件文件名")
 	// ErrPluginNotFound 实例插件目录下未找到该插件。
 	ErrPluginNotFound = errors.New("插件不存在")
+	// ErrPluginAssetRequired 批量部署未选择插件制品。
+	ErrPluginAssetRequired = errors.New("需选择插件制品")
+	// ErrPluginTargetRequired 批量部署未指定目标实例。
+	ErrPluginTargetRequired = errors.New("需指定目标实例")
+	// ErrInvalidPluginAsset 制品不是可部署插件。
+	ErrInvalidPluginAsset = errors.New("非法的插件制品")
+	// ErrPluginAssetFileUnavailable 制品物理文件不可读取。
+	ErrPluginAssetFileUnavailable = errors.New("插件制品文件不可用")
 )
 
 // disabledSuffix 禁用插件的文件名后缀：约定 `.jar` 启用 / `.jar.disabled` 禁用。
@@ -53,6 +63,37 @@ type PluginInfo struct {
 	Size int64 `json:"size"`
 	// ModTime 修改时间（Unix 秒）。
 	ModTime int64 `json:"modTime"`
+}
+
+// PluginBatchDeployRequest 插件批量部署请求（FR-053）。
+type PluginBatchDeployRequest struct {
+	AssetIDs []uint
+	IDs      []uint
+	Filter   *InstanceBatchFilter
+}
+
+// PluginBatchDeployInstanceResult 单实例部署结果。
+type PluginBatchDeployInstanceResult struct {
+	ID      uint   `json:"id"`
+	Name    string `json:"name"`
+	Skipped bool   `json:"skipped"`
+	Reason  string `json:"reason,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// PluginBatchDeployResult 批量部署聚合结果，计数口径为实例。
+type PluginBatchDeployResult struct {
+	Total   int                               `json:"total"`
+	Success int                               `json:"success"`
+	Failed  int                               `json:"failed"`
+	Skipped int                               `json:"skipped"`
+	Results []PluginBatchDeployInstanceResult `json:"results"`
+}
+
+type pluginBatchAsset struct {
+	ID       uint
+	Filename string
+	Content  []byte
 }
 
 // PluginService 插件/模组单服管理（FR-052）。
@@ -158,6 +199,194 @@ func (s *PluginService) Upload(instanceID uint, dir, filename string, content []
 	return asset, nil
 }
 
+// BatchDeploy 从制品库选择插件并批量写入多个实例的 plugins/ 目录（FR-053）。
+func (s *PluginService) BatchDeploy(req PluginBatchDeployRequest, scopeIDs []uint, scope bool) (*PluginBatchDeployResult, error) {
+	assets, err := s.loadPluginBatchAssets(req.AssetIDs)
+	if err != nil {
+		return nil, err
+	}
+	instances, skipped, err := s.resolvePluginBatchTargets(req, scopeIDs, scope)
+	if err != nil {
+		return nil, err
+	}
+	if len(instances) > maxInstanceBatchTargets {
+		return nil, fmt.Errorf("批量目标数 %d 超过上限 %d", len(instances), maxInstanceBatchTargets)
+	}
+	return s.deployPluginBatch(instances, assets, skipped), nil
+}
+
+func (s *PluginService) deployPluginBatch(instances []model.Instance, assets []pluginBatchAsset, skipped int) *PluginBatchDeployResult {
+	result := &PluginBatchDeployResult{Total: len(instances) + skipped, Skipped: skipped, Results: []PluginBatchDeployInstanceResult{}}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, instanceBatchConcurrency)
+	for i := range instances {
+		inst := instances[i]
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			item := s.deployPluginBatchOne(&inst, assets)
+			mu.Lock()
+			appendPluginBatchResult(result, item)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	sort.Slice(result.Results, func(i, j int) bool { return result.Results[i].ID < result.Results[j].ID })
+	return result
+}
+
+func appendPluginBatchResult(result *PluginBatchDeployResult, item PluginBatchDeployInstanceResult) {
+	result.Results = append(result.Results, item)
+	if item.Skipped {
+		result.Skipped++
+		return
+	}
+	if item.Error != "" {
+		result.Failed++
+		return
+	}
+	result.Success++
+}
+
+func (s *PluginService) deployPluginBatchOne(inst *model.Instance, assets []pluginBatchAsset) PluginBatchDeployInstanceResult {
+	item := PluginBatchDeployInstanceResult{ID: inst.ID, Name: inst.Name}
+	if inst.WorkDir == "" {
+		item.Skipped = true
+		item.Reason = ErrWorkDirNotSet.Error()
+		return item
+	}
+	if inst.Node.Status != model.NodeStatusOnline {
+		item.Error = ErrNodeNotOnline.Error()
+		return item
+	}
+	worker, ok := s.workerFor(inst.Node.UUID)
+	if !ok {
+		item.Error = ErrNodeNotConnected.Error()
+		return item
+	}
+	if err := writePluginBatchAssets(inst.UUID, worker, assets); err != nil {
+		item.Error = err.Error()
+	}
+	return item
+}
+
+func writePluginBatchAssets(instanceUUID string, worker pluginWorkerOps, assets []pluginBatchAsset) error {
+	for _, asset := range assets {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		resp, err := worker.WriteFile(ctx, &workerpb.WriteFileRequest{InstanceUuid: instanceUUID, Path: "plugins/" + asset.Filename, Content: asset.Content})
+		cancel()
+		if err != nil {
+			return fmt.Errorf("部署插件 %s 失败: %w", asset.Filename, err)
+		}
+		if !resp.Success {
+			return fmt.Errorf("部署插件 %s 失败: %s", asset.Filename, resp.Error)
+		}
+	}
+	return nil
+}
+
+func (s *PluginService) loadPluginBatchAssets(assetIDs []uint) ([]pluginBatchAsset, error) {
+	if s.asset == nil {
+		return nil, ErrPluginAssetFileUnavailable
+	}
+	if len(assetIDs) == 0 {
+		return nil, ErrPluginAssetRequired
+	}
+	out := make([]pluginBatchAsset, 0, len(assetIDs))
+	for _, id := range assetIDs {
+		asset, err := s.loadPluginBatchAsset(id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *asset)
+	}
+	return out, nil
+}
+
+func (s *PluginService) loadPluginBatchAsset(assetID uint) (*pluginBatchAsset, error) {
+	asset, err := s.asset.GetByID(assetID)
+	if err != nil {
+		return nil, err
+	}
+	filename, err := pluginAssetFilename(asset)
+	if err != nil {
+		return nil, err
+	}
+	content, err := readPluginAssetContent(s.asset, asset)
+	if err != nil {
+		return nil, err
+	}
+	return &pluginBatchAsset{ID: asset.ID, Filename: filename, Content: content}, nil
+}
+
+func pluginAssetFilename(asset *model.Asset) (string, error) {
+	if asset.Type != model.AssetTypePlugin {
+		return "", ErrInvalidPluginAsset
+	}
+	filename := strings.TrimSpace(asset.Filename)
+	if filename == "" {
+		filename = strings.TrimSpace(asset.Name)
+	}
+	if err := validatePluginName(filename); err != nil {
+		return "", ErrInvalidPluginAsset
+	}
+	return filename, nil
+}
+
+func readPluginAssetContent(assetSvc *AssetService, asset *model.Asset) ([]byte, error) {
+	path := assetSvc.AbsPath(asset)
+	if path == "" {
+		return nil, ErrPluginAssetFileUnavailable
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrPluginAssetFileUnavailable, err)
+	}
+	return content, nil
+}
+
+func (s *PluginService) resolvePluginBatchTargets(req PluginBatchDeployRequest, scopeIDs []uint, scope bool) ([]model.Instance, int, error) {
+	if len(req.IDs) == 0 && req.Filter == nil {
+		return nil, 0, ErrPluginTargetRequired
+	}
+	if len(req.IDs) > 0 && req.Filter != nil {
+		return nil, 0, fmt.Errorf("ids 与 filter 只能指定一个")
+	}
+	return s.queryPluginBatchTargets(req, scopeIDs, scope)
+}
+
+func (s *PluginService) queryPluginBatchTargets(req PluginBatchDeployRequest, scopeIDs []uint, scope bool) ([]model.Instance, int, error) {
+	if len(req.IDs) > 0 {
+		return s.queryPluginBatchTargetIDs(req.IDs, scopeIDs, scope)
+	}
+	f := InstanceBatchFilter{}
+	if req.Filter != nil {
+		f = *req.Filter
+	}
+	var instances []model.Instance
+	q := applyInstanceBatchFilter(s.db.Model(&model.Instance{}).Preload("Node"), f, scopeIDs, scope)
+	if err := q.Limit(maxInstanceBatchTargets + 1).Find(&instances).Error; err != nil {
+		return nil, 0, fmt.Errorf("查询批量目标失败: %w", err)
+	}
+	return instances, 0, nil
+}
+
+func (s *PluginService) queryPluginBatchTargetIDs(ids []uint, scopeIDs []uint, scope bool) ([]model.Instance, int, error) {
+	var instances []model.Instance
+	q := applyInstanceBatchFilter(s.db.Model(&model.Instance{}).Preload("Node"), InstanceBatchFilter{}, scopeIDs, scope)
+	if err := q.Where("instances.id IN ?", ids).Find(&instances).Error; err != nil {
+		return nil, 0, fmt.Errorf("查询批量目标失败: %w", err)
+	}
+	skipped := len(ids) - len(instances)
+	if skipped < 0 {
+		skipped = 0
+	}
+	return instances, skipped, nil
+}
+
 // Delete 删除实例插件目录下的指定插件（同时匹配启用/禁用两种文件名）。
 // name 为展示名（不含 `.disabled`）；dir 为空时默认 plugins/。
 func (s *PluginService) Delete(instanceID uint, dir, name string) error {
@@ -261,7 +490,7 @@ func (s *PluginService) workerFor(nodeUUID string) (pluginWorkerOps, bool) {
 }
 
 // client 加载实例及其节点的 Worker 文件操作句柄，沿用 file/config 服务的校验
-//（workDir 必须存在、节点在线且已连接）。
+// （workDir 必须存在、节点在线且已连接）。
 func (s *PluginService) client(instanceID uint) (*model.Instance, pluginWorkerOps, error) {
 	var inst model.Instance
 	if err := s.db.Preload("Node").First(&inst, instanceID).Error; err != nil {
