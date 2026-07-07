@@ -5,10 +5,12 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
 
+	"github.com/wcpe/JianManager/internal/platform/onetimetoken"
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
@@ -37,6 +39,7 @@ type TerminalSession struct {
 type TerminalServer struct {
 	jwtSecret string
 	upgrader  websocket.Upgrader
+	tokens    *onetimetoken.Store
 	mu        sync.RWMutex
 	sessions  map[string][]*TerminalSession
 	buffers   map[string]*daemon.RingBuffer // per-instance 环形缓冲区
@@ -48,6 +51,7 @@ type TerminalServer struct {
 func NewTerminalServer(jwtSecret string) *TerminalServer {
 	return &TerminalServer{
 		jwtSecret: jwtSecret,
+		tokens:    onetimetoken.NewStore(),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -91,9 +95,19 @@ func (s *TerminalServer) Handler() http.HandlerFunc {
 			http.Error(w, "token 缺少 instanceId", http.StatusBadRequest)
 			return
 		}
+		expiresAt, ok := terminalWSExpiresAt(claims)
+		if !ok {
+			http.Error(w, "token 缺少过期时间", http.StatusUnauthorized)
+			return
+		}
+		if !s.tokens.Consume(tokenStr, expiresAt) {
+			http.Error(w, "token 已被使用", http.StatusUnauthorized)
+			return
+		}
 
 		conn, err := s.upgrader.Upgrade(w, r, nil)
 		if err != nil {
+			s.tokens.Release(tokenStr)
 			slog.Error("WebSocket 升级失败", "error", err)
 			return
 		}
@@ -229,4 +243,12 @@ func (s *TerminalServer) GetSessionCount(instanceID string) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.sessions[instanceID])
+}
+
+func terminalWSExpiresAt(claims jwt.MapClaims) (time.Time, bool) {
+	expiresAt, err := claims.GetExpirationTime()
+	if err != nil || expiresAt == nil {
+		return time.Time{}, false
+	}
+	return expiresAt.Time, true
 }

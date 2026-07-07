@@ -46,11 +46,10 @@ func (s *TerminalService) IssueToken(instanceID uint, permission, requestHost st
 		return nil, ErrNodeNotFound
 	}
 
-	// 签发 10min 有效期的 token。
-	// 仅在 WS 握手时校验一次，连上后长期有效；前端按会话缓存复用同一 token，
-	// 故 TTL 须明显大于前端缓存窗口，否则重开/重连会用到过期 token 致握手失败。
+	// 签发 30s 有效期的一次性 token，仅用于完成一次 WS 握手。
+	// 连接建立后不再重复校验，长时间终端会话由已建立的 WebSocket 自身承载。
 	now := time.Now()
-	const terminalTokenTTL = 10 * time.Minute
+	const terminalTokenTTL = 30 * time.Second
 	claims := jwt.MapClaims{
 		"instanceId": instance.UUID,
 		"permission": permission, // read 或 write

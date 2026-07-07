@@ -6,9 +6,12 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
+
+	"github.com/wcpe/JianManager/internal/platform/onetimetoken"
 )
 
 // TerminalProxy WebSocket 终端代理。
@@ -17,6 +20,7 @@ type TerminalProxy struct {
 	jwtSecret string
 	terminal  *TerminalService
 	upgrader  websocket.Upgrader
+	tokens    *onetimetoken.Store
 }
 
 // NewTerminalProxy 创建终端代理。
@@ -24,6 +28,7 @@ func NewTerminalProxy(jwtSecret string, terminal *TerminalService) *TerminalProx
 	return &TerminalProxy{
 		jwtSecret: jwtSecret,
 		terminal:  terminal,
+		tokens:    onetimetoken.NewStore(),
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
@@ -60,6 +65,11 @@ func (p *TerminalProxy) Handler() http.HandlerFunc {
 			http.Error(w, "missing instanceId", http.StatusBadRequest)
 			return
 		}
+		expiresAt, ok := terminalTokenExpiresAt(claims)
+		if !ok {
+			http.Error(w, "invalid token expiration", http.StatusUnauthorized)
+			return
+		}
 
 		// 2. 查找 Worker WS 地址
 		workerWSURL, err := p.terminal.GetWorkerAddr(instanceUUID)
@@ -68,10 +78,15 @@ func (p *TerminalProxy) Handler() http.HandlerFunc {
 			http.Error(w, "instance not found", http.StatusNotFound)
 			return
 		}
+		if !p.tokens.Consume(tokenStr, expiresAt) {
+			http.Error(w, "token already used", http.StatusUnauthorized)
+			return
+		}
 
 		// 3. 升级浏览器连接
 		browserConn, err := p.upgrader.Upgrade(w, r, nil)
 		if err != nil {
+			p.tokens.Release(tokenStr)
 			return
 		}
 		defer browserConn.Close()
@@ -80,6 +95,7 @@ func (p *TerminalProxy) Handler() http.HandlerFunc {
 		workerURL := fmt.Sprintf("%s?token=%s", workerWSURL, tokenStr)
 		workerConn, _, err := websocket.DefaultDialer.Dial(workerURL, nil)
 		if err != nil {
+			p.tokens.Release(tokenStr)
 			slog.Error("连接 Worker WS 失败", "url", workerURL, "error", err)
 			browserConn.WriteMessage(websocket.TextMessage,
 				[]byte(fmt.Sprintf(`{"type":"state","state":"error","data":"连接 Worker 失败: %s"}`, err.Error())))
@@ -129,4 +145,12 @@ func (p *TerminalProxy) Handler() http.HandlerFunc {
 		wg.Wait()
 		slog.Info("终端代理已关闭", "instanceUUID", instanceUUID)
 	}
+}
+
+func terminalTokenExpiresAt(claims jwt.MapClaims) (time.Time, bool) {
+	expiresAt, err := claims.GetExpirationTime()
+	if err != nil || expiresAt == nil {
+		return time.Time{}, false
+	}
+	return expiresAt.Time, true
 }
