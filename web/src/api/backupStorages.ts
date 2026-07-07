@@ -16,7 +16,19 @@ export interface BackupStorage {
   /** Secret Key 的环境变量引用 */
   secretKeyEnv: string
   useSsl: boolean
+  /** 已完成备份份数（后端聚合，不落库存储记录）。 */
+  backupCount: number
+  /** 已完成备份占用字节数（后端聚合，不落库存储记录）。 */
+  usedBytes: number
   createdAt: string
+}
+
+export interface BackupStorageTestResult {
+  ok: boolean
+  message: string
+  errorCode?: string
+  latencyMs: number
+  nodeUuid?: string
 }
 
 /** 创建存储后端请求体。 */
@@ -55,5 +67,14 @@ export function useDeleteBackupStorage() {
   return useMutation({
     mutationFn: (id: number) => api.delete(`/backup-storages/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['backup-storages'] }),
+  })
+}
+
+export function useTestBackupStorage() {
+  return useMutation({
+    mutationFn: async (id: number) => {
+      const { data } = await api.post<BackupStorageTestResult>(`/backup-storages/${id}/test`)
+      return { id, result: data }
+    },
   })
 }

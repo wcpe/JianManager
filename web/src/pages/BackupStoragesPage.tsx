@@ -5,7 +5,9 @@ import {
   useBackupStorages,
   useCreateBackupStorage,
   useDeleteBackupStorage,
+  useTestBackupStorage,
   type BackupStorage,
+  type BackupStorageTestResult,
   type CreateBackupStorageBody,
 } from '@/api/backupStorages'
 import { Badge } from '@jianmanager/ui/components/badge'
@@ -33,6 +35,20 @@ const emptyForm: CreateBackupStorageBody = {
   accessKeyEnv: '', secretKeyEnv: '', useSsl: true,
 }
 
+function formatBytes(bytes: number | undefined) {
+  const value = Number(bytes ?? 0)
+  if (value < 1024) return `${value} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let current = value / 1024
+  for (const unit of units) {
+    if (current < 1024 || unit === 'TB') {
+      return `${current.toFixed(current >= 10 ? 0 : 1)} ${unit}`
+    }
+    current /= 1024
+  }
+  return `${value} B`
+}
+
 /**
  * 备份远程存储后端管理页（FR-057）。
  * 凭证以 ${ENV_VAR} 形式引用环境变量，不收明文（config-files.md）；仅平台管理员可访问。
@@ -42,9 +58,11 @@ export default function BackupStoragesPage() {
   const { data: storages, isLoading } = useBackupStorages()
   const create = useCreateBackupStorage()
   const del = useDeleteBackupStorage()
+  const testStorage = useTestBackupStorage()
   const [form, setForm] = useState<CreateBackupStorageBody>(emptyForm)
   const [showForm, setShowForm] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
+  const [testResults, setTestResults] = useState<Record<number, BackupStorageTestResult>>({})
 
   const set = (k: keyof CreateBackupStorageBody, v: string | boolean) => setForm((f) => ({ ...f, [k]: v }))
 
@@ -86,6 +104,21 @@ export default function BackupStoragesPage() {
       },
     })
     setDeleteTarget(null)
+  }
+
+  const handleTest = async (id: number) => {
+    try {
+      const { result } = await testStorage.mutateAsync(id)
+      setTestResults((prev) => ({ ...prev, [id]: result }))
+      if (result.ok) {
+        toast.success(t('backupStorages.testSuccess', '连接成功'))
+      } else {
+        toast.error(result.message || t('backupStorages.testFailed', '连接失败'))
+      }
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+      toast.error(msg || t('backupStorages.testFailed', '连接失败'))
+    }
   }
 
   return (
@@ -188,32 +221,57 @@ export default function BackupStoragesPage() {
               <TableHead>{t('backupStorages.endpoint', 'Endpoint')}</TableHead>
               <TableHead>{t('backupStorages.prefix', '前缀')}</TableHead>
               <TableHead>{t('backupStorages.accessKeyEnv', 'Access Key 环境变量')}</TableHead>
+              <TableHead className="text-right">{t('backupStorages.backupCount', '备份数')}</TableHead>
+              <TableHead className="text-right">{t('backupStorages.usedSpace', '已用空间')}</TableHead>
               <TableHead className="text-right">{t('backupStorages.actions', '操作')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {(storages ?? []).map((s: BackupStorage) => (
-              <TableRow key={s.id}>
-                <TableCell className="font-medium">{s.name}</TableCell>
-                <TableCell><Badge variant="outline">{s.type.toUpperCase()}</Badge></TableCell>
-                <TableCell className="font-mono text-xs">{s.endpoint}{s.bucket ? ` / ${s.bucket}` : ''}</TableCell>
-                <TableCell>{s.prefix || '-'}</TableCell>
-                <TableCell className="font-mono text-xs">{s.accessKeyEnv || '-'}</TableCell>
-                <TableCell className="text-right">
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="text-status-danger hover:text-status-danger"
-                    onClick={() => setDeleteTarget(s.id)}
-                  >
-                    {t('common.delete', '删除')}
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
+            {(storages ?? []).map((s: BackupStorage) => {
+              const result = testResults[s.id]
+              const testing = testStorage.isPending && testStorage.variables === s.id
+              return (
+                <TableRow key={s.id}>
+                  <TableCell className="font-medium">{s.name}</TableCell>
+                  <TableCell><Badge variant="outline">{s.type.toUpperCase()}</Badge></TableCell>
+                  <TableCell className="font-mono text-xs">{s.endpoint}{s.bucket ? ` / ${s.bucket}` : ''}</TableCell>
+                  <TableCell>{s.prefix || '-'}</TableCell>
+                  <TableCell className="font-mono text-xs">{s.accessKeyEnv || '-'}</TableCell>
+                  <TableCell className="text-right tabular-nums">{s.backupCount ?? 0}</TableCell>
+                  <TableCell className="text-right tabular-nums">{formatBytes(s.usedBytes)}</TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      {result && (
+                        <span className={result.ok ? 'text-xs text-status-success' : 'text-xs text-status-danger'}>
+                          {result.ok
+                            ? t('backupStorages.testOkWithLatency', '连通 {{latency}} ms', { latency: result.latencyMs })
+                            : result.message}
+                        </span>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        disabled={testing}
+                        onClick={() => handleTest(s.id)}
+                      >
+                        {testing ? t('backupStorages.testing', '测试中…') : t('backupStorages.testConnection', '测试连接')}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        className="text-status-danger hover:text-status-danger"
+                        onClick={() => setDeleteTarget(s.id)}
+                      >
+                        {t('common.delete', '删除')}
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
             {(!storages || storages.length === 0) && !isLoading && (
               <TableRow>
-                <TableCell colSpan={6} className="h-16 text-center text-muted-foreground">{t('backupStorages.empty', '暂无存储后端')}</TableCell>
+                <TableCell colSpan={8} className="h-16 text-center text-muted-foreground">{t('backupStorages.empty', '暂无存储后端')}</TableCell>
               </TableRow>
             )}
           </TableBody>

@@ -43,10 +43,13 @@ type BackupStorage struct {
 	SecretKeyEnv string `gorm:"type:varchar(255)" json:"secretKeyEnv"`
 	// UseSSL S3 是否启用 TLS。默认由应用层（router/service）设为 true；
 	// 不用 gorm default:true，否则 GORM 会把显式 false（零值）覆盖回 true。
-	UseSSL    bool           `json:"useSsl"`
-	CreatedAt time.Time      `json:"createdAt"`
-	UpdatedAt time.Time      `json:"updatedAt"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	UseSSL bool `json:"useSsl"`
+	// BackupCount/UsedBytes 为 FR-152 列表聚合展示字段，不落库。
+	BackupCount int64          `gorm:"-" json:"backupCount"`
+	UsedBytes   int64          `gorm:"-" json:"usedBytes"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	UpdatedAt   time.Time      `json:"updatedAt"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // ValidBackupStorageType 校验后端类型是否在允许枚举内（local 仅用于占位，不作为远程后端创建）。

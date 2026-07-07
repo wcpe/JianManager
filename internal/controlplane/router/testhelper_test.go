@@ -74,6 +74,9 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 	nodeSvc.SetInstanceService(instanceSvc)
 	// 制品库需要数据根；测试用临时根，进程退出后由 OS 回收。
 	root, _ := dataroot.Init(filepath.Join(os.TempDir(), "jm-test-"+strconv.FormatInt(time.Now().UnixNano(), 10)))
+	assetSvc := service.NewAssetService(db, root)
+	backupStorageSvc := service.NewBackupStorageService(db, pool)
+	backupStorageSvc.SetDataRoot(root)
 	svcs := &Services{
 		Auth:          service.NewAuthService(db, jwtCfg),
 		User:          service.NewUserService(db),
@@ -88,17 +91,19 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 		Terminal:      service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),
 		File:          fileSvc,
 		FileVersion:   fileVersionSvc,
+		Plugin:        service.NewPluginService(db, pool, assetSvc),
 		Config:        configSvc,
 		Bot:           service.NewBotService(db, pool),
 		Alert:         service.NewAlertService(db),
 		AlertChannel:  service.NewAlertChannelService(db),
 		Schedule:      service.NewScheduleService(db),
 		Backup:        service.NewBackupService(db, pool),
+		BackupStorage: backupStorageSvc,
 		Template:      service.NewTemplateService(db),
 		Audit:         service.NewAuditService(db),
 		Authz:         authzSvc,
 		Business:      service.NewBusinessService(db, pool),
-		Asset:         service.NewAssetService(db, root),
+		Asset:         assetSvc,
 		RuntimeAssets: service.NewRuntimeAssetsService(db),
 		Storage:       service.NewStorageService(db, root),
 		Log:           service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),

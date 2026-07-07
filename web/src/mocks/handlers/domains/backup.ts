@@ -69,6 +69,8 @@ const backupStorages = db<BackupStorage>('backupStorages', () => [
     accessKeyEnv: '${JIANMANAGER_BACKUP_S3_AK}',
     secretKeyEnv: '${JIANMANAGER_BACKUP_S3_SK}',
     useSsl: true,
+    backupCount: 1,
+    usedBytes: 268435456,
     createdAt: '2026-05-20T08:00:00Z',
   },
   {
@@ -82,6 +84,8 @@ const backupStorages = db<BackupStorage>('backupStorages', () => [
     accessKeyEnv: '${JIANMANAGER_BACKUP_SFTP_USER}',
     secretKeyEnv: '${JIANMANAGER_BACKUP_SFTP_PASS}',
     useSsl: false,
+    backupCount: 0,
+    usedBytes: 0,
     createdAt: '2026-05-21T08:00:00Z',
   },
 ])
@@ -215,9 +219,23 @@ export const handlers = [
       accessKeyEnv: body.accessKeyEnv ?? '',
       secretKeyEnv: body.secretKeyEnv ?? '',
       useSsl: body.useSsl ?? true,
+      backupCount: 0,
+      usedBytes: 0,
       createdAt: new Date().toISOString(),
     })
     return HttpResponse.json(created, { status: 201 })
+  }),
+
+  domainRoute('post', '/backup-storages/:id/test', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const storage = backupStorages.get(id)
+    if (!storage) return HttpResponse.json({ error: 'NOT_FOUND', message: '存储后端不存在' }, { status: 404 })
+    if (id === 2) {
+      return HttpResponse.json({ ok: false, message: '认证失败：请检查环境变量凭证', errorCode: 'AUTH_FAILED', latencyMs: 18, nodeUuid: 'mock-node-1' })
+    }
+    return HttpResponse.json({ ok: true, message: '连接成功', latencyMs: 32, nodeUuid: 'mock-node-1' })
   }),
 
   domainRoute('delete', '/backup-storages/:id', (info) => {

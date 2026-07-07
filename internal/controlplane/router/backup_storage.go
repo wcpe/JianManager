@@ -20,7 +20,7 @@ func NewBackupStorageHandler(svc *service.BackupStorageService) *BackupStorageHa
 }
 
 func (h *BackupStorageHandler) List(c *gin.Context) {
-	items, err := h.svc.List()
+	items, err := h.svc.ListWithStats()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
 		return
@@ -94,11 +94,57 @@ func (h *BackupStorageHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
 }
 
+func (h *BackupStorageHandler) Stats(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	stats, err := h.svc.Stats(id)
+	if err != nil {
+		if errors.Is(err, service.ErrStorageNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+	c.JSON(http.StatusOK, stats)
+}
+
+func (h *BackupStorageHandler) LocalStats(c *gin.Context) {
+	stats, err := h.svc.LocalStats()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+	c.JSON(http.StatusOK, stats)
+}
+
+func (h *BackupStorageHandler) TestConnection(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	result, err := h.svc.TestConnection(id)
+	if err != nil {
+		if errors.Is(err, service.ErrStorageNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 func (h *BackupStorageHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	g := rg.Group("/backup-storages")
 	{
 		g.GET("", h.List)
 		g.POST("", h.Create)
+		g.GET("/local/stats", h.LocalStats)
+		g.GET("/:id/stats", h.Stats)
+		g.POST("/:id/test", h.TestConnection)
 		g.DELETE("/:id", h.Delete)
 	}
 }

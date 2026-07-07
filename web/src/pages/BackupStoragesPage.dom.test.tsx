@@ -31,6 +31,22 @@ describe('BackupStoragesPage（mock）', () => {
     expect(screen.getByText('sftp-offsite')).toBeInTheDocument()
     // 凭证以 ${ENV_VAR} 引用展示，不返回明文（FR-057）。
     expect(screen.getByText('${JIANMANAGER_BACKUP_S3_AK}')).toBeInTheDocument()
+    expect(screen.getByText('备份数')).toBeInTheDocument()
+    expect(screen.getByText('已用空间')).toBeInTheDocument()
+    expect(screen.getByText('256 MB')).toBeInTheDocument()
+  })
+
+  it('行内测试连接展示成功与失败反馈', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<BackupStoragesPage />)
+    await screen.findByText('s3-primary')
+
+    const buttons = screen.getAllByRole('button', { name: '测试连接' })
+    await user.click(buttons[0])
+    expect(await screen.findByText('连通 32 ms')).toBeInTheDocument()
+
+    await user.click(buttons[1])
+    expect(await screen.findByText('认证失败：请检查环境变量凭证')).toBeInTheDocument()
   })
 
   it('新建存储后端 → 列表联动出现新行', async () => {
