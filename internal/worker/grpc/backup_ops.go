@@ -4,11 +4,13 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/storage"
 	"github.com/wcpe/JianManager/proto/workerpb"
@@ -143,6 +145,43 @@ func (s *Server) RestoreBackup(ctx context.Context, req *workerpb.RestoreBackupR
 	}
 
 	return &workerpb.RestoreBackupResponse{Success: true, RestoredFiles: restored}, nil
+}
+
+// TestStorageBackend 对远程备份存储做一次非破坏性读写删除探测。
+func (s *Server) TestStorageBackend(ctx context.Context, req *workerpb.TestStorageBackendRequest) (*workerpb.TestStorageBackendResponse, error) {
+	if req.Storage == nil || strings.TrimSpace(req.Storage.Type) == "" || req.Storage.Type == storage.TypeLocal {
+		return &workerpb.TestStorageBackendResponse{Success: false, Error: "缺少远程存储参数", ErrorCode: "CONFIG_INVALID"}, nil
+	}
+	started := time.Now()
+	if err := storage.Probe(ctx, specToConfig(req.Storage)); err != nil {
+		return &workerpb.TestStorageBackendResponse{
+			Success:   false,
+			Error:     err.Error(),
+			LatencyMs: time.Since(started).Milliseconds(),
+			ErrorCode: classifyStorageProbeError(err),
+		}, nil
+	}
+	return &workerpb.TestStorageBackendResponse{Success: true, LatencyMs: time.Since(started).Milliseconds()}, nil
+}
+
+func classifyStorageProbeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return "TIMEOUT"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "401") || strings.Contains(msg, "403") || strings.Contains(msg, "unauthorized") || strings.Contains(msg, "forbidden") || strings.Contains(msg, "permission"):
+		return "AUTH_FAILED"
+	case strings.Contains(msg, "no such host") || strings.Contains(msg, "connection") || strings.Contains(msg, "connect") || strings.Contains(msg, "refused"):
+		return "NETWORK_ERROR"
+	case strings.Contains(msg, "不支持") || strings.Contains(msg, "无需远程"):
+		return "CONFIG_INVALID"
+	default:
+		return "PROBE_FAILED"
+	}
 }
 
 // uploadFile 把本地归档以 key 上传到远程后端（流式，不全量载入内存）。

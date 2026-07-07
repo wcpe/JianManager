@@ -83,6 +83,8 @@ service WorkerService {
   rpc ProbeJDK(ProbeJDKRequest) returns (ProbeJDKResponse);
   // DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
   rpc DownloadCore(DownloadCoreRequest) returns (DownloadCoreResponse);
+  // InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
+  rpc InstallForgeServer(InstallForgeServerRequest) returns (InstallForgeServerResponse);
 
   // === 节点制品缓存（FR-178）===
   //
@@ -124,6 +126,8 @@ service WorkerService {
   // RestoreBackup 按备份链顺序（全量基 + 各增量）回放归档到实例工作目录；
   // 远程归档先据 storage 拉回本地再回放。
   rpc RestoreBackup(RestoreBackupRequest) returns (RestoreBackupResponse);
+  // TestStorageBackend 对远程备份存储做一次非破坏性读写删除探测（FR-152）。
+  rpc TestStorageBackend(TestStorageBackendRequest) returns (TestStorageBackendResponse);
 
   // === Bot 操作 ===
 
@@ -797,6 +801,23 @@ message DownloadCoreResponse {
   int64 size = 3;
 }
 
+message InstallForgeServerRequest {
+  string instance_uuid = 1;
+  string forge_installer_url = 2;
+  string forge_installer_sha256 = 3; // 可选；非空时校验 Forge installer
+  string spongeforge_url = 4;
+  string spongeforge_sha256 = 5;     // 可选；非空时校验 SpongeForge mod
+  string spongeforge_filename = 6;   // 默认 SpongeForge.jar，落到 mods/ 下
+  string launch_jar = 7;             // 预期 Forge 服务端启动 jar（如 forge-<ver>-server.jar）
+}
+
+message InstallForgeServerResponse {
+  bool success = 1;
+  string error = 2;
+  string launch_jar = 3;
+  int64 spongeforge_size = 4;
+}
+
 // === 节点制品缓存（FR-178） ===
 
 // ArtifactCacheItem 一条节点本地制品缓存项（meta 缺失时 name/version 为空、size 取 blob 实际大小）。
@@ -887,6 +908,9 @@ message DeployServerProbeRequest {
   bytes jar = 2;
   // config_yaml 生成的 plugins/ServerProbe/config.yml 内容（已按分配端口开启 /metrics）。
   string config_yaml = 3;
+  // libraries_zip 是构建期预置的 ServerProbe 运行库缓存包（zip 内根路径为 libraries/）。
+  // Worker 解压到实例工作目录根，避免探针首启联网拉 TabooLib/Kotlin 依赖（FR-114）。
+  bytes libraries_zip = 4;
 }
 
 message DeployServerProbeResponse {
@@ -1003,6 +1027,17 @@ message RestoreBackupResponse {
   bool success = 1;
   string error = 2;
   int64 restored_files = 3;          // 回放写入的文件数
+}
+
+message TestStorageBackendRequest {
+  StorageBackendSpec storage = 1;
+}
+
+message TestStorageBackendResponse {
+  bool success = 1;
+  string error = 2;
+  int64 latency_ms = 3;
+  string error_code = 4;
 }
 
 // === 插件桥（ServerProbe 反向 WS ↔ Worker，FR-065，见 ADR-016）===

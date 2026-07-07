@@ -98,6 +98,89 @@ func TestDownloadCore_LocalStub(t *testing.T) {
 // TestDownloadCore_CacheHitSkipsNetwork 验证节点制品缓存（FR-178）：
 // 同一 sha256 第一次下载落地后存入缓存；删掉工作目录文件、关掉下载源后再建实例，
 // 应从缓存秒拷命中、完全不走网络（命中痛点：删实例再建免重下大 jar）。
+func TestInstallForgeServer_InstallsForgeAndSpongeForge(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)
+	ctx := context.Background()
+
+	const uuid = "33333333-3333-3333-3333-333333333333"
+	workDir := filepath.Join(tmp, "forge-inst")
+	createResp, err := srv.CreateInstance(ctx, &workerpb.CreateInstanceRequest{
+		InstanceUuid: uuid,
+		Name:         "forge",
+		StartCommand: "noop",
+		WorkDir:      workDir,
+		ProcessType:  "direct",
+		JdkPath:      filepath.Join(tmp, "jdk"),
+	})
+	require.NoError(t, err)
+	require.True(t, createResp.Success, createResp.Error)
+
+	installer := []byte("fake-forge-installer")
+	mod := []byte("fake-spongeforge-mod")
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/installer.jar":
+			_, _ = w.Write(installer)
+		case "/spongeforge.jar":
+			_, _ = w.Write(mod)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	oldRunner := runForgeInstaller
+	runForgeInstaller = func(_ context.Context, javaBin, _ string, gotWorkDir string, env []string) ([]byte, error) {
+		require.Contains(t, javaBin, filepath.Join("jdk", "bin"))
+		require.Equal(t, workDir, gotWorkDir)
+		require.NotEmpty(t, env)
+		return []byte("安装完成"), os.WriteFile(filepath.Join(gotWorkDir, "forge-1.21.1-52.1.5-server.jar"), []byte("forge-server"), 0o644)
+	}
+	t.Cleanup(func() { runForgeInstaller = oldRunner })
+
+	resp, err := srv.InstallForgeServer(ctx, &workerpb.InstallForgeServerRequest{
+		InstanceUuid:        uuid,
+		ForgeInstallerUrl:   ts.URL + "/installer.jar",
+		SpongeforgeUrl:      ts.URL + "/spongeforge.jar",
+		SpongeforgeFilename: "SpongeForge.jar",
+		LaunchJar:           "forge-1.21.1-52.1.5-server.jar",
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Success, resp.Error)
+	require.Equal(t, "forge-1.21.1-52.1.5-server.jar", resp.LaunchJar)
+	require.Equal(t, int64(len(mod)), resp.SpongeforgeSize)
+
+	got, readErr := os.ReadFile(filepath.Join(workDir, "mods", "SpongeForge.jar"))
+	require.NoError(t, readErr)
+	assert.Equal(t, mod, got)
+	_, statErr := os.Stat(filepath.Join(workDir, ".jianmanager", "forge-installer.jar"))
+	require.NoError(t, statErr)
+}
+
+func TestInstallForgeServer_RejectsUnsafeFilenames(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)
+	ctx := context.Background()
+	const uuid = "44444444-4444-4444-4444-444444444444"
+	createResp, err := srv.CreateInstance(ctx, &workerpb.CreateInstanceRequest{
+		InstanceUuid: uuid, Name: "forge", StartCommand: "noop", WorkDir: filepath.Join(tmp, "forge-bad"), ProcessType: "direct",
+	})
+	require.NoError(t, err)
+	require.True(t, createResp.Success, createResp.Error)
+
+	resp, err := srv.InstallForgeServer(ctx, &workerpb.InstallForgeServerRequest{
+		InstanceUuid:        uuid,
+		ForgeInstallerUrl:   "https://example.invalid/installer.jar",
+		SpongeforgeUrl:      "https://example.invalid/spongeforge.jar",
+		SpongeforgeFilename: "../SpongeForge.jar",
+		LaunchJar:           "forge.jar",
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Success)
+	assert.Contains(t, resp.Error, "非法")
+}
+
 func TestDownloadCore_CacheHitSkipsNetwork(t *testing.T) {
 	tmp := t.TempDir()
 	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)

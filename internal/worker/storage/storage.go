@@ -7,10 +7,12 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"strings"
+	"time"
 )
 
 // 后端类型常量。local 表示不外置（归档仅留在节点本地数据根）。
@@ -57,6 +59,40 @@ func New(cfg Config) (Backend, error) {
 	default:
 		return nil, fmt.Errorf("不支持的存储后端类型: %s", cfg.Type)
 	}
+}
+
+// Probe 执行一次小对象上传、下载校验与删除，验证后端读写删除权限。
+func Probe(ctx context.Context, cfg Config) error {
+	backend, err := New(cfg)
+	if err != nil {
+		return err
+	}
+	payload := []byte("jianmanager-storage-probe")
+	key := ObjectKey(cfg.Prefix, "_jm_probe", fmt.Sprintf("%d", time.Now().UnixNano()))
+	if err := backend.Upload(ctx, key, bytes.NewReader(payload), int64(len(payload))); err != nil {
+		return err
+	}
+
+	rc, err := backend.Download(ctx, key)
+	if err != nil {
+		_ = backend.Delete(ctx, key)
+		return err
+	}
+	got, readErr := io.ReadAll(rc)
+	closeErr := rc.Close()
+	if readErr != nil {
+		_ = backend.Delete(ctx, key)
+		return readErr
+	}
+	if closeErr != nil {
+		_ = backend.Delete(ctx, key)
+		return closeErr
+	}
+	if !bytes.Equal(got, payload) {
+		_ = backend.Delete(ctx, key)
+		return fmt.Errorf("探测对象内容校验失败")
+	}
+	return backend.Delete(ctx, key)
 }
 
 // ObjectKey 组合远程对象键：<prefix>/<instanceUUID>/<backupUUID>.tar.gz。

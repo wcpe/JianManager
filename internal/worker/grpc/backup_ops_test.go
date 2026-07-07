@@ -3,13 +3,19 @@ package grpc
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
@@ -49,6 +55,65 @@ func manifestMap(m []*workerpb.BackupManifestEntry) map[string]*workerpb.BackupM
 		out[e.Path] = e
 	}
 	return out
+}
+
+func TestStorageBackend_WebDAVSuccess(t *testing.T) {
+	objects := map[string][]byte{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, p, ok := r.BasicAuth()
+		if !ok || u != "u" || p != "p" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.Method {
+		case "MKCOL":
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodPut:
+			body, _ := io.ReadAll(r.Body)
+			objects[r.URL.Path] = body
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodGet:
+			body, ok := objects[r.URL.Path]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_, _ = w.Write(body)
+		case http.MethodDelete:
+			delete(objects, r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer srv.Close()
+
+	s := NewServer(process.NewManager(t.TempDir()), "node-test", nil, nil, nil)
+	resp, err := s.TestStorageBackend(context.Background(), &workerpb.TestStorageBackendRequest{Storage: &workerpb.StorageBackendSpec{
+		Type: "webdav", Endpoint: srv.URL + "/backups", Prefix: "jm", AccessKey: "u", SecretKey: "p",
+	}})
+	require.NoError(t, err)
+	require.True(t, resp.Success, resp.Error)
+	require.Empty(t, objects)
+}
+
+func TestStorageBackend_WebDAVAuthFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.TrimSpace(r.Header.Get("Authorization")) == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	s := NewServer(process.NewManager(t.TempDir()), "node-test", nil, nil, nil)
+	resp, err := s.TestStorageBackend(context.Background(), &workerpb.TestStorageBackendRequest{Storage: &workerpb.StorageBackendSpec{
+		Type: "webdav", Endpoint: srv.URL, AccessKey: "u", SecretKey: "bad",
+	}})
+	require.NoError(t, err)
+	require.False(t, resp.Success)
+	require.Equal(t, "AUTH_FAILED", resp.ErrorCode)
 }
 
 // TestWriteBackupArchive_FullCapturesAllFiles 全量备份打包全部常规文件并产出完整清单。

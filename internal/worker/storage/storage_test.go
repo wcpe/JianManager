@@ -123,6 +123,25 @@ func TestWebDAV_AuthFailure(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestProbe_WebDAVCleansProbeObject(t *testing.T) {
+	dav := &fakeDAV{objects: map[string][]byte{}, user: "u", pass: "p"}
+	srv := httptest.NewServer(dav)
+	defer srv.Close()
+
+	err := Probe(context.Background(), Config{Type: TypeWebDAV, Endpoint: srv.URL + "/backups", Prefix: "jm", AccessKey: "u", SecretKey: "p"})
+	require.NoError(t, err)
+	require.Empty(t, dav.objects)
+}
+
+func TestProbe_WebDAVAuthFailure(t *testing.T) {
+	dav := &fakeDAV{objects: map[string][]byte{}, user: "u", pass: "p"}
+	srv := httptest.NewServer(dav)
+	defer srv.Close()
+
+	err := Probe(context.Background(), Config{Type: TypeWebDAV, Endpoint: srv.URL, AccessKey: "u", SecretKey: "wrong"})
+	require.Error(t, err)
+}
+
 // TestS3_SignedRoundTrip 用 httptest 模拟 S3：校验带 SigV4 Authorization 头并完成上传/下载/删除。
 func TestS3_SignedRoundTrip(t *testing.T) {
 	objects := map[string][]byte{}
