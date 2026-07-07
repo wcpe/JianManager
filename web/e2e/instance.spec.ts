@@ -3,12 +3,12 @@ import { login } from './helpers'
 
 /**
  * FR-211 E2E：实例生命周期跨页流（mock 模式整站）。
- * 登录 → SPA 导航进实例页 → 看到 FR-201 种子实例 → 真 UI 启/停一个实例、断言状态联动；
- * 另含创建实例走通对话框后列表出现。
+ * 登录 → 进入实例页 → 看到 FR-201 种子实例 → 真 UI 启/停一个实例、断言状态联动；
+ * 另含 FR-028 创建实例走通独立向导后列表出现。
  *
  * mock 状态机是直达的（POST …/start→RUNNING、…/stop→STOPPED，无 STARTING/STOPPING 过渡，
  * 见 src/mocks/handlers/domains/instance.ts），点击后 ['instances'] query 失效重取即翻牌，
- * 无需等过渡轮询。用 SPA 点侧栏链接进页（保留会话内存库联动），不 page.goto 以免重置内存库。
+ * 无需等过渡轮询。
  */
 
 /** 实例页默认卡片视图：每张工作台卡是含实例名按钮的卡片容器（带 bg-card）。 */
@@ -23,16 +23,9 @@ function cardStatus(card: Locator): Locator {
   return card.locator('[data-slot="status-badge"]')
 }
 
-/**
- * 登录后经侧栏「全部实例」链接 SPA 进入实例管理页（保留会话内状态联动）。
- * 「全部实例」在可折叠的「集群」域下，默认展开；若被折叠则先点组头展开再点链接。
- */
+/** 登录后进入实例管理页。 */
 async function gotoInstances(page: Page): Promise<void> {
-  const link = page.getByRole('link', { name: '全部实例', exact: true })
-  if (!(await link.isVisible())) {
-    await page.getByRole('button', { name: '集群' }).click()
-  }
-  await link.click()
+  await page.goto('/instances')
   await expect(page.getByRole('heading', { name: '实例管理' })).toBeVisible()
 }
 
@@ -87,26 +80,25 @@ test.describe('实例生命周期（mock 模式，FR-211）', () => {
     await gotoInstances(page)
     const name = `e2e-srv-${Date.now()}`
 
-    // 打开创建对话框（页眉「创建实例」按钮）。
+    // 打开独立创建向导页。
     await page.getByRole('button', { name: '创建实例', exact: true }).click()
-    const dialog = page.getByRole('dialog')
-    await expect(dialog.getByRole('heading', { name: '创建实例' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '创建实例' })).toBeVisible()
 
-    // 名称（必填）。对话框内文本输入框用 placeholder 定位最稳。
-    await dialog.getByPlaceholder('Survival Server').fill(name)
+    // 基本信息：实例名 + 节点。
+    await page.getByPlaceholder('Survival Server').fill(name)
+    await page.getByText('选择节点', { exact: true }).click()
+    await page.getByRole('button', { name: /alpha/ }).click()
+    await page.getByRole('button', { name: '下一步', exact: true }).click()
 
-    // 节点（必填，Combobox allowCustom=false）：点触发器展开 → 选种子在线节点 alpha。
-    await dialog.getByText('选择节点', { exact: true }).click()
-    await page.getByRole('button', { name: 'alpha', exact: true }).click()
+    // 启动配置：保留 daemon，填写启动命令后进入确认页。
+    await page.getByPlaceholder('java -Xmx2G -jar server.jar nogui').fill('java -jar server.jar nogui')
+    await page.getByRole('button', { name: '下一步', exact: true }).click()
+    await expect(page.getByText(name)).toBeVisible()
 
-    // 启动命令（必填）。
-    await dialog.getByPlaceholder('java -Xmx2G -jar paper.jar nogui').fill('java -jar server.jar nogui')
-
-    // 提交并等对话框关闭。
-    await dialog.getByRole('button', { name: '创建', exact: true }).click()
-    await expect(dialog).toHaveCount(0, { timeout: 10_000 })
-
-    // 列表失效重取后新实例卡片出现（创建后默认 STOPPED）。
+    // 提交后回到实例列表，新实例卡片出现在追加的末尾（创建后默认 STOPPED）。
+    await page.getByRole('button', { name: '创建', exact: true }).click()
+    await expect(page.getByRole('heading', { name: '实例管理' })).toBeVisible({ timeout: 10_000 })
+    await page.getByTestId('instances-card-virtual').evaluate((el) => { el.scrollTop = el.scrollHeight })
     await expect(page.getByRole('button', { name, exact: true })).toBeVisible({ timeout: 10_000 })
   })
 })

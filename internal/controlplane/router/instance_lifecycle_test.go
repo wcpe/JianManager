@@ -90,6 +90,37 @@ func TestInstance_Start_AlreadyStarting(t *testing.T) {
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
 }
 
+// TestInstance_Stop_RunningToStopping 运行中实例可停止并进入 STOPPING。
+func TestInstance_Stop_RunningToStopping(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	createTestNode(t, db)
+
+	body := map[string]interface{}{
+		"nodeId":       1,
+		"name":         "停止成功实例",
+		"type":         "minecraft_java",
+		"processType":  "direct",
+		"startCommand": "java -jar server.jar",
+	}
+	w := makeRequest(r, "POST", "/api/v1/instances", body, token)
+	require.Equal(t, http.StatusCreated, w.Code)
+	created := parseJSON(t, w)
+	id := uint(created["id"].(float64))
+
+	// 测试环境没有真实 Worker，直接模拟运行中实例以验证 HTTP API 成功停止路径。
+	require.NoError(t, db.Model(&model.Instance{}).Where("id = ?", id).Update("status", model.InstanceStatusRunning).Error)
+
+	w = makeRequest(r, "POST", "/api/v1/instances/"+itoa(id)+"/stop", nil, token)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	w = makeRequest(r, "GET", "/api/v1/instances/"+itoa(id), nil, token)
+	assert.Equal(t, http.StatusOK, w.Code)
+	resp := parseJSON(t, w)
+	assert.Equal(t, "STOPPING", resp["status"])
+}
+
 // TestInstance_Stop_InvalidTransition 停止状态的实例再次停止返回错误。
 func TestInstance_Stop_InvalidTransition(t *testing.T) {
 	db := setupTestDB(t)
