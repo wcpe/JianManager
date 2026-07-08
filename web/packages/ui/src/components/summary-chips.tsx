@@ -49,7 +49,8 @@ export function SummaryChips({
             disabled={!clickable}
             aria-pressed={clickable ? !!chip.active : undefined}
             className={cn(
-              'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium shadow-soft transition-all duration-200 ease-ios',
+              // FR-244 收敛：hover 反馈时长绑 motion token（normal≈180ms），不再散落硬编码定值。
+              'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium shadow-soft transition-all duration-[var(--motion-duration-normal)] ease-ios',
               clickable && 'cursor-pointer hover:shadow-lift',
               !clickable && 'cursor-default',
               chip.active

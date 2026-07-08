@@ -144,4 +144,27 @@ describe('FR-244 全局动画 token 化', () => {
     expect(appCss).toMatch(/\.jm-mobile-nav-panel\[data-state='open'\][\s\S]*animation:\s*jm-panel-up var\(--motion-duration-normal\) var\(--motion-easing-standard\)/)
     expect(appCss).toMatch(/\.jm-toolbar-surface[\s\S]*transition:\s*background-color var\(--motion-duration-normal\) var\(--motion-easing-standard\)/)
   })
+
+  // 全站动效收敛（FR-244 剩余缺口）：共享原语的一次性交互动效从散落的 duration-200/300 收敛到 motion token。
+  // 每项断言「不含硬编码定值」+「引用 motion-duration token」，防新代码或回退再引入脱离节奏的毫秒值。
+  const CONVERGED_MOTION_PRIMITIVES = [
+    'components/ui/panel.tsx',
+    'components/ui/dialog.tsx',
+    'components/ui/summary-chips.tsx',
+    'components/ui/view-toggle.tsx',
+  ] as const
+
+  for (const file of CONVERGED_MOTION_PRIMITIVES) {
+    it(`${file} hover/浮层动效绑定 motion-duration token（不再硬编码 duration-200/300）`, () => {
+      const src = read(file)
+      expect(src).not.toMatch(/duration-200\b/)
+      expect(src).not.toMatch(/duration-300\b/)
+      expect(src).toMatch(/duration-\[var\(--motion-duration-(?:normal|slow)\)\]/)
+    })
+  }
+
+  it('组件包 styles.css 也暴露收敛注释指向统一动画词汇表', () => {
+    expect(uiCss).toMatch(/FR-244/)
+    expect(uiCss).toMatch(/--motion-duration-slow/)
+  })
 })

@@ -33,7 +33,8 @@ export function Panel({
       className={cn(
         'flex min-h-0 flex-col rounded-lg border bg-card/95 text-card-foreground shadow-soft backdrop-blur-sm',
         hoverable &&
-          'transition-[box-shadow] duration-300 ease-ios hover:shadow-lift',
+          // FR-244 收敛：hover 抬升时长绑 motion token（slow≈320ms），不再散落硬编码定值。
+          'transition-[box-shadow] duration-[var(--motion-duration-slow)] ease-ios hover:shadow-lift',
         className,
       )}
       {...props}

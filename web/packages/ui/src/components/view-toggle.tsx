@@ -40,7 +40,8 @@ export function ViewToggle({
             aria-pressed={active}
             title={label}
             className={cn(
-              'flex size-7 items-center justify-center rounded-md transition-all duration-200 ease-ios',
+              // FR-244 收敛：切换态时长绑 motion token（normal≈180ms），不再散落硬编码定值。
+              'flex size-7 items-center justify-center rounded-md transition-all duration-[var(--motion-duration-normal)] ease-ios',
               active
                 ? 'bg-card text-primary shadow-soft'
                 : 'text-muted-foreground hover:text-foreground',

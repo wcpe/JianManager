@@ -46,6 +46,16 @@
      品牌相关取值（--brand-shadow）经变量路由，FR-164 第二主题仅覆盖变量即可换肤。 */
   --shadow-soft: 0 1px 2px rgb(var(--shadow-color) / 0.05), 0 1px 3px -1px rgb(var(--shadow-color) / 0.05);
   --shadow-lift: 0 6px 16px -5px rgb(var(--shadow-color) / 0.14), 0 2px 6px -3px rgb(var(--shadow-color) / 0.08);
+  /* ── 全局动效收敛（FR-244）：唯一的动画词汇表，任何交互动效都从这里取值，禁止再散落硬编码毫秒 ──
+       时长 token：--motion-duration-fast(120)｜normal(180)｜slow(320)｜route(360)｜progress-*(进度条专用)。
+       缓动 token：--motion-easing-standard（iOS 收敛缓动，别名 --ease-ios，Tailwind 用 ease-ios）｜--motion-easing-emphasized。
+       语义类（本文件下方定义）：
+         .jm-page-stack   — 页面内容进场（jm-page-in，页根统一套）；
+         .jm-route-transition — 路由级切页进场（jm-route-enter，Workspace 路由壳统一套）；
+         .jm-panel-up/.jm-panel-down（keyframes）— 浮层/面板升起·落下，[data-state] 驱动（如 .jm-mobile-nav-panel）；
+         .animate-breathing — 运行对象呼吸光环。
+       组件里做卡片/行/控件的 hover、浮层进出等一次性动效时：用 Tailwind 任意值绑 token
+       （如 `duration-[var(--motion-duration-slow)] ease-ios`），不要写 `duration-300` 这类脱离 token 的定值。 */
   --motion-duration-fast: 120ms;
   --motion-duration-normal: 180ms;
   --motion-duration-slow: 320ms;
