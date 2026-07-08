@@ -6,7 +6,13 @@
 
 ## [Unreleased]
 
-> 归属：本段为 `v0.13.0` 开发版归档区，范围从 `v0.12.0` tag（`0939068c`）之后到当前 `HEAD`；正式发布时由 `sdd-release-version` 提升为 `## 0.13.0（YYYY-MM-DD）`。
+> 归属：本段为**未发版开发段**，自 `v0.12.0` tag（`0939068c`）之后到当前 `HEAD`，按主题切 **4 个版本**发布（替代原「v0.13.0 单一大堆」），正式发版时由 `sdd-release-version` 分别提升：
+> - `v0.13.0` 运营底座与可观测补全（第三期收口）
+> - `v0.14.0` 控制台体验与规模化（第六期）
+> - `v0.15.0` 客户端分发 / OTA 二三轮（第四期）
+> - `v0.16.0` JBIS 背包域 + 遗留收口（第五期，规划，待真机）
+>
+> 各条目归属版本以 §4 PRD 中该 FR 的 `已交付@vX.Y.Z` 为准；发版时按版本分段提升。
 
 ### 新增
 - **备份存储测试连接与容量展示（FR-152）**：备份存储列表新增已完成备份份数与已用空间统计，远程后端可行内测试连接并显示成功/失败原因与延迟。Control Plane 新增 `/backup-storages/:id/stats`、`/backup-storages/:id/test`、`/backup-storages/local/stats` 端点，Worker 新增 `TestStorageBackend` gRPC，经既有 S3/SFTP/WebDAV 存储抽象执行读写探测与容量统计；前端补 hook、mock、i18n、DOM 与 E2E 覆盖。
