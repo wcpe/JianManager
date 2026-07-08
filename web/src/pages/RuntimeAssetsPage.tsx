@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Cpu, Package, Trash2 } from 'lucide-react'
+import { Cpu, Package, Trash2, Upload } from 'lucide-react'
 
 import {
   useRuntimeAssetsOverview,
   useDeleteRuntimeJDK,
   useDeleteAsset,
+  useImportAsset,
   type AssetInfo,
   type AssetType,
   type JDKMatrixItem,
@@ -322,15 +323,23 @@ function AssetSection({
 }) {
   const { t } = useTranslation()
   const [filter, setFilter] = useState<AssetFilter>(DEFAULT_ASSET_FILTER)
+  const [importOpen, setImportOpen] = useState(false)
   const filtered = filterAssetGroups(groups, filter)
   const pluginAssets = groups.find((g) => g.type === 'plugin')?.items ?? []
 
   return (
     <section className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Package className="size-4 text-muted-foreground" />
-        <h2 className="text-base font-semibold">{t('runtimeAssets.assetRegion')}</h2>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Package className="size-4 text-muted-foreground" />
+          <h2 className="text-base font-semibold">{t('runtimeAssets.assetRegion')}</h2>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
+          <Upload className="size-4" />
+          {t('runtimeAssets.import')}
+        </Button>
       </div>
+      {importOpen && <ImportAssetDialog open={importOpen} onOpenChange={setImportOpen} />}
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <StatCard label={t('runtimeAssets.assetCount')} value={summary.assetCount} />
@@ -424,6 +433,123 @@ function AssetSection({
         ))
       )}
     </section>
+  )
+}
+
+/** 可导入的制品类型（不含 client-file：客户端文件走分发页专属发布流程，FR-088/251）。 */
+const IMPORTABLE_ASSET_TYPES: AssetType[] = ['core', 'plugin', 'image', 'video', 'archive', 'blob']
+
+/** 已上传字节 / 总字节 → 百分比（0~100，钳制）。 */
+function importPercent(loaded: number, total: number): number {
+  if (total <= 0) return 0
+  return Math.max(0, Math.min(100, Math.round((loaded / total) * 100)))
+}
+
+/**
+ * 导入制品弹窗（FR-155：补齐制品导入下载进度）。
+ * 选类型 + 选本地文件后走 multipart 入库（POST /assets），上传期间显示实时进度条，
+ * 进度由 axios onUploadProgress 驱动（与插件上传同一机制）。成功后 overview 失效刷新，新制品即刻出现。
+ * 遵循模态纪律（ui-modals）：内容自适应壳 + 内部滚动，头/脚固定。
+ */
+function ImportAssetDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const { t } = useTranslation()
+  const importAsset = useImportAsset()
+  const [type, setType] = useState<AssetType>('core')
+  const [name, setName] = useState('')
+  const [version, setVersion] = useState('')
+  const [file, setFile] = useState<File | null>(null)
+  // 已上传/总字节；null=尚未开始上传（不渲染进度条）。
+  const [progress, setProgress] = useState<{ loaded: number; total: number } | null>(null)
+
+  const submit = () => {
+    if (!file) return
+    setProgress({ loaded: 0, total: file.size })
+    importAsset.mutate(
+      {
+        type,
+        file,
+        name: name.trim() || undefined,
+        version: version.trim() || undefined,
+        onProgress: (loaded, total) => setProgress({ loaded, total: total || file.size }),
+      },
+      {
+        onSuccess: () => {
+          toast.success(t('runtimeAssets.importDone'))
+          onOpenChange(false)
+        },
+        onError: (err: ApiError) =>
+          toast.error(err.response?.data?.message || t('runtimeAssets.importFailed')),
+        onSettled: () => setProgress(null),
+      },
+    )
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className={scrollableDialogContentClass}>
+        <DialogHeader>
+          <DialogTitle>{t('runtimeAssets.importTitle')}</DialogTitle>
+          <DialogDescription>{t('runtimeAssets.importDescription')}</DialogDescription>
+        </DialogHeader>
+        <ScrollableDialogBody className="space-y-3">
+          <label className="block space-y-1 text-sm">
+            <span className="font-medium">{t('runtimeAssets.importType')}</span>
+            <select
+              value={type}
+              onChange={(e) => setType(e.target.value as AssetType)}
+              disabled={importAsset.isPending}
+              className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+            >
+              {IMPORTABLE_ASSET_TYPES.map((ty) => (
+                <option key={ty} value={ty}>{ty}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block space-y-1 text-sm">
+            <span className="font-medium">{t('runtimeAssets.importFile')}</span>
+            <input
+              type="file"
+              aria-label={t('runtimeAssets.importFile')}
+              disabled={importAsset.isPending}
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              className="block w-full text-sm text-muted-foreground file:mr-3 file:rounded-md file:border file:bg-muted file:px-3 file:py-1.5 file:text-sm"
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block space-y-1 text-sm">
+              <span className="font-medium">{t('runtimeAssets.importName')}</span>
+              <Input value={name} onChange={(e) => setName(e.target.value)} disabled={importAsset.isPending} className="h-9" />
+            </label>
+            <label className="block space-y-1 text-sm">
+              <span className="font-medium">{t('runtimeAssets.importVersion')}</span>
+              <Input value={version} onChange={(e) => setVersion(e.target.value)} disabled={importAsset.isPending} className="h-9" />
+            </label>
+          </div>
+          {progress && (
+            <div role="status" aria-label={t('runtimeAssets.importProgressLabel')}>
+              <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                <span className="truncate">{file?.name}</span>
+                <span className="font-mono tabular-nums">{importPercent(progress.loaded, progress.total)}%</span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-[width]"
+                  style={{ width: `${importPercent(progress.loaded, progress.total)}%` }}
+                />
+              </div>
+            </div>
+          )}
+        </ScrollableDialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={importAsset.isPending}>
+            {t('common.cancel')}
+          </Button>
+          <Button onClick={submit} disabled={!file || importAsset.isPending}>
+            {importAsset.isPending ? t('runtimeAssets.importing') : t('runtimeAssets.import')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

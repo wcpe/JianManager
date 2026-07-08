@@ -112,6 +112,32 @@ describe('RuntimeAssetsPage（mock 假后端）', () => {
     expect(rows.map((p) => p.instanceId).sort()).toEqual([1, 2])
   })
 
+  it('导入制品：选类型+文件上传后新制品出现在列表，弹窗展示进度条', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    renderWithProviders(<RuntimeAssetsPage />)
+
+    // 打开「导入制品」弹窗（制品区标题栏按钮）。
+    await user.click(await screen.findByRole('button', { name: '导入制品' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('导入制品到制品库')).toBeInTheDocument()
+
+    // 选类型 plugin + 命名 + 选文件（命名保证断言不依赖 jsdom 对 File 名的处理）。
+    await user.selectOptions(within(dialog).getByLabelText('类型'), 'plugin')
+    await user.type(within(dialog).getByLabelText('名称（可选）'), 'MyImportedPlugin')
+    const fileInput = within(dialog).getByLabelText('文件') as HTMLInputElement
+    await user.upload(fileInput, new File(['jarbytes'], 'MyImportedPlugin-1.0.jar', { type: 'application/java-archive' }))
+
+    // 上传前进度条不显示；提交后（上传期间）进度区（role=status）出现，证明导入期间有进度反馈。
+    expect(screen.queryByRole('status', { name: '上传进度' })).not.toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: '导入制品' }))
+    expect(await screen.findByRole('status', { name: '上传进度' })).toBeInTheDocument()
+
+    // 成功后弹窗关闭，overview 联动刷新，新制品名出现在列表。
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(await screen.findByText('MyImportedPlugin')).toBeInTheDocument()
+  })
+
   it('普通成员访问 overview 被拒绝，不泄露聚合数据', async () => {
     db<Session>('sessions').insert({ accessToken: 'member-token', refreshToken: 'member-refresh', userId: 2 })
     localStorage.setItem('accessToken', 'member-token')
