@@ -9,13 +9,32 @@ import { server } from '@/mocks/server'
 import { API } from '@/mocks/api'
 import NodesPage from './NodesPage'
 
+// 监控分段的 TimeSeriesChart 依赖 ResizeObserver 实测宽度，jsdom 无之 → 补桩使图表不崩（项目既有约定）。
+if (!('ResizeObserver' in globalThis)) {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver
+}
+
 /**
- * NodesPage 强断言（FR-200）：①渲染 seed 节点 ②进入维护写操作→列表联动出维护标记 ③注入 500→错误态。
+ * NodesPage 强断言（FR-200 / FR-128）：①渲染 seed 节点 ②进入维护写操作→列表联动出维护标记
+ * ③详情激活 Tab 可寻址（?tab= 读写 + ?node= 深链）④注入 500→错误态。
  * NodesPage 跨域调 GET /instances（FR-201 域），本域 worktree 未注册——用 server.use 本地桩返回空，
  * 满足 onUnhandledRequest:'error' 覆盖闸，且不污染他域 handler 文件。
  */
 function stubInstances() {
   server.use(http.get(API('/instances'), () => HttpResponse.json([])))
+}
+
+/** 监控分段跨域调 GET /metrics/series（观测域），本域未注册——本地桩返回空序列即可（图表走空态提示）。 */
+function stubMetricSeries() {
+  server.use(
+    http.get(API('/metrics/series'), () =>
+      HttpResponse.json({ resolution: 'raw', from: '', to: '', series: [] }),
+    ),
+  )
 }
 
 describe('NodesPage（mock 假后端）', () => {
@@ -68,6 +87,40 @@ describe('NodesPage（mock 假后端）', () => {
 
     await user.click(await screen.findByRole('tab', { name: '手动连接' }))
     expect(await screen.findByText(/不写入 worker\.yml/)).toBeInTheDocument()
+  })
+
+  it('URL 带 ?node=2&tab=monitor 时深链选中 beta 并激活监控分段（FR-128）', async () => {
+    loginMockUser()
+    stubInstances()
+    stubMetricSeries()
+    renderWithProviders(<NodesPage />, { route: '/nodes?node=2&tab=monitor' })
+
+    // 详情身份块出 beta（深链选中 id=2，非默认首个 alpha）。
+    const heading = await screen.findByRole('heading', { name: 'beta' })
+    expect(heading).toBeInTheDocument()
+    // 监控分段渲染：CPU 趋势面板可见（概览分段无此面板）。
+    expect(await screen.findByText('CPU 趋势')).toBeInTheDocument()
+  })
+
+  it('切换详情分段时 URL 同步写入 ?tab=，切回概览时省略参数（FR-128）', async () => {
+    loginMockUser()
+    stubInstances()
+    stubMetricSeries()
+    const user = userEvent.setup()
+    renderWithProviders(<NodesPage />, { route: '/nodes' })
+
+    await screen.findByText('beta') // 列表就绪；alpha 默认选中
+    // 默认 overview 不写 tab 参数。
+    expect(new URLSearchParams(window.location.search).get('tab')).toBeNull()
+
+    // 点「监控」分段 → URL 写入 tab=monitor。
+    await user.click(await screen.findByRole('button', { name: '监控' }))
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('tab')).toBe('monitor'))
+    expect(await screen.findByText('CPU 趋势')).toBeInTheDocument()
+
+    // 切回「概览」→ tab 参数被省略（保持链接简洁）。
+    await user.click(await screen.findByRole('button', { name: '概览' }))
+    await waitFor(() => expect(new URLSearchParams(window.location.search).get('tab')).toBeNull())
   })
 
   it('注入 500：节点列表请求失败，列表区不崩溃（无节点行）', async () => {

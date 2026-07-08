@@ -74,6 +74,46 @@ describe('GroupsPage（mock 假后端）', () => {
     await waitFor(() => expect(screen.queryByRole('heading', { name: '管理「默认组」成员' })).not.toBeInTheDocument())
   })
 
+  it('URL 带 ?group=1&panel=members 时深链打开默认组成员管理面板（FR-128）', async () => {
+    loginMockUser()
+    renderWithProviders(<GroupsPage />, { route: '/groups?group=1&panel=members' })
+    // 无需点按，成员管理弹窗随 URL 深链直接打开。
+    const heading = await screen.findByRole('heading', { name: '管理「默认组」成员' })
+    expect(heading.closest('[role="dialog"]')).toBeInTheDocument()
+  })
+
+  it('URL 带 ?group=1&panel=edit 时深链打开默认组编辑面板（FR-128）', async () => {
+    loginMockUser()
+    renderWithProviders(<GroupsPage />, { route: '/groups?group=1&panel=edit' })
+    const heading = await screen.findByRole('heading', { name: '编辑用户组「默认组」' })
+    expect(heading.closest('[role="dialog"]')).toBeInTheDocument()
+  })
+
+  it('点「成员」→ URL 写入 ?group=&panel=members，关闭后参数清除（FR-128）', async () => {
+    loginMockUser()
+    renderWithProviders(<GroupsPage />, { route: '/groups' })
+    await screen.findByText('默认组')
+    const user = userEvent.setup()
+
+    const defaultPanel = screen.getByText('默认组').closest('[data-slot="panel"]') as HTMLElement
+    await user.click(within(defaultPanel).getByRole('button', { name: '成员' }))
+
+    await waitFor(() => {
+      const sp = new URLSearchParams(window.location.search)
+      expect(sp.get('group')).toBe('1')
+      expect(sp.get('panel')).toBe('members')
+    })
+    expect(await screen.findByRole('heading', { name: '管理「默认组」成员' })).toBeInTheDocument()
+
+    // Esc 关闭面板 → group/panel 参数被清除。
+    await user.keyboard('{Escape}')
+    await waitFor(() => {
+      const sp = new URLSearchParams(window.location.search)
+      expect(sp.get('group')).toBeNull()
+      expect(sp.get('panel')).toBeNull()
+    })
+  })
+
   it('删除用户组 → 该项从列表消失（DELETE /groups/:id 联动）', async () => {
     loginPlatformAdmin()
     renderWithProviders(<GroupsPage />)

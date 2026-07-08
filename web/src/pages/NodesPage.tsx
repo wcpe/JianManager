@@ -75,6 +75,12 @@ type PendingAction = { kind: 'drain' | 'delete'; node: NodeInfo }
 type DetailTab = 'overview' | 'instances' | 'jdk' | 'cache' | 'ports' | 'proxy' | 'monitor' | 'repair'
 const DETAIL_TABS: DetailTab[] = ['overview', 'instances', 'jdk', 'cache', 'ports', 'proxy', 'monitor', 'repair']
 
+/** 从 URL `?tab=` 解析激活分段（FR-128 可寻址；非法值回退默认 overview）。 */
+function readDetailTab(searchParams: URLSearchParams): DetailTab {
+  const tab = searchParams.get('tab')
+  return DETAIL_TABS.includes(tab as DetailTab) ? (tab as DetailTab) : 'overview'
+}
+
 /** 各实例对比图可切的指标（FR-060 #2：节点上各实例 TPS/MSPT/堆/线程对比）。 */
 const COMPARE_METRICS: { key: string; labelKey: string; fmt: (v: number) => string }[] = [
   { key: 'inst_tps', labelKey: 'metrics.tps', fmt: (v) => v.toFixed(1) },
@@ -363,17 +369,31 @@ export default function NodesPage() {
   const { data: nodes, isLoading } = useNodes({ refetchInterval: 30_000 })
   const { data: instances } = useInstances()
 
-  // 初始选中可由 URL `?node=<id>` 指定（命令面板 FR-241 跳转携带），否则未选（派生回退第一个）。
-  const [searchParams] = useSearchParams()
-  const initialNodeId = (() => {
+  // 选中节点与激活分段均入 URL（FR-128 可寻址）：`?node=<id>` 深链（命令面板 FR-241 跳转携带）、
+  // `?tab=<DetailTab>` 激活分段（默认 overview 省略）。直接从 searchParams 派生，浏览器前进/后退自动生效。
+  const [searchParams, setSearchParams] = useSearchParams()
+  const selectedId = (() => {
     const n = Number(searchParams.get('node'))
     return Number.isFinite(n) && n > 0 ? n : null
   })()
-  const [selectedId, setSelectedId] = useState<number | null>(initialNodeId)
+  const tab = readDetailTab(searchParams)
   const [query, setQuery] = useState('')
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [addOpen, setAddOpen] = useState(false)
-  const [tab, setTab] = useState<DetailTab>('overview')
+
+  // 选中节点写入 URL（保留当前 tab 等其它参数）。
+  const setSelectedId = (id: number) => {
+    const next = new URLSearchParams(searchParams)
+    next.set('node', String(id))
+    setSearchParams(next)
+  }
+  // 切换激活分段写入 URL（默认 overview 省略，保持链接简洁）。
+  const setTab = (next: DetailTab) => {
+    const params = new URLSearchParams(searchParams)
+    if (next === 'overview') params.delete('tab')
+    else params.set('tab', next)
+    setSearchParams(params)
+  }
   // 左栏收缩为窄图标轨（FR-177）：收缩态持久化（localStorage）。
   const [collapsed, setCollapsed] = useState(loadNodeListCollapsed)
 

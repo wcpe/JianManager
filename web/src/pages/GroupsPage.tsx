@@ -1,7 +1,8 @@
 import { useState } from 'react'
+import { useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { Users, Server, Bot, HardDrive } from 'lucide-react'
-import { useGroups, useDeleteGroup, type GroupInfo } from '@/api/groups'
+import { useGroups, useDeleteGroup } from '@/api/groups'
 import CreateGroupDialog from '@/components/CreateGroupDialog'
 import GroupEditDialog from '@/components/GroupEditDialog'
 import GroupMembersDialog from '@/components/GroupMembersDialog'
@@ -9,14 +10,41 @@ import DangerConfirm from '@/components/DangerConfirm'
 import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
 
+/** 用户组详情可打开的面板（FR-128 可寻址）：编辑属性 / 管理成员。 */
+type GroupPanel = 'edit' | 'members'
+
 export default function GroupsPage() {
   const { t } = useTranslation()
   const [showCreate, setShowCreate] = useState(false)
-  const [editGroup, setEditGroup] = useState<GroupInfo | null>(null)
-  const [membersGroupId, setMembersGroupId] = useState<number | null>(null)
   const [deleteGroup, setDeleteGroup] = useState<{ id: number; name: string } | null>(null)
   const { data: groups, isLoading } = useGroups()
   const del = useDeleteGroup()
+
+  // 选中组与打开的面板入 URL（FR-128 可寻址）：`?group=<id>` 深链某组、`&panel=edit|members` 打开对应面板；
+  // 直接从 searchParams 派生，浏览器前进/后退可复原。创建/删除属瞬时动作，仍走本地 state。
+  const [searchParams, setSearchParams] = useSearchParams()
+  const activeGroupId = (() => {
+    const n = Number(searchParams.get('group'))
+    return Number.isFinite(n) && n > 0 ? n : null
+  })()
+  const panelParam = searchParams.get('panel')
+  const activePanel: GroupPanel | null =
+    panelParam === 'edit' || panelParam === 'members' ? panelParam : null
+  // 选中组须真实存在（含深链到已删除组的兜底），否则视为未选。
+  const activeGroup = groups?.find((g) => g.id === activeGroupId) ?? null
+
+  const openPanel = (id: number, panel: GroupPanel) => {
+    const next = new URLSearchParams(searchParams)
+    next.set('group', String(id))
+    next.set('panel', panel)
+    setSearchParams(next)
+  }
+  const closePanel = () => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('group')
+    next.delete('panel')
+    setSearchParams(next)
+  }
 
   return (
     <div>
@@ -46,10 +74,10 @@ export default function GroupsPage() {
               }
               actions={
                 <>
-                  <Button variant="ghost" size="xs" onClick={() => setEditGroup(g)}>
+                  <Button variant="ghost" size="xs" onClick={() => openPanel(g.id, 'edit')}>
                     {t('common.edit')}
                   </Button>
-                  <Button variant="ghost" size="xs" onClick={() => setMembersGroupId(g.id)}>
+                  <Button variant="ghost" size="xs" onClick={() => openPanel(g.id, 'members')}>
                     {t('groups.manageMembersBtn')}
                   </Button>
                   <Button
@@ -103,11 +131,11 @@ export default function GroupsPage() {
         </div>
       )}
 
-      {editGroup && (
-        <GroupEditDialog key={editGroup.id} group={editGroup} onClose={() => setEditGroup(null)} />
+      {activeGroup && activePanel === 'edit' && (
+        <GroupEditDialog key={activeGroup.id} group={activeGroup} onClose={closePanel} />
       )}
-      {membersGroupId !== null && (
-        <GroupMembersDialog groupId={membersGroupId} onClose={() => setMembersGroupId(null)} />
+      {activeGroup && activePanel === 'members' && (
+        <GroupMembersDialog groupId={activeGroup.id} onClose={closePanel} />
       )}
       <DangerConfirm
         open={deleteGroup !== null}
