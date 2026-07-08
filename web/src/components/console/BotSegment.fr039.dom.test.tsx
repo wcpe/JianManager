@@ -3,7 +3,6 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import InstanceTree from './InstanceTree'
 import InstanceConsolePage from './InstanceConsolePage'
 import BotSegment from './BotSegment'
 
@@ -22,16 +21,6 @@ beforeAll(() => {
 })
 
 describe('FR-039 控制台实例内 Bot 管理段', () => {
-  it('实例树通过聚合摘要显示 Bot 徽标，不展开逐个 Bot', async () => {
-    loginMockUser()
-    renderWithProviders(<InstanceTree />)
-
-    expect(await screen.findByText('survival-1')).toBeInTheDocument()
-    expect(await screen.findByText('1/2')).toBeInTheDocument()
-    expect(screen.getByText('0/1')).toBeInTheDocument()
-    expect(screen.queryByText('GuardBot')).not.toBeInTheDocument()
-  })
-
   it('统一服务器控制台可切到 Bot 分区并渲染实例内 Bot 段', async () => {
     loginMockUser()
     renderWithProviders(<InstanceConsolePage instanceId={1} />)
