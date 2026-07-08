@@ -38,6 +38,12 @@ type upgradeAllRequest struct {
 	Version string `json:"version"`
 	// NodeIDs 限定升级的节点；留空=全部在线节点。
 	NodeIDs []uint `json:"nodeIds"`
+	// CanarySize 金丝雀节点数：先行升级这么多个（0=无金丝雀，FR-155）。
+	CanarySize int `json:"canarySize"`
+	// BatchSize 金丝雀之后剩余节点的分批大小（<=0=剩余全部一批，等价原行为，FR-155）。
+	BatchSize int `json:"batchSize"`
+	// AbortOnCanaryFailure 金丝雀有失败即中止、剩余不升级（FR-155）。
+	AbortOnCanaryFailure bool `json:"abortOnCanaryFailure"`
 }
 
 type cacheWorkerAssetRequest struct {
@@ -139,7 +145,12 @@ func (h *SelfUpdateHandler) UpgradeAll(c *gin.Context) {
 	var req upgradeAllRequest
 	_ = c.ShouldBindJSON(&req)
 
-	ro, err := h.svc.StartRolloutWithBaseURL(c.Request.Context(), req.NodeIDs, req.Version, selfUpdateRequestBaseURL(c))
+	// FR-155：金丝雀 + 分批参数经 RolloutOptions 透传；零值=原「串行全部」行为。
+	ro, err := h.svc.StartRolloutWithOptions(c.Request.Context(), req.NodeIDs, req.Version, selfUpdateRequestBaseURL(c), service.RolloutOptions{
+		CanarySize:           req.CanarySize,
+		BatchSize:            req.BatchSize,
+		AbortOnCanaryFailure: req.AbortOnCanaryFailure,
+	})
 	if err != nil {
 		if errors.Is(err, service.ErrUpdateNotConfigured) {
 			c.JSON(http.StatusConflict, gin.H{"error": "UPDATE_NOT_CONFIGURED", "message": "未配置更新源"})
@@ -148,7 +159,10 @@ func (h *SelfUpdateHandler) UpgradeAll(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "ROLLOUT_BUSY", "message": err.Error()})
 		return
 	}
-	h.recordAudit(c, "self_update.rollout", map[string]any{"targetVersion": req.Version, "total": ro.Total})
+	h.recordAudit(c, "self_update.rollout", map[string]any{
+		"targetVersion": req.Version, "total": ro.Total,
+		"canarySize": ro.CanarySize, "batchSize": ro.BatchSize,
+	})
 	c.JSON(http.StatusAccepted, ro)
 }
 

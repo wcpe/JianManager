@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -223,6 +224,220 @@ func TestRollout_MixedResults(t *testing.T) {
 	}
 	if !sawFailErr {
 		t.Fatal("未见到 n2 失败状态")
+	}
+}
+
+// waitRolloutDone 轮询等待 rollout 收敛为 completed（超时 fail）。
+func waitRolloutDone(t *testing.T, svc *SelfUpdateService) *Rollout {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if svc.RolloutSnapshot().State == "completed" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	snap := svc.RolloutSnapshot()
+	if snap.State != "completed" {
+		t.Fatalf("rollout 应完成，实得 state=%s phase=%s", snap.State, snap.Phase)
+	}
+	return snap
+}
+
+// seedRolloutNodes 建 n 个在线节点（入库 + 登记 pool），按传入名称，返回节点切片。
+func seedRolloutNodes(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool, names ...string) []*model.Node {
+	t.Helper()
+	out := make([]*model.Node, 0, len(names))
+	for i, name := range names {
+		n := &model.Node{Name: name, Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: string(rune('a' + i)), OS: runtime.GOOS, Arch: runtime.GOARCH, Status: model.NodeStatusOnline}
+		require.NoError(t, db.Create(n).Error)
+		require.NoError(t, pool.Connect(n.UUID, "127.0.0.1:1"))
+		out = append(out, n)
+	}
+	return out
+}
+
+// TestRollout_CanarySucceedsThenRolling 验证金丝雀成功后进入滚动阶段、全部升级、Phase 递进至 completed（FR-155）。
+func TestRollout_CanarySucceedsThenRolling(t *testing.T) {
+	db := newSelfUpdateTestDB(t)
+	pool := cpgrpc.NewClientPool()
+	ns := seedRolloutNodes(t, db, pool, "n1", "n2", "n3", "n4")
+
+	svc := NewSelfUpdateService(db, pool, SelfUpdateConfig{FeedURL: "https://x"}, nil)
+	var upgraded []uint
+	var mu sync.Mutex
+	svc.nodeUpgradeFn = func(nodeID uint, _ string) (string, string, error) {
+		mu.Lock()
+		upgraded = append(upgraded, nodeID)
+		mu.Unlock()
+		return "0.7.0", "0.8.0", nil
+	}
+
+	ro, err := svc.StartRolloutWithOptions(context.Background(), nil, "0.8.0", "", RolloutOptions{CanarySize: 1, AbortOnCanaryFailure: true})
+	require.NoError(t, err)
+	// 启动即返回快照应带金丝雀阶段与配置回显。
+	if ro.Phase != "canary" || ro.CanarySize != 1 {
+		t.Fatalf("启动快照应 phase=canary canarySize=1，实得 phase=%s canarySize=%d", ro.Phase, ro.CanarySize)
+	}
+
+	snap := waitRolloutDone(t, svc)
+	if snap.Phase != "completed" {
+		t.Fatalf("金丝雀成功应最终 phase=completed，实得 %s", snap.Phase)
+	}
+	if snap.Total != 4 || snap.Succeeded != 4 || snap.Failed != 0 {
+		t.Fatalf("应 4 全成功，实得 total=%d succeeded=%d failed=%d", snap.Total, snap.Succeeded, snap.Failed)
+	}
+	mu.Lock()
+	got := len(upgraded)
+	mu.Unlock()
+	if got != 4 {
+		t.Fatalf("金丝雀成功后应升级全部 4 个节点，实得 %d", got)
+	}
+	_ = ns
+}
+
+// TestRollout_CanaryFailsAborts 验证金丝雀失败 + abortOnCanaryFailure 时剩余节点不升级、Phase=aborted（FR-155）。
+func TestRollout_CanaryFailsAborts(t *testing.T) {
+	db := newSelfUpdateTestDB(t)
+	pool := cpgrpc.NewClientPool()
+	ns := seedRolloutNodes(t, db, pool, "n1", "n2", "n3", "n4")
+	canaryID := ns[0].ID
+
+	svc := NewSelfUpdateService(db, pool, SelfUpdateConfig{FeedURL: "https://x"}, nil)
+	var upgraded []uint
+	var mu sync.Mutex
+	svc.nodeUpgradeFn = func(nodeID uint, _ string) (string, string, error) {
+		mu.Lock()
+		upgraded = append(upgraded, nodeID)
+		mu.Unlock()
+		if nodeID == canaryID {
+			return "0.7.0", "0.7.0", errors.New("checksum mismatch") // 金丝雀失败
+		}
+		return "0.7.0", "0.8.0", nil
+	}
+
+	_, err := svc.StartRolloutWithOptions(context.Background(), nil, "0.8.0", "", RolloutOptions{CanarySize: 1, AbortOnCanaryFailure: true})
+	require.NoError(t, err)
+
+	snap := waitRolloutDone(t, svc)
+	if snap.Phase != "aborted" {
+		t.Fatalf("金丝雀失败 + 中止应 phase=aborted，实得 %s", snap.Phase)
+	}
+	if snap.Failed != 1 {
+		t.Fatalf("应恰 1 个失败（金丝雀），实得 failed=%d", snap.Failed)
+	}
+	// 剩余 3 个节点应标 skipped 且从未被升级。
+	skipped := 0
+	for _, n := range snap.Nodes {
+		if n.State == "skipped" {
+			skipped++
+		}
+	}
+	if skipped != 3 {
+		t.Fatalf("剩余 3 节点应 skipped，实得 %d", skipped)
+	}
+	mu.Lock()
+	got := len(upgraded)
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("中止后仅金丝雀被升级，实得升级 %d 个", got)
+	}
+}
+
+// TestRollout_CanaryFailsNoAbortContinues 验证不设 abortOnCanaryFailure 时金丝雀失败仍继续滚动升级剩余（FR-155）。
+func TestRollout_CanaryFailsNoAbortContinues(t *testing.T) {
+	db := newSelfUpdateTestDB(t)
+	pool := cpgrpc.NewClientPool()
+	ns := seedRolloutNodes(t, db, pool, "n1", "n2", "n3")
+	canaryID := ns[0].ID
+
+	svc := NewSelfUpdateService(db, pool, SelfUpdateConfig{FeedURL: "https://x"}, nil)
+	svc.nodeUpgradeFn = func(nodeID uint, _ string) (string, string, error) {
+		if nodeID == canaryID {
+			return "0.7.0", "0.7.0", errors.New("boom")
+		}
+		return "0.7.0", "0.8.0", nil
+	}
+
+	_, err := svc.StartRolloutWithOptions(context.Background(), nil, "0.8.0", "", RolloutOptions{CanarySize: 1, AbortOnCanaryFailure: false})
+	require.NoError(t, err)
+
+	snap := waitRolloutDone(t, svc)
+	if snap.Phase != "completed" {
+		t.Fatalf("不中止应最终 phase=completed，实得 %s", snap.Phase)
+	}
+	if snap.Succeeded != 2 || snap.Failed != 1 {
+		t.Fatalf("金丝雀失败但继续：应 2 成功 1 失败，实得 succeeded=%d failed=%d", snap.Succeeded, snap.Failed)
+	}
+	for _, n := range snap.Nodes {
+		if n.State == "skipped" {
+			t.Fatal("不中止时不应有 skipped 节点")
+		}
+	}
+}
+
+// TestRollout_BatchSizeChunksRemaining 验证 batchSize 正确分批剩余节点、全部升级且 Phase 收敛（FR-155）。
+func TestRollout_BatchSizeChunksRemaining(t *testing.T) {
+	db := newSelfUpdateTestDB(t)
+	pool := cpgrpc.NewClientPool()
+	// 5 个节点：金丝雀 1 + 剩余 4，batchSize=2 → 剩余分 2 批（各 2 个）。
+	seedRolloutNodes(t, db, pool, "n1", "n2", "n3", "n4", "n5")
+
+	svc := NewSelfUpdateService(db, pool, SelfUpdateConfig{FeedURL: "https://x"}, nil)
+	var upgraded []uint
+	var mu sync.Mutex
+	svc.nodeUpgradeFn = func(nodeID uint, _ string) (string, string, error) {
+		mu.Lock()
+		upgraded = append(upgraded, nodeID)
+		mu.Unlock()
+		return "0.7.0", "0.8.0", nil
+	}
+
+	ro, err := svc.StartRolloutWithOptions(context.Background(), nil, "0.8.0", "", RolloutOptions{CanarySize: 1, BatchSize: 2})
+	require.NoError(t, err)
+	if ro.BatchSize != 2 {
+		t.Fatalf("启动快照应回显 batchSize=2，实得 %d", ro.BatchSize)
+	}
+
+	snap := waitRolloutDone(t, svc)
+	if snap.Phase != "completed" {
+		t.Fatalf("应最终 phase=completed，实得 %s", snap.Phase)
+	}
+	if snap.Succeeded != 5 {
+		t.Fatalf("5 节点应全部升级成功，实得 succeeded=%d", snap.Succeeded)
+	}
+	// 金丝雀=batch1、剩余两批=batch2/3 → 结束时 CurrentBatch 应为 3。
+	if snap.CurrentBatch != 3 {
+		t.Fatalf("金丝雀1 + 剩余分2批，末批号应为 3，实得 currentBatch=%d", snap.CurrentBatch)
+	}
+	mu.Lock()
+	got := len(upgraded)
+	mu.Unlock()
+	if got != 5 {
+		t.Fatalf("应升级全部 5 个节点，实得 %d", got)
+	}
+}
+
+// TestRollout_NoCanaryNoBatchBackCompat 验证零值 options（无金丝雀/分批）退化为原「串行全部」行为（FR-155 向后兼容）。
+func TestRollout_NoCanaryNoBatchBackCompat(t *testing.T) {
+	db := newSelfUpdateTestDB(t)
+	pool := cpgrpc.NewClientPool()
+	seedRolloutNodes(t, db, pool, "n1", "n2", "n3")
+
+	svc := NewSelfUpdateService(db, pool, SelfUpdateConfig{FeedURL: "https://x"}, nil)
+	svc.nodeUpgradeFn = func(_ uint, _ string) (string, string, error) { return "0.7.0", "0.8.0", nil }
+
+	// 走原 StartRollout（无 options）路径。
+	_, err := svc.StartRollout(context.Background(), nil, "0.8.0")
+	require.NoError(t, err)
+
+	snap := waitRolloutDone(t, svc)
+	// 无金丝雀 → 直接滚动，剩余全部一批（CurrentBatch=2）。
+	if snap.Phase != "completed" || snap.CanarySize != 0 {
+		t.Fatalf("无金丝雀应 phase=completed canarySize=0，实得 phase=%s canarySize=%d", snap.Phase, snap.CanarySize)
+	}
+	if snap.Succeeded != 3 || snap.Failed != 0 {
+		t.Fatalf("应 3 全成功，实得 succeeded=%d failed=%d", snap.Succeeded, snap.Failed)
 	}
 }
 

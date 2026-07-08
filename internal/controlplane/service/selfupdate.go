@@ -570,7 +570,7 @@ func (s *SelfUpdateService) UpgradeNodeWithBaseURL(ctx context.Context, nodeID u
 type RolloutNodeState struct {
 	NodeID      uint   `json:"nodeId"`
 	Name        string `json:"name"`
-	State       string `json:"state"` // pending | upgrading | succeeded | failed
+	State       string `json:"state"` // pending | upgrading | succeeded | failed | skipped
 	FromVersion string `json:"fromVersion"`
 	ToVersion   string `json:"toVersion"`
 	Error       string `json:"error"`
@@ -589,6 +589,22 @@ type Rollout struct {
 	Failed        int                `json:"failed"`
 	Pending       int                `json:"pending"`
 	Nodes         []RolloutNodeState `json:"nodes"`
+	// FR-155 金丝雀分批：Phase 标记编排阶段，CanarySize/BatchSize 回显本次配置，
+	// CurrentBatch 为 1-based 当前批（金丝雀=第 1 批）。省略金丝雀/分批时退化为原「串行全部」行为。
+	Phase        string `json:"phase"` // canary | rolling | completed | aborted
+	CanarySize   int    `json:"canarySize"`
+	BatchSize    int    `json:"batchSize"`
+	CurrentBatch int    `json:"currentBatch"`
+}
+
+// RolloutOptions 是全网升级的金丝雀 + 分批编排参数（FR-155，全部可选、零值=原串行全部行为）。
+type RolloutOptions struct {
+	// CanarySize 先行升级的金丝雀节点数（0=无金丝雀，直接进滚动阶段）。
+	CanarySize int
+	// BatchSize 金丝雀之后剩余节点的分批大小（<=0=剩余全部作为一批，等价原行为）。
+	BatchSize int
+	// AbortOnCanaryFailure 金丝雀阶段有任一节点失败时是否中止：中止则剩余节点保持 skipped、不再升级。
+	AbortOnCanaryFailure bool
 }
 
 // StartRollout 对给定节点（nodeIDs 空=全部在线节点）发起逐节点串行升级，异步执行。
@@ -598,7 +614,14 @@ func (s *SelfUpdateService) StartRollout(ctx context.Context, nodeIDs []uint, wa
 }
 
 // StartRolloutWithBaseURL 对给定节点发起逐节点升级，并把同一个 CP HTTP 基址用于 FR-190 资产下发。
+// 无金丝雀/分批参数（零值 RolloutOptions），等价原「串行全部」行为——保持向后兼容。
 func (s *SelfUpdateService) StartRolloutWithBaseURL(ctx context.Context, nodeIDs []uint, wantVersion, baseURL string) (*Rollout, error) {
+	return s.StartRolloutWithOptions(ctx, nodeIDs, wantVersion, baseURL, RolloutOptions{})
+}
+
+// StartRolloutWithOptions 在 StartRolloutWithBaseURL 基础上支持金丝雀 + 分批编排（FR-155）。
+// opts 全部字段可选：CanarySize 先行升级的金丝雀数、BatchSize 剩余分批大小、AbortOnCanaryFailure 金丝雀失败即中止。
+func (s *SelfUpdateService) StartRolloutWithOptions(_ context.Context, nodeIDs []uint, wantVersion, baseURL string, opts RolloutOptions) (*Rollout, error) {
 	if !s.Configured() {
 		return nil, ErrUpdateNotConfigured
 	}
@@ -616,6 +639,17 @@ func (s *SelfUpdateService) StartRolloutWithBaseURL(ctx context.Context, nodeIDs
 		return nil, err
 	}
 
+	// 金丝雀数不得超过总目标；BatchSize<=0 时后续按「剩余全部一批」处理。
+	canary := opts.CanarySize
+	if canary > len(targets) {
+		canary = len(targets)
+	}
+	// 初始 Phase：有金丝雀先进 canary，否则直接 rolling（初始批次=1）；
+	// 与 runRollout 里 setRolloutPhase 的首个赋值一致，避免返回快照时短暂空 Phase。
+	initialPhase := "canary"
+	if canary == 0 {
+		initialPhase = "rolling"
+	}
 	ro := &Rollout{
 		RolloutID:     uuid.New().String(),
 		TargetVersion: wantVersion,
@@ -623,6 +657,10 @@ func (s *SelfUpdateService) StartRolloutWithBaseURL(ctx context.Context, nodeIDs
 		StartedAt:     time.Now(),
 		Total:         len(targets),
 		Pending:       len(targets),
+		Phase:         initialPhase,
+		CanarySize:    canary,
+		BatchSize:     opts.BatchSize,
+		CurrentBatch:  1,
 	}
 	for _, n := range targets {
 		ro.Nodes = append(ro.Nodes, RolloutNodeState{NodeID: n.ID, Name: n.Name, State: "pending"})
@@ -630,7 +668,7 @@ func (s *SelfUpdateService) StartRolloutWithBaseURL(ctx context.Context, nodeIDs
 	s.rollout = ro
 	s.rolloutMu.Unlock()
 
-	go s.runRollout(targets, wantVersion, baseURL)
+	go s.runRollout(targets, wantVersion, baseURL, opts)
 	return s.RolloutSnapshot(), nil
 }
 
@@ -654,9 +692,58 @@ func (s *SelfUpdateService) selectRolloutTargets(nodeIDs []uint) ([]model.Node, 
 	return online, nil
 }
 
-// runRollout 逐节点串行升级；单节点失败不阻断后续，记 failed + error。
-func (s *SelfUpdateService) runRollout(targets []model.Node, wantVersion, baseURL string) {
-	for _, n := range targets {
+// runRollout 编排全网升级（FR-155 金丝雀分批）：
+// 先升级金丝雀批（Phase=canary）；若配了 AbortOnCanaryFailure 且金丝雀有失败，则中止——
+// 剩余节点标 skipped、Phase=aborted，rollout 收尾为 completed。否则进入滚动阶段（Phase=rolling），
+// 把剩余节点按 batchSize 分批（<=0=剩余全部一批，等价原行为）逐节点串行升级；单节点失败不阻断本批后续。
+// 每批内部仍逐节点串行（与原行为一致），仅新增阶段/批次的语义与状态标记。
+func (s *SelfUpdateService) runRollout(targets []model.Node, wantVersion, baseURL string, opts RolloutOptions) {
+	// 金丝雀数收敛到 [0, len(targets)]（与 StartRolloutWithOptions 中一致）。
+	canary := opts.CanarySize
+	if canary > len(targets) {
+		canary = len(targets)
+	}
+
+	// 阶段 1：金丝雀批（batch 1）。canary=0 时该批为空、直接进滚动阶段。
+	s.setRolloutPhase("canary", 1)
+	canaryTargets := targets[:canary]
+	remaining := targets[canary:]
+	canaryFailed := s.upgradeRolloutBatch(canaryTargets, wantVersion, baseURL)
+
+	// 金丝雀失败即中止：剩余节点标 skipped，Phase=aborted，收尾（不再升级剩余）。
+	if canary > 0 && opts.AbortOnCanaryFailure && canaryFailed {
+		for _, n := range remaining {
+			s.updateRolloutNode(n.ID, func(ns *RolloutNodeState) { ns.State = "skipped" })
+		}
+		s.finishRollout("aborted")
+		return
+	}
+
+	// 阶段 2：滚动。剩余节点按 batchSize 分批（<=0=剩余全部一批）；金丝雀占 batch 1，故从 batch 2 起编号。
+	s.setRolloutPhase("rolling", 2)
+	batchSize := opts.BatchSize
+	if batchSize <= 0 {
+		batchSize = len(remaining)
+	}
+	batchNo := 2
+	for start := 0; start < len(remaining); start += batchSize {
+		end := start + batchSize
+		if end > len(remaining) {
+			end = len(remaining)
+		}
+		s.setRolloutBatch(batchNo)
+		s.upgradeRolloutBatch(remaining[start:end], wantVersion, baseURL)
+		batchNo++
+	}
+
+	s.finishRollout("completed")
+}
+
+// upgradeRolloutBatch 逐节点串行升级一批；单节点失败不阻断本批后续，记 failed + error。
+// 返回本批是否有节点失败（金丝雀阶段据此决定是否中止）。
+func (s *SelfUpdateService) upgradeRolloutBatch(batch []model.Node, wantVersion, baseURL string) bool {
+	var anyFailed bool
+	for _, n := range batch {
 		s.updateRolloutNode(n.ID, func(ns *RolloutNodeState) {
 			ns.State = "upgrading"
 			ns.Attempts++
@@ -673,14 +760,43 @@ func (s *SelfUpdateService) runRollout(targets []model.Node, wantVersion, baseUR
 				ns.Error = ""
 			}
 		})
+		if err != nil {
+			anyFailed = true
+		}
 	}
+	return anyFailed
+}
+
+// setRolloutPhase 在锁内设置编排阶段与当前批次（须不持 rolloutMu 调用）。
+func (s *SelfUpdateService) setRolloutPhase(phase string, batch int) {
 	s.rolloutMu.Lock()
+	defer s.rolloutMu.Unlock()
+	if s.rollout != nil {
+		s.rollout.Phase = phase
+		s.rollout.CurrentBatch = batch
+	}
+}
+
+// setRolloutBatch 在锁内更新当前批次编号（须不持 rolloutMu 调用）。
+func (s *SelfUpdateService) setRolloutBatch(batch int) {
+	s.rolloutMu.Lock()
+	defer s.rolloutMu.Unlock()
+	if s.rollout != nil {
+		s.rollout.CurrentBatch = batch
+	}
+}
+
+// finishRollout 在锁内收尾 rollout：置 State=completed、Phase=finalPhase、FinishedAt（须不持 rolloutMu 调用）。
+// 中止（aborted）与正常完成（completed）均把 State 收敛为 completed（对外「不再运行」），Phase 区分二者。
+func (s *SelfUpdateService) finishRollout(finalPhase string) {
+	s.rolloutMu.Lock()
+	defer s.rolloutMu.Unlock()
 	if s.rollout != nil {
 		now := time.Now()
 		s.rollout.State = "completed"
+		s.rollout.Phase = finalPhase
 		s.rollout.FinishedAt = &now
 	}
-	s.rolloutMu.Unlock()
 }
 
 // upgradeNodeForRollout 是 rollout 内对单节点的升级调用；测试可经 nodeUpgradeFn 覆盖。
@@ -708,6 +824,7 @@ func (s *SelfUpdateService) updateRolloutNode(nodeID uint, fn func(*RolloutNodeS
 }
 
 // recountRolloutLocked 重算 succeeded/failed/pending（须持 rolloutMu）。
+// FR-155：中止后剩余节点标 skipped，既非成功也非失败，且不计入 pending（编排已结束、无待处理项）。
 func (s *SelfUpdateService) recountRolloutLocked() {
 	var ok, fail, pend int
 	for _, n := range s.rollout.Nodes {
@@ -716,6 +833,8 @@ func (s *SelfUpdateService) recountRolloutLocked() {
 			ok++
 		case "failed":
 			fail++
+		case "skipped":
+			// 已跳过（金丝雀失败中止）：不计入任何进行中/待处理计数。
 		default:
 			pend++
 		}
