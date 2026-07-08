@@ -1251,9 +1251,9 @@ function GroupPeek({ params, onOpenBot }: { params: BotListParams; onOpenBot: (i
 }
 
 const STATUS_COLOR: Record<string, string> = {
-  connected: 'text-green-500',
-  connecting: 'text-amber-500',
-  error: 'text-red-500',
+  connected: 'text-status-success',
+  connecting: 'text-status-warning',
+  error: 'text-status-danger',
   stopped: 'text-muted-foreground',
   pending: 'text-muted-foreground',
 }

@@ -135,10 +135,10 @@ export default function ProxyRegistrationsDialog({ proxyId, proxyName, onClose }
                     <TableCell>{r.priority}</TableCell>
                     <TableCell className="text-muted-foreground">{r.forcedHost || '--'}</TableCell>
                     <TableCell className="text-right">
-                      <button className="text-xs text-red-600 hover:underline"
+                      <Button type="button" variant="link" size="xs" className="h-auto p-0 text-status-danger hover:text-status-danger"
                         onClick={() => del.mutate(r.id, { onSuccess: () => toast.success(t('proxy.unregistered')) })}>
                         {t('proxy.unregister')}
-                      </button>
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -182,10 +182,9 @@ export default function ProxyRegistrationsDialog({ proxyId, proxyName, onClose }
                 <Checkbox checked={restricted} onCheckedChange={(v) => setRestricted(v === true)} aria-label={t('proxy.restricted')} />
                 {t('proxy.restricted')}
               </label>
-              <button type="submit" disabled={create.isPending || !backendId || !!forcedHostError}
-                className="px-3 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50">
+              <Button type="submit" size="sm" disabled={create.isPending || !backendId || !!forcedHostError}>
                 {t('proxy.register')}
-              </button>
+              </Button>
             </div>
           </form>
         </ScrollableDialogBody>

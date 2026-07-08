@@ -177,24 +177,26 @@ function NotificationRow({ item }: { item: FeedItem }) {
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1">
         {!item.read && (
-          <button
+          <Button
             type="button"
-            className="text-xs text-primary hover:underline"
+            variant="link"
+            size="xs"
+            className="h-auto p-0"
             onClick={() => markRead.mutate({ source: item.source, id: item.id })}
           >
             {t('notificationCenter.markRead')}
-          </button>
+          </Button>
         )}
         {/* 任务类站内信（含 taskId）→ 一键跳任务中心并定位该任务（FR-226 联动）。 */}
         {item.source === 'message' && item.taskId && (
-          <button type="button" className="text-xs text-primary hover:underline" onClick={() => navigate(`/tasks?task=${item.taskId}`)}>
+          <Button type="button" variant="link" size="xs" className="h-auto p-0" onClick={() => navigate(`/tasks?task=${item.taskId}`)}>
             {t('notificationCenter.viewTask')}
-          </button>
+          </Button>
         )}
         {item.source === 'alert' && (
-          <button type="button" className="text-xs text-muted-foreground hover:underline" onClick={() => navigate('/alerts')}>
+          <Button type="button" variant="link" size="xs" className="h-auto p-0 text-muted-foreground hover:text-foreground" onClick={() => navigate('/alerts')}>
             {t('notificationCenter.viewAlertDetail')}
-          </button>
+          </Button>
         )}
       </div>
     </li>

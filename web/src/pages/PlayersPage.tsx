@@ -470,12 +470,12 @@ function LiveTab() {
                       ))}
                     </SelectContent>
                   </Select>
-                  <button className="text-xs text-muted-foreground hover:text-foreground" onClick={togglePause}>
+                  <Button variant="link" size="xs" className="h-auto p-0 text-muted-foreground hover:text-foreground" onClick={togglePause}>
                     {paused ? t('players.liveResume') : t('players.livePause')}
-                  </button>
-                  <button className="text-xs text-muted-foreground hover:text-foreground" onClick={clearEvents}>
+                  </Button>
+                  <Button variant="link" size="xs" className="h-auto p-0 text-muted-foreground hover:text-foreground" onClick={clearEvents}>
                     {t('players.liveClear')}
-                  </button>
+                  </Button>
                 </div>
               </div>
               {visibleEvents.length === 0 ? (
@@ -592,16 +592,16 @@ function BansTab() {
                   <TableCell className="text-muted-foreground">{b.operator?.username || '--'}</TableCell>
                   <TableCell className="text-muted-foreground">{new Date(b.createdAt).toLocaleString()}</TableCell>
                   <TableCell>
-                    <span className={`inline-flex items-center gap-1.5 text-xs ${b.active ? 'text-red-600' : 'text-muted-foreground'}`}>
-                      <span className={`h-2 w-2 rounded-full ${b.active ? 'bg-red-500' : 'bg-muted-foreground'}`} />
+                    <span className={`inline-flex items-center gap-1.5 text-xs ${b.active ? 'text-status-danger' : 'text-muted-foreground'}`}>
+                      <span className={`h-2 w-2 rounded-full ${b.active ? 'bg-status-danger' : 'bg-muted-foreground'}`} />
                       {b.active ? t('players.banActive') : t('players.banLifted')}
                     </span>
                   </TableCell>
                   <TableCell className="text-right">
                     {b.active && (
-                      <button className="text-xs text-blue-600 hover:underline" onClick={() => setPending(b.playerName)}>
+                      <Button variant="link" size="xs" className="h-auto p-0" onClick={() => setPending(b.playerName)}>
                         {t('players.unban')}
-                      </button>
+                      </Button>
                     )}
                   </TableCell>
                 </TableRow>
@@ -699,13 +699,9 @@ function WhitelistTab() {
               className="flex-1 px-3 py-2 border rounded-md bg-background text-sm"
               placeholder={t('players.whitelistAddPlaceholder')}
             />
-            <button
-              type="submit"
-              disabled={wlAction.isPending || !name.trim()}
-              className="px-3 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50"
-            >
+            <Button type="submit" disabled={wlAction.isPending || !name.trim()}>
               {t('players.whitelistAdd')}
-            </button>
+            </Button>
           </form>
 
           {isLoading ? (
@@ -726,9 +722,9 @@ function WhitelistTab() {
                     <TableRow key={p}>
                       <TableCell className="font-medium">{p}</TableCell>
                       <TableCell className="text-right">
-                        <button className="text-xs text-red-600 hover:underline" onClick={() => remove(p)}>
+                        <Button variant="link" size="xs" className="h-auto p-0 text-status-danger hover:text-status-danger" onClick={() => remove(p)}>
                           {t('common.delete')}
-                        </button>
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}

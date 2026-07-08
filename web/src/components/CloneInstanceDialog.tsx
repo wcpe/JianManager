@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useInstances } from '@/api/instances'
 import { useCloneInstance, type CloneResult } from '@/api/clone'
+import { Button } from '@jianmanager/ui/components/button'
 import {
   Dialog,
   DialogContent,
@@ -186,17 +187,15 @@ export default function CloneInstanceDialog({ sourceId, sourceName, onClose }: C
           </ScrollableDialogBody>
 
           <DialogFooter className="flex-row justify-end pt-2">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-sm border rounded-md hover:bg-accent">
+            <Button type="button" variant="outline" onClick={onClose}>
               {t('common.cancel')}
-            </button>
-            <button type="button" onClick={runPreview} disabled={clone.isPending || !name}
-              className="px-4 py-2 text-sm border rounded-md hover:bg-accent disabled:opacity-50">
+            </Button>
+            <Button type="button" variant="outline" onClick={runPreview} disabled={clone.isPending || !name}>
               {t('clone.preview')}
-            </button>
-            <button type="submit" disabled={clone.isPending || !name}
-              className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50">
+            </Button>
+            <Button type="submit" disabled={clone.isPending || !name}>
               {clone.isPending ? t('clone.cloning') : t('clone.submit')}
-            </button>
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

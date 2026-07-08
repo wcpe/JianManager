@@ -242,12 +242,12 @@ function RulesTab() {
                     />
                   </TableCell>
                   <TableCell className="space-x-3 text-right whitespace-nowrap">
-                    <button className="text-xs text-primary hover:underline" onClick={() => setEditing(r)}>
+                    <Button variant="link" size="xs" className="h-auto p-0" onClick={() => setEditing(r)}>
                       {t('common.edit')}
-                    </button>
-                    <button className="text-xs text-status-danger hover:underline" onClick={() => setDeleteTarget(r)}>
+                    </Button>
+                    <Button variant="link" size="xs" className="h-auto p-0 text-status-danger hover:text-status-danger" onClick={() => setDeleteTarget(r)}>
                       {t('common.delete')}
-                    </button>
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))}
@@ -428,9 +428,9 @@ function EventsTab() {
                   {e.acknowledged ? (
                     <span className="text-xs text-muted-foreground">{t('alerts.acknowledged')}</span>
                   ) : (
-                    <button className="text-xs text-primary hover:underline" onClick={() => ack.mutate(e.id)}>
+                    <Button variant="link" size="xs" className="h-auto p-0" onClick={() => ack.mutate(e.id)}>
                       {t('alerts.acknowledge')}
-                    </button>
+                    </Button>
                   )}
                 </TableCell>
               </TableRow>

@@ -237,9 +237,9 @@ function BatchOperationNotice({
           )}
         </div>
         {state.done && (
-          <button type="button" className="shrink-0 text-primary hover:underline" onClick={onDismiss}>
+          <Button type="button" variant="link" size="xs" className="h-auto shrink-0 p-0" onClick={onDismiss}>
             {t('common.close')}
-          </button>
+          </Button>
         )}
       </div>
     </div>
