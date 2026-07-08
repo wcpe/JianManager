@@ -21,6 +21,10 @@ import {
 import { useAuthStore } from '@/stores/auth'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
+import { Input } from '@jianmanager/ui/components/input'
+import { Label } from '@jianmanager/ui/components/label'
+import { Checkbox } from '@jianmanager/ui/components/checkbox'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import DangerConfirm from '@/components/DangerConfirm'
 import { ReleaseNotes } from '@/components/ReleaseNotes'
@@ -89,7 +93,12 @@ export default function SystemUpdatePage() {
   const rolloutQ = useRollout()
   const rolloutRunning = rolloutQ.data?.state === 'running'
 
+  // 全网升级两步走：先开配置弹窗（金丝雀数/每批数/失败即中止，FR-155），确认后再走 DangerConfirm 二次确认。
+  const [configAll, setConfigAll] = useState(false)
   const [confirmAll, setConfirmAll] = useState(false)
+  const [canarySize, setCanarySize] = useState('')
+  const [batchSize, setBatchSize] = useState('')
+  const [abortOnCanaryFailure, setAbortOnCanaryFailure] = useState(true)
 
   if (!isPlatformAdmin) {
     return (
@@ -115,8 +124,15 @@ export default function SystemUpdatePage() {
 
   const doUpgradeAll = () => {
     setConfirmAll(false)
+    // 空输入=不设该项：canarySize 省略=无金丝雀、batchSize 省略=剩余全部一批（等价原行为）。
+    const canary = canarySize.trim() === '' ? undefined : Math.max(0, Number(canarySize))
+    const batch = batchSize.trim() === '' ? undefined : Math.max(0, Number(batchSize))
     upgradeAll.mutate(
-      {},
+      {
+        canarySize: canary,
+        batchSize: batch,
+        abortOnCanaryFailure: canary ? abortOnCanaryFailure : undefined,
+      },
       {
         onSuccess: () => {
           toast.success(t('systemUpdate.rolloutStarted', '全网升级已发起'))
@@ -207,13 +223,67 @@ export default function SystemUpdatePage() {
             latest={result.latestVersion}
             workerAssetVersion={result.controlPlane.currentVersion || result.latestVersion}
             rolloutRunning={rolloutRunning}
-            onUpgradeAll={() => setConfirmAll(true)}
+            onUpgradeAll={() => setConfigAll(true)}
             onUpgraded={() => refresh.mutate(undefined)}
           />
         </>
       )}
 
       {rolloutQ.data && rolloutQ.data.state !== 'idle' && <RolloutPanel rollout={rolloutQ.data} />}
+
+      {/* 全网升级第一步：金丝雀分批配置（FR-155）。留空即无金丝雀/剩余一批，等价原串行全部。 */}
+      <Dialog open={configAll} onOpenChange={(v) => { if (!v) setConfigAll(false) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t('systemUpdate.canaryConfigTitle', '全网升级策略')}</DialogTitle>
+            <DialogDescription>
+              {t('systemUpdate.canaryConfigDesc', '可先升级少量金丝雀节点验证无误后再分批推进全网；留空则一次串行升级所有节点。')}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <div className="space-y-1.5">
+              <Label htmlFor="rollout-canary-size">{t('systemUpdate.canarySize', '金丝雀节点数')}</Label>
+              <Input
+                id="rollout-canary-size"
+                type="number"
+                min={0}
+                inputMode="numeric"
+                value={canarySize}
+                onChange={(e) => setCanarySize(e.target.value)}
+                placeholder={t('systemUpdate.canaryNonePlaceholder', '0 = 不设金丝雀')}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="rollout-batch-size">{t('systemUpdate.batchSize', '每批节点数')}</Label>
+              <Input
+                id="rollout-batch-size"
+                type="number"
+                min={0}
+                inputMode="numeric"
+                value={batchSize}
+                onChange={(e) => setBatchSize(e.target.value)}
+                placeholder={t('systemUpdate.batchAllPlaceholder', '留空 = 剩余一次全部')}
+              />
+            </div>
+            <label className="flex items-center gap-2 text-sm" htmlFor="rollout-abort-canary">
+              <Checkbox
+                id="rollout-abort-canary"
+                checked={abortOnCanaryFailure}
+                onCheckedChange={(v) => setAbortOnCanaryFailure(v === true)}
+              />
+              {t('systemUpdate.abortOnCanaryFailure', '金丝雀失败即中止（不再升级剩余节点）')}
+            </label>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfigAll(false)}>
+              {t('common.cancel', '取消')}
+            </Button>
+            <Button onClick={() => { setConfigAll(false); setConfirmAll(true) }}>
+              {t('common.continue', '继续')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <DangerConfirm
         open={confirmAll}
@@ -656,7 +726,10 @@ function RolloutPanel({ rollout }: { rollout: Rollout }) {
     <div className="rounded-lg border p-4 space-y-3">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h2 className="text-lg font-semibold">{t('systemUpdate.rolloutTitle', '全网升级进度')}</h2>
-        <RolloutStateBadge state={rollout.state} />
+        <div className="flex items-center gap-2">
+          {rollout.phase && <RolloutPhaseBadge phase={rollout.phase} />}
+          <RolloutStateBadge state={rollout.state} />
+        </div>
       </div>
       <div className="text-sm text-muted-foreground flex flex-wrap gap-x-4 gap-y-1">
         <span>{t('systemUpdate.rolloutTarget', '目标版本')}：<span className="font-mono text-foreground">{rollout.targetVersion || t('systemUpdate.feedLatest', '源最新')}</span></span>
@@ -664,6 +737,13 @@ function RolloutPanel({ rollout }: { rollout: Rollout }) {
         <span className="text-emerald-600">{t('systemUpdate.rolloutSucceeded', '成功 {{n}}', { n: rollout.succeeded })}</span>
         <span className="text-destructive">{t('systemUpdate.rolloutFailedCount', '失败 {{n}}', { n: rollout.failed })}</span>
         <span>{t('systemUpdate.rolloutPending', '待处理 {{n}}', { n: rollout.pending })}</span>
+        {/* 金丝雀分批回显（FR-155）：仅在设了金丝雀或分批时展示，避免污染原「串行全部」的简洁面板。 */}
+        {!!rollout.canarySize && (
+          <span>{t('systemUpdate.rolloutCanary', '金丝雀 {{n}}', { n: rollout.canarySize })}</span>
+        )}
+        {!!rollout.currentBatch && (rollout.canarySize || (rollout.batchSize ?? 0) > 0) && (
+          <span>{t('systemUpdate.rolloutCurrentBatch', '第 {{n}} 批', { n: rollout.currentBatch })}</span>
+        )}
       </div>
 
       <div className="overflow-hidden rounded-md border">
@@ -694,6 +774,23 @@ function RolloutPanel({ rollout }: { rollout: Rollout }) {
   )
 }
 
+/** rollout 编排阶段徽章（FR-155）：金丝雀 / 滚动 / 已中止 / 已完成。 */
+function RolloutPhaseBadge({ phase }: { phase: string }) {
+  const { t } = useTranslation()
+  switch (phase) {
+    case 'canary':
+      return <Badge variant="outline" className="border-sky-500/50 text-sky-600">{t('systemUpdate.phaseCanary', '金丝雀')}</Badge>
+    case 'rolling':
+      return <Badge variant="outline" className="border-amber-500/50 text-amber-600">{t('systemUpdate.phaseRolling', '滚动')}</Badge>
+    case 'aborted':
+      return <Badge variant="outline" className="text-destructive border-destructive/40">{t('systemUpdate.phaseAborted', '已中止')}</Badge>
+    case 'completed':
+      return <Badge variant="outline" className="border-emerald-500/40 text-emerald-600">{t('systemUpdate.phaseCompleted', '已完成')}</Badge>
+    default:
+      return null
+  }
+}
+
 /** rollout 整体状态徽章。 */
 function RolloutStateBadge({ state }: { state: string }) {
   const { t } = useTranslation()
@@ -716,6 +813,8 @@ function RolloutNodeBadge({ state }: { state: RolloutNodeState['state'] }) {
       return <Badge variant="outline" className="text-destructive border-destructive/40">{t('systemUpdate.nodeFailed', '失败')}</Badge>
     case 'upgrading':
       return <Badge variant="outline" className="border-amber-500/50 text-amber-600"><RefreshCw className="size-3.5 animate-spin" /> {t('systemUpdate.nodeUpgrading', '升级中')}</Badge>
+    case 'skipped':
+      return <Badge variant="outline" className="text-muted-foreground">{t('systemUpdate.nodeSkipped', '已跳过')}</Badge>
     default:
       return <Badge variant="outline" className="text-muted-foreground">{t('systemUpdate.nodePending', '待处理')}</Badge>
   }

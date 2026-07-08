@@ -1,3 +1,4 @@
+import type { AxiosProgressEvent } from 'axios'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
 
@@ -126,6 +127,43 @@ export function useDeleteAsset() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (assetId: number) => api.delete(`/assets/${assetId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['runtime-assets-overview'] }),
+  })
+}
+
+/** 导入制品请求（FR-155 下载进度补齐）。onProgress 由 axios 上传进度回调驱动，供弹窗展示进度条。 */
+export interface ImportAssetPayload {
+  type: AssetType
+  file: File
+  name?: string
+  version?: string
+  /** 进度回调：已上传字节 / 总字节。 */
+  onProgress?: (loaded: number, total: number) => void
+}
+
+/**
+ * 导入一个制品到制品库（FR-155：制品导入下载进度）。
+ * 走既有 multipart 入库路由（POST /assets，服务层 AssetService.Ingest CAS 去重），
+ * 用 axios onUploadProgress 上报字节进度（与 useUploadPlugin 同一进度机制，不新造轮子）。
+ * 成功后失效全局聚合缓存，令新制品即刻出现在列表。
+ */
+export function useImportAsset() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (payload: ImportAssetPayload) => {
+      const form = new FormData()
+      form.append('type', payload.type)
+      form.append('file', payload.file, payload.file.name)
+      if (payload.name) form.append('name', payload.name)
+      if (payload.version) form.append('version', payload.version)
+      const { data } = await api.post<AssetInfo>('/assets', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (evt: AxiosProgressEvent) => {
+          payload.onProgress?.(evt.loaded, evt.total ?? payload.file.size)
+        },
+      })
+      return data
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['runtime-assets-overview'] }),
   })
 }

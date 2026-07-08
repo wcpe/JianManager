@@ -1,4 +1,4 @@
-import { HttpResponse } from 'msw'
+import { HttpResponse, delay } from 'msw'
 import { domainRoute } from '@/mocks/inject'
 import { requireAuth, requirePlatformAdmin } from '@/mocks/auth-middleware'
 import { db } from '@/mocks/db'
@@ -115,6 +115,57 @@ interface MockRuntimeInstanceRef {
 const NOW = '2026-06-28T08:00:00Z'
 /** 更新源 mock 最新版本。 */
 const FEED_LATEST = '0.10.0'
+
+/** 从 multipart 请求提取制品导入所需字段（FR-155）。 */
+interface MultipartAssetFields {
+  type?: string
+  name?: string
+  version?: string
+  filename?: string
+  contentType?: string
+  size?: number
+}
+
+/**
+ * 稳健读取 multipart/form-data 字段（FR-155 导入制品）。
+ * 优先走标准 request.formData()；在测试环境下 axios 编码的真实 File 会触发 undici multipart
+ * 解析器断言失败（jsdom/undici 已知不兼容），此时回退按原始文本正则提取各段，保证 mock 仍可用。
+ */
+async function readMultipartFields(request: Request): Promise<MultipartAssetFields> {
+  try {
+    const form = await request.clone().formData()
+    const file = form.get('file')
+    const fileLike = file as { name?: unknown; size?: unknown; type?: unknown } | null
+    return {
+      type: strOrUndef(form.get('type')),
+      name: strOrUndef(form.get('name')),
+      version: strOrUndef(form.get('version')),
+      filename: typeof file === 'string' ? file : typeof fileLike?.name === 'string' ? fileLike.name : undefined,
+      contentType: typeof fileLike?.type === 'string' ? fileLike.type : undefined,
+      size: typeof fileLike?.size === 'number' ? fileLike.size : undefined,
+    }
+  } catch {
+    // 回退：从原始 multipart 文本按 name 抓取各段（含文件段的 filename / 正文长度）。
+    const raw = await request.text()
+    const field = (n: string) => {
+      const m = raw.match(new RegExp(`name="${n}"\\r?\\n\\r?\\n([\\s\\S]*?)\\r?\\n--`, 'i'))
+      return m ? m[1] : undefined
+    }
+    const fileMatch = raw.match(/name="file"; filename="([^"]*)"[\s\S]*?\r?\n\r?\n([\s\S]*?)\r?\n--/i)
+    return {
+      type: field('type'),
+      name: field('name'),
+      version: field('version'),
+      filename: fileMatch?.[1],
+      size: fileMatch ? fileMatch[2].length : undefined,
+    }
+  }
+}
+
+/** FormDataEntryValue → 非空字符串或 undefined。 */
+function strOrUndef(v: FormDataEntryValue | null): string | undefined {
+  return typeof v === 'string' && v !== '' ? v : undefined
+}
 
 /** 生成从当前时间起算的接入 token 过期时间，避免 mock seed 随日期推进变成过期样例。 */
 function enrollTokenExpiresAt(ttlMinutes = 60) {
@@ -336,7 +387,7 @@ function cacheWorkerAsset(os: string, arch: string) {
 /** CP（Control Plane）自身 mock 版本状态，升级/回滚后变更，check 即反映（FR-081）。 */
 const cp = { currentVersion: '0.9.0', backupVersion: '0.8.0' as string | undefined }
 
-/** 全网升级编排进度快照（FR-081），upgrade-all 触发后填充。 */
+/** 全网升级编排进度快照（FR-081 + FR-155 金丝雀分批），upgrade-all 触发后填充。 */
 interface MockRollout {
   rolloutId: string
   targetVersion: string
@@ -348,6 +399,10 @@ interface MockRollout {
   failed: number
   pending: number
   nodes: { nodeId: number; name: string; state: string; fromVersion: string; toVersion: string; error: string; attempts: number }[]
+  phase: string
+  canarySize: number
+  batchSize: number
+  currentBatch: number
 }
 let rollout: MockRollout = {
   rolloutId: '',
@@ -360,6 +415,10 @@ let rollout: MockRollout = {
   failed: 0,
   pending: 0,
   nodes: [],
+  phase: '',
+  canarySize: 0,
+  batchSize: 0,
+  currentBatch: 0,
 }
 
 /** 升级一个版本号的小工具：currentVersion→FEED_LATEST 时算可升级。 */
@@ -783,6 +842,44 @@ export const handlers = [
     })
   }),
 
+  // 导入制品（FR-155：制品导入下载进度）——镜像后端 multipart 入库（POST /assets）。
+  // 读上传文件 → 按类型插入一条制品，令 overview 联动出现（进度由前端 axios onUploadProgress 驱动）。
+  domainRoute('post', '/assets', async (info) => {
+    const denied = requirePlatformAdmin(info)
+    if (denied) return denied
+    const fields = await readMultipartFields(info.request)
+    const type = String(fields.type || '') as MockAsset['type']
+    const validTypes: MockAsset['type'][] = ['core', 'plugin', 'image', 'video', 'archive', 'blob', 'client-file']
+    if (!validTypes.includes(type)) {
+      return HttpResponse.json({ error: 'INVALID_TYPE', message: '非法的资产类型' }, { status: 400 })
+    }
+    if (!fields.filename) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '需提供上传文件' }, { status: 400 })
+    }
+    // 轻微延迟：模拟上传耗时，让前端进度反馈有可观测窗口（导入进度是本 endpoint 的核心体验）。
+    await delay(30)
+    const filename = fields.filename
+    const created = assets.insert({
+      type,
+      name: fields.name || filename.replace(/\.[^.]+$/, ''),
+      version: fields.version || '',
+      filename,
+      sha256: 'imported'.padEnd(64, '0'),
+      md5: 'imported'.padEnd(32, '0'),
+      size: fields.size || 1024,
+      contentType: fields.contentType || 'application/octet-stream',
+      sourceUrl: '',
+      metadata: '{}',
+      storageState: 'hot',
+      storageBackend: 'local',
+      refCount: 0,
+      relPath: `${type}/${filename}`,
+      createdAt: NOW,
+      lastUsedAt: NOW,
+    })
+    return HttpResponse.json(created, { status: 201 })
+  }),
+
   domainRoute('delete', '/assets/:id', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
@@ -873,11 +970,23 @@ export const handlers = [
   domainRoute('post', '/self-update/nodes/upgrade-all', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    const body = (await info.request.json().catch(() => ({}))) as { nodeIds?: number[]; version?: string }
+    const body = (await info.request.json().catch(() => ({}))) as {
+      nodeIds?: number[]
+      version?: string
+      canarySize?: number
+      batchSize?: number
+      abortOnCanaryFailure?: boolean
+    }
     const to = body.version || FEED_LATEST
     const targets = nodes
       .list((n) => n.status === 1)
       .filter((n) => !body.nodeIds || body.nodeIds.includes(n.id))
+    // FR-155：金丝雀=第 1 批；剩余按 batchSize 分批（<=0=剩余一批）。mock 恒成功，故末态 phase=completed。
+    const canarySize = Math.min(Math.max(0, body.canarySize ?? 0), targets.length)
+    const batchSize = body.batchSize && body.batchSize > 0 ? body.batchSize : Math.max(1, targets.length - canarySize)
+    const remaining = targets.length - canarySize
+    const remainingBatches = remaining > 0 ? Math.ceil(remaining / batchSize) : 0
+    const currentBatch = canarySize > 0 ? 1 + remainingBatches : Math.max(1, remainingBatches)
     rollout = {
       rolloutId: `rollout-${Date.now()}`,
       targetVersion: to,
@@ -893,6 +1002,10 @@ export const handlers = [
         nodes.update(n.id, { workerVersion: to, backupVersion: from })
         return { nodeId: n.id, name: n.name, state: 'succeeded', fromVersion: from, toVersion: to, error: '', attempts: 1 }
       }),
+      phase: 'completed',
+      canarySize,
+      batchSize: body.batchSize ?? 0,
+      currentBatch,
     }
     return HttpResponse.json(rollout, { status: 202 })
   }),

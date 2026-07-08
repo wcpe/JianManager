@@ -58,7 +58,7 @@ export interface WorkerAssetCacheEntry {
 export interface RolloutNodeState {
   nodeId: number
   name: string
-  /** pending | upgrading | succeeded | failed */
+  /** pending | upgrading | succeeded | failed | skipped */
   state: string
   fromVersion: string
   toVersion: string
@@ -79,6 +79,14 @@ export interface Rollout {
   failed: number
   pending: number
   nodes: RolloutNodeState[]
+  /** 编排阶段（FR-155）：canary | rolling | completed | aborted。 */
+  phase?: string
+  /** 本次金丝雀节点数（FR-155）。 */
+  canarySize?: number
+  /** 本次剩余分批大小（FR-155，<=0=剩余全部一批）。 */
+  batchSize?: number
+  /** 当前批次（FR-155，1-based，金丝雀=第 1 批）。 */
+  currentBatch?: number
 }
 
 /** CP 自更新接受响应（202）。 */
@@ -212,12 +220,36 @@ export function useUpgradeNode() {
   })
 }
 
-/** 发起全网逐节点升级编排（nodeIds 省略=全部在线节点）。 */
+/**
+ * 发起全网逐节点升级编排（nodeIds 省略=全部在线节点）。
+ * FR-155：可选金丝雀分批——canarySize 先行升级的金丝雀数、batchSize 剩余分批大小、
+ * abortOnCanaryFailure 金丝雀失败即中止；均省略时等价原「串行全部」行为。
+ */
 export function useUpgradeAll() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ nodeIds, version }: { nodeIds?: number[]; version?: string }) =>
-      api.post<Rollout>('/self-update/nodes/upgrade-all', { nodeIds, version }).then((r) => r.data),
+    mutationFn: ({
+      nodeIds,
+      version,
+      canarySize,
+      batchSize,
+      abortOnCanaryFailure,
+    }: {
+      nodeIds?: number[]
+      version?: string
+      canarySize?: number
+      batchSize?: number
+      abortOnCanaryFailure?: boolean
+    }) =>
+      api
+        .post<Rollout>('/self-update/nodes/upgrade-all', {
+          nodeIds,
+          version,
+          canarySize,
+          batchSize,
+          abortOnCanaryFailure,
+        })
+        .then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['self-update', 'rollout'] }),
   })
 }

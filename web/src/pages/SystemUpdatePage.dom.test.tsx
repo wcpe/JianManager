@@ -33,9 +33,16 @@ function loginPlatformAdmin() {
 }
 
 const requiredSystemUpdateKeys = [
+  'abortOnCanaryFailure',
+  'batchAllPlaceholder',
+  'batchSize',
   'cacheState',
   'cacheWorkerAsset',
   'cachedAt',
+  'canaryConfigDesc',
+  'canaryConfigTitle',
+  'canaryNonePlaceholder',
+  'canarySize',
   'checkFailed',
   'checkUpdate',
   'checking',
@@ -64,6 +71,7 @@ const requiredSystemUpdateKeys = [
   'nodeRollbackConfirmDesc',
   'nodeRollbackFailed',
   'nodeRolledBack',
+  'nodeSkipped',
   'nodeSucceeded',
   'nodeUpgradeConfirm',
   'nodeUpgradeConfirmDesc',
@@ -75,10 +83,16 @@ const requiredSystemUpdateKeys = [
   'notConfigured',
   'offline',
   'online',
+  'phaseAborted',
+  'phaseCanary',
+  'phaseCompleted',
+  'phaseRolling',
   'platform',
   'releaseNotes',
   'rollback',
   'rollbackTo',
+  'rolloutCanary',
+  'rolloutCurrentBatch',
   'rolloutFailedCount',
   'rolloutInProgress',
   'rolloutPending',
@@ -332,12 +346,85 @@ describe('SystemUpdatePage（mock 假后端）', () => {
     renderWithProviders(<SystemUpdatePage />)
 
     await screen.findByText('Control Plane')
+    // FR-155：全网升级先开配置弹窗（金丝雀分批），点「Continue」再进 DangerConfirm 二次确认。
     await user.click(screen.getByRole('button', { name: 'Upgrade all' }))
+    const configDialog = await screen.findByRole('dialog')
+    await user.click(within(configDialog).getByRole('button', { name: 'Continue' }))
     const dialog = await screen.findByRole('dialog')
     await user.click(within(dialog).getByRole('button', { name: 'Upgrade all' }))
 
     await waitFor(() => expect(toastError).toHaveBeenCalledWith('Failed to start fleet-wide upgrade'))
     expect(toastError).not.toHaveBeenCalledWith(expect.stringContaining('{{n}}'))
+  })
+
+  it('全网升级配置金丝雀分批：弹窗有金丝雀/每批输入，发起后请求带参数且进度显示阶段（FR-155）', async () => {
+    loginPlatformAdmin()
+    const user = userEvent.setup()
+    let sentBody: { canarySize?: number; batchSize?: number; abortOnCanaryFailure?: boolean } | null = null
+    // 金丝雀阶段快照（upgrade-all 触发后 rollout GET 才返回它，避免进页即渲染进度面板致 alpha 重复）。
+    const canarySnapshot = {
+      rolloutId: 'r-canary',
+      targetVersion: '0.10.0',
+      state: 'running',
+      startedAt: '2026-07-06T00:00:00Z',
+      finishedAt: null,
+      total: 2,
+      succeeded: 1,
+      failed: 0,
+      pending: 1,
+      nodes: [
+        { nodeId: 1, name: 'alpha', state: 'succeeded', fromVersion: '0.9.0', toVersion: '0.10.0', error: '', attempts: 1 },
+        { nodeId: 2, name: 'beta', state: 'pending', fromVersion: '', toVersion: '', error: '', attempts: 0 },
+      ],
+      phase: 'canary',
+      canarySize: 1,
+      batchSize: 0,
+      currentBatch: 1,
+    }
+    let started = false
+    server.use(
+      http.post(API('/self-update/nodes/upgrade-all'), async (info) => {
+        sentBody = (await info.request.json()) as typeof sentBody
+        started = true
+        return HttpResponse.json(canarySnapshot, { status: 202 })
+      }),
+      // 触发前 idle（不渲染进度面板），触发后回金丝雀阶段 → 进度面板渲染阶段徽章 + 金丝雀计数。
+      http.get(API('/self-update/rollout'), () =>
+        HttpResponse.json(started ? canarySnapshot : { rolloutId: '', targetVersion: '', state: 'idle', startedAt: '', finishedAt: null, total: 0, succeeded: 0, failed: 0, pending: 0, nodes: [], phase: '', canarySize: 0, batchSize: 0, currentBatch: 0 }),
+      ),
+    )
+    renderWithProviders(<SystemUpdatePage />)
+
+    // 打开配置弹窗（节点区「全网升级」按钮；alpha 可升级 → 未被禁用）。
+    await screen.findByText('alpha')
+    await user.click(screen.getByRole('button', { name: '全网升级' }))
+
+    // 配置弹窗内应有金丝雀数与每批数输入、以及金丝雀失败即中止勾选。
+    const configDialog = await screen.findByRole('dialog')
+    const canaryInput = within(configDialog).getByLabelText('金丝雀节点数')
+    const batchInput = within(configDialog).getByLabelText('每批节点数')
+    expect(canaryInput).toBeInTheDocument()
+    expect(batchInput).toBeInTheDocument()
+    expect(within(configDialog).getByText('金丝雀失败即中止（不再升级剩余节点）')).toBeInTheDocument()
+
+    await user.type(canaryInput, '1')
+    await user.type(batchInput, '2')
+    // 「继续」→ 关配置弹窗、开 DangerConfirm。
+    await user.click(within(configDialog).getByRole('button', { name: '继续' }))
+
+    const confirmDialog = await screen.findByRole('dialog')
+    await user.click(within(confirmDialog).getByRole('button', { name: '全网升级' }))
+
+    // 请求体应带金丝雀/分批参数。
+    await waitFor(() => expect(sentBody).not.toBeNull())
+    expect(sentBody!.canarySize).toBe(1)
+    expect(sentBody!.batchSize).toBe(2)
+    expect(sentBody!.abortOnCanaryFailure).toBe(true)
+
+    // 进度面板显示金丝雀阶段徽章 + 金丝雀计数。
+    expect(await screen.findByText('全网升级进度')).toBeInTheDocument()
+    expect(await screen.findByText('金丝雀')).toBeInTheDocument()
+    expect(screen.getByText('金丝雀 1')).toBeInTheDocument()
   })
 
   it('注入 500：检查失败显示错误态', async () => {
