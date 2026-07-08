@@ -4,11 +4,11 @@
 
 ## 1. 背景与目标
 
-现有建服向导和核心解析主要覆盖 Paper/Velocity/Waterfall/BungeeCord。FR-046 先支持 SpongeVanilla 后端子服，并为 SpongeForge 预留 core family 与 UI 文案；SpongeForge 只有在能确认稳定直链发行物且不需要通用 Forge 安装器时才进入本轮实现，否则延期为后续补充 FR。全部实现仍沿用群组服 M:N 建模、系统分配工作目录/端口和结构化启动。
+现有建服向导和核心解析主要覆盖 Paper/Velocity/Waterfall/BungeeCord。FR-046 支持 SpongeVanilla 与 SpongeForge 两类后端子服；SpongeForge 经其官方 Forge 安装器直链完成一次性部署（仅调用该安装器，不做通用 Forge 版本管理）。全部实现仍沿用群组服 M:N 建模、系统分配工作目录/端口和结构化启动。
 
 ## 2. 需求
 
-- 建服向导核心类型新增 `spongevanilla`；`spongeforge` 作为待确认候选展示或灰置，不承诺本轮可创建。
+- 建服向导核心类型新增 `spongevanilla` 与 `spongeforge`，两者本轮均可创建（SpongeForge 经其官方 Forge 安装器直链部署）。
 - 按 MC 版本解析可用 Sponge 核心。
 - 下载核心 jar 优先命中制品库，未命中时入库。
 - 创建后仍使用系统分配工作目录、端口、JDK 和结构化启动。
@@ -16,7 +16,7 @@
 
 范围外：
 
-- 通用 Forge 安装器管理；因此 SpongeForge 不能依赖 Forge 安装器流程作为本轮交付前提。
+- 通用 Forge 版本/安装器管理（SpongeForge 仅调用其官方发行安装器完成一次性部署，不提供通用 Forge 管理能力）。
 - modpack 安装。
 - Sponge 插件市场。
 - 对旧 Sponge 版本做无限兼容。
@@ -28,7 +28,7 @@
 新增 core family：
 
 - `spongevanilla`
-- `spongeforge`（预留 / 待确认；若发行物需要 Forge 安装器则不进入本轮创建能力）
+- `spongeforge`（经其官方 Forge 安装器直链部署；派生启动仍走结构化 `LaunchJar`）
 
 实例仍是 `role=backend`，不新增实例角色。
 
@@ -52,12 +52,12 @@ Worker 仍按 `jdk + jvm_args + core_jar + args` 派生启动命令，不允许�
 - [x] 新增通用 provision service/router 入口，保留旧 `/instances/provision/bukkit` 兼容。
 - [x] 扩展前端向导选项与 i18n。
 - [x] 补假后端 mock 和 DOM 测试。
-- [ ] 真机创建 SpongeVanilla backend 并启动；若 SpongeForge 发行链已确认无需 Forge 安装器，可追加 SpongeForge 真机验收。
+- [ ] 真机创建 SpongeVanilla + SpongeForge backend 并启动（SpongeForge 经 Forge 安装器）。
 - [x] 文档同步：API、ARCHITECTURE。
 
 ## 5. 验收标准
 
-- `/cores` 能列出 SpongeVanilla 候选；SpongeForge 未确认时必须以禁用/待确认状态展示，不提供可提交创建。
+- `/cores` 能列出 SpongeVanilla 与 SpongeForge 候选，两者均可提交创建。
 - 创建 Sponge backend 时系统分配端口/目录/JDK。
 - 创建后可一键启动到 RUNNING。
 - 代理注册关系不破坏 ADR-007。
@@ -65,5 +65,5 @@ Worker 仍按 `jdk + jvm_args + core_jar + args` 派生启动命令，不允许�
 
 ## 6. 风险 / 待定
 
-- SpongeForge 发行物与 Forge 安装器关系需在实现前确认最小支持版本；未确认前不得把 SpongeForge 标为本轮已交付。
+- SpongeForge 依赖其官方 Forge 安装器直链，需在真机验收锁定最小支持版本与安装器直链可用性；真机通过前不标已交付。
 - 若官方源没有稳定 sha256，需要通过制品库入库时计算 sha256。
