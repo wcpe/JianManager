@@ -278,11 +278,11 @@ function defaultManifest() {
 
 function selectBatchTargets(body: PluginBatchDeployMockRequest) {
   const rows = db<PluginTargetInstance>('instances').list()
-  const ids = body.ids ?? body.target?.ids
+  const ids = body.target?.ids
   if (ids && ids.length > 0) {
     return rows.filter((inst) => ids.includes(inst.id))
   }
-  const filter = body.filter ?? body.target?.filter
+  const filter = body.target?.filter
   if (!filter) return []
   return rows.filter((inst) => {
     if (filter.nodeId !== undefined && inst.nodeId !== Number(filter.nodeId)) return false
@@ -430,8 +430,8 @@ export const handlers = [
     if (denied) return denied
     const body = (await info.request.json().catch(() => ({}))) as PluginBatchDeployMockRequest
     const assetIds = body.assetIds ?? []
-    const ids = body.ids ?? body.target?.ids ?? []
-    const filter = body.filter ?? body.target?.filter
+    const ids = body.target?.ids ?? []
+    const filter = body.target?.filter
     if (assetIds.length === 0) {
       return HttpResponse.json({ error: 'INVALID_REQUEST', message: '请选择插件制品' }, { status: 400 })
     }
@@ -458,17 +458,17 @@ export const handlers = [
     }
 
     const dir = normalizePluginDir(body.destination ?? 'plugins')
-    const results: Array<{ id: number; name: string; skipped: boolean; reason?: string; error?: string }> = []
+    const results: Array<{ instanceId: number; assetId: number; ok: boolean; error?: string }> = []
     let success = 0
     let failed = 0
     for (const inst of targets) {
-      const errors: string[] = []
       for (const asset of selectedAssets) {
         if (!asset) continue
         const name = asset.filename || asset.name || mockPluginAssetName(asset.id)
         const existing = plugins.find((p) => p.instanceId === inst.id && p.dir === dir && p.name === name)
         if (existing && !body.overwrite) {
-          errors.push(`${name} 已存在`)
+          failed += 1
+          results.push({ instanceId: inst.id, assetId: asset.id, ok: false, error: `${name} 已存在` })
           continue
         }
         if (existing) {
@@ -483,13 +483,8 @@ export const handlers = [
             modTime: Math.floor(Date.now() / 1000),
           })
         }
-      }
-      if (errors.length > 0) {
-        failed += 1
-        results.push({ id: inst.id, name: inst.name, skipped: false, error: errors.join('；') })
-      } else {
         success += 1
-        results.push({ id: inst.id, name: inst.name, skipped: false })
+        results.push({ instanceId: inst.id, assetId: asset.id, ok: true })
       }
     }
 

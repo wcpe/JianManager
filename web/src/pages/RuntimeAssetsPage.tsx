@@ -584,7 +584,7 @@ function PluginBatchDeployDialog({
     setConfirmOpen(true)
   }
   const confirmDeploy = () => {
-    deploy.mutate({ assetIds: selectedAssetIds, ids: selectedInstanceIds })
+    deploy.mutate({ assetIds: selectedAssetIds, target: { ids: selectedInstanceIds } })
     setConfirmOpen(false)
   }
 

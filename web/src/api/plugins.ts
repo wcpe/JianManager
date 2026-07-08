@@ -27,12 +27,8 @@ export interface PluginInfo {
 export interface PluginBatchDeployRequest {
   /** 从制品库选择的 type=plugin 资产 ID。 */
   assetIds: number[]
-  /** 显式目标实例 ID；与 filter 二选一。 */
-  ids?: number[]
-  /** 后端批量筛选条件；与 ids 二选一。 */
-  filter?: Record<string, unknown>
-  /** 新版对话框目标实例与筛选条件；兼容旧版 ids/filter。 */
-  target?: {
+  /** 目标实例与筛选条件；ids 与 filter 二选一。 */
+  target: {
     ids?: number[]
     filter?: {
       nodeId?: number
@@ -46,7 +42,7 @@ export interface PluginBatchDeployRequest {
 }
 
 export interface PluginBatchDeployInstanceResult {
-  id: number
+  id: number | string
   name: string
   skipped: boolean
   reason?: string
@@ -59,6 +55,8 @@ export interface PluginBatchDeployItem {
   ok: boolean
   error?: string
 }
+
+type PluginBatchDeployRawResult = Partial<PluginBatchDeployInstanceResult & PluginBatchDeployItem>
 
 export interface PluginBatchDeployResult {
   /** 计数口径为实例。 */
@@ -81,7 +79,27 @@ export interface UploadPluginPayload {
   onProgress?: (loaded: number, total: number) => void
 }
 
-function normalizePluginBatchDeployResult(data: Partial<PluginBatchDeployResult>): PluginBatchDeployResult {
+function normalizePluginBatchDeployResultItem(item: PluginBatchDeployRawResult, index: number): PluginBatchDeployInstanceResult {
+  if (item.name || item.id !== undefined) {
+    return {
+      id: item.id ?? `legacy-${index}`,
+      name: item.name ?? `目标 #${item.id ?? index + 1}`,
+      skipped: Boolean(item.skipped),
+      reason: item.reason,
+      error: item.error,
+    }
+  }
+  const instanceId = item.instanceId ?? 0
+  const assetId = item.assetId ?? 0
+  return {
+    id: `${instanceId}-${assetId}-${index}`,
+    name: `实例 #${instanceId} / 资产 #${assetId}`,
+    skipped: false,
+    error: item.ok === false ? item.error || '部署失败' : item.error,
+  }
+}
+
+function normalizePluginBatchDeployResult(data: Partial<Omit<PluginBatchDeployResult, 'results'> & { results: PluginBatchDeployRawResult[] }>): PluginBatchDeployResult {
   const success = data.success ?? data.succeeded ?? 0
   const failed = data.failed ?? 0
   const skipped = data.skipped ?? 0
@@ -91,7 +109,7 @@ function normalizePluginBatchDeployResult(data: Partial<PluginBatchDeployResult>
     success,
     failed,
     skipped,
-    results: data.results ?? [],
+    results: (data.results ?? []).map(normalizePluginBatchDeployResultItem),
     requestedInstances: data.requestedInstances ?? total,
     requestedAssets: data.requestedAssets ?? 0,
     succeeded: data.succeeded ?? success,

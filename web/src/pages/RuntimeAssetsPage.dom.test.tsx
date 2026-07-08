@@ -104,6 +104,8 @@ describe('RuntimeAssetsPage（mock 假后端）', () => {
     await user.click(within(dialog).getByRole('button', { name: '确认部署' }))
 
     expect(await within(dialog).findByText('结果：成功 2 / 跳过 0 / 失败 0')).toBeInTheDocument()
+    expect(within(dialog).getByText(/实例 #1 \/ 资产 #\d+: 已部署/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/实例 #2 \/ 资产 #\d+: 已部署/)).toBeInTheDocument()
     const rows = db<{ instanceId: number; name: string; dir: string }>('plugins').list(
       (p) => p.name === 'ViaVersion-5.0.1.jar' && p.dir === 'plugins',
     )
