@@ -44,6 +44,13 @@ func (f *fakeProvisionWorker) DownloadCore(_ context.Context, in *workerpb.Downl
 	return &workerpb.DownloadCoreResponse{Success: true}, nil
 }
 
+// DeployServerProbe 桩：本地存在内嵌探针制品时 provisionOnWorker 会走探针部署分支，
+// 桩返回成功以免命中内嵌 WorkerServiceClient 接口的 nil 方法而空指针 panic
+// （干净检出/CI 无内嵌 jar 时该分支被跳过，不会走到这里）。
+func (f *fakeProvisionWorker) DeployServerProbe(_ context.Context, _ *workerpb.DeployServerProbeRequest, _ ...grpc.CallOption) (*workerpb.DeployServerProbeResponse, error) {
+	return &workerpb.DeployServerProbeResponse{Success: true}, nil
+}
+
 func (f *fakeProvisionWorker) WriteConfig(_ context.Context, in *workerpb.WriteConfigRequest, _ ...grpc.CallOption) (*workerpb.WriteConfigResponse, error) {
 	if f.writes == nil {
 		f.writes = map[string]string{}
