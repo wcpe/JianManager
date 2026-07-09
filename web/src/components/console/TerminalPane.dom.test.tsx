@@ -318,4 +318,41 @@ describe('TerminalPane（mock 假后端）', () => {
     expect(screen.getByRole('status')).toHaveTextContent('第 1 / 3 项')
     expect(term.scrollCalls.at(-1)).toBe(0)
   })
+
+  it('FR-276：WORKER_TOKEN_REJECTED 错误显示密钥不一致定向诊断，而非裸 [状态: error]', async () => {
+    loginMockUser()
+    renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
+
+    const term = await findTerminal()
+    const ws = await findSocket()
+    act(() => {
+      ws.emitMessage({
+        type: 'state',
+        state: 'error',
+        code: 'WORKER_TOKEN_REJECTED',
+        data: '终端令牌被 Worker 拒绝（HTTP 401）：该节点的 WS 令牌密钥与平台不一致。',
+      })
+    })
+
+    const text = term.lines.join('\n')
+    expect(text).toContain('[终端令牌被节点拒绝]')
+    expect(text).toContain('WS 令牌密钥与平台不一致')
+  })
+
+  it('FR-276：一般错误态带出 data 原因；无 data 维持原 [状态: xxx] 行为', async () => {
+    loginMockUser()
+    renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
+
+    const term = await findTerminal()
+    const ws = await findSocket()
+    act(() => {
+      ws.emitMessage({ type: 'state', state: 'error', data: '连接 Worker 失败: dial tcp: refused' })
+      ws.emitMessage({ type: 'state', state: 'running' })
+    })
+
+    const text = term.lines.join('\n')
+    expect(text).toContain('[状态: error] 连接 Worker 失败: dial tcp: refused')
+    expect(text).toContain('[状态: running]')
+    expect(text).not.toContain('[终端令牌被节点拒绝]')
+  })
 })

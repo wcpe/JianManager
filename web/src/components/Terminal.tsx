@@ -442,7 +442,17 @@ export default function TerminalComponent({
             if (list) onlinePlayersRef.current = new Set(list[1].split(/,\s*/).map((s) => s.trim()).filter(Boolean))
           }
         } else if (msg.type === 'state') {
-          const line = `\r\n[状态: ${msg.state}]\r\n`
+          // 错误态渲染后端诊断（FR-276，见 ADR-061）：code=WORKER_TOKEN_REJECTED 是「节点 WS
+          // 令牌密钥与平台不一致」的定向提示（红色醒目），一般错误也带出 data 原因——
+          // 不再只显示裸 [状态: error] 而把诊断信息丢掉。
+          let line: string
+          if (msg.state === 'error' && msg.code === 'WORKER_TOKEN_REJECTED') {
+            line = `\r\n\x1b[1;31m[终端令牌被节点拒绝]\x1b[0m ${String(msg.data ?? '')}\r\n`
+          } else if (msg.state === 'error' && msg.data) {
+            line = `\r\n[状态: ${msg.state}] ${String(msg.data)}\r\n`
+          } else {
+            line = `\r\n[状态: ${msg.state}]\r\n`
+          }
           if (pausedRef.current) {
             pendingRef.current.push(line)
             if (pendingRef.current.length > PENDING_MAX) pendingRef.current.shift()
