@@ -13,16 +13,18 @@ func newPaperStub(t *testing.T) *CoreService {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/paper", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"versions":["1.20.6","1.21","1.21.1"]}`)) // 旧→新
+		// fill v3：versions 为分组对象（组与组内均新→旧），扁平化后为 1.21.1/1.21/1.20.6。
+		_, _ = w.Write([]byte(`{"versions":{"1.21":["1.21.1","1.21"],"1.20":["1.20.6"]}}`))
 	})
 	mux.HandleFunc("/paper/versions/1.21.1/builds", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"builds":[
-			{"build":195,"downloads":{"application":{"name":"paper-1.21.1-195.jar","sha256":"aaa"}}},
-			{"build":196,"downloads":{"application":{"name":"paper-1.21.1-196.jar","sha256":"bbb"}}}
-		]}`))
+		// fill v3：直接返回构建数组，下载在 downloads["server:default"]（直给 url + sha256）。
+		_, _ = w.Write([]byte(`[
+			{"id":195,"downloads":{"server:default":{"name":"paper-1.21.1-195.jar","checksums":{"sha256":"aaa"},"url":"https://cdn.example/paper-1.21.1-195.jar"}}},
+			{"id":196,"downloads":{"server:default":{"name":"paper-1.21.1-196.jar","checksums":{"sha256":"bbb"},"url":"https://cdn.example/paper-1.21.1-196.jar"}}}
+		]`))
 	})
 	mux.HandleFunc("/paper/versions/9.9.9/builds", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"builds":[]}`))
+		_, _ = w.Write([]byte(`[]`))
 	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
@@ -74,7 +76,7 @@ func TestCoreResolveBuild(t *testing.T) {
 	require.Equal(t, 196, latest.Build)
 	require.Equal(t, "paper-1.21.1-196.jar", latest.Filename)
 	require.Equal(t, "bbb", latest.SHA256)
-	require.Equal(t, s.base+"/paper/versions/1.21.1/builds/196/downloads/paper-1.21.1-196.jar", latest.DownloadURL)
+	require.Equal(t, "https://cdn.example/paper-1.21.1-196.jar", latest.DownloadURL)
 
 	// 指定构建 195
 	pinned, err := s.ResolveBuild(context.Background(), "paper", "1.21.1", 195)

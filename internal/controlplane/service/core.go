@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"encoding/xml"
@@ -15,7 +16,9 @@ import (
 )
 
 // paperAPIBase 是 PaperMC 下载 API 根（FR-034/035 核心下载源：paper/velocity/waterfall）。
-const paperAPIBase = "https://api.papermc.io/v2/projects"
+// 用 fill v3——旧 v2（api.papermc.io/v2）已 sunset（返回 410），真机建服因此全部失效。
+// v3：versions 为 {minor:[patch...]} 分组对象；builds 为数组，下载在 downloads["server:default"]（直给 CDN url + sha256）。
+const paperAPIBase = "https://fill.papermc.io/v3/projects"
 
 // spongeMavenBase 是 Sponge 官方 Maven release 仓库根（FR-046：SpongeVanilla/SpongeForge）。
 const spongeMavenBase = "https://repo.spongepowered.org/repository/maven-releases/org/spongepowered"
@@ -123,17 +126,39 @@ func (s *CoreService) ListVersions(ctx context.Context, coreType string) ([]stri
 	if !paperFamily(p) {
 		return nil, fmt.Errorf("暂不支持的核心类型: %s", coreType)
 	}
+	// fill v3：versions 为 {minor:[patch...]} 分组对象（组与组内均新→旧）。
+	// 按 JSON 出现顺序扁平化以保留「新→旧」，供前端默认选最新。
 	var out struct {
-		Versions []string `json:"versions"`
+		Versions json.RawMessage `json:"versions"`
 	}
 	if err := s.getJSON(ctx, fmt.Sprintf("%s/%s", s.paperBase(), p), &out); err != nil {
 		return nil, err
 	}
-	// PaperMC 返回旧→新，反转为新→旧便于前端默认选最新。
-	for i, j := 0, len(out.Versions)-1; i < j; i, j = i+1, j-1 {
-		out.Versions[i], out.Versions[j] = out.Versions[j], out.Versions[i]
+	return flattenPaperVersions(out.Versions)
+}
+
+// flattenPaperVersions 把 fill v3 的分组版本对象 {minor:[patch...]} 按 JSON 出现顺序（新→旧）扁平化为版本列表。
+// 用流式 token 解码保留键顺序（map 解码会丢序）。
+func flattenPaperVersions(raw json.RawMessage) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("核心仓库未返回版本")
 	}
-	return out.Versions, nil
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if _, err := dec.Token(); err != nil { // 开括号 {
+		return nil, err
+	}
+	versions := make([]string, 0)
+	for dec.More() {
+		if _, err := dec.Token(); err != nil { // minor 键
+			return nil, err
+		}
+		var patches []string
+		if err := dec.Decode(&patches); err != nil {
+			return nil, err
+		}
+		versions = append(versions, patches...)
+	}
+	return versions, nil
 }
 
 // ResolveBuild 解析指定核心类型/版本的下载信息。build<=0 取最新构建。
@@ -159,30 +184,30 @@ func (s *CoreService) ResolveBuild(ctx context.Context, coreType, mcVersion stri
 	if strings.TrimSpace(mcVersion) == "" {
 		return nil, fmt.Errorf("缺少 mcVersion")
 	}
-	var out struct {
-		Builds []struct {
-			Build     int `json:"build"`
-			Downloads struct {
-				Application struct {
-					Name   string `json:"name"`
-					SHA256 string `json:"sha256"`
-				} `json:"application"`
-			} `json:"downloads"`
-		} `json:"builds"`
+	// fill v3：builds 端点直接返回构建数组（含 id/channel/downloads），下载产物在 downloads["server:default"]。
+	var builds []struct {
+		ID        int `json:"id"`
+		Downloads map[string]struct {
+			Name      string `json:"name"`
+			Checksums struct {
+				SHA256 string `json:"sha256"`
+			} `json:"checksums"`
+			URL string `json:"url"`
+		} `json:"downloads"`
 	}
-	if err := s.getJSON(ctx, fmt.Sprintf("%s/%s/versions/%s/builds", s.paperBase(), p, mcVersion), &out); err != nil {
+	if err := s.getJSON(ctx, fmt.Sprintf("%s/%s/versions/%s/builds", s.paperBase(), p, mcVersion), &builds); err != nil {
 		return nil, err
 	}
-	if len(out.Builds) == 0 {
+	if len(builds) == 0 {
 		return nil, fmt.Errorf("%s %s 无可用构建", coreType, mcVersion)
 	}
-	sort.Slice(out.Builds, func(i, j int) bool { return out.Builds[i].Build > out.Builds[j].Build })
+	sort.Slice(builds, func(i, j int) bool { return builds[i].ID > builds[j].ID })
 
-	chosen := out.Builds[0]
+	chosen := builds[0]
 	if build > 0 {
 		found := false
-		for _, b := range out.Builds {
-			if b.Build == build {
+		for _, b := range builds {
+			if b.ID == build {
 				chosen, found = b, true
 				break
 			}
@@ -192,17 +217,17 @@ func (s *CoreService) ResolveBuild(ctx context.Context, coreType, mcVersion stri
 		}
 	}
 
-	name := chosen.Downloads.Application.Name
-	if name == "" {
-		return nil, fmt.Errorf("%s %s #%d 缺少下载产物", coreType, mcVersion, chosen.Build)
+	dl, ok := chosen.Downloads["server:default"]
+	if !ok || dl.Name == "" || dl.URL == "" {
+		return nil, fmt.Errorf("%s %s #%d 缺少下载产物", coreType, mcVersion, chosen.ID)
 	}
 	return &CoreInfo{
 		Type:        p,
 		MCVersion:   mcVersion,
-		Build:       chosen.Build,
-		Filename:    name,
-		DownloadURL: fmt.Sprintf("%s/%s/versions/%s/builds/%d/downloads/%s", s.paperBase(), p, mcVersion, chosen.Build, name),
-		SHA256:      chosen.Downloads.Application.SHA256,
+		Build:       chosen.ID,
+		Filename:    dl.Name,
+		DownloadURL: dl.URL,
+		SHA256:      dl.Checksums.SHA256,
 	}, nil
 }
 
