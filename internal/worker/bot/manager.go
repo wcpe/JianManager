@@ -76,12 +76,39 @@ type Manager struct {
 	stdout    *bufio.Scanner
 	running   bool
 	cancel    context.CancelFunc
+	waitDone  chan struct{} // 本代子进程 Wait 归来即关闭（单一 waiter，Stop 复用）
 	bots      map[string]*BotState
 	onEvent   EventCallback
 	eventSubs map[uint64]chan *BotWorkerEvent
 	nextSubID uint64
 	prewarm   int
 	botWorker string // bot-worker 脚本路径
+}
+
+// stderrTailLimit 子进程 stderr 尾巴保留上限（崩溃取证用，防无界增长）。
+const stderrTailLimit = 4 * 1024
+
+// tailBuffer 只保留最后 limit 字节的写入缓冲（并发安全）。
+type tailBuffer struct {
+	mu    sync.Mutex
+	buf   []byte
+	limit int
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > t.limit {
+		t.buf = t.buf[len(t.buf)-t.limit:]
+	}
+	return len(p), nil
+}
+
+func (t *tailBuffer) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return string(t.buf)
 }
 
 // ManagerConfig 管理器配置。
@@ -170,17 +197,46 @@ func (m *Manager) Start(ctx context.Context) error {
 	// 增大扫描缓冲区，避免长行被截断
 	m.stdout.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
+	// 捕获 stderr 尾巴：子进程崩溃时留取证现场（此前直接丢弃，死因不可查）。
+	stderrTail := &tailBuffer{limit: stderrTailLimit}
+	m.cmd.Stderr = stderrTail
+
 	if err := m.cmd.Start(); err != nil {
 		return fmt.Errorf("启动 Bot Worker 失败: %w", err)
 	}
 
 	m.running = true
+	m.waitDone = make(chan struct{})
 	slog.Info("Bot Worker 已启动", "pid", m.cmd.Process.Pid)
 
 	// 启动事件读取循环
 	go m.readLoop()
+	// 单一 waiter：子进程退出（崩溃/被杀/正常）即归位 running=false，
+	// 使 ensureBotManager 懒重拉恢复生效；否则后续 IPC 全部写入死管道、Bot 永卡 connecting。
+	go m.waitChild(m.cmd, m.waitDone, stderrTail)
 
 	return nil
+}
+
+// waitChild 等待子进程退出并归位运行态（本代 cmd 的唯一 Wait 调用方）。
+func (m *Manager) waitChild(cmd *exec.Cmd, done chan struct{}, stderrTail *tailBuffer) {
+	err := cmd.Wait()
+	close(done)
+
+	m.mu.Lock()
+	// 代际守卫：仅当仍是本代子进程时归位，避免旧代 Wait 迟到冲掉重拉后的新状态。
+	current := m.cmd == cmd
+	wasRunning := m.running
+	if current {
+		m.running = false
+	}
+	m.mu.Unlock()
+
+	if current && wasRunning {
+		// 非 Stop 主动收束的退出（崩溃/自亡）：留取证日志。
+		slog.Error("Bot Worker 子进程意外退出，下次 Bot 操作将自动重拉",
+			"error", err, "stderrTail", stderrTail.String())
+	}
 }
 
 // Stop 停止 Bot 管理器和 Bot Worker 子进程。
@@ -196,13 +252,9 @@ func (m *Manager) Stop() {
 	if m.cancel != nil {
 		m.cancel()
 	}
+	done := m.waitDone
 
-	// 等待子进程退出
-	done := make(chan error, 1)
-	go func() {
-		done <- m.cmd.Wait()
-	}()
-
+	// 等待 waitChild（唯一 Wait 调用方）确认子进程退出，超时兜底强杀。
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
