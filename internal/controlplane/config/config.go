@@ -137,6 +137,11 @@ type JWTConfig struct {
 	Secret     string        `mapstructure:"secret"`
 	AccessTTL  time.Duration `mapstructure:"access_ttl"`
 	RefreshTTL time.Duration `mapstructure:"refresh_ttl"`
+	// WSSecret CP↔Worker WS 令牌密钥显式配置（FR-275，见 ADR-061）：只签终端/插件桥令牌，
+	// 与签用户会话的 Secret 隔离。留空时生产态自动生成并持久化到数据根、dev 回退开发值；
+	// 显式配置亦是存量部署过渡逃生口（可设旧 jwt.secret 值兼容未升级 Worker）。
+	// 环境变量 JIANMANAGER_JWT_WS_SECRET。
+	WSSecret string `mapstructure:"ws_secret"`
 }
 
 // LogConfig 日志配置。
@@ -182,6 +187,8 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("jwt.secret", "dev-secret-change-me")
 	v.SetDefault("jwt.access_ttl", "15m")
 	v.SetDefault("jwt.refresh_ttl", "168h")
+	// CP↔Worker WS 令牌密钥（FR-275，见 ADR-061）：默认空 = 生产 autogen 持久化 / dev 回退。
+	v.SetDefault("jwt.ws_secret", "")
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "json")
 	v.SetDefault("log_store.enabled", true)

@@ -63,6 +63,23 @@ func main() {
 	}
 	slog.Info("数据根就绪", "dataDir", root.Base())
 
+	// CP↔Worker 专用 WS 令牌密钥（FR-275，见 ADR-061）：只签终端/插件桥令牌，与签用户会话的
+	// jwt.secret 隔离（Worker 永不持有 jwt.secret）。三轨：显式 jwt.ws_secret > 生产 autogen
+	// 持久化 <dataRoot>/etc/ws-token-secret.key > dev 回退。经注册/心跳自动下发 Worker。
+	// 解析失败 fail-fast：WS 密钥不可用则终端/监控必坏，且绝不回退 jwt.secret 掩盖问题。
+	wsTokenSecret, wsSecretSource, err := service.ResolveWSTokenSecret(cfg.JWT.WSSecret, cfg.Server.DevMode, root.Abs("etc/ws-token-secret.key"))
+	if err != nil {
+		log.Fatalf("初始化 WS 令牌密钥失败: %v", err)
+	}
+	switch wsSecretSource {
+	case service.WSTokenSecretSourceGenerated:
+		slog.Info("WS 令牌密钥已就绪（生产自动生成并持久化，经注册自动下发 Worker，勿删密钥文件）", "file", "etc/ws-token-secret.key")
+	case service.WSTokenSecretSourceDev:
+		slog.Info("WS 令牌密钥使用 dev 回退值（dev_mode）")
+	default:
+		slog.Info("WS 令牌密钥使用显式配置（jwt.ws_secret）")
+	}
+
 	authSvc := service.NewAuthService(db, cfg.JWT)
 	userSvc := service.NewUserService(db)
 	groupSvc := service.NewGroupService(db)
@@ -76,8 +93,9 @@ func main() {
 	instanceBatchSvc := service.NewInstanceBatchService(db, pool)
 	// 实例组织分组树（FR-165，见 ADR-033）：文件夹式多级嵌套归类 + 实例 M:N，仅 CP 读写。
 	instanceGroupSvc := service.NewInstanceGroupService(db)
-	// 回填实例服务，供节点排空（drain）复用实例停止逻辑（FR-048）。
+	// 回填实例服务与 Worker 连接池，供节点排空（drain）和实时指标拉取复用。
 	nodeSvc.SetInstanceService(instanceSvc)
+	nodeSvc.SetClientPool(pool)
 	jdkSvc := service.NewJDKService(db, pool)
 	// 节点运行时管理（FR-178）：制品缓存 + JDK 版本目录（foojay）+ 目录浏览，经 gRPC 委托 Worker。
 	nodeRuntimeSvc := service.NewNodeRuntimeService(db, pool)
@@ -85,7 +103,7 @@ func main() {
 	diagnosticsSvc := service.NewDiagnosticsService(db, pool)
 	diagnosticsSvc.SetHTTPClientProvider(outboundProvider.Client)
 	dockerImageSvc := service.NewDockerImageService(db, pool)
-	terminalSvc := service.NewTerminalService(db, cfg.JWT.Secret, fmt.Sprintf("ws://localhost:%d", cfg.Server.Port))
+	terminalSvc := service.NewTerminalService(db, wsTokenSecret, fmt.Sprintf("ws://localhost:%d", cfg.Server.Port))
 	fileSvc := service.NewFileService(db, pool)
 	fileVersionSvc := service.NewFileVersionService(db, pool, service.FileVersionConfig{
 		MaxPerFile:   cfg.FileVersion.MaxPerFile,
@@ -219,7 +237,7 @@ func main() {
 	// 用持有者注入，使全局代理改动运行时即时生效（FR-185）。
 	coreSvc.SetHTTPClientProvider(outboundProvider.Client)
 	// 插件桥服务（FR-065，见 ADR-016）：建服时为实例签发插件桥 token 并写入探针 config 的 bridge 段。
-	pluginBridgeSvc := service.NewPluginBridgeService(cfg.JWT.Secret)
+	pluginBridgeSvc := service.NewPluginBridgeService(wsTokenSecret)
 	provisionSvc := service.NewProvisionService(db, pool, instanceSvc, coreSvc, pluginBridgeSvc)
 	registrationSvc := service.NewRegistrationService(db)
 	networkSvc := service.NewNetworkService(db, instanceSvc)
@@ -410,7 +428,7 @@ func main() {
 	}, cfg.JWT.Secret)
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）
-	terminalProxy := service.NewTerminalProxy(cfg.JWT.Secret, terminalSvc)
+	terminalProxy := service.NewTerminalProxy(wsTokenSecret, terminalSvc)
 	r.GET("/ws/terminal", gin.WrapF(terminalProxy.Handler()))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
@@ -418,6 +436,8 @@ func main() {
 
 	// 启动 gRPC 服务器（用于 Worker Node 注册和心跳）
 	grpcHandler := cpgrpc.NewControlPlaneHandler(db, pool)
+	// WS 令牌密钥经注册/心跳下发 Worker（FR-275，见 ADR-061）。
+	grpcHandler.SetWSTokenSecret(wsTokenSecret)
 	grpcHandler.SetOnWorkerConnect(func(nodeUUID string) {
 		eventSvc.StartWorkerStream(nodeUUID)
 		// 玩家事件流（探针经反向 WS 上报）同步订阅（FR-066）。

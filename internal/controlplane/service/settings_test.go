@@ -100,6 +100,38 @@ func TestGet_SensitiveMasked(t *testing.T) {
 	require.NotContains(t, dsn.Value, "supersecret") // 口令段被打码
 }
 
+// TestGet_WSTokenSecretDisplay jwt.ws_secret 只读展示（FR-275，见 ADR-061）：
+// 显式配置掩码；未配置按 dev_mode 显示来源描述，不回显 autogen 解析出的密钥值。
+func TestGet_WSTokenSecretDisplay(t *testing.T) {
+	// 显式配置 → 掩码 + sensitive。
+	cfg := testConfig()
+	cfg.JWT.WSSecret = "my-explicit-ws-secret"
+	view, err := NewSettingsService(newSettingsTestDB(t), cfg).Get()
+	require.NoError(t, err)
+	item, ok := findItem(view.ReadOnly, "jwt.ws_secret")
+	require.True(t, ok)
+	require.True(t, item.Sensitive)
+	require.NotContains(t, item.Value, "explicit-ws") // 明文不外泄
+
+	// 生产未配置 → 显示 autogen 来源描述（不含密钥值）。
+	cfg = testConfig()
+	view, err = NewSettingsService(newSettingsTestDB(t), cfg).Get()
+	require.NoError(t, err)
+	item, ok = findItem(view.ReadOnly, "jwt.ws_secret")
+	require.True(t, ok)
+	require.False(t, item.Sensitive)
+	require.Contains(t, item.Value, "自动生成")
+
+	// dev_mode 未配置 → dev 回退描述。
+	cfg = testConfig()
+	cfg.Server.DevMode = true
+	view, err = NewSettingsService(newSettingsTestDB(t), cfg).Get()
+	require.NoError(t, err)
+	item, ok = findItem(view.ReadOnly, "jwt.ws_secret")
+	require.True(t, ok)
+	require.Contains(t, item.Value, "dev 回退")
+}
+
 // TestUpdate_PersistsAndOverrides 写入白名单键后落库，再读有效配置取到覆盖值。
 func TestUpdate_PersistsAndOverrides(t *testing.T) {
 	db := newSettingsTestDB(t)

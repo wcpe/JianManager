@@ -71,6 +71,7 @@ type ControlPlaneHandler struct {
 	tasks           TaskIngester           // 任务进度入库（nil 时心跳不落任务，FR-183）
 	enroll          EnrollmentValidator    // enrollment token 校验消费（nil 时退化为 FR-004 自助注册）
 	proxy           NodeProxyResolver      // 节点期望代理解析（nil 时心跳响应不携带代理，FR-185）
+	wsTokenSecret   string                 // CP↔Worker WS 令牌密钥（空时注册/心跳响应不携带，FR-275）
 }
 
 // NewControlPlaneHandler 创建处理器。
@@ -105,6 +106,13 @@ func (h *ControlPlaneHandler) SetEnrollmentValidator(v EnrollmentValidator) {
 // 变化运行时重建出站 client；不注入则心跳响应不带代理（退化为 Worker 仅用本地 yaml/env，向后兼容）。
 func (h *ControlPlaneHandler) SetNodeProxyResolver(r NodeProxyResolver) {
 	h.proxy = r
+}
+
+// SetWSTokenSecret 注入 CP↔Worker WS 令牌密钥（FR-275，见 ADR-061）。
+// 注入后注册响应（首注册/重注册）与每拍心跳响应均携带该密钥，Worker 持久化并热应用到
+// 终端/插件桥校验；不注入（零值）则响应不携带，Worker 回退本地 jwt_secret（向后兼容）。
+func (h *ControlPlaneHandler) SetWSTokenSecret(s string) {
+	h.wsTokenSecret = s
 }
 
 // Register 处理 Worker Node 注册。
@@ -189,7 +197,8 @@ func (h *ControlPlaneHandler) reregisterExisting(node *model.Node, req *workerpb
 	slog.Info("节点已重新注册", "name", req.Name, "uuid", node.UUID, "matchBy", matchBy)
 
 	h.connectWorker(node.UUID, req)
-	return &workerpb.RegisterResponse{NodeUuid: node.UUID, NodeSecret: node.Secret}, nil
+	// WS 令牌密钥随重注册下发（FR-275）：存量节点升级/重启即拿到密钥，无需人工同步。
+	return &workerpb.RegisterResponse{NodeUuid: node.UUID, NodeSecret: node.Secret, WsTokenSecret: h.wsTokenSecret}, nil
 }
 
 // createNewNode 创建全新节点：凭有效 enrollment token 准入（FR-080，见 ADR-020），
@@ -235,7 +244,8 @@ func (h *ControlPlaneHandler) createNewNode(ctx context.Context, req *workerpb.R
 	slog.Info("新节点已注册", "name", req.Name, "uuid", node.UUID)
 
 	h.connectWorker(node.UUID, req)
-	return &workerpb.RegisterResponse{NodeUuid: node.UUID, NodeSecret: node.Secret}, nil
+	// WS 令牌密钥随首注册下发（FR-275）：一键安装的新节点开箱终端/插件桥可用。
+	return &workerpb.RegisterResponse{NodeUuid: node.UUID, NodeSecret: node.Secret, WsTokenSecret: h.wsTokenSecret}, nil
 }
 
 // connectWorker 建立到 Worker Node 的反向 gRPC 连接（req.GrpcPort>0 时）。失败仅告警、不阻断注册。
@@ -285,6 +295,10 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 	// 首次心跳到达时校验 node_secret（通过 gRPC metadata 传递，不改 proto）。
 	// secret 在 Register 阶段由 CP 签发，Worker 存入本地并在每次心跳携带。
 	var nodeSecretValid bool
+	// authenticated 标记本流已通过 node_secret 校验（FR-275，见 ADR-061）：WS 令牌密钥仅对
+	// 已鉴权流下发——未出示 secret 的旧版兼容路径跳过鉴权，任何可达 gRPC 端口的调用方都能开流，
+	// 无门槛下发等于把密钥送给陌生人（可据此伪造终端令牌）。新版 Worker 心跳恒带 node-secret。
+	var authenticated bool
 	if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
 		if vals := md.Get(nodeSecretHeader); len(vals) > 0 {
 			secret := vals[0]
@@ -315,8 +329,9 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 				slog.Warn("心跳鉴权失败：secret 不匹配", "nodeUUID", req.NodeUuid)
 				return status.Errorf(codes.PermissionDenied, "心跳鉴权失败")
 			}
-			// 校验通过后关闭标记，后续心跳不再重复查 DB
+			// 校验通过后关闭标记，后续心跳不再重复查 DB；流标记为已鉴权（密钥下发门槛）。
 			nodeSecretValid = false
+			authenticated = true
 		}
 
 		// 更新节点指标和心跳时间
@@ -378,6 +393,12 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 		// 返回响应；携带该节点期望出站代理供 Worker 运行时应用（FR-185，见 ADR-043）。
 		// generation 变化时 Worker 才重建出站 client（避免每拍重建）；重连/重启天然由后续心跳重发。
 		resp := &workerpb.HeartbeatResponse{Timestamp: time.Now().Unix()}
+		// WS 令牌密钥每拍携带（FR-275，见 ADR-061）：Worker 比对变化才热应用 + 持久化，
+		// CP 轮换密钥后 Worker 不重启即自愈。仅对已鉴权流下发（见上 authenticated）；
+		// 空值（未注入）不动作，向后兼容。
+		if authenticated {
+			resp.WsTokenSecret = h.wsTokenSecret
+		}
 		if h.proxy != nil {
 			resp.ProxyUrl, resp.ProxyNoProxy, resp.ProxyGeneration = h.proxy.EffectiveNodeProxyByUUID(req.NodeUuid)
 		}

@@ -179,6 +179,9 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		readOnlyItem("database.driver", s.cfg.Database.Driver, false),
 		readOnlyItem("database.dsn", maskDSN(s.cfg.Database.DSN), true),
 		readOnlyItem("jwt.secret", maskSecret(s.cfg.JWT.Secret), true),
+		// CP↔Worker WS 令牌密钥（FR-275，见 ADR-061）：显式配置时掩码显示；未配置时展示来源
+		//（生产 autogen / dev 回退），不回显解析后的密钥值（避免把生成密钥带进设置响应）。
+		readOnlyItem("jwt.ws_secret", s.wsTokenSecretDisplay(), s.cfg.JWT.WSSecret != ""),
 		readOnlyItem("jwt.access_ttl", s.cfg.JWT.AccessTTL.String(), false),
 		readOnlyItem("jwt.refresh_ttl", s.cfg.JWT.RefreshTTL.String(), false),
 	}
@@ -399,6 +402,18 @@ func validateSettingValue(key, val string) error {
 		}
 	}
 	return nil
+}
+
+// wsTokenSecretDisplay 生成 jwt.ws_secret 只读展示值（FR-275，见 ADR-061）。
+// 显式配置 → 掩码；未配置 → 按 dev_mode 推导来源描述（不回显 autogen 解析出的密钥值）。
+func (s *SettingsService) wsTokenSecretDisplay() string {
+	if s.cfg.JWT.WSSecret != "" {
+		return maskSecret(s.cfg.JWT.WSSecret)
+	}
+	if s.cfg.Server.DevMode {
+		return "(dev 回退)"
+	}
+	return "(自动生成: 数据根 etc/ws-token-secret.key)"
 }
 
 // maskSecret 对密钥类敏感值脱敏：保留首尾各 3 字符，中间以 *** 代替；过短则全部打码。
