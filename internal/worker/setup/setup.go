@@ -128,6 +128,8 @@ func Run(ctx context.Context, configWorkDir string, opts Options) (*Result, erro
 		NodeUUID:   regResult.NodeUUID,
 		NodeSecret: regResult.NodeSecret,
 		NodeName:   in.NodeName,
+		// CP 下发的 WS 令牌密钥一并持久化（FR-275，见 ADR-061）；旧 CP 为空则不写。
+		WSTokenSecret: regResult.WSTokenSecret,
 	}
 	if err := register.SaveIdentity(root.EtcDir(), identity); err != nil {
 		return nil, fmt.Errorf("持久化节点身份失败: %w", err)

@@ -23,6 +23,10 @@ type Identity struct {
 	NodeSecret string `json:"nodeSecret"`
 	// NodeName 注册使用的节点名（重注册按 name 命中，需与首注册一致）。
 	NodeName string `json:"nodeName"`
+	// WSTokenSecret CP 下发的 WS 令牌密钥（FR-275，见 ADR-061）：终端/插件桥令牌校验用，
+	// 敏感，不入日志。空 = 旧 CP 未下发过，启动回退本地 jwt_secret 配置。
+	// omitempty：空值不写入文件，旧格式身份文件字节不变。
+	WSTokenSecret string `json:"wsTokenSecret,omitempty"`
 }
 
 // IdentityPath 返回数据根下的身份文件绝对路径 <etcDir>/node-identity.json。

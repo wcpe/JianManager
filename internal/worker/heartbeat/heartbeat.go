@@ -53,6 +53,9 @@ type Heartbeat struct {
 	// proxyApplier 据心跳响应里 CP 下发的期望代理运行时重建 Worker 出站 client（FR-185，见 ADR-043）；
 	// 为 nil 时心跳不应用下发代理（Worker 仅用本地 yaml/env，向后兼容旧 CP）。
 	proxyApplier *proxyApplier
+	// wsSecretApplier 据心跳响应里 CP 下发的 WS 令牌密钥热应用（FR-275，见 ADR-061）；
+	// 为 nil 时不应用（向后兼容旧 CP：Worker 沿用启动时生效值）。
+	wsSecretApplier *wsSecretApplier
 }
 
 // New 创建心跳上报器。
@@ -79,6 +82,13 @@ func (h *Heartbeat) SetTaskProvider(p TaskSnapshotProvider) {
 // 内部用 generation 比较，仅在期望代理变化时才重建（避免每拍重建）。
 func (h *Heartbeat) SetProxyRebuilder(rebuild func(httpclient.Config) error) {
 	h.proxyApplier = newProxyApplier(rebuild)
+}
+
+// SetWSSecretApplier 注入「据心跳下发 WS 令牌密钥热应用」的回调（FR-275，见 ADR-061）。
+// current 为启动时已生效的密钥（首拍据此去重）；apply 由 main 装配（热更新终端/插件桥 +
+// 持久化身份文件）。不调用则忽略 CP 下发的密钥（向后兼容）。
+func (h *Heartbeat) SetWSSecretApplier(current string, apply func(secret string) error) {
+	h.wsSecretApplier = newWSSecretApplier(current, apply)
 }
 
 // Start 启动心跳上报。
@@ -200,6 +210,9 @@ func (h *Heartbeat) sendHeartbeat() error {
 	// 应用 CP 下发的期望出站代理（FR-185，见 ADR-043）：generation 变化才重建出站 client。
 	// 重连/重启天然由后续心跳重发，无需 Worker 落盘。
 	h.proxyApplier.apply(reply)
+
+	// 应用 CP 下发的 WS 令牌密钥（FR-275，见 ADR-061）：值变化才热更新终端/插件桥校验 + 持久化。
+	h.wsSecretApplier.applyReply(reply)
 
 	// 应用 CP 下发的取消请求（FR-227）：真中断对应运行中任务（如下载），canceled 经下一拍心跳上报。
 	if h.taskProvider != nil {

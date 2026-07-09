@@ -37,7 +37,10 @@ type TerminalSession struct {
 
 // TerminalServer 终端 WebSocket 服务器。
 type TerminalServer struct {
+	// jwtSecret 终端一次性 token 校验密钥，secretMu 保护：CP 经注册/心跳下发新值时
+	// 由 SetJWTSecret 热更新（FR-275，见 ADR-061），与握手校验读并发安全。
 	jwtSecret string
+	secretMu  sync.RWMutex
 	upgrader  websocket.Upgrader
 	tokens    *onetimetoken.Store
 	mu        sync.RWMutex
@@ -58,6 +61,21 @@ func NewTerminalServer(jwtSecret string) *TerminalServer {
 		sessions: make(map[string][]*TerminalSession),
 		buffers:  make(map[string]*daemon.RingBuffer),
 	}
+}
+
+// SetJWTSecret 热更新 token 校验密钥（FR-275，见 ADR-061）：CP 经注册/心跳下发新密钥时调用。
+// 仅影响后续握手；已建立的会话不受影响（握手只校验一次）。
+func (s *TerminalServer) SetJWTSecret(secret string) {
+	s.secretMu.Lock()
+	s.jwtSecret = secret
+	s.secretMu.Unlock()
+}
+
+// currentJWTSecret 并发安全读取当前校验密钥。
+func (s *TerminalServer) currentJWTSecret() string {
+	s.secretMu.RLock()
+	defer s.secretMu.RUnlock()
+	return s.jwtSecret
 }
 
 // SetStdinHandler 设置 stdin 输入处理函数。
@@ -81,7 +99,7 @@ func (s *TerminalServer) Handler() http.HandlerFunc {
 
 		claims := jwt.MapClaims{}
 		token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
-			return []byte(s.jwtSecret), nil
+			return []byte(s.currentJWTSecret()), nil
 		})
 		if err != nil || !token.Valid {
 			http.Error(w, "token 无效或已过期", http.StatusUnauthorized)

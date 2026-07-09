@@ -10,10 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestIdentity_SaveLoadRoundtrip 写入后读回字段一致（FR-080，见 ADR-020 §3）。
+// TestIdentity_SaveLoadRoundtrip 写入后读回字段一致（FR-080，见 ADR-020 §3；WS 令牌密钥见 FR-275）。
 func TestIdentity_SaveLoadRoundtrip(t *testing.T) {
 	etcDir := t.TempDir()
-	want := &Identity{NodeUUID: "uuid-123", NodeSecret: "secret-xyz", NodeName: "edge-1"}
+	want := &Identity{NodeUUID: "uuid-123", NodeSecret: "secret-xyz", NodeName: "edge-1", WSTokenSecret: "ws-abc"}
 
 	require.NoError(t, SaveIdentity(etcDir, want))
 
@@ -23,6 +23,21 @@ func TestIdentity_SaveLoadRoundtrip(t *testing.T) {
 	assert.Equal(t, want.NodeUUID, got.NodeUUID)
 	assert.Equal(t, want.NodeSecret, got.NodeSecret)
 	assert.Equal(t, want.NodeName, got.NodeName)
+	assert.Equal(t, want.WSTokenSecret, got.WSTokenSecret)
+}
+
+// TestIdentity_LoadLegacyFileWithoutWSTokenSecret 旧格式身份文件（无 wsTokenSecret 字段）
+// 照常加载、字段为空（FR-275 向后兼容：空值由启动链回退本地 jwt_secret）。
+func TestIdentity_LoadLegacyFileWithoutWSTokenSecret(t *testing.T) {
+	etcDir := t.TempDir()
+	legacy := `{"nodeUuid":"uuid-123","nodeSecret":"secret-xyz","nodeName":"edge-1"}`
+	require.NoError(t, os.WriteFile(IdentityPath(etcDir), []byte(legacy), 0o600))
+
+	got, err := LoadIdentity(etcDir)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "uuid-123", got.NodeUUID)
+	assert.Empty(t, got.WSTokenSecret)
 }
 
 // TestIdentity_LoadMissingReturnsNil 文件不存在返回 (nil, nil)，对应首次安装的正常情形。

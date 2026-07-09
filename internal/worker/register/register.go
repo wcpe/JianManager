@@ -54,6 +54,8 @@ type Config struct {
 type Result struct {
 	NodeUUID   string
 	NodeSecret string
+	// WSTokenSecret CP 下发的 WS 令牌密钥（FR-275，见 ADR-061）；旧 CP 响应为空。
+	WSTokenSecret string
 }
 
 // Register 向 Control Plane 注册当前 Worker Node。
@@ -90,8 +92,9 @@ func Register(ctx context.Context, cfg Config) (*Result, error) {
 
 	slog.Info("注册成功", "nodeUUID", resp.NodeUuid)
 	return &Result{
-		NodeUUID:   resp.NodeUuid,
-		NodeSecret: resp.NodeSecret,
+		NodeUUID:      resp.NodeUuid,
+		NodeSecret:    resp.NodeSecret,
+		WSTokenSecret: resp.WsTokenSecret,
 	}, nil
 }
 

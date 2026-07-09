@@ -188,7 +188,10 @@ func (s *PluginSession) deliverResult(r CommandResult) bool {
 // 维护「实例 UUID → 探针会话」表：同一实例同时仅一活动会话，新连顶替旧连（见 ADR-016）。
 // token 校验复用 JIANMANAGER_JWT_SECRET，要求 scope=plugin-bridge 且 instanceId 与 query 一致。
 type PluginBridgeServer struct {
+	// jwtSecret 插件桥 token 校验密钥，secretMu 保护：CP 经注册/心跳下发新值时
+	// 由 SetJWTSecret 热更新（FR-275，见 ADR-061），与握手校验读并发安全。
 	jwtSecret string
+	secretMu  sync.RWMutex
 	upgrader  websocket.Upgrader
 	mu        sync.Mutex
 	sessions  map[string]*PluginSession
@@ -208,6 +211,21 @@ func NewPluginBridgeServer(jwtSecret string) *PluginBridgeServer {
 
 // SetEventHandler 注入事件回调，把 connected/disconnected/业务事件桥接到 gRPC StreamPluginEvents。
 func (s *PluginBridgeServer) SetEventHandler(h PluginEventHandler) { s.onEvent = h }
+
+// SetJWTSecret 热更新 token 校验密钥（FR-275，见 ADR-061）：CP 经注册/心跳下发新密钥时调用。
+// 仅影响后续握手；已建立的探针会话不受影响（握手只校验一次）。
+func (s *PluginBridgeServer) SetJWTSecret(secret string) {
+	s.secretMu.Lock()
+	s.jwtSecret = secret
+	s.secretMu.Unlock()
+}
+
+// currentJWTSecret 并发安全读取当前校验密钥。
+func (s *PluginBridgeServer) currentJWTSecret() string {
+	s.secretMu.RLock()
+	defer s.secretMu.RUnlock()
+	return s.jwtSecret
+}
 
 // validateBridgeToken 校验插件桥握手参数：HS256 签名有效 + scope=plugin-bridge +
 // token 内 instanceId 与 query instance 一致；通过则返回实例 UUID。
@@ -240,7 +258,7 @@ func validateBridgeToken(secret, tokenStr, queryInstance string) (string, error)
 // Handler 返回 /ws/plugin-bridge 的 HTTP handler。
 func (s *PluginBridgeServer) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		instanceID, err := validateBridgeToken(s.jwtSecret, r.URL.Query().Get("token"), r.URL.Query().Get("instance"))
+		instanceID, err := validateBridgeToken(s.currentJWTSecret(), r.URL.Query().Get("token"), r.URL.Query().Get("instance"))
 		if err != nil {
 			status := http.StatusUnauthorized
 			if errors.Is(err, errBridgeNoInstance) || errors.Is(err, errBridgeInstMismatch) {

@@ -197,6 +197,23 @@ func runWorker() {
 		os.Exit(1)
 	}
 
+	// 本地身份提前加载（FR-275，见 ADR-061）：WS 令牌密钥初始值优先取身份文件持久化值
+	//（上次 CP 下发），回退 worker.yml jwt_secret（旧 CP/首装兼容）——须在 WS 服务器构造前
+	// 就绪，消除「注册完成前用旧密钥校验」窗口。注册流程复用本次加载结果，不二次读文件。
+	etcDir := root.EtcDir()
+	localIdentity, idErr := register.LoadIdentity(etcDir)
+	if idErr != nil {
+		slog.Error("读取本地节点身份失败", "error", idErr)
+		os.Exit(1)
+	}
+	if setupResult != nil {
+		// setup 刚完成首注册并持久化身份（含 CP 下发的 WS 令牌密钥），直接复用不重读。
+		localIdentity = setupResult.Identity
+	}
+	if localIdentity != nil && localIdentity.WSTokenSecret != "" {
+		jwtSecret = localIdentity.WSTokenSecret
+	}
+
 	// 服务器工作目录根：默认数据根下 var/servers；配置 servers_dir 显式覆盖（兼容旧部署）。
 	serversDir := root.ServersDir()
 	if cfg.ServersDir != "" {
@@ -344,26 +361,25 @@ func runWorker() {
 		cpAddr = "localhost:9100"
 	}
 
-	etcDir := root.EtcDir()
 	var regResult *register.Result
+	// identityForPersist 是当前节点身份的内存副本（心跳下发 WS 令牌密钥轮换时补写身份文件用）。
+	var identityForPersist *register.Identity
 
 	if setupResult != nil {
 		// 本次启动由 setup 完成首注册并已持久化身份（FR-222，见 ADR-051）：
 		// 直接复用其换得的身份转 run，不再二次注册、不重复消费一次性 token。
 		regResult = &register.Result{
-			NodeUUID:   setupResult.Identity.NodeUUID,
-			NodeSecret: setupResult.Identity.NodeSecret,
+			NodeUUID:      setupResult.Identity.NodeUUID,
+			NodeSecret:    setupResult.Identity.NodeSecret,
+			WSTokenSecret: setupResult.Identity.WSTokenSecret,
 		}
+		identityForPersist = setupResult.Identity
 		nodeUUID = regResult.NodeUUID
 		slog.Info("沿用 setup 首注册身份转入运行", "nodeUUID", nodeUUID)
 	} else {
-		// 优先读本地身份文件复用既有 node_uuid/secret（重注册，不带 token，不重复消费一次性 token）；
+		// 优先复用启动早期加载的本地身份（重注册，不带 token，不重复消费一次性 token）；
 		// 无身份文件则为首次安装，必须携带 enrollment token 首注册。
-		identity, err := register.LoadIdentity(etcDir)
-		if err != nil {
-			slog.Error("读取本地节点身份失败", "error", err)
-			os.Exit(1)
-		}
+		identity := localIdentity
 
 		regCfg := register.Config{
 			ControlPlaneAddr: cpAddr,
@@ -399,16 +415,38 @@ func runWorker() {
 		slog.Info("已注册到 Control Plane", "nodeUUID", nodeUUID)
 
 		// 首次注册成功后持久化身份（含 node_secret，0600），重启复用、不重复消费 token（FR-080）。
+		// CP 下发的 WS 令牌密钥一并持久化（FR-275，见 ADR-061）。
 		if identity == nil {
-			if err := register.SaveIdentity(etcDir, &register.Identity{
-				NodeUUID:   regResult.NodeUUID,
-				NodeSecret: regResult.NodeSecret,
-				NodeName:   regCfg.NodeName,
-			}); err != nil {
+			fresh := &register.Identity{
+				NodeUUID:      regResult.NodeUUID,
+				NodeSecret:    regResult.NodeSecret,
+				NodeName:      regCfg.NodeName,
+				WSTokenSecret: regResult.WSTokenSecret,
+			}
+			if err := register.SaveIdentity(etcDir, fresh); err != nil {
 				// 持久化失败不致命（本次仍在线），但重启会因无身份且 token 已失效而首注册失败，需告警。
 				slog.Warn("持久化节点身份失败，重启可能需重新签发 enrollment token", "error", err)
 			}
+			identityForPersist = fresh
+		} else {
+			if regResult.WSTokenSecret != "" && regResult.WSTokenSecret != identity.WSTokenSecret {
+				// 重注册带来新 WS 令牌密钥（存量节点升级 / CP 轮换后的主路径，FR-275）：补写身份文件。
+				identity.WSTokenSecret = regResult.WSTokenSecret
+				if err := register.SaveIdentity(etcDir, identity); err != nil {
+					slog.Warn("持久化 WS 令牌密钥失败（内存已生效，重启后经注册自愈）", "error", err)
+				}
+			}
+			identityForPersist = identity
 		}
+	}
+
+	// CP 下发的 WS 令牌密钥热应用（FR-275，见 ADR-061）：注册响应非空即应用到终端/插件桥
+	//（幂等；与启动初值相同等效无操作）。旧 CP 响应为空 → 沿用启动初值（本地配置），行为不变。
+	currentWSSecret := jwtSecret
+	if regResult.WSTokenSecret != "" {
+		terminalServer.SetJWTSecret(regResult.WSTokenSecret)
+		pluginBridge.SetJWTSecret(regResult.WSTokenSecret)
+		currentWSSecret = regResult.WSTokenSecret
 	}
 
 	// 启动心跳上报（携带注册获得的 node_secret 供 Control Plane 鉴权）
@@ -424,6 +462,17 @@ func runWorker() {
 		}
 		slog.Info("出站代理已据 CP 下发运行时更新", "proxy", httpclient.Sanitize(c.URL), "noProxy", c.NoProxy)
 		return nil
+	})
+	// CP 经心跳下发 WS 令牌密钥（FR-275，见 ADR-061）：值变化即热更新终端/插件桥校验并补写
+	// 身份文件——CP 轮换密钥后 Worker 不重启自愈。心跳单 goroutine 应用，无并发写身份文件。
+	hb.SetWSSecretApplier(currentWSSecret, func(secret string) error {
+		terminalServer.SetJWTSecret(secret)
+		pluginBridge.SetJWTSecret(secret)
+		if identityForPersist == nil {
+			return nil // 理论不达：注册成功必有身份；无身份时仅内存生效
+		}
+		identityForPersist.WSTokenSecret = secret
+		return register.SaveIdentity(etcDir, identityForPersist)
 	})
 	hb.Start()
 	defer hb.Stop()
