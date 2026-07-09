@@ -59,10 +59,12 @@ type fakeFR035RouteCoreTransport struct{}
 func (fakeFR035RouteCoreTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	body := ""
 	switch req.URL.Path {
-	case "/v2/projects/velocity":
-		body = `{"versions":["3.2.0-SNAPSHOT","3.3.0-SNAPSHOT"]}`
-	case "/v2/projects/velocity/versions/3.3.0-SNAPSHOT/builds":
-		body = `{"builds":[{"build":500,"downloads":{"application":{"name":"velocity-3.3.0-SNAPSHOT-500.jar","sha256":"` + strings.Repeat("b", 64) + `"}}}]}`
+	case "/v3/projects/velocity":
+		// fill v3：versions 为分组对象（组与组内均新→旧），扁平化后为 3.3.0-SNAPSHOT/3.2.0-SNAPSHOT。
+		body = `{"versions":{"3.3.0":["3.3.0-SNAPSHOT"],"3.2.0":["3.2.0-SNAPSHOT"]}}`
+	case "/v3/projects/velocity/versions/3.3.0-SNAPSHOT/builds":
+		// fill v3：builds 为数组，Velocity 下载同样在 downloads["server:default"]（真实 API 已核验）。
+		body = `[{"id":500,"downloads":{"server:default":{"name":"velocity-3.3.0-SNAPSHOT-500.jar","checksums":{"sha256":"` + strings.Repeat("b", 64) + `"},"url":"https://cdn.example/velocity-3.3.0-SNAPSHOT-500.jar"}}}]`
 	default:
 		return &http.Response{StatusCode: http.StatusNotFound, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("not found")), Request: req}, nil
 	}

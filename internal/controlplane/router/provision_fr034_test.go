@@ -54,10 +54,12 @@ type fakeFR034CoreTransport struct{}
 func (fakeFR034CoreTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	body := ""
 	switch req.URL.Path {
-	case "/v2/projects/paper":
-		body = `{"versions":["1.20.6","1.21","1.21.1"]}`
-	case "/v2/projects/paper/versions/1.21.1/builds":
-		body = `{"builds":[{"build":196,"downloads":{"application":{"name":"paper-1.21.1-196.jar","sha256":"` + strings.Repeat("a", 64) + `"}}}]}`
+	case "/v3/projects/paper":
+		// fill v3：versions 为分组对象（组与组内均新→旧），扁平化后为 1.21.1/1.21/1.20.6。
+		body = `{"versions":{"1.21":["1.21.1","1.21"],"1.20":["1.20.6"]}}`
+	case "/v3/projects/paper/versions/1.21.1/builds":
+		// fill v3：builds 为数组，下载在 downloads["server:default"].{name,checksums.sha256,url}。
+		body = `[{"id":196,"downloads":{"server:default":{"name":"paper-1.21.1-196.jar","checksums":{"sha256":"` + strings.Repeat("a", 64) + `"},"url":"https://cdn.example/paper-1.21.1-196.jar"}}}]`
 	default:
 		return &http.Response{StatusCode: http.StatusNotFound, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("not found")), Request: req}, nil
 	}
