@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"strings"
 
@@ -41,7 +42,7 @@ func Audit(cfg AuditConfig) gin.HandlerFunc {
 				targetType, targetID := determineTarget(c.Request.URL.Path)
 
 				ip := c.ClientIP()
-				detail := string(body)
+				detail := sanitizeAuditDetail(body)
 				if len(detail) > 1024 {
 					detail = detail[:1024] + "..."
 				}
@@ -54,6 +55,75 @@ func Audit(cfg AuditConfig) gin.HandlerFunc {
 			c.Next()
 		}
 	}
+}
+
+// sensitiveAuditKeyFragments 命中即掩蔽的键名片段（小写包含比对）。
+// 覆盖 password/newPassword/passwd、secret/apiSecret、token/refreshToken 等命名变体。
+var sensitiveAuditKeyFragments = []string{"password", "passwd", "secret", "token"}
+
+// sanitizeAuditDetail 把请求体转成可落库的审计 detail：JSON 体递归掩蔽凭据类字段
+// （键名含 password/passwd/secret/token，大小写不敏感）为 "***"；非 JSON / 无敏感键原样返回。
+// 审计要回答「谁对什么做了什么」，凭据明文不属该范畴——落库即长期泄漏
+// （FR-015 审计页可见、FR-155 可全量导出），如 PUT /users/:id 重置密码的请求体。
+func sanitizeAuditDetail(body []byte) string {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return string(body)
+	}
+	var v interface{}
+	if err := json.Unmarshal(trimmed, &v); err != nil {
+		return string(body)
+	}
+	masked, changed := maskSensitiveValues(v)
+	if !changed {
+		return string(body)
+	}
+	out, err := json.Marshal(masked)
+	if err != nil {
+		return string(body)
+	}
+	return string(out)
+}
+
+// maskSensitiveValues 递归掩蔽 map/数组里的敏感键值，返回是否有改动（无改动则保留原文）。
+func maskSensitiveValues(v interface{}) (interface{}, bool) {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		changed := false
+		for k, val := range t {
+			if isSensitiveAuditKey(k) {
+				t[k] = "***"
+				changed = true
+				continue
+			}
+			if nv, c := maskSensitiveValues(val); c {
+				t[k] = nv
+				changed = true
+			}
+		}
+		return t, changed
+	case []interface{}:
+		changed := false
+		for i, item := range t {
+			if nv, c := maskSensitiveValues(item); c {
+				t[i] = nv
+				changed = true
+			}
+		}
+		return t, changed
+	default:
+		return v, false
+	}
+}
+
+func isSensitiveAuditKey(key string) bool {
+	k := strings.ToLower(key)
+	for _, frag := range sensitiveAuditKeyFragments {
+		if strings.Contains(k, frag) {
+			return true
+		}
+	}
+	return false
 }
 
 // determineAction 从 HTTP 方法和路径推断操作名称。
