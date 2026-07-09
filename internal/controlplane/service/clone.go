@@ -34,7 +34,8 @@ var defaultCloneExcludes = []string{
 }
 
 // quickCloneIncludes 快速复制的 include 集（FR-231）：核心 jar + plugins/ + 根配置（顶层段匹配，不含 world/logs/cache）。
-var quickCloneIncludes = []string{"*.jar", "plugins", "server.properties", "*.yml", "*.yaml", "*.properties"}
+// eula.txt 必须显式包含（不在 *.yml/*.properties 通配内）：漏掉则克隆服首启被 Paper 以自生成的 eula=false 拒启。
+var quickCloneIncludes = []string{"*.jar", "plugins", "server.properties", "eula.txt", "*.yml", "*.yaml", "*.properties"}
 
 // cloneFilters 据复制模式派生 worker 的 include/exclude（FR-231）。
 // quick=核心+插件+根配置；advanced/默认=用户 include（空=全部）+ 用户 exclude ∪ 运行态垃圾（始终排）。

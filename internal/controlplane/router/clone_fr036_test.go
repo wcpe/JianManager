@@ -147,5 +147,5 @@ func TestFR036CloneRoutes(t *testing.T) {
 }
 
 func quickCloneIncludesForRouter() []string {
-	return []string{"*.jar", "plugins", "server.properties", "*.yml", "*.yaml", "*.properties"}
+	return []string{"*.jar", "plugins", "server.properties", "eula.txt", "*.yml", "*.yaml", "*.properties"}
 }
