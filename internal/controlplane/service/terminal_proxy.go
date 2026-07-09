@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,28 @@ import (
 
 	"github.com/wcpe/JianManager/internal/platform/onetimetoken"
 )
+
+// TerminalProxyCodeWorkerTokenRejected 是「Worker 拒绝终端令牌」的诊断码（FR-276，见 ADR-061）。
+// 前端据此展示「该节点 WS 令牌密钥与平台不一致」的定向诊断，而非裸「连接已断开」。
+const TerminalProxyCodeWorkerTokenRejected = "WORKER_TOKEN_REJECTED"
+
+// terminalProxyStateMessage CP→浏览器的终端代理错误状态消息。
+// Code 供前端定向识别（空 = 一般性失败，如网络不可达）；Data 为人话诊断。
+type terminalProxyStateMessage struct {
+	Type  string `json:"type"`
+	State string `json:"state"`
+	Code  string `json:"code,omitempty"`
+	Data  string `json:"data"`
+}
+
+// writeTerminalProxyState 向浏览器连接发送一条错误状态消息（JSON 序列化，转义安全）。
+func writeTerminalProxyState(conn *websocket.Conn, code, data string) {
+	msg, err := json.Marshal(terminalProxyStateMessage{Type: "state", State: "error", Code: code, Data: data})
+	if err != nil {
+		return
+	}
+	_ = conn.WriteMessage(websocket.TextMessage, msg)
+}
 
 // TerminalProxy WebSocket 终端代理。
 // 浏览器 → CP WebSocket → Worker WebSocket，双向桥接。
@@ -93,12 +116,24 @@ func (p *TerminalProxy) Handler() http.HandlerFunc {
 
 		// 4. 连接 Worker WS（携带同样的 token）
 		workerURL := fmt.Sprintf("%s?token=%s", workerWSURL, tokenStr)
-		workerConn, _, err := websocket.DefaultDialer.Dial(workerURL, nil)
+		workerConn, dialResp, err := websocket.DefaultDialer.Dial(workerURL, nil)
 		if err != nil {
 			p.tokens.Release(tokenStr)
-			slog.Error("连接 Worker WS 失败", "url", workerURL, "error", err)
-			browserConn.WriteMessage(websocket.TextMessage,
-				[]byte(fmt.Sprintf(`{"type":"state","state":"error","data":"连接 Worker 失败: %s"}`, err.Error())))
+			// Worker 以 401/403 拒绝握手 = 令牌被 Worker 主动拒绝（非网络故障）：给出定向诊断
+			//（FR-276，见 ADR-061）。常见根因：该节点 WS 令牌密钥与平台不一致（旧 Worker 未升级 /
+			// 手动配置漂移）。日志与消息均不含 token（workerWSURL 无 query）。
+			if dialResp != nil {
+				defer dialResp.Body.Close()
+				if dialResp.StatusCode == http.StatusUnauthorized || dialResp.StatusCode == http.StatusForbidden {
+					slog.Error("Worker 拒绝终端令牌（疑似节点 WS 令牌密钥与平台不一致）",
+						"url", workerWSURL, "status", dialResp.StatusCode)
+					writeTerminalProxyState(browserConn, TerminalProxyCodeWorkerTokenRejected,
+						fmt.Sprintf("终端令牌被 Worker 拒绝（HTTP %d）：该节点的 WS 令牌密钥与平台不一致。新版 Worker 会在注册时自动获取密钥，请确认节点已升级并重启；手动部署请核对 worker.yml 的 jwt_secret 是否与平台一致。", dialResp.StatusCode))
+					return
+				}
+			}
+			slog.Error("连接 Worker WS 失败", "url", workerWSURL, "error", err)
+			writeTerminalProxyState(browserConn, "", "连接 Worker 失败: "+err.Error())
 			return
 		}
 		defer workerConn.Close()
