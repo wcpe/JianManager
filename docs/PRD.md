@@ -66,6 +66,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-267~272（高密度控制台重塑 2026-07-02）：A+C Jian 绿默认视觉底座 / 页眉节点作用域 + 侧栏 IA + 页面归位 / 服务器统一控制台 `/instances/:id` / 节点控制台与高密度服务器列表 / 平台首页高密度总览 / 全站 A+C 皮肤收口 → `docs/specs/console-redesign/design.md`（已交付@v0.13.0）；关联 ADR-055/056/057；使用既有 mock-api 完成前端原型，不新增真实后端接口。
 - FR-273（通用组件包与控件博物馆）：抽出 `@jianmanager/ui` 通用 UI/token/charts 包，主应用消费组件包，并新增 `web/wiki` 控件博物馆展示第一版控件与常用状态矩阵 → `docs/specs/component-package-wiki/spec.md`；关联 ADR-058。
 - FR-274（Bot 压测会话 YAML 动作编排与 50 Bot 稳定验收，增强 FR-042）→ `docs/specs/bot-stress-yaml-orchestration/spec.md`
+- FR-275/276（CP↔Worker 专用 WS 令牌密钥下发 + 终端 401 诊断兜底：终端/插件桥令牌与用户会话密钥分离，经 gRPC 注册响应下发并持久化；修 FR-080 enroll 不下发密钥致生产终端 401、探针监控失效的产品缺口；修订 ADR-020，见 ADR-061）→ `docs/specs/worker-ws-token-secret/spec.md`（草拟，FR-275 开发中）
 - 已交付 FR 的详情见对应 `docs/specs/<feature>/` 与 git 历史。
 
 | 编号 | 需求 | 优先级 | 状态 |
@@ -79,7 +80,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-007 | 终端实时 | — | ✅ 已交付@v0.1.0 |
 | FR-008 | 文件管理 | — | ✅ 已交付@v0.1.0 |
 | FR-009 | Bot 平台 | — | ✅ 已交付@v0.1.0 |
-| FR-010 | 监控指标 | — | ✅ 已交付@v0.1.0 |
+| FR-010 | 监控指标 | — | 🔨 修复中（验收发现 `GET /api/v1/nodes/:id/metrics` 曾在真实 CP 后端 404；后端修复已落地，待补齐四类证据链复验） |
 | FR-011 | 告警规则 | — | ✅ 已交付@v0.1.0 |
 | FR-012 | 定时任务 | — | ✅ 已交付@v0.6.0 |
 | FR-013 | 备份恢复 | — | ✅ 已交付@v0.1.0 |
@@ -334,6 +335,8 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-272 | 全站页面归位与 A+C 皮肤收口：把玩家、插件、备份、定时、Bot、业务等单服能力收进服务器控制台，平台级页面归入平台管理，并统一 A+C Jian 绿默认高密度外观 | P1 | ✅ 已交付@v0.14.0 |
 | FR-273 | 通用组件包与控件博物馆：抽出 `@jianmanager/ui` 通用 UI/token/charts 包，主应用从包引入共享控件，并新增 `web/wiki` 控件博物馆展示第一版通用控件与常用状态矩阵（需 spec + ADR-058；不抽业务组件、不新增后端接口） | — | ✅ 已交付@v0.14.0 |
 | FR-274 | Bot 压测会话 YAML 动作编排与 50 Bot 稳定验收（增强 FR-042）→ `docs/specs/bot-stress-yaml-orchestration/spec.md` | P2 | ✅ 已交付@v0.13.0（代码全测过 spec §4 全 [x]；真机全栈验收：真 CP+Worker+bot-worker+MC1.16.5，50-bot YAML 编排会话 50/50 连续在线 0 掉线，稳定窗口 ~5.5 分钟[缩比 30min 硬标，窗口内 0 drop]） |
+| FR-275 | CP↔Worker 专用 WS 令牌密钥自动下发：CP 预配独立于 jwt.secret 的 WS 令牌密钥（显式配置 > 生产态自动生成持久化 > dev 回退），终端/插件桥令牌改用其签发；经 gRPC RegisterResponse 下发（首注册+重注册），Worker 持久化到 node-identity.json（0600）并用于终端+插件桥校验，旧 CP 空字段回退现状（修 FR-080 enroll 不下发密钥致生产终端 401、探针监控失效的产品缺口；需 spec + ADR-061，修订 ADR-020）→ `docs/specs/worker-ws-token-secret/spec.md` | P0 | 🔨 开发中 |
+| FR-276 | 终端 WS 密钥不一致 401 诊断兜底：CP 终端代理探测 Worker 握手 401 时返回结构化诊断，前端显示「终端令牌被 Worker 拒绝，疑似该节点 WS 密钥与平台不一致」而非裸「连接已断开」，与网络类断连区分；OPERATIONS 标注密钥同步要求与手动核对修复法（需 spec，并入 worker-ws-token-secret；依赖 FR-275 先落）→ `docs/specs/worker-ws-token-secret/spec.md` | P1 | 🔨 开发中 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 

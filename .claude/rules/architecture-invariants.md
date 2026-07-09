@@ -19,6 +19,7 @@
 - Control Plane ↔ Worker Node：gRPC（唯一允许的 RPC 协议）
 - 浏览器 ↔ Worker Node：WebSocket（仅终端/日志流，需一次性 token 鉴权）
 - 监控探针 ServerProbe ↔ Worker Node：**反向 WebSocket**（插件桥 `/ws/plugin-bridge`，探针主动连入本机 Worker，需实例级 token 鉴权 scope=plugin-bridge；探针不直连 CP/DB/gRPC，事件/指令经 Worker 中转。载体=ServerProbe 探针，见 ADR-016，取代 ADR-014 的「探针只读+RCON 治理」、复活 ADR-012 的 WS 通道）
+- CP↔Worker WS 令牌密钥：终端与插件桥的 WS 令牌用**专用共享密钥**签发/校验（CP 三轨解析：显式 `jwt.ws_secret` > 生产 autogen 持久化 > dev 回退；经 gRPC 注册/心跳自动下发 Worker 并持久化，见 ADR-061）；与签用户会话的 `jwt.secret` 隔离，**`jwt.secret` 永不下发 Worker**
 - Worker Node ↔ Bot Worker：stdin/stdout JSON 行协议
 - 守护进程 ↔ Worker Node：Unix Socket 二进制帧协议（本机）
 - 守护进程 ↔ jmctl 紧急控制台：Unix Socket / 命名管道二进制帧协议（**本机-only 应急通道**，CP/Worker 不可用时直连，载体=`cmd/jmctl/` CLI，见 ADR-041）。守护进程 socket 的本机访问方因此有二（Worker 常态 + jmctl 应急）；jmctl 不开任何网络端口、不直连 CP/DB/gRPC，「浏览器/网络永不直触守护进程 socket」的约束不变
