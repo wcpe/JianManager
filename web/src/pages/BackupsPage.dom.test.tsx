@@ -64,6 +64,41 @@ describe('BackupsPage（mock）', () => {
     })
   })
 
+  it('实例运行中 → 恢复按钮禁用并提示先停止（FR-013 恢复守卫回归）', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get(API('/instances'), () =>
+        HttpResponse.json([{ id: 1, name: 'survival', uuid: 'i-1', status: 'RUNNING' }]),
+      ),
+    )
+    renderWithProviders(<BackupsPage />)
+    await selectInstance(user)
+    await screen.findByText('full-2026-06-01T02:00:00')
+
+    // 运行中恢复会被下次自动存档覆盖（静默失效），按钮须禁用并给出定向提示。
+    const restoreButtons = screen.getAllByRole('button', { name: '恢复' })
+    expect(restoreButtons.length).toBeGreaterThan(0)
+    for (const btn of restoreButtons) {
+      expect(btn).toBeDisabled()
+      expect(btn).toHaveAttribute('title', '实例运行中，请先停止实例再恢复')
+    }
+  })
+
+  it('实例已停止 → 已完成备份的恢复按钮可用', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get(API('/instances'), () =>
+        HttpResponse.json([{ id: 1, name: 'survival', uuid: 'i-1', status: 'STOPPED' }]),
+      ),
+    )
+    renderWithProviders(<BackupsPage />)
+    await selectInstance(user)
+    await screen.findByText('full-2026-06-01T02:00:00')
+
+    const restoreButtons = screen.getAllByRole('button', { name: '恢复' })
+    expect(restoreButtons.some((btn) => !(btn as HTMLButtonElement).disabled)).toBe(true)
+  })
+
   it('注入 500 → 显示空态而非崩溃', async () => {
     const user = userEvent.setup()
     mockInject('get', '/instances/:id/backups', { kind: 'status', status: 500 })

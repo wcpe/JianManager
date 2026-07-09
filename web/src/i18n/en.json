@@ -1791,6 +1791,7 @@
     "restoreConfirm": "Restore to this backup? Current data will be overwritten",
     "confirmRestore": "Restore this backup?",
     "restoreWarning": "Current files will be overwritten. This action cannot be undone.",
+    "restoreNeedStopped": "Instance is running. Stop it before restoring.",
     "deleteConfirm": "Delete this backup?",
     "empty": "No backups",
     "size": "Size",

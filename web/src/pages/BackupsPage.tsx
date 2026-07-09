@@ -60,6 +60,14 @@ export default function BackupsPage() {
   const deleteBackup = useDeleteBackup()
   const restoreBackup = useRestoreBackup()
 
+  // 实例进程可能存活（STARTING/RUNNING/STOPPING）时禁止恢复，与后端恢复守卫一致：
+  // 运行中的服务器下次自动存档会覆盖掉刚恢复的文件，恢复会静默失效。
+  const selectedInst = (instances ?? []).find((inst) => inst.id === selectedInstance)
+  const instanceLive = !!selectedInst && ['STARTING', 'RUNNING', 'STOPPING'].includes(selectedInst.status)
+  const restoreDisabledTitle = instanceLive
+    ? t('backups.restoreNeedStopped', '实例运行中，请先停止实例再恢复')
+    : undefined
+
   const list = useMemo(() => backups ?? [], [backups])
   const summary = useMemo(() => summarizeBackups(list), [list])
   const backupById = useMemo(() => new Map(list.map((b) => [b.id, b])), [list])
@@ -91,8 +99,10 @@ export default function BackupsPage() {
     try {
       await restoreBackup.mutateAsync(backupId)
       toast.success(t('backups.restoring', '恢复中...'))
-    } catch {
-      toast.error(t('backups.restoreFailed', '恢复备份失败'))
+    } catch (e: unknown) {
+      // 实例未停止时后端回 409 INSTANCE_NOT_STOPPED，透传定向提示。
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+      toast.error(msg || t('backups.restoreFailed', '恢复备份失败'))
     }
     setRestoreTarget(null)
   }
@@ -222,7 +232,8 @@ export default function BackupsPage() {
                           variant="ghost"
                           size="xs"
                           onClick={() => setRestoreTarget(b.id)}
-                          disabled={b.status !== BACKUP_COMPLETED || restoreBackup.isPending}
+                          disabled={b.status !== BACKUP_COMPLETED || restoreBackup.isPending || instanceLive}
+                          title={restoreDisabledTitle}
                         >
                           {t('backups.restore', '恢复')}
                         </Button>
@@ -281,7 +292,8 @@ export default function BackupsPage() {
                             variant="ghost"
                             size="xs"
                             onClick={() => setRestoreTarget(b.id)}
-                            disabled={b.status !== BACKUP_COMPLETED || restoreBackup.isPending}
+                            disabled={b.status !== BACKUP_COMPLETED || restoreBackup.isPending || instanceLive}
+                            title={restoreDisabledTitle}
                           >
                             {t('backups.restore', '恢复')}
                           </Button>

@@ -1770,6 +1770,7 @@
     "restoreConfirm": "确认恢复此备份？当前数据将被覆盖。",
     "confirmRestore": "确认恢复此备份？",
     "restoreWarning": "当前文件将被覆盖，此操作不可撤销。",
+    "restoreNeedStopped": "实例运行中，请先停止实例再恢复",
     "deleteConfirm": "确定删除此备份？",
     "empty": "暂无备份",
     "size": "大小",
