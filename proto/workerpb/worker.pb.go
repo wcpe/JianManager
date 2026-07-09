@@ -130,9 +130,13 @@ func (x *RegisterRequest) GetDiskTotalMb() int64 {
 }
 
 type RegisterResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeUuid      string                 `protobuf:"bytes,1,opt,name=node_uuid,json=nodeUuid,proto3" json:"node_uuid,omitempty"`
-	NodeSecret    string                 `protobuf:"bytes,2,opt,name=node_secret,json=nodeSecret,proto3" json:"node_secret,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	NodeUuid   string                 `protobuf:"bytes,1,opt,name=node_uuid,json=nodeUuid,proto3" json:"node_uuid,omitempty"`
+	NodeSecret string                 `protobuf:"bytes,2,opt,name=node_secret,json=nodeSecret,proto3" json:"node_secret,omitempty"`
+	// CP↔Worker WS 令牌密钥（FR-275，见 ADR-061）：只签终端/插件桥令牌，与用户会话密钥隔离。
+	// 首注册与重注册均下发；Worker 持久化到 etc/node-identity.json 并热应用到 WS 校验。
+	// 空 = 旧 CP 未下发，Worker 回退本地 jwt_secret 配置（向后兼容）。
+	WsTokenSecret string `protobuf:"bytes,3,opt,name=ws_token_secret,json=wsTokenSecret,proto3" json:"ws_token_secret,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -177,6 +181,13 @@ func (x *RegisterResponse) GetNodeUuid() string {
 func (x *RegisterResponse) GetNodeSecret() string {
 	if x != nil {
 		return x.NodeSecret
+	}
+	return ""
+}
+
+func (x *RegisterResponse) GetWsTokenSecret() string {
+	if x != nil {
+		return x.WsTokenSecret
 	}
 	return ""
 }
@@ -717,6 +728,10 @@ type HeartbeatResponse struct {
 	// 且未终态」的任务 id 下发，Worker 据此取消对应任务的执行 context（真中断下载 + 清理临时文件）
 	// 并经下一拍心跳上报该任务为 canceled。幂等：Worker 对已不在登记表的 id 静默忽略。
 	CancelTaskIds []string `protobuf:"bytes,5,rep,name=cancel_task_ids,json=cancelTaskIds,proto3" json:"cancel_task_ids,omitempty"`
+	// CP↔Worker WS 令牌密钥每拍携带（FR-275，见 ADR-061，镜像 proxy 下发）：Worker 比对
+	// 与当前生效值不同才热应用 + 持久化——CP 轮换密钥后 Worker 不重启即自愈（≤1 心跳周期）。
+	// 空 = 旧 CP 未下发，Worker 不动作。
+	WsTokenSecret string `protobuf:"bytes,6,opt,name=ws_token_secret,json=wsTokenSecret,proto3" json:"ws_token_secret,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -784,6 +799,13 @@ func (x *HeartbeatResponse) GetCancelTaskIds() []string {
 		return x.CancelTaskIds
 	}
 	return nil
+}
+
+func (x *HeartbeatResponse) GetWsTokenSecret() string {
+	if x != nil {
+		return x.WsTokenSecret
+	}
+	return ""
 }
 
 type CreateInstanceRequest struct {
@@ -9198,11 +9220,12 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x04arch\x18\x06 \x01(\tR\x04arch\x12\x1b\n" +
 	"\tcpu_cores\x18\a \x01(\x05R\bcpuCores\x12\x1b\n" +
 	"\tmemory_mb\x18\b \x01(\x03R\bmemoryMb\x12\"\n" +
-	"\rdisk_total_mb\x18\t \x01(\x03R\vdiskTotalMb\"P\n" +
+	"\rdisk_total_mb\x18\t \x01(\x03R\vdiskTotalMb\"x\n" +
 	"\x10RegisterResponse\x12\x1b\n" +
 	"\tnode_uuid\x18\x01 \x01(\tR\bnodeUuid\x12\x1f\n" +
 	"\vnode_secret\x18\x02 \x01(\tR\n" +
-	"nodeSecret\"\xbf\x04\n" +
+	"nodeSecret\x12&\n" +
+	"\x0fws_token_secret\x18\x03 \x01(\tR\rwsTokenSecret\"\xbf\x04\n" +
 	"\x10HeartbeatRequest\x12\x1b\n" +
 	"\tnode_uuid\x18\x01 \x01(\tR\bnodeUuid\x12\x1b\n" +
 	"\tcpu_usage\x18\x02 \x01(\x02R\bcpuUsage\x12!\n" +
@@ -9256,13 +9279,14 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x04user\x18\b \x01(\tR\x04user\x12'\n" +
 	"\x0fcommand_summary\x18\t \x01(\tR\x0ecommandSummary\x12+\n" +
 	"\x12sampled_at_unix_ms\x18\n" +
-	" \x01(\x03R\x0fsampledAtUnixMs\"\xc7\x01\n" +
+	" \x01(\x03R\x0fsampledAtUnixMs\"\xef\x01\n" +
 	"\x11HeartbeatResponse\x12\x1c\n" +
 	"\ttimestamp\x18\x01 \x01(\x03R\ttimestamp\x12\x1b\n" +
 	"\tproxy_url\x18\x02 \x01(\tR\bproxyUrl\x12$\n" +
 	"\x0eproxy_no_proxy\x18\x03 \x01(\tR\fproxyNoProxy\x12)\n" +
 	"\x10proxy_generation\x18\x04 \x01(\tR\x0fproxyGeneration\x12&\n" +
-	"\x0fcancel_task_ids\x18\x05 \x03(\tR\rcancelTaskIds\"\xe2\x05\n" +
+	"\x0fcancel_task_ids\x18\x05 \x03(\tR\rcancelTaskIds\x12&\n" +
+	"\x0fws_token_secret\x18\x06 \x01(\tR\rwsTokenSecret\"\xe2\x05\n" +
 	"\x15CreateInstanceRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +

@@ -190,6 +190,10 @@ message RegisterRequest {
 message RegisterResponse {
   string node_uuid = 1;
   string node_secret = 2;
+  // CP↔Worker WS 令牌密钥（FR-275，见 ADR-061）：只签终端/插件桥令牌，与用户会话密钥隔离。
+  // 首注册与重注册均下发；Worker 持久化到 etc/node-identity.json 并热应用到 WS 校验。
+  // 空 = 旧 CP 未下发，Worker 回退本地 jwt_secret 配置（向后兼容）。
+  string ws_token_secret = 3;
 }
 
 // === 心跳 ===
@@ -270,6 +274,10 @@ message HeartbeatResponse {
   // 且未终态」的任务 id 下发，Worker 据此取消对应任务的执行 context（真中断下载 + 清理临时文件）
   // 并经下一拍心跳上报该任务为 canceled。幂等：Worker 对已不在登记表的 id 静默忽略。
   repeated string cancel_task_ids = 5;
+  // CP↔Worker WS 令牌密钥每拍携带（FR-275，见 ADR-061，镜像 proxy 下发）：Worker 比对
+  // 与当前生效值不同才热应用 + 持久化——CP 轮换密钥后 Worker 不重启即自愈（≤1 心跳周期）。
+  // 空 = 旧 CP 未下发，Worker 不动作。
+  string ws_token_secret = 6;
 }
 
 // === 实例操作 ===
