@@ -159,7 +159,7 @@ internal/worker/
 - **配置加载**：Worker 启动时经 `internal/worker/config.go`（viper）真正加载 `worker.yml`（CP gRPC 地址、grpc/ws 端口、data_dir、日志），`JIANMANAGER_` 前缀环境变量按路径覆盖。配置落盘取代历史的环境变量堆砌。
 - **免配置自启 setup（FR-222，见 ADR-051，改写 ADR-020 §2 单脚本写配置编排）**：「下载」（取二进制）与「上线」（写配置 + 注册 + run）解耦——Worker 入口 `runWorker` 加载配置前先自检「是否已配置」（`无 worker.yml/.yaml` **且** `无 <data-dir>/etc/node-identity.json`）。**未配置** → 进入 `internal/worker/setup`：有 TTY 交互逐项问 CP gRPC 地址 / enroll token / 节点名（可选端口、data_dir，给默认值）；无 TTY（CI/管道/systemd/Windows 服务）从命令行参数 + `JIANMANAGER_*` env 读，缺必填（CP 地址 / token）即 fail-fast（不卡住等输入）。setup 顺序：写 `worker.yml`（原子、复刻安装脚本字段、**enroll token 绝不写入**）→ 携 token 经 gRPC 首注册换身份 → 持久化 `node_uuid`/`node_secret` 到 `etc/node-identity.json`（0600）→ **转入正常 run**（内存构造配置 + 复用首注册身份，不重启进程、不重复注册）。**已配置**（有 yml 或有 node-identity，或显式传配置文件路径）→ 跳过 setup 直接 run（现状零变化）。新机器零脚本依赖即可上线，安装脚本（FR-223）退化为「取二进制 + 调 setup」。
 - **enrollment token 准入**：新增节点凭 CP 签发的**一次性、限时** enrollment token 注册（取代 FR-004 的「无凭据自助注册」对新节点的开放）。token 经 gRPC metadata `enroll-token` 传给 CP 校验消费（不改 proto）；CP 只对「新节点首次落库」设门槛，已有身份的重注册不强制 token（不破网）。
-- **身份持久化**：注册成功换得的 `node_uuid`/`node_secret` 写入数据根 `etc/node-identity.json`（0600，含敏感 secret 不入日志）。Worker 重启优先读该文件复用既有身份走重注册，不重复消费已失效的一次性 token。
+- **身份持久化**：注册成功换得的 `node_uuid`/`node_secret` 写入数据根 `etc/node-identity.json`（0600，含敏感 secret 不入日志）。Worker 重启优先读该文件复用既有身份走重注册，不重复消费已失效的一次性 token。CP 下发的 **WS 令牌密钥**（`wsTokenSecret`，FR-275/ADR-061）一并持久化于此：启动时优先用其构造终端/插件桥校验（回退 `worker.yml` `jwt_secret` 兼容旧 CP），注册/心跳下发变化时热更新并补写。
 - **注册身份匹配（UUID 锚定，见 ADR-039，修复重名覆盖 BUG-A）**：`ControlPlaneHandler.Register` 按三级优先级匹配既有节点，杜绝「另一台机器用同名注册覆写旧节点身份/host」——
   1. **UUID 证明**：Worker 重注册时经 gRPC metadata `node-uuid` + `node-secret` 出示本地身份；命中库中节点且 secret 匹配 → 按 UUID 重注册（更新 host/port/os/arch，允许改名）；secret 不符 → `PermissionDenied`，绝不覆写。
   2. **同机 host 兼容（过渡）**：未升级旧 Worker 只带 name，name 命中既有节点且本次连接 host 与库存 host 一致（同机重启信号）→ 放行重注册并告警建议升级；host 不一致落到 3。
@@ -178,8 +178,10 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 
 - 生命周期：Register, Heartbeat (双向 stream)
   - `Register` 的身份匹配经 gRPC metadata 携带 `node-uuid`/`node-secret`（重注册出示身份）或 `enroll-token`（新节点准入），均不改 proto；匹配优先级与重名覆盖防护见 §5.1（ADR-039）
+  - `RegisterResponse` 携带 `ws_token_secret`（FR-275，见 ADR-061）：CP↔Worker 专用 **WS 令牌密钥**（只签终端/插件桥令牌，与签用户会话的 `jwt.secret` 隔离，Worker 永不持有后者）。首注册与重注册均下发；Worker 持久化到 `etc/node-identity.json` 并热应用到 WS 校验。CP 侧密钥三轨：显式 `jwt.ws_secret` > 生产 autogen 持久化 `<dataRoot>/etc/ws-token-secret.key`（0600）> dev 回退 `dev-secret-change-me`；空字段（旧 CP）时 Worker 回退本地 `jwt_secret` 配置（向后兼容）
   - `Heartbeat` 负载除节点指标（CPU/内存/磁盘/累计网络字节/`load_avg1` 系统负载，FR-062）外携带 `instance_metrics`（每实例 ServerProbe 快照：TPS/MSPT/在线/堆/线程/CPU/uptime + 分世界负载，FR-060）；CP 收心跳经 `IngestHeartbeat` 落库为时序样本（node_cpu/mem/disk/net 速率/load）并据相邻累计字节算网络速率（Worker 不碰 DB）
   - `Heartbeat` 还加性携带 `tasks`（`TaskSnapshot`：task_id/state/progress/error/result/recent_log_lines，FR-183/ADR-040）——Worker 把运行中长任务（如 JDK 安装）的进度随心跳上报，CP 经 `TaskService.IngestSnapshots` upsert `Task` + 幂等追加 `TaskLog`，并在任务**首次进终态**时触发副作用（jdk_install 成功落 `NodeJDK` + 发成功站内信，失败发失败站内信）。日志行编码为 `<绝对序号>\t<正文>`，跨周期重叠窗口按绝对序号去重
+  - `HeartbeatResponse` 加性携带 `ws_token_secret`（FR-275，见 ADR-061）：WS 令牌密钥每拍随心跳下发，Worker 比对「值变化」才热更新终端/插件桥校验并补写身份文件——CP 轮换密钥后 Worker 不重启即自愈（≤1 心跳周期）
   - `HeartbeatResponse` 加性携带 `proxy_url`/`proxy_no_proxy`/`proxy_generation`（出站代理可视化下发，FR-185/ADR-043）——CP 据「节点 custom ? 节点值 : 全局默认」算每节点**期望出站代理**，每拍随心跳响应下发；Worker 仅当 `proxy_generation`（期望代理配置的 FNV 哈希）变化时才 `httpclient.New` 重建出站持有者（`httpclient.Provider` 原子替换，避免每拍重建），新 client 注入到各下载点（JDK/CFR/自更新/服务端 jar）即时生效。真相源 = CP DB（`nodes.proxy_*`），Worker **不落盘**，重连/重启由后续心跳天然重发；下发为空回退本地 `worker.yml`/env。CP 自身出站代理由设置面板 `proxy.url`/`proxy.no_proxy`（settings DB 覆盖）管控、运行时重建，且作为各节点默认代理（优先级 settings DB > yaml > env）
 - 实例操作：CreateInstance, StartInstance, StopInstance, RestartInstance, KillInstance, SendCommand, GetInstanceStatus, ListInstances
   - `CreateInstance` 除 `start_command` 外携带 `stop_command`（优雅停止命令，CP 按实例角色派生：backend/universal=`stop`，proxy=`end`），由 daemon wrapper 在优雅停止时写入进程 stdin；并携带 `probe_port`（CP 分配的 ServerProbe 端口，daemon 模式透传到 wrapper→PID 记录，供 Worker 心跳自采与重启恢复，FR-060）；以及 `graceful_stop_timeout_seconds`（CP 从平台设置 `graceful_stop.timeout` 取生效值随启动下发，daemon 透传到 wrapper 做超时强杀兜底，FR-063；值在启动时定型，对设置变更后新启动的实例生效）。docker 模式（FR-078，ADR-019）额外携带 `image`（容器镜像引用）与 `port_mappings`（容器端口↔宿主端口，宿主端口来自 FR-032 端口池），Worker 启动容器前据 `image` 自动拉取缺失镜像
@@ -218,13 +220,13 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 
 ### 6.2 WebSocket（浏览器 ↔ Worker Node）
 
-终端直连，Control Plane 签发一次性 30s token 鉴权：
+终端经 CP 代理桥接，Control Plane 签发一次性 30s token 鉴权。token 用 **WS 令牌密钥**签发/校验（FR-275，见 ADR-061）：CP 与 Worker 共享的专用密钥（经注册/心跳自动下发，见 §6.1），与签用户会话的 `jwt.secret` 隔离：
 
 ```
-Browser → Control Plane (GET /terminal/token)
-  → 返回 {token, ws_url}
-Browser → Worker Node (WS ws://worker:port/ws/terminal?token=xxx)
-  → 双向终端流
+Browser → Control Plane (POST /instances/:id/terminal/token)
+  → 返回 {token, wsUrl}（wsUrl 指向 CP 代理端点 /ws/terminal）
+Browser → CP (/ws/terminal?token=xxx) → CP 校验并转拨 → Worker (:wsPort/ws/terminal?token=xxx)
+  → Worker 独立校验同一 token → 双向终端流（browser ↔ CP ↔ worker 桥接）
 ```
 
 消息格式：
@@ -234,6 +236,8 @@ Browser → Worker Node (WS ws://worker:port/ws/terminal?token=xxx)
 {"type":"stdout","instanceId":"xxx","data":"..."}
 {"type":"stderr","instanceId":"xxx","data":"..."}
 {"type":"state","instanceId":"xxx","state":"RUNNING"}
+// CP 代理 → Browser（错误分支，FR-276）：Worker 以 401/403 拒绝令牌时给定向诊断
+{"type":"state","state":"error","code":"WORKER_TOKEN_REJECTED","data":"终端令牌被 Worker 拒绝（HTTP 401）：该节点的 WS 令牌密钥与平台不一致。…"}
 
 // Browser → Worker
 {"type":"stdin","instanceId":"xxx","data":"..."}
@@ -278,7 +282,7 @@ serverprobe_world_{loaded_chunks,entities,tile_entities}{world=}  → 按世界�
 
 - 端点：Worker 暴露 `GET /ws/plugin-bridge`，与 `/ws/terminal` 并列、同一 WS 监听端口。
 - 方向：探针**主动反向连入** `ws://127.0.0.1:<wsPort>/ws/plugin-bridge?token=<jwt>&instance=<uuid>`（本机回环，零额外对外网络面）。
-- 鉴权（实例级 token，复用 JWT secret）：CP 为实例签发 HS256 token（claims `instanceId`+`scope=plugin-bridge`，TTL 数分钟），随探针 config 的 `bridge:` 段下发；Worker 校验**签名 + `scope==plugin-bridge` + token 内 `instanceId == query.instance`** 后建会话，仅握手校验一次。
+- 鉴权（实例级 token，用 **WS 令牌密钥**签发/校验，FR-275/ADR-061——不再复用签用户会话的 `jwt.secret`）：CP 为实例签发 HS256 token（claims `instanceId`+`scope=plugin-bridge`，长 TTL 等效实例生命周期），随探针 config 的 `bridge:` 段下发；Worker 校验**签名 + `scope==plugin-bridge` + token 内 `instanceId == query.instance`** 后建会话，仅握手校验一次。密钥轮换会使已下发探针 token 失效，需经 FR-068 在线更新/重建服重发探针配置。
 - 会话表：Worker 维护「实例 UUID → 探针会话」，同实例单活动会话、**新连顶替旧连**；连接/断开冒泡 `connected`/`disconnected` 事件经 gRPC `StreamPluginEvents` 到 CP。
 - 心跳与重连：探针周期发 `ping`、Worker 回 `pong`，Worker 读超时判定断线；探针断线后自身指数退避重连（初始 ~1s，上限 ~30s）。
 - 探针侧载体：ServerProbe fork core 模块 `BridgeClient`（IOC `@Service`，`@PostEnable` 起 `@PreDestroy` 停），JDK 8 兼容、零三方依赖的最小 RFC 6455 客户端（`MinimalWebSocketClient`）。
@@ -958,7 +962,7 @@ log_store:
 ```
 data/
 ├── bin/              # 平台/辅助可执行
-├── etc/              # 平台与节点配置；当前 OTA 不再生成 client-sign-key.pem 作为信任根，key_enc 主密钥可由 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入或自动生成持久化为 client-key-enc.key
+├── etc/              # 平台与节点配置；当前 OTA 不再生成 client-sign-key.pem 作为信任根，key_enc 主密钥可由 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入或自动生成持久化为 client-key-enc.key；CP 侧 WS 令牌密钥生产 autogen 持久化为 ws-token-secret.key（0600，FR-275/ADR-061，勿删——删除即轮换、已下发探针 token 失效）；Worker 侧 node-identity.json 含 wsTokenSecret
 ├── opt/jdks/         # 便携 JDK：<vendor>-<ver>/（取代旧的 <serversDir>/jdks）
 ├── var/
 │   ├── servers/      # 服务器工作目录：<slug>-<shortid>/（系统分配）

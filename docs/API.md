@@ -225,8 +225,11 @@
 - **审计**: `node.purge_orphans`
 
 ### GET /api/v1/nodes/:id/metrics
-- **描述**: 节点指标（CPU/内存/磁盘时间序列）
+- **描述**: 节点实时指标快照（CPU/内存/磁盘）。节点已连接时 CP 经 Worker `GetNodeMetrics` 主动拉取；Worker 暂未连接时回退节点最新心跳快照，避免实时面板因连接池短暂缺失直接不可用。
 - **关联 FR**: FR-010
+- **权限**: 平台管理员
+- **响应**: `{ cpuUsage, memoryUsage, diskUsage, memoryUsedMb, memoryTotalMb, diskUsedMb, diskTotalMb }`，其中 `cpuUsage`/`memoryUsage`/`diskUsage` 为 `0~1` 比例值。
+- **错误码**: `404 NOT_FOUND`（节点不存在），`503 METRICS_UNAVAILABLE`（Worker 已连接但实时指标拉取失败）
 
 ### GET /install-worker.sh ; GET /install-worker.ps1
 - **描述**: CP 匿名静态托管 Worker 一键安装脚本（Linux/macOS 的 `.sh`、Windows 的 `.ps1`）。一键命令拼 `curl <cp>/install-worker.sh | sh` / `iex (iwr <cp>/install-worker.ps1 -UseBasicParsing).Content`，依赖 CP 自托管这两路径
@@ -842,7 +845,12 @@
     "expiresIn": 30
   }
   ```
-- **说明**: `wsUrl` 指向 CP 代理端点，host 取浏览器请求的 Host（支持非 localhost 访问）；scheme 跟随访问协议——经 TLS 直连或反代标注 `X-Forwarded-Proto: https` 时为 `wss`，否则 `ws`，避免 HTTPS 页面连 `ws` 被混合内容策略拦截。前端连接时以 `?token=` 附加 token。
+- **说明**: `wsUrl` 指向 CP 代理端点，host 取浏览器请求的 Host（支持非 localhost 访问）；scheme 跟随访问协议——经 TLS 直连或反代标注 `X-Forwarded-Proto: https` 时为 `wss`，否则 `ws`，避免 HTTPS 页面连 `ws` 被混合内容策略拦截。前端连接时以 `?token=` 附加 token。token 用 CP↔Worker 专用 **WS 令牌密钥**签发（FR-275，见 ADR-061），CP 代理与 Worker 各校验一次。
+- **错误诊断（FR-276）**: CP 代理连 Worker 握手被 401/403 拒绝时，经已升级的浏览器 WS 连接下发结构化错误后关闭：
+  ```json
+  {"type":"state","state":"error","code":"WORKER_TOKEN_REJECTED","data":"终端令牌被 Worker 拒绝（HTTP 401）：该节点的 WS 令牌密钥与平台不一致。…"}
+  ```
+  网络类拨号失败无 `code` 字段（`data` 为「连接 Worker 失败: …」），前端据 `code` 区分定向诊断与一般断连。
 
 ---
 

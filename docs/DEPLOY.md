@@ -57,7 +57,10 @@ database:
   driver: sqlite      # sqlite | mysql
   dsn: data/jianmanager.db   # MySQL 示例: user:pass@tcp(host:3306)/jianmanager?charset=utf8mb4&parseTime=True
 jwt:
-  secret: CHANGE_ME   # 必改；与所有 Worker 一致（终端一次性 token 由 CP 签发、Worker 校验）
+  secret: CHANGE_ME   # 必改；签用户登录会话（自 FR-275 起不再需要与 Worker 同步）
+  # ws_secret: 留空即可——CP↔Worker WS 令牌密钥（终端/探针桥，FR-275/ADR-061）：生产未配时
+  # 自动生成并持久化到数据根 etc/ws-token-secret.key，经注册/心跳自动下发给 Worker，零配置可用。
+  # 显式配置仅用于过渡兼容（如设为旧 jwt.secret 值以兼容未升级的 Worker）。
   access_ttl: 15m
   refresh_ttl: 168h
 log:
@@ -76,7 +79,8 @@ file_version:         # 通用文件改前快照（FR-051）
 | `JIANMANAGER_GRPC_PORT` | grpc.port | 9100 |
 | `JIANMANAGER_DATABASE_DRIVER` | database.driver | sqlite |
 | `JIANMANAGER_DATABASE_DSN` | database.dsn | data/jianmanager.db |
-| `JIANMANAGER_JWT_SECRET` | jwt.secret | dev-secret-change-me（**必改**） |
+| `JIANMANAGER_JWT_SECRET` | jwt.secret | dev-secret-change-me（**必改**；只签用户会话，不再下发 Worker） |
+| `JIANMANAGER_JWT_WS_SECRET` | jwt.ws_secret | 空（生产自动生成持久化 + 注册自动下发 Worker；仅过渡兼容时显式配，FR-275/ADR-061） |
 | `JIANMANAGER_DATA_DIR` | 数据根（资产/缓存） | 进程目录下 `data/` |
 | `JIANMANAGER_CLIENT_KEY_ENC_SECRET` | client_dist.key_enc_secret | 空（env 优先；未配时生产自动生成并持久化，dev 兜底；不阻断建密钥，见下） |
 
@@ -95,7 +99,7 @@ Worker 全部用环境变量配置（也可放 `worker.yml` 同名键）：
 | 环境变量 | 说明 | 默认 |
 |---|---|---|
 | `JIANMANAGER_CONTROL_PLANE_GRPC` | **必填**，Control Plane gRPC 地址 `host:9100` | 无 |
-| `JIANMANAGER_JWT_SECRET` | **必须与 Control Plane 一致** | 无 |
+| `JIANMANAGER_JWT_SECRET` | 旧 CP（< FR-275）兼容项：与 CP 一致才能过终端/探针桥校验。新 CP 会在注册时自动下发 WS 令牌密钥（持久化到 `etc/node-identity.json`），**无需配置** | dev-secret-change-me |
 | `JIANMANAGER_NODE_NAME` | 节点显示名 | node-01 |
 | `JIANMANAGER_NODE_UUID` | 固定节点 UUID（留空则首次生成；重装后想复用既有节点须显式指定） | 自动 |
 | `JIANMANAGER_HOST` | 浏览器/CP 回拨本 Worker 的地址（终端/WS）。留空自动探测本机 IP；NAT/容器下需显式指定可达地址 | 自动 |
@@ -119,6 +123,15 @@ npm run build          # 产出 dist/index.js
 # 然后在 Worker 进程设置：
 export JIANMANAGER_BOT_WORKER_PATH="$(pwd)/dist/index.js"
 ```
+
+### 终端 / 探针监控 401 排查（FR-275/276，见 ADR-061）
+
+终端页显示「**终端令牌被节点拒绝**……WS 令牌密钥与平台不一致」（而非普通「连接已断开」）时，按序核对：
+
+1. **节点是否已升级并重启**：新版 Worker 在注册时自动获取 WS 令牌密钥（心跳持续自愈），重启节点即可；CP 与 Worker 建议同批升级。
+2. **手动/旧版部署**：旧版 Worker 仍用本地 `jwt_secret` 校验——将其设为与 CP 一致；或在 CP 显式设 `jwt.ws_secret` 为旧 `jwt.secret` 值过渡（逃生口），待节点升级后移除。
+3. **CP 密钥被轮换过**（改了 `jwt.ws_secret` 或删了数据根 `etc/ws-token-secret.key`）：在网 Worker 会经心跳 ≤1 拍自愈；**已下发的探针桥长期 token 会失效**，需对受影响实例走「探针在线更新」（FR-068）或重建服重发探针配置，插件桥监控才能恢复。
+4. 普通「连接已断开/连接 Worker 失败」是网络类问题（端口不可达、实例未运行），与密钥无关，按网络与端口章节排查。
 
 ## 7. JDK 托管（运行现代 Minecraft 服）
 
