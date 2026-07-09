@@ -126,3 +126,41 @@ func TestRegister_ExistingNode_NoTokenReregisters(t *testing.T) {
 	require.Equal(t, existing.UUID, resp.NodeUuid)
 	require.Equal(t, "existing-secret", resp.NodeSecret, "重注册应返回既有 secret，不重签")
 }
+
+// TestRegister_NewNode_UsesEnrollTokenPresetName worker 未上报名（req.Name 空）时，新节点采用
+// enrollment token 的预设节点名（setup.go 承诺「留空由 CP/token 预设名生效」）。复现真机缺陷：
+// 仅设 JIANMANAGER_NAME（未映射到 setup 上报名）→ req.Name="" → 原实现节点名为空、一键搭建
+// 「选择节点」按名过滤取不到该节点、建实例被堵。
+func TestRegister_NewNode_UsesEnrollTokenPresetName(t *testing.T) {
+	h, db, enrollSvc := newEnrollRegisterHandler(t)
+	_, plaintext, err := enrollSvc.Issue("preset-edge", 30, 1) // 添加节点时预设的名
+	require.NoError(t, err)
+
+	resp, err := h.Register(ctxWithToken(plaintext), registerReq("")) // worker 上报空名
+	require.NoError(t, err)
+
+	var node model.Node
+	require.NoError(t, db.Where("uuid = ?", resp.NodeUuid).First(&node).Error)
+	require.Equal(t, "preset-edge", node.Name, "req.Name 空时应采用 token 预设名，而非留空")
+}
+
+// TestRegister_ExistingNode_EmptyNameKeepsName worker 经 UUID 身份重注册时上报空名，不得把既有
+// 非空节点名清空——否则真机 worker 每次重启都把名字抹成空（identity.NodeName 为空时）、选择器取不到。
+func TestRegister_ExistingNode_EmptyNameKeepsName(t *testing.T) {
+	h, db, _ := newEnrollRegisterHandler(t)
+	existing := &model.Node{
+		Name: "edge-keep", Host: "127.0.0.1", GRPCPort: 0, WSPort: 0,
+		Secret: "sec-keep", Status: model.NodeStatusOffline,
+	}
+	require.NoError(t, db.Create(existing).Error)
+
+	md := metadata.New(map[string]string{"node-uuid": existing.UUID, "node-secret": "sec-keep"})
+	ctx := metadata.NewIncomingContext(context.Background(), md)
+	resp, err := h.Register(ctx, registerReq("")) // 空名重注册
+	require.NoError(t, err)
+	require.Equal(t, existing.UUID, resp.NodeUuid)
+
+	var node model.Node
+	require.NoError(t, db.Where("uuid = ?", existing.UUID).First(&node).Error)
+	require.Equal(t, "edge-keep", node.Name, "空名重注册不应清空既有节点名")
+}

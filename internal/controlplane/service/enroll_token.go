@@ -99,9 +99,9 @@ func (s *EnrollTokenService) PeekForNewNode(plaintext string) (*model.NodeEnroll
 // ConsumeForNewNode 校验并原子消费 enrollment token：经条件 UPDATE 仅当 (未消费 + 未吊销 + 未过期)
 // 时把 used 置真并记 used_at/used_by_node。RowsAffected==1 才算消费成功（并发下仅一个调用成功，保证一次性）。
 // 供 gRPC Register 在「新节点首次落库」前调用。校验/竞争失败统一返回 ErrEnrollTokenInvalid。
-func (s *EnrollTokenService) ConsumeForNewNode(plaintext, nodeUUID string) error {
+func (s *EnrollTokenService) ConsumeForNewNode(plaintext, nodeUUID string) (string, error) {
 	if plaintext == "" {
-		return ErrEnrollTokenInvalid
+		return "", ErrEnrollTokenInvalid
 	}
 	hash := sha256Hex(plaintext)
 	now := time.Now()
@@ -113,12 +113,19 @@ func (s *EnrollTokenService) ConsumeForNewNode(plaintext, nodeUUID string) error
 			"used_by_node": nodeUUID,
 		})
 	if res.Error != nil {
-		return fmt.Errorf("消费 enrollment token 失败: %w", res.Error)
+		return "", fmt.Errorf("消费 enrollment token 失败: %w", res.Error)
 	}
 	if res.RowsAffected != 1 {
-		return ErrEnrollTokenInvalid
+		return "", ErrEnrollTokenInvalid
 	}
-	return nil
+	// 取该 token 的预设节点名：worker 未上报名（如仅设 JIANMANAGER_NAME、未经 setup --name/
+	// JIANMANAGER_NODE_NAME）时由 CP 采用，兑现「NodeName 留空由 CP/token 预设名生效」。
+	// 取名失败不阻断注册、退回空名。
+	var tok model.NodeEnrollToken
+	if err := s.db.Select("node_name").Where("token_hash = ?", hash).First(&tok).Error; err != nil {
+		return "", nil
+	}
+	return tok.NodeName, nil
 }
 
 // List 列出全部 enrollment token（仅元数据，无明文），按创建时间倒序。

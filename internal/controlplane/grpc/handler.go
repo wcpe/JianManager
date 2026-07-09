@@ -50,7 +50,7 @@ type TaskIngester interface {
 // ConsumeForNewNode 仅当 token 当前有效（未消费/未吊销/未过期）时原子消费、返回 nil；
 // 否则返回非 nil（注册据此拒绝新节点）。
 type EnrollmentValidator interface {
-	ConsumeForNewNode(plaintext, nodeUUID string) error
+	ConsumeForNewNode(plaintext, nodeUUID string) (presetNodeName string, err error)
 }
 
 // NodeProxyResolver 计算某节点的期望出站代理 + generation，供心跳响应下发（FR-185，见 ADR-043）。
@@ -166,7 +166,6 @@ func (h *ControlPlaneHandler) Register(ctx context.Context, req *workerpb.Regist
 // 重建反向 gRPC 连接，返回既有 UUID/secret（不重签）。matchBy 仅用于日志区分匹配路径。
 func (h *ControlPlaneHandler) reregisterExisting(node *model.Node, req *workerpb.RegisterRequest, matchBy string) (*workerpb.RegisterResponse, error) {
 	updates := map[string]interface{}{
-		"name":           req.Name, // 允许改名（UUID 锚定身份，name 降为可变标签，受唯一约束）
 		"host":           req.Host,
 		"grpc_port":      req.GrpcPort,
 		"ws_port":        req.WsPort,
@@ -177,6 +176,11 @@ func (h *ControlPlaneHandler) reregisterExisting(node *model.Node, req *workerpb
 		"memory_mb":      req.MemoryMb,
 		"disk_total_mb":  req.DiskTotalMb,
 		"last_heartbeat": time.Now(),
+	}
+	// 允许改名（UUID 锚定身份，name 降为可变标签，受唯一约束）；但**空名上报不清空既有名**——
+	// worker 仅设 JIANMANAGER_NAME（identity.NodeName 为空）时每次重启会上报空名，否则会把好名字抹成空。
+	if req.Name != "" {
+		updates["name"] = req.Name
 	}
 	if err := h.db.Model(node).Updates(updates).Error; err != nil {
 		slog.Error("更新节点失败", "name", req.Name, "error", err)
@@ -192,19 +196,26 @@ func (h *ControlPlaneHandler) reregisterExisting(node *model.Node, req *workerpb
 // 换发全新 UUID/secret。未注入校验器（开发/既有部署零配置）则退化为自助注册。
 func (h *ControlPlaneHandler) createNewNode(ctx context.Context, req *workerpb.RegisterRequest) (*workerpb.RegisterResponse, error) {
 	newUUID := uuid.New().String()
+	name := req.Name
 	if h.enroll != nil {
 		enrollToken := enrollTokenFromContext(ctx)
-		if cerr := h.enroll.ConsumeForNewNode(enrollToken, newUUID); cerr != nil {
+		presetName, cerr := h.enroll.ConsumeForNewNode(enrollToken, newUUID)
+		if cerr != nil {
 			slog.Warn("新节点注册被拒：enrollment token 无效", "name", req.Name)
 			return nil, status.Errorf(codes.PermissionDenied,
 				"新节点注册需要有效的 enrollment token（请在面板「添加节点」重新生成）")
+		}
+		// worker 未上报名（仅设 JIANMANAGER_NAME、未经 setup --name/JIANMANAGER_NODE_NAME 上报）时，
+		// 采用 token 上「添加节点」预设的名，避免空名节点导致一键搭建「选择节点」按名过滤取不到。
+		if name == "" {
+			name = presetName
 		}
 	}
 
 	now := time.Now()
 	node := model.Node{
 		UUID:          newUUID,
-		Name:          req.Name,
+		Name:          name,
 		Host:          req.Host,
 		GRPCPort:      int(req.GrpcPort),
 		WSPort:        int(req.WsPort),

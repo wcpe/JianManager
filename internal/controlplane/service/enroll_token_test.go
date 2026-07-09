@@ -67,15 +67,18 @@ func TestEnrollToken_PeekValidAndConsumeOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tok.ID, peeked.ID)
 
-	// 首次消费成功。
-	require.NoError(t, svc.ConsumeForNewNode(plaintext, "uuid-1"))
+	// 首次消费成功，并返回 token 预设名。
+	name, err := svc.ConsumeForNewNode(plaintext, "uuid-1")
+	require.NoError(t, err)
+	require.Equal(t, "node-a", name)
 
 	// 消费后再 peek 失败（已消费）。
 	_, err = svc.PeekForNewNode(plaintext)
 	require.ErrorIs(t, err, ErrEnrollTokenInvalid)
 
 	// 二次消费失败（一次性）。
-	require.ErrorIs(t, svc.ConsumeForNewNode(plaintext, "uuid-2"), ErrEnrollTokenInvalid)
+	_, err = svc.ConsumeForNewNode(plaintext, "uuid-2")
+	require.ErrorIs(t, err, ErrEnrollTokenInvalid)
 
 	// 消费态落库正确：used + used_by_node 记首个消费者。
 	got, err := svc.List()
@@ -96,7 +99,8 @@ func TestEnrollToken_PeekRejectsExpired(t *testing.T) {
 	_, err = svc.PeekForNewNode(plaintext)
 	require.ErrorIs(t, err, ErrEnrollTokenInvalid)
 	// 过期 token 也不能消费。
-	require.ErrorIs(t, svc.ConsumeForNewNode(plaintext, "uuid-x"), ErrEnrollTokenInvalid)
+	_, err = svc.ConsumeForNewNode(plaintext, "uuid-x")
+	require.ErrorIs(t, err, ErrEnrollTokenInvalid)
 }
 
 func TestEnrollToken_PeekRejectsRevoked(t *testing.T) {
@@ -107,7 +111,8 @@ func TestEnrollToken_PeekRejectsRevoked(t *testing.T) {
 
 	_, err = svc.PeekForNewNode(plaintext)
 	require.ErrorIs(t, err, ErrEnrollTokenInvalid)
-	require.ErrorIs(t, svc.ConsumeForNewNode(plaintext, "uuid-x"), ErrEnrollTokenInvalid)
+	_, err = svc.ConsumeForNewNode(plaintext, "uuid-x")
+	require.ErrorIs(t, err, ErrEnrollTokenInvalid)
 }
 
 func TestEnrollToken_PeekRejectsUnknownAndEmpty(t *testing.T) {
@@ -119,8 +124,10 @@ func TestEnrollToken_PeekRejectsUnknownAndEmpty(t *testing.T) {
 	_, err = svc.PeekForNewNode("jmet_does-not-exist")
 	require.ErrorIs(t, err, ErrEnrollTokenInvalid)
 
-	require.ErrorIs(t, svc.ConsumeForNewNode("", "uuid"), ErrEnrollTokenInvalid)
-	require.ErrorIs(t, svc.ConsumeForNewNode("jmet_nope", "uuid"), ErrEnrollTokenInvalid)
+	_, err = svc.ConsumeForNewNode("", "uuid")
+	require.ErrorIs(t, err, ErrEnrollTokenInvalid)
+	_, err = svc.ConsumeForNewNode("jmet_nope", "uuid")
+	require.ErrorIs(t, err, ErrEnrollTokenInvalid)
 }
 
 // TestEnrollToken_ConsumeIsAtomicUnderConcurrency 验证一次性消费在并发下仅一个调用成功。
@@ -137,7 +144,7 @@ func TestEnrollToken_ConsumeIsAtomicUnderConcurrency(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			defer wg.Done()
-			if err := svc.ConsumeForNewNode(plaintext, "uuid"); err == nil {
+			if _, err := svc.ConsumeForNewNode(plaintext, "uuid"); err == nil {
 				mu.Lock()
 				successes++
 				mu.Unlock()
