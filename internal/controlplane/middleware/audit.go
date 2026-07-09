@@ -36,7 +36,9 @@ func Audit(cfg AuditConfig) gin.HandlerFunc {
 				uid, _ := userID.(uint)
 
 				action := determineAction(method, c.FullPath())
-				targetType, targetID := determineTarget(c.FullPath())
+				// 目标 ID 须从真实请求路径取，c.FullPath() 是 /instances/:id 路由模式，
+				// 会把审计目标记成占位符 :id（无法定位具体实例）。
+				targetType, targetID := determineTarget(c.Request.URL.Path)
 
 				ip := c.ClientIP()
 				detail := string(body)
