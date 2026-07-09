@@ -147,7 +147,8 @@ func fakeFR035PaperCoreRepo(t *testing.T) string {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"builds":[{"build":500,"downloads":{"application":{"name":"velocity-3.3.0-SNAPSHOT-500.jar","sha256":"`+strings.Repeat("b", 64)+`"}}}]}`)
+		// fill v3：builds 为数组，Velocity 下载同样在 downloads["server:default"]（真实 API 已核验）。
+		_, _ = fmt.Fprint(w, `[{"id":500,"downloads":{"server:default":{"name":"velocity-3.3.0-SNAPSHOT-500.jar","checksums":{"sha256":"`+strings.Repeat("b", 64)+`"},"url":"https://cdn.example/velocity-3.3.0-SNAPSHOT-500.jar"}}}]`)
 	}))
 	t.Cleanup(ts.Close)
 	return ts.URL

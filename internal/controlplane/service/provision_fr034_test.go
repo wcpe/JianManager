@@ -115,7 +115,8 @@ func fakeFR034PaperCoreRepo(t *testing.T) string {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"builds":[{"build":196,"downloads":{"application":{"name":"paper-1.21.1-196.jar","sha256":"`+strings.Repeat("a", 64)+`"}}}]}`)
+		// fill v3：builds 为数组，下载在 downloads["server:default"].{name,checksums.sha256,url}。
+		_, _ = fmt.Fprint(w, `[{"id":196,"downloads":{"server:default":{"name":"paper-1.21.1-196.jar","checksums":{"sha256":"`+strings.Repeat("a", 64)+`"},"url":"https://cdn.example/paper-1.21.1-196.jar"}}}]`)
 	}))
 	t.Cleanup(ts.Close)
 	return ts.URL
