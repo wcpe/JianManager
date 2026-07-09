@@ -718,12 +718,23 @@ func downloadFile(ctx context.Context, client *http.Client, url, destPath string
 	if err != nil {
 		return 0, "", fmt.Errorf("创建文件失败: %w", err)
 	}
-	defer f.Close()
 
+	// 中途失败（限速/超时/连接中断）或不完整下载都不得留下半成品 jar，
+	// 否则会被当成有效核心落地（真机曾出现 ~1.3MB 截断 jar 建成实例）。
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(f, h), resp.Body)
-	if err != nil {
-		return 0, "", fmt.Errorf("写入核心失败: %w", err)
+	n, copyErr := io.Copy(io.MultiWriter(f, h), resp.Body)
+	closeErr := f.Close()
+	if copyErr != nil {
+		_ = os.Remove(destPath)
+		return 0, "", fmt.Errorf("写入核心失败: %w", copyErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(destPath)
+		return 0, "", fmt.Errorf("关闭核心文件失败: %w", closeErr)
+	}
+	if resp.ContentLength >= 0 && n != resp.ContentLength {
+		_ = os.Remove(destPath)
+		return 0, "", fmt.Errorf("核心下载不完整：期望 %d 字节实得 %d 字节", resp.ContentLength, n)
 	}
 	return n, hex.EncodeToString(h.Sum(nil)), nil
 }

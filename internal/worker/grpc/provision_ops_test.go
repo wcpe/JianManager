@@ -95,6 +95,45 @@ func TestDownloadCore_LocalStub(t *testing.T) {
 	})
 }
 
+// TestDownloadCore_TruncatedDownloadLeavesNoPartialFile 复现「核心下载中途截断仍留损坏 jar」的
+// robustness bug（FR-034）：下载源限速 / 超时 / 连接中断导致 io.Copy 中途失败时，
+// DownloadCore 必须报失败且**不得**在工作目录留下半成品 jar（否则用户会拿到 1.3MB 的坏核心）。
+func TestDownloadCore_TruncatedDownloadLeavesNoPartialFile(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)
+	ctx := context.Background()
+
+	const uuid = "55555555-5555-5555-5555-555555555555"
+	workDir := filepath.Join(tmp, "inst-trunc")
+	createResp, err := srv.CreateInstance(ctx, &workerpb.CreateInstanceRequest{
+		InstanceUuid: uuid, Name: "trunc", StartCommand: "noop", WorkDir: workDir, ProcessType: "direct",
+	})
+	require.NoError(t, err)
+	require.True(t, createResp.Success, createResp.Error)
+
+	// 声明较大的 Content-Length，却只写少量字节即结束 → 客户端读到 io.ErrUnexpectedEOF（截断）。
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "4096")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("partial-truncated-core-bytes"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}))
+	defer ts.Close()
+
+	resp, err := srv.DownloadCore(ctx, &workerpb.DownloadCoreRequest{
+		InstanceUuid: uuid,
+		DestFilename: "server.jar",
+		DownloadUrl:  ts.URL,
+		Sha256:       "0000000000000000000000000000000000000000000000000000000000000000",
+	})
+	require.NoError(t, err)
+	assert.False(t, resp.Success, "截断下载必须报失败")
+	_, statErr := os.Stat(filepath.Join(workDir, "server.jar"))
+	assert.True(t, os.IsNotExist(statErr), "截断下载不得在工作目录留下损坏 jar")
+}
+
 // TestDownloadCore_CacheHitSkipsNetwork 验证节点制品缓存（FR-178）：
 // 同一 sha256 第一次下载落地后存入缓存；删掉工作目录文件、关掉下载源后再建实例，
 // 应从缓存秒拷命中、完全不走网络（命中痛点：删实例再建免重下大 jar）。
