@@ -210,6 +210,46 @@ func TestBackupExecuteRestore_PassesStorageKeysAndChecksums(t *testing.T) {
 	require.Equal(t, []string{"aaa", "bbb"}, fake.restoreReq.ChecksumSha256)
 }
 
+// TestRestore_InstanceStateGuard 恢复前校验实例运行态（FR-013 真机验收缺陷回归）：
+// 进程可能存活的状态（STARTING/RUNNING/STOPPING）一律拒绝——运行中的 MC 服世界数据持在内存，
+// 覆盖工作目录会被下次自动存档覆盖回去（恢复静默失效）且有损坏风险；
+// STOPPED/CRASHED（进程已退出）放行，崩溃后恢复备份是主要使用场景。
+func TestRestore_InstanceStateGuard(t *testing.T) {
+	tests := []struct {
+		status  model.InstanceStatus
+		wantErr bool
+	}{
+		{model.InstanceStatusStarting, true},
+		{model.InstanceStatusRunning, true},
+		{model.InstanceStatusStopping, true},
+		{model.InstanceStatusStopped, false},
+		{model.InstanceStatusCrashed, false},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.status), func(t *testing.T) {
+			db := newBackupTestDB(t)
+			// 空 pool：放行路径的异步恢复仅记「节点未连接」，不影响同步返回值断言。
+			svc := NewBackupService(db, cpgrpc.NewClientPool())
+			node := &model.Node{UUID: "node-guard-" + string(tt.status), Name: "alpha", Host: "127.0.0.1", GRPCPort: 9001, WSPort: 9002, Secret: "s"}
+			require.NoError(t, db.Create(node).Error)
+			inst := &model.Instance{
+				UUID: "inst-guard-" + string(tt.status), NodeID: node.ID, Name: "survival", Type: model.InstanceTypeMinecraftJava,
+				Role: model.InstanceRoleBackend, ProcessType: model.ProcessTypeDirect, Status: tt.status,
+				StartCommand: "java -jar server.jar",
+			}
+			require.NoError(t, db.Create(inst).Error)
+			backup := makeBackup(t, db, inst.ID, model.BackupModeFull, nil, nil)
+
+			err := svc.Restore(backup.ID)
+			if tt.wantErr {
+				require.ErrorIs(t, err, ErrInstanceNotStopped)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 // TestResolveChain_BrokenParent 父备份缺失时报链断裂。
 func TestResolveChain_BrokenParent(t *testing.T) {
 	db := newBackupTestDB(t)

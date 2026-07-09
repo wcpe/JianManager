@@ -71,6 +71,11 @@ func (h *BackupHandler) Restore(c *gin.Context) {
 		return
 	}
 	if err := h.backupSvc.Restore(id); err != nil {
+		// 实例进程可能存活时拒绝恢复（避免自动存档覆盖恢复结果/损坏文件树），回 409 提示先停止。
+		if errors.Is(err, service.ErrInstanceNotStopped) {
+			c.JSON(http.StatusConflict, gin.H{"error": "INSTANCE_NOT_STOPPED", "message": err.Error()})
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return
 	}

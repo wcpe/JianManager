@@ -45,3 +45,36 @@ func TestBackup_List_IncludesChecksumFields(t *testing.T) {
 	require.Equal(t, backup.Checksum, row["checksum"])
 	require.Equal(t, backup.ChecksumAlgo, row["checksumAlgo"])
 }
+
+// TestBackup_Restore_RejectedWhenInstanceRunning 实例运行中恢复备份回 409（FR-013 真机验收缺陷回归）：
+// 恢复会解包覆盖工作目录，运行中的服务器下次自动存档会把恢复结果覆盖回去（静默失效），须先停止实例。
+func TestBackup_Restore_RejectedWhenInstanceRunning(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	instance := &model.Instance{
+		UUID:         "inst-backup-restore-running",
+		NodeID:       node.ID,
+		Name:         "survival",
+		Type:         model.InstanceTypeMinecraftJava,
+		Role:         model.InstanceRoleBackend,
+		ProcessType:  model.ProcessTypeDirect,
+		Status:       model.InstanceStatusRunning,
+		StartCommand: "java -jar server.jar",
+	}
+	require.NoError(t, db.Create(instance).Error)
+	backup := &model.Backup{
+		InstanceID: instance.ID,
+		Name:       "full-restore-guard",
+		Status:     model.BackupStatusCompleted,
+		FilePath:   "var/backups/full.tar.gz",
+	}
+	require.NoError(t, db.Create(backup).Error)
+
+	w := makeRequest(r, http.MethodPost, "/api/v1/backups/"+itoa(backup.ID)+"/restore", nil, token)
+	require.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+	body := parseJSON(t, w)
+	require.Equal(t, "INSTANCE_NOT_STOPPED", body["error"])
+	require.Contains(t, body["message"], "请先停止实例")
+}

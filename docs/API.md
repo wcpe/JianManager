@@ -1360,6 +1360,7 @@
 ### POST /api/v1/backups/:id/restore
 - **描述**: 恢复备份。增量备份沿父链回溯解析整链（全量基 + 各增量），委托 Worker 按序回放；远程备份先拉回本地再回放；有 `checksum` 的归档在解压前校验，不一致则拒绝恢复
 - **关联 FR**: FR-013, FR-056, FR-057, FR-171
+- **错误**: 409 `INSTANCE_NOT_STOPPED`（实例进程可能存活——STARTING/RUNNING/STOPPING 时拒绝恢复，须先停止实例；STOPPED/CRASHED 放行）；422 `BUSINESS_ERROR`（备份未完成/链断裂等）
 
 ### DELETE /api/v1/backups/:id
 - **描述**: 删除备份。被增量子备份依赖时拒绝（422），避免割裂备份链

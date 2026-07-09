@@ -25,6 +25,8 @@ var (
 	ErrBackupNotFound = errors.New("备份不存在")
 	// ErrNoFullBaseForIncremental 增量备份缺少可作基准的已完成父备份。
 	ErrNoFullBaseForIncremental = errors.New("没有可用于增量基准的已完成备份")
+	// ErrInstanceNotStopped 实例进程可能存活，拒绝恢复备份。
+	ErrInstanceNotStopped = errors.New("实例未停止，请先停止实例再恢复备份")
 )
 
 // BackupService 备份服务。
@@ -219,6 +221,18 @@ func (s *BackupService) Restore(backupID uint) error {
 	}
 	if backup.Status != model.BackupStatusCompleted {
 		return fmt.Errorf("备份未完成，无法恢复")
+	}
+
+	// 运行态守卫：恢复会解包覆盖工作目录，进程可能存活时必须拒绝——运行中的 MC 服
+	// 世界数据持在内存，下次自动存档会把刚恢复的文件覆盖回去（恢复静默失效），且对
+	// 存活进程的文件树做覆盖有损坏风险。CRASHED 进程已退出，放行（崩溃后恢复是主场景）。
+	var instance model.Instance
+	if err := s.db.First(&instance, backup.InstanceID).Error; err != nil {
+		return fmt.Errorf("实例不存在: %w", err)
+	}
+	switch instance.Status {
+	case model.InstanceStatusStarting, model.InstanceStatusRunning, model.InstanceStatusStopping:
+		return fmt.Errorf("%w（当前状态 %s）", ErrInstanceNotStopped, instance.Status)
 	}
 
 	chain, err := s.resolveChain(&backup)
