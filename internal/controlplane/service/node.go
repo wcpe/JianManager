@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -9,7 +10,9 @@ import (
 
 	"gorm.io/gorm"
 
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 var (
@@ -24,6 +27,7 @@ type NodeService struct {
 	// instanceSvc 用于排空（drain）时停止节点上的运行实例。
 	// 同包内通过 SetInstanceService 注入，规避构造期循环依赖。
 	instanceSvc *InstanceService
+	pool        *cpgrpc.ClientPool
 }
 
 // NewNodeService 创建节点服务。
@@ -36,6 +40,11 @@ func NewNodeService(db *gorm.DB) *NodeService {
 // 在 main 装配阶段二者均就绪后再回填，避免构造顺序耦合。
 func (s *NodeService) SetInstanceService(instanceSvc *InstanceService) {
 	s.instanceSvc = instanceSvc
+}
+
+// SetClientPool 注入 Worker 连接池，供节点实时指标按需拉取。
+func (s *NodeService) SetClientPool(pool *cpgrpc.ClientPool) {
+	s.pool = pool
 }
 
 // RegisterRequest 节点注册请求。
@@ -65,17 +74,17 @@ func (s *NodeService) Register(req RegisterRequest) (*RegisterResult, error) {
 	}
 
 	node := &model.Node{
-		Name:        req.Name,
-		Host:        req.Host,
-		GRPCPort:    req.GRPCPort,
-		WSPort:      req.WSPort,
-		Secret:      secret,
-		Status:      model.NodeStatusOnline,
-		OS:          req.OS,
-		Arch:        req.Arch,
-		CPUCores:    req.CPUCores,
-		MemoryMB:    req.MemoryMB,
-		DiskTotalMB: req.DiskTotalMB,
+		Name:          req.Name,
+		Host:          req.Host,
+		GRPCPort:      req.GRPCPort,
+		WSPort:        req.WSPort,
+		Secret:        secret,
+		Status:        model.NodeStatusOnline,
+		OS:            req.OS,
+		Arch:          req.Arch,
+		CPUCores:      req.CPUCores,
+		MemoryMB:      req.MemoryMB,
+		DiskTotalMB:   req.DiskTotalMB,
 		LastHeartbeat: ptrTime(time.Now()),
 	}
 
@@ -91,11 +100,11 @@ func (s *NodeService) Register(req RegisterRequest) (*RegisterResult, error) {
 
 // HeartbeatData 心跳上报数据。
 type HeartbeatData struct {
-	CPUUsage    float64 `json:"cpuUsage"`
-	MemoryUsage float64 `json:"memoryUsage"`
-	DiskUsage   float64 `json:"diskUsage"`
-	MemoryUsedMB int64  `json:"memoryUsedMb"`
-	DiskUsedMB  int64   `json:"diskUsedMb"`
+	CPUUsage     float64 `json:"cpuUsage"`
+	MemoryUsage  float64 `json:"memoryUsage"`
+	DiskUsage    float64 `json:"diskUsage"`
+	MemoryUsedMB int64   `json:"memoryUsedMb"`
+	DiskUsedMB   int64   `json:"diskUsedMb"`
 }
 
 // Heartbeat 处理节点心跳。
@@ -130,6 +139,64 @@ func (s *NodeService) GetByID(id uint) (*model.Node, error) {
 		return nil, fmt.Errorf("查询节点失败: %w", err)
 	}
 	return &node, nil
+}
+
+// NodeMetricsData 节点实时指标快照。
+type NodeMetricsData struct {
+	CPUUsage      float32 `json:"cpuUsage"`
+	MemoryUsage   float32 `json:"memoryUsage"`
+	DiskUsage     float32 `json:"diskUsage"`
+	MemoryUsedMB  int64   `json:"memoryUsedMb"`
+	MemoryTotalMB int64   `json:"memoryTotalMb"`
+	DiskUsedMB    int64   `json:"diskUsedMb"`
+	DiskTotalMB   int64   `json:"diskTotalMb"`
+}
+
+// GetMetrics 返回节点实时指标；Worker 已连接时主动拉取，未连接时回退最新心跳快照。
+func (s *NodeService) GetMetrics(id uint) (*NodeMetricsData, error) {
+	node, err := s.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if s.pool != nil {
+		if client, ok := s.pool.Get(node.UUID); ok && client.Worker != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			resp, err := client.Worker.GetNodeMetrics(ctx, &workerpb.GetNodeMetricsRequest{})
+			if err != nil {
+				return nil, fmt.Errorf("获取节点指标失败: %w", err)
+			}
+			return nodeMetricsFromWorker(resp), nil
+		}
+	}
+	return nodeMetricsFromSnapshot(node), nil
+}
+
+func nodeMetricsFromSnapshot(node *model.Node) *NodeMetricsData {
+	return &NodeMetricsData{
+		CPUUsage:      node.CPUUsage,
+		MemoryUsage:   node.MemoryUsage,
+		DiskUsage:     node.DiskUsage,
+		MemoryUsedMB:  node.MemoryUsedMB,
+		MemoryTotalMB: node.MemoryMB,
+		DiskUsedMB:    node.DiskUsedMB,
+		DiskTotalMB:   node.DiskTotalMB,
+	}
+}
+
+func nodeMetricsFromWorker(resp *workerpb.GetNodeMetricsResponse) *NodeMetricsData {
+	if resp == nil {
+		return &NodeMetricsData{}
+	}
+	return &NodeMetricsData{
+		CPUUsage:      resp.CpuUsage,
+		MemoryUsage:   resp.MemoryUsage,
+		DiskUsage:     resp.DiskUsage,
+		MemoryUsedMB:  resp.MemoryUsedMb,
+		MemoryTotalMB: resp.MemoryTotalMb,
+		DiskUsedMB:    resp.DiskUsedMb,
+		DiskTotalMB:   resp.DiskTotalMb,
+	}
 }
 
 // GetByUUID 按 UUID 获取节点。

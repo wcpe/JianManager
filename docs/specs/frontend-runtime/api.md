@@ -12,9 +12,10 @@
 
 ### 节点指标
 
-- `GET /api/v1/nodes/:id/metrics` — 节点 CPU/内存/磁盘指标
+- `GET /api/v1/nodes/:id/metrics` — 节点 CPU/内存/磁盘实时快照，返回 `{ cpuUsage, memoryUsage, diskUsage, memoryUsedMb, memoryTotalMb, diskUsedMb, diskTotalMb }`，使用率为 `0~1` 比例值
 - 关联前端：`NodesPage` 节点列表的实时指标列
 - 轮询间隔：30s
+- 后端语义：节点已连接时 CP 经 Worker `GetNodeMetrics` 主动拉取；Worker 暂未连接时回退节点最新心跳快照
 
 ### 实例操作
 

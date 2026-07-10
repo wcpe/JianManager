@@ -58,6 +58,44 @@ func TestNode_Get_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+func TestNode_Metrics_Success(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+
+	require.NoError(t, db.Model(node).Updates(map[string]any{
+		"cpu_usage":      0.42,
+		"memory_usage":   0.5,
+		"disk_usage":     0.25,
+		"memory_used_mb": 4096,
+		"memory_mb":      8192,
+		"disk_used_mb":   51200,
+		"disk_total_mb":  102400,
+	}).Error)
+
+	w := makeRequest(r, "GET", "/api/v1/nodes/"+itoa(node.ID)+"/metrics", nil, token)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	resp := parseJSON(t, w)
+	assert.InDelta(t, 0.42, resp["cpuUsage"], 0.001)
+	assert.InDelta(t, 0.5, resp["memoryUsage"], 0.001)
+	assert.InDelta(t, 0.25, resp["diskUsage"], 0.001)
+	assert.Equal(t, float64(4096), resp["memoryUsedMb"])
+	assert.Equal(t, float64(8192), resp["memoryTotalMb"])
+	assert.Equal(t, float64(51200), resp["diskUsedMb"])
+	assert.Equal(t, float64(102400), resp["diskTotalMb"])
+}
+
+func TestNode_Metrics_NotFound(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+
+	w := makeRequest(r, "GET", "/api/v1/nodes/999/metrics", nil, token)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
 func TestNode_List_MultipleNodes(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

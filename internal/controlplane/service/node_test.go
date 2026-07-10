@@ -1,14 +1,17 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"gorm.io/gorm"
 
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // newNodeTestDB 为节点服务测试准备内存库（FR-048）。
@@ -31,6 +34,68 @@ func newTestNode(t *testing.T, db *gorm.DB, name string) *model.Node {
 	node := &model.Node{Name: name, Host: "127.0.0.1", GRPCPort: 1, WSPort: 2, Secret: "s-" + name, Status: model.NodeStatusOnline}
 	require.NoError(t, db.Create(node).Error)
 	return node
+}
+
+type fakeNodeMetricsWorker struct {
+	workerpb.WorkerServiceClient
+	resp *workerpb.GetNodeMetricsResponse
+}
+
+func (f *fakeNodeMetricsWorker) GetNodeMetrics(context.Context, *workerpb.GetNodeMetricsRequest, ...grpc.CallOption) (*workerpb.GetNodeMetricsResponse, error) {
+	return f.resp, nil
+}
+
+func TestNodeService_GetMetrics_UsesWorkerWhenConnected(t *testing.T) {
+	db := newNodeTestDB(t)
+	node := newTestNode(t, db, "n1")
+	pool := cpgrpc.NewClientPool()
+	pool.SetWorkerClientForTest(node.UUID, &fakeNodeMetricsWorker{resp: &workerpb.GetNodeMetricsResponse{
+		CpuUsage:      0.61,
+		MemoryUsage:   0.62,
+		DiskUsage:     0.63,
+		MemoryUsedMb:  7000,
+		MemoryTotalMb: 16000,
+		DiskUsedMb:    80000,
+		DiskTotalMb:   200000,
+	}})
+	svc := NewNodeService(db)
+	svc.SetClientPool(pool)
+
+	got, err := svc.GetMetrics(node.ID)
+	require.NoError(t, err)
+	require.InDelta(t, 0.61, got.CPUUsage, 0.001)
+	require.InDelta(t, 0.62, got.MemoryUsage, 0.001)
+	require.InDelta(t, 0.63, got.DiskUsage, 0.001)
+	require.Equal(t, int64(7000), got.MemoryUsedMB)
+	require.Equal(t, int64(16000), got.MemoryTotalMB)
+	require.Equal(t, int64(80000), got.DiskUsedMB)
+	require.Equal(t, int64(200000), got.DiskTotalMB)
+}
+
+func TestNodeService_GetMetrics_FallsBackToHeartbeatSnapshot(t *testing.T) {
+	db := newNodeTestDB(t)
+	node := newTestNode(t, db, "n1")
+	require.NoError(t, db.Model(node).Updates(map[string]any{
+		"cpu_usage":      0.21,
+		"memory_usage":   0.22,
+		"disk_usage":     0.23,
+		"memory_used_mb": 1024,
+		"memory_mb":      2048,
+		"disk_used_mb":   4096,
+		"disk_total_mb":  8192,
+	}).Error)
+	svc := NewNodeService(db)
+	svc.SetClientPool(cpgrpc.NewClientPool())
+
+	got, err := svc.GetMetrics(node.ID)
+	require.NoError(t, err)
+	require.InDelta(t, 0.21, got.CPUUsage, 0.001)
+	require.InDelta(t, 0.22, got.MemoryUsage, 0.001)
+	require.InDelta(t, 0.23, got.DiskUsage, 0.001)
+	require.Equal(t, int64(1024), got.MemoryUsedMB)
+	require.Equal(t, int64(2048), got.MemoryTotalMB)
+	require.Equal(t, int64(4096), got.DiskUsedMB)
+	require.Equal(t, int64(8192), got.DiskTotalMB)
 }
 
 // SetMaintenance 置维护应翻转标记，再次置 false 应解除。

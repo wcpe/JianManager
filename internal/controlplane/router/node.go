@@ -148,6 +148,29 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已下线"})
 }
 
+// Metrics 返回节点实时指标快照（仅平台管理员）。
+func (h *NodeHandler) Metrics(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+
+	metrics, err := h.nodeSvc.GetMetrics(id)
+	if err != nil {
+		if errors.Is(err, service.ErrNodeNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "节点不存在"})
+			return
+		}
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "METRICS_UNAVAILABLE", "message": "无法获取节点指标"})
+		return
+	}
+
+	c.JSON(http.StatusOK, metrics)
+}
+
 // repairConfirmRequest 破坏性修复操作的二次确认请求体（见 ADR-039 §2）。
 type repairConfirmRequest struct {
 	// Confirm 必须显式为 true 才执行破坏性操作。
@@ -278,6 +301,7 @@ func (h *NodeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		// 静态段 repair 须在 /:id 之前注册，避免被 :id 通配吞掉。
 		nodes.GET("/repair/suspects", h.Suspects)
 		nodes.GET("/:id", h.Get)
+		nodes.GET("/:id/metrics", h.Metrics)
 		nodes.GET("/:id/orphans", h.Orphans)
 		nodes.POST("/:id/maintenance", h.Maintenance)
 		nodes.POST("/:id/drain", h.Drain)
