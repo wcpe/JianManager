@@ -6,7 +6,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,6 +19,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/artifactcache"
@@ -292,6 +295,7 @@ func deployServerProbeLibrariesZip(workDir string, data []byte) error {
 		return fmt.Errorf("解析实例工作目录失败: %w", err)
 	}
 	var total int64
+	var locked []string
 	for _, entry := range zr.File {
 		dest, ok, err := probeCacheZipDest(rootAbs, entry.Name)
 		if err != nil {
@@ -319,14 +323,23 @@ func deployServerProbeLibrariesZip(workDir string, data []byte) error {
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			return fmt.Errorf("创建依赖目录失败: %w", err)
 		}
-		n, err := writeProbeLibraryZipEntry(entry, dest)
+		n, wasLocked, err := writeProbeLibraryZipEntry(entry, dest)
 		if err != nil {
 			return err
+		}
+		if wasLocked {
+			locked = append(locked, entry.Name)
 		}
 		total += n
 		if total > probeMaxZipTotalBytes {
 			return fmt.Errorf("依赖缓存解压后过大: %d", total)
 		}
+	}
+	// FR-068 在线更新：运行中实例锁定的 classpath 依赖无法覆盖，已降级跳过（旧版留存，下次重启后再更新生效）。
+	// 只要 jar+config 与其余条目写成功即视为成功，不因文件锁使整个更新请求失败。
+	if len(locked) > 0 {
+		slog.Warn("部分探针依赖被运行中实例占用，本次跳过覆盖（旧版留存，下次重启后再更新生效）",
+			"workDir", workDir, "count", len(locked), "entries", locked)
 	}
 	return nil
 }
@@ -356,35 +369,89 @@ func probeCacheZipDest(workDirAbs, name string) (string, bool, error) {
 	return destAbs, true, nil
 }
 
-func writeProbeLibraryZipEntry(entry *zip.File, dest string) (int64, error) {
+// writeProbeLibraryZipEntry 将单个依赖条目落地到 dest，返回（写入/逻辑字节数, 是否因文件被锁跳过, error）。
+//
+// FR-068 运行中在线更新探针：JVM 独占锁定 classpath 依赖 jar，Windows 覆盖会失败（Access denied）。
+// 两级绕锁——① 目标已存在且大小+CRC32 与条目一致（依赖版本极少变，绝大多数条目命中）→ 跳过写入、不触碰被锁文件；
+// ② 内容确有变化但目标被锁 → 降级为「跳过并由调用方告警」（旧版留存，下次重启后再更新生效），返回 locked=true，
+// 不使整个更新请求失败——只要 jar+config 与其余条目写成功即视为成功。
+func writeProbeLibraryZipEntry(entry *zip.File, dest string) (int64, bool, error) {
+	if probeLibraryEntryUnchanged(dest, entry) {
+		return int64(entry.UncompressedSize64), false, nil
+	}
 	r, err := entry.Open()
 	if err != nil {
-		return 0, fmt.Errorf("读取依赖缓存条目失败: %w", err)
+		return 0, false, fmt.Errorf("读取依赖缓存条目失败: %w", err)
 	}
 	defer r.Close()
 	tmp := dest + ".tmp"
 	defer os.Remove(tmp)
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
-		return 0, fmt.Errorf("创建依赖缓存文件失败: %w", err)
+		return 0, false, fmt.Errorf("创建依赖缓存文件失败: %w", err)
 	}
 	limited := &io.LimitedReader{R: r, N: probeMaxZipEntryBytes + 1}
 	n, copyErr := io.Copy(f, limited)
 	closeErr := f.Close()
 	if copyErr != nil {
-		return 0, fmt.Errorf("写入依赖缓存文件失败: %w", copyErr)
+		return 0, false, fmt.Errorf("写入依赖缓存文件失败: %w", copyErr)
 	}
 	if closeErr != nil {
-		return 0, fmt.Errorf("关闭依赖缓存文件失败: %w", closeErr)
+		return 0, false, fmt.Errorf("关闭依赖缓存文件失败: %w", closeErr)
 	}
 	if n > probeMaxZipEntryBytes {
-		return 0, fmt.Errorf("依赖缓存单文件过大: %s", entry.Name)
+		return 0, false, fmt.Errorf("依赖缓存单文件过大: %s", entry.Name)
 	}
 	_ = os.Remove(dest)
 	if err := os.Rename(tmp, dest); err != nil {
-		return 0, fmt.Errorf("替换依赖缓存文件失败: %w", err)
+		if isFileLockedErr(err) {
+			return 0, true, nil
+		}
+		return 0, false, fmt.Errorf("替换依赖缓存文件失败: %w", err)
 	}
-	return n, nil
+	return n, false, nil
+}
+
+// probeLibraryEntryUnchanged 判断 dest 已存在且内容与 zip 条目完全一致（大小 + CRC32）。
+// 一致则跳过覆盖——依赖版本极少变，绝大多数条目命中，从而不触碰被运行中 JVM 锁定的 classpath jar（FR-068）。
+func probeLibraryEntryUnchanged(dest string, entry *zip.File) bool {
+	st, err := os.Stat(dest)
+	if err != nil || !st.Mode().IsRegular() {
+		return false
+	}
+	if uint64(st.Size()) != entry.UncompressedSize64 {
+		return false
+	}
+	f, err := os.Open(dest)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	h := crc32.NewIEEE()
+	if _, err := io.Copy(h, f); err != nil {
+		return false
+	}
+	return h.Sum32() == entry.CRC32
+}
+
+// isFileLockedErr 判断 err 是否为「目标被其他进程独占占用」导致的写入/替换失败。
+// 运行中实例的 JVM 独占 classpath 依赖 jar，Windows 覆盖表现为 Access denied（ERROR_ACCESS_DENIED）
+// 或 Sharing violation（ERROR_SHARING_VIOLATION=32）。Unix 一般无此类独占锁，仅兜 EACCES/EPERM。
+func isFileLockedErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, os.ErrPermission) {
+		return true
+	}
+	if runtime.GOOS == "windows" {
+		var errno syscall.Errno
+		if errors.As(err, &errno) {
+			const errorSharingViolation = syscall.Errno(32)
+			return errno == errorSharingViolation
+		}
+	}
+	return false
 }
 
 func downloadAndVerify(ctx context.Context, client *http.Client, url, sha, destPath, label string) (int64, string, error) {
