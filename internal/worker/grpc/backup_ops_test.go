@@ -17,6 +17,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/wcpe/JianManager/internal/platform/dataroot"
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
@@ -116,6 +117,78 @@ func TestStorageBackend_WebDAVAuthFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, resp.Success)
 	require.Equal(t, "AUTH_FAILED", resp.ErrorCode)
+}
+
+func TestCreateBackupAndRestore_RemoteWebDAVRoundTrip(t *testing.T) {
+	objects := map[string][]byte{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, p, ok := r.BasicAuth()
+		if !ok || u != "u" || p != "p" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.Method {
+		case "MKCOL":
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodPut:
+			body, _ := io.ReadAll(r.Body)
+			objects[r.URL.Path] = body
+			w.WriteHeader(http.StatusCreated)
+		case http.MethodGet:
+			body, ok := objects[r.URL.Path]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_, _ = w.Write(body)
+		case http.MethodDelete:
+			delete(objects, r.URL.Path)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer srv.Close()
+
+	root, err := dataroot.Init(t.TempDir())
+	require.NoError(t, err)
+	s := NewServer(process.NewManager(t.TempDir()), "node-test", nil, nil, root)
+	_, err = s.CreateInstance(context.Background(), &workerpb.CreateInstanceRequest{
+		InstanceUuid: "inst-remote-webdav",
+		Name:         "remote-webdav",
+		WorkDir:      "servers/remote-webdav",
+		ProcessType:  "direct",
+	})
+	require.NoError(t, err)
+	workDir := root.Abs("servers/remote-webdav")
+	writeFile(t, workDir, "server.properties", "motd=remote", time.Unix(1_700_000_000, 0))
+
+	spec := &workerpb.StorageBackendSpec{Type: "webdav", Endpoint: srv.URL + "/backups", Prefix: "jm", AccessKey: "u", SecretKey: "p"}
+	created, err := s.CreateBackup(context.Background(), &workerpb.CreateBackupRequest{
+		InstanceUuid: "inst-remote-webdav",
+		BackupUuid:   "backup-remote-webdav",
+		Storage:      spec,
+	})
+	require.NoError(t, err)
+	require.True(t, created.Success, created.Error)
+	require.Equal(t, "jm/inst-remote-webdav/backup-remote-webdav.tar.gz", created.StorageKey)
+	require.Contains(t, objects, "/backups/"+created.StorageKey)
+
+	localArchive := root.Abs(created.RelPath)
+	require.NoError(t, os.Remove(localArchive))
+	require.NoError(t, os.Remove(filepath.Join(workDir, "server.properties")))
+	restored, err := s.RestoreBackup(context.Background(), &workerpb.RestoreBackupRequest{
+		InstanceUuid:   "inst-remote-webdav",
+		RelPaths:       []string{created.RelPath},
+		Storage:        spec,
+		StorageKeys:    []string{created.StorageKey},
+		ChecksumSha256: []string{created.ChecksumSha256},
+	})
+	require.NoError(t, err)
+	require.True(t, restored.Success, restored.Error)
+	body, err := os.ReadFile(filepath.Join(workDir, "server.properties"))
+	require.NoError(t, err)
+	require.Equal(t, "motd=remote", string(body))
 }
 
 // TestWriteBackupArchive_FullCapturesAllFiles 全量备份打包全部常规文件并产出完整清单。
