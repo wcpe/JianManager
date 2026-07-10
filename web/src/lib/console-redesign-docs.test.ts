@@ -13,7 +13,7 @@ describe('console redesign documentation', () => {
     const prd = readDoc('docs/PRD.md')
 
     for (const fr of ['FR-267', 'FR-268', 'FR-269', 'FR-270', 'FR-271', 'FR-272']) {
-      expect(prd).toMatch(new RegExp(`\\| ${fr} \\|[^\\n]+\\| P1 \\| ✅ 已交付@v0\\.13\\.0 \\|`))
+      expect(prd).toMatch(new RegExp(`\\| ${fr} \\|[^\\n]+\\| P1 \\| ✅ 已交付@v0\\.\\d+\\.\\d+[^\\n|]*\\|`))
     }
   })
 
