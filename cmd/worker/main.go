@@ -265,7 +265,7 @@ func runWorker() {
 	defer collector.Stop()
 
 	// 启动 gRPC 服务器
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(wgrpc.ServerOptions()...)
 	workerServer := wgrpc.NewServer(manager, nodeUUID, collector, jdkMgr, root)
 	// Worker 升级二进制下载与服务端 jar 下载经进程级出站持有者（FR-174/FR-185）：
 	// CP 下发代理改动运行时即时生效。

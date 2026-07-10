@@ -68,6 +68,7 @@ Worker 预置范围：
 当前验证：
 
 - `go test ./internal/worker/grpc -run TestDeployServerProbe -count=1` 通过，覆盖缓存预置、缺依赖诊断、越界目录拒绝。
+- `go test ./internal/worker/grpc -run TestDeployServerProbe_OverGRPCAllowsLargePayload -count=1` 通过：经 bufconn 真实 gRPC 传输下发 >4MiB 探针载荷不被 `ResourceExhausted` 拒收，堵住「jar + libraries_zip 合计超默认 4MiB gRPC 单消息上限致探针部署失败」的验证盲区（既有 handler 级测试不经编解码，覆盖不到）。
 - 已补断网首启手动验收 runbook，用于 release 资产和真机环境可用时复验 Paper + ServerProbe 插件桥链路。
 
 ## 6. 风险 / 待定
