@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
@@ -48,9 +49,12 @@ func (s *TerminalService) IssueToken(instanceID uint, permission, requestHost st
 
 	// 签发 30s 有效期的一次性 token，仅用于完成一次 WS 握手。
 	// 连接建立后不再重复校验，长时间终端会话由已建立的 WebSocket 自身承载。
+	// jti 保证每次签发结果唯一：claims 若无随机成分，同一秒内两次签发会得到
+	// 字节相同的 JWT，配合一次性 used-set 会误伤断线后同秒重取 token 的重连（FR-140）。
 	now := time.Now()
 	const terminalTokenTTL = 30 * time.Second
 	claims := jwt.MapClaims{
+		"jti":        uuid.NewString(),
 		"instanceId": instance.UUID,
 		"permission": permission, // read 或 write
 		"exp":        now.Add(terminalTokenTTL).Unix(),
