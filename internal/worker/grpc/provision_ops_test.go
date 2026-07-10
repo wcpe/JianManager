@@ -197,6 +197,66 @@ func TestInstallForgeServer_InstallsForgeAndSpongeForge(t *testing.T) {
 	require.NoError(t, statErr)
 }
 
+func TestInstallForgeServer_AcceptsModernForgeArgFileLayout(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)
+	ctx := context.Background()
+
+	const uuid = "66666666-6666-6666-6666-666666666666"
+	workDir := filepath.Join(tmp, "forge-modern")
+	createResp, err := srv.CreateInstance(ctx, &workerpb.CreateInstanceRequest{
+		InstanceUuid: uuid,
+		Name:         "forge-modern",
+		StartCommand: "noop",
+		WorkDir:      workDir,
+		ProcessType:  "direct",
+		JdkPath:      filepath.Join(tmp, "jdk"),
+	})
+	require.NoError(t, err)
+	require.True(t, createResp.Success, createResp.Error)
+
+	installer := []byte("fake-forge-installer")
+	mod := []byte("fake-spongeforge-mod")
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/installer.jar":
+			_, _ = w.Write(installer)
+		case "/spongeforge.jar":
+			_, _ = w.Write(mod)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	oldRunner := runForgeInstaller
+	runForgeInstaller = func(_ context.Context, _ string, _ string, gotWorkDir string, _ []string) ([]byte, error) {
+		rel := filepath.Join("libraries", "net", "minecraftforge", "forge", "1.21.1-52.1.5")
+		require.NoError(t, os.MkdirAll(filepath.Join(gotWorkDir, rel), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(gotWorkDir, "user_jvm_args.txt"), []byte("# panel args"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(gotWorkDir, "forge-1.21.1-52.1.5-shim.jar"), []byte("shim"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(gotWorkDir, rel, "win_args.txt"), []byte("-jar forge-1.21.1-52.1.5-shim.jar"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(gotWorkDir, rel, "unix_args.txt"), []byte("-jar forge-1.21.1-52.1.5-shim.jar"), 0o644))
+		return []byte("安装完成"), os.WriteFile(filepath.Join(gotWorkDir, rel, "forge-1.21.1-52.1.5-server.jar"), []byte("forge-server"), 0o644)
+	}
+	t.Cleanup(func() { runForgeInstaller = oldRunner })
+
+	resp, err := srv.InstallForgeServer(ctx, &workerpb.InstallForgeServerRequest{
+		InstanceUuid:        uuid,
+		ForgeInstallerUrl:   ts.URL + "/installer.jar",
+		SpongeforgeUrl:      ts.URL + "/spongeforge.jar",
+		SpongeforgeFilename: "SpongeForge.jar",
+		LaunchJar:           "forge-1.21.1-52.1.5-server.jar",
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Success, resp.Error)
+	require.Equal(t, "forge-1.21.1-52.1.5-server.jar", resp.LaunchJar)
+
+	got, readErr := os.ReadFile(filepath.Join(workDir, "mods", "SpongeForge.jar"))
+	require.NoError(t, readErr)
+	assert.Equal(t, mod, got)
+}
+
 func TestInstallForgeServer_RejectsUnsafeFilenames(t *testing.T) {
 	tmp := t.TempDir()
 	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)

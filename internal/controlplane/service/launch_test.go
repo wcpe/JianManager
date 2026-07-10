@@ -51,6 +51,23 @@ func TestDeriveStartCommand(t *testing.T) {
 			"java -Xms512M -Xmx512M -Dfoo=bar -jar s.jar nogui",
 			false,
 		},
+		{
+			"Forge argfile 启动不使用根目录 server jar",
+			&LaunchSpec{
+				MemoryMb:     4096,
+				JvmArgs:      []string{"-XX:+UseG1GC"},
+				CoreJar:      "forge-1.21.1-52.1.5-server.jar",
+				JavaArgFiles: []string{"user_jvm_args.txt", "libraries/net/minecraftforge/forge/1.21.1-52.1.5/unix_args.txt"},
+			},
+			"java -Xms4096M -Xmx4096M -XX:+UseG1GC @user_jvm_args.txt @libraries/net/minecraftforge/forge/1.21.1-52.1.5/unix_args.txt nogui",
+			false,
+		},
+		{
+			"Forge argfile 路径不得逃逸工作目录",
+			&LaunchSpec{CoreJar: "forge.jar", JavaArgFiles: []string{"../run_args.txt"}},
+			"",
+			true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

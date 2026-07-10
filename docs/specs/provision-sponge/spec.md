@@ -28,7 +28,7 @@
 新增 core family：
 
 - `spongevanilla`
-- `spongeforge`（经其官方 Forge 安装器直链部署；派生启动仍走结构化 `LaunchJar`）
+- `spongeforge`（经其官方 Forge 安装器直链部署；现代 Forge 派生启动走结构化 `JavaArgFiles`，`LaunchJar` 仅作兼容元数据）
 
 实例仍是 `role=backend`，不新增实例角色。
 
@@ -60,6 +60,7 @@ Worker 仍按 `jdk + jvm_args + core_jar + args` 派生启动命令，不允许�
 - `/cores` 能列出 SpongeVanilla 与 SpongeForge 候选，两者均可提交创建。
 - 创建 Sponge backend 时系统分配端口/目录/JDK。
 - 创建后可一键启动到 RUNNING。
+- SpongeForge 现代 Forge installer 产物必须按 `user_jvm_args.txt` + `libraries/net/minecraftforge/forge/<forgeVersion>/{win,unix}_args.txt` 启动，不依赖根目录 `forge-*-server.jar`。
 - 代理注册关系不破坏 ADR-007。
 - 亮/暗色和中/英文向导正常。
 

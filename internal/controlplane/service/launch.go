@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"strings"
 )
 
@@ -15,7 +16,10 @@ type LaunchSpec struct {
 	// JvmArgs 额外 JVM 参数（如 -XX:+UseG1GC），位于内存参数之后、-jar 之前。
 	JvmArgs []string `json:"jvmArgs"`
 	// CoreJar 工作目录内的核心 jar 文件名（如 paper.jar），相对工作目录。
+	// Forge argfile 模式下仅作为兼容元数据保留，不参与 -jar 启动。
 	CoreJar string `json:"coreJar"`
+	// JavaArgFiles 是传给 java 的 @argfile，相对工作目录，用于现代 Forge run 脚本布局。
+	JavaArgFiles []string `json:"javaArgFiles,omitempty"`
 	// ExtraArgs 传给服务端的额外参数（`nogui` 已默认附加，无需重复）。
 	ExtraArgs []string `json:"extraArgs"`
 	// OmitNogui 为 true 时不追加 `nogui`（代理 Velocity/BungeeCord 不接受该参数，FR-035）。
@@ -39,6 +43,7 @@ func parseLaunchSpec(raw string) (*LaunchSpec, error) {
 // deriveStartCommand 由 LaunchSpec 派生 java 启动命令：
 //
 //	java -Xms<m>M -Xmx<m>M <jvmArgs...> -jar <coreJar> nogui <extraArgs...>
+//	java -Xms<m>M -Xmx<m>M <jvmArgs...> @<argfile...> nogui <extraArgs...>
 //
 // 命令使用 PATH 中的 `java`——Worker 启动时会按实例绑定的 jdk_path 把
 // `<jdk>/bin` 接入 PATH（见 process/command.go ComposeEnv），从而选中正确的 JDK，
@@ -60,7 +65,17 @@ func deriveStartCommand(spec *LaunchSpec) (string, error) {
 			parts = append(parts, a)
 		}
 	}
-	parts = append(parts, "-jar", quoteIfSpace(spec.CoreJar))
+	if len(spec.JavaArgFiles) > 0 {
+		for _, file := range spec.JavaArgFiles {
+			arg, err := javaArgFileToken(file)
+			if err != nil {
+				return "", err
+			}
+			parts = append(parts, arg)
+		}
+	} else {
+		parts = append(parts, "-jar", quoteIfSpace(spec.CoreJar))
+	}
 	if !spec.OmitNogui {
 		parts = append(parts, "nogui")
 	}
@@ -70,6 +85,34 @@ func deriveStartCommand(spec *LaunchSpec) (string, error) {
 		}
 	}
 	return strings.Join(parts, " "), nil
+}
+
+func javaArgFileToken(file string) (string, error) {
+	file = strings.TrimSpace(file)
+	if !safeLaunchRelPath(file) {
+		return "", fmt.Errorf("非法的 Java argfile 路径: %s", file)
+	}
+	return "@" + quoteIfSpace(file), nil
+}
+
+func safeLaunchRelPath(file string) bool {
+	if file == "" || strings.Contains(file, "\\") || strings.Contains(file, ":") || path.IsAbs(file) {
+		return false
+	}
+	for _, r := range file {
+		if !safeLaunchPathChar(r) {
+			return false
+		}
+	}
+	clean := path.Clean(file)
+	return clean == file && clean != "." && !strings.HasPrefix(clean, "../") && clean != ".."
+}
+
+func safeLaunchPathChar(r rune) bool {
+	return r == '/' || r == '.' || r == '_' || r == '-' ||
+		(r >= '0' && r <= '9') ||
+		(r >= 'A' && r <= 'Z') ||
+		(r >= 'a' && r <= 'z')
 }
 
 // quoteIfSpace 当字符串含空白时用双引号包裹，保证 shell 把它当作单个参数。

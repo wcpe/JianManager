@@ -60,9 +60,9 @@ FR-046 在既有向导式建服 API 上支持 SpongeVanilla 与 SpongeForge 后�
 
 > `runtime` 为向后兼容新增字段；旧客户端忽略该字段仍可展示基础下载信息，新客户端用于展示 SpongeForge 需要 Forge 初始化。
 
-### POST /api/v1/instances/provision/bukkit
+### POST /api/v1/instances/provision/server
 
-- **描述**：向导创建后端子服。历史路径名保留为 `bukkit` 以兼容现有前端与调用方，但 `coreType` 可选择 Sponge 变体。
+- **描述**：通用向导创建后端子服入口，承载 `paper`、`spongevanilla`、`spongeforge` 等非代理核心。旧 `POST /api/v1/instances/provision/bukkit` 仅作为 Paper/Bukkit 兼容入口保留，内部复用同一服务方法；新增 Sponge 能力不得继续通过 `bukkit` 命名入口表达。
 - **请求**：
 
 ```json
@@ -101,7 +101,7 @@ SpongeForge 示例：
   - `type` 必须为 `minecraft_java`。
   - `role` 必须为 `backend`。
   - SpongeVanilla 的启动核心为工作目录下 `server.jar`。
-  - SpongeForge 的 Sponge jar 位于 `mods/SpongeForge.jar`，Forge 服务端入口由结构化启动配置引用。
+  - SpongeForge 的 Sponge jar 位于 `mods/SpongeForge.jar`，现代 Forge 服务端入口由结构化 `javaArgFiles` 启动配置引用，`runtime.launchJar` 仅作兼容元数据。
 
 #### 部分失败响应
 
@@ -147,5 +147,6 @@ SpongeForge 示例：
 
 - `/cores?type=spongevanilla` 与 `/cores?type=spongeforge` 必须返回新→旧版本列表。
 - `/cores` 构建解析必须能返回可展示的 `filename`、`downloadUrl`、`build`。
-- `POST /instances/provision/bukkit` 对 `coreType=spongevanilla|spongeforge` 创建出的实例仍保持 `minecraft_java/backend`。
+- `POST /instances/provision/server` 对 `coreType=spongevanilla|spongeforge` 创建出的实例仍保持 `minecraft_java/backend`。
+- `POST /instances/provision/bukkit` 仅作为旧 Paper/Bukkit 兼容入口保留，不作为新增 Sponge 能力的对外契约。
 - 前端提交 payload 不得出现 `type=sponge`。

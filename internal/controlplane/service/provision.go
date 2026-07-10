@@ -73,7 +73,12 @@ func (p *ProvisionService) ProvisionServer(ctx context.Context, req ProvisionSer
 		return nil, err
 	}
 
-	spec, err := launchSpecForProvision(req, core)
+	var node model.Node
+	if err := p.db.First(&node, req.NodeID).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("查找节点失败: %w", err)
+	}
+
+	spec, err := launchSpecForProvision(req, core, node.OS)
 	if err != nil {
 		return nil, err
 	}
@@ -109,15 +114,28 @@ func (p *ProvisionService) ProvisionServer(ctx context.Context, req ProvisionSer
 	return inst, nil
 }
 
-func launchSpecForProvision(req ProvisionServerRequest, core *CoreInfo) (LaunchSpec, error) {
+func launchSpecForProvision(req ProvisionServerRequest, core *CoreInfo, nodeOS string) (LaunchSpec, error) {
 	spec := LaunchSpec{MemoryMb: req.MemoryMb, JvmArgs: req.JvmArgs, CoreJar: provisionCoreJar}
 	if core != nil && core.Runtime != nil && core.Runtime.Distribution == "spongeforge" {
 		if strings.TrimSpace(core.Runtime.LaunchJar) == "" {
 			return LaunchSpec{}, fmt.Errorf("SpongeForge 缺少 Forge 启动 jar")
 		}
+		forgeVersion := strings.TrimSpace(core.Runtime.ForgeVersion)
+		if forgeVersion == "" {
+			return LaunchSpec{}, fmt.Errorf("SpongeForge 缺少 Forge 版本")
+		}
 		spec.CoreJar = core.Runtime.LaunchJar
+		spec.JavaArgFiles = []string{"user_jvm_args.txt", forgeArgsFile(forgeVersion, nodeOS)}
 	}
 	return spec, nil
+}
+
+func forgeArgsFile(forgeVersion, nodeOS string) string {
+	name := "unix_args.txt"
+	if strings.EqualFold(strings.TrimSpace(nodeOS), "windows") {
+		name = "win_args.txt"
+	}
+	return "libraries/net/minecraftforge/forge/" + forgeVersion + "/" + name
 }
 
 // ProvisionBukkit 端到端搭建一个 Paper 后端子服，保留旧入口兼容。

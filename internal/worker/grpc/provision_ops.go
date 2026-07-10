@@ -133,12 +133,19 @@ func (s *Server) InstallForgeServer(ctx context.Context, req *workerpb.InstallFo
 	}
 	if launchJar == "" {
 		launchJar = discoverForgeLaunchJar(inst.WorkDir)
+		if launchJar == "" {
+			launchJar = discoverModernForgeLaunchJar(inst.WorkDir)
+		}
 	}
 	if launchJar == "" {
 		return &workerpb.InstallForgeServerResponse{Success: false, Error: "Forge installer 未生成可识别的启动 jar"}, nil
 	}
 	if _, err := os.Stat(filepath.Join(inst.WorkDir, launchJar)); err != nil {
 		if discovered := discoverForgeLaunchJar(inst.WorkDir); discovered != "" {
+			launchJar = discovered
+		} else if modernForgeLayoutReady(inst.WorkDir, launchJar) {
+			// 现代 Forge 从 @args 文件启动，根目录无需存在 forge-*-server.jar。
+		} else if discovered := discoverModernForgeLaunchJar(inst.WorkDir); discovered != "" {
 			launchJar = discovered
 		} else {
 			return &workerpb.InstallForgeServerResponse{Success: false, Error: fmt.Sprintf("Forge 启动 jar 不存在: %s", launchJar)}, nil
@@ -201,6 +208,60 @@ func discoverForgeLaunchJar(workDir string) string {
 	return ""
 }
 
+func discoverModernForgeLaunchJar(workDir string) string {
+	root := filepath.Join(workDir, "libraries", "net", "minecraftforge", "forge")
+	versions, err := os.ReadDir(root)
+	if err != nil {
+		return ""
+	}
+	for _, version := range versions {
+		if !version.IsDir() {
+			continue
+		}
+		launchJar := "forge-" + version.Name() + "-server.jar"
+		if modernForgeLayoutReady(workDir, launchJar) {
+			return launchJar
+		}
+	}
+	return ""
+}
+
+func modernForgeLayoutReady(workDir, launchJar string) bool {
+	version := forgeVersionFromLaunchJar(launchJar)
+	if version == "" {
+		return false
+	}
+	base := filepath.Join(workDir, "libraries", "net", "minecraftforge", "forge", version)
+	required := []string{
+		filepath.Join(workDir, "user_jvm_args.txt"),
+		filepath.Join(workDir, "forge-"+version+"-shim.jar"),
+		filepath.Join(base, "forge-"+version+"-server.jar"),
+	}
+	for _, file := range required {
+		if !regularFileExists(file) {
+			return false
+		}
+	}
+	return regularFileExists(filepath.Join(base, "win_args.txt")) || regularFileExists(filepath.Join(base, "unix_args.txt"))
+}
+
+func forgeVersionFromLaunchJar(launchJar string) string {
+	name := strings.TrimSpace(launchJar)
+	if !strings.HasPrefix(name, "forge-") || !strings.HasSuffix(name, "-server.jar") {
+		return ""
+	}
+	version := strings.TrimSuffix(strings.TrimPrefix(name, "forge-"), "-server.jar")
+	if version == "" || strings.ContainsAny(version, `/\\`) || strings.Contains(version, "..") {
+		return ""
+	}
+	return version
+}
+
+func regularFileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
 func safePlainFilename(name string) bool {
 	name = strings.TrimSpace(name)
 	if name == "" || strings.ContainsAny(name, `/\\`) || strings.Contains(name, "..") {
@@ -226,14 +287,13 @@ func deployServerProbeLibrariesZip(workDir string, data []byte) error {
 	if len(zr.File) > probeMaxZipEntries {
 		return fmt.Errorf("依赖缓存条目过多: %d", len(zr.File))
 	}
-	root := filepath.Join(workDir, "libraries")
-	rootAbs, err := filepath.Abs(root)
+	rootAbs, err := filepath.Abs(workDir)
 	if err != nil {
-		return fmt.Errorf("解析 libraries 目录失败: %w", err)
+		return fmt.Errorf("解析实例工作目录失败: %w", err)
 	}
 	var total int64
 	for _, entry := range zr.File {
-		dest, ok, err := probeLibraryZipDest(rootAbs, entry.Name)
+		dest, ok, err := probeCacheZipDest(rootAbs, entry.Name)
 		if err != nil {
 			return err
 		}
@@ -271,7 +331,7 @@ func deployServerProbeLibrariesZip(workDir string, data []byte) error {
 	return nil
 }
 
-func probeLibraryZipDest(rootAbs, name string) (string, bool, error) {
+func probeCacheZipDest(workDirAbs, name string) (string, bool, error) {
 	if strings.TrimSpace(name) == "" || strings.Contains(name, "\\") || strings.Contains(name, ":") || path.IsAbs(name) {
 		return "", false, fmt.Errorf("依赖缓存含非法路径: %s", name)
 	}
@@ -279,19 +339,18 @@ func probeLibraryZipDest(rootAbs, name string) (string, bool, error) {
 	if clean != strings.TrimSuffix(name, "/") {
 		return "", false, fmt.Errorf("依赖缓存含非法路径: %s", name)
 	}
-	if clean == "libraries" {
-		return rootAbs, false, nil
+	if clean == "libraries" || clean == "assets" {
+		return filepath.Join(workDirAbs, filepath.FromSlash(clean)), false, nil
 	}
-	if !strings.HasPrefix(clean, "libraries/") {
-		return "", false, fmt.Errorf("依赖缓存条目必须位于 libraries/ 下: %s", name)
+	if !strings.HasPrefix(clean, "libraries/") && !strings.HasPrefix(clean, "assets/") {
+		return "", false, fmt.Errorf("依赖缓存条目必须位于 libraries/ 或 assets/ 下: %s", name)
 	}
-	rel := strings.TrimPrefix(clean, "libraries/")
-	dest := filepath.Join(rootAbs, filepath.FromSlash(rel))
+	dest := filepath.Join(workDirAbs, filepath.FromSlash(clean))
 	destAbs, err := filepath.Abs(dest)
 	if err != nil {
 		return "", false, fmt.Errorf("解析依赖缓存路径失败: %w", err)
 	}
-	if destAbs != rootAbs && !strings.HasPrefix(destAbs, rootAbs+string(os.PathSeparator)) {
+	if destAbs != workDirAbs && !strings.HasPrefix(destAbs, workDirAbs+string(os.PathSeparator)) {
 		return "", false, fmt.Errorf("依赖缓存路径逃逸: %s", name)
 	}
 	return destAbs, true, nil
