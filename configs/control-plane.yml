@@ -12,7 +12,11 @@ database:
   dsn: data/jianmanager.db
 
 jwt:
-  secret: dev-secret-change-me  # 生产环境通过 JIANMANAGER_JWT_SECRET 环境变量覆盖
+  secret: dev-secret-change-me  # 生产经 JIANMANAGER_JWT_SECRET 覆盖；只签用户会话，自 FR-275 起不再下发 Worker
+  # CP↔Worker WS 令牌密钥（终端/插件桥，FR-275，见 ADR-061）。留空即可：生产自动生成并持久化到
+  # 数据根 etc/ws-token-secret.key、经注册/心跳自动下发 Worker；dev 回退开发值。
+  # 仅过渡兼容需显式配（如设旧 jwt.secret 值兼容未升级 Worker），生产经 JIANMANAGER_JWT_WS_SECRET 注入。
+  # ws_secret: ""
   access_ttl: 15m
   refresh_ttl: 168h
 

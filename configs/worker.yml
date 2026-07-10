@@ -7,7 +7,9 @@ node_secret: ${JIANMANAGER_NODE_SECRET}
 # 注册上报给 CP 的本机地址（供 CP 反向连接）；留空自动探测出口 IP。
 # host: ""
 
-# WS 终端 / 插件桥一次性 token 校验密钥；与 Control Plane 共享（生产经 JIANMANAGER_JWT_SECRET 覆盖）。
+# WS 终端 / 插件桥 token 校验密钥。新版 CP 在注册/心跳时自动下发专用密钥并持久化到
+# <data_dir>/etc/node-identity.json（FR-275，见 ADR-061），其生效优先级高于本项——通常无需配置。
+# 本项仅作旧 CP（< FR-275）兼容回退：届时须与 CP 的 jwt.secret 一致（生产经 JIANMANAGER_JWT_SECRET 覆盖）。
 jwt_secret: dev-secret-change-me
 
 # enrollment token（一次性节点准入凭据）绝不写入本文件——经 JIANMANAGER_ENROLL_TOKEN

@@ -14,6 +14,8 @@ services:
       - JIANMANAGER_DATABASE_DRIVER=sqlite
       - JIANMANAGER_DATABASE_DSN=/app/data/jianmanager.db
       - JIANMANAGER_JWT_SECRET=${JIANMANAGER_JWT_SECRET:-dev-secret-change-me}
+      # CP↔Worker WS 令牌密钥（FR-275，见 ADR-061）：留空=生产自动生成持久化 + 注册自动下发 Worker；仅过渡兼容时显式设
+      - JIANMANAGER_JWT_WS_SECRET=${JIANMANAGER_JWT_WS_SECRET:-}
     volumes:
       - cp-data:/app/data
 
