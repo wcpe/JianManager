@@ -3,7 +3,7 @@ import { login } from './helpers'
 
 /**
  * FR-166/167/168 可组合卡片工作区 / 跨实例超级工作台 / 工作区导播台 · 单机（Playwright + mock）验收。
- * 共享 WorkspaceCanvas 引擎（7 功能卡 + 预设持久化）；/super 跨实例拼合；/director 场景轮播。
+ * 共享 WorkspaceCard 卡壳 + 预设引擎（7 功能卡 + 预设持久化）；/super 跨实例拼合；/director 场景轮播。
  * 证据落 .tmp/acceptance/FR-166|167|168/。
  */
 
