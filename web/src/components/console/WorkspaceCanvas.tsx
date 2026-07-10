@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import GridLayout, { WidthProvider, type Layout } from 'react-grid-layout'
+import DangerConfirm from '@/components/DangerConfirm'
 import {
   useInstance,
   useStartInstance,
@@ -58,6 +59,8 @@ export default function WorkspaceCanvas({ instanceId }: WorkspaceCanvasProps) {
   const stop = useStopInstance()
   const restart = useRestartInstance()
   const kill = useKillInstance()
+  // 强杀走统一危险操作确认（FR-059），不直发请求。
+  const [killConfirmOpen, setKillConfirmOpen] = useState(false)
 
   const ensureCanvas = useWorkspaceStore((s) => s.ensureCanvas)
   const canvas = useWorkspaceStore((s) => s.canvasByInstance[instanceId])
@@ -128,7 +131,7 @@ export default function WorkspaceCanvas({ instanceId }: WorkspaceCanvasProps) {
         onStart={() => start.mutate(instanceId)}
         onStop={() => stop.mutate(instanceId)}
         onRestart={() => restart.mutate(instanceId)}
-        onKill={() => kill.mutate(instanceId)}
+        onKill={() => setKillConfirmOpen(true)}
         onApplyPreset={(id) => applyPreset(instanceId, id)}
         onAddCard={(type: CardType) => addCard(instanceId, type)}
         onSavePreset={(name) => savePresetAs(instanceId, name)}
@@ -190,6 +193,17 @@ export default function WorkspaceCanvas({ instanceId }: WorkspaceCanvasProps) {
           </ResponsiveGrid>
         )}
       </div>
+
+      {/* 强杀二次确认（FR-059）：与实例列表页同款 DangerConfirm，组管理员及以上可确认。 */}
+      <DangerConfirm
+        open={killConfirmOpen}
+        title={t('danger.killInstanceTitle', { name: instanceName })}
+        description={t('danger.killInstanceDesc')}
+        confirmLabel={t('instances.kill')}
+        scope="group"
+        onConfirm={() => { kill.mutate(instanceId); setKillConfirmOpen(false) }}
+        onCancel={() => setKillConfirmOpen(false)}
+      />
     </div>
   )
 }

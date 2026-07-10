@@ -1,9 +1,10 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { Activity, AlertTriangle, Boxes, Gauge, HardDrive, Layers, Play, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
 
 import { useInstance, useKillInstance, useRestartInstance, useStartInstance, useStopInstance } from '@/api/instances'
+import DangerConfirm from '@/components/DangerConfirm'
 import { useInstanceMetrics } from '@/api/metrics'
 import { useLogs } from '@/api/logs'
 import { useNodes } from '@/api/nodes'
@@ -63,6 +64,8 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const stop = useStopInstance()
   const start = useStartInstance()
   const kill = useKillInstance()
+  // 强杀走统一危险操作确认（FR-059），不直发请求。
+  const [killConfirmOpen, setKillConfirmOpen] = useState(false)
 
   const node = nodes.find((n) => n.id === instance?.nodeId)
   const online = serverState?.state?.server?.onlinePlayers ?? metrics?.onlinePlayers ?? 0
@@ -113,7 +116,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
                 <Square className="size-3.5" />
                 {t('serverConsole.stop')}
               </Button>
-              <Button size="sm" variant="destructive" disabled={!canControl} onClick={() => kill.mutate(instance.id)}>
+              <Button size="sm" variant="destructive" disabled={!canControl} onClick={() => setKillConfirmOpen(true)}>
                 <AlertTriangle className="size-3.5" />
                 {t('serverConsole.kill')}
               </Button>
@@ -172,6 +175,17 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
           <PlaceholderPanel tab={activeTab} />
         )}
       </div>
+
+      {/* 强杀二次确认（FR-059）：与实例列表页同款 DangerConfirm，组管理员及以上可确认。 */}
+      <DangerConfirm
+        open={killConfirmOpen}
+        title={t('danger.killInstanceTitle', { name: instance.name })}
+        description={t('danger.killInstanceDesc')}
+        confirmLabel={t('instances.kill')}
+        scope="group"
+        onConfirm={() => { kill.mutate(instance.id); setKillConfirmOpen(false) }}
+        onCancel={() => setKillConfirmOpen(false)}
+      />
     </div>
   )
 }
