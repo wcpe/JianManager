@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
@@ -144,8 +145,7 @@ type fakeStressCreateBotWorker struct {
 }
 
 func (f *fakeStressCreateBotWorker) CreateBot(_ context.Context, req *workerpb.CreateBotRequest, _ ...grpc.CallOption) (*workerpb.CreateBotResponse, error) {
-	copied := *req
-	f.requests = append(f.requests, &copied)
+	f.requests = append(f.requests, proto.Clone(req).(*workerpb.CreateBotRequest))
 	return &workerpb.CreateBotResponse{Success: true, Status: "connecting"}, nil
 }
 
