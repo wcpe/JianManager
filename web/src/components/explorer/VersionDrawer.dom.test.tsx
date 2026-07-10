@@ -103,8 +103,8 @@ describe('文件历史版本抽屉（mock 假后端，FR-204）', () => {
     await user.click(within(fromRow).getByRole('button', { name: '从' }))
     await user.click(within(toRow).getByRole('button', { name: '到' }))
 
-    expect(await screen.findByText('-old-value')).toHaveClass('text-rose-700')
-    expect(screen.getByText('+new-value')).toHaveClass('text-emerald-700')
+    expect(await screen.findByText('-old-value')).toHaveClass('text-status-danger')
+    expect(screen.getByText('+new-value')).toHaveClass('text-status-success')
   })
 
   it('版本端点注入 500：显示「加载版本失败」错误态（不崩溃）', async () => {

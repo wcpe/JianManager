@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@jianmanager/ui/components/sheet'
 import DangerConfirm from '@/components/DangerConfirm'
+import { UnifiedDiff } from '@/components/UnifiedDiff'
 import {
   useFileVersions,
   useFileVersionDiff,
@@ -25,26 +26,6 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-}
-
-function diffLineClass(line: string): string {
-  if (line.startsWith('---') || line.startsWith('+++')) return 'text-sky-700 dark:text-sky-300'
-  if (line.startsWith('@@')) return 'text-violet-700 dark:text-violet-300'
-  if (line.startsWith('+')) return 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-  if (line.startsWith('-')) return 'bg-rose-500/10 text-rose-700 dark:text-rose-300'
-  return 'text-muted-foreground'
-}
-
-function UnifiedDiff({ diff }: { diff: string }) {
-  return (
-    <pre className="font-mono text-[10px] leading-5">
-      {diff.split('\n').map((line, index) => (
-        <span key={`${index}:${line}`} className={`block whitespace-pre-wrap px-1 ${diffLineClass(line)}`}>
-          {line || ' '}
-        </span>
-      ))}
-    </pre>
-  )
 }
 
 export default function VersionDrawer({

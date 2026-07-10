@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@jianmanager/ui/components/sheet'
 import DangerConfirm from '@/components/DangerConfirm'
+import { UnifiedDiff } from '@/components/UnifiedDiff'
 import {
   useConfigVersions,
   useConfigDiff,
@@ -124,7 +125,7 @@ export default function ConfigVersionDrawer({
               {diffQ.isLoading ? (
                 <p className="text-xs">{t('common.loading')}</p>
               ) : diffQ.data ? (
-                <pre className="whitespace-pre-wrap font-mono text-[10px]">{diffQ.data.unifiedDiff}</pre>
+                <UnifiedDiff diff={diffQ.data.unifiedDiff} />
               ) : (
                 <p className="text-xs text-destructive">{diffQ.error ? (diffQ.error as Error).message : ''}</p>
               )}

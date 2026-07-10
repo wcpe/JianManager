@@ -2,9 +2,12 @@ import type { ComponentProps } from 'react'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
 import { mockInject } from '@/mocks/inject'
 import { loginMockUser } from '@/test/auth'
+import { server } from '@/mocks/server'
+import { API } from '@/mocks/api'
 import ConfigVersionDrawer from './ConfigVersionDrawer'
 
 /**
@@ -55,11 +58,38 @@ describe('ConfigVersionDrawer 版本/diff/回滚（mock 假后端）', () => {
     const row2 = screen.getByText('#2').closest('li') as HTMLElement
     await user.click(within(row1).getByRole('button', { name: '从' }))
     await user.click(within(row2).getByRole('button', { name: '到' }))
-    // unifiedDiff 文本块渲染（mock 把两版内容拼成含 "--- #1" / "+++ #2" 标记的 unified diff）。
-    // 整段 diff 在一个 <pre> 文本节点内，按子串匹配该节点即可。
-    const pre = await screen.findByText(/--- #1/)
-    expect(pre).toBeInTheDocument()
-    expect(pre.textContent).toContain('+++ #2')
+    // unifiedDiff 逐行着色渲染（FR-141 UnifiedDiff）：每行独立 <span>，故 --- 头与 +++ 头分属两节点。
+    expect(await screen.findByText('--- #1')).toBeInTheDocument()
+    expect(screen.getByText('+++ #2')).toBeInTheDocument()
+  })
+
+  it('diff 增删行使用语义颜色区分（+ 绿 / - 红 / @@ 蓝，上下文不着色）', async () => {
+    const user = userEvent.setup()
+    // 覆盖 diff 端点返回可控 unified diff（含 @@ 头与上下文行），断言逐行语义着色（FR-141）。
+    server.use(
+      http.get(API('/instances/:id/configs/diff/:file'), () =>
+        HttpResponse.json({
+          fromVersionId: 1,
+          toVersionId: 2,
+          unifiedDiff: '--- #1\n+++ #2\n@@ -1,2 +1,2 @@\n-old-value\n+new-value\n unchanged',
+        }),
+      ),
+    )
+    renderDrawer()
+    await screen.findByText('#2')
+    const row1 = screen.getByText('#1').closest('li') as HTMLElement
+    const row2 = screen.getByText('#2').closest('li') as HTMLElement
+    await user.click(within(row1).getByRole('button', { name: '从' }))
+    await user.click(within(row2).getByRole('button', { name: '到' }))
+
+    // 删除行着红 / 新增行着绿 / hunk 头着中性蓝，均用语义色 token（随明暗自适配、双主题正交）。
+    expect(await screen.findByText('-old-value')).toHaveClass('text-status-danger')
+    expect(screen.getByText('+new-value')).toHaveClass('text-status-success')
+    expect(screen.getByText('@@ -1,2 +1,2 @@')).toHaveClass('text-status-info')
+    // 上下文行不着色（既非 success 也非 danger）。
+    const context = screen.getByText('unchanged')
+    expect(context).not.toHaveClass('text-status-success')
+    expect(context).not.toHaveClass('text-status-danger')
   })
 
   it('交互：回滚 #1 → 确认弹窗 → rollback 成功回调 onRolledBack（新版本联动）', async () => {
