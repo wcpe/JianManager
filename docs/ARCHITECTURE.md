@@ -230,6 +230,8 @@ Browser → CP (/ws/terminal?token=xxx) → CP 校验并转拨 → Worker (:wsPo
   → Worker 独立校验同一 token → 双向终端流（browser ↔ CP ↔ worker 桥接）
 ```
 
+**空闲保活（FR-140）**：CP 终端代理（browser 侧与 worker 侧两个连接）与 Worker 终端桥都装 WS ping/pong 心跳——每 ~30s 发一次 ping、收到对端任意帧（含 pong）即续 ~70s 读超时。空闲终端（如 Paper 长时间无输出）经反向代理/LB 时不会被中间层按空闲超时（常见 60s）断连；同时据读超时检测真正的死连。ping 用 `WriteControl`（gorilla 保证与其它写并发安全），不与桥接/广播写互斥。
+
 消息格式：
 
 ```json
