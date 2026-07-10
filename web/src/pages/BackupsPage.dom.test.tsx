@@ -64,6 +64,34 @@ describe('BackupsPage（mock）', () => {
     })
   })
 
+  it('远程存储备份显示存储位置，创建时带上 storageId', async () => {
+    const user = userEvent.setup()
+    let createBody: Record<string, unknown> | null = null
+    server.use(
+      http.get(API('/instances'), () =>
+        HttpResponse.json([{ id: 2, name: 'remote-survival', uuid: 'i-2' }]),
+      ),
+      http.post(API('/instances/:id/backups'), async ({ request }) => {
+        createBody = await request.json() as Record<string, unknown>
+        return HttpResponse.json({ id: 99, uuid: 'bk-99', instanceId: 2, name: 'full-remote-test', filePath: '', fileSizeMb: 0, type: 0, mode: 0, status: 0, storageId: createBody.storageId, createdAt: new Date().toISOString() }, { status: 201 })
+      }),
+    )
+    renderWithProviders(<BackupsPage />)
+
+    await screen.findByRole('option', { name: 'remote-survival' })
+    const [instanceSelect, storageSelect] = screen.getAllByRole('combobox')
+    await user.selectOptions(instanceSelect, '2')
+
+    expect(await screen.findByText('full-2026-06-03T02:00:00')).toBeInTheDocument()
+    expect(screen.getAllByText('s3-primary').length).toBeGreaterThanOrEqual(2)
+
+    await screen.findByRole('option', { name: 's3-primary' })
+    await user.selectOptions(storageSelect, '1')
+    await user.click(screen.getByRole('button', { name: '全量备份' }))
+
+    await waitFor(() => expect(createBody?.storageId).toBe(1))
+  })
+
   it('实例运行中 → 恢复按钮禁用并提示先停止（FR-013 恢复守卫回归）', async () => {
     const user = userEvent.setup()
     server.use(
