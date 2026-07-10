@@ -19,6 +19,14 @@ import (
 // 前端据此展示「该节点 WS 令牌密钥与平台不一致」的定向诊断，而非裸「连接已断开」。
 const TerminalProxyCodeWorkerTokenRejected = "WORKER_TOKEN_REJECTED"
 
+// WS 保活心跳参数（FR-140 加固）：给浏览器侧与 Worker 侧连接都装 ping/pong，
+// 让空闲终端不被 CP 与浏览器之间的中间层（反代/LB）按空闲超时断开。参数含义同 worker 侧。
+const (
+	terminalProxyPongWait   = 70 * time.Second
+	terminalProxyPingPeriod = 30 * time.Second
+	terminalProxyWriteWait  = 10 * time.Second
+)
+
 // terminalProxyStateMessage CP→浏览器的终端代理错误状态消息。
 // Code 供前端定向识别（空 = 一般性失败，如网络不可达）；Data 为人话诊断。
 type terminalProxyStateMessage struct {
@@ -44,6 +52,11 @@ type TerminalProxy struct {
 	terminal  *TerminalService
 	upgrader  websocket.Upgrader
 	tokens    *onetimetoken.Store
+
+	// pingPeriod / pongWait 控制保活心跳（FR-140），默认取包级常量；
+	// pingPeriod<=0 禁用主动 ping、pongWait<=0 不设读超时（仅测试用于模拟「无心跳」链路）。
+	pingPeriod time.Duration
+	pongWait   time.Duration
 }
 
 // NewTerminalProxy 创建终端代理。
@@ -55,6 +68,8 @@ func NewTerminalProxy(jwtSecret string, terminal *TerminalService) *TerminalProx
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
+		pingPeriod: terminalProxyPingPeriod,
+		pongWait:   terminalProxyPongWait,
 	}
 }
 
@@ -140,6 +155,11 @@ func (p *TerminalProxy) Handler() http.HandlerFunc {
 
 		slog.Info("终端代理已建立", "instanceUUID", instanceUUID, "permission", permission)
 
+		// 保活心跳（FR-140）：两侧连接都装 pong 续读超时 + 定时 ping。浏览器侧 ping 让
+		// 「浏览器↔CP」这一跳（可能经反代/LB）保持有流量；Worker 侧 ping 保活「CP↔Worker」跳。
+		p.setupKeepalive(browserConn)
+		p.setupKeepalive(workerConn)
+
 		// 5. 双向桥接
 		var wg sync.WaitGroup
 		wg.Add(2)
@@ -153,6 +173,7 @@ func (p *TerminalProxy) Handler() http.HandlerFunc {
 				if err != nil {
 					return
 				}
+				p.extendReadDeadline(browserConn)
 				if err := workerConn.WriteMessage(msgType, msg); err != nil {
 					return
 				}
@@ -171,14 +192,59 @@ func (p *TerminalProxy) Handler() http.HandlerFunc {
 					}
 					return
 				}
+				p.extendReadDeadline(workerConn)
 				if err := browserConn.WriteMessage(msgType, msg); err != nil {
 					return
 				}
 			}
 		}()
 
+		// 心跳 ping：WriteControl 可与桥接的写并发（gorilla 保证），无需额外互斥。
+		if p.pingPeriod > 0 {
+			stop := make(chan struct{})
+			go pingConn(browserConn, p.pingPeriod, stop)
+			go pingConn(workerConn, p.pingPeriod, stop)
+			defer close(stop)
+		}
+
 		wg.Wait()
 		slog.Info("终端代理已关闭", "instanceUUID", instanceUUID)
+	}
+}
+
+// setupKeepalive 为连接装读超时与 pong 处理器（FR-140）：收到 pong 即续读超时。
+func (p *TerminalProxy) setupKeepalive(conn *websocket.Conn) {
+	if p.pongWait <= 0 {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(p.pongWait))
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(p.pongWait))
+	})
+}
+
+// extendReadDeadline 收到任意数据帧后续读超时（对端存活）。
+func (p *TerminalProxy) extendReadDeadline(conn *websocket.Conn) {
+	if p.pongWait <= 0 {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(p.pongWait))
+}
+
+// pingConn 定时向连接发送 WS ping 帧保活（FR-140），直到 stop 关闭或写失败。
+// WriteControl 与其它写并发安全（gorilla 保证）。
+func pingConn(conn *websocket.Conn, period time.Duration, stop <-chan struct{}) {
+	ticker := time.NewTicker(period)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(terminalProxyWriteWait)); err != nil {
+				return
+			}
+		}
 	}
 }
 
