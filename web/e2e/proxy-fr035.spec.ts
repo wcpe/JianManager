@@ -40,7 +40,8 @@ test.describe('FR-035 搭建代理（mock 模式真浏览器）', () => {
 
     await page.getByRole('button', { name: '搭建', exact: true }).click()
     await expect(page.getByText(/mock-(forwarding-secret|fwd-secret)/)).toBeVisible({ timeout: 10_000 })
-    await page.getByTestId('instances-card-virtual').evaluate((el) => { el.scrollTop = el.scrollHeight })
+    await page.getByRole('button', { name: '完成', exact: true }).click()
+    await page.getByRole('searchbox', { name: '搜索实例' }).fill(name)
     await expect(page.getByRole('button', { name, exact: true })).toBeVisible({ timeout: 10_000 })
     await expect(page.getByText('代理').last()).toBeVisible()
     await page.screenshot({ path: path.join(artifactsDir, 'fr035-e2e-proxy-created.png'), fullPage: true })

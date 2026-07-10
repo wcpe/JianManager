@@ -39,7 +39,7 @@ test.describe('FR-034 搭建 Bukkit 子服（mock 模式真浏览器）', () => 
 
     await page.getByRole('button', { name: '搭建', exact: true }).click()
     await expect(page.getByRole('heading', { name: '实例管理' })).toBeVisible({ timeout: 10_000 })
-    await page.getByTestId('instances-card-virtual').evaluate((el) => { el.scrollTop = el.scrollHeight })
+    await page.getByRole('searchbox', { name: '搜索实例' }).fill(name)
     await expect(page.getByRole('button', { name, exact: true })).toBeVisible({ timeout: 10_000 })
     await expect(page.getByText('后端').last()).toBeVisible()
     await page.screenshot({ path: path.join(artifactsDir, 'fr034-e2e-provision-created.png'), fullPage: true })

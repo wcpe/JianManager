@@ -28,7 +28,7 @@ test.describe('FR-040 全局 Bot 管理页重构（mock 模式真浏览器）', 
     await expect(page.getByRole('heading', { name: 'Bot 管理' })).toBeVisible()
     await expect(page.getByText('2 实例 · 2 节点')).toBeVisible()
     await expect(page.getByText('舰队健康')).toBeVisible()
-    await expect(page.getByRole('button', { name: '压测' })).toBeDisabled()
+    await expect(page.getByRole('button', { name: '压测' })).toBeVisible()
     await expect(page.getByRole('button', { name: '生存服', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: '空岛服', exact: true })).toBeVisible()
     await expect(page.getByText('GuardBot')).toHaveCount(0)
