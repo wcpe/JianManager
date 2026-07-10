@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from 'react'
+import { useCallback, useState, type KeyboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useInstance } from '@/api/instances'
 import { useTerminalToken } from '@/api/terminal'
@@ -39,7 +39,18 @@ export default function TerminalPane({ instanceId, hideHeader = false }: Termina
   // 仅在状态已知且非完全停机时请求 token / 挂载终端：STOPPED 与状态未知都不发起 WS
   // （enabled=false 连 token 都不取），避免对停机/加载中实例无谓拨号或闪现终端。
   const canAttach = !!status && !isStopped
-  const { data: tokenData, isLoading, error } = useTerminalToken(instanceId, 'write', canAttach)
+  const { isLoading, error, refetch } = useTerminalToken(instanceId, 'write', canAttach)
+  // 一次性 token 首连即被 CP 消费失效（onetimetoken.Store），重连（自动重试 / 手动重连）必须
+  // 现取一条新 token——复用已消费 token 会被 /ws/terminal 以 401「token already used」拒绝，
+  // 导致重连永不恢复（FR-140）。故不把 token 作为静态 prop 下传，而暴露拉取回调让终端每次连接前现取。
+  const fetchToken = useCallback(async () => {
+    const result = await refetch()
+    const data = result.data
+    if (!data?.wsUrl || !data.token) {
+      throw new Error(result.error instanceof Error ? result.error.message : '获取终端令牌失败')
+    }
+    return { wsUrl: data.wsUrl, token: data.token }
+  }, [refetch])
   const adjustFont = (delta: number) => setFontSize((value) => Math.min(20, Math.max(11, value + delta)))
   const handlePaneKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
@@ -149,8 +160,7 @@ export default function TerminalPane({ instanceId, hideHeader = false }: Termina
           <TerminalComponent
             key={`${instanceId}:${reconnectKey}`}
             instanceId={String(instanceId)}
-            wsUrl={tokenData?.wsUrl}
-            token={tokenData?.token}
+            fetchToken={fetchToken}
             readOnly={!isRunning}
             isLoading={isLoading}
             fontSize={fontSize}

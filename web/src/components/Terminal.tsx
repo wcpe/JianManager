@@ -8,8 +8,11 @@ import { useTranslation } from 'react-i18next'
 
 interface TerminalComponentProps {
   instanceId: string
-  wsUrl?: string
-  token?: string
+  /**
+   * 拉取一次性终端连接凭据（wsUrl + token）。**每次连接前现取**：
+   * 一次性 token 首连即被 CP 消费失效，重连必须重取新 token，否则复用会 401（FR-140）。
+   */
+  fetchToken?: () => Promise<{ wsUrl: string; token: string }>
   readOnly?: boolean
   /** token 正在加载中，显示占位而非尝试连接 */
   isLoading?: boolean
@@ -129,8 +132,7 @@ const highlightRowMatches = (
 
 export default function TerminalComponent({
   instanceId,
-  wsUrl,
-  token,
+  fetchToken,
   readOnly = false,
   isLoading = false,
   fontSize = 14,
@@ -397,11 +399,37 @@ export default function TerminalComponent({
     URL.revokeObjectURL(url)
   }, [getAllText, instanceId])
 
-  const connect = useCallback(() => {
-    if (!wsUrl || !token) return
+  const connect = useCallback(async () => {
+    if (!fetchToken) return
     cleanupRef.current = false
 
-    const ws = new WebSocket(`${wsUrl}?token=${token}`)
+    // 重试调度：token 拉取失败或 WS 出错都经此路径。STABLE_AFTER_MS 计时器负责在连接存活足够久后
+    // 清零累计计数（防 FIX-B open→立即 close 反复清零绕过 MAX_RETRIES 的死循环刷断连）。
+    const scheduleRetry = () => {
+      if (stableTimerRef.current) clearTimeout(stableTimerRef.current)
+      if (cleanupRef.current) return
+      if (retryCountRef.current < MAX_RETRIES) {
+        retryCountRef.current++
+        // eslint-disable-next-line react-hooks/immutability -- 重试定时器经 ref 记录，connect 递归重连为既定模式
+        retryTimerRef.current = setTimeout(() => { if (!cleanupRef.current) void connect() }, BASE_RETRY_DELAY * retryCountRef.current)
+      } else {
+        termRef.current?.write('\r\n[连接错误]\r\n')
+      }
+    }
+
+    // 每次连接（首连 / 自动重试 / 手动重连重挂）前现取一次性凭据：一次性 token 首连消费后即失效，
+    // 复用会被 CP 以 401「token already used」拒绝、重连永不恢复（FR-140）。
+    let creds: { wsUrl: string; token: string }
+    try {
+      creds = await fetchToken()
+    } catch {
+      if (cleanupRef.current) return
+      scheduleRetry()
+      return
+    }
+    if (cleanupRef.current) return
+
+    const ws = new WebSocket(`${creds.wsUrl}?token=${creds.token}`)
     wsRef.current = ws
 
     // 仅在连接「存活足够久」后才清零重试计数。CP→Worker 拨号失败时浏览器侧会先 open（升级成功）
@@ -473,18 +501,11 @@ export default function TerminalComponent({
     }
 
     ws.onerror = () => {
-      if (stableTimerRef.current) clearTimeout(stableTimerRef.current)
       if (cleanupRef.current) return
-      if (retryCountRef.current < MAX_RETRIES) {
-        retryCountRef.current++
-        // eslint-disable-next-line react-hooks/immutability -- 重试定时器经 ref 记录，connect 递归重连为既定模式
-        retryTimerRef.current = setTimeout(() => { if (!cleanupRef.current) connect() }, BASE_RETRY_DELAY * retryCountRef.current)
-      } else {
-        termRef.current?.write('\r\n[连接错误]\r\n')
-      }
+      scheduleRetry()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- connect 递归重连，仅依赖连接参数
-  }, [wsUrl, token, instanceId])
+  }, [fetchToken, instanceId])
 
   useEffect(() => {
     if (!terminalRef.current) return
@@ -592,7 +613,7 @@ export default function TerminalComponent({
     }
     window.addEventListener('resize', handleResize)
 
-    if (!isLoading && wsUrl && token) connect()
+    if (!isLoading && fetchToken) void connect()
 
     return () => {
       window.removeEventListener('resize', handleResize)
@@ -605,7 +626,7 @@ export default function TerminalComponent({
       term.dispose()
     }
     // 故意不依赖 readOnly：实例状态变化不重建终端/不断连。
-  }, [instanceId, connect, isLoading, wsUrl, token, submitLine, replaceLine, copySelection, fontSize])
+  }, [instanceId, connect, isLoading, fetchToken, submitLine, replaceLine, copySelection, fontSize])
 
   if (isLoading) {
     return (

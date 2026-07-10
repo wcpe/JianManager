@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
+import { server } from '@/mocks/server'
 
 const xtermHarness = vi.hoisted(() => {
   type DataHandler = (data: string) => void
@@ -354,5 +356,47 @@ describe('TerminalPane（mock 假后端）', () => {
     expect(text).toContain('[状态: error] 连接 Worker 失败: dial tcp: refused')
     expect(text).toContain('[状态: running]')
     expect(text).not.toContain('[终端令牌被节点拒绝]')
+  })
+
+  /**
+   * FR-140 回归：终端一次性 token 首连即被 CP 消费失效（onetimetoken.Store），
+   * 点「重新连接」必须重新拉取一条新的一次性 token；若复用已消费的旧 token，
+   * /ws/terminal 会以 401「token already used」拒绝，导致重连永不恢复。
+   * 断言重连触发了新的 terminal-token 拉取，且新连接携带的是新 token（非复用旧 token）。
+   */
+  it('FR-140：点重新连接必须重新拉取一次性 token，不复用已消费的旧 token', async () => {
+    const user = userEvent.setup()
+    loginMockUser()
+
+    // 每次拉取返回递增的唯一 token，用于识别「是否重取 / 是否复用」。
+    let tokenFetches = 0
+    server.use(
+      http.get('*/api/v1/instances/:id/terminal-token', () => {
+        tokenFetches += 1
+        return HttpResponse.json({
+          token: `once-token-${tokenFetches}`,
+          wsUrl: 'ws://localhost/_mock/terminal',
+          expiresIn: 30,
+        })
+      }),
+    )
+
+    renderWithProviders(<TerminalPane instanceId={1} hideHeader />)
+
+    const firstSocket = await findSocket()
+    const firstToken = new URL(firstSocket.url).searchParams.get('token')
+    const fetchesBeforeReconnect = tokenFetches
+
+    await user.click(screen.getByRole('button', { name: '重新连接' }))
+
+    // 重连应新建一条 WS 连接。
+    await waitFor(() => expect(wsHarness.sockets.length).toBeGreaterThan(1))
+    const secondSocket = wsHarness.sockets.at(-1)!
+    const secondToken = new URL(secondSocket.url).searchParams.get('token')
+
+    // 重连必须重新拉取 token（bug 表现为 0 次重取）。
+    expect(tokenFetches).toBeGreaterThan(fetchesBeforeReconnect)
+    // 新连接携带的是新签发的一次性 token，而非复用首连已消费的旧 token。
+    expect(secondToken).not.toBe(firstToken)
   })
 })
