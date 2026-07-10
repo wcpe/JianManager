@@ -8,6 +8,9 @@
 
 > 本段累积 `v0.13.0` tag 之后的开发变更。JBIS 背包域（第五期，FR-124~127）的读写数据流真机验收受第三方 CoreLib serverInfo（MySQL+Redis+服务器注册）环境硬门槛阻断，代码已随 v0.13.0 落地但 PRD 保持 🔨，待环境凑齐或经 AllinInventorySync 自带 mc-testkit e2e 验通后翻交付。
 
+### 修复
+- **发布向导切步骤清空本地暂存文件（FR-191/250）**：工作区路由过渡容器 `Workspace` 的 `key` 一度含 `location.search`，导致同一路由页内仅 query 变化（发布向导 `?step=` 步骤切换、列表筛选、tab 切换等）会 remount 整棵路由子树，清空 `ClientPublishPage` 本地暂存的 `drafts`——真机浏览器上发布向导过不了「选择文件 → 逐文件配置」这一步，FR-191/250 发布流完全不可用（单测因直接渲染页面组件、绕过 Workspace 外壳而漏检）。改 `routeKey` 仅按 `location.pathname`（页面级切换仍重放进场动画，同页 query 变化不再 remount），并补 `Workspace.routekey.dom.test.tsx` 经真实 `BrowserRouter` 渲染 Workspace 断言同页 query 变化不清空页内状态。
+
 ## 0.13.0（2026-07-11）
 
 > 自 `v0.12.0`（`0939068c`）以来累积交付：第三期运营底座与可观测补全、第六期控制台体验与规模化、第四期客户端分发/OTA 二三轮，以及三～六期的真机验收缺陷收尾。第五期 JBIS 背包域集成层脊柱（FR-115~123）已交付、背包数据读写流（FR-124~127）代码随本版落地但真机数据流待环境（见上方 Unreleased 说明）。
