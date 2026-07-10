@@ -18,7 +18,7 @@
 - **路径**：归档路径与目标路径经既有 `validatePath` 防工作目录越界；zip 条目名经 zip-slip 校验（拒 `..`/绝对路径条目）。
 - **只读**：归档浏览只读不落盘；反编译只读——CFR 仅静态分析字节码输出源码，不加载/运行目标 class、不写工作目录、不联网执行。
 - **超时**：反编译 `context.WithTimeout`（默认 30s）。
-- **体积上限**：归档单条目读取截断（默认 4 MiB）；反编译输入 class/jar 字节上限（默认 16 MiB）、输出源码截断（默认 4 MiB，`truncated=true`）。
+- **体积上限**：归档单条目读取截断（默认 4 MiB）；反编译输入字节上限（默认 16 MiB）——**整 jar 反编译按 jar 整体大小判限；jar 内单条目反编译按该 class 条目解压后大小判限**（宿主 jar 可远超上限，其中单个 class 通常仅几十 KB；条目超限即**拒绝**、不静默截断，`UncompressedSize64` 预拒 + `LimitReader(limit+1)` 防 zip bomb，FR-075 修复）；输出源码截断（默认 4 MiB，`truncated=true`）。
 - **CFR 分发**：配置路径 > 内嵌（`make embed-cfr`，gitignore 不入库）> 数据根缓存 `var/tools/cfr-<ver>.jar` > Maven Central 按需下载（sha256 pin 校验）。
 
 ---
@@ -157,3 +157,4 @@ message DecompileClassResponse {
 | 打开 jar/zip 列条目树；查看内部文本流式到只读编辑器；树内展开归档为子树 | `ListArchiveEntries`/`ReadArchiveEntry` + `FileTree` 归档子树 + 只读 `CodeEditor` |
 | 反编译 class/jar：经实例 JDK 跑 CFR → 源码流（超时+体积上限+失败降级） | `DecompileClass` + CFR 受控 exec + 降级 |
 | 真机：打开真 plugin jar、看内部 plugin.yml、反编译 class 出源码 | 真机验（环境有 JDK） |
+| 真机：反编译**大核心 jar（如 server.jar 数十 MB）内单个 class** 成功（按条目大小判限，不被整 jar 体积拒绝） | `prepareDecompileTarget` 单条目分支不做整 jar 校验 + `extractClassFromJar` 按条目解压后大小判限（FR-075 修复）；回归 `TestPrepareDecompileTarget_*` |

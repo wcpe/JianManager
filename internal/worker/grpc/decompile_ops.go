@@ -92,11 +92,11 @@ func (s *Server) prepareDecompileTarget(absPath, relPath, entry string) (target,
 		return absPath, "", nil, nil
 
 	case ".jar":
-		if err := checkFileSize(absPath, maxDecompileInputBytes); err != nil {
-			return "", "", nil, err
-		}
 		if entry == "" {
-			// 整 jar 反编译。
+			// 整 jar 反编译：按宿主 jar 整体大小判限。
+			if err := checkFileSize(absPath, maxDecompileInputBytes); err != nil {
+				return "", "", nil, err
+			}
 			return absPath, "", nil, nil
 		}
 		if !isSafeArchiveEntryName(entry) {
@@ -105,7 +105,8 @@ func (s *Server) prepareDecompileTarget(absPath, relPath, entry string) (target,
 		if !strings.HasSuffix(strings.ToLower(entry), ".class") {
 			return "", "", nil, fmt.Errorf("仅支持反编译 .class 条目: %s", entry)
 		}
-		// 从 jar 抽出该 class 到临时文件（避免把整 jar 交给 CFR 全量反编译）。
+		// 单条目反编译：不按宿主 jar 大小判限（server.jar 等核心 jar 常达数十 MB，远超上限，
+		// 但其中单个 class 通常仅几十 KB）。改由 extractClassFromJar 按该 class 条目解压后大小判限（FR-075）。
 		tmp, terr := extractClassFromJar(absPath, entry)
 		if terr != nil {
 			return "", "", nil, terr
@@ -118,7 +119,8 @@ func (s *Server) prepareDecompileTarget(absPath, relPath, entry string) (target,
 }
 
 // extractClassFromJar 从 jar 中抽出某 .class 条目到临时 .class 文件，返回临时文件路径。
-// 抽出体积截断到上限，防异常巨条目。
+// 限流按该 class 条目解压后大小判定（而非宿主 jar 大小，FR-075）：条目超上限即拒绝，
+// 不静默截断——截断出的残缺 class 无法反编译，只会得到含糊错误。
 func extractClassFromJar(jarPath, entry string) (string, error) {
 	zr, err := zip.OpenReader(jarPath)
 	if err != nil {
@@ -139,6 +141,10 @@ func extractClassFromJar(jarPath, entry string) (string, error) {
 	if f.FileInfo().IsDir() {
 		return "", fmt.Errorf("%s 是目录条目", entry)
 	}
+	// 廉价预拒：zip 头声明的解压后大小已超上限则直接拒（无需解压）。
+	if f.UncompressedSize64 > uint64(maxDecompileInputBytes) {
+		return "", fmt.Errorf("目标过大（%d 字节，上限 %d），拒绝反编译", f.UncompressedSize64, maxDecompileInputBytes)
+	}
 
 	rc, err := f.Open()
 	if err != nil {
@@ -151,14 +157,21 @@ func extractClassFromJar(jarPath, entry string) (string, error) {
 		return "", fmt.Errorf("创建临时文件失败: %w", err)
 	}
 	tmpName := tmp.Name()
-	if _, err := io.Copy(tmp, io.LimitReader(rc, maxDecompileInputBytes)); err != nil {
-		_ = tmp.Close()
+	// LimitReader 限 limit+1 字节：zip 头声明大小可造假（zip bomb），以实际解压字节数为准，
+	// 超上限即拒并清理临时文件（参考 provision_ops.go probeMaxZipEntryBytes 模式）。
+	n, copyErr := io.Copy(tmp, io.LimitReader(rc, maxDecompileInputBytes+1))
+	closeErr := tmp.Close()
+	if copyErr != nil {
 		_ = os.Remove(tmpName)
-		return "", fmt.Errorf("抽取 jar 条目失败: %w", err)
+		return "", fmt.Errorf("抽取 jar 条目失败: %w", copyErr)
 	}
-	if err := tmp.Close(); err != nil {
+	if closeErr != nil {
 		_ = os.Remove(tmpName)
-		return "", err
+		return "", closeErr
+	}
+	if n > maxDecompileInputBytes {
+		_ = os.Remove(tmpName)
+		return "", fmt.Errorf("目标过大（解压超过上限 %d 字节），拒绝反编译", maxDecompileInputBytes)
 	}
 	return tmpName, nil
 }

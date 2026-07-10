@@ -3,6 +3,7 @@ package grpc
 import (
 	"archive/zip"
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,103 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
+
+// zeroReader 是无限零字节源，供测试造可控大小的 zip 条目。
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
+}
+
+// makeDecompileJar 造一个反编译测试 jar：
+//   - blobSize>0 时写一个填充条目 blobName：blobMethod=zip.Store 令其磁盘体积≈blobSize（不压缩）；
+//     blobMethod=zip.Deflate 且全零 → 磁盘体积极小但解压后=blobSize（zip bomb 造型）。
+//   - texts 为若干普通 Deflate 文本条目。
+func makeDecompileJar(t *testing.T, path, blobName string, blobMethod uint16, blobSize int, texts map[string]string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, f.Close()) }()
+	zw := zip.NewWriter(f)
+	if blobSize > 0 {
+		w, err := zw.CreateHeader(&zip.FileHeader{Name: blobName, Method: blobMethod})
+		require.NoError(t, err)
+		_, err = io.CopyN(w, zeroReader{}, int64(blobSize))
+		require.NoError(t, err)
+	}
+	for name, content := range texts {
+		w, err := zw.Create(name)
+		require.NoError(t, err)
+		_, err = w.Write([]byte(content))
+		require.NoError(t, err)
+	}
+	require.NoError(t, zw.Close())
+}
+
+// TestPrepareDecompileTarget_JarEntryUsesEntrySizeNotJarSize 复现 FR-075 缺陷：
+// 宿主 jar 远超上限（如 server.jar 43MB），但其中单个 class 仅几字节，
+// 单条目反编译不得被整 jar 体积拒绝——否则服务端核心 jar 内 class 永远无法单条目反编译。
+func TestPrepareDecompileTarget_JarEntryUsesEntrySizeNotJarSize(t *testing.T) {
+	srv := &Server{}
+	work := t.TempDir()
+	jar := filepath.Join(work, "server.jar")
+	over := maxDecompileInputBytes + 1<<20 // 17MB 填充（Store 不压缩），令 jar 磁盘体积超整体上限
+	makeDecompileJar(t, jar, "BigBlob.bin", zip.Store, over, map[string]string{
+		"io/papermc/paperclip/Main.class": "FAKE-MAIN-CLASS",
+	})
+	info, err := os.Stat(jar)
+	require.NoError(t, err)
+	require.Greater(t, info.Size(), int64(maxDecompileInputBytes), "前置：宿主 jar 须超整体上限，才测得到点")
+
+	target, jarEntry, cleanup, perr := srv.prepareDecompileTarget(jar, "server.jar", "io/papermc/paperclip/Main.class")
+	if cleanup != nil {
+		defer cleanup()
+	}
+	require.NoError(t, perr, "大 jar 内小 class 单条目反编译不应被整 jar 体积拒绝")
+	require.Empty(t, jarEntry)
+	b, err := os.ReadFile(target)
+	require.NoError(t, err)
+	require.Equal(t, "FAKE-MAIN-CLASS", string(b))
+}
+
+// TestPrepareDecompileTarget_OversizeEntryRejected 校验 zip bomb 防护：
+// jar 磁盘体积很小（压缩后），但单条目解压后超上限 → 仍须拒绝，不得静默截断。
+func TestPrepareDecompileTarget_OversizeEntryRejected(t *testing.T) {
+	srv := &Server{}
+	work := t.TempDir()
+	jar := filepath.Join(work, "bomb.jar")
+	makeDecompileJar(t, jar, "Huge.class", zip.Deflate, maxDecompileInputBytes+1<<20, nil) // 17MB 全零，deflate 后极小
+	info, err := os.Stat(jar)
+	require.NoError(t, err)
+	require.Less(t, info.Size(), int64(maxDecompileInputBytes), "前置：jar 磁盘体积须小于上限，才能证明是条目守卫在拒绝")
+
+	_, _, cleanup, perr := srv.prepareDecompileTarget(jar, "bomb.jar", "Huge.class")
+	if cleanup != nil {
+		defer cleanup()
+	}
+	require.Error(t, perr, "超大单 class 条目须被拒绝，不得静默截断")
+	require.Contains(t, perr.Error(), "过大")
+}
+
+// TestPrepareDecompileTarget_WholeJarStillLimited 校验整 jar 反编译（entry 空）仍按整体大小判限。
+func TestPrepareDecompileTarget_WholeJarStillLimited(t *testing.T) {
+	srv := &Server{}
+	work := t.TempDir()
+	jar := filepath.Join(work, "big.jar")
+	over := maxDecompileInputBytes + 1<<20
+	makeDecompileJar(t, jar, "BigBlob.bin", zip.Store, over, map[string]string{"a.class": "x"})
+
+	_, _, cleanup, perr := srv.prepareDecompileTarget(jar, "big.jar", "")
+	if cleanup != nil {
+		defer cleanup()
+	}
+	require.Error(t, perr, "整 jar 超整体上限须被拒绝")
+	require.Contains(t, perr.Error(), "过大")
+}
 
 func TestCheckFileSize(t *testing.T) {
 	dir := t.TempDir()
