@@ -182,6 +182,24 @@ describe('InstancesPage（mock 假后端）', () => {
     await waitFor(() => expect(restored.scrollTop).toBe(176))
   })
 
+  it('路由切换时浏览器把滚动容器归零也不会清掉待恢复位置', async () => {
+    const route = '/instances?view=list'
+    const first = renderWithProviders(<InstancesPage />, { route })
+    const surface = await screen.findByTestId('instances-table-virtual')
+    surface.scrollTop = 176
+    fireEvent.scroll(surface)
+
+    // 真实浏览器在离开列表路由时可能把内层滚动容器先归零并触发 scroll；
+    // 该归零不是用户主动滚回顶部，不能删除已经保存的返回位置。
+    surface.scrollTop = 0
+    fireEvent.scroll(surface)
+    first.unmount()
+
+    renderWithProviders(<InstancesPage />, { route })
+    const restored = await screen.findByTestId('instances-table-virtual')
+    await waitFor(() => expect(restored.scrollTop).toBe(176))
+  })
+
   it('分组列表视图使用单个虚拟表，不为每组重复表头', async () => {
     renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=node' })
 

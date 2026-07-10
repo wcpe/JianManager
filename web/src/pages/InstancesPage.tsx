@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { ArrowUpDown, ChevronRight, ChevronDown, Zap, Globe, Plus, FolderTree, Search, SlidersHorizontal } from 'lucide-react'
@@ -1085,26 +1085,62 @@ function useStoredVirtualScroll(
   onScroll: () => void,
   storageKey: string,
 ) {
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
+  const clearZeroTimerRef = useRef<number | null>(null)
+
+  const cancelClearZeroTimer = useCallback(() => {
+    if (clearZeroTimerRef.current == null) return
+    window.clearTimeout(clearZeroTimerRef.current)
+    clearZeroTimerRef.current = null
+  }, [])
+
+  useLayoutEffect(() => {
     const saved = Number(sessionStorage.getItem(storageKey) ?? 0)
     if (!Number.isFinite(saved) || saved <= 0) return
 
-    const frame = window.requestAnimationFrame(() => {
+    let cancelled = false
+    let attempts = 0
+    let timer: number | null = null
+    const restore = () => {
+      if (cancelled) return
+      const el = containerRef.current
+      attempts += 1
+      if (!el) {
+        if (attempts < 20) timer = window.setTimeout(restore, 50)
+        return
+      }
       el.scrollTop = saved
       onScroll()
-    })
-    return () => window.cancelAnimationFrame(frame)
+      if (el.scrollTop < saved && attempts < 20) timer = window.setTimeout(restore, 50)
+    }
+
+    timer = window.setTimeout(restore, 0)
+    return () => {
+      cancelled = true
+      if (timer != null) window.clearTimeout(timer)
+    }
   }, [containerRef, onScroll, storageKey])
+
+  useEffect(() => cancelClearZeroTimer, [cancelClearZeroTimer])
 
   return useCallback(() => {
     onScroll()
     const el = containerRef.current
     if (!el) return
-    if (el.scrollTop <= 0) sessionStorage.removeItem(storageKey)
-    else sessionStorage.setItem(storageKey, String(Math.round(el.scrollTop)))
-  }, [containerRef, onScroll, storageKey])
+
+    const scrollTop = Math.round(el.scrollTop)
+    if (scrollTop <= 0) {
+      cancelClearZeroTimer()
+      clearZeroTimerRef.current = window.setTimeout(() => {
+        const currentKey = `${SCROLL_KEY_PREFIX}${window.location.pathname}${window.location.search}`
+        if (currentKey === storageKey) sessionStorage.removeItem(storageKey)
+        clearZeroTimerRef.current = null
+      }, 150)
+      return
+    }
+
+    cancelClearZeroTimer()
+    sessionStorage.setItem(storageKey, String(scrollTop))
+  }, [cancelClearZeroTimer, containerRef, onScroll, storageKey])
 }
 
 /**
