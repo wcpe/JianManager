@@ -638,6 +638,9 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 }
 
 // Delete 删除实例（需先停止）。
+// 先经 gRPC 让 Worker 清理实例数据（工作目录 + 派生索引 + 注册表条目），成功后再删记录，
+// 兑现删除确认文案「所有数据将被删除」；否则系统分配的 hash 后缀目录（ADR-007）不复用，
+// 反复建删会无限堆积孤儿目录。清理失败则中止删除（记录保留可重试），不静默孤儿化。
 func (s *InstanceService) Delete(id uint) error {
 	instance, err := s.GetByID(id)
 	if err != nil {
@@ -646,6 +649,10 @@ func (s *InstanceService) Delete(id uint) error {
 	// 只允许删除已停止或已崩溃的实例
 	if instance.Status != model.InstanceStatusStopped && instance.Status != model.InstanceStatusCrashed {
 		return ErrInstanceRunning
+	}
+
+	if err := s.removeWorkerData(instance); err != nil {
+		return fmt.Errorf("清理实例数据失败: %w", err)
 	}
 
 	return s.db.Transaction(func(tx *gorm.DB) error {
@@ -657,6 +664,44 @@ func (s *InstanceService) Delete(id uint) error {
 		// 删除实例
 		return tx.Delete(&model.Instance{}, id).Error
 	})
+}
+
+// removeWorkerData 委托 Worker 删除实例的工作目录与派生资产（RemoveInstance RPC）。
+// 节点记录缺失或未连接（离线/已失联）时跳过并告警——否则失联节点上的实例记录永远无法删除，
+// 残留目录留待节点侧处理；节点在线时清理必须成功，失败即返回错误中止删除。
+func (s *InstanceService) removeWorkerData(instance *model.Instance) error {
+	var node model.Node
+	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			slog.Warn("删除实例：节点记录不存在，跳过 Worker 数据清理", "instanceId", instance.UUID)
+			return nil
+		}
+		return fmt.Errorf("查找节点失败: %w", err)
+	}
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		slog.Warn("删除实例：节点未连接，跳过 Worker 数据清理（目录残留在节点上）",
+			"instanceId", instance.UUID, "nodeUUID", node.UUID, "workDir", instance.WorkDir)
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	resp, err := client.Worker.RemoveInstance(ctx, &workerpb.RemoveInstanceRequest{
+		InstanceUuid: instance.UUID,
+		WorkDir:      instance.WorkDir,
+	})
+	if err != nil {
+		return fmt.Errorf("gRPC RemoveInstance 失败: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("Worker 清理失败: %s", resp.Error)
+	}
+	if resp.WorkDirSkipped {
+		// 托管区外的历史手填目录：Worker 拒绝越界删除但放行记录删除，仅告警留痕。
+		slog.Warn("删除实例：Worker 跳过工作目录清理", "instanceId", instance.UUID, "reason", resp.SkipReason)
+	}
+	return nil
 }
 
 // Start 启动实例（委托给 Worker Node）。

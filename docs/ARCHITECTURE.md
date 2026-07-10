@@ -212,6 +212,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
   - **SpongeForge 安装**（FR-046）：`InstallForgeServer` 仅服务 `coreType=spongeforge`，Worker 在实例工作目录下载 Forge installer 到 `.jianmanager/forge-installer.jar`，使用实例绑定 JDK 执行 `--installServer`，再把 SpongeForge universal jar 写入 `mods/SpongeForge.jar`；CP 仍先创建 `type=minecraft_java` / `role=backend` 实例，并以 `LaunchSpec.CoreJar=forge-<mc>-<forge>-server.jar` 结构化启动。该 RPC 不暴露任意路径写入能力，所有产物限制在实例工作目录内
   - `BrowseDir`（FR-178）：只读列出节点某绝对路径下的子目录（空路径返回盘符/根），经 CP 端点 `GET /nodes/:id/browse`（仅平台管理员、防穿越）供前端 JDK 路径登记目录选择器逐级浏览
 - 复制 (V2)：CloneWorkDir（本机复制源工作目录到目标，排除运行态文件）
+- 删除清理：RemoveInstance（CP 删除实例时移除 Worker 注册表条目、删除工作目录与派生搜索索引）。运行态守卫拒删在跑实例；`RemoveAll` 仅限托管区（数据根 `var/servers`）内，托管区外（历史手填绝对路径）跳过删除经 `work_dir_skipped` 回报、不阻断实例删除；CP 侧节点未连接时跳过清理仅删记录（失联节点实例仍可删）
   - 搭建子服/代理由 Control Plane 编排：分配端口/目录 → CreateInstance → DownloadCore 或 InstallForgeServer → WriteConfig，不另设通用 worker 端 Provision RPC
 - 备份 (V2)：CreateBackup, RestoreBackup, TestStorageBackend（FR-056/057/152）
   - Worker 把工作目录打 tar.gz 落数据根 `var/backups/<instanceUUID>/`，据 base_manifest 做增量差异，始终回传完整文件清单供 CP 维护链/基准

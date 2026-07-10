@@ -108,6 +108,8 @@ service WorkerService {
   rpc DeployServerProbe(DeployServerProbeRequest) returns (DeployServerProbeResponse);
   // CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
   rpc CloneWorkDir(CloneWorkDirRequest) returns (CloneWorkDirResponse);
+  // RemoveInstance 移除实例注册并删除其工作目录与派生索引（CP 删除实例时真清理，兑现「所有数据将被删除」）。
+  rpc RemoveInstance(RemoveInstanceRequest) returns (RemoveInstanceResponse);
 
   // === Docker 镜像管理（FR-078，见 ADR-019）===
 
@@ -958,6 +960,25 @@ message CloneWorkDirResponse {
   int64 copied_files = 3;
   int64 copied_bytes = 4;
   repeated string skipped = 5; // 被排除跳过的顶层项/目录（回报用）
+}
+
+// === 实例删除清理 ===
+
+message RemoveInstanceRequest {
+  string instance_uuid = 1;
+  // work_dir 是 CP 记录的工作目录（数据根相对路径，ADR-010）。
+  // Worker 注册表命中时以注册的绝对路径为准；未命中（如 Worker 重启后未重推）时据此解析兜底。
+  string work_dir = 2;
+}
+
+message RemoveInstanceResponse {
+  bool success = 1;
+  string error = 2;
+  // work_dir_skipped 表示目录未被删除但不阻断实例删除：
+  // 目录在托管区（数据根 var/servers）之外（历史手填绝对路径）或无数据根时，
+  // Worker 拒绝越界 RemoveAll，仅移除注册，skip_reason 说明原因。
+  bool work_dir_skipped = 3;
+  string skip_reason = 4;
 }
 
 // === Docker 镜像管理（FR-078，见 ADR-019） ===

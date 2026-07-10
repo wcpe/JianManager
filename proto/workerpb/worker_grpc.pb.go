@@ -62,6 +62,7 @@ const (
 	WorkerService_BrowseDir_FullMethodName            = "/worker.WorkerService/BrowseDir"
 	WorkerService_DeployServerProbe_FullMethodName    = "/worker.WorkerService/DeployServerProbe"
 	WorkerService_CloneWorkDir_FullMethodName         = "/worker.WorkerService/CloneWorkDir"
+	WorkerService_RemoveInstance_FullMethodName       = "/worker.WorkerService/RemoveInstance"
 	WorkerService_ListImages_FullMethodName           = "/worker.WorkerService/ListImages"
 	WorkerService_PullImage_FullMethodName            = "/worker.WorkerService/PullImage"
 	WorkerService_RemoveImage_FullMethodName          = "/worker.WorkerService/RemoveImage"
@@ -179,6 +180,8 @@ type WorkerServiceClient interface {
 	DeployServerProbe(ctx context.Context, in *DeployServerProbeRequest, opts ...grpc.CallOption) (*DeployServerProbeResponse, error)
 	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
 	CloneWorkDir(ctx context.Context, in *CloneWorkDirRequest, opts ...grpc.CallOption) (*CloneWorkDirResponse, error)
+	// RemoveInstance 移除实例注册并删除其工作目录与派生索引（CP 删除实例时真清理，兑现「所有数据将被删除」）。
+	RemoveInstance(ctx context.Context, in *RemoveInstanceRequest, opts ...grpc.CallOption) (*RemoveInstanceResponse, error)
 	// ListImages 列出 Worker 本机 Docker 镜像。
 	ListImages(ctx context.Context, in *ListImagesRequest, opts ...grpc.CallOption) (*ListImagesResponse, error)
 	// PullImage 从 registry 拉取镜像到 Worker 本机（建实例选镜像前置）。
@@ -684,6 +687,16 @@ func (c *workerServiceClient) CloneWorkDir(ctx context.Context, in *CloneWorkDir
 	return out, nil
 }
 
+func (c *workerServiceClient) RemoveInstance(ctx context.Context, in *RemoveInstanceRequest, opts ...grpc.CallOption) (*RemoveInstanceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveInstanceResponse)
+	err := c.cc.Invoke(ctx, WorkerService_RemoveInstance_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) ListImages(ctx context.Context, in *ListImagesRequest, opts ...grpc.CallOption) (*ListImagesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListImagesResponse)
@@ -988,6 +1001,8 @@ type WorkerServiceServer interface {
 	DeployServerProbe(context.Context, *DeployServerProbeRequest) (*DeployServerProbeResponse, error)
 	// CloneWorkDir 复制源实例工作目录到目标实例工作目录，排除运行态文件（FR-036 一键复制）。
 	CloneWorkDir(context.Context, *CloneWorkDirRequest) (*CloneWorkDirResponse, error)
+	// RemoveInstance 移除实例注册并删除其工作目录与派生索引（CP 删除实例时真清理，兑现「所有数据将被删除」）。
+	RemoveInstance(context.Context, *RemoveInstanceRequest) (*RemoveInstanceResponse, error)
 	// ListImages 列出 Worker 本机 Docker 镜像。
 	ListImages(context.Context, *ListImagesRequest) (*ListImagesResponse, error)
 	// PullImage 从 registry 拉取镜像到 Worker 本机（建实例选镜像前置）。
@@ -1170,6 +1185,9 @@ func (UnimplementedWorkerServiceServer) DeployServerProbe(context.Context, *Depl
 }
 func (UnimplementedWorkerServiceServer) CloneWorkDir(context.Context, *CloneWorkDirRequest) (*CloneWorkDirResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CloneWorkDir not implemented")
+}
+func (UnimplementedWorkerServiceServer) RemoveInstance(context.Context, *RemoveInstanceRequest) (*RemoveInstanceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveInstance not implemented")
 }
 func (UnimplementedWorkerServiceServer) ListImages(context.Context, *ListImagesRequest) (*ListImagesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListImages not implemented")
@@ -1998,6 +2016,24 @@ func _WorkerService_CloneWorkDir_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_RemoveInstance_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveInstanceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).RemoveInstance(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_RemoveInstance_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).RemoveInstance(ctx, req.(*RemoveInstanceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_ListImages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListImagesRequest)
 	if err := dec(in); err != nil {
@@ -2492,6 +2528,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CloneWorkDir",
 			Handler:    _WorkerService_CloneWorkDir_Handler,
+		},
+		{
+			MethodName: "RemoveInstance",
+			Handler:    _WorkerService_RemoveInstance_Handler,
 		},
 		{
 			MethodName: "ListImages",

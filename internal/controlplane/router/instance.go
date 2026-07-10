@@ -368,7 +368,9 @@ func (h *InstanceHandler) Delete(c *gin.Context) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "INSTANCE_RUNNING", "message": "实例正在运行，需先停止"})
 			return
 		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "删除失败"})
+		// 透传失败原因（如 Worker 侧「实例进程仍在运行」「删除工作目录失败」），
+		// 让用户知道删除为何中止、可否重试，而非笼统「删除失败」。
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": err.Error()})
 		return
 	}
 
