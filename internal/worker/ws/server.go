@@ -14,6 +14,18 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
+// WS 保活心跳参数（FR-140 加固）：空闲终端（如 Paper 长时间无输出）经反代/LB 时，
+// 会被中间层按空闲超时（常见 60s）断开。定时 ping 让连接保持有流量、pong 到达即续读超时，
+// 据此既保活又能检测真正的死连。pingPeriod 须显著小于 pongWait 与常见中间层空闲超时。
+const (
+	// wsPongWait 读超时：超过此时长未收到对端任何帧（含 pong）判定连接已死。
+	wsPongWait = 70 * time.Second
+	// wsPingPeriod 主动 ping 间隔。
+	wsPingPeriod = 30 * time.Second
+	// wsWriteWait 单次控制帧（ping）写超时。
+	wsWriteWait = 10 * time.Second
+)
+
 // StdinHandler stdin 输入处理函数。
 type StdinHandler func(instanceID, data string)
 
@@ -48,6 +60,11 @@ type TerminalServer struct {
 	buffers   map[string]*daemon.RingBuffer // per-instance 环形缓冲区
 	onStdin   StdinHandler
 	onResize  ResizeHandler
+
+	// pingPeriod / pongWait 控制保活心跳（FR-140），默认取包级常量；
+	// pingPeriod<=0 禁用主动 ping、pongWait<=0 不设读超时（仅测试用于模拟「无心跳」链路）。
+	pingPeriod time.Duration
+	pongWait   time.Duration
 }
 
 // NewTerminalServer 创建终端服务器。
@@ -58,8 +75,10 @@ func NewTerminalServer(jwtSecret string) *TerminalServer {
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool { return true },
 		},
-		sessions: make(map[string][]*TerminalSession),
-		buffers:  make(map[string]*daemon.RingBuffer),
+		sessions:   make(map[string][]*TerminalSession),
+		buffers:    make(map[string]*daemon.RingBuffer),
+		pingPeriod: wsPingPeriod,
+		pongWait:   wsPongWait,
 	}
 }
 
@@ -171,13 +190,32 @@ func (s *TerminalServer) handleSession(session *TerminalSession) {
 		slog.Info("终端已断开", "instanceId", session.InstanceID)
 	}()
 
+	conn := session.Conn
+	// 保活心跳（FR-140）：pong 到达即续读超时，配合定时 ping 让空闲连接不被中间层判超时断开。
+	if s.pongWait > 0 {
+		_ = conn.SetReadDeadline(time.Now().Add(s.pongWait))
+		conn.SetPongHandler(func(string) error {
+			return conn.SetReadDeadline(time.Now().Add(s.pongWait))
+		})
+	}
+	if s.pingPeriod > 0 {
+		stop := make(chan struct{})
+		defer close(stop)
+		// WriteControl 可与其它写并发（gorilla 保证），无需与 Broadcast 的写互斥。
+		go s.pingLoop(conn, stop)
+	}
+
 	for {
-		_, msgBytes, err := session.Conn.ReadMessage()
+		_, msgBytes, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
 				slog.Warn("终端连接异常关闭", "instanceId", session.InstanceID, "error", err)
 			}
 			return
+		}
+		// 收到任意数据帧也视为对端存活，续读超时。
+		if s.pongWait > 0 {
+			_ = conn.SetReadDeadline(time.Now().Add(s.pongWait))
 		}
 
 		var msg TerminalMessage
@@ -193,6 +231,22 @@ func (s *TerminalServer) handleSession(session *TerminalSession) {
 		case "resize":
 			if s.onResize != nil {
 				s.onResize(session.InstanceID, msg.Cols, msg.Rows)
+			}
+		}
+	}
+}
+
+// pingLoop 定时向连接发送 WS ping 帧保活（FR-140），直到 stop 关闭或写失败。
+func (s *TerminalServer) pingLoop(conn *websocket.Conn, stop <-chan struct{}) {
+	ticker := time.NewTicker(s.pingPeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(wsWriteWait)); err != nil {
+				return
 			}
 		}
 	}
