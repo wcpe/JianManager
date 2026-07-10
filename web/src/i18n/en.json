@@ -1160,6 +1160,7 @@
     "cpuLimit": "CPU Limit (cores)",
     "memLimit": "Memory Limit (MiB)",
     "diskLimit": "Disk Limit (MiB)",
+    "unlimited": "Unlimited",
     "resourceLimit": "Resource Limits",
     "resourceLimitTitle": "Resource Limits for {{name}}",
     "resourceLimitHint": "Leave empty for unlimited; injected into the container cgroup on next start",

@@ -1116,6 +1116,7 @@
     "cpuLimit": "CPU 上限（核）",
     "memLimit": "内存上限（MiB）",
     "diskLimit": "磁盘上限（MiB）",
+    "unlimited": "不限制",
     "resourceLimit": "资源限额",
     "resourceLimitTitle": "{{name}} 的资源限额",
     "resourceLimitHint": "留空/0 表示不限制；CPU/内存下次启动注入容器 cgroup",
