@@ -43,6 +43,7 @@ func TestDeployServerProbe(t *testing.T) {
 	libs := makeProbeLibrariesZip(t, map[string]string{
 		"libraries/io/izzel/taboolib/common-env/6.3.0/common-env-6.3.0.jar":      "jar-bytes",
 		"libraries/io/izzel/taboolib/common-env/6.3.0/common-env-6.3.0.jar.sha1": "sha1-bytes",
+		"assets/4c/4cf1c21c1b0e91556f12f846accc3f69826fb682":                     "mapping-bytes",
 	})
 
 	t.Run("jar 与 config 同时落地", func(t *testing.T) {
@@ -80,6 +81,10 @@ func TestDeployServerProbe(t *testing.T) {
 		gotSha1, e2 := os.ReadFile(filepath.Join(workDir, "libraries", "io", "izzel", "taboolib", "common-env", "6.3.0", "common-env-6.3.0.jar.sha1"))
 		require.NoError(t, e2)
 		assert.Equal(t, "sha1-bytes", string(gotSha1))
+
+		gotAsset, e3 := os.ReadFile(filepath.Join(workDir, "assets", "4c", "4cf1c21c1b0e91556f12f846accc3f69826fb682"))
+		require.NoError(t, e3)
+		assert.Equal(t, "mapping-bytes", string(gotAsset))
 	})
 
 	t.Run("依赖缓存拒绝恶意路径", func(t *testing.T) {

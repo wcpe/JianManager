@@ -29,8 +29,8 @@ func ServerProbeJar() []byte {
 	return b
 }
 
-// ServerProbeLibrariesZip 返回内嵌的 ServerProbe 运行库缓存包（FR-114）。
-// zip 内根路径为 libraries/，Worker 解压到实例工作目录根，避免探针首启联网拉依赖。
+// ServerProbeLibrariesZip 返回内嵌的 ServerProbe 运行库与 assets 缓存包（FR-114）。
+// zip 内根路径为 libraries/ 与 assets/，Worker 解压到实例工作目录根，避免探针首启联网拉依赖。
 func ServerProbeLibrariesZip() []byte {
 	b, err := probeFS.ReadFile("probe/probe-libraries.zip")
 	if err != nil {

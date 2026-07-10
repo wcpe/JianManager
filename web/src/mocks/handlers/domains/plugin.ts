@@ -514,8 +514,8 @@ export const handlers = [
       embeddedFingerprint: 'abc123',
       embeddedAvailable: true,
       librariesAvailable: true,
-      librariesBytes: 5_692_115,
-      librariesShortSha: '20894081',
+      librariesBytes: 6_604_478,
+      librariesShortSha: '9ca6579c',
       lastPushedAt: '2026-06-22T10:00:00Z',
     })
   }),
@@ -533,8 +533,8 @@ export const handlers = [
       embeddedVersion: '0.1.0',
       embeddedFingerprint: 'abc123',
       librariesAvailable: true,
-      librariesBytes: 5_692_115,
-      librariesShortSha: '20894081',
+      librariesBytes: 6_604_478,
+      librariesShortSha: '9ca6579c',
       message: body.restart ? '已推送并重启' : '已推送，下次重启生效',
     })
   }),
