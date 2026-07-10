@@ -7,3 +7,9 @@ func TestDetermineAction_PluginBatchDeploy(t *testing.T) {
 		t.Fatalf("action = %q", got)
 	}
 }
+
+func TestDetermineAction_InstanceBatch(t *testing.T) {
+	if got := determineAction("POST", "/api/v1/instances/batch"); got != "instance.batch" {
+		t.Fatalf("action = %q", got)
+	}
+}
