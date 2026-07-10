@@ -88,6 +88,10 @@ func (h *BackupHandler) Delete(c *gin.Context) {
 		return
 	}
 	if err := h.backupSvc.Delete(id); err != nil {
+		if errors.Is(err, service.ErrBackupHasIncrementalChildren) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
 		return
 	}

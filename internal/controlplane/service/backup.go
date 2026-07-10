@@ -25,6 +25,8 @@ var (
 	ErrBackupNotFound = errors.New("备份不存在")
 	// ErrNoFullBaseForIncremental 增量备份缺少可作基准的已完成父备份。
 	ErrNoFullBaseForIncremental = errors.New("没有可用于增量基准的已完成备份")
+	// ErrBackupHasIncrementalChildren 备份被增量子备份依赖，删除会割裂恢复链。
+	ErrBackupHasIncrementalChildren = errors.New("备份被增量备份依赖")
 	// ErrInstanceNotStopped 实例进程可能存活，拒绝恢复备份。
 	ErrInstanceNotStopped = errors.New("实例未停止，请先停止实例再恢复备份")
 )
@@ -335,7 +337,7 @@ func (s *BackupService) Delete(backupID uint) error {
 		return err
 	}
 	if children > 0 {
-		return fmt.Errorf("该备份被 %d 个增量备份依赖，请先删除其子备份", children)
+		return fmt.Errorf("%w：该备份被 %d 个增量备份依赖，请先删除其子备份", ErrBackupHasIncrementalChildren, children)
 	}
 	return s.db.Delete(&model.Backup{}, backupID).Error
 }

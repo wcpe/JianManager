@@ -26,13 +26,13 @@ func TestBackup_List_IncludesChecksumFields(t *testing.T) {
 	}
 	require.NoError(t, db.Create(instance).Error)
 	backup := &model.Backup{
-		InstanceID:    instance.ID,
-		Name:          "full-checksum",
-		FilePath:      "var/backups/full.tar.gz",
-		FileSizeMB:    12.5,
-		Status:        model.BackupStatusCompleted,
-		Checksum:      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		ChecksumAlgo:  "sha256",
+		InstanceID:   instance.ID,
+		Name:         "full-checksum",
+		FilePath:     "var/backups/full.tar.gz",
+		FileSizeMB:   12.5,
+		Status:       model.BackupStatusCompleted,
+		Checksum:     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		ChecksumAlgo: "sha256",
 	}
 	require.NoError(t, db.Create(backup).Error)
 
@@ -77,4 +77,45 @@ func TestBackup_Restore_RejectedWhenInstanceRunning(t *testing.T) {
 	body := parseJSON(t, w)
 	require.Equal(t, "INSTANCE_NOT_STOPPED", body["error"])
 	require.Contains(t, body["message"], "请先停止实例")
+}
+
+func TestBackup_Delete_ReferencedParentReturnsBusinessError(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	instance := &model.Instance{
+		UUID:         "inst-backup-delete-chain",
+		NodeID:       node.ID,
+		Name:         "survival",
+		Type:         model.InstanceTypeMinecraftJava,
+		Role:         model.InstanceRoleBackend,
+		ProcessType:  model.ProcessTypeDirect,
+		Status:       model.InstanceStatusStopped,
+		StartCommand: "java -jar server.jar",
+	}
+	require.NoError(t, db.Create(instance).Error)
+	full := &model.Backup{
+		InstanceID: instance.ID,
+		Name:       "full-parent",
+		Mode:       model.BackupModeFull,
+		Status:     model.BackupStatusCompleted,
+		FilePath:   "var/backups/full.tar.gz",
+	}
+	require.NoError(t, db.Create(full).Error)
+	inc := &model.Backup{
+		InstanceID: instance.ID,
+		Name:       "inc-child",
+		Mode:       model.BackupModeIncremental,
+		ParentID:   &full.ID,
+		Status:     model.BackupStatusCompleted,
+		FilePath:   "var/backups/inc.tar.gz",
+	}
+	require.NoError(t, db.Create(inc).Error)
+
+	w := makeRequest(r, http.MethodDelete, "/api/v1/backups/"+itoa(full.ID), nil, token)
+	require.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	body := parseJSON(t, w)
+	require.Equal(t, "BUSINESS_ERROR", body["error"])
+	require.Contains(t, body["message"], "增量备份依赖")
 }
