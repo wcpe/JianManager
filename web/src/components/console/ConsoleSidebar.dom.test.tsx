@@ -56,6 +56,34 @@ describe('ConsoleSidebar 高密度控制台 IA（FR-268）', () => {
     expect(within(platformGroup).getByRole('link', { name: '任务中心' })).toBeInTheDocument()
   })
 
+  it('FR-112 平台级入口收进平台管理，URL 保持不变', () => {
+    renderWithProviders(<ConsoleSidebar />)
+    const platformHeader = screen.getByRole('button', { name: '平台管理' })
+    const platformGroup = platformHeader.parentElement as HTMLElement
+
+    expect(within(platformGroup).getByRole('link', { name: '运行时资产' })).toHaveAttribute('href', '/runtime-assets')
+    expect(within(platformGroup).getByRole('link', { name: '客户端分发' })).toHaveAttribute('href', '/client-channels')
+    expect(within(platformGroup).getByRole('link', { name: '存储' })).toHaveAttribute('href', '/storage')
+    expect(within(platformGroup).getByRole('link', { name: '用户' })).toHaveAttribute('href', '/users')
+    expect(within(platformGroup).getByRole('link', { name: '用户组' })).toHaveAttribute('href', '/groups')
+    expect(within(platformGroup).getByRole('link', { name: '审计日志' })).toHaveAttribute('href', '/audit')
+    expect(within(platformGroup).getByRole('link', { name: '设置' })).toHaveAttribute('href', '/settings')
+  })
+
+  it('FR-112 数据库和系统更新仅平台管理员可见', () => {
+    renderWithProviders(<ConsoleSidebar />)
+    expect(screen.queryByRole('link', { name: '数据库' })).toBeNull()
+    expect(screen.queryByRole('link', { name: '系统更新' })).toBeNull()
+
+    useAuthStore.setState({ role: 10 })
+    renderWithProviders(<ConsoleSidebar />)
+    const platformHeader = screen.getAllByRole('button', { name: '平台管理' }).at(-1) as HTMLElement
+    const platformGroup = platformHeader.parentElement as HTMLElement
+
+    expect(within(platformGroup).getByRole('link', { name: '数据库' })).toHaveAttribute('href', '/database')
+    expect(within(platformGroup).getByRole('link', { name: '系统更新' })).toHaveAttribute('href', '/system-update')
+  })
+
   it('观测域不再有「告警」项（FR-216 收口）', () => {
     renderWithProviders(<ConsoleSidebar />)
     const obsHeader = screen.getByRole('button', { name: '观测' })

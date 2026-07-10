@@ -28,7 +28,7 @@ describe('MetricsSegment（mock 假后端）', () => {
     expect(await screen.findByText('ServerProbe 探针更新')).toBeInTheDocument()
     expect(screen.getByText('探针已连接')).toBeInTheDocument()
     expect(screen.getByText(/内嵌版本: 0\.1\.0/)).toBeInTheDocument()
-    expect(screen.getByText(/离线依赖缓存: 已内嵌 5\.4 MiB · 20894081/)).toBeInTheDocument()
+    expect(screen.getByText(/离线依赖缓存: 已内嵌 6\.3 MiB · 9ca6579c/)).toBeInTheDocument()
   })
 
   it('探针未连接时显示可操作安装指引', async () => {
