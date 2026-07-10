@@ -54,7 +54,7 @@ export default function ConfigExplorer({ instanceId }: ConfigExplorerProps) {
   }, [])
 
   const config: ConfigCapabilities = {
-    renderEditor: ({ instanceId: iid, path, name, onClose, onAfterSave, onOpenVersions, onDirtyChange }) => (
+    renderEditor: ({ instanceId: iid, path, name, onClose, onAfterSave, onOpenVersions, onDirtyChange, gotoLine, gotoNonce }) => (
       <ConfigFileEditor
         instanceId={iid}
         path={path}
@@ -63,6 +63,8 @@ export default function ConfigExplorer({ instanceId }: ConfigExplorerProps) {
         onAfterSave={onAfterSave}
         onOpenVersions={onOpenVersions}
         onDirtyChange={onDirtyChange}
+        gotoLine={gotoLine}
+        gotoNonce={gotoNonce}
       />
     ),
     renderVersionDrawer: ({ instanceId: iid, filePath, open, onOpenChange, onRolledBack }) => (

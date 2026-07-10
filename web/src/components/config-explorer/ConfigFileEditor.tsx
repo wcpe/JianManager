@@ -42,6 +42,10 @@ interface ConfigFileEditorProps {
   onOpenVersions: () => void
   /** 内部 dirty 变化时上报，供资源管理器切换/关闭守卫判断（BUG-018 #36）。 */
   onDirtyChange: (dirty: boolean) => void
+  /** 搜索命中跳转目标行（1 起，FR-074）；未定位时 undefined。 */
+  gotoLine?: number
+  /** 定位 nonce：变化即重触发定位（同一行再次点击也能重跳，FR-074）。 */
+  gotoNonce?: number
 }
 
 type EditMode = 'text' | 'form'
@@ -87,6 +91,8 @@ export default function ConfigFileEditor({
   onAfterSave,
   onOpenVersions,
   onDirtyChange,
+  gotoLine,
+  gotoNonce,
 }: ConfigFileEditorProps) {
   const { t } = useTranslation()
   const [mode, setMode] = useState<EditMode>('text')
@@ -154,6 +160,13 @@ export default function ConfigFileEditor({
   const dirty = mode === 'text' ? textDirty : formDirty
   const formInvalid = mode === 'form' && Object.keys(formErrors).length > 0
   const saving = writeMut.isPending || writeFieldsMut.isPending
+
+  // 搜索命中定位（FR-074）：行定位只在文本模式有意义，命中到来时强制切回文本模式
+  //（本组件跨文件复用同一实例，上一个文件可能停留在表单模式）。
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 命中跳转到来时切模式，属合法同步
+    if (gotoLine && gotoLine > 0) setMode('text')
+  }, [gotoLine, gotoNonce])
 
   // 把内部 dirty 上报给资源管理器，供切换/关闭守卫判断（BUG-018 #36）；卸载时复位为干净。
   useEffect(() => {
@@ -244,7 +257,14 @@ export default function ConfigFileEditor({
           <p className="p-4 text-sm text-destructive">{(readQ.error as Error).message}</p>
         ) : mode === 'text' ? (
           <div className="min-h-0 flex-1">
-            <CodeEditor value={draft} filename={name} onChange={setDraft} onSave={handleSave} />
+            <CodeEditor
+              value={draft}
+              filename={name}
+              gotoLine={gotoLine}
+              gotoNonce={gotoNonce}
+              onChange={setDraft}
+              onSave={handleSave}
+            />
           </div>
         ) : (
           <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">

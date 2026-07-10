@@ -72,6 +72,10 @@ export interface ConfigCapabilities {
     onOpenVersions: () => void
     /** 编辑器内部 dirty 变化时上报，供资源管理器切换/关闭守卫判断（BUG-018 #36）。 */
     onDirtyChange: (dirty: boolean) => void
+    /** 搜索命中跳转目标行（1 起，FR-074）；未定位时 undefined。 */
+    gotoLine?: number
+    /** 定位 nonce：变化即重触发定位（同一行再次点击也能重跳，FR-074）。 */
+    gotoNonce?: number
   }) => ReactNode
   /** 左栏目录树上方的额外内容（收藏栏 + 已发现配置面板）。 */
   sidebarExtra?: ReactNode
@@ -418,13 +422,20 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
   )
 
   // 搜索命中点击：打开文件并定位到行（FR-074）。filename 模式 line=0 即仅打开不定位。
-  // 配置模式下编辑器自行读取内容（不接 gotoLine，仅打开文件）。
+  // 配置模式下编辑器自行读取内容，gotoLine/gotoNonce 经 renderEditor 透传给配置编辑器定位。
   const openSearchHitNow = useCallback(
     async (path: string, line: number) => {
       const name = path.split('/').pop() || path
       setBlockedPreview(null)
       if (configMode) {
-        setOpenFile({ path, name, saved: '', draft: '' })
+        setOpenFile({
+          path,
+          name,
+          saved: '',
+          draft: '',
+          gotoLine: line > 0 ? line : undefined,
+          gotoNonce: Date.now(),
+        })
         return
       }
       try {
@@ -821,6 +832,8 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
                   onAfterSave: refreshAll,
                   onOpenVersions: () => setVersionFor(openFile.path),
                   onDirtyChange: setConfigDirty,
+                  gotoLine: openFile.gotoLine,
+                  gotoNonce: openFile.gotoNonce,
                 })}
               </div>
             ) : (
