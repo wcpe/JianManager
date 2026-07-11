@@ -9,6 +9,7 @@
 > 本段累积 `v0.13.0` tag 之后的开发变更。JBIS 背包域（第五期，FR-124~127）的读写数据流真机验收受第三方 CoreLib serverInfo（MySQL+Redis+服务器注册）环境硬门槛阻断，代码已随 v0.13.0 落地但 PRD 保持 🔨，待环境凑齐或经 AllinInventorySync 自带 mc-testkit e2e 验通后翻交付。
 
 ### 修复
+- **背包基础属性写解码不符契约致玩家被写死（FR-125/126/127，ServerProbe 子模块 `8b5974b`）**：探针 `InventoryProvider.writeBasicAttrs` 对 base/edited 直读容器顶层字段且仅按字符串解析，与前端/CP 审计既定的 `{dataVersion,basicAttrs:{...}}` 嵌套数值契约不符——契约 payload 全字段回退默认（血量 0.0）写入 AllinInventorySync，**在线玩家被直接写死、离线玩家上线即死**（真机 Paper 1.20.1 + AIS 2.1.0 复现）。探针解码下沉 `InventoryEnvelope.decodeBasicAttrs`（嵌套优先/扁平兼容、字符串/数值双承载，`JsonObject` 新增 `getDouble`），先红后绿两单测 + 探针 build 全绿；真机复验在线/离线写精确生效（xp 20→9、hp 20→15.5）、幂等重发 dv 不前移、玩家存活、背包定制页 UI 写路径（二次确认）端到端通过。随本条 bump `third_party/ServerProbe` 子模块并重建内嵌探针。
 - **发布向导切步骤清空本地暂存文件（FR-191/250）**：工作区路由过渡容器 `Workspace` 的 `key` 一度含 `location.search`，导致同一路由页内仅 query 变化（发布向导 `?step=` 步骤切换、列表筛选、tab 切换等）会 remount 整棵路由子树，清空 `ClientPublishPage` 本地暂存的 `drafts`——真机浏览器上发布向导过不了「选择文件 → 逐文件配置」这一步，FR-191/250 发布流完全不可用（单测因直接渲染页面组件、绕过 Workspace 外壳而漏检）。改 `routeKey` 仅按 `location.pathname`（页面级切换仍重放进场动画，同页 query 变化不再 remount），并补 `Workspace.routekey.dom.test.tsx` 经真实 `BrowserRouter` 渲染 Workspace 断言同页 query 变化不清空页内状态。
 
 ## 0.13.0（2026-07-11）
