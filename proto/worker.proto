@@ -50,6 +50,13 @@ service WorkerService {
   // DownloadFile 单文件分块流式下载（原样字节，不打包）。
   // ReadFile 的 10MiB 上限是在线编辑器护栏，下载必须走本 RPC，任意大小不截断。
   rpc DownloadFile(DownloadFileRequest) returns (stream DownloadFileChunk);
+  // UploadFile 单文件分块流式上传（与 DownloadFile 对称，FR-304）。
+  // WriteFile unary 受服务端单消息上限约束（直拨 64MiB 拒收）且反向隧道无上限会整块缓冲，
+  // 大文件上传必须走本 RPC：Worker 落临时文件、收完原子改名，中途失败不留半截目标文件。
+  // 首帧必须携带 instance_uuid + path（content 可同帧携带），后续帧仅 content（其余字段忽略）；
+  // 零帧即关流约定返回 success=false（不触盘、无副作用），供 CP 作老 Worker 能力探测
+  // （老 Worker 对本 RPC 返回 Unimplemented，CP 借此区分并回退 WriteFile）。
+  rpc UploadFile(stream UploadFileChunk) returns (UploadFileResponse);
   // SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
   // Worker 维护本地持久倒排索引（var/index/，增量更新），查询返回命中文件+行+片段。
   rpc SearchFiles(SearchFilesRequest) returns (SearchFilesResponse);
@@ -504,6 +511,18 @@ message DownloadFileRequest {
 message DownloadFileChunk {
   bytes content = 1;    // 文件原样字节分片
   int64 total_size = 2; // 仅首帧携带：文件总字节数，供 CP 设置 Content-Length；后续帧为 0
+}
+
+message UploadFileChunk {
+  string instance_uuid = 1; // 仅首帧有效
+  string path = 2;          // 仅首帧有效，相对工作目录的目标文件路径
+  bytes content = 3;        // 文件字节分片（首帧可携带）
+}
+
+message UploadFileResponse {
+  bool success = 1;
+  string error = 2;
+  int64 bytes_written = 3; // 实际落盘字节数，CP 与已发送字节数比对校验完整性
 }
 
 // === 全文搜索 / 文件名快速打开（FR-074，见 ADR-017）===

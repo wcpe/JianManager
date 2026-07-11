@@ -39,6 +39,7 @@ const (
 	WorkerService_RenameFile_FullMethodName           = "/worker.WorkerService/RenameFile"
 	WorkerService_DownloadArchive_FullMethodName      = "/worker.WorkerService/DownloadArchive"
 	WorkerService_DownloadFile_FullMethodName         = "/worker.WorkerService/DownloadFile"
+	WorkerService_UploadFile_FullMethodName           = "/worker.WorkerService/UploadFile"
 	WorkerService_SearchFiles_FullMethodName          = "/worker.WorkerService/SearchFiles"
 	WorkerService_ListArchiveEntries_FullMethodName   = "/worker.WorkerService/ListArchiveEntries"
 	WorkerService_ReadArchiveEntry_FullMethodName     = "/worker.WorkerService/ReadArchiveEntry"
@@ -136,6 +137,13 @@ type WorkerServiceClient interface {
 	// DownloadFile 单文件分块流式下载（原样字节，不打包）。
 	// ReadFile 的 10MiB 上限是在线编辑器护栏，下载必须走本 RPC，任意大小不截断。
 	DownloadFile(ctx context.Context, in *DownloadFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadFileChunk], error)
+	// UploadFile 单文件分块流式上传（与 DownloadFile 对称，FR-304）。
+	// WriteFile unary 受服务端单消息上限约束（直拨 64MiB 拒收）且反向隧道无上限会整块缓冲，
+	// 大文件上传必须走本 RPC：Worker 落临时文件、收完原子改名，中途失败不留半截目标文件。
+	// 首帧必须携带 instance_uuid + path（content 可同帧携带），后续帧仅 content（其余字段忽略）；
+	// 零帧即关流约定返回 success=false（不触盘、无副作用），供 CP 作老 Worker 能力探测
+	// （老 Worker 对本 RPC 返回 Unimplemented，CP 借此区分并回退 WriteFile）。
+	UploadFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UploadFileChunk, UploadFileResponse], error)
 	// SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
 	// Worker 维护本地持久倒排索引（var/index/，增量更新），查询返回命中文件+行+片段。
 	SearchFiles(ctx context.Context, in *SearchFilesRequest, opts ...grpc.CallOption) (*SearchFilesResponse, error)
@@ -476,6 +484,19 @@ func (c *workerServiceClient) DownloadFile(ctx context.Context, in *DownloadFile
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkerService_DownloadFileClient = grpc.ServerStreamingClient[DownloadFileChunk]
+
+func (c *workerServiceClient) UploadFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UploadFileChunk, UploadFileResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[4], WorkerService_UploadFile_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[UploadFileChunk, UploadFileResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerService_UploadFileClient = grpc.ClientStreamingClient[UploadFileChunk, UploadFileResponse]
 
 func (c *workerServiceClient) SearchFiles(ctx context.Context, in *SearchFilesRequest, opts ...grpc.CallOption) (*SearchFilesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -849,7 +870,7 @@ func (c *workerServiceClient) RunBotScript(ctx context.Context, in *RunBotScript
 
 func (c *workerServiceClient) StreamBotEvents(ctx context.Context, in *StreamBotEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BotEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[4], WorkerService_StreamBotEvents_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[5], WorkerService_StreamBotEvents_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -868,7 +889,7 @@ type WorkerService_StreamBotEventsClient = grpc.ServerStreamingClient[BotEvent]
 
 func (c *workerServiceClient) StreamPluginEvents(ctx context.Context, in *StreamPluginEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PluginEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[5], WorkerService_StreamPluginEvents_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[6], WorkerService_StreamPluginEvents_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -937,7 +958,7 @@ func (c *workerServiceClient) UpgradeWorker(ctx context.Context, in *UpgradeWork
 
 func (c *workerServiceClient) TerminalSession(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TerminalFrame, TerminalFrame], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[6], WorkerService_TerminalSession_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[7], WorkerService_TerminalSession_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -998,6 +1019,13 @@ type WorkerServiceServer interface {
 	// DownloadFile 单文件分块流式下载（原样字节，不打包）。
 	// ReadFile 的 10MiB 上限是在线编辑器护栏，下载必须走本 RPC，任意大小不截断。
 	DownloadFile(*DownloadFileRequest, grpc.ServerStreamingServer[DownloadFileChunk]) error
+	// UploadFile 单文件分块流式上传（与 DownloadFile 对称，FR-304）。
+	// WriteFile unary 受服务端单消息上限约束（直拨 64MiB 拒收）且反向隧道无上限会整块缓冲，
+	// 大文件上传必须走本 RPC：Worker 落临时文件、收完原子改名，中途失败不留半截目标文件。
+	// 首帧必须携带 instance_uuid + path（content 可同帧携带），后续帧仅 content（其余字段忽略）；
+	// 零帧即关流约定返回 success=false（不触盘、无副作用），供 CP 作老 Worker 能力探测
+	// （老 Worker 对本 RPC 返回 Unimplemented，CP 借此区分并回退 WriteFile）。
+	UploadFile(grpc.ClientStreamingServer[UploadFileChunk, UploadFileResponse]) error
 	// SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
 	// Worker 维护本地持久倒排索引（var/index/，增量更新），查询返回命中文件+行+片段。
 	SearchFiles(context.Context, *SearchFilesRequest) (*SearchFilesResponse, error)
@@ -1168,6 +1196,9 @@ func (UnimplementedWorkerServiceServer) DownloadArchive(*DownloadArchiveRequest,
 }
 func (UnimplementedWorkerServiceServer) DownloadFile(*DownloadFileRequest, grpc.ServerStreamingServer[DownloadFileChunk]) error {
 	return status.Error(codes.Unimplemented, "method DownloadFile not implemented")
+}
+func (UnimplementedWorkerServiceServer) UploadFile(grpc.ClientStreamingServer[UploadFileChunk, UploadFileResponse]) error {
+	return status.Error(codes.Unimplemented, "method UploadFile not implemented")
 }
 func (UnimplementedWorkerServiceServer) SearchFiles(context.Context, *SearchFilesRequest) (*SearchFilesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SearchFiles not implemented")
@@ -1652,6 +1683,13 @@ func _WorkerService_DownloadFile_Handler(srv interface{}, stream grpc.ServerStre
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkerService_DownloadFileServer = grpc.ServerStreamingServer[DownloadFileChunk]
+
+func _WorkerService_UploadFile_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(WorkerServiceServer).UploadFile(&grpc.GenericServerStream[UploadFileChunk, UploadFileResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerService_UploadFileServer = grpc.ClientStreamingServer[UploadFileChunk, UploadFileResponse]
 
 func _WorkerService_SearchFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SearchFilesRequest)
@@ -2699,6 +2737,11 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "DownloadFile",
 			Handler:       _WorkerService_DownloadFile_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "UploadFile",
+			Handler:       _WorkerService_UploadFile_Handler,
+			ClientStreams: true,
 		},
 		{
 			StreamName:    "StreamBotEvents",
