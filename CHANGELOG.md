@@ -6,7 +6,7 @@
 
 ## [Unreleased]
 
-> 本段累积 `v0.13.0` tag 之后的开发变更。JBIS 背包域（第五期，FR-124~127）的读写数据流真机验收受第三方 CoreLib serverInfo（MySQL+Redis+服务器注册）环境硬门槛阻断，代码已随 v0.13.0 落地但 PRD 保持 🔨，待环境凑齐或经 AllinInventorySync 自带 mc-testkit e2e 验通后翻交付。
+> 本段累积 `v0.13.0` tag 之后的开发变更。**JBIS 背包域（第五期，FR-124~127）读写数据流已于 2026-07-11 真机验通**（CoreLib serverInfo 环境门槛经黄金 config 解锁：bot 真入服 → AIS 落库 → view/writeBasicAttrs+审计/追踪事件全链路），PRD 已翻 `✅ 已交付@v0.16.0`。四期客户端 OTA 端到端真客户端更新流亦已真机复验，唯 FR-099 原生进度弹窗人眼目视为 env-blocked（非代码缺口，需真启动器场景）。
 
 ### 修复
 - **泛化业务台 object 型入参被当字符串下发致写操作永远失败（FR-119）**：业务掌控台 `BusinessSegment` manifest 驱动渲染时把每个 arg 一律当 `Record<string,string>` 存、下发时整体 `JSON.stringify(args)`，对**对象/数组型入参**（如 `inventory.writeBasicAttrs` 的 `base`/`edited`，契约为 `{dataVersion,basicAttrs:{...}}` 嵌套对象）——运维在文本框粘 JSON 会被当字符串发出，探针侧 `req.getObject("base")` 拿不到对象 → 返回「缺少 base 属性对象」，泛化面板手工写下发必失败（真机复现）。抽 `coerceBusinessArg`/`buildBusinessPayload` 纯函数：文本 trim 后以 `{`/`[` 起头才尝试 `JSON.parse`，解析成对象/数组则还原为真嵌套结构，其余（含 economy 的 `player`/`currency`/`amount` 标量）保持字符串——不破坏标量入参既有下发。补 `business-segment.test.ts` 取值单测 + `BusinessSegment.dom.test.tsx` 端到端断言 `writeBasicAttrs` 的 `edited` 下发为真嵌套对象（回执 success、版本自增）。仅影响泛化业务台对 object 型 arg 的手工下发；背包定制页 `InventorySegment` 走专用嵌套构造不受影响。

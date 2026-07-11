@@ -171,7 +171,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-096 | 分发端点应用层（L7）防护 | — | ✅ 已交付@v0.8.0·验收经 FR-264 覆盖 |
 | FR-097 | 自有 `.jmpack` 打包（压缩 + 签名，格式删除） | — | ❌ 已废弃（见 ADR-054） |
 | FR-098 | 块级二进制 diff 增量发布 | P2 | ✅ 已交付@v0.13.0·验收经 FR-251 覆盖 |
-| FR-099 | 客户端 OTA 更新进度窗口（进度条 + 速度 + ETA） | — | ✅ 已交付@v0.8.0 |
+| FR-099 | 客户端 OTA 更新进度窗口（进度条 + 速度 + ETA） | — | ✅ 已交付@v0.8.0·端到端真机复验：updater-core（Java8）真下载 + reconcile + sha256 完整性 + 文件级增量/托管区减量/防降级；进度模型 ProgressModel/ProgressView 11 单测绿、SwingProgressView 真桌面（非 headless）代码路径无崩溃。**原生 Swing 弹窗的人眼目视（动条+实时速度/ETA）= env-blocked**：原生 OS 窗口不可经浏览器工具截图 + 本地下载过快无可捕捉中间帧，需真启动器 `-javaagent:wedge.jar` 场景人肉/录屏确认 |
 | FR-103 | 插件桥（Bukkit/BC 插件 WS 连入，旧自写） | — | ❌ 已废弃（ADR-014） |
 | FR-107 | 后台客户端更新器接入指引 | — | ✅ 已交付@v0.8.0·验收经 FR-187 覆盖 |
 | FR-108 | 仪表盘总览环分级配色与负载量纲修正 | — | ✅ 已交付@v0.9.1·验收经 FR-062 覆盖 |
@@ -190,10 +190,10 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-121 | 业务写横切硬化（幂等 + 二次确认 + 审计，JBIS M2） | — | ✅ 已交付@v0.10.0·验收经 FR-123 覆盖 |
 | FR-122 | 经济汇聚与多区聚合（JBIS M2） | — | ✅ 已交付@v0.10.0·四档验收 |
 | FR-123 | 经济定制页（JBIS M2） | — | ✅ 已交付@v0.10.0·四档验收 |
-| FR-124 | 扩 AllinInventorySync api 导出读写门面 | P2 | 🔨 开发中（AIS 2.0.0 边界已登记；⚠️五期走查：集成层验通（清单从真 AIS API 面反射），实际读写数据流 env-blocked：CoreLib serverInfo 需 MySQL+Redis+服务器注册） |
-| FR-125 | 背包 Provider | P2 | 🔨 开发中（读视图/基础属性写/追踪事件边界已登记；⚠️五期走查：Provider 注册/降级验通，实际背包读 env-blocked（同 124 CoreLib serverInfo 链）） |
-| FR-126 | 背包汇聚与存储 | P2 | 🔨 开发中（事件去重、基础属性写审计与业务事件读视图实例级权限收敛已落地；⚠️五期走查：依赖背包数据流，随 FR-124/125 env-blocked（CoreLib serverInfo）） |
-| FR-127 | 背包定制页 | P2 | 🔨 开发中（快照查看与基础属性写 UI 已落地；⚠️五期走查：依赖背包数据流，随 FR-124/125 env-blocked（CoreLib serverInfo）） |
+| FR-124 | 扩 AllinInventorySync api 导出读写门面 | P2 | ✅ 已交付@v0.16.0·真机验收：CoreLib serverInfo 解锁（黄金 config + MySQL/Redis）后经真 AIS 2.1.0 api 读 view（getPlayerInventory 真背包，含离线）+ 基础属性写（getInventoryWriteApi.writeBasicAttrs 带 WriteResult 回执）真机验通；物品写门面按 ADR-0017 降级不在范围 |
+| FR-125 | 背包 Provider | P2 | ✅ 已交付@v0.16.0·真机验收：三插件（CoreLib 1.3.0 + AIS 2.1.0 + ServerProbe）同栈起通，view 返真背包（EMERALD×9…含 nbtBase64）+ writeBasicAttrs 精确生效且幂等 + TrackedItemActionEvent（JOIN_CARRY）订阅汇聚；过程修复探针解码不符嵌套契约写死玩家 bug（c6f287a / ServerProbe 8b5974b） |
+| FR-126 | 背包汇聚与存储 | P2 | ✅ 已交付@v0.16.0·真机验收：writeBasicAttrs → JM business.write 审计 + AIS EDIT_ATTRS；追踪事件 JOIN_CARRY 按 domain+dedupKey 汇聚落 business_events（id=1，node/instance 归属正确，payload 全对）；业务事件读视图实例级权限收敛已落地 |
+| FR-127 | 背包定制页 | P2 | ✅ 已交付@v0.16.0·真机验收：背包定制页（/super 背包卡）真背包快照 + 基础属性写二次确认端到端；业务掌控台 object 型入参下发修复（8b568d3，真机复验 writeBasicAttrs 嵌套 base/edited 下发 success） |
 | FR-128 | 导航与视图状态可寻址化 + 滚动位置恢复 | P1 | ✅ 已交付@v0.14.0·全真栈验收（真机验收：节点/实例 ?tab= URL 直达全程使用；滚动恢复重试制加固带回归） |
 | FR-129 | 实例工作区分屏面板化 | — | ❌ 已废弃（并入 FR-166 可组合卡片画布） |
 | FR-130 | 文件与配置合并为统一资源面板 | — | ❌ 已废弃（并入 FR-166 资源卡） |
@@ -394,8 +394,8 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | 第一期 | 核心平台 | v0.1.0~v0.3.0 | ✅ 完成（真机 FR-043 已验） |
 | 第二期 | MC 群组服运维 | v0.3.0~v0.4.0 / v0.7.0 / **v0.13.0*** | ✅ 完成（FR-046 SpongeVanilla/SpongeForge 真机验收通过） |
 | 第三期 | 运营底座与可观测 | v0.4.0~v0.9.1 / **v0.13.0** | ✅ 完成（FR-010/053/114 真机验收通过，随 v0.13.0 发布） |
-| 第四期 | 客户端 OTA 分发 | v0.8.0 / v0.11.0 / **v0.13.0** | ✅ 代码全交付、四档验收（真 UI+mock 后端）+ 部分后端真测；**端到端真客户端 OTA 更新流真机复验缺**（FR-099 更新进度窗口=唯一无后缀真缺口，需真客户端场景） |
-| 第五期 | JBIS 业务对接 | v0.10.0 / **待续（并入 [Unreleased]）** | 🔨 背包域在做（脊柱 FR-115~123 已交付；数据流 FR-124~127 代码落地但真机受 CoreLib serverInfo 环境门槛阻断） |
+| 第四期 | 客户端 OTA 分发 | v0.8.0 / v0.11.0 / v0.13.0 / **v0.16.0*** | ✅ 端到端真客户端 OTA 更新流已真机复验（updater-core 真下载+reconcile+sha256+增量/减量/防降级+鉴权 fail-static，真 UI 发布 v1/v2）；**唯一剩余 = FR-099 原生进度弹窗人眼目视 env-blocked**（非代码缺口，需真启动器场景） |
+| 第五期 | JBIS 业务对接 | v0.10.0 / **v0.16.0*** | ✅ 完成（经济域 FR-115~123 已交付；背包域数据流 FR-124~127 经 CoreLib serverInfo 解锁后真机验通：bot 入服→AIS 落库→view→writeBasicAttrs+审计+追踪事件全链路） |
 | 第六期 | 控制台体验增强 | v0.10.0 / v0.12.0 / **v0.13.0** | ✅ 完成（FR-128/133/137/140/141 全真机验收通过，随 v0.13.0 发布） |
 
 **当前未发版开发段按主题切 4 个版本**（自 v0.12.0 tag 后，替代原「v0.13.0 单一大堆 70 FR」）：

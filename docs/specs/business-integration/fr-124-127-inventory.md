@@ -1,6 +1,6 @@
 # 功能规格：JBIS 业务对接 — 背包域（FR-124~127, M3）
 
-> 状态：开发中　·　关联 PRD：FR-124~127　·　关联 ADR：ADR-026/028 + ServerProbe ADR-0016/0017 + AllinInventorySync ADR-0011/0012/0014
+> 状态：✅ 已交付@v0.16.0（2026-07-11 真机验通：CoreLib serverInfo 解锁 → bot 入服 AIS 落库 → view/writeBasicAttrs/追踪事件全链路）　·　关联 PRD：FR-124~127　·　关联 ADR：ADR-026/028 + ServerProbe ADR-0016/0017 + AllinInventorySync ADR-0011/0012/0014
 >
 > 设计总纲见同目录 `design.md`；M1/M2（经济域 FR-115~123）已交付，本 spec 为 M3 背包整域在途详情。
 >
@@ -23,7 +23,7 @@ JBIS「一个 ServerProbe = 本服唯一全能 agent」：核心链路 CP/Worker
   - [x] `getPlayerInventory(uuid)`：回源加载（含离线、纯读不 bump、不存在返 null）+ 结构化 ItemDto（material/amount/displayName/lore/enchants + nbtBase64 全保真）
   - [x] `writeInventory/writeEnderChest/writeBasicAttrs(base+edited delta)`：带 WriteResult 回执 + 持久业务幂等键（requestId 防重发刷物品）+ 在线归属校验（OWNED_ELSEWHERE 拒改他服在线）+ 委托 InventoryEditService.executeWrite delta 通道（两层锁 + CAS）。**注：2.0.0 起 `writeInventory/writeEnderChest` 入参为 `byte[]` 分区字节（不可外部消费，仅供其自身 GUI / 持有字节者）；`writeBasicAttrs` 仍收定形 `BasicAttrsDto`，外部可消费**
   - [x] ItemStack↔JSON codec（ItemStackCodec，Bukkit 序列化 base64 全保真，信封承载）
-  - [~] **真机**：第三方经 api 读任意玩家背包 + 带回执发/收物品 + 重发幂等不刷物品 —— 幂等命中/归属拒绝短路由 core 单测覆盖；真 apply（NbtCodec 触 `net.minecraft.*`）经 E2E 真服验，待 FR-125 链路就绪联调
+  - [x] **真机**（2026-07-11 验通）：第三方（ServerProbe）经 AIS 2.1.0 api 读任意玩家背包（getPlayerInventory 真背包，含离线）+ 基础属性写带 WriteResult 回执 + 重发同 taskId 幂等不重复写（dv 不前移）；物品发/收（byte[] 门面）按 ADR-0017 降级不在范围
 
 #### FR-125: 背包 Provider
 - **优先级**: P2 | **依赖**: FR-117, FR-124 | **关联 ADR**: JM ADR-026 / ServerProbe ADR-0016
@@ -35,7 +35,7 @@ JBIS「一个 ServerProbe = 本服唯一全能 agent」：核心链路 CP/Worker
   - [x] **物品写 writeInventory/writeEnderChest 暂不提供**：AllinInventorySync 2.0.0 物品写门面入参退回不透明分区字节，外部无法从结构化物品构造，dispatch 收到即明确降级（itemWriteUnsupported）、不进 manifest（ServerProbe ADR-0017，待其导出可外部消费的结构化物品写门面再恢复）
   - [x] 订阅 `TrackedItemActionEvent`（重点物品流转）→ emitBusinessEvent（domain=inventory，dedupKey=`playerUuid:action:occurredAtMs:seq`），软依赖 `@SubscribeEvent(bind=FQCN)` + OptionalEvent.get 避免漏注册
   - [x] 纯逻辑抽 `InventoryEnvelope`/`InventoryEventEnvelope`（单测 10+3 例全绿）；`compileOnly allininventorysync-api:2.0.0` + plugin softdepend AllinInventorySync
-  - [ ] **真机**：inventory.view 看到真实物品清单、writeBasicAttrs 生效且幂等、追踪事件汇聚（随 FR-126/127 统一收口；物品写暂不在范围内）
+  - [x] **真机**（2026-07-11 验通）：inventory.view 看到真实物品清单（EMERALD×9/DIAMOND×5，含 nbtBase64）、writeBasicAttrs 精确生效（xp/hp）且同 taskId 幂等、TrackedItemActionEvent（JOIN_CARRY）订阅汇聚落 CP business_events；物品写暂不在范围内。过程修复探针解码不符嵌套契约写死玩家（ServerProbe 8b5974b）
 
 #### FR-126: 背包汇聚与存储
 - **优先级**: P2 | **依赖**: FR-116, FR-121 | **关联 ADR**: ADR-028
@@ -44,7 +44,8 @@ JBIS「一个 ServerProbe = 本服唯一全能 agent」：核心链路 CP/Worker
   - [x] 追踪事件（JOIN_CARRY/DROP/PICKUP/MOVE_TO_CONTAINER）经通用 `BusinessEvent` envelope 按 `domain+dedupKey` 汇聚去重落库
   - [x] 基础属性写审计记录（domain/action/player/fields/requestId/回执 available）；本轮不记录远程发物品/收物品操作，因为该写能力不在范围内
   - [x] 业务事件 / 经济镜像只读端点按当前用户可访问实例 UUID 下沉过滤，组成员不能跨组读取其它实例的 inventory/economy envelope
-  - [~] 离线写后端透传 Provider `online=false` 回执，前端显示"已写入、待玩家上线生效"；真服端到端待联调确认
+  - [x] 离线写后端透传 Provider `online=false` 回执，前端显示"已写入、待玩家上线生效"；**真服端到端已验**（2026-07-11：bot 下线后 view online=false、writeBasicAttrs online=false success，重连后 load 应用编辑值）
+  - [x] **真机**（2026-07-11 验通）：追踪事件 JOIN_CARRY（配 track-diamond 规则→bot 带钻入服）经 domain+dedupKey 汇聚落 business_events（id=1，node/instanceUuid 归属正确、payload playerName/action/ruleId/material/amount 全对）；writeBasicAttrs → JM business.write 审计 + AIS EDIT_ATTRS 双留痕
 
 #### FR-127: 背包定制页
 - **优先级**: P2 | **依赖**: FR-119, FR-121, FR-125, FR-126
@@ -52,4 +53,4 @@ JBIS「一个 ServerProbe = 本服唯一全能 agent」：核心链路 CP/Worker
 - **验收**:
   - [x] 玩家背包快照查看 + 物品清单展示（经导出的 ItemDTO）
   - [x] 基础属性写走二次确认 UI；离线写显示待生效；i18n + 暗/亮色
-  - [ ] **真机**：定制页看真玩家背包、基础属性写生效且幂等；物品发放/回收不在本轮验收范围内
+  - [x] **真机**（2026-07-11 验通）：定制页（/super 背包卡）看真玩家背包、基础属性写走二次确认端到端生效且幂等；业务掌控台 object 型入参下发修复后 writeBasicAttrs 嵌套 base/edited 下发 success（8b568d3）。物品发放/回收不在本轮验收范围内
