@@ -79,6 +79,27 @@ ls dist/
 # worker-windows-amd64.exe         worker-linux-amd64
 ```
 
+### SSH 推送部署（面板 / 节点）
+
+在操作机（git-bash / Linux / macOS）把本地 `make dist` 产物经 SSH 密钥推送部署 / 更新到远程 Linux 主机（FR-277，见 ADR-063）。首次 / 更新自动判定：更新只换二进制并重启，配置 / 数据 / 节点身份全保留。
+
+```bash
+# 1) 部署面板（Control Plane）
+JM_SSH_HOST=1.2.3.4 scripts/deploy-cp.sh
+# 完成后浏览器打开 http://1.2.3.4:8080 走首启引导，并在「节点 → 添加节点」签发 token
+
+# 2) 部署节点（Worker，首次需要 token；更新部署可省）
+JM_SSH_HOST=5.6.7.8 JM_CONTROL_PLANE=1.2.3.4:9100 JM_ENROLL_TOKEN=jmet_xxx scripts/deploy-worker.sh
+
+# 更新部署：重出 dist 后重复执行同一命令即可（幂等）
+# 只看计划不实连：加 --dry-run
+```
+
+环境变量（均有默认值）：`JM_SSH_PORT`(22) / `JM_SSH_USER`(root) / `JM_SSH_KEY`(默认密钥链) /
+`JM_SERVICE_SCOPE`(auto：root 或免密 sudo → 系统级 systemd，纯普通用户 → user 级 systemd + linger) /
+`JM_INSTALL_DIR` / `JM_DATA_DIR` / `JM_CP_HTTP_PORT`(8080) / `JM_CP_GRPC_PORT`(9100) /
+`JM_WORKER_GRPC_PORT`(9101) / `JM_WORKER_WS_PORT`(9102) / `JM_NODE_NAME` / `JM_BUILD`(1=产物缺失自动 make dist)。
+
 ### Docker 部署
 
 ```bash
