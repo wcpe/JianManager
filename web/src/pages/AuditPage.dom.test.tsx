@@ -106,4 +106,23 @@ describe('AuditPage（mock 假后端）', () => {
     // useAuditLogs isError → AuditPage 渲染 audit.loadError。
     expect(await screen.findByText('加载审计日志失败')).toBeInTheDocument()
   })
+
+  // FR-303：action 键 i18n——已知键显翻译且原键仍可见（角标+悬停），未知键回退原样不崩。
+  it('已知 action 键显示中文翻译，原键以角标保留（FR-303）', async () => {
+    loginMockUser()
+    renderWithProviders(<AuditPage />)
+    // 种子 instance.start / group.create 均有 audit.actions 映射 → 显中文。
+    expect(await screen.findByText('启动实例')).toBeInTheDocument()
+    expect(screen.getByText('创建用户组')).toBeInTheDocument()
+    // 原键仍可见（小号 mono 角标），筛选输入按原键筛的心智不断。
+    expect(screen.getByText('instance.start')).toBeInTheDocument()
+    expect(screen.getByText('group.create')).toBeInTheDocument()
+  })
+
+  it('未知 action 键回退原键显示，不崩（FR-303）', async () => {
+    loginMockUser()
+    renderWithProviders(<AuditPage />)
+    // 种子 user.login 不在 audit.actions 映射表（后端无此键）→ 原样展示。
+    expect(await screen.findByText('user.login')).toBeInTheDocument()
+  })
 })

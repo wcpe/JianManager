@@ -186,6 +186,9 @@ function AuditRow({
   const { t } = useTranslation()
   const detail = formatAuditDetail(log.detail)
   const hasDetail = detail !== ''
+  // FR-303：action 键翻译。audit.actions 下是含点的扁平键（如 instance.start），
+  // 依赖 i18next ignoreJSONStructure（默认开）解析；未知键回退原键（defaultValue），保证不崩。
+  const actionLabel = t(`audit.actions.${log.action}`, { defaultValue: log.action })
   return (
     <div className="border-b border-border/60 last:border-b-0">
       <button
@@ -209,8 +212,16 @@ function AuditRow({
           {new Date(log.createdAt).toLocaleString()}
         </span>
         <span className="w-28 shrink-0 truncate">{log.user?.username ?? `#${log.userId}`}</span>
-        <span className="w-44 shrink-0">
-          <span className="rounded bg-muted px-2 py-0.5 font-mono text-[11px]">{log.action}</span>
+        {/* FR-303：有翻译时显翻译 + 小号 mono 原键角标（筛选仍按原键，心智不断）；无翻译时保持原 mono 徽章。 */}
+        <span className="w-44 min-w-0 shrink-0" title={log.action}>
+          {actionLabel === log.action ? (
+            <span className="rounded bg-muted px-2 py-0.5 font-mono text-[11px]">{log.action}</span>
+          ) : (
+            <span className="flex flex-col">
+              <span className="truncate">{actionLabel}</span>
+              <span className="truncate font-mono text-[10px] text-muted-foreground">{log.action}</span>
+            </span>
+          )}
         </span>
         <span className="min-w-0 flex-1 truncate text-muted-foreground">
           {log.targetType && `${log.targetType}#${log.targetId}`}
