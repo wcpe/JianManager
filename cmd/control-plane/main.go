@@ -443,6 +443,15 @@ func main() {
 
 	// 注册 WebSocket 终端代理（浏览器 → CP → Worker）
 	terminalProxy := service.NewTerminalProxy(wsTokenSecret, terminalSvc)
+	// 终端优先经 gRPC TerminalSession 桥接（FR-281 M2，见 ADR-066）：池取客户端隧道优先/
+	// 直拨回退，NAT/内网节点终端可达；老 Worker（Unimplemented）回退直拨 WS。
+	terminalProxy.SetWorkerClients(func(nodeUUID string) (workerpb.WorkerServiceClient, bool) {
+		client, ok := pool.Get(nodeUUID)
+		if !ok {
+			return nil, false
+		}
+		return client.Worker, true
+	})
 	r.GET("/ws/terminal", gin.WrapF(terminalProxy.Handler()))
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

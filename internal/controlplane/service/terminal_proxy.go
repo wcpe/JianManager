@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,8 +12,11 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/wcpe/JianManager/internal/platform/onetimetoken"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // TerminalProxyCodeWorkerTokenRejected 是「Worker 拒绝终端令牌」的诊断码（FR-276，见 ADR-061）。
@@ -57,6 +61,11 @@ type TerminalProxy struct {
 	// pingPeriod<=0 禁用主动 ping、pongWait<=0 不设读超时（仅测试用于模拟「无心跳」链路）。
 	pingPeriod time.Duration
 	pongWait   time.Duration
+
+	// workerClients 按节点取 WorkerServiceClient（FR-281 M2，见 ADR-066）：
+	// 由 ClientPool 适配注入——终端优先经 gRPC TerminalSession 桥接（隧道优先/直拨回退由
+	// 池决定），老 Worker（Unimplemented）回退直拨 WS。nil 表示未启用，恒走 WS 直拨。
+	workerClients func(nodeUUID string) (workerpb.WorkerServiceClient, bool)
 }
 
 // NewTerminalProxy 创建终端代理。
@@ -109,8 +118,8 @@ func (p *TerminalProxy) Handler() http.HandlerFunc {
 			return
 		}
 
-		// 2. 查找 Worker WS 地址
-		workerWSURL, err := p.terminal.GetWorkerAddr(instanceUUID)
+		// 2. 查找实例所在节点与 Worker WS 地址
+		nodeUUID, workerWSURL, err := p.terminal.GetWorkerSession(instanceUUID)
 		if err != nil {
 			slog.Error("查找 Worker 地址失败", "instanceUUID", instanceUUID, "error", err)
 			http.Error(w, "instance not found", http.StatusNotFound)
@@ -129,7 +138,19 @@ func (p *TerminalProxy) Handler() http.HandlerFunc {
 		}
 		defer browserConn.Close()
 
-		// 4. 连接 Worker WS（携带同样的 token）
+		// 4a. 优先经 gRPC TerminalSession 桥接（FR-281 M2，见 ADR-066）：
+		// 连接池隧道优先/直拨回退，NAT/内网节点终端由此可达；令牌校验方仍是 Worker。
+		// 老 Worker 无该 RPC（Unimplemented）→ 落到 4b 直拨 WS（行为与引入前一致）。
+		if p.workerClients != nil {
+			if worker, ok := p.workerClients(nodeUUID); ok {
+				if p.bridgeViaGRPC(browserConn, worker, tokenStr, instanceUUID) {
+					return
+				}
+				slog.Debug("gRPC 终端桥不可用，回退直拨 Worker WS", "instanceUUID", instanceUUID)
+			}
+		}
+
+		// 4b. 连接 Worker WS（携带同样的 token）
 		workerURL := fmt.Sprintf("%s?token=%s", workerWSURL, tokenStr)
 		workerConn, dialResp, err := websocket.DefaultDialer.Dial(workerURL, nil)
 		if err != nil {
@@ -210,6 +231,111 @@ func (p *TerminalProxy) Handler() http.HandlerFunc {
 		wg.Wait()
 		slog.Info("终端代理已关闭", "instanceUUID", instanceUUID)
 	}
+}
+
+// SetWorkerClients 注入按节点取 WorkerServiceClient 的来源（main 装配自 ClientPool，FR-281 M2）。
+func (p *TerminalProxy) SetWorkerClients(get func(nodeUUID string) (workerpb.WorkerServiceClient, bool)) {
+	p.workerClients = get
+}
+
+// bridgeViaGRPC 经 gRPC TerminalSession 双向流桥接浏览器终端（FR-281 M2，见 ADR-066）。
+// 池取到的客户端天然隧道优先/直拨回退——NAT/内网节点的终端由此可达。
+// 返回 true 表示会话已由本路径处理（含已向浏览器发出诊断的失败）；
+// 返回 false 表示应回退直拨 WS（老 Worker Unimplemented / 建流即败）。
+func (p *TerminalProxy) bridgeViaGRPC(browserConn *websocket.Conn, worker workerpb.WorkerServiceClient, tokenStr, instanceUUID string) bool {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stream, err := worker.TerminalSession(ctx)
+	if err != nil {
+		return false
+	}
+	if err := stream.Send(&workerpb.TerminalFrame{
+		Kind: &workerpb.TerminalFrame_Open{Open: &workerpb.TerminalOpen{Token: tokenStr}},
+	}); err != nil {
+		return false
+	}
+
+	// 等 Worker 的就绪 ack：确定性区分 就绪 / 令牌被拒 / 老 Worker 回退。
+	first, err := stream.Recv()
+	if err != nil {
+		st, _ := status.FromError(err)
+		switch st.Code() {
+		case codes.Unimplemented:
+			return false // 老 Worker 无该 RPC：回退直拨 WS，行为与引入前一致
+		case codes.PermissionDenied:
+			// 令牌被 Worker 拒绝：FR-276 定向诊断在 gRPC 桥路同语义成立（见 ADR-061）。
+			slog.Error("Worker 拒绝终端令牌（疑似节点 WS 令牌密钥与平台不一致）",
+				"instanceUUID", instanceUUID, "detail", st.Message())
+			writeTerminalProxyState(browserConn, TerminalProxyCodeWorkerTokenRejected,
+				fmt.Sprintf("终端令牌被 Worker 拒绝：该节点的 WS 令牌密钥与平台不一致。新版 Worker 会在注册时自动获取密钥，请确认节点已升级并重启；手动部署请核对 worker.yml 的 jwt_secret 是否与平台一致。（%s）", st.Message()))
+			return true
+		default:
+			slog.Error("gRPC 终端桥建立失败", "instanceUUID", instanceUUID, "error", err)
+			writeTerminalProxyState(browserConn, "", "连接 Worker 终端失败: "+st.Message())
+			return true
+		}
+	}
+	if first.GetOpen() == nil {
+		// 协议期望首帧为就绪 ack；容错：若对端直接发数据帧则透传后继续。
+		if f := first.GetFrame(); f != nil {
+			_ = browserConn.WriteMessage(int(f.MsgType), f.Payload)
+		}
+	}
+
+	slog.Info("终端代理已建立（gRPC 桥）", "instanceUUID", instanceUUID)
+	p.setupKeepalive(browserConn)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	// browser → gRPC（stdin、resize）
+	go func() {
+		defer wg.Done()
+		defer cancel() // 浏览器断开 → 取消流，另一侧泵随之退出
+		for {
+			msgType, msg, err := browserConn.ReadMessage()
+			if err != nil {
+				return
+			}
+			p.extendReadDeadline(browserConn)
+			if err := stream.Send(&workerpb.TerminalFrame{
+				Kind: &workerpb.TerminalFrame_Frame{Frame: &workerpb.TerminalWSFrame{MsgType: int32(msgType), Payload: msg}},
+			}); err != nil {
+				return
+			}
+		}
+	}()
+
+	// gRPC → browser（stdout、stderr、state）
+	go func() {
+		defer wg.Done()
+		defer browserConn.Close() // 流断开 → 关浏览器连接，另一侧泵随之退出
+		for {
+			in, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			f := in.GetFrame()
+			if f == nil {
+				continue
+			}
+			if err := browserConn.WriteMessage(int(f.MsgType), f.Payload); err != nil {
+				return
+			}
+		}
+	}()
+
+	// 浏览器侧保活 ping（FR-140）；Worker 侧保活由 gRPC/隧道传输层承担，无需应用层 ping。
+	if p.pingPeriod > 0 {
+		stop := make(chan struct{})
+		go pingConn(browserConn, p.pingPeriod, stop)
+		defer close(stop)
+	}
+
+	wg.Wait()
+	slog.Info("终端代理已关闭（gRPC 桥）", "instanceUUID", instanceUUID)
+	return true
 }
 
 // setupKeepalive 为连接装读超时与 pong 处理器（FR-140）：收到 pong 即续读超时。
