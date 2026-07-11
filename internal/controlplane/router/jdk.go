@@ -43,6 +43,10 @@ func (h *JDKHandler) Install(c *gin.Context) {
 	if access != nil { createdBy = access.UserID }
 	task, err := h.svc.InstallAsync(nodeID, req, createdBy)
 	if err != nil {
+		if errors.Is(err, service.ErrInvalidJDKArch) {
+			// FR-289：未知 arch 明确 422 拒绝，不再直透下载源产出误导性 404。
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error":"INVALID_ARCH","message":err.Error()}); return
+		}
 		if errors.Is(err, service.ErrNodeOffline) {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"error":"NODE_OFFLINE","message":"节点未连接，无法下发安装任务"}); return
 		}

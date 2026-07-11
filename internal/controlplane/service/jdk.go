@@ -20,6 +20,8 @@ var (
 	ErrJDKNotFound = errors.New("JDK 不存在")
 	ErrJDKInUse    = errors.New("JDK 正被实例占用")
 	ErrNodeOffline = errors.New("节点未连接")
+	// ErrInvalidJDKArch 安装请求 arch 不被支持（FR-289），路由映射 422。
+	ErrInvalidJDKArch = errors.New("不支持的 arch")
 )
 
 type JDKService struct {
@@ -92,6 +94,27 @@ type InstallJDKRequest struct {
 	Version string `json:"version"`
 }
 
+// normalizeJDKArch 把安装请求的 arch 别名归一为下载源（adoptium/foojay 等）认的写法（FR-289）：
+// Go/容器系常用 amd64/arm64，下载源只认 x64/aarch64——直透会产出误导性的「下载返回 HTTP 404」
+// （真机复现）。未知 arch 返回 ErrInvalidJDKArch 由路由映射 422，不再透传出 404。
+func normalizeJDKArch(arch string) (string, error) {
+	a := strings.ToLower(strings.TrimSpace(arch))
+	switch a {
+	case "x64", "amd64", "x86_64", "x86-64":
+		return "x64", nil
+	case "aarch64", "arm64":
+		return "aarch64", nil
+	case "x86", "i386", "i686":
+		return "x86", nil
+	case "arm", "arm32":
+		return "arm", nil
+	case "ppc64le", "s390x", "riscv64":
+		return a, nil // 下载源原生认的小众架构，原样放行
+	default:
+		return "", fmt.Errorf("%w: %q（支持 x64/amd64、aarch64/arm64、x86、arm 等）", ErrInvalidJDKArch, arch)
+	}
+}
+
 func (s *JDKService) List(nodeID uint) ([]model.NodeJDK, error) {
 	if err := s.syncFromWorker(nodeID); err != nil {
 		slog.Debug("JDK 同步失败（容忍）", "nodeId", nodeID, "error", err)
@@ -123,6 +146,12 @@ func (s *JDKService) InstallAsync(nodeID uint, req InstallJDKRequest, createdBy 
 	if s.tasks == nil {
 		return nil, fmt.Errorf("任务中心未启用，无法异步安装")
 	}
+	// arch 别名归一化（FR-289）：先于建任务/下发，未知 arch 在此拒绝。
+	arch, err := normalizeJDKArch(req.Arch)
+	if err != nil {
+		return nil, err
+	}
+	req.Arch = arch
 	node, err := s.nodeByID(nodeID)
 	if err != nil {
 		return nil, err
