@@ -1,6 +1,6 @@
 # 功能规格：JBIS 业务对接 — 背包域（FR-124~127, M3）
 
-> 状态：✅ 已交付@v0.16.0（2026-07-11 真机验通：CoreLib serverInfo 解锁 → bot 入服 AIS 落库 → view/writeBasicAttrs/追踪事件全链路）　·　关联 PRD：FR-124~127　·　关联 ADR：ADR-026/028 + ServerProbe ADR-0016/0017 + AllinInventorySync ADR-0011/0012/0014
+> 状态：✅ 已交付@v0.14.0（代码随 v0.13.0 落地；2026-07-11 CoreLib serverInfo 解锁后真机验通 → bot 入服 AIS 落库 → view/writeBasicAttrs/追踪事件全链路，翻交付于 v0.14.0）　·　关联 PRD：FR-124~127　·　关联 ADR：ADR-026/028 + ServerProbe ADR-0016/0017 + AllinInventorySync ADR-0011/0012/0014
 >
 > 设计总纲见同目录 `design.md`；M1/M2（经济域 FR-115~123）已交付，本 spec 为 M3 背包整域在途详情。
 >
