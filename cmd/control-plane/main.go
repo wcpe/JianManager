@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jhump/grpctunnel/tunnelpb"
 	"google.golang.org/grpc"
 
 	"github.com/wcpe/JianManager/internal/controlplane/config"
@@ -470,8 +471,14 @@ func main() {
 	// 注入节点期望代理解析器（FR-185，见 ADR-043）：每次心跳响应携带该节点期望出站代理
 	// （custom→节点值，inherit→全局默认）+ generation，Worker 据变化运行时重建出站 client。
 	grpcHandler.SetNodeProxyResolver(nodeProxySvc)
-	grpcServer := grpc.NewServer()
+	// 反向隧道注册表（FR-281，见 ADR-066）：Worker 主动在本 gRPC 端口开常驻反向隧道，
+	// CP 指令经隧道下发（NAT/内网 worker 零入站）；pool 取连接隧道优先、直拨回退。
+	// 鉴权拦截器仅拦 OpenReverseTunnel，其余流式方法（心跳等）原样放行。
+	tunnelReg := cpgrpc.NewTunnelRegistry(db)
+	pool.SetTunnelProvider(tunnelReg)
+	grpcServer := grpc.NewServer(grpc.ChainStreamInterceptor(tunnelReg.StreamAuthInterceptor()))
 	workerpb.RegisterWorkerServiceServer(grpcServer, grpcHandler)
+	tunnelpb.RegisterTunnelServiceServer(grpcServer, tunnelReg.Service())
 
 	grpcAddr := fmt.Sprintf(":%d", cfg.GRPC.Port)
 	grpcListener, err := net.Listen("tcp", grpcAddr)

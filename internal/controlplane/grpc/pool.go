@@ -18,10 +18,17 @@ type Client struct {
 	NodeUUID string
 }
 
+// TunnelProvider 提供节点反向隧道通道（FR-281，见 ADR-066）；由 TunnelRegistry 实现。
+// 以接口声明避免 pool 对隧道实现的硬依赖（测试可注入假 provider）。
+type TunnelProvider interface {
+	Channel(nodeUUID string) (grpc.ClientConnInterface, bool)
+}
+
 // ClientPool 管理到多个 Worker Node 的 gRPC 连接。
 type ClientPool struct {
 	mu      sync.RWMutex
 	clients map[string]*Client // nodeUUID → Client
+	tunnels TunnelProvider     // 反向隧道来源；nil 表示未启用（纯直拨）
 }
 
 // NewClientPool 创建客户端连接池。
@@ -36,9 +43,11 @@ func (p *ClientPool) Connect(nodeUUID, addr string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// 如果已连接，先关闭旧连接
+	// 如果已连接，先关闭旧连接（测试注入的客户端无底层 Conn，判空防 panic）
 	if existing, ok := p.clients[nodeUUID]; ok {
-		existing.Conn.Close()
+		if existing.Conn != nil {
+			existing.Conn.Close()
+		}
 		delete(p.clients, nodeUUID)
 	}
 
@@ -68,12 +77,28 @@ func (p *ClientPool) SetWorkerClientForTest(nodeUUID string, worker workerpb.Wor
 	p.clients[nodeUUID] = &Client{Worker: worker, NodeUUID: nodeUUID}
 }
 
-// Get 获取指定节点的客户端。
+// SetTunnelProvider 注入反向隧道来源（FR-281）；main 装配时调用一次。
+func (p *ClientPool) SetTunnelProvider(tp TunnelProvider) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.tunnels = tp
+}
+
+// Get 获取指定节点的客户端。两级取连接（ADR-066 双模式）：
+// 该节点存在活跃反向隧道 → 隧道优先（NAT/内网 worker 唯一可达路径）；
+// 否则回退直拨（老版本 worker、隧道断连重建窗口——行为与引入隧道前完全一致）。
 func (p *ClientPool) Get(nodeUUID string) (*Client, bool) {
 	p.mu.RLock()
-	defer p.mu.RUnlock()
-
+	tp := p.tunnels
 	client, ok := p.clients[nodeUUID]
+	p.mu.RUnlock()
+
+	if tp != nil {
+		if ch, tunneled := tp.Channel(nodeUUID); tunneled {
+			// 隧道客户端按取即建（轻量封装，无底层 Conn 需管理）。
+			return &Client{Worker: workerpb.NewWorkerServiceClient(ch), NodeUUID: nodeUUID}, true
+		}
+	}
 	return client, ok
 }
 
@@ -83,7 +108,9 @@ func (p *ClientPool) Disconnect(nodeUUID string) {
 	defer p.mu.Unlock()
 
 	if client, ok := p.clients[nodeUUID]; ok {
-		client.Conn.Close()
+		if client.Conn != nil {
+			client.Conn.Close()
+		}
 		delete(p.clients, nodeUUID)
 		slog.Info("已断开 Worker Node", "nodeUUID", nodeUUID)
 	}
@@ -95,7 +122,9 @@ func (p *ClientPool) Close() {
 	defer p.mu.Unlock()
 
 	for uuid, client := range p.clients {
-		client.Conn.Close()
+		if client.Conn != nil {
+			client.Conn.Close()
+		}
 		slog.Info("关闭 Worker Node 连接", "nodeUUID", uuid)
 	}
 	p.clients = make(map[string]*Client)
