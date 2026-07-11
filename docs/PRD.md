@@ -354,9 +354,9 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-286 | bot-worker 迁入 apps（ref，免 spec）：`bot-worker`→`apps/bot-worker`；同步 Go worker 运行时 spawn 路径解析与打包；须真机验 bot 真入服 spawn 成功（关联 ADR-064）。依赖 FR-285 | P2 | 📋 计划 |
 | FR-287 | 统一命令面 go-task（feat，需 spec）：引入 `Taskfile.yml` 作唯一命令入口，各语言暴露 build/test/lint/dev 同套动词委托 go/pnpm/gradlew，Windows+Linux 双跑通；`Makefile` 收敛为被委托层（关联 ADR-064）→ `docs/specs/monorepo-unification/spec.md`。依赖 FR-283/285 路径落定 | P2 | 📋 计划 |
 | FR-288 | 前端版本接上单一真源（feat，需 spec）：版本唯一真值 = `internal/version/version.go`（ADR-065 既定）；把前端 `__APP_VERSION__` 从独立记版的 `web/package.json` 改为构建期从真源派生注入，改 `version.go` 一处→前端展示+Go `/version`+产物路径（ADR-036）一致，消除前端漂移（实证：真源已 `0.15.0-dev`、前端仍报 `0.14.0`）（关联 ADR-064/065）→ `docs/specs/monorepo-unification/spec.md`。依赖 FR-283 | P2 | 📋 计划 |
-| FR-289 | JDK 安装 arch 别名归一化（fix，增强 FR-033/178）：`POST /nodes/:id/jdks/install` 的 `arch` 为自由字符串直透下载源解析，传 `amd64` 时 adoptium 不认（只认 `x64`）→ 下载 404 且错误不指向真因（真机复现：temurin 17 `arch=amd64` → 「下载返回 HTTP 404」，同版本 `x64` 成功）；面板固定送 `x64` 不受影响、API/自动化调用方中招。CP 侧入参归一化常见别名（`amd64`→`x64`、`arm64`→`aarch64`），未知 arch 直接 422 拒绝而非透传出 404（免 spec） | P2 | 📋 计划 |
-| FR-290 | JDK 下载停滞看门狗与中断错误归网络类（增强 FR-183/279）：下载流中途被掐（代理/跨境线路抖动）时任务无停滞检测，卡在中间进度直至整体超时兜底（真机复现：经 SOCKS5 代理下载 temurin 21 卡 48% 约 9 分钟），且最终错误 `写入临时文件失败: context canceled` 未被 FR-279 归为网络类 → 失败引导（去配代理/换镜像）不触发。加下载停滞看门狗（N 秒零进度 → 快速失败）并把停滞/中断类错误纳入 FR-279 网络类归类与引导（免 spec） | P2 | 📋 计划 |
-| FR-291 | JDK 安装失败残留目录清理与重试自愈（fix，增强 FR-183）：安装失败/被取消时已建的目标目录不清理（真机复现：卡死任务遗留 4KB 半截 `temurin-21/` 脚手架），此后同版本重装永远撞「目标目录已存在」，须登机手动 rm 才能解——核心操作被死锁在需要 SSH 的境地。改为安装失败即清理本次所建目标目录；安装前若目标目录存在但无完成标记（无 `bin/java`）则视为残骸自动清除重装；完好已装目录仍拒绝覆盖（语义不变）（免 spec） | P2 | 📋 计划 |
+| FR-289 | JDK 安装 arch 别名归一化（fix，增强 FR-033/178）：`POST /nodes/:id/jdks/install` 的 `arch` 为自由字符串直透下载源解析，传 `amd64` 时 adoptium 不认（只认 `x64`）→ 下载 404 且错误不指向真因（真机复现：temurin 17 `arch=amd64` → 「下载返回 HTTP 404」，同版本 `x64` 成功）；面板固定送 `x64` 不受影响、API/自动化调用方中招。CP 侧入参归一化常见别名（`amd64`→`x64`、`arm64`→`aarch64`），未知 arch 直接 422 拒绝而非透传出 404（免 spec） | P2 | 🔨 开发中 |
+| FR-290 | JDK 下载停滞看门狗与中断错误归网络类（增强 FR-183/279）：下载流中途被掐（代理/跨境线路抖动）时任务无停滞检测，卡在中间进度直至整体超时兜底（真机复现：经 SOCKS5 代理下载 temurin 21 卡 48% 约 9 分钟），且最终错误 `写入临时文件失败: context canceled` 未被 FR-279 归为网络类 → 失败引导（去配代理/换镜像）不触发。加下载停滞看门狗（N 秒零进度 → 快速失败）并把停滞/中断类错误纳入 FR-279 网络类归类与引导（免 spec） | P2 | 🔨 开发中 |
+| FR-291 | JDK 安装失败残留目录清理与重试自愈（fix，增强 FR-183）：安装失败/被取消时已建的目标目录不清理（真机复现：卡死任务遗留 4KB 半截 `temurin-21/` 脚手架），此后同版本重装永远撞「目标目录已存在」，须登机手动 rm 才能解——核心操作被死锁在需要 SSH 的境地。改为安装失败即清理本次所建目标目录；安装前若目标目录存在但无完成标记（无 `bin/java`）则视为残骸自动清除重装；完好已装目录仍拒绝覆盖（语义不变）（免 spec） | P2 | 🔨 开发中 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
