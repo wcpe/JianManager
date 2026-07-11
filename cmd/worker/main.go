@@ -30,6 +30,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/internal/worker/register"
 	"github.com/wcpe/JianManager/internal/worker/setup"
+	"github.com/wcpe/JianManager/internal/worker/tunnel"
 	"github.com/wcpe/JianManager/internal/worker/ws"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
@@ -476,6 +477,14 @@ func runWorker() {
 	})
 	hb.Start()
 	defer hb.Stop()
+
+	// 常驻反向隧道（FR-281，见 ADR-066）：把同一 workerServer 实现挂到隧道上，
+	// CP 指令经隧道下发——worker 零入站端口要求（NAT/内网可接入），9101 保留作直拨回退。
+	tunnelRunner := tunnel.New(cpAddr, nodeUUID, regResult.NodeSecret, func(reg grpc.ServiceRegistrar) {
+		workerpb.RegisterWorkerServiceServer(reg, workerServer)
+	})
+	tunnelRunner.Start()
+	defer tunnelRunner.Stop()
 
 	// 等待信号
 	sigCh := make(chan os.Signal, 1)
