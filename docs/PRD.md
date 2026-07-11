@@ -41,6 +41,8 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 > 标 `已交付` 是有门的：仅该 FR 的 spec 验收全过 + 测试 / 真机通过后，由 `sdd-release-version` 发版统一标 `已交付@vX.Y.Z`；开发中不得自标。false-done 走 `sdd-fix-bug` 归真，撤 / 推迟走 `sdd-rollback-change`。
 
 **活跃 FR 详细规格索引**（PRD 只留索引行，详情见 spec）：
+- FR-298~301（节点运行时库：多运行时泛化 / 自动扫描 / Node.js 安装器 / Bot 接管 / 聚合刷新）→ `docs/specs/node-runtime-library/spec.md`
+- FR-302（导入现有服务器：就地接管 / 搬迁托管区）→ `docs/specs/import-existing-server/spec.md`
 - FR-128~162（控制台体验与可寻址性增强）→ `docs/specs/console-ux-enhancement/spec.md`
 - FR-124~127（JBIS 背包域）→ `docs/specs/business-integration/fr-124-127-inventory.md`
 - FR-046（Sponge 子服支持）→ `docs/specs/provision-sponge/spec.md`（草拟，待审核）
@@ -364,6 +366,12 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-295 | 服务器控制台页签 keep-alive 与终端连接管理器（增强 FR-269）：9 个页签访问过即保活、切走不卸载切回瞬时；终端页签往返 WS 不断、滚动缓冲与输入不丢；文件/配置页签目录展开态与未保存草稿保留；终端连接抽为实例级连接管理器（组件订阅制，组件卸载不再直接断 WS）；离开实例整体释放（需 spec+ADR：前端 keep-alive 与终端连接管理架构，React 19.2 `<Activity>`/CSS hidden 取舍进 spec）→ `docs/specs/console-keepalive/spec.md` | P2 | 📋 计划 |
 | FR-296 | 跨服务器控制台热缓存（增强 FR-269，**依赖 FR-295**）：最近打开的 ≤3 个服控制台整体保活（LRU 淘汰），A↔B 切换双向瞬时呈现；缓存中的服终端 WS 保持连接、缓冲连续；闲置超时（默认 10 分钟不可见）自动断 WS 降级为界面状态缓存、再进自动重连；LRU 淘汰即完整卸载释放（与 FR-295 同 spec） | P2 | 📋 计划 |
 | FR-297 | 实例域数据层缓存调优（增强 FR-269/240）：实例详情/指标/serverState 等实例域查询拉长 staleTime/gcTime + placeholderData，回切先呈现缓存数据后台刷新；侧栏常驻列/服务器选择器行悬停预取实例详情（防抖）；现有 vitest 全绿不回归（免 spec） | P2 | 📋 计划 |
+| FR-298 | 节点运行时库底座与自动扫描（feat，泛化 FR-033/178/228 JDK 域，需 spec）：运行时抽象加类型维度（jdk / nodejs / python 预留；JDK 沿用 `node_jdks` 不动实例外键，新类型承载表 spec 定）；Worker 新增**扫描常见安装路径** RPC（`/usr/lib/jvm`、`Program Files\Java`、nvm/官方 node 目录等，复用 detect 探测），节点页 JDK 面板扩为「运行时」分区：扫描候选勾选入库 + 手动登记泛化多类型 → `docs/specs/node-runtime-library/spec.md` | P1 | 📋 计划 |
+| FR-299 | Node.js 运行时一键安装（feat，需 spec 并入 node-runtime-library）：nodejs.org dist 便携归档安装（index.json 版本解析、托管目录布局同 JDK），经节点出站代理（ADR-043）；停滞看门狗 / 网络失败引导 / 残骸自愈 / 删除顶层清理与 JDK 链路同语义（FR-289~292 齐平）。依赖 FR-298 | P1 | 📋 计划 |
+| FR-300 | bot-worker 接托管 Node 运行时（增强 FR-006 Bot 域，需 spec 并入 node-runtime-library）：Bot spawn 由裸 `exec("node")` 改为优先用节点运行时库登记/托管的 Node（可指定，无则回退 PATH 保兼容），消灭新节点 PATH 缺 node 时 Bot 起不来的脆弱点。依赖 FR-298 | P1 | 📋 计划 |
+| FR-301 | CP 运行时库存聚合缓存与刷新（feat，增强 FR-178 运行时资产页，需 spec 并入 node-runtime-library）：Overview 扩**多运行时矩阵**（节点 × 类型 × 版本 + 引用关系），CP 缓存各节点库存快照、显「上次同步时间」+ **手动刷新**（强制 syncFromWorker），同步失败容忍显旧数据。依赖 FR-298 | P1 | 📋 计划 |
+| FR-302 | 导入现有服务器向导（feat，节点级，需 spec + 新 ADR 落地 ADR-007 预留的「导入已有目录」高级模式）：浏览节点目录（复用 FR-178 BrowseDir）→ Worker 探测核心 jar / 内嵌 JDK / `server.properties` 端口 → 导入时二选一：**就地接管**（目录不动，托管区外例外 + **删除实例不删原目录**守则）或**搬进托管区**（移动/拷贝到系统分配目录）→ 登记实例（结构化启动 ADR-008）+ 探到的 JDK 顺带入运行时库 → `docs/specs/import-existing-server/spec.md` | P1 | 📋 计划 |
+| FR-303 | 审计日志 action 名 i18n（增强审计域，免 spec）：全量已知 action 键（`instance.start` 等 60+）中英映射（`audit.actions.*`），审计页显示翻译、悬停/角标露原键、未知键回退原样不崩；守则：本批 FR-298~302 新增审计 action 随身带中英翻译 | P2 | 📋 计划 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
