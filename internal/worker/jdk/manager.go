@@ -189,14 +189,24 @@ func (m *Manager) InstallWithProgress(ctx context.Context, vendor string, major 
 		}
 		installDir = filepath.Join(m.rootDir, suffix)
 	}
-	if _, err := os.Stat(installDir); err == nil {
-		return Info{}, fmt.Errorf("目标目录已存在: %s", installDir)
-	}
-
 	report := func(percent int, line string) {
 		if progress != nil {
 			progress(percent, line)
 		}
+	}
+
+	if _, err := os.Stat(installDir); err == nil {
+		// 有 bin/java 完成标记 = 完好已装目录，仍拒绝覆盖（语义不变）；
+		// 无标记 = 上次安装失败/取消遗留的残骸，自动清除重装，不再堵死重试（FR-291，
+		// 真机复现：卡死任务遗留半截目录致同版本重装永远撞「目标目录已存在」）。
+		if dirLooksLikeJDK(installDir) {
+			return Info{}, fmt.Errorf("目标目录已存在: %s", installDir)
+		}
+		if err := os.RemoveAll(installDir); err != nil {
+			return Info{}, fmt.Errorf("清理上次安装残留目录失败: %w", err)
+		}
+		slog.Info("检测到上次安装残留目录，已自动清理重装", "dir", installDir)
+		report(0, "检测到上次安装残留目录，已自动清理")
 	}
 
 	client := m.downloadClient()
@@ -411,6 +421,30 @@ func findFirstSubdir(dir string) string {
 		return entries[0].Name()
 	}
 	return ""
+}
+
+// hasJavaBin 报告 dir 下是否有 bin/java[.exe]（安装完成标记，FR-291）。
+func hasJavaBin(dir string) bool {
+	for _, name := range []string{"java", "java.exe"} {
+		if st, err := os.Stat(filepath.Join(dir, "bin", name)); err == nil && !st.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// dirLooksLikeJDK 报告 dir 是否像一个完好的已装 JDK：bin/java 在目录本身或
+// 一级子目录下（归档外层多包一层的布局，与 detectAt 的探测路径一致）。
+// 用于区分「完好已装（拒绝覆盖）」与「失败残骸（自动清除重装）」（FR-291）；
+// 只查文件存在、不执行 java，避免安装入口引入进程执行开销。
+func dirLooksLikeJDK(dir string) bool {
+	if hasJavaBin(dir) {
+		return true
+	}
+	if sub := findFirstSubdir(dir); sub != "" && hasJavaBin(filepath.Join(dir, sub)) {
+		return true
+	}
+	return false
 }
 
 // MarshalInfo 把 Info 转成 JSON 字符串，便于注册表持久化与跨进程传递。
