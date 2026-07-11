@@ -576,6 +576,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 
 - **左栏（常驻）= 资源主轴侧栏（FR-268，`ConsoleSidebar` / `nav-config.ts`）**：一级分组为 **平台首页 / 服务器 / 群组网络 / 观测 / 平台管理**，分组可展开、激活态使用 A+C Jian 绿主色，高频资源入口在上、平台管理入口沉底。
   - **服务器**组展开 = 全部服务器、节点、超级工作台、导播台。服务器选择不依赖常驻实例树，主要走全部服务器页、节点页、命令面板搜索与 `/instances/:id` 深链。
+  - **常驻服务器列（FR-293，增强 FR-240，`SidebarServerList`）**：「选择服务器」按钮（`ServerSelector`）下方常驻两区 = 收藏（置顶）+ 最近打开（LRU ≤8，已收藏去重）；行 = 状态点 + 名称（title 含节点名），点击进该服控制台并计入最近，行内星标可收藏/取消。与选择器弹窗共用 localStorage（`server-selector.favorites` / `server-selector.recent`），读写收敛 `components/console/server-selection.ts` 共享 store（模块级订阅 + `useSyncExternalStore`），弹窗、常驻列与直接路由进入实例（`InstanceConsolePage` 记入最近）三路互通；状态点数据走列表内 id 的低频合并查询（60s，复用 `['instances', id]` 同源端点），不为侧栏引入高频轮询；双空显示引导文案，折叠图标轨态不渲染。
   - **群组网络**组展开 = 网络拓扑（`/networks/topology`）与分组管理（`/networks`）。`/networks` 精确匹配，避免拓扑页同时点亮两个入口。
   - **观测 / 平台管理**承载跨服务器能力：监控总览、日志中心、统计分析、客户端分发监控，以及模板、客户端分发、运行时资产、存储、备份仓库、任务中心、通知中心、用户、用户组、审计、设置、许可、数据库、系统更新等平台级页面。
   - **可折叠图标轨（FR-131）**：可折叠为 3.5rem 仅域级图标轨（hover tooltip 显 label，点分组图标即展开侧栏再选子项）；导航区滚动条隐藏但保留滚动（`.scrollbar-none`）。折叠态 / 分组折叠态 / 选中节点持久化 `localStorage`（`stores/console.ts`：`sidebar.collapsed` / `sidebar.collapsedGroups` / `sidebar.selectedNodeId`）。

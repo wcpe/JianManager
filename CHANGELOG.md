@@ -21,6 +21,7 @@
 
 ### 修复
 - **单文件下载超 10MiB 被静默截断为损坏文件（FR-008/070 下载链路；FR-281 真机验收时发现，与隧道无关）**：文件管理器单文件下载端点 `GET /instances/:id/files/download` 复用了 Worker `ReadFile` unary RPC，其 10MiB 上限本是在线编辑器护栏——120MB 的 server.jar 下载得到恰好 10485760 字节的损坏前段且无任何报错（真机复现）。新增 Worker `DownloadFile` 服务端流 RPC（~64KiB 分片原样字节、首帧携带文件总大小、空文件也发首帧），CP `FileHandler.Download` 改为先收首帧再写响应头（打开失败/越界/目录仍回 JSON 错误）、逐帧转写并 `Flush`，且以首帧总大小显式设 `Content-Length`——流中途失败即字节数不符，客户端按下载失败处理，不再产出「看似成功」的半截文件。老 Worker（无本 RPC）明确报错引导升级节点，**不回退**会截断的 ReadFile；编辑器 `read` 端点语义不变（前端本有大文件/二进制预览拦截）。复现测试（12MiB 经忠实模拟截断语义的 fake Worker，断言完整字节 + Content-Length）红转绿补入套件，另补 Worker 侧 >10MiB round-trip/空文件/越界/目录 6 单测与 CP 侧小文件/缺文件/老 Worker 3 回归。ARCHITECTURE §文件操作同步归真（顺带修正该节虚标的 `UploadFile (client stream)`——上传实为 multipart→CP→`WriteFile`，从无该 RPC）。
+- **侧栏常驻服务器列（FR-293，增强 FR-240）**：「选择服务器」按钮下方常驻收藏（置顶）+ 最近打开（LRU ≤8，已收藏去重）两区，行=状态点+名称（title 含节点名）、点击进该服控制台；行内星标与选择器弹窗收藏经共享 store（同一 localStorage + `useSyncExternalStore` 订阅）实时互通，直接路由进实例也计入最近；状态点走列表内 id 的低频合并查询（60s），不为侧栏引入高频轮询；折叠图标轨态不显示、双空显示引导文案。补 6 例 DOM 强断言测试。
 
 ---
 
