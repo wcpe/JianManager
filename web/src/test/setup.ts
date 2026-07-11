@@ -5,6 +5,7 @@ import { server } from '@/mocks/server'
 import { resetDb } from '@/mocks/db'
 import { clearInjections } from '@/mocks/inject'
 import { useAuthStore } from '@/stores/auth'
+import { terminalSessionManager } from '@/lib/terminal-session-manager'
 
 /**
  * jsdom 组件 / 页面测试的全局 setup（FR-196，vitest dom project）。
@@ -20,5 +21,8 @@ afterEach(() => {
   clearInjections()
   localStorage.clear()
   useAuthStore.getState().logout()
+  // 终端会话常驻单例管理器（FR-295，ADR-067）：组件卸载不再断连，
+  // 每例后统一释放，防止会话（WS/xterm/计时器）泄漏到下个用例。
+  terminalSessionManager.disposeAll()
 })
 afterAll(() => server.close())
