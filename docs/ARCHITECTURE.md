@@ -8,15 +8,16 @@
 
 ```
 浏览器 (React SPA, go:embed 嵌入 Control Plane)
-    │ HTTP REST /api/v1/*        │ WebSocket (鉴权后直连)
-    ▼                            ▼
-Control Plane (Go 单二进制)      Worker Node WS Server
-    │ gRPC
+    │ HTTP REST /api/v1/*  +  WS /ws/terminal（终端经 CP 中转，浏览器不直连 Worker）
+    ▼
+Control Plane (Go 单二进制)
+    │ gRPC —— 指令优先经 Worker 主动建立的「反向隧道」下发（Worker 零入站，FR-281/ADR-066）；
+    │         无隧道（老 Worker / 重建窗口）回退 CP 直拨 worker gRPC 端口
     ▼
 Worker Node (Go) × 20~100
     ├── 游戏服进程管理 (direct/daemon/docker)
     ├── 守护进程 Wrapper
-    ├── WebSocket 终端服务 (/ws/terminal)
+    ├── WebSocket 终端服务 (/ws/terminal，CP 经 TerminalSession gRPC 桥回环接入；亦作老 CP 直拨回退)
     ├── 插件桥反向 WS 服务 (/ws/plugin-bridge, 探针主动连入, token, FR-065/ADR-016)
     ├── Bot 管理 → Node.js 子进程 (Mineflayer)
     └── 指标采集（ServerProbe /metrics）
@@ -28,8 +29,8 @@ Worker Node (Go) × 20~100
 
 | 进程 | 语言 | 部署 | 职责 |
 |---|---|---|---|
-| Control Plane | Go | 1 个实例 | API、认证、调度、gRPC 客户端池、前端静态文件 |
-| Worker Node | Go | 20-100 个实例 | gRPC 服务端、进程管理、Docker 管理、WS 终端服务 |
+| Control Plane | Go | 1 个实例 | API、认证、调度、gRPC 客户端池（隧道优先/直拨回退）、终端 WS 中转、前端静态文件 |
+| Worker Node | Go | 20-100 个实例 | gRPC 服务端 + 反向隧道客户端、进程管理、Docker 管理、WS 终端服务（本机桥/回退） |
 | Bot Worker | Node.js | 按需 spawn | Mineflayer 连接、行为引擎、寻路、脚本执行 |
 
 ## 3. 技术栈
@@ -703,7 +704,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 │  实例库拖拽添加 · 卡片携各自 instanceId                 │
 │  ┌──────────────────────────┐ ┌────────────────────┐  │
 │  │ ⠿ 终端  Survival          │ │ ⠿ 服务器状态        │  │
-│  │  (xterm 直连 Worker WS)   │ │  (在线/世界/运行态) │  │
+│  │  (xterm 经 CP WS 中转)    │ │  (在线/世界/运行态) │  │
 │  │                          │ ├────────────────────┤  │
 │  │                          │ │ ⠿ 资源（文件+配置） │  │
 │  └──────────────────────────┘ └────────────────────┘  │
@@ -713,7 +714,7 @@ Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不
 **画布工具栏**（`SuperWorkbenchToolbar`，FR-167）：标题 + 跨实例快捷预设 ▾ / 添加卡片 / 另存预设；跨实例画布无「当前实例」，故不含单实例生命周期操作，卡片来自左侧实例库拖拽、各携自己的 `instanceId`。导播台（`DirectorCanvas`）为只读播放视图，不可编辑布局。单实例生命周期（启动 / 停止 / 重启 / 强制终止 + 打开终端）由服务器统一控制台状态条承载（FR-269，见上）。与全局顶栏（FR-162/179）同色系同圆角（`bg-card/40` + 语义令牌，明暗 + 双主题随 CSS 变量切换）。
 
 - **卡片类型**（各复用既有面板，惰性挂载，未上画布不建 WS）：
-  - **终端** — 可交互终端（读写 xterm.js，直连 Worker Node WS，`TerminalPane`）
+  - **终端** — 可交互终端（读写 xterm.js，经 CP `/ws/terminal` 中转，`TerminalPane`；FR-281 后 CP→Worker 段优先走 TerminalSession gRPC 桥）
   - **资源** — 文件 + 配置**合一**（`ConfigExplorer` = `ResourceExplorer` + 配置能力，承 FR-130）：文件树 + CodeMirror 编辑器 + 配置 schema 双模式/校验/版本 + 收藏
   - **插件** — 插件安装与管理（`PluginManager`）
   - **监控** — FR-060 历史曲线 + 实时指标（`MetricsSegment`）

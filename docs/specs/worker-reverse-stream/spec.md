@@ -1,9 +1,10 @@
 # Spec: CP→Worker 指令反向流化——gRPC 反向隧道 + 终端中转（FR-281）
 
-- **状态**: 🔨 开发中
+- **状态**: 🔨 开发中（**M1+M2 代码全落、自动化测试全绿；剩 NAT 真机验收**，见 §4）
 - **关联**: ADR-066（accepted，修订 ADR-002 方向性 + 浏览器↔Worker WS 不变量）、ADR-039（节点 UUID 身份）、ADR-061（WS 令牌密钥）、ADR-050（重连 resync）、FR-278（内嵌 Worker 版本一致）
 - **用户拍板**: 双模式（隧道优先+直拨回退）；本批完整做（指令隧道 + 终端中转）
-- **里程碑**: M1 反向指令隧道 + 双模式池 → M2 终端（及浏览器↔Worker WS 其余用途）中转化
+- **里程碑**: M1 反向指令隧道 + 双模式池（✅ 代码+测试）→ M2 终端中转（✅ 代码+测试）
+- **落地 commit**: M1 `80b9712`（CP 隧道注册+池两级）/ `9e98a89`（Worker 隧道 Runner）/ `29c6867`（隧道状态观测）；M2 `e98e882`（TerminalSession 回环桥）/ `23c329c`（CP 代理 gRPC 优先桥）
 
 ## 1. 目标与非目标
 
@@ -35,40 +36,34 @@
 - **单节点单隧道**：同 UUID 重复建隧道，后建替换先建（与重注册语义一致，ADR-039）；替换瞬间在途 RPC 允许失败（上层既有重试/报错面兜底）。
 - **msgsize**：隧道两端沿用既有 MaxRecvMsgSize 放宽值（64MB，探针部署已踩过 4MB 默认坑）。
 
-## 3. M2 终端中转
+## 3. M2 终端中转（实现修订：比草案更小——CP 中转本就存在）
 
-### 3.1 proto（gate-api）
+> 实现时发现 **CP 已全量中转终端**（`TerminalProxy` 挂 `/ws/terminal`，浏览器 wsUrl 本就指向 CP；
+> FR-276 诊断即在此层）。唯一 NAT 断点是 CP→Worker 段的 `websocket.Dial(worker:9102)`。
+> 故 M2 收敛为「只换这一跳」，前端与浏览器侧端点零改动。以下为落地设计（取代草案 §3.1~3.3）。
+
+### 3.1 proto（已落）
 
 ```proto
-// WorkerService 新增（worker 侧实现，经隧道或直拨可达）：
-rpc TerminalSession(stream TerminalClientFrame) returns (stream TerminalServerFrame);
+rpc TerminalSession(stream TerminalFrame) returns (stream TerminalFrame);
 
-message TerminalClientFrame {
-  oneof payload {
-    TerminalOpen open = 1;      // 首帧：instance_id + 一次性终端令牌（worker 用 WS 令牌密钥校验，ADR-061 信任模型不变）
-    bytes stdin = 2;            // 终端输入
-    TerminalResize resize = 3;  // 行列变更
-  }
-}
-message TerminalServerFrame {
-  oneof payload {
-    bytes output = 1;           // 终端输出（stdout/stderr 合流，与既有 WS 帧语义一致）
-    TerminalClosed closed = 2;  // 会话结束 + 原因
-  }
-}
+message TerminalFrame { oneof kind { TerminalOpen open = 1; TerminalWSFrame frame = 2; } }
+message TerminalOpen { string token = 1; }        // CP→Worker 首帧携带一次性令牌；Worker→CP 空 open = 就绪 ack
+message TerminalWSFrame { int32 msg_type = 1; bytes payload = 2; }  // 不透明 WS 帧原样搬运
 ```
 
-- worker 侧 `TerminalSession` 桥接到既有终端会话层（与 9102 WS 服务同源实现，不复制会话逻辑）。
+- **不透明帧搬运**（取代草案的 stdin/resize 结构化帧）：对既有终端 WS 协议零侵入，resize/stdin/stdout/state 全部无感透传。
+- **worker 侧 = 本机回环桥**：`TerminalSession` 校验首帧后回环拨 `ws://127.0.0.1:<wsPort>/ws/terminal?token=…`——令牌校验与会话层的**单一真源仍是 `ws.TerminalServer`**（零复制）；本机 401/403 以 `PermissionDenied` 透传。
+- **就绪 ack**：回环拨通即回空 open，CP 据此确定性区分 就绪 / 令牌被拒（FR-276 诊断）/ 老 Worker `Unimplemented`（回退直拨 WS）。
 
-### 3.2 CP 中转端点（gate-api）
+### 3.2 CP 中转（已落，无新增 HTTP 端点）
 
-- `GET /api/nodes/:id/instances/:iid/terminal/relay`（WS upgrade）：鉴权沿用既有一次性终端令牌流程——前端先经既有 HTTP 端点取令牌，连本端点时以 query 携带；CP 透传令牌进 `TerminalSession` 首帧，**校验方仍是 worker**。CP 侧仅校验用户会话有权访问该实例（既有 permission 语义）+ 泵字节。
-- 错误面：worker 拒令牌 → 结构化诊断透传（FR-276 语义保留）；隧道/直拨均不可达 → 既有离线短路语义。
+- 复用既有 `/ws/terminal`（`TerminalProxy`）：新增 `bridgeViaGRPC`——池取 `WorkerServiceClient`（天然隧道优先/直拨回退）开 `TerminalSession` 流双向泵帧；`Unimplemented` 回退既有直拨 WS 路径，行为与引入前一致。
+- 一次性令牌全流程保留（CP 消费 used-set + Worker 校验签名）；FR-276 `WORKER_TOKEN_REJECTED` 定向诊断在 gRPC 桥路同语义成立。
 
-### 3.3 前端切线
+### 3.3 前端切线（零改动）
 
-- 终端接线（`web/src/api/terminal.ts` 及消费组件）从 worker WS URL 改为 CP relay URL；**一律中转**（ADR-066 拍板，不做双路径）。
-- 浏览器↔Worker WS 其余用途实施时盘点 9102 现役消费方（终端/日志/其他），逐一切到 CP 中转或确认本就走 CP；plugin-bridge（本机探针）保留在 9102。
+- 前端 `wsUrl` 本就指向 CP `/ws/terminal`，无需切线。已核查 `web/src` 无任何直连 worker WS 的用途（`wsPort` 仅作展示字段）；plugin-bridge（本机探针）保留在 9102。
 
 ### 3.4 文档与不变量同步（doc-sync）
 
@@ -77,11 +72,11 @@ message TerminalServerFrame {
 
 ## 4. 测试与验收
 
-### 自动化
-- 隧道单测：建立/鉴权拒绝/断连重建/同 UUID 替换。
-- pool 双模式单测：有隧道走隧道、无隧道回退直拨、隧道消失中途回退。
-- `TerminalSession` 单测：令牌校验（有效/无效/过期）、stdin/output 往返、resize、关闭语义。
-- 集成：进程内 CP+Worker 经真隧道跑 `StartInstance`/`ListFiles`/`StreamInstanceEvents` happy path；e2e 全链路（`internal/e2e`）在隧道模式下回归。
+### 自动化（✅ 全绿）
+- [x] 隧道集成（bufconn 真隧道）：建立→登记→pool 取隧道→RPC 达→断开→登记消失；鉴权三拒绝（secret 错/节点不存在/缺身份）；无隧道直拨回退（`internal/controlplane/grpc/tunnel_test.go`）
+- [x] Worker Runner：建立→RPC 经隧道达→CP 侧踢断→退避自动重连→Stop 后不再重连（`internal/worker/tunnel/tunnel_test.go`）
+- [x] `TerminalSession`：就绪 ack + echo 往返 / 令牌拒绝 `PermissionDenied` / 缺 open `InvalidArgument` / 未装配 `Unavailable`（`internal/worker/grpc/terminal_session_test.go`）
+- [x] CP 终端桥全真链路（真 `workerws.TerminalServer`）：直拨黑洞下 welcome 经 gRPC 桥到达（证明桥路生效）/ 老 Worker `Unimplemented` 回退直拨连通 / 密钥不一致 `WORKER_TOKEN_REJECTED` 诊断（`internal/controlplane/service/terminal_proxy_grpc_test.go`）；既有 WS 路径用例回归全绿
 
 ### 真机（必验，测试绿 ≠ 真能用）
 - **NAT 场景主验**：公网 CP（FR-277 部署主机可用）+ 家用 NAT Windows worker（9101/9102 不放行）：节点上线 → 指令（启停/文件/部署探针）→ **浏览器终端全链路** → ≥100MB 归档下载。
