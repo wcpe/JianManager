@@ -6,20 +6,32 @@
 
 ## [Unreleased]
 
-> 本段累积 `v0.13.0` tag 之后的开发变更。**JBIS 背包域（第五期，FR-124~127）读写数据流已于 2026-07-11 真机验通**（CoreLib serverInfo 环境门槛经黄金 config 解锁：bot 真入服 → AIS 落库 → view/writeBasicAttrs+审计/追踪事件全链路），代码随 v0.13.0 落地、真机验收翻交付于 `✅ 已交付@v0.14.0`。四期客户端 OTA 端到端真客户端更新流亦已真机复验，唯 FR-099 原生进度弹窗人眼目视为 env-blocked（非代码缺口，需真启动器场景）。
+> 本段累积 `v0.14.0` tag 之后的开发变更。
+
+---
+
+## 0.14.0（2026-07-11）
+
+> 第五期 JBIS 背包域读写数据流真机验收翻交付 + 本轮收口修复。背包域 FR-124~127 代码随 v0.13.0 落地，本版经黄金 config 解锁 CoreLib serverInfo（MySQL+Redis）并修复探针写死玩家缺陷后真机验通（bot 真入服 → AIS 落库 → view/writeBasicAttrs+审计/追踪事件全链路）。四期客户端 OTA 端到端真客户端更新流亦经 updater-core 真机复验（唯 FR-099 原生进度弹窗人眼目视 env-blocked、非代码缺口，需真启动器场景）。同步版本标签归正：三~六期归 v0.13.0，对齐「三~六期一并打进单个 v0.13.0 tag」的实际拓扑。
+
+### 交付
+- **第五期 JBIS 背包域读写（FR-124~127）真机验收翻交付**：CoreLib serverInfo 环境门槛（MySQL + Redis + 服务器注册）经 AllinInventorySync e2e 黄金 config 解锁后，ServerProbe 背包 Provider 对接真 AIS 2.1.0：`view` 读真背包（含离线、nbtBase64 全保真）+ `writeBasicAttrs` 基础属性写（幂等 + 二次确认 + JM `business.write` 与 AIS `EDIT_ATTRS` 双审计）+ `TrackedItemActionEvent`（JOIN_CARRY）经 `domain+dedupKey` 汇聚落 `business_events`；背包定制页（`/super`）与业务掌控台真机端到端验通。代码随 v0.13.0 落地，本版为真机验收交付。
 
 ### 修复
 - **泛化业务台 object 型入参被当字符串下发致写操作永远失败（FR-119）**：业务掌控台 `BusinessSegment` manifest 驱动渲染时把每个 arg 一律当 `Record<string,string>` 存、下发时整体 `JSON.stringify(args)`，对**对象/数组型入参**（如 `inventory.writeBasicAttrs` 的 `base`/`edited`，契约为 `{dataVersion,basicAttrs:{...}}` 嵌套对象）——运维在文本框粘 JSON 会被当字符串发出，探针侧 `req.getObject("base")` 拿不到对象 → 返回「缺少 base 属性对象」，泛化面板手工写下发必失败（真机复现）。抽 `coerceBusinessArg`/`buildBusinessPayload` 纯函数：文本 trim 后以 `{`/`[` 起头才尝试 `JSON.parse`，解析成对象/数组则还原为真嵌套结构，其余（含 economy 的 `player`/`currency`/`amount` 标量）保持字符串——不破坏标量入参既有下发。补 `business-segment.test.ts` 取值单测 + `BusinessSegment.dom.test.tsx` 端到端断言 `writeBasicAttrs` 的 `edited` 下发为真嵌套对象（回执 success、版本自增）。仅影响泛化业务台对 object 型 arg 的手工下发；背包定制页 `InventorySegment` 走专用嵌套构造不受影响。
 - **背包基础属性写解码不符契约致玩家被写死（FR-125/126/127，ServerProbe 子模块 `8b5974b`）**：探针 `InventoryProvider.writeBasicAttrs` 对 base/edited 直读容器顶层字段且仅按字符串解析，与前端/CP 审计既定的 `{dataVersion,basicAttrs:{...}}` 嵌套数值契约不符——契约 payload 全字段回退默认（血量 0.0）写入 AllinInventorySync，**在线玩家被直接写死、离线玩家上线即死**（真机 Paper 1.20.1 + AIS 2.1.0 复现）。探针解码下沉 `InventoryEnvelope.decodeBasicAttrs`（嵌套优先/扁平兼容、字符串/数值双承载，`JsonObject` 新增 `getDouble`），先红后绿两单测 + 探针 build 全绿；真机复验在线/离线写精确生效（xp 20→9、hp 20→15.5）、幂等重发 dv 不前移、玩家存活、背包定制页 UI 写路径（二次确认）端到端通过。随本条 bump `third_party/ServerProbe` 子模块并重建内嵌探针。
 - **发布向导切步骤清空本地暂存文件（FR-191/250）**：工作区路由过渡容器 `Workspace` 的 `key` 一度含 `location.search`，导致同一路由页内仅 query 变化（发布向导 `?step=` 步骤切换、列表筛选、tab 切换等）会 remount 整棵路由子树，清空 `ClientPublishPage` 本地暂存的 `drafts`——真机浏览器上发布向导过不了「选择文件 → 逐文件配置」这一步，FR-191/250 发布流完全不可用（单测因直接渲染页面组件、绕过 Workspace 外壳而漏检）。改 `routeKey` 仅按 `location.pathname`（页面级切换仍重放进场动画，同页 query 变化不再 remount），并补 `Workspace.routekey.dom.test.tsx` 经真实 `BrowserRouter` 渲染 Workspace 断言同页 query 变化不清空页内状态。
 
+### 文档
+- **版本标签对齐实际 tag 拓扑**：原计划「按主题切 v0.13~v0.16 四版」放弃（三~六期代码实际一并打进单个 v0.13.0 tag）；PRD §4 中 50 个 FR（33 个第六期控制台体验与规模化 + 17 个第四期客户端 OTA 二三轮）版本标签由 @v0.14.0/@v0.15.0 归正为 @v0.13.0，FR-124~127 归 @v0.14.0；§7 期↔版本映射与发布计划同步重写。
+
 ## 0.13.0（2026-07-11）
 
 > 自 `v0.12.0`（`0939068c`）以来累积交付：第三期运营底座与可观测补全、第六期控制台体验与规模化、第四期客户端分发/OTA 二三轮，以及三～六期的真机验收缺陷收尾。第五期 JBIS 背包域集成层脊柱（FR-115~123）已交付、背包数据读写流（FR-124~127）代码随本版落地但真机数据流待环境（见上方 Unreleased 说明）。
 
 ### 新增
-- **CP↔Worker 专用 WS 令牌密钥自动下发（FR-275，ADR-061，修订 ADR-020；v0.16.0）**：终端/插件桥令牌改用独立 WS 令牌密钥签发校验，与签用户会话的 `jwt.secret` 隔离（Worker 永不持有后者）。CP 三轨解析（显式 `jwt.ws_secret` > 生产自动生成持久化 `etc/ws-token-secret.key` > dev 回退），经 gRPC `RegisterResponse`（首注册+重注册）下发、`HeartbeatResponse` 每拍携带（值变化才热应用），Worker 持久化到 `etc/node-identity.json`（0600）并热更新终端/插件桥校验——修复「一键安装的生产 Worker 因密钥未同步终端 401、探针监控失效」的产品缺口，并顺带关闭「默认密钥校验 WS 令牌可被伪造终端 token」的暴露面。旧 CP 响应无字段时 Worker 回退本地 `jwt_secret`（向后兼容）。**升级注意**：曾手动同步过 `jwt_secret` 的部署请同批升级 CP 与 Worker（或临时设 `jwt.ws_secret` 为旧值过渡）；CP 换新密钥后需对存量实例走探针在线更新（FR-068）重发插件桥 token。
-- **终端 WS 密钥不一致 401 诊断兜底（FR-276，ADR-061；v0.16.0）**：CP 终端代理探测 Worker 握手 401/403 时向浏览器发 `code=WORKER_TOKEN_REJECTED` 结构化诊断，前端红色显示「终端令牌被节点拒绝：该节点的 WS 令牌密钥与平台不一致」并给出处置指引，与网络类断连（维持原文案）可区分；一般错误态同时带出后端 `data` 原因（此前被丢弃只显示裸 `[状态: error]`）。DEPLOY 新增「终端/探针监控 401 排查」小节。
+- **CP↔Worker 专用 WS 令牌密钥自动下发（FR-275，ADR-061，修订 ADR-020）**：终端/插件桥令牌改用独立 WS 令牌密钥签发校验，与签用户会话的 `jwt.secret` 隔离（Worker 永不持有后者）。CP 三轨解析（显式 `jwt.ws_secret` > 生产自动生成持久化 `etc/ws-token-secret.key` > dev 回退），经 gRPC `RegisterResponse`（首注册+重注册）下发、`HeartbeatResponse` 每拍携带（值变化才热应用），Worker 持久化到 `etc/node-identity.json`（0600）并热更新终端/插件桥校验——修复「一键安装的生产 Worker 因密钥未同步终端 401、探针监控失效」的产品缺口，并顺带关闭「默认密钥校验 WS 令牌可被伪造终端 token」的暴露面。旧 CP 响应无字段时 Worker 回退本地 `jwt_secret`（向后兼容）。**升级注意**：曾手动同步过 `jwt_secret` 的部署请同批升级 CP 与 Worker（或临时设 `jwt.ws_secret` 为旧值过渡）；CP 换新密钥后需对存量实例走探针在线更新（FR-068）重发插件桥 token。
+- **终端 WS 密钥不一致 401 诊断兜底（FR-276，ADR-061）**：CP 终端代理探测 Worker 握手 401/403 时向浏览器发 `code=WORKER_TOKEN_REJECTED` 结构化诊断，前端红色显示「终端令牌被节点拒绝：该节点的 WS 令牌密钥与平台不一致」并给出处置指引，与网络类断连（维持原文案）可区分；一般错误态同时带出后端 `data` 原因（此前被丢弃只显示裸 `[状态: error]`）。DEPLOY 新增「终端/探针监控 401 排查」小节。
 - **备份存储测试连接与容量展示（FR-152）**：备份存储列表新增已完成备份份数与已用空间统计，远程后端可行内测试连接并显示成功/失败原因与延迟。Control Plane 新增 `/backup-storages/:id/stats`、`/backup-storages/:id/test`、`/backup-storages/local/stats` 端点，Worker 新增 `TestStorageBackend` gRPC，经既有 S3/SFTP/WebDAV 存储抽象执行读写探测与容量统计；前端补 hook、mock、i18n、DOM 与 E2E 覆盖。
 - **插件批量部署多服（FR-053）**：新增插件批量部署规格与 API 契约，入口位于运行时资产页，从制品库选择 `type=plugin` 资产后一次部署到多个实例的 `plugins/` 目录；后端按实例管理权限收敛目标，复用 Worker `WriteFile` 扇出写入，不新增 Worker RPC，响应按实例聚合成功/失败/跳过结果并审计 `plugin.batchDeploy`。
 - **Sponge 子服支持（FR-046）**：一键建服核心类型扩展为 Paper / SpongeVanilla / SpongeForge，实例模型继续落 `minecraft_java` + `backend`。SpongeVanilla 从 Sponge 官方 Maven 解析并下载 universal jar 到 `server.jar`；SpongeForge 解析 SpongeForge 版本对应的 Forge installer 坐标，经新增 Worker gRPC `InstallForgeServer` 在实例工作目录执行 Forge installer，并把 `SpongeForge.jar` 写入 `mods/`。前端建服对话框支持核心类型切换、版本联动与下载预览，Mock/DOM 测试覆盖 SpongeVanilla 与 SpongeForge payload。
