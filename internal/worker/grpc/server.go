@@ -113,6 +113,9 @@ type Server struct {
 	// runtimeScanner 运行时扫描器（FR-298 节点运行时库）：ScanRuntimes 按常见安装路径
 	// 发现 jdk/nodejs 候选。为 nil 表示未启用（返回空候选）。由 SetRuntimeScanner 注入。
 	runtimeScanner *runtimescan.Scanner
+	// importJDKProbe 导入探测（FR-302）中「某目录是否为 JDK」的探测钩子，仅测试注入替身：
+	// 真探测（jdk.detectAt 语义）要跑 bin/java，伪目录布局单测不可得。为 nil 时走 jdkMgr.Probe。
+	importJDKProbe func(dir string) (*workerpb.ImportJdkCandidate, bool)
 }
 
 // NewServer 创建 Worker gRPC 服务器。
