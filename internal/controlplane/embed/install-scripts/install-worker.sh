@@ -24,7 +24,7 @@ set -eu
 
 # ---- 默认值 ----
 CONTROL_PLANE=""        # CP gRPC 地址 host:port（上线阶段必填）
-TOKEN=""                # enrollment token 明文（上线阶段必填）
+TOKEN="${JIANMANAGER_ENROLL_TOKEN:-}"  # enrollment token 明文（上线阶段必填；可经 env 传入避免出现在命令行，FR-277）
 NODE_NAME=""            # 节点名（可选，留空由 Worker/CP 预设名生效）
 BINARY=""               # 本地已拷贝的 Worker 二进制路径（离线/内网兜底，跳过下载）
 # Worker 二进制下载地址（可选）。面板一键命令默认传入 CP-local 地址；脚本直接运行时回退
@@ -35,6 +35,7 @@ DATA_DIR=""             # 数据根（缺省 <install-dir>/data）
 GRPC_PORT="9101"        # Worker gRPC 端口
 WS_PORT="9102"          # Worker WS 终端端口
 INSTALL_SERVICE="0"     # 是否注册 systemd 服务
+SERVICE_SCOPE="system"  # systemd 档位：system（/etc/systemd/system，需 root）| user（~/.config/systemd/user，普通用户，FR-277/ADR-063）
 DOWNLOAD_ONLY="0"       # 仅下载、不上线
 SKIP_DOWNLOAD="0"       # 跳过下载、直接上线
 
@@ -55,6 +56,8 @@ usage() {
   --grpc-port <port>       Worker gRPC 端口（默认 9101）
   --ws-port <port>         Worker WS 端口（默认 9102）
   --service                注册 systemd 服务（开机自启、常驻自连）
+  --service-scope <s>      systemd 档位：system（默认，需 root）| user（普通用户
+                           unit，需 linger 保断连常驻，脚本自动检查/尝试开启）
   --download-only          只下载/准备二进制，不上线
   --skip-download          跳过下载，直接用安装目录已有二进制上线
   -h, --help               显示本帮助
@@ -74,6 +77,7 @@ while [ $# -gt 0 ]; do
         --grpc-port)     GRPC_PORT="$2"; shift 2 ;;
         --ws-port)       WS_PORT="$2"; shift 2 ;;
         --service)       INSTALL_SERVICE="1"; shift ;;
+        --service-scope) SERVICE_SCOPE="$2"; shift 2 ;;
         --download-only) DOWNLOAD_ONLY="1"; shift ;;
         --skip-download) SKIP_DOWNLOAD="1"; shift ;;
         -h|--help)       usage; exit 0 ;;
@@ -84,6 +88,11 @@ done
 if [ "$DOWNLOAD_ONLY" = "1" ] && [ "$SKIP_DOWNLOAD" = "1" ]; then
     echo "错误: --download-only 与 --skip-download 互斥" >&2; exit 1
 fi
+
+case "$SERVICE_SCOPE" in
+    system|user) : ;;
+    *) echo "错误: --service-scope 仅支持 system|user（收到: $SERVICE_SCOPE）" >&2; exit 1 ;;
+esac
 
 # 上线阶段才校验 CP/token（仅下载时无需）。
 if [ "$DOWNLOAD_ONLY" != "1" ]; then
@@ -192,8 +201,42 @@ if [ "$INSTALL_SERVICE" = "1" ]; then
     if ! command -v systemctl >/dev/null 2>&1; then
         echo "错误: 系统无 systemd（systemctl 不存在），无法 --service 注册服务" >&2; exit 1
     fi
-    echo "[3/4] 注册 systemd 服务 jianmanager-worker（ExecStart 跑 worker 自配 setup）"
-    UNIT="/etc/systemd/system/jianmanager-worker.service"
+    # 按档位选 unit 路径与 systemctl 形态（FR-277/ADR-063）。user 档面向纯普通用户：
+    # unit 进 $HOME、systemctl --user 管理，并强制 linger——不开 linger 的 user 服务
+    # 在 SSH 会话断开后会被 systemd 回收，「装成功但断连即死」比失败更糟，开不了就报错。
+    if [ "$SERVICE_SCOPE" = "user" ]; then
+        SYSCTL="systemctl --user"
+        UNIT_DIR="$HOME/.config/systemd/user"
+        WANTED_BY="default.target"
+        # SSH 非交互会话常缺 XDG_RUNTIME_DIR，user bus 定位靠它。
+        [ -n "${XDG_RUNTIME_DIR:-}" ] || XDG_RUNTIME_DIR="/run/user/$(id -u)"
+        export XDG_RUNTIME_DIR
+        if command -v loginctl >/dev/null 2>&1; then
+            if [ "$(loginctl show-user "$(id -un)" --property=Linger --value 2>/dev/null)" != "yes" ]; then
+                if loginctl enable-linger "$(id -un)" 2>/dev/null; then
+                    echo "      已为用户 $(id -un) 开启 linger（断连后服务常驻）"
+                else
+                    echo "错误: 用户 $(id -un) 未开启 linger 且无权自开，user 档服务在 SSH 断开后会被杀。" >&2
+                    echo "      请让管理员执行一次: loginctl enable-linger $(id -un)  然后重试。" >&2
+                    exit 1
+                fi
+            fi
+        else
+            echo "警告: 无 loginctl，无法确认 linger 状态；若 SSH 断开后服务消失，请管理员开启 linger。" >&2
+        fi
+        mkdir -p "$UNIT_DIR"
+    else
+        if [ "$(id -u)" != "0" ]; then
+            echo "错误: --service-scope system 需要 root（写 /etc/systemd/system 与 systemctl）。" >&2
+            echo "      普通用户请改用 --service-scope user。" >&2
+            exit 1
+        fi
+        SYSCTL="systemctl"
+        UNIT_DIR="/etc/systemd/system"
+        WANTED_BY="multi-user.target"
+    fi
+    echo "[3/4] 注册 systemd 服务 jianmanager-worker（$SERVICE_SCOPE 档，ExecStart 跑 worker 自配 setup）"
+    UNIT="$UNIT_DIR/jianmanager-worker.service"
     # 首次启动：worker 无配置 → 自启 setup，读环境里的 CP/token/节点名等完成写配置 + 注册 +
     # 持久化身份 + 转 run。注册成功后落本地身份文件，后续重启 worker 判「已配置」直接 run、不再用 token。
     # token 经服务进程环境注入（一次性），不写入任何配置文件。
@@ -219,12 +262,16 @@ Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=$WANTED_BY
 UNIT_EOF
-    systemctl daemon-reload
-    systemctl enable jianmanager-worker >/dev/null 2>&1 || true
-    systemctl restart jianmanager-worker
-    echo "[4/4] 完成。服务已启动（首次自配上线），查看日志: journalctl -u jianmanager-worker -f"
+    $SYSCTL daemon-reload
+    $SYSCTL enable jianmanager-worker >/dev/null 2>&1 || true
+    $SYSCTL restart jianmanager-worker
+    if [ "$SERVICE_SCOPE" = "user" ]; then
+        echo "[4/4] 完成。服务已启动（首次自配上线），查看日志: journalctl --user -u jianmanager-worker -f"
+    else
+        echo "[4/4] 完成。服务已启动（首次自配上线），查看日志: journalctl -u jianmanager-worker -f"
+    fi
 else
     echo "[3/4] 未指定 --service，前台调 worker 自配上线（Ctrl+C 退出；生产建议加 --service）"
     echo "[4/4] 启动 Worker（首次自配 setup）..."
