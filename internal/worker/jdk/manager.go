@@ -260,13 +260,20 @@ func (m *Manager) Remove(path string) error {
 		return err
 	}
 	rel, err := filepath.Rel(rootAbs, abs)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	// rel="." 即托管根本身：整根删除会清空全部托管 JDK，一并拒绝（FR-292）。
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 		return fmt.Errorf("只能删除托管目录 (%s) 下的 JDK", m.rootDir)
 	}
 	if !strings.HasPrefix(abs, rootAbs) {
 		return fmt.Errorf("只能删除托管目录 (%s) 下的 JDK", m.rootDir)
 	}
-	return os.RemoveAll(abs)
+	// 归一到托管根下的顶层子目录整体删除（FR-292）：登记路径可能是解压后嵌套的
+	// 内层（…/temurin-11/jdk-11.0.31+11），只删内层会留父壳空目录在托管根下占位。
+	top := rel
+	if i := strings.IndexRune(rel, filepath.Separator); i >= 0 {
+		top = rel[:i]
+	}
+	return os.RemoveAll(filepath.Join(rootAbs, top))
 }
 
 // detectAt 探测给定目录是否为 JDK：找 bin/java 并运行 -XshowSettings:properties
