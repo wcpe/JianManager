@@ -1,5 +1,17 @@
 .PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-probe embed-cfr embed-client-updater gen-licenses docker dist dist-bin
 
+# Windows 原生终端（PowerShell/cmd）下 GNU make 默认用 cmd.exe 执行 recipe，而本文件 recipe
+# 全为 POSIX 命令（mkdir -p / cp -r / sed …），cmd 下会报「命令语法不正确」。检测到
+# Git for Windows 的 sh 则强制启用（8.3 短路径 PROGRA~1 避开空格路径坑）；git-bash 内运行不受影响。
+# 同时把 Git 的 usr/bin 前置进 PATH：npm 等 sh 包装脚本的 `#!/usr/bin/env bash` 才会命中
+# git-bash，而非 PATH 上 system32 的 WSL bash（后者按 WSL 路径体系找不到脚本，报 No such file）。
+ifeq ($(OS),Windows_NT)
+ifneq ($(wildcard C:/PROGRA~1/Git/usr/bin/sh.exe),)
+SHELL := C:/PROGRA~1/Git/usr/bin/sh.exe
+export PATH := C:/PROGRA~1/Git/usr/bin;$(PATH)
+endif
+endif
+
 # 构建所有（含前端嵌入）。gen-licenses 先行，确保许可清单与即将打包的前端一致。
 # embed-install-scripts 同步一键安装脚本内嵌副本（FR-080），保持与 canonical scripts/ 一致。
 build: gen-licenses build-web embed-web embed-install-scripts build-cp build-worker
