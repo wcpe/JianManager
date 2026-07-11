@@ -235,8 +235,17 @@ if [ "$INSTALL_SERVICE" = "1" ]; then
         UNIT_DIR="/etc/systemd/system"
         WANTED_BY="multi-user.target"
     fi
-    echo "[3/4] 注册 systemd 服务 jianmanager-worker（$SERVICE_SCOPE 档，ExecStart 跑 worker 自配 setup）"
-    UNIT="$UNIT_DIR/jianmanager-worker.service"
+    # systemd unit 名据安装目录派生（FR-282）：同机多 worker（各自不同 --install-dir）各占独立 unit、
+    # 互不覆盖。默认目录（basename=jianmanager，含 /opt/jianmanager 与 ~/jianmanager）保持
+    # jianmanager-worker 保向后兼容；其余取 basename 去 jianmanager- 前缀作后缀、非法字符归一为 -。
+    SERVICE_NAME="jianmanager-worker"
+    _dir_base=$(basename "$INSTALL_DIR")
+    if [ "$_dir_base" != "jianmanager" ]; then
+        _suffix=$(printf '%s' "$_dir_base" | sed -e 's/^jianmanager-\{0,1\}//' -e 's/[^A-Za-z0-9_-]/-/g')
+        [ -n "$_suffix" ] && SERVICE_NAME="jianmanager-worker-$_suffix"
+    fi
+    echo "[3/4] 注册 systemd 服务 $SERVICE_NAME（$SERVICE_SCOPE 档，ExecStart 跑 worker 自配 setup）"
+    UNIT="$UNIT_DIR/$SERVICE_NAME.service"
     # 首次启动：worker 无配置 → 自启 setup，读环境里的 CP/token/节点名等完成写配置 + 注册 +
     # 持久化身份 + 转 run。注册成功后落本地身份文件，后续重启 worker 判「已配置」直接 run、不再用 token。
     # token 经服务进程环境注入（一次性），不写入任何配置文件。
@@ -265,12 +274,12 @@ RestartSec=5
 WantedBy=$WANTED_BY
 UNIT_EOF
     $SYSCTL daemon-reload
-    $SYSCTL enable jianmanager-worker >/dev/null 2>&1 || true
-    $SYSCTL restart jianmanager-worker
+    $SYSCTL enable "$SERVICE_NAME" >/dev/null 2>&1 || true
+    $SYSCTL restart "$SERVICE_NAME"
     if [ "$SERVICE_SCOPE" = "user" ]; then
-        echo "[4/4] 完成。服务已启动（首次自配上线），查看日志: journalctl --user -u jianmanager-worker -f"
+        echo "[4/4] 完成。服务已启动（首次自配上线），查看日志: journalctl --user -u $SERVICE_NAME -f"
     else
-        echo "[4/4] 完成。服务已启动（首次自配上线），查看日志: journalctl -u jianmanager-worker -f"
+        echo "[4/4] 完成。服务已启动（首次自配上线），查看日志: journalctl -u $SERVICE_NAME -f"
     fi
 else
     echo "[3/4] 未指定 --service，前台调 worker 自配上线（Ctrl+C 退出；生产建议加 --service）"
