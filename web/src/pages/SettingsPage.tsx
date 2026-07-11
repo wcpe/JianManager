@@ -350,17 +350,20 @@ function PlatformCategory({
             </div>
           )}
 
-          {/* 连通性测试（FR-229）：代理在网络分类测出站、JDK 下载源在运行时分类测可达。 */}
+          {/* 连通性测试（FR-229）：代理在网络分类测出站（目标可自定义，FR-280）、JDK 下载源在运行时分类测可达。 */}
           {category === 'network' && (
             <div className="space-y-2 border-t pt-3">
-              <p className="text-xs text-muted-foreground">{t('diagnostics.proxyTestHint', '测试 CP 能否经当前出站代理访问外网（GitHub）。')}</p>
-              <OutboundTestButton url="https://api.github.com" label={t('diagnostics.testProxy', '测试出站连通性')} />
+              <p className="text-xs text-muted-foreground">
+                {t('diagnostics.proxyTrafficHint', '经此出站代理的流量：JDK 一键下载、Worker 二进制/自更新拉取、探针依赖下载、客户端分发外呼与更新源检查等 CP/节点的对外下载与请求。')}
+              </p>
+              <p className="text-xs text-muted-foreground">{t('diagnostics.proxyTestHint', '填任意地址测试 CP 能否经当前出站代理访问外网（默认 https://www.google.com）。')}</p>
+              <OutboundTestButton defaultUrl="https://www.google.com" editable label={t('diagnostics.testProxy', '测试出站连通性')} />
             </div>
           )}
           {category === 'runtime' && (
             <div className="space-y-2 border-t pt-3">
               <p className="text-xs text-muted-foreground">{t('diagnostics.jdkSourceTestHint', '测试 JDK 下载源（foojay）是否可达。')}</p>
-              <OutboundTestButton url="https://api.foojay.io/disco/v3.0/distributions" label={t('diagnostics.testJdkSource', '测试 JDK 下载源')} />
+              <OutboundTestButton defaultUrl="https://api.foojay.io/disco/v3.0/distributions" label={t('diagnostics.testJdkSource', '测试 JDK 下载源')} />
             </div>
           )}
         </>
