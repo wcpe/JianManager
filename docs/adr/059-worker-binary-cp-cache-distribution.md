@@ -1,8 +1,8 @@
 # ADR-059: Worker 二进制由 CP 代理缓存并经 LAN 下发
 
 - **日期**: 2026-07-06
-- **状态**: accepted（关联 FR-190；缓存/下载/UpgradeNode/系统更新页/安装命令已落地，真机内网验收待补）
-- **关联**: FR-190、ADR-020、ADR-036、ADR-037、ADR-043、ADR-051
+- **状态**: accepted（关联 FR-190；缓存/下载/UpgradeNode/系统更新页/安装命令已落地，真机内网验收待补）。「可信来源 = GitHub Releases/feed」一条被 ADR-062 修订为「内嵌（首选，同版本）+ 远程 feed（兜底）」，其余决策不变
+- **关联**: FR-190、ADR-020、ADR-036、ADR-037、ADR-043、ADR-051、ADR-062
 
 ## 上下文
 
