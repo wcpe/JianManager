@@ -133,6 +133,11 @@ func downloadAndExtract(ctx context.Context, client *http.Client, url, destDir s
 // 上报下载百分比与阶段日志（FR-183，见 ADR-040；report 可为 nil）。
 // 有 Content-Length 时按字节计算 0~100 的真实百分比；无则停在 0、靠阶段日志补充。
 func downloadAndExtractWithProgress(ctx context.Context, client *http.Client, url, destDir string, report jdkProgress) error {
+	return downloadAndExtractStallParams(ctx, client, url, destDir, report, downloadStallTimeout, stallCheckInterval)
+}
+
+// downloadAndExtractStallParams 同上，但停滞看门狗阈值参数化（便于测试以小值注入，FR-290）。
+func downloadAndExtractStallParams(ctx context.Context, client *http.Client, url, destDir string, report jdkProgress, stall, interval time.Duration) error {
 	if client == nil {
 		client = &http.Client{} // 无总超时；卡死由 stall 看门狗判定（FIX-4）
 	}
@@ -143,6 +148,7 @@ func downloadAndExtractWithProgress(ctx context.Context, client *http.Client, ur
 	// 用可取消 context + stall 看门狗替代「总超时」：慢但在进展的大归档不被拖死，
 	// 仅连续无字节进展（卡死/源不可达）时中断（FIX-4，原 15min 总超时会把进展中的大下载也掐断）。
 	// 子 context 继承外部取消（FR-227 强制停止）与 stall 看门狗本地取消（FIX-4），任一触发即中断请求。
+	parent := ctx // 保留外部 ctx：区分「看门狗停滞掐断」与「用户强停」两种取消（FR-290）
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -151,7 +157,10 @@ func downloadAndExtractWithProgress(ctx context.Context, client *http.Client, ur
 	}
 	pw := &progressWriter{report: report} // total 待响应头到达后填
 	watchdogDone := make(chan struct{})
-	go watchStall(cancel, pw, downloadStallTimeout, stallCheckInterval, watchdogDone)
+	// 看门狗掐断前先置停滞标记：失败时据此产出「下载停滞」专属错误并归网络类，
+	// 而非裸 "context canceled"（真机复现：经代理下载流中途被掐，卡 48% 且错误无引导，FR-290）。
+	var stalled atomic.Bool
+	go watchStall(func() { stalled.Store(true); cancel() }, pw, stall, interval, watchdogDone)
 	defer close(watchdogDone)
 
 	resp, err := client.Do(req)
@@ -190,7 +199,18 @@ func downloadAndExtractWithProgress(ctx context.Context, client *http.Client, ur
 	pw.total = resp.ContentLength // 响应头已到，io.Copy 前填总长（看门狗只读 written 原子，无并发冲突）
 	if _, err := io.Copy(tmp, io.TeeReader(resp.Body, pw)); err != nil {
 		tmp.Close()
-		return fmt.Errorf("写入临时文件失败: %w", err)
+		// 三分叉（FR-290）：停滞掐断 → 专属说明+网络类引导；用户强停 → 原样不误标；
+		// 其余传输中断（连接被重置等） → 归网络类引导。
+		switch {
+		case stalled.Load():
+			// 停滞由看门狗确定判定，不依赖 isNetworkError 探测（底层是 context canceled），
+			// 直接确定性追加 FR-279 引导。
+			return fmt.Errorf("下载停滞已中断：连续 %v 无字节进展，疑似下载流被掐断/代理断流: %w%s", stall, err, networkHint)
+		case parent.Err() != nil:
+			return fmt.Errorf("写入临时文件失败: %w", err)
+		default:
+			return annotateDownloadError(fmt.Errorf("写入临时文件失败: %w", err))
+		}
 	}
 	tmp.Close()
 	report(100, "下载完成，开始解压")
