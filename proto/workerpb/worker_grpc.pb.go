@@ -82,6 +82,7 @@ const (
 	WorkerService_GetVersion_FullMethodName           = "/worker.WorkerService/GetVersion"
 	WorkerService_CheckDocker_FullMethodName          = "/worker.WorkerService/CheckDocker"
 	WorkerService_UpgradeWorker_FullMethodName        = "/worker.WorkerService/UpgradeWorker"
+	WorkerService_TerminalSession_FullMethodName      = "/worker.WorkerService/TerminalSession"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
@@ -226,6 +227,12 @@ type WorkerServiceClient interface {
 	// Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper）。
 	// action="rollback" 时改为回滚本地升级前备份（FR-182，见 ADR-042），不下载。
 	UpgradeWorker(ctx context.Context, in *UpgradeWorkerRequest, opts ...grpc.CallOption) (*UpgradeWorkerResponse, error)
+	// TerminalSession 把 CP 侧终端代理（浏览器 ⇄ CP /ws/terminal）的 WS 帧经 gRPC 双向流
+	// 转发给 Worker：首帧必须为 open（携带一次性终端令牌），Worker 在本机回环拨自身 WS
+	// 终端服务并原样泵帧——令牌校验方仍是 Worker（ADR-061 信任模型不变），会话层零复制。
+	// 经反向隧道承载时 CP→Worker 终端零入站；老 Worker 无本方法（Unimplemented）时 CP
+	// 回退直拨 Worker WS（双模式，与指令通道一致）。
+	TerminalSession(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TerminalFrame, TerminalFrame], error)
 }
 
 type workerServiceClient struct {
@@ -905,6 +912,19 @@ func (c *workerServiceClient) UpgradeWorker(ctx context.Context, in *UpgradeWork
 	return out, nil
 }
 
+func (c *workerServiceClient) TerminalSession(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TerminalFrame, TerminalFrame], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[5], WorkerService_TerminalSession_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[TerminalFrame, TerminalFrame]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerService_TerminalSessionClient = grpc.BidiStreamingClient[TerminalFrame, TerminalFrame]
+
 // WorkerServiceServer is the server API for WorkerService service.
 // All implementations must embed UnimplementedWorkerServiceServer
 // for forward compatibility.
@@ -1047,6 +1067,12 @@ type WorkerServiceServer interface {
 	// Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper）。
 	// action="rollback" 时改为回滚本地升级前备份（FR-182，见 ADR-042），不下载。
 	UpgradeWorker(context.Context, *UpgradeWorkerRequest) (*UpgradeWorkerResponse, error)
+	// TerminalSession 把 CP 侧终端代理（浏览器 ⇄ CP /ws/terminal）的 WS 帧经 gRPC 双向流
+	// 转发给 Worker：首帧必须为 open（携带一次性终端令牌），Worker 在本机回环拨自身 WS
+	// 终端服务并原样泵帧——令牌校验方仍是 Worker（ADR-061 信任模型不变），会话层零复制。
+	// 经反向隧道承载时 CP→Worker 终端零入站；老 Worker 无本方法（Unimplemented）时 CP
+	// 回退直拨 Worker WS（双模式，与指令通道一致）。
+	TerminalSession(grpc.BidiStreamingServer[TerminalFrame, TerminalFrame]) error
 	mustEmbedUnimplementedWorkerServiceServer()
 }
 
@@ -1245,6 +1271,9 @@ func (UnimplementedWorkerServiceServer) CheckDocker(context.Context, *CheckDocke
 }
 func (UnimplementedWorkerServiceServer) UpgradeWorker(context.Context, *UpgradeWorkerRequest) (*UpgradeWorkerResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpgradeWorker not implemented")
+}
+func (UnimplementedWorkerServiceServer) TerminalSession(grpc.BidiStreamingServer[TerminalFrame, TerminalFrame]) error {
+	return status.Error(codes.Unimplemented, "method TerminalSession not implemented")
 }
 func (UnimplementedWorkerServiceServer) mustEmbedUnimplementedWorkerServiceServer() {}
 func (UnimplementedWorkerServiceServer) testEmbeddedByValue()                       {}
@@ -2362,6 +2391,13 @@ func _WorkerService_UpgradeWorker_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_TerminalSession_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(WorkerServiceServer).TerminalSession(&grpc.GenericServerStream[TerminalFrame, TerminalFrame]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerService_TerminalSessionServer = grpc.BidiStreamingServer[TerminalFrame, TerminalFrame]
+
 // WorkerService_ServiceDesc is the grpc.ServiceDesc for WorkerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2628,6 +2664,12 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "StreamPluginEvents",
 			Handler:       _WorkerService_StreamPluginEvents_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "TerminalSession",
+			Handler:       _WorkerService_TerminalSession_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "proto/worker.proto",

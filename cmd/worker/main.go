@@ -302,6 +302,10 @@ func runWorker() {
 	})
 	workerServer.SetDecompiler(decompProvider)
 
+	// 终端会话隧道桥（FR-281 M2，见 ADR-066）：TerminalSession 回环拨本机 WS 终端服务，
+	// 令牌校验/会话层单一真源仍是 ws.TerminalServer。
+	workerServer.SetTerminalWSAddr(fmt.Sprintf("ws://127.0.0.1:%d/ws/terminal", wsPort))
+
 	workerpb.RegisterWorkerServiceServer(grpcServer, workerServer)
 
 	grpcAddr := fmt.Sprintf(":%d", grpcPort)

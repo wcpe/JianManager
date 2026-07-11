@@ -173,6 +173,15 @@ service WorkerService {
   // Worker 重启后 RecoverDaemonInstances 经 PID 文件重连存活 wrapper）。
   // action="rollback" 时改为回滚本地升级前备份（FR-182，见 ADR-042），不下载。
   rpc UpgradeWorker(UpgradeWorkerRequest) returns (UpgradeWorkerResponse);
+
+  // === 终端会话隧道桥（FR-281 M2，见 ADR-066）===
+
+  // TerminalSession 把 CP 侧终端代理（浏览器 ⇄ CP /ws/terminal）的 WS 帧经 gRPC 双向流
+  // 转发给 Worker：首帧必须为 open（携带一次性终端令牌），Worker 在本机回环拨自身 WS
+  // 终端服务并原样泵帧——令牌校验方仍是 Worker（ADR-061 信任模型不变），会话层零复制。
+  // 经反向隧道承载时 CP→Worker 终端零入站；老 Worker 无本方法（Unimplemented）时 CP
+  // 回退直拨 Worker WS（双模式，与指令通道一致）。
+  rpc TerminalSession(stream TerminalFrame) returns (stream TerminalFrame);
 }
 
 // === 注册 ===
@@ -1249,3 +1258,26 @@ message DecompileClassResponse {
   string decompiler = 5;    // 反编译器标识（如 "CFR 0.152"）
 }
 
+
+// === 终端会话隧道桥（FR-281 M2，见 ADR-066）===
+
+// TerminalFrame 终端会话双向流的帧：首帧（CP→Worker）必须为 open，其后双向均为不透明 WS 帧搬运。
+message TerminalFrame {
+  oneof kind {
+    TerminalOpen open = 1;       // 会话建立（仅 CP→Worker 首帧）
+    TerminalWSFrame frame = 2;   // 不透明 WS 帧（双向）
+  }
+}
+
+// TerminalOpen 会话建立请求 / 就绪应答：
+// CP→Worker 首帧携带一次性终端令牌（Worker 以其 WS 令牌密钥校验，ADR-061 信任模型不变，CP 不代校验）；
+// Worker→CP 方向 token 为空，作「会话就绪 ack」——CP 据此确定性区分 就绪/令牌被拒/老 Worker 回退。
+message TerminalOpen {
+  string token = 1;
+}
+
+// TerminalWSFrame 原样搬运的 WebSocket 数据帧（对既有终端 WS 协议零侵入）。
+message TerminalWSFrame {
+  int32 msg_type = 1;   // gorilla/websocket 消息类型（1=Text，2=Binary）
+  bytes payload = 2;
+}

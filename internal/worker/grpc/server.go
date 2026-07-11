@@ -68,6 +68,10 @@ type Server struct {
 	// bridge 提供「实例 UUID→探针会话」表与下发能力；为 nil 表示本节点未启用插件桥。由 SetPluginBridge 注入。
 	bridge *ws.PluginBridgeServer
 
+	// terminalWSAddr 本机终端 WS 服务回环地址（FR-281 M2，见 ADR-066）：
+	// TerminalSession 据此回环拨自身 WS 终端服务桥接会话。由 SetTerminalWSAddr 注入。
+	terminalWSAddr string
+
 	// decompiler 解析/缓存 CFR 反编译器 jar（FR-075，见 ADR-018）。
 	// 为 nil 表示本节点未启用反编译能力，DecompileClass 返回降级错误。由 SetDecompiler 注入。
 	decompiler *decompiler.Provider
