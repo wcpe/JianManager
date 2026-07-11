@@ -6,6 +6,7 @@ import { Search, Server, Star, X } from 'lucide-react'
 import { useInstanceAggregate, useSearchInstances, type InstanceInfo } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useConsoleStore } from '@/stores/console'
+import { useInstanceHoverPrefetch, type HoverPrefetcher } from '@/lib/instance-prefetch'
 import { useVirtualRows } from '@/lib/virtual-list'
 import { cn } from '@jianmanager/ui'
 import {
@@ -58,6 +59,8 @@ export default function ServerSelector() {
   const { data: searchResult, isLoading, isFetching } = useSearchInstances(params, open)
   const { data: aggregate } = useInstanceAggregate(aggregateParams, open)
   const { data: nodes = [] } = useNodes()
+  // 行悬停预取实例详情（FR-297）：稳定悬停 150ms 才预取，点击进入即命中缓存。
+  const prefetcher = useInstanceHoverPrefetch()
   const nodeNames = useMemo(() => new Map(nodes.map((node) => [node.id, node.name])), [nodes])
   const rows = useMemo(() => buildRows(searchResult?.items ?? [], groupBy, nodeNames, t), [searchResult, groupBy, nodeNames, t])
   const favoriteIds = useMemo(() => new Set(favorites.map((item) => item.id)), [favorites])
@@ -147,8 +150,8 @@ export default function ServerSelector() {
             <div className="min-h-0 flex-1 overflow-hidden p-3">
               {showQuickLists && (recent.length > 0 || favorites.length > 0) && (
                 <div className="mb-3 grid gap-2 md:grid-cols-2">
-                  <QuickList title={t('serverSelector.recent')} items={recent} favoriteIds={favoriteIds} onOpen={openInstance} onToggleFavorite={toggleFavorite} />
-                  <QuickList title={t('serverSelector.favorites')} items={favorites} favoriteIds={favoriteIds} onOpen={openInstance} onToggleFavorite={toggleFavorite} />
+                  <QuickList title={t('serverSelector.recent')} items={recent} favoriteIds={favoriteIds} prefetcher={prefetcher} onOpen={openInstance} onToggleFavorite={toggleFavorite} />
+                  <QuickList title={t('serverSelector.favorites')} items={favorites} favoriteIds={favoriteIds} prefetcher={prefetcher} onOpen={openInstance} onToggleFavorite={toggleFavorite} />
                 </div>
               )}
 
@@ -178,6 +181,7 @@ export default function ServerSelector() {
                             instance={row.instance}
                             favorite={favoriteIds.has(row.instance.id)}
                             nodeName={nodeNames.get(row.instance.nodeId)}
+                            prefetcher={prefetcher}
                             onOpen={openInstance}
                             onToggleFavorite={toggleFavorite}
                           />
@@ -199,12 +203,14 @@ function QuickList({
   title,
   items,
   favoriteIds,
+  prefetcher,
   onOpen,
   onToggleFavorite,
 }: {
   title: string
   items: StoredInstance[]
   favoriteIds: Set<number>
+  prefetcher: HoverPrefetcher
   onOpen: (instance: StoredInstance) => void
   onToggleFavorite: (instance: StoredInstance) => void
 }) {
@@ -218,6 +224,7 @@ function QuickList({
             key={item.id}
             instance={item}
             favorite={favoriteIds.has(item.id)}
+            prefetcher={prefetcher}
             onOpen={onOpen}
             onToggleFavorite={onToggleFavorite}
           />
@@ -230,17 +237,23 @@ function QuickList({
 function StoredInstanceRow({
   instance,
   favorite,
+  prefetcher,
   onOpen,
   onToggleFavorite,
 }: {
   instance: StoredInstance
   favorite: boolean
+  prefetcher: HoverPrefetcher
   onOpen: (instance: StoredInstance) => void
   onToggleFavorite: (instance: StoredInstance) => void
 }) {
   const { t } = useTranslation()
   return (
-    <div className="flex items-center gap-1 rounded-md hover:bg-accent/50">
+    <div
+      className="flex items-center gap-1 rounded-md hover:bg-accent/50"
+      onMouseEnter={() => prefetcher.enter(instance.id)}
+      onMouseLeave={() => prefetcher.leave()}
+    >
       <button type="button" onClick={() => onOpen(instance)} className="min-w-0 flex-1 px-2 py-1.5 text-left text-sm">
         <span className="block truncate">{instance.name}</span>
         <span className="block truncate text-[11px] text-muted-foreground">{instance.status}</span>
@@ -261,18 +274,25 @@ function InstanceRow({
   instance,
   favorite,
   nodeName,
+  prefetcher,
   onOpen,
   onToggleFavorite,
 }: {
   instance: InstanceInfo
   favorite: boolean
   nodeName: string | undefined
+  prefetcher: HoverPrefetcher
   onOpen: (instance: InstanceInfo) => void
   onToggleFavorite: (instance: InstanceInfo) => void
 }) {
   const { t } = useTranslation()
   return (
-    <div data-testid="server-selector-row" className="flex h-9 items-center gap-2 border-t px-2 text-sm hover:bg-accent/50">
+    <div
+      data-testid="server-selector-row"
+      className="flex h-9 items-center gap-2 border-t px-2 text-sm hover:bg-accent/50"
+      onMouseEnter={() => prefetcher.enter(instance.id)}
+      onMouseLeave={() => prefetcher.leave()}
+    >
       <button type="button" onClick={() => onOpen(instance)} className="min-w-0 flex flex-1 items-center gap-2 text-left">
         <span className="size-2 shrink-0 rounded-full bg-primary" />
         <span className="min-w-0 flex-1 truncate">{instance.name}</span>

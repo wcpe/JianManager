@@ -1,5 +1,6 @@
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
+import { INSTANCE_QUERY_GC_TIME_MS } from '@/api/instances'
 import type { MetricRange } from '@jianmanager/ui'
 
 export interface NodeMetricsData {
@@ -53,6 +54,9 @@ export function useInstanceMetrics(instanceId: number, enabled = true) {
     },
     enabled: !!instanceId && enabled,
     refetchInterval: enabled ? 10_000 : false,
+    // FR-297：跨服回切先呈现缓存指标后台刷新，避免 KPI 区闪空。
+    gcTime: INSTANCE_QUERY_GC_TIME_MS,
+    placeholderData: keepPreviousData,
   })
 }
 

@@ -1,5 +1,6 @@
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
+import { INSTANCE_QUERY_GC_TIME_MS } from '@/api/instances'
 
 /** 有界裁剪结构（探针侧 ServerStateSupport.bounded）：大集合裁剪到 items + 原始总数 + 是否截断。 */
 export interface Bounded<T> {
@@ -125,5 +126,8 @@ export function useServerState(
     refetchOnWindowFocus: false,
     // 自动刷新时数据视为即时过期以便按间隔重拉；手动模式下保持快照不被动重拉。
     staleTime: refetchMs ? 0 : Infinity,
+    // FR-297：跨服回切先呈现缓存快照后台刷新，不打断运营者巡检节奏。
+    gcTime: INSTANCE_QUERY_GC_TIME_MS,
+    placeholderData: keepPreviousData,
   })
 }

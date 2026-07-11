@@ -1,6 +1,12 @@
-import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, queryOptions, useInfiniteQuery, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '@/api/client'
+
+/**
+ * 实例域查询缓存保留时长（FR-297）：控制台来回切换（页签/跨服）时命中缓存先呈现旧数据、
+ * 后台刷新，避免每次回切都白屏等待。默认 gcTime 5 分钟不够覆盖运营者巡检节奏，提至 15 分钟。
+ */
+export const INSTANCE_QUERY_GC_TIME_MS = 15 * 60_000
 
 export interface InstanceInfo {
   id: number
@@ -152,15 +158,27 @@ export function useInstanceAggregate(params?: InstanceListParams & { q?: string 
   })
 }
 
-/** 获取实例详情（过渡状态时自动轮询）。 */
-export function useInstance(id: number) {
-  return useQuery({
+/**
+ * 实例详情查询选项（FR-297）：useInstance 与悬停预取（`lib/instance-prefetch.ts`）共用
+ * 同一 queryKey/queryFn/gcTime，保证预取结果能被后续 useInstance 直接命中。
+ */
+export function instanceQueryOptions(id: number) {
+  return queryOptions({
     queryKey: ['instances', id],
     queryFn: async () => {
       const { data } = await api.get<InstanceInfo>(`/instances/${id}`)
       return data
     },
+    gcTime: INSTANCE_QUERY_GC_TIME_MS,
+  })
+}
+
+/** 获取实例详情（过渡状态时自动轮询；FR-297 回切先呈现缓存后台刷新）。 */
+export function useInstance(id: number) {
+  return useQuery({
+    ...instanceQueryOptions(id),
     enabled: !!id,
+    placeholderData: keepPreviousData,
     refetchInterval: (query) => {
       const status = query.state.data?.status
       if (status === 'STARTING' || status === 'STOPPING') return 2000

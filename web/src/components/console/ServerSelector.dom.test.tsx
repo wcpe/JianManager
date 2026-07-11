@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { screen, within, waitFor } from '@testing-library/react'
+import { fireEvent, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse, delay } from 'msw'
 import { renderWithProviders } from '@/test/render'
@@ -88,5 +88,33 @@ describe('ServerSelector DOM', () => {
 
     const dialog = await screen.findByRole('dialog', { name: '服务器选择器' })
     expect(within(dialog).getByText('加载中...')).toBeInTheDocument()
+  })
+
+  it('行稳定悬停 150ms 预取实例详情，快速掠过不请求（FR-297）', async () => {
+    const user = userEvent.setup()
+    // 经请求事件计数实例详情请求（GET /instances/:数字id，天然排除 search/aggregate 子路径）。
+    const detailHits: string[] = []
+    const listener = ({ request }: { request: Request }) => {
+      const match = new URL(request.url).pathname.match(/\/api\/v1\/instances\/(\d+)$/)
+      if (match) detailHits.push(match[1])
+    }
+    server.events.on('request:start', listener)
+    try {
+      renderWithProviders(<ServerSelector />)
+      await user.click(screen.getByRole('button', { name: '选择服务器' }))
+      const rows = await screen.findAllByTestId('server-selector-row')
+
+      // 快速掠过：进入后立即离开，防抖期内取消，不发预取请求。
+      fireEvent.mouseEnter(rows[0])
+      fireEvent.mouseLeave(rows[0])
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      expect(detailHits).toHaveLength(0)
+
+      // 稳定悬停：超过 150ms 触发一次实例详情预取。
+      fireEvent.mouseEnter(rows[0])
+      await waitFor(() => expect(detailHits.length).toBe(1))
+    } finally {
+      server.events.removeListener('request:start', listener)
+    }
   })
 })
