@@ -20,6 +20,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/jdk"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/process"
+	"github.com/wcpe/JianManager/internal/worker/runtimescan"
 	"github.com/wcpe/JianManager/internal/worker/search"
 	"github.com/wcpe/JianManager/internal/worker/taskreg"
 	"github.com/wcpe/JianManager/internal/worker/ws"
@@ -108,6 +109,10 @@ type Server struct {
 	// 命中即从缓存秒拷到工作目录（免重下），未命中下载校验后存入。为 nil 表示未启用缓存
 	// （DownloadCore 退化为原有「每次都下载」行为，向后兼容）。由 SetArtifactCache 注入。
 	cache *artifactcache.Cache
+
+	// runtimeScanner 运行时扫描器（FR-298 节点运行时库）：ScanRuntimes 按常见安装路径
+	// 发现 jdk/nodejs 候选。为 nil 表示未启用（返回空候选）。由 SetRuntimeScanner 注入。
+	runtimeScanner *runtimescan.Scanner
 }
 
 // NewServer 创建 Worker gRPC 服务器。

@@ -312,6 +312,10 @@ func detectAt(dir string) (Info, bool) {
 	}, true
 }
 
+// Detect 探测给定目录是否为 JDK（detectAt 的导出薄封装）。
+// 供运行时扫描器复用同一探测语义（FR-298，见 internal/worker/runtimescan）。
+func Detect(dir string) (Info, bool) { return detectAt(dir) }
+
 // normalizeJDKHome 把 path 归一为 JDK home（FR-228）：若指向 bin/java[.exe] 则取上两级（去掉 bin/java），否则原样。
 func normalizeJDKHome(path string) string {
 	clean := filepath.Clean(strings.TrimSpace(path))

@@ -29,6 +29,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/internal/worker/register"
+	"github.com/wcpe/JianManager/internal/worker/runtimescan"
 	"github.com/wcpe/JianManager/internal/worker/setup"
 	"github.com/wcpe/JianManager/internal/worker/tunnel"
 	"github.com/wcpe/JianManager/internal/worker/ws"
@@ -271,6 +272,13 @@ func runWorker() {
 	// Worker 升级二进制下载与服务端 jar 下载经进程级出站持有者（FR-174/FR-185）：
 	// CP 下发代理改动运行时即时生效。
 	workerServer.SetHTTPClientProvider(outboundProvider.Client)
+	// 运行时扫描器（FR-298 节点运行时库）：ScanRuntimes 按常见安装路径发现 jdk/nodejs 候选；
+	// JDK 托管根作托管根传入，其下候选标 already_registered。
+	var runtimeManagedRoots []string
+	if jdkMgr != nil {
+		runtimeManagedRoots = append(runtimeManagedRoots, jdkMgr.RootDir())
+	}
+	workerServer.SetRuntimeScanner(runtimescan.New(runtimeManagedRoots))
 	// 全文搜索追加忽略规则（worker.yml search.ignore，叠加内置默认集，FR-074）。
 	workerServer.SetSearchIgnore(cfg.Search.Ignore)
 	// 节点制品缓存（FR-178）：按 sha256 缓存下载过的核心 jar（var/artifact-cache），建实例命中即秒拷免重下。
