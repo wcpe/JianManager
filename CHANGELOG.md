@@ -9,6 +9,7 @@
 > 本段累积 `v0.14.0` tag 之后的开发变更。
 
 ### 新增
+- **JDK 下载网络失败可操作引导（FR-279）**：Worker 侧对 JDK 一键下载的网络类失败（TLS 握手超时 / DNS / 连接被拒 / 卡死取消，真机复现 `adoptium/temurin21-binaries … TLS handshake timeout`）追加中文可操作引导并保留底层英文标记；前端任务中心失败详情据标记识别网络类失败，渲染「去配置出站代理」（→ 设置）与「更换下载源/镜像」（→ 运行时资产）两入口，非网络类错误不误报。JDK 下载已经 ADR-043 心跳下发的出站代理持有者执行（`jdkMgr.SetHTTPClientProvider(outboundProvider.Client)`），配代理即生效。单测覆盖 Worker 错误分类 + 前端检测 + 任务详情入口渲染。
 - **Makefile 本地交叉编译发布产物（`make dist` / `make dist-bin`）**：在任意宿主（含 Windows）交叉编译 control-plane/worker 的 windows-amd64 + linux-amd64 四个产物，命名/ldflags/版本注入对齐 CI 发布管线（ADR-036）；纯 Go + `CGO_ENABLED=0` 使其可行。README 生产构建章节同步。
 - **CP 内嵌 Worker 二进制，一键安装/节点升级不出网（FR-278，见 ADR-062 修订 ADR-059）**：构建期把 windows/linux amd64 Worker go:embed 进 CP（`make embed-worker`，`make dist` 与 CI release 两阶段接入；CP 体积 59MB→~97MB），`EnsureWorkerAsset` 解析顺序改为 本地缓存（有效，含手动放置热修）> 内嵌物化 > 远程 feed——受限网络（GitHub TLS 超时）与本地构建开发版（远程无对应 release）下，安装/升级同版本 Worker 的主链路全程不出网（真机复现的一键安装 502 双重死因就此消除）。内嵌资产不入库（目录 `.gitignore` 占位，fresh checkout 未注入照常编译、运行时优雅降级）；service 不隐式读 go:embed（main 显式装配，测试与构建环境解耦）；物化条目缓存元数据 `sourceUrl=embedded://cp-binary` 可在系统更新页区分来源；启动日志打点内嵌状态。单测覆盖 命中物化/版本不匹配/平台缺失/未注入降级/清单指纹错位拒收 五场景。
 

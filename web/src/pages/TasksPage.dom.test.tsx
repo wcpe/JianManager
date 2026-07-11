@@ -35,6 +35,27 @@ describe('TasksPage（mock 假后端）', () => {
     expect(await screen.findByText(/sha256 不匹配/)).toBeInTheDocument()
   })
 
+  it('② 网络类下载失败展开 → 显示代理/镜像可操作入口（FR-279）', async () => {
+    loginMockUser()
+    renderWithProviders(<TasksPage />)
+    const row = await screen.findByRole('button', { name: /受限网络下装 JDK 21（网络失败）/ })
+    await userEvent.click(row)
+    expect(await screen.findByText(/出站网络不可达/)).toBeInTheDocument()
+    const proxyLink = screen.getByRole('link', { name: /去配置出站代理/ })
+    expect(proxyLink).toHaveAttribute('href', '/settings')
+    const mirrorLink = screen.getByRole('link', { name: /更换下载源\/镜像/ })
+    expect(mirrorLink).toHaveAttribute('href', '/runtime-assets')
+  })
+
+  it('② 非网络类失败不显示网络引导入口（FR-279 不误报）', async () => {
+    loginMockUser()
+    renderWithProviders(<TasksPage />)
+    const row = await screen.findByRole('button', { name: /安装便携运行时/ })
+    await userEvent.click(row)
+    await screen.findByText(/sha256 不匹配/)
+    expect(screen.queryByRole('link', { name: /去配置出站代理/ })).not.toBeInTheDocument()
+  })
+
   it('③ 注入 500 → 显示加载任务失败错误态', async () => {
     loginMockUser()
     mockInject('get', '/tasks', { kind: 'status', status: 500 })

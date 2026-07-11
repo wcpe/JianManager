@@ -156,7 +156,8 @@ func downloadAndExtractWithProgress(ctx context.Context, client *http.Client, ur
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("下载失败: %w", err)
+		// 网络类失败（TLS 超时 / DNS / 连接被拒 / 卡死取消）追加可操作引导（FR-279）。
+		return annotateDownloadError(fmt.Errorf("下载失败: %w", err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {

@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useSearchParams } from 'react-router'
-import { ChevronRight, Ban, Loader2 } from 'lucide-react'
+import { Link, useSearchParams } from 'react-router'
+import { ChevronRight, Ban, Loader2, Wifi } from 'lucide-react'
+import { isNetworkDownloadFailure } from '@/lib/download-failure'
 import { useTasks, useTask, useCancelTask, isTerminalTask, type Task, type TaskState } from '@/api/tasks'
 import { useNodes } from '@/api/nodes'
 import { Badge } from '@jianmanager/ui/components/badge'
@@ -269,6 +270,18 @@ function TaskDetail({ taskId, error }: { taskId: string; error: string }) {
           <pre className="overflow-x-auto rounded-md border border-destructive/40 bg-card p-2 font-mono text-[11px] whitespace-pre-wrap break-all text-destructive">
             {error}
           </pre>
+          {isNetworkDownloadFailure(error) && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-700 dark:text-amber-400">
+              <Wifi className="size-3.5 shrink-0" />
+              <span>{t('tasks.networkFailureHint', '出站网络不可达：下载源疑似被墙或超时。可配置出站代理或更换下载镜像源后重试。')}</span>
+              <Link to="/settings" className="font-medium underline underline-offset-2 hover:text-amber-800 dark:hover:text-amber-300">
+                {t('tasks.networkFailureProxyLink', '去配置出站代理')}
+              </Link>
+              <Link to="/runtime-assets" className="font-medium underline underline-offset-2 hover:text-amber-800 dark:hover:text-amber-300">
+                {t('tasks.networkFailureMirrorLink', '更换下载源/镜像')}
+              </Link>
+            </div>
+          )}
         </div>
       )}
       <div>

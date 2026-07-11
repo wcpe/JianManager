@@ -381,6 +381,24 @@ function seedTasks(): Task[] {
       createdAt: iso(-7_200_000),
       updatedAt: iso(-7_100_000),
     },
+    {
+      // 网络类 JDK 下载失败（FR-279）：错误含 Go stdlib 稳定标记 + Worker 追加的中文引导，
+      // 供 TasksPage 渲染「去配代理 / 换镜像」入口的 DOM 断言。
+      id: 4,
+      taskId: 'task-jdk-neterr',
+      nodeId: 2,
+      kind: 'jdk_install',
+      state: 'failed',
+      progress: 5,
+      title: '受限网络下装 JDK 21（网络失败）',
+      detail: 'node-2',
+      error:
+        '下载失败: Get "https://github.com/adoptium/temurin21-binaries/releases/download/...": net/http: TLS handshake timeout（疑似网络受限：JDK 下载经节点出站代理执行、未配置则直连，可在面板「设置 → 网络」配置出站代理，或在「运行时资产」页更换 JDK 下载源/镜像后重试）',
+      result: '',
+      createdBy: 1,
+      createdAt: iso(-3_600_000),
+      updatedAt: iso(-3_500_000),
+    },
   ]
 
   const generated: Task[] = []

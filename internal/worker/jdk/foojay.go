@@ -143,7 +143,8 @@ func foojayFetch(client *http.Client, queryURL string) ([]foojayPackage, error) 
 	}
 	resp, err := client.Get(queryURL)
 	if err != nil {
-		return nil, fmt.Errorf("foojay 查询失败: %w", err)
+		// 解析下载源阶段的网络类失败同样追加可操作引导（FR-279）。
+		return nil, annotateDownloadError(fmt.Errorf("foojay 查询失败: %w", err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
