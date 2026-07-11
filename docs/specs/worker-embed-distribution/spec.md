@@ -26,8 +26,8 @@
 
 ## 4. 验收标准
 
-- [ ] `make dist` 产出的 CP 内嵌两平台 Worker（启动日志可证；CP 体积增 ~43MB）
-- [ ] fresh checkout 未跑 `embed-worker` 时 `go build ./...` 照常通过；运行时资产状态为「未内嵌」、行为回退现状
-- [ ] 单测：内嵌命中物化（sha256 与 manifest 一致、元数据 `embedded://`）/ 版本不匹配跳过内嵌 / 未嵌平台走远程 / 空嵌目录优雅降级
-- [ ] 真机：断 GitHub（或直接无外网）+ 空缓存 → 一键安装 Windows 节点成功（下载来自内嵌物化，不出网）
-- [ ] 系统更新页 Worker 缓存列表显示 `embedded://` 来源条目
+- [x] `make dist` 产出的 CP 内嵌两平台 Worker（真机：`make embed-worker` 注入 2 平台 + manifest，CP 59MB→97MB，启动日志「CP 内嵌 Worker 资产在位 version=0.14.0 platforms=linux/amd64,windows/amd64」）
+- [x] fresh checkout 未跑 `embed-worker` 时 `go build ./...` 照常通过（目录 `.gitignore` 占位）；未装配内嵌源时行为回退现状（单测 EmbeddedAbsentGracefulFallback + 启动日志「未内嵌」分支）
+- [x] 单测：内嵌命中物化不出网 / 版本不匹配跳过 / 未嵌平台走远程 / 未装配降级 / 清单指纹错位拒收（5 例全绿；service 不隐式读 go:embed，main 显式装配，测试与构建环境解耦）
+- [ ] **真机**：断 GitHub（或直接无外网）+ 空缓存 → 一键安装 Windows 节点成功（下载来自内嵌物化，不出网）
+- [x] 系统更新页 Worker 缓存列表可区分来源（缓存元数据 `sourceUrl=embedded://cp-binary` 经既有 ListWorkerAssets 透出）

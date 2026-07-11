@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	cpembed "github.com/wcpe/JianManager/internal/controlplane/embed"
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
@@ -110,6 +111,9 @@ type SelfUpdateService struct {
 	nodeUpgradeFn  func(nodeID uint, wantVersion string) (string, string, error) // 覆盖 rollout 内单节点升级
 	cpRollbackFn   func() (toVersion string, err error)                          // 覆盖 CP 自身回滚（FR-182）
 	nodeRollbackFn func(nodeID uint) (from, to string, err error)                // 覆盖单节点回滚（FR-182）
+	// 内嵌 Worker 资产源（FR-278/ADR-062）；生产为 nil 走 cpembed 真实现。
+	embeddedWorkerManifestFn func() *cpembed.WorkerAssetManifest
+	embeddedWorkerBinaryFn   func(cpembed.WorkerAssetManifestEntry) []byte
 }
 
 // NewSelfUpdateService 创建自更新服务。root 用于 CP 自身下载落 cache/，可为 nil（回退临时目录）。

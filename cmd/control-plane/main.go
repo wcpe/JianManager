@@ -160,6 +160,19 @@ func main() {
 	// 拉取 feed 与 CP 自身二进制下载经进程级出站代理（FR-174，见 ADR-037）。
 	// 用持有者注入，使全局代理改动运行时即时生效（CP「检查更新」立即走新代理，FR-185）。
 	selfUpdateSvc.SetHTTPClientProvider(outboundProvider.Client)
+	// 内嵌 Worker 资产装配（FR-278，见 ADR-062）：安装/升级同版本 Worker 优先取内嵌、不出网。
+	// service 不隐式读 go:embed（测试与构建环境解耦），真实现由此处装配；
+	// 未注入（make embed-worker 未跑）时回退 缓存/远程 链路，打点便于排障。
+	selfUpdateSvc.SetEmbeddedWorkerSource(cpembed.EmbeddedWorkerManifest, cpembed.EmbeddedWorkerBinary)
+	if wm := cpembed.EmbeddedWorkerManifest(); wm != nil {
+		platforms := make([]string, 0, len(wm.Assets))
+		for _, a := range wm.Assets {
+			platforms = append(platforms, a.OS+"/"+a.Arch)
+		}
+		slog.Info("CP 内嵌 Worker 资产在位", "version", wm.Version, "platforms", strings.Join(platforms, ","))
+	} else {
+		slog.Info("未内嵌 Worker 资产（make embed-worker 未注入），worker-assets 走缓存/远程链路")
+	}
 	// 客户端分发频道与拉取密钥（FR-086，见 ADR-022）：鉴权只用哈希比对。
 	clientChannelSvc := service.NewClientChannelService(db)
 	// 拉取密钥可逆加密 + 管理员可查看（FR-192，见 ADR-044）：另存 AES-256-GCM 加密副本供查看明文。

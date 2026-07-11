@@ -244,6 +244,21 @@ jobs:
           name: embed-worker
           path: internal/worker/embed/cfr/
 
+      - name: 注入 CP 内嵌 Worker 资产（FR-278/ADR-062，两平台 + manifest）
+        shell: bash
+        env:
+          CGO_ENABLED: '0'
+          VERSION: ${{ needs.prepare-embeds.outputs.version }}
+        run: |
+          set -euo pipefail
+          LDFLAGS="-s -w -X github.com/wcpe/JianManager/internal/version.Version=${VERSION}"
+          mkdir -p internal/controlplane/embed/worker
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "${LDFLAGS}" \
+            -o internal/controlplane/embed/worker/worker-windows-amd64.exe ./cmd/worker
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "${LDFLAGS}" \
+            -o internal/controlplane/embed/worker/worker-linux-amd64 ./cmd/worker
+          go run ./scripts/embed-worker-manifest.go --dir internal/controlplane/embed/worker --version "${VERSION}"
+
       - name: 交叉编译 control-plane 与 worker（ldflags 注入版本）
         shell: bash
         env:

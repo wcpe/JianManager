@@ -987,7 +987,7 @@ CP 与各 Worker 的**所有出站下载**统一收口到共享出站 HTTP 客�
 | 进程 | 出站点 | 用途 |
 |---|---|---|
 | CP + Worker | `internal/platform/selfupdate.DownloadWith` | 自更新二进制下载（`Download` 保留为 DefaultClient 薄包装，生产走 `DownloadWith`） |
-| CP | `service.SelfUpdateService`（`resolveRelease`：GitHub Releases API / feed 回退 + CP 自升下载 + 升级前备份/回滚，FR-175/FR-182/ADR-036 §7/ADR-042；`EnsureWorkerAsset`：FR-190 Worker 二进制缓存） | 更新源解析（默认 GitHub Releases，feed 回退）+ CP 自身升级/回滚 + Worker 二进制 CP 代理缓存 |
+| CP | `service.SelfUpdateService`（`resolveRelease`：GitHub Releases API / feed 回退 + CP 自升下载 + 升级前备份/回滚，FR-175/FR-182/ADR-036 §7/ADR-042；`EnsureWorkerAsset`：FR-190/FR-278 Worker 二进制解析顺序 本地缓存 > CP 内嵌物化 > 远程 feed，见 ADR-062） | 更新源解析（默认 GitHub Releases，feed 回退）+ CP 自身升级/回滚 + Worker 二进制分发（内嵌优先，安装/升级同版本 Worker 不出网） |
 | CP | `service.CoreService` | PaperMC API 与 Sponge 官方 Maven metadata 解析服务端核心版本/构建 |
 | CP | `service.AssetService.IngestFromURL` | 远端制品（服务端核心等）下载入库 |
 | Worker | `grpc.Server.UpgradeWorker` | Worker 升级二进制下载；FR-190 起下载 URL 由 CP-local `/worker-assets/:version/:os/:arch/worker?token=...` 提供，Worker 无需访问公网 release 源 |
@@ -1035,6 +1035,14 @@ proxy:
 - **release**：汇总 4 二进制 + 生成 `checksums.txt`（每件 sha256，ADR-036 §2），用 `scripts/changelog-extract.mjs` 取发布说明——push tag `v*` → 正式 release（取该版本段，`prerelease=false`）；push `master` → 覆盖固定 tag `latest` 预发布（FR-182 由 `nightly` 改名，取 `[Unreleased]` 段，`prerelease=true`，先删旧 release 再重建以仅保留本次产物）。
 
 发布二进制**内嵌全部可选资产**「下载即用」：CP 自带前端 + 探针 + 客户端更新器，Worker 自带 CFR（ADR-036 §5）。`go:embed` 对缺失/空目录会编译失败，故 prepare-embeds 任一内嵌步骤失败即 fail-fast。版本注入在 build/release 两 job 按 prepare-embeds 同一 output 取值，保证二进制内 `version.Version` 与 release tag 一致。发布制品的命名/校验/渠道契约由 ADR-036 固化，供 FR-175 自更新对接 GitHub Releases 消费（ADR-020 §4 的 feed 来源立场由 FR-175 落地时标 superseded）。
+
+### 12.2 SSH 推送式远程部署（FR-277，见 ADR-063）
+
+在既有**拉取式**安装（目标机上 `curl <cp>/install-worker.sh | sh`，§5.1）之外的**推送式**通道：操作机执行 `scripts/deploy-cp.sh` / `scripts/deploy-worker.sh`（POSIX sh），经 SSH 密钥把本地 `make dist` 产物推送部署 / 更新到 Linux + systemd 主机。配置全经 `JM_*` 环境变量（与目标机二进制消费的 `JIANMANAGER_*` 命名空间隔离，按需显式映射）。
+
+- **定位**：传输 + 编排层，零上线逻辑。Worker 首次上线 = scp 二进制 + 仓内 `install-worker.sh` → 远端 `--binary … --service` 执行（上线语义全走 ADR-051：worker 自配 setup、token 经 env 不落普通文件）；CP 首次部署 = 推二进制 + 最小 `control-plane.yml`（端口 + sqlite，密钥零写入，靠 ADR-061 生产态自动生成）+ unit + HTTP 探活。
+- **更新部署**：远端有无 unit 自动判定；stop → 旧二进制留 `.bak` → 换新 → start，不碰 `control-plane.yml` / `worker.yml` / `node-identity.json` / unit。幂等可重复执行。
+- **服务档位双轨**（ADR-063 §2）：`system`（root 直连或非 root 免密 sudo，`/etc/systemd/system`）/ `user`（纯普通用户，`~/.config/systemd/user` + `systemctl --user`，强制 linger 保断连常驻、开不了即报错）。`install-worker.sh` 为此扩 `--service-scope system|user`（默认 system 现状零变化），拉取式一键安装同获非 root 能力。
 
 ## 13. MC 群组服模型（V2）
 

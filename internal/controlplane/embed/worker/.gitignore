@@ -1,0 +1,4 @@
+# Worker 二进制与 manifest 为 `make embed-worker` 构建期注入产物（ADR-062），不入库；
+# 本 .gitignore 占位保证目录存在、go:embed 不致编译失败（未注入时运行时优雅降级「未内嵌」）。
+*
+!.gitignore

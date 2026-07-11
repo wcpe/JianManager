@@ -15,9 +15,14 @@ import (
 	"strings"
 	"time"
 
+	cpembed "github.com/wcpe/JianManager/internal/controlplane/embed"
 	"github.com/wcpe/JianManager/internal/platform/selfupdate"
 	"github.com/wcpe/JianManager/internal/version"
 )
+
+// WorkerAssetSourceEmbedded 是内嵌物化缓存条目的 sourceUrl 取值（FR-278/ADR-062），
+// 系统更新页缓存列表据此区分来源（内嵌物化 / 远程拉取 / 手动放置）。
+const WorkerAssetSourceEmbedded = "embedded://cp-binary"
 
 var (
 	// ErrWorkerAssetNotCached 表示请求的 Worker 资产尚未缓存。
@@ -60,6 +65,8 @@ type WorkerAssetTokenScope struct {
 }
 
 // EnsureWorkerAsset 确保与当前 CP 版本一致的目标平台 Worker 二进制已缓存。
+// 解析顺序（ADR-062 修订 ADR-059）：本地缓存（有效）> 内嵌物化 > 远程 feed——
+// 安装/升级同版本 Worker 的主链路在 CP 内嵌资产在位时全程不出网。
 func (s *SelfUpdateService) EnsureWorkerAsset(ctx context.Context, goos, goarch string) (*WorkerAssetCacheEntry, error) {
 	if err := validateWorkerAssetPart(goos); err != nil {
 		return nil, err
@@ -67,11 +74,98 @@ func (s *SelfUpdateService) EnsureWorkerAsset(ctx context.Context, goos, goarch 
 	if err := validateWorkerAssetPart(goarch); err != nil {
 		return nil, err
 	}
+	// ① 本地缓存已有效（任意来源，含运维手动放置的热修）→ 直接复用，不出网。
+	if entry, err := s.readWorkerAssetMetadata(version.Version, goos, goarch); err == nil {
+		if err := s.validateWorkerAssetEntry(entry); err == nil {
+			entry.Cached = true
+			return entry, nil
+		}
+	}
+	// ② 内嵌物化：CP 自带与自身版本一致的 Worker（FR-278）。
+	if entry, err := s.materializeEmbeddedWorkerAsset(goos, goarch); err != nil {
+		return nil, err
+	} else if entry != nil {
+		return entry, nil
+	}
+	// ③ 远程 feed 兜底（跨平台未嵌 / 未注入内嵌资产的构建）。
 	feed, art, err := s.resolveArtifact(ctx, ComponentWorker, goos, goarch, version.Version)
 	if err != nil {
 		return nil, err
 	}
 	return s.ensureWorkerAssetFromArtifact(ctx, feed.Version, goos, goarch, art)
+}
+
+// materializeEmbeddedWorkerAsset 把内嵌 Worker 二进制物化进 ADR-059 缓存目录。
+// 未内嵌 / 版本与 CP 不一致 / 平台缺失返回 (nil, nil) 交由远程兜底；写盘或校验失败返回错误。
+func (s *SelfUpdateService) materializeEmbeddedWorkerAsset(goos, goarch string) (*WorkerAssetCacheEntry, error) {
+	manifest := s.embeddedWorkerManifest()
+	if manifest == nil || manifest.Version != version.Version {
+		return nil, nil
+	}
+	for _, asset := range manifest.Assets {
+		if !strings.EqualFold(asset.OS, goos) || !strings.EqualFold(asset.Arch, goarch) {
+			continue
+		}
+		raw := s.embeddedWorkerBinary(asset)
+		if len(raw) == 0 {
+			return nil, nil
+		}
+		dir := s.workerAssetDir(version.Version, goos, goarch)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, fmt.Errorf("创建 Worker 资产缓存目录失败: %w", err)
+		}
+		binPath := filepath.Join(dir, workerAssetBinaryName(goos))
+		if err := os.WriteFile(binPath, raw, 0o755); err != nil {
+			return nil, fmt.Errorf("物化内嵌 Worker 二进制失败: %w", err)
+		}
+		entry := &WorkerAssetCacheEntry{
+			Version:   version.Version,
+			OS:        goos,
+			Arch:      goarch,
+			Cached:    true,
+			SHA256:    strings.ToLower(strings.TrimSpace(asset.SHA256)),
+			Size:      asset.Size,
+			SourceURL: WorkerAssetSourceEmbedded,
+			CachedAt:  time.Now().UTC(),
+			Path:      binPath,
+		}
+		// 写盘后按构建期 manifest 指纹复核，防内嵌清单与字节错位（构建管线缺陷即时暴露）。
+		if err := s.validateWorkerAssetEntry(entry); err != nil {
+			return nil, fmt.Errorf("内嵌 Worker 资产校验失败: %w", err)
+		}
+		if err := writeWorkerAssetMetadata(filepath.Join(dir, "metadata.json"), entry); err != nil {
+			return nil, err
+		}
+		return entry, nil
+	}
+	return nil, nil
+}
+
+// SetEmbeddedWorkerSource 注入内嵌 Worker 资产源（FR-278/ADR-062 依赖注入点，与 SetHTTPClient 同族）。
+// 由 main 装配 cpembed 真实现；**未注入时视为无内嵌**（直接走缓存/远程链路）——go:embed 内容随
+// 构建环境（是否跑过 make embed-worker）而变，service 层不隐式读取，测试行为与构建环境解耦。
+func (s *SelfUpdateService) SetEmbeddedWorkerSource(
+	manifestFn func() *cpembed.WorkerAssetManifest,
+	binaryFn func(cpembed.WorkerAssetManifestEntry) []byte,
+) {
+	s.embeddedWorkerManifestFn = manifestFn
+	s.embeddedWorkerBinaryFn = binaryFn
+}
+
+// embeddedWorkerManifest 取内嵌 Worker 清单；未经 SetEmbeddedWorkerSource 装配返回 nil（无内嵌）。
+func (s *SelfUpdateService) embeddedWorkerManifest() *cpembed.WorkerAssetManifest {
+	if s.embeddedWorkerManifestFn != nil {
+		return s.embeddedWorkerManifestFn()
+	}
+	return nil
+}
+
+// embeddedWorkerBinary 取内嵌 Worker 二进制字节；未装配返回 nil。
+func (s *SelfUpdateService) embeddedWorkerBinary(entry cpembed.WorkerAssetManifestEntry) []byte {
+	if s.embeddedWorkerBinaryFn != nil {
+		return s.embeddedWorkerBinaryFn(entry)
+	}
+	return nil
 }
 
 // WorkerAssetStatus 返回目标平台当前 CP 版本 Worker 资产缓存状态。

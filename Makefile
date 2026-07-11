@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-probe embed-cfr embed-client-updater gen-licenses docker dist dist-bin
+.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-probe embed-cfr embed-client-updater embed-worker gen-licenses docker dist dist-bin
 
 # Windows 原生终端（PowerShell/cmd）下 GNU make 默认用 cmd.exe 执行 recipe，而本文件 recipe
 # 全为 POSIX 命令（mkdir -p / cp -r / sed …），cmd 下会报「命令语法不正确」。检测到
@@ -86,8 +86,17 @@ embed-cfr:
 VERSION ?= $(shell sed -n 's/^var Version = "\(.*\)"/\1/p' internal/version/version.go)
 DIST_LDFLAGS = -s -w -X github.com/wcpe/JianManager/internal/version.Version=$(VERSION)
 
-# 全量发布构建：前端 + 内嵌资产先行，再交叉编译四个二进制。
-dist: gen-licenses build-web embed-web embed-install-scripts dist-bin
+# 全量发布构建：前端 + 内嵌资产先行（含两阶段 Worker 内嵌，ADR-062），再交叉编译四个二进制。
+dist: gen-licenses build-web embed-web embed-install-scripts embed-worker dist-bin
+
+# 交叉编译两平台 Worker 并注入 CP 内嵌目录（FR-278/ADR-062）：CP 随身自带与自身版本一致的
+# Worker，一键安装/节点升级不出网。产物与 manifest 不入库（目录 .gitignore 占位）；
+# 不跑此目标时 CP 不内嵌 Worker，worker-assets 回退 缓存/远程 链路，不影响其它构建。
+embed-worker:
+	mkdir -p internal/controlplane/embed/worker
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o internal/controlplane/embed/worker/worker-windows-amd64.exe ./cmd/worker
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o internal/controlplane/embed/worker/worker-linux-amd64 ./cmd/worker
+	go run ./scripts/embed-worker-manifest.go --dir internal/controlplane/embed/worker --version $(VERSION)
 
 # 仅交叉编译二进制（内嵌资产已就绪时的快速重编）。
 dist-bin:
