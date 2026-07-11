@@ -8,26 +8,26 @@ import { useNodes } from '@/api/nodes'
 import { useConsoleStore } from '@/stores/console'
 import { useVirtualRows } from '@/lib/virtual-list'
 import { cn } from '@jianmanager/ui'
+import {
+  recordRecentServer,
+  toggleFavoriteServer,
+  useFavoriteServers,
+  useRecentServers,
+  type StoredInstance,
+} from './server-selection'
 
-const RECENT_KEY = 'server-selector.recent'
-const FAVORITES_KEY = 'server-selector.favorites'
 const PAGE_SIZE = 200
 const ROW_HEIGHT = 36
-
-interface StoredInstance {
-  id: number
-  uuid: string
-  nodeId: number
-  name: string
-  status: string
-}
 
 type GroupBy = 'node' | 'status'
 type SelectorRow =
   | { kind: 'group'; key: string; label: string; count: number }
   | { kind: 'instance'; key: string; instance: InstanceInfo }
 
-/** 导航外壳服务器选择器（FR-240）：服务端搜索 + 聚合计数 + 虚拟渲染 + 最近/收藏。 */
+/**
+ * 导航外壳服务器选择器（FR-240）：服务端搜索 + 聚合计数 + 虚拟渲染 + 最近/收藏。
+ * 最近/收藏经 server-selection 共享 store 读写（FR-293），与侧栏常驻列实时互通。
+ */
 export default function ServerSelector() {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -35,8 +35,8 @@ export default function ServerSelector() {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [groupBy, setGroupBy] = useState<GroupBy>('node')
-  const [recent, setRecent] = useState<StoredInstance[]>(() => loadStored(RECENT_KEY))
-  const [favorites, setFavorites] = useState<StoredInstance[]>(() => loadStored(FAVORITES_KEY))
+  const recent = useRecentServers()
+  const favorites = useFavoriteServers()
   const trimmed = query.trim()
 
   const params = useMemo(
@@ -73,21 +73,13 @@ export default function ServerSelector() {
   const visibleRows = rows.slice(range.start, range.end)
 
   function openInstance(instance: InstanceInfo | StoredInstance) {
-    const stored = toStored(instance)
-    const next = upsertStored(recent, stored, 8)
-    setRecent(next)
-    saveStored(RECENT_KEY, next)
+    recordRecentServer(instance)
     setOpen(false)
     navigate(`/instances/${instance.id}`)
   }
 
   function toggleFavorite(instance: InstanceInfo | StoredInstance) {
-    const exists = favoriteIds.has(instance.id)
-    const next = exists
-      ? favorites.filter((item) => item.id !== instance.id)
-      : upsertStored(favorites, toStored(instance), 32)
-    setFavorites(next)
-    saveStored(FAVORITES_KEY, next)
+    toggleFavoriteServer(instance)
   }
 
   return (
@@ -322,32 +314,3 @@ function buildRows(
   return rows
 }
 
-function toStored(instance: InstanceInfo | StoredInstance): StoredInstance {
-  return { id: instance.id, uuid: instance.uuid, nodeId: instance.nodeId, name: instance.name, status: instance.status }
-}
-
-function upsertStored(list: StoredInstance[], item: StoredInstance, limit: number): StoredInstance[] {
-  return [item, ...list.filter((x) => x.id !== item.id)].slice(0, limit)
-}
-
-function loadStored(key: string): StoredInstance[] {
-  if (typeof localStorage === 'undefined') return []
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(key) ?? '[]')
-    if (!Array.isArray(value)) return []
-    return value.filter(isStoredInstance)
-  } catch {
-    return []
-  }
-}
-
-function saveStored(key: string, value: StoredInstance[]): void {
-  if (typeof localStorage === 'undefined') return
-  localStorage.setItem(key, JSON.stringify(value))
-}
-
-function isStoredInstance(value: unknown): value is StoredInstance {
-  if (!value || typeof value !== 'object') return false
-  const item = value as Partial<StoredInstance>
-  return typeof item.id === 'number' && typeof item.name === 'string' && typeof item.uuid === 'string' && typeof item.nodeId === 'number' && typeof item.status === 'string'
-}
