@@ -8,6 +8,9 @@
 
 > 本段累积 `v0.14.0` tag 之后的开发变更。
 
+### 新增
+- **Makefile 本地交叉编译发布产物（`make dist` / `make dist-bin`）**：在任意宿主（含 Windows）交叉编译 control-plane/worker 的 windows-amd64 + linux-amd64 四个产物，命名/ldflags/版本注入对齐 CI 发布管线（ADR-036）；纯 Go + `CGO_ENABLED=0` 使其可行。README 生产构建章节同步。
+
 ---
 
 ## 0.14.0（2026-07-11）
