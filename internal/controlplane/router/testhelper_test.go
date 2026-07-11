@@ -52,6 +52,12 @@ func setupTestDB(t *testing.T) *gorm.DB {
 
 // setupTestRouter 创建配置好所有服务的测试路由引擎。
 func setupTestRouter(db *gorm.DB) *gin.Engine {
+	return setupTestRouterWithPool(db, cpgrpc.NewClientPool())
+}
+
+// setupTestRouterWithPool 同 setupTestRouter，但使用调用方提供的连接池，
+// 便于用 SetWorkerClientForTest 注入 fake Worker 测试经 gRPC 委托的路径。
+func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	jwtCfg := config.JWTConfig{
 		Secret:     "test-secret-key-for-testing",
@@ -59,7 +65,6 @@ func setupTestRouter(db *gorm.DB) *gin.Engine {
 		RefreshTTL: 7 * 24 * time.Hour,
 	}
 	groupSvc := service.NewGroupService(db)
-	pool := cpgrpc.NewClientPool()
 	authzSvc := service.NewAuthzService(db)
 	fileSvc := service.NewFileService(db, pool)
 	fileVersionSvc := service.NewFileVersionService(db, pool, service.DefaultFileVersionConfig())

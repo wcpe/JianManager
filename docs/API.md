@@ -863,7 +863,7 @@
 - **Query**: `?path=/plugins`
 
 ### GET /api/v1/instances/:id/files/read
-- **描述**: 读取文件内容
+- **描述**: 读取文件内容（在线编辑器用；Worker `ReadFile` 带 10MiB 编辑器护栏，超限截断——下载文件请用 `download` 端点，不受此上限）
 - **关联 FR**: FR-008
 - **Query**: `?path=plugins/essentials/config.yml`
 
@@ -877,9 +877,12 @@
 - **关联 FR**: FR-008
 
 ### GET /api/v1/instances/:id/files/download
-- **描述**: 文件下载（流式）
+- **描述**: 单文件流式下载。经 Worker `DownloadFile` 服务端流原样分块返回（不打包、任意大小不截断），CP 逐帧转写响应体并 `Flush`；响应携带 `Content-Length`（源文件总大小），流中途失败即字节数不符，客户端按下载失败处理，不会拿到「看似成功」的半截文件
 - **关联 FR**: FR-008
+- **权限**: `instance.file`（可访问实例）
 - **Query**: `?path=plugins/essentials/config.yml`
+- **响应**: `200`，`Content-Type: application/octet-stream`，`Content-Disposition: attachment`
+- **错误**: `400 INVALID_REQUEST`（缺 path）；`404 NOT_FOUND`（实例不存在/无权限）；`422 BUSINESS_ERROR`（节点离线/文件不存在/目标是目录/路径非法；老 Worker 不支持流式下载时明确报错引导升级，**不回退**会截断的 `ReadFile`）
 
 ### POST /api/v1/instances/:id/files/archive
 - **描述**: 批量打包下载。把选中的若干文件/目录（目录递归）即时打包为 **zip** 流式返回。Worker 边遍历边打包边流式发送（不全量缓冲整包），CP 把 gRPC 流转为 HTTP `application/zip` 响应体；打包开始前失败仍返回 JSON 错误

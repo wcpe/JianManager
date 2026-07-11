@@ -246,6 +246,34 @@ func (s *FileService) DownloadArchive(ctx context.Context, instanceID uint, path
 	return stream, nil
 }
 
+// DownloadFile 单文件流式下载：返回 Worker gRPC 服务端流，由调用方逐帧 Recv 并写到 HTTP 响应。
+// ReadFile 的 10MiB 上限是在线编辑器护栏，下载必须走本流式 RPC，任意大小不截断。
+// 注意：流式需贯穿整个 HTTP 响应，故由调用方传入请求级 ctx（不在此设固定超时）。
+func (s *FileService) DownloadFile(ctx context.Context, instanceID uint, path string) (workerpb.WorkerService_DownloadFileClient, error) {
+	if err := validatePath(path); err != nil {
+		return nil, err
+	}
+
+	instance, node, err := s.getInstanceAndNode(instanceID)
+	if err != nil {
+		return nil, err
+	}
+
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return nil, ErrNodeNotConnected
+	}
+
+	stream, err := client.Worker.DownloadFile(ctx, &workerpb.DownloadFileRequest{
+		InstanceUuid: instance.UUID,
+		Path:         path,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("下载文件失败: %w", err)
+	}
+	return stream, nil
+}
+
 // SearchHit 一条搜索命中（与 Worker SearchHit 对应，FR-074）。
 type SearchHit struct {
 	Path    string `json:"path"`

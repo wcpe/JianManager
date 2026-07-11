@@ -47,6 +47,9 @@ service WorkerService {
   rpc RenameFile(RenameFileRequest) returns (RenameFileResponse);
   // DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（FR-070 批量下载）。
   rpc DownloadArchive(DownloadArchiveRequest) returns (stream DownloadArchiveChunk);
+  // DownloadFile 单文件分块流式下载（原样字节，不打包）。
+  // ReadFile 的 10MiB 上限是在线编辑器护栏，下载必须走本 RPC，任意大小不截断。
+  rpc DownloadFile(DownloadFileRequest) returns (stream DownloadFileChunk);
   // SearchFiles 对实例工作目录做全文搜索或文件名快速打开（FR-074，见 ADR-017）。
   // Worker 维护本地持久倒排索引（var/index/，增量更新），查询返回命中文件+行+片段。
   rpc SearchFiles(SearchFilesRequest) returns (SearchFilesResponse);
@@ -491,6 +494,16 @@ message DownloadArchiveRequest {
 
 message DownloadArchiveChunk {
   bytes content = 1; // zip 字节分片
+}
+
+message DownloadFileRequest {
+  string instance_uuid = 1;
+  string path = 2; // 相对工作目录的单个文件路径
+}
+
+message DownloadFileChunk {
+  bytes content = 1;    // 文件原样字节分片
+  int64 total_size = 2; // 仅首帧携带：文件总字节数，供 CP 设置 Content-Length；后续帧为 0
 }
 
 // === 全文搜索 / 文件名快速打开（FR-074，见 ADR-017）===

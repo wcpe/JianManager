@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/wcpe/JianManager/internal/controlplane/middleware"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
@@ -190,7 +192,8 @@ func (h *FileHandler) Upload(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已上传"})
 }
 
-// Download 文件下载。
+// Download 单文件流式下载。经 Worker DownloadFile 流逐帧转写响应体，任意大小不截断
+// （修复：曾复用编辑器 ReadFile 的 10MiB 上限，超限大文件被静默截断为损坏内容）。
 func (h *FileHandler) Download(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -208,14 +211,65 @@ func (h *FileHandler) Download(c *gin.Context) {
 		return
 	}
 
-	content, err := h.fileSvc.ReadFile(id, path)
+	stream, err := h.fileSvc.DownloadFile(c.Request.Context(), id, path)
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return
 	}
 
+	// 先收首帧再写头：打开失败/越界/目录（含老 Worker 不支持本 RPC）仍能返回 JSON 错误而非半截文件。
+	// Worker 成功必发首帧（空文件亦然），故首帧即 EOF 视为异常。
+	first, err := stream.Recv()
+	if err != nil {
+		msg := err.Error()
+		switch {
+		case status.Code(err) == codes.Unimplemented:
+			// 老 Worker 无 DownloadFile：明确报错引导升级，绝不回退会截断的 ReadFile。
+			msg = "节点 Worker 版本过旧，不支持大文件流式下载，请先升级节点"
+		case err == io.EOF:
+			msg = "下载流异常结束"
+		}
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": msg})
+		return
+	}
+
+	c.Header("Content-Type", "application/octet-stream")
 	c.Header("Content-Disposition", "attachment; filename="+path)
-	c.Data(http.StatusOK, "application/octet-stream", content)
+	// 首帧携带文件总大小：显式 Content-Length 让客户端可校验完整性——流中途失败时
+	// 收到的字节数与之不符，浏览器/HTTP 客户端会判下载失败，而非拿到静默截断的文件。
+	c.Header("Content-Length", strconv.FormatInt(first.TotalSize, 10))
+	c.Status(http.StatusOK)
+	flusher, _ := c.Writer.(http.Flusher)
+
+	writeChunk := func(b []byte) bool {
+		if len(b) == 0 {
+			return true
+		}
+		if _, werr := c.Writer.Write(b); werr != nil {
+			return false // 客户端断开
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		return true
+	}
+
+	if !writeChunk(first.Content) {
+		return
+	}
+	for {
+		chunk, rerr := stream.Recv()
+		if rerr == io.EOF {
+			return
+		}
+		if rerr != nil {
+			// 流中途失败：响应头已发出，只能截断连接（Content-Length 不符，客户端按下载失败处理）。
+			return
+		}
+		if !writeChunk(chunk.Content) {
+			return
+		}
+	}
 }
 
 // archiveRequest 批量打包下载请求（FR-070）。

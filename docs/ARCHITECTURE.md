@@ -190,8 +190,10 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
   - CP 不直连 Docker，节点级镜像列出/拉取/删除经 Worker 委托（守架构边界）；`ListImages` 在节点 Docker 不可用时回 `docker_available=false`，CP 据此提示安装 Docker
 - 实例事件流：StreamInstanceEvents (server stream)
   - 同一流承载两类事件：`state_change`（状态转换）与 `stdout`/`stderr`（进程输出）。Worker 进程输出回调分流为「WS 终端广播 + 事件流上报」两路，互不阻塞。CP 侧 EventService 把 `stdout`/`stderr` 经 LogService 落库（日志中心 FR-049），`state_change` 经 SSE 推前端
-- 文件操作：ListFiles, ReadFile, WriteFile, DeleteFile, RenameFile（跨目录即移动）, UploadFile (client stream), DownloadFile (server stream), DownloadArchive (server stream), SearchFiles
-  - `WriteFile` 是实例工作目录内受限写入能力；FR-053 插件批量部署由 CP 读取制品库插件字节后复用该 RPC 扇出写入 `plugins/`，不为批量插件部署新增 Worker RPC。
+- 文件操作：ListFiles, ReadFile, WriteFile, DeleteFile, RenameFile（跨目录即移动）, DownloadFile (server stream), DownloadArchive (server stream), SearchFiles
+  - `ReadFile` 是**在线编辑器**读取能力，带 10MiB 护栏（超限截断；前端另有大文件/二进制预览拦截）。**下载不得复用 ReadFile**——曾因下载端点借用它导致超限大文件被静默截断（详见 `DownloadFile`）
+  - `DownloadFile` 单文件**原样分块流式**返回（~64KiB 分片，首帧携带文件总大小），任意大小不截断；CP `FileHandler.Download` 先收首帧再写响应头（打开失败/越界/目录/老 Worker 无本 RPC 时仍能返回 JSON 明确错误而非半截文件），并以首帧总大小设 `Content-Length`——流中途失败即字节数不符，客户端按下载失败处理。老 Worker（无本 RPC）明确报错引导升级，**不回退会截断的 ReadFile**
+  - `WriteFile` 是实例工作目录内受限写入能力；FR-053 插件批量部署由 CP 读取制品库插件字节后复用该 RPC 扇出写入 `plugins/`，不为批量插件部署新增 Worker RPC。文件上传经 HTTP multipart 由 CP 读取后复用本 RPC 写入（无独立 client-stream 上传 RPC）
   - `DownloadArchive` 把选中的文件/目录（目录递归，仅常规文件）即时打包为 zip 边遍历边分片流式返回（每条目经 `validatePath` 防越界/zip-slip，~32KiB 分片，不缓冲整包）；CP `FileHandler.DownloadArchive` 逐帧 `Recv` 写响应并 `Flush`，转为 HTTP `application/zip`（批量下载，FR-070）。资源管理器树内拖拽「移动」复用 `RenameFile`，无独立 move RPC
   - `SearchFiles` 对实例工作目录做全文搜索 / 文件名快速打开（FR-074，见 ADR-017）。索引是 **Worker 本地派生资产**（落数据根 `var/index/<instance-uuid>/`，**不进 CP 数据库**）：Worker 每实例持有一份倒排索引（token→文件集合）+ 文件指纹表，查询前按指纹比对增量更新（增/改/删）再倒排取候选、候选内精确行扫描；`mode=filename` 走文件名子串匹配（行号 0）。CP 仅经 gRPC 转发查询、不持有索引
 - 归档浏览与反编译（FR-075；见 ADR-018）：ListArchiveEntries, ReadArchiveEntry, DecompileClass

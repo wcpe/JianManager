@@ -15,6 +15,9 @@
 - **Makefile 本地交叉编译发布产物（`make dist` / `make dist-bin`）**：在任意宿主（含 Windows）交叉编译 control-plane/worker 的 windows-amd64 + linux-amd64 四个产物，命名/ldflags/版本注入对齐 CI 发布管线（ADR-036）；纯 Go + `CGO_ENABLED=0` 使其可行。README 生产构建章节同步。
 - **CP 内嵌 Worker 二进制，一键安装/节点升级不出网（FR-278，见 ADR-062 修订 ADR-059）**：构建期把 windows/linux amd64 Worker go:embed 进 CP（`make embed-worker`，`make dist` 与 CI release 两阶段接入；CP 体积 59MB→~97MB），`EnsureWorkerAsset` 解析顺序改为 本地缓存（有效，含手动放置热修）> 内嵌物化 > 远程 feed——受限网络（GitHub TLS 超时）与本地构建开发版（远程无对应 release）下，安装/升级同版本 Worker 的主链路全程不出网（真机复现的一键安装 502 双重死因就此消除）。内嵌资产不入库（目录 `.gitignore` 占位，fresh checkout 未注入照常编译、运行时优雅降级）；service 不隐式读 go:embed（main 显式装配，测试与构建环境解耦）；物化条目缓存元数据 `sourceUrl=embedded://cp-binary` 可在系统更新页区分来源；启动日志打点内嵌状态。单测覆盖 命中物化/版本不匹配/平台缺失/未注入降级/清单指纹错位拒收 五场景。
 
+### 修复
+- **单文件下载超 10MiB 被静默截断为损坏文件（FR-008/070 下载链路；FR-281 真机验收时发现，与隧道无关）**：文件管理器单文件下载端点 `GET /instances/:id/files/download` 复用了 Worker `ReadFile` unary RPC，其 10MiB 上限本是在线编辑器护栏——120MB 的 server.jar 下载得到恰好 10485760 字节的损坏前段且无任何报错（真机复现）。新增 Worker `DownloadFile` 服务端流 RPC（~64KiB 分片原样字节、首帧携带文件总大小、空文件也发首帧），CP `FileHandler.Download` 改为先收首帧再写响应头（打开失败/越界/目录仍回 JSON 错误）、逐帧转写并 `Flush`，且以首帧总大小显式设 `Content-Length`——流中途失败即字节数不符，客户端按下载失败处理，不再产出「看似成功」的半截文件。老 Worker（无本 RPC）明确报错引导升级节点，**不回退**会截断的 ReadFile；编辑器 `read` 端点语义不变（前端本有大文件/二进制预览拦截）。复现测试（12MiB 经忠实模拟截断语义的 fake Worker，断言完整字节 + Content-Length）红转绿补入套件，另补 Worker 侧 >10MiB round-trip/空文件/越界/目录 6 单测与 CP 侧小文件/缺文件/老 Worker 3 回归。ARCHITECTURE §文件操作同步归真（顺带修正该节虚标的 `UploadFile (client stream)`——上传实为 multipart→CP→`WriteFile`，从无该 RPC）。
+
 ---
 
 ## 0.14.0（2026-07-11）
