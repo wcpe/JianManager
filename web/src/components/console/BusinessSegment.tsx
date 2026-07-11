@@ -13,7 +13,7 @@ import {
   type BusinessAction,
   type BusinessResult,
 } from '@/api/business'
-import { isWriteAction } from './business-actions'
+import { buildBusinessPayload, isWriteAction } from './business-actions'
 
 /**
  * 业务掌控台（JBIS，FR-119，见 ADR-026/027）。
@@ -66,7 +66,8 @@ export default function BusinessSegment({ instanceId }: BusinessSegmentProps) {
         instanceId,
         selected.domain,
         selected.action.action,
-        JSON.stringify(args),
+        // 对象/数组入参还原为真嵌套结构后下发（FR-119），避免探针 getObject 拿不到对象；标量保持字符串。
+        buildBusinessPayload(args),
         write
           ? { write: true, operationId: crypto.randomUUID(), reason: reason.trim() || undefined }
           : undefined,
