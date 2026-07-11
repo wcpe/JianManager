@@ -2882,6 +2882,12 @@
     "favoriteName": "收藏 {{name}}",
     "unfavoriteName": "取消收藏 {{name}}"
   },
+  "sidebarServers": {
+    "listLabel": "常驻服务器列表",
+    "favorites": "收藏",
+    "recent": "最近打开",
+    "empty": "暂无常用服务器，打开「选择服务器」搜索并收藏。"
+  },
   "licenses": {
     "entry": "开源许可",
     "title": "开源许可",

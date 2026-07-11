@@ -26,6 +26,7 @@ import {
   DropdownMenuTrigger,
 } from '@jianmanager/ui/components/dropdown-menu'
 import ServerSelector from './ServerSelector'
+import SidebarServerList from './SidebarServerList'
 import SidebarNavLink from './SidebarNavLink'
 import ThemeSwitcher from './ThemeSwitcher'
 import { logoToggleLabelKey } from './sidebar-logo'
@@ -44,7 +45,8 @@ const SIDEBAR_CONTENT_SWAP_MS = 320
 /**
  * 运维控制台左侧栏（FR-268 / ADR-055）：常驻资源主轴侧栏。
  * 定高 flex column；分组导航区占据剩余高度并整体滚动（滚动条隐藏，FR-131）。
- * 侧栏只放跨服务器 / 平台级入口；服务器选择交给全部服务器页、节点页与全局搜索。
+ * 侧栏只放跨服务器 / 平台级入口；服务器选择交给全部服务器页、节点页与全局搜索，
+ * 另在「选择服务器」下方常驻收藏 + 最近打开列（FR-293，仅展开态）。
  * 底部保留主题、语言、版本与开源许可。
  */
 export default function ConsoleSidebar() {
@@ -140,6 +142,8 @@ function SidebarContent({
       {!compact && (
         <div className="shrink-0 border-b bg-card/35 p-2">
           <ServerSelector />
+          {/* 常驻服务器列（FR-293）：收藏置顶 + 最近打开；compact 图标轨不渲染本块。 */}
+          <SidebarServerList />
         </div>
       )}
 

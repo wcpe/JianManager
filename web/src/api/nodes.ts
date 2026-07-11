@@ -107,8 +107,8 @@ export function useRevokeEnrollToken() {
   })
 }
 
-/** 获取节点列表，支持自动轮询刷新。 */
-export function useNodes(options?: { refetchInterval?: number }) {
+/** 获取节点列表，支持自动轮询刷新；enabled=false 可按需挂起（如侧栏常驻列双空时，FR-293）。 */
+export function useNodes(options?: { refetchInterval?: number; enabled?: boolean }) {
   return useQuery({
     queryKey: ['nodes'],
     queryFn: async () => {
@@ -116,6 +116,7 @@ export function useNodes(options?: { refetchInterval?: number }) {
       return data
     },
     refetchInterval: options?.refetchInterval,
+    enabled: options?.enabled,
   })
 }
 

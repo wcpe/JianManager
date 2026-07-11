@@ -2882,6 +2882,12 @@
     "favoriteName": "Favorite {{name}}",
     "unfavoriteName": "Unfavorite {{name}}"
   },
+  "sidebarServers": {
+    "listLabel": "Pinned server list",
+    "favorites": "Favorites",
+    "recent": "Recently opened",
+    "empty": "No pinned servers yet. Open \"Select server\" to search and star favorites."
+  },
   "licenses": {
     "entry": "Licenses",
     "title": "Open-source licenses",

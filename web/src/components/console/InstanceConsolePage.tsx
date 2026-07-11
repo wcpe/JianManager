@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { Activity, AlertTriangle, Boxes, Gauge, HardDrive, Layers, Play, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
@@ -15,6 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { cn, instanceStatusLevel } from '@jianmanager/ui'
 import type { CardType } from '@/lib/workspace-card'
 import WorkspaceCardBody from './WorkspaceCardBody'
+import { recordRecentServer } from './server-selection'
 
 type TabKey = 'overview' | 'terminal' | 'resource' | 'metrics' | 'players' | 'plugins' | 'backup' | 'business' | 'bot'
 
@@ -66,6 +67,12 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const kill = useKillInstance()
   // 强杀走统一危险操作确认（FR-059），不直发请求。
   const [killConfirmOpen, setKillConfirmOpen] = useState(false)
+
+  // FR-293：直接经路由/深链进入实例也计入「最近打开」（与选择器/侧栏常驻列同一存储）；
+  // store 侧对内容未变的写入不广播，轮询刷新不会造成订阅方空转。
+  useEffect(() => {
+    if (instance) recordRecentServer(instance)
+  }, [instance])
 
   const node = nodes.find((n) => n.id === instance?.nodeId)
   const online = serverState?.state?.server?.onlinePlayers ?? metrics?.onlinePlayers ?? 0
