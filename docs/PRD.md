@@ -41,6 +41,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 > 标 `已交付` 是有门的：仅该 FR 的 spec 验收全过 + 测试 / 真机通过后，由 `sdd-release-version` 发版统一标 `已交付@vX.Y.Z`；开发中不得自标。false-done 走 `sdd-fix-bug` 归真，撤 / 推迟走 `sdd-rollback-change`。
 
 **活跃 FR 详细规格索引**（PRD 只留索引行，详情见 spec）：
+- FR-304（文件上传链路流式化：client-stream UploadFile 与 DownloadFile 对称）→ `docs/specs/upload-streaming/spec.md`（需 spec，开发中创建）
 - FR-298~301（节点运行时库：多运行时泛化 / 自动扫描 / Node.js 安装器 / Bot 接管 / 聚合刷新）→ `docs/specs/node-runtime-library/spec.md`
 - FR-302（导入现有服务器：就地接管 / 搬迁托管区）→ `docs/specs/import-existing-server/spec.md`
 - FR-128~162（控制台体验与可寻址性增强）→ `docs/specs/console-ux-enhancement/spec.md`
@@ -372,6 +373,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-301 | CP 运行时库存聚合缓存与刷新（feat，增强 FR-178 运行时资产页，需 spec 并入 node-runtime-library）：Overview 扩**多运行时矩阵**（节点 × 类型 × 版本 + 引用关系），CP 缓存各节点库存快照、显「上次同步时间」+ **手动刷新**（强制 syncFromWorker），同步失败容忍显旧数据。依赖 FR-298 | P1 | 📋 计划 |
 | FR-302 | 导入现有服务器向导（feat，节点级，需 spec + 新 ADR 落地 ADR-007 预留的「导入已有目录」高级模式）：浏览节点目录（复用 FR-178 BrowseDir）→ Worker 探测核心 jar / 内嵌 JDK / `server.properties` 端口 → 导入时二选一：**就地接管**（目录不动，托管区外例外 + **删除实例不删原目录**守则）或**搬进托管区**（移动/拷贝到系统分配目录）→ 登记实例（结构化启动 ADR-008）+ 探到的 JDK 顺带入运行时库 → `docs/specs/import-existing-server/spec.md` | P1 | 📋 计划 |
 | FR-303 | 审计日志 action 名 i18n（增强审计域，免 spec）：全量已知 action 键（`instance.start` 等 60+）中英映射（`audit.actions.*`），审计页显示翻译、悬停/角标露原键、未知键回退原样不崩；守则：本批 FR-298~302 新增审计 action 随身带中英翻译 | P2 | 📋 计划 |
+| FR-304 | 文件上传链路流式化（增强 FR-009 文件域 + FR-052/053 插件部署，需 spec）：`POST /instances/:id/files/upload` 现为 CP `io.ReadAll` 全量内存缓冲 + Worker `WriteFile` unary 直传（下载修复 a6a3713 的对称隐患）。复现结论：**直拨模式** >64MB 被 Worker `MaxRecvMsgSize` 显式拒收（65MB → `ResourceExhausted` 68157492 vs 67108864）；**隧道模式**（FR-281）grpctunnel 分帧 16KB、逻辑消息上限 4GB，同载荷**不设防直接吞** → 双模式行为不一致；≤64MB 也双侧整块缓冲，且 CP `FileService.WriteFile` 硬编码 10s 超时慢链路大文件必超时。新增 client-stream `UploadFile` RPC（与 `DownloadFile` 对称：分块传输 + 落临时文件校验后原子改名），CP 上传 handler 改流式转发不再 `ReadAll`；FR-052/053 插件单发/批量扇出复用 `WriteFile` 的部署路径同步兼容改造（阈值/是否保留小文件 unary 由 spec 定）；老 Worker `Unimplemented` 回退 `WriteFile` 保兼容（沿用 ≤64MB 上限并给明确报错） | P1 | 📋 计划 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
