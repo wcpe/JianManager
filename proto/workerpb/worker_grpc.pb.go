@@ -55,6 +55,7 @@ const (
 	WorkerService_RemoveJDK_FullMethodName            = "/worker.WorkerService/RemoveJDK"
 	WorkerService_JDKCatalog_FullMethodName           = "/worker.WorkerService/JDKCatalog"
 	WorkerService_ProbeJDK_FullMethodName             = "/worker.WorkerService/ProbeJDK"
+	WorkerService_ScanRuntimes_FullMethodName         = "/worker.WorkerService/ScanRuntimes"
 	WorkerService_DownloadCore_FullMethodName         = "/worker.WorkerService/DownloadCore"
 	WorkerService_InstallForgeServer_FullMethodName   = "/worker.WorkerService/InstallForgeServer"
 	WorkerService_ListArtifactCache_FullMethodName    = "/worker.WorkerService/ListArtifactCache"
@@ -175,6 +176,9 @@ type WorkerServiceClient interface {
 	JDKCatalog(ctx context.Context, in *JDKCatalogRequest, opts ...grpc.CallOption) (*JDKCatalogResponse, error)
 	// ProbeJDK 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 厂商/版本/架构，供登记自动填（FR-228）。
 	ProbeJDK(ctx context.Context, in *ProbeJDKRequest, opts ...grpc.CallOption) (*ProbeJDKResponse, error)
+	// ScanRuntimes 扫描节点常见安装路径发现运行时候选（jdk/nodejs，FR-298 节点运行时库）。
+	// 路径不存在/探测失败静默跳过，不阻断整体扫描；托管根下的候选标 already_registered。
+	ScanRuntimes(ctx context.Context, in *ScanRuntimesRequest, opts ...grpc.CallOption) (*ScanRuntimesResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
 	DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error)
 	// InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
@@ -648,6 +652,16 @@ func (c *workerServiceClient) ProbeJDK(ctx context.Context, in *ProbeJDKRequest,
 	return out, nil
 }
 
+func (c *workerServiceClient) ScanRuntimes(ctx context.Context, in *ScanRuntimesRequest, opts ...grpc.CallOption) (*ScanRuntimesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ScanRuntimesResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ScanRuntimes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DownloadCoreResponse)
@@ -1057,6 +1071,9 @@ type WorkerServiceServer interface {
 	JDKCatalog(context.Context, *JDKCatalogRequest) (*JDKCatalogResponse, error)
 	// ProbeJDK 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 厂商/版本/架构，供登记自动填（FR-228）。
 	ProbeJDK(context.Context, *ProbeJDKRequest) (*ProbeJDKResponse, error)
+	// ScanRuntimes 扫描节点常见安装路径发现运行时候选（jdk/nodejs，FR-298 节点运行时库）。
+	// 路径不存在/探测失败静默跳过，不阻断整体扫描；托管根下的候选标 already_registered。
+	ScanRuntimes(context.Context, *ScanRuntimesRequest) (*ScanRuntimesResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
 	DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error)
 	// InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
@@ -1244,6 +1261,9 @@ func (UnimplementedWorkerServiceServer) JDKCatalog(context.Context, *JDKCatalogR
 }
 func (UnimplementedWorkerServiceServer) ProbeJDK(context.Context, *ProbeJDKRequest) (*ProbeJDKResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ProbeJDK not implemented")
+}
+func (UnimplementedWorkerServiceServer) ScanRuntimes(context.Context, *ScanRuntimesRequest) (*ScanRuntimesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ScanRuntimes not implemented")
 }
 func (UnimplementedWorkerServiceServer) DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DownloadCore not implemented")
@@ -1961,6 +1981,24 @@ func _WorkerService_ProbeJDK_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_ScanRuntimes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ScanRuntimesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ScanRuntimes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ScanRuntimes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ScanRuntimes(ctx, req.(*ScanRuntimesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_DownloadCore_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DownloadCoreRequest)
 	if err := dec(in); err != nil {
@@ -2606,6 +2644,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ProbeJDK",
 			Handler:    _WorkerService_ProbeJDK_Handler,
+		},
+		{
+			MethodName: "ScanRuntimes",
+			Handler:    _WorkerService_ScanRuntimes_Handler,
 		},
 		{
 			MethodName: "DownloadCore",

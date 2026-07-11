@@ -91,6 +91,9 @@ service WorkerService {
   rpc JDKCatalog(JDKCatalogRequest) returns (JDKCatalogResponse);
   // ProbeJDK 探测节点上某路径（JDK home 或 java 可执行文件）的 JDK 厂商/版本/架构，供登记自动填（FR-228）。
   rpc ProbeJDK(ProbeJDKRequest) returns (ProbeJDKResponse);
+  // ScanRuntimes 扫描节点常见安装路径发现运行时候选（jdk/nodejs，FR-298 节点运行时库）。
+  // 路径不存在/探测失败静默跳过，不阻断整体扫描；托管根下的候选标 already_registered。
+  rpc ScanRuntimes(ScanRuntimesRequest) returns (ScanRuntimesResponse);
   // DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
   rpc DownloadCore(DownloadCoreRequest) returns (DownloadCoreResponse);
   // InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
@@ -966,6 +969,29 @@ message ProbeJDKResponse {
   string arch = 5;            // 架构（x64/aarch64...）
   string java_home = 6;       // 归一后的 JDK home 绝对路径（登记用 path）
   string error = 7;           // valid=false 时的原因
+}
+
+// === 节点运行时库（FR-298）===
+
+// ScanRuntimes 扫描常见安装路径发现运行时候选（jdk/nodejs）。
+message ScanRuntimesRequest {
+  // types 过滤要扫描的运行时类型（jdk / nodejs）；空 = 扫描全部支持类型。
+  repeated string types = 1;
+}
+
+// RuntimeCandidate 一条扫描发现的运行时候选。
+message RuntimeCandidate {
+  string type = 1;             // 运行时类型（jdk / nodejs）
+  string vendor = 2;           // jdk=归一厂商（Temurin/...）；nodejs=展示名（Node.js）
+  string version = 3;          // 完整版本（如 21.0.4+9 / 22.17.0）
+  int32 major_version = 4;     // 主版本（如 21 / 22）
+  string arch = 5;             // 架构（jdk：os.arch；nodejs：process.arch 的 x64/arm64）
+  string path = 6;             // jdk=home 目录绝对路径；nodejs=node 可执行文件绝对路径
+  bool already_registered = 7; // 位于 Worker 托管根下（已在库），CP 侧另按 DB 记录补标
+}
+
+message ScanRuntimesResponse {
+  repeated RuntimeCandidate candidates = 1;
 }
 
 message DeployServerProbeRequest {
