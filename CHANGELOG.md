@@ -9,6 +9,7 @@
 > 本段累积 `v0.14.0` tag 之后的开发变更。
 
 ### 新增
+- **SSH 推送式远程部署脚本（FR-277，见 ADR-063）**：新增 `scripts/deploy-cp.sh` / `deploy-worker.sh`（POSIX sh，操作机执行），经 SSH 密钥把本地 `make dist` 产物推送部署 / 更新到远程 Linux + systemd 主机，配置全经 `JM_*` 环境变量。首次 / 更新自动判定：首次部署面板生成最小 `control-plane.yml` + unit + HTTP 探活（密钥零写入，靠生产态自动生成）、节点复用 `install-worker.sh`（ADR-051 语义，token 经 env 不落普通文件）；更新只换二进制（留 `.bak`）并重启，配置 / 数据 / 节点身份全保留，幂等可重复执行（更新部署探活端口从远端已有 `control-plane.yml` 解析，不需重传端口）。服务档位 system/user 双轨：root 直连、非 root 免密 sudo（自动 `sudo -n` 提权）、纯普通用户（user 级 systemd + 强制 linger）三种目标机全支持；`install-worker.sh` 相应扩 `--service-scope system|user` 与 `JIANMANAGER_ENROLL_TOKEN` env 缺省读取（默认行为零变化），拉取式一键安装同获非 root 能力。README / ARCHITECTURE §12.2 同步。
 - **出站代理面板提示 + 连通性测试目标可自定义（FR-280）**：设置页「网络」分类补大白话提示，列明经此出站代理的流量类别（JDK 下载、Worker 二进制/自更新、探针依赖、客户端分发外呼与更新源检查）；连通性测试从写死 GitHub 改为可输入任意 URL、默认 `https://www.google.com`（`OutboundTestButton` 新增 `editable` 模式，后端 `/diagnostics/http-test` 本就接受任意 http(s) URL）。补组件 DOM 测试（可编辑测通/固定目标两态）。
 - **JDK 下载网络失败可操作引导（FR-279）**：Worker 侧对 JDK 一键下载的网络类失败（TLS 握手超时 / DNS / 连接被拒 / 卡死取消，真机复现 `adoptium/temurin21-binaries … TLS handshake timeout`）追加中文可操作引导并保留底层英文标记；前端任务中心失败详情据标记识别网络类失败，渲染「去配置出站代理」（→ 设置）与「更换下载源/镜像」（→ 运行时资产）两入口，非网络类错误不误报。JDK 下载已经 ADR-043 心跳下发的出站代理持有者执行（`jdkMgr.SetHTTPClientProvider(outboundProvider.Client)`），配代理即生效。单测覆盖 Worker 错误分类 + 前端检测 + 任务详情入口渲染。
 - **Makefile 本地交叉编译发布产物（`make dist` / `make dist-bin`）**：在任意宿主（含 Windows）交叉编译 control-plane/worker 的 windows-amd64 + linux-amd64 四个产物，命名/ldflags/版本注入对齐 CI 发布管线（ADR-036）；纯 Go + `CGO_ENABLED=0` 使其可行。README 生产构建章节同步。
