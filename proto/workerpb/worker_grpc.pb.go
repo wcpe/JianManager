@@ -86,6 +86,8 @@ const (
 	WorkerService_CheckDocker_FullMethodName          = "/worker.WorkerService/CheckDocker"
 	WorkerService_UpgradeWorker_FullMethodName        = "/worker.WorkerService/UpgradeWorker"
 	WorkerService_TerminalSession_FullMethodName      = "/worker.WorkerService/TerminalSession"
+	WorkerService_InspectServerDir_FullMethodName     = "/worker.WorkerService/InspectServerDir"
+	WorkerService_ImportServerDir_FullMethodName      = "/worker.WorkerService/ImportServerDir"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
@@ -249,6 +251,13 @@ type WorkerServiceClient interface {
 	// 经反向隧道承载时 CP→Worker 终端零入站；老 Worker 无本方法（Unimplemented）时 CP
 	// 回退直拨 Worker WS（双模式，与指令通道一致）。
 	TerminalSession(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TerminalFrame, TerminalFrame], error)
+	// InspectServerDir 只读探测节点上某现成服务器目录：核心 jar 候选（深度≤2，已知核心名排前，
+	// MANIFEST Main-Class 仅作排序提示）、内嵌 JDK 候选（jre*/jdk*/runtime/java 子目录）、
+	// server.properties 端口与 eula 状态。守卫：路径必须绝对/存在/目录，且不得指向托管区之内。
+	InspectServerDir(ctx context.Context, in *InspectServerDirRequest, opts ...grpc.CallOption) (*InspectServerDirResponse, error)
+	// ImportServerDir 导入现成目录：migrate 模式把目录整体搬进托管区系统分配目录
+	// （同盘 os.Rename 优先，跨盘递归拷贝 + 数量/字节校验 + 清源）；in_place 模式 no-op 回原路径。
+	ImportServerDir(ctx context.Context, in *ImportServerDirRequest, opts ...grpc.CallOption) (*ImportServerDirResponse, error)
 }
 
 type workerServiceClient struct {
@@ -983,6 +992,26 @@ func (c *workerServiceClient) TerminalSession(ctx context.Context, opts ...grpc.
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkerService_TerminalSessionClient = grpc.BidiStreamingClient[TerminalFrame, TerminalFrame]
 
+func (c *workerServiceClient) InspectServerDir(ctx context.Context, in *InspectServerDirRequest, opts ...grpc.CallOption) (*InspectServerDirResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InspectServerDirResponse)
+	err := c.cc.Invoke(ctx, WorkerService_InspectServerDir_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ImportServerDir(ctx context.Context, in *ImportServerDirRequest, opts ...grpc.CallOption) (*ImportServerDirResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ImportServerDirResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ImportServerDir_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WorkerServiceServer is the server API for WorkerService service.
 // All implementations must embed UnimplementedWorkerServiceServer
 // for forward compatibility.
@@ -1144,6 +1173,13 @@ type WorkerServiceServer interface {
 	// 经反向隧道承载时 CP→Worker 终端零入站；老 Worker 无本方法（Unimplemented）时 CP
 	// 回退直拨 Worker WS（双模式，与指令通道一致）。
 	TerminalSession(grpc.BidiStreamingServer[TerminalFrame, TerminalFrame]) error
+	// InspectServerDir 只读探测节点上某现成服务器目录：核心 jar 候选（深度≤2，已知核心名排前，
+	// MANIFEST Main-Class 仅作排序提示）、内嵌 JDK 候选（jre*/jdk*/runtime/java 子目录）、
+	// server.properties 端口与 eula 状态。守卫：路径必须绝对/存在/目录，且不得指向托管区之内。
+	InspectServerDir(context.Context, *InspectServerDirRequest) (*InspectServerDirResponse, error)
+	// ImportServerDir 导入现成目录：migrate 模式把目录整体搬进托管区系统分配目录
+	// （同盘 os.Rename 优先，跨盘递归拷贝 + 数量/字节校验 + 清源）；in_place 模式 no-op 回原路径。
+	ImportServerDir(context.Context, *ImportServerDirRequest) (*ImportServerDirResponse, error)
 	mustEmbedUnimplementedWorkerServiceServer()
 }
 
@@ -1354,6 +1390,12 @@ func (UnimplementedWorkerServiceServer) UpgradeWorker(context.Context, *UpgradeW
 }
 func (UnimplementedWorkerServiceServer) TerminalSession(grpc.BidiStreamingServer[TerminalFrame, TerminalFrame]) error {
 	return status.Error(codes.Unimplemented, "method TerminalSession not implemented")
+}
+func (UnimplementedWorkerServiceServer) InspectServerDir(context.Context, *InspectServerDirRequest) (*InspectServerDirResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InspectServerDir not implemented")
+}
+func (UnimplementedWorkerServiceServer) ImportServerDir(context.Context, *ImportServerDirRequest) (*ImportServerDirResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ImportServerDir not implemented")
 }
 func (UnimplementedWorkerServiceServer) mustEmbedUnimplementedWorkerServiceServer() {}
 func (UnimplementedWorkerServiceServer) testEmbeddedByValue()                       {}
@@ -2514,6 +2556,42 @@ func _WorkerService_TerminalSession_Handler(srv interface{}, stream grpc.ServerS
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkerService_TerminalSessionServer = grpc.BidiStreamingServer[TerminalFrame, TerminalFrame]
 
+func _WorkerService_InspectServerDir_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InspectServerDirRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).InspectServerDir(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_InspectServerDir_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).InspectServerDir(ctx, req.(*InspectServerDirRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_ImportServerDir_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ImportServerDirRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ImportServerDir(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ImportServerDir_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ImportServerDir(ctx, req.(*ImportServerDirRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkerService_ServiceDesc is the grpc.ServiceDesc for WorkerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2756,6 +2834,14 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpgradeWorker",
 			Handler:    _WorkerService_UpgradeWorker_Handler,
+		},
+		{
+			MethodName: "InspectServerDir",
+			Handler:    _WorkerService_InspectServerDir_Handler,
+		},
+		{
+			MethodName: "ImportServerDir",
+			Handler:    _WorkerService_ImportServerDir_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

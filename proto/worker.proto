@@ -195,6 +195,16 @@ service WorkerService {
   // 经反向隧道承载时 CP→Worker 终端零入站；老 Worker 无本方法（Unimplemented）时 CP
   // 回退直拨 Worker WS（双模式，与指令通道一致）。
   rpc TerminalSession(stream TerminalFrame) returns (stream TerminalFrame);
+
+  // === 导入现有服务器（FR-302，见 ADR-XXXX）===
+
+  // InspectServerDir 只读探测节点上某现成服务器目录：核心 jar 候选（深度≤2，已知核心名排前，
+  // MANIFEST Main-Class 仅作排序提示）、内嵌 JDK 候选（jre*/jdk*/runtime/java 子目录）、
+  // server.properties 端口与 eula 状态。守卫：路径必须绝对/存在/目录，且不得指向托管区之内。
+  rpc InspectServerDir(InspectServerDirRequest) returns (InspectServerDirResponse);
+  // ImportServerDir 导入现成目录：migrate 模式把目录整体搬进托管区系统分配目录
+  // （同盘 os.Rename 优先，跨盘递归拷贝 + 数量/字节校验 + 清源）；in_place 模式 no-op 回原路径。
+  rpc ImportServerDir(ImportServerDirRequest) returns (ImportServerDirResponse);
 }
 
 // === 注册 ===
@@ -1036,6 +1046,9 @@ message RemoveInstanceRequest {
   // work_dir 是 CP 记录的工作目录（数据根相对路径，ADR-010）。
   // Worker 注册表命中时以注册的绝对路径为准；未命中（如 Worker 重启后未重推）时据此解析兜底。
   string work_dir = 2;
+  // skip_work_dir 就地导入实例（FR-302，见 ADR-XXXX）：CP 显式指示跳过目录删除，
+  // 仅移除注册与派生索引，原目录绝不清理（与托管区守卫互为双保险）。
+  bool skip_work_dir = 3;
 }
 
 message RemoveInstanceResponse {
@@ -1338,4 +1351,50 @@ message TerminalOpen {
 message TerminalWSFrame {
   int32 msg_type = 1;   // gorilla/websocket 消息类型（1=Text，2=Binary）
   bytes payload = 2;
+}
+
+// === 导入现有服务器（FR-302，见 ADR-XXXX）===
+
+message InspectServerDirRequest {
+  // path 导入根目录（节点上的绝对路径）。
+  string path = 1;
+}
+
+// ImportJarCandidate 一个核心 jar 候选。
+message ImportJarCandidate {
+  string path = 1;             // 相对导入根、以「/」分隔的路径（深度≤2）
+  int64 size = 2;              // 字节
+  string main_class_hint = 3;  // MANIFEST Main-Class 嗅探结果（仅排序/展示提示，可为空）
+}
+
+// ImportJdkCandidate 一个内嵌 JDK 候选（jre*/jdk*/runtime/java 子目录经 JDK 探测确认）。
+message ImportJdkCandidate {
+  string path = 1;             // JDK home 绝对路径
+  string vendor = 2;
+  string version = 3;
+  int32 major_version = 4;
+  string arch = 5;
+}
+
+message InspectServerDirResponse {
+  bool success = 1;
+  string error = 2;            // 守卫拒绝/探测失败原因
+  repeated ImportJarCandidate jars = 3;
+  repeated ImportJdkCandidate jdks = 4;
+  int32 server_port = 5;       // server.properties 的 server-port（0=未知）
+  bool eula_accepted = 6;      // eula.txt 是否 eula=true
+  bool props_found = 7;        // 是否存在可解析的 server.properties
+}
+
+message ImportServerDirRequest {
+  string path = 1;         // 导入根目录（节点上的绝对路径）
+  string mode = 2;         // in_place | migrate
+  string target_slug = 3;  // migrate 模式的托管区目标目录名（<slug>-<shortid>，CP 生成）
+}
+
+message ImportServerDirResponse {
+  bool success = 1;
+  string error = 2;
+  string work_dir = 3;     // 最终工作目录在节点上的绝对路径
+  bool moved = 4;          // migrate 是否实际完成搬迁（in_place 恒为 false）
 }
