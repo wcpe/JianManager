@@ -1,7 +1,7 @@
 # ADR-064: 多语言 monorepo 统一布局与命令面（apps/packages/internal/third_party + go-task）
 
 - **日期**: 2026-07-12
-- **状态**: proposed（草稿；FR-283 开工前定稿为 accepted）
+- **状态**: accepted
 - **取代关系**: 无取代。**重申并细化 ADR-005**（go:embed 单二进制 + 开发模式反代不变、embed 目标目录不变），仅更新「前端源码目录」这一结构前提的措辞；不改 ADR-001/002/003/006 等任何进程模型与通信边界。
 - **关联**: FR-283~288（本 ADR 落地）、ADR-005（前端 go:embed 单二进制）、ADR-036（发布管线 + 产物命名契约）、ADR-047（devmock 仅 dev/test 形态、不入嵌入产物）、ADR-058（`@jianmanager/ui` 组件包与组件博物馆）、ADR-065（`version.go` 版本唯一真值——FR-288 把前端接上它）。
 
