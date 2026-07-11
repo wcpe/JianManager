@@ -11,6 +11,8 @@ export interface NodeInfo {
   status: number // 0=offline, 1=online, 2=starting
   /** 维护模式（cordon）：true 时禁止新实例调度到该节点（FR-048）。 */
   maintenance: boolean
+  /** 反向隧道已连（FR-281，见 ADR-066）：true=指令经隧道下发（NAT/内网可用），false=直拨回退。 */
+  tunnelConnected: boolean
   os: string
   arch: string
   cpuCores: number

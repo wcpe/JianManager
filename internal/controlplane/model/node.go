@@ -60,6 +60,11 @@ type Node struct {
 	CreatedAt        time.Time      `json:"createdAt"`
 	UpdatedAt        time.Time      `json:"updatedAt"`
 	DeletedAt        gorm.DeletedAt `gorm:"index" json:"-"`
+
+	// TunnelConnected 该节点当前是否有活跃反向隧道（FR-281，见 ADR-066）。
+	// 运行态字段不落库（gorm:"-"），由 NodeService 在响应时据 TunnelRegistry 填充：
+	// true=指令经隧道下发（NAT/内网节点可用），false=直拨回退（老 worker/隧道重建窗口）。
+	TunnelConnected bool `gorm:"-" json:"tunnelConnected"`
 }
 
 // BeforeCreate 创建前自动生成 UUID。

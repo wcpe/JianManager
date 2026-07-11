@@ -21,6 +21,8 @@ interface MockNode {
   wsPort: number
   status: number
   maintenance: boolean
+  /** 反向隧道已连（FR-281，见 ADR-066）：在线节点 true=隧道下发，false=直拨回退。 */
+  tunnelConnected: boolean
   os: string
   arch: string
   cpuCores: number
@@ -182,6 +184,7 @@ const nodes = db<MockNode>('nodes', () => [
     wsPort: 9200,
     status: 1,
     maintenance: false,
+    tunnelConnected: true,
     os: 'linux',
     arch: 'amd64',
     cpuCores: 8,
@@ -207,6 +210,7 @@ const nodes = db<MockNode>('nodes', () => [
     wsPort: 9200,
     status: 0,
     maintenance: false,
+    tunnelConnected: false,
     os: 'windows',
     arch: 'amd64',
     cpuCores: 4,

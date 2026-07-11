@@ -28,6 +28,8 @@ type NodeService struct {
 	// 同包内通过 SetInstanceService 注入，规避构造期循环依赖。
 	instanceSvc *InstanceService
 	pool        *cpgrpc.ClientPool
+	// tunnelStatus 反向隧道状态来源（FR-281）；nil 表示未启用，响应恒 false。
+	tunnelStatus TunnelStatus
 }
 
 // NewNodeService 创建节点服务。
@@ -45,6 +47,23 @@ func (s *NodeService) SetInstanceService(instanceSvc *InstanceService) {
 // SetClientPool 注入 Worker 连接池，供节点实时指标按需拉取。
 func (s *NodeService) SetClientPool(pool *cpgrpc.ClientPool) {
 	s.pool = pool
+}
+
+// TunnelStatus 报告节点反向隧道连接状态（FR-281，见 ADR-066）；由 TunnelRegistry 实现。
+type TunnelStatus interface {
+	Connected(nodeUUID string) bool
+}
+
+// SetTunnelStatus 注入隧道状态来源；main 装配时调用一次。未注入时响应恒为 false（直拨语义）。
+func (s *NodeService) SetTunnelStatus(ts TunnelStatus) {
+	s.tunnelStatus = ts
+}
+
+// fillTunnelState 填充节点的运行态隧道字段（响应期计算，不落库）。
+func (s *NodeService) fillTunnelState(node *model.Node) {
+	if s.tunnelStatus != nil {
+		node.TunnelConnected = s.tunnelStatus.Connected(node.UUID)
+	}
 }
 
 // RegisterRequest 节点注册请求。
@@ -126,6 +145,9 @@ func (s *NodeService) List() ([]model.Node, error) {
 	if err := s.db.Find(&nodes).Error; err != nil {
 		return nil, fmt.Errorf("查询节点列表失败: %w", err)
 	}
+	for i := range nodes {
+		s.fillTunnelState(&nodes[i])
+	}
 	return nodes, nil
 }
 
@@ -138,6 +160,7 @@ func (s *NodeService) GetByID(id uint) (*model.Node, error) {
 		}
 		return nil, fmt.Errorf("查询节点失败: %w", err)
 	}
+	s.fillTunnelState(&node)
 	return &node, nil
 }
 

@@ -637,6 +637,16 @@ function NodeDetailPane({
             <div className="flex items-center gap-2">
               <h2 className="truncate text-base font-semibold" title={node.name}>{node.name}</h2>
               <StatusBadge level={level} label={statusLabel} />
+              {/* 反向隧道状态（FR-281，见 ADR-066）：仅在线节点有意义——隧道已连=指令免入站；直拨回退=走 node.Host:GRPCPort */}
+              {online && (
+                <Badge
+                  variant="outline"
+                  className={node.tunnelConnected ? 'text-status-success border-status-success/50' : 'text-muted-foreground'}
+                  title={node.tunnelConnected ? t('nodes.tunnelConnectedHint') : t('nodes.tunnelDirectHint')}
+                >
+                  {node.tunnelConnected ? t('nodes.tunnelConnected') : t('nodes.tunnelDirect')}
+                </Badge>
+              )}
               {node.maintenance && (
                 <Badge variant="outline" className="text-status-warning border-status-warning/50">
                   {t('nodes.maintenance')}
