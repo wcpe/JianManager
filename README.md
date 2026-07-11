@@ -61,13 +61,22 @@ JIANMANAGER_CONTROL_PLANE_GRPC=localhost:9100 go run ./cmd/worker
 ### 生产构建
 
 ```bash
-# 构建所有（前端 + 嵌入 + Go 二进制）
+# 构建所有（前端 + 嵌入 + Go 二进制，本机平台）
 make build
 
 # 产物
 ls bin/
 # control-plane.exe  # Control Plane（含前端）
 # worker.exe          # Worker Node
+
+# 发布产物交叉编译（windows+linux amd64，任意宿主可跑；纯 Go + CGO_ENABLED=0）
+make dist        # 前端 + 内嵌资产先行 + 四个二进制
+make dist-bin    # 仅重编二进制（内嵌资产已就绪时）
+
+# 产物（命名与 CI 发布管线一致，版本号自动读 internal/version/version.go，可 VERSION=x.y.z 覆盖）
+ls dist/
+# control-plane-windows-amd64.exe  control-plane-linux-amd64
+# worker-windows-amd64.exe         worker-linux-amd64
 ```
 
 ### Docker 部署

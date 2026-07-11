@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-probe embed-cfr embed-client-updater gen-licenses docker
+.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-probe embed-cfr embed-client-updater gen-licenses docker dist dist-bin
 
 # 构建所有（含前端嵌入）。gen-licenses 先行，确保许可清单与即将打包的前端一致。
 # embed-install-scripts 同步一键安装脚本内嵌副本（FR-080），保持与 canonical scripts/ 一致。
@@ -66,6 +66,25 @@ embed-cfr:
 	curl -fsSL -o internal/worker/embed/cfr/cfr.jar https://repo1.maven.org/maven2/org/benf/cfr/0.152/cfr-0.152.jar
 	echo "f686e8f3ded377d7bc87d216a90e9e9512df4156e75b06c655a16648ae8765b2  internal/worker/embed/cfr/cfr.jar" | sha256sum -c -
 
+# ── 发布产物交叉编译（windows+linux，对齐 .github/workflows/release.yml build job）──
+# 纯 Go（SQLite 用 glebarez 纯 Go 驱动、无 CGO）+ CGO_ENABLED=0，任意宿主（含 Windows）可交叉编译全平台产物。
+# 命名与版本注入与 CI 同式：dist/<组件>-<os>-<arch>[.exe]，-X internal/version.Version（ADR-036）。
+# VERSION 默认读 internal/version/version.go 当前值，可覆盖：make dist VERSION=1.0.0。
+# 注：probe / client-updater 内嵌 jar 已入库随 checkout 就位；如需重建用 embed-probe / embed-client-updater。
+VERSION ?= $(shell sed -n 's/^var Version = "\(.*\)"/\1/p' internal/version/version.go)
+DIST_LDFLAGS = -s -w -X github.com/wcpe/JianManager/internal/version.Version=$(VERSION)
+
+# 全量发布构建：前端 + 内嵌资产先行，再交叉编译四个二进制。
+dist: gen-licenses build-web embed-web embed-install-scripts dist-bin
+
+# 仅交叉编译二进制（内嵌资产已就绪时的快速重编）。
+dist-bin:
+	mkdir -p dist
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/control-plane-windows-amd64.exe ./cmd/control-plane
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/worker-windows-amd64.exe ./cmd/worker
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/control-plane-linux-amd64 ./cmd/control-plane
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/worker-linux-amd64 ./cmd/worker
+
 # 构建 Bot Worker
 build-bot:
 	cd bot-worker && npm run build
@@ -126,7 +145,7 @@ docker-down:
 
 # 清理
 clean:
-	rm -rf bin/ web/dist/ bot-worker/dist/ data/ internal/controlplane/embed/dist/
+	rm -rf bin/ dist/ web/dist/ bot-worker/dist/ data/ internal/controlplane/embed/dist/
 
 # 安装所有依赖
 install:
