@@ -1,14 +1,14 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Bell, Boxes, Check, ChevronDown, Loader2, LogOut, RotateCw, Search, Server, UserRound } from 'lucide-react'
+import { AlertTriangle, Bell, Boxes, Check, ChevronDown, Loader2, LogOut, RotateCw, Search, Server, UserRound, Users } from 'lucide-react'
 
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
-import { useInstance, useInstanceAggregate } from '@/api/instances'
+import { useInstance, useInstanceAggregate, useSearchInstances, type InstanceInfo } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
-import { useMetricOverview } from '@/api/metrics'
+import { useInstanceMetrics, useMetricOverview } from '@/api/metrics'
 import { useTasks } from '@/api/tasks'
 import { useNotificationFeed, useFeedUnreadCount, type FeedItem } from '@/api/notification-feed'
 import { cn } from '@jianmanager/ui'
@@ -168,39 +168,207 @@ function RefreshButton() {
   )
 }
 
-/** 单个集群概览徽标：图标 + 计数，可点跳转对应筛选。danger 时计数着红。 */
-function ClusterBadge({
+/** 集群统计浮窗行数上限（FR-294）：超出在底部提示「还有 N 个，查看全部」。 */
+const STAT_POPOVER_MAX_ROWS = 8
+
+/**
+ * 集群概览徽标 + 缩略浮窗外壳（FR-294，复用 FR-216 铃铛的 DropdownMenu 范式、同款视觉）：
+ * 徽标点击由「直接跳筛选页」改为弹缩略浮窗；受控 open 态经 render prop 传给内容，
+ * 让浮窗数据查询 enabled 绑定 open——数据仅浮窗打开时拉取。danger 时计数着红。
+ */
+function ClusterStatPopover({
   icon: Icon,
   value,
   label,
   danger,
-  onClick,
+  children,
 }: {
   icon: typeof Server
   value: number
   label: string
   danger?: boolean
-  onClick: () => void
+  /** 浮窗内容，接收当前 open 态用于绑定查询 enabled。 */
+  children: (open: boolean) => ReactNode
 }) {
+  const [open, setOpen] = useState(false)
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={`${label}: ${value}`}
-      aria-label={`${label}: ${value}`}
-      className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-    >
-      <Icon className={cn('size-3.5', danger && 'text-status-danger')} />
-      <span className={cn('tabular-nums', danger && 'font-medium text-status-danger')}>{value}</span>
-    </button>
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          title={`${label}: ${value}`}
+          aria-label={`${label}: ${value}`}
+          className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+        >
+          <Icon className={cn('size-3.5', danger && 'text-status-danger')} />
+          <span className={cn('tabular-nums', danger && 'font-medium text-status-danger')}>{value}</span>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72">
+        <div className="px-2 py-1.5 text-xs font-medium">{label}</div>
+        <DropdownMenuSeparator />
+        {children(open)}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
-/** 集群概览徽标组（FR-162）：在线节点 / 运行实例 / 崩溃数；点击跳转对应筛选。窄屏隐藏。 */
-function ClusterBadges() {
+/** 浮窗底部「查看全部」项（FR-294）：行数超上限时改为提示剩余数。 */
+function StatPopoverFooter({ remaining, label, onClick }: { remaining: number; label: string; onClick: () => void }) {
+  const { t } = useTranslation()
+  return (
+    <>
+      <DropdownMenuSeparator />
+      <DropdownMenuItem onClick={onClick} className="justify-center text-xs text-muted-foreground">
+        {remaining > 0 ? t('header.moreCount', { count: remaining }) : label}
+      </DropdownMenuItem>
+    </>
+  )
+}
+
+/**
+ * 在线节点浮窗内容（FR-294）：行 = 节点名 + 在线状态点 + 该节点运行实例数。
+ * 节点列表复用页眉 NodeScopeSelector 已缓存的 ['nodes'] 查询（不额外发请求）；
+ * 每节点运行数复用 FR-247 聚合（status=RUNNING 的 byNode），enabled 绑定浮窗 open 态。
+ * 行点击 → /nodes?node=<id> 定位该节点（FR-128 深链）。
+ */
+function NodeStatRows({ open }: { open: boolean }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  // 复用总览页同款聚合；崩溃数走 FR-247 聚合，避免页眉为计数拉全量实例。
+  const { data: nodes } = useNodes()
+  const { data: runningAgg } = useInstanceAggregate({ status: 'RUNNING' }, open)
+  const runningByNode = new Map((runningAgg?.byNode ?? []).map((n) => [n.nodeId, n.count]))
+  const visible = (nodes ?? []).slice(0, STAT_POPOVER_MAX_ROWS)
+
+  return (
+    <>
+      {nodes && visible.length === 0 ? (
+        <div className="px-2 py-6 text-center text-xs text-muted-foreground">{t('header.noNodes')}</div>
+      ) : (
+        visible.map((node) => (
+          <DropdownMenuItem key={node.id} onClick={() => navigate(`/nodes?node=${node.id}`)} className="text-xs">
+            <span
+              className={cn('size-1.5 shrink-0 rounded-full', node.status === 1 ? 'bg-status-success' : 'bg-muted-foreground/50')}
+            />
+            <span className="min-w-0 flex-1 truncate">{node.name}</span>
+            <span className="shrink-0 tabular-nums text-muted-foreground">
+              {t('header.runningOnNode', { count: runningByNode.get(node.id) ?? 0 })}
+            </span>
+          </DropdownMenuItem>
+        ))
+      )}
+      <StatPopoverFooter
+        remaining={(nodes?.length ?? 0) - visible.length}
+        label={t('header.viewAllNodes')}
+        onClick={() => navigate('/nodes')}
+      />
+    </>
+  )
+}
+
+/**
+ * 运行中服务器浮窗内容（FR-294）：行 = 实例名 + 节点名 + 在线人数（有数据时）。
+ * 复用 FR-247 分页搜索（status=RUNNING，pageSize=行数上限），enabled 绑定浮窗 open 态；
+ * 行点击 → /instances/:id 该服控制台，底部「查看全部」→ /instances?status=RUNNING。
+ */
+function RunningInstanceRows({ open }: { open: boolean }) {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const { data: nodes } = useNodes()
+  const { data } = useSearchInstances({ status: 'RUNNING', pageSize: STAT_POPOVER_MAX_ROWS }, open)
+  const items = data?.items ?? []
+  const nodeNames = new Map((nodes ?? []).map((n) => [n.id, n.name]))
+
+  return (
+    <>
+      {data && items.length === 0 ? (
+        <div className="px-2 py-6 text-center text-xs text-muted-foreground">{t('header.noRunningInstances')}</div>
+      ) : (
+        items.map((inst) => (
+          <RunningInstanceRow key={inst.id} instance={inst} nodeName={nodeNames.get(inst.nodeId)} open={open} />
+        ))
+      )}
+      <StatPopoverFooter
+        remaining={Math.max(0, (data?.total ?? 0) - items.length)}
+        label={t('header.viewAll')}
+        onClick={() => navigate('/instances?status=RUNNING')}
+      />
+    </>
+  )
+}
+
+/**
+ * 运行中服务器浮窗单行（FR-294）：在线人数复用既有实例 metrics 查询（FR-060），
+ * enabled 绑定浮窗 open 态（行仅在浮窗打开时挂载），无数据时不显示人数。
+ */
+function RunningInstanceRow({ instance, nodeName, open }: { instance: InstanceInfo; nodeName?: string; open: boolean }) {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const { data: metrics } = useInstanceMetrics(instance.id, open)
+  return (
+    <DropdownMenuItem onClick={() => navigate(`/instances/${instance.id}`)} className="text-xs">
+      <span className="size-1.5 shrink-0 rounded-full bg-status-success" />
+      <span className="min-w-0 flex-1 truncate">{instance.name}</span>
+      {nodeName && <span className="shrink-0 text-muted-foreground">{nodeName}</span>}
+      {metrics && (
+        <span className="flex shrink-0 items-center gap-1 tabular-nums text-muted-foreground">
+          <Users className="size-3" />
+          {t('header.onlinePlayersCount', { count: metrics.onlinePlayers })}
+        </span>
+      )}
+    </DropdownMenuItem>
+  )
+}
+
+/**
+ * 崩溃服务器浮窗内容（FR-294）：行 = 实例名 + 节点名 + 崩溃原因（statusReason，有则显）；
+ * 空态显示友好文案。复用 FR-247 分页搜索（status=CRASHED），enabled 绑定浮窗 open 态；
+ * 行点击 → /instances/:id，底部「查看全部」→ /instances?status=CRASHED。
+ */
+function CrashedInstanceRows({ open }: { open: boolean }) {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const { data: nodes } = useNodes()
+  const { data } = useSearchInstances({ status: 'CRASHED', pageSize: STAT_POPOVER_MAX_ROWS }, open)
+  const items = data?.items ?? []
+  const nodeNames = new Map((nodes ?? []).map((n) => [n.id, n.name]))
+
+  return (
+    <>
+      {data && items.length === 0 ? (
+        <div className="px-2 py-6 text-center text-xs text-muted-foreground">{t('header.noCrashedInstances')}</div>
+      ) : (
+        items.map((inst) => (
+          <DropdownMenuItem key={inst.id} onClick={() => navigate(`/instances/${inst.id}`)} className="items-start text-xs">
+            <span className="mt-1 size-1.5 shrink-0 rounded-full bg-status-danger" />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5">
+                <span className="min-w-0 flex-1 truncate">{inst.name}</span>
+                {nodeNames.get(inst.nodeId) && (
+                  <span className="shrink-0 text-muted-foreground">{nodeNames.get(inst.nodeId)}</span>
+                )}
+              </div>
+              {inst.statusReason && <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{inst.statusReason}</p>}
+            </div>
+          </DropdownMenuItem>
+        ))
+      )}
+      <StatPopoverFooter
+        remaining={Math.max(0, (data?.total ?? 0) - items.length)}
+        label={t('header.viewAll')}
+        onClick={() => navigate('/instances?status=CRASHED')}
+      />
+    </>
+  )
+}
+
+/**
+ * 集群概览徽标组（FR-162；FR-294 点击改弹缩略浮窗）：在线节点 / 运行实例 / 崩溃数。
+ * 徽标计数数据源不变（总览页同款聚合 + FR-247 聚合，避免页眉为计数拉全量实例）；
+ * 原「点击跳筛选页」保留为浮窗底部「查看全部」。窄屏隐藏逻辑（header-layout）不变。
+ */
+function ClusterBadges() {
+  const { t } = useTranslation()
   const { data: overview } = useMetricOverview('24h')
   const { data: aggregate } = useInstanceAggregate()
   const online = overview?.totals.onlineNodeCount ?? 0
@@ -209,20 +377,15 @@ function ClusterBadges() {
 
   return (
     <div className={cn('items-center', visibilityClass(slotVisibility('clusterBadges')))}>
-      <ClusterBadge icon={Server} value={online} label={t('header.onlineNodes')} onClick={() => navigate('/nodes')} />
-      <ClusterBadge
-        icon={Boxes}
-        value={running}
-        label={t('header.runningInstances')}
-        onClick={() => navigate('/instances?status=RUNNING')}
-      />
-      <ClusterBadge
-        icon={AlertTriangle}
-        value={crashed}
-        label={t('header.crashedInstances')}
-        danger={crashed > 0}
-        onClick={() => navigate('/instances?status=CRASHED')}
-      />
+      <ClusterStatPopover icon={Server} value={online} label={t('header.onlineNodes')}>
+        {(open) => <NodeStatRows open={open} />}
+      </ClusterStatPopover>
+      <ClusterStatPopover icon={Boxes} value={running} label={t('header.runningInstances')}>
+        {(open) => <RunningInstanceRows open={open} />}
+      </ClusterStatPopover>
+      <ClusterStatPopover icon={AlertTriangle} value={crashed} label={t('header.crashedInstances')} danger={crashed > 0}>
+        {(open) => <CrashedInstanceRows open={open} />}
+      </ClusterStatPopover>
     </div>
   )
 }

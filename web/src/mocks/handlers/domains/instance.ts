@@ -24,6 +24,8 @@ export interface MockInstance {
   role: string
   processType: string
   status: string
+  /** 当前状态原因（对齐 InstanceInfo.statusReason）：CRASHED 时给出具体崩溃原因，供 FR-294 浮窗显示。 */
+  statusReason?: string
   startCommand: string
   /** 直接绑定的 JDK id；0/缺省表示未直接绑定。 */
   jdkId?: number
@@ -115,6 +117,7 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     role: 'backend',
     processType: 'docker',
     status: 'CRASHED',
+    statusReason: '实例未绑定 JDK，启动委托失败',
     startCommand: 'java -jar paper.jar nogui',
     jdkId: 0,
     javaMajorVersion: 21,
@@ -180,6 +183,7 @@ const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
     role: 'backend',
     processType: 'docker',
     status: 'CRASHED',
+    statusReason: 'OutOfMemoryError: Java heap space',
     startCommand: 'java -Xmx4G -jar paper.jar nogui',
     workDir: '/servers/survival-world',
     image: 'itzg/minecraft-server:latest',
@@ -254,6 +258,7 @@ function buildGeneratedInstance(id: number): MockInstance {
     role,
     processType: id % 4 === 0 ? 'docker' : 'daemon',
     status,
+    statusReason: status === 'CRASHED' ? `进程异常退出（exit code ${id % 3 === 0 ? 137 : 1}）` : undefined,
     startCommand: role === 'proxy' ? 'java -jar velocity.jar' : 'java -Xmx2G -jar paper.jar nogui',
     workDir: `/servers/${name}`,
     image: id % 4 === 0 ? 'itzg/minecraft-server:latest' : '',
