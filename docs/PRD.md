@@ -344,6 +344,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-278 | CP 内嵌 Worker 二进制（一键安装/升级不依赖 GitHub）：构建期把 windows/linux amd64 Worker 二进制 go:embed 进 CP（make dist / CI 两阶段：先 worker 后 CP，体积 +~43MB），`/worker-assets` 端点解析顺序改为 内嵌（版本=CP 自身）> 本地缓存 > 远程 feed 兜底——离线/内网/国内网络/本地构建开发版的一键安装与节点升级全程不出网，CP↔Worker 版本强一致（真机复现：安装请求因 GitHub TLS 超时 + 远程无本地构建版本 release 而必然失败）（feat，需 spec + ADR-062 修订 ADR-059 分发来源）→ `docs/specs/worker-embed-distribution/spec.md` | P1 | 🔨 开发中 |
 | FR-279 | JDK 下载受限网络可用性与失败引导：JDK 一键下载（temurin 等 GitHub 源）在无代理环境 TLS 超时（真机复现 `adoptium/temurin21-binaries ... TLS handshake timeout`）——失败信息改为可操作引导（明示可在设置页配置出站代理、或切换 JDK 镜像源，附入口跳转），并真机验证 Worker 侧 JDK 下载确实经 ADR-043 心跳下发的出站代理生效（增强 FR-033/178/186，免 spec） | P2 | 🔨 开发中 |
 | FR-280 | 出站代理面板提示与连通性测试自定义目标：① 代理设置区补大白话提示，列明哪些流量经此代理（JDK 下载、Worker 资产/自更新拉取、探针依赖、客户端分发外呼等）；② 连通性测试目标从写死 GitHub 改为可输入任意 URL 测试，默认 `https://www.google.com`（提示文案同步去掉「（GitHub）」硬编码）（增强 FR-185/229，免 spec） | P2 | 🔨 开发中 |
+| FR-281 | CP→Worker 指令反向流化（免 NAT / 零入站端口暴露）：把 CP→Worker 的指令派发从「CP 直连 worker gRPC `node.Host:GRPCPort`」改为经 Worker 主动建立的**常驻双向流**承载——Worker 只出站、零入站端口暴露，家用 NAT / 内网 / 公网混合环境均可接入（现状真机复现：公网 CP 无法回拨家用 NAT 后的 Windows worker 的 9101/9102）。含 proto 新增双向指令流、CP 连接池由「拨号」改为「往流里派发 + 关联请求/回执」、Worker 由 gRPC 服务端改为「守流听指令」、超时/断线重连/背压语义；终端 WS（9102）一并经 CP 中转（或同机制隧道化）才彻底免入站。**架构级大改，需新 ADR 修订 ADR-002（gRPC 节点通信）+ spec**（feat，排后续版本） | P1 | 📋 计划 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
