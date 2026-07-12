@@ -137,6 +137,11 @@ func (m *Manager) ListGlobal(ctx context.Context, pm string) ([]GlobalPackage, e
 	out, runErr := m.runner()(ctx, pmPath, args, env, nil)
 	pkgs, parseErr := parseLsJSON(pm, out)
 	if parseErr != nil && runErr != nil {
+		// 全空全局目录：npm 对无 lib/node_modules 的 prefix 报 ENOENT 退出非 0——
+		// 视为「还没装过任何包」回空列表（真机复现：全新节点首次打开分区报错）。
+		if strings.Contains(string(out), "ENOENT") {
+			return []GlobalPackage{}, nil
+		}
 		return nil, fmt.Errorf("列出全局包失败: %v（%s）", runErr, firstLine(out))
 	}
 	// outdated best-effort：命令对「有可更新项」按惯例退出码非 0，只要 stdout 可解析就采纳。

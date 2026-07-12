@@ -122,3 +122,24 @@ func TestGlobal_NoManagedNodeExplains(t *testing.T) {
 		t.Fatalf("无托管 Node 应有可操作错误，实际: %v", err)
 	}
 }
+
+// TestListGlobal_EmptyPrefixTreatedAsEmpty 全空全局目录（npm ls 报 ENOENT/exit 254）
+// 应视为空列表而非报错——真机复现：全新节点首次打开全局包分区直接报
+// 「列出全局包失败: exit status 254（npm error code ENOENT）」（FR-307）。
+func TestListGlobal_EmptyPrefixTreatedAsEmpty(t *testing.T) {
+	fake := func(_ context.Context, _ string, args, _ []string, _ func(string)) ([]byte, error) {
+		if args[0] == "ls" {
+			// npm 对空 prefix 的真实行为：stderr 报 ENOENT、退出码非 0、stdout 无 JSON
+			return []byte("npm error code ENOENT\nnpm error syscall lstat"), &exitOneErr{}
+		}
+		return nil, &exitOneErr{}
+	}
+	m := newGlobalTestManager(t, fake)
+	pkgs, err := m.ListGlobal(context.Background(), "npm")
+	if err != nil {
+		t.Fatalf("空全局目录应回空列表而非报错: %v", err)
+	}
+	if len(pkgs) != 0 {
+		t.Fatalf("应空列表，实际 %d", len(pkgs))
+	}
+}
