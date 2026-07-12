@@ -24,6 +24,8 @@ export interface InstanceInfo {
   /** 绑定的 JDK id（0/缺省=未绑定，用系统 Java）。 */
   jdkId?: number
   workDir: string
+  /** 就地导入标记（FR-302）：工作目录为托管区外原目录，删除实例不删原目录。 */
+  workDirInPlace?: boolean
   /** docker 模式的容器镜像引用（FR-078，ADR-019）；非 docker 模式为空。 */
   image?: string
   /** docker 模式 CPU 核数上限（FR-079）；0=不限制，仅 docker 模式生效。 */

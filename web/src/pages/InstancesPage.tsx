@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { ArrowUpDown, ChevronRight, ChevronDown, Zap, Globe, Plus, FolderTree, Search, SlidersHorizontal } from 'lucide-react'
+import { ArrowUpDown, ChevronRight, ChevronDown, Zap, Globe, Plus, FolderTree, HardDriveDownload, Search, SlidersHorizontal } from 'lucide-react'
 import {
   useInfiniteInstanceSearch,
   useInstanceAggregate,
@@ -22,6 +22,7 @@ import DangerConfirm from '@/components/DangerConfirm'
 import InstanceBatchBar from '@/components/InstanceBatchBar'
 import ProvisionServerDialog from '@/components/ProvisionServerDialog'
 import ProvisionProxyDialog from '@/components/ProvisionProxyDialog'
+import ImportServerWizard from '@/components/ImportServerWizard'
 import ProxyRegistrationsDialog from '@/components/ProxyRegistrationsDialog'
 import CloneInstanceDialog from '@/components/CloneInstanceDialog'
 import InstanceTagsDialog from '@/components/InstanceTagsDialog'
@@ -170,6 +171,7 @@ export default function InstancesPage() {
   }, [searchParams, setSearchParams])
   const [showProvision, setShowProvision] = useState(false)
   const [showProvisionProxy, setShowProvisionProxy] = useState(false)
+  const [showImport, setShowImport] = useState(false)
   const [manageProxy, setManageProxy] = useState<{ id: number; name: string } | null>(null)
   const [cloneTarget, setCloneTarget] = useState<{ id: number; name: string } | null>(null)
   const [editConfigTarget, setEditConfigTarget] = useState<InstanceInfo | null>(null)
@@ -183,7 +185,7 @@ export default function InstancesPage() {
     memLimitMb: number
     diskLimitMb: number
   } | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; inPlace?: boolean } | null>(null)
   const [killTarget, setKillTarget] = useState<{ id: number; name: string } | null>(null)
   // 批量操作选中的实例 ID 集合（FR-058）。
   const [selectedIds, setSelectedIds] = useState<number[]>([])
@@ -471,7 +473,7 @@ export default function InstancesPage() {
       })}
       onProxy={() => setManageProxy({ id: inst.id, name: inst.name })}
       onClone={() => setCloneTarget({ id: inst.id, name: inst.name })}
-      onDelete={() => setDeleteTarget({ id: inst.id, name: inst.name })}
+      onDelete={() => setDeleteTarget({ id: inst.id, name: inst.name, inPlace: !!inst.workDirInPlace })}
     />
   )
 
@@ -518,6 +520,12 @@ export default function InstancesPage() {
               >
                 {inst.name}
               </button>
+              {/* 就地导入徽章（FR-302）：工作目录在托管区外，删除实例不删原目录。 */}
+              {inst.workDirInPlace && (
+                <Badge variant="outline" className="shrink-0 border-amber-500/50 text-amber-600 dark:text-amber-400">
+                  {t('importServer.inPlaceBadge')}
+                </Badge>
+              )}
             </div>
           </TableCell>
           <TableCell className="text-muted-foreground">{inst.type}</TableCell>
@@ -626,6 +634,9 @@ export default function InstancesPage() {
           </Button>
           <Button variant="outline" onClick={() => setShowProvisionProxy(true)}>
             <Globe className="size-4" /> {t('proxy.entry')}
+          </Button>
+          <Button variant="outline" onClick={() => setShowImport(true)}>
+            <HardDriveDownload className="size-4" /> {t('importServer.entry')}
           </Button>
           <Button onClick={() => navigate('/instances/new')}>
             <Plus className="size-4" /> {t('instances.createInstance')}
@@ -770,6 +781,7 @@ export default function InstancesPage() {
 
       <ProvisionServerDialog open={showProvision} onClose={() => setShowProvision(false)} />
       <ProvisionProxyDialog open={showProvisionProxy} onClose={() => setShowProvisionProxy(false)} />
+      <ImportServerWizard open={showImport} onClose={() => setShowImport(false)} />
       {manageProxy && (
         <ProxyRegistrationsDialog proxyId={manageProxy.id} proxyName={manageProxy.name} onClose={() => setManageProxy(null)} />
       )}
@@ -876,7 +888,7 @@ export default function InstancesPage() {
       <DangerConfirm
         open={deleteTarget !== null}
         title={t('danger.deleteInstanceTitle', { name: deleteTarget?.name ?? '' })}
-        description={t('danger.deleteInstanceDesc')}
+        description={deleteTarget?.inPlace ? t('importServer.deleteInPlaceDesc') : t('danger.deleteInstanceDesc')}
         confirmLabel={t('common.delete')}
         confirmText={deleteTarget?.name}
         scope="group"
