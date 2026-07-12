@@ -19,82 +19,83 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	WorkerService_Register_FullMethodName             = "/worker.WorkerService/Register"
-	WorkerService_Heartbeat_FullMethodName            = "/worker.WorkerService/Heartbeat"
-	WorkerService_CreateInstance_FullMethodName       = "/worker.WorkerService/CreateInstance"
-	WorkerService_ResyncInstances_FullMethodName      = "/worker.WorkerService/ResyncInstances"
-	WorkerService_StartInstance_FullMethodName        = "/worker.WorkerService/StartInstance"
-	WorkerService_StopInstance_FullMethodName         = "/worker.WorkerService/StopInstance"
-	WorkerService_RestartInstance_FullMethodName      = "/worker.WorkerService/RestartInstance"
-	WorkerService_KillInstance_FullMethodName         = "/worker.WorkerService/KillInstance"
-	WorkerService_SendCommand_FullMethodName          = "/worker.WorkerService/SendCommand"
-	WorkerService_GetInstanceStatus_FullMethodName    = "/worker.WorkerService/GetInstanceStatus"
-	WorkerService_ListInstances_FullMethodName        = "/worker.WorkerService/ListInstances"
-	WorkerService_StreamInstanceEvents_FullMethodName = "/worker.WorkerService/StreamInstanceEvents"
-	WorkerService_IssueTerminalToken_FullMethodName   = "/worker.WorkerService/IssueTerminalToken"
-	WorkerService_ListFiles_FullMethodName            = "/worker.WorkerService/ListFiles"
-	WorkerService_ReadFile_FullMethodName             = "/worker.WorkerService/ReadFile"
-	WorkerService_WriteFile_FullMethodName            = "/worker.WorkerService/WriteFile"
-	WorkerService_DeleteFile_FullMethodName           = "/worker.WorkerService/DeleteFile"
-	WorkerService_RenameFile_FullMethodName           = "/worker.WorkerService/RenameFile"
-	WorkerService_DownloadArchive_FullMethodName      = "/worker.WorkerService/DownloadArchive"
-	WorkerService_DownloadFile_FullMethodName         = "/worker.WorkerService/DownloadFile"
-	WorkerService_UploadFile_FullMethodName           = "/worker.WorkerService/UploadFile"
-	WorkerService_SearchFiles_FullMethodName          = "/worker.WorkerService/SearchFiles"
-	WorkerService_ListArchiveEntries_FullMethodName   = "/worker.WorkerService/ListArchiveEntries"
-	WorkerService_ReadArchiveEntry_FullMethodName     = "/worker.WorkerService/ReadArchiveEntry"
-	WorkerService_DecompileClass_FullMethodName       = "/worker.WorkerService/DecompileClass"
-	WorkerService_ListConfigFiles_FullMethodName      = "/worker.WorkerService/ListConfigFiles"
-	WorkerService_ReadConfig_FullMethodName           = "/worker.WorkerService/ReadConfig"
-	WorkerService_WriteConfig_FullMethodName          = "/worker.WorkerService/WriteConfig"
-	WorkerService_ValidateConfig_FullMethodName       = "/worker.WorkerService/ValidateConfig"
-	WorkerService_GetNodeMetrics_FullMethodName       = "/worker.WorkerService/GetNodeMetrics"
-	WorkerService_GetInstanceMetrics_FullMethodName   = "/worker.WorkerService/GetInstanceMetrics"
-	WorkerService_ListJDKs_FullMethodName             = "/worker.WorkerService/ListJDKs"
-	WorkerService_InstallJDK_FullMethodName           = "/worker.WorkerService/InstallJDK"
-	WorkerService_RemoveJDK_FullMethodName            = "/worker.WorkerService/RemoveJDK"
-	WorkerService_JDKCatalog_FullMethodName           = "/worker.WorkerService/JDKCatalog"
-	WorkerService_ProbeJDK_FullMethodName             = "/worker.WorkerService/ProbeJDK"
-	WorkerService_ScanRuntimes_FullMethodName         = "/worker.WorkerService/ScanRuntimes"
-	WorkerService_InstallRuntime_FullMethodName       = "/worker.WorkerService/InstallRuntime"
-	WorkerService_RemoveRuntime_FullMethodName        = "/worker.WorkerService/RemoveRuntime"
-	WorkerService_GetPMConfig_FullMethodName          = "/worker.WorkerService/GetPMConfig"
-	WorkerService_SetPMConfig_FullMethodName          = "/worker.WorkerService/SetPMConfig"
-	WorkerService_ListGlobalPackages_FullMethodName   = "/worker.WorkerService/ListGlobalPackages"
-	WorkerService_InstallGlobalPackage_FullMethodName = "/worker.WorkerService/InstallGlobalPackage"
-	WorkerService_RemoveGlobalPackage_FullMethodName  = "/worker.WorkerService/RemoveGlobalPackage"
-	WorkerService_DownloadCore_FullMethodName         = "/worker.WorkerService/DownloadCore"
-	WorkerService_InstallForgeServer_FullMethodName   = "/worker.WorkerService/InstallForgeServer"
-	WorkerService_ListArtifactCache_FullMethodName    = "/worker.WorkerService/ListArtifactCache"
-	WorkerService_EvictArtifactCache_FullMethodName   = "/worker.WorkerService/EvictArtifactCache"
-	WorkerService_ClearArtifactCache_FullMethodName   = "/worker.WorkerService/ClearArtifactCache"
-	WorkerService_SetArtifactCacheCap_FullMethodName  = "/worker.WorkerService/SetArtifactCacheCap"
-	WorkerService_BrowseDir_FullMethodName            = "/worker.WorkerService/BrowseDir"
-	WorkerService_DeployServerProbe_FullMethodName    = "/worker.WorkerService/DeployServerProbe"
-	WorkerService_CloneWorkDir_FullMethodName         = "/worker.WorkerService/CloneWorkDir"
-	WorkerService_RemoveInstance_FullMethodName       = "/worker.WorkerService/RemoveInstance"
-	WorkerService_ListImages_FullMethodName           = "/worker.WorkerService/ListImages"
-	WorkerService_PullImage_FullMethodName            = "/worker.WorkerService/PullImage"
-	WorkerService_RemoveImage_FullMethodName          = "/worker.WorkerService/RemoveImage"
-	WorkerService_CreateBackup_FullMethodName         = "/worker.WorkerService/CreateBackup"
-	WorkerService_RestoreBackup_FullMethodName        = "/worker.WorkerService/RestoreBackup"
-	WorkerService_TestStorageBackend_FullMethodName   = "/worker.WorkerService/TestStorageBackend"
-	WorkerService_CreateBot_FullMethodName            = "/worker.WorkerService/CreateBot"
-	WorkerService_DeleteBot_FullMethodName            = "/worker.WorkerService/DeleteBot"
-	WorkerService_ListBots_FullMethodName             = "/worker.WorkerService/ListBots"
-	WorkerService_SetBotBehavior_FullMethodName       = "/worker.WorkerService/SetBotBehavior"
-	WorkerService_SendBotCommand_FullMethodName       = "/worker.WorkerService/SendBotCommand"
-	WorkerService_RunBotScript_FullMethodName         = "/worker.WorkerService/RunBotScript"
-	WorkerService_StreamBotEvents_FullMethodName      = "/worker.WorkerService/StreamBotEvents"
-	WorkerService_StreamPluginEvents_FullMethodName   = "/worker.WorkerService/StreamPluginEvents"
-	WorkerService_SendPluginCommand_FullMethodName    = "/worker.WorkerService/SendPluginCommand"
-	WorkerService_QueryServerState_FullMethodName     = "/worker.WorkerService/QueryServerState"
-	WorkerService_GetVersion_FullMethodName           = "/worker.WorkerService/GetVersion"
-	WorkerService_CheckDocker_FullMethodName          = "/worker.WorkerService/CheckDocker"
-	WorkerService_UpgradeWorker_FullMethodName        = "/worker.WorkerService/UpgradeWorker"
-	WorkerService_TerminalSession_FullMethodName      = "/worker.WorkerService/TerminalSession"
-	WorkerService_InspectServerDir_FullMethodName     = "/worker.WorkerService/InspectServerDir"
-	WorkerService_ImportServerDir_FullMethodName      = "/worker.WorkerService/ImportServerDir"
+	WorkerService_Register_FullMethodName              = "/worker.WorkerService/Register"
+	WorkerService_Heartbeat_FullMethodName             = "/worker.WorkerService/Heartbeat"
+	WorkerService_FetchBotWorkerArchive_FullMethodName = "/worker.WorkerService/FetchBotWorkerArchive"
+	WorkerService_CreateInstance_FullMethodName        = "/worker.WorkerService/CreateInstance"
+	WorkerService_ResyncInstances_FullMethodName       = "/worker.WorkerService/ResyncInstances"
+	WorkerService_StartInstance_FullMethodName         = "/worker.WorkerService/StartInstance"
+	WorkerService_StopInstance_FullMethodName          = "/worker.WorkerService/StopInstance"
+	WorkerService_RestartInstance_FullMethodName       = "/worker.WorkerService/RestartInstance"
+	WorkerService_KillInstance_FullMethodName          = "/worker.WorkerService/KillInstance"
+	WorkerService_SendCommand_FullMethodName           = "/worker.WorkerService/SendCommand"
+	WorkerService_GetInstanceStatus_FullMethodName     = "/worker.WorkerService/GetInstanceStatus"
+	WorkerService_ListInstances_FullMethodName         = "/worker.WorkerService/ListInstances"
+	WorkerService_StreamInstanceEvents_FullMethodName  = "/worker.WorkerService/StreamInstanceEvents"
+	WorkerService_IssueTerminalToken_FullMethodName    = "/worker.WorkerService/IssueTerminalToken"
+	WorkerService_ListFiles_FullMethodName             = "/worker.WorkerService/ListFiles"
+	WorkerService_ReadFile_FullMethodName              = "/worker.WorkerService/ReadFile"
+	WorkerService_WriteFile_FullMethodName             = "/worker.WorkerService/WriteFile"
+	WorkerService_DeleteFile_FullMethodName            = "/worker.WorkerService/DeleteFile"
+	WorkerService_RenameFile_FullMethodName            = "/worker.WorkerService/RenameFile"
+	WorkerService_DownloadArchive_FullMethodName       = "/worker.WorkerService/DownloadArchive"
+	WorkerService_DownloadFile_FullMethodName          = "/worker.WorkerService/DownloadFile"
+	WorkerService_UploadFile_FullMethodName            = "/worker.WorkerService/UploadFile"
+	WorkerService_SearchFiles_FullMethodName           = "/worker.WorkerService/SearchFiles"
+	WorkerService_ListArchiveEntries_FullMethodName    = "/worker.WorkerService/ListArchiveEntries"
+	WorkerService_ReadArchiveEntry_FullMethodName      = "/worker.WorkerService/ReadArchiveEntry"
+	WorkerService_DecompileClass_FullMethodName        = "/worker.WorkerService/DecompileClass"
+	WorkerService_ListConfigFiles_FullMethodName       = "/worker.WorkerService/ListConfigFiles"
+	WorkerService_ReadConfig_FullMethodName            = "/worker.WorkerService/ReadConfig"
+	WorkerService_WriteConfig_FullMethodName           = "/worker.WorkerService/WriteConfig"
+	WorkerService_ValidateConfig_FullMethodName        = "/worker.WorkerService/ValidateConfig"
+	WorkerService_GetNodeMetrics_FullMethodName        = "/worker.WorkerService/GetNodeMetrics"
+	WorkerService_GetInstanceMetrics_FullMethodName    = "/worker.WorkerService/GetInstanceMetrics"
+	WorkerService_ListJDKs_FullMethodName              = "/worker.WorkerService/ListJDKs"
+	WorkerService_InstallJDK_FullMethodName            = "/worker.WorkerService/InstallJDK"
+	WorkerService_RemoveJDK_FullMethodName             = "/worker.WorkerService/RemoveJDK"
+	WorkerService_JDKCatalog_FullMethodName            = "/worker.WorkerService/JDKCatalog"
+	WorkerService_ProbeJDK_FullMethodName              = "/worker.WorkerService/ProbeJDK"
+	WorkerService_ScanRuntimes_FullMethodName          = "/worker.WorkerService/ScanRuntimes"
+	WorkerService_InstallRuntime_FullMethodName        = "/worker.WorkerService/InstallRuntime"
+	WorkerService_RemoveRuntime_FullMethodName         = "/worker.WorkerService/RemoveRuntime"
+	WorkerService_GetPMConfig_FullMethodName           = "/worker.WorkerService/GetPMConfig"
+	WorkerService_SetPMConfig_FullMethodName           = "/worker.WorkerService/SetPMConfig"
+	WorkerService_ListGlobalPackages_FullMethodName    = "/worker.WorkerService/ListGlobalPackages"
+	WorkerService_InstallGlobalPackage_FullMethodName  = "/worker.WorkerService/InstallGlobalPackage"
+	WorkerService_RemoveGlobalPackage_FullMethodName   = "/worker.WorkerService/RemoveGlobalPackage"
+	WorkerService_DownloadCore_FullMethodName          = "/worker.WorkerService/DownloadCore"
+	WorkerService_InstallForgeServer_FullMethodName    = "/worker.WorkerService/InstallForgeServer"
+	WorkerService_ListArtifactCache_FullMethodName     = "/worker.WorkerService/ListArtifactCache"
+	WorkerService_EvictArtifactCache_FullMethodName    = "/worker.WorkerService/EvictArtifactCache"
+	WorkerService_ClearArtifactCache_FullMethodName    = "/worker.WorkerService/ClearArtifactCache"
+	WorkerService_SetArtifactCacheCap_FullMethodName   = "/worker.WorkerService/SetArtifactCacheCap"
+	WorkerService_BrowseDir_FullMethodName             = "/worker.WorkerService/BrowseDir"
+	WorkerService_DeployServerProbe_FullMethodName     = "/worker.WorkerService/DeployServerProbe"
+	WorkerService_CloneWorkDir_FullMethodName          = "/worker.WorkerService/CloneWorkDir"
+	WorkerService_RemoveInstance_FullMethodName        = "/worker.WorkerService/RemoveInstance"
+	WorkerService_ListImages_FullMethodName            = "/worker.WorkerService/ListImages"
+	WorkerService_PullImage_FullMethodName             = "/worker.WorkerService/PullImage"
+	WorkerService_RemoveImage_FullMethodName           = "/worker.WorkerService/RemoveImage"
+	WorkerService_CreateBackup_FullMethodName          = "/worker.WorkerService/CreateBackup"
+	WorkerService_RestoreBackup_FullMethodName         = "/worker.WorkerService/RestoreBackup"
+	WorkerService_TestStorageBackend_FullMethodName    = "/worker.WorkerService/TestStorageBackend"
+	WorkerService_CreateBot_FullMethodName             = "/worker.WorkerService/CreateBot"
+	WorkerService_DeleteBot_FullMethodName             = "/worker.WorkerService/DeleteBot"
+	WorkerService_ListBots_FullMethodName              = "/worker.WorkerService/ListBots"
+	WorkerService_SetBotBehavior_FullMethodName        = "/worker.WorkerService/SetBotBehavior"
+	WorkerService_SendBotCommand_FullMethodName        = "/worker.WorkerService/SendBotCommand"
+	WorkerService_RunBotScript_FullMethodName          = "/worker.WorkerService/RunBotScript"
+	WorkerService_StreamBotEvents_FullMethodName       = "/worker.WorkerService/StreamBotEvents"
+	WorkerService_StreamPluginEvents_FullMethodName    = "/worker.WorkerService/StreamPluginEvents"
+	WorkerService_SendPluginCommand_FullMethodName     = "/worker.WorkerService/SendPluginCommand"
+	WorkerService_QueryServerState_FullMethodName      = "/worker.WorkerService/QueryServerState"
+	WorkerService_GetVersion_FullMethodName            = "/worker.WorkerService/GetVersion"
+	WorkerService_CheckDocker_FullMethodName           = "/worker.WorkerService/CheckDocker"
+	WorkerService_UpgradeWorker_FullMethodName         = "/worker.WorkerService/UpgradeWorker"
+	WorkerService_TerminalSession_FullMethodName       = "/worker.WorkerService/TerminalSession"
+	WorkerService_InspectServerDir_FullMethodName      = "/worker.WorkerService/InspectServerDir"
+	WorkerService_ImportServerDir_FullMethodName       = "/worker.WorkerService/ImportServerDir"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
@@ -107,6 +108,9 @@ type WorkerServiceClient interface {
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	// Heartbeat 双向心跳流，Worker 上报资源指标。
 	Heartbeat(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[HeartbeatRequest, HeartbeatResponse], error)
+	// FetchBotWorkerArchive Worker 自愈拉取 CP 内嵌的 bot-worker dist 归档（FR-308，CP 侧实现）：
+	// 携带节点身份鉴权 + 本地已知 sha256，指纹一致回空归档（省流），否则回 tar.gz 字节。
+	FetchBotWorkerArchive(ctx context.Context, in *FetchBotWorkerArchiveRequest, opts ...grpc.CallOption) (*FetchBotWorkerArchiveResponse, error)
 	// CreateInstance 在指定 Worker 上创建实例。
 	CreateInstance(ctx context.Context, in *CreateInstanceRequest, opts ...grpc.CallOption) (*CreateInstanceResponse, error)
 	// ResyncInstances Worker 重连/重注册后，CP 一次性重推该节点全部实例规格，
@@ -314,6 +318,16 @@ func (c *workerServiceClient) Heartbeat(ctx context.Context, opts ...grpc.CallOp
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkerService_HeartbeatClient = grpc.BidiStreamingClient[HeartbeatRequest, HeartbeatResponse]
+
+func (c *workerServiceClient) FetchBotWorkerArchive(ctx context.Context, in *FetchBotWorkerArchiveRequest, opts ...grpc.CallOption) (*FetchBotWorkerArchiveResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FetchBotWorkerArchiveResponse)
+	err := c.cc.Invoke(ctx, WorkerService_FetchBotWorkerArchive_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
 func (c *workerServiceClient) CreateInstance(ctx context.Context, in *CreateInstanceRequest, opts ...grpc.CallOption) (*CreateInstanceResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -1116,6 +1130,9 @@ type WorkerServiceServer interface {
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	// Heartbeat 双向心跳流，Worker 上报资源指标。
 	Heartbeat(grpc.BidiStreamingServer[HeartbeatRequest, HeartbeatResponse]) error
+	// FetchBotWorkerArchive Worker 自愈拉取 CP 内嵌的 bot-worker dist 归档（FR-308，CP 侧实现）：
+	// 携带节点身份鉴权 + 本地已知 sha256，指纹一致回空归档（省流），否则回 tar.gz 字节。
+	FetchBotWorkerArchive(context.Context, *FetchBotWorkerArchiveRequest) (*FetchBotWorkerArchiveResponse, error)
 	// CreateInstance 在指定 Worker 上创建实例。
 	CreateInstance(context.Context, *CreateInstanceRequest) (*CreateInstanceResponse, error)
 	// ResyncInstances Worker 重连/重注册后，CP 一次性重推该节点全部实例规格，
@@ -1306,6 +1323,9 @@ func (UnimplementedWorkerServiceServer) Register(context.Context, *RegisterReque
 }
 func (UnimplementedWorkerServiceServer) Heartbeat(grpc.BidiStreamingServer[HeartbeatRequest, HeartbeatResponse]) error {
 	return status.Error(codes.Unimplemented, "method Heartbeat not implemented")
+}
+func (UnimplementedWorkerServiceServer) FetchBotWorkerArchive(context.Context, *FetchBotWorkerArchiveRequest) (*FetchBotWorkerArchiveResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FetchBotWorkerArchive not implemented")
 }
 func (UnimplementedWorkerServiceServer) CreateInstance(context.Context, *CreateInstanceRequest) (*CreateInstanceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateInstance not implemented")
@@ -1574,6 +1594,24 @@ func _WorkerService_Heartbeat_Handler(srv interface{}, stream grpc.ServerStream)
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkerService_HeartbeatServer = grpc.BidiStreamingServer[HeartbeatRequest, HeartbeatResponse]
+
+func _WorkerService_FetchBotWorkerArchive_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FetchBotWorkerArchiveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).FetchBotWorkerArchive(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_FetchBotWorkerArchive_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).FetchBotWorkerArchive(ctx, req.(*FetchBotWorkerArchiveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
 
 func _WorkerService_CreateInstance_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateInstanceRequest)
@@ -2860,6 +2898,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Register",
 			Handler:    _WorkerService_Register_Handler,
+		},
+		{
+			MethodName: "FetchBotWorkerArchive",
+			Handler:    _WorkerService_FetchBotWorkerArchive_Handler,
 		},
 		{
 			MethodName: "CreateInstance",

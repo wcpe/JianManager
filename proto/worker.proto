@@ -10,6 +10,9 @@ service WorkerService {
   rpc Register(RegisterRequest) returns (RegisterResponse);
   // Heartbeat 双向心跳流，Worker 上报资源指标。
   rpc Heartbeat(stream HeartbeatRequest) returns (stream HeartbeatResponse);
+  // FetchBotWorkerArchive Worker 自愈拉取 CP 内嵌的 bot-worker dist 归档（FR-308，CP 侧实现）：
+  // 携带节点身份鉴权 + 本地已知 sha256，指纹一致回空归档（省流），否则回 tar.gz 字节。
+  rpc FetchBotWorkerArchive(FetchBotWorkerArchiveRequest) returns (FetchBotWorkerArchiveResponse);
   // CreateInstance 在指定 Worker 上创建实例。
   rpc CreateInstance(CreateInstanceRequest) returns (CreateInstanceResponse);
   // ResyncInstances Worker 重连/重注册后，CP 一次性重推该节点全部实例规格，
@@ -248,6 +251,21 @@ message RegisterResponse {
 }
 
 // === 心跳 ===
+
+// bot-worker dist 自愈下发（FR-308，CP 侧实现；见 ADR-070）。
+message FetchBotWorkerArchiveRequest {
+  string node_uuid = 1;   // 节点身份（与重注册同源校验）
+  string node_secret = 2;
+  string known_sha256 = 3; // 本地已有 dist 的清单指纹（空=本地无）
+}
+
+message FetchBotWorkerArchiveResponse {
+  bool success = 1;
+  string error = 2;      // CP 未内嵌 bot-worker 时明确说明
+  string sha256 = 3;     // 当前内嵌归档指纹
+  string version = 4;    // 构建版本（同 CP version）
+  bytes archive = 5;     // tar.gz 字节；known_sha256 已一致时为空（跳过重拉）
+}
 
 message HeartbeatRequest {
   string node_uuid = 1;
