@@ -400,6 +400,24 @@ func untarGz(archivePath, destDir string) error {
 				return err
 			}
 			out.Close()
+		case tar.TypeSymlink:
+			// Node 官方 tar.gz 的 bin/npm、bin/corepack 是相对符号链接，必须保留
+			// （FR-299 缺陷：此前静默丢弃致 corepack/npm 不可用）。仅允许**相对**且
+			// 解析后不逃出解压根的链接目标（防 symlink 逃逸）。
+			if filepath.IsAbs(hdr.Linkname) {
+				return fmt.Errorf("归档含绝对符号链接目标: %s -> %s", hdr.Name, hdr.Linkname)
+			}
+			resolved := filepath.Join(filepath.Dir(target), hdr.Linkname)
+			if rel, err := filepath.Rel(destDir, resolved); err != nil || strings.HasPrefix(rel, "..") {
+				return fmt.Errorf("归档含逃逸符号链接: %s -> %s", hdr.Name, hdr.Linkname)
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				return err
+			}
+			_ = os.Remove(target) // 覆盖旧链接/文件
+			if err := os.Symlink(hdr.Linkname, target); err != nil {
+				return fmt.Errorf("创建符号链接失败 %s: %w", hdr.Name, err)
+			}
 		}
 	}
 	return nil
