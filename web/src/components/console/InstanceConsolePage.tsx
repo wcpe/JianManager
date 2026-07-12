@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Activity, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { Activity, AlertTriangle, Boxes, Gauge, HardDrive, Layers, Play, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
+import { Activity as ActivityIcon, AlertTriangle, Boxes, Gauge, HardDrive, Layers, Play, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
 
 import { useInstance, useKillInstance, useRestartInstance, useStartInstance, useStopInstance } from '@/api/instances'
 import DangerConfirm from '@/components/DangerConfirm'
@@ -51,11 +51,21 @@ function readActiveTab(searchParams: URLSearchParams): TabKey {
   return TAB_KEYS.includes(tab as TabKey) ? (tab as TabKey) : 'overview'
 }
 
-/** 服务器统一控制台（FR-269）：固定分区的单服默认入口。 */
+/**
+ * 服务器统一控制台（FR-269）：固定分区的单服默认入口。
+ * 页签 keep-alive（FR-295，ADR-067）：访问过的页签进入 mountedTabs 全部渲染，
+ * 非活跃者包 `<Activity mode="hidden">`——DOM 与本地状态保留、effects 卸载
+ * （TanStack Query 订阅随之暂停 → 隐藏页签自动停轮询），切回瞬时呈现。
+ */
 export default function InstanceConsolePage({ instanceId }: InstanceConsolePageProps) {
   const { t } = useTranslation()
   const [searchParams, setSearchParams] = useSearchParams()
   const activeTab = readActiveTab(searchParams)
+  // 访问过即保活：渲染期把新激活页签并入集合（React 官方「渲染期间调整状态」模式）。
+  const [mountedTabs, setMountedTabs] = useState<TabKey[]>([activeTab])
+  if (!mountedTabs.includes(activeTab)) {
+    setMountedTabs((prev) => (prev.includes(activeTab) ? prev : [...prev, activeTab]))
+  }
   const { data: instance } = useInstance(instanceId)
   const { data: nodes = [] } = useNodes({ refetchInterval: 30_000 })
   const { data: metrics } = useInstanceMetrics(instanceId, true)
@@ -163,24 +173,31 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
           ))}
         </nav>
 
-        {activeTab === 'overview' ? (
-          <OverviewPanel
-            instanceId={instance.id}
-            metrics={metrics}
-            online={online}
-            maxPlayers={maxPlayers}
-            nodeDiskUsage={node?.diskUsage}
-            logs={logs?.items ?? []}
-            watchItems={watchItems}
-            probeConnected={serverState?.connected ?? false}
-          />
-        ) : TAB_CARD_TYPE[activeTab] ? (
-          <div className="min-h-[520px] rounded-lg border bg-card shadow-soft">
-            <WorkspaceCardBody instanceId={instance.id} type={TAB_CARD_TYPE[activeTab]!} />
-          </div>
-        ) : (
-          <PlaceholderPanel tab={activeTab} />
-        )}
+        {/* 页签 keep-alive（FR-295）：访问过的页签全部保持挂载，非活跃者 Activity 隐藏——
+            DOM/本地状态（终端缓冲、文件树展开态、未保存草稿）保留，轮询自动暂停。 */}
+        {mountedTabs.map((tab) => (
+          <Activity key={tab} mode={tab === activeTab ? 'visible' : 'hidden'}>
+            {tab === 'overview' ? (
+              <OverviewPanel
+                instanceId={instance.id}
+                metrics={metrics}
+                online={online}
+                maxPlayers={maxPlayers}
+                nodeDiskUsage={node?.diskUsage}
+                logs={logs?.items ?? []}
+                watchItems={watchItems}
+                probeConnected={serverState?.connected ?? false}
+              />
+            ) : TAB_CARD_TYPE[tab] ? (
+              <div className="min-h-[520px] rounded-lg border bg-card shadow-soft">
+                {/* persistTerminal：终端连接由管理器常驻，页签隐藏/切换不断 WS（FR-295）。 */}
+                <WorkspaceCardBody instanceId={instance.id} type={TAB_CARD_TYPE[tab]!} persistTerminal />
+              </div>
+            ) : (
+              <PlaceholderPanel tab={tab} />
+            )}
+          </Activity>
+        ))}
       </div>
 
       {/* 强杀二次确认（FR-059）：与实例列表页同款 DangerConfirm，组管理员及以上可确认。 */}
@@ -236,7 +253,7 @@ function OverviewPanel({
       <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
         <KpiCard icon={Gauge} label={t('serverConsole.cpu')} value={`${cpuPct}%`} progress={cpuPct} />
         <KpiCard icon={HardDrive} label={t('serverConsole.memory')} value={`${memoryPct}%`} sub={`${formatNumber(metrics?.memoryMb, 0)} / ${formatNumber(metrics?.heapMaxMb, 0)} MB`} progress={memoryPct} />
-        <KpiCard icon={Activity} label={t('serverConsole.tps')} value={formatNumber(metrics?.tps, 1)} progress={Math.min(100, ((metrics?.tps ?? 0) / 20) * 100)} />
+        <KpiCard icon={ActivityIcon} label={t('serverConsole.tps')} value={formatNumber(metrics?.tps, 1)} progress={Math.min(100, ((metrics?.tps ?? 0) / 20) * 100)} />
         <KpiCard icon={Users} label={t('serverConsole.online')} value={`${online}/${maxPlayers}`} progress={maxPlayers > 0 ? (online / maxPlayers) * 100 : 0} />
         <KpiCard icon={Layers} label={t('serverConsole.disk')} value={`${diskPct}%`} progress={diskPct} />
         <KpiCard icon={AlertTriangle} label={t('serverConsole.alerts')} value={String(alertCount)} danger={alertCount > 0} progress={alertCount > 0 ? 100 : 0} />
