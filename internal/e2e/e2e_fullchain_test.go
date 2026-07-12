@@ -46,7 +46,7 @@ func setupCluster(t *testing.T, base int) (*e2eClient, uint, string) {
 	serversDir := filepath.Join(tmpRoot, "servers")
 	dbDSN := "file:e2e-" + strconv.FormatInt(time.Now().UnixNano(), 10) + "?mode=memory&cache=shared"
 
-	cpCmd := exec.Command("go", "run", "./cmd/control-plane")
+	cpCmd := exec.Command("go", "run", "./apps/control-plane")
 	cpCmd.Dir = projectRoot
 	cpCmd.Env = append(os.Environ(),
 		"JIANMANAGER_SERVER_PORT="+httpPort,
@@ -77,7 +77,7 @@ func setupCluster(t *testing.T, base int) (*e2eClient, uint, string) {
 	require.NotEmpty(t, client.token, "accessToken 为空")
 	enrollToken := issueEnrollToken(t, client, "e2e-worker")
 
-	workerCmd := exec.Command("go", "run", "./cmd/worker")
+	workerCmd := exec.Command("go", "run", "./apps/worker")
 	workerCmd.Dir = projectRoot
 	workerCmd.Env = append(os.Environ(),
 		"JIANMANAGER_CONTROL_PLANE_GRPC=127.0.0.1:"+cpGRPCPort,

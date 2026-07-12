@@ -55,7 +55,7 @@ make dev-web
 **启动 Worker Node**:
 ```bash
 # 新终端
-JIANMANAGER_CONTROL_PLANE_GRPC=localhost:9100 go run ./cmd/worker
+JIANMANAGER_CONTROL_PLANE_GRPC=localhost:9100 go run ./apps/worker
 ```
 
 ### 生产构建

@@ -22,7 +22,7 @@
 - CP↔Worker WS 令牌密钥：终端与插件桥的 WS 令牌用**专用共享密钥**签发/校验（CP 三轨解析：显式 `jwt.ws_secret` > 生产 autogen 持久化 > dev 回退；经 gRPC 注册/心跳自动下发 Worker 并持久化，见 ADR-061）；与签用户会话的 `jwt.secret` 隔离，**`jwt.secret` 永不下发 Worker**
 - Worker Node ↔ Bot Worker：stdin/stdout JSON 行协议
 - 守护进程 ↔ Worker Node：Unix Socket 二进制帧协议（本机）
-- 守护进程 ↔ jmctl 紧急控制台：Unix Socket / 命名管道二进制帧协议（**本机-only 应急通道**，CP/Worker 不可用时直连，载体=`cmd/jmctl/` CLI，见 ADR-041）。守护进程 socket 的本机访问方因此有二（Worker 常态 + jmctl 应急）；jmctl 不开任何网络端口、不直连 CP/DB/gRPC，「浏览器/网络永不直触守护进程 socket」的约束不变
+- 守护进程 ↔ jmctl 紧急控制台：Unix Socket / 命名管道二进制帧协议（**本机-only 应急通道**，CP/Worker 不可用时直连，载体=`apps/jmctl/` CLI，见 ADR-041）。守护进程 socket 的本机访问方因此有二（Worker 常态 + jmctl 应急）；jmctl 不开任何网络端口、不直连 CP/DB/gRPC，「浏览器/网络永不直触守护进程 socket」的约束不变
 - 玩家客户端 updater ↔ Control Plane：**HTTP 公网分发端点**（客户端 OTA，FR-087）——仅**消费类**（`GET .../manifest`、`GET /client-artifacts/:sha256`）经**拉取密钥**（`X-Client-Key`）鉴权；**发布端点**（`POST .../files`、`POST .../versions`）走 JWT 平台管理员。拉取密钥半公开（随整包分发必泄露），仅鉴权路由+吊销、**不作内容可信依据**；内容可信靠 manifest 的 **Ed25519 签名** + 单调 version 防降级（ADR-022），L7 防护见 ADR-023
 
 ## 数据所有权

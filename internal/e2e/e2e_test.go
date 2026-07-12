@@ -176,7 +176,7 @@ func TestE2E_InstanceFullLifecycle(t *testing.T) {
 	// 使用内存数据库避免文件残留
 	dbDSN := "file:e2e-" + fmt.Sprintf("%d", time.Now().UnixNano()) + "?mode=memory&cache=shared"
 
-	cpCmd := exec.Command("go", "run", "./cmd/control-plane")
+	cpCmd := exec.Command("go", "run", "./apps/control-plane")
 	cpCmd.Dir = projectRoot
 	cpCmd.Env = append(os.Environ(),
 		"JIANMANAGER_SERVER_PORT=18080",
@@ -215,7 +215,7 @@ func TestE2E_InstanceFullLifecycle(t *testing.T) {
 	enrollToken := issueEnrollToken(t, client, "e2e-worker")
 
 	// 3. 启动 Worker Node
-	workerCmd := exec.Command("go", "run", "./cmd/worker")
+	workerCmd := exec.Command("go", "run", "./apps/worker")
 	workerCmd.Dir = projectRoot
 	workerCmd.Env = append(os.Environ(),
 		"JIANMANAGER_CONTROL_PLANE_GRPC=127.0.0.1:"+cpGRPC,

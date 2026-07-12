@@ -22,7 +22,7 @@ COPY . .
 # 运行时建服自动部署探针会优雅跳过（FR-010 既有行为）。
 COPY --from=webbuilder /repo/apps/control-plane-web/dist ./internal/controlplane/embed/dist
 # 纯 Go SQLite 驱动（glebarez/modernc），无需 CGO。
-RUN CGO_ENABLED=0 GOOS=linux go build -o control-plane ./cmd/control-plane
+RUN CGO_ENABLED=0 GOOS=linux go build -o control-plane ./apps/control-plane
 
 # ---- 运行阶段 ----
 FROM alpine:3.20

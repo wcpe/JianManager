@@ -43,12 +43,14 @@ Bug 修复:    /sdd-fix-bug
 ## 目录结构
 
 ```
-cmd/                    # Go 入口
-internal/               # Go 内部包（第一方 Go 库，Go 原生形态留根，ADR-064）
-proto/                  # Protobuf 定义
 apps/                   # 可运行外壳（ADR-064）
+  control-plane/        #   Go：Control Plane 二进制（原 cmd/control-plane）
+  worker/               #   Go：Worker 二进制（原 cmd/worker）
+  jmctl/                #   Go：紧急控制台 CLI（原 cmd/jmctl，ADR-041）
   control-plane-web/    #   React 主控台（原 web/）
   ui-museum/            #   组件博物馆（原 web/wiki，ADR-058）
+internal/               # Go 内部包（第一方 Go 库，Go 原生形态留根，ADR-064）
+proto/                  # Protobuf 定义
 packages/               # 第一方 JS 库（pnpm workspace）
   ui/                   #   @jianmanager/ui 共享组件/token/charts
 bot-worker/             # Node.js Bot Worker（npm 自管，不入 workspace）

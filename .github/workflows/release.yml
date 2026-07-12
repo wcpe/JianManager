@@ -258,9 +258,9 @@ jobs:
           LDFLAGS="-s -w -X github.com/wcpe/JianManager/internal/version.Version=${VERSION}"
           mkdir -p internal/controlplane/embed/worker
           GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "${LDFLAGS}" \
-            -o internal/controlplane/embed/worker/worker-windows-amd64.exe ./cmd/worker
+            -o internal/controlplane/embed/worker/worker-windows-amd64.exe ./apps/worker
           GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "${LDFLAGS}" \
-            -o internal/controlplane/embed/worker/worker-linux-amd64 ./cmd/worker
+            -o internal/controlplane/embed/worker/worker-linux-amd64 ./apps/worker
           go run ./scripts/embed-worker-manifest.go --dir internal/controlplane/embed/worker --version "${VERSION}"
 
       - name: 交叉编译 control-plane 与 worker（ldflags 注入版本）
@@ -275,9 +275,9 @@ jobs:
           mkdir -p dist
           LDFLAGS="-s -w -X github.com/wcpe/JianManager/internal/version.Version=${VERSION}"
           go build -trimpath -ldflags "${LDFLAGS}" \
-            -o "dist/control-plane-${GOOS}-${GOARCH}${{ matrix.ext }}" ./cmd/control-plane
+            -o "dist/control-plane-${GOOS}-${GOARCH}${{ matrix.ext }}" ./apps/control-plane
           go build -trimpath -ldflags "${LDFLAGS}" \
-            -o "dist/worker-${GOOS}-${GOARCH}${{ matrix.ext }}" ./cmd/worker
+            -o "dist/worker-${GOOS}-${GOARCH}${{ matrix.ext }}" ./apps/worker
           ls -l dist/
 
       - name: 上传二进制产物

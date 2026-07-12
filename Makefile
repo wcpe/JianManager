@@ -18,15 +18,15 @@ build: gen-licenses build-web embed-web embed-install-scripts build-cp build-wor
 
 # 构建 Control Plane（含嵌入前端）
 build-cp:
-	go build -o bin/control-plane.exe ./cmd/control-plane
+	go build -o bin/control-plane.exe ./apps/control-plane
 
 # 构建 Worker Node
 build-worker:
-	go build -o bin/worker.exe ./cmd/worker
+	go build -o bin/worker.exe ./apps/worker
 
 # 构建 jmctl 紧急控制台 CLI（独立轻量二进制，仅链 daemon 帧协议包，~3.6MB，FR-184/ADR-041）
 build-jmctl:
-	go build -o bin/jmctl.exe ./cmd/jmctl
+	go build -o bin/jmctl.exe ./apps/jmctl
 
 # 构建前端（FR-283：pnpm workspace，主应用在 apps/control-plane-web）
 build-web:
@@ -100,17 +100,17 @@ embed-botworker: build-bot
 # 不跑此目标时 CP 不内嵌 Worker，worker-assets 回退 缓存/远程 链路，不影响其它构建。
 embed-worker:
 	mkdir -p internal/controlplane/embed/worker
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o internal/controlplane/embed/worker/worker-windows-amd64.exe ./cmd/worker
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o internal/controlplane/embed/worker/worker-linux-amd64 ./cmd/worker
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o internal/controlplane/embed/worker/worker-windows-amd64.exe ./apps/worker
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o internal/controlplane/embed/worker/worker-linux-amd64 ./apps/worker
 	go run ./scripts/embed-worker-manifest.go --dir internal/controlplane/embed/worker --version $(VERSION)
 
 # 仅交叉编译二进制（内嵌资产已就绪时的快速重编）。
 dist-bin:
 	mkdir -p dist
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/control-plane-windows-amd64.exe ./cmd/control-plane
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/worker-windows-amd64.exe ./cmd/worker
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/control-plane-linux-amd64 ./cmd/control-plane
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/worker-linux-amd64 ./cmd/worker
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/control-plane-windows-amd64.exe ./apps/control-plane
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/worker-windows-amd64.exe ./apps/worker
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/control-plane-linux-amd64 ./apps/control-plane
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/worker-linux-amd64 ./apps/worker
 
 # 构建 Bot Worker
 build-bot:
@@ -118,7 +118,7 @@ build-bot:
 
 # 开发模式启动 Control Plane
 dev-cp:
-	go run ./cmd/control-plane --dev
+	go run ./apps/control-plane --dev
 
 # 开发模式启动前端
 dev-web:
