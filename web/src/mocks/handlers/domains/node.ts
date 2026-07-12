@@ -893,6 +893,36 @@ export const handlers = [
     return HttpResponse.json({ message: '已删除' })
   }),
 
+  /* ===================== 节点包管理器配置（FR-306） ===================== */
+  domainRoute('get', '/nodes/:id/pm-config', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({
+      pm: 'npm',
+      corepackAvailable: true,
+      pmVersion: '10.8.2',
+      nodeBin: '/data/opt/runtimes/nodejs-22/node-v22.17.0-linux-x64/bin/node',
+      registries: [{ url: 'https://registry.npmmirror.com', scope: '' }],
+    })
+  }),
+  domainRoute('put', '/nodes/:id/pm-config', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json()) as { pm?: string; registries?: { url: string; scope?: string; token?: string }[] }
+    return HttpResponse.json({
+      pm: body.pm || 'npm',
+      corepackAvailable: true,
+      pmVersion: body.pm === 'pnpm' ? '9.1.0' : '10.8.2',
+      nodeBin: '/data/opt/runtimes/nodejs-22/node-v22.17.0-linux-x64/bin/node',
+      registries: (body.registries ?? []).map((r) => ({
+        url: r.url,
+        scope: r.scope ?? '',
+        token: r.token ? '********' : '',
+        tokenMasked: !!r.token,
+      })),
+    })
+  }),
+
   /* ===================== 节点制品缓存（FR-178） ===================== */
   domainRoute('get', '/nodes/:id/artifact-cache', (info) => {
     const denied = requireAuth(info)

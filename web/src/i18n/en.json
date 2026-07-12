@@ -2466,7 +2466,8 @@
       "node.runtime.delete": "Delete node runtime",
       "runtime_assets.refresh": "Refresh runtime inventory",
       "instance.import.inspect": "Inspect import directory",
-      "instance.import": "Import existing server"
+      "instance.import": "Import existing server",
+      "node.pm.config": "Configure node package manager"
     }
   },
   "importServer": {
@@ -3263,5 +3264,20 @@
     "prevPage": "Prev",
     "nextPage": "Next",
     "pageOf": "Page {{page}} / {{total}}"
+  },
+  "pmConfig": {
+    "title": "Package manager & registries",
+    "pmLabel": "Package manager",
+    "registries": "Registries (first = default, others by @scope)",
+    "addRegistry": "Add registry",
+    "defaultScope": "Default (leave scope empty)",
+    "scope": "scope",
+    "registryUrl": "Registry URL",
+    "token": "Token",
+    "tokenOptional": "Token (optional)",
+    "saved": "Package manager config saved",
+    "saveFailed": "Save failed",
+    "noCorepack": "Managed Node has no corepack; npm only",
+    "save": "Save config"
   }
 }

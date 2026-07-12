@@ -2445,7 +2445,8 @@
       "node.runtime.delete": "删除节点运行时",
       "runtime_assets.refresh": "刷新运行时库存",
       "instance.import.inspect": "探测导入目录",
-      "instance.import": "导入现有服务器"
+      "instance.import": "导入现有服务器",
+      "node.pm.config": "配置节点包管理器"
     }
   },
   "importServer": {
@@ -3263,5 +3264,20 @@
     "prevPage": "上一页",
     "nextPage": "下一页",
     "pageOf": "第 {{page}} / {{total}} 页"
+  },
+  "pmConfig": {
+    "title": "包管理器与下载源",
+    "pmLabel": "包管理器",
+    "registries": "下载源 registry（首条为默认源，其余按 @scope 域）",
+    "addRegistry": "添加源",
+    "defaultScope": "默认源（scope 留空）",
+    "scope": "scope",
+    "registryUrl": "registry 地址",
+    "token": "凭据",
+    "tokenOptional": "凭据(可选)",
+    "saved": "包管理器配置已保存",
+    "saveFailed": "保存失败",
+    "noCorepack": "托管 Node 无 corepack，仅 npm 可用",
+    "save": "保存配置"
   }
 }
