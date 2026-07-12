@@ -215,12 +215,14 @@ export const handlers = [
   }),
 
   // ---- 上传（POST /instances/:id/files/upload，multipart）：写入 form 的 file 内容 ----
+  // FR-304：目标路径优先经 query 参数（与真 CP 流式契约一致），form path 字段兼容回退。
   domainRoute('post', '/instances/:id/files/upload', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     const instanceId = Number((info.params as { id: string }).id)
     const form = await info.request.formData()
-    const dest = String(form.get('path') ?? '').replace(/^\/+/, '')
+    const queryDest = new URL(info.request.url).searchParams.get('path') ?? ''
+    const dest = (queryDest || String(form.get('path') ?? '')).replace(/^\/+/, '')
     const file = form.get('file')
     const content = file instanceof File ? await file.text() : String(file ?? '')
     if (dest) writeNode(instanceId, dest, content)

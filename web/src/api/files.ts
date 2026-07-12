@@ -63,7 +63,11 @@ export async function renameFile(
   await api.post(`/instances/${instanceId}/files/rename`, { oldPath, newPath })
 }
 
-/** 上传单个文件（multipart，FR-008；覆盖前自动快照 FR-051）。 */
+/**
+ * 上传单个文件（multipart，FR-008；覆盖前自动快照 FR-051）。
+ * FR-304：目标路径经 query 参数传递——CP 流式读 multipart（不整块缓冲），
+ * 读到 file 部分时必须已知目标路径，form 字段顺序不可依赖。
+ */
 export async function uploadFile(
   instanceId: number,
   destPath: string,
@@ -71,8 +75,8 @@ export async function uploadFile(
 ): Promise<void> {
   const form = new FormData()
   form.append('file', file)
-  form.append('path', destPath)
   await api.post(`/instances/${instanceId}/files/upload`, form, {
+    params: { path: destPath },
     headers: { 'Content-Type': 'multipart/form-data' },
   })
 }
