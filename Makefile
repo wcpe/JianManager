@@ -114,7 +114,7 @@ dist-bin:
 
 # 构建 Bot Worker
 build-bot:
-	cd bot-worker && npm run build
+	cd apps/bot-worker && npm run build
 
 # 开发模式启动 Control Plane
 dev-cp:
@@ -138,7 +138,7 @@ test:
 
 # E2E 端到端测试（需启动真实 CP + Worker 进程）
 # 全链路用例（FR-043）会 spawn 真实 bot-worker(Node) 并让真实 Bot 进服，
-# 故依赖已构建的 bot-worker dist；需预先 `make install`（含 bot-worker npm i）。
+# 故依赖已构建的 bot-worker dist；需预先 `make install`（含 apps/bot-worker npm i）。
 e2e: build-bot
 	go test -tags=e2e -run TestE2E ./internal/e2e/ -v -timeout 240s
 
@@ -152,7 +152,7 @@ lint-web:
 
 # Bot Worker 类型检查 + lint
 lint-bot:
-	cd bot-worker && npx tsc --noEmit && npm run lint
+	cd apps/bot-worker && npx tsc --noEmit && npm run lint
 
 # 生成 protobuf 代码（module 选项确保按 go_package 写入 proto/workerpb，而非嵌套 github.com 目录）
 proto:
@@ -172,10 +172,10 @@ docker-down:
 
 # 清理
 clean:
-	rm -rf bin/ dist/ apps/control-plane-web/dist/ apps/ui-museum/dist/ bot-worker/dist/ data/ internal/controlplane/embed/dist/
+	rm -rf bin/ dist/ apps/control-plane-web/dist/ apps/ui-museum/dist/ apps/bot-worker/dist/ data/ internal/controlplane/embed/dist/
 
 # 安装所有依赖（前端经 pnpm workspace 一次装齐；bot-worker 保持 npm 自管，FR-283/ADR-064）
 install:
 	go mod tidy
 	pnpm install
-	cd bot-worker && npm install
+	cd apps/bot-worker && npm install

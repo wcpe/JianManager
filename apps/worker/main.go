@@ -315,13 +315,21 @@ func runWorker() {
 	slog.Info("节点制品缓存已启用", "dir", root.ArtifactCacheDir(), "maxBytes", cfg.ArtifactCache.MaxBytes)
 
 	// Bot 管理器：按需 spawn bot-worker(Node) 子进程，经 stdin/stdout IPC 管理 Mineflayer Bot。
-	// 入口脚本解析顺序（FR-308，见 ADR-070 修订 ADR-006）：JIANMANAGER_BOT_WORKER_PATH 显式覆盖 >
-	// 数据根自愈物化副本（注册后拉取，见下方 botdist.Ensure）> 旧相对路径 bot-worker/dist/index.js。
+	// 入口脚本解析顺序（FR-308 见 ADR-070 修订 ADR-006；FR-286 迁移见 ADR-064）：
+	// JIANMANAGER_BOT_WORKER_PATH 显式覆盖 > 数据根自愈物化副本（注册后拉取，见下方
+	// botdist.Ensure）> apps/bot-worker/dist/index.js（仓库内直跑新布局）> 旧相对路径
+	// bot-worker/dist/index.js（存量部署把 bot-worker 平铺在安装目录，不因升级断 Bot 能力）。
 	// node 可执行经 FR-300 解析器选定：本地扫描最高版 Node（runtimescan 路径表）优先，无候选回退 PATH "node"。
 	botWorkerPath := os.Getenv("JIANMANAGER_BOT_WORKER_PATH")
 	botWorkerPathPinned := botWorkerPath != ""
 	if botWorkerPath == "" {
-		botWorkerPath = filepath.Join("bot-worker", "dist", "index.js")
+		botWorkerPath = filepath.Join("apps", "bot-worker", "dist", "index.js")
+		if _, statErr := os.Stat(botWorkerPath); statErr != nil {
+			legacy := filepath.Join("bot-worker", "dist", "index.js")
+			if _, legacyErr := os.Stat(legacy); legacyErr == nil {
+				botWorkerPath = legacy
+			}
+		}
 	}
 	// mineflayer 等运行时依赖不随 dist 分发，指向 FR-307 托管全局包：NODE_PATH 兜底 CJS，
 	// spawn 前预检缺装给可操作指引（装依赖走节点『全局包管理』）。

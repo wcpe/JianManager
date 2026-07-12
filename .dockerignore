@@ -9,7 +9,7 @@
 **/node_modules
 apps/control-plane-web/dist
 apps/ui-museum/dist
-bot-worker/dist
+apps/bot-worker/dist
 bin/
 internal/controlplane/embed/dist
 

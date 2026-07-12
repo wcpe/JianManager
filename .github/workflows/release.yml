@@ -101,7 +101,7 @@ jobs:
           path: |
             ~/.local/share/pnpm/store
             ~/.npm
-          key: js-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'bot-worker/package-lock.json') }}
+          key: js-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'apps/bot-worker/package-lock.json') }}
           restore-keys: |
             js-${{ runner.os }}-
 
@@ -111,7 +111,7 @@ jobs:
           set -euo pipefail
           corepack enable
           pnpm install --frozen-lockfile
-          npm --prefix bot-worker ci
+          npm --prefix apps/bot-worker ci
           node scripts/gen-licenses.mjs
           pnpm --filter control-plane-web build
           mkdir -p internal/controlplane/embed/dist

@@ -20,7 +20,7 @@ const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(SCRIPT_DIR, '..')
 // FR-283：前端迁 apps/control-plane-web（pnpm workspace，锁文件在仓库根 pnpm-lock.yaml）。
 const WEB_DIR = join(REPO_ROOT, 'apps', 'control-plane-web')
-const BOT_DIR = join(REPO_ROOT, 'bot-worker')
+const BOT_DIR = join(REPO_ROOT, 'apps', 'bot-worker')
 const OUT_FILE = join(WEB_DIR, 'public', 'licenses.json')
 
 const MAX_BUFFER = 128 * 1024 * 1024

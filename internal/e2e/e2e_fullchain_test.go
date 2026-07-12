@@ -3,7 +3,7 @@
 // 全链路 e2e（FR-043）：节点在线 → 创建并启动 MC 实例 → 终端交互 → Bot 真正进服 → 运维闭环。
 //
 // 受限于 e2e 主机仅有 Java 8，真实 Paper 1.21 无法启动，故实例进程使用确定性的
-// 假 MC 服务器（bot-worker/test/fake-mc-server.mjs，基于 mineflayer 自带的
+// 假 MC 服务器（apps/bot-worker/test/fake-mc-server.mjs，基于 mineflayer 自带的
 // minecraft-protocol，离线 1.8.9）。它对真实 bot-worker spawn 的真实 mineflayer Bot
 // 完成登录握手直至 spawn —— 平台侧每个环节（CP/Worker/gRPC/进程管理/终端代理/Bot
 // spawn/IPC/状态回传）都是真链路，唯一被替身的是「Paper 实现」本身。
@@ -92,7 +92,7 @@ func setupCluster(t *testing.T, base int) (*e2eClient, uint, string) {
 		// 替身实例进程不响应优雅 stop，缩短超时使停止快速回退强杀（验收 5 需实例尽快停、Bot 随之断开）。
 		"JIANMANAGER_GRACEFUL_STOP_TIMEOUT=2s",
 		// Bot 能力：指向已构建的 bot-worker 入口，使 Worker 能 spawn Node 子进程。
-		"JIANMANAGER_BOT_WORKER_PATH="+filepath.Join(projectRoot, "bot-worker", "dist", "index.js"),
+		"JIANMANAGER_BOT_WORKER_PATH="+filepath.Join(projectRoot, "apps", "bot-worker", "dist", "index.js"),
 	)
 	workerCmd.Stdout = os.Stdout
 	workerCmd.Stderr = os.Stderr
@@ -123,7 +123,7 @@ func TestE2E_FullChainTerminalBot(t *testing.T) {
 
 	// 每次取一个空闲端口，避免上一轮失败遗留的实例进程占用导致 Bot 连到错误的服务器。
 	mcPort := freePort(t)
-	fakeServer := filepath.Join(projectRoot, "bot-worker", "test", "fake-mc-server.mjs")
+	fakeServer := filepath.Join(projectRoot, "apps", "bot-worker", "test", "fake-mc-server.mjs")
 	startCmd := fmt.Sprintf("node %s --port=%d --version=1.8.9", fakeServer, mcPort)
 	t.Logf("假 MC 服务器端口=%d", mcPort)
 
