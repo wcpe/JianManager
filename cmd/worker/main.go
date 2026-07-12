@@ -285,7 +285,17 @@ func runWorker() {
 		runtimeManagedRoots = append(runtimeManagedRoots, jdkMgr.RootDir())
 	}
 	runtimeManagedRoots = append(runtimeManagedRoots, runtimeMgr.RootDir())
-	workerServer.SetRuntimeScanner(runtimescan.New(runtimeManagedRoots))
+	runtimeScanner := runtimescan.New(runtimeManagedRoots)
+	// FR-299×FR-300 胶合：托管安装根不在默认 node 路径表内，动态追加两种布局
+	// （linux tar.gz 解出 bin/node；windows zip 顶层 node.exe），使一键安装的托管 Node
+	// 能被扫描发现并被 Bot spawn 解析器选中。
+	runtimeScanner.AddNodeGlobs(
+		filepath.Join(runtimeMgr.RootDir(), "nodejs-*", "bin", "node"),
+		filepath.Join(runtimeMgr.RootDir(), "nodejs-*", "*", "bin", "node"),
+		filepath.Join(runtimeMgr.RootDir(), "nodejs-*", "node.exe"),
+		filepath.Join(runtimeMgr.RootDir(), "nodejs-*", "*", "node.exe"),
+	)
+	workerServer.SetRuntimeScanner(runtimeScanner)
 	// 全文搜索追加忽略规则（worker.yml search.ignore，叠加内置默认集，FR-074）。
 	workerServer.SetSearchIgnore(cfg.Search.Ignore)
 	// 节点制品缓存（FR-178）：按 sha256 缓存下载过的核心 jar（var/artifact-cache），建实例命中即秒拷免重下。
@@ -302,7 +312,13 @@ func runWorker() {
 	if botWorkerPath == "" {
 		botWorkerPath = filepath.Join("bot-worker", "dist", "index.js")
 	}
-	botMgr := bot.NewManager(bot.ManagerConfig{BotWorkerPath: botWorkerPath})
+	// FR-300 解析器复用上面的运行时扫描器（含托管根 glob）：一键装的托管 Node 也可被选中。
+	botMgr := bot.NewManager(bot.ManagerConfig{
+		BotWorkerPath: botWorkerPath,
+		NodeResolver: bot.NewNodeResolver("", func() []runtimescan.Candidate {
+			return runtimeScanner.Scan([]string{runtimescan.TypeNodeJS})
+		}),
+	})
 	defer botMgr.Stop()
 	workerServer.SetBotManager(botMgr)
 

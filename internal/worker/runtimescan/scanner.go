@@ -58,6 +58,13 @@ func New(managedRoots []string) *Scanner {
 	}
 }
 
+// AddNodeGlobs 追加 Node 可执行扫描 glob（FR-299×FR-300 胶合）：默认路径表只含系统常见位，
+// 托管安装根（<数据根>/opt/runtimes/nodejs-*）由 main 据 dataroot 动态追加——否则一键安装的
+// 托管 Node 对扫描发现与 Bot spawn 解析器（FR-300 NodeResolver）不可见。
+func (s *Scanner) AddNodeGlobs(globs ...string) {
+	s.nodeGlobs = append(s.nodeGlobs, globs...)
+}
+
 // Scan 扫描并返回候选列表。types 过滤类型（空=全部支持类型）；未知类型静默忽略
 // （CP 侧负责校验拒绝）。结果按 type、major 降序、path 升序稳定排序，按 path 去重。
 func (s *Scanner) Scan(types []string) []Candidate {
