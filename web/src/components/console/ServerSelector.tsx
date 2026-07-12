@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { Search, Server, Star, X } from 'lucide-react'
@@ -97,7 +98,9 @@ export default function ServerSelector() {
         <span className="min-w-0 flex-1 truncate">{t('serverSelector.open')}</span>
       </button>
 
-      {open && (
+      {/* Portal 到 body：侧栏祖先带 transform/contain（FR-131 折叠动画）会给 fixed 建立包含块，
+          内联渲染会把全屏模态压到侧栏宽度内。渲染到 body 逃出该包含块，覆盖整个视口居中。 */}
+      {open && createPortal(
         <div className="fixed inset-0 z-[58] flex items-start justify-center bg-black/45 p-4 pt-[10vh]" role="presentation" onClick={() => setOpen(false)}>
           <div
             role="dialog"
@@ -193,7 +196,8 @@ export default function ServerSelector() {
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   )

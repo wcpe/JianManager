@@ -45,6 +45,19 @@ describe('ServerSelector DOM', () => {
     })
   })
 
+  it('模态渲染到 body（Portal），不困在侧栏包含块内', async () => {
+    const user = userEvent.setup()
+    const { container } = renderWithProviders(<ServerSelector />)
+
+    await user.click(screen.getByRole('button', { name: '选择服务器' }))
+    const dialog = await screen.findByRole('dialog', { name: '服务器选择器' })
+
+    // 侧栏祖先带 transform/contain（FR-131）会给 fixed 建立包含块、把全屏模态压到侧栏宽度内；
+    // Portal 到 body 后模态不再是本组件渲染容器的后代，逃出该包含块。
+    expect(container.contains(dialog)).toBe(false)
+    expect(document.body.contains(dialog)).toBe(true)
+  })
+
   it('搜索和空态可用，节点作用域透传到服务端查询', async () => {
     const user = userEvent.setup()
     useConsoleStore.setState({ selectedNodeId: 2 })
