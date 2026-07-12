@@ -1955,6 +1955,17 @@
 - **审计**: `node.runtime.delete`
 - **错误码**: `400 INVALID_REQUEST`（缺 type）；`409 JDK_IN_USE`（jdk 被实例占用，附 `instances`）；`404 NOT_FOUND`；`422 BUSINESS_ERROR`（未知类型）；`502 WORKER_ERROR`（托管删除下发失败/被拒）
 
+#### GET /api/v1/nodes/:id/pm-config
+- **描述**: 读取节点包管理器与 registry 配置（FR-306）：DB 偏好（pm）+ registry 列表（**token 脱敏**，`tokenMasked` 标识有无凭据）+ Worker 报告的 corepack 可用性/已激活 PM 版本/托管 node 路径（节点离线时 Worker 侧字段留空，配置本身仍可看）。
+- **关联 FR**: FR-306　·　**权限**: 平台管理员
+- **响应**: `200 { pm, corepackAvailable, pmVersion, nodeBin, registries: [{name,url,scope,token,tokenMasked}] }`
+
+#### PUT /api/v1/nodes/:id/pm-config
+- **描述**: 设置节点 PM 偏好与 registry（FR-306）。pm ∈ npm/pnpm/yarn（pnpm/yarn 经托管 Node 的 **corepack enable** 激活，失败明确报错）；registry 写节点**托管 .npmrc**（`<数据根>/opt/runtimes/.npmrc`，原子写；默认源 `registry=`、`@scope:registry=`、凭据 `_authToken` 行）。**掩码 token 保存语义**（同 proxy.url）：回传掩码/空 = 沿用旧 token，明文 = 更新。Worker 成功才落库。
+- **权限**: 平台管理员　·　**审计**: `node.pm.config`
+- **请求**: `{ "pm":"pnpm", "registries":[{"url":"https://registry.npmmirror.com"},{"scope":"myco","url":"https://npm.myco.com","token":"..."}] }`
+- **响应**: `200`（同 GET 视图）；`503 NODE_OFFLINE`；`422 BUSINESS_ERROR`（pm/registry 校验失败、corepack 不可用等）
+
 ### 节点出站代理（FR-185，见 ADR-043）
 
 > 节点级出站代理：继承平台全局默认（设置面板配，见「平台设置」network 键）或为本节点自定义。
