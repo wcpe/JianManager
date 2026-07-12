@@ -1058,7 +1058,8 @@
       "ports": "端口",
       "proxy": "代理",
       "monitor": "监控",
-      "repair": "坏节点修复"
+      "repair": "坏节点修复",
+      "runtime": "运行时"
     }
   },
   "nodeRepair": {

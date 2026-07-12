@@ -72,12 +72,13 @@ function formatBytes(bytes: number): string {
 type PendingAction = { kind: 'drain' | 'delete'; node: NodeInfo }
 
 /** 右栏分段（FR-177 §3.3 + FR-185）：概览/实例/JDK/缓存/端口/代理/监控/坏节点修复。 */
-type DetailTab = 'overview' | 'instances' | 'jdk' | 'cache' | 'ports' | 'proxy' | 'monitor' | 'repair'
-const DETAIL_TABS: DetailTab[] = ['overview', 'instances', 'jdk', 'cache', 'ports', 'proxy', 'monitor', 'repair']
+type DetailTab = 'overview' | 'instances' | 'runtime' | 'cache' | 'ports' | 'proxy' | 'monitor' | 'repair'
+const DETAIL_TABS: DetailTab[] = ['overview', 'instances', 'runtime', 'cache', 'ports', 'proxy', 'monitor', 'repair']
 
 /** 从 URL `?tab=` 解析激活分段（FR-128 可寻址；非法值回退默认 overview）。 */
 function readDetailTab(searchParams: URLSearchParams): DetailTab {
   const tab = searchParams.get('tab')
+  if (tab === 'jdk') return 'runtime' // 旧链接兼容：tab=jdk → 运行时
   return DETAIL_TABS.includes(tab as DetailTab) ? (tab as DetailTab) : 'overview'
 }
 
@@ -661,16 +662,23 @@ function NodeDetailPane({
               </span>
             </div>
           </div>
+          {/* 资源仪表内联右置（FR-311 v2）：用掉身份行右侧空区，紧凑一排贴着 kebab；
+              仪表与身份同排信息密度高、不再单独占一行摊开。窄屏（<md）降级为下方 2×2。 */}
+          <div className="hidden shrink-0 items-center gap-5 md:flex">
+            <ResourceGauge label={t('nodes.cpu')} value={online ? (node.cpuUsage ?? 0) * 100 : 0} unit="%" size={56} />
+            <ResourceGauge label={t('nodes.memory')} value={online ? (node.memoryUsage ?? 0) * 100 : 0} unit="%" size={56} />
+            <ResourceGauge label={t('nodes.disk')} value={online ? (node.diskUsage ?? 0) * 100 : 0} unit="%" size={56} />
+            <ResourceGauge label={t('nodes.load')} value={online ? loadPct : 0} unit="%" size={56} />
+          </div>
           <NodeActionsMenu node={node} onToggleMaintenance={onToggleMaintenance} onDrain={onDrain} onDelete={onDelete} />
         </div>
 
-        {/* 资源仪表：CPU/内存/磁盘/负载（FR-061；离线归零空盘）。
-            四等分栅格铺满卡宽（窄屏 2×2），消除左聚拢造成的整片留白（FR-311 真机反馈）。 */}
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <div className="flex justify-center"><ResourceGauge label={t('nodes.cpu')} value={online ? (node.cpuUsage ?? 0) * 100 : 0} unit="%" size={64} /></div>
-          <div className="flex justify-center"><ResourceGauge label={t('nodes.memory')} value={online ? (node.memoryUsage ?? 0) * 100 : 0} unit="%" size={64} /></div>
-          <div className="flex justify-center"><ResourceGauge label={t('nodes.disk')} value={online ? (node.diskUsage ?? 0) * 100 : 0} unit="%" size={64} /></div>
-          <div className="flex justify-center"><ResourceGauge label={t('nodes.load')} value={online ? loadPct : 0} unit="%" size={64} /></div>
+        {/* 窄屏降级：仪表 2×2 紧凑网格（md 以上已内联到身份行）。 */}
+        <div className="mt-3 grid grid-cols-2 gap-2 md:hidden">
+          <div className="flex justify-center"><ResourceGauge label={t('nodes.cpu')} value={online ? (node.cpuUsage ?? 0) * 100 : 0} unit="%" size={56} /></div>
+          <div className="flex justify-center"><ResourceGauge label={t('nodes.memory')} value={online ? (node.memoryUsage ?? 0) * 100 : 0} unit="%" size={56} /></div>
+          <div className="flex justify-center"><ResourceGauge label={t('nodes.disk')} value={online ? (node.diskUsage ?? 0) * 100 : 0} unit="%" size={56} /></div>
+          <div className="flex justify-center"><ResourceGauge label={t('nodes.load')} value={online ? loadPct : 0} unit="%" size={56} /></div>
         </div>
       </Panel>
 
@@ -694,7 +702,7 @@ function NodeDetailPane({
       <div>
         {tab === 'overview' && <NodeOverviewSection node={node} />}
         {tab === 'instances' && <NodeInstanceCompare node={node} range="24h" />}
-        {tab === 'jdk' && <NodeJDKPanel nodeId={node.id} active />}
+        {tab === 'runtime' && <NodeJDKPanel nodeId={node.id} active />}
         {tab === 'cache' && <NodeArtifactCachePanel nodeId={node.id} active />}
         {tab === 'ports' && (
           <Panel title={t('ports.title')}>

@@ -1081,7 +1081,8 @@
       "ports": "Ports",
       "proxy": "Proxy",
       "monitor": "Monitoring",
-      "repair": "Node repair"
+      "repair": "Node repair",
+      "runtime": "Runtime"
     }
   },
   "nodeProxy": {
