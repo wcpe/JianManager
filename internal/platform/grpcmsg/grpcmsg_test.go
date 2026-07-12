@@ -117,13 +117,14 @@ func TestWrapRegistrar_UnderCapPasses(t *testing.T) {
 	}
 }
 
-// TestWrapRegistrar_StreamFrameOverCapRejected 流式单帧超限 → 拒收；小帧照常（FR-305）。
-func TestWrapRegistrar_StreamFrameOverCapRejected(t *testing.T) {
+// TestWrapRegistrar_StreamNotWrapped 流式小帧照常放行（FR-304 生产帧型 64KiB×4）——
+// WrapRegistrar 只守 unary、不包裹 stream（避免干扰 grpctunnel 分块流控，真机 DeployServerProbe
+// DeadlineExceeded 的根因）；流的尺寸由直拨 ServerOptions / 隧道 16KiB 分块天然兜底。
+func TestWrapRegistrar_StreamNotWrapped(t *testing.T) {
 	c := startGuarded(t, &guardedWorker{}, CallOptions()...)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// 小帧照常（64KiB 帧 ×4，FR-304 生产帧型）。
 	up, err := c.UploadFile(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -136,15 +137,6 @@ func TestWrapRegistrar_StreamFrameOverCapRejected(t *testing.T) {
 	if _, err := up.CloseAndRecv(); err != nil {
 		t.Fatalf("小帧流应成功: %v", err)
 	}
-
-	// 单帧超限 → 服务端 RecvMsg 判限拒收（客户端 send 放开直击服务端）。
-	up2, err := c.UploadFile(ctx, grpc.MaxCallSendMsgSize(int(^uint32(0)>>1)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = up2.Send(&workerpb.UploadFileChunk{Path: "a.bin", Content: bigBytes()}) // 错误可能延迟到 CloseAndRecv
-	_, err = up2.CloseAndRecv()
-	requireExhausted(t, err)
 }
 
 // TestCallOptions_RecvCapExplicit CP 客户端显式 recv 上限修 4MiB 默认暗礁：

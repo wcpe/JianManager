@@ -60,33 +60,16 @@ func UnaryServerInterceptor() grpc.UnaryServerInterceptor {
 	}
 }
 
-// StreamServerInterceptor 返回按帧判限的 stream 服务端拦截器：RecvMsg/SendMsg 单帧超限即拒。
-func StreamServerInterceptor() grpc.StreamServerInterceptor {
-	return func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		return handler(srv, &sizeGuardStream{ServerStream: ss})
-	}
-}
-
-// sizeGuardStream 包装 ServerStream，对收发单帧判限。
-type sizeGuardStream struct{ grpc.ServerStream }
-
-func (s *sizeGuardStream) RecvMsg(m any) error {
-	if err := s.ServerStream.RecvMsg(m); err != nil {
-		return err
-	}
-	return checkSize(m, "（流入帧）")
-}
-
-func (s *sizeGuardStream) SendMsg(m any) error {
-	if err := checkSize(m, "（流出帧）"); err != nil {
-		return err
-	}
-	return s.ServerStream.SendMsg(m)
-}
-
-// WrapRegistrar 包装 grpc.ServiceRegistrar：注册时改写 ServiceDesc 的 unary/stream handler，
-// 使其经本包拦截器执行——grpctunnel 的 ReverseTunnelServer 实现 ServiceRegistrar，
-// 包一层即获得与 grpc.NewServer 尺寸选项等效的守卫（FR-305）。原 desc 不被修改（深拷贝）。
+// WrapRegistrar 包装 grpc.ServiceRegistrar：注册时改写 ServiceDesc 的 **unary** handler，
+// 使其经本包判限拦截器执行——grpctunnel 的 ReverseTunnelServer 实现 ServiceRegistrar，
+// 包一层即让隧道承载的 unary RPC 获得与 grpc.NewServer 尺寸选项等效的 64MiB 守卫（FR-305）。
+//
+// 只守 unary、**不包裹 stream handler**：大 unary 是无框架上限的整块缓冲 OOM 真风险；而
+// grpctunnel 的流按 16KiB 分块传输（`chunkMax`）、单帧天然远小于上限，包裹其 ServerStream 的
+// RecvMsg/SendMsg 反而干扰 grpctunnel 的分块流控——真机复现：并发常驻 StreamInstanceEvents +
+// 7.6MB DeployServerProbe unary 一起时死锁 DeadlineExceeded。直拨侧的流由 ServerOptions 的
+// MaxRecvMsgSize/MaxSendMsgSize 兜底，隧道侧的流由 grpctunnel 分块天然受限，无需再包。
+// 原 desc 不被修改（浅拷贝壳 + 重建 Methods 切片）。
 func WrapRegistrar(reg grpc.ServiceRegistrar) grpc.ServiceRegistrar {
 	return &guardRegistrar{inner: reg}
 }
@@ -95,9 +78,8 @@ type guardRegistrar struct{ inner grpc.ServiceRegistrar }
 
 func (g *guardRegistrar) RegisterService(desc *grpc.ServiceDesc, impl any) {
 	unaryInt := UnaryServerInterceptor()
-	streamInt := StreamServerInterceptor()
 
-	wrapped := *desc // 浅拷贝壳，Methods/Streams 切片下面重建，避免污染全局生成的 desc
+	wrapped := *desc // 浅拷贝壳，Methods 切片下面重建，避免污染全局生成的 desc；Streams 原样透传
 	wrapped.Methods = make([]grpc.MethodDesc, len(desc.Methods))
 	for i, m := range desc.Methods {
 		m := m // 捕获副本
@@ -107,19 +89,6 @@ func (g *guardRegistrar) RegisterService(desc *grpc.ServiceDesc, impl any) {
 			return orig(srv, ctx, dec, chainInterceptors(chainedInt, unaryInt))
 		}
 		wrapped.Methods[i] = m
-	}
-	wrapped.Streams = make([]grpc.StreamDesc, len(desc.Streams))
-	for i, s := range desc.Streams {
-		s := s
-		orig := s.Handler
-		s.Handler = func(srv any, ss grpc.ServerStream) error {
-			return streamInt(srv, ss, &grpc.StreamServerInfo{
-				FullMethod:     "/" + desc.ServiceName + "/" + s.StreamName,
-				IsClientStream: s.ClientStreams,
-				IsServerStream: s.ServerStreams,
-			}, orig)
-		}
-		wrapped.Streams[i] = s
 	}
 	g.inner.RegisterService(&wrapped, impl)
 }
