@@ -207,7 +207,8 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 指标：`GetNodeMetrics` 采集 Worker 所在节点 CPU / 内存 / 磁盘实时快照；`GetInstanceMetrics` 请求带 `probe_port`，由 Worker 抓 ServerProbe `/metrics`（**RCON 已退役（FR-067/ADR-016）**——探针未就绪时富指标 N/A，不再回退 RCON）。`GET /api/v1/nodes/:id/metrics` 节点面板端点优先经已连接 Worker 主动拉取，连接池暂无该节点时回退 CP 中最新心跳快照；实例实时面板继续按需 `GetInstanceMetrics` 拉取；**历史时序**（FR-060）由 Worker 心跳推送 `instance_metrics`，二者互补
 - 玩家管理：SendPluginCommand（FR-067/ADR-016；CP 经 Worker 反向 WS 向探针下发踢/封/解封/白名单治理指令，探针经服务端 API 执行；在线列表经探针事件聚合）。**RCON 路径已退役**，`ExecRconCommand`/`rcon_client` 移除；探针未连入时优雅降级
 - 配置 (V2)：ListConfigFiles, ReadConfig, WriteConfig, ListConfigVersions, RollbackConfig
-- 运行时 (V2)：ListJDKs, InstallJDK, RemoveJDK, JDKCatalog, DownloadCore, InstallForgeServer, ListArtifactCache, EvictArtifactCache, ClearArtifactCache, SetArtifactCacheCap, BrowseDir
+- 运行时 (V2)：ListJDKs, InstallJDK, RemoveJDK, JDKCatalog, ProbeJDK, ScanRuntimes, DownloadCore, InstallForgeServer, ListArtifactCache, EvictArtifactCache, ClearArtifactCache, SetArtifactCacheCap, BrowseDir
+  - `ScanRuntimes`（FR-298 节点运行时库）：按类型（jdk/nodejs）扫描节点**常见安装路径**发现运行时候选（`internal/worker/runtimescan`，路径表按 GOOS 内置：jdk=`/usr/lib/jvm/*`/`/opt/java*`/`/opt/jdk*`/sdkman 与 Windows `Program Files\Java|Eclipse Adoptium|Microsoft\jdk*`；nodejs=`/usr/local/bin/node`/`/usr/bin/node`/`/opt/node*/bin/node`/nvm 与 Windows `Program Files\nodejs`、`%APPDATA%\nvm`）。jdk 探测复用 `jdk.detectAt` 语义、nodejs 跑 `node --version` + `node -p process.arch`（arch 保留 nodejs 命名 x64/arm64）；路径不存在/探测失败**静默跳过**不阻断整体；托管根下候选标 `already_registered`，CP 侧再按 DB 已登记路径补标
   - `InstallJDK` 携带 `mirror_base`（CP 从平台设置 `jdk.mirror.<vendor>` 取生效值后下发；Worker 用它构造下载 URL，使运行时配置的镜像源真生效，FR-033/FR-063；为空回退 Worker 本地 env/官方默认源）
   - `InstallJDK` 加性携带 `task_id`（FR-183/ADR-040）：非空时走**异步**——Worker 登记内存任务表、`go` 后台下载（带字节进度计数）、RPC 立即返回 `task_id`（不再阻塞最长 20min），进度/日志/终态经心跳 `tasks` 上报，CP 据终态落 `NodeJDK` + 发站内信；为空回退同步路径（向后兼容）
   - `InstallJDK` 加性携带 `version`（FR-178）：非空时 Worker 经 **foojay disco API** 按具体版本解析下载源；为空取该大版本最新 GA
@@ -439,6 +440,7 @@ Backup ──N:1──▶ BackupStorage (storage_id, 远程存储位置, V2)
 Instance(proxy) ──M:N──▶ Instance(backend)   # V2 ServerRegistration: alias/priority/forced_host
 Network ──M:N──▶ Instance                    # V2 NetworkMember（非独占软标签）
 Node ──1:N──▶ NodeJDK                         # V2
+Node ──1:N──▶ NodeRuntime                     # V2 FR-298（非 JDK 运行时：nodejs/python 预留）
 Instance ──1:N──▶ InstanceConfigVersion       # V2（仅配置文件，FR-031）
 Instance ──1:N──▶ FileVersion                 # V2（任意文件改前快照，FR-051）
 AuditLog ──N:1──▶ User
@@ -482,6 +484,7 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | network_members (V2) | network_id(FK), instance_id(FK)（M:N，一个子服可属多群组） |
 | server_registrations (V2) | proxy_id(FK), backend_id(FK), alias, priority, forced_host, restricted, enabled；UNIQUE(proxy_id, alias) |
 | node_jdks (V2) | node_id(FK), vendor, major_version, version, arch, path, managed(下载/登记) |
+| node_runtimes (V2, FR-298) | node_id(FK), type(varchar16: nodejs/python 预留，jdk 不落本表), name(展示名如 "Node.js 22"), version, major, arch, path, managed；UNIQUE(node_id,type,path)（节点运行时库非 JDK 承载表：JDK 沿用 node_jdks 不迁移、实例外键零变更；读侧与 node_jdks 拼统一 Runtime 视图、写侧各走各表） |
 | instance_config_versions (V2) | instance_id(FK), file_path, content, author, created_at |
 | file_versions (V2) | instance_id(FK), file_path, content_hash, content(base64,二进制安全), size, author_id, rollback_of_version_id, created_at；INDEX(instance_id,file_path)（FR-051 通用文件改前快照） |
 | assets | type(core/plugin/image/video/archive/blob/client-file/client-pack/client-core/client-updater-core), name, version, filename, sha256(寻址+去重键), md5, size, content_type, source_url, metadata(JSON), storage_state(hot/archived/external), storage_backend, ref_count, rel_path(相对数据根), created_at, last_used_at；UNIQUE(type,sha256) |

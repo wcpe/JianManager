@@ -1858,6 +1858,46 @@
 - **响应**: `{ "path": "/opt", "parent": "/", "dirs": [{ "name": "jdks", "path": "/opt/jdks" }] }`
 - **错误码**: `503 NODE_OFFLINE`；`502 WORKER_ERROR`（路径不可访问/非目录/相对路径）
 
+### 节点运行时库（FR-298）
+
+> 运行时泛化管理：JDK 沿用 `node_jdks` 与既有 `/nodes/:id/jdks` 全链路**不动**；本组端点提供
+> **统一 Runtime 视图**（node_jdks(type=jdk) + node_runtimes 读侧拼装）、**扫描发现**（Worker
+> `ScanRuntimes` 扫常见安装路径）与**泛化登记/删除**。仅平台管理员；扫描/登记/删除写审计
+> （`node.runtime.scan` / `node.runtime.register` / `node.runtime.delete`，中英翻译在 `audit.actions.*`）。
+
+#### GET /api/v1/nodes/:id/runtimes
+- **描述**: 统一 Runtime 视图。JDK 部分复用 JDK List 的 `syncFromWorker` 容忍语义（同步失败仍回 DB 数据）；排序 type 升序（jdk 在前）→ major 降序。
+- **关联 FR**: FR-298
+- **权限**: 平台管理员
+- **响应**: `[{ "id", "nodeId", "type": "jdk|nodejs|python", "name": "Temurin|Node.js 22", "majorVersion", "version", "arch", "path", "managed", "createdAt" }]`（`id` 按 `type` 归属各承载表，增删须带 type）
+- **错误码**: `404 NOT_FOUND`（节点不存在）
+
+#### POST /api/v1/nodes/:id/runtimes/scan
+- **描述**: 代理 Worker `ScanRuntimes` 扫描常见安装路径回候选列表。Worker 侧托管根下候选标 `alreadyRegistered`，CP 再按 DB 已登记 (type,path) 补标（重复扫描已入库项即标出）。路径不存在/探测失败静默跳过。
+- **关联 FR**: FR-298
+- **权限**: 平台管理员
+- **请求体**: `{ "types": ["jdk", "nodejs"] }`（可空/省略 = 全部可扫描类型）
+- **响应**: `{ "candidates": [{ "type", "vendor", "version", "majorVersion", "arch", "path", "alreadyRegistered" }] }`
+- **审计**: `node.runtime.scan`（detail 含 types 与候选数）
+- **错误码**: `422 BUSINESS_ERROR`（未知扫描类型）；`503 NODE_OFFLINE`；`404 NOT_FOUND`；`502 WORKER_ERROR`
+
+#### POST /api/v1/nodes/:id/runtimes
+- **描述**: 泛化登记运行时。`type=jdk` **转发现有 JDK 登记链路**（落 `node_jdks`，需 `vendor`+`majorVersion`）；其它已知类型（nodejs / python 预留）落 `node_runtimes`（`name` 缺省自动生成如 "Node.js 22"）。未知类型拒绝。
+- **关联 FR**: FR-298
+- **权限**: 平台管理员
+- **请求体**: `{ "type": "nodejs", "name": "Node.js 22", "vendor": "", "majorVersion": 22, "version": "22.17.0", "arch": "x64", "path": "/usr/local/bin/node", "managed": false }`（`type`/`version`/`path` 必填）
+- **响应**: `201 Created` 统一视图行（同 GET 元素结构）
+- **审计**: `node.runtime.register`
+- **错误码**: `422 BUSINESS_ERROR`（未知类型 / 同 node+type+path 重复登记 / JDK 缺 vendor 或 majorVersion）；`404 NOT_FOUND`；`400 INVALID_REQUEST`
+
+#### DELETE /api/v1/nodes/:id/runtimes/:rid?type=
+- **描述**: 删除运行时。`type` **必带**（定位承载表）：`type=jdk` 走现有 JDK 删除链路（占用守卫 + 托管连文件语义不变）；其它类型仅删 `node_runtimes` 记录（波1 均为外部登记，不动磁盘文件；托管 Node 文件清理随 FR-299）。
+- **关联 FR**: FR-298
+- **权限**: 平台管理员
+- **响应**: `{ "message": "已删除" }`
+- **审计**: `node.runtime.delete`
+- **错误码**: `400 INVALID_REQUEST`（缺 type）；`409 JDK_IN_USE`（jdk 被实例占用，附 `instances`）；`404 NOT_FOUND`；`422 BUSINESS_ERROR`（未知类型）
+
 ### 节点出站代理（FR-185，见 ADR-043）
 
 > 节点级出站代理：继承平台全局默认（设置面板配，见「平台设置」network 键）或为本节点自定义。
