@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-probe embed-cfr embed-client-updater embed-worker gen-licenses docker dist dist-bin
+.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-probe embed-cfr embed-client-updater embed-worker embed-botworker gen-licenses docker dist dist-bin
 
 # Windows 原生终端（PowerShell/cmd）下 GNU make 默认用 cmd.exe 执行 recipe，而本文件 recipe
 # 全为 POSIX 命令（mkdir -p / cp -r / sed …），cmd 下会报「命令语法不正确」。检测到
@@ -87,7 +87,13 @@ VERSION ?= $(shell sed -n 's/^var Version = "\(.*\)"/\1/p' internal/version/vers
 DIST_LDFLAGS = -s -w -X github.com/wcpe/JianManager/internal/version.Version=$(VERSION)
 
 # 全量发布构建：前端 + 内嵌资产先行（含两阶段 Worker 内嵌，ADR-062），再交叉编译四个二进制。
-dist: gen-licenses build-web embed-web embed-install-scripts embed-worker dist-bin
+dist: gen-licenses build-web embed-web embed-install-scripts embed-botworker embed-worker dist-bin
+
+# 打包 bot-worker dist 注入 CP 内嵌目录（FR-308/ADR-070）：Worker 经 gRPC 自愈拉取，
+# bot 能力不再依赖手工拷贝 dist。产物不入库（目录 .gitignore 占位）；
+# 不跑此目标时 CP 不内嵌 bot-worker，Worker 回退本地已有 dist，不影响其它构建。
+embed-botworker: build-bot
+	go run ./scripts/embed-botworker.go --src bot-worker/dist --out internal/controlplane/embed/botworker --version $(VERSION)
 
 # 交叉编译两平台 Worker 并注入 CP 内嵌目录（FR-278/ADR-062）：CP 随身自带与自身版本一致的
 # Worker，一键安装/节点升级不出网。产物与 manifest 不入库（目录 .gitignore 占位）；
