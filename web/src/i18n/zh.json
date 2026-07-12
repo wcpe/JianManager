@@ -995,7 +995,16 @@
       "deleted": "运行时已删除",
       "deleteFailed": "删除失败",
       "deleteRecordTitle": "删除运行时登记记录?",
-      "deleteRecordDesc": "外部登记的运行时仅删除平台记录，不影响磁盘上的文件。"
+      "deleteRecordDesc": "外部登记的运行时仅删除平台记录，不影响磁盘上的文件。",
+      "deleteManagedTitle": "删除托管运行时及其文件?",
+      "deleteManagedDesc": "这是平台一键安装的托管运行时，删除将同时清除节点上的整个安装目录，不可恢复。",
+      "installNode": "安装 Node.js",
+      "installTitle": "安装 Node.js",
+      "installMajor": "主版本",
+      "installHint": "从 nodejs.org dist（或平台设置的镜像源）下载该主版本最新便携归档，经节点出站代理安装到托管目录。下发后进度见「任务中心」。",
+      "installConfirm": "下发安装",
+      "installDispatched": "Node.js 安装任务已下发，进度可在「任务中心」查看",
+      "installFailed": "安装下发失败"
     },
     "enroll": {
       "addNode": "添加节点",
@@ -2426,6 +2435,7 @@
       "player.whitelist.remove": "移除白名单玩家",
       "node.runtime.scan": "扫描节点运行时",
       "node.runtime.register": "登记节点运行时",
+      "node.runtime.install": "安装节点运行时",
       "node.runtime.delete": "删除节点运行时",
       "instance.import.inspect": "探测导入目录",
       "instance.import": "导入现有服务器"

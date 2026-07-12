@@ -1,18 +1,20 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Boxes, Coffee, Copy, Hexagon, Loader2, Radar, Trash2 } from 'lucide-react'
+import { Boxes, Coffee, Copy, Download, Hexagon, Loader2, Radar, Trash2 } from 'lucide-react'
 import {
   useNodeRuntimes,
   useScanRuntimes,
   useRegisterRuntime,
   useDeleteRuntime,
+  useInstallRuntime,
   type NodeRuntimeItem,
   type RuntimeCandidate,
 } from '@/api/runtimes'
 import { Button } from '@jianmanager/ui/components/button'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
+import { Input } from '@jianmanager/ui/components/input'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { cn } from '@jianmanager/ui'
@@ -21,6 +23,9 @@ import { copyToClipboard } from '@/lib/clipboard'
 
 /** 运行时类型展示名（专有名词，不进 i18n）。 */
 const TYPE_LABEL: Record<string, string> = { jdk: 'JDK', nodejs: 'Node.js', python: 'Python' }
+
+/** 常见 Node.js LTS 主版本快选（最小做法：静态列表 + 自定义输入，不代理 index.json）。 */
+const NODE_LTS_MAJORS = [22, 20, 18]
 
 /** 运行时类型图标：jdk=咖啡、nodejs=六边形、其它=通用盒。 */
 function TypeIcon({ type, className }: { type: string; className?: string }) {
@@ -48,11 +53,33 @@ export default function NodeRuntimeSection({ nodeId, active = true }: NodeRuntim
   const scan = useScanRuntimes(nodeId)
   const register = useRegisterRuntime(nodeId)
   const del = useDeleteRuntime(nodeId)
+  const install = useInstallRuntime(nodeId)
 
   const [scanOpen, setScanOpen] = useState(false)
   const [candidates, setCandidates] = useState<RuntimeCandidate[] | null>(null)
   const [checked, setChecked] = useState<Record<string, boolean>>({})
   const [pendingDel, setPendingDel] = useState<NodeRuntimeItem | null>(null)
+  const [installOpen, setInstallOpen] = useState(false)
+  const [installMajor, setInstallMajor] = useState(String(NODE_LTS_MAJORS[0]))
+
+  const installMajorNum = Number.parseInt(installMajor, 10)
+  const installMajorValid = Number.isInteger(installMajorNum) && installMajorNum > 0
+
+  // 一键安装 Node.js（FR-299）：202 受理即提示跳任务中心，终态由心跳落库后列表自然出现。
+  const onInstall = () => {
+    if (!installMajorValid) return
+    install.mutate(
+      { type: 'nodejs', major: installMajorNum },
+      {
+        onSuccess: () => {
+          toast.success(t('nodes.runtimeLib.installDispatched'))
+          setInstallOpen(false)
+        },
+        onError: (err: Error & { response?: { data?: { message?: string } } }) =>
+          toast.error(err.response?.data?.message || t('nodes.runtimeLib.installFailed')),
+      },
+    )
+  }
 
   const rows = runtimes ?? []
   const selectedCount = useMemo(() => Object.values(checked).filter(Boolean).length, [checked])
@@ -117,10 +144,16 @@ export default function NodeRuntimeSection({ nodeId, active = true }: NodeRuntim
           <h3 className="text-sm font-semibold">{t('nodes.runtimeLib.title')}</h3>
           <p className="text-xs text-muted-foreground">{t('nodes.runtimeLib.subtitle')}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={openScan}>
-          <Radar className="size-4" />
-          {t('nodes.runtimeLib.scan')}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setInstallOpen(true)}>
+            <Download className="size-4" />
+            {t('nodes.runtimeLib.installNode')}
+          </Button>
+          <Button variant="outline" size="sm" onClick={openScan}>
+            <Radar className="size-4" />
+            {t('nodes.runtimeLib.scan')}
+          </Button>
+        </div>
       </div>
 
       {/* 统一列表：类型徽章区分 */}
@@ -178,6 +211,53 @@ export default function NodeRuntimeSection({ nodeId, active = true }: NodeRuntim
           ))}
         </div>
       )}
+
+      {/* 安装 Node.js 模态（FR-299）：LTS 主版本快选 + 自定义输入，202 受理后进度跳任务中心 */}
+      <Dialog open={installOpen} onOpenChange={setInstallOpen}>
+        <DialogContent className={scrollableDialogContentClass}>
+          <DialogHeader>
+            <DialogTitle>{t('nodes.runtimeLib.installTitle')}</DialogTitle>
+          </DialogHeader>
+          <ScrollableDialogBody className="space-y-3">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium" htmlFor="node-install-major">
+                {t('nodes.runtimeLib.installMajor')}
+              </label>
+              <div className="flex items-center gap-2">
+                {NODE_LTS_MAJORS.map((m) => (
+                  <Button
+                    key={m}
+                    type="button"
+                    size="sm"
+                    variant={installMajorNum === m ? 'default' : 'outline'}
+                    onClick={() => setInstallMajor(String(m))}
+                  >
+                    {m} LTS
+                  </Button>
+                ))}
+                <Input
+                  id="node-install-major"
+                  className="w-24"
+                  inputMode="numeric"
+                  value={installMajor}
+                  onChange={(e) => setInstallMajor(e.target.value)}
+                  aria-label={t('nodes.runtimeLib.installMajor')}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">{t('nodes.runtimeLib.installHint')}</p>
+          </ScrollableDialogBody>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setInstallOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button onClick={onInstall} disabled={!installMajorValid || install.isPending}>
+              {install.isPending && <Loader2 className="size-4 animate-spin" />}
+              {t('nodes.runtimeLib.installConfirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* 扫描发现模态：scrollable-dialog 壳（头/脚固定、候选超高内部滚动） */}
       <Dialog open={scanOpen} onOpenChange={setScanOpen}>
@@ -246,18 +326,18 @@ export default function NodeRuntimeSection({ nodeId, active = true }: NodeRuntim
         </DialogContent>
       </Dialog>
 
-      {/* 删除确认：jdk 托管连文件（委托现链路），其它只删记录 */}
+      {/* 删除确认：托管的连文件（jdk 委托现链路 / nodejs 经 RemoveRuntime，FR-299），外部登记只删记录 */}
       <DangerConfirm
         open={pendingDel !== null}
-        title={pendingDel?.type === 'jdk' && pendingDel?.managed
-          ? t('nodes.jdkDeleteFilesTitle')
+        title={pendingDel?.managed
+          ? (pendingDel.type === 'jdk' ? t('nodes.jdkDeleteFilesTitle') : t('nodes.runtimeLib.deleteManagedTitle'))
           : t('nodes.runtimeLib.deleteRecordTitle')}
-        description={pendingDel?.type === 'jdk' && pendingDel?.managed
-          ? t('nodes.jdkDeleteFilesDesc')
+        description={pendingDel?.managed
+          ? (pendingDel.type === 'jdk' ? t('nodes.jdkDeleteFilesDesc') : t('nodes.runtimeLib.deleteManagedDesc'))
           : t('nodes.runtimeLib.deleteRecordDesc')}
         confirmLabel={t('common.delete')}
-        confirmText={pendingDel?.type === 'jdk' && pendingDel?.managed
-          ? `${pendingDel?.name} ${pendingDel?.majorVersion}`
+        confirmText={pendingDel?.managed
+          ? (pendingDel.type === 'jdk' ? `${pendingDel.name} ${pendingDel.majorVersion}` : pendingDel.name)
           : undefined}
         onConfirm={() => {
           const target = pendingDel!

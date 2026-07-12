@@ -49,6 +49,36 @@ describe('NodeRuntimeSection（FR-298 节点运行时库）', () => {
     expect(screen.getByText('Node.js')).toBeInTheDocument() // 类型徽章
   })
 
+  it('安装 Node.js（FR-299）：LTS 主版本快选下发，202 受理后模态关、列表出现托管行', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<NodeRuntimeSection nodeId={1} active />)
+
+    // 打开安装模态：主版本快选 + 自定义输入。
+    await user.click(await screen.findByRole('button', { name: /安装 Node\.js/ }))
+    expect(await screen.findByText('主版本')).toBeInTheDocument()
+
+    // 默认 22，切到 20 LTS 后下发。
+    await user.click(screen.getByRole('button', { name: '20 LTS' }))
+    await user.click(screen.getByRole('button', { name: /下发安装/ }))
+
+    // 受理（202）后模态关闭；mock 同步落托管行模拟任务终态，列表出现 Node.js 20（托管）。
+    await waitFor(() => expect(screen.queryByRole('button', { name: /下发安装/ })).not.toBeInTheDocument())
+    expect(await screen.findByText('Node.js 20')).toBeInTheDocument()
+    expect(screen.getByText(/nodejs-20/)).toBeInTheDocument()
+  })
+
+  it('安装 Node.js：自定义主版本非法时禁用下发', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<NodeRuntimeSection nodeId={1} active />)
+
+    await user.click(await screen.findByRole('button', { name: /安装 Node\.js/ }))
+    const input = await screen.findByRole('textbox', { name: '主版本' })
+    await user.clear(input)
+    expect(screen.getByRole('button', { name: /下发安装/ })).toBeDisabled()
+    await user.type(input, '24')
+    expect(screen.getByRole('button', { name: /下发安装/ })).toBeEnabled()
+  })
+
   it('入库后重复扫描该候选标已在库', async () => {
     const user = userEvent.setup()
     renderWithProviders(<NodeRuntimeSection nodeId={1} active />)

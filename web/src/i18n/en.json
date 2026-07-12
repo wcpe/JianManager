@@ -1018,7 +1018,16 @@
       "deleted": "Runtime deleted",
       "deleteFailed": "Delete failed",
       "deleteRecordTitle": "Delete runtime record?",
-      "deleteRecordDesc": "Externally-registered runtimes only have their platform record removed; files on disk are not touched."
+      "deleteRecordDesc": "Externally-registered runtimes only have their platform record removed; files on disk are not touched.",
+      "deleteManagedTitle": "Delete managed runtime and its files?",
+      "deleteManagedDesc": "This runtime was installed by the platform. Deleting it also removes the entire install directory on the node. This cannot be undone.",
+      "installNode": "Install Node.js",
+      "installTitle": "Install Node.js",
+      "installMajor": "Major version",
+      "installHint": "Downloads the latest portable archive of this major from nodejs.org dist (or the configured mirror) via the node's outbound proxy into the managed directory. Track progress in Task Center.",
+      "installConfirm": "Install",
+      "installDispatched": "Node.js install task dispatched; track progress in Task Center",
+      "installFailed": "Failed to dispatch install"
     },
     "enroll": {
       "addNode": "Add Node",
@@ -2447,6 +2456,7 @@
       "player.whitelist.remove": "Remove player from whitelist",
       "node.runtime.scan": "Scan node runtimes",
       "node.runtime.register": "Register node runtime",
+      "node.runtime.install": "Install node runtime",
       "node.runtime.delete": "Delete node runtime",
       "instance.import.inspect": "Inspect import directory",
       "instance.import": "Import existing server"

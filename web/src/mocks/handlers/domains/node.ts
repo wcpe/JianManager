@@ -833,7 +833,38 @@ export const handlers = [
     return HttpResponse.json(created, { status: 201 })
   }),
 
-  // 删除：type 定位承载表（jdk → node-jdks，其它 → node-runtimes）。
+  // 一键安装 Node.js（FR-299）：202+taskId 受理；mock 同步落一条托管运行时行，模拟任务终态落库。
+  domainRoute('post', '/nodes/:id/runtimes/install', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const nodeId = Number((info.params as { id: string }).id)
+    const body = (await info.request.json()) as { type: string; major: number; arch?: string }
+    if (body.type !== 'nodejs') {
+      return HttpResponse.json({ error: 'BUSINESS_ERROR', message: `不支持的运行时类型: ${body.type}` }, { status: 422 })
+    }
+    if (!Number.isInteger(body.major) || body.major <= 0) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '请求参数错误' }, { status: 400 })
+    }
+    const version = `${body.major}.0.0`
+    const path = `/data/opt/runtimes/nodejs-${body.major}/node-v${version}-linux-x64/bin/node`
+    if (nodeRuntimes.list((r) => r.nodeId === nodeId && r.type === 'nodejs' && r.path === path).length === 0) {
+      nodeRuntimes.insert({
+        nodeId,
+        type: 'nodejs',
+        name: `Node.js ${body.major}`,
+        majorVersion: body.major,
+        version,
+        arch: body.arch || 'x64',
+        path,
+        managed: true,
+        createdAt: NOW,
+      })
+    }
+    const taskId = `task-runtime-install-${body.major}`
+    return HttpResponse.json({ taskId, task: { taskId, kind: 'runtime_install', state: 'running' } }, { status: 202 })
+  }),
+
+  // 删除：type 定位承载表（jdk → node-jdks，其它 → node-runtimes；托管 nodejs 语义=连文件，mock 仅删记录）。
   domainRoute('delete', '/nodes/:id/runtimes/:rid', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
