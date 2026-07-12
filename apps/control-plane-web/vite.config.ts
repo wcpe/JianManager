@@ -3,13 +3,19 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
-import pkg from './package.json' with { type: 'json' }
+import { readFileSync } from 'node:fs'
+
+// FR-288（见 ADR-064/065）：版本唯一真源 = internal/version/version.go。
+// 构建期（dev 与 build 同路径）解析注入 __APP_VERSION__，package.json 不再承载
+// 版本语义（冻结 0.0.0）——bump 真源一处，前端展示 / Go /version / 产物路径三者一致。
+const versionGo = readFileSync(path.resolve(__dirname, '../../internal/version/version.go'), 'utf8')
+const appVersion = /^var Version = "(.+)"$/m.exec(versionGo)?.[1] ?? '0.0.0-unknown'
 
 // https://vite.dev/config/
 export default defineConfig({
-  // 注入前端版本号，运维控制台侧栏底部展示（FR-037）
+  // 注入前端版本号，运维控制台侧栏底部展示（FR-037；来源见上 FR-288）
   define: {
-    __APP_VERSION__: JSON.stringify(pkg.version),
+    __APP_VERSION__: JSON.stringify(appVersion),
   },
   // 路由已按页 lazy 分割；再把重型第三方库拆成独立 vendor chunk（v0.9.0 走查 #13）：
   // recharts/codemirror/xterm 等不再被卷进某个应用 chunk（原「PluginManager」单 chunk ~798KB），
