@@ -15,6 +15,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+
+	"github.com/wcpe/JianManager/internal/platform/grpcmsg"
 )
 
 // nodeUUIDHeader / nodeSecretHeader 隧道建立请求携带节点身份的 gRPC metadata header 名。
@@ -105,7 +107,9 @@ func (r *Runner) serveOnce() error {
 	defer conn.Close()
 
 	rts := grpctunnel.NewReverseTunnelServer(tunnelpb.NewTunnelServiceClient(conn))
-	r.register(rts)
+	// 消息尺寸守卫（FR-305）：grpctunnel 不接受 grpc.ServerOption，唯一天花板是 4GB 硬编码——
+	// 经 WrapRegistrar 在注册层施加与直拨 ServerOptions 等效的 64MiB 双向上限，双模式行为一致。
+	r.register(grpcmsg.WrapRegistrar(rts))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
