@@ -25,6 +25,9 @@ type Services struct {
 	InstanceGroup    *service.InstanceGroupService
 	JDK              *service.JDKService
 	NodeRuntime      *service.NodeRuntimeService
+	// RuntimeLibrary 节点运行时库（FR-298）：统一 Runtime 视图 + 扫描发现 + 泛化登记；
+	// nil 时 /nodes/:id/runtimes 端点关闭。
+	RuntimeLibrary *service.RuntimeLibraryService
 	Diagnostics      *service.DiagnosticsService
 	DockerImage      *service.DockerImageService
 	Terminal         *service.TerminalService
@@ -157,6 +160,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.NodeRuntime != nil {
 			nodeRuntimeHandler := NewNodeRuntimeHandler(svcs.NodeRuntime, svcs.Audit)
 			nodeRuntimeHandler.RegisterRoutes(protected)
+		}
+
+		// 节点运行时库（FR-298）：统一 Runtime 视图（node_jdks + node_runtimes 读侧拼装）+
+		// 扫描发现 + 泛化登记/删除。仅平台管理员；扫描/登记/删除写审计。
+		if svcs.RuntimeLibrary != nil {
+			runtimeLibraryHandler := NewRuntimeLibraryHandler(svcs.RuntimeLibrary, svcs.Audit)
+			runtimeLibraryHandler.RegisterRoutes(protected)
 		}
 
 		// 节点级出站代理（FR-185，见 ADR-043）：查看/设置某节点继承全局或自定义代理。

@@ -100,6 +100,8 @@ func main() {
 	jdkSvc := service.NewJDKService(db, pool)
 	// 节点运行时管理（FR-178）：制品缓存 + JDK 版本目录（foojay）+ 目录浏览，经 gRPC 委托 Worker。
 	nodeRuntimeSvc := service.NewNodeRuntimeService(db, pool)
+	// 节点运行时库（FR-298）：统一 Runtime 视图 + 扫描发现 + 泛化登记（JDK 写路径委托 jdkSvc）。
+	runtimeLibrarySvc := service.NewRuntimeLibraryService(db, pool, jdkSvc)
 	// 连通性测试（FR-229）：出站 HTTP 经当前出站代理客户端、节点存活经 gRPC GetVersion。
 	diagnosticsSvc := service.NewDiagnosticsService(db, pool)
 	diagnosticsSvc.SetHTTPClientProvider(outboundProvider.Client)
@@ -380,6 +382,7 @@ func main() {
 		InstanceGroup:           instanceGroupSvc,
 		JDK:                     jdkSvc,
 		NodeRuntime:             nodeRuntimeSvc,
+		RuntimeLibrary:          runtimeLibrarySvc,
 		Diagnostics:             diagnosticsSvc,
 		DockerImage:             dockerImageSvc,
 		Terminal:                terminalSvc,

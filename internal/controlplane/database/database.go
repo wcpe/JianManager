@@ -92,6 +92,9 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.GroupQuota{},
 		&model.Node{},
 		&model.NodeJDK{},
+		// 节点运行时库（FR-298）：非 JDK 运行时（nodejs/python 预留）承载表，
+		// 读侧与 node_jdks 拼统一视图，写侧各走各表；JDK 不迁移。
+		&model.NodeRuntime{},
 		&model.NodeEnrollToken{},
 		&model.Instance{},
 		&model.GroupInstance{},
