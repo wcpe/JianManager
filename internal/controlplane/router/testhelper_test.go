@@ -119,6 +119,7 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 		DBBrowse:         service.NewDBBrowseService(db),
 		SelfUpdate:       service.NewSelfUpdateService(db, pool, service.SelfUpdateConfig{}, root),
 		ServerState:      service.NewServerStateService(db, pool),
+		ImportServer:     service.NewImportServerService(db, pool, instanceSvc),
 	}
 	return Setup(svcs, jwtCfg.Secret)
 }

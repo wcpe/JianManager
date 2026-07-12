@@ -261,6 +261,8 @@ func main() {
 	proxySvc := service.NewProxyService(db, pool, instanceSvc, coreSvc, registrationSvc)
 	registrationSvc.SetSyncer(proxySvc)
 	cloneSvc := service.NewCloneService(db, pool, instanceSvc, registrationSvc)
+	// 导入现有服务器（FR-302，见 ADR-XXXX）：就地接管 / 搬迁托管区。
+	importServerSvc := service.NewImportServerService(db, pool, instanceSvc)
 	playerSvc := service.NewPlayerService(db, pool)
 	// 服务器状态查询服务（FR-076，见 ADR-016）：按需经探针反向 WS 桥的 QueryServerState
 	// 取回某实例全量 Bukkit 内部状态（前端「服务器状态」tab 开/刷新才查，FR-077）。
@@ -411,6 +413,7 @@ func main() {
 		Provision:               provisionSvc,
 		Proxy:                   proxySvc,
 		Clone:                   cloneSvc,
+		ImportServer:            importServerSvc,
 		Registration:            registrationSvc,
 		Network:                 networkSvc,
 		Log:                     logSvc,
