@@ -136,6 +136,20 @@ func downloadAndExtractWithProgress(ctx context.Context, client *http.Client, ur
 	return downloadAndExtractStallParams(ctx, client, url, destDir, report, downloadStallTimeout, stallCheckInterval)
 }
 
+// DownloadAndExtract 下载归档到临时文件并按后缀解压到 destDir（导出薄封装，FR-299）。
+// 供非 JDK 运行时安装器（internal/worker/runtime）复用与 JDK 完全一致的下载语义：
+// 停滞看门狗判卡死（FR-290）、网络类失败追加可操作引导（FR-279）、zip/tar.gz 防路径逃逸。
+// report 可为 nil；stall/interval <= 0 时用包默认看门狗阈值（测试可注入小值）。
+func DownloadAndExtract(ctx context.Context, client *http.Client, url, destDir string, report Progress, stall, interval time.Duration) error {
+	if stall <= 0 {
+		stall = downloadStallTimeout
+	}
+	if interval <= 0 {
+		interval = stallCheckInterval
+	}
+	return downloadAndExtractStallParams(ctx, client, url, destDir, jdkProgress(report), stall, interval)
+}
+
 // downloadAndExtractStallParams 同上，但停滞看门狗阈值参数化（便于测试以小值注入，FR-290）。
 func downloadAndExtractStallParams(ctx context.Context, client *http.Client, url, destDir string, report jdkProgress, stall, interval time.Duration) error {
 	if client == nil {
