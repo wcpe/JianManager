@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path"
 	"strings"
 	"time"
 
+	gogrpc "google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 
 	"github.com/wcpe/JianManager/internal/controlplane/grpc"
@@ -140,6 +144,157 @@ func (s *FileService) WriteFile(instanceID uint, path string, content []byte) er
 		return fmt.Errorf("写入文件失败: %s", resp.Error)
 	}
 
+	return nil
+}
+
+// uploadChunkSize 上传流式分片大小，与 Worker DownloadFile 分片对称（FR-304）。
+const uploadChunkSize = 64 * 1024
+
+// legacyUploadMaxBytes 老 Worker（无 UploadFile）回退 WriteFile unary 的内容上限：
+// Worker 服务端 64MiB 单消息上限扣除 protobuf 编组余量，超限直接引导升级而非盲发注定被拒的请求。
+const legacyUploadMaxBytes = 64*1024*1024 - 64*1024
+
+// UploadFile 单文件流式上传（FR-304）：经 Worker UploadFile client-stream 分片转发，
+// 任意大小不受单消息上限约束、CP 侧内存占用 O(chunk)。老 Worker 回退 WriteFile unary（≤64MB）。
+// 流式需贯穿整个 HTTP 请求，故由调用方传入请求级 ctx（不设固定超时——这正是本 FR 要移除的 10s 硬超时）。
+func (s *FileService) UploadFile(ctx context.Context, instanceID uint, filePath string, r io.Reader) error {
+	if err := validatePath(filePath); err != nil {
+		return err
+	}
+
+	instance, node, err := s.getInstanceAndNode(instanceID)
+	if err != nil {
+		return err
+	}
+
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return ErrNodeNotConnected
+	}
+
+	return uploadToWorker(ctx, client.Worker, instance.UUID, filePath, r)
+}
+
+// workerFileUploader 上传所需的 Worker 客户端能力子集（UploadFile 流式 + WriteFile 回退）。
+// workerpb.WorkerServiceClient 与 plugin 服务的窄接口均天然满足，供文件上传与插件部署共用。
+type workerFileUploader interface {
+	UploadFile(ctx context.Context, opts ...gogrpc.CallOption) (workerpb.WorkerService_UploadFileClient, error)
+	WriteFile(ctx context.Context, in *workerpb.WriteFileRequest, opts ...gogrpc.CallOption) (*workerpb.WriteFileResponse, error)
+}
+
+// uploadToWorker 上传统一入口：探测能力后流式 UploadFile，老 Worker 回退 WriteFile（≤64MB）。
+// 每次上传都轻量探测（一次零帧流）：隧道模式的 pool.Get 按取即建 Client，
+// 无稳定宿主可缓存探测结果；上传是低频用户操作，探测成本可忽略且永远正确。
+func uploadToWorker(ctx context.Context, w workerFileUploader, instanceUUID, filePath string, r io.Reader) error {
+	supported, err := probeUploadFile(ctx, w)
+	if err != nil {
+		return fmt.Errorf("上传文件失败: %w", err)
+	}
+	if !supported {
+		return uploadViaLegacyWriteFile(ctx, w, instanceUUID, filePath, r)
+	}
+	return streamUploadFile(ctx, w, instanceUUID, filePath, r)
+}
+
+// probeUploadFile 零帧探测 Worker 是否支持 UploadFile（约定见 proto 注释）：
+// 新 Worker 对零帧即关流返回业务级失败（无副作用）→ 支持；老 Worker 返回 Unimplemented → 不支持；
+// 其他传输错误如实上抛（此时回退 WriteFile 同样会失败，不掩盖真因）。
+func probeUploadFile(ctx context.Context, w workerFileUploader) (bool, error) {
+	stream, err := w.UploadFile(ctx)
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			return false, nil
+		}
+		return false, err
+	}
+	if _, err := stream.CloseAndRecv(); err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// streamUploadFile 把 r 按分片经 UploadFile 流发往 Worker，并校验落盘字节数与已发送一致。
+func streamUploadFile(ctx context.Context, w workerFileUploader, instanceUUID, filePath string, r io.Reader) error {
+	// 子 ctx：任何提前返回都中止流（而非 CloseSend 正常结束），Worker 据此清理临时文件、不落半截目标。
+	sctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	stream, err := w.UploadFile(sctx)
+	if err != nil {
+		return fmt.Errorf("上传文件失败: %w", err)
+	}
+
+	buf := make([]byte, uploadChunkSize)
+	var sent int64
+	first := true
+	for {
+		n, rerr := r.Read(buf)
+		if n > 0 || first {
+			// 拷贝一份再发：gRPC 异步序列化，复用底层 buffer 会数据竞争（与 DownloadFile 同理）。
+			chunk := &workerpb.UploadFileChunk{Content: append([]byte(nil), buf[:n]...)}
+			if first {
+				chunk.InstanceUuid = instanceUUID
+				chunk.Path = filePath
+				first = false
+			}
+			if serr := stream.Send(chunk); serr != nil {
+				if serr == io.EOF {
+					break // 流已被服务端终止，真实错误由 CloseAndRecv 给出
+				}
+				return fmt.Errorf("上传文件失败: %w", serr)
+			}
+			sent += int64(n)
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			// 上游（浏览器）断流：直接返回并经 defer cancel 中止 gRPC 流——绝不 CloseSend，
+			// 否则 Worker 会把残缺内容当完整文件提交。
+			return fmt.Errorf("读取上传内容失败: %w", rerr)
+		}
+	}
+
+	resp, err := stream.CloseAndRecv()
+	if err != nil {
+		return fmt.Errorf("上传文件失败: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("上传文件失败: %s", resp.Error)
+	}
+	if resp.BytesWritten != sent {
+		return fmt.Errorf("上传完整性校验失败：已发送 %d 字节，Worker 落盘 %d 字节", sent, resp.BytesWritten)
+	}
+	return nil
+}
+
+// uploadViaLegacyWriteFile 老 Worker 回退：整块读入（≤64MB）走既有 WriteFile unary。
+// 超时放宽为 5 分钟（替代既有 10s——慢链路大文件在旧超时下必失败）。
+func uploadViaLegacyWriteFile(ctx context.Context, w workerFileUploader, instanceUUID, filePath string, r io.Reader) error {
+	content, err := io.ReadAll(io.LimitReader(r, legacyUploadMaxBytes+1))
+	if err != nil {
+		return fmt.Errorf("读取上传内容失败: %w", err)
+	}
+	if int64(len(content)) > legacyUploadMaxBytes {
+		return errors.New("节点 Worker 版本过旧，不支持大文件流式上传，请先升级节点")
+	}
+
+	wctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	resp, err := w.WriteFile(wctx, &workerpb.WriteFileRequest{
+		InstanceUuid: instanceUUID,
+		Path:         filePath,
+		Content:      content,
+	})
+	if err != nil {
+		return fmt.Errorf("写入文件失败: %w", err)
+	}
+	if !resp.Success {
+		return fmt.Errorf("写入文件失败: %s", resp.Error)
+	}
 	return nil
 }
 

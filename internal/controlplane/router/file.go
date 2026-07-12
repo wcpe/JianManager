@@ -2,6 +2,7 @@ package router
 
 import (
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 	"strings"
@@ -145,7 +146,11 @@ func (h *FileHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已删除"})
 }
 
-// Upload 文件上传。
+// Upload 文件流式上传（FR-304）。multipart 流式读、经 Worker UploadFile 流式转发，
+// 全程不整块缓冲（修复：曾 io.ReadAll 全量进内存 + WriteFile unary 直传，直拨 >64MB 被
+// gRPC 单消息上限拒收、反向隧道下双侧内存整块缓冲）。
+// 目标路径优先经 query 参数 `path` 传递；兼容先于 file 部分的 multipart path 字段
+// （流式顺序读所限：读到 file 时必须已知目标路径）。
 func (h *FileHandler) Upload(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -157,22 +162,49 @@ func (h *FileHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	path := c.PostForm("path")
-	if path == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少 path"})
+	path := c.Query("path")
+
+	mr, err := c.Request.MultipartReader()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的 multipart 请求"})
 		return
 	}
 
-	file, _, err := c.Request.FormFile("file")
-	if err != nil {
+	var filePart *multipart.Part
+	for filePart == nil {
+		part, perr := mr.NextPart()
+		if perr == io.EOF {
+			break
+		}
+		if perr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "读取上传表单失败"})
+			return
+		}
+		switch part.FormName() {
+		case "file":
+			filePart = part
+		case "path":
+			if path == "" {
+				b, rerr := io.ReadAll(io.LimitReader(part, 4096))
+				if rerr != nil {
+					_ = part.Close()
+					c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "读取 path 字段失败"})
+					return
+				}
+				path = strings.TrimSpace(string(b))
+			}
+			_ = part.Close()
+		default:
+			_ = part.Close()
+		}
+	}
+	if filePart == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少文件"})
 		return
 	}
-	defer file.Close()
-
-	content, err := io.ReadAll(file)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "读取上传文件失败"})
+	defer filePart.Close()
+	if path == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少 path（经 query 参数或先于 file 的表单字段提供）"})
 		return
 	}
 
@@ -184,7 +216,7 @@ func (h *FileHandler) Upload(c *gin.Context) {
 		return
 	}
 
-	if err := h.fileSvc.WriteFile(id, path, content); err != nil {
+	if err := h.fileSvc.UploadFile(c.Request.Context(), id, path, filePart); err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return
 	}

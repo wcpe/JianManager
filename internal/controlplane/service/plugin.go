@@ -63,6 +63,9 @@ type pluginWorkerOps interface {
 	ListFiles(ctx context.Context, in *workerpb.ListFilesRequest, opts ...grpc.CallOption) (*workerpb.ListFilesResponse, error)
 	ReadFile(ctx context.Context, in *workerpb.ReadFileRequest, opts ...grpc.CallOption) (*workerpb.ReadFileResponse, error)
 	WriteFile(ctx context.Context, in *workerpb.WriteFileRequest, opts ...grpc.CallOption) (*workerpb.WriteFileResponse, error)
+	// UploadFile 流式上传（FR-304）：部署经 uploadToWorker 统一入口，大 jar 不受 unary 单消息上限约束；
+	// 老 Worker 返回 Unimplemented 时自动回退 WriteFile（≤64MB）。
+	UploadFile(ctx context.Context, opts ...grpc.CallOption) (workerpb.WorkerService_UploadFileClient, error)
 	DeleteFile(ctx context.Context, in *workerpb.DeleteFileRequest, opts ...grpc.CallOption) (*workerpb.DeleteFileResponse, error)
 	RenameFile(ctx context.Context, in *workerpb.RenameFileRequest, opts ...grpc.CallOption) (*workerpb.RenameFileResponse, error)
 }
@@ -241,18 +244,12 @@ func (s *PluginService) Upload(instanceID uint, dir, filename string, content []
 		asset = a
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// FR-304：部署走流式统一入口（老 Worker 自动回退 WriteFile）。
+	// 超时从 30s 放宽为 5 分钟：流式后传输时长与 jar 体积相关。
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	resp, err := worker.WriteFile(ctx, &workerpb.WriteFileRequest{
-		InstanceUuid: inst.UUID,
-		Path:         dir + "/" + filename,
-		Content:      content,
-	})
-	if err != nil {
+	if err := uploadToWorker(ctx, worker, inst.UUID, dir+"/"+filename, bytes.NewReader(content)); err != nil {
 		return nil, fmt.Errorf("部署插件失败: %w", err)
-	}
-	if !resp.Success {
-		return nil, fmt.Errorf("部署插件失败: %s", resp.Error)
 	}
 	return asset, nil
 }
@@ -508,18 +505,11 @@ func (s *PluginService) deployAssetToInstance(inst *model.Instance, asset plugin
 			return fmt.Errorf("文件已存在: %s/%s", dir, asset.filename)
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// FR-304：批量扇出同走流式统一入口（老 Worker 自动回退 WriteFile），超时随之放宽为 5 分钟。
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	resp, err := worker.WriteFile(ctx, &workerpb.WriteFileRequest{
-		InstanceUuid: inst.UUID,
-		Path:         dir + "/" + asset.filename,
-		Content:      asset.content,
-	})
-	if err != nil {
+	if err := uploadToWorker(ctx, worker, inst.UUID, dir+"/"+asset.filename, bytes.NewReader(asset.content)); err != nil {
 		return fmt.Errorf("部署插件失败: %w", err)
-	}
-	if !resp.Success {
-		return fmt.Errorf("部署插件失败: %s", resp.Error)
 	}
 	return nil
 }

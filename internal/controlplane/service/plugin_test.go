@@ -12,6 +12,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
@@ -73,6 +75,12 @@ func (f *fakeWorkerOps) ReadFile(_ context.Context, in *workerpb.ReadFileRequest
 		return nil, context.DeadlineExceeded
 	}
 	return &workerpb.ReadFileResponse{Content: content}, nil
+}
+
+// UploadFile 模拟老 Worker（Unimplemented）：部署经 uploadToWorker 自动回退 WriteFile，
+// 既有 writes/writeErrors 断言路径保持不变；流式路径由 file_upload_test.go 单独覆盖。
+func (f *fakeWorkerOps) UploadFile(_ context.Context, _ ...grpc.CallOption) (workerpb.WorkerService_UploadFileClient, error) {
+	return nil, status.Error(codes.Unimplemented, "unknown method UploadFile")
 }
 
 func (f *fakeWorkerOps) WriteFile(_ context.Context, in *workerpb.WriteFileRequest, _ ...grpc.CallOption) (*workerpb.WriteFileResponse, error) {
@@ -271,6 +279,67 @@ func newPluginSvcWithFake(t *testing.T, asset *AssetService) (*PluginService, *f
 	svc := NewPluginService(db, cpgrpc.NewClientPool(), asset)
 	svc.workerResolver = func(string) (pluginWorkerOps, bool) { return fake, true }
 	return svc, fake, inst.ID
+}
+
+// streamingFakeWorkerOps 模拟支持 UploadFile 的新 Worker：记录流式帧并落入内存文件树。
+type streamingFakeWorkerOps struct {
+	*fakeWorkerOps
+	streams []*fakePluginUploadStream
+}
+
+type fakePluginUploadStream struct {
+	grpc.ClientStream
+	owner *streamingFakeWorkerOps
+	sent  []*workerpb.UploadFileChunk
+}
+
+func (s *fakePluginUploadStream) Send(c *workerpb.UploadFileChunk) error {
+	s.sent = append(s.sent, c)
+	return nil
+}
+
+func (s *fakePluginUploadStream) CloseAndRecv() (*workerpb.UploadFileResponse, error) {
+	if len(s.sent) == 0 {
+		return &workerpb.UploadFileResponse{Success: false, Error: "缺少首帧"}, nil
+	}
+	var n int64
+	for _, c := range s.sent {
+		n += int64(len(c.Content))
+	}
+	if parts := strings.SplitN(s.sent[0].Path, "/", 2); len(parts) == 2 {
+		s.owner.put(parts[0], parts[1], n)
+	}
+	return &workerpb.UploadFileResponse{Success: true, BytesWritten: n}, nil
+}
+
+func (f *streamingFakeWorkerOps) UploadFile(_ context.Context, _ ...grpc.CallOption) (workerpb.WorkerService_UploadFileClient, error) {
+	s := &fakePluginUploadStream{owner: f}
+	f.streams = append(f.streams, s)
+	return s, nil
+}
+
+// TestPluginService_Upload_StreamsToNewWorker 新 Worker：部署经 UploadFile 流式（FR-304），
+// 不再落 WriteFile unary；首帧携带部署目标路径。
+func TestPluginService_Upload_StreamsToNewWorker(t *testing.T) {
+	db := newPluginTestDB(t)
+	node := model.Node{UUID: "node-stream", Status: model.NodeStatusOnline}
+	require.NoError(t, db.Create(&node).Error)
+	inst := model.Instance{UUID: "inst-stream", NodeID: node.ID, Name: "srv", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDirect, StartCommand: "x", WorkDir: "/srv/srv"}
+	require.NoError(t, db.Create(&inst).Error)
+
+	fake := &streamingFakeWorkerOps{fakeWorkerOps: newFakeWorker()}
+	svc := NewPluginService(db, cpgrpc.NewClientPool(), nil)
+	svc.workerResolver = func(string) (pluginWorkerOps, bool) { return fake, true }
+
+	_, err := svc.Upload(inst.ID, "plugins", "Streamy.jar", []byte("jar-bytes"))
+	require.NoError(t, err)
+
+	require.Empty(t, fake.writes, "新 Worker 不得走 WriteFile 回退")
+	require.Len(t, fake.streams, 2, "应先零帧探测再真传")
+	frames := fake.streams[1].sent
+	require.NotEmpty(t, frames)
+	require.Equal(t, "inst-stream", frames[0].InstanceUuid)
+	require.Equal(t, "plugins/Streamy.jar", frames[0].Path)
 }
 
 // TestPluginService_List_AggregatesAndDetectsStatus 端到端覆盖 List：

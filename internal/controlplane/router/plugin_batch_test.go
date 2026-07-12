@@ -14,6 +14,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/middleware"
@@ -44,6 +46,11 @@ func (f *fakePluginBatchWorker) WriteFile(_ context.Context, in *workerpb.WriteF
 	f.writes = append(f.writes, in.Path)
 	f.files[in.Path] = struct{}{}
 	return &workerpb.WriteFileResponse{Success: true}, nil
+}
+
+// UploadFile 模拟老 Worker（Unimplemented）：部署回退 WriteFile，既有 writes 断言不变。
+func (f *fakePluginBatchWorker) UploadFile(_ context.Context, _ ...grpc.CallOption) (workerpb.WorkerService_UploadFileClient, error) {
+	return nil, status.Error(codes.Unimplemented, "unknown method UploadFile")
 }
 
 func TestPluginBatchDeploy_Route(t *testing.T) {
