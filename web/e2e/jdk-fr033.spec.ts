@@ -29,7 +29,7 @@ test.describe('FR-033 JDK 与运行时管理（mock 模式真浏览器）', () =
     await page.getByPlaceholder('/opt/jdks/temurin-21 或 .../bin/java').fill('/opt/jdks/e2e-java-21')
     await page.getByRole('button', { name: '检测' }).click()
     await expect(page.getByText('21.0.4+9')).toBeVisible()
-    await page.getByRole('button', { name: '保存' }).click()
+    await page.getByRole('button', { name: '保存', exact: true }).click() // exact：同页 FR-306 有「保存配置」
     await expect(page.getByText('/opt/jdks/e2e-java-21')).toBeVisible()
     await expect(page.getByRole('button', { name: /外部\s*1/ })).toBeVisible()
     await page.screenshot({ path: path.join(artifactsDir, 'fr033-e2e-jdk-register.png'), fullPage: true })

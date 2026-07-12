@@ -36,6 +36,8 @@
 - **CP 运行时库存聚合缓存与刷新（FR-301，增强 FR-082/178 运行时资产页）**：`GET /runtime-assets/overview` 加性扩展 `runtimes` 多运行时矩阵（`node_jdks`(type=jdk，含引用实例) + `node_runtimes`(nodejs/python 预留，引用诚实恒空) 读侧拼装）与 `runtimeSyncs`/`syncedAt`（新列 `nodes.runtime_synced_at`，JDK syncFromWorker 成功即刷新，nil=从未同步）——老字段零变更、老前端不受影响；新 `POST /runtime-assets/refresh` 强制全节点库存 syncFromWorker（FR-301 手动刷新）：单节点失败容忍（逐节点回报 ok/error、DB 旧数据保留显旧），平台管理员 + 审计 `runtime_assets.refresh`（中英翻译随 FR 带齐）。前端运行时资产页 JDK 矩阵泛化为节点×运行时矩阵（类型徽章分列）+「上次同步 <相对时间>」+ 刷新按钮（部分失败 toast 提示失败节点名单、页面继续显旧数据）。service 聚合/失败容忍单测 + refresh 端点测 + 前端 DOM 测（多类型矩阵/刷新前移「刚刚」/失败容忍显旧）覆盖。
 
 - **反向隧道单消息尺寸上限统一治理（FR-305，见 `docs/specs/tunnel-message-size-guard/spec.md`）**：修「同一载荷直拨 64MiB 拒收、隧道一路吃到 grpctunnel 4GB 硬编码天花板」的双轨不一致与整块缓冲 OOM 暴露面（FR-304 登记前实测 65MB unary 经隧道成功吃进）。新增共享守卫包 `internal/platform/grpcmsg`（64MiB 单一真值 + 双向判限拦截器 + `WrapRegistrar` 注册层包装 + 客户端 `CallOptions`）：隧道注册经 WrapRegistrar 获得与直拨等效上限（不依赖 grpctunnel/grpchan 选项透传语义，两方向守卫全在自有代码）；直拨 Worker 服务端补发送方向同界；CP 连接池两方向显式 64MiB（顺修客户端接收 4MiB 默认暗礁——此前 >4MiB unary 响应会被 CP 静默拒收）。超限统一 `ResourceExhausted`+中文引导（走流式/升级节点）。复现测试红转绿（65MiB unary 经进程内反向隧道修前吃进、修后拒收）+ 真实生成 ServiceDesc 驱动的拦截器单测 5 例 + 流式小帧零回归。
+- **节点页 JDK 双列重复显示（FR-298 交付后 v0.15.0 版本验收 e2e 抓出）**：`NodeJDKPanel` 自有 JDK 富列表与内挂的运行时分区统一列表同时渲染 type=jdk 条目，同一 JDK 整页出现两次。修复：运行时分区列表只承载非 JDK 类型（JDK 由上方富列表唯一呈现，保留筛选/复制/删除守卫能力），统一视图保留在 API 层，扫描/登记链路不变；spec §3.5 措辞同步。复现 e2e（jdk-fr033 strict 违规）转绿。
+- **实例列表页移动端工具栏横向溢出（FR-302 交付后 v0.15.0 版本验收 e2e 抓出）**：页头按钮组 `flex gap-2` 无换行，FR-302 新增第 4 个「导入现有服务器」按钮后 390px 视口溢出 120px。修复：按钮组补 `flex-wrap`。复现 e2e（navigation-benchmark 移动端溢出预算 ≤2px）转绿；顺带更新 fr162 页眉 e2e 适配 FR-294 徽标浮窗交互（陈旧断言）与 jdk-fr033 的「保存」精确匹配（FR-306 同页新增「保存配置」致歧义）。
 ---
 
 ## 0.14.0（2026-07-11）
