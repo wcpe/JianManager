@@ -3,6 +3,7 @@ package service
 import (
 	"fmt"
 	"sort"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -23,11 +24,26 @@ import (
 // 本服务只负责「展示」引用关系，不重复实现删除逻辑。
 type RuntimeAssetsService struct {
 	db *gorm.DB
+	// sync 单节点库存强制同步器（FR-301 手动刷新）。main 装配阶段经 SetJDKSync 注入
+	// JDKService；未注入时 Refresh 报错（Overview 只读聚合不受影响）。
+	sync RuntimeSyncer
+}
+
+// RuntimeSyncer 单节点运行时库存强制同步（FR-301）。生产实现为 JDKService.SyncFromWorker
+//（node_runtimes 无 Worker 侧清单可同步：外部登记真相源即 CP 库，托管 Node 随 FR-299 再议）；
+// 接口化便于单测注入失败场景。
+type RuntimeSyncer interface {
+	SyncFromWorker(nodeID uint) error
 }
 
 // NewRuntimeAssetsService 创建运行时与制品聚合服务。
 func NewRuntimeAssetsService(db *gorm.DB) *RuntimeAssetsService {
 	return &RuntimeAssetsService{db: db}
+}
+
+// SetJDKSync 注入库存同步器（FR-301 手动刷新）。main 装配阶段调用。
+func (s *RuntimeAssetsService) SetJDKSync(sync RuntimeSyncer) {
+	s.sync = sync
 }
 
 // RuntimeAssetsOverview 全局页一次性聚合载荷。
@@ -40,6 +56,41 @@ type RuntimeAssetsOverview struct {
 	Assets []AssetTypeGroup `json:"assets"`
 	// AssetSummary 制品区汇总（资产总数 / 总占用 / 去重省下 / 被引用数）。
 	AssetSummary AssetSummary `json:"assetSummary"`
+	// Runtimes 跨节点多运行时矩阵（FR-301 加性扩展）：node_jdks(type=jdk，含引用实例)
+	// 与 node_runtimes（nodejs / python 预留）读侧拼装；不改 JDKs 等老字段。
+	Runtimes []RuntimeMatrixItem `json:"runtimes"`
+	// RuntimeSyncs 每节点上次库存同步状态（FR-301）：SyncedAt=nil 表示从未同步。
+	RuntimeSyncs []RuntimeNodeSync `json:"runtimeSyncs"`
+	// SyncedAt 整体上次同步时间 = 各节点 runtime_synced_at 的最大值（FR-301）；nil=全部未同步。
+	SyncedAt *time.Time `json:"syncedAt"`
+}
+
+// RuntimeMatrixItem 跨节点多运行时矩阵的一项（FR-301）：一个节点上的一个运行时。
+// type=jdk 行来自 node_jdks（Name=厂商，Instances 语义同 JDKMatrixItem）；
+// 其它类型来自 node_runtimes——当前无「实例↔非 JDK 运行时」的引用消费者，
+// Instances 恒空 / RefCount 恒 0（诚实留空，不臆造连接）。
+type RuntimeMatrixItem struct {
+	ID           uint             `json:"id"`
+	NodeID       uint             `json:"nodeId"`
+	NodeName     string           `json:"nodeName"`
+	NodeOnline   bool             `json:"nodeOnline"`
+	Type         string           `json:"type"`
+	Name         string           `json:"name"`
+	MajorVersion int              `json:"majorVersion"`
+	Version      string           `json:"version"`
+	Arch         string           `json:"arch"`
+	Path         string           `json:"path"`
+	Managed      bool             `json:"managed"`
+	Instances    []JDKRefInstance `json:"instances"`
+	RefCount     int              `json:"refCount"`
+}
+
+// RuntimeNodeSync 一个节点的库存同步状态（FR-301）。
+type RuntimeNodeSync struct {
+	NodeID   uint       `json:"nodeId"`
+	NodeName string     `json:"nodeName"`
+	Online   bool       `json:"online"`
+	SyncedAt *time.Time `json:"syncedAt"`
 }
 
 // JDKRefInstance 引用某 JDK 的实例（引用关系下钻 / 删除占用方提示）。
@@ -125,16 +176,139 @@ func (s *RuntimeAssetsService) Overview() (*RuntimeAssetsOverview, error) {
 	if err := s.db.Order("id desc").Find(&assets).Error; err != nil {
 		return nil, fmt.Errorf("查询资产失败: %w", err)
 	}
+	// 非 JDK 运行时（FR-301）：与 node_runtimes 的统一视图排序一致（type 升序 → major 降序）。
+	var runtimes []model.NodeRuntime
+	if err := s.db.Order("type asc, major desc, id desc").Find(&runtimes).Error; err != nil {
+		return nil, fmt.Errorf("查询运行时失败: %w", err)
+	}
 
 	matrix, jdkSummary := buildJDKMatrix(nodes, jdks, instances)
 	groups, assetSummary := groupAssetsByType(assets)
+	syncs, syncedAt := buildRuntimeSyncs(nodes)
 
 	return &RuntimeAssetsOverview{
 		JDKs:         matrix,
 		JDKSummary:   jdkSummary,
 		Assets:       groups,
 		AssetSummary: assetSummary,
+		Runtimes:     buildRuntimeMatrix(nodes, matrix, runtimes),
+		RuntimeSyncs: syncs,
+		SyncedAt:     syncedAt,
 	}, nil
+}
+
+// buildRuntimeMatrix 拼装跨节点多运行时矩阵（纯函数，FR-301）：
+// jdk 行直接由既有 JDK 矩阵映射（保留引用实例），其后追加 node_runtimes 行（引用恒空）。
+func buildRuntimeMatrix(nodes []model.Node, jdkItems []JDKMatrixItem, runtimes []model.NodeRuntime) []RuntimeMatrixItem {
+	nodeByID := make(map[uint]model.Node, len(nodes))
+	for _, n := range nodes {
+		nodeByID[n.ID] = n
+	}
+
+	items := make([]RuntimeMatrixItem, 0, len(jdkItems)+len(runtimes))
+	for _, j := range jdkItems {
+		items = append(items, RuntimeMatrixItem{
+			ID:           j.ID,
+			NodeID:       j.NodeID,
+			NodeName:     j.NodeName,
+			NodeOnline:   j.NodeOnline,
+			Type:         "jdk",
+			Name:         j.Vendor,
+			MajorVersion: j.MajorVersion,
+			Version:      j.Version,
+			Arch:         j.Arch,
+			Path:         j.Path,
+			Managed:      j.Managed,
+			Instances:    j.Instances,
+			RefCount:     j.RefCount,
+		})
+	}
+	for _, rt := range runtimes {
+		node := nodeByID[rt.NodeID]
+		items = append(items, RuntimeMatrixItem{
+			ID:           rt.ID,
+			NodeID:       rt.NodeID,
+			NodeName:     node.Name,
+			NodeOnline:   node.Status == model.NodeStatusOnline,
+			Type:         rt.Type,
+			Name:         rt.Name,
+			MajorVersion: rt.Major,
+			Version:      rt.Version,
+			Arch:         rt.Arch,
+			Path:         rt.Path,
+			Managed:      rt.Managed,
+			Instances:    []JDKRefInstance{},
+			RefCount:     0,
+		})
+	}
+	return items
+}
+
+// buildRuntimeSyncs 由节点行导出每节点同步状态与整体 syncedAt（= 各节点最大值，纯函数）。
+func buildRuntimeSyncs(nodes []model.Node) ([]RuntimeNodeSync, *time.Time) {
+	syncs := make([]RuntimeNodeSync, 0, len(nodes))
+	var latest *time.Time
+	for _, n := range nodes {
+		syncs = append(syncs, RuntimeNodeSync{
+			NodeID:   n.ID,
+			NodeName: n.Name,
+			Online:   n.Status == model.NodeStatusOnline,
+			SyncedAt: n.RuntimeSyncedAt,
+		})
+		if n.RuntimeSyncedAt != nil && (latest == nil || n.RuntimeSyncedAt.After(*latest)) {
+			latest = n.RuntimeSyncedAt
+		}
+	}
+	return syncs, latest
+}
+
+// RuntimeRefreshResult 单节点强制同步结果（FR-301）。失败时 SyncedAt 保留旧时间戳
+//（nil = 从未同步过），供前端「显旧数据 + 提示」。
+type RuntimeRefreshResult struct {
+	NodeID   uint       `json:"nodeId"`
+	NodeName string     `json:"nodeName"`
+	OK       bool       `json:"ok"`
+	Error    string     `json:"error,omitempty"`
+	SyncedAt *time.Time `json:"syncedAt"`
+}
+
+// RuntimeRefreshOutcome POST /runtime-assets/refresh 载荷（FR-301）。
+type RuntimeRefreshOutcome struct {
+	Results  []RuntimeRefreshResult `json:"results"`
+	SyncedAt *time.Time             `json:"syncedAt"`
+}
+
+// Refresh 强制全节点库存同步（FR-301 手动刷新）：逐节点 syncFromWorker，
+// 单节点失败不阻断整体（失败容忍：结果逐节点回报 ok/error，DB 旧数据保留供显示）。
+func (s *RuntimeAssetsService) Refresh() (*RuntimeRefreshOutcome, error) {
+	if s.sync == nil {
+		return nil, fmt.Errorf("运行时同步器未装配")
+	}
+	var nodes []model.Node
+	if err := s.db.Order("id asc").Find(&nodes).Error; err != nil {
+		return nil, fmt.Errorf("查询节点失败: %w", err)
+	}
+
+	out := &RuntimeRefreshOutcome{Results: make([]RuntimeRefreshResult, 0, len(nodes))}
+	for _, n := range nodes {
+		res := RuntimeRefreshResult{NodeID: n.ID, NodeName: n.Name}
+		if err := s.sync.SyncFromWorker(n.ID); err != nil {
+			res.Error = err.Error()
+			res.SyncedAt = n.RuntimeSyncedAt // 失败：保留旧时间戳，前端显旧数据
+		} else {
+			res.OK = true
+			// 成功路径 syncFromWorker 已更新 runtime_synced_at，重读取最新值。
+			var refreshed model.Node
+			if err := s.db.Select("runtime_synced_at").First(&refreshed, n.ID).Error; err == nil {
+				res.SyncedAt = refreshed.RuntimeSyncedAt
+			}
+		}
+		if res.SyncedAt != nil && (out.SyncedAt == nil || res.SyncedAt.After(*out.SyncedAt)) {
+			out.SyncedAt = res.SyncedAt
+		}
+		out.Results = append(out.Results, res)
+	}
+	return out, nil
 }
 
 // buildJDKMatrix 由节点 / JDK / 实例推导跨节点 JDK 矩阵 + 每项的引用实例清单（纯函数）。
@@ -175,10 +349,10 @@ func buildJDKMatrix(nodes []model.Node, jdks []model.NodeJDK, instances []model.
 			continue
 		}
 		refs[targetJDK] = append(refs[targetJDK], JDKRefInstance{
-			ID:     inst.ID,
-			UUID:   inst.UUID,
-			Name:   inst.Name,
-			Status: inst.Status,
+			ID:      inst.ID,
+			UUID:    inst.UUID,
+			Name:    inst.Name,
+			Status:  inst.Status,
 			Binding: binding,
 		})
 		instanceRefs++

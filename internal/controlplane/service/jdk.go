@@ -372,6 +372,12 @@ func (s *JDKService) ResolveForInstance(nodeID, jdkID uint, javaMajor int) (*mod
 	return &jdk, nil
 }
 
+// SyncFromWorker 强制从 Worker 同步该节点的 JDK 库存（FR-301 手动刷新入口）。
+// 与 List 内的隐式同步同一实现：失败由调用方容忍（DB 旧数据仍可用、前端显旧数据）。
+func (s *JDKService) SyncFromWorker(nodeID uint) error {
+	return s.syncFromWorker(nodeID)
+}
+
 func (s *JDKService) syncFromWorker(nodeID uint) error {
 	if s.pool == nil {
 		return nil
@@ -418,6 +424,11 @@ func (s *JDKService) syncFromWorker(nodeID uint) error {
 				slog.Warn("同步 JDK 失败（更新）", "error", err)
 			}
 		}
+	}
+	// 记录本节点库存同步成功时间（FR-301）：运行时资产页「上次同步」与刷新语义的锚点。
+	if err := s.db.Model(&model.Node{}).Where("id = ?", nodeID).
+		Update("runtime_synced_at", time.Now()).Error; err != nil {
+		slog.Warn("记录运行时同步时间失败", "nodeId", nodeID, "error", err)
 	}
 	return nil
 }

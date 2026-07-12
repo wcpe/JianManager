@@ -271,10 +271,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		assetHandler := NewAssetHandler(svcs.Asset)
 		assetHandler.RegisterRoutes(protected)
 
-		// 运行时与制品全局页只读聚合（FR-082）：JDK 矩阵 + 引用实例 + 制品占用/去重/冷热。
-		// 平台级共享资源，Handler 内部按平台管理员收敛。
+		// 运行时与制品全局页聚合（FR-082）：JDK 矩阵 + 引用实例 + 制品占用/去重/冷热；
+		// FR-301 另含多运行时矩阵与强制刷新（写审计）。平台级共享资源，Handler 内部按平台管理员收敛。
 		if svcs.RuntimeAssets != nil {
-			runtimeAssetsHandler := NewRuntimeAssetsHandler(svcs.RuntimeAssets)
+			runtimeAssetsHandler := NewRuntimeAssetsHandler(svcs.RuntimeAssets, svcs.Audit)
 			runtimeAssetsHandler.RegisterRoutes(protected)
 		}
 

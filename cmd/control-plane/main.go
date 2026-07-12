@@ -141,8 +141,10 @@ func main() {
 	// 制品入库下载（如服务端核心 IngestFromURL）经进程级出站代理（FR-174，见 ADR-037）。
 	// 用持有者注入，使全局代理改动运行时即时生效（FR-185，见 ADR-043）。
 	assetSvc.SetHTTPClientProvider(outboundProvider.Client)
-	// 运行时与制品全局页只读聚合（FR-082）：跨节点 JDK 矩阵 + 引用实例 + 制品占用/去重/冷热。
+	// 运行时与制品全局页聚合（FR-082）：跨节点 JDK 矩阵 + 引用实例 + 制品占用/去重/冷热。
 	runtimeAssetsSvc := service.NewRuntimeAssetsService(db)
+	// FR-301 手动刷新：强制全节点库存 syncFromWorker（失败容忍显旧数据）。
+	runtimeAssetsSvc.SetJDKSync(jdkSvc)
 	// 节点 enrollment token（一键安装 / 傻瓜部署，FR-080，见 ADR-020）：
 	// 一次性、限时的新节点准入凭据，落库只存哈希、明文签发时一次性返回。
 	enrollTokenSvc := service.NewEnrollTokenService(db)

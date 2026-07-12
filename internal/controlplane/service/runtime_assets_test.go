@@ -14,10 +14,11 @@ func newRuntimeAssetsTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NodeJDK{}, &model.Instance{}, &model.Asset{}))
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NodeJDK{}, &model.NodeRuntime{}, &model.Instance{}, &model.Asset{}))
 	// 每个用例独立清表（cache=shared 共享同库）。
 	require.NoError(t, db.Exec("DELETE FROM nodes").Error)
 	require.NoError(t, db.Exec("DELETE FROM node_jdks").Error)
+	require.NoError(t, db.Exec("DELETE FROM node_runtimes").Error)
 	require.NoError(t, db.Exec("DELETE FROM instances").Error)
 	require.NoError(t, db.Exec("DELETE FROM assets").Error)
 	return db

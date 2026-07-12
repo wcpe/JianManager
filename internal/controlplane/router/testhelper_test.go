@@ -83,6 +83,10 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	backupStorageSvc := service.NewBackupStorageService(db, pool)
 	backupStorageSvc.SetDataRoot(root)
 	botSvc := service.NewBotService(db, pool)
+	// 运行时资产聚合 + 强制刷新（FR-301）：注入 JDK 同步器，令 refresh 端点可测
+	//（配合 SetWorkerClientForTest 注入 fake Worker）。
+	runtimeAssetsSvc := service.NewRuntimeAssetsService(db)
+	runtimeAssetsSvc.SetJDKSync(service.NewJDKService(db, pool))
 	svcs := &Services{
 		Auth:             service.NewAuthService(db, jwtCfg),
 		User:             service.NewUserService(db),
@@ -112,7 +116,7 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 		Business:         service.NewBusinessService(db, pool),
 		BusinessEvent:    service.NewBusinessEventService(db),
 		Asset:            assetSvc,
-		RuntimeAssets:    service.NewRuntimeAssetsService(db),
+		RuntimeAssets:    runtimeAssetsSvc,
 		Storage:          service.NewStorageService(db, root),
 		Log:              service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),
 		Metric:           service.NewMetricService(db),
