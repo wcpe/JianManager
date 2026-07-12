@@ -20,7 +20,11 @@ type ScrollHandler = (line: number) => void
 type KeyHandler = (event: KeyboardEvent) => boolean
 
 class MockBufferLine {
-  constructor(private readonly text: string) {}
+  private readonly text: string
+
+  constructor(text: string) {
+    this.text = text
+  }
 
   translateToString() {
     return this.text
@@ -172,8 +176,10 @@ export class MockWebSocket {
   onmessage: ((event: MessageEvent) => void) | null = null
   onclose: ((event: CloseEvent) => void) | null = null
   onerror: ((event: Event) => void) | null = null
+  readonly url: string
 
-  constructor(readonly url: string) {
+  constructor(url: string) {
+    this.url = url
     wsSockets.push(this)
     window.setTimeout(() => {
       if (this.readyState !== MockWebSocket.CONNECTING) return
