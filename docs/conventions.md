@@ -96,3 +96,13 @@ docs: 更新 API.md 新增 bot 接口定义
 - `feat/xxx` — 功能分支
 - `fix/xxx` — 修复分支
 - `hotfix/xxx` — 紧急修复分支
+
+### 版本号
+
+单一真值来源为 `internal/version/version.go` 的 `var Version`，命名遵循 `.claude/rules/versioning.md`（ADR-065）：
+
+- **正式发布版** 裸 `X.Y.Z`：仅出现在打了 tag `vX.Y.Z` 的那个提交上。
+- **开发版** `X.Y.Z-dev`：两个 tag 之间的所有开发态（`dev` 分支常态），`X.Y.Z` 为按 SemVer（feat→MINOR / fix→PATCH / 破坏性→MAJOR）推断的**下一个目标版本**；`-dev` 为 SemVer 预发布标识，满足 `上个正式版 < X.Y.Z-dev < X.Y.Z`。
+- **候选版**（可选）`X.Y.Z-rc.N`：冻结候选时短暂使用。
+
+发版由 `sdd-release-version` 去 `-dev` → 打 tag `vX.Y.Z` → 立即 bump 到下一个 `-dev`。构建期版本经 `-ldflags` 注入（ADR-036），产物命名 `<component>-<os>-<arch>[.exe]` 不含版本号。禁止 `version.go` 停留在已发布的裸版本号造成漂移。
