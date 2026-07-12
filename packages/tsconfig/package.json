@@ -1,0 +1,11 @@
+{
+  "name": "@jianmanager/tsconfig",
+  "private": true,
+  "version": "0.0.0",
+  "description": "共享 TypeScript 配置预设（FR-283，见 ADR-064）：base / react-app / node 三层",
+  "files": [
+    "base.json",
+    "react-app.json",
+    "node.json"
+  ]
+}

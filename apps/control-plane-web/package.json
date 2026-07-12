@@ -49,6 +49,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@jianmanager/eslint-config": "workspace:*",
+    "@jianmanager/tsconfig": "workspace:*",
     "@playwright/test": "^1.61.1",
     "@tailwindcss/vite": "^4.3.1",
     "@testing-library/jest-dom": "^6.9.1",
