@@ -26,7 +26,7 @@ func NewRuntimeLibraryHandler(svc *service.RuntimeLibraryService, audit *service
 }
 
 // writeRuntimeLibErr 把服务错误映射为 HTTP：节点不存在/记录不存在→404、节点离线→503、
-// 未知类型/重复登记→422、JDK 占用→409、其它→502。
+// 未知类型/重复登记/未知 arch→422、JDK 占用→409、其它→502。
 func (h *RuntimeLibraryHandler) writeRuntimeLibErr(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrNodeNotFound):
@@ -35,7 +35,9 @@ func (h *RuntimeLibraryHandler) writeRuntimeLibErr(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "运行时不存在"})
 	case errors.Is(err, service.ErrNodeOffline):
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "NODE_OFFLINE", "message": "节点未连接"})
-	case errors.Is(err, service.ErrInvalidRuntimeType), errors.Is(err, service.ErrRuntimeDuplicated):
+	case errors.Is(err, service.ErrInvalidRuntimeType), errors.Is(err, service.ErrRuntimeDuplicated),
+		errors.Is(err, service.ErrInvalidRuntimeArch):
+		// 未知 arch 明确 422 拒绝（FR-299，齐平 FR-289），不直透下载源产出误导性 404。
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 	default:
 		c.JSON(http.StatusBadGateway, gin.H{"error": "WORKER_ERROR", "message": err.Error()})
@@ -126,8 +128,41 @@ func (h *RuntimeLibraryHandler) Register(c *gin.Context) {
 	c.JSON(http.StatusCreated, view)
 }
 
+// Install POST /nodes/:id/runtimes/install — 异步一键安装运行时（FR-299，首批 nodejs）：
+// 建任务、令 Worker 启动即返回，立即回 202 + {taskId}（任务中心 kind=runtime_install）。
+// 终态落 node_runtimes（managed=true）；进度/完成经任务中心与站内信查看。
+func (h *RuntimeLibraryHandler) Install(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	nodeID, err := parseUintParam(c, "id")
+	if err != nil {
+		return
+	}
+	var req service.InstallRuntimeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+	access := getAccess(c)
+	var createdBy uint
+	if access != nil {
+		createdBy = access.UserID
+	}
+	task, err := h.svc.InstallAsync(nodeID, req, createdBy)
+	if err != nil {
+		h.writeRuntimeLibErr(c, err)
+		return
+	}
+	h.recordAudit(c, "node.runtime.install", c.Param("id"), map[string]any{
+		"nodeId": nodeID, "type": req.Type, "major": req.Major, "arch": req.Arch, "taskId": task.TaskID,
+	})
+	c.JSON(http.StatusAccepted, gin.H{"taskId": task.TaskID, "task": task})
+}
+
 // Delete DELETE /nodes/:id/runtimes/:rid?type= — 删除（type=jdk 走现链路含占用守卫与
-// 托管连文件语义；其它类型只删记录）。type 必带以定位承载表。
+// 托管连文件语义；其它类型托管的经 Worker 删托管目录、外部登记只删记录，FR-299）。
+// type 必带以定位承载表。
 func (h *RuntimeLibraryHandler) Delete(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -166,5 +201,6 @@ func (h *RuntimeLibraryHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rt.GET("", h.List)
 	rt.POST("", h.Register)
 	rt.POST("/scan", h.Scan)
+	rt.POST("/install", h.Install)
 	rt.DELETE("/:rid", h.Delete)
 }

@@ -26,6 +26,9 @@ const (
 	SettingKeyJDKMirrorTemurin  = "jdk.mirror.temurin"
 	SettingKeyJDKMirrorCorretto = "jdk.mirror.corretto"
 	SettingKeyJDKMirrorZulu     = "jdk.mirror.zulu"
+	// SettingKeyRuntimeMirrorNodeJS Node.js dist 下载镜像源基址（FR-299，语义同 jdk.mirror.*）。
+	// 安装 Node.js 时 CP 取生效值经 InstallRuntimeRequest.mirror_base 下发 Worker。
+	SettingKeyRuntimeMirrorNodeJS = "runtime.mirror.nodejs"
 	// SettingKeyGracefulStopTimeout 优雅停止超时（Go duration 文本）。
 	// 启动实例时 CP 取生效值经 CreateInstanceRequest 下发 Worker→wrapper，对其后新启动的实例生效（FR-063）。
 	SettingKeyGracefulStopTimeout = "graceful_stop.timeout"
@@ -164,6 +167,8 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		s.editableItem(SettingKeyJDKMirrorTemurin, s.defaultValue(SettingKeyJDKMirrorTemurin), overrides, false),
 		s.editableItem(SettingKeyJDKMirrorCorretto, s.defaultValue(SettingKeyJDKMirrorCorretto), overrides, false),
 		s.editableItem(SettingKeyJDKMirrorZulu, s.defaultValue(SettingKeyJDKMirrorZulu), overrides, false),
+		// Node.js dist 镜像源（FR-299）：随安装下发 Worker（同 jdk.mirror.*，非 CP 内即时生效）。
+		s.editableItem(SettingKeyRuntimeMirrorNodeJS, s.defaultValue(SettingKeyRuntimeMirrorNodeJS), overrides, false),
 		s.editableItem(SettingKeyGracefulStopTimeout, s.defaultValue(SettingKeyGracefulStopTimeout), overrides, false),
 		s.editableItem(SettingKeyBackupRetentionDays, s.defaultValue(SettingKeyBackupRetentionDays), overrides, false),
 		// 出站代理（network 类，FR-185/ADR-043）：保存即在 CP 内重建出站持有者（即时生效）。
@@ -292,6 +297,8 @@ func (s *SettingsService) defaultValue(key string) string {
 		return "https://corretto.aws"
 	case SettingKeyJDKMirrorZulu:
 		return "https://api.azul.com"
+	case SettingKeyRuntimeMirrorNodeJS:
+		return "https://nodejs.org/dist"
 	case SettingKeyGracefulStopTimeout:
 		return "30s"
 	case SettingKeyBackupRetentionDays:
@@ -360,6 +367,7 @@ func isWritableSettingKey(key string) bool {
 	switch key {
 	case SettingKeyLogLevel, SettingKeyDebugMode,
 		SettingKeyJDKMirrorTemurin, SettingKeyJDKMirrorCorretto, SettingKeyJDKMirrorZulu,
+		SettingKeyRuntimeMirrorNodeJS,
 		SettingKeyGracefulStopTimeout, SettingKeyBackupRetentionDays,
 		SettingKeyProxyURL, SettingKeyProxyNoProxy:
 		return true
@@ -388,7 +396,8 @@ func validateSettingValue(key, val string) error {
 		if err != nil || n < 0 {
 			return fmt.Errorf("%w: 备份保留天数须为非负整数", ErrSettingValueInvalid)
 		}
-	case SettingKeyJDKMirrorTemurin, SettingKeyJDKMirrorCorretto, SettingKeyJDKMirrorZulu:
+	case SettingKeyJDKMirrorTemurin, SettingKeyJDKMirrorCorretto, SettingKeyJDKMirrorZulu,
+		SettingKeyRuntimeMirrorNodeJS:
 		if val == "" {
 			return fmt.Errorf("%w: 镜像源不能为空", ErrSettingValueInvalid)
 		}

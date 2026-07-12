@@ -288,6 +288,16 @@ func (s *TaskService) finalizeTerminal(t *model.Task) {
 			s.notify(t.CreatedBy, model.NotificationLevelError,
 				"JDK 安装失败", failBody(t), t.TaskID)
 		}
+	case model.TaskKindRuntimeInstall:
+		// 运行时安装（FR-299，首批 Node.js）：成功落 node_runtimes（managed=true）+ 发信。
+		if t.State == model.TaskStateSucceeded {
+			s.persistRuntimeFromTask(t)
+			s.notify(t.CreatedBy, model.NotificationLevelSuccess,
+				"运行时安装完成", successRuntimeBody(t), t.TaskID)
+		} else {
+			s.notify(t.CreatedBy, model.NotificationLevelError,
+				"运行时安装失败", failBody(t), t.TaskID)
+		}
 	default:
 		// 其它任务类型：仅按成功/失败发通用站内信。
 		if t.State == model.TaskStateSucceeded {
@@ -330,6 +340,41 @@ func (s *TaskService) persistJDKFromTask(t *model.Task) {
 	}
 	if err := s.db.Create(jdk).Error; err != nil {
 		slog.Warn("任务完成落 JDK 记录失败", "taskId", t.TaskID, "error", err)
+	}
+}
+
+// persistRuntimeFromTask 解析 runtime_install 任务的 result 落一条 model.NodeRuntime
+//（managed=true，FR-299）。同 (node,type,path) 已存在则跳过（幂等双保险，同 persistJDKFromTask）。
+func (s *TaskService) persistRuntimeFromTask(t *model.Task) {
+	var r struct {
+		Type    string `json:"type"`
+		Name    string `json:"name"`
+		Version string `json:"version"`
+		Major   int    `json:"major"`
+		Arch    string `json:"arch"`
+		Path    string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(t.Result), &r); err != nil || r.Path == "" || r.Type == "" {
+		slog.Warn("解析运行时安装结果失败", "taskId", t.TaskID, "error", err)
+		return
+	}
+	var n int64
+	s.db.Model(&model.NodeRuntime{}).Where("node_id = ? AND type = ? AND path = ?", t.NodeID, r.Type, r.Path).Count(&n)
+	if n > 0 {
+		return
+	}
+	rt := &model.NodeRuntime{
+		NodeID:  t.NodeID,
+		Type:    r.Type,
+		Name:    r.Name,
+		Version: r.Version,
+		Major:   r.Major,
+		Arch:    r.Arch,
+		Path:    r.Path,
+		Managed: true,
+	}
+	if err := s.db.Create(rt).Error; err != nil {
+		slog.Warn("任务完成落运行时记录失败", "taskId", t.TaskID, "error", err)
 	}
 }
 
@@ -399,6 +444,18 @@ func successJDKBody(t *model.Task) string {
 	}
 	if json.Unmarshal([]byte(t.Result), &r) == nil && r.Version != "" {
 		return fmt.Sprintf("%s %s 已安装到 %s", r.Vendor, r.Version, r.Path)
+	}
+	return t.Title + " 已完成"
+}
+
+func successRuntimeBody(t *model.Task) string {
+	var r struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+		Path    string `json:"path"`
+	}
+	if json.Unmarshal([]byte(t.Result), &r) == nil && r.Version != "" {
+		return fmt.Sprintf("%s %s 已安装到 %s", r.Name, r.Version, r.Path)
 	}
 	return t.Title + " 已完成"
 }

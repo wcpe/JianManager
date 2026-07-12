@@ -321,6 +321,8 @@ func main() {
 	taskSvc := service.NewTaskService(db)
 	taskSvc.SetNotificationService(notificationSvc)
 	jdkSvc.SetTaskService(taskSvc)
+	// 运行时库安装异步化（FR-299）：Node.js 安装复用 jdk_install 的任务模式（kind=runtime_install）。
+	runtimeLibrarySvc.SetTaskService(taskSvc)
 
 	// 统一通知中心（FR-216，见 ADR-048）：只读聚合站内信（定向消息）+ 告警事件（系统警报）
 	// 为一条通知流，页眉单铃铛 + 通知中心页消费。不新建表，标记已读下推到各源既有服务。
@@ -333,6 +335,8 @@ func main() {
 	//   JDK 安装读 jdk.mirror.<vendor>；实例启动读 graceful_stop.timeout 随启动下发；
 	//   备份裁剪读 backup.retention_days 定期回收旧备份。
 	jdkSvc.SetSettingsReader(settingsSvc)
+	// Node.js 安装读 runtime.mirror.nodejs 随安装下发（FR-299）。
+	runtimeLibrarySvc.SetSettingsReader(settingsSvc)
 	instanceSvc.SetSettingsReader(settingsSvc)
 	backupSvc.SetSettingsReader(settingsSvc)
 	backupSvc.Start()
