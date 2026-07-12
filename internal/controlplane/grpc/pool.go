@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/wcpe/JianManager/internal/platform/grpcmsg"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
@@ -53,6 +54,9 @@ func (p *ClientPool) Connect(nodeUUID, addr string) error {
 
 	conn, err := grpc.NewClient(addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		// 两方向显式 64MiB（FR-305）：接收默认仅 4MiB（大响应暗礁）、发送默认无界，
+		// 与 Worker 服务端/隧道守卫同源同值（grpcmsg.MaxMessageBytes）。
+		grpc.WithDefaultCallOptions(grpcmsg.CallOptions()...),
 	)
 	if err != nil {
 		return fmt.Errorf("连接 Worker Node %s 失败: %w", addr, err)
