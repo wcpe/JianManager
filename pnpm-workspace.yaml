@@ -1,0 +1,7 @@
+# JS 工作区（FR-283，见 ADR-064）：apps/* 可运行外壳 + packages/* 第一方 JS 库。
+# pnpm 只认带 package.json 的目录，Go 外壳（apps/control-plane 等）自动被忽略。
+# bot-worker 显式排除（FR-286 移入 apps/ 后仍 npm 自管：生产随 Worker 部署自带 node_modules）。
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "!apps/bot-worker"
