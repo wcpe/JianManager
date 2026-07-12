@@ -873,8 +873,12 @@
 - **请求**: `{ "path": "string", "content": "string" }`
 
 ### POST /api/v1/instances/:id/files/upload
-- **描述**: 文件上传（multipart）
-- **关联 FR**: FR-008
+- **描述**: 文件流式上传（multipart）。CP 流式读 multipart 并经 Worker `UploadFile` client-stream 分块转发（任意大小、双侧内存 O(chunk)、无固定短超时）；Worker 落临时文件收完原子改名，中途失败不留半截目标文件。老 Worker（无 `UploadFile`）自动回退 `WriteFile` unary（≤64MB），超限明确报错引导升级节点
+- **关联 FR**: FR-008 / FR-304
+- **权限**: `instance.file`（可管理实例）
+- **Query**: `?path=plugins/a.jar`（目标路径**首选经 query 传递**；兼容先于 `file` 部分的 multipart `path` 字段——CP 流式顺序读，读到 `file` 时必须已知目标路径）
+- **请求体**: multipart，`file` 部分为文件内容
+- **错误**: `400 INVALID_REQUEST`（缺 path / 缺文件 / 非法 multipart）；`404 NOT_FOUND`（实例不存在/无权限）；`422 BUSINESS_ERROR`（节点离线/路径非法/老 Worker 超 64MB/完整性校验不符）
 
 ### GET /api/v1/instances/:id/files/download
 - **描述**: 单文件流式下载。经 Worker `DownloadFile` 服务端流原样分块返回（不打包、任意大小不截断），CP 逐帧转写响应体并 `Flush`；响应携带 `Content-Length`（源文件总大小），流中途失败即字节数不符，客户端按下载失败处理，不会拿到「看似成功」的半截文件
