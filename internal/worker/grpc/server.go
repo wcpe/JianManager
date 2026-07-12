@@ -20,6 +20,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/jdk"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/process"
+	wruntime "github.com/wcpe/JianManager/internal/worker/runtime"
 	"github.com/wcpe/JianManager/internal/worker/runtimescan"
 	"github.com/wcpe/JianManager/internal/worker/search"
 	"github.com/wcpe/JianManager/internal/worker/taskreg"
@@ -113,6 +114,9 @@ type Server struct {
 	// runtimeScanner 运行时扫描器（FR-298 节点运行时库）：ScanRuntimes 按常见安装路径
 	// 发现 jdk/nodejs 候选。为 nil 表示未启用（返回空候选）。由 SetRuntimeScanner 注入。
 	runtimeScanner *runtimescan.Scanner
+	// runtimeMgr 非 JDK 运行时安装管理器（FR-299，首批 Node.js）：InstallRuntime/RemoveRuntime
+	// 经此下载安装/托管删除。为 nil 表示未启用（RPC 返回明确错误）。由 SetRuntimeManager 注入。
+	runtimeMgr *wruntime.Manager
 	// importJDKProbe 导入探测（FR-302）中「某目录是否为 JDK」的探测钩子，仅测试注入替身：
 	// 真探测（jdk.detectAt 语义）要跑 bin/java，伪目录布局单测不可得。为 nil 时走 jdkMgr.Probe。
 	importJDKProbe func(dir string) (*workerpb.ImportJdkCandidate, bool)

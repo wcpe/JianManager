@@ -29,6 +29,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/internal/worker/register"
+	wruntime "github.com/wcpe/JianManager/internal/worker/runtime"
 	"github.com/wcpe/JianManager/internal/worker/runtimescan"
 	"github.com/wcpe/JianManager/internal/worker/setup"
 	"github.com/wcpe/JianManager/internal/worker/tunnel"
@@ -272,12 +273,18 @@ func runWorker() {
 	// Worker 升级二进制下载与服务端 jar 下载经进程级出站持有者（FR-174/FR-185）：
 	// CP 下发代理改动运行时即时生效。
 	workerServer.SetHTTPClientProvider(outboundProvider.Client)
+	// 非 JDK 运行时安装管理器（FR-299，首批 Node.js）：托管根 <dataRoot>/opt/runtimes，
+	// 下载经进程级出站持有者（代理改动运行时即时生效，同 JDK）。
+	runtimeMgr := wruntime.NewManager(root.RuntimesDir())
+	runtimeMgr.SetHTTPClientProvider(outboundProvider.Client)
+	workerServer.SetRuntimeManager(runtimeMgr)
 	// 运行时扫描器（FR-298 节点运行时库）：ScanRuntimes 按常见安装路径发现 jdk/nodejs 候选；
-	// JDK 托管根作托管根传入，其下候选标 already_registered。
+	// JDK 托管根与运行时托管根传入，其下候选标 already_registered。
 	var runtimeManagedRoots []string
 	if jdkMgr != nil {
 		runtimeManagedRoots = append(runtimeManagedRoots, jdkMgr.RootDir())
 	}
+	runtimeManagedRoots = append(runtimeManagedRoots, runtimeMgr.RootDir())
 	workerServer.SetRuntimeScanner(runtimescan.New(runtimeManagedRoots))
 	// 全文搜索追加忽略规则（worker.yml search.ignore，叠加内置默认集，FR-074）。
 	workerServer.SetSearchIgnore(cfg.Search.Ignore)

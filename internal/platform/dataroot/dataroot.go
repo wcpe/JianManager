@@ -33,6 +33,7 @@ var layoutDirs = []string{
 	"bin",
 	"etc",
 	filepath.Join("opt", "jdks"),
+	filepath.Join("opt", "runtimes"),
 	filepath.Join("var", "servers"),
 	filepath.Join("var", "log"),
 	filepath.Join("var", "artifacts"),
@@ -87,6 +88,10 @@ func (r *Root) Base() string { return r.base }
 
 // JDKsDir 返回托管 JDK 根目录 <root>/opt/jdks。
 func (r *Root) JDKsDir() string { return filepath.Join(r.base, "opt", "jdks") }
+
+// RuntimesDir 返回托管非 JDK 运行时根目录 <root>/opt/runtimes（首批 Node.js，FR-299）。
+// 与 opt/jdks 平级：JDK 沿用既有目录不迁移，其它运行时按 <type>-<major> 子目录托管。
+func (r *Root) RuntimesDir() string { return filepath.Join(r.base, "opt", "runtimes") }
 
 // ServersDir 返回服务器工作目录根 <root>/var/servers。
 func (r *Root) ServersDir() string { return filepath.Join(r.base, "var", "servers") }
