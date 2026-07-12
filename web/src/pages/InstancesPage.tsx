@@ -628,7 +628,9 @@ export default function InstancesPage() {
     <div data-page="instances" className="jm-page-stack space-y-4">
       <div className="jm-page-header">
         <h1 className="jm-page-title">{t('instances.title')}</h1>
-        <div className="flex gap-2">
+        {/* flex-wrap：四个入口按钮在移动端（390px）超行宽须换行——修 v0.15.0 验收 e2e
+            抓出的移动端横向溢出 120px（FR-302 加第 4 按钮后顶爆无 wrap 的一行）。 */}
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setShowProvision(true)}>
             <Zap className="size-4" /> {t('provision.entry')}
           </Button>
