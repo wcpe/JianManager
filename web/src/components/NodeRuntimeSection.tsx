@@ -82,7 +82,10 @@ export default function NodeRuntimeSection({ nodeId, active = true }: NodeRuntim
     )
   }
 
-  const rows = runtimes ?? []
+  // 列表只承载非 JDK 类型（v0.15.0 验收 e2e 抓出的双列重复修复）：JDK 已由上方 JDK 面板
+  // 富列表（FR-195 行卡片/筛选/复制/删除守卫）唯一呈现，此处再列 type=jdk 即整页重复；
+  // 统一视图保留在 API 层（GET /nodes/:id/runtimes 仍含 jdk），扫描/登记链路不变。
+  const rows = (runtimes ?? []).filter((rt) => rt.type !== 'jdk')
   const selectedCount = useMemo(() => Object.values(checked).filter(Boolean).length, [checked])
 
   // 打开模态即扫描（重扫也走这里）：候选与勾选态清零重建。

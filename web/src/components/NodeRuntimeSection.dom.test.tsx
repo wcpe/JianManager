@@ -18,16 +18,16 @@ beforeEach(() => {
 })
 
 describe('NodeRuntimeSection（FR-298 节点运行时库）', () => {
-  it('统一列表展示 JDK（类型徽章），扫描发现后勾选候选入库', async () => {
+  it('列表只承载非 JDK 类型（JDK 由上方面板唯一呈现），扫描发现后勾选候选入库', async () => {
     const user = userEvent.setup()
     renderWithProviders(<NodeRuntimeSection nodeId={1} active />)
 
-    // 统一视图：node-jdks 种子（2 条 temurin）以 type=jdk 呈现，带 JDK 类型徽章。
-    expect((await screen.findAllByText('temurin')).length).toBeGreaterThanOrEqual(2)
-    expect(screen.getAllByText('JDK').length).toBeGreaterThanOrEqual(2)
-    expect(screen.getByText('/opt/jdks/temurin-21')).toBeInTheDocument()
+    // 分区列表不再重复列 type=jdk（v0.15.0 验收 e2e 抓出的整页双列重复修复）：
+    // node-jdks 种子（2 条 temurin）由上方 JDK 面板富列表唯一呈现，此处不出现。
+    await screen.findByRole('button', { name: /扫描发现/ })
+    expect(screen.queryByText('/opt/jdks/temurin-21')).not.toBeInTheDocument()
 
-    // 扫描发现：开模态列候选。
+    // 扫描发现：开模态列候选（jdk 候选仍参与扫描/登记链路，只是不进本分区列表）。
     await user.click(screen.getByRole('button', { name: /扫描发现/ }))
     expect(await screen.findByText('扫描发现运行时')).toBeInTheDocument()
 
