@@ -104,6 +104,13 @@ service WorkerService {
   rpc GetPMConfig(GetPMConfigRequest) returns (GetPMConfigResponse);
   // SetPMConfig 设置 PM 偏好（pnpm/yarn 经 corepack enable 激活）并写托管 .npmrc（FR-306）。
   rpc SetPMConfig(SetPMConfigRequest) returns (SetPMConfigResponse);
+  // ListGlobalPackages 列出托管全局目录下已装包（FR-307；含 outdated 可更新标记，best-effort）。
+  rpc ListGlobalPackages(ListGlobalPackagesRequest) returns (ListGlobalPackagesResponse);
+  // InstallGlobalPackage 安装/升级全局包（FR-307；task_id 必填走任务中心异步，版本空=latest，
+  // 升级=对已装包再装 @latest）。
+  rpc InstallGlobalPackage(InstallGlobalPackageRequest) returns (InstallGlobalPackageResponse);
+  // RemoveGlobalPackage 卸载全局包（FR-307，同步）。
+  rpc RemoveGlobalPackage(RemoveGlobalPackageRequest) returns (RemoveGlobalPackageResponse);
   // DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
   rpc DownloadCore(DownloadCoreRequest) returns (DownloadCoreResponse);
   // InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
@@ -1076,6 +1083,47 @@ message SetPMConfigResponse {
   bool success = 1;
   string error = 2;
   string pm_version = 3; // 激活后的 PM 版本
+}
+
+// 全局包可视化管理（FR-307）：托管全局目录 <数据根>/opt/runtimes/global，
+// PM 操作统一带托管 .npmrc（NPM_CONFIG_USERCONFIG）与托管 Node PATH。
+message GlobalPackage {
+  string name = 1;
+  string version = 2;
+  string latest = 3; // outdated 探测到的最新版（空=已最新/探测失败）
+}
+
+message ListGlobalPackagesRequest {
+  string pm = 1; // npm|pnpm（yarn 全局不支持，回明确错误）
+}
+
+message ListGlobalPackagesResponse {
+  bool success = 1;
+  string error = 2;
+  repeated GlobalPackage packages = 3;
+}
+
+message InstallGlobalPackageRequest {
+  string pm = 1;
+  string name = 2;    // 包名（含 @scope/ 前缀合法）
+  string version = 3; // 空=latest
+  string task_id = 4; // 必填：任务中心异步（进度/日志经心跳上报）
+}
+
+message InstallGlobalPackageResponse {
+  bool success = 1; // 任务已受理
+  string error = 2;
+  string task_id = 3;
+}
+
+message RemoveGlobalPackageRequest {
+  string pm = 1;
+  string name = 2;
+}
+
+message RemoveGlobalPackageResponse {
+  bool success = 1;
+  string error = 2;
 }
 
 message DeployServerProbeRequest {

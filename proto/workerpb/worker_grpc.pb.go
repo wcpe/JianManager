@@ -60,6 +60,9 @@ const (
 	WorkerService_RemoveRuntime_FullMethodName        = "/worker.WorkerService/RemoveRuntime"
 	WorkerService_GetPMConfig_FullMethodName          = "/worker.WorkerService/GetPMConfig"
 	WorkerService_SetPMConfig_FullMethodName          = "/worker.WorkerService/SetPMConfig"
+	WorkerService_ListGlobalPackages_FullMethodName   = "/worker.WorkerService/ListGlobalPackages"
+	WorkerService_InstallGlobalPackage_FullMethodName = "/worker.WorkerService/InstallGlobalPackage"
+	WorkerService_RemoveGlobalPackage_FullMethodName  = "/worker.WorkerService/RemoveGlobalPackage"
 	WorkerService_DownloadCore_FullMethodName         = "/worker.WorkerService/DownloadCore"
 	WorkerService_InstallForgeServer_FullMethodName   = "/worker.WorkerService/InstallForgeServer"
 	WorkerService_ListArtifactCache_FullMethodName    = "/worker.WorkerService/ListArtifactCache"
@@ -195,6 +198,13 @@ type WorkerServiceClient interface {
 	GetPMConfig(ctx context.Context, in *GetPMConfigRequest, opts ...grpc.CallOption) (*GetPMConfigResponse, error)
 	// SetPMConfig 设置 PM 偏好（pnpm/yarn 经 corepack enable 激活）并写托管 .npmrc（FR-306）。
 	SetPMConfig(ctx context.Context, in *SetPMConfigRequest, opts ...grpc.CallOption) (*SetPMConfigResponse, error)
+	// ListGlobalPackages 列出托管全局目录下已装包（FR-307；含 outdated 可更新标记，best-effort）。
+	ListGlobalPackages(ctx context.Context, in *ListGlobalPackagesRequest, opts ...grpc.CallOption) (*ListGlobalPackagesResponse, error)
+	// InstallGlobalPackage 安装/升级全局包（FR-307；task_id 必填走任务中心异步，版本空=latest，
+	// 升级=对已装包再装 @latest）。
+	InstallGlobalPackage(ctx context.Context, in *InstallGlobalPackageRequest, opts ...grpc.CallOption) (*InstallGlobalPackageResponse, error)
+	// RemoveGlobalPackage 卸载全局包（FR-307，同步）。
+	RemoveGlobalPackage(ctx context.Context, in *RemoveGlobalPackageRequest, opts ...grpc.CallOption) (*RemoveGlobalPackageResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
 	DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error)
 	// InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
@@ -725,6 +735,36 @@ func (c *workerServiceClient) SetPMConfig(ctx context.Context, in *SetPMConfigRe
 	return out, nil
 }
 
+func (c *workerServiceClient) ListGlobalPackages(ctx context.Context, in *ListGlobalPackagesRequest, opts ...grpc.CallOption) (*ListGlobalPackagesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListGlobalPackagesResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ListGlobalPackages_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) InstallGlobalPackage(ctx context.Context, in *InstallGlobalPackageRequest, opts ...grpc.CallOption) (*InstallGlobalPackageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InstallGlobalPackageResponse)
+	err := c.cc.Invoke(ctx, WorkerService_InstallGlobalPackage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) RemoveGlobalPackage(ctx context.Context, in *RemoveGlobalPackageRequest, opts ...grpc.CallOption) (*RemoveGlobalPackageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RemoveGlobalPackageResponse)
+	err := c.cc.Invoke(ctx, WorkerService_RemoveGlobalPackage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DownloadCoreResponse)
@@ -1167,6 +1207,13 @@ type WorkerServiceServer interface {
 	GetPMConfig(context.Context, *GetPMConfigRequest) (*GetPMConfigResponse, error)
 	// SetPMConfig 设置 PM 偏好（pnpm/yarn 经 corepack enable 激活）并写托管 .npmrc（FR-306）。
 	SetPMConfig(context.Context, *SetPMConfigRequest) (*SetPMConfigResponse, error)
+	// ListGlobalPackages 列出托管全局目录下已装包（FR-307；含 outdated 可更新标记，best-effort）。
+	ListGlobalPackages(context.Context, *ListGlobalPackagesRequest) (*ListGlobalPackagesResponse, error)
+	// InstallGlobalPackage 安装/升级全局包（FR-307；task_id 必填走任务中心异步，版本空=latest，
+	// 升级=对已装包再装 @latest）。
+	InstallGlobalPackage(context.Context, *InstallGlobalPackageRequest) (*InstallGlobalPackageResponse, error)
+	// RemoveGlobalPackage 卸载全局包（FR-307，同步）。
+	RemoveGlobalPackage(context.Context, *RemoveGlobalPackageRequest) (*RemoveGlobalPackageResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
 	DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error)
 	// InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
@@ -1376,6 +1423,15 @@ func (UnimplementedWorkerServiceServer) GetPMConfig(context.Context, *GetPMConfi
 }
 func (UnimplementedWorkerServiceServer) SetPMConfig(context.Context, *SetPMConfigRequest) (*SetPMConfigResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetPMConfig not implemented")
+}
+func (UnimplementedWorkerServiceServer) ListGlobalPackages(context.Context, *ListGlobalPackagesRequest) (*ListGlobalPackagesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListGlobalPackages not implemented")
+}
+func (UnimplementedWorkerServiceServer) InstallGlobalPackage(context.Context, *InstallGlobalPackageRequest) (*InstallGlobalPackageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InstallGlobalPackage not implemented")
+}
+func (UnimplementedWorkerServiceServer) RemoveGlobalPackage(context.Context, *RemoveGlobalPackageRequest) (*RemoveGlobalPackageResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveGlobalPackage not implemented")
 }
 func (UnimplementedWorkerServiceServer) DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DownloadCore not implemented")
@@ -2189,6 +2245,60 @@ func _WorkerService_SetPMConfig_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_ListGlobalPackages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListGlobalPackagesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ListGlobalPackages(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ListGlobalPackages_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ListGlobalPackages(ctx, req.(*ListGlobalPackagesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_InstallGlobalPackage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InstallGlobalPackageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).InstallGlobalPackage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_InstallGlobalPackage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).InstallGlobalPackage(ctx, req.(*InstallGlobalPackageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_RemoveGlobalPackage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveGlobalPackageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).RemoveGlobalPackage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_RemoveGlobalPackage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).RemoveGlobalPackage(ctx, req.(*RemoveGlobalPackageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_DownloadCore_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DownloadCoreRequest)
 	if err := dec(in); err != nil {
@@ -2890,6 +3000,18 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetPMConfig",
 			Handler:    _WorkerService_SetPMConfig_Handler,
+		},
+		{
+			MethodName: "ListGlobalPackages",
+			Handler:    _WorkerService_ListGlobalPackages_Handler,
+		},
+		{
+			MethodName: "InstallGlobalPackage",
+			Handler:    _WorkerService_InstallGlobalPackage_Handler,
+		},
+		{
+			MethodName: "RemoveGlobalPackage",
+			Handler:    _WorkerService_RemoveGlobalPackage_Handler,
 		},
 		{
 			MethodName: "DownloadCore",
