@@ -30,7 +30,10 @@ export default function NodePMConfigSection({ nodeId, active = true }: NodePMCon
   if (data && data !== syncedData) {
     setSyncedData(data)
     setPm(data.pm)
-    setRegs(data.registries.length > 0 ? data.registries : [{ url: '', scope: '' }])
+    // registries 判空守卫：空配置节点后端可回 null（Go nil 切片序列化），直接 .length 会
+    // TypeError 拖垮整个节点页（v0.15.0 真机白屏根因）；null/空一律给一条空行可编辑。
+    const regs = data.registries ?? []
+    setRegs(regs.length > 0 ? regs : [{ url: '', scope: '' }])
   }
 
   if (!active) return null

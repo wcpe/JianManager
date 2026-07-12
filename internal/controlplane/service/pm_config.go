@@ -79,7 +79,9 @@ func (s *PMConfigService) Get(nodeID uint) (*PMConfigView, error) {
 	if err != nil {
 		return nil, err
 	}
-	view := &PMConfigView{PM: cfg.PM}
+	// Registries 初始化为空切片而非 nil：nil marshal 成 null 会让前端 .length 白屏
+	// （v0.15.0 真机抓出：全新节点 /nodes?tab=jdk 整页空白）。
+	view := &PMConfigView{PM: cfg.PM, Registries: []PMRegistryView{}}
 	for _, r := range regs {
 		view.Registries = append(view.Registries, PMRegistryView{
 			Name: r.Name, URL: r.URL, Scope: r.Scope,

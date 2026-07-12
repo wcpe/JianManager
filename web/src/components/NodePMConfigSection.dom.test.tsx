@@ -64,4 +64,19 @@ describe('NodePMConfigSection（FR-306）', () => {
     renderWithProviders(<NodePMConfigSection nodeId={2} />)
     expect(screen.getByText('包管理器与下载源')).toBeInTheDocument()
   })
+
+  it('registries=null（老 CP nil 切片序列化）不崩，渲染默认空 registry 行', async () => {
+    // v0.15.0 真机测试抓出：全新节点后端回 "registries":null，
+    // data.registries.length 直接 TypeError → /nodes?tab=jdk 整页白屏。
+    const orig = view.registries
+    ;(view as { registries: unknown }).registries = null
+    try {
+      renderWithProviders(<NodePMConfigSection nodeId={1} />)
+      expect(await screen.findByText('包管理器与下载源')).toBeInTheDocument()
+      // 默认给一条空 registry 行可编辑
+      expect(screen.getByRole('textbox', { name: 'registry 地址' })).toBeInTheDocument()
+    } finally {
+      view.registries = orig
+    }
+  })
 })
