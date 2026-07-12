@@ -4,9 +4,9 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { server } from '@/mocks/server'
-import { API } from '@/mocks/api'
-import { mockInject } from '@/mocks/inject'
+import { server } from '@jianmanager/devmock/server'
+import { API } from '@jianmanager/devmock/api'
+import { mockInject } from '@jianmanager/devmock/inject'
 import SchedulesPage from './SchedulesPage'
 
 /**

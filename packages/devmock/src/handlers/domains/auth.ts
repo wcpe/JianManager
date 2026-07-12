@@ -1,6 +1,6 @@
 import { HttpResponse } from 'msw'
-import { domainRoute } from '@/mocks/inject'
-import { db } from '@/mocks/db'
+import { domainRoute } from '@jianmanager/devmock/inject'
+import { db } from '@jianmanager/devmock/db'
 
 /**
  * 身份访问域 mock handler（地基随 FR-199 交付的纵切样例）。

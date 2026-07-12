@@ -3,8 +3,8 @@ import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
-import { server } from '@/mocks/server'
-import { API } from '@/mocks/api'
+import { server } from '@jianmanager/devmock/server'
+import { API } from '@jianmanager/devmock/api'
 import EditInstanceLimitsDialog from './EditInstanceLimitsDialog'
 
 describe('EditInstanceLimitsDialog 资源限额编辑器（FR-079）', () => {

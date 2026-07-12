@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { server } from '@/mocks/server'
+import { server } from '@jianmanager/devmock/server'
 
 const xtermHarness = vi.hoisted(() => {
   type DataHandler = (data: string) => void

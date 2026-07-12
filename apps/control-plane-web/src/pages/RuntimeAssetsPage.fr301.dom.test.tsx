@@ -3,8 +3,8 @@ import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { mockInject } from '@/mocks/inject'
-import { db } from '@/mocks/db'
+import { mockInject } from '@jianmanager/devmock/inject'
+import { db } from '@jianmanager/devmock/db'
 import RuntimeAssetsPage from './RuntimeAssetsPage'
 
 /** 假后端非 JDK 运行时行形状（同 mocks/handlers/domains/node.ts 的 MockNodeRuntime）。 */

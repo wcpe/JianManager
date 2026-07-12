@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { mockInject } from '@/mocks/inject'
+import { mockInject } from '@jianmanager/devmock/inject'
 import ClientStatsPanel from './ClientStatsPanel'
 
 /**

@@ -4,8 +4,8 @@ import userEvent from '@testing-library/user-event'
 import { HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { server } from '@/mocks/server'
-import { domainRoute } from '@/mocks/inject'
+import { server } from '@jianmanager/devmock/server'
+import { domainRoute } from '@jianmanager/devmock/inject'
 import ProtectionCenterPage from './ProtectionCenterPage'
 
 describe('ProtectionCenterPage', () => {

@@ -3,9 +3,9 @@ import { screen, waitFor } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { mockInject } from '@/mocks/inject'
-import { server } from '@/mocks/server'
-import { API } from '@/mocks/api'
+import { mockInject } from '@jianmanager/devmock/inject'
+import { server } from '@jianmanager/devmock/server'
+import { API } from '@jianmanager/devmock/api'
 import OverviewPage from './OverviewPage'
 
 /**

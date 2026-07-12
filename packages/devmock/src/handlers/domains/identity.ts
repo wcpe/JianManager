@@ -1,8 +1,8 @@
 import { HttpResponse } from 'msw'
-import { domainRoute } from '@/mocks/inject'
-import { requireAuth } from '@/mocks/auth-middleware'
-import { db } from '@/mocks/db'
-import type { User } from '@/mocks/handlers/domains/auth'
+import { domainRoute } from '@jianmanager/devmock/inject'
+import { requireAuth } from '@jianmanager/devmock/auth-middleware'
+import { db } from '@jianmanager/devmock/db'
+import type { User } from '@jianmanager/devmock/handlers/domains/auth'
 
 /**
  * 身份访问域 mock handler（FR-199）：setup / users / groups / audit。

@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
 
-import { mockInject } from '@/mocks/inject'
+import { mockInject } from '@jianmanager/devmock/inject'
 import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
 import MetricsSegment from './MetricsSegment'

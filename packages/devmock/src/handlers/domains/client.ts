@@ -1,7 +1,7 @@
 import { http, HttpResponse } from 'msw'
-import { domainRoute } from '@/mocks/inject'
-import { db } from '@/mocks/db'
-import { requireAuth } from '@/mocks/auth-middleware'
+import { domainRoute } from '@jianmanager/devmock/inject'
+import { db } from '@jianmanager/devmock/db'
+import { requireAuth } from '@jianmanager/devmock/auth-middleware'
 
 /**
  * 客户端分发与平台设置域 mock handler（FR-210，照 spec §7 范式）。

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { useAuthStore } from '@/stores/auth'
-import { mockInject } from '@/mocks/inject'
+import { mockInject } from '@jianmanager/devmock/inject'
 import InventorySegment from './InventorySegment'
 
 /** InventorySegment 背包定制页：manifest 发现 → 背包查看 → 基础属性写二次确认。 */

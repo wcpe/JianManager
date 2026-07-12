@@ -1,16 +1,16 @@
 import { HttpResponse } from 'msw'
-import { domainRoute } from '@/mocks/inject'
-import { requireAuth } from '@/mocks/auth-middleware'
-import { db } from '@/mocks/db'
+import { domainRoute } from '@jianmanager/devmock/inject'
+import { requireAuth } from '@jianmanager/devmock/auth-middleware'
+import { db } from '@jianmanager/devmock/db'
 import type {
   NetworkSummary,
   NetworkDetail,
   NetworkMember,
   BatchActionResult,
-} from '@/api/networks'
-import type { Registration, CreateRegistrationBody } from '@/api/registrations'
-import type { ProvisionProxyBody, ProvisionProxyResult } from '@/api/proxy'
-import type { InstanceInfo } from '@/api/instances'
+} from '@jianmanager/devmock/contracts'
+import type { Registration, CreateRegistrationBody } from '@jianmanager/devmock/contracts'
+import type { ProvisionProxyBody, ProvisionProxyResult } from '@jianmanager/devmock/contracts'
+import type { InstanceInfo } from '@jianmanager/devmock/contracts'
 
 /**
  * 群组服网络域 mock handler（FR-203，照 spec §7 范式）。

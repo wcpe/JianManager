@@ -26,7 +26,7 @@ const queryClient = new QueryClient({
  */
 async function enableMocking() {
   if (!import.meta.env.VITE_MOCK) return
-  const [{ worker }, dbModule] = await Promise.all([import('@/mocks/browser'), import('@/mocks/db')])
+  const [{ worker }, dbModule] = await Promise.all([import('@jianmanager/devmock/browser'), import('@jianmanager/devmock/db')])
   dbModule.resetDb()
   // 内存假后端刷新即重置，但 localStorage 仍存 token——为其补一个会话，使 mock 模式刷新后保持登录
   // （否则刷新→会话丢→首个 API 401→跳登录，整站不可持续点）。仅 VITE_MOCK 下运行，不入生产。

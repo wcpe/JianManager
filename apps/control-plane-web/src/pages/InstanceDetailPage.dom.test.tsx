@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { Routes, Route } from 'react-router'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { mockInject } from '@/mocks/inject'
+import { mockInject } from '@jianmanager/devmock/inject'
 import InstanceDetailPage from './InstanceDetailPage'
 
 /**

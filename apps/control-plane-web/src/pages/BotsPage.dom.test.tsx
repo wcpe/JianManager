@@ -3,10 +3,10 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
-import { server } from '@/mocks/server'
-import { API } from '@/mocks/api'
+import { server } from '@jianmanager/devmock/server'
+import { API } from '@jianmanager/devmock/api'
 import { loginMockUser } from '@/test/auth'
-import { mockInject } from '@/mocks/inject'
+import { mockInject } from '@jianmanager/devmock/inject'
 import BotsPage from './BotsPage'
 
 /**

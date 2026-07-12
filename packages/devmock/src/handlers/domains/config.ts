@@ -1,7 +1,7 @@
 import { HttpResponse } from 'msw'
-import { domainRoute } from '@/mocks/inject'
-import { requireAuth, requirePlatformAdmin } from '@/mocks/auth-middleware'
-import { db } from '@/mocks/db'
+import { domainRoute } from '@jianmanager/devmock/inject'
+import { requireAuth, requirePlatformAdmin } from '@jianmanager/devmock/auth-middleware'
+import { db } from '@jianmanager/devmock/db'
 
 /**
  * 配置与数据库域 mock handler（FR-205）。

@@ -3,8 +3,8 @@ import { screen, waitFor } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { server } from '@/mocks/server'
-import { API } from '@/mocks/api'
+import { server } from '@jianmanager/devmock/server'
+import { API } from '@jianmanager/devmock/api'
 import { useInstanceAggregate, useSearchInstances } from './instances'
 
 function Probe() {

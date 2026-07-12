@@ -7,8 +7,8 @@ import { toast } from 'sonner'
 
 import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
-import { server } from '@/mocks/server'
-import { API } from '@/mocks/api'
+import { server } from '@jianmanager/devmock/server'
+import { API } from '@jianmanager/devmock/api'
 import { clearInstanceDrafts, reportInstanceDraft } from '@/lib/console-draft-registry'
 
 vi.mock('@xterm/xterm', async () => {

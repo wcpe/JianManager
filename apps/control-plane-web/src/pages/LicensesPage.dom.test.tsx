@@ -4,7 +4,7 @@ import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { server } from '@/mocks/server'
+import { server } from '@jianmanager/devmock/server'
 import LicensesPage from './LicensesPage'
 
 /**

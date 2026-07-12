@@ -4,9 +4,9 @@ import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { mockInject } from '@/mocks/inject'
-import { server } from '@/mocks/server'
-import { API } from '@/mocks/api'
+import { mockInject } from '@jianmanager/devmock/inject'
+import { server } from '@jianmanager/devmock/server'
+import { API } from '@jianmanager/devmock/api'
 import BackupStoragesPage from './BackupStoragesPage'
 
 // 新增对话框内的 Combobox（Radix Popover）依赖 ResizeObserver，jsdom 未实现，需垫片。

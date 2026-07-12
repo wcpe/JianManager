@@ -1,10 +1,10 @@
 import { HttpResponse } from 'msw'
-import { domainRoute } from '@/mocks/inject'
-import { db } from '@/mocks/db'
-import { requireAuth } from '@/mocks/auth-middleware'
-import type { BackupInfo, CreateBackupBody } from '@/api/backups'
-import type { BackupStorage, CreateBackupStorageBody } from '@/api/backupStorages'
-import type { ScheduleInfo, ScheduleLogInfo, CreateScheduleBody, UpdateScheduleBody } from '@/api/schedules'
+import { domainRoute } from '@jianmanager/devmock/inject'
+import { db } from '@jianmanager/devmock/db'
+import { requireAuth } from '@jianmanager/devmock/auth-middleware'
+import type { BackupInfo, CreateBackupBody } from '@jianmanager/devmock/contracts'
+import type { BackupStorage, CreateBackupStorageBody } from '@jianmanager/devmock/contracts'
+import type { ScheduleInfo, ScheduleLogInfo, CreateScheduleBody, UpdateScheduleBody } from '@jianmanager/devmock/contracts'
 
 /**
  * 备份与计划域 mock handler（FR-207）。

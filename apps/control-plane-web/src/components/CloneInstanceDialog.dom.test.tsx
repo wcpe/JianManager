@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { Toaster } from 'sonner'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { mockInject } from '@/mocks/inject'
+import { mockInject } from '@jianmanager/devmock/inject'
 import { useInstances } from '@/api/instances'
 import CloneInstanceDialog from './CloneInstanceDialog'
 

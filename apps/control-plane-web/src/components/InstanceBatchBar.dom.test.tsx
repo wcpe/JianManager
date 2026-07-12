@@ -5,8 +5,8 @@ import { http, HttpResponse } from 'msw'
 import { Toaster } from 'sonner'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { server } from '@/mocks/server'
-import { API } from '@/mocks/api'
+import { server } from '@jianmanager/devmock/server'
+import { API } from '@jianmanager/devmock/api'
 import InstanceBatchBar, { type BatchSelectedInstance } from './InstanceBatchBar'
 
 const running: BatchSelectedInstance = { id: 101, name: 'fr058-running-a', status: 'RUNNING' }

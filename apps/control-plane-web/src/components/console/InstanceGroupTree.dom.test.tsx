@@ -6,8 +6,8 @@ import { InstanceGroupTree } from './InstanceGroupTree'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { useConsoleStore } from '@/stores/console'
-import { server } from '@/mocks/server'
-import { API } from '@/mocks/api'
+import { server } from '@jianmanager/devmock/server'
+import { API } from '@jianmanager/devmock/api'
 
 function renderTree(selectedGroupId: number | null = null, onSelect = vi.fn()) {
   loginMockUser()

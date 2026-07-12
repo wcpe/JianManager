@@ -1,7 +1,7 @@
 import { HttpResponse } from 'msw'
-import { domainRoute } from '@/mocks/inject'
-import { requireAuth } from '@/mocks/auth-middleware'
-import { db } from '@/mocks/db'
+import { domainRoute } from '@jianmanager/devmock/inject'
+import { requireAuth } from '@jianmanager/devmock/auth-middleware'
+import { db } from '@jianmanager/devmock/db'
 
 /**
  * Bot 与终端域 mock handler（FR-209）。照 spec §7 范式：用 domainRoute 注册本域全部 endpoint，

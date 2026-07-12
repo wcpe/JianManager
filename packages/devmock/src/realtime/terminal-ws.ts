@@ -1,5 +1,5 @@
 import { ws, HttpResponse } from 'msw'
-import { domainRoute } from '@/mocks/inject'
+import { domainRoute } from '@jianmanager/devmock/inject'
 
 /**
  * 终端实时流仿真（FR-198）。

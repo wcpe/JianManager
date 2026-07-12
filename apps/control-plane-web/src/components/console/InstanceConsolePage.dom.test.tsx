@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 
 import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
-import { server } from '@/mocks/server'
+import { server } from '@jianmanager/devmock/server'
 import { useAuthStore } from '@/stores/auth'
 import InstanceConsolePage from './InstanceConsolePage'
 

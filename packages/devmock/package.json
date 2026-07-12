@@ -1,0 +1,21 @@
+{
+  "name": "@jianmanager/devmock",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "MSW 内存假后端（ADR-047；FR-284 抽包，仅 dev/test 形态、不入生产构建）",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "exports": {
+    "./db": "./src/db/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "dependencies": {
+    "msw": "^2.14.6"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.2",
+    "vitest": "^4.1.9"
+  }
+}

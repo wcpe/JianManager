@@ -3,10 +3,10 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { mockInject } from '@/mocks/inject'
-import { db } from '@/mocks/db'
+import { mockInject } from '@jianmanager/devmock/inject'
+import { db } from '@jianmanager/devmock/db'
 import { useAuthStore } from '@/stores/auth'
-import type { Session } from '@/mocks/handlers/domains/auth'
+import type { Session } from '@jianmanager/devmock/handlers/domains/auth'
 import PlayersPage from './PlayersPage'
 
 /**

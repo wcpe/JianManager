@@ -49,6 +49,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@jianmanager/devmock": "workspace:*",
     "@jianmanager/eslint-config": "workspace:*",
     "@jianmanager/tsconfig": "workspace:*",
     "@playwright/test": "^1.61.1",

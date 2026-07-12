@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw'
-import { API } from '@/mocks/api'
+import { API } from '@jianmanager/devmock/api'
 
 /**
  * 实例事件 SSE 流仿真（FR-198）。

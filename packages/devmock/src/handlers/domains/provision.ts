@@ -1,7 +1,7 @@
 import { HttpResponse, type HttpResponseResolver } from 'msw'
-import { domainRoute } from '@/mocks/inject'
-import { db } from '@/mocks/db'
-import { requireAuth } from '@/mocks/auth-middleware'
+import { domainRoute } from '@jianmanager/devmock/inject'
+import { db } from '@jianmanager/devmock/db'
+import { requireAuth } from '@jianmanager/devmock/auth-middleware'
 
 /**
  * 供给与模板域 mock handler（FR-202）。

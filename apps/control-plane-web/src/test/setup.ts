@@ -1,9 +1,9 @@
 import '@testing-library/jest-dom/vitest'
 import { afterAll, afterEach, beforeAll } from 'vitest'
 import { cleanup } from '@testing-library/react'
-import { server } from '@/mocks/server'
-import { resetDb } from '@/mocks/db'
-import { clearInjections } from '@/mocks/inject'
+import { server } from '@jianmanager/devmock/server'
+import { resetDb } from '@jianmanager/devmock/db'
+import { clearInjections } from '@jianmanager/devmock/inject'
 import { useAuthStore } from '@/stores/auth'
 import type { TerminalSessionManager } from '@/lib/terminal-session-manager'
 

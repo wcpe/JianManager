@@ -1,6 +1,6 @@
-import { db } from '@/mocks/db'
+import { db } from '@jianmanager/devmock/db'
 import { useAuthStore } from '@/stores/auth'
-import type { Session } from '@/mocks/handlers/domains/auth'
+import type { Session } from '@jianmanager/devmock/handlers/domains/auth'
 
 /**
  * 让后续渲染的页面处于已登录态（FR-196 测试工具）。

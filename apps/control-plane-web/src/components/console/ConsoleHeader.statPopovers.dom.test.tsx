@@ -4,9 +4,9 @@ import userEvent from '@testing-library/user-event'
 
 import { loginMockUser } from '@/test/auth'
 import { renderWithProviders } from '@/test/render'
-import { server } from '@/mocks/server'
-import { db } from '@/mocks/db'
-import type { MockInstance } from '@/mocks/handlers/domains/instance'
+import { server } from '@jianmanager/devmock/server'
+import { db } from '@jianmanager/devmock/db'
+import type { MockInstance } from '@jianmanager/devmock/handlers/domains/instance'
 import ConsoleHeader from './ConsoleHeader'
 
 /**

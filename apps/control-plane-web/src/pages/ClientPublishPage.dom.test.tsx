@@ -3,8 +3,8 @@ import { screen, waitFor, fireEvent, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { server } from '@/mocks/server'
-import { mockInject } from '@/mocks/inject'
+import { server } from '@jianmanager/devmock/server'
+import { mockInject } from '@jianmanager/devmock/inject'
 import ClientPublishPage from './ClientPublishPage'
 
 /**
