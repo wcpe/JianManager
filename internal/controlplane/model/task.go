@@ -27,6 +27,8 @@ func (s TaskState) IsTerminal() bool {
 const (
 	// TaskKindJDKInstall JDK 一键下载安装任务（FR-183 首批载体，见 ADR-040）。
 	TaskKindJDKInstall = "jdk_install"
+	// TaskKindPkgInstall 全局包安装/升级任务（FR-307）。
+	TaskKindPkgInstall = "pkg_install"
 	// TaskKindRuntimeInstall 非 JDK 运行时一键下载安装任务（FR-299，首批 Node.js）。
 	// 复用 jdk_install 的异步任务模式；终态副作用落 model.NodeRuntime。
 	TaskKindRuntimeInstall = "runtime_install"

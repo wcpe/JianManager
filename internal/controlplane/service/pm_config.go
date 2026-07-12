@@ -22,6 +22,7 @@ const pmTokenMask = "********"
 type PMConfigService struct {
 	db   *gorm.DB
 	pool *cpgrpc.ClientPool
+	tasks *TaskService // 任务中心（FR-307 异步装包）；SetTaskService 注入
 }
 
 // NewPMConfigService 创建 PM 配置服务。

@@ -67,6 +67,82 @@ func (h *PMConfigHandler) Put(c *gin.Context) {
 	c.JSON(http.StatusOK, view)
 }
 
+// ListPackages GET /nodes/:id/packages —— 列出托管全局目录已装包（含可更新标记，FR-307）。
+func (h *PMConfigHandler) ListPackages(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	nodeID, err := parseUintParam(c, "id")
+	if err != nil {
+		return
+	}
+	pkgs, pm, err := h.svc.ListGlobalPackages(nodeID)
+	if err != nil {
+		h.mapErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"pm": pm, "packages": pkgs})
+}
+
+// InstallPackage POST /nodes/:id/packages —— 异步安装/升级全局包（202+taskId，FR-307）。
+func (h *PMConfigHandler) InstallPackage(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	nodeID, err := parseUintParam(c, "id")
+	if err != nil {
+		return
+	}
+	var in struct {
+		Name    string `json:"name" binding:"required,min=1,max=214"`
+		Version string `json:"version"`
+	}
+	if err := c.ShouldBindJSON(&in); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误（name 必填）"})
+		return
+	}
+	uid, _ := c.Get(middleware.CtxUserID)
+	userID, _ := uid.(uint)
+	task, err := h.svc.InstallGlobalPackageAsync(nodeID, in.Name, in.Version, userID)
+	if err != nil {
+		h.mapErr(c, err)
+		return
+	}
+	if h.audit != nil {
+		raw, _ := json.Marshal(map[string]any{"name": in.Name, "version": in.Version})
+		_ = h.audit.Record(userID, "node.pkg.install", "node", c.Param("id"), string(raw), c.ClientIP())
+	}
+	c.JSON(http.StatusAccepted, gin.H{"taskId": task.TaskID, "task": task})
+}
+
+// RemovePackage DELETE /nodes/:id/packages?name=<pkg> —— 卸载全局包（同步，FR-307）。
+// 包名经 query 传（@scope/name 含斜杠，路径参数会破路由）。
+func (h *PMConfigHandler) RemovePackage(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	nodeID, err := parseUintParam(c, "id")
+	if err != nil {
+		return
+	}
+	name := c.Query("name")
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少 name"})
+		return
+	}
+	if err := h.svc.RemoveGlobalPackage(nodeID, name); err != nil {
+		h.mapErr(c, err)
+		return
+	}
+	if h.audit != nil {
+		uid, _ := c.Get(middleware.CtxUserID)
+		userID, _ := uid.(uint)
+		raw, _ := json.Marshal(map[string]any{"name": name})
+		_ = h.audit.Record(userID, "node.pkg.remove", "node", c.Param("id"), string(raw), c.ClientIP())
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "已卸载"})
+}
+
 func (h *PMConfigHandler) mapErr(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrNodeNotFound):
@@ -78,8 +154,11 @@ func (h *PMConfigHandler) mapErr(c *gin.Context, err error) {
 	}
 }
 
-// RegisterRoutes 注册 PM 配置路由（平台管理员）。
+// RegisterRoutes 注册 PM 配置与全局包路由（平台管理员）。
 func (h *PMConfigHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.GET("/nodes/:id/pm-config", h.Get)
 	rg.PUT("/nodes/:id/pm-config", h.Put)
+	rg.GET("/nodes/:id/packages", h.ListPackages)
+	rg.POST("/nodes/:id/packages", h.InstallPackage)
+	rg.DELETE("/nodes/:id/packages", h.RemovePackage)
 }

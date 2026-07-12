@@ -324,6 +324,7 @@ func main() {
 	taskSvc := service.NewTaskService(db)
 	taskSvc.SetNotificationService(notificationSvc)
 	jdkSvc.SetTaskService(taskSvc)
+	pmConfigSvc.SetTaskService(taskSvc) // FR-307 全局包异步安装走任务中心
 	// 运行时库安装异步化（FR-299）：Node.js 安装复用 jdk_install 的任务模式（kind=runtime_install）。
 	runtimeLibrarySvc.SetTaskService(taskSvc)
 

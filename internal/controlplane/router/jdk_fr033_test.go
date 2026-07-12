@@ -49,6 +49,8 @@ func setupFR033Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.E
 	taskSvc.SetNotificationService(notificationSvc)
 	jdkSvc := service.NewJDKService(db, pool)
 	jdkSvc.SetTaskService(taskSvc)
+	pmSvc := service.NewPMConfigService(db, pool)
+	pmSvc.SetTaskService(taskSvc) // FR-307 全局包异步安装
 
 	svcs := &Services{
 		Auth:          service.NewAuthService(db, jwtCfg),
@@ -56,6 +58,7 @@ func setupFR033Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool) *gin.E
 		Group:         groupSvc,
 		Node:          nodeSvc,
 		JDK:           jdkSvc,
+		PMConfig:      pmSvc,
 		Instance:      instanceSvc,
 		InstanceBatch: service.NewInstanceBatchService(db, pool),
 		Audit:         service.NewAuditService(db),
