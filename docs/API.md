@@ -1619,19 +1619,22 @@
 
 ---
 
-## 运行时与制品全局页（FR-082）
+## 运行时与制品全局页（FR-082 / FR-301）
 
-> 只读聚合端点，给「运行时与制品」全局页一次性提供 JDK 矩阵 + 引用关系 + 制品占用/去重/冷热统计。
-> 不引入新表/新 proto，跨现有表（`nodes`/`node_jdks`/`instances`/`assets`）聚合。
-> 权限：平台管理员。删除受引用项仍走各自端点（JDK：`DELETE /nodes/:id/jdks/:jid`；制品：`DELETE /assets/:id`），本端点只展示引用。
+> 聚合端点，给「运行时与制品」全局页一次性提供 JDK 矩阵 + 引用关系 + 制品占用/去重/冷热统计；
+> FR-301 起 overview 加性携带**多运行时矩阵**（`node_jdks` + `node_runtimes` 读侧拼装）与每节点/整体上次同步时间，
+> 另有 `refresh` 强制全节点库存同步。跨现有表（`nodes`/`node_jdks`/`node_runtimes`/`instances`/`assets`）聚合。
+> 权限：平台管理员。删除受引用项仍走各自端点（JDK：`DELETE /nodes/:id/jdks/:jid`；制品：`DELETE /assets/:id`），本组端点只展示引用。
 
 ### GET /api/v1/runtime-assets/overview
-- **描述**: 跨节点 JDK 矩阵（每项含引用实例清单）+ 制品按类型分组（每组含占用/去重/冷热统计）+ 两区汇总
-- **关联 FR**: FR-082（聚合 FR-033 JDK 绑定语义 + FR-045 制品库元数据）
+- **描述**: 跨节点 JDK 矩阵（每项含引用实例清单）+ 制品按类型分组（每组含占用/去重/冷热统计）+ 两区汇总；FR-301 加性扩展 `runtimes` / `runtimeSyncs` / `syncedAt`（老字段不变，老前端不受影响）
+- **关联 FR**: FR-082（聚合 FR-033 JDK 绑定语义 + FR-045 制品库元数据）/ FR-301（多运行时矩阵 + 同步时间）
 - **引用解析**:
   - JDK 引用由实例绑定真实推导：`instances.jdk_id`（直接绑定，`binding=direct`）或 `instances.java_major_version`（按 Java 大版本绑定，解析到同节点同大版本中 id 最大者，`binding=major`）；跨节点不串台
   - 制品当前不持久化「实例↔制品」连接（FR-045 消费侧 `ref_count` 为占位，见 ADR-011），故制品区给「按类型」占用/去重/冷热 + 既有 `refCount`，不臆造实例连接
   - `client-file` 制品沿用 `metadata` JSON 暴露客户端相对路径/codec（如 `path`、`targetPath`、`codec`），前端据此展示 OTA 文件来源
+  - `runtimes` 多运行时矩阵（FR-301）：`type=jdk` 行来自 `node_jdks`（`name`=厂商，含引用实例）；其它类型（nodejs / python 预留）来自 `node_runtimes`——当前无「实例↔非 JDK 运行时」引用消费者，`instances` 恒空 / `refCount` 恒 0（不臆造）
+  - `runtimeSyncs` 每节点上次库存同步状态（源自 `nodes.runtime_synced_at`，JDK `syncFromWorker` 成功即刷新；`syncedAt=null`=从未同步）；顶层 `syncedAt` = 各节点最大值
 - **权限**: 平台管理员；未登录返回 401，普通成员返回 403，均不返回聚合数据
 - **响应 200**:
 ```json
@@ -1657,10 +1660,40 @@
       "hotCount": 1, "archivedCount": 0, "externalCount": 0
     }
   ],
-  "assetSummary": { "assetCount": 1, "totalSize": 48234123, "referencedCount": 0, "hotCount": 1, "archivedCount": 0, "externalCount": 0 }
+  "assetSummary": { "assetCount": 1, "totalSize": 48234123, "referencedCount": 0, "hotCount": 1, "archivedCount": 0, "externalCount": 0 },
+  "runtimes": [
+    { "id": 10, "nodeId": 1, "nodeName": "node-a", "nodeOnline": true, "type": "jdk",
+      "name": "Temurin", "majorVersion": 21, "version": "21.0.4", "arch": "x64",
+      "path": "/opt/jdks/temurin-21", "managed": true,
+      "instances": [ { "id": 100, "uuid": "<uuid>", "name": "paper-1", "status": "RUNNING", "binding": "direct" } ],
+      "refCount": 1 },
+    { "id": 3, "nodeId": 1, "nodeName": "node-a", "nodeOnline": true, "type": "nodejs",
+      "name": "Node.js 22", "majorVersion": 22, "version": "22.17.0", "arch": "x64",
+      "path": "/usr/local/bin/node", "managed": false, "instances": [], "refCount": 0 }
+  ],
+  "runtimeSyncs": [ { "nodeId": 1, "nodeName": "node-a", "online": true, "syncedAt": "2026-07-12T10:00:00Z" } ],
+  "syncedAt": "2026-07-12T10:00:00Z"
 }
 ```
 - **错误**: 401（未登录）；403（已登录但非平台管理员）；500 `INTERNAL_ERROR`
+
+### POST /api/v1/runtime-assets/refresh
+- **描述**: 强制全节点库存 `syncFromWorker`（FR-301 手动刷新）。逐节点执行 JDK 库存同步（成功即前移该节点 `runtime_synced_at`）；**失败容忍**——单节点同步失败（离线/RPC 失败）不阻断整体，结果逐节点回报 `ok`/`error`，DB 旧数据保留（前端显旧数据 + 提示失败节点）。`node_runtimes` 无 Worker 侧清单可同步（外部登记真相源即 CP 库，托管 Node 随 FR-299 再议）
+- **关联 FR**: FR-301
+- **权限**: 平台管理员；写审计 `runtime_assets.refresh`（detail 含 total/ok/failed）
+- **请求体**: 无
+- **响应 200**:
+```json
+{
+  "results": [
+    { "nodeId": 1, "nodeName": "node-a", "ok": true, "syncedAt": "2026-07-12T10:00:00Z" },
+    { "nodeId": 2, "nodeName": "node-b", "ok": false, "error": "节点未连接", "syncedAt": null }
+  ],
+  "syncedAt": "2026-07-12T10:00:00Z"
+}
+```
+- 说明：失败节点 `syncedAt` 保留旧时间戳（`null`=从未同步）；顶层 `syncedAt` = 本轮各节点最大值
+- **错误**: 401（未登录）；403（非平台管理员）；500 `INTERNAL_ERROR`（同步器未装配/查库失败）
 
 ---
 
