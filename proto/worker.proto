@@ -94,6 +94,11 @@ service WorkerService {
   // ScanRuntimes 扫描节点常见安装路径发现运行时候选（jdk/nodejs，FR-298 节点运行时库）。
   // 路径不存在/探测失败静默跳过，不阻断整体扫描；托管根下的候选标 already_registered。
   rpc ScanRuntimes(ScanRuntimesRequest) returns (ScanRuntimesResponse);
+  // InstallRuntime 下载并安装指定运行时到 Worker 托管目录（首批 nodejs，FR-299）。
+  // 携带 task_id 异步执行（语义同 InstallJDK/FR-183）：启动即返回，进度/日志/终态经心跳上报。
+  rpc InstallRuntime(InstallRuntimeRequest) returns (InstallRuntimeResponse);
+  // RemoveRuntime 删除 Worker 托管的运行时目录（FR-299，删除顶层清理语义同 RemoveJDK/FR-292）。
+  rpc RemoveRuntime(RemoveRuntimeRequest) returns (RemoveRuntimeResponse);
   // DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
   rpc DownloadCore(DownloadCoreRequest) returns (DownloadCoreResponse);
   // InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
@@ -1002,6 +1007,39 @@ message RuntimeCandidate {
 
 message ScanRuntimesResponse {
   repeated RuntimeCandidate candidates = 1;
+}
+
+// InstallRuntime 下载并安装运行时（FR-299，首批 nodejs：nodejs.org dist 便携归档）。
+message InstallRuntimeRequest {
+  string type = 1;        // 运行时类型（首批仅 nodejs）
+  int32 major = 2;        // 主版本（如 22）
+  // arch 用该运行时下载源的命名（nodejs：x64 / arm64；CP 已按类型归一，FR-289 语义）。
+  // 为空时 Worker 按本机 GOARCH 推导。
+  string arch = 3;
+  // mirror_base 下载基址（CP 从平台设置 runtime.mirror.nodejs 取生效值后下发）。
+  // 为空时回退 Worker 本地 env/官方默认源（https://nodejs.org/dist）。
+  string mirror_base = 4;
+  // task_id CP 任务业务 ID（FR-183 异步语义同 InstallJDK）：必填，Worker 启动即返回，
+  // 后台下载解压，进度/日志/终态经心跳按此 task_id 上报。
+  string task_id = 5;
+}
+
+message InstallRuntimeResponse {
+  bool success = 1;   // 已受理并启动（异步）
+  string error = 2;
+  string task_id = 3; // 回显受理的任务 ID（CP 据此把 Task 置为 running）
+}
+
+// RemoveRuntime 删除托管运行时目录（FR-299）。path 可为登记的内层路径（如 …/bin/node），
+// Worker 归一到托管根（opt/runtimes）下的顶层子目录整体删除（FR-292 语义）。
+message RemoveRuntimeRequest {
+  string type = 1; // 运行时类型（首批仅 nodejs）
+  string path = 2;
+}
+
+message RemoveRuntimeResponse {
+  bool success = 1;
+  string error = 2;
 }
 
 message DeployServerProbeRequest {
