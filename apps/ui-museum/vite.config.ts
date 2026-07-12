@@ -1,17 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import path from 'path'
 
+// @jianmanager/ui 经 pnpm workspace 真依赖解析（源码 exports，Vite 直接转译），不再 alias（FR-283）。
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  resolve: {
-    alias: [
-      { find: '@jianmanager/ui/styles.css', replacement: path.resolve(__dirname, '../packages/ui/src/styles.css') },
-      { find: /^@jianmanager\/ui\/(.+)$/, replacement: `${path.resolve(__dirname, '../packages/ui/src')}/$1` },
-      { find: '@jianmanager/ui', replacement: path.resolve(__dirname, '../packages/ui/src/index.ts') },
-    ],
-  },
   server: {
     port: 5174,
   },

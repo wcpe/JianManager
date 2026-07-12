@@ -95,24 +95,27 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      - name: 缓存 npm（web / bot-worker）
+      - name: 缓存包管理器（pnpm store / bot-worker npm）
         uses: actions/cache@v4
         with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('web/package-lock.json', 'bot-worker/package-lock.json') }}
+          path: |
+            ~/.local/share/pnpm/store
+            ~/.npm
+          key: js-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'bot-worker/package-lock.json') }}
           restore-keys: |
-            npm-${{ runner.os }}-
+            js-${{ runner.os }}-
 
-      - name: 前端依赖与构建 + 许可清单（等价 make gen-licenses + build-web + embed-web）
+      - name: 前端依赖与构建 + 许可清单（等价 make gen-licenses + build-web + embed-web，FR-283 pnpm workspace）
         shell: bash
         run: |
           set -euo pipefail
-          npm --prefix web ci
+          corepack enable
+          pnpm install --frozen-lockfile
           npm --prefix bot-worker ci
           node scripts/gen-licenses.mjs
-          npm --prefix web run build
+          pnpm --filter control-plane-web build
           mkdir -p internal/controlplane/embed/dist
-          cp -r web/dist/* internal/controlplane/embed/dist/
+          cp -r apps/control-plane-web/dist/* internal/controlplane/embed/dist/
 
       - name: 内嵌探针 jar 与离线依赖缓存（等价 make embed-probe）
         shell: bash
@@ -198,17 +201,18 @@ jobs:
           go vet ./...
           go test ./...
 
-      - name: 前端 依赖 / lint / 单测 / 构建 / E2E
-        working-directory: web
+      - name: 前端 依赖 / lint / 单测 / 构建 / E2E（FR-283 pnpm workspace）
         shell: bash
         run: |
           set -euo pipefail
-          npm ci
-          npm run lint
-          npx vitest run
-          npm run build
-          npx playwright install --with-deps chromium
-          npm run e2e
+          corepack enable
+          pnpm install --frozen-lockfile
+          cd apps/control-plane-web
+          pnpm lint
+          pnpm exec vitest run
+          pnpm build
+          pnpm exec playwright install --with-deps chromium
+          pnpm e2e
 
   # ───────────────────────── build：交叉编译 4 个二进制（matrix） ─────────────────────────
   build:

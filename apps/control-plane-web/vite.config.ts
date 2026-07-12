@@ -30,13 +30,9 @@ export default defineConfig({
     },
   },
   plugins: [react(), tailwindcss()],
+  // @jianmanager/ui 经 pnpm workspace 真依赖解析（源码 exports，Vite 直接转译），不再 alias（FR-283）。
   resolve: {
-    alias: [
-      { find: '@jianmanager/ui/styles.css', replacement: path.resolve(__dirname, './packages/ui/src/styles.css') },
-      { find: /^@jianmanager\/ui\/(.+)$/, replacement: `${path.resolve(__dirname, './packages/ui/src')}/$1` },
-      { find: '@jianmanager/ui', replacement: path.resolve(__dirname, './packages/ui/src/index.ts') },
-      { find: '@', replacement: path.resolve(__dirname, './src') },
-    ],
+    alias: [{ find: '@', replacement: path.resolve(__dirname, './src') }],
   },
   server: {
     host: '127.0.0.1',

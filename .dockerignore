@@ -7,7 +7,8 @@
 
 # 依赖与构建产物（前端 dist 由 webbuilder 阶段重新构建并注入）
 **/node_modules
-web/dist
+apps/control-plane-web/dist
+apps/ui-museum/dist
 bot-worker/dist
 bin/
 internal/controlplane/embed/dist

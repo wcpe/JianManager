@@ -28,20 +28,20 @@ build-worker:
 build-jmctl:
 	go build -o bin/jmctl.exe ./cmd/jmctl
 
-# 构建前端
+# 构建前端（FR-283：pnpm workspace，主应用在 apps/control-plane-web）
 build-web:
-	cd web && npm run build
+	pnpm --filter control-plane-web build
 
-# 扫描三源依赖与许可证，生成 web/public/licenses.json（FR-135，开源许可页 /licenses 数据源）。
-# 需 web/bot-worker 已 npm install；Go 侧需 go-licenses（go install github.com/google/go-licenses@latest），
+# 扫描三源依赖与许可证，生成 apps/control-plane-web/public/licenses.json（FR-135，开源许可页 /licenses 数据源）。
+# 需 pnpm install / bot-worker npm install 已完成；Go 侧需 go-licenses（go install github.com/google/go-licenses@latest），
 # 缺失时回退 go list 启发式（见脚本）。输出确定性（按来源+包名排序、不含时间戳），构建期再生、无依赖变更不产生 diff。
 gen-licenses:
 	node scripts/gen-licenses.mjs
 
-# 将前端构建产物复制到嵌入目录
+# 将前端构建产物复制到嵌入目录（go:embed 目标目录不变，仅源路径随 FR-283 迁移）
 embed-web:
 	mkdir -p internal/controlplane/embed/dist
-	cp -r web/dist/* internal/controlplane/embed/dist/
+	cp -r apps/control-plane-web/dist/* internal/controlplane/embed/dist/
 
 # 同步 Worker 一键安装脚本内嵌副本（FR-080，见 ADR-020 §2 CP 静态托管）。
 # canonical 真源在 scripts/install-worker.{sh,ps1}（随发布分发 / 手动拷贝）；本目标把它们复制到
@@ -122,7 +122,7 @@ dev-cp:
 
 # 开发模式启动前端
 dev-web:
-	cd web && npm run dev
+	pnpm --filter control-plane-web dev
 
 # Go 静态分析
 vet:
@@ -148,7 +148,7 @@ test-cover:
 
 # 前端类型检查 + lint
 lint-web:
-	cd web && npx tsc --noEmit && npm run lint
+	cd apps/control-plane-web && npx tsc --noEmit && pnpm lint
 
 # Bot Worker 类型检查 + lint
 lint-bot:
@@ -172,10 +172,10 @@ docker-down:
 
 # 清理
 clean:
-	rm -rf bin/ dist/ web/dist/ bot-worker/dist/ data/ internal/controlplane/embed/dist/
+	rm -rf bin/ dist/ apps/control-plane-web/dist/ apps/ui-museum/dist/ bot-worker/dist/ data/ internal/controlplane/embed/dist/
 
-# 安装所有依赖
+# 安装所有依赖（前端经 pnpm workspace 一次装齐；bot-worker 保持 npm 自管，FR-283/ADR-064）
 install:
 	go mod tidy
-	cd web && npm install
+	pnpm install
 	cd bot-worker && npm install

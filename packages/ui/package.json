@@ -6,6 +6,26 @@
   "exports": {
     ".": "./src/index.ts",
     "./styles.css": "./src/styles.css",
-    "./*": "./src/*"
+    "./components/*": "./src/components/*.tsx",
+    "./charts/*": "./src/charts/*.tsx",
+    "./lib/*": "./src/lib/*.ts"
+  },
+  "dependencies": {
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.18.0",
+    "recharts": "^3.8.1",
+    "tailwind-merge": "^3.6.0"
+  },
+  "peerDependencies": {
+    "i18next": "^26.3.1",
+    "radix-ui": "^1.6.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-i18next": "^17.0.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "typescript": "~6.0.2"
   }
 }

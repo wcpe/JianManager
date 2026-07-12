@@ -3,6 +3,9 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const root = path.resolve(__dirname, '../..')
+// FR-283：组件博物馆迁 apps/ui-museum（原 web/wiki），经仓库根定位。
+const repoRoot = path.resolve(root, '../..')
+const museumRoot = path.join(repoRoot, 'apps/ui-museum')
 const sourceRoot = path.join(root, 'src')
 
 const firstWaveUi = [
@@ -116,9 +119,9 @@ describe('@jianmanager/ui package boundary', () => {
   })
 
   it('creates a wiki project that imports the shared package instead of duplicating components', () => {
-    const appPath = path.join(root, 'wiki/src/App.tsx')
-    const packagePath = path.join(root, 'wiki/package.json')
-    const vitePath = path.join(root, 'wiki/vite.config.ts')
+    const appPath = path.join(museumRoot, 'src/App.tsx')
+    const packagePath = path.join(museumRoot, 'package.json')
+    const vitePath = path.join(museumRoot, 'vite.config.ts')
 
     expect(existsSync(appPath)).toBe(true)
     expect(existsSync(packagePath)).toBe(true)

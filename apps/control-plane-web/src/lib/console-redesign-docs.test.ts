@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const repoRoot = path.resolve(__dirname, '../../..')
+// FR-283：app 迁 apps/control-plane-web 后，仓库根在四级之上。
+const repoRoot = path.resolve(__dirname, '../../../..')
 
 function readDoc(relativePath: string) {
   return readFileSync(path.join(repoRoot, relativePath), 'utf8')

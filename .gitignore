@@ -17,7 +17,7 @@
 go.work
 go.work.sum
 
-# 前端 (web + bot-worker)
+# 前端 (apps/* + packages/* pnpm workspace + bot-worker)
 node_modules/
 dist/
 .vite/

@@ -1,11 +1,14 @@
-# ---- 前端构建阶段：产出 web/dist，供 Go 阶段注入 go:embed all:dist ----
+# ---- 前端构建阶段（FR-283 pnpm workspace）：产出 apps/control-plane-web/dist，供 Go 阶段注入 go:embed all:dist ----
 FROM node:20-alpine AS webbuilder
-WORKDIR /web
-# 先拷依赖清单以复用层缓存：package.json/lock 不变时跳过 npm ci。
-COPY web/package.json web/package-lock.json ./
-RUN npm ci
-COPY web/ ./
-RUN npm run build
+WORKDIR /repo
+# 先拷 workspace 清单以复用层缓存：清单/锁不变时跳过 pnpm install。
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY apps/control-plane-web/package.json apps/control-plane-web/
+COPY packages/ui/package.json packages/ui/
+RUN corepack enable && pnpm install --frozen-lockfile --filter control-plane-web...
+COPY apps/control-plane-web/ apps/control-plane-web/
+COPY packages/ui/ packages/ui/
+RUN pnpm --filter control-plane-web build
 
 # ---- Go 构建阶段（go.mod: go 1.26.x，镜像须 >= 该版本，否则 toolchain 报错）----
 FROM golang:1.26-alpine AS builder
@@ -17,7 +20,7 @@ COPY . .
 # 探针 jar 若已由 `make embed-probe` 预置于 embed/probe/，则随上面的 COPY . . 一并嵌入；
 # 未预置时 embed/probe/.gitignore 占位保证 go:embed all:probe 不致编译失败，
 # 运行时建服自动部署探针会优雅跳过（FR-010 既有行为）。
-COPY --from=webbuilder /web/dist ./internal/controlplane/embed/dist
+COPY --from=webbuilder /repo/apps/control-plane-web/dist ./internal/controlplane/embed/dist
 # 纯 Go SQLite 驱动（glebarez/modernc），无需 CGO。
 RUN CGO_ENABLED=0 GOOS=linux go build -o control-plane ./cmd/control-plane
 

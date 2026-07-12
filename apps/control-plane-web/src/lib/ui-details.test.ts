@@ -13,7 +13,8 @@ import path from 'node:path'
  */
 
 const srcDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const rootDir = path.resolve(srcDir, '..')
+// FR-283：packages/ui 迁仓库根 packages/，rootDir 指仓库根。
+const rootDir = path.resolve(srcDir, '../../..')
 
 function existingSourcePath(base: string): string {
   for (const suffix of ['', '.tsx', '.ts']) {

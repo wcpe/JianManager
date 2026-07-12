@@ -2,6 +2,12 @@
   "name": "jianmanager",
   "private": true,
   "packageManager": "pnpm@10.11.0",
+  "pnpm": {
+    "overrides": {
+      "i18next": "26.3.1",
+      "react-i18next": "17.0.8"
+    }
+  },
   "scripts": {
     "dev": "pnpm --filter control-plane-web dev",
     "build": "pnpm -r build",
