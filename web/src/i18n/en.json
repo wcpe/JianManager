@@ -2270,7 +2270,13 @@
     "referencedJdk": "Referenced JDKs",
     "instanceRefs": "Instance References",
     "jdkEmpty": "No JDKs registered yet",
-    "jdkMatrixTitle": "Node × Version reference matrix (cell = referencing instances)",
+    "runtimeMatrixTitle": "Node × Runtime matrix (cell = referencing instances)",
+    "lastSync": "Last sync {{time}}",
+    "neverSynced": "Never synced",
+    "refresh": "Refresh",
+    "refreshDone": "Runtime inventory refreshed",
+    "refreshPartial": "Some nodes failed to sync, showing stale data: {{names}}",
+    "refreshFailed": "Refresh failed",
     "node": "Node",
     "managed": "Managed",
     "refs": "refs",
@@ -2458,6 +2464,7 @@
       "node.runtime.register": "Register node runtime",
       "node.runtime.install": "Install node runtime",
       "node.runtime.delete": "Delete node runtime",
+      "runtime_assets.refresh": "Refresh runtime inventory",
       "instance.import.inspect": "Inspect import directory",
       "instance.import": "Import existing server"
     }

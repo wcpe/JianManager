@@ -1,16 +1,18 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Cpu, Package, Trash2, Upload } from 'lucide-react'
+import { Cpu, Package, RefreshCw, Trash2, Upload } from 'lucide-react'
 
 import {
   useRuntimeAssetsOverview,
+  useRefreshRuntimeAssets,
   useDeleteRuntimeJDK,
   useDeleteAsset,
   useImportAsset,
   type AssetInfo,
   type AssetType,
   type JDKMatrixItem,
+  type RuntimeMatrixEntry,
 } from '@/api/runtimeAssets'
 import { useSearchInstances } from '@/api/instances'
 import { useBatchDeployPlugins, type PluginBatchDeployResult } from '@/api/plugins'
@@ -23,12 +25,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui'
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/DangerConfirm'
+import { formatRelativeTime } from '@/lib/relative-time'
 import {
   formatBytes,
-  buildJDKMatrix,
+  buildRuntimeGrid,
   filterAssetGroups,
   shortSha,
   DEFAULT_ASSET_FILTER,
+  RUNTIME_TYPE_LABEL,
   type AssetFilter,
 } from './runtime-assets-view'
 
@@ -72,7 +76,7 @@ export default function RuntimeAssetsPage() {
         <p className="text-xs text-muted-foreground">{t('runtimeAssets.subtitle')}</p>
       </div>
 
-      <JDKSection jdks={data.jdks} summary={data.jdkSummary} />
+      <JDKSection jdks={data.jdks} summary={data.jdkSummary} runtimes={data.runtimes} syncedAt={data.syncedAt} />
       <AssetSection groups={data.assets} summary={data.assetSummary} />
     </div>
   )
@@ -93,18 +97,58 @@ function StatCard({ label, value, accent }: { label: string; value: React.ReactN
 function JDKSection({
   jdks,
   summary,
+  runtimes,
+  syncedAt,
 }: {
   jdks: JDKMatrixItem[]
   summary: { nodeCount: number; jdkCount: number; referencedJdk: number; instanceRefs: number }
+  /** 多运行时矩阵项（FR-301）：jdk + nodejs 等多类型。 */
+  runtimes: RuntimeMatrixEntry[]
+  /** 整体上次库存同步时间（ISO）；null=从未同步。 */
+  syncedAt: string | null
 }) {
   const { t } = useTranslation()
-  const matrix = buildJDKMatrix(jdks)
+  const grid = buildRuntimeGrid(runtimes)
+  const refresh = useRefreshRuntimeAssets()
+
+  // 手动刷新（FR-301）：强制全节点 syncFromWorker。失败容忍——部分节点失败时
+  // 提示失败节点名单，页面继续显示 DB 旧数据（不清空、不报错态）。
+  const onRefresh = () => {
+    refresh.mutate(undefined, {
+      onSuccess: (outcome) => {
+        const failed = outcome.results.filter((r) => !r.ok)
+        if (failed.length > 0) {
+          toast.warning(
+            t('runtimeAssets.refreshPartial', {
+              names: failed.map((f) => f.nodeName || `#${f.nodeId}`).join('、'),
+            }),
+          )
+        } else {
+          toast.success(t('runtimeAssets.refreshDone'))
+        }
+      },
+      onError: (err: ApiError) => toast.error(err.response?.data?.message || t('runtimeAssets.refreshFailed')),
+    })
+  }
 
   return (
     <section className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Cpu className="size-4 text-muted-foreground" />
-        <h2 className="text-base font-semibold">{t('runtimeAssets.jdkRegion')}</h2>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Cpu className="size-4 text-muted-foreground" />
+          <h2 className="text-base font-semibold">{t('runtimeAssets.jdkRegion')}</h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">
+            {syncedAt
+              ? t('runtimeAssets.lastSync', { time: formatRelativeTime(syncedAt) })
+              : t('runtimeAssets.neverSynced')}
+          </span>
+          <Button variant="outline" size="sm" disabled={refresh.isPending} onClick={onRefresh}>
+            <RefreshCw className={cn('size-4', refresh.isPending && 'animate-spin')} />
+            {t('runtimeAssets.refresh')}
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -114,76 +158,87 @@ function JDKSection({
         <StatCard label={t('runtimeAssets.instanceRefs')} value={summary.instanceRefs} accent />
       </div>
 
-      {jdks.length === 0 ? (
+      {runtimes.length === 0 ? (
         <Panel>
           <p className="py-8 text-center text-sm text-muted-foreground">{t('runtimeAssets.jdkEmpty')}</p>
         </Panel>
       ) : (
-        <>
-          {/* 可视化：节点×版本引用矩阵——格内数字=该 vendor-major 在该节点上的引用实例数。 */}
-          <Panel title={t('runtimeAssets.jdkMatrixTitle')} bodyClassName="p-0">
-            <Table className="text-xs">
-              <TableHeader className="bg-muted/50">
-                <TableRow>
-                  <TableHead className="sticky left-0 z-10 border-r bg-muted/50">{t('runtimeAssets.node')}</TableHead>
-                  {matrix.columns.map((col) => (
-                    <TableHead key={col.key} className="text-center">
-                      <div>{col.vendor}</div>
-                      <div className="font-mono text-[10px] text-muted-foreground">Java {col.majorVersion}</div>
-                    </TableHead>
-                  ))}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {matrix.rows.map((row) => (
-                  <TableRow key={row.nodeId}>
-                    <TableCell className="sticky left-0 z-10 border-r bg-card whitespace-nowrap">
-                      <span className="inline-flex items-center gap-1.5">
+        /* 可视化：节点×运行时引用矩阵（FR-301 多类型）——列=类型徽章+版本，格内数字=引用实例数（非 JDK 恒 0）。 */
+        <Panel title={t('runtimeAssets.runtimeMatrixTitle')} bodyClassName="p-0">
+          <Table className="text-xs">
+            <TableHeader className="bg-muted/50">
+              <TableRow>
+                <TableHead className="sticky left-0 z-10 border-r bg-muted/50">{t('runtimeAssets.node')}</TableHead>
+                {grid.columns.map((col) => (
+                  <TableHead key={col.key} className="text-center">
+                    <span
+                      className={cn(
+                        'rounded px-1.5 py-0.5 text-[9px] font-medium',
+                        col.type === 'jdk'
+                          ? 'bg-status-info/15 text-status-info'
+                          : 'bg-status-success/15 text-status-success',
+                      )}
+                    >
+                      {RUNTIME_TYPE_LABEL[col.type] ?? col.type}
+                    </span>
+                    <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                      {col.type === 'jdk' ? `${col.label} ${col.majorVersion}` : `v${col.majorVersion}`}
+                    </div>
+                  </TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {grid.rows.map((row) => (
+                <TableRow key={row.nodeId}>
+                  <TableCell className="sticky left-0 z-10 border-r bg-card whitespace-nowrap">
+                    <span className="inline-flex items-center gap-1.5">
+                      <span
+                        className={cn(
+                          'size-1.5 rounded-full',
+                          row.nodeOnline ? 'bg-status-success' : 'bg-muted-foreground',
+                        )}
+                      />
+                      {row.nodeName || `#${row.nodeId}`}
+                    </span>
+                  </TableCell>
+                  {grid.columns.map((col) => {
+                    const cell = row.cells[col.key]
+                    if (!cell) {
+                      return (
+                        <TableCell key={col.key} className="text-center text-muted-foreground/40">·</TableCell>
+                      )
+                    }
+                    // 引用越多色越深（冷热可视）：0=灰，>0=主色调深浅。
+                    const hot = cell.refCount > 0
+                    return (
+                      <TableCell key={col.key} className="text-center">
                         <span
                           className={cn(
-                            'size-1.5 rounded-full',
-                            row.nodeOnline ? 'bg-status-success' : 'bg-muted-foreground',
+                            'inline-flex min-w-7 items-center justify-center rounded px-1.5 py-0.5 font-mono',
+                            hot ? 'bg-primary/15 font-semibold text-primary' : 'bg-muted text-muted-foreground',
                           )}
-                        />
-                        {row.nodeName || `#${row.nodeId}`}
-                      </span>
-                    </TableCell>
-                    {matrix.columns.map((col) => {
-                      const cell = row.cells[col.key]
-                      if (!cell) {
-                        return (
-                          <TableCell key={col.key} className="text-center text-muted-foreground/40">·</TableCell>
-                        )
-                      }
-                      // 引用越多色越深（冷热可视）：0=灰，>0=主色调深浅。
-                      const hot = cell.refCount > 0
-                      return (
-                        <TableCell key={col.key} className="text-center">
-                          <span
-                            className={cn(
-                              'inline-flex min-w-7 items-center justify-center rounded px-1.5 py-0.5 font-mono',
-                              hot ? 'bg-primary/15 font-semibold text-primary' : 'bg-muted text-muted-foreground',
-                            )}
-                            title={cell.items.map((it) => `${it.version || it.vendor} · ${it.refCount}`).join('\n')}
-                          >
-                            {cell.refCount}
-                          </span>
-                        </TableCell>
-                      )
-                    })}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </Panel>
+                          title={cell.items.map((it) => `${it.version || it.name} · ${it.refCount}`).join('\n')}
+                        >
+                          {cell.refCount}
+                        </span>
+                      </TableCell>
+                    )
+                  })}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Panel>
+      )}
 
-          {/* 明细：每个 JDK + 其引用实例（引用关系下钻 + 删除占用方提示）。 */}
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-            {jdks.map((j) => (
-              <JDKCard key={j.id} jdk={j} />
-            ))}
-          </div>
-        </>
+      {/* 明细：每个 JDK + 其引用实例（引用关系下钻 + 删除占用方提示）。 */}
+      {jdks.length > 0 && (
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          {jdks.map((j) => (
+            <JDKCard key={j.id} jdk={j} />
+          ))}
+        </div>
       )}
     </section>
   )

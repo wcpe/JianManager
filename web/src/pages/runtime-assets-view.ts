@@ -2,6 +2,7 @@ import type {
   AssetType,
   AssetTypeGroup,
   JDKMatrixItem,
+  RuntimeMatrixEntry,
 } from '@/api/runtimeAssets'
 
 /**
@@ -87,6 +88,81 @@ export function buildJDKMatrix(items: JDKMatrixItem[]): JDKMatrix {
   const columns = Array.from(columnMap.values()).sort((a, b) => {
     if (a.majorVersion !== b.majorVersion) return b.majorVersion - a.majorVersion
     return a.vendor.localeCompare(b.vendor)
+  })
+  const rows = Array.from(rowMap.values()).sort((a, b) => a.nodeName.localeCompare(b.nodeName))
+  return { columns, rows }
+}
+
+/** 运行时类型展示名（专有名词，不进 i18n；与 NodeRuntimeSection 约定一致）。 */
+export const RUNTIME_TYPE_LABEL: Record<string, string> = { jdk: 'JDK', nodejs: 'Node.js', python: 'Python' }
+
+/** 多运行时矩阵一格：某节点 × 某「类型-名称-major」列上的运行时与引用数。 */
+export interface RuntimeGridCell {
+  /** 该格命中的运行时项（同节点同列可有多条不同小版本）。 */
+  items: RuntimeMatrixEntry[]
+  /** 该格引用实例总数（非 JDK 类型恒 0）。 */
+  refCount: number
+}
+
+/** 多运行时矩阵列：jdk 列 = 厂商 × major；其它类型列 = 类型 × major。 */
+export interface RuntimeGridColumn {
+  key: string
+  type: string
+  /** 列主标签：jdk=厂商（Temurin/...）；其它=类型展示名（Node.js/...）。 */
+  label: string
+  majorVersion: number
+}
+
+/** 多运行时矩阵行（节点）。 */
+export interface RuntimeGridRow {
+  nodeId: number
+  nodeName: string
+  nodeOnline: boolean
+  /** 列键 → 格。缺失列表示该节点无此列运行时。 */
+  cells: Record<string, RuntimeGridCell>
+}
+
+/** 节点 × 运行时矩阵（FR-301 可视化用）：行=节点，列=类型+版本，格=运行时+引用。 */
+export interface RuntimeGrid {
+  columns: RuntimeGridColumn[]
+  rows: RuntimeGridRow[]
+}
+
+/** 多运行时列键（type 维度先行，保证不同类型同 major 不合并）。 */
+function runtimeColumnKey(it: RuntimeMatrixEntry): { key: string; label: string } {
+  const label = it.type === 'jdk' ? it.name : (RUNTIME_TYPE_LABEL[it.type] ?? it.type)
+  return { key: `${it.type}|${label}|${it.majorVersion}`, label }
+}
+
+/**
+ * 由多运行时矩阵项构建节点 × 运行时矩阵（FR-301，泛化 buildJDKMatrix 到多类型）：
+ * 行按 nodeName 升序；列按 type 升序（jdk 在前）→ major 降序 → label 升序；
+ * 同节点同列多条（不同小版本）合并进一格并累加引用数。
+ */
+export function buildRuntimeGrid(items: RuntimeMatrixEntry[]): RuntimeGrid {
+  const columnMap = new Map<string, RuntimeGridColumn>()
+  const rowMap = new Map<number, RuntimeGridRow>()
+
+  for (const it of items) {
+    const { key, label } = runtimeColumnKey(it)
+    if (!columnMap.has(key)) {
+      columnMap.set(key, { key, type: it.type, label, majorVersion: it.majorVersion })
+    }
+    let row = rowMap.get(it.nodeId)
+    if (!row) {
+      row = { nodeId: it.nodeId, nodeName: it.nodeName, nodeOnline: it.nodeOnline, cells: {} }
+      rowMap.set(it.nodeId, row)
+    }
+    const cell = row.cells[key] ?? { items: [], refCount: 0 }
+    cell.items.push(it)
+    cell.refCount += it.refCount
+    row.cells[key] = cell
+  }
+
+  const columns = Array.from(columnMap.values()).sort((a, b) => {
+    if (a.type !== b.type) return a.type.localeCompare(b.type)
+    if (a.majorVersion !== b.majorVersion) return b.majorVersion - a.majorVersion
+    return a.label.localeCompare(b.label)
   })
   const rows = Array.from(rowMap.values()).sort((a, b) => a.nodeName.localeCompare(b.nodeName))
   return { columns, rows }

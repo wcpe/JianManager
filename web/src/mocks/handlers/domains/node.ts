@@ -269,6 +269,18 @@ interface MockNodeRuntime {
 
 const nodeRuntimes = db<MockNodeRuntime>('node-runtimes', () => [])
 
+/** 每节点上次库存同步时间（FR-301）；syncedAt=null 表示从未同步。刷新端点只前移在线节点。 */
+interface MockRuntimeSync {
+  id: number
+  nodeId: number
+  syncedAt: string | null
+}
+
+const runtimeSyncs = db<MockRuntimeSync>('runtime-syncs', () => [
+  { id: 1, nodeId: 1, syncedAt: NOW },
+  { id: 2, nodeId: 2, syncedAt: null },
+])
+
 const enrollTokens = db<MockEnrollToken>('enroll-tokens', () => [
   {
     id: 1,
@@ -977,6 +989,49 @@ export const handlers = [
         }
       })
       .filter((g) => g.count > 0)
+    // FR-301 加性扩展：多运行时矩阵（jdk 行沿 jdkMatrix 映射 + node-runtimes 行引用恒空）。
+    const runtimeMatrix = [
+      ...jdkMatrix.map((j) => ({
+        id: j.id,
+        nodeId: j.nodeId,
+        nodeName: j.nodeName,
+        nodeOnline: j.nodeOnline,
+        type: 'jdk',
+        name: j.vendor,
+        majorVersion: j.majorVersion,
+        version: j.version,
+        arch: j.arch,
+        path: j.path,
+        managed: j.managed,
+        instances: j.instances,
+        refCount: j.refCount,
+      })),
+      ...nodeRuntimes.list().map((r) => {
+        const node = nodeRows.find((n) => n.id === r.nodeId)
+        return {
+          id: r.id,
+          nodeId: r.nodeId,
+          nodeName: node?.name ?? `#${r.nodeId}`,
+          nodeOnline: node?.status === 1,
+          type: r.type,
+          name: r.name,
+          majorVersion: r.majorVersion,
+          version: r.version,
+          arch: r.arch,
+          path: r.path,
+          managed: r.managed,
+          instances: [],
+          refCount: 0,
+        }
+      }),
+    ]
+    const syncRows = nodeRows.map((n) => ({
+      nodeId: n.id,
+      nodeName: n.name,
+      online: n.status === 1,
+      syncedAt: runtimeSyncs.list((s) => s.nodeId === n.id)[0]?.syncedAt ?? null,
+    }))
+    const syncTimes = syncRows.map((s) => s.syncedAt).filter((v): v is string => v !== null).sort()
     return HttpResponse.json({
       jdks: jdkMatrix,
       jdkSummary: {
@@ -994,7 +1049,28 @@ export const handlers = [
         archivedCount: assetRows.filter((a) => a.storageState === 'archived').length,
         externalCount: assetRows.filter((a) => a.storageState === 'external').length,
       },
+      runtimes: runtimeMatrix,
+      runtimeSyncs: syncRows,
+      syncedAt: syncTimes.length > 0 ? syncTimes[syncTimes.length - 1] : null,
     })
+  }),
+
+  // 强制全节点库存同步（FR-301）：在线节点 syncedAt 前移，离线节点 ok=false 保留旧值（失败容忍显旧）。
+  domainRoute('post', '/runtime-assets/refresh', (info) => {
+    const denied = requirePlatformAdmin(info)
+    if (denied) return denied
+    const now = new Date().toISOString()
+    const results = nodes.list().map((n) => {
+      const rec = runtimeSyncs.list((s) => s.nodeId === n.id)[0]
+      if (n.status === 1) {
+        if (rec) runtimeSyncs.update(rec.id, { syncedAt: now })
+        else runtimeSyncs.insert({ nodeId: n.id, syncedAt: now })
+        return { nodeId: n.id, nodeName: n.name, ok: true, syncedAt: now }
+      }
+      return { nodeId: n.id, nodeName: n.name, ok: false, error: '节点未连接', syncedAt: rec?.syncedAt ?? null }
+    })
+    const okTimes = results.filter((r) => r.ok)
+    return HttpResponse.json({ results, syncedAt: okTimes.length > 0 ? now : null })
   }),
 
   // 导入制品（FR-155：制品导入下载进度）——镜像后端 multipart 入库（POST /assets）。

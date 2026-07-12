@@ -2249,7 +2249,13 @@
     "referencedJdk": "被引用 JDK",
     "instanceRefs": "实例引用数",
     "jdkEmpty": "尚未登记任何 JDK",
-    "jdkMatrixTitle": "节点 × 版本引用矩阵（格内为引用实例数）",
+    "runtimeMatrixTitle": "节点 × 运行时矩阵（格内为引用实例数）",
+    "lastSync": "上次同步 {{time}}",
+    "neverSynced": "尚未同步",
+    "refresh": "刷新",
+    "refreshDone": "运行时库存已刷新",
+    "refreshPartial": "部分节点同步失败，显示旧数据：{{names}}",
+    "refreshFailed": "刷新失败",
     "node": "节点",
     "managed": "托管",
     "refs": "引用",
@@ -2437,6 +2443,7 @@
       "node.runtime.register": "登记节点运行时",
       "node.runtime.install": "安装节点运行时",
       "node.runtime.delete": "删除节点运行时",
+      "runtime_assets.refresh": "刷新运行时库存",
       "instance.import.inspect": "探测导入目录",
       "instance.import": "导入现有服务器"
     }

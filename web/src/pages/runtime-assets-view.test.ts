@@ -3,9 +3,11 @@ import type { AssetInfo, AssetTypeGroup, JDKMatrixItem } from '@/api/runtimeAsse
 import {
   formatBytes,
   buildJDKMatrix,
+  buildRuntimeGrid,
   filterAssetGroups,
   shortSha,
   DEFAULT_ASSET_FILTER,
+  RUNTIME_TYPE_LABEL,
 } from './runtime-assets-view'
 
 function jdk(p: Partial<JDKMatrixItem>): JDKMatrixItem {
@@ -146,5 +148,74 @@ describe('shortSha', () => {
   it('takes first 12 chars', () => {
     expect(shortSha('abcdef0123456789')).toBe('abcdef012345')
     expect(shortSha('')).toBe('')
+  })
+})
+
+describe('buildRuntimeGrid（FR-301 多运行时矩阵）', () => {
+  function rt(p: Partial<import('@/api/runtimeAssets').RuntimeMatrixEntry>): import('@/api/runtimeAssets').RuntimeMatrixEntry {
+    return {
+      id: 1,
+      nodeId: 1,
+      nodeName: 'n1',
+      nodeOnline: true,
+      type: 'jdk',
+      name: 'Temurin',
+      majorVersion: 21,
+      version: '21.0.4',
+      arch: 'x64',
+      path: '/opt/jdk',
+      managed: true,
+      instances: [],
+      refCount: 0,
+      ...p,
+    }
+  }
+
+  it('多类型分列：jdk 列在前（type 升序），同类型内 major 降序', () => {
+    const grid = buildRuntimeGrid([
+      rt({ id: 1, type: 'nodejs', name: 'Node.js 22', majorVersion: 22 }),
+      rt({ id: 2, type: 'jdk', name: 'Temurin', majorVersion: 17 }),
+      rt({ id: 3, type: 'jdk', name: 'Temurin', majorVersion: 21 }),
+    ])
+    expect(grid.columns.map((c) => `${c.type}:${c.label}-${c.majorVersion}`)).toEqual([
+      'jdk:Temurin-21',
+      'jdk:Temurin-17',
+      'nodejs:Node.js-22',
+    ])
+  })
+
+  it('不同类型同 major 不合并为同一列', () => {
+    const grid = buildRuntimeGrid([
+      rt({ id: 1, type: 'jdk', name: 'Temurin', majorVersion: 22 }),
+      rt({ id: 2, type: 'nodejs', name: 'Node.js 22', majorVersion: 22, nodeId: 1 }),
+    ])
+    expect(grid.columns).toHaveLength(2)
+    expect(grid.rows).toHaveLength(1)
+    expect(Object.keys(grid.rows[0].cells)).toHaveLength(2)
+  })
+
+  it('同节点同列多条合并累加引用数；跨节点分行', () => {
+    const grid = buildRuntimeGrid([
+      rt({ id: 1, nodeId: 1, nodeName: 'a', refCount: 2 }),
+      rt({ id: 2, nodeId: 1, nodeName: 'a', version: '21.0.1', refCount: 1 }),
+      rt({ id: 3, nodeId: 2, nodeName: 'b', type: 'nodejs', name: 'Node.js 22', majorVersion: 22 }),
+    ])
+    expect(grid.rows.map((r) => r.nodeName)).toEqual(['a', 'b'])
+    const jdkKey = grid.columns.find((c) => c.type === 'jdk')!.key
+    expect(grid.rows[0].cells[jdkKey].items).toHaveLength(2)
+    expect(grid.rows[0].cells[jdkKey].refCount).toBe(3)
+    // b 节点无 jdk 列格。
+    expect(grid.rows[1].cells[jdkKey]).toBeUndefined()
+  })
+
+  it('非 jdk 列 label 用类型展示名（RUNTIME_TYPE_LABEL），未知类型回退原样', () => {
+    const grid = buildRuntimeGrid([
+      rt({ id: 1, type: 'nodejs', name: 'Node.js 22', majorVersion: 22 }),
+      rt({ id: 2, type: 'ruby', name: 'Ruby 3', majorVersion: 3 }),
+    ])
+    const labels = grid.columns.map((c) => c.label)
+    expect(labels).toContain('Node.js')
+    expect(labels).toContain('ruby')
+    expect(RUNTIME_TYPE_LABEL.jdk).toBe('JDK')
   })
 })

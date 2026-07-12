@@ -82,12 +82,44 @@ export interface AssetSummary {
   externalCount: number
 }
 
-/** 运行时与制品全局页一次性聚合载荷（FR-082）。 */
+/**
+ * 跨节点多运行时矩阵项（FR-301 加性扩展）：type 区分 jdk / nodejs / python（预留）。
+ * type=jdk 行 name=厂商且携带引用实例；其它类型当前无引用消费者，instances 恒空。
+ */
+export interface RuntimeMatrixEntry {
+  id: number
+  nodeId: number
+  nodeName: string
+  nodeOnline: boolean
+  type: string
+  name: string
+  majorVersion: number
+  version: string
+  arch: string
+  path: string
+  managed: boolean
+  instances: JDKRefInstance[]
+  refCount: number
+}
+
+/** 一个节点的库存同步状态（FR-301）。syncedAt=null 表示从未同步。 */
+export interface RuntimeNodeSync {
+  nodeId: number
+  nodeName: string
+  online: boolean
+  syncedAt: string | null
+}
+
+/** 运行时与制品全局页一次性聚合载荷（FR-082；FR-301 加性扩展 runtimes/runtimeSyncs/syncedAt）。 */
 export interface RuntimeAssetsOverview {
   jdks: JDKMatrixItem[]
   jdkSummary: JDKSummary
   assets: AssetTypeGroup[]
   assetSummary: AssetSummary
+  runtimes: RuntimeMatrixEntry[]
+  runtimeSyncs: RuntimeNodeSync[]
+  /** 整体上次同步时间 = 各节点最大值；null=全部未同步。 */
+  syncedAt: string | null
 }
 
 /** 拉取运行时与制品全局聚合（FR-082）。 */
@@ -101,8 +133,41 @@ export function useRuntimeAssetsOverview() {
         ...data,
         jdks: (data.jdks ?? []).map((j) => ({ ...j, instances: j.instances ?? [] })),
         assets: (data.assets ?? []).map((g) => ({ ...g, items: g.items ?? [] })),
+        runtimes: (data.runtimes ?? []).map((r) => ({ ...r, instances: r.instances ?? [] })),
+        runtimeSyncs: data.runtimeSyncs ?? [],
+        syncedAt: data.syncedAt ?? null,
       }
     },
+  })
+}
+
+/** 单节点强制同步结果（FR-301）。失败节点 syncedAt 保留旧值（显旧数据语义）。 */
+export interface RuntimeRefreshResult {
+  nodeId: number
+  nodeName: string
+  ok: boolean
+  error?: string
+  syncedAt: string | null
+}
+
+/** POST /runtime-assets/refresh 载荷（FR-301）。 */
+export interface RuntimeRefreshOutcome {
+  results: RuntimeRefreshResult[]
+  syncedAt: string | null
+}
+
+/**
+ * 强制全节点库存同步（FR-301 手动刷新）。失败容忍：响应逐节点回报 ok/error，
+ * 调用方据此提示失败节点（数据显旧）。成功后失效全局聚合缓存令 syncedAt/矩阵即刻更新。
+ */
+export function useRefreshRuntimeAssets() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.post<RuntimeRefreshOutcome>('/runtime-assets/refresh')
+      return { ...data, results: data.results ?? [] }
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['runtime-assets-overview'] }),
   })
 }
 
