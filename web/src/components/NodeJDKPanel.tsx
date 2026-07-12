@@ -15,6 +15,7 @@ import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggl
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/DangerConfirm'
 import DirectoryPicker from '@/components/DirectoryPicker'
+import NodeRuntimeSection from '@/components/NodeRuntimeSection'
 import { copyToClipboard } from '@/lib/clipboard'
 
 /** JDK 厂商集（foojay 支持，可自定义其它发行版）。 */
@@ -509,6 +510,9 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
         }}
         onCancel={() => setPendingDel(null)}
       />
+
+      {/* 运行时分区（FR-298 节点运行时库）：统一列表（类型徽章）+ 扫描发现候选勾选入库。 */}
+      <NodeRuntimeSection nodeId={nodeId} active={active} />
     </div>
   )
 }

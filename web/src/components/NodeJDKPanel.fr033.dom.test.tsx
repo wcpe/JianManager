@@ -24,7 +24,8 @@ describe('NodeJDKPanel（FR-033 JDK 与运行时管理）', () => {
 
     expect((await screen.findAllByText('temurin')).length).toBeGreaterThanOrEqual(2)
     expect(screen.getByText('Java 21')).toBeInTheDocument()
-    expect(screen.getByText('/opt/jdks/temurin-21')).toBeInTheDocument()
+    // FR-298 后 JDK 面板下方还有「运行时」统一列表分区，同路径出现多处。
+    expect(screen.getAllByText('/opt/jdks/temurin-21').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByRole('button', { name: /托管2/ })).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '登记已有' }))
@@ -39,8 +40,9 @@ describe('NodeJDKPanel（FR-033 JDK 与运行时管理）', () => {
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => expect(screen.getByRole('button', { name: /外部1/ })).toBeInTheDocument())
-    expect(screen.getByText('Temurin')).toBeInTheDocument()
-    expect(screen.getByText('/opt/jdks/custom-java-21')).toBeInTheDocument()
+    // FR-298 统一列表分区同步展示新登记 JDK，同名/同路径出现多处。
+    expect(screen.getAllByText('Temurin').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('/opt/jdks/custom-java-21').length).toBeGreaterThanOrEqual(1)
   })
 
   it('探测失败时展示错误且保持保存禁用', async () => {

@@ -253,6 +253,22 @@ const jdks = db<MockJDK>('node-jdks', () => [
   },
 ])
 
+/** 假后端非 JDK 运行时（FR-298，字段同 web/src/api/runtimes.ts NodeRuntimeItem 去 type=jdk）。 */
+interface MockNodeRuntime {
+  id: number
+  nodeId: number
+  type: string
+  name: string
+  majorVersion: number
+  version: string
+  arch: string
+  path: string
+  managed: boolean
+  createdAt: string
+}
+
+const nodeRuntimes = db<MockNodeRuntime>('node-runtimes', () => [])
+
 const enrollTokens = db<MockEnrollToken>('enroll-tokens', () => [
   {
     id: 1,
@@ -728,6 +744,110 @@ export const handlers = [
         { name: 'instances', path: '/opt/instances' },
       ],
     })
+  }),
+
+  /* ===================== 节点运行时库（FR-298） ===================== */
+  // 统一 Runtime 视图：node-jdks(type=jdk) + node-runtimes 读侧拼装。
+  domainRoute('get', '/nodes/:id/runtimes', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const nodeId = Number((info.params as { id: string }).id)
+    const jdkRows = jdks.list((j) => j.nodeId === nodeId).map((j) => ({
+      id: j.id,
+      nodeId: j.nodeId,
+      type: 'jdk',
+      name: j.vendor,
+      majorVersion: j.majorVersion,
+      version: j.version,
+      arch: j.arch,
+      path: j.path,
+      managed: j.managed,
+      createdAt: j.createdAt,
+    }))
+    return HttpResponse.json([...jdkRows, ...nodeRuntimes.list((r) => r.nodeId === nodeId)])
+  }),
+
+  // 扫描发现：固定两条候选（jdk 同 seed 路径→已在库；nodejs 未登记时可勾选入库，入库后重扫标已在库）。
+  domainRoute('post', '/nodes/:id/runtimes/scan', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const nodeId = Number((info.params as { id: string }).id)
+    await delay(50)
+    const jdkPath = '/opt/jdks/temurin-21'
+    const nodePath = '/usr/local/bin/node'
+    return HttpResponse.json({
+      candidates: [
+        {
+          type: 'jdk', vendor: 'Temurin', version: '21.0.3+9', majorVersion: 21, arch: 'x64', path: jdkPath,
+          alreadyRegistered: jdks.list((j) => j.nodeId === nodeId && j.path === jdkPath).length > 0,
+        },
+        {
+          type: 'nodejs', vendor: 'Node.js', version: '22.17.0', majorVersion: 22, arch: 'x64', path: nodePath,
+          alreadyRegistered: nodeRuntimes.list((r) => r.nodeId === nodeId && r.path === nodePath).length > 0,
+        },
+      ],
+    })
+  }),
+
+  // 泛化登记：type=jdk 落 node-jdks 走现链路语义；其它落 node-runtimes（同 node+type+path 重复 422）。
+  domainRoute('post', '/nodes/:id/runtimes', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const nodeId = Number((info.params as { id: string }).id)
+    const body = (await info.request.json()) as {
+      type: string; name?: string; vendor?: string; majorVersion: number; version: string; arch?: string; path: string; managed?: boolean
+    }
+    if (!['jdk', 'nodejs', 'python'].includes(body.type)) {
+      return HttpResponse.json({ error: 'BUSINESS_ERROR', message: `不支持的运行时类型: ${body.type}` }, { status: 422 })
+    }
+    if (body.type === 'jdk') {
+      const created = jdks.insert({
+        nodeId,
+        vendor: body.vendor || body.name || 'Unknown',
+        majorVersion: body.majorVersion,
+        version: body.version,
+        arch: body.arch ?? '',
+        path: body.path,
+        managed: body.managed ?? false,
+        createdAt: NOW,
+      })
+      return HttpResponse.json({
+        id: created.id, nodeId, type: 'jdk', name: created.vendor, majorVersion: created.majorVersion,
+        version: created.version, arch: created.arch, path: created.path, managed: created.managed, createdAt: NOW,
+      }, { status: 201 })
+    }
+    if (nodeRuntimes.list((r) => r.nodeId === nodeId && r.type === body.type && r.path === body.path).length > 0) {
+      return HttpResponse.json({ error: 'BUSINESS_ERROR', message: '该路径已登记同类型运行时' }, { status: 422 })
+    }
+    const created = nodeRuntimes.insert({
+      nodeId,
+      type: body.type,
+      name: body.name || `${body.type === 'nodejs' ? 'Node.js' : 'Python'} ${body.majorVersion}`,
+      majorVersion: body.majorVersion,
+      version: body.version,
+      arch: body.arch ?? '',
+      path: body.path,
+      managed: body.managed ?? false,
+      createdAt: NOW,
+    })
+    return HttpResponse.json(created, { status: 201 })
+  }),
+
+  // 删除：type 定位承载表（jdk → node-jdks，其它 → node-runtimes）。
+  domainRoute('delete', '/nodes/:id/runtimes/:rid', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const rid = Number((info.params as { rid: string }).rid)
+    const type = new URL(info.request.url).searchParams.get('type')
+    if (!type) return HttpResponse.json({ error: 'INVALID_REQUEST', message: '缺少 type 查询参数' }, { status: 400 })
+    if (type === 'jdk') {
+      if (!jdks.get(rid)) return HttpResponse.json({ error: 'NOT_FOUND', message: '运行时不存在' }, { status: 404 })
+      jdks.remove(rid)
+    } else {
+      if (!nodeRuntimes.get(rid)) return HttpResponse.json({ error: 'NOT_FOUND', message: '运行时不存在' }, { status: 404 })
+      nodeRuntimes.remove(rid)
+    }
+    return HttpResponse.json({ message: '已删除' })
   }),
 
   /* ===================== 节点制品缓存（FR-178） ===================== */

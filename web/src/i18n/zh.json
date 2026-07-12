@@ -979,6 +979,24 @@
     "jdkDeleteDescription": "将从该节点删除此 JDK，引用它的实例可能无法启动。",
     "jdkDeleted": "JDK 已删除",
     "jdkInUse": "JDK 正被实例占用：{{names}}",
+    "runtimeLib": {
+      "title": "运行时",
+      "subtitle": "节点运行时统一视图（JDK / Node.js），可扫描常见安装路径发现候选",
+      "scan": "扫描发现",
+      "scanTitle": "扫描发现运行时",
+      "scanning": "正在扫描节点常见安装路径…",
+      "scanFailed": "扫描失败",
+      "scanEmpty": "未发现运行时候选",
+      "alreadyRegistered": "已在库",
+      "register": "入库所选（{{count}}）",
+      "registerSuccess": "已入库 {{count}} 条运行时",
+      "registerFailed": "入库失败",
+      "empty": "尚无运行时",
+      "deleted": "运行时已删除",
+      "deleteFailed": "删除失败",
+      "deleteRecordTitle": "删除运行时登记记录?",
+      "deleteRecordDesc": "外部登记的运行时仅删除平台记录，不影响磁盘上的文件。"
+    },
     "enroll": {
       "addNode": "添加节点",
       "addTitle": "添加节点",
@@ -2339,7 +2357,12 @@
     "totalCount": "已加载 {{count}} 条",
     "loadedCount": "已加载 {{loaded}} / 共 {{total}} 条",
     "export": "导出",
-    "detail": "变更详情"
+    "detail": "变更详情",
+    "actions": {
+      "node.runtime.scan": "扫描节点运行时",
+      "node.runtime.register": "登记节点运行时",
+      "node.runtime.delete": "删除节点运行时"
+    }
   },
   "database": {
     "title": "数据库",
