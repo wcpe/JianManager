@@ -207,8 +207,9 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 指标：`GetNodeMetrics` 采集 Worker 所在节点 CPU / 内存 / 磁盘实时快照；`GetInstanceMetrics` 请求带 `probe_port`，由 Worker 抓 ServerProbe `/metrics`（**RCON 已退役（FR-067/ADR-016）**——探针未就绪时富指标 N/A，不再回退 RCON）。`GET /api/v1/nodes/:id/metrics` 节点面板端点优先经已连接 Worker 主动拉取，连接池暂无该节点时回退 CP 中最新心跳快照；实例实时面板继续按需 `GetInstanceMetrics` 拉取；**历史时序**（FR-060）由 Worker 心跳推送 `instance_metrics`，二者互补
 - 玩家管理：SendPluginCommand（FR-067/ADR-016；CP 经 Worker 反向 WS 向探针下发踢/封/解封/白名单治理指令，探针经服务端 API 执行；在线列表经探针事件聚合）。**RCON 路径已退役**，`ExecRconCommand`/`rcon_client` 移除；探针未连入时优雅降级
 - 配置 (V2)：ListConfigFiles, ReadConfig, WriteConfig, ListConfigVersions, RollbackConfig
-- 运行时 (V2)：ListJDKs, InstallJDK, RemoveJDK, JDKCatalog, ProbeJDK, ScanRuntimes, DownloadCore, InstallForgeServer, ListArtifactCache, EvictArtifactCache, ClearArtifactCache, SetArtifactCacheCap, BrowseDir
+- 运行时 (V2)：ListJDKs, InstallJDK, RemoveJDK, JDKCatalog, ProbeJDK, ScanRuntimes, InstallRuntime, RemoveRuntime, DownloadCore, InstallForgeServer, ListArtifactCache, EvictArtifactCache, ClearArtifactCache, SetArtifactCacheCap, BrowseDir
   - `ScanRuntimes`（FR-298 节点运行时库）：按类型（jdk/nodejs）扫描节点**常见安装路径**发现运行时候选（`internal/worker/runtimescan`，路径表按 GOOS 内置：jdk=`/usr/lib/jvm/*`/`/opt/java*`/`/opt/jdk*`/sdkman 与 Windows `Program Files\Java|Eclipse Adoptium|Microsoft\jdk*`；nodejs=`/usr/local/bin/node`/`/usr/bin/node`/`/opt/node*/bin/node`/nvm 与 Windows `Program Files\nodejs`、`%APPDATA%\nvm`）。jdk 探测复用 `jdk.detectAt` 语义、nodejs 跑 `node --version` + `node -p process.arch`（arch 保留 nodejs 命名 x64/arm64）；路径不存在/探测失败**静默跳过**不阻断整体；托管根下候选标 `already_registered`，CP 侧再按 DB 已登记路径补标
+  - `InstallRuntime` / `RemoveRuntime`（FR-299 Node.js 一键安装）：`InstallRuntime` **仅异步任务路径**（`task_id` 必填，语义同 InstallJDK 异步）——Worker 侧 `internal/worker/runtime` 安装器经 `<mirror>/index.json`（默认 `https://nodejs.org/dist`，镜像可配平台设置 `runtime.mirror.nodejs`）解析该 major 最新版本，下载便携归档（linux tar.gz / windows zip）解压到托管目录 `<数据根>/opt/runtimes/nodejs-<major>/`；下载复用 jdk 包导出的 `DownloadAndExtract` 基建（同一出站 client + 停滞看门狗 FR-290 + 网络失败引导 FR-279），残骸自愈完成标记 = node 可执行文件（`bin/node`|`node.exe`，FR-291），arch 用 nodejs 命名（x64/arm64，CP 按类型归一、未知 422，齐平 FR-289）。终态经心跳落 `node_runtimes`（managed=true）。`RemoveRuntime` 删除托管目录（归一顶层清理、拒根本身与根外路径，FR-292）
   - `InstallJDK` 携带 `mirror_base`（CP 从平台设置 `jdk.mirror.<vendor>` 取生效值后下发；Worker 用它构造下载 URL，使运行时配置的镜像源真生效，FR-033/FR-063；为空回退 Worker 本地 env/官方默认源）
   - `InstallJDK` 加性携带 `task_id`（FR-183/ADR-040）：非空时走**异步**——Worker 登记内存任务表、`go` 后台下载（带字节进度计数）、RPC 立即返回 `task_id`（不再阻塞最长 20min），进度/日志/终态经心跳 `tasks` 上报，CP 据终态落 `NodeJDK` + 发站内信；为空回退同步路径（向后兼容）
   - `InstallJDK` 加性携带 `version`（FR-178）：非空时 Worker 经 **foojay disco API** 按具体版本解析下载源；为空取该大版本最新 GA
@@ -977,6 +978,7 @@ data/
 ├── bin/              # 平台/辅助可执行
 ├── etc/              # 平台与节点配置；当前 OTA 不再生成 client-sign-key.pem 作为信任根，key_enc 主密钥可由 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入或自动生成持久化为 client-key-enc.key；CP 侧 WS 令牌密钥生产 autogen 持久化为 ws-token-secret.key（0600，FR-275/ADR-061，勿删——删除即轮换、已下发探针 token 失效）；Worker 侧 node-identity.json 含 wsTokenSecret
 ├── opt/jdks/         # 便携 JDK：<vendor>-<ver>/（取代旧的 <serversDir>/jdks）
+├── opt/runtimes/     # 便携非 JDK 运行时：nodejs-<major>/（FR-299 一键安装托管目录）
 ├── var/
 │   ├── servers/      # 服务器工作目录：<slug>-<shortid>/（系统分配）
 │   ├── index/        # 全文搜索倒排索引：<instance-uuid>/（Worker 本地派生，ADR-017）

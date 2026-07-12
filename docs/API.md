@@ -1876,8 +1876,9 @@
 
 > 运行时泛化管理：JDK 沿用 `node_jdks` 与既有 `/nodes/:id/jdks` 全链路**不动**；本组端点提供
 > **统一 Runtime 视图**（node_jdks(type=jdk) + node_runtimes 读侧拼装）、**扫描发现**（Worker
-> `ScanRuntimes` 扫常见安装路径）与**泛化登记/删除**。仅平台管理员；扫描/登记/删除写审计
-> （`node.runtime.scan` / `node.runtime.register` / `node.runtime.delete`，中英翻译在 `audit.actions.*`）。
+> `ScanRuntimes` 扫常见安装路径）、**一键安装**（FR-299，首批 Node.js）与**泛化登记/删除**。
+> 仅平台管理员；扫描/登记/安装/删除写审计（`node.runtime.scan` / `node.runtime.register` /
+> `node.runtime.install` / `node.runtime.delete`，中英翻译在 `audit.actions.*`）。
 
 #### GET /api/v1/nodes/:id/runtimes
 - **描述**: 统一 Runtime 视图。JDK 部分复用 JDK List 的 `syncFromWorker` 容忍语义（同步失败仍回 DB 数据）；排序 type 升序（jdk 在前）→ major 降序。
@@ -1904,13 +1905,22 @@
 - **审计**: `node.runtime.register`
 - **错误码**: `422 BUSINESS_ERROR`（未知类型 / 同 node+type+path 重复登记 / JDK 缺 vendor 或 majorVersion）；`404 NOT_FOUND`；`400 INVALID_REQUEST`
 
+#### POST /api/v1/nodes/:id/runtimes/install
+- **描述**: 异步一键安装运行时（首批仅 `type=nodejs`）。CP 建任务（任务中心 kind=`runtime_install`，复用 jdk_install 异步模式）→ 下发 Worker `InstallRuntime`（携带 `task_id` 与平台设置 `runtime.mirror.nodejs` 生效值）→ Worker 启动即返回 → **202 + taskId**。Worker 经 `<mirror>/index.json` 解析该 major 最新版下载便携归档到托管目录 `opt/runtimes/nodejs-<major>/`（停滞看门狗/残骸自愈语义齐平 FR-290/291）；终态经心跳落 `node_runtimes`（managed=true）+ 站内信。`arch` 可空（节点按本机推导），别名归一为 nodejs 命名（`amd64→x64`、`aarch64→arm64`，与 adoptium 归一表分派不共用），未知 arch 明确 422（FR-289 语义齐平）。
+- **关联 FR**: FR-299
+- **权限**: 平台管理员
+- **请求体**: `{ "type": "nodejs", "major": 22, "arch": "x64" }`（`type`/`major` 必填，`arch` 可空）
+- **响应**: `202 Accepted` `{ "taskId": "<uuid>", "task": { … } }`
+- **审计**: `node.runtime.install`（detail 含 type/major/arch/taskId）
+- **错误码**: `422 BUSINESS_ERROR`（不可安装类型 / 未知 arch / 非正 major）；`503 NODE_OFFLINE`；`404 NOT_FOUND`；`502 WORKER_ERROR`（下发失败/Worker 拒绝）
+
 #### DELETE /api/v1/nodes/:id/runtimes/:rid?type=
-- **描述**: 删除运行时。`type` **必带**（定位承载表）：`type=jdk` 走现有 JDK 删除链路（占用守卫 + 托管连文件语义不变）；其它类型仅删 `node_runtimes` 记录（波1 均为外部登记，不动磁盘文件；托管 Node 文件清理随 FR-299）。
-- **关联 FR**: FR-298
+- **描述**: 删除运行时。`type` **必带**（定位承载表）：`type=jdk` 走现有 JDK 删除链路（占用守卫 + 托管连文件语义不变）；其它类型语义对齐 JDK（FR-299）——**托管的（managed=true）先经 Worker `RemoveRuntime` 删除托管目录**（归一顶层清理，FR-292；Worker 拒绝时记录保留、返回 502），再删 `node_runtimes` 记录；外部登记的只删记录、不动磁盘文件。
+- **关联 FR**: FR-298 / FR-299
 - **权限**: 平台管理员
 - **响应**: `{ "message": "已删除" }`
 - **审计**: `node.runtime.delete`
-- **错误码**: `400 INVALID_REQUEST`（缺 type）；`409 JDK_IN_USE`（jdk 被实例占用，附 `instances`）；`404 NOT_FOUND`；`422 BUSINESS_ERROR`（未知类型）
+- **错误码**: `400 INVALID_REQUEST`（缺 type）；`409 JDK_IN_USE`（jdk 被实例占用，附 `instances`）；`404 NOT_FOUND`；`422 BUSINESS_ERROR`（未知类型）；`502 WORKER_ERROR`（托管删除下发失败/被拒）
 
 ### 节点出站代理（FR-185，见 ADR-043）
 
@@ -2090,6 +2100,7 @@
     "editable": [
       { "key": "log.level", "value": "info", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": true },
       { "key": "jdk.mirror.temurin", "value": "https://api.adoptium.net", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": false },
+      { "key": "runtime.mirror.nodejs", "value": "https://nodejs.org/dist", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": false },
       { "key": "graceful_stop.timeout", "value": "30s", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": false },
       { "key": "backup.retention_days", "value": "14", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": false },
       { "key": "proxy.url", "value": "http://127.0.0.1:7890", "editable": true, "sensitive": true, "overridden": true, "effectiveImmediately": true },
@@ -2106,10 +2117,11 @@
 - **描述**: 写入一批白名单配置覆盖。非白名单键或值不合法时整体拒绝（422）且不落库；成功后返回更新后的最新视图。可即时生效项（`log.level`）落库后立即应用
 - **权限**: 平台管理员
 - **关联 FR**: FR-063
-- **可写白名单键**: `log.level`（debug|info|warn|error）、`jdk.mirror.temurin` / `jdk.mirror.corretto` / `jdk.mirror.zulu`、`graceful_stop.timeout`（Go duration 文本）、`backup.retention_days`（非负整数）、`proxy.url`（network 类，敏感，FR-185）、`proxy.no_proxy`（network 类，FR-185）
+- **可写白名单键**: `log.level`（debug|info|warn|error）、`jdk.mirror.temurin` / `jdk.mirror.corretto` / `jdk.mirror.zulu`、`runtime.mirror.nodejs`（FR-299）、`graceful_stop.timeout`（Go duration 文本）、`backup.retention_days`（非负整数）、`proxy.url`（network 类，敏感，FR-185）、`proxy.no_proxy`（network 类，FR-185）
 - **各项生效方式**（FR-063 / FR-185）：
   - `log.level`：`effectiveImmediately=true`，落库即在 CP 内切换（slog LevelVar）
   - `jdk.mirror.*`：安装 JDK 时 CP 取生效值经 `InstallJDK.mirror_base` 下发 Worker，影响下载源
+  - `runtime.mirror.nodejs`（FR-299）：安装 Node.js 时 CP 取生效值经 `InstallRuntime.mirror_base` 下发 Worker（默认官方 `https://nodejs.org/dist`，可换 npmmirror 等）
   - `graceful_stop.timeout`：启动实例时 CP 取生效值经 `CreateInstance.graceful_stop_timeout_seconds` 下发 Worker→wrapper；对设置变更后**新启动**的实例生效，已运行实例保留启动时的值
   - `backup.retention_days`：CP 后台巡检（约每小时一轮）裁剪 `createdAt` 早于 N 天的备份；`≤0` 不裁剪；被未超期增量子链引用的全量基跳过以保链可恢复
   - `proxy.url` / `proxy.no_proxy`（FR-185/ADR-043）：`effectiveImmediately=true`，落库即重建 CP 出站持有者（CP 自身下载立即走新代理）；`proxy.url` 敏感，回显脱敏（含凭据时仅 `scheme://host:port`），非法地址（非 http/https/socks5 / 不可解析）整体拒绝（422）。此全局值同时作为各节点默认代理（节点页可覆盖），优先级 settings DB > control-plane.yml > env
