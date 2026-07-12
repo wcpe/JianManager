@@ -297,6 +297,7 @@ func runWorker() {
 
 	// Bot 管理器：按需 spawn bot-worker(Node) 子进程，经 stdin/stdout IPC 管理 Mineflayer Bot。
 	// 入口脚本默认 bot-worker/dist/index.js（相对 cwd），可经 JIANMANAGER_BOT_WORKER_PATH 覆盖。参见 ADR-006。
+	// node 可执行经 FR-300 解析器选定：本地扫描最高版 Node（runtimescan 路径表）优先，无候选回退 PATH "node"。
 	botWorkerPath := os.Getenv("JIANMANAGER_BOT_WORKER_PATH")
 	if botWorkerPath == "" {
 		botWorkerPath = filepath.Join("bot-worker", "dist", "index.js")

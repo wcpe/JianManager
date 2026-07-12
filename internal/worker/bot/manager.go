@@ -82,7 +82,8 @@ type Manager struct {
 	eventSubs map[uint64]chan *BotWorkerEvent
 	nextSubID uint64
 	prewarm   int
-	botWorker string // bot-worker 脚本路径
+	botWorker string        // bot-worker 脚本路径
+	nodeRes   *NodeResolver // node 可执行解析器（FR-300：托管/扫描 Node 优先，回退 PATH）
 }
 
 // stderrTailLimit 子进程 stderr 尾巴保留上限（崩溃取证用，防无界增长）。
@@ -115,15 +116,25 @@ func (t *tailBuffer) String() string {
 type ManagerConfig struct {
 	BotWorkerPath string // bot-worker 入口脚本路径（dist/index.js）
 	PrewarmCount  int    // 预热 Bot 数量
+	// NodePath 显式指定 spawn 用的 node 可执行（FR-300；V1 无 UI/配置面，仅留结构）。
+	NodePath string
+	// NodeResolver 可注入的 node 解析器（测试/后续 CP 下发接入点）；
+	// nil 时按 NodePath + 本地扫描构造默认解析器。
+	NodeResolver *NodeResolver
 }
 
 // NewManager 创建 Bot 管理器。
 func NewManager(config ManagerConfig) *Manager {
+	resolver := config.NodeResolver
+	if resolver == nil {
+		resolver = NewNodeResolver(config.NodePath, nil)
+	}
 	return &Manager{
 		bots:      make(map[string]*BotState),
 		eventSubs: make(map[uint64]chan *BotWorkerEvent),
 		prewarm:   config.PrewarmCount,
 		botWorker: config.BotWorkerPath,
+		nodeRes:   resolver,
 	}
 }
 
@@ -181,33 +192,26 @@ func (m *Manager) Start(ctx context.Context) error {
 		args = append(args, fmt.Sprintf("--prewarm=%d", m.prewarm))
 	}
 
-	m.cmd = exec.CommandContext(ctx, "node", args...)
-
-	stdin, err := m.cmd.StdinPipe()
+	// node 可执行解析（FR-300）：显式配置 > 本地扫描最高版 > PATH "node"，结果缓存。
+	res := m.nodeRes.Resolve()
+	stderrTail, err := m.spawnLocked(ctx, res.Path, args)
 	if err != nil {
-		return fmt.Errorf("创建 stdin 管道失败: %w", err)
+		// 缓存的解析可能已失效（托管 node 被删/移动）：重扫一次，路径不同才值得重试。
+		if retry := m.nodeRes.Refresh(); retry.Path != res.Path {
+			slog.Warn("Bot Worker 启动失败，重扫 node 后重试",
+				"error", err, "node", retry.Path, "nodeSource", retry.Source)
+			res = retry
+			stderrTail, err = m.spawnLocked(ctx, res.Path, args)
+		}
 	}
-	m.stdin = json.NewEncoder(stdin)
-
-	stdout, err := m.cmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("创建 stdout 管道失败: %w", err)
-	}
-	m.stdout = bufio.NewScanner(stdout)
-	// 增大扫描缓冲区，避免长行被截断
-	m.stdout.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-
-	// 捕获 stderr 尾巴：子进程崩溃时留取证现场（此前直接丢弃，死因不可查）。
-	stderrTail := &tailBuffer{limit: stderrTailLimit}
-	m.cmd.Stderr = stderrTail
-
-	if err := m.cmd.Start(); err != nil {
-		return fmt.Errorf("启动 Bot Worker 失败: %w", err)
+		return err
 	}
 
 	m.running = true
 	m.waitDone = make(chan struct{})
-	slog.Info("Bot Worker 已启动", "pid", m.cmd.Process.Pid)
+	slog.Info("Bot Worker 已启动",
+		"pid", m.cmd.Process.Pid, "node", res.Path, "nodeSource", res.Source)
 
 	// 启动事件读取循环
 	go m.readLoop()
@@ -216,6 +220,37 @@ func (m *Manager) Start(ctx context.Context) error {
 	go m.waitChild(m.cmd, m.waitDone, stderrTail)
 
 	return nil
+}
+
+// spawnLocked 用指定 node 可执行拉起 bot-worker 子进程并接好 stdio（须持有 m.mu）。
+// 失败不留半成品：exec.Cmd.Start 出错时会自行关闭已建管道，Manager 状态由调用方决定是否重试。
+func (m *Manager) spawnLocked(ctx context.Context, nodePath string, args []string) (*tailBuffer, error) {
+	cmd := exec.CommandContext(ctx, nodePath, args...)
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("创建 stdin 管道失败: %w", err)
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("创建 stdout 管道失败: %w", err)
+	}
+
+	// 捕获 stderr 尾巴：子进程崩溃时留取证现场（此前直接丢弃，死因不可查）。
+	stderrTail := &tailBuffer{limit: stderrTailLimit}
+	cmd.Stderr = stderrTail
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("启动 Bot Worker 失败: %w", err)
+	}
+
+	m.cmd = cmd
+	m.stdin = json.NewEncoder(stdin)
+	m.stdout = bufio.NewScanner(stdout)
+	// 增大扫描缓冲区，避免长行被截断
+	m.stdout.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	return stderrTail, nil
 }
 
 // waitChild 等待子进程退出并归位运行态（本代 cmd 的唯一 Wait 调用方）。
