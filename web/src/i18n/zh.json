@@ -2853,7 +2853,8 @@
     "placeholderTitle": "此分区已归位到服务器控制台",
     "placeholderHint": "第一版原型先完成入口与信息密度，深层管理会在后续 FR 中补齐。",
     "probeUnavailable": "探针未连入，部分在线玩家与世界数据为预览值",
-    "noInstance": "服务器不存在或正在加载"
+    "noInstance": "服务器不存在或正在加载",
+    "evictedWithDraft": "「{{name}}」已被挤出热缓存，其未保存的草稿已丢弃"
   },
   "palette": {
     "title": "命令面板",

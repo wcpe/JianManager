@@ -24,6 +24,7 @@ import {
   downloadArchive,
   type FileInfo,
 } from '@/api/files'
+import { reportInstanceDraft } from '@/lib/console-draft-registry'
 import CodeEditor from './editor/CodeEditor'
 import EditorShortcutsHelp from './editor/EditorShortcutsHelp'
 import ArchiveViewer from './ArchiveViewer'
@@ -281,7 +282,9 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
   const configDirtyRef = useRef(false)
   const setConfigDirty = useCallback((d: boolean) => {
     configDirtyRef.current = d
-  }, [])
+    // FR-296 淘汰偏好：配置编辑器脏态同步登记到实例草稿注册表。
+    reportInstanceDraft(instanceId, 'resource-config', d)
+  }, [instanceId])
   const [discardAction, setDiscardAction] = useState<{ action: () => void } | null>(null)
 
   // 切换/关闭文件前若有未保存草稿则二次确认，避免静默丢失编辑（BUG-018）。
@@ -747,6 +750,13 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
   )
 
   const dirty = openFile !== null && openFile.draft !== openFile.saved
+
+  // FR-296 淘汰偏好：文本编辑器脏态登记到实例草稿注册表——热缓存宿主据此优先淘汰
+  // 无草稿实例、被迫淘汰带草稿者时 toast 警示。故意无 effect 清理：Activity 隐藏会卸
+  // effects 但草稿 DOM 状态仍在；真卸载由宿主 clearInstanceDrafts 统一清签。
+  useEffect(() => {
+    reportInstanceDraft(instanceId, 'resource-file', dirty)
+  }, [dirty, instanceId])
 
   return (
     <div className="flex h-[600px] overflow-hidden rounded-lg border">

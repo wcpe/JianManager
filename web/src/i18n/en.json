@@ -2853,7 +2853,8 @@
     "placeholderTitle": "This section now belongs inside the server console",
     "placeholderHint": "The first mock prototype completes the entry and density; deeper management will follow in later FRs.",
     "probeUnavailable": "Probe is not connected; some player and world data is preview-only",
-    "noInstance": "Server not found or loading"
+    "noInstance": "Server not found or loading",
+    "evictedWithDraft": "\"{{name}}\" was evicted from the hot cache; its unsaved draft was discarded"
   },
   "palette": {
     "title": "Command palette",

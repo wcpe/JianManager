@@ -57,8 +57,6 @@ interface TerminalSession {
   pending: string[]
   outputListeners: Set<(text: string) => void>
   stateListeners: Set<(state: TerminalSessionState) => void>
-  /** 被控制台热集 pin 住：独立表面 release 时不释放（ADR-067 会话全局唯一）。 */
-  pinned: boolean
   disposed: boolean
   /** 连接代际：reconnect/dispose 后使在途 fetchCreds 结果作废。 */
   generation: number
@@ -73,6 +71,11 @@ interface TerminalSession {
  */
 export class TerminalSessionManager {
   private sessions = new Map<number, TerminalSession>()
+  /**
+   * 被控制台热集 pin 住的实例（FR-296）：独立表面 release 时不释放。
+   * 管理器级集合而非会话字段——宿主可在会话尚未创建（终端页签未打开）时先 pin。
+   */
+  private pinnedIds = new Set<number>()
 
   /**
    * 获取（或创建）实例终端会话。首次创建即现取 token 连 WS；
@@ -118,7 +121,6 @@ export class TerminalSessionManager {
       pending: [],
       outputListeners: new Set(),
       stateListeners: new Set(),
-      pinned: false,
       disposed: false,
       generation: 0,
     }
@@ -151,20 +153,17 @@ export class TerminalSessionManager {
 
   /** 独立表面（画布卡片等非 keep-alive 宿主）卸载语义：未被热集 pin 时立即整体释放。 */
   release(instanceId: number): void {
-    const session = this.sessions.get(instanceId)
-    if (!session || session.pinned) return
+    if (this.pinnedIds.has(instanceId)) return
     this.dispose(instanceId)
   }
 
-  /** 热集成员标记（FR-296 缓存宿主调用）：pin 期间独立表面的 release 不释放会话。 */
+  /** 热集成员标记（FR-296 缓存宿主调用）：pin 期间独立表面的 release 不释放会话；可先于会话创建。 */
   pin(instanceId: number): void {
-    const session = this.sessions.get(instanceId)
-    if (session) session.pinned = true
+    this.pinnedIds.add(instanceId)
   }
 
   unpin(instanceId: number): void {
-    const session = this.sessions.get(instanceId)
-    if (session) session.pinned = false
+    this.pinnedIds.delete(instanceId)
   }
 
   /** 实例控制台转入后台（热集 hidden 成员）：起闲置断连计时。 */
@@ -287,6 +286,7 @@ export class TerminalSessionManager {
 
   /** 整体释放该实例会话：断 WS + dispose xterm（LRU 淘汰 / 独立表面释放 / 登出）。 */
   dispose(instanceId: number): void {
+    this.pinnedIds.delete(instanceId)
     const session = this.sessions.get(instanceId)
     if (!session) return
     session.disposed = true
@@ -300,9 +300,10 @@ export class TerminalSessionManager {
     this.sessions.delete(instanceId)
   }
 
-  /** 释放全部会话（登出 / 测试隔离）。 */
+  /** 释放全部会话（登出 / 测试隔离），并清空热集 pin 登记。 */
   disposeAll(): void {
     for (const instanceId of [...this.sessions.keys()]) this.dispose(instanceId)
+    this.pinnedIds.clear()
   }
 
   // ---- 内部 ----

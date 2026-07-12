@@ -50,7 +50,9 @@ export default function Workspace() {
   // 路由过渡容器 key 仅按 pathname——同页仅 query 变化（如发布向导 ?step= 步骤切换、列表筛选、
   // tab 切换）不得 remount 路由子树，否则会清空页内本地状态（如发布向导本地暂存的 drafts）。
   // 页面级切换（pathname 变）仍会换 key 重放进场动画。
-  const routeKey = location.pathname
+  // `/instances/:id` 归并为固定 key（FR-296，ADR-067）：实例间切换不 remount 路由子树，
+  // 由跨服热缓存宿主（InstanceConsoleCache）在子树内做 LRU 保活与瞬切。
+  const routeKey = isInstanceRoute ? 'instances-console' : location.pathname
 
   // 超级工作台全幅（自带实例库 + 画布），不套统一内边距与滚动壳。
   if (location.pathname === '/super' || location.pathname.startsWith('/super/')) {

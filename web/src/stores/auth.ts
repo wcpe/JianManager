@@ -46,6 +46,9 @@ export const useAuthStore = create<AuthState>((set) => ({
     localStorage.removeItem('accessToken')
     localStorage.removeItem('refreshToken')
     set({ accessToken: null, refreshToken: null, isAuthenticated: false, role: null, username: null })
+    // 登出即整体释放全部终端会话（FR-295/296，ADR-067）：连接常驻管理器不随组件卸载断开，
+    // 必须在此统一 dispose 防孤儿 WS。动态 import 避免把 xterm 卷进首屏 chunk。
+    void import('@/lib/terminal-session-manager').then((m) => m.terminalSessionManager.disposeAll())
   },
 
   loadFromStorage: () => {
