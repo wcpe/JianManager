@@ -20,6 +20,7 @@ import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/DangerConfirm'
 import NodePMConfigSection from '@/components/NodePMConfigSection'
+import NodeGlobalPackagesSection from '@/components/NodeGlobalPackagesSection'
 import { copyToClipboard } from '@/lib/clipboard'
 
 /** 运行时类型展示名（专有名词，不进 i18n）。 */
@@ -363,6 +364,9 @@ export default function NodeRuntimeSection({ nodeId, active = true }: NodeRuntim
 
       {/* 包管理器与 registry 配置（FR-306） */}
       <NodePMConfigSection nodeId={nodeId} active={active} />
+
+      {/* 全局包管理（FR-307）：托管全局目录已装包 列表/搜索/安装/升级/卸载。 */}
+      <NodeGlobalPackagesSection nodeId={nodeId} active={active} />
     </div>
   )
 }

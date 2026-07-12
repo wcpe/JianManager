@@ -269,6 +269,19 @@ interface MockNodeRuntime {
 
 const nodeRuntimes = db<MockNodeRuntime>('node-runtimes', () => [])
 
+/** 全局包内存清单（FR-307）：装/卸联动；mineflayer 种子标可更新（升级入口可见）。 */
+interface MockGlobalPackage {
+  id: number
+  name: string
+  version: string
+  latest?: string
+}
+
+const globalPkgs = db<MockGlobalPackage>('node-global-packages', () => [
+  { id: 1, name: 'mineflayer', version: '4.20.0', latest: '4.21.0' },
+  { id: 2, name: 'typescript', version: '5.6.0' },
+])
+
 /** 每节点上次库存同步时间（FR-301）；syncedAt=null 表示从未同步。刷新端点只前移在线节点。 */
 interface MockRuntimeSync {
   id: number
@@ -921,6 +934,37 @@ export const handlers = [
         tokenMasked: !!r.token,
       })),
     })
+  }),
+
+  /* ===================== 节点全局包管理（FR-307） ===================== */
+  // 有状态内存清单：装/卸联动列表；mineflayer 种子标可更新（升级入口可见）。
+  domainRoute('get', '/nodes/:id/packages', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({ pm: 'npm', packages: globalPkgs.list().map((row) => ({ name: row.name, version: row.version, latest: row.latest })) })
+  }),
+  domainRoute('post', '/nodes/:id/packages', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json()) as { name?: string; version?: string }
+    if (!body.name) return HttpResponse.json({ error: 'INVALID_REQUEST', message: '缺少 name' }, { status: 400 })
+    const existing = globalPkgs.list((p) => p.name === body.name)[0]
+    const ver = body.version || '9.9.9'
+    if (existing) {
+      globalPkgs.update(existing.id, { version: ver, latest: undefined })
+    } else {
+      globalPkgs.insert({ name: body.name, version: ver } as Omit<MockGlobalPackage, 'id'>)
+    }
+    return HttpResponse.json({ taskId: `t-pkg-${globalPkgs.list().length}` }, { status: 202 })
+  }),
+  domainRoute('delete', '/nodes/:id/packages', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const name = new URL(info.request.url).searchParams.get('name')
+    const hit = globalPkgs.list((p) => p.name === name)[0]
+    if (!hit) return HttpResponse.json({ error: 'BUSINESS_ERROR', message: '包不存在' }, { status: 422 })
+    globalPkgs.remove(hit.id)
+    return HttpResponse.json({ message: '已卸载' })
   }),
 
   /* ===================== 节点制品缓存（FR-178） ===================== */

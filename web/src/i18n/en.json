@@ -2467,7 +2467,9 @@
       "runtime_assets.refresh": "Refresh runtime inventory",
       "instance.import.inspect": "Inspect import directory",
       "instance.import": "Import existing server",
-      "node.pm.config": "Configure node package manager"
+      "node.pm.config": "Configure node package manager",
+      "node.pkg.install": "Install global package",
+      "node.pkg.remove": "Remove global package"
     }
   },
   "importServer": {
@@ -3224,7 +3226,9 @@
       "canceling": "Stopping"
     },
     "kind": {
-      "jdkInstall": "JDK install"
+      "jdkInstall": "JDK install",
+      "runtimeInstall": "Runtime install",
+      "pkgInstall": "Global package install"
     },
     "filter": {
       "keyword": "Search title / detail",
