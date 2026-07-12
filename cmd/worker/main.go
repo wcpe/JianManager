@@ -29,6 +29,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/metrics"
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/internal/worker/register"
+	"github.com/wcpe/JianManager/internal/worker/pkgmgr"
 	wruntime "github.com/wcpe/JianManager/internal/worker/runtime"
 	"github.com/wcpe/JianManager/internal/worker/runtimescan"
 	"github.com/wcpe/JianManager/internal/worker/setup"
@@ -296,6 +297,8 @@ func runWorker() {
 		filepath.Join(runtimeMgr.RootDir(), "nodejs-*", "*", "node.exe"),
 	)
 	workerServer.SetRuntimeScanner(runtimeScanner)
+	// 包管理器（FR-306）：托管 .npmrc 与 corepack 激活落 opt/runtimes（与 nodejs-* 平级）。
+	workerServer.SetPkgManager(pkgmgr.NewManager(runtimeMgr.RootDir()))
 	// 全文搜索追加忽略规则（worker.yml search.ignore，叠加内置默认集，FR-074）。
 	workerServer.SetSearchIgnore(cfg.Search.Ignore)
 	// 节点制品缓存（FR-178）：按 sha256 缓存下载过的核心 jar（var/artifact-cache），建实例命中即秒拷免重下。
