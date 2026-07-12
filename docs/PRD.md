@@ -41,6 +41,8 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 > 标 `已交付` 是有门的：仅该 FR 的 spec 验收全过 + 测试 / 真机通过后，由 `sdd-release-version` 发版统一标 `已交付@vX.Y.Z`；开发中不得自标。false-done 走 `sdd-fix-bug` 归真，撤 / 推迟走 `sdd-rollback-change`。
 
 **活跃 FR 详细规格索引**（PRD 只留索引行，详情见 spec）：
+- FR-313（进程级崩溃诊断链路：环形缓冲 + 退出码快照上报持久化 + 前端崩溃诊断面板）→ `docs/specs/crash-diagnostics/spec.md`（需 spec，开发中创建）
+- FR-314（实例启动同步预检：预检 RPC + 同步报错不进 STARTING）→ `docs/specs/start-preflight/spec.md`（需 spec，开发中创建）
 - FR-305（反向隧道单消息尺寸上限统一治理：`ServerOptions()` 64MiB 在 grpctunnel 路径失效）→ `docs/specs/tunnel-message-size-guard/spec.md`（需 spec，开发中创建；宜随 FR-281 M1 一并处理）
 - FR-304（文件上传链路流式化：client-stream UploadFile 与 DownloadFile 对称）→ `docs/specs/upload-streaming/spec.md`（实现全绿待真机）
 - FR-298~301（节点运行时库：多运行时泛化 / 自动扫描 / Node.js 安装器 / Bot 接管 / 聚合刷新）→ `docs/specs/node-runtime-library/spec.md`
@@ -384,6 +386,10 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-309 | 节点删除实例守卫（fix，增强 FR-004 节点管理）：删除节点当前不校验其名下实例，节点没了实例记录成孤儿——终端/操作全 404「节点不存在」（v0.15.0 真机复现：删离线测试节点后其 nat-echo 实例悬挂，用户直撞 404）。节点删除时有实例则 409 拒绝并列出实例（离线节点允许 `?force=` 显式级联删除记录并明示不清理远端文件）（免 spec） | P1 | 📋 计划 |
 | FR-310 | 删除运行中实例的进程处置一致性（fix，增强 FR-005/FIX-C）：对 RUNNING 实例发 DELETE，CP 删记录返 200 而 Worker 运行态守卫拒杀进程——DB 与现实脱钩，java 进程成无主孤儿继续跑占端口（v0.15.0 真机复现：删运行中测试实例后 java -jar server.jar 遗留）。改为 CP 对 RUNNING 实例删除先优雅停（超时强杀树）再删，或 409 要求先停；Worker 重启孤儿接管扫描一并评估（免 spec） | P1 | 📋 计划 |
 | FR-311 | 节点页管理体验补全（增强 FR-033/177，真机测试反馈）：① JDK 已登记行加**编辑**入口（改厂商/版本/arch/路径，走既有 PUT /nodes/:id/jdks/:jid，模态遵守 ui-modals）；② 节点详情头四个统计球排版紧凑化（现占满整行空隙过大，改小尺寸+左聚拢与信息区同排）（免 spec） | P2 | 🔨 开发中 |
+| FR-312 | 实例启动失败原因可见性（增强 FR-269/294，真机复现：实例未绑 JDK 点启动只见「启动中→崩溃」无因——statusReason 已入库已出 API，但实例控制台页无展示位，且 Worker 心跳把 CRASHED 冲回 STOPPED 后卡片唯一展示位 `status===CRASHED` 条件失效）：实例控制台页加失败原因横幅（statusReason 非空即显、标注「上次启动失败」，下次启动由既有 transition 清空），工作台卡片展示条件同步放宽为非空即显（免 spec） | P1 | 📋 计划 |
+| FR-313 | 进程级崩溃诊断链路（feat，需 spec）：Worker 维护实例输出环形缓冲（最后 N 行）+ 捕获退出码/信号/运行时长，进程退出生成崩溃快照经 gRPC 上报 CP 持久化（保留最近 K 次）；前端实例控制台「崩溃诊断」展示快照（时间/退出码/尾部输出）——补齐进程秒退（如 jar 缺失）全链路零痕迹盲区（现 proto 不带原因、Worker 不留崩溃日志、终端仅实时流）→ `docs/specs/crash-diagnostics/spec.md` | P1 | 📋 计划 |
+| FR-314 | 实例启动同步预检（feat，增强 FR-005 启停链路，需 spec）：点启动 CP 先同步调 Worker 预检（JDK 绑定/可解析、启动目标 jar 或命令存在、工作目录就绪），失败同步返回具体错误（前端弹错+横幅），状态不进 STARTING；过检才转 STARTING 走既有异步启动——终结「配置错误也要启动中→崩溃兜一圈」→ `docs/specs/start-preflight/spec.md` | P1 | 📋 计划 |
+| FR-315 | 实例状态光晕视觉（增强 FR-269/240 控制台视觉）：实例控制台容器与工作台实例卡片外圈按状态渐变光晕——RUNNING 绿色柔光、STARTING/STOPPING 琥珀呼吸、CRASHED 红色警示光、STOPPED 无光晕；随双主题取色、平滑过渡动画、遵守 UI 风格偏好不过度（免 spec） | P2 | 📋 计划 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
