@@ -20,6 +20,7 @@ import (
 	workercfg "github.com/wcpe/JianManager/internal/worker"
 	"github.com/wcpe/JianManager/internal/worker/artifactcache"
 	"github.com/wcpe/JianManager/internal/worker/bot"
+	"github.com/wcpe/JianManager/internal/worker/botdist"
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 	"github.com/wcpe/JianManager/internal/worker/decompiler"
 	wembed "github.com/wcpe/JianManager/internal/worker/embed"
@@ -309,18 +310,25 @@ func runWorker() {
 	slog.Info("节点制品缓存已启用", "dir", root.ArtifactCacheDir(), "maxBytes", cfg.ArtifactCache.MaxBytes)
 
 	// Bot 管理器：按需 spawn bot-worker(Node) 子进程，经 stdin/stdout IPC 管理 Mineflayer Bot。
-	// 入口脚本默认 bot-worker/dist/index.js（相对 cwd），可经 JIANMANAGER_BOT_WORKER_PATH 覆盖。参见 ADR-006。
+	// 入口脚本解析顺序（FR-308，见 ADR-070 修订 ADR-006）：JIANMANAGER_BOT_WORKER_PATH 显式覆盖 >
+	// 数据根自愈物化副本（注册后拉取，见下方 botdist.Ensure）> 旧相对路径 bot-worker/dist/index.js。
 	// node 可执行经 FR-300 解析器选定：本地扫描最高版 Node（runtimescan 路径表）优先，无候选回退 PATH "node"。
 	botWorkerPath := os.Getenv("JIANMANAGER_BOT_WORKER_PATH")
+	botWorkerPathPinned := botWorkerPath != ""
 	if botWorkerPath == "" {
 		botWorkerPath = filepath.Join("bot-worker", "dist", "index.js")
 	}
+	// mineflayer 等运行时依赖不随 dist 分发，指向 FR-307 托管全局包：NODE_PATH 兜底 CJS，
+	// spawn 前预检缺装给可操作指引（装依赖走节点『全局包管理』）。
+	globalNM := botdist.GlobalNodeModulesCandidates(runtimeMgr.RootDir())
 	// FR-300 解析器复用上面的运行时扫描器（含托管根 glob）：一键装的托管 Node 也可被选中。
 	botMgr := bot.NewManager(bot.ManagerConfig{
 		BotWorkerPath: botWorkerPath,
 		NodeResolver: bot.NewNodeResolver("", func() []runtimescan.Candidate {
 			return runtimeScanner.Scan([]string{runtimescan.TypeNodeJS})
 		}),
+		ExtraEnv:     []string{botdist.NodePathEnv(globalNM)},
+		DepsPrecheck: func(distDir string) error { return botdist.CheckDeps(distDir, globalNM) },
 	})
 	defer botMgr.Stop()
 	workerServer.SetBotManager(botMgr)
@@ -477,6 +485,27 @@ func runWorker() {
 				}
 			}
 			identityForPersist = identity
+		}
+	}
+
+	// bot-worker dist 自愈下发（FR-308，见 ADR-070）：注册成功即持身份从 CP 拉取内嵌归档，
+	// 物化到数据根后切换 bot 入口路径。显式 JIANMANAGER_BOT_WORKER_PATH 时尊重覆盖不自愈；
+	// CP 未内嵌/拉取失败回退本地已有（物化副本或旧相对路径），只告警不阻断启动。
+	if !botWorkerPathPinned {
+		ensureCtx, cancelEnsure := context.WithTimeout(context.Background(), 60*time.Second)
+		entry, err := botdist.Ensure(ensureCtx, botdist.Options{
+			CPAddr:            cpAddr,
+			NodeUUID:          nodeUUID,
+			NodeSecret:        regResult.NodeSecret,
+			Dir:               root.BotWorkerDir(),
+			GlobalNodeModules: botdist.GlobalNodeModulesDir(runtimeMgr.RootDir()),
+		})
+		cancelEnsure()
+		if err != nil {
+			slog.Warn("bot-worker 自愈下发未成，沿用现有入口路径", "error", err, "fallback", botWorkerPath)
+		} else {
+			botMgr.SetBotWorkerPath(entry)
+			slog.Info("bot-worker dist 已就绪", "entry", entry)
 		}
 	}
 

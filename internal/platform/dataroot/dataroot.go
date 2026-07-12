@@ -93,6 +93,9 @@ func (r *Root) JDKsDir() string { return filepath.Join(r.base, "opt", "jdks") }
 // 与 opt/jdks 平级：JDK 沿用既有目录不迁移，其它运行时按 <type>-<major> 子目录托管。
 func (r *Root) RuntimesDir() string { return filepath.Join(r.base, "opt", "runtimes") }
 
+// BotWorkerDir 返回 bot-worker dist 自愈物化目录 <root>/opt/bot-worker（FR-308，见 ADR-070）。
+func (r *Root) BotWorkerDir() string { return filepath.Join(r.base, "opt", "bot-worker") }
+
 // ServersDir 返回服务器工作目录根 <root>/var/servers。
 func (r *Root) ServersDir() string { return filepath.Join(r.base, "var", "servers") }
 

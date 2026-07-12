@@ -15,7 +15,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -84,6 +86,9 @@ type Manager struct {
 	prewarm   int
 	botWorker string        // bot-worker 脚本路径
 	nodeRes   *NodeResolver // node 可执行解析器（FR-300：托管/扫描 Node 优先，回退 PATH）
+	extraEnv  []string      // spawn 追加环境（FR-308：NODE_PATH 指向托管全局包，CJS 兜底）
+	// depsPrecheck spawn 前依赖预检（FR-308）：缺 mineflayer 时给可操作指引而非子进程裸崩。
+	depsPrecheck func(distDir string) error
 }
 
 // stderrTailLimit 子进程 stderr 尾巴保留上限（崩溃取证用，防无界增长）。
@@ -121,6 +126,11 @@ type ManagerConfig struct {
 	// NodeResolver 可注入的 node 解析器（测试/后续 CP 下发接入点）；
 	// nil 时按 NodePath + 本地扫描构造默认解析器。
 	NodeResolver *NodeResolver
+	// ExtraEnv spawn 时在继承环境上追加的变量（FR-308：NODE_PATH → 托管全局包）。
+	ExtraEnv []string
+	// DepsPrecheck spawn 前依赖预检（FR-308）；nil 时不预检（测试/旧行为）。
+	// 入参为当前入口脚本所在目录。
+	DepsPrecheck func(distDir string) error
 }
 
 // NewManager 创建 Bot 管理器。
@@ -130,12 +140,22 @@ func NewManager(config ManagerConfig) *Manager {
 		resolver = NewNodeResolver(config.NodePath, nil)
 	}
 	return &Manager{
-		bots:      make(map[string]*BotState),
-		eventSubs: make(map[uint64]chan *BotWorkerEvent),
-		prewarm:   config.PrewarmCount,
-		botWorker: config.BotWorkerPath,
-		nodeRes:   resolver,
+		bots:         make(map[string]*BotState),
+		eventSubs:    make(map[uint64]chan *BotWorkerEvent),
+		prewarm:      config.PrewarmCount,
+		botWorker:    config.BotWorkerPath,
+		nodeRes:      resolver,
+		extraEnv:     config.ExtraEnv,
+		depsPrecheck: config.DepsPrecheck,
 	}
+}
+
+// SetBotWorkerPath 运行时更新 bot-worker 入口脚本路径（FR-308：自愈下发完成后切到数据根物化副本）。
+// 只影响下一次 spawn；已运行的子进程不打扰。
+func (m *Manager) SetBotWorkerPath(p string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.botWorker = p
 }
 
 // SetEventCallback 设置事件回调。
@@ -185,6 +205,14 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("Bot 管理器已在运行")
 	}
 
+	// 依赖预检（FR-308）：mineflayer 不随 dist 分发，缺装时在这里给指引，
+	// 而非让子进程以 ERR_MODULE_NOT_FOUND 裸崩、用户只能翻 stderr 取证。
+	if m.depsPrecheck != nil {
+		if err := m.depsPrecheck(filepath.Dir(m.botWorker)); err != nil {
+			return err
+		}
+	}
+
 	ctx, m.cancel = context.WithCancel(ctx)
 
 	args := []string{m.botWorker}
@@ -226,6 +254,9 @@ func (m *Manager) Start(ctx context.Context) error {
 // 失败不留半成品：exec.Cmd.Start 出错时会自行关闭已建管道，Manager 状态由调用方决定是否重试。
 func (m *Manager) spawnLocked(ctx context.Context, nodePath string, args []string) (*tailBuffer, error) {
 	cmd := exec.CommandContext(ctx, nodePath, args...)
+	if len(m.extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), m.extraEnv...)
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
