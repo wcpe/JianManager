@@ -95,6 +95,8 @@ func AutoMigrate(db *gorm.DB) error {
 		// 节点运行时库（FR-298）：非 JDK 运行时（nodejs/python 预留）承载表，
 		// 读侧与 node_jdks 拼统一视图，写侧各走各表；JDK 不迁移。
 		&model.NodeRuntime{},
+		// 节点包管理器与 registry 配置（FR-306，节点单例）。
+		&model.NodePMConfig{},
 		&model.NodeEnrollToken{},
 		&model.Instance{},
 		&model.GroupInstance{},

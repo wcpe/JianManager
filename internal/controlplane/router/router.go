@@ -28,6 +28,8 @@ type Services struct {
 	// RuntimeLibrary 节点运行时库（FR-298）：统一 Runtime 视图 + 扫描发现 + 泛化登记；
 	// nil 时 /nodes/:id/runtimes 端点关闭。
 	RuntimeLibrary *service.RuntimeLibraryService
+	// PMConfig 节点包管理器与 registry 配置（FR-306）；nil 时 /nodes/:id/pm-config 端点关闭。
+	PMConfig         *service.PMConfigService
 	Diagnostics      *service.DiagnosticsService
 	DockerImage      *service.DockerImageService
 	Terminal         *service.TerminalService
@@ -169,6 +171,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.RuntimeLibrary != nil {
 			runtimeLibraryHandler := NewRuntimeLibraryHandler(svcs.RuntimeLibrary, svcs.Audit)
 			runtimeLibraryHandler.RegisterRoutes(protected)
+		}
+
+		// 节点包管理器与 registry 配置（FR-306）：PM 偏好（corepack 激活）+ 多 registry。仅平台管理员 + 审计。
+		if svcs.PMConfig != nil {
+			NewPMConfigHandler(svcs.PMConfig, svcs.Audit).RegisterRoutes(protected)
 		}
 
 		// 节点级出站代理（FR-185，见 ADR-043）：查看/设置某节点继承全局或自定义代理。
