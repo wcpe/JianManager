@@ -245,24 +245,39 @@ curl -X POST http://localhost:8080/api/v1/instances/1/start \
 
 ## 开发
 
+### 统一命令面（go-task，FR-287 / ADR-064）
+
+多语言仓库的唯一命令入口（Windows / Linux 同套动词；底层委托 go / pnpm / npm / make，配方真源不搬家）：
+
+```bash
+go install github.com/go-task/task/v3/cmd/task@latest   # 一次安装
+
+task            # 列出全部任务
+task build      # Go 全部包 + 前端两应用
+task test       # Go + 前端（含 devmock 包）
+task lint       # go vet + 前端 tsc/eslint
+task dist       # 发布构建（等价 make dist）
+task dev:cp     # 开发模式 Control Plane
+task dev:mock   # 前端 mock 模式（MSW 假后端，无需真后端）
+# 域命名空间：go:* / web:* / bot:* / probe:build / proto / embed:web
+```
+
 ### 测试
 
 ```bash
-make test           # 运行测试
+task test           # 全量（或按域 task go:test / task web:test）
+make test           # Go 测试（-race）
 make test-cover     # 测试覆盖率
-make vet            # 静态分析
-make lint           # golangci-lint
-make lint-web       # 前端类型检查
+task lint           # 全量静态检查
 make lint-bot       # Bot Worker 类型检查
 ```
 
 ### 前端 mock 模式与测试（FR-196~212）
 
 ```bash
-cd web
-npm run dev:mock   # 起 mock 模式整站（内置有状态假后端，无需真后端，开发 / 演示 / 走查）
-npm test           # vitest：node 纯逻辑 + jsdom 组件 / 页面强断言（打到 mock 假后端）
-npm run e2e        # Playwright E2E：真浏览器跑 mock 模式整站关键流（自动起 dev:mock）
+task dev:mock      # 起 mock 模式整站（内置有状态假后端，无需真后端，开发 / 演示 / 走查）
+task web:test      # vitest：node 纯逻辑 + jsdom 组件 / 页面强断言（打到 mock 假后端）
+task web:e2e       # Playwright E2E：真浏览器跑 mock 模式整站关键流（自动起 dev:mock）
 ```
 
 **CI 门禁**：`.github/workflows/ci.yml` 在 PR / 非 master 分支 push 时跑 web 的 lint + vitest + build + E2E；`release.yml` 发布前同样过这些闸。**需仓库管理员在分支保护里勾选 `web-quality` 为必需 check**，合并前才硬挡（CI 只提供 check，分支保护是仓库设置）。
@@ -270,9 +285,18 @@ npm run e2e        # Playwright E2E：真浏览器跑 mock 模式整站关键流
 ### 目录结构
 
 ```
-cmd/
-  control-plane/    # Control Plane 入口
-  worker/           # Worker Node 入口
+apps/                 # 可运行外壳（ADR-064）
+  control-plane/      # Control Plane 入口（Go）
+  worker/             # Worker Node 入口（Go）
+  jmctl/              # 紧急控制台 CLI（Go）
+  control-plane-web/  # React 主控台
+  ui-museum/          # 组件博物馆
+  bot-worker/         # Node.js Bot Worker（npm 自管，不入 workspace）
+packages/             # 第一方 JS 库（pnpm workspace）
+  ui/                 # @jianmanager/ui 共享组件
+  devmock/            # MSW 假后端（仅 dev/test）
+  tsconfig/           # 共享 TS 配置
+  eslint-config/      # 共享 ESLint 配置
 internal/
   controlplane/     # Control Plane 内部包
     config/         # 配置加载
@@ -293,8 +317,6 @@ internal/
     heartbeat/      # 心跳上报
 proto/
   workerpb/         # gRPC 桩代码
-web/                # React 前端
-bot-worker/         # Node.js Bot Worker
 configs/            # 配置文件样例
 docs/               # 文档
 ```

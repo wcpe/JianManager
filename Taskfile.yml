@@ -1,0 +1,141 @@
+# 统一命令面（FR-287，见 ADR-064）：多语言仓库的唯一命令入口。
+#
+# 原则：task 只编排、不搬逻辑——底层委托各语言原生工具（go / pnpm / npm / make / gradlew），
+# 配方真源保持在 Makefile（embed/dist）与各 package.json，避免双真源。
+# go-task 内置跨平台 sh 解释器，本文件在 Windows（开发机）与 Linux（CI/服务器）行为一致；
+# CI 仍直调底层命令（release.yml 不强制走 task，见 spec §5 决策）。
+#
+# 安装：go install github.com/go-task/task/v3/cmd/task@latest
+version: '3'
+
+tasks:
+  default:
+    desc: 列出可用任务
+    cmds:
+      - task --list
+    silent: true
+
+  # ─────────────── 聚合动词（全仓） ───────────────
+
+  build:
+    desc: 全量构建（Go 全部包 + 前端两应用；不含 embed/dist 编排，发布用 task dist）
+    deps: [go:build, web:build]
+
+  test:
+    desc: 全量测试（Go + 前端含 devmock 包）
+    deps: [go:test, web:test]
+
+  lint:
+    desc: 全量静态检查（go vet + 前端 tsc/eslint）
+    deps: [go:lint, web:lint]
+
+  dev:
+    desc: 开发指引（CP 与前端各占一个终端，分别跑 task dev:cp / task dev:web）
+    silent: true
+    cmds:
+      - echo "开两个终端分别执行："
+      - echo "  task dev:cp    # Control Plane（--dev 反代前端 dev server）"
+      - echo "  task dev:web   # 前端 Vite dev server"
+      - echo "  task dev:mock  # 前端 mock 模式（无需后端，MSW 假后端）"
+
+  # ─────────────── Go ───────────────
+
+  go:build:
+    desc: 编译全部 Go 包（含 apps/ 三入口）
+    cmds:
+      - go build ./...
+
+  go:test:
+    desc: Go 单测
+    cmds:
+      - go test ./...
+
+  go:race:
+    desc: Go 单测（竞态检测）
+    cmds:
+      - go test -race ./...
+
+  go:lint:
+    desc: go vet（golangci-lint 已安装时一并跑）
+    cmds:
+      - go vet ./...
+      - cmd: golangci-lint run
+        ignore_error: true
+
+  dev:cp:
+    desc: 开发模式起 Control Plane
+    cmds:
+      - go run ./apps/control-plane --dev
+
+  # ─────────────── 前端（pnpm workspace） ───────────────
+
+  web:build:
+    desc: 构建主控台 + 组件博物馆
+    cmds:
+      - pnpm --filter control-plane-web build
+      - pnpm --filter @jianmanager/ui-museum build
+
+  web:test:
+    desc: 前端全部测试（vitest；含 @jianmanager/devmock 包内自检）
+    cmds:
+      - pnpm -r test
+
+  web:lint:
+    desc: 前端类型检查 + eslint
+    cmds:
+      - pnpm --filter control-plane-web exec tsc -b --noEmit
+      - pnpm --filter control-plane-web lint
+
+  web:e2e:
+    desc: Playwright E2E（mock 模式整站；本机 5173 被占时设 PLAYWRIGHT_PORT）
+    dir: apps/control-plane-web
+    cmds:
+      - pnpm e2e
+
+  dev:web:
+    desc: 前端 dev server（连真后端）
+    cmds:
+      - pnpm --filter control-plane-web dev
+
+  dev:mock:
+    desc: 前端 mock 模式 dev server（MSW 假后端，无需真后端）
+    dir: apps/control-plane-web
+    cmds:
+      - pnpm dev:mock
+
+  # ─────────────── Bot Worker（npm 自管） ───────────────
+
+  bot:build:
+    desc: 构建 bot-worker（Mineflayer Node 子进程）
+    dir: apps/bot-worker
+    cmds:
+      - npm run build
+
+  bot:lint:
+    desc: bot-worker 类型检查 + eslint
+    dir: apps/bot-worker
+    cmds:
+      - npx tsc --noEmit
+      - npm run lint
+
+  # ─────────────── 内嵌资产 / 发布（委托 Makefile 配方真源） ───────────────
+
+  probe:build:
+    desc: 构建 ServerProbe 探针 jar 并注入 CP 内嵌目录（需 JDK21 + 子模块）
+    cmds:
+      - make embed-probe
+
+  embed:web:
+    desc: 前端产物拷入 go:embed 目录
+    cmds:
+      - make embed-web
+
+  proto:
+    desc: 重新生成 protobuf 代码
+    cmds:
+      - make proto
+
+  dist:
+    desc: 全量发布构建（前端 + 全部内嵌资产 + 四平台二进制，等价 make dist）
+    cmds:
+      - make dist
