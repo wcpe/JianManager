@@ -3,7 +3,7 @@
 - **日期**: 2026-07-02
 - **状态**: accepted
 - **推翻**: [ADR-022](022-client-manifest-trust-and-public-endpoint.md)（签名信任模型——信任根从「Ed25519 签名」改为「HTTPS + 拉取密钥鉴权」）；[ADR-053](053-trust-key-config-supply.md)（信任公钥运行期可配——验签已去，`signPublicKey`/`signKeyId` 废弃）
-- **修订**: [ADR-045](045-updater-core-central-version-mgmt.md)（core 默认随 CP 内嵌单版本——改为归档多版本 + 运营面板可选 + 楔子自动拉取）；[ADR-059](059-client-dist-zstd-patch-from.md)（FR-098 以可选 zstd patch-from 形式恢复窄口径增量发布）
+- **修订**: [ADR-045](045-updater-core-central-version-mgmt.md)（core 默认随 CP 内嵌单版本——改为归档多版本 + 运营面板可选 + 楔子自动拉取）；[ADR-068](068-client-dist-zstd-patch-from.md)（FR-098 以可选 zstd patch-from 形式恢复窄口径增量发布）
 - **废弃 FR**: FR-090（CAS 内容寻址缓存）、FR-091（core 自更新，上移到楔子）、FR-097（`.jmpack` 容器）、FR-253（信任公钥可配）、FR-248（签名密钥自动生成）
 - **关联**: FR-256（去验签 + 去 CAS + 去 jmpack）、FR-257（流式下载）、FR-258（楔子 gradle-wrapper）、FR-259（core 版本归档 + 端点）、FR-260（前端 + ADR + doc-sync）
 
@@ -107,4 +107,4 @@ GET /client-channels/:id/updater-core → { "version": int, "sha256": string, "d
 - **私钥离线/HSM 签发** — 中小运营商无 HSM 条件、离线签发流程过重，且 HTTPS + token 已满足实际威胁模型，YAGNI，否决。
 - **core 仍随整合包附带（ADR-045 原状）** — 整合包 14MB、core 升级需重发整包，gradle-wrapper 模式下 30KB 楔子 + 自动拉 core 更优，否决。
 - **保留 CAS 但改小文件模式** — 整包式分发下 CAS 反膨胀，逐文件 size+sha256 快筛够用，否决。
-- **delta patch / 字节级 diff** — 本 ADR 当时否决通用 diff / 容器式增量；FR-098 后续以 [ADR-059](059-client-dist-zstd-patch-from.md) 收敛为可选 zstd patch-from，不恢复 CAS / `.jmpack`。
+- **delta patch / 字节级 diff** — 本 ADR 当时否决通用 diff / 容器式增量；FR-098 后续以 [ADR-068](068-client-dist-zstd-patch-from.md) 收敛为可选 zstd patch-from，不恢复 CAS / `.jmpack`。

@@ -1,4 +1,4 @@
-# ADR-059: 客户端分发 zstd patch-from 增量发布
+# ADR-068: 客户端分发 zstd patch-from 增量发布
 
 - **日期**: 2026-07-06
 - **状态**: accepted
