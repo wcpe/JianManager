@@ -27,14 +27,19 @@ interface WorkspaceCardBodyProps {
   instanceId: number
   /** 卡片功能类型。 */
   type: CardType
+  /**
+   * 终端会话保活（FR-295，ADR-067）：服务器统一控制台（keep-alive 宿主）下传 true——
+   * 页签隐藏/卸载不断 WS；画布/导播台等独立表面保持默认卸载即释放（ADR-035 资源模型不变）。
+   */
+  persistTerminal?: boolean
 }
 
-export default function WorkspaceCardBody({ instanceId, type }: WorkspaceCardBodyProps) {
+export default function WorkspaceCardBody({ instanceId, type, persistTerminal = false }: WorkspaceCardBodyProps) {
   const { data: instance } = useInstance(instanceId)
 
   switch (type) {
     case 'terminal':
-      return <TerminalPane instanceId={instanceId} hideHeader />
+      return <TerminalPane instanceId={instanceId} hideHeader persistSession={persistTerminal} />
     case 'resource':
       // 资源卡=文件+配置合一：管理视图复用 ConfigExplorer（ResourceExplorer + config 能力，FR-130），
       // 浏览视图用共享 FileBrowser（FR-213）；二者并存，能力不减。

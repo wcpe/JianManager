@@ -1,8 +1,8 @@
 import { useEffect, useRef, useCallback, useState, type KeyboardEvent } from 'react'
-import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
+import type { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { useDirectorRender } from '@/lib/director-render'
+import { terminalSessionManager } from '@/lib/terminal-session-manager'
 import { copyToClipboard } from '@/lib/clipboard'
 import { useTranslation } from 'react-i18next'
 
@@ -22,13 +22,13 @@ interface TerminalComponentProps {
   searchOpen?: boolean
   /** 搜索框开关变更回调。 */
   onSearchOpenChange?: (open: boolean) => void
+  /**
+   * 会话保活（FR-295，ADR-067）：true=卸载（含 Activity 隐藏）只 detach，
+   * 连接与缓冲由连接管理器常驻（控制台 keep-alive 宿主负责最终释放）；
+   * false（默认）=独立表面语义，卸载即释放会话（未被控制台热集 pin 时）。
+   */
+  persistSession?: boolean
 }
-
-const MAX_RETRIES = 3
-const BASE_RETRY_DELAY = 1000
-// 连接存活超过此时长才视为「真正连上」并清零重试计数；用于防止 open→立即 close 的循环
-// 反复把计数清零而绕过 MAX_RETRIES（FIX-B 死循环刷断连）。
-const STABLE_AFTER_MS = 2000
 
 // 常用 MC/Paper 控制台命令，用于 Tab 补全（服务端控制台非 PTY，无原生补全）。
 const MC_COMMANDS = [
@@ -130,6 +130,11 @@ const highlightRowMatches = (
   }
 }
 
+/**
+ * 终端渲染壳（FR-295 改造，ADR-067）：xterm 实例与 WS 连接常驻
+ * {@link terminalSessionManager}，本组件只负责 attach 渲染、输入处理与
+ * 搜索/历史/右键菜单等交互；卸载（含 `<Activity>` 隐藏）不再断连。
+ */
 export default function TerminalComponent({
   instanceId,
   fetchToken,
@@ -138,16 +143,12 @@ export default function TerminalComponent({
   fontSize = 14,
   searchOpen,
   onSearchOpenChange,
+  persistSession = false,
 }: TerminalComponentProps) {
   const { t } = useTranslation()
+  const numericId = Number(instanceId)
   const terminalRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
-  const wsRef = useRef<WebSocket | null>(null)
-  const cleanupRef = useRef(false)
-  const retryCountRef = useRef(0)
-  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // 连接存活计时器：onopen 后延迟清零重试计数，连接若提前关闭则取消，使 MAX_RETRIES 真正生效。
-  const stableTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lineBufRef = useRef('')
   // readOnly 用 ref：实例状态变化只切换是否允许输入，不重建/不重连——停服时保持连接看关服日志。
   const readOnlyRef = useRef(readOnly)
@@ -156,24 +157,8 @@ export default function TerminalComponent({
   }, [readOnly])
 
   // 导播台节流（FR-168 / ADR-035）：非激活场景的终端 WS 保活但**暂停 xterm 重绘**——
-  // onmessage 把输出累积进 pendingRef 而不 write，切回激活时一次性 flush。无 Provider 时恒激活（FR-166/167 不变）。
+  // 输出由管理器累积，切回激活时一次性 flush。无 Provider 时恒激活（FR-166/167 不变）。
   const { active: directorActive } = useDirectorRender()
-  const pausedRef = useRef(!directorActive)
-  const pendingRef = useRef<string[]>([])
-  // 累积上限：长时间不激活的场景不无限攒内存（约对应 xterm scrollback），超限丢弃最旧段。
-  const PENDING_MAX = 4000
-
-  // 激活态切换：进入激活则一次性 flush 累积输出并 fit（瞬切回零延迟看到最新日志）；离开则转暂停。
-  useEffect(() => {
-    pausedRef.current = !directorActive
-    if (directorActive && pendingRef.current.length > 0) {
-      const term = termRef.current
-      if (term) {
-        for (const chunk of pendingRef.current) term.write(chunk)
-        pendingRef.current = []
-      }
-    }
-  }, [directorActive])
 
   // 命令历史（ref 供输入处理用，state 供右侧抽屉渲染）
   const historyRef = useRef<string[]>([])
@@ -212,11 +197,8 @@ export default function TerminalComponent({
 
   // 把一行命令下发并入历史
   const submitLine = useCallback(() => {
-    const ws = wsRef.current
     const line = lineBufRef.current
-    if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'stdin', instanceId, data: line }))
-    }
+    terminalSessionManager.send(numericId, { type: 'stdin', instanceId, data: line })
     termRef.current?.write('\r\n')
     if (line.trim()) {
       historyRef.current = [...historyRef.current, line].slice(-200)
@@ -224,7 +206,7 @@ export default function TerminalComponent({
     }
     histIdxRef.current = -1
     lineBufRef.current = ''
-  }, [instanceId])
+  }, [instanceId, numericId])
 
   // 用 newLine 替换当前输入行（历史导航/插入用）
   const replaceLine = useCallback((newLine: string) => {
@@ -399,129 +381,17 @@ export default function TerminalComponent({
     URL.revokeObjectURL(url)
   }, [getAllText, instanceId])
 
-  const connect = useCallback(async () => {
-    if (!fetchToken) return
-    cleanupRef.current = false
-
-    // 重试调度：token 拉取失败或 WS 出错都经此路径。STABLE_AFTER_MS 计时器负责在连接存活足够久后
-    // 清零累计计数（防 FIX-B open→立即 close 反复清零绕过 MAX_RETRIES 的死循环刷断连）。
-    const scheduleRetry = () => {
-      if (stableTimerRef.current) clearTimeout(stableTimerRef.current)
-      if (cleanupRef.current) return
-      if (retryCountRef.current < MAX_RETRIES) {
-        retryCountRef.current++
-        // eslint-disable-next-line react-hooks/immutability -- 重试定时器经 ref 记录，connect 递归重连为既定模式
-        retryTimerRef.current = setTimeout(() => { if (!cleanupRef.current) void connect() }, BASE_RETRY_DELAY * retryCountRef.current)
-      } else {
-        termRef.current?.write('\r\n[连接错误]\r\n')
-      }
-    }
-
-    // 每次连接（首连 / 自动重试 / 手动重连重挂）前现取一次性凭据：一次性 token 首连消费后即失效，
-    // 复用会被 CP 以 401「token already used」拒绝、重连永不恢复（FR-140）。
-    let creds: { wsUrl: string; token: string }
-    try {
-      creds = await fetchToken()
-    } catch {
-      if (cleanupRef.current) return
-      scheduleRetry()
-      return
-    }
-    if (cleanupRef.current) return
-
-    const ws = new WebSocket(`${creds.wsUrl}?token=${creds.token}`)
-    wsRef.current = ws
-
-    // 仅在连接「存活足够久」后才清零重试计数。CP→Worker 拨号失败时浏览器侧会先 open（升级成功）
-    // 再被立即 close，若在 onopen 即清零会让 MAX_RETRIES 永远归零、陷入无限重连刷断连（FIX-B）。
-    ws.onopen = () => {
-      if (stableTimerRef.current) clearTimeout(stableTimerRef.current)
-      stableTimerRef.current = setTimeout(() => { retryCountRef.current = 0 }, STABLE_AFTER_MS)
-    }
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data)
-        if (msg.type === 'stdout' || msg.type === 'stderr') {
-          const text = String(msg.data ?? '')
-          const out = text.replace(/\r?\n/g, '\r\n')
-          // 非激活：累积不重绘（WS 仍在收，瞬切回再 flush，零延迟且不丢数据）。
-          if (pausedRef.current) {
-            pendingRef.current.push(out)
-            if (pendingRef.current.length > PENDING_MAX) pendingRef.current.shift()
-          } else {
-            termRef.current?.write(out)
-            if (searchVisibleRef.current && searchQueryRef.current.trim()) scheduleSearchHighlightRef.current()
-          }
-          // 解析在线玩家：逐完整行匹配加入/离开/list 输出
-          parseBufRef.current += text
-          let nl: number
-          while ((nl = parseBufRef.current.indexOf('\n')) >= 0) {
-            const raw = parseBufRef.current.slice(0, nl)
-            parseBufRef.current = parseBufRef.current.slice(nl + 1)
-            // 去 ANSI 颜色码与 CR：Paper 控制台给玩家名套色，否则玩家名被转义码包裹导致正则匹配不到
-            // eslint-disable-next-line no-control-regex -- ANSI 转义符为有意匹配
-            const line = raw.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\r/g, '')
-            const join = line.match(/([A-Za-z0-9_]{1,16}) joined the game/)
-            if (join) onlinePlayersRef.current.add(join[1])
-            const left = line.match(/([A-Za-z0-9_]{1,16}) left the game/)
-            if (left) onlinePlayersRef.current.delete(left[1])
-            const list = line.match(/players online:\s*(.+)$/)
-            if (list) onlinePlayersRef.current = new Set(list[1].split(/,\s*/).map((s) => s.trim()).filter(Boolean))
-          }
-        } else if (msg.type === 'state') {
-          // 错误态渲染后端诊断（FR-276，见 ADR-061）：code=WORKER_TOKEN_REJECTED 是「节点 WS
-          // 令牌密钥与平台不一致」的定向提示（红色醒目），一般错误也带出 data 原因——
-          // 不再只显示裸 [状态: error] 而把诊断信息丢掉。
-          let line: string
-          if (msg.state === 'error' && msg.code === 'WORKER_TOKEN_REJECTED') {
-            line = `\r\n\x1b[1;31m[终端令牌被节点拒绝]\x1b[0m ${String(msg.data ?? '')}\r\n`
-          } else if (msg.state === 'error' && msg.data) {
-            line = `\r\n[状态: ${msg.state}] ${String(msg.data)}\r\n`
-          } else {
-            line = `\r\n[状态: ${msg.state}]\r\n`
-          }
-          if (pausedRef.current) {
-            pendingRef.current.push(line)
-            if (pendingRef.current.length > PENDING_MAX) pendingRef.current.shift()
-          } else {
-            termRef.current?.write(line)
-            if (searchVisibleRef.current && searchQueryRef.current.trim()) scheduleSearchHighlightRef.current()
-          }
-        }
-      } catch {
-        termRef.current?.write(event.data)
-      }
-    }
-
-    ws.onclose = () => {
-      // 连接关闭即取消「存活清零」计时：未撑过 STABLE_AFTER_MS 不算真正连上，保留累计计数。
-      if (stableTimerRef.current) clearTimeout(stableTimerRef.current)
-      if (!cleanupRef.current) termRef.current?.write('\r\n[连接已断开]\r\n')
-    }
-
-    ws.onerror = () => {
-      if (cleanupRef.current) return
-      scheduleRetry()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- connect 递归重连，仅依赖连接参数
-  }, [fetchToken, instanceId])
-
+  // 会话订阅（FR-295，ADR-067）：mount 时 acquire+attach 常驻 xterm，注册输入/输出处理；
+  // 卸载（含 Activity 隐藏）只解绑渲染层，连接与滚动缓冲留在管理器（persistSession=false
+  // 的独立表面在此释放会话，维持「未挂载卡不建 WS」的旧资源语义）。
   useEffect(() => {
-    if (!terminalRef.current) return
+    const container = terminalRef.current
+    if (!container || isLoading || !fetchToken) return
 
-    const term = new Terminal({
-      cursorBlink: true,
-      disableStdin: false,
-      fontSize,
-      fontFamily: 'Consolas, Monaco, monospace',
-      theme: { background: '#1a1b26', foreground: '#a9b1d6', cursor: '#c0caf5' },
-    })
-
-    const fitAddon = new FitAddon()
-    term.loadAddon(fitAddon)
-    term.open(terminalRef.current)
-    fitAddon.fit()
+    terminalSessionManager.acquire(numericId, fetchToken, { fontSize })
+    terminalSessionManager.attach(numericId, container)
+    const term = terminalSessionManager.getTerm(numericId)
+    if (!term) return
     termRef.current = term
 
     term.attachCustomKeyEventHandler((event) => {
@@ -565,7 +435,7 @@ export default function TerminalComponent({
       }
     }
 
-    term.onData((data) => {
+    const dataDisposable = term.onData((data) => {
       if (readOnlyRef.current) return // 实例非运行：忽略输入但保持连接
       // 整体匹配的转义/控制序列
       if (data === '\x1b[A') { // ↑ 上一条历史
@@ -605,28 +475,55 @@ export default function TerminalComponent({
       }
     })
 
-    const handleResize = () => {
-      fitAddon.fit()
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: 'resize', instanceId, cols: term.cols, rows: term.rows }))
+    // 输出订阅：解析在线玩家（逐完整行匹配加入/离开/list 输出）+ 搜索高亮联动。
+    const unsubscribeOutput = terminalSessionManager.onOutput(numericId, (text) => {
+      parseBufRef.current += text
+      let nl: number
+      while ((nl = parseBufRef.current.indexOf('\n')) >= 0) {
+        const raw = parseBufRef.current.slice(0, nl)
+        parseBufRef.current = parseBufRef.current.slice(nl + 1)
+        // 去 ANSI 颜色码与 CR：Paper 控制台给玩家名套色，否则玩家名被转义码包裹导致正则匹配不到
+        // eslint-disable-next-line no-control-regex -- ANSI 转义符为有意匹配
+        const line = raw.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\r/g, '')
+        const join = line.match(/([A-Za-z0-9_]{1,16}) joined the game/)
+        if (join) onlinePlayersRef.current.add(join[1])
+        const left = line.match(/([A-Za-z0-9_]{1,16}) left the game/)
+        if (left) onlinePlayersRef.current.delete(left[1])
+        const list = line.match(/players online:\s*(.+)$/)
+        if (list) onlinePlayersRef.current = new Set(list[1].split(/,\s*/).map((s) => s.trim()).filter(Boolean))
       }
+      if (searchVisibleRef.current && searchQueryRef.current.trim()) scheduleSearchHighlightRef.current()
+    })
+
+    const handleResize = () => {
+      terminalSessionManager.fit(numericId)
+      terminalSessionManager.send(numericId, { type: 'resize', instanceId, cols: term.cols, rows: term.rows })
     }
     window.addEventListener('resize', handleResize)
 
-    if (!isLoading && fetchToken) void connect()
-
     return () => {
       window.removeEventListener('resize', handleResize)
-      cleanupRef.current = true
-      if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
-      if (stableTimerRef.current) clearTimeout(stableTimerRef.current)
       if (searchHighlightTimerRef.current) clearTimeout(searchHighlightTimerRef.current)
       searchScrollDisposable.dispose()
-      wsRef.current?.close()
-      term.dispose()
+      dataDisposable.dispose()
+      unsubscribeOutput()
+      terminalSessionManager.detach(numericId)
+      // 独立表面（画布卡片等）卸载即释放；控制台 keep-alive 宿主下只解绑渲染。
+      if (!persistSession) terminalSessionManager.release(numericId)
     }
-    // 故意不依赖 readOnly：实例状态变化不重建终端/不断连。
-  }, [instanceId, connect, isLoading, fetchToken, submitLine, replaceLine, copySelection, fontSize])
+    // 故意不依赖 readOnly/fontSize：实例状态与字号变化不重建订阅、不断连。
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- fontSize 仅作首建默认值，运行时经 setFontSize 调整
+  }, [instanceId, numericId, isLoading, fetchToken, persistSession, submitLine, replaceLine, copySelection])
+
+  // 导播台激活态 → 管理器暂停/恢复重绘（恢复时管理器一次性 flush 累积输出）。
+  useEffect(() => {
+    terminalSessionManager.setPaused(numericId, !directorActive)
+  }, [directorActive, numericId])
+
+  // 字号运行时调整：不再重建终端/重连（原实现整拆整建）。
+  useEffect(() => {
+    terminalSessionManager.setFontSize(numericId, fontSize)
+  }, [fontSize, numericId])
 
   if (isLoading) {
     return (

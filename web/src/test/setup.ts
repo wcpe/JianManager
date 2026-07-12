@@ -5,7 +5,6 @@ import { server } from '@/mocks/server'
 import { resetDb } from '@/mocks/db'
 import { clearInjections } from '@/mocks/inject'
 import { useAuthStore } from '@/stores/auth'
-import { terminalSessionManager } from '@/lib/terminal-session-manager'
 
 /**
  * jsdom 组件 / 页面测试的全局 setup（FR-196，vitest dom project）。
@@ -14,7 +13,7 @@ import { terminalSessionManager } from '@/lib/terminal-session-manager'
  * （否则成功登录用例写入的 token 会泄漏到下个用例，使 LoginPage 误判已登录而重定向）。
  */
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
-afterEach(() => {
+afterEach(async () => {
   cleanup()
   server.resetHandlers()
   resetDb()
@@ -23,6 +22,9 @@ afterEach(() => {
   useAuthStore.getState().logout()
   // 终端会话常驻单例管理器（FR-295，ADR-067）：组件卸载不再断连，
   // 每例后统一释放，防止会话（WS/xterm/计时器）泄漏到下个用例。
+  // 动态 import：静态 import 会在测试文件的 vi.mock('@xterm/xterm') 生效前
+  // 把真 xterm 绑进管理器模块缓存，使各测试文件的 xterm mock 失效。
+  const { terminalSessionManager } = await import('@/lib/terminal-session-manager')
   terminalSessionManager.disposeAll()
 })
 afterAll(() => server.close())

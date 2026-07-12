@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useInstance } from '@/api/instances'
 import { useTerminalToken } from '@/api/terminal'
 import TerminalComponent from '@/components/Terminal'
+import { terminalSessionManager } from '@/lib/terminal-session-manager'
 import { Button } from '@jianmanager/ui/components/button'
 import { cn } from '@jianmanager/ui'
 import { Eye, Maximize2, Minimize2, Pencil, RotateCcw, Search, ZoomIn, ZoomOut } from 'lucide-react'
@@ -21,11 +22,15 @@ interface TerminalPaneProps {
    * 此时本组件只渲染终端区，避免双重头部。
    */
   hideHeader?: boolean
+  /**
+   * 终端会话保活（FR-295，ADR-067）：控制台 keep-alive 宿主下传 true，
+   * 卸载/隐藏不释放连接；独立表面（画布卡片等）保持默认卸载即释放。
+   */
+  persistSession?: boolean
 }
 
-export default function TerminalPane({ instanceId, hideHeader = false }: TerminalPaneProps) {
+export default function TerminalPane({ instanceId, hideHeader = false, persistSession = false }: TerminalPaneProps) {
   const { t } = useTranslation()
-  const [reconnectKey, setReconnectKey] = useState(0)
   const [fullscreen, setFullscreen] = useState(false)
   const [fontSize, setFontSize] = useState(14)
   const [terminalSearchOpen, setTerminalSearchOpen] = useState(false)
@@ -94,7 +99,8 @@ export default function TerminalPane({ instanceId, hideHeader = false }: Termina
             {isRunning ? <Pencil className="size-3" /> : <Eye className="size-3" />}
             {isRunning ? t('instanceDetail.terminalWritable') : t('instanceDetail.terminalReadOnlyBadge')}
           </span>
-          <Button size="sm" variant="outline" className="h-7 rounded-full px-2.5 text-xs" onClick={() => setReconnectKey((v) => v + 1)}>
+          {/* 手动重连改经连接管理器（FR-295）：不再 remount 组件，断旧连、现取新 token 重建（FR-140）。 */}
+          <Button size="sm" variant="outline" className="h-7 rounded-full px-2.5 text-xs" onClick={() => terminalSessionManager.reconnect(instanceId)}>
             <RotateCcw className="mr-1 size-3.5" />
             {t('instanceDetail.terminalReconnect')}
           </Button>
@@ -158,7 +164,7 @@ export default function TerminalPane({ instanceId, hideHeader = false }: Termina
           </div>
         ) : (
           <TerminalComponent
-            key={`${instanceId}:${reconnectKey}`}
+            key={String(instanceId)}
             instanceId={String(instanceId)}
             fetchToken={fetchToken}
             readOnly={!isRunning}
@@ -166,6 +172,7 @@ export default function TerminalPane({ instanceId, hideHeader = false }: Termina
             fontSize={fontSize}
             searchOpen={terminalSearchOpen}
             onSearchOpenChange={setTerminalSearchOpen}
+            persistSession={persistSession}
           />
         )}
       </div>
