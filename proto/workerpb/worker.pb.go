@@ -7324,7 +7324,7 @@ type RemoveInstanceRequest struct {
 	// work_dir 是 CP 记录的工作目录（数据根相对路径，ADR-010）。
 	// Worker 注册表命中时以注册的绝对路径为准；未命中（如 Worker 重启后未重推）时据此解析兜底。
 	WorkDir string `protobuf:"bytes,2,opt,name=work_dir,json=workDir,proto3" json:"work_dir,omitempty"`
-	// skip_work_dir 就地导入实例（FR-302，见 ADR-XXXX）：CP 显式指示跳过目录删除，
+	// skip_work_dir 就地导入实例（FR-302，见 ADR-069）：CP 显式指示跳过目录删除，
 	// 仅移除注册与派生索引，原目录绝不清理（与托管区守卫互为双保险）。
 	SkipWorkDir   bool `protobuf:"varint,3,opt,name=skip_work_dir,json=skipWorkDir,proto3" json:"skip_work_dir,omitempty"`
 	unknownFields protoimpl.UnknownFields

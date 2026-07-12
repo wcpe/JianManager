@@ -1,6 +1,6 @@
 # FR-302: 导入现有服务器向导（节点级，就地接管 / 搬迁托管区）
 
-> 状态：草拟　·　关联 PRD：FR-302　·　分支：feature/fr-302-import-server　·　关联 ADR：ADR-XXXX（占位，落地时统一分配真号；落地 ADR-007 预留的「导入已有目录」高级模式，修订其「工作目录一律系统分配」为「导入例外」）
+> 状态：草拟　·　关联 PRD：FR-302　·　分支：feature/fr-302-import-server　·　关联 ADR：ADR-069（占位，落地时统一分配真号；落地 ADR-007 预留的「导入已有目录」高级模式，修订其「工作目录一律系统分配」为「导入例外」）
 
 ## 1. 背景与目标
 
@@ -40,7 +40,7 @@
 - **删除语义（关键守则）**：就地实例删除时 CP 明确传「跳过目录删除」；且 Worker 现有托管区守卫（`remove_instance_ops.go`：托管区外一律跳过 RemoveAll）已天然兜底——双保险，spec 要求补一条端到端测试锁死。
 - 就地实例 UI 上带「就地导入」徽章 + 删除确认文案明示「不会删除原目录」。
 
-### 3.3 ADR-XXXX（占位）
+### 3.3 ADR-069（占位）
 
 记录：导入实例的工作目录例外（就地=托管区外合法存在）、删除不碰就地目录守则、migrate 的 rename/拷贝策略；标注修订 ADR-007（其「保留为高级模式」的预留正式落地）。
 
@@ -53,7 +53,7 @@
 - [ ] proto：InspectServerDir / ImportServerDir + Worker 实现（探测器 + 搬迁器 + 守卫）
 - [ ] CP：inspect/import 端点 + service + `work_dir_in_place` migration + 删除跳过语义
 - [ ] 前端：导入向导模态（节点页/实例列表入口）
-- [ ] ADR-XXXX 落稿（占位号）
+- [ ] ADR-069 落稿（占位号）
 - [ ] 测试：探测器单测（伪目录布局：paper 服/嵌套 jre/无 props）、搬迁器单测（同盘/跨盘/清源校验）、就地删除不删目录端到端测试、端点单测、前端 DOM 测
 - [ ] 文档同步：ARCHITECTURE（RPC+模型列）、API.md、PRD 状态、CHANGELOG 尾行
 

@@ -42,7 +42,7 @@ func (s *Server) RemoveInstance(ctx context.Context, req *workerpb.RemoveInstanc
 	resp := &workerpb.RemoveInstanceResponse{Success: true}
 	switch {
 	case req.SkipWorkDir:
-		// 就地导入实例（FR-302，见 ADR-XXXX）：CP 显式指示保留原目录，
+		// 就地导入实例（FR-302，见 ADR-069）：CP 显式指示保留原目录，
 		// 与下方托管区守卫互为双保险——任一生效原目录都完好。
 		resp.WorkDirSkipped = true
 		resp.SkipReason = "就地导入实例：按 CP 指示保留原目录，未删除任何文件"

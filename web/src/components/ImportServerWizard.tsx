@@ -48,7 +48,7 @@ function dirBaseName(path: string): string {
 }
 
 /**
- * 导入现有服务器向导（FR-302，见 ADR-XXXX）：选目录 → 探测结果（jar 单选 / JDK 勾选 /
+ * 导入现有服务器向导（FR-302，见 ADR-069）：选目录 → 探测结果（jar 单选 / JDK 勾选 /
  * 端口 eula 展示）→ 模式二选一（就地接管 / 搬进托管区，含后果说明）→ 名称/内存/JDK → 提交跳实例页。
  * 模态承载 + 内容自适应（ui-modals 纪律，scrollable-dialog 壳）。
  */

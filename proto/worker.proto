@@ -196,7 +196,7 @@ service WorkerService {
   // 回退直拨 Worker WS（双模式，与指令通道一致）。
   rpc TerminalSession(stream TerminalFrame) returns (stream TerminalFrame);
 
-  // === 导入现有服务器（FR-302，见 ADR-XXXX）===
+  // === 导入现有服务器（FR-302，见 ADR-069）===
 
   // InspectServerDir 只读探测节点上某现成服务器目录：核心 jar 候选（深度≤2，已知核心名排前，
   // MANIFEST Main-Class 仅作排序提示）、内嵌 JDK 候选（jre*/jdk*/runtime/java 子目录）、
@@ -1046,7 +1046,7 @@ message RemoveInstanceRequest {
   // work_dir 是 CP 记录的工作目录（数据根相对路径，ADR-010）。
   // Worker 注册表命中时以注册的绝对路径为准；未命中（如 Worker 重启后未重推）时据此解析兜底。
   string work_dir = 2;
-  // skip_work_dir 就地导入实例（FR-302，见 ADR-XXXX）：CP 显式指示跳过目录删除，
+  // skip_work_dir 就地导入实例（FR-302，见 ADR-069）：CP 显式指示跳过目录删除，
   // 仅移除注册与派生索引，原目录绝不清理（与托管区守卫互为双保险）。
   bool skip_work_dir = 3;
 }
@@ -1353,7 +1353,7 @@ message TerminalWSFrame {
   bytes payload = 2;
 }
 
-// === 导入现有服务器（FR-302，见 ADR-XXXX）===
+// === 导入现有服务器（FR-302，见 ADR-069）===
 
 message InspectServerDirRequest {
   // path 导入根目录（节点上的绝对路径）。

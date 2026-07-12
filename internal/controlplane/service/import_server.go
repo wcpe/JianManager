@@ -20,7 +20,7 @@ import (
 // 路由映射 422（不存在路径等按 spec 归 4xx）。
 var ErrImportRejected = errors.New("导入被拒绝")
 
-// ImportServerService 导入现有服务器（FR-302，见 ADR-XXXX）：
+// ImportServerService 导入现有服务器（FR-302，见 ADR-069）：
 // 探测（代理 Worker InspectServerDir）→ 就地接管 / 搬迁托管区 → 登记实例
 // （结构化启动同 provision 路径）+ 探到的内嵌 JDK 登记进 node_jdks（managed=false）。
 type ImportServerService struct {

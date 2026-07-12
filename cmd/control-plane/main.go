@@ -261,7 +261,7 @@ func main() {
 	proxySvc := service.NewProxyService(db, pool, instanceSvc, coreSvc, registrationSvc)
 	registrationSvc.SetSyncer(proxySvc)
 	cloneSvc := service.NewCloneService(db, pool, instanceSvc, registrationSvc)
-	// 导入现有服务器（FR-302，见 ADR-XXXX）：就地接管 / 搬迁托管区。
+	// 导入现有服务器（FR-302，见 ADR-069）：就地接管 / 搬迁托管区。
 	importServerSvc := service.NewImportServerService(db, pool, instanceSvc)
 	playerSvc := service.NewPlayerService(db, pool)
 	// 服务器状态查询服务（FR-076，见 ADR-016）：按需经探针反向 WS 桥的 QueryServerState

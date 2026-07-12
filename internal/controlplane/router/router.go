@@ -56,7 +56,7 @@ type Services struct {
 	Provision        *service.ProvisionService
 	Proxy            *service.ProxyService
 	Clone            *service.CloneService
-	// ImportServer 导入现有服务器（FR-302，见 ADR-XXXX）；nil 时导入端点关闭。
+	// ImportServer 导入现有服务器（FR-302，见 ADR-069）；nil 时导入端点关闭。
 	ImportServer *service.ImportServerService
 	Registration     *service.RegistrationService
 	Network          *service.NetworkService
@@ -320,7 +320,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		provisionHandler := NewProvisionHandler(svcs.Core, svcs.Provision, svcs.Proxy, svcs.Clone)
 		provisionHandler.RegisterRoutes(admin)
 
-		// 导入现有服务器：就地接管 / 搬迁托管区（FR-302，见 ADR-XXXX）。平台管理员 + 审计。
+		// 导入现有服务器：就地接管 / 搬迁托管区（FR-302，见 ADR-069）。平台管理员 + 审计。
 		if svcs.ImportServer != nil {
 			importServerHandler := NewImportServerHandler(svcs.ImportServer, svcs.Audit)
 			importServerHandler.RegisterRoutes(admin)

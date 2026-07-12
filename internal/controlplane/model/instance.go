@@ -75,7 +75,7 @@ type Instance struct {
 	JavaMajorVersion  int            `gorm:"index" json:"javaMajorVersion"`
 	LaunchSpec        string         `gorm:"type:text" json:"launchSpec"`
 	WorkDir           string         `gorm:"type:varchar(512)" json:"workDir"`
-	// WorkDirInPlace 就地导入标记（FR-302，见 ADR-XXXX）：工作目录为托管区外的原始绝对路径
+	// WorkDirInPlace 就地导入标记（FR-302，见 ADR-069）：工作目录为托管区外的原始绝对路径
 	// （ADR-007 系统分配原则的唯一合法例外）。删除实例时 CP 据此指示 Worker 跳过目录删除，
 	// 原目录永不清理（双保险之一，另一道是 Worker 托管区守卫）。
 	WorkDirInPlace bool `gorm:"default:false" json:"workDirInPlace"`

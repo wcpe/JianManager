@@ -123,7 +123,7 @@ type CreateInstanceRequest struct {
 	QueryPort   int     `json:"queryPort"`
 	ProbePort   int     `json:"probePort"`
 
-	// importWorkDir / importInPlace 仅供包内导入流程（FR-302，见 ADR-XXXX）预置工作目录：
+	// importWorkDir / importInPlace 仅供包内导入流程（FR-302，见 ADR-069）预置工作目录：
 	// 就地=原目录绝对路径、搬迁=已搬迁的系统分配相对路径，绕过下方系统分配。
 	// 未导出故 JSON 绑定不可注入——外部 API 依旧无法手填任意工作目录（ADR-007 原则不破）。
 	importWorkDir string
@@ -171,7 +171,7 @@ func (s *InstanceService) Create(req CreateInstanceRequest) (*model.Instance, er
 	// 工作目录系统分配（ADR-007/ADR-010）：MC 实例始终系统分配（忽略用户手填）；
 	// 其它类型（generic）调用方未传则同样系统分配（FR-234 创建向导隐藏工作目录、统一自动生成），
 	// 显式传入则保留（API 调用方仍可指定）。一律落数据根 var/servers 下相对路径保证便携。
-	// 导入流程（FR-302）经包内未导出字段预置工作目录，是系统分配的唯一例外（ADR-XXXX）。
+	// 导入流程（FR-302）经包内未导出字段预置工作目录，是系统分配的唯一例外（ADR-069）。
 	workDir := req.WorkDir
 	switch {
 	case req.importWorkDir != "":
@@ -698,7 +698,7 @@ func (s *InstanceService) removeWorkerData(instance *model.Instance) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	// 就地导入实例（FR-302，见 ADR-XXXX）：显式指示 Worker 跳过目录删除，
+	// 就地导入实例（FR-302，见 ADR-069）：显式指示 Worker 跳过目录删除，
 	// 原目录归用户自管；Worker 托管区守卫是第二道保险。
 	resp, err := client.Worker.RemoveInstance(ctx, &workerpb.RemoveInstanceRequest{
 		InstanceUuid: instance.UUID,
