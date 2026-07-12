@@ -45,8 +45,8 @@
 - [x] bot spawn NODE_PATH 注入 + 依赖预检 + 引导性错误
 - [x] ADR-070 落稿
 - [x] 测试：自愈全路径单测（fake client）、链接功能性验证、预检/NODE_PATH 单测、CP RPC 鉴权与嵌入态双分支单测
-- [ ] 文档同步：ARCHITECTURE（分发模型+目录+RPC）、PRD 状态、CHANGELOG 尾行（无新增 HTTP 端点，API.md 不涉）
-- [ ] 真机：node-2 自愈拉 dist → 面板装依赖 → bot 真入 MC 服
+- [x] 文档同步：ARCHITECTURE（分发模型+目录+RPC）、PRD 状态、CHANGELOG 尾行（无新增 HTTP 端点，API.md 不涉）
+- [x] 真机（2026-07-13）：node-2 自愈拉 dist（CP journal「下发 bot-worker 归档 25267B」+ worker「dist 已更新 211fb4fd6c45」，重启复验指纹省流零重拉；win-node junction 同验）→ 面板全局包装 mineflayer-pathfinder 2.4.5（任务 19 succeeded）→ UI 一键搭建 Paper 1.21.8（bot-arena2 @25566）→ UI 建 bot → **MC 日志 `fr308bot joined the game`**、bot status=connected、`nodeSource=managed-scan`，无 ERR_MODULE_NOT_FOUND
 
 ## 5. 验收标准
 

@@ -390,6 +390,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-313 | 进程级崩溃诊断链路（feat，需 spec）：Worker 维护实例输出环形缓冲（最后 N 行）+ 捕获退出码/信号/运行时长，进程退出生成崩溃快照经 gRPC 上报 CP 持久化（保留最近 K 次）；前端实例控制台「崩溃诊断」展示快照（时间/退出码/尾部输出）——补齐进程秒退（如 jar 缺失）全链路零痕迹盲区（现 proto 不带原因、Worker 不留崩溃日志、终端仅实时流）→ `docs/specs/crash-diagnostics/spec.md` | P1 | 📋 计划 |
 | FR-314 | 实例启动同步预检（feat，增强 FR-005 启停链路，需 spec）：点启动 CP 先同步调 Worker 预检（JDK 绑定/可解析、启动目标 jar 或命令存在、工作目录就绪），失败同步返回具体错误（前端弹错+横幅），状态不进 STARTING；过检才转 STARTING 走既有异步启动——终结「配置错误也要启动中→崩溃兜一圈」→ `docs/specs/start-preflight/spec.md` | P1 | 📋 计划 |
 | FR-315 | 实例状态光晕视觉（增强 FR-269/240 控制台视觉）：实例控制台容器与工作台实例卡片外圈按状态渐变光晕——RUNNING 绿色柔光、STARTING/STOPPING 琥珀呼吸、CRASHED 红色警示光、STOPPED 无光晕；随双主题取色、平滑过渡动画、遵守 UI 风格偏好不过度（免 spec） | P2 | 📋 计划 |
+| FR-316 | 一键搭建版本-JDK 兼容预检（增强 FR-034 搭建向导，FR-308 真机钓出：选 MC 26.1 + 节点最高 Temurin 21 可搭建成功但启动必崩「requires running the server with Java 25」）：向导选定 MC 版本后按核心 Java 需求映射校验所选/默认 JDK，不满足即表单级阻断并引导去 JDK 面板安装；与 FR-314 启动预检互补（搭建时拦 vs 启动时拦）（免 spec） | P2 | 📋 计划 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
