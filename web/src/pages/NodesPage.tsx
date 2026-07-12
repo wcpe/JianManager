@@ -664,12 +664,13 @@ function NodeDetailPane({
           <NodeActionsMenu node={node} onToggleMaintenance={onToggleMaintenance} onDrain={onDrain} onDelete={onDelete} />
         </div>
 
-        {/* 资源仪表：CPU/内存/磁盘/负载（FR-061；离线归零空盘） */}
-        <div className="mt-4 flex flex-wrap items-center gap-x-8 gap-y-3">
-          <ResourceGauge label={t('nodes.cpu')} value={online ? (node.cpuUsage ?? 0) * 100 : 0} unit="%" size={78} />
-          <ResourceGauge label={t('nodes.memory')} value={online ? (node.memoryUsage ?? 0) * 100 : 0} unit="%" size={78} />
-          <ResourceGauge label={t('nodes.disk')} value={online ? (node.diskUsage ?? 0) * 100 : 0} unit="%" size={78} />
-          <ResourceGauge label={t('nodes.load')} value={online ? loadPct : 0} unit="%" size={78} />
+        {/* 资源仪表：CPU/内存/磁盘/负载（FR-061；离线归零空盘）。
+            四等分栅格铺满卡宽（窄屏 2×2），消除左聚拢造成的整片留白（FR-311 真机反馈）。 */}
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="flex justify-center"><ResourceGauge label={t('nodes.cpu')} value={online ? (node.cpuUsage ?? 0) * 100 : 0} unit="%" size={64} /></div>
+          <div className="flex justify-center"><ResourceGauge label={t('nodes.memory')} value={online ? (node.memoryUsage ?? 0) * 100 : 0} unit="%" size={64} /></div>
+          <div className="flex justify-center"><ResourceGauge label={t('nodes.disk')} value={online ? (node.diskUsage ?? 0) * 100 : 0} unit="%" size={64} /></div>
+          <div className="flex justify-center"><ResourceGauge label={t('nodes.load')} value={online ? loadPct : 0} unit="%" size={64} /></div>
         </div>
       </Panel>
 

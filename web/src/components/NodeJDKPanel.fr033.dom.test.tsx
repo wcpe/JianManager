@@ -57,3 +57,28 @@ describe('NodeJDKPanel（FR-033 JDK 与运行时管理）', () => {
     expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
   })
 })
+
+describe('NodeJDKPanel 编辑登记信息（FR-311）', () => {
+  it('行内编辑：改厂商与路径保存后列表更新', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<NodeJDKPanel nodeId={1} active />)
+
+    // 种子 JDK 行出现后点铅笔开编辑模态。
+    await screen.findByText('/opt/jdks/temurin-21')
+    await user.click(screen.getAllByRole('button', { name: '编辑' })[0])
+    expect(await screen.findByText('编辑 JDK 登记信息')).toBeInTheDocument()
+
+    // 改具体版本 + 路径 → 保存。
+    const verInput = screen.getByRole('textbox', { name: '版本号' })
+    await user.clear(verInput)
+    await user.type(verInput, '21.0.99')
+    const pathInput = screen.getByRole('textbox', { name: '本地路径' })
+    await user.clear(pathInput)
+    await user.type(pathInput, '/opt/jdks/temurin-21-edited')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    // 模态关、列表出现新路径（mock PUT 生效 + invalidate 刷新）。
+    await waitFor(() => expect(screen.queryByText('编辑 JDK 登记信息')).not.toBeInTheDocument())
+    expect(await screen.findByText('/opt/jdks/temurin-21-edited')).toBeInTheDocument()
+  })
+})

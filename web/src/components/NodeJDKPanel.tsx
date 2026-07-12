@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Copy, Download, FolderOpen, Loader2, Package, PackageCheck, Coffee, Search, Trash2 } from 'lucide-react'
-import { useNodeJDKs, useCreateJDK, useDeleteJDK, useInstallJDK, useProbeJDK, type NodeJDK, type ProbeResult } from '@/api/jdks'
+import { Copy, Download, FolderOpen, Loader2, Package, PackageCheck, Pencil, Coffee, Search, Trash2 } from 'lucide-react'
+import { useNodeJDKs, useCreateJDK, useDeleteJDK, useInstallJDK, useProbeJDK, useUpdateJDK, type NodeJDK, type ProbeResult } from '@/api/jdks'
 import { useJDKCatalog } from '@/api/nodeRuntime'
 import { PingNodeButton } from '@/components/PingNodeButton'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
@@ -87,6 +87,35 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
   const [view, setView] = useState<ViewMode>('list')
   const [query, setQuery] = useState('')
   const [sourceFilter, setSourceFilter] = useState<'all' | 'managed' | 'external'>('all')
+
+  // 编辑登记信息（FR-311）：行内铅笔 → 模态改厂商/大版本/具体版本/arch/路径，走既有 PUT。
+  const update = useUpdateJDK(nodeId)
+  const [editing, setEditing] = useState<NodeJDK | null>(null)
+  const [editForm, setEditForm] = useState({ vendor: '', majorVersion: '', version: '', arch: '', path: '' })
+  const openEdit = (j: NodeJDK) => {
+    setEditing(j)
+    setEditForm({ vendor: j.vendor, majorVersion: String(j.majorVersion), version: j.version ?? '', arch: j.arch ?? '', path: j.path })
+  }
+  const submitEdit = () => {
+    if (!editing) return
+    update.mutate(
+      {
+        jdkId: editing.id,
+        body: {
+          vendor: editForm.vendor.trim(),
+          majorVersion: Number(editForm.majorVersion) || editing.majorVersion,
+          version: editForm.version.trim(),
+          arch: editForm.arch.trim(),
+          path: editForm.path.trim(),
+        },
+      },
+      {
+        onSuccess: () => { toast.success(t('nodes.jdkEditSaved', '已保存 JDK 登记信息')); setEditing(null) },
+        onError: (err: Error & { response?: { data?: { message?: string } } }) =>
+          toast.error(err.response?.data?.message || t('nodes.jdkEditFailed', '保存失败')),
+      },
+    )
+  }
 
   // foojay 版本目录（仅在「一键下载」分段且 vendor 非空时查询）。
   const majorNum = Number(major) || 0
@@ -293,6 +322,14 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
                   {sourceBadge(j.managed)}
                   <button
                     type="button"
+                    aria-label={t('nodes.jdkEdit', '编辑')}
+                    className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+                    onClick={() => openEdit(j)}
+                  >
+                    <Pencil className="size-4" />
+                  </button>
+                  <button
+                    type="button"
                     aria-label={t('common.delete')}
                     className="shrink-0 text-muted-foreground transition-colors hover:text-status-danger"
                     onClick={() => setPendingDel(j)}
@@ -319,6 +356,14 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
                     <Badge variant="secondary" className="bg-accent font-medium text-primary">
                       Java {j.majorVersion}
                     </Badge>
+                    <button
+                      type="button"
+                      aria-label={t('nodes.jdkEdit', '编辑')}
+                      className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+                      onClick={() => openEdit(j)}
+                    >
+                      <Pencil className="size-4" />
+                    </button>
                     <button
                       type="button"
                       aria-label={t('common.delete')}
@@ -510,6 +555,49 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
         }}
         onCancel={() => setPendingDel(null)}
       />
+
+      {/* 编辑登记信息（FR-311）：改厂商/版本/arch/路径，走既有 PUT /nodes/:id/jdks/:jid。 */}
+      <Dialog open={editing !== null} onOpenChange={(next) => { if (!next) setEditing(null) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t('nodes.jdkEditTitle', '编辑 JDK 登记信息')}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <div className="grid grid-cols-2 gap-3">
+              <label className="space-y-1">
+                <span className="font-medium">{t('nodes.jdkVendor')}</span>
+                <Combobox options={VENDOR_OPTIONS} value={editForm.vendor} onChange={(v) => setEditForm((f) => ({ ...f, vendor: v }))} />
+              </label>
+              <label className="space-y-1">
+                <span className="font-medium">{t('nodes.jdkMajor')}</span>
+                <Input value={editForm.majorVersion} inputMode="numeric" aria-label={t('nodes.jdkMajor')}
+                  onChange={(e) => setEditForm((f) => ({ ...f, majorVersion: e.target.value }))} />
+              </label>
+              <label className="space-y-1">
+                <span className="font-medium">{t('nodes.jdkVersion')}</span>
+                <Input value={editForm.version} aria-label={t('nodes.jdkVersion')}
+                  onChange={(e) => setEditForm((f) => ({ ...f, version: e.target.value }))} />
+              </label>
+              <label className="space-y-1">
+                <span className="font-medium">{t('nodes.jdkArch')}</span>
+                <Input value={editForm.arch} aria-label={t('nodes.jdkArch')}
+                  onChange={(e) => setEditForm((f) => ({ ...f, arch: e.target.value }))} />
+              </label>
+            </div>
+            <label className="block space-y-1">
+              <span className="font-medium">{t('nodes.jdkPath')}</span>
+              <Input value={editForm.path} className="font-mono text-xs" aria-label={t('nodes.jdkPath')}
+                onChange={(e) => setEditForm((f) => ({ ...f, path: e.target.value }))} />
+            </label>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="outline" onClick={() => setEditing(null)}>{t('common.cancel')}</Button>
+              <Button disabled={update.isPending || !editForm.vendor.trim() || !editForm.path.trim()} onClick={submitEdit}>
+                {update.isPending ? t('common.saving', '保存中…') : t('common.save', '保存')}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* 运行时分区（FR-298 节点运行时库）：统一列表（类型徽章）+ 扫描发现候选勾选入库。 */}
       <NodeRuntimeSection nodeId={nodeId} active={active} />
