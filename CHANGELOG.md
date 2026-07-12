@@ -8,6 +8,9 @@
 
 > 本段为 `v0.16.0` 开发版归档区，累积 `v0.15.0` tag 之后的开发变更（开发态版本号 `0.16.0-dev`，见 ADR-065）。
 
+### 新增
+- **bot-worker dist 自愈下发与依赖解耦（FR-308，见 ADR-070 修订 ADR-006）**：Worker 独立部署（无仓库检出）时 bot 能力此前整体不可用（`bot-worker/dist` 相对路径不存在、mineflayer 无处解析 → 子进程 `ERR_MODULE_NOT_FOUND` 裸崩）。构建期 `make embed-botworker` 把 dist 打成确定性 tar.gz（~25KB，含 `package.json` 保 ESM 语义）内嵌 CP（不入库、未注入优雅降级）；Worker 注册成功后经新增 unary RPC `FetchBotWorkerArchive`（`node_uuid+node_secret` 与重注册同源鉴权、`known_sha256` 指纹一致回空归档省流、天然复用反向隧道）自愈物化到 `<数据根>/opt/bot-worker/`（sha256 复核 + 临时目录 rename 原子换入，CP 不可达/未内嵌回退本地已有只告警不阻断）。运行时依赖不随归档分发、指向 FR-307 托管全局包：dist 同级自动建 `node_modules` 链接 → 全局 node_modules（Windows junction 免特权 / 其余 symlink），NODE_PATH 兜底 CJS；spawn 前依赖预检，缺装返回「请到节点『全局包管理』安装 mineflayer 与 mineflayer-pathfinder」可操作指引。入口解析顺序 `JIANMANAGER_BOT_WORKER_PATH` 显式覆盖 > 数据根物化副本 > 旧相对路径（仓库式部署向后兼容）。单测覆盖自愈全路径（首拉/指纹跳过/降级回退/校验拒绝/路径穿越拒绝）、链接功能性验证、预检指引、CP RPC 鉴权与嵌入态双分支。
+
 ## 0.15.0（2026-07-13）
 
 > 分发自足与受限网络体验（SSH 推送部署/CP 内嵌 Worker/代理链路）+ CP→Worker 反向隧道与终端中转（ADR-066）+ 节点运行时库（多运行时/扫描/Node 安装/包管理器）+ 导入现有服务器（ADR-069）+ 文件传输流式化收口 + 导航与控制台缓存体验批 + 审计 i18n。全部 FR 经四档验收（.tmp 验收报告），G1~G3 UI 尾巴修复闭环（e2e 99/99）。

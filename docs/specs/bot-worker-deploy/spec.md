@@ -15,35 +15,38 @@
 
 ## 3. 设计
 
-### 3.1 CP 内嵌与分发端点
+### 3.1 CP 内嵌与分发通道
 
-- 构建期 `make embed-botworker`：`bot-worker/dist` 打成 `bot-worker.tar.gz` + sha256 清单，go:embed 进 CP（目录 `.gitignore` 占位，未注入优雅降级——端点 404，Worker 保持现状）。`make dist`/`build` 接入该步。
-- 新端点 `GET /worker-assets/bot-worker.tar.gz`（鉴权复用 worker-assets 既有 token 语义）+ `GET /worker-assets/bot-worker.manifest`（sha256+构建版本，Worker 比对指纹决定是否重拉）。
+- 构建期 `make embed-botworker`：`bot-worker/dist` 打成**确定性** `bot-worker.tar.gz`（含 `package.json` 保 ESM 语义）+ sha256 清单，go:embed 进 CP（目录 `.gitignore` 占位，未注入优雅降级，Worker 保持现状）。`make dist` 接入该步。
+- **分发通道修订（施工定案，见 ADR-070）**：初稿的「HTTP `GET /worker-assets/bot-worker.tar.gz` 复用既有 token 语义」不可实现——worker-assets 的 token 是一次性 enroll 语义，撑不住每次启动的常态自愈。改为新增 unary RPC `FetchBotWorkerArchive`（CP 侧实现，`node_uuid+node_secret` 与重注册同源鉴权；请求携带本地 `known_sha256`，指纹一致回空归档省流）。归档 ~25KB 远低于 64MiB 单消息上限（FR-305），且 gRPC 通道天然复用反向隧道（ADR-066），NAT 节点零额外暴露面。不再新增 HTTP 端点。
 
 ### 3.2 Worker 自愈下发
 
-- bot spawn 前（`ensureBotWorker`）：目标 `<数据根>/opt/bot-worker/`（**迁离 cwd 相对路径**，纳入数据根；`JIANMANAGER_BOT_WORKER_PATH` 显式指定时跳过自愈保兼容）。
-  - 本地无 dist 或 `manifest.sha256` 与 CP 清单不符 → 从 CP 拉 tar.gz 校验 sha256 后解压（原子：临时目录+rename；复用 jdk 包 DownloadAndExtract 语义含 symlink 支持）。
-  - CP 不可达/未内嵌 → 若本地已有 dist 用旧的；全无 → spawn 报错引导。
+- 自愈时机（施工定案）：**注册成功后一次**（`botdist.Ensure`，60s 超时，失败只告警不阻断启动），而非每次 bot spawn 前——CP 刚服务完注册必可达，且避免 spawn 热路径带网络往返。目标 `<数据根>/opt/bot-worker/`（**迁离 cwd 相对路径**，纳入数据根；`JIANMANAGER_BOT_WORKER_PATH` 显式指定时跳过自愈保兼容）。
+  - 本地无 dist 或 `.jm-manifest.json` 指纹与 CP 不符 → 经 RPC 拉归档、sha256 复核后解压（原子：临时目录+rename，旧目录挪 `.old` 可回滚；归档只含常规文件，解压拒路径穿越）。
+  - CP 不可达/未内嵌 → 若本地已有物化副本用旧的；全无 → Ensure 报错、bot 入口沿用旧相对路径兜底。
 - `BotWorkerPath` 解析顺序：env 显式 > 数据根自愈目录 > 旧相对路径（向后兼容开发环境）。
 
-### 3.3 NODE_PATH 与依赖预检
+### 3.3 依赖解析与预检
 
-- spawn env 追加 `NODE_PATH=<runtimesRoot>/global/node_modules`（与 FR-307 全局目录约定一致；307 未落地/目录不存在时照样注入——路径不存在 node 会忽略）。
-- 预检：`<global>/node_modules/mineflayer` 目录存在即视为可达；缺失 → `Start` 返回错误「bot 依赖未安装：请到节点『全局包管理』安装 mineflayer 与 mineflayer-pathfinder」（该错误经 bot 状态/日志面向用户）。
+- 主通道=**node_modules 链接**（§6 定案）：自愈时在 `opt/bot-worker/node_modules` 建链接 → 托管全局 node_modules（npm 布局按平台：Windows `global/node_modules` 用 junction，其余 `global/lib/node_modules` 用 symlink）。已存在的非空实体目录不覆写（保留用户现场）。
+- spawn env 追加 `NODE_PATH=<两种平台布局候选>`（CJS 兜底；目录不存在 node 会忽略）。
+- 预检（spawn 前）：mineflayer 与 mineflayer-pathfinder 在「dist 同级 node_modules / 旧布局上级 node_modules / 托管全局候选」任一命中即放行；缺失 → `Start` 返回错误「bot 依赖未安装：请到节点『全局包管理』安装 mineflayer 与 mineflayer-pathfinder（缺少 X）」（该错误经 bot 状态/日志面向用户）。
 
-### 3.4 ADR-XXXX（修订 ADR-006）
+### 3.4 ADR-070（修订 ADR-006）
 
-记录：bot-worker 分发模型=CP 内嵌 dist + Worker 自愈拉取（数据根 opt/bot-worker）+ 依赖全局包 NODE_PATH，取代「dist 相对 cwd + node_modules 随仓」的开发态假设；ADR-006 的 stdin/stdout IPC 与 Node 子进程边界不变。
+记录：bot-worker 分发模型=CP 内嵌 dist + Worker 经 gRPC 自愈拉取（数据根 opt/bot-worker）+ 依赖走托管全局包（node_modules 链接主通道、NODE_PATH 兜底），取代「dist 相对 cwd + node_modules 随仓」的开发态假设；ADR-006 的 stdin/stdout IPC 与 Node 子进程边界不变。
 
 ## 4. 任务拆分
 
-- [ ] make embed-botworker + CP go:embed + 分发/manifest 端点（未注入降级）
-- [ ] Worker ensureBotWorker 自愈（指纹比对/下载校验/原子解压/路径解析顺序）
-- [ ] bot spawn NODE_PATH 注入 + mineflayer 预检 + 引导性错误
-- [ ] ADR-XXXX 落稿（占位号）
-- [ ] 测试：指纹比对/降级/路径解析单测（httptest 假 CP）、NODE_PATH 注入与预检单测、CP 端点单测
-- [ ] 文档同步：ARCHITECTURE（分发模型+目录）、API.md（新端点）、PRD 状态、CHANGELOG 尾行
+- [x] make embed-botworker（确定性归档+manifest）+ CP go:embed（未注入降级）
+- [x] proto `FetchBotWorkerArchive` + CP handler（身份鉴权/指纹省流/降级应答）
+- [x] Worker botdist.Ensure 自愈（指纹比对/sha256 复核/原子解压/node_modules 链接/路径解析顺序）+ main 接线
+- [x] bot spawn NODE_PATH 注入 + 依赖预检 + 引导性错误
+- [x] ADR-070 落稿
+- [x] 测试：自愈全路径单测（fake client）、链接功能性验证、预检/NODE_PATH 单测、CP RPC 鉴权与嵌入态双分支单测
+- [ ] 文档同步：ARCHITECTURE（分发模型+目录+RPC）、PRD 状态、CHANGELOG 尾行（无新增 HTTP 端点，API.md 不涉）
+- [ ] 真机：node-2 自愈拉 dist → 面板装依赖 → bot 真入 MC 服
 
 ## 5. 验收标准
 

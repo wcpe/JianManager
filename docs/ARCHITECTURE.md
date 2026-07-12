@@ -177,12 +177,13 @@ internal/worker/
 
 Protobuf 定义位于 `proto/worker.proto`，包含：
 
-- 生命周期：Register, Heartbeat (双向 stream)
+- 生命周期：Register, Heartbeat (双向 stream), FetchBotWorkerArchive
   - `Register` 的身份匹配经 gRPC metadata 携带 `node-uuid`/`node-secret`（重注册出示身份）或 `enroll-token`（新节点准入），均不改 proto；匹配优先级与重名覆盖防护见 §5.1（ADR-039）
   - `RegisterResponse` 携带 `ws_token_secret`（FR-275，见 ADR-061）：CP↔Worker 专用 **WS 令牌密钥**（只签终端/插件桥令牌，与签用户会话的 `jwt.secret` 隔离，Worker 永不持有后者）。首注册与重注册均下发；Worker 持久化到 `etc/node-identity.json` 并热应用到 WS 校验。CP 侧密钥三轨：显式 `jwt.ws_secret` > 生产 autogen 持久化 `<dataRoot>/etc/ws-token-secret.key`（0600）> dev 回退 `dev-secret-change-me`；空字段（旧 CP）时 Worker 回退本地 `jwt_secret` 配置（向后兼容）
   - `Heartbeat` 负载除节点指标（CPU/内存/磁盘/累计网络字节/`load_avg1` 系统负载，FR-062）外携带 `instance_metrics`（每实例 ServerProbe 快照：TPS/MSPT/在线/堆/线程/CPU/uptime + 分世界负载，FR-060）；CP 收心跳经 `IngestHeartbeat` 落库为时序样本（node_cpu/mem/disk/net 速率/load）并据相邻累计字节算网络速率（Worker 不碰 DB）
   - `Heartbeat` 还加性携带 `tasks`（`TaskSnapshot`：task_id/state/progress/error/result/recent_log_lines，FR-183/ADR-040）——Worker 把运行中长任务（如 JDK 安装）的进度随心跳上报，CP 经 `TaskService.IngestSnapshots` upsert `Task` + 幂等追加 `TaskLog`，并在任务**首次进终态**时触发副作用（jdk_install 成功落 `NodeJDK` + 发成功站内信，失败发失败站内信）。日志行编码为 `<绝对序号>\t<正文>`，跨周期重叠窗口按绝对序号去重
   - `HeartbeatResponse` 加性携带 `ws_token_secret`（FR-275，见 ADR-061）：WS 令牌密钥每拍随心跳下发，Worker 比对「值变化」才热更新终端/插件桥校验并补写身份文件——CP 轮换密钥后 Worker 不重启即自愈（≤1 心跳周期）
+  - `FetchBotWorkerArchive`（FR-308，见 ADR-070；CP 侧实现，Worker 调用）：Worker 注册成功后凭 `node_uuid+node_secret`（与重注册同源校验）拉取 CP 内嵌 bot-worker dist 归档；请求携带本地 `known_sha256`，指纹一致 CP 回空归档省流；CP 未内嵌回 `success=false` + 原因（Worker 回退本地已有）。归档 ~25KB 单 unary 传输（64MiB 上限内，FR-305）
   - `HeartbeatResponse` 加性携带 `proxy_url`/`proxy_no_proxy`/`proxy_generation`（出站代理可视化下发，FR-185/ADR-043）——CP 据「节点 custom ? 节点值 : 全局默认」算每节点**期望出站代理**，每拍随心跳响应下发；Worker 仅当 `proxy_generation`（期望代理配置的 FNV 哈希）变化时才 `httpclient.New` 重建出站持有者（`httpclient.Provider` 原子替换，避免每拍重建），新 client 注入到各下载点（JDK/CFR/自更新/服务端 jar）即时生效。真相源 = CP DB（`nodes.proxy_*`），Worker **不落盘**，重连/重启由后续心跳天然重发；下发为空回退本地 `worker.yml`/env。CP 自身出站代理由设置面板 `proxy.url`/`proxy.no_proxy`（settings DB 覆盖）管控、运行时重建，且作为各节点默认代理（优先级 settings DB > yaml > env）
 - 实例操作：CreateInstance, StartInstance, StopInstance, RestartInstance, KillInstance, SendCommand, GetInstanceStatus, ListInstances
   - `CreateInstance` 除 `start_command` 外携带 `stop_command`（优雅停止命令，CP 按实例角色派生：backend/universal=`stop`，proxy=`end`），由 daemon wrapper 在优雅停止时写入进程 stdin；并携带 `probe_port`（CP 分配的 ServerProbe 端口，daemon 模式透传到 wrapper→PID 记录，供 Worker 心跳自采与重启恢复，FR-060）；以及 `graceful_stop_timeout_seconds`（CP 从平台设置 `graceful_stop.timeout` 取生效值随启动下发，daemon 透传到 wrapper 做超时强杀兜底，FR-063；值在启动时定型，对设置变更后新启动的实例生效）。docker 模式（FR-078，ADR-019）额外携带 `image`（容器镜像引用）与 `port_mappings`（容器端口↔宿主端口，宿主端口来自 FR-032 端口池），Worker 启动容器前据 `image` 自动拉取缺失镜像
@@ -945,6 +946,8 @@ bot-worker/src/
 容量：50 bots/worker, 256 workers max ≈ 12,800 bots
 
 Worker spawn bot-worker 的 node 可执行经解析策略选定（FR-300，`internal/worker/bot/noderesolver.go`）：显式配置（`ManagerConfig.NodePath`，V1 只留结构无配置面）> 节点本地扫描最高 major Node（复用 `runtimescan` node 路径表）> 回退 PATH `"node"`（保兼容）；解析一次缓存、spawn 失败重扫重试一次，路径与来源（explicit-config/managed-scan/path-fallback）打进 Bot 启动日志。
+
+**dist 分发与依赖（FR-308，见 ADR-070 修订 ADR-006）**：bot-worker dist 由构建期 `make embed-botworker` 打成确定性 tar.gz（含 `package.json` 保 ESM 语义）内嵌 CP；Worker 注册成功后经 unary RPC `FetchBotWorkerArchive`（`node_uuid+node_secret` 与重注册同源鉴权，指纹一致回空归档省流）自愈物化到 `<数据根>/opt/bot-worker/`（`internal/worker/botdist`，sha256 复核 + 临时目录 rename 原子换入）。入口解析顺序：`JIANMANAGER_BOT_WORKER_PATH` 显式覆盖（不自愈）> 数据根物化副本 > 旧相对路径 `bot-worker/dist/index.js`；CP 未内嵌/不可达回退本地已有，只告警不阻断启动。运行时依赖（mineflayer / mineflayer-pathfinder）不随归档分发，由 FR-307 托管全局包提供：自愈时在 dist 同级建 `node_modules` 链接 → 托管全局 node_modules（Windows junction / 其余 symlink），NODE_PATH 仅作 CJS 兜底；spawn 前预检缺装即返回「请到节点『全局包管理』安装 …」的可操作指引。
 
 `orchestrated` 是组合行为，不直接解析 YAML：它只消费 Control Plane 已规范化的 `behaviorConfig`，按阶段创建并切换既有行为类。`custom` 阶段继续复用现有步骤执行器字段，Go 侧把 YAML 的 `durationMs` 映射为 bot-worker 已支持的 `duration`，避免两端维护两套 YAML 语义。
 
