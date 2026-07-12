@@ -38,6 +38,7 @@ type Config struct {
 type Manager struct {
 	runtimesRoot string // 托管运行时根：nodejs-* 子目录 + 托管 .npmrc/global 落此
 	configDir    string // .npmrc 落盘目录（默认 = runtimesRoot）
+	run          runner // PM 命令执行器（nil=真 exec；测试经 SetRunner 注入，FR-307）
 }
 
 // NewManager 创建包管理器。runtimesRoot 为 <数据根>/opt/runtimes。
