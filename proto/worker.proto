@@ -99,6 +99,11 @@ service WorkerService {
   rpc InstallRuntime(InstallRuntimeRequest) returns (InstallRuntimeResponse);
   // RemoveRuntime 删除 Worker 托管的运行时目录（FR-299，删除顶层清理语义同 RemoveJDK/FR-292）。
   rpc RemoveRuntime(RemoveRuntimeRequest) returns (RemoveRuntimeResponse);
+  // GetPMConfig 读取节点包管理器与 registry 配置（FR-306）：当前 PM 偏好、corepack 可用性、
+  // 已激活 PM 版本、托管 .npmrc 现有 registry。
+  rpc GetPMConfig(GetPMConfigRequest) returns (GetPMConfigResponse);
+  // SetPMConfig 设置 PM 偏好（pnpm/yarn 经 corepack enable 激活）并写托管 .npmrc（FR-306）。
+  rpc SetPMConfig(SetPMConfigRequest) returns (SetPMConfigResponse);
   // DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
   rpc DownloadCore(DownloadCoreRequest) returns (DownloadCoreResponse);
   // InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
@@ -1040,6 +1045,37 @@ message RemoveRuntimeRequest {
 message RemoveRuntimeResponse {
   bool success = 1;
   string error = 2;
+}
+
+// PMRegistry 单条 registry（FR-306）。scope 空=默认源；非空=@scope 域源。token 可选凭据。
+message PMRegistry {
+  string name = 1;
+  string url = 2;
+  string scope = 3;
+  string token = 4; // CP→Worker 下发明文；Worker→CP 回读时清空（不回传凭据）
+}
+
+message GetPMConfigRequest {
+  string pm = 1; // CP 侧 DB 偏好，Worker 据此报该 PM 版本（空=npm）
+}
+
+message GetPMConfigResponse {
+  string pm = 1;                     // 当前 PM 偏好（npm/pnpm/yarn）
+  bool corepack_available = 2;       // 托管 Node 是否含 corepack
+  string pm_version = 3;             // 已激活 PM 版本（<pm> --version）
+  repeated PMRegistry registries = 4; // 托管 .npmrc 现有 registry（token 已清空）
+  string node_bin = 5;               // 定位到的托管 node 可执行（诊断用）
+}
+
+message SetPMConfigRequest {
+  string pm = 1;
+  repeated PMRegistry registries = 2;
+}
+
+message SetPMConfigResponse {
+  bool success = 1;
+  string error = 2;
+  string pm_version = 3; // 激活后的 PM 版本
 }
 
 message DeployServerProbeRequest {

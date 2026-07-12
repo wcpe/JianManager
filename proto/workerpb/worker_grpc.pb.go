@@ -58,6 +58,8 @@ const (
 	WorkerService_ScanRuntimes_FullMethodName         = "/worker.WorkerService/ScanRuntimes"
 	WorkerService_InstallRuntime_FullMethodName       = "/worker.WorkerService/InstallRuntime"
 	WorkerService_RemoveRuntime_FullMethodName        = "/worker.WorkerService/RemoveRuntime"
+	WorkerService_GetPMConfig_FullMethodName          = "/worker.WorkerService/GetPMConfig"
+	WorkerService_SetPMConfig_FullMethodName          = "/worker.WorkerService/SetPMConfig"
 	WorkerService_DownloadCore_FullMethodName         = "/worker.WorkerService/DownloadCore"
 	WorkerService_InstallForgeServer_FullMethodName   = "/worker.WorkerService/InstallForgeServer"
 	WorkerService_ListArtifactCache_FullMethodName    = "/worker.WorkerService/ListArtifactCache"
@@ -188,6 +190,11 @@ type WorkerServiceClient interface {
 	InstallRuntime(ctx context.Context, in *InstallRuntimeRequest, opts ...grpc.CallOption) (*InstallRuntimeResponse, error)
 	// RemoveRuntime 删除 Worker 托管的运行时目录（FR-299，删除顶层清理语义同 RemoveJDK/FR-292）。
 	RemoveRuntime(ctx context.Context, in *RemoveRuntimeRequest, opts ...grpc.CallOption) (*RemoveRuntimeResponse, error)
+	// GetPMConfig 读取节点包管理器与 registry 配置（FR-306）：当前 PM 偏好、corepack 可用性、
+	// 已激活 PM 版本、托管 .npmrc 现有 registry。
+	GetPMConfig(ctx context.Context, in *GetPMConfigRequest, opts ...grpc.CallOption) (*GetPMConfigResponse, error)
+	// SetPMConfig 设置 PM 偏好（pnpm/yarn 经 corepack enable 激活）并写托管 .npmrc（FR-306）。
+	SetPMConfig(ctx context.Context, in *SetPMConfigRequest, opts ...grpc.CallOption) (*SetPMConfigResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
 	DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error)
 	// InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
@@ -698,6 +705,26 @@ func (c *workerServiceClient) RemoveRuntime(ctx context.Context, in *RemoveRunti
 	return out, nil
 }
 
+func (c *workerServiceClient) GetPMConfig(ctx context.Context, in *GetPMConfigRequest, opts ...grpc.CallOption) (*GetPMConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPMConfigResponse)
+	err := c.cc.Invoke(ctx, WorkerService_GetPMConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) SetPMConfig(ctx context.Context, in *SetPMConfigRequest, opts ...grpc.CallOption) (*SetPMConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetPMConfigResponse)
+	err := c.cc.Invoke(ctx, WorkerService_SetPMConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DownloadCoreResponse)
@@ -1135,6 +1162,11 @@ type WorkerServiceServer interface {
 	InstallRuntime(context.Context, *InstallRuntimeRequest) (*InstallRuntimeResponse, error)
 	// RemoveRuntime 删除 Worker 托管的运行时目录（FR-299，删除顶层清理语义同 RemoveJDK/FR-292）。
 	RemoveRuntime(context.Context, *RemoveRuntimeRequest) (*RemoveRuntimeResponse, error)
+	// GetPMConfig 读取节点包管理器与 registry 配置（FR-306）：当前 PM 偏好、corepack 可用性、
+	// 已激活 PM 版本、托管 .npmrc 现有 registry。
+	GetPMConfig(context.Context, *GetPMConfigRequest) (*GetPMConfigResponse, error)
+	// SetPMConfig 设置 PM 偏好（pnpm/yarn 经 corepack enable 激活）并写托管 .npmrc（FR-306）。
+	SetPMConfig(context.Context, *SetPMConfigRequest) (*SetPMConfigResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
 	DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error)
 	// InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
@@ -1338,6 +1370,12 @@ func (UnimplementedWorkerServiceServer) InstallRuntime(context.Context, *Install
 }
 func (UnimplementedWorkerServiceServer) RemoveRuntime(context.Context, *RemoveRuntimeRequest) (*RemoveRuntimeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveRuntime not implemented")
+}
+func (UnimplementedWorkerServiceServer) GetPMConfig(context.Context, *GetPMConfigRequest) (*GetPMConfigResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPMConfig not implemented")
+}
+func (UnimplementedWorkerServiceServer) SetPMConfig(context.Context, *SetPMConfigRequest) (*SetPMConfigResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetPMConfig not implemented")
 }
 func (UnimplementedWorkerServiceServer) DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DownloadCore not implemented")
@@ -2115,6 +2153,42 @@ func _WorkerService_RemoveRuntime_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_GetPMConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPMConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).GetPMConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_GetPMConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).GetPMConfig(ctx, req.(*GetPMConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_SetPMConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetPMConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).SetPMConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_SetPMConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).SetPMConfig(ctx, req.(*SetPMConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_DownloadCore_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DownloadCoreRequest)
 	if err := dec(in); err != nil {
@@ -2808,6 +2882,14 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RemoveRuntime",
 			Handler:    _WorkerService_RemoveRuntime_Handler,
+		},
+		{
+			MethodName: "GetPMConfig",
+			Handler:    _WorkerService_GetPMConfig_Handler,
+		},
+		{
+			MethodName: "SetPMConfig",
+			Handler:    _WorkerService_SetPMConfig_Handler,
 		},
 		{
 			MethodName: "DownloadCore",
