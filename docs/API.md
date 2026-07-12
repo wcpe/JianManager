@@ -1960,6 +1960,25 @@
 - **关联 FR**: FR-306　·　**权限**: 平台管理员
 - **响应**: `200 { pm, corepackAvailable, pmVersion, nodeBin, registries: [{name,url,scope,token,tokenMasked}] }`
 
+### GET /api/v1/nodes/:id/packages
+- **描述**: 列出节点托管全局目录（`<数据根>/opt/runtimes/global`）已装包，含 outdated 可更新标记（best-effort）；PM 取节点 FR-306 配置偏好
+- **权限**: 平台管理员
+- **响应**: `200 { pm, packages:[{name,version,latest?}] }`；`503 NODE_OFFLINE`
+- **关联 FR**: FR-307 | **Spec**: `docs/specs/node-package-management/`
+
+### POST /api/v1/nodes/:id/packages
+- **描述**: 异步安装/升级全局包（任务中心 202 语义；version 空=latest，升级=对已装包再装 latest）。审计 `node.pkg.install`
+- **权限**: 平台管理员
+- **请求**: `{ "name":"mineflayer", "version":"" }`
+- **响应**: `202 { taskId, task }`；`503 NODE_OFFLINE`；`422`
+- **关联 FR**: FR-307
+
+### DELETE /api/v1/nodes/:id/packages?name=<pkg>
+- **描述**: 卸载全局包（同步；包名经 query——`@scope/name` 含斜杠不入路径）。审计 `node.pkg.remove`
+- **权限**: 平台管理员
+- **响应**: `200`；`503 NODE_OFFLINE`；`422`
+- **关联 FR**: FR-307
+
 #### PUT /api/v1/nodes/:id/pm-config
 - **描述**: 设置节点 PM 偏好与 registry（FR-306）。pm ∈ npm/pnpm/yarn（pnpm/yarn 经托管 Node 的 **corepack enable** 激活，失败明确报错）；registry 写节点**托管 .npmrc**（`<数据根>/opt/runtimes/.npmrc`，原子写；默认源 `registry=`、`@scope:registry=`、凭据 `_authToken` 行）。**掩码 token 保存语义**（同 proxy.url）：回传掩码/空 = 沿用旧 token，明文 = 更新。Worker 成功才落库。
 - **权限**: 平台管理员　·　**审计**: `node.pm.config`
