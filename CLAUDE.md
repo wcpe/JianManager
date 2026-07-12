@@ -44,10 +44,15 @@ Bug 修复:    /sdd-fix-bug
 
 ```
 cmd/                    # Go 入口
-internal/               # Go 内部包
+internal/               # Go 内部包（第一方 Go 库，Go 原生形态留根，ADR-064）
 proto/                  # Protobuf 定义
-web/                    # React 前端
-bot-worker/             # Node.js Bot Worker
+apps/                   # 可运行外壳（ADR-064）
+  control-plane-web/    #   React 主控台（原 web/）
+  ui-museum/            #   组件博物馆（原 web/wiki，ADR-058）
+packages/               # 第一方 JS 库（pnpm workspace）
+  ui/                   #   @jianmanager/ui 共享组件/token/charts
+bot-worker/             # Node.js Bot Worker（npm 自管，不入 workspace）
+third_party/            # vendored 子模块（ServerProbe）
 docs/                   # 文档
 .claude/rules/          # SDD 规则
 .claude/skills/         # SDD 技能

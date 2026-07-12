@@ -1,6 +1,8 @@
 @import "@jianmanager/ui/styles.css";
 
 @source "./**/*.{ts,tsx}";
+/* FR-283：ui 包经 workspace symlink 解析后 Tailwind v4 不扫 node_modules，显式声明扫描源。 */
+@source "../../../packages/ui/src";
 
 body {
   min-width: 320px;
