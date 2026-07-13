@@ -1,6 +1,7 @@
 import { keepPreviousData, queryOptions, useInfiniteQuery, useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import api from '@/api/client'
+import { removeServer } from '@/components/console/server-selection'
 
 /**
  * 实例域查询缓存保留时长（FR-297）：控制台来回切换（页签/跨服）时命中缓存先呈现旧数据、
@@ -285,9 +286,11 @@ export function useDeleteInstance() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: number) => api.delete(`/instances/${id}`),
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
       toast.success('实例已删除')
       qc.invalidateQueries({ queryKey: ['instances'] })
+      // 从侧栏「最近打开/收藏」剔除，避免残留死链（BUG 修复）。
+      removeServer(id)
     },
     onError: (err: Error & { response?: { data?: { message?: string } } }) => {
       toast.error(err.response?.data?.message || '删除失败')

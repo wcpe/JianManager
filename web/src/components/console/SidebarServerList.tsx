@@ -12,6 +12,7 @@ import InstanceStatusDot from './InstanceStatusDot'
 import {
   RECENT_LIMIT,
   recordRecentServer,
+  removeServer,
   toggleFavoriteServer,
   useFavoriteServers,
   useRecentServers,
@@ -20,6 +21,11 @@ import {
 
 /** 状态合并查询的刷新间隔：侧栏不引入高频轮询（FR-293），仅低频合并刷新列表内实例。 */
 const STATUS_REFRESH_MS = 60_000
+
+/** 判定错误是否为确定性 404（实例已删）——用于对账剔除死链；网络错等不算，避免误删。 */
+function isNotFound(reason: unknown): boolean {
+  return (reason as { response?: { status?: number } })?.response?.status === 404
+}
 
 /**
  * 侧栏常驻服务器列（FR-293，增强 FR-240）：「选择服务器」按钮下方常驻两区 =
@@ -158,7 +164,13 @@ function useListedInstanceStatus(ids: number[]): Map<number, string> {
       )
       const statuses: [number, string][] = []
       results.forEach((result, index) => {
-        if (result.status === 'fulfilled') statuses.push([sortedIds[index]!, result.value.status])
+        if (result.status === 'fulfilled') {
+          statuses.push([sortedIds[index]!, result.value.status])
+        } else if (isNotFound(result.reason)) {
+          // 该实例确已删除（404）：从最近/收藏剔除死链（BUG 修复对账兜底）——
+          // 覆盖批量删/其它 tab/直接 API 删的场景。仅对确定性 404，网络错回落本地快照不误删。
+          removeServer(sortedIds[index]!)
+        }
       })
       return statuses
     },

@@ -127,6 +127,23 @@ describe('SidebarServerList 常驻服务器列（FR-293）', () => {
     })
   })
 
+  it('实例已删除（per-id 查询 404）时对账剔除死链，存活实例保留（BUG 修复）', async () => {
+    // ghost(id 9999) 超出假后端千服播种范围 → GET 404；survival(id 1) 存活。二者都在最近列。
+    const ghost = { id: 9999, uuid: 'i-ghost', nodeId: 1, name: 'ghost-server', status: 'RUNNING' }
+    seedSelection([], [ghost, survival])
+    renderWithProviders(<SidebarServerList />)
+
+    // 死链行随对账消失，存活行保留。
+    await waitFor(() => {
+      expect(screen.queryByText('ghost-server')).toBeNull()
+    })
+    expect(screen.getByText('survival-1')).toBeInTheDocument()
+    // localStorage 里也已剔除，刷新后不复活。
+    const recent = JSON.parse(localStorage.getItem('server-selector.recent') ?? '[]') as Stored[]
+    expect(recent.some((x) => x.id === 9999)).toBe(false)
+    expect(recent.some((x) => x.id === 1)).toBe(true)
+  })
+
   it('收藏与最近双空时显示引导文案', () => {
     renderWithProviders(<SidebarServerList />)
 

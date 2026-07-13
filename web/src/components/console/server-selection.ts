@@ -108,6 +108,16 @@ export function recordRecentServer(instance: InstanceInfo | StoredInstance): voi
   writeStored(RECENT_KEY, upsertStored(getRecentServers(), toStored(instance), RECENT_LIMIT))
 }
 
+/**
+ * 从「最近打开」与「收藏」双列剔除指定实例（BUG 修复：实例删除后残留死链）。
+ * 删除实例时联动调用（useDeleteInstance），侧栏 per-id 状态查询确认 404 时也调用对账。
+ * 幂等：两列都不含该 id 时是空操作（writeStored 内容未变不落盘不广播，订阅方不空转）。
+ */
+export function removeServer(id: number): void {
+  writeStored(RECENT_KEY, getRecentServers().filter((item) => item.id !== id))
+  writeStored(FAVORITES_KEY, getFavoriteServers().filter((item) => item.id !== id))
+}
+
 /** 收藏/取消收藏实例，弹窗与常驻列共用同一入口保证互通。 */
 export function toggleFavoriteServer(instance: InstanceInfo | StoredInstance): void {
   const favorites = getFavoriteServers()
