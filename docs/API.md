@@ -675,11 +675,11 @@
 - **关联 FR**: FR-034, FR-046
 
 ### POST /api/v1/instances/provision/server
-- **描述**: 一键搭建后端子服：支持 `paper`、`spongevanilla` 等非代理核心；解析核心 → 分配端口 → 系统分配目录 + 结构化启动 → 下载核心 + 写 eula/server.properties，返回实例（STOPPED，可一键启动）
+- **描述**: 一键搭建后端子服（FR-319 异步化）：同步段解析核心 → 分配端口 → 系统分配目录 + 结构化启动 → 建实例 + 登记任务后**立即返回**；下载核心 + 写 eula/server.properties + 部署探针在 CP 后台任务推进（独立 context，前端断开不影响），进度/失败原因见任务中心（kind=`provision`）。失败时任务含错误链、实例 `statusReason` 标注「搭建未完成：…」
 - **权限**: 平台管理员
 - **请求**: `{ "nodeId":1,"name":"lobby","coreType":"spongevanilla","mcVersion":"1.21.1","build":0,"jdkId":1,"memoryMb":4096,"jvmArgs":["-XX:+UseG1GC"],"groupId":0,"onlineMode":false }`（`onlineMode` 缺省 false=代理就绪/离线；独立正版服可传 true）
-- **响应**: `201` 创建的 Instance；`502 PROVISION_FAILED`（含已创建实例供重试/删除）；代理核心会返回 `422 PROVISION_FAILED`
-- **关联 FR**: FR-034, FR-046
+- **响应**: `201 { "instance": {...}, "taskId": "..." }`；`422 PROVISION_FAILED`（核心解析/建实例失败，含代理核心误入）；`502 PROVISION_FAILED`（实例已建但任务登记失败，含实例供重试/删除）
+- **关联 FR**: FR-034, FR-046, FR-319
 
 ### POST /api/v1/instances/provision/bukkit
 - **描述**: 旧 Paper/Bukkit 兼容入口，内部复用 `POST /instances/provision/server`；新增前端能力不再通过该入口创建 SpongeVanilla
@@ -1815,6 +1815,7 @@
 - **响应**:
   - 分页模式：`{ "items": [AuditLogInfo], "total": 123, "page": 1, "pageSize": 50 }`
   - 旧数组模式：`AuditLogInfo[]`
+  - `AuditLogInfo` 含 `success`（bool，FR-321：失败操作也留痕）与 `error`（失败时响应 error body 截断，≤512 字符）
 
 ### GET /api/v1/audit/export
 - **描述**: 按过滤条件导出审计日志 NDJSON（平台管理员）

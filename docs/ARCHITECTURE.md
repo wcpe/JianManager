@@ -484,7 +484,7 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | metric_rollup_5m (V2) | series_id(FK), bucket_ts, avg/min/max/last/count；留 ~30d |
 | metric_rollup_1h (V2) | series_id(FK), bucket_ts, avg/min/max/last/count；留 ≥1y |
 | templates | uuid, name, type, description, start_command, default_work_dir, download_url, config_files(JSON) |
-| audit_logs | user_id, action, target_type, target_id, detail(JSON), ip（FR-172 分页 envelope 走服务端 total；NDJSON 导出按批次流式输出白名单字段，`audit.export` detail 仅记录格式、过滤摘要与成功/失败状态） |
+| audit_logs | user_id, action, target_type, target_id, detail(JSON), ip, success(默认 true), error(varchar 512)（FR-321：失败操作也留痕并带响应错误内容；FR-172 分页 envelope 走服务端 total；NDJSON 导出按批次流式输出白名单字段，`audit.export` detail 仅记录格式、过滤摘要与成功/失败状态） |
 | networks (V2) | uuid, name, description（非独占软标签） |
 | network_members (V2) | network_id(FK), instance_id(FK)（M:N，一个子服可属多群组） |
 | server_registrations (V2) | proxy_id(FK), backend_id(FK), alias, priority, forced_host, restricted, enabled；UNIQUE(proxy_id, alias) |
@@ -978,6 +978,8 @@ log_store:
 ```
 
 归档目录恒为数据根 `var/log`（不可配，保证便携自洽）：超阈值的旧日志按 NDJSON（`logs-YYYY-MM-DD.ndjson`）滚动落盘后从表中清理。
+
+**API 错误统一落平台日志（FR-320）**：全局 gin 中间件 `middleware.ErrorLog` 把 API 失败响应（4xx 业务拒绝=warn、5xx=error，401/404/429 噪音跳过）连同路径/状态码/响应体/用户/IP slog 化，经 `PersistSlogHandler` 桥自动落日志中心 platform 源——`/logs` 页可直接追查「某操作为什么报错」。此前错误只回 HTTP 响应，平台日志恒空、失败随连接断开进黑洞（FR-319 真机事故的观测性根因）。
 
 ### 11.1 项目自包含数据根（FHS 布局，ADR-010）
 

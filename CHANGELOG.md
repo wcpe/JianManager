@@ -9,8 +9,14 @@
 > 本段为 `v0.16.0` 开发版归档区，累积 `v0.15.0` tag 之后的开发变更（开发态版本号 `0.16.0-dev`，见 ADR-065）。
 
 ### 新增
+- **一键搭建异步化 + 全程可观测（FR-319，真机事故钓出）**：1.20.1 搭建挂死 180s+——Paper CDN 从节点侧仅 ~200KB/s（47MB jar 需 4 分钟），provision 是同步 HTTP 长事务，前端超时断开→请求 ctx 连锁取消 DownloadCore→留空壳实例（无 server.jar 可点启动→秒退 CRASHED），错误随断开连接进黑洞。搭建改任务中心异步：同步段只解析核心+建实例+登记任务（立即 201 返回 `{instance, taskId}`），下载/写配置/探针在 CP 后台 goroutine（独立 context 30min 超时）分阶段推进 Task（kind=`provision`，任务中心可筛可看阶段日志）；失败 Task 含完整错误链 + 实例 statusReason 标注「搭建未完成：…」+ slog 落平台日志；worker DownloadCore 补开始/完成/失败（含耗时）日志；前端向导提交即关框提示看任务中心。TaskService 补 CP 侧直写 MarkSucceeded/SetStage。
+- **API 错误统一落平台日志（FR-320，真机钓出）**：API 失败此前只回 HTTP 响应、无任何 slog——FR-049 日志中心平台日志恒空。新增全局 gin 中间件把 4xx 业务拒绝（warn）与 5xx（error）连同路径/状态码/响应体/用户/IP slog 化，经 log_slog 桥自动落日志中心 platform 源，/logs 页可追查「某操作为什么报错」；401/404/429 噪音跳过。
+- **审计日志记录失败操作与错误内容（FR-321，增强 FR-050）**：AuditLog 加 success/error 字段，审计中间件捕获响应状态与 error body——失败操作也留痕并带错误内容（此前搭建失败审计零记录）；审计页失败红徽章 + 展开区错误内容块。
 - **内存水位启动守卫（FR-317，真机事故钓出）**：验收开 Paper -Xmx2048M 把 8G 主机 OOM 至用户态僵死（swap 风暴 load>100、SSH/面板全失联），启动链路此前无任何内存防线。新增双闸：① CP 预警闸（`InstanceService.memoryGate`）按节点最近心跳（90s 内有效）预判「可用 − 预估需求 < 保留水位」即拒绝、不下发 RPC；心跳过旧/字段缺失放行。② Worker 实时闸（`process.Manager.preflightMemory`，先于 Java 版本预检、direct/daemon/docker 普适）启动瞬间读系统内存同判，被拒保持原状态返回含三个数字的可操作错误。估算口径共享 `internal/platform/memguard`（docker 用 MemLimitMB；宿主解析 -Xmx ×1.15+256MB 开销；无声明保守默认 768MB），保留水位默认 max(512MB, 总内存 10%)，`worker.yml` `memory_guard.reserve_mb/disabled` 可覆盖/应急关闭；读数失败一律 fail-open。单测覆盖 Xmx 解析各单位/估算优先级/水位边界/拒绝保状态/自定义水位/禁用/fail-open/CP 闸四态。
 - **bot-worker dist 自愈下发与依赖解耦（FR-308，见 ADR-070 修订 ADR-006）**：Worker 独立部署（无仓库检出）时 bot 能力此前整体不可用（`bot-worker/dist` 相对路径不存在、mineflayer 无处解析 → 子进程 `ERR_MODULE_NOT_FOUND` 裸崩）。构建期 `make embed-botworker` 把 dist 打成确定性 tar.gz（~25KB，含 `package.json` 保 ESM 语义）内嵌 CP（不入库、未注入优雅降级）；Worker 注册成功后经新增 unary RPC `FetchBotWorkerArchive`（`node_uuid+node_secret` 与重注册同源鉴权、`known_sha256` 指纹一致回空归档省流、天然复用反向隧道）自愈物化到 `<数据根>/opt/bot-worker/`（sha256 复核 + 临时目录 rename 原子换入，CP 不可达/未内嵌回退本地已有只告警不阻断）。运行时依赖不随归档分发、指向 FR-307 托管全局包：dist 同级自动建 `node_modules` 链接 → 全局 node_modules（Windows junction 免特权 / 其余 symlink），NODE_PATH 兜底 CJS；spawn 前依赖预检，缺装返回「请到节点『全局包管理』安装 mineflayer 与 mineflayer-pathfinder」可操作指引。入口解析顺序 `JIANMANAGER_BOT_WORKER_PATH` 显式覆盖 > 数据根物化副本 > 旧相对路径（仓库式部署向后兼容）。单测覆盖自愈全路径（首拉/指纹跳过/降级回退/校验拒绝/路径穿越拒绝）、链接功能性验证、预检指引、CP RPC 鉴权与嵌入态双分支。
+
+### 修复
+- **心跳流断开告警降噪（FR-322，真机复现）**：worker 每拍心跳「发一拍→收响应→cancel 流」属正常收尾，CP 却按 WARN 无差别刷屏（真机 2 小时 484 条「心跳流断开 context canceled」且无节点标识），淹没真异常。Canceled/EOF 正常收尾降 Debug，异常断流保留 WARN 并带 nodeUUID。
 
 ## 0.15.0（2026-07-13）
 
