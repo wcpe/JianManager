@@ -1425,7 +1425,14 @@
     "batchFailed": "失败 {{count}}",
     "batchSkipped": "跳过 {{count}}",
     "pasteNothing": "无可粘贴的条目（同名冲突或目标无效）",
-    "deleteConfirmMany": "确定要删除选中的 {{count}} 项吗？此操作不可撤销。"
+    "deleteConfirmMany": "确定要删除选中的 {{count}} 项吗？此操作不可撤销。",
+    "saving": "保存中…",
+    "creating": "创建中…",
+    "renaming": "重命名中…",
+    "deleting": "删除中…",
+    "uploading": "上传中…",
+    "downloading": "下载中…",
+    "downloaded": "已下载"
   },
   "search": {
     "title": "搜索",

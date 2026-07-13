@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useQueryClient } from '@tanstack/react-query'
-import { Download, FileQuestion, History, Save, X } from 'lucide-react'
+import { Download, FileQuestion, History, Loader2, Save, X } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import {
   Dialog,
@@ -496,18 +496,24 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
   }, [currentDir, runOrAskDiscard])
 
   // ---- 保存（Ctrl+S）----
+  // saving 守卫防 Ctrl+S 连击重复提交（FR-324）；toast.loading→success/error 给即时反馈。
+  const [saving, setSaving] = useState(false)
   const saveOpenFile = useCallback(async () => {
-    if (!openFile) return
+    if (!openFile || saving) return
+    setSaving(true)
+    const toastId = toast.loading(t('files.saving'))
     try {
       await writeFileContent(instanceId, openFile.path, openFile.draft)
       setOpenFile((f) => (f ? { ...f, saved: f.draft } : f))
       // 保存改前生成快照（FR-051），失效该文件版本缓存。
       qc.invalidateQueries({ queryKey: ['fileVersions', instanceId, openFile.path] })
-      toast.success(t('files.saved'))
+      toast.success(t('files.saved'), { id: toastId })
     } catch {
-      toast.error(t('files.saveFailed'))
+      toast.error(t('files.saveFailed'), { id: toastId })
+    } finally {
+      setSaving(false)
     }
-  }, [openFile, instanceId, qc, t])
+  }, [openFile, saving, instanceId, qc, t])
 
   // ---- 新建 / 重命名（PromptDialog）----
   const validateName = useCallback(
@@ -528,15 +534,17 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
       const name = value.trim()
       const kind = prompt.kind
       setPrompt(null)
+      // toast.loading→success/error：新建/重命名点击后即时反馈（FR-324）。
+      const toastId = toast.loading(kind === 'rename' ? t('files.renaming') : t('files.creating'))
       try {
         if (kind === 'newFile') {
           // 后端无独立 create 端点：写空内容即创建文件。
           await writeFileContent(instanceId, joinPath(currentDir, name), '')
-          toast.success(t('files.createSuccess'))
+          toast.success(t('files.createSuccess'), { id: toastId })
         } else if (kind === 'newFolder') {
           // 通过在新目录下写占位文件创建目录（后端按路径自动建父目录）。
           await writeFileContent(instanceId, joinPath(joinPath(currentDir, name), '.gitkeep'), '')
-          toast.success(t('files.createSuccess'))
+          toast.success(t('files.createSuccess'), { id: toastId })
         } else if (kind === 'rename' && prompt.oldName) {
           if (name !== prompt.oldName) {
             await renameFile(
@@ -544,12 +552,14 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
               joinPath(currentDir, prompt.oldName),
               joinPath(currentDir, name),
             )
-            toast.success(t('files.renamed'))
+            toast.success(t('files.renamed'), { id: toastId })
+          } else {
+            toast.dismiss(toastId)
           }
         }
         refreshAll()
       } catch {
-        toast.error(kind === 'rename' ? t('files.renameFailed') : t('files.createFailed'))
+        toast.error(kind === 'rename' ? t('files.renameFailed') : t('files.createFailed'), { id: toastId })
       }
     },
     [prompt, instanceId, currentDir, refreshAll, t],
@@ -560,6 +570,8 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
     if (!deleteTargets) return
     const paths = deleteTargets
     setDeleteTargets(null)
+    // 批量删除可能几秒（多文件），toast.loading 给即时反馈（FR-324）。
+    const toastId = toast.loading(t('files.deleting'))
     try {
       await Promise.all(paths.map((p) => deleteFile(instanceId, p)))
       // 若删除的是当前打开的文件/归档/反编译目标，关闭对应右栏（避免展示已删条目）。
@@ -567,39 +579,50 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
       if (blockedPreview && paths.includes(blockedPreview.path)) setBlockedPreview(null)
       if (archiveFor && paths.includes(archiveFor.path)) setArchiveFor(null)
       if (decompileFor && paths.includes(decompileFor.path)) setDecompileFor(null)
-      toast.success(t('files.deleted'))
+      toast.success(t('files.deleted'), { id: toastId })
       refreshAll()
     } catch {
-      toast.error(t('files.deleteFailed'))
+      toast.error(t('files.deleteFailed'), { id: toastId })
     }
   }, [deleteTargets, instanceId, openFile, blockedPreview, archiveFor, decompileFor, refreshAll, t])
 
   // ---- 上传（拖拽 / 按钮，批量逐文件）----
+  // 逐文件上传，toast 实时显示当前文件名 + 百分比（FR-324）；批量时带 i/N 计数。
   const handleUpload = useCallback(
     async (fileList: FileList) => {
       const arr = [...fileList]
+      const toastId = toast.loading(t('files.uploading'))
       try {
-        for (const f of arr) {
+        for (let i = 0; i < arr.length; i++) {
+          const f = arr[i]!
           const dest = joinPath(currentDir, f.name)
-          await uploadFile(instanceId, dest, f)
+          const prefix = arr.length > 1 ? `${i + 1}/${arr.length} · ` : ''
+          await uploadFile(instanceId, dest, f, (percent) => {
+            toast.loading(
+              percent < 0 ? `${prefix}${f.name}` : `${prefix}${f.name} ${percent}%`,
+              { id: toastId },
+            )
+          })
           // 覆盖已存在文件会改前快照（FR-051）。
           qc.invalidateQueries({ queryKey: ['fileVersions', instanceId, dest] })
         }
-        toast.success(t('files.uploaded'))
+        toast.success(t('files.uploaded'), { id: toastId })
         refreshAll()
       } catch {
-        toast.error(t('files.uploadFailed'))
+        toast.error(t('files.uploadFailed'), { id: toastId })
       }
     },
     [currentDir, instanceId, qc, refreshAll, t],
   )
 
   // ---- 下载（单文件流式 / 多选 zip）----
+  // 下载点击后即时反馈（FR-324）：流式取字节到浏览器期间显「下载中…」，落盘成功即消。
   const downloadSingle = useCallback(
     (file: FileInfo) => {
-      void downloadFile(instanceId, joinPath(currentDir, file.name)).catch(() =>
-        toast.error(t('files.downloadFailed')),
-      )
+      const toastId = toast.loading(t('files.downloading'))
+      void downloadFile(instanceId, joinPath(currentDir, file.name))
+        .then(() => toast.success(t('files.downloaded'), { id: toastId }))
+        .catch(() => toast.error(t('files.downloadFailed'), { id: toastId }))
     },
     [instanceId, currentDir, t],
   )
@@ -867,10 +890,11 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
                       size="sm"
                       variant="outline"
                       className="h-7 gap-1 px-2 text-xs"
-                      disabled={!dirty}
+                      disabled={!dirty || saving}
                       onClick={() => void saveOpenFile()}
                     >
-                      <Save className="size-3.5" /> {t('files.save')}
+                      {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}{' '}
+                      {t('files.save')}
                     </Button>
                     <Button
                       size="sm"

@@ -72,12 +72,17 @@ export async function uploadFile(
   instanceId: number,
   destPath: string,
   file: File | Blob,
+  onProgress?: (percent: number) => void,
 ): Promise<void> {
   const form = new FormData()
   form.append('file', file)
   await api.post(`/instances/${instanceId}/files/upload`, form, {
     params: { path: destPath },
     headers: { 'Content-Type': 'multipart/form-data' },
+    // 上传进度百分比（FR-324）：total 可得时报 0~100，否则回落 -1（不确定态由调用方决定展示）。
+    onUploadProgress: onProgress
+      ? (e) => onProgress(e.total ? Math.round((e.loaded / e.total) * 100) : -1)
+      : undefined,
   })
 }
 

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useMetricSeries, type MetricSeries, useInstanceMetrics } from '@/api/metrics'
 import { useInstance } from '@/api/instances'
@@ -48,10 +49,12 @@ function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
           </span>
         )}
         <div className="ml-auto flex gap-2">
-          <Button size="sm" variant="outline" disabled={!st.embeddedAvailable || update.isPending} onClick={() => doUpdate(false)}>
+          <Button size="sm" variant="outline" className="gap-1" disabled={!st.embeddedAvailable || update.isPending} onClick={() => doUpdate(false)}>
+            {update.isPending && <Loader2 className="size-3.5 animate-spin" />}
             {t('probe.update')}
           </Button>
-          <Button size="sm" variant="outline" disabled={!st.embeddedAvailable || update.isPending} onClick={() => doUpdate(true)}>
+          <Button size="sm" variant="outline" className="gap-1" disabled={!st.embeddedAvailable || update.isPending} onClick={() => doUpdate(true)}>
+            {update.isPending && <Loader2 className="size-3.5 animate-spin" />}
             {t('probe.updateRestart')}
           </Button>
         </div>

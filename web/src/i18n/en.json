@@ -1446,7 +1446,14 @@
     "batchFailed": "failed {{count}}",
     "batchSkipped": "skipped {{count}}",
     "pasteNothing": "Nothing to paste (name conflict or invalid target)",
-    "deleteConfirmMany": "Delete the {{count}} selected items? This cannot be undone."
+    "deleteConfirmMany": "Delete the {{count}} selected items? This cannot be undone.",
+    "saving": "Saving…",
+    "creating": "Creating…",
+    "renaming": "Renaming…",
+    "deleting": "Deleting…",
+    "uploading": "Uploading…",
+    "downloading": "Downloading…",
+    "downloaded": "Downloaded"
   },
   "search": {
     "title": "Search",
