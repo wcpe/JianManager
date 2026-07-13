@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gorm.io/gorm"
 
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
@@ -28,6 +30,13 @@ var (
 	// ErrStartCommandRequired 非 docker 实例缺启动命令（docker 可空，交镜像 entrypoint 自管启动，FR-078）。
 	ErrStartCommandRequired = errors.New("非 docker 实例必须提供启动命令")
 )
+
+// PreflightError 启动预检未通过错误（FR-314）：携带面向用户的原因，供 HTTP 层映射 422 PREFLIGHT_FAILED。
+type PreflightError struct {
+	Reason string
+}
+
+func (e *PreflightError) Error() string { return e.Reason }
 
 // validTransitions 合法的状态转换。
 var validTransitions = map[model.InstanceStatus][]model.InstanceStatus{
@@ -738,6 +747,12 @@ func (s *InstanceService) Start(id uint) error {
 		return err
 	}
 
+	// 启动前同步预检（FR-314）：转 STARTING 前同步问 Worker 校验 JDK/jar/工作目录，
+	// 失败即带具体原因返回、状态不进 STARTING，终结「配置错误也要启动中→崩溃兜一圈」。
+	if err := s.preflightStart(instance); err != nil {
+		return err
+	}
+
 	// 状态转换
 	if err := s.transition(id, model.InstanceStatusStarting, "启动"); err != nil {
 		return err
@@ -1324,4 +1339,57 @@ func (s *InstanceService) GetMetrics(id uint) (*MetricsData, error) {
 		})
 	}
 	return data, nil
+}
+
+// preflightStart 启动前同步预检（FR-314）：查节点连通 → 确保实例已注册 → 调 Worker 预检 RPC。
+// 节点未连接返回 ErrNodeOffline（HTTP 409）；预检未过返回 *PreflightError（HTTP 422）并写 statusReason；
+// 老 Worker 无该 RPC（Unimplemented）则跳过预检、保持现有异步启动行为不变（向后兼容）。
+func (s *InstanceService) preflightStart(instance *model.Instance) error {
+	var node model.Node
+	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
+		return ErrNodeOffline
+	}
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return ErrNodeOffline
+	}
+
+	if regErr := s.registerOnWorker(instance); regErr != nil {
+		slog.Debug("预检前实例注册（已注册或失败均不阻断）", "instanceId", instance.UUID, "error", regErr)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := client.Worker.PreflightStartInstance(ctx, &workerpb.InstanceActionRequest{
+		InstanceUuid: instance.UUID,
+	})
+	if err != nil {
+		if status.Code(err) == codes.Unimplemented {
+			slog.Debug("Worker 未实现启动预检，跳过", "instanceId", instance.UUID)
+			return nil
+		}
+		reason := "启动预检不可达: " + err.Error()
+		s.updateStatusReasonOnly(instance.ID, reason)
+		return &PreflightError{Reason: reason}
+	}
+
+	if resp.Success {
+		return nil
+	}
+
+	reason := resp.Error
+	if reason == "" {
+		reason = "启动预检未通过"
+	}
+	s.updateStatusReasonOnly(instance.ID, reason)
+	return &PreflightError{Reason: reason}
+}
+
+// updateStatusReasonOnly 仅更新 status_reason，不动 status（FR-314 预检失败：状态保持、不进 STARTING）。
+func (s *InstanceService) updateStatusReasonOnly(id uint, reason string) {
+	if err := s.db.Model(&model.Instance{}).Where("id = ?", id).
+		Update("status_reason", reason).Error; err != nil {
+		slog.Error("更新实例状态原因失败", "instanceId", id, "error", err)
+	}
 }

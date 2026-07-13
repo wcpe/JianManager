@@ -390,7 +390,17 @@ func (h *InstanceHandler) Start(c *gin.Context) {
 	}
 
 	if err := h.instanceSvc.Start(id); err != nil {
-		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "INVALID_TRANSITION", "message": err.Error()})
+		var pfErr *service.PreflightError
+		switch {
+		case errors.Is(err, service.ErrNodeOffline):
+			// 节点未连接：预检无法执行，返回 409（FR-314）。
+			c.JSON(http.StatusConflict, gin.H{"error": "NODE_OFFLINE", "message": err.Error()})
+		case errors.As(err, &pfErr):
+			// 启动预检未通过：422 带具体原因，前端弹错并可在控制台横幅回显（FR-314）。
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "PREFLIGHT_FAILED", "message": pfErr.Reason})
+		default:
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "INVALID_TRANSITION", "message": err.Error()})
+		}
 		return
 	}
 
