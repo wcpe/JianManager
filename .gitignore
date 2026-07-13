@@ -44,7 +44,9 @@ Thumbs.db
 
 # Docker
 docker-compose.override.yml
-/.tmp/
+# .tmp 任意层级都忽略（不带前导斜杠）——含 apps/**/.tmp 的验收/e2e 截图，
+# 禁止把图片等临时产物提交进库（根锚定 /.tmp/ 曾漏掉子目录的 .tmp）。
+.tmp/
 /data-demo/
 /evidence/
 test-results/
