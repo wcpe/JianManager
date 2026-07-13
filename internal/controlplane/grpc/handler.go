@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"time"
 
@@ -309,12 +310,22 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 		}
 	}
 
+	// lastNodeUUID 记录本流最近一次心跳的节点，断流日志据此标识来源（FR-322）。
+	var lastNodeUUID string
 	for {
 		req, err := stream.Recv()
 		if err != nil {
-			slog.Warn("心跳流断开", "error", err)
+			// Worker 每拍心跳「发一拍→收响应→cancel 流」属正常收尾（每 worker 每 30s 一次），
+			// 按 WARN 刷屏会淹没真异常（真机 2 小时 484 条）：Canceled/EOF 降 Debug，
+			// 其余（网络中断/协议错）保留 WARN 并带节点标识（FR-322）。
+			if err == io.EOF || status.Code(err) == codes.Canceled {
+				slog.Debug("心跳流正常收尾", "nodeUUID", lastNodeUUID)
+			} else {
+				slog.Warn("心跳流异常断开", "nodeUUID", lastNodeUUID, "error", err)
+			}
 			return err
 		}
+		lastNodeUUID = req.NodeUuid
 
 		// 首次收到心跳时做 secret 校验（需要 nodeUUID 查 DB）
 		if nodeSecretValid {
