@@ -397,6 +397,8 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-320 | API 错误统一落平台日志（feat，真机钓出：provision 失败等 API 错误只回 HTTP 响应，无任何 slog→FR-049 日志中心平台日志恒空，用户「乱七八糟的问题都看不到日志」）：全局 gin 中间件把 4xx 业务拒绝（422/502 等）与 5xx 的 [路径、状态码、error body、用户、IP] slog 化（4xx=warn、5xx=error），经既有 log_slog 桥自动落日志中心 platform 源；核对 /logs 页导航入口可见性（免 spec） | P1 | 🔨 开发中 |
 | FR-321 | 审计日志记录失败操作与错误内容（增强 FR-050，真机钓出：搭建失败审计零记录）：AuditLog 加 success/error 字段，关键写操作（实例生命周期/搭建/删除/上传）失败也记审计并带错误内容；审计页列表失败徽章 + 详情展开错误（免 spec） | P1 | 🔨 开发中 |
 | FR-322 | 心跳流断开告警降噪（fix，真机复现：CP journal 2 小时 484 条「心跳流断开 context canceled」WARN——worker 每拍心跳收完响应即 cancel 属正常收尾，被当异常刷屏淹没真问题，且无节点标识）：Canceled/EOF 正常收尾降 Debug，异常断流保留 WARN 并带 nodeUUID（免 spec） | P2 | 🔨 开发中 |
+| FR-323 | 长操作任务化：导入/克隆/备份纳入任务中心（增强 FR-302 导入 / FR-036 克隆 / 备份 FR，FR-319 同族收口——用户「把所有长耗时任务加到任务中心、不堵塞页面、有进度」）：抽公共 `run-as-task` 底座（CreateTask→CP 后台 goroutine→SetStage 阶段进度→MarkSucceeded/Failed→终态站内信），provision（FR-319）一并迁过去 DRY；导入 migrate 搬迁 / 克隆 CloneWorkDir / 备份创建 / 备份恢复 四个现同步阻塞或后台无进度的长操作接入——提交秒回 `{taskId}` 不阻塞（搬迁/拷贝/打包可达数十分钟），任务中心显示 stage 文案 + 终态 + 失败错误链；新增 TaskKind（import/clone/backup_create/backup_restore）+ 前端任务中心筛选/文案 → `docs/specs/long-op-tasks/spec.md`（需 spec：3 端点响应改 {taskId}、抽共享底座跨 3 service+任务模型+前端） | P1 | 📋 计划 |
+| FR-324 | 短操作 loading 与文件传输进度补齐（增强 FR-075 反编译 / FR-068 探针 / FR-008/070 文件——用户「1-3 秒短任务要 loading 或进度条」）：① 反编译、探针部署点击后 loading 且完成前防重复点；② 资源管理器 新建/重命名/删除/保存 文件 loading 反馈；③ 文件上传显示百分比进度条（axios onUploadProgress），下载有反馈（浏览器原生下载条 + 内联「下载中」提示）。纯前端 UX 补齐，无数据模型/API 变更（免 spec） | P2 | 📋 计划 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
