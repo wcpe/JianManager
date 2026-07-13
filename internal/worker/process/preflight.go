@@ -2,6 +2,7 @@ package process
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -89,4 +90,102 @@ func parseJavaMajor(out string) (int, bool) {
 		return second, true
 	}
 	return first, true
+}
+
+// PreflightCheckResult 单项启动预检结果（FR-314）。
+type PreflightCheckResult struct {
+	Name    string
+	OK      bool
+	Message string
+}
+
+// PreflightStart 对已注册实例做启动前同步预检（FR-314）：校验 java 运行时、工作目录、启动目标 jar，
+// 供 CP 在转 STARTING 前同步拦截配置错误，终结「配置错误也要启动中→崩溃兜一圈」。
+// docker 实例整体放行（本地 JDK/文件语义不适用）。实例未注册返回 error。
+// 与 Start 内嵌的 preflightJavaVersion 同源复用、并存不冲突（纵深防御，防 CP 绕过与竞态窗口）。
+func (m *Manager) PreflightStart(uuid string) ([]PreflightCheckResult, error) {
+	m.mu.RLock()
+	inst, ok := m.instances[uuid]
+	if !ok {
+		m.mu.RUnlock()
+		return nil, fmt.Errorf("实例未注册: %s", uuid)
+	}
+	// 实例配置字段由 Manager 锁保护（Create/SetLaunchConfig 均在 m.mu 下写），读时持读锁。
+	startCmd := inst.StartCommand
+	workDir := inst.WorkDir
+	jdkPath := inst.JDKPath
+	jdkBinPath := inst.JDKBinPath
+	ptype := inst.processType
+	m.mu.RUnlock()
+
+	if ptype == ProcessTypeDocker {
+		return []PreflightCheckResult{{Name: "docker", OK: true, Message: "docker 实例跳过本地启动预检"}}, nil
+	}
+
+	return []PreflightCheckResult{
+		toPreflightCheck("java_runtime", preflightJavaVersion(CommandSpec{
+			StartCommand: startCmd,
+			JavaHome:     jdkPath,
+			JDKBinPath:   jdkBinPath,
+		})),
+		toPreflightCheck("work_dir", checkWorkDir(workDir)),
+		toPreflightCheck("launch_target", checkLaunchTarget(startCmd, workDir)),
+	}, nil
+}
+
+// toPreflightCheck 把 err 归一为预检项结果：nil→通过，否则失败并带面向用户的原因。
+func toPreflightCheck(name string, err error) PreflightCheckResult {
+	if err != nil {
+		return PreflightCheckResult{Name: name, OK: false, Message: err.Error()}
+	}
+	return PreflightCheckResult{Name: name, OK: true}
+}
+
+// checkWorkDir 校验实例工作目录存在且为目录。
+func checkWorkDir(dir string) error {
+	if dir == "" {
+		return fmt.Errorf("实例工作目录未设置")
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("实例工作目录不存在：%s", dir)
+		}
+		return fmt.Errorf("无法访问实例工作目录（%s）：%v", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("实例工作目录不是目录：%s", dir)
+	}
+	return nil
+}
+
+// checkLaunchTarget 若启动命令含 `-jar <path>`，校验该 jar（相对工作目录解析）存在；
+// 解析不出 jar（自定义命令）则保守放行，不误拦非 -jar 启动方式（宁漏勿误伤）。
+func checkLaunchTarget(startCommand, workDir string) error {
+	jar := parseJarPath(startCommand)
+	if jar == "" {
+		return nil
+	}
+	path := jar
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workDir, jar)
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("启动目标 jar 不存在：%s（请确认已放入工作目录或完成搭建）", jar)
+		}
+		return fmt.Errorf("无法访问启动目标 jar（%s）：%v", jar, err)
+	}
+	return nil
+}
+
+// parseJarPath 从启动命令解析 `-jar` 后的 jar 路径；无则返回空串。
+func parseJarPath(cmd string) string {
+	fields := strings.Fields(cmd)
+	for i, f := range fields {
+		if f == "-jar" && i+1 < len(fields) {
+			return strings.Trim(fields[i+1], `"`)
+		}
+	}
+	return ""
 }
