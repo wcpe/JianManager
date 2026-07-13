@@ -37,7 +37,7 @@ func (s *AuditService) RecordResult(userID uint, action, targetType, targetID, d
 		TargetID:   targetID,
 		Detail:     detail,
 		IP:         ip,
-		Success:    success,
+		Failed:     !success,
 		Error:      errMsg,
 	}
 	if err := s.db.Create(log).Error; err != nil {

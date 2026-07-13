@@ -142,3 +142,25 @@ func TestAuditService_ListPage_ReturnsEnvelope(t *testing.T) {
 	assert.Equal(t, "2", page.Items[0].TargetID)
 	assert.Equal(t, "1", page.Items[1].TargetID)
 }
+
+// TestAuditService_RecordResult_FailurePersistsFalse 失败记录的 success=false 必须真实落库（FR-321）。
+// 回归锁定：Success 是 bool 零值，默认 Create 会被 `default:true` tag 吃掉（零值列不进
+// INSERT → 落库变 true），失败记录静默变成功——真机首验即中招。
+func TestAuditService_RecordResult_FailurePersistsFalse(t *testing.T) {
+	db := setupAuditTestDB(t)
+	svc := NewAuditService(db)
+
+	require.NoError(t, svc.RecordResult(1, "instance.create", "instance", "9", "{}", "127.0.0.1",
+		false, `{"error":"PROVISION_FAILED"}`))
+	require.NoError(t, svc.Record(1, "instance.start", "instance", "9", "{}", "127.0.0.1"))
+
+	var failed model.AuditLog
+	require.NoError(t, db.Where("action = ?", "instance.create").First(&failed).Error)
+	require.True(t, failed.Failed, "失败记录落库后 failed 必须为 true")
+	require.Contains(t, failed.Error, "PROVISION_FAILED")
+
+	var ok model.AuditLog
+	require.NoError(t, db.Where("action = ?", "instance.start").First(&ok).Error)
+	require.False(t, ok.Failed)
+	require.Empty(t, ok.Error)
+}

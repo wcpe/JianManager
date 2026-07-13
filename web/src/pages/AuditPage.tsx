@@ -185,7 +185,7 @@ function AuditRow({
 }) {
   const { t } = useTranslation()
   const detail = formatAuditDetail(log.detail)
-  const hasDetail = detail !== '' || (log.success === false && !!log.error)
+  const hasDetail = detail !== '' || (log.failed && !!log.error)
   // FR-303：action 键翻译。audit.actions 下是含点的扁平键（如 instance.start），
   // 依赖 i18next ignoreJSONStructure（默认开）解析；未知键回退原键（defaultValue），保证不崩。
   const actionLabel = t(`audit.actions.${log.action}`, { defaultValue: log.action })
@@ -227,7 +227,7 @@ function AuditRow({
           {log.targetType && `${log.targetType}#${log.targetId}`}
         </span>
         {/* FR-321：失败操作红色徽章，一眼定位报错操作。 */}
-        {log.success === false && (
+        {log.failed && (
           <span className="shrink-0 rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] font-medium text-destructive">
             {t('audit.failed')}
           </span>
@@ -236,7 +236,7 @@ function AuditRow({
       </button>
       {open && hasDetail && (
         <div className="bg-muted/30 px-3 pb-3 pl-10">
-          {log.success === false && log.error && (
+          {log.failed && log.error && (
             <>
               <p className="mb-1 text-[11px] font-medium text-destructive">{t('audit.errorContent')}</p>
               <pre className="mb-2 overflow-x-auto rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-[11px] whitespace-pre-wrap break-all text-destructive">

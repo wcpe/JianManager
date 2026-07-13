@@ -1815,7 +1815,7 @@
 - **响应**:
   - 分页模式：`{ "items": [AuditLogInfo], "total": 123, "page": 1, "pageSize": 50 }`
   - 旧数组模式：`AuditLogInfo[]`
-  - `AuditLogInfo` 含 `success`（bool，FR-321：失败操作也留痕）与 `error`（失败时响应 error body 截断，≤512 字符）
+  - `AuditLogInfo` 含 `failed`（bool，FR-321：失败操作也留痕；历史行零值=未失败）与 `error`（失败时响应 error body 截断，≤512 字符）
 
 ### GET /api/v1/audit/export
 - **描述**: 按过滤条件导出审计日志 NDJSON（平台管理员）

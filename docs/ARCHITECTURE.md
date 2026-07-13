@@ -484,7 +484,7 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | metric_rollup_5m (V2) | series_id(FK), bucket_ts, avg/min/max/last/count；留 ~30d |
 | metric_rollup_1h (V2) | series_id(FK), bucket_ts, avg/min/max/last/count；留 ≥1y |
 | templates | uuid, name, type, description, start_command, default_work_dir, download_url, config_files(JSON) |
-| audit_logs | user_id, action, target_type, target_id, detail(JSON), ip, success(默认 true), error(varchar 512)（FR-321：失败操作也留痕并带响应错误内容；FR-172 分页 envelope 走服务端 total；NDJSON 导出按批次流式输出白名单字段，`audit.export` detail 仅记录格式、过滤摘要与成功/失败状态） |
+| audit_logs | user_id, action, target_type, target_id, detail(JSON), ip, failed(bool，零值=未失败), error(varchar 512)（FR-321：失败操作也留痕并带响应错误内容；FR-172 分页 envelope 走服务端 total；NDJSON 导出按批次流式输出白名单字段，`audit.export` detail 仅记录格式、过滤摘要与成功/失败状态） |
 | networks (V2) | uuid, name, description（非独占软标签） |
 | network_members (V2) | network_id(FK), instance_id(FK)（M:N，一个子服可属多群组） |
 | server_registrations (V2) | proxy_id(FK), backend_id(FK), alias, priority, forced_host, restricted, enabled；UNIQUE(proxy_id, alias) |

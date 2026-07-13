@@ -47,8 +47,8 @@ interface AuditLog {
   targetId: string
   detail: string
   ip: string
-  /** FR-321：操作结果与失败错误内容。 */
-  success: boolean
+  /** FR-321：操作是否失败与失败错误内容。 */
+  failed: boolean
   error: string
   createdAt: string
   user?: { id: number; username: string }
@@ -89,7 +89,7 @@ const audit = db<AuditLog>('audit', () => [
     targetId: '1',
     detail: '{"ua":"mock"}',
     ip: '127.0.0.1',
-    success: true,
+    failed: false,
     error: '',
     createdAt: '2026-06-28T10:00:00Z',
     user: { id: 1, username: 'admin' },
@@ -103,7 +103,7 @@ const audit = db<AuditLog>('audit', () => [
     targetId: 'inst-001',
     detail: '{"reason":"manual"}',
     ip: '127.0.0.1',
-    success: false,
+    failed: true,
     error: '{"error":"MEM_GATE","message":"节点可用内存不足：已拒绝启动"}',
     createdAt: '2026-06-28T10:05:00Z',
     user: { id: 1, username: 'admin' },
@@ -117,7 +117,7 @@ const audit = db<AuditLog>('audit', () => [
     targetId: '2',
     detail: '',
     ip: '10.0.0.2',
-    success: true,
+    failed: false,
     error: '',
     createdAt: '2026-06-28T10:10:00Z',
     user: { id: 2, username: 'operator' },

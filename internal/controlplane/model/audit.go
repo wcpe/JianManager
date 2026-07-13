@@ -17,8 +17,10 @@ type AuditLog struct {
 	TargetID   string    `gorm:"type:varchar(64)" json:"targetId"`
 	Detail     string    `gorm:"type:text" json:"detail"` // JSON
 	IP         string    `gorm:"type:varchar(64)" json:"ip"`
-	// Success 操作是否成功（FR-321：失败操作也留痕并带错误内容，回答「这个操作为什么报错」）。
-	Success bool `gorm:"default:true" json:"success"`
+	// Failed 操作是否失败（FR-321：失败操作也留痕并带错误内容）。语义取「失败」而非「成功」：
+	// 失败是非零值 true，规避 GORM 零值列不进 INSERT 的坑（存 success 时 false 会被 default 吃掉），
+	// 且历史行零值天然=未失败，无需迁移回填。
+	Failed bool `json:"failed"`
 	// Error 失败时的错误内容（响应 error body 截断，FR-321）。
 	Error     string    `gorm:"type:varchar(512)" json:"error"`
 	CreatedAt time.Time `json:"createdAt"`
