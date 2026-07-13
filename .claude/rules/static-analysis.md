@@ -58,7 +58,7 @@ issues:
 go vet ./...
 golangci-lint run
 
-# TypeScript
-cd web && tsc --noEmit && npm run lint
-cd bot-worker && tsc --noEmit && npm run lint
+# TypeScript（等价 task lint / task bot:lint）
+cd apps/control-plane-web && pnpm exec tsc -b --noEmit && pnpm lint
+cd apps/bot-worker && npx tsc --noEmit && npm run lint
 ```
