@@ -58,12 +58,14 @@ export function useImportServer() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (payload: ImportServerPayload) => {
-      const { data } = await api.post<InstanceInfo>('/instances/import', payload)
-      return data
+      // FR-323：migrate 搬迁异步化，响应 {instance, taskId}；解包回 instance 保持消费者契约。
+      const { data } = await api.post<{ instance: InstanceInfo; taskId: string }>('/instances/import', payload)
+      return data.instance
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['instances'] })
       void qc.invalidateQueries({ queryKey: ['node-jdks'] })
+      void qc.invalidateQueries({ queryKey: ['tasks'] })
     },
   })
 }

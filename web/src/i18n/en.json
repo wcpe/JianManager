@@ -3240,7 +3240,11 @@
       "jdkInstall": "JDK install",
       "runtimeInstall": "Runtime install",
       "pkgInstall": "Global package install",
-      "provision": "Provision"
+      "provision": "Provision",
+      "import": "Import Server",
+      "clone": "Clone Instance",
+      "backupCreate": "Backup Create",
+      "backupRestore": "Backup Restore"
     },
     "filter": {
       "keyword": "Search title / detail",

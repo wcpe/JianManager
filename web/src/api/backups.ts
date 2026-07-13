@@ -64,7 +64,7 @@ export function useCreateBackup(instanceId: number) {
   return useMutation({
     mutationFn: (body?: CreateBackupBody) =>
       api.post(`/instances/${instanceId}/backups`, body ?? {}),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['backups'] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['backups'] }); qc.invalidateQueries({ queryKey: ['tasks'] }) },
   })
 }
 
@@ -72,7 +72,7 @@ export function useRestoreBackup() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (backupId: number) => api.post(`/backups/${backupId}/restore`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['backups'] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['backups'] }); qc.invalidateQueries({ queryKey: ['tasks'] }) },
   })
 }
 
@@ -80,6 +80,6 @@ export function useDeleteBackup() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (backupId: number) => api.delete(`/backups/${backupId}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['backups'] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['backups'] }); qc.invalidateQueries({ queryKey: ['tasks'] }) },
   })
 }

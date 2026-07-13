@@ -32,7 +32,10 @@ export function useCloneInstance(sourceId: number) {
     mutationFn: (body: CloneBody) =>
       api.post<CloneResult>(`/instances/${sourceId}/clone`, body).then((r) => r.data),
     onSuccess: (res) => {
-      if (!res.dryRun) qc.invalidateQueries({ queryKey: ['instances'] })
+      if (!res.dryRun) {
+        qc.invalidateQueries({ queryKey: ['instances'] })
+        qc.invalidateQueries({ queryKey: ['tasks'] }) // FR-323：克隆拷贝走任务中心
+      }
     },
   })
 }

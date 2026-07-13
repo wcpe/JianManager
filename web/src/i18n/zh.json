@@ -3240,7 +3240,11 @@
       "jdkInstall": "JDK 安装",
       "runtimeInstall": "运行时安装",
       "pkgInstall": "全局包安装",
-      "provision": "一键搭建"
+      "provision": "一键搭建",
+      "import": "导入服务器",
+      "clone": "克隆实例",
+      "backupCreate": "备份创建",
+      "backupRestore": "备份恢复"
     },
     "filter": {
       "keyword": "搜索标题 / 详情",
