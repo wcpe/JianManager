@@ -101,3 +101,9 @@ message PreflightCheck {
 - launch_target 解析保守放行：自定义非 `-jar` 命令不拦（宁漏勿误伤）；后续 FR-313 崩溃快照兜住漏网场景。
 - 预检与启动之间存在 TOCTOU 窗口（预检过后 jar 被删）：接受——`StartInstance` 内嵌预检与进程崩溃路径仍在，本 FR 不追求原子。
 - CP→Worker 预检超时 10s 取值：慢隧道下点击等待上限；若真机体感差可降为 5s（实现时以常量集中定义）。
+
+## 7. 实现说明（与设计偏差，落地后补记）
+
+- **复用 `InstanceActionResponse` 而非新增 `PreflightResult`/`PreflightCheck`**：本机 protoc（28.3）与项目基线（27.1）描述符编码不一致，整文件重生成会引入大量无关漂移；且拼接后的失败原因单串已满足展示需求，逐项 checks 数组非必需。故新 RPC `PreflightStartInstance` 复用 `InstanceActionResponse`（`success`=全部通过，`error`=拼接失败原因），grpc 桩按既有 `StartInstance` 模式手工增补（含 `Unimplemented` 兜底，老 Worker 向后兼容白送）。
+- **前端无需改动**：既有启动 mutation 的 `onError` 已 `toast.error(err.response?.data?.message)`，422 的 message 即拼接后的预检原因，天然弹出；再由 FR-312 失败原因横幅在控制台回显 statusReason。故本 FR 不新增前端代码。
+- **CP `Start` 挂载点**：预检插在既有 `memoryGate` 之后、`transition(STARTING)` 之前；`ErrNodeOffline` 复用 `jdk.go` 既有哨兵。
