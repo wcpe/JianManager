@@ -14,13 +14,13 @@
 | `README.md` / `DEPLOY.md` / `CHANGELOG.md` | 文档 |
 
 三进程模型：`浏览器 →(HTTP/WS)→ Control Plane →(gRPC)→ Worker Node →(spawn)→ Bot Worker(Node.js)`。
-Bot Worker 是 Node.js 子进程，**不随发布包打包**，按源码运行（见 §6）。
+Bot Worker 是 Node.js 子进程，其 dist 已内嵌 Control Plane，Worker 注册后**自动下发**到本机，无需手动准备文件（FR-308，见 §6）。
 
 ## 2. 环境要求
 
 - Control Plane / Worker：对应平台的可执行文件即可运行，无需额外运行时（纯 Go 静态二进制，内置 SQLite）。
 - 运行 Minecraft 等游戏服：目标 Worker 机需要对应 JDK。现代 Paper（1.18+）需 Java 17/21——可在节点托管便携 JDK（见 §7），无需系统预装。
-- Bot 功能：Worker 机需要 Node.js 20+（运行 Bot Worker）。
+- Bot 功能：Worker 机需要 Node.js 20+——可在节点「运行时」页一键安装托管 Node，无需系统预装（见 §6）。
 - 数据库：默认 SQLite（零依赖）；生产可切 MySQL（见 §4）。
 
 ## 3. 快速部署（单机）
@@ -106,18 +106,25 @@ Worker 全部用环境变量配置（也可放 `worker.yml` 同名键）：
 | `JIANMANAGER_GRPC_PORT` | Worker gRPC 端口 | 9101 |
 | `JIANMANAGER_WS_PORT` | Worker 终端 WebSocket 端口 | 9102 |
 | `JIANMANAGER_DATA_DIR` | 数据根（游戏服在 `var/servers/`、JDK 在 `opt/jdks/`） | 进程目录下 `data/` |
-| `JIANMANAGER_BOT_WORKER_PATH` | Bot Worker 入口 `index.js` 路径（启用 Bot 必填，见下） | `bot-worker/dist/index.js` |
+| `JIANMANAGER_BOT_WORKER_PATH` | 显式覆盖 Bot Worker 入口 `index.js` 路径（指定后固定该入口、不再自愈下发；仅仓库式部署等特殊场景需要，见下） | 留空自动解析（数据根自愈副本优先） |
 | `JIANMANAGER_DISABLE_JDK` | 设为 `1` 关闭托管 JDK 能力 | 启用 |
 | `JIANMANAGER_JDK_TEMURIN_BASE` | 一键安装 Temurin 的下载基址（国内可换镜像） | `https://api.adoptium.net` |
 | `JIANMANAGER_JDK_CORRETTO_BASE` | 一键安装 Corretto 的下载基址 | `https://corretto.aws` |
 | `JIANMANAGER_JDK_ZULU_BASE` | 一键安装 Zulu 的元数据 API 基址 | `https://api.azul.com` |
 
-### Bot Worker（Node.js，按源码运行）
+### Bot Worker（Node.js，自动下发）
 
-Bot 功能由 Node.js 子进程承载，发布包不含其依赖，需在 Worker 机准备：
+Bot 功能由 Node.js 子进程承载。bot-worker 的 dist 已内嵌 Control Plane 二进制（FR-308，见 ADR-070）：Worker 注册成功后经 gRPC（`FetchBotWorkerArchive`）自动拉取并物化到 `<数据根>/opt/bot-worker/`（sha256 校验 + 原子换入；指纹一致跳过；CP 不可达时回退本地已有副本，只告警不阻断启动）。**发布包部署无需手动准备 bot-worker 文件**，只需在 Worker 机备好两项运行时：
+
+1. **Node.js 20+**：推荐在节点「运行时」页一键安装托管 Node（FR-299）；Worker spawn 时优先用本机扫描到的最高版 Node，无候选回退 PATH 中的 `node`（FR-300）。
+2. **Bot 运行时依赖**（`mineflayer`、`mineflayer-pathfinder`）：不随归档分发，在节点「全局包管理」安装（FR-307）。缺装时 Bot 启动会返回明确的安装指引，不会裸崩。
+
+入口解析顺序：`JIANMANAGER_BOT_WORKER_PATH` 显式覆盖（指定后不再自愈下发）> 数据根自愈副本 > 仓库相对路径 `apps/bot-worker/dist/index.js`（旧布局 `bot-worker/dist/index.js` 兼容）。
+
+**仓库式部署回退（按源码运行）**：从仓库检出运行 Worker 时，可自行构建并显式指定入口：
 
 ```bash
-cd bot-worker
+cd apps/bot-worker
 npm install
 npm run build          # 产出 dist/index.js
 # 然后在 Worker 进程设置：
