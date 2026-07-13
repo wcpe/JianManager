@@ -1,14 +1,36 @@
 package router
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
+
+// fakeLifecycleWorker 假 Worker（FR-314 后启动链路带同步预检）：预检放行、注册/启动即成功，
+// 使生命周期用例聚焦路由层状态转换语义而非预检分支（预检分支见 service 层与下方 409 用例）。
+type fakeLifecycleWorker struct {
+	workerpb.WorkerServiceClient
+}
+
+func (f *fakeLifecycleWorker) PreflightStartInstance(ctx context.Context, in *workerpb.InstanceActionRequest, opts ...grpc.CallOption) (*workerpb.InstanceActionResponse, error) {
+	return &workerpb.InstanceActionResponse{Success: true}, nil
+}
+
+func (f *fakeLifecycleWorker) CreateInstance(ctx context.Context, in *workerpb.CreateInstanceRequest, opts ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
+	return &workerpb.CreateInstanceResponse{}, nil
+}
+
+func (f *fakeLifecycleWorker) StartInstance(ctx context.Context, in *workerpb.InstanceActionRequest, opts ...grpc.CallOption) (*workerpb.InstanceActionResponse, error) {
+	return &workerpb.InstanceActionResponse{Success: true}, nil
+}
 
 // TestInstance_Create_Unauthorized 未登录创建实例返回 401。
 func TestInstance_Create_Unauthorized(t *testing.T) {
@@ -38,12 +60,14 @@ func TestInstance_Delete_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }
 
-// TestInstance_Start_StoppedToStarting 停止状态的实例可启动。
+// TestInstance_Start_StoppedToStarting 停止状态的实例可启动（预检放行经 fake Worker，FR-314）。
 func TestInstance_Start_StoppedToStarting(t *testing.T) {
 	db := setupTestDB(t)
-	r := setupTestRouter(db)
+	pool := cpgrpc.NewClientPool()
+	r := setupTestRouterWithPool(db, pool)
 	token := getAdminToken(t, r)
-	createTestNode(t, db)
+	node := createTestNode(t, db)
+	pool.SetWorkerClientForTest(node.UUID, &fakeLifecycleWorker{})
 
 	body := map[string]interface{}{
 		"nodeId":       1,
@@ -62,12 +86,14 @@ func TestInstance_Start_StoppedToStarting(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
-// TestInstance_Start_AlreadyStarting 已处于 STARTING 状态再次启动返回错误。
+// TestInstance_Start_AlreadyStarting 已处于 STARTING 状态再次启动返回错误（预检放行经 fake Worker）。
 func TestInstance_Start_AlreadyStarting(t *testing.T) {
 	db := setupTestDB(t)
-	r := setupTestRouter(db)
+	pool := cpgrpc.NewClientPool()
+	r := setupTestRouterWithPool(db, pool)
 	token := getAdminToken(t, r)
-	createTestNode(t, db)
+	node := createTestNode(t, db)
+	pool.SetWorkerClientForTest(node.UUID, &fakeLifecycleWorker{})
 
 	body := map[string]interface{}{
 		"nodeId":       1,
@@ -88,6 +114,31 @@ func TestInstance_Start_AlreadyStarting(t *testing.T) {
 	// 第二次启动失败（STARTING 不能再次启动）
 	w = makeRequest(r, "POST", "/api/v1/instances/"+itoa(id)+"/start", nil, token)
 	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+}
+
+// TestInstance_Start_NodeOffline 节点未连接时启动被同步预检拦截，返回 409 NODE_OFFLINE（FR-314）。
+func TestInstance_Start_NodeOffline(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db) // 空连接池 = 节点未连接
+	token := getAdminToken(t, r)
+	createTestNode(t, db)
+
+	body := map[string]interface{}{
+		"nodeId":       1,
+		"name":         "离线节点实例",
+		"type":         "minecraft_java",
+		"processType":  "direct",
+		"startCommand": "java -jar server.jar",
+	}
+	w := makeRequest(r, "POST", "/api/v1/instances", body, token)
+	require.Equal(t, http.StatusCreated, w.Code)
+	created := parseJSON(t, w)
+	id := uint(created["id"].(float64))
+
+	w = makeRequest(r, "POST", "/api/v1/instances/"+itoa(id)+"/start", nil, token)
+	assert.Equal(t, http.StatusConflict, w.Code)
+	resp := parseJSON(t, w)
+	assert.Equal(t, "NODE_OFFLINE", resp["error"])
 }
 
 // TestInstance_Stop_RunningToStopping 运行中实例可停止并进入 STOPPING。
