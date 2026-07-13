@@ -228,6 +228,11 @@ func runWorker() {
 	slog.Info("Worker Node 启动", "name", nodeName, "grpcPort", grpcPort, "wsPort", wsPort, "dataDir", root.Base(), "serversDir", serversDir)
 	// 初始化进程管理器
 	manager := process.NewManager(serversDir)
+	// 启动内存闸（FR-317）：可用内存塞不下待启实例即拒绝启动，防节点 OOM 失联。
+	manager.SetMemGuard(process.MemGuardConfig{
+		ReserveMB: cfg.MemoryGuard.ReserveMB,
+		Disabled:  cfg.MemoryGuard.Disabled,
+	})
 
 	// 初始化 JDK 管理器：托管根 <dataRoot>/opt/jdks；可选追加系统 JDK 探测目录。
 	// 参见 ADR-010：JDK 从旧的 <serversDir>/jdks 迁移到 opt/jdks。

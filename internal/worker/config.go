@@ -47,6 +47,17 @@ type Config struct {
 	// 经此代理。url 留空=直连（沿用环境变量代理）。各 Worker 在不同机器各配各的。
 	Proxy     httpclient.Config `mapstructure:"proxy"`
 	Heartbeat time.Duration     `mapstructure:"-"`
+	// MemoryGuard 启动内存闸（FR-317）：可用内存不足以再塞下待启实例时拒绝启动，
+	// 防止把节点内存跑满至失去响应。零值即启用 + 默认保留水位 max(512MB, 总内存 10%)。
+	MemoryGuard MemoryGuardConfig `mapstructure:"memory_guard"`
+}
+
+// MemoryGuardConfig 启动内存闸配置（FR-317）。
+type MemoryGuardConfig struct {
+	// ReserveMB 保留水位（MB）；0 = 默认策略 max(512MB, 总内存 10%)。
+	ReserveMB int64 `mapstructure:"reserve_mb"`
+	// Disabled 显式关闭守卫（应急逃生口，如误判阻塞关键启动时）。
+	Disabled bool `mapstructure:"disabled"`
 }
 
 // SearchConfig 全文搜索索引配置（FR-074，见 ADR-017）。

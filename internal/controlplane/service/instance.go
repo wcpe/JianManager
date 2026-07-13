@@ -14,6 +14,7 @@ import (
 
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/internal/platform/memguard"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
@@ -725,6 +726,12 @@ func (s *InstanceService) Start(id uint) error {
 		return err
 	}
 
+	// 内存水位预警闸（FR-317 CP 侧）：按节点最近心跳预判，不足直接拒绝不下发 RPC。
+	// Worker 侧启动前还有实时闸兜底（心跳数据最多滞后一个心跳周期）。
+	if err := s.memoryGate(instance); err != nil {
+		return err
+	}
+
 	// 状态转换
 	if err := s.transition(id, model.InstanceStatusStarting, "启动"); err != nil {
 		return err
@@ -733,6 +740,27 @@ func (s *InstanceService) Start(id uint) error {
 	// 委托给 Worker Node
 	s.spawnDelegate(instance, "start")
 
+	return nil
+}
+
+// memoryGate 启动前按节点心跳数据预判内存水位（FR-317）。
+// 心跳过旧（>90s，节点观测不可信）或字段缺失时放行——实时判定交给 Worker 闸；
+// 这里只拦「数据可信且明显塞不下」的启动，避免白走一趟 RPC 和状态翻转。
+func (s *InstanceService) memoryGate(instance *model.Instance) error {
+	var node model.Node
+	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
+		return nil // 节点记录异常交给后续委托路径报错，不在闸上拦
+	}
+	if node.MemoryMB <= 0 || node.MemoryUsedMB <= 0 ||
+		node.LastHeartbeat == nil || time.Since(*node.LastHeartbeat) > 90*time.Second {
+		return nil
+	}
+	availMB := node.MemoryMB - node.MemoryUsedMB
+	required := memguard.EstimateStartMB(instance.StartCommand, instance.MemLimitMB)
+	reserve := memguard.DefaultReserveMB(node.MemoryMB)
+	if err := memguard.Check(availMB, required, reserve); err != nil {
+		return fmt.Errorf("节点 %s %w", node.Name, err)
+	}
 	return nil
 }
 

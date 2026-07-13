@@ -74,6 +74,9 @@ type Manager struct {
 	pidDir string
 	// onStateChange 实例状态变更回调，用于 StreamInstanceEvents 推送。
 	onStateChange func(instanceUUID string, oldState, newState InstanceState)
+	// memGuard 启动内存闸配置；readMem 系统内存读数器（nil=真读数，测试注入，FR-317）。
+	memGuard MemGuardConfig
+	readMem  readSysMem
 }
 
 // NewManager 创建进程管理器。
@@ -315,6 +318,14 @@ func (m *Manager) Start(uuid string) error {
 	// 启动前校验 java 版本（仅宿主进程模式；docker 的 java 在容器内不适用）。
 	// 避免无绑定 JDK / 版本不符的 MC 实例以 UnsupportedClassVersionError 静默崩在
 	// 游戏服自身日志、面板只见 CRASHED 无因（BUG-012）。校验失败保持原状态、返回明确错误。
+	// 启动前实时内存闸（FR-317，先于 Java 预检——对所有 processType 普适）：
+	// 可用内存不足以再塞下这个实例即拒绝，保持原状态返回明确错误。
+	// docker 模式同样过闸（容器内存也吃宿主，按 MemLimitMB 估算）。
+	if err := m.preflightMemory(inst); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+
 	if inst.processType != ProcessTypeDocker {
 		if err := preflightJavaVersion(CommandSpec{
 			StartCommand: inst.StartCommand,
