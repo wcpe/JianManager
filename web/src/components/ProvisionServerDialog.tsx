@@ -134,7 +134,8 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
       },
       {
         onSuccess: () => {
-          toast.success(t('provision.success', { name }))
+          // FR-319 异步化：实例已建，核心下载在后台任务推进（慢源可能数分钟），进度看任务中心。
+          toast.success(t('provision.submitted'))
           close()
         },
         onError: (err: Error & { response?: { data?: { message?: string; instance?: unknown } } }) => {

@@ -327,6 +327,8 @@ func main() {
 	pmConfigSvc.SetTaskService(taskSvc) // FR-307 全局包异步安装走任务中心
 	// 运行时库安装异步化（FR-299）：Node.js 安装复用 jdk_install 的任务模式（kind=runtime_install）。
 	runtimeLibrarySvc.SetTaskService(taskSvc)
+	// 一键搭建异步化（FR-319）：下载/写配置在后台任务推进，前端不再被慢下载拖超时。
+	provisionSvc.SetTaskService(taskSvc)
 
 	// 统一通知中心（FR-216，见 ADR-048）：只读聚合站内信（定向消息）+ 告警事件（系统警报）
 	// 为一条通知流，页眉单铃铛 + 通知中心页消费。不新建表，标记已读下推到各源既有服务。

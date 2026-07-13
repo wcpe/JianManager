@@ -59,16 +59,24 @@ func (s *Server) DownloadCore(ctx context.Context, req *workerpb.DownloadCoreReq
 		}
 		if hit, err := s.cache.GetTo(want, target); err == nil && hit {
 			if st, statErr := os.Stat(target); statErr == nil {
+				slog.Info("核心下载：缓存命中秒拷", "instance", req.InstanceUuid, "sha256", want[:12], "size", st.Size())
 				return &workerpb.DownloadCoreResponse{Success: true, Size: st.Size()}, nil
 			}
 		}
 	}
 
 	// 2) 未命中：下载并（有 sha256 时）校验。
+	// 开始/结果都留日志（FR-319）：慢源下载被 CP 取消/中断时，此前 worker 全程零痕迹不可追查。
+	slog.Info("核心下载开始", "instance", req.InstanceUuid, "url", req.DownloadUrl)
+	start := time.Now()
 	size, sum, err := downloadFile(ctx, s.outboundClient(), req.DownloadUrl, target)
 	if err != nil {
+		slog.Warn("核心下载失败", "instance", req.InstanceUuid, "url", req.DownloadUrl,
+			"elapsed", time.Since(start).Round(time.Second), "error", err)
 		return &workerpb.DownloadCoreResponse{Success: false, Error: err.Error()}, nil
 	}
+	slog.Info("核心下载完成", "instance", req.InstanceUuid, "size", size,
+		"elapsed", time.Since(start).Round(time.Second))
 	if want != "" && want != sum {
 		_ = os.Remove(target)
 		return &workerpb.DownloadCoreResponse{Success: false, Error: fmt.Sprintf("核心 sha256 校验不符：期望 %s 实得 %s", want, sum)}, nil

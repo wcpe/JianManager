@@ -72,17 +72,25 @@ export interface ProvisionServerBody {
   onlineMode?: boolean
 }
 
+/** 一键搭建异步响应（FR-319）：实例立即落库，下载/写配置在任务中心异步推进。 */
+export interface ProvisionServerResult {
+  instance: InstanceInfo
+  /** 搭建任务 id（进度/失败原因见任务中心）。 */
+  taskId: string
+}
+
 /**
- * 一键搭建后端子服：后端解析核心 → 分配端口/工作目录 → 结构化启动 →
- * 下载核心 + 写基础配置，返回创建的实例（STOPPED，可一键启动）。
+ * 一键搭建后端子服（FR-319 异步化）：同步段只解析核心 + 建实例 + 登记任务（立即返回），
+ * 下载核心/写配置在 CP 后台任务推进——慢源下载不再把请求拖到超时。
  */
 export function useProvisionServer() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body: ProvisionServerBody) =>
-      api.post<InstanceInfo>('/instances/provision/server', body),
+      api.post<ProvisionServerResult>('/instances/provision/server', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['instances'] })
+      qc.invalidateQueries({ queryKey: ['tasks'] })
     },
   })
 }

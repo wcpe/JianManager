@@ -87,6 +87,37 @@ func (s *TaskService) MarkFailed(taskID, reason string) error {
 	return nil
 }
 
+// MarkSucceeded 把任务置为 succeeded（CP 侧执行体完成时调用，FR-319）。
+// 与 MarkFailed 对称：终态幂等 + 触发 finalizeTerminal 副作用（站内信）。
+func (s *TaskService) MarkSucceeded(taskID, result string) error {
+	var t model.Task
+	if err := s.db.Where("task_id = ?", taskID).First(&t).Error; err != nil {
+		return err
+	}
+	if t.State.IsTerminal() {
+		return nil
+	}
+	if err := s.db.Model(&model.Task{}).Where("task_id = ?", taskID).
+		Updates(map[string]any{"state": model.TaskStateSucceeded, "progress": 100, "result": result}).Error; err != nil {
+		return err
+	}
+	t.State = model.TaskStateSucceeded
+	t.Result = result
+	s.finalizeTerminal(&t)
+	return nil
+}
+
+// SetStage 更新 CP 侧执行任务的阶段展示（进度百分比 + 详情行，FR-319）。
+// 同时把阶段行落 TaskLog（绝对序号自增），任务中心日志区可见完整阶段轨迹。
+func (s *TaskService) SetStage(taskID string, progress int, stage string) {
+	_ = s.db.Model(&model.Task{}).Where("task_id = ?", taskID).
+		Updates(map[string]any{"progress": progress, "detail": stage}).Error
+	var maxSeq int64
+	_ = s.db.Model(&model.TaskLog{}).Where("task_id = ?", taskID).
+		Select("COALESCE(MAX(seq),0)").Scan(&maxSeq).Error
+	_ = s.db.Create(&model.TaskLog{TaskID: taskID, Seq: int(maxSeq) + 1, Line: stage}).Error
+}
+
 // TaskListFilter 任务列表筛选条件（FR-227）。零值字段表示不限制。
 type TaskListFilter struct {
 	Kind    string     // 任务种类（如 jdk_install）

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	cpembed "github.com/wcpe/JianManager/internal/controlplane/embed"
@@ -31,7 +32,13 @@ type ProvisionService struct {
 	// bridge 用于建服时签发实例级插件桥 token 并写入探针 config（FR-065，见 ADR-016）。
 	// 为 nil 时探针 config 不含 bridge 段（探针只跑 /metrics，不连反向 WS）。
 	bridge *PluginBridgeService
+	// tasks 任务中心（FR-319）：搭建的下载/写配置阶段经任务异步执行与展示；
+	// nil 时（测试/未接线）回退同步执行（旧行为）。
+	tasks *TaskService
 }
+
+// SetTaskService 注入任务中心（FR-319，main 接线）：非 nil 后搭建走异步任务模式。
+func (p *ProvisionService) SetTaskService(t *TaskService) { p.tasks = t }
 
 // NewProvisionService 创建一键搭建服务。
 // bridge 可为 nil（未启用插件桥时）；非 nil 时建服自动为实例签发插件桥 token 并下发探针。
@@ -68,16 +75,79 @@ func (p *ProvisionService) ProvisionServer(ctx context.Context, req ProvisionSer
 		return nil, err
 	}
 
-	ports, err := allocPortsForNode(p.db, req.NodeID)
+	// 创建实例：系统分配工作目录 + 结构化启动 + 绑定 JDK + 端口；daemon 启动不杀服（ADR-003）。
+	// Create 内部会派生 java 启动命令并把实例注册到 Worker（创建工作目录）。
+	inst, err := p.createProvisionInstance(req, core)
 	if err != nil {
 		return nil, err
 	}
 
+	if err := p.provisionOnWorker(ctx, inst, core, boolOr(req.OnlineMode, false), ""); err != nil {
+		// 实例已落库（STOPPED），返回实例与错误，便于用户重试或删除。
+		return inst, fmt.Errorf("子服搭建失败: %w", err)
+	}
+	return inst, nil
+}
+
+// ProvisionServerAsync 一键搭建的异步入口（FR-319）：同步段只做核心解析 + 建实例 + 登记任务
+// （立即返回，前端不再被慢下载拖到超时），下载/写配置/探针在 CP 后台 goroutine 执行——
+// 用独立 context（不挂请求），前端断开不再连锁取消下载（真机事故：Paper CDN ~200KB/s、
+// 47MB 需 4 分钟，同步链路被前端超时腰斩后留空壳实例且错误进黑洞）。
+// 失败：任务终态含错误链 + 实例 statusReason 标注「搭建未完成」+ slog 落平台日志。
+func (p *ProvisionService) ProvisionServerAsync(ctx context.Context, req ProvisionServerRequest, createdBy uint) (*model.Instance, string, error) {
+	if p.tasks == nil {
+		inst, err := p.ProvisionServer(ctx, req)
+		return inst, "", err
+	}
+	if IsProxyCore(req.CoreType) {
+		return nil, "", fmt.Errorf("代理核心请使用代理搭建入口: %s", req.CoreType)
+	}
+	core, err := p.core.ResolveBuild(ctx, req.CoreType, req.MCVersion, req.Build)
+	if err != nil {
+		slog.Error("一键搭建失败：解析核心构建", "name", req.Name, "coreType", req.CoreType, "mcVersion", req.MCVersion, "error", err)
+		return nil, "", err
+	}
+	inst, err := p.createProvisionInstance(req, core)
+	if err != nil {
+		slog.Error("一键搭建失败：创建实例", "name", req.Name, "error", err)
+		return nil, "", err
+	}
+
+	taskID := uuid.New().String()
+	title := fmt.Sprintf("一键搭建 %s（%s %s）", inst.Name, req.CoreType, req.MCVersion)
+	if _, terr := p.tasks.CreateTask(taskID, req.NodeID, model.TaskKindProvision, title, "排队中", createdBy); terr != nil {
+		return inst, "", fmt.Errorf("登记搭建任务失败: %w", terr)
+	}
+	onlineMode := boolOr(req.OnlineMode, false)
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		_ = p.tasks.MarkRunning(taskID)
+		if err := p.provisionOnWorker(bgCtx, inst, core, onlineMode, taskID); err != nil {
+			slog.Error("一键搭建失败", "instance", inst.Name, "instanceId", inst.ID, "taskId", taskID, "error", err)
+			_ = p.tasks.MarkFailed(taskID, err.Error())
+			// 空壳标注：statusReason 让实例卡片/详情可见「为什么这个实例不可用」，启动前一目了然。
+			_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
+				Update("status_reason", "搭建未完成："+err.Error()).Error
+			return
+		}
+		_ = p.tasks.MarkSucceeded(taskID, "")
+		_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).Update("status_reason", "").Error
+		slog.Info("一键搭建完成", "instance", inst.Name, "instanceId", inst.ID, "taskId", taskID)
+	}()
+	return inst, taskID, nil
+}
+
+// createProvisionInstance 同步段的「分配端口 + 结构化启动 + 建实例」（与旧同步路径共用）。
+func (p *ProvisionService) createProvisionInstance(req ProvisionServerRequest, core *CoreInfo) (*model.Instance, error) {
+	ports, err := allocPortsForNode(p.db, req.NodeID)
+	if err != nil {
+		return nil, err
+	}
 	var node model.Node
 	if err := p.db.First(&node, req.NodeID).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, fmt.Errorf("查找节点失败: %w", err)
 	}
-
 	spec, err := launchSpecForProvision(req, core, node.OS)
 	if err != nil {
 		return nil, err
@@ -86,10 +156,7 @@ func (p *ProvisionService) ProvisionServer(ctx context.Context, req ProvisionSer
 	if err != nil {
 		return nil, err
 	}
-
-	// 创建实例：系统分配工作目录 + 结构化启动 + 绑定 JDK + 端口；daemon 启动不杀服（ADR-003）。
-	// Create 内部会派生 java 启动命令并把实例注册到 Worker（创建工作目录）。
-	inst, err := p.instance.Create(CreateInstanceRequest{
+	return p.instance.Create(CreateInstanceRequest{
 		NodeID:      req.NodeID,
 		Name:        req.Name,
 		Type:        model.InstanceTypeMinecraftJava,
@@ -103,15 +170,6 @@ func (p *ProvisionService) ProvisionServer(ctx context.Context, req ProvisionSer
 		AutoRestart: true,
 		GroupID:     req.GroupID,
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	if err := p.provisionOnWorker(ctx, inst, core, boolOr(req.OnlineMode, false)); err != nil {
-		// 实例已落库（STOPPED），返回实例与错误，便于用户重试或删除。
-		return inst, fmt.Errorf("子服搭建失败: %w", err)
-	}
-	return inst, nil
 }
 
 func launchSpecForProvision(req ProvisionServerRequest, core *CoreInfo, nodeOS string) (LaunchSpec, error) {
@@ -160,7 +218,13 @@ func (p *ProvisionService) NodePorts(nodeID uint) (*NodePortsResult, error) {
 }
 
 // provisionOnWorker 在 Worker 上下载/安装核心并写入 eula.txt / server.properties。
-func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.Instance, core *CoreInfo, onlineMode bool) error {
+// taskID 非空时各阶段经任务中心上报（FR-319）；空 = 旧同步路径不上报。
+func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.Instance, core *CoreInfo, onlineMode bool, taskID string) error {
+	stage := func(progress int, text string) {
+		if taskID != "" && p.tasks != nil {
+			p.tasks.SetStage(taskID, progress, text)
+		}
+	}
 	var node model.Node
 	if err := p.db.First(&node, inst.NodeID).Error; err != nil {
 		return fmt.Errorf("查找节点失败: %w", err)
@@ -171,14 +235,17 @@ func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.In
 	}
 
 	if isSpongeForgeCore(core) {
+		stage(10, "安装 Forge/SpongeForge（可能需要数分钟）…")
 		if err := p.installSpongeForge(ctx, client, inst, core); err != nil {
 			return err
 		}
 	} else {
+		stage(10, fmt.Sprintf("下载核心 %s（源站较慢时可能需要数分钟）…", core.DownloadURL))
 		if err := p.downloadSingleCore(ctx, client, inst, core); err != nil {
 			return err
 		}
 	}
+	stage(70, "写入 eula.txt / server.properties …")
 
 	cfgCtx, cancel2 := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel2()
@@ -202,6 +269,7 @@ func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.In
 
 	// 部署 ServerProbe 监控探针（FR-010）：CP 内嵌探针 jar 时下发 jar + 开启 /metrics 的 config.yml；
 	// 未内嵌（未跑 make embed-probe）则跳过。探针为辅助监控，部署失败仅告警、不阻断建服。
+	stage(85, "部署监控探针 …")
 	if jar := cpembed.ServerProbeJar(); len(jar) > 0 {
 		probeCtx, cancel3 := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel3()

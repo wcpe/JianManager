@@ -87,7 +87,7 @@ export default function TasksPage() {
         <FilterSelect value={stateF} onChange={setStateF} placeholder={t('tasks.filter.allStates', '全部状态')}
           options={STATE_OPTIONS.map((s) => ({ value: s, label: t(STATE_META[s].key) }))} />
         <FilterSelect value={kindF} onChange={setKindF} placeholder={t('tasks.filter.allKinds', '全部种类')}
-          options={[{ value: 'jdk_install', label: t('tasks.kind.jdkInstall', 'JDK 安装') }, { value: 'runtime_install', label: t('tasks.kind.runtimeInstall', '运行时安装') }, { value: 'pkg_install', label: t('tasks.kind.pkgInstall', '全局包安装') }]} />
+          options={[{ value: 'jdk_install', label: t('tasks.kind.jdkInstall', 'JDK 安装') }, { value: 'runtime_install', label: t('tasks.kind.runtimeInstall', '运行时安装') }, { value: 'pkg_install', label: t('tasks.kind.pkgInstall', '全局包安装') }, { value: 'provision', label: t('tasks.kind.provision', '一键搭建') }]} />
         <FilterSelect value={nodeF} onChange={setNodeF} placeholder={t('tasks.filter.allNodes', '全部节点')}
           options={(nodes ?? []).map((n) => ({ value: String(n.id), label: n.name }))} />
         <FilterSelect value={timeF} onChange={(v) => { setTimeF(v); setSince(sinceFromFilter(v)) }} placeholder={t('tasks.filter.allTime', '全部时间')}

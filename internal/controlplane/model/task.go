@@ -32,6 +32,9 @@ const (
 	// TaskKindRuntimeInstall 非 JDK 运行时一键下载安装任务（FR-299，首批 Node.js）。
 	// 复用 jdk_install 的异步任务模式；终态副作用落 model.NodeRuntime。
 	TaskKindRuntimeInstall = "runtime_install"
+	// TaskKindProvision 一键搭建后端子服任务（FR-319）：与其它 kind 不同，执行体在 CP 后台
+	// goroutine（下载在 worker、编排在 CP），进度/终态由 CP 直写而非 worker 心跳快照。
+	TaskKindProvision = "provision"
 )
 
 // Task 一条长耗时跨进程任务（如 JDK 安装）。

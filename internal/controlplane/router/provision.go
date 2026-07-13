@@ -46,16 +46,23 @@ func (h *ProvisionHandler) Cores(c *gin.Context) {
 	c.JSON(http.StatusOK, info)
 }
 
-// ProvisionServer POST /instances/provision/server —— 一键搭建后端子服。
+// ProvisionServer POST /instances/provision/server —— 一键搭建后端子服（FR-319 异步化）。
+// 同步段只做核心解析 + 建实例 + 登记任务，立即 201 返回 {instance, taskId}；
+// 下载/写配置在 CP 后台推进，进度/失败原因见任务中心（前端不再被慢下载拖到超时）。
 func (h *ProvisionHandler) ProvisionServer(c *gin.Context) {
 	var req service.ProvisionServerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
 		return
 	}
-	inst, err := h.prov.ProvisionServer(c.Request.Context(), req)
+	access := getAccess(c)
+	var createdBy uint
+	if access != nil {
+		createdBy = access.UserID
+	}
+	inst, taskID, err := h.prov.ProvisionServerAsync(c.Request.Context(), req, createdBy)
 	if err != nil {
-		// inst 非空表示实例已创建但搭建步骤（下载/写配置）失败，回报实例供重试/删除。
+		// inst 非空表示实例已创建但后续步骤失败（异步模式下仅登记任务失败会至此），回报实例供重试/删除。
 		if inst != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "PROVISION_FAILED", "message": err.Error(), "instance": inst})
 			return
@@ -63,7 +70,7 @@ func (h *ProvisionHandler) ProvisionServer(c *gin.Context) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "PROVISION_FAILED", "message": err.Error()})
 		return
 	}
-	c.JSON(http.StatusCreated, inst)
+	c.JSON(http.StatusCreated, gin.H{"instance": inst, "taskId": taskID})
 }
 
 // ProvisionBukkit POST /instances/provision/bukkit —— 旧 Paper 后端子服入口，兼容旧前端/脚本。

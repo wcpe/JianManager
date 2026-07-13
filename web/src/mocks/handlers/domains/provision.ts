@@ -122,7 +122,8 @@ const provisionBackend: HttpResponseResolver = async (info) => {
     tags: '',
     createdAt: new Date().toISOString(),
   })
-  return HttpResponse.json(inst, { status: 201 })
+  // FR-319 异步化响应形状：{instance, taskId}，下载在任务中心异步推进。
+  return HttpResponse.json({ instance: inst, taskId: `task-provision-${Date.now()}` }, { status: 201 })
 }
 
 export const handlers = [
