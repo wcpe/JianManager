@@ -6,7 +6,11 @@
 
 ## [Unreleased]
 
-> 本段为 `v0.16.0` 开发版归档区，累积 `v0.15.0` tag 之后的开发变更（开发态版本号 `0.16.0-dev`，见 ADR-065）。
+> 本段为 `v0.17.0` 开发版归档区，累积 `v0.16.0` tag 之后的开发变更（开发态版本号 `0.17.0-dev`，见 ADR-065）。
+
+## 0.16.0（2026-07-14）
+
+> 启动链路可靠性与全程可观测（一键搭建异步化/启动同步预检/内存水位守卫双闸/失败原因横幅与状态光晕）+ 长短操作体验收口（导入/克隆/备份任务中心化、短操作 loading 与上传进度）+ API 错误落平台日志与审计失败留痕 + 节点全局包管理与 bot-worker 自愈下发（ADR-070）+ monorepo 统一工作区布局（ADR-064）。全部 FR 真机验收（`.tmp/acceptance-version-v0.16.0-2026-07-14.md`：线上部署 + 真浏览器走查 + journal 铁证）。
 
 ### 新增
 - **长操作任务化：导入/克隆/备份纳入任务中心（FR-323，见 `docs/specs/long-op-tasks/`）**：用户「把所有长耗时任务加到任务中心、不堵塞页面、有进度」。抽 CP 侧共享底座 `TaskService.RunAsync`（CreateTask→后台 goroutine→SetStage 阶段进度→MarkSucceeded/Failed→终态站内信，业务副作用如 statusReason/Backup record 状态由 work 自负），provision（FR-319）迁到同底座 DRY（顺带修复 FR-319 时漏改的 provision_fr034 router 测试断言 + 补 race 安全）。导入 migrate 搬迁 / 克隆拷贝工作目录 / 备份创建 / 备份恢复 四个现同步阻塞或后台无进度的长操作接入：提交秒回 `{…, taskId}` 不阻塞（搬迁/拷贝/打包可数十分钟），任务中心显示 stage 文案（搬迁中/拷贝中/打包中/恢复中）+ 终态 + 失败错误链；就地导入（O(1) 无拷贝）保持同步。新 TaskKind（import/clone/backup_create/backup_restore）+ 任务中心 kind 筛选/文案；导入响应改 `{instance, taskId}`、克隆 CloneResult 加 `taskId`（前端解包保消费者契约 + invalidate tasks）；导入 migrate/克隆全程实例 statusReason 标「导入中/克隆中」配合启动闸（FR-319 二轮）。单测覆盖 RunAsync 成功/失败/instance_id 关联/默认详情 + 各服务同步回退保测试绿。

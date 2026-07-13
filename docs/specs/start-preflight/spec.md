@@ -1,6 +1,6 @@
 # 功能规格：实例启动同步预检
 
-> 状态：开发中　·　关联 PRD：FR-314（增强 FR-005 启停链路）　·　分支：feature/fr-314-start-preflight
+> 状态：✅ done（v0.16.0 交付，真机验收）　·　关联 PRD：FR-314（增强 FR-005 启停链路）　·　分支：feature/fr-314-start-preflight
 
 ## 1. 背景与目标
 

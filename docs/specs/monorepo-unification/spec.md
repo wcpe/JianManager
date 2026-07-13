@@ -1,6 +1,6 @@
 # Spec: 多语言 monorepo 统一布局与命令面（FR-283~288）
 
-- **状态**: 🔨 开发中（**六 FR 实现全落 `feature/fr283-monorepo-unification`，自动化验证全绿；剩：bot 真机 spawn、整合回 dev、CI 真跑**）
+- **状态**: ✅ done（v0.16.0 交付：已整合回 dev；bot 真机 spawn e2e 双链路过、`make dist` 全量绿、线上部署 bundle 哈希对齐本地构建；真 CI 待 push 后触发验证，见 `.tmp/acceptance-version-v0.16.0-2026-07-14.md`）
 - **落地 commit**: FR-283 `5cfec2a2`（纯移动 682 rename+workspace 骨架）/`896ccaaf`（真依赖接线+构建链）/`41d6e861`（Tailwind @source）/`adf46df9`（tsconfig+eslint-config 抽包）；FR-285 `cee6f697`；FR-286 `a63800b8`；FR-284 `d4fbb153`（contracts 反转+69 消费文件）；FR-287 `4082aba5`；FR-288 `7df8e676`
 - **迁移实录五坑**（后人引以为鉴）: ①pnpm 全新 resolve 丢 npm 钉扎→`pnpm import` 继承；②多 importer peer-hash 分裂致单例库（react-i18next/i18next）双实例、i18n context 断→peer 化+根 overrides 钉版；③Tailwind v4 不扫 node_modules→CSS 入口显式 `@source`；④重复 JSON 键（devDependencies×2）后块覆盖前块→依赖静默丢；⑤install EPERM 中断致原生 binding 半残（有 .node 无 package.json，oxide 残则 Tailwind 扫描静默全崩、rolldown 残则 UNRESOLVED_ENTRY）→删 .pnpm 残目录重物化；vitest/build 不检 CSS，此类损坏仅 e2e 能抓
 - **关联**: ADR-064（accepted，布局与命令面决策）、ADR-005（go:embed 单二进制，重申不变）、ADR-047（devmock 仅 dev/test 形态）、ADR-058（`@jianmanager/ui` 组件包）、ADR-065（`version.go` 版本唯一真值）、ADR-036（发布管线与产物命名）
