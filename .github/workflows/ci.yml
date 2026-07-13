@@ -1,4 +1,4 @@
-# 前端质量门禁（FR-212，见 ADR-047 决策 8 / spec §9）。
+# 前端与 bot-worker 质量门禁（FR-212，见 ADR-047 决策 8 / spec §9）。
 #
 # 触发：pull_request + 非 master 分支 push —— 合并前 / 分支 push 即跑，把坏代码挡在合并前。
 #   master push 与 tag 的发布前门禁由 release.yml 的 test job 覆盖（已含 lint+vitest+build+E2E），本工作流不重复。
@@ -11,6 +11,10 @@
 # 路径与命令对齐 monorepo 真貌（FR-283/286/287）：前端已迁 apps/control-plane-web，pnpm workspace
 #   管理（pnpm 版本由根 package.json 的 packageManager 字段经 corepack 锁定）；各步骤与 Taskfile.yml
 #   的 web:lint / web:test / web:build / web:e2e 同配方，CI 直调底层命令不经 task（FR-287 spec §5 决策）。
+#
+# bot-quality：apps/bot-worker 质量门禁（npm 自管、不入 pnpm workspace，见 ADR-064）——
+#   npm ci + tsc --noEmit + eslint，与 Taskfile.yml 的 bot:lint 同配方；
+#   npm 缓存以 apps/bot-worker/package-lock.json 为 key。
 
 name: ci
 
@@ -82,3 +86,37 @@ jobs:
       - name: E2E（Playwright，mock 模式整站，等价 task web:e2e）
         working-directory: apps/control-plane-web
         run: pnpm e2e
+
+  bot-quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/bot-worker
+    steps:
+      - name: Checkout（不需子模块，纯 bot-worker 门禁）
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 缓存 npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('apps/bot-worker/package-lock.json') }}
+          restore-keys: |
+            npm-${{ runner.os }}-
+
+      - name: 安装依赖（npm 自管，不入 pnpm workspace）
+        run: npm ci
+
+      - name: Lint（tsc + eslint，等价 task bot:lint）
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx tsc --noEmit
+          npm run lint
