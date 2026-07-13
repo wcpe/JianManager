@@ -329,6 +329,10 @@ func main() {
 	runtimeLibrarySvc.SetTaskService(taskSvc)
 	// 一键搭建异步化（FR-319）：下载/写配置在后台任务推进，前端不再被慢下载拖超时。
 	provisionSvc.SetTaskService(taskSvc)
+	// 长操作任务化（FR-323）：导入 migrate 搬迁 / 克隆拷贝 / 备份创建恢复 纳入任务中心。
+	importServerSvc.SetTaskService(taskSvc)
+	cloneSvc.SetTaskService(taskSvc)
+	backupSvc.SetTaskService(taskSvc)
 
 	// 统一通知中心（FR-216，见 ADR-048）：只读聚合站内信（定向消息）+ 告警事件（系统警报）
 	// 为一条通知流，页眉单铃铛 + 通知中心页消费。不新建表，标记已读下推到各源既有服务。

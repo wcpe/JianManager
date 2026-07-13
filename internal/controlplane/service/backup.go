@@ -48,11 +48,26 @@ type BackupService struct {
 
 	// onBackupFailed 备份失败回调（FR-085 告警触发源）；nil 表示未接入告警。
 	onBackupFailed func(backup *model.Backup, msg string)
+
+	// tasks 任务中心（FR-323）：备份创建/恢复经任务异步且可见进度；nil 时回退旧 goroutine（测试）。
+	tasks *TaskService
 }
 
 // NewBackupService 创建备份服务。
 func NewBackupService(db *gorm.DB, pool *grpc.ClientPool) *BackupService {
 	return &BackupService{db: db, pool: pool}
+}
+
+// SetTaskService 注入任务中心（FR-323，main 接线）：非 nil 后备份创建/恢复走后台任务 + 进度。
+func (s *BackupService) SetTaskService(t *TaskService) { s.tasks = t }
+
+// backupNodeID 解析备份所属实例的节点 id（任务归属展示用；失败回 0 不阻断）。
+func (s *BackupService) backupNodeID(instanceID uint) uint {
+	var inst model.Instance
+	if err := s.db.Select("node_id").First(&inst, instanceID).Error; err != nil {
+		return 0
+	}
+	return inst.NodeID
 }
 
 // SetStorageService 注入远程存储服务（FR-057）。在 main 装配阶段调用，避免构造期循环依赖。
@@ -116,7 +131,18 @@ func (s *BackupService) CreateWithOptions(instanceID uint, name string, opts Cre
 	// 经 GORM Model(...).Update 会写回模型字段（autoUpdateTime 等），二者并发读写
 	// 同一结构体构成数据竞态（go test -race 可稳定复现）。复制后两者内存隔离。
 	async := *backup
-	go s.executeBackup(&async)
+	// 纳入任务中心（FR-323）：进度/终态在任务中心可见，Backup record 状态仍由 executeBackup 自更
+	//（备份列表页不回归）。无任务中心（测试）回退旧后台 goroutine。
+	if s.tasks == nil {
+		go func() { _ = s.executeBackup(&async, nil) }()
+		return backup, nil
+	}
+	s.tasks.RunAsync(RunSpec{
+		NodeID: s.backupNodeID(instanceID), InstanceID: instanceID, Kind: model.TaskKindBackupCreate,
+		Title: fmt.Sprintf("备份 %s", name),
+	}, func(_ context.Context, stage func(int, string)) (string, error) {
+		return "", s.executeBackup(&async, stage)
+	})
 	return backup, nil
 }
 
@@ -134,21 +160,25 @@ func (s *BackupService) latestCompleted(instanceID uint) (*model.Backup, error) 
 	return &b, nil
 }
 
-// executeBackup 异步执行备份：经 gRPC 委托 Worker 打包工作目录（增量传基准清单），
-// 完成后回写归档路径/大小/清单，远程目标再记录对象键。
-func (s *BackupService) executeBackup(backup *model.Backup) {
+// executeBackup 执行备份：经 gRPC 委托 Worker 打包工作目录（增量传基准清单），
+// 完成后回写归档路径/大小/清单，远程目标再记录对象键。stage 非 nil 上报阶段（FR-323 任务中心）；
+// 返回 error 供 RunAsync MarkFailed（Backup record 状态仍在此内自更，备份列表页不回归）。
+func (s *BackupService) executeBackup(backup *model.Backup, stage func(int, string)) error {
+	report := func(p int, text string) {
+		if stage != nil {
+			stage(p, text)
+		}
+	}
 	s.db.Model(backup).Update("status", model.BackupStatusInProgress)
 
 	instance, node, err := s.resolveInstanceNode(backup.InstanceID)
 	if err != nil {
-		s.failBackup(backup, "解析实例/节点失败", err)
-		return
+		return s.failBackup(backup, "解析实例/节点失败", err)
 	}
 
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
-		s.failBackup(backup, "节点未连接", fmt.Errorf("nodeUUID=%s", node.UUID))
-		return
+		return s.failBackup(backup, "节点未连接", fmt.Errorf("nodeUUID=%s", node.UUID))
 	}
 
 	req := &workerpb.CreateBackupRequest{
@@ -161,31 +191,28 @@ func (s *BackupService) executeBackup(backup *model.Backup) {
 	if backup.Mode == model.BackupModeIncremental {
 		baseManifest, berr := s.chainManifest(backup.ParentID)
 		if berr != nil {
-			s.failBackup(backup, "构建增量基准失败", berr)
-			return
+			return s.failBackup(backup, "构建增量基准失败", berr)
 		}
 		req.BaseManifest = baseManifest
 	}
 
 	// 远程存储后端解析（FR-057 接入）。
 	if spec, serr := s.storageSpec(backup.StorageID); serr != nil {
-		s.failBackup(backup, "解析存储后端失败", serr)
-		return
+		return s.failBackup(backup, "解析存储后端失败", serr)
 	} else {
 		req.Storage = spec
 	}
 
+	report(30, "打包工作目录…")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
 	resp, err := client.Worker.CreateBackup(ctx, req)
 	if err != nil {
-		s.failBackup(backup, "备份执行失败", err)
-		return
+		return s.failBackup(backup, "备份执行失败", err)
 	}
 	if !resp.Success {
-		s.failBackup(backup, "备份执行失败", errors.New(resp.Error))
-		return
+		return s.failBackup(backup, "备份执行失败", errors.New(resp.Error))
 	}
 
 	manifestJSON, _ := json.Marshal(resp.Manifest)
@@ -201,6 +228,7 @@ func (s *BackupService) executeBackup(backup *model.Backup) {
 
 	slog.Info("备份已完成", "backupId", backup.UUID, "instanceId", backup.InstanceID,
 		"mode", backup.Mode, "files", resp.FileCount, "sizeBytes", resp.SizeBytes)
+	return nil
 }
 
 // ListByInstance 按实例列出备份（含类型/模式/父链字段，供前端展示链关系）。
@@ -242,7 +270,17 @@ func (s *BackupService) Restore(backupID uint) error {
 		return err
 	}
 
-	go s.executeRestore(&backup, chain)
+	// 纳入任务中心（FR-323）：恢复进度/终态可见。无任务中心（测试）回退旧后台 goroutine。
+	if s.tasks == nil {
+		go func() { _ = s.executeRestore(&backup, chain, nil) }()
+		return nil
+	}
+	s.tasks.RunAsync(RunSpec{
+		NodeID: instance.NodeID, InstanceID: backup.InstanceID, Kind: model.TaskKindBackupRestore,
+		Title: fmt.Sprintf("恢复备份 %s", backup.Name),
+	}, func(_ context.Context, stage func(int, string)) (string, error) {
+		return "", s.executeRestore(&backup, chain, stage)
+	})
 	return nil
 }
 
@@ -274,17 +312,23 @@ func (s *BackupService) resolveChain(target *model.Backup) ([]model.Backup, erro
 	return nil, fmt.Errorf("备份链过长或存在环")
 }
 
-// executeRestore 异步执行链式恢复：委托 Worker 按链顺序回放归档到工作目录。
-func (s *BackupService) executeRestore(backup *model.Backup, chain []model.Backup) {
+// executeRestore 执行链式恢复：委托 Worker 按链顺序回放归档到工作目录。
+// stage 非 nil 上报阶段（FR-323 任务中心）；返回 error 供 RunAsync MarkFailed。
+func (s *BackupService) executeRestore(backup *model.Backup, chain []model.Backup, stage func(int, string)) error {
+	report := func(p int, text string) {
+		if stage != nil {
+			stage(p, text)
+		}
+	}
 	instance, node, err := s.resolveInstanceNode(backup.InstanceID)
 	if err != nil {
 		slog.Error("恢复失败：解析实例/节点", "backupId", backup.UUID, "error", err)
-		return
+		return fmt.Errorf("解析实例/节点失败: %w", err)
 	}
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
 		slog.Error("恢复失败：节点未连接", "nodeUUID", node.UUID)
-		return
+		return fmt.Errorf("节点未连接: %s", node.UUID)
 	}
 
 	relPaths, storageKeys, checksums := backupChainRestoreArgs(chain)
@@ -292,9 +336,10 @@ func (s *BackupService) executeRestore(backup *model.Backup, chain []model.Backu
 	spec, serr := s.storageSpec(backup.StorageID)
 	if serr != nil {
 		slog.Error("恢复失败：解析存储后端", "backupId", backup.UUID, "error", serr)
-		return
+		return fmt.Errorf("解析存储后端失败: %w", serr)
 	}
 
+	report(30, "回放备份链…")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
@@ -307,15 +352,16 @@ func (s *BackupService) executeRestore(backup *model.Backup, chain []model.Backu
 	})
 	if err != nil {
 		slog.Error("恢复执行失败", "backupId", backup.UUID, "error", err)
-		return
+		return fmt.Errorf("恢复执行失败: %w", err)
 	}
 	if !resp.Success {
 		slog.Error("恢复执行失败", "backupId", backup.UUID, "error", resp.Error)
-		return
+		return fmt.Errorf("恢复执行失败: %s", resp.Error)
 	}
 
 	slog.Info("恢复已完成", "backupId", backup.UUID, "instanceId", backup.InstanceID,
 		"chainLen", len(chain), "restoredFiles", resp.RestoredFiles, "workDir", instance.WorkDir)
+	return nil
 }
 
 func backupChainRestoreArgs(chain []model.Backup) ([]string, []string, []string) {
@@ -399,12 +445,14 @@ func (s *BackupService) resolveInstanceNode(instanceID uint) (*model.Instance, *
 }
 
 // failBackup 标记备份失败并记录日志，触发备份失败告警钩子（FR-085）。
-func (s *BackupService) failBackup(backup *model.Backup, msg string, err error) {
+// failBackup 回写失败状态 + 告警 + 失败钩子，并返回组合错误（FR-323：供 RunAsync MarkFailed）。
+func (s *BackupService) failBackup(backup *model.Backup, msg string, err error) error {
 	s.db.Model(backup).Update("status", model.BackupStatusFailed)
 	slog.Error("备份失败："+msg, "backupId", backup.UUID, "error", err)
 	if s.onBackupFailed != nil {
 		s.onBackupFailed(backup, msg)
 	}
+	return fmt.Errorf("%s: %w", msg, err)
 }
 
 // Start 启动按保留天数定期裁剪旧备份的后台巡检（FR-063：backup.retention_days 真生效）。

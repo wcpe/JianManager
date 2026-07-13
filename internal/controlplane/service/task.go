@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -116,6 +118,54 @@ func (s *TaskService) SetStage(taskID string, progress int, stage string) {
 	_ = s.db.Model(&model.TaskLog{}).Where("task_id = ?", taskID).
 		Select("COALESCE(MAX(seq),0)").Scan(&maxSeq).Error
 	_ = s.db.Create(&model.TaskLog{TaskID: taskID, Seq: int(maxSeq) + 1, Line: stage}).Error
+}
+
+// RunSpec 一次长操作任务化的参数（FR-323 共享底座）。
+type RunSpec struct {
+	NodeID     uint          // 任务归属节点
+	InstanceID uint          // 关联实例（0=无）；非 0 写 task.instance_id（启动闸/关联展示复用 FR-319）
+	Kind       string        // TaskKind（import/clone/backup_create/backup_restore/provision）
+	Title      string        // 任务标题
+	Detail     string        // 初始详情（空=「排队中」）
+	CreatedBy  uint          // 发起人（归属隔离 + 终态站内信收件人）
+	Timeout    time.Duration // 后台执行超时（0=默认 30min）
+}
+
+// RunAsync 把一个长操作跑成后台任务（FR-323 共享底座）：登记任务→CP 后台 goroutine 执行→
+// SetStage 阶段进度→MarkSucceeded/Failed→终态站内信。立即返回 taskID（不阻塞请求，独立
+// context 不受前端断开影响）。work 收 (ctx, stage)，stage(progress,text) 上报阶段；返回
+// (resultJSON, err)。业务副作用（statusReason/Backup record 状态/落库）由 work 自负——
+// 底座只管任务生命周期 + instance_id 关联。
+func (s *TaskService) RunAsync(spec RunSpec, work func(ctx context.Context, stage func(int, string)) (string, error)) string {
+	taskID := uuid.New().String()
+	detail := spec.Detail
+	if detail == "" {
+		detail = "排队中"
+	}
+	if _, err := s.CreateTask(taskID, spec.NodeID, spec.Kind, spec.Title, detail, spec.CreatedBy); err != nil {
+		slog.Error("登记长操作任务失败", "kind", spec.Kind, "title", spec.Title, "error", err)
+		return ""
+	}
+	if spec.InstanceID != 0 {
+		_ = s.db.Model(&model.Task{}).Where("task_id = ?", taskID).Update("instance_id", spec.InstanceID).Error
+	}
+	timeout := spec.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		_ = s.MarkRunning(taskID)
+		result, err := work(ctx, func(p int, text string) { s.SetStage(taskID, p, text) })
+		if err != nil {
+			slog.Error("长操作任务失败", "kind", spec.Kind, "taskId", taskID, "error", err)
+			_ = s.MarkFailed(taskID, err.Error())
+			return
+		}
+		_ = s.MarkSucceeded(taskID, result)
+	}()
+	return taskID
 }
 
 // TaskListFilter 任务列表筛选条件（FR-227）。零值字段表示不限制。

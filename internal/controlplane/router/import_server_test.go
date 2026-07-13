@@ -110,9 +110,13 @@ func TestImportServer_EndToEndWithFakeWorker(t *testing.T) {
 	w = makeRequest(r, http.MethodPost, "/api/v1/instances/import",
 		map[string]any{"nodeId": node.ID, "path": "/srv/old", "mode": "in_place", "name": "老服", "jarPath": "server.jar"}, token)
 	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+	// FR-323：响应形状为 {instance, taskId}（就地接管 taskId 空）。
 	created := parseJSON(t, w)
-	assert.Equal(t, true, created["workDirInPlace"])
-	assert.Equal(t, "/srv/old", created["workDir"])
+	inst, ok := created["instance"].(map[string]any)
+	require.True(t, ok, "响应应含 instance 对象: %s", w.Body.String())
+	assert.Equal(t, true, inst["workDirInPlace"])
+	assert.Equal(t, "/srv/old", inst["workDir"])
+	assert.Equal(t, "", created["taskId"], "就地接管同步完成，taskId 为空")
 
 	var inspectAudit, importAudit int64
 	require.NoError(t, db.Model(&model.AuditLog{}).Where("action = ?", "instance.import.inspect").Count(&inspectAudit).Error)

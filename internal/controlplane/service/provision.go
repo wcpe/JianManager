@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	cpembed "github.com/wcpe/JianManager/internal/controlplane/embed"
@@ -82,7 +81,7 @@ func (p *ProvisionService) ProvisionServer(ctx context.Context, req ProvisionSer
 		return nil, err
 	}
 
-	if err := p.provisionOnWorker(ctx, inst, core, boolOr(req.OnlineMode, false), ""); err != nil {
+	if err := p.provisionOnWorker(ctx, inst, core, boolOr(req.OnlineMode, false), nil); err != nil {
 		// 实例已落库（STOPPED），返回实例与错误，便于用户重试或删除。
 		return inst, fmt.Errorf("子服搭建失败: %w", err)
 	}
@@ -113,34 +112,30 @@ func (p *ProvisionService) ProvisionServerAsync(ctx context.Context, req Provisi
 		return nil, "", err
 	}
 
-	taskID := uuid.New().String()
-	title := fmt.Sprintf("一键搭建 %s（%s %s）", inst.Name, req.CoreType, req.MCVersion)
-	if _, terr := p.tasks.CreateTask(taskID, req.NodeID, model.TaskKindProvision, title, "排队中", createdBy); terr != nil {
-		return inst, "", fmt.Errorf("登记搭建任务失败: %w", terr)
-	}
-	// 任务关联实例（FR-319）：启动闸据此拦截「核心还在下载就点启动」的实例。
-	_ = p.db.Model(&model.Task{}).Where("task_id = ?", taskID).Update("instance_id", inst.ID).Error
 	// 全程「搭建中」标注：实例卡片/详情可见状态，配合启动闸阻止过早启动（真机复现：
 	// 异步化后实例秒回 STOPPED 可点启动，但核心还在下载→点启动得 corrupt/缺 jar）。
 	_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
 		Update("status_reason", "搭建中：正在下载核心（完成前请勿启动）").Error
 	onlineMode := boolOr(req.OnlineMode, false)
-	go func() {
-		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		_ = p.tasks.MarkRunning(taskID)
-		if err := p.provisionOnWorker(bgCtx, inst, core, onlineMode, taskID); err != nil {
-			slog.Error("一键搭建失败", "instance", inst.Name, "instanceId", inst.ID, "taskId", taskID, "error", err)
-			_ = p.tasks.MarkFailed(taskID, err.Error())
+	title := fmt.Sprintf("一键搭建 %s（%s %s）", inst.Name, req.CoreType, req.MCVersion)
+	// 迁 FR-323 共享底座：CreateTask→后台 goroutine→阶段进度→终态，statusReason 副作用在 work 内自负。
+	// InstanceID 关联使启动闸拦截「核心还在下载就点启动」（FR-319 二轮）。
+	taskID := p.tasks.RunAsync(RunSpec{
+		NodeID: req.NodeID, InstanceID: inst.ID, Kind: model.TaskKindProvision, Title: title, CreatedBy: createdBy,
+	}, func(ctx context.Context, stage func(int, string)) (string, error) {
+		if err := p.provisionOnWorker(ctx, inst, core, onlineMode, stage); err != nil {
 			// 空壳标注：statusReason 让实例卡片/详情可见「为什么这个实例不可用」，启动前一目了然。
 			_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
 				Update("status_reason", "搭建未完成："+err.Error()).Error
-			return
+			return "", err
 		}
-		_ = p.tasks.MarkSucceeded(taskID, "")
 		_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).Update("status_reason", "").Error
-		slog.Info("一键搭建完成", "instance", inst.Name, "instanceId", inst.ID, "taskId", taskID)
-	}()
+		slog.Info("一键搭建完成", "instance", inst.Name, "instanceId", inst.ID)
+		return "", nil
+	})
+	if taskID == "" {
+		return inst, "", fmt.Errorf("登记搭建任务失败")
+	}
 	return inst, taskID, nil
 }
 
@@ -224,11 +219,11 @@ func (p *ProvisionService) NodePorts(nodeID uint) (*NodePortsResult, error) {
 }
 
 // provisionOnWorker 在 Worker 上下载/安装核心并写入 eula.txt / server.properties。
-// taskID 非空时各阶段经任务中心上报（FR-319）；空 = 旧同步路径不上报。
-func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.Instance, core *CoreInfo, onlineMode bool, taskID string) error {
+// stage 非 nil 时各阶段经任务中心上报（FR-319/323）；nil = 旧同步路径不上报。
+func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.Instance, core *CoreInfo, onlineMode bool, stageFn func(int, string)) error {
 	stage := func(progress int, text string) {
-		if taskID != "" && p.tasks != nil {
-			p.tasks.SetStage(taskID, progress, text)
+		if stageFn != nil {
+			stageFn(progress, text)
 		}
 	}
 	var node model.Node

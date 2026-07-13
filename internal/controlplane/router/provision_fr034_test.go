@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +25,9 @@ import (
 
 type fakeFR034RouteWorker struct {
 	workerpb.WorkerServiceClient
+	// FR-319/323：provision 异步化后 DownloadCore/WriteConfig 在后台 goroutine 调用，
+	// 测试主协程需并发读——加锁保证 race 安全（go test -race）。
+	mu       sync.Mutex
 	download *workerpb.DownloadCoreRequest
 	configs  map[string]string
 }
@@ -33,16 +37,33 @@ func (f *fakeFR034RouteWorker) CreateInstance(context.Context, *workerpb.CreateI
 }
 
 func (f *fakeFR034RouteWorker) DownloadCore(_ context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
+	f.mu.Lock()
 	f.download = req
+	f.mu.Unlock()
 	return &workerpb.DownloadCoreResponse{Success: true, Size: 42}, nil
 }
 
 func (f *fakeFR034RouteWorker) WriteConfig(_ context.Context, req *workerpb.WriteConfigRequest, _ ...grpc.CallOption) (*workerpb.WriteConfigResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.configs == nil {
 		f.configs = make(map[string]string)
 	}
 	f.configs[req.Path] = req.Content
 	return &workerpb.WriteConfigResponse{Success: true}, nil
+}
+
+// downloadReq / configOf 加锁读后台写入的字段（测试断言用）。
+func (f *fakeFR034RouteWorker) downloadReq() *workerpb.DownloadCoreRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.download
+}
+
+func (f *fakeFR034RouteWorker) configOf(path string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.configs[path]
 }
 
 func (f *fakeFR034RouteWorker) DeployServerProbe(context.Context, *workerpb.DeployServerProbeRequest, ...grpc.CallOption) (*workerpb.DeployServerProbeResponse, error) {
@@ -124,14 +145,23 @@ func TestFR034ProvisionRoutes(t *testing.T) {
 		"nodeId": node.ID, "name": "fr034-route-lobby", "coreType": "paper", "mcVersion": "1.21.1", "jdkId": jdk.ID, "memoryMb": 2048, "onlineMode": false,
 	}, adminToken)
 	require.Equal(t, http.StatusCreated, createResp.Code, createResp.Body.String())
-	var inst model.Instance
-	require.NoError(t, json.Unmarshal(createResp.Body.Bytes(), &inst))
+	// FR-319/323：provision 异步化，响应 {instance, taskId}；下载/写配置在后台任务推进。
+	var wrapper struct {
+		Instance model.Instance `json:"instance"`
+		TaskID   string         `json:"taskId"`
+	}
+	require.NoError(t, json.Unmarshal(createResp.Body.Bytes(), &wrapper))
+	inst := wrapper.Instance
+	// 本测试未接线 TaskService（走同步回退，taskId 空）——异步任务机制由 provision_fr319_test 覆盖；
+	// 此处只验 FR-034 核心解析→下载→写配置流。
 	require.Equal(t, model.InstanceRoleBackend, inst.Role)
 	require.Equal(t, model.InstanceTypeMinecraftJava, inst.Type)
 	require.Equal(t, 25565, inst.ServerPort)
-	require.NotNil(t, worker.download)
-	require.Equal(t, "server.jar", worker.download.DestFilename)
-	require.Equal(t, strings.Repeat("a", 64), worker.download.Sha256)
-	require.Contains(t, worker.configs["server.properties"], "online-mode=false")
-	require.Contains(t, worker.configs["server.properties"], fmt.Sprintf("server-port=%d", inst.ServerPort))
+	// 后台任务完成下载 + 写配置（异步，等其落地）。
+	require.Eventually(t, func() bool { return worker.downloadReq() != nil }, 3*time.Second, 20*time.Millisecond)
+	require.Equal(t, "server.jar", worker.downloadReq().DestFilename)
+	require.Equal(t, strings.Repeat("a", 64), worker.downloadReq().Sha256)
+	require.Eventually(t, func() bool { return worker.configOf("server.properties") != "" }, 3*time.Second, 20*time.Millisecond)
+	require.Contains(t, worker.configOf("server.properties"), "online-mode=false")
+	require.Contains(t, worker.configOf("server.properties"), fmt.Sprintf("server-port=%d", inst.ServerPort))
 }

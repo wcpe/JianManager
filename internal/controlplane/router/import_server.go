@@ -45,7 +45,7 @@ func (h *ImportServerHandler) Import(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
 		return
 	}
-	inst, err := h.svc.Import(c.Request.Context(), req)
+	inst, taskID, err := h.svc.Import(c.Request.Context(), req)
 	if err != nil {
 		h.mapError(c, err)
 		return
@@ -54,7 +54,8 @@ func (h *ImportServerHandler) Import(c *gin.Context) {
 		"nodeId": req.NodeID, "path": req.Path, "mode": req.Mode,
 		"name": req.Name, "jarPath": req.JarPath, "registerJdkPaths": len(req.RegisterJdkPaths),
 	})
-	c.JSON(http.StatusCreated, inst)
+	// FR-323：migrate 搬迁异步化，响应 {instance, taskId}（taskId 空=就地接管同步完成）。
+	c.JSON(http.StatusCreated, gin.H{"instance": inst, "taskId": taskID})
 }
 
 // mapError 统一错误映射：节点缺失 404、离线 503、守卫/业务拒绝 422、其余 502（Worker 链路）。

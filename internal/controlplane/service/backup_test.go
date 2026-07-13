@@ -165,7 +165,7 @@ func TestBackupExecuteBackup_PersistsWorkerChecksum(t *testing.T) {
 	backup := &model.Backup{InstanceID: inst.ID, Name: "full", Type: model.BackupTypeManual, Mode: model.BackupModeFull, Status: model.BackupStatusPending}
 	require.NoError(t, db.Create(backup).Error)
 
-	svc.executeBackup(backup)
+	svc.executeBackup(backup, nil)
 
 	var saved model.Backup
 	require.NoError(t, db.First(&saved, backup.ID).Error)
@@ -201,7 +201,7 @@ func TestBackupExecuteRestore_PassesStorageKeysAndChecksums(t *testing.T) {
 	pool.SetWorkerClientForTest(node.UUID, fake)
 	svc := NewBackupService(db, pool)
 
-	svc.executeRestore(inc, []model.Backup{*full, *inc})
+	svc.executeRestore(inc, []model.Backup{*full, *inc}, nil)
 
 	require.NotNil(t, fake.restoreReq)
 	require.Equal(t, "inst-restore", fake.restoreReq.InstanceUuid)

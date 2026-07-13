@@ -117,7 +117,7 @@ func TestImportInspect_WorkerGuardRejection(t *testing.T) {
 func TestImportServer_InPlace(t *testing.T) {
 	svc, worker, db, node := newImportEnv(t)
 
-	inst, err := svc.Import(context.Background(), ImportServerRequest{
+	inst, _, err := svc.Import(context.Background(), ImportServerRequest{
 		NodeID:           node.ID,
 		Path:             `D:\legacy\srv`,
 		Mode:             "in_place",
@@ -150,7 +150,7 @@ func TestImportServer_Migrate(t *testing.T) {
 	svc, worker, _, node := newImportEnv(t)
 	worker.importResp = &workerpb.ImportServerDirResponse{Success: true, WorkDir: `D:\data\var\servers\old-web-x`, Moved: true}
 
-	inst, err := svc.Import(context.Background(), ImportServerRequest{
+	inst, _, err := svc.Import(context.Background(), ImportServerRequest{
 		NodeID:  node.ID,
 		Path:    `D:\legacy\srv`,
 		Mode:    "migrate",
@@ -171,7 +171,7 @@ func TestImportServer_Migrate(t *testing.T) {
 func TestImportServer_RejectsUnknownJar(t *testing.T) {
 	svc, _, _, node := newImportEnv(t)
 
-	_, err := svc.Import(context.Background(), ImportServerRequest{
+	_, _, err := svc.Import(context.Background(), ImportServerRequest{
 		NodeID: node.ID, Path: `D:\legacy\srv`, Mode: "in_place", Name: "x",
 		JarPath: "../../evil.jar",
 	})
@@ -187,7 +187,7 @@ func TestImportServer_JdkRegistrationGuards(t *testing.T) {
 		Path: `D:\legacy\srv\jre-17`, Managed: false,
 	}).Error)
 
-	_, err := svc.Import(context.Background(), ImportServerRequest{
+	_, _, err := svc.Import(context.Background(), ImportServerRequest{
 		NodeID: node.ID, Path: `D:\legacy\srv`, Mode: "in_place", Name: "y",
 		JarPath:          "paper-1.20.4-497.jar",
 		RegisterJdkPaths: []string{`D:\legacy\srv\jre-17`, `D:\not\a\candidate`},
@@ -204,7 +204,7 @@ func TestImportServer_JdkRegistrationGuards(t *testing.T) {
 func TestDeleteInPlaceInstanceSendsSkipWorkDir(t *testing.T) {
 	svc, worker, db, node := newImportEnv(t)
 
-	inst, err := svc.Import(context.Background(), ImportServerRequest{
+	inst, _, err := svc.Import(context.Background(), ImportServerRequest{
 		NodeID: node.ID, Path: `D:\legacy\srv`, Mode: "in_place", Name: "老服",
 		JarPath: "paper-1.20.4-497.jar",
 	})

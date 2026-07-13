@@ -53,12 +53,17 @@ type CloneService struct {
 	pool     *cpgrpc.ClientPool
 	instance *InstanceService
 	reg      *RegistrationService
+	// tasks 任务中心（FR-323）：拷贝工作目录经任务异步；nil 时回退同步（旧行为/测试）。
+	tasks *TaskService
 }
 
 // NewCloneService 创建克隆服务。
 func NewCloneService(db *gorm.DB, pool *cpgrpc.ClientPool, instance *InstanceService, reg *RegistrationService) *CloneService {
 	return &CloneService{db: db, pool: pool, instance: instance, reg: reg}
 }
+
+// SetTaskService 注入任务中心（FR-323，main 接线）：非 nil 后拷贝阶段走后台任务。
+func (s *CloneService) SetTaskService(t *TaskService) { s.tasks = t }
 
 // CloneInstanceRequest 复制请求。
 type CloneInstanceRequest struct {
@@ -88,6 +93,8 @@ type CloneResult struct {
 	Registrations []RegistrationView `json:"registrations,omitempty"`
 	Warnings      []string           `json:"warnings,omitempty"`
 	DryRun        bool               `json:"dryRun"`
+	// TaskID 拷贝工作目录的后台任务 id（FR-323，异步模式非空；同步回退/dryRun 为空）。
+	TaskID string `json:"taskId,omitempty"`
 }
 
 // Clone 复制源 backend 子服。dryRun=true 仅预检（分配预览 + 冲突告警）不落盘。
@@ -166,16 +173,48 @@ func (s *CloneService) Clone(ctx context.Context, srcID uint, req CloneInstanceR
 	result.Instance = dst
 	result.Allocated.WorkDir = dst.WorkDir
 
-	// 复制工作目录（排除运行态文件）。
-	if err := s.cloneWorkDirOnWorker(ctx, &src, dst, cloneInclude, cloneExclude); err != nil {
-		return result, fmt.Errorf("复制工作目录失败: %w", err)
+	// 长段（拷贝工作目录 + 配置修正 + 代理注册）异步化（FR-323）：大目录拷贝可数分钟，
+	// 同步会阻塞 HTTP 请求。有任务中心即秒回 {instance, taskId}，拷贝在 CP 后台推进；
+	// 失败标注 dst statusReason「克隆未完成」，成功清空。无任务中心（测试）回退同步。
+	if s.tasks == nil {
+		if err := s.finishCloneWork(ctx, &src, dst, req, cloneInclude, cloneExclude, result, nil); err != nil {
+			return result, err
+		}
+		return result, nil
 	}
+	_ = s.db.Model(&model.Instance{}).Where("id = ?", dst.ID).
+		Update("status_reason", "克隆中：正在复制工作目录（完成前请勿启动）").Error
+	result.TaskID = s.tasks.RunAsync(RunSpec{
+		NodeID: dst.NodeID, InstanceID: dst.ID, Kind: model.TaskKindClone,
+		Title: fmt.Sprintf("克隆实例 %s", dst.Name), CreatedBy: 0,
+	}, func(ctx context.Context, stage func(int, string)) (string, error) {
+		if err := s.finishCloneWork(ctx, &src, dst, req, cloneInclude, cloneExclude, &CloneResult{}, stage); err != nil {
+			_ = s.db.Model(&model.Instance{}).Where("id = ?", dst.ID).
+				Update("status_reason", "克隆未完成："+err.Error()).Error
+			return "", err
+		}
+		_ = s.db.Model(&model.Instance{}).Where("id = ?", dst.ID).Update("status_reason", "").Error
+		return "", nil
+	})
+	return result, nil
+}
 
+// finishCloneWork 克隆的长段：复制工作目录（排除运行态文件）→ 配置修正 → 可选代理注册。
+// stage 非 nil 时上报阶段（异步任务模式）；warnings 收进 result（同步模式回给前端，异步模式弃）。
+func (s *CloneService) finishCloneWork(ctx context.Context, src, dst *model.Instance, req CloneInstanceRequest, include, exclude []string, result *CloneResult, stage func(int, string)) error {
+	if stage != nil {
+		stage(20, "复制工作目录…")
+	}
+	if err := s.cloneWorkDirOnWorker(ctx, src, dst, include, exclude); err != nil {
+		return fmt.Errorf("复制工作目录失败: %w", err)
+	}
+	if stage != nil {
+		stage(80, "配置修正与代理注册…")
+	}
 	// 配置修正：新端口/rcon 密码/可选 motd、level-name；保留 forwarding secret（随目录复制）。
 	if w := s.fixupConfig(ctx, dst, req); w != "" {
 		result.Warnings = append(result.Warnings, w)
 	}
-
 	// 可选注册进所选代理（触发 FR-035 写代理配置 + 下发 secret）。
 	for _, proxyID := range req.RegisterToProxyIDs {
 		view, rerr := s.reg.Create(proxyID, CreateRegistrationRequest{BackendID: dst.ID})
@@ -186,7 +225,7 @@ func (s *CloneService) Clone(ctx context.Context, srcID uint, req CloneInstanceR
 			result.Warnings = append(result.Warnings, rerr.Error())
 		}
 	}
-	return result, nil
+	return nil
 }
 
 // cloneWorkDirOnWorker 确保源/目标在 Worker 注册后，调用 CloneWorkDir 本机复制。

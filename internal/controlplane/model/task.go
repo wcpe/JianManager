@@ -35,6 +35,14 @@ const (
 	// TaskKindProvision 一键搭建后端子服任务（FR-319）：与其它 kind 不同，执行体在 CP 后台
 	// goroutine（下载在 worker、编排在 CP），进度/终态由 CP 直写而非 worker 心跳快照。
 	TaskKindProvision = "provision"
+	// TaskKindImport 导入现有服务器（migrate 搬迁）任务（FR-323，CP 后台 goroutine）。
+	TaskKindImport = "import"
+	// TaskKindClone 克隆实例（拷贝工作目录）任务（FR-323，CP 后台 goroutine）。
+	TaskKindClone = "clone"
+	// TaskKindBackupCreate 备份创建（打包工作目录）任务（FR-323，CP 后台 goroutine）。
+	TaskKindBackupCreate = "backup_create"
+	// TaskKindBackupRestore 备份恢复（回放备份链）任务（FR-323，CP 后台 goroutine）。
+	TaskKindBackupRestore = "backup_restore"
 )
 
 // Task 一条长耗时跨进程任务（如 JDK 安装）。
