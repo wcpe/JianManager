@@ -314,6 +314,26 @@ func (s *Server) StartInstance(ctx context.Context, req *workerpb.InstanceAction
 	return &workerpb.InstanceActionResponse{Success: true}, nil
 }
 
+// PreflightStartInstance 启动前同步预检（FR-314）：返回逐项检查聚合结果。success=全部通过，
+// message=拼接失败原因（供 CP 同步拦截配置错误、写 statusReason）。实例未注册按预检失败处理。
+func (s *Server) PreflightStartInstance(ctx context.Context, req *workerpb.InstanceActionRequest) (*workerpb.InstanceActionResponse, error) {
+	checks, err := s.manager.PreflightStart(req.InstanceUuid)
+	if err != nil {
+		slog.Warn("启动预检无法执行", "instanceId", req.InstanceUuid, "error", err)
+		return &workerpb.InstanceActionResponse{Success: false, Error: "启动预检无法执行: " + err.Error()}, nil
+	}
+	var failed []string
+	for _, c := range checks {
+		if !c.OK && c.Message != "" {
+			failed = append(failed, c.Message)
+		}
+	}
+	if len(failed) == 0 {
+		return &workerpb.InstanceActionResponse{Success: true}, nil
+	}
+	return &workerpb.InstanceActionResponse{Success: false, Error: strings.Join(failed, "；")}, nil
+}
+
 // StopInstance 停止实例。
 func (s *Server) StopInstance(ctx context.Context, req *workerpb.InstanceActionRequest) (*workerpb.InstanceActionResponse, error) {
 	if err := s.manager.Stop(req.InstanceUuid); err != nil {
