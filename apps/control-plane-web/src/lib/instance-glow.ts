@@ -5,7 +5,7 @@
  * 自包含纯函数，便于单测状态→光晕映射。
  */
 export function instanceStatusGlowClass(status: string, soft = false): string {
-  let kind = ''
+  let kind: string
   switch (status) {
     case 'RUNNING':
       kind = 'running'
