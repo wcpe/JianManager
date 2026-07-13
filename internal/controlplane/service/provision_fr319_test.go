@@ -102,3 +102,33 @@ func TestProvisionServerAsync_FailureVisible(t *testing.T) {
 	require.NoError(t, svc.db.First(&got, inst.ID).Error)
 	require.True(t, strings.HasPrefix(got.StatusReason, "搭建未完成："), "statusReason 应标注空壳原因，实际 %q", got.StatusReason)
 }
+
+// TestStart_BlockedWhileProvisionInFlight 核心还在下载（provision 任务未终态）时启动被拒（FR-319）。
+// 真机复现：异步化后实例秒回 STOPPED 可点启动，点了得 Invalid or corrupt jarfile。
+func TestStart_BlockedWhileProvisionInFlight(t *testing.T) {
+	db := newInstanceTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskLog{}, &model.Notification{}))
+	node := &model.Node{UUID: "node-gate", Status: model.NodeStatusOnline, OS: "linux"}
+	require.NoError(t, db.Create(node).Error)
+	pool := cpgrpc.NewClientPool()
+	instSvc := NewInstanceService(db, NewGroupService(db), pool)
+
+	inst := &model.Instance{Name: "prov-gate", NodeID: node.ID, Type: model.InstanceTypeMinecraftJava,
+		ProcessType: model.ProcessTypeDaemon, StartCommand: "java -jar server.jar", Status: model.InstanceStatusStopped}
+	require.NoError(t, db.Create(inst).Error)
+
+	// 关联本实例的 running provision 任务 → 启动应被拒。
+	require.NoError(t, db.Create(&model.Task{TaskID: "t-prov", NodeID: node.ID, InstanceID: inst.ID,
+		Kind: model.TaskKindProvision, State: model.TaskStateRunning}).Error)
+
+	err := instSvc.Start(inst.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "搭建中")
+
+	// 任务终态后放行（改 succeeded，闸不再拦；后续因节点未连接在委托层失败，但不再是搭建中错误）。
+	require.NoError(t, db.Model(&model.Task{}).Where("task_id = ?", "t-prov").
+		Update("state", model.TaskStateSucceeded).Error)
+	if err := instSvc.Start(inst.ID); err != nil {
+		require.NotContains(t, err.Error(), "搭建中", "任务终态后不应再被搭建中闸拦")
+	}
+}

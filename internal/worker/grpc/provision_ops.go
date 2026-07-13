@@ -848,7 +848,11 @@ func downloadFile(ctx context.Context, client *http.Client, url, destPath string
 		return 0, "", fmt.Errorf("下载核心返回 HTTP %d", resp.StatusCode)
 	}
 
-	f, err := os.Create(destPath)
+	// 先写 .part 临时文件、完整校验后原子 rename 换入：目标路径要么没有、要么是完整文件。
+	// 此前直接写目标路径，慢源下载的几分钟窗口内躺着半截 jar——异步搭建（FR-319）期间
+	// 用户点启动即得 `Invalid or corrupt jarfile`（真机复现，2.7MB/43MB 时被 java 吃到）。
+	tmpPath := destPath + ".part"
+	f, err := os.Create(tmpPath)
 	if err != nil {
 		return 0, "", fmt.Errorf("创建文件失败: %w", err)
 	}
@@ -859,16 +863,20 @@ func downloadFile(ctx context.Context, client *http.Client, url, destPath string
 	n, copyErr := io.Copy(io.MultiWriter(f, h), resp.Body)
 	closeErr := f.Close()
 	if copyErr != nil {
-		_ = os.Remove(destPath)
+		_ = os.Remove(tmpPath)
 		return 0, "", fmt.Errorf("写入核心失败: %w", copyErr)
 	}
 	if closeErr != nil {
-		_ = os.Remove(destPath)
+		_ = os.Remove(tmpPath)
 		return 0, "", fmt.Errorf("关闭核心文件失败: %w", closeErr)
 	}
 	if resp.ContentLength >= 0 && n != resp.ContentLength {
-		_ = os.Remove(destPath)
+		_ = os.Remove(tmpPath)
 		return 0, "", fmt.Errorf("核心下载不完整：期望 %d 字节实得 %d 字节", resp.ContentLength, n)
+	}
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return 0, "", fmt.Errorf("落位核心文件失败: %w", err)
 	}
 	return n, hex.EncodeToString(h.Sum(nil)), nil
 }

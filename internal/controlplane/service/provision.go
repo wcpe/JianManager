@@ -118,6 +118,12 @@ func (p *ProvisionService) ProvisionServerAsync(ctx context.Context, req Provisi
 	if _, terr := p.tasks.CreateTask(taskID, req.NodeID, model.TaskKindProvision, title, "排队中", createdBy); terr != nil {
 		return inst, "", fmt.Errorf("登记搭建任务失败: %w", terr)
 	}
+	// 任务关联实例（FR-319）：启动闸据此拦截「核心还在下载就点启动」的实例。
+	_ = p.db.Model(&model.Task{}).Where("task_id = ?", taskID).Update("instance_id", inst.ID).Error
+	// 全程「搭建中」标注：实例卡片/详情可见状态，配合启动闸阻止过早启动（真机复现：
+	// 异步化后实例秒回 STOPPED 可点启动，但核心还在下载→点启动得 corrupt/缺 jar）。
+	_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
+		Update("status_reason", "搭建中：正在下载核心（完成前请勿启动）").Error
 	onlineMode := boolOr(req.OnlineMode, false)
 	go func() {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)

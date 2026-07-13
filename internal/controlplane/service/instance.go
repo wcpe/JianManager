@@ -726,6 +726,12 @@ func (s *InstanceService) Start(id uint) error {
 		return err
 	}
 
+	// 在途搭建闸（FR-319）：一键搭建异步化后实例秒回 STOPPED 可点启动，但核心可能还在
+	// 后台下载——此时启动会得到 corrupt/缺失 jar。若有未终态的 provision 任务关联本实例即拒。
+	if err := s.provisionInFlightGate(id); err != nil {
+		return err
+	}
+
 	// 内存水位预警闸（FR-317 CP 侧）：按节点最近心跳预判，不足直接拒绝不下发 RPC。
 	// Worker 侧启动前还有实时闸兜底（心跳数据最多滞后一个心跳周期）。
 	if err := s.memoryGate(instance); err != nil {
@@ -740,6 +746,24 @@ func (s *InstanceService) Start(id uint) error {
 	// 委托给 Worker Node
 	s.spawnDelegate(instance, "start")
 
+	return nil
+}
+
+// provisionInFlightGate 拦截「核心还在下载就点启动」（FR-319）：
+// 查有无关联本实例、未终态（pending/running）的 provision 任务，有则拒启并引导看任务中心。
+func (s *InstanceService) provisionInFlightGate(instanceID uint) error {
+	var count int64
+	err := s.db.Model(&model.Task{}).
+		Where("instance_id = ? AND kind = ? AND state IN ?",
+			instanceID, model.TaskKindProvision,
+			[]model.TaskState{model.TaskStatePending, model.TaskStateRunning}).
+		Count(&count).Error
+	if err != nil {
+		return nil // 查询异常不阻断正常启动
+	}
+	if count > 0 {
+		return fmt.Errorf("实例正在搭建中（核心下载未完成），请等待任务中心的搭建任务完成后再启动")
+	}
 	return nil
 }
 

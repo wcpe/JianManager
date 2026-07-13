@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -132,6 +133,62 @@ func TestDownloadCore_TruncatedDownloadLeavesNoPartialFile(t *testing.T) {
 	assert.False(t, resp.Success, "截断下载必须报失败")
 	_, statErr := os.Stat(filepath.Join(workDir, "server.jar"))
 	assert.True(t, os.IsNotExist(statErr), "截断下载不得在工作目录留下损坏 jar")
+}
+
+// TestDownloadCore_TargetAbsentUntilComplete 下载期间目标路径不存在半成品（FR-319 原子落位）：
+// 慢源下载的几分钟窗口内，异步搭建的实例可能被点启动——server.jar 必须要么不存在、要么完整，
+// 绝不能是写了一半的 corrupt jar（真机复现：用户点启动得 Invalid or corrupt jarfile）。
+func TestDownloadCore_TargetAbsentUntilComplete(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)
+	ctx := context.Background()
+
+	const uuid = "66666666-6666-6666-6666-666666666666"
+	workDir := filepath.Join(tmp, "inst-atomic")
+	_, err := srv.CreateInstance(ctx, &workerpb.CreateInstanceRequest{
+		InstanceUuid: uuid, Name: "atomic", StartCommand: "noop", WorkDir: workDir, ProcessType: "direct",
+	})
+	require.NoError(t, err)
+
+	payload := []byte("complete-core-jar-bytes-abc")
+	target := filepath.Join(workDir, "server.jar")
+	// 慢源：分两段写、中间等一个信号，期间断言目标 server.jar 尚不存在（只应有 .part）。
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "27")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(payload[:10])
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-release // 阻在这里，模拟下载进行中
+		_, _ = w.Write(payload[10:])
+	}))
+	defer ts.Close()
+
+	done := make(chan *workerpb.DownloadCoreResponse, 1)
+	go func() {
+		r, _ := srv.DownloadCore(ctx, &workerpb.DownloadCoreRequest{
+			InstanceUuid: uuid, DestFilename: "server.jar", DownloadUrl: ts.URL,
+		})
+		done <- r
+	}()
+
+	// 下载进行中：目标必须不存在（原子落位的核心保证）。
+	require.Eventually(t, func() bool {
+		_, e := os.Stat(target + ".part")
+		return e == nil
+	}, 3*time.Second, 20*time.Millisecond, "下载中应存在 .part 临时文件")
+	_, statErr := os.Stat(target)
+	assert.True(t, os.IsNotExist(statErr), "下载未完成时 server.jar 不得存在（防点启动读到半截 jar）")
+
+	close(release)
+	resp := <-done
+	require.True(t, resp.Success, resp.Error)
+	got, _ := os.ReadFile(target)
+	assert.Equal(t, payload, got, "完成后 server.jar 应是完整内容")
+	_, partErr := os.Stat(target + ".part")
+	assert.True(t, os.IsNotExist(partErr), "落位后 .part 应被 rename 消费掉")
 }
 
 // TestDownloadCore_CacheHitSkipsNetwork 验证节点制品缓存（FR-178）：

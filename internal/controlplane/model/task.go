@@ -44,6 +44,9 @@ type Task struct {
 	TaskID string `gorm:"type:varchar(64);uniqueIndex;not null" json:"taskId"`
 	NodeID uint   `gorm:"index" json:"nodeId"`
 	Kind   string `gorm:"type:varchar(64);not null;index" json:"kind"`
+	// InstanceID 关联实例（FR-319 provision 任务用）；0=无关联。
+	// 启动闸据此拦截「核心还在下载就点启动」的实例（在途 provision 任务未终态即拒启）。
+	InstanceID uint `gorm:"index" json:"instanceId"`
 	// State 见 TaskState；以字符串存储便于跨进程一致。
 	State    TaskState `gorm:"type:varchar(16);not null;default:pending;index" json:"state"`
 	Progress int       `gorm:"not null;default:0" json:"progress"` // 0~100

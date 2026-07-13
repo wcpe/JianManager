@@ -114,6 +114,13 @@ export function InstanceWorktableCard({
               {inst.statusReason}
             </p>
           )}
+          {/* 搭建中提示（FR-319）：一键搭建异步化后核心下载期间实例为 STOPPED，
+              标注「搭建中」让用户知道尚不可启动（后端启动闸也会拦）。 */}
+          {inst.status === 'STOPPED' && inst.statusReason?.startsWith('搭建中') && (
+            <p className="mt-0.5 line-clamp-2 text-[11px] text-status-warning" title={inst.statusReason}>
+              {inst.statusReason}
+            </p>
+          )}
         </div>
         {roleBadge}
         {/* 次要操作菜单（⋯）不冒泡到卡片，避免点菜单误开工作区（FIX-9）。 */}
