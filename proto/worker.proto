@@ -28,6 +28,8 @@ service WorkerService {
   rpc RestartInstance(InstanceActionRequest) returns (InstanceActionResponse);
   // KillInstance 强制终止实例。
   rpc KillInstance(InstanceActionRequest) returns (InstanceActionResponse);
+  // 启动前同步预检（FR-314）：复用 InstanceActionResponse（success=预检通过，message=拼接失败原因）。
+  rpc PreflightStartInstance(InstanceActionRequest) returns (InstanceActionResponse);
   // SendCommand 向实例发送命令。
   rpc SendCommand(SendCommandRequest) returns (SendCommandResponse);
   // GetInstanceStatus 获取实例状态。

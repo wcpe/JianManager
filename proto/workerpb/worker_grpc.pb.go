@@ -25,6 +25,7 @@ const (
 	WorkerService_CreateInstance_FullMethodName        = "/worker.WorkerService/CreateInstance"
 	WorkerService_ResyncInstances_FullMethodName       = "/worker.WorkerService/ResyncInstances"
 	WorkerService_StartInstance_FullMethodName         = "/worker.WorkerService/StartInstance"
+	WorkerService_PreflightStartInstance_FullMethodName         = "/worker.WorkerService/PreflightStartInstance"
 	WorkerService_StopInstance_FullMethodName          = "/worker.WorkerService/StopInstance"
 	WorkerService_RestartInstance_FullMethodName       = "/worker.WorkerService/RestartInstance"
 	WorkerService_KillInstance_FullMethodName          = "/worker.WorkerService/KillInstance"
@@ -120,6 +121,7 @@ type WorkerServiceClient interface {
 	ResyncInstances(ctx context.Context, in *ResyncInstancesRequest, opts ...grpc.CallOption) (*ResyncInstancesResponse, error)
 	// StartInstance 启动实例。
 	StartInstance(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
+	PreflightStartInstance(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
 	// StopInstance 停止实例。
 	StopInstance(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error)
 	// RestartInstance 重启实例。
@@ -353,6 +355,16 @@ func (c *workerServiceClient) StartInstance(ctx context.Context, in *InstanceAct
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(InstanceActionResponse)
 	err := c.cc.Invoke(ctx, WorkerService_StartInstance_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) PreflightStartInstance(ctx context.Context, in *InstanceActionRequest, opts ...grpc.CallOption) (*InstanceActionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InstanceActionResponse)
+	err := c.cc.Invoke(ctx, WorkerService_PreflightStartInstance_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1142,6 +1154,7 @@ type WorkerServiceServer interface {
 	ResyncInstances(context.Context, *ResyncInstancesRequest) (*ResyncInstancesResponse, error)
 	// StartInstance 启动实例。
 	StartInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
+	PreflightStartInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
 	// StopInstance 停止实例。
 	StopInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error)
 	// RestartInstance 重启实例。
@@ -1335,6 +1348,10 @@ func (UnimplementedWorkerServiceServer) ResyncInstances(context.Context, *Resync
 }
 func (UnimplementedWorkerServiceServer) StartInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StartInstance not implemented")
+}
+
+func (UnimplementedWorkerServiceServer) PreflightStartInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PreflightStartInstance not implemented")
 }
 func (UnimplementedWorkerServiceServer) StopInstance(context.Context, *InstanceActionRequest) (*InstanceActionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method StopInstance not implemented")
@@ -1663,6 +1680,24 @@ func _WorkerService_StartInstance_Handler(srv interface{}, ctx context.Context, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).StartInstance(ctx, req.(*InstanceActionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_PreflightStartInstance_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InstanceActionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).PreflightStartInstance(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_PreflightStartInstance_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).PreflightStartInstance(ctx, req.(*InstanceActionRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2914,6 +2949,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StartInstance",
 			Handler:    _WorkerService_StartInstance_Handler,
+		},
+		{
+			MethodName: "PreflightStartInstance",
+			Handler:    _WorkerService_PreflightStartInstance_Handler,
 		},
 		{
 			MethodName: "StopInstance",
