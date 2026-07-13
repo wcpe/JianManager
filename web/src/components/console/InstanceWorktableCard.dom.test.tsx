@@ -47,6 +47,20 @@ describe('InstanceWorktableCard 点击卡片打开实例（FIX-9）', () => {
     expect(window.location.pathname).toBe('/instances')
   })
 
+  it('statusReason 非空即显失败原因，不再要求 CRASHED 前置（FR-312）', () => {
+    // Worker 心跳会把 CRASHED 冲回 STOPPED——STOPPED + statusReason 也必须可见。
+    renderWithProviders(
+      <InstanceWorktableCard
+        inst={{ ...stoppedInst, statusReason: '实例未绑定 JDK，启动委托失败' } as InstanceInfo}
+        nodeName="node-a"
+        roleBadge={null}
+        menu={null}
+      />,
+      { route: '/instances' },
+    )
+    expect(screen.getByText('实例未绑定 JDK，启动委托失败')).toBeInTheDocument()
+  })
+
   it('传入 onOpen 时由调用方处理深链跳转', async () => {
     const opened: number[] = []
     const user = userEvent.setup()

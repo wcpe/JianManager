@@ -108,8 +108,9 @@ export function InstanceWorktableCard({
               className="bg-transparent px-0 py-0"
             />
           </div>
-          {/* 崩溃原因（FR-#2）：异步委托失败的具体错误，不再只见「崩溃」无因。 */}
-          {inst.status === 'CRASHED' && inst.statusReason && (
+          {/* 失败原因（FR-312 放宽 FR-#2 条件）：statusReason 非空即显、不看 status——
+              Worker 心跳会把 CRASHED 冲回 STOPPED，以 CRASHED 为前置条件时原因随之不可见。 */}
+          {inst.statusReason && (
             <p className="mt-0.5 line-clamp-2 text-[11px] text-status-danger" title={inst.statusReason}>
               {inst.statusReason}
             </p>

@@ -95,6 +95,10 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
 
   const canStart = instance.status === 'STOPPED' || instance.status === 'CRASHED'
   const canControl = instance.status === 'RUNNING' || instance.status === 'STARTING' || instance.status === 'STOPPING'
+  // 失败原因横幅（FR-312）：只看 statusReason 非空、不看 status——Worker 心跳会把 CRASHED
+  // 冲回 STOPPED，若以状态为前置条件横幅会随之消失；再次启动时 CP transition 清空 reason，
+  // 横幅纯受查询数据驱动消失，不留本地状态。
+  const startFailReason = instance.statusReason?.trim()
   const setActiveTab = (tab: TabKey) => {
     const next = new URLSearchParams(searchParams)
     if (tab === 'overview') next.delete('tab')
@@ -105,6 +109,19 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   return (
     <div data-page="instance-console" className="jm-page-stack min-h-full w-full text-[13px] text-foreground">
       <div className="w-full space-y-3">
+        {startFailReason && (
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded-md border border-status-danger/40 bg-status-danger/10 px-3 py-2 text-xs text-status-danger"
+          >
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+            <div className="min-w-0">
+              <p className="font-semibold">{t('serverConsole.lastStartFailed')}</p>
+              {/* 原因全文可读：不 truncate / line-clamp，长错误换行展示。 */}
+              <p className="mt-0.5 whitespace-pre-wrap break-words">{startFailReason}</p>
+            </div>
+          </div>
+        )}
         <header className="rounded-lg border bg-card/95 p-3 shadow-soft backdrop-blur-sm">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">

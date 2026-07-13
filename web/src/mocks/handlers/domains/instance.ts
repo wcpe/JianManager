@@ -606,7 +606,8 @@ export const handlers = [
   domainRoute('post', '/instances/:id/start', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    instances.update(Number(info.params.id), { status: 'RUNNING' })
+    // 对齐真 CP：启动 transition 清空 statusReason（FR-312 失败原因横幅随查询刷新消失）。
+    instances.update(Number(info.params.id), { status: 'RUNNING', statusReason: undefined })
     return HttpResponse.json({ message: '已启动' })
   }),
 
@@ -620,7 +621,8 @@ export const handlers = [
   domainRoute('post', '/instances/:id/restart', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    instances.update(Number(info.params.id), { status: 'RUNNING' })
+    // 重启同为启动 transition，一并清空 statusReason（FR-312）。
+    instances.update(Number(info.params.id), { status: 'RUNNING', statusReason: undefined })
     return HttpResponse.json({ message: '已重启' })
   }),
 
