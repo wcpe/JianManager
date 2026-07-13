@@ -44,10 +44,10 @@ export class PathfinderMover {
     return this.initialized && this.pathfinder !== null && this.goals !== null
   }
 
-  /** 移动到指定坐标。 */
+  /** 移动到指定坐标（进入 range 范围即视为到达）。 */
   async moveTo(x: number, y: number, z: number, range = 2): Promise<void> {
     if (!this.isReady()) return
-    const goal = new this.goals!.GoalBlock(x, y, z)
+    const goal = new this.goals!.GoalNear(x, y, z, range)
     this.pathfinder!.setGoal(goal)
   }
 

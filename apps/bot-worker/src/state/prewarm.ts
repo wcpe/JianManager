@@ -10,7 +10,6 @@
  *   - 停止 Bot 时将其归还池中（如池未满）
  */
 
-import type { Bot } from 'mineflayer'
 import { sendEvent } from '../index.js'
 
 /** 预热池中的空闲 Bot 条目。 */
