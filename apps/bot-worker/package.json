@@ -15,7 +15,11 @@
     "mineflayer-pathfinder": "^2.4.5"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.0.0",
-    "typescript": "^5.7.0"
+    "eslint": "^10.7.0",
+    "globals": "^17.7.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.64.0"
   }
 }
