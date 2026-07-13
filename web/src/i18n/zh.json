@@ -24,7 +24,8 @@
     "provisioning": "搭建中…",
     "success": "子服「{{name}}」已搭建，可一键启动",
     "partialFailure": "实例已创建，但核心下载或配置写入未完成，请在实例详情中重试",
-    "failed": "搭建失败"
+    "failed": "搭建失败",
+    "submitted": "搭建任务已提交：核心下载中，进度见任务中心"
   },
   "proxy": {
     "entry": "搭建代理",
@@ -2450,7 +2451,9 @@
       "node.pm.config": "配置节点包管理器",
       "node.pkg.install": "安装全局包",
       "node.pkg.remove": "卸载全局包"
-    }
+    },
+    "failed": "失败",
+    "errorContent": "错误内容"
   },
   "importServer": {
     "entry": "导入现有服务器",
@@ -3229,7 +3232,8 @@
     "kind": {
       "jdkInstall": "JDK 安装",
       "runtimeInstall": "运行时安装",
-      "pkgInstall": "全局包安装"
+      "pkgInstall": "全局包安装",
+      "provision": "一键搭建"
     },
     "filter": {
       "keyword": "搜索标题 / 详情",

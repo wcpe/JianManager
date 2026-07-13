@@ -10,6 +10,10 @@ export interface AuditLogInfo {
   targetId: string
   detail: string
   ip: string
+  /** 操作是否成功（FR-321：失败操作也留痕）。 */
+  success: boolean
+  /** 失败时的错误内容（响应 error body 截断，FR-321）。 */
+  error: string
   createdAt: string
   user?: { id: number; username: string }
 }

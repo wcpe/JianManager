@@ -12,10 +12,11 @@ import (
 // AuditConfig 审计中间件配置。
 type AuditConfig struct {
 	// RecordFunc 记录审计日志的回调函数。
-	RecordFunc func(userID uint, action, targetType, targetID, detail, ip string)
+	// success/errMsg：操作结果（FR-321）——失败操作也留痕并带错误内容（响应 error body 截断）。
+	RecordFunc func(userID uint, action, targetType, targetID, detail, ip string, success bool, errMsg string)
 }
 
-// Audit 审计日志中间件，自动记录关键操作。
+// Audit 审计日志中间件，自动记录关键操作（成功与失败都记，FR-321）。
 func Audit(cfg AuditConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// 只记录写操作
@@ -27,6 +28,10 @@ func Audit(cfg AuditConfig) gin.HandlerFunc {
 				body, _ = io.ReadAll(c.Request.Body)
 				c.Request.Body = io.NopCloser(bytes.NewReader(body))
 			}
+
+			// 捕获响应体前段：失败时其 error/message 即审计错误内容（FR-321）。
+			w := &respCaptureWriter{ResponseWriter: c.Writer, cap: 512}
+			c.Writer = w
 
 			// 执行请求
 			c.Next()
@@ -48,7 +53,13 @@ func Audit(cfg AuditConfig) gin.HandlerFunc {
 				}
 
 				if action != "" {
-					cfg.RecordFunc(uid, action, targetType, targetID, detail, ip)
+					status := c.Writer.Status()
+					success := status < 400
+					errMsg := ""
+					if !success {
+						errMsg = string(w.buf)
+					}
+					cfg.RecordFunc(uid, action, targetType, targetID, detail, ip, success, errMsg)
 				}
 			}
 		} else {

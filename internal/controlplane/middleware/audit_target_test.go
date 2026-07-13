@@ -17,7 +17,7 @@ func TestAuditMiddleware_TargetIDFromActualPath(t *testing.T) {
 	var gotType, gotID string
 	r := gin.New()
 	r.Use(Audit(AuditConfig{
-		RecordFunc: func(_ uint, _, targetType, targetID, _, _ string) {
+		RecordFunc: func(_ uint, _, targetType, targetID, _, _ string, _ bool, _ string) {
 			gotType, gotID = targetType, targetID
 		},
 	}))

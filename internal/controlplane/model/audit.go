@@ -17,8 +17,12 @@ type AuditLog struct {
 	TargetID   string    `gorm:"type:varchar(64)" json:"targetId"`
 	Detail     string    `gorm:"type:text" json:"detail"` // JSON
 	IP         string    `gorm:"type:varchar(64)" json:"ip"`
-	CreatedAt  time.Time `json:"createdAt"`
-	User       User      `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	// Success 操作是否成功（FR-321：失败操作也留痕并带错误内容，回答「这个操作为什么报错」）。
+	Success bool `gorm:"default:true" json:"success"`
+	// Error 失败时的错误内容（响应 error body 截断，FR-321）。
+	Error     string    `gorm:"type:varchar(512)" json:"error"`
+	CreatedAt time.Time `json:"createdAt"`
+	User      User      `gorm:"foreignKey:UserID" json:"user,omitempty"`
 }
 
 // BeforeCreate 创建前自动生成 UUID。

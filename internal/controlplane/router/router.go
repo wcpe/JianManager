@@ -106,6 +106,9 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 	api := r.Group("/api/v1")
 	api.Use(middleware.RateLimit(10, 20)) // 10 请求/秒，桶容量 20
+	// API 错误统一落平台日志（FR-320）：4xx 业务拒绝 warn / 5xx error，经 log_slog 桥进日志中心，
+	// /logs 页可追查「某操作为什么报错」（挂全局含未认证路径；401/404/429 噪音跳过）。
+	api.Use(middleware.ErrorLog())
 
 	// 公开路由（无需认证）
 	authHandler := NewAuthHandler(svcs.Auth)
@@ -144,8 +147,8 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 	protected := api.Group("")
 	protected.Use(middleware.JWTAuth(jwtSecret))
 	protected.Use(middleware.Audit(middleware.AuditConfig{
-		RecordFunc: func(userID uint, action, targetType, targetID, detail, ip string) {
-			_ = svcs.Audit.Record(userID, action, targetType, targetID, detail, ip)
+		RecordFunc: func(userID uint, action, targetType, targetID, detail, ip string, success bool, errMsg string) {
+			_ = svcs.Audit.RecordResult(userID, action, targetType, targetID, detail, ip, success, errMsg)
 		},
 	}))
 	// 加载授权上下文（用户角色 + 组成员关系），供后续权限判断使用

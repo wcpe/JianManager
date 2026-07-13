@@ -24,7 +24,8 @@
     "provisioning": "Provisioning…",
     "success": "Server \"{{name}}\" provisioned, ready to start",
     "partialFailure": "Instance created, but core download or config write did not finish; retry from the instance detail page",
-    "failed": "Provisioning failed"
+    "failed": "Provisioning failed",
+    "submitted": "Provision task submitted: core downloading, see Task Center for progress"
   },
   "proxy": {
     "entry": "Provision Proxy",
@@ -2471,7 +2472,9 @@
       "node.pm.config": "Configure node package manager",
       "node.pkg.install": "Install global package",
       "node.pkg.remove": "Remove global package"
-    }
+    },
+    "failed": "Failed",
+    "errorContent": "Error"
   },
   "importServer": {
     "entry": "Import existing server",
@@ -3229,7 +3232,8 @@
     "kind": {
       "jdkInstall": "JDK install",
       "runtimeInstall": "Runtime install",
-      "pkgInstall": "Global package install"
+      "pkgInstall": "Global package install",
+      "provision": "Provision"
     },
     "filter": {
       "keyword": "Search title / detail",

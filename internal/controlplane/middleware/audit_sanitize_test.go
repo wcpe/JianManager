@@ -19,7 +19,7 @@ func TestAuditMiddleware_PasswordNotRecordedInDetail(t *testing.T) {
 	var gotAction, gotDetail string
 	r := gin.New()
 	r.Use(Audit(AuditConfig{
-		RecordFunc: func(_ uint, action, _, _, detail, _ string) {
+		RecordFunc: func(_ uint, action, _, _, detail, _ string, _ bool, _ string) {
 			gotAction, gotDetail = action, detail
 		},
 	}))

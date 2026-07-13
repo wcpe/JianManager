@@ -19,8 +19,17 @@ func NewAuditService(db *gorm.DB) *AuditService {
 	return &AuditService{db: db}
 }
 
-// Record 记录审计日志。
+// Record 记录一条成功操作的审计日志（既有调用点语义不变）。
 func (s *AuditService) Record(userID uint, action, targetType, targetID, detail, ip string) error {
+	return s.RecordResult(userID, action, targetType, targetID, detail, ip, true, "")
+}
+
+// RecordResult 记录带结果的审计日志（FR-321）：失败操作也留痕并带错误内容，
+// 回答「这个操作为什么报错」（此前失败操作审计无错误内容）。
+func (s *AuditService) RecordResult(userID uint, action, targetType, targetID, detail, ip string, success bool, errMsg string) error {
+	if len(errMsg) > 512 {
+		errMsg = errMsg[:512]
+	}
 	log := &model.AuditLog{
 		UserID:     userID,
 		Action:     action,
@@ -28,6 +37,8 @@ func (s *AuditService) Record(userID uint, action, targetType, targetID, detail,
 		TargetID:   targetID,
 		Detail:     detail,
 		IP:         ip,
+		Success:    success,
+		Error:      errMsg,
 	}
 	if err := s.db.Create(log).Error; err != nil {
 		return fmt.Errorf("记录审计日志失败: %w", err)
