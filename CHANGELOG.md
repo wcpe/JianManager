@@ -9,6 +9,7 @@
 > 本段为 `v0.16.0` 开发版归档区，累积 `v0.15.0` tag 之后的开发变更（开发态版本号 `0.16.0-dev`，见 ADR-065）。
 
 ### 新增
+- **内存水位启动守卫（FR-317，真机事故钓出）**：验收开 Paper -Xmx2048M 把 8G 主机 OOM 至用户态僵死（swap 风暴 load>100、SSH/面板全失联），启动链路此前无任何内存防线。新增双闸：① CP 预警闸（`InstanceService.memoryGate`）按节点最近心跳（90s 内有效）预判「可用 − 预估需求 < 保留水位」即拒绝、不下发 RPC；心跳过旧/字段缺失放行。② Worker 实时闸（`process.Manager.preflightMemory`，先于 Java 版本预检、direct/daemon/docker 普适）启动瞬间读系统内存同判，被拒保持原状态返回含三个数字的可操作错误。估算口径共享 `internal/platform/memguard`（docker 用 MemLimitMB；宿主解析 -Xmx ×1.15+256MB 开销；无声明保守默认 768MB），保留水位默认 max(512MB, 总内存 10%)，`worker.yml` `memory_guard.reserve_mb/disabled` 可覆盖/应急关闭；读数失败一律 fail-open。单测覆盖 Xmx 解析各单位/估算优先级/水位边界/拒绝保状态/自定义水位/禁用/fail-open/CP 闸四态。
 - **bot-worker dist 自愈下发与依赖解耦（FR-308，见 ADR-070 修订 ADR-006）**：Worker 独立部署（无仓库检出）时 bot 能力此前整体不可用（`bot-worker/dist` 相对路径不存在、mineflayer 无处解析 → 子进程 `ERR_MODULE_NOT_FOUND` 裸崩）。构建期 `make embed-botworker` 把 dist 打成确定性 tar.gz（~25KB，含 `package.json` 保 ESM 语义）内嵌 CP（不入库、未注入优雅降级）；Worker 注册成功后经新增 unary RPC `FetchBotWorkerArchive`（`node_uuid+node_secret` 与重注册同源鉴权、`known_sha256` 指纹一致回空归档省流、天然复用反向隧道）自愈物化到 `<数据根>/opt/bot-worker/`（sha256 复核 + 临时目录 rename 原子换入，CP 不可达/未内嵌回退本地已有只告警不阻断）。运行时依赖不随归档分发、指向 FR-307 托管全局包：dist 同级自动建 `node_modules` 链接 → 全局 node_modules（Windows junction 免特权 / 其余 symlink），NODE_PATH 兜底 CJS；spawn 前依赖预检，缺装返回「请到节点『全局包管理』安装 mineflayer 与 mineflayer-pathfinder」可操作指引。入口解析顺序 `JIANMANAGER_BOT_WORKER_PATH` 显式覆盖 > 数据根物化副本 > 旧相对路径（仓库式部署向后兼容）。单测覆盖自愈全路径（首拉/指纹跳过/降级回退/校验拒绝/路径穿越拒绝）、链接功能性验证、预检指引、CP RPC 鉴权与嵌入态双分支。
 
 ## 0.15.0（2026-07-13）
