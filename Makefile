@@ -93,7 +93,7 @@ dist: gen-licenses build-web embed-web embed-install-scripts embed-botworker emb
 # bot 能力不再依赖手工拷贝 dist。产物不入库（目录 .gitignore 占位）；
 # 不跑此目标时 CP 不内嵌 bot-worker，Worker 回退本地已有 dist，不影响其它构建。
 embed-botworker: build-bot
-	go run ./scripts/embed-botworker.go --src bot-worker/dist --out internal/controlplane/embed/botworker --version $(VERSION)
+	go run ./scripts/embed-botworker.go --src apps/bot-worker/dist --out internal/controlplane/embed/botworker --version $(VERSION)
 
 # 交叉编译两平台 Worker 并注入 CP 内嵌目录（FR-278/ADR-062）：CP 随身自带与自身版本一致的
 # Worker，一键安装/节点升级不出网。产物与 manifest 不入库（目录 .gitignore 占位）；

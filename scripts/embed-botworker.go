@@ -1,10 +1,10 @@
 //go:build ignore
 
-// 打包 bot-worker dist 为 CP 内嵌归档（FR-308/ADR-070）：把 bot-worker/dist 打成
+// 打包 bot-worker dist 为 CP 内嵌归档（FR-308/ADR-070）：把 apps/bot-worker/dist 打成
 // 确定性 tar.gz（路径排序、固定 mtime/属主），写出 bot-worker.tar.gz + manifest.json
 // （version/sha256/size）。由 `make embed-botworker` 调用；纯 Go 实现不依赖外部 tar。
 //
-// 用法: go run ./scripts/embed-botworker.go --src bot-worker/dist --out internal/controlplane/embed/botworker --version 0.16.0-dev
+// 用法: go run ./scripts/embed-botworker.go --src apps/bot-worker/dist --out internal/controlplane/embed/botworker --version 0.16.0-dev
 package main
 
 import (
@@ -30,8 +30,8 @@ type manifest struct {
 }
 
 func main() {
-	src := flag.String("src", "bot-worker/dist", "bot-worker 构建产物目录")
-	pkgJSON := flag.String("pkgjson", "bot-worker/package.json", "随归档携带的 package.json（ESM 需 type:module 与 dist 同级）")
+	src := flag.String("src", "apps/bot-worker/dist", "bot-worker 构建产物目录")
+	pkgJSON := flag.String("pkgjson", "apps/bot-worker/package.json", "随归档携带的 package.json（ESM 需 type:module 与 dist 同级）")
 	out := flag.String("out", "internal/controlplane/embed/botworker", "嵌入目录")
 	version := flag.String("version", "", "构建版本（与 CP version.Version 同源）")
 	flag.Parse()
