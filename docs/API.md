@@ -713,8 +713,8 @@
 - **权限**: 平台管理员
 - **请求**: `{ "name":"lobby-2","motd":"","levelName":"","registerToProxyIds":[30],"dryRun":false, "mode":"quick", "include":["plugins","*.jar"], "exclude":["world"] }`
   - `mode`: `quick` / `advanced`（省略=advanced）；`include`/`exclude`: 顶层项的目录前缀或 basename glob（如 `plugins`、`*.jar`），仅 advanced 用
-- **响应**: `201`（dryRun `200`）`{ instance?, allocated, excluded, registrations, warnings, dryRun }`（`excluded` 反映该次实际排除集）；`422 NOT_A_BACKEND`/`SOURCE_RUNNING`；`502 CLONE_FAILED`
-- **关联 FR**: FR-036, FR-231 | **Spec**: `docs/specs/clone-instance/`, `docs/specs/instance-clone-modes/`
+- **响应**: `201`（dryRun `200`）`{ instance?, allocated, excluded, registrations, warnings, dryRun, taskId? }`（`excluded` 反映该次实际排除集；**FR-323** 实拷异步化，`taskId` 为拷贝工作目录的后台任务、进度见任务中心，dryRun/同步回退时空）；`422 NOT_A_BACKEND`/`SOURCE_RUNNING`；`502 CLONE_FAILED`
+- **关联 FR**: FR-036, FR-231, FR-323 | **Spec**: `docs/specs/clone-instance/`, `docs/specs/instance-clone-modes/`
 
 ### POST /api/v1/instances/import/inspect
 - **描述**: 探测节点上某现成服务器目录（导入前预检）：返回核心 jar 候选（深度≤2，已知核心名排前，MANIFEST Main-Class 嗅探作排序提示）、内嵌 JDK 候选（`jre*`/`jdk*`/`runtime`/`java` 子目录经探测）、`server.properties` 端口、eula 状态。守卫：路径须绝对、存在、为目录，且不得指向托管区内已有实例目录
@@ -727,8 +727,8 @@
 - **描述**: 导入现成目录为受管实例（落地 ADR-007 预留的「导入已有目录」高级模式）。`mode=in_place` 就地接管（工作目录=原目录、托管区外例外，**删除实例不删原目录**）；`mode=migrate` 搬进系统分配的托管目录（同盘 rename 优先、跨盘拷贝+校验后清源）。结构化启动（ADR-008），端口沿用探测值不改文件；`registerJdkPaths` 逐个登记为节点 JDK（managed=false）
 - **权限**: 平台管理员
 - **请求**: `{ "nodeId":2,"path":"/srv/paper","mode":"in_place","name":"old-server","jarPath":"server.jar","jdkId":1,"registerJdkPaths":["/srv/paper/jre"],"memoryMb":2048 }`
-- **响应**: `201 { instance }`（含 `workDirInPlace`）；`503 NODE_OFFLINE`；`422 IMPORT_FAILED`
-- **关联 FR**: FR-302 | **Spec**: `docs/specs/import-existing-server/`
+- **响应**: `201 { instance, taskId }`（instance 含 `workDirInPlace`；**FR-323** migrate 搬迁异步化，`taskId` 为搬迁后台任务、进度见任务中心，就地接管 O(1) 同步完成 `taskId` 空）；`503 NODE_OFFLINE`；`422 IMPORT_FAILED`
+- **关联 FR**: FR-302, FR-323 | **Spec**: `docs/specs/import-existing-server/`, `docs/specs/long-op-tasks/`
 
 ---
 
