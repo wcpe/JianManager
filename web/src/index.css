@@ -748,3 +748,45 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* FR-315 实例状态外圈光晕：按状态柔和渐变光晕，取色经 status 语义 token（双主题自适配）。
+   容器用标准强度、卡片用 --soft 弱化；过渡态琥珀呼吸。克制柔光，遵守 UI 风格偏好不过度。 */
+.jm-status-glow { transition: box-shadow 400ms ease; }
+.jm-status-glow-running {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-success) 35%, transparent),
+              0 0 20px -6px color-mix(in srgb, var(--color-status-success) 60%, transparent);
+}
+.jm-status-glow-transitioning {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-warning) 38%, transparent),
+              0 0 18px -6px color-mix(in srgb, var(--color-status-warning) 55%, transparent);
+  animation: jm-glow-breathe 1.9s ease-in-out infinite;
+}
+.jm-status-glow-crashed {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-danger) 45%, transparent),
+              0 0 20px -5px color-mix(in srgb, var(--color-status-danger) 60%, transparent);
+}
+.jm-status-glow--soft.jm-status-glow-running {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-success) 28%, transparent),
+              0 0 14px -7px color-mix(in srgb, var(--color-status-success) 50%, transparent);
+}
+.jm-status-glow--soft.jm-status-glow-transitioning {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-warning) 30%, transparent),
+              0 0 13px -7px color-mix(in srgb, var(--color-status-warning) 48%, transparent);
+}
+.jm-status-glow--soft.jm-status-glow-crashed {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-danger) 36%, transparent),
+              0 0 14px -7px color-mix(in srgb, var(--color-status-danger) 52%, transparent);
+}
+@keyframes jm-glow-breathe {
+  0%, 100% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-warning) 30%, transparent),
+                0 0 12px -7px color-mix(in srgb, var(--color-status-warning) 42%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-warning) 48%, transparent),
+                0 0 22px -4px color-mix(in srgb, var(--color-status-warning) 66%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .jm-status-glow-transitioning { animation: none; }
+}

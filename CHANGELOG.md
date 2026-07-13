@@ -20,6 +20,7 @@
 - **心跳流断开告警降噪（FR-322，真机复现）**：worker 每拍心跳「发一拍→收响应→cancel 流」属正常收尾，CP 却按 WARN 无差别刷屏（真机 2 小时 484 条「心跳流断开 context canceled」且无节点标识），淹没真异常。Canceled/EOF 正常收尾降 Debug，异常断流保留 WARN 并带 nodeUUID。
 - **侧栏常驻服务器列删除后残留死链（BUG，FR-293 缺陷）**：左侧导航「最近打开/收藏」的服务器,对应实例删除后仍残留在列里（`server-selection.ts` 只有加/收藏切换、无剔除函数；`useDeleteInstance` onSuccess 不清 store；per-id 状态查询 404 被 allSettled 忽略回落本地快照,永不剔除）。store 加 `removeServer(id)`（剔除最近+收藏双列并广播,幂等空操作不空转）；删除实例 onSuccess 联动即时剔除；侧栏 per-id 查询遇确定性 404 对账剔除（兜底其它 tab/直接 API 删,网络错不误删）。单测覆盖剔除/广播/空操作/落盘 + DOM 对账剔除死链保存活实例。
 - **实例启动失败原因可见性（FR-312，真机复现）**：statusReason 已入库已出 API 但实例控制台页无展示位，且 Worker 心跳把 CRASHED 冲回 STOPPED 后工作台卡片唯一展示条件 `status===CRASHED` 失效——启动失败只见「启动中→崩溃」无因。控制台页顶部新增「上次启动失败」横幅（statusReason 非空即显、原因全文可读、纯数据驱动，再次启动经 CP transition 清空后随查询刷新消失），工作台卡片展示条件同步放宽为非空即显。
+- **实例状态外圈光晕（FR-315）**：控制台容器与工作台卡片按状态渐变柔光（RUNNING 绿柔光 / STARTING·STOPPING 琥珀呼吸 / CRASHED 红警示 / STOPPED 无），取色经 status 语义 token 双主题自适配，克制不过度。
 
 ## 0.15.0（2026-07-13）
 

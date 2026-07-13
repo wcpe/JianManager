@@ -14,6 +14,7 @@ import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui'
 import { toneChipClass, type Tone } from '@/lib/tone'
 import { cn } from '@jianmanager/ui'
+import { instanceStatusGlowClass } from '@/lib/instance-glow'
 
 /** 实例状态 → 图标块语义色调（与状态徽章同色系，运行=主色块）。 */
 function statusTone(status: string): Tone {
@@ -80,7 +81,7 @@ export function InstanceWorktableCard({
 
   return (
     <div
-      className="group flex cursor-pointer flex-col rounded-xl border bg-card p-4 text-card-foreground shadow-soft transition-[box-shadow] duration-300 ease-ios hover:shadow-lift"
+      className={cn('group flex cursor-pointer flex-col rounded-xl border bg-card p-4 text-card-foreground shadow-soft transition-[box-shadow] duration-300 ease-ios hover:shadow-lift', instanceStatusGlowClass(inst.status, true))}
       onClick={() => openConsole(inst.id)}
     >
       {/* 头部：图标块 + 名称 + 状态（运行呼吸灯）+ 菜单 */}

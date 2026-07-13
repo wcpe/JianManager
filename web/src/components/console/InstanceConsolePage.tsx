@@ -13,6 +13,7 @@ import { Button } from '@jianmanager/ui/components/button'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { cn, instanceStatusLevel } from '@jianmanager/ui'
+import { instanceStatusGlowClass } from '@/lib/instance-glow'
 import type { CardType } from '@/lib/workspace-card'
 import WorkspaceCardBody from './WorkspaceCardBody'
 import { recordRecentServer } from './server-selection'
@@ -122,7 +123,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
             </div>
           </div>
         )}
-        <header className="rounded-lg border bg-card/95 p-3 shadow-soft backdrop-blur-sm">
+        <header className={cn('rounded-lg border bg-card/95 p-3 shadow-soft backdrop-blur-sm', instanceStatusGlowClass(instance.status))}>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="flex items-center gap-2">
