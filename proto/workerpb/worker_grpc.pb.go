@@ -219,6 +219,7 @@ type WorkerServiceClient interface {
 	// RemoveGlobalPackage 卸载全局包（FR-307，同步）。
 	RemoveGlobalPackage(ctx context.Context, in *RemoveGlobalPackageRequest, opts ...grpc.CallOption) (*RemoveGlobalPackageResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
+	// 先查节点核心缓存（FR-178 sha256 键 / FR-330 组合键），命中免远程下载。
 	DownloadCore(ctx context.Context, in *DownloadCoreRequest, opts ...grpc.CallOption) (*DownloadCoreResponse, error)
 	// InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
 	InstallForgeServer(ctx context.Context, in *InstallForgeServerRequest, opts ...grpc.CallOption) (*InstallForgeServerResponse, error)
@@ -1268,6 +1269,7 @@ type WorkerServiceServer interface {
 	// RemoveGlobalPackage 卸载全局包（FR-307，同步）。
 	RemoveGlobalPackage(context.Context, *RemoveGlobalPackageRequest) (*RemoveGlobalPackageResponse, error)
 	// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
+	// 先查节点核心缓存（FR-178 sha256 键 / FR-330 组合键），命中免远程下载。
 	DownloadCore(context.Context, *DownloadCoreRequest) (*DownloadCoreResponse, error)
 	// InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
 	InstallForgeServer(context.Context, *InstallForgeServerRequest) (*InstallForgeServerResponse, error)

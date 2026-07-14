@@ -122,6 +122,7 @@ service WorkerService {
   // RemoveGlobalPackage 卸载全局包（FR-307，同步）。
   rpc RemoveGlobalPackage(RemoveGlobalPackageRequest) returns (RemoveGlobalPackageResponse);
   // DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服）。
+  // 先查节点核心缓存（FR-178 sha256 键 / FR-330 组合键），命中免远程下载。
   rpc DownloadCore(DownloadCoreRequest) returns (DownloadCoreResponse);
   // InstallForgeServer 安装 Forge 服务端并部署 SpongeForge mod（FR-046）。
   rpc InstallForgeServer(InstallForgeServerRequest) returns (InstallForgeServerResponse);
@@ -932,12 +933,20 @@ message DownloadCoreRequest {
   string dest_filename = 2; // 落地文件名（如 server.jar），相对实例工作目录
   string download_url = 3;
   string sha256 = 4;        // 可选；非空时校验下载内容
+
+  // 组合缓存键成分（FR-330）：sha256 为空的下载源（Sponge Maven 等）按
+  // core_type|mc_version|build 定位节点核心缓存。CP 必须把 latest/未指定构建
+  // 解析为具体构建后再下发；三者缺任一（如 BungeeCord latest 无构建号）则不参与组合键缓存。
+  string core_type = 5;   // 核心类型（paper / spongevanilla / velocity …）
+  string mc_version = 6;  // 具体 MC 版本（"latest" 不参与组合键）
+  int32 build = 7;        // 具体构建号（<=0 不参与组合键）
 }
 
 message DownloadCoreResponse {
   bool success = 1;
   string error = 2;
   int64 size = 3;
+  bool cache_hit = 4; // FR-330：本次交付来自节点核心缓存（免远程下载），CP 据此区分 provision stage 文案
 }
 
 message InstallForgeServerRequest {

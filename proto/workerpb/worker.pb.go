@@ -6049,11 +6049,17 @@ func (x *RemoveJDKResponse) GetError() string {
 }
 
 type DownloadCoreRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InstanceUuid  string                 `protobuf:"bytes,1,opt,name=instance_uuid,json=instanceUuid,proto3" json:"instance_uuid,omitempty"`
-	DestFilename  string                 `protobuf:"bytes,2,opt,name=dest_filename,json=destFilename,proto3" json:"dest_filename,omitempty"` // 落地文件名（如 server.jar），相对实例工作目录
-	DownloadUrl   string                 `protobuf:"bytes,3,opt,name=download_url,json=downloadUrl,proto3" json:"download_url,omitempty"`
-	Sha256        string                 `protobuf:"bytes,4,opt,name=sha256,proto3" json:"sha256,omitempty"` // 可选；非空时校验下载内容
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	InstanceUuid string                 `protobuf:"bytes,1,opt,name=instance_uuid,json=instanceUuid,proto3" json:"instance_uuid,omitempty"`
+	DestFilename string                 `protobuf:"bytes,2,opt,name=dest_filename,json=destFilename,proto3" json:"dest_filename,omitempty"` // 落地文件名（如 server.jar），相对实例工作目录
+	DownloadUrl  string                 `protobuf:"bytes,3,opt,name=download_url,json=downloadUrl,proto3" json:"download_url,omitempty"`
+	Sha256       string                 `protobuf:"bytes,4,opt,name=sha256,proto3" json:"sha256,omitempty"` // 可选；非空时校验下载内容
+	// 组合缓存键成分（FR-330）：sha256 为空的下载源（Sponge Maven 等）按
+	// core_type|mc_version|build 定位节点核心缓存。CP 必须把 latest/未指定构建
+	// 解析为具体构建后再下发；三者缺任一（如 BungeeCord latest 无构建号）则不参与组合键缓存。
+	CoreType      string `protobuf:"bytes,5,opt,name=core_type,json=coreType,proto3" json:"core_type,omitempty"`    // 核心类型（paper / spongevanilla / velocity …）
+	McVersion     string `protobuf:"bytes,6,opt,name=mc_version,json=mcVersion,proto3" json:"mc_version,omitempty"` // 具体 MC 版本（"latest" 不参与组合键）
+	Build         int32  `protobuf:"varint,7,opt,name=build,proto3" json:"build,omitempty"`                         // 具体构建号（<=0 不参与组合键）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6116,11 +6122,33 @@ func (x *DownloadCoreRequest) GetSha256() string {
 	return ""
 }
 
+func (x *DownloadCoreRequest) GetCoreType() string {
+	if x != nil {
+		return x.CoreType
+	}
+	return ""
+}
+
+func (x *DownloadCoreRequest) GetMcVersion() string {
+	if x != nil {
+		return x.McVersion
+	}
+	return ""
+}
+
+func (x *DownloadCoreRequest) GetBuild() int32 {
+	if x != nil {
+		return x.Build
+	}
+	return 0
+}
+
 type DownloadCoreResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
 	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
 	Size          int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	CacheHit      bool                   `protobuf:"varint,4,opt,name=cache_hit,json=cacheHit,proto3" json:"cache_hit,omitempty"` // FR-330：本次交付来自节点核心缓存（免远程下载），CP 据此区分 provision stage 文案
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -6174,6 +6202,13 @@ func (x *DownloadCoreResponse) GetSize() int64 {
 		return x.Size
 	}
 	return 0
+}
+
+func (x *DownloadCoreResponse) GetCacheHit() bool {
+	if x != nil {
+		return x.CacheHit
+	}
+	return false
 }
 
 type InstallForgeServerRequest struct {
@@ -12029,16 +12064,21 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\x04path\x18\x01 \x01(\tR\x04path\"C\n" +
 	"\x11RemoveJDKResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05error\"\x9a\x01\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"\xec\x01\n" +
 	"\x13DownloadCoreRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12#\n" +
 	"\rdest_filename\x18\x02 \x01(\tR\fdestFilename\x12!\n" +
 	"\fdownload_url\x18\x03 \x01(\tR\vdownloadUrl\x12\x16\n" +
-	"\x06sha256\x18\x04 \x01(\tR\x06sha256\"Z\n" +
+	"\x06sha256\x18\x04 \x01(\tR\x06sha256\x12\x1b\n" +
+	"\tcore_type\x18\x05 \x01(\tR\bcoreType\x12\x1d\n" +
+	"\n" +
+	"mc_version\x18\x06 \x01(\tR\tmcVersion\x12\x14\n" +
+	"\x05build\x18\a \x01(\x05R\x05build\"w\n" +
 	"\x14DownloadCoreResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x12\n" +
-	"\x04size\x18\x03 \x01(\x03R\x04size\"\xd0\x02\n" +
+	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x1b\n" +
+	"\tcache_hit\x18\x04 \x01(\bR\bcacheHit\"\xd0\x02\n" +
 	"\x19InstallForgeServerRequest\x12#\n" +
 	"\rinstance_uuid\x18\x01 \x01(\tR\finstanceUuid\x12.\n" +
 	"\x13forge_installer_url\x18\x02 \x01(\tR\x11forgeInstallerUrl\x124\n" +
