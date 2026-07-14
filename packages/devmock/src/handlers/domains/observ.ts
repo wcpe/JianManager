@@ -1049,12 +1049,16 @@ export const handlers = [
     return HttpResponse.json({ message: '已标记已读' })
   }),
 
-  // ===== tasks 任务中心（FR-183） =====
+  // ===== tasks 任务中心（FR-183；FR-337 分页信封 {items,total,limit,offset}） =====
   domainRoute('get', '/tasks', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     const url = new URL(info.request.url)
-    const limit = Number(url.searchParams.get('limit') ?? '100')
+    // 窗口钳制与真后端一致（FR-337）：limit 缺省 100、钳制 [1,500]；offset 缺省 0、负值/非法归 0。
+    const rawLimit = Number(url.searchParams.get('limit') ?? '100')
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(Math.trunc(rawLimit), 500) : 100
+    const rawOffset = Number(url.searchParams.get('offset') ?? '0')
+    const offset = Number.isFinite(rawOffset) && rawOffset > 0 ? Math.trunc(rawOffset) : 0
     const kind = url.searchParams.get('kind')
     const state = url.searchParams.get('state')
     const nodeId = url.searchParams.get('nodeId')
@@ -1066,7 +1070,7 @@ export const handlers = [
     if (nodeId) items = items.filter((t) => t.nodeId === Number(nodeId))
     if (keyword) items = items.filter((t) => t.title.includes(keyword) || t.detail.includes(keyword))
     if (since) items = items.filter((t) => t.createdAt >= since)
-    return HttpResponse.json(items.slice(0, limit))
+    return HttpResponse.json({ items: items.slice(offset, offset + limit), total: items.length, limit, offset })
   }),
 
   domainRoute('get', '/tasks/:taskId', (info) => {

@@ -1,13 +1,15 @@
 import { describe, it, expect } from 'vitest'
-import { screen } from '@testing-library/react'
+import { fireEvent, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
+import { db } from '@jianmanager/devmock/db'
 import TasksPage from './TasksPage'
 
 /**
- * TasksPage 强断言（FR-208）：验种子任务渲染、展开看任务日志（详情联动）、错误注入显错误态。
+ * TasksPage 强断言（FR-208）：验种子任务渲染、展开看任务日志（详情联动）、错误注入显错误态；
+ * 分页信封（FR-337）：共 N 条/已加载数、「加载更多」增长窗口、筛选变化复位窗口。
  */
 describe('TasksPage（mock 假后端）', () => {
   it('① 渲染出种子任务行', async () => {
@@ -68,5 +70,30 @@ describe('TasksPage（mock 假后端）', () => {
     mockInject('get', '/tasks', { kind: 'empty' })
     renderWithProviders(<TasksPage />)
     expect(await screen.findByText('暂无任务')).toBeInTheDocument()
+  })
+
+  it('④ 分页信封（FR-337）：共 N 条/已加载数、加载更多扩窗且保持筛选、筛选变化复位窗口', async () => {
+    loginMockUser()
+    // 直接从假后端集合算期望值，不硬编码种子规模（数百任务种子，见 observ.ts MOCK_TASK_COUNT）。
+    const allTasks = db<{ title: string }>('tasks').list()
+    const seededTotal = allTasks.length
+    const filteredTotal = allTasks.filter((t) => t.title.includes('批量任务')).length
+    expect(seededTotal).toBeGreaterThan(200) // 前置：种子须超过两窗，否则下方断言失真
+    renderWithProviders(<TasksPage />)
+
+    // 首窗：limit 缺省 100，顶部「共 N 条 · 已加载 100」。
+    expect(await screen.findByText(`共 ${seededTotal} 条 · 已加载 100`)).toBeInTheDocument()
+
+    // 「加载更多」→ 窗口扩到 200，总数不变。
+    await userEvent.click(screen.getByRole('button', { name: '加载更多' }))
+    expect(await screen.findByText(`共 ${seededTotal} 条 · 已加载 200`)).toBeInTheDocument()
+
+    // 改关键词筛选 → 窗口复位 100，total 随筛选口径收窄。
+    fireEvent.change(screen.getByPlaceholderText('搜索标题 / 详情'), { target: { value: '批量任务' } })
+    expect(await screen.findByText(`共 ${filteredTotal} 条 · 已加载 100`)).toBeInTheDocument()
+
+    // 再「加载更多」→ 在同一筛选结果集内扩窗（加载更多保持筛选参数）。
+    await userEvent.click(screen.getByRole('button', { name: '加载更多' }))
+    expect(await screen.findByText(`共 ${filteredTotal} 条 · 已加载 200`)).toBeInTheDocument()
   })
 })

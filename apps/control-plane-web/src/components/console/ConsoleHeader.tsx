@@ -423,9 +423,11 @@ const TASK_BADGE_META: Record<string, { variant: 'secondary' | 'destructive' | '
 function TasksMenu() {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const { data: tasks } = useTasks()
-  const active = (tasks ?? []).filter((tk) => !isTerminalTask(tk))
-  const recent = (tasks ?? []).slice(0, TASKS_MENU_MAX_ROWS)
+  // FR-337 分页信封：消费 items（首窗 ≤100，active 计数/最近 N 条口径与改前一致）。
+  const { data } = useTasks()
+  const tasks = data?.items ?? []
+  const active = tasks.filter((tk) => !isTerminalTask(tk))
+  const recent = tasks.slice(0, TASKS_MENU_MAX_ROWS)
   const avg = active.length > 0 ? Math.round(active.reduce((s, tk) => s + tk.progress, 0) / active.length) : 0
 
   return (

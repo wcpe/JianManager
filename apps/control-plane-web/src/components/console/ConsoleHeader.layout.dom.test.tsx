@@ -16,7 +16,7 @@ vi.mock('@/api/metrics', () => ({
   useMetricOverview: () => ({ data: { totals: { onlineNodeCount: 1, runningInstances: 2 } } }),
 }))
 vi.mock('@/api/tasks', () => ({
-  useTasks: () => ({ data: [] }),
+  useTasks: () => ({ data: { items: [], total: 0, limit: 100, offset: 0 } }),
 }))
 vi.mock('@/api/notification-feed', () => ({
   useFeedUnreadCount: () => ({ data: 0 }),

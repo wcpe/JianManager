@@ -38,10 +38,16 @@ function sinceFromFilter(v: string): string | undefined {
   return undefined
 }
 
+/** 任务列表增长窗口（FR-337）：初始/步长 100，封顶 500（到顶引导用筛选缩小范围）。 */
+const TASKS_WINDOW_STEP = 100
+const TASKS_WINDOW_MAX = 500
+
 /**
- * 全局任务中心页（FR-183 + FR-227）。
+ * 全局任务中心页（FR-183 + FR-227 + FR-337）。
  * 轮询 `/tasks` 列长任务（如 JDK 安装）：进度条 + 状态徽标 + 展开看滚动日志。
  * 进行中任务可「强制停止」（FR-227：经心跳真中断 Worker 操作）；列表按 kind/state/node/关键词/时间筛选。
+ * 分页信封（FR-337）：顶部「共 N 条 · 已加载 M」，「加载更多」扩大 limit 的增长窗口（offset 恒 0），
+ * 任一筛选变化时窗口复位；轮询重取整个已加载窗口，进度与总数同步刷新。
  * 存在进行中任务时自动短轮询刷新；全部终态时停止。非平台管理员只见自己发起的任务（后端收敛）。
  */
 export default function TasksPage() {
@@ -57,40 +63,61 @@ export default function TasksPage() {
   const [keyword, setKeyword] = useState('')
   const [timeF, setTimeF] = useState('') // ''=全部 | 24h | 7d
   const [since, setSince] = useState<string | undefined>(undefined)
+  // 增长窗口（FR-337）：「加载更多」+100 封顶 500；筛选变化复位。
+  const [limit, setLimit] = useState(TASKS_WINDOW_STEP)
+
+  /** 包装筛选 setter：任一筛选变化时窗口复位（FR-337），避免停留在放大的窗口。 */
+  const withWindowReset = <T,>(set: (v: T) => void) => (v: T) => {
+    setLimit(TASKS_WINDOW_STEP)
+    set(v)
+  }
 
   const { data: nodes } = useNodes()
-  const { data: tasks, isLoading, isError } = useTasks({
+  const { data: page, isLoading, isError } = useTasks({
     state: (stateF as TaskState) || '',
     kind: kindF,
     nodeId: nodeF ? Number(nodeF) : undefined,
     keyword,
     since,
+    limit,
   })
+  const tasks = page?.items ?? []
+  const total = page?.total ?? 0
+  const canLoadMore = tasks.length < total && limit < TASKS_WINDOW_MAX
+  const windowCapped = tasks.length < total && limit >= TASKS_WINDOW_MAX
 
   const hasFilters = !!(stateF || kindF || nodeF || keyword || timeF)
-  const resetFilters = () => { setStateF(''); setKindF(''); setNodeF(''); setKeyword(''); setTimeF(''); setSince(undefined) }
+  const resetFilters = () => {
+    setStateF(''); setKindF(''); setNodeF(''); setKeyword(''); setTimeF(''); setSince(undefined)
+    setLimit(TASKS_WINDOW_STEP)
+  }
 
   return (
     <div data-page="tasks" className="jm-page-stack space-y-4">
       <div className="jm-page-header">
         <h1 className="jm-page-title">{t('tasks.title')}</h1>
+        {page != null && !isError && (
+          <span className="self-center text-xs tabular-nums text-muted-foreground">
+            {t('tasks.countSummary', { total, loaded: tasks.length })}
+          </span>
+        )}
       </div>
 
       {/* 筛选条（FR-227） */}
       <div className="jm-toolbar-surface flex flex-wrap items-center gap-2 p-2">
         <Input
           value={keyword}
-          onChange={(e) => setKeyword(e.target.value)}
+          onChange={(e) => withWindowReset(setKeyword)(e.target.value)}
           placeholder={t('tasks.filter.keyword', '搜索标题 / 详情')}
           className="h-8 w-52"
         />
-        <FilterSelect value={stateF} onChange={setStateF} placeholder={t('tasks.filter.allStates', '全部状态')}
+        <FilterSelect value={stateF} onChange={withWindowReset(setStateF)} placeholder={t('tasks.filter.allStates', '全部状态')}
           options={STATE_OPTIONS.map((s) => ({ value: s, label: t(STATE_META[s].key) }))} />
-        <FilterSelect value={kindF} onChange={setKindF} placeholder={t('tasks.filter.allKinds', '全部种类')}
+        <FilterSelect value={kindF} onChange={withWindowReset(setKindF)} placeholder={t('tasks.filter.allKinds', '全部种类')}
           options={Object.entries(TASK_KIND_LABEL_KEYS).map(([value, key]) => ({ value, label: t(key) }))} />
-        <FilterSelect value={nodeF} onChange={setNodeF} placeholder={t('tasks.filter.allNodes', '全部节点')}
+        <FilterSelect value={nodeF} onChange={withWindowReset(setNodeF)} placeholder={t('tasks.filter.allNodes', '全部节点')}
           options={(nodes ?? []).map((n) => ({ value: String(n.id), label: n.name }))} />
-        <FilterSelect value={timeF} onChange={(v) => { setTimeF(v); setSince(sinceFromFilter(v)) }} placeholder={t('tasks.filter.allTime', '全部时间')}
+        <FilterSelect value={timeF} onChange={withWindowReset((v: string) => { setTimeF(v); setSince(sinceFromFilter(v)) })} placeholder={t('tasks.filter.allTime', '全部时间')}
           options={[{ value: '24h', label: t('tasks.filter.last24h', '近 24 小时') }, { value: '7d', label: t('tasks.filter.last7d', '近 7 天') }]} />
         {hasFilters && (
           <Button variant="ghost" size="sm" onClick={resetFilters} className="text-muted-foreground">
@@ -99,35 +126,54 @@ export default function TasksPage() {
         )}
       </div>
 
-      {isLoading && !tasks ? (
+      {isLoading && !page ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
       ) : isError ? (
         <p className="text-destructive">{t('tasks.loadError')}</p>
-      ) : !tasks || tasks.length === 0 ? (
+      ) : tasks.length === 0 ? (
         <Panel>
           <p className="px-3 py-10 text-center text-sm text-muted-foreground">
             {hasFilters ? t('tasks.emptyFiltered', '没有匹配筛选条件的任务') : t('tasks.empty')}
           </p>
         </Panel>
       ) : (
-        <Panel bodyClassName="p-0">
-          <div className="flex items-center gap-3 border-b bg-muted/40 px-3 py-2 text-[11px] font-medium text-muted-foreground">
-            <span className="w-4 shrink-0" />
-            <span className="min-w-0 flex-1">{t('tasks.task')}</span>
-            <span className="w-24 shrink-0">{t('tasks.stateLabel')}</span>
-            <span className="w-40 shrink-0">{t('tasks.progress')}</span>
-            <span className="w-40 shrink-0">{t('tasks.updatedAt')}</span>
-            <span className="w-20 shrink-0" />
-          </div>
-          {tasks.map((task) => (
-            <TaskRow
-              key={task.taskId}
-              task={task}
-              open={expanded === task.taskId}
-              onToggle={() => setExpanded((id) => (id === task.taskId ? null : task.taskId))}
-            />
-          ))}
-        </Panel>
+        <>
+          <Panel bodyClassName="p-0">
+            <div className="flex items-center gap-3 border-b bg-muted/40 px-3 py-2 text-[11px] font-medium text-muted-foreground">
+              <span className="w-4 shrink-0" />
+              <span className="min-w-0 flex-1">{t('tasks.task')}</span>
+              <span className="w-24 shrink-0">{t('tasks.stateLabel')}</span>
+              <span className="w-40 shrink-0">{t('tasks.progress')}</span>
+              <span className="w-40 shrink-0">{t('tasks.updatedAt')}</span>
+              <span className="w-20 shrink-0" />
+            </div>
+            {tasks.map((task) => (
+              <TaskRow
+                key={task.taskId}
+                task={task}
+                open={expanded === task.taskId}
+                onToggle={() => setExpanded((id) => (id === task.taskId ? null : task.taskId))}
+              />
+            ))}
+          </Panel>
+
+          {/* 加载更多（FR-337）：扩大 limit 的增长窗口；到顶（500）且仍有剩余时引导筛选收窄。 */}
+          {(canLoadMore || windowCapped) && (
+            <div className="flex items-center justify-center pb-1">
+              {windowCapped ? (
+                <p className="text-xs text-muted-foreground">{t('tasks.loadMoreCapped')}</p>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setLimit((l) => Math.min(l + TASKS_WINDOW_STEP, TASKS_WINDOW_MAX))}
+                >
+                  {t('tasks.loadMore')}
+                </Button>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   )

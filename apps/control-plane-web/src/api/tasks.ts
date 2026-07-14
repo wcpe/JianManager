@@ -77,9 +77,20 @@ export function tasksRefetchInterval(tasks: readonly Pick<Task, 'state'>[] | und
   return hasActive ? ACTIVE_TASKS_REFETCH_MS : false
 }
 
-/** 任务列表筛选（FR-227）。空字段不传。 */
+/** GET /tasks 分页信封（FR-337）：total 与筛选（含归属隔离）同口径，limit/offset 回显服务端钳制后生效值。 */
+export interface TaskPage {
+  items: Task[]
+  total: number
+  limit: number
+  offset: number
+}
+
+/** 任务列表筛选（FR-227）+ 分页窗口（FR-337）。空字段不传。 */
 export interface TaskListParams {
+  /** 每窗行数，服务端缺省 100、钳制 [1,500]（FR-337）。 */
   limit?: number
+  /** 偏移，缺省 0（FR-337；Web 端增长窗口恒 0，供 API 消费方翻页）。 */
+  offset?: number
   kind?: string
   state?: TaskState | ''
   nodeId?: number
@@ -89,13 +100,16 @@ export interface TaskListParams {
 }
 
 /**
- * 任务列表（FR-183 + FR-227 筛选 + FR-329 自动刷新）。
+ * 任务列表（FR-183 + FR-227 筛选 + FR-329 自动刷新 + FR-337 分页信封）。
+ * 返回 `{items,total,limit,offset}` 信封；「加载更多」= 扩大 limit 的增长窗口（offset 恒 0），
+ * 轮询天然重取整个已加载窗口，进度/新任务/total 同步刷新。
  * 存在非终态任务时短轮询（2s）刷新进度；全部终态时停止轮询，避免空转。
  * staleTime 置 0（覆盖全局 30s）：任务数据秒级演进，若命中「30s 内看过一眼」的新鲜缓存，
  * 挂载时不重取且缓存里无活跃任务→轮询也不启动，页面会卡死在旧快照（真机「要手动刷新才动」）。
  */
 export function useTasks(params: TaskListParams = {}) {
   const query: Record<string, string | number> = { limit: params.limit ?? 100 }
+  if (params.offset) query.offset = params.offset
   if (params.kind) query.kind = params.kind
   if (params.state) query.state = params.state
   if (params.nodeId) query.nodeId = params.nodeId
@@ -104,11 +118,13 @@ export function useTasks(params: TaskListParams = {}) {
   return useQuery({
     queryKey: ['tasks', query],
     queryFn: async () => {
-      const { data } = await api.get<Task[]>('/tasks', { params: query })
+      const { data } = await api.get<TaskPage>('/tasks', { params: query })
       return data
     },
     staleTime: 0,
-    refetchInterval: (q) => tasksRefetchInterval(q.state.data),
+    // 「加载更多」扩窗/改筛选时保留旧结果避免列表闪烁（同 useAuditLogs 既有范式）。
+    placeholderData: (prev) => prev,
+    refetchInterval: (q) => tasksRefetchInterval(q.state.data?.items),
   })
 }
 

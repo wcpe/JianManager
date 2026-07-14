@@ -40,7 +40,7 @@ vi.mock('@/api/logs', () => ({
   useLogs: () => ({ data: { items: [] } }),
 }))
 vi.mock('@/api/tasks', () => ({
-  useTasks: () => ({ data: [] }),
+  useTasks: () => ({ data: { items: [], total: 0, limit: 100, offset: 0 } }),
 }))
 vi.mock('@/api/notification-feed', () => ({
   useFeedUnreadCount: () => ({ data: 0 }),
