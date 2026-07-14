@@ -1851,7 +1851,8 @@
     "summaryEnabled": "Enabled",
     "summaryDisabled": "Disabled",
     "nextRunLabel": "Next run",
-    "disabledLabel": "Disabled"
+    "disabledLabel": "Disabled",
+    "notScheduled": "Not scheduled"
   },
   "backups": {
     "title": "Backup Management",

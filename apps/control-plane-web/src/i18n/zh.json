@@ -1830,7 +1830,8 @@
     "summaryEnabled": "启用",
     "summaryDisabled": "停用",
     "nextRunLabel": "下次执行",
-    "disabledLabel": "已停用"
+    "disabledLabel": "已停用",
+    "notScheduled": "未计划"
   },
   "backups": {
     "title": "备份管理",

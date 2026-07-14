@@ -158,7 +158,15 @@ export default function SchedulesPage() {
               meta={
                 <>
                   <div>{s.enabled ? t('schedules.nextRunLabel') : t('schedules.disabledLabel')}</div>
-                  <div>{s.lastRun ? new Date(s.lastRun).toLocaleString() : t('schedules.neverRun')}</div>
+                  <div>
+                    {s.enabled
+                      ? validateCron(s.cronExpr).valid
+                        ? (nextRuns(s.cronExpr, 1)[0]?.toLocaleString() ?? t('schedules.notScheduled'))
+                        : t('schedules.notScheduled')
+                      : s.lastRun
+                        ? new Date(s.lastRun).toLocaleString()
+                        : t('schedules.neverRun')}
+                  </div>
                 </>
               }
               trailing={
