@@ -185,6 +185,107 @@ func TestMetric_PurgeTTL_RemovesProcessSnapshots(t *testing.T) {
 	require.Equal(t, int32(11), rows[0].PID)
 }
 
+// instSample 构造一条实例级样本，供批量序列测试播种。
+func instSample(node, instUUID, key string, ts time.Time, v *float64) Sample {
+	return Sample{
+		NodeUUID: node, InstanceID: instUUID, Scope: model.MetricScopeInstance,
+		MetricKey: key, Unit: "tps", TS: ts, Value: v,
+	}
+}
+
+func TestMetric_ResolveInstanceIDs(t *testing.T) {
+	svc := newMetricSvc(t)
+	require.NoError(t, svc.db.AutoMigrate(&model.Instance{}))
+	a := &model.Instance{Name: "a", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDaemon, StartCommand: "x"}
+	b := &model.Instance{Name: "b", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDaemon, StartCommand: "x"}
+	require.NoError(t, svc.db.Create(a).Error)
+	require.NoError(t, svc.db.Create(b).Error)
+
+	got, err := svc.ResolveInstanceIDs([]string{a.UUID, b.UUID, "missing-uuid"})
+	require.NoError(t, err)
+	require.Len(t, got, 2, "查不到的 uuid 不在结果中")
+	require.Equal(t, a.ID, got[a.UUID])
+	require.Equal(t, b.ID, got[b.UUID])
+
+	empty, err := svc.ResolveInstanceIDs(nil)
+	require.NoError(t, err)
+	require.Empty(t, empty)
+}
+
+func TestMetric_QuerySeriesBatch_GroupsByTarget(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	node := "n"
+	// 两个目标各一条 TPS 序列；目标 A 另有 MSPT 序列。
+	require.NoError(t, svc.Ingest([]Sample{
+		instSample(node, "uuid-a", model.MetricInstTPS, base, fp(20)),
+		instSample(node, "uuid-a", model.MetricInstMSPT, base, fp(30)),
+		instSample(node, "uuid-b", model.MetricInstTPS, base, fp(18)),
+	}))
+
+	res, out, err := svc.QuerySeriesBatch(SeriesQuery{
+		Scope: model.MetricScopeInstance,
+		From:  base.Add(-time.Hour), To: base.Add(time.Hour), Resolution: "raw",
+	}, []string{"uuid-a", "uuid-b", "uuid-c"})
+	require.NoError(t, err)
+	require.Equal(t, "raw", res)
+	// 每个入参 UUID 都有条目（含无序列的 uuid-c → 空数组）。
+	require.Len(t, out, 3)
+	require.Len(t, out["uuid-a"], 2, "目标 A 有 TPS + MSPT 两条序列")
+	require.Len(t, out["uuid-b"], 1)
+	require.NotNil(t, out["uuid-c"], "无序列目标返回非 nil 空数组")
+	require.Len(t, out["uuid-c"], 0)
+}
+
+func TestMetric_QuerySeriesBatch_MetricsFilter(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	require.NoError(t, svc.Ingest([]Sample{
+		instSample("n", "uuid-a", model.MetricInstTPS, base, fp(20)),
+		instSample("n", "uuid-a", model.MetricInstMSPT, base, fp(30)),
+	}))
+
+	_, out, err := svc.QuerySeriesBatch(SeriesQuery{
+		Scope: model.MetricScopeInstance, MetricKeys: []string{model.MetricInstTPS},
+		From: base.Add(-time.Hour), To: base.Add(time.Hour), Resolution: "raw",
+	}, []string{"uuid-a"})
+	require.NoError(t, err)
+	require.Len(t, out["uuid-a"], 1, "metrics 过滤只留 TPS")
+	require.Equal(t, model.MetricInstTPS, out["uuid-a"][0].MetricKey)
+}
+
+func TestMetric_QuerySeriesBatch_Empty(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	res, out, err := svc.QuerySeriesBatch(SeriesQuery{
+		Scope: model.MetricScopeInstance,
+		From:  base.Add(-time.Hour), To: base.Add(time.Hour), Resolution: "raw",
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, "raw", res)
+	require.Empty(t, out)
+}
+
+// TestMetric_QuerySeriesBatch_SameAsSingle 断言批量响应中某 targetId 的序列与单目标 QuerySeries 同构（FR-334 验收）。
+func TestMetric_QuerySeriesBatch_SameAsSingle(t *testing.T) {
+	svc := newMetricSvc(t)
+	base := metricBase()
+	node := "n"
+	require.NoError(t, svc.Ingest([]Sample{
+		instSample(node, "uuid-a", model.MetricInstTPS, base, fp(20)),
+		instSample(node, "uuid-a", model.MetricInstTPS, base.Add(30*time.Second), fp(19)),
+	}))
+	q := SeriesQuery{
+		Scope: model.MetricScopeInstance, InstanceID: "uuid-a", MetricKeys: []string{model.MetricInstTPS},
+		From: base.Add(-time.Hour), To: base.Add(time.Hour), Resolution: "raw",
+	}
+	_, single, err := svc.QuerySeries(q)
+	require.NoError(t, err)
+	_, batch, err := svc.QuerySeriesBatch(q, []string{"uuid-a"})
+	require.NoError(t, err)
+	require.Equal(t, single, batch["uuid-a"], "批量与单目标序列逐字段一致")
+}
+
 func TestMetric_QueryAutoResolutionPicksTier(t *testing.T) {
 	svc := newMetricSvc(t)
 	base := metricBase()

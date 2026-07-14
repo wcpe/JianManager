@@ -27,9 +27,14 @@ func NewMetricHandler(metricSvc *service.MetricService, authz *service.AuthzServ
 func (h *MetricHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	m := rg.Group("/metrics")
 	m.GET("/series", h.Series)
+	m.POST("/series/batch", h.SeriesBatch)
 	m.GET("/overview", h.Overview)
 	m.GET("/processes/top", h.ProcessTop)
 }
+
+// metricBatchMaxTargets 批量序列端点的目标数硬上限（FR-334）。去重后超出即 422。
+// 与 processes/top 的 limit 上限（parseProcessTopLimit）对齐取 50。
+const metricBatchMaxTargets = 50
 
 var metricRangeDurations = map[string]time.Duration{
 	"1h":  time.Hour,
@@ -118,6 +123,122 @@ func (h *MetricHandler) Series(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"resolution": res, "from": from, "to": to, "series": series})
+}
+
+// seriesBatchRequest 批量序列请求体（FR-334）。POST 承载只读查询：50 个 UUID 入 query 过长，body 语义清晰。
+type seriesBatchRequest struct {
+	Scope      string   `json:"scope"`
+	TargetIDs  []string `json:"targetIds"`
+	Metrics    []string `json:"metrics"`
+	Range      string   `json:"range"`
+	Resolution string   `json:"resolution"`
+}
+
+// skippedTarget 被剔除的目标（无权/不存在），随批量响应返回，供前端区分「无数据」与「被剔除」（FR-334）。
+type skippedTarget struct {
+	TargetID string `json:"targetId"`
+	Reason   string `json:"reason"` // forbidden | not_found
+}
+
+// SeriesBatch 批量返回多个实例目标的历史曲线，消 NodeInstanceCompare 的 N+1 请求（FR-334）。
+// 逐目标复用实例访问收敛（等价 CanAccessInstance，走 AccessibleInstanceIDs 集合判定）：
+// 无权/不存在的目标剔除并列入 skipped，不整拒——对比场景个别目标越权不应让整图空白。
+// v1 仅支持 scope=instance（对比场景只有实例维度有 N+1，node 单查询无此问题）。
+func (h *MetricHandler) SeriesBatch(c *gin.Context) {
+	access := getAccess(c)
+	if access == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
+		return
+	}
+
+	var req seriesBatchRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求体非法"})
+		return
+	}
+	if req.Scope != string(model.MetricScopeInstance) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_SCOPE", "message": "scope 必须为 instance"})
+		return
+	}
+
+	targetIDs := dedupeStrings(req.TargetIDs)
+	if len(targetIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "targetIds 缺失或为空"})
+		return
+	}
+	if len(targetIDs) > metricBatchMaxTargets {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "TOO_MANY_TARGETS", "message": "对比目标过多，最多 50 个"})
+		return
+	}
+
+	switch req.Resolution {
+	case "", "auto", "raw", "5m", "1h":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_RESOLUTION", "message": "resolution 非法"})
+		return
+	}
+
+	rng := req.Range
+	if rng == "" {
+		rng = "24h"
+	}
+	dur, ok := metricRangeDurations[rng]
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_RANGE", "message": "range 非法"})
+		return
+	}
+	now := time.Now().UTC()
+	from, to := now.Add(-dur), now
+
+	// uuid→id 一次解析；解析不到的入 skipped(not_found)。
+	idByUUID, err := h.metricSvc.ResolveInstanceIDs(targetIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return
+	}
+
+	// 鉴权批量化：一次取可访问实例 id 集（platform admin 返回 scoped=false 全放行），
+	// 集合外的目标入 skipped(forbidden)——与逐目标 CanAccessInstance 判定等价但免 N 次查询。
+	allowedIDs, scoped, err := h.authz.AccessibleInstanceIDs(access)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return
+	}
+	allowedSet := make(map[uint]struct{}, len(allowedIDs))
+	for _, id := range allowedIDs {
+		allowedSet[id] = struct{}{}
+	}
+
+	survivors := make([]string, 0, len(targetIDs))
+	skipped := make([]skippedTarget, 0)
+	for _, uuid := range targetIDs {
+		id, found := idByUUID[uuid]
+		if !found {
+			skipped = append(skipped, skippedTarget{TargetID: uuid, Reason: "not_found"})
+			continue
+		}
+		if scoped {
+			if _, ok := allowedSet[id]; !ok {
+				skipped = append(skipped, skippedTarget{TargetID: uuid, Reason: "forbidden"})
+				continue
+			}
+		}
+		survivors = append(survivors, uuid)
+	}
+
+	q := service.SeriesQuery{
+		Scope:      model.MetricScopeInstance,
+		MetricKeys: req.Metrics,
+		From:       from,
+		To:         to,
+		Resolution: req.Resolution,
+	}
+	res, series, err := h.metricSvc.QuerySeriesBatch(q, survivors)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"resolution": res, "from": from, "to": to, "series": series, "skipped": skipped})
 }
 
 // Overview 返回总览页跨节点聚合：当前总量 + 聚合曲线（总 CPU 均值 / 总内存 / 总在线玩家）。
@@ -235,6 +356,24 @@ func parseMetricRange(c *gin.Context) (time.Time, time.Time, bool) {
 		return time.Time{}, time.Time{}, false
 	}
 	return now.Add(-dur), now, true
+}
+
+// dedupeStrings 去重并保序，剔除空白项（批量目标 UUID 归一，FR-334）。
+func dedupeStrings(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 func splitMetricKeys(s string) []string {

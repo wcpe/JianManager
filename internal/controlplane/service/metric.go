@@ -123,6 +123,23 @@ func (s *MetricService) ResolveInstanceID(uuid string) (uint, bool, error) {
 	return 0, false, err
 }
 
+// ResolveInstanceIDs 批量由实例 UUID 取数值 ID（ResolveInstanceID 的批量形态，FR-334）。
+// 一次 IN 查询返回 uuid→id 映射；查不到的 uuid 不在结果中（调用方据此归入 skipped:not_found）。
+func (s *MetricService) ResolveInstanceIDs(uuids []string) (map[string]uint, error) {
+	out := map[string]uint{}
+	if len(uuids) == 0 {
+		return out, nil
+	}
+	var instances []model.Instance
+	if err := s.db.Select("id", "uuid").Where("uuid IN ?", uuids).Find(&instances).Error; err != nil {
+		return nil, err
+	}
+	for _, inst := range instances {
+		out[inst.UUID] = inst.ID
+	}
+	return out, nil
+}
+
 // selectResolution 据查询跨度自动选档；显式 resolution 优先。
 func selectResolution(span time.Duration, requested string) string {
 	switch requested {
@@ -461,6 +478,39 @@ func (s *MetricService) QuerySeries(q SeriesQuery) (string, []Series, error) {
 			return res, nil, err
 		}
 		out = append(out, Series{MetricKey: sr.MetricKey, Unit: sr.Unit, World: sr.World, Points: pts})
+	}
+	return res, out, nil
+}
+
+// QuerySeriesBatch 批量返回多个实例目标的历史曲线（FR-334：消 N+1）。整批同档同窗，
+// 序列表一次 IN 查询后按 instance_id 分组，逐序列点位复用 queryPoints（与单目标版一致）。
+// instanceIDs 为已解析的实例 UUID（每个都是响应中的 targetId 键）；out 保证每个入参 UUID
+// 都有条目（无序列的目标返空数组，与单目标端点空 series 语义一致，前端可区分「无数据」与「被剔除」）。
+func (s *MetricService) QuerySeriesBatch(q SeriesQuery, instanceIDs []string) (string, map[string][]Series, error) {
+	res := selectResolution(q.To.Sub(q.From), q.Resolution)
+	out := make(map[string][]Series, len(instanceIDs))
+	for _, id := range instanceIDs {
+		out[id] = []Series{} // 预置空数组，无序列目标也在响应中出现
+	}
+	if len(instanceIDs) == 0 {
+		return res, out, nil
+	}
+
+	sq := s.db.Model(&model.MetricSeries{}).Where("instance_id IN ?", instanceIDs)
+	if len(q.MetricKeys) > 0 {
+		sq = sq.Where("metric_key IN ?", q.MetricKeys)
+	}
+	var rows []model.MetricSeries
+	if err := sq.Order("instance_id, metric_key, world").Find(&rows).Error; err != nil {
+		return res, nil, err
+	}
+
+	for _, sr := range rows {
+		pts, err := s.queryPoints(sr.ID, res, q.From.UTC(), q.To.UTC())
+		if err != nil {
+			return res, nil, err
+		}
+		out[sr.InstanceID] = append(out[sr.InstanceID], Series{MetricKey: sr.MetricKey, Unit: sr.Unit, World: sr.World, Points: pts})
 	}
 	return res, out, nil
 }
