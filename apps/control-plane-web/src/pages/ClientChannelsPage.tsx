@@ -28,6 +28,7 @@ import {
   type ClientKeyWithSecret,
 } from '@/api/clientChannels'
 import { copyToClipboard } from '@/lib/clipboard'
+import { useTabParam } from '@/lib/use-tab-param'
 import {
   deriveReadiness,
   readinessCompletedCount,
@@ -102,7 +103,6 @@ export default function ClientChannelsPage() {
     return (
       <ChannelWorkbench
         channelId={selected}
-        initialTab={searchParams.get('tab') as WorkbenchTab | null}
         onBack={backToList}
       />
     )
@@ -329,24 +329,16 @@ function CreateChannelDialog({
  */
 function ChannelWorkbench({
   channelId,
-  initialTab,
   onBack,
 }: {
   channelId: string
-  /** 还原入口（FR-191 从发布页返回时为 'versions'）；非法/缺省回落 'keys'。 */
-  initialTab?: WorkbenchTab | null
   onBack: () => void
 }) {
   const { t } = useTranslation()
   const { data: detail, isLoading } = useClientChannel(channelId)
   const del = useDeleteClientChannel()
 
-  const validInitialTab: WorkbenchTab = (['keys', 'versions', 'core', 'stats', 'guide'] as const).includes(
-    initialTab as WorkbenchTab,
-  )
-    ? (initialTab as WorkbenchTab)
-    : 'keys'
-  const [tab, setTab] = useState<WorkbenchTab>(validInitialTab)
+  const [tab, setTab] = useTabParam<WorkbenchTab>('tab', 'keys', ['keys', 'versions', 'core', 'stats', 'guide'])
   const [deleteChannel, setDeleteChannel] = useState(false)
   // 就绪度步骤器「创建密钥」CTA 直接开建密钥模态（BUG-E）：开关上提到工作台、随 tab 自动归零。
   const [keyCreateOpen, setKeyCreateOpen] = useState(false)
@@ -402,7 +394,7 @@ function ChannelWorkbench({
         }}
       />
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as WorkbenchTab)}>
+      <Tabs value={tab} onValueChange={setTab}>
         <TabsList variant="line">
           <TabsTrigger value="keys">{t('clientChannels.manageKeys', '拉取密钥')}</TabsTrigger>
           <TabsTrigger value="versions">{t('clientVersions.tab', '版本管理')}</TabsTrigger>

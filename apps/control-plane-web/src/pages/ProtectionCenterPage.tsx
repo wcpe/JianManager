@@ -40,6 +40,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
 import { Textarea } from '@jianmanager/ui/components/textarea'
 import DangerConfirm from '@/components/DangerConfirm'
+import { useTabParam } from '@/lib/use-tab-param'
 
 const EMPTY = '—'
 
@@ -721,6 +722,7 @@ function GroupsTab() {
 }
 
 export default function ProtectionCenterPage() {
+  const [tab, setTab] = useTabParam('tab', 'overview', ['overview', 'events', 'logs', 'profiles', 'ip', 'actions', 'players', 'groups'])
   return (
     <div data-page="client-dist-security" className="jm-page-stack space-y-4">
       <div className="jm-page-header">
@@ -733,7 +735,7 @@ export default function ProtectionCenterPage() {
         </div>
         <Badge variant="outline"><ShieldAlert className="size-3" /> FR-264</Badge>
       </div>
-      <Tabs defaultValue="overview" className="space-y-4">
+      <Tabs value={tab} onValueChange={setTab} className="space-y-4">
         <TabsList className="jm-toolbar-surface flex h-auto w-full flex-wrap justify-start gap-1 p-1">
           <TabsTrigger className="flex-none" value="overview">安全总览</TabsTrigger>
           <TabsTrigger className="flex-none" value="events">异常请求</TabsTrigger>

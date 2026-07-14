@@ -42,6 +42,7 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import type { DistBucket } from '@/lib/platform-stats'
+import { useTabParam } from '@/lib/use-tab-param'
 
 const ROLE_PLATFORM_ADMIN = 10
 const ALL_CHANNELS = '__all__'
@@ -587,7 +588,7 @@ export default function ClientDistMonitoringPage() {
   const { t } = useTranslation()
   const [range, setRange] = useState<MetricRange>('7d')
   const [channel, setChannel] = useState<string>(ALL_CHANNELS)
-  const [tab, setTab] = useState<PageTab>('statistics')
+  const [tab, setTab] = useTabParam<PageTab>('tab', 'statistics', ['statistics', 'monitor', 'logs', 'clients'])
   const [runtimeLink, setRuntimeLink] = useState<RuntimeLink>({})
 
   const isPlatformAdmin = useAuthStore((s) => s.role) === ROLE_PLATFORM_ADMIN
@@ -630,7 +631,7 @@ export default function ClientDistMonitoringPage() {
           <p className="py-10 text-center text-sm text-muted-foreground">{t('clientDistMonitor.adminOnly')}</p>
         </Panel>
       ) : (
-        <Tabs value={tab} onValueChange={(v) => setTab(v as PageTab)}>
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList variant="line">
             <TabsTrigger value="statistics"><Search className="size-3.5" />{t('clientDistMonitor.tabStatistics')}</TabsTrigger>
             <TabsTrigger value="monitor"><Activity className="size-3.5" />{t('clientDistMonitor.tabMonitor')}</TabsTrigger>
