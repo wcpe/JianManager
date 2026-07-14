@@ -1,7 +1,7 @@
 import { Activity, useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { Activity as ActivityIcon, AlertTriangle, Boxes, Gauge, HardDrive, Layers, Loader2, Play, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
+import { Activity as ActivityIcon, AlertTriangle, Gauge, HardDrive, Layers, Loader2, Play, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
 
 import { useInstance, useKillInstance, useRestartInstance, useStartInstance, useStopInstance, isProvisioningInstance } from '@/api/instances'
 import DangerConfirm from '@/components/DangerConfirm'
@@ -16,6 +16,8 @@ import { cn, instanceStatusLevel } from '@jianmanager/ui'
 import { instanceStatusGlowClass } from '@/lib/instance-glow'
 import type { CardType } from '@/lib/workspace-card'
 import CrashDiagnosticsCard from './CrashDiagnosticsCard'
+import InstanceBackupSegment from './InstanceBackupSegment'
+import InstancePlayersSegment from './InstancePlayersSegment'
 import WorkspaceCardBody from './WorkspaceCardBody'
 import { recordRecentServer } from './server-selection'
 
@@ -230,14 +232,18 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
                 watchItems={watchItems}
                 probeConnected={serverState?.connected ?? false}
               />
+            ) : tab === 'players' ? (
+              /* 玩家分区接真（FR-339）：本实例作用域的在线/踢封/封禁/白名单。 */
+              <InstancePlayersSegment instanceId={instance.id} />
+            ) : tab === 'backup' ? (
+              /* 备份·定时分区接真（FR-339）：本实例定时任务启停/删 + 备份创建/恢复/删除。 */
+              <InstanceBackupSegment instanceId={instance.id} />
             ) : TAB_CARD_TYPE[tab] ? (
               <div className="min-h-[520px] rounded-lg border bg-card shadow-soft">
                 {/* persistTerminal：终端连接由管理器常驻，页签隐藏/切换不断 WS（FR-295）。 */}
                 <WorkspaceCardBody instanceId={instance.id} type={TAB_CARD_TYPE[tab]!} persistTerminal />
               </div>
-            ) : (
-              <PlaceholderPanel tab={tab} />
-            )}
+            ) : null}
           </Activity>
         ))}
       </div>
@@ -406,20 +412,6 @@ function KpiCard({ icon: Icon, label, value, sub, progress, danger }: { icon: Lu
       <div className="mt-2 h-1.5 overflow-hidden rounded-sm bg-muted">
         <div className={cn('h-full rounded-sm', danger ? 'bg-status-danger' : progress > 80 ? 'bg-status-warning' : 'bg-primary')} style={{ width: `${Math.max(4, Math.min(100, progress))}%` }} />
       </div>
-    </div>
-  )
-}
-
-function PlaceholderPanel({ tab }: { tab: TabKey }) {
-  const { t } = useTranslation()
-  return (
-    <div className="rounded-lg border bg-card p-6 shadow-soft">
-      <div className="flex items-center gap-2 text-sm font-semibold">
-        {tab === 'players' ? <Users className="size-4 text-primary" /> : <Boxes className="size-4 text-primary" />}
-        {t(TAB_LABEL_KEY[tab])}
-      </div>
-      <p className="mt-2 text-sm text-muted-foreground">{t('serverConsole.placeholderTitle')}</p>
-      <p className="mt-1 text-xs text-muted-foreground">{t('serverConsole.placeholderHint')}</p>
     </div>
   )
 }
