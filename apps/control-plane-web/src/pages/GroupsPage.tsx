@@ -9,6 +9,7 @@ import GroupMembersDialog from '@/components/GroupMembersDialog'
 import DangerConfirm from '@/components/DangerConfirm'
 import { Button } from '@jianmanager/ui/components/button'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { formatSizeMb } from '@/pages/backups-view'
 
 /** 用户组详情可打开的面板（FR-128 可寻址）：编辑属性 / 管理成员。 */
 type GroupPanel = 'edit' | 'members'
@@ -101,7 +102,7 @@ export default function GroupsPage() {
                   <QuotaChip
                     icon={<HardDrive className="size-3" />}
                     label={t('groups.storageQuota')}
-                    value={`${g.quota.maxStorageMb}MB`}
+                    value={formatSizeMb(g.quota.maxStorageMb)}
                   />
                 </div>
               )}

@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router'
-import { Suspense, lazy } from 'react'
+import { Suspense, lazy, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useAuthStore } from '@/stores/auth'
 import WorkspaceEmpty from './WorkspaceEmpty'
 
 const OverviewPage = lazy(() => import('@/pages/OverviewPage'))
@@ -36,6 +37,20 @@ const TasksPage = lazy(() => import('@/pages/TasksPage'))
 const NotificationCenterPage = lazy(() => import('@/pages/NotificationCenterPage'))
 const SuperWorkbenchPage = lazy(() => import('./SuperWorkbenchPage'))
 const DirectorConsolePage = lazy(() => import('./DirectorConsolePage'))
+
+/** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
+const ROLE_PLATFORM_ADMIN = 10
+
+/**
+ * 管理页路由级角色守卫：此前仅靠侧栏按角色隐藏入口，URL 直达仍可进页。
+ * 非平台管理员一律重定向首页；页内既有角色兜底（如 DatabasePage/SystemUpdatePage）保留作纵深防御，
+ * 后端 RBAC 仍是最终强制。
+ */
+function RequirePlatformAdmin({ children }: { children: ReactNode }) {
+  const role = useAuthStore((s) => s.role)
+  if (role !== ROLE_PLATFORM_ADMIN) return <Navigate to="/" replace />
+  return <>{children}</>
+}
 /**
  * 运维控制台右侧工作区（ADR-009 / FR-037 / FR-039 / FR-166 / FR-167 / FR-269）。
  * 打开服务器时默认渲染固定分区的服务器统一控制台；可组合卡片画布保留为高级拼屏能力。
@@ -114,9 +129,9 @@ export default function Workspace() {
             <Route path="observability" element={<Navigate to="/monitor" replace />} />
             <Route path="storage" element={<StoragePage />} />
             <Route path="settings" element={<SettingsPage />} />
-            <Route path="database" element={<DatabasePage />} />
-            <Route path="system-update" element={<SystemUpdatePage />} />
-            <Route path="licenses" element={<LicensesPage />} />
+            <Route path="database" element={<RequirePlatformAdmin><DatabasePage /></RequirePlatformAdmin>} />
+            <Route path="system-update" element={<RequirePlatformAdmin><SystemUpdatePage /></RequirePlatformAdmin>} />
+            <Route path="licenses" element={<RequirePlatformAdmin><LicensesPage /></RequirePlatformAdmin>} />
             <Route path="*" element={<WorkspaceEmpty />} />
           </Routes>
         </div>

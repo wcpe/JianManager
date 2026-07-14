@@ -47,6 +47,7 @@ const requiredSystemUpdateKeys = [
   'checkUpdate',
   'checking',
   'controlPlane',
+  'copySha',
   'cpRollbackConfirm',
   'cpRollbackConfirmDesc',
   'cpRollbackFailed',
@@ -184,7 +185,10 @@ describe('SystemUpdatePage（mock 假后端）', () => {
     const panel = await screen.findByRole('region', { name: 'Worker 二进制缓存' })
     expect(within(panel).getByText('linux/amd64')).toBeInTheDocument()
     expect(within(panel).getByText('windows/amd64')).toBeInTheDocument()
-    expect(await within(panel).findByText('0123456789abcdef'.repeat(4))).toBeInTheDocument()
+    // sha256 截断展示（前 8…后 8），全量 hash 挂 title 供悬停查看 + 点击复制。
+    const shaButton = await within(panel).findByText('01234567…89abcdef')
+    expect(shaButton.closest('button')).toHaveAttribute('title', '0123456789abcdef'.repeat(4))
+    expect(shaButton.closest('button')).toHaveAttribute('aria-label', '复制 SHA256')
     expect(within(panel).getByText('1.0 MB')).toBeInTheDocument()
     expect(within(panel).getByText(/2026-07-06/)).toBeInTheDocument()
     expect(within(panel).getByText('sha256 校验失败')).toBeInTheDocument()
@@ -216,7 +220,7 @@ describe('SystemUpdatePage（mock 假后端）', () => {
     const linuxRow = within(panel).getByText('linux/amd64').closest('tr') as HTMLElement
     expect(within(linuxRow).getByText('0.12.0')).toBeInTheDocument()
     expect(within(linuxRow).getByText('未缓存')).toBeInTheDocument()
-    expect(within(linuxRow).queryByText('a'.repeat(64))).not.toBeInTheDocument()
+    expect(within(linuxRow).queryByText('aaaaaaaa…aaaaaaaa')).not.toBeInTheDocument()
   })
 
   it('点击预缓存后刷新 Worker 二进制缓存状态', async () => {
@@ -233,7 +237,7 @@ describe('SystemUpdatePage（mock 假后端）', () => {
     await waitFor(() => {
       const refreshedRow = within(panel).getByText('windows/amd64').closest('tr') as HTMLElement
       expect(within(refreshedRow).getByText('已缓存')).toBeInTheDocument()
-      expect(within(refreshedRow).getByText('fedcba9876543210'.repeat(4))).toBeInTheDocument()
+      expect(within(refreshedRow).getByText('fedcba98…76543210')).toBeInTheDocument()
       expect(within(refreshedRow).queryByText('sha256 校验失败')).not.toBeInTheDocument()
     })
   })

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { RefreshCw, ArrowUpCircle, ArrowDownCircle, ServerCog, AlertCircle, CheckCircle2, Clock, Download } from 'lucide-react'
+import { RefreshCw, ArrowUpCircle, ArrowDownCircle, ServerCog, AlertCircle, CheckCircle2, Clock, Copy, Download } from 'lucide-react'
 import {
   useSelfUpdateCheck,
   useRefreshSelfUpdateCheck,
@@ -30,6 +30,7 @@ import DangerConfirm from '@/components/DangerConfirm'
 import { ReleaseNotes } from '@/components/ReleaseNotes'
 import { formatCacheBytes } from '@/lib/artifact-cache'
 import { formatRelativeTime } from '@/lib/relative-time'
+import { copyToClipboard } from '@/lib/clipboard'
 
 /** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
 const ROLE_PLATFORM_ADMIN = 10
@@ -557,7 +558,27 @@ function WorkerAssetTableRow({
       <TableCell className="whitespace-nowrap font-mono text-xs">{row.os}/{row.arch}</TableCell>
       <TableCell className="whitespace-nowrap font-mono text-xs">{row.version || '-'}</TableCell>
       <TableCell><WorkerAssetCacheBadge cached={row.cached} /></TableCell>
-      <TableCell className="min-w-48 max-w-80 break-all font-mono text-[11px]">{row.sha256 || '-'}</TableCell>
+      {/* 全量 64 位 hash 铺开会把表格挤宽；截断展示（前 8…后 8），title 悬停看全量、点击复制全量。 */}
+      <TableCell className="whitespace-nowrap font-mono text-[11px]">
+        {row.sha256 ? (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 text-muted-foreground transition-colors hover:text-foreground"
+            title={row.sha256}
+            aria-label={t('systemUpdate.copySha', '复制 SHA256')}
+            onClick={async () => {
+              const ok = await copyToClipboard(row.sha256)
+              if (ok) toast.success(t('artifactCache.shaCopied', '已复制 SHA256'))
+              else toast.error(t('common.copyFailed', '复制失败'))
+            }}
+          >
+            <span>{`${row.sha256.slice(0, 8)}…${row.sha256.slice(-8)}`}</span>
+            <Copy className="size-3" />
+          </button>
+        ) : (
+          '-'
+        )}
+      </TableCell>
       <TableCell className="whitespace-nowrap font-mono text-xs">{formatCacheBytes(row.size)}</TableCell>
       <TableCell className="whitespace-nowrap font-mono text-xs">{formatWorkerAssetTime(row.cachedAt)}</TableCell>
       <TableCell className={row.lastError ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'}>
@@ -664,7 +685,7 @@ function NodeRow({ node, latest, disabled, onUpgraded }: { node: ComponentStatus
         <DangerConfirm
           open={confirm}
           title={t('systemUpdate.nodeUpgradeConfirm', '确定升级该节点？')}
-          description={t('systemUpdate.nodeUpgradeConfirmDesc', '将令该节点下载新版 Worker、sha256 校验后替换并重启。daemon 模式下运行中的游戏服不掉。')}
+          description={t('systemUpdate.nodeUpgradeConfirmDesc', '将令该节点下载新版 Worker（{{v}}）、sha256 校验后替换并重启。daemon 模式下运行中的游戏服不掉。', { v: latest })}
           scope="platform"
           confirmLabel={t('systemUpdate.upgrade', '升级')}
           onConfirm={doUpgrade}

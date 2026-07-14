@@ -208,7 +208,7 @@ export default function BackupStoragesPage() {
               )}
               <div className="flex flex-col gap-1 text-sm">
                 <FieldLabel>{t('backupStorages.accessKeyEnv', 'Access Key 环境变量')}</FieldLabel>
-                <input className="p-2 border rounded bg-background font-mono aria-invalid:border-destructive" placeholder={t('backupStorages.credentialHint', '')}
+                <input className="p-2 border rounded bg-background font-mono aria-invalid:border-destructive" placeholder={t('backupStorages.accessKeyHint', '')}
                   aria-invalid={!!gate.show('accessKeyEnv', errors.accessKeyEnv)}
                   value={form.accessKeyEnv} onChange={(e) => set('accessKeyEnv', e.target.value)}
                   onBlur={() => gate.touch('accessKeyEnv')} />
@@ -216,7 +216,7 @@ export default function BackupStoragesPage() {
               </div>
               <div className="flex flex-col gap-1 text-sm">
                 <FieldLabel>{t('backupStorages.secretKeyEnv', 'Secret Key 环境变量')}</FieldLabel>
-                <input className="p-2 border rounded bg-background font-mono aria-invalid:border-destructive" placeholder={t('backupStorages.credentialHint', '')}
+                <input className="p-2 border rounded bg-background font-mono aria-invalid:border-destructive" placeholder={t('backupStorages.secretKeyHint', '')}
                   aria-invalid={!!gate.show('secretKeyEnv', errors.secretKeyEnv)}
                   value={form.secretKeyEnv} onChange={(e) => set('secretKeyEnv', e.target.value)}
                   onBlur={() => gate.touch('secretKeyEnv')} />
