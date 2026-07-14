@@ -73,10 +73,13 @@
 ## 用户
 
 ### GET /api/v1/users
-- **描述**: 用户列表（平台管理员）
-- **关联 FR**: FR-002
+- **描述**: 用户列表（平台管理员）。可选服务端搜索/分页（FR-336）。
+- **关联 FR**: FR-002 / FR-336
 - **权限**: `user.read`
-- **响应** (200): `[{ id, uuid, username, role, status, createdAt }]`
+- **Query**: `q`（用户名模糊，两形态均生效）· `limit`（1–500，携带即切分页信封形态）· `offset`（≥0，仅 limit>0 生效）
+- **响应形态分流**（按是否携带 `limit`）:
+  - 不带 `limit`（兼容既有）: `[{ id, uuid, username, role, status, createdAt }]`
+  - 带 `limit`（分页信封）: `{ items: [...同上], total, limit, offset }`（`total` 与 `q` 同源）
 
 ### GET /api/v1/users/:id
 - **描述**: 用户详情
