@@ -393,10 +393,10 @@
 - **权限**: `instance.delete`
 
 ### POST /api/v1/instances/:id/start
-- **描述**: 启动实例。启动前依次过：在途搭建闸（FR-319 二轮②/FR-331，关联本实例的 provision 任务未终态即 422 拒绝并引导看任务中心）、内存水位预警闸（FR-317）、同步预检（FR-314）
-- **关联 FR**: FR-005、FR-314、FR-317、FR-319、FR-331
+- **描述**: 启动实例。启动前依次过：在途长操作闸（FR-319 二轮②/FR-331，FR-323 补漏扩展：关联本实例的 provision/import/clone 任务未终态即 422 拒绝，文案按 kind 区分「搭建中/导入中/克隆中」并引导看任务中心）、内存水位预警闸（FR-317）、同步预检（FR-314）
+- **关联 FR**: FR-005、FR-314、FR-317、FR-319、FR-323、FR-331
 - **权限**: `instance.operate`
-- **错误**: 409 `NODE_OFFLINE`（节点未连接，预检无法执行）；422 `PREFLIGHT_FAILED`（预检未通过，带具体原因）；422 `INVALID_TRANSITION`（状态机拒绝 / 搭建中「实例正在搭建中（核心下载未完成）…」/ 内存水位不足）
+- **错误**: 409 `NODE_OFFLINE`（节点未连接，预检无法执行）；422 `PREFLIGHT_FAILED`（预检未通过，带具体原因）；422 `INVALID_TRANSITION`（状态机拒绝 / 长操作在途「实例正在搭建中（核心下载未完成）…/导入中（目录搬迁未完成）…/克隆中（工作目录复制未完成）…」/ 内存水位不足）
 
 ### POST /api/v1/instances/:id/stop
 - **描述**: 停止实例
@@ -439,7 +439,7 @@
   - `command`：`action=command` 时必填；目标上限 5000（超出 → 400）
   - 动作映射（复用既有 per-instance RPC）：`command`→SendCommand（仅对 RUNNING 实例）、`start/stop/restart/kill`→Start/Stop/Restart/KillInstance
   - 生命周期动作委托结果回写终态，失败回写 CRASHED；`command` 不改实例状态
-  - 在途搭建闸（FR-331 补漏 FR-319 二轮②）：`start`/`restart` 对「关联 provision 任务未终态」的实例逐条拒绝——计入 `failed` 并带「实例正在搭建中…」明细，**不回写 CRASHED**（实例本身无恙）
+  - 在途长操作闸（FR-331 补漏 FR-319 二轮②，FR-323 补漏扩展 import/clone）：`start`/`restart` 对「关联 provision/import/clone 任务未终态」的实例逐条拒绝——计入 `failed` 并带按 kind 区分的「实例正在搭建中/导入中/克隆中…」明细，**不回写 CRASHED**（实例本身无恙）
 - **响应**:
   ```json
   {

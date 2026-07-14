@@ -830,9 +830,10 @@ func (s *InstanceService) Start(id uint) error {
 		return err
 	}
 
-	// 在途搭建闸（FR-319）：一键搭建异步化后实例秒回 STOPPED 可点启动，但核心可能还在
-	// 后台下载——此时启动会得到 corrupt/缺失 jar。若有未终态的 provision 任务关联本实例即拒。
-	if err := provisionInFlightGate(s.db, id); err != nil {
+	// 在途长操作闸（FR-319/FR-323）：搭建/导入/克隆异步化后实例秒回 STOPPED 可点启动，
+	// 但核心可能还在下载、目录还在搬迁/拷贝——此时启动会得到半截工作目录。
+	// 若有未终态的 provision/import/clone 任务关联本实例即拒。
+	if err := longOpInFlightGate(s.db, id); err != nil {
 		return err
 	}
 
@@ -859,23 +860,30 @@ func (s *InstanceService) Start(id uint) error {
 	return nil
 }
 
-// provisionInFlightGate 拦截「核心还在下载就点启动」（FR-319 二轮②）：
-// 查有无关联该实例、未终态（pending/running）的 provision 任务，有则拒启并引导看任务中心。
+// longOpInFlightGate 拦截「工作目录尚未就绪就点启动」（FR-319 二轮②，FR-323 补漏扩展）：
+// 搭建（provision，核心下载中）/导入（import，migrate 搬迁中）/克隆（clone，目录拷贝中）
+// 任一未终态（pending/running）任务关联本实例即拒启，文案按 kind 区分并引导看任务中心。
 // 包级函数：单实例 Start 与批量 start/restart（FR-331 补漏）共用同一道闸。
-func provisionInFlightGate(db *gorm.DB, instanceID uint) error {
-	var count int64
+func longOpInFlightGate(db *gorm.DB, instanceID uint) error {
+	var kinds []string
 	err := db.Model(&model.Task{}).
-		Where("instance_id = ? AND kind = ? AND state IN ?",
-			instanceID, model.TaskKindProvision,
+		Where("instance_id = ? AND kind IN ? AND state IN ?",
+			instanceID,
+			[]string{model.TaskKindProvision, model.TaskKindImport, model.TaskKindClone},
 			[]model.TaskState{model.TaskStatePending, model.TaskStateRunning}).
-		Count(&count).Error
-	if err != nil {
+		Order("id").
+		Pluck("kind", &kinds).Error
+	if err != nil || len(kinds) == 0 {
 		return nil // 查询异常不阻断正常启动
 	}
-	if count > 0 {
+	switch kinds[0] {
+	case model.TaskKindImport:
+		return fmt.Errorf("实例正在导入中（目录搬迁未完成），请等待任务中心的导入任务完成后再启动")
+	case model.TaskKindClone:
+		return fmt.Errorf("实例正在克隆中（工作目录复制未完成），请等待任务中心的克隆任务完成后再启动")
+	default:
 		return fmt.Errorf("实例正在搭建中（核心下载未完成），请等待任务中心的搭建任务完成后再启动")
 	}
-	return nil
 }
 
 // memoryGate 启动前按节点心跳数据预判内存水位（FR-317）。
