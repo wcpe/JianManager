@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import {
   useBackupStorages,
   useCreateBackupStorage,
+  useUpdateBackupStorage,
   useDeleteBackupStorage,
   useTestBackupStorage,
   useTestBackupStorageDraft,
@@ -52,19 +53,23 @@ function formatBytes(bytes: number | undefined) {
 }
 
 /**
- * 备份远程存储后端管理页（FR-057）。
+ * 备份远程存储后端管理页（FR-057，编辑=FR-338）。
  * 凭证以 ${ENV_VAR} 形式引用环境变量，不收明文（config-files.md）；仅平台管理员可访问。
+ * 弹窗 create/edit 双模式：编辑受控回显现值（凭证即 ${VAR} 引用，非明文），type 不可改。
  */
 export default function BackupStoragesPage() {
   const { t } = useTranslation()
   const { data: storages, isLoading } = useBackupStorages()
   const create = useCreateBackupStorage()
+  const update = useUpdateBackupStorage()
   const del = useDeleteBackupStorage()
   const testStorage = useTestBackupStorage()
   const testDraft = useTestBackupStorageDraft()
   const [form, setForm] = useState<CreateBackupStorageBody>(emptyForm)
   const [draftTestResult, setDraftTestResult] = useState<BackupStorageTestResult | null>(null)
   const [showForm, setShowForm] = useState(false)
+  /** 编辑目标；null = 创建模式（FR-338）。 */
+  const [editing, setEditing] = useState<BackupStorage | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
   const gate = useFieldGate()
 
@@ -88,19 +93,39 @@ export default function BackupStoragesPage() {
       : form.type === 'sftp' ? t('backupStorages.endpointHintSftp', 'SFTP 主机')
         : t('backupStorages.endpointHintWebdav', 'WebDAV 基地址')
 
+  /** 编辑入口：行值受控填入表单（凭证字段即 ${VAR} 引用，原样回显无泄露，FR-338）。 */
+  const openEdit = (s: BackupStorage) => {
+    setForm({
+      name: s.name, type: s.type, endpoint: s.endpoint, bucket: s.bucket, region: s.region,
+      prefix: s.prefix, accessKeyEnv: s.accessKeyEnv, secretKeyEnv: s.secretKeyEnv, useSsl: s.useSsl,
+    })
+    setEditing(s)
+    setDraftTestResult(null)
+    gate.reset()
+    setShowForm(true)
+  }
+
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     gate.submit()
     if (hasErrors(errors)) return
     try {
-      await create.mutateAsync(form)
-      toast.success(t('backupStorages.create', '创建'))
+      if (editing) {
+        await update.mutateAsync({ id: editing.id, ...form })
+        toast.success(t('backupStorages.updated', '已更新'))
+      } else {
+        await create.mutateAsync(form)
+        toast.success(t('backupStorages.create', '创建'))
+      }
       setForm(emptyForm)
+      setEditing(null)
       gate.reset()
       setShowForm(false)
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
-      toast.error(msg || t('backupStorages.createFailed', '创建存储后端失败'))
+      toast.error(msg || (editing
+        ? t('backupStorages.updateFailed', '更新存储后端失败')
+        : t('backupStorages.createFailed', '创建存储后端失败')))
     }
   }
 
@@ -150,17 +175,24 @@ export default function BackupStoragesPage() {
         </div>
         <button
           className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-          onClick={() => { setForm(emptyForm); setDraftTestResult(null); gate.reset(); setShowForm(true) }}
+          onClick={() => { setForm(emptyForm); setEditing(null); setDraftTestResult(null); gate.reset(); setShowForm(true) }}
         >
           {t('backupStorages.add', '新增存储后端')}
         </button>
       </div>
 
-      <Dialog open={showForm} onOpenChange={(o) => { setShowForm(o); if (!o) setDraftTestResult(null) }}>
+      <Dialog open={showForm} onOpenChange={(o) => { setShowForm(o); if (!o) { setDraftTestResult(null); setEditing(null) } }}>
         <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
           <DialogHeader>
-            <DialogTitle>{t('backupStorages.add', '新增存储后端')}</DialogTitle>
+            <DialogTitle>
+              {editing ? t('backupStorages.edit', '编辑存储后端') : t('backupStorages.add', '新增存储后端')}
+            </DialogTitle>
           </DialogHeader>
+          {editing && editing.backupCount > 0 && (
+            <p className="text-xs rounded-md border border-status-warning/40 bg-status-warning/10 text-status-warning px-3 py-2">
+              {t('backupStorages.editInUseHint', '该后端已被备份引用：修改 Endpoint/Bucket/前缀不会迁移已有备份对象，可能影响旧备份的恢复定位。')}
+            </p>
+          )}
           <form id="backup-storage-form" onSubmit={submit}>
             <ScrollableDialogBody className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="flex flex-col gap-1 text-sm">
@@ -173,7 +205,8 @@ export default function BackupStoragesPage() {
               </div>
               <div className="flex flex-col gap-1 text-sm">
                 <FieldLabel>{t('backupStorages.type', '类型')}</FieldLabel>
-                <Combobox options={TYPE_OPTIONS} value={form.type} onChange={(v) => set('type', v)} allowCustom={false} />
+                {/* 编辑时 type 不可改（改型=删重建，后端 422 双保险，FR-338）。 */}
+                <Combobox options={TYPE_OPTIONS} value={form.type} onChange={(v) => set('type', v)} allowCustom={false} disabled={!!editing} />
               </div>
               <label className="flex flex-col gap-1 text-sm md:col-span-2">
                 {t('backupStorages.endpoint', 'Endpoint')}
@@ -244,8 +277,8 @@ export default function BackupStoragesPage() {
             >
               {t('backupStorages.testConnection', '测试连接')}
             </Button>
-            <Button type="submit" form="backup-storage-form" disabled={create.isPending || hasErrors(errors)}>
-              {t('backupStorages.create', '创建')}
+            <Button type="submit" form="backup-storage-form" disabled={create.isPending || update.isPending || hasErrors(errors)}>
+              {editing ? t('common.save', '保存') : t('backupStorages.create', '创建')}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -291,6 +324,9 @@ export default function BackupStoragesPage() {
                     disabled={testStorage.isPending && testStorage.variables === s.id}
                   >
                     {t('backupStorages.test', '测试')}
+                  </Button>
+                  <Button variant="ghost" size="xs" onClick={() => openEdit(s)}>
+                    {t('common.edit', '编辑')}
                   </Button>
                   <Button
                     variant="ghost"

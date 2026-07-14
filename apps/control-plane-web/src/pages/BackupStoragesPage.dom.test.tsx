@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { toast } from 'sonner'
 import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
@@ -21,6 +22,7 @@ if (!('ResizeObserver' in globalThis)) {
 /**
  * 备份存储后端页（FR-207 域簇）。三条强断言：
  * ① 渲染出 seed 存储后端；② 新建后列表联动出现新行；③ 注入 500 → 显空态（不崩溃）。
+ * FR-338 编辑流：回显现值（含 ${VAR} 凭证引用）/type 禁用/PUT 保存刷新 + lastTest 重置/撞名 422/草稿测试连接。
  * 表单字段标签未与 input 关联（FieldLabel 无 htmlFor），故按 DOM 顺序 / placeholder 选取。
  */
 describe('BackupStoragesPage（mock）', () => {
@@ -127,5 +129,103 @@ describe('BackupStoragesPage（mock）', () => {
     await waitFor(() => {
       expect(screen.queryByText('s3-primary')).not.toBeInTheDocument()
     })
+  })
+
+  // ---- 编辑（FR-338）----
+
+  it('编辑弹窗受控回显现值（含 ${VAR} 凭证引用原样）且 type 不可改', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<BackupStoragesPage />)
+    const row = (await screen.findByText('s3-primary')).closest('tr') as HTMLElement
+
+    await user.click(within(row).getByRole('button', { name: '编辑' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText('编辑存储后端')).toBeInTheDocument()
+
+    const [nameInput, endpointInput, bucketInput, regionInput, prefixInput, accessKeyInput, secretKeyInput] =
+      within(dialog).getAllByRole('textbox')
+    expect(nameInput).toHaveValue('s3-primary')
+    expect(endpointInput).toHaveValue('s3.amazonaws.com')
+    expect(bucketInput).toHaveValue('jm-backups')
+    expect(regionInput).toHaveValue('us-east-1')
+    expect(prefixInput).toHaveValue('prod/')
+    // 凭证即 ${ENV_VAR} 引用（非明文），原样回显无泄露。
+    expect(accessKeyInput).toHaveValue('${JIANMANAGER_BACKUP_S3_AK}')
+    expect(secretKeyInput).toHaveValue('${JIANMANAGER_BACKUP_S3_SK}')
+    // type 不可改（改型=删重建，后端 422 双保险）。
+    expect(within(dialog).getByRole('button', { name: 'S3' })).toBeDisabled()
+    // s3-primary 被 1 个备份引用 → 显示改指向风险提示条。
+    expect(within(dialog).getByText(/已被备份引用/)).toBeInTheDocument()
+  })
+
+  it('编辑保存提交 PUT → 列表反映新值且最近测试列回未测试态', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<BackupStoragesPage />)
+    const row = (await screen.findByText('s3-primary')).closest('tr') as HTMLElement
+    // seed 带既往测试结论，编辑成功后应被清空（配置已变，旧结论失效）。
+    expect(within(row).getByText('连接正常')).toBeInTheDocument()
+
+    await user.click(within(row).getByRole('button', { name: '编辑' }))
+    const dialog = await screen.findByRole('dialog')
+    const [nameInput, endpointInput] = within(dialog).getAllByRole('textbox')
+    await user.clear(nameInput)
+    await user.type(nameInput, 's3-renamed')
+    await user.clear(endpointInput)
+    await user.type(endpointInput, 'minio.internal:9000')
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+
+    // PUT 成功 → 关窗 + 列表刷新为新值（替换而非追加）。
+    const renamed = await screen.findByText('s3-renamed')
+    expect(screen.queryByText('s3-primary')).not.toBeInTheDocument()
+    const newRow = renamed.closest('tr') as HTMLElement
+    expect(within(newRow).getByText(/minio\.internal:9000/)).toBeInTheDocument()
+    // lastTest* 已清空 → 最近测试列回到未测试态。
+    expect(within(newRow).queryByText('连接正常')).not.toBeInTheDocument()
+  })
+
+  it('编辑撞其他后端名 → 422 错误 toast 展示后端 message 且不关窗', async () => {
+    const user = userEvent.setup()
+    const toastError = vi.spyOn(toast, 'error')
+    renderWithProviders(<BackupStoragesPage />)
+    const row = (await screen.findByText('s3-primary')).closest('tr') as HTMLElement
+
+    await user.click(within(row).getByRole('button', { name: '编辑' }))
+    const dialog = await screen.findByRole('dialog')
+    const [nameInput] = within(dialog).getAllByRole('textbox')
+    await user.clear(nameInput)
+    await user.type(nameInput, 'sftp-offsite') // 与 seed #2 撞名（devmock PUT 排除自身预检）
+    await user.click(within(dialog).getByRole('button', { name: '保存' }))
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(expect.stringContaining('存储后端名称已存在')),
+    )
+    // 失败不关窗，草稿保留可继续修改。
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('编辑草稿可先测试连接（body 同形，不落库）', async () => {
+    const user = userEvent.setup()
+    let draftBody: Record<string, unknown> | null = null
+    server.use(
+      http.post(API('/backup-storages/test'), async ({ request }) => {
+        draftBody = (await request.json()) as Record<string, unknown>
+        return HttpResponse.json({ ok: true, message: '编辑草稿连接正常', latencyMs: 5 })
+      }),
+    )
+    renderWithProviders(<BackupStoragesPage />)
+    const row = (await screen.findByText('s3-primary')).closest('tr') as HTMLElement
+
+    await user.click(within(row).getByRole('button', { name: '编辑' }))
+    const dialog = await screen.findByRole('dialog')
+    const [, endpointInput] = within(dialog).getAllByRole('textbox')
+    await user.clear(endpointInput)
+    await user.type(endpointInput, 'minio.new:9000')
+    await user.click(within(dialog).getByRole('button', { name: '测试连接' }))
+
+    await waitFor(() => expect(draftBody?.endpoint).toBe('minio.new:9000'))
+    expect(draftBody?.name).toBe('s3-primary')
+    expect(await screen.findByText('编辑草稿连接正常')).toBeInTheDocument()
+    // 仅测试草稿，未提交保存 → 列表原值不变。
+    expect(screen.getByText('s3-primary')).toBeInTheDocument()
   })
 })

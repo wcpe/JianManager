@@ -242,6 +242,43 @@ export const handlers = [
     return HttpResponse.json(created, { status: 201 })
   }),
 
+  // PUT 全量替换式编辑（FR-338）：404 / 改 type 422 / 名称冲突（排除自身）422，
+  // 成功后重置 lastTest*（配置已变，旧连通性结论失效），契约对齐真后端。
+  domainRoute('put', '/backup-storages/:id', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const existing = backupStorages.get(id)
+    if (!existing) return HttpResponse.json({ error: 'NOT_FOUND', message: '存储后端不存在' }, { status: 404 })
+    const body = (await info.request.json()) as CreateBackupStorageBody
+    if (body.type !== existing.type) {
+      return HttpResponse.json(
+        { error: 'BUSINESS_ERROR', message: `存储后端类型不可修改: ${existing.type} → ${body.type}` },
+        { status: 422 },
+      )
+    }
+    if (backupStorages.find((s) => s.name === body.name && s.id !== id)) {
+      return HttpResponse.json(
+        { error: 'BUSINESS_ERROR', message: `存储后端名称已存在: "${body.name}"` },
+        { status: 422 },
+      )
+    }
+    const updated = backupStorages.update(id, {
+      name: body.name,
+      endpoint: body.endpoint ?? '',
+      bucket: body.bucket ?? '',
+      region: body.region ?? '',
+      prefix: body.prefix ?? '',
+      accessKeyEnv: body.accessKeyEnv ?? '',
+      secretKeyEnv: body.secretKeyEnv ?? '',
+      useSsl: body.useSsl ?? true,
+      lastTestAt: undefined,
+      lastTestOk: false,
+      lastTestMessage: '',
+    })
+    return HttpResponse.json(updated)
+  }),
+
   domainRoute('post', '/backup-storages/test', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied

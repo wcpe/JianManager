@@ -57,10 +57,26 @@ export function useBackupStorages() {
   })
 }
 
+/** PUT body 与创建同形；type 须与现值一致（FR-338）。 */
+export type UpdateBackupStorageBody = CreateBackupStorageBody
+
+export interface UpdateBackupStorageVars extends CreateBackupStorageBody {
+  id: number
+}
+
 export function useCreateBackupStorage() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body: CreateBackupStorageBody) => api.post('/backup-storages', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['backup-storages'] }),
+  })
+}
+
+/** 更新存储后端（FR-338）。全量替换，body 同创建（type 须与现值一致，否则后端回 422）。 */
+export function useUpdateBackupStorage() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, ...body }: UpdateBackupStorageVars) => api.put(`/backup-storages/${id}`, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['backup-storages'] }),
   })
 }
