@@ -150,6 +150,12 @@ export default function NodeArtifactCachePanel({ nodeId, active = true }: NodeAr
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="truncate font-medium">{it.name || '—'}</span>
+                    {/* 类型徽章（FR-330）：核心缓存条目一眼可辨（当前仅 core 一类，按类型渐进扩展）。 */}
+                    {it.type === 'core' && (
+                      <span className="shrink-0 rounded-full bg-accent px-2 py-0.5 text-[10px] font-medium text-primary">
+                        {t('artifactCache.typeCore')}
+                      </span>
+                    )}
                     {it.version && <span className="shrink-0 text-xs text-muted-foreground">{it.version}</span>}
                   </div>
                   <button

@@ -299,6 +299,7 @@
   "artifactCache": {
     "title": "制品缓存",
     "drawerDesc": "节点本地按 sha256 缓存的服务端核心 jar，建实例命中即秒拷免重下。全局制品库管理见控制面板。",
+    "typeCore": "核心",
     "total": "总占用",
     "capLabel": "上限",
     "capInputLabel": "上限(GB)",

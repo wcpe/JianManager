@@ -299,6 +299,7 @@
   "artifactCache": {
     "title": "Artifact Cache",
     "drawerDesc": "Node-local core jars cached by sha256; instance creation copies on hit, no re-download. Global artifact library is managed in the control plane.",
+    "typeCore": "Core",
     "total": "Total",
     "capLabel": "Cap",
     "capInputLabel": "Cap (GB)",
