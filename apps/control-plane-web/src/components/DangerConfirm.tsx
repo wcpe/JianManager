@@ -1,6 +1,6 @@
 import { useEffect, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle, ShieldAlert } from 'lucide-react'
+import { AlertTriangle, Loader2, ShieldAlert } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -47,6 +47,8 @@ export interface DangerConfirmProps {
   onConfirm: () => void
   /** 取消/关闭回调。 */
   onCancel: () => void
+  /** 确认操作在途：为真时确认按钮旋转并禁用，防止删除/停止等在途重复提交。 */
+  pending?: boolean
 }
 
 /** 统一的危险操作确认弹窗，替代 window.confirm 与零散内联 ConfirmDialog。 */
@@ -59,6 +61,7 @@ export default function DangerConfirm({
   scope,
   onConfirm,
   onCancel,
+  pending = false,
 }: DangerConfirmProps) {
   const { t } = useTranslation()
   const inputId = useId()
@@ -78,7 +81,7 @@ export default function DangerConfirm({
   const canConfirm = !denied && textMatched
 
   const handleConfirm = () => {
-    if (!canConfirm) return
+    if (!canConfirm || pending) return
     onConfirm()
   }
 
@@ -121,7 +124,8 @@ export default function DangerConfirm({
           <Button variant="outline" onClick={onCancel}>
             {t('common.cancel')}
           </Button>
-          <Button variant="destructive" disabled={!canConfirm} onClick={handleConfirm}>
+          <Button variant="destructive" disabled={!canConfirm || pending} onClick={handleConfirm}>
+            {pending && <Loader2 className="size-4 animate-spin" aria-hidden />}
             {confirmLabel ?? t('common.delete')}
           </Button>
         </DialogFooter>
