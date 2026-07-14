@@ -3,14 +3,20 @@
 # 下次同步从此版本起做增量对账。
 
 synced_template_version: 0.1.0
-synced_at: 2026-06-26
-reconcile_mode: best-effort-full   # 本项目此前无戳记，做了全量两方对账（无 base，项目文件 vs 当前模板）
+synced_at: 2026-07-14
+reconcile_mode: incremental   # 上游仍为 0.1.0，规则正文无增量；本轮为补缺失文档 + 文件名归一
 
 notes: |
-  - .claude/rules/* 经对账判定为「项目定制超集」：architecture-invariants / testing-and-quality /
-    git-commit / static-analysis / decision-alignment 等均比上游 0.1.0 基线大且含 JianManager 专有内容
-    （三进程模型、gRPC、ADR 表、scope/type 枚举等），按技能红线保留不覆盖。
-  - 项目独有规则 doc-evolution.md / gate-{prd,sdd,api,merge}.md 上游无对应，保留。
-  - 已补 docs/specs/_template.md（项目原缺）。
-  - 未引入 docs/CONTRIBUTING.md：与项目自有 doc-evolution.md + docs/CONVENTIONS.md 职责重叠，
-    按用户决定不补，避免多真源。
+  - 2026-06-26 首轮（best-effort-full）：.claude/rules/* 判定为「项目定制超集」保留不覆盖；
+    补 docs/specs/_template.md；CONTRIBUTING 当时按用户决定未引入。
+  - 2026-07-14 本轮（用户指示补齐缺失文档）：
+    * 补 docs/CONTRIBUTING.md——按项目现实适配（version.go 真源/ADR-065、dev+master 分支、
+      task 命令面、CI 双门禁），只引用既有真源不复制正文，推翻首轮「不补」决定（用户明示）。
+    * 补 docs/adr/README.md（去掉模板的索引表——70+ 条 ADR 以文件为真源，避免双源漂移）。
+    * 补 docs/specs/README.md（路径适配项目目录式 docs/specs/<feature>/spec.md 约定）。
+    * 补 .github/PULL_REQUEST_TEMPLATE.md 与 ISSUE_TEMPLATE/{bug_report,feature_request}.md
+      （优先级口径改 P0/P1/P2 对齐 PRD）、.editorconfig（补 *.md 不裁尾空格例外）。
+    * docs/conventions.md → docs/CONVENTIONS.md 大小写归一（git mv），
+      修正 doc-evolution.md 中唯一小写引用。
+  - 项目独有规则 doc-evolution.md / gate-{prd,sdd,api,merge}.md / ui-modals.md / versioning.md
+    上游无对应，保留。

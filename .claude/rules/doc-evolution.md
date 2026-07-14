@@ -9,7 +9,7 @@
 | API | `docs/API.md` | **原地更新到当前真貌** | 和代码保持同步；endpoint 增删改直接体现在文档中 |
 | ADR | `docs/adr/*.md` | **只追加 + 取代，不删** | 新 ADR 编号递增；推翻旧决策时新 ADR 引用旧 ADR（superseded-by）；旧 ADR 不删除 |
 | CHANGELOG | `CHANGELOG.md` | **累积 + 发版分段** | `[Unreleased]` 段累积当前开发版变更；若已确定下一版本号，段首用一句话标明「本段为 `vX.Y.Z` 开发版归档区」及起止范围；正式发版时由 `sdd-release-version` 将该段提升为版本号段 |
-| Conventions | `docs/conventions.md` | **原地更新** | 规范变更直接修改 |
+| Conventions | `docs/CONVENTIONS.md` | **原地更新** | 规范变更直接修改 |
 | Feature Impl | `docs/specs/<feature>/impl.md` | **开发中持续更新，完成后归档** | 开发时打勾任务、记录实际进度；feature 完成后状态标记 ✅ done 不再修改 |
 
 ## 关键原则
