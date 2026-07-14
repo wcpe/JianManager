@@ -2734,7 +2734,10 @@
     "roleHint": "Members can only access authorized resources; group admins manage their group's instances and members; platform admins have full access.",
     "roleDesc_0": "Member: can only access resources in authorized groups; cannot manage users or nodes.",
     "roleDesc_1": "Group admin: can manage this group's instances, members and quota.",
-    "roleDesc_10": "Platform admin: full access including users, nodes and platform settings."
+    "roleDesc_10": "Platform admin: full access including users, nodes and platform settings.",
+    "created": "User created",
+    "updated": "User updated",
+    "deleted": "User deleted"
   },
   "groups": {
     "title": "Group Management",
@@ -2755,7 +2758,13 @@
     "addMember": "Add",
     "removeMember": "Remove",
     "selectUser": "Select a user to add",
-    "noMembers": "No members yet"
+    "noMembers": "No members yet",
+    "created": "Group created",
+    "updated": "Group updated",
+    "deleted": "Group deleted",
+    "quotaUpdated": "Quota updated",
+    "memberAdded": "Member added",
+    "memberRemoved": "Member removed"
   },
   "alerts": {
     "title": "Alert Management",

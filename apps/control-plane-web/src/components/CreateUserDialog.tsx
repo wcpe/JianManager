@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueryClient, useMutation } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import api from '@/api/client'
 import { type UserInfo } from '@/api/users'
 import { Button } from '@jianmanager/ui/components/button'
@@ -68,6 +69,7 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
       }
     },
     onSuccess: () => {
+      toast.success(t('users.created'))
       qc.invalidateQueries({ queryKey: ['users'] })
       onClose()
       resetForm()

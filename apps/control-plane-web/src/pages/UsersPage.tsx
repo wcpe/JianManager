@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { UserRound } from 'lucide-react'
 import { useUsers, useDeleteUser, useUpdateUser, type UserInfo } from '@/api/users'
 import DangerConfirm from '@/components/DangerConfirm'
@@ -49,7 +50,14 @@ export default function UsersPage() {
   // 平台管理员主色 pill，其余中性，作角色 pill 着色。
   const roleTone = (role: number) => (role === 10 ? 'info' : 'neutral')
   // 用户状态 0=启用。toggle 即在 0/1 间切换。
-  const toggleStatus = (u: UserInfo) => updateUser.mutate({ id: u.id, status: u.status === 0 ? 1 : 0 })
+  const toggleStatus = (u: UserInfo) =>
+    updateUser.mutate(
+      { id: u.id, status: u.status === 0 ? 1 : 0 },
+      {
+        onError: (err: Error & { response?: { data?: { message?: string } } }) =>
+          toast.error(err.response?.data?.message || t('common.error')),
+      },
+    )
 
   return (
     <div data-page="users" className="jm-page-stack space-y-4">
