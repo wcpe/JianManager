@@ -74,6 +74,124 @@ func TestCreate_DefaultsS3Region(t *testing.T) {
 	require.Equal(t, "us-east-1", st.Region)
 }
 
+// TestCreate_NameConflict 名称与既有后端冲突时回业务错误（FR-338 收口，替代裸撞唯一索引的 500）。
+func TestCreate_NameConflict(t *testing.T) {
+	svc := NewBackupStorageService(newStorageTestDB(t))
+	_, err := svc.Create(&model.BackupStorage{Name: "dup", Type: model.BackupStorageWebDAV, Endpoint: "https://dav.local"})
+	require.NoError(t, err)
+	_, err = svc.Create(&model.BackupStorage{Name: "dup", Type: model.BackupStorageS3, Endpoint: "s3.local", Bucket: "b"})
+	require.ErrorIs(t, err, ErrStorageNameConflict)
+}
+
+// TestUpdate_OK 编辑改名/改凭证引用/改 endpoint 落库生效，且 lastTest* 清空（FR-338）。
+func TestUpdate_OK(t *testing.T) {
+	db := newStorageTestDB(t)
+	svc := NewBackupStorageService(db)
+	st, err := svc.Create(&model.BackupStorage{
+		Name: "s3-old", Type: model.BackupStorageS3, Endpoint: "old.local:9000", Bucket: "old-bucket",
+		Region: "us-east-1", Prefix: "old/", AccessKeyEnv: "${OLD_AK}", SecretKeyEnv: "${OLD_SK}", UseSSL: true,
+	})
+	require.NoError(t, err)
+
+	// 预置一次测试结论，编辑后应被清空（旧连通性结论失效）。
+	now := time.Now().UTC()
+	require.NoError(t, db.Model(&model.BackupStorage{}).Where("id = ?", st.ID).Updates(map[string]any{
+		"last_test_at": &now, "last_test_ok": true, "last_test_message": "连接正常",
+	}).Error)
+
+	updated, err := svc.Update(st.ID, model.BackupStorage{
+		Name: "s3-new", Type: model.BackupStorageS3, Endpoint: "new.local:9000", Bucket: "new-bucket",
+		Region: "eu-west-1", Prefix: "new/", AccessKeyEnv: "${NEW_AK}", SecretKeyEnv: "${NEW_SK}", UseSSL: false,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "s3-new", updated.Name)
+	require.Equal(t, "new.local:9000", updated.Endpoint)
+	require.Equal(t, "new-bucket", updated.Bucket)
+	require.Equal(t, "eu-west-1", updated.Region)
+	require.Equal(t, "new/", updated.Prefix)
+	require.Equal(t, "${NEW_AK}", updated.AccessKeyEnv)
+	require.Equal(t, "${NEW_SK}", updated.SecretKeyEnv)
+	require.False(t, updated.UseSSL) // 显式 false 落库，未被 GORM 零值跳过吞掉
+	require.Nil(t, updated.LastTestAt)
+	require.False(t, updated.LastTestOk)
+	require.Empty(t, updated.LastTestMessage)
+}
+
+// TestUpdate_NotFound 不存在的后端回 ErrStorageNotFound（404）。
+func TestUpdate_NotFound(t *testing.T) {
+	svc := NewBackupStorageService(newStorageTestDB(t))
+	_, err := svc.Update(9999, model.BackupStorage{Name: "x", Type: model.BackupStorageS3})
+	require.ErrorIs(t, err, ErrStorageNotFound)
+}
+
+// TestUpdate_TypeImmutable 改 type 被拒（改型=删重建，FR-338 拍板）。
+func TestUpdate_TypeImmutable(t *testing.T) {
+	svc := NewBackupStorageService(newStorageTestDB(t))
+	st, err := svc.Create(&model.BackupStorage{Name: "s3", Type: model.BackupStorageS3, Endpoint: "s3.local", Bucket: "b"})
+	require.NoError(t, err)
+	_, err = svc.Update(st.ID, model.BackupStorage{Name: "s3", Type: model.BackupStorageSFTP, Endpoint: "sftp.local"})
+	require.ErrorIs(t, err, ErrStorageTypeImmutable)
+}
+
+// TestUpdate_NameConflict 名称撞其他后端回 422 业务错误；撞自身名（不改名保存）放行。
+func TestUpdate_NameConflict(t *testing.T) {
+	svc := NewBackupStorageService(newStorageTestDB(t))
+	_, err := svc.Create(&model.BackupStorage{Name: "a", Type: model.BackupStorageWebDAV, Endpoint: "https://a.local"})
+	require.NoError(t, err)
+	b, err := svc.Create(&model.BackupStorage{Name: "b", Type: model.BackupStorageWebDAV, Endpoint: "https://b.local"})
+	require.NoError(t, err)
+
+	_, err = svc.Update(b.ID, model.BackupStorage{Name: "a", Type: model.BackupStorageWebDAV, Endpoint: "https://b.local"})
+	require.ErrorIs(t, err, ErrStorageNameConflict)
+
+	// 排除自身：保持原名保存不误伤。
+	updated, err := svc.Update(b.ID, model.BackupStorage{Name: "b", Type: model.BackupStorageWebDAV, Endpoint: "https://b2.local"})
+	require.NoError(t, err)
+	require.Equal(t, "https://b2.local", updated.Endpoint)
+}
+
+// TestUpdate_RejectsPlaintextCredential 凭证非 ${ENV_VAR} 引用（明文）被拒，与 Create 同源校验。
+func TestUpdate_RejectsPlaintextCredential(t *testing.T) {
+	svc := NewBackupStorageService(newStorageTestDB(t))
+	st, err := svc.Create(&model.BackupStorage{Name: "s3", Type: model.BackupStorageS3, Endpoint: "s3.local", Bucket: "b"})
+	require.NoError(t, err)
+	_, err = svc.Update(st.ID, model.BackupStorage{
+		Name: "s3", Type: model.BackupStorageS3, Endpoint: "s3.local", Bucket: "b",
+		AccessKeyEnv: "AKIAPLAINTEXT", // 明文，非 ${VAR}
+	})
+	require.ErrorIs(t, err, ErrCredentialNotEnvRef)
+}
+
+// TestUpdate_DefaultsS3Region S3 未填 region 时默认 us-east-1，与 Create 一致。
+func TestUpdate_DefaultsS3Region(t *testing.T) {
+	svc := NewBackupStorageService(newStorageTestDB(t))
+	st, err := svc.Create(&model.BackupStorage{Name: "s3", Type: model.BackupStorageS3, Endpoint: "s3.local", Bucket: "b", Region: "eu-west-1"})
+	require.NoError(t, err)
+	updated, err := svc.Update(st.ID, model.BackupStorage{Name: "s3", Type: model.BackupStorageS3, Endpoint: "s3.local", Bucket: "b"})
+	require.NoError(t, err)
+	require.Equal(t, "us-east-1", updated.Region)
+}
+
+// TestUpdate_AllowedWhenReferencedByBackup 被备份引用的后端仍可编辑（换密钥/endpoint 为合法运维，不加引用锁）。
+func TestUpdate_AllowedWhenReferencedByBackup(t *testing.T) {
+	db := newStorageTestDB(t)
+	svc := NewBackupStorageService(db)
+	st, err := svc.Create(&model.BackupStorage{
+		Name: "s3", Type: model.BackupStorageS3, Endpoint: "s3.local", Bucket: "b",
+		AccessKeyEnv: "${AK}", SecretKeyEnv: "${SK}",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&model.Backup{InstanceID: 1, Name: "bk", StorageID: &st.ID, Status: model.BackupStatusCompleted}).Error)
+
+	updated, err := svc.Update(st.ID, model.BackupStorage{
+		Name: "s3", Type: model.BackupStorageS3, Endpoint: "s3-rotated.local", Bucket: "b",
+		AccessKeyEnv: "${AK_ROTATED}", SecretKeyEnv: "${SK_ROTATED}",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "s3-rotated.local", updated.Endpoint)
+	require.Equal(t, "${AK_ROTATED}", updated.AccessKeyEnv)
+}
+
 // TestResolveSpec_FromEnv 凭证从环境变量解析为明文下发 spec。
 func TestResolveSpec_FromEnv(t *testing.T) {
 	t.Setenv("JM_TEST_BK_AK", "ak-secret")

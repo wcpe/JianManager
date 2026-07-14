@@ -33,6 +33,10 @@ var (
 	ErrInvalidStorageType = errors.New("非法的存储后端类型")
 	// ErrStorageInUse 存储后端被备份引用，禁止删除。
 	ErrStorageInUse = errors.New("存储后端被备份引用，无法删除")
+	// ErrStorageTypeImmutable 存储后端类型不可修改（改型=删重建，FR-338）。
+	ErrStorageTypeImmutable = errors.New("存储后端类型不可修改")
+	// ErrStorageNameConflict 存储后端名称已存在（FR-338）。
+	ErrStorageNameConflict = errors.New("存储后端名称已存在")
 	// ErrCredentialEnvMissing 凭证引用的环境变量未设置。
 	ErrCredentialEnvMissing = errors.New("凭证环境变量未设置")
 	// ErrCredentialNotEnvRef 凭证未以 ${ENV_VAR} 形式引用（禁止硬编码明文）。
@@ -86,12 +90,16 @@ func (s *BackupStorageService) SetDataRoot(root *dataroot.Root) {
 	s.root = root
 }
 
-// Create 创建远程存储后端。校验类型合法且凭证字段为 ${ENV_VAR} 引用（非空时）。
+// Create 创建远程存储后端。校验类型合法且凭证字段为 ${ENV_VAR} 引用（非空时）；
+// 名称冲突预检回 422 语义错误（FR-338 对称收口，替代裸撞 DB 唯一索引的 500）。
 func (s *BackupStorageService) Create(st *model.BackupStorage) (*model.BackupStorage, error) {
 	if !model.ValidBackupStorageType(st.Type) {
 		return nil, ErrInvalidStorageType
 	}
 	if err := validateCredentialRefs(st); err != nil {
+		return nil, err
+	}
+	if err := s.checkNameConflict(st.Name, 0); err != nil {
 		return nil, err
 	}
 	if st.Region == "" && st.Type == model.BackupStorageS3 {
@@ -101,6 +109,63 @@ func (s *BackupStorageService) Create(st *model.BackupStorage) (*model.BackupSto
 		return nil, fmt.Errorf("创建存储后端失败: %w", err)
 	}
 	return st, nil
+}
+
+// Update 全量更新存储后端配置（FR-338）。类型不可改（改型=删重建）；校验与 Create 同源
+// （仅静态校验，不在保存时强制探活——连通性由「测试连接」显式做）；成功后清空 lastTest*
+// （配置已变，旧测试结论失效）。被备份引用的后端允许编辑（换密钥/endpoint 为合法运维场景，不加引用锁）。
+func (s *BackupStorageService) Update(id uint, st model.BackupStorage) (*model.BackupStorage, error) {
+	cur, err := s.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if st.Type != cur.Type {
+		return nil, fmt.Errorf("%w: %s → %s", ErrStorageTypeImmutable, cur.Type, st.Type)
+	}
+	if !model.ValidBackupStorageType(st.Type) {
+		return nil, ErrInvalidStorageType
+	}
+	if err := validateCredentialRefs(&st); err != nil {
+		return nil, err
+	}
+	if err := s.checkNameConflict(st.Name, id); err != nil {
+		return nil, err
+	}
+	if st.Region == "" && st.Type == model.BackupStorageS3 {
+		st.Region = "us-east-1"
+	}
+	// Updates(map) 显式写零值（false / 空串 / NULL），避开 GORM struct 更新的零值跳过。
+	if err := s.db.Model(&model.BackupStorage{}).Where("id = ?", id).Updates(map[string]any{
+		"name":              st.Name,
+		"endpoint":          st.Endpoint,
+		"bucket":            st.Bucket,
+		"region":            st.Region,
+		"prefix":            st.Prefix,
+		"access_key_env":    st.AccessKeyEnv,
+		"secret_key_env":    st.SecretKeyEnv,
+		"use_ssl":           st.UseSSL,
+		"last_test_at":      nil,
+		"last_test_ok":      false,
+		"last_test_message": "",
+	}).Error; err != nil {
+		return nil, fmt.Errorf("更新存储后端失败: %w", err)
+	}
+	return s.GetByID(id)
+}
+
+// checkNameConflict 名称冲突预检（FR-338）：与其他后端同名回 ErrStorageNameConflict；
+// excludeID 排除自身（Create 传 0）。并发窗口由 DB uniqueIndex 兜底。
+func (s *BackupStorageService) checkNameConflict(name string, excludeID uint) error {
+	var count int64
+	if err := s.db.Model(&model.BackupStorage{}).
+		Where("name = ? AND id <> ?", name, excludeID).
+		Count(&count).Error; err != nil {
+		return fmt.Errorf("名称冲突预检失败: %w", err)
+	}
+	if count > 0 {
+		return fmt.Errorf("%w: %q", ErrStorageNameConflict, name)
+	}
+	return nil
 }
 
 // List 列出所有远程存储后端。

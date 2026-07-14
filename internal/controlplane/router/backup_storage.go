@@ -63,8 +63,9 @@ func (h *BackupStorageHandler) Create(c *gin.Context) {
 	}
 	created, err := h.svc.Create(st)
 	if err != nil {
-		// 类型非法 / 凭证非 ${ENV_VAR} 引用为可预期校验错误，回 422。
-		if errors.Is(err, service.ErrInvalidStorageType) || errors.Is(err, service.ErrCredentialNotEnvRef) {
+		// 类型非法 / 凭证非 ${ENV_VAR} 引用 / 名称冲突为可预期校验错误，回 422（FR-338 收口）。
+		if errors.Is(err, service.ErrInvalidStorageType) || errors.Is(err, service.ErrCredentialNotEnvRef) ||
+			errors.Is(err, service.ErrStorageNameConflict) {
 			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 			return
 		}
@@ -72,6 +73,35 @@ func (h *BackupStorageHandler) Create(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, created)
+}
+
+// Update 全量替换式编辑存储后端（FR-338）。body 同 Create（复用 createStorageRequest）；
+// type 不可改、名称冲突排除自身，404/422 语义与既有端点对齐。
+func (h *BackupStorageHandler) Update(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	var req createStorageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST"})
+		return
+	}
+	updated, err := h.svc.Update(id, storageFromRequest(req))
+	if err != nil {
+		if errors.Is(err, service.ErrStorageNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND"})
+			return
+		}
+		if errors.Is(err, service.ErrInvalidStorageType) || errors.Is(err, service.ErrCredentialNotEnvRef) ||
+			errors.Is(err, service.ErrStorageTypeImmutable) || errors.Is(err, service.ErrStorageNameConflict) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
+		return
+	}
+	c.JSON(http.StatusOK, updated)
 }
 
 func storageFromRequest(req createStorageRequest) model.BackupStorage {
@@ -191,6 +221,7 @@ func (h *BackupStorageHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		g.GET("/local/stats", h.LocalStats)
 		g.GET("/:id/stats", h.Stats)
 		g.POST("/:id/test", h.TestSaved)
+		g.PUT("/:id", h.Update)
 		g.DELETE("/:id", h.Delete)
 	}
 }
