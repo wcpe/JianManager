@@ -16,6 +16,7 @@ import {
   filterOptions,
   isKnownValue,
   shouldOfferCustom,
+  visibleOptions,
 } from '../lib/combobox'
 
 export type { ComboboxOption }
@@ -39,6 +40,11 @@ interface ComboboxProps {
   className?: string
   /** 触发器 id（配合 FieldLabel htmlFor）。 */
   id?: string
+  /**
+   * 受控查询回调（FR-336）：内部搜索框输入变化与展开重置时回传当前查询串，
+   * 供服务端搜索场景（如群组成员候选）驱动远端 q；不传则行为完全不变。
+   */
+  onQueryChange?: (q: string) => void
 }
 
 /**
@@ -55,6 +61,7 @@ export function Combobox({
   invalid,
   className,
   id,
+  onQueryChange,
 }: ComboboxProps) {
   const { t } = useTranslation()
   const [open, setOpen] = React.useState(false)
@@ -62,11 +69,18 @@ export function Combobox({
   const inputRef = React.useRef<HTMLInputElement>(null)
 
   const filtered = filterOptions(options, query)
+  // 有界渲染（FR-336）：超上限只挂前 100 个 DOM 节点，剩余以提示行引导继续输入。
+  const { visible, hiddenCount } = visibleOptions(filtered)
   const offerCustom = allowCustom && shouldOfferCustom(filtered, query) && shouldOfferCustom(options, query)
   const known = isKnownValue(options, value)
   const display = known
     ? optionLabel(options.find((o) => o.value === value)!)
     : value
+
+  const updateQuery = (q: string) => {
+    setQuery(q)
+    onQueryChange?.(q)
+  }
 
   const commit = (v: string) => {
     onChange(v)
@@ -77,7 +91,7 @@ export function Combobox({
   const onOpenChange = (next: boolean) => {
     setOpen(next)
     if (next) {
-      setQuery('')
+      updateQuery('')
       // 展开后聚焦搜索框便于直接键入
       requestAnimationFrame(() => inputRef.current?.focus())
     }
@@ -127,7 +141,7 @@ export function Combobox({
           <input
             ref={inputRef}
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => updateQuery(e.target.value)}
             onKeyDown={onInputKeyDown}
             placeholder={t('combobox.searchPlaceholder')}
             className="mb-1 h-8 w-full rounded-sm border-b bg-transparent px-2 text-sm outline-none placeholder:text-muted-foreground"
@@ -136,7 +150,7 @@ export function Combobox({
             {filtered.length === 0 && !offerCustom && (
               <p className="px-2 py-2 text-xs text-muted-foreground">{t('combobox.noResults')}</p>
             )}
-            {filtered.map((opt) => (
+            {visible.map((opt) => (
               <button
                 key={opt.value}
                 type="button"
@@ -149,6 +163,11 @@ export function Combobox({
                 )}
               </button>
             ))}
+            {hiddenCount > 0 && (
+              <p data-slot="combobox-more" className="px-2 py-2 text-xs text-muted-foreground">
+                {t('combobox.moreOptions', { count: hiddenCount })}
+              </p>
+            )}
             {offerCustom && (
               <button
                 type="button"
