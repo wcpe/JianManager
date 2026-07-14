@@ -25,7 +25,7 @@ test('FR-144 节点页集群概览 + 主从双栏 + 详情分段 + 操作 kebab'
   // 详情：操作 kebab + 分段 tab
   await expect(page.getByRole('button', { name: '操作' }).first()).toBeVisible()
   await expect(page.getByRole('button', { name: '概览', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'JDK', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '运行时', exact: true })).toBeVisible() // FR-311：JDK 分段更名运行时
   await expect(page.getByRole('button', { name: '制品缓存', exact: true })).toBeVisible()
 
   await page.screenshot({ path: '../.tmp/acceptance/FR-144/single-machine-nodes.png', fullPage: true })

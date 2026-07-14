@@ -11,7 +11,7 @@ test('FR-178 节点 JDK 面板: foojay 下载 + 异步进度 + 测试存活', as
   await login(page)
   await page.goto('/nodes')
 
-  await page.getByRole('button', { name: 'JDK', exact: true }).click()
+  await page.getByRole('button', { name: '运行时', exact: true }).click() // FR-311：JDK 分段更名运行时
   await expect(page.getByRole('button', { name: '一键下载' })).toBeVisible()
   await expect(page.getByRole('button', { name: '登记已有' })).toBeVisible()
   await expect(page.getByRole('button', { name: /托管/ })).toBeVisible() // 托管 JDK 分区
