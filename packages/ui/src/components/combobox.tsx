@@ -95,7 +95,10 @@ export function Combobox({
   }
 
   return (
-    <PopoverPrimitive.Root open={open} onOpenChange={onOpenChange}>
+    // modal：在模态 Dialog 内使用时，Popover 自身注册滚动锁分片；否则 Dialog 的
+    // react-remove-scroll 会把 portal 到 body 的下拉内容当「模态外区域」吞掉滚轮/触摸
+    // 滚动，长列表（如 Paper 全版本）不可滚不可选（FR-328）。
+    <PopoverPrimitive.Root open={open} onOpenChange={onOpenChange} modal>
       <PopoverPrimitive.Trigger asChild>
         <button
           type="button"
@@ -129,7 +132,7 @@ export function Combobox({
             placeholder={t('combobox.searchPlaceholder')}
             className="mb-1 h-8 w-full rounded-sm border-b bg-transparent px-2 text-sm outline-none placeholder:text-muted-foreground"
           />
-          <div className="max-h-56 overflow-y-auto">
+          <div data-slot="combobox-list" className="max-h-56 overflow-y-auto">
             {filtered.length === 0 && !offerCustom && (
               <p className="px-2 py-2 text-xs text-muted-foreground">{t('combobox.noResults')}</p>
             )}
