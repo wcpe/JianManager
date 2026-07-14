@@ -20,6 +20,8 @@ export interface CoreInfo {
   downloadUrl: string
   sha256: string
   runtime?: CoreRuntimeInfo
+  /** 该 MC 版本所需最低 Java 大版本（FR-316 向导 JDK 预检）；缺省=未知/不设需求，不据此拦截。 */
+  javaMajorRequired?: number
 }
 
 interface CoreVersionsResp {

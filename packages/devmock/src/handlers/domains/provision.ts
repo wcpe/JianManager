@@ -75,12 +75,23 @@ export function seed(): void {
 
 /** 假核心版本表：按核心类型给出新→旧版本，供 GET /cores 的版本列表分支返回。 */
 const CORE_VERSIONS: Record<string, string[]> = {
-  paper: ['1.21.1', '1.21', '1.20.6'],
+  paper: ['26.1', '1.21.1', '1.21', '1.20.6'],
   spongevanilla: ['1.21.1', '1.20.2'],
   spongeforge: ['1.20.1', '1.19.4'],
   velocity: ['3.3.0-SNAPSHOT', '3.2.0-SNAPSHOT'],
   waterfall: ['1.21', '1.20'],
   bungeecord: ['latest'],
+}
+
+/** 假 MC 版本 → 最低 Java 大版本映射（FR-316，镜像 CP 内置保守映射表的取值）。 */
+const JAVA_REQUIREMENTS: Record<string, number> = {
+  '26.1': 25,
+  '1.21.1': 21,
+  '1.21': 21,
+  '1.20.6': 21,
+  '1.20.2': 17,
+  '1.20.1': 17,
+  '1.19.4': 17,
 }
 
 const LATEST_BUILDS: Record<string, number> = {
@@ -192,6 +203,8 @@ export const handlers = [
       filename,
       downloadUrl: `https://example.com/${type}/${mcVersion}/${filename}`,
       sha256: 'a'.repeat(64),
+      // FR-316：解析响应携带该版本所需 Java 大版本；未收录版本省略字段（不设需求）。
+      javaMajorRequired: JAVA_REQUIREMENTS[mcVersion],
       runtime: type === 'spongeforge'
         ? {
             distribution: 'spongeforge',

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { useNodes } from '@/api/nodes'
 import { useGroups } from '@/api/groups'
@@ -79,6 +80,29 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
     },
   )
 
+  // FR-316 版本-JDK 兼容预检：解析响应携带该 MC 版本所需最低 Java 大版本（CP 单一真值），
+  // 对所选/默认 JDK 表单级阻断，与 FR-314 启动预检互补（搭建时拦 vs 启动时拦）。
+  // 阻断：节点无任何 JDK；或所选 JDK 大版本低于需求（真机事故：MC 26.1 + 最高 Temurin 21 必崩）。
+  // 仅警示不阻断：节点有 JDK 但选了「不指定」——系统 Java 版本未知，宁漏勿误伤，交 FR-314 兜底。
+  const requiredJava = resolved?.javaMajorRequired ?? 0
+  const selectedJdk = (jdks ?? []).find((j) => String(j.id) === jdkId)
+  let jdkBlockText: string | null = null
+  let jdkWarnText: string | null = null
+  if (nodeId && mcVersion && requiredJava > 0 && jdks !== undefined) {
+    if (jdks.length === 0) {
+      jdkBlockText = t('provision.javaReqNoJdk', { version: mcVersion, java: requiredJava })
+    } else if (!selectedJdk) {
+      jdkWarnText = t('provision.javaReqUnverified', { version: mcVersion, java: requiredJava })
+    } else if (selectedJdk.majorVersion < requiredJava) {
+      jdkBlockText = t('provision.javaReqTooLow', {
+        version: mcVersion,
+        java: requiredJava,
+        current: selectedJdk.majorVersion,
+        gap: requiredJava - selectedJdk.majorVersion,
+      })
+    }
+  }
+
   // 选节点后默认绑定该节点最高版本的已装 JDK：现代 Paper 需 Java 17/21，
   // 默认「不指定」会用系统 Java（常为 8）导致一键搭建出的服跑不起来。每节点只默认一次，用户仍可改。
   const jdkDefaultNodeRef = useRef('')
@@ -117,7 +141,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
-    if (hasErrors(errors)) return
+    if (hasErrors(errors) || jdkBlockText) return
     const args = jvmArgs.trim() ? jvmArgs.trim().split(/\s+/).filter(Boolean) : undefined
     provision.mutate(
       {
@@ -276,10 +300,23 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
                   onChange={setJdkId}
                   allowCustom={false}
                   placeholder={t('provision.noJdk')}
+                  invalid={!!jdkBlockText}
                 />
               </div>
             </div>
           </div>
+
+          {jdkBlockText && (
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-2 text-xs text-destructive">
+              <span>{jdkBlockText}</span>{' '}
+              <Link to="/runtime-assets" className="font-medium underline underline-offset-2">
+                {t('provision.goInstallJdk')}
+              </Link>
+            </div>
+          )}
+          {!jdkBlockText && jdkWarnText && (
+            <p className="text-xs text-amber-600 dark:text-amber-400">{jdkWarnText}</p>
+          )}
 
           <div>
             <FieldLabel>{t('provision.jvmArgs')}</FieldLabel>
@@ -328,7 +365,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
             </button>
             <button
               type="submit"
-              disabled={provision.isPending || hasErrors(errors)}
+              disabled={provision.isPending || hasErrors(errors) || !!jdkBlockText}
               className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md disabled:opacity-50"
             >
               {provision.isPending ? t('provision.provisioning') : t('provision.submit')}
