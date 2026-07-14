@@ -364,11 +364,13 @@ func (h *InstanceHandler) Delete(c *gin.Context) {
 	}
 
 	if err := h.instanceSvc.Delete(id); err != nil {
+		// FR-310 后运行中实例删除由 CP 编排「先停再删」，仅在无法停止（节点未连接等）时
+		// 返回 INSTANCE_RUNNING——透传具体原因与指引，而非笼统「需先停止」。
 		if errors.Is(err, service.ErrInstanceRunning) {
-			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "INSTANCE_RUNNING", "message": "实例正在运行，需先停止"})
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "INSTANCE_RUNNING", "message": err.Error()})
 			return
 		}
-		// 透传失败原因（如 Worker 侧「实例进程仍在运行」「删除工作目录失败」），
+		// 透传失败原因（如 Worker 侧「实例进程仍在运行」「删除工作目录失败」「删除前停止失败」），
 		// 让用户知道删除为何中止、可否重试，而非笼统「删除失败」。
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": err.Error()})
 		return

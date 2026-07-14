@@ -658,8 +658,20 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 	return s.GetByID(id)
 }
 
-// Delete 删除实例（需先停止）。
-// 先经 gRPC 让 Worker 清理实例数据（工作目录 + 派生索引 + 注册表条目），成功后再删记录，
+// deleteStopSettleInterval / deleteStopSettleMargin 是删除编排的停止收敛节奏（FR-310）。
+// StopInstance 对 daemon 策略是「发起停止」即返回（wrapper 端优雅关服、超时强杀进程树兜底），
+// 进程真正退出并释放文件锁可能滞后整个优雅停止窗口，Windows 上 Worker 的 RemoveAll 在此
+// 窗口内会撞锁失败——删除编排在窗口内按 interval 重试清理，而非把「删除失败请重试」抛给用户；
+// margin 是优雅停止超时之外的额外等待余量。测试经这两个变量缩短节奏。
+var (
+	deleteStopSettleInterval = 2 * time.Second
+	deleteStopSettleMargin   = 15 * time.Second
+)
+
+// Delete 删除实例。运行中/启动中/停止中的实例先同步停止（FR-310：Worker 侧优雅停，
+// 超时强杀进程树），停成才继续删；停不成中止删除并返回可操作错误——此前 CP 删记录而
+// Worker 运行态守卫拒杀进程，DB 与现实脱钩，java 进程沦为无主孤儿继续占端口。
+// 随后经 gRPC 让 Worker 清理实例数据（工作目录 + 派生索引 + 注册表条目），成功后再删记录，
 // 兑现删除确认文案「所有数据将被删除」；否则系统分配的 hash 后缀目录（ADR-007）不复用，
 // 反复建删会无限堆积孤儿目录。清理失败则中止删除（记录保留可重试），不静默孤儿化。
 func (s *InstanceService) Delete(id uint) error {
@@ -667,12 +679,16 @@ func (s *InstanceService) Delete(id uint) error {
 	if err != nil {
 		return err
 	}
-	// 只允许删除已停止或已崩溃的实例
-	if instance.Status != model.InstanceStatusStopped && instance.Status != model.InstanceStatusCrashed {
-		return ErrInstanceRunning
+	stoppedForDelete := false
+	switch instance.Status {
+	case model.InstanceStatusRunning, model.InstanceStatusStarting, model.InstanceStatusStopping:
+		if err := s.stopForDelete(instance); err != nil {
+			return err
+		}
+		stoppedForDelete = true
 	}
 
-	if err := s.removeWorkerData(instance); err != nil {
+	if err := s.removeWorkerDataSettled(instance, stoppedForDelete); err != nil {
 		return fmt.Errorf("清理实例数据失败: %w", err)
 	}
 
@@ -685,6 +701,83 @@ func (s *InstanceService) Delete(id uint) error {
 		// 删除实例
 		return tx.Delete(&model.Instance{}, id).Error
 	})
+}
+
+// stopForDelete 删除前的同步停止编排（FR-310）。与 Stop 的异步委托不同：删除必须确证
+// 进程处置已发起且 Worker 受理，才能继续删目录/删记录，故同步调 StopInstance 并等待结果。
+// 停机逻辑完全复用既有链路：Worker 侧按策略优雅停止（daemon wrapper 关服命令 / docker 宽限期），
+// 超时强杀进程树（GracefulStopTimeoutSeconds 语义，FR-063），CP 不重写停机。
+// 状态全程走状态机合法边：RUNNING/STARTING→STOPPING→STOPPED（STOPPING 在途则不重复转换）。
+func (s *InstanceService) stopForDelete(instance *model.Instance) error {
+	var node model.Node
+	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// 节点记录已不存在：无处可停，与 removeWorkerData 的「节点缺失仅删记录」路径一致放行。
+			slog.Warn("删除实例：节点记录不存在，跳过删除前停止", "instanceId", instance.UUID)
+			return nil
+		}
+		return fmt.Errorf("查找节点失败: %w", err)
+	}
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		// 节点未连接时无法停止进程。此时删记录会复刻 FR-310 原始事故（记录没了、java 继续跑），
+		// 故拒绝并给可操作指引；节点恢复心跳后实例状态会对账（syncInstanceStates），届时可重试。
+		return fmt.Errorf("%w：节点 %s 未连接，无法停止运行中的实例；请待节点恢复后重试删除",
+			ErrInstanceRunning, node.Name)
+	}
+
+	if instance.Status != model.InstanceStatusStopping {
+		if err := s.transition(instance.ID, model.InstanceStatusStopping, "删除前停止"); err != nil {
+			return err
+		}
+	}
+
+	// docker 策略的 ContainerStop 会同步阻塞到宽限期收尾，RPC 超时须覆盖整个优雅停止窗口 + 余量。
+	ctx, cancel := context.WithTimeout(context.Background(), s.deleteStopTimeout()+30*time.Second)
+	defer cancel()
+	resp, err := client.Worker.StopInstance(ctx, &workerpb.InstanceActionRequest{InstanceUuid: instance.UUID})
+	if err != nil {
+		// 停止未确认即中止删除（记录保留、状态留在 STOPPING，由心跳对账回真实状态）。
+		return fmt.Errorf("删除前停止实例失败（gRPC StopInstance）: %w；已中止删除，记录保留可重试", err)
+	}
+	if !resp.Success {
+		// Worker 报「未运行」= 现实已停止、DB 状态滞后（如 STOPPING 在途收尾），照常继续删除；
+		// 其余失败中止——Worker 侧 RemoveInstance 的运行态守卫仍是最后一道兜底。
+		if !strings.Contains(resp.Error, "未运行") {
+			return fmt.Errorf("删除前停止实例失败: %s；已中止删除，记录保留可重试", resp.Error)
+		}
+	}
+
+	// 条件回写 STOPPING→STOPPED（合法转换边）：心跳并发改过状态则不强改，避免覆盖真实观测。
+	s.updateStatusFromTo(instance.ID, model.InstanceStatusStopping, model.InstanceStatusStopped)
+	return nil
+}
+
+// deleteStopTimeout 返回删除编排应等待的优雅停止窗口：平台设置生效值，未配置时对齐
+// Worker wrapper 的默认优雅停止超时（30s，见 internal/worker/daemon gracefulStopTimeout）。
+func (s *InstanceService) deleteStopTimeout() time.Duration {
+	if sec := s.gracefulStopTimeoutSeconds(); sec > 0 {
+		return time.Duration(sec) * time.Second
+	}
+	return 30 * time.Second
+}
+
+// removeWorkerDataSettled 委托 Worker 清理实例数据；若删除编排刚同步停止过实例（FR-310），
+// 在停止收敛窗口（优雅停止超时 + margin）内对清理失败做有界重试——进程退出前工作目录
+// 存在文件锁属预期时序，不是终局失败。未经停止的直删保持一次性语义不变。
+func (s *InstanceService) removeWorkerDataSettled(instance *model.Instance, justStopped bool) error {
+	err := s.removeWorkerData(instance)
+	if err == nil || !justStopped {
+		return err
+	}
+	deadline := time.Now().Add(s.deleteStopTimeout() + deleteStopSettleMargin)
+	for time.Now().Before(deadline) {
+		time.Sleep(deleteStopSettleInterval)
+		if err = s.removeWorkerData(instance); err == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 // removeWorkerData 委托 Worker 删除实例的工作目录与派生资产（RemoveInstance RPC）。
