@@ -27,11 +27,11 @@
 
 ## 4. 任务拆分
 
-- [ ] proto：`ReportCrashSnapshot` 消息 + RPC，重新生成
-- [ ] Worker：退出码/信号/时长捕获 + 尾部输出截取 + 组装上报（含 Unimplemented 兜底）；单测（快照组装、非正常退出判定、截取边界）
-- [ ] CP：model + 迁移 + gRPC handler + 修剪 + 级联删 + REST API；单测（修剪只留 K、权限、倒序）
-- [ ] 前端：崩溃诊断卡 + i18n（中/英）+ 双主题适配；vitest（渲染/空态/展开）
-- [ ] 文档同步：ARCHITECTURE（表 + RPC）、API.md、PRD 状态、CHANGELOG 段尾
+- [x] proto：`ReportCrashSnapshot` 消息 + RPC，重新生成
+- [x] Worker：退出码/信号/时长捕获 + 尾部输出截取 + 组装上报（含 Unimplemented 兜底）；单测（快照组装、非正常退出判定、截取边界）
+- [x] CP：model + 迁移 + gRPC handler + 修剪 + 级联删 + REST API；单测（修剪只留 K、权限、倒序）
+- [x] 前端：崩溃诊断卡 + i18n（中/英）+ 双主题适配；vitest（渲染/空态/展开）
+- [x] 文档同步：ARCHITECTURE（表 + RPC）、API.md、PRD 状态、CHANGELOG 段尾
 
 ## 5. 验收标准
 

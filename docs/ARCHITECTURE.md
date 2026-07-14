@@ -191,6 +191,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
   - CP 不直连 Docker，节点级镜像列出/拉取/删除经 Worker 委托（守架构边界）；`ListImages` 在节点 Docker 不可用时回 `docker_available=false`，CP 据此提示安装 Docker
 - 实例事件流：StreamInstanceEvents (server stream)
   - 同一流承载两类事件：`state_change`（状态转换）与 `stdout`/`stderr`（进程输出）。Worker 进程输出回调分流为「WS 终端广播 + 事件流上报」两路，互不阻塞。CP 侧 EventService 把 `stdout`/`stderr` 经 LogService 落库（日志中心 FR-049），`state_change` 经 SSE 推前端
+- 崩溃快照上报：`ReportCrashSnapshot`（FR-313；CP 侧实现，Worker 调用，与注册/心跳同信道）——进程非正常退出（退出码≠0 或 RUNNING/STARTING 态意外退出）时 Worker 组装崩溃现场（退出码/信号/时长 + 终端环形缓冲尾部 200 行/64KB）异步上报，凭 `node_uuid+node_secret` 鉴权且实例须属于该节点；CP 落 `instance_crash_snapshots` 并同事务按实例滚动只留最近 5 条。上报失败（网络/老 CP `Unimplemented`）Worker 记日志丢弃不阻塞状态机；daemon 模式退出码经 wrapper 控制通道事件帧（`TypeEvent`+`java_exit` JSON）上抛，老 wrapper 不发帧、老 Worker 忽略未知帧，新旧互不炸
 - 文件操作：ListFiles, ReadFile, WriteFile, UploadFile (client stream), DeleteFile, RenameFile（跨目录即移动）, DownloadFile (server stream), DownloadArchive (server stream), SearchFiles
   - `ReadFile` 是**在线编辑器**读取能力，带 10MiB 护栏（超限截断；前端另有大文件/二进制预览拦截）。**下载不得复用 ReadFile**——曾因下载端点借用它导致超限大文件被静默截断（详见 `DownloadFile`）
   - `DownloadFile` 单文件**原样分块流式**返回（~64KiB 分片，首帧携带文件总大小），任意大小不截断；CP `FileHandler.Download` 先收首帧再写响应头（打开失败/越界/目录/老 Worker 无本 RPC 时仍能返回 JSON 明确错误而非半截文件），并以首帧总大小设 `Content-Length`——流中途失败即字节数不符，客户端按下载失败处理。老 Worker（无本 RPC）明确报错引导升级，**不回退会截断的 ReadFile**
@@ -469,6 +470,7 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | group_instances | group_id, instance_id(UNIQUE) |
 | instance_group_nodes (V2, FR-165) | uuid, name, parent_id(自引用 FK, NULL=根), sort, deleted_at（实例组织分组树节点，邻接表表达多级嵌套；正交于用户组/网络群组，仅组织归类，ADR-033）；INDEX(parent_id) |
 | instance_group_members (V2, FR-165) | group_id(FK instance_group_nodes), instance_id(FK)；UNIQUE(group_id, instance_id)（实例-组织分组 M:N，一实例可属多组；删组只解绑、不删实例） |
+| instance_crash_snapshots (FR-313) | instance_id(FK, INDEX), occurred_at, exit_code(无法获知=-1), signal(Unix 信号名；Windows/非信号退出为空), duration_ms, tail_output(TEXT, ≤200 行/64KB Worker 侧截取)（进程非正常退出现场；Worker 经 ReportCrashSnapshot 上报，写入同事务按实例滚动只留最近 5 条，删实例级联清） |
 | bot_stress_sessions | uuid, instance_id(FK), name, name_prefix, status(pending/running/stopped/error), bot_count, behavior, config(JSON), orchestration_yaml(TEXT), orchestration_summary(JSON), succeeded, failed, last_error, started_at, ended_at |
 | bots | uuid, instance_id(FK), stress_session_id(FK，可空), name, status, config(JSON), behavior, worker_id |
 | backups | uuid, instance_id(FK), name, file_path, file_size_mb, type(0/1), mode(0 全量/1 增量, V2), status(0/1/2/3), parent_id(FK self, 备份链, V2), manifest(JSON 文件清单, V2), storage_id(FK, V2), storage_key(远程对象键, V2), checksum/checksum_algo(归档完整性, FR-171) |

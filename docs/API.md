@@ -581,6 +581,15 @@
 - **错误**: `403 FORBIDDEN`（无 `instance.read`）、`404 NOT_FOUND`（实例不可见/不存在）
 - **关联 FR**: FR-076 ｜ **关联 ADR**: ADR-016
 
+### GET /api/v1/instances/:id/crash-snapshots
+- **描述**: 实例崩溃快照列表（FR-313）：进程非正常退出的现场留存（Worker 经 gRPC `ReportCrashSnapshot` 上报入库，每实例滚动保留最近 5 条，删实例级联清）。按发生时间倒序返回（最新在前），空结果回 `[]`；供实例控制台「崩溃诊断」卡
+- **权限**: `instance.read`（且实例须可访问；不可访问按存在性隐藏返回 404）
+- **响应**: `200`，`[{ "id":1, "instanceId":3, "occurredAt":"2026-07-13T02:15:00Z", "exitCode":1, "signal":"killed", "durationMs":2500, "tailOutput":"...", "createdAt":"..." }]`
+  - `exitCode`：进程退出码，无法获知时为 `-1`；`signal`：Unix 终止信号名，Windows / 非信号退出为空
+  - `tailOutput`：崩溃前终端尾部输出（Worker 侧截取，≤200 行 / 64KB）
+- **错误**: `403 FORBIDDEN`（无 `instance.read`）、`404 NOT_FOUND`（实例不可见/不存在）
+- **关联 FR**: FR-313
+
 ### POST /api/v1/instances/:id/business
 - **描述**: JBIS 业务对接——向某实例下发一条业务命令（`domain.action` + 结构化 `payload`）并取回结果（FR-116/FR-121，见 ADR-026/027/029）。CP **插件无关**：经既有探针桥（ADR-016）把信封下发到目标实例 ServerProbe 业务对接层（BusinessHost→per-plugin Provider 执行），结果 JSON 原样透传，CP 不解析。`domain` 区分业务域（`economy`/`inventory`…），与监控/治理（`core.*`）同桥分流
 - **权限**: 读动作（`write=false`/缺省）`instance.operate`；**写动作（`write=true`，对应 manifest `readOnly=false`，如改余额/改背包）`instance.business.write`**（FR-121）。两者均须实例可访问
