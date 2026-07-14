@@ -50,6 +50,29 @@ describe('NetworksPage（mock 假后端）', () => {
     expect(screen.getByText('0 个成员')).toBeInTheDocument()
   })
 
+  it('①-1 列表健康分布读概要 memberStatus 计数，零 per-network 详情请求（FR-335）', async () => {
+    const perNetwork: string[] = []
+    const listener = ({ request }: { request: Request }) => {
+      const url = new URL(request.url)
+      // GET /networks/:id 形态（列表页不应触发）。
+      if (/\/api\/v1\/networks\/\d+$/.test(url.pathname) && request.method === 'GET') {
+        perNetwork.push(url.pathname)
+      }
+    }
+    server.events.on('request:start', listener)
+    try {
+      renderWithProviders(<NetworksPage />, { route: '/networks' })
+      // survival 种子 3 成员：2 RUNNING + 1 CRASHED → 健康分布直接来自概要计数。
+      await screen.findByText('survival')
+      await waitFor(() => expect(screen.getByText(/运行 2/)).toBeInTheDocument())
+      expect(screen.getByText(/崩溃 1/)).toBeInTheDocument()
+      // 列表页零 per-network 详情请求。
+      expect(perNetwork).toHaveLength(0)
+    } finally {
+      server.events.removeListener('request:start', listener)
+    }
+  })
+
   it('② 创建群组 → 列表联动出现新行', async () => {
     const user = userEvent.setup()
     renderWithProviders(<NetworksPage />, { route: '/networks' })

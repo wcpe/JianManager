@@ -6,9 +6,11 @@ import type {
   NetworkSummary,
   NetworkDetail,
   NetworkMember,
+  MemberStatusCounts,
   BatchActionResult,
 } from '@jianmanager/devmock/contracts'
 import type { Registration, CreateRegistrationBody } from '@jianmanager/devmock/contracts'
+import type { TopologyProxy, TopologyNetwork, TopologyResponse } from '@jianmanager/devmock/contracts'
 import type { ProvisionProxyBody, ProvisionProxyResult } from '@jianmanager/devmock/contracts'
 import type { InstanceInfo } from '@jianmanager/devmock/contracts'
 
@@ -121,14 +123,40 @@ const registrations = db<RegistrationRow>('registrations', () => [
   },
 ])
 
-/** 群组行 → 列表概要（剥离 members，仅暴露计数）。 */
+/** 成员状态 → 五态计数桶（未知状态计入 stopped，与后端/前端中性桶口径一致，FR-335）。 */
+function memberStatusCounts(members: NetworkMember[]): MemberStatusCounts {
+  const c: MemberStatusCounts = { running: 0, stopped: 0, crashed: 0, starting: 0, stopping: 0 }
+  for (const m of members) {
+    switch (m.status) {
+      case 'RUNNING':
+        c.running += 1
+        break
+      case 'CRASHED':
+        c.crashed += 1
+        break
+      case 'STARTING':
+        c.starting += 1
+        break
+      case 'STOPPING':
+        c.stopping += 1
+        break
+      default:
+        c.stopped += 1
+    }
+  }
+  return c
+}
+
+/** 群组行 → 列表概要（剥离 members，暴露计数 + 成员健康桶，FR-335）。 */
 function toSummary(n: NetworkRow): NetworkSummary {
+  const memberStatus = memberStatusCounts(n.members)
   return {
     id: n.id,
     uuid: n.uuid,
     name: n.name,
     description: n.description,
     memberCount: n.members.length,
+    memberStatus,
     createdAt: n.createdAt,
   }
 }
@@ -274,6 +302,52 @@ export const handlers = [
       results: members.map((m) => ({ instanceId: m.instanceId, ok: true })),
     }
     return HttpResponse.json(result)
+  }),
+
+  // ---- 群组拓扑聚合（FR-335）：一次返全量 proxy 注册 + network 成员归属，消 per-proxy N+1 ----
+  domainRoute('get', '/topology', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+
+    const allRegs = registrations.list()
+    const instances = db<InstanceInfo>('instances')
+
+    // proxy 概要来源：优先实例集合里的 role=proxy 行；补齐仅在注册里出现的 proxyId。
+    const proxyIds = new Set<number>()
+    for (const inst of instances.list((i) => i.role === 'proxy')) proxyIds.add(inst.id)
+    for (const r of allRegs) proxyIds.add(r.proxyId)
+
+    // 存在的实例 ID 集合（proxy + 有效 backend），供裁剪 network 悬空成员。
+    const existing = new Set<number>()
+
+    const proxies: TopologyProxy[] = [...proxyIds]
+      .sort((a, b) => a - b)
+      .map((pid) => {
+        const inst = instances.get(pid)
+        const regs = allRegs
+          .filter((r) => r.proxyId === pid)
+          .sort((a, b) => a.priority - b.priority || a.id - b.id)
+          .map(toRegistration)
+        existing.add(pid)
+        for (const r of regs) existing.add(r.backendId)
+        return {
+          id: pid,
+          name: inst?.name ?? `proxy-${pid}`,
+          status: inst?.status ?? 'RUNNING',
+          serverPort: inst?.serverPort ?? 25565,
+          nodeId: inst?.nodeId ?? 0,
+          registrations: regs,
+        }
+      })
+
+    const nets: TopologyNetwork[] = networks.list().map((n) => ({
+      id: n.id,
+      name: n.name,
+      memberInstanceIds: n.members.map((m) => m.instanceId).filter((iid) => existing.has(iid)),
+    }))
+
+    const resp: TopologyResponse = { proxies, networks: nets }
+    return HttpResponse.json(resp)
   }),
 
   // ---- proxy↔backend 注册（M:N） ----

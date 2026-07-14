@@ -150,6 +150,15 @@ export interface UpdateScheduleBody {
 
 // ─────────────────────────── 群组网络（networks） ───────────────────────────
 
+/** 成员实例按运行状态的计数桶（五态零补齐，FR-335）。 */
+export interface MemberStatusCounts {
+  running: number
+  stopped: number
+  crashed: number
+  starting: number
+  stopping: number
+}
+
 /** 群组概要。 */
 export interface NetworkSummary {
   id: number
@@ -157,6 +166,8 @@ export interface NetworkSummary {
   name: string
   description: string
   memberCount: number
+  /** 成员健康计数桶（FR-335）。 */
+  memberStatus: MemberStatusCounts
   createdAt: string
 }
 
@@ -217,6 +228,31 @@ export interface CreateRegistrationBody {
   forcedHost?: string
   restricted?: boolean
   enabled?: boolean
+}
+
+// ─────────────────────────── 拓扑聚合（topology，FR-335） ───────────────────────────
+
+/** 拓扑聚合里的单个代理概要 + 其注册（与 GET /proxies/:id/registrations 同构）。 */
+export interface TopologyProxy {
+  id: number
+  name: string
+  status: string
+  serverPort: number
+  nodeId: number
+  registrations: Registration[]
+}
+
+/** 拓扑分组概要：一个 network 的成员归属。 */
+export interface TopologyNetwork {
+  id: number
+  name: string
+  memberInstanceIds: number[]
+}
+
+/** 全量群组拓扑聚合响应（GET /topology，FR-335）。 */
+export interface TopologyResponse {
+  proxies: TopologyProxy[]
+  networks: TopologyNetwork[]
 }
 
 // ─────────────────────────── 搭建代理（proxy） ───────────────────────────

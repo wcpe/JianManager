@@ -1,10 +1,8 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
-import { useQueries } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Network, GitBranch, List } from 'lucide-react'
-import api from '@/api/client'
 import DangerConfirm from '@/components/DangerConfirm'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
@@ -27,7 +25,7 @@ import { validateRequired } from '@/lib/form-validation'
 import { useFieldGate } from '@/lib/use-field-gate'
 import { instanceStatusLevel, statusColorVar } from '@jianmanager/ui'
 import { cn } from '@jianmanager/ui'
-import { memberHealth, type MemberHealth } from '@/lib/topology'
+import { memberHealth, memberHealthFromStatus, type MemberHealth } from '@/lib/topology'
 import TopologyGraph from '@/components/console/TopologyGraph'
 import { useInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
@@ -40,7 +38,6 @@ import {
   useRemoveNetworkMember,
   useNetworkAction,
   type NetworkSummary,
-  type NetworkDetail,
 } from '@/api/networks'
 
 /** 实例运行状态 → i18n 文案键（复用实例页既有键，FR-160 统一 StatusBadge）。 */
@@ -59,7 +56,6 @@ const STATUS_LABEL: Record<string, string> = {
 export default function NetworksPage() {
   const { t } = useTranslation()
   const { data: networks, isLoading } = useNetworks()
-  const { data: proxies } = useInstances({ role: 'proxy' })
   const [createOpen, setCreateOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<NetworkSummary | null>(null)
   const del = useDeleteNetwork()
@@ -128,7 +124,7 @@ export default function NetworksPage() {
           bodyClassName="p-4"
         >
           <p className="mb-3 text-xs text-muted-foreground">{t('networks.topoSubtitle')}</p>
-          <TopologyGraph proxies={proxies ?? []} />
+          <TopologyGraph />
           <TopologyLegend />
         </Panel>
       ) : isLoading ? (
@@ -181,7 +177,7 @@ function ViewTab({
   )
 }
 
-/** 群组列表：卡片化行 + 成员健康分布（成员状态经各群组详情并行拉取统计）。 */
+/** 群组列表：卡片化行 + 成员健康分布（FR-335：直接读概要内联的 memberStatus 计数，零详情请求）。 */
 function NetworkList({
   networks,
   onView,
@@ -193,27 +189,14 @@ function NetworkList({
 }) {
   const { t } = useTranslation()
 
-  // 每群组一条详情查询并行拉取成员，用于行内健康分布（群组数动态，用 useQueries）。
-  const details = useQueries({
-    queries: networks.map((n) => ({
-      queryKey: ['networks', n.id],
-      queryFn: async () => {
-        const { data } = await api.get<NetworkDetail>(`/networks/${n.id}`)
-        return data
-      },
-      enabled: !!n.id,
-    })),
-  })
-
   if (networks.length === 0) {
     return <p className="text-muted-foreground text-center py-8">{t('networks.empty')}</p>
   }
 
   return (
     <div className="space-y-2.5">
-      {networks.map((n, i) => {
-        const detail = details[i]?.data
-        const health = detail ? memberHealth(detail.members) : null
+      {networks.map((n) => {
+        const health = memberHealthFromStatus(n.memberStatus)
         return (
           <Panel key={n.id} hoverable className="px-0" bodyClassName="px-4 py-3">
             <div className="flex items-start justify-between gap-3">
@@ -236,7 +219,7 @@ function NetworkList({
               </div>
             </div>
             <div className="mt-2.5">
-              <HealthDistribution health={health} loading={!detail} />
+              <HealthDistribution health={health} loading={false} />
             </div>
           </Panel>
         )

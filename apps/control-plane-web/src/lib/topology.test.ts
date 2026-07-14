@@ -3,8 +3,12 @@ import {
   buildTopology,
   layoutTopology,
   memberHealth,
+  memberHealthFromStatus,
+  groupTopology,
+  layoutTopologyGrouped,
   edgeLevel,
   type ProxyRegistrations,
+  type TopoGroupBrief,
 } from './topology'
 import type { Registration } from '@/api/registrations'
 import type { InstanceInfo } from '@/api/instances'
@@ -234,5 +238,140 @@ describe('memberHealth', () => {
     const h = memberHealth([member('WEIRD')])
     expect(h.stopped).toBe(1)
     expect(h.total).toBe(1)
+  })
+})
+
+describe('memberHealthFromStatus', () => {
+  it('五态桶 → 健康分布（starting+stopping 合入 transitioning）', () => {
+    const h = memberHealthFromStatus({ running: 2, stopped: 1, crashed: 3, starting: 1, stopping: 2 })
+    expect(h.running).toBe(2)
+    expect(h.stopped).toBe(1)
+    expect(h.crashed).toBe(3)
+    expect(h.transitioning).toBe(3) // 1 + 2
+    expect(h.total).toBe(9)
+  })
+  it('全 0 → total 0', () => {
+    const h = memberHealthFromStatus({ running: 0, stopped: 0, crashed: 0, starting: 0, stopping: 0 })
+    expect(h).toEqual({ total: 0, running: 0, crashed: 0, transitioning: 0, stopped: 0 })
+  })
+})
+
+describe('groupTopology', () => {
+  const topo = buildTopology([
+    { proxy: proxy(1, 'p1'), registrations: [reg(10, 1, 100), reg(11, 1, 101)] },
+    { proxy: proxy(2, 'p2'), registrations: [reg(20, 2, 102)] },
+  ])
+
+  it('节点按 network 成员归属落带；未归属入未分组兜底带', () => {
+    const num = (a: number, b: number) => a - b
+    const groups: TopoGroupBrief[] = [{ id: 5, name: 'survival', memberInstanceIds: [1, 100] }]
+    const g = groupTopology(topo, groups)
+    // 首带 survival 含 p1(1) + backend 100；其余（p2、101、102）入未分组带。
+    expect(g.bands).toHaveLength(2)
+    expect(g.bands[0].id).toBe(5)
+    expect(g.bands[0].nodes.map((n) => n.id).sort(num)).toEqual([1, 100])
+    expect(g.bands[1].id).toBeNull()
+    expect(g.bands[1].nodes.map((n) => n.id).sort(num)).toEqual([2, 101, 102])
+  })
+
+  it('多归属节点落首带并记入 multiHomed', () => {
+    const groups: TopoGroupBrief[] = [
+      { id: 5, name: 'a', memberInstanceIds: [100] },
+      { id: 6, name: 'b', memberInstanceIds: [100] },
+    ]
+    const g = groupTopology(topo, groups)
+    expect(g.multiHomed.has(100)).toBe(true)
+    // 100 只出现在首带 a，不重复渲染到 b。
+    const bandA = g.bands.find((b) => b.id === 5)!
+    expect(bandA.nodes.some((n) => n.id === 100)).toBe(true)
+    const bandB = g.bands.find((b) => b.id === 6)
+    expect(bandB).toBeUndefined() // b 无独占节点 → 空带不出现
+  })
+
+  it('无分组时全部节点入未分组带', () => {
+    const g = groupTopology(topo, [])
+    expect(g.bands).toHaveLength(1)
+    expect(g.bands[0].id).toBeNull()
+    expect(g.bands[0].nodes).toHaveLength(topo.nodes.length)
+    expect(g.multiHomed.size).toBe(0)
+  })
+
+  it('连线原样携带', () => {
+    const g = groupTopology(topo, [{ id: 5, name: 'a', memberInstanceIds: [1] }])
+    expect(g.edges).toEqual(topo.edges)
+  })
+})
+
+describe('layoutTopologyGrouped', () => {
+  const topo = buildTopology([
+    { proxy: proxy(1, 'p1'), registrations: [reg(10, 1, 100), reg(11, 1, 101)] },
+    { proxy: proxy(2, 'p2'), registrations: [reg(20, 2, 102)] },
+  ])
+  const opts = {
+    width: 600,
+    rowHeight: 44,
+    nodeWidth: 168,
+    paddingY: 18,
+    bandHeaderHeight: 26,
+    bandGap: 20,
+  }
+
+  it('多带纵向堆叠：后带 y 严格大于前带', () => {
+    const groups: TopoGroupBrief[] = [
+      { id: 5, name: 'a', memberInstanceIds: [1, 100] },
+      { id: 6, name: 'b', memberInstanceIds: [2, 102] },
+    ]
+    const laid = layoutTopologyGrouped(groupTopology(topo, groups), opts)
+    expect(laid.bands.length).toBeGreaterThanOrEqual(2)
+    for (let i = 1; i < laid.bands.length; i++) {
+      expect(laid.bands[i].y).toBeGreaterThan(laid.bands[i - 1].y)
+    }
+  })
+
+  it('带内 proxy 左列 / backend 右列', () => {
+    const laid = layoutTopologyGrouped(groupTopology(topo, []), opts)
+    const px = laid.nodes.filter((n) => n.kind === 'proxy').map((n) => n.x)
+    const bx = laid.nodes.filter((n) => n.kind === 'backend').map((n) => n.x)
+    expect(new Set(px).size).toBe(1)
+    expect(new Set(bx).size).toBe(1)
+    expect(px[0]).toBeLessThan(bx[0])
+  })
+
+  it('总高度 = 各带高之和 + 带间隔（不随节点线性单列膨胀）', () => {
+    const groups: TopoGroupBrief[] = [
+      { id: 5, name: 'a', memberInstanceIds: [1, 100] },
+      { id: 6, name: 'b', memberInstanceIds: [2, 102] },
+    ]
+    const laid = layoutTopologyGrouped(groupTopology(topo, groups), opts)
+    const bandsHeight = laid.bands.reduce((sum, b) => sum + b.height, 0)
+    // 带间各留一个 bandGap（n 带 → n-1 个间隔）。
+    expect(laid.height).toBeCloseTo(bandsHeight + (laid.bands.length - 1) * opts.bandGap)
+  })
+
+  it('节点落在其所属带的垂直区间内', () => {
+    const groups: TopoGroupBrief[] = [
+      { id: 5, name: 'a', memberInstanceIds: [1, 100] },
+      { id: 6, name: 'b', memberInstanceIds: [2, 102] },
+    ]
+    const grouped = groupTopology(topo, groups)
+    const laid = layoutTopologyGrouped(grouped, opts)
+    // p2(2) 属第二带，其 y 应落在第二带区间内。
+    const p2 = laid.nodes.find((n) => n.kind === 'proxy' && n.id === 2)!
+    const band2 = laid.bands[1]
+    expect(p2.y).toBeGreaterThan(band2.y)
+    expect(p2.y).toBeLessThan(band2.y + band2.height)
+  })
+
+  it('edge 端点解析到节点中心（可跨带）', () => {
+    const groups: TopoGroupBrief[] = [{ id: 5, name: 'a', memberInstanceIds: [1] }]
+    const grouped = groupTopology(topo, groups)
+    const laid = layoutTopologyGrouped(grouped, opts)
+    const e = laid.edges.find((x) => x.proxyId === 1 && x.backendId === 100)!
+    const p = laid.nodes.find((n) => n.kind === 'proxy' && n.id === 1)!
+    const b = laid.nodes.find((n) => n.kind === 'backend' && n.id === 100)!
+    expect(e.x1).toBeCloseTo(p.x + 84)
+    expect(e.x2).toBeCloseTo(b.x - 84)
+    expect(e.y1).toBeCloseTo(p.y)
+    expect(e.y2).toBeCloseTo(b.y)
   })
 })

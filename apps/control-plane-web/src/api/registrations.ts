@@ -49,7 +49,11 @@ export function useCreateRegistration(proxyId: number) {
   return useMutation({
     mutationFn: (body: CreateRegistrationBody) =>
       api.post(`/proxies/${proxyId}/registrations`, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['registrations', proxyId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['registrations', proxyId] })
+      // 拓扑聚合视图（FR-335）随注册变更失效。
+      qc.invalidateQueries({ queryKey: ['topology'] })
+    },
   })
 }
 
@@ -59,7 +63,10 @@ export function useUpdateRegistration(proxyId: number) {
   return useMutation({
     mutationFn: ({ rid, body }: { rid: number; body: Partial<Omit<CreateRegistrationBody, 'backendId'>> }) =>
       api.patch(`/proxies/${proxyId}/registrations/${rid}`, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['registrations', proxyId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['registrations', proxyId] })
+      qc.invalidateQueries({ queryKey: ['topology'] })
+    },
   })
 }
 
@@ -68,6 +75,9 @@ export function useDeleteRegistration(proxyId: number) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (rid: number) => api.delete(`/proxies/${proxyId}/registrations/${rid}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['registrations', proxyId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['registrations', proxyId] })
+      qc.invalidateQueries({ queryKey: ['topology'] })
+    },
   })
 }
