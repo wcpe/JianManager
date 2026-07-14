@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -25,6 +25,7 @@ import {
 } from '@/api/bots'
 import { useInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
+import { useDebounced } from '@/lib/use-debounced'
 import {
   statusCounts,
   toListParams,
@@ -206,16 +207,6 @@ export default function BotsPage() {
       <BotDetailDialog botId={detailBotId} onOpenChange={(open) => { if (!open) setDetailBotId(null) }} />
     </div>
   )
-}
-
-/** 防抖：value 停止变化 delay 毫秒后才更新返回值，用于搜索输入。 */
-function useDebounced<T>(value: T, delay: number): T {
-  const [debounced, setDebounced] = useState(value)
-  useEffect(() => {
-    const id = setTimeout(() => setDebounced(value), delay)
-    return () => clearTimeout(id)
-  }, [value, delay])
-  return debounced
 }
 
 /** 页顶概览卡片：总计/在线/连接中/异常 + 分布（X 实例·Y 节点）+ 舰队健康条（多段）。 */

@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useGroups, useAddGroupMember, useRemoveGroupMember } from '@/api/groups'
-import { useUsers } from '@/api/users'
+import { useUserSearch } from '@/api/users'
+import { useDebounced } from '@/lib/use-debounced'
 import {
   ScrollableDialogBody,
   scrollableDialogContentClass,
@@ -16,27 +17,39 @@ import {
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { Button } from '@jianmanager/ui/components/button'
 
+/** 候选默认窗口：只取前 50 条，靠键入服务端 q 缩小（FR-336）。 */
+const CANDIDATE_LIMIT = 50
+
 interface GroupMembersDialogProps {
   /** 目标组 ID（从实时 useGroups 读取，使增删成员即时反映）。 */
   groupId: number
   onClose: () => void
 }
 
-/** 管理用户组成员：列出现有成员可移除 + 选择用户加入（FR-156，兑现 FR-003）。 */
+/**
+ * 管理用户组成员：列出现有成员可移除 + 选择用户加入（FR-156，兑现 FR-003）。
+ * 候选走服务端搜索（FR-336）：默认前 50 条，Combobox 键入经 debounce 300ms 下发 q；
+ * 已选成员列表来自 group.members，与候选加载解耦、恒显。
+ */
 export default function GroupMembersDialog({ groupId, onClose }: GroupMembersDialogProps) {
   const { t } = useTranslation()
   const { data: groups } = useGroups()
-  const { data: users } = useUsers()
   const addMember = useAddGroupMember()
   const removeMember = useRemoveGroupMember()
   const [pick, setPick] = useState('')
+  const [kw, setKw] = useState('')
+  const q = useDebounced(kw, 300).trim()
+  const { data: page } = useUserSearch({ q: q || undefined, limit: CANDIDATE_LIMIT })
 
   const group = groups?.find((g) => g.id === groupId)
 
   const memberUserIds = new Set((group?.members ?? []).map((m) => m.userId))
-  const candidates: ComboboxOption[] = (users ?? [])
+  const candidates: ComboboxOption[] = (page?.items ?? [])
     .filter((u) => !memberUserIds.has(u.id))
     .map((u) => ({ value: String(u.id), label: u.username }))
+  // 服务端截断时提示「已显示前 N / 共 total」，引导键入缩小范围。
+  // Array.isArray 守卫：mock/后端异常返裸数组时不炸（page.items 可能 undefined）。
+  const truncated = !!page && Array.isArray(page.items) && page.total > page.items.length
 
   return (
     <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
@@ -69,28 +82,36 @@ export default function GroupMembersDialog({ groupId, onClose }: GroupMembersDia
             )}
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="flex-1">
-              <Combobox
-                options={candidates}
-                value={pick}
-                onChange={setPick}
-                allowCustom={false}
-                placeholder={t('groups.selectUser')}
-              />
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <div className="flex-1">
+                <Combobox
+                  options={candidates}
+                  value={pick}
+                  onChange={setPick}
+                  onQueryChange={setKw}
+                  allowCustom={false}
+                  placeholder={t('groups.selectUser')}
+                />
+              </div>
+              <Button
+                size="sm"
+                disabled={!pick || addMember.isPending}
+                onClick={() => {
+                  if (pick) {
+                    addMember.mutate({ id: groupId, userId: Number(pick) })
+                    setPick('')
+                  }
+                }}
+              >
+                {t('groups.addMember')}
+              </Button>
             </div>
-            <Button
-              size="sm"
-              disabled={!pick || addMember.isPending}
-              onClick={() => {
-                if (pick) {
-                  addMember.mutate({ id: groupId, userId: Number(pick) })
-                  setPick('')
-                }
-              }}
-            >
-              {t('groups.addMember')}
-            </Button>
+            {truncated && (
+              <p className="text-xs text-muted-foreground">
+                {t('groups.candidateHint', { shown: page.items.length, total: page.total })}
+              </p>
+            )}
           </div>
         </ScrollableDialogBody>
 

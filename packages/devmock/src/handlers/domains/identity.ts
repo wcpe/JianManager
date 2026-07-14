@@ -196,7 +196,17 @@ export const handlers = [
   domainRoute('get', '/users', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    return HttpResponse.json(users.list().map(toUserInfo))
+    // FR-336 双形态（镜像 router/user.go）：q 用户名模糊；带 limit 返 {items,total,limit,offset} 信封，
+    // 不带 limit 返旧裸数组（UsersPage/AuditPage 等既有消费方不破）。
+    const url = new URL(info.request.url)
+    const q = (url.searchParams.get('q') ?? '').trim().toLowerCase()
+    let rows = users.list().map(toUserInfo)
+    if (q) rows = rows.filter((u) => u.username.toLowerCase().includes(q))
+    const limitRaw = url.searchParams.get('limit')
+    if (limitRaw === null) return HttpResponse.json(rows)
+    const limit = Math.min(Math.max(Number(limitRaw) || 1, 1), 500)
+    const offset = Math.max(Number(url.searchParams.get('offset')) || 0, 0)
+    return HttpResponse.json({ items: rows.slice(offset, offset + limit), total: rows.length, limit, offset })
   }),
 
   domainRoute('put', '/users/:id', async (info) => {
