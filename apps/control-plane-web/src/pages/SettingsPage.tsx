@@ -8,7 +8,8 @@ import { useAuthStore } from '@/stores/auth'
 import { changeLanguage } from '@/i18n'
 import { cn } from '@jianmanager/ui'
 import { useSettings, useUpdateSettings, type SettingItem } from '@/api/settings'
-import { diffSettings, hasUnsavedChanges } from './settings-form'
+import { diffSettings, hasUnsavedChanges, hasInvalidDraft, validateSettingDraft } from './settings-form'
+import { FieldError } from '@jianmanager/ui/components/field-label'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
@@ -265,6 +266,8 @@ function PlatformCategory({
 
   const changed = diffSettings(editable, draft)
   const hasChanges = Object.keys(changed).length > 0
+  // 展示值（草稿优先）存在非法项即禁保存——前端与后端 422 双闸（验收矩阵 #3）。
+  const hasInvalid = hasInvalidDraft(editable, draft)
   const isSecurity = category === 'security'
 
   const save = async () => {
@@ -344,7 +347,7 @@ function PlatformCategory({
           </div>
           {editable.length > 0 && (
             <div className="flex justify-end">
-              <Button size="sm" onClick={save} disabled={!hasChanges || update.isPending}>
+              <Button size="sm" onClick={save} disabled={!hasChanges || hasInvalid || update.isPending}>
                 {update.isPending ? t('common.saving', '保存中…') : t('common.save', '保存')}
               </Button>
             </div>
@@ -383,6 +386,8 @@ function EditableRow({
   onChange: (v: string) => void
 }) {
   const { t } = useTranslation()
+  // 文本类项按键做客户端校验（时长/非负整数/镜像非空/代理 URL），非法即红框+行内错误。
+  const draftError = validateSettingDraft(item.key, value)
   return (
     <div className="flex items-center justify-between gap-4 px-3 py-2">
       <div className="min-w-0">
@@ -423,7 +428,16 @@ function EditableRow({
           </SelectContent>
         </Select>
       ) : (
-        <Input value={value} onChange={(e) => onChange(e.target.value)} className="h-8 w-56" />
+        <div className="w-56">
+          <Input
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            className="h-8"
+            inputMode={item.key === 'backup.retention_days' ? 'numeric' : undefined}
+            aria-invalid={!!draftError}
+          />
+          <FieldError error={draftError} />
+        </div>
       )}
     </div>
   )
