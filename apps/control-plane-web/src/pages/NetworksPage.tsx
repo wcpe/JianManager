@@ -393,6 +393,7 @@ function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose
   const action = useNetworkAction(networkId)
   const [selected, setSelected] = useState<number[]>([])
   const [candFilter, setCandFilter] = useState('')
+  const [removeTarget, setRemoveTarget] = useState<{ instanceId: number; name: string } | null>(null)
 
   const nodeName = useMemo(() => {
     const m = new Map<number, string>()
@@ -433,7 +434,18 @@ function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose
     })
   }
 
+  // 成员移除是可逆软操作（可重新加入），但会改变群组拓扑，故加二次确认。
+  const confirmRemove = () => {
+    if (!removeTarget) return
+    removeMember.mutate(removeTarget.instanceId, {
+      onSuccess: () => toast.success(t('networks.memberRemoved')),
+      onError: () => toast.error(t('common.error')),
+      onSettled: () => setRemoveTarget(null),
+    })
+  }
+
   return (
+    <>
     <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
       <DialogContent
         className="flex max-h-[88vh] w-full max-w-4xl flex-col gap-0 overflow-hidden p-0"
@@ -514,7 +526,7 @@ function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose
                         size="xs"
                         variant="ghost"
                         className="shrink-0 text-status-danger hover:text-status-danger"
-                        onClick={() => removeMember.mutate(m.instanceId)}
+                        onClick={() => setRemoveTarget({ instanceId: m.instanceId, name: m.name })}
                       >
                         {t('networks.removeMember')}
                       </Button>
@@ -586,5 +598,15 @@ function NetworkDetailPanel({ networkId, onClose }: { networkId: number; onClose
         </div>
       </DialogContent>
     </Dialog>
+      <DangerConfirm
+        open={removeTarget !== null}
+        title={t('networks.removeMemberConfirm', { name: removeTarget?.name ?? '' })}
+        description={t('networks.removeMemberDesc')}
+        confirmLabel={t('networks.removeMember')}
+        pending={removeMember.isPending}
+        onConfirm={confirmRemove}
+        onCancel={() => setRemoveTarget(null)}
+      />
+    </>
   )
 }

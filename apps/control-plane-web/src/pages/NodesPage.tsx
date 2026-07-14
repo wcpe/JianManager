@@ -509,8 +509,9 @@ export default function NodesPage() {
     })
   }
 
-  const toggleMaintenance = (node: NodeInfo) => {
-    const enabled = !node.maintenance
+  const [maintenanceTarget, setMaintenanceTarget] = useState<NodeInfo | null>(null)
+
+  const runMaintenance = (node: NodeInfo, enabled: boolean) => {
     setMaintenance.mutate(
       { id: node.id, enabled },
       {
@@ -520,6 +521,21 @@ export default function NodesPage() {
           toast.error(e?.response?.data?.message || t('common.error')),
       },
     )
+  }
+
+  // 进入维护会中断新实例调度（不影响运行实例、可退出回退），故进入方向加二次确认；退出无害直接执行。
+  const toggleMaintenance = (node: NodeInfo) => {
+    if (!node.maintenance) {
+      setMaintenanceTarget(node)
+      return
+    }
+    runMaintenance(node, false)
+  }
+
+  const confirmMaintenance = () => {
+    if (!maintenanceTarget) return
+    runMaintenance(maintenanceTarget, true)
+    setMaintenanceTarget(null)
   }
 
   const confirmPending = () => {
@@ -715,6 +731,15 @@ export default function NodesPage() {
         scope="platform"
         onConfirm={confirmForceDelete}
         onCancel={() => setForcePending(null)}
+      />
+      <DangerConfirm
+        open={maintenanceTarget !== null}
+        title={t('nodes.maintenanceConfirmTitle')}
+        description={t('nodes.maintenanceConfirmDesc', { name: maintenanceTarget?.name ?? '' })}
+        confirmLabel={t('nodes.enterMaintenance')}
+        pending={setMaintenance.isPending}
+        onConfirm={confirmMaintenance}
+        onCancel={() => setMaintenanceTarget(null)}
       />
     </div>
   )

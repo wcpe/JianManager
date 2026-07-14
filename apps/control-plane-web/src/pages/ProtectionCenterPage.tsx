@@ -39,6 +39,7 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
 import { Textarea } from '@jianmanager/ui/components/textarea'
+import DangerConfirm from '@/components/DangerConfirm'
 
 const EMPTY = '—'
 
@@ -633,6 +634,7 @@ function GroupsTab() {
   const deleteGroup = useDeleteClientSecurityGroup()
   const [name, setName] = useState('')
   const [targetType, setTargetType] = useState<SecurityTargetType>('ip')
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string } | null>(null)
   const submit = (e: FormEvent) => {
     e.preventDefault()
     createGroup.mutate({ name, kind: 'manual', targetType, enabled: true, rule: null, actionPolicy: null }, {
@@ -643,7 +645,16 @@ function GroupsTab() {
       onError: () => toast.error('创建安全分组失败'),
     })
   }
+  const confirmDeleteGroup = () => {
+    if (!deleteTarget) return
+    deleteGroup.mutate(deleteTarget.id, {
+      onSuccess: () => toast.success('已删除安全分组'),
+      onError: () => toast.error('删除安全分组失败'),
+      onSettled: () => setDeleteTarget(null),
+    })
+  }
   return (
+    <>
     <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
       <Panel title="新建手动分组" icon={<UsersRound className="size-4" />}>
         <form className="space-y-3" onSubmit={submit}>
@@ -688,7 +699,7 @@ function GroupsTab() {
                   <TableCell><Badge variant={group.enabled ? 'default' : 'outline'}>{group.enabled ? '启用' : '停用'}</Badge></TableCell>
                   <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{fmtTime(group.updatedAt)}</TableCell>
                   <TableCell className="text-right">
-                    <Button size="xs" variant="outline" disabled={deleteGroup.isPending} onClick={() => deleteGroup.mutate(group.id)}>删除</Button>
+                    <Button size="xs" variant="outline" className="text-status-danger hover:text-status-danger" onClick={() => setDeleteTarget({ id: group.id, name: group.name })}>删除</Button>
                   </TableCell>
                 </TableRow>
               ))}
@@ -697,6 +708,15 @@ function GroupsTab() {
         )}
       </Panel>
     </div>
+      <DangerConfirm
+        open={deleteTarget !== null}
+        title={`删除安全分组「${deleteTarget?.name ?? ''}」`}
+        description="删除后该分组的防护规则立即失效，此操作不可撤销。"
+        pending={deleteGroup.isPending}
+        onConfirm={confirmDeleteGroup}
+        onCancel={() => setDeleteTarget(null)}
+      />
+    </>
   )
 }
 
