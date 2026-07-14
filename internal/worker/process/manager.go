@@ -93,6 +93,13 @@ type Manager struct {
 	// memGuard 启动内存闸配置；readMem 系统内存读数器（nil=真读数，测试注入，FR-317）。
 	memGuard MemGuardConfig
 	readMem  readSysMem
+	// recoverDial / recoverKillTree / recoverPIDAlive / recoverSleep 是接管扫描兜底路径
+	// （FR-325）的可注入桩：nil=真实现（strategy.Reconnect / daemon.KillPIDTree /
+	// daemon.IsPIDAlive / time.Sleep），测试注入以免真拨号、真杀进程、真等待。
+	recoverDial     func(s *daemonStrategy, addr string) error
+	recoverKillTree func(pid int) error
+	recoverPIDAlive func(pid int) bool
+	recoverSleep    func(d time.Duration)
 }
 
 // NewManager 创建进程管理器。
@@ -615,7 +622,7 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 		}
 
 		// wrapper 进程不存活：清理 PID 文件 + 残留 socket
-		if rec.WrapperPID <= 0 || !daemon.IsPIDAlive(rec.WrapperPID) {
+		if rec.WrapperPID <= 0 || !m.pidAlive(rec.WrapperPID) {
 			slog.Info("daemon wrapper 已不存活，清理残留", "instanceId", rec.InstanceUUID, "wrapperPid", rec.WrapperPID)
 			_ = os.Remove(pidPath)
 			if rec.SocketAddr != "" {
@@ -627,9 +634,11 @@ func (m *Manager) RecoverDaemonInstances() (int, error) {
 		// wrapper 存活：构造 daemon 策略并 reconnect。
 		// WorkDir 从 PID 记录恢复，否则文件/配置操作会因空工作目录失败（open :）。
 		strategy := newDaemonStrategy(m, CommandSpec{UUID: instanceUUID, WorkDir: rec.WorkDir, ProcessType: ProcessTypeDaemon, ProbePort: rec.ProbePort})
-		if err := strategy.Reconnect(rec.SocketAddr); err != nil {
-			slog.Warn("reconnect wrapper 失败，清理", "instanceId", instanceUUID, "error", err)
-			_ = os.Remove(pidPath)
+		if err := m.reconnectWithRetry(strategy, rec.SocketAddr, instanceUUID); err != nil {
+			// FR-325：重试耗尽仍拨不通。此前只删 PID 文件，活着的 wrapper/Java 从此不可
+			// 发现（孤儿永久化，真机事故：残留 java 占 Paper session.lock）。改为按 PID
+			// 记录强杀孤儿进程树，死透才清理；杀不死则保留 PID 文件待下次扫描再兜底。
+			m.reapOrphanWrapper(instanceUUID, pidPath, rec, err)
 			continue
 		}
 		strategy.SetWrapperPID(rec.WrapperPID)

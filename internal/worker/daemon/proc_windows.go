@@ -18,3 +18,12 @@ func killProcessTree(cmd *exec.Cmd) {
 	}
 	_ = exec.Command("taskkill", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Run()
 }
+
+// KillPIDTree 按 PID 用 taskkill /T /F 递归终止整棵进程树（FR-325 接管兜底：
+// 只有 PID 记录、无 *exec.Cmd 句柄），与 killProcessTree 同源。
+func KillPIDTree(pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	return exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").Run()
+}
