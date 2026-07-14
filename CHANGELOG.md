@@ -26,6 +26,7 @@
 - **一键搭建 MC 版本下拉不可滚动（FR-328，增强 FR-034，真机复现）**：搭建向导内 Combobox 下拉（节点/MC 版本/JDK/用户组）portal 到 body，被模态 Dialog 的 react-remove-scroll 滚动锁当「模态外区域」吞掉滚轮/触摸滚动，长版本列表（如 Paper 全版本）滚不动选不到——列表自身 max-h+内滚结构无病。共享 Combobox 的 Popover 置 `modal` 自持滚动锁分片放行滚动（真机 Chrome 验证 wheel 由被 preventDefault → 放行）；核查向导内其余下拉：核心类型 Radix Select 自带滚动锁管理且仅 3 项无此病，构建号/内存为纯输入框不涉及。
 - **折叠态导航分类图标点击跳转分类首页（FR-332，增强 FR-131/181，真机复现「点分类图标无反应」）**：折叠图标轨下分类图标原为「展开侧栏」按钮，现改为导航到该分类下第一个可见页面（groups 已按角色裁剪）并点亮激活态，侧栏保持折叠；展开态分类头仍为纯分组开关，行为不变。
 - **CP 本机应急密码重置子命令（FR-333）**：`jianmanager-cp reset-password -u <用户名> [-p <密码>] [-c <config>] [-list]`——bcrypt 重置并解锁账号，`-p` 留空自动生成 16 位随机密码，`-list` 列用户名。命令落 CP 二进制自身（数据库仅 CP 可读写；jmctl 按 ADR-041 不直连 DB）。
+- **启动闸补漏覆盖导入/克隆在途任务（FR-323 交付缺口，FR-331 勘察钓出）**：v0.16.0 的 FR-323 条目声称导入/克隆全程 statusReason「配合启动闸」，实际闸（`longOpInFlightGate`，原 `provisionInFlightGate`）只滤 kind=provision——migrate 搬迁 / 目录拷贝在途的实例仍可从单实例与批量入口启动到半截工作目录。闸的 kind 过滤扩为 provision/import/clone，拒启文案按 kind 区分（搭建中/导入中/克隆中）；前端禁启判定 `isProvisioningInstance` 同步扩展「导入中/克隆中」前缀（卡片/列表行/控制台三处启动按钮与琥珀横幅随之覆盖，横幅标题与 tooltip 文案泛化为长操作措辞）；Go 单测钉死 import/clone 在途单启+批量 start/restart 被拒、终态放行、不回写 CRASHED + vitest 覆盖前缀判定与控制台导入中禁启；API.md 同步修正闸表述。
 
 ## 0.16.0（2026-07-14）
 
