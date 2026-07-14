@@ -2749,7 +2749,8 @@
     "deleted": "用户组已删除",
     "quotaUpdated": "配额已更新",
     "memberAdded": "成员已添加",
-    "memberRemoved": "成员已移除"
+    "memberRemoved": "成员已移除",
+    "candidateHint": "已显示前 {{shown}} 个，共 {{total}} 个候选，键入以缩小范围"
   },
   "alerts": {
     "title": "告警管理",
@@ -3058,8 +3059,7 @@
     "logMessage": "消息",
     "playersPreview": "玩家预览",
     "noLogs": "暂无日志",
-    "placeholderTitle": "此分区已归位到服务器控制台",
-    "placeholderHint": "第一版原型先完成入口与信息密度，深层管理会在后续 FR 中补齐。",
+    "goCreateSchedule": "去定时任务页创建",
     "probeUnavailable": "探针未连入，部分在线玩家与世界数据为预览值",
     "lastStartFailed": "上次启动失败",
     "crashDiagnostics": "崩溃诊断",

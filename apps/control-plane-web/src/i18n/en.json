@@ -2770,7 +2770,8 @@
     "deleted": "Group deleted",
     "quotaUpdated": "Quota updated",
     "memberAdded": "Member added",
-    "memberRemoved": "Member removed"
+    "memberRemoved": "Member removed",
+    "candidateHint": "Showing first {{shown}} of {{total}} candidates; type to narrow"
   },
   "alerts": {
     "title": "Alert Management",
@@ -3058,8 +3059,7 @@
     "logMessage": "Message",
     "playersPreview": "Players Preview",
     "noLogs": "No logs",
-    "placeholderTitle": "This section now belongs inside the server console",
-    "placeholderHint": "The first mock prototype completes the entry and density; deeper management will follow in later FRs.",
+    "goCreateSchedule": "Create in the Schedules page",
     "probeUnavailable": "Probe is not connected; some player and world data is preview-only",
     "lastStartFailed": "Last start failed",
     "crashDiagnostics": "Crash Diagnostics",
