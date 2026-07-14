@@ -233,6 +233,15 @@ func (s *InstanceBatchService) delegateBatchOne(req InstanceBatchRequest, inst *
 		return fmt.Errorf("实例未运行，无法下发命令（当前状态 %s）", inst.Status)
 	}
 
+	// 在途搭建闸（FR-331 补漏 FR-319 二轮②）：批量 start/restart 直发 Worker RPC，
+	// 原先完全绕过单实例 Start 的搭建闸——搭建中实例会被启动到半截 jar。
+	// 启动类动作先过同一道闸；闸拦只计 failed、不回写 CRASHED（实例本身无恙）。
+	if req.Action == InstanceBatchStart || req.Action == InstanceBatchRestart {
+		if err := provisionInFlightGate(s.db, inst.ID); err != nil {
+			return err
+		}
+	}
+
 	client, ok := s.pool.Get(inst.Node.UUID)
 	if !ok {
 		// 生命周期动作与单实例 delegateToWorker 对齐：节点不可达视为失败并回写 CRASHED。

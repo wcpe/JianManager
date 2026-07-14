@@ -1,9 +1,9 @@
 import { Activity, useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { Activity as ActivityIcon, AlertTriangle, Boxes, Gauge, HardDrive, Layers, Play, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
+import { Activity as ActivityIcon, AlertTriangle, Boxes, Gauge, HardDrive, Layers, Loader2, Play, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
 
-import { useInstance, useKillInstance, useRestartInstance, useStartInstance, useStopInstance } from '@/api/instances'
+import { useInstance, useKillInstance, useRestartInstance, useStartInstance, useStopInstance, isProvisioningInstance } from '@/api/instances'
 import DangerConfirm from '@/components/DangerConfirm'
 import { useInstanceMetrics } from '@/api/metrics'
 import { useLogs } from '@/api/logs'
@@ -97,10 +97,14 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
 
   const canStart = instance.status === 'STOPPED' || instance.status === 'CRASHED'
   const canControl = instance.status === 'RUNNING' || instance.status === 'STARTING' || instance.status === 'STOPPING'
+  // 搭建中硬性禁启（FR-331）：provision 未终态期间启动按钮禁用 + tooltip 引导看任务中心，
+  // 与后端启动闸（FR-319 二轮②）同一信号源（statusReason「搭建中」），任务终态自然解禁。
+  const provisioning = isProvisioningInstance(instance)
   // 失败原因横幅（FR-312）：只看 statusReason 非空、不看 status——Worker 心跳会把 CRASHED
   // 冲回 STOPPED，若以状态为前置条件横幅会随之消失；再次启动时 CP transition 清空 reason，
   // 横幅纯受查询数据驱动消失，不留本地状态。
-  const startFailReason = instance.statusReason?.trim()
+  // 搭建中的 statusReason 是进行时状态而非失败（FR-331）：不落红色失败横幅，走下方琥珀状态横幅。
+  const startFailReason = provisioning ? undefined : instance.statusReason?.trim()
   const setActiveTab = (tab: TabKey) => {
     const next = new URLSearchParams(searchParams)
     if (tab === 'overview') next.delete('tab')
@@ -124,6 +128,22 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
             </div>
           </div>
         )}
+        {/* 搭建中状态横幅（FR-331）：琥珀而非红（是进行时不是失败），随 provision 任务终态清 reason 自动消失。 */}
+        {provisioning && (
+          <div
+            role="status"
+            className="flex items-start gap-2 rounded-md border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-xs text-status-warning"
+          >
+            <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin" />
+            <div className="min-w-0">
+              <p className="font-semibold">{t('instances.provisioningTitle')}</p>
+              <p className="mt-0.5 whitespace-pre-wrap break-words">{instance.statusReason}</p>
+              <Link to="/tasks" className="mt-0.5 inline-block font-medium underline underline-offset-2">
+                {t('instances.provisioningGoTasks')}
+              </Link>
+            </div>
+          </div>
+        )}
         <header className={cn('rounded-lg border bg-card/95 p-3 shadow-soft backdrop-blur-sm', instanceStatusGlowClass(instance.status))}>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0">
@@ -139,10 +159,13 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
               {canStart && (
-                <Button size="sm" onClick={() => start.mutate(instance.id)}>
-                  <Play className="size-3.5" />
-                  {t('instances.start')}
-                </Button>
+                // 禁用按钮带 disabled:pointer-events-none，tooltip 由外层 span 承载（FR-331）。
+                <span title={provisioning ? t('instances.provisioningBlocked') : undefined}>
+                  <Button size="sm" disabled={provisioning} onClick={() => start.mutate(instance.id)}>
+                    <Play className="size-3.5" />
+                    {t('instances.start')}
+                  </Button>
+                </span>
               )}
               <Button size="sm" variant="outline" disabled={!canControl} onClick={() => restart.mutate(instance.id)}>
                 <RotateCw className="size-3.5" />

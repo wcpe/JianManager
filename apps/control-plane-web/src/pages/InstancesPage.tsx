@@ -10,6 +10,7 @@ import {
   useRestartInstance,
   useDeleteInstance,
   useKillInstance,
+  isProvisioningInstance,
   type InstanceListParams,
   type InstanceSearchParams,
   type InstanceInfo,
@@ -567,18 +568,21 @@ export default function InstancesPage() {
           </TableCell>
           <TableCell>
             <div className="flex items-center gap-1">
-              {/* 主操作随状态，操作进行中禁用防连点（FR-138） */}
+              {/* 主操作随状态，操作进行中禁用防连点（FR-138）；
+                  搭建中硬性禁启（FR-331），tooltip 由外层 span 承载（禁用态 pointer-events-none）。 */}
               {(inst.status === 'STOPPED' || inst.status === 'CRASHED') && (
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  disabled={start.isPending && start.variables === inst.id}
-                  onClick={() => start.mutate(inst.id)}
-                  aria-label={t('instances.start')}
-                  className="text-green-600 hover:text-green-700"
-                >
-                  {start.isPending && start.variables === inst.id ? t('instances.processing') : t('instances.start')}
-                </Button>
+                <span title={isProvisioningInstance(inst) ? t('instances.provisioningBlocked') : undefined}>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    disabled={isProvisioningInstance(inst) || (start.isPending && start.variables === inst.id)}
+                    onClick={() => start.mutate(inst.id)}
+                    aria-label={t('instances.start')}
+                    className="text-green-600 hover:text-green-700"
+                  >
+                    {start.isPending && start.variables === inst.id ? t('instances.processing') : t('instances.start')}
+                  </Button>
+                </span>
               )}
               {inst.status === 'RUNNING' && (
                 <>

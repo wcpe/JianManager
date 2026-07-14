@@ -5,6 +5,7 @@ import {
   useStartInstance,
   useStopInstance,
   useRestartInstance,
+  isProvisioningInstance,
   type InstanceInfo,
 } from '@/api/instances'
 import { useInstanceMetrics } from '@/api/metrics'
@@ -62,6 +63,8 @@ export function InstanceWorktableCard({
 
   const running = inst.status === 'RUNNING'
   const stopped = inst.status === 'STOPPED' || inst.status === 'CRASHED'
+  // 搭建中硬性禁启（FR-331）：provision 未终态期间启动按钮直接禁用，不再只靠琥珀文案劝阻。
+  const provisioning = isProvisioningInstance(inst)
   // 仅运行态拉实时指标；停机/过渡态不轮询（省请求，避免离线 422）。
   const { data: metrics } = useInstanceMetrics(inst.id, running)
   const level: StatusLevel = instanceStatusLevel(inst.status)
@@ -110,15 +113,16 @@ export function InstanceWorktableCard({
             />
           </div>
           {/* 失败原因（FR-312 放宽 FR-#2 条件）：statusReason 非空即显、不看 status——
-              Worker 心跳会把 CRASHED 冲回 STOPPED，以 CRASHED 为前置条件时原因随之不可见。 */}
-          {inst.statusReason && (
+              Worker 心跳会把 CRASHED 冲回 STOPPED，以 CRASHED 为前置条件时原因随之不可见。
+              搭建中的 reason 是进行时状态而非失败（FR-331），只走下方琥珀行、不落红。 */}
+          {inst.statusReason && !provisioning && (
             <p className="mt-0.5 line-clamp-2 text-[11px] text-status-danger" title={inst.statusReason}>
               {inst.statusReason}
             </p>
           )}
           {/* 搭建中提示（FR-319）：一键搭建异步化后核心下载期间实例为 STOPPED，
-              标注「搭建中」让用户知道尚不可启动（后端启动闸也会拦）。 */}
-          {inst.status === 'STOPPED' && inst.statusReason?.startsWith('搭建中') && (
+              标注「搭建中」让用户知道尚不可启动（启动按钮同步禁用 + 后端启动闸兜底，FR-331）。 */}
+          {provisioning && (
             <p className="mt-0.5 line-clamp-2 text-[11px] text-status-warning" title={inst.statusReason}>
               {inst.statusReason}
             </p>
@@ -157,17 +161,20 @@ export function InstanceWorktableCard({
         )}
         <div className="ml-auto flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
           {stopped && (
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              disabled={start.isPending && start.variables === inst.id}
-              onClick={() => start.mutate(inst.id)}
-              aria-label={t('instances.start')}
-              title={t('instances.start')}
-              className="text-status-success hover:text-status-success"
-            >
-              <Play className="size-3.5" />
-            </Button>
+            // 禁用按钮带 disabled:pointer-events-none，tooltip 由外层 span 承载（FR-331）。
+            <span title={provisioning ? t('instances.provisioningBlocked') : undefined}>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                disabled={provisioning || (start.isPending && start.variables === inst.id)}
+                onClick={() => start.mutate(inst.id)}
+                aria-label={t('instances.start')}
+                title={provisioning ? t('instances.provisioningBlocked') : t('instances.start')}
+                className="text-status-success hover:text-status-success"
+              >
+                <Play className="size-3.5" />
+              </Button>
+            </span>
           )}
           {running && (
             <>

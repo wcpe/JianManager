@@ -61,6 +61,34 @@ describe('InstanceWorktableCard 点击卡片打开实例（FIX-9）', () => {
     expect(screen.getByText('实例未绑定 JDK，启动委托失败')).toBeInTheDocument()
   })
 
+  it('搭建中硬性禁启（FR-331）：启动按钮禁用 + tooltip 引导看任务中心 + 琥珀提示不落红', () => {
+    renderWithProviders(
+      <InstanceWorktableCard
+        inst={{ ...stoppedInst, statusReason: '搭建中：正在下载核心（完成前请勿启动）' } as InstanceInfo}
+        nodeName="node-a"
+        roleBadge={null}
+        menu={null}
+      />,
+      { route: '/instances' },
+    )
+
+    const startBtn = screen.getByRole('button', { name: '启动' })
+    expect(startBtn).toBeDisabled()
+    expect(startBtn).toHaveAttribute('title', expect.stringContaining('任务中心'))
+    // 禁用按钮 pointer-events-none，tooltip 由外层 span 兜底承载。
+    expect(startBtn.closest('span')).toHaveAttribute('title', expect.stringContaining('任务中心'))
+    // 搭建中是进行时状态：琥珀行显示 reason，不再同时落红色失败行（只render一处）。
+    expect(screen.getAllByText('搭建中：正在下载核心（完成前请勿启动）')).toHaveLength(1)
+  })
+
+  it('非搭建中的 STOPPED 实例启动按钮可点（FR-331 不误伤）', () => {
+    renderWithProviders(
+      <InstanceWorktableCard inst={stoppedInst} nodeName="node-a" roleBadge={null} menu={null} />,
+      { route: '/instances' },
+    )
+    expect(screen.getByRole('button', { name: '启动' })).toBeEnabled()
+  })
+
   it('传入 onOpen 时由调用方处理深链跳转', async () => {
     const opened: number[] = []
     const user = userEvent.setup()

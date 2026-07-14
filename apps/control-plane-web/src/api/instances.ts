@@ -48,6 +48,15 @@ export interface InstanceInfo {
   createdAt: string
 }
 
+/**
+ * 实例是否处于「搭建中」（FR-331）：一键搭建 provision 任务未终态期间，后端把实例
+ * statusReason 固定标注为「搭建中：…」且状态保持 STOPPED（FR-319 二轮③）。
+ * 前端据此硬性禁用启动入口（与后端启动闸同一信号源）；任务终态后 reason 被清空/改写，自然解禁。
+ */
+export function isProvisioningInstance(inst: Pick<InstanceInfo, 'status' | 'statusReason'>): boolean {
+  return inst.status === 'STOPPED' && !!inst.statusReason?.startsWith('搭建中')
+}
+
 /** 实例列表多维筛选参数（FR-047）：任意组合，留空表示该维度不过滤。 */
 export interface InstanceListParams {
   nodeId?: number

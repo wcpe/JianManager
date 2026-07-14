@@ -832,7 +832,7 @@ func (s *InstanceService) Start(id uint) error {
 
 	// 在途搭建闸（FR-319）：一键搭建异步化后实例秒回 STOPPED 可点启动，但核心可能还在
 	// 后台下载——此时启动会得到 corrupt/缺失 jar。若有未终态的 provision 任务关联本实例即拒。
-	if err := s.provisionInFlightGate(id); err != nil {
+	if err := provisionInFlightGate(s.db, id); err != nil {
 		return err
 	}
 
@@ -859,11 +859,12 @@ func (s *InstanceService) Start(id uint) error {
 	return nil
 }
 
-// provisionInFlightGate 拦截「核心还在下载就点启动」（FR-319）：
-// 查有无关联本实例、未终态（pending/running）的 provision 任务，有则拒启并引导看任务中心。
-func (s *InstanceService) provisionInFlightGate(instanceID uint) error {
+// provisionInFlightGate 拦截「核心还在下载就点启动」（FR-319 二轮②）：
+// 查有无关联该实例、未终态（pending/running）的 provision 任务，有则拒启并引导看任务中心。
+// 包级函数：单实例 Start 与批量 start/restart（FR-331 补漏）共用同一道闸。
+func provisionInFlightGate(db *gorm.DB, instanceID uint) error {
 	var count int64
-	err := s.db.Model(&model.Task{}).
+	err := db.Model(&model.Task{}).
 		Where("instance_id = ? AND kind = ? AND state IN ?",
 			instanceID, model.TaskKindProvision,
 			[]model.TaskState{model.TaskStatePending, model.TaskStateRunning}).

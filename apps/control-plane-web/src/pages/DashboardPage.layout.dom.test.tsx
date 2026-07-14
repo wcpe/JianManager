@@ -20,6 +20,11 @@ vi.mock('@/api/instances', () => ({
   useStopInstance: () => ({ mutate: () => undefined }),
   useRestartInstance: () => ({ mutate: () => undefined }),
   useKillInstance: () => ({ mutate: () => undefined }),
+  // FR-331：路由挂 InstanceConsolePage 时会调用，工厂 mock 需带上（恒 false=非搭建中）。
+  isProvisioningInstance: () => false,
+  // FR-313 崩溃诊断卡经 crashSnapshots.ts 引用该常量（真模块），工厂 mock 缺它会在
+  // 懒加载片段落地时抛「No export is defined」偶发炸布局用例。
+  INSTANCE_QUERY_GC_TIME_MS: 15 * 60_000,
 }))
 vi.mock('@/api/nodes', () => ({
   useNodes: () => ({ data: [{ id: 1, name: 'alpha', status: 1, diskUsage: 12 }] }),
