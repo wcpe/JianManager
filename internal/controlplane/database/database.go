@@ -118,6 +118,8 @@ func AutoMigrate(db *gorm.DB) error {
 		// 与用户组 / 网络群组正交，仅供组织归类，不承载 RBAC / 部署语义。
 		&model.InstanceGroupNode{},
 		&model.InstanceGroupMember{},
+		// 实例崩溃快照（FR-313）：进程非正常退出现场留存，每实例滚动保留最近 5 条。
+		&model.InstanceCrashSnapshot{},
 		&model.ServerRegistration{},
 		&model.Network{},
 		&model.NetworkMember{},

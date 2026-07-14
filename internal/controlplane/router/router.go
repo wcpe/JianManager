@@ -39,6 +39,8 @@ type Services struct {
 	Player           *service.PlayerService
 	PlayerEvent      *service.PlayerEventService
 	ServerState      *service.ServerStateService
+	// CrashSnapshot 实例崩溃快照只读查询（FR-313）；nil 时端点关闭。
+	CrashSnapshot *service.CrashSnapshotService
 	Business         *service.BusinessService
 	BusinessEvent    *service.BusinessEventService
 	Config           *service.ConfigService
@@ -242,6 +244,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.ServerState != nil {
 			serverStateHandler := NewServerStateHandler(svcs.ServerState, svcs.Authz)
 			serverStateHandler.RegisterRoutes(protected)
+		}
+
+		// 崩溃诊断：实例崩溃快照只读列表（FR-313），instance:read 且实例可访问。
+		if svcs.CrashSnapshot != nil {
+			NewCrashSnapshotHandler(svcs.CrashSnapshot, svcs.Authz).RegisterRoutes(protected)
 		}
 
 		// JBIS 业务对接：经探针桥下发业务命令（domain.action+payload）并透传结果（FR-116），instance:operate 且实例可访问。

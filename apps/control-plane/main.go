@@ -270,6 +270,9 @@ func main() {
 	// 服务器状态查询服务（FR-076，见 ADR-016）：按需经探针反向 WS 桥的 QueryServerState
 	// 取回某实例全量 Bukkit 内部状态（前端「服务器状态」tab 开/刷新才查，FR-077）。
 	serverStateSvc := service.NewServerStateService(db, pool)
+
+	// 崩溃快照只读查询（FR-313）：写入在 gRPC 层（Worker 上报），REST 只读供实例控制台「崩溃诊断」卡。
+	crashSnapshotSvc := service.NewCrashSnapshotService(db)
 	// 业务对接编排服务（FR-116，见 ADR-026/027）：经探针桥下发业务命令（domain.action+payload）
 	// 并透传结果，CP 插件无关、降级即默认。JBIS 业务对接平台 M1 脊柱。
 	businessSvc := service.NewBusinessService(db, pool)
@@ -409,6 +412,7 @@ func main() {
 		Player:                  playerSvc,
 		PlayerEvent:             playerEventSvc,
 		ServerState:             serverStateSvc,
+		CrashSnapshot:           crashSnapshotSvc,
 		Business:                businessSvc,
 		BusinessEvent:           businessEventSvc,
 		Config:                  configSvc,

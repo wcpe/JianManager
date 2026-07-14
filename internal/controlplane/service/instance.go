@@ -698,6 +698,8 @@ func (s *InstanceService) Delete(id uint) error {
 		// 级联删除群组服关系（ADR-007）：作为代理或后端的注册记录、群组成员关系。
 		tx.Where("proxy_id = ? OR backend_id = ?", id, id).Delete(&model.ServerRegistration{})
 		tx.Where("instance_id = ?", id).Delete(&model.NetworkMember{})
+		// 级联清理崩溃快照（FR-313）。
+		tx.Where("instance_id = ?", id).Delete(&model.InstanceCrashSnapshot{})
 		// 删除实例
 		return tx.Delete(&model.Instance{}, id).Error
 	})
