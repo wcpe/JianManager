@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/glebarez/sqlite"
@@ -165,7 +166,7 @@ func TestTaskService_AppendLogs_OverlapWindowDedup(t *testing.T) {
 	require.Equal(t, []string{"a", "b", "c", "d"}, []string{logs[0].Line, logs[1].Line, logs[2].Line, logs[3].Line})
 }
 
-// List 归属隔离：非管理员只见自己发起的，管理员见全部。
+// List 归属隔离：非管理员只见自己发起的（total 同口径只数本人），管理员见全部。
 func TestTaskService_List_OwnershipScoping(t *testing.T) {
 	db := newTaskTestDB(t)
 	svc := newTaskSvc(t, db)
@@ -175,15 +176,17 @@ func TestTaskService_List_OwnershipScoping(t *testing.T) {
 	_, _ = svc.CreateTask("tb", node.ID, model.TaskKindJDKInstall, "t", "d", 20)
 
 	user10 := &UserAccess{UserID: 10, IsPlatformAdmin: false}
-	got, err := svc.List(user10, TaskListFilter{})
+	got, total, err := svc.List(user10, TaskListFilter{})
 	require.NoError(t, err)
 	require.Len(t, got, 1)
+	require.EqualValues(t, 1, total, "非管理员 total 只统计自己发起的")
 	require.Equal(t, "ta", got[0].TaskID)
 
 	admin := &UserAccess{UserID: 99, IsPlatformAdmin: true}
-	got, err = svc.List(admin, TaskListFilter{})
+	got, total, err = svc.List(admin, TaskListFilter{})
 	require.NoError(t, err)
 	require.Len(t, got, 2)
+	require.EqualValues(t, 2, total)
 }
 
 // 强制停止（FR-227）：节点离线 → 直接置 canceled（无 Worker 操作可中断）。
@@ -233,7 +236,7 @@ func TestTaskService_Cancel_TerminalAndCrossUser(t *testing.T) {
 	require.ErrorIs(t, svc.Cancel(&UserAccess{UserID: 999, IsPlatformAdmin: false}, "tc"), ErrTaskNotFound)
 }
 
-// List 筛选（FR-227）：按 state / keyword 过滤。
+// List 筛选（FR-227）：按 state / keyword 过滤；total 与筛选同口径（FR-337）。
 func TestTaskService_List_Filters(t *testing.T) {
 	db := newTaskTestDB(t)
 	svc := newTaskSvc(t, db)
@@ -244,15 +247,95 @@ func TestTaskService_List_Filters(t *testing.T) {
 	require.NoError(t, svc.MarkFailed("f2", "x"))
 	admin := &UserAccess{UserID: 1, IsPlatformAdmin: true}
 
-	byState, err := svc.List(admin, TaskListFilter{State: "failed"})
+	byState, total, err := svc.List(admin, TaskListFilter{State: "failed"})
 	require.NoError(t, err)
 	require.Len(t, byState, 1)
+	require.EqualValues(t, 1, total)
 	require.Equal(t, "f2", byState[0].TaskID)
 
-	byKw, err := svc.List(admin, TaskListFilter{Keyword: "Temurin"})
+	byKw, total, err := svc.List(admin, TaskListFilter{Keyword: "Temurin"})
 	require.NoError(t, err)
 	require.Len(t, byKw, 1)
+	require.EqualValues(t, 1, total)
 	require.Equal(t, "f1", byKw[0].TaskID)
+}
+
+// EffectiveWindow（FR-337）：limit 缺省 100、钳制 [1,500]；offset 负值归 0。
+func TestTaskListFilter_EffectiveWindow(t *testing.T) {
+	tests := []struct {
+		name       string
+		limit      int
+		offset     int
+		wantLimit  int
+		wantOffset int
+	}{
+		{"零值缺省", 0, 0, 100, 0},
+		{"负 limit 归缺省", -3, 0, 100, 0},
+		{"下界 1 保留", 1, 0, 1, 0},
+		{"区间内原样", 250, 30, 250, 30},
+		{"上界 500 保留", 500, 0, 500, 0},
+		{"超上限封顶 500", 501, 0, 500, 0},
+		{"负 offset 归 0", 100, -7, 100, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			limit, offset := TaskListFilter{Limit: tt.limit, Offset: tt.offset}.EffectiveWindow()
+			require.Equal(t, tt.wantLimit, limit)
+			require.Equal(t, tt.wantOffset, offset)
+		})
+	}
+}
+
+// List 分页窗口（FR-337）：offset 翻页窗口正确、越界 offset 返回空 items 且 total 不变、
+// total 不受窗口影响（Count 与 Find 同筛选不同窗）。
+func TestTaskService_List_PaginationWindow(t *testing.T) {
+	db := newTaskTestDB(t)
+	svc := newTaskSvc(t, db)
+	node := &model.Node{UUID: "up", Name: "n", Host: "h", GRPCPort: 1, WSPort: 2, Secret: "s"}
+	require.NoError(t, db.Create(node).Error)
+	// 依次建 p1..p5：created_at DESC, id DESC 稳定序下最新在前（p5,p4,p3,p2,p1）。
+	for i := 1; i <= 5; i++ {
+		_, err := svc.CreateTask(fmt.Sprintf("p%d", i), node.ID, model.TaskKindJDKInstall, "t", "d", 5)
+		require.NoError(t, err)
+	}
+	admin := &UserAccess{UserID: 1, IsPlatformAdmin: true}
+
+	// 首窗：limit=2 offset=0 → p5,p4；total=5（不受窗口影响）。
+	got, total, err := svc.List(admin, TaskListFilter{Limit: 2})
+	require.NoError(t, err)
+	require.EqualValues(t, 5, total)
+	require.Len(t, got, 2)
+	require.Equal(t, "p5", got[0].TaskID)
+	require.Equal(t, "p4", got[1].TaskID)
+
+	// 翻窗：offset=2 → p3,p2。
+	got, total, err = svc.List(admin, TaskListFilter{Limit: 2, Offset: 2})
+	require.NoError(t, err)
+	require.EqualValues(t, 5, total)
+	require.Len(t, got, 2)
+	require.Equal(t, "p3", got[0].TaskID)
+	require.Equal(t, "p2", got[1].TaskID)
+
+	// 越界 offset：items 空、total 不变。
+	got, total, err = svc.List(admin, TaskListFilter{Limit: 2, Offset: 100})
+	require.NoError(t, err)
+	require.EqualValues(t, 5, total)
+	require.Empty(t, got)
+
+	// 负 offset 归 0：等价首窗。
+	got, total, err = svc.List(admin, TaskListFilter{Limit: 2, Offset: -1})
+	require.NoError(t, err)
+	require.EqualValues(t, 5, total)
+	require.Len(t, got, 2)
+	require.Equal(t, "p5", got[0].TaskID)
+
+	// 窗口小于命中数时 total 仍为全量：limit=1 + state 筛选组合。
+	require.NoError(t, svc.MarkFailed("p1", "x"))
+	require.NoError(t, svc.MarkFailed("p2", "x"))
+	got, total, err = svc.List(admin, TaskListFilter{State: "failed", Limit: 1})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, total, "total 为同筛选命中总数，不受 limit 截窗影响")
+	require.Len(t, got, 1)
 }
 
 // Get 越权：非管理员查别人的任务返回 ErrTaskNotFound（不泄露存在性）。

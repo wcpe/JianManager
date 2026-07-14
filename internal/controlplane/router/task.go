@@ -22,7 +22,9 @@ func NewTaskHandler(svc *service.TaskService) *TaskHandler {
 }
 
 // List 列出任务（非平台管理员只见自己发起的，平台管理员见全部）。
-// 支持筛选 query（FR-227）：kind / state / nodeId / keyword / since / until（RFC3339）/ limit。
+// 支持筛选 query（FR-227）：kind / state / nodeId / keyword / since / until（RFC3339）。
+// 分页信封（FR-337）：`?limit=&offset=` → `{items,total,limit,offset}`，
+// total 与筛选（含归属隔离）同口径，limit/offset 回显钳制后的实际生效值。
 func (h *TaskHandler) List(c *gin.Context) {
 	access := getAccess(c)
 	f := service.TaskListFilter{
@@ -33,6 +35,11 @@ func (h *TaskHandler) List(c *gin.Context) {
 	if v := c.Query("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			f.Limit = n
+		}
+	}
+	if v := c.Query("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Offset = n
 		}
 	}
 	if v := c.Query("nodeId"); v != "" {
@@ -50,12 +57,13 @@ func (h *TaskHandler) List(c *gin.Context) {
 			f.Until = &ts
 		}
 	}
-	tasks, err := h.svc.List(access, f)
+	tasks, total, err := h.svc.List(access, f)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询任务列表失败"})
 		return
 	}
-	c.JSON(http.StatusOK, tasks)
+	limit, offset := f.EffectiveWindow()
+	c.JSON(http.StatusOK, gin.H{"items": tasks, "total": total, "limit": limit, "offset": offset})
 }
 
 // Cancel 强制停止任务（FR-227）；越权/不存在 404，已终态 409。

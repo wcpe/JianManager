@@ -176,16 +176,38 @@ type TaskListFilter struct {
 	Keyword string     // 标题/详情模糊匹配
 	Since   *time.Time // 创建时间下界
 	Until   *time.Time // 创建时间上界
-	Limit   int        // 默认 100
+	Limit   int        // 每窗行数，缺省 100、钳制 [1,500]（FR-337）
+	Offset  int        // 偏移，负值归 0（FR-337）
 }
 
-// List 列出任务（按筛选，FR-227）。非平台管理员只见自己发起的（createdBy）；平台管理员见全部。
-// 按创建时间倒序，limit 默认 100。
-func (s *TaskService) List(access *UserAccess, f TaskListFilter) ([]model.Task, error) {
-	limit := f.Limit
+// 任务列表分页窗口的缺省与上限（FR-337）。
+const (
+	taskListLimitDefault = 100
+	taskListLimitMax     = 500
+)
+
+// EffectiveWindow 返回钳制后的生效分页窗口（FR-337）：limit 缺省 100、钳制 [1,500]；offset 负值归 0。
+// service 查询与 router 信封回显共用，保证「实际生效值」单一来源。
+func (f TaskListFilter) EffectiveWindow() (limit, offset int) {
+	limit = f.Limit
 	if limit <= 0 {
-		limit = 100
+		limit = taskListLimitDefault
 	}
+	if limit > taskListLimitMax {
+		limit = taskListLimitMax
+	}
+	offset = f.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}
+
+// List 列出任务（FR-183/227/337）。返回 (items, total, error)；
+// total 为同筛选（含归属隔离）的命中总数。倒序 created_at DESC, id DESC（既有稳定序），
+// 分页窗口按 EffectiveWindow 钳制。非平台管理员只见自己发起的（createdBy）；平台管理员见全部。
+func (s *TaskService) List(access *UserAccess, f TaskListFilter) ([]model.Task, int64, error) {
+	limit, offset := f.EffectiveWindow()
 	q := s.db.Model(&model.Task{})
 	if access != nil && !access.IsPlatformAdmin {
 		q = q.Where("created_by = ?", access.UserID)
@@ -209,11 +231,17 @@ func (s *TaskService) List(access *UserAccess, f TaskListFilter) ([]model.Task, 
 	if f.Until != nil {
 		q = q.Where("created_at <= ?", *f.Until)
 	}
-	var tasks []model.Task
-	if err := q.Order("created_at DESC, id DESC").Limit(limit).Find(&tasks).Error; err != nil {
-		return nil, fmt.Errorf("查询任务列表失败: %w", err)
+	// Session 复用同一组筛选子句、Count 与 Find 各自克隆语句，避免子句互染（FR-337）。
+	q = q.Session(&gorm.Session{})
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("统计任务总数失败: %w", err)
 	}
-	return tasks, nil
+	var tasks []model.Task
+	if err := q.Order("created_at DESC, id DESC").Limit(limit).Offset(offset).Find(&tasks).Error; err != nil {
+		return nil, 0, fmt.Errorf("查询任务列表失败: %w", err)
+	}
+	return tasks, total, nil
 }
 
 // Get 查单个任务（含日志）。非平台管理员只能查自己发起的；越权返回 ErrTaskNotFound（不泄露存在性）。
