@@ -10,9 +10,14 @@
 //
 // 范围（首版写死）：仅服务于 DownloadCore 的服务端核心 jar，不缓存插件/其它下载路径。
 // 并发安全：写用临时文件 + 原子 rename；同 sha256 并发写「最后 rename 胜」，内容一致无害。
+//
+// FR-330 增强：meta 增加组合缓存键 CoreKey（core|mcVersion|build），无 sha256 的下载源
+// （Sponge Maven 等）经 LookupCoreKey 反查命中；GetTo 命中时全量校验内容，损坏即作废回退。
 package artifactcache
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -40,6 +45,9 @@ type Meta struct {
 	CachedAt time.Time `json:"cachedAt"`
 	// LastUsedAt 最近命中（GetTo）或存入时间，LRU 淘汰依据。
 	LastUsedAt time.Time `json:"lastUsedAt"`
+	// CoreKey 组合缓存键（FR-330）：sha256 未知的下载源（Sponge Maven 等）按
+	// `core|mcVersion|build` 反查缓存条目；可空（sha 键之外的补充索引）。
+	CoreKey string `json:"coreKey,omitempty"`
 }
 
 // Entry 是 List 返回的一条缓存项（合并 sha256 与元数据）。
@@ -52,6 +60,8 @@ type Entry struct {
 	Size       int64     `json:"size"`
 	CachedAt   time.Time `json:"cachedAt"`
 	LastUsedAt time.Time `json:"lastUsedAt"`
+	// CoreKey 组合缓存键（FR-330），meta 缺失时为空。
+	CoreKey string `json:"coreKey,omitempty"`
 }
 
 // Cache 是一个根目录下的内容寻址制品缓存。可被多个 goroutine 安全共享。
@@ -118,6 +128,9 @@ func (c *Cache) Has(sha string) bool {
 // GetTo 把缓存中 sha256 的 blob 拷贝到 dest（命中返回 true 并 touch LastUsedAt）。
 // 未命中返回 (false, nil) 且不创建 dest，调用方据此走下载路径。
 // 拷贝用临时文件 + 原子 rename，避免半成品文件被实例读到。
+//
+// 命中校验（FR-330）：拷贝时全量核算内容 sha256，与缓存键不符（磁盘损坏/外部篡改）
+// 即作废该条目并按未命中返回——绝不把脏内容交付给实例，调用方回退下载重建缓存。
 func (c *Cache) GetTo(sha, dest string) (bool, error) {
 	if !validSHA(sha) {
 		return false, nil
@@ -130,24 +143,35 @@ func (c *Cache) GetTo(sha, dest string) (bool, error) {
 		}
 		return false, fmt.Errorf("打开缓存 blob 失败: %w", err)
 	}
-	defer src.Close()
 
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		src.Close()
 		return false, fmt.Errorf("创建目标目录失败: %w", err)
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(dest), ".artifactcache-*.tmp")
 	if err != nil {
+		src.Close()
 		return false, fmt.Errorf("创建临时文件失败: %w", err)
 	}
 	tmpName := tmp.Name()
-	if _, err := io.Copy(tmp, src); err != nil {
+	h := sha256.New()
+	_, copyErr := io.Copy(tmp, io.TeeReader(src, h))
+	// 校验/作废前必须先关 src：Windows 上打开中的 blob 无法删除（sharing violation），
+	// 不先关句柄 Evict 会静默失败、损坏条目永远赖在缓存里。
+	src.Close()
+	if copyErr != nil {
 		tmp.Close()
 		_ = os.Remove(tmpName)
-		return false, fmt.Errorf("拷贝缓存内容失败: %w", err)
+		return false, fmt.Errorf("拷贝缓存内容失败: %w", copyErr)
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpName)
 		return false, err
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); got != sha {
+		_ = os.Remove(tmpName)
+		_ = c.Evict(sha)
+		return false, nil
 	}
 	if err := os.Rename(tmpName, dest); err != nil {
 		_ = os.Remove(tmpName)
@@ -156,6 +180,26 @@ func (c *Cache) GetTo(sha, dest string) (bool, error) {
 
 	c.touch(sha)
 	return true, nil
+}
+
+// LookupCoreKey 按组合缓存键（FR-330：`core|mcVersion|build`）反查已缓存的 sha256。
+// 多条命中（异常态：重复缓存）取 LastUsedAt 最新一条；空键/未命中返回 ("", false)。
+// 缓存条目量级小（个位数~几十个核心 jar），全量扫描 meta 即可，不另建索引文件。
+func (c *Cache) LookupCoreKey(key string) (string, bool) {
+	if strings.TrimSpace(key) == "" {
+		return "", false
+	}
+	var bestSHA string
+	var bestTime time.Time
+	for _, e := range c.scan() {
+		if e.CoreKey != key {
+			continue
+		}
+		if bestSHA == "" || e.LastUsedAt.After(bestTime) {
+			bestSHA, bestTime = e.SHA256, e.LastUsedAt
+		}
+	}
+	return bestSHA, bestSHA != ""
 }
 
 // Put 把 srcPath 文件存入缓存（键为 sha256，调用方保证内容确为该 sha256）。
@@ -327,6 +371,7 @@ func (c *Cache) scan() []Entry {
 				e.Name = m.Name
 				e.Type = m.Type
 				e.Version = m.Version
+				e.CoreKey = m.CoreKey
 				if m.Size > 0 {
 					e.Size = m.Size
 				}

@@ -111,6 +111,10 @@ type Server struct {
 	// 命中即从缓存秒拷到工作目录（免重下），未命中下载校验后存入。为 nil 表示未启用缓存
 	// （DownloadCore 退化为原有「每次都下载」行为，向后兼容）。由 SetArtifactCache 注入。
 	cache *artifactcache.Cache
+	// coreFlightMu/coreFlights 同核心并发下载单飞（FR-330）：同缓存键（sha256 或组合键）的
+	// 并发 DownloadCore 只有领队真正走网络，其余等待领队完成后从缓存秒取，不重复下载也不互相踩。
+	coreFlightMu sync.Mutex
+	coreFlights  map[string]*coreFlight
 
 	// runtimeScanner 运行时扫描器（FR-298 节点运行时库）：ScanRuntimes 按常见安装路径
 	// 发现 jdk/nodejs 候选。为 nil 表示未启用（返回空候选）。由 SetRuntimeScanner 注入。

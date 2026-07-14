@@ -27,13 +27,16 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服 + FR-178 节点制品缓存）。
+// DownloadCore 下载服务端核心 jar 到实例工作目录（FR-034 一键开服 + FR-178/330 节点核心缓存）。
 // 实例须已注册（CreateInstance），据其工作目录落地；可选 sha256 校验，不符则删除并报错。
 //
-// 节点制品缓存（FR-178，仅服务端核心 jar）：
-//  1. sha256 非空且缓存命中 → 直接从缓存秒拷到工作目录（免网络），touch lastUsed。
-//  2. 未命中 → 走 downloadFile 下载（边下边算 sha256 校验），落地后存入缓存 + 写 meta。
-//  3. sha256 为空（少数源无校验）→ 不缓存，按现状下载（缓存键必须是 sha256，无键不缓存）。
+// 节点核心缓存（FR-178 sha256 键 + FR-330 组合键，仅服务端核心 jar）：
+//  1. 命中 → 从缓存秒拷到工作目录（免网络）。键取 sha256（已知时）或 core|mcVersion|build
+//     组合键（Sponge Maven 等无 sha 源）；命中时全量校验内容，损坏即作废条目回退下载。
+//  2. 未命中 → 同缓存键并发单飞（FR-330）：领队走 downloadFile 下载（边下边算 sha256 校验），
+//     落地后存入缓存 + 写 meta；其余等待领队完成后从缓存取，同核心并发搭建只下载一次。
+//  3. 无任何缓存键（sha256 为空且组合键成分不全，如 BungeeCord latest）→ 每次下载，
+//     仍按算出的 sha256 存入缓存（面板可见可清理），但因无键不可复用。
 func (s *Server) DownloadCore(ctx context.Context, req *workerpb.DownloadCoreRequest) (*workerpb.DownloadCoreResponse, error) {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)
 	if !exists {
@@ -51,51 +54,164 @@ func (s *Server) DownloadCore(ctx context.Context, req *workerpb.DownloadCoreReq
 	target := filepath.Join(inst.WorkDir, dest)
 
 	want := strings.ToLower(strings.TrimSpace(req.Sha256))
+	coreKey := coreCacheKey(req.CoreType, req.McVersion, req.Build)
 
-	// 1) 缓存命中（仅当有 sha256 键且启用缓存）：秒拷免网络。
-	if s.cache != nil && want != "" {
-		if err := os.MkdirAll(inst.WorkDir, 0o755); err != nil {
-			return &workerpb.DownloadCoreResponse{Success: false, Error: fmt.Sprintf("创建工作目录失败: %v", err)}, nil
-		}
-		if hit, err := s.cache.GetTo(want, target); err == nil && hit {
-			if st, statErr := os.Stat(target); statErr == nil {
-				slog.Info("核心下载：缓存命中秒拷", "instance", req.InstanceUuid, "sha256", want[:12], "size", st.Size())
-				return &workerpb.DownloadCoreResponse{Success: true, Size: st.Size()}, nil
-			}
-		}
+	// 1) 缓存命中：sha256 键优先，组合键兜底。GetTo 内部全量校验，损坏条目作废按未命中走。
+	if size, hit := s.fetchCoreFromCache(req.InstanceUuid, want, coreKey, target); hit {
+		return &workerpb.DownloadCoreResponse{Success: true, Size: size, CacheHit: true}, nil
 	}
 
-	// 2) 未命中：下载并（有 sha256 时）校验。
-	// 开始/结果都留日志（FR-319）：慢源下载被 CP 取消/中断时，此前 worker 全程零痕迹不可追查。
+	// 2) 未命中：同缓存键并发单飞（FR-330）。无键（latest 等不可冻结源）直接下载。
+	flightKey := want
+	if flightKey == "" {
+		flightKey = coreKey
+	}
+	if s.cache == nil || flightKey == "" {
+		size, err := s.downloadCoreToTarget(ctx, req, target, dest, want, coreKey)
+		if err != nil {
+			return &workerpb.DownloadCoreResponse{Success: false, Error: err.Error()}, nil
+		}
+		return &workerpb.DownloadCoreResponse{Success: true, Size: size}, nil
+	}
+
+	fl, leader := s.joinCoreFlight(flightKey)
+	if leader {
+		size, err := s.downloadCoreToTarget(ctx, req, target, dest, want, coreKey)
+		s.finishCoreFlight(flightKey, fl, err)
+		if err != nil {
+			return &workerpb.DownloadCoreResponse{Success: false, Error: err.Error()}, nil
+		}
+		return &workerpb.DownloadCoreResponse{Success: true, Size: size}, nil
+	}
+
+	// 跟随者：等领队完成后从缓存取（领队 Put 先于 finish，成功即可命中）。
+	select {
+	case <-fl.done:
+	case <-ctx.Done():
+		return &workerpb.DownloadCoreResponse{Success: false, Error: fmt.Sprintf("等待同核心下载被取消: %v", ctx.Err())}, nil
+	}
+	if fl.err == nil {
+		if size, hit := s.fetchCoreFromCache(req.InstanceUuid, want, coreKey, target); hit {
+			return &workerpb.DownloadCoreResponse{Success: true, Size: size, CacheHit: true}, nil
+		}
+	}
+	// 领队失败或缓存取失败（Put 失败/条目被并发清理）：退化为自己下载，保证本实例交付。
+	size, err := s.downloadCoreToTarget(ctx, req, target, dest, want, coreKey)
+	if err != nil {
+		return &workerpb.DownloadCoreResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &workerpb.DownloadCoreResponse{Success: true, Size: size}, nil
+}
+
+// coreCacheKey 组合缓存键（FR-330）：无 sha256 的下载源按 `core|mcVersion|build` 定位缓存。
+// 三元组必须都具体（CP 已把 latest/未指定构建解析为具体构建再下发）；缺任一
+// （如 BungeeCord latest 无构建号）返回空 = 不参与组合键缓存，避免冻结 latest 语义。
+func coreCacheKey(coreType, mcVersion string, build int32) string {
+	ct := strings.ToLower(strings.TrimSpace(coreType))
+	mv := strings.TrimSpace(mcVersion)
+	if ct == "" || mv == "" || strings.EqualFold(mv, "latest") || build <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s|%s|%d", ct, mv, build)
+}
+
+// fetchCoreFromCache 尝试从节点核心缓存交付到 target：sha256 键优先，组合键兜底反查。
+// GetTo 命中时全量校验内容（FR-330），损坏条目已被作废，返回未命中让调用方回退下载。
+func (s *Server) fetchCoreFromCache(instanceUUID, want, coreKey, target string) (int64, bool) {
+	if s.cache == nil {
+		return 0, false
+	}
+	sha := want
+	if sha == "" && coreKey != "" {
+		if k, ok := s.cache.LookupCoreKey(coreKey); ok {
+			sha = k
+		}
+	}
+	if sha == "" {
+		return 0, false
+	}
+	hit, err := s.cache.GetTo(sha, target)
+	if err != nil || !hit {
+		return 0, false
+	}
+	st, statErr := os.Stat(target)
+	if statErr != nil {
+		return 0, false
+	}
+	slog.Info("核心下载：缓存命中秒拷", "instance", instanceUUID, "sha256", sha[:12], "size", st.Size())
+	return st.Size(), true
+}
+
+// downloadCoreToTarget 远程下载核心到 target 并（有 sha256 时）校验，成功后存入节点缓存。
+// 开始/结果都留日志（FR-319）：慢源下载被 CP 取消/中断时，此前 worker 全程零痕迹不可追查。
+func (s *Server) downloadCoreToTarget(ctx context.Context, req *workerpb.DownloadCoreRequest, target, dest, want, coreKey string) (int64, error) {
 	slog.Info("核心下载开始", "instance", req.InstanceUuid, "url", req.DownloadUrl)
 	start := time.Now()
 	size, sum, err := downloadFile(ctx, s.outboundClient(), req.DownloadUrl, target)
 	if err != nil {
 		slog.Warn("核心下载失败", "instance", req.InstanceUuid, "url", req.DownloadUrl,
 			"elapsed", time.Since(start).Round(time.Second), "error", err)
-		return &workerpb.DownloadCoreResponse{Success: false, Error: err.Error()}, nil
+		return 0, err
 	}
 	slog.Info("核心下载完成", "instance", req.InstanceUuid, "size", size,
 		"elapsed", time.Since(start).Round(time.Second))
 	if want != "" && want != sum {
 		_ = os.Remove(target)
-		return &workerpb.DownloadCoreResponse{Success: false, Error: fmt.Sprintf("核心 sha256 校验不符：期望 %s 实得 %s", want, sum)}, nil
+		return 0, fmt.Errorf("核心 sha256 校验不符：期望 %s 实得 %s", want, sum)
 	}
 
-	// 3) 存入缓存（仅当有 sha256 键且启用缓存；存入失败不影响本次建实例）。
+	// 存入缓存（键 = 实得 sha256，组合键写入 meta 供无 sha 源反查；存入失败不影响本次建实例）。
 	if s.cache != nil && sum != "" {
 		meta := artifactcache.Meta{
 			Name:      dest,
 			Type:      "core",
 			SourceURL: req.DownloadUrl,
 			Size:      size,
+			CoreKey:   coreKey,
+		}
+		// 有核心元信息时用更可读的名字/版本（面板展示，FR-330）：如 paper-1.21.8 / 1.21.8-263。
+		if ct := strings.ToLower(strings.TrimSpace(req.CoreType)); ct != "" && strings.TrimSpace(req.McVersion) != "" {
+			meta.Name = ct + "-" + strings.TrimSpace(req.McVersion)
+			if req.Build > 0 {
+				meta.Version = fmt.Sprintf("%s-%d", strings.TrimSpace(req.McVersion), req.Build)
+			}
 		}
 		if err := s.cache.Put(sum, target, meta); err != nil {
 			slog.Warn("存入节点制品缓存失败（不影响本次建实例）", "sha256", sum, "error", err)
 		}
 	}
+	return size, nil
+}
 
-	return &workerpb.DownloadCoreResponse{Success: true, Size: size}, nil
+// coreFlight 一次进行中的核心下载（FR-330 并发单飞）：领队完成（成功 Put 入缓存或失败）后
+// close(done)，跟随者据 err 决定从缓存取还是退化自下。
+type coreFlight struct {
+	done chan struct{}
+	err  error
+}
+
+// joinCoreFlight 加入（或创建）缓存键对应的下载单飞；返回是否为领队。
+func (s *Server) joinCoreFlight(key string) (*coreFlight, bool) {
+	s.coreFlightMu.Lock()
+	defer s.coreFlightMu.Unlock()
+	if s.coreFlights == nil {
+		s.coreFlights = make(map[string]*coreFlight)
+	}
+	if fl, ok := s.coreFlights[key]; ok {
+		return fl, false
+	}
+	fl := &coreFlight{done: make(chan struct{})}
+	s.coreFlights[key] = fl
+	return fl, true
+}
+
+// finishCoreFlight 领队完成：先摘登记（后续新请求另起单飞），再置结果并唤醒跟随者。
+func (s *Server) finishCoreFlight(key string, fl *coreFlight, err error) {
+	s.coreFlightMu.Lock()
+	delete(s.coreFlights, key)
+	s.coreFlightMu.Unlock()
+	fl.err = err
+	close(fl.done)
 }
 
 // forgeInstallerRunner 执行 Forge installer；测试会替换为假 runner，避免真实启动 Java。
