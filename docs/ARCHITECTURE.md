@@ -532,6 +532,8 @@ database:
   # dsn: "user:pass@tcp(127.0.0.1:3306)/jianmanager?charset=utf8mb4&parseTime=true"
 ```
 
+SQLite 驱动为 glebarez/sqlite（纯 Go），连接池**收敛为单连接**（`SetMaxOpenConns(1)`，FR-318）：该驱动 COMMIT 因 SQLITE_BUSY 失败时事务保持打开、且不实现 `driver.Validator`/`SessionResetter`，多连接下自身锁竞争会把带打开事务的连接毒化回池（此后抽到即报 `cannot start a transaction within a transaction`，直到重启）；CP 是数据库唯一读写方（见架构不变量「数据所有权」），单连接消除自库锁竞争即消除毒化前提，代价是库访问串行化（SQLite 写本就单写者，规模内可接受）。MySQL 不受此限，池参数走驱动默认。
+
 ### 数据库资源管理器（FR-084）
 
 Control Plane 持有数据库唯一读写入口，浏览器与 Worker/Bot 均不直接连接数据库。FR-084 在该边界内新增只读资源管理器：`DBBrowseService` 复用当前进程的 `*gorm.DB`，通过 GORM migrator 枚举表/列，通过白名单校验后的 `db.Table(name)` 执行分页 `SELECT`。表名、排序列、过滤列必须命中元数据白名单；过滤值参数化绑定，不拼接用户输入；列名命中密码、密钥、token、secret、node_secret 等敏感片段时由服务端替换为 `******` 后再返回。该能力无写入、迁移、导出、执行 SQL 入口，REST handler 全部挂平台管理员权限组并返回 401/403 对齐其他平台级资源。

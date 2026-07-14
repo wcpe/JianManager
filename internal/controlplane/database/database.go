@@ -44,6 +44,20 @@ func New(cfg config.DatabaseConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("连接数据库失败: %w", err)
 	}
 
+	// SQLite 收敛为单连接（FR-318 根因修复）：glebarez/go-sqlite 的 COMMIT 因 SQLITE_BUSY
+	// 失败时事务保持打开，而驱动不实现 driver.Validator/SessionResetter，database/sql 会把
+	// 带着打开事务的连接放回池中且永不驱逐——此后抽到该连接的请求全部报
+	// "cannot start a transaction within a transaction"，直到重启（线上 OOM/swap 慢 IO 即触发）。
+	// BUSY 的唯一来源是自身连接池内的锁竞争（CP 是数据库唯一读写方，见架构不变量「数据所有权」），
+	// 单连接下同库锁竞争不复存在，毒化前提被整体消除。机制与回归见 sqlite_txpoison_test.go。
+	if cfg.Driver == "sqlite" {
+		sqlDB, err := db.DB()
+		if err != nil {
+			return nil, fmt.Errorf("获取底层连接池失败: %w", err)
+		}
+		sqlDB.SetMaxOpenConns(1)
+	}
+
 	return db, nil
 }
 

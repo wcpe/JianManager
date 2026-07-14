@@ -13,6 +13,7 @@
 - **删除运行中实例的进程处置一致性（FR-310）**：真机曾复现对 RUNNING 实例发 DELETE 后 CP 删记录返 200 而 Worker 运行态守卫拒杀进程——DB 与现实脱钩，java 进程沦为无主孤儿继续占端口。改为 CP 编排「先停再删」：删除前经状态机合法转换（RUNNING/STARTING→STOPPING→STOPPED）同步调 Worker `StopInstance`（复用既有优雅停止链路，超时强杀进程树，不重写停机逻辑），停成才清理工作目录、删记录；停止失败或节点未连接一律中止删除并透传可操作原因（记录保留可重试），绝不孤儿化进程；刚停止的实例在优雅停止收敛窗口内对文件锁类清理失败有界重试（Windows 上进程退出前 RemoveAll 撞锁属预期时序）。前端实例行菜单删除项运行态解禁，确认框明示「将先停止（超时强杀）再删除」（i18n 中英）。
 ### 新增
 - **一键搭建版本-JDK 兼容预检（FR-316，增强 FR-034，真机事故钓出：选 MC 26.1 + 节点最高 Temurin 21 可搭建成功但启动必崩「requires running the server with Java 25」）**：`GET /cores` 解析响应新增 `javaMajorRequired`（该 MC 版本所需最低 Java 大版本，CP 单一真值：Paper 取 fill v3 官方元数据、失败回退内置保守映射表 ≤1.16→8/1.17→16/1.18~1.20.4→17/1.20.5+→21/26.1+→25，Sponge 用映射表，未知版本不设需求宽容不误拦）；搭建向导选定版本后即校验所选/默认 JDK——不满足（含节点无任何 JDK）表单级阻断：提交禁用 + 差距文案（需要的 Java 版本与当前 JDK 差几个大版本）+「去 JDK 面板安装」引导链接；选「不指定（系统 Java）」仅琥珀警示不阻断（版本未知宁漏勿误伤）。与 FR-314 启动预检互补（搭建时拦 vs 启动时拦）。中英文案随身、Go/vitest 单测覆盖映射边界与阻断/放行/无 JDK 三态。
+- **CP 压力态 SQLite 嵌套事务错（FR-318，FR-317 事故现场钓出）**：OOM/swap 恢复初期实例 stop 转换反复报 `cannot start a transaction within a transaction`、删 bot 报 INTERNAL_ERROR、重启 CP 即愈。根因非应用层事务嵌套（11 处 `db.Transaction` 回调审计均只用 `tx`），而是连接毒化：glebarez/go-sqlite 的 COMMIT 因 SQLITE_BUSY 失败时事务保持打开，驱动无 `driver.Validator`/`SessionResetter` 且 BUSY 非 ErrBadConn，database/sql 把带打开事务的连接放回池中永不驱逐（重启=清池故即愈）。修复：`database.New` 对 SQLite 收敛单连接（`SetMaxOpenConns(1)`，CP 是库唯一读写方，自身池内锁竞争即 BUSY 唯一来源）；补驱动级毒化机制确定性复现 + 并发 transition/删 bot/慢读者压力回归门（修复前稳定复现 425 个原错、修复后恒绿）。
 
 ## 0.16.0（2026-07-14）
 
