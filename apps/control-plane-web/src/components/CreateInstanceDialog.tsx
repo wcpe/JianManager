@@ -25,6 +25,7 @@ import {
   validateFields,
   hasErrors,
 } from '@/lib/form-validation'
+import { useFieldGate } from '@/lib/use-field-gate'
 
 interface CreateInstanceDialogProps {
   open: boolean
@@ -64,6 +65,7 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
   const [groupId, setGroupId] = useState('')
   const [templateId, setTemplateId] = useState('')
   const [jdkId, setJdkId] = useState('')
+  const gate = useFieldGate()
 
   const { data: jdks } = useNodeJDKs(nodeId ? Number(nodeId) : 0)
 
@@ -134,10 +136,12 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
     setGroupId('')
     setTemplateId('')
     setJdkId('')
+    gate.reset()
   }
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
+    gate.submit()
     if (hasErrors(errors)) return
     create.mutate({
       nodeId: Number(nodeId),
@@ -192,11 +196,12 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
                   <input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
+                    onBlur={() => gate.touch('name')}
                     className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
                     placeholder="Survival Server"
-                    aria-invalid={!!errors.name}
+                    aria-invalid={!!gate.show('name', errors.name)}
                   />
-                  <FieldError error={errors.name} />
+                  <FieldError error={gate.show('name', errors.name)} />
                 </div>
 
                 <div>
@@ -205,13 +210,13 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
                     <Combobox
                       options={nodeOptions}
                       value={nodeId}
-                      onChange={setNodeId}
+                      onChange={(v) => { gate.touch('nodeId'); setNodeId(v) }}
                       allowCustom={false}
                       placeholder={t('instances.selectNode')}
-                      invalid={!!errors.nodeId}
+                      invalid={!!gate.show('nodeId', errors.nodeId)}
                     />
                   </div>
-                  <FieldError error={errors.nodeId} />
+                  <FieldError error={gate.show('nodeId', errors.nodeId)} />
                 </div>
 
                 <div>
@@ -284,12 +289,13 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
                 <input
                   value={startCommand}
                   onChange={(e) => setStartCommand(e.target.value)}
+                  onBlur={() => gate.touch('startCommand')}
                   className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm font-mono aria-invalid:border-destructive"
                   placeholder="java -Xmx2G -jar paper.jar nogui"
-                  aria-invalid={!!errors.startCommand}
+                  aria-invalid={!!gate.show('startCommand', errors.startCommand)}
                 />
-                {errors.startCommand ? (
-                  <FieldError error={errors.startCommand} />
+                {gate.show('startCommand', errors.startCommand) ? (
+                  <FieldError error={gate.show('startCommand', errors.startCommand)} />
                 ) : (
                   <p className="mt-1 text-xs text-muted-foreground">直接填写命令，不要用引号包裹整个命令</p>
                 )}
@@ -308,12 +314,13 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
                   <input
                     value={workDir}
                     onChange={(e) => setWorkDir(e.target.value)}
+                    onBlur={() => gate.touch('workDir')}
                     className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
                     placeholder="/servers/survival"
-                    aria-invalid={!!errors.workDir}
+                    aria-invalid={!!gate.show('workDir', errors.workDir)}
                   />
-                  {errors.workDir ? (
-                    <FieldError error={errors.workDir} />
+                  {gate.show('workDir', errors.workDir) ? (
+                    <FieldError error={gate.show('workDir', errors.workDir)} />
                   ) : (
                     <p className="mt-1 text-xs text-muted-foreground">{t('instances.workDirHint')}</p>
                   )}
@@ -338,12 +345,13 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
                   <input
                     value={image}
                     onChange={(e) => setImage(e.target.value)}
+                    onBlur={() => gate.touch('image')}
                     className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm font-mono aria-invalid:border-destructive"
                     placeholder="itzg/minecraft-server:latest"
-                    aria-invalid={!!errors.image}
+                    aria-invalid={!!gate.show('image', errors.image)}
                   />
-                  {errors.image ? (
-                    <FieldError error={errors.image} />
+                  {gate.show('image', errors.image) ? (
+                    <FieldError error={gate.show('image', errors.image)} />
                   ) : (
                     <p className="mt-1 text-xs text-muted-foreground">{t('instances.dockerImageHint')}</p>
                   )}
@@ -355,13 +363,14 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
                     <input
                       value={cpuLimit}
                       onChange={(e) => setCpuLimit(e.target.value)}
+                      onBlur={() => gate.touch('cpuLimit')}
                       className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
                       placeholder="1.5"
                       inputMode="decimal"
-                      aria-invalid={!!errors.cpuLimit}
+                      aria-invalid={!!gate.show('cpuLimit', errors.cpuLimit)}
                     />
-                    {errors.cpuLimit ? (
-                      <FieldError error={errors.cpuLimit} />
+                    {gate.show('cpuLimit', errors.cpuLimit) ? (
+                      <FieldError error={gate.show('cpuLimit', errors.cpuLimit)} />
                     ) : (
                       <p className="mt-1 text-xs text-muted-foreground">{t('instances.resourceLimitHint')}</p>
                     )}
@@ -371,13 +380,14 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
                     <input
                       value={memLimitMb}
                       onChange={(e) => setMemLimitMb(e.target.value)}
+                      onBlur={() => gate.touch('memLimitMb')}
                       className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
                       placeholder="2048"
                       inputMode="numeric"
-                      aria-invalid={!!errors.memLimitMb}
+                      aria-invalid={!!gate.show('memLimitMb', errors.memLimitMb)}
                     />
-                    {errors.memLimitMb ? (
-                      <FieldError error={errors.memLimitMb} />
+                    {gate.show('memLimitMb', errors.memLimitMb) ? (
+                      <FieldError error={gate.show('memLimitMb', errors.memLimitMb)} />
                     ) : (
                       <p className="mt-1 text-xs text-muted-foreground">{t('instances.resourceLimitHint')}</p>
                     )}
@@ -387,13 +397,14 @@ export default function CreateInstanceDialog({ open, onClose }: CreateInstanceDi
                     <input
                       value={diskLimitMb}
                       onChange={(e) => setDiskLimitMb(e.target.value)}
+                      onBlur={() => gate.touch('diskLimitMb')}
                       className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
                       placeholder="10240"
                       inputMode="numeric"
-                      aria-invalid={!!errors.diskLimitMb}
+                      aria-invalid={!!gate.show('diskLimitMb', errors.diskLimitMb)}
                     />
-                    {errors.diskLimitMb ? (
-                      <FieldError error={errors.diskLimitMb} />
+                    {gate.show('diskLimitMb', errors.diskLimitMb) ? (
+                      <FieldError error={gate.show('diskLimitMb', errors.diskLimitMb)} />
                     ) : (
                       <p className="mt-1 text-xs text-muted-foreground">{t('instances.diskLimitHint')}</p>
                     )}

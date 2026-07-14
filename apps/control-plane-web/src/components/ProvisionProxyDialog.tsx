@@ -21,6 +21,7 @@ import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combob
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { copyToClipboard } from '@/lib/clipboard'
 import { validateRequired, validatePositiveInt, validateFields, hasErrors } from '@/lib/form-validation'
+import { useFieldGate } from '@/lib/use-field-gate'
 
 interface ProvisionProxyDialogProps {
   open: boolean
@@ -47,6 +48,7 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
   const [groupId, setGroupId] = useState('')
   const [onlineMode, setOnlineMode] = useState(true) // 默认正版网络
   const [forwardingSecret, setForwardingSecret] = useState('')
+  const gate = useFieldGate()
 
   const { data: jdks } = useNodeJDKs(nodeId ? Number(nodeId) : 0)
   // bungeecord 无版本选择（仅 latest）；velocity/waterfall 走 PaperMC 版本列表。
@@ -97,6 +99,7 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
     setName(''); setNodeId(''); setProxyType('velocity'); setVersion('')
     setJdkId(''); setMemoryMb('1024'); setJvmArgs(''); setGroupId(''); setOnlineMode(true); setForwardingSecret('')
     jdkDefaultNodeRef.current = ''
+    gate.reset()
   }
   const close = () => { onClose(); reset() }
   const copySecret = async () => {
@@ -107,6 +110,7 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
+    gate.submit()
     if (hasErrors(errors)) return
     const args = jvmArgs.trim() ? jvmArgs.trim().split(/\s+/).filter(Boolean) : undefined
     provision.mutate(
@@ -168,9 +172,10 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
           <div>
             <FieldLabel required>{t('instances.instanceName')}</FieldLabel>
             <input value={name} onChange={(e) => setName(e.target.value)}
-              aria-invalid={!!errors.name}
+              onBlur={() => gate.touch('name')}
+              aria-invalid={!!gate.show('name', errors.name)}
               className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive" placeholder="velocity-main" />
-            <FieldError error={errors.name} />
+            <FieldError error={gate.show('name', errors.name)} />
           </div>
 
           <div>
@@ -179,13 +184,13 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
               <Combobox
                 options={nodeOptions}
                 value={nodeId}
-                onChange={setNodeId}
+                onChange={(v) => { gate.touch('nodeId'); setNodeId(v) }}
                 allowCustom={false}
                 placeholder={t('instances.selectNode')}
-                invalid={!!errors.nodeId}
+                invalid={!!gate.show('nodeId', errors.nodeId)}
               />
             </div>
-            <FieldError error={errors.nodeId} />
+            <FieldError error={gate.show('nodeId', errors.nodeId)} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -205,13 +210,13 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
                 <Combobox
                   options={versionOptions}
                   value={needsVersion ? version : ''}
-                  onChange={setVersion}
+                  onChange={(v) => { gate.touch('version'); setVersion(v) }}
                   disabled={!needsVersion || versionsLoading}
-                  invalid={!!errors.version}
+                  invalid={!!gate.show('version', errors.version)}
                   placeholder={needsVersion ? (versionsLoading ? t('provision.loadingVersions') : t('provision.selectVersion')) : t('proxy.latestOnly')}
                 />
               </div>
-              <FieldError error={errors.version} />
+              <FieldError error={gate.show('version', errors.version)} />
             </div>
           </div>
           {resolved && (
@@ -222,9 +227,10 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
             <div>
               <FieldLabel>{t('provision.memory')}</FieldLabel>
               <input value={memoryMb} onChange={(e) => setMemoryMb(e.target.value)} inputMode="numeric"
-                aria-invalid={!!errors.memoryMb}
+                onBlur={() => gate.touch('memoryMb')}
+                aria-invalid={!!gate.show('memoryMb', errors.memoryMb)}
                 className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive" placeholder="1024" />
-              <FieldError error={errors.memoryMb} />
+              <FieldError error={gate.show('memoryMb', errors.memoryMb)} />
             </div>
             <div>
               <FieldLabel>JDK</FieldLabel>

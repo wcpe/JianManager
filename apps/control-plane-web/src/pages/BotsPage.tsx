@@ -63,6 +63,7 @@ import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired, validateHost, validatePort, validateFields, hasErrors } from '@/lib/form-validation'
+import { useFieldGate } from '@/lib/use-field-gate'
 import {
   Table,
   TableBody,
@@ -585,6 +586,7 @@ function StressSessionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
   const [behavior, setBehavior] = useState('idle')
   const [orchestrationYaml, setOrchestrationYaml] = useState(DEFAULT_ORCHESTRATION_YAML)
   const [error, setError] = useState('')
+  const gate = useFieldGate()
 
   const instanceOptions: ComboboxOption[] = (instances ?? []).map((inst) => ({
     value: String(inst.id),
@@ -612,10 +614,12 @@ function StressSessionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
     setBehavior('idle')
     setOrchestrationYaml(DEFAULT_ORCHESTRATION_YAML)
     setError('')
+    gate.reset()
   }
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
+    gate.submit()
     if (hasErrors(errors)) return
     setError('')
     createSession.mutate(
@@ -658,6 +662,7 @@ function StressSessionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                 options={instanceOptions}
                 value={instanceId}
                 onChange={(v: string) => {
+                  gate.touch('instanceId')
                   setInstanceId(v)
                   const inst = instances?.find((i) => String(i.id) === v)
                   if (inst) {
@@ -667,32 +672,32 @@ function StressSessionDialog({ open, onOpenChange }: { open: boolean; onOpenChan
                 }}
                 allowCustom={false}
                 placeholder={t('bots.selectInstance')}
-                invalid={!!errors.instanceId}
+                invalid={!!gate.show('instanceId', errors.instanceId)}
               />
-              <FieldError error={errors.instanceId} />
+              <FieldError error={gate.show('instanceId', errors.instanceId)} />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <FieldLabel required>{t('bots.namePrefix')}</FieldLabel>
-                <Input aria-label={t('bots.namePrefix')} value={namePrefix} onChange={(e) => setNamePrefix(e.target.value)} />
-                <FieldError error={errors.namePrefix} />
+                <Input aria-label={t('bots.namePrefix')} value={namePrefix} onChange={(e) => setNamePrefix(e.target.value)} onBlur={() => gate.touch('namePrefix')} />
+                <FieldError error={gate.show('namePrefix', errors.namePrefix)} />
               </div>
               <div className="space-y-1">
                 <FieldLabel required>{t('bots.count')}</FieldLabel>
-                <Input aria-label={t('bots.count')} value={count} type="number" onChange={(e) => setCount(e.target.value)} />
-                <FieldError error={errors.count} />
+                <Input aria-label={t('bots.count')} value={count} type="number" onChange={(e) => setCount(e.target.value)} onBlur={() => gate.touch('count')} />
+                <FieldError error={gate.show('count', errors.count)} />
               </div>
             </div>
             <div className="grid grid-cols-3 gap-3">
               <div className="col-span-2 space-y-1">
                 <FieldLabel required>{t('bots.serverAddr')}</FieldLabel>
-                <Input aria-label={t('bots.serverAddr')} value={server} onChange={(e) => setServer(e.target.value)} aria-invalid={!!errors.server} />
-                <FieldError error={errors.server} />
+                <Input aria-label={t('bots.serverAddr')} value={server} onChange={(e) => setServer(e.target.value)} onBlur={() => gate.touch('server')} aria-invalid={!!gate.show('server', errors.server)} />
+                <FieldError error={gate.show('server', errors.server)} />
               </div>
               <div className="space-y-1">
                 <FieldLabel required>{t('bots.port')}</FieldLabel>
-                <Input aria-label={t('bots.port')} value={port} onChange={(e) => setPort(e.target.value)} type="number" aria-invalid={!!errors.port} />
-                <FieldError error={errors.port} />
+                <Input aria-label={t('bots.port')} value={port} onChange={(e) => setPort(e.target.value)} type="number" onBlur={() => gate.touch('port')} aria-invalid={!!gate.show('port', errors.port)} />
+                <FieldError error={gate.show('port', errors.port)} />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
@@ -1424,6 +1429,7 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
   const [auth, setAuth] = useState('offline')
   const [behavior, setBehavior] = useState('idle')
   const [error, setError] = useState('')
+  const gate = useFieldGate()
 
   const instanceOptions: ComboboxOption[] = (instances ?? []).map((inst) => ({
     value: String(inst.id),
@@ -1448,10 +1454,12 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
     setAuth('offline')
     setBehavior('idle')
     setError('')
+    gate.reset()
   }
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
+    gate.submit()
     if (hasErrors(errors)) return
     setError('')
     create.mutate(
@@ -1495,10 +1503,11 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
               <Input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                onBlur={() => gate.touch('name')}
                 placeholder="GuardBot"
-                aria-invalid={!!errors.name}
+                aria-invalid={!!gate.show('name', errors.name)}
               />
-              <FieldError error={errors.name} />
+              <FieldError error={gate.show('name', errors.name)} />
             </div>
 
             <div className="space-y-1">
@@ -1507,6 +1516,7 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
                 options={instanceOptions}
                 value={instanceId}
                 onChange={(v: string) => {
+                  gate.touch('instanceId')
                   setInstanceId(v)
                   // 选实例即默认连到该实例（本机回环 + 实例实际端口），避免端口填错连不进
                   const inst = instances?.find((i) => String(i.id) === v)
@@ -1517,9 +1527,9 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
                 }}
                 allowCustom={false}
                 placeholder={t('bots.selectInstance')}
-                invalid={!!errors.instanceId}
+                invalid={!!gate.show('instanceId', errors.instanceId)}
               />
-              <FieldError error={errors.instanceId} />
+              <FieldError error={gate.show('instanceId', errors.instanceId)} />
             </div>
 
             <div className="grid grid-cols-3 gap-3">
@@ -1528,20 +1538,22 @@ function CreateBotDialog({ open, onOpenChange }: CreateBotDialogProps) {
                 <Input
                   value={server}
                   onChange={(e) => setServer(e.target.value)}
+                  onBlur={() => gate.touch('server')}
                   placeholder="mc.example.com"
-                  aria-invalid={!!errors.server}
+                  aria-invalid={!!gate.show('server', errors.server)}
                 />
-                <FieldError error={errors.server} />
+                <FieldError error={gate.show('server', errors.server)} />
               </div>
               <div className="space-y-1">
                 <FieldLabel required>{t('bots.port')}</FieldLabel>
                 <Input
                   value={port}
                   onChange={(e) => setPort(e.target.value)}
+                  onBlur={() => gate.touch('port')}
                   type="number"
-                  aria-invalid={!!errors.port}
+                  aria-invalid={!!gate.show('port', errors.port)}
                 />
-                <FieldError error={errors.port} />
+                <FieldError error={gate.show('port', errors.port)} />
               </div>
             </div>
 

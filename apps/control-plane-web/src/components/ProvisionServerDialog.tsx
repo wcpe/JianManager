@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired, validatePositiveInt, validateFields, hasErrors } from '@/lib/form-validation'
+import { useFieldGate } from '@/lib/use-field-gate'
 
 interface ProvisionServerDialogProps {
   open: boolean
@@ -45,6 +46,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
   const [jvmArgs, setJvmArgs] = useState('')
   const [groupId, setGroupId] = useState('')
   const [onlineMode, setOnlineMode] = useState(false) // 默认代理就绪（离线）
+  const gate = useFieldGate()
 
   const { data: jdks } = useNodeJDKs(nodeId ? Number(nodeId) : 0)
   const { data: versions, isLoading: versionsLoading, isError: versionsError } = useCoreVersions(
@@ -126,6 +128,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
     setGroupId('')
     setOnlineMode(false)
     jdkDefaultNodeRef.current = ''
+    gate.reset()
   }
 
   const changeCoreType = (next: string) => {
@@ -141,6 +144,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
+    gate.submit()
     if (hasErrors(errors) || jdkBlockText) return
     const args = jvmArgs.trim() ? jvmArgs.trim().split(/\s+/).filter(Boolean) : undefined
     provision.mutate(
@@ -197,11 +201,12 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
+              onBlur={() => gate.touch('name')}
               className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
               placeholder="lobby"
-              aria-invalid={!!errors.name}
+              aria-invalid={!!gate.show('name', errors.name)}
             />
-            <FieldError error={errors.name} />
+            <FieldError error={gate.show('name', errors.name)} />
           </div>
 
           <div>
@@ -210,13 +215,13 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
               <Combobox
                 options={nodeOptions}
                 value={nodeId}
-                onChange={setNodeId}
+                onChange={(v) => { gate.touch('nodeId'); setNodeId(v) }}
                 allowCustom={false}
                 placeholder={t('instances.selectNode')}
-                invalid={!!errors.nodeId}
+                invalid={!!gate.show('nodeId', errors.nodeId)}
               />
             </div>
-            <FieldError error={errors.nodeId} />
+            <FieldError error={gate.show('nodeId', errors.nodeId)} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -242,9 +247,9 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
                 <Combobox
                   options={versionOptions}
                   value={mcVersion}
-                  onChange={setMcVersion}
+                  onChange={(v) => { gate.touch('mcVersion'); setMcVersion(v) }}
                   disabled={versionsLoading || versionsError}
-                  invalid={!!errors.mcVersion}
+                  invalid={!!gate.show('mcVersion', errors.mcVersion)}
                   placeholder={
                     versionsLoading
                       ? t('provision.loadingVersions')
@@ -254,7 +259,7 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
                   }
                 />
               </div>
-              <FieldError error={errors.mcVersion} />
+              <FieldError error={gate.show('mcVersion', errors.mcVersion)} />
             </div>
           </div>
 
@@ -284,12 +289,13 @@ export default function ProvisionServerDialog({ open, onClose }: ProvisionServer
               <input
                 value={memoryMb}
                 onChange={(e) => setMemoryMb(e.target.value)}
+                onBlur={() => gate.touch('memoryMb')}
                 inputMode="numeric"
                 className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive"
                 placeholder="2048"
-                aria-invalid={!!errors.memoryMb}
+                aria-invalid={!!gate.show('memoryMb', errors.memoryMb)}
               />
-              <FieldError error={errors.memoryMb} />
+              <FieldError error={gate.show('memoryMb', errors.memoryMb)} />
             </div>
             <div>
               <FieldLabel>JDK</FieldLabel>

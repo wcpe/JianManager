@@ -22,6 +22,7 @@ import {
   validateResourceLimitNumber,
   validateFields,
 } from '@/lib/form-validation'
+import { useFieldGate } from '@/lib/use-field-gate'
 
 /** 向导步骤键。advanced 仅 docker 启动方式出现。 */
 type StepKey = 'basic' | 'launch' | 'advanced' | 'review'
@@ -71,6 +72,7 @@ export default function InstanceWizardPage() {
   const [jdkId, setJdkId] = useState('')
   // docker 环境变量键值对（FR-236）：一键 Minecraft 预设注入 EULA=TRUE；可手动增删。
   const [envPairs, setEnvPairs] = useState<{ key: string; value: string }[]>([])
+  const gate = useFieldGate()
 
   const { data: jdks } = useNodeJDKs(nodeId ? Number(nodeId) : 0)
 
@@ -132,6 +134,14 @@ export default function InstanceWizardPage() {
     return true
   }
 
+  // 各步受校验字段：「下一步」点击视为该步提交，仅揭示该步字段错误（不波及后续步）。
+  const STEP_FIELDS: Record<StepKey, string[]> = {
+    basic: ['name', 'nodeId'],
+    launch: ['startCommand'],
+    advanced: ['image', 'cpuLimit', 'memLimitMb', 'diskLimitMb'],
+    review: [],
+  }
+
   const create = useMutation({
     mutationFn: (body: Record<string, unknown>) => api.post('/instances', body),
     onSuccess: () => {
@@ -164,6 +174,7 @@ export default function InstanceWizardPage() {
   }
 
   const submit = () => {
+    gate.submit()
     if (!steps.every(stepValid)) return
     create.mutate({
       nodeId: Number(nodeId),
@@ -232,12 +243,12 @@ export default function InstanceWizardPage() {
 
         {step === 'basic' && (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <Field label={t('instances.instanceName')} required error={errors.name}>
-              <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} placeholder="Survival Server" aria-invalid={!!errors.name} />
+            <Field label={t('instances.instanceName')} required error={gate.show('name', errors.name)}>
+              <input value={name} onChange={(e) => setName(e.target.value)} onBlur={() => gate.touch('name')} className={inputClass} placeholder="Survival Server" aria-invalid={!!gate.show('name', errors.name)} />
             </Field>
-            <Field label={t('instances.node')} required error={errors.nodeId}>
+            <Field label={t('instances.node')} required error={gate.show('nodeId', errors.nodeId)}>
               <div className="mt-1">
-                <Combobox options={nodeOptions} value={nodeId} onChange={setNodeId} allowCustom={false} placeholder={t('instances.selectNode')} invalid={!!errors.nodeId} />
+                <Combobox options={nodeOptions} value={nodeId} onChange={(v) => { gate.touch('nodeId'); setNodeId(v) }} allowCustom={false} placeholder={t('instances.selectNode')} invalid={!!gate.show('nodeId', errors.nodeId)} />
                 {hasNoNodes && (
                   <p className="mt-1.5 text-xs text-muted-foreground">{t('instances.noNodesHint')}</p>
                 )}
@@ -269,8 +280,8 @@ export default function InstanceWizardPage() {
                 <div className="mt-1"><Combobox options={jdkOptions} value={jdkId} onChange={setJdkId} allowCustom={false} placeholder={t('instances.jdkSystemDefault')} /></div>
               </Field>
             </div>
-            <Field label={t('instanceDetail.startCommand')} required={!isDocker} error={errors.startCommand}>
-              <input value={startCommand} onChange={(e) => setStartCommand(e.target.value)} className={cn(inputClass, 'font-mono')} placeholder="java -Xmx2G -jar server.jar nogui" aria-invalid={!!errors.startCommand} />
+            <Field label={t('instanceDetail.startCommand')} required={!isDocker} error={gate.show('startCommand', errors.startCommand)}>
+              <input value={startCommand} onChange={(e) => setStartCommand(e.target.value)} onBlur={() => gate.touch('startCommand')} className={cn(inputClass, 'font-mono')} placeholder="java -Xmx2G -jar server.jar nogui" aria-invalid={!!gate.show('startCommand', errors.startCommand)} />
               <p className="mt-1.5 text-xs text-muted-foreground">{isDocker ? t('instances.startCommandDockerHint') : t('instances.startCommandHint')}</p>
             </Field>
             <label className="flex items-center gap-2 text-sm">
@@ -308,21 +319,21 @@ export default function InstanceWizardPage() {
                 {t('instances.dockerMcPresetApply')}
               </Button>
             </div>
-            <Field label={t('instances.dockerImage')} required error={errors.image}>
-              <input value={image} onChange={(e) => setImage(e.target.value)} className={cn(inputClass, 'font-mono')} placeholder="itzg/minecraft-server:latest" aria-invalid={!!errors.image} />
+            <Field label={t('instances.dockerImage')} required error={gate.show('image', errors.image)}>
+              <input value={image} onChange={(e) => setImage(e.target.value)} onBlur={() => gate.touch('image')} className={cn(inputClass, 'font-mono')} placeholder="itzg/minecraft-server:latest" aria-invalid={!!gate.show('image', errors.image)} />
             </Field>
             <EnvVarsEditor pairs={envPairs} onChange={setEnvPairs} />
             <div>
               <p className="mb-2 text-xs text-muted-foreground">{t('instances.resourceLimitHint')}</p>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                <Field label={t('instances.cpuLimit')} error={errors.cpuLimit}>
-                  <input value={cpuLimit} onChange={(e) => setCpuLimit(e.target.value)} className={inputClass} placeholder="1.5" inputMode="decimal" aria-invalid={!!errors.cpuLimit} />
+                <Field label={t('instances.cpuLimit')} error={gate.show('cpuLimit', errors.cpuLimit)}>
+                  <input value={cpuLimit} onChange={(e) => setCpuLimit(e.target.value)} onBlur={() => gate.touch('cpuLimit')} className={inputClass} placeholder="1.5" inputMode="decimal" aria-invalid={!!gate.show('cpuLimit', errors.cpuLimit)} />
                 </Field>
-                <Field label={t('instances.memLimit')} error={errors.memLimitMb}>
-                  <input value={memLimitMb} onChange={(e) => setMemLimitMb(e.target.value)} className={inputClass} placeholder="2048" inputMode="numeric" aria-invalid={!!errors.memLimitMb} />
+                <Field label={t('instances.memLimit')} error={gate.show('memLimitMb', errors.memLimitMb)}>
+                  <input value={memLimitMb} onChange={(e) => setMemLimitMb(e.target.value)} onBlur={() => gate.touch('memLimitMb')} className={inputClass} placeholder="2048" inputMode="numeric" aria-invalid={!!gate.show('memLimitMb', errors.memLimitMb)} />
                 </Field>
-                <Field label={t('instances.diskLimit')} error={errors.diskLimitMb}>
-                  <input value={diskLimitMb} onChange={(e) => setDiskLimitMb(e.target.value)} className={inputClass} placeholder="10240" inputMode="numeric" aria-invalid={!!errors.diskLimitMb} />
+                <Field label={t('instances.diskLimit')} error={gate.show('diskLimitMb', errors.diskLimitMb)}>
+                  <input value={diskLimitMb} onChange={(e) => setDiskLimitMb(e.target.value)} onBlur={() => gate.touch('diskLimitMb')} className={inputClass} placeholder="10240" inputMode="numeric" aria-invalid={!!gate.show('diskLimitMb', errors.diskLimitMb)} />
                   <p className="mt-1.5 text-xs text-muted-foreground">{t('instances.diskLimitHint')}</p>
                 </Field>
               </div>
@@ -358,7 +369,7 @@ export default function InstanceWizardPage() {
             {create.isPending ? t('common.creating') : t('common.create')}
           </Button>
         ) : (
-          <Button type="button" onClick={() => setStepIdx(safeIdx + 1)} disabled={!stepValid(step)}>
+          <Button type="button" onClick={() => { STEP_FIELDS[step].forEach(gate.touch); setStepIdx(safeIdx + 1) }} disabled={!stepValid(step)}>
             {t('instances.wizardNext')}
             <ChevronRight className="size-4" />
           </Button>

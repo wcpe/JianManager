@@ -53,6 +53,7 @@ import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired, validateUrl, validateAbsPath, validateFields, hasErrors } from '@/lib/form-validation'
+import { useFieldGate } from '@/lib/use-field-gate'
 import { copyToClipboard } from '@/lib/clipboard'
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/DangerConfirm'
@@ -336,6 +337,7 @@ function ApplyTemplateDialog({ template, onClose }: { template: TemplateInfo; on
   const [values, setValues] = useState<Record<string, string>>({})
   const [copied, setCopied] = useState(false)
   const [showFullCmd, setShowFullCmd] = useState(false)
+  const gate = useFieldGate()
 
   const nodeOptions: ComboboxOption[] = (nodes ?? [])
     .filter((n) => n.status === 1)
@@ -376,6 +378,7 @@ function ApplyTemplateDialog({ template, onClose }: { template: TemplateInfo; on
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
+    gate.submit()
     if (blocked) return
     // MC 类型工作目录由系统分配；其它类型回填模板默认工作目录（可为空则交后端处理）。
     create.mutate({
@@ -431,10 +434,11 @@ function ApplyTemplateDialog({ template, onClose }: { template: TemplateInfo; on
                 id="apply-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                onBlur={() => gate.touch('name')}
                 placeholder="survival"
-                aria-invalid={!!baseErrors.name}
+                aria-invalid={!!gate.show('name', baseErrors.name)}
               />
-              <FieldError error={baseErrors.name} />
+              <FieldError error={gate.show('name', baseErrors.name)} />
             </div>
 
             <div className="space-y-1.5">
@@ -443,12 +447,12 @@ function ApplyTemplateDialog({ template, onClose }: { template: TemplateInfo; on
                 id="apply-node"
                 options={nodeOptions}
                 value={nodeId}
-                onChange={setNodeId}
+                onChange={(v) => { gate.touch('nodeId'); setNodeId(v) }}
                 allowCustom={false}
                 placeholder={t('instances.selectNode')}
-                invalid={!!baseErrors.nodeId}
+                invalid={!!gate.show('nodeId', baseErrors.nodeId)}
               />
-              <FieldError error={baseErrors.nodeId} />
+              <FieldError error={gate.show('nodeId', baseErrors.nodeId)} />
             </div>
 
             <div className="space-y-1.5">
@@ -477,8 +481,9 @@ function ApplyTemplateDialog({ template, onClose }: { template: TemplateInfo; on
                       id={`apply-var-${v}`}
                       value={values[v] ?? ''}
                       onChange={(e) => setValues((prev) => ({ ...prev, [v]: e.target.value }))}
+                      onBlur={() => gate.touch(`var:${v}`)}
                       placeholder={v}
-                      aria-invalid={!!varErrors[v]}
+                      aria-invalid={!!gate.show(`var:${v}`, varErrors[v])}
                     />
                   </div>
                 ))}
@@ -547,6 +552,7 @@ function CreateTemplateDialog({ onClose }: { onClose: () => void }) {
   const [startCommand, setStartCommand] = useState('')
   const [downloadUrl, setDownloadUrl] = useState('')
   const [defaultWorkDir, setDefaultWorkDir] = useState('')
+  const gate = useFieldGate()
 
   // 类型可编辑下拉：内置常用类型 + 已有模板出现过的类型去重（FR-072）。
   const typeOptions: ComboboxOption[] = Array.from(
@@ -566,6 +572,7 @@ function CreateTemplateDialog({ onClose }: { onClose: () => void }) {
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
+    gate.submit()
     if (hasErrors(errors)) return
     create.mutate(
       {
@@ -600,10 +607,11 @@ function CreateTemplateDialog({ onClose }: { onClose: () => void }) {
                 id="tpl-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                onBlur={() => gate.touch('name')}
                 placeholder={t('templates.namePlaceholder')}
-                aria-invalid={!!errors.name}
+                aria-invalid={!!gate.show('name', errors.name)}
               />
-              <FieldError error={errors.name} />
+              <FieldError error={gate.show('name', errors.name)} />
             </div>
             <div className="space-y-1.5">
               <FieldLabel required htmlFor="tpl-type">{t('templates.type')}</FieldLabel>
@@ -611,11 +619,11 @@ function CreateTemplateDialog({ onClose }: { onClose: () => void }) {
                 id="tpl-type"
                 options={typeOptions}
                 value={type}
-                onChange={setType}
+                onChange={(v) => { gate.touch('type'); setType(v) }}
                 placeholder={t('templates.typePlaceholder')}
-                invalid={!!errors.type}
+                invalid={!!gate.show('type', errors.type)}
               />
-              <FieldError error={errors.type} />
+              <FieldError error={gate.show('type', errors.type)} />
             </div>
             <div className="space-y-1.5">
               <FieldLabel htmlFor="tpl-desc">{t('templates.description')}</FieldLabel>
@@ -632,12 +640,13 @@ function CreateTemplateDialog({ onClose }: { onClose: () => void }) {
                 id="tpl-cmd"
                 value={startCommand}
                 onChange={(e) => setStartCommand(e.target.value)}
+                onBlur={() => gate.touch('startCommand')}
                 placeholder={t('templates.startCommandPlaceholder')}
                 className="font-mono text-xs"
                 rows={2}
-                aria-invalid={!!errors.startCommand}
+                aria-invalid={!!gate.show('startCommand', errors.startCommand)}
               />
-              <FieldError error={errors.startCommand} />
+              <FieldError error={gate.show('startCommand', errors.startCommand)} />
               <p className="text-[11px] text-muted-foreground">{t('templates.market.variablesSyntaxHint')}</p>
             </div>
             <div className="space-y-1.5">
@@ -646,10 +655,11 @@ function CreateTemplateDialog({ onClose }: { onClose: () => void }) {
                 id="tpl-url"
                 value={downloadUrl}
                 onChange={(e) => setDownloadUrl(e.target.value)}
+                onBlur={() => gate.touch('downloadUrl')}
                 placeholder={t('templates.downloadUrlPlaceholder')}
-                aria-invalid={!!errors.downloadUrl}
+                aria-invalid={!!gate.show('downloadUrl', errors.downloadUrl)}
               />
-              <FieldError error={errors.downloadUrl} />
+              <FieldError error={gate.show('downloadUrl', errors.downloadUrl)} />
             </div>
             <div className="space-y-1.5">
               <FieldLabel htmlFor="tpl-workdir">{t('templates.defaultWorkDir')}</FieldLabel>
@@ -657,10 +667,11 @@ function CreateTemplateDialog({ onClose }: { onClose: () => void }) {
                 id="tpl-workdir"
                 value={defaultWorkDir}
                 onChange={(e) => setDefaultWorkDir(e.target.value)}
+                onBlur={() => gate.touch('defaultWorkDir')}
                 placeholder={t('templates.defaultWorkDirPlaceholder')}
-                aria-invalid={!!errors.defaultWorkDir}
+                aria-invalid={!!gate.show('defaultWorkDir', errors.defaultWorkDir)}
               />
-              <FieldError error={errors.defaultWorkDir} />
+              <FieldError error={gate.show('defaultWorkDir', errors.defaultWorkDir)} />
             </div>
           </ScrollableDialogBody>
           <DialogFooter className="pt-4">

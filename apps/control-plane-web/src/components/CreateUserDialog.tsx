@@ -19,6 +19,7 @@ import {
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { Input } from '@jianmanager/ui/components/input'
 import { validateRequired, minLength, validateFields, hasErrors } from '@/lib/form-validation'
+import { useFieldGate } from '@/lib/use-field-gate'
 
 interface CreateUserDialogProps {
   open: boolean
@@ -36,6 +37,7 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
   const [password, setPassword] = useState('')
   const [role, setRole] = useState('0')
   const [error, setError] = useState('')
+  const gate = useFieldGate()
 
   const roleOptions: ComboboxOption[] = [
     { value: '0', label: t('users.member') },
@@ -80,10 +82,12 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
     setPassword('')
     setRole('0')
     setError('')
+    gate.reset()
   }
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
+    gate.submit()
     if (hasErrors(errors)) return
     setError('')
     create.mutate({ username, password, role })
@@ -115,10 +119,11 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
                 id="create-user-username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
+                onBlur={() => gate.touch('username')}
                 className="mt-1"
-                aria-invalid={!!errors.username}
+                aria-invalid={!!gate.show('username', errors.username)}
               />
-              <FieldError error={errors.username} values={{ min: USERNAME_MIN }} />
+              <FieldError error={gate.show('username', errors.username)} values={{ min: USERNAME_MIN }} />
             </div>
 
             <div>
@@ -128,10 +133,11 @@ export default function CreateUserDialog({ open, onClose }: CreateUserDialogProp
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                onBlur={() => gate.touch('password')}
                 className="mt-1"
-                aria-invalid={!!errors.password}
+                aria-invalid={!!gate.show('password', errors.password)}
               />
-              <FieldError error={errors.password} values={{ min: PASSWORD_MIN }} />
+              <FieldError error={gate.show('password', errors.password)} values={{ min: PASSWORD_MIN }} />
             </div>
 
             <div>

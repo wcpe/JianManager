@@ -24,6 +24,7 @@ import {
 } from '@jianmanager/ui/components/dialog'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired } from '@/lib/form-validation'
+import { useFieldGate } from '@/lib/use-field-gate'
 import { instanceStatusLevel, statusColorVar } from '@jianmanager/ui'
 import { cn } from '@jianmanager/ui'
 import { memberHealth, type MemberHealth } from '@/lib/topology'
@@ -313,11 +314,13 @@ function CreateNetworkModal({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const create = useCreateNetwork()
+  const gate = useFieldGate()
 
   const nameError = validateRequired(name)
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
+    gate.submit()
     if (nameError) return
     create.mutate(
       { name, description: description || undefined },
@@ -350,11 +353,12 @@ function CreateNetworkModal({ onClose }: { onClose: () => void }) {
               <Input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                onBlur={() => gate.touch('name')}
                 className="mt-1"
                 placeholder="survival"
-                aria-invalid={!!nameError}
+                aria-invalid={!!gate.show('name', nameError)}
               />
-              <FieldError error={nameError} />
+              <FieldError error={gate.show('name', nameError)} />
             </div>
             <div>
               <FieldLabel>{t('networks.description')}</FieldLabel>

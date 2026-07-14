@@ -26,6 +26,7 @@ import {
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { validateRequired, validateEnvRef, validateFields, hasErrors } from '@/lib/form-validation'
+import { useFieldGate } from '@/lib/use-field-gate'
 import DangerConfirm from '@/components/DangerConfirm'
 
 const TYPES = ['s3', 'sftp', 'webdav'] as const
@@ -65,6 +66,7 @@ export default function BackupStoragesPage() {
   const [draftTestResult, setDraftTestResult] = useState<BackupStorageTestResult | null>(null)
   const [showForm, setShowForm] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null)
+  const gate = useFieldGate()
 
   const set = (k: keyof CreateBackupStorageBody, v: string | boolean) => {
     setDraftTestResult(null)
@@ -88,11 +90,13 @@ export default function BackupStoragesPage() {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
+    gate.submit()
     if (hasErrors(errors)) return
     try {
       await create.mutateAsync(form)
       toast.success(t('backupStorages.create', '创建'))
       setForm(emptyForm)
+      gate.reset()
       setShowForm(false)
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
@@ -146,7 +150,7 @@ export default function BackupStoragesPage() {
         </div>
         <button
           className="px-4 py-2 bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
-          onClick={() => { setForm(emptyForm); setDraftTestResult(null); setShowForm(true) }}
+          onClick={() => { setForm(emptyForm); setDraftTestResult(null); gate.reset(); setShowForm(true) }}
         >
           {t('backupStorages.add', '新增存储后端')}
         </button>
@@ -162,9 +166,10 @@ export default function BackupStoragesPage() {
               <div className="flex flex-col gap-1 text-sm">
                 <FieldLabel required>{t('backupStorages.name', '名称')}</FieldLabel>
                 <input className="p-2 border rounded bg-background aria-invalid:border-destructive" value={form.name}
-                  aria-invalid={!!errors.name}
-                  onChange={(e) => set('name', e.target.value)} />
-                <FieldError error={errors.name} />
+                  aria-invalid={!!gate.show('name', errors.name)}
+                  onChange={(e) => set('name', e.target.value)}
+                  onBlur={() => gate.touch('name')} />
+                <FieldError error={gate.show('name', errors.name)} />
               </div>
               <div className="flex flex-col gap-1 text-sm">
                 <FieldLabel>{t('backupStorages.type', '类型')}</FieldLabel>
@@ -204,16 +209,18 @@ export default function BackupStoragesPage() {
               <div className="flex flex-col gap-1 text-sm">
                 <FieldLabel>{t('backupStorages.accessKeyEnv', 'Access Key 环境变量')}</FieldLabel>
                 <input className="p-2 border rounded bg-background font-mono aria-invalid:border-destructive" placeholder={t('backupStorages.credentialHint', '')}
-                  aria-invalid={!!errors.accessKeyEnv}
-                  value={form.accessKeyEnv} onChange={(e) => set('accessKeyEnv', e.target.value)} />
-                <FieldError error={errors.accessKeyEnv} />
+                  aria-invalid={!!gate.show('accessKeyEnv', errors.accessKeyEnv)}
+                  value={form.accessKeyEnv} onChange={(e) => set('accessKeyEnv', e.target.value)}
+                  onBlur={() => gate.touch('accessKeyEnv')} />
+                <FieldError error={gate.show('accessKeyEnv', errors.accessKeyEnv)} />
               </div>
               <div className="flex flex-col gap-1 text-sm">
                 <FieldLabel>{t('backupStorages.secretKeyEnv', 'Secret Key 环境变量')}</FieldLabel>
                 <input className="p-2 border rounded bg-background font-mono aria-invalid:border-destructive" placeholder={t('backupStorages.credentialHint', '')}
-                  aria-invalid={!!errors.secretKeyEnv}
-                  value={form.secretKeyEnv} onChange={(e) => set('secretKeyEnv', e.target.value)} />
-                <FieldError error={errors.secretKeyEnv} />
+                  aria-invalid={!!gate.show('secretKeyEnv', errors.secretKeyEnv)}
+                  value={form.secretKeyEnv} onChange={(e) => set('secretKeyEnv', e.target.value)}
+                  onBlur={() => gate.touch('secretKeyEnv')} />
+                <FieldError error={gate.show('secretKeyEnv', errors.secretKeyEnv)} />
               </div>
             </ScrollableDialogBody>
           </form>

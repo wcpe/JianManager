@@ -17,6 +17,7 @@ import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import { Input } from '@jianmanager/ui/components/input'
 import { Textarea } from '@jianmanager/ui/components/textarea'
 import { validateRequired } from '@/lib/form-validation'
+import { useFieldGate } from '@/lib/use-field-gate'
 
 interface CreateGroupDialogProps {
   open: boolean
@@ -29,17 +30,20 @@ export default function CreateGroupDialog({ open, onClose }: CreateGroupDialogPr
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [error, setError] = useState('')
+  const gate = useFieldGate()
 
   const resetForm = () => {
     setName('')
     setDescription('')
     setError('')
+    gate.reset()
   }
 
   const nameError = validateRequired(name)
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
+    gate.submit()
     if (nameError) return
     setError('')
     create.mutate(
@@ -82,10 +86,11 @@ export default function CreateGroupDialog({ open, onClose }: CreateGroupDialogPr
                 id="create-group-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                onBlur={() => gate.touch('name')}
                 className="mt-1"
-                aria-invalid={!!nameError}
+                aria-invalid={!!gate.show('name', nameError)}
               />
-              <FieldError error={nameError} />
+              <FieldError error={gate.show('name', nameError)} />
             </div>
 
             <div>
