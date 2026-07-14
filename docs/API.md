@@ -500,6 +500,14 @@
   raw 档 `points` 的 `avg/min/max` 同为样本值，缺测（探针不可用）`avg:null` 渲染为断点。
 - **错误**: 400 `INVALID_SCOPE`/`INVALID_RANGE`/`INVALID_RESOLUTION`；403 `FORBIDDEN`；404 `TARGET_NOT_FOUND`
 
+### POST /api/v1/metrics/series/batch
+- **描述**: 多目标一次批量取历史曲线（消节点实例对比 N+1）。逐 targetId 复用 `scope=instance` 的 `instance.read` 鉴权，越权/不存在目标不报错、剔除进 `skipped`
+- **关联 FR**: FR-334（增强 FR-060）
+- **权限**: 登录；`scope=instance` 按 `instance.read` 逐目标收敛
+- **请求**: `{ "scope":"instance", "targetIds":["<uuid>", ...(1~50 去重)], "metrics":["inst_tps"], "range":"24h", "resolution":"auto" }`
+- **响应** (200): `{ "resolution", "from", "to", "series": { "<targetId>": [MetricSeries...] }, "skipped": [ { "targetId", "reason": "forbidden"|"not_found" } ] }`（series 与 `GET /metrics/series` 同构、逐目标独立）
+- **错误**: 400 `INVALID_REQUEST`/`INVALID_SCOPE`/`INVALID_RANGE`/`INVALID_RESOLUTION`；403 `FORBIDDEN`（无鉴权上下文）；422 `TOO_MANY_TARGETS`（>50）；500 `INTERNAL_ERROR`
+
 ### GET /api/v1/metrics/overview
 - **描述**: 总览页跨节点聚合：当前总量 + 聚合历史曲线（总 CPU 均值 / 总内存合计 / 总在线玩家合计）
 - **关联 FR**: FR-060
@@ -718,6 +726,12 @@
 - **响应**: `200 { synced, secretConsistent, warnings }`
 - **关联 FR**: FR-035
 
+### GET /api/v1/topology
+- **描述**: 一次性返回全部 proxy 及其注册（含 backend 概要）+ 全部群组的成员实例 ID（消拓扑页逐 proxy/逐 network 的双 N+1）。registrations 与 `GET /proxies/:id/registrations` 同构、按 `priority asc,id asc` 排序，backend 已删则为 null
+- **关联 FR**: FR-335（增强 FR-145）
+- **权限**: 平台管理员
+- **响应** (200): `{ "proxies":[{ "id","name","status","serverPort","nodeId","registrations":[RegistrationView] }], "networks":[{ "id","name","memberInstanceIds":[...] }] }`；`403`/`500`
+
 ### GET / POST /api/v1/proxies/:id/registrations，PATCH / DELETE …/:rid
 - **描述**: 管理 proxy↔backend 注册（M:N）；POST/PATCH/DELETE 落库后同步写代理 servers/priorities/forced-host 并下发 Velocity secret
 - **权限**: 平台管理员
@@ -851,6 +865,7 @@
 ### GET / POST /api/v1/networks，GET / PATCH / DELETE …/:id
 - **描述**: 群组（Network 非独占软标签）CRUD；删除群组不影响成员实例与代理注册
 - **请求(POST)**: `{ "name":"survival","description":"" }`；**错误**: `409 NETWORK_NAME_CONFLICT`、`404 NETWORK_NOT_FOUND`
+- **列表概要（FR-335）**: 每项增 `memberStatus:{running,stopped,crashed,starting,stopping}`（JOIN 实例一次聚合、五态零补齐，供列表健康分布直接消费，消逐 network 拉详情的 N+1）；`memberCount` 口径为 JOIN 后实际成员数（悬空成员剔除，只减不增）
 
 ### POST /api/v1/networks/:id/members，DELETE …/members/:instanceId
 - **描述**: 群组成员增删（幂等）；**请求(POST)**: `{ "instanceIds":[12,13] }`
