@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   formatBytes,
   formatterFor,
+  compactFormatter,
   ratioPctSeries,
   buildChartSeries,
   NODE_CHART_DEFS,
@@ -38,6 +39,23 @@ describe('formatterFor', () => {
   })
   it('bytesPerSec 带 /s 后缀', () => {
     expect(formatterFor('bytesPerSec')(5e6)).toBe('5M/s')
+  })
+})
+
+describe('compactFormatter', () => {
+  it('按量级取 G/M/K，保留 1 位小数、整数省 .0', () => {
+    expect(compactFormatter(17179869184)).toBe('17.2G')
+    expect(compactFormatter(5e6)).toBe('5M')
+    expect(compactFormatter(1500)).toBe('1.5K')
+  })
+  it('小量级原值输出（1 位小数、整数省 .0）', () => {
+    expect(compactFormatter(42)).toBe('42')
+    expect(compactFormatter(1.26)).toBe('1.3')
+    expect(compactFormatter(0)).toBe('0')
+  })
+  it('负数保留符号，非有限数归 0', () => {
+    expect(compactFormatter(-2500)).toBe('-2.5K')
+    expect(compactFormatter(NaN)).toBe('0')
   })
 })
 
@@ -184,6 +202,10 @@ describe('buildCompareSeries', () => {
     const out = buildCompareSeries(['node_load', 'node_cpu_pct'], NODE_METRIC_CATALOG, raw, id)
     expect(out.map((s) => s.key)).toEqual(['node_load', 'node_cpu_pct'])
     expect(out[0].name).toBe('monitor.metric.load1')
+  })
+  it('每条序列带出目录 format（供 Y 轴/hover 选格式器）', () => {
+    const out = buildCompareSeries(['node_load', 'node_cpu_pct'], NODE_METRIC_CATALOG, raw, id)
+    expect(out.map((s) => s.format)).toEqual(['load', 'pct'])
   })
   it('无匹配序列的 key 跳过', () => {
     const out = buildCompareSeries(['node_cpu_pct', 'node_net_rx_rate'], NODE_METRIC_CATALOG, raw, id)

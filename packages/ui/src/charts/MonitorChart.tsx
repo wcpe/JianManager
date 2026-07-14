@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Brush, CartesianGrid, Legend, Line, LineChart, XAxis, YAxis } from 'recharts'
-import type { PlotSeries } from '../lib/monitor-metrics'
+import { formatterFor, type PlotSeries } from '../lib/monitor-metrics'
 import { brushSelectionToWindow } from '../lib/brush'
 import { hoverSnapshotAt, type SampleRow } from '../lib/chart-hover'
 
@@ -33,6 +33,7 @@ export function MonitorChart({
   emptyHint,
   yDomain = ['auto', 'auto'],
   showBrush = true,
+  yAxisWidth = 48,
 }: {
   series: PlotSeries[]
   height?: number
@@ -41,6 +42,8 @@ export function MonitorChart({
   yDomain?: [number | 'auto' | 'dataMin' | 'dataMax', number | 'auto' | 'dataMin' | 'dataMax']
   /** 数据点过少时可关闭 brush（拖拽无意义）。 */
   showBrush?: boolean
+  /** Y 轴宽度（px）。格式化后仍偏长的场景（如多指标对比的紧凑缩写）可放宽避免截断。 */
+  yAxisWidth?: number
 }) {
   const { t } = useTranslation()
 
@@ -129,18 +132,22 @@ export function MonitorChart({
         {snapshot ? (
           <>
             <span className="text-muted-foreground">{new Date(snapshot.ts).toLocaleString()}</span>
-            {snapshot.entries.map((e, i) => (
-              <span key={e.key} className="inline-flex items-center gap-1">
-                <span
-                  className="inline-block size-2 rounded-full"
-                  style={{ background: series[i]?.color ?? CHART_COLORS[i % CHART_COLORS.length] }}
-                />
-                <span className="text-muted-foreground">{e.name}</span>
-                <span className="font-medium tabular-nums text-foreground">
-                  {e.value != null ? fmt(e.value) : '—'}
+            {snapshot.entries.map((e, i) => {
+              // 序列自带 format 时（多指标对比混合量纲）hover 按各自单位渲染，否则用图级 fmt。
+              const perFmt = series[i]?.format
+              return (
+                <span key={e.key} className="inline-flex items-center gap-1">
+                  <span
+                    className="inline-block size-2 rounded-full"
+                    style={{ background: series[i]?.color ?? CHART_COLORS[i % CHART_COLORS.length] }}
+                  />
+                  <span className="text-muted-foreground">{e.name}</span>
+                  <span className="font-medium tabular-nums text-foreground">
+                    {e.value != null ? (perFmt ? formatterFor(perFmt) : fmt)(e.value) : '—'}
+                  </span>
                 </span>
-              </span>
-            ))}
+              )
+            })}
           </>
         ) : (
           <span className="text-muted-foreground/60">{t('monitor.hoverHint')}</span>
@@ -173,7 +180,7 @@ export function MonitorChart({
               tickFormatter={(v: number) => fmt(v)}
               tick={{ fontSize: 11, fill: 'var(--muted-foreground)' }}
               stroke="var(--border)"
-              width={48}
+              width={yAxisWidth}
             />
             {series.length > 1 && <Legend wrapperStyle={{ fontSize: 11 }} iconType="plainline" iconSize={12} />}
             {series.map((s, i) => (

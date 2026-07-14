@@ -3,13 +3,16 @@ import { MonitorChart } from '@/components/charts/MonitorChart'
 import {
   buildCompareSeries,
   catalogFor,
+  compactFormatter,
+  formatterFor,
   type RawSeries,
 } from '@/lib/monitor-metrics'
 
 /**
  * 多指标对比/叠加（FR-221）：用户从该 target 的指标目录里勾选多条指标，叠加到同一图对比趋势。
  * 跨指标量纲不同（TPS vs 字节 vs %），故对比图 Y 轴不约束（auto），以形状/趋势对比为主，
- * 绝对值看 hover 浮窗。选中集合受控由父级持有（随 target 切换重置）。
+ * 绝对值看 hover 浮窗。Y 轴刻度：选中序列格式一致时用该单位格式器，混合量纲退紧凑 SI 缩写
+ * （避免字节级原始数字截断）。选中集合受控由父级持有（随 target 切换重置）。
  */
 export function MetricComparePanel({
   kind,
@@ -27,6 +30,9 @@ export function MetricComparePanel({
   const { t } = useTranslation()
   const catalog = catalogFor(kind)
   const plot = buildCompareSeries(selected, catalog, raw, (k) => t(k))
+  // 全部序列同 format → 用该单位格式器；混合量纲 → 紧凑缩写（hover 已按各序列 format 渲染）。
+  const formats = [...new Set(plot.map((s) => s.format))]
+  const valueFormatter = formats.length === 1 && formats[0] ? formatterFor(formats[0]) : compactFormatter
 
   return (
     <div className="space-y-3">
@@ -57,7 +63,13 @@ export function MetricComparePanel({
           {t('monitor.compare.empty')}
         </div>
       ) : (
-        <MonitorChart series={plot} height={height} emptyHint={t('common.noData')} />
+        <MonitorChart
+          series={plot}
+          height={height}
+          valueFormatter={valueFormatter}
+          yAxisWidth={56}
+          emptyHint={t('common.noData')}
+        />
       )}
     </div>
   )

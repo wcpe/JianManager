@@ -89,7 +89,7 @@ describe('MonitoringPage（mock 假后端）', () => {
     expect(container.firstElementChild).toHaveAttribute('data-page', 'monitoring')
     expect(container.firstElementChild).toHaveClass('jm-page-stack')
     expect(await screen.findByRole('heading', { name: '监控' })).toBeInTheDocument()
-    // 平台主图网格标题「负载/内存」唯一（概览/对比用「1 分钟/已用」别名，不冲突），证明骨架挂载。
+    // 平台主图网格标题「负载/内存」唯一（概览/对比用「1 分钟/内存已用」别名，不冲突），证明骨架挂载。
     // CPU/在线玩家 因 FR-221 概览/对比也用同名，故仅断言「至少出现一次」。
     expect(await screen.findByText('负载')).toBeInTheDocument()
     expect(screen.getAllByText('内存').length).toBeGreaterThan(0)

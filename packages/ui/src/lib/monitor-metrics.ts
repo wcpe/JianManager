@@ -19,6 +19,8 @@ export interface PlotSeries {
   name: string
   /** 线色，默认按序取 --chart-1..5（与 TimeSeriesChart 一致）。 */
   color?: string
+  /** 该序列的数值格式（FR-221 对比图据此选 Y 轴/hover 格式器；缺省由调用方统一格式化）。 */
+  format?: ValueFormat
   points: { ts: string; value: number | null }[]
 }
 
@@ -71,6 +73,24 @@ export function formatterFor(fmt: ValueFormat): (v: number) => string {
     default:
       return (v) => v.toFixed(0)
   }
+}
+
+/**
+ * 混合量纲的紧凑数值缩写（FR-221 多指标对比）：叠加序列单位不同（TPS vs 字节 vs %）时
+ * Y 轴无法用单一单位格式器，退而用十进制 SI 缩写压短大数（≥1e9→G、≥1e6→M、≥1e3→K，
+ * 保留 1 位小数、整数位省略 .0），避免字节量级原始数字在窄 Y 轴里被截断。
+ */
+export function compactFormatter(v: number): string {
+  if (!Number.isFinite(v)) return '0'
+  const trim1 = (n: number) => {
+    const s = n.toFixed(1)
+    return s.endsWith('.0') ? s.slice(0, -2) : s
+  }
+  const abs = Math.abs(v)
+  if (abs >= 1e9) return `${trim1(v / 1e9)}G`
+  if (abs >= 1e6) return `${trim1(v / 1e6)}M`
+  if (abs >= 1e3) return `${trim1(v / 1e3)}K`
+  return trim1(v)
 }
 
 /**
@@ -322,6 +342,7 @@ export function buildSnapshots(catalog: MetricCatalogItem[], raw: RawSeries[]): 
  * 装配「多指标对比」叠加曲线：按 selected 的 metricKey 顺序各取一条序列叠加到同一图。
  * 跨指标量纲不同（如 TPS vs 字节），故对比图统一不约束 Y 轴（auto），按各自原值绘制——
  * 形状/趋势对比为主，绝对值看 hover。无匹配序列的 key 跳过。
+ * 每条曲线带出目录里的 format，供渲染层选 Y 轴/hover 格式器（同量纲用单位格式、混合退紧凑缩写）。
  */
 export function buildCompareSeries(
   selected: string[],
@@ -334,7 +355,7 @@ export function buildCompareSeries(
     .map((key) => {
       const item = byKey.get(key)
       const points = pointsOf(raw, key)
-      return { key, name: item ? nameOf(item.nameKey) : key, points }
+      return { key, name: item ? nameOf(item.nameKey) : key, format: item?.format, points }
     })
     .filter((s) => s.points.length > 0)
 }
