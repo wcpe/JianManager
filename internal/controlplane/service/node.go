@@ -291,19 +291,88 @@ func (s *NodeService) Drain(id uint) (*DrainResult, error) {
 	return result, nil
 }
 
+// NodeInstanceBrief 节点删除守卫随拒绝返回的实例摘要（FR-309），供前端展示阻断清单。
+type NodeInstanceBrief struct {
+	ID     uint                 `json:"id"`
+	Name   string               `json:"name"`
+	Status model.InstanceStatus `json:"status"`
+}
+
+// NodeHasInstancesError 节点名下仍有实例、拒绝删除（FR-309）。
+// 用类型化错误携带实例清单，handler 据此组装 409 响应体。
+type NodeHasInstancesError struct {
+	Instances []NodeInstanceBrief
+}
+
+// Error 实现 error 接口。
+func (e *NodeHasInstancesError) Error() string {
+	return fmt.Sprintf("节点名下仍有 %d 个实例，请先删除或迁移实例后再下线", len(e.Instances))
+}
+
+// NodeDeleteResult 节点删除结果（FR-309）：force 级联时报告删除的实例记录数。
+type NodeDeleteResult struct {
+	InstancesPurged int `json:"instancesPurged"`
+}
+
 // Delete 主动下线节点：解除注册并保留记录（软删除），复连需重新注册。
-// 安全约束：节点在线时拒绝下线，应先排空并断开 Worker，避免下线一个仍在跑实例的活节点。
+// 安全约束（FR-048 / FR-309）：
+//   - 节点在线时一律拒绝（force 亦无效）——活节点必须先排空并断开 Worker，force 仅为
+//     离线节点的孤儿记录兜底；
+//   - 名下仍有实例且未 force 时拒绝并返回实例清单（*NodeHasInstancesError），避免删节点
+//     留下孤儿实例（其终端/操作全 404「节点不存在」）；
+//   - 离线节点 force=true 显式级联：同事务软删名下实例记录及其组/群组服/群组成员关联行
+//     （口径与 InstanceService.Delete 的记录级联一致）。节点离线无法委托 Worker 清理，
+//     远端实例文件一律保留，由调用方明示用户。
+//
 // 软删除（gorm.DeletedAt）保留历史审计与实例归属；Worker 复连时 Register 重新建档获得新 UUID/secret。
-// 参见 FR-048。
-func (s *NodeService) Delete(id uint) error {
+func (s *NodeService) Delete(id uint, force bool) (*NodeDeleteResult, error) {
 	node, err := s.GetByID(id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if node.Status == model.NodeStatusOnline {
-		return fmt.Errorf("不能删除在线节点")
+		return nil, fmt.Errorf("不能删除在线节点")
 	}
-	return s.db.Delete(&model.Node{}, id).Error
+
+	var instances []model.Instance
+	if err := s.db.Where("node_id = ?", id).Find(&instances).Error; err != nil {
+		return nil, fmt.Errorf("查询节点实例失败: %w", err)
+	}
+	if len(instances) > 0 && !force {
+		briefs := make([]NodeInstanceBrief, 0, len(instances))
+		for _, inst := range instances {
+			briefs = append(briefs, NodeInstanceBrief{ID: inst.ID, Name: inst.Name, Status: inst.Status})
+		}
+		return nil, &NodeHasInstancesError{Instances: briefs}
+	}
+
+	result := &NodeDeleteResult{}
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		if len(instances) > 0 {
+			ids := make([]uint, 0, len(instances))
+			for _, inst := range instances {
+				ids = append(ids, inst.ID)
+			}
+			if err := tx.Where("instance_id IN ?", ids).Delete(&model.GroupInstance{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("proxy_id IN ? OR backend_id IN ?", ids, ids).Delete(&model.ServerRegistration{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("instance_id IN ?", ids).Delete(&model.NetworkMember{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("node_id = ?", id).Delete(&model.Instance{}).Error; err != nil {
+				return err
+			}
+			result.InstancesPurged = len(ids)
+		}
+		return tx.Delete(&model.Node{}, id).Error
+	})
+	if err != nil {
+		return nil, fmt.Errorf("删除节点失败: %w", err)
+	}
+	return result, nil
 }
 
 // ScheduleAllowed 判断节点当前是否允许接纳新实例调度。

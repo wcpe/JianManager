@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -131,6 +132,8 @@ func (h *NodeHandler) Drain(c *gin.Context) {
 }
 
 // Delete 主动下线节点：解除注册并保留记录（仅平台管理员，危险操作）。参见 FR-048。
+// FR-309 实例守卫：名下有实例回 409 并携实例清单；离线节点可 `?force=true` 显式级联
+// 删除实例平台记录（不清理远端文件）；在线节点无论 force 一律拒绝。
 func (h *NodeHandler) Delete(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -140,12 +143,31 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	if err := h.nodeSvc.Delete(id); err != nil {
+	force := false
+	if raw := c.Query("force"); raw != "" {
+		force, err = strconv.ParseBool(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "force 参数格式错误"})
+			return
+		}
+	}
+
+	result, err := h.nodeSvc.Delete(id, force)
+	if err != nil {
+		var hasInst *service.NodeHasInstancesError
+		if errors.As(err, &hasInst) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":     "NODE_HAS_INSTANCES",
+				"message":   err.Error(),
+				"instances": hasInst.Instances,
+			})
+			return
+		}
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "已下线"})
+	c.JSON(http.StatusOK, gin.H{"message": "已下线", "instancesPurged": result.InstancesPurged})
 }
 
 // Metrics 返回节点实时指标快照（仅平台管理员）。

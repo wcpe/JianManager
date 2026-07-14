@@ -40,6 +40,82 @@ func TestNode_Delete_Offline_Success(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
+// TestNode_Delete_WithInstances_Conflict 离线节点名下有实例时删除被 409 拒绝并列出实例（FR-309）。
+func TestNode_Delete_WithInstances_Conflict(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	require.NoError(t, db.Model(&model.Node{}).Where("id = ?", node.ID).Update("status", model.NodeStatusOffline).Error)
+
+	inst := &model.Instance{
+		NodeID:       node.ID,
+		Name:         "orphan-candidate",
+		Type:         model.InstanceTypeGeneric,
+		ProcessType:  model.ProcessTypeDirect,
+		StartCommand: "x",
+		Status:       model.InstanceStatusStopped,
+	}
+	require.NoError(t, db.Create(inst).Error)
+
+	w := makeRequest(r, "DELETE", "/api/v1/nodes/"+itoa(node.ID), nil, token)
+	assert.Equal(t, http.StatusConflict, w.Code)
+	body := parseJSON(t, w)
+	assert.Equal(t, "NODE_HAS_INSTANCES", body["error"])
+	instances, ok := body["instances"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, instances, 1)
+	first := instances[0].(map[string]interface{})
+	assert.Equal(t, "orphan-candidate", first["name"])
+	assert.Equal(t, string(model.InstanceStatusStopped), first["status"])
+
+	// 拒绝即零副作用：节点仍在。
+	w = makeRequest(r, "GET", "/api/v1/nodes/"+itoa(node.ID), nil, token)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+// TestNode_Delete_ForceCascades 离线节点 ?force=true 级联删除实例记录（FR-309，不清理远端文件）。
+func TestNode_Delete_ForceCascades(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	require.NoError(t, db.Model(&model.Node{}).Where("id = ?", node.ID).Update("status", model.NodeStatusOffline).Error)
+
+	inst := &model.Instance{
+		NodeID:       node.ID,
+		Name:         "orphan-candidate",
+		Type:         model.InstanceTypeGeneric,
+		ProcessType:  model.ProcessTypeDirect,
+		StartCommand: "x",
+		Status:       model.InstanceStatusStopped,
+	}
+	require.NoError(t, db.Create(inst).Error)
+
+	w := makeRequest(r, "DELETE", "/api/v1/nodes/"+itoa(node.ID)+"?force=true", nil, token)
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, float64(1), parseJSON(t, w)["instancesPurged"])
+
+	// 节点与实例记录均已软删。
+	w = makeRequest(r, "GET", "/api/v1/nodes/"+itoa(node.ID), nil, token)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	var count int64
+	db.Model(&model.Instance{}).Where("node_id = ?", node.ID).Count(&count)
+	assert.Zero(t, count)
+}
+
+// TestNode_Delete_ForceInvalidValue force 参数非法时 400（FR-309）。
+func TestNode_Delete_ForceInvalidValue(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	require.NoError(t, db.Model(&model.Node{}).Where("id = ?", node.ID).Update("status", model.NodeStatusOffline).Error)
+
+	w := makeRequest(r, "DELETE", "/api/v1/nodes/"+itoa(node.ID)+"?force=banana", nil, token)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
 // TestNode_Delete_NotFound 删除不存在的节点返回错误。
 func TestNode_Delete_NotFound(t *testing.T) {
 	db := setupTestDB(t)

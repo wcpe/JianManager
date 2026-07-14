@@ -229,10 +229,13 @@ func TestNodeService_Delete_OnlineRejected(t *testing.T) {
 	svc := NewNodeService(db)
 	node := newTestNode(t, db, "n1")
 
-	require.Error(t, svc.Delete(node.ID))
+	_, err := svc.Delete(node.ID, false)
+	require.Error(t, err)
 
 	require.NoError(t, db.Model(node).Update("status", model.NodeStatusOffline).Error)
-	require.NoError(t, svc.Delete(node.ID))
+	result, err := svc.Delete(node.ID, false)
+	require.NoError(t, err)
+	require.Zero(t, result.InstancesPurged)
 
 	// 软删除：默认查询不可见，Unscoped 仍可见（记录保留）。
 	var visible int64
@@ -241,6 +244,97 @@ func TestNodeService_Delete_OnlineRejected(t *testing.T) {
 	var total int64
 	db.Unscoped().Model(&model.Node{}).Where("id = ?", node.ID).Count(&total)
 	require.Equal(t, int64(1), total)
+}
+
+// Delete 实例守卫（FR-309）：离线节点名下仍有实例、未 force 时拒绝，
+// 错误携带实例清单（id/name/status），节点与实例均不动。
+func TestNodeService_Delete_WithInstances_Rejected(t *testing.T) {
+	db := newNodeTestDB(t)
+	svc := NewNodeService(db)
+	node := newTestNode(t, db, "n1")
+	require.NoError(t, db.Model(node).Update("status", model.NodeStatusOffline).Error)
+
+	inst := &model.Instance{NodeID: node.ID, Name: "orphan-candidate", Type: model.InstanceTypeGeneric, ProcessType: model.ProcessTypeDirect, StartCommand: "x", Status: model.InstanceStatusStopped}
+	require.NoError(t, db.Create(inst).Error)
+
+	_, err := svc.Delete(node.ID, false)
+	require.Error(t, err)
+
+	var hasInst *NodeHasInstancesError
+	require.ErrorAs(t, err, &hasInst)
+	require.Len(t, hasInst.Instances, 1)
+	require.Equal(t, inst.ID, hasInst.Instances[0].ID)
+	require.Equal(t, "orphan-candidate", hasInst.Instances[0].Name)
+	require.Equal(t, model.InstanceStatusStopped, hasInst.Instances[0].Status)
+
+	// 节点与实例都还在（拒绝即零副作用）。
+	var nodeCount, instCount int64
+	db.Model(&model.Node{}).Where("id = ?", node.ID).Count(&nodeCount)
+	require.Equal(t, int64(1), nodeCount)
+	db.Model(&model.Instance{}).Where("id = ?", inst.ID).Count(&instCount)
+	require.Equal(t, int64(1), instCount)
+}
+
+// Delete force 级联（FR-309）：离线节点 force=true 时软删名下实例记录及其关联行，
+// 只清平台记录不触碰远端文件；其它节点的实例不受影响。
+func TestNodeService_Delete_ForceCascadesOfflineNode(t *testing.T) {
+	db := newNodeTestDB(t)
+	svc := NewNodeService(db)
+	node := newTestNode(t, db, "n1")
+	other := newTestNode(t, db, "n2")
+	require.NoError(t, db.Model(node).Update("status", model.NodeStatusOffline).Error)
+
+	inst1 := &model.Instance{NodeID: node.ID, Name: "i1", Type: model.InstanceTypeGeneric, ProcessType: model.ProcessTypeDirect, StartCommand: "x", Status: model.InstanceStatusStopped}
+	inst2 := &model.Instance{NodeID: node.ID, Name: "i2", Type: model.InstanceTypeGeneric, ProcessType: model.ProcessTypeDirect, StartCommand: "x", Status: model.InstanceStatusCrashed}
+	otherInst := &model.Instance{NodeID: other.ID, Name: "other", Type: model.InstanceTypeGeneric, ProcessType: model.ProcessTypeDirect, StartCommand: "x", Status: model.InstanceStatusStopped}
+	require.NoError(t, db.Create(inst1).Error)
+	require.NoError(t, db.Create(inst2).Error)
+	require.NoError(t, db.Create(otherInst).Error)
+	// 关联行随实例级联（与 InstanceService.Delete 的记录级联口径一致）。
+	require.NoError(t, db.Create(&model.GroupInstance{GroupID: 1, InstanceID: inst1.ID}).Error)
+	require.NoError(t, db.Create(&model.ServerRegistration{ProxyID: inst1.ID, BackendID: inst2.ID, Alias: "b1"}).Error)
+	require.NoError(t, db.Create(&model.NetworkMember{NetworkID: 1, InstanceID: inst2.ID}).Error)
+
+	result, err := svc.Delete(node.ID, true)
+	require.NoError(t, err)
+	require.Equal(t, 2, result.InstancesPurged)
+
+	// 节点与名下实例软删（默认查询不可见）。
+	var count int64
+	db.Model(&model.Node{}).Where("id = ?", node.ID).Count(&count)
+	require.Zero(t, count)
+	db.Model(&model.Instance{}).Where("node_id = ?", node.ID).Count(&count)
+	require.Zero(t, count)
+	// 关联行已清。
+	db.Model(&model.GroupInstance{}).Where("instance_id = ?", inst1.ID).Count(&count)
+	require.Zero(t, count)
+	db.Model(&model.ServerRegistration{}).Where("proxy_id = ? OR backend_id = ?", inst1.ID, inst2.ID).Count(&count)
+	require.Zero(t, count)
+	db.Model(&model.NetworkMember{}).Where("instance_id = ?", inst2.ID).Count(&count)
+	require.Zero(t, count)
+	// 其它节点的实例不受影响。
+	db.Model(&model.Instance{}).Where("id = ?", otherInst.ID).Count(&count)
+	require.Equal(t, int64(1), count)
+}
+
+// Delete 在线节点 force 无效（FR-309 语义）：在线节点无论是否 force 一律拒绝——
+// force 仅为离线节点的孤儿记录兜底，活节点必须先排空断开 Worker 走正常下线。
+func TestNodeService_Delete_OnlineForceStillRejected(t *testing.T) {
+	db := newNodeTestDB(t)
+	svc := NewNodeService(db)
+	node := newTestNode(t, db, "n1")
+	inst := &model.Instance{NodeID: node.ID, Name: "i1", Type: model.InstanceTypeGeneric, ProcessType: model.ProcessTypeDirect, StartCommand: "x", Status: model.InstanceStatusRunning}
+	require.NoError(t, db.Create(inst).Error)
+
+	_, err := svc.Delete(node.ID, true)
+	require.Error(t, err)
+
+	// 零副作用：节点与实例都在。
+	var count int64
+	db.Model(&model.Node{}).Where("id = ?", node.ID).Count(&count)
+	require.Equal(t, int64(1), count)
+	db.Model(&model.Instance{}).Where("id = ?", inst.ID).Count(&count)
+	require.Equal(t, int64(1), count)
 }
 
 // 调度拦截：维护模式节点拒绝创建实例，返回 ErrNodeInMaintenance。
