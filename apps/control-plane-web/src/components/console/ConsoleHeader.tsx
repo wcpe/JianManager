@@ -2,16 +2,17 @@ import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Bell, Boxes, Check, ChevronDown, Loader2, LogOut, RotateCw, Search, Server, UserRound, Users } from 'lucide-react'
+import { AlertTriangle, Bell, Boxes, Check, ChevronDown, ListChecks, Loader2, LogOut, RotateCw, Search, Server, UserRound, Users } from 'lucide-react'
 
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
 import { useInstance, useInstanceAggregate, useSearchInstances, type InstanceInfo } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useInstanceMetrics, useMetricOverview } from '@/api/metrics'
-import { useTasks } from '@/api/tasks'
+import { useTasks, isTerminalTask, TASK_KIND_LABEL_KEYS, type Task } from '@/api/tasks'
 import { useNotificationFeed, useFeedUnreadCount, type FeedItem } from '@/api/notification-feed'
 import { cn } from '@jianmanager/ui'
+import { Badge } from '@jianmanager/ui/components/badge'
 import PageBreadcrumb from './PageBreadcrumb'
 import { searchBoxClass, slotVisibility, visibilityClass } from './header-layout'
 import {
@@ -48,7 +49,7 @@ export default function ConsoleHeader() {
         <div className="flex items-center gap-0.5 sm:gap-1">
           <RefreshButton />
           <ClusterBadges />
-          <TaskProgress />
+          <TasksMenu />
           <NotificationBell />
           <AccountMenu />
         </div>
@@ -390,30 +391,118 @@ function ClusterBadges() {
   )
 }
 
+/** 页眉任务下拉的行数上限（FR-327）：最近 N 条，看全量进任务中心页。 */
+const TASKS_MENU_MAX_ROWS = 8
+
+/** 终态任务 → 徽章变体与文案键（tasks.state.*，与任务中心页同款语义）。 */
+const TASK_BADGE_META: Record<string, { variant: 'secondary' | 'destructive' | 'outline'; key: string }> = {
+  succeeded: { variant: 'secondary', key: 'tasks.state.succeeded' },
+  failed: { variant: 'destructive', key: 'tasks.state.failed' },
+  canceled: { variant: 'outline', key: 'tasks.state.canceled' },
+}
+
 /**
- * 页眉任务进度（FR-226）：有在跑任务（pending/running）时显示数量 + 平均进度，点击进任务中心定位。
- * 无在跑任务时隐藏（任务中心入口在侧栏「系统」）；轮询复用 useTasks（有活跃任务时短轮询、空闲停）。
+ * 页眉任务中心入口 + 下拉面板（FR-327，下拉化 FR-226 的「点击直跳任务中心」）：
+ * 入口常驻——有在跑任务（pending/running）时显示数量 + 平均进度（转圈反馈），空闲时静态图标；
+ * 点击弹下拉面板列最近 N 条任务（kind 徽标/名称/stage 进度/终态徽章），点条目跳任务中心定位该任务
+ * （FR-226 `?task=` 深链），底部「进入任务中心」看全量。面板外点击关闭为 DropdownMenu 缺省行为。
+ * 数据/轮询复用 useTasks（FR-329：活跃 2s 短轮询、空闲停），下拉不额外发请求。
  */
-function TaskProgress() {
+function TasksMenu() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { data: tasks } = useTasks()
-  const active = (tasks ?? []).filter((tk) => tk.state === 'running' || tk.state === 'pending')
-  if (active.length === 0) return null
-  const avg = Math.round(active.reduce((s, tk) => s + tk.progress, 0) / active.length)
-  const label = t('header.tasksRunning', { count: active.length, progress: avg })
+  const active = (tasks ?? []).filter((tk) => !isTerminalTask(tk))
+  const recent = (tasks ?? []).slice(0, TASKS_MENU_MAX_ROWS)
+  const avg = active.length > 0 ? Math.round(active.reduce((s, tk) => s + tk.progress, 0) / active.length) : 0
+
   return (
-    <button
-      type="button"
-      onClick={() => navigate('/tasks')}
-      title={label}
-      aria-label={label}
-      className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-primary transition-colors hover:bg-accent/60"
-    >
-      <Loader2 className="size-3.5 animate-spin" />
-      <span className="font-medium tabular-nums">{active.length}</span>
-      <span className="tabular-nums text-muted-foreground">{avg}%</span>
-    </button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          title={active.length > 0 ? t('header.tasksRunning', { count: active.length, progress: avg }) : t('header.tasks')}
+          aria-label={t('header.tasks')}
+          className={cn(
+            'flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs transition-colors hover:bg-accent/60',
+            active.length > 0 ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {active.length > 0 ? (
+            <>
+              <Loader2 className="size-3.5 animate-spin" />
+              <span className="font-medium tabular-nums">{active.length}</span>
+              <span className="tabular-nums text-muted-foreground">{avg}%</span>
+            </>
+          ) : (
+            <ListChecks className="size-4" />
+          )}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-80">
+        <div className="flex items-center justify-between px-2 py-1.5 text-xs font-medium">
+          <span>{t('header.tasks')}</span>
+          {active.length > 0 && (
+            <span className="text-muted-foreground">{t('header.tasksActiveCount', { count: active.length })}</span>
+          )}
+        </div>
+        <DropdownMenuSeparator />
+        {recent.length === 0 ? (
+          <div className="px-2 py-6 text-center text-xs text-muted-foreground">{t('tasks.empty')}</div>
+        ) : (
+          // 内容自适应 + 超高内部滚动（ui-modals 纪律：禁固定尺寸溢出）。
+          <div className="max-h-72 overflow-y-auto">
+            {recent.map((task) => (
+              <TaskMenuRow key={task.taskId} task={task} />
+            ))}
+          </div>
+        )}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => navigate('/tasks')} className="justify-center text-xs text-muted-foreground">
+          {t('header.viewAllTasks')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * 页眉任务下拉单行（FR-327）：kind 徽标 + 标题 + 进行中进度条（% 数值）/终态徽章 + stage 详情。
+ * 点击跳任务中心并深链定位该任务（`/tasks?task=<taskId>`，进页自动展开，FR-226）。
+ */
+function TaskMenuRow({ task }: { task: Task }) {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const kindKey = TASK_KIND_LABEL_KEYS[task.kind]
+  // 取消中（已请求停止但 Worker 未确认）优先于状态徽章，语义与任务中心页一致（FR-227）。
+  const canceling = task.state === 'running' && task.cancelRequested
+  const badge = TASK_BADGE_META[task.state]
+  const pct = Math.max(0, Math.min(100, task.progress))
+  return (
+    <DropdownMenuItem onClick={() => navigate(`/tasks?task=${task.taskId}`)} className="items-start text-xs">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1.5">
+          <span className="shrink-0 rounded bg-primary/10 px-1 py-px text-[10px] font-medium text-primary">
+            {kindKey ? t(kindKey) : task.kind}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-foreground">{task.title || task.kind}</span>
+          {canceling ? (
+            <Badge variant="outline">{t('tasks.state.canceling', '取消中')}</Badge>
+          ) : (
+            badge && <Badge variant={badge.variant}>{t(badge.key)}</Badge>
+          )}
+        </div>
+        {!isTerminalTask(task) && !canceling && (
+          <div className="mt-1 flex items-center gap-2">
+            <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+              <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+            </div>
+            <span className="shrink-0 tabular-nums text-[10px] text-muted-foreground">{pct}%</span>
+          </div>
+        )}
+        {task.detail && <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{task.detail}</p>}
+      </div>
+    </DropdownMenuItem>
   )
 }
 

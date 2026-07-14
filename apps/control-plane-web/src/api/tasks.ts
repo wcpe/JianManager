@@ -50,6 +50,21 @@ export function isTerminalTask(t: Pick<Task, 'state'>): boolean {
   return TERMINAL_STATES.has(t.state)
 }
 
+/**
+ * 任务 kind → i18n 文案键（任务中心筛选与页眉任务下拉共用，FR-327）。
+ * 新增 TaskKind 时同步补一行 + zh/en 文案；未知 kind 由消费方回退显示原始值。
+ */
+export const TASK_KIND_LABEL_KEYS: Record<string, string> = {
+  jdk_install: 'tasks.kind.jdkInstall',
+  runtime_install: 'tasks.kind.runtimeInstall',
+  pkg_install: 'tasks.kind.pkgInstall',
+  provision: 'tasks.kind.provision',
+  import: 'tasks.kind.import',
+  clone: 'tasks.kind.clone',
+  backup_create: 'tasks.kind.backupCreate',
+  backup_restore: 'tasks.kind.backupRestore',
+}
+
 /** 活跃任务轮询间隔（FR-329）：存在非终态任务时 ~2s 自动刷新进度。 */
 export const ACTIVE_TASKS_REFETCH_MS = 2000
 
