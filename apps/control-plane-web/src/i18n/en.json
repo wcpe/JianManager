@@ -1948,7 +1948,11 @@
     "capacity": "Capacity",
     "lastTest": "Last Test",
     "testOk": "Connection healthy",
-    "test": "Test"
+    "test": "Test",
+    "edit": "Edit Backend",
+    "updated": "Updated",
+    "updateFailed": "Failed to update storage backend",
+    "editInUseHint": "This backend is referenced by backups: changing the endpoint/bucket/prefix does not migrate existing backup objects and may break restore lookup for old backups."
   },
   "clientChannels": {
     "title": "Client Distribution",
@@ -3280,6 +3284,9 @@
     "forceStopDesc": "This interrupts the task on the node (downloads are canceled, temp files cleaned). Cannot be undone.",
     "cancelRequested": "Stop requested",
     "cancelFailed": "Failed to stop",
+    "countSummary": "{{total}} total · {{loaded}} loaded",
+    "loadMore": "Load more",
+    "loadMoreCapped": "Reached the 500-row load cap. Narrow the filters to see more.",
     "state": {
       "pending": "Pending",
       "running": "Running",

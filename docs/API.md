@@ -1408,10 +1408,17 @@
 - **响应加性字段**: `backupCount`、`usedBytes`、`lastTestAt`、`lastTestOk`、`lastTestMessage`
 
 ### POST /api/v1/backup-storages
-- **描述**: 创建远程存储后端（`type` ∈ s3/sftp/webdav）。凭证字段须为 `${ENV_VAR}` 引用，明文/非法类型回 422
+- **描述**: 创建远程存储后端（`type` ∈ s3/sftp/webdav）。凭证字段须为 `${ENV_VAR}` 引用，明文/非法类型回 422；名称与既有后端冲突回 422（FR-338 与 PUT 同源预检）
 - **权限**: 平台管理员
-- **关联 FR**: FR-057, FR-152
+- **关联 FR**: FR-057, FR-152, FR-338
 - **请求**: `{ "name": "string", "type": "s3", "endpoint": "", "bucket": "", "region": "", "prefix": "", "accessKeyEnv": "${VAR}", "secretKeyEnv": "${VAR}", "useSsl": true }`
+
+### PUT /api/v1/backup-storages/:id
+- **描述**: 编辑远程存储后端（全量替换）。`type` 不可改（与现值不一致回 422，改型=删重建）；凭证字段须为 `${ENV_VAR}` 引用；名称冲突（排除自身）回 422；成功后清空 `lastTestAt/lastTestOk/lastTestMessage`（配置已变，旧连通性结论失效）。被备份引用的后端允许编辑（换密钥/endpoint 为合法运维，不加引用锁）；保存仅做静态校验不探活，连通性由 test 端点显式测试
+- **权限**: 平台管理员
+- **关联 FR**: FR-338
+- **请求**: 同 `POST /api/v1/backup-storages`
+- **错误**: 404 `NOT_FOUND`；422 `BUSINESS_ERROR`（类型非法/类型变更/凭证非 `${ENV_VAR}`/名称冲突）
 
 ### POST /api/v1/backup-storages/test
 - **描述**: 测试未保存的存储后端配置；不创建记录，不写 `lastTest*`。S3 使用短超时 SigV4 `HEAD bucket`，WebDAV 使用 `OPTIONS`，SFTP 建立 SSH 握手
@@ -2023,11 +2030,13 @@
 - **错误码**: `404 NOT_FOUND`（节点不存在）；`422 BUSINESS_ERROR`（mode 非法 / custom 缺地址 / 代理地址非法）
 
 ### GET /api/v1/tasks
-- **描述**: 任务列表（倒序）。非平台管理员只见自己发起的，平台管理员见全部。
-- **关联 FR**: FR-183 / FR-227（筛选）
+- **描述**: 任务列表（`created_at DESC, id DESC` 倒序）分页信封。非平台管理员只见自己发起的（`total` 同口径），平台管理员见全部。
+- **关联 FR**: FR-183 / FR-227（筛选）/ FR-337（分页信封，**破坏性**：裸数组 → 信封）
 - **权限**: 所有认证用户（归属隔离）
-- **Query**: `?limit=100`；筛选（FR-227）`?kind=&state=&nodeId=&keyword=&since=&until=`（`since`/`until` 为 RFC3339；`keyword` 模糊匹配标题/详情）
-- **响应**: `[{ id, taskId, nodeId, kind, state, progress, title, detail, error, result, cancelRequested, createdBy, createdAt, updatedAt }]`
+- **Query**: 分页 `?limit=100&offset=0`（`limit` 缺省 100、钳制 [1,500]；`offset` 缺省 0、负值归 0）；筛选（FR-227）`?kind=&state=&nodeId=&keyword=&since=&until=`（`since`/`until` 为 RFC3339；`keyword` 模糊匹配标题/详情）。非法整数/时间沿既有行为忽略该项取缺省
+- **响应**: `{ "items": [{ id, taskId, nodeId, kind, state, progress, title, detail, error, result, cancelRequested, createdBy, createdAt, updatedAt }], "total": 342, "limit": 100, "offset": 0 }`
+  - `items[]` 元素字段与原裸数组元素完全一致，仅外层包裹信封（FR-337）
+  - `total`: 同筛选 + 同归属隔离口径的命中总数；`limit`/`offset` 回显钳制后的实际生效值
   - `state`: `pending` / `running` / `succeeded` / `failed` / `canceled`；`progress`: 0~100
   - `cancelRequested`: 已请求强制停止但 Worker 尚未确认中断（在线 running 取消时为 true，前端显「取消中」，FR-227）
 

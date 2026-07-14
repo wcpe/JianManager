@@ -1927,7 +1927,11 @@
     "capacity": "容量",
     "lastTest": "最近测试",
     "testOk": "连接正常",
-    "test": "测试"
+    "test": "测试",
+    "edit": "编辑存储后端",
+    "updated": "已更新",
+    "updateFailed": "更新存储后端失败",
+    "editInUseHint": "该后端已被备份引用：修改 Endpoint/Bucket/前缀不会迁移已有备份对象，可能影响旧备份的恢复定位。"
   },
   "clientChannels": {
     "title": "客户端分发",
@@ -3280,6 +3284,9 @@
     "forceStopDesc": "将中断该任务在节点上的执行（如下载会被取消、临时文件清理），不可恢复。",
     "cancelRequested": "已请求停止",
     "cancelFailed": "停止失败",
+    "countSummary": "共 {{total}} 条 · 已加载 {{loaded}}",
+    "loadMore": "加载更多",
+    "loadMoreCapped": "已达单次加载上限 500 条，可用筛选缩小范围",
     "state": {
       "pending": "等待中",
       "running": "进行中",
