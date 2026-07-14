@@ -10,9 +10,14 @@ import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
+import {
+  ScrollableDialogBody,
+  scrollableDialogContentClass,
+} from '@jianmanager/ui/components/scrollable-dialog'
 import { Button } from '@jianmanager/ui/components/button'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
@@ -94,127 +99,132 @@ export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {
 
   return (
     <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
-      <DialogContent className="max-h-[90vh] max-w-md overflow-y-auto">
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-md`}>
         <DialogHeader>
           <DialogTitle>{isEdit ? t('alerts.editChannel') : t('alerts.createChannel')}</DialogTitle>
         </DialogHeader>
 
-        <div>
-          <FieldLabel required>{t('alerts.channelName')}</FieldLabel>
-          <input
-            className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive"
-            value={name}
-            aria-invalid={!!nameError}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <FieldError error={nameError} />
-        </div>
-
-        <div>
-          <FieldLabel>{t('alerts.channelType')}</FieldLabel>
-          <Select value={type} onValueChange={(v) => setType(v)}>
-            <SelectTrigger className="w-full mt-1">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {CHANNEL_TYPES.map((ct) => (
-                <SelectItem key={ct} value={ct}>
-                  {t(`alerts.channel_${ct}`, ct)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {channelIsInApp(type) && <p className="text-sm text-muted-foreground">{t('alerts.inappHint')}</p>}
-
-        {channelUsesURL(type) && (
+        <ScrollableDialogBody className="space-y-3">
           <div>
-            <FieldLabel required>{t('alerts.channelUrl')}</FieldLabel>
+            <FieldLabel required>{t('alerts.channelName')}</FieldLabel>
             <input
-              className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive font-mono text-sm"
-              placeholder="${JM_DINGTALK_WEBHOOK}"
-              value={cfg.url ?? ''}
-              aria-invalid={!!(urlError || urlMissing)}
-              onChange={(e) => set({ url: e.target.value })}
+              className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive"
+              value={name}
+              aria-invalid={!!nameError}
+              onChange={(e) => setName(e.target.value)}
             />
-            <FieldError error={urlError || urlMissing} />
-            <p className="text-xs text-muted-foreground mt-1">{t('alerts.envRefHint')}</p>
+            <FieldError error={nameError} />
           </div>
-        )}
 
-        {channelIsTelegram(type) && (
-          <>
+          <div>
+            <FieldLabel>{t('alerts.channelType')}</FieldLabel>
+            <Select value={type} onValueChange={(v) => setType(v)}>
+              <SelectTrigger className="w-full mt-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {CHANNEL_TYPES.map((ct) => (
+                  <SelectItem key={ct} value={ct}>
+                    {t(`alerts.channel_${ct}`, ct)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {channelIsInApp(type) && <p className="text-sm text-muted-foreground">{t('alerts.inappHint')}</p>}
+
+          {channelUsesURL(type) && (
             <div>
-              <FieldLabel required>{t('alerts.telegramToken')}</FieldLabel>
+              <FieldLabel required>{t('alerts.channelUrl')}</FieldLabel>
               <input
                 className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive font-mono text-sm"
-                placeholder="${JM_TELEGRAM_TOKEN}"
-                value={cfg.token ?? ''}
-                aria-invalid={!!(tokenMissing || tokenError)}
-                onChange={(e) => set({ token: e.target.value })}
+                placeholder="${JM_DINGTALK_WEBHOOK}"
+                value={cfg.url ?? ''}
+                aria-invalid={!!(urlError || urlMissing)}
+                onChange={(e) => set({ url: e.target.value })}
               />
-              <FieldError error={tokenMissing || tokenError} />
+              <FieldError error={urlError || urlMissing} />
               <p className="text-xs text-muted-foreground mt-1">{t('alerts.envRefHint')}</p>
             </div>
-            <div>
-              <FieldLabel required>{t('alerts.telegramChatId')}</FieldLabel>
-              <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!chatMissing} value={cfg.chatId ?? ''} onChange={(e) => set({ chatId: e.target.value })} />
-              <FieldError error={chatMissing} />
-            </div>
-          </>
-        )}
+          )}
 
-        {channelIsEmail(type) && (
-          <>
-            <div className="grid grid-cols-3 gap-2">
-              <div className="col-span-2">
-                <FieldLabel required>{t('alerts.smtpHost')}</FieldLabel>
-                <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!hostMissing} value={cfg.host ?? ''} onChange={(e) => set({ host: e.target.value })} />
-                <FieldError error={hostMissing} />
+          {channelIsTelegram(type) && (
+            <>
+              <div>
+                <FieldLabel required>{t('alerts.telegramToken')}</FieldLabel>
+                <input
+                  className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive font-mono text-sm"
+                  placeholder="${JM_TELEGRAM_TOKEN}"
+                  value={cfg.token ?? ''}
+                  aria-invalid={!!(tokenMissing || tokenError)}
+                  onChange={(e) => set({ token: e.target.value })}
+                />
+                <FieldError error={tokenMissing || tokenError} />
+                <p className="text-xs text-muted-foreground mt-1">{t('alerts.envRefHint')}</p>
               </div>
               <div>
-                <FieldLabel required>{t('alerts.smtpPort')}</FieldLabel>
-                <input type="number" className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!portMissing} placeholder="587" value={cfg.port ?? ''} onChange={(e) => set({ port: Number(e.target.value) })} />
-                <FieldError error={portMissing} />
+                <FieldLabel required>{t('alerts.telegramChatId')}</FieldLabel>
+                <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!chatMissing} value={cfg.chatId ?? ''} onChange={(e) => set({ chatId: e.target.value })} />
+                <FieldError error={chatMissing} />
               </div>
-            </div>
-            <div>
-              <FieldLabel>{t('alerts.smtpUsername')}</FieldLabel>
-              <input className="w-full mt-1 p-2 border rounded" value={cfg.username ?? ''} onChange={(e) => set({ username: e.target.value })} />
-            </div>
-            <div>
-              <FieldLabel>{t('alerts.smtpPassword')}</FieldLabel>
-              <input
-                className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive font-mono text-sm"
-                placeholder="${JM_SMTP_PASSWORD}"
-                value={cfg.password ?? ''}
-                aria-invalid={!!passwordError}
-                onChange={(e) => set({ password: e.target.value })}
-              />
-              <FieldError error={passwordError} />
-              <p className="text-xs text-muted-foreground mt-1">{t('alerts.envRefHint')}</p>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <FieldLabel>{t('alerts.smtpFrom')}</FieldLabel>
-                <input className="w-full mt-1 p-2 border rounded" value={cfg.from ?? ''} onChange={(e) => set({ from: e.target.value })} />
+            </>
+          )}
+
+          {channelIsEmail(type) && (
+            <>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="col-span-2">
+                  <FieldLabel required>{t('alerts.smtpHost')}</FieldLabel>
+                  <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!hostMissing} value={cfg.host ?? ''} onChange={(e) => set({ host: e.target.value })} />
+                  <FieldError error={hostMissing} />
+                </div>
+                <div>
+                  <FieldLabel required>{t('alerts.smtpPort')}</FieldLabel>
+                  <input type="number" className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!portMissing} placeholder="587" value={cfg.port ?? ''} onChange={(e) => set({ port: Number(e.target.value) })} />
+                  <FieldError error={portMissing} />
+                </div>
               </div>
               <div>
-                <FieldLabel required>{t('alerts.smtpTo')}</FieldLabel>
-                <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!toMissing} placeholder="a@x.com, b@x.com" value={cfg.to ?? ''} onChange={(e) => set({ to: e.target.value })} />
-                <FieldError error={toMissing} />
+                <FieldLabel>{t('alerts.smtpUsername')}</FieldLabel>
+                <input className="w-full mt-1 p-2 border rounded" value={cfg.username ?? ''} onChange={(e) => set({ username: e.target.value })} />
               </div>
-            </div>
-          </>
-        )}
+              <div>
+                <FieldLabel>{t('alerts.smtpPassword')}</FieldLabel>
+                <input
+                  className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive font-mono text-sm"
+                  placeholder="${JM_SMTP_PASSWORD}"
+                  value={cfg.password ?? ''}
+                  aria-invalid={!!passwordError}
+                  onChange={(e) => set({ password: e.target.value })}
+                />
+                <FieldError error={passwordError} />
+                <p className="text-xs text-muted-foreground mt-1">{t('alerts.envRefHint')}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <FieldLabel>{t('alerts.smtpFrom')}</FieldLabel>
+                  <input className="w-full mt-1 p-2 border rounded" value={cfg.from ?? ''} onChange={(e) => set({ from: e.target.value })} />
+                </div>
+                <div>
+                  <FieldLabel required>{t('alerts.smtpTo')}</FieldLabel>
+                  <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" aria-invalid={!!toMissing} placeholder="a@x.com, b@x.com" value={cfg.to ?? ''} onChange={(e) => set({ to: e.target.value })} />
+                  <FieldError error={toMissing} />
+                </div>
+              </div>
+            </>
+          )}
 
-        <label className="flex items-center gap-2 text-sm">
-          <Checkbox checked={enabled} onCheckedChange={(v) => setEnabled(v === true)} aria-label={t('alerts.enabled')} />
-          {t('alerts.enabled')}
-        </label>
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox checked={enabled} onCheckedChange={(v) => setEnabled(v === true)} aria-label={t('alerts.enabled')} />
+            {t('alerts.enabled')}
+          </label>
+        </ScrollableDialogBody>
 
-        <div className="flex gap-2 pt-2">
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose}>
+            {t('common.cancel')}
+          </Button>
           <Button
             type="button"
             disabled={hasError || create.isPending || update.isPending}
@@ -222,10 +232,7 @@ export function ChannelDialog({ channel, onClose }: ChannelDialogProps) {
           >
             {t('common.save')}
           </Button>
-          <Button type="button" variant="outline" onClick={onClose}>
-            {t('common.cancel')}
-          </Button>
-        </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

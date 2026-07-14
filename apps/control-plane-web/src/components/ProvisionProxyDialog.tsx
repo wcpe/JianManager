@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
+import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
 import { Button } from '@jianmanager/ui/components/button'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
@@ -144,16 +145,18 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) close() }}>
-      <DialogContent className="max-h-[90vh] max-w-md overflow-y-auto">
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-md`}>
         {forwardingSecret ? (
           <>
             <DialogHeader>
               <DialogTitle>{t('proxy.secretTitle')}</DialogTitle>
               <DialogDescription>{t('proxy.secretDesc')}</DialogDescription>
             </DialogHeader>
-            <div className="rounded-md border bg-muted/40 p-3 font-mono text-sm break-all">
-              {forwardingSecret}
-            </div>
+            <ScrollableDialogBody>
+              <div className="rounded-md border bg-muted/40 p-3 font-mono text-sm break-all">
+                {forwardingSecret}
+              </div>
+            </ScrollableDialogBody>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={copySecret}>
                 <Copy className="size-4" /> {t('proxy.copySecret')}
@@ -168,120 +171,122 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
               <DialogDescription>{t('provision.systemAssigned')}</DialogDescription>
             </DialogHeader>
 
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div>
-            <FieldLabel required>{t('instances.instanceName')}</FieldLabel>
-            <input value={name} onChange={(e) => setName(e.target.value)}
-              onBlur={() => gate.touch('name')}
-              aria-invalid={!!gate.show('name', errors.name)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive" placeholder="velocity-main" />
-            <FieldError error={gate.show('name', errors.name)} />
-          </div>
+            <form onSubmit={handleSubmit} className="flex min-h-0 flex-1 flex-col">
+              <ScrollableDialogBody className="space-y-3 py-2">
+                <div>
+                  <FieldLabel required>{t('instances.instanceName')}</FieldLabel>
+                  <input value={name} onChange={(e) => setName(e.target.value)}
+                    onBlur={() => gate.touch('name')}
+                    aria-invalid={!!gate.show('name', errors.name)}
+                    className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive" placeholder="velocity-main" />
+                  <FieldError error={gate.show('name', errors.name)} />
+                </div>
 
-          <div>
-            <FieldLabel required>{t('instances.node')}</FieldLabel>
-            <div className="mt-1">
-              <Combobox
-                options={nodeOptions}
-                value={nodeId}
-                onChange={(v) => { gate.touch('nodeId'); setNodeId(v) }}
-                allowCustom={false}
-                placeholder={t('instances.selectNode')}
-                invalid={!!gate.show('nodeId', errors.nodeId)}
-              />
-            </div>
-            <FieldError error={gate.show('nodeId', errors.nodeId)} />
-          </div>
+                <div>
+                  <FieldLabel required>{t('instances.node')}</FieldLabel>
+                  <div className="mt-1">
+                    <Combobox
+                      options={nodeOptions}
+                      value={nodeId}
+                      onChange={(v) => { gate.touch('nodeId'); setNodeId(v) }}
+                      allowCustom={false}
+                      placeholder={t('instances.selectNode')}
+                      invalid={!!gate.show('nodeId', errors.nodeId)}
+                    />
+                  </div>
+                  <FieldError error={gate.show('nodeId', errors.nodeId)} />
+                </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <FieldLabel>{t('proxy.type')}</FieldLabel>
-              <div className="mt-1">
-                <Combobox
-                  options={proxyTypeOptions}
-                  value={proxyType}
-                  onChange={(v) => { setProxyType(v); setVersion('') }}
-                />
-              </div>
-            </div>
-            <div>
-              <FieldLabel required={needsVersion}>{t('proxy.version')}</FieldLabel>
-              <div className="mt-1">
-                <Combobox
-                  options={versionOptions}
-                  value={needsVersion ? version : ''}
-                  onChange={(v) => { gate.touch('version'); setVersion(v) }}
-                  disabled={!needsVersion || versionsLoading}
-                  invalid={!!gate.show('version', errors.version)}
-                  placeholder={needsVersion ? (versionsLoading ? t('provision.loadingVersions') : t('provision.selectVersion')) : t('proxy.latestOnly')}
-                />
-              </div>
-              <FieldError error={gate.show('version', errors.version)} />
-            </div>
-          </div>
-          {resolved && (
-            <p className="text-xs text-muted-foreground">{t('provision.willDownload')}: {resolved.filename}</p>
-          )}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <FieldLabel>{t('proxy.type')}</FieldLabel>
+                    <div className="mt-1">
+                      <Combobox
+                        options={proxyTypeOptions}
+                        value={proxyType}
+                        onChange={(v) => { setProxyType(v); setVersion('') }}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <FieldLabel required={needsVersion}>{t('proxy.version')}</FieldLabel>
+                    <div className="mt-1">
+                      <Combobox
+                        options={versionOptions}
+                        value={needsVersion ? version : ''}
+                        onChange={(v) => { gate.touch('version'); setVersion(v) }}
+                        disabled={!needsVersion || versionsLoading}
+                        invalid={!!gate.show('version', errors.version)}
+                        placeholder={needsVersion ? (versionsLoading ? t('provision.loadingVersions') : t('provision.selectVersion')) : t('proxy.latestOnly')}
+                      />
+                    </div>
+                    <FieldError error={gate.show('version', errors.version)} />
+                  </div>
+                </div>
+                {resolved && (
+                  <p className="text-xs text-muted-foreground">{t('provision.willDownload')}: {resolved.filename}</p>
+                )}
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <FieldLabel>{t('provision.memory')}</FieldLabel>
-              <input value={memoryMb} onChange={(e) => setMemoryMb(e.target.value)} inputMode="numeric"
-                onBlur={() => gate.touch('memoryMb')}
-                aria-invalid={!!gate.show('memoryMb', errors.memoryMb)}
-                className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive" placeholder="1024" />
-              <FieldError error={gate.show('memoryMb', errors.memoryMb)} />
-            </div>
-            <div>
-              <FieldLabel>JDK</FieldLabel>
-              <div className="mt-1">
-                <Combobox
-                  options={jdkOptions}
-                  value={jdkId}
-                  onChange={setJdkId}
-                  allowCustom={false}
-                  placeholder={t('provision.noJdk')}
-                />
-              </div>
-            </div>
-          </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <FieldLabel>{t('provision.memory')}</FieldLabel>
+                    <input value={memoryMb} onChange={(e) => setMemoryMb(e.target.value)} inputMode="numeric"
+                      onBlur={() => gate.touch('memoryMb')}
+                      aria-invalid={!!gate.show('memoryMb', errors.memoryMb)}
+                      className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm aria-invalid:border-destructive" placeholder="1024" />
+                    <FieldError error={gate.show('memoryMb', errors.memoryMb)} />
+                  </div>
+                  <div>
+                    <FieldLabel>JDK</FieldLabel>
+                    <div className="mt-1">
+                      <Combobox
+                        options={jdkOptions}
+                        value={jdkId}
+                        onChange={setJdkId}
+                        allowCustom={false}
+                        placeholder={t('provision.noJdk')}
+                      />
+                    </div>
+                  </div>
+                </div>
 
-          <div>
-            <FieldLabel>{t('provision.jvmArgs')}</FieldLabel>
-            <input value={jvmArgs} onChange={(e) => setJvmArgs(e.target.value)}
-              className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm font-mono" placeholder="-XX:+UseG1GC" />
-          </div>
+                <div>
+                  <FieldLabel>{t('provision.jvmArgs')}</FieldLabel>
+                  <input value={jvmArgs} onChange={(e) => setJvmArgs(e.target.value)}
+                    className="w-full mt-1 px-3 py-2 border rounded-md bg-background text-sm font-mono" placeholder="-XX:+UseG1GC" />
+                </div>
 
-          <div>
-            <FieldLabel>{t('instances.group')}</FieldLabel>
-            <div className="mt-1">
-              <Combobox
-                options={groupOptions}
-                value={groupId}
-                onChange={setGroupId}
-                allowCustom={false}
-                placeholder={t('instances.noGroup')}
-              />
-            </div>
-          </div>
+                <div>
+                  <FieldLabel>{t('instances.group')}</FieldLabel>
+                  <div className="mt-1">
+                    <Combobox
+                      options={groupOptions}
+                      value={groupId}
+                      onChange={setGroupId}
+                      allowCustom={false}
+                      placeholder={t('instances.noGroup')}
+                    />
+                  </div>
+                </div>
 
-          <div>
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox checked={onlineMode} onCheckedChange={(v) => setOnlineMode(v === true)} aria-label={t('proxy.onlineMode')} />
-              {t('proxy.onlineMode')}
-            </label>
-            <p className="mt-1 text-xs text-muted-foreground">{t('proxy.onlineModeHint')}</p>
-          </div>
+                <div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox checked={onlineMode} onCheckedChange={(v) => setOnlineMode(v === true)} aria-label={t('proxy.onlineMode')} />
+                    {t('proxy.onlineMode')}
+                  </label>
+                  <p className="mt-1 text-xs text-muted-foreground">{t('proxy.onlineModeHint')}</p>
+                </div>
+              </ScrollableDialogBody>
 
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="outline" onClick={close}>
-              {t('common.cancel')}
-            </Button>
-            <Button type="submit" disabled={provision.isPending || hasErrors(errors)}>
-              {provision.isPending ? t('proxy.provisioning') : t('proxy.submit')}
-            </Button>
-          </div>
-        </form>
+              <DialogFooter className="flex-row justify-end pt-2">
+                <Button type="button" variant="outline" onClick={close}>
+                  {t('common.cancel')}
+                </Button>
+                <Button type="submit" disabled={provision.isPending || hasErrors(errors)}>
+                  {provision.isPending ? t('proxy.provisioning') : t('proxy.submit')}
+                </Button>
+              </DialogFooter>
+            </form>
           </>
         )}
       </DialogContent>

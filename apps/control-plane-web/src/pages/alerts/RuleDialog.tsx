@@ -12,9 +12,14 @@ import { FieldLabel, FieldError } from '@jianmanager/ui/components/field-label'
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@jianmanager/ui/components/dialog'
+import {
+  ScrollableDialogBody,
+  scrollableDialogContentClass,
+} from '@jianmanager/ui/components/scrollable-dialog'
 import { Button } from '@jianmanager/ui/components/button'
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import {
@@ -131,203 +136,208 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
 
   return (
     <Dialog open onOpenChange={(next) => { if (!next) onClose() }}>
-      <DialogContent className="max-h-[90vh] max-w-lg overflow-y-auto">
+      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-lg`}>
         <DialogHeader>
           <DialogTitle>{isEdit ? t('alerts.editRule') : t('alerts.createRule')}</DialogTitle>
         </DialogHeader>
 
-        <div>
-          <FieldLabel required>{t('alerts.ruleName')}</FieldLabel>
-          <input
-            className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive"
-            value={form.name}
-            disabled={isEdit}
-            aria-invalid={!!nameError}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-          />
-          <FieldError error={nameError} />
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
+        <ScrollableDialogBody className="space-y-3">
           <div>
-            <FieldLabel>{t('alerts.triggerType')}</FieldLabel>
-            <Select
-              value={form.triggerType}
-              disabled={isEdit}
-              onValueChange={(v) => setForm({ ...form, triggerType: v, targetType: targetTypeForTrigger(v), targetId: null })}
-            >
-              <SelectTrigger className="w-full mt-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {TRIGGER_TYPES.map((tt) => (
-                  <SelectItem key={tt} value={tt}>
-                    {t(`alerts.trigger_${tt}`, tt)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <FieldLabel>{t('alerts.level')}</FieldLabel>
-            <Select value={form.level} onValueChange={(v) => setForm({ ...form, level: v })}>
-              <SelectTrigger className="w-full mt-1">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {LEVELS.map((lv) => (
-                  <SelectItem key={lv} value={lv}>
-                    {t(`alerts.level_${lv}`)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        {!isEdit ? (
-          <div>
-            <FieldLabel>{t('alerts.targetScope')}</FieldLabel>
-            <select
-              className="w-full mt-1 p-2 border rounded text-sm"
-              value={form.targetId ?? ''}
-              onChange={(e) => setForm({ ...form, targetId: e.target.value ? Number(e.target.value) : null })}
-            >
-              <option value="">{targetAllLabel}</option>
-              {targetOptions.map((target) => (
-                <option key={target.id} value={target.id}>{target.label}</option>
-              ))}
-            </select>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {t(form.targetType === 'node' ? 'alerts.targetNodeHint' : 'alerts.targetInstanceHint')}
-            </p>
-          </div>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            {t('alerts.targetScope')}: {rule?.targetId ? `#${rule.targetId}` : targetAllLabel}
-          </p>
-        )}
-
-        {triggerUsesMetric(form.triggerType) && (
-          <div className="grid grid-cols-4 gap-2">
-            <div>
-              <FieldLabel>{t('alerts.metric')}</FieldLabel>
-              <Select value={form.metric} onValueChange={(v) => setForm({ ...form, metric: v })}>
-                <SelectTrigger className="w-full mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="cpu">{t('alerts.cpu')}</SelectItem>
-                  <SelectItem value="memory">{t('alerts.memory')}</SelectItem>
-                  <SelectItem value="disk">{t('alerts.disk')}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <FieldLabel>{t('alerts.condition')}</FieldLabel>
-              <Select value={form.operator} onValueChange={(v) => setForm({ ...form, operator: v })}>
-                <SelectTrigger className="w-full mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value=">">&gt;</SelectItem>
-                  <SelectItem value="<">&lt;</SelectItem>
-                  <SelectItem value=">=">&gt;=</SelectItem>
-                  <SelectItem value="<=">&lt;=</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <FieldLabel>{t('alerts.threshold')}</FieldLabel>
-              <input type="number" className="w-full mt-1 p-2 border rounded" value={form.threshold} onChange={(e) => setForm({ ...form, threshold: Number(e.target.value) })} />
-            </div>
-            <div>
-              <FieldLabel>{t('alerts.durationSec')}</FieldLabel>
-              <input type="number" className="w-full mt-1 p-2 border rounded" value={form.durationSec} onChange={(e) => setForm({ ...form, durationSec: Number(e.target.value) })} />
-            </div>
-          </div>
-        )}
-
-        {triggerUsesKeyword(form.triggerType) && (
-          <div>
-            <FieldLabel required>{t('alerts.keyword')}</FieldLabel>
+            <FieldLabel required>{t('alerts.ruleName')}</FieldLabel>
             <input
               className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive"
-              placeholder="OutOfMemoryError"
-              value={form.keyword}
-              aria-invalid={!!keywordError}
-              onChange={(e) => setForm({ ...form, keyword: e.target.value })}
+              value={form.name}
+              disabled={isEdit}
+              aria-invalid={!!nameError}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
             />
-            <FieldError error={keywordError} />
+            <FieldError error={nameError} />
           </div>
-        )}
 
-        {triggerUsesEventMatch(form.triggerType) && (
-          <div>
-            <FieldLabel>{t('alerts.eventMatch')}</FieldLabel>
-            <Select value={form.eventMatch || undefined} onValueChange={(v) => setForm({ ...form, eventMatch: v })}>
-              <SelectTrigger className="w-full mt-1">
-                <SelectValue placeholder={t('alerts.anyEvent')} />
-              </SelectTrigger>
-              <SelectContent>
-                {PLAYER_EVENTS.map((ev) => (
-                  <SelectItem key={ev} value={ev}>
-                    {t(`alerts.playerEvent_${ev}`, ev)}
-                  </SelectItem>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <FieldLabel>{t('alerts.triggerType')}</FieldLabel>
+              <Select
+                value={form.triggerType}
+                disabled={isEdit}
+                onValueChange={(v) => setForm({ ...form, triggerType: v, targetType: targetTypeForTrigger(v), targetId: null })}
+              >
+                <SelectTrigger className="w-full mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {TRIGGER_TYPES.map((tt) => (
+                    <SelectItem key={tt} value={tt}>
+                      {t(`alerts.trigger_${tt}`, tt)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <FieldLabel>{t('alerts.level')}</FieldLabel>
+              <Select value={form.level} onValueChange={(v) => setForm({ ...form, level: v })}>
+                <SelectTrigger className="w-full mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {LEVELS.map((lv) => (
+                    <SelectItem key={lv} value={lv}>
+                      {t(`alerts.level_${lv}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {!isEdit ? (
+            <div>
+              <FieldLabel>{t('alerts.targetScope')}</FieldLabel>
+              <select
+                className="w-full mt-1 p-2 border rounded text-sm"
+                value={form.targetId ?? ''}
+                onChange={(e) => setForm({ ...form, targetId: e.target.value ? Number(e.target.value) : null })}
+              >
+                <option value="">{targetAllLabel}</option>
+                {targetOptions.map((target) => (
+                  <option key={target.id} value={target.id}>{target.label}</option>
                 ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-
-        {/* 通道路由（多选）。 */}
-        <div>
-          <FieldLabel>{t('alerts.channels')}</FieldLabel>
-          {channels.length === 0 ? (
-            <p className="text-sm text-muted-foreground mt-1">{t('alerts.noChannelsHint')}</p>
+              </select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {t(form.targetType === 'node' ? 'alerts.targetNodeHint' : 'alerts.targetInstanceHint')}
+              </p>
+            </div>
           ) : (
-            <div className="mt-1 flex flex-wrap gap-2">
-              {channels.map((c) => (
-                <label key={c.id} className="flex items-center gap-1.5 px-2 py-1 border rounded cursor-pointer text-sm">
-                  <Checkbox checked={form.channelIds.includes(c.id)} onCheckedChange={() => toggleChannel(c.id)} aria-label={c.name} />
-                  {c.name}
-                </label>
-              ))}
+            <p className="text-xs text-muted-foreground">
+              {t('alerts.targetScope')}: {rule?.targetId ? `#${rule.targetId}` : targetAllLabel}
+            </p>
+          )}
+
+          {triggerUsesMetric(form.triggerType) && (
+            <div className="grid grid-cols-4 gap-2">
+              <div>
+                <FieldLabel>{t('alerts.metric')}</FieldLabel>
+                <Select value={form.metric} onValueChange={(v) => setForm({ ...form, metric: v })}>
+                  <SelectTrigger className="w-full mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cpu">{t('alerts.cpu')}</SelectItem>
+                    <SelectItem value="memory">{t('alerts.memory')}</SelectItem>
+                    <SelectItem value="disk">{t('alerts.disk')}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <FieldLabel>{t('alerts.condition')}</FieldLabel>
+                <Select value={form.operator} onValueChange={(v) => setForm({ ...form, operator: v })}>
+                  <SelectTrigger className="w-full mt-1">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value=">">&gt;</SelectItem>
+                    <SelectItem value="<">&lt;</SelectItem>
+                    <SelectItem value=">=">&gt;=</SelectItem>
+                    <SelectItem value="<=">&lt;=</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <FieldLabel>{t('alerts.threshold')}</FieldLabel>
+                <input type="number" className="w-full mt-1 p-2 border rounded" value={form.threshold} onChange={(e) => setForm({ ...form, threshold: Number(e.target.value) })} />
+              </div>
+              <div>
+                <FieldLabel>{t('alerts.durationSec')}</FieldLabel>
+                <input type="number" className="w-full mt-1 p-2 border rounded" value={form.durationSec} onChange={(e) => setForm({ ...form, durationSec: Number(e.target.value) })} />
+              </div>
             </div>
           )}
-        </div>
 
-        {/* 聚合 + 静默 + 恢复。 */}
-        <div className="grid grid-cols-3 gap-2">
-          <div>
-            <FieldLabel>{t('alerts.dedupWindowSec')}</FieldLabel>
-            <input type="number" className="w-full mt-1 p-2 border rounded" value={form.dedupWindowSec} onChange={(e) => setForm({ ...form, dedupWindowSec: Number(e.target.value) })} />
-          </div>
-          <div>
-            <FieldLabel>{t('alerts.silenceStart')}</FieldLabel>
-            <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" placeholder="23:00" value={form.silenceStart} aria-invalid={!!silenceError} onChange={(e) => setForm({ ...form, silenceStart: e.target.value })} />
-          </div>
-          <div>
-            <FieldLabel>{t('alerts.silenceEnd')}</FieldLabel>
-            <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" placeholder="07:00" value={form.silenceEnd} aria-invalid={!!silenceError} onChange={(e) => setForm({ ...form, silenceEnd: e.target.value })} />
-          </div>
-        </div>
-        <FieldError error={silenceError} />
-        {(form.silenceStart || form.silenceEnd) && (
-          <p className="text-xs text-muted-foreground">
-            {t('alerts.silenceTzNote')}
-            {isValidHHMM(form.silenceStart) && isValidHHMM(form.silenceEnd) && form.silenceStart > form.silenceEnd
-              ? ` · ${t('alerts.silenceCrossMidnight')}`
-              : ''}
-          </p>
-        )}
+          {triggerUsesKeyword(form.triggerType) && (
+            <div>
+              <FieldLabel required>{t('alerts.keyword')}</FieldLabel>
+              <input
+                className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive"
+                placeholder="OutOfMemoryError"
+                value={form.keyword}
+                aria-invalid={!!keywordError}
+                onChange={(e) => setForm({ ...form, keyword: e.target.value })}
+              />
+              <FieldError error={keywordError} />
+            </div>
+          )}
 
-        <label className="flex items-center gap-2 text-sm">
-          <Checkbox checked={form.notifyRecover} onCheckedChange={(v) => setForm({ ...form, notifyRecover: v === true })} aria-label={t('alerts.notifyRecover')} />
-          {t('alerts.notifyRecover')}
-        </label>
+          {triggerUsesEventMatch(form.triggerType) && (
+            <div>
+              <FieldLabel>{t('alerts.eventMatch')}</FieldLabel>
+              <Select value={form.eventMatch || undefined} onValueChange={(v) => setForm({ ...form, eventMatch: v })}>
+                <SelectTrigger className="w-full mt-1">
+                  <SelectValue placeholder={t('alerts.anyEvent')} />
+                </SelectTrigger>
+                <SelectContent>
+                  {PLAYER_EVENTS.map((ev) => (
+                    <SelectItem key={ev} value={ev}>
+                      {t(`alerts.playerEvent_${ev}`, ev)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
-        <div className="flex gap-2 pt-2">
+          {/* 通道路由（多选）。 */}
+          <div>
+            <FieldLabel>{t('alerts.channels')}</FieldLabel>
+            {channels.length === 0 ? (
+              <p className="text-sm text-muted-foreground mt-1">{t('alerts.noChannelsHint')}</p>
+            ) : (
+              <div className="mt-1 flex flex-wrap gap-2">
+                {channels.map((c) => (
+                  <label key={c.id} className="flex items-center gap-1.5 px-2 py-1 border rounded cursor-pointer text-sm">
+                    <Checkbox checked={form.channelIds.includes(c.id)} onCheckedChange={() => toggleChannel(c.id)} aria-label={c.name} />
+                    {c.name}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 聚合 + 静默 + 恢复。 */}
+          <div className="grid grid-cols-3 gap-2">
+            <div>
+              <FieldLabel>{t('alerts.dedupWindowSec')}</FieldLabel>
+              <input type="number" className="w-full mt-1 p-2 border rounded" value={form.dedupWindowSec} onChange={(e) => setForm({ ...form, dedupWindowSec: Number(e.target.value) })} />
+            </div>
+            <div>
+              <FieldLabel>{t('alerts.silenceStart')}</FieldLabel>
+              <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" placeholder="23:00" value={form.silenceStart} aria-invalid={!!silenceError} onChange={(e) => setForm({ ...form, silenceStart: e.target.value })} />
+            </div>
+            <div>
+              <FieldLabel>{t('alerts.silenceEnd')}</FieldLabel>
+              <input className="w-full mt-1 p-2 border rounded aria-invalid:border-destructive" placeholder="07:00" value={form.silenceEnd} aria-invalid={!!silenceError} onChange={(e) => setForm({ ...form, silenceEnd: e.target.value })} />
+            </div>
+          </div>
+          <FieldError error={silenceError} />
+          {(form.silenceStart || form.silenceEnd) && (
+            <p className="text-xs text-muted-foreground">
+              {t('alerts.silenceTzNote')}
+              {isValidHHMM(form.silenceStart) && isValidHHMM(form.silenceEnd) && form.silenceStart > form.silenceEnd
+                ? ` · ${t('alerts.silenceCrossMidnight')}`
+                : ''}
+            </p>
+          )}
+
+          <label className="flex items-center gap-2 text-sm">
+            <Checkbox checked={form.notifyRecover} onCheckedChange={(v) => setForm({ ...form, notifyRecover: v === true })} aria-label={t('alerts.notifyRecover')} />
+            {t('alerts.notifyRecover')}
+          </label>
+        </ScrollableDialogBody>
+
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose}>
+            {t('common.cancel')}
+          </Button>
           <Button
             type="button"
             disabled={hasError || create.isPending || update.isPending}
@@ -335,10 +345,7 @@ export function RuleDialog({ rule, channels, onClose }: RuleDialogProps) {
           >
             {t('common.save')}
           </Button>
-          <Button type="button" variant="outline" onClick={onClose}>
-            {t('common.cancel')}
-          </Button>
-        </div>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )
