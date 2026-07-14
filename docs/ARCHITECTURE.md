@@ -345,7 +345,7 @@ Flags:   bit0=compressed(zlib)
 - **优雅停止命令按角色派生**：收到 `stop` 控制帧后，wrapper 向进程 stdin 写「关服命令」——MC 后端用 `stop`、代理（BungeeCord/Waterfall/Velocity）用 `end`（代理不认 `stop`，误发会挂到超时才强杀）。该命令由 CP 按实例角色派生、经 `CreateInstance` 的 `stop_command` 字段下发并烤进 `WrapperConfig`；为空时回退 `stop`。超时（`JIANMANAGER_GRACEFUL_STOP_TIMEOUT`，默认 30s）仍未退出则强杀兜底。
 - **重启前等待上一代退出**：daemon 策略 `Start` 前按 PID 文件等待上一代 wrapper/Java 完全退出（`WaitForPriorExit`，上限 `JIANMANAGER_START_WAIT_PRIOR_EXIT_TIMEOUT`，默认 15s），避免快速 stop→start 时旧进程仍占监听端口/socket 导致新进程端口冲突崩溃（`exit status 1`）。
 - **强制终止杀整树**：`daemonStrategy.Kill`（重启/强制终止路径）除发 `kill` 控制帧外，兜底用 `taskkill /T` 终止 wrapper→cmd→Java 整棵进程树；不可只杀 wrapper PID，否则 Windows 上 Java 孤儿化继续占监听端口，紧接的 `Start` 会因端口被占而 `BindException` 崩溃。
-- **PID 文件恢复**：wrapper 写 `<pidDir>/<uuid>.pid`（JSON：wrapper pid、java pid、socket 地址、instance uuid）。Worker 启动时 `Manager.RecoverDaemonInstances` 扫描 PID 文件，wrapper pid 存活则 reconnect socket 恢复管理，否则清理文件与残留 socket。
+- **PID 文件恢复**：wrapper 写 `<pidDir>/<uuid>.pid`（JSON：wrapper pid、java pid、socket 地址、instance uuid）。Worker 启动时 `Manager.RecoverDaemonInstances` 扫描 PID 文件，wrapper pid 存活则 reconnect socket 恢复管理，wrapper 已死则清理文件与残留 socket。wrapper 存活但 reconnect 拨号失败时（FR-325 兜底）：有界重试（3 次、间隔 1s/2s/4s 递增，期间保留 PID 文件保证实例仍可发现）；耗尽后按 PID 记录先强杀 wrapper 进程树再补杀 Java 树（`daemon.KillPIDTree`：Windows `taskkill /T /F`、Unix 杀进程组，Java 在 Unix 上自成进程组故须补杀），存活复核确认死透才清 PID 文件与 socket；杀不死（权限等）保留 PID 文件待下次接管扫描再兜底——杜绝孤儿永久失联（真机事故：残留 java 占 Paper `session.lock`）。
 - **优雅退出**：daemon 模式下 `Manager.StopAll` 只断开与 wrapper 的连接，不杀游戏服（direct 模式才终止进程）。
 
 #### docker 容器化实例生命周期（ADR-019，FR-078）
