@@ -766,6 +766,14 @@ body {
     /* 只关闭平滑滚动；控制台切页和进度条属于状态反馈，不能被全局清零。 */
     scroll-behavior: auto !important;
   }
+
+  /* 路由/页面进场属装饰性过渡（非状态反馈），减少动效偏好下直接呈现终态。
+     同时消除自动化环境（普遍模拟 reduced-motion、可能冻结动画在首帧）里
+     内容停留在 opacity:0 + translateY 首帧导致的「点击不中/页面空白」假象。 */
+  .jm-page-stack,
+  .jm-route-transition {
+    animation: none;
+  }
 }
 
 /* FR-315 实例状态外圈光晕：按状态柔和渐变光晕，取色经 status 语义 token（双主题自适配）。
