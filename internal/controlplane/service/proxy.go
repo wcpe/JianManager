@@ -310,11 +310,16 @@ func (p *ProxyService) provisionProxyOnWorker(ctx context.Context, inst *model.I
 	}
 	dlCtx, cancel := context.WithTimeout(ctx, 16*time.Minute)
 	defer cancel()
+	// 组合缓存键成分随请求下发（FR-330）：velocity/waterfall 有 sha256 走 sha 键，
+	// BungeeCord latest 无构建号在 Worker 侧不参与组合键（不冻结 latest 语义）。
 	dl, err := client.Worker.DownloadCore(dlCtx, &workerpb.DownloadCoreRequest{
 		InstanceUuid: inst.UUID,
 		DestFilename: provisionCoreJar,
 		DownloadUrl:  core.DownloadURL,
 		Sha256:       core.SHA256,
+		CoreType:     core.Type,
+		McVersion:    core.MCVersion,
+		Build:        int32(core.Build),
 	})
 	if err != nil {
 		return fmt.Errorf("下载核心失败: %w", err)

@@ -241,9 +241,16 @@ func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.In
 			return err
 		}
 	} else {
-		stage(10, fmt.Sprintf("下载核心 %s（源站较慢时可能需要数分钟）…", core.DownloadURL))
-		if err := p.downloadSingleCore(ctx, client, inst, core); err != nil {
+		stage(10, fmt.Sprintf("下载核心 %s（源站较慢时可能需要数分钟；节点已缓存则秒完成）…", core.DownloadURL))
+		cacheHit, err := p.downloadSingleCore(ctx, client, inst, core)
+		if err != nil {
 			return err
+		}
+		// stage 文案区分「缓存命中/下载中」（FR-330）：命中免远程下载，任务轨迹一眼可辨。
+		if cacheHit {
+			stage(60, "核心缓存命中：已从节点缓存秒级复用，跳过远程下载")
+		} else {
+			stage(60, "核心下载完成")
 		}
 	}
 	stage(70, "写入 eula.txt / server.properties …")
@@ -290,7 +297,10 @@ func (p *ProvisionService) provisionOnWorker(ctx context.Context, inst *model.In
 	return nil
 }
 
-func (p *ProvisionService) downloadSingleCore(ctx context.Context, client *cpgrpc.Client, inst *model.Instance, core *CoreInfo) error {
+// downloadSingleCore 委托 Worker 下载核心，返回是否节点缓存命中（FR-330 stage 文案用）。
+// 组合缓存键成分（CoreType/MCVersion/Build）随请求下发：ResolveBuild 已把 latest/未指定构建
+// 解析为具体构建，无 sha256 源（Sponge Maven 等）在 Worker 侧按组合键复用缓存。
+func (p *ProvisionService) downloadSingleCore(ctx context.Context, client *cpgrpc.Client, inst *model.Instance, core *CoreInfo) (bool, error) {
 	dlCtx, cancel := context.WithTimeout(ctx, 16*time.Minute)
 	defer cancel()
 	dl, err := client.Worker.DownloadCore(dlCtx, &workerpb.DownloadCoreRequest{
@@ -298,14 +308,17 @@ func (p *ProvisionService) downloadSingleCore(ctx context.Context, client *cpgrp
 		DestFilename: provisionCoreJar,
 		DownloadUrl:  core.DownloadURL,
 		Sha256:       core.SHA256,
+		CoreType:     core.Type,
+		McVersion:    core.MCVersion,
+		Build:        int32(core.Build),
 	})
 	if err != nil {
-		return fmt.Errorf("下载核心失败: %w", err)
+		return false, fmt.Errorf("下载核心失败: %w", err)
 	}
 	if !dl.Success {
-		return fmt.Errorf("下载核心失败: %s", dl.Error)
+		return false, fmt.Errorf("下载核心失败: %s", dl.Error)
 	}
-	return nil
+	return dl.CacheHit, nil
 }
 
 func (p *ProvisionService) installSpongeForge(ctx context.Context, client *cpgrpc.Client, inst *model.Instance, core *CoreInfo) error {
