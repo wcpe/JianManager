@@ -1,6 +1,6 @@
 # 功能规格：进程级崩溃诊断链路（crash-diagnostics）
 
-> 状态：草拟　·　关联 PRD：FR-313　·　分支：feature/fr-313-crash-diagnostics
+> 状态：开发中　·　关联 PRD：FR-313　·　分支：feature/fr-313-crash-diagnostics
 
 ## 1. 背景与目标
 
