@@ -60,6 +60,18 @@ export interface MockGroupMembership {
   instanceId: number
 }
 
+/** 崩溃快照（FR-313）：字段对齐 web/src/api/crashSnapshots.ts 的 CrashSnapshot。 */
+export interface MockCrashSnapshot {
+  id: number
+  instanceId: number
+  occurredAt: string
+  exitCode: number
+  signal: string
+  durationMs: number
+  tailOutput: string
+  createdAt: string
+}
+
 // 集合在所属域 handler 模块顶层带 seedFn 唯一声明（import 即播种，resetDb 重播）。
 const INSTANCE_SEED_OVERRIDES: MockInstance[] = [
   {
@@ -291,6 +303,40 @@ const instanceGroups = db<MockInstanceGroup>('instanceGroups', () => [
 const groupMembers = db<MockGroupMembership>('instanceGroupMembers', () => [
   { id: 1, groupId: 2, instanceId: 1 },
   { id: 2, groupId: 3, instanceId: 3 },
+])
+
+// 崩溃快照种子（FR-313）：挂在两台 CRASHED 种子实例上，倒序留存语义由 handler 排序保证。
+const crashSnapshots = db<MockCrashSnapshot>('instanceCrashSnapshots', () => [
+  {
+    id: 1,
+    instanceId: 3,
+    occurredAt: '2026-07-10T08:00:00Z',
+    exitCode: 1,
+    signal: '',
+    durationMs: 2300,
+    tailOutput: 'Error: Unable to access jarfile paper.jar\n',
+    createdAt: '2026-07-10T08:00:01Z',
+  },
+  {
+    id: 2,
+    instanceId: 3,
+    occurredAt: '2026-07-12T09:30:00Z',
+    exitCode: 137,
+    signal: 'killed',
+    durationMs: 754000,
+    tailOutput: '[09:29:58] [Server thread/INFO]: Saving chunks\n[09:29:59] [Server thread/WARN]: Can\'t keep up!\n',
+    createdAt: '2026-07-12T09:30:01Z',
+  },
+  {
+    id: 3,
+    instanceId: 12,
+    occurredAt: '2026-07-13T02:15:00Z',
+    exitCode: 1,
+    signal: '',
+    durationMs: 3600000,
+    tailOutput: 'java.lang.OutOfMemoryError: Java heap space\n\tat net.minecraft.server.MinecraftServer.tick\n',
+    createdAt: '2026-07-13T02:15:01Z',
+  },
 ])
 
 /** 标签字符串列解析为数组（容错非 JSON），供按 env/tag 过滤。 */
@@ -599,6 +645,10 @@ export const handlers = [
     groupMembers
       .list((m) => m.instanceId === id)
       .forEach((m) => groupMembers.remove(m.id))
+    // 级联清崩溃快照（FR-313，对齐真 CP 的级联删除语义）。
+    crashSnapshots
+      .list((s) => s.instanceId === id)
+      .forEach((s) => crashSnapshots.remove(s.id))
     return new HttpResponse(null, { status: 204 })
   }),
 
@@ -713,6 +763,18 @@ export const handlers = [
         listeners: { totalRegistered: 42 },
       },
     })
+  }),
+
+  // ---- 崩溃诊断（FR-313）：快照按发生时间倒序（最新在前），空结果回 [] ----
+  domainRoute('get', '/instances/:id/crash-snapshots', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const inst = instances.get(Number(info.params.id))
+    if (!inst) return HttpResponse.json({ error: 'NOT_FOUND', message: '实例不存在' }, { status: 404 })
+    const rows = crashSnapshots
+      .list((s) => s.instanceId === inst.id)
+      .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt) || b.id - a.id)
+    return HttpResponse.json(rows)
   }),
 
   // ---- 端口占用（FR-032）----

@@ -15,6 +15,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { cn, instanceStatusLevel } from '@jianmanager/ui'
 import { instanceStatusGlowClass } from '@/lib/instance-glow'
 import type { CardType } from '@/lib/workspace-card'
+import CrashDiagnosticsCard from './CrashDiagnosticsCard'
 import WorkspaceCardBody from './WorkspaceCardBody'
 import { recordRecentServer } from './server-selection'
 
@@ -242,6 +243,7 @@ function MetaCell({ label, value, mono, tone }: { label: string; value: string; 
 }
 
 function OverviewPanel({
+  instanceId,
   metrics,
   online,
   maxPlayers,
@@ -360,6 +362,9 @@ function OverviewPanel({
           </TableBody>
         </Table>
       </section>
+
+      {/* 崩溃诊断（FR-313）：与失败横幅（FR-312）互补——横幅一句话，此卡看现场。 */}
+      <CrashDiagnosticsCard instanceId={instanceId} />
     </div>
   )
 }

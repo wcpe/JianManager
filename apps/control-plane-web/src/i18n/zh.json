@@ -3026,6 +3026,13 @@
     "placeholderHint": "第一版原型先完成入口与信息密度，深层管理会在后续 FR 中补齐。",
     "probeUnavailable": "探针未连入，部分在线玩家与世界数据为预览值",
     "lastStartFailed": "上次启动失败",
+    "crashDiagnostics": "崩溃诊断",
+    "crashKeepHint": "保留最近 5 次崩溃现场",
+    "crashExitCode": "退出码",
+    "crashSignal": "信号",
+    "crashDuration": "运行时长",
+    "crashNoOutput": "本次崩溃无输出留存",
+    "crashEmpty": "暂无崩溃记录，进程非正常退出时会自动留存现场",
     "noInstance": "服务器不存在或正在加载",
     "evictedWithDraft": "「{{name}}」已被挤出热缓存，其未保存的草稿已丢弃"
   },

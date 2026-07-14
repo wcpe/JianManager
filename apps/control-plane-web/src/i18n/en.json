@@ -3026,6 +3026,13 @@
     "placeholderHint": "The first mock prototype completes the entry and density; deeper management will follow in later FRs.",
     "probeUnavailable": "Probe is not connected; some player and world data is preview-only",
     "lastStartFailed": "Last start failed",
+    "crashDiagnostics": "Crash Diagnostics",
+    "crashKeepHint": "Keeps the last 5 crash scenes",
+    "crashExitCode": "Exit code",
+    "crashSignal": "Signal",
+    "crashDuration": "Uptime",
+    "crashNoOutput": "No output captured for this crash",
+    "crashEmpty": "No crashes recorded. The scene is captured automatically when the process exits abnormally.",
     "noInstance": "Server not found or loading",
     "evictedWithDraft": "\"{{name}}\" was evicted from the hot cache; its unsaved draft was discarded"
   },
