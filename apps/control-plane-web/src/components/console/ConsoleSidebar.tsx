@@ -176,33 +176,31 @@ function SidebarContent({
   )
 }
 
-/** 折叠态：仅图标。leaf 直接导航；分组点击展开侧栏（再选子项）。hover tooltip 显 label。 */
+/**
+ * 折叠态：仅图标。leaf 直接导航；分类图标导航到该分类下第一个可见子页（FR-332，
+ * groups 已按角色裁剪，childRoutes[0] 即权限过滤后的第一页）。hover tooltip 显 label。
+ * 旧行为「点分类图标展开侧栏」废弃——真机上等同无反应，展开另有 logo 与展开按钮承担。
+ */
 function CollapsedGroup({ group }: { group: NavGroup }) {
   const { t } = useTranslation()
   const { pathname } = useLocation()
-  const toggleSidebar = useConsoleStore((s) => s.toggleSidebar)
   const Icon = group.icon
   const childRoutes = groupRoutes(group)
   const active = group.to
     ? pathname === group.to
     : childRoutes.some((r) => pathname === r || pathname.startsWith(r + '/'))
+  const to = group.to ?? childRoutes[0]
+  if (!to) return null
 
   const cls = cn(
     'grid w-full place-items-center rounded-md py-2 transition-colors',
     active ? 'bg-accent text-primary shadow-[inset_3px_0_0_var(--primary)]' : 'text-foreground/80 hover:bg-accent/60 hover:text-foreground',
   )
 
-  if (group.to) {
-    return (
-      <Link to={group.to} aria-label={t(group.labelKey)} title={t(group.labelKey)} className={cls}>
-        <Icon className="size-4" />
-      </Link>
-    )
-  }
   return (
-    <button type="button" onClick={() => toggleSidebar()} aria-label={t(group.labelKey)} title={t(group.labelKey)} className={cls}>
+    <Link to={to} aria-label={t(group.labelKey)} title={t(group.labelKey)} data-active={active ? 'true' : 'false'} className={cls}>
       <Icon className="size-4" />
-    </button>
+    </Link>
   )
 }
 

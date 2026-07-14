@@ -24,6 +24,7 @@
 - **搭建中实例硬性禁止启动（FR-331，增强 FR-319 二轮②启动闸，真机反馈「statusReason 仅文案提示，仍可点启动”）**：文案劝阻升级为状态强制。**后端补漏**——根因核查：单实例 `POST /instances/:id/start` 的搭建闸自 FR-319 二轮已生效（422），但**批量入口 `POST /instances/batch` 的 start/restart 直发 Worker RPC 完全绕闸**，搭建中实例可经批量启动到半截 jar 且失败还被误回写 CRASHED；闸提为包级函数两路共用，批量 start/restart 逐条过闸——计 failed 带「实例正在搭建中…」明细、不回写 CRASHED（组启/调度器启动本走单实例 Start 已被闸覆盖）。**前端硬禁**——实例卡片/实例列表行/实例控制台三处启动按钮在搭建中直接禁用（tooltip 指明搭建中 + 引导看任务中心，判定 `isProvisioningInstance` 与后端同信号源 statusReason），任务终态 reason 清空自然解禁；控制台「搭建中」不再落红色「上次启动失败」横幅，改琥珀状态横幅（标题 + reason 全文 + 去任务中心链接），卡片红/琥珀双行去重。Go 单测钉死批量 start/restart 被拦不回写 CRASHED/终态放行/stop 不受累 + vitest 覆盖三处禁用态与解禁、横幅样式切换，中英双语。
 ### 修复
 - **一键搭建 MC 版本下拉不可滚动（FR-328，增强 FR-034，真机复现）**：搭建向导内 Combobox 下拉（节点/MC 版本/JDK/用户组）portal 到 body，被模态 Dialog 的 react-remove-scroll 滚动锁当「模态外区域」吞掉滚轮/触摸滚动，长版本列表（如 Paper 全版本）滚不动选不到——列表自身 max-h+内滚结构无病。共享 Combobox 的 Popover 置 `modal` 自持滚动锁分片放行滚动（真机 Chrome 验证 wheel 由被 preventDefault → 放行）；核查向导内其余下拉：核心类型 Radix Select 自带滚动锁管理且仅 3 项无此病，构建号/内存为纯输入框不涉及。
+- **折叠态导航分类图标点击跳转分类首页（FR-332，增强 FR-131/181，真机复现「点分类图标无反应」）**：折叠图标轨下分类图标原为「展开侧栏」按钮，现改为导航到该分类下第一个可见页面（groups 已按角色裁剪）并点亮激活态，侧栏保持折叠；展开态分类头仍为纯分组开关，行为不变。
 
 ## 0.16.0（2026-07-14）
 

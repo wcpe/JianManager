@@ -178,3 +178,45 @@ describe('ConsoleSidebar 高密度控制台 IA（FR-268）', () => {
     expect(content).toHaveClass('jm-sidebar-group-content')
   })
 })
+
+/**
+ * 折叠态分类图标导航（FR-332）：折叠图标轨下点分类图标不再是「无反应」的展开按钮，
+ * 而是导航到该分类下第一个可见页面（groups 已按角色裁剪）并点亮激活态；展开态分类头
+ * 仍是纯分组开关（上方既有用例覆盖，行为不变）。
+ */
+describe('折叠态分类图标导航（FR-332）', () => {
+  beforeEach(() => {
+    loginMockUser()
+    useConsoleStore.setState({ sidebarCollapsed: true, collapsedGroups: {} })
+    useAuthStore.setState({ role: 1 })
+  })
+
+  it('分类图标渲染为链接，指向分类下第一个可见页面；leaf 链接不变', () => {
+    renderWithProviders(<ConsoleSidebar />)
+
+    expect(screen.getByRole('link', { name: '服务器' })).toHaveAttribute('href', '/instances')
+    expect(screen.getByRole('link', { name: '群组网络' })).toHaveAttribute('href', '/networks/topology')
+    expect(screen.getByRole('link', { name: '观测' })).toHaveAttribute('href', '/monitor')
+    expect(screen.getByRole('link', { name: '平台管理' })).toHaveAttribute('href', '/templates')
+    expect(screen.getByRole('link', { name: '平台首页' })).toHaveAttribute('href', '/')
+  })
+
+  it('分类下任意子路由命中时分类图标显示激活态', () => {
+    renderWithProviders(<ConsoleSidebar />, { route: '/logs' })
+
+    expect(screen.getByRole('link', { name: '观测' })).toHaveAttribute('data-active', 'true')
+    expect(screen.getByRole('link', { name: '服务器' })).toHaveAttribute('data-active', 'false')
+  })
+
+  // 异步用例放本文件末尾：让前面同步用例的在途 /nodes 查询有机会落地（同 setup.ts 拆卸注释）。
+  it('点击分类图标路由跳到第一子页并点亮激活态，侧栏保持折叠', async () => {
+    const user = userEvent.setup()
+    const { container } = renderWithProviders(<ConsoleSidebar />)
+
+    await user.click(screen.getByRole('link', { name: '观测' }))
+
+    expect(window.location.pathname).toBe('/monitor')
+    expect(screen.getByRole('link', { name: '观测' })).toHaveAttribute('data-active', 'true')
+    expect(container.querySelector('aside')).toHaveAttribute('data-state', 'collapsed')
+  })
+})
