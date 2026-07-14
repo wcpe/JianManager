@@ -1116,6 +1116,9 @@ export const handlers = [
     if (from) items = items.filter((l) => l.time >= from)
     if (to) items = items.filter((l) => l.time <= to)
 
+    // 对齐真后端 log.go 的 time DESC 稳定排序（真后端有序，mock 此前漏排造成「实时正序+历史倒序」假象）。
+    items = [...items].sort((a, b) => (a.time < b.time ? 1 : a.time > b.time ? -1 : 0))
+
     const total = items.length
     const start = (page - 1) * pageSize
     return HttpResponse.json({ items: items.slice(start, start + pageSize), total, page, pageSize })
