@@ -1,334 +1,193 @@
+<div align="center">
+
 # JianManager
 
-游戏服务器多节点管理平台。Go + 内嵌 React 架构，单二进制部署。
+**多节点游戏服务器管理面板 · 单二进制部署 · NAT 友好 · 为 Minecraft 群组服而生**
 
-## 功能
+[![Release](https://img.shields.io/github/v/release/wcpe/JianManager)](https://github.com/wcpe/JianManager/releases/latest)
+[![Release Pipeline](https://github.com/wcpe/JianManager/actions/workflows/release.yml/badge.svg)](https://github.com/wcpe/JianManager/actions/workflows/release.yml)
+[![CI](https://github.com/wcpe/JianManager/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/wcpe/JianManager/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](go.mod)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-- **实例管理**: 创建/启动/停止/重启游戏服务器实例，状态机驱动
-- **节点管理**: Worker Node 自动注册、心跳上报、离线检测
-- **终端**: 浏览器直连 Worker Node WebSocket，xterm.js 实时终端
-- **文件管理**: 在线浏览/编辑实例工作目录文件
-- **Bot 平台**: Mineflayer Bot 管理，支持 follow/guard/patrol/idle 行为
-- **监控**: CPU/内存/磁盘指标采集，Recharts 仪表盘
-- **告警**: 阈值触发告警，Webhook 通知
-- **定时任务**: Cron 调度器，支持启停/命令/备份
-- **备份恢复**: 手动创建备份，通过 gRPC 委托 Worker 执行
-- **模板**: 预设服务端模板，一键创建实例
-- **审计日志**: 关键操作自动记录
-- **i18n**: 中英文国际化
-- **MC 群组服**: Paper 一键搭建、群组关系建模、系统分配工作目录与端口
-- **节点运行时**: 托管多 JDK（foojay 多厂商多版本）+ 节点制品缓存（建实例命中秒建、免重复下载）
-- **任务中心 + 站内信**: 长任务异步化（进度 / 日志实时上报）+ 完成 / 失败站内信
-- **面板自更新**: 对接 GitHub Releases，检查更新 / 一键升级 / 回滚上一版（CP + Worker）
-- **出站代理**: CP / Worker 每进程可配 HTTP/SOCKS5，内网 / 受限网络下载
-- **应急控制台**: `jmctl` 本机直连守护进程，CP/Worker 不可用时的最后一公里运维
-- **双主题**: 靛蓝 / 青绿 + 明暗模式，一处切换全站持久
+</div>
 
-## 快速开始
+JianManager 是面向中小型游戏服务器运营团队的自托管管理平台：一个 Go 二进制内嵌完整 React 控制台，落地即用（零配置 SQLite 起步，生产可切 MySQL）；受管节点经**反向隧道只出站接入**——家用宽带 NAT、内网、云主机混合组网都不需要在节点侧开放任何入站端口。
 
-### 环境要求
+从「在面板上点一下搭出 Paper/Velocity 群组服」到「托管 JDK/Node.js 运行时、Bot 自动化、监控告警、备份、客户端整合包 OTA 分发」，覆盖游戏服日常运营的完整生命周期。
 
-- Go 1.22+
-- Node.js 20+
-- npm
+## ✨ 核心特性
 
-### 安装依赖
+**部署与接入**
+- **单二进制**：前端经 `go:embed` 内嵌，Control Plane 一个文件即整个面板；SQLite 零配置起步
+- **节点零入站接入**：Worker 主动建立 gRPC 反向隧道，NAT / 内网机器免端口映射；老版本自动回退直拨
+- **一键装节点**：面板生成安装命令，目标机粘贴执行即注册上线（systemd / Windows 双平台，Worker 二进制内嵌在面板里，**离线 / 受限网络也能装**）
+- **SSH 推送部署**：`deploy-cp.sh` / `deploy-worker.sh` 从操作机一条命令部署 / 更新远程主机，配置与数据无损
+- **在线自更新**：面板内检查新版 / 一键升级 / 回滚上一版（CP 与全部节点）
+
+**实例与 Minecraft**
+- **实例全生命周期**：创建 / 启动 / 停止 / 重启，状态机驱动；direct / 守护进程 / **Docker 容器**（资源限额）三种运行方式
+- **一键搭建群组服**：选版本即搭 Paper 子服 / Velocity 代理，核心下载、初始配置、探针部署全程任务中心可观测；版本-JDK 兼容与启动前同步预检把配置错误拦在启动之前
+- **导入现有服务器**：浏览节点目录 → 探测核心 / 端口 / JDK → 就地接管或搬入托管区
+- **崩溃可诊断**：启动失败原因横幅、退出快照（退出码 + 尾部日志）、状态光晕一眼分辨运行态
+- **内存水位守卫**：CP 预警 + Worker 实时双闸，杜绝「开一个服把整台节点 OOM 拖死」
+
+**终端与文件**
+- **Web 终端**：xterm.js 实时终端经面板中转直达实例 stdin/stdout，页签切换连接不断
+- **资源管理器**：在线浏览 / 编辑 / 上传（流式 + 进度）/ 下载 / 打包，jar 反编译速览
+- **备份恢复**：手动 / 定时备份，支持 S3 兼容对象存储做异地端点
+
+**运行时与资产**
+- **托管多 JDK**：foojay 多厂商多版本一键下载安装、自动扫描已装 JDK、实例级绑定
+- **Node.js 运行时与全局包**：节点级包管理器（npm/pnpm，多 registry / 镜像源），Bot 依赖装全局即用
+- **制品缓存**：服务端核心 / 探针等制品节点级缓存，重复建服秒命中
+
+**可观测与运营**
+- **监控**：节点 / 实例 CPU · 内存 · TPS · MSPT 时序图表，进程级采集，探针（ServerProbe）深度指标
+- **告警与通知**：阈值告警 + Webhook；任务中心 + 站内信收敛全部长任务进度与终态
+- **日志与审计**：平台日志中心（API 错误自动落库可追查）、审计日志含失败操作与错误内容、操作名中英双语
+- **Bot 平台**：Mineflayer Bot 托管（follow / guard / patrol 行为引擎），bot-worker 运行时由面板自动下发自愈
+- **客户端 OTA 分发**：整合包发布 / 分块上传 / Ed25519 签名 manifest / 防降级，玩家侧启动器增量更新
+
+**安全与体验**
+- 用户组权限模型 · JWT 会话与 WS 令牌密钥隔离 · 出站代理（受限网络下载）· `jmctl` 应急控制台（面板不可用时本机直连守护进程）· 双主题明暗模式 · 中英 i18n
+
+## 🚀 快速开始
+
+### 1. 启动面板（Control Plane）
+
+从 [Releases](https://github.com/wcpe/JianManager/releases/latest) 下载对应平台的 `control-plane` 二进制：
 
 ```bash
-make install
+# Linux
+curl -fsSLo control-plane https://github.com/wcpe/JianManager/releases/latest/download/control-plane-linux-amd64
+chmod +x control-plane && ./control-plane
+# Windows：下载 control-plane-windows-amd64.exe 双击或命令行运行
 ```
 
-### 开发模式
+浏览器打开 `http://<主机>:8080`，跟随首启引导创建管理员账号——零配置即可跑起来（数据默认落 `data/` 下的 SQLite）。
 
-**启动 Control Plane (后端 + 前端嵌入)**:
-```bash
-make dev-cp
-# 访问 http://localhost:8080
-```
+### 2. 添加节点（Worker）
 
-**启动前端开发服务器 (热重载)**:
-```bash
-make dev-web
-# 访问 http://localhost:5173 (自动代理 API 到 8080)
-```
+面板 **「节点 → 添加节点」** 会生成一条一键安装命令，到目标机粘贴执行即可：Worker 安装为系统服务、自动注册上线，并经反向隧道保持连接——**节点侧无需开放任何入站端口**，家用 NAT 后的机器也能直接接入。
 
-**启动 Worker Node**:
-```bash
-# 新终端
-JIANMANAGER_CONTROL_PLANE_GRPC=localhost:9100 go run ./apps/worker
-```
+### 3. 开服
 
-### 生产构建
+**「实例 → 一键搭建」** 选择 Minecraft 版本与节点即可搭出 Paper 子服或 Velocity 代理；已有服务器目录则用 **「导入现有服务器」** 就地接管。
+
+### 其它部署方式
+
+<details>
+<summary><b>SSH 推送部署（推荐用于远程 Linux 主机）</b></summary>
+
+在操作机把本地构建产物经 SSH 推送部署 / 更新，首次与更新自动判定、幂等可重复：
 
 ```bash
-# 构建所有（前端 + 嵌入 + Go 二进制，本机平台）
-make build
-
-# 产物
-ls bin/
-# control-plane.exe  # Control Plane（含前端）
-# worker.exe          # Worker Node
-
-# 发布产物交叉编译（windows+linux amd64，任意宿主可跑；纯 Go + CGO_ENABLED=0）
-make dist        # 前端 + 内嵌资产先行 + 四个二进制
-make dist-bin    # 仅重编二进制（内嵌资产已就绪时）
-
-# 产物（命名与 CI 发布管线一致，版本号自动读 internal/version/version.go，可 VERSION=x.y.z 覆盖）
-ls dist/
-# control-plane-windows-amd64.exe  control-plane-linux-amd64
-# worker-windows-amd64.exe         worker-linux-amd64
-```
-
-### SSH 推送部署（面板 / 节点）
-
-在操作机（git-bash / Linux / macOS）把本地 `make dist` 产物经 SSH 密钥推送部署 / 更新到远程 Linux 主机（FR-277，见 ADR-063）。首次 / 更新自动判定：更新只换二进制并重启，配置 / 数据 / 节点身份全保留。
-
-```bash
-# 1) 部署面板（Control Plane）
+# 部署面板
 JM_SSH_HOST=1.2.3.4 scripts/deploy-cp.sh
-# 完成后浏览器打开 http://1.2.3.4:8080 走首启引导，并在「节点 → 添加节点」签发 token
-
-# 2) 部署节点（Worker，首次需要 token；更新部署可省）
+# 部署节点（首次需在面板签发 token；更新可省）
 JM_SSH_HOST=5.6.7.8 JM_CONTROL_PLANE=1.2.3.4:9100 JM_ENROLL_TOKEN=jmet_xxx scripts/deploy-worker.sh
-
-# 更新部署：重出 dist 后重复执行同一命令即可（幂等）
-# 只看计划不实连：加 --dry-run
 ```
 
-环境变量（均有默认值）：`JM_SSH_PORT`(22) / `JM_SSH_USER`(root) / `JM_SSH_KEY`(默认密钥链) /
-`JM_SERVICE_SCOPE`(auto：root 或免密 sudo → 系统级 systemd，纯普通用户 → user 级 systemd + linger) /
-`JM_INSTALL_DIR` / `JM_DATA_DIR` / `JM_CP_HTTP_PORT`(8080) / `JM_CP_GRPC_PORT`(9100) /
-`JM_WORKER_GRPC_PORT`(9101) / `JM_WORKER_WS_PORT`(9102) / `JM_NODE_NAME` / `JM_BUILD`(1=产物缺失自动 make dist)。
+支持 root / 免密 sudo / 纯普通用户（user 级 systemd + linger）三种目标机形态，详见 [docs/DEPLOY.md](docs/DEPLOY.md)。
+</details>
 
-### Docker 部署
+<details>
+<summary><b>Docker</b></summary>
 
 ```bash
-# 构建镜像
-make docker
-
-# 启动所有服务
-make docker-up
-
-# 查看日志
+make docker && make docker-up   # 构建镜像并起 CP + Worker
 docker compose logs -f
+```
+</details>
 
-# 停止
-make docker-down
+<details>
+<summary><b>从源码构建</b></summary>
+
+需要 Go 1.22+、Node.js 20+、pnpm（经 corepack）：
+
+```bash
+go install github.com/go-task/task/v3/cmd/task@latest
+task dist    # 前端 + 全部内嵌资产 + windows/linux amd64 四个二进制 → dist/
+```
+</details>
+
+## 🏗 架构
+
+```
+ 浏览器（React SPA，go:embed 内嵌）
+     │  HTTP / WS（终端经面板中转）
+     ▼
+ Control Plane（Go，×1）────── SQLite / MySQL
+     ▲  gRPC 反向隧道（Worker 只出站；老节点回退直拨）
+     │
+ Worker Node（Go，×N）
+     ├── 进程管理（direct / 守护进程 / Docker）
+     ├── ServerProbe 探针桥（TPS/MSPT 等深度指标）
+     └── Bot Worker（Node.js 子进程，Mineflayer）
 ```
 
-## 架构
-
-```
-浏览器 (React SPA)
-    │ HTTP REST /api/v1/*
-    ▼
-Control Plane (Go)
-    │ gRPC
-    ▼
-Worker Node (Go) × N
-    ├── 进程管理 (direct/daemon/docker)
-    ├── WebSocket 终端服务
-    ├── ServerProbe 指标采集 + 探针桥
-    └── Bot 管理 → Node.js 子进程 (Mineflayer)
-```
-
-### 三进程模型
-
-| 进程 | 语言 | 部署 | 职责 |
+| 进程 | 语言 | 数量 | 职责 |
 |---|---|---|---|
-| Control Plane | Go | 1 个实例 | API、认证、调度、gRPC 客户端池、前端静态文件 |
-| Worker Node | Go | N 个实例 | gRPC 服务端、进程管理、WS 终端、指标采集 |
-| Bot Worker | Node.js | 按需 spawn | Mineflayer 连接、行为引擎 |
+| Control Plane | Go | 1 | API、认证、调度、数据库、前端托管、制品分发 |
+| Worker Node | Go | N | 游戏服进程管理、终端、指标采集、文件操作 |
+| Bot Worker | Node.js | 按需 | Mineflayer 连接与行为引擎 |
 
-### 端口
+**端口**：对外仅需暴露面板 HTTP（默认 `8080`）与 CP gRPC（默认 `9100`，供节点出站连接）；节点侧端口（9101/9102）仅本机探针与旧版直拨回退使用，无需公网暴露。
 
-| 端口 | 服务 | 说明 |
-|---|---|---|
-| 8080 | HTTP | Control Plane API + 前端 |
-| 9100 | gRPC | Control Plane ↔ Worker Node |
-| 9101 | gRPC | Worker Node gRPC |
-| 9102 | WebSocket | Worker Node 终端服务 |
+## ⚙️ 配置
 
-## 配置
-
-### Control Plane
-
-配置文件: `configs/control-plane.yml`（`.yaml` 仅作为兼容回退）
+零配置可跑；需要定制时在工作目录放 `control-plane.yml`：
 
 ```yaml
 server:
-  host: 0.0.0.0
   port: 8080
-  dev_mode: false
-
-grpc:
-  port: 9100
-
 database:
-  driver: sqlite
+  driver: sqlite          # 或 mysql
   dsn: data/jianmanager.db
-
-jwt:
-  secret: your-secret-here
-  access_ttl: 15m
-  refresh_ttl: 168h
-
 log:
   level: info
-  format: json
 ```
 
-### Worker Node
+所有配置项均可用 `JIANMANAGER_` 前缀环境变量覆盖（如 `JIANMANAGER_SERVER_PORT=9090`）。JWT / WS 密钥生产态自动生成持久化，无需手工配置。完整配置与运维手册见 [docs/DEPLOY.md](docs/DEPLOY.md)。
 
-环境变量:
+## 🧑‍💻 开发
 
-| 变量 | 说明 | 默认值 |
-|---|---|---|
-| `JIANMANAGER_NODE_NAME` | 节点名称 | node-01 |
-| `JIANMANAGER_CONTROL_PLANE_GRPC` | Control Plane gRPC 地址 | localhost:9100 |
-| `JIANMANAGER_GRPC_PORT` | Worker gRPC 端口 | 9101 |
-| `JIANMANAGER_WS_PORT` | Worker WebSocket 端口 | 9102 |
-| `JIANMANAGER_WORK_DIR` | 实例工作目录 | ./servers |
-| `JIANMANAGER_JWT_SECRET` | JWT 密钥 | dev-secret-change-me |
-
-### 环境变量覆盖
-
-所有配置项可通过 `JIANMANAGER_` 前缀环境变量覆盖:
+多语言 monorepo，[go-task](https://taskfile.dev) 统一命令面（Windows / Linux 同套动词）：
 
 ```bash
-JIANMANAGER_SERVER_PORT=8080
-JIANMANAGER_DB_DRIVER=sqlite
-JIANMANAGER_DB_DSN=/app/data/jianmanager.db
-JIANMANAGER_JWT_SECRET=your-secret
-```
-
-## API
-
-### 认证
-
-```bash
-# 登录
-curl -X POST http://localhost:8080/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin123"}'
-
-# 返回: {"accessToken":"...","refreshToken":"...","expiresIn":900}
-```
-
-### 节点
-
-```bash
-# 列出节点
-curl http://localhost:8080/api/v1/nodes \
-  -H "Authorization: Bearer <token>"
-```
-
-### 实例
-
-```bash
-# 创建实例
-curl -X POST http://localhost:8080/api/v1/instances \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "nodeId": 1,
-    "name": "Survival Server",
-    "type": "minecraft_java",
-    "processType": "daemon",
-    "startCommand": "java -Xmx2G -jar paper.jar nogui"
-  }'
-
-# 启动实例
-curl -X POST http://localhost:8080/api/v1/instances/1/start \
-  -H "Authorization: Bearer <token>"
-```
-
-## 开发
-
-### 统一命令面（go-task，FR-287 / ADR-064）
-
-多语言仓库的唯一命令入口（Windows / Linux 同套动词；底层委托 go / pnpm / npm / make，配方真源不搬家）：
-
-```bash
-go install github.com/go-task/task/v3/cmd/task@latest   # 一次安装
-
 task            # 列出全部任务
+task dev:cp     # 起 Control Plane（--dev 反代前端 dev server）
+task dev:web    # 前端 Vite dev server
+task dev:mock   # 前端 mock 模式（MSW 有状态假后端，无需真后端即可跑整站）
 task build      # Go 全部包 + 前端两应用
-task test       # Go + 前端（含 devmock 包）
-task lint       # go vet + 前端 tsc/eslint
-task dist       # 发布构建（等价 make dist）
-task dev:cp     # 开发模式 Control Plane
-task dev:mock   # 前端 mock 模式（MSW 假后端，无需真后端）
-# 域命名空间：go:* / web:* / bot:* / probe:build / proto / embed:web
+task test       # Go + 前端全部测试
+task lint       # go vet + tsc + eslint
+task web:e2e    # Playwright 真浏览器整站 E2E（mock 模式）
 ```
 
-### 测试
-
-```bash
-task test           # 全量（或按域 task go:test / task web:test）
-make test           # Go 测试（-race）
-make test-cover     # 测试覆盖率
-task lint           # 全量静态检查
-make lint-bot       # Bot Worker 类型检查
+```
+apps/                  # 可运行外壳：control-plane / worker / jmctl（Go）
+                       #             control-plane-web / ui-museum（React）/ bot-worker（Node.js）
+packages/              # 共享 JS 库：ui / devmock / tsconfig / eslint-config（pnpm workspace）
+internal/              # Go 内部包（controlplane / worker / platform）
+proto/                 # gRPC Protobuf 定义
+docs/                  # 架构 / API / 部署 / ADR 全套文档
 ```
 
-### 前端 mock 模式与测试（FR-196~212）
+CI 在 PR 与分支 push 上跑 `web-quality`（lint + vitest + 构建 + E2E）与 `bot-quality` 双门禁；tag push 触发发布管线自动产出多平台产物与 GitHub Release。提交信息遵循 Conventional Commits（中文描述），详见 [docs/CONVENTIONS.md](docs/CONVENTIONS.md)。
 
-```bash
-task dev:mock      # 起 mock 模式整站（内置有状态假后端，无需真后端，开发 / 演示 / 走查）
-task web:test      # vitest：node 纯逻辑 + jsdom 组件 / 页面强断言（打到 mock 假后端）
-task web:e2e       # Playwright E2E：真浏览器跑 mock 模式整站关键流（自动起 dev:mock）
-```
+## 📚 文档
 
-**CI 门禁**：`.github/workflows/ci.yml` 在 PR / 非 master 分支 push 时跑 web 的 lint + vitest + build + E2E；`release.yml` 发布前同样过这些闸。**需仓库管理员在分支保护里勾选 `web-quality` 为必需 check**，合并前才硬挡（CI 只提供 check，分支保护是仓库设置）。
+| 文档 | 内容 |
+|---|---|
+| [DEPLOY.md](docs/DEPLOY.md) | 部署与运维手册（发布产物 / systemd / 网络与密钥 / 排障） |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统架构（进程模型 / 通信协议 / 数据模型） |
+| [API.md](docs/API.md) | REST API 参考 |
+| [PRD.md](docs/PRD.md) | 产品需求与功能索引 |
+| [CONVENTIONS.md](docs/CONVENTIONS.md) | 编码与协作规范 |
+| [docs/adr/](docs/adr/) | 全部架构决策记录（ADR） |
 
-### 目录结构
+## 📄 许可证
 
-```
-apps/                 # 可运行外壳（ADR-064）
-  control-plane/      # Control Plane 入口（Go）
-  worker/             # Worker Node 入口（Go）
-  jmctl/              # 紧急控制台 CLI（Go）
-  control-plane-web/  # React 主控台
-  ui-museum/          # 组件博物馆
-  bot-worker/         # Node.js Bot Worker（npm 自管，不入 workspace）
-packages/             # 第一方 JS 库（pnpm workspace）
-  ui/                 # @jianmanager/ui 共享组件
-  devmock/            # MSW 假后端（仅 dev/test）
-  tsconfig/           # 共享 TS 配置
-  eslint-config/      # 共享 ESLint 配置
-internal/
-  controlplane/     # Control Plane 内部包
-    config/         # 配置加载
-    database/       # 数据库初始化
-    middleware/     # 认证、限流中间件
-    model/          # 数据模型
-    router/         # API 路由
-    service/        # 业务逻辑
-    grpc/           # gRPC 客户端池
-    embed/          # 前端嵌入
-  worker/           # Worker Node 内部包
-    process/        # 进程管理器
-    daemon/         # 守护进程协议
-    grpc/           # gRPC 服务端
-    ws/             # WebSocket 终端
-    metrics/        # ServerProbe 指标与探针桥
-    register/       # 节点注册
-    heartbeat/      # 心跳上报
-proto/
-  workerpb/         # gRPC 桩代码
-configs/            # 配置文件样例
-docs/               # 文档
-```
-
-## 文档
-
-- [DEPLOY.md](docs/DEPLOY.md) — 部署指南（发布产物运维）
-- [PRD.md](docs/PRD.md) — 产品需求
-- [ARCHITECTURE.md](docs/ARCHITECTURE.md) — 系统架构
-- [API.md](docs/API.md) — API 参考
-- [CONVENTIONS.md](docs/CONVENTIONS.md) — 编码规范
-
-## 许可证
-
-MIT
+[MIT](LICENSE)
