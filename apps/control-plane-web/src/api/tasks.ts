@@ -50,6 +50,18 @@ export function isTerminalTask(t: Pick<Task, 'state'>): boolean {
   return TERMINAL_STATES.has(t.state)
 }
 
+/** 活跃任务轮询间隔（FR-329）：存在非终态任务时 ~2s 自动刷新进度。 */
+export const ACTIVE_TASKS_REFETCH_MS = 2000
+
+/**
+ * 任务轮询启停判定（FR-329）：任一任务非终态 → 2s 短轮询；全部终态 / 空 / 未加载 → 停。
+ * 抽纯函数供任务列表与单任务详情共用，且轮询启停规则可独立单测。
+ */
+export function tasksRefetchInterval(tasks: readonly Pick<Task, 'state'>[] | undefined): number | false {
+  const hasActive = Array.isArray(tasks) && tasks.some((t) => !isTerminalTask(t))
+  return hasActive ? ACTIVE_TASKS_REFETCH_MS : false
+}
+
 /** 任务列表筛选（FR-227）。空字段不传。 */
 export interface TaskListParams {
   limit?: number
@@ -62,8 +74,10 @@ export interface TaskListParams {
 }
 
 /**
- * 任务列表（FR-183 + FR-227 筛选）。
- * 存在进行中任务时短轮询（3s）刷新进度；全部终态时停止轮询，避免空转。
+ * 任务列表（FR-183 + FR-227 筛选 + FR-329 自动刷新）。
+ * 存在非终态任务时短轮询（2s）刷新进度；全部终态时停止轮询，避免空转。
+ * staleTime 置 0（覆盖全局 30s）：任务数据秒级演进，若命中「30s 内看过一眼」的新鲜缓存，
+ * 挂载时不重取且缓存里无活跃任务→轮询也不启动，页面会卡死在旧快照（真机「要手动刷新才动」）。
  */
 export function useTasks(params: TaskListParams = {}) {
   const query: Record<string, string | number> = { limit: params.limit ?? 100 }
@@ -78,11 +92,8 @@ export function useTasks(params: TaskListParams = {}) {
       const { data } = await api.get<Task[]>('/tasks', { params: query })
       return data
     },
-    refetchInterval: (q) => {
-      const tasks = q.state.data
-      const hasActive = Array.isArray(tasks) && tasks.some((t) => !isTerminalTask(t))
-      return hasActive ? 3000 : false
-    },
+    staleTime: 0,
+    refetchInterval: (q) => tasksRefetchInterval(q.state.data),
   })
 }
 
@@ -95,7 +106,7 @@ export function useCancelTask() {
   })
 }
 
-/** 单个任务详情（含日志）。进行中时短轮询（2s）。 */
+/** 单个任务详情（含日志）。进行中时短轮询（2s，FR-329 与列表同款启停规则）；终态即停。 */
 export function useTask(taskId: string | undefined) {
   return useQuery({
     queryKey: ['task', taskId],
@@ -104,9 +115,10 @@ export function useTask(taskId: string | undefined) {
       return data
     },
     enabled: !!taskId,
+    staleTime: 0,
     refetchInterval: (query) => {
       const task = query.state.data?.task
-      return task && !isTerminalTask(task) ? 2000 : false
+      return task ? tasksRefetchInterval([task]) : false
     },
   })
 }
