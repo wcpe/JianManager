@@ -10,6 +10,7 @@ import {
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Badge } from '@jianmanager/ui/components/badge'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import DangerConfirm from '@/components/DangerConfirm'
 
 /**
@@ -82,7 +83,12 @@ export default function NodeGlobalPackagesSection({ nodeId, active = true }: { n
 
       {/* 列表：名称 / 版本 / 可更新徽章 + 升级 / 卸载。 */}
       {isLoading ? (
-        <div className="text-sm text-muted-foreground">{t('common.loading', '加载中…')}</div>
+        /* 骨架占位：按包行（px-3 py-2 单行文本 ≈ h-10）轮廓，替代裸文字。 */
+        <div className="space-y-1.5">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-10 w-full" />
+        </div>
       ) : error ? (
         <div className="text-sm text-status-danger">
           {(error as Error & { response?: { data?: { message?: string } } }).response?.data?.message || t('pkg.listFailed', '获取全局包失败')}

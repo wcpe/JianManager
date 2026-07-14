@@ -17,6 +17,7 @@ import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Input } from '@jianmanager/ui/components/input'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
 import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager/ui/components/scrollable-dialog'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/DangerConfirm'
 import NodePMConfigSection from '@/components/NodePMConfigSection'
@@ -163,7 +164,11 @@ export default function NodeRuntimeSection({ nodeId, active = true }: NodeRuntim
 
       {/* 统一列表：类型徽章区分 */}
       {isLoading ? (
-        <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+        /* 骨架占位：按运行时行卡片（size-9 图标 + 双行文本 ≈ h-14）轮廓，替代裸文字。 */
+        <div className="space-y-2">
+          <Skeleton className="h-14 w-full" />
+          <Skeleton className="h-14 w-full" />
+        </div>
       ) : rows.length === 0 ? (
         <p className="py-4 text-center text-sm text-muted-foreground">{t('nodes.runtimeLib.empty')}</p>
       ) : (

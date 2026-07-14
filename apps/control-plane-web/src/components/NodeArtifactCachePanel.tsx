@@ -13,6 +13,7 @@ import { formatCacheBytes, capGiBToBytes, capBytesToGiB, describeCap } from '@/l
 import { copyToClipboard } from '@/lib/clipboard'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import DangerConfirm from '@/components/DangerConfirm'
 
 /**
@@ -120,7 +121,12 @@ export default function NodeArtifactCachePanel({ nodeId, active = true }: NodeAr
 
       {/* 列表：搜索 + 行卡片（FR-195） */}
       {isLoading ? (
-        <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+        /* 骨架占位：按行卡片（size-9 图标 + 双行文本 ≈ h-14）轮廓，替代裸文字。 */
+        <div className="space-y-2">
+          <Skeleton className="h-14 w-full" />
+          <Skeleton className="h-14 w-full" />
+          <Skeleton className="h-14 w-full" />
+        </div>
       ) : isError ? (
         <p className="text-sm text-destructive">{t('artifactCache.loadFailed')}</p>
       ) : items.length === 0 ? (

@@ -5,6 +5,7 @@ import { Globe } from 'lucide-react'
 import { useNodeProxy, useUpdateNodeProxy, type NodeProxyView } from '@/api/nodes'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
 
 /**
  * 节点出站代理面板（FR-185，见 ADR-043）：单选「继承全局 / 自定义」，自定义展开 URL + no_proxy。
@@ -24,7 +25,15 @@ export default function NodeProxyPanel({ nodeId, active = true }: NodeProxyPanel
   const { data, isLoading, isError } = useNodeProxy(nodeId, { enabled: active })
   const update = useUpdateNodeProxy(nodeId)
 
-  if (isLoading) return <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+  if (isLoading)
+    // 骨架占位：标题行 + 生效信息条 + 模式行轮廓，替代裸文字避免布局跳动。
+    return (
+      <div className="space-y-3">
+        <Skeleton className="h-5 w-44" />
+        <Skeleton className="h-9 w-full" />
+        <Skeleton className="h-9 w-2/3" />
+      </div>
+    )
   if (isError || !data) return <p className="text-sm text-destructive">{t('nodeProxy.loadFailed')}</p>
 
   return <NodeProxyForm nodeId={nodeId} view={data} saving={update.isPending} onSave={update.mutateAsync} />

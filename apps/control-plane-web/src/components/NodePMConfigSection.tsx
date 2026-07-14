@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Plus, Trash2, Loader2, Check } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { toast } from 'sonner'
 import { useNodePMConfig, useSetNodePMConfig, type PMRegistry } from '@/api/pmConfig'
 
@@ -37,7 +38,15 @@ export default function NodePMConfigSection({ nodeId, active = true }: NodePMCon
   }
 
   if (!active) return null
-  if (isLoading) return <div className="text-sm text-muted-foreground">{t('common.loading', '加载中…')}</div>
+  if (isLoading)
+    // 骨架占位：标题行 + 包管理器选择行 + registry 输入行轮廓，替代裸文字。
+    return (
+      <div className="space-y-2">
+        <Skeleton className="h-5 w-40" />
+        <Skeleton className="h-8 w-full" />
+        <Skeleton className="h-8 w-full" />
+      </div>
+    )
 
   const setReg = (i: number, patch: Partial<PMRegistry>) =>
     setRegs((prev) => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))

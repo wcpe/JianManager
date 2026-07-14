@@ -38,6 +38,7 @@ import {
 } from '@/lib/template-apply'
 import type { Tone } from '@/lib/tone'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { StatCard } from '@jianmanager/ui/components/stat-card'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
@@ -153,7 +154,20 @@ export default function TemplatesPage() {
       </div>
 
       {isLoading ? (
-        <p className="text-muted-foreground">{t('common.loading')}</p>
+        /* 加载骨架：与真实市场卡片网格同布局，占位卡拼封面/标题/描述/按钮轮廓，避免布局跳动。 */
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {Array.from({ length: 6 }, (_, i) => (
+            <Panel key={i} bodyClassName="p-0" className="overflow-hidden">
+              <Skeleton className="h-20 w-full rounded-none" />
+              <div className="space-y-2.5 p-3">
+                <Skeleton className="h-4 w-16 rounded-full" />
+                <Skeleton className="h-3 w-full" />
+                <Skeleton className="h-3 w-2/3" />
+                <Skeleton className="h-8 w-full" />
+              </div>
+            </Panel>
+          ))}
+        </div>
       ) : !templates || templates.length === 0 ? (
         <Panel>
           <p className="py-8 text-center text-sm text-muted-foreground">{t('templates.empty')}</p>

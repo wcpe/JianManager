@@ -7,6 +7,7 @@ import {
   TableHeader,
   TableRow,
 } from '@jianmanager/ui/components/table'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { useNodePorts } from '@/api/ports'
 
 /** 节点端口占用面板（FR-032）：展示系统已分配的 server/query 端口与分配范围（RCON 已退役 FR-067）。 */
@@ -14,7 +15,15 @@ export default function NodePortsPanel({ nodeId }: { nodeId: number }) {
   const { t } = useTranslation()
   const { data, isLoading } = useNodePorts(nodeId)
 
-  if (isLoading) return <p className="text-muted-foreground text-sm">{t('common.loading')}</p>
+  if (isLoading)
+    // 骨架占位：范围说明行 + 两行表格行轮廓，替代裸文字避免布局跳动。
+    return (
+      <div className="space-y-2">
+        <Skeleton className="h-4 w-56" />
+        <Skeleton className="h-10 w-full" />
+        <Skeleton className="h-10 w-full" />
+      </div>
+    )
 
   return (
     <div>

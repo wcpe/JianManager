@@ -637,7 +637,7 @@ function WhitelistTab() {
   const backends = useMemo(() => instances || [], [instances])
   const [instanceId, setInstanceId] = useState<number | null>(null)
   const effectiveId = instanceId ?? backends[0]?.id ?? null
-  const { data: wl, isLoading } = useWhitelist(effectiveId)
+  const { data: wl, isLoading, isError, refetch } = useWhitelist(effectiveId)
   const wlAction = useWhitelistAction(effectiveId)
   const [name, setName] = useState('')
 
@@ -706,6 +706,14 @@ function WhitelistTab() {
 
           {isLoading ? (
             <p className="text-muted-foreground">{t('common.loading')}</p>
+          ) : isError ? (
+            /* 查询失败不落空表：显式错误提示 + 重试（复用既有 common.error / common.refresh 键）。 */
+            <div className="flex items-center gap-3">
+              <p className="text-sm text-destructive">{t('common.error')}</p>
+              <Button type="button" variant="outline" size="sm" onClick={() => void refetch()}>
+                {t('common.refresh')}
+              </Button>
+            </div>
           ) : wl && !wl.available ? (
             <p className="text-sm text-amber-600">{t('players.whitelistUnavailable')}</p>
           ) : (

@@ -11,6 +11,7 @@ import {
   type ReenrollResult,
 } from '@/api/nodeRepair'
 import { Button } from '@jianmanager/ui/components/button'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import DangerConfirm from '@/components/DangerConfirm'
 import { copyToClipboard } from '@/lib/clipboard'
 
@@ -88,7 +89,11 @@ export default function NodeRepairPanel({ node, active = true }: NodeRepairPanel
       <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
         <div className="mb-1 font-medium">{t('nodeRepair.orphanTitle')}</div>
         {orphans.isLoading ? (
-          <p className="text-xs text-muted-foreground">{t('common.loading')}</p>
+          /* 骨架占位：对应两个孤立资源统计项（文本行高 ≈ h-4）。 */
+          <div className="flex flex-wrap gap-4">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-4 w-28" />
+          </div>
         ) : (
           <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
             <span>

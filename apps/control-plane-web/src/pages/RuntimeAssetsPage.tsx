@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Cpu, Package, RefreshCw, Trash2, Upload } from 'lucide-react'
+import { Coffee, Cpu, Package, RefreshCw, SearchX, Trash2, Upload } from 'lucide-react'
 
 import {
   useRuntimeAssetsOverview,
@@ -17,6 +17,7 @@ import {
 import { useSearchInstances } from '@/api/instances'
 import { useBatchDeployPlugins, type PluginBatchDeployResult } from '@/api/plugins'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { EmptyState } from '@jianmanager/ui/components/empty-state'
 import { Button } from '@jianmanager/ui/components/button'
 import { Input } from '@jianmanager/ui/components/input'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@jianmanager/ui/components/dialog'
@@ -160,7 +161,7 @@ function JDKSection({
 
       {runtimes.length === 0 ? (
         <Panel>
-          <p className="py-8 text-center text-sm text-muted-foreground">{t('runtimeAssets.jdkEmpty')}</p>
+          <EmptyState icon={<Coffee />} title={t('runtimeAssets.jdkEmpty')} />
         </Panel>
       ) : (
         /* 可视化：节点×运行时引用矩阵（FR-301 多类型）——列=类型徽章+版本，格内数字=引用实例数（非 JDK 恒 0）。 */
@@ -448,9 +449,12 @@ function AssetSection({
 
       {filtered.length === 0 ? (
         <Panel>
-          <p className="py-8 text-center text-sm text-muted-foreground">
-            {summary.assetCount === 0 ? t('runtimeAssets.assetEmpty') : t('runtimeAssets.noMatch')}
-          </p>
+          {/* 区分「库为空」与「筛选无命中」：后者用 SearchX 提示与筛选条件相关。 */}
+          {summary.assetCount === 0 ? (
+            <EmptyState icon={<Package />} title={t('runtimeAssets.assetEmpty')} />
+          ) : (
+            <EmptyState icon={<SearchX />} title={t('runtimeAssets.noMatch')} />
+          )}
         </Panel>
       ) : (
         filtered.map((g) => (

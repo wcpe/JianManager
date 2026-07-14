@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@jianmanager/u
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { ViewToggle, type ViewMode } from '@jianmanager/ui/components/view-toggle'
+import { Skeleton } from '@jianmanager/ui/components/skeleton'
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/DangerConfirm'
 import DirectoryPicker from '@/components/DirectoryPicker'
@@ -281,7 +282,12 @@ export default function NodeJDKPanel({ nodeId, active = true }: NodeJDKPanelProp
 
           {/* 列表 / 网格 / 空 / 载入 */}
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+            /* 骨架占位：按 JDK 行卡片（size-9 图标 + 双行文本 ≈ h-14）轮廓，替代裸文字。 */
+            <div className="space-y-2">
+              <Skeleton className="h-14 w-full" />
+              <Skeleton className="h-14 w-full" />
+              <Skeleton className="h-14 w-full" />
+            </div>
           ) : filteredJdks.length === 0 ? (
             <p className="py-6 text-center text-sm text-muted-foreground">{t('nodes.jdkEmpty')}</p>
           ) : view === 'list' ? (
