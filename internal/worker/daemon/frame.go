@@ -24,6 +24,10 @@ const (
 	TypeCommand  Type = 0x02
 	TypeResponse Type = 0x03
 	TypeHeartbeat Type = 0x04
+	// TypeEvent 事件帧（wrapper→Worker 单向，ChannelControl，payload=JSON，FR-313）。
+	// 版本互不炸：老 Worker 的 readLoop 只消费 stdout/stderr 通道、忽略未知帧；
+	// 老 wrapper 从不发事件帧，新 Worker 收不到即无快照，均不影响既有链路。
+	TypeEvent Type = 0x05
 )
 
 // Flags 帧标志位。

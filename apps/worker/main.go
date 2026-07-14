@@ -21,6 +21,7 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/artifactcache"
 	"github.com/wcpe/JianManager/internal/worker/bot"
 	"github.com/wcpe/JianManager/internal/worker/botdist"
+	"github.com/wcpe/JianManager/internal/worker/crashreport"
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 	"github.com/wcpe/JianManager/internal/worker/decompiler"
 	wembed "github.com/wcpe/JianManager/internal/worker/embed"
@@ -422,6 +423,21 @@ func runWorker() {
 		cpAddr = "localhost:9100"
 	}
 
+	// 崩溃快照上报（FR-313）：进程非正常退出时，把策略捕获的退出码/信号/时长 +
+	// 终端环形缓冲的尾部输出（最后 200 行 / 64KB）组装为快照，异步经 gRPC 上报 CP
+	// 持久化。上报失败（网络 / 老 CP Unimplemented）记日志丢弃，不阻塞状态机。
+	crashReporter := crashreport.New(cpAddr)
+	manager.SetCrashHandler(func(instanceID string, info process.CrashInfo) {
+		crashReporter.Report(crashreport.Snapshot{
+			InstanceUUID: instanceID,
+			OccurredAt:   info.OccurredAt,
+			ExitCode:     info.ExitCode,
+			Signal:       info.Signal,
+			DurationMs:   info.DurationMs,
+			TailOutput:   crashreport.Tail(terminalServer.BufferedOutput(instanceID), crashreport.DefaultTailLines, crashreport.DefaultTailBytes),
+		})
+	})
+
 	var regResult *register.Result
 	// identityForPersist 是当前节点身份的内存副本（心跳下发 WS 令牌密钥轮换时补写身份文件用）。
 	var identityForPersist *register.Identity
@@ -500,6 +516,9 @@ func runWorker() {
 			identityForPersist = identity
 		}
 	}
+
+	// 节点身份就绪后崩溃快照上报可用（FR-313）：两条注册路径（setup 首注册 / 常规注册）在此汇合。
+	crashReporter.SetIdentity(nodeUUID, regResult.NodeSecret)
 
 	// bot-worker dist 自愈下发（FR-308，见 ADR-070）：注册成功即持身份从 CP 拉取内嵌归档，
 	// 物化到数据根后切换 bot 入口路径。显式 JIANMANAGER_BOT_WORKER_PATH 时尊重覆盖不自愈；

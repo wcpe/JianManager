@@ -310,6 +310,18 @@ func (s *TerminalServer) getOrCreateBuffer(instanceID string) *daemon.RingBuffer
 	return buf
 }
 
+// BufferedOutput 返回实例终端环形缓冲区当前内容的副本；实例尚无缓冲时返回 nil。
+// 供崩溃快照截取尾部输出（FR-313）——只读旁路，不创建缓冲、不影响终端回放。
+func (s *TerminalServer) BufferedOutput(instanceID string) []byte {
+	s.mu.RLock()
+	buf, ok := s.buffers[instanceID]
+	s.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	return buf.ReadAll()
+}
+
 // GetSessionCount 获取指定实例的终端会话数。
 func (s *TerminalServer) GetSessionCount(instanceID string) int {
 	s.mu.RLock()

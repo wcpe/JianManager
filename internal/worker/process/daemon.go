@@ -175,6 +175,19 @@ func (d *daemonStrategy) readLoop(conn net.Conn) {
 				}
 				d.mgr.onOutput(d.spec.UUID, stream, data)
 			}
+		case daemon.ChannelControl:
+			// wrapper 上抛的进程退出事件（FR-313）：daemon 模式退出码只有 wrapper 能拿到，
+			// 经此扇出崩溃现场供组装快照上报 CP。老 wrapper 不发事件帧，此分支自然不触达。
+			if fr.Type == daemon.TypeEvent {
+				if ev, ok := daemon.DecodeExitEvent(fr.Payload); ok {
+					d.mgr.emitCrash(d.spec.UUID, CrashInfo{
+						ExitCode:   ev.ExitCode,
+						Signal:     ev.Signal,
+						DurationMs: ev.DurationMs,
+						OccurredAt: time.Now(),
+					})
+				}
+			}
 		}
 	}
 }

@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
 // directStrategy 直接子进程启动方式。
@@ -26,8 +28,10 @@ type directStrategy struct {
 	// crashCount 记录连续崩溃次数，用于指数退避。成功重启后不清零，
 	// 持续崩溃退避逐步加长；正常停止时由 Manager 重置实例账面 CrashCount。
 	crashCount int
-	wg         sync.WaitGroup
-	closed     bool
+	// startedAt 本次进程启动时刻，供崩溃快照计算运行时长（FR-313）。
+	startedAt time.Time
+	wg        sync.WaitGroup
+	closed    bool
 }
 
 // newDirectStrategy 构造 direct 策略。
@@ -73,6 +77,7 @@ func (d *directStrategy) Start(ctx context.Context) error {
 	d.cmd = cmd
 	d.stdin = stdin
 	d.state = StateRunning
+	d.startedAt = time.Now()
 	slog.Info("direct 实例已启动", "instanceId", d.spec.UUID, "pid", cmd.Process.Pid)
 
 	d.wg.Add(1)
@@ -103,11 +108,21 @@ func (d *directStrategy) waitLoop() {
 	d.cmd = nil
 	d.crashCount++
 	crashCount := d.crashCount
+	startedAt := d.startedAt
 	d.mu.Unlock()
 
 	// 同步崩溃状态到 Manager 记账并扇出（否则 Manager 仍记 RUNNING，
 	// 后续手动 /start 与下方自动重启的 Start() 守卫都会因状态不是 STOPPED/CRASHED 而拒绝）。
 	d.mgr.markStrategyState(d.spec.UUID, StateCrashed)
+
+	// 非正常退出：捕获退出码/信号/时长扇出崩溃现场，供组装快照上报 CP（FR-313）。
+	exitCode, sig := daemon.ExitInfo(cmd.ProcessState)
+	d.mgr.emitCrash(d.spec.UUID, CrashInfo{
+		ExitCode:   exitCode,
+		Signal:     sig,
+		DurationMs: time.Since(startedAt).Milliseconds(),
+		OccurredAt: time.Now(),
+	})
 
 	slog.Warn("direct 实例崩溃", "instanceId", d.spec.UUID, "err", err, "crashCount", crashCount)
 

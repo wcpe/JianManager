@@ -249,6 +249,7 @@ func (w *Wrapper) javaWait(cmd *exec.Cmd) {
 		w.javaStdin = nil
 	}
 	prevState := w.state
+	startedAt := w.javaStartedAt
 	w.mu.Unlock()
 
 	slog.Warn("Java 退出", "instanceId", w.cfg.InstanceUUID, "err", err)
@@ -259,6 +260,10 @@ func (w *Wrapper) javaWait(cmd *exec.Cmd) {
 		w.signalClose()
 		return
 	}
+
+	// 非正常退出：把退出码/信号/时长经控制通道上抛 Worker，供其组装崩溃快照（FR-313）。
+	// Worker 未连接（重启窗口等）时丢弃——快照是诊断增强，不阻塞崩溃处理主线。
+	w.emitExitEvent(cmd.ProcessState, time.Since(startedAt))
 
 	w.mu.Lock()
 	w.crashCount++
@@ -299,6 +304,32 @@ func (w *Wrapper) javaWait(cmd *exec.Cmd) {
 	if err := w.startJava(); err != nil {
 		slog.Error("wrapper 重启 Java 失败", "instanceId", w.cfg.InstanceUUID, "error", err)
 		w.signalClose()
+	}
+}
+
+// emitExitEvent 把被托管进程的非正常退出现场（退出码/信号/时长）作为事件帧发给已连接的
+// Worker（FR-313）。无连接或编码/写失败仅记日志丢弃：崩溃快照是尽力而为的诊断信息。
+func (w *Wrapper) emitExitEvent(ps *os.ProcessState, uptime time.Duration) {
+	exitCode, sig := ExitInfo(ps)
+	fr, err := EncodeExitEventFrame(ExitEvent{
+		Event:      EventJavaExit,
+		ExitCode:   exitCode,
+		Signal:     sig,
+		DurationMs: uptime.Milliseconds(),
+	})
+	if err != nil {
+		slog.Warn("编码退出事件失败", "instanceId", w.cfg.InstanceUUID, "error", err)
+		return
+	}
+	w.mu.Lock()
+	conn := w.workerConn
+	w.mu.Unlock()
+	if conn == nil {
+		slog.Debug("Worker 未连接，退出事件丢弃", "instanceId", w.cfg.InstanceUUID, "exitCode", exitCode)
+		return
+	}
+	if err := fr.Encode(conn); err != nil {
+		slog.Warn("发送退出事件失败", "instanceId", w.cfg.InstanceUUID, "error", err)
 	}
 }
 

@@ -46,8 +46,10 @@ type dockerStrategy struct {
 	state  InstanceState
 	// crashCount 记录连续崩溃次数，用于指数退避（语义同 direct 策略）。
 	crashCount int
-	wg         sync.WaitGroup
-	closed     bool
+	// startedAt 本次容器启动时刻，供崩溃快照计算运行时长（FR-313）。
+	startedAt time.Time
+	wg        sync.WaitGroup
+	closed    bool
 }
 
 // newDockerStrategy 构造 docker 策略。
@@ -196,6 +198,7 @@ func (d *dockerStrategy) Start(ctx context.Context) error {
 	}
 
 	d.state = StateRunning
+	d.startedAt = time.Now()
 	slog.Info("docker 实例已启动", "instanceId", d.spec.UUID, "container", d.containerID[:12], "image", image)
 
 	d.wg.Add(2)
@@ -228,7 +231,8 @@ func (d *dockerStrategy) waitLoop() {
 	}
 
 	statusCh, errCh := cli.ContainerWait(context.Background(), containerID, containertypes.WaitConditionNotRunning)
-	var exitCode int64
+	// 容器退出码取自 ContainerWait（docker 记容器退出码，FR-313）；Wait 出错无法获知时取 -1。
+	var exitCode int64 = -1
 	select {
 	case st := <-statusCh:
 		exitCode = st.StatusCode
@@ -251,10 +255,18 @@ func (d *dockerStrategy) waitLoop() {
 	d.state = StateCrashed
 	d.crashCount++
 	crashCount := d.crashCount
+	startedAt := d.startedAt
 	d.mu.Unlock()
 
 	// 同步崩溃状态到 Manager 记账并扇出（与 direct 策略一致，使 Start 守卫允许重启）。
 	d.mgr.markStrategyState(d.spec.UUID, StateCrashed)
+
+	// 非正常退出：容器退出码 + 时长扇出崩溃现场（容器无宿主信号语义，signal 留空，FR-313）。
+	d.mgr.emitCrash(d.spec.UUID, CrashInfo{
+		ExitCode:   int(exitCode),
+		DurationMs: time.Since(startedAt).Milliseconds(),
+		OccurredAt: time.Now(),
+	})
 	slog.Warn("docker 实例崩溃", "instanceId", d.spec.UUID, "exitCode", exitCode, "crashCount", crashCount)
 
 	if d.spec.AutoRestart {

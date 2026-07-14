@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
@@ -62,6 +63,19 @@ type Instance struct {
 	processType ProcessType
 }
 
+// CrashInfo 进程非正常退出的现场信息（FR-313）：退出码 ≠ 0，或 RUNNING/STARTING 态
+// 意外退出时由策略捕获，经 Manager 崩溃回调扇出、组装崩溃快照上报 CP。
+type CrashInfo struct {
+	// ExitCode 进程退出码；无法获知（Wait 出错无退出状态 / 容器 Wait 错误）时为 -1。
+	ExitCode int
+	// Signal 终止信号名（Unix，如 killed）；Windows / 非信号退出为空。
+	Signal string
+	// DurationMs 本次运行时长（毫秒）。
+	DurationMs int64
+	// OccurredAt 崩溃发生时刻。
+	OccurredAt time.Time
+}
+
 // Manager 进程管理器。
 // 它通过 IProcessCommand 策略接口支持多种启动方式（direct/daemon/docker），
 // 参见 ADR-003: 守护进程 Wrapper 模式。
@@ -74,6 +88,8 @@ type Manager struct {
 	pidDir string
 	// onStateChange 实例状态变更回调，用于 StreamInstanceEvents 推送。
 	onStateChange func(instanceUUID string, oldState, newState InstanceState)
+	// onCrash 进程非正常退出回调（FR-313），用于组装崩溃快照上报 CP。
+	onCrash func(instanceID string, info CrashInfo)
 	// memGuard 启动内存闸配置；readMem 系统内存读数器（nil=真读数，测试注入，FR-317）。
 	memGuard MemGuardConfig
 	readMem  readSysMem
@@ -98,6 +114,20 @@ func (m *Manager) SetOutputHandler(handler func(instanceID string, stream string
 // 每次实例状态发生转换时调用，用于 StreamInstanceEvents 推送。
 func (m *Manager) SetStateChangeHandler(handler func(instanceUUID string, oldState, newState InstanceState)) {
 	m.onStateChange = handler
+}
+
+// SetCrashHandler 设置进程非正常退出回调（FR-313）。
+// 各策略在崩溃判定路径（direct/docker waitLoop、daemon 经 wrapper 退出事件）捕获现场后
+// 经此扇出；回调须快速返回（上报本身应异步），不得阻塞策略的崩溃处理。
+func (m *Manager) SetCrashHandler(handler func(instanceID string, info CrashInfo)) {
+	m.onCrash = handler
+}
+
+// emitCrash 触发崩溃回调（未设置则忽略）。
+func (m *Manager) emitCrash(instanceID string, info CrashInfo) {
+	if m.onCrash != nil {
+		m.onCrash(instanceID, info)
+	}
 }
 
 // emitStateChange 触发状态变更回调。调用方需持有或不持有锁均可（回调在锁外执行）。
