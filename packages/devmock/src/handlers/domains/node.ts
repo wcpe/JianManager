@@ -730,6 +730,14 @@ export const handlers = [
     if (denied) return denied
     const jid = Number((info.params as { jid: string }).jid)
     if (!jdks.get(jid)) return HttpResponse.json({ error: 'NOT_FOUND', message: 'JDK 不存在' }, { status: 404 })
+    // 对齐真后端 JDKService.Delete 的引用守卫：被实例绑定的 JDK 返 409（含占用实例清单），而非无条件 204。
+    const used = db<MockRuntimeInstanceRef>('instances').list().filter((i) => i.jdkId === jid)
+    if (used.length > 0) {
+      return HttpResponse.json(
+        { error: 'JDK_IN_USE', message: 'JDK 正被实例占用，无法删除', instances: used.map((i) => ({ id: i.id, name: i.name })) },
+        { status: 409 },
+      )
+    }
     jdks.remove(jid)
     return new HttpResponse(null, { status: 204 })
   }),
