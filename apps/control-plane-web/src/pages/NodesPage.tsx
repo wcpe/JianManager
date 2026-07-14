@@ -490,16 +490,16 @@ export default function NodesPage() {
   }, [instances])
 
   const filtered = useMemo(() => filterNodes(nodes ?? [], query), [nodes, query])
-  // 有效选中（FR-232 进入默认选第一个 + FR-177 幽灵选中回退）：未显式选中或选中节点已消失 → 回退第一个。
+  // 有效选中（FR-232 进入默认选第一个 + FR-177 幽灵选中回退）：基于搜索后的 filtered 派生——
+  // 未显式选中/选中项不在筛选结果内 → 回退筛选结果第一个；搜索无匹配 → null（右栏落空态，不留旧详情）。
   // 派生而非用 effect 同步 state（避免 set-state-in-effect 级联；selectedId 仍保留用户最后点选）。
   const effectiveSelectedId = useMemo(() => {
-    const list = nodes ?? []
-    if (list.length === 0) return null
-    if (selectedId !== null && list.some((n) => n.id === selectedId)) return selectedId
-    return list[0].id
-  }, [nodes, selectedId])
+    if (filtered.length === 0) return null
+    if (selectedId !== null && filtered.some((n) => n.id === selectedId)) return selectedId
+    return filtered[0].id
+  }, [filtered, selectedId])
   // 选中节点解析为实时列表对象（节点下线→回退第一个，右栏随轮询刷新而非陈旧快照）。
-  const selected = useMemo(() => resolveSelectedNode(nodes ?? [], effectiveSelectedId), [nodes, effectiveSelectedId])
+  const selected = useMemo(() => resolveSelectedNode(filtered, effectiveSelectedId), [filtered, effectiveSelectedId])
 
   const toggleCollapsed = () => {
     setCollapsed((c) => {
