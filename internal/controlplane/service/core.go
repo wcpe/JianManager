@@ -52,6 +52,10 @@ type CoreInfo struct {
 	DownloadURL string           `json:"downloadUrl"`
 	SHA256      string           `json:"sha256"`
 	Runtime     *CoreRuntimeInfo `json:"runtime,omitempty"`
+	// JavaMajorRequired 该 MC 版本所需的最低 Java 大版本（FR-316 搭建向导 JDK 兼容预检）。
+	// Paper 取 fill v3 官方元数据、失败回退内置映射表；Sponge 用内置映射表；
+	// 0=未知/不设需求（代理核心或解析不出的版本，前端不据此拦截）。
+	JavaMajorRequired int `json:"javaMajorRequired,omitempty"`
 }
 
 // CoreService 解析 MC 服务端核心的可用版本与下载信息（FR-034/046）。
@@ -176,7 +180,13 @@ func (s *CoreService) ResolveBuild(ctx context.Context, coreType, mcVersion stri
 		}, nil
 	}
 	if spongeFamily(p) {
-		return s.resolveSpongeBuild(ctx, p, mcVersion, build)
+		info, err := s.resolveSpongeBuild(ctx, p, mcVersion, build)
+		if err != nil {
+			return nil, err
+		}
+		// Sponge 官方 Maven 无 java 需求元数据，用 CP 内置映射表（FR-316）。
+		info.JavaMajorRequired = javaMajorForMCVersion(info.MCVersion)
+		return info, nil
 	}
 	if !paperFamily(p) {
 		return nil, fmt.Errorf("暂不支持的核心类型: %s", coreType)
@@ -221,14 +231,127 @@ func (s *CoreService) ResolveBuild(ctx context.Context, coreType, mcVersion stri
 	if !ok || dl.Name == "" || dl.URL == "" {
 		return nil, fmt.Errorf("%s %s #%d 缺少下载产物", coreType, mcVersion, chosen.ID)
 	}
-	return &CoreInfo{
+	info := &CoreInfo{
 		Type:        p,
 		MCVersion:   mcVersion,
 		Build:       chosen.ID,
 		Filename:    dl.Name,
 		DownloadURL: dl.URL,
 		SHA256:      dl.Checksums.SHA256,
-	}, nil
+	}
+	// 仅后端核心 paper 附带 java 需求（FR-316）：velocity/waterfall 是代理，
+	// 其版本号非 MC 版本语义，搭建向导 JDK 预检不适用，不设需求。
+	if p == "paper" {
+		info.JavaMajorRequired = s.paperVersionJavaMinimum(ctx, p, mcVersion)
+		if info.JavaMajorRequired == 0 {
+			info.JavaMajorRequired = javaMajorForMCVersion(mcVersion)
+		}
+	}
+	return info, nil
+}
+
+// paperVersionJavaMinimum 查 fill v3 版本详情中的 java.version.minimum（Paper 官方元数据，FR-316）。
+// 任一环节失败（网络/404/字段缺失）返回 0，由调用方回退内置映射表——java 需求获取绝不阻断核心解析。
+func (s *CoreService) paperVersionJavaMinimum(ctx context.Context, project, mcVersion string) int {
+	var out struct {
+		Version struct {
+			Java struct {
+				Version struct {
+					Minimum int `json:"minimum"`
+				} `json:"version"`
+			} `json:"java"`
+		} `json:"version"`
+	}
+	if err := s.getJSON(ctx, fmt.Sprintf("%s/%s/versions/%s", s.paperBase(), project, mcVersion), &out); err != nil {
+		return 0
+	}
+	if out.Version.Java.Version.Minimum < 0 {
+		return 0
+	}
+	return out.Version.Java.Version.Minimum
+}
+
+// javaRequirementThresholds 是 MC 版本 → 最低 Java 大版本的保守映射表（FR-316），
+// 按版本下限从新到旧排列，命中首个「mcVersion ≥ 下限」的条目。
+// 依据 Mojang 公告/PaperMC 元数据：≤1.16→8、1.17→16、1.18~1.20.4→17、1.20.5+→21、
+// 26.1+（2026 年起年号制命名，真机事故：26.1 要求 Java 25）→25。
+// 后续新版本按公告在表首追加条目即可，无需改逻辑。
+var javaRequirementThresholds = []struct {
+	minVersion []int
+	javaMajor  int
+}{
+	{[]int{26, 1}, 25},
+	{[]int{1, 20, 5}, 21},
+	{[]int{1, 18}, 17},
+	{[]int{1, 17}, 16},
+	{[]int{1, 0}, 8},
+}
+
+// javaMajorForMCVersion 返回 mcVersion 所需的最低 Java 大版本；
+// 未知/解析不出的版本返回 0（不设需求，宽容不误拦，FR-316）。
+func javaMajorForMCVersion(mcVersion string) int {
+	segs, ok := parseVersionSegments(mcVersion)
+	if !ok {
+		return 0
+	}
+	for _, th := range javaRequirementThresholds {
+		if compareVersionSegments(segs, th.minVersion) >= 0 {
+			return th.javaMajor
+		}
+	}
+	return 0
+}
+
+// parseVersionSegments 解析点分版本号的数字前缀段（"1.20.5"→[1,20,5]、"1.21.1-SNAPSHOT"→[1,21,1]）；
+// 首段无数字前缀（如 "latest"）返回 !ok。
+func parseVersionSegments(v string) ([]int, bool) {
+	segs := make([]int, 0, 3)
+	for _, part := range strings.Split(strings.TrimSpace(v), ".") {
+		i := 0
+		for i < len(part) && part[i] >= '0' && part[i] <= '9' {
+			i++
+		}
+		if i == 0 {
+			break
+		}
+		n, err := strconv.Atoi(part[:i])
+		if err != nil {
+			break
+		}
+		segs = append(segs, n)
+		if i != len(part) {
+			// 段内带后缀（如 "5-pre1"）：取数字前缀后不再往下解析。
+			break
+		}
+	}
+	if len(segs) == 0 {
+		return nil, false
+	}
+	return segs, true
+}
+
+// compareVersionSegments 逐段比较两个版本号（缺段按 0），返回 -1/0/1。
+func compareVersionSegments(a, b []int) int {
+	n := len(a)
+	if len(b) > n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		var av, bv int
+		if i < len(a) {
+			av = a[i]
+		}
+		if i < len(b) {
+			bv = b[i]
+		}
+		if av != bv {
+			if av < bv {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
 }
 
 func (s *CoreService) getJSON(ctx context.Context, url string, v interface{}) error {

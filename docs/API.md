@@ -674,8 +674,8 @@
 - **描述**: 查询服务端核心可用版本/构建。无 `mcVersion` 返回版本列表；带 `mcVersion` 返回下载信息
 - **权限**: 平台管理员
 - **Query**: `type=paper`（默认）/`velocity`/`waterfall`（PaperMC API）/`bungeecord`（md-5 Jenkins，仅 `latest`）/`spongevanilla`（Sponge 官方 Maven metadata）、`mcVersion`、`build`（可选，PaperMC 缺省最新；SpongeVanilla 按 MC 版本取最新 artifact）
-- **响应（带 mcVersion）**: `{ "type":"paper","mcVersion":"1.21.1","build":196,"filename":"...","downloadUrl":"...","sha256":"..." }`
-- **关联 FR**: FR-034, FR-046
+- **响应（带 mcVersion）**: `{ "type":"paper","mcVersion":"1.21.1","build":196,"filename":"...","downloadUrl":"...","sha256":"...","javaMajorRequired":21 }`。`javaMajorRequired` 为该 MC 版本所需最低 Java 大版本（FR-316 搭建向导 JDK 预检）：Paper 取 fill v3 官方元数据、失败回退 CP 内置保守映射表（≤1.16→8、1.17→16、1.18~1.20.4→17、1.20.5+→21、26.1+→25）；Sponge 用映射表；代理核心/未知版本省略该字段（不设需求，前端不据此拦截）
+- **关联 FR**: FR-034, FR-046, FR-316
 
 ### POST /api/v1/instances/provision/server
 - **描述**: 一键搭建后端子服（FR-319 异步化）：同步段解析核心 → 分配端口 → 系统分配目录 + 结构化启动 → 建实例 + 登记任务后**立即返回**；下载核心 + 写 eula/server.properties + 部署探针在 CP 后台任务推进（独立 context，前端断开不影响），进度/失败原因见任务中心（kind=`provision`）。失败时任务含错误链、实例 `statusReason` 标注「搭建未完成：…」
