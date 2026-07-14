@@ -13,6 +13,11 @@ service WorkerService {
   // FetchBotWorkerArchive Worker 自愈拉取 CP 内嵌的 bot-worker dist 归档（FR-308，CP 侧实现）：
   // 携带节点身份鉴权 + 本地已知 sha256，指纹一致回空归档（省流），否则回 tar.gz 字节。
   rpc FetchBotWorkerArchive(FetchBotWorkerArchiveRequest) returns (FetchBotWorkerArchiveResponse);
+  // ReportCrashSnapshot Worker 上报实例崩溃快照（FR-313，CP 侧实现）：进程非正常退出
+  //（退出码 ≠ 0 或 RUNNING/STARTING 态意外退出）时携带节点身份上报现场（退出码/信号/
+  // 时长/尾部输出），CP 持久化并按实例滚动保留最近 5 条。与注册/心跳同信道（隧道/直拨
+  // 双模式天然可用）；老 CP 返回 Unimplemented，Worker 记日志丢弃、不阻塞状态机。
+  rpc ReportCrashSnapshot(ReportCrashSnapshotRequest) returns (ReportCrashSnapshotResponse);
   // CreateInstance 在指定 Worker 上创建实例。
   rpc CreateInstance(CreateInstanceRequest) returns (CreateInstanceResponse);
   // ResyncInstances Worker 重连/重注册后，CP 一次性重推该节点全部实例规格，
@@ -250,6 +255,24 @@ message RegisterResponse {
   // 首注册与重注册均下发；Worker 持久化到 etc/node-identity.json 并热应用到 WS 校验。
   // 空 = 旧 CP 未下发，Worker 回退本地 jwt_secret 配置（向后兼容）。
   string ws_token_secret = 3;
+}
+
+// === 崩溃快照上报（FR-313，CP 侧实现）===
+
+// ReportCrashSnapshotRequest 一条实例崩溃快照：进程非正常退出的现场留存。
+message ReportCrashSnapshotRequest {
+  string node_uuid = 1;          // 节点身份（与 FetchBotWorkerArchive 同源校验）
+  string node_secret = 2;
+  string instance_uuid = 3;      // 崩溃实例（须属于该节点）
+  int64 occurred_at_unix_ms = 4; // 崩溃发生时刻（Unix 毫秒）
+  int32 exit_code = 5;           // 进程退出码；无法获知（如容器 Wait 出错）为 -1
+  string signal = 6;             // 终止信号名（Unix，如 killed）；Windows / 非信号退出留空
+  int64 duration_ms = 7;         // 本次运行时长（毫秒）
+  string tail_output = 8;        // 崩溃前终端尾部输出（Worker 侧截取，≤200 行 / 64KB）
+}
+
+// ReportCrashSnapshotResponse 无负载确认（语义等价 Empty，遵循本 proto 的 Request/Response 命名惯例）。
+message ReportCrashSnapshotResponse {
 }
 
 // === 心跳 ===
