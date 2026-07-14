@@ -168,6 +168,61 @@ describe('NodesPage（mock 假后端）', () => {
     await waitFor(() => expect(screen.queryByText('beta')).not.toBeInTheDocument())
   })
 
+  it('实例对比分段：只发 1 条批量指标请求（消 N+1），批量目标 ≤12（FR-334）', async () => {
+    loginMockUser()
+    // 计数批量指标请求 + 捕获请求体（断言单请求 + 目标上限）；search 请求断言 pageSize=12。
+    let batchCount = 0
+    let batchTargetCount = 0
+    let searchPageSize: string | null = null
+    server.use(
+      http.post(API('/metrics/series/batch'), async ({ request }) => {
+        batchCount += 1
+        const body = (await request.json()) as { targetIds?: string[] }
+        batchTargetCount = body.targetIds?.length ?? 0
+        return HttpResponse.json({ resolution: 'raw', from: '', to: '', series: {}, skipped: [] })
+      }),
+      http.get(API('/instances/search'), ({ request }) => {
+        const url = new URL(request.url)
+        // 只在按节点分页（对比清单）时记录；其它 search 调用不干扰。
+        if (url.searchParams.get('nodeId')) searchPageSize = url.searchParams.get('pageSize')
+        const items = Array.from({ length: 12 }, (_, i) => ({
+          id: 100 + i,
+          uuid: `cmp-${i}`,
+          nodeId: 2,
+          name: `srv-${String(i).padStart(2, '0')}`,
+          type: 'minecraft_java',
+          role: 'backend',
+          processType: 'daemon',
+          status: 'RUNNING',
+          startCommand: 'java -jar s.jar',
+          workDir: '/x',
+          image: '',
+          cpuLimit: 0,
+          memLimitMb: 0,
+          diskLimitMb: 0,
+          serverPort: 25600 + i,
+          autoStart: false,
+          autoRestart: true,
+          tags: '',
+          createdAt: '2026-01-01T00:00:00Z',
+        }))
+        return HttpResponse.json({ items, total: 600, page: 1, pageSize: 12 })
+      }),
+    )
+    const user = userEvent.setup()
+    renderWithProviders(<NodesPage />, { route: '/nodes?node=2&tab=instances' })
+
+    // 进入实例分段：对比面板标题可见（等异步查询发起）。
+    expect(await screen.findByText('实例指标对比')).toBeInTheDocument()
+    await waitFor(() => expect(batchCount).toBe(1))
+    expect(batchTargetCount).toBeLessThanOrEqual(12)
+    expect(searchPageSize).toBe('12')
+
+    // 切换对比指标（TPS→MSPT）仍是单条批量查询，不回退 N 条逐实例请求。
+    await user.click(await screen.findByRole('button', { name: 'MSPT' }))
+    await waitFor(() => expect(batchCount).toBe(2))
+  })
+
   it('注入 500：节点列表请求失败，列表区不崩溃（无节点行）', async () => {
     loginMockUser()
     stubInstances()

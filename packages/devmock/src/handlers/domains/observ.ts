@@ -724,6 +724,48 @@ export const handlers = [
     })
   }),
 
+  // 批量多实例序列（FR-334）：镜像真后端契约——targetIds 去重后 1~50，按 targetId 生成同构序列，
+  // 支持 metrics 过滤；假后端无访问模型，解析到的目标全放行，skipped 恒空（真机才有 forbidden/not_found）。
+  domainRoute('post', '/metrics/series/batch', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json()) as {
+      scope?: string
+      targetIds?: string[]
+      metrics?: string[]
+      range?: string
+      resolution?: string
+    }
+    if (body.scope !== 'instance') {
+      return HttpResponse.json({ error: 'INVALID_SCOPE', message: 'scope 必须为 instance' }, { status: 400 })
+    }
+    const targetIds = [...new Set((body.targetIds ?? []).map((s) => s.trim()).filter(Boolean))]
+    if (targetIds.length === 0) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: 'targetIds 缺失或为空' }, { status: 400 })
+    }
+    if (targetIds.length > 50) {
+      return HttpResponse.json({ error: 'TOO_MANY_TARGETS', message: '对比目标过多，最多 50 个' }, { status: 422 })
+    }
+    const range = body.range ?? '24h'
+    const wanted = body.metrics
+    const { step } = rangePlan(range)
+    const series: Record<string, ReturnType<typeof instanceSeries>> = {}
+    let span = 0
+    for (const id of targetIds) {
+      const all = instanceSeries(range)
+      const filtered = wanted?.length ? all.filter((s) => wanted.includes(s.metricKey)) : all
+      series[id] = filtered
+      span = Math.max(span, (filtered[0]?.points.length ?? 0) * step)
+    }
+    return HttpResponse.json({
+      resolution: 'raw',
+      from: iso(-span),
+      to: iso(0),
+      series,
+      skipped: [],
+    })
+  }),
+
   domainRoute('get', '/metrics/processes/top', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied

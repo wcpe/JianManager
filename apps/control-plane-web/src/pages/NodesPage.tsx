@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { useQueries } from '@tanstack/react-query'
 import {
   Box,
   ChevronsLeft,
@@ -19,9 +18,8 @@ import {
   type NodeInfo,
   type NodeDeleteBlockedInstance,
 } from '@/api/nodes'
-import { useInstances } from '@/api/instances'
-import api from '@/api/client'
-import { useMetricSeries, type MetricSeriesResponse } from '@/api/metrics'
+import { useInstanceAggregate, useInstanceSearch } from '@/api/instances'
+import { useMetricSeries, useMetricSeriesBatch } from '@/api/metrics'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Panel } from '@jianmanager/ui/components/panel'
 import { Input } from '@jianmanager/ui/components/input'
@@ -165,30 +163,35 @@ const COMPARE_METRICS: { key: string; labelKey: string; fmt: (v: number) => stri
   { key: 'inst_threads', labelKey: 'metrics.threads', fmt: (v) => v.toFixed(0) },
 ]
 
-/** 节点上各实例同一指标对比：每实例一条线，可切 TPS/MSPT/堆/线程。 */
+/** 对比图可读性上限：一图最多 12 条线（超出仅取名称升序前 12，FR-334）。50 是后端硬上限。 */
+const COMPARE_TARGET_CAP = 12
+
+/**
+ * 节点上各实例同一指标对比：每实例一条线，可切 TPS/MSPT/堆/线程（FR-060 #2）。
+ * FR-334：实例清单走服务端按节点分页（`/instances/search`）取前 12（名称升序），
+ * 指标一次批量查询（`/metrics/series/batch`）拆分为各线，消 N+1 请求风暴。
+ */
 function NodeInstanceCompare({ node, range }: { node: NodeInfo; range: MetricRange }) {
   const { t } = useTranslation()
   const [metric, setMetric] = useState('inst_tps')
-  const { data: instances } = useInstances()
-  const nodeInstances = (instances ?? []).filter((i) => i.nodeId === node.id)
   const spec = COMPARE_METRICS.find((m) => m.key === metric) ?? COMPARE_METRICS[0]
 
-  // 每实例一条查询并行拉取（实例数动态，用 useQueries）。
-  const results = useQueries({
-    queries: nodeInstances.map((inst) => ({
-      queryKey: ['metricSeries', 'instance', inst.uuid, range, metric],
-      queryFn: async () => {
-        const q = new URLSearchParams({ scope: 'instance', targetId: inst.uuid, range, metrics: metric })
-        const { data } = await api.get<MetricSeriesResponse>(`/metrics/series?${q.toString()}`)
-        return data
-      },
-      enabled: !!inst.uuid,
-      refetchInterval: 30_000,
-    })),
+  // 服务端按节点过滤分页取前 12（名称升序）；total 为该节点实例总数（提示中的 N）。
+  const { data: search } = useInstanceSearch({
+    nodeId: node.id,
+    pageSize: COMPARE_TARGET_CAP,
+    sort: 'name',
+    order: 'asc',
   })
+  const nodeInstances = search?.items ?? []
+  const total = search?.total ?? 0
+  const targetIds = nodeInstances.map((i) => i.uuid)
 
-  const series: ChartSeries[] = nodeInstances.map((inst, i) => {
-    const s = results[i].data?.series.find((x) => x.metricKey === metric && x.world === '')
+  // 单条批量查询替代逐实例 useQueries × N（FR-334）。
+  const { data: batch } = useMetricSeriesBatch({ scope: 'instance', targetIds, range, metrics: [metric] })
+
+  const series: ChartSeries[] = nodeInstances.map((inst) => {
+    const s = batch?.series[inst.uuid]?.find((x) => x.metricKey === metric && x.world === '')
     return { key: inst.uuid, name: inst.name, points: (s?.points ?? []).map((p) => ({ ts: p.ts, value: p.avg })) }
   })
 
@@ -210,6 +213,11 @@ function NodeInstanceCompare({ node, range }: { node: NodeInfo; range: MetricRan
         </div>
       }
     >
+      {total > COMPARE_TARGET_CAP && (
+        <p className="mb-2 text-xs text-muted-foreground">
+          {t('nodes.compareCap', { shown: COMPARE_TARGET_CAP, total })}
+        </p>
+      )}
       <TimeSeriesChart series={series} height={180} valueFormatter={spec.fmt} emptyHint={t('nodes.empty')} />
     </Panel>
   )
@@ -443,7 +451,9 @@ function NodeRailIcon({
 export default function NodesPage() {
   const { t } = useTranslation()
   const { data: nodes, isLoading } = useNodes({ refetchInterval: 30_000 })
-  const { data: instances } = useInstances()
+  // 各节点实例数走服务端聚合（FR-247/FR-270）：byNode 每节点计数已在服务端算好，
+  // 本页不再全量拉取实例再前端归并。
+  const { data: aggregate } = useInstanceAggregate()
 
   // 选中节点与激活分段均入 URL（FR-128 可寻址）：`?node=<id>` 深链（命令面板 FR-241 跳转携带）、
   // `?tab=<DetailTab>` 激活分段（默认 overview 省略）。直接从 searchParams 派生，浏览器前进/后退自动生效。
@@ -482,12 +492,12 @@ export default function NodesPage() {
 
   // 集群汇总（FR-144）：在线/离线/维护计数 + 在线节点资源水位均值。
   const summary = useMemo(() => summarizeNodes(nodes ?? []), [nodes])
-  // 各节点实例数（统计一次，列表/详情共用）。
+  // 各节点实例数（服务端聚合 byNode，列表/详情共用）。
   const instanceCountByNode = useMemo(() => {
     const map = new Map<number, number>()
-    for (const i of instances ?? []) map.set(i.nodeId, (map.get(i.nodeId) ?? 0) + 1)
+    for (const { nodeId, count } of aggregate?.byNode ?? []) map.set(nodeId, count)
     return map
-  }, [instances])
+  }, [aggregate])
 
   const filtered = useMemo(() => filterNodes(nodes ?? [], query), [nodes, query])
   // 有效选中（FR-232 进入默认选第一个 + FR-177 幽灵选中回退）：基于搜索后的 filtered 派生——

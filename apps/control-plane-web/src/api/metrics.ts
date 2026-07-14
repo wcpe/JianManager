@@ -117,6 +117,56 @@ export function useMetricSeries(params: {
   })
 }
 
+/** 被剔除的目标（FR-334）：无实例访问权（forbidden）或 UUID 不存在（not_found）。 */
+export interface SkippedTarget {
+  targetId: string
+  reason: 'forbidden' | 'not_found'
+}
+
+/**
+ * 批量序列响应（FR-334）：整批共用 resolution/from/to；series 按 targetId(UUID) 分组，
+ * 值与单目标端点 series 数组同构；被剔除的目标入 skipped（前端可区分「无数据」空数组与「被剔除」）。
+ */
+export interface MetricSeriesBatchResponse {
+  resolution: string
+  from: string
+  to: string
+  series: Record<string, MetricSeries[]>
+  skipped: SkippedTarget[]
+}
+
+/**
+ * 批量多实例历史曲线（FR-334：消 NodeInstanceCompare 的 N+1）。一次请求返回各目标序列，
+ * 30s 轮询。targetIds 为空时不请求。v1 仅 scope=instance（对比场景只有实例维度有 N+1）。
+ */
+export function useMetricSeriesBatch(params: {
+  scope: 'instance'
+  targetIds: string[]
+  range: MetricRange
+  /** 指标键过滤（逗号合并下发）；不传返回各目标全部序列。 */
+  metrics?: string[]
+  /** 聚合粒度档位（FR-221）；auto/留空=按区间自动选档。 */
+  resolution?: MetricResolution
+  enabled?: boolean
+}) {
+  const { scope, targetIds, range, metrics, resolution, enabled = true } = params
+  return useQuery({
+    queryKey: ['metricSeriesBatch', scope, targetIds.join(','), range, metrics?.join(',') ?? '', resolution ?? 'auto'],
+    queryFn: async () => {
+      const { data } = await api.post<MetricSeriesBatchResponse>('/metrics/series/batch', {
+        scope,
+        targetIds,
+        ...(metrics?.length ? { metrics } : {}),
+        range,
+        ...(resolution && resolution !== 'auto' ? { resolution } : {}),
+      })
+      return data
+    },
+    enabled: enabled && targetIds.length > 0,
+    refetchInterval: 30_000,
+  })
+}
+
 export interface OverviewTotals {
   nodeCount: number
   onlineNodeCount: number
