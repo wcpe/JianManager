@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
 export interface AuditLogInfo {
@@ -30,9 +30,6 @@ export interface AuditQueryParams {
   from?: string
   /** 结束时间（RFC3339，含时区）。 */
   to?: string
-  limit?: number
-  page?: number
-  pageSize?: number
 }
 
 export interface AuditLogPage {
@@ -42,32 +39,31 @@ export interface AuditLogPage {
   pageSize: number
 }
 
+const AUDIT_PAGE_SIZE = 100
+
 /**
- * 查询审计日志（FR-015）。
- * 筛选条件下沉到后端 DB（user/action/targetType/时间范围/limit），变更即重查。
- * keepPreviousData 让改筛选时旧结果保留，避免表格闪烁。
+ * 无限分页查询审计日志（FR-015 / FR-172）。
+ * 业务筛选进入 queryKey，筛选变化时由 TanStack Query 自然切换到新的分页缓存。
  */
 export function useAuditLogs(params?: AuditQueryParams) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['audit', params],
-    queryFn: async () => {
-      const { data } = await api.get<AuditLogPage | AuditLogInfo[]>('/audit', { params })
+    initialPageParam: 1,
+    queryFn: async ({ pageParam }) => {
+      const { data } = await api.get<AuditLogPage | AuditLogInfo[]>('/audit', {
+        params: { ...params, page: pageParam, pageSize: AUDIT_PAGE_SIZE },
+      })
       if (Array.isArray(data)) {
-        return { items: data, total: data.length, page: 1, pageSize: data.length }
+        return { items: data, total: data.length, page: pageParam, pageSize: AUDIT_PAGE_SIZE }
       }
       return data
     },
-    placeholderData: (prev) => prev,
+    getNextPageParam: (lastPage) =>
+      lastPage.page * lastPage.pageSize < lastPage.total ? lastPage.page + 1 : undefined,
   })
 }
 
 export async function exportAuditLogs(params?: AuditQueryParams): Promise<Blob> {
-  const exportParams = params ? { ...params } : undefined
-  if (exportParams) {
-    delete exportParams.page
-    delete exportParams.pageSize
-    delete exportParams.limit
-  }
-  const { data } = await api.get<Blob>('/audit/export', { params: exportParams, responseType: 'blob' })
+  const { data } = await api.get<Blob>('/audit/export', { params, responseType: 'blob' })
   return data
 }

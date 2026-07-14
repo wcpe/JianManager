@@ -33,19 +33,17 @@ describe('toRFC3339', () => {
 
 describe('toAuditParams', () => {
   it('omits every dimension for the default (empty) filter', () => {
-    expect(toAuditParams(DEFAULT_AUDIT_FILTER)).toEqual({ page: 1, pageSize: 100 })
+    expect(toAuditParams(DEFAULT_AUDIT_FILTER)).toEqual({})
   })
 
   it('omits blank text fields', () => {
-    expect(toAuditParams(state({ action: '   ', targetType: '' }))).toEqual({ page: 1, pageSize: 100 })
+    expect(toAuditParams(state({ action: '   ', targetType: '' }))).toEqual({})
   })
 
   it('keeps set text fields trimmed', () => {
     expect(toAuditParams(state({ action: ' instance.start ', targetType: 'instance' }))).toEqual({
       action: 'instance.start',
       targetType: 'instance',
-      page: 1,
-      pageSize: 100,
     })
   })
 
@@ -60,14 +58,6 @@ describe('toAuditParams', () => {
     const params = toAuditParams(state({ from: '2026-06-01T00:00', to: '2026-06-22T23:59' }))
     expect(params.from).toBe(new Date('2026-06-01T00:00').toISOString())
     expect(params.to).toBe(new Date('2026-06-22T23:59').toISOString())
-  })
-
-  it('omits the limit when non-positive', () => {
-    expect(toAuditParams(state({ limit: 0 }))).toEqual({})
-  })
-
-  it('carries an enlarged limit through (load-more)', () => {
-    expect(toAuditParams(state({ limit: 300 })).pageSize).toBe(300)
   })
 })
 

@@ -151,7 +151,7 @@ export default function ClientIntegrationGuide({ channelId, keys }: { channelId:
         <p className="text-muted-foreground">
           {t(
             'clientGuide.step3Desc',
-            '下面是本频道专属配置。key 换成你在「拉取密钥」Tab 创建的密钥（明文仅创建时一次性显示）；endpoint 必须是玩家可访问的 API 根地址，例如 http://127.0.0.1:18370/api/v1，禁止填写 /client-channels 等后缀。',
+            '下面是本频道专属配置。key 使用你在「拉取密钥」Tab 创建的密钥（可随时查看明文并自动填入）；endpoint 必须是玩家可访问的 API 根地址，例如 http://127.0.0.1:18370/api/v1，禁止填写 /client-channels 等后缀。',
           )}
         </p>
         <label className="flex flex-col gap-1 mt-2">

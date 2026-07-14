@@ -69,6 +69,62 @@ describe('AuditPage（mock 假后端）', () => {
     expect(screen.getByText('已加载 1 / 共 250 条')).toBeInTheDocument()
   })
 
+  it('加载更多按 100 条分页请求并可累计浏览超过 200 条数据', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    const requests: URL[] = []
+    server.use(
+      http.get(API('/audit'), ({ request }) => {
+        const url = new URL(request.url)
+        requests.push(url)
+        const page = Number(url.searchParams.get('page'))
+        const pageSize = Number(url.searchParams.get('pageSize'))
+        const start = (page - 1) * pageSize
+        const items = Array.from({ length: Math.min(pageSize, 250 - start) }, (_, index) => {
+          const id = start + index + 1
+          return {
+            id,
+            uuid: `a-${id}`,
+            userId: 1,
+            action: `audit.row.${id}`,
+            targetType: 'audit',
+            targetId: String(id),
+            detail: '',
+            ip: '127.0.0.1',
+            failed: false,
+            error: '',
+            createdAt: '2026-06-28T10:00:00Z',
+            user: { id: 1, username: 'admin' },
+          }
+        })
+        return HttpResponse.json({ items, total: 250, page, pageSize })
+      }),
+    )
+
+    renderWithProviders(<AuditPage />)
+
+    expect(await screen.findByText('audit.row.1')).toBeInTheDocument()
+    expect(requests[0].searchParams.get('page')).toBe('1')
+    expect(requests[0].searchParams.get('pageSize')).toBe('100')
+
+    await user.click(screen.getByRole('button', { name: '加载更多' }))
+
+    expect(await screen.findByText('audit.row.101')).toBeInTheDocument()
+    expect(requests[1].searchParams.get('page')).toBe('2')
+    expect(requests[1].searchParams.get('pageSize')).toBe('100')
+    expect(screen.getByText('audit.row.1')).toBeInTheDocument()
+    expect(screen.getByText('已加载 200 / 共 250 条')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '加载更多' }))
+
+    expect(await screen.findByText('audit.row.250')).toBeInTheDocument()
+    expect(requests[2].searchParams.get('page')).toBe('3')
+    expect(requests[2].searchParams.get('pageSize')).toBe('100')
+    expect(screen.getByText('audit.row.1')).toBeInTheDocument()
+    expect(screen.getByText('已加载 250 / 共 250 条')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '加载更多' })).toBeDisabled()
+  })
+
   it('导出使用相同筛选条件，但不携带分页参数', async () => {
     loginMockUser()
     const user = userEvent.setup()

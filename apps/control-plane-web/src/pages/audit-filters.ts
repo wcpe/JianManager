@@ -12,21 +12,16 @@ export interface AuditFilterState {
   /** datetime-local 本地时间，空串表示不限。 */
   from: string
   to: string
-  limit: number
 }
 
-/** 默认筛选状态：全部不过滤，limit 与后端默认一致（100）。 */
+/** 默认筛选状态：全部不过滤。 */
 export const DEFAULT_AUDIT_FILTER: AuditFilterState = {
   userId: '',
   action: '',
   targetType: '',
   from: '',
   to: '',
-  limit: 100,
 }
-
-/** 「加载更多」每次递增的条数。 */
-export const AUDIT_PAGE_STEP = 100
 
 /**
  * 把 datetime-local 本地时间转为后端期望的 RFC3339（带时区偏移）。
@@ -64,11 +59,6 @@ export function toAuditParams(filter: AuditFilterState): AuditQueryParams {
 
   const to = toRFC3339(filter.to)
   if (to) params.to = to
-
-  if (filter.limit > 0) {
-    params.page = 1
-    params.pageSize = filter.limit
-  }
 
   return params
 }

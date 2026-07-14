@@ -17,7 +17,29 @@ async function fillAndSubmit(username: string, password: string) {
 }
 
 describe('LoginPage（mock 假后端）', () => {
-  it('正确凭据 → 跳转控制台（/）', async () => {
+  it('合法 returnTo → 登录后返回原页面', async () => {
+    const returnTo = '/instances?status=running#terminal'
+    renderWithProviders(<LoginPage />, { route: `/login?returnTo=${encodeURIComponent(returnTo)}` })
+    await screen.findByLabelText('用户名')
+    await fillAndSubmit('admin', 'admin123')
+    await waitFor(() => {
+      expect(`${window.location.pathname}${window.location.search}${window.location.hash}`).toBe(returnTo)
+    })
+  })
+
+  it.each([
+    ['协议外部 URL', 'https://evil.example/path'],
+    ['协议相对外部 URL', '//evil.example/path'],
+    ['登录页循环', '/login/again?reason=expired'],
+    ['初始化页循环', '/setup/step?from=login'],
+  ])('%s returnTo → 登录后回首页', async (_name, returnTo) => {
+    renderWithProviders(<LoginPage />, { route: `/login?returnTo=${encodeURIComponent(returnTo)}` })
+    await screen.findByLabelText('用户名')
+    await fillAndSubmit('admin', 'admin123')
+    await waitFor(() => expect(window.location.pathname).toBe('/'))
+  })
+
+  it('无 returnTo → 登录后回首页', async () => {
     renderWithProviders(<LoginPage />, { route: '/login' })
     await screen.findByLabelText('用户名')
     await fillAndSubmit('admin', 'admin123')

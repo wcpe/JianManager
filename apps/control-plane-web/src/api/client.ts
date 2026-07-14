@@ -7,6 +7,24 @@ const api = axios.create({
   timeout: 10000,
 })
 
+/** 仅允许同源站内绝对路径作为登录后的返回目标，避免开放重定向与认证页面循环。 */
+export function getSafeReturnTo(value: string | null): string {
+  if (!value?.startsWith('/') || value.startsWith('//')) return '/'
+
+  try {
+    const target = new URL(value, window.location.origin)
+    if (target.origin !== window.location.origin) return '/'
+
+    const pathname = decodeURIComponent(target.pathname).toLowerCase()
+    const isAuthLoop = ['/login', '/setup'].some(
+      (route) => pathname === route || pathname.startsWith(`${route}/`),
+    )
+    return isAuthLoop ? '/' : `${target.pathname}${target.search}${target.hash}`
+  } catch {
+    return '/'
+  }
+}
+
 /** mock 模式暴露请求路径给真浏览器 benchmark，避免依赖 Service Worker 网络事件。 */
 function recordMockRequestPath(url?: string): void {
   if (!import.meta.env.VITE_MOCK || typeof window === 'undefined' || !url) return
@@ -83,7 +101,8 @@ api.interceptors.response.use(
         return api(originalRequest)
       } catch {
         clearAuth()
-        window.location.href = '/login'
+        const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`
+        window.location.href = `/login?returnTo=${encodeURIComponent(returnTo)}`
         return Promise.reject(error)
       }
     }

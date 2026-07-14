@@ -9,6 +9,7 @@ import {
   useInstanceGroups,
   useInstanceGroupSubtree,
   useAddInstanceGroupMembers,
+  useRemoveInstanceGroupMembers,
   type InstanceGroupNode,
 } from '@/api/instanceGroups'
 import { InstanceWorktableCard } from './InstanceWorktableCard'
@@ -92,6 +93,7 @@ export function InstanceGroupManager() {
         {selectedIds.length > 0 && (
           <MarkIntoGroupBar
             selectedIds={selectedIds}
+            selectedGroupId={selectedGroupId}
             groups={groups ?? []}
             onDone={clearSelection}
           />
@@ -167,16 +169,19 @@ function DraggableInstance({
 /** 批量「标记入组」栏：选一个目标组，把已选实例批量加入（幂等）。 */
 function MarkIntoGroupBar({
   selectedIds,
+  selectedGroupId,
   groups,
   onDone,
 }: {
   selectedIds: number[]
+  selectedGroupId: number | null
   groups: InstanceGroupNode[]
   onDone: () => void
 }) {
   const { t } = useTranslation()
   const [target, setTarget] = useState<string>('')
   const addMembers = useAddInstanceGroupMembers()
+  const removeMembers = useRemoveInstanceGroupMembers()
 
   const submit = () => {
     if (!target) return
@@ -188,6 +193,20 @@ function MarkIntoGroupBar({
           onDone()
         },
         onError: () => toast.error(t('instanceGroups.markFailed')),
+      },
+    )
+  }
+
+  const removeFromCurrent = () => {
+    if (selectedGroupId === null) return
+    removeMembers.mutate(
+      { id: selectedGroupId, instanceIds: selectedIds },
+      {
+        onSuccess: () => {
+          toast.success(t('instanceGroups.removedCount', { count: selectedIds.length }))
+          onDone()
+        },
+        onError: () => toast.error(t('instanceGroups.removeFailed')),
       },
     )
   }
@@ -212,6 +231,18 @@ function MarkIntoGroupBar({
         <Button size="sm" onClick={submit} disabled={!target || addMembers.isPending}>
           {t('instanceGroups.markInto')}
         </Button>
+        {selectedGroupId !== null && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-destructive hover:text-destructive"
+            title={t('instanceGroups.removeFromCurrentHint')}
+            onClick={removeFromCurrent}
+            disabled={removeMembers.isPending}
+          >
+            {t('instanceGroups.removeFromCurrent')}
+          </Button>
+        )}
         <Button size="sm" variant="ghost" onClick={onDone}>
           {t('common.cancel')}
         </Button>

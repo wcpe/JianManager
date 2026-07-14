@@ -14,13 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
-import {
-  AUDIT_PAGE_STEP,
-  DEFAULT_AUDIT_FILTER,
-  toAuditParams,
-  formatAuditDetail,
-  type AuditFilterState,
-} from './audit-filters'
+import { DEFAULT_AUDIT_FILTER, toAuditParams, formatAuditDetail, type AuditFilterState } from './audit-filters'
 
 // Radix Select 不允许空字符串值，用哨兵代表「全部用户」。
 const SENTINEL_ALL = '__all__'
@@ -28,7 +22,7 @@ const SENTINEL_ALL = '__all__'
 /**
  * 审计日志查询页（FR-015 + FR-158）。
  * 套「流水检索」范式：强筛选（用户/操作/目标类型/时间范围）→ 时间线行；行可展开看变更详情（detail）。
- * 「导出」走后端 NDJSON 白名单导出；「加载更多」扩大 pageSize；「清空」恢复默认。
+ * 「导出」走后端 NDJSON 白名单导出；「加载更多」逐页追加；「清空」恢复默认。
  * 后端分页 envelope 返回真实 total，页面展示已加载数与命中总数。
  */
 export default function AuditPage() {
@@ -38,15 +32,12 @@ export default function AuditPage() {
   const [filter, setFilter] = useState<AuditFilterState>(DEFAULT_AUDIT_FILTER)
   const [expanded, setExpanded] = useState<number | null>(null)
 
-  // 改任一筛选都把 limit 收回默认，避免停留在放大的页。
-  const patch = (next: Partial<AuditFilterState>) =>
-    setFilter((prev) => ({ ...prev, limit: DEFAULT_AUDIT_FILTER.limit, ...next }))
+  const patch = (next: Partial<AuditFilterState>) => setFilter((prev) => ({ ...prev, ...next }))
 
   const params = toAuditParams(filter)
-  const { data: page, isLoading, isError } = useAuditLogs(params)
-  const logs = page?.items ?? []
-
-  const canLoadMore = !!page && logs.length < page.total
+  const { data, isLoading, isError, fetchNextPage, hasNextPage, isFetchingNextPage } = useAuditLogs(params)
+  const logs = data?.pages.flatMap((page) => page.items) ?? []
+  const total = data?.pages[0]?.total ?? logs.length
 
   const handleExport = async () => {
     if (logs.length === 0) return
@@ -125,7 +116,7 @@ export default function AuditPage() {
         />
       </div>
 
-      {isLoading && !page ? (
+      {isLoading && !data ? (
         <p className="text-muted-foreground">{t('common.loading')}</p>
       ) : isError ? (
         <p className="text-destructive">{t('audit.loadError')}</p>
@@ -157,12 +148,12 @@ export default function AuditPage() {
 
           {/* 加载更多 */}
           <div className="flex items-center justify-between text-sm text-muted-foreground">
-            <span>{t('audit.loadedCount', { loaded: logs.length, total: page?.total ?? logs.length })}</span>
+            <span>{t('audit.loadedCount', { loaded: logs.length, total })}</span>
             <Button
               variant="outline"
               size="sm"
-              disabled={!canLoadMore}
-              onClick={() => setFilter((prev) => ({ ...prev, limit: prev.limit + AUDIT_PAGE_STEP }))}
+              disabled={!hasNextPage || isFetchingNextPage}
+              onClick={() => fetchNextPage()}
             >
               {t('audit.loadMore')}
             </Button>

@@ -52,8 +52,8 @@ export default function ClientDistFlowGuide() {
             steps={[
               t('clientDistFlow.first1', '建一个分发频道（每服一个）。'),
               t('clientDistFlow.first2', '建一把拉取密钥——玩家更新器的「门禁卡」，务必存好、可随时查看；丢了玩家就断更。'),
-              t('clientDistFlow.first3', '发布第一版：传文件或 zip 整合包 → 编排目录 → 发布，系统自动签名。'),
-              t('clientDistFlow.first4', '打包给玩家：把 楔子.jar + 更新核心.jar + 配置（频道 + 密钥）一起塞进整合包。'),
+              t('clientDistFlow.first3', '发布第一版：传文件或 zip 整合包 → 编排目录 → 发布，系统自动生成文件清单与 SHA-256。'),
+              t('clientDistFlow.first4', '打包给玩家：只需把楔子.jar + 配置（频道 + 密钥）放进整合包；楔子会在首次启动时自动拉取更新核心。'),
               t('clientDistFlow.first5', '一次性分发整合包给玩家——之后再也不用重发整合包。'),
             ]}
           />
@@ -66,7 +66,7 @@ export default function ClientDistFlowGuide() {
             title={t('clientDistFlow.dailyTitle', '② 日常更新')}
             steps={[
               t('clientDistFlow.daily1', '你在面板发一个新版本。'),
-              t('clientDistFlow.daily2', '玩家一开游戏自动更新：楔子 → 加载更新核心 → 凭密钥拉签名清单 → 验签 → 只下变化的文件 → 进游戏。'),
+              t('clientDistFlow.daily2', '玩家一开游戏自动更新：楔子 → 拉取并加载更新核心 → 凭密钥拉文件清单 → 校验 SHA-256 → 只下变化的文件 → 进游戏。'),
               t('clientDistFlow.daily3', '万一出问题，自动退回上一个好用的版本，玩家照样进得去。'),
             ]}
           />

@@ -42,6 +42,23 @@ describe('ClientChannelsPage（mock 假后端）', () => {
     expect(await screen.findByRole('heading', { name: /创造三区/ })).toBeInTheDocument()
   })
 
+  it('创建拉取密钥后说明可随时再次查看明文', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    renderWithProviders(<ClientChannelsPage />, { route: '/client-channels?channel=skyblock-s1&tab=keys' })
+
+    await screen.findByText('空岛一区')
+    await user.click(screen.getByRole('button', { name: '创建密钥' }))
+    const createDialog = await screen.findByRole('dialog')
+    await user.type(within(createDialog).getByPlaceholderText('如：正式包 / 灰度'), '回归密钥')
+    await user.click(within(createDialog).getByRole('button', { name: '创建密钥' }))
+
+    const secretDialog = await screen.findByRole('dialog')
+    expect(within(secretDialog).getByText('拉取密钥')).toBeInTheDocument()
+    expect(within(secretDialog).getByText('此密钥已加密保存，关闭后仍可在密钥列表中随时查看明文。')).toBeInTheDocument()
+    expect(within(secretDialog).queryByText(/仅此一次|无法再次查看/)).not.toBeInTheDocument()
+  })
+
   it('拉取密钥列表标识已过期与即将过期', async () => {
     loginMockUser()
     const now = Date.now()

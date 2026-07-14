@@ -985,7 +985,7 @@ function EditKeyForm({
   )
 }
 
-/** 一次性明文展示弹窗：仅创建/轮换后可见，提示复制保存（复制走 copyToClipboard 兜底 HTTP 非安全上下文）。 */
+/** 创建或改值后的明文展示弹窗：密钥已加密保存，后续仍可从列表查看（复制兼容 HTTP 非安全上下文）。 */
 function SecretDialog({ secret, onClose }: { secret: ClientKeyWithSecret | null; onClose: () => void }) {
   const { t } = useTranslation()
 
@@ -1000,9 +1000,9 @@ function SecretDialog({ secret, onClose }: { secret: ClientKeyWithSecret | null;
     <Dialog open={secret !== null} onOpenChange={(v: boolean) => { if (!v) onClose() }}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t('clientChannels.secretTitle', '拉取密钥（仅此一次）')}</DialogTitle>
+          <DialogTitle>{t('clientChannels.secretTitle', '拉取密钥')}</DialogTitle>
           <DialogDescription>
-            {t('clientChannels.secretDesc', '请立即复制保存。关闭后将无法再次查看完整密钥。')}
+            {t('clientChannels.secretDesc', '此密钥已加密保存，关闭后仍可在密钥列表中随时查看明文。')}
           </DialogDescription>
         </DialogHeader>
         <div className="flex items-center gap-2 rounded-md border bg-muted/50 p-3">

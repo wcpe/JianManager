@@ -14,8 +14,8 @@ interface LoginResponse {
   expiresIn: number
 }
 
-/** 登录 mutation。 */
-export function useLogin() {
+/** 登录 mutation；成功后跳到调用方已校验的站内目标。 */
+export function useLogin(returnTo = '/') {
   const loginStore = useAuthStore((s) => s.login)
   const navigate = useNavigate()
 
@@ -26,7 +26,7 @@ export function useLogin() {
     },
     onSuccess: (data) => {
       loginStore(data.accessToken, data.refreshToken)
-      navigate('/')
+      navigate(returnTo, { replace: true })
     },
   })
 }

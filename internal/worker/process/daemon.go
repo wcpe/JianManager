@@ -231,7 +231,21 @@ func (d *daemonStrategy) Stop() error {
 
 	// 常态：控制连接已就绪，下发 stop 控制帧让 wrapper 优雅关服（保存世界 + 输出停止日志）。
 	if conn != nil {
-		return d.sendControl(daemon.ControlStop)
+		if err := d.sendControl(daemon.ControlStop); err == nil {
+			return nil
+		} else {
+			// jmctl 等本机应急客户端可能替换 wrapper 当前连接，使 Worker 仍持有已断开的旧 conn。
+			// 不能把 broken pipe 直接上抛：否则实例会落 CRASHED，而 Java 仍由 wrapper 托管，
+			// 控制面又会禁用停止/强杀，最终形成无法从 UI 清理的孤儿进程。
+			slog.Warn("既有 wrapper 控制连接写入失败，改用即时拨号停止",
+				"instanceId", d.spec.UUID, "error", err)
+			_ = conn.Close()
+			d.mu.Lock()
+			if d.conn == conn {
+				d.conn = nil
+			}
+			d.mu.Unlock()
+		}
 	}
 
 	// FIX-C（bug #4）连接窗口竞态：Start 仅 spawn wrapper 即返回 RUNNING，控制连接由 connectLoop

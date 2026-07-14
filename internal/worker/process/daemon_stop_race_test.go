@@ -2,6 +2,7 @@ package process
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -24,6 +25,77 @@ import (
 //
 // 注：daemonStrategy.Start 经 os.Executable() spawn worker 二进制的 daemon 子命令，单测二进制无该
 // 子命令分支，故此处不走真实 spawn，而是直接驱动 strategy 的连接/停止路径（与 daemon_test.go 同思路）。
+func TestDaemonStrategy_StopAfterControlConnectionReplaced_KillsChild(t *testing.T) {
+	t.Setenv("JIANMANAGER_GRACEFUL_STOP_TIMEOUT", "1s")
+	t.Setenv("JIANMANAGER_START_WAIT_PRIOR_EXIT_TIMEOUT", "1s")
+
+	pidDir := t.TempDir()
+	uuid := "daemon-stop-replaced-connection"
+	cfg := daemon.WrapperConfig{
+		InstanceUUID: uuid,
+		StartCommand: keepAliveCmd(),
+		WorkDir:      pidDir,
+		AutoRestart:  false,
+		PIDDir:       pidDir,
+	}
+	ready := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() { done <- daemon.RunWithReady(cfg, ready) }()
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("wrapper 监听就绪超时")
+	}
+
+	pidPath := filepath.Join(pidDir, uuid+".pid")
+	pf := daemon.NewPIDFile(pidPath)
+	require.Eventually(t, func() bool {
+		rec, err := pf.ReadRecord()
+		return err == nil && rec.JavaPID > 0 && daemon.IsPIDAlive(rec.JavaPID)
+	}, 15*time.Second, 50*time.Millisecond, "应能读到存活的被托管子进程 pid")
+	rec, _ := pf.ReadRecord()
+
+	mgr := NewManager(pidDir)
+	d := newDaemonStrategy(mgr, CommandSpec{UUID: uuid, WorkDir: pidDir, ProcessType: ProcessTypeDaemon})
+	require.NoError(t, d.Reconnect(rec.SocketAddr), "连接 wrapper 失败")
+
+	// jmctl 等本机应急客户端会建立第二条连接。wrapper 接受新连接后会关闭原 Worker 连接，
+	// 此时策略仍持有旧 conn；停止必须能从写入 broken pipe 恢复，而不是留下 Java 孤儿。
+	emergencyConn, err := daemon.Dial(rec.SocketAddr)
+	require.NoError(t, err, "第二客户端连接 wrapper 失败")
+	defer emergencyConn.Close()
+	require.Eventually(t, func() bool {
+		return d.sendControl(daemon.ControlPing) != nil
+	}, 3*time.Second, 20*time.Millisecond, "原 Worker 连接应被第二客户端替换为失效连接")
+
+	t.Cleanup(func() {
+		if _, err := os.Stat(pidPath); err == nil {
+			if conn, dialErr := daemon.Dial(rec.SocketAddr); dialErr == nil {
+				f := &daemon.Frame{Header: daemon.Header{Channel: daemon.ChannelControl, Type: daemon.TypeCommand}, Payload: []byte(daemon.ControlKill)}
+				_ = f.Encode(conn)
+				_ = conn.Close()
+			}
+		}
+		select {
+		case <-done:
+		case <-time.After(8 * time.Second):
+		}
+	})
+
+	require.NoError(t, d.Stop(), "控制连接失效后 Stop 应重新拨号停止 wrapper")
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(8 * time.Second):
+		t.Fatal("停止后 wrapper 与被托管子进程仍未退出")
+	}
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(pidPath)
+		return os.IsNotExist(err)
+	}, 3*time.Second, 50*time.Millisecond, "停止后应清理 PID 文件")
+	_ = d.Close()
+}
+
 func TestDaemonStrategy_StopDuringConnectWindow_KillsChild(t *testing.T) {
 	// 测试替身进程（ping/sleep）不响应 stdin "stop"，缩短优雅停止超时让其快速回退强杀。
 	t.Setenv("JIANMANAGER_GRACEFUL_STOP_TIMEOUT", "1s")

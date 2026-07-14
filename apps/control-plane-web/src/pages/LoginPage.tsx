@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from 'react'
-import { Navigate } from 'react-router'
+import { Navigate, useLocation } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { useLogin } from '@/api/auth'
+import { getSafeReturnTo } from '@/api/client'
 import { useSetupStatus } from '@/api/setup'
 import { useAuthStore } from '@/stores/auth'
 import { Panel } from '@jianmanager/ui/components/panel'
@@ -12,17 +13,19 @@ import { Button } from '@jianmanager/ui/components/button'
 
 export default function LoginPage() {
   const { t } = useTranslation()
+  const location = useLocation()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [returnTo] = useState(() => getSafeReturnTo(new URLSearchParams(location.search).get('returnTo')))
 
-  const login = useLogin()
   const { data: setupStatus, isLoading } = useSetupStatus()
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
+  const login = useLogin(returnTo)
 
-  // 已登录用户不应停留在登录页，跳回控制台（BUG-006）
+  // 已登录用户不应停留在登录页，返回安全的原页面（BUG-006、DEF-FR157-1）。
   if (isAuthenticated) {
-    return <Navigate to="/" replace />
+    return <Navigate to={returnTo} replace />
   }
 
   if (!isLoading && setupStatus?.setupRequired) {
