@@ -399,6 +399,14 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-322 | 心跳流断开告警降噪（fix，真机复现：CP journal 2 小时 484 条「心跳流断开 context canceled」WARN——worker 每拍心跳收完响应即 cancel 属正常收尾，被当异常刷屏淹没真问题，且无节点标识）：Canceled/EOF 正常收尾降 Debug，异常断流保留 WARN 并带 nodeUUID（免 spec） | P2 | ✅ 已交付@v0.16.0 |
 | FR-323 | 长操作任务化：导入/克隆/备份纳入任务中心（增强 FR-302 导入 / FR-036 克隆 / 备份 FR，FR-319 同族收口——用户「把所有长耗时任务加到任务中心、不堵塞页面、有进度」）：抽公共 `run-as-task` 底座（CreateTask→CP 后台 goroutine→SetStage 阶段进度→MarkSucceeded/Failed→终态站内信），provision（FR-319）一并迁过去 DRY；导入 migrate 搬迁 / 克隆 CloneWorkDir / 备份创建 / 备份恢复 四个现同步阻塞或后台无进度的长操作接入——提交秒回 `{taskId}` 不阻塞（搬迁/拷贝/打包可达数十分钟），任务中心显示 stage 文案 + 终态 + 失败错误链；新增 TaskKind（import/clone/backup_create/backup_restore）+ 前端任务中心筛选/文案 → `docs/specs/long-op-tasks/spec.md`（需 spec：3 端点响应改 {taskId}、抽共享底座跨 3 service+任务模型+前端） | P1 | ✅ 已交付@v0.16.0 |
 | FR-324 | 短操作 loading 与文件传输进度补齐（增强 FR-075 反编译 / FR-068 探针 / FR-008/070 文件——用户「1-3 秒短任务要 loading 或进度条」）：① 反编译、探针部署点击后 loading 且完成前防重复点；② 资源管理器 新建/重命名/删除/保存 文件 loading 反馈；③ 文件上传显示百分比进度条（axios onUploadProgress），下载有反馈（浏览器原生下载条 + 内联「下载中」提示）。纯前端 UX 补齐，无数据模型/API 变更（免 spec） | P2 | ✅ 已交付@v0.16.0 |
+| FR-325 | Worker reconnect 失败孤儿进程接管兜底（fix，FR-310 孤儿评估缺口 (a)，ADR-003 守护链路；真机事故实证：FR-277 主机实例 1-86876de3 启动报 Paper `session.lock already locked`——前次运行的孤儿 java 仍活着占世界锁）：Worker 重启接管扫描中 wrapper 存活但 reconnect 拨号失败时，现只删 PID 文件（`manager.go` reconnect 失败分支），活进程从此永久失联。改为保留 PID 文件重试有界次数，仍失败则按 PID 记录的 WrapperPID 杀进程树并记日志，杜绝孤儿永久化（免 spec） | P1 | 📋 计划 |
+| FR-326 | CP↔Worker 实例反向对账（feat，FR-310 孤儿评估缺口 (b)）：Worker 恢复/在跑的实例若 CP 已无记录会永远跑（正向对账已有：CP 以心跳为真源置 STOPPED；反向缺失）。Worker 心跳携带在管实例清单，CP 对无记录者下发处置指令（需防误杀护栏：宽限期+人工确认开关），proto+双侧改造（需 spec，后续批次） | P2 | 📋 计划 |
+| FR-327 | 页眉任务中心下拉面板（增强 FR-183 任务中心）：点击页眉任务中心入口弹下拉面板（最近 N 条任务：kind/名称/stage 进度/终态徽章），面板内点条目跳任务中心对应项；运行中任务有进度反馈；模态外点击关闭（免 spec） | P2 | 📋 计划 |
+| FR-328 | 一键搭建后端子服 MC 版本下拉不可滚动（fix，增强 FR-034 搭建向导，真机复现）：向导后端子服步骤的 MC 版本下拉列表超出可视高度后无法滚动，长版本列表不可选。修复下拉内容区滚动（受模态内 overflow 约束影响一并核查），并核查向导内其他下拉同病（免 spec） | P1 | 📋 计划 |
+| FR-329 | 任务中心进度自动刷新（增强 FR-183/319，真机反馈「搭建进度要手动刷新才动」）：任务中心页与页眉任务入口在存在非终态任务时自动轮询刷新（TanStack Query refetchInterval，运行中 ~2s/空闲停轮询），任务到终态即停；SSE 回推列为后续可选不在本 FR（免 spec） | P1 | 📋 计划 |
+| FR-330 | 服务器核心节点级缓存（增强 FR-034/319 搭建链路 + FR-179 制品缓存，真机痛点：Paper CDN 节点侧 ~200KB/s，47MB 核心每次搭建都重新下载）：Worker DownloadCore 先查节点核心缓存（sha256 已知按 sha 键、否则 core+version+build 键，落数据根 cache 区），命中跳过远程下载直接复制/链接入实例目录；未命中下载完成校验后入缓存再交付；缓存条目在节点制品缓存面板可见可清理；provision 任务 stage 文案区分「缓存命中/下载中」（免 spec） | P1 | 📋 计划 |
+| FR-331 | 搭建中实例硬性禁止启动（fix，增强 FR-319 二轮②启动闸，真机反馈：statusReason「正在下载核心（完成前请勿启动）」仅文案提示，仍可点启动）：provision 任务未终态的实例，前端启动按钮直接禁用（tooltip 指明搭建中+引导看任务中心），后端启动闸核查补漏确保各入口（单启/批量/一键）一律 4xx 拒绝——文案劝阻升级为状态强制（免 spec） | P1 | 📋 计划 |
+| FR-332 | 折叠态导航分类图标点击跳转分类首页（fix，增强 FR-131/181 侧边栏折叠，真机复现：折叠后点击分类图标无反应无法跳转）：折叠态下点击分类图标默认导航到该分类下第一个页面（并展示激活态）；展开态行为不变（免 spec） | P2 | 📋 计划 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
