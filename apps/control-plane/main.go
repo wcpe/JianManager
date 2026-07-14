@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"flag"
 	"fmt"
 	"log"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/database"
 	cpembed "github.com/wcpe/JianManager/internal/controlplane/embed"
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/router"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
@@ -25,6 +27,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "reset-password" {
+		runResetPassword(os.Args[2:])
+		return
+	}
 	cfgPath := ""
 	if len(os.Args) > 1 {
 		cfgPath = os.Args[1]
@@ -549,4 +555,51 @@ func initLogger(cfg config.LogConfig) {
 		handler = slog.NewTextHandler(os.Stdout, opts)
 	}
 	slog.SetDefault(slog.New(handler))
+}
+
+// runResetPassword 本机应急重置用户密码子命令（FR-333）。
+// 用法: jianmanager-cp reset-password -u <用户名> [-c <config>] [-p <新密码>] [-list]
+// 不给 -p 时生成随机密码并打印。密码重置同时解锁账号（Status 置回 Active）。
+// 命令落在 CP 二进制自身而非 jmctl：数据库仅 Control Plane 可读写（架构不变量），
+// jmctl 按 ADR-041 不得直连 DB。CP 服务运行中亦可执行（SQLite 短写由驱动 busy 兜底）。
+func runResetPassword(args []string) {
+	fs := flag.NewFlagSet("reset-password", flag.ExitOnError)
+	cfgPath := fs.String("c", "", "配置文件路径（默认与主程序相同解析规则）")
+	username := fs.String("u", "", "要重置的用户名")
+	password := fs.String("p", "", "新密码（留空自动生成 16 位随机密码）")
+	list := fs.Bool("list", false, "仅列出全部用户名后退出")
+	_ = fs.Parse(args)
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		log.Fatalf("加载配置失败: %v", err)
+	}
+	db, err := database.New(cfg.Database)
+	if err != nil {
+		log.Fatalf("连接数据库失败: %v", err)
+	}
+
+	if *list {
+		var names []string
+		if err := db.Model(&model.User{}).Order("id").Pluck("username", &names).Error; err != nil {
+			log.Fatalf("查询用户失败: %v", err)
+		}
+		fmt.Printf("共 %d 个用户: %s\n", len(names), strings.Join(names, ", "))
+		return
+	}
+
+	if *username == "" {
+		log.Fatal("缺少 -u <用户名>（可先用 -list 查看现有用户）")
+	}
+	plain := *password
+	if plain == "" {
+		if plain, err = service.GenerateResetPassword(); err != nil {
+			log.Fatalf("%v", err)
+		}
+	}
+	user, err := service.ResetUserPassword(db, *username, plain)
+	if err != nil {
+		log.Fatalf("重置失败: %v", err)
+	}
+	fmt.Printf("密码已重置并解锁账号\n用户: %s\n新密码: %s\n", user.Username, plain)
 }
