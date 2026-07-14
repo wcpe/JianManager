@@ -17,6 +17,7 @@ import {
   useDrainNode,
   useDeleteNode,
   type NodeInfo,
+  type NodeDeleteBlockedInstance,
 } from '@/api/nodes'
 import { useInstances } from '@/api/instances'
 import api from '@/api/client'
@@ -50,6 +51,18 @@ import {
 import { toneChipClass } from '@/lib/tone'
 import { cn } from '@jianmanager/ui'
 
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
+import {
+  scrollableDialogContentClass,
+  ScrollableDialogBody,
+} from '@jianmanager/ui/components/scrollable-dialog'
 import NodeJDKPanel from '@/components/NodeJDKPanel'
 import NodePortsPanel from '@/components/NodePortsPanel'
 import NodeArtifactCachePanel from '@/components/NodeArtifactCachePanel'
@@ -70,6 +83,68 @@ function formatBytes(bytes: number): string {
 
 /** 待二次确认的危险节点操作（FR-048）。 */
 type PendingAction = { kind: 'drain' | 'delete'; node: NodeInfo }
+
+/** 节点下线被实例守卫 409 拒绝的上下文（FR-309）：节点 + 名下实例清单。 */
+type DeleteConflict = { node: NodeInfo; instances: NodeDeleteBlockedInstance[] }
+
+/**
+ * 节点下线被实例守卫拒绝的清单模态（FR-309）：列出名下实例（名称 + 状态）；
+ * 离线节点额外提供「强制下线」入口（级联删平台记录、明示不清理远端文件）。
+ */
+function NodeDeleteBlockedDialog({
+  conflict,
+  onClose,
+  onForce,
+}: {
+  conflict: DeleteConflict | null
+  onClose: () => void
+  onForce: () => void
+}) {
+  const { t } = useTranslation()
+  // 实例状态 → 既有 instances.* i18n 文案；未知状态原样展示兜底。
+  const statusText = (status: string) => {
+    const keys: Record<string, string> = {
+      STOPPED: 'instances.stopped',
+      STARTING: 'instances.starting',
+      RUNNING: 'instances.running',
+      STOPPING: 'instances.stopping',
+      CRASHED: 'instances.crashed',
+    }
+    return keys[status] ? t(keys[status]) : status
+  }
+  const offline = conflict !== null && conflict.node.status !== 1
+  return (
+    <Dialog open={conflict !== null} onOpenChange={(v: boolean) => { if (!v) onClose() }}>
+      <DialogContent className={scrollableDialogContentClass}>
+        <DialogHeader>
+          <DialogTitle>{t('nodes.deleteBlockedTitle')}</DialogTitle>
+          <DialogDescription>
+            {t('nodes.deleteBlockedDesc', { name: conflict?.node.name, count: conflict?.instances.length })}
+          </DialogDescription>
+        </DialogHeader>
+        <ScrollableDialogBody className="space-y-1.5">
+          {(conflict?.instances ?? []).map((inst) => (
+            <div key={inst.id} className="flex items-center justify-between gap-2 rounded-md border px-3 py-1.5 text-sm">
+              <span className="min-w-0 truncate" title={inst.name}>{inst.name}</span>
+              <Badge variant="outline" className="shrink-0 text-[11px] text-muted-foreground">
+                {statusText(inst.status)}
+              </Badge>
+            </div>
+          ))}
+          {offline && (
+            <p className="pt-1 text-xs text-muted-foreground">{t('nodes.deleteBlockedForceHint')}</p>
+          )}
+        </ScrollableDialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
+          {offline && (
+            <Button variant="destructive" onClick={onForce}>{t('nodes.forceDelete')}</Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 /** 右栏分段（FR-177 §3.3 + FR-185）：概览/实例/JDK/缓存/端口/代理/监控/坏节点修复。 */
 type DetailTab = 'overview' | 'instances' | 'runtime' | 'cache' | 'ports' | 'proxy' | 'monitor' | 'repair'
@@ -380,6 +455,9 @@ export default function NodesPage() {
   const tab = readDetailTab(searchParams)
   const [query, setQuery] = useState('')
   const [pending, setPending] = useState<PendingAction | null>(null)
+  // FR-309：下线被实例守卫 409 拒绝 → 清单模态；离线节点走强制下线需再过一道输入名称确认。
+  const [conflict, setConflict] = useState<DeleteConflict | null>(null)
+  const [forcePending, setForcePending] = useState<DeleteConflict | null>(null)
   const [addOpen, setAddOpen] = useState(false)
 
   // 选中节点写入 URL（保留当前 tab 等其它参数）。
@@ -455,12 +533,30 @@ export default function NodesPage() {
           toast.error(e?.response?.data?.message || t('common.error')),
       })
     } else {
-      del.mutate(node.id, {
+      del.mutate({ id: node.id }, {
         onSuccess: () => toast.success(t('nodes.deleted')),
-        onError: (e: Error & { response?: { data?: { message?: string } } }) =>
-          toast.error(e?.response?.data?.message || t('common.error')),
+        onError: (e: Error & { response?: { status?: number; data?: { error?: string; message?: string; instances?: NodeDeleteBlockedInstance[] } } }) => {
+          // FR-309：名下有实例被守卫拒绝 → 弹实例清单模态（离线节点内含强制下线入口）。
+          if (e?.response?.status === 409 && e.response.data?.error === 'NODE_HAS_INSTANCES') {
+            setConflict({ node, instances: e.response.data.instances ?? [] })
+            return
+          }
+          toast.error(e?.response?.data?.message || t('common.error'))
+        },
       })
     }
+  }
+
+  // FR-309 强制下线（仅离线节点）：级联删除名下实例的平台记录，明示不清理远端文件。
+  const confirmForceDelete = () => {
+    if (!forcePending) return
+    const { node } = forcePending
+    setForcePending(null)
+    del.mutate({ id: node.id, force: true }, {
+      onSuccess: (res) => toast.success(t('nodes.forceDeleted', { count: res.data.instancesPurged })),
+      onError: (e: Error & { response?: { data?: { message?: string } } }) =>
+        toast.error(e?.response?.data?.message || t('common.error')),
+    })
   }
 
   const summaryChips: SummaryChip[] = [
@@ -597,6 +693,28 @@ export default function NodesPage() {
         scope="platform"
         onConfirm={confirmPending}
         onCancel={() => setPending(null)}
+      />
+      {/* FR-309：下线被实例守卫拒绝的清单模态 + 离线节点强制下线确认（输入名称）。 */}
+      <NodeDeleteBlockedDialog
+        conflict={conflict}
+        onClose={() => setConflict(null)}
+        onForce={() => {
+          setForcePending(conflict)
+          setConflict(null)
+        }}
+      />
+      <DangerConfirm
+        open={forcePending !== null}
+        title={t('nodes.forceDeleteConfirmTitle')}
+        description={t('nodes.forceDeleteConfirmDesc', {
+          name: forcePending?.node.name,
+          count: forcePending?.instances.length,
+        })}
+        confirmLabel={t('nodes.forceDelete')}
+        confirmText={forcePending?.node.name}
+        scope="platform"
+        onConfirm={confirmForceDelete}
+        onCancel={() => setForcePending(null)}
       />
     </div>
   )

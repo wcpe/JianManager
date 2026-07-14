@@ -7,6 +7,7 @@ import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
+import { useAuthStore } from '@/stores/auth'
 import NodesPage from './NodesPage'
 
 // 监控分段的 TimeSeriesChart 依赖 ResizeObserver 实测宽度，jsdom 无之 → 补桩使图表不崩（项目既有约定）。
@@ -35,6 +36,19 @@ function stubMetricSeries() {
       HttpResponse.json({ resolution: 'raw', from: '', to: '', series: [] }),
     ),
   )
+}
+
+/** 平台管理员 JWT：危险操作门禁（DangerConfirm scope=platform）按 role=10 放行（同 GroupsPage 惯例）。 */
+function adminJwt(role = 10): string {
+  const payload = btoa(JSON.stringify({ userId: 1, username: 'admin', role, exp: Math.floor(Date.now() / 1000) + 900 }))
+  return `mock.${payload}.sig`
+}
+
+/** 登录为平台管理员：写 sessions（过 requireAuth）+ 同步 auth store role（过危险操作门禁）。 */
+function loginPlatformAdmin(): void {
+  const token = adminJwt(10)
+  loginMockUser(token)
+  useAuthStore.getState().login(token, 'test-refresh-token')
 }
 
 describe('NodesPage（mock 假后端）', () => {
@@ -121,6 +135,37 @@ describe('NodesPage（mock 假后端）', () => {
     // 切回「概览」→ tab 参数被省略（保持链接简洁）。
     await user.click(await screen.findByRole('button', { name: '概览' }))
     await waitFor(() => expect(new URLSearchParams(window.location.search).get('tab')).toBeNull())
+  })
+
+  it('离线节点名下有实例：下线被 409 拒并列实例清单，强制下线级联删除（FR-309）', async () => {
+    loginPlatformAdmin()
+    stubInstances()
+    const user = userEvent.setup()
+    renderWithProviders(<NodesPage />)
+
+    // 选中离线节点 beta（seed id=2，其名下有 seed 实例，如 creative-1）。
+    await user.click(await screen.findByText('beta'))
+    await screen.findByRole('heading', { name: 'beta' })
+    await user.click(screen.getByRole('button', { name: '操作' }))
+    await user.click(await screen.findByRole('menuitem', { name: '下线' }))
+
+    // 第一道确认（既有 DangerConfirm）：输入节点名后确认。
+    await user.type(await screen.findByPlaceholderText('beta'), 'beta')
+    await user.click(screen.getByRole('button', { name: '下线' }))
+
+    // 守卫 409 → 实例清单模态：列出名下实例 + 离线节点的强制下线入口。
+    expect(await screen.findByText('无法下线：节点名下仍有实例')).toBeInTheDocument()
+    expect(await screen.findByText('creative-1')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '强制下线' }))
+
+    // 第二道确认（强制级联，文案明示不清理远端文件）：再次输入节点名。
+    expect(await screen.findByText('强制下线节点')).toBeInTheDocument()
+    expect(screen.getByText(/不会被清理/)).toBeInTheDocument()
+    await user.type(await screen.findByPlaceholderText('beta'), 'beta')
+    await user.click(screen.getByRole('button', { name: '强制下线' }))
+
+    // 级联删除成功：节点从列表消失。
+    await waitFor(() => expect(screen.queryByText('beta')).not.toBeInTheDocument())
   })
 
   it('注入 500：节点列表请求失败，列表区不崩溃（无节点行）', async () => {

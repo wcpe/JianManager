@@ -154,12 +154,33 @@ export function useDrainNode() {
   })
 }
 
-/** 主动下线节点：解除注册并保留记录（FR-048）。 */
+/** 节点删除被实例守卫拒绝时随 409 返回的实例摘要（FR-309）。 */
+export interface NodeDeleteBlockedInstance {
+  id: number
+  name: string
+  status: string
+}
+
+/** 节点删除结果（FR-309）：force 级联时报告删除的实例记录数。 */
+export interface NodeDeleteResult {
+  message: string
+  instancesPurged: number
+}
+
+/**
+ * 主动下线节点：解除注册并保留记录（FR-048）。
+ * FR-309：名下有实例回 409 NODE_HAS_INSTANCES（含实例清单）；离线节点可 force 级联
+ * 删除实例平台记录（不清理远端文件），故成功后同时失效实例列表。
+ */
 export function useDeleteNode() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: number) => api.delete(`/nodes/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['nodes'] }),
+    mutationFn: ({ id, force }: { id: number; force?: boolean }) =>
+      api.delete<NodeDeleteResult>(`/nodes/${id}`, force ? { params: { force: true } } : undefined),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['nodes'] })
+      qc.invalidateQueries({ queryKey: ['instances'] })
+    },
   })
 }
 

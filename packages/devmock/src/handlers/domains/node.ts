@@ -560,8 +560,27 @@ export const handlers = [
     const id = Number((info.params as { id: string }).id)
     const n = nodes.get(id)
     if (!n) return HttpResponse.json({ error: 'NOT_FOUND', message: '节点不存在' }, { status: 404 })
+    // FR-309 实例守卫（对齐真后端）：在线一律拒；名下有实例且未 force → 409 携清单；
+    // 离线 + force=true → 级联删除实例记录（mock 中直接移除）。
+    if (n.status === 1) {
+      return HttpResponse.json({ error: 'BUSINESS_ERROR', message: '不能删除在线节点' }, { status: 422 })
+    }
+    const force = new URL(info.request.url).searchParams.get('force') === 'true'
+    const instances = db<{ id: number; nodeId: number; name: string; status: string }>('instances')
+    const owned = instances.list().filter((i) => i.nodeId === id)
+    if (owned.length > 0 && !force) {
+      return HttpResponse.json(
+        {
+          error: 'NODE_HAS_INSTANCES',
+          message: `节点名下仍有 ${owned.length} 个实例，请先删除或迁移实例后再下线`,
+          instances: owned.map((i) => ({ id: i.id, name: i.name, status: i.status })),
+        },
+        { status: 409 },
+      )
+    }
+    for (const i of owned) instances.remove(i.id)
     nodes.remove(id)
-    return new HttpResponse(null, { status: 204 })
+    return HttpResponse.json({ message: '已下线', instancesPurged: owned.length })
   }),
 
   domainRoute('post', '/nodes/enroll-token', async (info) => {
