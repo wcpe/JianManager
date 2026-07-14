@@ -38,7 +38,8 @@ export default function DirectoryPicker({ nodeId, onPick, onCancel, initialPath 
         <button
           type="button"
           onClick={() => refetch()}
-          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+          disabled={isFetching}
+          className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-60"
           title={t('common.refresh')}
         >
           <RefreshCw className={`size-3.5 ${isFetching ? 'animate-spin' : ''}`} />

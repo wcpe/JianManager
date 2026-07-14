@@ -171,9 +171,10 @@ function RefreshButton() {
     <button
       type="button"
       onClick={refresh}
+      disabled={spinning}
       aria-label={t('header.refresh')}
       title={t('header.refresh')}
-      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground disabled:pointer-events-none disabled:opacity-60"
     >
       <RotateCw className={cn('size-4', spinning && 'animate-spin')} />
     </button>

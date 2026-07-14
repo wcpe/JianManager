@@ -306,6 +306,7 @@ function BrowserSection() {
           size="icon-xs"
           className="text-muted-foreground"
           onClick={() => void refetch()}
+          disabled={isFetching}
           aria-label={t('storage.refresh')}
         >
           <RefreshCw className={cn('size-3.5', isFetching && 'animate-spin')} />

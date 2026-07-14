@@ -34,6 +34,8 @@ export default function LoginPage() {
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
+    // 在途短路：pending 中回车/再点不重发登录请求（验收矩阵 #1 防重复提交）。
+    if (login.isPending) return
     setError('')
 
     login.mutate(
@@ -62,7 +64,7 @@ export default function LoginPage() {
           <p className="mt-1 text-sm text-muted-foreground">{t('login.subtitle')}</p>
         </div>
         {error && (
-          <div className="mb-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>
+          <div role="alert" className="mb-4 rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -72,6 +74,7 @@ export default function LoginPage() {
               id="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              disabled={login.isPending}
               required
             />
           </div>
@@ -81,6 +84,7 @@ export default function LoginPage() {
               id="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              disabled={login.isPending}
               required
             />
           </div>
