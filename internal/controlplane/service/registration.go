@@ -82,6 +82,100 @@ type UpdateRegistrationRequest struct {
 	Enabled    *bool   `json:"enabled"`
 }
 
+// ProxyTopology 单个代理及其注册关系（拓扑聚合单元，FR-335）。
+// 字段与 model.Instance 概要（proxy 侧）+ registrations（与 GET /proxies/:id/registrations 同构）对齐。
+type ProxyTopology struct {
+	ID            uint                 `json:"id"`
+	Name          string               `json:"name"`
+	Status        model.InstanceStatus `json:"status"`
+	ServerPort    int                  `json:"serverPort"`
+	NodeID        uint                 `json:"nodeId"`
+	Registrations []RegistrationView   `json:"registrations"`
+}
+
+// Topology 一次组装全量群组拓扑（FR-335）：所有 role=proxy 实例 + 各自注册（含后端概要）。
+// service 层固定次数 IN 查询，无 per-proxy/per-registration 循环单查：
+//  1. 一次取全部 proxy 概要；
+//  2. 一次按 proxy_id IN 取全量注册（排序与 List 一致 priority asc, id asc）；
+//  3. 一次按 distinct backendId IN 取后端概要（替代 per-registration backendBrief）。
+//
+// 同构性：每个 proxy 的 registrations 与对其单发 List(proxyID) 逐字段一致；
+// 后端实例已删时 backend 为 nil（与 backendBrief 查不到返 nil 一致）。
+// 第二返回值 existing 为「本次拓扑涉及的全部实例 ID 集合」（proxy + 有效 backend），
+// 供上层（拓扑 handler）裁剪 network 成员归属中的悬空成员。
+func (s *RegistrationService) Topology() ([]ProxyTopology, map[uint]bool, error) {
+	// 1. 全部 proxy 概要（保序 id asc）。
+	var proxies []model.Instance
+	if err := s.db.Where("role = ?", model.InstanceRoleProxy).Order("id asc").Find(&proxies).Error; err != nil {
+		return nil, nil, fmt.Errorf("查询代理实例失败: %w", err)
+	}
+	existing := make(map[uint]bool, len(proxies))
+	proxyIDs := make([]uint, 0, len(proxies))
+	for _, p := range proxies {
+		existing[p.ID] = true
+		proxyIDs = append(proxyIDs, p.ID)
+	}
+
+	// 2. 一次取全量注册（按 proxy_id IN），排序与 List 一致。
+	var regs []model.ServerRegistration
+	if len(proxyIDs) > 0 {
+		if err := s.db.Where("proxy_id IN ?", proxyIDs).Order("priority asc, id asc").Find(&regs).Error; err != nil {
+			return nil, nil, fmt.Errorf("查询注册关系失败: %w", err)
+		}
+	}
+
+	// 3. 一次取后端概要（distinct backendId IN）。
+	backendIDSet := make(map[uint]struct{})
+	for _, r := range regs {
+		backendIDSet[r.BackendID] = struct{}{}
+	}
+	backendIDs := make([]uint, 0, len(backendIDSet))
+	for id := range backendIDSet {
+		backendIDs = append(backendIDs, id)
+	}
+	briefs := make(map[uint]*BackendBrief, len(backendIDs))
+	if len(backendIDs) > 0 {
+		var insts []model.Instance
+		if err := s.db.Where("id IN ?", backendIDs).Find(&insts).Error; err != nil {
+			return nil, nil, fmt.Errorf("查询后端概要失败: %w", err)
+		}
+		for i := range insts {
+			inst := insts[i]
+			existing[inst.ID] = true
+			briefs[inst.ID] = &BackendBrief{
+				ID:         inst.ID,
+				Name:       inst.Name,
+				Role:       inst.Role,
+				NodeID:     inst.NodeID,
+				ServerPort: inst.ServerPort,
+				Status:     inst.Status,
+			}
+		}
+	}
+
+	// 4. 内存组装（regs 已全局按 priority/id 排序，按 proxy 分桶保持局部有序）。
+	byProxy := make(map[uint][]RegistrationView, len(proxies))
+	for _, r := range regs {
+		byProxy[r.ProxyID] = append(byProxy[r.ProxyID], RegistrationView{ServerRegistration: r, Backend: briefs[r.BackendID]})
+	}
+	out := make([]ProxyTopology, 0, len(proxies))
+	for _, p := range proxies {
+		views := byProxy[p.ID]
+		if views == nil {
+			views = []RegistrationView{}
+		}
+		out = append(out, ProxyTopology{
+			ID:            p.ID,
+			Name:          p.Name,
+			Status:        p.Status,
+			ServerPort:    p.ServerPort,
+			NodeID:        p.NodeID,
+			Registrations: views,
+		})
+	}
+	return out, existing, nil
+}
+
 // List 列出某代理的注册关系（按 priority 升序），附后端概要。
 func (s *RegistrationService) List(proxyID uint) ([]RegistrationView, error) {
 	if _, err := s.requireProxy(proxyID); err != nil {

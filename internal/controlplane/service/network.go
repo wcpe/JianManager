@@ -29,14 +29,25 @@ func NewNetworkService(db *gorm.DB, instance *InstanceService) *NetworkService {
 	return &NetworkService{db: db, instance: instance}
 }
 
-// NetworkSummary 群组列表项（含成员数）。
+// MemberStatusCounts 群组成员按运行状态的计数桶（五态零补齐，FR-335）。
+// 供列表页免详情请求直接渲染健康分布条。
+type MemberStatusCounts struct {
+	Running  int `json:"running"`
+	Stopped  int `json:"stopped"`
+	Crashed  int `json:"crashed"`
+	Starting int `json:"starting"`
+	Stopping int `json:"stopping"`
+}
+
+// NetworkSummary 群组列表项（含成员数与成员健康计数，FR-032/FR-335）。
 type NetworkSummary struct {
-	ID          uint      `json:"id"`
-	UUID        string    `json:"uuid"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	MemberCount int       `json:"memberCount"`
-	CreatedAt   time.Time `json:"createdAt"`
+	ID           uint               `json:"id"`
+	UUID         string             `json:"uuid"`
+	Name         string             `json:"name"`
+	Description  string             `json:"description"`
+	MemberCount  int                `json:"memberCount"`
+	MemberStatus MemberStatusCounts `json:"memberStatus"`
+	CreatedAt    time.Time          `json:"createdAt"`
 }
 
 // NetworkMemberView 群组成员实例概要。
@@ -73,24 +84,119 @@ type BatchActionResult struct {
 	Results   []BatchActionItemResult `json:"results"`
 }
 
-// List 返回所有群组及成员数（新→旧）。
+// List 返回所有群组及成员健康计数（新→旧，FR-335）。
+// 一次 JOIN+GROUP BY 聚合出全部群组按状态的成员计数（替代原 per-network Count 循环）；
+// INNER JOIN 天然剔除悬空成员（实例已删但 network_members 残留），与 Get 的成员列表口径一致。
+// memberCount 为五桶之和（即实际存在的成员数）。
 func (s *NetworkService) List() ([]NetworkSummary, error) {
 	var networks []model.Network
 	if err := s.db.Order("created_at desc").Find(&networks).Error; err != nil {
 		return nil, fmt.Errorf("查询群组列表失败: %w", err)
 	}
+
+	// 一次聚合：每个 (network_id, status) 一行计数。
+	type statusCountRow struct {
+		NetworkID uint
+		Status    model.InstanceStatus
+		Cnt       int
+	}
+	var rows []statusCountRow
+	if err := s.db.
+		Model(&model.NetworkMember{}).
+		Select("network_members.network_id AS network_id, instances.status AS status, COUNT(*) AS cnt").
+		Joins("JOIN instances ON instances.id = network_members.instance_id").
+		Group("network_members.network_id, instances.status").
+		Scan(&rows).Error; err != nil {
+		return nil, fmt.Errorf("聚合群组成员状态失败: %w", err)
+	}
+
+	counts := make(map[uint]*MemberStatusCounts, len(networks))
+	for _, r := range rows {
+		c := counts[r.NetworkID]
+		if c == nil {
+			c = &MemberStatusCounts{}
+			counts[r.NetworkID] = c
+		}
+		addStatusCount(c, r.Status, r.Cnt)
+	}
+
 	out := make([]NetworkSummary, 0, len(networks))
 	for _, n := range networks {
-		var cnt int64
-		s.db.Model(&model.NetworkMember{}).Where("network_id = ?", n.ID).Count(&cnt)
+		var mc MemberStatusCounts
+		if c := counts[n.ID]; c != nil {
+			mc = *c
+		}
 		out = append(out, NetworkSummary{
-			ID:          n.ID,
-			UUID:        n.UUID,
-			Name:        n.Name,
-			Description: n.Description,
-			MemberCount: int(cnt),
-			CreatedAt:   n.CreatedAt,
+			ID:           n.ID,
+			UUID:         n.UUID,
+			Name:         n.Name,
+			Description:  n.Description,
+			MemberCount:  mc.Running + mc.Stopped + mc.Crashed + mc.Starting + mc.Stopping,
+			MemberStatus: mc,
+			CreatedAt:    n.CreatedAt,
 		})
+	}
+	return out, nil
+}
+
+// addStatusCount 把一个状态的计数累加进对应桶（未知状态计入 stopped，与前端中性桶口径一致）。
+func addStatusCount(c *MemberStatusCounts, status model.InstanceStatus, n int) {
+	switch status {
+	case model.InstanceStatusRunning:
+		c.Running += n
+	case model.InstanceStatusCrashed:
+		c.Crashed += n
+	case model.InstanceStatusStarting:
+		c.Starting += n
+	case model.InstanceStatusStopping:
+		c.Stopping += n
+	default: // STOPPED 及未知
+		c.Stopped += n
+	}
+}
+
+// MembersIndex 一次返回所有群组的成员归属（network_id → 成员实例 ID 列表，FR-335）。
+// 供拓扑聚合端点按 network 分组布局；不 JOIN 实例表（悬空成员由聚合端点侧按 proxy/backend 存在性自然过滤）。
+func (s *NetworkService) MembersIndex() (map[uint][]uint, error) {
+	var members []model.NetworkMember
+	if err := s.db.Order("network_id asc, id asc").Find(&members).Error; err != nil {
+		return nil, fmt.Errorf("查询群组成员索引失败: %w", err)
+	}
+	idx := make(map[uint][]uint)
+	for _, m := range members {
+		idx[m.NetworkID] = append(idx[m.NetworkID], m.InstanceID)
+	}
+	return idx, nil
+}
+
+// NetworkTopoBrief 供拓扑分组布局的群组概要（含成员归属，FR-335）。
+type NetworkTopoBrief struct {
+	ID                uint   `json:"id"`
+	Name              string `json:"name"`
+	MemberInstanceIDs []uint `json:"memberInstanceIds"`
+}
+
+// TopoBriefs 返回所有群组的分组概要（id/name/成员归属），供拓扑聚合端点（FR-335）。
+// 成员归属仅收敛到「实际存在的实例 ID」——existing 为存在的实例 ID 集合（proxy+backend），
+// 不在其中的悬空成员被剔除，与 api.md「悬空成员不出现」一致。
+func (s *NetworkService) TopoBriefs(existing map[uint]bool) ([]NetworkTopoBrief, error) {
+	var networks []model.Network
+	if err := s.db.Order("created_at desc").Find(&networks).Error; err != nil {
+		return nil, fmt.Errorf("查询群组列表失败: %w", err)
+	}
+	idx, err := s.MembersIndex()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]NetworkTopoBrief, 0, len(networks))
+	for _, n := range networks {
+		ids := make([]uint, 0, len(idx[n.ID]))
+		for _, iid := range idx[n.ID] {
+			if existing[iid] {
+				ids = append(ids, iid)
+			}
+		}
+		out = append(out, NetworkTopoBrief{ID: n.ID, Name: n.Name, MemberInstanceIDs: ids})
 	}
 	return out, nil
 }

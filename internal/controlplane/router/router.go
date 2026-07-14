@@ -350,6 +350,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		networkHandler := NewNetworkHandler(svcs.Network)
 		networkHandler.RegisterRoutes(admin)
 
+		// 群组拓扑聚合（FR-335）：一次返全量 proxy 注册 + network 成员归属，消 per-proxy N+1。平台管理员。
+		topologyHandler := NewTopologyHandler(svcs.Registration, svcs.Network)
+		topologyHandler.RegisterRoutes(admin)
+
 		// 备份远程存储后端：含凭证 env 引用，平台级配置，限平台管理员（FR-057）。
 		if svcs.BackupStorage != nil {
 			backupStorageHandler := NewBackupStorageHandler(svcs.BackupStorage)
