@@ -185,7 +185,7 @@ export default function InstancesPage() {
     memLimitMb: number
     diskLimitMb: number
   } | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; inPlace?: boolean } | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number; name: string; inPlace?: boolean; running?: boolean } | null>(null)
   const [killTarget, setKillTarget] = useState<{ id: number; name: string } | null>(null)
   // 批量操作选中的实例 ID 集合（FR-058）。
   const [selectedIds, setSelectedIds] = useState<number[]>([])
@@ -473,7 +473,13 @@ export default function InstancesPage() {
       })}
       onProxy={() => setManageProxy({ id: inst.id, name: inst.name })}
       onClone={() => setCloneTarget({ id: inst.id, name: inst.name })}
-      onDelete={() => setDeleteTarget({ id: inst.id, name: inst.name, inPlace: !!inst.workDirInPlace })}
+      onDelete={() => setDeleteTarget({
+        id: inst.id,
+        name: inst.name,
+        inPlace: !!inst.workDirInPlace,
+        // FR-310：非停止态删除由后端编排「先停止（超时强杀）再删除」，确认框据此提示。
+        running: inst.status !== 'STOPPED' && inst.status !== 'CRASHED',
+      })}
     />
   )
 
@@ -890,7 +896,11 @@ export default function InstancesPage() {
       <DangerConfirm
         open={deleteTarget !== null}
         title={t('danger.deleteInstanceTitle', { name: deleteTarget?.name ?? '' })}
-        description={deleteTarget?.inPlace ? t('importServer.deleteInPlaceDesc') : t('danger.deleteInstanceDesc')}
+        description={[
+          // FR-310：运行中删除先停止再删除，确认时明示进程处置方式。
+          deleteTarget?.running ? t('danger.deleteInstanceStopFirst') : null,
+          deleteTarget?.inPlace ? t('importServer.deleteInPlaceDesc') : t('danger.deleteInstanceDesc'),
+        ].filter(Boolean).join(' ')}
         confirmLabel={t('common.delete')}
         confirmText={deleteTarget?.name}
         scope="group"
@@ -1537,7 +1547,8 @@ function FilterSelect({
 
 /**
  * 实例行的「⋯」次要操作菜单（FR-138）：标签 / 资源限额 / 代理后端 / 克隆 / 删除收入下拉，
- * 行内只保留启停/重启主操作。运行态下克隆/删除改禁用 + tooltip（非消失），删除标红。
+ * 行内只保留启停/重启主操作。运行态下克隆改禁用 + tooltip（非消失）；删除标红且运行态
+ * 仍可用（FR-310：后端编排先停止再删除），tooltip 提示该行为。
  */
 function InstanceRowMenu({
   inst,
@@ -1557,7 +1568,8 @@ function InstanceRowMenu({
   onDelete: () => void
 }) {
   const { t } = useTranslation()
-  // 克隆/删除要求实例已停止（运行/过渡态禁用并提示原因，而非隐藏）。
+  // 克隆要求实例已停止（运行/过渡态禁用并提示原因，而非隐藏）；
+  // 删除运行态可用（FR-310 先停再删），仅以 tooltip 提示行为。
   const stopped = inst.status === 'STOPPED' || inst.status === 'CRASHED'
 
   return (
@@ -1595,14 +1607,7 @@ function InstanceRowMenu({
         <DropdownMenuItem
           variant="destructive"
           title={stopped ? undefined : t('instances.deleteRunningHint')}
-          className={stopped ? undefined : 'opacity-50 cursor-not-allowed'}
-          onSelect={(e) => {
-            if (!stopped) {
-              e.preventDefault()
-              return
-            }
-            onDelete()
-          }}
+          onSelect={onDelete}
         >
           {t('common.delete')}
         </DropdownMenuItem>
