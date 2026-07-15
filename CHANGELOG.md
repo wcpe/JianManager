@@ -14,6 +14,9 @@
 - **daemon 跨平台测试发布门禁**：daemon 控制连接回归测试改用短随机临时目录，避免 GitHub Actions Linux runner 的 Unix Socket 路径超过系统上限；实例标识加入随机后缀，消除 Windows Named Pipe 在重复运行时的名称冲突；wrapper 在监听前退出时直接报告真实错误，不再误报为等待超时。此修复仅影响测试稳定性，不改变生产运行逻辑。
 
 ## 0.17.0（2026-07-16）
+### 新增
+- **实例系统级基础指标 + 概览接真去 mock-api（FR-343，feat，增强 FR-170/142，见 `docs/specs/instance-system-metrics/spec.md`；盘问结论：用户「TPS/MSPT mock 假数据」真相 = 实例大多没连 ServerProbe → 无源显占位，后端时序早已真数据）**：①**后端**——`GetInstanceMetrics` 非 docker 分支补采进程 CPU%（gopsutil `CPUPercent`）+ 运行时长（`CreateTime`），连同已有 RSS 内存，让**未部署/未连探针的运行中实例**在概览也有真实 CPU/内存/运行时长（系统直取，无 proto 变更；探针可用时仍优先覆盖富指标）。②**前端概览**——去除写死的 `mock-api` 假火花线（`buildSparkValues(19.8/35)`），改真实 `inst_tps` 时序火花线（`useMetricSeries`），无数据/无探针显「暂无时序数据/需探针」空态而非假图；内存卡无堆上限（无探针）时显 RSS MB 不再显误导的 0%；TPS 卡无探针显「需探针」而非 -1；页眉补运行时长。keepalive 测试同步（概览也是 metricSeries 消费方，「监控页签隐藏归零」断言按 queryKey 精确到监控页签查询）。tsc/lint/vitest 16/16 绿；系统指标属真机/真进程性质，探针链路与 CPU 随负载变化待真机验。
+
 ### 修复
 - **代理无启用后端时启动前拦截（fix，真机复现：代理启动即崩 `java.lang.IllegalArgumentException: No servers defined`）**：无任何启用后端注册的代理直接启动，BungeeCord/Velocity 读到空 `servers` 段抛崩、CP 却已把它转 STARTING。CP 侧 `preflightStart`（FR-314）新增代理就绪校验——纯 DB count（`server_registrations` 中该 proxy 的 `enabled` 注册数），先于节点连通/Worker RPC；为 0 即返 `*PreflightError`（HTTP 422）并写 statusReason「代理未注册任何启用的后端服务器…请先添加并启用至少一个后端子服」，状态不进 STARTING，把「崩一圈才知道」提前为「启动前拦截」。单测覆盖代理无后端拦截 / 有后端放行。
 - **节点离线时「更新探针」快速失败（fix，真机复现：探针未连接时点更新探针一直转圈 loading）**：`ProbeUpdateService.deployTo` 原仅在连接池无客户端时快速失败；但节点离线而池中残留失活反向隧道客户端（`pool.Get` 仍返回 ok）时，`DeployServerProbe`（jar + 依赖 zip 大载荷）阻塞到 `probeDeployTimeout`(30s) 才失败——前端表现为「一直 loading」。`deployTo` 先于 jar/pool 检查新增节点在线快速失败闸：按心跳态 `Node.Status != online` 即返明确原因「节点离线，请先让节点上线再重试」（前端 `useUpdateProbe` 已有 onError toast，秒回错误不空转）。离线闸置于 jar 检查之前，未内嵌 jar 的开发环境亦可命中。单测：节点离线快速失败 / 节点在线但不在池仍报未连接。

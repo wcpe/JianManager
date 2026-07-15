@@ -5,7 +5,7 @@ import { Activity as ActivityIcon, AlertTriangle, Gauge, HardDrive, Layers, Load
 
 import { useInstance, useKillInstance, useRestartInstance, useStartInstance, useStopInstance, isProvisioningInstance } from '@/api/instances'
 import DangerConfirm from '@/components/DangerConfirm'
-import { useInstanceMetrics } from '@/api/metrics'
+import { useInstanceMetrics, useMetricSeries } from '@/api/metrics'
 import { useLogs } from '@/api/logs'
 import { useNodes } from '@/api/nodes'
 import { useServerState } from '@/api/serverState'
@@ -194,6 +194,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
             <MetaCell label={t('serverConsole.online')} value={`${online}/${maxPlayers}`} mono />
             <MetaCell label={t('serverConsole.tps')} value={formatNumber(metrics?.tps, 1)} mono tone={metrics?.tps != null && metrics.tps < 18 ? 'warn' : 'ok'} />
             <MetaCell label={t('serverConsole.mspt')} value={`${formatNumber(metrics?.msptMillis, 0)}ms`} mono tone={metrics?.msptMillis != null && metrics.msptMillis > 50 ? 'danger' : 'ok'} />
+            <MetaCell label={t('serverConsole.uptime')} value={formatUptime(metrics?.uptimeSeconds)} mono />
             <MetaCell label="UUID" value={instance.uuid.slice(0, 8)} mono />
           </div>
         </header>
@@ -224,6 +225,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
             {tab === 'overview' ? (
               <OverviewPanel
                 instanceId={instance.id}
+                instanceUuid={instance.uuid}
                 metrics={metrics}
                 online={online}
                 maxPlayers={maxPlayers}
@@ -273,6 +275,7 @@ function MetaCell({ label, value, mono, tone }: { label: string; value: string; 
 
 function OverviewPanel({
   instanceId,
+  instanceUuid,
   metrics,
   online,
   maxPlayers,
@@ -282,6 +285,7 @@ function OverviewPanel({
   probeConnected,
 }: {
   instanceId: number
+  instanceUuid: string
   metrics?: { tps: number; msptMillis: number; memoryMb: number; heapMaxMb: number; cpuPercent: number; onlinePlayers: number; probeAvailable: boolean }
   online: number
   maxPlayers: number
@@ -291,18 +295,25 @@ function OverviewPanel({
   probeConnected: boolean
 }) {
   const { t } = useTranslation()
-  const memoryPct = metrics?.heapMaxMb ? Math.min(100, Math.round((metrics.memoryMb / metrics.heapMaxMb) * 100)) : 0
+  const hasHeapMax = (metrics?.heapMaxMb ?? 0) > 0
+  const memoryPct = hasHeapMax ? Math.min(100, Math.round((metrics!.memoryMb / metrics!.heapMaxMb) * 100)) : 0
   const cpuPct = Math.round(metrics?.cpuPercent ?? 0)
   const diskPct = Math.round(nodeDiskUsage ?? 0)
   const alertCount = watchItems.length
-  const spark = buildSparkValues(metrics?.tps ?? 19.8, metrics?.msptMillis ?? 35)
+  const hasProbe = metrics?.probeAvailable ?? false
+  // FR-343 去 mock-api：实例 TPS 真实时序火花线（取末段点位），无数据/无探针显空态而非假图。
+  const { data: seriesData } = useMetricSeries({ scope: 'instance', targetId: instanceUuid, range: '1h', metrics: ['inst_tps'], enabled: !!instanceUuid })
+  const tpsBars = (seriesData?.series.find((s) => s.metricKey === 'inst_tps' && s.world === '')?.points ?? [])
+    .filter((p) => p.avg != null)
+    .slice(-24)
+    .map((p) => Math.max(2, Math.min(100, ((p.avg as number) / 20) * 100)))
 
   return (
     <div className="space-y-3">
       <div className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
-        <KpiCard icon={Gauge} label={t('serverConsole.cpu')} value={`${cpuPct}%`} progress={cpuPct} />
-        <KpiCard icon={HardDrive} label={t('serverConsole.memory')} value={`${memoryPct}%`} sub={`${formatNumber(metrics?.memoryMb, 0)} / ${formatNumber(metrics?.heapMaxMb, 0)} MB`} progress={memoryPct} />
-        <KpiCard icon={ActivityIcon} label={t('serverConsole.tps')} value={formatNumber(metrics?.tps, 1)} progress={Math.min(100, ((metrics?.tps ?? 0) / 20) * 100)} />
+        <KpiCard icon={Gauge} label={t('serverConsole.cpu')} value={`${cpuPct}%`} progress={Math.min(100, cpuPct)} />
+        <KpiCard icon={HardDrive} label={t('serverConsole.memory')} value={hasHeapMax ? `${memoryPct}%` : `${formatNumber(metrics?.memoryMb, 0)} MB`} sub={hasHeapMax ? `${formatNumber(metrics?.memoryMb, 0)} / ${formatNumber(metrics?.heapMaxMb, 0)} MB` : 'RSS'} progress={memoryPct} />
+        <KpiCard icon={ActivityIcon} label={t('serverConsole.tps')} value={hasProbe ? formatNumber(metrics?.tps, 1) : t('serverConsole.probeRequired')} progress={hasProbe ? Math.min(100, ((metrics?.tps ?? 0) / 20) * 100) : 0} />
         <KpiCard icon={Users} label={t('serverConsole.online')} value={`${online}/${maxPlayers}`} progress={maxPlayers > 0 ? (online / maxPlayers) * 100 : 0} />
         <KpiCard icon={Layers} label={t('serverConsole.disk')} value={`${diskPct}%`} progress={diskPct} />
         <KpiCard icon={AlertTriangle} label={t('serverConsole.alerts')} value={String(alertCount)} danger={alertCount > 0} progress={alertCount > 0 ? 100 : 0} />
@@ -316,15 +327,18 @@ function OverviewPanel({
 
       <div className="grid gap-3 xl:grid-cols-[1.2fr_1fr_0.9fr]">
         <section className="rounded-lg border bg-card p-3 shadow-soft">
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-sm font-semibold">TPS / MSPT</h2>
-            <span className="font-mono text-[11px] text-muted-foreground">mock-api</span>
-          </div>
-          <div className="grid h-44 grid-cols-24 items-end gap-1 border border-dashed bg-muted/70 p-2">
-            {spark.map((v, i) => (
-              <span key={i} className="rounded-t-sm bg-primary/75" style={{ height: `${v}%` }} />
-            ))}
-          </div>
+          <h2 className="mb-2 text-sm font-semibold">{t('serverConsole.tps')} / {t('serverConsole.mspt')}</h2>
+          {tpsBars.length > 0 ? (
+            <div className="grid h-44 grid-cols-24 items-end gap-1 rounded-md border bg-muted/40 p-2">
+              {tpsBars.map((v, i) => (
+                <span key={i} className="rounded-t-sm bg-primary/75" style={{ height: `${v}%` }} />
+              ))}
+            </div>
+          ) : (
+            <div className="flex h-44 items-center justify-center rounded-md border border-dashed bg-muted/40 px-3 text-center text-xs text-muted-foreground">
+              {hasProbe ? t('serverConsole.noSeriesYet') : t('serverConsole.probeUnavailable')}
+            </div>
+          )}
         </section>
 
         <section className="rounded-lg border bg-card p-3 shadow-soft">
@@ -421,12 +435,16 @@ function formatNumber(value: number | undefined, digits: number) {
   return value.toFixed(digits)
 }
 
-function buildSparkValues(tps: number, mspt: number) {
-  return Array.from({ length: 24 }, (_, i) => {
-    const wave = Math.sin(i / 2.2) * 12 + Math.cos(i / 3.7) * 8
-    const base = Math.max(24, Math.min(92, tps * 4 + wave - Math.max(0, mspt - 45) / 2))
-    return Math.round(base)
-  })
+/** 运行时长（秒）人性化：Xd Yh / Xh Ym / Xm / Xs；无值显 —。 */
+function formatUptime(sec: number | undefined): string {
+  if (!sec || sec <= 0) return '—'
+  const d = Math.floor(sec / 86400)
+  const h = Math.floor((sec % 86400) / 3600)
+  const m = Math.floor((sec % 3600) / 60)
+  if (d > 0) return `${d}d ${h}h`
+  if (h > 0) return `${h}h ${m}m`
+  if (m > 0) return `${m}m`
+  return `${Math.floor(sec)}s`
 }
 
 function buildWatchItems({

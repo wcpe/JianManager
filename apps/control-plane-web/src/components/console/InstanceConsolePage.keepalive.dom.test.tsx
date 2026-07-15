@@ -120,10 +120,14 @@ describe('InstanceConsolePage 页签 keep-alive（FR-295）', () => {
       expect(queries.some((q) => q.getObserversCount() > 0)).toBe(true)
     })
 
-    // 切到概览：监控页签 Activity 隐藏 → effects 卸载 → 查询订阅暂停（轮询停止）。
+    // 切到概览：监控页签 Activity 隐藏 → effects 卸载 → 其查询订阅暂停（轮询停止）。
+    // 概览自身也用 metricSeries 画真实 TPS 火花线（FR-343 去 mock-api），概览可见时其查询活跃；
+    // 它与监控页签的宽查询 queryKey 不同（概览带 metrics=['inst_tps']），故此处只校验监控页签查询归零。
     await user.click(screen.getByRole('button', { name: '概览' }))
     await waitFor(() => {
       const queries = capturedQueryClient!.getQueryCache().findAll({ queryKey: ['metricSeries'] })
+        .filter((q) => !q.queryKey.includes('inst_tps'))
+      expect(queries.length).toBeGreaterThan(0)
       expect(queries.every((q) => q.getObserversCount() === 0)).toBe(true)
     })
     // 缓存数据未被清除：切回可瞬时呈现。
