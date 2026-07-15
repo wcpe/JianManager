@@ -445,6 +445,15 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 			if memInfo, err := proc.MemoryInfo(); err == nil && memInfo != nil {
 				resp.MemoryMb = int64(memInfo.RSS / 1024 / 1024)
 			}
+			// FR-343 系统级基础指标：无需 ServerProbe，直接采进程 CPU%/运行时长，让未部署/未连探针的
+			// 运行中实例在概览也有真实 CPU 与运行时长（内存 RSS 上面已采）。CPUPercent 为累计 CPU%
+			//（与 FR-170 进程采样器同源、非阻塞）；uptime 由进程创建时刻推算。探针可用时下方会覆盖。
+			if cpu, err := proc.CPUPercent(); err == nil {
+				resp.CpuPercent = cpu
+			}
+			if createMs, err := proc.CreateTime(); err == nil && createMs > 0 {
+				resp.UptimeSeconds = float64(time.Now().UnixMilli()-createMs) / 1000
+			}
 		}
 	}
 
