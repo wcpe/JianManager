@@ -391,7 +391,7 @@
 - **说明**: `tags` 传数组（含空数组 `[]` 清空）覆盖标签；环境维度复用 `env:` 前缀（FR-047），无独立字段。`cpuLimit`/`memLimitMb`/`diskLimitMb` 为 docker 模式资源限额（FR-079），传值覆盖、缺省/`null` 不变；`0` 或负值会归一化为不限制。变更对实例下一次启动生效，仅 docker 模式生效；磁盘限额当前仅持久化展示，不强制限制 bind mount 工作目录。
 
 ### DELETE /api/v1/instances/:id
-- **描述**: 删除实例。运行中/启动中/停止中的实例由 CP 先同步停止再删（FR-310）：删除前经状态机合法转换（RUNNING/STARTING→STOPPING→STOPPED）同步调 Worker `StopInstance`（复用优雅停止链路，超时强杀进程树），停止失败中止删除、返回 500 并透传原因（记录保留可重试）；节点未连接且实例声称在运行时返回 422 `INSTANCE_RUNNING`（无法核实进程处置，拒删记录防进程孤儿化，待节点恢复后重试）。节点在线时经 gRPC `RemoveInstance` 让 Worker 删除工作目录与派生索引（刚停止的实例在优雅停止收敛窗口内对文件锁类清理失败有界重试），清理成功才删记录（兑现「所有数据将被删除」），清理失败返回 500 并透传原因、记录保留可重试；已停止实例且节点未连接时仅删记录并告警（目录残留在节点上）；托管区（数据根 `var/servers`）外的历史手填工作目录 Worker 拒删文件但放行记录删除
+- **描述**: 删除实例。运行中/启动中/停止中的实例由 CP 先同步停止再删（FR-310）：删除前经状态机合法转换（RUNNING/STARTING→STOPPING→STOPPED）同步调 Worker `StopInstance`（复用优雅停止链路，超时强杀进程树），停止失败中止删除并透传原因（记录保留可重试）；节点记录缺失、节点已离线或连接池无可用 Worker 时一律拒绝删除，避免 CP 记录消失而节点进程/目录成为孤儿，其中运行态无法停止返回 422 `INSTANCE_RUNNING`，其余清理路由失败返回 500 并携带明确原因。仅节点在线且 gRPC `RemoveInstance` 成功清理 Worker 注册、工作目录与派生索引后才删除 CP 记录；刚停止实例在优雅停止收敛窗口内对文件锁类清理失败有界重试。托管区（数据根 `var/servers`）外的历史手填目录与 FR-302 就地导入目录由 Worker/CP 双重 `SkipWorkDir` 保护，保留原目录但仍清理 Worker 注册后删除 CP 记录
 - **关联 FR**: FR-005、FR-310
 - **权限**: `instance.delete`
 
@@ -707,18 +707,18 @@
 - **关联 FR**: FR-034, FR-046, FR-319
 
 ### POST /api/v1/instances/provision/bukkit
-- **描述**: 旧 Paper/Bukkit 兼容入口，内部复用 `POST /instances/provision/server`；新增前端能力不再通过该入口创建 SpongeVanilla
+- **描述**: 旧 Paper/Bukkit 兼容入口，实际直接复用异步 `ProvisionServer` 处理器；同步创建实例并登记 `provision` 任务后立即返回，后台继续下载核心与写入配置。新增前端能力不再通过该入口创建 SpongeVanilla
 - **权限**: 平台管理员
 - **请求**: `{ "nodeId":1,"name":"lobby","coreType":"paper","mcVersion":"1.21.1","build":0,"jdkId":1,"memoryMb":4096,"jvmArgs":["-XX:+UseG1GC"],"groupId":0,"onlineMode":false }`（`onlineMode` 缺省 false=代理就绪/离线；独立正版服可传 true）
-- **响应**: `201` 创建的 Instance；`502 PROVISION_FAILED`（含已创建实例供重试/删除）
-- **关联 FR**: FR-034, FR-046
+- **响应**: `201 { "instance": {...}, "taskId": "..." }`；同步准备失败 `422 PROVISION_FAILED`；实例已创建但任务登记失败时 `502 PROVISION_FAILED`（响应含 `instance`，供重试/删除）
+- **关联 FR**: FR-034, FR-046, FR-319
 
 ### POST /api/v1/instances/provision/proxy
-- **描述**: 一键搭建代理（role=proxy）：velocity/waterfall（PaperMC）/bungeecord（md-5 Jenkins），分配监听端口/目录，下载核心，生成转发配置；Velocity 生成 forwarding secret 并返回一次
+- **描述**: 一键搭建代理（role=proxy，FR-202/236 异步化）：同步段解析核心 → 分配监听端口/目录 → 创建实例并登记 `provision` 任务后立即返回；核心下载、转发配置生成与后端注册在 CP 独立后台 context 推进，浏览器断开不取消。后台失败先把实例标注为「搭建失败，待清理」并记录原始原因，再调用统一 Delete 编排补偿：Worker 在线且清理成功时删除 Worker 注册、工作目录、实例记录与注册关系；节点离线或清理失败时保留实例与失败原因供恢复连接后重试，补偿错误同时写入失败任务。Velocity forwarding secret 仅在首次 HTTP 响应返回，不写入任务结果、任务日志或失败原因
 - **权限**: 平台管理员
 - **请求**: `{ "nodeId":1,"name":"velocity-main","proxyType":"velocity","version":"3.3.0-SNAPSHOT","jdkId":1,"memoryMb":1024,"jvmArgs":[],"groupId":0,"onlineMode":true,"backendRegistrations":[] }`（`onlineMode` 缺省 true=正版网络；离线模式群组服传 false，持久化后 resync 不会重置）
-- **响应**: `201 { instance, forwardingSecret?, registrations, warnings }`；`502 PROVISION_FAILED`
-- **关联 FR**: FR-035 | **Spec**: `docs/specs/provision-proxy/`
+- **响应**: `201 { instance, taskId, forwardingSecret?, registrations, warnings }`；同步准备失败 `422 PROVISION_FAILED`；任务登记失败且补偿结果随错误返回时 `502 PROVISION_FAILED`
+- **关联 FR**: FR-035, FR-202, FR-236 | **Spec**: `docs/specs/provision-proxy/`
 
 ### POST /api/v1/proxies/:id/resync
 - **描述**: 重新把注册关系与 secret 推到代理配置与各后端（代理/后端离线恢复后）
@@ -2219,12 +2219,13 @@
   ```
 
 ### PUT /api/v1/settings
-- **描述**: 写入一批白名单配置覆盖。非白名单键或值不合法时整体拒绝（422）且不落库；成功后返回更新后的最新视图。可即时生效项（`log.level`）落库后立即应用
+- **描述**: 写入一批白名单配置覆盖。非白名单键或值不合法时整体拒绝（422）且不落库；成功后返回更新后的最新视图。设置页按外观、日志、运行时、网络、备份、安全 / 系统共 **6 类**展示；是否立即改变 CP 行为以每项 `effectiveImmediately` 与下列生效链路为准，不能泛化为所有白名单项无条件热生效
 - **权限**: 平台管理员
 - **关联 FR**: FR-063
-- **可写白名单键**: `log.level`（debug|info|warn|error）、`jdk.mirror.temurin` / `jdk.mirror.corretto` / `jdk.mirror.zulu`、`runtime.mirror.nodejs`（FR-299）、`graceful_stop.timeout`（Go duration 文本）、`backup.retention_days`（非负整数）、`proxy.url`（network 类，敏感，FR-185）、`proxy.no_proxy`（network 类，FR-185）
-- **各项生效方式**（FR-063 / FR-185）：
+- **可写白名单键**: `log.level`（debug|info|warn|error）、`debug.mode`（true|false）、`jdk.mirror.temurin` / `jdk.mirror.corretto` / `jdk.mirror.zulu`、`runtime.mirror.nodejs`（FR-299）、`graceful_stop.timeout`（Go duration 文本）、`backup.retention_days`（非负整数）、`proxy.url`（network 类，敏感，FR-185）、`proxy.no_proxy`（network 类，FR-185）
+- **各项生效方式**（FR-063 / FR-185 / FR-225）：
   - `log.level`：`effectiveImmediately=true`，落库即在 CP 内切换（slog LevelVar）
+  - `debug.mode`：`effectiveImmediately=true`，开启时切换 CP 日志与 Gin debug 模式；关闭时恢复 `log.level` 基线与 Gin release 模式
   - `jdk.mirror.*`：安装 JDK 时 CP 取生效值经 `InstallJDK.mirror_base` 下发 Worker，影响下载源
   - `runtime.mirror.nodejs`（FR-299）：安装 Node.js 时 CP 取生效值经 `InstallRuntime.mirror_base` 下发 Worker（默认官方 `https://nodejs.org/dist`，可换 npmmirror 等）
   - `graceful_stop.timeout`：启动实例时 CP 取生效值经 `CreateInstance.graceful_stop_timeout_seconds` 下发 Worker→wrapper；对设置变更后**新启动**的实例生效，已运行实例保留启动时的值
