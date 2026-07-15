@@ -117,14 +117,14 @@ export function useMetricSeries(params: {
   })
 }
 
-/** 被剔除的目标（FR-334）：无实例访问权（forbidden）或 UUID 不存在（not_found）。 */
+/** 被剔除的目标（FR-340）：无实例访问权（forbidden）或 UUID 不存在（not_found）。 */
 export interface SkippedTarget {
   targetId: string
   reason: 'forbidden' | 'not_found'
 }
 
 /**
- * 批量序列响应（FR-334）：整批共用 resolution/from/to；series 按 targetId(UUID) 分组，
+ * 批量序列响应（FR-340）：整批共用 resolution/from/to；series 按 targetId(UUID) 分组，
  * 值与单目标端点 series 数组同构；被剔除的目标入 skipped（前端可区分「无数据」空数组与「被剔除」）。
  */
 export interface MetricSeriesBatchResponse {
@@ -136,7 +136,7 @@ export interface MetricSeriesBatchResponse {
 }
 
 /**
- * 批量多实例历史曲线（FR-334：消 NodeInstanceCompare 的 N+1）。一次请求返回各目标序列，
+ * 批量多实例历史曲线（FR-340：消 NodeInstanceCompare 的 N+1）。一次请求返回各目标序列，
  * 30s 轮询。targetIds 为空时不请求。v1 仅 scope=instance（对比场景只有实例维度有 N+1）。
  */
 export function useMetricSeriesBatch(params: {

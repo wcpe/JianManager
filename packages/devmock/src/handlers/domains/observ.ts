@@ -724,7 +724,7 @@ export const handlers = [
     })
   }),
 
-  // 批量多实例序列（FR-334）：镜像真后端契约——targetIds 去重后 1~50，按 targetId 生成同构序列，
+  // 批量多实例序列（FR-340）：镜像真后端契约——targetIds 去重后 1~50，按 targetId 生成同构序列，
   // 支持 metrics 过滤；假后端无访问模型，解析到的目标全放行，skipped 恒空（真机才有 forbidden/not_found）。
   domainRoute('post', '/metrics/series/batch', async (info) => {
     const denied = requireAuth(info)

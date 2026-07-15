@@ -41,7 +41,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 > 标 `已交付` 是有门的：仅该 FR 的 spec 验收全过 + 测试 / 真机通过后，由 `sdd-release-version` 发版统一标 `已交付@vX.Y.Z`；开发中不得自标。false-done 走 `sdd-fix-bug` 归真，撤 / 推迟走 `sdd-rollback-change`。
 
 **活跃 FR 详细规格索引**（PRD 只留索引行，详情见 spec）：
-- FR-334~339（2026-07-15 验收分诊批二：规模化与全栈补缺）→ FR-334 `docs/specs/metrics-batch-series/`、FR-335 `docs/specs/topology-scale/`、FR-336 `docs/specs/users-search-pagination/`、FR-337 `docs/specs/tasks-pagination/`、FR-338 `docs/specs/backup-storage-update/`、FR-339 `docs/specs/console-players-backup-segments/`；随批一并做的前端消费 gap：节点页聚合（gap:FR-270）/实例列表可供性（gap:FR-235）/超级工作台虚拟化（gap:FR-167）/备份实例选择器 Combobox/端口表虚拟化
+- FR-335~340（2026-07-15 验收分诊批二：规模化与全栈补缺）→ FR-335 `docs/specs/topology-scale/`、FR-336 `docs/specs/users-search-pagination/`、FR-337 `docs/specs/tasks-pagination/`、FR-338 `docs/specs/backup-storage-update/`、FR-339 `docs/specs/console-players-backup-segments/`、FR-340 `docs/specs/metrics-batch-series/`；随批一并做的前端消费 gap：节点页聚合（gap:FR-270）/实例列表可供性（gap:FR-235）/超级工作台虚拟化（gap:FR-167）/备份实例选择器 Combobox/端口表虚拟化
 - FR-313（进程级崩溃诊断链路：环形缓冲 + 退出码快照上报持久化 + 前端崩溃诊断面板）→ `docs/specs/crash-diagnostics/spec.md`（需 spec，开发中创建）
 - FR-314（实例启动同步预检：预检 RPC + 同步报错不进 STARTING）→ `docs/specs/start-preflight/spec.md`（需 spec，开发中创建）
 - FR-305（反向隧道单消息尺寸上限统一治理：`ServerOptions()` 64MiB 在 grpctunnel 路径失效）→ `docs/specs/tunnel-message-size-guard/spec.md`（需 spec，开发中创建；宜随 FR-281 M1 一并处理）
@@ -411,12 +411,12 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-332 | 折叠态导航分类图标点击跳转分类首页（fix，增强 FR-131/181 侧边栏折叠，真机复现：折叠后点击分类图标无反应无法跳转）：折叠态下点击分类图标默认导航到该分类下第一个页面（并展示激活态）；展开态行为不变（免 spec） | P2 | 🔨 开发中 |
 | FR-333 | CP 本机应急密码重置子命令（feat，运维应急能力，用户要求「补重置密码命令」以解锁验收环境）：`jianmanager-cp reset-password -u <用户名> [-p <密码>] [-c <config>] [-list]`——bcrypt 重置指定用户密码并解锁账号（Status→Active），`-p` 留空自动生成 16 位随机密码打印，`-list` 列出全部用户名。命令落 CP 二进制自身而非 jmctl：数据库仅 CP 可读写（架构不变量），jmctl 按 ADR-041 不得直连 DB（免 spec） | P1 | 🔨 开发中 |
 | FR-334 | 控制台品牌顶栏贯通（T 型外壳）+ 页眉节点作用域下线（feat，增强 FR-162/181/268 控制台外壳，用户走查「侧栏与页眉交界处错位成台阶、页眉节点作用域下拉几乎无作用」）：外壳改 T 型——整宽顶栏（品牌区 + 面包屑 + 操作区）在上、其下「侧栏 + 工作区」一行；品牌区宽度与侧栏同步、右缘对齐连线，顶栏下缘=侧栏上缘，消除原侧栏 logo 区与页眉两条错位分割线的交界台阶；logo 折叠触发器（FR-181）迁入顶栏品牌区。删除页眉节点作用域下拉（`selectedNodeId` 数据面保留，全部服务器页自带节点筛选/命令面板/向导预填照常）；顶栏高度与 logo/搜索框尺寸下调（见 ADR-071，免 spec） | P2 | 🔨 开发中 |
-| FR-334 | 指标批量序列接口（feat，增强 FR-060/270，2026-07-15 验收分诊：节点详情实例对比对 N 个实例逐条 `GET /metrics/series` 造成 N+1 请求风暴且 30s 重拉）：后端新增多目标批量序列端点（一次查库按 targetId 分组返回 `{targetId→series[]}`，逐目标复用既有实例访问鉴权）；前端 NodeInstanceCompare 改单条批量查询 + 对比目标数上限；节点内实例清单改用 FR-247 已交付的聚合/搜索接口（gap:FR-270 归真一并收口）→ `docs/specs/metrics-batch-series/spec.md` | P1 | 🔨 开发中 |
 | FR-335 | 群组拓扑规模化（feat，增强 FR-145，验收分诊：拓扑页每 proxy 拉 registration + 列表页每 network 拉详情双 N+1；SVG 纵向线性堆叠超高无缩放/筛选）：后端新增拓扑聚合端点（一次返回全部 proxy 及注册关系）+ NetworkSummary 内联成员健康计数；前端拓扑单查询消费 + SVG 视口控件（pan/zoom/适应视图/搜索/状态筛选/分层布局）→ `docs/specs/topology-scale/spec.md` | P2 | 🔨 开发中 |
 | FR-336 | 用户目录服务端搜索分页 + 候选下拉虚拟化（feat，增强 FR-003/156，验收分诊：`/users` 前后端均无搜索/分页，共享 Combobox 无虚拟化，用户量大时成员弹窗全量挂载）：后端 `GET /users` 加 `q/limit/offset` 返 `{items,total}`（兼容旧无参全量）；共享 Combobox 引入窗口渲染；群组成员弹窗默认只显已选+少量候选、键入走服务端搜索 → `docs/specs/users-search-pagination/spec.md` | P2 | 🔨 开发中 |
 | FR-337 | 任务中心列表分页信封（feat，增强 FR-183，验收分诊：任务接口固定 Limit(100) 返裸数组无 total/offset，前端整批渲染无翻页/总数，规模化既看不到全量也一次全挂）：后端 List 加 Count+offset 返 `{items,total,limit,offset}`（对齐 FR-247 分页约定）；前端「共 N 条」+加载更多/无限滚动（保 FR-329 非终态轮询行为）；devmock 同步契约 → `docs/specs/tasks-pagination/spec.md` | P2 | 🔨 开发中 |
 | FR-338 | 备份存储配置编辑（feat，增强 FR-057，验收分诊：备份存储自交付起前后端均无 Update，改配置只能删了重建）：后端 `PUT /backup-storages/:id`（复用既有 validateCandidate/凭证 ${ENV} 引用校验/名称冲突校验，404/422 语义与 Create 一致）；前端编辑弹窗（受控填入现值、区分 create/update）+ 表格编辑入口；devmock 同步 → `docs/specs/backup-storage-update/spec.md` | P2 | 🔨 开发中 |
 | FR-339 | 实例控制台玩家/备份定时分区接真（feat，FR-269 首版占位归真，验收分诊：两页签停留「第一版原型」静态占位而后端/独立页面/hook 均已就绪）：抽实例作用域 `InstancePlayersSegment`（复用 useOnlinePlayers/useBans/useWhitelist 等）与 `InstanceBackupSegment`（useSchedules(id)+useBackups(id)）接入控制台页签；短期不能全接的分区从 TAB_KEYS 撤下不留假入口；清理占位文案 → `docs/specs/console-players-backup-segments/spec.md` | P2 | 🔨 开发中 |
+| FR-340 | 指标批量序列接口（feat，增强 FR-060/270，2026-07-15 验收分诊：节点详情实例对比对 N 个实例逐条 `GET /metrics/series` 造成 N+1 请求风暴且 30s 重拉）：后端新增多目标批量序列端点（一次查库按 targetId 分组返回 `{targetId→series[]}`，逐目标复用既有实例访问鉴权）；前端 NodeInstanceCompare 改单条批量查询 + 对比目标数上限；节点内实例清单改用 FR-247 已交付的聚合/搜索接口（gap:FR-270 归真一并收口）→ `docs/specs/metrics-batch-series/spec.md` | P1 | 🔨 开发中 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 

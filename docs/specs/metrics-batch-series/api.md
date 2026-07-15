@@ -1,6 +1,6 @@
-# API Spec — FR-334 指标批量序列接口
+# API Spec — FR-340 指标批量序列接口
 
-> 关联 FR: FR-334（增强 FR-060/FR-270）| 优先级: P1 | 关联 ADR: ADR-013（分级降采样存储，沿用）| 状态: 草拟
+> 关联 FR: FR-340（增强 FR-060/FR-270）| 优先级: P1 | 关联 ADR: ADR-013（分级降采样存储，沿用）| 状态: 草拟
 
 ## 概述
 
@@ -13,7 +13,7 @@
 ### POST /api/v1/metrics/series/batch
 
 - **描述**: 批量返回多个实例目标的历史曲线。整批共用同一查询窗口与聚合档位（`range` 枚举 + `resolution` 自动/显式选档，语义同单目标端点）；每个 targetId 对应的序列数组与单目标端点响应的 `series` 字段同构。
-- **关联 FR**: FR-334（消费方：节点详情实例对比 `NodeInstanceCompare`）
+- **关联 FR**: FR-340（消费方：节点详情实例对比 `NodeInstanceCompare`）
 - **权限**: 登录 + 逐目标实例访问收敛（等价 `CanAccessInstance`，实现走 `AccessibleInstanceIDs` 集合判定）。无权/不存在的目标**剔除**并列入 `skipped`，不整拒。
 - **请求**:
   ```json

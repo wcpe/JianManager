@@ -163,12 +163,12 @@ const COMPARE_METRICS: { key: string; labelKey: string; fmt: (v: number) => stri
   { key: 'inst_threads', labelKey: 'metrics.threads', fmt: (v) => v.toFixed(0) },
 ]
 
-/** 对比图可读性上限：一图最多 12 条线（超出仅取名称升序前 12，FR-334）。50 是后端硬上限。 */
+/** 对比图可读性上限：一图最多 12 条线（超出仅取名称升序前 12，FR-340）。50 是后端硬上限。 */
 const COMPARE_TARGET_CAP = 12
 
 /**
  * 节点上各实例同一指标对比：每实例一条线，可切 TPS/MSPT/堆/线程（FR-060 #2）。
- * FR-334：实例清单走服务端按节点分页（`/instances/search`）取前 12（名称升序），
+ * FR-340：实例清单走服务端按节点分页（`/instances/search`）取前 12（名称升序），
  * 指标一次批量查询（`/metrics/series/batch`）拆分为各线，消 N+1 请求风暴。
  */
 function NodeInstanceCompare({ node, range }: { node: NodeInfo; range: MetricRange }) {
@@ -187,7 +187,7 @@ function NodeInstanceCompare({ node, range }: { node: NodeInfo; range: MetricRan
   const total = search?.total ?? 0
   const targetIds = nodeInstances.map((i) => i.uuid)
 
-  // 单条批量查询替代逐实例 useQueries × N（FR-334）。
+  // 单条批量查询替代逐实例 useQueries × N（FR-340）。
   const { data: batch } = useMetricSeriesBatch({ scope: 'instance', targetIds, range, metrics: [metric] })
 
   const series: ChartSeries[] = nodeInstances.map((inst) => {

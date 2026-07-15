@@ -32,7 +32,7 @@ func (h *MetricHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	m.GET("/processes/top", h.ProcessTop)
 }
 
-// metricBatchMaxTargets 批量序列端点的目标数硬上限（FR-334）。去重后超出即 422。
+// metricBatchMaxTargets 批量序列端点的目标数硬上限（FR-340）。去重后超出即 422。
 // 与 processes/top 的 limit 上限（parseProcessTopLimit）对齐取 50。
 const metricBatchMaxTargets = 50
 
@@ -125,7 +125,7 @@ func (h *MetricHandler) Series(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"resolution": res, "from": from, "to": to, "series": series})
 }
 
-// seriesBatchRequest 批量序列请求体（FR-334）。POST 承载只读查询：50 个 UUID 入 query 过长，body 语义清晰。
+// seriesBatchRequest 批量序列请求体（FR-340）。POST 承载只读查询：50 个 UUID 入 query 过长，body 语义清晰。
 type seriesBatchRequest struct {
 	Scope      string   `json:"scope"`
 	TargetIDs  []string `json:"targetIds"`
@@ -134,13 +134,13 @@ type seriesBatchRequest struct {
 	Resolution string   `json:"resolution"`
 }
 
-// skippedTarget 被剔除的目标（无权/不存在），随批量响应返回，供前端区分「无数据」与「被剔除」（FR-334）。
+// skippedTarget 被剔除的目标（无权/不存在），随批量响应返回，供前端区分「无数据」与「被剔除」（FR-340）。
 type skippedTarget struct {
 	TargetID string `json:"targetId"`
 	Reason   string `json:"reason"` // forbidden | not_found
 }
 
-// SeriesBatch 批量返回多个实例目标的历史曲线，消 NodeInstanceCompare 的 N+1 请求（FR-334）。
+// SeriesBatch 批量返回多个实例目标的历史曲线，消 NodeInstanceCompare 的 N+1 请求（FR-340）。
 // 逐目标复用实例访问收敛（等价 CanAccessInstance，走 AccessibleInstanceIDs 集合判定）：
 // 无权/不存在的目标剔除并列入 skipped，不整拒——对比场景个别目标越权不应让整图空白。
 // v1 仅支持 scope=instance（对比场景只有实例维度有 N+1，node 单查询无此问题）。
@@ -358,7 +358,7 @@ func parseMetricRange(c *gin.Context) (time.Time, time.Time, bool) {
 	return now.Add(-dur), now, true
 }
 
-// dedupeStrings 去重并保序，剔除空白项（批量目标 UUID 归一，FR-334）。
+// dedupeStrings 去重并保序，剔除空白项（批量目标 UUID 归一，FR-340）。
 func dedupeStrings(in []string) []string {
 	seen := make(map[string]struct{}, len(in))
 	out := make([]string, 0, len(in))

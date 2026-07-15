@@ -123,7 +123,7 @@ func (s *MetricService) ResolveInstanceID(uuid string) (uint, bool, error) {
 	return 0, false, err
 }
 
-// ResolveInstanceIDs 批量由实例 UUID 取数值 ID（ResolveInstanceID 的批量形态，FR-334）。
+// ResolveInstanceIDs 批量由实例 UUID 取数值 ID（ResolveInstanceID 的批量形态，FR-340）。
 // 一次 IN 查询返回 uuid→id 映射；查不到的 uuid 不在结果中（调用方据此归入 skipped:not_found）。
 func (s *MetricService) ResolveInstanceIDs(uuids []string) (map[string]uint, error) {
 	out := map[string]uint{}
@@ -482,7 +482,7 @@ func (s *MetricService) QuerySeries(q SeriesQuery) (string, []Series, error) {
 	return res, out, nil
 }
 
-// QuerySeriesBatch 批量返回多个实例目标的历史曲线（FR-334：消 N+1）。整批同档同窗，
+// QuerySeriesBatch 批量返回多个实例目标的历史曲线（FR-340：消 N+1）。整批同档同窗，
 // 序列表一次 IN 查询后按 instance_id 分组，逐序列点位复用 queryPoints（与单目标版一致）。
 // instanceIDs 为已解析的实例 UUID（每个都是响应中的 targetId 键）；out 保证每个入参 UUID
 // 都有条目（无序列的目标返空数组，与单目标端点空 series 语义一致，前端可区分「无数据」与「被剔除」）。

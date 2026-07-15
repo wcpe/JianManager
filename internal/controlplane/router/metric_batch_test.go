@@ -178,7 +178,7 @@ func TestMetricSeriesBatch_NotFoundSkipped(t *testing.T) {
 }
 
 // TestMetricSeriesBatch_ForbiddenSkipped：受限用户请求含越权目标 → 有权目标正常返回、
-// 越权目标进 skipped(forbidden) 且响应不含其数据（FR-334 鉴权验收）。
+// 越权目标进 skipped(forbidden) 且响应不含其数据（FR-340 鉴权验收）。
 func TestMetricSeriesBatch_ForbiddenSkipped(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

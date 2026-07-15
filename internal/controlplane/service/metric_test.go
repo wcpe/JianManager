@@ -266,7 +266,7 @@ func TestMetric_QuerySeriesBatch_Empty(t *testing.T) {
 	require.Empty(t, out)
 }
 
-// TestMetric_QuerySeriesBatch_SameAsSingle 断言批量响应中某 targetId 的序列与单目标 QuerySeries 同构（FR-334 验收）。
+// TestMetric_QuerySeriesBatch_SameAsSingle 断言批量响应中某 targetId 的序列与单目标 QuerySeries 同构（FR-340 验收）。
 func TestMetric_QuerySeriesBatch_SameAsSingle(t *testing.T) {
 	svc := newMetricSvc(t)
 	base := metricBase()

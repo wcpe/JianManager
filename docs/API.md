@@ -502,7 +502,7 @@
 
 ### POST /api/v1/metrics/series/batch
 - **描述**: 多目标一次批量取历史曲线（消节点实例对比 N+1）。逐 targetId 复用 `scope=instance` 的 `instance.read` 鉴权，越权/不存在目标不报错、剔除进 `skipped`
-- **关联 FR**: FR-334（增强 FR-060）
+- **关联 FR**: FR-340（增强 FR-060）
 - **权限**: 登录；`scope=instance` 按 `instance.read` 逐目标收敛
 - **请求**: `{ "scope":"instance", "targetIds":["<uuid>", ...(1~50 去重)], "metrics":["inst_tps"], "range":"24h", "resolution":"auto" }`
 - **响应** (200): `{ "resolution", "from", "to", "series": { "<targetId>": [MetricSeries...] }, "skipped": [ { "targetId", "reason": "forbidden"|"not_found" } ] }`（series 与 `GET /metrics/series` 同构、逐目标独立）

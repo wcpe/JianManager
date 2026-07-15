@@ -168,7 +168,7 @@ describe('NodesPage（mock 假后端）', () => {
     await waitFor(() => expect(screen.queryByText('beta')).not.toBeInTheDocument())
   })
 
-  it('实例对比分段：只发 1 条批量指标请求（消 N+1），批量目标 ≤12（FR-334）', async () => {
+  it('实例对比分段：只发 1 条批量指标请求（消 N+1），批量目标 ≤12（FR-340）', async () => {
     loginMockUser()
     // 计数批量指标请求 + 捕获请求体（断言单请求 + 目标上限）；search 请求断言 pageSize=12。
     let batchCount = 0
