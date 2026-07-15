@@ -272,6 +272,14 @@ func (s *ProbeUpdateService) deployTo(inst *model.Instance) error {
 	if inst.Node.UUID == "" {
 		return fmt.Errorf("实例 %d 缺少关联节点", inst.ID)
 	}
+	// 节点离线快速失败（FIX，真机：探针/节点异常时点「更新探针」长时间转圈到超时）：
+	// 节点不在线时连接池可能残留失活的反向隧道客户端（pool.Get 仍返回 ok），
+	// DeployServerProbe 会阻塞到 probeDeployTimeout(30s) 才失败——前端看起来「一直 loading」。
+	// 先按心跳态判定：节点非在线直接返回明确原因（HTTP 4xx），让前端秒回错误、不空转。
+	// 置于 jar/pool 检查之前，确保离线态在任何 CP 构建（含未内嵌 jar 的开发环境）下均可命中。
+	if inst.Node.Status != model.NodeStatusOnline {
+		return fmt.Errorf("节点 %s 当前离线，无法推送探针：请先让节点上线再重试", inst.Node.Name)
+	}
 	jar := cpembed.ServerProbeJar()
 	if len(jar) == 0 {
 		return ErrProbeNotEmbedded

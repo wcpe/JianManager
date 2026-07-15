@@ -107,11 +107,26 @@ func TestProbeUpdate_DeployTo_NodeNotConnected(t *testing.T) {
 	db := newProbeUpdateTestDB(t)
 	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
 	inst := mkProbeInstance(t, db, "smp", 1)
-	inst.Node = model.Node{UUID: "node-not-in-pool", WSPort: 9102}
+	// 节点在线（过离线快速失败闸）但不在连接池 → 命中「未连接」而非「离线」。
+	inst.Node = model.Node{UUID: "node-not-in-pool", Name: "n-online", Status: model.NodeStatusOnline, WSPort: 9102}
 
 	err := svc.deployTo(inst)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "未连接")
+}
+
+// TestProbeUpdate_DeployTo_NodeOffline 节点离线 → deployTo 先于 jar/pool 快速失败（明确「离线」原因），
+// 杜绝连接池残留失活隧道客户端致 DeployServerProbe 空转到 30s 超时（真机「更新探针一直 loading」）。
+// 无需内嵌 jar：离线闸置于 jar 检查之前，任何构建下均可命中。
+func TestProbeUpdate_DeployTo_NodeOffline(t *testing.T) {
+	db := newProbeUpdateTestDB(t)
+	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
+	inst := mkProbeInstance(t, db, "smp", 1)
+	inst.Node = model.Node{UUID: "n-off", Name: "node-off", Status: model.NodeStatusOffline}
+
+	err := svc.deployTo(inst)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "离线")
 }
 
 // TestProbeUpdate_ResolveTargets_Skipped 请求 IDs 中不存在的实例计入 skipped（存在性隐藏）。
