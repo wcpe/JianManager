@@ -54,6 +54,10 @@ func main() {
 // runDaemonWrapper 以 wrapper 子进程模式运行。
 // 配置通过环境变量 JM_DAEMON_WRAPPER_CONFIG 传递（JSON）。
 func runDaemonWrapper() {
+	// wrapper 必须在 Worker 重启后存活（ADR-003、FR-341）：Worker 死后其建立的 stdout/stderr
+	// 管道读端关闭，wrapper 下一次日志写会触发 SIGPIPE 而被默认终止。忽略之，改为 EPIPE 丢弃。
+	daemon.IgnoreBrokenPipe()
+
 	cfg, err := daemon.ParseWrapperConfigFromEnv()
 	if err != nil {
 		slog.Error("daemon wrapper 配置解析失败", "error", err)
@@ -592,7 +596,20 @@ func runWorker() {
 	sig := <-sigCh
 
 	slog.Info("收到退出信号，正在关闭", "signal", sig)
-	grpcServer.GracefulStop()
+	// GracefulStop 会阻塞至所有活跃 RPC 收敛，但终端会话 / 反向隧道 / 日志流是长连接、永不自然
+	// 结束，会无界挂起至 systemd TimeoutStopSec(默认 90s) 才 SIGKILL，进而拖延甚至跳过 StopAll 的
+	// daemon 优雅断开（FR-341 K3）。故设 5s 上限，超时强制 Stop() 关活跃连接，确保迅速退出。
+	graceStopped := make(chan struct{})
+	go func() {
+		grpcServer.GracefulStop()
+		close(graceStopped)
+	}()
+	select {
+	case <-graceStopped:
+	case <-time.After(5 * time.Second):
+		slog.Warn("gRPC 优雅停机超时，强制关闭活跃连接")
+		grpcServer.Stop()
+	}
 	manager.StopAll()
 	slog.Info("Worker Node 已停止")
 }
