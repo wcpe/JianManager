@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState, type KeyboardEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useCallback, useState, type KeyboardEvent } from 'react'
 import type { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { useDirectorRender } from '@/lib/director-render'
@@ -170,6 +170,22 @@ export default function TerminalComponent({
   const parseBufRef = useRef('')
   // 右键菜单
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  // 右键菜单最终落点（钳制进视口后）。菜单开启时按实际尺寸把落点收进视口，
+  // 贴右/下边缘时向左/上收，避免菜单溢出屏幕看不全（FIX：原直接用 clientX/Y 无边界钳制）。
+  const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null)
+  useLayoutEffect(() => {
+    if (!menu || !menuRef.current) {
+      setMenuPos(null)
+      return
+    }
+    const { offsetWidth: w, offsetHeight: h } = menuRef.current
+    const margin = 8
+    setMenuPos({
+      left: Math.max(margin, Math.min(menu.x, window.innerWidth - w - margin)),
+      top: Math.max(margin, Math.min(menu.y, window.innerHeight - h - margin)),
+    })
+  }, [menu])
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [internalSearchOpen, setInternalSearchOpen] = useState(false)
   const searchVisible = searchOpen ?? internalSearchOpen
@@ -655,12 +671,13 @@ export default function TerminalComponent({
         <>
           <div className="fixed inset-0 z-20" onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null) }} />
           <div
+            ref={menuRef}
             role="menu"
             aria-label={t('instanceDetail.terminalMenu')}
             tabIndex={-1}
             onKeyDown={handleMenuKeyDown}
             className="fixed z-30 min-w-36 rounded-md border border-white/10 bg-[#1f2030] py-1 text-sm text-gray-200 shadow-lg"
-            style={{ left: menu.x, top: menu.y }}
+            style={{ left: menuPos?.left ?? menu.x, top: menuPos?.top ?? menu.y }}
           >
             <button type="button" role="menuitem" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { copySelection(); setMenu(null) }}>{t('instanceDetail.terminalCopySelection')}</button>
             <button type="button" role="menuitem" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { selectAll(); setMenu(null) }}>{t('instanceDetail.terminalSelectAll')}</button>
