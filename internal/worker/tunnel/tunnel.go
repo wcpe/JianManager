@@ -123,8 +123,10 @@ func (r *Runner) serveOnce() error {
 	}()
 
 	// 身份经 metadata 出示（ADR-039）：CP 拦截器校验通过后按 UUID 登记隧道归属。
-	ctx = metadata.AppendToOutgoingContext(ctx, nodeUUIDHeader, r.nodeUUID, nodeSecretHeader, r.nodeSecret)
-	started, err := rts.Serve(ctx)
+	// 用独立 serveCtx 承载附加 metadata 的派生 ctx，不回写 ctx——否则与上面读 ctx.Done() 的
+	// goroutine 数据竞争（AppendToOutgoingContext 会重新赋值 ctx 变量）。
+	serveCtx := metadata.AppendToOutgoingContext(ctx, nodeUUIDHeader, r.nodeUUID, nodeSecretHeader, r.nodeSecret)
+	started, err := rts.Serve(serveCtx)
 	if !started {
 		slog.Debug("反向隧道未能建立", "error", err)
 	}
