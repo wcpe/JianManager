@@ -20,6 +20,9 @@
 - **重启改优雅停止避免 world 锁冲突（fix，真机复现：点重启后 Paper 报 `SessionLock$ExceptionWorldConflict: world/session.lock already locked`）**：`Manager.Restart` 原为强杀（`killLocked`）+ 立即启动——daemon 模式强杀 wrapper 进程树时，Unix 上自成进程组的托管 Java 可能未被杀到而沦为孤儿、仍占 world/session.lock，新进程随即启动即撞世界锁冲突；且强杀跳过世界保存、无关服日志（用户「看不到服务器关闭内容」）。改为运行中先优雅停止（下发 stop/end 控制帧由 wrapper 正常关服、输出关服日志），由 `startLocked` 内 `daemon.WaitForPriorExit` 依 PID 文件等旧 wrapper/Java 全退出再拉起新进程（复用同一策略；`reapWrapper` 的 `d.wrapperCmd!=cmd` 陈旧守卫防旧 reaper 误改新实例状态）；已停止/崩溃实例 Restart 直接启动。强制停止（`KillInstance` RPC / UI「强制关停」按钮，运行·启动·停止中可用）保留供卡死兜底。单测：运行中 Restart 发优雅 Stop 零 Kill / 已停止直接启动 / 既有并发序列化与 reaper 竞态回归（-race 绿）。
 - **终端右键菜单钳制进视口（fix，真机反馈：右键菜单位置不对、贴边溢出屏幕看不全）**：终端右键菜单原以 `position: fixed` + 原始 `clientX/clientY` 定位、无视口边界钳制，光标贴右/下边缘时菜单溢出屏幕。菜单开启后经 `useLayoutEffect` 按实际尺寸把落点钳制进视口（贴边向左/上收、留 8px 边距），paint 前修正、无越界闪现。
 
+### 优化
+- **控制台终端顶栏收敛为紧凑扁平单条（refactor，方案 A，用户走查「顶栏太占位置、样式丑」）**：终端面板顶部原为「浮动卡片工具栏（`rounded-lg border bg-card/95 shadow-soft` + 药丸按钮）+ 独占一行的琥珀只读横幅」两层 chrome、纵向占位偏高。收敛为**单条扁平工具栏**（`border-b`、无浮卡/无阴影、`py-1.5`、ghost 图标按钮），非运行状态提示并入行首（不再独占整行），终端外层内边距 `p-4→p-2`，把纵向空间还给日志区。功能与可访问性不变（读写徽标/重连/搜索/字号/全屏控件与 aria 保留，dom 测试 9/9 绿）。
+
 > 启动链路诊断与可观测收官（进程级崩溃诊断链路 / 版本-JDK 兼容预检 / 搭建中硬禁启动闸补漏 / CP 压力态 SQLite 连接毒化修复）+ **daemon 进程模型可靠性闭环**（删运行中实例进程处置一致性与工作目录清净 / Worker 重启接管孤儿兜底 / Worker 重启 daemon wrapper 存活并自动重连，ADR-003 落地）+ 规模化收口（指标批量序列 / 群组拓扑聚合+SVG 视口 / 用户目录服务端搜索分页 / 任务列表分页信封 / 备份存储编辑 / 控制台玩家·备份分区接真）+ 控制台品牌顶栏贯通 T 型外壳（ADR-071）+ 任务中心页眉下拉与进度自动刷新 + 节点删除实例守卫 / 应急密码重置 + 全站交互质量修复批次（mock 整站验收 ~50 条真缺陷）。真机验收见 `.tmp/acceptance-version-0.17.0-2026-07-15.md` 与 daemon 存活 node-2 复验。
 
 ### 修复

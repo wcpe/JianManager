@@ -88,8 +88,10 @@ export default function TerminalPane({ instanceId, hideHeader = false, persistSe
         </div>
       )}
 
+      {/* 顶栏（REF 方案 A）：三层 chrome 收敛为单条扁平工具栏——去浮卡/去阴影/去外边距，
+          状态提示并入行首（不再独占整行），控件右对齐、扁平 ghost，把纵向空间还给日志区。 */}
       {canAttach && (
-        <div className="mx-4 mt-3 flex flex-wrap items-center gap-2 rounded-lg border bg-card/95 px-3 py-2 text-xs shadow-soft">
+        <div className="flex flex-wrap items-center gap-1 border-b bg-card/40 px-3 py-1.5 text-xs">
           <span
             className={cn(
               'inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-medium',
@@ -99,32 +101,36 @@ export default function TerminalPane({ instanceId, hideHeader = false, persistSe
             {isRunning ? <Pencil className="size-3" /> : <Eye className="size-3" />}
             {isRunning ? t('instanceDetail.terminalWritable') : t('instanceDetail.terminalReadOnlyBadge')}
           </span>
+          {/* 非运行（STARTING/STOPPING/CRASHED）：状态提示并入工具栏行首，替代此前独占一行的琥珀横幅。 */}
+          {status && !isRunning && !isStopped && (
+            <span className="text-amber-600 dark:text-amber-400">{t('instanceDetail.terminalReadOnly', { status })}</span>
+          )}
           {/* 手动重连改经连接管理器（FR-295）：不再 remount 组件，断旧连、现取新 token 重建（FR-140）。 */}
-          <Button size="sm" variant="outline" className="h-7 rounded-full px-2.5 text-xs" onClick={() => terminalSessionManager.reconnect(instanceId)}>
+          <Button size="sm" variant="ghost" className="ml-auto h-7 rounded-md px-2 text-xs" onClick={() => terminalSessionManager.reconnect(instanceId)}>
             <RotateCcw className="mr-1 size-3.5" />
             {t('instanceDetail.terminalReconnect')}
           </Button>
           <Button
             size="icon"
-            variant="outline"
-            className="size-7 rounded-full"
+            variant="ghost"
+            className="size-7 rounded-md"
             onClick={() => setTerminalSearchOpen(true)}
             aria-label={t('instanceDetail.terminalSearchOpen', { defaultValue: '搜索终端' })}
             aria-pressed={terminalSearchOpen}
           >
             <Search className="size-3.5" />
           </Button>
-          <Button size="icon" variant="outline" className="size-7 rounded-full" onClick={() => adjustFont(-1)} aria-label={t('instanceDetail.terminalFontDown')}>
+          <Button size="icon" variant="ghost" className="size-7 rounded-md" onClick={() => adjustFont(-1)} aria-label={t('instanceDetail.terminalFontDown')}>
             <ZoomOut className="size-3.5" />
           </Button>
           <span className="min-w-9 text-center font-mono tabular-nums text-muted-foreground">{fontSize}px</span>
-          <Button size="icon" variant="outline" className="size-7 rounded-full" onClick={() => adjustFont(1)} aria-label={t('instanceDetail.terminalFontUp')}>
+          <Button size="icon" variant="ghost" className="size-7 rounded-md" onClick={() => adjustFont(1)} aria-label={t('instanceDetail.terminalFontUp')}>
             <ZoomIn className="size-3.5" />
           </Button>
           <Button
             size="sm"
-            variant="outline"
-            className="ml-auto h-7 rounded-full px-2.5 text-xs"
+            variant="ghost"
+            className="h-7 rounded-md px-2 text-xs"
             onClick={() => setFullscreen((v) => !v)}
             aria-pressed={fullscreen}
           >
@@ -134,15 +140,8 @@ export default function TerminalPane({ instanceId, hideHeader = false, persistSe
         </div>
       )}
 
-      {/* 非运行（STARTING/STOPPING/CRASHED）仍连只读终端，给出状态提示 */}
-      {status && !isRunning && !isStopped && (
-        <div className="mx-4 mt-2 rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
-          {t('instanceDetail.terminalReadOnly', { status })}
-        </div>
-      )}
-
       {/* 终端区 */}
-      <div className="min-h-0 flex-1 p-4">
+      <div className="min-h-0 flex-1 p-2">
         {!status ? (
           // 实例状态未知（加载中）：先不挂载终端，避免拿不到状态就拨号/闪现。
           <div className="flex min-h-[400px] items-center justify-center rounded-lg bg-[#1a1b26] p-4">
