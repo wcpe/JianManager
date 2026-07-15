@@ -17,6 +17,15 @@ func TestInstallScripts_NonEmpty(t *testing.T) {
 	}
 }
 
+// TestInstallWorkerScript_KillModeProcess 守护 worker systemd 单元含 KillMode=process。
+// daemon wrapper 必须在 Worker 重启后存活（ADR-003、FR-341）：缺此则 systemd 默认 control-group
+// 会连坐 SIGKILL cgroup 内经 setsid 脱离的 wrapper，游戏服随之被杀、命中「清理残留」而非「接管重连」。
+func TestInstallWorkerScript_KillModeProcess(t *testing.T) {
+	if !bytes.Contains(InstallWorkerScriptSh(), []byte("KillMode=process")) {
+		t.Fatal("install-worker.sh 缺少 KillMode=process（FR-341：daemon wrapper 需逃过 systemd cgroup 连坐）")
+	}
+}
+
 // TestInstallScripts_MatchCanonical 守护单一真源：内嵌副本必须与仓库根 scripts/ 下 canonical
 // 脚本字节一致，防止两份漂移（改了 scripts/ 却忘同步内嵌副本，导致 CP 下发旧脚本）。
 func TestInstallScripts_MatchCanonical(t *testing.T) {

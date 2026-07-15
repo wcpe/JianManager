@@ -269,6 +269,9 @@ ExecStart=$BIN_PATH
 $SVC_ENV
 Restart=always
 RestartSec=5
+# KillMode=process：停止/重启时仅向主进程(Worker)发信号，不波及 cgroup 内经 setsid 脱离的 daemon
+# wrapper，使游戏服在 Worker 重启后存活、由恢复的 Worker 经 socket 重连接管（ADR-003、FR-341）
+KillMode=process
 
 [Install]
 WantedBy=$WANTED_BY
