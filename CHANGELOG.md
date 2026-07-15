@@ -14,6 +14,8 @@
 - **daemon 跨平台测试发布门禁**：daemon 控制连接回归测试改用短随机临时目录，避免 GitHub Actions Linux runner 的 Unix Socket 路径超过系统上限；实例标识加入随机后缀，消除 Windows Named Pipe 在重复运行时的名称冲突；wrapper 在监听前退出时直接报告真实错误，不再误报为等待超时。此修复仅影响测试稳定性，不改变生产运行逻辑。
 
 ## 0.17.0（2026-07-16）
+### 修复
+- **代理无启用后端时启动前拦截（fix，真机复现：代理启动即崩 `java.lang.IllegalArgumentException: No servers defined`）**：无任何启用后端注册的代理直接启动，BungeeCord/Velocity 读到空 `servers` 段抛崩、CP 却已把它转 STARTING。CP 侧 `preflightStart`（FR-314）新增代理就绪校验——纯 DB count（`server_registrations` 中该 proxy 的 `enabled` 注册数），先于节点连通/Worker RPC；为 0 即返 `*PreflightError`（HTTP 422）并写 statusReason「代理未注册任何启用的后端服务器…请先添加并启用至少一个后端子服」，状态不进 STARTING，把「崩一圈才知道」提前为「启动前拦截」。单测覆盖代理无后端拦截 / 有后端放行。
 
 > 启动链路诊断与可观测收官（进程级崩溃诊断链路 / 版本-JDK 兼容预检 / 搭建中硬禁启动闸补漏 / CP 压力态 SQLite 连接毒化修复）+ **daemon 进程模型可靠性闭环**（删运行中实例进程处置一致性与工作目录清净 / Worker 重启接管孤儿兜底 / Worker 重启 daemon wrapper 存活并自动重连，ADR-003 落地）+ 规模化收口（指标批量序列 / 群组拓扑聚合+SVG 视口 / 用户目录服务端搜索分页 / 任务列表分页信封 / 备份存储编辑 / 控制台玩家·备份分区接真）+ 控制台品牌顶栏贯通 T 型外壳（ADR-071）+ 任务中心页眉下拉与进度自动刷新 + 节点删除实例守卫 / 应急密码重置 + 全站交互质量修复批次（mock 整站验收 ~50 条真缺陷）。真机验收见 `.tmp/acceptance-version-0.17.0-2026-07-15.md` 与 daemon 存活 node-2 复验。
 

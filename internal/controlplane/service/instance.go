@@ -1593,6 +1593,23 @@ func (s *InstanceService) GetMetrics(id uint) (*MetricsData, error) {
 // 节点未连接返回 ErrNodeOffline（HTTP 409）；预检未过返回 *PreflightError（HTTP 422）并写 statusReason；
 // 老 Worker 无该 RPC（Unimplemented）则跳过预检、保持现有异步启动行为不变（向后兼容）。
 func (s *InstanceService) preflightStart(instance *model.Instance) error {
+	// 代理启动前置校验（FIX，真机复现 BungeeCord「No servers defined」崩溃）：
+	// 无启用后端注册的代理直接启动，BungeeCord/Velocity 会在读到空 servers 段时抛
+	// IllegalArgumentException: No servers defined 崩溃。此为纯 CP 侧 DB 校验，先于节点连通/Worker RPC，
+	// 给出可直接修复的明确原因（HTTP 422），把「崩一圈才知道」提前为「启动前拦截」。
+	if instance.Role == model.InstanceRoleProxy {
+		var enabled int64
+		if err := s.db.Model(&model.ServerRegistration{}).
+			Where("proxy_id = ? AND enabled = ?", instance.ID, true).
+			Count(&enabled).Error; err != nil {
+			slog.Warn("代理启动预检：统计启用后端注册失败，跳过该项校验", "instanceId", instance.UUID, "error", err)
+		} else if enabled == 0 {
+			reason := "代理未注册任何启用的后端服务器：直接启动会因「No servers defined」崩溃。请先为该代理添加并启用至少一个后端子服，再启动。"
+			s.updateStatusReasonOnly(instance.ID, reason)
+			return &PreflightError{Reason: reason}
+		}
+	}
+
 	var node model.Node
 	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
 		return ErrNodeOffline

@@ -115,3 +115,47 @@ func TestStartPreflight_OK(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, model.InstanceStatusStarting, got.Status)
 }
+
+// 代理无启用后端注册 → 启动前拦截返回 *PreflightError（杜绝 BungeeCord「No servers defined」崩溃），
+// 状态保持 STOPPED、原因写入 statusReason；该校验先于节点连通/Worker RPC（空连接池也应命中）。
+func TestStartPreflight_ProxyNoBackends(t *testing.T) {
+	svc, _, _, inst := newPreflightFixture(t)
+	require.NoError(t, svc.db.Model(inst).Update("role", model.InstanceRoleProxy).Error)
+
+	err := svc.Start(inst.ID)
+	var pfErr *PreflightError
+	require.ErrorAs(t, err, &pfErr)
+	assert.Contains(t, pfErr.Reason, "No servers defined")
+
+	got, err := svc.GetByID(inst.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.InstanceStatusStopped, got.Status, "代理无后端预检失败状态不得进 STARTING")
+	assert.Contains(t, got.StatusReason, "后端", "无后端原因应写入 statusReason")
+}
+
+// 代理有启用后端注册 → 放行到 Worker 预检 RPC（fake 放行 → STARTING）。
+func TestStartPreflight_ProxyWithBackendPasses(t *testing.T) {
+	svc, pool, node, inst := newPreflightFixture(t)
+	require.NoError(t, svc.db.Model(inst).Update("role", model.InstanceRoleProxy).Error)
+
+	backend := &model.Instance{
+		NodeID: node.ID, Name: "backend-1", Type: model.InstanceTypeMinecraftJava,
+		ProcessType: model.ProcessTypeDaemon, StartCommand: "java -jar server.jar",
+		Status: model.InstanceStatusStopped, Role: model.InstanceRoleBackend,
+	}
+	require.NoError(t, svc.db.Create(backend).Error)
+	require.NoError(t, svc.db.Create(&model.ServerRegistration{
+		ProxyID: inst.ID, BackendID: backend.ID, Alias: "b1", Enabled: true,
+	}).Error)
+
+	pool.SetWorkerClientForTest(node.UUID, &fakeWorkerClient{
+		preflightResp: &workerpb.InstanceActionResponse{Success: true},
+	})
+
+	err := svc.Start(inst.ID)
+	require.NoError(t, err)
+
+	got, err := svc.GetByID(inst.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.InstanceStatusStarting, got.Status)
+}
