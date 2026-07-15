@@ -21,11 +21,11 @@ export default defineConfig({
     trace: 'on-first-retry',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-  // 自动起 mock 模式 dev server（dev:mock=VITE_MOCK=1）；本地复用已开的，CI 新起。
+  // 自动起当前工作区的 mock dev server；默认禁止复用未知服务，避免本地旧进程造成假失败。
   webServer: {
     command: `npm run dev:mock -- --host 127.0.0.1 --port ${e2ePort}`,
     url: e2eBaseURL,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: process.env.PLAYWRIGHT_REUSE_SERVER === '1',
     timeout: 120_000,
   },
 })
