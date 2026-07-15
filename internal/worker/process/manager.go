@@ -575,7 +575,15 @@ func (m *Manager) stopLocked(uuid string, inst *Instance) error {
 	return nil
 }
 
-// Restart 强制终止并重新启动实例，整个过程持有同一实例的生命周期锁。
+// Restart 优雅重启实例：运行中先发停止命令让游戏服正常关服（保存世界、释放 world/session.lock、
+// 输出关服日志），等旧进程完全退出后再启动；已停止/崩溃则直接启动。整个过程持有同一实例生命周期锁。
+//
+// 此前用强杀（killLocked）+ 立即启动：daemon 模式强杀 wrapper 进程树时，Unix 上自成进程组的 Java
+// 可能未被杀到而沦为孤儿、仍占 world 锁，新进程随即启动即撞 Paper `SessionLock$ExceptionWorldConflict`
+// （真机复现）；且强杀无关服日志、跳过世界保存。改走优雅停止——stopLocked 下发 stop 控制帧由
+// wrapper 优雅关服（自带超时强杀兜底、复用同一策略）；startLocked 内 strategy.Start() 的
+// daemon.WaitForPriorExit 依 PID 文件等旧 wrapper/Java 全退出（best-effort 上限）再拉起新进程，
+// reapWrapper 的 `d.wrapperCmd != cmd` 陈旧守卫保证旧 reaper 不误改新实例状态。
 func (m *Manager) Restart(uuid string) error {
 	inst, exists := m.lockInstanceOperation(uuid)
 	if !exists {
@@ -583,8 +591,14 @@ func (m *Manager) Restart(uuid string) error {
 	}
 	defer inst.operationMu.Unlock()
 
-	if err := m.killLocked(uuid, inst); err != nil {
-		return err
+	m.mu.RLock()
+	state := inst.State
+	m.mu.RUnlock()
+	// 运行中（含启动/停止中）先优雅停止、等旧进程退出；STOPPED/CRASHED 无活跃进程，直接（重）启动。
+	if state == StateRunning || state == StateStarting || state == StateStopping {
+		if err := m.stopLocked(uuid, inst); err != nil {
+			return err
+		}
 	}
 	return m.startLocked(uuid, inst)
 }

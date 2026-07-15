@@ -17,6 +17,7 @@ type blockingLifecycleStrategy struct {
 	startOnce   sync.Once
 	releaseOnce sync.Once
 	concurrent  bool
+	startCalls  int
 }
 
 func newBlockingLifecycleStrategy() *blockingLifecycleStrategy {
@@ -30,6 +31,7 @@ func newBlockingLifecycleStrategy() *blockingLifecycleStrategy {
 func (s *blockingLifecycleStrategy) Start(context.Context) error {
 	s.mu.Lock()
 	s.state = StateRunning
+	s.startCalls++
 	s.mu.Unlock()
 	return nil
 }
@@ -87,6 +89,12 @@ func (s *blockingLifecycleStrategy) hadConcurrentCall() bool {
 	return s.concurrent
 }
 
+func (s *blockingLifecycleStrategy) startedCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.startCalls
+}
+
 func TestManager_RestartWaitsForStopAndKeepsNewProcessRunning(t *testing.T) {
 	m := NewManager(t.TempDir())
 	const uuid = "restart-serialized"
@@ -114,7 +122,10 @@ func TestManager_RestartWaitsForStopAndKeepsNewProcessRunning(t *testing.T) {
 	m.mu.RLock()
 	newStrategy := m.instances[uuid].strategy
 	m.mu.RUnlock()
-	require.NotSame(t, oldStrategy, newStrategy, "Restart 必须启动新策略")
+	// 优雅重启复用同一策略对象（daemon 重连语义；reapWrapper 的 d.wrapperCmd!=cmd 陈旧守卫保证安全），
+	// 以「策略被重新 Start 拉起新进程」判定重启生效，而非「策略对象被替换」（旧强杀实现的副产物）。
+	require.Same(t, oldStrategy, newStrategy, "优雅重启复用同一策略对象")
+	require.Equal(t, 1, oldStrategy.startedCount(), "Restart 必须重新 Start 拉起新进程")
 	require.False(t, oldStrategy.hadConcurrentCall(), "旧策略生命周期方法不得并发执行")
 	t.Cleanup(func() { _ = m.Kill(uuid) })
 }

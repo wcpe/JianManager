@@ -13,6 +13,8 @@ import (
 // Manager 在「策略异步崩溃 → markStrategyState 同步 → 重启」路径上的记账与守卫行为。
 type fakeStrategy struct {
 	startCount int
+	stopCount  int
+	killCount  int
 	state      InstanceState
 	// onStart 可选钩子：在 Start 记账为 RUNNING 后、返回前同步触发，用于确定性地模拟
 	// 「进程在 strategy.Start 返回前就崩溃」的并发时序（启动窗口竞态），无需真实进程与 sleep。
@@ -27,8 +29,8 @@ func (f *fakeStrategy) Start(context.Context) error {
 	}
 	return nil
 }
-func (f *fakeStrategy) Stop() error              { f.state = StateStopped; return nil }
-func (f *fakeStrategy) Kill() error              { f.state = StateStopped; return nil }
+func (f *fakeStrategy) Stop() error              { f.stopCount++; f.state = StateStopped; return nil }
+func (f *fakeStrategy) Kill() error              { f.killCount++; f.state = StateStopped; return nil }
 func (f *fakeStrategy) SendCommand(string) error { return nil }
 func (f *fakeStrategy) State() InstanceState     { return f.state }
 func (f *fakeStrategy) Close() error             { return nil }
@@ -59,6 +61,50 @@ func TestManager_MarkStrategyState_AllowsRestart(t *testing.T) {
 	st, _ = m.GetState(uuid)
 	assert.Equal(t, StateRunning, st)
 	assert.GreaterOrEqual(t, fake.startCount, 1, "重启应再次调用策略 Start")
+}
+
+// TestManager_Restart_GracefulStopsNotKills 钉死 Restart 走优雅停止（Stop）而非强杀（Kill）：
+// 强杀在 daemon 模式会孤儿化 Unix 上自成进程组的 Java、留占 world/session.lock，新进程随即启动
+// 即撞 Paper SessionLock$ExceptionWorldConflict（真机复现）。运行中 Restart 必须发一次 Stop、零 Kill。
+func TestManager_Restart_GracefulStopsNotKills(t *testing.T) {
+	m := NewManager(t.TempDir())
+	uuid := "restart-graceful"
+	require.NoError(t, createDirect(m, uuid, "Fake", "echo hi", "."))
+
+	fake := &fakeStrategy{state: StateRunning}
+	m.mu.Lock()
+	inst := m.instances[uuid]
+	inst.strategy = fake
+	inst.State = StateRunning
+	m.mu.Unlock()
+
+	require.NoError(t, m.Restart(uuid))
+
+	assert.Equal(t, 1, fake.stopCount, "运行中 Restart 应发一次优雅停止")
+	assert.Equal(t, 0, fake.killCount, "运行中 Restart 不得强杀（会孤儿化 Java 撞 session.lock）")
+	assert.GreaterOrEqual(t, fake.startCount, 1, "Restart 应重新拉起进程")
+	st, _ := m.GetState(uuid)
+	assert.Equal(t, StateRunning, st)
+}
+
+// TestManager_Restart_StoppedInstanceJustStarts 已停止/崩溃实例 Restart 直接启动、不误发 Kill/Stop。
+func TestManager_Restart_StoppedInstanceJustStarts(t *testing.T) {
+	m := NewManager(t.TempDir())
+	uuid := "restart-stopped"
+	require.NoError(t, createDirect(m, uuid, "Fake", "echo hi", "."))
+
+	fake := &fakeStrategy{state: StateStopped}
+	m.mu.Lock()
+	inst := m.instances[uuid]
+	inst.strategy = fake
+	inst.State = StateStopped
+	m.mu.Unlock()
+
+	require.NoError(t, m.Restart(uuid))
+
+	assert.Equal(t, 0, fake.stopCount, "已停止实例 Restart 不应发停止")
+	assert.Equal(t, 0, fake.killCount, "已停止实例 Restart 不应强杀")
+	assert.GreaterOrEqual(t, fake.startCount, 1, "已停止实例 Restart 应直接启动")
 }
 
 // TestManager_Start_PreservesCrashDuringStartWindow 确定性复现并回归「启动窗口竞态」：
