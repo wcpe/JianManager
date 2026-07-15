@@ -4,8 +4,10 @@ import { toast } from 'sonner'
 import { Archive } from 'lucide-react'
 import { useBackups, useCreateBackup, useDeleteBackup, useRestoreBackup, type BackupInfo } from '@/api/backups'
 import { useBackupStorages } from '@/api/backupStorages'
-import { useInstances } from '@/api/instances'
+import { useInstance, useInstanceSearch } from '@/api/instances'
+import { useDebounced } from '@/lib/use-debounced'
 import { Panel } from '@jianmanager/ui/components/panel'
+import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combobox'
 import { StatusBadge } from '@jianmanager/ui/components/status-badge'
 import { Button } from '@jianmanager/ui/components/button'
 import {
@@ -46,8 +48,28 @@ export default function BackupsPage() {
   const [restoreTarget, setRestoreTarget] = useState<number | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<BackupInfo | null>(null)
   const [view, setView] = useState<ConfigView>('list')
-  const { data: instances } = useInstances()
   const { data: storages } = useBackupStorages()
+
+  // 实例选择器改服务端按需搜索（Combobox）：输入防抖后下发 q，避免全量 option。
+  const [instanceQuery, setInstanceQuery] = useState('')
+  const debouncedInstanceQuery = useDebounced(instanceQuery.trim(), 250)
+  const { data: instanceSearch } = useInstanceSearch({
+    ...(debouncedInstanceQuery ? { q: debouncedInstanceQuery } : {}),
+    page: 1,
+    pageSize: 50,
+    sort: 'name',
+    order: 'asc',
+  })
+  // 当前选中实例详情（恢复守卫需其状态；深链/搜索翻页后仍可解析名称与状态）。
+  const { data: selectedInst } = useInstance(selectedInstance ?? 0)
+  // Combobox 选项：服务端搜索结果 + 保证已选实例始终在列（否则触发器显不出其名称）。
+  const instanceOptions = useMemo<ComboboxOption[]>(() => {
+    const opts = (instanceSearch?.items ?? []).map((inst) => ({ value: String(inst.id), label: inst.name }))
+    if (selectedInst && !opts.some((o) => o.value === String(selectedInst.id))) {
+      opts.unshift({ value: String(selectedInst.id), label: selectedInst.name })
+    }
+    return opts
+  }, [instanceSearch, selectedInst])
 
   // 先无轮询取一次以判定是否有进行中备份，再据此决定轮询间隔（FR-151）。
   const probe = useBackups(selectedInstance)
@@ -62,7 +84,6 @@ export default function BackupsPage() {
 
   // 实例进程可能存活（STARTING/RUNNING/STOPPING）时禁止恢复，与后端恢复守卫一致：
   // 运行中的服务器下次自动存档会覆盖掉刚恢复的文件，恢复会静默失效。
-  const selectedInst = (instances ?? []).find((inst) => inst.id === selectedInstance)
   const instanceLive = !!selectedInst && ['STARTING', 'RUNNING', 'STOPPING'].includes(selectedInst.status)
   const restoreDisabledTitle = instanceLive
     ? t('backups.restoreNeedStopped', '实例运行中，请先停止实例再恢复')
@@ -147,14 +168,15 @@ export default function BackupsPage() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-2xl font-bold">{t('backups.title', '备份管理')}</h1>
         <div className="flex gap-2 flex-wrap items-center">
-          <select
-            className="p-2 border rounded bg-background text-sm"
-            value={selectedInstance ?? ''}
-            onChange={(e) => setSelectedInstance(e.target.value ? Number(e.target.value) : undefined)}
-          >
-            <option value="">{t('backups.selectInstance', '选择实例')}</option>
-            {(instances ?? []).map((inst) => <option key={inst.id} value={inst.id}>{inst.name}</option>)}
-          </select>
+          <Combobox
+            className="w-52"
+            options={instanceOptions}
+            value={selectedInstance ? String(selectedInstance) : ''}
+            onChange={(v) => setSelectedInstance(v ? Number(v) : undefined)}
+            onQueryChange={setInstanceQuery}
+            allowCustom={false}
+            placeholder={t('backups.selectInstance', '选择实例')}
+          />
           <select
             className="p-2 border rounded bg-background text-sm"
             value={storageId ?? ''}

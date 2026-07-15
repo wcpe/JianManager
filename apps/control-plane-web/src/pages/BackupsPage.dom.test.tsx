@@ -17,21 +17,34 @@ import BackupsPage from './BackupsPage'
 describe('BackupsPage（mock）', () => {
   beforeEach(() => {
     loginMockUser() // 受 requireAuth 保护，渲染前置已登录态
-    // /instances 由实例域负责；本域测试只需一个最小桩供实例下拉选择。
+    // 实例选择器改 Combobox（服务端搜索）+ useInstance 拉选中详情；本域只需最小桩。
     server.use(
-      http.get(API('/instances'), () =>
-        HttpResponse.json([{ id: 1, name: 'survival', uuid: 'i-1' }]),
+      http.get(API('/instances/search'), () =>
+        HttpResponse.json({
+          items: [{ id: 1, name: 'survival', uuid: 'i-1', status: 'STOPPED' }],
+          total: 1,
+          page: 1,
+          pageSize: 50,
+        }),
+      ),
+      http.get(API('/instances/:id'), () =>
+        HttpResponse.json({ id: 1, name: 'survival', uuid: 'i-1', status: 'STOPPED' }),
       ),
     )
   })
 
-  /** 选中 id=1 的实例，触发 useBackups(1) 拉取该实例备份。 */
-  async function selectInstance(user: ReturnType<typeof userEvent.setup>) {
-    // 选实例前页面仅有「实例」「存储」两个原生 select；实例为第一个。
-    // 等实例查询返回、option「survival」渲染后再选，避免选不到值。
-    await screen.findByRole('option', { name: 'survival' })
-    const instanceSelect = screen.getAllByRole('combobox')[0]
-    await user.selectOptions(instanceSelect, '1')
+  /**
+   * 选中名为 `name` 的实例（默认 survival），触发 useBackups 拉取该实例备份。
+   * 实例选择器已改 Combobox（服务端搜索）：点触发器展开 → 点选项按钮提交。
+   */
+  async function selectInstance(
+    user: ReturnType<typeof userEvent.setup>,
+    name = 'survival',
+  ) {
+    // Combobox 触发器初始显示 placeholder「选择实例」。
+    await user.click(await screen.findByRole('button', { name: '选择实例' }))
+    // 展开后异步渲染服务端搜索结果 option；点其按钮提交。
+    await user.click(await screen.findByRole('button', { name }))
   }
 
   it('选实例后渲染 seed 备份', async () => {
@@ -68,8 +81,16 @@ describe('BackupsPage（mock）', () => {
     const user = userEvent.setup()
     let createBody: Record<string, unknown> | null = null
     server.use(
-      http.get(API('/instances'), () =>
-        HttpResponse.json([{ id: 2, name: 'remote-survival', uuid: 'i-2' }]),
+      http.get(API('/instances/search'), () =>
+        HttpResponse.json({
+          items: [{ id: 2, name: 'remote-survival', uuid: 'i-2', status: 'STOPPED' }],
+          total: 1,
+          page: 1,
+          pageSize: 50,
+        }),
+      ),
+      http.get(API('/instances/:id'), () =>
+        HttpResponse.json({ id: 2, name: 'remote-survival', uuid: 'i-2', status: 'STOPPED' }),
       ),
       http.post(API('/instances/:id/backups'), async ({ request }) => {
         createBody = await request.json() as Record<string, unknown>
@@ -78,9 +99,9 @@ describe('BackupsPage（mock）', () => {
     )
     renderWithProviders(<BackupsPage />)
 
-    await screen.findByRole('option', { name: 'remote-survival' })
-    const [instanceSelect, storageSelect] = screen.getAllByRole('combobox')
-    await user.selectOptions(instanceSelect, '2')
+    // 实例选 Combobox；存储仍为原生 select（下拉基数小），按 title 定位。
+    await selectInstance(user, 'remote-survival')
+    const storageSelect = screen.getByRole('combobox', { name: '存储位置' })
 
     expect(await screen.findByText('full-2026-06-03T02:00:00')).toBeInTheDocument()
     expect(screen.getAllByText('s3-primary').length).toBeGreaterThanOrEqual(2)
@@ -95,8 +116,16 @@ describe('BackupsPage（mock）', () => {
   it('实例运行中 → 恢复按钮禁用并提示先停止（FR-013 恢复守卫回归）', async () => {
     const user = userEvent.setup()
     server.use(
-      http.get(API('/instances'), () =>
-        HttpResponse.json([{ id: 1, name: 'survival', uuid: 'i-1', status: 'RUNNING' }]),
+      http.get(API('/instances/search'), () =>
+        HttpResponse.json({
+          items: [{ id: 1, name: 'survival', uuid: 'i-1', status: 'RUNNING' }],
+          total: 1,
+          page: 1,
+          pageSize: 50,
+        }),
+      ),
+      http.get(API('/instances/:id'), () =>
+        HttpResponse.json({ id: 1, name: 'survival', uuid: 'i-1', status: 'RUNNING' }),
       ),
     )
     renderWithProviders(<BackupsPage />)
@@ -115,8 +144,16 @@ describe('BackupsPage（mock）', () => {
   it('实例已停止 → 已完成备份的恢复按钮可用', async () => {
     const user = userEvent.setup()
     server.use(
-      http.get(API('/instances'), () =>
-        HttpResponse.json([{ id: 1, name: 'survival', uuid: 'i-1', status: 'STOPPED' }]),
+      http.get(API('/instances/search'), () =>
+        HttpResponse.json({
+          items: [{ id: 1, name: 'survival', uuid: 'i-1', status: 'STOPPED' }],
+          total: 1,
+          page: 1,
+          pageSize: 50,
+        }),
+      ),
+      http.get(API('/instances/:id'), () =>
+        HttpResponse.json({ id: 1, name: 'survival', uuid: 'i-1', status: 'STOPPED' }),
       ),
     )
     renderWithProviders(<BackupsPage />)
