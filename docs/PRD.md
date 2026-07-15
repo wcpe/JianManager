@@ -417,6 +417,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 | FR-338 | 备份存储配置编辑（feat，增强 FR-057，验收分诊：备份存储自交付起前后端均无 Update，改配置只能删了重建）：后端 `PUT /backup-storages/:id`（复用既有 validateCandidate/凭证 ${ENV} 引用校验/名称冲突校验，404/422 语义与 Create 一致）；前端编辑弹窗（受控填入现值、区分 create/update）+ 表格编辑入口；devmock 同步 → `docs/specs/backup-storage-update/spec.md` | P2 | 🔨 开发中 |
 | FR-339 | 实例控制台玩家/备份定时分区接真（feat，FR-269 首版占位归真，验收分诊：两页签停留「第一版原型」静态占位而后端/独立页面/hook 均已就绪）：抽实例作用域 `InstancePlayersSegment`（复用 useOnlinePlayers/useBans/useWhitelist 等）与 `InstanceBackupSegment`（useSchedules(id)+useBackups(id)）接入控制台页签；短期不能全接的分区从 TAB_KEYS 撤下不留假入口；清理占位文案 → `docs/specs/console-players-backup-segments/spec.md` | P2 | 🔨 开发中 |
 | FR-340 | 指标批量序列接口（feat，增强 FR-060/270，2026-07-15 验收分诊：节点详情实例对比对 N 个实例逐条 `GET /metrics/series` 造成 N+1 请求风暴且 30s 重拉）：后端新增多目标批量序列端点（一次查库按 targetId 分组返回 `{targetId→series[]}`，逐目标复用既有实例访问鉴权）；前端 NodeInstanceCompare 改单条批量查询 + 对比目标数上限；节点内实例清单改用 FR-247 已交付的聚合/搜索接口（gap:FR-270 归真一并收口）→ `docs/specs/metrics-batch-series/spec.md` | P1 | 🔨 开发中 |
+| FR-341 | daemon 实例在 Worker 重启后存活并自动重连（fix，ADR-003 闭环，2026-07-15 验收 FR-325 真机复现：`systemctl restart` 后 daemon wrapper 与游戏服一起死、命中「清理残留」而非「接管重连」）：定位三叠加杀手并各个击破——K1 wrapper 的 stdout/stderr 断管 SIGPIPE 崩溃（主因，`worker daemon` 子进程启动即 `signal.Ignore(SIGPIPE)`、Unix-only）；K2 systemd cgroup 连坐（worker unit 加 `KillMode=process`，同步内嵌副本+守护测试）；K3 优雅停机 90s 无界挂起（`GracefulStop` 设 5s 上限、超时强制 `Stop()`，确保 `StopAll` 的 daemon 优雅断开及时执行）；不回归 FR-310（删运行中实例仍强杀两棵进程树）→ `docs/specs/daemon-survival/spec.md` | P0 | 🔨 开发中 |
 
 ### 范围外（后续版本，暂不纳入 V1）
 
