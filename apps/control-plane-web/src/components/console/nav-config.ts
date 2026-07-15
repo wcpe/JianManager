@@ -3,6 +3,7 @@ import {
   Archive,
   BarChart3,
   Bell,
+  Bot,
   Box,
   Clapperboard,
   Database,
@@ -50,7 +51,7 @@ export interface NavSection {
 
 /**
  * 高密度控制台导航 IA（FR-268 / ADR-055）：平台首页 / 服务器 / 群组网络 / 观测 / 平台管理。
- * 侧栏只放跨服务器或平台级入口；单服能力（玩家、插件、备份、Bot、业务等）统一收进服务器控制台。
+ * 侧栏只放跨服务器或平台级入口；单服操作仍统一收进服务器控制台。
  */
 export const NAV_GROUPS: NavGroup[] = [
   { key: 'platformHome', labelKey: 'nav.platformHome', icon: LayoutDashboard, to: '/' },
@@ -60,6 +61,8 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: Server,
     children: [
       { to: '/instances', labelKey: 'nav.allInstances', icon: Box },
+      { to: '/players', labelKey: 'nav.players', icon: User },
+      { to: '/bots', labelKey: 'nav.bots', icon: Bot },
       { to: '/nodes', labelKey: 'nav.nodes', icon: Server },
       { to: '/super', labelKey: 'nav.superWorkbench', icon: LayoutGrid },
       { to: '/director', labelKey: 'nav.director', icon: Clapperboard },
@@ -104,12 +107,14 @@ export const NAV_GROUPS: NavGroup[] = [
           { to: '/runtime-assets', labelKey: 'nav.runtimeAssets', icon: Layers },
           { to: '/storage', labelKey: 'nav.storage', icon: HardDrive },
           { to: '/backup-storages', labelKey: 'nav.backupStorages', icon: Archive },
+          { to: '/backups', labelKey: 'nav.backups', icon: Archive },
         ],
       },
       {
         labelKey: 'nav.taskNotification',
         children: [
           { to: '/tasks', labelKey: 'nav.tasks', icon: ListChecks },
+          { to: '/schedules', labelKey: 'nav.schedules', icon: FileClock },
           { to: '/notifications', labelKey: 'nav.notifications', icon: Bell },
         ],
       },

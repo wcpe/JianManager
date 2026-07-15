@@ -1,8 +1,11 @@
 import { beforeAll, describe, expect, it } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
+import { server } from '@jianmanager/devmock/server'
+import { API } from '@jianmanager/devmock/api'
 import InstanceConsolePage from './InstanceConsolePage'
 import BotSegment from './BotSegment'
 
@@ -53,5 +56,67 @@ describe('FR-039 控制台实例内 Bot 管理段', () => {
       const guardRow = screen.getByText('GuardBot').closest('li') as HTMLElement
       expect(within(guardRow).getByText('巡逻')).toBeInTheDocument()
     })
+  })
+
+  it('等待与停止 Bot 点击重连只提交 start 批量动作', async () => {
+    loginMockUser()
+    const requests: Record<string, unknown>[] = []
+    const bots = [
+      {
+        id: 11,
+        uuid: 'bot-waiting',
+        instanceId: 1,
+        name: 'WaitingBot',
+        status: 'pending',
+        config: JSON.stringify({ server: '127.0.0.1', port: 25565, auth: 'offline' }),
+        behavior: 'idle',
+        workerId: 'node-1',
+        createdAt: '2026-06-28T00:00:00Z',
+        updatedAt: '2026-06-28T00:00:00Z',
+      },
+      {
+        id: 12,
+        uuid: 'bot-stopped',
+        instanceId: 1,
+        name: 'StoppedBot',
+        status: 'stopped',
+        config: JSON.stringify({ server: '127.0.0.1', port: 25565, auth: 'offline' }),
+        behavior: 'guard',
+        workerId: 'node-1',
+        createdAt: '2026-06-28T00:00:00Z',
+        updatedAt: '2026-06-28T00:00:00Z',
+      },
+    ]
+    server.use(
+      http.get(API('/bots'), () => HttpResponse.json({ items: bots, total: bots.length, page: 1, pageSize: 50 })),
+      http.post(API('/bots/batch'), async (info) => {
+        const body = (await info.request.json()) as Record<string, unknown>
+        requests.push(body)
+        return HttpResponse.json({
+          action: body.action,
+          requested: 1,
+          succeeded: 1,
+          failed: 0,
+          skipped: 0,
+          errors: [],
+        })
+      }),
+    )
+    renderWithProviders(<BotSegment instanceId={1} />)
+
+    for (const name of ['WaitingBot', 'StoppedBot']) {
+      const row = (await screen.findByText(name)).closest('li') as HTMLElement
+      await userEvent.click(within(row).getByRole('button', { name: '重连' }))
+      await waitFor(() => expect(requests).toHaveLength(name === 'WaitingBot' ? 1 : 2))
+    }
+
+    expect(requests).toEqual([
+      { action: 'start', ids: [11] },
+      { action: 'start', ids: [12] },
+    ])
+    for (const request of requests) {
+      expect(request).not.toHaveProperty('behavior')
+      expect(request.action).not.toBe('set-behavior')
+    }
   })
 })

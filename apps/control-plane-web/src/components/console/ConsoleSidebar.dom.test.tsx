@@ -42,6 +42,17 @@ describe('ConsoleSidebar 高密度控制台 IA（FR-268）', () => {
     expect(screen.getByRole('link', { name: '统计分析' })).toHaveAttribute('href', '/statistics')
   })
 
+  it('FR-272 页面在桌面侧栏归入指定导航域', () => {
+    renderWithProviders(<ConsoleSidebar />)
+    const serversGroup = screen.getByRole('button', { name: '服务器' }).parentElement as HTMLElement
+    const platformGroup = screen.getByRole('button', { name: '平台管理' }).parentElement as HTMLElement
+
+    expect(within(serversGroup).getByRole('link', { name: '玩家' })).toHaveAttribute('href', '/players')
+    expect(within(serversGroup).getByRole('link', { name: 'Bot' })).toHaveAttribute('href', '/bots')
+    expect(within(platformGroup).getByRole('link', { name: '定时任务' })).toHaveAttribute('href', '/schedules')
+    expect(within(platformGroup).getByRole('link', { name: '备份' })).toHaveAttribute('href', '/backups')
+  })
+
   it('任务中心归「平台管理」，不在「观测」域', () => {
     renderWithProviders(<ConsoleSidebar />)
     const tasks = screen.getByRole('link', { name: '任务中心' })

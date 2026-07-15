@@ -12,12 +12,14 @@ import LicensesPage from './LicensesPage'
  * 许可清单走静态资源 /licenses.json（裸 http.get mock），非 /api，故错误注入用 server.use 覆盖。
  */
 describe('LicensesPage（mock 假后端）', () => {
-  it('渲染出 seed 依赖（运行时 react / 开发 vitest）', async () => {
+  it('渲染五个发行来源及其代表依赖', async () => {
     loginMockUser()
     renderWithProviders(<LicensesPage />)
     expect(await screen.findByText('react')).toBeInTheDocument()
-    expect(screen.getByText('vitest')).toBeInTheDocument()
+    expect(screen.getByText('mineflayer')).toBeInTheDocument()
     expect(screen.getByText('github.com/gin-gonic/gin')).toBeInTheDocument()
+    expect(screen.getByText('com.github.luben:zstd-jni')).toBeInTheDocument()
+    expect(screen.getByText('org.ow2.asm:asm')).toBeInTheDocument()
   })
 
   it('搜索过滤 → 列表联动收敛', async () => {

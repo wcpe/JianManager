@@ -4,7 +4,7 @@ import { login } from './helpers'
 /**
  * FR-135 开源许可与依赖清单页 · 单机（Playwright + mock 模式）验收。
  * 覆盖：从侧栏底部「开源许可」入口进 /licenses（带返回）；照参考图布局——搜索框（按包名过滤）+
- * 运行时/开发分区计数 + 表格[包名·版本·许可证·作者] + 行内展开许可证全文；三源依赖（web npm / Go go.mod 等）。
+ * 运行时/开发分区计数 + 表格[包名·版本·许可证·作者] + 行内展开许可证全文；五类发行来源完整覆盖。
  * 证据落 .tmp/acceptance/FR-135/。
  */
 
@@ -20,10 +20,12 @@ test('FR-135 侧栏入口进开源许可页 + 依赖清单渲染 + 搜索过滤 
   await expect(page.getByRole('heading', { name: '开源许可' })).toBeVisible()
   await expect(page.getByRole('button', { name: '返回' })).toBeVisible()
 
-  // 依赖清单渲染（运行时 react / 开发 vitest / Go gin — 三源覆盖）
+  // 五类发行来源均有代表依赖，Java 来源不得静默漏扫。
   await expect(page.getByText('react', { exact: true }).first()).toBeVisible()
-  await expect(page.getByText('vitest', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('mineflayer', { exact: true }).first()).toBeVisible()
   await expect(page.getByText('github.com/gin-gonic/gin').first()).toBeVisible()
+  await expect(page.getByText('com.github.luben:zstd-jni').first()).toBeVisible()
+  await expect(page.getByText('org.ow2.asm:asm', { exact: true }).first()).toBeVisible()
 
   // 运行时/开发分区计数（表格标题旁计数徽标）+ 表头列
   await expect(page.getByText('运行时依赖').first()).toBeVisible()

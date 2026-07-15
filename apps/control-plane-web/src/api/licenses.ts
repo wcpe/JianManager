@@ -7,10 +7,10 @@ export interface LicenseDependency {
   license: string
   author: string
   url: string
-  /** 来源：web/bot-worker 为 npm，go 为 go.mod。 */
-  scope: 'web' | 'bot-worker' | 'go'
-  ecosystem: 'npm' | 'go'
-  /** 运行时依赖 vs 开发依赖（Go 依赖一律 runtime）。 */
+  /** 来源：两个 npm 应用、Go 模块或两个 Java 发行物。 */
+  scope: 'web' | 'bot-worker' | 'go' | 'client-updater' | 'serverprobe'
+  ecosystem: 'npm' | 'go' | 'maven'
+  /** 运行时依赖 vs 开发依赖（Go/Java 发行依赖一律 runtime）。 */
   type: 'runtime' | 'dev'
   /** 许可证全文（可能为空）。 */
   licenseText: string

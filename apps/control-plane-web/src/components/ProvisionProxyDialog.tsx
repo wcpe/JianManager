@@ -128,7 +128,7 @@ export default function ProvisionProxyDialog({ open, onClose }: ProvisionProxyDi
       },
       {
         onSuccess: (res) => {
-          toast.success(t('proxy.success', { name }))
+          toast.success(t('proxy.submitted', '代理搭建任务已提交，进度见任务中心'))
           if (res.forwardingSecret) {
             setForwardingSecret(res.forwardingSecret)
           } else {

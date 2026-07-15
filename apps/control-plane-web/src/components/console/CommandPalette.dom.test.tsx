@@ -37,6 +37,23 @@ describe('CommandPalette DOM', () => {
     useConsoleStore.setState({ commandPaletteOpen: true, selectedNodeId: null })
   })
 
+  it.each([
+    ['玩家', '/players'],
+    ['Bot', '/bots'],
+    ['定时任务', '/schedules'],
+    ['备份', '/backups'],
+  ])('FR-272 页面「%s」可从命令面板检索并跳转', async (label, path) => {
+    const user = userEvent.setup()
+    renderWithProviders(<CommandPalette />, { route: '/' })
+
+    const input = screen.getByLabelText('搜索实例 / 节点 / 页面 / 操作…')
+    await user.clear(input)
+    await user.type(input, label)
+    await user.click(await screen.findByText(label))
+
+    expect(window.location.pathname).toBe(path)
+  })
+
   it('输入关键字走服务端实例搜索，并跳转到 /instances/:id', async () => {
     const user = userEvent.setup()
     const seen: Record<string, string>[] = []

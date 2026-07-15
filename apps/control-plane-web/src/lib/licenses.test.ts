@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import licensesManifest from '../../public/licenses.json'
 import { depKey, filterByName, partitionDeps, type DepLike } from './licenses'
 
 const make = (over: Partial<DepLike>): DepLike => ({
@@ -8,6 +9,43 @@ const make = (over: Partial<DepLike>): DepLike => ({
   type: 'runtime',
   license: 'MIT',
   ...over,
+})
+
+describe('生成许可证清单', () => {
+  const dependencies = licensesManifest.dependencies
+
+  it.each(['web', 'bot-worker', 'go', 'client-updater', 'serverprobe'])('%s 来源非空', (scope) => {
+    expect(dependencies.some((dependency) => dependency.scope === scope)).toBe(true)
+  })
+
+  it('保留完整依赖计数与运行时/开发分类', () => {
+    const runtime = dependencies.filter((dependency) => dependency.type === 'runtime')
+    const dev = dependencies.filter((dependency) => dependency.type === 'dev')
+
+    expect(dependencies).toHaveLength(945)
+    expect(runtime.length).toBeGreaterThan(0)
+    expect(dev.length).toBeGreaterThan(0)
+    expect(runtime.length + dev.length).toBe(dependencies.length)
+  })
+
+  it('许可证全文不公开 Codecov token、徽章或 README 内容', () => {
+    const licenseTexts = dependencies.map((dependency) => dependency.licenseText).join('\n')
+
+    expect(licenseTexts).not.toMatch(/codecov|badge|shields\.io|\[!\[|README(?:\.md)?/i)
+  })
+
+  it('包含 Java 发行物的实际打包依赖', () => {
+    expect(
+      dependencies.some(
+        (dependency) => dependency.scope === 'client-updater' && dependency.name.endsWith(':zstd-jni'),
+      ),
+    ).toBe(true)
+    expect(
+      dependencies.some(
+        (dependency) => dependency.scope === 'serverprobe' && dependency.name === 'org.ow2.asm:asm',
+      ),
+    ).toBe(true)
+  })
 })
 
 describe('depKey', () => {

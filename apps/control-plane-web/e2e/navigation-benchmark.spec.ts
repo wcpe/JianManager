@@ -56,7 +56,17 @@ const ROUTES: BenchRoute[] = [
 
 const OVERVIEW_RESPONSIVE_VIEWPORTS = [
   { label: '移动端', width: 390, height: 844 },
+  { label: '窄桌面端', width: 1024, height: 768 },
   { label: '桌面端', width: 1366, height: 768 },
+]
+
+const RESPONSIVE_TABLE_ROUTES: BenchRoute[] = [
+  { label: '用户管理', href: '/users', readySelector: '[data-page="users"]' },
+  {
+    label: '客户端分发密钥',
+    href: '/client-channels?channel=skyblock-s1&tab=keys',
+    readySelector: '[data-page="client-channel-workbench"]',
+  },
 ]
 
 /** 重置会影响导航可见性的本地持久状态，避免 benchmark 被侧栏折叠态干扰。 */
@@ -92,6 +102,45 @@ async function expectNoWorkspaceOverflow(page: Page, label: string, pageSelector
   })
   expect(overflow, `${label} 主工作区横向溢出像素`).toBeLessThanOrEqual(2)
   await page.locator(pageSelector).evaluate((el) => el.removeAttribute('data-overflow-probe'))
+}
+
+/** 检查共享表格由自身容器承接横向滚动，不把滚动传导到主工作区。 */
+async function expectTablesOwnHorizontalScroll(page: Page, label: string, pageSelector: string): Promise<void> {
+  const result = await page.locator(pageSelector).evaluate((root) => {
+    const workspace = root.closest('.jm-workspace-bg') as HTMLElement | null
+    const workspaceScrollLeft = workspace?.scrollLeft ?? 0
+    const violations: string[] = []
+    const tables = Array.from(root.querySelectorAll<HTMLElement>('[data-slot="table"]'))
+
+    tables.forEach((table, index) => {
+      const container = table.parentElement
+      if (!container || container.getAttribute('data-slot') !== 'table-container') {
+        violations.push(`table[${index}] 缺少共享滚动容器`)
+        return
+      }
+
+      const overflowX = getComputedStyle(container).overflowX
+      if (overflowX !== 'auto' && overflowX !== 'scroll') {
+        violations.push(`table[${index}] overflow-x=${overflowX}`)
+        return
+      }
+
+      const maxScrollLeft = container.scrollWidth - container.clientWidth
+      if (maxScrollLeft > 2) {
+        container.scrollLeft = maxScrollLeft
+        if (container.scrollLeft <= 0) violations.push(`table[${index}] 自身容器不可滚动`)
+        if ((workspace?.scrollLeft ?? 0) !== workspaceScrollLeft) {
+          violations.push(`table[${index}] 滚动传导到主工作区`)
+        }
+        container.scrollLeft = 0
+      }
+    })
+
+    return { tableCount: tables.length, violations }
+  })
+
+  expect(result.tableCount, `${label} 关键表格存在`).toBeGreaterThan(0)
+  expect(result.violations, `${label} 表格横向滚动归属`).toEqual([])
 }
 
 async function animationDurationMs(page: Page, selector: string): Promise<number> {
@@ -340,6 +389,8 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
   })
 
   test('关键页面桌面和移动端均不产生横向溢出', async ({ page }) => {
+    test.setTimeout(60_000)
+
     for (const viewport of OVERVIEW_RESPONSIVE_VIEWPORTS) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height })
       for (const route of ROUTES) {
@@ -350,6 +401,19 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
         await ready.evaluate((el) => el.setAttribute('data-overflow-probe', 'true'))
         await expectNoWorkspaceOverflow(page, `${viewport.label} ${route.label}`, route.readySelector)
       }
+    }
+  })
+
+  test('1024x768 关键表格只在自身容器内横向滚动', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 })
+
+    for (const route of RESPONSIVE_TABLE_ROUTES) {
+      await page.goto(route.href)
+      const ready = page.locator(route.readySelector)
+      await expect(ready, `${route.label} 页面就绪`).toBeVisible()
+      await ready.evaluate((el) => el.setAttribute('data-overflow-probe', 'true'))
+      await expectNoWorkspaceOverflow(page, `窄桌面端 ${route.label}`, route.readySelector)
+      await expectTablesOwnHorizontalScroll(page, `窄桌面端 ${route.label}`, route.readySelector)
     }
   })
 
@@ -429,9 +493,11 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
       expect(collapseStats.contentFinalX, `${route.label} 收起结束内容区落到图标轨后`).toBeLessThanOrEqual(80)
       expect(collapseStats.framesOver24, `${route.label} 收起掉帧数量`).toBeLessThanOrEqual(10)
 
-      const expandButton = page.locator('[data-mode="collapsed"][aria-hidden="false"] button[aria-label="展开侧栏"]')
-      await expect(expandButton, `${route.label} 折叠态展开按钮存在`).toHaveCount(2)
-      await expandButton.last().click()
+      const headerExpandButton = page.locator('[data-slot="console-header"]').getByRole('button', { name: '展开侧栏' })
+      const railExpandButton = page.locator('[data-mode="collapsed"][aria-hidden="false"] button[aria-label="展开侧栏"]')
+      await expect(headerExpandButton, `${route.label} 顶栏展开入口唯一`).toHaveCount(1)
+      await expect(railExpandButton, `${route.label} 图标轨展开入口唯一`).toHaveCount(1)
+      await railExpandButton.click()
       const expandStats = await sidebarFrameStats(page)
       await expect(sidebar, `${route.label} 侧栏展开动画状态`).toHaveAttribute('data-state', 'expanded')
       expect(expandStats.sidebarTransition, `${route.label} 展开时 aside 不做 width transition，避免主工作区逐帧重排`).not.toContain('width')
@@ -461,12 +527,12 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
     })
   })
 
-  test('系统减少动态时仍保留控制台切页与进度反馈动画', async ({ page }) => {
+  test('系统减少动态时关闭装饰切页动画并保留进度反馈', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await page.goto('/networks/topology')
     await expect(page.locator('[data-page="networks"]'), '网络拓扑页就绪').toBeVisible()
 
-    expect(await animationDurationMs(page, '[data-slot="workspace-route-transition"]'), '减少动态模式下切页动画时长').toBeGreaterThanOrEqual(120)
+    expect(await animationDurationMs(page, '[data-slot="workspace-route-transition"]'), '减少动态模式下关闭装饰切页动画').toBe(0)
 
     await page.locator('a[href="/logs"]').first().click()
     await expect.poll(

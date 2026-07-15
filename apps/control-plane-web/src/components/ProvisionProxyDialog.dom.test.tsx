@@ -97,8 +97,9 @@ describe('ProvisionProxyDialog（mock 假后端，搭建代理流程）', () => 
 
     await user.click(screen.getByRole('button', { name: '搭建' }))
 
-    // 联动：POST /instances/provision/proxy 落 instances 集合（role=proxy）→ 失效重取 → 列表出现。
+    // 联动：POST /instances/provision/proxy 秒回 instance + taskId，实例集合刷新并提示转入任务中心。
     await waitFor(() => expect(within(list).getByText('edge-proxy')).toBeInTheDocument())
+    expect(await screen.findByText('代理搭建任务已提交，进度见任务中心')).toBeInTheDocument()
     expect(await screen.findByRole('heading', { name: 'Forwarding secret' })).toBeInTheDocument()
     expect(screen.getByText('mock-forwarding-secret')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '复制 secret' })).toBeInTheDocument()

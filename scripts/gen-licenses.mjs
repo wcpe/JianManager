@@ -1,4 +1,4 @@
-// 构建期依赖与许可证扫描（FR-135）：全覆盖三源——control-plane-web(pnpm) + bot-worker(npm) + Go(go.mod)，
+// 构建期依赖与许可证扫描（FR-135）：覆盖 Web、Bot Worker、Go、客户端更新器与 ServerProbe，
 // 产出 apps/control-plane-web/public/licenses.json 供前端 /licenses 页读取。**构建期生成、不手维护**。
 //
 // 用法：node scripts/gen-licenses.mjs            （由 Makefile `gen-licenses` 调用，build 前置）
@@ -7,13 +7,13 @@
 //      运行时/开发分区即据此；作者取 publisher、链接取 repository、全文读 licenseFile。
 // Go ：go-licenses csv（实际链接进二进制的包集，比 go.mod 全图更贴近「真正分发」），
 //      版本/目录/全文用 go list -m 补全；go-licenses 不可用时回退 go list + 许可证启发式识别。
-//
-// 设计为构建期稳健：任一源失败只告警并跳过该源（产出可能为部分），不让整个 build 崩。
+// Java：调用仓库自带 Gradle wrapper 的 dependencies 标准输出，只收发行物实际 runtime/taboo 依赖；
+//       任一发行来源为空时直接失败，避免生成部分清单。
 
 import { execSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, statSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
@@ -21,11 +21,14 @@ const REPO_ROOT = resolve(SCRIPT_DIR, '..')
 // FR-283：前端迁 apps/control-plane-web（pnpm workspace，锁文件在仓库根 pnpm-lock.yaml）。
 const WEB_DIR = join(REPO_ROOT, 'apps', 'control-plane-web')
 const BOT_DIR = join(REPO_ROOT, 'apps', 'bot-worker')
+const CLIENT_UPDATER_DIR = join(REPO_ROOT, 'client-updater')
+const SERVERPROBE_DIR = join(REPO_ROOT, 'third_party', 'ServerProbe')
 const OUT_FILE = join(WEB_DIR, 'public', 'licenses.json')
+const REQUIRED_SCOPES = ['web', 'bot-worker', 'go', 'client-updater', 'serverprobe']
 
 const MAX_BUFFER = 128 * 1024 * 1024
 const MAX_LICENSE_TEXT = 64 * 1024
-const LICENSE_FILE_RE = /^(LICENSE|LICENCE|COPYING|COPYRIGHT)(\.[\w.-]+)?$/i
+const LICENSE_FILE_RE = /^(LICENSE|LICENCE|COPYING|NOTICE|UNLICENSE)(?:[._-][\w.-]+)?$/i
 const SCRIPT_FILE = fileURLToPath(import.meta.url)
 const FORCE = process.argv.includes('--force') || process.env.LICENSES_FORCE === '1'
 const DEPENDENCY_INPUT_FILES = [
@@ -35,6 +38,21 @@ const DEPENDENCY_INPUT_FILES = [
   join(BOT_DIR, 'package-lock.json'),
   join(REPO_ROOT, 'go.mod'),
   join(REPO_ROOT, 'go.sum'),
+  join(CLIENT_UPDATER_DIR, 'settings.gradle.kts'),
+  join(CLIENT_UPDATER_DIR, 'build.gradle.kts'),
+  join(CLIENT_UPDATER_DIR, 'gradle.properties'),
+  join(CLIENT_UPDATER_DIR, 'gradle', 'wrapper', 'gradle-wrapper.properties'),
+  join(CLIENT_UPDATER_DIR, 'wedge', 'build.gradle.kts'),
+  join(CLIENT_UPDATER_DIR, 'updater-core', 'build.gradle.kts'),
+  join(SERVERPROBE_DIR, 'settings.gradle.kts'),
+  join(SERVERPROBE_DIR, 'build.gradle.kts'),
+  join(SERVERPROBE_DIR, 'gradle.properties'),
+  join(SERVERPROBE_DIR, 'gradle', 'wrapper', 'gradle-wrapper.properties'),
+  join(SERVERPROBE_DIR, 'api', 'build.gradle.kts'),
+  join(SERVERPROBE_DIR, 'project', 'core', 'build.gradle.kts'),
+  join(SERVERPROBE_DIR, 'platform', 'platform-bukkit', 'build.gradle.kts'),
+  join(SERVERPROBE_DIR, 'platform', 'platform-bungee', 'build.gradle.kts'),
+  join(SERVERPROBE_DIR, 'plugin', 'build.gradle.kts'),
 ]
 const FINGERPRINT_FILES = [...DEPENDENCY_INPUT_FILES, SCRIPT_FILE]
 
@@ -63,6 +81,16 @@ function existingSourceHash() {
   }
 }
 
+/** 缓存清单也必须包含全部发行来源，防止沿用旧版三源结果。 */
+function existingManifestHasRequiredScopes() {
+  try {
+    const manifest = JSON.parse(readFileSync(OUT_FILE, 'utf8'))
+    return REQUIRED_SCOPES.every((scope) => manifest.dependencies?.some((dependency) => dependency.scope === scope))
+  } catch {
+    return false
+  }
+}
+
 /** 兼容旧清单：没有 sourceHash 时，只要依赖输入没比输出新，就快速复用。 */
 function existingOutputIsFreshByMtime() {
   try {
@@ -82,6 +110,14 @@ function readLicenseText(file) {
   } catch {
     return ''
   }
+}
+
+/** 仅明确的许可证文件名可作为静态公开全文，避免误收 README 等任意依赖文本。 */
+function readDeclaredLicenseText(file, license) {
+  const identifier = normLicense(license).replace(/[^A-Za-z0-9.+() /-]/g, '').slice(0, 160) || 'Unknown'
+  const fallback = `未找到可安全公开的许可证文件；依赖声明的许可证标识：${identifier}`
+  if (!file || !LICENSE_FILE_RE.test(basename(file))) return fallback
+  return readLicenseText(file) || fallback
 }
 
 /** 在模块目录里找许可证文件并读取全文。 */
@@ -167,7 +203,7 @@ function scanNpm(scope, dir) {
         scope,
         ecosystem: 'npm',
         type: mode === 'production' ? 'runtime' : 'dev',
-        licenseText: readLicenseText(meta.licenseFile),
+        licenseText: readDeclaredLicenseText(meta.licenseFile, meta.licenses),
       })
     }
   }
@@ -270,16 +306,103 @@ function scanGo() {
   return [...byPath.values()]
 }
 
+// ─────────────────────────────── Java / Gradle ───────────────────────────────
+
+const MAVEN_METADATA_OVERRIDES = new Map([
+  [
+    'com.github.luben:zstd-jni',
+    { license: 'BSD-2-Clause', author: 'Luben Karavelov', url: 'https://github.com/luben/zstd-jni' },
+  ],
+  ['org.ow2.asm:asm', { license: 'BSD-3-Clause', author: 'OW2', url: 'https://asm.ow2.io' }],
+  ['org.ow2.asm:asm-commons', { license: 'BSD-3-Clause', author: 'OW2', url: 'https://asm.ow2.io' }],
+  ['org.ow2.asm:asm-tree', { license: 'BSD-3-Clause', author: 'OW2', url: 'https://asm.ow2.io' }],
+])
+
+/** 从 Gradle dependencies 文本提取去重后的 Maven 坐标。 */
+function parseGradleDependencies(output) {
+  const coordinates = new Map()
+  for (const line of output.split(/\r?\n/)) {
+    const branch = line.match(/^[\s|+\\-]*---\s+(.+)$/)
+    if (!branch || branch[1].startsWith('project ')) continue
+    const matched = branch[1].match(/^([^:\s]+):([^:\s]+):([^\s]+)(?:\s+->\s+([^\s]+))?/)
+    if (!matched) continue
+    const [, group, artifact, requestedVersion, selectedVersion] = matched
+    const version = selectedVersion || requestedVersion
+    if (version === 'FAILED') throw new Error(`Gradle 依赖解析失败：${group}:${artifact}`)
+    coordinates.set(`${group}:${artifact}`, { group, artifact, version })
+  }
+  return [...coordinates.values()]
+}
+
+/** 调用项目自带 wrapper 查询指定发行 classpath；可用 LICENSES_GRADLE_OFFLINE=1 强制离线。 */
+function gradleDependencies(projectDir, projectPath, configuration) {
+  const wrapper = join(projectDir, process.platform === 'win32' ? 'gradlew.bat' : 'gradlew')
+  if (!existsSync(wrapper)) throw new Error(`缺少 Gradle wrapper：${wrapper}`)
+  const offline = process.env.LICENSES_GRADLE_OFFLINE === '1' ? '--offline ' : ''
+  const command = `"${wrapper}" --console=plain --quiet ${offline}${projectPath}:dependencies --configuration ${configuration}`
+  const output = execSync(command, {
+    cwd: projectDir,
+    maxBuffer: MAX_BUFFER,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).toString()
+  return parseGradleDependencies(output)
+}
+
+/** Java 元数据保持确定性；未知坐标仍入清单，但不猜测许可证与项目链接。 */
+function mavenMetadata(coordinate) {
+  const name = `${coordinate.group}:${coordinate.artifact}`
+  return MAVEN_METADATA_OVERRIDES.get(name) || { license: 'Unknown', author: coordinate.group, url: '' }
+}
+
+/** 扫描一个 Java 发行物；空结果视为构建错误，禁止静默生成残缺清单。 */
+function scanGradle(scope, projectDir, projectPath, configuration) {
+  let coordinates
+  try {
+    coordinates = gradleDependencies(projectDir, projectPath, configuration)
+  } catch (error) {
+    throw new Error(`${scope} 依赖扫描失败：${error.message}`)
+  }
+  if (coordinates.length === 0) throw new Error(`${scope} 依赖扫描结果为空`)
+  return coordinates.map((coordinate) => ({
+    name: `${coordinate.group}:${coordinate.artifact}`,
+    version: coordinate.version,
+    ...mavenMetadata(coordinate),
+    scope,
+    ecosystem: 'maven',
+    type: 'runtime',
+    licenseText: '',
+  }))
+}
+
+/** 所有发行来源必须非空，避免任何扫描失败被包装成看似成功的部分结果。 */
+function assertRequiredScopes(dependencies) {
+  const missing = REQUIRED_SCOPES.filter(
+    (scope) => !dependencies.some((dependency) => dependency.scope === scope),
+  )
+  if (missing.length > 0) throw new Error(`许可证清单缺少发行来源：${missing.join(', ')}`)
+}
+
 // ─────────────────────────────────── 主流程 ───────────────────────────────────
 
 const sourceHash = sourceFingerprint()
 const cachedHash = existingSourceHash()
-if (!FORCE && (cachedHash === sourceHash || (!cachedHash && existingOutputIsFreshByMtime()))) {
+if (
+  !FORCE &&
+  existingManifestHasRequiredScopes() &&
+  (cachedHash === sourceHash || (!cachedHash && existingOutputIsFreshByMtime()))
+) {
   console.log(`[gen-licenses] 依赖输入未变化，复用已有清单 → ${OUT_FILE}`)
   process.exit(0)
 }
 
-const deps = [...scanNpm('web', WEB_DIR), ...scanNpm('bot-worker', BOT_DIR), ...scanGo()]
+const deps = [
+  ...scanNpm('web', WEB_DIR),
+  ...scanNpm('bot-worker', BOT_DIR),
+  ...scanGo(),
+  ...scanGradle('client-updater', CLIENT_UPDATER_DIR, ':updater-core', 'runtimeClasspath'),
+  ...scanGradle('serverprobe', SERVERPROBE_DIR, ':plugin', 'taboo'),
+]
+assertRequiredScopes(deps)
 deps.sort((a, b) => a.scope.localeCompare(b.scope) || a.name.localeCompare(b.name))
 
 const manifest = {

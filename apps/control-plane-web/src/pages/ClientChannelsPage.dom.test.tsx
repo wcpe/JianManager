@@ -59,6 +59,45 @@ describe('ClientChannelsPage（mock 假后端）', () => {
     expect(within(secretDialog).queryByText(/仅此一次|无法再次查看/)).not.toBeInTheDocument()
   })
 
+  it('旧哈希密钥 KeyEnc 为空时禁用查看并提示明文不可找回', async () => {
+    loginMockUser()
+    server.use(
+      http.get(API('/client-channels/:channelId'), () =>
+        HttpResponse.json({
+          id: 1,
+          channelId: 'skyblock-s1',
+          name: '空岛一区',
+          description: '空岛生存主分发频道',
+          currentVersion: 2,
+          createdAt: '2026-06-01T08:00:00Z',
+          updatedAt: '2026-06-20T08:00:00Z',
+          keys: [
+            {
+              id: 12,
+              name: '旧版哈希密钥',
+              keyPrefix: 'jmck_legacy',
+              revoked: false,
+              expiresAt: null,
+              lastUsedAt: null,
+              createdAt: '2025-12-01T09:00:00Z',
+              revealable: false,
+            },
+          ],
+        }),
+      ),
+    )
+
+    renderWithProviders(<ClientChannelsPage />, { route: '/client-channels?channel=skyblock-s1&tab=keys' })
+
+    const keyName = await screen.findByText('旧版哈希密钥')
+    const row = keyName.closest('tr')
+    expect(row).not.toBeNull()
+    const revealButton = within(row!).getByRole('button', { name: '查看' })
+    expect(revealButton).toBeDisabled()
+    expect(revealButton.getAttribute('title')).toContain('明文不可找回')
+    expect(revealButton.getAttribute('title')).toContain('编辑')
+  })
+
   it('拉取密钥列表标识已过期与即将过期', async () => {
     loginMockUser()
     const now = Date.now()

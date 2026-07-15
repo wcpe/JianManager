@@ -19,18 +19,23 @@ export interface ProvisionProxyBody {
 /** 搭建代理结果。 */
 export interface ProvisionProxyResult {
   instance: InstanceInfo
+  /** 异步供给任务 id，下载/配置/注册进度见任务中心。 */
+  taskId: string
   forwardingSecret?: string
   registrations: unknown[]
   warnings?: string[]
 }
 
-/** 搭建代理实例（role=proxy）。 */
+/** 搭建代理实例（role=proxy）：立即返回实例与 taskId，慢操作在后台执行。 */
 export function useProvisionProxy() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (body: ProvisionProxyBody) =>
       api.post<ProvisionProxyResult>('/instances/provision/proxy', body).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['instances'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['instances'] })
+      qc.invalidateQueries({ queryKey: ['tasks'] })
+    },
   })
 }
 
