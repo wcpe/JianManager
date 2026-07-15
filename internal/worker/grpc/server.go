@@ -19,8 +19,8 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/decompiler"
 	"github.com/wcpe/JianManager/internal/worker/jdk"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
-	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/internal/worker/pkgmgr"
+	"github.com/wcpe/JianManager/internal/worker/process"
 	wruntime "github.com/wcpe/JianManager/internal/worker/runtime"
 	"github.com/wcpe/JianManager/internal/worker/runtimescan"
 	"github.com/wcpe/JianManager/internal/worker/search"
@@ -261,7 +261,7 @@ func (s *Server) registerInstanceFromProto(req *workerpb.CreateInstanceRequest) 
 			s.manager.SetGracefulStopTimeout(req.InstanceUuid, int(req.GracefulStopTimeoutSeconds))
 			// 刷新启动配置（启动命令 / 绑定 JDK / 环境变量），使配置编辑（FR-233 重绑 JDK 等）对下次启动生效——
 			// 否则 worker 保留旧 spec，重绑的 JDK 不被采用、preflight 仍报「未绑定 JDK」。
-			s.manager.SetLaunchConfig(req.InstanceUuid, req.StartCommand, req.JdkPath, req.JdkBinPath, req.EnvVars)
+			s.manager.SetLaunchConfig(req.InstanceUuid, req.StartCommand, req.JdkPath, req.JdkBinPath, req.EnvVars, req.AutoRestart)
 			if req.ProcessType == string(process.ProcessTypeDocker) {
 				s.manager.SetDockerConfig(req.InstanceUuid, req.Image, portMappingsFromProto(req.PortMappings), req.CpuLimit, req.MemLimitMb, req.DiskLimitMb)
 			}
@@ -348,10 +348,7 @@ func (s *Server) StopInstance(ctx context.Context, req *workerpb.InstanceActionR
 
 // RestartInstance 重启实例。
 func (s *Server) RestartInstance(ctx context.Context, req *workerpb.InstanceActionRequest) (*workerpb.InstanceActionResponse, error) {
-	if err := s.manager.Kill(req.InstanceUuid); err != nil {
-		// 忽略 kill 错误（可能已停止）
-	}
-	if err := s.manager.Start(req.InstanceUuid); err != nil {
+	if err := s.manager.Restart(req.InstanceUuid); err != nil {
 		return &workerpb.InstanceActionResponse{Success: false, Error: err.Error()}, nil
 	}
 	return &workerpb.InstanceActionResponse{Success: true}, nil

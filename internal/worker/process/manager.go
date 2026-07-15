@@ -56,9 +56,15 @@ type Instance struct {
 	State       InstanceState
 	AutoRestart bool
 	CrashCount  int
+	// operationMu 串行同一实例的生命周期操作，不阻塞其他实例。
+	operationMu sync.Mutex
 	// strategy 是该实例的启动策略，按 ProcessType 选择。
 	// nil 表示实例已创建但尚未启动（或已 Close）。
 	strategy IProcessCommand
+	// strategyStale 表示运行期间收到新启动规格；当前策略继续服务，正常停止后再丢弃重建。
+	strategyStale bool
+	// strategyResetting 防止 Start 在锁外关闭过期策略期间被另一启动请求并发穿透。
+	strategyResetting bool
 	// processType 记录构造策略时的方式，用于 StopAll 判断优雅退出路径。
 	processType ProcessType
 }
@@ -261,17 +267,41 @@ func (m *Manager) SetDockerConfig(uuid, image string, mappings []PortMapping, cp
 	}
 }
 
-// SetLaunchConfig 刷新已存在实例的启动配置（启动命令 / 绑定 JDK / 环境变量），供 CP 在「重新注册已存在
-// 实例」时下发，使配置编辑（如 FR-233 重绑 JDK / 改启动命令）对下一次启动生效（值在 Start 时随 spec 定型）。
-// 修 BUG——原「已存在」分支只刷 docker 配置，重绑的 JDK 不到 worker，preflight 仍报「未绑定 JDK」。实例不存在则忽略。
-func (m *Manager) SetLaunchConfig(uuid, startCommand, jdkPath, jdkBinPath string, envVars map[string]string) {
+// SetLaunchConfig 刷新已存在实例的启动配置，供 CP 幂等重注册时下发（FR-233）。
+// 运行中的策略继续服务且仅标记过期；停止/崩溃态则立即丢弃旧策略，确保下一次启动采用新规格。
+func (m *Manager) SetLaunchConfig(uuid, startCommand, jdkPath, jdkBinPath string, envVars map[string]string, autoRestart bool) {
+	var stale IProcessCommand
+	var resetting *Instance
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if inst, ok := m.instances[uuid]; ok {
 		inst.StartCommand = startCommand
 		inst.JDKPath = jdkPath
 		inst.JDKBinPath = jdkBinPath
 		inst.EnvVars = envVars
+		inst.AutoRestart = autoRestart
+		if inst.strategy != nil {
+			switch inst.State {
+			case StateRunning, StateStarting, StateStopping:
+				inst.strategyStale = true
+			default:
+				stale = inst.strategy
+				inst.strategy = nil
+				inst.strategyStale = false
+				inst.strategyResetting = true
+				resetting = inst
+			}
+		}
+	}
+	m.mu.Unlock()
+	if stale != nil {
+		_ = stale.Close()
+	}
+	if resetting != nil {
+		m.mu.Lock()
+		if current, ok := m.instances[uuid]; ok && current == resetting {
+			current.strategyResetting = false
+		}
+		m.mu.Unlock()
 	}
 }
 
@@ -339,17 +369,74 @@ func (m *Manager) GetInstanceDockerStats(ctx context.Context, uuid string) (cpuP
 	return ds.Stats(ctx)
 }
 
+// lockInstanceOperation 获取实例级生命周期锁，并复核等待期间实例未被移除或替换。
+func (m *Manager) lockInstanceOperation(uuid string) (*Instance, bool) {
+	m.mu.RLock()
+	inst, exists := m.instances[uuid]
+	m.mu.RUnlock()
+	if !exists {
+		return nil, false
+	}
+
+	inst.operationMu.Lock()
+	m.mu.RLock()
+	current, stillExists := m.instances[uuid]
+	m.mu.RUnlock()
+	if !stillExists || current != inst {
+		inst.operationMu.Unlock()
+		return nil, false
+	}
+	return inst, true
+}
+
 // Start 启动实例。按实例的 ProcessType 选择策略；首次启动时惰性构造策略。
 func (m *Manager) Start(uuid string) error {
-	m.mu.Lock()
-	inst, exists := m.instances[uuid]
+	inst, exists := m.lockInstanceOperation(uuid)
 	if !exists {
-		m.mu.Unlock()
 		return fmt.Errorf("实例 %s 不存在", uuid)
+	}
+	defer inst.operationMu.Unlock()
+	return m.startLocked(uuid, inst)
+}
+
+// startLocked 在已持有实例生命周期锁时启动实例。
+func (m *Manager) startLocked(uuid string, inst *Instance) error {
+	m.mu.Lock()
+	current, exists := m.instances[uuid]
+	if !exists || current != inst {
+		m.mu.Unlock()
+		return fmt.Errorf("实例 %s 不存在或已被替换", uuid)
 	}
 	if inst.State != StateStopped && inst.State != StateCrashed {
 		m.mu.Unlock()
 		return fmt.Errorf("实例 %s 当前状态 %s 无法启动", uuid, inst.State)
+	}
+	if inst.strategyResetting {
+		m.mu.Unlock()
+		return fmt.Errorf("实例 %s 正在刷新启动策略，请稍后重试", uuid)
+	}
+
+	// Stop 收尾与配置更新可能交错：Stop 已检查 stale 后，SetLaunchConfig 才在 STOPPING 窗口
+	// 标记旧策略过期。Start 必须在构造新策略前锁外关闭旧策略，同时阻止并发启动穿透。
+	if inst.strategy != nil && inst.strategyStale {
+		stale := inst.strategy
+		inst.strategy = nil
+		inst.strategyStale = false
+		inst.strategyResetting = true
+		m.mu.Unlock()
+		_ = stale.Close()
+		m.mu.Lock()
+		current, stillExists := m.instances[uuid]
+		if !stillExists || current != inst {
+			m.mu.Unlock()
+			return fmt.Errorf("实例 %s 不存在", uuid)
+		}
+		inst.strategyResetting = false
+		if inst.State != StateStopped && inst.State != StateCrashed {
+			state := inst.State
+			m.mu.Unlock()
+			return fmt.Errorf("实例 %s 当前状态 %s 无法启动", uuid, state)
+		}
 	}
 
 	// 启动前校验 java 版本（仅宿主进程模式；docker 的 java 在容器内不适用）。
@@ -441,21 +528,42 @@ func (m *Manager) Start(uuid string) error {
 
 // Stop 停止实例。
 func (m *Manager) Stop(uuid string) error {
-	m.mu.RLock()
-	inst, exists := m.instances[uuid]
-	m.mu.RUnlock()
-	if !exists || inst.strategy == nil {
+	inst, exists := m.lockInstanceOperation(uuid)
+	if !exists {
 		return fmt.Errorf("实例 %s 未运行", uuid)
 	}
+	defer inst.operationMu.Unlock()
+	return m.stopLocked(uuid, inst)
+}
 
+// stopLocked 在已持有实例生命周期锁时停止实例。
+func (m *Manager) stopLocked(uuid string, inst *Instance) error {
 	m.mu.Lock()
+	current, exists := m.instances[uuid]
+	if !exists || current != inst || inst.strategy == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("实例 %s 未运行", uuid)
+	}
+	strategy := inst.strategy
 	oldState := inst.State
 	inst.State = StateStopping
 	m.mu.Unlock()
 	m.emitStateChange(uuid, oldState, StateStopping)
 
-	if err := inst.strategy.Stop(); err != nil {
+	if err := strategy.Stop(); err != nil {
 		return fmt.Errorf("停止实例 %s 失败: %w", uuid, err)
+	}
+
+	// 运行期间保存过新规格时，保持 STOPPING 直到旧策略资源释放，再允许下一次 Start 重建。
+	m.mu.Lock()
+	replaceStrategy := inst.strategy == strategy && inst.strategyStale
+	if replaceStrategy {
+		inst.strategy = nil
+		inst.strategyStale = false
+	}
+	m.mu.Unlock()
+	if replaceStrategy {
+		_ = strategy.Close()
 	}
 
 	m.mu.Lock()
@@ -467,20 +575,46 @@ func (m *Manager) Stop(uuid string) error {
 	return nil
 }
 
-// Kill 强制终止实例。
-func (m *Manager) Kill(uuid string) error {
-	m.mu.RLock()
-	inst, exists := m.instances[uuid]
-	m.mu.RUnlock()
-
+// Restart 强制终止并重新启动实例，整个过程持有同一实例的生命周期锁。
+func (m *Manager) Restart(uuid string) error {
+	inst, exists := m.lockInstanceOperation(uuid)
 	if !exists {
 		return fmt.Errorf("实例 %s 不存在", uuid)
 	}
+	defer inst.operationMu.Unlock()
 
-	if inst.strategy != nil {
-		_ = inst.strategy.Kill()
-		_ = inst.strategy.Close()
-		inst.strategy = nil
+	if err := m.killLocked(uuid, inst); err != nil {
+		return err
+	}
+	return m.startLocked(uuid, inst)
+}
+
+// Kill 强制终止实例。
+func (m *Manager) Kill(uuid string) error {
+	inst, exists := m.lockInstanceOperation(uuid)
+	if !exists {
+		return fmt.Errorf("实例 %s 不存在", uuid)
+	}
+	defer inst.operationMu.Unlock()
+	return m.killLocked(uuid, inst)
+}
+
+// killLocked 在已持有实例生命周期锁时强制终止实例。
+func (m *Manager) killLocked(uuid string, inst *Instance) error {
+	m.mu.Lock()
+	current, exists := m.instances[uuid]
+	if !exists || current != inst {
+		m.mu.Unlock()
+		return fmt.Errorf("实例 %s 不存在或已被替换", uuid)
+	}
+	strategy := inst.strategy
+	inst.strategy = nil
+	inst.strategyStale = false
+	m.mu.Unlock()
+
+	if strategy != nil {
+		_ = strategy.Kill()
+		_ = strategy.Close()
 	}
 
 	m.mu.Lock()
@@ -488,7 +622,6 @@ func (m *Manager) Kill(uuid string) error {
 	inst.State = StateStopped
 	m.mu.Unlock()
 	m.emitStateChange(uuid, oldState, StateStopped)
-
 	return nil
 }
 
@@ -540,20 +673,45 @@ func (m *Manager) SendCommand(uuid, command string) error {
 
 // Remove 移除实例记录。
 func (m *Manager) Remove(uuid string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	m.mu.RLock()
 	inst, exists := m.instances[uuid]
+	m.mu.RUnlock()
 	if !exists {
 		return nil
 	}
 
-	if inst.strategy != nil {
-		_ = inst.strategy.Kill()
-		_ = inst.strategy.Close()
+	inst.operationMu.Lock()
+	defer inst.operationMu.Unlock()
+	return m.removeLocked(uuid, inst)
+}
+
+// removeLocked 在已持有实例生命周期锁时移除实例记录。
+func (m *Manager) removeLocked(uuid string, inst *Instance) error {
+	m.mu.Lock()
+	current, exists := m.instances[uuid]
+	if !exists {
+		m.mu.Unlock()
+		return nil
+	}
+	if current != inst {
+		m.mu.Unlock()
+		return fmt.Errorf("实例 %s 已被替换，拒绝移除新实例", uuid)
+	}
+	strategy := inst.strategy
+	inst.strategy = nil
+	inst.strategyStale = false
+	m.mu.Unlock()
+
+	if strategy != nil {
+		_ = strategy.Kill()
+		_ = strategy.Close()
 	}
 
-	delete(m.instances, uuid)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if current, ok := m.instances[uuid]; ok && current == inst {
+		delete(m.instances, uuid)
+	}
 	return nil
 }
 
