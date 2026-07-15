@@ -45,15 +45,15 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 - FR-313（进程级崩溃诊断链路：环形缓冲 + 退出码快照上报持久化 + 前端崩溃诊断面板）→ `docs/specs/crash-diagnostics/spec.md`（需 spec，开发中创建）
 - FR-314（实例启动同步预检：预检 RPC + 同步报错不进 STARTING）→ `docs/specs/start-preflight/spec.md`（需 spec，开发中创建）
 - FR-305（反向隧道单消息尺寸上限统一治理：`ServerOptions()` 64MiB 在 grpctunnel 路径失效）→ `docs/specs/tunnel-message-size-guard/spec.md`（需 spec，开发中创建；宜随 FR-281 M1 一并处理）
-- FR-304（文件上传链路流式化：client-stream UploadFile 与 DownloadFile 对称）→ `docs/specs/upload-streaming/spec.md`（实现全绿待真机）
+- FR-304（文件上传链路流式化：client-stream UploadFile 与 DownloadFile 对称）→ `docs/specs/upload-streaming/spec.md`（✅ 已交付@v0.15.0）
 - FR-298~301（节点运行时库：多运行时泛化 / 自动扫描 / Node.js 安装器 / Bot 接管 / 聚合刷新）→ `docs/specs/node-runtime-library/spec.md`
 - FR-306~307（节点包管理器 + 多 registry + 全局包可视化管理）→ `docs/specs/node-package-management/spec.md`
 - FR-308（bot-worker 下发部署 + NODE_PATH 全局依赖）→ `docs/specs/bot-worker-deploy/spec.md`
 - FR-302（导入现有服务器：就地接管 / 搬迁托管区）→ `docs/specs/import-existing-server/spec.md`
 - FR-128~162（控制台体验与可寻址性增强）→ `docs/specs/console-ux-enhancement/spec.md`
 - FR-124~127（JBIS 背包域）→ `docs/specs/business-integration/fr-124-127-inventory.md`
-- FR-046（Sponge 子服支持）→ `docs/specs/provision-sponge/spec.md`（草拟，待审核）
-- FR-114（探针依赖内联 / 缓存预置）→ `docs/specs/probe-dependency-cache/spec.md`（开发中，Worker 侧缓存预置已落地，断网真机待验）
+- FR-046（Sponge 子服支持）→ `docs/specs/provision-sponge/spec.md`（✅ 已交付@v0.13.0）
+- FR-114（探针依赖内联 / 缓存预置）→ `docs/specs/probe-dependency-cache/spec.md`（✅ 已交付@v0.13.0）
 - FR-073 / 078 / 079 / 080 / 082 / 083 / 084 / 085（ServerProbe 治理桥运营底座在途）→ `docs/specs/serverprobe-ops-inflight/spec.md`
 - FR-003 / 041 / 042 / 046 / 059 / 098 / 113 / 114（在途杂项 / 归真 / 延后）→ `docs/specs/inflight-backlog/spec.md`
 - FR-053（插件批量部署多服）→ `docs/specs/plugin-batch-deploy/spec.md` + `api.md`
