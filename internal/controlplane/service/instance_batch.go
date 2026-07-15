@@ -33,13 +33,19 @@ const (
 // InstanceBatchService 实例批量操作服务。
 // 复用 InstanceService 的 gRPC 客户端池与 DB，但批量委托走同步路径以精确计数。
 type InstanceBatchService struct {
-	db   *gorm.DB
-	pool *cpgrpc.ClientPool
+	db       *gorm.DB
+	pool     *cpgrpc.ClientPool
+	instance *InstanceService
 }
 
 // NewInstanceBatchService 创建实例批量操作服务。
 func NewInstanceBatchService(db *gorm.DB, pool *cpgrpc.ClientPool) *InstanceBatchService {
 	return &InstanceBatchService{db: db, pool: pool}
+}
+
+// SetInstanceService 注入实例生命周期协调器，使批量动作与单实例删除/启动共用同一把锁。
+func (s *InstanceBatchService) SetInstanceService(instance *InstanceService) {
+	s.instance = instance
 }
 
 // InstanceBatchAction 批量操作动作。
@@ -223,6 +229,18 @@ func (s *InstanceBatchService) Batch(req InstanceBatchRequest, scopeIDs []uint, 
 // 生命周期动作委托成功后回写终态，失败回写 CRASHED，与单实例 delegateToWorker 语义对齐；
 // command 动作不改实例状态。
 func (s *InstanceBatchService) delegateBatchOne(req InstanceBatchRequest, inst *model.Instance) error {
+	var releaseOperation func()
+	if s.instance != nil {
+		releaseOperation = s.instance.acquireInstanceOperation(inst.ID)
+		defer releaseOperation()
+		var current model.Instance
+		err := s.db.Preload("Node").First(&current, inst.ID).Error
+		if err != nil || current.UUID != inst.UUID {
+			return ErrInstanceNotFound
+		}
+		inst = &current
+	}
+
 	if inst.Node.UUID == "" {
 		return fmt.Errorf("实例 %d 缺少关联节点", inst.ID)
 	}
