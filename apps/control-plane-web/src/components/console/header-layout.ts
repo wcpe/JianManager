@@ -65,5 +65,5 @@ export function visibilityClass(v: SlotVisibility): string {
  * 紧贴集群徽标/铃铛/账户；窄屏（<md）隐藏。
  */
 export function searchBoxClass(): string {
-  return 'relative hidden w-44 md:block lg:w-56 xl:w-64'
+  return 'relative hidden w-40 md:block lg:w-52 xl:w-60'
 }

@@ -7,7 +7,6 @@ import {
   ChevronDown,
   ChevronRight,
   Languages,
-  PanelLeftClose,
   PanelLeftOpen,
   Scale,
   ShieldCheck,
@@ -29,7 +28,6 @@ import ServerSelector from './ServerSelector'
 import SidebarServerList from './SidebarServerList'
 import SidebarNavLink from './SidebarNavLink'
 import ThemeSwitcher from './ThemeSwitcher'
-import { logoToggleLabelKey } from './sidebar-logo'
 import { navGroupsForRole, type NavGroup, type NavSection } from './nav-config'
 
 /** 分节小标题图标（仅视觉，折叠态不显）。 */
@@ -75,14 +73,12 @@ export default function ConsoleSidebar() {
       >
         <SidebarContent
           active={!renderCollapsed}
-          collapsed={collapsed}
           compact={false}
           groups={groups}
           toggleSidebar={toggleSidebar}
         />
         <SidebarContent
           active={renderCollapsed}
-          collapsed={collapsed}
           compact
           groups={groups}
           toggleSidebar={toggleSidebar}
@@ -94,13 +90,11 @@ export default function ConsoleSidebar() {
 
 function SidebarContent({
   active,
-  collapsed,
   compact,
   groups,
   toggleSidebar,
 }: {
   active: boolean
-  collapsed: boolean
   compact: boolean
   groups: NavGroup[]
   toggleSidebar: () => void
@@ -109,36 +103,6 @@ function SidebarContent({
 
   return (
     <div data-mode={compact ? 'collapsed' : 'expanded'} aria-hidden={!active} inert={!active ? true : undefined} className="jm-sidebar-mode">
-      <div className={cn('flex shrink-0 items-center border-b py-3.5', compact ? 'justify-center px-2' : 'gap-2 px-3.5')}>
-        {/* logo 整体可点折叠/展开（FR-181，复用 toggleSidebar）：折叠态仅图标仍可点回展开。 */}
-        <button
-          type="button"
-          onClick={toggleSidebar}
-          aria-label={t(logoToggleLabelKey(collapsed))}
-          title={t(logoToggleLabelKey(collapsed))}
-          className={cn(
-            'flex min-w-0 items-center rounded-md transition-colors hover:bg-accent/60',
-            compact ? 'justify-center' : 'flex-1 gap-2 px-1.5 py-1 -mx-1.5',
-          )}
-        >
-          <span className="grid size-8 shrink-0 place-items-center rounded-md border border-primary/15 bg-card shadow-soft">
-            <img src="/brand/jianmanager-mark.svg" alt="" aria-hidden="true" className="size-7" />
-          </span>
-          {!compact && <h2 className="min-w-0 flex-1 truncate text-left text-base font-bold tracking-tight text-foreground">JianManager</h2>}
-        </button>
-        {!compact && (
-          <button
-            type="button"
-            onClick={toggleSidebar}
-            aria-label={t('nav.collapseSidebar')}
-            title={t('nav.collapseSidebar')}
-            className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-          >
-            <PanelLeftClose className="size-4" />
-          </button>
-        )}
-      </div>
-
       {!compact && (
         <div className="shrink-0 border-b bg-card/35 p-2">
           <ServerSelector />

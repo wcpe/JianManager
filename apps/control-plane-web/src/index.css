@@ -624,6 +624,17 @@ body {
   transition: background-color var(--motion-duration-normal) var(--motion-easing-standard), box-shadow var(--motion-duration-normal) var(--motion-easing-standard);
 }
 
+/* 方案 C 品牌顶栏：品牌区宽度随侧栏同步收放，右缘描边与侧栏右缘连成一条竖线（ADR-071）。 */
+.jm-brand-segment {
+  width: var(--sidebar-expanded-width);
+  border-right: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  transition: width var(--sidebar-motion-duration) var(--motion-easing-standard);
+}
+
+.jm-console-shell[data-sidebar-target='collapsed'] .jm-brand-segment {
+  width: var(--sidebar-collapsed-width);
+}
+
 .jm-console-main {
   background-color: color-mix(in srgb, var(--background) 92%, var(--card));
 }
@@ -711,6 +722,10 @@ body {
     linear-gradient(180deg, color-mix(in srgb, var(--card) 98%, transparent) 0%, color-mix(in srgb, var(--muted) 92%, transparent) 100%),
     var(--background);
   box-shadow: 1px 0 0 color-mix(in srgb, var(--border) 86%, transparent), 16px 0 38px -32px rgb(var(--shadow-color) / 0.75);
+}
+
+.dark .jm-brand-segment {
+  border-right-color: color-mix(in srgb, var(--border) 86%, transparent);
 }
 
 .dark .jm-console-header {

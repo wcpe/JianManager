@@ -23,19 +23,22 @@ vi.mock('@/api/notification-feed', () => ({
   useNotificationFeed: () => ({ data: { items: [] } }),
 }))
 
-/** FR-268/FR-269：控制台顶栏布局回归。 */
+/** 方案 C（ADR-071）：顶栏承载品牌区 + 面包屑 + 操作区；节点作用域下拉已下线。 */
 describe('ConsoleHeader 布局', () => {
   beforeEach(() => {
     loginMockUser()
   })
 
-  it('顶栏不重复渲染侧栏品牌，给面包屑和操作区留出空间', () => {
+  it('顶栏承载品牌区与面包屑，且已下线节点作用域下拉', () => {
     const { container } = renderWithProviders(<ConsoleHeader />, { route: '/instances/1' })
 
     expect(container.querySelector('header')).toHaveAttribute('data-slot', 'console-header')
     expect(container.querySelector('header')).toHaveClass('jm-console-header')
-    expect(screen.queryByText('JianManager')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '节点作用域' })).toBeInTheDocument()
+    // 方案 C：品牌 Logo 移入顶栏品牌区。
+    expect(screen.getByText('JianManager')).toBeInTheDocument()
+    // FR-268 节点作用域下拉已下线。
+    expect(screen.queryByRole('button', { name: '节点作用域' })).not.toBeInTheDocument()
+    // 主题 / 配色切换仍只在侧栏底部，不在顶栏。
     expect(screen.queryByRole('button', { name: '切换主题' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Jian 绿' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '青绿' })).not.toBeInTheDocument()

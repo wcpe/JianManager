@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { screen, within } from '@testing-library/react'
+import { act, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
@@ -147,16 +147,15 @@ describe('ConsoleSidebar 高密度控制台 IA（FR-268）', () => {
     expect(aside.className).not.toContain('duration-200')
   })
 
-  it('侧栏折叠/展开暴露抽屉动画状态', async () => {
-    const user = userEvent.setup()
+  it('侧栏折叠/展开暴露抽屉动画状态', () => {
     const { container } = renderWithProviders(<ConsoleSidebar />)
     const aside = container.querySelector('aside') as HTMLElement
 
     expect(aside).toHaveAttribute('data-state', 'expanded')
     expect(container.querySelector('[data-slot="sidebar-drawer"]')).toHaveClass('jm-sidebar-drawer')
 
-    const collapseButtons = screen.getAllByRole('button', { name: '收起侧栏' })
-    await user.click(collapseButtons[1]!)
+    // 折叠开关随方案 C 移入顶栏品牌区；侧栏单测直接驱动 store 验证抽屉状态回填。
+    act(() => useConsoleStore.getState().toggleSidebar())
 
     expect(aside).toHaveAttribute('data-state', 'collapsed')
     expect(container.querySelector('[data-slot="sidebar-drawer"]')).toHaveAttribute('data-state', 'collapsed')

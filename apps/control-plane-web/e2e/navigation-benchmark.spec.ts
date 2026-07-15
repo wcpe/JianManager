@@ -404,7 +404,7 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
       await expect(drawer, `${route.label} 侧栏内部 drawer 可见`).toBeVisible()
       await expect(sidebar, `${route.label} 侧栏默认展开状态`).toHaveAttribute('data-state', 'expanded')
 
-      const collapseButton = sidebar.getByRole('button', { name: '收起侧栏' }).filter({ hasNotText: 'JianManager' })
+      const collapseButton = page.locator('[data-slot="console-header"]').getByRole('button', { name: '收起侧栏' }).filter({ hasNotText: 'JianManager' })
       await expect(collapseButton, `${route.label} 显式侧栏收起按钮唯一`).toHaveCount(1)
       await collapseButton.click()
       const collapseStats = await sidebarFrameStats(page)

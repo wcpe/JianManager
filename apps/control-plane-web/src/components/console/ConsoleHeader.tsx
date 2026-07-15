@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useLocation, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Bell, Boxes, Check, ChevronDown, ListChecks, Loader2, LogOut, RotateCw, Search, Server, UserRound, Users } from 'lucide-react'
+import { AlertTriangle, Bell, Boxes, ListChecks, Loader2, LogOut, PanelLeftClose, RotateCw, Search, Server, UserRound, Users } from 'lucide-react'
 
 import { useAuthStore } from '@/stores/auth'
 import { useConsoleStore } from '@/stores/console'
@@ -14,6 +14,7 @@ import { useNotificationFeed, useFeedUnreadCount, type FeedItem } from '@/api/no
 import { cn } from '@jianmanager/ui'
 import { Badge } from '@jianmanager/ui/components/badge'
 import PageBreadcrumb from './PageBreadcrumb'
+import { logoToggleLabelKey } from './sidebar-logo'
 import { searchBoxClass, slotVisibility, visibilityClass } from './header-layout'
 import {
   DropdownMenu,
@@ -31,69 +32,79 @@ const ROLE_LABEL_KEY: Record<number, string> = {
 }
 
 /**
- * 全局顶栏（FR-162，重排见 FR-179；通知合并见 FR-216）：控制台外壳内容区上方常驻页眉，侧栏保持全高。
- * 左 = 当前页面包屑（自动占据剩余宽度）；右 = **靠右对齐的操作区**——
- * 常驻搜索框（占位，Ctrl/⌘+K 聚焦）+ 集群概览徽标 + **统一通知铃铛**（FR-216：合并原站内信收件箱 +
- * 告警铃铛为单一入口，消费统一通知流）+ 账户菜单（含退出登录，接管 FR-132）。
- * 搜索由 FR-162 的居中铺中部改为靠右紧贴操作图标（FR-179），窄屏隐藏不挤垮工作区。
- * 槽位顺序 / 响应式可见性逻辑下沉纯函数 `header-layout.ts`（vitest 覆盖）。
+ * 全局顶栏（方案 C 品牌顶栏贯通，见 ADR-071；承接 FR-162/FR-179、通知合并 FR-216）：
+ * 横跨整宽的常驻顶栏——左端「品牌区」宽度随其下侧栏同步收放，右缘与侧栏右缘连成一条竖线，
+ * 使左列「品牌 + 侧栏」合为一体，消除原「侧栏 logo 区」与「内容页眉」两条错位分割线的交界台阶。
+ * 品牌区之右依次为当前页面包屑（占据剩余宽度）+ **靠右对齐操作区**（搜索 / 集群概览 / 任务 /
+ * 统一通知铃铛 FR-216 / 账户菜单）。原节点作用域下拉（FR-268）已下线：其作用域仅少数页面消费、
+ * 全部服务器页自带节点筛选，页眉入口去重。槽位顺序 / 响应式可见性逻辑仍下沉纯函数 `header-layout.ts`。
  */
 export default function ConsoleHeader() {
   return (
-    <header data-slot="console-header" className="jm-console-header flex h-14 shrink-0 items-center gap-2 border-b px-3 text-[13px] backdrop-blur-xl sm:px-4">
-      <NodeScopeSelector />
-      <TitleArea />
-      {/* 右侧操作区：搜索、集群状态、任务、通知与账户（FR-268）。 */}
-      <div className="ml-auto flex items-center gap-2 sm:gap-3">
-        <SearchBox />
-        <div className="flex items-center gap-0.5 sm:gap-1">
-          <RefreshButton />
-          <ClusterBadges />
-          <TasksMenu />
-          <NotificationBell />
-          <AccountMenu />
+    <header
+      data-slot="console-header"
+      className="jm-console-header relative z-30 flex h-12 shrink-0 items-center border-b text-[13px] backdrop-blur-xl"
+    >
+      <BrandSegment />
+      <div className="flex min-w-0 flex-1 items-center gap-2 px-3 sm:gap-3 sm:px-4">
+        <TitleArea />
+        {/* 右侧操作区：搜索、集群状态、任务、通知与账户。 */}
+        <div className="ml-auto flex items-center gap-2 sm:gap-3">
+          <SearchBox />
+          <div className="flex items-center gap-0.5 sm:gap-1">
+            <RefreshButton />
+            <ClusterBadges />
+            <TasksMenu />
+            <NotificationBell />
+            <AccountMenu />
+          </div>
         </div>
       </div>
     </header>
   )
 }
 
-/** 节点作用域选择器（FR-268）：全部节点 / 单节点，影响用户上下文理解。 */
-function NodeScopeSelector() {
+/**
+ * 顶栏品牌区（方案 C，见 ADR-071）：Logo + 折叠开关，整体作为折叠触发器复用 `toggleSidebar`
+ * （展开态点击=收起、折叠态=展开，接管原侧栏 logo 的 FR-181 行为）。宽度经 CSS 与侧栏同步收放，
+ * 右缘描边与侧栏右缘对齐连线。窄屏（<sm）侧栏隐藏，品牌区随之隐藏，顶栏回落为「面包屑 + 操作区」满宽。
+ */
+function BrandSegment() {
   const { t } = useTranslation()
-  const selectedNodeId = useConsoleStore((s) => s.selectedNodeId)
-  const setSelectedNodeId = useConsoleStore((s) => s.setSelectedNodeId)
-  const { data: nodes = [] } = useNodes({ refetchInterval: 30_000 })
-  const selected = nodes.find((n) => n.id === selectedNodeId)
-  const label = selected?.name ?? t('console.allNodes')
+  const collapsed = useConsoleStore((s) => s.sidebarCollapsed)
+  const toggleSidebar = useConsoleStore((s) => s.toggleSidebar)
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+    <div className={cn('jm-brand-segment hidden h-full shrink-0 items-center sm:flex', collapsed ? 'justify-center px-2' : 'gap-2 px-3.5')}>
+      <button
+        type="button"
+        onClick={toggleSidebar}
+        aria-label={t(logoToggleLabelKey(collapsed))}
+        title={t(logoToggleLabelKey(collapsed))}
+        className={cn(
+          'flex min-w-0 items-center rounded-md transition-colors hover:bg-accent/60',
+          collapsed ? 'justify-center' : '-mx-1.5 flex-1 gap-2 px-1.5 py-1',
+        )}
+      >
+        <span className="grid size-7 shrink-0 place-items-center rounded-md border border-primary/15 bg-card shadow-soft">
+          <img src="/brand/jianmanager-mark.svg" alt="" aria-hidden="true" className="size-6" />
+        </span>
+        {!collapsed && (
+          <h2 className="min-w-0 flex-1 truncate text-left text-sm font-bold tracking-tight text-foreground">JianManager</h2>
+        )}
+      </button>
+      {!collapsed && (
         <button
           type="button"
-          aria-label={t('header.nodeScope')}
-          className="flex h-9 max-w-[180px] items-center gap-1.5 rounded-md border bg-card/90 px-2.5 text-xs text-foreground shadow-soft transition-colors hover:bg-muted/60"
+          onClick={toggleSidebar}
+          aria-label={t('nav.collapseSidebar')}
+          title={t('nav.collapseSidebar')}
+          className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
         >
-          <span className={cn('size-1.5 rounded-full', selected ? 'bg-status-success' : 'bg-primary')} />
-          <span className="truncate">{label}</span>
-          <ChevronDown className="size-3.5 text-muted-foreground" />
+          <PanelLeftClose className="size-4" />
         </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-56">
-        <DropdownMenuItem onClick={() => setSelectedNodeId(null)}>
-          <span className="flex-1">{t('console.allNodes')}</span>
-          {selectedNodeId == null && <Check className="size-3.5" />}
-        </DropdownMenuItem>
-        {nodes.map((node) => (
-          <DropdownMenuItem key={node.id} onClick={() => setSelectedNodeId(node.id)}>
-            <span className={cn('size-1.5 rounded-full', node.status === 1 ? 'bg-status-success' : 'bg-muted-foreground/50')} />
-            <span className="min-w-0 flex-1 truncate">{node.name}</span>
-            {selectedNodeId === node.id && <Check className="size-3.5" />}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      )}
+    </div>
   )
 }
 
@@ -130,7 +141,7 @@ function SearchBox() {
         type="button"
         onClick={() => openPalette(true)}
         aria-label={t('header.searchPlaceholder')}
-        className="flex h-9 w-full items-center gap-2 rounded-md border bg-card/90 pl-2.5 pr-2 text-sm text-muted-foreground shadow-soft transition-colors hover:bg-muted/55"
+        className="flex h-8 w-full items-center gap-2 rounded-md border bg-card/90 pl-2.5 pr-2 text-xs text-muted-foreground shadow-soft transition-colors hover:bg-muted/55"
       >
         <Search className="size-4 shrink-0" />
         <span className="min-w-0 flex-1 truncate text-left">{t('header.searchPlaceholder')}</span>

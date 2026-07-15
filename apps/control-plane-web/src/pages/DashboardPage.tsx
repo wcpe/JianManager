@@ -13,9 +13,9 @@ type SidebarLayoutState = 'expanded' | 'collapsed'
 type SidebarMotionState = 'idle' | 'expanding' | 'collapsing'
 
 /**
- * 运维控制台 Shell（ADR-009 / FR-037 / FR-061 / FR-162）：
- * 左 = 常驻多级侧栏（全高，分组可展开，实例树/节点切换并入「实例」组）；
- * 右 = 全局顶栏（FR-162：标题/搜索/集群徽标/告警/账户）+ 其下工作区。
+ * 运维控制台 Shell（方案 C 品牌顶栏贯通，见 ADR-071；承接 ADR-009 / FR-037 / FR-061 / FR-162）：
+ * 顶 = 横跨整宽的全局顶栏（品牌区 + 面包屑 + 搜索/集群徽标/任务/通知/账户）；
+ * 其下为一行「侧栏 + 工作区」——侧栏下移到顶栏之下，品牌区宽度与侧栏同步，交界处合为一条竖线。
  * 登录后默认落地此处。
  */
 export default function DashboardPage() {
@@ -40,15 +40,17 @@ export default function DashboardPage() {
       data-sidebar-target={sidebarState}
       data-sidebar-layout={sidebarLayout}
       data-sidebar-motion={sidebarMotion}
-      className="jm-console-shell flex h-screen w-screen overflow-hidden"
+      className="jm-console-shell flex h-screen w-screen flex-col overflow-hidden"
     >
-      <ConsoleSidebar />
-      <div data-slot="console-content" className="jm-console-content relative flex min-w-0 w-full flex-1 flex-col">
-        <TopLoadingBar />
-        <ConsoleHeader />
-        <main data-slot="console-main" className="jm-console-main jm-workspace-bg min-h-0 w-full flex-1 pb-16 sm:pb-0">
-          <Workspace />
-        </main>
+      <TopLoadingBar />
+      <ConsoleHeader />
+      <div data-slot="console-body" className="flex min-h-0 w-full flex-1">
+        <ConsoleSidebar />
+        <div data-slot="console-content" className="jm-console-content relative flex min-w-0 w-full flex-1 flex-col">
+          <main data-slot="console-main" className="jm-console-main jm-workspace-bg min-h-0 w-full flex-1 pb-16 sm:pb-0">
+            <Workspace />
+          </main>
+        </div>
       </div>
       <MobileConsoleNav />
       {/* 全局命令面板（FR-241）：始终挂载以监听 Ctrl+K，打开时覆盖全屏。 */}
