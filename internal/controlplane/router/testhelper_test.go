@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"google.golang.org/grpc"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
+	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 // setupTestDB 创建临时 SQLite 数据库并运行自动迁移。
@@ -53,6 +56,23 @@ func setupTestDB(t *testing.T) *gorm.DB {
 // setupTestRouter 创建配置好所有服务的测试路由引擎。
 func setupTestRouter(db *gorm.DB) *gin.Engine {
 	return setupTestRouterWithPool(db, cpgrpc.NewClientPool())
+}
+
+type removeSuccessWorkerClient struct {
+	workerpb.WorkerServiceClient
+}
+
+func (removeSuccessWorkerClient) RemoveInstance(context.Context, *workerpb.RemoveInstanceRequest, ...grpc.CallOption) (*workerpb.RemoveInstanceResponse, error) {
+	return &workerpb.RemoveInstanceResponse{Success: true}, nil
+}
+
+func setupDeleteTestRouter(db *gorm.DB) (*gin.Engine, *cpgrpc.ClientPool) {
+	pool := cpgrpc.NewClientPool()
+	return setupTestRouterWithPool(db, pool), pool
+}
+
+func connectDeleteTestWorker(pool *cpgrpc.ClientPool, nodeUUID string) {
+	pool.SetWorkerClientForTest(nodeUUID, removeSuccessWorkerClient{})
 }
 
 // setupTestRouterWithPool 同 setupTestRouter，但使用调用方提供的连接池，
@@ -87,6 +107,8 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	//（配合 SetWorkerClientForTest 注入 fake Worker）。
 	runtimeAssetsSvc := service.NewRuntimeAssetsService(db)
 	runtimeAssetsSvc.SetJDKSync(service.NewJDKService(db, pool))
+	instanceBatchSvc := service.NewInstanceBatchService(db, pool)
+	instanceBatchSvc.SetInstanceService(instanceSvc)
 	svcs := &Services{
 		Auth:             service.NewAuthService(db, jwtCfg),
 		User:             service.NewUserService(db),
@@ -94,7 +116,7 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 		Node:             nodeSvc,
 		NodeRepair:       service.NewNodeRepairService(db),
 		Instance:         instanceSvc,
-		InstanceBatch:    service.NewInstanceBatchService(db, pool),
+		InstanceBatch:    instanceBatchSvc,
 		InstanceGroup:    service.NewInstanceGroupService(db),
 		NodeRuntime:      service.NewNodeRuntimeService(db, pool),
 		ProbeUpdate:      service.NewProbeUpdateService(db, pool, service.NewPluginBridgeService(jwtCfg.Secret)),

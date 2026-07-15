@@ -199,12 +199,12 @@ func TestInstance_Stop_InvalidTransition(t *testing.T) {
 // TestInstance_Delete_Running_Stopped 测试运行中的实例不能删除，停止后可删除。
 func TestInstance_Delete_Running_Stopped(t *testing.T) {
 	db := setupTestDB(t)
-	r := setupTestRouter(db)
+	r, pool := setupDeleteTestRouter(db)
 	token := getAdminToken(t, r)
-	createTestNode(t, db)
+	node := createTestNode(t, db)
 
 	body := map[string]interface{}{
-		"nodeId":       1,
+		"nodeId":       node.ID,
 		"name":         "删除链路实例",
 		"type":         "minecraft_java",
 		"processType":  "direct",
@@ -224,6 +224,7 @@ func TestInstance_Delete_Running_Stopped(t *testing.T) {
 
 	// 将状态改回 STOPPED
 	require.NoError(t, db.Model(&model.Instance{}).Where("id = ?", id).Update("status", model.InstanceStatusStopped).Error)
+	connectDeleteTestWorker(pool, node.UUID)
 
 	// 停止后可删除
 	w = makeRequest(r, "DELETE", "/api/v1/instances/"+itoa(id), nil, token)

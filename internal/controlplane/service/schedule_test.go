@@ -28,6 +28,34 @@ func setupScheduleTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+// TestScheduleExecutor_RestartUsesInstanceLongOpGate 验证定时重启复用中心化 Restart 闸，
+// 长操作在途时执行失败并把同一原因写入执行日志。
+func TestScheduleExecutor_RestartUsesInstanceLongOpGate(t *testing.T) {
+	db := setupScheduleTestDB(t)
+	node := &model.Node{Name: "fr331-schedule-node", Status: model.NodeStatusOnline, OS: "linux"}
+	require.NoError(t, db.Create(node).Error)
+	inst := &model.Instance{Name: "fr331-schedule", NodeID: node.ID, Type: model.InstanceTypeMinecraftJava,
+		ProcessType: model.ProcessTypeDaemon, StartCommand: "java -jar server.jar", Status: model.InstanceStatusStopped}
+	require.NoError(t, db.Create(inst).Error)
+	require.NoError(t, db.Create(&model.Task{TaskID: "fr331-schedule-task", NodeID: node.ID, InstanceID: inst.ID,
+		Kind: model.TaskKindProvision, State: model.TaskStateRunning}).Error)
+	schedule := &model.Schedule{InstanceID: inst.ID, Name: "在途重启", CronExpr: "0 * * * *", Action: "restart", Enabled: true}
+	require.NoError(t, db.Create(schedule).Error)
+
+	instanceSvc := NewInstanceService(db, NewGroupService(db), nil)
+	t.Cleanup(instanceSvc.Shutdown)
+	executor := NewScheduleExecutorImpl(db, instanceSvc, nil, nil)
+
+	err := executor.ExecuteSchedule(schedule)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "搭建中")
+
+	var log model.ScheduleExecutionLog
+	require.NoError(t, db.Where("schedule_id = ?", schedule.ID).First(&log).Error)
+	require.Equal(t, model.ScheduleLogStatusFailed, log.Status)
+	require.Contains(t, log.Error, "搭建中")
+}
+
 func TestScheduleService_ListExecutionLogs(t *testing.T) {
 	db := setupScheduleTestDB(t)
 	svc := NewScheduleService(db)

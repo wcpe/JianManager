@@ -100,6 +100,35 @@ func TestNetwork_DeleteDoesNotAffectRegistrations(t *testing.T) {
 	require.ErrorIs(t, err, ErrNetworkNotFound)
 }
 
+// TestNetwork_BatchRestart_UsesInstanceLongOpGate 验证网络批量重启复用 InstanceService.Restart，
+// 长操作在途时逐项聚合失败，不中断整个网络批次。
+func TestNetwork_BatchRestart_UsesInstanceLongOpGate(t *testing.T) {
+	db := newNetTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Task{}))
+	instSvc := NewInstanceService(db, nil, nil)
+	t.Cleanup(instSvc.Shutdown)
+	svc := NewNetworkService(db, instSvc)
+
+	network, err := svc.Create("fr331-network", "")
+	require.NoError(t, err)
+	inst := &model.Instance{Name: "fr331-member", NodeID: 1, Type: model.InstanceTypeMinecraftJava,
+		Role: model.InstanceRoleBackend, ProcessType: model.ProcessTypeDaemon,
+		StartCommand: "java -jar server.jar", Status: model.InstanceStatusStopped}
+	require.NoError(t, db.Create(inst).Error)
+	_, _, err = svc.AddMembers(network.ID, []uint{inst.ID})
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&model.Task{TaskID: "fr331-network-task", InstanceID: inst.ID,
+		Kind: model.TaskKindProvision, State: model.TaskStateRunning}).Error)
+
+	result, err := svc.BatchAction(network.ID, "restart")
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Total)
+	require.Equal(t, 0, result.Succeeded)
+	require.Equal(t, 1, result.Failed)
+	require.Len(t, result.Results, 1)
+	require.Contains(t, result.Results[0].Error, "搭建中")
+}
+
 func TestNetwork_BatchAction(t *testing.T) {
 	db := newNetTestDB(t)
 	instSvc := NewInstanceService(db, nil, nil)

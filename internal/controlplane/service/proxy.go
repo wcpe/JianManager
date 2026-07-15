@@ -25,12 +25,17 @@ type ProxyService struct {
 	instance *InstanceService
 	core     *CoreService
 	reg      *RegistrationService
+	// tasks 非 nil 时启用代理供给异步任务，避免 HTTP 请求取消中断慢下载。
+	tasks *TaskService
 }
 
 // NewProxyService 创建代理服务。
 func NewProxyService(db *gorm.DB, pool *cpgrpc.ClientPool, instance *InstanceService, core *CoreService, reg *RegistrationService) *ProxyService {
 	return &ProxyService{db: db, pool: pool, instance: instance, core: core, reg: reg}
 }
+
+// SetTaskService 注入任务中心；非 nil 后代理供给走后台任务。
+func (p *ProxyService) SetTaskService(tasks *TaskService) { p.tasks = tasks }
 
 // ProvisionProxyRequest 向导式创建代理实例请求。
 type ProvisionProxyRequest struct {
@@ -52,91 +57,172 @@ type ProvisionProxyRequest struct {
 // ProvisionProxyResult 代理搭建结果。
 type ProvisionProxyResult struct {
 	Instance         *model.Instance    `json:"instance"`
+	TaskID           string             `json:"taskId"`
 	ForwardingSecret string             `json:"forwardingSecret,omitempty"` // 仅 Velocity，返回一次供用户留存
 	Registrations    []RegistrationView `json:"registrations"`
 	Warnings         []string           `json:"warnings,omitempty"`
 }
 
-// ProvisionProxy 端到端搭建一个代理实例（role=proxy），返回创建的实例与初始注册结果。
+// ProvisionProxy 端到端同步搭建代理，保留给既有调用方与未接线任务中心的兼容路径。
 func (p *ProxyService) ProvisionProxy(ctx context.Context, req ProvisionProxyRequest) (*ProvisionProxyResult, error) {
+	result, core, err := p.prepareProxy(ctx, req)
+	if err != nil {
+		return result, err
+	}
+	if err := p.finishProxy(ctx, req, result, core, false); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+// ProvisionProxyAsync 同步创建实例并登记任务，下载/配置/注册在独立后台 context 中执行。
+// 失败时复用实例删除编排清理 Worker 注册、工作目录、数据库实例与注册关系。
+func (p *ProxyService) ProvisionProxyAsync(ctx context.Context, req ProvisionProxyRequest, createdBy uint) (*ProvisionProxyResult, error) {
+	if p.tasks == nil {
+		return p.ProvisionProxy(ctx, req)
+	}
+	result, core, err := p.prepareProxy(ctx, req)
+	if err != nil {
+		if result != nil && result.Instance != nil {
+			if cleanupErr := p.instance.Delete(result.Instance.ID); cleanupErr != nil {
+				return result, fmt.Errorf("%w；失败补偿清理失败: %v", err, cleanupErr)
+			}
+		}
+		return nil, err
+	}
+	provisionReason := "搭建中：正在供给代理核心与配置（完成前请勿启动）"
+	result.Instance.StatusReason = provisionReason
+	p.setProvisionReason(result.Instance.ID, provisionReason)
+	backgroundInstance := *result.Instance
+	secret := result.ForwardingSecret
+	title := fmt.Sprintf("一键搭建代理 %s（%s %s）", backgroundInstance.Name, req.ProxyType, req.Version)
+	result.TaskID = p.tasks.RunAsync(RunSpec{
+		NodeID: req.NodeID, InstanceID: backgroundInstance.ID, Kind: model.TaskKindProvision, Title: title, CreatedBy: createdBy,
+	}, func(ctx context.Context, stage func(int, string)) (string, error) {
+		return p.runProxyProvision(ctx, req, &backgroundInstance, secret, core, stage)
+	})
+	if result.TaskID != "" {
+		return result, nil
+	}
+	cleanupErr := p.instance.Delete(result.Instance.ID)
+	if cleanupErr != nil {
+		return result, fmt.Errorf("登记代理供给任务失败，且补偿清理失败: %w", cleanupErr)
+	}
+	return nil, fmt.Errorf("登记代理供给任务失败")
+}
+
+func (p *ProxyService) prepareProxy(ctx context.Context, req ProvisionProxyRequest) (*ProvisionProxyResult, *CoreInfo, error) {
 	if !IsProxyCore(req.ProxyType) {
-		return nil, fmt.Errorf("不支持的代理类型: %s", req.ProxyType)
+		return nil, nil, fmt.Errorf("不支持的代理类型: %s", req.ProxyType)
 	}
 	core, err := p.core.ResolveBuild(ctx, req.ProxyType, req.Version, req.Build)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	inst, secret, err := p.createProxyInstance(req)
+	if err != nil {
+		return inst2result(inst, secret), nil, err
+	}
+	return inst2result(inst, secret), core, nil
+}
 
+func (p *ProxyService) createProxyInstance(req ProvisionProxyRequest) (*model.Instance, string, error) {
 	ports, err := allocPortsForNode(p.db, req.NodeID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-
 	secret := ""
 	if IsVelocityCore(req.ProxyType) {
 		secret = genForwardingSecret()
 	}
-
-	// 代理用结构化启动：java -jar core.jar（OmitNogui，代理不接受 nogui）。
 	specJSON, err := json.Marshal(LaunchSpec{MemoryMb: req.MemoryMb, JvmArgs: req.JvmArgs, CoreJar: provisionCoreJar, OmitNogui: true})
 	if err != nil {
-		return nil, err
+		return nil, secret, err
 	}
-
 	inst, err := p.instance.Create(CreateInstanceRequest{
-		NodeID:      req.NodeID,
-		Name:        req.Name,
-		Type:        model.InstanceTypeMinecraftJava,
-		Role:        model.InstanceRoleProxy,
-		ProcessType: model.ProcessTypeDaemon,
-		JDKID:       req.JDKID,
-		LaunchSpec:  string(specJSON),
-		ServerPort:  ports.ServerPort, // 代理监听端口
-		AutoRestart: true,
-		GroupID:     req.GroupID,
+		NodeID: req.NodeID, Name: req.Name, Type: model.InstanceTypeMinecraftJava, Role: model.InstanceRoleProxy,
+		ProcessType: model.ProcessTypeDaemon, JDKID: req.JDKID, LaunchSpec: string(specJSON),
+		ServerPort: ports.ServerPort, AutoRestart: true, GroupID: req.GroupID,
 	})
 	if err != nil {
-		return nil, err
+		return nil, secret, err
 	}
+	if err := p.persistProxySettings(inst, boolOr(req.OnlineMode, true), secret); err != nil {
+		return inst, secret, err
+	}
+	return inst, secret, nil
+}
 
-	// online-mode 选择持久化（缺省 true=正版），供 SyncProxy 重新生成配置时保留。
-	onlineMode := boolOr(req.OnlineMode, true)
-	if err := p.db.Model(inst).Update("proxy_online_mode", onlineMode).Error; err != nil {
-		return inst2result(inst, secret), fmt.Errorf("保存 online-mode 失败: %w", err)
+func (p *ProxyService) persistProxySettings(inst *model.Instance, onlineMode bool, secret string) error {
+	updates := map[string]any{"proxy_online_mode": onlineMode}
+	if secret != "" {
+		updates["forwarding_secret"] = secret
+	}
+	if err := p.db.Model(inst).Updates(updates).Error; err != nil {
+		return fmt.Errorf("保存代理设置失败: %w", err)
 	}
 	inst.ProxyOnlineMode = onlineMode
+	inst.ForwardingSecret = secret
+	return nil
+}
 
-	if secret != "" {
-		if err := p.db.Model(inst).Update("forwarding_secret", secret).Error; err != nil {
-			return inst2result(inst, secret), fmt.Errorf("保存 forwarding secret 失败: %w", err)
-		}
-		inst.ForwardingSecret = secret
+func (p *ProxyService) finishProxy(ctx context.Context, req ProvisionProxyRequest, result *ProvisionProxyResult, core *CoreInfo, failOnConfigError bool) error {
+	if err := p.provisionProxyOnWorker(ctx, result.Instance, core); err != nil {
+		return fmt.Errorf("代理搭建失败: %w", err)
 	}
-
-	result := inst2result(inst, secret)
-
-	// 下载核心 + 写 forwarding.secret（Velocity）。代理 servers 配置由随后的 sync 写入。
-	if err := p.provisionProxyOnWorker(ctx, inst, core); err != nil {
-		return result, fmt.Errorf("代理搭建失败: %w", err)
-	}
-
-	// 初始注册（每条 Create 触发一次 sync；最终 sync 收集 warnings）。
-	for _, r := range req.BackendRegistrations {
-		view, rerr := p.reg.Create(inst.ID, r)
+	for _, registration := range req.BackendRegistrations {
+		view, err := p.reg.Create(result.Instance.ID, registration)
 		if view != nil {
 			result.Registrations = append(result.Registrations, *view)
 		}
-		if rerr != nil {
-			result.Warnings = append(result.Warnings, rerr.Error())
+		if err != nil {
+			result.Warnings = append(result.Warnings, err.Error())
 		}
 	}
-
-	warnings, serr := p.syncProxyDetailed(inst.ID)
+	warnings, err := p.syncProxyDetailed(result.Instance.ID)
 	result.Warnings = append(result.Warnings, warnings...)
-	if serr != nil {
-		result.Warnings = append(result.Warnings, serr.Error())
+	if err == nil {
+		return nil
 	}
-	return result, nil
+	result.Warnings = append(result.Warnings, err.Error())
+	if failOnConfigError {
+		return fmt.Errorf("生成代理配置失败: %w", err)
+	}
+	return nil
+}
+
+func (p *ProxyService) runProxyProvision(ctx context.Context, req ProvisionProxyRequest, inst *model.Instance, secret string, core *CoreInfo, stage func(int, string)) (string, error) {
+	backgroundResult := inst2result(inst, secret)
+	stage(10, "下载代理核心（源站较慢时可能需要数分钟）…")
+	if err := p.finishProxy(ctx, req, backgroundResult, core, true); err != nil {
+		stage(90, "供给失败，正在清理实例与工作目录…")
+		return "", p.compensateProxyFailure(inst, err)
+	}
+	stage(95, "代理核心、配置与后端注册已就绪")
+	p.setProvisionReason(inst.ID, "")
+	slog.Info("代理一键供给完成", "instance", inst.Name, "instanceId", inst.ID)
+	return "", nil
+}
+
+func (p *ProxyService) compensateProxyFailure(inst *model.Instance, cause error) error {
+	reason := fmt.Sprintf("搭建失败，待清理：%v", cause)
+	if err := p.persistProvisionReason(inst.ID, reason); err != nil {
+		return fmt.Errorf("%w；记录搭建失败状态失败: %v", cause, err)
+	}
+	if cleanupErr := p.instance.Delete(inst.ID); cleanupErr != nil {
+		return fmt.Errorf("%w；失败补偿清理失败: %v", cause, cleanupErr)
+	}
+	return cause
+}
+
+func (p *ProxyService) persistProvisionReason(instanceID uint, reason string) error {
+	return p.db.Model(&model.Instance{}).Where("id = ?", instanceID).Update("status_reason", reason).Error
+}
+
+func (p *ProxyService) setProvisionReason(instanceID uint, reason string) {
+	if err := p.persistProvisionReason(instanceID, reason); err != nil {
+		slog.Warn("更新代理供给原因失败", "instanceId", instanceID, "error", err)
+	}
 }
 
 func inst2result(inst *model.Instance, secret string) *ProvisionProxyResult {

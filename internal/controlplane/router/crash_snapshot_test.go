@@ -91,7 +91,7 @@ func TestCrashSnapshots_Permission(t *testing.T) {
 // TestCrashSnapshots_CascadeDeleteWithInstance 删除实例级联清快照（spec §3/§5）。
 func TestCrashSnapshots_CascadeDeleteWithInstance(t *testing.T) {
 	db := setupTestDB(t)
-	r := setupTestRouter(db)
+	r, pool := setupDeleteTestRouter(db)
 	token := getAdminToken(t, r)
 	node := createTestNode(t, db)
 	g := createGroupViaAPI(t, r, token, "g")
@@ -99,7 +99,7 @@ func TestCrashSnapshots_CascadeDeleteWithInstance(t *testing.T) {
 	seedCrashSnapshot(t, db, id, time.Now(), 1)
 	seedCrashSnapshot(t, db, id, time.Now().Add(time.Minute), 2)
 
-	// 测试环境节点未连接：removeWorkerData 跳过 Worker 清理，记录删除照常走。
+	connectDeleteTestWorker(pool, node.UUID)
 	w := makeRequest(r, "DELETE", "/api/v1/instances/"+itoa(id), nil, token)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 

@@ -78,16 +78,21 @@ func (h *ProvisionHandler) ProvisionBukkit(c *gin.Context) {
 	h.ProvisionServer(c)
 }
 
-// ProvisionProxy POST /instances/provision/proxy —— 向导式搭建代理实例（FR-035）。
+// ProvisionProxy POST /instances/provision/proxy —— 异步搭建代理实例（FR-035/202/236）。
+// 同步段创建实例并登记任务，立即返回兼容结果 + taskId；下载、配置、注册与失败补偿在后台执行。
 func (h *ProvisionHandler) ProvisionProxy(c *gin.Context) {
 	var req service.ProvisionProxyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
 		return
 	}
-	result, err := h.proxy.ProvisionProxy(c.Request.Context(), req)
+	access := getAccess(c)
+	var createdBy uint
+	if access != nil {
+		createdBy = access.UserID
+	}
+	result, err := h.proxy.ProvisionProxyAsync(c.Request.Context(), req, createdBy)
 	if err != nil {
-		// result 非空（含已创建代理实例）表示部分失败，回报供重试/删除。
 		if result != nil && result.Instance != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "PROVISION_FAILED", "message": err.Error(), "result": result})
 			return

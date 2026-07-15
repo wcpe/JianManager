@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
+	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
@@ -14,7 +15,7 @@ func newRegTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Instance{}, &model.ServerRegistration{}, &model.Network{}, &model.NetworkMember{}, &model.GroupInstance{}))
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.ServerRegistration{}, &model.Network{}, &model.NetworkMember{}, &model.GroupInstance{}))
 	return db
 }
 
@@ -117,7 +118,12 @@ func TestRegistration_UpdateAndDelete(t *testing.T) {
 func TestRegistration_CascadeOnInstanceDelete(t *testing.T) {
 	db := newRegTestDB(t)
 	regSvc := NewRegistrationService(db)
-	instSvc := NewInstanceService(db, nil, nil)
+	pool := cpgrpc.NewClientPool()
+	instSvc := NewInstanceService(db, nil, pool)
+	t.Cleanup(instSvc.Shutdown)
+	node := &model.Node{UUID: "registration-delete-node", Name: "registration-delete-node", Status: model.NodeStatusOnline}
+	require.NoError(t, db.Create(node).Error)
+	pool.SetWorkerClientForTest(node.UUID, &fakeRemoveWorker{})
 	proxy := mkRoleInstance(t, db, "velocity", model.InstanceRoleProxy)
 	backend := mkRoleInstance(t, db, "lobby", model.InstanceRoleBackend)
 	_, err := regSvc.Create(proxy.ID, CreateRegistrationRequest{BackendID: backend.ID})

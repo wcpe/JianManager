@@ -65,19 +65,30 @@ func TestRunAsync_FailurePropagates(t *testing.T) {
 	require.Contains(t, task.Error, "磁盘满")
 }
 
-// TestRunAsync_LinksInstance InstanceID 非 0 时写 task.instance_id（启动闸/关联复用，FR-319/323）。
+// TestRunAsync_LinksInstance InstanceID 必须随 pending 任务在同一 INSERT 中写入（FR-319/323）。
 func TestRunAsync_LinksInstance(t *testing.T) {
 	db := newRunAsyncDB(t)
+	require.NoError(t, db.Exec(`CREATE TRIGGER require_runasync_instance
+		BEFORE INSERT ON tasks
+		WHEN NEW.kind = 'import' AND NEW.instance_id != 42
+		BEGIN SELECT RAISE(ABORT, 'instance_id 必须随任务创建写入'); END`).Error)
+	// 阻止后台抢先推进到 running，使断言稳定观察刚创建的 pending 行。
+	require.NoError(t, db.Exec(`CREATE TRIGGER keep_runasync_pending
+		BEFORE UPDATE OF state ON tasks
+		WHEN NEW.state = 'running'
+		BEGIN SELECT RAISE(IGNORE); END`).Error)
+
 	svc := NewTaskService(db)
 	block := make(chan struct{})
 	taskID := svc.RunAsync(RunSpec{NodeID: 1, InstanceID: 42, Kind: model.TaskKindImport, Title: "导入 x", CreatedBy: 1},
 		func(_ context.Context, _ func(int, string)) (string, error) {
-			<-block // 卡住，保证读取 instance_id 时任务仍 running
+			<-block
 			return "", nil
 		})
-	// instance_id 在返回前已写入（同步 Update）。
+	require.NotEmpty(t, taskID, "INSERT 未携带 instance_id 时触发器会拒绝创建")
 	var task model.Task
 	require.NoError(t, db.Where("task_id = ?", taskID).First(&task).Error)
+	require.Equal(t, model.TaskStatePending, task.State)
 	require.Equal(t, uint(42), task.InstanceID)
 	close(block)
 	waitTaskState(t, svc, taskID, model.TaskStateSucceeded)

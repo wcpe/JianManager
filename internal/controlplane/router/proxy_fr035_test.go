@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 
 type fakeFR035RouteWorker struct {
 	workerpb.WorkerServiceClient
+	mu       sync.Mutex
 	download *workerpb.DownloadCoreRequest
 	configs  map[string]map[string]string
 }
@@ -32,11 +34,15 @@ func (f *fakeFR035RouteWorker) CreateInstance(context.Context, *workerpb.CreateI
 }
 
 func (f *fakeFR035RouteWorker) DownloadCore(_ context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
+	f.mu.Lock()
 	f.download = req
+	f.mu.Unlock()
 	return &workerpb.DownloadCoreResponse{Success: true, Size: 42}, nil
 }
 
 func (f *fakeFR035RouteWorker) ReadConfig(_ context.Context, req *workerpb.ReadConfigRequest, _ ...grpc.CallOption) (*workerpb.ReadConfigResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.configs == nil || f.configs[req.InstanceUuid] == nil {
 		return &workerpb.ReadConfigResponse{Path: req.Path, Content: ""}, nil
 	}
@@ -44,6 +50,8 @@ func (f *fakeFR035RouteWorker) ReadConfig(_ context.Context, req *workerpb.ReadC
 }
 
 func (f *fakeFR035RouteWorker) WriteConfig(_ context.Context, req *workerpb.WriteConfigRequest, _ ...grpc.CallOption) (*workerpb.WriteConfigResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.configs == nil {
 		f.configs = make(map[string]map[string]string)
 	}
@@ -52,6 +60,16 @@ func (f *fakeFR035RouteWorker) WriteConfig(_ context.Context, req *workerpb.Writ
 	}
 	f.configs[req.InstanceUuid][req.Path] = req.Content
 	return &workerpb.WriteConfigResponse{Success: true}, nil
+}
+
+func (f *fakeFR035RouteWorker) snapshot(instanceUUID string) (*workerpb.DownloadCoreRequest, map[string]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	configs := make(map[string]string)
+	for path, content := range f.configs[instanceUUID] {
+		configs[path] = content
+	}
+	return f.download, configs
 }
 
 type fakeFR035RouteCoreTransport struct{}
@@ -84,6 +102,9 @@ func setupFR035Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool, core *
 	regSvc := service.NewRegistrationService(db)
 	proxySvc := service.NewProxyService(db, pool, instanceSvc, core, regSvc)
 	regSvc.SetSyncer(proxySvc)
+	require.NoError(t, db.AutoMigrate(&model.Task{}, &model.TaskLog{}, &model.Notification{}))
+	taskSvc := service.NewTaskService(db)
+	proxySvc.SetTaskService(taskSvc)
 
 	svcs := &Services{
 		Auth:          service.NewAuthService(db, jwtCfg),
@@ -98,6 +119,7 @@ func setupFR035Router(t *testing.T, db *gorm.DB, pool *cpgrpc.ClientPool, core *
 		Core:          core,
 		Proxy:         proxySvc,
 		Registration:  regSvc,
+		Task:          taskSvc,
 	}
 	return Setup(svcs, jwtCfg.Secret)
 }
@@ -134,17 +156,31 @@ func TestFR035ProvisionProxyRoutes(t *testing.T) {
 	require.NoError(t, json.Unmarshal(createResp.Body.Bytes(), &result))
 	require.NotEmpty(t, result.ForwardingSecret)
 	require.NotNil(t, result.Instance)
+	require.NotEmpty(t, result.TaskID, "异步代理供给必须返回 taskId")
 	require.Equal(t, model.InstanceRoleProxy, result.Instance.Role)
 	require.Equal(t, 25565, result.Instance.ServerPort)
-	require.Len(t, result.Registrations, 1)
-	require.Equal(t, "lobby", result.Registrations[0].Alias)
-	require.NotNil(t, worker.download)
-	require.Equal(t, "server.jar", worker.download.DestFilename)
-	require.Equal(t, strings.Repeat("b", 64), worker.download.Sha256)
-	require.Equal(t, result.ForwardingSecret, worker.configs[result.Instance.UUID]["forwarding.secret"])
-	require.Contains(t, worker.configs[result.Instance.UUID]["velocity.toml"], "player-info-forwarding-mode = \"modern\"")
-	require.Contains(t, worker.configs[result.Instance.UUID]["velocity.toml"], "lobby = \"127.0.0.1:25566\"")
-	require.Contains(t, worker.configs[backend.UUID]["config/paper-global.yml"], result.ForwardingSecret)
+
+	require.Eventually(t, func() bool {
+		var task model.Task
+		if err := db.Where("task_id = ?", result.TaskID).First(&task).Error; err != nil || !task.State.IsTerminal() {
+			return false
+		}
+		return task.State == model.TaskStateSucceeded
+	}, 3*time.Second, 20*time.Millisecond)
+	require.Eventually(t, func() bool {
+		var count int64
+		return db.Model(&model.ServerRegistration{}).Where("proxy_id = ?", result.Instance.ID).Count(&count).Error == nil && count == 1
+	}, 3*time.Second, 20*time.Millisecond)
+	_, proxyConfigs := worker.snapshot(result.Instance.UUID)
+	download, _ := worker.snapshot(result.Instance.UUID)
+	_, backendConfigs := worker.snapshot(backend.UUID)
+	require.NotNil(t, download)
+	require.Equal(t, "server.jar", download.DestFilename)
+	require.Equal(t, strings.Repeat("b", 64), download.Sha256)
+	require.Equal(t, result.ForwardingSecret, proxyConfigs["forwarding.secret"])
+	require.Contains(t, proxyConfigs["velocity.toml"], "player-info-forwarding-mode = \"modern\"")
+	require.Contains(t, proxyConfigs["velocity.toml"], "lobby = \"127.0.0.1:25566\"")
+	require.Contains(t, backendConfigs["config/paper-global.yml"], result.ForwardingSecret)
 
 	resyncResp := makeRequest(r, http.MethodPost, "/api/v1/proxies/"+itoa(result.Instance.ID)+"/resync", nil, adminToken)
 	require.Equal(t, http.StatusOK, resyncResp.Code, resyncResp.Body.String())

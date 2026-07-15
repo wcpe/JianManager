@@ -47,15 +47,20 @@ func (s *TaskService) SetNotificationService(n *NotificationService) {
 // CreateTask 登记一条新任务（state=pending），返回其业务 task_id。
 // taskID 为调用方生成的 UUID（与下发 Worker 的一致）。
 func (s *TaskService) CreateTask(taskID string, nodeID uint, kind, title, detail string, createdBy uint) (*model.Task, error) {
+	return s.createTask(taskID, nodeID, 0, kind, title, detail, createdBy)
+}
+
+func (s *TaskService) createTask(taskID string, nodeID, instanceID uint, kind, title, detail string, createdBy uint) (*model.Task, error) {
 	t := &model.Task{
-		TaskID:    taskID,
-		NodeID:    nodeID,
-		Kind:      kind,
-		State:     model.TaskStatePending,
-		Progress:  0,
-		Title:     title,
-		Detail:    detail,
-		CreatedBy: createdBy,
+		TaskID:     taskID,
+		NodeID:     nodeID,
+		InstanceID: instanceID,
+		Kind:       kind,
+		State:      model.TaskStatePending,
+		Progress:   0,
+		Title:      title,
+		Detail:     detail,
+		CreatedBy:  createdBy,
 	}
 	if err := s.db.Create(t).Error; err != nil {
 		return nil, fmt.Errorf("创建任务失败: %w", err)
@@ -142,12 +147,9 @@ func (s *TaskService) RunAsync(spec RunSpec, work func(ctx context.Context, stag
 	if detail == "" {
 		detail = "排队中"
 	}
-	if _, err := s.CreateTask(taskID, spec.NodeID, spec.Kind, spec.Title, detail, spec.CreatedBy); err != nil {
+	if _, err := s.createTask(taskID, spec.NodeID, spec.InstanceID, spec.Kind, spec.Title, detail, spec.CreatedBy); err != nil {
 		slog.Error("登记长操作任务失败", "kind", spec.Kind, "title", spec.Title, "error", err)
 		return ""
-	}
-	if spec.InstanceID != 0 {
-		_ = s.db.Model(&model.Task{}).Where("task_id = ?", taskID).Update("instance_id", spec.InstanceID).Error
 	}
 	timeout := spec.Timeout
 	if timeout <= 0 {
@@ -453,7 +455,7 @@ func (s *TaskService) persistJDKFromTask(t *model.Task) {
 }
 
 // persistRuntimeFromTask 解析 runtime_install 任务的 result 落一条 model.NodeRuntime
-//（managed=true，FR-299）。同 (node,type,path) 已存在则跳过（幂等双保险，同 persistJDKFromTask）。
+// （managed=true，FR-299）。同 (node,type,path) 已存在则跳过（幂等双保险，同 persistJDKFromTask）。
 func (s *TaskService) persistRuntimeFromTask(t *model.Task) {
 	var r struct {
 		Type    string `json:"type"`

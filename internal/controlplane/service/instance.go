@@ -49,6 +49,11 @@ var validTransitions = map[model.InstanceStatus][]model.InstanceStatus{
 	model.InstanceStatusCrashed:  {model.InstanceStatusStarting},
 }
 
+type instanceOperationLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
 // InstanceService 实例管理服务。
 type InstanceService struct {
 	db       *gorm.DB
@@ -66,12 +71,48 @@ type InstanceService struct {
 	bgCancel context.CancelFunc
 	bgWG     sync.WaitGroup
 	bgMu     sync.Mutex
+
+	// operationLocks 将同实例生命周期请求与其异步 Worker 委托串行到同一临界区，
+	// 防止删除越过在途启动后，旧实例指针又在 Worker 重建注册并启动孤儿进程。
+	operationLocksMu sync.Mutex
+	operationLocks   map[uint]*instanceOperationLock
 }
 
 // NewInstanceService 创建实例服务。
 func NewInstanceService(db *gorm.DB, groupSvc *GroupService, pool *cpgrpc.ClientPool) *InstanceService {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &InstanceService{db: db, groupSvc: groupSvc, pool: pool, bgCtx: ctx, bgCancel: cancel}
+	return &InstanceService{
+		db:             db,
+		groupSvc:       groupSvc,
+		pool:           pool,
+		bgCtx:          ctx,
+		bgCancel:       cancel,
+		operationLocks: make(map[uint]*instanceOperationLock),
+	}
+}
+
+// acquireInstanceOperation 获取单实例生命周期锁；返回函数必须且只能调用一次。
+// 引用计数让无等待者的锁及时移除，避免实例反复创建删除后长期积累锁对象。
+func (s *InstanceService) acquireInstanceOperation(id uint) func() {
+	s.operationLocksMu.Lock()
+	lock := s.operationLocks[id]
+	if lock == nil {
+		lock = &instanceOperationLock{}
+		s.operationLocks[id] = lock
+	}
+	lock.refs++
+	s.operationLocksMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		s.operationLocksMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(s.operationLocks, id)
+		}
+		s.operationLocksMu.Unlock()
+	}
 }
 
 // SetSettingsReader 注入平台设置读取器（FR-063）。在 main 装配阶段调用，避免构造期循环依赖。
@@ -607,6 +648,9 @@ type UpdateInstanceFields struct {
 
 // Update 更新实例配置。各字段为 nil 时表示不变。
 func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instance, error) {
+	releaseOperation := s.acquireInstanceOperation(id)
+	defer releaseOperation()
+
 	instance, err := s.GetByID(id)
 	if err != nil {
 		return nil, err
@@ -655,7 +699,18 @@ func (s *InstanceService) Update(id uint, f UpdateInstanceFields) (*model.Instan
 		}
 	}
 
-	return s.GetByID(id)
+	updated, err := s.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	launchSpecChanged := f.StartCommand != nil || f.AutoRestart != nil || f.JDKID != nil || f.EnvVars != nil
+	if launchSpecChanged && s.pool != nil {
+		// 保存只更新 Worker 的下次启动规格，不触发任何生命周期动作；同步失败由后续 Start/Restart 重注册兜底。
+		if err := s.registerOnWorkerLocked(updated); err != nil {
+			slog.Warn("实例启动规格已保存但同步在线 Worker 失败", "instanceId", updated.UUID, "error", err)
+		}
+	}
+	return updated, nil
 }
 
 // deleteStopSettleInterval / deleteStopSettleMargin 是删除编排的停止收敛节奏（FR-310）。
@@ -675,6 +730,9 @@ var (
 // 兑现删除确认文案「所有数据将被删除」；否则系统分配的 hash 后缀目录（ADR-007）不复用，
 // 反复建删会无限堆积孤儿目录。清理失败则中止删除（记录保留可重试），不静默孤儿化。
 func (s *InstanceService) Delete(id uint) error {
+	releaseOperation := s.acquireInstanceOperation(id)
+	defer releaseOperation()
+
 	instance, err := s.GetByID(id)
 	if err != nil {
 		return err
@@ -714,16 +772,20 @@ func (s *InstanceService) stopForDelete(instance *model.Instance) error {
 	var node model.Node
 	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// 节点记录已不存在：无处可停，与 removeWorkerData 的「节点缺失仅删记录」路径一致放行。
-			slog.Warn("删除实例：节点记录不存在，跳过删除前停止", "instanceId", instance.UUID)
-			return nil
+			return fmt.Errorf("%w：实例所属节点记录不存在，无法停止并清理 Worker 数据；已中止删除，实例记录保留", ErrNodeOffline)
 		}
 		return fmt.Errorf("查找节点失败: %w", err)
 	}
+	if node.Status != model.NodeStatusOnline {
+		return fmt.Errorf("%w：节点 %s 已离线，无法停止并清理 Worker 数据；已中止删除，实例记录保留",
+			ErrNodeOffline, node.Name)
+	}
+	if s.pool == nil {
+		return fmt.Errorf("%w：节点 %s 未连接，无法停止运行中的实例；请待节点恢复后重试删除",
+			ErrInstanceRunning, node.Name)
+	}
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
-		// 节点未连接时无法停止进程。此时删记录会复刻 FR-310 原始事故（记录没了、java 继续跑），
-		// 故拒绝并给可操作指引；节点恢复心跳后实例状态会对账（syncInstanceStates），届时可重试。
 		return fmt.Errorf("%w：节点 %s 未连接，无法停止运行中的实例；请待节点恢复后重试删除",
 			ErrInstanceRunning, node.Name)
 	}
@@ -783,22 +845,27 @@ func (s *InstanceService) removeWorkerDataSettled(instance *model.Instance, just
 }
 
 // removeWorkerData 委托 Worker 删除实例的工作目录与派生资产（RemoveInstance RPC）。
-// 节点记录缺失或未连接（离线/已失联）时跳过并告警——否则失联节点上的实例记录永远无法删除，
-// 残留目录留待节点侧处理；节点在线时清理必须成功，失败即返回错误中止删除。
+// 只有节点在线且 Worker 明确清理成功后才能删除 CP 记录；节点缺失、离线或未连接均中止删除并保留实例。
 func (s *InstanceService) removeWorkerData(instance *model.Instance) error {
 	var node model.Node
 	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			slog.Warn("删除实例：节点记录不存在，跳过 Worker 数据清理", "instanceId", instance.UUID)
-			return nil
+			return fmt.Errorf("%w：实例所属节点记录不存在，无法清理 Worker 数据；已中止删除，实例记录保留", ErrNodeOffline)
 		}
 		return fmt.Errorf("查找节点失败: %w", err)
 	}
+	if node.Status != model.NodeStatusOnline {
+		return fmt.Errorf("%w：节点 %s 已离线，无法清理 Worker 数据；已中止删除，实例记录保留",
+			ErrNodeOffline, node.Name)
+	}
+	if s.pool == nil {
+		return fmt.Errorf("%w：节点 %s 未连接，无法清理 Worker 数据；已中止删除，实例记录保留",
+			ErrNodeOffline, node.Name)
+	}
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
-		slog.Warn("删除实例：节点未连接，跳过 Worker 数据清理（目录残留在节点上）",
-			"instanceId", instance.UUID, "nodeUUID", node.UUID, "workDir", instance.WorkDir)
-		return nil
+		return fmt.Errorf("%w：节点 %s 未连接，无法清理 Worker 数据；已中止删除，实例记录保留",
+			ErrNodeOffline, node.Name)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -825,6 +892,14 @@ func (s *InstanceService) removeWorkerData(instance *model.Instance) error {
 
 // Start 启动实例（委托给 Worker Node）。
 func (s *InstanceService) Start(id uint) error {
+	releaseOperation := s.acquireInstanceOperation(id)
+	delegateOwnsOperation := false
+	defer func() {
+		if !delegateOwnsOperation {
+			releaseOperation()
+		}
+	}()
+
 	instance, err := s.GetByID(id)
 	if err != nil {
 		return err
@@ -854,8 +929,8 @@ func (s *InstanceService) Start(id uint) error {
 		return err
 	}
 
-	// 委托给 Worker Node
-	s.spawnDelegate(instance, "start")
+	// 委托给 Worker Node；生命周期锁移交给后台委托，RPC 与状态回写结束后释放。
+	delegateOwnsOperation = s.spawnDelegate(instance, "start", releaseOperation)
 
 	return nil
 }
@@ -909,6 +984,14 @@ func (s *InstanceService) memoryGate(instance *model.Instance) error {
 
 // Stop 停止实例（委托给 Worker Node）。
 func (s *InstanceService) Stop(id uint) error {
+	releaseOperation := s.acquireInstanceOperation(id)
+	delegateOwnsOperation := false
+	defer func() {
+		if !delegateOwnsOperation {
+			releaseOperation()
+		}
+	}()
+
 	instance, err := s.GetByID(id)
 	if err != nil {
 		return err
@@ -918,15 +1001,27 @@ func (s *InstanceService) Stop(id uint) error {
 		return err
 	}
 
-	s.spawnDelegate(instance, "stop")
-
+	delegateOwnsOperation = s.spawnDelegate(instance, "stop", releaseOperation)
 	return nil
 }
 
 // Restart 重启实例。
 func (s *InstanceService) Restart(id uint) error {
+	releaseOperation := s.acquireInstanceOperation(id)
+	delegateOwnsOperation := false
+	defer func() {
+		if !delegateOwnsOperation {
+			releaseOperation()
+		}
+	}()
+
 	instance, err := s.GetByID(id)
 	if err != nil {
+		return err
+	}
+
+	// 重启最终会重新启动实例，必须与 Start 共用同一道长操作闸；所有复用 Restart 的入口自动覆盖。
+	if err := longOpInFlightGate(s.db, id); err != nil {
 		return err
 	}
 
@@ -934,13 +1029,20 @@ func (s *InstanceService) Restart(id uint) error {
 		return err
 	}
 
-	s.spawnDelegate(instance, "restart")
-
+	delegateOwnsOperation = s.spawnDelegate(instance, "restart", releaseOperation)
 	return nil
 }
 
 // Kill 强制终止实例。
 func (s *InstanceService) Kill(id uint) error {
+	releaseOperation := s.acquireInstanceOperation(id)
+	delegateOwnsOperation := false
+	defer func() {
+		if !delegateOwnsOperation {
+			releaseOperation()
+		}
+	}()
+
 	instance, err := s.GetByID(id)
 	if err != nil {
 		return err
@@ -953,8 +1055,7 @@ func (s *InstanceService) Kill(id uint) error {
 		return err
 	}
 
-	s.spawnDelegate(instance, "kill")
-
+	delegateOwnsOperation = s.spawnDelegate(instance, "kill", releaseOperation)
 	return nil
 }
 
@@ -996,8 +1097,20 @@ func (s *InstanceService) SendCommand(id uint, command string) error {
 	return nil
 }
 
-// registerOnWorker 将实例注册到 Worker Node 的进程管理器。
+// registerOnWorker 在单实例生命周期锁内重读当前记录后注册，拒绝删除后的旧实例指针重新登记 Worker。
 func (s *InstanceService) registerOnWorker(instance *model.Instance) error {
+	releaseOperation := s.acquireInstanceOperation(instance.ID)
+	defer releaseOperation()
+
+	current, err := s.GetByID(instance.ID)
+	if err != nil || current.UUID != instance.UUID {
+		return ErrInstanceNotFound
+	}
+	return s.registerOnWorkerLocked(current)
+}
+
+// registerOnWorkerLocked 注册当前实例；调用方必须持有对应实例生命周期锁。
+func (s *InstanceService) registerOnWorkerLocked(instance *model.Instance) error {
 	var node model.Node
 	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
 		return fmt.Errorf("查找节点失败: %w", err)
@@ -1079,8 +1192,29 @@ func (s *InstanceService) ResyncNode(nodeUUID string) {
 	}
 
 	var instances []model.Instance
-	if err := s.db.Where("node_id = ?", node.ID).Find(&instances).Error; err != nil {
+	if err := s.db.Where("node_id = ?", node.ID).Order("id").Find(&instances).Error; err != nil {
 		slog.Warn("重连重推：查实例列表失败", "nodeUUID", nodeUUID, "error", err)
+		return
+	}
+	if len(instances) == 0 {
+		return
+	}
+
+	// 与单实例生命周期动作、删除共用同一组锁。锁内重读可剔除等待期间已删除的记录；
+	// 若重推先获得锁，删除会等待 RPC 完成后再移除 Worker 注册，两个顺序都不会留下旧快照重建。
+	releaseOperations := make([]func(), 0, len(instances))
+	instanceIDs := make([]uint, 0, len(instances))
+	for i := range instances {
+		releaseOperations = append(releaseOperations, s.acquireInstanceOperation(instances[i].ID))
+		instanceIDs = append(instanceIDs, instances[i].ID)
+	}
+	defer func() {
+		for i := len(releaseOperations) - 1; i >= 0; i-- {
+			releaseOperations[i]()
+		}
+	}()
+	if err := s.db.Where("id IN ? AND node_id = ?", instanceIDs, node.ID).Order("id").Find(&instances).Error; err != nil {
+		slog.Warn("重连重推：锁内刷新实例列表失败", "nodeUUID", nodeUUID, "error", err)
 		return
 	}
 	if len(instances) == 0 {
@@ -1193,20 +1327,23 @@ func (s *InstanceService) resolveJDKPath(instance *model.Instance) (string, erro
 }
 
 // spawnDelegate 在后台异步委托实例动作给 Worker，并登记到 bgWG 以便优雅关闭时 join。
-// Shutdown 之后（bgCtx 取消）不再发起新委托，避免向已关闭的依赖（如测试退出后关闭的 DB）写库。
-func (s *InstanceService) spawnDelegate(instance *model.Instance, action string) {
+// releaseOperation 由后台委托在 RPC 与状态回写结束后调用，使删除与后续生命周期请求等待在途动作。
+// Shutdown 之后（bgCtx 取消）不再发起新委托，返回 false 让调用方自行释放生命周期锁。
+func (s *InstanceService) spawnDelegate(instance *model.Instance, action string, releaseOperation func()) bool {
 	s.bgMu.Lock()
 	if s.bgCtx.Err() != nil {
 		s.bgMu.Unlock()
-		return
+		return false
 	}
 	s.bgWG.Add(1)
 	s.bgMu.Unlock()
 
 	go func() {
 		defer s.bgWG.Done()
+		defer releaseOperation()
 		s.delegateToWorker(instance, action)
 	}()
+	return true
 }
 
 // Shutdown 停止接受新的后台 Worker 委托并等待在途委托完成。
@@ -1250,13 +1387,20 @@ func (s *InstanceService) delegateToWorker(instance *model.Instance, action stri
 	switch action {
 	case "start":
 		// 确保实例已注册到 Worker（Create 时可能 Worker 离线）
-		if regErr := s.registerOnWorker(instance); regErr != nil {
+		if regErr := s.registerOnWorkerLocked(instance); regErr != nil {
 			slog.Debug("实例已在 Worker 注册或注册失败", "instanceId", instance.UUID, "error", regErr)
 		}
 		resp, err = client.Worker.StartInstance(ctx, req)
 	case "stop":
 		resp, err = client.Worker.StopInstance(ctx, req)
 	case "restart":
+		// Restart 不经过 Start 的预检链路，须先幂等重注册；同步失败时禁止继续用 Worker 缓存旧规格重启。
+		if regErr := s.registerOnWorkerLocked(instance); regErr != nil {
+			reason := "重启前同步最新启动规格失败，已取消重启: " + regErr.Error()
+			slog.Error("重启前同步最新启动规格失败，已取消重启", "instanceId", instance.UUID, "error", regErr)
+			s.updateStatusReasonAsync(instance.ID, model.InstanceStatusCrashed, reason)
+			return
+		}
 		resp, err = client.Worker.RestartInstance(ctx, req)
 	case "kill":
 		resp, err = client.Worker.KillInstance(ctx, req)
@@ -1458,7 +1602,7 @@ func (s *InstanceService) preflightStart(instance *model.Instance) error {
 		return ErrNodeOffline
 	}
 
-	if regErr := s.registerOnWorker(instance); regErr != nil {
+	if regErr := s.registerOnWorkerLocked(instance); regErr != nil {
 		slog.Debug("预检前实例注册（已注册或失败均不阻断）", "instanceId", instance.UUID, "error", regErr)
 	}
 

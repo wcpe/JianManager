@@ -98,6 +98,7 @@ func main() {
 	// 优雅关闭：停止接受新的后台 Worker 委托并等待在途异步状态回写收尾，避免泄漏 goroutine。
 	defer instanceSvc.Shutdown()
 	instanceBatchSvc := service.NewInstanceBatchService(db, pool)
+	instanceBatchSvc.SetInstanceService(instanceSvc)
 	// 实例组织分组树（FR-165，见 ADR-033）：文件夹式多级嵌套归类 + 实例 M:N，仅 CP 读写。
 	instanceGroupSvc := service.NewInstanceGroupService(db)
 	// 回填实例服务与 Worker 连接池，供节点排空（drain）和实时指标拉取复用。
@@ -336,8 +337,9 @@ func main() {
 	pmConfigSvc.SetTaskService(taskSvc) // FR-307 全局包异步安装走任务中心
 	// 运行时库安装异步化（FR-299）：Node.js 安装复用 jdk_install 的任务模式（kind=runtime_install）。
 	runtimeLibrarySvc.SetTaskService(taskSvc)
-	// 一键搭建异步化（FR-319）：下载/写配置在后台任务推进，前端不再被慢下载拖超时。
+	// 一键搭建异步化：后端服与代理的下载/配置在后台任务推进，不再受 HTTP 请求取消影响。
 	provisionSvc.SetTaskService(taskSvc)
+	proxySvc.SetTaskService(taskSvc)
 	// 长操作任务化（FR-323）：导入 migrate 搬迁 / 克隆拷贝 / 备份创建恢复 纳入任务中心。
 	importServerSvc.SetTaskService(taskSvc)
 	cloneSvc.SetTaskService(taskSvc)

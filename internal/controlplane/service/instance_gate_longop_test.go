@@ -59,6 +59,22 @@ func TestStart_BlockedWhileImportOrCloneInFlight(t *testing.T) {
 	}
 }
 
+// TestRestart_BlockedWhileLongOperationInFlight 验证 FR-331 中心化闸：所有复用
+// InstanceService.Restart 的单实例、网络、定时与探针重启入口都必须在状态转换前被拦截。
+func TestRestart_BlockedWhileLongOperationInFlight(t *testing.T) {
+	db, instID := newLongOpGateDB(t, model.TaskKindProvision)
+	svc := NewInstanceService(db, NewGroupService(db), cpgrpc.NewClientPool())
+	t.Cleanup(svc.Shutdown)
+
+	err := svc.Restart(instID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "搭建中")
+
+	var got model.Instance
+	require.NoError(t, db.First(&got, instID).Error)
+	require.Equal(t, model.InstanceStatusStopped, got.Status, "闸拦必须早于重启状态转换")
+}
+
 // TestInstanceBatch_StartRestart_BlockedWhileImportOrCloneInFlight 批量 start/restart：
 // import/clone 未终态逐条拒绝计 failed 带 kind 区分文案，实例保持 STOPPED（不回写 CRASHED）。
 func TestInstanceBatch_StartRestart_BlockedWhileImportOrCloneInFlight(t *testing.T) {

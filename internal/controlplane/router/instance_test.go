@@ -189,12 +189,12 @@ func TestInstance_DockerResourceLimitsCreateUpdateAndValidate(t *testing.T) {
 
 func TestInstance_Delete_Success(t *testing.T) {
 	db := setupTestDB(t)
-	r := setupTestRouter(db)
+	r, pool := setupDeleteTestRouter(db)
 	token := getAdminToken(t, r)
-	createTestNode(t, db)
+	node := createTestNode(t, db)
 
 	createBody := map[string]interface{}{
-		"nodeId":       1,
+		"nodeId":       node.ID,
 		"name":         "待删除实例",
 		"type":         "minecraft_java",
 		"processType":  "direct",
@@ -205,6 +205,7 @@ func TestInstance_Delete_Success(t *testing.T) {
 
 	created := parseJSON(t, w)
 	id := uint(created["id"].(float64))
+	connectDeleteTestWorker(pool, node.UUID)
 
 	w = makeRequest(r, "DELETE", "/api/v1/instances/"+itoa(id), nil, token)
 	assert.Equal(t, http.StatusOK, w.Code)

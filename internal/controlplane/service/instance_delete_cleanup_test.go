@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -32,10 +34,74 @@ func (f *fakeRemoveWorker) RemoveInstance(_ context.Context, req *workerpb.Remov
 	return &workerpb.RemoveInstanceResponse{Success: true}, nil
 }
 
+type blockingStartDeleteWorker struct {
+	workerpb.WorkerServiceClient
+	startEntered chan struct{}
+	allowStart   chan struct{}
+	removeCalled chan struct{}
+	removeOnce   sync.Once
+}
+
+type blockingDeleteResyncWorker struct {
+	workerpb.WorkerServiceClient
+	removeEntered  chan struct{}
+	allowRemove    chan struct{}
+	resyncCalled   chan struct{}
+	registerCalled chan struct{}
+	startCalled    chan struct{}
+	registerOnce   sync.Once
+	resyncOnce     sync.Once
+	startOnce      sync.Once
+}
+
+func (f *blockingStartDeleteWorker) CreateInstance(context.Context, *workerpb.CreateInstanceRequest, ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
+	return &workerpb.CreateInstanceResponse{}, nil
+}
+
+func (f *blockingStartDeleteWorker) PreflightStartInstance(context.Context, *workerpb.InstanceActionRequest, ...grpc.CallOption) (*workerpb.InstanceActionResponse, error) {
+	return &workerpb.InstanceActionResponse{Success: true}, nil
+}
+
+func (f *blockingStartDeleteWorker) StartInstance(context.Context, *workerpb.InstanceActionRequest, ...grpc.CallOption) (*workerpb.InstanceActionResponse, error) {
+	close(f.startEntered)
+	<-f.allowStart
+	return &workerpb.InstanceActionResponse{Success: true}, nil
+}
+
+func (f *blockingStartDeleteWorker) StopInstance(context.Context, *workerpb.InstanceActionRequest, ...grpc.CallOption) (*workerpb.InstanceActionResponse, error) {
+	return &workerpb.InstanceActionResponse{Success: true}, nil
+}
+
+func (f *blockingStartDeleteWorker) RemoveInstance(context.Context, *workerpb.RemoveInstanceRequest, ...grpc.CallOption) (*workerpb.RemoveInstanceResponse, error) {
+	f.removeOnce.Do(func() { close(f.removeCalled) })
+	return &workerpb.RemoveInstanceResponse{Success: true}, nil
+}
+
+func (f *blockingDeleteResyncWorker) CreateInstance(context.Context, *workerpb.CreateInstanceRequest, ...grpc.CallOption) (*workerpb.CreateInstanceResponse, error) {
+	f.registerOnce.Do(func() { close(f.registerCalled) })
+	return &workerpb.CreateInstanceResponse{Success: true}, nil
+}
+
+func (f *blockingDeleteResyncWorker) RemoveInstance(context.Context, *workerpb.RemoveInstanceRequest, ...grpc.CallOption) (*workerpb.RemoveInstanceResponse, error) {
+	close(f.removeEntered)
+	<-f.allowRemove
+	return &workerpb.RemoveInstanceResponse{Success: true}, nil
+}
+
+func (f *blockingDeleteResyncWorker) ResyncInstances(context.Context, *workerpb.ResyncInstancesRequest, ...grpc.CallOption) (*workerpb.ResyncInstancesResponse, error) {
+	f.resyncOnce.Do(func() { close(f.resyncCalled) })
+	return &workerpb.ResyncInstancesResponse{}, nil
+}
+
+func (f *blockingDeleteResyncWorker) StartInstance(context.Context, *workerpb.InstanceActionRequest, ...grpc.CallOption) (*workerpb.InstanceActionResponse, error) {
+	f.startOnce.Do(func() { close(f.startCalled) })
+	return &workerpb.InstanceActionResponse{Success: true}, nil
+}
+
 func newDeleteCleanupEnv(t *testing.T) (*InstanceService, *cpgrpc.ClientPool, *model.Node, *model.Instance) {
 	t.Helper()
 	db := newCloneTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NetworkMember{}))
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NetworkMember{}, &model.Task{}, &model.InstanceCrashSnapshot{}))
 	pool := cpgrpc.NewClientPool()
 	svc := NewInstanceService(db, nil, pool)
 	t.Cleanup(svc.Shutdown)
@@ -93,12 +159,198 @@ func TestDeleteInstanceAbortsWhenWorkerRPCFails(t *testing.T) {
 	require.NoError(t, gerr)
 }
 
-// 节点未连接（离线/已失联）时不阻断删除：仅删记录，目录留待节点侧处理。
-// 否则失联节点上的实例记录将永远无法删除。
-func TestDeleteInstanceProceedsWhenNodeDisconnected(t *testing.T) {
+// 节点未连接时无法确认 Worker 数据已清理，必须中止并保留实例记录。
+func TestDeleteInstanceAbortsWhenNodeDisconnected(t *testing.T) {
 	svc, _, _, inst := newDeleteCleanupEnv(t)
 
-	require.NoError(t, svc.Delete(inst.ID))
+	err := svc.Delete(inst.ID)
+	require.ErrorIs(t, err, ErrNodeOffline)
+	require.Contains(t, err.Error(), "实例记录保留")
+	got, getErr := svc.GetByID(inst.ID)
+	require.NoError(t, getErr)
+	require.Equal(t, inst.ID, got.ID)
+}
+
+// 节点状态已离线时即使连接池残留客户端，也不得调用 Worker 或删除 CP 记录。
+func TestDeleteInstanceAbortsWhenNodeStatusOffline(t *testing.T) {
+	svc, pool, node, inst := newDeleteCleanupEnv(t)
+	worker := &fakeRemoveWorker{}
+	pool.SetWorkerClientForTest(node.UUID, worker)
+	require.NoError(t, svc.db.Model(node).Update("status", model.NodeStatusOffline).Error)
+
+	err := svc.Delete(inst.ID)
+	require.ErrorIs(t, err, ErrNodeOffline)
+	require.Empty(t, worker.removed, "离线节点不得使用连接池中的过期客户端清理")
+	_, getErr := svc.GetByID(inst.ID)
+	require.NoError(t, getErr)
+}
+
+// 节点记录缺失时无法路由 Worker 清理，必须返回明确错误并保留实例。
+func TestDeleteInstanceAbortsWhenNodeRecordMissing(t *testing.T) {
+	svc, _, node, inst := newDeleteCleanupEnv(t)
+	require.NoError(t, svc.db.Unscoped().Delete(node).Error)
+
+	err := svc.Delete(inst.ID)
+	require.ErrorIs(t, err, ErrNodeOffline)
+	require.Contains(t, err.Error(), "节点记录不存在")
+	_, getErr := svc.GetByID(inst.ID)
+	require.NoError(t, getErr)
+}
+
+// 删除必须等待同实例在途启动委托结束，禁止先清理并删除记录后又被旧启动指针重新注册。
+func TestDeleteInstanceWaitsForInFlightStartDelegate(t *testing.T) {
+	svc, pool, node, inst := newDeleteCleanupEnv(t)
+	worker := &blockingStartDeleteWorker{
+		startEntered: make(chan struct{}),
+		allowStart:   make(chan struct{}),
+		removeCalled: make(chan struct{}),
+	}
+	pool.SetWorkerClientForTest(node.UUID, worker)
+
+	require.NoError(t, svc.Start(inst.ID))
+	select {
+	case <-worker.startEntered:
+	case <-time.After(time.Second):
+		t.Fatal("启动委托未进入 Worker")
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- svc.Delete(inst.ID) }()
+	removedPrematurely := false
+	select {
+	case <-worker.removeCalled:
+		removedPrematurely = true
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(worker.allowStart)
+	require.NoError(t, <-deleteDone)
+	require.False(t, removedPrematurely, "在途启动尚未结束时不得清理实例")
 	_, err := svc.GetByID(inst.ID)
 	require.ErrorIs(t, err, ErrInstanceNotFound)
+}
+
+// 删除先持锁时，重连重推必须在锁内重读并剔除已删实例，不能把旧快照重新登记到 Worker。
+func TestResyncNodeSkipsInstanceDeletedWhileWaiting(t *testing.T) {
+	svc, pool, node, inst := newDeleteCleanupEnv(t)
+	worker := &blockingDeleteResyncWorker{
+		removeEntered:  make(chan struct{}),
+		allowRemove:    make(chan struct{}),
+		resyncCalled:   make(chan struct{}),
+		registerCalled: make(chan struct{}),
+	}
+	pool.SetWorkerClientForTest(node.UUID, worker)
+
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- svc.Delete(inst.ID) }()
+	select {
+	case <-worker.removeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("删除未进入 Worker 清理")
+	}
+
+	resyncDone := make(chan struct{})
+	go func() {
+		svc.ResyncNode(node.UUID)
+		close(resyncDone)
+	}()
+	require.Eventually(t, func() bool {
+		svc.operationLocksMu.Lock()
+		defer svc.operationLocksMu.Unlock()
+		lock := svc.operationLocks[inst.ID]
+		return lock != nil && lock.refs == 2
+	}, time.Second, 10*time.Millisecond, "重连重推应已读取旧快照并等待实例锁")
+	close(worker.allowRemove)
+
+	require.NoError(t, <-deleteDone)
+	select {
+	case <-resyncDone:
+	case <-time.After(time.Second):
+		t.Fatal("重连重推未结束")
+	}
+	select {
+	case <-worker.resyncCalled:
+		t.Fatal("已删除实例不得从旧快照重推到 Worker")
+	default:
+	}
+}
+
+// 配置更新持有同一生命周期锁，不能在删除后用旧快照重注册已删除实例。
+func TestBatchStartWaitsForDeleteLock(t *testing.T) {
+	svc, pool, node, inst := newDeleteCleanupEnv(t)
+	worker := &blockingDeleteResyncWorker{
+		removeEntered:  make(chan struct{}),
+		allowRemove:    make(chan struct{}),
+		resyncCalled:   make(chan struct{}),
+		registerCalled: make(chan struct{}),
+		startCalled:    make(chan struct{}),
+	}
+	pool.SetWorkerClientForTest(node.UUID, worker)
+	batch := NewInstanceBatchService(svc.db, pool)
+	batch.SetInstanceService(svc)
+
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- svc.Delete(inst.ID) }()
+	select {
+	case <-worker.removeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("删除未进入 Worker 清理")
+	}
+
+	batchDone := make(chan *InstanceBatchResult, 1)
+	go func() {
+		result, err := batch.Batch(InstanceBatchRequest{Action: InstanceBatchStart, IDs: []uint{inst.ID}}, nil, false)
+		if err != nil {
+			batchDone <- &InstanceBatchResult{Failed: 1, Errors: []InstanceBatchError{{Error: err.Error()}}}
+			return
+		}
+		batchDone <- result
+	}()
+	select {
+	case <-worker.startCalled:
+		t.Fatal("删除持锁期间不得发送批量启动")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(worker.allowRemove)
+	require.NoError(t, <-deleteDone)
+	result := <-batchDone
+	require.Equal(t, 1, result.Failed)
+	require.Contains(t, result.Errors[0].Error, "实例不存在")
+}
+
+// 配置更新持有同一生命周期锁，不能在删除后用旧快照重注册已删除实例。
+func TestUpdateInstanceWaitsForDeleteLock(t *testing.T) {
+	svc, pool, node, inst := newDeleteCleanupEnv(t)
+	worker := &blockingDeleteResyncWorker{
+		removeEntered:  make(chan struct{}),
+		allowRemove:    make(chan struct{}),
+		resyncCalled:   make(chan struct{}),
+		registerCalled: make(chan struct{}),
+	}
+	pool.SetWorkerClientForTest(node.UUID, worker)
+
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- svc.Delete(inst.ID) }()
+	select {
+	case <-worker.removeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("删除未进入 Worker 清理")
+	}
+
+	name := "更新后的名称"
+	updateDone := make(chan error, 1)
+	go func() {
+		_, err := svc.Update(inst.ID, UpdateInstanceFields{StartCommand: &name})
+		updateDone <- err
+	}()
+	select {
+	case <-worker.registerCalled:
+		t.Fatal("删除持锁期间不得重注册实例")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(worker.allowRemove)
+	require.NoError(t, <-deleteDone)
+	require.ErrorIs(t, <-updateDone, ErrInstanceNotFound)
 }
