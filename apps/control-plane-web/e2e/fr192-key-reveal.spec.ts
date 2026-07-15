@@ -18,8 +18,11 @@ test('FR-192 拉取密钥 创建 + 可随时查看明文 + 可编辑/吊销', as
   const dlg = page.getByRole('dialog', { name: '创建密钥' })
   await dlg.getByRole('textbox', { name: '密钥名称' }).fill('e2e-key')
   await dlg.getByRole('button', { name: '创建密钥' }).click()
-  // 仅此一次明文弹窗 → 关闭
-  await page.getByRole('dialog', { name: /仅此一次/ }).getByRole('button', { name: '关闭' }).click()
+  // 创建后的明文弹窗确认密钥已加密保存，后续仍可从列表查看。
+  const secret = page.getByRole('dialog', { name: '拉取密钥' })
+  await expect(secret).toContainText('此密钥已加密保存，关闭后仍可在密钥列表中随时查看明文。')
+  await expect(secret).not.toContainText(/仅此一次|无法再次查看/)
+  await secret.getByRole('button', { name: '关闭' }).click()
 
   // 密钥行：查看（可随时再看明文）/ 编辑 / 吊销
   await expect(page.getByText('e2e-key')).toBeVisible()
