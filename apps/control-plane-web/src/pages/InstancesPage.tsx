@@ -840,6 +840,35 @@ export default function InstancesPage() {
           {selectedIds.length > 0 && (
             <InstanceBatchBar selected={selectedInstances} onClear={clearSelection} onRetainFailed={setSelectedIds} />
           )}
+          {/* 加载可供性（FR-235）：已加载/总数计数 + 显式「加载更多」兜底（不依赖滚动触发）。
+              分组视图下 total 为服务端总数，各组仅反映「当前已加载页」，组头计数即已加载子集。 */}
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-sm text-muted-foreground">
+            <span data-testid="instances-loaded-count">
+              {t('instances.loadedOfTotal', {
+                defaultValue: 'Loaded {{loaded}} / {{total}}',
+                loaded: instances.length,
+                total: totalCount,
+              })}
+              {groupBy !== 'none' && (
+                <span className="ml-2 text-xs">
+                  {t('instances.groupsLoadedOnly', { defaultValue: '(groups show loaded pages only)' })}
+                </span>
+              )}
+            </span>
+            {instances.length < totalCount && (
+              <Button
+                variant="outline"
+                size="sm"
+                data-testid="instances-load-more"
+                disabled={isFetchingNextPage}
+                onClick={loadMoreInstances}
+              >
+                {isFetchingNextPage
+                  ? t('instances.loadingMore', { defaultValue: 'Loading…' })
+                  : t('instances.loadMore', { defaultValue: 'Load more' })}
+              </Button>
+            )}
+          </div>
           {view === 'card' ? (
             <CardView
               groupBy={groupBy}

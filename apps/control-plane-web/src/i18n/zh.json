@@ -307,6 +307,8 @@
     "serverPort": "监听端口",
     "queryPort": "Query",
     "empty": "该节点暂无端口占用",
+    "filterPlaceholder": "按实例名筛选",
+    "noMatch": "无匹配端口",
     "range": "分配范围：server {{server}}+（每段 {{size}} 个）"
   },
   "artifactCache": {
@@ -530,6 +532,7 @@
     "expandLibrary": "展开实例库",
     "searchInstance": "搜索实例…",
     "selectInstance": "选择实例 {{name}}",
+    "toggleInstanceFunctions": "展开/收起 {{name}} 的功能",
     "selectedHint": "已选 {{count}} 个实例，拖动任一即可批量加入",
     "customLayout": "自定义布局",
     "noPresets": "暂无跨实例预设",
@@ -1138,6 +1141,10 @@
     "deleteRunningHint": "运行中删除会先停止实例再删除",
     "deleteConfirm": "确定删除？",
     "empty": "暂无实例",
+    "loadedOfTotal": "已加载 {{loaded}} / 共 {{total}}",
+    "groupsLoadedOnly": "（分组仅含当前已加载页）",
+    "loadMore": "加载更多",
+    "loadingMore": "加载中…",
     "stopped": "停止",
     "starting": "启动中",
     "running": "运行",

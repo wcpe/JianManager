@@ -275,6 +275,39 @@ describe('InstancesPage（mock 假后端）', () => {
     })
   })
 
+  it('展示「已加载/共」计数与显式「加载更多」按钮（FR-235 可供性）', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<InstancesPage />, { route: '/instances' })
+    await switchToListView(user)
+
+    // 计数文本：已加载首页 < 总数（1000+ seed），故计数与加载更多按钮均出现。
+    const count = await screen.findByTestId('instances-loaded-count')
+    // 计数文案「已加载 N / 共 M」（FR-235 可供性）。
+    expect(count.textContent).toMatch(/已加载 \d+ \/ 共 \d+/)
+
+    const loadMore = screen.getByTestId('instances-load-more')
+    expect(loadMore).toBeInTheDocument()
+
+    // 点击加载更多 → 追加下一页 → 已加载数增加。
+    const loadedBefore = Number(count.textContent?.match(/已加载 (\d+)/)?.[1] ?? '0')
+    await user.click(loadMore)
+    await waitFor(() => {
+      const after = Number(
+        screen.getByTestId('instances-loaded-count').textContent?.match(/已加载 (\d+)/)?.[1] ?? '0',
+      )
+      expect(after).toBeGreaterThan(loadedBefore)
+    })
+  })
+
+  it('分组视图标注「仅当前已加载页」（FR-235 可供性）', async () => {
+    renderWithProviders(<InstancesPage />, { route: '/instances?view=list&groupBy=node' })
+    await screen.findByTestId('instances-table-virtual')
+
+    const count = await screen.findByTestId('instances-loaded-count')
+    // 分组下追加「（分组仅含当前已加载页）」标注（FR-235 可供性）。
+    expect(count.textContent).toContain('（分组仅含当前已加载页）')
+  })
+
   it('注入 500 → 列表不渲染任何种子实例（错误态非崩溃）', async () => {
     mockInject('get', '/instances/search', { kind: 'status', status: 500 })
     const user = userEvent.setup()

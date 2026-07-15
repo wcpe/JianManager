@@ -307,6 +307,8 @@
     "serverPort": "Listen Port",
     "queryPort": "Query",
     "empty": "No ports in use on this node",
+    "filterPlaceholder": "Filter by instance name",
+    "noMatch": "No matching ports",
     "range": "Allocation: server {{server}}+ ({{size}} per range)"
   },
   "artifactCache": {
@@ -530,6 +532,7 @@
     "expandLibrary": "Expand library",
     "searchInstance": "Search instances…",
     "selectInstance": "Select instance {{name}}",
+    "toggleInstanceFunctions": "Toggle functions for {{name}}",
     "selectedHint": "{{count}} selected; drag any one to add them all",
     "customLayout": "Custom layout",
     "noPresets": "No cross-instance presets yet",
@@ -1182,6 +1185,10 @@
     "deleteRunningHint": "Deleting while running will stop the instance first",
     "deleteConfirm": "Are you sure to delete?",
     "empty": "No instances",
+    "loadedOfTotal": "Loaded {{loaded}} / {{total}}",
+    "groupsLoadedOnly": "(groups show loaded pages only)",
+    "loadMore": "Load more",
+    "loadingMore": "Loading…",
     "stopped": "Stopped",
     "starting": "Starting",
     "running": "Running",
