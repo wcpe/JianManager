@@ -563,15 +563,27 @@ func (s *BotService) delegateBatchOne(req BotBatchRequest, bot *model.Bot) error
 			Behavior:     bot.Behavior,
 		})
 		if err != nil {
+			markBotDelegateFailure(s.db, bot.ID, fmt.Sprintf("gRPC CreateBot 失败: %v", err))
 			return fmt.Errorf("gRPC CreateBot 失败: %w", err)
 		}
 		if !resp.Success {
+			// 与单建路径同款账本：失败写 status=error + lastError，行内可见原因而非永卡原状态。
+			markBotDelegateFailure(s.db, bot.ID, fmt.Sprintf("Worker CreateBot 失败: %s", resp.Error))
 			return fmt.Errorf("Worker CreateBot 失败: %s", resp.Error)
 		}
-		// 真实状态由读取时 refreshStatus 回填，这里先置 connecting，不再乐观置 connected。
-		_ = s.db.Model(&model.Bot{}).Where("id = ?", bot.ID).Update("status", model.BotStatusConnecting).Error
+		// 真实状态由读取时 refreshStatus 回填，这里先置 connecting，不再乐观置 connected；委托成功清 lastError。
+		_ = s.db.Model(&model.Bot{}).Where("id = ?", bot.ID).Updates(map[string]any{"status": model.BotStatusConnecting, "last_error": ""}).Error
 	default:
 		return fmt.Errorf("不支持的批量动作: %s", req.Action)
 	}
 	return nil
+}
+
+// markBotDelegateFailure 把委托 Worker 失败写进 Bot 账本（status=error + lastError），
+// 使批量/压测路径与单建路径反馈一致；写库失败仅记日志（原始委托错误另由调用方上抛）。
+func markBotDelegateFailure(db *gorm.DB, botID uint, reason string) {
+	if err := db.Model(&model.Bot{}).Where("id = ?", botID).
+		Updates(map[string]any{"status": model.BotStatusError, "last_error": reason}).Error; err != nil {
+		slog.Warn("写入 Bot 委托失败账本失败", "botID", botID, "error", err)
+	}
 }

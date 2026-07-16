@@ -27,6 +27,9 @@ type Bot struct {
 	StressSessionID *uint          `gorm:"index" json:"stressSessionId,omitempty"`
 	Name            string         `gorm:"type:varchar(128);not null" json:"name"`
 	Status          BotStatus      `gorm:"type:varchar(32);default:pending" json:"status"`
+	// LastError 最近一次委托 Worker 失败的原因（如 bot-worker 依赖未装、节点未连）。
+	// 委托成功即清空；status=error 时前端据此显示可操作指引，杜绝「创建 201 但永远 pending 零反馈」。
+	LastError       string         `gorm:"type:text" json:"lastError,omitempty"`
 	Config          string         `gorm:"type:text" json:"config"` // JSON: server, port, auth
 	Behavior        string         `gorm:"type:varchar(64)" json:"behavior"`
 	WorkerID        string         `gorm:"type:varchar(128)" json:"workerId"`

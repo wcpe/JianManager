@@ -130,9 +130,14 @@ func (s *BotService) Create(req CreateBotRequest) (*model.Bot, error) {
 		return nil, fmt.Errorf("创建 Bot 失败: %w", err)
 	}
 
-	// 委托 Worker 创建 Bot 连接（失败不阻塞 DB 创建，记 warning）
+	// 委托 Worker 创建 Bot 连接。失败不阻塞 DB 创建（记录保留，依赖装好后可重连），
+	// 但必须把失败写进 Bot 本身（status=error + lastError）随创建响应带回——此前只 slog.Warn
+	// 吞掉，API 照发 201，真机表现为「bot 永远 pending、服务器/bot 两侧零反馈」。
 	if err := s.delegateCreateBot(bot, req.BehaviorConfig); err != nil {
 		slog.Warn("委托 Worker 创建 Bot 失败", "botID", bot.ID, "error", err)
+		bot.Status = model.BotStatusError
+		bot.LastError = err.Error()
+		_ = s.db.Model(bot).Updates(map[string]any{"status": bot.Status, "last_error": bot.LastError}).Error
 	}
 
 	return bot, nil
@@ -216,11 +221,14 @@ func (s *BotService) delegateCreateBot(bot *model.Bot, behaviorConfig json.RawMe
 	}
 
 	// Bot 连接是异步的：先置 connecting，真实状态由读取时经 ListBots 拉取回填（refreshStatus）。
+	// 委托成功即清空 lastError（覆盖「上次失败→依赖装好重连成功」的翻篇）。
 	status := model.BotStatusConnecting
 	if resp.Status != "" {
 		status = mapWorkerBotStatus(resp.Status)
 	}
-	_ = s.db.Model(bot).Update("status", status).Error
+	bot.Status = status
+	bot.LastError = ""
+	_ = s.db.Model(bot).Updates(map[string]any{"status": status, "last_error": ""}).Error
 	return nil
 }
 

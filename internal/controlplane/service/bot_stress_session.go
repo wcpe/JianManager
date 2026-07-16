@@ -262,6 +262,8 @@ func (s *BotStressSessionService) Start(id uint) (*BotStressSessionView, error) 
 		_ = s.db.Model(sess).Update("status", model.BotStressSessionError).Error
 		return nil, err
 	}
+	// 结果账本从会话既有计数续算（error 态重启动补建缺口时不清零历史）。
+	succeeded, failed := sess.Succeeded, sess.Failed
 	for i := 1; i <= sess.BotCount; i++ {
 		name := stressSessionBotName(sess.NamePrefix, i)
 		if names[name] {
@@ -290,9 +292,26 @@ func (s *BotStressSessionService) Start(id uint) (*BotStressSessionView, error) 
 			return nil, fmt.Errorf("创建压测 Bot 失败: %w", err)
 		}
 		names[bot.Name] = true
+		// 委托 Worker 失败的 Bot（记录已建但 status=error，如 bot-worker 依赖未装）计入会话失败账本；
+		// 此前 Create 吞掉委托失败，20/20 全卡「等待中」而 Failed 恒 0，压测侧零反馈。
+		if bot.Status == model.BotStatusError {
+			succeeded, failed = accumulateStressBotOutcome(succeeded, failed, false)
+			_ = s.db.Model(sess).Updates(map[string]any{"failed": failed, "last_error": bot.LastError}).Error
+		} else {
+			succeeded, failed = accumulateStressBotOutcome(succeeded, failed, true)
+			_ = s.db.Model(sess).Update("succeeded", succeeded).Error
+		}
 	}
 
 	return s.Get(id)
+}
+
+// accumulateStressBotOutcome 累计压测 Bot 创建结果计数（纯函数便于测试）。
+func accumulateStressBotOutcome(succeeded, failed int, ok bool) (int, int) {
+	if ok {
+		return succeeded + 1, failed
+	}
+	return succeeded, failed + 1
 }
 
 func (s *BotStressSessionService) existingStressSessionBotNames(sessionID uint) (map[string]bool, error) {
