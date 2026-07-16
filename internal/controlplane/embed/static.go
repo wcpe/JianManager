@@ -29,6 +29,10 @@ func RegisterStaticRoutes(r *gin.Engine) {
 		panic("读取嵌入 index.html 失败: " + err.Error())
 	}
 	serveIndex := func(c *gin.Context) {
+		// index.html 必须禁缓存（FIX，真机：部署新版后浏览器启发式缓存旧 index，
+		// 引用旧哈希 chunk——已修复的前端缺陷在用户端看起来「还在」）。
+		// chunk 文件名带内容哈希，index 每次重取即可保证版本一致。
+		c.Header("Cache-Control", "no-cache")
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
 	}
 
@@ -53,6 +57,11 @@ func RegisterStaticRoutes(r *gin.Engine) {
 		file, err := sub.Open(cleanPath)
 		if err == nil {
 			file.Close()
+			// 构建产物文件名带内容哈希，可安全长缓存；嵌入 FS 无修改时间，
+			// 不显式设置时浏览器按启发式缓存，行为不可控。
+			if strings.HasPrefix(cleanPath, "assets/") {
+				c.Header("Cache-Control", "public, max-age=31536000, immutable")
+			}
 			c.FileFromFS(cleanPath, staticFS)
 			return
 		}
