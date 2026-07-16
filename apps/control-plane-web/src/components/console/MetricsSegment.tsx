@@ -23,13 +23,21 @@ function formatProbeCacheBytes(bytes: number) {
  */
 function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
   const { t } = useTranslation()
+  const { data: inst } = useInstance(instanceId)
   const { data: st } = useProbeUpdateStatus(instanceId)
   const update = useUpdateProbe(instanceId)
+  // ServerProbe 是 Bukkit 插件，代理端（BungeeCord/Waterfall/Velocity）无法加载：
+  // 代理实例不渲染探针卡（后端同有守卫），避免「更新探针必失败」的陷阱按钮。
+  if (inst?.role === 'proxy') return null
   if (!st) return null
   const doUpdate = (restart: boolean) =>
     update.mutate(restart, {
       onSuccess: (r) => toast.success(r.restarted ? t('probe.updatedRestarted') : t('probe.updatedPending')),
-      onError: () => toast.error(t('probe.updateFailed')),
+      // 失败必须带服务端原因（真机：toast 只显「更新探针失败」干壳，422 的具体原因被吞）。
+      onError: (e) => {
+        const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+        toast.error(msg ? `${t('probe.updateFailed')}：${msg}` : t('probe.updateFailed'))
+      },
     })
   return (
     <Panel title={t('probe.title')}>
