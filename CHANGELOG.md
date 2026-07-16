@@ -33,6 +33,7 @@
 - **Bot 委托失败落账本随响应带回（fix(control-plane)，真机复现：bot 全线连不上且「服务器和 bot 两边都没有任何反馈」）**：`BotService.Create` 此前对委托 Worker 失败只 `slog.Warn` 吞掉、API 照发 201——Worker 侧「bot 依赖未安装：请到节点『全局包管理』安装 mineflayer…」的指引根本到不了用户，23 个 bot 永卡 pending、异常计数恒 0。修复：Bot 模型新增 `lastError`（AutoMigrate 加列）；单建/批量启动/压测建 bot 委托失败一律落 `status=error + lastError`（异常计数即亮、行内可见原因），委托成功清空翻篇；压测会话接通既有 `Succeeded/Failed/LastError` 账本（此前恒记成功）。单测覆盖失败入库带回/成功清空/批量失败标记/压测账本累计。
 - **CreateBot 拒绝时落 Worker 日志（fix(worker)）**：`ensureBotManager` 失败此前只装进 gRPC 响应，Worker 日志零痕迹——两侧排障皆盲。拒绝时补 `slog.Warn`（botUuid + 原因）。
 - **Bot 创建与行内暴露委托失败原因（fix(web)）**：创建响应 `status=error` 时弹窗内显示 `lastError` 可操作指引（不再静默关窗留死 bot）；Bot 行内 error 态追加红字原因 + title 悬浮全文。
+- **Bot 列表与聚合短轮询（fix(web)，真机复现：bot 已进服、面板永远显示「连接中」）**：Bot 状态异步演进（connecting→connected 秒级、且由读取触发回填），而列表/聚合查询仅挂载取一次永不再刷——统计条冻死在挂载瞬间的旧值。`useBots`/`useBotSummary` 补 5s 轮询（对齐 FR-329 任务轮询先例）；真机复测重连后统计条 10s 内自动 连接中→在线，零手动刷新。
 ### 优化
 - **控制台终端顶栏收敛为紧凑扁平单条（refactor，方案 A，用户走查「顶栏太占位置、样式丑」）**：终端面板顶部原为「浮动卡片工具栏（`rounded-lg border bg-card/95 shadow-soft` + 药丸按钮）+ 独占一行的琥珀只读横幅」两层 chrome、纵向占位偏高。收敛为**单条扁平工具栏**（`border-b`、无浮卡/无阴影、`py-1.5`、ghost 图标按钮），非运行状态提示并入行首（不再独占整行），终端外层内边距 `p-4→p-2`，把纵向空间还给日志区。功能与可访问性不变（读写徽标/重连/搜索/字号/全屏控件与 aria 保留，dom 测试 9/9 绿）。
 
