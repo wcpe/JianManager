@@ -860,6 +860,9 @@ func (s *Server) ensureBotManager() error {
 // CreateBot 创建并连接一个 Bot。
 func (s *Server) CreateBot(ctx context.Context, req *workerpb.CreateBotRequest) (*workerpb.CreateBotResponse, error) {
 	if err := s.ensureBotManager(); err != nil {
+		// 失败必须留 Worker 侧日志：此前只装进响应，Worker 日志零痕迹，
+		// 真机排障（bot 依赖未装/node 缺失）两侧都看不到原因。
+		slog.Warn("CreateBot 拒绝：bot-worker 未就绪", "botUuid", req.BotUuid, "error", err)
 		return &workerpb.CreateBotResponse{Success: false, Error: err.Error()}, nil
 	}
 	slog.Info("CreateBot", "botUuid", req.BotUuid, "host", req.Host, "port", req.Port, "username", req.Username, "version", req.Version)
