@@ -1031,6 +1031,17 @@ func (s *InstanceService) Restart(id uint) error {
 		return err
 	}
 
+	// 重启 = 停止 + 启动，启动侧守卫必须同样生效（真机：代理后端注册被清空后点「重启」
+	// 绕过启动预检，BungeeCord 读到空 servers 立崩、JVM 非 daemon 线程残留假活成僵尸）。
+	// DAMAGED 守卫与启动预检（节点连通 / jar / JDK / 代理后端）与 Start 同栈；
+	// 内存水位闸刻意不进重启——旧进程随即释放同额内存，按新增启动计算会误拒。
+	if instance.Status == model.InstanceStatusDamaged {
+		return &PreflightError{Reason: "实例已损毁（搭建未完成），请先重建再启动"}
+	}
+	if err := s.preflightStart(instance); err != nil {
+		return err
+	}
+
 	if err := s.transition(id, model.InstanceStatusStopping, "重启-停止"); err != nil {
 		return err
 	}

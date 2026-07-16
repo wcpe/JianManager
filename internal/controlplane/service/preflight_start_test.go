@@ -159,3 +159,32 @@ func TestStartPreflight_ProxyWithBackendPasses(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, model.InstanceStatusStarting, got.Status)
 }
+
+// 重启路径与启动同栈守卫（真机回归：代理后端注册被清空后点「重启」绕过启动预检，
+// BungeeCord 读到空 servers 立崩、JVM 非 daemon 线程残留假活成僵尸）。
+func TestRestartPreflight_ProxyNoBackends(t *testing.T) {
+	svc, _, _, inst := newPreflightFixture(t)
+	require.NoError(t, svc.db.Model(inst).Updates(map[string]any{
+		"role": model.InstanceRoleProxy, "status": model.InstanceStatusRunning,
+	}).Error)
+
+	err := svc.Restart(inst.ID)
+	var pfErr *PreflightError
+	require.ErrorAs(t, err, &pfErr, "重启无后端代理必须被预检拦截")
+	assert.Contains(t, pfErr.Reason, "No servers defined")
+
+	got, err := svc.GetByID(inst.ID)
+	require.NoError(t, err)
+	assert.Equal(t, model.InstanceStatusRunning, got.Status, "拦截后状态保持原样，不得进 STOPPING")
+}
+
+// 重启损毁实例同样被拦（与 Start 的 DAMAGED 守卫一致）。
+func TestRestartPreflight_DamagedRejected(t *testing.T) {
+	svc, _, _, inst := newPreflightFixture(t)
+	require.NoError(t, svc.db.Model(inst).Update("status", model.InstanceStatusDamaged).Error)
+
+	err := svc.Restart(inst.ID)
+	var pfErr *PreflightError
+	require.ErrorAs(t, err, &pfErr)
+	assert.Contains(t, pfErr.Reason, "损毁")
+}
