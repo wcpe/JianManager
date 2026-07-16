@@ -196,3 +196,46 @@ func TestProbeUpdate_Batch_EmptyTargets(t *testing.T) {
 	require.Equal(t, 0, res.Succeeded)
 	require.Equal(t, 0, res.Failed)
 }
+
+// TestProbeUpdate_Update_RejectsProxy 真机回归（对 BungeeCord 代理点「更新探针」失败且原因被吞）：
+// ServerProbe 是 Bukkit 插件，代理端无法加载——代理实例单发推送直接拒绝并带明确原因，
+// 不再走完整推送链路后在依赖预置阶段才失败。守卫置于内嵌检查之前（不依赖内嵌产物可测）。
+func TestProbeUpdate_Update_RejectsProxy(t *testing.T) {
+	db := newProbeUpdateTestDB(t)
+	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
+	proxy := &model.Instance{
+		Name: "lobby", NodeID: 1, Type: model.InstanceTypeMinecraftJava,
+		Role: model.InstanceRoleProxy, ProcessType: model.ProcessTypeDaemon,
+		StartCommand: "x", Status: model.InstanceStatusRunning,
+	}
+	require.NoError(t, db.Create(proxy).Error)
+
+	_, err := svc.Update(proxy.ID)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "代理实例不适用", "拒绝原因必须明确指向代理不适用")
+}
+
+// TestProbeUpdate_ResolveTargets_SkipsProxy 批量目标解析静默跳过代理实例（计入 skipped）。
+func TestProbeUpdate_ResolveTargets_SkipsProxy(t *testing.T) {
+	db := newProbeUpdateTestDB(t)
+	svc := NewProbeUpdateService(db, cpgrpc.NewClientPool(), nil)
+	backend := mkProbeInstance(t, db, "smp", 1)
+	proxy := &model.Instance{
+		Name: "gate", NodeID: 1, Type: model.InstanceTypeMinecraftJava,
+		Role: model.InstanceRoleProxy, ProcessType: model.ProcessTypeDaemon,
+		StartCommand: "x", Status: model.InstanceStatusRunning,
+	}
+	require.NoError(t, db.Create(proxy).Error)
+
+	insts, skipped, err := svc.resolveTargets(ProbeUpdateBatchRequest{IDs: []uint{backend.ID, proxy.ID}}, nil, false)
+	require.NoError(t, err)
+	require.Len(t, insts, 1, "代理被排除，仅后端命中")
+	require.Equal(t, backend.ID, insts[0].ID)
+	require.Equal(t, 1, skipped, "被排除的代理计入 skipped")
+
+	insts, _, err = svc.resolveTargets(ProbeUpdateBatchRequest{}, nil, false)
+	require.NoError(t, err)
+	for _, in := range insts {
+		require.NotEqual(t, model.InstanceRoleProxy, in.Role, "filter 模式亦不得纳入代理")
+	}
+}

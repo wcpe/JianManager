@@ -153,13 +153,19 @@ func (s *ProbeUpdateService) Status(instanceID uint) (*ProbeUpdateStatus, error)
 // restart=true 时推送成功后由调用方重启（本服务只标记 restarted 计划，实际重启委托 restartFn，
 // 见 router 装配）。jar 未内嵌返回 ErrProbeNotEmbedded；节点未连/下发失败返回包装错误。
 func (s *ProbeUpdateService) Update(instanceID uint) (*ProbeUpdateResult, error) {
-	info := cpembed.ServerProbeJarInfo()
-	if !info.Available {
-		return nil, ErrProbeNotEmbedded
-	}
 	var inst model.Instance
 	if err := s.db.Preload("Node").First(&inst, instanceID).Error; err != nil {
 		return nil, err
+	}
+	// 代理实例不适用探针（FIX，真机：对 BungeeCord 代理点「更新探针」走完整推送链路后在依赖预置阶段失败）：
+	// ServerProbe 是 Bukkit 插件，代理端（BungeeCord/Waterfall/Velocity）无法加载，推了也白推。
+	// 置于内嵌检查之前：不适用与是否捆绑探针无关。
+	if inst.Role == model.InstanceRoleProxy {
+		return nil, fmt.Errorf("代理实例不适用 ServerProbe 探针（Bukkit 插件，代理端无法加载），无需推送")
+	}
+	info := cpembed.ServerProbeJarInfo()
+	if !info.Available {
+		return nil, ErrProbeNotEmbedded
 	}
 	if err := s.deployTo(&inst); err != nil {
 		return nil, err
@@ -245,7 +251,8 @@ func (s *ProbeUpdateService) resolveTargets(req ProbeUpdateBatchRequest, scopeID
 
 	if len(req.IDs) > 0 {
 		q := applyInstanceBatchFilter(s.db.Model(&model.Instance{}).Preload("Node"), InstanceBatchFilter{}, scopeIDs, scope)
-		if err := q.Where("instances.id IN ?", req.IDs).Find(&instances).Error; err != nil {
+		// 代理实例不适用探针（Bukkit 插件），批量目标静默跳过并计入 skipped。
+		if err := q.Where("instances.id IN ? AND instances.role <> ?", req.IDs, model.InstanceRoleProxy).Find(&instances).Error; err != nil {
 			return nil, 0, fmt.Errorf("查询批量目标失败: %w", err)
 		}
 		skipped := len(req.IDs) - len(instances)
@@ -260,7 +267,7 @@ func (s *ProbeUpdateService) resolveTargets(req ProbeUpdateBatchRequest, scopeID
 		f = *req.Filter
 	}
 	q := applyInstanceBatchFilter(s.db.Model(&model.Instance{}).Preload("Node"), f, scopeIDs, scope)
-	if err := q.Limit(maxProbeUpdateTargets + 1).Find(&instances).Error; err != nil {
+	if err := q.Where("instances.role <> ?", model.InstanceRoleProxy).Limit(maxProbeUpdateTargets + 1).Find(&instances).Error; err != nil {
 		return nil, 0, fmt.Errorf("查询批量目标失败: %w", err)
 	}
 	return instances, 0, nil
