@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -484,6 +485,7 @@ func (o *wrapperOutput) Write(p []byte) (int, error) {
 
 // buildJavaCmd 构造 Java 进程命令。跨平台：Windows 用 cmd.exe /c，其他用 sh -c。
 func buildJavaCmd(cfg WrapperConfig) *exec.Cmd {
+	writeEnvFile(cfg) // FR-344：物化自定义启动 env 到 <workDir>/.env（供查看；实际注入仍走 composeEnv）
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = exec.Command("cmd.exe", "/c", cfg.StartCommand)
@@ -494,6 +496,30 @@ func buildJavaCmd(cfg WrapperConfig) *exec.Cmd {
 	cmd.Dir = cfg.WorkDir
 	cmd.Env = composeEnv(os.Environ(), cfg)
 	return cmd
+}
+
+// writeEnvFile 把实例自定义启动环境变量物化为 <workDir>/.env（FR-344，KEY=VALUE 行 + 生成头注释）。
+// 供用户在文件管理器/终端查看；源真值仍是 instance.EnvVars（控制台「环境变量」页签编辑），
+// 本文件启动时按当前配置重写（单向生成物）。best-effort：写失败只记日志、不阻塞启动。
+func writeEnvFile(cfg WrapperConfig) {
+	if strings.TrimSpace(cfg.WorkDir) == "" {
+		return
+	}
+	var b strings.Builder
+	b.WriteString("# 由 JianManager 生成（FR-344）：实例自定义启动环境变量。\n")
+	b.WriteString("# 编辑请用控制台「环境变量」页签；本文件启动时按配置重写。\n")
+	keys := make([]string, 0, len(cfg.EnvVars))
+	for k := range cfg.EnvVars {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(&b, "%s=%s\n", k, cfg.EnvVars[k])
+	}
+	path := filepath.Join(cfg.WorkDir, ".env")
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		slog.Warn("写入 .env 失败", "instanceId", cfg.InstanceUUID, "path", path, "error", err)
+	}
 }
 
 // composeEnv 合成进程环境：基线 (os.Environ) + JAVA_HOME + PATH 前置 + 实例 EnvVars。

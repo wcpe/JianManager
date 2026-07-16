@@ -484,6 +484,12 @@
   ```
   `probeAvailable=false` 时富指标为零值，调用方仅展示 tps/onlinePlayers/memoryMb 与提示「未安装 ServerProbe 探针」。
 
+### GET /api/v1/instances/:id/env
+- **描述**: 运行中实例 JVM 进程的实际环境（FR-344 环境变量下区）。Worker 经 gopsutil 读进程实际环境（Linux `/proc/pid/environ`）；实例未运行 / 平台读取受限（Windows 等）时 `available=false` + `note`。上区「自定义启动环境变量」编辑复用 `PUT /instances/:id`（`envVars`），启动时 Worker 物化为 `<workDir>/.env`（单向生成物）
+- **关联 FR**: FR-344
+- **权限**: `instance.read`
+- **响应**: `{ "env": {"JAVA_HOME":"...","PATH":"...","FOO":"bar"}, "available": true, "note": "" }`
+
 ### GET /api/v1/metrics/series
 - **描述**: 节点/实例历史曲线。Worker 心跳上报节点指标 + 每实例 ServerProbe 快照，CP 分级降采样持久化（raw 48h / 5m 30d / 1h ≥1y，ADR-013），按区间自动选档返回
 - **关联 FR**: FR-060 ｜ **关联 ADR**: ADR-013, ADR-014

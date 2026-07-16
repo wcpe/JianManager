@@ -492,6 +492,44 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 	return resp, nil
 }
 
+// GetInstanceEnv 返回运行中实例 Java 进程的实际环境（FR-344 环境变量下区）。
+// 取进程 PID → gopsutil Environ 读进程环境（Linux 走 /proc/pid/environ）；未运行/平台受限则 available=false + note。
+func (s *Server) GetInstanceEnv(ctx context.Context, req *workerpb.GetInstanceEnvRequest) (*workerpb.GetInstanceEnvResponse, error) {
+	resp := &workerpb.GetInstanceEnvResponse{}
+	state, err := s.manager.GetState(req.InstanceUuid)
+	if err != nil {
+		return resp, fmt.Errorf("实例不存在: %w", err)
+	}
+	if state != "RUNNING" {
+		resp.Note = "实例未运行，无运行时环境"
+		return resp, nil
+	}
+	pid := s.manager.GetInstancePID(req.InstanceUuid)
+	if pid <= 0 {
+		resp.Note = "无法获取实例进程 PID"
+		return resp, nil
+	}
+	proc, err := psproc.NewProcess(int32(pid))
+	if err != nil {
+		resp.Note = "读取进程失败：" + err.Error()
+		return resp, nil
+	}
+	environ, err := proc.EnvironWithContext(ctx)
+	if err != nil || len(environ) == 0 {
+		resp.Note = "读取进程环境不支持或为空（部分平台如 Windows 受限）"
+		return resp, nil
+	}
+	m := make(map[string]string, len(environ))
+	for _, kv := range environ {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			m[kv[:i]] = kv[i+1:]
+		}
+	}
+	resp.Env = m
+	resp.Available = true
+	return resp, nil
+}
+
 // IssueTerminalToken 签发终端 token。
 // 有意不在 Worker 侧实现：终端 token 由 Control Plane 签发并代理（见 FR-007/FR-019 决策），
 // 浏览器经 CP 拿到 token 后直连 Worker WS。此处返回明确错误而非走 Unimplemented，

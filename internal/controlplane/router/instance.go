@@ -528,6 +528,24 @@ func (h *InstanceHandler) Metrics(c *gin.Context) {
 	c.JSON(http.StatusOK, metrics)
 }
 
+// Env 获取实例运行时进程实际环境（FR-344 环境变量下区）。
+func (h *InstanceHandler) Env(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	data, err := h.instanceSvc.GetInstanceEnv(id)
+	if err != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "ENV_UNAVAILABLE", "message": "无法获取运行时环境"})
+		return
+	}
+	c.JSON(http.StatusOK, data)
+}
+
 // RegisterRoutes 注册实例路由。
 func (h *InstanceHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	instances := rg.Group("/instances")
@@ -546,6 +564,7 @@ func (h *InstanceHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		instances.POST("/:id/kill", h.Kill)
 		instances.POST("/:id/command", h.Command)
 		instances.GET("/:id/metrics", h.Metrics)
+		instances.GET("/:id/env", h.Env)
 	}
 }
 

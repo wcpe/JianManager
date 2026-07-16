@@ -88,6 +88,8 @@ service WorkerService {
   rpc GetNodeMetrics(GetNodeMetricsRequest) returns (GetNodeMetricsResponse);
   // GetInstanceMetrics 获取实例指标。
   rpc GetInstanceMetrics(GetInstanceMetricsRequest) returns (GetInstanceMetricsResponse);
+  // GetInstanceEnv 获取运行中实例 JVM 进程的实际环境（FR-344 环境变量下区）。
+  rpc GetInstanceEnv(GetInstanceEnvRequest) returns (GetInstanceEnvResponse);
 
   // === JDK 管理 ===
 
@@ -758,6 +760,18 @@ message WorldMetric {
   int64 loaded_chunks = 2;
   int64 entities = 3;
   int64 tile_entities = 4;
+}
+
+// GetInstanceEnvRequest 取运行中实例进程实际环境（FR-344）。
+message GetInstanceEnvRequest {
+  string instance_uuid = 1;
+}
+
+// GetInstanceEnvResponse 运行中 JVM 进程实际环境（gopsutil proc.Environ）。
+message GetInstanceEnvResponse {
+  map<string, string> env = 1;  // 进程实际环境（含继承 + JAVA_HOME/PATH + 自定义）
+  bool available = 2;           // false=实例未运行 / 平台读取受限（Windows 等）
+  string note = 3;              // 不可用原因
 }
 
 // === Bot 操作 ===
