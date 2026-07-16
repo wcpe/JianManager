@@ -112,6 +112,11 @@ func (p *ProvisionService) ProvisionServerAsync(ctx context.Context, req Provisi
 		return nil, "", err
 	}
 
+	// 存搭建参数供损毁后「重建」复用（FR-342）：搭建任一阶段失败进 DAMAGED 时参数已在库，
+	// 用户修好网络/环境点重建即复用重跑，无需重填。
+	if specJSON, mErr := json.Marshal(req); mErr == nil {
+		_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).Update("provision_spec", string(specJSON)).Error
+	}
 	// 全程「搭建中」标注：实例卡片/详情可见状态，配合启动闸阻止过早启动（真机复现：
 	// 异步化后实例秒回 STOPPED 可点启动，但核心还在下载→点启动得 corrupt/缺 jar）。
 	_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
@@ -124,9 +129,10 @@ func (p *ProvisionService) ProvisionServerAsync(ctx context.Context, req Provisi
 		NodeID: req.NodeID, InstanceID: inst.ID, Kind: model.TaskKindProvision, Title: title, CreatedBy: createdBy,
 	}, func(ctx context.Context, stage func(int, string)) (string, error) {
 		if err := p.provisionOnWorker(ctx, inst, core, onlineMode, stage); err != nil {
-			// 空壳标注：statusReason 让实例卡片/详情可见「为什么这个实例不可用」，启动前一目了然。
+			// 搭建任一阶段失败 → 损毁态（FR-342）：直写 DAMAGED＋原因，参数已存 ProvisionSpec 可重建。
+			// statusReason 让实例卡片/详情可见「为什么不可用」，启动前一目了然（损毁态亦拦启动）。
 			_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
-				Update("status_reason", "搭建未完成："+err.Error()).Error
+				Updates(map[string]any{"status": model.InstanceStatusDamaged, "status_reason": "搭建未完成：" + err.Error()}).Error
 			return "", err
 		}
 		_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).Update("status_reason", "").Error
@@ -137,6 +143,57 @@ func (p *ProvisionService) ProvisionServerAsync(ctx context.Context, req Provisi
 		return inst, "", fmt.Errorf("登记搭建任务失败")
 	}
 	return inst, taskID, nil
+}
+
+// RebuildInstance 重建损毁实例（FR-342）：复用已存搭建参数（ProvisionSpec）重跑搭建到既有工作目录，
+// 无需重填。仅 DAMAGED 且有 ProvisionSpec 的实例可重建；成功→STOPPED，失败→仍 DAMAGED。
+// 起后台任务（任务中心可见进度），返回任务 ID。
+func (p *ProvisionService) RebuildInstance(ctx context.Context, instanceID uint, createdBy uint) (string, error) {
+	var inst model.Instance
+	if err := p.db.First(&inst, instanceID).Error; err != nil {
+		return "", err
+	}
+	if inst.Status != model.InstanceStatusDamaged {
+		return "", fmt.Errorf("仅损毁（DAMAGED）实例可重建，当前状态 %s", inst.Status)
+	}
+	if strings.TrimSpace(inst.ProvisionSpec) == "" {
+		return "", fmt.Errorf("实例无可复用的搭建参数，无法重建（请删除后重新创建）")
+	}
+	var req ProvisionServerRequest
+	if err := json.Unmarshal([]byte(inst.ProvisionSpec), &req); err != nil {
+		return "", fmt.Errorf("解析搭建参数失败: %w", err)
+	}
+	if p.tasks == nil {
+		return "", fmt.Errorf("重建需任务中心底座")
+	}
+	core, err := p.core.ResolveBuild(ctx, req.CoreType, req.MCVersion, req.Build)
+	if err != nil {
+		return "", err
+	}
+	onlineMode := boolOr(req.OnlineMode, false)
+	_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
+		Update("status_reason", "重建中：正在重新下载核心（完成前请勿启动）").Error
+	title := fmt.Sprintf("重建 %s（%s %s）", inst.Name, req.CoreType, req.MCVersion)
+	instCopy := inst
+	taskID := p.tasks.RunAsync(RunSpec{
+		NodeID: inst.NodeID, InstanceID: inst.ID, Kind: model.TaskKindProvision, Title: title, CreatedBy: createdBy,
+	}, func(ctx context.Context, stage func(int, string)) (string, error) {
+		if err := p.provisionOnWorker(ctx, &instCopy, core, onlineMode, stage); err != nil {
+			// 重建仍失败：保持 DAMAGED，只更新原因（用户可再次重建）。
+			_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
+				Update("status_reason", "重建未完成："+err.Error()).Error
+			return "", err
+		}
+		// 成功：损毁 → STOPPED，清原因，可启动。
+		_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
+			Updates(map[string]any{"status": model.InstanceStatusStopped, "status_reason": ""}).Error
+		slog.Info("实例重建完成", "instance", inst.Name, "instanceId", inst.ID)
+		return "", nil
+	})
+	if taskID == "" {
+		return "", fmt.Errorf("登记重建任务失败")
+	}
+	return taskID, nil
 }
 
 // createProvisionInstance 同步段的「分配端口 + 结构化启动 + 建实例」（与旧同步路径共用）。

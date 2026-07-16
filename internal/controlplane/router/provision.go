@@ -103,6 +103,27 @@ func (h *ProvisionHandler) ProvisionProxy(c *gin.Context) {
 	c.JSON(http.StatusCreated, result)
 }
 
+// Rebuild POST /instances/:id/rebuild —— 重建损毁实例（FR-342），复用已存搭建参数重跑搭建到既有工作目录，
+// 无需重填。仅 DAMAGED 且有 ProvisionSpec 的实例可重建；起后台任务返回 {taskId}，进度见任务中心。
+func (h *ProvisionHandler) Rebuild(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "无效的实例 ID"})
+		return
+	}
+	access := getAccess(c)
+	var createdBy uint
+	if access != nil {
+		createdBy = access.UserID
+	}
+	taskID, err := h.prov.RebuildInstance(c.Request.Context(), uint(id), createdBy)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "REBUILD_FAILED", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"taskId": taskID})
+}
+
 // ResyncProxy POST /proxies/:id/resync —— 重新把注册关系与 secret 推到代理配置与各后端（FR-035）。
 func (h *ProvisionHandler) ResyncProxy(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -181,6 +202,7 @@ func (h *ProvisionHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.POST("/instances/provision/bukkit", h.ProvisionBukkit)
 	rg.POST("/instances/provision/proxy", h.ProvisionProxy)
 	rg.POST("/instances/:id/clone", h.CloneInstance)
+	rg.POST("/instances/:id/rebuild", h.Rebuild)
 	rg.POST("/proxies/:id/resync", h.ResyncProxy)
 	rg.GET("/nodes/:id/ports", h.Ports)
 }

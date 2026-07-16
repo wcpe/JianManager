@@ -905,6 +905,12 @@ func (s *InstanceService) Start(id uint) error {
 		return err
 	}
 
+	// 损毁实例不可直接启动（FR-342）：搭建任一阶段失败进 DAMAGED，须先「重建」复用参数重跑搭建，
+	// 成功→STOPPED 再启动。返回 *PreflightError（HTTP 422）带明确原因，前端启动按钮亦禁用。
+	if instance.Status == model.InstanceStatusDamaged {
+		return &PreflightError{Reason: "实例已损毁（搭建未完成），请先重建再启动"}
+	}
+
 	// 在途长操作闸（FR-319/FR-323）：搭建/导入/克隆异步化后实例秒回 STOPPED 可点启动，
 	// 但核心可能还在下载、目录还在搬迁/拷贝——此时启动会得到半截工作目录。
 	// 若有未终态的 provision/import/clone 任务关联本实例即拒。

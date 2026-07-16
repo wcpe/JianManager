@@ -962,7 +962,11 @@ Worker spawn bot-worker 的 node 可执行经解析策略选定（FR-300，`inte
 STOPPED → STARTING → RUNNING → STOPPING → STOPPED
                                   ↓
                                CRASHED → STARTING (指数退避)
+
+搭建/重建任一阶段失败 → DAMAGED → (重建，复用参数重跑搭建) → STOPPED   (FR-342：损毁态)
 ```
+
+**损毁态与重建（FR-342）**：一键搭建/代理搭建过程中任一阶段失败（下载/校验/配置写入/探针部署/Forge 安装器）的实例进入 `DAMAGED`（损毁），原始搭建参数存实例 `provision_spec`（JSON），失败原因写 `status_reason`。DAMAGED 由搭建/重建任务失败时直写（同 statusReason，不走 `transition()` 状态机）；`validTransitions[DAMAGED]` 留空 + `Start()` 显式守卫 → 损毁实例不可直接启动（返回 `PREFLIGHT_FAILED`「已损毁，请先重建」）。`POST /instances/:id/rebuild` 复用 `provision_spec` 重跑搭建到既有工作目录（覆盖残缺 jar/配置），成功直写 STOPPED、失败仍 DAMAGED，重建在途经长操作闸拦重复重建/启动。
 
 **启动前双闸（FR-317 内存水位守卫）**：STOPPED/CRASHED → STARTING 的转换前有两道内存闸，防止启动实例把节点内存跑满至失去响应（真机事故：Paper -Xmx2048M 致 8G 主机 swap 风暴、SSH/面板全失联）。① **CP 预警闸**（`InstanceService.memoryGate`）：按节点最近心跳（`memory_mb`/`memory_used_mb`，90s 内有效）预判 `可用 − 预估需求 < 保留水位` 即拒绝、不下发 RPC 不翻状态；心跳过旧/字段缺失放行（fail-open）。② **Worker 实时闸**（`process.Manager.preflightMemory`，先于 Java 版本预检、对 direct/daemon/docker 普适）：启动瞬间读系统可用内存做同一判定，被拒保持原状态并返回可操作错误。估算口径共享 `internal/platform/memguard`：docker 用 `MemLimitMB`，宿主解析 `-Xmx`（×1.15 + 256MB JVM 开销），解析不到用保守默认 768MB；保留水位默认 `max(512MB, 总内存 10%)`，Worker 侧可经 `worker.yml` `memory_guard.reserve_mb` 覆盖、`memory_guard.disabled` 应急关闭。读数失败一律 fail-open（守卫故障不应瘫痪启动能力）。 **在途搭建闸（FR-319）**：一键搭建异步化后实例秒回 STOPPED 可点启动，但核心可能还在后台下载——`InstanceService.Start` 查有无关联本实例、未终态的 `provision` 任务（`tasks.instance_id`），有则拒启引导看任务中心；配合 worker `DownloadCore` 临时文件 `.part`+原子 rename（下载窗口不留半截 jar）与实例 `statusReason=搭建中` 标注，堵住「点启动读到 corrupt/缺失 jar」。
 

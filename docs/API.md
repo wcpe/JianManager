@@ -416,6 +416,12 @@
 - **关联 FR**: FR-005
 - **权限**: `instance.operate`
 
+### POST /api/v1/instances/:id/rebuild
+- **描述**: 重建损毁（DAMAGED）实例（FR-342）——复用已存搭建参数（`ProvisionSpec`）重跑搭建到既有工作目录，无需重填。仅 `status=DAMAGED` 且有搭建参数的实例可重建；起后台任务返回 `{taskId}`，进度见任务中心；成功→STOPPED、失败→仍 DAMAGED。损毁实例的 `start` 被拦（`PREFLIGHT_FAILED`「已损毁，请先重建」）
+- **关联 FR**: FR-342
+- **权限**: `instance.operate`
+- **错误**: 422 `REBUILD_FAILED`（非损毁 / 无可复用参数 / 参数解析失败 / 核心解析失败 / 登记任务失败，带具体原因）
+
 ### POST /api/v1/instances/:id/command
 - **描述**: 向运行中的实例下发一行控制台命令（复用既有 SendCommand 委托，仅对 RUNNING 实例生效；命令不改变实例状态）。批量下发见 `POST /instances/batch`（action=command）。
 - **关联 FR**: FR-005

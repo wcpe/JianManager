@@ -16,6 +16,9 @@ const (
 	InstanceStatusRunning  InstanceStatus = "RUNNING"
 	InstanceStatusStopping InstanceStatus = "STOPPING"
 	InstanceStatusCrashed  InstanceStatus = "CRASHED"
+	// InstanceStatusDamaged 损毁（FR-342）：一键搭建/代理搭建过程中任一阶段失败进入此态，
+	// 原始搭建参数（ProvisionSpec）保留，可「重建」复用参数重跑搭建；损毁实例不可直接启动。
+	InstanceStatusDamaged InstanceStatus = "DAMAGED"
 )
 
 // InstanceType 实例类型。
@@ -74,6 +77,9 @@ type Instance struct {
 	JDKID             uint           `gorm:"index" json:"jdkId"`
 	JavaMajorVersion  int            `gorm:"index" json:"javaMajorVersion"`
 	LaunchSpec        string         `gorm:"type:text" json:"launchSpec"`
+	// ProvisionSpec 存一键搭建/代理搭建的原始请求（JSON），供损毁后「重建」复用参数重跑搭建（FR-342）。
+	// 仅经搭建入口创建的实例有值；手动/导入实例为空、不适用重建。
+	ProvisionSpec     string         `gorm:"type:text" json:"provisionSpec,omitempty"`
 	WorkDir           string         `gorm:"type:varchar(512)" json:"workDir"`
 	// WorkDirInPlace 就地导入标记（FR-302，见 ADR-069）：工作目录为托管区外的原始绝对路径
 	// （ADR-007 系统分配原则的唯一合法例外）。删除实例时 CP 据此指示 Worker 跳过目录删除，
