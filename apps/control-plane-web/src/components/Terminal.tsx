@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useState, type KeyboardEvent } from 'react'
+import { createPortal } from 'react-dom'
 import type { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { useDirectorRender } from '@/lib/director-render'
@@ -666,8 +667,9 @@ export default function TerminalComponent({
         </div>
       )}
 
-      {/* 右键菜单 */}
-      {menu && (
+      {/* 右键菜单：portal 到 body——控制台/路由壳带 transform（will-change/matrix），
+          fixed 的包含块会被劫持为该祖先，视口坐标整体偏移；出壳后 fixed 才真正相对视口。 */}
+      {menu && createPortal(
         <>
           <div className="fixed inset-0 z-20" onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null) }} />
           <div
@@ -687,7 +689,8 @@ export default function TerminalComponent({
             <button type="button" role="menuitem" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { pasteClipboard(); setMenu(null) }}>{t('instanceDetail.terminalPaste')}</button>
             <button type="button" role="menuitem" className="block w-full px-3 py-1 text-left hover:bg-white/10" onClick={() => { termRef.current?.clear(); setMenu(null) }}>{t('instanceDetail.terminalClear')}</button>
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </div>
   )
