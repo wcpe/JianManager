@@ -137,6 +137,32 @@ func TestManager_Start_PreservesCrashDuringStartWindow(t *testing.T) {
 	require.NoError(t, m.Start(uuid), "CRASHED 实例应可重启，证明未被卡在 RUNNING")
 }
 
+// TestManager_Restart_IgnoresStalePriorStopDuringStartWindow 确定性复现真机竞态：
+// 重启（stop→start）复用同一策略对象时，上一代 wrapper 的优雅退出回报（STOPPED）可能晚于
+// 新一轮 startLocked 置 STARTING 才落地（reapWrapper 抢锁先于 Start 替换 wrapperCmd，
+// 代际守卫拦不住）。修复前该迟到回报把记账 STARTING→STOPPED，Start 收尾 CAS 失败保留 STOPPED，
+// 真机表现为「java 健康运行、面板显停止」的脱同步；修复后 STARTING 期间的 STOPPED 一律视为
+// 旧代讣告忽略，重启收尾记账 RUNNING。
+func TestManager_Restart_IgnoresStalePriorStopDuringStartWindow(t *testing.T) {
+	m := NewManager(t.TempDir())
+	uuid := "restart-stale-stop"
+	require.NoError(t, createDirect(m, uuid, "Fake", "echo hi", "."))
+
+	fake := &fakeStrategy{state: StateRunning}
+	// onStart 在新一轮 Start 的启动窗口内同步触发，模拟上一代 wrapper 的迟到停止回报。
+	fake.onStart = func() { m.markStrategyState(uuid, StateStopped) }
+	m.mu.Lock()
+	inst := m.instances[uuid]
+	inst.strategy = fake
+	inst.State = StateRunning
+	m.mu.Unlock()
+
+	require.NoError(t, m.Restart(uuid))
+
+	st, _ := m.GetState(uuid)
+	require.Equal(t, StateRunning, st, "上一代迟到的 STOPPED 回报不得把新启动打成停止")
+}
+
 // quickCrashCmd 返回一个立即以非零码退出的命令，用于模拟实例进程崩溃（不依赖真实 MC / 端口）。
 // direct 策略按平台用 cmd.exe / sh 执行，故两端均可用 "exit 1"。
 func quickCrashCmd() string { return "exit 1" }

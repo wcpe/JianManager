@@ -168,6 +168,16 @@ func (m *Manager) markStrategyState(uuid string, newState InstanceState) {
 		m.mu.Unlock()
 		return
 	}
+	// 重启（stop→start）复用同一策略对象时，上一代 wrapper 的优雅退出回报可能晚于新一轮
+	// startLocked 置 STARTING（reapWrapper 抢锁先于 Start 替换 wrapperCmd，代际守卫拦不住）。
+	// Stop/Start 经 operationMu 串行化，STARTING 期间不可能有真正的停止在飞；而新一代秒崩
+	// 上报的是 CRASHED（启动后策略态非 Stopping）。故 STARTING 收到 STOPPED 必属旧代迟到
+	// 讣告——忽略，避免把健康的新实例记成 STOPPED（进程活着、面板显停止的脱同步）。
+	if newState == StateStopped && oldState == StateStarting {
+		m.mu.Unlock()
+		slog.Info("忽略上一代 wrapper 的迟到停止回报（新实例正在启动）", "instanceId", uuid)
+		return
+	}
 	inst.State = newState
 	m.mu.Unlock()
 	m.emitStateChange(uuid, oldState, newState)
