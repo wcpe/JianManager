@@ -87,6 +87,15 @@ jobs:
         working-directory: apps/control-plane-web
         run: pnpm e2e
 
+      - name: 上传 Playwright E2E 测试产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-e2e-test-results
+          path: apps/control-plane-web/test-results
+          if-no-files-found: ignore
+          retention-days: 7
+
   bot-quality:
     runs-on: ubuntu-latest
     defaults:

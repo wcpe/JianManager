@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login, selectBackupInstance } from './helpers'
+import { login, selectComboboxOption } from './helpers'
 
 /**
  * FR-151 备份页增强 · 单机（Playwright + mock 模式）验收。
@@ -13,8 +13,8 @@ test('FR-151 备份汇总 + 校验和 + 增量链警告', async ({ page }) => {
   await page.goto('/backups')
   await expect(page.getByRole('heading', { name: '备份管理' })).toBeVisible()
 
-  // 选择实例 → 展示备份列表
-  await selectBackupInstance(page, 'survival-1')
+  // 实例选择器已改为服务端搜索型 Combobox，搜索并选择种子实例后展示备份列表。
+  await selectComboboxOption(page, '选择实例', 'survival-1')
 
   // 顶部汇总
   await expect(page.getByRole('button', { name: /总占用/ })).toBeVisible()

@@ -48,9 +48,20 @@ test('FR-063b 运行时调整免重启：改值保存后前端热回读新值', 
   // 裸数字会让「保存」保持禁用（前端 422 双闸）。故用合法 duration 驱动。
   await expect(box).toHaveValue('30s')
   await box.fill('60s')
-  await page.getByRole('button', { name: '保存', exact: true }).click()
 
-  // 免重启热回读：PUT 成功后 onSuccess 失效缓存重取，输入框回填新值（无页面刷新）。
+  const saveButton = page.getByRole('button', { name: '保存', exact: true })
+  await expect(saveButton).toBeEnabled()
+  // 先监听保存请求，确保后续禁用态与回读值对应本次 PUT 成功响应。
+  const saveResponsePromise = page.waitForResponse((response) => {
+    const request = response.request()
+    return request.method() === 'PUT' && new URL(response.url()).pathname === '/api/v1/settings'
+  })
+  await saveButton.click()
+  const saveResponse = await saveResponsePromise
+  expect(saveResponse.ok()).toBe(true)
+
+  // 免重启热回读：PUT 成功后草稿清空，保存按钮恢复禁用并回填后端新值。
+  await expect(saveButton).toBeDisabled()
   await expect(box).toHaveValue('60s')
 
   await page.screenshot({ path: '../.tmp/acceptance/FR-063/single-machine-runtime-apply.png', fullPage: true })

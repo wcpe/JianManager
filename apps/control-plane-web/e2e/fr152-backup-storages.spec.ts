@@ -19,9 +19,20 @@ test('FR-152 备份存储 容量+备份数 展示 与 行内测试连接反馈',
   // 最近测试状态
   await expect(page.getByText('连接正常')).toBeVisible()
 
-  // 行内「测试」连接 → 即时反馈（toast）
-  await page.getByRole('button', { name: '测试' }).first().click()
-  await expect(page.getByText(/测试|连接|已送达|成功|失败/).first()).toBeVisible({ timeout: 10_000 })
+  // 先监听行内测试请求，避免列表已有状态文案掩盖请求未完成的问题。
+  const testResponsePromise = page.waitForResponse((response) => {
+    const request = response.request()
+    const pathname = new URL(response.url()).pathname
+    return request.method() === 'POST' && /^\/api\/v1\/backup-storages\/\d+\/test$/.test(pathname)
+  })
+  await page.getByRole('button', { name: '测试', exact: true }).first().click()
+  const testResponse = await testResponsePromise
+  expect(testResponse.ok()).toBe(true)
+
+  // 即时反馈必须是本次请求产生的 sonner toast。
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: '连接正常' }).first()).toBeVisible({
+    timeout: 10_000,
+  })
 
   await page.screenshot({ path: '../.tmp/acceptance/FR-152/single-machine-backup-storages.png', fullPage: true })
 })

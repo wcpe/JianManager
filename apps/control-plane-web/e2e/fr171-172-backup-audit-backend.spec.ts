@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login, selectBackupInstance } from './helpers'
+import { login, selectComboboxOption } from './helpers'
 
 /**
  * FR-171 备份完整性校验和 / FR-172 审计服务端分页与导出 · 单机（Playwright + mock）验收（前端消费面）。
@@ -10,7 +10,7 @@ import { login, selectBackupInstance } from './helpers'
 test('FR-171 备份列表展示校验和', async ({ page }) => {
   await login(page)
   await page.goto('/backups')
-  await selectBackupInstance(page, 'survival-1')
+  await selectComboboxOption(page, '选择实例', 'survival-1')
   await expect(page.getByText('校验和').first()).toBeVisible() // 校验和列
   await page.screenshot({ path: '../.tmp/acceptance/FR-171/single-machine-backup-checksum.png', fullPage: true })
 })

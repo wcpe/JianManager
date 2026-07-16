@@ -69,8 +69,8 @@ async function openEconomyCard(page: Page): Promise<void> {
   // 点其展开箭头（aria-expanded=false）露出功能子项（含「经济」拖拽源）。
   await firstRow.getByRole('button', { expanded: false }).click()
 
-  // 「经济」功能拖拽源（FunctionDragItem 内层 <div draggable>，文案取自 card 定义标题「经济」）。
-  const economySource = page.locator('[draggable="true"]').filter({ hasText: '经济' }).first()
+  // 「经济」功能拖拽源位于虚拟列表项内部的 FunctionDragItem 内层 <div draggable>。
+  const economySource = page.locator('[data-testid="instance-library-virtual"] [draggable="true"]').filter({ hasText: '经济' }).first()
   await expect(economySource).toBeVisible()
   await economySource.evaluate((el) => el.setAttribute('data-e2e-econ-src', '1'))
 

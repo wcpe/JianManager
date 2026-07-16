@@ -26,10 +26,17 @@ test.describe('整站导航（mock 模式）', () => {
     await page.goto('/backup-storages')
     await expect(page.getByRole('heading', { name: '备份存储后端' })).toBeVisible()
     await expect(page.getByText('256 MB')).toBeVisible()
-    // 行内测试连接：行按钮名为「测试」（「测试连接」是创建表单内的按钮，此处表单未开）。
+    // 先监听行内测试请求，避免列表已有的「连接正常」文本被误当作点击完成信号。
+    const testResponsePromise = page.waitForResponse((response) => {
+      const request = response.request()
+      const pathname = new URL(response.url()).pathname
+      return request.method() === 'POST' && /^\/api\/v1\/backup-storages\/\d+\/test$/.test(pathname)
+    })
     await page.getByRole('button', { name: '测试', exact: true }).first().click()
-    // 成功 → toast 显示后端 message（mock `/backup-storages/:id/test` 返回「连接正常」）。
-    // 原断言「连通 32 ms」为陈旧文案（前端 handleTest 用 toast.success(result.message)，从不渲染延迟毫秒）。
-    await expect(page.getByText('连接正常').first()).toBeVisible()
+    const testResponse = await testResponsePromise
+    expect(testResponse.ok()).toBe(true)
+
+    // 成功 toast 必须来自 sonner 门户，且展示后端返回的「连接正常」。
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: '连接正常' }).first()).toBeVisible()
   })
 })

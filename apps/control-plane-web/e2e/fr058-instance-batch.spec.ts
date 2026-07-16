@@ -26,11 +26,24 @@ test('FR-058 列表多选 → 批量操作栏 → 批量重启结果反馈 + 强
   // 选中后浮现批量操作栏，展示已选计数。
   await expect(page.getByText('已选 1 个')).toBeVisible()
 
-  // 批量重启（非危险动作，无需二次确认）→ 直接执行，落结果反馈 toast。
+  // 批量重启以对应 action 的 POST 响应作为完成信号，避免旧 toast 造成误判。
+  const restartResponsePromise = page.waitForResponse((response) => {
+    const request = response.request()
+    const pathname = new URL(response.url()).pathname
+    return (
+      request.method() === 'POST' &&
+      pathname === '/api/v1/instances/batch' &&
+      request.postDataJSON().action === 'restart'
+    )
+  })
   await page.getByRole('button', { name: '批量重启' }).click()
-  await expect(page.getByText(/批量完成：成功 \d+/).first()).toBeVisible({ timeout: 10_000 })
+  const restartResponse = await restartResponsePromise
+  expect(restartResponse.ok()).toBe(true)
 
-  // 成功后批量栏清空选择（onClear），需重新选中该运行中实例再演示危险动作。
+  // 响应成功后再断言结果反馈与选择清理。
+  await expect(page.locator('[data-sonner-toast]').filter({ hasText: /批量完成：成功 \d+/ }).first()).toBeVisible({
+    timeout: 10_000,
+  })
   await expect(rowCheckbox).not.toBeChecked()
   await rowCheckbox.check()
   await expect(page.getByText('已选 1 个')).toBeVisible()
@@ -46,6 +59,21 @@ test('FR-058 列表多选 → 批量操作栏 → 批量重启结果反馈 + 强
 
   await page.screenshot({ path: '../.tmp/acceptance/FR-058/single-machine-instance-batch.png', fullPage: true })
 
+  // 强制关服同样按 kill action 的 POST 响应判定完成，旧的重启 toast 不参与同步。
+  const killResponsePromise = page.waitForResponse((response) => {
+    const request = response.request()
+    const pathname = new URL(response.url()).pathname
+    return (
+      request.method() === 'POST' &&
+      pathname === '/api/v1/instances/batch' &&
+      request.postDataJSON().action === 'kill'
+    )
+  })
   await execute.click()
-  await expect(page.getByText(/批量完成：成功 \d+/).first()).toBeVisible({ timeout: 10_000 })
+  const killResponse = await killResponsePromise
+  expect(killResponse.ok()).toBe(true)
+
+  // 响应成功后确认危险动作对话框关闭且选择栏已清理；实例状态变化后该行可能移出当前筛选结果。
+  await expect(killDialog).not.toBeVisible()
+  await expect(page.getByText('已选 1 个')).not.toBeVisible()
 })

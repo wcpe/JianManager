@@ -9,7 +9,14 @@ import { login } from './helpers'
 
 test('FR-148 多序列图例 + 空态 i18n（TimeSeriesChart）', async ({ page }) => {
   await login(page)
+  // 趋势图由独立时序请求驱动，导航前监听响应，避免整套慢速运行时在数据回填前断言。
+  const seriesResponsePromise = page.waitForResponse((response) => {
+    const request = response.request()
+    return request.method() === 'GET' && new URL(response.url()).pathname === '/api/v1/metrics/series'
+  })
   await page.goto('/instances/1?tab=metrics')
+  const seriesResponse = await seriesResponsePromise
+  expect(seriesResponse.ok()).toBe(true)
 
   // 多序列常驻图例（堆内存：上限 + 已用）
   await expect(page.getByText('堆内存')).toBeVisible()
