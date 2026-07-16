@@ -44,12 +44,14 @@ test('FR-063b 运行时调整免重启：改值保存后前端热回读新值', 
   await page.getByRole('button', { name: '运行时', exact: true }).click()
   const row = page.locator('div.px-3.py-2').filter({ hasText: 'graceful_stop.timeout' })
   const box = row.locator('input').first()
-  await expect(box).toHaveValue('30')
-  await box.fill('60')
+  // graceful_stop.timeout 是 Go duration（须带单位，如 30s）；validateSettingDraft 拒绝裸数字，
+  // 裸数字会让「保存」保持禁用（前端 422 双闸）。故用合法 duration 驱动。
+  await expect(box).toHaveValue('30s')
+  await box.fill('60s')
   await page.getByRole('button', { name: '保存', exact: true }).click()
 
   // 免重启热回读：PUT 成功后 onSuccess 失效缓存重取，输入框回填新值（无页面刷新）。
-  await expect(box).toHaveValue('60')
+  await expect(box).toHaveValue('60s')
 
   await page.screenshot({ path: '../.tmp/acceptance/FR-063/single-machine-runtime-apply.png', fullPage: true })
 })

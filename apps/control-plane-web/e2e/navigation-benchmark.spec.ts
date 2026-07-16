@@ -243,11 +243,16 @@ async function sidebarFrameStats(page: Page): Promise<{
     const drawerStartW = Math.round(drawer.getBoundingClientRect().width)
     const contentStartX = Math.round(content.getBoundingClientRect().x)
     const frames: number[] = []
+    const drawerWidths: number[] = []
+    const sidebarWidths: number[] = []
     let last: number | null = null
     let done = false
     const tick = (now: number) => {
       if (last !== null) frames.push(now - last)
       last = now
+      // 逐帧记录宽度：中段宽度改由整段采样派生，消除固定时刻快照在慢速 CI 上落到动画末态的偶发。
+      drawerWidths.push(drawer.getBoundingClientRect().width)
+      sidebarWidths.push(sidebar.getBoundingClientRect().width)
       if (!done) requestAnimationFrame(tick)
     }
     requestAnimationFrame(tick)
@@ -262,8 +267,6 @@ async function sidebarFrameStats(page: Page): Promise<{
     const expandedModeTransition = expandedMode ? getComputedStyle(expandedMode).transitionProperty : 'none'
     const collapsedModeTransition = collapsedMode ? getComputedStyle(collapsedMode).transitionProperty : 'none'
     const expandedIconTransition = expandedIcon ? getComputedStyle(expandedIcon).transitionProperty : 'none'
-    const sidebarMidW = Math.round(sidebar.getBoundingClientRect().width)
-    const drawerMidW = Math.round(drawer.getBoundingClientRect().width)
     const contentStyle = getComputedStyle(content)
     const contentTransition = contentStyle.transitionProperty
     const contentClipPath = contentStyle.clipPath
@@ -271,6 +274,38 @@ async function sidebarFrameStats(page: Page): Promise<{
     const contentMidX = Math.round(content.getBoundingClientRect().x)
     await new Promise((resolve) => window.setTimeout(resolve, 360))
     done = true
+
+    // 从整段逐帧采样派生中段宽度（比固定时刻快照稳）：
+    // drawer 取「过渡中」帧（严格介于观测最小/最大之间）的中位数——只要 rAF 采到过渡就稳落 (start,end) 开区间；
+    // sidebar（aside 不做 width 过渡、宽度恒定）取采样众数，抹平点击瞬间可能的单帧亚像素抖动。
+    const median = (xs: number[]) => xs.slice().sort((a, b) => a - b)[Math.floor(xs.length / 2)] ?? 0
+    const mode = (xs: number[]) => {
+      const counts = new Map<number, number>()
+      let best = xs[0] ?? 0
+      let bestN = 0
+      for (const x of xs) {
+        const n = (counts.get(x) ?? 0) + 1
+        counts.set(x, n)
+        if (n > bestN) {
+          bestN = n
+          best = x
+        }
+      }
+      return best
+    }
+    const dMin = Math.min(drawerStartW, ...drawerWidths)
+    const dMax = Math.max(drawerStartW, ...drawerWidths)
+    // 「drawer 过渡中」的帧下标（drawer 宽度严格介于观测最小/最大之间）。
+    const transitioningIdx: number[] = []
+    drawerWidths.forEach((w, i) => {
+      if (w > dMin + 1 && w < dMax - 1) transitioningIdx.push(i)
+    })
+    const drawerTransitioning = transitioningIdx.map((i) => drawerWidths[i])
+    // sidebar 中段宽度取「drawer 过渡中」同帧的 aside 宽度：证「drawer 视觉过渡期间 aside 布局不随之重排」，
+    // 避开整段众数会把动画结束后已落定的 aside 终宽计入（那不是「中段」）。
+    const sidebarDuringTransition = transitioningIdx.map((i) => Math.round(sidebarWidths[i]))
+    const sidebarMidW = sidebarDuringTransition.length ? mode(sidebarDuringTransition) : Math.round(sidebarStartW)
+    const drawerMidW = Math.round(drawerTransitioning.length ? median(drawerTransitioning) : (dMin + dMax) / 2)
 
     return {
       maxFrameMs: Math.round(Math.max(0, ...frames) * 10) / 10,

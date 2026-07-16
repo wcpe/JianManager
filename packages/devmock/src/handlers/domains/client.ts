@@ -1323,7 +1323,7 @@ db<SettingsRow>('settings', () => [
   {
     id: 2,
     key: 'graceful_stop.timeout',
-    value: '30',
+    value: '30s',
     editable: true,
     sensitive: false,
     overridden: false,

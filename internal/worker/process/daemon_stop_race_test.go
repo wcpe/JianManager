@@ -11,6 +11,25 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/daemon"
 )
 
+func shortDaemonPIDDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "jm-daemon-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+func waitDaemonWrapperReady(t *testing.T, ready <-chan struct{}, done <-chan error) {
+	t.Helper()
+	select {
+	case <-ready:
+	case err := <-done:
+		t.Fatalf("wrapper 在监听就绪前退出: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("wrapper 监听就绪超时")
+	}
+}
+
 // TestDaemonStrategy_StopDuringConnectWindow_KillsChild 是 FIX-C（bug #4）的回归：
 // Start 拉起后「立即 Stop」杀不掉进程 → 孤儿继续输出日志。
 //
@@ -29,8 +48,8 @@ func TestDaemonStrategy_StopAfterControlConnectionReplaced_KillsChild(t *testing
 	t.Setenv("JIANMANAGER_GRACEFUL_STOP_TIMEOUT", "1s")
 	t.Setenv("JIANMANAGER_START_WAIT_PRIOR_EXIT_TIMEOUT", "1s")
 
-	pidDir := t.TempDir()
-	uuid := "daemon-stop-replaced-connection"
+	pidDir := shortDaemonPIDDir(t)
+	uuid := "daemon-stop-replaced-" + filepath.Base(pidDir)
 	cfg := daemon.WrapperConfig{
 		InstanceUUID: uuid,
 		StartCommand: keepAliveCmd(),
@@ -41,11 +60,7 @@ func TestDaemonStrategy_StopAfterControlConnectionReplaced_KillsChild(t *testing
 	ready := make(chan struct{}, 1)
 	done := make(chan error, 1)
 	go func() { done <- daemon.RunWithReady(cfg, ready) }()
-	select {
-	case <-ready:
-	case <-time.After(5 * time.Second):
-		t.Fatal("wrapper 监听就绪超时")
-	}
+	waitDaemonWrapperReady(t, ready, done)
 
 	pidPath := filepath.Join(pidDir, uuid+".pid")
 	pf := daemon.NewPIDFile(pidPath)
@@ -113,10 +128,10 @@ func TestDaemonStrategy_StopDuringConnectWindow_KillsChild(t *testing.T) {
 
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pidDir := t.TempDir()
-			// uuid 含子用例序号：Windows Named Pipe 名由 uuid 派生，跨子用例同名会因上一 wrapper
-			// 尚未释放管道而「监听就绪超时」，故每个子用例用独立实例标识隔离。
-			uuid := fmt.Sprintf("daemon-stop-race-%d", i)
+			pidDir := shortDaemonPIDDir(t)
+			// UUID 同时包含子用例序号与随机目录名：Unix socket 保持短路径，Windows Named Pipe
+			// 在跨子用例及 -count 重复运行时也不复用名称，避免上一 wrapper 尚未释放监听端。
+			uuid := fmt.Sprintf("daemon-stop-race-%d-%s", i, filepath.Base(pidDir))
 
 			// 1) 进程内启动真实 wrapper（real OS 子进程托管 keepAlive 命令），模拟「已拉起的实例」。
 			cfg := daemon.WrapperConfig{
@@ -129,11 +144,7 @@ func TestDaemonStrategy_StopDuringConnectWindow_KillsChild(t *testing.T) {
 			ready := make(chan struct{}, 1)
 			done := make(chan error, 1)
 			go func() { done <- daemon.RunWithReady(cfg, ready) }()
-			select {
-			case <-ready:
-			case <-time.After(5 * time.Second):
-				t.Fatal("wrapper 监听就绪超时")
-			}
+			waitDaemonWrapperReady(t, ready, done)
 
 			// 等 wrapper 写好 PID 文件并拿到被托管子进程 pid + socket 地址。
 			pf := daemon.NewPIDFile(filepath.Join(pidDir, uuid+".pid"))

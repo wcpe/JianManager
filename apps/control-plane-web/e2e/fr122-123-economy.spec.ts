@@ -23,8 +23,8 @@ import { login } from './helpers'
  */
 async function dragEconomyToCanvas(page: Page): Promise<void> {
   await page.evaluate((emptyHint) => {
-    // 源：标记过 data-e2e-econ-src 的「经济」功能拖拽源。
-    const source = document.querySelector('li[data-e2e-econ-src="1"]')
+    // 源：标记过 data-e2e-econ-src 的「经济」功能拖拽源（draggable 在 FunctionDragItem 内层 div 上）。
+    const source = document.querySelector('[data-e2e-econ-src="1"]')
     if (!source) throw new Error('经济功能拖拽源未找到')
     // 落点：含「画布为空」提示的节点，取其带 onDrop 的可滚动祖先（flex-1 放置区）。
     let hintEl: Element | null = null
@@ -69,8 +69,8 @@ async function openEconomyCard(page: Page): Promise<void> {
   // 点其展开箭头（aria-expanded=false）露出功能子项（含「经济」拖拽源）。
   await firstRow.getByRole('button', { expanded: false }).click()
 
-  // 「经济」功能拖拽源（FunctionDragItem，<li draggable> 文案取自 workspace.cardEconomy="经济"）。
-  const economySource = page.locator('li[draggable="true"]').filter({ hasText: '经济' }).first()
+  // 「经济」功能拖拽源（FunctionDragItem 内层 <div draggable>，文案取自 card 定义标题「经济」）。
+  const economySource = page.locator('[draggable="true"]').filter({ hasText: '经济' }).first()
   await expect(economySource).toBeVisible()
   await economySource.evaluate((el) => el.setAttribute('data-e2e-econ-src', '1'))
 

@@ -46,18 +46,18 @@ describe('SettingsPage（mock 假后端）', () => {
     const user = userEvent.setup()
     renderWithProviders(<SettingsPage />)
 
-    // 切到「运行时」分类，改 graceful_stop.timeout（其输入框按当前值 30 唯一定位，避开重名键文本）。
+    // 切到「运行时」分类，改 graceful_stop.timeout（Go duration 带单位，按当前值 30s 唯一定位，避开重名键文本）。
     await user.click(await screen.findByRole('button', { name: /运行时/ }))
-    const input = (await screen.findByDisplayValue('30')) as HTMLInputElement
+    const input = (await screen.findByDisplayValue('30s')) as HTMLInputElement
 
     await user.clear(input)
-    await user.type(input, '60')
+    await user.type(input, '60s')
     await user.click(screen.getByRole('button', { name: '保存' }))
 
     // 联动回读：PUT 写入后 onSuccess 失效缓存重取，输入框回填新值（草稿已清，展示后端生效值）。
     // 成功 toast 走 sonner 门户、harness 未挂 Toaster，故以「值持久化为新值、旧值消失」断言写读联动。
-    await waitFor(() => expect(screen.getByDisplayValue('60')).toBeInTheDocument())
-    expect(screen.queryByDisplayValue('30')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.getByDisplayValue('60s')).toBeInTheDocument())
+    expect(screen.queryByDisplayValue('30s')).not.toBeInTheDocument()
   })
 
   it('注入 500 → 平台配置显示加载失败错误态', async () => {
