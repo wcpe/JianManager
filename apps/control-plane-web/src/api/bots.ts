@@ -166,6 +166,10 @@ export interface BotBatchResult {
   errors: { botId: number; error: string }[]
 }
 
+/** Bot 状态是异步演进的（connecting→connected/error 在秒级发生、且由读取触发回填），
+ * 列表与聚合必须短轮询：此前仅挂载取一次，真机表现为「bot 已进服、面板永远显示连接中」。 */
+const BOT_REFETCH_MS = 5000
+
 /** 获取 Bot 分页列表，支持多维筛选（FR-038）。 */
 export function useBots(params?: BotListParams) {
   return useQuery({
@@ -174,6 +178,7 @@ export function useBots(params?: BotListParams) {
       const { data } = await api.get<BotListResponse>('/bots', { params })
       return data
     },
+    refetchInterval: BOT_REFETCH_MS,
   })
 }
 
@@ -185,6 +190,7 @@ export function useBotSummary(params?: BotListParams & { groupBy?: string }) {
       const { data } = await api.get<BotSummary>('/bots/summary', { params })
       return data
     },
+    refetchInterval: BOT_REFETCH_MS,
   })
 }
 
