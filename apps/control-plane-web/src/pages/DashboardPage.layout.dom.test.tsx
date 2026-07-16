@@ -20,6 +20,8 @@ vi.mock('@/api/instances', () => ({
   useStopInstance: () => ({ mutate: () => undefined }),
   useRestartInstance: () => ({ mutate: () => undefined }),
   useKillInstance: () => ({ mutate: () => undefined }),
+  // FR-342：实例控制台始终初始化重建 mutation，布局测试的整模块 mock 必须同步提供。
+  useRebuildInstance: () => ({ mutate: () => undefined }),
   // FR-331：路由挂 InstanceConsolePage 时会调用，工厂 mock 需带上（恒 false=非搭建中）。
   isProvisioningInstance: () => false,
   // FR-313 崩溃诊断卡经 crashSnapshots.ts 引用该常量（真模块），工厂 mock 缺它会在
@@ -32,6 +34,8 @@ vi.mock('@/api/nodes', () => ({
 vi.mock('@/api/metrics', () => ({
   useMetricOverview: () => ({ data: { totals: { onlineNodeCount: 1, runningInstances: 2 } } }),
   useInstanceMetrics: () => ({ data: { tps: 19.8, msptMillis: 28, memoryMb: 2048, heapMaxMb: 4096, cpuPercent: 36, onlinePlayers: 12, probeAvailable: false } }),
+  // FR-343：实例概览会请求 TPS 时序，布局测试返回空序列即可。
+  useMetricSeries: () => ({ data: { series: [] } }),
 }))
 vi.mock('@/api/serverState', () => ({
   useServerState: () => ({ data: { connected: false, state: { server: { onlinePlayers: 12, maxPlayers: 200 } } } }),
@@ -71,6 +75,9 @@ describe('DashboardPage 宽屏布局', () => {
   it('桌面侧栏切换期间锁定布局宽度，动画结束后再落位', async () => {
     const user = userEvent.setup()
     const { container } = renderWithProviders(<DashboardPage />, { route: '/instances/2' })
+
+    // 先等待懒加载的实例控制台落地，避免侧栏断言抢在路由组件初始化前完成。
+    await waitFor(() => expect(container.querySelector('[data-page="instance-console"]')).toBeInTheDocument(), { timeout: 5_000 })
 
     const shell = container.querySelector('[data-slot="console-shell"]') as HTMLElement
     const content = container.querySelector('[data-slot="console-content"]') as HTMLElement
