@@ -114,6 +114,41 @@ func TestHeartbeat_ValidSecretUpdatesNode(t *testing.T) {
 	require.InDelta(t, 1.25, fromDB.LoadAvg1, 0.001)
 }
 
+// TestHeartbeat_KeepsDamagedOnStoppedReport 覆盖 FR-342 真机回归：DAMAGED（搭建失败损毁）是
+// CP 侧生命周期态，Worker 不感知、对已注册但未运行的实例上报 STOPPED。心跳同步不得把
+// DAMAGED 降级为 STOPPED（否则损毁徽章与启动守卫在下一个心跳即失效）；上报运行类状态
+//（进程确实活着）时才允许覆盖。
+func TestHeartbeat_KeepsDamagedOnStoppedReport(t *testing.T) {
+	h, db := newHeartbeatHandler(t)
+	node := seedHeartbeatNode(t, db, model.NodeStatusOnline, time.Now())
+
+	damaged := &model.Instance{
+		UUID: "inst-damaged", Name: "fr342-damaged", NodeID: node.ID,
+		Status: model.InstanceStatusDamaged, StatusReason: "搭建未完成：下载核心失败",
+	}
+	require.NoError(t, db.Create(damaged).Error)
+
+	// Worker 上报 STOPPED：损毁态必须保留。
+	stream := newHeartbeatTestStream(ctxWithHeartbeatSecret("node-secret-ok"), &workerpb.HeartbeatRequest{
+		NodeUuid:  node.UUID,
+		Instances: []*workerpb.InstanceState{{InstanceUuid: damaged.UUID, State: "STOPPED"}},
+	})
+	require.True(t, errors.Is(h.Heartbeat(stream), io.EOF))
+
+	var fromDB model.Instance
+	require.NoError(t, db.Where("uuid = ?", damaged.UUID).First(&fromDB).Error)
+	require.Equal(t, model.InstanceStatusDamaged, fromDB.Status, "心跳上报 STOPPED 不得降级 DAMAGED")
+
+	// Worker 上报 RUNNING（进程确实活着）：允许覆盖损毁态，以 Worker 实况为准。
+	stream2 := newHeartbeatTestStream(ctxWithHeartbeatSecret("node-secret-ok"), &workerpb.HeartbeatRequest{
+		NodeUuid:  node.UUID,
+		Instances: []*workerpb.InstanceState{{InstanceUuid: damaged.UUID, State: "RUNNING"}},
+	})
+	require.True(t, errors.Is(h.Heartbeat(stream2), io.EOF))
+	require.NoError(t, db.Where("uuid = ?", damaged.UUID).First(&fromDB).Error)
+	require.Equal(t, model.InstanceStatusRunning, fromDB.Status, "运行类上报应照常同步")
+}
+
 // TestHeartbeat_WrongSecretRejected 覆盖 FR-029：错误 node-secret 的心跳必须拒绝，且不得更新节点状态。
 func TestHeartbeat_WrongSecretRejected(t *testing.T) {
 	h, db := newHeartbeatHandler(t)

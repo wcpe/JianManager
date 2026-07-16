@@ -451,9 +451,15 @@ func (h *ControlPlaneHandler) syncInstanceStates(nodeUUID string, states []*work
 	for _, s := range states {
 		reported = append(reported, s.InstanceUuid)
 		status := model.InstanceStatus(s.State)
-		if err := h.db.Model(&model.Instance{}).
-			Where("uuid = ?", s.InstanceUuid).
-			Update("status", status).Error; err != nil {
+		q := h.db.Model(&model.Instance{}).Where("uuid = ?", s.InstanceUuid)
+		// DAMAGED（FR-342 搭建失败损毁）是 CP 侧生命周期态，Worker 不感知：损毁实例在 Worker
+		// 记账里本就是「没在跑」（STOPPED/CRASHED），与损毁不矛盾。此前无条件覆写会在搭建失败后的
+		// 下一个心跳把 DAMAGED 降级成 STOPPED，启动守卫随即失效（真机回归）。仅当 Worker 上报
+		// 运行类状态（进程确实活着）才允许覆盖 DAMAGED。
+		if status == model.InstanceStatusStopped || status == model.InstanceStatusCrashed {
+			q = q.Where("status <> ?", model.InstanceStatusDamaged)
+		}
+		if err := q.Update("status", status).Error; err != nil {
 			slog.Warn("同步实例状态失败", "instanceUUID", s.InstanceUuid, "state", s.State, "error", err)
 		}
 	}
