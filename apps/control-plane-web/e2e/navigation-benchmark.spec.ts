@@ -151,16 +151,33 @@ async function animationDurationMs(page: Page, selector: string): Promise<number
   })
 }
 
-async function visibleAnimationDurationMs(page: Page, selector: string): Promise<number> {
-  return page.locator(selector).evaluate((el) => {
-    if (el.getAttribute('data-visible') !== 'true') return 0
+async function armVisibleAnimationDurationProbe(page: Page, rootSelector: string, targetSelector: string): Promise<void> {
+  await page.locator(rootSelector).evaluate((root, selector) => {
+    const probeRoot = root as HTMLElement & { __jmVisibleAnimationListener?: EventListener }
+    if (probeRoot.__jmVisibleAnimationListener) {
+      probeRoot.removeEventListener('animationstart', probeRoot.__jmVisibleAnimationListener)
+    }
+    probeRoot.dataset.observedAnimationDurationMs = '0'
+    const listener: EventListener = (event) => {
+      const target = event.target
+      if (!(target instanceof HTMLElement) || !target.matches(selector) || target.dataset.visible !== 'true') return
+      const rawDuration = getComputedStyle(target).animationDuration.split(',')[0] ?? '0s'
+      const durationMs = rawDuration.endsWith('ms') ? Number.parseFloat(rawDuration) : Number.parseFloat(rawDuration) * 1000
+      if (Number.isFinite(durationMs)) probeRoot.dataset.observedAnimationDurationMs = String(durationMs)
+    }
+    probeRoot.addEventListener('animationstart', listener)
+    probeRoot.__jmVisibleAnimationListener = listener
+  }, targetSelector)
+}
 
-    const style = getComputedStyle(el)
-    if (style.animationName === 'none') return 0
-
-    const rawDuration = style.animationDuration.split(',')[0] ?? '0s'
-    const durationMs = rawDuration.endsWith('ms') ? Number.parseFloat(rawDuration) : Number.parseFloat(rawDuration) * 1000
-    return Number.isFinite(durationMs) ? durationMs : 0
+async function readVisibleAnimationDurationProbe(page: Page, rootSelector: string): Promise<number> {
+  return page.locator(rootSelector).evaluate((root) => {
+    const probeRoot = root as HTMLElement & { __jmVisibleAnimationListener?: EventListener }
+    if (probeRoot.__jmVisibleAnimationListener) {
+      probeRoot.removeEventListener('animationstart', probeRoot.__jmVisibleAnimationListener)
+      delete probeRoot.__jmVisibleAnimationListener
+    }
+    return Number.parseFloat(probeRoot.dataset.observedAnimationDurationMs ?? '0')
   })
 }
 
@@ -580,12 +597,12 @@ test.describe('页面切换 benchmark（mock 模式）', () => {
 
     expect(await animationDurationMs(page, '[data-slot="workspace-route-transition"]'), '减少动态模式下关闭装饰切页动画').toBe(0)
 
+    const progressTrackSelector = '[data-slot="top-loading-track"]'
+    await armVisibleAnimationDurationProbe(page, progressTrackSelector, '[data-testid="top-loading-bar"]')
     await page.locator('a[href="/logs"]').first().click()
-    await expect.poll(
-      async () => visibleAnimationDurationMs(page, '[data-testid="top-loading-bar"]'),
-      { message: '减少动态模式下进度条动画可见', timeout: 1000 },
-    )
-      .toBeGreaterThanOrEqual(120)
+    // 模拟慢速 CI：测试进程恢复断言时，720ms 的路由进度反馈可能已经结束。
+    await page.waitForTimeout(800)
+    expect(await readVisibleAnimationDurationProbe(page, progressTrackSelector), '减少动态模式下进度条动画可见').toBeGreaterThanOrEqual(120)
     await expect(page.locator('[data-page="logs"]'), '日志中心页就绪').toBeVisible()
     await expect.poll(
       async () => page.locator('[data-slot="top-loading-track"]').getAttribute('data-visible'),
