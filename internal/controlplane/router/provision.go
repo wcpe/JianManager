@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
@@ -116,7 +117,18 @@ func (h *ProvisionHandler) Rebuild(c *gin.Context) {
 	if access != nil {
 		createdBy = access.UserID
 	}
-	taskID, err := h.prov.RebuildInstance(c.Request.Context(), uint(id), createdBy)
+	// 按角色分派（FR-342 阶段二）：代理走 proxy.RebuildProxy，后端/通用走 prov.RebuildInstance。
+	role, roleErr := h.prov.InstanceRoleFor(uint(id))
+	if roleErr != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	var taskID string
+	if role == model.InstanceRoleProxy {
+		taskID, err = h.proxy.RebuildProxy(c.Request.Context(), uint(id), createdBy)
+	} else {
+		taskID, err = h.prov.RebuildInstance(c.Request.Context(), uint(id), createdBy)
+	}
 	if err != nil {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "REBUILD_FAILED", "message": err.Error()})
 		return

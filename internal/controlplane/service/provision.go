@@ -145,6 +145,15 @@ func (p *ProvisionService) ProvisionServerAsync(ctx context.Context, req Provisi
 	return inst, taskID, nil
 }
 
+// InstanceRoleFor 返回实例角色（供重建端点按 server/proxy 分派，FR-342 阶段二）。
+func (p *ProvisionService) InstanceRoleFor(id uint) (model.InstanceRole, error) {
+	var inst model.Instance
+	if err := p.db.Select("role").First(&inst, id).Error; err != nil {
+		return "", err
+	}
+	return inst.Role, nil
+}
+
 // RebuildInstance 重建损毁实例（FR-342）：复用已存搭建参数（ProvisionSpec）重跑搭建到既有工作目录，
 // 无需重填。仅 DAMAGED 且有 ProvisionSpec 的实例可重建；成功→STOPPED，失败→仍 DAMAGED。
 // 起后台任务（任务中心可见进度），返回任务 ID。

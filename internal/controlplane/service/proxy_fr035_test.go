@@ -91,29 +91,6 @@ func (f *failingFR035ProxyWorker) RemoveInstance(_ context.Context, req *workerp
 	return &workerpb.RemoveInstanceResponse{Success: true}, nil
 }
 
-type offlineDuringFailureFR035ProxyWorker struct {
-	fakeFR035ProxyWorker
-	started chan struct{}
-	release chan struct{}
-	removed chan struct{}
-}
-
-func (f *offlineDuringFailureFR035ProxyWorker) DownloadCore(ctx context.Context, req *workerpb.DownloadCoreRequest, _ ...grpc.CallOption) (*workerpb.DownloadCoreResponse, error) {
-	f.download = req
-	close(f.started)
-	select {
-	case <-f.release:
-		return &workerpb.DownloadCoreResponse{Success: false, Error: "代理核心下载中断"}, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-func (f *offlineDuringFailureFR035ProxyWorker) RemoveInstance(_ context.Context, _ *workerpb.RemoveInstanceRequest, _ ...grpc.CallOption) (*workerpb.RemoveInstanceResponse, error) {
-	close(f.removed)
-	return &workerpb.RemoveInstanceResponse{Success: true}, nil
-}
-
 func newAsyncFR035ProxyService(t *testing.T, worker workerpb.WorkerServiceClient) (*ProxyService, *TaskService, *model.Node, func()) {
 	t.Helper()
 	db := newJDKTestDB(t)
@@ -186,7 +163,8 @@ func TestProvisionProxyAsync_DetachesFromRequestContext(t *testing.T) {
 	require.Empty(t, stored.StatusReason, "供给成功后应清空数据库中的搭建原因")
 }
 
-func TestProvisionProxyAsync_FailureCompensatesInstanceWorkerAndWorkDir(t *testing.T) {
+// FR-342 阶段二：代理搭建失败 → 损毁态（不再删实例/不再调 RemoveInstance），保留 ProvisionSpec 供重建。
+func TestProvisionProxyAsync_FailureMarksDamaged(t *testing.T) {
 	worker := &failingFR035ProxyWorker{removed: make(chan *workerpb.RemoveInstanceRequest, 1)}
 	proxySvc, taskSvc, node, done := newAsyncFR035ProxyService(t, worker)
 	defer done()
@@ -200,92 +178,66 @@ func TestProvisionProxyAsync_FailureCompensatesInstanceWorkerAndWorkDir(t *testi
 	task := waitTaskTerminal(t, taskSvc, result.TaskID)
 	require.Equal(t, model.TaskStateFailed, task.State)
 	require.Contains(t, task.Error, "代理核心下载中断")
-	require.Empty(t, task.Result)
-	require.NotContains(t, task.Error, result.ForwardingSecret)
-	_, logs, getErr := taskSvc.Get(nil, result.TaskID)
-	require.NoError(t, getErr)
-	for _, line := range logs {
-		require.NotContains(t, line.Line, result.ForwardingSecret)
-	}
-
-	select {
-	case removed := <-worker.removed:
-		require.Equal(t, result.Instance.UUID, removed.InstanceUuid)
-		require.Equal(t, result.Instance.WorkDir, removed.WorkDir)
-	case <-time.After(time.Second):
-		t.Fatal("失败补偿未调用 Worker RemoveInstance")
-	}
-	var count int64
-	require.NoError(t, proxySvc.db.Model(&model.Instance{}).Where("id = ?", result.Instance.ID).Count(&count).Error)
-	require.Zero(t, count, "失败补偿后不应保留实例半成品")
-}
-
-func TestProvisionProxyAsync_FailurePreservesInstanceWhenRemoveFails(t *testing.T) {
-	worker := &failingFR035ProxyWorker{
-		removed:   make(chan *workerpb.RemoveInstanceRequest, 1),
-		removeErr: "工作目录被占用",
-	}
-	proxySvc, taskSvc, node, done := newAsyncFR035ProxyService(t, worker)
-	defer done()
-
-	result, err := proxySvc.ProvisionProxyAsync(context.Background(), ProvisionProxyRequest{
-		NodeID: node.ID, Name: "cleanup-failed-velocity", ProxyType: "velocity", Version: "3.3.0-SNAPSHOT", MemoryMb: 1024,
-	}, 10)
-	require.NoError(t, err)
-
-	task := waitTaskTerminal(t, taskSvc, result.TaskID)
-	require.Equal(t, model.TaskStateFailed, task.State)
-	require.Contains(t, task.Error, "代理核心下载中断")
-	require.Contains(t, task.Error, "失败补偿清理失败")
-	require.Contains(t, task.Error, "工作目录被占用")
-	require.Empty(t, task.Result)
 	require.NotContains(t, task.Error, result.ForwardingSecret)
 
 	var stored model.Instance
 	require.NoError(t, proxySvc.db.First(&stored, result.Instance.ID).Error)
-	require.Contains(t, stored.StatusReason, "搭建失败")
-	require.Contains(t, stored.StatusReason, "待清理")
-	require.Contains(t, stored.StatusReason, "代理核心下载中断")
-}
-
-func TestProvisionProxyAsync_FailurePreservesInstanceWhenNodeOffline(t *testing.T) {
-	worker := &offlineDuringFailureFR035ProxyWorker{
-		started: make(chan struct{}),
-		release: make(chan struct{}),
-		removed: make(chan struct{}),
-	}
-	proxySvc, taskSvc, node, done := newAsyncFR035ProxyService(t, worker)
-	defer done()
-
-	result, err := proxySvc.ProvisionProxyAsync(context.Background(), ProvisionProxyRequest{
-		NodeID: node.ID, Name: "offline-cleanup-velocity", ProxyType: "velocity", Version: "3.3.0-SNAPSHOT", MemoryMb: 1024,
-	}, 11)
-	require.NoError(t, err)
-	select {
-	case <-worker.started:
-	case <-time.After(time.Second):
-		t.Fatal("后台下载未启动")
-	}
-	require.NoError(t, proxySvc.db.Model(node).Update("status", model.NodeStatusOffline).Error)
-	close(worker.release)
-
-	task := waitTaskTerminal(t, taskSvc, result.TaskID)
-	require.Equal(t, model.TaskStateFailed, task.State)
-	require.Contains(t, task.Error, "失败补偿清理失败")
-	require.Contains(t, task.Error, "节点")
-	require.Contains(t, task.Error, "离线")
-	require.Empty(t, task.Result)
-	require.NotContains(t, task.Error, result.ForwardingSecret)
-
-	var stored model.Instance
-	require.NoError(t, proxySvc.db.First(&stored, result.Instance.ID).Error)
-	require.Contains(t, stored.StatusReason, "搭建失败")
-	require.Contains(t, stored.StatusReason, "待清理")
+	require.Equal(t, model.InstanceStatusDamaged, stored.Status, "代理搭建失败应进损毁态（不再删实例）")
+	require.Contains(t, stored.StatusReason, "搭建未完成")
+	require.NotEmpty(t, stored.ProvisionSpec, "搭建参数应存 ProvisionSpec 供重建复用")
 	select {
 	case <-worker.removed:
-		t.Fatal("离线节点不得调用 RemoveInstance")
+		t.Fatal("损毁态不应调用 RemoveInstance（改为可重建、不删实例）")
 	default:
 	}
+}
+
+// FR-342 阶段二：代理重建守卫——非损毁 / 损毁但无参数 分别拒绝。
+func TestRebuildProxy_Guards(t *testing.T) {
+	proxySvc, _, node, done := newAsyncFR035ProxyService(t, &fakeFR035ProxyWorker{})
+	defer done()
+
+	stopped := &model.Instance{NodeID: node.ID, Name: "p-stopped", Type: model.InstanceTypeMinecraftJava, Role: model.InstanceRoleProxy, ProcessType: model.ProcessTypeDaemon, StartCommand: "x", Status: model.InstanceStatusStopped}
+	require.NoError(t, proxySvc.db.Create(stopped).Error)
+	_, err := proxySvc.RebuildProxy(context.Background(), stopped.ID, 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "仅损毁", "非损毁代理不可重建")
+
+	dmg := &model.Instance{NodeID: node.ID, Name: "p-dmg", Type: model.InstanceTypeMinecraftJava, Role: model.InstanceRoleProxy, ProcessType: model.ProcessTypeDaemon, StartCommand: "x", Status: model.InstanceStatusDamaged}
+	require.NoError(t, proxySvc.db.Create(dmg).Error)
+	_, err = proxySvc.RebuildProxy(context.Background(), dmg.ID, 1)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "无可复用的搭建参数", "损毁但无参数不可重建")
+}
+
+// FR-342 阶段二：损毁代理换好 worker 后重建 → 复用参数 + forwarding_secret 重跑成功 → STOPPED。
+func TestRebuildProxy_Succeeds(t *testing.T) {
+	worker := &failingFR035ProxyWorker{removed: make(chan *workerpb.RemoveInstanceRequest, 1)}
+	proxySvc, taskSvc, node, done := newAsyncFR035ProxyService(t, worker)
+	defer done()
+
+	// 先用下载失败 worker 造损毁。
+	result, err := proxySvc.ProvisionProxyAsync(context.Background(), ProvisionProxyRequest{
+		NodeID: node.ID, Name: "rebuild-velocity", ProxyType: "velocity", Version: "3.3.0-SNAPSHOT", MemoryMb: 1024,
+	}, 1)
+	require.NoError(t, err)
+	waitTaskTerminal(t, taskSvc, result.TaskID)
+	var dmg model.Instance
+	require.NoError(t, proxySvc.db.First(&dmg, result.Instance.ID).Error)
+	require.Equal(t, model.InstanceStatusDamaged, dmg.Status)
+
+	// 换成功 worker → 重建复用已存参数 + forwarding_secret。
+	success := &blockingFR035ProxyWorker{started: make(chan struct{}), release: make(chan struct{})}
+	close(success.release)
+	proxySvc.pool.SetWorkerClientForTest(node.UUID, success)
+	rbTaskID, err := proxySvc.RebuildProxy(context.Background(), result.Instance.ID, 1)
+	require.NoError(t, err)
+	waitTaskTerminal(t, taskSvc, rbTaskID)
+
+	var rebuilt model.Instance
+	require.NoError(t, proxySvc.db.First(&rebuilt, result.Instance.ID).Error)
+	require.Equal(t, model.InstanceStatusStopped, rebuilt.Status, "代理重建成功应回 STOPPED")
+	require.Empty(t, rebuilt.StatusReason, "重建成功应清空原因")
 }
 
 func TestFR035ProvisionProxyCreatesVelocityAndSyncsBackend(t *testing.T) {

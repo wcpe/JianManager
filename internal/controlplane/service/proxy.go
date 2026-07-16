@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -89,6 +90,10 @@ func (p *ProxyService) ProvisionProxyAsync(ctx context.Context, req ProvisionPro
 			}
 		}
 		return nil, err
+	}
+	// 存搭建参数供损毁后「重建」复用（FR-342）：与 server 一致，失败进 DAMAGED 后参数已在库。
+	if specJSON, mErr := json.Marshal(req); mErr == nil {
+		_ = p.db.Model(&model.Instance{}).Where("id = ?", result.Instance.ID).Update("provision_spec", string(specJSON)).Error
 	}
 	provisionReason := "搭建中：正在供给代理核心与配置（完成前请勿启动）"
 	result.Instance.StatusReason = provisionReason
@@ -195,8 +200,8 @@ func (p *ProxyService) runProxyProvision(ctx context.Context, req ProvisionProxy
 	backgroundResult := inst2result(inst, secret)
 	stage(10, "下载代理核心（源站较慢时可能需要数分钟）…")
 	if err := p.finishProxy(ctx, req, backgroundResult, core, true); err != nil {
-		stage(90, "供给失败，正在清理实例与工作目录…")
-		return "", p.compensateProxyFailure(inst, err)
+		stage(90, "供给失败，标记损毁态待重建…")
+		return "", p.markProxyDamaged(inst, err)
 	}
 	stage(95, "代理核心、配置与后端注册已就绪")
 	p.setProvisionReason(inst.ID, "")
@@ -204,13 +209,65 @@ func (p *ProxyService) runProxyProvision(ctx context.Context, req ProvisionProxy
 	return "", nil
 }
 
-func (p *ProxyService) compensateProxyFailure(inst *model.Instance, cause error) error {
-	reason := fmt.Sprintf("搭建失败，待清理：%v", cause)
-	if err := p.persistProvisionReason(inst.ID, reason); err != nil {
-		return fmt.Errorf("%w；记录搭建失败状态失败: %v", cause, err)
+// RebuildProxy 重建损毁代理实例（FR-342）：复用已存 ProvisionSpec + forwarding_secret 重跑代理搭建到既有
+// 工作目录，无需重填。仅 DAMAGED 且有 ProvisionSpec 的代理可重建；成功→STOPPED、失败→仍 DAMAGED。
+func (p *ProxyService) RebuildProxy(ctx context.Context, instanceID uint, createdBy uint) (string, error) {
+	var inst model.Instance
+	if err := p.db.First(&inst, instanceID).Error; err != nil {
+		return "", err
 	}
-	if cleanupErr := p.instance.Delete(inst.ID); cleanupErr != nil {
-		return fmt.Errorf("%w；失败补偿清理失败: %v", cause, cleanupErr)
+	if inst.Status != model.InstanceStatusDamaged {
+		return "", fmt.Errorf("仅损毁（DAMAGED）实例可重建，当前状态 %s", inst.Status)
+	}
+	if strings.TrimSpace(inst.ProvisionSpec) == "" {
+		return "", fmt.Errorf("实例无可复用的搭建参数，无法重建（请删除后重新创建）")
+	}
+	var req ProvisionProxyRequest
+	if err := json.Unmarshal([]byte(inst.ProvisionSpec), &req); err != nil {
+		return "", fmt.Errorf("解析搭建参数失败: %w", err)
+	}
+	if p.tasks == nil {
+		return "", fmt.Errorf("重建需任务中心底座")
+	}
+	core, err := p.core.ResolveBuild(ctx, req.ProxyType, req.Version, req.Build)
+	if err != nil {
+		return "", err
+	}
+	secret := inst.ForwardingSecret // 复用已存 secret，避免与后端注册配置的 secret 失配
+	p.setProvisionReason(inst.ID, "重建中：正在重新供给代理核心与配置（完成前请勿启动）")
+	title := fmt.Sprintf("重建代理 %s（%s %s）", inst.Name, req.ProxyType, req.Version)
+	backgroundInstance := inst
+	taskID := p.tasks.RunAsync(RunSpec{
+		NodeID: inst.NodeID, InstanceID: inst.ID, Kind: model.TaskKindProvision, Title: title, CreatedBy: createdBy,
+	}, func(ctx context.Context, stage func(int, string)) (string, error) {
+		return p.runProxyRebuild(ctx, req, &backgroundInstance, secret, core, stage)
+	})
+	if taskID == "" {
+		return "", fmt.Errorf("登记重建任务失败")
+	}
+	return taskID, nil
+}
+
+// runProxyRebuild 重跑代理搭建（finishProxy）到既有实例：成功→损毁转 STOPPED 清原因，失败→保持 DAMAGED。
+func (p *ProxyService) runProxyRebuild(ctx context.Context, req ProvisionProxyRequest, inst *model.Instance, secret string, core *CoreInfo, stage func(int, string)) (string, error) {
+	stage(10, "重建：下载代理核心与配置…")
+	if err := p.finishProxy(ctx, req, inst2result(inst, secret), core, true); err != nil {
+		_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).Update("status_reason", "重建未完成："+err.Error()).Error
+		return "", err // 保持 DAMAGED
+	}
+	_ = p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
+		Updates(map[string]any{"status": model.InstanceStatusStopped, "status_reason": ""}).Error
+	slog.Info("代理重建完成", "instance", inst.Name, "instanceId", inst.ID)
+	return "", nil
+}
+
+// markProxyDamaged 代理搭建/重建失败 → 损毁态（FR-342）：不再删除实例，改标 DAMAGED 保留原始搭建参数
+// （ProvisionSpec）与 forwarding_secret 供「重建」复用；失败原因写 statusReason。
+// （此前是删实例做失败补偿；改为可重建，与 server 搭建失败语义对齐；旧「待清理」文案无其他逻辑依赖。）
+func (p *ProxyService) markProxyDamaged(inst *model.Instance, cause error) error {
+	if err := p.db.Model(&model.Instance{}).Where("id = ?", inst.ID).
+		Updates(map[string]any{"status": model.InstanceStatusDamaged, "status_reason": "搭建未完成：" + cause.Error()}).Error; err != nil {
+		return fmt.Errorf("%w；标记损毁态失败: %v", cause, err)
 	}
 	return cause
 }
