@@ -1673,6 +1673,7 @@
     "microsoft": "Microsoft",
     "initialBehavior": "初始行为",
     "createFailed": "创建失败",
+    "delegateFailed": "已创建记录，但节点侧启动失败（原因未知）",
     "summaryTotal": "总计",
     "summaryOnline": "在线",
     "summaryConnecting": "连接中",

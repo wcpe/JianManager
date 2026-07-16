@@ -90,7 +90,13 @@ export default function CreateBotDialog({ open, onOpenChange, instanceId }: Crea
         behavior,
       },
       {
-        onSuccess: () => {
+        onSuccess: (bot) => {
+          // 记录创建成功但委托 Worker 失败（如 bot 依赖未装）：留在弹窗内显示可操作原因，
+          // 不再静默关窗留下一个永远 pending 的 Bot（真机「两侧零反馈」）。
+          if (bot?.status === 'error') {
+            setError(bot.lastError || t('bots.delegateFailed'))
+            return
+          }
           onOpenChange(false)
           resetForm()
         },

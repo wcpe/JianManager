@@ -1694,6 +1694,7 @@
     "microsoft": "Microsoft",
     "initialBehavior": "Initial Behavior",
     "createFailed": "Creation failed",
+    "delegateFailed": "Record created, but node-side start failed (unknown reason)",
     "summaryTotal": "Total",
     "summaryOnline": "Online",
     "summaryConnecting": "Connecting",

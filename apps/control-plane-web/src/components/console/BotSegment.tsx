@@ -336,7 +336,12 @@ function BotRow({
     <li className="flex items-center gap-3 px-3 py-2 text-sm">
       <Checkbox checked={checked} onCheckedChange={onToggleSelect} aria-label={bot.name} />
       <BotStatusDot status={bot.status} />
-      <span className="min-w-0 flex-1 truncate font-medium">{bot.name}</span>
+      <span className="min-w-0 flex-1 truncate font-medium" title={bot.lastError || undefined}>
+        {bot.name}
+        {bot.status === 'error' && bot.lastError && (
+          <span className="ml-2 truncate text-xs font-normal text-destructive">{bot.lastError}</span>
+        )}
+      </span>
       <span className="hidden truncate text-xs text-muted-foreground sm:inline">
         {config.server}:{config.port}
       </span>

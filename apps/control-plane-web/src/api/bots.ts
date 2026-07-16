@@ -15,6 +15,8 @@ export interface BotInfo {
   instanceId: number
   name: string
   status: string
+  /** 最近一次委托 Worker 失败的原因（status=error 时非空，如 bot 依赖未装）。 */
+  lastError?: string
   /** Bot 连接配置，后端以 JSON 字符串存储。 */
   config: string
   behavior: string
@@ -198,14 +200,14 @@ export function useBot(id: number) {
   })
 }
 
-/** 创建 Bot。 */
+/** 创建 Bot。返回创建结果（含 status/lastError：委托 Worker 失败时 status=error 且带原因）。 */
 export function useCreateBot() {
   const qc = useQueryClient()
   return useMutation({
     // 后端 Bot.config 以 JSON 字符串存储（CreateBotRequest.Config string），
     // 表单的 config 是对象，必须序列化后再提交，否则 Gin 绑定失败返回 400。
     mutationFn: (payload: CreateBotRequest) =>
-      api.post('/bots', { ...payload, config: JSON.stringify(payload.config) }),
+      api.post<BotInfo>('/bots', { ...payload, config: JSON.stringify(payload.config) }).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['bots'] }),
   })
 }
