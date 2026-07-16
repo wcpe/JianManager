@@ -245,14 +245,24 @@ async function sidebarFrameStats(page: Page): Promise<{
     const frames: number[] = []
     const drawerWidths: number[] = []
     const sidebarWidths: number[] = []
+    const contentTransitions: string[] = []
+    const contentClipPaths: string[] = []
+    const contentXs: number[] = []
+    const contentRights: number[] = []
     let last: number | null = null
     let done = false
     const tick = (now: number) => {
       if (last !== null) frames.push(now - last)
       last = now
-      // 逐帧记录宽度：中段宽度改由整段采样派生，消除固定时刻快照在慢速 CI 上落到动画末态的偶发。
+      // 逐帧记录动画数据，避免慢速 CI 将固定时刻快照落到动画末态。
       drawerWidths.push(drawer.getBoundingClientRect().width)
       sidebarWidths.push(sidebar.getBoundingClientRect().width)
+      const contentStyle = getComputedStyle(content)
+      const contentRect = content.getBoundingClientRect()
+      contentTransitions.push(contentStyle.transitionProperty)
+      contentClipPaths.push(contentStyle.clipPath)
+      contentXs.push(contentRect.x)
+      contentRights.push(contentRect.right)
       if (!done) requestAnimationFrame(tick)
     }
     requestAnimationFrame(tick)
@@ -267,11 +277,6 @@ async function sidebarFrameStats(page: Page): Promise<{
     const expandedModeTransition = expandedMode ? getComputedStyle(expandedMode).transitionProperty : 'none'
     const collapsedModeTransition = collapsedMode ? getComputedStyle(collapsedMode).transitionProperty : 'none'
     const expandedIconTransition = expandedIcon ? getComputedStyle(expandedIcon).transitionProperty : 'none'
-    const contentStyle = getComputedStyle(content)
-    const contentTransition = contentStyle.transitionProperty
-    const contentClipPath = contentStyle.clipPath
-    const contentMidRect = content.getBoundingClientRect()
-    const contentMidX = Math.round(content.getBoundingClientRect().x)
     await new Promise((resolve) => window.setTimeout(resolve, 360))
     done = true
 
@@ -306,6 +311,12 @@ async function sidebarFrameStats(page: Page): Promise<{
     const sidebarDuringTransition = transitioningIdx.map((i) => Math.round(sidebarWidths[i]))
     const sidebarMidW = sidebarDuringTransition.length ? mode(sidebarDuringTransition) : Math.round(sidebarStartW)
     const drawerMidW = Math.round(drawerTransitioning.length ? median(drawerTransitioning) : (dMin + dMax) / 2)
+    // content 必须与 drawer 的真实过渡帧对齐；固定等待 180ms 在慢速 CI 上可能落到 idle，误读为 transition:none。
+    const contentMidIdx = transitioningIdx[Math.floor(transitioningIdx.length / 2)] ?? 0
+    const contentTransition = contentTransitions[contentMidIdx] ?? 'none'
+    const contentClipPath = contentClipPaths[contentMidIdx] ?? 'none'
+    const contentMidX = Math.round(contentXs[contentMidIdx] ?? contentStartX)
+    const contentMidVisibleRight = Math.round((contentRights[contentMidIdx] ?? 0) - clipRightPx(contentClipPath))
 
     return {
       maxFrameMs: Math.round(Math.max(0, ...frames) * 10) / 10,
@@ -326,7 +337,7 @@ async function sidebarFrameStats(page: Page): Promise<{
       drawerFinalW: Math.round(drawer.getBoundingClientRect().width),
       contentTransition,
       contentClipPath,
-      contentMidVisibleRight: Math.round(contentMidRect.right - clipRightPx(contentClipPath)),
+      contentMidVisibleRight,
       viewportWidth: window.innerWidth,
       contentStartX,
       contentMidX,
