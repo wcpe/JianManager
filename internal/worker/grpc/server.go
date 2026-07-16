@@ -441,17 +441,19 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 		// 复用 HeapMaxMb 字段承载「内存上限」语义，仅卡片实时视图消费（不入时序）。
 		resp.HeapMaxMb = memLimit / (1024 * 1024)
 	} else if pid := s.manager.GetInstancePID(req.InstanceUuid); pid > 0 {
-		if proc, err := psproc.NewProcess(int32(pid)); err == nil {
-			if memInfo, err := proc.MemoryInfo(); err == nil && memInfo != nil {
+		// 受管根进程在 daemon 模式是 Go wrapper（RSS ~20MB），真实游戏 JVM 隔着中间 sh 层；
+		// 必须解析到游戏进程本身再采样，否则概览/卡片显示 wrapper 体格（真机 1.4GB 显 20MB）。
+		if proc := resolveGameProc(ctx, int32(pid)); proc != nil {
+			if memInfo, err := proc.MemoryInfoWithContext(ctx); err == nil && memInfo != nil {
 				resp.MemoryMb = int64(memInfo.RSS / 1024 / 1024)
 			}
 			// FR-343 系统级基础指标：无需 ServerProbe，直接采进程 CPU%/运行时长，让未部署/未连探针的
 			// 运行中实例在概览也有真实 CPU 与运行时长（内存 RSS 上面已采）。CPUPercent 为累计 CPU%
 			//（与 FR-170 进程采样器同源、非阻塞）；uptime 由进程创建时刻推算。探针可用时下方会覆盖。
-			if cpu, err := proc.CPUPercent(); err == nil {
+			if cpu, err := proc.CPUPercentWithContext(ctx); err == nil {
 				resp.CpuPercent = cpu
 			}
-			if createMs, err := proc.CreateTime(); err == nil && createMs > 0 {
+			if createMs, err := proc.CreateTimeWithContext(ctx); err == nil && createMs > 0 {
 				resp.UptimeSeconds = float64(time.Now().UnixMilli()-createMs) / 1000
 			}
 		}
@@ -492,6 +494,54 @@ func (s *Server) GetInstanceMetrics(ctx context.Context, req *workerpb.GetInstan
 	return resp, nil
 }
 
+// resolveGameProc 从受管根进程解析真正的游戏进程（JVM）。daemon 模式根进程是 Go wrapper，
+// 真实 java 隔着中间 shell 层（wrapper→sh→java）；direct 模式根进程可能就是 shell。
+// 深度优先遍历后代：优先返回名为 java 的最深进程，无 java 命名者回退最深后代，无后代回退根进程。
+// FR-343 指标与 FR-344 运行时环境都读游戏进程本身，而非托管壳。
+func resolveGameProc(ctx context.Context, pid int32) *psproc.Process {
+	root, err := psproc.NewProcessWithContext(ctx, pid)
+	if err != nil {
+		return nil
+	}
+	deepest, deepestDepth := root, -1
+	var javaDeepest *psproc.Process
+	javaDepth := -1
+	seen := map[int32]struct{}{}
+	var walk func(p *psproc.Process, depth int)
+	walk = func(p *psproc.Process, depth int) {
+		// 进程树规模守卫：受管实例树很小（wrapper/sh/java + 少量子工具），64 足够且防环。
+		if p == nil || len(seen) >= 64 {
+			return
+		}
+		if _, ok := seen[p.Pid]; ok {
+			return
+		}
+		seen[p.Pid] = struct{}{}
+		if depth > deepestDepth {
+			deepestDepth, deepest = depth, p
+		}
+		if name, err := p.NameWithContext(ctx); err == nil {
+			if n := strings.ToLower(name); n == "java" || n == "java.exe" {
+				if depth > javaDepth {
+					javaDepth, javaDeepest = depth, p
+				}
+			}
+		}
+		children, err := p.ChildrenWithContext(ctx)
+		if err != nil {
+			return
+		}
+		for _, c := range children {
+			walk(c, depth+1)
+		}
+	}
+	walk(root, 0)
+	if javaDeepest != nil {
+		return javaDeepest
+	}
+	return deepest
+}
+
 // GetInstanceEnv 返回运行中实例 Java 进程的实际环境（FR-344 环境变量下区）。
 // 取进程 PID → gopsutil Environ 读进程环境（Linux 走 /proc/pid/environ）；未运行/平台受限则 available=false + note。
 func (s *Server) GetInstanceEnv(ctx context.Context, req *workerpb.GetInstanceEnvRequest) (*workerpb.GetInstanceEnvResponse, error) {
@@ -509,9 +559,11 @@ func (s *Server) GetInstanceEnv(ctx context.Context, req *workerpb.GetInstanceEn
 		resp.Note = "无法获取实例进程 PID"
 		return resp, nil
 	}
-	proc, err := psproc.NewProcess(int32(pid))
-	if err != nil {
-		resp.Note = "读取进程失败：" + err.Error()
+	// 解析到游戏 JVM 本身：wrapper 的环境缺 composeEnv 注入的 JAVA_HOME/PATH 前缀与自定义变量，
+	// 直读根进程会把「运行时实际环境」展示成 wrapper 继承的 systemd 环境（FR-344 下区语义是 JVM）。
+	proc := resolveGameProc(ctx, int32(pid))
+	if proc == nil {
+		resp.Note = "读取进程失败：进程不存在"
 		return resp, nil
 	}
 	environ, err := proc.EnvironWithContext(ctx)
