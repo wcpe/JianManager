@@ -3096,6 +3096,8 @@
     "noLogs": "No logs",
     "goCreateSchedule": "Create in the Schedules page",
     "probeUnavailable": "Probe is not connected; some player and world data is preview-only",
+    "probeRequired": "Probe required",
+    "uptime": "Uptime",
     "lastStartFailed": "Last start failed",
     "crashDiagnostics": "Crash Diagnostics",
     "crashKeepHint": "Keeps the last 5 crash scenes",

@@ -3096,6 +3096,8 @@
     "noLogs": "暂无日志",
     "goCreateSchedule": "去定时任务页创建",
     "probeUnavailable": "探针未连入，部分在线玩家与世界数据为预览值",
+    "probeRequired": "需探针",
+    "uptime": "运行时长",
     "lastStartFailed": "上次启动失败",
     "crashDiagnostics": "崩溃诊断",
     "crashKeepHint": "保留最近 5 次崩溃现场",
