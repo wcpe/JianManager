@@ -8,12 +8,8 @@
 
 > 本段为 `v0.18.0` 开发版归档区，累积 `v0.17.0` tag 之后的开发变更（开发态版本号 `0.18.0-dev`，见 ADR-065）。
 
-## 0.17.1（2026-07-16）
+> 2026-07-16 真机验收（FR-277 主机，浏览器逐项点验）：FR-342（server+proxy 断网损毁→恢复→重建→可启动全闭环）/ FR-343（探针与无探针双路真实指标）/ FR-344（.env 落盘+进程注入+运行时环境读 JVM 真身）/ FR-345（停机回放+深链+搜索导出）/ 4 fix / REF-1 全部通过；验收过程钓出上述 5 个集成缺陷并当场修复重部复验。
 
-### 修复
-- **daemon 跨平台测试发布门禁**：daemon 控制连接回归测试改用短随机临时目录，避免 GitHub Actions Linux runner 的 Unix Socket 路径超过系统上限；实例标识加入随机后缀，消除 Windows Named Pipe 在重复运行时的名称冲突；wrapper 在监听前退出时直接报告真实错误，不再误报为等待超时。此修复仅影响测试稳定性，不改变生产运行逻辑。
-
-## 0.17.0（2026-07-16）
 ### 新增
 - **实例系统级基础指标 + 概览接真去 mock-api（FR-343，feat，增强 FR-170/142，见 `docs/specs/instance-system-metrics/spec.md`；盘问结论：用户「TPS/MSPT mock 假数据」真相 = 实例大多没连 ServerProbe → 无源显占位，后端时序早已真数据）**：①**后端**——`GetInstanceMetrics` 非 docker 分支补采进程 CPU%（gopsutil `CPUPercent`）+ 运行时长（`CreateTime`），连同已有 RSS 内存，让**未部署/未连探针的运行中实例**在概览也有真实 CPU/内存/运行时长（系统直取，无 proto 变更；探针可用时仍优先覆盖富指标）。②**前端概览**——去除写死的 `mock-api` 假火花线（`buildSparkValues(19.8/35)`），改真实 `inst_tps` 时序火花线（`useMetricSeries`），无数据/无探针显「暂无时序数据/需探针」空态而非假图；内存卡无堆上限（无探针）时显 RSS MB 不再显误导的 0%；TPS 卡无探针显「需探针」而非 -1；页眉补运行时长。keepalive 测试同步（概览也是 metricSeries 消费方，「监控页签隐藏归零」断言按 queryKey 精确到监控页签查询）。tsc/lint/vitest 16/16 绿；系统指标属真机/真进程性质，探针链路与 CPU 随负载变化待真机验。
 - **搭建失败损毁态 + 一键重建（FR-342，feat，增强 FR-319 异步搭建，见 `docs/specs/provision-damaged-rebuild/spec.md`；真机反馈：断网/下载核心失败后实例只留 STOPPED，无重建入口、只能删了重填参数）**：①**状态机**——新增 `DAMAGED`（损毁）；一键搭建任一阶段失败（下载/校验/配置/探针/Forge）直写损毁态，原始搭建参数存实例 `provision_spec`（JSON）供复用；损毁实例不可直接启动（`Start` 守卫返 `PREFLIGHT_FAILED`「已损毁，请先重建」）。②**重建**——`POST /instances/:id/rebuild` 复用 `provision_spec` 重跑搭建到既有工作目录（覆盖残缺 jar/配置），成功→STOPPED、失败→仍 DAMAGED，重建在途经长操作闸拦重复重建/启动；起后台任务、进度见任务中心。③**前端**——状态点/徽章 DAMAGED 红「损毁」；控制台损毁实例显「重建」按钮（复用参数、无需重填）、不出现启动按钮、失败原因横幅显搭建失败原因；重建中禁用按钮。后端 4 单测（失败→DAMAGED+存参数 / 重建守卫 / 换 worker 重建成功→STOPPED / 损毁拦启动，含 fake-worker 端到端）+ 前端 tsc/lint/28 绿。④**代理路径（阶段二）**——代理搭建失败同进 DAMAGED 可重建：`markProxyDamaged` 由「删实例失败补偿」改为「标损毁保留」（`provision_spec`+`forwarding_secret` 已入库），`RebuildProxy` 复用二者重跑 `finishProxy`，`/rebuild` 端点按实例 role 分派 server/proxy（前端 DAMAGED 徽章+重建按钮通用无需改）；旧「失败补偿删实例」3 测试重写为损毁/重建断言 + 代理重建成功端到端。重建端到端真机验待环境。
@@ -26,8 +22,20 @@
 - **重启改优雅停止避免 world 锁冲突（fix，真机复现：点重启后 Paper 报 `SessionLock$ExceptionWorldConflict: world/session.lock already locked`）**：`Manager.Restart` 原为强杀（`killLocked`）+ 立即启动——daemon 模式强杀 wrapper 进程树时，Unix 上自成进程组的托管 Java 可能未被杀到而沦为孤儿、仍占 world/session.lock，新进程随即启动即撞世界锁冲突；且强杀跳过世界保存、无关服日志（用户「看不到服务器关闭内容」）。改为运行中先优雅停止（下发 stop/end 控制帧由 wrapper 正常关服、输出关服日志），由 `startLocked` 内 `daemon.WaitForPriorExit` 依 PID 文件等旧 wrapper/Java 全退出再拉起新进程（复用同一策略；`reapWrapper` 的 `d.wrapperCmd!=cmd` 陈旧守卫防旧 reaper 误改新实例状态）；已停止/崩溃实例 Restart 直接启动。强制停止（`KillInstance` RPC / UI「强制关停」按钮，运行·启动·停止中可用）保留供卡死兜底。单测：运行中 Restart 发优雅 Stop 零 Kill / 已停止直接启动 / 既有并发序列化与 reaper 竞态回归（-race 绿）。
 - **终端右键菜单钳制进视口（fix，真机反馈：右键菜单位置不对、贴边溢出屏幕看不全）**：终端右键菜单原以 `position: fixed` + 原始 `clientX/clientY` 定位、无视口边界钳制，光标贴右/下边缘时菜单溢出屏幕。菜单开启后经 `useLayoutEffect` 按实际尺寸把落点钳制进视口（贴边向左/上收、留 8px 边距），paint 前修正、无越界闪现。
 
+- **控制台缺失词条补齐（fix，真机验收钓出）**：FR-343 前端提交引用 `serverConsole.uptime` / `serverConsole.probeRequired` 但中英语言包均未定义，线上页头「运行时长」标签与 TPS 卡占位渲染为裸 key。补两词条（运行时长/需探针、Uptime/Probe required）。
+- **终端右键菜单 portal 出 transform 祖先（fix，真机验收钓出，FIX-4 补完）**：视口钳制计算正确（style 已落 1323px）但实际渲染偏移 +68/+60px——控制台/路由过渡壳带 `transform: matrix(1,0,0,1,0,0)` 与 `will-change: transform`，`position: fixed` 的包含块被劫持为该祖先而非视口。菜单与遮罩 `createPortal` 到 `document.body` 彻底逃逸；真机复测极右缘触发菜单 `right=1467 ≤ 视口 1475`、渲染位与钳制样式一致。
+- **重启窗口内上一代 wrapper 迟到停止回报误判（fix(worker)，真机验收钓出，FIX-3 补完）**：重启复用同一策略对象时，旧 wrapper 优雅退出回报可晚于新一轮 `startLocked` 置 STARTING 落地（reapWrapper 抢锁先于 Start 替换 `wrapperCmd`，代际守卫拦不住），把新启动记账打成 STOPPED——真机表现「java 健康运行、面板显停止」脱同步。Stop/Start 经 operationMu 串行化，STARTING 期间不可能有真停止在飞、新一代秒崩报的是 CRASHED，故 `markStrategyState` 对 STARTING×STOPPED 一律视为旧代讣告忽略。确定性单测复刻该时序（-race 绿）；真机复测重启序列全净、无误判。
+- **实例指标与运行时环境解析到游戏 JVM 而非 wrapper 壳（fix(worker)，真机验收钓出，FR-343/344 补完）**：`GetInstancePID` 在 daemon 模式返回 Go wrapper 的 PID，`GetInstanceMetrics`（FR-343）与 `GetInstanceEnv`（FR-344）直读根进程——真机 1.4GB 的 Paper 显示 20MB（wrapper 体格）、运行时环境显示 wrapper 继承的 systemd 环境（缺 composeEnv 注入的 JAVA_HOME/JDK 前缀 PATH/自定义变量）。新增 `resolveGameProc` 从受管根进程深度优先解析 java 命名后代（wrapper→sh→java，无 java 回退最深后代/根），两 RPC 换用；真机复测 s1 内存 523/1024MB（探针堆）、lobby 146MB RSS（无探针系统直取）、运行时区出 JAVA_HOME + JDK 前缀 PATH + 自定义变量。
+- **心跳状态同步不得把损毁态降级为停止（fix(control-plane)，真机验收钓出，FR-342 补完）**：Worker 不感知 CP 侧 DAMAGED，对已注册未运行实例心跳上报 STOPPED，`syncInstanceStates` 无条件覆写把损毁态在下一拍降级成 STOPPED——损毁徽章与启动守卫随即失效（真机搭建失败后数秒即被洗回停止）。同步对 STOPPED/CRASHED 上报跳过 DAMAGED 实例（损毁本就「没在跑」，不矛盾）；上报运行类状态仍照常覆盖（进程确实活着以 Worker 实况为准）。心跳单测覆盖保留/覆盖两态；真机复测损毁态挺过 3+ 心跳不降级、重建后正常转 STOPPED。
 ### 优化
 - **控制台终端顶栏收敛为紧凑扁平单条（refactor，方案 A，用户走查「顶栏太占位置、样式丑」）**：终端面板顶部原为「浮动卡片工具栏（`rounded-lg border bg-card/95 shadow-soft` + 药丸按钮）+ 独占一行的琥珀只读横幅」两层 chrome、纵向占位偏高。收敛为**单条扁平工具栏**（`border-b`、无浮卡/无阴影、`py-1.5`、ghost 图标按钮），非运行状态提示并入行首（不再独占整行），终端外层内边距 `p-4→p-2`，把纵向空间还给日志区。功能与可访问性不变（读写徽标/重连/搜索/字号/全屏控件与 aria 保留，dom 测试 9/9 绿）。
+
+## 0.17.1（2026-07-16）
+
+### 修复
+- **daemon 跨平台测试发布门禁**：daemon 控制连接回归测试改用短随机临时目录，避免 GitHub Actions Linux runner 的 Unix Socket 路径超过系统上限；实例标识加入随机后缀，消除 Windows Named Pipe 在重复运行时的名称冲突；wrapper 在监听前退出时直接报告真实错误，不再误报为等待超时。此修复仅影响测试稳定性，不改变生产运行逻辑。
+
+## 0.17.0（2026-07-16）
 
 > 启动链路诊断与可观测收官（进程级崩溃诊断链路 / 版本-JDK 兼容预检 / 搭建中硬禁启动闸补漏 / CP 压力态 SQLite 连接毒化修复）+ **daemon 进程模型可靠性闭环**（删运行中实例进程处置一致性与工作目录清净 / Worker 重启接管孤儿兜底 / Worker 重启 daemon wrapper 存活并自动重连，ADR-003 落地）+ 规模化收口（指标批量序列 / 群组拓扑聚合+SVG 视口 / 用户目录服务端搜索分页 / 任务列表分页信封 / 备份存储编辑 / 控制台玩家·备份分区接真）+ 控制台品牌顶栏贯通 T 型外壳（ADR-071）+ 任务中心页眉下拉与进度自动刷新 + 节点删除实例守卫 / 应急密码重置 + 全站交互质量修复批次（mock 整站验收 ~50 条真缺陷）。真机验收见 `.tmp/acceptance-version-0.17.0-2026-07-15.md` 与 daemon 存活 node-2 复验。
 
