@@ -3043,12 +3043,25 @@
     "viewAllNotifications": "View all",
     "account": "Account"
   },
+  "env": {
+    "customTitle": "Custom launch environment variables",
+    "customHint": "Saved to the instance's .env file in its work directory; injected into the process on next start.",
+    "empty": "No custom environment variables. Click Add to create one.",
+    "add": "Add",
+    "save": "Save",
+    "saved": "Saved; takes effect on next start",
+    "keyLabel": "Env var name",
+    "valueLabel": "Env var value",
+    "runtimeTitle": "Runtime environment (read-only)",
+    "runtimeUnavailable": "Instance not running, or this platform does not support reading the runtime process environment."
+  },
   "serverConsole": {
     "title": "Server Console",
     "subtitle": "A fixed operations and service cockpit for one server",
     "overview": "Overview",
     "console": "Console",
     "filesConfig": "Files & Config",
+    "env": "Environment",
     "metrics": "Metrics",
     "players": "Players",
     "plugins": "Plugins",

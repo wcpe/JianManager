@@ -836,6 +836,24 @@ export const handlers = [
     })
   }),
 
+  // 实例环境（FR-344）：configured=自定义启动 env、runtime=运行时进程实际环境。
+  domainRoute('get', '/instances/:id/env', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    return HttpResponse.json({
+      configured: { PAPER_VELOCITY: 'true', MY_FLAG: '1' },
+      runtime: {
+        JAVA_HOME: '/opt/jdk-21',
+        PATH: '/opt/jdk-21/bin:/usr/bin:/bin',
+        PAPER_VELOCITY: 'true',
+        MY_FLAG: '1',
+        LANG: 'en_US.UTF-8',
+      },
+      runtimeAvailable: true,
+      note: '',
+    })
+  }),
+
   // ===== alerts 规则（FR-011/085） =====
   domainRoute('get', '/alerts/rules', (info) => {
     const denied = requireAuth(info)

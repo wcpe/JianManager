@@ -3043,12 +3043,25 @@
     "viewAllNotifications": "查看全部",
     "account": "账户"
   },
+  "env": {
+    "customTitle": "自定义启动环境变量",
+    "customHint": "保存后写入实例工作目录 .env 文件，下次启动注入进程生效。",
+    "empty": "暂无自定义环境变量，点「添加」新增。",
+    "add": "添加",
+    "save": "保存",
+    "saved": "已保存，下次启动生效",
+    "keyLabel": "环境变量名",
+    "valueLabel": "环境变量值",
+    "runtimeTitle": "运行时实际环境（只读）",
+    "runtimeUnavailable": "实例未运行或该平台不支持读取运行时进程环境。"
+  },
   "serverConsole": {
     "title": "服务器控制台",
     "subtitle": "单台服务器的运维与运营固定分区控制台",
     "overview": "概览",
     "console": "控制台",
     "filesConfig": "文件配置",
+    "env": "环境变量",
     "metrics": "监控",
     "players": "玩家",
     "plugins": "插件",

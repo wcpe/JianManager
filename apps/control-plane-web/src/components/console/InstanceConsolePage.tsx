@@ -17,11 +17,12 @@ import { instanceStatusGlowClass } from '@/lib/instance-glow'
 import type { CardType } from '@/lib/workspace-card'
 import CrashDiagnosticsCard from './CrashDiagnosticsCard'
 import InstanceBackupSegment from './InstanceBackupSegment'
+import InstanceEnvSegment from './InstanceEnvSegment'
 import InstancePlayersSegment from './InstancePlayersSegment'
 import WorkspaceCardBody from './WorkspaceCardBody'
 import { recordRecentServer } from './server-selection'
 
-type TabKey = 'overview' | 'terminal' | 'resource' | 'metrics' | 'players' | 'plugins' | 'backup' | 'business' | 'bot'
+type TabKey = 'overview' | 'terminal' | 'resource' | 'env' | 'metrics' | 'players' | 'plugins' | 'backup' | 'business' | 'bot'
 
 const TAB_CARD_TYPE: Partial<Record<TabKey, CardType>> = {
   terminal: 'terminal',
@@ -32,12 +33,13 @@ const TAB_CARD_TYPE: Partial<Record<TabKey, CardType>> = {
   bot: 'bot',
 }
 
-const TAB_KEYS: TabKey[] = ['overview', 'terminal', 'resource', 'metrics', 'players', 'plugins', 'backup', 'business', 'bot']
+const TAB_KEYS: TabKey[] = ['overview', 'terminal', 'resource', 'env', 'metrics', 'players', 'plugins', 'backup', 'business', 'bot']
 
 const TAB_LABEL_KEY: Record<TabKey, string> = {
   overview: 'serverConsole.overview',
   terminal: 'serverConsole.console',
   resource: 'serverConsole.filesConfig',
+  env: 'serverConsole.env',
   metrics: 'serverConsole.metrics',
   players: 'serverConsole.players',
   plugins: 'serverConsole.plugins',
@@ -247,6 +249,9 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
                 watchItems={watchItems}
                 probeConnected={serverState?.connected ?? false}
               />
+            ) : tab === 'env' ? (
+              /* 环境变量页签（FR-344）：上区编辑自定义启动 env（写 .env）、下区运行时实际环境只读。 */
+              <InstanceEnvSegment instanceId={instance.id} />
             ) : tab === 'players' ? (
               /* 玩家分区接真（FR-339）：本实例作用域的在线/踢封/封禁/白名单。 */
               <InstancePlayersSegment instanceId={instance.id} />

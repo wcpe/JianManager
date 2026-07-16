@@ -285,6 +285,8 @@ export interface UpdateInstanceBody {
   jdkId?: number
   /** 传数组（含空数组）覆盖标签；不传则不变。 */
   tags?: string[]
+  /** 自定义启动环境变量（FR-344）：传对象（含空对象=清空）覆盖，不传则不变。变更对下次启动生效。 */
+  envVars?: Record<string, string>
   /** docker 资源限额（FR-079）：传值（含 0=清除限制）覆盖，不传则不变。变更对下次启动生效。 */
   cpuLimit?: number
   memLimitMb?: number
@@ -304,6 +306,24 @@ export function useUpdateInstance() {
     onError: (err: Error & { response?: { data?: { message?: string } } }) => {
       toast.error(err.response?.data?.message || '更新失败')
     },
+  })
+}
+
+/** 实例环境（FR-344 环境变量页签）：configured=自定义启动 env（可编辑源）、runtime=运行时进程实际环境。 */
+export interface InstanceEnvData {
+  configured: Record<string, string>
+  runtime: Record<string, string> | null
+  runtimeAvailable: boolean
+  note: string
+}
+
+/** 查询实例环境（FR-344）：configured + 运行时实际环境；15s 轮询（运行时段随进程变化）。 */
+export function useInstanceEnv(instanceId: number, enabled = true) {
+  return useQuery({
+    queryKey: ['instance-env', instanceId],
+    queryFn: () => api.get<InstanceEnvData>(`/instances/${instanceId}/env`).then((r) => r.data),
+    enabled: enabled && instanceId > 0,
+    refetchInterval: 15000,
   })
 }
 
