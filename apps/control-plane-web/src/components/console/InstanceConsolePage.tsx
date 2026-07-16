@@ -1,9 +1,9 @@
 import { Activity, useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
-import { Activity as ActivityIcon, AlertTriangle, Gauge, HardDrive, Layers, Loader2, Play, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
+import { Activity as ActivityIcon, AlertTriangle, Gauge, Hammer, HardDrive, Layers, Loader2, Play, RotateCw, Square, TerminalSquare, Users, type LucideIcon } from 'lucide-react'
 
-import { useInstance, useKillInstance, useRestartInstance, useStartInstance, useStopInstance, isProvisioningInstance } from '@/api/instances'
+import { useInstance, useKillInstance, useRebuildInstance, useRestartInstance, useStartInstance, useStopInstance, isProvisioningInstance } from '@/api/instances'
 import DangerConfirm from '@/components/DangerConfirm'
 import { useInstanceMetrics, useMetricSeries } from '@/api/metrics'
 import { useLogs } from '@/api/logs'
@@ -79,6 +79,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const stop = useStopInstance()
   const start = useStartInstance()
   const kill = useKillInstance()
+  const rebuild = useRebuildInstance()
   // 强杀走统一危险操作确认（FR-059），不直发请求。
   const [killConfirmOpen, setKillConfirmOpen] = useState(false)
 
@@ -102,11 +103,14 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   // 搭建中硬性禁启（FR-331）：provision 未终态期间启动按钮禁用 + tooltip 引导看任务中心，
   // 与后端启动闸（FR-319 二轮②）同一信号源（statusReason「搭建中」），任务终态自然解禁。
   const provisioning = isProvisioningInstance(instance)
+  const isDamaged = instance.status === 'DAMAGED'
+  // 重建在途（FR-342）：损毁实例重建期间 statusReason 标「重建中…」，据此禁用重建按钮、且不落红色失败横幅。
+  const rebuilding = isDamaged && (instance.statusReason?.startsWith('重建中') ?? false)
   // 失败原因横幅（FR-312）：只看 statusReason 非空、不看 status——Worker 心跳会把 CRASHED
   // 冲回 STOPPED，若以状态为前置条件横幅会随之消失；再次启动时 CP transition 清空 reason，
   // 横幅纯受查询数据驱动消失，不留本地状态。
   // 搭建中的 statusReason 是进行时状态而非失败（FR-331）：不落红色失败横幅，走下方琥珀状态横幅。
-  const startFailReason = provisioning ? undefined : instance.statusReason?.trim()
+  const startFailReason = provisioning || rebuilding ? undefined : instance.statusReason?.trim()
   const setActiveTab = (tab: TabKey) => {
     const next = new URLSearchParams(searchParams)
     if (tab === 'overview') next.delete('tab')
@@ -166,6 +170,15 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
                   <Button size="sm" disabled={provisioning} onClick={() => start.mutate(instance.id)}>
                     <Play className="size-3.5" />
                     {t('instances.start')}
+                  </Button>
+                </span>
+              )}
+              {isDamaged && (
+                // 损毁实例（FR-342）：显「重建」复用参数重跑搭建；重建在途禁用（tooltip 提示）。
+                <span title={rebuilding ? t('serverConsole.rebuilding') : undefined}>
+                  <Button size="sm" disabled={rebuilding} onClick={() => rebuild.mutate(instance.id)}>
+                    <Hammer className="size-3.5" />
+                    {t('serverConsole.rebuild')}
                   </Button>
                 </span>
               )}

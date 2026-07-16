@@ -78,7 +78,7 @@ export function toTreeBranches(
 
 /**
  * 实例状态点的视觉分类。
- * RUNNING=绿，STARTING/STOPPING=琥珀，CRASHED=红，其余（STOPPED 等）=空心灰。
+ * RUNNING=绿，STARTING/STOPPING=琥珀，CRASHED/DAMAGED=红，其余（STOPPED 等）=空心灰。
  */
 export type StatusDotKind = 'running' | 'transitioning' | 'crashed' | 'stopped'
 
@@ -90,6 +90,7 @@ export function statusDotKind(status: string): StatusDotKind {
     case 'STOPPING':
       return 'transitioning'
     case 'CRASHED':
+    case 'DAMAGED':
       return 'crashed'
     default:
       return 'stopped'

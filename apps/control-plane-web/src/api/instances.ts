@@ -260,6 +260,22 @@ export function useKillInstance() {
   })
 }
 
+/** 重建损毁实例（FR-342）：复用已存搭建参数重跑搭建，无需重填；起后台任务，进度见任务中心。 */
+export function useRebuildInstance() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api.post(`/instances/${id}/rebuild`),
+    onSuccess: () => {
+      toast.success('实例重建中…')
+      qc.invalidateQueries({ queryKey: ['instances'] })
+      qc.invalidateQueries({ queryKey: ['tasks'] })
+    },
+    onError: (err: Error & { response?: { data?: { message?: string } } }) => {
+      toast.error(err.response?.data?.message || '重建失败')
+    },
+  })
+}
+
 /** 可更新的实例字段（FR-047 新增 tags：环境/标签维度）。 */
 export interface UpdateInstanceBody {
   name?: string
