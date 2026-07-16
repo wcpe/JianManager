@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useInstance } from '@/api/instances'
 import { useTerminalToken } from '@/api/terminal'
 import TerminalComponent from '@/components/Terminal'
+import StoppedLogsView from './StoppedLogsView'
 import { terminalSessionManager } from '@/lib/terminal-session-manager'
 import { Button } from '@jianmanager/ui/components/button'
 import { cn } from '@jianmanager/ui'
@@ -148,13 +149,9 @@ export default function TerminalPane({ instanceId, hideHeader = false, persistSe
             <p className="text-sm text-gray-500">{t('instanceDetail.connecting')}</p>
           </div>
         ) : isStopped ? (
-          // 完全停机：不挂载 xterm、不连 WS，展示「实例未运行」静态占位，避免死循环刷断连（FIX-B）。
-          <div className="flex min-h-[400px] flex-col items-center justify-center gap-1.5 rounded-lg bg-[#1a1b26] p-4 text-center">
-            <p className="text-sm font-medium text-gray-300">
-              {t('instanceDetail.terminalNotRunning', { status })}
-            </p>
-            <p className="text-xs text-gray-500">{t('instanceDetail.terminalNotRunningHint')}</p>
-          </div>
+          // 完全停机：不挂载 xterm、不连 WS（避免死循环刷断连 FIX-B），改从 DB 回放历史日志（FR-345）——
+          // 令关服过程/崩溃现场在停机态仍可见，替代此前空白「实例未运行」占位。
+          <StoppedLogsView instanceId={instanceId} status={status} />
         ) : error ? (
           <div className="flex min-h-[400px] items-center justify-center rounded-lg bg-[#1a1b26] p-4">
             <p className="text-sm text-muted-foreground">

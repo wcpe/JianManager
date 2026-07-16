@@ -219,13 +219,13 @@ async function findSocket() {
  * seed：id=1 RUNNING、id=2 STOPPED（见 mocks/handlers/domains/instance.ts）。
  */
 describe('TerminalPane（mock 假后端）', () => {
-  it('停机实例：显示「实例未运行」占位、不挂载终端', async () => {
+  it('停机实例：回放历史日志（不挂载终端、不发起 WS）', async () => {
     loginMockUser()
     renderWithProviders(<TerminalPane instanceId={2} hideHeader />)
 
-    // 占位文案出现（status 注入到 terminalNotRunning）。
+    // 停机态改回放 DB 历史日志（FR-345）：头部含「实例未运行（状态）」提示 + 「查看完整历史」链。
     expect(await screen.findByText(/实例未运行（STOPPED）/)).toBeInTheDocument()
-    expect(screen.getByText('启动实例后即可使用终端')).toBeInTheDocument()
+    expect(screen.getByText('查看完整历史')).toBeInTheDocument()
     // 不挂载真实终端 → 不发起 WS → 不会刷「连接已断开」。
     expect(xtermHarness.instances).toHaveLength(0)
     expect(wsHarness.sockets).toHaveLength(0)

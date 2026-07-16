@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Download, Radio } from 'lucide-react'
 import { useLogs, exportLogs, type LogQueryParams } from '@/api/logs'
@@ -57,11 +58,17 @@ export default function LogsPage() {
   const { t } = useTranslation()
   const { data: nodes } = useNodes()
   const { data: instances } = useInstances()
+  const [searchParams] = useSearchParams()
 
   const [source, setSource] = useState('')
   const [level, setLevel] = useState('')
   const [nodeId, setNodeId] = useState<number | null>(null)
-  const [instanceId, setInstanceId] = useState<number | null>(null)
+  // 深链预筛选（FR-345）：从 URL ?instanceId= 初始化实例筛选（如从终端「查看完整历史」进入）。
+  const [instanceId, setInstanceId] = useState<number | null>(() => {
+    const q = searchParams.get('instanceId')
+    const n = q ? Number(q) : NaN
+    return Number.isFinite(n) && n > 0 ? n : null
+  })
   const [keyword, setKeyword] = useState('')
   const [range, setRange] = useState<TimeRangePreset>('all')
   const [page, setPage] = useState(1)
