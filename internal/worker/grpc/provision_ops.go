@@ -601,6 +601,14 @@ func (s *Server) DeployServerProbe(ctx context.Context, req *workerpb.DeployServ
 	if !exists {
 		return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("实例 %s 未注册", req.InstanceUuid)}, nil
 	}
+	// 离线依赖 zip 必须先于依赖预置解压（FIX，真机：CN 主机 repo.tabooproject.org 连接被重置 EOF）：
+	// 预置按「本地缺文件才联网」判定，随请求内嵌下发的离线缓存正是这些依赖——先落盘则预置全命中
+	// 零联网；原顺序反了，离线缓存明明在手却先去外网下 pom 而整体失败。
+	if len(req.LibrariesZip) > 0 {
+		if err := deployServerProbeLibrariesZip(inst.WorkDir, req.LibrariesZip); err != nil {
+			return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("写入探针依赖缓存失败: %v", err)}, nil
+		}
+	}
 	if len(req.Jar) > 0 {
 		if err := s.prepareServerProbeDependencies(ctx, inst.WorkDir, req.Jar); err != nil {
 			return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("预置探针依赖失败: %v", err)}, nil
@@ -622,11 +630,6 @@ func (s *Server) DeployServerProbe(ctx context.Context, req *workerpb.DeployServ
 		}
 		if err := os.WriteFile(filepath.Join(cfgDir, "config.yml"), []byte(cfg), 0o644); err != nil {
 			return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("写入探针配置失败: %v", err)}, nil
-		}
-	}
-	if len(req.LibrariesZip) > 0 {
-		if err := deployServerProbeLibrariesZip(inst.WorkDir, req.LibrariesZip); err != nil {
-			return &workerpb.DeployServerProbeResponse{Success: false, Error: fmt.Sprintf("写入探针依赖缓存失败: %v", err)}, nil
 		}
 	}
 	return &workerpb.DeployServerProbeResponse{Success: true}, nil

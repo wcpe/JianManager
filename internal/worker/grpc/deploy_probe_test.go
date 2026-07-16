@@ -218,6 +218,41 @@ func TestDeployServerProbe_UsesCachedTabooLibLibrariesWhenRepoOffline(t *testing
 	require.Equal(t, 1, jarHits, "已预置的探针依赖不应在离线重部署时重复访问远端仓库")
 }
 
+// TestDeployServerProbe_LibrariesZipSatisfiesDependenciesOffline 钉死离线依赖 zip 先于依赖预置落盘：
+// 远端仓库完全不可达（真机：CN 主机 repo.tabooproject.org 连接被重置），但请求随身携带的离线依赖
+// zip 已包含全部所需 pom/jar——部署必须成功且零联网。修复前顺序相反（先预置后解压 zip），
+// 离线缓存在手却先去外网下 pom 而整体失败。
+func TestDeployServerProbe_LibrariesZipSatisfiesDependenciesOffline(t *testing.T) {
+	tmp := t.TempDir()
+	srv := NewServer(process.NewManager(tmp), "test-node", nil, nil, nil)
+	ctx := context.Background()
+	const uuid = "66666666-6666-6666-6666-666666666666"
+	workDir := filepath.Join(tmp, "inst")
+	requireCreatedProbeInstance(t, srv, ctx, uuid, workDir)
+
+	// 仓库对任何请求都 404（等效外网不可达）。
+	repo := httptest.NewServer(http.NotFoundHandler())
+	defer repo.Close()
+
+	depDir := "libraries/io/izzel/taboolib/basic-configuration/6.3.0-test/"
+	zipData := makeProbeLibrariesZip(t, map[string]string{
+		depDir + "basic-configuration-6.3.0-test.pom": "<project/>",
+		depDir + "basic-configuration-6.3.0-test.jar": "offline-zip-module",
+	})
+
+	resp, err := srv.DeployServerProbe(ctx, &workerpb.DeployServerProbeRequest{
+		InstanceUuid: uuid,
+		Jar:          makeProbeJar(t, repo.URL, "libraries", "basic-configuration"),
+		LibrariesZip: zipData,
+	})
+	require.NoError(t, err)
+	require.True(t, resp.Success, resp.Error)
+
+	got, err := os.ReadFile(filepath.Join(workDir, "libraries", "io", "izzel", "taboolib", "basic-configuration", "6.3.0-test", "basic-configuration-6.3.0-test.jar"))
+	require.NoError(t, err)
+	assert.Equal(t, "offline-zip-module", string(got), "依赖应来自离线 zip 而非远端仓库")
+}
+
 // TestDeployServerProbe_DependencyPrefetchDiagnostics 覆盖缺依赖诊断和缓存目录越界保护。
 func TestDeployServerProbe_DependencyPrefetchDiagnostics(t *testing.T) {
 	tmp := t.TempDir()
