@@ -58,6 +58,7 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import DangerConfirm from '@/components/DangerConfirm'
+import { ContextMenuSurface } from '@/components/ui/context-menu-surface'
 
 /** 平台「全部」哨兵（Radix Select 不允许空字符串值，回写时映射回 ""）。 */
 const PLATFORM_ALL = '__all__'
@@ -764,9 +765,10 @@ function ContextMenu({
 }) {
   const isRoot = target.kind === 'root'
   return (
-    <div
+    <ContextMenuSurface
+      x={x}
+      y={y}
       className="fixed z-50 min-w-[140px] rounded-md border bg-popover p-1 shadow-md"
-      style={{ left: x, top: y }}
       data-testid="fe-context-menu"
       onClick={(e) => e.stopPropagation()}
     >
@@ -798,7 +800,7 @@ function ContextMenu({
           </button>
         </>
       )}
-    </div>
+    </ContextMenuSurface>
   )
 }
 

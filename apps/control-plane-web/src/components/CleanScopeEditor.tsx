@@ -25,6 +25,7 @@ import {
   type TreeDir,
 } from '@/lib/client-publish-wizard'
 import { cn } from '@jianmanager/ui'
+import { ContextMenuSurface } from '@/components/ui/context-menu-surface'
 
 // ── 颜色映射 ──────────────────────────────────────────────────────────
 
@@ -383,9 +384,10 @@ function ScopeContextMenu({
   t: TFunction
 }) {
   return (
-    <div
+    <ContextMenuSurface
+      x={x}
+      y={y}
       className="fixed z-50 min-w-[140px] rounded-md border bg-popover p-1 shadow-md"
-      style={{ left: x, top: y }}
       data-testid="clean-scope-context-menu"
       onClick={(e) => e.stopPropagation()}
     >
@@ -416,7 +418,7 @@ function ScopeContextMenu({
         <Ban className="size-4" />
         {t('clientVersions.cleanScopeUnmark', '取消标记')}
       </button>
-    </div>
+    </ContextMenuSurface>
   )
 }
 
