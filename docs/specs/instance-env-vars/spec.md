@@ -19,7 +19,7 @@
 ### 下区：运行时实际环境（只读）
 
 - 新增 Worker RPC `GetInstanceEnv(uuid)`：取实例 Java 进程 PID（`GetInstancePID`），gopsutil `proc.Environ()` 读取**进程实际环境**返回 map；实例未运行 / 读取不支持（Windows 等平台受限）→ `available=false` + `note`。
-- CP `GET /instances/:id/env` → `{ env, available, note }`（`instance.read` 权限）。
+- CP `GET /instances/:id/env` → `{ configured, runtime, runtimeAvailable, note }`（`instance.read` 权限）：`configured`=自定义启动 env（可编辑源，解自 `instance.EnvVars`，恒返回）；`runtime`=运行时进程实际环境（尽力而为，未运行/受限时 `runtimeAvailable=false`）。
 - 前端下区消费该端点，只读展示；`available=false` 显提示（未运行 / 平台受限）。
 
 ### 前端

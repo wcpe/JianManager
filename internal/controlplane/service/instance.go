@@ -1595,34 +1595,50 @@ func (s *InstanceService) GetMetrics(id uint) (*MetricsData, error) {
 	return data, nil
 }
 
-// InstanceEnvData 运行时实际环境（FR-344 环境变量下区）。
+// InstanceEnvData 实例环境（FR-344 环境变量页签）：configured=自定义启动 env（可编辑源），
+// runtime=运行时进程实际环境（含继承，只读）；runtimeAvailable=false 表示未运行/平台受限。
 type InstanceEnvData struct {
-	Env       map[string]string `json:"env"`
-	Available bool              `json:"available"`
-	Note      string            `json:"note"`
+	Configured       map[string]string `json:"configured"`
+	Runtime          map[string]string `json:"runtime"`
+	RuntimeAvailable bool              `json:"runtimeAvailable"`
+	Note             string            `json:"note"`
 }
 
-// GetInstanceEnv 通过 gRPC 从 Worker 获取运行中实例进程的实际环境（FR-344）。
+// GetInstanceEnv 返回实例自定义启动环境变量 + 运行时进程实际环境（FR-344）。
+// configured 恒返回（解自 instance.EnvVars）；runtime 尽力而为——节点未连/未运行/平台受限时
+// runtimeAvailable=false + note，不阻塞 configured 返回（上区编辑不受运行态影响）。
 func (s *InstanceService) GetInstanceEnv(id uint) (*InstanceEnvData, error) {
 	instance, err := s.GetByID(id)
 	if err != nil {
 		return nil, err
 	}
+	data := &InstanceEnvData{Configured: map[string]string{}}
+	if strings.TrimSpace(instance.EnvVars) != "" {
+		_ = json.Unmarshal([]byte(instance.EnvVars), &data.Configured)
+	}
 	var node model.Node
 	if err := s.db.First(&node, instance.NodeID).Error; err != nil {
-		return nil, fmt.Errorf("查找节点失败: %w", err)
+		data.Note = "查找节点失败"
+		return data, nil
 	}
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
-		return nil, fmt.Errorf("节点 %s 未连接", node.UUID)
+		data.Note = "节点未连接，无法读取运行时环境"
+		return data, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	resp, err := client.Worker.GetInstanceEnv(ctx, &workerpb.GetInstanceEnvRequest{InstanceUuid: instance.UUID})
 	if err != nil {
-		return nil, fmt.Errorf("获取运行时环境失败: %w", err)
+		data.Note = "读取运行时环境失败: " + err.Error()
+		return data, nil
 	}
-	return &InstanceEnvData{Env: resp.Env, Available: resp.Available, Note: resp.Note}, nil
+	data.Runtime = resp.Env
+	data.RuntimeAvailable = resp.Available
+	if resp.Note != "" {
+		data.Note = resp.Note
+	}
+	return data, nil
 }
 
 // preflightStart 启动前同步预检（FR-314）：查节点连通 → 确保实例已注册 → 调 Worker 预检 RPC。
