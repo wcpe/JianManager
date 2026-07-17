@@ -11,3 +11,7 @@
 ## 导航（别慌通读）
 
 理解系统现状看 [`../ARCHITECTURE.md`](../ARCHITECTURE.md)（永远是当前真貌的综合），ADR 只在追问「当初为什么」时按需翻；**当前架构 = 未被取代的活跃集**，被取代的归档不打扰。当前生效的关键决策速查表见 [`.claude/rules/decision-alignment.md`](../../.claude/rules/decision-alignment.md)。
+
+## 索引（最近新增）
+
+- [ADR-073](073-artifact-external-object-storage.md) 制品库外置对象存储与 302 预签名分发（FR-347，修订 ADR-011 存储节）
