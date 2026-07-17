@@ -50,6 +50,9 @@ const (
 // AssetBackendLocal 本地存储后端标识（默认）。
 const AssetBackendLocal = "local"
 
+// AssetBackendS3 S3 兼容对象存储后端标识（FR-347，见 ADR-073）。
+const AssetBackendS3 = "s3"
+
 // Asset 制品库资产索引（内容寻址 + 类型化元数据）。
 // sha256 既是寻址键也是去重键：同 (type, sha256) 复用同一条记录与同一份物理文件。
 // 参见 ADR-011: 制品库——类型分区的内容寻址与资产模型。
@@ -78,6 +81,9 @@ type Asset struct {
 	StorageState AssetStorageState `gorm:"type:varchar(32);default:hot;not null" json:"storageState"`
 	// StorageBackend 存储后端标识，默认 local。
 	StorageBackend string `gorm:"type:varchar(64);default:local;not null" json:"storageBackend"`
+	// StorageChannelID 外置存储渠道引用（FR-347，见 ADR-073）：0=本地/无渠道（历史行为），
+	// >0 时指向 artifact_storage_channels.id——位置由记录自述，不由全局活跃状态推断。
+	StorageChannelID uint `gorm:"default:0;not null;index" json:"storageChannelId"`
 	// RefCount 引用计数，>0 时禁止删除（被模板/实例占用）。
 	RefCount int `gorm:"default:0;not null" json:"refCount"`
 	// RelPath 物理文件相对数据根的路径（var/artifacts/<type>/<ab>/<sha256><ext>），便携登记。

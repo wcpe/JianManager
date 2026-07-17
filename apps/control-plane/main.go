@@ -211,6 +211,14 @@ func main() {
 		// 降级日志已在 ResolveKeyEncryptor 返回错误时带真实原因输出。
 	}
 	clientChannelSvc.SetKeyEncryptor(keyEncryptor)
+	// 制品存储渠道（FR-347，见 ADR-073）：client-file 制品外置对象存储的落点路由配置。
+	// 凭证复用拉取密钥加密器（同一份主密钥，运维口径一致，ADR-073 决策 4）；
+	// EnsureBuiltin 幂等 seed 内置「本机存储」渠道并兜底活跃（local 恒可用）。
+	artifactStorageSvc := service.NewArtifactStorageChannelService(db, root)
+	artifactStorageSvc.SetKeyEncryptor(keyEncryptor)
+	if err := artifactStorageSvc.EnsureBuiltin(); err != nil {
+		slog.Warn("内置本机存储渠道初始化失败，制品上传按本地兜底", "error", err)
+	}
 	// 客户端分发版本与 manifest 组装（FR-087 / FR-256 简化后：不再签名 manifest，信任靠 HTTPS + 拉取密钥鉴权）。
 	clientVersionSvc := service.NewClientVersionService(db, assetSvc, clientChannelSvc)
 	// updater-core 版本归档（FR-259，见 updater-arch-simplification spec §D）：
@@ -434,6 +442,7 @@ func main() {
 		Schedule:                scheduleSvc,
 		Backup:                  backupSvc,
 		BackupStorage:           backupStorageSvc,
+		ArtifactStorage:         artifactStorageSvc,
 		Template:                templateSvc,
 		Audit:                   auditSvc,
 		Authz:                   authzSvc,

@@ -51,6 +51,9 @@ type Services struct {
 	Schedule         *service.ScheduleService
 	Backup           *service.BackupService
 	BackupStorage    *service.BackupStorageService
+	// ArtifactStorage 制品存储渠道（FR-347，见 ADR-073）：client-file 外置对象存储配置；
+	// nil 时渠道端点关闭（上传恒本地）。
+	ArtifactStorage *service.ArtifactStorageChannelService
 	Template         *service.TemplateService
 	Audit            *service.AuditService
 	Authz            *service.AuthzService
@@ -361,6 +364,12 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.BackupStorage != nil {
 			backupStorageHandler := NewBackupStorageHandler(svcs.BackupStorage)
 			backupStorageHandler.RegisterRoutes(admin)
+		}
+
+		// 制品存储渠道：client-file 制品外置对象存储配置（凭证可逆加密落库），
+		// 限平台管理员（FR-347，见 ADR-073）。
+		if svcs.ArtifactStorage != nil {
+			NewArtifactStorageHandler(svcs.ArtifactStorage).RegisterRoutes(admin)
 		}
 
 		// 平台配置：全量配置可视化 + 白名单运行时覆盖，限平台管理员（FR-063 / ADR-015）。

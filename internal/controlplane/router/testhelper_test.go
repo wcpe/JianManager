@@ -102,6 +102,12 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	assetSvc := service.NewAssetService(db, root)
 	backupStorageSvc := service.NewBackupStorageService(db, pool)
 	backupStorageSvc.SetDataRoot(root)
+	// 制品存储渠道（FR-347）：dev 加密器 + 内置本机存储 seed，令渠道端点可测。
+	artifactStorageSvc := service.NewArtifactStorageChannelService(db, root)
+	if enc, _, err := service.ResolveKeyEncryptor("", true, ""); err == nil {
+		artifactStorageSvc.SetKeyEncryptor(enc)
+	}
+	_ = artifactStorageSvc.EnsureBuiltin()
 	botSvc := service.NewBotService(db, pool)
 	// 运行时资产聚合 + 强制刷新（FR-301）：注入 JDK 同步器，令 refresh 端点可测
 	//（配合 SetWorkerClientForTest 注入 fake Worker）。
@@ -132,6 +138,7 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 		Schedule:         service.NewScheduleService(db),
 		Backup:           service.NewBackupService(db, pool),
 		BackupStorage:    backupStorageSvc,
+		ArtifactStorage:  artifactStorageSvc,
 		Template:         service.NewTemplateService(db),
 		Audit:            service.NewAuditService(db),
 		Authz:            authzSvc,
