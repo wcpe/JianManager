@@ -18,6 +18,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/wcpe/JianManager/internal/controlplane/blobstore"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 )
@@ -75,6 +76,10 @@ type AssetService struct {
 	// httpProvider 运行时出站 client 持有者（FR-185/ADR-043）：非 nil 时每次取当前 client，
 	// 使设置面板改全局代理后立即生效（无需重启），优先于 httpClient。
 	httpProvider func() *http.Client
+	// storageChannels 制品存储渠道服务（FR-347，见 ADR-073）：注入后 client-file 类型入库
+	// 按活跃渠道路由落点（local 行为原文不变；s3 上传对象并在记录上自述位置）。
+	// 不注入 = 纯 local（既有装配/测试零改动）。
+	storageChannels *ArtifactStorageChannelService
 }
 
 // NewAssetService 创建制品库服务。root 提供 var/artifacts 物理根。
@@ -92,6 +97,12 @@ func (s *AssetService) SetHTTPClient(c *http.Client) {
 // 使全局代理改动即时生效。优先于 SetHTTPClient 注入的固定 client。
 func (s *AssetService) SetHTTPClientProvider(p func() *http.Client) {
 	s.httpProvider = p
+}
+
+// SetStorageChannels 注入制品存储渠道服务（FR-347，见 ADR-073）：仅 client-file 类型的
+// Ingest 落点按活跃渠道路由，其余类型恒本地。由 main 装配；不调用则行为与历史完全一致。
+func (s *AssetService) SetStorageChannels(ch *ArtifactStorageChannelService) {
+	s.storageChannels = ch
 }
 
 // outboundClient 返回出站 client：优先运行时持有者（取当前），其次固定注入，再回退 DefaultClient。
@@ -191,36 +202,71 @@ func (s *AssetService) Ingest(r io.Reader, p IngestParams) (*model.Asset, error)
 	}
 
 	relPath := casRelPath(p.Type, sum256, p.Filename)
-	absPath := s.root.Abs(relPath)
-	if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
-		return nil, fmt.Errorf("创建制品目录失败: %w", err)
+
+	// 落点路由（FR-347，见 ADR-073）：仅 client-file 且渠道服务已注入时取活跃渠道；
+	// 活跃=s3 上传对象（键=CAS 相对路径挂渠道 prefix），失败快失败不静默回落（决策 5）；
+	// 活跃=local 与其余类型走下方既有 CAS 落盘原文（行为零变化）。
+	storageBackend := model.AssetBackendLocal
+	storageChannelID := uint(0)
+	storageState := model.AssetStorageHot
+	var s3Store blobstore.Store
+	if p.Type == model.AssetTypeClientFile && s.storageChannels != nil {
+		ch, cerr := s.storageChannels.Active()
+		if cerr != nil {
+			return nil, fmt.Errorf("解析活跃制品存储渠道失败: %w", cerr)
+		}
+		if ch.Type == model.ArtifactStorageS3 {
+			store, serr := s.storageChannels.StoreFor(ch)
+			if serr != nil {
+				return nil, fmt.Errorf("构造制品存储后端失败: %w", serr)
+			}
+			if perr := store.PutFile(context.Background(), relPath, tmpPath, size); perr != nil {
+				return nil, fmt.Errorf("上传制品到对象存储失败: %w", perr)
+			}
+			storageBackend = model.AssetBackendS3
+			storageChannelID = ch.ID
+			storageState = model.AssetStorageExternal
+			s3Store = store
+		}
 	}
-	// 原子落位：把临时文件移动到 CAS 路径。若并发已落位则覆盖为同一内容，无害。
-	if err := os.Rename(tmpPath, absPath); err != nil {
-		return nil, fmt.Errorf("移动制品到 CAS 失败: %w", err)
+
+	absPath := s.root.Abs(relPath)
+	if storageBackend == model.AssetBackendLocal {
+		if err := os.MkdirAll(filepath.Dir(absPath), 0o755); err != nil {
+			return nil, fmt.Errorf("创建制品目录失败: %w", err)
+		}
+		// 原子落位：把临时文件移动到 CAS 路径。若并发已落位则覆盖为同一内容，无害。
+		if err := os.Rename(tmpPath, absPath); err != nil {
+			return nil, fmt.Errorf("移动制品到 CAS 失败: %w", err)
+		}
 	}
 
 	now := time.Now()
 	asset := &model.Asset{
-		Type:           p.Type,
-		Name:           p.Name,
-		Version:        p.Version,
-		Filename:       p.Filename,
-		SHA256:         sum256,
-		MD5:            sumMD5,
-		Size:           size,
-		ContentType:    p.ContentType,
-		SourceURL:      p.SourceURL,
-		Metadata:       p.Metadata,
-		StorageState:   model.AssetStorageHot,
-		StorageBackend: model.AssetBackendLocal,
-		RefCount:       0,
-		RelPath:        relPath,
-		LastUsedAt:     &now,
+		Type:             p.Type,
+		Name:             p.Name,
+		Version:          p.Version,
+		Filename:         p.Filename,
+		SHA256:           sum256,
+		MD5:              sumMD5,
+		Size:             size,
+		ContentType:      p.ContentType,
+		SourceURL:        p.SourceURL,
+		Metadata:         p.Metadata,
+		StorageState:     storageState,
+		StorageBackend:   storageBackend,
+		StorageChannelID: storageChannelID,
+		RefCount:         0,
+		RelPath:          relPath,
+		LastUsedAt:       &now,
 	}
 	if err := s.db.Create(asset).Error; err != nil {
-		// DB 失败时回滚物理文件，避免孤儿 blob。
-		_ = os.Remove(absPath)
+		// DB 失败时回滚物理 blob，避免孤儿：local 删 CAS 文件，s3 尽力删已传对象（对称语义）。
+		if s3Store != nil {
+			_ = s3Store.Delete(context.Background(), relPath)
+		} else {
+			_ = os.Remove(absPath)
+		}
 		return nil, fmt.Errorf("登记资产失败: %w", err)
 	}
 	return asset, nil
@@ -323,7 +369,13 @@ func (s *AssetService) Delete(id uint) error {
 	if err := s.db.Delete(&model.Asset{}, id).Error; err != nil {
 		return fmt.Errorf("删除资产记录失败: %w", err)
 	}
-	if asset.RelPath != "" && s.root != nil {
+	// 物理清理按记录后端路由（FR-347）：s3 → 渠道 store 删对象；local → 删 CAS 文件
+	//（均尽力而为，与既有删除语义一致）。
+	if asset.StorageBackend == model.AssetBackendS3 && s.storageChannels != nil {
+		if store, serr := s.storageChannels.StoreForAsset(asset); serr == nil {
+			_ = store.Delete(context.Background(), asset.RelPath)
+		}
+	} else if asset.RelPath != "" && s.root != nil {
 		_ = os.Remove(s.root.Abs(asset.RelPath))
 	}
 	return nil

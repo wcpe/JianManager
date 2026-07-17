@@ -3,6 +3,7 @@ package service
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -86,6 +87,9 @@ type ClientVersionService struct {
 	// embeddedCore CP 内嵌的默认 updater-core（FR-193，见 ADR-045 改写）。非 nil 时 BuildManifest
 	// 用它自动产出 agent.core（取代运营手填/pin）；nil（无内嵌 jar）时省略 agent.core（不破 FR-087/088）。
 	embeddedCore *EmbeddedCore
+	// storageChannels 制品存储渠道服务（FR-347，见 ADR-073）：注入后 s3 制品的读取
+	//（预览/代理下载/补丁物化）与 302 预签名经渠道 BlobStore；不注入 = 纯 local（既有测试零改动）。
+	storageChannels *ArtifactStorageChannelService
 }
 
 // NewClientVersionService 创建版本服务。
@@ -98,6 +102,45 @@ func NewClientVersionService(db *gorm.DB, assets *AssetService, channel *ClientC
 // 经 setter 注入以保持构造签名稳定（既有装配/测试零改动）。
 func (s *ClientVersionService) SetEmbeddedCore(ec *EmbeddedCore) {
 	s.embeddedCore = ec
+}
+
+// SetStorageChannels 注入制品存储渠道服务（FR-347，见 ADR-073）：s3 制品的读路径与预签名
+// 经渠道 BlobStore 路由。由 main 装配；不调用则所有制品按 local 语义读取（历史行为）。
+func (s *ClientVersionService) SetStorageChannels(ch *ArtifactStorageChannelService) {
+	s.storageChannels = ch
+}
+
+// PresignArtifactURL 为 s3 制品现算预签名下载 URL（302 分发，FR-347，见 ADR-073 决策 1）。
+// TTL 取制品所属渠道配置。渠道服务未注入/渠道缺失/凭证解密失败均报错（调用方回 503）。
+func (s *ClientVersionService) PresignArtifactURL(asset *model.Asset) (string, error) {
+	if s.storageChannels == nil {
+		return "", fmt.Errorf("制品存储渠道服务未装配")
+	}
+	return s.storageChannels.PresignForAsset(asset)
+}
+
+// OpenArtifactContent 按记录自述路由打开制品内容流（FR-347）：local → os.Open CAS 文件
+//（缺失 ErrAssetNotFound，与历史降级口径一致）；s3 → 渠道 BlobStore.Open 拉取对象。
+// 供管理面代理下载/文本预览/补丁物化复用；玩家消费端点的 s3 分发走 302 预签名不经此。
+func (s *ClientVersionService) OpenArtifactContent(asset *model.Asset, absPath string) (io.ReadCloser, error) {
+	if asset.StorageBackend == model.AssetBackendS3 {
+		if s.storageChannels == nil {
+			return nil, fmt.Errorf("制品存储渠道服务未装配，无法读取 s3 制品")
+		}
+		store, err := s.storageChannels.StoreForAsset(asset)
+		if err != nil {
+			return nil, err
+		}
+		return store.Open(context.Background(), asset.RelPath)
+	}
+	if absPath == "" {
+		return nil, ErrAssetNotFound
+	}
+	f, err := os.Open(absPath)
+	if err != nil {
+		return nil, ErrAssetNotFound
+	}
+	return f, nil
 }
 
 // PublishFileParams 上传客户端文件制品参数。
@@ -449,13 +492,19 @@ func (s *ClientVersionService) manifestFileContentPath(f ManifestFile) (string, 
 		if f.SHA256 != "" && !strings.EqualFold(asset.SHA256, f.SHA256) {
 			return "", nil, false, nil
 		}
-		return absPath, func() {}, true, nil
+		// 本地 codec=none 快路径：直用 CAS 物理路径（原样保留）；
+		// s3 制品本地无文件，落到下方物化管道（BlobStore.Open → 临时文件，FR-347）。
+		if asset.StorageBackend != model.AssetBackendS3 {
+			return absPath, func() {}, true, nil
+		}
 	}
-	return s.materializeManifestFileContent(absPath, f)
+	return s.materializeManifestFileContent(asset, absPath, f)
 }
 
-func (s *ClientVersionService) materializeManifestFileContent(absPath string, f ManifestFile) (string, func(), bool, error) {
-	src, err := os.Open(absPath)
+func (s *ClientVersionService) materializeManifestFileContent(asset *model.Asset, absPath string, f ManifestFile) (string, func(), bool, error) {
+	// 源按记录后端路由（FR-347）：local os.Open；s3 渠道 BlobStore.Open。
+	// 打开失败按「制品不可用于 patch」降级（返回 ok=false 不报错），与历史口径一致。
+	src, err := s.OpenArtifactContent(asset, absPath)
 	if err != nil {
 		return "", nil, false, nil
 	}
@@ -892,9 +941,15 @@ func (s *ClientVersionService) ReadArtifactText(sha256 string) (*ArtifactTextPre
 		return out, nil
 	}
 
-	data, rerr := readFileCapped(absPath, ArtifactTextPreviewMaxBytes)
+	// 读取按记录后端路由（FR-347）：local 保持 os.Open 降级口径，s3 经渠道 BlobStore 限量读。
+	rc, oerr := s.OpenArtifactContent(asset, absPath)
+	if oerr != nil {
+		return nil, oerr
+	}
+	defer rc.Close()
+	data, rerr := io.ReadAll(io.LimitReader(rc, ArtifactTextPreviewMaxBytes))
 	if rerr != nil {
-		return nil, rerr
+		return nil, fmt.Errorf("读取制品失败: %w", rerr)
 	}
 	if bytesContainNUL(data) {
 		out.Kind = "binary"
@@ -927,24 +982,6 @@ func bytesContainNUL(b []byte) bool {
 		}
 	}
 	return false
-}
-
-// readFileCapped 读取文件至多 limit 字节（超出部分丢弃；调用方已先据 size 判定 too-large）。
-// 用 io.LimitReader 防御性兜底，避免极端情况下读入超大文件。
-func readFileCapped(absPath string, limit int64) ([]byte, error) {
-	if absPath == "" {
-		return nil, ErrAssetNotFound
-	}
-	f, err := os.Open(absPath)
-	if err != nil {
-		return nil, ErrAssetNotFound
-	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, limit))
-	if err != nil {
-		return nil, fmt.Errorf("读取制品失败: %w", err)
-	}
-	return data, nil
 }
 
 // assembleManifest 把频道 + 版本快照还原为 SignedManifest（未签名）。

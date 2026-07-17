@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -249,6 +250,27 @@ func (h *ClientVersionHandler) DownloadArtifact(c *gin.Context) {
 		h.respondErr(c, err)
 		return
 	}
+	contentType := asset.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	// s3 制品：CP 经 BlobStore 代理直流，不走 302（FR-347，见 ADR-073 决策 6）——浏览器
+	// axios blob fetch 跨域跟随预签名 URL 会撞对象存储 CORS；管理面下载是低频运维动作，
+	// CP 中继代价可接受、前端零改动、对象存储无需配 CORS。
+	if asset.StorageBackend == model.AssetBackendS3 {
+		rc, oerr := h.svc.OpenArtifactContent(asset, absPath)
+		if oerr != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "ARTIFACT_NOT_FOUND", "message": "制品文件缺失"})
+			return
+		}
+		defer rc.Close()
+		c.Header("Content-Type", contentType)
+		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", asset.SHA256))
+		c.Header("Content-Length", strconv.FormatInt(asset.Size, 10))
+		c.Status(http.StatusOK)
+		_, _ = io.Copy(c.Writer, rc)
+		return
+	}
 	f, oerr := os.Open(absPath)
 	if oerr != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "ARTIFACT_NOT_FOUND", "message": "制品文件缺失"})
@@ -259,10 +281,6 @@ func (h *ClientVersionHandler) DownloadArtifact(c *gin.Context) {
 	if serr != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "读取制品失败"})
 		return
-	}
-	contentType := asset.ContentType
-	if contentType == "" {
-		contentType = "application/octet-stream"
 	}
 	c.Header("Content-Type", contentType)
 	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", asset.SHA256))
@@ -401,6 +419,29 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 			return
 		}
 		defer lease.Release()
+	}
+
+	// s3 制品：鉴权/防护/限流/带宽检查全部照旧先行后，302 到预签名短时效 URL
+	//（FR-347，见 ADR-073 决策 1）。CP 只当授权与调度面，字节流量走对象存储出口；
+	// updater 已 setInstanceFollowRedirects(true) 自动跟随（跨协议限制见 spec §3.8 部署约束）。
+	if asset.StorageBackend == model.AssetBackendS3 {
+		if h.security != nil {
+			if err := h.security.CheckBandwidth(c.ClientIP(), key.ID, channelID, asset.Size); err != nil {
+				errCode = h.respondSecurityErr(c, err)
+				return
+			}
+		}
+		loc, perr := h.svc.PresignArtifactURL(asset)
+		if perr != nil {
+			// 渠道缺失/凭证解密失败：对 updater 给可重试语义（快失败，运维恢复渠道即愈）。
+			errCode = "ARTIFACT_STORAGE_UNAVAILABLE"
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "ARTIFACT_STORAGE_UNAVAILABLE", "message": "制品外置存储暂不可用"})
+			return
+		}
+		// 短时效预签名 URL 禁缓存（缓存会把带签名的 URL 固化成过期死链）。
+		c.Header("Cache-Control", "no-store")
+		c.Redirect(http.StatusFound, loc)
+		return
 	}
 
 	f, oerr := os.Open(absPath)

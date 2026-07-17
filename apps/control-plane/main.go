@@ -221,6 +221,10 @@ func main() {
 	}
 	// 客户端分发版本与 manifest 组装（FR-087 / FR-256 简化后：不再签名 manifest，信任靠 HTTPS + 拉取密钥鉴权）。
 	clientVersionSvc := service.NewClientVersionService(db, assetSvc, clientChannelSvc)
+	// 制品外置存储接线（FR-347，见 ADR-073）：写路径 client-file 按活跃渠道路由落点；
+	// 读路径 s3 制品经渠道 BlobStore（玩家端点 302 预签名 / 管理面代理直流 / 预览 / 补丁物化）。
+	assetSvc.SetStorageChannels(artifactStorageSvc)
+	clientVersionSvc.SetStorageChannels(artifactStorageSvc)
 	// updater-core 版本归档（FR-259，见 updater-arch-simplification spec §D）：
 	// 内嵌 core jar 入库为 client-updater-core 类型（内容寻址去重——不同版本 sha256 不同即天然归档多版本不覆盖）。
 	// 频道选定版本经 coreEndpoint 端点返回给楔子（gradle-wrapper 模式，FR-258）；运营可一键切换回滚。
