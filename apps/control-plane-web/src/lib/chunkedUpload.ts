@@ -39,6 +39,11 @@ export interface UploadFileChunkedOptions {
    * 传入仅为建议，实际以 init 返回的 chunkSize 为准。
    */
   chunkSize?: number
+  /**
+   * 已知的文件原始内容 sha256（FR-346：预查阶段已算出时透传）。
+   * complete 请求携带之，服务端 Ingest 强校验——传输损坏在入库前即被拒。
+   */
+  expectedSha256?: string
 }
 
 /**
@@ -92,7 +97,7 @@ export async function uploadFileChunked(
   file: File,
   opts: UploadFileChunkedOptions = {},
 ): Promise<ClientFileResult> {
-  const { onProgress, signal, chunkSize: wantChunkSize } = opts
+  const { onProgress, signal, chunkSize: wantChunkSize, expectedSha256 } = opts
 
   if (signal?.aborted) throw abortError()
 
@@ -123,9 +128,10 @@ export async function uploadFileChunked(
     if (signal?.aborted) throw abortError()
 
     // 3) complete：服务端校验齐全 + 拼装喂 CAS，返回内容寻址元数据。
+    // 已知原始内容 sha256 时顺带强校验（FR-346；服务端既有 expectedSha256 能力）。
     const { data: result } = await api.post<ClientFileResult>(
       `/client-channels/${channelId}/uploads/${init.uploadId}/complete`,
-      { codec: 'none' },
+      expectedSha256 ? { codec: 'none', expectedSha256 } : { codec: 'none' },
       { signal },
     )
     return result

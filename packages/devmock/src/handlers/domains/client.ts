@@ -337,6 +337,45 @@ const uploads = new Map<string, MockUpload>()
 /** uploadId 自增序列（mock 稳定可预测）。 */
 let uploadSeq = 0
 
+/**
+ * 已知制品登记表（FR-346 秒传预查镜像）：sha256 → {md5,size}。
+ * 聚合上传 / 分块 complete（带 expectedSha256）成功后登记；预查按 sha+size 全等命中。
+ * 与真后端 CAS 语义一致：同内容重复发布 → 预查命中 → 零字节上传。
+ */
+const knownArtifacts = new Map<string, { md5: string; size: number }>()
+
+/** 由 sha256 派生稳定伪 md5（mock 不真算内容；取前 32 hex 保证确定且互异）。 */
+const pseudoMd5 = (sha256: string) => sha256.slice(0, 32).padEnd(32, '0')
+
+/** 校验 64 位 hex sha256（大小写不敏感），归一小写；非法返回 null。 */
+function normalizeSha(raw: unknown): string | null {
+  const s = String(raw ?? '').trim().toLowerCase()
+  return /^[0-9a-f]{64}$/.test(s) ? s : null
+}
+
+/**
+ * 从 multipart 原始文本中提取指定表单字段的正文（首个命中 part）。
+ * 仅供 mock 消费文本型字段（meta JSON）；不处理编码/二进制（mock 不消费文件字节）。
+ */
+function extractMultipartField(raw: string, field: string): string | null {
+  const marker = `name="${field}"`
+  const at = raw.indexOf(marker)
+  if (at < 0) return null
+  const bodyStart = raw.indexOf('\r\n\r\n', at)
+  if (bodyStart < 0) return null
+  const bodyEnd = raw.indexOf('\r\n--', bodyStart + 4)
+  if (bodyEnd < 0) return null
+  return raw.slice(bodyStart + 4, bodyEnd)
+}
+
+/** 统计 multipart 原始文本中指定表单字段的 part 数（files 计数用；part 头为 ASCII 可靠）。 */
+function countMultipartParts(raw: string, field: string): number {
+  const marker = `name="${field}"`
+  let n = 0
+  for (let i = raw.indexOf(marker); i >= 0; i = raw.indexOf(marker, i + marker.length)) n += 1
+  return n
+}
+
 /** mock 默认分片 8 MiB，夹取到 [1MiB,64MiB]，与后端 clampChunkSize 一致。 */
 function clampMockChunk(chunkSize?: number): number {
   const def = 8 * 1024 * 1024
@@ -810,7 +849,7 @@ export const handlers = [
   }),
 
   // complete：校验齐全 → 回内容寻址元数据（与单次上传同结构）→ 清会话。
-  domainRoute('post', '/client-channels/:channelId/uploads/:uploadId/complete', (info) => {
+  domainRoute('post', '/client-channels/:channelId/uploads/:uploadId/complete', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     const uploadId = String(info.params.uploadId)
@@ -820,11 +859,72 @@ export const handlers = [
       return HttpResponse.json({ error: 'UPLOAD_INCOMPLETE', message: '分片不齐全' }, { status: 422 })
     }
     uploads.delete(uploadId)
-    // mock 用会话大小派生一个稳定伪 sha（真后端为内容寻址）；size 回声明总字节，供发布页草稿。
+    // FR-346：complete 可带 expectedSha256（分块路径已算 hash 时强校验）——mock 回显之并登记
+    // 进 knownArtifacts（后续预查可命中）；未带时沿用稳定伪 sha（真后端为内容寻址）。
+    const body = (await info.request.json().catch(() => ({}))) as { expectedSha256?: string }
+    const sha = normalizeSha(body.expectedSha256) ?? 'e'.repeat(64)
+    knownArtifacts.set(sha, { md5: pseudoMd5(sha), size: sess.totalSize })
     return HttpResponse.json(
-      { sha256: 'e'.repeat(64), md5: 'f'.repeat(32), size: sess.totalSize, codec: 'none' },
+      { sha256: sha, md5: pseudoMd5(sha), size: sess.totalSize, codec: 'none' },
       { status: 201 },
     )
+  }),
+
+  // ── 上传增效（FR-346）：秒传预查 + 小文件聚合 ────────────────────────────
+
+  // 秒传预查：≤500 项，命中 knownArtifacts（sha+size 全等）者回与真上传同构结果。
+  domainRoute('post', '/client-channels/:channelId/files/precheck', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json()) as { files?: { sha256?: string; size?: number }[] }
+    const files = body.files ?? []
+    if (files.length === 0) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: 'files 为空' }, { status: 400 })
+    }
+    if (files.length > 500) {
+      return HttpResponse.json({ error: 'BATCH_LIMIT_EXCEEDED', message: '单次预查最多 500 项' }, { status: 400 })
+    }
+    const results = files.map((f) => {
+      const sha = normalizeSha(f.sha256)
+      if (!sha) return { sha256: String(f.sha256 ?? ''), hit: false }
+      const known = knownArtifacts.get(sha)
+      if (known && known.size === Number(f.size)) {
+        return { sha256: sha, hit: true, result: { sha256: sha, md5: known.md5, size: known.size, codec: 'none' } }
+      }
+      return { sha256: sha, hit: false }
+    })
+    return HttpResponse.json({ results })
+  }),
+
+  // 小文件聚合上传：meta（JSON 数组）+ 同序 files part；结果回声明值并登记（后续预查命中）。
+  // 注意：不走 request.formData()——jsdom 测试环境下 undici 的 multipart 解析对 jsdom
+  // File 断言失败（与 setup.ts 的 Blob.stream polyfill 同类互操作坑）。mock 只消费 meta
+  // 声明与 files part 计数，从原始文本按 multipart 语法提取即可（文件字节不参与结果）。
+  domainRoute('post', '/client-channels/:channelId/files/batch', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const raw = await info.request.text()
+    const metaJson = extractMultipartField(raw, 'meta')
+    let metas: { filename?: string; size?: number; sha256?: string }[]
+    try {
+      metas = JSON.parse(metaJson ?? '') as typeof metas
+    } catch {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: 'meta JSON 非法' }, { status: 400 })
+    }
+    const fileParts = countMultipartParts(raw, 'files')
+    if (!Array.isArray(metas) || metas.length === 0 || fileParts !== metas.length) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: 'files part 数与 meta 不符' }, { status: 400 })
+    }
+    if (metas.length > 200) {
+      return HttpResponse.json({ error: 'BATCH_LIMIT_EXCEEDED', message: '单批最多 200 个文件' }, { status: 400 })
+    }
+    const results = metas.map((m) => {
+      const sha = normalizeSha(m.sha256) ?? 'e'.repeat(64)
+      const size = Number(m.size ?? 0)
+      knownArtifacts.set(sha, { md5: pseudoMd5(sha), size })
+      return { sha256: sha, md5: pseudoMd5(sha), size, codec: 'none' }
+    })
+    return HttpResponse.json({ results }, { status: 201 })
   }),
 
   // abort：弃单（幂等 204）。

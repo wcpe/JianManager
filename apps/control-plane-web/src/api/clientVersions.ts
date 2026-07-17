@@ -105,6 +105,82 @@ export function usePublishClientFile() {
   })
 }
 
+// ── 上传增效：秒传预查 + 小文件聚合（FR-346，增强 FR-250/251）───────────────
+
+/** 秒传预查单项：前端算好的原始内容 sha256 + 文件字节数（spec §2 hash 对齐语义）。 */
+export interface PrecheckFileEntry {
+  /** 文件原始内容 sha256（64 hex）。 */
+  sha256: string
+  /** 文件字节数（命中要求与制品 size 精确相等）。 */
+  size: number
+}
+
+/** 秒传预查单项结果（与请求顺序对齐）。 */
+export interface PrecheckFileResult {
+  sha256: string
+  /** 是否命中制品库（命中者免字节上传）。 */
+  hit: boolean
+  /** 命中时与真上传同构的制品元数据；未命中省略。 */
+  result?: ClientFileResult
+}
+
+/**
+ * 批量秒传预查：一个请求查 ≤500 个 hash，命中者直接引用既有制品（FR-346）。
+ * 预查是纯优化：调用方对请求失败应降级为「全部未命中」继续正常上传，不阻断发布。
+ */
+export async function precheckClientFiles(
+  channelId: string,
+  files: PrecheckFileEntry[],
+  opts: { signal?: AbortSignal } = {},
+): Promise<PrecheckFileResult[]> {
+  const { data } = await api.post<{ results: PrecheckFileResult[] }>(
+    `/client-channels/${channelId}/files/precheck`,
+    { files },
+    { signal: opts.signal },
+  )
+  return data.results
+}
+
+/** 聚合上传单文件条目：声明元数据 + 浏览器内容源。 */
+export interface BatchUploadEntry {
+  filename: string
+  size: number
+  /** 原始内容 sha256（64 hex，服务端按此强校验）。 */
+  sha256: string
+  /** 文件内容（File/Blob，随 multipart files part 发出）。 */
+  file: Blob
+}
+
+/**
+ * 小文件聚合上传（FR-346）：一个 multipart 请求携带 ≤200 个 ≤8MiB 小文件（总 ≤32MiB），
+ * 返回与逐文件上传逐字段一致的结果数组（与 entries 顺序对齐）。
+ * 协议：meta 首 part（JSON 声明数组）+ 同序 files part；服务端 fail-fast。
+ * 显式 120s 超时：32MiB 批体量下默认 10s 不够。
+ */
+export async function uploadClientFilesBatch(
+  channelId: string,
+  entries: BatchUploadEntry[],
+  opts: { signal?: AbortSignal; onUploadProgress?: (loadedBytes: number) => void } = {},
+): Promise<ClientFileResult[]> {
+  const form = new FormData()
+  form.append(
+    'meta',
+    JSON.stringify(entries.map(({ filename, size, sha256 }) => ({ filename, size, sha256 }))),
+  )
+  for (const e of entries) form.append('files', e.file, e.filename)
+  const { data } = await api.post<{ results: ClientFileResult[] }>(
+    `/client-channels/${channelId}/files/batch`,
+    form,
+    {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120_000,
+      signal: opts.signal,
+      onUploadProgress: (evt) => opts.onUploadProgress?.(evt.loaded ?? 0),
+    },
+  )
+  return data.results
+}
+
 /** 发布版本（提交文件清单 + 托管目录 + 自更新段）；服务端单调递增版本号、切 latest 指针。 */
 export function usePublishClientVersion() {
   const qc = useQueryClient()

@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom/vitest'
+import { webcrypto } from 'node:crypto'
 import { afterAll, afterEach, beforeAll } from 'vitest'
 import { cleanup } from '@testing-library/react'
 import { server } from '@jianmanager/devmock/server'
@@ -14,6 +15,18 @@ import type { TerminalSessionManager } from '@/lib/terminal-session-manager'
  * blob-like 调 `object.stream()`——jsdom 的 Blob 无此方法，直接抛 Unhandled Rejection
  * 使 vitest 全绿仍以错误退出（本地 Node 24 的 undici 路径不受影响，故仅 CI 复现）。
  */
+/**
+ * jsdom Crypto 缺 `subtle` 的最小 polyfill（FR-346）：发布页上传前用
+ * `crypto.subtle.digest('SHA-256', …)` 算秒传预查 hash，jsdom 的 window.crypto 只有
+ * getRandomValues——桥接 Node 内建 WebCrypto 的 subtle（与浏览器同规范实现）。
+ */
+if (globalThis.crypto && !globalThis.crypto.subtle) {
+  Object.defineProperty(globalThis.crypto, 'subtle', {
+    configurable: true,
+    value: webcrypto.subtle,
+  })
+}
+
 if (typeof Blob !== 'undefined' && typeof Blob.prototype.stream !== 'function') {
   Object.defineProperty(Blob.prototype, 'stream', {
     configurable: true,

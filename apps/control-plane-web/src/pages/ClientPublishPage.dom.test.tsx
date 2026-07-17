@@ -13,12 +13,14 @@ import ClientPublishPage from './ClientPublishPage'
  * 用 MSW 假后端的 upload/version 端点 + request:start 事件计数上传请求，验证时机。
  */
 
-/** 统计命中「分块上传」端点（init/chunk/complete）的请求数——发布前应恒为 0。 */
+/** 统计命中「上传」端点的请求数——发布前应恒为 0。
+ * 覆盖 FR-251 分块三段（.../uploads*）与 FR-346 增效端点（files/precheck、files/batch）：
+ * 行为契约不变（选文件零请求、点发布才上传），仅线上协议随 FR-346 演进。 */
 function countUploadRequests(): { get: () => number; stop: () => void } {
   let n = 0
   const listener = ({ request }: { request: Request }) => {
-    // 分块上传三段路径均含 /uploads（init: .../uploads；chunk: .../uploads/:id/chunks/:i；complete: .../complete）。
-    if (/\/client-channels\/[^/]+\/uploads/.test(new URL(request.url).pathname)) n += 1
+    const p = new URL(request.url).pathname
+    if (/\/client-channels\/[^/]+\/(uploads|files\/precheck|files\/batch)/.test(p)) n += 1
   }
   server.events.on('request:start', listener)
   return {
@@ -243,9 +245,8 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
       await user.click(await screen.findByRole('button', { name: /发布新版本/ }))
 
       await waitFor(() => expect(versionPub.get()).toBe(1))
-      // 上传发生（keep.jar），但删除的 drop.jar 不该额外触发——用 init 次数=1 佐证（每文件一次 init）。
-      const initCount = uploads.get() // init+chunk+complete 混计；keep.jar 走完整一轮
-      expect(initCount).toBeGreaterThan(0)
+      // 上传发生（keep.jar 经预查+聚合），删除的 drop.jar 不额外触发（已不在草稿，自然不上传）。
+      expect(uploads.get()).toBeGreaterThan(0)
     } finally {
       versionPub.stop()
     }
@@ -281,8 +282,9 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
     loginMockUser()
     const user = userEvent.setup()
     const versionPub = countVersionPublishRequests()
-    // 注入上传 init 失败：uploadFileChunked 首步即 500，发布中断。
-    mockInject('post', '/client-channels/:channelId/uploads', { kind: 'status', status: 500 })
+    // 注入聚合上传失败（FR-346 小文件路径的字节上传步）：预查 miss 后 batch 500，发布中断。
+    // 预查失败会被降级吞掉（纯优化），batch 才是必经的字节上传步——注入点选它。
+    mockInject('post', '/client-channels/:channelId/files/batch', { kind: 'status', status: 500 })
     try {
       const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
       await screen.findByTestId('publish-dropzone')

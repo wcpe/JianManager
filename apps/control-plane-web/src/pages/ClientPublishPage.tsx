@@ -16,7 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import { usePublishClientVersion, type ManifestFile } from '@/api/clientVersions'
-import { uploadFileChunked } from '@/lib/chunkedUpload'
+import { uploadFilesEfficient } from '@/lib/efficientUpload'
 import {
   PUBLISH_STEPS,
   canAdvance,
@@ -71,18 +71,25 @@ function nextDraftId(): string {
   return `d${draftSeq}`
 }
 
-/** 发布批量上传进度（FR-250/251）：字节级累计 + 当前文件与文件序号，供百分比进度条。 */
+/** 发布批量上传进度（FR-250/251，FR-346 增效后）：字节级累计 + 阶段 + 秒传计数。 */
 interface UploadProgress {
-  /** 已上传字节（含已完成文件 + 当前文件已传部分）。 */
+  /** 阶段：hashing=本地校验计算（零网络）；uploading=字节上传（含秒传落定）。 */
+  phase: 'hashing' | 'uploading'
+  /** 已上传字节（含已完成任务 + 在途部分，单调不倒退）。 */
   uploadedBytes: number
   /** 本批次待上传文件总字节。 */
   totalBytes: number
-  /** 当前正在上传的文件名（展示用）。 */
+  /** 当前活跃任务的展示名（并发下取最近启动者；聚合批为 i18n 文案）。 */
   currentName: string
-  /** 当前文件序号（1 基）。 */
-  currentIndex: number
+  /** 已落定文件数（含秒传命中）。 */
+  completedFiles: number
   /** 本批次待上传文件总数。 */
   fileCount: number
+  /** hashing 阶段：已校验 / 需校验文件数。 */
+  hashedFiles: number
+  totalFilesToHash: number
+  /** 秒传命中文件数（内容已在制品库，免字节上传）。 */
+  reusedFiles: number
 }
 
 /**
@@ -391,9 +398,10 @@ export default function ClientPublishPage() {
   }
 
   /**
-   * 发布：点「发布」才批量上传（FR-250）。建 AbortController → 本地去重（同 name+size 只传一次）→
-   * 逐个 `uploadFileChunked` 得 sha256/md5/size（归并总体进度）→ 按草稿顺序回填结果组
-   * `ManifestFile[]` → 提交版本。任一文件失败：保留全部草稿、停批、可重试（弹错、不清草稿）。
+   * 发布：点「发布」才批量上传（FR-250，FR-346 增效）。建 AbortController → 本地去重
+   * （同 name+size 只传一次）→ `uploadFilesEfficient` 编排（算 hash → 秒传预查命中免传 →
+   * miss 小文件聚合、大文件分块，并发 4，进度单调）→ 按草稿顺序回填结果组 `ManifestFile[]`
+   * → 提交版本。任一文件失败：保留全部草稿、停批、可重试（弹错、不清草稿）。
    */
   const doPublish = async () => {    if (!publishable || uploading) return
     const abort = new AbortController()
@@ -403,33 +411,29 @@ export default function ClientPublishPage() {
     try {
       // 本地去重：同 name+size 仅上传一次；keys[i] 记第 i 个草稿的去重键，用于回填复用结果。
       const plan = dedupUnits(drafts, (d) => ({ name: d.filename, size: d.size }))
-      const totalBytes = plan.unique.reduce((s, d) => s + d.size, 0)
       // 键 → 上传结果（sha256/md5/size/codec），供发布时为每个草稿（含被去重者）回填。
-      const resultByKey = new Map<string, { sha256: string; md5: string; size: number; codec: string }>()
-      let baseBytes = 0 // 已完成文件累计字节。
-      for (let i = 0; i < plan.unique.length; i++) {
-        const d = plan.unique[i]
-        setProgress({
-          uploadedBytes: baseBytes,
-          totalBytes,
-          currentName: d.path,
-          currentIndex: i + 1,
-          fileCount: plan.unique.length,
-        })
-        const res = await uploadFileChunked(channelId!, d.file, {
+      const resultByKey = await uploadFilesEfficient(
+        channelId!,
+        plan.unique.map((d) => ({ key: localDedupKey(d.filename, d.size), file: d.file, label: d.path })),
+        {
           signal: abort.signal,
-          onProgress: (fileUploaded) =>
+          onProgress: (p) =>
             setProgress({
-              uploadedBytes: batchProgressBytes(baseBytes, fileUploaded, totalBytes),
-              totalBytes,
-              currentName: d.path,
-              currentIndex: i + 1,
-              fileCount: plan.unique.length,
+              phase: p.phase,
+              uploadedBytes: batchProgressBytes(0, p.uploadedBytes, p.totalBytes),
+              totalBytes: p.totalBytes,
+              currentName:
+                p.current?.kind === 'batch'
+                  ? t('clientVersions.batchGroupLabel', '聚合小文件 ×{{n}}', { n: p.current.count })
+                  : p.current?.name ?? '',
+              completedFiles: p.completedFiles,
+              fileCount: p.totalFiles,
+              hashedFiles: p.hashedFiles,
+              totalFilesToHash: p.totalFilesToHash,
+              reusedFiles: p.reusedFiles,
             }),
-        })
-        resultByKey.set(localDedupKey(d.filename, d.size), res)
-        baseBytes += d.size
-      }
+        },
+      )
 
       // 按草稿顺序回填上传结果（codec=none：file 原始内容元数据 = artifact 元数据）。
       const files: ManifestFile[] = drafts.map((d) => {
@@ -728,10 +732,18 @@ export default function ClientPublishPage() {
   )
 }
 
-/** 批量上传进度条（FR-250/251）：字节级百分比 + 当前文件/序号 + 取消按钮。 */
+/** 批量上传进度条（FR-250/251，FR-346 增效）：hashing/uploading 双阶段 + 秒传计数 + 取消。 */
 function UploadProgressBar({ progress, onCancel }: { progress: UploadProgress; onCancel: () => void }) {
   const { t } = useTranslation()
-  const pct = progress.totalBytes > 0 ? Math.round((progress.uploadedBytes / progress.totalBytes) * 100) : 0
+  const hashing = progress.phase === 'hashing'
+  // hashing 阶段按文件数、uploading 阶段按字节，分母为 0 时恒 0（不产生 NaN）。
+  const pct = hashing
+    ? progress.totalFilesToHash > 0
+      ? Math.round((progress.hashedFiles / progress.totalFilesToHash) * 100)
+      : 0
+    : progress.totalBytes > 0
+      ? Math.round((progress.uploadedBytes / progress.totalBytes) * 100)
+      : 0
   return (
     <div className="space-y-1.5 rounded-lg border bg-background/60 p-3">
       <div className="flex items-center justify-between gap-2 text-xs">
@@ -742,13 +754,26 @@ function UploadProgressBar({ progress, onCancel }: { progress: UploadProgress; o
           </span>
         </span>
         <span className="flex shrink-0 items-center gap-2">
+          {progress.reusedFiles > 0 && (
+            <span
+              className="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-emerald-600 dark:text-emerald-500"
+              data-testid="upload-reused-chip"
+            >
+              {t('clientVersions.reusedInstant', '秒传 {{n}} 个', { n: progress.reusedFiles })}
+            </span>
+          )}
           <span className="tabular-nums text-muted-foreground">
-            {t('clientVersions.uploadProgressBytes', '{{current}}/{{count}} · {{done}} / {{total}}', {
-              current: progress.currentIndex,
-              count: progress.fileCount,
-              done: formatBytes(progress.uploadedBytes),
-              total: formatBytes(progress.totalBytes),
-            })}
+            {hashing
+              ? t('clientVersions.hashingProgress', '校验文件 {{done}}/{{total}}', {
+                  done: progress.hashedFiles,
+                  total: progress.totalFilesToHash,
+                })
+              : t('clientVersions.uploadProgressBytes', '{{current}}/{{count}} · {{done}} / {{total}}', {
+                  current: Math.min(progress.completedFiles + 1, progress.fileCount),
+                  count: progress.fileCount,
+                  done: formatBytes(progress.uploadedBytes),
+                  total: formatBytes(progress.totalBytes),
+                })}
           </span>
           <span className="tabular-nums font-medium text-foreground">{pct}%</span>
           <button
