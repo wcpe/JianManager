@@ -17,6 +17,7 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  FolderTree,
   GripVertical,
   Lock,
   Pencil,
@@ -26,12 +27,15 @@ import {
   buildFileTreeWithDirs,
   collectSubtreeFiles,
   detectConflicts,
+  expandDirChains,
   isSelfOrDescendant,
+  joinDirPath,
   keepBothPath,
   moveDirToDir,
   moveFileToDir,
   nextUniqueName,
   normalizeManifestPath,
+  parseDirPathsInput,
   renamePathSegment,
   type ConflictResolution,
   type LocalUnit,
@@ -57,6 +61,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@jianmanager/ui/components/select'
+import {
+  scrollableDialogContentClass,
+  ScrollableDialogBody,
+} from '@jianmanager/ui/components/scrollable-dialog'
 import DangerConfirm from '@/components/DangerConfirm'
 import { ContextMenuSurface } from '@/components/ui/context-menu-surface'
 
@@ -193,6 +201,8 @@ export default function FileExplorer({
   const [dropActive, setDropActive] = useState(false)
   // 上传中禁用。
   const [resolving, setResolving] = useState(false)
+  // 「新建多级目录」模态基准目录（null=关闭；''=根目录，FR-350）。
+  const [multiDirBase, setMultiDirBase] = useState<string | null>(null)
 
   // 有效空目录（排除已被文件占据的）——派生值而非 effect 同步。
   const effectiveEmptyDirs = useMemo(() => {
@@ -287,12 +297,19 @@ export default function FileExplorer({
       const target = renamingTarget
       setRenamingTarget(null)
       if (!target) return
-      const name = newName.trim()
-      if (name === '' || name.includes('/')) return
       if (target.kind === 'file') {
+        const name = newName.trim()
+        if (name === '' || name.includes('/')) return
         onPathChange?.(target.index, renamePathSegment(target.path, name))
       } else {
-        // 重命名目录：改子文件 path + 改 emptyDirs
+        // 重命名目录：改子文件 path + 改 emptyDirs。
+        // FR-350：目录名支持 `/` 分隔多级——输入 a/b/c 时在原位置一次展开整条层级
+        // （新建文件夹占位随即改名即得多级目录）；`..` 越界与空名拒绝，`.` 段与空段折叠。
+        const segs = normalizeManifestPath(newName)
+          .split('/')
+          .filter((s) => s !== '' && s !== '.')
+        if (segs.length === 0 || segs.some((s) => s === '..')) return
+        const name = segs.join('/')
         const oldPath = target.dirPath
         const parent = oldPath.includes('/') ? oldPath.slice(0, oldPath.lastIndexOf('/')) : ''
         const newPath = parent === '' ? name : `${parent}/${name}`
@@ -339,6 +356,28 @@ export default function FileExplorer({
       setTimeout(() => setRenamingTarget({ kind: 'dir', dirPath: newPath }), 0)
     },
     [readonly, tree, t],
+  )
+
+  /**
+   * 批量创建多级目录（FR-350 模态确认）：相对路径拼 baseDir 前缀后入 emptyDirs。
+   * 已存在的层级由 buildFileTreeWithDirs 静默复用（先查后建），不报错不重复；
+   * 展开整条祖先链保证新层级可见。
+   */
+  const createMultiDirs = useCallback(
+    (baseDir: string, relDirs: string[]) => {
+      if (readonly || relDirs.length === 0) return
+      const prefixed = relDirs.map((d) => joinDirPath(baseDir, d))
+      setEmptyDirs((prev) => {
+        const seen = new Set(prev)
+        return [...prev, ...prefixed.filter((d) => !seen.has(d) && (seen.add(d), true))]
+      })
+      setCollapsedPaths((prev) => {
+        const next = new Set(prev)
+        for (const p of expandDirChains(prefixed)) next.delete(p)
+        return next
+      })
+    },
+    [readonly],
   )
 
   // ── 删除 ──────────────────────────────────────────────────────────
@@ -566,6 +605,7 @@ export default function FileExplorer({
         {!readonly && (
           <Toolbar
             onCreateFolder={() => createFolder(currentSelectedDir(selectedIndices, tree))}
+            onCreateMultiDir={() => setMultiDirBase(currentSelectedDir(selectedIndices, tree))}
             onDelete={() => {
               if (selectedIndices.size > 0) {
                 setDeleteConfirm({ indices: Array.from(selectedIndices), dirPaths: [] })
@@ -641,6 +681,24 @@ export default function FileExplorer({
             setContextMenu(null)
             createFolder(tg.kind === 'dir' ? tg.dirPath : '')
           }}
+          onNewMultiDir={() => {
+            const tg = contextMenu.target
+            setContextMenu(null)
+            setMultiDirBase(tg.kind === 'dir' ? tg.dirPath : '')
+          }}
+          t={t}
+        />
+      )}
+
+      {/* 新建多级目录模态（FR-350） */}
+      {multiDirBase !== null && (
+        <MultiDirDialog
+          baseDir={multiDirBase}
+          onClose={() => setMultiDirBase(null)}
+          onCreate={(relDirs) => {
+            createMultiDirs(multiDirBase, relDirs)
+            setMultiDirBase(null)
+          }}
           t={t}
         />
       )}
@@ -707,6 +765,7 @@ export default function FileExplorer({
 
 function Toolbar({
   onCreateFolder,
+  onCreateMultiDir,
   onDelete,
   onExpandAll,
   onCollapseAll,
@@ -714,6 +773,7 @@ function Toolbar({
   t,
 }: {
   onCreateFolder: () => void
+  onCreateMultiDir: () => void
   onDelete: () => void
   onExpandAll: () => void
   onCollapseAll: () => void
@@ -725,6 +785,10 @@ function Toolbar({
       <Button variant="outline" size="sm" onClick={onCreateFolder} data-testid="fe-new-folder">
         <FolderPlus className="size-4" />
         {t('fileExplorer.newFolder', '新建文件夹')}
+      </Button>
+      <Button variant="outline" size="sm" onClick={onCreateMultiDir} data-testid="fe-new-multi-dir">
+        <FolderTree className="size-4" />
+        {t('fileExplorer.newMultiDir', '新建多级目录')}
       </Button>
       <Button variant="outline" size="sm" onClick={onDelete} disabled={disableDelete} data-testid="fe-delete">
         <Trash2 className="size-4" />
@@ -753,6 +817,7 @@ function ContextMenu({
   onRename,
   onDelete,
   onNewFolder,
+  onNewMultiDir,
   t,
 }: {
   x: number
@@ -761,6 +826,7 @@ function ContextMenu({
   onRename: () => void
   onDelete: () => void
   onNewFolder: () => void
+  onNewMultiDir: () => void
   t: TFunction
 }) {
   const isRoot = target.kind === 'root'
@@ -779,6 +845,15 @@ function ContextMenu({
       >
         <FolderPlus className="size-4" />
         {t('fileExplorer.newFolder', '新建文件夹')}
+      </button>
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+        data-testid="fe-menu-multi-dir"
+        onClick={onNewMultiDir}
+      >
+        <FolderTree className="size-4" />
+        {t('fileExplorer.newMultiDir', '新建多级目录')}
       </button>
       {!isRoot && (
         <>
@@ -801,6 +876,94 @@ function ContextMenu({
         </>
       )}
     </ContextMenuSurface>
+  )
+}
+
+// ── 新建多级目录模态（FR-350） ────────────────────────────────────────
+
+/**
+ * 「新建多级目录」模态：多行 textarea 每行一条路径（单行可 `a/b/c` 整条层级），
+ * 实时预览将创建的层级链，确认后批量建。遵守模态纪律（ui-modals）：
+ * scrollableDialogContentClass + ScrollableDialogBody，头/脚固定、正文超高内部滚动。
+ */
+function MultiDirDialog({
+  baseDir,
+  onClose,
+  onCreate,
+  t,
+}: {
+  /** 基准目录（''=根）：所有输入路径拼在其下。 */
+  baseDir: string
+  onClose: () => void
+  /** 确认创建：参数为解析后的相对路径（未拼 baseDir 前缀）。 */
+  onCreate: (relDirs: string[]) => void
+  t: TFunction
+}) {
+  const [input, setInput] = useState('')
+  const parsed = useMemo(() => parseDirPathsInput(input), [input])
+  // 预览 = 拼前缀后的全层级链（含将被复用的既有层级）。
+  const preview = useMemo(
+    () => expandDirChains(parsed.dirs.map((d) => joinDirPath(baseDir, d))),
+    [parsed.dirs, baseDir],
+  )
+  return (
+    <Dialog open onOpenChange={(v) => { if (!v) onClose() }}>
+      <DialogContent className={cn(scrollableDialogContentClass, 'sm:max-w-md')}>
+        <DialogHeader>
+          <DialogTitle>{t('fileExplorer.newMultiDir', '新建多级目录')}</DialogTitle>
+          <DialogDescription>
+            {t('fileExplorer.multiDirBase', '创建位置：{{base}}', {
+              base: baseDir === '' ? t('fileExplorer.rootDirName', '根目录') : baseDir,
+            })}
+            {' · '}
+            {t('fileExplorer.multiDirDesc', '每行一条路径；单行可用 a/b/c 一次创建整条层级，已存在的层级自动复用。')}
+          </DialogDescription>
+        </DialogHeader>
+        <ScrollableDialogBody className="space-y-3">
+          <textarea
+            autoFocus
+            rows={4}
+            className="w-full resize-y rounded-md border bg-background p-2 font-mono text-xs"
+            placeholder={t('fileExplorer.multiDirPlaceholder', 'mods/extra\nconfig/client/hud')}
+            value={input}
+            data-testid="fe-multi-dir-input"
+            onChange={(e) => setInput(e.target.value)}
+          />
+          {parsed.invalid.length > 0 && (
+            <p className="text-xs text-destructive">
+              {t('fileExplorer.multiDirInvalid', '已忽略 {{n}} 条非法路径（含 .. 或为空）', { n: parsed.invalid.length })}
+            </p>
+          )}
+          {preview.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-xs text-muted-foreground">
+                {t('fileExplorer.multiDirPreview', '将创建 {{n}} 个目录层级', { n: preview.length })}
+              </p>
+              <ul className="max-h-40 space-y-0.5 overflow-y-auto rounded-md border p-2 font-mono text-xs">
+                {preview.map((p) => (
+                  <li key={p} className="flex items-center gap-1.5 truncate text-muted-foreground">
+                    <Folder className="size-3.5 shrink-0 text-amber-500" />
+                    {p}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </ScrollableDialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            {t('common.cancel', '取消')}
+          </Button>
+          <Button
+            disabled={parsed.dirs.length === 0}
+            data-testid="fe-multi-dir-confirm"
+            onClick={() => onCreate(parsed.dirs)}
+          >
+            {t('common.create', '创建')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

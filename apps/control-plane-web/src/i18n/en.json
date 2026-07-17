@@ -1533,6 +1533,15 @@
     "truncated": "Truncated",
     "listTruncated": "Too many entries; truncated"
   },
+  "fileExplorer": {
+    "newMultiDir": "New nested folders",
+    "multiDirBase": "Create under: {{base}}",
+    "rootDirName": "Root",
+    "multiDirDesc": "One path per line; a/b/c creates the whole chain at once, existing levels are reused.",
+    "multiDirPlaceholder": "mods/extra\nconfig/client/hud",
+    "multiDirPreview": "{{n}} directory level(s) will be created",
+    "multiDirInvalid": "{{n}} invalid path(s) ignored (contains .. or empty)"
+  },
   "fileBrowser": {
     "pickFile": "Pick a file on the left to preview its content",
     "loading": "Loading...",

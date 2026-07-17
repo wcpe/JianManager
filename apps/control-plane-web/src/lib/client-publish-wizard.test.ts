@@ -32,6 +32,9 @@ import {
   computeDirVisualState,
   exportMarkings,
   getDescendantDirPaths,
+  parseDirPathsInput,
+  expandDirChains,
+  joinDirPath,
   type TreeFile,
   type FileSystemEntryLike,
 } from './client-publish-wizard'
@@ -707,5 +710,87 @@ describe('exportMarkings', () => {
   it('结果按字母序', () => {
     const m = buildCleanMap(['zebra', 'alpha', 'mid'], [])
     expect(exportMarkings(m).managedDirs).toEqual(['alpha', 'mid', 'zebra'])
+  })
+})
+
+/** FR-350：多级目录创建输入解析。 */
+describe('parseDirPathsInput', () => {
+  it('单行多级路径解析为一条目录', () => {
+    expect(parseDirPathsInput('a/b/c/d')).toEqual({ dirs: ['a/b/c/d'], invalid: [] })
+  })
+
+  it('多行输入每行一条，保输入顺序', () => {
+    expect(parseDirPathsInput('mods/extra\nconfig/client/hud\nlibs')).toEqual({
+      dirs: ['mods/extra', 'config/client/hud', 'libs'],
+      invalid: [],
+    })
+  })
+
+  it('归一化：反斜杠 / 前导 ./ 与 / / 结尾斜杠 / 重复斜杠折叠', () => {
+    expect(parseDirPathsInput('mods\\sub').dirs).toEqual(['mods/sub'])
+    expect(parseDirPathsInput('./mods/sub/').dirs).toEqual(['mods/sub'])
+    expect(parseDirPathsInput('/mods//sub').dirs).toEqual(['mods/sub'])
+  })
+
+  it('`.` 段折叠为无效果段', () => {
+    expect(parseDirPathsInput('a/./b').dirs).toEqual(['a/b'])
+  })
+
+  it('含 .. 越界段整行拒绝进 invalid', () => {
+    const out = parseDirPathsInput('ok/one\n../escape\na/../b')
+    expect(out.dirs).toEqual(['ok/one'])
+    expect(out.invalid).toEqual(['../escape', 'a/../b'])
+  })
+
+  it('归一后为空的非空白行进 invalid，纯空白行静默跳过', () => {
+    const out = parseDirPathsInput('/\n\n   \n.')
+    expect(out.dirs).toEqual([])
+    expect(out.invalid).toEqual(['/', '.'])
+  })
+
+  it('重复行去重（保首个）', () => {
+    expect(parseDirPathsInput('a/b\na/b\na\\b').dirs).toEqual(['a/b'])
+  })
+
+  it('空输入 → 全空', () => {
+    expect(parseDirPathsInput('')).toEqual({ dirs: [], invalid: [] })
+  })
+})
+
+/** FR-350：目录路径展开为全部层级链（预览 / 展开折叠用）。 */
+describe('expandDirChains', () => {
+  it('单条多级路径展开整条链', () => {
+    expect(expandDirChains(['a/b/c'])).toEqual(['a', 'a/b', 'a/b/c'])
+  })
+
+  it('多条路径共享前缀层级去重', () => {
+    expect(expandDirChains(['a/b', 'a/c'])).toEqual(['a', 'a/b', 'a/c'])
+  })
+
+  it('重复层级只出现一次且顺序稳定', () => {
+    expect(expandDirChains(['x', 'x/y', 'x'])).toEqual(['x', 'x/y'])
+  })
+
+  it('空列表 → 空', () => {
+    expect(expandDirChains([])).toEqual([])
+  })
+})
+
+/** FR-350：目录前缀拼接（右键定点上传 / 模态基准目录）。 */
+describe('joinDirPath', () => {
+  it('空前缀返回子路径本身', () => {
+    expect(joinDirPath('', 'mods/a.jar')).toBe('mods/a.jar')
+  })
+
+  it('前缀 + 子路径以 / 相接', () => {
+    expect(joinDirPath('mods', 'sub/a.jar')).toBe('mods/sub/a.jar')
+  })
+
+  it('前缀结尾斜杠与子路径前导斜杠被归一', () => {
+    expect(joinDirPath('mods/', '/a.jar')).toBe('mods/a.jar')
+  })
+
+  it('空子路径返回前缀本身', () => {
+    expect(joinDirPath('mods', '')).toBe('mods')
   })
 })

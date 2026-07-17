@@ -1512,6 +1512,15 @@
     "truncated": "已截断",
     "listTruncated": "条目过多，已截断"
   },
+  "fileExplorer": {
+    "newMultiDir": "新建多级目录",
+    "multiDirBase": "创建位置：{{base}}",
+    "rootDirName": "根目录",
+    "multiDirDesc": "每行一条路径；单行可用 a/b/c 一次创建整条层级，已存在的层级自动复用。",
+    "multiDirPlaceholder": "mods/extra\nconfig/client/hud",
+    "multiDirPreview": "将创建 {{n}} 个目录层级",
+    "multiDirInvalid": "已忽略 {{n}} 条非法路径（含 .. 或为空）"
+  },
   "fileBrowser": {
     "pickFile": "在左侧选择文件以预览内容",
     "loading": "正在加载...",
