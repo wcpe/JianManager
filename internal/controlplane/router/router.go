@@ -71,7 +71,10 @@ type Services struct {
 	ClientChannel    *service.ClientChannelService
 	ClientVersion    *service.ClientVersionService
 	// ClientChunkUpload 大文件分块上传（FR-251，增强 FR-088）；nil 时分块端点关闭、前端回退单次上传。
-	ClientChunkUpload  *service.ChunkedUploadService
+	ClientChunkUpload *service.ChunkedUploadService
+	// ClientUploadEfficiency 上传增效：秒传预查 + 小文件聚合（FR-346，增强 FR-250/251）；
+	// nil 时增效端点关闭、前端预查失败降级为全量上传（不阻断发布）。
+	ClientUploadEfficiency *service.ClientUploadEfficiencyService
 	ClientMachine      *service.ClientMachineService
 	ClientDistTracking *service.ClientDistTrackingService
 	ClientIPGuard      *service.ClientIPGuardService
@@ -403,6 +406,13 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.ClientChunkUpload != nil && svcs.ClientChannel != nil {
 			clientChunkUploadHandler := NewClientChunkUploadHandler(svcs.ClientChunkUpload, svcs.ClientChannel, svcs.Audit)
 			clientChunkUploadHandler.RegisterRoutes(admin)
+		}
+
+		// 客户端分发上传增效：秒传预查 + 小文件聚合（FR-346，增强 FR-250/251）。与分块上传
+		// 同鉴权组、落同一 CAS；独立 handler 不改既有上传端点。
+		if svcs.ClientUploadEfficiency != nil && svcs.ClientChannel != nil {
+			clientUploadEffHandler := NewClientUploadEfficiencyHandler(svcs.ClientUploadEfficiency, svcs.ClientChannel, svcs.Audit)
+			clientUploadEffHandler.RegisterRoutes(admin)
 		}
 
 		// updater-core 版本归档 + 频道选定（FR-259，见 updater-arch-simplification spec §D）：

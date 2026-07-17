@@ -233,6 +233,9 @@ func main() {
 	clientChunkUploadSvc := service.NewChunkedUploadService(root, clientVersionSvc)
 	clientChunkUploadSvc.Start()
 	defer clientChunkUploadSvc.Stop()
+	// 客户端分发上传增效（FR-346，增强 FR-250/251）：秒传预查（批量 sha256 查 CAS 命中免传）
+	// + 小文件聚合上传（一请求多小文件），复用 clientVersionSvc.PublishFile 落同一 CAS。
+	clientUploadEffSvc := service.NewClientUploadEfficiencyService(db, clientVersionSvc)
 	// 客户端机器码登记（FR-092）：manifest 拉取时 best-effort upsert，弱一致、不阻断。
 	clientMachineSvc := service.NewClientMachineService(db)
 	// 客户端分发拉取/下载追踪（FR-093）：明细短保留 + 写时增量聚合 + 后台滚动清理。
@@ -450,6 +453,7 @@ func main() {
 		ClientChannel:           clientChannelSvc,
 		ClientVersion:           clientVersionSvc,
 		ClientChunkUpload:       clientChunkUploadSvc,
+		ClientUploadEfficiency:  clientUploadEffSvc,
 		ClientMachine:           clientMachineSvc,
 		ClientDistTracking:      clientDistTrackingSvc,
 		ClientIPGuard:           clientIPGuardSvc,
