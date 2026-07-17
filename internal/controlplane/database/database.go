@@ -141,6 +141,9 @@ func AutoMigrate(db *gorm.DB) error {
 		// 制品存储渠道（FR-347，见 ADR-073）：client-file 制品外置对象存储的渠道配置，
 		// 内置「本机存储」行由 service EnsureBuiltin 幂等 seed。
 		&model.ArtifactStorageChannel{},
+		// 制品存量迁移（FR-348）：迁移任务登记与实时计数 + 逐条失败明细。
+		&model.ArtifactMigration{},
+		&model.ArtifactMigrationFailure{},
 		&model.LogEntry{},
 		&model.MetricSeries{},
 		&model.MetricSampleRaw{},

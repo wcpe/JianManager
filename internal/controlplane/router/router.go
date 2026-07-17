@@ -54,6 +54,8 @@ type Services struct {
 	// ArtifactStorage 制品存储渠道（FR-347，见 ADR-073）：client-file 外置对象存储配置；
 	// nil 时渠道端点关闭（上传恒本地）。
 	ArtifactStorage *service.ArtifactStorageChannelService
+	// ArtifactMigration 制品存量迁移（FR-348）：渠道间搬运后台任务；nil 时迁移端点关闭。
+	ArtifactMigration *service.ArtifactMigrationService
 	Template         *service.TemplateService
 	Audit            *service.AuditService
 	Authz            *service.AuthzService
@@ -370,6 +372,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 限平台管理员（FR-347，见 ADR-073）。
 		if svcs.ArtifactStorage != nil {
 			NewArtifactStorageHandler(svcs.ArtifactStorage).RegisterRoutes(admin)
+		}
+
+		// 制品存量迁移：渠道间搬运后台任务（发起/状态/失败明细），限平台管理员（FR-348）。
+		if svcs.ArtifactMigration != nil {
+			NewArtifactMigrationHandler(svcs.ArtifactMigration).RegisterRoutes(admin)
 		}
 
 		// 平台配置：全量配置可视化 + 白名单运行时覆盖，限平台管理员（FR-063 / ADR-015）。

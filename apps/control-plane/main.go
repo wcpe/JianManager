@@ -359,6 +359,12 @@ func main() {
 	importServerSvc.SetTaskService(taskSvc)
 	cloneSvc.SetTaskService(taskSvc)
 	backupSvc.SetTaskService(taskSvc)
+	// 制品存量迁移（FR-348）：渠道间搬运后台任务（先改记录再删源，幂等续跑）。
+	// RecoverOrphans 清扫 CP 重启滞留的非终态迁移任务，保证在途判定即真相。
+	artifactMigrationSvc := service.NewArtifactMigrationService(db, root, artifactStorageSvc, taskSvc)
+	if err := artifactMigrationSvc.RecoverOrphans(); err != nil {
+		slog.Warn("清扫制品迁移孤儿任务失败", "error", err)
+	}
 
 	// 统一通知中心（FR-216，见 ADR-048）：只读聚合站内信（定向消息）+ 告警事件（系统警报）
 	// 为一条通知流，页眉单铃铛 + 通知中心页消费。不新建表，标记已读下推到各源既有服务。
@@ -447,6 +453,7 @@ func main() {
 		Backup:                  backupSvc,
 		BackupStorage:           backupStorageSvc,
 		ArtifactStorage:         artifactStorageSvc,
+		ArtifactMigration:       artifactMigrationSvc,
 		Template:                templateSvc,
 		Audit:                   auditSvc,
 		Authz:                   authzSvc,

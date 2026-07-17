@@ -259,6 +259,13 @@ func (s *ArtifactStorageChannelService) Delete(id uint) error {
 	if ch.Active {
 		return ErrArtifactStorageActiveDelete
 	}
+	// 迁移在途禁删任何渠道（FR-348）：源集合由逐条记录自述、随迁移动态收敛，
+	// 静态判定「此渠道无关」不可靠，粗粒度全禁；迁移终态（或强停）后恢复可删。
+	if inflight, ierr := artifactMigrationInFlight(s.db); ierr != nil {
+		return ierr
+	} else if inflight {
+		return ErrArtifactStorageMigrationInFlight
+	}
 	var refs int64
 	if err := s.db.Model(&model.Asset{}).Where("storage_channel_id = ?", id).Count(&refs).Error; err != nil {
 		return fmt.Errorf("检查渠道引用失败: %w", err)

@@ -43,6 +43,9 @@ const (
 	TaskKindBackupCreate = "backup_create"
 	// TaskKindBackupRestore 备份恢复（回放备份链）任务（FR-323，CP 后台 goroutine）。
 	TaskKindBackupRestore = "backup_restore"
+	// TaskKindArtifactMigrate 制品存量迁移任务（FR-348，CP 后台 goroutine）：
+	// 逐制品搬运到目标存储渠道（先改记录再删源），全程一次仅允许一个在途。
+	TaskKindArtifactMigrate = "artifact_migrate"
 )
 
 // Task 一条长耗时跨进程任务（如 JDK 安装）。
