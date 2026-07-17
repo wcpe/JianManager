@@ -103,6 +103,45 @@ export interface CreateBackupStorageBody {
   useSsl?: boolean
 }
 
+// ─────────────────── 制品存储渠道（artifact-storages，FR-347） ───────────────────
+
+/** 制品存储渠道：client-file 制品落点路由配置。响应永不含凭证明文/密文（ADR-073）。 */
+export interface ArtifactStorageChannel {
+  id: number
+  name: string
+  /** local（内置「本机存储」独占）| s3 */
+  type: 'local' | 's3'
+  endpoint: string
+  bucket: string
+  region: string
+  prefix: string
+  useSsl: boolean
+  presignTtlSeconds: number
+  active: boolean
+  builtin: boolean
+  hasAccessKey: boolean
+  hasSecretKey: boolean
+  lastTestAt?: string
+  lastTestOk: boolean
+  lastTestMessage: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** 创建/编辑渠道请求体。编辑时 accessKey/secretKey 留空 = 保留原值。 */
+export interface SaveArtifactStorageBody {
+  name: string
+  type: string
+  endpoint?: string
+  bucket?: string
+  region?: string
+  prefix?: string
+  accessKey?: string
+  secretKey?: string
+  useSsl?: boolean
+  presignTtlSeconds?: number
+}
+
 // ─────────────────────────── 定时任务（schedules） ───────────────────────────
 
 /** 定时任务（与后端 model.Schedule 对齐）。 */

@@ -17,6 +17,7 @@ const GroupsPage = lazy(() => import('@/pages/GroupsPage'))
 const SchedulesPage = lazy(() => import('@/pages/SchedulesPage'))
 const BackupsPage = lazy(() => import('@/pages/BackupsPage'))
 const BackupStoragesPage = lazy(() => import('@/pages/BackupStoragesPage'))
+const ArtifactStoragesPage = lazy(() => import('@/pages/ArtifactStoragesPage'))
 const BotsPage = lazy(() => import('@/pages/BotsPage'))
 const AuditPage = lazy(() => import('@/pages/AuditPage'))
 const TemplatesPage = lazy(() => import('@/pages/TemplatesPage'))
@@ -110,6 +111,8 @@ export default function Workspace() {
             <Route path="schedules" element={<SchedulesPage />} />
             <Route path="backups" element={<BackupsPage />} />
             <Route path="backup-storages" element={<BackupStoragesPage />} />
+            {/* 文件存储配置（FR-347）：客户端分发制品外置对象存储渠道。 */}
+            <Route path="artifact-storages" element={<ArtifactStoragesPage />} />
             <Route path="audit" element={<AuditPage />} />
             <Route path="tasks" element={<TasksPage />} />
             {/* 通知中心（FR-216）：站内信 + 告警合并的统一通知流页。 */}

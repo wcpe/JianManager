@@ -6,6 +6,7 @@ import {
   Bot,
   Box,
   Clapperboard,
+  CloudUpload,
   Database,
   DownloadCloud,
   FileClock,
@@ -106,6 +107,7 @@ export const NAV_GROUPS: NavGroup[] = [
         children: [
           { to: '/runtime-assets', labelKey: 'nav.runtimeAssets', icon: Layers },
           { to: '/storage', labelKey: 'nav.storage', icon: HardDrive },
+          { to: '/artifact-storages', labelKey: 'nav.artifactStorages', icon: CloudUpload },
           { to: '/backup-storages', labelKey: 'nav.backupStorages', icon: Archive },
           { to: '/backups', labelKey: 'nav.backups', icon: Archive },
         ],
