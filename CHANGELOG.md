@@ -34,6 +34,9 @@
 - **CreateBot 拒绝时落 Worker 日志（fix(worker)）**：`ensureBotManager` 失败此前只装进 gRPC 响应，Worker 日志零痕迹——两侧排障皆盲。拒绝时补 `slog.Warn`（botUuid + 原因）。
 - **Bot 创建与行内暴露委托失败原因（fix(web)）**：创建响应 `status=error` 时弹窗内显示 `lastError` 可操作指引（不再静默关窗留死 bot）；Bot 行内 error 态追加红字原因 + title 悬浮全文。
 - **Bot 列表与聚合短轮询（fix(web)，真机复现：bot 已进服、面板永远显示「连接中」）**：Bot 状态异步演进（connecting→connected 秒级、且由读取触发回填），而列表/聚合查询仅挂载取一次永不再刷——统计条冻死在挂载瞬间的旧值。`useBots`/`useBotSummary` 补 5s 轮询（对齐 FR-329 任务轮询先例）；真机复测重连后统计条 10s 内自动 连接中→在线，零手动刷新。
+- **实例重启复用启动预检堵住绕闸路径（fix(control-plane)，真机复现：代理后端被清空后点重启仍可绕过启动闸，BungeeCord 因 `No servers defined` 秒崩并残留假活）**：`POST /instances/:id/restart` 接入损毁态守卫与 `preflightStart`，代理无启用后端、启动规格不完整等场景在停旧进程前同步拒绝；重启保持内存中性，刻意不重复执行内存水位闸。单测覆盖无后端代理拒绝与就绪代理放行；真机重新注册 s1 后 lobby 日志出现 `Listening on /0.0.0.0:25566`，进程与端口均真实存活。
+- **文件树与清理范围右键菜单共享 portal 钳制基座（fix(web)，真机复现：文件配置页贴边右键仍受 transform 祖先影响而漂移/溢出）**：抽取共享 `ContextMenuSurface`，统一 `createPortal(document.body)` 与基于菜单实测尺寸的视口钳制，`FileExplorer`、`CleanScopeEditor` 两处接入，避免各自复制定位逻辑。真机在文件列表右下边缘触发菜单，菜单挂载于 body、右侧完全收进视口，底边仅有浏览器亚像素取整误差且视觉无裁切。
+- **前端入口页禁缓存避免部署后滞留旧资源图（fix(control-plane)）**：静态资源响应按用途分层缓存——`index.html` 返回 `Cache-Control: no-cache`，带哈希的 `assets/` 继续使用 immutable 长缓存；浏览器刷新会重新校验入口并引用当前哈希 chunk，不再因启发式缓存旧 index 而持续运行上一版前端。真机强制重新导航确认入口文档响应携带 `Cache-Control: no-cache`。
 ### 优化
 - **控制台终端顶栏收敛为紧凑扁平单条（refactor，方案 A，用户走查「顶栏太占位置、样式丑」）**：终端面板顶部原为「浮动卡片工具栏（`rounded-lg border bg-card/95 shadow-soft` + 药丸按钮）+ 独占一行的琥珀只读横幅」两层 chrome、纵向占位偏高。收敛为**单条扁平工具栏**（`border-b`、无浮卡/无阴影、`py-1.5`、ghost 图标按钮），非运行状态提示并入行首（不再独占整行），终端外层内边距 `p-4→p-2`，把纵向空间还给日志区。功能与可访问性不变（读写徽标/重连/搜索/字号/全屏控件与 aria 保留，dom 测试 9/9 绿）。
 
