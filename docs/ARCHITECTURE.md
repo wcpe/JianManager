@@ -496,7 +496,8 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | node_pm_configs (V2, FR-306) | node_id(UNIQUE), pm(varchar16 default npm: npm/pnpm/yarn), registries(text, JSON 数组 [{name,url,scope,token}])（节点包管理器配置单例：token 入库明文、API 出参与日志脱敏（掩码回传=不改），Worker 侧落托管 .npmrc + corepack enable） |
 | instance_config_versions (V2) | instance_id(FK), file_path, content, author, created_at |
 | file_versions (V2) | instance_id(FK), file_path, content_hash, content(base64,二进制安全), size, author_id, rollback_of_version_id, created_at；INDEX(instance_id,file_path)（FR-051 通用文件改前快照） |
-| assets | type(core/plugin/image/video/archive/blob/client-file/client-pack/client-core/client-updater-core), name, version, filename, sha256(寻址+去重键), md5, size, content_type, source_url, metadata(JSON), storage_state(hot/archived/external), storage_backend, ref_count, rel_path(相对数据根), created_at, last_used_at；UNIQUE(type,sha256) |
+| assets | type(core/plugin/image/video/archive/blob/client-file/client-pack/client-core/client-updater-core), name, version, filename, sha256(寻址+去重键), md5, size, content_type, source_url, metadata(JSON), storage_state(hot/archived/external), storage_backend(local/s3), storage_channel_id(FK artifact_storage_channels，0=本地/无渠道；位置由记录自述，FR-347), ref_count, rel_path(相对数据根=跨后端存储键), created_at, last_used_at；UNIQUE(type,sha256) |
+| artifact_storage_channels | name(UNIQUE), type(local/s3), endpoint, bucket, region, prefix, access_key_enc/secret_key_enc(AES-256-GCM 可逆加密，复用 FR-192 KeyEncryptor), use_ssl, presign_ttl_seconds(默认 600，[60,3600]), active(全表恰一条，写路径路由开关), builtin(内置「本机存储」不可删不可编辑), last_test_at/last_test_ok/last_test_message（FR-347，见 ADR-073；与备份域 backup_storages 独立） |
 | logs (FR-049) | source(instance/control_plane/worker), level(debug/info/warn/error), instance_id, instance_uuid, node_id, stream(stdout/stderr), message, time；复合索引 (source,time)/(level,time)/(instance_id,time)/(node_id,time)，关键字检索走 message 列谓词 |
 | ban_records (V2) | uuid, player_name, reason, scope(network/instance/global), scope_id, operator_id(FK), active, created_at, unbanned_at（玩家封禁台账，FR-054；保留历史治理记录，解封置 active=false 保留历史） |
 | platform_settings (V2) | key(PK), value, updated_at（平台配置 DB 覆盖层，仅存被显式覆盖的白名单键；生效优先级 DB 覆盖 > 环境变量 > YAML 默认，FR-063/ADR-015）。network 类键 `proxy.url`（敏感脱敏）/`proxy.no_proxy` 为 CP 全局出站代理（FR-185/ADR-043），保存即重建 CP 出站持有者并作为各节点默认代理（优先级 settings DB > control-plane.yml > env） |
@@ -1112,6 +1113,7 @@ proxy:
 ### 14.1 类型分区 + 内容寻址（CAS）
 - 资产存 `var/artifacts/<type>/<sha256 前 2 位>/<sha256>.<ext>`；类型内按 sha256 去重，类型间物理分目录（便于浏览/整类备份/归档）。
 - `type` ∈ `core | plugin | image | video | archive | blob`。sha256 既是寻址键也是去重键，登记 `rel_path` 相对数据根存储（便携）。
+- **CAS 相对路径 = 跨后端存储键**（FR-347 修订 ADR-011：`var/artifacts` 从唯一物理落点升格为默认后端 + 键规范，见 ADR-073）——local 后端即数据根物理路径，S3 后端为 `<渠道 prefix>/<rel_path>` 对象键；类型分区/sha256 去重/索引模型不变。
 
 ### 14.2 入库与完整性
 - 入库即算 sha256+md5；调用方提供期望校验和则比对，不符拒收。
@@ -1119,8 +1121,15 @@ proxy:
 - 入口：multipart 上传 / 从本地路径登记 / 下载入库（`IngestFromURL`，供 FR-034 建服取核心复用）。
 
 ### 14.3 生命周期与引用保护
-- `storage_state`(hot/archived/external) + `storage_backend` 驱动归档/外置（归档策略与外部后端为后续 FR，此处先立模型）；归档只改状态与位置，DB 记录与引用（sha256）不变。
-- `ref_count`>0（被模板/实例引用）的资产删除前拒绝。
+- `storage_state`(hot/archived/external) + `storage_backend`(local/s3) + `storage_channel_id` 驱动归档/外置；**位置由记录自述，不由全局状态推断**（FR-347）。归档只改状态与位置，DB 记录与引用（sha256）不变。
+- `ref_count`>0（被模板/实例引用）的资产删除前拒绝。删除物理清理按记录后端路由：local 删 CAS 文件、s3 删渠道对象（均尽力而为）。
+
+### 14.3a 外置对象存储渠道（FR-347，见 ADR-073）
+- **BlobStore 抽象**（`internal/controlplane/blobstore`）：`Kind/PutFile/Open/Stat/Delete/List/Presign` 统一 local（数据根 CAS，行为与主线逐字节等价）与 s3（纯标准库 SigV4 header 签名 + query 预签名、path-style、`UNSIGNED-PAYLOAD` 流式 PUT；签名对拍 AWS 官方向量）。**CP 侧独立实现，不 import `internal/worker/storage`**（进程边界，ADR-073 决策 3；第三个消费方出现时再抽 `internal/platform/objectstore`）。
+- **渠道表 `artifact_storage_channels`**：内置「本机存储」行（Builtin+local）幂等 seed、不可删不可编辑、无活跃行时兜底活跃；单活跃渠道（事务先清后设）为写路径唯一路由开关；凭证 AES-256-GCM 可逆加密（复用 FR-192 KeyEncryptor，加密器未配置时创建/编辑 s3 渠道 422 快失败不落明文）；删除守卫=内置/活跃/被制品引用均拒。
+- **写路径**：仅 `client-file` 类型经活跃渠道路由（其余类型是 CP/Worker 运行链路本地依赖，恒 local）——活跃=local 走既有 CAS 落盘原文；活跃=s3 流式上传对象并记 `storage_backend=s3 + storage_channel_id + storage_state=external`；上传失败快失败不静默回落（ADR-073 决策 5）；去重命中不迁移不重传。
+- **读路径消费方分野**（ADR-073 决策 6）：玩家端点 `GET /client-artifacts/:sha256` 对 s3 制品回 **302 预签名短时效 URL**（TTL 渠道可配默认 600s + `Cache-Control: no-store`，CP 只当授权与调度面，字节走对象存储出口；渠道失效 503 可重试）；**管理面**下载/预览/发布期补丁物化经 CP BlobStore 代理直流（浏览器跨域跟随预签名 URL 撞对象存储 CORS，低频运维 CP 中继可接受）。部署约束：updater `HttpURLConnection` 不跨 http↔https 跟随 302，CP 与 S3 endpoint 须同协议；CP 与 S3 时钟偏移超 TTL 预签名 403（运维 NTP）。
+- 存量制品迁移（FR-348）与索引↔S3 对账（FR-349）在本底座之上后续实现。
 
 ### 14.4 API 与鉴权
 - `GET /assets`（按 type 筛选、分页）、`GET /assets/:id`、`POST /assets`（上传/登记）、`DELETE /assets/:id`。

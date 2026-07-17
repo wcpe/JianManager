@@ -1470,6 +1470,57 @@
 
 ---
 
+## 制品存储渠道（FR-347，见 ADR-073）
+
+> 客户端分发制品（client-file）的外置对象存储渠道：活跃渠道决定新上传制品落点（local 原样 / s3 上传对象），存量制品按记录自述读取。与备份域 `backup-storages` 独立（消费方不同：备份下发 Worker 执行，本渠道由 CP 自身上传/预签名）。凭证面板直填、AES-256-GCM 可逆加密落库（复用 FR-192 KeyEncryptor）；**响应永不含凭证明文或密文**，以 `hasAccessKey`/`hasSecretKey` 布尔标示。全部端点限平台管理员。
+
+### GET /api/v1/artifact-storages
+- **描述**: 渠道列表（内置「本机存储」恒排最前），含 `active/builtin/hasAccessKey/hasSecretKey/lastTestAt/lastTestOk/lastTestMessage/presignTtlSeconds`
+- **权限**: 平台管理员
+- **关联 FR**: FR-347
+
+### POST /api/v1/artifact-storages
+- **描述**: 创建 s3 渠道（**仅 `type=s3`**；local 由内置行独占）。校验名称唯一、endpoint/bucket 非空、`presignTtlSeconds` ∈ [60,3600]（缺省 600）；凭证加密器未配置（生产 autogen 失败降级态）时 422 快失败、不落明文
+- **权限**: 平台管理员
+- **关联 FR**: FR-347
+- **请求**: `{ "name": "string", "type": "s3", "endpoint": "rustfs.lan:9000", "bucket": "jm-artifacts", "region": "us-east-1", "prefix": "jm", "accessKey": "明文", "secretKey": "明文", "useSsl": false, "presignTtlSeconds": 600 }`
+- **错误**: 400 `INVALID_REQUEST`；422 `BUSINESS_ERROR`（名称冲突/类型非法/endpoint 或 bucket 缺失/TTL 越界/加密器未配置）
+
+### PUT /api/v1/artifact-storages/:id
+- **描述**: 编辑渠道。内置行不可编辑；`type` 不可改；`accessKey`/`secretKey` 传空 = **保留原密文**（脱敏编辑语义）、传非空 = 重加密覆盖；成功后清空 `lastTest*`（配置已变旧结论失效）
+- **权限**: 平台管理员
+- **关联 FR**: FR-347
+- **请求**: 同 `POST /api/v1/artifact-storages`
+- **错误**: 400；404 `NOT_FOUND`；422 `BUSINESS_ERROR`（内置不可编辑/类型不可改/名称冲突/校验失败）
+
+### DELETE /api/v1/artifact-storages/:id
+- **描述**: 删除渠道（硬删除）。内置行拒；活跃渠道拒（先切走）；被制品引用拒（422 附引用数——读路径按 `assets.storage_channel_id` 自述定位，删被引用渠道即断链）
+- **权限**: 平台管理员
+- **关联 FR**: FR-347
+- **错误**: 404；422 `BUSINESS_ERROR`（内置不可删/活跃不可删/被 N 个制品引用）
+
+### POST /api/v1/artifact-storages/test
+- **描述**: 真连探测候选配置，不写库。s3 = 写探测对象（PUT 8 字节 → HEAD → DELETE，探测键挂渠道 prefix 下 `probe/`，验证的正是写路径所需权限）；local = 数据根可写探测。可带 `id`：编辑态凭证留空时用存库密文解密后探测
+- **权限**: 平台管理员
+- **关联 FR**: FR-347
+- **请求**: 同 POST + 可选 `"id": 1`
+- **响应**: `{ "ok": true, "message": "连接正常", "errorCode": "", "latencyMs": 12 }`
+
+### POST /api/v1/artifact-storages/:id/test
+- **描述**: 真连探测已保存渠道，并持久化 `lastTestAt/lastTestOk/lastTestMessage`
+- **权限**: 平台管理员
+- **关联 FR**: FR-347
+- **响应**: 同上
+
+### POST /api/v1/artifact-storages/:id/activate
+- **描述**: 设活跃渠道（事务先清后设，全表恰一条活跃）。**只影响新上传**；存量制品按各自 `storage_backend + storage_channel_id` 读取，不受影响
+- **权限**: 平台管理员
+- **关联 FR**: FR-347
+- **响应** (200): 渠道对象
+- **错误**: 404
+
+---
+
 ## 告警
 
 > FR-011 阈值告警在 FR-085 扩展为多通道 + 多触发类型 + 分级聚合静默 + 确认历史。
@@ -2569,10 +2620,10 @@
 - **错误**: 400 `INVALID_REQUEST`（缺 sha256）| 403 `FORBIDDEN`（非平台管理员）| 404 `ARTIFACT_NOT_FOUND`
 
 ### GET /api/v1/client-channels/:id/files/download
-- **描述**: 按制品 `sha256` 下载 client-file 制品（**管理台**，FR-214）。与上同理：浏览器需一个 JWT 下载入口（含预览降级态的下载兜底），与玩家拉取密钥制品端点隔离
-- **关联 FR**: FR-214 | **鉴权**: **JWT，平台管理员**（运营操作）
+- **描述**: 按制品 `sha256` 下载 client-file 制品（**管理台**，FR-214）。与上同理：浏览器需一个 JWT 下载入口（含预览降级态的下载兜底），与玩家拉取密钥制品端点隔离。s3 制品 **CP 经 BlobStore 代理直流、不走 302**（浏览器 axios blob fetch 跨域跟随预签名 URL 会撞对象存储 CORS；管理面低频运维动作，CP 中继代价可接受，FR-347/ADR-073 决策 6）
+- **关联 FR**: FR-214, FR-347 | **鉴权**: **JWT，平台管理员**（运营操作）
 - **查询参数**: `sha256`（必）
-- **响应** (200): 制品二进制（`Content-Disposition: attachment`）。支持 `Range`（`http.ServeContent`）
+- **响应** (200): 制品二进制（`Content-Disposition: attachment`）。local 支持 `Range`（`http.ServeContent`）；s3 代理直流带 `Content-Length`
 - **错误**: 400 `INVALID_REQUEST`（缺 sha256）| 403 `FORBIDDEN` | 404 `ARTIFACT_NOT_FOUND`
 
 ### POST /api/v1/client-channels/:id/rollback
@@ -2825,11 +2876,12 @@
 - **错误**: 401 `INVALID_CLIENT_KEY`（无/无效/吊销/过期 key）| 404 `CHANNEL_NOT_FOUND` / `NO_LATEST_VERSION`（频道尚未发布版本）
 
 ### GET /api/v1/client-artifacts/:sha256
-- **描述**: 按内容寻址下载客户端制品（zstd 压缩流或原文，按 codec）。制品跨频道共享，路径无频道段
-- **关联 FR**: FR-087
+- **描述**: 按内容寻址下载客户端制品（zstd 压缩流或原文，按 codec）。制品跨频道共享，路径无频道段。鉴权/防护/限流/带宽检查全部通过后按 `Asset.StorageBackend` 分流（FR-347，见 ADR-073）：local → CP `ServeContent` 直出（如旧）；s3 → **302** 跳转对象存储预签名短时效 URL，字节流量不经 CP
+- **关联 FR**: FR-087, FR-347
 - **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必，任一有效密钥即授权）；`X-Machine-Id`（可）。**无 JWT**
-- **响应** (200/206): 二进制制品；支持 `Range`（断点续传，206 部分内容）；强缓存（内容寻址不可变，`Cache-Control: public, max-age=31536000, immutable` + `ETag` 为内容 sha256）
-- **错误**: 401 `INVALID_CLIENT_KEY` | 404 `ARTIFACT_NOT_FOUND` | 416（Range 越界，由 `http.ServeContent` 处理）
+- **响应** (200/206，local): 二进制制品；支持 `Range`（断点续传，206 部分内容）；强缓存（内容寻址不可变，`Cache-Control: public, max-age=31536000, immutable` + `ETag` 为内容 sha256）
+- **响应** (302，s3): `Location=` SigV4 query 预签名 GET URL（TTL 取渠道 `presignTtlSeconds`，默认 600s）+ `Cache-Control: no-store`（短时效 URL 禁缓存）。updater 已 `followRedirects(true)` 自动跟随；**http↔https 跨协议不自动跟随**——部署要求 CP 与 S3 endpoint 同协议（ADR-073 决策 6）
+- **错误**: 401 `INVALID_CLIENT_KEY` | 404 `ARTIFACT_NOT_FOUND` | 416（Range 越界，由 `http.ServeContent` 处理）| 503 `ARTIFACT_STORAGE_UNAVAILABLE`（s3 渠道失效/凭证解密失败，可重试语义）
 
 ### GET /api/v1/client-channels/:id/updater-core
 - **描述**: 返回频道当前选定 updater-core 分发信息（FR-259，见 [ADR-054](../adr/054-updater-arch-simplification.md)）。楔子首次启动 / 后续启动只按 `version` 是否大于本地 `selectedVersion` 决定是否下载；这里的 `version` 是频道级递增分发版本，不等同于归档列表里的 jar 版本。切回旧 `sha256` 回滚时，后端仍会抬高分发版本，确保冻结 wedge 会下载目标旧 jar。返回格式冻结（spec §2.5.3），后续 CP 升级只能加字段不能删/改已有字段
