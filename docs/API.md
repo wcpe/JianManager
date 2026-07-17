@@ -2508,6 +2508,23 @@
 - **响应**: `204 No Content`
 - **错误**: 403 `UPLOAD_CHANNEL_MISMATCH`（跨频道弃他人会话）
 
+### POST /api/v1/client-channels/:id/files/precheck
+- **描述**: 批量**秒传预查**（FR-346，增强 FR-250/251）。前端上传前算好各文件**原始内容** sha256，一个请求查 ≤500 个：命中制品库（发布链路恒 `codec=none`，`assets.sha256` 即原始内容 hash，见 spec §2 对齐语义）且 `size` 精确相等者返回与真上传**同构**的结果——前端跳过字节上传直接引用既有制品。命中 bump `last_used_at`；只读预查不产生审计。历史 `codec≠none` 制品天然不命中（其 sha256 为压缩态 hash），无错误引用风险
+- **关联 FR**: FR-346
+- **鉴权**: **JWT，平台管理员**（运营操作，与 `POST .../files` 同组）
+- **请求**: `{ "files": [ { "sha256": "ab34…64hex", "size": 12345 } ] }`（1..500 项；sha256 大小写不敏感、归一小写；size ≥ 0）
+- **响应** (200): `{ "results": [ { "sha256": "ab34…", "hit": true, "result": { "sha256": "ab34…", "md5": "…", "size": 12345, "codec": "none" } }, { "sha256": "cd56…", "hit": false } ] }`（与请求顺序对齐、等长；`result` 与 `POST .../files` 返回同构）
+- **错误**: 400 `INVALID_REQUEST`（files 空 / sha256 非 64 hex / size<0）/ `BATCH_LIMIT_EXCEEDED`（>500 项）| 404 `CHANNEL_NOT_FOUND`
+
+### POST /api/v1/client-channels/:id/files/batch
+- **描述**: **小文件聚合上传**（FR-346）。一个 multipart 请求携带多个 ≤8 MiB 小文件（≤200 个 / 总 ≤32 MiB），替代逐文件三段分块协议；每项逐个喂入同一 CAS（`Ingest` 按声明 sha256 强校验 + 去重），结果与单次/分块上传**逐字段一致**。**fail-fast**：任一文件校验失败即中止返回错误，已入库的前序文件保留（CAS 无引用制品无害，重试整批即秒传）。>8 MiB 文件仍走 FR-251 分块协议
+- **关联 FR**: FR-346
+- **鉴权**: **JWT，平台管理员**
+- **请求**: `multipart/form-data`，part 顺序强约束——首 part 字段 `meta`（JSON 数组 `[{ "filename": "a.jar", "size": 2048, "sha256": "ab34…64hex" }]`，sha256 必填），随后**恰好 len(meta) 个**字段 `files` 的 part 与 meta 同序（原始字节）
+- **响应** (201): `{ "results": [ { "sha256": "ab34…", "md5": "…", "size": 2048, "codec": "none" } ] }`（与 meta 顺序对齐、等长）
+- **错误**: 400 `INVALID_REQUEST`（multipart/meta 非法、首 part 非 meta、files part 数与 meta 不符）/ `BATCH_LIMIT_EXCEEDED`（>200 个 / 单文件 >8 MiB / 总 >32 MiB）| 404 `CHANNEL_NOT_FOUND` | 422 `CHECKSUM_MISMATCH`（字节与声明 sha256 不符，含长度不符）
+- **审计**: `client_file.publish`（**每批 1 条**，detail 含 `via: "batch"`、`count`、`totalBytes`）
+
 ### POST /api/v1/client-channels/:id/versions
 - **描述**: 发布版本并切 latest 指针。`version` 由服务端**单调递增分配**（防降级基准，contract §3），不接受客户端指定
 - **关联 FR**: FR-087
