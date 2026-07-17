@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
@@ -137,3 +137,90 @@ describe('FileExplorer 多级目录一次建（FR-350）', () => {
   })
 })
 
+describe('FileExplorer 右键定点上传（FR-350）', () => {
+  it('提供 onUploadToDir 时目录右键菜单出现上传两项', async () => {
+    renderWithProviders(
+      <FileExplorer files={manifestFiles('mods/a.jar')} onUploadToDir={vi.fn()} />,
+    )
+
+    fireEvent.contextMenu(dirRow('mods'))
+    const menu = await screen.findByTestId('fe-context-menu')
+    expect(within(menu).getByText('上传文件到此')).toBeInTheDocument()
+    expect(within(menu).getByText('上传文件夹到此')).toBeInTheDocument()
+  })
+
+  it('未提供 onUploadToDir 时不显示上传项', async () => {
+    renderWithProviders(<FileExplorer files={manifestFiles('mods/a.jar')} />)
+
+    fireEvent.contextMenu(dirRow('mods'))
+    const menu = await screen.findByTestId('fe-context-menu')
+    expect(within(menu).queryByText('上传文件到此')).not.toBeInTheDocument()
+    expect(within(menu).queryByText('上传文件夹到此')).not.toBeInTheDocument()
+  })
+
+  it('文件行右键菜单不出现上传项（仅目录）', async () => {
+    renderWithProviders(
+      <FileExplorer files={manifestFiles('mods/a.jar')} onUploadToDir={vi.fn()} />,
+    )
+
+    const fileEl = screen.getAllByTestId('fe-file-row')[0]
+    fireEvent.contextMenu(fileEl)
+    const menu = await screen.findByTestId('fe-context-menu')
+    expect(within(menu).queryByText('上传文件到此')).not.toBeInTheDocument()
+  })
+
+  it('上传文件到此：回调携带所选文件与目标目录路径', async () => {
+    const onUploadToDir = vi.fn()
+    renderWithProviders(
+      <FileExplorer files={manifestFiles('mods/a.jar')} onUploadToDir={onUploadToDir} />,
+    )
+
+    fireEvent.contextMenu(dirRow('mods'))
+    const menu = await screen.findByTestId('fe-context-menu')
+    fireEvent.click(within(menu).getByText('上传文件到此'))
+
+    const input = screen.getByTestId('fe-upload-files-input') as HTMLInputElement
+    expect(input.multiple).toBe(true)
+    expect(input.hasAttribute('webkitdirectory')).toBe(false)
+
+    const picked = new File(['x'], 'extra.jar')
+    fireEvent.change(input, { target: { files: [picked] } })
+
+    expect(onUploadToDir).toHaveBeenCalledOnce()
+    expect(onUploadToDir).toHaveBeenCalledWith([picked], 'mods')
+  })
+
+  it('上传文件夹到此：input 带 webkitdirectory 且回调携带目录路径', async () => {
+    const onUploadToDir = vi.fn()
+    renderWithProviders(
+      <FileExplorer files={manifestFiles('mods/a.jar', 'config/x.toml')} onUploadToDir={onUploadToDir} />,
+    )
+
+    fireEvent.contextMenu(dirRow('config'))
+    const menu = await screen.findByTestId('fe-context-menu')
+    fireEvent.click(within(menu).getByText('上传文件夹到此'))
+
+    const input = screen.getByTestId('fe-upload-folder-input') as HTMLInputElement
+    expect(input.hasAttribute('webkitdirectory')).toBe(true)
+
+    const picked = new File(['y'], 'hud.json')
+    fireEvent.change(input, { target: { files: [picked] } })
+
+    expect(onUploadToDir).toHaveBeenCalledOnce()
+    expect(onUploadToDir).toHaveBeenCalledWith([picked], 'config')
+  })
+
+  it('选择器取消（空 FileList）不触发回调', async () => {
+    const onUploadToDir = vi.fn()
+    renderWithProviders(
+      <FileExplorer files={manifestFiles('mods/a.jar')} onUploadToDir={onUploadToDir} />,
+    )
+
+    fireEvent.contextMenu(dirRow('mods'))
+    const menu = await screen.findByTestId('fe-context-menu')
+    fireEvent.click(within(menu).getByText('上传文件到此'))
+    fireEvent.change(screen.getByTestId('fe-upload-files-input'), { target: { files: [] } })
+
+    expect(onUploadToDir).not.toHaveBeenCalled()
+  })
+})

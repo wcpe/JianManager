@@ -1540,7 +1540,9 @@
     "multiDirDesc": "One path per line; a/b/c creates the whole chain at once, existing levels are reused.",
     "multiDirPlaceholder": "mods/extra\nconfig/client/hud",
     "multiDirPreview": "{{n}} directory level(s) will be created",
-    "multiDirInvalid": "{{n}} invalid path(s) ignored (contains .. or empty)"
+    "multiDirInvalid": "{{n}} invalid path(s) ignored (contains .. or empty)",
+    "uploadFilesHere": "Upload files here",
+    "uploadFolderHere": "Upload folder here"
   },
   "fileBrowser": {
     "pickFile": "Pick a file on the left to preview its content",

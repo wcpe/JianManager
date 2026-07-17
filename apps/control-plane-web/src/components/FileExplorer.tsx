@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type MouseEvent as ReactMouseEvent,
   type DragEvent,
 } from 'react'
@@ -18,10 +19,12 @@ import {
   FolderOpen,
   FolderPlus,
   FolderTree,
+  FolderUp,
   GripVertical,
   Lock,
   Pencil,
   Trash2,
+  Upload,
 } from 'lucide-react'
 import {
   buildFileTreeWithDirs,
@@ -159,6 +162,12 @@ export interface FileExplorerProps {
   resolveDrop?: (files: File[], targetDir: string) => Promise<LocalUnit[]>
   /** 冲突解决后 / 无冲突时，把单元累加进草稿。 */
   onAddFiles?: (units: LocalUnit[]) => void
+  /**
+   * 右键目录「上传文件/文件夹到此」（FR-350）：组件只负责弹系统选择器，
+   * 把所选文件与目标目录路径交给页面层摄入（业务摄入不在组件内）。
+   * 省略时这两个菜单项不显示（不影响其他使用方）。
+   */
+  onUploadToDir?: (files: File[], targetDirPath: string) => void
 }
 
 export default function FileExplorer({
@@ -171,6 +180,7 @@ export default function FileExplorer({
   onRemoveMultiple,
   resolveDrop,
   onAddFiles,
+  onUploadToDir,
 }: FileExplorerProps) {
   const { t } = useTranslation()
 
@@ -203,6 +213,11 @@ export default function FileExplorer({
   const [resolving, setResolving] = useState(false)
   // 「新建多级目录」模态基准目录（null=关闭；''=根目录，FR-350）。
   const [multiDirBase, setMultiDirBase] = useState<string | null>(null)
+  // 定点上传 hidden input（FR-350）：files=散文件多选、folder=webkitdirectory 目录选择。
+  const uploadFilesInputRef = useRef<HTMLInputElement>(null)
+  const uploadFolderInputRef = useRef<HTMLInputElement>(null)
+  // 定点上传目标目录（点菜单项时记录，选择器回调时读取）。
+  const uploadTargetDirRef = useRef('')
 
   // 有效空目录（排除已被文件占据的）——派生值而非 effect 同步。
   const effectiveEmptyDirs = useMemo(() => {
@@ -378,6 +393,26 @@ export default function FileExplorer({
       })
     },
     [readonly],
+  )
+
+  // ── 定点上传（FR-350 右键目录「上传文件/文件夹到此」） ────────────────
+
+  /** 打开定点上传系统选择器：记录目标目录，触发对应 hidden input。 */
+  const openUploadPicker = useCallback((dirPath: string, kind: 'files' | 'folder') => {
+    uploadTargetDirRef.current = dirPath
+    const ref = kind === 'files' ? uploadFilesInputRef : uploadFolderInputRef
+    ref.current?.click()
+  }, [])
+
+  /** 选择器回调：把所选文件与目标目录交给页面层摄入（组件不做业务摄入）。 */
+  const onUploadPicked = useCallback(
+    (e: ChangeEvent<HTMLInputElement>) => {
+      const picked = Array.from(e.target.files ?? [])
+      e.target.value = '' // 允许重复选择同名内容再次触发 change
+      if (picked.length === 0) return
+      onUploadToDir?.(picked, uploadTargetDirRef.current)
+    },
+    [onUploadToDir],
   )
 
   // ── 删除 ──────────────────────────────────────────────────────────
@@ -686,8 +721,51 @@ export default function FileExplorer({
             setContextMenu(null)
             setMultiDirBase(tg.kind === 'dir' ? tg.dirPath : '')
           }}
+          onUploadFiles={
+            onUploadToDir && contextMenu.target.kind === 'dir'
+              ? () => {
+                  const dirPath = (contextMenu.target as { kind: 'dir'; dirPath: string }).dirPath
+                  setContextMenu(null)
+                  openUploadPicker(dirPath, 'files')
+                }
+              : undefined
+          }
+          onUploadFolder={
+            onUploadToDir && contextMenu.target.kind === 'dir'
+              ? () => {
+                  const dirPath = (contextMenu.target as { kind: 'dir'; dirPath: string }).dirPath
+                  setContextMenu(null)
+                  openUploadPicker(dirPath, 'folder')
+                }
+              : undefined
+          }
           t={t}
         />
+      )}
+
+      {/* 定点上传 hidden input（FR-350）：菜单项触发 click，选中后经 onUploadToDir 交页面层摄入 */}
+      {!readonly && onUploadToDir && (
+        <>
+          <input
+            ref={uploadFilesInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            data-testid="fe-upload-files-input"
+            onChange={onUploadPicked}
+          />
+          <input
+            ref={uploadFolderInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            data-testid="fe-upload-folder-input"
+            onChange={onUploadPicked}
+            // @ts-expect-error 非标准属性，浏览器支持目录选择
+            webkitdirectory=""
+            directory=""
+          />
+        </>
       )}
 
       {/* 新建多级目录模态（FR-350） */}
@@ -818,6 +896,8 @@ function ContextMenu({
   onDelete,
   onNewFolder,
   onNewMultiDir,
+  onUploadFiles,
+  onUploadFolder,
   t,
 }: {
   x: number
@@ -827,6 +907,10 @@ function ContextMenu({
   onDelete: () => void
   onNewFolder: () => void
   onNewMultiDir: () => void
+  /** 「上传文件到此」（FR-350）：仅目录目标且页面提供 onUploadToDir 时给出。 */
+  onUploadFiles?: () => void
+  /** 「上传文件夹到此」（FR-350）：仅目录目标且页面提供 onUploadToDir 时给出。 */
+  onUploadFolder?: () => void
   t: TFunction
 }) {
   const isRoot = target.kind === 'root'
@@ -855,6 +939,28 @@ function ContextMenu({
         <FolderTree className="size-4" />
         {t('fileExplorer.newMultiDir', '新建多级目录')}
       </button>
+      {onUploadFiles && (
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+          data-testid="fe-menu-upload-files"
+          onClick={onUploadFiles}
+        >
+          <Upload className="size-4" />
+          {t('fileExplorer.uploadFilesHere', '上传文件到此')}
+        </button>
+      )}
+      {onUploadFolder && (
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent"
+          data-testid="fe-menu-upload-folder"
+          onClick={onUploadFolder}
+        >
+          <FolderUp className="size-4" />
+          {t('fileExplorer.uploadFolderHere', '上传文件夹到此')}
+        </button>
+      )}
       {!isRoot && (
         <>
           <button

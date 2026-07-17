@@ -30,6 +30,7 @@ import {
   dedupUnits,
   localDedupKey,
   batchProgressBytes,
+  joinDirPath,
   CLEAN_ALL_SENTINEL,
   isCleanAll,
   type PublishStepId,
@@ -274,6 +275,41 @@ export default function ClientPublishPage() {
       appendUnits(units)
     },
     [appendUnits],
+  )
+
+  /**
+   * FR-350 右键定点上传：把 FileExplorer 交来的「所选文件 + 目标目录」摄入草稿。
+   * zip 解包后逐条拼目录前缀；文件夹选择（webkitdirectory）保留 webkitRelativePath
+   * 内部相对结构拼在前缀后；散文件回退文件名。均本地暂存、不上传。
+   */
+  const ingestFilesToDir = useCallback(
+    async (picked: File[], targetDirPath: string) => {
+      const units: LocalUnit[] = []
+      for (const f of picked) {
+        if (isZipFilename(f.name)) {
+          const buf = new Uint8Array(await f.arrayBuffer())
+          for (const u of await unzipToUnits(buf)) {
+            units.push({ ...u, path: joinDirPath(targetDirPath, u.path) })
+          }
+        } else {
+          const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath
+          const sub = normalizeManifestPath(rel && rel !== '' ? rel : f.name)
+          units.push({ file: f, path: joinDirPath(targetDirPath, sub) })
+        }
+      }
+      appendUnits(units)
+    },
+    [appendUnits],
+  )
+
+  /** FileExplorer onUploadToDir 回调（同步签名）：异步摄入 + 解包失败弹错。 */
+  const onUploadToDir = useCallback(
+    (picked: File[], targetDirPath: string) => {
+      ingestFilesToDir(picked, targetDirPath).catch((err) => {
+        toast.error(errMsg(err, t('clientVersions.unzipFailed', '解包 ZIP 失败')))
+      })
+    },
+    [ingestFilesToDir, t],
   )
 
   const onPickFiles = async (e: ChangeEvent<HTMLInputElement>) => {
@@ -557,6 +593,7 @@ export default function ClientPublishPage() {
                 onRemoveMultiple={(indices) => indices.forEach((i) => removeDraft(idOf(i)))}
                 resolveDrop={resolveDrop}
                 onAddFiles={(units) => appendUnits(units)}
+                onUploadToDir={onUploadToDir}
               />
             )}
           </div>
@@ -582,6 +619,7 @@ export default function ClientPublishPage() {
               onRemoveMultiple={(indices) => indices.forEach((i) => removeDraft(idOf(i)))}
               resolveDrop={resolveDrop}
               onAddFiles={(units) => appendUnits(units)}
+              onUploadToDir={onUploadToDir}
             />
           </div>
         )}
