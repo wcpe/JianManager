@@ -36,7 +36,7 @@ func NewClientChunkUploadHandler(svc *service.ChunkedUploadService, channel *ser
 type initUploadRequest struct {
 	// Filename 原始文件名（决定 CAS 扩展名/下载名），可空。
 	Filename string `json:"filename"`
-	// TotalSize 文件总字节数（必，>0）。
+	// TotalSize 文件总字节数（必，>=0；0=空文件）。
 	TotalSize int64 `json:"totalSize"`
 	// ChunkSize 期望分片大小（可空；<=0 用服务端默认，越界自动夹取）。
 	ChunkSize int64 `json:"chunkSize"`

@@ -251,6 +251,32 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
     }
   })
 
+  it('含 0 字节文件（.gitkeep 类空文件）发布成功', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    const versionPub = countVersionPublishRequests()
+    try {
+      const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
+      await screen.findByTestId('publish-dropzone')
+      const input = addFilesInput(container)
+      // 整合包常见形态：普通文件 + 0 字节占位文件（.gitkeep / 空配置）。
+      await user.upload(input, new File(['data'], 'mod.jar'))
+      await user.upload(input, new File([], '.gitkeep'))
+      await screen.findByText('mod.jar')
+      await screen.findByText('.gitkeep')
+
+      await user.click(screen.getByRole('button', { name: /下一步/ }))
+      await user.click(screen.getByRole('button', { name: /下一步/ }))
+      await user.click(screen.getByRole('button', { name: /下一步/ }))
+      await user.click(await screen.findByRole('button', { name: /发布新版本/ }))
+
+      // 0 字节文件不再被 init(totalSize=0) 400 弃单——批量上传全过、版本发布端点被调用一次。
+      await waitFor(() => expect(versionPub.get()).toBe(1))
+    } finally {
+      versionPub.stop()
+    }
+  })
+
   it('上传失败 → 保留草稿、不发布版本（可重试）', async () => {
     loginMockUser()
     const user = userEvent.setup()

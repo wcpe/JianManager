@@ -47,7 +47,7 @@ export interface UploadFileChunkedOptions {
  *
  * @param totalSize 文件总字节数（>=0）。
  * @param chunkSize 每片字节数（>0）。
- * @returns 有序分片区间数组；totalSize=0 时返回单个空片（index 0, [0,0)），与后端「>0 才 init」由调用方保证。
+ * @returns 有序分片区间数组；totalSize=0（空文件）返回空数组——零次分片循环、init 后直达 complete。
  */
 export function sliceRanges(totalSize: number, chunkSize: number): ChunkRange[] {
   if (chunkSize <= 0) throw new Error('chunkSize 必须为正')
@@ -83,6 +83,7 @@ function abortError(): Error {
  * 分块上传一个文件到指定频道，返回内容寻址元数据（与单次上传 usePublishClientFile 同结构）。
  *
  * 流程：init → 顺序 PUT 各分片（application/octet-stream 原始字节）→ complete。
+ * 0 字节文件（.gitkeep/空配置）：init(totalSize=0) 合法、无分片，直达 complete（后端落空内容 CAS）。
  * 取消（signal.aborted）在任意阶段生效：已 init 则 best-effort DELETE 弃单后抛 AbortError。
  * codec 恒 none（本期发布不压缩，与既有 ClientPublishPage 一致）。
  */

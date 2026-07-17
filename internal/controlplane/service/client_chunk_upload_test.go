@@ -224,10 +224,61 @@ func TestChunkedUpload_ChannelMismatchRejected(t *testing.T) {
 
 func TestChunkedUpload_InvalidInitRejected(t *testing.T) {
 	svc, _, _ := newChunkedUploadSvc(t)
-	_, err := svc.Init("ch", InitParams{TotalSize: 0, ChunkSize: testChunk})
+	// totalSize=0 合法（空文件，见 TestChunkedUpload_ZeroByteFile）；仅负数拒绝。
+	_, err := svc.Init("ch", InitParams{TotalSize: -5})
 	require.ErrorIs(t, err, ErrInvalidUploadInit)
-	_, err = svc.Init("ch", InitParams{TotalSize: -5})
-	require.ErrorIs(t, err, ErrInvalidUploadInit)
+}
+
+// 空内容的标准摘要（RFC 6234 / RFC 1321 已知值），验证空文件 CAS 入库内容寻址正确。
+const (
+	emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	emptyMD5    = "d41d8cd98f00b204e9800998ecf8427e"
+)
+
+// 整合包常见 0 字节文件（.gitkeep / 空配置）：init(totalSize=0) 须成功且 chunkCount=0，
+// 无片可传（任何 index 越界），complete 直接拼空内容喂 CAS，结果与单次上传空内容一致。
+func TestChunkedUpload_ZeroByteFile(t *testing.T) {
+	svc, verSvc, _ := newChunkedUploadSvc(t)
+
+	init, err := svc.Init("ch", InitParams{Filename: ".gitkeep", TotalSize: 0, ChunkSize: testChunk})
+	require.NoError(t, err)
+	require.Equal(t, int64(0), init.ChunkCount)
+
+	// 0 片会话不接受任何分片写入。
+	_, err = svc.WriteChunk("ch", init.UploadID, 0, bytes.NewReader(nil))
+	require.ErrorIs(t, err, ErrInvalidChunkIndex)
+
+	tempDir := filepath.Join(svc.uploadsRoot(), init.UploadID)
+	require.DirExists(t, tempDir)
+
+	out, err := svc.Complete("ch", init.UploadID, CompleteParams{Codec: "none"})
+	require.NoError(t, err)
+	require.Equal(t, int64(0), out.Size)
+	require.Equal(t, emptySHA256, out.SHA256)
+	require.Equal(t, emptyMD5, out.MD5)
+	require.Equal(t, "none", out.Codec)
+
+	// 与单次 PublishFile 空内容逐字段一致（同 CAS 去重）。
+	single, err := verSvc.PublishFile(bytes.NewReader(nil), PublishFileParams{Filename: ".gitkeep"})
+	require.NoError(t, err)
+	require.Equal(t, single.SHA256, out.SHA256)
+	require.Equal(t, single.MD5, out.MD5)
+	require.Equal(t, single.Size, out.Size)
+
+	// complete 后清临时目录 + 会话移除（与非空路径一致）。
+	require.NoDirExists(t, tempDir)
+	_, err = svc.Complete("ch", init.UploadID, CompleteParams{})
+	require.ErrorIs(t, err, ErrUploadNotFound)
+}
+
+// 空文件 + 期望校验和：ExpectedSHA256 为空内容 sha256 时 complete 应通过（Ingest 比对路径不豁免空流）。
+func TestChunkedUpload_ZeroByteFileExpectedSha256(t *testing.T) {
+	svc, _, _ := newChunkedUploadSvc(t)
+	init, err := svc.Init("ch", InitParams{Filename: "empty.cfg", TotalSize: 0})
+	require.NoError(t, err)
+	out, err := svc.Complete("ch", init.UploadID, CompleteParams{ExpectedSHA256: emptySHA256})
+	require.NoError(t, err)
+	require.Equal(t, emptySHA256, out.SHA256)
 }
 
 func TestChunkedUpload_ChunkSizeClampAndCount(t *testing.T) {

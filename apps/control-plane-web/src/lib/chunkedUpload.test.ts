@@ -1,5 +1,14 @@
-import { describe, it, expect } from 'vitest'
-import { sliceRanges, progressBytes, type ChunkRange } from './chunkedUpload'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+// hoisted mock 暴露 api 方法 spy，供 uploadFileChunked 的 0 字节文件契约断言（BUG：空文件被 init 400 弃单）。
+const { postMock, putMock, deleteMock } = vi.hoisted(() => ({
+  postMock: vi.fn(),
+  putMock: vi.fn(),
+  deleteMock: vi.fn(),
+}))
+vi.mock('@/api/client', () => ({ default: { post: postMock, put: putMock, delete: deleteMock } }))
+
+import { sliceRanges, progressBytes, uploadFileChunked, type ChunkRange } from './chunkedUpload'
 
 /** 分块上传切片数学（FR-251）：片数 / 边界 / 末片 / 进度归并纯逻辑。 */
 describe('sliceRanges', () => {
@@ -57,6 +66,76 @@ describe('sliceRanges', () => {
     expect(() => sliceRanges(10, 0)).toThrow()
     expect(() => sliceRanges(10, -1)).toThrow()
     expect(() => sliceRanges(-1, 10)).toThrow()
+  })
+})
+
+/**
+ * 0 字节文件（整合包常见 .gitkeep / 空配置）上传契约：init(totalSize=0) → 零次分片 PUT →
+ * 直达 complete；进度回调有终态且无 NaN（uploadedBytes === totalBytes === 0 即 100%）。
+ */
+describe('uploadFileChunked 0 字节文件', () => {
+  beforeEach(() => {
+    postMock.mockReset()
+    putMock.mockReset()
+    deleteMock.mockReset()
+  })
+
+  it('init 报 totalSize=0、零次 chunk 请求、直达 complete 并返回结果', async () => {
+    const chunkSize = 8 * 1024 * 1024
+    const completeResult = {
+      sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+      md5: 'd41d8cd98f00b204e9800998ecf8427e',
+      size: 0,
+      codec: 'none',
+    }
+    postMock.mockImplementation((url: string) => {
+      if (/\/uploads$/.test(url)) {
+        return Promise.resolve({ data: { uploadId: 'u1', chunkSize, chunkCount: 0 } })
+      }
+      return Promise.resolve({ data: completeResult })
+    })
+
+    const progress: Array<[number, number]> = []
+    const res = await uploadFileChunked('ch-1', new File([], '.gitkeep'), {
+      onProgress: (uploaded, total) => progress.push([uploaded, total]),
+    })
+
+    // init 声明 totalSize=0（不再由前端回避空文件）。
+    const [initUrl, initBody] = postMock.mock.calls[0] as [string, { totalSize: number; filename: string }]
+    expect(initUrl).toBe('/client-channels/ch-1/uploads')
+    expect(initBody.totalSize).toBe(0)
+    expect(initBody.filename).toBe('.gitkeep')
+
+    // 空文件无分片：零次 chunk PUT。
+    expect(putMock).not.toHaveBeenCalled()
+
+    // 直达 complete（第二次 post 即 complete）。
+    const [completeUrl] = postMock.mock.calls[1] as [string]
+    expect(completeUrl).toBe('/client-channels/ch-1/uploads/u1/complete')
+
+    // 成功路径不弃单。
+    expect(deleteMock).not.toHaveBeenCalled()
+
+    // 返回 complete 的内容寻址元数据。
+    expect(res).toEqual(completeResult)
+
+    // 进度回调有终态：uploadedBytes === totalBytes（0/0 即已传完）、无 NaN、不为负。
+    expect(progress.length).toBeGreaterThan(0)
+    const [lastUploaded, lastTotal] = progress[progress.length - 1]
+    expect(lastUploaded).toBe(lastTotal)
+    for (const [u, t] of progress) {
+      expect(Number.isNaN(u)).toBe(false)
+      expect(Number.isNaN(t)).toBe(false)
+      expect(u).toBeGreaterThanOrEqual(0)
+      expect(t).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('init 被拒（0 字节旧后端 400）时错误上抛且不发 chunk/complete', async () => {
+    postMock.mockRejectedValueOnce(new Error('INVALID_UPLOAD_INIT'))
+    await expect(uploadFileChunked('ch-1', new File([], '.gitkeep'))).rejects.toThrow('INVALID_UPLOAD_INIT')
+    expect(putMock).not.toHaveBeenCalled()
+    expect(postMock).toHaveBeenCalledTimes(1) // 仅 init，无 complete
   })
 })
 

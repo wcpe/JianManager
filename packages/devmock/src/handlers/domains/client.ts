@@ -772,16 +772,18 @@ export const handlers = [
       totalSize: number
       chunkSize?: number
     }
-    if (!body.totalSize || body.totalSize <= 0) {
-      return HttpResponse.json({ error: 'INVALID_UPLOAD_INIT', message: 'totalSize 须为正' }, { status: 400 })
+    // 与真后端一致（BUG 修复）：totalSize=0 合法（空文件如 .gitkeep，chunkCount=0 直达 complete），仅负数/非数拒。
+    const totalSize = Number(body.totalSize ?? 0)
+    if (!Number.isFinite(totalSize) || totalSize < 0) {
+      return HttpResponse.json({ error: 'INVALID_UPLOAD_INIT', message: 'totalSize 不能为负' }, { status: 400 })
     }
     const chunkSize = clampMockChunk(body.chunkSize)
-    const chunkCount = Math.ceil(body.totalSize / chunkSize)
+    const chunkCount = Math.ceil(totalSize / chunkSize)
     const uploadId = `mock-upload-${++uploadSeq}`
     uploads.set(uploadId, {
       channelId,
       filename: body.filename ?? '',
-      totalSize: body.totalSize,
+      totalSize,
       chunkSize,
       chunkCount,
       received: new Set<number>(),

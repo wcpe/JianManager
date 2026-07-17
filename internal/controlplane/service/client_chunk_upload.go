@@ -26,7 +26,7 @@ var (
 	ErrInvalidChunkSize = errors.New("分片字节数不符")
 	// ErrUploadIncomplete complete 时分片不齐全（缺片）。
 	ErrUploadIncomplete = errors.New("分片不齐全")
-	// ErrInvalidUploadInit init 参数非法（totalSize<=0 / chunkSize<=0）。
+	// ErrInvalidUploadInit init 参数非法（totalSize<0；0 为空文件、合法）。
 	ErrInvalidUploadInit = errors.New("上传初始化参数非法")
 )
 
@@ -170,7 +170,7 @@ func (s *ChunkedUploadService) SweepExpired() int {
 type InitParams struct {
 	// Filename 原始文件名（决定 CAS 扩展名/下载名），可空。
 	Filename string
-	// TotalSize 文件总字节数（必，>0）。
+	// TotalSize 文件总字节数（必，>=0；0=空文件如 .gitkeep，chunkCount=0 无片直达 complete）。
 	TotalSize int64
 	// ChunkSize 期望分片大小（可空，<=0 用默认；越界则夹取到 [min,max]）。
 	ChunkSize int64
@@ -187,13 +187,15 @@ type InitResult struct {
 }
 
 // Init 建立分块上传会话：校验参数 → 敲定 chunkSize/chunkCount → 建临时目录 → 登记会话。
-// totalSize<=0 返回 ErrInvalidUploadInit。chunkSize 越界自动夹取到 [minChunkSize,maxChunkSize]。
+// totalSize<0 返回 ErrInvalidUploadInit；totalSize=0 合法（整合包常见 .gitkeep/空配置，BUG 修复：
+// 原 <=0 一刀切使含空文件的发布整批弃单），此时 chunkCount=0、无片可传、complete 直接落空内容。
+// chunkSize 越界自动夹取到 [minChunkSize,maxChunkSize]。
 func (s *ChunkedUploadService) Init(channelID string, p InitParams) (*InitResult, error) {
-	if p.TotalSize <= 0 {
-		return nil, fmt.Errorf("%w: totalSize 须为正", ErrInvalidUploadInit)
+	if p.TotalSize < 0 {
+		return nil, fmt.Errorf("%w: totalSize 不能为负", ErrInvalidUploadInit)
 	}
 	chunkSize := clampChunkSize(p.ChunkSize)
-	// ceil 除法，全程 int64 无 32 位截断。
+	// ceil 除法，全程 int64 无 32 位截断；chunkSize 经夹取恒 >=minChunkSize 无除零，totalSize=0 时自然得 0 片。
 	chunkCount := (p.TotalSize + chunkSize - 1) / chunkSize
 
 	id, err := newUploadID()
@@ -304,6 +306,7 @@ type CompleteParams struct {
 
 // Complete 完成分块上传：校验分片齐全 + 总字节匹配 → io.MultiReader 顺序拼装各 part 喂
 // PublishFile 落 CAS → 返回 ClientFileResult（与单次上传逐字段一致）→ 清理临时分片 + 移除会话。
+// 空文件会话（chunkCount=0）齐全校验天然通过、拼装为空流，正常走 PublishFile/Ingest 得空内容 CAS。
 //
 // 缺片返回 ErrUploadIncomplete；总字节不符返回 ErrInvalidChunkSize；频道不匹配 ErrUploadChannelMismatch。
 // 落 CAS 失败时保留会话与临时分片（供重试 complete），不吞会话。

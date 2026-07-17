@@ -2480,9 +2480,9 @@
 - **描述**: 大文件**分块上传**初始化（FR-251，增强 FR-088 单次上传）。声明文件总大小 → 建上传会话 → 返回 `uploadId` 与服务端敲定的 `chunkSize`/`chunkCount`（前端据此切片）。用于 4G+ 整合包，避免单请求超时、无进度、失败整传重来
 - **关联 FR**: FR-251
 - **鉴权**: **JWT，平台管理员**（运营操作，与 `POST .../files` 同组）
-- **请求**: `{ "filename": "pack.zip", "totalSize": 5368709120, "chunkSize": 8388608 }`（`totalSize` 必 >0；`chunkSize` 可空，<=0 用默认 8 MiB，越界夹取到 [1 MiB, 64 MiB]）
+- **请求**: `{ "filename": "pack.zip", "totalSize": 5368709120, "chunkSize": 8388608 }`（`totalSize` 必 >=0，**0=空文件**（整合包常见 `.gitkeep`/空配置）此时 `chunkCount=0`、无片可传、直接 complete 落空内容；`chunkSize` 可空，<=0 用默认 8 MiB，越界夹取到 [1 MiB, 64 MiB]）
 - **响应** (201): `{ "uploadId": "a1b2…", "chunkSize": 8388608, "chunkCount": 640 }`
-- **错误**: 400 `INVALID_REQUEST` / `INVALID_UPLOAD_INIT`（totalSize<=0）| 404 `CHANNEL_NOT_FOUND`
+- **错误**: 400 `INVALID_REQUEST` / `INVALID_UPLOAD_INIT`（totalSize<0）| 404 `CHANNEL_NOT_FOUND`
 
 ### PUT /api/v1/client-channels/:id/uploads/:uploadId/chunks/:index
 - **描述**: 上传第 `index`（0 基）个分片。**幂等**——重传同 index 覆盖，支持失败重试；分片先落临时文件再原子 rename，避免半写脏片被 complete 采纳
