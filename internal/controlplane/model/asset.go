@@ -45,6 +45,9 @@ const (
 	AssetStorageArchived AssetStorageState = "archived"
 	// AssetStorageExternal 外置到对象存储等后端。
 	AssetStorageExternal AssetStorageState = "external"
+	// AssetStorageLost 失效：索引在、外置对象缺失，下载不可用（FR-349 对账「标记失效」处置写入；
+	// 重传同内容文件去重命中即补传对象并复位 external，自愈语义见 artifact-s3-reconcile spec §3.6）。
+	AssetStorageLost AssetStorageState = "lost"
 )
 
 // AssetBackendLocal 本地存储后端标识（默认）。

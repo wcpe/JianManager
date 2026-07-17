@@ -144,6 +144,10 @@ func AutoMigrate(db *gorm.DB) error {
 		// 制品存量迁移（FR-348）：迁移任务登记与实时计数 + 逐条失败明细。
 		&model.ArtifactMigration{},
 		&model.ArtifactMigrationFailure{},
+		// 制品索引 ↔ S3 对象一致性对账（FR-349）：运行记录 + 差异明细 + 定期设置（单行）。
+		&model.ArtifactReconcileRun{},
+		&model.ArtifactReconcileDiff{},
+		&model.ArtifactReconcileSetting{},
 		&model.LogEntry{},
 		&model.MetricSeries{},
 		&model.MetricSampleRaw{},
