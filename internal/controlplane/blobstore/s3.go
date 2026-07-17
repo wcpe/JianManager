@@ -190,17 +190,26 @@ func (s *s3Store) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// listBucketResult ListObjectsV2 响应（只取所需字段）。
+// listBucketResult ListObjectsV2 响应（只取所需字段；截断标记与续传令牌供 ListPage 分页，FR-349）。
 type listBucketResult struct {
 	Contents []struct {
 		Key          string `xml:"Key"`
 		Size         int64  `xml:"Size"`
 		LastModified string `xml:"LastModified"`
 	} `xml:"Contents"`
+	IsTruncated           bool   `xml:"IsTruncated"`
+	NextContinuationToken string `xml:"NextContinuationToken"`
 }
 
-// List 经 ListObjectsV2 枚举 prefix 下对象；返回键剥掉渠道 Prefix（还原 CAS 键视角）。
+// List 经 ListObjectsV2 枚举 prefix 下对象（单页语义不变）；返回键剥掉渠道 Prefix。
 func (s *s3Store) List(ctx context.Context, prefix string, limit int) ([]ObjectInfo, error) {
+	out, _, err := s.ListPage(ctx, prefix, limit, "")
+	return out, err
+}
+
+// ListPage 经 ListObjectsV2 + continuation-token 分页枚举（FR-349 对账全量遍历）。
+// nextToken 非空表示 bucket 侧已截断，还有后续页。
+func (s *s3Store) ListPage(ctx context.Context, prefix string, limit int, token string) ([]ObjectInfo, string, error) {
 	if limit <= 0 {
 		limit = 1000
 	}
@@ -208,23 +217,26 @@ func (s *s3Store) List(ctx context.Context, prefix string, limit int) ([]ObjectI
 	q.Set("list-type", "2")
 	q.Set("max-keys", strconv.Itoa(limit))
 	q.Set("prefix", s.fullKey(prefix))
+	if token != "" {
+		q.Set("continuation-token", token)
+	}
 	listURL := fmt.Sprintf("%s://%s/%s?%s", s.scheme, s.endpoint, s.bucket, q.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	signV4(req, emptyPayloadHash, s.accessKey, s.secretKey, s.region, s.now().UTC())
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("S3 列举失败: %w", err)
+		return nil, "", fmt.Errorf("S3 列举失败: %w", err)
 	}
 	defer drainClose(resp.Body)
 	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("S3 列举失败: HTTP %d", resp.StatusCode)
+		return nil, "", fmt.Errorf("S3 列举失败: HTTP %d", resp.StatusCode)
 	}
 	var result listBucketResult
 	if err := xml.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&result); err != nil {
-		return nil, fmt.Errorf("解析 S3 列举响应失败: %w", err)
+		return nil, "", fmt.Errorf("解析 S3 列举响应失败: %w", err)
 	}
 	out := make([]ObjectInfo, 0, len(result.Contents))
 	for _, c := range result.Contents {
@@ -238,7 +250,11 @@ func (s *s3Store) List(ctx context.Context, prefix string, limit int) ([]ObjectI
 		}
 		out = append(out, info)
 	}
-	return out, nil
+	next := ""
+	if result.IsTruncated {
+		next = result.NextContinuationToken
+	}
+	return out, next, nil
 }
 
 // Presign 生成对象的 SigV4 query 预签名 GET URL（302 分发用，见 ADR-073 决策 1）。

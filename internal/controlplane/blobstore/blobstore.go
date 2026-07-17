@@ -59,8 +59,12 @@ type Store interface {
 	Stat(ctx context.Context, key string) (*ObjectInfo, error)
 	// Delete 幂等删除 blob（缺失不报错）。
 	Delete(ctx context.Context, key string) error
-	// List 枚举 prefix 下至多 limit 个 blob（连通探测与 FR-349 对账用；limit<=0 取 1000）。
+	// List 枚举 prefix 下至多 limit 个 blob（连通探测等单页场景；limit<=0 取 1000）。
 	List(ctx context.Context, prefix string, limit int) ([]ObjectInfo, error)
+	// ListPage 分页枚举 prefix 下的 blob（FR-349 对账全量遍历用）。
+	// token 传上一页返回的续传令牌（首页传空）；nextToken 非空表示还有后续页；limit<=0 取 1000。
+	// 令牌对调用方不透明（s3=ListObjectsV2 continuation-token；local=游标键），大 bucket 循环至 nextToken 为空即全量。
+	ListPage(ctx context.Context, prefix string, limit int, token string) (items []ObjectInfo, nextToken string, err error)
 	// Presign 生成 blob 的短时效公开 GET URL（无需凭证即可下载，302 分发用）。
 	// 纯本地签名计算无网络 IO。local 后端返回 ErrPresignUnsupported。
 	Presign(key string, ttl time.Duration) (string, error)

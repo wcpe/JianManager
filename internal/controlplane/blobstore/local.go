@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -73,10 +74,39 @@ func (l *localStore) Delete(_ context.Context, key string) error {
 }
 
 // List 枚举 prefix（数据根相对目录/键前缀）下的文件，登记键统一「/」分隔（与 CAS 键规范一致）。
-func (l *localStore) List(_ context.Context, prefix string, limit int) ([]ObjectInfo, error) {
+func (l *localStore) List(ctx context.Context, prefix string, limit int) ([]ObjectInfo, error) {
+	out, _, err := l.ListPage(ctx, prefix, limit, "")
+	return out, err
+}
+
+// ListPage 分页枚举（FR-349）：全量 Walk 后按键排序，token=上一页末键（start-after 游标语义）。
+// local 渠道不参与对账（本地文件系统由 CAS 自管），此实现保证接口完备与与 s3 一致的遍历语义。
+func (l *localStore) ListPage(_ context.Context, prefix string, limit int, token string) ([]ObjectInfo, string, error) {
 	if limit <= 0 {
 		limit = 1000
 	}
+	all, err := l.walkAll(prefix)
+	if err != nil {
+		return nil, "", err
+	}
+	start := 0
+	if token != "" {
+		start = sort.Search(len(all), func(i int) bool { return all[i].Key > token })
+	}
+	end := start + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	page := all[start:end]
+	next := ""
+	if end < len(all) && len(page) > 0 {
+		next = page[len(page)-1].Key
+	}
+	return page, next, nil
+}
+
+// walkAll 收集 prefix 下全部文件并按键升序（与 S3 ListObjectsV2 字典序对齐）。
+func (l *localStore) walkAll(prefix string) ([]ObjectInfo, error) {
 	base := l.root.Abs(prefix)
 	rootAbs := l.root.Abs("")
 	var out []ObjectInfo
@@ -89,9 +119,6 @@ func (l *localStore) List(_ context.Context, prefix string, limit int) ([]Object
 		}
 		if d.IsDir() {
 			return nil
-		}
-		if len(out) >= limit {
-			return fs.SkipAll
 		}
 		info, ierr := d.Info()
 		if ierr != nil {
@@ -111,6 +138,7 @@ func (l *localStore) List(_ context.Context, prefix string, limit int) ([]Object
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
+	sort.Slice(out, func(a, b int) bool { return out[a].Key < out[b].Key })
 	return out, nil
 }
 

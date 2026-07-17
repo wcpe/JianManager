@@ -78,6 +78,40 @@ func TestLocalStore_OpenStatDeleteList(t *testing.T) {
 	require.ErrorIs(t, err, ErrBlobNotFound)
 }
 
+// TestLocalStore_ListPage_Cursor ListPage 以末键游标分页（FR-349）：跨页全量、字典序、无重复。
+func TestLocalStore_ListPage_Cursor(t *testing.T) {
+	store, root := newLocalStore(t)
+	want := []string{
+		"var/artifacts/client-file/aa/1.zip",
+		"var/artifacts/client-file/bb/2.zip",
+		"var/artifacts/client-file/cc/3.zip",
+		"var/artifacts/client-file/dd/4.zip",
+		"var/artifacts/client-file/ee/5.zip",
+	}
+	for _, k := range want {
+		require.NoError(t, os.MkdirAll(filepath.Dir(root.Abs(k)), 0o755))
+		require.NoError(t, os.WriteFile(root.Abs(k), []byte("x"), 0o644))
+	}
+
+	var got []string
+	token := ""
+	pages := 0
+	for {
+		items, next, err := store.ListPage(context.Background(), "var/artifacts/client-file", 2, token)
+		require.NoError(t, err)
+		pages++
+		for _, it := range items {
+			got = append(got, it.Key)
+		}
+		if next == "" {
+			break
+		}
+		token = next
+	}
+	require.Equal(t, want, got, "跨页拼出完整字典序清单")
+	require.Equal(t, 3, pages)
+}
+
 // TestLocalStore_ListMissingDir 列举不存在目录返回空而非错误（探测/对账容错）。
 func TestLocalStore_ListMissingDir(t *testing.T) {
 	store, _ := newLocalStore(t)

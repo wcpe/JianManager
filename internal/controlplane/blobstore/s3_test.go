@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -114,15 +115,41 @@ func (f *fakeS3) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// answerList 仿真 ListObjectsV2：字典序 + max-keys 截断 + continuation-token 续传
+//（真实 S3 令牌不透明，此处用「上一页末键」当令牌，适配器按不透明字符串处理）。
 func (f *fakeS3) answerList(w http.ResponseWriter, r *http.Request) {
 	prefix := r.URL.Query().Get("prefix")
+	maxKeys := 1000
+	if mk := r.URL.Query().Get("max-keys"); mk != "" {
+		if n, err := strconv.Atoi(mk); err == nil && n > 0 {
+			maxKeys = n
+		}
+	}
+	token := r.URL.Query().Get("continuation-token")
+
+	matched := make([]string, 0, len(f.objects))
+	for k := range f.objects {
+		if strings.HasPrefix(k, prefix) && k > token {
+			matched = append(matched, k)
+		}
+	}
+	sort.Strings(matched)
+	truncated := len(matched) > maxKeys
+	if truncated {
+		matched = matched[:maxKeys]
+	}
+
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>`)
-	for k, v := range f.objects {
-		if strings.HasPrefix(k, prefix) {
-			b.WriteString("<Contents><Key>" + k + "</Key><Size>" + intToStr(len(v)) + "</Size>" +
-				"<LastModified>2013-05-24T00:00:00.000Z</LastModified></Contents>")
-		}
+	for _, k := range matched {
+		b.WriteString("<Contents><Key>" + k + "</Key><Size>" + intToStr(len(f.objects[k])) + "</Size>" +
+			"<LastModified>2013-05-24T00:00:00.000Z</LastModified></Contents>")
+	}
+	if truncated {
+		b.WriteString("<IsTruncated>true</IsTruncated>")
+		b.WriteString("<NextContinuationToken>" + matched[len(matched)-1] + "</NextContinuationToken>")
+	} else {
+		b.WriteString("<IsTruncated>false</IsTruncated>")
 	}
 	b.WriteString(`</ListBucketResult>`)
 	w.Header().Set("Content-Type", "application/xml")
@@ -206,6 +233,40 @@ func TestS3Store_List_FakeServer(t *testing.T) {
 	keys := []string{out[0].Key, out[1].Key}
 	require.Contains(t, keys, "var/artifacts/client-file/aa/one.zip")
 	require.Contains(t, keys, "var/artifacts/client-file/bb/two.zip")
+}
+
+// TestS3Store_ListPage_Continuation ListPage 经 continuation-token 跨页全量遍历（FR-349）：
+// pageSize 小于对象数时多页拼出完整清单、无重复无遗漏，末页 nextToken 为空。
+func TestS3Store_ListPage_Continuation(t *testing.T) {
+	fake, srv := newFakeS3(t, "jm-artifacts")
+	store := newTestS3Store(t, srv, "pfx")
+	want := map[string]bool{}
+	for _, k := range []string{"aa/1.zip", "bb/2.zip", "cc/3.zip", "dd/4.zip", "ee/5.zip"} {
+		full := "var/artifacts/client-file/" + k
+		fake.objects["pfx/"+full] = []byte("x")
+		want[full] = true
+	}
+	fake.objects["pfx/probe/leftover"] = []byte("p") // 命名空间外，不应出现
+
+	got := map[string]bool{}
+	token := ""
+	pages := 0
+	for {
+		items, next, err := store.ListPage(context.Background(), "var/artifacts/client-file/", 2, token)
+		require.NoError(t, err)
+		pages++
+		require.LessOrEqual(t, len(items), 2)
+		for _, it := range items {
+			require.False(t, got[it.Key], "跨页不得重复: %s", it.Key)
+			got[it.Key] = true
+		}
+		if next == "" {
+			break
+		}
+		token = next
+	}
+	require.Equal(t, want, got, "跨页拼出完整清单")
+	require.Equal(t, 3, pages, "5 个对象按页大小 2 应分 3 页")
 }
 
 // TestS3Store_Presign_ParamsAndTTL 适配器 Presign 出 path-style URL 且含全部
