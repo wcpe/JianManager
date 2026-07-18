@@ -1118,6 +1118,47 @@
 
 ## Bot
 
+### GET /api/v1/bots/load-nodes
+- **描述**: 查询目标实例可使用的 Bot 发压节点容量摘要（FR-351 / ADR-074）。目标实例只决定权限与被测对象，返回节点是实际运行 Mineflayer 的候选 Worker
+- **关联 FR**: FR-351
+- **权限**: `bot:read`，并须具备目标实例读取权限；无权实例按 404 隐藏存在性
+- **Query**: `instanceId`（必填，正整数）
+- **响应** (200):
+  ```json
+  {
+    "items": [
+      {
+        "nodeId": 2,
+        "nodeUuid": "uuid",
+        "nodeName": "load-node-2",
+        "online": true,
+        "tunnelConnected": true,
+        "botWorkerReady": true,
+        "legacy": false,
+        "maxBots": 50,
+        "activeBots": 10,
+        "reservedBots": 5,
+        "availableBots": 35,
+        "capacityGeneration": 7,
+        "workerEpoch": "uuid",
+        "botWorkerVersion": "0.4.0",
+        "runtimeSource": "worker-grpc",
+        "rssBytes": 134217728,
+        "eventLoopP95Ms": 4.2,
+        "lastHeartbeatAt": "datetime"
+      }
+    ],
+    "totalCapacity": 50,
+    "availableCapacity": 35,
+    "updatedAt": "datetime"
+  }
+  ```
+  - `availableBots = max(0, maxBots - activeBots - reservedBots)`；`reservedBots` 合并未完成持久批次与 CP 内存软预留
+  - `capacityGeneration` 只表示 max/features/epoch/admission 等容量语义版本；`activeBots` 等即时利用率快照变化本身不使已有计划失效
+  - 不可用节点仍可出现在 `items`，通过 `unavailableReason`（如 `NODE_OFFLINE` / `NODE_MAINTENANCE` / `LEGACY_WORKER` / `CAPACITY_SNAPSHOT_STALE`）说明原因，`availableBots=0`
+  - 响应不返回节点 host、gRPC 端口、node secret、计划签名密钥或其他敏感配置
+- **错误**: 400 `INVALID_REQUEST`（instanceId 缺失/非法）| 403 `FORBIDDEN`（缺 `bot:read`）| 404 `NOT_FOUND`（实例不存在或无权）| 500 `INTERNAL_ERROR`
+
 ### GET /api/v1/bots
 - **描述**: Bot 列表，分页 + 多维筛选（替换原扁平数组返回，FR-038）
 - **关联 FR**: FR-009, FR-038
@@ -1342,27 +1383,89 @@
 - **描述**: 查询单个压测会话详情，返回持久化 YAML。
 - **关联 FR**: FR-042 / FR-274
 - **权限**: `bot:read`（按会话目标实例隔离）
-- **响应**: `200` 同创建响应。
+- **响应**: `200` 同创建响应；FR-351 起在已预检/启动的会话上加性返回 `allocations[]` 与 `batches[]` 摘要。`instanceId` 仍是被测目标，`batches[].executorNodeId` 才是实际发压节点
 - **错误**:
   - 403 `FORBIDDEN`：无读取权限。
   - 404 `NOT_FOUND`：会话不存在或无权访问。
 
+### POST /api/v1/bots/stress-sessions/:id/preflight
+- **描述**: 为尚未启动或可重试的压测会话执行容量预检，生成跨 Worker 确定性分片、短期软预留和签名 `planToken`；不创建 Bot、不下发批次
+- **关联 FR**: FR-351
+- **权限**: `bot:manage`（按会话目标实例隔离）；写审计 `bot_load.run.preflight`，审计仅记录节点数量、目标数、ready 和 blocker code，不记录 planToken/计划正文
+- **请求**（body 可空）:
+  ```json
+  {
+    "executorNodeIds": [2, 3],
+    "connectRatePerSecondPerNode": 5
+  }
+  ```
+  - `executorNodeIds` 可选；省略时由 CP 从可用节点池自动选择，重复 ID 去重，最多 256 个
+  - `connectRatePerSecondPerNode` 可选，范围 `1..50`，省略使用默认 5
+- **响应** (200):
+  ```json
+  {
+    "runId": 1,
+    "runUuid": "uuid",
+    "ready": true,
+    "planToken": "opaque-signed-token",
+    "expiresAt": "datetime",
+    "targetBots": 100,
+    "totalAvailable": 150,
+    "allocations": [
+      {
+        "batchId": "uuid",
+        "ordinal": 1,
+        "executorNodeId": 2,
+        "executorNodeUuid": "uuid",
+        "executorNodeName": "load-node-2",
+        "plannedCount": 50,
+        "connectStartAt": "datetime",
+        "connectIntervalMs": 200,
+        "idempotencyKey": "bot-load-..."
+      }
+    ],
+    "nodeCapacities": [],
+    "probe": { "required": false, "connected": false, "instanceId": 1, "instanceUuid": "uuid" },
+    "estimatedDurationSeconds": 10,
+    "warnings": [],
+    "blockers": []
+  }
+  ```
+  - 容量不足、指定节点不可用或探针要求未满足时仍返回 200，`ready=false`、无 `planToken`，原因进入 `blockers[]`；容量 blocker code 为 `BOT_LOAD_CAPACITY_INSUFFICIENT`，节点 blocker code 为 `BOT_LOAD_NODE_UNAVAILABLE`
+  - 单个 allocation 的 `plannedCount` 为 `1..50`；`planToken` 只作下一步 start 的不透明凭据，客户端不得解析、拼装或回传 allocation plan
+  - 软预留位于 CP 内存、与 token 同期过期，不写数据库；CP 重启后 start 仍会即时快检
+- **错误**: 400 `INVALID_REQUEST` | 403 `FORBIDDEN` | 404 `NOT_FOUND` | 409 `BOT_LOAD_INVALID_STATE` | 500 `INTERNAL_ERROR`
+
 ### POST /api/v1/bots/stress-sessions/:id/start
-- **描述**: 启动压测会话，按会话配置批量创建并上线 Bot；含 YAML 编排时下发 `orchestrated` 行为和 `behavior_config`。
-- **关联 FR**: FR-042 / FR-274
-- **权限**: `bot:manage`（按会话目标实例隔离）
-- **响应**: `200` 会话视图，含 `counts` 和 `orchestrationSummary`。
+- **描述**: 使用预检签发的 `planToken` 启动分布式压测会话。CP 校验服务端计划、容量世代与即时节点可用性，在单事务中创建/恢复批次和 Bot desired 记录，提交后异步 dispatch
+- **关联 FR**: FR-042 / FR-274 / FR-351
+- **权限**: `bot:manage`（按会话目标实例隔离）；写审计 `bot_load.run.start`
+- **请求**:
+  ```json
+  { "planToken": "opaque-signed-token" }
+  ```
+- **响应**: `202 Accepted`，返回会话视图。新增字段为加性字段：
+  - `allocations[]`: 服务端保存计划的只读摘要（执行节点、批次大小、连接时间门控）
+  - `batches[]`: `{ id, uuid, executorNodeId, ordinal, plannedCount, acceptedCount, failedCount, state, startedAt?, endedAt? }`
+  - 返回 202 仅表示事务已提交且后台派发已接受；不会等待 Worker accepted，更不会等待 Bot connected。accepted 只来自逐项批量回执，connected 只来自 Fleet runtime 事件
+  - 响应不返回节点密钥、planToken 签名材料、数据库中的 allocation_plan 原文或批次内部错误明细
+- **V1 空 body 兼容**: 仅旧字段形态、尚无分布式计划且 `count<=50` 的 V1 会话，可在目标实例节点容量足够时由服务端内部预检并启动；V2/分布式会话缺 `planToken` 返回 409，禁止静默退回单节点
 - **错误**:
-  - 400 `INVALID_REQUEST`：会话状态不允许启动或持久化编排无法解析。
-  - 404 `NOT_FOUND`：会话不存在或无权访问。
+  - 400 `INVALID_REQUEST`：请求体/连接配置非法
+  - 403 `FORBIDDEN`：缺少会话目标实例的 Bot 管理权限
+  - 404 `NOT_FOUND`：会话不存在或无权访问
+  - 409 `BOT_LOAD_INVALID_STATE`：当前状态不允许启动
+  - 409 `BOT_LOAD_CAPACITY_CHANGED`（CAPACITY_CHANGED）：planToken 过期、签名/计划不匹配或使用节点的 `capacityGeneration` 已变化，须重新预检
+  - 422 `BOT_LOAD_CAPACITY_INSUFFICIENT`（CAPACITY_INSUFFICIENT）：即时可用容量不足且尚未物化既有批次
+  - 503 `BOT_LOAD_NODE_UNAVAILABLE`（NODE_UNAVAILABLE）：计划中的 Worker/bot-worker 当前离线、legacy、未就绪或不可达
 
 ### POST /api/v1/bots/stress-sessions/:id/stop
-- **描述**: 停止压测会话，将会话关联 Bot 批量置为 `stopped`
-- **关联 FR**: FR-042 / FR-274
-- **权限**: `bot:manage`（按会话目标实例隔离）
-- **响应**: `200` 会话视图，含 `counts` 和 `orchestrationSummary`。
-- **错误**:
-  - 404 `NOT_FOUND`：会话不存在或无权访问。
+- **描述**: 记录 stopped desired intent，并按 Bot 的实际执行节点分组、每批最多 50 条异步停止；可重复调用
+- **关联 FR**: FR-042 / FR-274 / FR-351
+- **权限**: `bot:manage`（按会话目标实例隔离）；写审计 `bot_load.run.stop`
+- **请求**（body 可空）: `{ "reason": "人工结束压测" }`，`reason` 最长 255 个字符
+- **响应**: `202 Accepted` 会话视图。它表示停止意图和后台任务已接受，不表示全部 Bot 已断开；逐项 accepted 后才把 Bot 写为 `stopped`。若存在未停止差距，批次保持 `failed`、会话进入 `error` 并保留可诊断原因，不伪报 stopped
+- **错误**: 400 `INVALID_REQUEST`（JSON 非法或 reason 超长）| 403 `FORBIDDEN` | 404 `NOT_FOUND` | 500 `INTERNAL_ERROR`
 
 ---
 

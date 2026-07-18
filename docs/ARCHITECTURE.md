@@ -11,6 +11,7 @@
     │ HTTP REST /api/v1/*  +  WS /ws/terminal（终端经 CP 中转，浏览器不直连 Worker）
     ▼
 Control Plane (Go 单二进制)
+    ├── 跨 Worker Bot 调度与 desired-state 真源（FR-351/ADR-074）
     │ gRPC —— 指令优先经 Worker 主动建立的「反向隧道」下发（Worker 零入站，FR-281/ADR-066）；
     │         无隧道（老 Worker / 重建窗口）回退 CP 直拨 worker gRPC 端口
     ▼
@@ -19,7 +20,7 @@ Worker Node (Go) × 20~100
     ├── 守护进程 Wrapper
     ├── WebSocket 终端服务 (/ws/terminal，CP 经 TerminalSession gRPC 桥回环接入；亦作老 CP 直拨回退)
     ├── 插件桥反向 WS 服务 (/ws/plugin-bridge, 探针主动连入, token, FR-065/ADR-016)
-    ├── Bot 管理 → Node.js 子进程 (Mineflayer)
+    ├── Bot 容量/runtime 真源 → Node.js 子进程 (Mineflayer)
     └── 指标采集（ServerProbe /metrics）
         ▲ HTTP GET /metrics (本机回环抓取)  +  ◀ 反向 WS (探针桥, 治理/事件通道)
         └── ServerProbe 探针 jar (运行于游戏服 JVM, FR-010 监控见 ADR-014, 治理桥见 ADR-016)
@@ -29,9 +30,9 @@ Worker Node (Go) × 20~100
 
 | 进程 | 语言 | 部署 | 职责 |
 |---|---|---|---|
-| Control Plane | Go | 1 个实例 | API、认证、调度、gRPC 客户端池（隧道优先/直拨回退）、终端 WS 中转、前端静态文件 |
-| Worker Node | Go | 20-100 个实例 | gRPC 服务端 + 反向隧道客户端、进程管理、Docker 管理、WS 终端服务（本机桥/回退） |
-| Bot Worker | Node.js | 按需 spawn | Mineflayer 连接、行为引擎、寻路、脚本执行 |
+| Control Plane | Go | 1 个实例 | API、认证、跨 Worker 调度与 desired-state 真源、gRPC 客户端池（隧道优先/直拨回退）、终端 WS 中转、前端静态文件 |
+| Worker Node | Go | 20-100 个实例 | gRPC 服务端 + 反向隧道客户端、进程管理、Docker 管理、Bot 容量/runtime 真源、WS 终端服务（本机桥/回退） |
+| Bot Worker | Node.js | 由 Worker 按需 spawn | Mineflayer 连接、行为引擎、寻路、脚本执行；仅经 stdin/stdout JSON IPC 受管 |
 
 ## 3. 技术栈
 
@@ -110,6 +111,12 @@ internal/controlplane/
 - 节点管理：限平台管理员
 - 配额：创建实例时校验 `MaxInstances`/`MaxBots`/`MaxStorageMB`（0 表示不限）；`GET /groups/:id/quota` 返回用量
 
+### 4.2 Bot 目标实例与执行节点（FR-351 / ADR-074）
+
+`Bot.InstanceID` 始终表示被测目标实例，也是权限、指标与 ServerProbe 事件的归属；`Bot.ExecutorNodeID` 表示实际运行 Mineflayer 的 Worker。所有 Bot 创建、删除、停止、行为、命令、状态刷新与事件订阅统一经 `BotExecutorResolver` 解析：`ExecutorNodeID` 非空时优先，否则回退 `Instance.NodeID`，既有普通 Bot 与 V1 压测会话保持兼容；`WorkerID` 仅用于兼容展示，不作路由真源。
+
+Control Plane 负责发现发压节点、生成确定性分片、保存批次与 Bot desired generation，并以事务物化记录后异步派发；Worker 只执行 assignment，并以本节点 Bot Manager 的准入容量和 runtime 事件为真源。默认单 Bot Worker 容量仍为 50，不通过放大单进程容量实现 500 Bot；跨节点扩容不改变三进程模型，也不新增第四类服务。
+
 ## 5. Worker Node 架构
 
 ```
@@ -124,7 +131,7 @@ internal/controlplane/
 ├─ 终端与日志流 ──────────────────────────────────────┤
 │  process stdout/stderr → WS terminal/log + gRPC events │
 ├─ Bot 管理层 ────────────────────────────────────────┤
-│  bot manager, ipc, Node.js 子进程生命周期             │
+│  bot manager, fleet 容量/runtime, 批量 IPC, Node.js 子进程生命周期 │
 ├─ 指标采集 ──────────────────────────────────────────┤
 │  collector, serverprobe(/metrics), heartbeat snapshots │
 ├─ 群组服层 (V2) ─────────────────────────────────────┤
@@ -203,7 +210,10 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
 - 归档浏览与反编译（FR-075；见 ADR-018）：ListArchiveEntries, ReadArchiveEntry, DecompileClass
   - `ListArchiveEntries`/`ReadArchiveEntry` 用 Go `archive/zip` **只读**列举/读取 jar/zip 内部条目（不起进程、零落盘，条目名经 zip-slip 校验，条目数/单条目字节有上限超出截断，内容嗅探 NUL 判二进制）；`DecompileClass` 经实例绑定 JDK（或系统候选 JDK / `JAVA_HOME` 兜底）**受控 exec** CFR 单 jar 把 `.class`/`.jar`（或 jar 内某 `.class` 抽临时文件）反编译为 Java 源码——CFR 仅静态分析字节码、不加载/运行目标代码，`context` 超时 + 输入体积上限 + 输出截断 + 失败/降级以 `success=false`+结构化 error 返回（不抛错）。CP 加性端点 `GET .../files/archive/entries`、`GET .../files/archive/read`（octet-stream + `X-Truncated`/`X-Binary` 头）、`POST .../files/decompile`，均复用文件「查看」级权限。CFR 分发：配置路径 > 内嵌（`make embed-cfr`，gitignore 不入库）> 数据根缓存 `var/tools/cfr-<ver>.jar` > Maven Central 按需下载（sha256 pin）
 - 终端：IssueTerminalToken
-- Bot：CreateBot, DeleteBot, ListBots, SetBotBehavior, SendBotCommand；`StreamBotEvents`/富遥测归 FR-041 后续实现，当前 Worker gRPC 以 `ListBots` 快照 + CP 读取时懒回填状态为准
+- Bot 基础操作：CreateBot, DeleteBot, ListBots, SetBotBehavior, SendBotCommand, StreamBotEvents；Control Plane 统一经 `BotExecutorResolver` 路由到 `ExecutorNodeID ?? Instance.NodeID`，目标实例与实际执行节点可不同（ADR-074）
+- Bot Fleet（FR-351，加性协议）：`GetBotCapacity` 返回 ready/legacy/max/active/connecting、`capacity_generation`、worker epoch、bot-worker 版本/feature、RSS 与事件循环 p95；`ApplyBotBatch` 每批最多 50 个 assignment，携 `batch_id`、`idempotency_key`、期望容量世代并返回逐 Bot accepted/skipped/error 回执；`GetBotFleetSnapshot` 建立完整 runtime 基线；`StreamBotFleetEvents` 持续发送 `runtime_snapshot | action_event`；`SignalBotActions` 每次最多 100 个通用动作信号并逐项回执。`BotAssignment` 已加性铺设 `scenario_json`、`resume_step_id`、`connect_not_before_unix_ms` 与 `correlation_seed`，供后续场景/运行 FR 复用
+  - `capacityGeneration` 只在 max/features、Worker/Bot Worker epoch 或 admission ready/unavailable 等**容量语义**变化时递增；active/connecting 只是即时利用率快照，不单独使 planToken 失效
+  - `BotFleetEvent.action_event` 与 ServerProbe MSPT p95 的 `mspt_p95_millis` proto/心跳字段已加性铺设；FR-351 只提供协议承载，可信动作语义和 ServerProbe p95 计算/接真分别属于 FR-352/353，不在此宣称已完成
 - 探针部署：DeployServerProbe（CP 内嵌 ServerProbe jar + 生成的 config.yml + 运行库缓存 `libraries_zip` 经 gRPC 下发，FR-010/FR-114；见 ADR-014/016）。Worker 写入实例 `plugins/` 并把缓存包解压到实例根 `libraries/`，**在线更新**（FR-068）复用本 RPC 推最新内嵌 jar 与缓存（下次重启生效，可选推送并重启），经 `GET/POST /instances/:id/probe/update`
 - 插件桥（FR-065；见 ADR-016）：StreamPluginEvents (server stream，CP 订阅某实例/全部探针经反向 WS 上报的事件流 connected/disconnected/heartbeat/玩家事件)、SendPluginCommand（CP 经 Worker 向探针下发治理/查询指令）、QueryServerState（查询子服全状态骨架）。地基阶段真实承载 connected/disconnected/heartbeat 与通道层，业务事件/治理执行语义留 FR-066/067
   - **JBIS 业务事件汇聚上行（FR-122；见 ADR-027/028）**：同一条 StreamPluginEvents 流复用承载 `domain` 非空的业务域事件（PluginEvent 的 `domain`/`dedup_key`/`raw_json` 字段，Worker 透传不消费语义）。CP 侧 `PlayerEventService` 据 `domain` 分流：玩家/监控事件走在线名册 + SSE，业务事件交 `BusinessEventService` 按 (domain,dedup_key) 去重落 `business_events` 通用信封，经济域(`economy`)再解析信封维护 `economy_balance_mirrors`(node→zone 维度、seq 单调)+`economy_ledger_entries`(审计)。探针侧由 mce `PlayerEconomyChangeEvent`/`PlayerEconomyCatchupEvent` 折算上报（覆盖 web 后台/跨服一切余额变更），currencyId Int→identifier 折算保证跨服聚合不串味。CP 插件无关、只认信封
@@ -364,23 +374,41 @@ Flags:   bit0=compressed(zlib)
 
 ```
 Go → Node.js (stdin, JSON 行):
-  {"cmd":"create-bots","bots":[{"id":"b1","behavior":"idle","behaviorConfig":{...}}]}
-  {"cmd":"stop-bots","botIds":[...]}
+  {"cmd":"create-bots","requestId":"...","batchId":"...","idempotencyKey":"...","bots":[...]}
+  {"cmd":"stop-bots","requestId":"...","botIds":[...],"generation":2,"reason":"..."}
+  {"cmd":"signal-actions","requestId":"...","signals":[...]}
+  {"cmd":"get-fleet-snapshot","requestId":"..."}
   {"cmd":"set-behavior","botId":"b1","behavior":"follow","target":"player","config":{...}}
   {"cmd":"send-command","botId":"b1","command":"say hello"}
   {"cmd":"run-script","scriptId":"s1","botIds":["b1"],"steps":[...]}
   {"cmd":"stop-script","scriptId":"s1"}
 
 Node.js → Go (stdout, JSON 行):
-  {"evt":"worker-ready"}
-  {"evt":"heartbeat","seq":1,"timestamp":...}
+  {"evt":"worker-ready","workerEpoch":"...","maxBots":50,"features":["fleet-v1"],"capacityGeneration":1}
+  {"evt":"heartbeat","activeBots":10,"connectingBots":2,"rssBytes":...,"eventLoopP95Ms":...,"capacityGeneration":1}
+  {"evt":"batch-result","requestId":"...","batchId":"...","idempotencyKey":"...","results":[...]}
+  {"evt":"signal-result","requestId":"...","signalResults":[...]}
+  {"evt":"fleet-snapshot-result","requestId":"...","bots":[...]}
   {"evt":"bot-state","bots":[...]}
+  {"evt":"action-event","action":{...}}
   {"evt":"bot-event","botId":"b1","type":"chat","data":{...}}
   {"evt":"bot-error","botId":"b1","error":"ECONNREFUSED"}
   {"evt":"script-progress","scriptId":"s1","status":"running","progress":50}
 ```
 
+Fleet 同步命令均携 `requestId`，Worker Manager 维护有界 pending map 与超时/迟到回执清理；写入 stdin 不代表 accepted，必须收到 `batch-result`/`signal-result` 的逐项确认。`create-bots` 的 assignment 可携 `connectNotBeforeUnixMs`（兼容 `connectNotBefore`），bot-worker 在到时前只登记 connecting 并以定时器门控真实 Mineflayer 连接；停止、重放与相同 idempotencyKey 均保持幂等。通用动作信号命令精确使用 `signal-actions`。
+
 Bot 压测 YAML 编排（FR-274）保持单一解析点：Control Plane 接收 JSON 请求体中的 `orchestrationYaml`，负责 YAML 解析、语义校验、原文持久化与 `orchestrationSummary` 摘要生成；启动会话时将规范化后的阶段、循环、错峰和 custom steps 序列化进既有 gRPC `behavior_config` 字段，并把 Bot 行为置为 `orchestrated`。Worker Node 不解析 YAML，也不重建编排语义，只把 `behavior_config` 透传到 bot-worker 的 IPC `behaviorConfig`。bot-worker 的 `orchestrated` 行为按 `startDelayMs` 错峰启动、按阶段切换内部 `idle/follow/patrol/guard/custom` 行为，并通过 `bot-event` 上报 `orchestration-phase` 事件供真实环境验收确认。
+
+#### 6.4.1 分布式压测预检与执行（FR-351 / ADR-074）
+
+- `GET /api/v1/bots/load-nodes?instanceId=` 返回目标实例权限作用域内的发压节点容量摘要；CP 的 `BotLoadCapacityDirectory` 并发聚合 Worker `GetBotCapacity`，单节点超时 3 秒、并发上限 16、缓存最长 15 秒，并合并 DB 中未完成批次占用与 CP 进程内 60 秒软预留。软预留是派生状态，CP 重启可丢失，**不写数据库**。
+- `POST /api/v1/bots/stress-sessions/:id/preflight` 按可选执行节点和每节点连接速率生成确定性轮转分片；单批 ≤50，容量不足仍返回 200 且 `ready=false`。ready 时服务端持久化 allocation plan，签发短期 `planToken`，客户端不回传或修改计划正文。
+- `POST .../:id/start` 校验 planToken、容量世代和即时节点可用性，在单事务中创建/恢复 `bot_load_batches` 与 Bot desired 记录；事务提交后才异步 dispatch，HTTP 返回 202，不等待 accepted 或 connected。各批独立回写，单节点失败不回滚其他成功批次，也不会把仅写入 stdin 的 Bot 计为 accepted。
+- `POST .../:id/stop` 先持久化 stopped desired generation，再按实际执行节点分组、每 50 条异步停止并返回 202。响应表示停止意图已接受，不代表全部 Bot 已离线；只有逐项 accepted 才写 `stopped`，仍有差距时会话保持错误态和可诊断原因，不伪报完成。
+- 旧 V1 会话仅在 count≤50、仍是旧字段形态且目标节点即时容量足够时，允许空 body start 由服务端内部生成单节点计划；分布式/V2 会话缺 `planToken` 返回容量计划已变化并要求重新预检。
+
+ServerProbe 仍只与目标实例**本机 Worker**通信（`/metrics` 回环抓取 + `/ws/plugin-bridge` 反向连接），不因 Bot 在其他 Worker 执行而跨节点直连；浏览器仍只访问 Control Plane。可信探针事件后续由 CP 关联目标实例后再路由，FR-351 不实现 FR-353 的探针事件适配或 FR-355 的 acceptance harness。
 
 ### 6.5 客户端 OTA 公网分发端点（玩家 updater ↔ Control Plane，FR-087 / ADR-022/023）
 
@@ -442,6 +470,8 @@ Group ──1:N──▶ GroupQuota
 Group ──M:N──▶ Instance (GroupInstance, UNIQUE instance_id)
 Node ──1:N──▶ Instance
 Instance ──1:N──▶ Backup / Schedule / Bot / BotStressSession
+Bot ──N:1──▶ Node (executor_node_id, 可空；为空回退目标 Instance.node_id)
+BotStressSession ──1:N──▶ BotLoadBatch ──1:N──▶ Bot
 BotStressSession ──1:N──▶ Bot (stress_session_id, 可空)
 Backup ──N:1──▶ Backup (parent_id, 增量备份链, V2)
 Backup ──N:1──▶ BackupStorage (storage_id, 远程存储位置, V2)
@@ -473,8 +503,9 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | instance_group_nodes (V2, FR-165) | uuid, name, parent_id(自引用 FK, NULL=根), sort, deleted_at（实例组织分组树节点，邻接表表达多级嵌套；正交于用户组/网络群组，仅组织归类，ADR-033）；INDEX(parent_id) |
 | instance_group_members (V2, FR-165) | group_id(FK instance_group_nodes), instance_id(FK)；UNIQUE(group_id, instance_id)（实例-组织分组 M:N，一实例可属多组；删组只解绑、不删实例） |
 | instance_crash_snapshots (FR-313) | instance_id(FK, INDEX), occurred_at, exit_code(无法获知=-1), signal(Unix 信号名；Windows/非信号退出为空), duration_ms, tail_output(TEXT, ≤200 行/64KB Worker 侧截取)（进程非正常退出现场；Worker 经 ReportCrashSnapshot 上报，写入同事务按实例滚动只留最近 5 条，删实例级联清） |
-| bot_stress_sessions | uuid, instance_id(FK), name, name_prefix, status(pending/running/stopped/error), bot_count, behavior, config(JSON), orchestration_yaml(TEXT), orchestration_summary(JSON), succeeded, failed, last_error, started_at, ended_at |
-| bots | uuid, instance_id(FK), stress_session_id(FK，可空), name, status, config(JSON), behavior, worker_id |
+| bot_stress_sessions | uuid, instance_id(FK), name, name_prefix, status(pending/running/stopped/error), bot_count, behavior, config(JSON), orchestration_yaml(TEXT), orchestration_summary(JSON), allocation_plan(TEXT，服务端保存的确定性分片正文；不由客户端回传), succeeded, failed, last_error, started_at, ended_at |
+| bot_load_batches (FR-351) | uuid, stress_session_id(FK), executor_node_id(FK), ordinal, planned_count/accepted_count/connected_count/failed_count, state(planned/dispatching/running/stopped/failed), idempotency_key, connect_start_at, connect_interval_ms, last_error, started_at, ended_at；UNIQUE(stress_session_id,ordinal)，单批 planned_count≤50 |
+| bots | uuid, instance_id(FK，目标实例/权限归属), stress_session_id(FK，可空), executor_node_id(FK，可空；为空回退目标实例节点), load_batch_id(FK，可空), name, status, worker_epoch/worker_epoch_generation, last_event_seq, last_seen_at/connected_at, desired_state_generation, config_hash, cohort_key, last_error, config(JSON), behavior, worker_id(仅兼容展示) |
 | backups | uuid, instance_id(FK), name, file_path, file_size_mb, type(0/1), mode(0 全量/1 增量, V2), status(0/1/2/3), parent_id(FK self, 备份链, V2), manifest(JSON 文件清单, V2), storage_id(FK, V2), storage_key(远程对象键, V2), checksum/checksum_algo(归档完整性, FR-171) |
 | process_metric_snapshots | node_uuid, instance_uuid, pid, name, cpu_percent, rss_bytes, read_bytes_per_sec, write_bytes_per_sec, user, command_summary(截断脱敏), sampled_at（受管实例进程 TOPN 短期快照，按 48h TTL 清理，FR-170） |
 | backup_storages | name(UNIQUE), type(local/s3/sftp/webdav), endpoint, bucket, region, prefix, access_key_env(${ENV_VAR}), secret_key_env(${ENV_VAR}), use_ssl, last_test_at/last_test_ok/last_test_message（FR-057/FR-152；backupCount/usedBytes 从 backups 聚合） |
@@ -955,7 +986,7 @@ bot-worker/src/
   health/       # 心跳检测
 ```
 
-容量：50 bots/worker, 256 workers max ≈ 12,800 bots
+默认准入容量仍为 **50 bots/worker**；FR-351 通过 Control Plane 将同一目标实例的 Bot 确定性分片到多个 Worker，而不是提高单 Bot Worker 默认容量。bot-worker 的 `worker-ready` 声明 `fleet-v1`、maxBots、worker epoch 与 capacityGeneration，heartbeat 上报 active/connecting、RSS 和事件循环 p95；runtime 的 generation/configHash/epoch/eventSeq 由 CP 归真，旧进程或乱序事件不得覆盖新 desired 状态。
 
 Worker spawn bot-worker 的 node 可执行经解析策略选定（FR-300，`internal/worker/bot/noderesolver.go`）：显式配置（`ManagerConfig.NodePath`，V1 只留结构无配置面）> 节点本地扫描最高 major Node（复用 `runtimescan` node 路径表）> 回退 PATH `"node"`（保兼容）；解析一次缓存、spawn 失败重扫重试一次，路径与来源（explicit-config/managed-scan/path-fallback）打进 Bot 启动日志。
 
