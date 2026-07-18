@@ -5,8 +5,18 @@ import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
 import { mockInject } from '@jianmanager/devmock/inject'
 import { db } from '@jianmanager/devmock/db'
+import { server } from '@jianmanager/devmock/server'
 import type { Session } from '@jianmanager/devmock/handlers/domains/auth'
 import RuntimeAssetsPage from './RuntimeAssetsPage'
+
+function trackReconcilePosts() {
+  const paths: string[] = []
+  const listener = ({ request }: { request: Request }) => {
+    if (request.method === 'POST') paths.push(new URL(request.url).pathname)
+  }
+  server.events.on('request:start', listener)
+  return { paths, stop: () => server.events.removeListener('request:start', listener) }
+}
 
 /**
  * RuntimeAssetsPage 强断言（FR-200/FR-053）：①渲染 seed JDK/制品 ②删 JDK→overview 联动减少
@@ -57,6 +67,55 @@ describe('RuntimeAssetsPage（mock 假后端）', () => {
     await user.type(screen.getByPlaceholderText('搜索名称/版本/sha256'), 'paper')
     expect(screen.getByText('paper-1.20.4')).toBeInTheDocument()
     expect(screen.queryByText('lobby-client-config')).not.toBeInTheDocument()
+  })
+
+  it('client-file 表格展示存储位置与对账状态，lost 制品红标并提示自愈', async () => {
+    loginMockUser()
+    renderWithProviders(<RuntimeAssetsPage />)
+
+    expect(await screen.findByText('lost-client-pack')).toBeInTheDocument()
+    expect(screen.getByText('存储位置')).toBeInTheDocument()
+    expect(screen.getByText('对账状态')).toBeInTheDocument()
+
+    const localRow = screen.getByText('lobby-client-config').closest('tr') as HTMLElement
+    expect(within(localRow).getByText('本机')).toBeInTheDocument()
+    expect(within(localRow).getByText('正常')).toBeInTheDocument()
+
+    const lostRow = screen.getByText('lost-client-pack').closest('tr') as HTMLElement
+    expect(within(lostRow).getByText('rustfs-主渠道')).toBeInTheDocument()
+    expect(within(lostRow).getAllByText('失效')).toHaveLength(2)
+    expect(within(lostRow).getByTitle('外置对象已缺失，重传同内容文件即可自愈')).toBeInTheDocument()
+  })
+
+  it('展示运行记录与报告，两个危险操作确认后才发送处置请求', async () => {
+    loginMockUser()
+    const tracker = trackReconcilePosts()
+    const user = userEvent.setup()
+    renderWithProviders(<RuntimeAssetsPage />)
+
+    expect(await screen.findByText('制品存储对账')).toBeInTheDocument()
+    const viewReport = await screen.findByRole('button', { name: '查看报告' })
+    expect(screen.getByText('手动')).toBeInTheDocument()
+    await user.click(viewReport)
+
+    const report = await screen.findByRole('dialog', { name: /对账报告/ })
+    expect(within(report).getByText(/索引 3 · 对象 3 · 一致 1/)).toBeInTheDocument()
+    expect(within(report).getByText(/var\/artifacts\/client-file\/99/)).toBeInTheDocument()
+    expect(within(report).getByText('var/artifacts/client-file/ff/orphan-pack.zip')).toBeInTheDocument()
+
+    expect(tracker.paths).not.toContain('/api/v1/artifact-reconcile/runs/1/resolve-missing')
+    await user.click(within(report).getByRole('button', { name: '全部标记失效' }))
+    const markDialog = await screen.findByRole('dialog', { name: '确认标记缺失制品为失效？' })
+    expect(tracker.paths).not.toContain('/api/v1/artifact-reconcile/runs/1/resolve-missing')
+    await user.click(within(markDialog).getByRole('button', { name: '全部标记失效' }))
+    await waitFor(() => expect(tracker.paths).toContain('/api/v1/artifact-reconcile/runs/1/resolve-missing'))
+
+    await user.click(within(report).getByRole('button', { name: '清理全部孤儿' }))
+    const cleanupDialog = await screen.findByRole('dialog', { name: '确认清理全部孤儿对象？' })
+    expect(tracker.paths).not.toContain('/api/v1/artifact-reconcile/runs/1/cleanup-orphans')
+    await user.click(within(cleanupDialog).getByRole('button', { name: '清理全部孤儿' }))
+    await waitFor(() => expect(tracker.paths).toContain('/api/v1/artifact-reconcile/runs/1/cleanup-orphans'))
+    tracker.stop()
   })
 
   it('删除一个 JDK 后，overview 联动移除该 JDK', async () => {

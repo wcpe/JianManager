@@ -52,8 +52,9 @@ export interface AssetInfo {
   contentType: string
   sourceUrl: string
   metadata: string
-  storageState: 'hot' | 'archived' | 'external'
+  storageState: 'hot' | 'archived' | 'external' | 'lost'
   storageBackend: string
+  storageChannelId: number
   refCount: number
   relPath: string
   createdAt: string
@@ -70,6 +71,7 @@ export interface AssetTypeGroup {
   hotCount: number
   archivedCount: number
   externalCount: number
+  lostCount: number
 }
 
 /** 制品区汇总统计。 */
@@ -80,6 +82,7 @@ export interface AssetSummary {
   hotCount: number
   archivedCount: number
   externalCount: number
+  lostCount: number
 }
 
 /**
@@ -110,6 +113,12 @@ export interface RuntimeNodeSync {
   syncedAt: string | null
 }
 
+export interface ArtifactChannelRef {
+  id: number
+  name: string
+  type: string
+}
+
 /** 运行时与制品全局页一次性聚合载荷（FR-082；FR-301 加性扩展 runtimes/runtimeSyncs/syncedAt）。 */
 export interface RuntimeAssetsOverview {
   jdks: JDKMatrixItem[]
@@ -118,6 +127,7 @@ export interface RuntimeAssetsOverview {
   assetSummary: AssetSummary
   runtimes: RuntimeMatrixEntry[]
   runtimeSyncs: RuntimeNodeSync[]
+  artifactChannels: ArtifactChannelRef[]
   /** 整体上次同步时间 = 各节点最大值；null=全部未同步。 */
   syncedAt: string | null
 }
@@ -135,6 +145,7 @@ export function useRuntimeAssetsOverview() {
         assets: (data.assets ?? []).map((g) => ({ ...g, items: g.items ?? [] })),
         runtimes: (data.runtimes ?? []).map((r) => ({ ...r, instances: r.instances ?? [] })),
         runtimeSyncs: data.runtimeSyncs ?? [],
+        artifactChannels: data.artifactChannels ?? [],
         syncedAt: data.syncedAt ?? null,
       }
     },

@@ -190,6 +190,44 @@ export interface ArtifactMigrationFailure {
   createdAt: string
 }
 
+export interface ArtifactReconcileRun {
+  id: number
+  channelId: number
+  channelName: string
+  status: 'running' | 'succeeded' | 'failed'
+  triggeredBy: 'manual' | 'scheduled'
+  startedAt: string
+  finishedAt?: string
+  indexCount: number
+  objectCount: number
+  matchedCount: number
+  missingCount: number
+  orphanCount: number
+  errorMessage: string
+}
+
+export interface ArtifactReconcileDiff {
+  id: number
+  runId: number
+  channelId: number
+  kind: 'missing' | 'orphan'
+  assetId: number
+  sha256: string
+  objectKey: string
+  size: number
+  lastModified?: string
+  status: 'open' | 'resolved'
+  resolvedAt?: string
+  resolvedAction: string
+  resolveError: string
+}
+
+export interface ArtifactReconcileSettings {
+  enabled: boolean
+  intervalHours: number
+  nextRunAt?: string
+}
+
 // ─────────────────────────── 定时任务（schedules） ───────────────────────────
 
 /** 定时任务（与后端 model.Schedule 对齐）。 */

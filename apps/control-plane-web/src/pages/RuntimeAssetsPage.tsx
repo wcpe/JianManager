@@ -27,6 +27,7 @@ import { instanceStatusLevel, type StatusLevel } from '@jianmanager/ui'
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/DangerConfirm'
 import { formatRelativeTime } from '@/lib/relative-time'
+import ArtifactReconcileSection from './ArtifactReconcileSection'
 import {
   formatBytes,
   buildRuntimeGrid,
@@ -78,7 +79,8 @@ export default function RuntimeAssetsPage() {
       </div>
 
       <JDKSection jdks={data.jdks} summary={data.jdkSummary} runtimes={data.runtimes} syncedAt={data.syncedAt} />
-      <AssetSection groups={data.assets} summary={data.assetSummary} />
+      <AssetSection groups={data.assets} summary={data.assetSummary} channels={data.artifactChannels} />
+      <ArtifactReconcileSection channels={data.artifactChannels} />
     </div>
   )
 }
@@ -366,8 +368,10 @@ const ASSET_TYPES: Array<AssetType | 'all'> = [
 function AssetSection({
   groups,
   summary,
+  channels,
 }: {
   groups: import('@/api/runtimeAssets').AssetTypeGroup[]
+  channels: import('@/api/runtimeAssets').ArtifactChannelRef[]
   summary: {
     assetCount: number
     totalSize: number
@@ -375,6 +379,7 @@ function AssetSection({
     hotCount: number
     archivedCount: number
     externalCount: number
+    lostCount: number
   }
 }) {
   const { t } = useTranslation()
@@ -478,13 +483,15 @@ function AssetSection({
                   <TableHead>{t('runtimeAssets.sha256')}</TableHead>
                   <TableHead className="text-right">{t('runtimeAssets.size')}</TableHead>
                   <TableHead className="text-center">{t('runtimeAssets.storage')}</TableHead>
+                  {g.type === 'client-file' && <TableHead>{t('runtimeAssets.storageLocation')}</TableHead>}
+                  {g.type === 'client-file' && <TableHead className="text-center">{t('runtimeAssets.reconcileState')}</TableHead>}
                   <TableHead className="text-center">{t('runtimeAssets.refs')}</TableHead>
                   <TableHead className="text-right">{t('common.actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {g.items.map((a) => (
-                  <AssetRow key={a.id} asset={a} pluginAssets={pluginAssets} />
+                  <AssetRow key={a.id} asset={a} pluginAssets={pluginAssets} channels={channels} />
                 ))}
               </TableBody>
             </Table>
@@ -622,7 +629,15 @@ function parseAssetMetadata(raw: string): { path?: string; codec?: string } {
   }
 }
 
-function AssetRow({ asset, pluginAssets }: { asset: AssetInfo; pluginAssets: AssetInfo[] }) {
+function AssetRow({
+  asset,
+  pluginAssets,
+  channels,
+}: {
+  asset: AssetInfo
+  pluginAssets: AssetInfo[]
+  channels: import('@/api/runtimeAssets').ArtifactChannelRef[]
+}) {
   const { t } = useTranslation()
   const del = useDeleteAsset()
   const [confirming, setConfirming] = useState(false)
@@ -647,11 +662,17 @@ function AssetRow({ asset, pluginAssets }: { asset: AssetInfo; pluginAssets: Ass
   }
 
   const storageLabel =
-    asset.storageState === 'archived'
-      ? t('runtimeAssets.storageArchived')
-      : asset.storageState === 'external'
-        ? t('runtimeAssets.storageExternal')
-        : t('runtimeAssets.storageHot')
+    asset.storageState === 'lost'
+      ? t('runtimeAssets.storageLost')
+      : asset.storageState === 'archived'
+        ? t('runtimeAssets.storageArchived')
+        : asset.storageState === 'external'
+          ? t('runtimeAssets.storageExternal')
+          : t('runtimeAssets.storageHot')
+  const channelName = channels.find((channel) => channel.id === asset.storageChannelId)?.name
+  const storageLocation = asset.storageBackend === 's3'
+    ? channelName || t('runtimeAssets.storageChannelFallback', { id: asset.storageChannelId })
+    : t('runtimeAssets.storageLocal')
   const metadata = parseAssetMetadata(asset.metadata)
   const clientFileInfo = asset.type === 'client-file'
     ? [asset.filename, metadata.path, metadata.codec].filter(Boolean).join(' · ')
@@ -672,14 +693,32 @@ function AssetRow({ asset, pluginAssets }: { asset: AssetInfo; pluginAssets: Ass
         <span
           className={cn(
             'rounded px-1.5 py-0.5 text-[10px]',
-            asset.storageState === 'hot'
-              ? 'bg-status-success/15 text-status-success'
-              : 'bg-muted text-muted-foreground',
+            asset.storageState === 'lost'
+              ? 'bg-destructive/15 text-destructive'
+              : asset.storageState === 'hot'
+                ? 'bg-status-success/15 text-status-success'
+                : 'bg-muted text-muted-foreground',
           )}
         >
           {storageLabel}
         </span>
       </TableCell>
+      {asset.type === 'client-file' && <TableCell>{storageLocation}</TableCell>}
+      {asset.type === 'client-file' && (
+        <TableCell className="text-center">
+          <span
+            className={cn(
+              'rounded px-1.5 py-0.5 text-[10px]',
+              asset.storageState === 'lost'
+                ? 'bg-destructive/15 text-destructive'
+                : 'bg-status-success/15 text-status-success',
+            )}
+            title={asset.storageState === 'lost' ? t('runtimeAssets.reconcileLostHint') : undefined}
+          >
+            {asset.storageState === 'lost' ? t('runtimeAssets.reconcileLost') : t('runtimeAssets.reconcileOk')}
+          </span>
+        </TableCell>
+      )}
       <TableCell className="text-center">
         <span
           className={cn(

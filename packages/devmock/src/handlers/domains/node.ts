@@ -81,8 +81,9 @@ interface MockAsset {
   contentType: string
   sourceUrl: string
   metadata: string
-  storageState: 'hot' | 'archived' | 'external'
+  storageState: 'hot' | 'archived' | 'external' | 'lost'
   storageBackend: string
+  storageChannelId: number
   refCount: number
   relPath: string
   createdAt: string
@@ -323,6 +324,7 @@ const assets = db<MockAsset>('assets', () => [
     metadata: '{}',
     storageState: 'hot',
     storageBackend: 'local',
+    storageChannelId: 0,
     refCount: 1,
     relPath: 'core/paper-1.20.4-496.jar',
     createdAt: NOW,
@@ -342,6 +344,7 @@ const assets = db<MockAsset>('assets', () => [
     metadata: '{}',
     storageState: 'archived',
     storageBackend: 'local',
+    storageChannelId: 0,
     refCount: 0,
     relPath: 'plugin/ViaVersion-5.0.1.jar',
     createdAt: NOW,
@@ -361,10 +364,31 @@ const assets = db<MockAsset>('assets', () => [
     metadata: '{"path":"config/servers.json","codec":"zstd"}',
     storageState: 'hot',
     storageBackend: 'local',
+    storageChannelId: 0,
     refCount: 1,
     relPath: 'client-file/servers.json.zst',
     createdAt: NOW,
     lastUsedAt: NOW,
+  },
+  {
+    id: 4,
+    type: 'client-file',
+    name: 'lost-client-pack',
+    version: '2026.07.18',
+    filename: 'lost-pack.zip',
+    sha256: '9'.repeat(64),
+    md5: '8'.repeat(32),
+    size: 4096,
+    contentType: 'application/zip',
+    sourceUrl: '',
+    metadata: '{"path":"mods/lost-pack.zip","codec":"none"}',
+    storageState: 'lost',
+    storageBackend: 's3',
+    storageChannelId: 2,
+    refCount: 0,
+    relPath: `var/artifacts/client-file/99/${'9'.repeat(64)}.zip`,
+    createdAt: NOW,
+    lastUsedAt: null,
   },
 ])
 
@@ -1087,6 +1111,7 @@ export const handlers = [
           hotCount: items.filter((a) => a.storageState === 'hot').length,
           archivedCount: items.filter((a) => a.storageState === 'archived').length,
           externalCount: items.filter((a) => a.storageState === 'external').length,
+          lostCount: items.filter((a) => a.storageState === 'lost').length,
         }
       })
       .filter((g) => g.count > 0)
@@ -1149,7 +1174,12 @@ export const handlers = [
         hotCount: assetRows.filter((a) => a.storageState === 'hot').length,
         archivedCount: assetRows.filter((a) => a.storageState === 'archived').length,
         externalCount: assetRows.filter((a) => a.storageState === 'external').length,
+        lostCount: assetRows.filter((a) => a.storageState === 'lost').length,
       },
+      artifactChannels: [
+        { id: 1, name: '本机存储', type: 'local' },
+        { id: 2, name: 'rustfs-主渠道', type: 's3' },
+      ],
       runtimes: runtimeMatrix,
       runtimeSyncs: syncRows,
       syncedAt: syncTimes.length > 0 ? syncTimes[syncTimes.length - 1] : null,
@@ -1204,6 +1234,7 @@ export const handlers = [
       metadata: '{}',
       storageState: 'hot',
       storageBackend: 'local',
+      storageChannelId: 0,
       refCount: 0,
       relPath: `${type}/${filename}`,
       createdAt: NOW,
