@@ -1,0 +1,624 @@
+package grpc
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"sync/atomic"
+	"time"
+
+	"github.com/wcpe/JianManager/internal/worker/bot"
+	"github.com/wcpe/JianManager/proto/workerpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+)
+
+const (
+	maxBotBatchSize           = 50
+	maxBotActionSignals       = 100
+	botBatchCacheLimit        = 1000
+	botBatchCacheTTL          = time.Hour
+	botBatchStatusAccepted    = "accepted"
+	botBatchStatusConflict    = "conflict"
+	botBatchStatusCapacity    = "capacity_insufficient"
+	botBatchStatusUnavailable = "ephemeral_unavailable"
+)
+
+type botFleetManager interface {
+	CapacitySnapshot() bot.BotCapacitySnapshot
+	FleetSnapshot(sessionID string) []bot.BotState
+	ApplyBotBatch(context.Context, string, string, string, []bot.BotConfig) (*bot.BotWorkerEvent, error)
+	StopBotBatch(context.Context, string, []string, int64, string) (*bot.BotWorkerEvent, error)
+	SignalActions(context.Context, string, []bot.ActionSignal) (*bot.BotWorkerEvent, error)
+	RequestFleetSnapshot(context.Context, string) (*bot.BotWorkerEvent, error)
+}
+
+type botBatchCacheEntry struct {
+	payloadHash string
+	response    *workerpb.ApplyBotBatchResponse
+	err         error
+	createdAt   time.Time
+	done        chan struct{}
+}
+
+type botBatchDispatchPlan struct {
+	results       []*workerpb.ApplyBotBatchItemResult
+	createConfigs []bot.BotConfig
+	createIndexes []int
+	stopIDs       []string
+	stopIndexes   []int
+}
+
+var botRequestSequence atomic.Uint64
+
+// GetBotCapacity 返回本节点 bot-worker 的准入容量与运行时快照。
+func (s *Server) GetBotCapacity(ctx context.Context, _ *workerpb.GetBotCapacityRequest) (*workerpb.GetBotCapacityResponse, error) {
+	if err := s.prepareBotFleet(ctx); err != nil {
+		return unavailableCapacityResponse(err), nil
+	}
+	return capacityToProto(s.botFleet.CapacitySnapshot()), nil
+}
+
+// ApplyBotBatch 幂等应用最多 50 个 assignment，并仅把 Node 明确回执计为 accepted。
+func (s *Server) ApplyBotBatch(ctx context.Context, req *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error) {
+	if err := validateBotBatchRequest(req); err != nil {
+		return nil, err
+	}
+	payloadHash, err := botBatchPayloadHash(req)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "计算 Bot 批次摘要失败: %v", err)
+	}
+	entry, owner, err := s.beginBotBatch(ctx, req.IdempotencyKey, payloadHash)
+	if err != nil {
+		return nil, err
+	}
+	if !owner {
+		if entry.err != nil {
+			return nil, entry.err
+		}
+		return cloneBotBatchResponse(entry.response), nil
+	}
+
+	response, applyErr := s.applyBotBatchOnce(ctx, req)
+	if applyErr != nil {
+		s.abortBotBatch(req.IdempotencyKey, entry, applyErr)
+		return nil, applyErr
+	}
+	s.completeBotBatch(entry, response)
+	return cloneBotBatchResponse(response), nil
+}
+
+func (s *Server) applyBotBatchOnce(ctx context.Context, req *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error) {
+	if err := s.prepareBotFleet(ctx); err != nil {
+		return unavailableBotBatchResponse(req, err), nil
+	}
+	capacity := s.botFleet.CapacitySnapshot()
+	if req.ExpectedCapacityGeneration != 0 && req.ExpectedCapacityGeneration != capacity.CapacityGeneration {
+		return nil, status.Errorf(codes.FailedPrecondition, "Bot 容量世代已变化: expected=%d actual=%d", req.ExpectedCapacityGeneration, capacity.CapacityGeneration)
+	}
+
+	plan := planBotBatch(req.Assignments, capacity, s.botFleet.FleetSnapshot(""))
+	s.dispatchBotCreates(ctx, req, &plan)
+	s.dispatchBotStops(ctx, req, &plan)
+	return &workerpb.ApplyBotBatchResponse{
+		BatchId:            req.BatchId,
+		IdempotencyKey:     req.IdempotencyKey,
+		Results:            plan.results,
+		CapacityGeneration: s.botFleet.CapacitySnapshot().CapacityGeneration,
+	}, nil
+}
+
+// GetBotFleetSnapshot 返回 Node 当前完整快照，供 CP 建立流基线。
+func (s *Server) GetBotFleetSnapshot(ctx context.Context, req *workerpb.GetBotFleetSnapshotRequest) (*workerpb.GetBotFleetSnapshotResponse, error) {
+	if err := s.prepareBotFleet(ctx); err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	event, err := s.botFleet.RequestFleetSnapshot(ctx, nextBotRequestID("snapshot"))
+	if err != nil {
+		return nil, status.Errorf(codes.Unavailable, "获取 Bot fleet 快照失败: %v", err)
+	}
+	states := s.botFleet.FleetSnapshot(req.SessionUuid)
+	if event != nil && len(event.Bots) > 0 {
+		states = filterBotStates(event.Bots, req.SessionUuid)
+	}
+	return fleetSnapshotResponse(states, s.botFleet.CapacitySnapshot()), nil
+}
+
+// StreamBotFleetEvents 持续发送类型化 runtime/action 事件，旧 BotEvent 流保持不变。
+func (s *Server) StreamBotFleetEvents(req *workerpb.StreamBotFleetEventsRequest, stream workerpb.WorkerService_StreamBotFleetEventsServer) error {
+	if err := s.prepareBotFleet(stream.Context()); err != nil {
+		return status.Error(codes.Unavailable, err.Error())
+	}
+	ch := make(chan *bot.BotWorkerEvent, 256)
+	s.addBotEventSubscriber(ch)
+	defer s.removeBotEventSubscriber(ch)
+
+	for {
+		select {
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		case event := <-ch:
+			for _, fleetEvent := range botWorkerEventToFleetProto(event, req.SessionUuid) {
+				if err := stream.Send(fleetEvent); err != nil {
+					return err
+				}
+			}
+		}
+	}
+}
+
+// SignalBotActions 批量投递通用动作信号，并返回逐信号回执。
+func (s *Server) SignalBotActions(ctx context.Context, req *workerpb.SignalBotActionsRequest) (*workerpb.SignalBotActionsResponse, error) {
+	if len(req.Signals) > maxBotActionSignals {
+		return nil, status.Errorf(codes.InvalidArgument, "单次动作信号不能超过 %d 个", maxBotActionSignals)
+	}
+	if err := s.prepareBotFleet(ctx); err != nil {
+		return unavailableSignalResponse(req.Signals, err), nil
+	}
+
+	signals := make([]bot.ActionSignal, 0, len(req.Signals))
+	for _, signal := range req.Signals {
+		signals = append(signals, botActionSignalFromProto(signal))
+	}
+	event, err := s.botFleet.SignalActions(ctx, nextBotRequestID("signal"), signals)
+	if err != nil {
+		return unavailableSignalResponse(req.Signals, err), nil
+	}
+	return signalResponseFromEvent(req.Signals, event), nil
+}
+
+func (s *Server) prepareBotFleet(ctx context.Context) error {
+	if s.botFleet == nil {
+		return fmt.Errorf("本节点未启用 Bot 能力")
+	}
+	if s.botMgr == nil {
+		return nil
+	}
+	if err := s.ensureBotManager(); err != nil {
+		return err
+	}
+	if err := s.botMgr.WaitReady(ctx); err != nil {
+		return fmt.Errorf("等待 bot-worker 就绪失败: %w", err)
+	}
+	return nil
+}
+
+func validateBotBatchRequest(req *workerpb.ApplyBotBatchRequest) error {
+	if req == nil || len(req.Assignments) == 0 {
+		return status.Error(codes.InvalidArgument, "Bot 批次不能为空")
+	}
+	if len(req.Assignments) > maxBotBatchSize {
+		return status.Errorf(codes.InvalidArgument, "单批 Bot assignment 不能超过 %d 个", maxBotBatchSize)
+	}
+	if req.BatchId == "" || req.IdempotencyKey == "" {
+		return status.Error(codes.InvalidArgument, "batchId 和 idempotencyKey 不能为空")
+	}
+	return nil
+}
+
+func botBatchPayloadHash(req *workerpb.ApplyBotBatchRequest) (string, error) {
+	payload, err := proto.MarshalOptions{Deterministic: true}.Marshal(req)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func (s *Server) beginBotBatch(ctx context.Context, key, payloadHash string) (*botBatchCacheEntry, bool, error) {
+	s.botBatchMu.Lock()
+	if s.botBatchResults == nil {
+		s.botBatchResults = make(map[string]*botBatchCacheEntry)
+	}
+	s.cleanupBotBatchCacheLocked(time.Now())
+	if entry, ok := s.botBatchResults[key]; ok {
+		if entry.payloadHash != payloadHash {
+			s.botBatchMu.Unlock()
+			return nil, false, status.Error(codes.FailedPrecondition, "相同 idempotencyKey 对应的 Bot 批次载荷不一致")
+		}
+		s.botBatchMu.Unlock()
+		select {
+		case <-entry.done:
+			return entry, false, nil
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		}
+	}
+	if len(s.botBatchResults) >= botBatchCacheLimit {
+		s.botBatchMu.Unlock()
+		return nil, false, status.Error(codes.ResourceExhausted, "Bot 批次幂等缓存已满")
+	}
+	entry := &botBatchCacheEntry{payloadHash: payloadHash, createdAt: time.Now(), done: make(chan struct{})}
+	s.botBatchResults[key] = entry
+	s.botBatchMu.Unlock()
+	return entry, true, nil
+}
+
+func (s *Server) completeBotBatch(entry *botBatchCacheEntry, response *workerpb.ApplyBotBatchResponse) {
+	s.botBatchMu.Lock()
+	entry.response = cloneBotBatchResponse(response)
+	close(entry.done)
+	s.botBatchMu.Unlock()
+}
+
+func (s *Server) abortBotBatch(key string, entry *botBatchCacheEntry, err error) {
+	s.botBatchMu.Lock()
+	entry.err = err
+	if s.botBatchResults[key] == entry {
+		delete(s.botBatchResults, key)
+	}
+	close(entry.done)
+	s.botBatchMu.Unlock()
+}
+
+func (s *Server) cleanupBotBatchCacheLocked(now time.Time) {
+	for key, entry := range s.botBatchResults {
+		select {
+		case <-entry.done:
+			if now.Sub(entry.createdAt) >= botBatchCacheTTL {
+				delete(s.botBatchResults, key)
+			}
+		default:
+		}
+	}
+	for len(s.botBatchResults) >= botBatchCacheLimit {
+		key := oldestCompletedBotBatch(s.botBatchResults)
+		if key == "" {
+			return
+		}
+		delete(s.botBatchResults, key)
+	}
+}
+
+func oldestCompletedBotBatch(entries map[string]*botBatchCacheEntry) string {
+	var oldestKey string
+	var oldestTime time.Time
+	for key, entry := range entries {
+		select {
+		case <-entry.done:
+			if oldestKey == "" || entry.createdAt.Before(oldestTime) {
+				oldestKey, oldestTime = key, entry.createdAt
+			}
+		default:
+		}
+	}
+	return oldestKey
+}
+
+func planBotBatch(assignments []*workerpb.BotAssignment, capacity bot.BotCapacitySnapshot, states []bot.BotState) botBatchDispatchPlan {
+	plan := botBatchDispatchPlan{results: make([]*workerpb.ApplyBotBatchItemResult, len(assignments))}
+	existing := make(map[string]bot.BotState, len(states))
+	for _, state := range states {
+		existing[state.ID] = state
+	}
+	remaining := capacity.MaxBots - capacity.ActiveBots
+	seen := make(map[string]struct{}, len(assignments))
+	for index, assignment := range assignments {
+		remaining = planBotAssignment(&plan, index, assignment, existing, seen, capacity, remaining)
+	}
+	return plan
+}
+
+func planBotAssignment(plan *botBatchDispatchPlan, index int, assignment *workerpb.BotAssignment, existing map[string]bot.BotState, seen map[string]struct{}, capacity bot.BotCapacitySnapshot, remaining int) int {
+	if assignment == nil || assignment.BotUuid == "" {
+		plan.results[index] = conflictBotResult("", "bot_uuid_invalid", "botUuid 不能为空")
+		return remaining
+	}
+	if _, duplicate := seen[assignment.BotUuid]; duplicate {
+		plan.results[index] = conflictBotResult(assignment.BotUuid, "duplicate_assignment", "批次内 Bot assignment 重复")
+		return remaining
+	}
+	seen[assignment.BotUuid] = struct{}{}
+	state, exists := existing[assignment.BotUuid]
+	if reason := assignmentConflictReason(assignment, state, exists); reason != "" {
+		plan.results[index] = conflictBotResult(assignment.BotUuid, reason, "Bot assignment 与当前版本冲突")
+		return remaining
+	}
+	if !capacity.Ready || capacity.Legacy {
+		plan.results[index] = unavailableBotResult(assignment.BotUuid, "bot-worker 未声明 fleet 准入能力")
+		return remaining
+	}
+	if assignment.DesiredState == "stopped" {
+		return planBotStop(plan, index, assignment, exists, remaining)
+	}
+	if assignment.DesiredState != "" && assignment.DesiredState != "running" {
+		plan.results[index] = conflictBotResult(assignment.BotUuid, "desired_state_invalid", "desiredState 仅支持 running/stopped")
+		return remaining
+	}
+	if !exists && remaining <= 0 {
+		plan.results[index] = capacityBotResult(assignment.BotUuid)
+		return remaining
+	}
+	plan.createIndexes = append(plan.createIndexes, index)
+	plan.createConfigs = append(plan.createConfigs, botConfigFromAssignment(assignment))
+	if !exists {
+		remaining--
+	}
+	return remaining
+}
+
+func planBotStop(plan *botBatchDispatchPlan, index int, assignment *workerpb.BotAssignment, exists bool, remaining int) int {
+	if !exists {
+		plan.results[index] = &workerpb.ApplyBotBatchItemResult{BotUuid: assignment.BotUuid, Accepted: true, Skipped: true, Status: botBatchStatusAccepted}
+		return remaining
+	}
+	plan.stopIndexes = append(plan.stopIndexes, index)
+	plan.stopIDs = append(plan.stopIDs, assignment.BotUuid)
+	return remaining + 1
+}
+
+func assignmentConflictReason(assignment *workerpb.BotAssignment, state bot.BotState, exists bool) string {
+	if !exists {
+		return ""
+	}
+	if assignment.Generation < state.Generation {
+		return "stale_generation"
+	}
+	if assignment.Generation == state.Generation && assignment.ConfigHash != "" && state.ConfigHash != "" && assignment.ConfigHash != state.ConfigHash {
+		return "config_hash_conflict"
+	}
+	return ""
+}
+
+func (s *Server) dispatchBotCreates(ctx context.Context, req *workerpb.ApplyBotBatchRequest, plan *botBatchDispatchPlan) {
+	if len(plan.createConfigs) == 0 {
+		return
+	}
+	event, err := s.botFleet.ApplyBotBatch(ctx, nextBotRequestID("create"), req.BatchId, req.IdempotencyKey, plan.createConfigs)
+	botIDs := make([]string, 0, len(plan.createConfigs))
+	for _, config := range plan.createConfigs {
+		botIDs = append(botIDs, config.ID)
+	}
+	mergeBotDispatchResults(plan.results, plan.createIndexes, botIDs, event, err)
+}
+
+func (s *Server) dispatchBotStops(ctx context.Context, req *workerpb.ApplyBotBatchRequest, plan *botBatchDispatchPlan) {
+	if len(plan.stopIDs) == 0 {
+		return
+	}
+	event, err := s.botFleet.StopBotBatch(ctx, nextBotRequestID("stop"), plan.stopIDs, maxAssignmentGeneration(req.Assignments), "desired_state=stopped")
+	mergeBotDispatchResults(plan.results, plan.stopIndexes, plan.stopIDs, event, err)
+}
+
+func mergeBotDispatchResults(results []*workerpb.ApplyBotBatchItemResult, indexes []int, botIDs []string, event *bot.BotWorkerEvent, err error) {
+	if err != nil {
+		for position, index := range indexes {
+			results[index] = unavailableBotResult(botIDs[position], err.Error())
+		}
+		return
+	}
+	byID := make(map[string]bot.BotItemResult)
+	if event != nil {
+		for _, result := range event.Results {
+			byID[result.BotID] = result
+		}
+	}
+	for position, index := range indexes {
+		botID := botIDs[position]
+		item, ok := byID[botID]
+		if !ok {
+			results[index] = unavailableBotResult(botID, "bot-worker 未返回逐项回执")
+			continue
+		}
+		results[index] = botItemResultToProto(item)
+	}
+}
+
+func botConfigFromAssignment(assignment *workerpb.BotAssignment) bot.BotConfig {
+	return bot.BotConfig{
+		ID: assignment.BotUuid, Name: assignment.Name, Host: assignment.Host, Port: int(assignment.Port),
+		Username: assignment.Username, Version: assignment.Version, Auth: assignment.Auth,
+		SessionID: assignment.SessionUuid, Generation: assignment.Generation, ConfigHash: assignment.ConfigHash,
+		CohortKey: assignment.CohortKey, Scenario: json.RawMessage(assignment.ScenarioJson), ResumeStepID: assignment.ResumeStepId,
+		ConnectNotBefore: assignment.ConnectNotBeforeUnixMs, CorrelationSeed: assignment.CorrelationSeed,
+	}
+}
+
+func botItemResultToProto(result bot.BotItemResult) *workerpb.ApplyBotBatchItemResult {
+	statusValue := result.Status
+	if result.Accepted {
+		statusValue = botBatchStatusAccepted
+	} else if statusValue == "" && result.Skipped {
+		statusValue = botBatchStatusConflict
+	} else if statusValue == "" {
+		statusValue = botBatchStatusUnavailable
+	}
+	return &workerpb.ApplyBotBatchItemResult{
+		BotUuid: result.BotID, Accepted: result.Accepted, Skipped: result.Skipped,
+		Status: statusValue, ErrorCode: result.ErrorCode, Error: result.Error,
+	}
+}
+
+func conflictBotResult(botID, code, message string) *workerpb.ApplyBotBatchItemResult {
+	return &workerpb.ApplyBotBatchItemResult{BotUuid: botID, Skipped: true, Status: botBatchStatusConflict, ErrorCode: code, Error: message}
+}
+
+func capacityBotResult(botID string) *workerpb.ApplyBotBatchItemResult {
+	return &workerpb.ApplyBotBatchItemResult{BotUuid: botID, Status: botBatchStatusCapacity, ErrorCode: botBatchStatusCapacity, Error: "Bot 容量不足"}
+}
+
+func unavailableBotResult(botID, message string) *workerpb.ApplyBotBatchItemResult {
+	return &workerpb.ApplyBotBatchItemResult{BotUuid: botID, Status: botBatchStatusUnavailable, ErrorCode: botBatchStatusUnavailable, Error: message}
+}
+
+func unavailableBotBatchResponse(req *workerpb.ApplyBotBatchRequest, err error) *workerpb.ApplyBotBatchResponse {
+	results := make([]*workerpb.ApplyBotBatchItemResult, 0, len(req.Assignments))
+	for _, assignment := range req.Assignments {
+		botID := ""
+		if assignment != nil {
+			botID = assignment.BotUuid
+		}
+		results = append(results, unavailableBotResult(botID, err.Error()))
+	}
+	return &workerpb.ApplyBotBatchResponse{BatchId: req.BatchId, IdempotencyKey: req.IdempotencyKey, Results: results}
+}
+
+func maxAssignmentGeneration(assignments []*workerpb.BotAssignment) int64 {
+	var generation int64
+	for _, assignment := range assignments {
+		if assignment != nil && assignment.Generation > generation {
+			generation = assignment.Generation
+		}
+	}
+	return generation
+}
+
+func capacityToProto(snapshot bot.BotCapacitySnapshot) *workerpb.GetBotCapacityResponse {
+	return &workerpb.GetBotCapacityResponse{
+		Ready: snapshot.Ready, Legacy: snapshot.Legacy, MaxBots: int32(snapshot.MaxBots),
+		ActiveBots: int32(snapshot.ActiveBots), ConnectingBots: int32(snapshot.ConnectingBots),
+		CapacityGeneration: snapshot.CapacityGeneration, WorkerEpoch: snapshot.WorkerEpoch,
+		WorkerEpochGeneration: snapshot.WorkerEpochGeneration, BotWorkerVersion: snapshot.BotWorkerVersion,
+		RssBytes: snapshot.RSSBytes, EventLoopP95Ms: snapshot.EventLoopP95Ms,
+		ObservedAtUnixMs: snapshot.ObservedAt.UnixMilli(), UnavailableReason: snapshot.UnavailableReason,
+		Features: append([]string(nil), snapshot.Features...),
+	}
+}
+
+func unavailableCapacityResponse(err error) *workerpb.GetBotCapacityResponse {
+	return &workerpb.GetBotCapacityResponse{Legacy: true, MaxBots: 50, ObservedAtUnixMs: time.Now().UnixMilli(), UnavailableReason: err.Error()}
+}
+
+func fleetSnapshotResponse(states []bot.BotState, capacity bot.BotCapacitySnapshot) *workerpb.GetBotFleetSnapshotResponse {
+	bots := make([]*workerpb.BotRuntimeSnapshot, 0, len(states))
+	for i := range states {
+		bots = append(bots, botStateToRuntimeProto(&states[i]))
+	}
+	return &workerpb.GetBotFleetSnapshotResponse{Bots: bots, CapacityGeneration: capacity.CapacityGeneration, ObservedAtUnixMs: time.Now().UnixMilli()}
+}
+
+func filterBotStates(states []bot.BotState, sessionID string) []bot.BotState {
+	if sessionID == "" {
+		return states
+	}
+	filtered := make([]bot.BotState, 0, len(states))
+	for _, state := range states {
+		if state.SessionID == sessionID {
+			filtered = append(filtered, state)
+		}
+	}
+	return filtered
+}
+
+func botStateToRuntimeProto(state *bot.BotState) *workerpb.BotRuntimeSnapshot {
+	result := &workerpb.BotRuntimeSnapshot{
+		BotUuid: state.ID, SessionUuid: state.SessionID, Generation: state.Generation, ConfigHash: state.ConfigHash,
+		WorkerEpoch: state.WorkerEpoch, WorkerEpochGeneration: state.WorkerEpochGeneration, EventSeq: state.EventSeq,
+		Status: state.Status, CurrentStepId: state.CurrentStepID, Health: state.Health, Food: int32(state.Food),
+		ReconnectCount: int32(state.ReconnectCount), ErrorCode: state.ErrorCode, LastError: state.LastError,
+		ObservedAtUnixMs: state.ObservedAt,
+	}
+	if state.Position != nil {
+		result.Pos = &workerpb.BotPosition{X: state.Position.X, Y: state.Position.Y, Z: state.Position.Z}
+	}
+	return result
+}
+
+func botWorkerEventToFleetProto(event *bot.BotWorkerEvent, sessionID string) []*workerpb.BotFleetEvent {
+	if event == nil {
+		return nil
+	}
+	if event.Evt == "action-event" && event.Action != nil {
+		if sessionID != "" && event.Action.SessionID != sessionID {
+			return nil
+		}
+		return []*workerpb.BotFleetEvent{{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: actionEventToProto(event.Action)}}}
+	}
+	if event.Evt != "bot-state" {
+		return nil
+	}
+	results := make([]*workerpb.BotFleetEvent, 0, len(event.Bots))
+	for i := range event.Bots {
+		if sessionID != "" && event.Bots[i].SessionID != sessionID {
+			continue
+		}
+		results = append(results, &workerpb.BotFleetEvent{Event: &workerpb.BotFleetEvent_RuntimeSnapshot{RuntimeSnapshot: botStateToRuntimeProto(&event.Bots[i])}})
+	}
+	return results
+}
+
+func actionEventToProto(event *bot.ActionEvent) *workerpb.BotActionEvent {
+	return &workerpb.BotActionEvent{
+		BotUuid: event.BotID, SessionUuid: event.SessionID, Generation: event.Generation,
+		ActionRunId: event.ActionRunID, StepId: event.StepID, Attempt: int32(event.Attempt), Status: event.Status,
+		ErrorCode: event.ErrorCode, Message: event.Message, CorrelationToken: event.CorrelationToken,
+		ResultJson: string(event.Result), DurationMs: event.DurationMS, ObservedAtUnixMs: event.ObservedAt,
+	}
+}
+
+func botActionSignalFromProto(signal *workerpb.BotActionSignal) bot.ActionSignal {
+	if signal == nil {
+		return bot.ActionSignal{}
+	}
+	return bot.ActionSignal{
+		SignalID: signal.SignalId, BotID: signal.BotUuid, SessionID: signal.SessionUuid, Generation: signal.Generation,
+		ActionRunID: signal.ActionRunId, StepID: signal.StepId, Type: signal.Type,
+		CorrelationToken: signal.CorrelationToken, Payload: json.RawMessage(signal.PayloadJson), ObservedAt: signal.ObservedAtUnixMs,
+	}
+}
+
+func signalResponseFromEvent(signals []*workerpb.BotActionSignal, event *bot.BotWorkerEvent) *workerpb.SignalBotActionsResponse {
+	byID := make(map[string]bot.SignalItemResult)
+	if event != nil {
+		for _, result := range event.SignalResults {
+			byID[result.SignalID] = result
+		}
+	}
+	results := make([]*workerpb.SignalBotActionItemResult, 0, len(signals))
+	for _, signal := range signals {
+		signalID := ""
+		if signal != nil {
+			signalID = signal.SignalId
+		}
+		result, ok := byID[signalID]
+		if !ok {
+			results = append(results, &workerpb.SignalBotActionItemResult{SignalId: signalID, ErrorCode: botBatchStatusUnavailable, Error: "bot-worker 未返回逐项回执"})
+			continue
+		}
+		results = append(results, &workerpb.SignalBotActionItemResult{SignalId: result.SignalID, Accepted: result.Accepted, Skipped: result.Skipped, ErrorCode: result.ErrorCode, Error: result.Error})
+	}
+	return &workerpb.SignalBotActionsResponse{Results: results}
+}
+
+func unavailableSignalResponse(signals []*workerpb.BotActionSignal, err error) *workerpb.SignalBotActionsResponse {
+	results := make([]*workerpb.SignalBotActionItemResult, 0, len(signals))
+	for _, signal := range signals {
+		signalID := ""
+		if signal != nil {
+			signalID = signal.SignalId
+		}
+		results = append(results, &workerpb.SignalBotActionItemResult{SignalId: signalID, ErrorCode: botBatchStatusUnavailable, Error: err.Error()})
+	}
+	return &workerpb.SignalBotActionsResponse{Results: results}
+}
+
+func (s *Server) addBotEventSubscriber(ch chan *bot.BotWorkerEvent) {
+	s.botEventMu.Lock()
+	s.botEventSubs = append(s.botEventSubs, ch)
+	s.botEventMu.Unlock()
+}
+
+func (s *Server) removeBotEventSubscriber(ch chan *bot.BotWorkerEvent) {
+	s.botEventMu.Lock()
+	for i, subscriber := range s.botEventSubs {
+		if subscriber == ch {
+			s.botEventSubs = append(s.botEventSubs[:i], s.botEventSubs[i+1:]...)
+			break
+		}
+	}
+	s.botEventMu.Unlock()
+}
+
+func nextBotRequestID(prefix string) string {
+	return fmt.Sprintf("%s-%d-%d", prefix, time.Now().UnixNano(), botRequestSequence.Add(1))
+}
+
+func cloneBotBatchResponse(response *workerpb.ApplyBotBatchResponse) *workerpb.ApplyBotBatchResponse {
+	if response == nil {
+		return nil
+	}
+	return proto.Clone(response).(*workerpb.ApplyBotBatchResponse)
+}

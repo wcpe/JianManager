@@ -58,6 +58,11 @@ type Server struct {
 	// botMgr 管理本节点 Bot（spawn bot-worker Node 子进程，stdin/stdout IPC）。参见 ADR-006。
 	// 为 nil 表示本节点未启用 Bot 能力，相关 RPC 返回明确错误。由 SetBotManager 注入。
 	botMgr *bot.Manager
+	// botFleet 允许 Fleet RPC 复用 Manager，并为协议测试注入最小替身。
+	botFleet        botFleetManager
+	botStartMu      sync.Mutex
+	botBatchMu      sync.Mutex
+	botBatchResults map[string]*botBatchCacheEntry
 	// botEventMu 保护 botEventSubs，StreamBotEvents 订阅/取消订阅时加锁。
 	botEventMu     sync.Mutex
 	botEventSubs   []chan *bot.BotWorkerEvent
@@ -135,13 +140,14 @@ type Server struct {
 // jdkMgr 可为 nil（未启用 JDK 托管时）。root 用于解析相对工作目录，可为 nil（按绝对路径处理）。
 func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Collector, jdkMgr *jdk.Manager, root *dataroot.Root) *Server {
 	s := &Server{
-		manager:       manager,
-		nodeUUID:      nodeUUID,
-		collector:     collector,
-		jdkMgr:        jdkMgr,
-		root:          root,
-		searchIndexes: make(map[string]*search.Index),
-		tasks:         taskreg.New(),
+		manager:         manager,
+		nodeUUID:        nodeUUID,
+		collector:       collector,
+		jdkMgr:          jdkMgr,
+		root:            root,
+		botBatchResults: make(map[string]*botBatchCacheEntry),
+		searchIndexes:   make(map[string]*search.Index),
+		tasks:           taskreg.New(),
 	}
 	manager.SetStateChangeHandler(func(uuid string, oldState, newState process.InstanceState) {
 		s.dispatch(instanceEvent{
@@ -805,6 +811,7 @@ func (s *Server) SetBotManager(m *bot.Manager) {
 		s.botEventCancel = nil
 	}
 	s.botMgr = m
+	s.botFleet = m
 	s.botEventMu.Unlock()
 
 	if m == nil {
@@ -846,6 +853,8 @@ func (s *Server) SetSearchIgnore(rules []string) {
 // ensureBotManager 确保 bot-worker 子进程已启动（首次创建 Bot 时懒启动）。
 // 子进程生命周期跟随 Worker（用 background 上下文），由 botMgr.Stop() 收束。
 func (s *Server) ensureBotManager() error {
+	s.botStartMu.Lock()
+	defer s.botStartMu.Unlock()
 	if s.botMgr == nil {
 		return fmt.Errorf("本节点未启用 Bot 能力")
 	}
