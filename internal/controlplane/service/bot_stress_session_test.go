@@ -121,7 +121,11 @@ func TestBotStressSession_CreateKeepsLegacyBehaviorWithoutOrchestration(t *testi
 func TestBotStressSession_StartCreatesAssociatedBots(t *testing.T) {
 	db := newBotStressSessionTestDB(t)
 	inst := createBotStressInstance(t, db)
-	svc := newBotStressSessionService(t, db)
+	var node model.Node
+	require.NoError(t, db.First(&node, inst.NodeID).Error)
+	pool := cpgrpc.NewClientPool()
+	pool.SetWorkerClientForTest(node.UUID, &fakeStressCreateBotWorker{})
+	svc := NewBotStressSessionService(db, NewBotService(db, pool))
 	sess, err := svc.Create(CreateBotStressSessionRequest{
 		InstanceID: inst.ID,
 		Count:      2,

@@ -404,7 +404,7 @@ func (s *BotStressSessionService) viewFromSession(sess model.BotStressSession) (
 
 func (s *BotStressSessionService) refreshSessionBotStatuses(sessionID uint) error {
 	var bots []model.Bot
-	if err := s.db.Preload("Instance.Node").Where("stress_session_id = ?", sessionID).Find(&bots).Error; err != nil {
+	if err := s.db.Preload("Instance.Node").Preload("ExecutorNode").Where("stress_session_id = ?", sessionID).Find(&bots).Error; err != nil {
 		return fmt.Errorf("刷新压测 Bot 状态失败: %w", err)
 	}
 	s.botSvc.refreshStatuses(bots)

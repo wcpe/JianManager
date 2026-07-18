@@ -129,7 +129,7 @@ type BotBatchResult struct {
 	Errors    []BotBatchError `json:"errors"`
 }
 
-// applyFilter 将筛选条件作用到查询，nodeID 经 instances 联表。
+// applyFilter 将筛选条件作用到查询，nodeID 优先匹配执行节点并兼容回退目标实例节点。
 // scopeIDs 非 nil 时附加可访问实例集合谓词（跨组隔离下沉为 SQL）。
 func applyFilter(q *gorm.DB, f BotFilter, scopeIDs []uint, scope bool) *gorm.DB {
 	if scope {
@@ -146,12 +146,11 @@ func applyFilter(q *gorm.DB, f BotFilter, scopeIDs []uint, scope bool) *gorm.DB 
 		q = q.Where("bots.stress_session_id = ?", *f.StressSessionID)
 	}
 	if f.NodeID != nil {
-		// Bot 无 node_id 列，经实例联表收敛到该节点下的实例
-		q = q.Where("bots.instance_id IN (?)",
-			q.Session(&gorm.Session{NewDB: true}).
-				Model(&model.Instance{}).
-				Select("id").
-				Where("node_id = ?", *f.NodeID))
+		legacyInstances := q.Session(&gorm.Session{NewDB: true}).
+			Model(&model.Instance{}).
+			Select("id").
+			Where("node_id = ?", *f.NodeID)
+		q = q.Where("bots.executor_node_id = ? OR (bots.executor_node_id IS NULL AND bots.instance_id IN (?))", *f.NodeID, legacyInstances)
 	}
 	if f.Status != nil {
 		q = q.Where("bots.status = ?", *f.Status)
@@ -191,6 +190,7 @@ func (s *BotService) ListPaged(query BotListQuery, scopeIDs []uint, scope bool) 
 	if total > 0 {
 		if err := base.
 			Preload("Instance.Node").
+			Preload("ExecutorNode").
 			Order("bots.id ASC").
 			Offset((page - 1) * size).
 			Limit(size).
@@ -209,12 +209,16 @@ func (s *BotService) ListPaged(query BotListQuery, scopeIDs []uint, scope bool) 
 }
 
 // refreshStatuses 按节点聚合批量拉取各 Bot 的实时状态并回填 DB（每个 Worker 仅一次 ListBots）。
-// 需 items 预加载 Instance.Node。Worker 离线或 Bot 不在列表中时保留上次状态。
+// 需 items 预加载 Instance.Node 与 ExecutorNode。Worker 离线或 Bot 不在列表中时保留上次状态。
 func (s *BotService) refreshStatuses(bots []model.Bot) {
 	byNode := map[string][]int{}
 	for i := range bots {
-		if u := bots[i].Instance.Node.UUID; u != "" {
-			byNode[u] = append(byNode[u], i)
+		node := &bots[i].Instance.Node
+		if bots[i].ExecutorNodeID != nil && bots[i].ExecutorNode != nil && bots[i].ExecutorNode.UUID != "" {
+			node = bots[i].ExecutorNode
+		}
+		if node.UUID != "" {
+			byNode[node.UUID] = append(byNode[node.UUID], i)
 		}
 	}
 	for nodeUUID, idxs := range byNode {
@@ -302,9 +306,8 @@ func (s *BotService) summaryGroups(f BotFilter, groupBy string, scopeIDs []uint,
 		keyCol = "bots.instance_id"
 		groupCol = "bots.instance_id"
 	case "node":
-		// 经实例联表取节点
-		keyCol = "instances.node_id"
-		groupCol = "instances.node_id"
+		keyCol = "COALESCE(bots.executor_node_id, instances.node_id)"
+		groupCol = keyCol
 	case "status":
 		keyCol = "bots.status"
 		groupCol = "bots.status"
@@ -410,7 +413,7 @@ func (s *BotService) resolveBatchTargets(req BotBatchRequest, scopeIDs []uint, s
 	var bots []model.Bot
 
 	if len(req.IDs) > 0 {
-		q := applyFilter(s.db.Model(&model.Bot{}).Preload("Instance.Node"), BotFilter{}, scopeIDs, scope)
+		q := applyFilter(s.db.Model(&model.Bot{}).Preload("Instance.Node").Preload("ExecutorNode"), BotFilter{}, scopeIDs, scope)
 		if err := q.Where("bots.id IN ?", req.IDs).Find(&bots).Error; err != nil {
 			return nil, 0, fmt.Errorf("查询批量目标失败: %w", err)
 		}
@@ -427,7 +430,7 @@ func (s *BotService) resolveBatchTargets(req BotBatchRequest, scopeIDs []uint, s
 	if req.Filter != nil {
 		f = *req.Filter
 	}
-	q := applyFilter(s.db.Model(&model.Bot{}).Preload("Instance.Node"), f, scopeIDs, scope)
+	q := applyFilter(s.db.Model(&model.Bot{}).Preload("Instance.Node").Preload("ExecutorNode"), f, scopeIDs, scope)
 	if err := q.Limit(maxBatchTargets + 1).Find(&bots).Error; err != nil {
 		return nil, 0, fmt.Errorf("查询批量目标失败: %w", err)
 	}
@@ -516,12 +519,13 @@ func (s *BotService) applyBatchDBChange(req BotBatchRequest, bots []model.Bot) {
 
 // delegateBatchOne 将单个 Bot 的批量动作委托到其所属 Worker（复用既有 per-bot RPC）。
 func (s *BotService) delegateBatchOne(req BotBatchRequest, bot *model.Bot) error {
-	if bot.Instance.ID == 0 || bot.Instance.Node.UUID == "" {
-		return fmt.Errorf("Bot %d 缺少关联实例或节点", bot.ID)
+	node, instance, err := s.resolver.Resolve(bot)
+	if err != nil {
+		return err
 	}
-	client, ok := s.pool.Get(bot.Instance.Node.UUID)
+	client, ok := s.pool.Get(node.UUID)
 	if !ok {
-		return fmt.Errorf("Worker %s 未连接", bot.Instance.Node.UUID)
+		return fmt.Errorf("Worker %s 未连接", node.UUID)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -550,10 +554,10 @@ func (s *BotService) delegateBatchOne(req BotBatchRequest, bot *model.Bot) error
 		}
 	case BotBatchStart:
 		// 重连即重新上线：必须带连接目标（host/port/version），否则 Bot 连到默认端口连不上。
-		host, port, conn := botConnTarget(bot, &bot.Instance)
+		host, port, conn := botConnTarget(bot, instance)
 		resp, err := client.Worker.CreateBot(ctx, &workerpb.CreateBotRequest{
 			BotUuid:      bot.UUID,
-			InstanceUuid: bot.Instance.UUID,
+			InstanceUuid: instance.UUID,
 			Name:         bot.Name,
 			Host:         host,
 			Port:         int32(port),

@@ -97,13 +97,14 @@ func mapWorkerBotStatus(s string) model.BotStatus {
 
 // BotService Bot 管理服务。
 type BotService struct {
-	db   *gorm.DB
-	pool *grpc.ClientPool
+	db       *gorm.DB
+	pool     *grpc.ClientPool
+	resolver *BotExecutorResolver
 }
 
 // NewBotService 创建 Bot 服务。
 func NewBotService(db *gorm.DB, pool *grpc.ClientPool) *BotService {
-	return &BotService{db: db, pool: pool}
+	return &BotService{db: db, pool: pool, resolver: NewBotExecutorResolver(db)}
 }
 
 // CreateBotRequest 创建 Bot 请求。
@@ -190,7 +191,7 @@ func (s *BotService) UpdateBehavior(id uint, behavior string) error {
 
 // delegateCreateBot 委托 Worker 创建 Bot 连接。
 func (s *BotService) delegateCreateBot(bot *model.Bot, behaviorConfig json.RawMessage) error {
-	client, instance, err := s.getWorkerClient(bot.InstanceID)
+	client, instance, node, err := s.getWorkerClient(bot)
 	if err != nil {
 		return err
 	}
@@ -228,7 +229,8 @@ func (s *BotService) delegateCreateBot(bot *model.Bot, behaviorConfig json.RawMe
 	}
 	bot.Status = status
 	bot.LastError = ""
-	_ = s.db.Model(bot).Updates(map[string]any{"status": status, "last_error": ""}).Error
+	bot.WorkerID = node.UUID
+	_ = s.db.Model(bot).Updates(map[string]any{"status": status, "last_error": "", "worker_id": node.UUID}).Error
 	return nil
 }
 
@@ -236,7 +238,7 @@ func (s *BotService) delegateCreateBot(bot *model.Bot, behaviorConfig json.RawMe
 // Worker 离线或 Bot 不在 Worker 列表中时保留上次已知状态，不抹除。
 // 状态源头：bot-worker(Mineflayer 事件) → Worker bot.Manager → 本方法。
 func (s *BotService) refreshStatus(bot *model.Bot) {
-	client, _, err := s.getWorkerClient(bot.InstanceID)
+	client, _, _, err := s.getWorkerClient(bot)
 	if err != nil {
 		return
 	}
@@ -267,7 +269,7 @@ func (s *BotService) SendCommand(id uint, command string) error {
 		return ErrBotNotFound
 	}
 
-	client, _, err := s.getWorkerClient(bot.InstanceID)
+	client, _, _, err := s.getWorkerClient(&bot)
 	if err != nil {
 		return err
 	}
@@ -298,7 +300,7 @@ func (s *BotService) StreamEvents(ctx context.Context, id uint) (*model.Bot, wor
 		return nil, nil, err
 	}
 
-	client, _, err := s.getWorkerClient(bot.InstanceID)
+	client, _, _, err := s.getWorkerClient(&bot)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -311,7 +313,7 @@ func (s *BotService) StreamEvents(ctx context.Context, id uint) (*model.Bot, wor
 
 // delegateDeleteBot 委托 Worker 停止 Bot。
 func (s *BotService) delegateDeleteBot(bot *model.Bot) error {
-	client, _, err := s.getWorkerClient(bot.InstanceID)
+	client, _, _, err := s.getWorkerClient(bot)
 	if err != nil {
 		return err
 	}
@@ -331,7 +333,7 @@ func (s *BotService) delegateDeleteBot(bot *model.Bot) error {
 
 // delegateSetBehavior 委托 Worker 切换 Bot 行为。
 func (s *BotService) delegateSetBehavior(bot *model.Bot, behavior string) error {
-	client, _, err := s.getWorkerClient(bot.InstanceID)
+	client, _, _, err := s.getWorkerClient(bot)
 	if err != nil {
 		return err
 	}
@@ -352,17 +354,15 @@ func (s *BotService) delegateSetBehavior(bot *model.Bot, behavior string) error 
 	return nil
 }
 
-// getWorkerClient 根据实例 ID 获取 Worker gRPC 客户端和实例信息。
-func (s *BotService) getWorkerClient(instanceID uint) (*grpc.Client, *model.Instance, error) {
-	var instance model.Instance
-	if err := s.db.Preload("Node").First(&instance, instanceID).Error; err != nil {
-		return nil, nil, fmt.Errorf("实例不存在: %w", err)
+// getWorkerClient 按 ADR-074 规则解析实际执行节点并取得 gRPC 客户端。
+func (s *BotService) getWorkerClient(bot *model.Bot) (*grpc.Client, *model.Instance, *model.Node, error) {
+	node, instance, err := s.resolver.Resolve(bot)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-
-	client, ok := s.pool.Get(instance.Node.UUID)
+	client, ok := s.pool.Get(node.UUID)
 	if !ok {
-		return nil, nil, fmt.Errorf("Worker %s 未连接", instance.Node.UUID)
+		return nil, nil, nil, fmt.Errorf("Worker %s 未连接", node.UUID)
 	}
-
-	return client, &instance, nil
+	return client, instance, node, nil
 }

@@ -124,6 +124,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Network{},
 		&model.NetworkMember{},
 		&model.BotStressSession{},
+		&model.BotLoadBatch{},
 		&model.Bot{},
 		&model.BanRecord{},
 		&model.AlertRule{},

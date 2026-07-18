@@ -90,6 +90,11 @@ const (
 	WorkerService_SendBotCommand_FullMethodName         = "/worker.WorkerService/SendBotCommand"
 	WorkerService_RunBotScript_FullMethodName           = "/worker.WorkerService/RunBotScript"
 	WorkerService_StreamBotEvents_FullMethodName        = "/worker.WorkerService/StreamBotEvents"
+	WorkerService_GetBotCapacity_FullMethodName         = "/worker.WorkerService/GetBotCapacity"
+	WorkerService_ApplyBotBatch_FullMethodName          = "/worker.WorkerService/ApplyBotBatch"
+	WorkerService_GetBotFleetSnapshot_FullMethodName    = "/worker.WorkerService/GetBotFleetSnapshot"
+	WorkerService_StreamBotFleetEvents_FullMethodName   = "/worker.WorkerService/StreamBotFleetEvents"
+	WorkerService_SignalBotActions_FullMethodName       = "/worker.WorkerService/SignalBotActions"
 	WorkerService_StreamPluginEvents_FullMethodName     = "/worker.WorkerService/StreamPluginEvents"
 	WorkerService_SendPluginCommand_FullMethodName      = "/worker.WorkerService/SendPluginCommand"
 	WorkerService_QueryServerState_FullMethodName       = "/worker.WorkerService/QueryServerState"
@@ -270,6 +275,16 @@ type WorkerServiceClient interface {
 	RunBotScript(ctx context.Context, in *RunBotScriptRequest, opts ...grpc.CallOption) (*RunBotScriptResponse, error)
 	// StreamBotEvents 订阅 Bot 事件流。
 	StreamBotEvents(ctx context.Context, in *StreamBotEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BotEvent], error)
+	// GetBotCapacity 返回本节点 Bot Worker 的 fleet 准入容量快照（FR-351）。
+	GetBotCapacity(ctx context.Context, in *GetBotCapacityRequest, opts ...grpc.CallOption) (*GetBotCapacityResponse, error)
+	// ApplyBotBatch 批量应用最多 50 个 Bot assignment，并返回逐项回执（FR-351）。
+	ApplyBotBatch(ctx context.Context, in *ApplyBotBatchRequest, opts ...grpc.CallOption) (*ApplyBotBatchResponse, error)
+	// GetBotFleetSnapshot 返回当前 Bot fleet 运行快照（FR-351，供后续 reconcile 建基线）。
+	GetBotFleetSnapshot(ctx context.Context, in *GetBotFleetSnapshotRequest, opts ...grpc.CallOption) (*GetBotFleetSnapshotResponse, error)
+	// StreamBotFleetEvents 以类型化流持续上报 runtime/action 事件（FR-351）。
+	StreamBotFleetEvents(ctx context.Context, in *StreamBotFleetEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BotFleetEvent], error)
+	// SignalBotActions 批量投递最多 100 个外部动作信号，并返回逐项回执（FR-351）。
+	SignalBotActions(ctx context.Context, in *SignalBotActionsRequest, opts ...grpc.CallOption) (*SignalBotActionsResponse, error)
 	// StreamPluginEvents 订阅某实例（或全部）探针经反向 WS 上报的事件流（connected/disconnected/玩家事件…）。
 	StreamPluginEvents(ctx context.Context, in *StreamPluginEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PluginEvent], error)
 	// SendPluginCommand CP 经 Worker 向探针下发治理/查询指令（踢/封/白名单/在线列表…）。
@@ -1061,9 +1076,68 @@ func (c *workerServiceClient) StreamBotEvents(ctx context.Context, in *StreamBot
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkerService_StreamBotEventsClient = grpc.ServerStreamingClient[BotEvent]
 
+func (c *workerServiceClient) GetBotCapacity(ctx context.Context, in *GetBotCapacityRequest, opts ...grpc.CallOption) (*GetBotCapacityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBotCapacityResponse)
+	err := c.cc.Invoke(ctx, WorkerService_GetBotCapacity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ApplyBotBatch(ctx context.Context, in *ApplyBotBatchRequest, opts ...grpc.CallOption) (*ApplyBotBatchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplyBotBatchResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ApplyBotBatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) GetBotFleetSnapshot(ctx context.Context, in *GetBotFleetSnapshotRequest, opts ...grpc.CallOption) (*GetBotFleetSnapshotResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetBotFleetSnapshotResponse)
+	err := c.cc.Invoke(ctx, WorkerService_GetBotFleetSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) StreamBotFleetEvents(ctx context.Context, in *StreamBotFleetEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BotFleetEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[6], WorkerService_StreamBotFleetEvents_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[StreamBotFleetEventsRequest, BotFleetEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerService_StreamBotFleetEventsClient = grpc.ServerStreamingClient[BotFleetEvent]
+
+func (c *workerServiceClient) SignalBotActions(ctx context.Context, in *SignalBotActionsRequest, opts ...grpc.CallOption) (*SignalBotActionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SignalBotActionsResponse)
+	err := c.cc.Invoke(ctx, WorkerService_SignalBotActions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) StreamPluginEvents(ctx context.Context, in *StreamPluginEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PluginEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[6], WorkerService_StreamPluginEvents_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[7], WorkerService_StreamPluginEvents_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1132,7 +1206,7 @@ func (c *workerServiceClient) UpgradeWorker(ctx context.Context, in *UpgradeWork
 
 func (c *workerServiceClient) TerminalSession(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[TerminalFrame, TerminalFrame], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[7], WorkerService_TerminalSession_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[8], WorkerService_TerminalSession_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1332,6 +1406,16 @@ type WorkerServiceServer interface {
 	RunBotScript(context.Context, *RunBotScriptRequest) (*RunBotScriptResponse, error)
 	// StreamBotEvents 订阅 Bot 事件流。
 	StreamBotEvents(*StreamBotEventsRequest, grpc.ServerStreamingServer[BotEvent]) error
+	// GetBotCapacity 返回本节点 Bot Worker 的 fleet 准入容量快照（FR-351）。
+	GetBotCapacity(context.Context, *GetBotCapacityRequest) (*GetBotCapacityResponse, error)
+	// ApplyBotBatch 批量应用最多 50 个 Bot assignment，并返回逐项回执（FR-351）。
+	ApplyBotBatch(context.Context, *ApplyBotBatchRequest) (*ApplyBotBatchResponse, error)
+	// GetBotFleetSnapshot 返回当前 Bot fleet 运行快照（FR-351，供后续 reconcile 建基线）。
+	GetBotFleetSnapshot(context.Context, *GetBotFleetSnapshotRequest) (*GetBotFleetSnapshotResponse, error)
+	// StreamBotFleetEvents 以类型化流持续上报 runtime/action 事件（FR-351）。
+	StreamBotFleetEvents(*StreamBotFleetEventsRequest, grpc.ServerStreamingServer[BotFleetEvent]) error
+	// SignalBotActions 批量投递最多 100 个外部动作信号，并返回逐项回执（FR-351）。
+	SignalBotActions(context.Context, *SignalBotActionsRequest) (*SignalBotActionsResponse, error)
 	// StreamPluginEvents 订阅某实例（或全部）探针经反向 WS 上报的事件流（connected/disconnected/玩家事件…）。
 	StreamPluginEvents(*StreamPluginEventsRequest, grpc.ServerStreamingServer[PluginEvent]) error
 	// SendPluginCommand CP 经 Worker 向探针下发治理/查询指令（踢/封/白名单/在线列表…）。
@@ -1583,6 +1667,21 @@ func (UnimplementedWorkerServiceServer) RunBotScript(context.Context, *RunBotScr
 }
 func (UnimplementedWorkerServiceServer) StreamBotEvents(*StreamBotEventsRequest, grpc.ServerStreamingServer[BotEvent]) error {
 	return status.Error(codes.Unimplemented, "method StreamBotEvents not implemented")
+}
+func (UnimplementedWorkerServiceServer) GetBotCapacity(context.Context, *GetBotCapacityRequest) (*GetBotCapacityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetBotCapacity not implemented")
+}
+func (UnimplementedWorkerServiceServer) ApplyBotBatch(context.Context, *ApplyBotBatchRequest) (*ApplyBotBatchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyBotBatch not implemented")
+}
+func (UnimplementedWorkerServiceServer) GetBotFleetSnapshot(context.Context, *GetBotFleetSnapshotRequest) (*GetBotFleetSnapshotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetBotFleetSnapshot not implemented")
+}
+func (UnimplementedWorkerServiceServer) StreamBotFleetEvents(*StreamBotFleetEventsRequest, grpc.ServerStreamingServer[BotFleetEvent]) error {
+	return status.Error(codes.Unimplemented, "method StreamBotFleetEvents not implemented")
+}
+func (UnimplementedWorkerServiceServer) SignalBotActions(context.Context, *SignalBotActionsRequest) (*SignalBotActionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SignalBotActions not implemented")
 }
 func (UnimplementedWorkerServiceServer) StreamPluginEvents(*StreamPluginEventsRequest, grpc.ServerStreamingServer[PluginEvent]) error {
 	return status.Error(codes.Unimplemented, "method StreamPluginEvents not implemented")
@@ -2860,6 +2959,89 @@ func _WorkerService_StreamBotEvents_Handler(srv interface{}, stream grpc.ServerS
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WorkerService_StreamBotEventsServer = grpc.ServerStreamingServer[BotEvent]
 
+func _WorkerService_GetBotCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBotCapacityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).GetBotCapacity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_GetBotCapacity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).GetBotCapacity(ctx, req.(*GetBotCapacityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_ApplyBotBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyBotBatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ApplyBotBatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ApplyBotBatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ApplyBotBatch(ctx, req.(*ApplyBotBatchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_GetBotFleetSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBotFleetSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).GetBotFleetSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_GetBotFleetSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).GetBotFleetSnapshot(ctx, req.(*GetBotFleetSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_StreamBotFleetEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StreamBotFleetEventsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(WorkerServiceServer).StreamBotFleetEvents(m, &grpc.GenericServerStream[StreamBotFleetEventsRequest, BotFleetEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type WorkerService_StreamBotFleetEventsServer = grpc.ServerStreamingServer[BotFleetEvent]
+
+func _WorkerService_SignalBotActions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignalBotActionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).SignalBotActions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_SignalBotActions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).SignalBotActions(ctx, req.(*SignalBotActionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_StreamPluginEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(StreamPluginEventsRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -3272,6 +3454,22 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _WorkerService_RunBotScript_Handler,
 		},
 		{
+			MethodName: "GetBotCapacity",
+			Handler:    _WorkerService_GetBotCapacity_Handler,
+		},
+		{
+			MethodName: "ApplyBotBatch",
+			Handler:    _WorkerService_ApplyBotBatch_Handler,
+		},
+		{
+			MethodName: "GetBotFleetSnapshot",
+			Handler:    _WorkerService_GetBotFleetSnapshot_Handler,
+		},
+		{
+			MethodName: "SignalBotActions",
+			Handler:    _WorkerService_SignalBotActions_Handler,
+		},
+		{
 			MethodName: "SendPluginCommand",
 			Handler:    _WorkerService_SendPluginCommand_Handler,
 		},
@@ -3330,6 +3528,11 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "StreamBotEvents",
 			Handler:       _WorkerService_StreamBotEvents_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamBotFleetEvents",
+			Handler:       _WorkerService_StreamBotFleetEvents_Handler,
 			ServerStreams: true,
 		},
 		{

@@ -190,6 +190,16 @@ service WorkerService {
   rpc RunBotScript(RunBotScriptRequest) returns (RunBotScriptResponse);
   // StreamBotEvents 订阅 Bot 事件流。
   rpc StreamBotEvents(StreamBotEventsRequest) returns (stream BotEvent);
+  // GetBotCapacity 返回本节点 Bot Worker 的 fleet 准入容量快照（FR-351）。
+  rpc GetBotCapacity(GetBotCapacityRequest) returns (GetBotCapacityResponse);
+  // ApplyBotBatch 批量应用最多 50 个 Bot assignment，并返回逐项回执（FR-351）。
+  rpc ApplyBotBatch(ApplyBotBatchRequest) returns (ApplyBotBatchResponse);
+  // GetBotFleetSnapshot 返回当前 Bot fleet 运行快照（FR-351，供后续 reconcile 建基线）。
+  rpc GetBotFleetSnapshot(GetBotFleetSnapshotRequest) returns (GetBotFleetSnapshotResponse);
+  // StreamBotFleetEvents 以类型化流持续上报 runtime/action 事件（FR-351）。
+  rpc StreamBotFleetEvents(StreamBotFleetEventsRequest) returns (stream BotFleetEvent);
+  // SignalBotActions 批量投递最多 100 个外部动作信号，并返回逐项回执（FR-351）。
+  rpc SignalBotActions(SignalBotActionsRequest) returns (SignalBotActionsResponse);
 
   // === 插件桥（ServerProbe 反向 WS ↔ Worker，FR-065，见 ADR-016）===
   //
@@ -343,6 +353,7 @@ message InstanceMetricSample {
   double cpu_load = 9;        // 0~1 系统 CPU；<0 不可用
   double uptime_seconds = 10;
   repeated WorldMetric worlds = 11;
+  double mspt_p95_millis = 12; // ServerProbe 最近 60 秒原始 Tick 时长 p95；老探针缺失时为零值并由 probe_available/上层缺测语义判定
 }
 
 // ProcessMetricSample 受管实例进程 TOPN 快照（FR-170）。
@@ -752,6 +763,7 @@ message GetInstanceMetricsResponse {
   // probe_available=true 表示指标来自 ServerProbe；false 表示探针未部署/未就绪（指标 N/A）。
   // RCON 回退已退役（FR-067，见 ADR-016）：不再有 RCON/进程内存兜底的 TPS/在线人数。
   bool probe_available = 10;
+  float mspt_p95_millis = 11; // ServerProbe 最近 60 秒原始 Tick 时长 p95；不得由 avg 二次聚合冒充
 }
 
 // WorldMetric 单个世界的负载（来自 ServerProbe serverprobe_world_*）。
@@ -868,6 +880,7 @@ message BotEvent {
   string data = 3;    // JSON
   int64 timestamp = 4;
 }
+
 // === JDK 管理 ===
 
 message ListJDKsRequest {}
@@ -1585,4 +1598,159 @@ message ImportServerDirResponse {
   string error = 2;
   string work_dir = 3;     // 最终工作目录在节点上的绝对路径
   bool moved = 4;          // migrate 是否实际完成搬迁（in_place 恒为 false）
+}
+
+// === Bot fleet（FR-351，一次铺齐下游共享字段）===
+
+message GetBotCapacityRequest {}
+
+message GetBotCapacityResponse {
+  bool ready = 1;
+  bool legacy = 2;
+  int32 max_bots = 3;
+  int32 active_bots = 4;
+  int32 connecting_bots = 5;
+  int64 capacity_generation = 6;
+  string worker_epoch = 7;
+  int64 worker_epoch_generation = 8;
+  string bot_worker_version = 9;
+  int64 rss_bytes = 10;
+  double event_loop_p95_ms = 11;
+  int64 observed_at_unix_ms = 12;
+  string unavailable_reason = 13;
+  repeated string features = 14;
+}
+
+message BotAssignment {
+  string bot_uuid = 1;
+  string instance_uuid = 2;
+  string session_uuid = 3;
+  int64 generation = 4;
+  string desired_state = 5; // running/stopped
+  string config_hash = 6;
+  string name = 7;
+  string host = 8;
+  int32 port = 9;
+  string username = 10;
+  string version = 11;
+  string auth = 12;
+  string cohort_key = 13;
+  string scenario_json = 14;
+  string resume_step_id = 15;
+  int64 connect_not_before_unix_ms = 16;
+  string correlation_seed = 17;
+}
+
+message ApplyBotBatchRequest {
+  string batch_id = 1;
+  string idempotency_key = 2;
+  int64 expected_capacity_generation = 3;
+  repeated BotAssignment assignments = 4;
+}
+
+message ApplyBotBatchItemResult {
+  string bot_uuid = 1;
+  bool accepted = 2;
+  bool skipped = 3;
+  string status = 4;
+  string error_code = 5;
+  string error = 6;
+}
+
+message ApplyBotBatchResponse {
+  string batch_id = 1;
+  string idempotency_key = 2;
+  repeated ApplyBotBatchItemResult results = 3;
+  int64 capacity_generation = 4;
+}
+
+message GetBotFleetSnapshotRequest {
+  string session_uuid = 1; // 空表示本节点全部 Bot
+}
+
+message BotPosition {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+message BotRuntimeSnapshot {
+  string bot_uuid = 1;
+  string session_uuid = 2;
+  int64 generation = 3;
+  string config_hash = 4;
+  string worker_epoch = 5;
+  int64 worker_epoch_generation = 6;
+  int64 event_seq = 7;
+  string status = 8;
+  string current_step_id = 9;
+  double health = 10;
+  int32 food = 11;
+  BotPosition pos = 12;
+  int32 reconnect_count = 13;
+  string error_code = 14;
+  string last_error = 15;
+  int64 observed_at_unix_ms = 16;
+}
+
+message GetBotFleetSnapshotResponse {
+  repeated BotRuntimeSnapshot bots = 1;
+  int64 capacity_generation = 2;
+  int64 observed_at_unix_ms = 3;
+}
+
+message StreamBotFleetEventsRequest {
+  string session_uuid = 1; // 空表示本节点全部活动 Bot
+}
+
+message BotActionEvent {
+  string bot_uuid = 1;
+  string session_uuid = 2;
+  int64 generation = 3;
+  string action_run_id = 4;
+  string step_id = 5;
+  int32 attempt = 6;
+  string status = 7; // running/succeeded/failed/timed_out/cancelled
+  string error_code = 8;
+  string message = 9;
+  string correlation_token = 10;
+  string result_json = 11;
+  int64 duration_ms = 12;
+  int64 observed_at_unix_ms = 13;
+}
+
+message BotFleetEvent {
+  oneof event {
+    BotRuntimeSnapshot runtime_snapshot = 1;
+    BotActionEvent action_event = 2;
+  }
+}
+
+message BotActionSignal {
+  string signal_id = 1;
+  string bot_uuid = 2;
+  string session_uuid = 3;
+  int64 generation = 4;
+  string action_run_id = 5;
+  string step_id = 6;
+  string type = 7; // probe/barrier/cancel
+  string correlation_token = 8;
+  string payload_json = 9;
+  int64 observed_at_unix_ms = 10;
+}
+
+message SignalBotActionsRequest {
+  repeated BotActionSignal signals = 1;
+}
+
+message SignalBotActionItemResult {
+  string signal_id = 1;
+  bool accepted = 2;
+  bool skipped = 3;
+  string error_code = 4;
+  string error = 5;
+}
+
+message SignalBotActionsResponse {
+  repeated SignalBotActionItemResult results = 1;
 }
