@@ -16,4 +16,5 @@
 
 ## 索引（最近新增）
 
+- [ADR-074](074-bot-distributed-load.md) Bot 目标实例与执行节点解耦，采用 Control Plane 分布式调度（FR-351～357，部分修订 ADR-006）
 - [ADR-073](073-artifact-external-object-storage.md) 制品库外置对象存储与 302 预签名分发（FR-347，修订 ADR-011 存储节）
