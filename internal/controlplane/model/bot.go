@@ -21,14 +21,22 @@ const (
 
 // Bot Mineflayer Bot。
 type Bot struct {
-	ID              uint      `gorm:"primaryKey" json:"id"`
-	UUID            string    `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
-	InstanceID      uint      `gorm:"not null;index" json:"instanceId"`
-	StressSessionID *uint     `gorm:"index" json:"stressSessionId,omitempty"`
-	ExecutorNodeID  *uint     `gorm:"index" json:"executorNodeId,omitempty"`
-	LoadBatchID     *uint     `gorm:"index" json:"loadBatchId,omitempty"`
-	Name            string    `gorm:"type:varchar(128);not null" json:"name"`
-	Status          BotStatus `gorm:"type:varchar(32);default:pending" json:"status"`
+	ID                     uint       `gorm:"primaryKey" json:"id"`
+	UUID                   string     `gorm:"type:char(36);uniqueIndex;not null" json:"uuid"`
+	InstanceID             uint       `gorm:"not null;index" json:"instanceId"`
+	StressSessionID        *uint      `gorm:"index" json:"stressSessionId,omitempty"`
+	ExecutorNodeID         *uint      `gorm:"index;index:idx_bots_executor_generation,priority:1" json:"executorNodeId,omitempty"`
+	LoadBatchID            *uint      `gorm:"index" json:"loadBatchId,omitempty"`
+	Name                   string     `gorm:"type:varchar(128);not null" json:"name"`
+	Status                 BotStatus  `gorm:"type:varchar(32);default:pending" json:"status"`
+	WorkerEpoch            string     `gorm:"type:varchar(36);not null;default:''" json:"workerEpoch"`
+	WorkerEpochGeneration  int64      `gorm:"not null;default:0" json:"workerEpochGeneration"`
+	LastEventSeq           int64      `gorm:"not null;default:0" json:"lastEventSeq"`
+	LastSeenAt             *time.Time `json:"lastSeenAt,omitempty"`
+	ConnectedAt            *time.Time `json:"connectedAt,omitempty"`
+	DesiredStateGeneration int64      `gorm:"not null;default:1;index:idx_bots_executor_generation,priority:2" json:"desiredStateGeneration"`
+	ConfigHash             string     `gorm:"type:char(64);not null;default:''" json:"configHash"`
+	CohortKey              string     `gorm:"type:varchar(64);not null;default:''" json:"cohortKey"`
 	// LastError 最近一次委托 Worker 失败的原因（如 bot-worker 依赖未装、节点未连）。
 	// 委托成功即清空；status=error 时前端据此显示可操作指引，杜绝「创建 201 但永远 pending 零反馈」。
 	LastError string         `gorm:"type:text" json:"lastError,omitempty"`
