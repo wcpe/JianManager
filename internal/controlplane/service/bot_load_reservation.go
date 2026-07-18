@@ -114,6 +114,16 @@ func (s *BotLoadReservationStore) RestoreIfCurrent(runID uint, currentRevision u
 	return true
 }
 
+// Release 消费完成后释放指定运行的软预留，避免已持久化批次继续占用内存租约。
+func (s *BotLoadReservationStore) Release(runID uint) {
+	if s == nil || runID == 0 {
+		return
+	}
+	s.mu.Lock()
+	delete(s.leases, runID)
+	s.mu.Unlock()
+}
+
 // Cleanup 清除所有已过期租约。
 func (s *BotLoadReservationStore) Cleanup() {
 	s.mu.Lock()
