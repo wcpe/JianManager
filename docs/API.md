@@ -1470,7 +1470,7 @@
 
 ---
 
-## 制品存储渠道（FR-347，见 ADR-073）
+## 制品存储渠道与存量迁移（FR-347/348，见 ADR-073）
 
 > 客户端分发制品（client-file）的外置对象存储渠道：活跃渠道决定新上传制品落点（local 原样 / s3 上传对象），存量制品按记录自述读取。与备份域 `backup-storages` 独立（消费方不同：备份下发 Worker 执行，本渠道由 CP 自身上传/预签名）。凭证面板直填、AES-256-GCM 可逆加密落库（复用 FR-192 KeyEncryptor）；**响应永不含凭证明文或密文**，以 `hasAccessKey`/`hasSecretKey` 布尔标示。全部端点限平台管理员。
 
@@ -1494,10 +1494,10 @@
 - **错误**: 400；404 `NOT_FOUND`；422 `BUSINESS_ERROR`（内置不可编辑/类型不可改/名称冲突/校验失败）
 
 ### DELETE /api/v1/artifact-storages/:id
-- **描述**: 删除渠道（硬删除）。内置行拒；活跃渠道拒（先切走）；被制品引用拒（422 附引用数——读路径按 `assets.storage_channel_id` 自述定位，删被引用渠道即断链）
+- **描述**: 删除渠道（硬删除）。内置行拒；活跃渠道拒（先切走）；被制品引用拒（422 附引用数——读路径按 `assets.storage_channel_id` 自述定位，删被引用渠道即断链）；存在非终态制品迁移任务时粗粒度禁止删除任何渠道，避免逐条迁移期间源渠道被移除
 - **权限**: 平台管理员
-- **关联 FR**: FR-347
-- **错误**: 404；422 `BUSINESS_ERROR`（内置不可删/活跃不可删/被 N 个制品引用）
+- **关联 FR**: FR-347, FR-348
+- **错误**: 404；422 `BUSINESS_ERROR`（内置不可删/活跃不可删/被 N 个制品引用/制品存量迁移在途）
 
 ### POST /api/v1/artifact-storages/test
 - **描述**: 真连探测候选配置，不写库。s3 = 写探测对象（PUT 8 字节 → HEAD → DELETE，探测键挂渠道 prefix 下 `probe/`，验证的正是写路径所需权限）；local = 数据根可写探测。可带 `id`：编辑态凭证留空时用存库密文解密后探测
@@ -1518,6 +1518,27 @@
 - **关联 FR**: FR-347
 - **响应** (200): 渠道对象
 - **错误**: 404
+
+### POST /api/v1/artifact-storages/:id/migrate
+- **描述**: 发起全部存量 `client-file` 制品迁移到路径指定渠道的 CP 后台任务。同一时间只允许一个在途迁移；发起前对目标渠道真连探测。重新对同一目标发起新任务即幂等续跑，已在目标渠道的制品计入 `skipped`、不重传
+- **权限**: 平台管理员
+- **关联 FR**: FR-348
+- **响应** (202): `{ "taskId": "uuid" }`；任务 `kind=artifact_migrate`、`nodeId=0`，进度与终态可在任务中心查看
+- **错误**: 404 `NOT_FOUND`（目标渠道不存在）；409 `MIGRATION_IN_FLIGHT`（已有在途迁移）；422 `BUSINESS_ERROR`（目标真连探测失败或凭证解密/连接解析失败，`message` 携具体原因）
+
+### GET /api/v1/artifact-storages/migration
+- **描述**: 查询最近一次制品迁移任务及实时计数；从未迁移过返回双 `null`
+- **权限**: 平台管理员
+- **关联 FR**: FR-348
+- **响应**: `{ "task": Task|null, "migration": { "taskId":"uuid", "targetChannelId":2, "targetName":"rustfs", "total":10, "migrated":7, "failed":1, "skipped":2 }|null }`
+- **错误**: 500 `INTERNAL_ERROR`
+
+### GET /api/v1/artifact-storages/migration/:taskId/failures
+- **描述**: 查询指定迁移任务的逐制品失败明细，按 id 升序、最多返回 500 条；完整失败总数以迁移计数 `failed` 为准
+- **权限**: 平台管理员
+- **关联 FR**: FR-348
+- **响应**: `[{ "id":1, "taskId":"uuid", "assetId":42, "sha256":"…", "filename":"modpack.jar", "size":1024, "reason":"写入目标失败", "createdAt":"RFC3339" }]`
+- **错误**: 500 `INTERNAL_ERROR`
 
 ---
 
@@ -2128,8 +2149,8 @@
 - **响应**: `{ "task": { ...Task }, "logs": [{ id, taskId, seq, line, ts }] }`
 
 ### POST /api/v1/tasks/:taskId/cancel
-- **描述**: 强制停止任务（FR-227）。**真中断**：pending（Worker 未起）或节点离线 → 直接置 `canceled`；running 在线 → 置 `cancelRequested=true`，经心跳 `HeartbeatResponse.cancel_task_ids` 下发，Worker 取消执行 context（中断下载 + 清理临时文件）后回报 `canceled` 终态。
-- **关联 FR**: FR-227
+- **描述**: 强制停止任务（FR-227）。**Worker 任务真中断**：pending（Worker 未起）或节点离线 → 直接置 `canceled`；running 在线 → 置 `cancelRequested=true`，经心跳 `HeartbeatResponse.cancel_task_ids` 下发，Worker 取消执行 context（中断下载 + 清理临时文件）后回报 `canceled` 终态。**CP 本地制品迁移任务**（FR-348，`kind=artifact_migrate/nodeId=0`）直接置 `canceled`，迁移循环在处理下一条制品前读取任务状态并退出，不再触碰后续制品
+- **关联 FR**: FR-227, FR-348
 - **权限**: 所有认证用户（仅自己发起的；平台管理员不限）；越权/不存在 404
 - **错误**: 已终态 → 409 `ALREADY_TERMINAL`
 - **响应**: `{ "message": "已请求停止" }`
