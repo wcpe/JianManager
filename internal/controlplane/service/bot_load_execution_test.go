@@ -277,6 +277,7 @@ func TestBotLoadExecutionStart_InvalidPlansHaveZeroSideEffects(t *testing.T) {
 	tests := []struct {
 		name              string
 		wantCapacityCalls int
+		wantError         error
 		mutate            func(*botLoadExecutionHarness) string
 	}{
 		{
@@ -304,7 +305,7 @@ func TestBotLoadExecutionStart_InvalidPlansHaveZeroSideEffects(t *testing.T) {
 			},
 		},
 		{
-			name: "节点即时不可用", wantCapacityCalls: 1,
+			name: "节点即时不可用", wantCapacityCalls: 1, wantError: ErrBotLoadNodeUnavailable,
 			mutate: func(h *botLoadExecutionHarness) string {
 				h.capacity.snapshot.NodeCapacities[0].BotWorkerReady = false
 				h.capacity.snapshot.NodeCapacities[0].UnavailableReason = BotLoadUnavailableAdmission
@@ -325,7 +326,11 @@ func TestBotLoadExecutionStart_InvalidPlansHaveZeroSideEffects(t *testing.T) {
 			token := test.mutate(h)
 			_, err := h.service.Start(context.Background(), h.session.ID, token)
 			require.Error(t, err)
-			require.True(t, errors.Is(err, ErrBotLoadCapacityChanged))
+			wantError := test.wantError
+			if wantError == nil {
+				wantError = ErrBotLoadCapacityChanged
+			}
+			require.ErrorIs(t, err, wantError)
 			require.Equal(t, test.wantCapacityCalls, h.capacity.Calls())
 			require.Zero(t, countBotLoadRows(t, h.db, &model.BotLoadBatch{}))
 			require.Zero(t, countBotLoadRows(t, h.db, &model.Bot{}))

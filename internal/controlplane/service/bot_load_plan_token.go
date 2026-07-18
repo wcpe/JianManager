@@ -11,7 +11,20 @@ import (
 	"time"
 )
 
-const botLoadPlanTokenTTL = time.Minute
+const (
+	botLoadPlanTokenTTL    = time.Minute
+	botLoadPlanTokenDomain = "jianmanager/bot-load/plan-token/v1"
+)
+
+// DeriveBotLoadPlanTokenSecret 从稳定服务端主密钥域分离派生计划令牌专用密钥。
+func DeriveBotLoadPlanTokenSecret(master []byte) []byte {
+	if len(master) == 0 {
+		return nil
+	}
+	mac := hmac.New(sha256.New, master)
+	_, _ = mac.Write([]byte(botLoadPlanTokenDomain))
+	return mac.Sum(nil)
+}
 
 type botLoadPlanTokenClaims struct {
 	Version             int                     `json:"version"`

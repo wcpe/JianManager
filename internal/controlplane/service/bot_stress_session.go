@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,6 +45,20 @@ type BotStressSessionCounts struct {
 	ByStatus map[string]int64 `json:"byStatus"`
 }
 
+// BotLoadBatchSummary 是会话响应中的分布式批次摘要，不暴露节点密钥或内部错误细节。
+type BotLoadBatchSummary struct {
+	ID             uint                    `json:"id"`
+	UUID           string                  `json:"uuid"`
+	ExecutorNodeID uint                    `json:"executorNodeId"`
+	Ordinal        int                     `json:"ordinal"`
+	PlannedCount   int                     `json:"plannedCount"`
+	AcceptedCount  int                     `json:"acceptedCount"`
+	FailedCount    int                     `json:"failedCount"`
+	State          model.BotLoadBatchState `json:"state"`
+	StartedAt      *time.Time              `json:"startedAt,omitempty"`
+	EndedAt        *time.Time              `json:"endedAt,omitempty"`
+}
+
 // BotStressSessionView 压测会话响应视图。
 type BotStressSessionView struct {
 	ID                   uint                           `json:"id"`
@@ -61,6 +76,8 @@ type BotStressSessionView struct {
 	CreatedAt            time.Time                      `json:"createdAt"`
 	UpdatedAt            time.Time                      `json:"updatedAt"`
 	Counts               BotStressSessionCounts         `json:"counts"`
+	Allocations          []BotLoadAllocation            `json:"allocations,omitempty"`
+	Batches              []BotLoadBatchSummary          `json:"batches,omitempty"`
 }
 
 // BotStressSessionListQuery 会话列表分页参数。
@@ -163,7 +180,53 @@ func (s *BotStressSessionService) Get(id uint) (*BotStressSessionView, error) {
 	if err != nil {
 		return nil, err
 	}
-	return s.viewFromSession(*sess)
+	view, err := s.viewFromSession(*sess)
+	if err != nil {
+		return nil, err
+	}
+	return s.enrichBotLoadView(view, sess)
+}
+
+// LoadForBotLoad 加载预检/启停所需的会话、目标实例与目标节点。
+func (s *BotStressSessionService) LoadForBotLoad(ctx context.Context, id uint) (*model.BotStressSession, error) {
+	var session model.BotStressSession
+	if err := s.db.WithContext(ctx).Preload("Instance.Node").First(&session, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrBotStressSessionNotFound
+		}
+		return nil, fmt.Errorf("查询 Bot 负载会话失败: %w", err)
+	}
+	return &session, nil
+}
+
+// IsLegacyBotStressSession 判断是否为仅使用 V1 字段、尚未生成分布式计划的兼容会话。
+func IsLegacyBotStressSession(session *model.BotStressSession) bool {
+	if session == nil || session.BotCount < 1 || session.BotCount > maxBotLoadBatchSize {
+		return false
+	}
+	if strings.TrimSpace(session.AllocationPlan) != "" || !hasLegacyBotStressConfigShape(session.Config) {
+		return false
+	}
+	return strings.TrimSpace(session.Behavior) != "" || strings.TrimSpace(session.OrchestrationYAML) != ""
+}
+
+func hasLegacyBotStressConfigShape(raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return true
+	}
+	var config map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &config) != nil {
+		return false
+	}
+	authRaw, declared := config["auth"]
+	if !declared {
+		return true
+	}
+	var auth string
+	if json.Unmarshal(authRaw, &auth) != nil {
+		return false
+	}
+	return !strings.EqualFold(strings.TrimSpace(auth), "offline")
 }
 
 // List 分页列出压测会话，并按可访问实例集合收敛。
@@ -398,6 +461,29 @@ func (s *BotStressSessionService) viewFromSession(sess model.BotStressSession) (
 			return nil, fmt.Errorf("解析压测会话编排摘要失败: %w", err)
 		}
 		view.OrchestrationSummary = &summary
+	}
+	return view, nil
+}
+
+func (s *BotStressSessionService) enrichBotLoadView(view *BotStressSessionView, session *model.BotStressSession) (*BotStressSessionView, error) {
+	if strings.TrimSpace(session.AllocationPlan) != "" {
+		plan, err := DecodeBotLoadAllocationPlan(session.AllocationPlan)
+		if err != nil {
+			return nil, err
+		}
+		view.Allocations = append([]BotLoadAllocation(nil), plan.Allocations...)
+	}
+	var batches []model.BotLoadBatch
+	if err := s.db.Where("stress_session_id = ?", session.ID).Order("ordinal ASC").Find(&batches).Error; err != nil {
+		return nil, fmt.Errorf("查询 Bot 负载批次摘要失败: %w", err)
+	}
+	view.Batches = make([]BotLoadBatchSummary, 0, len(batches))
+	for _, batch := range batches {
+		view.Batches = append(view.Batches, BotLoadBatchSummary{
+			ID: batch.ID, UUID: batch.UUID, ExecutorNodeID: batch.ExecutorNodeID, Ordinal: batch.Ordinal,
+			PlannedCount: batch.PlannedCount, AcceptedCount: batch.AcceptedCount, FailedCount: batch.FailedCount,
+			State: batch.State, StartedAt: batch.StartedAt, EndedAt: batch.EndedAt,
+		})
 	}
 	return view, nil
 }

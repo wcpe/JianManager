@@ -23,11 +23,10 @@ phases:
 `
 
 func TestBotStressSession_Flow(t *testing.T) {
-	db := setupTestDB(t)
-	r := setupTestRouter(db)
-	token := getAdminToken(t, r)
-	createTestNode(t, db)
-	inst := createInstanceViaAPI(t, r, token, 1, createGroupViaAPI(t, r, token, "g"))
+	_, _, _, ctx := setupBotLoadHTTP(t, 50)
+	r := ctx.router
+	token := ctx.token
+	inst := ctx.instanceID
 
 	body := map[string]interface{}{
 		"instanceId": inst,
@@ -43,7 +42,7 @@ func TestBotStressSession_Flow(t *testing.T) {
 	assert.Equal(t, "pending", created["status"])
 
 	w = makeRequest(r, "POST", "/api/v1/bots/stress-sessions/"+itoa(sessionID)+"/start", nil, token)
-	require.Equalf(t, http.StatusOK, w.Code, "启动压测会话失败: %s", w.Body.String())
+	require.Equalf(t, http.StatusAccepted, w.Code, "启动压测会话失败: %s", w.Body.String())
 	started := parseJSON(t, w)
 	assert.Equal(t, "running", started["status"])
 	counts := started["counts"].(map[string]interface{})
@@ -58,7 +57,7 @@ func TestBotStressSession_Flow(t *testing.T) {
 	assert.Equal(t, "running", item["status"])
 
 	w = makeRequest(r, "POST", "/api/v1/bots/stress-sessions/"+itoa(sessionID)+"/stop", nil, token)
-	require.Equalf(t, http.StatusOK, w.Code, "停止压测会话失败: %s", w.Body.String())
+	require.Equalf(t, http.StatusAccepted, w.Code, "停止压测会话失败: %s", w.Body.String())
 	stopped := parseJSON(t, w)
 	assert.Equal(t, "stopped", stopped["status"])
 	stoppedCounts := stopped["counts"].(map[string]interface{})

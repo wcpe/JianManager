@@ -305,7 +305,7 @@ func validateBotLoadNodeReadiness(plan *BotLoadAllocationPlan, capacities []BotL
 	for nodeID := range allocationBotLoadCounts(plan.Allocations) {
 		capacity, ok := byNode[nodeID]
 		if !ok || !capacity.Online || !capacity.BotWorkerReady || capacity.Legacy || capacity.UnavailableReason != "" {
-			return newBotLoadCapacityChanged(fmt.Sprintf("发压节点 %d 当前不可用", nodeID))
+			return fmt.Errorf("%w: 发压节点 %d 当前不可用", ErrBotLoadNodeUnavailable, nodeID)
 		}
 	}
 	return nil
@@ -318,7 +318,7 @@ func validateImmediateBotLoadCapacity(plan *BotLoadAllocationPlan, capacities []
 	}
 	for nodeID, count := range allocationBotLoadCounts(plan.Allocations) {
 		if byNode[nodeID].AvailableBots < count {
-			return newBotLoadCapacityChanged(fmt.Sprintf("发压节点 %d 的即时容量已变化", nodeID))
+			return fmt.Errorf("%w: 发压节点 %d 的即时可用容量不足", ErrBotLoadCapacityInsufficient, nodeID)
 		}
 	}
 	return nil
@@ -745,7 +745,7 @@ func (s *BotLoadExecutionService) finishStartDispatch(ctx context.Context, sessi
 }
 
 // Stop 持久化 stopped desired generation 后提交按执行节点分组的后台批量停止。
-func (s *BotLoadExecutionService) Stop(ctx context.Context, sessionID uint) (*model.BotStressSession, error) {
+func (s *BotLoadExecutionService) Stop(ctx context.Context, sessionID uint, reasons ...string) (*model.BotStressSession, error) {
 	if err := s.validateDependencies(); err != nil {
 		return nil, err
 	}
@@ -756,7 +756,11 @@ func (s *BotLoadExecutionService) Stop(ctx context.Context, sessionID uint) (*mo
 	if session.Status == model.BotStressSessionStopped {
 		return session, nil
 	}
-	count, err := s.prepareStopIntent(ctx, sessionID)
+	reason := ""
+	if len(reasons) > 0 {
+		reason = reasons[0]
+	}
+	count, err := s.prepareStopIntent(ctx, sessionID, reason)
 	if err != nil {
 		return nil, err
 	}
@@ -772,7 +776,7 @@ func (s *BotLoadExecutionService) Stop(ctx context.Context, sessionID uint) (*mo
 	return s.loadSession(ctx, sessionID)
 }
 
-func (s *BotLoadExecutionService) prepareStopIntent(ctx context.Context, sessionID uint) (int64, error) {
+func (s *BotLoadExecutionService) prepareStopIntent(ctx context.Context, sessionID uint, reason string) (int64, error) {
 	var count int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var session model.BotStressSession
@@ -785,7 +789,7 @@ func (s *BotLoadExecutionService) prepareStopIntent(ctx context.Context, session
 		if count == 0 || botLoadStopIntentRecorded(session.LastError) {
 			return nil
 		}
-		intent := botLoadStopSessionError("dispatching", "")
+		intent := botLoadStopSessionError("dispatching", "", reason)
 		claimed := tx.Model(&model.BotStressSession{}).
 			Where("id = ? AND last_error = ?", sessionID, session.LastError).
 			Update("last_error", intent)
@@ -811,12 +815,17 @@ func botLoadStopIntentRecorded(lastError string) bool {
 	return json.Unmarshal([]byte(lastError), &value) == nil && value.Operation == "stop"
 }
 
-func botLoadStopSessionError(state, message string) string {
+func botLoadStopSessionError(state, message string, reasons ...string) string {
+	reason := ""
+	if len(reasons) > 0 {
+		reason = reasons[0]
+	}
 	value := struct {
 		Operation string `json:"operation"`
 		State     string `json:"state"`
 		Message   string `json:"message,omitempty"`
-	}{Operation: "stop", State: state, Message: message}
+		Reason    string `json:"reason,omitempty"`
+	}{Operation: "stop", State: state, Message: message, Reason: reason}
 	raw, _ := json.Marshal(value)
 	return string(raw)
 }

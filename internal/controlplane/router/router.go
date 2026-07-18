@@ -46,6 +46,10 @@ type Services struct {
 	Config           *service.ConfigService
 	Bot              *service.BotService
 	BotStressSession *service.BotStressSessionService
+	// BotLoadCapacity/Preflight/Execution 是 FR-351 进程级共享单例；nil 时仅保留旧会话入口。
+	BotLoadCapacity  *service.BotLoadCapacityDirectory
+	BotLoadPreflight *service.BotLoadPreflightService
+	BotLoadExecution *service.BotLoadExecutionService
 	Alert            *service.AlertService
 	AlertChannel     *service.AlertChannelService
 	Schedule         *service.ScheduleService
@@ -240,8 +244,14 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		configHandler := NewConfigHandler(svcs.Config, svcs.Authz)
 		configHandler.RegisterRoutes(protected)
 
+		// Bot 分布式容量静态路由必须先于 /bots/:id 注册，且复用进程级 CapacityDirectory。
+		if svcs.BotLoadCapacity != nil {
+			NewBotLoadHandler(svcs.BotLoadCapacity, svcs.Instance, svcs.Authz).RegisterRoutes(protected)
+		}
 		if svcs.BotStressSession != nil {
-			botStressSessionHandler := NewBotStressSessionHandler(svcs.BotStressSession, svcs.Authz)
+			botStressSessionHandler := NewBotStressSessionHandler(
+				svcs.BotStressSession, svcs.Authz, svcs.BotLoadPreflight, svcs.BotLoadExecution, svcs.Audit,
+			)
 			botStressSessionHandler.RegisterRoutes(protected)
 		}
 

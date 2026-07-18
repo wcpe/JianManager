@@ -200,6 +200,25 @@ func TestBotLoadPlanToken_SignedContract(t *testing.T) {
 	require.True(t, errors.Is(err, ErrBotLoadCapacityChanged))
 }
 
+func TestDeriveBotLoadPlanTokenSecret_DomainSeparatedFromJWT(t *testing.T) {
+	clock := &botLoadFakeClock{now: time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)}
+	master := []byte("stable-jwt-secret")
+	derived := DeriveBotLoadPlanTokenSecret(master)
+	require.Len(t, derived, 32)
+	require.NotEqual(t, master, derived)
+	require.Equal(t, derived, DeriveBotLoadPlanTokenSecret(master))
+
+	planSigner, err := NewBotLoadPlanTokenSigner(derived, clock)
+	require.NoError(t, err)
+	jwtKeySigner, err := NewBotLoadPlanTokenSigner(master, clock)
+	require.NoError(t, err)
+	expectation := BotLoadPlanTokenExpectation{RunID: 1, AllocationHash: "hash"}
+	token, _, err := planSigner.Issue(expectation.RunID, expectation.AllocationHash, nil)
+	require.NoError(t, err)
+	require.NoError(t, planSigner.Verify(token, expectation))
+	require.ErrorIs(t, jwtKeySigner.Verify(token, expectation), ErrBotLoadCapacityChanged)
+}
+
 func TestNewBotLoadPlanTokenSigner_RejectsEmptySecret(t *testing.T) {
 	_, err := NewBotLoadPlanTokenSigner(nil, &botLoadFakeClock{now: time.Now()})
 	require.Error(t, err)

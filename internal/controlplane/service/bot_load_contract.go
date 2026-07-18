@@ -27,6 +27,10 @@ const (
 var (
 	// ErrBotLoadCapacityChanged 供 HTTP/start 层稳定映射 409 BOT_LOAD_CAPACITY_CHANGED。
 	ErrBotLoadCapacityChanged = errors.New("Bot 负载容量计划已变化")
+	// ErrBotLoadCapacityInsufficient 表示即时可用容量已不足，需重新预检。
+	ErrBotLoadCapacityInsufficient = errors.New("Bot 负载容量不足")
+	// ErrBotLoadNodeUnavailable 表示计划使用的执行节点当前不可用。
+	ErrBotLoadNodeUnavailable = errors.New("Bot 负载节点不可用")
 	// ErrBotLoadPreflightInvalid 表示纯核心层输入不符合冻结范围。
 	ErrBotLoadPreflightInvalid = errors.New("Bot 负载预检参数无效")
 )

@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/jhump/grpctunnel/tunnelpb"
 	"google.golang.org/grpc"
+	"gorm.io/gorm"
 
 	"github.com/wcpe/JianManager/internal/controlplane/config"
 	"github.com/wcpe/JianManager/internal/controlplane/database"
@@ -26,6 +27,31 @@ import (
 	"github.com/wcpe/JianManager/internal/version"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
+
+type botLoadServiceBundle struct {
+	capacity     *service.BotLoadCapacityDirectory
+	reservations *service.BotLoadReservationStore
+	signer       *service.BotLoadPlanTokenSigner
+	preflight    *service.BotLoadPreflightService
+	execution    *service.BotLoadExecutionService
+}
+
+// assembleBotLoadServices 创建进程级共享的容量目录、软预留、签名器与执行服务。
+func assembleBotLoadServices(db *gorm.DB, pool *cpgrpc.ClientPool, stableSecret string) (*botLoadServiceBundle, error) {
+	reservations := service.NewBotLoadReservationStore(nil, 0)
+	capacity := service.NewGRPCBotLoadCapacityDirectory(db, pool, reservations, nil)
+	planSecret := service.DeriveBotLoadPlanTokenSecret([]byte(stableSecret))
+	signer, err := service.NewBotLoadPlanTokenSigner(planSecret, nil)
+	if err != nil {
+		return nil, err
+	}
+	preflight := service.NewBotLoadPreflightService(db, capacity, reservations, signer, nil)
+	execution := service.NewGRPCBotLoadExecutionService(db, capacity, reservations, signer, pool, nil, nil)
+	return &botLoadServiceBundle{
+		capacity: capacity, reservations: reservations, signer: signer,
+		preflight: preflight, execution: execution,
+	}, nil
+}
 
 func main() {
 	if version.Requested(os.Args[1:]) {
@@ -99,6 +125,10 @@ func main() {
 	// 坏节点检测/修复（见 ADR-039 §2）：检测重名/被串改节点、重新 enroll、清理孤立 JDK/实例。
 	nodeRepairSvc := service.NewNodeRepairService(db)
 	pool := cpgrpc.NewClientPool()
+	botLoadSvcs, err := assembleBotLoadServices(db, pool, cfg.JWT.Secret)
+	if err != nil {
+		log.Fatalf("初始化 Bot 分布式负载服务失败: %v", err)
+	}
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
 	// 优雅关闭：停止接受新的后台 Worker 委托并等待在途异步状态回写收尾，避免泄漏 goroutine。
 	defer instanceSvc.Shutdown()
@@ -458,6 +488,9 @@ func main() {
 		Config:                  configSvc,
 		Bot:                     botSvc,
 		BotStressSession:        botStressSessionSvc,
+		BotLoadCapacity:         botLoadSvcs.capacity,
+		BotLoadPreflight:        botLoadSvcs.preflight,
+		BotLoadExecution:        botLoadSvcs.execution,
 		Alert:                   alertSvc,
 		AlertChannel:            alertChannelSvc,
 		Schedule:                scheduleSvc,
