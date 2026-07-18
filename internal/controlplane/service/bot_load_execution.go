@@ -107,6 +107,16 @@ type botLoadReconcileItem struct {
 	mode       botLoadReconcileMode
 }
 
+type botLoadSerialTask struct {
+	identity string
+	task     func()
+}
+
+type botLoadSerialQueue struct {
+	pending    []botLoadSerialTask
+	identities map[string]struct{}
+}
+
 // BotLoadExecutionService 实现 FR-351 的 start、后台 dispatch、批量 stop 与基础 snapshot 收敛。
 type BotLoadExecutionService struct {
 	db           *gorm.DB
@@ -118,9 +128,10 @@ type BotLoadExecutionService struct {
 	clock        BotLoadClock
 	resolver     *BotExecutorResolver
 
-	startMu sync.Mutex
-	taskMu  sync.Mutex
-	tasks   map[string]struct{}
+	startMu     sync.Mutex
+	taskMu      sync.Mutex
+	tasks       map[string]struct{}
+	serialTasks map[string]*botLoadSerialQueue
 }
 
 // NewBotLoadExecutionService 创建可注入容量、RPC、runner 和时钟的分布式运行核心。
@@ -132,6 +143,7 @@ func NewBotLoadExecutionService(db *gorm.DB, capacities BotLoadCapacityRefresher
 		db: db, capacities: capacities, reservations: reservations, signer: signer,
 		dispatcher: dispatcher, runner: runner, clock: normalizeBotLoadClock(clock),
 		resolver: NewBotExecutorResolver(db), tasks: make(map[string]struct{}),
+		serialTasks: make(map[string]*botLoadSerialQueue),
 	}
 }
 
@@ -156,7 +168,7 @@ func (s *BotLoadExecutionService) Start(ctx context.Context, sessionID uint, pla
 		s.reservations.Release(sessionID)
 	}
 	if hasPlanned {
-		if err := s.submitOnce(fmt.Sprintf("start:%d", sessionID), func() { s.runDispatch(sessionID) }); err != nil {
+		if err := s.submitLifecycle(sessionID, "start", func() { s.runDispatch(prepared) }); err != nil {
 			return nil, err
 		}
 	}
@@ -327,6 +339,9 @@ func validateImmediateBotLoadCapacity(plan *BotLoadAllocationPlan, capacities []
 func (s *BotLoadExecutionService) materializeStart(ctx context.Context, prepared *botLoadStartPreparation) (bool, error) {
 	hasPlanned := false
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := s.claimBotLoadStartState(tx, prepared.session.ID); err != nil {
+			return err
+		}
 		batches, err := materializeBotLoadBatches(tx, prepared.session.ID, prepared.plan)
 		if err != nil {
 			return err
@@ -348,6 +363,35 @@ func (s *BotLoadExecutionService) materializeStart(ctx context.Context, prepared
 		return nil
 	})
 	return hasPlanned, err
+}
+
+func (s *BotLoadExecutionService) claimBotLoadStartState(tx *gorm.DB, sessionID uint) error {
+	allowed := []model.BotStressSessionStatus{
+		model.BotStressSessionPending, model.BotStressSessionError, model.BotStressSessionRunning,
+	}
+	now := s.clock.Now().UTC()
+	result := tx.Model(&model.BotStressSession{}).
+		Where("id = ? AND status IN ? AND (last_error IS NULL OR last_error NOT LIKE ?)", sessionID, allowed, `%"operation":"stop"%`).
+		Updates(map[string]any{
+			"status": model.BotStressSessionRunning, "started_at": gorm.Expr("COALESCE(started_at, ?)", now), "ended_at": nil,
+		})
+	if result.Error != nil {
+		return fmt.Errorf("锁定 Bot 负载启动状态失败: %w", result.Error)
+	}
+	if result.RowsAffected > 0 {
+		return nil
+	}
+	var session model.BotStressSession
+	if err := tx.Select("id", "status", "last_error").First(&session, sessionID).Error; err != nil {
+		return err
+	}
+	if err := validateBotLoadStartState(session.Status); err != nil {
+		return err
+	}
+	if botLoadStopIntentRecorded(session.LastError) {
+		return fmt.Errorf("%w: 会话已收到停止意图", ErrBotLoadInvalidState)
+	}
+	return fmt.Errorf("%w: 会话状态已变化", ErrBotLoadInvalidState)
 }
 
 func materializeBotLoadBatches(tx *gorm.DB, sessionID uint, plan *BotLoadAllocationPlan) (map[int]model.BotLoadBatch, error) {
@@ -513,39 +557,54 @@ func botLoadAssignmentConfigHash(assignment *workerpb.BotAssignment) string {
 
 // Dispatch 派发所有仍为 planned 的批次；每批独立回写，失败不会回滚其他批次。
 func (s *BotLoadExecutionService) Dispatch(ctx context.Context, sessionID uint) error {
-	session, plan, config, err := s.loadDispatchContext(ctx, sessionID)
+	prepared, err := s.loadDispatchContext(ctx, sessionID)
 	if err != nil {
 		return err
 	}
+	return s.dispatchPrepared(ctx, prepared)
+}
+
+func (s *BotLoadExecutionService) dispatchPrepared(ctx context.Context, prepared *botLoadStartPreparation) error {
 	var writeErrors []error
-	for _, allocation := range plan.Allocations {
-		if err := s.dispatchAllocation(ctx, session, plan, config, allocation); err != nil {
+	for _, allocation := range prepared.plan.Allocations {
+		stopped, err := s.stopIntentRecorded(ctx, prepared.session.ID)
+		if err != nil {
+			writeErrors = append(writeErrors, err)
+			break
+		}
+		if stopped {
+			break
+		}
+		if err := s.dispatchAllocation(ctx, prepared.session, prepared.plan, prepared.config, allocation); err != nil {
 			writeErrors = append(writeErrors, err)
 		}
 	}
-	if err := s.finishStartDispatch(ctx, sessionID); err != nil {
+	if err := s.finishStartDispatch(ctx, prepared.session.ID); err != nil {
 		writeErrors = append(writeErrors, err)
 	}
 	return errors.Join(writeErrors...)
 }
 
-func (s *BotLoadExecutionService) runDispatch(sessionID uint) {
-	if err := s.Dispatch(context.Background(), sessionID); err != nil {
-		slog.Error("Bot 负载后台派发存在数据库回写错误", "runId", sessionID, "error", err)
+func (s *BotLoadExecutionService) runDispatch(prepared *botLoadStartPreparation) {
+	if err := s.dispatchPrepared(context.Background(), prepared); err != nil {
+		slog.Error("Bot 负载后台派发存在数据库回写错误", "runId", prepared.session.ID, "error", err)
 	}
 }
 
-func (s *BotLoadExecutionService) loadDispatchContext(ctx context.Context, sessionID uint) (*model.BotStressSession, *BotLoadAllocationPlan, botLoadConnectionConfig, error) {
+func (s *BotLoadExecutionService) loadDispatchContext(ctx context.Context, sessionID uint) (*botLoadStartPreparation, error) {
 	session, err := s.loadSession(ctx, sessionID)
 	if err != nil {
-		return nil, nil, botLoadConnectionConfig{}, err
+		return nil, err
 	}
 	plan, err := decodeStartAllocationPlan(session)
 	if err != nil {
-		return nil, nil, botLoadConnectionConfig{}, err
+		return nil, err
 	}
 	config, err := parseBotLoadConnectionConfig(session.Config)
-	return session, plan, config, err
+	if err != nil {
+		return nil, err
+	}
+	return &botLoadStartPreparation{session: session, plan: plan, config: config}, nil
 }
 
 func (s *BotLoadExecutionService) dispatchAllocation(ctx context.Context, session *model.BotStressSession, plan *BotLoadAllocationPlan, config botLoadConnectionConfig, allocation BotLoadAllocation) error {
@@ -557,6 +616,10 @@ func (s *BotLoadExecutionService) dispatchAllocation(ctx context.Context, sessio
 	if err != nil {
 		lastErr := structuredBotLoadError("DB_LOAD_FAILED", "ephemeral_unavailable", err.Error())
 		return s.failBotLoadBatchWithoutItems(ctx, batch, lastErr)
+	}
+	stopped, err := s.stopIntentRecorded(ctx, session.ID)
+	if err != nil || stopped {
+		return err
 	}
 	request := buildStartBotLoadBatchRequest(session, plan, config, allocation, bots)
 	response, rpcErr := s.applyBotLoadBatch(ctx, allocation.ExecutorNodeUUID, request)
@@ -588,7 +651,7 @@ func (s *BotLoadExecutionService) claimBotLoadBatch(ctx context.Context, session
 
 func (s *BotLoadExecutionService) loadBatchBots(ctx context.Context, batchID uint) ([]model.Bot, error) {
 	var bots []model.Bot
-	if err := s.db.WithContext(ctx).Where("load_batch_id = ?", batchID).Order("name ASC").Find(&bots).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("load_batch_id = ?", batchID).Order("id ASC").Find(&bots).Error; err != nil {
 		return nil, fmt.Errorf("查询 Bot 负载批次成员失败: %w", err)
 	}
 	return bots, nil
@@ -677,13 +740,22 @@ func structuredBotLoadError(code, status, message string) string {
 
 func (s *BotLoadExecutionService) persistStartBatchResult(ctx context.Context, batch *model.BotLoadBatch, items []botLoadDispatchItem) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var session model.BotStressSession
+		if err := tx.Select("id", "status", "last_error").First(&session, batch.StressSessionID).Error; err != nil {
+			return fmt.Errorf("读取 Bot 负载会话派发状态失败: %w", err)
+		}
+		if session.Status == model.BotStressSessionStopped || botLoadStopIntentRecorded(session.LastError) {
+			return nil
+		}
 		accepted, failed, lastErr := summarizeBotLoadItems(items)
 		for _, item := range items {
 			updates := map[string]any{"status": model.BotStatusError, "last_error": item.lastErr}
 			if item.accepted {
 				updates = map[string]any{"status": model.BotStatusConnecting, "last_error": ""}
 			}
-			if err := tx.Model(&model.Bot{}).Where("id = ?", item.bot.ID).Updates(updates).Error; err != nil {
+			if err := tx.Model(&model.Bot{}).
+				Where("id = ? AND desired_state_generation = ?", item.bot.ID, item.bot.DesiredStateGeneration).
+				Updates(updates).Error; err != nil {
 				return fmt.Errorf("回写 Bot 逐项派发结果失败: %w", err)
 			}
 		}
@@ -733,11 +805,20 @@ func (s *BotLoadExecutionService) finishStartDispatch(ctx context.Context, sessi
 		Where("stress_session_id = ?", sessionID).Scan(&summary).Error; err != nil {
 		return fmt.Errorf("汇总 Bot 负载派发结果失败: %w", err)
 	}
+	var session model.BotStressSession
+	if err := s.db.WithContext(ctx).Select("id", "status", "last_error").First(&session, sessionID).Error; err != nil {
+		return fmt.Errorf("读取 Bot 负载会话最终派发状态失败: %w", err)
+	}
+	if session.Status == model.BotStressSessionStopped || botLoadStopIntentRecorded(session.LastError) {
+		return nil
+	}
 	now := s.clock.Now().UTC()
-	result := s.db.WithContext(ctx).Model(&model.BotStressSession{}).Where("id = ?", sessionID).Updates(map[string]any{
-		"status": model.BotStressSessionRunning, "succeeded": summary.Accepted, "failed": summary.Failed,
-		"last_error": summary.LastErr, "started_at": gorm.Expr("COALESCE(started_at, ?)", now), "ended_at": nil,
-	})
+	result := s.db.WithContext(ctx).Model(&model.BotStressSession{}).
+		Where("id = ? AND status <> ? AND last_error = ?", sessionID, model.BotStressSessionStopped, session.LastError).
+		Updates(map[string]any{
+			"status": model.BotStressSessionRunning, "succeeded": summary.Accepted, "failed": summary.Failed,
+			"last_error": summary.LastErr, "started_at": gorm.Expr("COALESCE(started_at, ?)", now), "ended_at": nil,
+		})
 	if result.Error != nil {
 		return fmt.Errorf("更新 Bot 负载会话派发结果失败: %w", result.Error)
 	}
@@ -770,7 +851,7 @@ func (s *BotLoadExecutionService) Stop(ctx context.Context, sessionID uint, reas
 		}
 		return s.loadSession(ctx, sessionID)
 	}
-	if err := s.submitOnce(fmt.Sprintf("stop:%d", sessionID), func() { s.runStopDispatch(sessionID) }); err != nil {
+	if err := s.submitLifecycle(sessionID, "stop", func() { s.runStopDispatch(sessionID) }); err != nil {
 		return nil, err
 	}
 	return s.loadSession(ctx, sessionID)
@@ -806,6 +887,14 @@ func (s *BotLoadExecutionService) prepareStopIntent(ctx context.Context, session
 		return 0, fmt.Errorf("保存 Bot stopped desired intent 失败: %w", err)
 	}
 	return count, nil
+}
+
+func (s *BotLoadExecutionService) stopIntentRecorded(ctx context.Context, sessionID uint) (bool, error) {
+	var session model.BotStressSession
+	if err := s.db.WithContext(ctx).Select("id", "status", "last_error").First(&session, sessionID).Error; err != nil {
+		return false, fmt.Errorf("检查 Bot 负载停止意图失败: %w", err)
+	}
+	return session.Status == model.BotStressSessionStopped || botLoadStopIntentRecorded(session.LastError), nil
 }
 
 func botLoadStopIntentRecorded(lastError string) bool {
@@ -1253,6 +1342,64 @@ func (s *BotLoadExecutionService) sessionHasBatches(ctx context.Context, session
 		return false, fmt.Errorf("检查 Bot 负载批次失败: %w", err)
 	}
 	return count > 0, nil
+}
+
+func (s *BotLoadExecutionService) submitLifecycle(sessionID uint, identity string, task func()) error {
+	key := fmt.Sprintf("lifecycle:%d", sessionID)
+	s.taskMu.Lock()
+	queue := s.serialTasks[key]
+	if queue != nil {
+		if _, exists := queue.identities[identity]; exists {
+			s.taskMu.Unlock()
+			return nil
+		}
+		queue.identities[identity] = struct{}{}
+		queue.pending = append(queue.pending, botLoadSerialTask{identity: identity, task: task})
+		s.taskMu.Unlock()
+		return nil
+	}
+	queue = &botLoadSerialQueue{
+		pending:    []botLoadSerialTask{{identity: identity, task: task}},
+		identities: map[string]struct{}{identity: {}},
+	}
+	s.serialTasks[key] = queue
+	s.taskMu.Unlock()
+	if err := s.runner.Submit(func() { s.drainLifecycle(key) }); err != nil {
+		s.taskMu.Lock()
+		delete(s.serialTasks, key)
+		s.taskMu.Unlock()
+		return fmt.Errorf("提交 Bot 负载后台任务失败: %w", err)
+	}
+	return nil
+}
+
+func (s *BotLoadExecutionService) drainLifecycle(key string) {
+	for {
+		s.taskMu.Lock()
+		queue := s.serialTasks[key]
+		if queue == nil || len(queue.pending) == 0 {
+			delete(s.serialTasks, key)
+			s.taskMu.Unlock()
+			return
+		}
+		current := queue.pending[0]
+		queue.pending = queue.pending[1:]
+		s.taskMu.Unlock()
+
+		current.task()
+
+		s.taskMu.Lock()
+		queue = s.serialTasks[key]
+		if queue != nil {
+			delete(queue.identities, current.identity)
+			if len(queue.pending) == 0 {
+				delete(s.serialTasks, key)
+				s.taskMu.Unlock()
+				return
+			}
+		}
+		s.taskMu.Unlock()
+	}
 }
 
 func (s *BotLoadExecutionService) submitOnce(key string, task func()) error {

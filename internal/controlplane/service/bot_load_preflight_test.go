@@ -171,6 +171,33 @@ func TestBotLoadPreflight_ConcurrentRunsDoNotOversell(t *testing.T) {
 	require.LessOrEqual(t, reservations.Snapshot(0)[1], 50)
 }
 
+func TestBotLoadPreflight_StalePendingSessionCannotOverwriteStartedPlan(t *testing.T) {
+	db := newBotLoadPreflightDB(t)
+	session := createBotLoadSession(t, db, "started", 20)
+	originalPlan := `{"runId":1,"frozen":true}`
+	require.NoError(t, db.Model(&model.BotStressSession{}).Where("id = ?", session.ID).Updates(map[string]any{
+		"status": model.BotStressSessionRunning, "allocation_plan": originalPlan,
+	}).Error)
+
+	clock := &botLoadFakeClock{now: time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)}
+	reservations := NewBotLoadReservationStore(clock, time.Minute)
+	signer, err := NewBotLoadPlanTokenSigner([]byte("test-only-plan-token-secret"), clock)
+	require.NoError(t, err)
+	provider := &fakeBotLoadCapacityProvider{snapshot: BotLoadCapacitySnapshot{
+		NodeCapacities:    []BotLoadNodeCapacity{readyBotLoadNode(1, 50, 3)},
+		ReservationLimits: map[uint]int{1: 50}, UpdatedAt: clock.Now(),
+	}}
+	svc := NewBotLoadPreflightService(db, provider, reservations, signer, clock)
+
+	_, err = svc.Preflight(context.Background(), &session, BotLoadPreflightInput{TargetBots: 20})
+	require.ErrorIs(t, err, ErrBotLoadInvalidState)
+	require.Empty(t, reservations.Snapshot(0))
+	var saved model.BotStressSession
+	require.NoError(t, db.First(&saved, session.ID).Error)
+	require.Equal(t, model.BotStressSessionRunning, saved.Status)
+	require.Equal(t, originalPlan, saved.AllocationPlan)
+}
+
 func TestBotLoadPreflight_SameRunAtomicallyReplacesReservation(t *testing.T) {
 	db := newBotLoadPreflightDB(t)
 	session := createBotLoadSession(t, db, "replace", 40)

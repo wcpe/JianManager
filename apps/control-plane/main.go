@@ -587,8 +587,9 @@ func main() {
 	// 鉴权拦截器仅拦 OpenReverseTunnel，其余流式方法（心跳等）原样放行。
 	tunnelReg := cpgrpc.NewTunnelRegistry(db)
 	pool.SetTunnelProvider(tunnelReg)
-	// 节点观测面暴露 tunnelConnected（列表/详情响应期填充，不落库）。
+	// 节点与 Bot 容量观测面共用实时隧道状态，不读取 gorm:- 运行态字段。
 	nodeSvc.SetTunnelStatus(tunnelReg)
+	botLoadSvcs.capacity.SetTunnelStatus(tunnelReg)
 	grpcServer := grpc.NewServer(grpc.ChainStreamInterceptor(tunnelReg.StreamAuthInterceptor()))
 	workerpb.RegisterWorkerServiceServer(grpcServer, grpcHandler)
 	tunnelpb.RegisterTunnelServiceServer(grpcServer, tunnelReg.Service())

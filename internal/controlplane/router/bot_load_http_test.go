@@ -154,6 +154,51 @@ func TestBotLoadNodes_RoutePermissionIsolationCacheAndRedaction(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, hidden.Code)
 }
 
+func TestBotStressSessionCreate_AuditsCanonicalAndAliasResultsWithoutCredentials(t *testing.T) {
+	db, _, _, ctx := setupBotLoadHTTP(t, 50)
+	tests := []struct {
+		name       string
+		path       string
+		count      int
+		wantStatus int
+		failed     bool
+	}{
+		{name: "标准端点成功", path: "/api/v1/bots/stress-sessions", count: 1, wantStatus: http.StatusCreated},
+		{name: "标准端点失败", path: "/api/v1/bots/stress-sessions", count: 0, wantStatus: http.StatusBadRequest, failed: true},
+		{name: "兼容别名成功", path: "/api/v1/bots/stress-test", count: 1, wantStatus: http.StatusCreated},
+		{name: "兼容别名失败", path: "/api/v1/bots/stress-test", count: 0, wantStatus: http.StatusBadRequest, failed: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			w := makeRequest(ctx.router, http.MethodPost, test.path, map[string]any{
+				"instanceId": ctx.instanceID,
+				"count":      test.count,
+				"behavior":   "idle",
+				"namePrefix": "audit",
+				"config": map[string]any{
+					"server": "127.0.0.1", "port": 25565, "auth": "offline",
+					"username": "audit-user", "password": "credential-must-not-appear",
+				},
+			}, ctx.token)
+			require.Equal(t, test.wantStatus, w.Code)
+		})
+	}
+
+	var audits []model.AuditLog
+	require.NoError(t, db.Where("action = ?", "bot_load.run.create").Order("id ASC").Find(&audits).Error)
+	require.Len(t, audits, len(tests))
+	for index, audit := range audits {
+		require.Equal(t, tests[index].failed, audit.Failed)
+		require.Equal(t, "bot_load_run", audit.TargetType)
+		require.NotContains(t, audit.Detail, "credential-must-not-appear")
+		require.NotContains(t, audit.Error, "credential-must-not-appear")
+		detail := strings.ToLower(audit.Detail)
+		require.NotContains(t, detail, "config")
+		require.NotContains(t, detail, "password")
+		require.NotContains(t, detail, "username")
+	}
+}
+
 func TestBotLoadPreflight_ValidationCapacityReadyAndAuditRedaction(t *testing.T) {
 	t.Run("请求校验", func(t *testing.T) {
 		_, _, _, ctx := setupBotLoadHTTP(t, 50)
@@ -226,6 +271,25 @@ func TestBotLoadStart_TokenCompatibilityAndIdempotency(t *testing.T) {
 		assert.EqualValues(t, 1, batchCount)
 	})
 
+	t.Run("启动接受后拒绝再次预检且计划不变", func(t *testing.T) {
+		db, _, _, ctx := setupBotLoadHTTP(t, 50)
+		sessionID := createBotLoadSession(t, ctx, 2)
+		preflight := preflightBotLoadSession(t, ctx, sessionID, nil)
+		var before model.BotStressSession
+		require.NoError(t, db.First(&before, sessionID).Error)
+
+		started := makeRequest(ctx.router, http.MethodPost, "/api/v1/bots/stress-sessions/"+itoa(sessionID)+"/start", map[string]any{"planToken": preflight["planToken"]}, ctx.token)
+		require.Equal(t, http.StatusAccepted, started.Code)
+		again := makeRequest(ctx.router, http.MethodPost, "/api/v1/bots/stress-sessions/"+itoa(sessionID)+"/preflight", map[string]any{
+			"connectRatePerSecondPerNode": 50,
+		}, ctx.token)
+		require.Equal(t, http.StatusConflict, again.Code)
+		require.Equal(t, "BOT_LOAD_INVALID_STATE", parseJSON(t, again)["error"])
+		var after model.BotStressSession
+		require.NoError(t, db.First(&after, sessionID).Error)
+		require.Equal(t, before.AllocationPlan, after.AllocationPlan)
+	})
+
 	t.Run("篡改令牌返回容量变化", func(t *testing.T) {
 		_, _, _, ctx := setupBotLoadHTTP(t, 50)
 		sessionID := createBotLoadSession(t, ctx, 2)
@@ -270,7 +334,10 @@ func TestBotLoadStart_TokenCompatibilityAndIdempotency(t *testing.T) {
 			"count":      2,
 			"behavior":   "idle",
 			"namePrefix": "legacy",
-			"config":     map[string]any{"server": "127.0.0.1", "port": 25565},
+			"config": map[string]any{
+				"server": "127.0.0.1", "port": 25565, "version": "1.20.4", "auth": "offline",
+				"username": "legacy-user", "password": "legacy-password",
+			},
 		}, ctx.token)
 		require.Equalf(t, http.StatusCreated, w.Code, "创建 V1 会话失败: %s", w.Body.String())
 		sessionID := uint(parseJSON(t, w)["id"].(float64))
@@ -281,9 +348,20 @@ func TestBotLoadStart_TokenCompatibilityAndIdempotency(t *testing.T) {
 		assert.Contains(t, audit.Detail, `"legacyCompat":true`)
 	})
 
-	t.Run("V2离线配置缺token拒绝", func(t *testing.T) {
+	t.Run("显式V2字段缺token拒绝", func(t *testing.T) {
 		db, _, worker, ctx := setupBotLoadHTTP(t, 50)
-		sessionID := createBotLoadSession(t, ctx, 2)
+		created := makeRequest(ctx.router, http.MethodPost, "/api/v1/bots/stress-sessions", map[string]any{
+			"instanceId": ctx.instanceID,
+			"count":      2,
+			"behavior":   "idle",
+			"namePrefix": "v2",
+			"config": map[string]any{
+				"server": "127.0.0.1", "port": 25565, "auth": "offline",
+				"scenario": map[string]any{"name": "tower-defense"},
+			},
+		}, ctx.token)
+		require.Equal(t, http.StatusCreated, created.Code)
+		sessionID := uint(parseJSON(t, created)["id"].(float64))
 		w := makeRequest(ctx.router, http.MethodPost, "/api/v1/bots/stress-sessions/"+itoa(sessionID)+"/start", nil, ctx.token)
 		assert.Equal(t, http.StatusConflict, w.Code)
 		assert.Equal(t, "BOT_LOAD_CAPACITY_CHANGED", parseJSON(t, w)["error"])

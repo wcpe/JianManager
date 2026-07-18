@@ -35,6 +35,11 @@ type BotLoadCapacityClient interface {
 	GetBotCapacity(ctx context.Context, nodeUUID string) (BotLoadWorkerCapacity, error)
 }
 
+// BotLoadTunnelStatusProvider 提供节点反向隧道的实时在线状态。
+type BotLoadTunnelStatusProvider interface {
+	Connected(nodeUUID string) bool
+}
+
 type gormBotLoadCapacityRepository struct {
 	db *gorm.DB
 }
@@ -125,6 +130,7 @@ type botLoadCapacityRefresh struct {
 type BotLoadCapacityDirectory struct {
 	repository   BotLoadCapacityRepository
 	client       BotLoadCapacityClient
+	tunnelStatus BotLoadTunnelStatusProvider
 	reservations *BotLoadReservationStore
 	clock        BotLoadClock
 	cacheTTL     time.Duration
@@ -150,6 +156,11 @@ func NewBotLoadCapacityDirectory(repository BotLoadCapacityRepository, client Bo
 // NewGRPCBotLoadCapacityDirectory 使用 GORM 和既有隧道优先连接池装配目录。
 func NewGRPCBotLoadCapacityDirectory(db *gorm.DB, pool *cpgrpc.ClientPool, reservations *BotLoadReservationStore, clock BotLoadClock) *BotLoadCapacityDirectory {
 	return NewBotLoadCapacityDirectory(newGormBotLoadCapacityRepository(db), poolBotLoadCapacityClient{pool: pool}, reservations, clock)
+}
+
+// SetTunnelStatus 注入反向隧道实时状态源。
+func (d *BotLoadCapacityDirectory) SetTunnelStatus(status BotLoadTunnelStatusProvider) {
+	d.tunnelStatus = status
 }
 
 // Snapshot 返回缓存优先的目录，并实时合并 DB/内存预留。
@@ -293,10 +304,14 @@ func (d *BotLoadCapacityDirectory) mergeCapacitySnapshot(nodes []model.Node, raw
 	return snapshot
 }
 
+func (d *BotLoadCapacityDirectory) tunnelConnected(nodeUUID string) bool {
+	return d.tunnelStatus != nil && d.tunnelStatus.Connected(nodeUUID)
+}
+
 func (d *BotLoadCapacityDirectory) mergeNodeCapacity(node model.Node, cached botLoadCachedCapacity, reserved, persistent int) (BotLoadNodeCapacity, int) {
 	capacity := BotLoadNodeCapacity{
 		NodeID: node.ID, NodeUUID: node.UUID, NodeName: node.Name,
-		Online: node.Status == model.NodeStatusOnline, TunnelConnected: node.TunnelConnected,
+		Online: node.Status == model.NodeStatusOnline, TunnelConnected: d.tunnelConnected(node.UUID),
 		ReservedBots: reserved, LastHeartbeatAt: node.LastHeartbeat,
 	}
 	if !capacity.Online {

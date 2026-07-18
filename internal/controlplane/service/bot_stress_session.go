@@ -218,15 +218,17 @@ func hasLegacyBotStressConfigShape(raw string) bool {
 	if json.Unmarshal([]byte(raw), &config) != nil {
 		return false
 	}
-	authRaw, declared := config["auth"]
-	if !declared {
-		return true
+	v2OnlyFields := map[string]struct{}{
+		"scenario": {}, "scenarioid": {}, "scenariojson": {},
+		"loadprofile": {}, "cohorts": {}, "executorpool": {},
+		"executorpoolid": {}, "executornodeids": {},
 	}
-	var auth string
-	if json.Unmarshal(authRaw, &auth) != nil {
-		return false
+	for field := range config {
+		if _, v2Only := v2OnlyFields[strings.ToLower(strings.TrimSpace(field))]; v2Only {
+			return false
+		}
 	}
-	return !strings.EqualFold(strings.TrimSpace(auth), "offline")
+	return true
 }
 
 // List 分页列出压测会话，并按可访问实例集合收敛。

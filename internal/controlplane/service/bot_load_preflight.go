@@ -177,14 +177,24 @@ func (s *BotLoadPreflightService) reserveAndPersistPlan(plan BotLoadAllocationPl
 
 func (s *BotLoadPreflightService) persistAllocationPlan(runID uint, rawPlan string) error {
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		result := tx.Model(&model.BotStressSession{}).Where("id = ?", runID).Update("allocation_plan", rawPlan)
+		allowed := []model.BotStressSessionStatus{model.BotStressSessionPending, model.BotStressSessionError}
+		result := tx.Model(&model.BotStressSession{}).
+			Where("id = ? AND status IN ?", runID, allowed).
+			Update("allocation_plan", rawPlan)
 		if result.Error != nil {
 			return fmt.Errorf("保存 Bot 负载计划失败: %w", result.Error)
 		}
-		if result.RowsAffected == 0 {
-			return ErrBotStressSessionNotFound
+		if result.RowsAffected > 0 {
+			return nil
 		}
-		return nil
+		var session model.BotStressSession
+		if err := tx.Select("id", "status").First(&session, runID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrBotStressSessionNotFound
+			}
+			return fmt.Errorf("检查 Bot 负载预检状态失败: %w", err)
+		}
+		return fmt.Errorf("%w: 当前状态为 %s", ErrBotLoadInvalidState, session.Status)
 	})
 }
 

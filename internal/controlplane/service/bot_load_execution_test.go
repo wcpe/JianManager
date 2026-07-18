@@ -118,6 +118,14 @@ func (r *botLoadQueuedRunner) Len() int {
 	return len(r.tasks)
 }
 
+func (r *botLoadQueuedRunner) RunAt(index int) {
+	r.mu.Lock()
+	task := r.tasks[index]
+	r.tasks = append(r.tasks[:index], r.tasks[index+1:]...)
+	r.mu.Unlock()
+	task()
+}
+
 type botLoadExecutionHarness struct {
 	db           *gorm.DB
 	clock        *botLoadFakeClock
@@ -203,6 +211,35 @@ func newBotLoadExecutionHarness(t *testing.T, capacities []int, target int, runn
 		dispatcher: dispatcher, service: service, session: session, instance: instance,
 		nodes: nodes, plan: plan, token: token,
 	}
+}
+
+func addBotLoadExecutionSession(t *testing.T, h *botLoadExecutionHarness, target int) (*model.BotStressSession, BotLoadAllocationPlan, string) {
+	t.Helper()
+	session := &model.BotStressSession{
+		InstanceID: h.instance.ID, Name: fmt.Sprintf("distributed-load-%d", target), NamePrefix: "load", BotCount: target,
+		Status: model.BotStressSessionPending, Behavior: "idle", Config: h.session.Config,
+	}
+	require.NoError(t, h.db.Create(session).Error)
+	planning, err := (BotLoadPlanner{}).Plan(BotLoadPlanRequest{
+		RunID: session.ID, RunUUID: session.UUID, TargetBots: target,
+		NodeCapacities: h.capacity.snapshot.NodeCapacities, ConnectRatePerSecondPerNode: 5, ConnectStartAt: h.clock.Now(),
+	})
+	require.NoError(t, err)
+	require.True(t, planning.Ready)
+	plan := BotLoadAllocationPlan{
+		RunID: session.ID, RunUUID: session.UUID, TargetBots: target,
+		Allocations: planning.Allocations, CapacityGenerations: planning.CapacityGenerations,
+	}
+	rawPlan, err := encodeBotLoadAllocationPlan(plan)
+	require.NoError(t, err)
+	require.NoError(t, h.db.Model(session).Update("allocation_plan", rawPlan).Error)
+	hash, err := BotLoadAllocationHash(plan.RunID, plan.TargetBots, plan.Allocations)
+	require.NoError(t, err)
+	token, expiresAt, err := h.signer.Issue(plan.RunID, hash, plan.CapacityGenerations)
+	require.NoError(t, err)
+	_, err = h.reservations.ReplaceUntil(session.ID, allocationBotLoadCounts(plan.Allocations), h.capacity.snapshot.ReservationLimits, expiresAt)
+	require.NoError(t, err)
+	return session, plan, token
 }
 
 func encodeBotLoadAllocationPlan(plan BotLoadAllocationPlan) (string, error) {
@@ -477,7 +514,7 @@ func TestBotLoadExecutionStart_BackgroundRunnerIsBounded(t *testing.T) {
 
 	session, err := h.service.Start(context.Background(), h.session.ID, h.token)
 	require.NoError(t, err)
-	require.Equal(t, model.BotStressSessionPending, session.Status)
+	require.Equal(t, model.BotStressSessionRunning, session.Status)
 	require.Equal(t, 1, runner.Len())
 	require.Empty(t, h.dispatcher.Calls())
 	_, reserved := h.reservations.Lease(h.session.ID)
@@ -487,6 +524,82 @@ func TestBotLoadExecutionStart_BackgroundRunnerIsBounded(t *testing.T) {
 	require.Zero(t, runner.Len())
 	require.Len(t, h.dispatcher.Calls(), 1)
 	require.Equal(t, model.BotStressSessionRunning, loadBotLoadSession(t, h.db, h.session.ID).Status)
+}
+
+func TestBotLoadExecutionStartStop_SerializesPerSessionWithoutBlockingOthers(t *testing.T) {
+	runner := &botLoadQueuedRunner{}
+	h := newBotLoadExecutionHarness(t, []int{4}, 2, runner)
+
+	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
+	require.NoError(t, err)
+	_, err = h.service.Stop(context.Background(), h.session.ID, "立即停止")
+	require.NoError(t, err)
+	other, _, otherToken := addBotLoadExecutionSession(t, h, 2)
+	_, err = h.service.Start(context.Background(), other.ID, otherToken)
+	require.NoError(t, err)
+	require.Equal(t, 2, runner.Len(), "同一会话启停应复用一个串行任务，其他会话保留独立任务")
+
+	runner.RunAt(1)
+	require.Equal(t, model.BotStressSessionRunning, loadBotLoadSession(t, h.db, other.ID).Status)
+	require.True(t, botLoadStopIntentRecorded(loadBotLoadSession(t, h.db, h.session.ID).LastError))
+
+	runner.RunAt(0)
+	require.Equal(t, model.BotStressSessionStopped, loadBotLoadSession(t, h.db, h.session.ID).Status)
+	seenStopped := false
+	for _, call := range h.dispatcher.Calls() {
+		for _, assignment := range call.request.Assignments {
+			if assignment.SessionUuid != h.session.UUID {
+				continue
+			}
+			require.NotEqual(t, "running", assignment.DesiredState, "stop intent 后不得发送晚到 running assignment")
+			seenStopped = seenStopped || assignment.DesiredState == "stopped"
+		}
+	}
+	require.True(t, seenStopped)
+}
+
+func TestBotLoadExecutionDispatch_ReloadKeepsThousandBotOrderAndAssignmentHash(t *testing.T) {
+	runner := &botLoadQueuedRunner{}
+	h := newBotLoadExecutionHarness(t, []int{1000}, 1000, runner)
+	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
+	require.NoError(t, err)
+
+	mutated := h.plan
+	mutated.Allocations = append([]BotLoadAllocation(nil), h.plan.Allocations...)
+	for index := range mutated.Allocations {
+		mutated.Allocations[index].ConnectStartAt = mutated.Allocations[index].ConnectStartAt.Add(time.Hour)
+	}
+	rawPlan, err := encodeBotLoadAllocationPlan(mutated)
+	require.NoError(t, err)
+	require.NoError(t, h.db.Model(&model.BotStressSession{}).Where("id = ?", h.session.ID).Update("allocation_plan", rawPlan).Error)
+
+	runner.RunAll()
+	calls := h.dispatcher.Calls()
+	require.Len(t, calls, len(h.plan.Allocations))
+	var bots []model.Bot
+	require.NoError(t, h.db.Where("stress_session_id = ?", h.session.ID).Find(&bots).Error)
+	byUUID := make(map[string]model.Bot, len(bots))
+	for _, bot := range bots {
+		byUUID[bot.UUID] = bot
+	}
+
+	globalIndex := 1
+	for allocationIndex, call := range calls {
+		allocation := h.plan.Allocations[allocationIndex]
+		require.Len(t, call.request.Assignments, allocation.PlannedCount)
+		for localIndex, assignment := range call.request.Assignments {
+			require.Equal(t, stableBotLoadBotName(h.session.NamePrefix, h.session.UUID, globalIndex), assignment.Name)
+			expectedConnectAt := allocation.ConnectStartAt.Add(time.Duration(localIndex*allocation.ConnectIntervalMS) * time.Millisecond).UnixMilli()
+			require.Equal(t, expectedConnectAt, assignment.ConnectNotBeforeUnixMs)
+			require.Equal(t, assignment.ConfigHash, botLoadAssignmentConfigHash(assignment))
+			require.Equal(t, byUUID[assignment.BotUuid].ConfigHash, assignment.ConfigHash)
+			globalIndex++
+		}
+	}
+	require.Equal(t, 1001, globalIndex)
+	lastBatch := calls[len(calls)-1].request.Assignments
+	require.Equal(t, stableBotLoadBotName(h.session.NamePrefix, h.session.UUID, 999), lastBatch[len(lastBatch)-2].Name)
+	require.Equal(t, stableBotLoadBotName(h.session.NamePrefix, h.session.UUID, 1000), lastBatch[len(lastBatch)-1].Name)
 }
 
 func TestBotLoadExecutionStop_GroupsChunksAndDoesNotFakeUnreachableBots(t *testing.T) {

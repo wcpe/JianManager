@@ -34,6 +34,12 @@ func (r *fakeBotLoadCapacityRepository) PersistentBotLoadOccupancy(_ context.Con
 	return r.persistent(excludeRunID), nil
 }
 
+type fakeBotLoadTunnelStatus map[string]bool
+
+func (s fakeBotLoadTunnelStatus) Connected(nodeUUID string) bool {
+	return s[nodeUUID]
+}
+
 type fakeBotLoadCapacityClient struct {
 	mu        sync.Mutex
 	responses map[string]BotLoadWorkerCapacity
@@ -230,6 +236,22 @@ func TestBotLoadCapacityDirectory_UnavailableReasonsAndReservations(t *testing.T
 	own := capacityByNodeID(excludingOwnRun.NodeCapacities)[1]
 	require.Equal(t, 8, own.ReservedBots)
 	require.Equal(t, 34, own.AvailableBots)
+}
+
+func TestBotLoadCapacityDirectory_UsesLiveTunnelStatus(t *testing.T) {
+	clock := &botLoadFakeClock{now: time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)}
+	node := onlineBotLoadNode(1)
+	client := &fakeBotLoadCapacityClient{
+		responses: map[string]BotLoadWorkerCapacity{node.UUID: workerCapacity(clock.Now(), 50, 0, 1)},
+		errors:    map[string]error{},
+	}
+	directory := NewBotLoadCapacityDirectory(&fakeBotLoadCapacityRepository{nodes: []model.Node{node}}, client, nil, clock)
+	directory.SetTunnelStatus(fakeBotLoadTunnelStatus{node.UUID: true})
+
+	snapshot, err := directory.Refresh(context.Background(), 0)
+	require.NoError(t, err)
+	require.Len(t, snapshot.NodeCapacities, 1)
+	require.True(t, snapshot.NodeCapacities[0].TunnelConnected)
 }
 
 func TestGormBotLoadCapacityRepository_MergesRemainingPersistentBatches(t *testing.T) {

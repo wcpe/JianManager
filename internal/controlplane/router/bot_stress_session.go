@@ -34,24 +34,35 @@ func NewBotStressSessionHandler(svc *service.BotStressSessionService, authz *ser
 func (h *BotStressSessionHandler) Create(c *gin.Context) {
 	access := getAccess(c)
 	if access == nil || !access.HasPermission(service.PermBotManage) {
+		err := errors.New("权限不足")
+		h.recordRunAudit(c, "bot_load.run.create", 0, createRunAuditDetail(c, nil), err)
 		c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "权限不足"})
 		return
 	}
 
 	var req service.CreateBotStressSessionRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
+		auditErr := service.ErrBotStressSessionInvalid
+		h.recordRunAudit(c, "bot_load.run.create", 0, createRunAuditDetail(c, &req), auditErr)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
 		return
 	}
 	if !access.IsPlatformAdmin {
 		ok, err := h.authz.CanManageInstance(access, req.InstanceID)
 		if err != nil || !ok {
+			auditErr := errors.New("无权为该实例创建压测会话")
+			h.recordRunAudit(c, "bot_load.run.create", 0, createRunAuditDetail(c, &req), auditErr)
 			c.JSON(http.StatusForbidden, gin.H{"error": "FORBIDDEN", "message": "无权为该实例创建压测会话"})
 			return
 		}
 	}
 
 	view, err := h.svc.Create(req)
+	targetID := uint(0)
+	if view != nil {
+		targetID = view.ID
+	}
+	h.recordRunAudit(c, "bot_load.run.create", targetID, createRunAuditDetail(c, &req), err)
 	if err != nil {
 		writeBotStressSessionError(c, err)
 		return
@@ -391,6 +402,18 @@ func startAuditDetail(view *service.BotStressSessionView, legacyCompat bool) gin
 		detail["status"] = view.Status
 		detail["allocationCount"] = len(view.Allocations)
 		detail["batchCount"] = len(view.Batches)
+	}
+	return detail
+}
+
+func createRunAuditDetail(c *gin.Context, req *service.CreateBotStressSessionRequest) gin.H {
+	detail := gin.H{"endpoint": "canonical"}
+	if c != nil && strings.HasSuffix(c.FullPath(), "/stress-test") {
+		detail["endpoint"] = "alias"
+	}
+	if req != nil {
+		detail["instanceId"] = req.InstanceID
+		detail["targetBots"] = req.Count
 	}
 	return detail
 }
