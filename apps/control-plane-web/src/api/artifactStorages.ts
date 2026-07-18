@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/api/client'
+import { tasksRefetchInterval, type Task } from '@/api/tasks'
 
 /**
  * 制品存储渠道（FR-347，见 ADR-073）：客户端分发制品（client-file）的落点路由配置。
@@ -114,5 +115,83 @@ export function useTestArtifactStorageDraft() {
   return useMutation({
     mutationFn: (body: SaveArtifactStorageBody & { id?: number }) =>
       api.post<ArtifactStorageTestResult>('/artifact-storages/test', body).then((r) => r.data),
+  })
+}
+
+// ───────────────────────── 存量迁移（FR-348）─────────────────────────
+
+/** 迁移登记与实时计数（GET /artifact-storages/migration 的 migration 段）。 */
+export interface ArtifactMigrationInfo {
+  taskId: string
+  targetChannelId: number
+  /** 目标渠道当前名称（迁移后渠道被删时为空串）。 */
+  targetName: string
+  total: number
+  migrated: number
+  failed: number
+  skipped: number
+}
+
+/** 最近一次迁移状态：任务 + 计数（从未迁移过则双 null）。 */
+export interface ArtifactMigrationStatus {
+  task: Task | null
+  migration: ArtifactMigrationInfo | null
+}
+
+/** 迁移失败明细一条（sha256 + 原因；重试 = 重新发起同目标迁移）。 */
+export interface ArtifactMigrationFailure {
+  id: number
+  taskId: string
+  assetId: number
+  sha256: string
+  filename: string
+  size: number
+  reason: string
+  createdAt: string
+}
+
+/**
+ * 最近一次迁移状态（FR-348）：在途任务非终态时 2s 短轮询刷新进度（复用任务中心启停规则），
+ * 终态即停。staleTime 置 0 防「新鲜缓存不启轮询」卡旧快照（同 useTasks 口径）。
+ */
+export function useArtifactMigrationStatus() {
+  return useQuery({
+    queryKey: ['artifact-migration'],
+    queryFn: async () => {
+      const { data } = await api.get<ArtifactMigrationStatus>('/artifact-storages/migration')
+      return data
+    },
+    staleTime: 0,
+    refetchInterval: (q) => {
+      const task = q.state.data?.task
+      return task ? tasksRefetchInterval([task]) : false
+    },
+  })
+}
+
+/** 发起「迁移到渠道 :id」后台任务（202 {taskId}；409=已有在途，422=目标探测失败）。 */
+export function useStartArtifactMigration() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (targetChannelId: number) =>
+      api.post<{ taskId: string }>(`/artifact-storages/${targetChannelId}/migrate`).then((r) => r.data),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['artifact-migration'] })
+      void qc.invalidateQueries({ queryKey: ['tasks'] })
+    },
+  })
+}
+
+/** 某次迁移任务的失败明细（上限 500 条；仅失败明细模态打开时拉取）。 */
+export function useArtifactMigrationFailures(taskId: string | undefined) {
+  return useQuery({
+    queryKey: ['artifact-migration-failures', taskId],
+    queryFn: async () => {
+      const { data } = await api.get<ArtifactMigrationFailure[]>(
+        `/artifact-storages/migration/${taskId}/failures`,
+      )
+      return data
+    },
+    enabled: !!taskId,
   })
 }

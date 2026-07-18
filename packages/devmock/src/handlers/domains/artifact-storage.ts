@@ -2,7 +2,14 @@ import { HttpResponse } from 'msw'
 import { domainRoute } from '@jianmanager/devmock/inject'
 import { db } from '@jianmanager/devmock/db'
 import { requireAuth } from '@jianmanager/devmock/auth-middleware'
-import type { ArtifactStorageChannel, SaveArtifactStorageBody } from '@jianmanager/devmock/contracts'
+import type {
+  ArtifactMigrationFailure,
+  ArtifactMigrationInfo,
+  ArtifactMigrationStatus,
+  ArtifactStorageChannel,
+  SaveArtifactStorageBody,
+  Task,
+} from '@jianmanager/devmock/contracts'
 
 /**
  * 制品存储渠道域 mock handler（FR-347，见 ADR-073）。
@@ -59,6 +66,46 @@ function sortedChannels(): ArtifactStorageChannel[] {
   return [...artifactStorages.list()].sort((a, b) =>
     a.builtin === b.builtin ? a.id - b.id : a.builtin ? -1 : 1,
   )
+}
+
+// ───────────────────────── 存量迁移（FR-348）─────────────────────────
+
+const migrationTasks = db<Task>('artifactMigrationTasks', () => [])
+const migrations = db<ArtifactMigrationInfo & { id: number }>('artifactMigrations', () => [])
+const migrationFailures = db<ArtifactMigrationFailure>('artifactMigrationFailures', () => [])
+
+const TERMINAL = new Set(['succeeded', 'failed', 'canceled'])
+
+/** 最近一次迁移任务（id 最大者）。 */
+function latestMigrationTask(): Task | undefined {
+  return [...migrationTasks.list()].sort((a, b) => b.id - a.id)[0]
+}
+
+/**
+ * 迁移进度模拟：每次 GET /artifact-storages/migration 轮询把 running 任务推进一条
+ * （已迁 +1），迁完 eligible（total - skipped）后落 succeeded——预览模式下进度卡两拍走完。
+ */
+function advanceMigration(task: Task): void {
+  if (task.state !== 'running') return
+  const info = migrations.find((m) => m.taskId === task.taskId)
+  if (!info) return
+  const eligible = info.total - info.skipped
+  const migrated = Math.min(info.migrated + 1, eligible)
+  migrations.update(info.id, { migrated })
+  if (migrated >= eligible) {
+    migrationTasks.update(task.id, {
+      state: 'succeeded',
+      progress: 100,
+      result: JSON.stringify({ total: info.total, migrated, failed: info.failed, skipped: info.skipped }),
+      updatedAt: new Date().toISOString(),
+    })
+  } else {
+    migrationTasks.update(task.id, {
+      progress: eligible > 0 ? Math.round((migrated * 100) / eligible) : 100,
+      detail: `共 ${info.total} · 已迁 ${migrated} · 失败 ${info.failed} · 跳过 ${info.skipped}`,
+      updatedAt: new Date().toISOString(),
+    })
+  }
 }
 
 export const handlers = [
@@ -219,5 +266,87 @@ export const handlers = [
     }
     const updated = artifactStorages.update(id, { active: true })
     return HttpResponse.json(updated)
+  }),
+
+  // ===== 存量迁移（FR-348）：发起 / 状态轮询（含进度模拟推进）/ 失败明细 =====
+
+  domainRoute('post', '/artifact-storages/:id/migrate', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const target = artifactStorages.get(id)
+    if (!target) return HttpResponse.json({ error: 'NOT_FOUND', message: '制品存储渠道不存在' }, { status: 404 })
+    // endpoint 含 unreachable 时模拟目标真连探测失败，覆盖 422 契约演示。
+    if (target.type === 's3' && target.endpoint.includes('unreachable')) {
+      return HttpResponse.json(
+        { error: 'BUSINESS_ERROR', message: `目标渠道连接失败：${target.endpoint} 不可达` },
+        { status: 422 },
+      )
+    }
+    const latest = latestMigrationTask()
+    if (latest && !TERMINAL.has(latest.state)) {
+      return HttpResponse.json(
+        { error: 'MIGRATION_IN_FLIGHT', message: '已有制品迁移任务在途，同一时间仅允许一个迁移任务' },
+        { status: 409 },
+      )
+    }
+    const now = new Date().toISOString()
+    const taskId = `mig-${Date.now()}`
+    const task = migrationTasks.insert({
+      taskId,
+      nodeId: 0,
+      kind: 'artifact_migrate',
+      state: 'running',
+      progress: 0,
+      title: `制品存量迁移 → ${target.name}`,
+      detail: '排队中',
+      error: '',
+      result: '',
+      cancelRequested: false,
+      createdBy: 1,
+      createdAt: now,
+      updatedAt: now,
+    })
+    // seed 计数：共 3 · 待迁 2 · 跳过 1（GET 轮询逐拍推进，两拍走完）。
+    migrations.insert({
+      taskId: task.taskId,
+      targetChannelId: id,
+      targetName: target.name,
+      total: 3,
+      migrated: 0,
+      failed: 0,
+      skipped: 1,
+    })
+    return HttpResponse.json({ taskId: task.taskId }, { status: 202 })
+  }),
+
+  domainRoute('get', '/artifact-storages/migration', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const task = latestMigrationTask()
+    if (!task) return HttpResponse.json({ task: null, migration: null })
+    advanceMigration(task)
+    const fresh = migrationTasks.find((t) => t.taskId === task.taskId) ?? task
+    const info2 = migrations.find((m) => m.taskId === task.taskId)
+    const migration = info2
+      ? {
+          taskId: info2.taskId,
+          targetChannelId: info2.targetChannelId,
+          targetName: artifactStorages.get(info2.targetChannelId)?.name ?? info2.targetName,
+          total: info2.total,
+          migrated: info2.migrated,
+          failed: info2.failed,
+          skipped: info2.skipped,
+        }
+      : null
+    const status: ArtifactMigrationStatus = { task: fresh, migration }
+    return HttpResponse.json(status)
+  }),
+
+  domainRoute('get', '/artifact-storages/migration/:taskId/failures', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const taskId = String(info.params.taskId)
+    return HttpResponse.json(migrationFailures.list((f) => f.taskId === taskId))
   }),
 ]

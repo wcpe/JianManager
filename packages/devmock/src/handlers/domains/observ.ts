@@ -2,6 +2,7 @@ import { HttpResponse } from 'msw'
 import { domainRoute } from '@jianmanager/devmock/inject'
 import { requireAuth } from '@jianmanager/devmock/auth-middleware'
 import { db } from '@jianmanager/devmock/db'
+import type { Task } from '@jianmanager/devmock/contracts'
 
 /**
  * 可观测与日志域 mock handler（FR-208）：metrics / alerts / notifications / tasks / logs。
@@ -82,24 +83,6 @@ interface Notification {
   taskId?: string
   readAt?: string
   createdAt: string
-}
-
-/** 长任务（对齐 api/tasks.ts Task）。 */
-interface Task {
-  id: number
-  taskId: string
-  nodeId: number
-  kind: string
-  state: 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled'
-  progress: number
-  title: string
-  detail: string
-  error: string
-  result: string
-  cancelRequested?: boolean
-  createdBy: number
-  createdAt: string
-  updatedAt: string
 }
 
 /** 任务滚动日志（对齐 api/tasks.ts TaskLog）。 */
@@ -216,6 +199,8 @@ const alertChannels = db<AlertChannel>('alertChannels', () => [
 
 const notifications = db<Notification>('notifications', seedNotifications)
 const tasks = db<Task>('tasks', seedTasks)
+/** 制品迁移域自持任务集合；任务中心合并读取，避免跨域重复声明 tasks 种子。 */
+const artifactMigrationTasks = db<Task>('artifactMigrationTasks')
 const taskLogs = db<TaskLog>('taskLogs', seedTaskLogs)
 const logs = db<LogRow>('logs', seedLogs)
 
@@ -347,6 +332,7 @@ function seedTasks(): Task[] {
       detail: 'node-1',
       error: '',
       result: JSON.stringify({ vendor: 'temurin', version: '21' }),
+      cancelRequested: false,
       createdBy: 1,
       createdAt: iso(-3_600_000),
       updatedAt: iso(-3_000_000),
@@ -362,6 +348,7 @@ function seedTasks(): Task[] {
       detail: '打包世界文件',
       error: '',
       result: '',
+      cancelRequested: false,
       createdBy: 1,
       createdAt: iso(-300_000),
       updatedAt: iso(-30_000),
@@ -377,6 +364,7 @@ function seedTasks(): Task[] {
       detail: 'node-2',
       error: '下载校验失败：sha256 不匹配',
       result: '',
+      cancelRequested: false,
       createdBy: 1,
       createdAt: iso(-7_200_000),
       updatedAt: iso(-7_100_000),
@@ -395,6 +383,7 @@ function seedTasks(): Task[] {
       error:
         '下载失败: Get "https://github.com/adoptium/temurin21-binaries/releases/download/...": net/http: TLS handshake timeout（疑似网络受限：JDK 下载经节点出站代理执行、未配置则直连，可在面板「设置 → 网络」配置出站代理，或在「运行时资产」页更换 JDK 下载源/镜像后重试）',
       result: '',
+      cancelRequested: false,
       createdBy: 1,
       createdAt: iso(-3_600_000),
       updatedAt: iso(-3_500_000),
@@ -1124,7 +1113,7 @@ export const handlers = [
     const nodeId = url.searchParams.get('nodeId')
     const keyword = url.searchParams.get('keyword')
     const since = url.searchParams.get('since')
-    let items = tasks.list()
+    let items = [...artifactMigrationTasks.list(), ...tasks.list()]
     if (kind) items = items.filter((t) => t.kind === kind)
     if (state) items = items.filter((t) => t.state === state)
     if (nodeId) items = items.filter((t) => t.nodeId === Number(nodeId))
@@ -1137,7 +1126,8 @@ export const handlers = [
     const denied = requireAuth(info)
     if (denied) return denied
     const taskId = String(info.params.taskId)
-    const task = tasks.find((t) => t.taskId === taskId)
+    const task = artifactMigrationTasks.find((t) => t.taskId === taskId)
+      ?? tasks.find((t) => t.taskId === taskId)
     if (!task) return HttpResponse.json({ error: 'NOT_FOUND', message: '任务不存在' }, { status: 404 })
     return HttpResponse.json({ task, logs: taskLogs.list((l) => l.taskId === taskId) })
   }),
@@ -1147,12 +1137,14 @@ export const handlers = [
     const denied = requireAuth(info)
     if (denied) return denied
     const taskId = String(info.params.taskId)
-    const task = tasks.find((t) => t.taskId === taskId)
+    const migrationTask = artifactMigrationTasks.find((t) => t.taskId === taskId)
+    const task = migrationTask ?? tasks.find((t) => t.taskId === taskId)
     if (!task) return HttpResponse.json({ error: 'NOT_FOUND', message: '任务不存在' }, { status: 404 })
     if (task.state === 'succeeded' || task.state === 'failed' || task.state === 'canceled') {
       return HttpResponse.json({ error: 'ALREADY_TERMINAL', message: '任务已结束，无法停止' }, { status: 409 })
     }
-    tasks.update(task.id, { state: 'canceled', cancelRequested: true })
+    const collection = migrationTask ? artifactMigrationTasks : tasks
+    collection.update(task.id, { state: 'canceled', cancelRequested: true })
     return HttpResponse.json({ message: '已请求停止' })
   }),
 

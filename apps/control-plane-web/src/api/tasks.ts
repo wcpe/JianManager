@@ -63,6 +63,7 @@ export const TASK_KIND_LABEL_KEYS: Record<string, string> = {
   clone: 'tasks.kind.clone',
   backup_create: 'tasks.kind.backupCreate',
   backup_restore: 'tasks.kind.backupRestore',
+  artifact_migrate: 'tasks.kind.artifactMigrate',
 }
 
 /** 活跃任务轮询间隔（FR-329）：存在非终态任务时 ~2s 自动刷新进度。 */

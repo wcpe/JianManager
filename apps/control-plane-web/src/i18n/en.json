@@ -2027,7 +2027,25 @@
     "updateFailed": "Failed to update channel",
     "deleteConfirm": "Delete this storage channel?",
     "deleteFailed": "Delete failed",
-    "empty": "No storage channels"
+    "empty": "No storage channels",
+    "migrate": {
+      "action": "Migrate here",
+      "confirmTitle": "Migrate existing artifacts to \"{{name}}\"?",
+      "confirmDesc": "All existing client distribution artifacts will be moved to this channel one by one: each item is verified, its record updated, then the source copy deleted. Items already on this channel are skipped. You can force-stop anytime; re-initiating resumes where it left off (migrated items are not re-transferred).",
+      "start": "Start Migration",
+      "started": "Migration task started. Track progress here or in Task Center",
+      "startFailed": "Failed to start migration",
+      "inProgress": "Migration in progress → {{name}}",
+      "counters": "Total {{total}} · Migrated {{migrated}} · Failed {{failed}} · Skipped {{skipped}}",
+      "stop": "Force Stop",
+      "stopRequested": "Stop requested. Re-initiate to resume",
+      "stopFailed": "Failed to stop",
+      "lastRun": "Last migration → {{name}}",
+      "failures": "Failure Details",
+      "failuresTitle": "Migration Failure Details",
+      "noFailures": "No failure records",
+      "retry": "Re-initiate"
+    }
   },
   "clientChannels": {
     "title": "Client Distribution",
@@ -3398,7 +3416,8 @@
       "import": "Import Server",
       "clone": "Clone Instance",
       "backupCreate": "Backup Create",
-      "backupRestore": "Backup Restore"
+      "backupRestore": "Backup Restore",
+      "artifactMigrate": "Artifact migration"
     },
     "filter": {
       "keyword": "Search title / detail",

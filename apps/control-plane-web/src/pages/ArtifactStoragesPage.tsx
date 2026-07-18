@@ -9,10 +9,14 @@ import {
   useActivateArtifactStorage,
   useTestArtifactStorage,
   useTestArtifactStorageDraft,
+  useArtifactMigrationStatus,
+  useStartArtifactMigration,
+  useArtifactMigrationFailures,
   type ArtifactStorageChannel,
   type ArtifactStorageTestResult,
   type SaveArtifactStorageBody,
 } from '@/api/artifactStorages'
+import { useCancelTask, isTerminalTask } from '@/api/tasks'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
@@ -34,6 +38,14 @@ import DangerConfirm from '@/components/DangerConfirm'
 const emptyForm: SaveArtifactStorageBody = {
   name: '', type: 's3', endpoint: '', bucket: '', region: '', prefix: '',
   accessKey: '', secretKey: '', useSsl: false, presignTtlSeconds: 600,
+}
+
+/** 字节数转人类可读，供迁移失败明细展示文件大小。 */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`
 }
 
 /**
@@ -59,6 +71,50 @@ export default function ArtifactStoragesPage() {
   /** 设活跃确认目标（影响后续上传落点，需确认语义）。 */
   const [activateTarget, setActivateTarget] = useState<ArtifactStorageChannel | null>(null)
   const gate = useFieldGate()
+
+  // 存量迁移（FR-348）：最近迁移状态轮询 + 发起 + 强停 + 失败明细。
+  const migrationStatus = useArtifactMigrationStatus()
+  const startMigration = useStartArtifactMigration()
+  const cancelTask = useCancelTask()
+  /** 迁移确认目标；null = 未在确认。 */
+  const [migrateTarget, setMigrateTarget] = useState<ArtifactStorageChannel | null>(null)
+  /** 失败明细模态的任务 id；null = 关闭（打开才拉取明细）。 */
+  const [failuresTaskId, setFailuresTaskId] = useState<string | null>(null)
+  const migrationFailures = useArtifactMigrationFailures(failuresTaskId ?? undefined)
+
+  const migTask = migrationStatus.data?.task ?? null
+  const migInfo = migrationStatus.data?.migration ?? null
+  /** 在途迁移存在时：各行迁移入口禁用、进度卡展示。 */
+  const migrationActive = !!migTask && !isTerminalTask(migTask)
+  const migCountersText = migInfo
+    ? t('artifactStorages.migrate.counters', '共 {{total}} · 已迁 {{migrated}} · 失败 {{failed}} · 跳过 {{skipped}}', {
+        total: migInfo.total, migrated: migInfo.migrated, failed: migInfo.failed, skipped: migInfo.skipped,
+      })
+    : ''
+
+  const handleStartMigration = (targetChannelId: number) => {
+    startMigration.mutate(targetChannelId, {
+      onSuccess: () => toast.success(t('artifactStorages.migrate.started', '迁移任务已发起，进度见本页与任务中心')),
+      // 409（已有在途）/ 422（目标探测失败）用后端 message 呈现准确原因。
+      onError: (err: unknown) => {
+        const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+        toast.error(msg || t('artifactStorages.migrate.startFailed', '发起迁移失败'))
+      },
+    })
+    setMigrateTarget(null)
+    setFailuresTaskId(null)
+  }
+
+  const handleStopMigration = () => {
+    if (!migTask) return
+    cancelTask.mutate(migTask.taskId, {
+      onSuccess: () => {
+        toast.success(t('artifactStorages.migrate.stopRequested', '已请求停止，重新发起可续跑'))
+        void migrationStatus.refetch()
+      },
+      onError: () => toast.error(t('artifactStorages.migrate.stopFailed', '停止失败')),
+    })
+  }
 
   const set = (k: keyof SaveArtifactStorageBody, v: string | boolean | number) => {
     setDraftTestResult(null)
@@ -276,6 +332,56 @@ export default function ArtifactStoragesPage() {
         </DialogContent>
       </Dialog>
 
+      {/* 在途迁移进度卡（FR-348）：任务非终态时展示，2s 轮询推进；可强制停止（重新发起即续跑）。 */}
+      {migrationActive && migTask && (
+        <div className="rounded-lg border bg-card p-4 space-y-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-sm font-medium">
+              {t('artifactStorages.migrate.inProgress', '存量迁移进行中 → {{name}}', { name: migInfo?.targetName ?? '' })}
+            </span>
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={handleStopMigration}
+              disabled={cancelTask.isPending || migTask.cancelRequested}
+            >
+              {t('artifactStorages.migrate.stop', '强制停止')}
+            </Button>
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+            <div
+              className="h-full rounded-full bg-primary transition-all"
+              style={{ width: `${Math.max(0, Math.min(100, migTask.progress))}%` }}
+            />
+          </div>
+          {migInfo && <p className="text-xs text-muted-foreground">{migCountersText}</p>}
+        </div>
+      )}
+
+      {/* 上次迁移摘要（终态）：状态 + 四计数；有失败条时给失败明细入口（重试=重新发起）。 */}
+      {migTask && isTerminalTask(migTask) && migInfo && (
+        <div className="rounded-lg border bg-card px-4 py-3 flex items-center justify-between gap-3 flex-wrap text-sm">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium">
+              {t('artifactStorages.migrate.lastRun', '上次迁移 → {{name}}', { name: migInfo.targetName })}
+            </span>
+            <span className={migTask.state === 'succeeded' ? 'text-status-success' : 'text-status-danger'}>
+              {migTask.state === 'succeeded'
+                ? t('tasks.state.succeeded', '已完成')
+                : migTask.state === 'canceled'
+                  ? t('tasks.state.canceled', '已停止')
+                  : t('tasks.state.failed', '已失败')}
+            </span>
+            <span className="text-xs text-muted-foreground">{migCountersText}</span>
+          </div>
+          {migInfo.failed > 0 && (
+            <Button variant="outline" size="xs" onClick={() => setFailuresTaskId(migTask.taskId)}>
+              {t('artifactStorages.migrate.failures', '失败明细')}
+            </Button>
+          )}
+        </div>
+      )}
+
       <div className="overflow-hidden rounded-lg border">
         <Table>
           <TableHeader className="bg-muted/50">
@@ -318,6 +424,15 @@ export default function ArtifactStoragesPage() {
                     disabled={testSaved.isPending && testSaved.variables === ch.id}
                   >
                     {t('artifactStorages.test', '测试')}
+                  </Button>
+                  {/* 迁移入口（FR-348）：任意渠道可为目标（含内置本机 = 回迁）；在途迁移时禁用。 */}
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => setMigrateTarget(ch)}
+                    disabled={migrationActive || startMigration.isPending}
+                  >
+                    {t('artifactStorages.migrate.action', '迁移到此')}
                   </Button>
                   {!ch.active && (
                     <Button variant="ghost" size="xs" onClick={() => setActivateTarget(ch)}>
@@ -368,6 +483,70 @@ export default function ArtifactStoragesPage() {
             </Button>
             <Button type="button" onClick={() => { if (activateTarget) handleActivate(activateTarget.id) }} disabled={activate.isPending}>
               {t('artifactStorages.setActive', '设活跃')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 迁移确认（FR-348）：说明逐条搬运语义（校验→改记录→删源、已在目标跳过、可停可续跑）。 */}
+      <Dialog open={migrateTarget !== null} onOpenChange={(o) => { if (!o) setMigrateTarget(null) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {t('artifactStorages.migrate.confirmTitle', '迁移存量制品到「{{name}}」？', { name: migrateTarget?.name ?? '' })}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {t('artifactStorages.migrate.confirmDesc', '将把全部存量客户端分发制品逐条搬运到该渠道：逐条校验、更新记录后再删除源副本；已在该渠道的自动跳过。任务可随时强制停止，重新发起即从断点续跑（已迁完成的不重传）。')}
+          </p>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setMigrateTarget(null)}>
+              {t('common.cancel', '取消')}
+            </Button>
+            <Button
+              type="button"
+              onClick={() => { if (migrateTarget) handleStartMigration(migrateTarget.id) }}
+              disabled={startMigration.isPending}
+            >
+              {t('artifactStorages.migrate.start', '开始迁移')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 失败明细（FR-348）：sha256+原因逐条；重试 = 对同目标重新发起（成功条自动跳过）。 */}
+      <Dialog open={failuresTaskId !== null} onOpenChange={(o) => { if (!o) setFailuresTaskId(null) }}>
+        <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
+          <DialogHeader>
+            <DialogTitle>{t('artifactStorages.migrate.failuresTitle', '迁移失败明细')}</DialogTitle>
+          </DialogHeader>
+          <ScrollableDialogBody className="space-y-2">
+            {(migrationFailures.data ?? []).map((f) => (
+              <div key={f.id} className="rounded-md border p-2 text-xs space-y-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium truncate">{f.filename || f.sha256}</span>
+                  <span className="flex items-center gap-2 text-muted-foreground shrink-0">
+                    <span className="font-mono">{f.sha256.slice(0, 12)}</span>
+                    <span>{formatBytes(f.size)}</span>
+                  </span>
+                </div>
+                <p className="text-status-danger break-all">{f.reason}</p>
+              </div>
+            ))}
+            {migrationFailures.data && migrationFailures.data.length === 0 && (
+              <p className="text-sm text-muted-foreground">{t('artifactStorages.migrate.noFailures', '暂无失败记录')}</p>
+            )}
+          </ScrollableDialogBody>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setFailuresTaskId(null)}>
+              {t('common.close', '关闭')}
+            </Button>
+            <Button
+              type="button"
+              onClick={() => { if (migInfo) handleStartMigration(migInfo.targetChannelId) }}
+              disabled={!migInfo || migrationActive || startMigration.isPending}
+            >
+              {t('artifactStorages.migrate.retry', '重新发起')}
             </Button>
           </DialogFooter>
         </DialogContent>

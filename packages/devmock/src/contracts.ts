@@ -142,6 +142,54 @@ export interface SaveArtifactStorageBody {
   presignTtlSeconds?: number
 }
 
+/** 长任务（与 web/src/api/tasks.ts Task 对齐）。 */
+export interface Task {
+  id: number
+  taskId: string
+  nodeId: number
+  kind: string
+  state: 'pending' | 'running' | 'succeeded' | 'failed' | 'canceled'
+  progress: number
+  title: string
+  detail: string
+  error: string
+  result: string
+  cancelRequested: boolean
+  createdBy: number
+  createdAt: string
+  updatedAt: string
+}
+
+/** 制品存量迁移登记与实时计数（FR-348）。 */
+export interface ArtifactMigrationInfo {
+  taskId: string
+  targetChannelId: number
+  /** 目标渠道当前名称（迁移后渠道被删时为空串）。 */
+  targetName: string
+  total: number
+  migrated: number
+  failed: number
+  skipped: number
+}
+
+/** 最近一次迁移状态；从未迁移过时 task/migration 均为 null。 */
+export interface ArtifactMigrationStatus {
+  task: Task | null
+  migration: ArtifactMigrationInfo | null
+}
+
+/** 迁移失败明细一条（sha256 + 原因，FR-348）。 */
+export interface ArtifactMigrationFailure {
+  id: number
+  taskId: string
+  assetId: number
+  sha256: string
+  filename: string
+  size: number
+  reason: string
+  createdAt: string
+}
+
 // ─────────────────────────── 定时任务（schedules） ───────────────────────────
 
 /** 定时任务（与后端 model.Schedule 对齐）。 */

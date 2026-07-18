@@ -2006,7 +2006,25 @@
     "updateFailed": "更新渠道失败",
     "deleteConfirm": "确定删除此存储渠道？",
     "deleteFailed": "删除失败",
-    "empty": "暂无存储渠道"
+    "empty": "暂无存储渠道",
+    "migrate": {
+      "action": "迁移到此",
+      "confirmTitle": "迁移存量制品到「{{name}}」？",
+      "confirmDesc": "将把全部存量客户端分发制品逐条搬运到该渠道：逐条校验、更新记录后再删除源副本；已在该渠道的自动跳过。任务可随时强制停止，重新发起即从断点续跑（已迁完成的不重传）。",
+      "start": "开始迁移",
+      "started": "迁移任务已发起，进度见本页与任务中心",
+      "startFailed": "发起迁移失败",
+      "inProgress": "存量迁移进行中 → {{name}}",
+      "counters": "共 {{total}} · 已迁 {{migrated}} · 失败 {{failed}} · 跳过 {{skipped}}",
+      "stop": "强制停止",
+      "stopRequested": "已请求停止，重新发起可续跑",
+      "stopFailed": "停止失败",
+      "lastRun": "上次迁移 → {{name}}",
+      "failures": "失败明细",
+      "failuresTitle": "迁移失败明细",
+      "noFailures": "暂无失败记录",
+      "retry": "重新发起"
+    }
   },
   "clientChannels": {
     "title": "客户端分发",
@@ -3398,7 +3416,8 @@
       "import": "导入服务器",
       "clone": "克隆实例",
       "backupCreate": "备份创建",
-      "backupRestore": "备份恢复"
+      "backupRestore": "备份恢复",
+      "artifactMigrate": "制品存量迁移"
     },
     "filter": {
       "keyword": "搜索标题 / 详情",
