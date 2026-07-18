@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -123,8 +124,10 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	runtimeAssetsSvc.SetJDKSync(service.NewJDKService(db, pool))
 	instanceBatchSvc := service.NewInstanceBatchService(db, pool)
 	instanceBatchSvc.SetInstanceService(instanceSvc)
+	authSvc := service.NewAuthService(db, jwtCfg)
+	authSvc.SetPasswordCostForTest(bcrypt.MinCost)
 	svcs := &Services{
-		Auth:              service.NewAuthService(db, jwtCfg),
+		Auth:              authSvc,
 		User:              service.NewUserService(db),
 		Group:             groupSvc,
 		Node:              nodeSvc,

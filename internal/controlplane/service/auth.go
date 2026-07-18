@@ -24,13 +24,19 @@ var (
 
 // AuthService 认证服务。
 type AuthService struct {
-	db  *gorm.DB
-	cfg config.JWTConfig
+	db           *gorm.DB
+	cfg          config.JWTConfig
+	passwordCost int
 }
 
 // NewAuthService 创建认证服务。
 func NewAuthService(db *gorm.DB, cfg config.JWTConfig) *AuthService {
-	return &AuthService{db: db, cfg: cfg}
+	return &AuthService{db: db, cfg: cfg, passwordCost: bcrypt.DefaultCost}
+}
+
+// SetPasswordCostForTest 设置测试用 bcrypt 成本，生产装配不得调用。
+func (s *AuthService) SetPasswordCostForTest(cost int) {
+	s.passwordCost = cost
 }
 
 // TokenPair access + refresh token 对。
@@ -58,7 +64,7 @@ func (s *AuthService) Register(username, password string) (*model.User, error) {
 	}
 
 	// bcrypt 加密密码
-	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), s.passwordCost)
 	if err != nil {
 		return nil, fmt.Errorf("加密密码失败: %w", err)
 	}
@@ -181,7 +187,7 @@ func (s *AuthService) SetupAdmin(username, password string) (*TokenPair, error) 
 		return nil, ErrAdminAlreadyExists
 	}
 
-	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), s.passwordCost)
 	if err != nil {
 		return nil, fmt.Errorf("加密密码失败: %w", err)
 	}

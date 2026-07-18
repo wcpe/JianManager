@@ -9,8 +9,17 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/wcpe/JianManager/internal/controlplane/config"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
+
+func TestAuthService_PasswordCost(t *testing.T) {
+	svc := NewAuthService(nil, config.JWTConfig{})
+	assert.Equal(t, bcrypt.DefaultCost, svc.passwordCost)
+
+	svc.SetPasswordCostForTest(bcrypt.MinCost)
+	assert.Equal(t, bcrypt.MinCost, svc.passwordCost)
+}
 
 func TestBcryptPasswordHashing(t *testing.T) {
 	password := "test-password-123"
