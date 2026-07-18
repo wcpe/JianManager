@@ -250,6 +250,11 @@ func (h *ClientVersionHandler) DownloadArtifact(c *gin.Context) {
 		h.respondErr(c, err)
 		return
 	}
+	// 失效制品（FR-349）：外置对象缺失，管理面下载同样给明确 410（提示重传自愈）。
+	if asset.StorageState == model.AssetStorageLost {
+		c.JSON(http.StatusGone, gin.H{"error": "ARTIFACT_LOST", "message": "制品外置对象已缺失，重传同内容文件即可恢复"})
+		return
+	}
 	contentType := asset.ContentType
 	if contentType == "" {
 		contentType = "application/octet-stream"
@@ -419,6 +424,14 @@ func (h *ClientVersionHandler) GetArtifact(c *gin.Context) {
 			return
 		}
 		defer lease.Release()
+	}
+
+	// 失效制品（FR-349）：完整鉴权/安全策略通过后、后端分流前返回 410，
+	// 不泄露未授权制品状态，也不再 302 到必 404 的预签名 URL。重传同内容即自愈。
+	if asset.StorageState == model.AssetStorageLost {
+		errCode = "ARTIFACT_LOST"
+		c.JSON(http.StatusGone, gin.H{"error": "ARTIFACT_LOST", "message": "制品外置对象已缺失，请联系运营重传"})
+		return
 	}
 
 	// s3 制品：鉴权/防护/限流/带宽检查全部照旧先行后，302 到预签名短时效 URL
@@ -616,6 +629,9 @@ func (h *ClientVersionHandler) respondErr(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrAssetNotFound):
 		// 管理面制品内容/下载（FR-214）取不存在的制品 → 404。
 		c.JSON(http.StatusNotFound, gin.H{"error": "ARTIFACT_NOT_FOUND", "message": "制品不存在"})
+	case errors.Is(err, service.ErrArtifactLost):
+		// 失效制品（FR-349）：索引在、外置对象缺失 → 410（重传同内容自愈）。
+		c.JSON(http.StatusGone, gin.H{"error": "ARTIFACT_LOST", "message": "制品外置对象已缺失，重传同内容文件即可恢复"})
 	case errors.Is(err, service.ErrChecksumMismatch):
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "CHECKSUM_MISMATCH", "message": err.Error()})
 	default:
@@ -640,6 +656,10 @@ func (h *ClientVersionHandler) respondConsumerErr(c *gin.Context, err error) str
 	case errors.Is(err, service.ErrAssetNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "ARTIFACT_NOT_FOUND", "message": "制品不存在"})
 		return "ARTIFACT_NOT_FOUND"
+	case errors.Is(err, service.ErrArtifactLost):
+		// 失效制品（FR-349）：明确 410 终态（防御映射；GetArtifact 已在分流前拦截）。
+		c.JSON(http.StatusGone, gin.H{"error": "ARTIFACT_LOST", "message": "制品外置对象已缺失，请联系运营重传"})
+		return "ARTIFACT_LOST"
 	default:
 		slog.Error("客户端分发消费端点内部错误", "path", c.Request.URL.Path, "channel", c.Param("id"), "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "操作失败"})

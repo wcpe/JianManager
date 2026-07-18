@@ -219,6 +219,12 @@ func main() {
 	if err := artifactStorageSvc.EnsureBuiltin(); err != nil {
 		slog.Warn("内置本机存储渠道初始化失败，制品上传按本地兜底", "error", err)
 	}
+	// 制品对账（FR-349）：索引 ↔ S3 对象清单一致性——手动/定期对账产差异报告，
+	// 处置走显式按钮（标记失效/清理孤儿），不做全自动修复。Start 含启动清障 + 定期调度。
+	artifactReconcileSvc := service.NewArtifactReconcileService(db, artifactStorageSvc)
+	artifactReconcileSvc.SetAudit(auditSvc)
+	artifactReconcileSvc.Start()
+	defer artifactReconcileSvc.Stop()
 	// 客户端分发版本与 manifest 组装（FR-087 / FR-256 简化后：不再签名 manifest，信任靠 HTTPS + 拉取密钥鉴权）。
 	clientVersionSvc := service.NewClientVersionService(db, assetSvc, clientChannelSvc)
 	// 制品外置存储接线（FR-347，见 ADR-073）：写路径 client-file 按活跃渠道路由落点；
@@ -454,6 +460,7 @@ func main() {
 		BackupStorage:           backupStorageSvc,
 		ArtifactStorage:         artifactStorageSvc,
 		ArtifactMigration:       artifactMigrationSvc,
+		ArtifactReconcile:       artifactReconcileSvc,
 		Template:                templateSvc,
 		Audit:                   auditSvc,
 		Authz:                   authzSvc,

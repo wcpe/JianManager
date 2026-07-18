@@ -72,6 +72,11 @@ func newExternalDistFakeS3(t *testing.T) (*externalDistFakeS3, *httptest.Server)
 // setupExternalDistRouter 客户端分发路由 + 制品存储渠道全接线（FR-347）：
 // 渠道服务注入 Asset 写路径与 ClientVersion 读路径。
 func setupExternalDistRouter(t *testing.T, db *gorm.DB) (*gin.Engine, *service.ArtifactStorageChannelService) {
+	return setupExternalDistRouterWithSecurity(t, db, false)
+}
+
+// setupExternalDistRouterWithSecurity 可选装配完整下载安全策略，验证鉴权顺序时启用。
+func setupExternalDistRouterWithSecurity(t *testing.T, db *gorm.DB, withSecurity bool) (*gin.Engine, *service.ArtifactStorageChannelService) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	jwtCfg := config.JWTConfig{Secret: "test-secret-key-for-testing", AccessTTL: 15 * time.Minute, RefreshTTL: 7 * 24 * time.Hour}
@@ -81,6 +86,7 @@ func setupExternalDistRouter(t *testing.T, db *gorm.DB) (*gin.Engine, *service.A
 	assetSvc := service.NewAssetService(db, root)
 	channelSvc := service.NewClientChannelService(db)
 	versionSvc := service.NewClientVersionService(db, assetSvc, channelSvc)
+	securitySvc := service.NewClientDistSecurityService(db, channelSvc, versionSvc)
 
 	artifactStorageSvc := service.NewArtifactStorageChannelService(db, root)
 	enc, _, eerr := service.ResolveKeyEncryptor("", true, "")
@@ -99,6 +105,9 @@ func setupExternalDistRouter(t *testing.T, db *gorm.DB) (*gin.Engine, *service.A
 		ClientChannel:   channelSvc,
 		ClientVersion:   versionSvc,
 		ClientMachine:   service.NewClientMachineService(db),
+	}
+	if withSecurity {
+		svcs.ClientDistSecurity = securitySvc
 	}
 	_ = cpgrpc.NewClientPool()
 	return Setup(svcs, jwtCfg.Secret), artifactStorageSvc
@@ -208,8 +217,44 @@ func TestClientDist_GetArtifact_S3_ChannelBroken_503(t *testing.T) {
 	assert.Equal(t, "ARTIFACT_STORAGE_UNAVAILABLE", parseJSON(t, w)["error"])
 }
 
+// TestClientDist_Artifact_Lost_410 失效制品（FR-349 对账标记）：玩家端点 410 ARTIFACT_LOST
+// （不再 302 到必 404 的预签名 URL）；管理面下载与文本预览同样 410。
+func TestClientDist_Artifact_Lost_410(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupExternalDistRouter(t, db)
+	token := getAdminToken(t, r)
+	const channelID = "s1"
+	key := createChannelAndKey(t, r, token, channelID)
+
+	_, srv := newExternalDistFakeS3(t)
+	createAndActivateS3Channel(t, r, token, srv.URL, 300)
+	sha := uploadClientFileNone(t, r, token, channelID, []byte("soon-to-be-lost"), "l.bin")
+
+	// 对账「标记失效」处置后的状态。
+	require.NoError(t, db.Exec("UPDATE assets SET storage_state = ? WHERE sha256 = ?", "lost", sha).Error)
+
+	// 玩家消费端点：410 明确终态，无 Location。
+	req := httptest.NewRequest("GET", "/api/v1/client-artifacts/"+sha, nil)
+	req.Header.Set("X-Client-Key", key)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusGone, w.Code, w.Body.String())
+	assert.Equal(t, "ARTIFACT_LOST", parseJSON(t, w)["error"])
+	assert.Empty(t, w.Header().Get("Location"), "失效制品不 302")
+
+	// 管理面下载：410。
+	wd := makeRequest(r, "GET", "/api/v1/client-channels/"+channelID+"/files/download?sha256="+sha, nil, token)
+	require.Equal(t, http.StatusGone, wd.Code)
+	assert.Equal(t, "ARTIFACT_LOST", parseJSON(t, wd)["error"])
+
+	// 管理面文本预览：410。
+	wp := makeRequest(r, "GET", "/api/v1/client-channels/"+channelID+"/files/content?sha256="+sha, nil, token)
+	require.Equal(t, http.StatusGone, wp.Code)
+	assert.Equal(t, "ARTIFACT_LOST", parseJSON(t, wp)["error"])
+}
+
 // TestClientDist_AdminDownloadAndPreview_S3Proxy 管理面下载对 s3 制品 CP 代理直流
-//（200 + Content-Length + attachment，字节一致，不 302）；文本预览正常。
+// （200 + Content-Length + attachment，字节一致，不 302）；文本预览正常。
 func TestClientDist_AdminDownloadAndPreview_S3Proxy(t *testing.T) {
 	db := setupTestDB(t)
 	r, _ := setupExternalDistRouter(t, db)

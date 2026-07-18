@@ -204,6 +204,52 @@ func TestIngest_S3UploadFailure_FailsFast(t *testing.T) {
 	require.Empty(t, entries, "失败不静默回落本地")
 }
 
+// TestIngest_ReuploadHealsLostAsset 失效自愈（FR-349 spec §3.6）：lost 资产重传同内容 →
+// 去重命中且把对象补传回记录自述的渠道、StorageState 复位 external（下载复通）。
+func TestIngest_ReuploadHealsLostAsset(t *testing.T) {
+	h := newIngestChannelHarness(t)
+	fake, srv := newCountingFakeS3(t)
+	ch := h.activateS3Channel(t, srv.URL)
+
+	data := []byte("lost-then-reuploaded")
+	asset, err := h.assets.Ingest(strings.NewReader(string(data)), IngestParams{
+		Type: model.AssetTypeClientFile, Filename: "heal.bin",
+	})
+	require.NoError(t, err)
+	objectKey := "jm-artifacts/jm/" + asset.RelPath
+
+	// 模拟存储侧对象丢失 + 对账「标记失效」处置。
+	fake.mu.Lock()
+	delete(fake.objects, objectKey)
+	fake.mu.Unlock()
+	require.NoError(t, h.db.Model(&model.Asset{}).Where("id = ?", asset.ID).
+		Update("storage_state", model.AssetStorageLost).Error)
+
+	// 重传同内容：去重命中 + 补传对象 + 失效清除。
+	putsBefore := fake.puts
+	healed, err := h.assets.Ingest(strings.NewReader(string(data)), IngestParams{
+		Type: model.AssetTypeClientFile, Filename: "heal.bin",
+	})
+	require.NoError(t, err)
+	require.Equal(t, asset.ID, healed.ID, "去重命中复用记录")
+	require.Equal(t, model.AssetStorageExternal, healed.StorageState, "失效标记清除")
+	require.Equal(t, putsBefore+1, fake.puts, "对象补传回记录自述渠道")
+	require.Equal(t, data, fake.objects[objectKey], "对象内容恢复")
+	require.Equal(t, ch.ID, healed.StorageChannelID, "渠道引用不变")
+
+	var reloaded model.Asset
+	require.NoError(t, h.db.First(&reloaded, asset.ID).Error)
+	require.Equal(t, model.AssetStorageExternal, reloaded.StorageState, "复位已落库")
+
+	// 非失效记录的去重命中仍不重传（历史语义不变）。
+	putsBefore = fake.puts
+	_, err = h.assets.Ingest(strings.NewReader(string(data)), IngestParams{
+		Type: model.AssetTypeClientFile, Filename: "heal.bin",
+	})
+	require.NoError(t, err)
+	require.Equal(t, putsBefore, fake.puts, "健康记录去重不重传")
+}
+
 // TestAssetDelete_S3RemovesObject 删除 s3 制品：DB 记录删除 + 渠道对象尽力清除。
 func TestAssetDelete_S3RemovesObject(t *testing.T) {
 	h := newIngestChannelHarness(t)

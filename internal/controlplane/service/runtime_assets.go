@@ -63,6 +63,16 @@ type RuntimeAssetsOverview struct {
 	RuntimeSyncs []RuntimeNodeSync `json:"runtimeSyncs"`
 	// SyncedAt 整体上次同步时间 = 各节点 runtime_synced_at 的最大值（FR-301）；nil=全部未同步。
 	SyncedAt *time.Time `json:"syncedAt"`
+	// ArtifactChannels 制品存储渠道引用（FR-349 加性扩展）：前端把资产行的
+	// storageChannelId 映射为渠道名（「存储位置」列），不回凭证任何信息。
+	ArtifactChannels []ArtifactChannelRef `json:"artifactChannels"`
+}
+
+// ArtifactChannelRef 制品存储渠道的最小引用（id/名称/类型），供列表映射展示（FR-349）。
+type ArtifactChannelRef struct {
+	ID   uint   `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 // RuntimeMatrixItem 跨节点多运行时矩阵的一项（FR-301）：一个节点上的一个运行时。
@@ -144,6 +154,8 @@ type AssetTypeGroup struct {
 	HotCount      int `json:"hotCount"`
 	ArchivedCount int `json:"archivedCount"`
 	ExternalCount int `json:"externalCount"`
+	// LostCount 失效资产数（FR-349：索引在、外置对象缺失）。
+	LostCount int `json:"lostCount"`
 }
 
 // AssetSummary 制品区汇总统计。
@@ -154,6 +166,8 @@ type AssetSummary struct {
 	HotCount        int   `json:"hotCount"`
 	ArchivedCount   int   `json:"archivedCount"`
 	ExternalCount   int   `json:"externalCount"`
+	// LostCount 失效资产数（FR-349）。
+	LostCount int `json:"lostCount"`
 }
 
 // Overview 加载现有表并聚合出全局页载荷。纯聚合逻辑下沉到 buildJDKMatrix / groupAssetsByType，便于单测。
@@ -181,19 +195,29 @@ func (s *RuntimeAssetsService) Overview() (*RuntimeAssetsOverview, error) {
 	if err := s.db.Order("type asc, major desc, id desc").Find(&runtimes).Error; err != nil {
 		return nil, fmt.Errorf("查询运行时失败: %w", err)
 	}
+	// 制品存储渠道最小引用（FR-349）：仅 id/name/type，供「存储位置」列映射，不带凭证信息。
+	var channels []model.ArtifactStorageChannel
+	if err := s.db.Select("id", "name", "type").Order("id asc").Find(&channels).Error; err != nil {
+		return nil, fmt.Errorf("查询制品存储渠道失败: %w", err)
+	}
+	channelRefs := make([]ArtifactChannelRef, 0, len(channels))
+	for _, ch := range channels {
+		channelRefs = append(channelRefs, ArtifactChannelRef{ID: ch.ID, Name: ch.Name, Type: string(ch.Type)})
+	}
 
 	matrix, jdkSummary := buildJDKMatrix(nodes, jdks, instances)
 	groups, assetSummary := groupAssetsByType(assets)
 	syncs, syncedAt := buildRuntimeSyncs(nodes)
 
 	return &RuntimeAssetsOverview{
-		JDKs:         matrix,
-		JDKSummary:   jdkSummary,
-		Assets:       groups,
-		AssetSummary: assetSummary,
-		Runtimes:     buildRuntimeMatrix(nodes, matrix, runtimes),
-		RuntimeSyncs: syncs,
-		SyncedAt:     syncedAt,
+		JDKs:             matrix,
+		JDKSummary:       jdkSummary,
+		Assets:           groups,
+		AssetSummary:     assetSummary,
+		Runtimes:         buildRuntimeMatrix(nodes, matrix, runtimes),
+		RuntimeSyncs:     syncs,
+		SyncedAt:         syncedAt,
+		ArtifactChannels: channelRefs,
 	}, nil
 }
 
@@ -444,6 +468,10 @@ func groupAssetsByType(assets []model.Asset) ([]AssetTypeGroup, AssetSummary) {
 		case model.AssetStorageExternal:
 			g.ExternalCount++
 			summary.ExternalCount++
+		case model.AssetStorageLost:
+			// 失效（FR-349）：单列统计，不混入 hot/external 三态。
+			g.LostCount++
+			summary.LostCount++
 		default:
 			g.HotCount++
 			summary.HotCount++

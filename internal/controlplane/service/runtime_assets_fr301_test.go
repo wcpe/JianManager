@@ -20,7 +20,7 @@ func newFR301DB(t *testing.T) *gorm.DB {
 	dsn := "file:fr301_" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NodeJDK{}, &model.NodeRuntime{}, &model.Instance{}, &model.Asset{}))
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NodeJDK{}, &model.NodeRuntime{}, &model.Instance{}, &model.Asset{}, &model.ArtifactStorageChannel{}))
 	return db
 }
 

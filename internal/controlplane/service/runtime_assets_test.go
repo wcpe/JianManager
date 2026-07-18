@@ -14,13 +14,14 @@ func newRuntimeAssetsTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NodeJDK{}, &model.NodeRuntime{}, &model.Instance{}, &model.Asset{}))
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NodeJDK{}, &model.NodeRuntime{}, &model.Instance{}, &model.Asset{}, &model.ArtifactStorageChannel{}))
 	// 每个用例独立清表（cache=shared 共享同库）。
 	require.NoError(t, db.Exec("DELETE FROM nodes").Error)
 	require.NoError(t, db.Exec("DELETE FROM node_jdks").Error)
 	require.NoError(t, db.Exec("DELETE FROM node_runtimes").Error)
 	require.NoError(t, db.Exec("DELETE FROM instances").Error)
 	require.NoError(t, db.Exec("DELETE FROM assets").Error)
+	require.NoError(t, db.Exec("DELETE FROM artifact_storage_channels").Error)
 	return db
 }
 
@@ -109,29 +110,33 @@ func TestBuildJDKMatrix_NoBindingIgnored(t *testing.T) {
 // 制品按类型分组：占用/去重/冷热统计正确，分组按类型名升序。
 func TestGroupAssetsByType_StatsAndOrder(t *testing.T) {
 	assets := []model.Asset{
+		{ID: 4, Type: model.AssetTypeClientFile, Size: 50, RefCount: 0, StorageState: model.AssetStorageLost},
 		{ID: 3, Type: model.AssetTypePlugin, Size: 100, RefCount: 2, StorageState: model.AssetStorageHot},
 		{ID: 2, Type: model.AssetTypeCore, Size: 500, RefCount: 0, StorageState: model.AssetStorageArchived},
 		{ID: 1, Type: model.AssetTypeCore, Size: 300, RefCount: 1, StorageState: model.AssetStorageHot},
 	}
 
 	groups, summary := groupAssetsByType(assets)
-	require.Len(t, groups, 2)
-	// 升序：core < plugin
-	require.Equal(t, model.AssetTypeCore, groups[0].Type)
-	require.Equal(t, model.AssetTypePlugin, groups[1].Type)
+	require.Len(t, groups, 3)
+	// 升序：client-file < core < plugin
+	require.Equal(t, model.AssetTypeClientFile, groups[0].Type)
+	require.Equal(t, model.AssetTypeCore, groups[1].Type)
+	require.Equal(t, model.AssetTypePlugin, groups[2].Type)
+	require.Equal(t, 1, groups[0].LostCount)
 
-	core := groups[0]
+	core := groups[1]
 	require.Equal(t, 2, core.Count)
 	require.EqualValues(t, 800, core.TotalSize)
 	require.Equal(t, 1, core.ReferencedCount)
 	require.Equal(t, 1, core.HotCount)
 	require.Equal(t, 1, core.ArchivedCount)
 
-	require.Equal(t, 3, summary.AssetCount)
-	require.EqualValues(t, 900, summary.TotalSize)
+	require.Equal(t, 4, summary.AssetCount)
+	require.EqualValues(t, 950, summary.TotalSize)
 	require.Equal(t, 2, summary.ReferencedCount)
 	require.Equal(t, 2, summary.HotCount)
 	require.Equal(t, 1, summary.ArchivedCount)
+	require.Equal(t, 1, summary.LostCount)
 }
 
 // 空集：分组与汇总均为零值，不 panic。
@@ -152,8 +157,17 @@ func TestRuntimeAssetsService_Overview(t *testing.T) {
 	require.NoError(t, db.Create(jdk).Error)
 	inst := &model.Instance{NodeID: node.ID, Name: "paper-1", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDaemon, JDKID: jdk.ID, Status: model.InstanceStatusRunning}
 	require.NoError(t, db.Create(inst).Error)
+	localChannel := &model.ArtifactStorageChannel{Name: "本机存储", Type: model.ArtifactStorageLocal, Builtin: true, Active: true}
+	require.NoError(t, db.Create(localChannel).Error)
+	s3Channel := &model.ArtifactStorageChannel{Name: "rustfs-主渠道", Type: model.ArtifactStorageS3}
+	require.NoError(t, db.Create(s3Channel).Error)
 	asset := &model.Asset{Type: model.AssetTypeCore, Name: "paper", SHA256: "a", Size: 1234, StorageState: model.AssetStorageHot}
 	require.NoError(t, db.Create(asset).Error)
+	lost := &model.Asset{
+		Type: model.AssetTypeClientFile, Name: "lost-client", SHA256: "b", Size: 64,
+		StorageBackend: model.AssetBackendS3, StorageChannelID: s3Channel.ID, StorageState: model.AssetStorageLost,
+	}
+	require.NoError(t, db.Create(lost).Error)
 
 	ov, err := svc.Overview()
 	require.NoError(t, err)
@@ -163,8 +177,15 @@ func TestRuntimeAssetsService_Overview(t *testing.T) {
 	require.Equal(t, "paper-1", ov.JDKs[0].Instances[0].Name)
 	require.Equal(t, 1, ov.JDKSummary.InstanceRefs)
 
-	require.Len(t, ov.Assets, 1)
-	require.Equal(t, model.AssetTypeCore, ov.Assets[0].Type)
-	require.EqualValues(t, 1234, ov.Assets[0].TotalSize)
-	require.Equal(t, 1, ov.AssetSummary.AssetCount)
+	require.Len(t, ov.Assets, 2)
+	require.Equal(t, model.AssetTypeClientFile, ov.Assets[0].Type)
+	require.Equal(t, 1, ov.Assets[0].LostCount)
+	require.Equal(t, model.AssetTypeCore, ov.Assets[1].Type)
+	require.EqualValues(t, 1234, ov.Assets[1].TotalSize)
+	require.Equal(t, 2, ov.AssetSummary.AssetCount)
+	require.Equal(t, 1, ov.AssetSummary.LostCount)
+	require.Equal(t, []ArtifactChannelRef{
+		{ID: localChannel.ID, Name: "本机存储", Type: string(model.ArtifactStorageLocal)},
+		{ID: s3Channel.ID, Name: "rustfs-主渠道", Type: string(model.ArtifactStorageS3)},
+	}, ov.ArtifactChannels)
 }

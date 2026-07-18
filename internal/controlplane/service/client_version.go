@@ -927,6 +927,10 @@ func (s *ClientVersionService) ReadArtifactText(sha256 string) (*ArtifactTextPre
 	if err != nil {
 		return nil, err
 	}
+	// 失效制品（FR-349）：外置对象已缺失，预览给明确错误（410）而非拉对象撞 404。
+	if asset.StorageState == model.AssetStorageLost {
+		return nil, ErrArtifactLost
+	}
 	codec := artifactCodec(asset.Metadata)
 	out := &ArtifactTextPreview{Size: asset.Size, Codec: codec}
 

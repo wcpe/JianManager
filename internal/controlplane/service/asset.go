@@ -32,6 +32,9 @@ var (
 	ErrInvalidAssetType = errors.New("非法的资产类型")
 	// ErrChecksumMismatch 校验和不符，拒绝入库。
 	ErrChecksumMismatch = errors.New("校验和不符")
+	// ErrArtifactLost 制品失效：索引在、外置对象缺失（FR-349 对账「标记失效」处置），
+	// 下载/预览不可用，重传同内容文件去重命中即自愈。
+	ErrArtifactLost = errors.New("制品外置对象已缺失")
 )
 
 const (
@@ -192,6 +195,25 @@ func (s *AssetService) Ingest(r io.Reader, p IngestParams) (*model.Asset, error)
 	var existing model.Asset
 	err = s.db.Where("type = ? AND sha256 = ?", p.Type, sum256).First(&existing).Error
 	if err == nil {
+		// 失效自愈（FR-349，见 artifact-s3-reconcile spec §3.6）：命中记录已标 lost（对账「标记失效」）
+		// 时，把同内容临时文件补传回**记录自述的渠道**（非当前活跃渠道——位置由记录自述，ADR-073）
+		// 并复位 external。恢复闭环：报缺失 → 标失效 → 重传同文件 → 自愈复通。补传失败快失败（决策 5）。
+		if existing.StorageState == model.AssetStorageLost && existing.StorageBackend == model.AssetBackendS3 {
+			if s.storageChannels == nil {
+				return nil, fmt.Errorf("失效制品无法自愈: 制品存储渠道服务未配置")
+			}
+			store, serr := s.storageChannels.StoreForAsset(&existing)
+			if serr != nil {
+				return nil, fmt.Errorf("解析失效制品渠道失败: %w", serr)
+			}
+			if perr := store.PutFile(context.Background(), existing.RelPath, tmpPath, size); perr != nil {
+				return nil, fmt.Errorf("补传失效制品到对象存储失败: %w", perr)
+			}
+			if uerr := s.db.Model(&existing).Update("storage_state", model.AssetStorageExternal).Error; uerr != nil {
+				return nil, fmt.Errorf("复位制品失效状态失败: %w", uerr)
+			}
+			existing.StorageState = model.AssetStorageExternal
+		}
 		now := time.Now()
 		s.db.Model(&existing).Update("last_used_at", &now)
 		existing.LastUsedAt = &now

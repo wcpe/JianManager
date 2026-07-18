@@ -29,6 +29,10 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
+// testArtifactReconcile 最近一次 setupTestRouterWithPool 构造的对账服务（FR-349）——
+// 对账执行需注入假 BlobStore（SetStoreFactory），路由测试串行执行下按引用注入安全。
+var testArtifactReconcile *service.ArtifactReconcileService
+
 // setupTestDB 创建临时 SQLite 数据库并运行自动迁移。
 // 通过 t.Cleanup 确保测试结束时关闭数据库连接。
 func setupTestDB(t *testing.T) *gorm.DB {
@@ -108,6 +112,10 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 		artifactStorageSvc.SetKeyEncryptor(enc)
 	}
 	_ = artifactStorageSvc.EnsureBuiltin()
+	// 制品对账（FR-349）：不 Start（测试不跑定期调度循环）；执行走假 store——
+	// 测试经包级 testArtifactReconcile.SetStoreFactory 注入（串行测试安全）。
+	artifactReconcileSvc := service.NewArtifactReconcileService(db, artifactStorageSvc)
+	testArtifactReconcile = artifactReconcileSvc
 	botSvc := service.NewBotService(db, pool)
 	// 运行时资产聚合 + 强制刷新（FR-301）：注入 JDK 同步器，令 refresh 端点可测
 	//（配合 SetWorkerClientForTest 注入 fake Worker）。
@@ -116,44 +124,45 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	instanceBatchSvc := service.NewInstanceBatchService(db, pool)
 	instanceBatchSvc.SetInstanceService(instanceSvc)
 	svcs := &Services{
-		Auth:             service.NewAuthService(db, jwtCfg),
-		User:             service.NewUserService(db),
-		Group:            groupSvc,
-		Node:             nodeSvc,
-		NodeRepair:       service.NewNodeRepairService(db),
-		Instance:         instanceSvc,
-		InstanceBatch:    instanceBatchSvc,
-		InstanceGroup:    service.NewInstanceGroupService(db),
-		NodeRuntime:      service.NewNodeRuntimeService(db, pool),
-		ProbeUpdate:      service.NewProbeUpdateService(db, pool, service.NewPluginBridgeService(jwtCfg.Secret)),
-		Terminal:         service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),
-		File:             fileSvc,
-		FileVersion:      fileVersionSvc,
-		Plugin:           service.NewPluginService(db, pool, assetSvc),
-		Config:           configSvc,
-		Bot:              botSvc,
-		BotStressSession: service.NewBotStressSessionService(db, botSvc),
-		Alert:            service.NewAlertService(db),
-		AlertChannel:     service.NewAlertChannelService(db),
-		Schedule:         service.NewScheduleService(db),
-		Backup:           service.NewBackupService(db, pool),
-		BackupStorage:    backupStorageSvc,
-		ArtifactStorage:  artifactStorageSvc,
-		Template:         service.NewTemplateService(db),
-		Audit:            service.NewAuditService(db),
-		Authz:            authzSvc,
-		Business:         service.NewBusinessService(db, pool),
-		BusinessEvent:    service.NewBusinessEventService(db),
-		Asset:            assetSvc,
-		RuntimeAssets:    runtimeAssetsSvc,
-		Storage:          service.NewStorageService(db, root),
-		Log:              service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),
-		Metric:           service.NewMetricService(db),
-		DBBrowse:         service.NewDBBrowseService(db),
-		SelfUpdate:       service.NewSelfUpdateService(db, pool, service.SelfUpdateConfig{}, root),
-		ServerState:      service.NewServerStateService(db, pool),
-		CrashSnapshot:    service.NewCrashSnapshotService(db),
-		ImportServer:     service.NewImportServerService(db, pool, instanceSvc),
+		Auth:              service.NewAuthService(db, jwtCfg),
+		User:              service.NewUserService(db),
+		Group:             groupSvc,
+		Node:              nodeSvc,
+		NodeRepair:        service.NewNodeRepairService(db),
+		Instance:          instanceSvc,
+		InstanceBatch:     instanceBatchSvc,
+		InstanceGroup:     service.NewInstanceGroupService(db),
+		NodeRuntime:       service.NewNodeRuntimeService(db, pool),
+		ProbeUpdate:       service.NewProbeUpdateService(db, pool, service.NewPluginBridgeService(jwtCfg.Secret)),
+		Terminal:          service.NewTerminalService(db, jwtCfg.Secret, "ws://localhost:8080"),
+		File:              fileSvc,
+		FileVersion:       fileVersionSvc,
+		Plugin:            service.NewPluginService(db, pool, assetSvc),
+		Config:            configSvc,
+		Bot:               botSvc,
+		BotStressSession:  service.NewBotStressSessionService(db, botSvc),
+		Alert:             service.NewAlertService(db),
+		AlertChannel:      service.NewAlertChannelService(db),
+		Schedule:          service.NewScheduleService(db),
+		Backup:            service.NewBackupService(db, pool),
+		BackupStorage:     backupStorageSvc,
+		ArtifactStorage:   artifactStorageSvc,
+		ArtifactReconcile: artifactReconcileSvc,
+		Template:          service.NewTemplateService(db),
+		Audit:             service.NewAuditService(db),
+		Authz:             authzSvc,
+		Business:          service.NewBusinessService(db, pool),
+		BusinessEvent:     service.NewBusinessEventService(db),
+		Asset:             assetSvc,
+		RuntimeAssets:     runtimeAssetsSvc,
+		Storage:           service.NewStorageService(db, root),
+		Log:               service.NewLogService(db, root, config.LogStoreConfig{Enabled: true, PersistPlatform: true}),
+		Metric:            service.NewMetricService(db),
+		DBBrowse:          service.NewDBBrowseService(db),
+		SelfUpdate:        service.NewSelfUpdateService(db, pool, service.SelfUpdateConfig{}, root),
+		ServerState:       service.NewServerStateService(db, pool),
+		CrashSnapshot:     service.NewCrashSnapshotService(db),
+		ImportServer:      service.NewImportServerService(db, pool, instanceSvc),
 	}
 	return Setup(svcs, jwtCfg.Secret)
 }

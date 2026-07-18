@@ -219,7 +219,7 @@ func TestReconcile_PagedTraversal(t *testing.T) {
 }
 
 // TestReconcile_PrefixIsolation 前缀隔离：CAS client-file 命名空间外对象
-//（probe/ 探测残留、他类型目录、桶根杂物）不参与比对、不算孤儿。
+// （probe/ 探测残留、他类型目录、桶根杂物）不参与比对、不算孤儿。
 func TestReconcile_PrefixIsolation(t *testing.T) {
 	h := newReconcileHarness(t)
 	h.store.put("probe/jm-probe-123", 8)
@@ -484,6 +484,17 @@ func TestReconcile_ResolveOnRunningRun(t *testing.T) {
 	require.ErrorIs(t, err, ErrReconcileRunRunning)
 	_, err = h.svc.CleanupOrphans(running.ID)
 	require.ErrorIs(t, err, ErrReconcileRunRunning)
+
+	failed := &model.ArtifactReconcileRun{
+		ChannelID: h.ch.ID, ChannelName: h.ch.Name,
+		Status: model.ArtifactReconcileFailed, TriggeredBy: model.ArtifactReconcileTriggerManual,
+		StartedAt: time.Now(),
+	}
+	require.NoError(t, h.db.Create(failed).Error)
+	_, err = h.svc.ResolveMissing(failed.ID)
+	require.ErrorIs(t, err, ErrReconcileRunNotSucceeded)
+	_, err = h.svc.CleanupOrphans(failed.ID)
+	require.ErrorIs(t, err, ErrReconcileRunNotSucceeded)
 }
 
 // TestReconcile_ListRuns 运行记录按 id desc、渠道过滤与上限生效。

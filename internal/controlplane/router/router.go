@@ -19,28 +19,28 @@ type Services struct {
 	Node       *service.NodeService
 	NodeRepair *service.NodeRepairService
 	// NodeProxy 节点级出站代理管控（FR-185，见 ADR-043）；nil 时节点代理端点关闭。
-	NodeProxy        *service.NodeProxyService
-	Instance         *service.InstanceService
-	InstanceBatch    *service.InstanceBatchService
-	InstanceGroup    *service.InstanceGroupService
-	JDK              *service.JDKService
-	NodeRuntime      *service.NodeRuntimeService
+	NodeProxy     *service.NodeProxyService
+	Instance      *service.InstanceService
+	InstanceBatch *service.InstanceBatchService
+	InstanceGroup *service.InstanceGroupService
+	JDK           *service.JDKService
+	NodeRuntime   *service.NodeRuntimeService
 	// RuntimeLibrary 节点运行时库（FR-298）：统一 Runtime 视图 + 扫描发现 + 泛化登记；
 	// nil 时 /nodes/:id/runtimes 端点关闭。
 	RuntimeLibrary *service.RuntimeLibraryService
 	// PMConfig 节点包管理器与 registry 配置（FR-306）；nil 时 /nodes/:id/pm-config 端点关闭。
-	PMConfig         *service.PMConfigService
-	Diagnostics      *service.DiagnosticsService
-	DockerImage      *service.DockerImageService
-	Terminal         *service.TerminalService
-	File             *service.FileService
-	FileVersion      *service.FileVersionService
-	Plugin           *service.PluginService
-	Player           *service.PlayerService
-	PlayerEvent      *service.PlayerEventService
-	ServerState      *service.ServerStateService
+	PMConfig    *service.PMConfigService
+	Diagnostics *service.DiagnosticsService
+	DockerImage *service.DockerImageService
+	Terminal    *service.TerminalService
+	File        *service.FileService
+	FileVersion *service.FileVersionService
+	Plugin      *service.PluginService
+	Player      *service.PlayerService
+	PlayerEvent *service.PlayerEventService
+	ServerState *service.ServerStateService
 	// CrashSnapshot 实例崩溃快照只读查询（FR-313）；nil 时端点关闭。
-	CrashSnapshot *service.CrashSnapshotService
+	CrashSnapshot    *service.CrashSnapshotService
 	Business         *service.BusinessService
 	BusinessEvent    *service.BusinessEventService
 	Config           *service.ConfigService
@@ -56,35 +56,38 @@ type Services struct {
 	ArtifactStorage *service.ArtifactStorageChannelService
 	// ArtifactMigration 制品存量迁移（FR-348）：渠道间搬运后台任务；nil 时迁移端点关闭。
 	ArtifactMigration *service.ArtifactMigrationService
-	Template         *service.TemplateService
-	Audit            *service.AuditService
-	Authz            *service.AuthzService
-	Event            *service.EventService
-	Asset            *service.AssetService
-	Core             *service.CoreService
-	Provision        *service.ProvisionService
-	Proxy            *service.ProxyService
-	Clone            *service.CloneService
+	// ArtifactReconcile 制品索引 ↔ S3 一致性对账（FR-349）：对账运行/差异报告/显式处置；
+	// nil 时对账端点关闭。
+	ArtifactReconcile *service.ArtifactReconcileService
+	Template          *service.TemplateService
+	Audit             *service.AuditService
+	Authz             *service.AuthzService
+	Event             *service.EventService
+	Asset             *service.AssetService
+	Core              *service.CoreService
+	Provision         *service.ProvisionService
+	Proxy             *service.ProxyService
+	Clone             *service.CloneService
 	// ImportServer 导入现有服务器（FR-302，见 ADR-069）；nil 时导入端点关闭。
-	ImportServer *service.ImportServerService
-	Registration     *service.RegistrationService
-	Network          *service.NetworkService
-	Log              *service.LogService
-	Metric           *service.MetricService
-	Settings         *service.SettingsService
-	ProbeUpdate      *service.ProbeUpdateService
-	ClientChannel    *service.ClientChannelService
-	ClientVersion    *service.ClientVersionService
+	ImportServer  *service.ImportServerService
+	Registration  *service.RegistrationService
+	Network       *service.NetworkService
+	Log           *service.LogService
+	Metric        *service.MetricService
+	Settings      *service.SettingsService
+	ProbeUpdate   *service.ProbeUpdateService
+	ClientChannel *service.ClientChannelService
+	ClientVersion *service.ClientVersionService
 	// ClientChunkUpload 大文件分块上传（FR-251，增强 FR-088）；nil 时分块端点关闭、前端回退单次上传。
 	ClientChunkUpload *service.ChunkedUploadService
 	// ClientUploadEfficiency 上传增效：秒传预查 + 小文件聚合（FR-346，增强 FR-250/251）；
 	// nil 时增效端点关闭、前端预查失败降级为全量上传（不阻断发布）。
 	ClientUploadEfficiency *service.ClientUploadEfficiencyService
-	ClientMachine      *service.ClientMachineService
-	ClientDistTracking *service.ClientDistTrackingService
-	ClientIPGuard      *service.ClientIPGuardService
-	ClientTelemetry    *service.ClientTelemetryService
-	ClientDistStats    *service.ClientDistStatsService
+	ClientMachine          *service.ClientMachineService
+	ClientDistTracking     *service.ClientDistTrackingService
+	ClientIPGuard          *service.ClientIPGuardService
+	ClientTelemetry        *service.ClientTelemetryService
+	ClientDistStats        *service.ClientDistStatsService
 	// ClientRuntimeState 客户端运行态心跳与聚合（FR-265）。
 	ClientRuntimeState *service.ClientRuntimeStateService
 	ClientDistSecurity *service.ClientDistSecurityService
@@ -377,6 +380,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 制品存量迁移：渠道间搬运后台任务（发起/状态/失败明细），限平台管理员（FR-348）。
 		if svcs.ArtifactMigration != nil {
 			NewArtifactMigrationHandler(svcs.ArtifactMigration).RegisterRoutes(admin)
+		}
+
+		// 制品对账：索引 ↔ S3 对象一致性运行/报告/显式处置，限平台管理员（FR-349）。
+		if svcs.ArtifactReconcile != nil {
+			NewArtifactReconcileHandler(svcs.ArtifactReconcile, svcs.Audit).RegisterRoutes(admin)
 		}
 
 		// 平台配置：全量配置可视化 + 白名单运行时覆盖，限平台管理员（FR-063 / ADR-015）。

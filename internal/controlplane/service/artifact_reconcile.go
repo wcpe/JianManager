@@ -26,6 +26,8 @@ var (
 	ErrReconcileRunNotFound = errors.New("对账运行记录不存在")
 	// ErrReconcileRunRunning 对账仍在进行中，差异报告未生成，处置被拒。
 	ErrReconcileRunRunning = errors.New("对账仍在进行中，请等待完成")
+	// ErrReconcileRunNotSucceeded 对账未成功完成（failed），没有可安全处置的完整报告。
+	ErrReconcileRunNotSucceeded = errors.New("对账未成功完成，无法处置差异")
 	// ErrReconcileInvalidInterval 定期周期越界。
 	ErrReconcileInvalidInterval = errors.New("定期对账周期须在 1~720 小时之间")
 )
@@ -82,6 +84,14 @@ func NewArtifactReconcileService(db *gorm.DB, channels *ArtifactStorageChannelSe
 
 // SetAudit 注入审计服务（处置/触发/设置变更留痕）。
 func (s *ArtifactReconcileService) SetAudit(a *AuditService) { s.audit = a }
+
+// SetStoreFactory 注入「渠道 → BlobStore」解析函数（默认 channels.StoreFor）。
+// 供装配定制与跨包测试注入假存储；生产装配无需调用。
+func (s *ArtifactReconcileService) SetStoreFactory(f func(*model.ArtifactStorageChannel) (blobstore.Store, error)) {
+	if f != nil {
+		s.storeFor = f
+	}
+}
 
 // Start 启动定期调度循环（分钟级 tick）并清障：CP 上次崩溃/重启遗留的 running 运行行置 failed。
 func (s *ArtifactReconcileService) Start() {
@@ -197,7 +207,7 @@ func (s *ArtifactReconcileService) Settings() (*model.ArtifactReconcileSetting, 
 }
 
 // UpdateSettings 更新定期对账设置：周期钳 [1,720] 小时；变更即重算 NextRunAt
-//（启用 → now+interval；禁用 → nil）。
+// （启用 → now+interval；禁用 → nil）。
 func (s *ArtifactReconcileService) UpdateSettings(enabled bool, intervalHours int) (*model.ArtifactReconcileSetting, error) {
 	if intervalHours < artifactReconcileIntervalMin || intervalHours > artifactReconcileIntervalMax {
 		return nil, fmt.Errorf("%w: %d", ErrReconcileInvalidInterval, intervalHours)
@@ -262,9 +272,12 @@ func (s *ArtifactReconcileService) TriggerAll(triggeredBy string) ([]model.Artif
 		}
 		s3Count++
 		run, terr := s.Trigger(chs[i].ID, triggeredBy)
-		if terr != nil {
+		if errors.Is(terr, ErrReconcileInProgress) {
 			skipped = append(skipped, ReconcileSkipped{ChannelID: chs[i].ID, ChannelName: chs[i].Name, Reason: terr.Error()})
 			continue
+		}
+		if terr != nil {
+			return started, skipped, terr
 		}
 		started = append(started, *run)
 	}
@@ -283,11 +296,6 @@ func (s *ArtifactReconcileService) beginRun(channelID uint, triggeredBy string) 
 	if ch.Type != model.ArtifactStorageS3 {
 		return nil, nil, nil, ErrReconcileChannelUnsupported
 	}
-	store, err := s.storeFor(ch)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("构造渠道存储后端失败: %w", err)
-	}
-
 	s.mu.Lock()
 	if s.inflight[channelID] {
 		s.mu.Unlock()
@@ -295,6 +303,12 @@ func (s *ArtifactReconcileService) beginRun(channelID uint, triggeredBy string) 
 	}
 	s.inflight[channelID] = true
 	s.mu.Unlock()
+
+	store, err := s.storeFor(ch)
+	if err != nil {
+		s.release(channelID)
+		return nil, nil, nil, fmt.Errorf("构造渠道存储后端失败: %w", err)
+	}
 
 	run := &model.ArtifactReconcileRun{
 		ChannelID:   ch.ID,
@@ -518,6 +532,9 @@ func (s *ArtifactReconcileService) ResolveMissing(runID uint) (*ResolveMissingRe
 	if run.Status == model.ArtifactReconcileRunning {
 		return nil, ErrReconcileRunRunning
 	}
+	if run.Status != model.ArtifactReconcileSucceeded {
+		return nil, ErrReconcileRunNotSucceeded
+	}
 	var diffs []model.ArtifactReconcileDiff
 	if err := s.db.Where("run_id = ? AND kind = ? AND status = ?",
 		runID, model.ArtifactDiffMissing, model.ArtifactDiffOpen).Find(&diffs).Error; err != nil {
@@ -575,6 +592,9 @@ func (s *ArtifactReconcileService) CleanupOrphans(runID uint) (*CleanupOrphansRe
 	}
 	if run.Status == model.ArtifactReconcileRunning {
 		return nil, ErrReconcileRunRunning
+	}
+	if run.Status != model.ArtifactReconcileSucceeded {
+		return nil, ErrReconcileRunNotSucceeded
 	}
 	ch, err := s.channels.GetByID(run.ChannelID)
 	if err != nil {
