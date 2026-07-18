@@ -44,7 +44,13 @@ func createBotStressInstance(t *testing.T, db *gorm.DB) *model.Instance {
 
 func newBotStressSessionService(t *testing.T, db *gorm.DB) *BotStressSessionService {
 	t.Helper()
-	return NewBotStressSessionService(db, NewBotService(db, cpgrpc.NewClientPool()))
+	var node model.Node
+	require.NoError(t, db.First(&node).Error)
+
+	worker := &fakeStressCreateBotWorker{}
+	pool := cpgrpc.NewClientPool()
+	pool.SetWorkerClientForTest(node.UUID, worker)
+	return NewBotStressSessionService(db, NewBotService(db, pool))
 }
 
 func TestBotStressSession_CreatePersistsFields(t *testing.T) {
@@ -129,7 +135,7 @@ func TestBotStressSession_StartCreatesAssociatedBots(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, model.BotStressSessionRunning, view.Status)
 	assert.Equal(t, int64(2), view.Counts.Total)
-	assert.Equal(t, int64(2), view.Counts.ByStatus[string(model.BotStatusPending)])
+	assert.Equal(t, int64(2), view.Counts.ByStatus[string(model.BotStatusConnecting)])
 
 	var bots []model.Bot
 	require.NoError(t, db.Where("stress_session_id = ?", sess.ID).Order("id ASC").Find(&bots).Error)
@@ -147,6 +153,10 @@ type fakeStressCreateBotWorker struct {
 func (f *fakeStressCreateBotWorker) CreateBot(_ context.Context, req *workerpb.CreateBotRequest, _ ...grpc.CallOption) (*workerpb.CreateBotResponse, error) {
 	f.requests = append(f.requests, proto.Clone(req).(*workerpb.CreateBotRequest))
 	return &workerpb.CreateBotResponse{Success: true, Status: "connecting"}, nil
+}
+
+func (f *fakeStressCreateBotWorker) DeleteBot(_ context.Context, _ *workerpb.DeleteBotRequest, _ ...grpc.CallOption) (*workerpb.DeleteBotResponse, error) {
+	return &workerpb.DeleteBotResponse{Success: true}, nil
 }
 
 func (f *fakeStressCreateBotWorker) ListBots(_ context.Context, _ *workerpb.ListBotsRequest, _ ...grpc.CallOption) (*workerpb.ListBotsResponse, error) {
