@@ -496,10 +496,13 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | node_pm_configs (V2, FR-306) | node_id(UNIQUE), pm(varchar16 default npm: npm/pnpm/yarn), registries(text, JSON 数组 [{name,url,scope,token}])（节点包管理器配置单例：token 入库明文、API 出参与日志脱敏（掩码回传=不改），Worker 侧落托管 .npmrc + corepack enable） |
 | instance_config_versions (V2) | instance_id(FK), file_path, content, author, created_at |
 | file_versions (V2) | instance_id(FK), file_path, content_hash, content(base64,二进制安全), size, author_id, rollback_of_version_id, created_at；INDEX(instance_id,file_path)（FR-051 通用文件改前快照） |
-| assets | type(core/plugin/image/video/archive/blob/client-file/client-pack/client-core/client-updater-core), name, version, filename, sha256(寻址+去重键), md5, size, content_type, source_url, metadata(JSON), storage_state(hot/archived/external), storage_backend(local/s3), storage_channel_id(FK artifact_storage_channels，0=本地/无渠道；位置由记录自述，FR-347), ref_count, rel_path(相对数据根=跨后端存储键), created_at, last_used_at；UNIQUE(type,sha256) |
+| assets | type(core/plugin/image/video/archive/blob/client-file/client-pack/client-core/client-updater-core), name, version, filename, sha256(寻址+去重键), md5, size, content_type, source_url, metadata(JSON), storage_state(hot/archived/external/**lost**；lost=索引存在但外置对象缺失，FR-349), storage_backend(local/s3), storage_channel_id(FK artifact_storage_channels，0=本地/无渠道；位置由记录自述，FR-347), ref_count, rel_path(相对数据根=跨后端存储键), created_at, last_used_at；UNIQUE(type,sha256) |
 | artifact_storage_channels | name(UNIQUE), type(local/s3), endpoint, bucket, region, prefix, access_key_enc/secret_key_enc(AES-256-GCM 可逆加密，复用 FR-192 KeyEncryptor), use_ssl, presign_ttl_seconds(默认 600，[60,3600]), active(全表恰一条，写路径路由开关), builtin(内置「本机存储」不可删不可编辑), last_test_at/last_test_ok/last_test_message（FR-347，见 ADR-073；与备份域 backup_storages 独立） |
 | artifact_migrations (FR-348) | task_id(UNIQUE，1:1 关联 tasks), target_channel_id(INDEX), total, migrated, failed, skipped, created_at, updated_at（一次存量迁移任务的登记与实时四计数；计数不塞 Task.Result/Detail，保证失败与中断时仍可精确查询） |
 | artifact_migration_failures (FR-348) | task_id(INDEX), asset_id, sha256, filename, size, reason(TEXT), created_at（逐制品失败明细，按任务隔离保留；前端查询最多展示 500 条，总数看 artifact_migrations.failed） |
+| artifact_reconcile_runs (FR-349) | channel_id, channel_name(快照), status(running/succeeded/failed), triggered_by(manual/scheduled), started_at/finished_at, index_count/object_count/matched_count/missing_count/orphan_count, error_message, created_at（逐 S3 渠道对账运行记录） |
+| artifact_reconcile_diffs (FR-349) | run_id, channel_id, kind(missing/orphan), asset_id/sha256, object_key, size, last_modified, status(open/resolved), resolved_at, resolved_action(marked_lost/cleaned/stale), resolve_error, created_at（差异快照与显式处置状态） |
+| artifact_reconcile_settings (FR-349) | id=1, enabled(default true), interval_hours(default 24，[1,720]), next_run_at, updated_at（定期对账单行设置） |
 | logs (FR-049) | source(instance/control_plane/worker), level(debug/info/warn/error), instance_id, instance_uuid, node_id, stream(stdout/stderr), message, time；复合索引 (source,time)/(level,time)/(instance_id,time)/(node_id,time)，关键字检索走 message 列谓词 |
 | ban_records (V2) | uuid, player_name, reason, scope(network/instance/global), scope_id, operator_id(FK), active, created_at, unbanned_at（玩家封禁台账，FR-054；保留历史治理记录，解封置 active=false 保留历史） |
 | platform_settings (V2) | key(PK), value, updated_at（平台配置 DB 覆盖层，仅存被显式覆盖的白名单键；生效优先级 DB 覆盖 > 环境变量 > YAML 默认，FR-063/ADR-015）。network 类键 `proxy.url`（敏感脱敏）/`proxy.no_proxy` 为 CP 全局出站代理（FR-185/ADR-043），保存即重建 CP 出站持有者并作为各节点默认代理（优先级 settings DB > control-plane.yml > env） |
@@ -1127,17 +1130,23 @@ proxy:
 - `ref_count`>0（被模板/实例引用）的资产删除前拒绝。删除物理清理按记录后端路由：local 删 CAS 文件、s3 删渠道对象（均尽力而为）。
 
 ### 14.3a 外置对象存储渠道（FR-347，见 ADR-073）
-- **BlobStore 抽象**（`internal/controlplane/blobstore`）：`Kind/PutFile/Open/Stat/Delete/List/Presign` 统一 local（数据根 CAS，行为与主线逐字节等价）与 s3（纯标准库 SigV4 header 签名 + query 预签名、path-style、`UNSIGNED-PAYLOAD` 流式 PUT；签名对拍 AWS 官方向量）。**CP 侧独立实现，不 import `internal/worker/storage`**（进程边界，ADR-073 决策 3；第三个消费方出现时再抽 `internal/platform/objectstore`）。
+- **BlobStore 抽象**（`internal/controlplane/blobstore`）：`Kind/PutFile/Open/Stat/Delete/List/ListPage/Presign` 统一 local（数据根 CAS，行为与主线逐字节等价）与 s3（纯标准库 SigV4 header 签名 + query 预签名、path-style、`UNSIGNED-PAYLOAD` 流式 PUT）；`ListPage` 以不透明续传令牌分页全量遍历（s3=ListObjectsV2 continuation-token，local=排序后的末键游标），供大 bucket 对账。**CP 侧独立实现，不 import `internal/worker/storage`**（进程边界，ADR-073 决策 3）。
 - **渠道表 `artifact_storage_channels`**：内置「本机存储」行（Builtin+local）幂等 seed、不可删不可编辑、无活跃行时兜底活跃；单活跃渠道（事务先清后设）为写路径唯一路由开关；凭证 AES-256-GCM 可逆加密（复用 FR-192 KeyEncryptor，加密器未配置时创建/编辑 s3 渠道 422 快失败不落明文）；删除守卫=内置/活跃/被制品引用均拒，且存在非终态 `artifact_migrate` 任务时粗粒度禁止删除任何渠道。
-- **写路径**：仅 `client-file` 类型经活跃渠道路由（其余类型是 CP/Worker 运行链路本地依赖，恒 local）——活跃=local 走既有 CAS 落盘原文；活跃=s3 流式上传对象并记 `storage_backend=s3 + storage_channel_id + storage_state=external`；上传失败快失败不静默回落（ADR-073 决策 5）；去重命中不迁移不重传。
-- **读路径消费方分野**（ADR-073 决策 6）：玩家端点 `GET /client-artifacts/:sha256` 对 s3 制品回 **302 预签名短时效 URL**（TTL 渠道可配默认 600s + `Cache-Control: no-store`，CP 只当授权与调度面，字节走对象存储出口；渠道失效 503 可重试）；**管理面**下载/预览/发布期补丁物化经 CP BlobStore 代理直流（浏览器跨域跟随预签名 URL 撞对象存储 CORS，低频运维 CP 中继可接受）。部署约束：updater `HttpURLConnection` 不跨 http↔https 跟随 302，CP 与 S3 endpoint 须同协议；CP 与 S3 时钟偏移超 TTL 预签名 403（运维 NTP）。
-- 索引↔S3 对账与残留清点仍由 FR-349 后续收口。
+- **写路径与失效自愈**：仅 `client-file` 类型经活跃渠道路由；s3 上传成功后记录 `storage_backend=s3 + storage_channel_id + storage_state=external`，失败快失败不回落。普通去重命中不重传；若命中的是 `lost+s3` 资产，Ingest 把临时文件补传回**记录自述渠道**而非当前活跃渠道，成功后复位 `external`，补传失败则整个 Ingest 失败。
+- **读路径消费方分野**（ADR-073 决策 6）：玩家端点完整鉴权/安全策略通过后，健康 s3 制品回 **302 预签名短时效 URL**；`storage_state=lost` 则在后端分流前回 **410 ARTIFACT_LOST**，不跳转到必 404 的对象 URL。管理面下载/预览同样对 lost 回 410；健康 s3 制品仍由 CP BlobStore 代理直流。部署约束：updater `HttpURLConnection` 不跨 http↔https 跟随 302，CP 与 S3 endpoint 须同协议；CP 与 S3 时钟偏移超 TTL 时预签名会 403，运维需保持 NTP。
 
 ### 14.3b 制品存量迁移（FR-348）
 - **任务与单在途约束**：`ArtifactMigrationService` 在 CP 进程内执行，任务为 `kind=artifact_migrate/node_id=0`；发起临界区先检查不存在 `pending/running` 同类任务，再真连探测目标渠道，同步创建 Task 与 `artifact_migrations` 登记后启动最长 12h 的后台 goroutine。第二个并发发起返回 409；目标不存在返回 404，探测/凭证解析失败返回 422。
 - **固定迁移顺序**：每条 `client-file` 必须按「**读源并复核 size/sha256 → 写目标 → 先更新 Asset 的 `storage_backend/storage_channel_id/storage_state`（带旧位置乐观守卫）→ 再删除源对象/文件**」执行。更新记录前任一步失败都记入 `artifact_migration_failures`、不删源并继续下一条；记录已指向目标后删源失败只记警告，读取已安全切换，残留交 FR-349。源/目标 s3 物理 endpoint+bucket+prefix 相同时跳过删源，避免删除刚写入的同键对象。
 - **计数与终态**：`artifact_migrations` 持久维护 `total/migrated/failed/skipped`；任一制品失败则任务 `failed` 并可查逐条原因，否则 `succeeded`。仅迁移 `client-file`，发起时已在目标的记录计 `skipped`。
-- **取消、孤儿与续跑**：任务中心取消 `node_id=0` 任务时直接置 `canceled`，迁移循环在每条开始前检查任务状态并退出。CP 启动时 `RecoverOrphans` 将遗留的非终态迁移任务置 `failed`，恢复「DB 非终态即本进程真在跑」不变式。终态或中断后重新向同一目标发起的是新 task；已成功条因记录已自述目标位置自动跳过，因此天然幂等续跑。
+- **取消、孤儿与续跑**：任务中心取消 `node_id=0` 任务时直接置 `canceled`，迁移循环在每条开始前检查任务状态并退出。CP 启动时 `RecoverOrphans` 将遗留的非终态迁移任务置 `failed`。终态或中断后重新向同一目标发起的是新 task；已成功条因记录已自述目标位置自动跳过，因此天然幂等续跑。
+
+### 14.3c S3 索引一致性对账（FR-349）
+- **范围**：对账单位为一个 s3 渠道；只遍历 `var/artifacts/client-file/` 命名空间。索引集合为该渠道全部 s3 client-file 资产（含 lost），对象集合经 `ListPage` 全量分页取得；local 渠道与 probe/、其他类型目录不参与。
+- **差异**：非 lost 索引键在对象侧不存在 → missing；对象键在该渠道全部索引（含 lost）不存在 → orphan；一致项只计数。lost 不重复报告 missing，但其键持续排除 orphan，防止误删人工恢复对象。
+- **执行与调度**：`ArtifactReconcileService` 建 running 记录后异步执行，同渠道进程内在途去重；全局触发跳过在途渠道。`Start` 把 CP 重启遗留 running 置 failed，并以分钟 tick 检查单行设置；默认 enabled/24h，首个周期从启动或启用时刻起算，不在启动瞬间扫描。
+- **显式处置**：成功报告的 missing 经按钮标 `Asset.StorageState=lost`；orphan 经 DangerConfirm 后逐键删除。两条路径均在处置时重查当前索引：资产已删/迁走或孤儿键已被新上传引用时翻 `stale`，不误改、不误删；删除失败保持 open 并记录错误供重试。对账本身只读，不自动修复。
+- **可视化**：运行时资产页 client-file 表格通过 overview 的 `artifactChannels` 映射存储位置，展示正常/lost 状态；同页对账区提供设置、全局触发、运行历史和分页报告，不改存储渠道页。
 
 ### 14.4 API 与鉴权
 - `GET /assets`（按 type 筛选、分页）、`GET /assets/:id`、`POST /assets`（上传/登记）、`DELETE /assets/:id`。

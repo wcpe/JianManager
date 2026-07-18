@@ -1540,6 +1540,47 @@
 - **响应**: `[{ "id":1, "taskId":"uuid", "assetId":42, "sha256":"…", "filename":"modpack.jar", "size":1024, "reason":"写入目标失败", "createdAt":"RFC3339" }]`
 - **错误**: 500 `INTERNAL_ERROR`
 
+## 制品索引与 S3 对账（FR-349）
+
+> 全部端点限平台管理员。对账单位为一个 S3 渠道；local 渠道不参与。运行异步执行并持久化缺失（索引有、对象无）与孤儿（对象有、索引无）报告；修改索引或删除对象只在显式处置端点发生。
+
+### GET /api/v1/artifact-reconcile/settings
+- **描述**: 读取定期对账设置。缺失时初始化为启用、24 小时周期；`nextRunAt` 为空表示尚未排期或已禁用
+- **响应**: `{ "enabled": true, "intervalHours": 24, "nextRunAt": "datetime" }`
+
+### PUT /api/v1/artifact-reconcile/settings
+- **请求**: `{ "enabled": true, "intervalHours": 24 }`，周期范围 `[1,720]`；启用时从当前时间重算下次执行，禁用时清空 `nextRunAt`
+- **响应**: 同 GET；写审计 `artifact_reconcile.settings_update`
+- **错误**: 400 `INVALID_REQUEST`；422 `BUSINESS_ERROR`
+
+### POST /api/v1/artifact-reconcile/runs
+- **请求**: `{ "channelId": 2 }` 触发单渠道；缺省或 0 触发全部 S3 渠道
+- **响应** (202): `{ "started": [Run], "skipped": [{ "channelId": 2, "channelName": "rustfs", "reason": "该渠道对账正在进行中" }] }`
+- **语义**: 单渠道在途返回 409；全局触发跳过在途渠道。无 S3 渠道或指定 local 渠道返回 422。写审计 `artifact_reconcile.trigger`
+
+### GET /api/v1/artifact-reconcile/runs
+- **查询参数**: `channelId` 可选；`limit` 默认 20、上限 100
+- **响应**: `Run[]`，按 ID 倒序。`Run.status` 为 `running|succeeded|failed`，包含索引/对象/一致/缺失/孤儿计数与失败原因
+
+### GET /api/v1/artifact-reconcile/runs/:id
+- **响应**: 单条 `Run`
+- **错误**: 404 `NOT_FOUND`
+
+### GET /api/v1/artifact-reconcile/runs/:id/diffs
+- **查询参数**: `kind=missing|orphan`；`page` 默认 1；`pageSize` 默认 50、上限 200
+- **响应**: `{ "items": [Diff], "total": 1, "page": 1, "pageSize": 50 }`。处置态为 `open|resolved`，处置动作 `marked_lost|cleaned|stale`
+- **错误**: 400 `INVALID_REQUEST`；404 `NOT_FOUND`
+
+### POST /api/v1/artifact-reconcile/runs/:id/resolve-missing
+- **描述**: 将成功报告内仍有效的 open missing 资产标为 `storageState=lost`；已删除或迁走的差异翻 `stale`
+- **响应**: `{ "marked": 1, "stale": 0 }`；写审计 `artifact_reconcile.mark_lost`
+- **错误**: 404；409（运行中）；422（运行失败、无完整报告）
+
+### POST /api/v1/artifact-reconcile/runs/:id/cleanup-orphans
+- **描述**: 删除成功报告内仍未被索引引用的 open orphan 对象；处置前再次检查同渠道同键索引，命中则翻 `stale` 不删除；删除失败保持 open 可重试
+- **响应**: `{ "cleaned": 1, "stale": 0, "failed": 0 }`；写审计 `artifact_reconcile.cleanup_orphans`
+- **错误**: 404；409（运行中）；422（运行失败、无完整报告）
+
 ---
 
 ## 告警
@@ -1750,8 +1791,8 @@
 > 权限：平台管理员。删除受引用项仍走各自端点（JDK：`DELETE /nodes/:id/jdks/:jid`；制品：`DELETE /assets/:id`），本组端点只展示引用。
 
 ### GET /api/v1/runtime-assets/overview
-- **描述**: 跨节点 JDK 矩阵（每项含引用实例清单）+ 制品按类型分组（每组含占用/去重/冷热统计）+ 两区汇总；FR-301 加性扩展 `runtimes` / `runtimeSyncs` / `syncedAt`（老字段不变，老前端不受影响）
-- **关联 FR**: FR-082（聚合 FR-033 JDK 绑定语义 + FR-045 制品库元数据）/ FR-301（多运行时矩阵 + 同步时间）
+- **描述**: 跨节点 JDK 矩阵（每项含引用实例清单）+ 制品按类型分组（每组含占用/去重/冷热统计）+ 两区汇总；FR-301 加性扩展 `runtimes` / `runtimeSyncs` / `syncedAt`；FR-349 加性扩展 `artifactChannels:[{id,name,type}]`、组/汇总 `lostCount`，资产行包含 `storageChannelId` 与 `storageState=lost`
+- **关联 FR**: FR-082（聚合 FR-033 JDK 绑定语义 + FR-045 制品库元数据）/ FR-301（多运行时矩阵 + 同步时间）/ FR-349（存储位置与失效状态可视化）
 - **引用解析**:
   - JDK 引用由实例绑定真实推导：`instances.jdk_id`（直接绑定，`binding=direct`）或 `instances.java_major_version`（按 Java 大版本绑定，解析到同节点同大版本中 id 最大者，`binding=major`）；跨节点不串台
   - 制品当前不持久化「实例↔制品」连接（FR-045 消费侧 `ref_count` 为占位，见 ADR-011），故制品区给「按类型」占用/去重/冷热 + 既有 `refCount`，不臆造实例连接
@@ -2638,14 +2679,14 @@
 - **查询参数**: `sha256`（必，制品自身 sha256 = `files[].artifact.sha256`）
 - **响应** (200): `{ "kind": "text"|"binary"|"too-large", "content": "…", "size": 45678, "codec": "none" }`
   - `kind=text`：`content` 为 UTF-8 文本；`kind=binary`（含 NUL 或已压缩制品，本期发布恒 `codec=none`，`zstd` 等不在管理面解压）/`kind=too-large`（超 1 MiB 不读全量）：仅 `size`/`codec`，无 `content`，前端降级为「仅下载」
-- **错误**: 400 `INVALID_REQUEST`（缺 sha256）| 403 `FORBIDDEN`（非平台管理员）| 404 `ARTIFACT_NOT_FOUND`
+- **错误**: 400 `INVALID_REQUEST`（缺 sha256）| 403 `FORBIDDEN`（非平台管理员）| 404 `ARTIFACT_NOT_FOUND` | 410 `ARTIFACT_LOST`（外置对象已确认缺失，重传同内容可自愈）
 
 ### GET /api/v1/client-channels/:id/files/download
 - **描述**: 按制品 `sha256` 下载 client-file 制品（**管理台**，FR-214）。与上同理：浏览器需一个 JWT 下载入口（含预览降级态的下载兜底），与玩家拉取密钥制品端点隔离。s3 制品 **CP 经 BlobStore 代理直流、不走 302**（浏览器 axios blob fetch 跨域跟随预签名 URL 会撞对象存储 CORS；管理面低频运维动作，CP 中继代价可接受，FR-347/ADR-073 决策 6）
 - **关联 FR**: FR-214, FR-347 | **鉴权**: **JWT，平台管理员**（运营操作）
 - **查询参数**: `sha256`（必）
 - **响应** (200): 制品二进制（`Content-Disposition: attachment`）。local 支持 `Range`（`http.ServeContent`）；s3 代理直流带 `Content-Length`
-- **错误**: 400 `INVALID_REQUEST`（缺 sha256）| 403 `FORBIDDEN` | 404 `ARTIFACT_NOT_FOUND`
+- **错误**: 400 `INVALID_REQUEST`（缺 sha256）| 403 `FORBIDDEN` | 404 `ARTIFACT_NOT_FOUND` | 410 `ARTIFACT_LOST`（外置对象已确认缺失，重传同内容可自愈）
 
 ### POST /api/v1/client-channels/:id/rollback
 - **描述**: 运营回滚——取历史版本 `sourceVersion` 的内容，**以更高版本号重发为新 latest**（保持 `version` 单调，客户端按防降级正常前进、不被拒，ADR-022 §3 / contract §3）。不下发更低版本号
@@ -2898,11 +2939,11 @@
 
 ### GET /api/v1/client-artifacts/:sha256
 - **描述**: 按内容寻址下载客户端制品（zstd 压缩流或原文，按 codec）。制品跨频道共享，路径无频道段。鉴权/防护/限流/带宽检查全部通过后按 `Asset.StorageBackend` 分流（FR-347，见 ADR-073）：local → CP `ServeContent` 直出（如旧）；s3 → **302** 跳转对象存储预签名短时效 URL，字节流量不经 CP
-- **关联 FR**: FR-087, FR-347
+- **关联 FR**: FR-087, FR-347, FR-349
 - **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必，任一有效密钥即授权）；`X-Machine-Id`（可）。**无 JWT**
 - **响应** (200/206，local): 二进制制品；支持 `Range`（断点续传，206 部分内容）；强缓存（内容寻址不可变，`Cache-Control: public, max-age=31536000, immutable` + `ETag` 为内容 sha256）
 - **响应** (302，s3): `Location=` SigV4 query 预签名 GET URL（TTL 取渠道 `presignTtlSeconds`，默认 600s）+ `Cache-Control: no-store`（短时效 URL 禁缓存）。updater 已 `followRedirects(true)` 自动跟随；**http↔https 跨协议不自动跟随**——部署要求 CP 与 S3 endpoint 同协议（ADR-073 决策 6）
-- **错误**: 401 `INVALID_CLIENT_KEY` | 404 `ARTIFACT_NOT_FOUND` | 416（Range 越界，由 `http.ServeContent` 处理）| 503 `ARTIFACT_STORAGE_UNAVAILABLE`（s3 渠道失效/凭证解密失败，可重试语义）
+- **错误**: 401 `INVALID_CLIENT_KEY` | 403 `ARTIFACT_NOT_ALLOWED` | 404 `ARTIFACT_NOT_FOUND` | **410 `ARTIFACT_LOST`**（完整鉴权后发现外置对象已确认缺失，明确终态；重传同内容可自愈）| 416（Range 越界，由 `http.ServeContent` 处理）| 503 `ARTIFACT_STORAGE_UNAVAILABLE`（s3 渠道失效/凭证解密失败，可重试语义）
 
 ### GET /api/v1/client-channels/:id/updater-core
 - **描述**: 返回频道当前选定 updater-core 分发信息（FR-259，见 [ADR-054](../adr/054-updater-arch-simplification.md)）。楔子首次启动 / 后续启动只按 `version` 是否大于本地 `selectedVersion` 决定是否下载；这里的 `version` 是频道级递增分发版本，不等同于归档列表里的 jar 版本。切回旧 `sha256` 回滚时，后端仍会抬高分发版本，确保冻结 wedge 会下载目标旧 jar。返回格式冻结（spec §2.5.3），后续 CP 升级只能加字段不能删/改已有字段
