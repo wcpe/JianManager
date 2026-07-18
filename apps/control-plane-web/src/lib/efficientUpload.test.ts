@@ -99,6 +99,34 @@ describe('uploadFilesEfficient', () => {
     expect(out.size).toBe(2)
   })
 
+  it('HTTP 非安全上下文无 WebCrypto：小文件用 JS hash 兜底，仍走预查与聚合', async () => {
+    const originalCrypto = globalThis.crypto
+    vi.stubGlobal('crypto', {})
+    mockPrecheck.mockImplementation(async (_ch, files) => allMiss(files))
+    mockBatch.mockImplementation(async (_ch, entries) =>
+      entries.map((e) => mkResult(e.sha256, e.size)),
+    )
+
+    try {
+      const out = await uploadFilesEfficient(
+        'ch-1',
+        [
+          { key: 'a', file: smallFile('a.txt', 'aaa'), label: 'a.txt' },
+          { key: 'b', file: smallFile('b.txt', 'bb'), label: 'b.txt' },
+        ],
+        {},
+      )
+
+      expect(mockPrecheck).toHaveBeenCalledTimes(1)
+      expect(mockPrecheck.mock.calls[0][1].every((entry) => /^[0-9a-f]{64}$/.test(entry.sha256))).toBe(true)
+      expect(mockBatch).toHaveBeenCalledTimes(1)
+      expect(mockChunked).not.toHaveBeenCalled()
+      expect(out.size).toBe(2)
+    } finally {
+      vi.stubGlobal('crypto', originalCrypto)
+    }
+  })
+
   it('大文件（>8MiB）走分块并携带 expectedSha256；不入聚合', async () => {
     mockPrecheck.mockImplementation(async (_ch, files) => allMiss(files))
     mockChunked.mockImplementation(async (_ch, file, opts) =>

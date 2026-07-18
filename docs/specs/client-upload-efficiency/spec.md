@@ -150,7 +150,7 @@ FR-250/251 后发布链路为「本地暂存 → 点发布才批量上传」，�
 流水线（`uploadFilesEfficient(channelId, entries, {signal, onProgress})` → `Map<key, ClientFileResult>`）：
 
 1. 输入 = FR-250 本地去重后的 unique 草稿（`name+size` 第一层近似去重保留）。
-2. **hash 阶段**：逐个**串行**读取 ≤ 256 MiB 的文件算 SHA-256（内存峰值 ≤ 单文件；> 256 MiB 跳过）。
+2. **hash 阶段**：安全上下文（HTTPS/localhost）下逐个**串行**读取 ≤ 256 MiB 的文件算 SHA-256（内存峰值 ≤ 单文件；> 256 MiB 跳过）；普通 HTTP 非安全上下文无 WebCrypto 时，≤ 8 MiB 聚合小文件用无依赖纯 JS SHA-256 兜底，> 8 MiB 文件跳过 hash 直接分块，兼顾请求聚合与主线程开销。
 3. **预查阶段**：hash 按 ≤ 500/批请求 precheck；**预查请求失败不阻断发布**（降级视全部 miss，
    继续正常上传——预查是纯优化，出错由后续真上传兜底暴露）。
 4. **装箱**：miss 且 ≤ 8 MiB → 贪心装箱进聚合批（≤200 个且 ≤32 MiB/批）；miss 且 > 8 MiB
@@ -210,7 +210,7 @@ Go（`client_upload_efficiency_test.go`，service 级，沿 FR-251 范式）：
 - `clientUploadPlan.test.ts`：hash 正确性（已知向量）、按大小分路（聚合/分块/免预查）、贪心装箱
   （数量与字节上限）、并发池上限、进度聚合单调不倒退不 NaN。
 - `efficientUpload.test.ts`（mock `@/api/client`）：预查命中跳过上传、miss 小文件进聚合、
-  大文件走分块、预查失败降级全量上传、fail-fast。
+  大文件走分块、预查失败降级全量上传、HTTP 非安全上下文无 WebCrypto 时小文件用 JS hash 兜底聚合、fail-fast。
 - `ClientPublishPage.dom.test.tsx`：请求计数器与失败注入随新协议演进（行为契约不变：
   选文件零请求、点发布才上传、失败保草稿）。
 
@@ -228,8 +228,7 @@ Go（`client_upload_efficiency_test.go`，service 级，沿 FR-251 范式）：
 
 ## 9. 风险 / 待定
 
-- **WebCrypto 无流式**：hash 阶段整读文件进内存，以 `HASH_MAX_FILE_BYTES=256MiB` + 串行护栏；
-  超限文件放弃预查（首发多传一次，不影响正确性）。不为边缘 case 引第三方流式 hash 库。
+- **WebCrypto 可用性与无流式**：仅安全上下文（HTTPS/localhost）提供 `crypto.subtle`；普通 HTTP 面板对 ≤ 8 MiB 小文件使用内置纯 JS SHA-256，保留预查/聚合，较大文件直接分块。WebCrypto 可用时 hash 阶段整读文件进内存，以 `HASH_MAX_FILE_BYTES=256MiB` + 串行护栏；超限文件放弃预查（首发多传一次，不影响正确性）。不引第三方流式 hash 库。
 - **聚合批部分成功**：fail-fast 后前序文件留在 CAS（无引用、内容寻址无害）；重试整批秒传通过。
   不做逐文件 partial-result 协议（YAGNI）。
 - **预查降级**：预查请求失败静默降级为全量上传，不阻断发布（优化失效 ≠ 功能失效）。

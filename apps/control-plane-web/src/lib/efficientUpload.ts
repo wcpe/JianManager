@@ -84,7 +84,11 @@ export async function uploadFilesEfficient(
   if (signal?.aborted) throw abortError()
 
   const totalBytes = entries.reduce((s, e) => s + e.file.size, 0)
-  const toHash = entries.filter((e) => shouldHash(e.file.size))
+  // 普通 HTTP 无 WebCrypto 时仅给聚合小文件走纯 JS hash；大文件跳过预查，避免主线程长时间计算。
+  const hasNativeHash = typeof crypto !== 'undefined' && crypto.subtle !== undefined
+  const toHash = entries.filter(
+    (e) => shouldHash(e.file.size) && (hasNativeHash || uploadRouteFor(e.file.size) === 'aggregate'),
+  )
 
   // ── 进度状态（经 emit 汇总为快照）──────────────────────────────────────
   let phase: EfficientUploadProgress['phase'] = 'hashing'
