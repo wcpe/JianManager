@@ -10,11 +10,12 @@ import (
 
 // RateLimiter 令牌桶限流器。
 type RateLimiter struct {
-	mu       sync.Mutex
-	buckets  map[string]*bucket
-	rate     int           // 每秒允许的请求数
-	capacity int           // 桶容量
-	cleanup  time.Duration // 清理间隔
+	mu          sync.Mutex
+	buckets     map[string]*bucket
+	rate        int           // 每秒允许的请求数
+	capacity    int           // 桶容量
+	cleanup     time.Duration // 清理间隔
+	lastCleanup time.Time
 }
 
 type bucket struct {
@@ -26,15 +27,13 @@ type bucket struct {
 
 // NewRateLimiter 创建限流器。
 func NewRateLimiter(ratePerSecond, capacity int) *RateLimiter {
-	rl := &RateLimiter{
-		buckets:  make(map[string]*bucket),
-		rate:     ratePerSecond,
-		capacity: capacity,
-		cleanup:  5 * time.Minute,
+	return &RateLimiter{
+		buckets:     make(map[string]*bucket),
+		rate:        ratePerSecond,
+		capacity:    capacity,
+		cleanup:     5 * time.Minute,
+		lastCleanup: time.Now(),
 	}
-
-	go rl.cleanupLoop()
-	return rl
 }
 
 // Allow 检查指定 key 是否允许请求。
@@ -43,6 +42,15 @@ func (rl *RateLimiter) Allow(key string) bool {
 	defer rl.mu.Unlock()
 
 	now := time.Now()
+	if now.Sub(rl.lastCleanup) >= rl.cleanup {
+		for bucketKey, b := range rl.buckets {
+			if now.Sub(b.lastTime) > rl.cleanup {
+				delete(rl.buckets, bucketKey)
+			}
+		}
+		rl.lastCleanup = now
+	}
+
 	b, exists := rl.buckets[key]
 	if !exists {
 		b = &bucket{
@@ -67,22 +75,6 @@ func (rl *RateLimiter) Allow(key string) bool {
 		return true
 	}
 	return false
-}
-
-func (rl *RateLimiter) cleanupLoop() {
-	ticker := time.NewTicker(rl.cleanup)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		rl.mu.Lock()
-		now := time.Now()
-		for key, b := range rl.buckets {
-			if now.Sub(b.lastTime) > rl.cleanup {
-				delete(rl.buckets, key)
-			}
-		}
-		rl.mu.Unlock()
-	}
 }
 
 // RateLimit 限流中间件。

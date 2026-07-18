@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -41,4 +42,22 @@ func TestRateLimiter_TokenRefill(t *testing.T) {
 	assert.False(t, rl.Allow("test"))
 
 	// 令牌会随时间补充（但由于测试速度极快，这里只验证逻辑正确性）
+}
+
+func TestRateLimiter_AllowCleansStaleBuckets(t *testing.T) {
+	rl := NewRateLimiter(1, 1)
+	rl.cleanup = time.Millisecond
+	assert.True(t, rl.Allow("stale"))
+
+	rl.mu.Lock()
+	rl.lastCleanup = time.Now().Add(-time.Second)
+	rl.buckets["stale"].lastTime = time.Now().Add(-time.Second)
+	rl.mu.Unlock()
+
+	assert.True(t, rl.Allow("fresh"))
+
+	rl.mu.Lock()
+	_, exists := rl.buckets["stale"]
+	rl.mu.Unlock()
+	assert.False(t, exists, "下一次请求应惰性清理过期桶")
 }
