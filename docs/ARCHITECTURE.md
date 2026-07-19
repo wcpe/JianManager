@@ -1066,15 +1066,18 @@ proxy:
 **生产**: 多节点部署，Control Plane 一个 + Worker Node 多个
 **Docker**: `Dockerfile.control-plane` + `Dockerfile.worker` + `docker-compose.yml`
 
-### 12.1 构建与发布管线（GitHub Actions，FR-173，见 ADR-036）
+### 12.1 构建与发布管线（GitHub Actions，FR-173，见 ADR-036 / ADR-074）
 
-`.github/workflows/release.yml` 在 `ubuntu-latest` 全程交叉编译产出 GitHub Releases 制品，三 job 串联：
+`.github/workflows/release.yml` 固定使用 Go 1.26.2、Node.js 22 与 JDK21，当前 job 链路为 `metadata → prepare-embeds → test → build → smoke → release`：
 
-- **prepare-embeds**（一次性产出全部 `go:embed` 资产，平台无关跨 matrix 复用）：`submodules: recursive` 拉取 `third_party/ServerProbe`，装 Go / Node20 / JDK21；构前端（`gen-licenses` → `vite build` → 复制到 `internal/controlplane/embed/dist/`）+ 内嵌探针 jar 与离线依赖缓存（`embed-probe` 生成 `ServerProbe.jar`、`probe-libraries.zip`、`probe.json`）+ 客户端更新器两件套（`embed-client-updater`，以 `--release 8` 在 JDK21 上构 Java8 字节码）+ CFR 反编译器（`embed-cfr`，sha256 pin 与 `decompiler/cfr.go` 常量一致）；embed 目录作 job artifact 上传。该 job 顺带解析触发类型算出注入版本经 job output 下传（正式=去前缀 tag `vX.Y.Z`，预发布=`0.0.0-dev+<shortsha>`）。
-- **build**（matrix `linux/amd64` + `windows/amd64`）：下载 embed artifact 还原到 `internal/**/embed/`，`GOOS/GOARCH go build -ldflags "-X .../internal/version.Version=<v>"` 编 control-plane 与 worker（共 4 个二进制），命名 `<component>-<os>-<arch>[.exe]`（ADR-036 §1）。
-- **release**：汇总 4 二进制 + 生成 `checksums.txt`（每件 sha256，ADR-036 §2），用 `scripts/changelog-extract.mjs` 取发布说明——push tag `v*` → 正式 release（取该版本段，`prerelease=false`）；push `master` → 覆盖固定 tag `latest` 预发布（FR-182 由 `nightly` 改名，取 `[Unreleased]` 段，`prerelease=true`，先删旧 release 再重建以仅保留本次产物）。
+- **metadata**：完整 checkout Git 历史后执行 `scripts/release-metadata.mjs`，读取 `internal/version/version.go` 并联合校验 Git ref、SHA 与精确 tag；统一输出 `version`、`release_tag`、`is_release`、`publish_release`，后续 job 不再各自推导版本。当前源码保持 `0.18.0-dev`。正式 tag `vX.Y.Z` 要求源码同提交为裸 `X.Y.Z`，Git tag / Release 保留 `v`，二进制与内嵌资产注入裸 `X.Y.Z`；开发构建从源码 `X.Y.Z-dev` 派生为 `X.Y.Z-dev+g<7位sha>`。普通分支位于已打 tag 的裸版本提交时只验证、不重复发布 `latest`。
+- **prepare-embeds**：一次性构建平台无关资产并作为 artifact 复用。除前端、探针及离线依赖缓存、客户端更新器与 CFR 外，发布链路还对 `apps/bot-worker` 执行 `npm ci`、生产依赖审计、类型检查、lint、build，再以 metadata 版本打确定性归档内嵌 CP。发布版 CP 因而自带前端 + Bot Worker + 探针 + 客户端更新器；Worker 自带 CFR。Bot 构建使用 Node.js 22，节点执行时仍要求 Node.js `>=22.13.0`（ADR-072）。任一必需 embed 缺失即 fail-fast。
+- **test**：还原同一批 embed 资产后运行 `go build ./...`、`go vet ./...`、`go test ./...`，以及前端 lint、vitest、生产构建和 Playwright E2E；门禁失败则不进入制品构建。
+- **build**：matrix 交叉编译 `linux/amd64` 与 `windows/amd64` 的 Control Plane / Worker 共 4 个最终二进制；构建 CP 前还注入同版本的两平台 Worker 与 manifest。全部二进制、Bot 归档和 Worker manifest 只消费 metadata 的同一 `version`。
+- **smoke**：四项矩阵逐一验证最终产物——两个 Linux 二进制在 `ubuntu-latest` 原生执行，两个 Windows `.exe` 在 `windows-latest` 原生执行；`--version` 必须退出码 0、stdout 严格等于 metadata 版本且 stderr 为空。`release` 直接依赖全部 smoke 成功。
+- **release**：汇总 4 个二进制并生成 `checksums.txt`（ADR-036 命名 / sha256 契约），按 CHANGELOG 提取说明；push tag `vX.Y.Z` 创建正式 Release，push `master` 删旧重建固定 `latest` 预发布。`publish_release=false` 时跳过发布。
 
-发布二进制**内嵌全部可选资产**「下载即用」：CP 自带前端 + 探针 + 客户端更新器，Worker 自带 CFR（ADR-036 §5）。`go:embed` 对缺失/空目录会编译失败，故 prepare-embeds 任一内嵌步骤失败即 fail-fast。版本注入在 build/release 两 job 按 prepare-embeds 同一 output 取值，保证二进制内 `version.Version` 与 release tag 一致。发布制品的命名/校验/渠道契约由 ADR-036 固化，供 FR-175 自更新对接 GitHub Releases 消费（ADR-020 §4 的 feed 来源立场由 FR-175 落地时标 superseded）。
+ADR-074 追加修订 ADR-036 的版本来源、Bot Worker 内嵌资产与发布前 smoke，不重写其历史；ADR-036 的产物命名、校验和 stable/prerelease 渠道契约继续生效。当前实现尚未按用户选择推送远端，GitHub-hosted runner、artifact 传递、权限与实际 Release 创建仍为 **Actions 待验**。
 
 ### 12.2 SSH 推送式远程部署（FR-277，见 ADR-063）
 

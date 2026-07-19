@@ -1,101 +1,177 @@
 # 功能规格：CI/CD 发布管线（GitHub Actions）
 
-> 状态：草拟　·　关联 PRD：FR-173　·　关联 ADR：ADR-036（本 FR 创建）　·　分支：feature/fr-173-release-pipeline
+> 状态：工作区已实现，远端 Actions 待验　·　关联 PRD：FR-173　·　关联 ADR：[ADR-036](../../adr/036-release-pipeline-github.md)、[ADR-074](../../adr/074-release-version-provenance-and-smoke.md)
 
-## 1. 背景与目标
+## 1. 目标与当前边界
 
-仓库当前**无任何 CI**（无 `.github/`），发版靠手工 `make build`（且只产 Windows `.exe`）。面板/节点自更新（FR-081 已交付）消费 release 产物，但**没有任何东西产出 release 与产物**。本 FR 补齐 GitHub Actions 发布管线：普通 push 出滚动预发布、打 tag 出正式发布，交叉编译并打包上传产物到 GitHub Releases，为 FR-175（自更新对接 GitHub）提供可消费的制品与命名契约。P1。
+发布管线为 Control Plane 与 Worker 产出可被 GitHub Releases 和自更新链路消费的固定命名制品，并在发布前统一完成版本溯源、内嵌资产构建、质量门禁、交叉编译与目标系统原生烟测。
 
-## 2. 需求（要什么）
+当前工作区已经实现：
 
-- **触发**：
-  - push 到 `master` → **滚动预发布**：取 `CHANGELOG.md` 的 `[Unreleased]` 段为发布说明，发布/**覆盖**固定 tag `nightly` 的预发布（`prerelease=true`，旧资产替换为本次构建）。
-  - push tag `v*`（如 `v0.11.0`）→ **正式发布**：取 `CHANGELOG.md` 中该版本段（`## 0.11.0（…）`）为发布说明，建正式 release（`prerelease=false`）。
-- **交叉编译**：Control Plane + Worker，目标 `linux/amd64` 与 `windows/amd64`（共 4 个二进制），含前端嵌入（`gen-licenses` → `build-web` → `embed-web` → `go:embed`）。
-- **产物**：4 个二进制 + `checksums.txt`（每件 sha256）上传到对应 release。命名遵循 ADR-036 契约。
-- **版本注入**：`go build -ldflags "-X github.com/wcpe/JianManager/internal/version.Version=<v>"`；正式=tag 版本（去 `refs/tags/`），预发布=`0.0.0-dev+<shortsha>`。下载的二进制 `GetVersion`/启动日志报告正确版本。
-- **内嵌全部可选资产（用户已定）**：发布的二进制内嵌探针 jar（`embed-probe`）+ CFR 反编译器（`embed-cfr`）+ 客户端更新器两件套（`embed-client-updater`），使下载即用——发布版 CP 自带探针（建服即部署 / 可推探针更新 FR-010/068）与客户端更新器（FR-107），发布版 Worker 自带 CFR（离线反编译 FR-075）。
-- 范围内：workflow（含上述内嵌）+ CHANGELOG 段落提取脚本（含单测）+ 产物命名契约（ADR-036）+ version.go 默认值对齐（消除现 `0.9.1` vs CHANGELOG `0.10.0` 漂移，真值仍由 ldflags 注入）。
-- 不做（范围外）：
-  - 自更新对接 GitHub 的**代码**（FR-175，批 2）——本 FR 只产出 release 与命名契约。
-  - `linux/arm64`、`darwin/*`（用户只要 linux/amd64 + windows/amd64）。
-  - 二进制签名（sha256 完整性校验即本线范围；Ed25519 签名是客户端 OTA FR-087 范畴，两线隔离）。
-  - bot-worker（Node）打包分发——自更新只覆盖 CP/Worker 二进制（FR-081 组件即 control-plane/worker），bot-worker 分发另议。
-  - Docker 镜像发布（已有 `make docker`，不在本 FR）。
+- 独立 `metadata` job 和 [`scripts/release-metadata.mjs`](../../../scripts/release-metadata.mjs)；
+- Bot Worker 质量门禁、生产构建与 CP 内嵌归档；
+- Go 1.26.2、Node.js 22、JDK21 发布工具链；
+- Control Plane / Worker × Linux / Windows 共四个二进制；
+- Linux 与 Windows 原生 runner 上逐产物执行 `--version` 的 smoke；
+- `checksums.txt`、CHANGELOG 发布说明与正式/滚动 Release 发布。
 
-## 3. 设计（怎么做）
+本次用户选择暂不 push，因此 GitHub-hosted runner、artifact 传递、权限和实际 Release 创建仍为**远端 Actions 待验**，不得标记为已远端通过。
 
-### 3.1 ADR-036（本 FR 创建，FR-175 共享）
+## 2. 发布契约
 
-确立「**发布管线 + 自更新对接 GitHub Releases**」的产物命名 / 校验 / 渠道契约（决策正文写 ADR，勿在 spec 重复）。要点：
-- 产物命名：`control-plane-<os>-<arch>[.exe]`、`worker-<os>-<arch>[.exe]`（`<os>`=`runtime.GOOS`、`<arch>`=`runtime.GOARCH`；windows 带 `.exe`）。
-- 校验：`checksums.txt`，每行 `<sha256(小写)>␠␠<filename>`，覆盖全部二进制。
-- 渠道：正式 release tag `vX.Y.Z`（`prerelease=false`）；滚动预发布固定 tag `nightly`（`prerelease=true`，每次 push 替换资产）。
-- 本 ADR 取代 ADR-020 §4「可配 feed 源」的**来源立场**——但 FR-173 仅**确立产物契约**；将 ADR-020 §4 标 `superseded-by ADR-036` 的动作由 FR-175（真正改自更新来源）落地，避免本 FR 未改自更新代码就翻旧决策。本 ADR 在 FR-173 内先立「产物/渠道契约」，FR-175 落地时补「自更新读 GitHub API」的来源决策。
+### 2.1 触发与渠道
 
-### 3.2 workflow `.github/workflows/release.yml`
+- push 到 `master`：覆盖固定 tag `latest` 的滚动预发布，`prerelease=true`，发布说明取 `CHANGELOG.md` 的 `[Unreleased]` 段。
+- push tag `vX.Y.Z`：创建正式 Release，`prerelease=false`，发布说明取 CHANGELOG 对应 `X.Y.Z` 版本段。
+- 普通分支源码若已是裸 `X.Y.Z` 且当前提交存在精确 tag `vX.Y.Z`，只执行构建验证，不重复覆盖 `latest`。
 
-全程在 `ubuntu-latest` 交叉编译；`on: push: { branches: [master], tags: ['v*'] }`；`permissions: { contents: write }`；对 `nightly` 加 `concurrency` 组防并发覆盖打架。**内嵌资产平台无关**（探针/客户端更新器 jar 内嵌 CP、CFR 内嵌 Worker），故只构建一次、跨 matrix 复用——拆 `prepare-embeds` → `build`(matrix) → `release` 三 job：
+### 2.2 产物
 
-- job `prepare-embeds`（构建/获取全部 go:embed 资产，一次性）：
-  1. `actions/checkout`（`submodules: recursive`——`embed-probe` 需 `third_party/ServerProbe` 子模块）。
-  2. 工具链：`actions/setup-go`（1.22+）、`actions/setup-node`（20）、`actions/setup-java`（**JDK21**，`embed-probe` 用）；`embed-client-updater` 需 **Java8**——优先靠 Gradle toolchain 自动解析 Java8（`client-updater` 已声明 toolchain），必要时 setup-java 多版本。
-  3. 前端：`npm ci` 于 `web/`+`bot-worker/` → `node scripts/gen-licenses.mjs` → `cd web && npm run build` → 复制 `web/dist/*` 到 `internal/controlplane/embed/dist/`（等价 `make embed-web`，用 sh）。
-  4. 内嵌资产（等价 Makefile 三 target，用 sh 直跑命令）：
-     - `make embed-probe`：`third_party/ServerProbe` gradlew 构探针 jar → `internal/controlplane/embed/probe/ServerProbe.jar`。
-     - `make embed-cfr`：curl CFR jar + `sha256sum -c` pin 校验 → `internal/worker/embed/cfr/cfr.jar`。
-     - `make embed-client-updater`：`client-updater` gradlew 构 wedge+updater-core → `internal/controlplane/embed/client-updater/{wedge,updater-core}.jar`。
-  5. 上传 `internal/controlplane/embed/`（dist+probe+client-updater）与 `internal/worker/embed/cfr/` 为 job artifact，供 build matrix 下载。
-- job `build`（needs prepare-embeds；matrix `{os: linux, arch: amd64}` / `{os: windows, arch: amd64}`）：
-  1. `actions/checkout`（`submodules: false`，本 job 不需子模块源，只需下载的 embed 产物）+ `setup-go`。
-  2. 下载 prepare-embeds 的 embed artifact 还原到对应 `internal/**/embed/` 目录（go:embed 在 `go build` 时拉入）。
-  3. `GOOS=<os> GOARCH=<arch> go build -ldflags "-X github.com/wcpe/JianManager/internal/version.Version=<v>" -o dist/<component>-<os>-<arch>[.exe] ./cmd/<component>`（CP 与 Worker 各一）。
-  4. 上传 4 二进制为 job artifact 供 release job 汇总。
-  - 注：`go:embed` 指令对**缺失目录**会编译失败；prepare-embeds 必须确保所有 embed 目录非空（探针/CFR/client-updater 内嵌均已选定，不存在「优雅缺省」分支）。
-- job `release`（needs build）：
-  1. 下载所有 job artifact，汇总到一个目录，生成 `checksums.txt`（`sha256sum * > checksums.txt`）。
-  2. 解析触发类型 + 版本 + 说明：调 `node scripts/changelog-extract.mjs`（见 3.3）。
-     - tag：`v=${GITHUB_REF#refs/tags/}`；notes=该版本段。
-     - master：`v=0.0.0-dev+${GITHUB_SHA::7}`；notes=`[Unreleased]` 段；目标 tag=`nightly`。
-  3. 发布：用 `softprops/action-gh-release`（或 `gh release`）：
-     - tag 路线：`tag_name=${v}`，`prerelease: false`，`body_path` 指向提取的说明，`files: dist/*`。
-     - master/nightly 路线：`tag_name: nightly`，`prerelease: true`，`body_path` 指向 `[Unreleased]` 说明，`files: dist/*`；**替换**既有 nightly 资产（action-gh-release 同 tag 会更新 release 并覆盖同名资产；若需先清空，用 `gh release delete-asset` 或重建 release——机制由实现选，**行为以验收为准：nightly 只保留本次构建产物**）。
-- **版本注入一致性**：版本字符串在 build 与 release 两 job 间需一致计算；建议在 build job 即按触发类型算好 `v` 注入 ldflags，release job 复用同一算法（或经 job output 传递），避免二进制内版本与 release tag 不符。
+发布资产固定为：
 
-### 3.3 CHANGELOG 段落提取 `scripts/changelog-extract.mjs`
+- `control-plane-linux-amd64`
+- `worker-linux-amd64`
+- `control-plane-windows-amd64.exe`
+- `worker-windows-amd64.exe`
+- `checksums.txt`
 
-- Node 脚本（与 `gen-licenses.mjs` 同栈）。参数：`--unreleased`（输出 `## [Unreleased]` 到下一个 `## ` 之间的正文）或 `--version 0.11.0`（输出 `## 0.11.0（…）` 段正文）。
-- 输出纯 markdown 到 stdout（供 `body_path`）。空段或找不到版本 → 非零退出 + 明确报错（让 CI 失败而非发空说明）。
-- 纯解析逻辑可单测：给定样例 CHANGELOG 文本，提取 `[Unreleased]` 与指定版本段正确、缺失版本报错。
+`checksums.txt` 覆盖四个二进制，行格式为 `<sha256>  <filename>`。命名与完整性契约继续遵循 ADR-036。
 
-### 3.4 version.go
+### 2.3 内嵌资产
 
-- 默认值由 `0.9.1` 对齐到 `0.10.0`（当前最新 tag），消除漂移；注释保留「真值由 ldflags 注入」。
+- Control Plane：React 前端、Bot Worker 归档、ServerProbe jar 与离线依赖缓存、客户端更新器两件套、Linux/Windows Worker 二进制及 manifest。
+- Worker：CFR 反编译器。
 
-## 4. 任务拆分
+任一必需内嵌目录缺失或构建失败时 fail-fast，不允许生成“可发布但资产不完整”的二进制。
 
-- [ ] 写 `docs/adr/036-release-pipeline-github.md`（ADR-036：产物命名/checksums/渠道契约；注明 FR-175 共享、ADR-020 §4 取代留 FR-175 落地）
-- [ ] `scripts/changelog-extract.mjs` + 单测（vitest 或 node:test；放可被 CI/本地跑的位置）
-- [ ] `.github/workflows/release.yml`：`prepare-embeds`（前端 + 探针 + CFR + 客户端更新器内嵌，submodules recursive + JDK21/Java8 toolchain）→ `build` matrix（linux/amd64 + windows/amd64，下载 embed 产物后 go build）→ `release`（checksums + 预发布/正式发布 + 说明取自 CHANGELOG）
-- [ ] ldflags 版本注入（build/release 版本一致）；`internal/version/version.go` 默认值对齐 0.10.0
-- [ ] doc-sync：PRD §4 FR-173 状态「计划」→「开发中」（只改本行）；ARCHITECTURE「构建/发布」如有章节补一段；CHANGELOG `[Unreleased]` 末尾追加一行（只加不改）；ADR-036
-- [ ] 中文 commit（`feat(ci): …` / `build(ci): …` 按 git-commit 规范）
+## 3. 版本来源与发布元数据
 
-## 5. 验收标准
+### 3.1 单一真源
 
-- `.github/workflows/release.yml` 存在且语法有效（`actionlint` 通过，或 YAML 解析无误 + 人工核对 steps）。
-- `changelog-extract` 单测绿：样例 CHANGELOG 提取 `[Unreleased]` 与某版本段正确、缺失版本非零退出。
-- 本地交叉编译可行：`GOOS=linux GOARCH=amd64 go build ./cmd/control-plane` 与 windows/amd64、worker 同样可编译（agent 本地验证编译路径）。
-- 下载/构建出的二进制启动日志或 `GetVersion` 报告注入的版本号。
-- **【需真 CI，用户确认】** push `master` → 出/覆盖 `nightly` 预发布，含 4 二进制 + `checksums.txt`，说明=CHANGELOG `[Unreleased]`；`nightly` 仅保留本次产物。
-- **【需真 CI，用户确认】** push tag `vX.Y.Z` → 出正式 release（非 prerelease），含 4 二进制 + `checksums.txt`，说明=该版本段。
-- 注：GitHub Actions 真跑须推远程，agent 本地只能验 workflow 语法 + 脚本单测 + 交叉编译；真 CI 两条标「待真 CI 验」，由用户推后确认。
+`internal/version/version.go` 的 `Version` 是源码版本单一真源，当前保持：
 
-## 6. 风险 / 待定
+```text
+0.18.0-dev
+```
 
-- **真 CI 不可本地完全验证**：标「待真 CI」，落地前由用户在远程跑一次 push + 一次 tag 确认。
-- **nightly 资产替换机制**：action-gh-release 同 tag 更新行为需实测；必要时 release job 先 `gh release delete nightly --yes`（容忍不存在）再重建。行为以验收「仅保留本次产物」为准。
-- **build/release 版本一致性**：务必两 job 同算法，否则二进制内版本与 release tag 不符。
-- **内嵌使 CI 变重变慢**（用户已接受）：需 `submodules: recursive` + JDK21（探针）+ Java8（客户端更新器，靠 gradle toolchain）+ Node + Go 多工具链；gradle 首次构建慢——必须开 gradle/go/npm 缓存，否则每次几分钟。`embed-cfr` 的 sha256 pin 必须与 `decompiler/cfr.go` 常量一致（pin 不符 CI 失败）。
-- **go:embed 缺目录即编译失败**：prepare-embeds 任一内嵌步骤失败会导致 build job go build 失败（没有「优雅缺省」）；内嵌步骤须 fail-fast 且有清晰报错。
-- **GITHUB_TOKEN 权限**：需 `contents: write` 发 release / 管 tag。
+`metadata` job 使用 `actions/checkout` 的 `fetch-depth: 0`，执行 `node scripts/release-metadata.mjs`，读取源码版本并联合校验 Git ref、提交 SHA 与当前提交的精确 tag。后续 job 只消费它输出的 `version`、`release_tag`、`is_release`、`publish_release`。
+
+### 3.2 正式发布
+
+正式 ref 必须为 `refs/tags/vX.Y.Z`，源码必须在同一提交写裸 `X.Y.Z`：
+
+| 用途 | 值 |
+|---|---|
+| Git tag / GitHub Release | `vX.Y.Z` |
+| 二进制 `--version` | `X.Y.Z` |
+| Bot Worker 归档版本 | `X.Y.Z` |
+| CP 内嵌 Worker manifest | `X.Y.Z` |
+
+正式 tag 的 `v` 与二进制裸版本明确分离。tag 格式非法或源码版本不一致时，metadata job 直接失败。
+
+### 3.3 开发构建
+
+开发分支源码保持 `X.Y.Z-dev`（候选期允许 `X.Y.Z-rc.N`），构建时追加 SemVer 构建元数据：
+
+```text
+X.Y.Z-dev+g<7位提交SHA>
+```
+
+例如当前源码 `0.18.0-dev` 在提交 `abcdef0…` 上构建为 `0.18.0-dev+gabcdef0`。提交 SHA 不写回源码；源码仍保持下一目标版本。普通分支出现无同 SHA 正式 tag 的裸版本必须失败。
+
+## 4. Workflow 结构
+
+当前发布链路为：
+
+```text
+metadata → prepare-embeds → test → build → smoke → release
+                         ↘ build 同时消费 metadata
+```
+
+| Job | 职责 | 关键门禁 |
+|---|---|---|
+| `metadata` | 读取源码版本，校验 ref/tag/SHA，输出全链路唯一发布元数据 | 正式 tag 与源码裸版本不一致即失败；开发分支非法版本即失败 |
+| `prepare-embeds` | 构建全部平台无关内嵌资产 | Bot Worker、前端、探针、客户端更新器、CFR 任一步失败即停止 |
+| `test` | 在发布前运行 Go 与前端质量门禁 | `go build`、`go vet`、`go test`；前端 lint、vitest、build、Playwright E2E |
+| `build` | 两目标 matrix 交叉编译，并为 CP 注入两平台 Worker | `linux/amd64`、`windows/amd64`；全部版本取 metadata output |
+| `smoke` | 在目标系统原生执行四个最终发布产物 | Linux/Windows 各执行 CP、Worker 的 `--version` |
+| `release` | 汇总资产、生成校验和、提取说明并创建 Release | 依赖全部 smoke 成功；`publish_release=false` 时跳过 |
+
+## 5. Bot Worker 构建与内嵌
+
+`prepare-embeds` 使用 Node.js 22，对 `apps/bot-worker` 顺序执行：
+
+1. `npm ci`；
+2. `npm run audit:prod`；
+3. `npm run typecheck`；
+4. `npm run lint`；
+5. `npm run build`；
+6. `go run ./scripts/embed-botworker.go ... --version <metadata.version>`。
+
+归档包含构建后的 dist 与维持 ESM 语义所需的包元数据，输出到 `internal/controlplane/embed/botworker/`，随后作为 CP embed artifact 传给构建矩阵。发布包不要求运维者手工拷贝 bot-worker dist。
+
+Node.js 22 是发布构建工具链；受管节点执行 Bot Worker 的运行时要求为 Node.js `>=22.13.0`，依赖分发与受控项目根遵循 ADR-072。
+
+## 6. 四产物原生 smoke
+
+`smoke` job 有四个矩阵项：
+
+| Runner | 产物 |
+|---|---|
+| `ubuntu-latest` | `control-plane-linux-amd64` |
+| `ubuntu-latest` | `worker-linux-amd64` |
+| `windows-latest` | `control-plane-windows-amd64.exe` |
+| `windows-latest` | `worker-windows-amd64.exe` |
+
+每项执行 `<binary> --version`，必须同时满足：
+
+- 进程退出码为 0；
+- stdout 去除首尾空白后严格等于 `metadata.version`；
+- stderr 文件大小为 0。
+
+`release` 直接依赖 `smoke`。这项门禁验证的是最终上传产物，而不是源码入口或中间构建文件。
+
+## 7. 工具链与本地验证
+
+发布 workflow 固定：
+
+- Go `1.26.2`；
+- Node.js `22`；
+- JDK `21`。
+
+本地可执行的针对性验证包括：
+
+```bash
+node --test scripts/release-metadata.test.mjs
+```
+
+仓库还包含 release workflow 契约测试，用于检查 metadata 输出消费、四项原生 smoke、release 对 smoke 的依赖及关键工具链值。完整发布构建可使用：
+
+```bash
+task dist
+```
+
+本地验证不能替代远端 GitHub Actions；尤其是 `ubuntu-latest` / `windows-latest` runner、artifact 上传下载、`GITHUB_TOKEN` 权限与 Release 创建必须推送后实跑。
+
+## 8. 验收状态
+
+| 验收项 | 当前状态 |
+|---|---|
+| `release-metadata.mjs` 从源码读取版本并校验正式 tag | 工作区已实现 |
+| 正式 `vX.Y.Z` 与二进制 `X.Y.Z` 分离 | 工作区已实现 |
+| 开发构建为 `X.Y.Z-dev+g<sha>` | 工作区已实现 |
+| 当前源码版本保持 `0.18.0-dev` | 已确认 |
+| Bot Worker build / audit / typecheck / lint 后内嵌 CP | 工作区已实现 |
+| Go 1.26.2 / Node.js 22 工具链 | 工作区已实现 |
+| 四个最终二进制在 Linux/Windows 原生 runner smoke | 工作区已实现 |
+| release 仅在 smoke 全绿后执行 | 工作区已实现 |
+| push `master` 实际覆盖 `latest` 预发布 | **远端 Actions 待验（本次不 push）** |
+| push `vX.Y.Z` 实际创建正式 Release | **远端 Actions 待验（本次不 push）** |
+
+## 9. 不在本规格范围
+
+- 新增目标平台或架构（如 linux/arm64、darwin）；
+- 二进制签名；
+- Docker 镜像发布；
+- 修改自更新的 GitHub Releases 消费契约；
+- 在本次文档同步中 push、创建 tag 或实际触发远端 Actions。

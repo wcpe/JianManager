@@ -7,7 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/wcpe/JianManager)](https://github.com/wcpe/JianManager/releases/latest)
 [![Release Pipeline](https://github.com/wcpe/JianManager/actions/workflows/release.yml/badge.svg)](https://github.com/wcpe/JianManager/actions/workflows/release.yml)
 [![CI](https://github.com/wcpe/JianManager/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/wcpe/JianManager/actions/workflows/ci.yml)
-[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](go.mod)
+[![Go](https://img.shields.io/badge/Go-1.26.2+-00ADD8?logo=go&logoColor=white)](go.mod)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 </div>
@@ -104,12 +104,14 @@ docker compose logs -f
 <details>
 <summary><b>从源码构建</b></summary>
 
-需要 Go 1.22+、Node.js 20+、pnpm（经 corepack）：
+需要 Go 1.26.2、Node.js 22（Bot Worker 与受管节点运行时要求 `>=22.13.0`）、pnpm（经 corepack）和 go-task：
 
 ```bash
 go install github.com/go-task/task/v3/cmd/task@latest
-task dist    # 前端 + 全部内嵌资产 + windows/linux amd64 四个二进制 → dist/
+task dist    # 前端 + Bot Worker + 全部内嵌资产 + Windows/Linux amd64 四个二进制 → dist/
 ```
+
+`task dist` 会把 Bot Worker 的生产构建归档内嵌进 Control Plane，并为所有 Go 产物注入同一版本。源码版本真值来自 `internal/version/version.go`；当前保持 `0.18.0-dev`，开发构建可报告为 `0.18.0-dev+g<sha>`。
 </details>
 
 ## 🏗 架构
@@ -175,7 +177,9 @@ proto/                 # gRPC Protobuf 定义
 docs/                  # 架构 / API / 部署 / ADR 全套文档
 ```
 
-CI 在 PR 与分支 push 上跑 `web-quality`（lint + vitest + 构建 + E2E）与 `bot-quality` 双门禁；tag push 触发发布管线自动产出多平台产物与 GitHub Release。提交信息遵循 Conventional Commits（中文描述），详见 [docs/CONVENTIONS.md](docs/CONVENTIONS.md)。
+CI 在 PR 与分支 push 上跑 `web-quality`（lint + vitest + 构建 + E2E）与 `bot-quality`（生产依赖审计 + typecheck + lint + build）双门禁。发布 workflow 另以独立 metadata job 校验源码版本、Git ref 与 tag，同版本构建/内嵌 Bot Worker 和四个 Go 产物，再分别在 Linux / Windows 原生 runner 执行四项 `--version` smoke；全部通过后才创建 Release。
+
+版本规则见 [ADR-074](docs/adr/074-release-version-provenance-and-smoke.md)：正式 Git tag / Release 为 `vX.Y.Z`，二进制内部版本为裸 `X.Y.Z`；开发构建为 `X.Y.Z-dev+g<sha>`。当前工作区实现尚未 push，远端 GitHub Actions 运行结果待验。提交信息遵循 Conventional Commits（中文描述），详见 [docs/CONVENTIONS.md](docs/CONVENTIONS.md)。
 
 ## 📚 文档
 

@@ -4,7 +4,8 @@
 
 ## 1. 开发环境
 
-- Go 1.22+ · Node.js 20+ · pnpm（经 `corepack enable` 激活）· [go-task](https://taskfile.dev)
+- Go **1.26.2** · Node.js **22**（Bot Worker 与受管节点运行时最低 `22.13.0`）· pnpm（经 `corepack enable` 激活）· [go-task](https://taskfile.dev)
+- 发布 workflow 固定使用 Go 1.26.2 / Node.js 22 / JDK21；本地发版构建除上述工具外还需满足探针与客户端更新器的 Java 构建条件。
 
 ```bash
 go install github.com/go-task/task/v3/cmd/task@latest
@@ -15,13 +16,16 @@ task dev:mock   # 前端 mock 模式（MSW 假后端，无需真后端）
 task test       # Go + 前端全部测试
 task lint       # go vet + tsc + eslint
 task web:e2e    # Playwright 真浏览器整站 E2E
+task dist       # 前端 + Bot Worker + 全部内嵌资产 + 四个发布二进制
 ```
 
 ## 2. 分支与流程
 
 - **`dev`**：日常开发分支；**`master`**：发布分支（PR 目标）。功能 / 修复走 `feature/*`、`fix/*` 短生命周期分支。
-- PR 必须通过 CI 双门禁（`web-quality`：lint + vitest + 构建 + E2E；`bot-quality`：bot-worker 类型检查 + eslint）。
-- 发版：`master` 打 `vX.Y.Z` tag 触发发布管线出多平台产物与 GitHub Release；紧急修复从发布 tag 切 `hotfix/*` 后回流。
+- PR 必须通过 CI 双门禁：`web-quality` 跑 lint + vitest + 构建 + E2E；`bot-quality` 跑 Bot Worker 生产依赖审计 + 类型检查 + lint + 构建。
+- 发布 workflow 另有完整门禁：metadata 版本/ref/tag 校验 → 全部内嵌资产（含 Bot Worker）→ Go 与前端测试 → 四产物构建 → Linux/Windows 原生 `--version` smoke → Release。任一步失败都不得发布。
+- 发版：先按 §6 把源码切为裸 `X.Y.Z`，在同一提交打 `vX.Y.Z` tag；Git tag / Release 保留 `v`，二进制版本不带 `v`。紧急修复从发布 tag 切 `hotfix/*` 后回流。
+- GitHub-hosted runner 与实际 Release 创建只有 push 后才能验证；当前工作区按用户选择暂不 push，因此远端 Actions 仍待验。
 
 ## 3. 提交规范
 
@@ -46,7 +50,22 @@ task web:e2e    # Playwright 真浏览器整站 E2E
 
 ## 6. 版本号
 
-唯一真源是 [`internal/version/version.go`](../internal/version/version.go)（ADR-065）：开发态恒为 `X.Y.Z-dev`（下一目标版本），仅发版流程改动它——**贡献者不要动版本号**。
+唯一真源是 [`internal/version/version.go`](../internal/version/version.go)（ADR-065 / [ADR-074](adr/074-release-version-provenance-and-smoke.md)）。当前版本保持 **`0.18.0-dev`**；开发态恒为下一目标版本 `X.Y.Z-dev`，普通贡献者不要自行改版本号。
+
+发布 metadata 由 `scripts/release-metadata.mjs` 统一解析，规则如下：
+
+- **开发构建**：源码 `X.Y.Z-dev`，二进制 / Bot 归档 / 内嵌 Worker manifest 注入 `X.Y.Z-dev+g<7位sha>`；SHA 只存在于构建元数据，不写回源码。
+- **正式发布**：先由发版流程把源码改为裸 `X.Y.Z`，在同一提交创建 tag `vX.Y.Z`；Git tag / GitHub Release 使用 `vX.Y.Z`，二进制内部使用裸 `X.Y.Z`。
+- **强校验**：正式 tag 与源码裸版本不一致直接失败；普通分支出现无同 SHA 正式 tag 的裸版本也直接失败。普通分支位于已经打 tag 的裸版本提交时不重复发布 `latest`。
+- **单点消费**：发布 workflow 的 Bot Worker 内嵌、CP 内嵌 Worker、四个最终二进制、smoke 与 Release 全部使用 metadata job 的同一份输出，禁止各 job 自行拼版本。
+
+针对性本地检查：
+
+```bash
+node --test scripts/release-metadata.test.mjs
+```
+
+完整版本生命周期仍以 [`.claude/rules/versioning.md`](../.claude/rules/versioning.md) 为准。
 
 ## 7. 文档地图
 
