@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -22,7 +23,7 @@ func newBotStressSessionTestDB(t *testing.T) *gorm.DB {
 	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.Bot{}, &model.BotStressSession{}))
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.Bot{}, &model.BotStressSession{}, &model.BotLoadBatch{}))
 	return db
 }
 
@@ -150,8 +151,9 @@ func TestBotStressSession_StartCreatesAssociatedBots(t *testing.T) {
 
 type fakeStressCreateBotWorker struct {
 	workerpb.WorkerServiceClient
-	requests []*workerpb.CreateBotRequest
-	listBots []*workerpb.BotInfo
+	requests  []*workerpb.CreateBotRequest
+	listBots  []*workerpb.BotInfo
+	listCalls int
 }
 
 func (f *fakeStressCreateBotWorker) CreateBot(_ context.Context, req *workerpb.CreateBotRequest, _ ...grpc.CallOption) (*workerpb.CreateBotResponse, error) {
@@ -164,6 +166,7 @@ func (f *fakeStressCreateBotWorker) DeleteBot(_ context.Context, _ *workerpb.Del
 }
 
 func (f *fakeStressCreateBotWorker) ListBots(_ context.Context, _ *workerpb.ListBotsRequest, _ ...grpc.CallOption) (*workerpb.ListBotsResponse, error) {
+	f.listCalls++
 	return &workerpb.ListBotsResponse{Bots: f.listBots}, nil
 }
 
@@ -243,6 +246,61 @@ func TestBotStressSession_GetRefreshesCountsFromWorker(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), view.Counts.Total)
 	assert.Equal(t, int64(2), view.Counts.ByStatus[string(model.BotStatusConnected)])
+	assert.Equal(t, 2, worker.listCalls)
+}
+
+func TestBotStressSession_ReadsDoNotOverwriteFleetRuntimeLedger(t *testing.T) {
+	db := newBotStressSessionTestDB(t)
+	inst := createBotStressInstance(t, db)
+	var node model.Node
+	require.NoError(t, db.First(&node, inst.NodeID).Error)
+
+	session := &model.BotStressSession{
+		InstanceID: inst.ID, Name: "fleet", NamePrefix: "fleet", BotCount: 1,
+		Status: model.BotStressSessionRunning,
+	}
+	require.NoError(t, db.Create(session).Error)
+	batch := &model.BotLoadBatch{
+		StressSessionID: session.ID, ExecutorNodeID: node.ID, Ordinal: 1, PlannedCount: 1,
+		AcceptedCount: 1, ConnectedCount: 1, State: model.BotLoadBatchRunning,
+		IdempotencyKey: "fleet-read-ledger", ConnectStartAt: time.Now().UTC(),
+	}
+	require.NoError(t, db.Create(batch).Error)
+	executorNodeID, batchID := node.ID, batch.ID
+	bot := &model.Bot{
+		InstanceID: inst.ID, StressSessionID: &session.ID, ExecutorNodeID: &executorNodeID, LoadBatchID: &batchID,
+		Name: "fleet-001", Status: model.BotStatusConnected,
+	}
+	require.NoError(t, db.Create(bot).Error)
+
+	worker := &fakeStressCreateBotWorker{listBots: []*workerpb.BotInfo{{BotUuid: bot.UUID, Status: "disconnected"}}}
+	pool := cpgrpc.NewClientPool()
+	pool.SetWorkerClientForTest(node.UUID, worker)
+	botSvc := NewBotService(db, pool)
+	svc := NewBotStressSessionService(db, botSvc)
+
+	detail, err := svc.Get(session.ID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), detail.Counts.ByStatus[string(model.BotStatusConnected)])
+	list, err := svc.List(BotStressSessionListQuery{}, nil, false)
+	require.NoError(t, err)
+	require.Len(t, list.Items, 1)
+	require.Equal(t, int64(1), list.Items[0].Counts.ByStatus[string(model.BotStatusConnected)])
+	botDetail, err := botSvc.GetByID(bot.ID)
+	require.NoError(t, err)
+	require.Equal(t, model.BotStatusConnected, botDetail.Status)
+	botList, err := botSvc.ListPaged(BotListQuery{Filter: BotFilter{NodeID: &node.ID}}, nil, false)
+	require.NoError(t, err)
+	require.Len(t, botList.Items, 1)
+	require.Equal(t, model.BotStatusConnected, botList.Items[0].Status)
+	require.Zero(t, worker.listCalls)
+
+	var loadedBot model.Bot
+	require.NoError(t, db.First(&loadedBot, bot.ID).Error)
+	require.Equal(t, model.BotStatusConnected, loadedBot.Status)
+	var loadedBatch model.BotLoadBatch
+	require.NoError(t, db.First(&loadedBatch, batch.ID).Error)
+	require.Equal(t, 1, loadedBatch.ConnectedCount)
 }
 
 func TestBotStressSession_StartIsIdempotent(t *testing.T) {

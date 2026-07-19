@@ -234,10 +234,11 @@ func (s *BotService) delegateCreateBot(bot *model.Bot, behaviorConfig json.RawMe
 	return nil
 }
 
-// refreshStatus 从所属 Worker 拉取该 Bot 的实时状态并回填 DB（懒拉取，读取时触发）。
-// Worker 离线或 Bot 不在 Worker 列表中时保留上次已知状态，不抹除。
-// 状态源头：bot-worker(Mineflayer 事件) → Worker bot.Manager → 本方法。
+// refreshStatus 为旧 V1 Bot 从所属 Worker 懒拉取状态；Fleet Bot 只允许协调器更新账本。
 func (s *BotService) refreshStatus(bot *model.Bot) {
+	if bot.LoadBatchID != nil {
+		return
+	}
 	client, _, _, err := s.getWorkerClient(bot)
 	if err != nil {
 		return

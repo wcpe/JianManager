@@ -166,6 +166,58 @@ func (s *BotLoadExecutionService) FleetSubscriptionManager() BotFleetSubscriptio
 	return s.subscriptions
 }
 
+// RecoverFleetSubscriptions 从持久化活动批次恢复已连接节点的 Fleet 订阅，不重派任务或重建 Bot。
+func (s *BotLoadExecutionService) RecoverFleetSubscriptions(ctx context.Context, connectedNodeUUIDs []string) error {
+	if s == nil || s.db == nil || s.subscriptions == nil || len(connectedNodeUUIDs) == 0 {
+		return nil
+	}
+	nodeUUIDs := uniqueBotLoadNodeUUIDs(connectedNodeUUIDs)
+	if len(nodeUUIDs) == 0 {
+		return nil
+	}
+	targets, err := s.loadRecoverableFleetSubscriptions(ctx, nodeUUIDs)
+	if err != nil {
+		return err
+	}
+	s.subscriptions.Restore(targets)
+	return nil
+}
+
+func (s *BotLoadExecutionService) loadRecoverableFleetSubscriptions(ctx context.Context, nodeUUIDs []string) ([]BotFleetSubscriptionTarget, error) {
+	var targets []BotFleetSubscriptionTarget
+	activeStates := []model.BotLoadBatchState{model.BotLoadBatchDispatching, model.BotLoadBatchRunning}
+	waitingRuntime := `%"operation":"stop"%"state":"waiting_runtime"%`
+	err := s.db.WithContext(ctx).Model(&model.BotLoadBatch{}).
+		Select("DISTINCT bot_load_batches.executor_node_id AS node_id, nodes.uuid AS node_uuid, sessions.uuid AS session_uuid").
+		Joins("JOIN bot_stress_sessions AS sessions ON sessions.id = bot_load_batches.stress_session_id AND sessions.deleted_at IS NULL").
+		Joins("JOIN nodes ON nodes.id = bot_load_batches.executor_node_id AND nodes.deleted_at IS NULL").
+		Where("nodes.uuid IN ?", nodeUUIDs).
+		Where("sessions.status = ? AND (bot_load_batches.state IN ? OR sessions.last_error LIKE ?)", model.BotStressSessionRunning, activeStates, waitingRuntime).
+		Order("sessions.uuid ASC, nodes.uuid ASC").
+		Scan(&targets).Error
+	if err != nil {
+		return nil, fmt.Errorf("查询待恢复 Bot Fleet 订阅失败: %w", err)
+	}
+	return targets, nil
+}
+
+func uniqueBotLoadNodeUUIDs(nodeUUIDs []string) []string {
+	seen := make(map[string]struct{}, len(nodeUUIDs))
+	unique := make([]string, 0, len(nodeUUIDs))
+	for _, nodeUUID := range nodeUUIDs {
+		nodeUUID = strings.TrimSpace(nodeUUID)
+		if nodeUUID == "" {
+			continue
+		}
+		if _, exists := seen[nodeUUID]; exists {
+			continue
+		}
+		seen[nodeUUID] = struct{}{}
+		unique = append(unique, nodeUUID)
+	}
+	return unique
+}
+
 // Start 校验服务端计划和即时容量，在单事务物化批次/Bot 后提交后台 dispatch。
 func (s *BotLoadExecutionService) Start(ctx context.Context, sessionID uint, planToken string) (*model.BotStressSession, error) {
 	prepared, err := s.prepareStart(ctx, sessionID, planToken)

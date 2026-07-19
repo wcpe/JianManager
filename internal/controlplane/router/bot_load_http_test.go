@@ -30,6 +30,8 @@ type botLoadHTTPWorker struct {
 	generation    int64
 	capacityCalls int
 	applyCalls    int
+	listCalls     int
+	listBots      []*workerpb.BotInfo
 	applyErr      error
 }
 
@@ -49,7 +51,10 @@ func (w *botLoadHTTPWorker) CreateInstance(context.Context, *workerpb.CreateInst
 }
 
 func (w *botLoadHTTPWorker) ListBots(context.Context, *workerpb.ListBotsRequest, ...grpc.CallOption) (*workerpb.ListBotsResponse, error) {
-	return &workerpb.ListBotsResponse{}, nil
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.listCalls++
+	return &workerpb.ListBotsResponse{Bots: w.listBots}, nil
 }
 
 func (w *botLoadHTTPWorker) ApplyBotBatch(_ context.Context, req *workerpb.ApplyBotBatchRequest, _ ...grpc.CallOption) (*workerpb.ApplyBotBatchResponse, error) {
@@ -264,6 +269,27 @@ func TestBotLoadStart_TokenCompatibilityAndIdempotency(t *testing.T) {
 		}
 		_, applyCalls := worker.counts()
 		assert.Equal(t, 1, applyCalls)
+		var fleetBots []model.Bot
+		require.NoError(t, db.Where("stress_session_id = ?", sessionID).Order("id ASC").Find(&fleetBots).Error)
+		require.Len(t, fleetBots, 2)
+		require.NoError(t, db.Model(&model.Bot{}).Where("stress_session_id = ?", sessionID).Update("status", model.BotStatusConnected).Error)
+		require.NoError(t, db.Model(&model.BotLoadBatch{}).Where("stress_session_id = ?", sessionID).Update("connected_count", 2).Error)
+		worker.mu.Lock()
+		worker.listBots = []*workerpb.BotInfo{
+			{BotUuid: fleetBots[0].UUID, Status: "disconnected"},
+			{BotUuid: fleetBots[1].UUID, Status: "disconnected"},
+		}
+		worker.mu.Unlock()
+		detail := makeRequest(ctx.router, http.MethodGet, "/api/v1/bots/stress-sessions/"+itoa(sessionID), nil, ctx.token)
+		require.Equal(t, http.StatusOK, detail.Code)
+		detailBody := parseJSON(t, detail)
+		batches := detailBody["batches"].([]any)
+		require.Len(t, batches, 1)
+		assert.Equal(t, float64(2), batches[0].(map[string]any)["connectedCount"])
+		assert.Equal(t, float64(2), detailBody["counts"].(map[string]any)["byStatus"].(map[string]any)["connected"])
+		worker.mu.Lock()
+		assert.Zero(t, worker.listCalls)
+		worker.mu.Unlock()
 		var botCount, batchCount int64
 		require.NoError(t, db.Model(&model.Bot{}).Where("stress_session_id = ?", sessionID).Count(&botCount).Error)
 		require.NoError(t, db.Model(&model.BotLoadBatch{}).Where("stress_session_id = ?", sessionID).Count(&batchCount).Error)

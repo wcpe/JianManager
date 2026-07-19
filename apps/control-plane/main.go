@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -58,6 +59,27 @@ func assembleBotLoadServices(db *gorm.DB, pool *cpgrpc.ClientPool, stableSecret 
 		capacity: capacity, reservations: reservations, signer: signer,
 		preflight: preflight, execution: execution, coordinator: coordinator, subscriptions: subscriptions,
 	}, nil
+}
+
+func recoverConnectedBotFleetSubscriptions(ctx context.Context, execution *service.BotLoadExecutionService, pool *cpgrpc.ClientPool, nodeUUIDs ...string) error {
+	connected := pool.ConnectedNodes()
+	if len(nodeUUIDs) > 0 {
+		connected = connected[:0]
+		for _, nodeUUID := range nodeUUIDs {
+			if _, ok := pool.Get(nodeUUID); ok {
+				connected = append(connected, nodeUUID)
+			}
+		}
+	}
+	return execution.RecoverFleetSubscriptions(ctx, connected)
+}
+
+func runControlPlaneServer(run func() error, closeSubscriptions func()) error {
+	err := run()
+	if err != nil && closeSubscriptions != nil {
+		closeSubscriptions()
+	}
+	return err
 }
 
 func main() {
@@ -575,6 +597,9 @@ func main() {
 		eventSvc.StartWorkerStream(nodeUUID)
 		// 玩家事件流（探针经反向 WS 上报）同步订阅（FR-066）。
 		playerEventSvc.StartWorkerStream(nodeUUID)
+		if err := recoverConnectedBotFleetSubscriptions(context.Background(), botLoadSvcs.execution, pool, nodeUUID); err != nil {
+			slog.Warn("恢复 Worker 的 Bot Fleet 订阅失败", "nodeUUID", nodeUUID, "error", err)
+		}
 		// Worker 重连/重注册后重推该节点全部实例规格，让重启后丢失的 STOPPED 实例
 		// 在 Worker 侧重新可被文件/配置/归档 op 定位（修 bug #2，见 ADR-050）。
 		// 异步执行：该回调可能在心跳处理路径内触发，重推不应阻塞心跳应答。
@@ -614,11 +639,14 @@ func main() {
 			slog.Error("gRPC 服务器退出", "error", err)
 		}
 	}()
+	if err := recoverConnectedBotFleetSubscriptions(context.Background(), botLoadSvcs.execution, pool); err != nil {
+		slog.Warn("恢复已连接 Worker 的 Bot Fleet 订阅失败", "error", err)
+	}
 
 	// 启动离线检测器
 	cpgrpc.StartOfflineDetector(db)
 
-	if err := r.Run(addr); err != nil {
+	if err := runControlPlaneServer(func() error { return r.Run(addr) }, botLoadSvcs.subscriptions.Close); err != nil {
 		log.Fatalf("启动服务器失败: %v", err)
 	}
 }

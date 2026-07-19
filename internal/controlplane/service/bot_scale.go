@@ -213,6 +213,9 @@ func (s *BotService) ListPaged(query BotListQuery, scopeIDs []uint, scope bool) 
 func (s *BotService) refreshStatuses(bots []model.Bot) {
 	byNode := map[string][]int{}
 	for i := range bots {
+		if bots[i].LoadBatchID != nil {
+			continue
+		}
 		node := &bots[i].Instance.Node
 		if bots[i].ExecutorNodeID != nil && bots[i].ExecutorNode != nil && bots[i].ExecutorNode.UUID != "" {
 			node = bots[i].ExecutorNode

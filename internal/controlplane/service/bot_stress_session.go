@@ -53,6 +53,7 @@ type BotLoadBatchSummary struct {
 	Ordinal        int                     `json:"ordinal"`
 	PlannedCount   int                     `json:"plannedCount"`
 	AcceptedCount  int                     `json:"acceptedCount"`
+	ConnectedCount int                     `json:"connectedCount"`
 	FailedCount    int                     `json:"failedCount"`
 	State          model.BotLoadBatchState `json:"state"`
 	StartedAt      *time.Time              `json:"startedAt,omitempty"`
@@ -483,7 +484,7 @@ func (s *BotStressSessionService) enrichBotLoadView(view *BotStressSessionView, 
 	for _, batch := range batches {
 		view.Batches = append(view.Batches, BotLoadBatchSummary{
 			ID: batch.ID, UUID: batch.UUID, ExecutorNodeID: batch.ExecutorNodeID, Ordinal: batch.Ordinal,
-			PlannedCount: batch.PlannedCount, AcceptedCount: batch.AcceptedCount, FailedCount: batch.FailedCount,
+			PlannedCount: batch.PlannedCount, AcceptedCount: batch.AcceptedCount, ConnectedCount: batch.ConnectedCount, FailedCount: batch.FailedCount,
 			State: batch.State, StartedAt: batch.StartedAt, EndedAt: batch.EndedAt,
 		})
 	}

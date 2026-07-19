@@ -98,6 +98,12 @@ func (s *botLoadExecutionSubscriptions) Ensure(target BotFleetSubscriptionTarget
 	s.ensured = append(s.ensured, target)
 }
 
+func (s *botLoadExecutionSubscriptions) Restore(targets []BotFleetSubscriptionTarget) {
+	for _, target := range targets {
+		s.Ensure(target)
+	}
+}
+
 func (s *botLoadExecutionSubscriptions) StopSession(sessionUUID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -353,6 +359,118 @@ func TestBotLoadExecutionStart_EnsuresOneFleetSubscriptionPerExecutorNode(t *tes
 	require.Equal(t, h.session.UUID, targets[0].SessionUUID)
 	require.Equal(t, h.session.UUID, targets[1].SessionUUID)
 	require.ElementsMatch(t, []uint{h.nodes[0].ID, h.nodes[1].ID}, []uint{targets[0].NodeID, targets[1].NodeID})
+}
+
+func TestBotLoadExecutionRecoverFleetSubscriptions_SelectsActiveTargetsForConnectedNode(t *testing.T) {
+	h := newBotLoadExecutionHarness(t, []int{50, 50}, 2, nil)
+	require.NoError(t, h.db.Model(h.session).Updates(map[string]any{
+		"status": model.BotStressSessionRunning,
+	}).Error)
+	activeBatches := []model.BotLoadBatch{
+		{StressSessionID: h.session.ID, ExecutorNodeID: h.nodes[0].ID, Ordinal: 1, PlannedCount: 1, State: model.BotLoadBatchRunning, IdempotencyKey: "recover-active-a", ConnectStartAt: h.clock.Now()},
+		{StressSessionID: h.session.ID, ExecutorNodeID: h.nodes[0].ID, Ordinal: 2, PlannedCount: 1, State: model.BotLoadBatchDispatching, IdempotencyKey: "recover-active-a-duplicate", ConnectStartAt: h.clock.Now()},
+		{StressSessionID: h.session.ID, ExecutorNodeID: h.nodes[1].ID, Ordinal: 3, PlannedCount: 1, State: model.BotLoadBatchRunning, IdempotencyKey: "recover-active-b", ConnectStartAt: h.clock.Now()},
+	}
+	require.NoError(t, h.db.Create(&activeBatches).Error)
+
+	waiting := &model.BotStressSession{
+		InstanceID: h.instance.ID, Name: "waiting-runtime", NamePrefix: "waiting", BotCount: 2,
+		Status: model.BotStressSessionRunning, LastError: botLoadStopSessionError("waiting_runtime", ""),
+	}
+	require.NoError(t, h.db.Create(waiting).Error)
+	require.NoError(t, h.db.Create(&[]model.BotLoadBatch{
+		{
+			StressSessionID: waiting.ID, ExecutorNodeID: h.nodes[0].ID, Ordinal: 1, PlannedCount: 1,
+			State: model.BotLoadBatchPlanned, IdempotencyKey: "recover-waiting-runtime-planned", ConnectStartAt: h.clock.Now(),
+		},
+		{
+			StressSessionID: waiting.ID, ExecutorNodeID: h.nodes[0].ID, Ordinal: 2, PlannedCount: 1,
+			State: model.BotLoadBatchFailed, IdempotencyKey: "recover-waiting-runtime-failed", ConnectStartAt: h.clock.Now(),
+		},
+	}).Error)
+
+	inactive := &model.BotStressSession{
+		InstanceID: h.instance.ID, Name: "inactive", NamePrefix: "inactive", BotCount: 1,
+		Status: model.BotStressSessionStopped, LastError: botLoadStopSessionError("waiting_runtime", ""),
+	}
+	require.NoError(t, h.db.Create(inactive).Error)
+	require.NoError(t, h.db.Create(&model.BotLoadBatch{
+		StressSessionID: inactive.ID, ExecutorNodeID: h.nodes[0].ID, Ordinal: 1, PlannedCount: 1,
+		State: model.BotLoadBatchRunning, IdempotencyKey: "recover-inactive", ConnectStartAt: h.clock.Now(),
+	}).Error)
+
+	failed := &model.BotStressSession{
+		InstanceID: h.instance.ID, Name: "failed", NamePrefix: "failed", BotCount: 1,
+		Status: model.BotStressSessionError, LastError: botLoadStopSessionError("waiting_runtime", ""),
+	}
+	require.NoError(t, h.db.Create(failed).Error)
+	require.NoError(t, h.db.Create(&model.BotLoadBatch{
+		StressSessionID: failed.ID, ExecutorNodeID: h.nodes[0].ID, Ordinal: 1, PlannedCount: 1,
+		State: model.BotLoadBatchFailed, IdempotencyKey: "recover-failed", ConnectStartAt: h.clock.Now(),
+	}).Error)
+
+	subscriptions := &botLoadExecutionSubscriptions{}
+	h.service.SetFleetSubscriptionManager(subscriptions)
+	require.NoError(t, h.service.RecoverFleetSubscriptions(context.Background(), []string{h.nodes[0].UUID}))
+
+	targets := subscriptions.Ensured()
+	require.Len(t, targets, 2)
+	require.ElementsMatch(t, []string{h.session.UUID, waiting.UUID}, []string{targets[0].SessionUUID, targets[1].SessionUUID})
+	for _, target := range targets {
+		require.Equal(t, h.nodes[0].ID, target.NodeID)
+		require.Equal(t, h.nodes[0].UUID, target.NodeUUID)
+	}
+
+	require.NoError(t, h.service.RecoverFleetSubscriptions(context.Background(), []string{h.nodes[1].UUID}))
+	targets = subscriptions.Ensured()
+	require.Len(t, targets, 3)
+	require.Equal(t, h.session.UUID, targets[2].SessionUUID)
+	require.Equal(t, h.nodes[1].UUID, targets[2].NodeUUID)
+
+	require.NoError(t, h.service.RecoverFleetSubscriptions(context.Background(), nil))
+	require.Len(t, subscriptions.Ensured(), 3)
+}
+
+func TestBotLoadExecutionRecoverFleetSubscriptions_RestartsManagerAndDeduplicatesReconnects(t *testing.T) {
+	h := newBotFleetRuntimeHarness(t)
+	require.NoError(t, h.db.Model(h.session).Updates(map[string]any{
+		"status": model.BotStressSessionRunning,
+	}).Error)
+	require.NoError(t, h.db.Create(&model.BotLoadBatch{
+		StressSessionID: h.session.ID, ExecutorNodeID: h.other.ID, Ordinal: 2, PlannedCount: 1,
+		State: model.BotLoadBatchDispatching, IdempotencyKey: "fleet-recover-other", ConnectStartAt: h.now,
+	}).Error)
+
+	firstClient := &botFleetSubscriptionClient{snapshot: &workerpb.GetBotFleetSnapshotResponse{}}
+	firstManager := NewBotFleetSubscriptionManager(NewBotFleetRuntimeCoordinator(h.service, firstClient, nil))
+	firstExecution := NewBotLoadExecutionService(h.db, nil, nil, nil, nil, nil, nil)
+	firstExecution.SetFleetSubscriptionManager(firstManager)
+	require.NoError(t, firstExecution.RecoverFleetSubscriptions(context.Background(), []string{h.node.UUID}))
+	require.Eventually(t, func() bool {
+		_, snapshots, streams, _ := firstClient.state()
+		return snapshots == 1 && streams == 1
+	}, time.Second, 10*time.Millisecond)
+	firstManager.Close()
+
+	secondClient := &botFleetSubscriptionClient{snapshot: &workerpb.GetBotFleetSnapshotResponse{}}
+	secondManager := NewBotFleetSubscriptionManager(NewBotFleetRuntimeCoordinator(h.service, secondClient, nil))
+	t.Cleanup(secondManager.Close)
+	secondExecution := NewBotLoadExecutionService(h.db, nil, nil, nil, nil, nil, nil)
+	secondExecution.SetFleetSubscriptionManager(secondManager)
+
+	for range 3 {
+		require.NoError(t, secondExecution.RecoverFleetSubscriptions(context.Background(), []string{h.node.UUID}))
+	}
+	require.Eventually(t, func() bool {
+		_, snapshots, streams, _ := secondClient.state()
+		return snapshots == 1 && streams == 1
+	}, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, secondExecution.RecoverFleetSubscriptions(context.Background(), []string{h.other.UUID}))
+	require.Eventually(t, func() bool {
+		_, snapshots, streams, _ := secondClient.state()
+		return snapshots == 2 && streams == 2
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestBotLoadExecutionStart_InvalidPlansHaveZeroSideEffects(t *testing.T) {

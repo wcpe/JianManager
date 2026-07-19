@@ -696,6 +696,7 @@ type BotFleetSubscriptionTarget struct {
 // BotFleetSubscriptionController 是 ExecutionService 所需的订阅生命周期接口。
 type BotFleetSubscriptionController interface {
 	Ensure(target BotFleetSubscriptionTarget)
+	Restore(targets []BotFleetSubscriptionTarget)
 	StopSession(sessionUUID string)
 }
 
@@ -777,6 +778,13 @@ func (m *BotFleetSubscriptionManager) subscriptionSlot(target BotFleetSubscripti
 	slot := &botFleetSubscriptionSlot{target: target}
 	m.slots[key] = slot
 	return slot
+}
+
+// Restore 恢复持久化运行仍需要的订阅；Ensure 保证重复启动与重连回调幂等。
+func (m *BotFleetSubscriptionManager) Restore(targets []BotFleetSubscriptionTarget) {
+	for _, target := range targets {
+		m.Ensure(target)
+	}
 }
 
 // StopSession 取消该会话的全部节点订阅；停止完成后不保留活动流。
