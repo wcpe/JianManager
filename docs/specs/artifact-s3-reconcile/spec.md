@@ -1,6 +1,6 @@
 # 功能规格：制品索引可视化与 S3 一致性对账
 
-> 状态：开发中　·　关联 PRD：FR-349（依赖 FR-347 外置存储底座）　·　分支：feature/fr-349-artifact-s3-reconcile　·　架构决策：ADR-073（已覆盖，本 spec 不另立 ADR）
+> 状态：已交付@v0.18.0　·　关联 PRD：FR-349（依赖 FR-347 外置存储底座）　·　分支：feature/fr-349-artifact-s3-reconcile　·　架构决策：ADR-073（已覆盖，本 spec 不另立 ADR）
 
 ## 1. 背景与目标
 

@@ -1,6 +1,6 @@
 # 功能规格：制品库存量迁移工具（渠道间搬运 + 幂等续跑）
 
-> 状态：开发中　·　关联 PRD：FR-348（依赖 FR-347 底座）　·　分支：feature/fr-348-artifact-storage-migration　·　架构决策：ADR-073（已覆盖，无新增 ADR）
+> 状态：已交付@v0.18.0　·　关联 PRD：FR-348（依赖 FR-347 底座）　·　分支：feature/fr-348-artifact-storage-migration　·　架构决策：ADR-073（已覆盖，无新增 ADR）
 
 ## 1. 背景与目标
 

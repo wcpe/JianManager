@@ -1,6 +1,6 @@
 # 功能规格：制品库外置对象存储底座（BlobStore + 存储渠道 + 302 预签名分发）
 
-> 状态：开发中　·　关联 PRD：FR-347（增强 FR-088，修订 ADR-011 存储节）　·　分支：feature/fr-347-artifact-external-storage　·　架构决策：ADR-073
+> 状态：已交付@v0.18.0　·　关联 PRD：FR-347（增强 FR-088，修订 ADR-011 存储节）　·　分支：feature/fr-347-artifact-external-storage　·　架构决策：ADR-073
 
 ## 1. 背景与目标
 

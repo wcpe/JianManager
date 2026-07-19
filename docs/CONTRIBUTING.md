@@ -50,7 +50,7 @@ task dist       # 前端 + Bot Worker + 全部内嵌资产 + 四个发布二进�
 
 ## 6. 版本号
 
-唯一真源是 [`internal/version/version.go`](../internal/version/version.go)（ADR-065 / [ADR-074](adr/074-release-version-provenance-and-smoke.md)）。当前版本保持 **`0.18.0-dev`**；开发态恒为下一目标版本 `X.Y.Z-dev`，普通贡献者不要自行改版本号。
+唯一真源是 [`internal/version/version.go`](../internal/version/version.go)（ADR-065 / [ADR-074](adr/074-release-version-provenance-and-smoke.md)）。当前正式发布提交使用 **`0.18.0`**，对应 tag `v0.18.0`；后续开发态恒为下一目标版本 `X.Y.Z-dev`，普通贡献者不要自行改版本号。
 
 发布 metadata 由 `scripts/release-metadata.mjs` 统一解析，规则如下：
 

@@ -6,7 +6,11 @@
 
 ## [Unreleased]
 
-> 本段为 `v0.19.0` 开发版归档区（自 v0.18.0 之后累积）。
+> 本段为 `v0.19.0` 开发版归档区（自 v0.18.0 之后累积），当前无未发布条目。
+
+## 0.18.0（2026-07-19）
+
+> 本版完整交付 FR-342～350：实例损毁重建、无探针系统指标、环境变量管理、停机历史日志、客户端分发上传增效、制品外置对象存储、存量迁移、S3 一致性对账与发布编排器定点增强；并收口启动预检、探针/Bot 反馈、进程状态、缓存、版本溯源与发布烟测等缺陷。FR-342～345 已于 2026-07-16 在 FR-277 主机完成真机逐项验收；正式发布前在干净基线完成 Go/前端/Bot 全量门禁、102 条 Chromium E2E 与四平台交付物构建。
 
 ### 新增
 - **客户端分发上传增效：秒传预查 + 小文件聚合 + 有限并发（FR-346，feat，增强 FR-250/251，见 `docs/specs/client-upload-efficiency/spec.md`；真机痛点：数千文件整合包发布逐文件串行 init→chunk→complete 请求过多）**：①**后端**——新端点 `POST /client-channels/:id/files/precheck`（批量 sha256 预查，≤500 项/请求，命中返回与真上传同构的制品引用并 bump `last_used_at`；发布链路恒 `codec=none`、Asset.SHA256 即原始内容 hash，前端 hash 直作查重键，历史压缩态制品天然不命中恒走真上传零误引）+ `POST /client-channels/:id/files/batch`（multipart 聚合上传，单文件 ≤8MiB、单批 ≤200 文件 & ≤32MiB，逐文件 sha256 校验，fail-fast 且已入库部分重试即秒传）。②**前端**——发布编排接入：上传前 WebCrypto 算 hash（≤256MiB，超限直分块不预查）、命中秒传零字节、新小文件按批聚合、>8MiB 走 FR-251 分块（complete 补 `expectedSha256` 强校验），文件级并发 4、进度双阶段整合；预查失败降级全量上传不阻断发布。③数千小文件整合包首发请求数 ~9000（严格串行）→ ~21（并发），内容不变二次发布仅 ~6 个预查请求零字节上传。④devmock 契约同步 + 中英 i18n。
@@ -14,22 +18,14 @@
 - **制品库存量迁移工具：渠道间搬运 + 幂等续跑（FR-348，feat，依赖 FR-347，见 `docs/specs/artifact-storage-migration/spec.md`）**：①**后台任务**——新增 `artifact_migrate` CP 本地任务与迁移/失败明细表，单在途、目标真连探测、最长 12h；逐制品严格执行「读源并校验 → 写目标 → 先改 Asset 位置记录 → 再删源」，失败条不删源并继续，其余成功不受影响。②**安全与续跑**——local↔S3/S3↔S3 双向迁移，旧位置乐观守卫、同物理桶跳过删源；强停逐条生效，CP 重启清扫孤儿任务，重新发起同目标时已迁条按记录自述自动跳过。③**前端**——存储渠道页新增迁移确认、实时进度与四计数、强停、终态摘要、失败明细及重新发起；任务中心与 devmock 同步。
 - **制品索引可视化与 S3 一致性对账（FR-349，feat，依赖 FR-347，见 `docs/specs/artifact-s3-reconcile/spec.md`）**：①**对账底座**——BlobStore 增 `ListPage` 分页遍历；按 S3 渠道异步比对 client-file 索引与对象清单，手动/默认每日定期触发、同渠道在途去重，运行与 missing/orphan 差异报告落库。②**显式处置**——缺失制品人工标 `lost` 后玩家与管理面下载返回 410 `ARTIFACT_LOST`；重传同内容自动补回记录自述渠道并复位；孤儿经二次确认清理，处置时重查索引，过时报告翻 `stale` 防误删。③**可视化**——制品列表增加存储位置与对账状态列，对账区提供设置、立即对账、运行记录、分页报告和两类危险操作确认；devmock、中英 i18n 与 DOM 回归同步。
 - **发布编排器文件树定点增强：多级目录一次建 + 右键定点上传（FR-350，feat，增强 FR-191/250/261，免 spec 纯前端）**：①「新建文件夹」占位改名输入 `a/b/c` 原位展开整条层级；新增「新建多级目录」模态（多行每行一条路径、实时预览将建层级与非法行计数、全非法禁创建、右键目录打开则拼在该目录下；`..` 拒绝、已存在层级静默复用）。②目录右键「上传文件到此 / 上传文件夹到此」（后者 `webkitdirectory` 按 `webkitRelativePath` 保留内部结构拼前缀、zip 解包逐条拼前缀、解包失败 toast）。共享组件经可选 props 注入（`onUploadToDir` 省略即不渲染），CleanScopeEditor 等使用方无感。
-
-### 修复
-- **0 字节文件上传被拒致整批发布失败（fix，真机反馈：含 `.gitkeep`/空配置的整合包发布报「上传初始化参数非法: totalSize 须为正」弃单）**：分块上传 init 的 `totalSize <= 0` 一刀切把合法空文件当参数非法。init 放宽为仅拒负数，0 字节 0 分片经 complete 空流正常 ingest（空文件标准摘要 `e3b0c44…`，与单次上传同 CAS 逐字段一致）；前端零分片直达 complete、进度终值无 NaN；devmock 同语义放宽。
-- **测试基建目录移出 app 类型检查面（fix(web)，FR-346 收尾钓出）**：vitest setup 引入 `node:crypto` 桥接后 `tsc -b` 在 app 工程报 TS2591（react-app 预设不含 node 类型，且增量缓存曾掩盖）；`src/test` 为测试专属基建，与 `*.test` 文件同属 vitest 运行面，一并从 `tsconfig.app.json` 排除。
-
-## 0.18.0（2026-07-17）
-
-> 2026-07-16 真机验收（FR-277 主机，浏览器逐项点验）：FR-342（server+proxy 断网损毁→恢复→重建→可启动全闭环）/ FR-343（探针与无探针双路真实指标）/ FR-344（.env 落盘+进程注入+运行时环境读 JVM 真身）/ FR-345（停机回放+深链+搜索导出）/ 4 fix / REF-1 全部通过；验收过程钓出上述 5 个集成缺陷并当场修复重部复验。
-
-### 新增
 - **实例系统级基础指标 + 概览接真去 mock-api（FR-343，feat，增强 FR-170/142，见 `docs/specs/instance-system-metrics/spec.md`；盘问结论：用户「TPS/MSPT mock 假数据」真相 = 实例大多没连 ServerProbe → 无源显占位，后端时序早已真数据）**：①**后端**——`GetInstanceMetrics` 非 docker 分支补采进程 CPU%（gopsutil `CPUPercent`）+ 运行时长（`CreateTime`），连同已有 RSS 内存，让**未部署/未连探针的运行中实例**在概览也有真实 CPU/内存/运行时长（系统直取，无 proto 变更；探针可用时仍优先覆盖富指标）。②**前端概览**——去除写死的 `mock-api` 假火花线（`buildSparkValues(19.8/35)`），改真实 `inst_tps` 时序火花线（`useMetricSeries`），无数据/无探针显「暂无时序数据/需探针」空态而非假图；内存卡无堆上限（无探针）时显 RSS MB 不再显误导的 0%；TPS 卡无探针显「需探针」而非 -1；页眉补运行时长。keepalive 测试同步（概览也是 metricSeries 消费方，「监控页签隐藏归零」断言按 queryKey 精确到监控页签查询）。tsc/lint/vitest 16/16 绿；探针与无探针双路真实指标真机验收通过。
 - **搭建失败损毁态 + 一键重建（FR-342，feat，增强 FR-319 异步搭建，见 `docs/specs/provision-damaged-rebuild/spec.md`；真机反馈：断网/下载核心失败后实例只留 STOPPED，无重建入口、只能删了重填参数）**：①**状态机**——新增 `DAMAGED`（损毁）；一键搭建任一阶段失败（下载/校验/配置/探针/Forge）直写损毁态，原始搭建参数存实例 `provision_spec`（JSON）供复用；损毁实例不可直接启动（`Start` 守卫返 `PREFLIGHT_FAILED`「已损毁，请先重建」）。②**重建**——`POST /instances/:id/rebuild` 复用 `provision_spec` 重跑搭建到既有工作目录（覆盖残缺 jar/配置），成功→STOPPED、失败→仍 DAMAGED，重建在途经长操作闸拦重复重建/启动；起后台任务、进度见任务中心。③**前端**——状态点/徽章 DAMAGED 红「损毁」；控制台损毁实例显「重建」按钮（复用参数、无需重填）、不出现启动按钮、失败原因横幅显搭建失败原因；重建中禁用按钮。后端 4 单测（失败→DAMAGED+存参数 / 重建守卫 / 换 worker 重建成功→STOPPED / 损毁拦启动，含 fake-worker 端到端）+ 前端 tsc/lint/28 绿。④**代理路径（阶段二）**——代理搭建失败同进 DAMAGED 可重建：`markProxyDamaged` 由「删实例失败补偿」改为「标损毁保留」（`provision_spec`+`forwarding_secret` 已入库），`RebuildProxy` 复用二者重跑 `finishProxy`，`/rebuild` 端点按实例 role 分派 server/proxy（前端 DAMAGED 徽章+重建按钮通用无需改）；旧「失败补偿删实例」3 测试重写为损毁/重建断言 + 代理重建成功端到端。服务端与代理重建端到端真机验收通过。
 - **实例环境变量管理（FR-344，feat，增强 FR-034/ADR-008 结构化启动，见 `docs/specs/instance-env-vars/spec.md`；用户要求「加环境变量 tab、自配启动 env 写 .env」）**：实例详情新增「环境变量」页签。①**上区**自定义启动环境变量 KEY/VALUE 编辑器——编辑复用既有 `PUT /instances/:id`（`envVars`，触发启动规格重同步），Worker 启动时把 env 物化为 `<workDir>/.env`（`buildJavaCmd`→`writeEnvFile`，单向生成物；实际注入仍走 `composeEnv`）、下次启动生效；草稿按 configured 内容 key 重挂初始化，轮询不清未保存编辑。②**下区**运行时实际环境只读——新增 Worker RPC `GetInstanceEnv`（gopsutil `proc.Environ` 读 Java 进程实际环境，含继承 PATH/JAVA_HOME）+ CP `GET /instances/:id/env`（`{configured,runtime,runtimeAvailable,note}`，configured 恒返回、runtime 尽力而为），未运行/平台受限（Windows）显提示。中英 i18n + devmock 契约。后端 build+worker/service/router 全绿 + `.env` 3 单测；前端 tsc/lint/vitest 16 绿；`.env` 落盘、进程注入与运行时环境读取真机验收通过。
 - **未运行/历史日志查看（FR-345，feat，增强 FR-039 终端/FR-049 日志中心，见 `docs/specs/instance-log-history/spec.md`；真机反馈：手动关服后终端变黑看不到关服过程、停止态无历史；软依赖 FIX-3 优雅关服使关服日志先落库）**：日志已 DB 持久化（FR-049），**纯前端复用、无后端改动**。①**终端回放**——`TerminalPane` 停机（STOPPED）分支由空白「实例未运行」静态占位改渲染 `StoppedLogsView`：`useLogs({instanceId,source:'instance'})` 拉 DB 最近历史正序展示（旧→新、加载滚到底、error/warn 着色），令关服过程/崩溃现场在停机态仍可见（DB 持久，重连/切页签/刷新不丢），不再变黑。②**独立历史**——头部「查看完整历史」链到 `/logs?instanceId=<id>`，`LogsPage` 从 URL 初始化实例筛选，复用既有搜索/时间筛选/导出。中英 i18n；TerminalPane 停机态测试同步（回放视图断言）。前端 tsc/lint/vitest 21 绿；停机回放、深链、搜索与导出真机验收通过。
 
 ### 修复
+- **0 字节文件上传被拒致整批发布失败（fix，真机反馈：含 `.gitkeep`/空配置的整合包发布报「上传初始化参数非法: totalSize 须为正」弃单）**：分块上传 init 的 `totalSize <= 0` 一刀切把合法空文件当参数非法。init 放宽为仅拒负数，0 字节 0 分片经 complete 空流正常 ingest（空文件标准摘要 `e3b0c44…`，与单次上传同 CAS 逐字段一致）；前端零分片直达 complete、进度终值无 NaN；devmock 同语义放宽。
+- **测试基建目录移出 app 类型检查面（fix(web)，FR-346 收尾钓出）**：vitest setup 引入 `node:crypto` 桥接后 `tsc -b` 在 app 工程报 TS2591（react-app 预设不含 node 类型，且增量缓存曾掩盖）；`src/test` 为测试专属基建，与 `*.test` 文件同属 vitest 运行面，一并从 `tsconfig.app.json` 排除。
 - **正式二进制补齐 `--version` 快速退出契约（fix(release)）**：Control Plane 与 Worker 入口统一识别 `--version`，只输出裸版本号并立即退出；避免参数被误当配置路径或进入正常启动流程，发布门禁可直接验证四平台制品的运行期版本真值。
 - **代理无启用后端时启动前拦截（fix，真机复现：代理启动即崩 `java.lang.IllegalArgumentException: No servers defined`）**：无任何启用后端注册的代理直接启动，BungeeCord/Velocity 读到空 `servers` 段抛崩、CP 却已把它转 STARTING。CP 侧 `preflightStart`（FR-314）新增代理就绪校验——纯 DB count（`server_registrations` 中该 proxy 的 `enabled` 注册数），先于节点连通/Worker RPC；为 0 即返 `*PreflightError`（HTTP 422）并写 statusReason「代理未注册任何启用的后端服务器…请先添加并启用至少一个后端子服」，状态不进 STARTING，把「崩一圈才知道」提前为「启动前拦截」。单测覆盖代理无后端拦截 / 有后端放行。
 - **节点离线时「更新探针」快速失败（fix，真机复现：探针未连接时点更新探针一直转圈 loading）**：`ProbeUpdateService.deployTo` 原仅在连接池无客户端时快速失败；但节点离线而池中残留失活反向隧道客户端（`pool.Get` 仍返回 ok）时，`DeployServerProbe`（jar + 依赖 zip 大载荷）阻塞到 `probeDeployTimeout`(30s) 才失败——前端表现为「一直 loading」。`deployTo` 先于 jar/pool 检查新增节点在线快速失败闸：按心跳态 `Node.Status != online` 即返明确原因「节点离线，请先让节点上线再重试」（前端 `useUpdateProbe` 已有 onError toast，秒回错误不空转）。离线闸置于 jar 检查之前，未内嵌 jar 的开发环境亦可命中。单测：节点离线快速失败 / 节点在线但不在池仍报未连接。
