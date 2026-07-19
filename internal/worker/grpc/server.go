@@ -27,6 +27,8 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/taskreg"
 	"github.com/wcpe/JianManager/internal/worker/ws"
 	"github.com/wcpe/JianManager/proto/workerpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // instanceEvent 内部事件，分发给所有 StreamInstanceEvents 订阅者。
@@ -70,7 +72,7 @@ type Server struct {
 	// botEventMu 保护 Bot 事件订阅；Fleet 订阅额外登记，以便 worker 退出时只关闭新流。
 	botEventMu        sync.Mutex
 	botEventSubs      []chan *bot.BotWorkerEvent
-	botFleetEventSubs map[chan *bot.BotWorkerEvent]int64
+	botFleetEventSubs map[chan *bot.BotWorkerEvent]*botFleetEventSubscriber
 	botEventCancel    func()
 
 	// eventMu 保护 eventSubs，StreamInstanceEvents 订阅/取消订阅时加锁。
@@ -847,25 +849,40 @@ func (s *Server) dispatchBotEvent(event *bot.BotWorkerEvent) {
 	}
 	currentGeneration := s.currentBotWorkerGeneration()
 	s.botEventMu.Lock()
-	defer s.botEventMu.Unlock()
+	overflowed := make([]*botFleetEventSubscriber, 0)
+	remaining := s.botEventSubs[:0]
 	for _, ch := range s.botEventSubs {
-		if subscriberGeneration, fleet := s.botFleetEventSubs[ch]; fleet &&
-			!matchesBotWorkerGeneration(event, subscriberGeneration, currentGeneration) {
+		subscriber, fleet := s.botFleetEventSubs[ch]
+		if fleet && !matchesBotWorkerGeneration(event, subscriber.generation, currentGeneration) {
+			remaining = append(remaining, ch)
 			continue
 		}
-		dispatchBotEventNonBlocking(ch, event)
+		if fleet && !subscriber.enqueue(event) {
+			delete(s.botFleetEventSubs, ch)
+			overflowed = append(overflowed, subscriber)
+			continue
+		}
+		if !fleet {
+			dispatchBotEventNonBlocking(ch, event)
+		}
+		remaining = append(remaining, ch)
+	}
+	s.botEventSubs = remaining
+	s.botEventMu.Unlock()
+	for _, subscriber := range overflowed {
+		subscriber.stop(status.Error(codes.ResourceExhausted, "Bot Fleet 可靠事件队列已满，请重新订阅"))
 	}
 }
 
 func (s *Server) dispatchBotWorkerExit(event *bot.BotWorkerEvent) {
 	sourceGeneration := event.WorkerEpochGeneration
 	s.botEventMu.Lock()
-	fleetSubscribers := make([]chan *bot.BotWorkerEvent, 0, len(s.botFleetEventSubs))
+	fleetSubscribers := make([]*botFleetEventSubscriber, 0, len(s.botFleetEventSubs))
 	remaining := s.botEventSubs[:0]
 	for _, ch := range s.botEventSubs {
-		subscriberGeneration, fleet := s.botFleetEventSubs[ch]
-		if fleet && (sourceGeneration == 0 || subscriberGeneration == sourceGeneration) {
-			fleetSubscribers = append(fleetSubscribers, ch)
+		subscriber, fleet := s.botFleetEventSubs[ch]
+		if fleet && (sourceGeneration == 0 || subscriber.generation == sourceGeneration) {
+			fleetSubscribers = append(fleetSubscribers, subscriber)
 			delete(s.botFleetEventSubs, ch)
 			continue
 		}
@@ -876,8 +893,9 @@ func (s *Server) dispatchBotWorkerExit(event *bot.BotWorkerEvent) {
 	}
 	s.botEventSubs = remaining
 	s.botEventMu.Unlock()
-	for _, ch := range fleetSubscribers {
-		close(ch)
+	exitErr := status.Error(codes.Unavailable, "bot-worker 进程已退出，请重新订阅")
+	for _, subscriber := range fleetSubscribers {
+		subscriber.stop(exitErr)
 	}
 }
 
@@ -899,7 +917,7 @@ func dispatchBotEventNonBlocking(ch chan *bot.BotWorkerEvent, event *bot.BotWork
 	select {
 	case ch <- event:
 	default:
-		// 慢订阅者丢帧，不能反压 bot-worker stdout 读取循环。
+		// 旧 BotEvent 流允许丢帧，不能反压 bot-worker stdout 读取循环。
 	}
 }
 

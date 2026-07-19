@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,15 +19,140 @@ import (
 )
 
 const (
-	maxBotBatchSize           = 50
-	maxBotActionSignals       = 100
-	botBatchCacheLimit        = 1000
-	botBatchCacheTTL          = time.Hour
-	botBatchStatusAccepted    = "accepted"
-	botBatchStatusConflict    = "conflict"
-	botBatchStatusCapacity    = "capacity_insufficient"
-	botBatchStatusUnavailable = "ephemeral_unavailable"
+	maxBotBatchSize            = 50
+	maxBotActionSignals        = 100
+	botBatchCacheLimit         = 1000
+	botBatchCacheTTL           = time.Hour
+	botFleetReliableQueueLimit = 1024
+	botBatchStatusAccepted     = "accepted"
+	botBatchStatusConflict     = "conflict"
+	botBatchStatusCapacity     = "capacity_insufficient"
+	botBatchStatusUnavailable  = "ephemeral_unavailable"
 )
+
+type botFleetEventSubscriber struct {
+	mu         sync.Mutex
+	generation int64
+	out        chan *bot.BotWorkerEvent
+	wake       chan struct{}
+	done       chan struct{}
+	stopped    chan struct{}
+	stopOnce   sync.Once
+	queue      []*bot.BotWorkerEvent
+	limit      int
+	err        error
+}
+
+func newBotFleetEventSubscriber(out chan *bot.BotWorkerEvent, generation int64) *botFleetEventSubscriber {
+	subscriber := &botFleetEventSubscriber{
+		generation: generation, out: out, wake: make(chan struct{}, 1),
+		done: make(chan struct{}), stopped: make(chan struct{}), limit: botFleetReliableQueueLimit,
+	}
+	go subscriber.run()
+	return subscriber
+}
+
+func (s *botFleetEventSubscriber) run() {
+	defer close(s.stopped)
+	defer close(s.out)
+	for {
+		event := s.next()
+		if event == nil {
+			select {
+			case <-s.wake:
+				continue
+			case <-s.done:
+				return
+			}
+		}
+		select {
+		case s.out <- event:
+		case <-s.done:
+			return
+		}
+	}
+}
+
+func (s *botFleetEventSubscriber) next() *bot.BotWorkerEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.queue) == 0 {
+		return nil
+	}
+	event := s.queue[0]
+	s.queue[0] = nil
+	s.queue = s.queue[1:]
+	return event
+}
+
+func (s *botFleetEventSubscriber) enqueue(event *bot.BotWorkerEvent) bool {
+	select {
+	case <-s.done:
+		return false
+	default:
+	}
+	s.mu.Lock()
+	accepted := s.enqueueLocked(event)
+	s.mu.Unlock()
+	if accepted {
+		select {
+		case s.wake <- struct{}{}:
+		default:
+		}
+	}
+	return accepted
+}
+
+func (s *botFleetEventSubscriber) enqueueLocked(event *bot.BotWorkerEvent) bool {
+	reliable := event != nil && event.Evt == "action-event"
+	if !reliable && s.mergeRuntimeLocked(event) {
+		return true
+	}
+	if len(s.queue) < s.limit {
+		s.queue = append(s.queue, event)
+		return true
+	}
+	if !reliable {
+		return true
+	}
+	for i, queued := range s.queue {
+		if queued == nil || queued.Evt != "action-event" {
+			copy(s.queue[i:], s.queue[i+1:])
+			s.queue[len(s.queue)-1] = event
+			return true
+		}
+	}
+	return false
+}
+
+func (s *botFleetEventSubscriber) mergeRuntimeLocked(event *bot.BotWorkerEvent) bool {
+	if event == nil || (event.Evt != "bot-state" && event.Evt != "heartbeat") {
+		return false
+	}
+	for i := len(s.queue) - 1; i >= 0; i-- {
+		if s.queue[i] != nil && s.queue[i].Evt == event.Evt {
+			s.queue[i] = event
+			return true
+		}
+	}
+	return false
+}
+
+func (s *botFleetEventSubscriber) stop(err error) {
+	s.mu.Lock()
+	if s.err == nil {
+		s.err = err
+	}
+	s.mu.Unlock()
+	s.stopOnce.Do(func() { close(s.done) })
+	<-s.stopped
+}
+
+func (s *botFleetEventSubscriber) terminalError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
 
 type botFleetManager interface {
 	CapacitySnapshot() bot.BotCapacitySnapshot
@@ -153,7 +279,7 @@ func (s *Server) StreamBotFleetEvents(req *workerpb.StreamBotFleetEventsRequest,
 		return status.Error(codes.Unavailable, err.Error())
 	}
 	ch := make(chan *bot.BotWorkerEvent, 256)
-	s.addBotFleetEventSubscriber(ch)
+	subscriber := s.addBotFleetEventSubscriber(ch)
 	defer s.removeBotEventSubscriber(ch)
 
 	for {
@@ -162,6 +288,9 @@ func (s *Server) StreamBotFleetEvents(req *workerpb.StreamBotFleetEventsRequest,
 			return stream.Context().Err()
 		case event, ok := <-ch:
 			if !ok {
+				if err := subscriber.terminalError(); err != nil {
+					return err
+				}
 				return status.Error(codes.Unavailable, "bot-worker 进程已退出，请重新订阅")
 			}
 			for _, fleetEvent := range botWorkerEventToFleetProto(event, req.SessionUuid) {
@@ -806,48 +935,55 @@ func (s *Server) addBotEventSubscriber(ch chan *bot.BotWorkerEvent) {
 	s.botEventMu.Unlock()
 }
 
-func (s *Server) addBotFleetEventSubscriber(ch chan *bot.BotWorkerEvent) {
+func (s *Server) addBotFleetEventSubscriber(ch chan *bot.BotWorkerEvent) *botFleetEventSubscriber {
 	generation := s.currentBotWorkerGeneration()
+	subscriber := newBotFleetEventSubscriber(ch, generation)
 	s.botEventMu.Lock()
 	s.botEventSubs = append(s.botEventSubs, ch)
 	if s.botFleetEventSubs == nil {
-		s.botFleetEventSubs = make(map[chan *bot.BotWorkerEvent]int64)
+		s.botFleetEventSubs = make(map[chan *bot.BotWorkerEvent]*botFleetEventSubscriber)
 	}
-	s.botFleetEventSubs[ch] = generation
+	s.botFleetEventSubs[ch] = subscriber
 	s.botEventMu.Unlock()
 
-	if s.botMgr == nil {
-		return
+	if s.botMgr != nil {
+		currentGeneration := s.currentBotWorkerGeneration()
+		if !s.botMgr.IsRunning() || currentGeneration != generation {
+			s.closeBotFleetEventSubscriber(ch, status.Error(codes.Unavailable, "bot-worker 进程已退出，请重新订阅"))
+		}
 	}
-	currentGeneration := s.currentBotWorkerGeneration()
-	if !s.botMgr.IsRunning() || currentGeneration != generation {
-		s.closeBotFleetEventSubscriber(ch)
-	}
+	return subscriber
 }
 
-func (s *Server) closeBotFleetEventSubscriber(ch chan *bot.BotWorkerEvent) {
+func (s *Server) closeBotFleetEventSubscriber(ch chan *bot.BotWorkerEvent, err error) {
 	s.botEventMu.Lock()
-	_, fleet := s.botFleetEventSubs[ch]
+	subscriber, fleet := s.botFleetEventSubs[ch]
 	removed := fleet && s.removeBotEventSubscriberLocked(ch)
 	s.botEventMu.Unlock()
 	if removed {
-		close(ch)
+		subscriber.stop(err)
 	}
 }
 
 func (s *Server) removeBotEventSubscriber(ch chan *bot.BotWorkerEvent) {
 	s.botEventMu.Lock()
+	subscriber := s.botFleetEventSubs[ch]
 	removed := s.removeBotEventSubscriberLocked(ch)
 	s.botEventMu.Unlock()
-	if removed {
-		close(ch)
+	if !removed {
+		return
 	}
+	if subscriber != nil {
+		subscriber.stop(nil)
+		return
+	}
+	close(ch)
 }
 
 func (s *Server) removeBotEventSubscriberLocked(ch chan *bot.BotWorkerEvent) bool {
 	delete(s.botFleetEventSubs, ch)
-	for i, subscriber := range s.botEventSubs {
-		if subscriber == ch {
+	for i, eventChannel := range s.botEventSubs {
+		if eventChannel == ch {
 			s.botEventSubs = append(s.botEventSubs[:i], s.botEventSubs[i+1:]...)
 			return true
 		}

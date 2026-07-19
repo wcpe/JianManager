@@ -2,6 +2,8 @@ package grpc
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -454,6 +456,93 @@ func TestStreamBotFleetEventsFiltersAndCleansSubscriberOnCancel(t *testing.T) {
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 	waitForBotEventSubscribers(t, srv, 0)
+}
+
+func TestDispatchBotEventPreservesBarrierAndTerminalActionsUnderRuntimePressure(t *testing.T) {
+	fake := &fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, WorkerEpochGeneration: 3}}
+	srv := newBotFleetTestServer(fake)
+	const actionRuns = 64
+	ch := make(chan *bot.BotWorkerEvent, 1)
+	srv.addBotFleetEventSubscriber(ch)
+	defer srv.removeBotEventSubscriber(ch)
+
+	startedAt := time.Now()
+	for i := range 256 {
+		srv.dispatchBotEvent(&bot.BotWorkerEvent{
+			Evt: "bot-state", WorkerEpochGeneration: 3,
+			Bots: []bot.BotState{{ID: "runtime-bot", EventSeq: int64(i + 1)}},
+		})
+	}
+	for i := range actionRuns {
+		actionRunID := fmt.Sprintf("action-%03d", i)
+		srv.dispatchBotEvent(grpcActionTestEvent(actionRunID, "running", json.RawMessage(`{"type":"barrier-arrived"}`)))
+		srv.dispatchBotEvent(grpcActionTestEvent(actionRunID, "succeeded", nil))
+	}
+	if elapsed := time.Since(startedAt); elapsed >= 500*time.Millisecond {
+		t.Fatalf("Bot 事件扇出不应反压 stdout: %v", elapsed)
+	}
+
+	seen := make(map[string]map[string]bool, actionRuns)
+	deadline := time.After(2 * time.Second)
+	for len(seen) < actionRuns || !allGRPCActionStatusesSeen(seen) {
+		select {
+		case event, ok := <-ch:
+			if !ok {
+				t.Fatal("动作事件全部交付前 Fleet 订阅被关闭")
+			}
+			if event.Evt != "action-event" || event.Action == nil {
+				continue
+			}
+			statuses := seen[event.Action.ActionRunID]
+			if statuses == nil {
+				statuses = make(map[string]bool, 2)
+				seen[event.Action.ActionRunID] = statuses
+			}
+			statuses[event.Action.Status] = true
+		case <-deadline:
+			t.Fatalf("channel 满压下 action-event 丢失: 已收到 %d/%d 组", len(seen), actionRuns)
+		}
+	}
+	require.Len(t, seen, actionRuns)
+	for _, statuses := range seen {
+		require.True(t, statuses["running"], "barrier-arrived 事件不得丢失")
+		require.True(t, statuses["succeeded"], "终态事件不得丢失")
+	}
+}
+
+func allGRPCActionStatusesSeen(seen map[string]map[string]bool) bool {
+	for _, statuses := range seen {
+		if !statuses["running"] || !statuses["succeeded"] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestDispatchBotEventClosesFleetSubscriberAtReliableQueueHardLimit(t *testing.T) {
+	fake := &fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, WorkerEpochGeneration: 3}}
+	srv := newBotFleetTestServer(fake)
+	ch := make(chan *bot.BotWorkerEvent, 1)
+	subscriber := srv.addBotFleetEventSubscriber(ch)
+
+	for i := range botFleetReliableQueueLimit + 16 {
+		srv.dispatchBotEvent(grpcActionTestEvent(fmt.Sprintf("action-%04d", i), "succeeded", nil))
+	}
+
+	waitForBotEventSubscribers(t, srv, 0)
+	require.Equal(t, codes.ResourceExhausted, status.Code(subscriber.terminalError()))
+	for range ch {
+	}
+}
+
+func grpcActionTestEvent(actionRunID, actionStatus string, result json.RawMessage) *bot.BotWorkerEvent {
+	return &bot.BotWorkerEvent{
+		Evt: "action-event", WorkerEpochGeneration: 3,
+		Action: &bot.ActionEvent{
+			BotID: "bot-action", SessionID: "run-1", Generation: 1,
+			ActionRunID: actionRunID, StepID: "barrier-1", Status: actionStatus, Result: result,
+		},
+	}
 }
 
 func TestAddBotFleetEventSubscriberAfterWorkerExitClosesImmediately(t *testing.T) {

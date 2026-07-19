@@ -142,6 +142,170 @@ type pendingRequestResult struct {
 	err   error
 }
 
+const eventSubscriberQueueLimit = 4096
+
+type eventSubscriber struct {
+	mu       sync.Mutex
+	out      chan *BotWorkerEvent
+	wake     chan struct{}
+	done     chan struct{}
+	stopped  chan struct{}
+	stopOnce sync.Once
+	queue    []*BotWorkerEvent
+	limit    int
+}
+
+func newEventSubscriber(buffer int) *eventSubscriber {
+	limit := eventSubscriberQueueLimit
+	if buffer > limit {
+		limit = buffer
+	}
+	subscriber := &eventSubscriber{
+		out: make(chan *BotWorkerEvent, buffer), wake: make(chan struct{}, 1),
+		done: make(chan struct{}), stopped: make(chan struct{}), limit: limit,
+	}
+	go subscriber.run()
+	return subscriber
+}
+
+func (s *eventSubscriber) run() {
+	defer close(s.stopped)
+	defer close(s.out)
+	for {
+		event := s.next()
+		if event == nil {
+			select {
+			case <-s.wake:
+				continue
+			case <-s.done:
+				return
+			}
+		}
+		select {
+		case s.out <- event:
+		case <-s.done:
+			return
+		}
+	}
+}
+
+func (s *eventSubscriber) next() *BotWorkerEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.queue) == 0 {
+		return nil
+	}
+	event := s.queue[0]
+	s.queue[0] = nil
+	s.queue = s.queue[1:]
+	return event
+}
+
+func (s *eventSubscriber) enqueue(event *BotWorkerEvent) bool {
+	select {
+	case <-s.done:
+		return false
+	default:
+	}
+	bufferedReliable := s.drainBufferedForExit(event)
+	s.mu.Lock()
+	if len(bufferedReliable) > 0 {
+		s.queue = append(bufferedReliable, s.queue...)
+	}
+	if event != nil && event.Evt == "worker-exit" {
+		s.dropQueuedRuntimeLocked()
+	}
+	accepted := s.enqueueLocked(event)
+	s.mu.Unlock()
+	if accepted {
+		select {
+		case s.wake <- struct{}{}:
+		default:
+		}
+	}
+	return accepted
+}
+
+func (s *eventSubscriber) drainBufferedForExit(event *BotWorkerEvent) []*BotWorkerEvent {
+	if event == nil || event.Evt != "worker-exit" {
+		return nil
+	}
+	retained := make([]*BotWorkerEvent, 0, cap(s.out))
+	for {
+		select {
+		case buffered, ok := <-s.out:
+			if !ok {
+				return retained
+			}
+			if buffered != nil && buffered.Evt == "action-event" {
+				retained = append(retained, buffered)
+			}
+		default:
+			return retained
+		}
+	}
+}
+
+func (s *eventSubscriber) dropQueuedRuntimeLocked() {
+	retained := s.queue[:0]
+	for _, queued := range s.queue {
+		if isReliableBotEvent(queued) {
+			retained = append(retained, queued)
+		}
+	}
+	for i := len(retained); i < len(s.queue); i++ {
+		s.queue[i] = nil
+	}
+	s.queue = retained
+}
+
+func (s *eventSubscriber) enqueueLocked(event *BotWorkerEvent) bool {
+	if !isReliableBotEvent(event) && s.mergeRuntimeLocked(event) {
+		return true
+	}
+	if len(s.queue) < s.limit {
+		s.queue = append(s.queue, event)
+		return true
+	}
+	if !isReliableBotEvent(event) {
+		return true
+	}
+	for i, queued := range s.queue {
+		if !isReliableBotEvent(queued) {
+			copy(s.queue[i:], s.queue[i+1:])
+			s.queue[len(s.queue)-1] = event
+			return true
+		}
+	}
+	return false
+}
+
+func (s *eventSubscriber) mergeRuntimeLocked(event *BotWorkerEvent) bool {
+	if event == nil || (event.Evt != "bot-state" && event.Evt != "heartbeat") {
+		return false
+	}
+	for i := len(s.queue) - 1; i >= 0; i-- {
+		if s.queue[i] != nil && s.queue[i].Evt == event.Evt {
+			s.queue[i] = event
+			return true
+		}
+	}
+	return false
+}
+
+func (s *eventSubscriber) abort() {
+	s.stopOnce.Do(func() { close(s.done) })
+}
+
+func (s *eventSubscriber) stop() {
+	s.abort()
+	<-s.stopped
+}
+
+func isReliableBotEvent(event *BotWorkerEvent) bool {
+	return event != nil && (event.Evt == "action-event" || event.Evt == "worker-exit")
+}
+
 // Manager Bot 管理器。
 // spawn 一个 Bot Worker 子进程，通过 stdin/stdout JSON 行协议通信。
 type Manager struct {
@@ -158,7 +322,7 @@ type Manager struct {
 	waitDone               chan struct{} // 本代子进程 Wait 归来即关闭（单一 waiter，Stop 复用）
 	bots                   map[string]*BotState
 	onEvent                EventCallback
-	eventSubs              map[uint64]chan *BotWorkerEvent
+	eventSubs              map[uint64]*eventSubscriber
 	nextSubID              uint64
 	pending                map[string]chan pendingRequestResult
 	requestTimeout         time.Duration
@@ -231,7 +395,7 @@ func NewManager(config ManagerConfig) *Manager {
 	}
 	return &Manager{
 		bots:           make(map[string]*BotState),
-		eventSubs:      make(map[uint64]chan *BotWorkerEvent),
+		eventSubs:      make(map[uint64]*eventSubscriber),
 		pending:        make(map[string]chan pendingRequestResult),
 		requestTimeout: requestTimeout,
 		capacity: BotCapacitySnapshot{
@@ -268,34 +432,37 @@ func (m *Manager) SetEventCallback(cb EventCallback) {
 }
 
 // SubscribeEvents 订阅 Bot Worker 事件。
-// 返回的 cancel 会移除订阅并关闭事件通道；慢订阅者会丢帧，不会阻塞 stdout 读取循环。
+// 每个订阅者使用单一有界泵：runtime 可合并/丢旧，action/退出事件优先保留，不反压 stdout。
 func (m *Manager) SubscribeEvents(buffer int) (<-chan *BotWorkerEvent, func()) {
 	if buffer <= 0 {
 		buffer = 1
 	}
-	ch := make(chan *BotWorkerEvent, buffer)
+	subscriber := newEventSubscriber(buffer)
 
 	m.mu.Lock()
 	if m.eventSubs == nil {
-		m.eventSubs = make(map[uint64]chan *BotWorkerEvent)
+		m.eventSubs = make(map[uint64]*eventSubscriber)
 	}
 	id := m.nextSubID
 	m.nextSubID++
-	m.eventSubs[id] = ch
+	m.eventSubs[id] = subscriber
 	m.mu.Unlock()
 
 	var once sync.Once
 	cancel := func() {
 		once.Do(func() {
 			m.mu.Lock()
-			if sub, ok := m.eventSubs[id]; ok {
+			sub, ok := m.eventSubs[id]
+			if ok {
 				delete(m.eventSubs, id)
-				close(sub)
 			}
 			m.mu.Unlock()
+			if ok {
+				sub.stop()
+			}
 		})
 	}
-	return ch, cancel
+	return subscriber.out, cancel
 }
 
 // Start 启动 Bot Worker 子进程。
@@ -1136,28 +1303,20 @@ func hasFeature(features []string, want string) bool {
 }
 
 func (m *Manager) dispatchEventLocked(event *BotWorkerEvent) {
-	for _, ch := range m.eventSubs {
-		select {
-		case ch <- event:
-		default:
-		}
-	}
+	m.enqueueSubscribersLocked(event)
 }
 
 func (m *Manager) dispatchTerminalEventLocked(event *BotWorkerEvent) {
-	for _, ch := range m.eventSubs {
-		select {
-		case ch <- event:
+	m.enqueueSubscribersLocked(event)
+}
+
+func (m *Manager) enqueueSubscribersLocked(event *BotWorkerEvent) {
+	for id, subscriber := range m.eventSubs {
+		if subscriber.enqueue(event) {
 			continue
-		default:
 		}
-		select {
-		case <-ch:
-		default:
-		}
-		select {
-		case ch <- event:
-		default:
-		}
+		delete(m.eventSubs, id)
+		subscriber.abort()
+		slog.Error("Bot 可靠事件队列已满，终止慢订阅者", "event", event.Evt)
 	}
 }
