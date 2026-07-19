@@ -554,35 +554,35 @@ func validateExistingBotLoadBatch(batch model.BotLoadBatch, allocation BotLoadAl
 
 func expectedBotLoadBots(prepared *botLoadStartPreparation, batches map[int]model.BotLoadBatch) ([]model.Bot, error) {
 	bots := make([]model.Bot, 0, prepared.plan.TargetBots)
-	globalIndex := 1
 	for _, allocation := range prepared.plan.Allocations {
 		batch, ok := batches[allocation.Ordinal]
 		if !ok {
 			return nil, fmt.Errorf("创建 Bot 失败: 批次 ordinal=%d 不存在", allocation.Ordinal)
 		}
+		firstOrdinal := botLoadAllocationFirstOrdinal(prepared.plan, allocation.Ordinal)
 		for localIndex := 0; localIndex < allocation.PlannedCount; localIndex++ {
-			bots = append(bots, newPlannedBotLoadBot(prepared, batch, allocation, globalIndex, localIndex))
-			globalIndex++
+			botOrdinal := firstOrdinal + localIndex
+			bots = append(bots, newPlannedBotLoadBot(prepared, batch, allocation, botOrdinal, localIndex))
 		}
 	}
 	return bots, nil
 }
 
-func newPlannedBotLoadBot(prepared *botLoadStartPreparation, batch model.BotLoadBatch, allocation BotLoadAllocation, globalIndex, localIndex int) model.Bot {
+func newPlannedBotLoadBot(prepared *botLoadStartPreparation, batch model.BotLoadBatch, allocation BotLoadAllocation, botOrdinal, localIndex int) model.Bot {
 	executorNodeID, batchID, sessionID := allocation.ExecutorNodeID, batch.ID, prepared.session.ID
 	cohortKey := ""
-	if globalIndex <= len(prepared.cohortAssignments) {
-		cohortKey = prepared.cohortAssignments[globalIndex-1]
+	if botOrdinal <= len(prepared.cohortAssignments) {
+		cohortKey = prepared.cohortAssignments[botOrdinal-1]
 	}
 	bot := model.Bot{
-		UUID:       stableBotLoadUUID(fmt.Sprintf("%s|bot|%d", prepared.session.UUID, globalIndex)),
+		UUID:       stableBotLoadUUID(fmt.Sprintf("%s|bot|%d", prepared.session.UUID, botOrdinal)),
 		InstanceID: prepared.session.InstanceID, StressSessionID: &sessionID, ExecutorNodeID: &executorNodeID,
-		LoadBatchID: &batchID, Name: stableBotLoadBotName(prepared.session.NamePrefix, prepared.session.UUID, globalIndex),
+		LoadBatchID: &batchID, Name: stableBotLoadBotName(prepared.session.NamePrefix, prepared.session.UUID, botOrdinal),
 		Status: model.BotStatusPending, DesiredStateGeneration: 1, Config: prepared.session.Config,
 		Behavior: prepared.session.Behavior, WorkerID: allocation.ExecutorNodeUUID, CohortKey: cohortKey,
 	}
 	assignment := buildRunningBotLoadAssignment(
-		&bot, prepared.session, &prepared.session.Instance, prepared.config, allocation, localIndex, prepared.cohortJSON[cohortKey],
+		&bot, prepared.session, &prepared.session.Instance, prepared.config, allocation, localIndex, botOrdinal, prepared.cohortJSON[cohortKey],
 	)
 	bot.ConfigHash = botLoadAssignmentConfigHash(assignment)
 	return bot
@@ -640,11 +640,12 @@ func equalUintPointers(left, right *uint) bool {
 	return *left == *right
 }
 
-func buildRunningBotLoadAssignment(bot *model.Bot, session *model.BotStressSession, instance *model.Instance, config botLoadConnectionConfig, allocation BotLoadAllocation, localIndex int, scenarioJSON string) *workerpb.BotAssignment {
+func buildRunningBotLoadAssignment(bot *model.Bot, session *model.BotStressSession, instance *model.Instance, config botLoadConnectionConfig, allocation BotLoadAllocation, localIndex, botOrdinal int, scenarioJSON string) *workerpb.BotAssignment {
 	username := config.Username
 	if username == "" {
 		username = sanitizeMCUsername(bot.Name)
 	}
+	scenarioJSON = scenarioRuntimeJSON(scenarioJSON, botOrdinal)
 	return &workerpb.BotAssignment{
 		BotUuid: bot.UUID, InstanceUuid: instance.UUID, SessionUuid: session.UUID,
 		Generation: bot.DesiredStateGeneration, DesiredState: "running", ConfigHash: bot.ConfigHash,
@@ -653,6 +654,26 @@ func buildRunningBotLoadAssignment(bot *model.Bot, session *model.BotStressSessi
 		ConnectNotBeforeUnixMs: allocation.ConnectStartAt.Add(time.Duration(localIndex*allocation.ConnectIntervalMS) * time.Millisecond).UnixMilli(),
 		CorrelationSeed:        stableBotLoadDigest(session.UUID + "|" + bot.UUID + "|correlation"),
 	}
+}
+
+func scenarioRuntimeJSON(cohortJSON string, botOrdinal int) string {
+	if strings.TrimSpace(cohortJSON) == "" {
+		return cohortJSON
+	}
+	var envelope struct {
+		Seed       int64           `json:"seed"`
+		BotOrdinal int             `json:"botOrdinal"`
+		Scenario   json.RawMessage `json:"scenario"`
+	}
+	if err := json.Unmarshal([]byte(cohortJSON), &envelope); err != nil || len(envelope.Scenario) == 0 {
+		return cohortJSON
+	}
+	envelope.BotOrdinal = botOrdinal
+	raw, err := json.Marshal(envelope)
+	if err != nil {
+		return cohortJSON
+	}
+	return string(raw)
 }
 
 func botLoadAssignmentConfigHash(assignment *workerpb.BotAssignment) string {
@@ -779,11 +800,40 @@ func (s *BotLoadExecutionService) loadBatchBots(ctx context.Context, batchID uin
 	return bots, nil
 }
 
+func stableBotLoadOrdinals(sessionUUID string, targetBots int) map[string]int {
+	ordinals := make(map[string]int, targetBots)
+	for ordinal := 1; ordinal <= targetBots; ordinal++ {
+		ordinals[stableBotLoadUUID(fmt.Sprintf("%s|bot|%d", sessionUUID, ordinal))] = ordinal
+	}
+	return ordinals
+}
+
+func botLoadOrdinalFromUUID(sessionUUID string, targetBots int, botUUID string) int {
+	return stableBotLoadOrdinals(sessionUUID, targetBots)[botUUID]
+}
+
+func botLoadAllocationFirstOrdinal(plan *BotLoadAllocationPlan, allocationOrdinal int) int {
+	firstOrdinal := 1
+	for _, allocation := range plan.Allocations {
+		if allocation.Ordinal < allocationOrdinal {
+			firstOrdinal += allocation.PlannedCount
+		}
+	}
+	return firstOrdinal
+}
+
+func botLoadAllocationLocalIndex(plan *BotLoadAllocationPlan, allocationOrdinal, botOrdinal int) int {
+	return max(0, botOrdinal-botLoadAllocationFirstOrdinal(plan, allocationOrdinal))
+}
+
 func buildStartBotLoadBatchRequest(session *model.BotStressSession, plan *BotLoadAllocationPlan, config botLoadConnectionConfig, allocation BotLoadAllocation, bots []model.Bot, cohortJSON map[string]string) *workerpb.ApplyBotBatchRequest {
 	assignments := make([]*workerpb.BotAssignment, 0, len(bots))
+	ordinals := stableBotLoadOrdinals(session.UUID, plan.TargetBots)
 	for index := range bots {
+		botOrdinal := ordinals[bots[index].UUID]
+		localIndex := botLoadAllocationLocalIndex(plan, allocation.Ordinal, botOrdinal)
 		assignment := buildRunningBotLoadAssignment(
-			&bots[index], session, &session.Instance, config, allocation, index, cohortJSON[bots[index].CohortKey],
+			&bots[index], session, &session.Instance, config, allocation, localIndex, botOrdinal, cohortJSON[bots[index].CohortKey],
 		)
 		assignment.ConfigHash = bots[index].ConfigHash
 		assignments = append(assignments, assignment)

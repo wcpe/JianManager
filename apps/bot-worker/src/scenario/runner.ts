@@ -8,6 +8,7 @@ import {
   type ScenarioActionResult,
   type ScenarioActionSignal,
   type ScenarioBotCapabilities,
+  type ScenarioEntityId,
   type ScenarioRuntime,
   type ScenarioSignalReceipt,
   type ScenarioStep,
@@ -31,6 +32,7 @@ export interface ScenarioRunnerOptions {
   correlationSeed?: string
   stageIndex?: number
   roomKey?: string
+  runDeadline?: number
   capabilities: ScenarioBotCapabilities
   emitActionEvent: (event: ActionEvent['action']) => void
   actionFactory?: ScenarioActionFactory
@@ -67,6 +69,8 @@ export class ScenarioRunner {
   private retryAt: number | undefined
   private correlationToken: string | undefined
   private correlationCounter = 0
+  private lockedEntity: ScenarioEntityId | undefined
+  private readonly rejoinCounts = new Map<string, number>()
   private readonly cancelToken = { cancelled: false, reason: undefined as string | undefined }
   private started = false
   private terminal = false
@@ -101,6 +105,10 @@ export class ScenarioRunner {
   }
 
   cancel(reason: string, now = this.options.capabilities.now()): Promise<void> {
+    if (!this.terminal && !this.disposed) {
+      this.cancelToken.cancelled = true
+      this.cancelToken.reason = reason
+    }
     return this.enqueue(() => this.cancelInternal(reason, now))
   }
 
@@ -151,13 +159,17 @@ export class ScenarioRunner {
 
   private async tickInternal(now: number): Promise<void> {
     if (!this.started || this.terminal || this.disposed) return
+    if (this.options.runDeadline !== undefined && now >= this.options.runDeadline) {
+      await this.expireRun(now)
+      return
+    }
     if (!this.current) {
       if (this.retryAt !== undefined && now >= this.retryAt) await this.startAttempt(now)
       return
     }
     const attempt = this.current
     const result = await this.callAction(() => attempt.action.tick(attempt.context, now))
-    if (this.current !== attempt) return
+    if (this.current !== attempt || this.cancelToken.cancelled) return
     if (result.state !== 'running') {
       await this.completeAttempt(result.state, result, now)
       return
@@ -174,7 +186,9 @@ export class ScenarioRunner {
     this.attempt++
     await this.createCurrent(now)
     if (!this.current) return
-    const result = await this.callAction(() => this.current!.action.start(this.current!.context))
+    const current = this.current
+    const result = await this.callAction(() => current.action.start(current.context))
+    if (this.current !== current || this.cancelToken.cancelled) return
     this.emit('running', result, now)
     if (result.state !== 'running') await this.completeAttempt(result.state, result, now)
   }
@@ -192,11 +206,14 @@ export class ScenarioRunner {
       botId: this.options.botId, botName: this.options.botName, username: this.options.username,
       runId: this.options.runId, generation: this.options.generation, cohortKey: this.options.cohortKey,
       stageIndex: this.options.stageIndex ?? 0, step, attempt: this.attempt, actionRunId,
-      startedAt: now, deadline: now + step.timeoutMs, cancelToken: this.cancelToken,
-      capabilities: this.options.capabilities,
+      startedAt: now, deadline: now + step.timeoutMs, runDeadline: this.options.runDeadline,
+      seed: this.runtime.seed, botOrdinal: this.runtime.botOrdinal,
+      cancelToken: this.cancelToken, capabilities: this.options.capabilities,
       currentCorrelationToken: () => this.correlationToken,
       ensureCorrelationToken: () => this.ensureCorrelationToken(),
       newCorrelationToken: () => this.newCorrelationToken(),
+      lockedEntityId: () => this.lockedEntity,
+      setLockedEntityId: (entityId) => { this.lockedEntity = entityId },
       templateVariables: () => this.templateVariables(step),
     }
   }
@@ -207,25 +224,54 @@ export class ScenarioRunner {
     now: number
   ): Promise<void> {
     if (!this.current) return
-    this.emit(status, result, now)
-    this.rememberTerminal(this.current)
     const step = this.current.step
+    const effective = this.validateJump(step, status, result)
+    this.emit(effective.status, effective.result, now)
+    this.rememberTerminal(this.current)
     await this.cleanupCurrent()
-    if (status !== 'succeeded' && this.attempt < step.maxAttempts) {
+    if (this.cancelToken.cancelled) return
+    if (effective.status !== 'succeeded' && this.attempt < step.maxAttempts && !result.jumpToStepId) {
       this.retryAt = now + step.retryBackoffMs
       return
     }
-    if (status !== 'succeeded') {
+    if (effective.status !== 'succeeded') {
       this.terminal = true
       return
     }
-    this.stepIndex++
+    this.stepIndex = effective.jumpIndex ?? this.stepIndex + 1
     this.attempt = 0
     if (this.stepIndex >= this.runtime.steps.length) {
       this.terminal = true
       return
     }
     await this.startAttempt(now)
+  }
+
+  private validateJump(
+    step: ScenarioStep,
+    status: 'succeeded' | 'failed',
+    result: ScenarioActionResult
+  ): { status: 'succeeded' | 'failed'; result: ScenarioActionResult; jumpIndex?: number } {
+    if (status !== 'succeeded' || !result.jumpToStepId) return { status, result }
+    const jumpIndex = this.runtime.steps.findIndex((candidate) => candidate.id === result.jumpToStepId)
+    if (jumpIndex < 0) return { status: 'failed', result: { state: 'failed', errorCode: 'ACTION_INTERNAL_ERROR', message: '重生入口 step 不存在' } }
+    const count = this.rejoinCounts.get(step.id) ?? 0
+    if (count >= step.maxAttempts) return { status: 'failed', result: { state: 'failed', errorCode: 'ACTION_INTERNAL_ERROR', message: '重生重进次数达到上限' } }
+    this.rejoinCounts.set(step.id, count + 1)
+    return { status, result, jumpIndex }
+  }
+
+  private async expireRun(now: number): Promise<void> {
+    this.cancelToken.cancelled = true
+    this.cancelToken.reason = '运行总截止时间已到'
+    if (this.current) {
+      await this.ignoreErrors(() => this.current!.action.cancel(this.current!.context, this.cancelToken.reason!))
+      this.emit('cancelled', { state: 'failed', errorCode: 'ACTION_CANCELLED', message: this.cancelToken.reason }, now)
+      this.rememberTerminal(this.current)
+      await this.cleanupCurrent()
+    }
+    this.retryAt = undefined
+    this.terminal = true
   }
 
   private async timeoutAttempt(now: number): Promise<void> {
@@ -279,7 +325,7 @@ export class ScenarioRunner {
 
   private async signalInternal(signal: ScenarioActionSignal, now: number): Promise<ScenarioSignalReceipt> {
     const replay = this.signalHistory.get(signal.signalId)
-    if (replay) return { ...replay, accepted: true, skipped: true }
+    if (replay) return { ...replay, skipped: true }
     const receipt = await this.routeSignal(signal, now)
     this.rememberSignal(receipt)
     return receipt
@@ -298,6 +344,7 @@ export class ScenarioRunner {
     const attempt = this.current
     const result = await this.callAction(() => attempt.action.signal!(attempt.context, signal))
     if (this.current !== attempt) return acceptedSignal(signal.signalId)
+    if (this.cancelToken.cancelled) return skippedSignal(signal.signalId, 'action_not_waiting', '动作正在取消')
     if (!result.signalAccepted && result.state === 'running') {
       return skippedSignal(signal.signalId, 'signal_type_mismatch', result.message ?? '信号类型不匹配')
     }
@@ -392,6 +439,9 @@ export class ScenarioRunner {
 function timeoutErrorCode(type: string): string {
   if (type === 'wait_probe_event') return 'PROBE_EVENT_TIMEOUT'
   if (type === 'barrier') return 'BARRIER_TIMEOUT'
+  if (type === 'move_to_and_wait') return 'MOVE_TIMEOUT'
+  if (type === 'attack_until') return 'ATTACK_ASSERTION_UNMET'
+  if (type === 'wait_spawn') return 'CONNECT_TIMEOUT'
   return 'ACTION_INTERNAL_ERROR'
 }
 
@@ -417,10 +467,19 @@ function terminalAssociationMismatch(terminal: TerminalAttempt, signal: Scenario
 function signalTypeMatches(step: ScenarioStep, signal: ScenarioActionSignal): boolean {
   if (signal.type === 'cancel') return true
   if (step.type === 'barrier') return signal.type === 'barrier-release'
-  if (step.type !== 'wait_probe_event') return false
-  if (signal.type === step.event) return true
   const payload = signal.payload as Record<string, unknown> | undefined
-  return signal.type === 'probe' && payload?.eventType === step.event
+  const eventType = signal.type === 'probe' ? payload?.eventType : signal.type
+  if (step.type === 'wait_probe_event') return eventType === step.event
+  if (step.type === 'move_to_and_wait') return eventType === 'area_arrived' && payload?.areaId === step.areaId
+  if (step.type === 'attack_until') return attackSignalMatches(step, eventType)
+  return false
+}
+
+function attackSignalMatches(step: ScenarioStep, eventType: unknown): boolean {
+  if (eventType === 'damage' || eventType === 'damage_dealt' || eventType === 'kill' || eventType === 'entity_killed') return true
+  if (eventType === 'observation-start' || eventType === 'observation-complete') return true
+  const stop = step.stop as Record<string, unknown> | undefined
+  return typeof eventType === 'string' && eventType !== '' && eventType === stop?.probeEvent
 }
 
 function acceptedSignal(signalId: string): ScenarioSignalReceipt {

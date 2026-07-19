@@ -26,6 +26,7 @@ const (
 	ActionErrorPathNotFound          = "PATH_NOT_FOUND"
 	ActionErrorMoveTimeout           = "MOVE_TIMEOUT"
 	ActionErrorTargetNotFound        = "TARGET_NOT_FOUND"
+	ActionErrorAttackAssertionUnmet  = "ATTACK_ASSERTION_UNMET"
 	ActionErrorProbeEventTimeout     = "PROBE_EVENT_TIMEOUT"
 	ActionErrorBarrierTimeout        = "BARRIER_TIMEOUT"
 	ActionErrorCancelled             = "ACTION_CANCELLED"
@@ -35,7 +36,7 @@ const (
 var actionErrorCodes = map[string]struct{}{
 	ActionErrorConnectTimeout: {}, ActionErrorConnectEnded: {},
 	ActionErrorPathfinderUnavailable: {}, ActionErrorPathNotFound: {},
-	ActionErrorMoveTimeout: {}, ActionErrorTargetNotFound: {},
+	ActionErrorMoveTimeout: {}, ActionErrorTargetNotFound: {}, ActionErrorAttackAssertionUnmet: {},
 	ActionErrorProbeEventTimeout: {}, ActionErrorBarrierTimeout: {},
 	ActionErrorCancelled: {}, ActionErrorInternal: {},
 }

@@ -21,21 +21,44 @@ const MAX_BATCH_SIZE = 50
 const DEFAULT_IDEMPOTENCY_TTL_MS = 60 * 60 * 1000
 const DEFAULT_IDEMPOTENCY_CACHE_SIZE = 1000
 
+interface McEntityLike {
+  id: string | number
+  type?: string
+  kind?: string
+  name?: string
+  mobType?: string
+  username?: string
+  health?: number
+  isValid?: boolean
+  position?: { x: number; y: number; z: number }
+}
+
 interface McBotLike {
   username: string
   health: number
   food: number
-  entity?: { position?: { x: number; y: number; z: number } }
-  pathfinder?: { setGoal(goal: null): void }
+  entity?: McEntityLike
+  entities?: Record<string, McEntityLike>
+  pathfinder?: { setGoal(goal: unknown): void }
+  loadPlugin?(plugin: unknown): void
+  attack?(entity: McEntityLike): void
+  respawn?(): void
   on(event: string, listener: (...args: never[]) => void): unknown
+  off?(event: string, listener: (...args: never[]) => void): unknown
+  removeListener?(event: string, listener: (...args: never[]) => void): unknown
   quit(): void
   chat(message: string): void
 }
 
 interface ScenarioCapabilityState {
   spawned: boolean
+  dead: boolean
+  spawnEventSeq: number
   endReason?: string
   mcBot: McBotLike | null
+  pathfinderEvents: { goalReached: number; pathFailed: number }
+  pathfinderInit: Promise<boolean> | null
+  pathfinderGoals: typeof import('mineflayer-pathfinder').goals | null
   capabilities: ScenarioBotCapabilities
 }
 
@@ -48,6 +71,7 @@ interface BotInstance {
   status: string
   mcBot: McBotLike | null
   connectTimer: unknown | null
+  eventCleanup: (() => void) | null
 }
 
 interface CachedBatchResult {
@@ -369,7 +393,7 @@ export class FleetController {
     const scenarioRunner = scenarioState ? this.createScenarioRunner(config, scenarioState) : null
     const instance: BotInstance = {
       config, fleetManaged, behavior, scenarioRunner, scenarioState,
-      status: 'connecting', mcBot: null, connectTimer: null,
+      status: 'connecting', mcBot: null, connectTimer: null, eventCleanup: null,
     }
     this.bots.set(config.id, instance)
     this.ensureTickLoop()
@@ -411,7 +435,11 @@ export class FleetController {
         return
       }
       instance.mcBot = mcBot
-      if (instance.scenarioState) instance.scenarioState.mcBot = mcBot
+      if (instance.scenarioState) {
+        instance.scenarioState.mcBot = mcBot
+        instance.scenarioState.pathfinderInit = null
+        instance.scenarioState.pathfinderGoals = null
+      }
       instance.behavior.setMcBot(mcBot as never)
       this.bindBotEvents(botId, instance, mcBot)
     } catch (error) {
@@ -422,22 +450,53 @@ export class FleetController {
   }
 
   private bindBotEvents(botId: string, instance: BotInstance, mcBot: McBotLike): void {
-    mcBot.on('spawn', (() => {
+    const listeners: Array<{ event: string; listener: (...args: never[]) => void }> = []
+    const bind = (event: string, listener: (...args: never[]) => void): void => {
+      mcBot.on(event, listener)
+      listeners.push({ event, listener })
+    }
+    instance.eventCleanup = () => {
+      for (const item of listeners) {
+        if (mcBot.off) mcBot.off(item.event, item.listener)
+        else mcBot.removeListener?.(item.event, item.listener)
+      }
+      listeners.length = 0
+      instance.eventCleanup = null
+    }
+    bind('spawn', (() => {
       if (this.bots.get(botId) !== instance) return
       instance.status = 'connected'
       if (instance.scenarioState) {
         instance.scenarioState.spawned = true
+        instance.scenarioState.dead = false
+        instance.scenarioState.spawnEventSeq++
         instance.scenarioState.endReason = undefined
       }
       this.emitBotState(botId, instance)
       this.sendEvent({ evt: 'bot-event', botId, type: 'spawn', data: {} })
       if (instance.scenarioRunner) void instance.scenarioRunner.tick(this.now())
     }) as (...args: never[]) => void)
-    mcBot.on('chat', ((username: string, message: string) => {
+    bind('death', (() => {
+      if (this.bots.get(botId) !== instance || !instance.scenarioState) return
+      instance.scenarioState.dead = true
+      instance.scenarioState.spawned = false
+    }) as (...args: never[]) => void)
+    bind('goal_reached', (() => {
+      if (this.bots.get(botId) !== instance || !instance.scenarioState) return
+      instance.scenarioState.pathfinderEvents.goalReached++
+      if (instance.scenarioRunner) void instance.scenarioRunner.tick(this.now())
+    }) as (...args: never[]) => void)
+    bind('path_update', ((result: { status?: string }) => {
+      if (this.bots.get(botId) !== instance || !instance.scenarioState) return
+      if (result?.status !== 'noPath' && result?.status !== 'timeout') return
+      instance.scenarioState.pathfinderEvents.pathFailed++
+      if (instance.scenarioRunner) void instance.scenarioRunner.tick(this.now())
+    }) as (...args: never[]) => void)
+    bind('chat', ((username: string, message: string) => {
       if (username === mcBot.username || this.bots.get(botId) !== instance) return
       this.sendEvent({ evt: 'bot-event', botId, type: 'chat', data: { username, message } })
     }) as (...args: never[]) => void)
-    mcBot.on('kicked', ((reason: string) => {
+    bind('kicked', ((reason: string) => {
       if (this.bots.get(botId) !== instance) return
       instance.status = 'disconnected'
       if (instance.scenarioState) instance.scenarioState.endReason = `kicked: ${reason}`
@@ -445,13 +504,13 @@ export class FleetController {
       this.sendEvent({ evt: 'bot-event', botId, type: 'kicked', data: { reason } })
       if (instance.scenarioRunner) void instance.scenarioRunner.connectionEnded('kicked', this.now())
     }) as (...args: never[]) => void)
-    mcBot.on('error', ((error: Error) => {
+    bind('error', ((error: Error) => {
       if (this.bots.get(botId) !== instance) return
       instance.status = 'error'
       this.emitBotState(botId, instance, { lastError: error.message, errorCode: 'connection_error' })
       this.sendEvent({ evt: 'bot-error', botId, error: error.message })
     }) as (...args: never[]) => void)
-    mcBot.on('end', (() => {
+    bind('end', (() => {
       if (this.bots.get(botId) !== instance) return
       instance.status = 'disconnected'
       if (instance.scenarioState) instance.scenarioState.endReason = 'end'
@@ -575,7 +634,9 @@ export class FleetController {
       this.cancelSchedule(instance.connectTimer)
       instance.connectTimer = null
     }
+    instance.eventCleanup?.()
     if (instance.scenarioRunner) {
+      instance.scenarioState?.capabilities.clearPathfinderGoal()
       void instance.scenarioRunner.cancel(reason).then(() => instance.scenarioRunner?.dispose())
     }
     instance.behavior.stop()
@@ -677,21 +738,101 @@ function hasScenario(value: unknown): boolean {
 
 function createScenarioCapabilityState(now: () => number): ScenarioCapabilityState {
   const state = {
-    spawned: false,
-    endReason: undefined,
-    mcBot: null,
+    spawned: false, dead: false, spawnEventSeq: 0, endReason: undefined, mcBot: null,
+    pathfinderEvents: { goalReached: 0, pathFailed: 0 }, pathfinderInit: null, pathfinderGoals: null,
   } as ScenarioCapabilityState
   state.capabilities = {
     now,
     isSpawned: () => state.spawned,
     connectionEndReason: () => state.endReason,
+    getPosition: () => scenarioPosition(state.mcBot?.entity?.position),
+    setPathfinderGoal: (goal) => setScenarioPathfinderGoal(state, goal.position, goal.radius),
+    clearPathfinderGoal: () => state.mcBot?.pathfinder?.setGoal(null),
+    pathfinderEvents: () => ({ ...state.pathfinderEvents }),
+    entities: () => scenarioEntities(state.mcBot),
+    attack: (entityId) => attackScenarioEntity(state.mcBot, entityId),
+    isDead: () => state.dead,
+    respawn: () => state.mcBot?.respawn?.(),
+    spawnEventSeq: () => state.spawnEventSeq,
     chat: (message) => {
       if (!state.mcBot) throw new Error('Bot 尚未连接，无法发送命令')
       state.mcBot.chat(message)
     },
-    clearPathfinderGoal: () => state.mcBot?.pathfinder?.setGoal(null),
   }
   return state
+}
+
+async function setScenarioPathfinderGoal(
+  state: ScenarioCapabilityState,
+  position: { x: number; y: number; z: number },
+  radius: number
+): Promise<{ status: 'set' | 'unavailable' | 'failed'; message?: string }> {
+  const ready = await ensureScenarioPathfinder(state)
+  if (!ready || !state.mcBot?.pathfinder || !state.pathfinderGoals) return { status: 'unavailable' }
+  try {
+    state.mcBot.pathfinder.setGoal(new state.pathfinderGoals.GoalNear(position.x, position.y, position.z, radius))
+    return { status: 'set' }
+  } catch (error) {
+    return { status: 'failed', message: String(error) }
+  }
+}
+
+async function ensureScenarioPathfinder(state: ScenarioCapabilityState): Promise<boolean> {
+  if (state.mcBot?.pathfinder && state.pathfinderGoals) return true
+  state.pathfinderInit ??= initializeScenarioPathfinder(state)
+  return state.pathfinderInit
+}
+
+async function initializeScenarioPathfinder(state: ScenarioCapabilityState): Promise<boolean> {
+  const mcBot = state.mcBot
+  if (!mcBot) return false
+  try {
+    const module = await import('mineflayer-pathfinder')
+    const commonJS = module.default as typeof import('mineflayer-pathfinder')
+    const plugin = module.pathfinder ?? commonJS.pathfinder
+    if (!mcBot.pathfinder) mcBot.loadPlugin?.(plugin)
+    state.pathfinderGoals = module.goals ?? commonJS.goals
+    return Boolean(mcBot.pathfinder && state.pathfinderGoals)
+  } catch {
+    return false
+  }
+}
+
+function scenarioEntities(mcBot: McBotLike | null): import('../scenario/types.js').ScenarioEntity[] {
+  if (!mcBot?.entities) return []
+  return Object.values(mcBot.entities).flatMap((entity) => {
+    const position = scenarioPosition(entity.position)
+    if (!position || entity.id === mcBot.entity?.id) return []
+    const type = entity.name ?? entity.type
+    return [{
+      id: entity.id,
+      kind: scenarioEntityKind(entity),
+      type: type?.toLowerCase(),
+      name: entity.username ?? entity.name,
+      health: entity.health,
+      dead: entity.isValid === false || (entity.health !== undefined && entity.health <= 0),
+      position,
+    }]
+  })
+}
+
+function scenarioEntityKind(entity: McEntityLike): string | undefined {
+  const kind = entity.kind?.toLowerCase()
+  if (kind?.includes('hostile')) return 'hostile'
+  if (kind?.includes('passive')) return 'passive'
+  return entity.kind ?? entity.type
+}
+
+function attackScenarioEntity(mcBot: McBotLike | null, entityId: string | number): boolean {
+  const entity = mcBot?.entities && Object.values(mcBot.entities).find((candidate) => String(candidate.id) === String(entityId))
+  if (!mcBot?.attack || !entity) return false
+  mcBot.attack(entity)
+  return true
+}
+
+function scenarioPosition(value?: { x: number; y: number; z: number }): { x: number; y: number; z: number } | undefined {
+  if (!value || !Number.isFinite(value.x) || !Number.isFinite(value.y) || !Number.isFinite(value.z)) return undefined
+  return { x: value.x, y: value.y, z: value.z }
 }
 
 function isSignalPromise(value: SignalItemResult | Promise<SignalItemResult>): value is Promise<SignalItemResult> {

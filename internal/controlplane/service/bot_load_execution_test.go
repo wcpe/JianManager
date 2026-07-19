@@ -375,13 +375,20 @@ func TestBotLoadExecutionStart_MaterializesStableCohortAndScenarioAssignments(t 
 		bot := byUUID[assignment.BotUuid]
 		require.Equal(t, bot.CohortKey, assignment.CohortKey)
 		require.NotEmpty(t, assignment.ScenarioJson)
-		var subtree struct {
-			Key   string            `json:"key"`
-			Steps []json.RawMessage `json:"steps"`
+		var envelope struct {
+			Seed       int64 `json:"seed"`
+			BotOrdinal int   `json:"botOrdinal"`
+			Scenario   struct {
+				Key   string            `json:"key"`
+				Steps []json.RawMessage `json:"steps"`
+			} `json:"scenario"`
 		}
-		require.NoError(t, json.Unmarshal([]byte(assignment.ScenarioJson), &subtree))
-		require.Equal(t, bot.CohortKey, subtree.Key)
-		require.NotEmpty(t, subtree.Steps)
+		require.NoError(t, json.Unmarshal([]byte(assignment.ScenarioJson), &envelope))
+		require.Equal(t, scenario.Seed, envelope.Seed)
+		require.Equal(t, botLoadOrdinalFromUUID(h.session.UUID, h.session.BotCount, assignment.BotUuid), envelope.BotOrdinal)
+		require.Greater(t, envelope.BotOrdinal, 0)
+		require.Equal(t, bot.CohortKey, envelope.Scenario.Key)
+		require.NotEmpty(t, envelope.Scenario.Steps)
 		require.Equal(t, assignment.ConfigHash, botLoadAssignmentConfigHash(assignment))
 		require.Equal(t, bot.ConfigHash, assignment.ConfigHash)
 	}
@@ -398,6 +405,17 @@ func TestBotLoadExecutionStart_MaterializesStableCohortAndScenarioAssignments(t 
 	for _, bot := range replayed {
 		require.Equal(t, firstCohorts[bot.UUID], bot.CohortKey)
 	}
+}
+
+func TestBotLoadAllocationLocalIndex_UsesStableAllocationOrdinal(t *testing.T) {
+	plan := &BotLoadAllocationPlan{Allocations: []BotLoadAllocation{
+		{Ordinal: 2, PlannedCount: 2},
+		{Ordinal: 1, PlannedCount: 3},
+	}}
+
+	require.Equal(t, 4, botLoadAllocationFirstOrdinal(plan, 2))
+	require.Equal(t, 0, botLoadAllocationLocalIndex(plan, 2, 4))
+	require.Equal(t, 1, botLoadAllocationLocalIndex(plan, 2, 5))
 }
 
 func TestBotLoadExecutionStart_EnsuresOneFleetSubscriptionPerExecutorNode(t *testing.T) {

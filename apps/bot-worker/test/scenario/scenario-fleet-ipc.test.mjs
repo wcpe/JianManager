@@ -134,6 +134,59 @@ test('signal-actions 强关联逐项回执，重复 signalId 幂等且终态后�
   assert.equal(harness.events.findLast((event) => event.evt === 'signal-result').signalResults[0].skipped, true)
 })
 
+test('Mineflayer 场景适配只绑定固定监听器，移动目标不重复且路径失败可见', async () => {
+  const harness = createFleetHarness()
+  harness.fleet.handleCommand({
+    cmd: 'create-bots', requestId: 'move-r', batchId: 'move-b', idempotencyKey: 'move-k',
+    bots: [assignment('move', { scenario: scenario([
+      step('spawn', 'wait_spawn'),
+      step('move', 'move_to_and_wait', { pos: { x: 10, y: 64, z: 0 }, radius: 1, timeoutMs: 10_000 }),
+    ]) })],
+  })
+  const bot = harness.bots[0]
+  const listenerCount = bot.eventNames().reduce((total, name) => total + bot.listenerCount(name), 0)
+  bot.emit('spawn')
+  for (let index = 0; index < 20 && bot.pathfinderGoals.length === 0; index++) await harness.flush()
+  assert.equal(bot.pathfinderGoals.length, 1)
+
+  for (let index = 0; index < 1_000; index++) await harness.tick(1_000 + index)
+  assert.equal(bot.pathfinderGoals.length, 1)
+  assert.equal(bot.eventNames().reduce((total, name) => total + bot.listenerCount(name), 0), listenerCount)
+
+  bot.emit('path_update', { status: 'noPath' })
+  await harness.tick(2_100)
+  assert.equal(actionEvents(harness.events, 'move').at(-1).action.errorCode, 'PATH_NOT_FOUND')
+  harness.fleet.handleCommand({ cmd: 'stop-bots', requestId: 'move-stop', botIds: ['move'], generation: 3 })
+  await harness.flush()
+  assert.ok(bot.clearedGoals >= 1)
+  assert.equal(bot.eventNames().reduce((total, name) => total + bot.listenerCount(name), 0), 0)
+})
+
+test('Mineflayer 实体与攻击能力适配锁定真实 entity id', async () => {
+  const harness = createFleetHarness()
+  harness.fleet.handleCommand({
+    cmd: 'create-bots', requestId: 'attack-r', batchId: 'attack-b', idempotencyKey: 'attack-k',
+    bots: [assignment('attack', { scenario: scenario([
+      step('spawn', 'wait_spawn'),
+      step('find', 'find_entity', { selector: { kind: 'hostile', types: ['zombie'], radius: 16, priority: 'nearest' } }),
+      step('attack', 'attack_until', {
+        selector: { kind: 'hostile', types: ['zombie'], radius: 16, priority: 'nearest' },
+        attackIntervalMs: 500, chase: false, reacquire: true,
+        stop: { durationMs: 2_000, damageAtLeast: 10, successPolicy: 'any' },
+      }),
+    ]) })],
+  })
+  const bot = harness.bots[0]
+  bot.entities.zombie = {
+    id: 35, kind: 'Hostile mobs', mobType: 'zombie', name: 'zombie', health: 20,
+    position: { x: 2, y: 64, z: 2 },
+  }
+  bot.emit('spawn')
+  await harness.flush()
+  await harness.flush()
+  assert.deepEqual(bot.attacks, [35])
+})
+
 test('50 Bot 长循环只复用一个集中 scheduler', async () => {
   const harness = createFleetHarness()
   const assignments = Array.from({ length: 50 }, (_, index) => assignment(`bot-${index}`, {

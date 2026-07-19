@@ -104,6 +104,12 @@ test('wait_probe_event 只接受完整关联与 eventType，重复和迟到安�
     assert.ok(result.errorCode)
   }
   assert.equal(events.filter((event) => event.status === 'succeeded').length, 0)
+  const rejected = { ...base, signalId: 'rejected-replay', correlationToken: 'wrong-token' }
+  const firstRejected = await runner.signal(rejected)
+  const replayedRejected = await runner.signal(rejected)
+  assert.equal(firstRejected.accepted, false)
+  assert.equal(replayedRejected.accepted, false)
+  assert.equal(replayedRejected.errorCode, firstRejected.errorCode)
 
   const accepted = await runner.signal(base)
   const duplicate = await runner.signal(base)

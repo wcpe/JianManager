@@ -25,6 +25,8 @@ export interface ScenarioStep {
 export interface ScenarioRuntime {
   key: string
   percent: number
+  seed?: number
+  botOrdinal?: number
   steps: ScenarioStep[]
 }
 
@@ -37,17 +39,59 @@ export interface ScenarioActionResult {
   result?: unknown
   correlationToken?: string
   signalAccepted?: boolean
+  jumpToStepId?: string
 }
 
 export type ActionStartResult = ScenarioActionResult
 export type ActionTickResult = ScenarioActionResult
 
+export interface ScenarioPosition {
+  x: number
+  y: number
+  z: number
+}
+
+export type ScenarioEntityId = string | number
+
+export interface ScenarioEntity {
+  id: ScenarioEntityId
+  kind?: string
+  type?: string
+  name?: string
+  health?: number
+  dead: boolean
+  position: ScenarioPosition
+}
+
+export interface ScenarioPathfinderGoal {
+  position: ScenarioPosition
+  radius: number
+}
+
+export interface ScenarioPathfinderResult {
+  status: 'set' | 'unavailable' | 'failed'
+  message?: string
+}
+
+export interface ScenarioPathfinderEvents {
+  goalReached: number
+  pathFailed: number
+}
+
 export interface ScenarioBotCapabilities {
   now(): number
   isSpawned(): boolean
   connectionEndReason(): string | undefined
-  chat(message: string): void
+  getPosition(): ScenarioPosition | undefined
+  setPathfinderGoal(goal: ScenarioPathfinderGoal): Promise<ScenarioPathfinderResult>
   clearPathfinderGoal(): void
+  pathfinderEvents(): ScenarioPathfinderEvents
+  entities(): ScenarioEntity[]
+  attack(entityId: ScenarioEntityId): boolean
+  isDead(): boolean
+  respawn(): void
+  spawnEventSeq(): number
+  chat(message: string): void
 }
 
 export interface ScenarioCancelToken {
@@ -68,11 +112,16 @@ export interface ScenarioActionContext {
   actionRunId: string
   startedAt: number
   deadline: number
+  runDeadline?: number
+  seed?: number
+  botOrdinal?: number
   cancelToken: ScenarioCancelToken
   capabilities: ScenarioBotCapabilities
   currentCorrelationToken(): string | undefined
   ensureCorrelationToken(): string
   newCorrelationToken(): string
+  lockedEntityId(): ScenarioEntityId | undefined
+  setLockedEntityId(entityId: ScenarioEntityId | undefined): void
   templateVariables(): Readonly<Record<string, string | undefined>>
 }
 
@@ -108,7 +157,9 @@ export interface ScenarioSignalReceipt {
 
 /** 只解析 Control Plane 下发的规范 JSON，不承担 YAML 或复杂业务校验。 */
 export function parseScenarioRuntime(input: unknown): ScenarioRuntime {
-  const value = typeof input === 'string' ? JSON.parse(input) as unknown : input
+  const decoded = typeof input === 'string' ? JSON.parse(input) as unknown : input
+  const envelope = isRecord(decoded) && isRecord(decoded.scenario) ? decoded : undefined
+  const value = envelope?.scenario ?? decoded
   if (!isRecord(value) || typeof value.key !== 'string' || !Array.isArray(value.steps)) {
     throw new Error('Scenario JSON 缺少 key 或 steps')
   }
@@ -118,6 +169,8 @@ export function parseScenarioRuntime(input: unknown): ScenarioRuntime {
   return {
     key: value.key,
     percent: finiteNumber(value.percent, 100),
+    seed: optionalFiniteNumber(envelope?.seed) ?? optionalFiniteNumber(value.seed),
+    botOrdinal: optionalFiniteNumber(envelope?.botOrdinal) ?? optionalFiniteNumber(value.botOrdinal),
     steps: value.steps.map((step, index) => parseStep(step, index)),
   }
 }
@@ -150,7 +203,11 @@ function defaultTimeout(type: string): number {
 }
 
 function finiteNumber(value: unknown, fallback: number): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+  return optionalFiniteNumber(value) ?? fallback
+}
+
+function optionalFiniteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

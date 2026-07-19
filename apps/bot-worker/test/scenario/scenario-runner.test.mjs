@@ -2,7 +2,18 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { ScenarioRunner } from '../../dist/scenario/runner.js'
+import { parseScenarioRuntime } from '../../dist/scenario/types.js'
 import { runnerOptions, scenario, step } from './helpers.mjs'
+
+test('Scenario runtime 解包新 envelope 并兼容旧 cohort JSON', () => {
+  const cohort = { key: 'combat', percent: 100, steps: [step('wait', 'wait', { durationMs: 100 })] }
+  const enveloped = parseScenarioRuntime({ seed: 42, botOrdinal: 7, scenario: cohort })
+  const legacy = parseScenarioRuntime({ ...cohort, seed: 42, botOrdinal: 7 })
+
+  assert.deepEqual(enveloped, legacy)
+  assert.equal(enveloped.seed, 42)
+  assert.equal(enveloped.botOrdinal, 7)
+})
 
 test('Runner 按 start→step→terminal 顺序推进并仅发一次终态', async () => {
   const { options, capabilities, events } = runnerOptions({
@@ -122,9 +133,9 @@ test('Runner 将动作异常转为 ACTION_INTERNAL_ERROR', async () => {
   assert.match(events.at(-1).message, /boom/)
 })
 
-test('Runner 对本段未实现动作结构化失败而不伪完成', async () => {
+test('Runner 对契约外未知动作结构化失败而不伪完成', async () => {
   const { options, events } = runnerOptions({
-    scenario: scenario([step('move', 'move_to_and_wait', { pos: { x: 1, y: 2, z: 3 }, radius: 2 })]),
+    scenario: scenario([step('unknown', 'unknown_action')]),
   })
   const runner = new ScenarioRunner(options)
 
@@ -132,7 +143,7 @@ test('Runner 对本段未实现动作结构化失败而不伪完成', async () =
 
   assert.equal(events.at(-1).status, 'failed')
   assert.equal(events.at(-1).errorCode, 'ACTION_INTERNAL_ERROR')
-  assert.match(events.at(-1).message, /本段未实现/)
+  assert.match(events.at(-1).message, /未实现动作类型/)
 })
 
 test('Runner 按 resumePolicy 选择恢复入口', async () => {
@@ -150,6 +161,35 @@ test('Runner 按 resumePolicy 选择恢复入口', async () => {
   const runnerB = new ScenarioRunner(restartScenario.options)
   await runnerB.start()
   assert.equal(runnerB.currentStepId, 'first')
+})
+
+test('Runner cancel 可打断异步寻路初始化且不会提交旧成功或推进下一步', async () => {
+  const run = runnerOptions({
+    scenario: scenario([
+      step('move', 'move_to_and_wait', { pos: { x: 10, y: 64, z: 0 }, radius: 1 }),
+      step('after', 'wait', { durationMs: 1 }),
+    ]),
+  })
+  let releaseGoal
+  let goalStarted
+  const goalStartedPromise = new Promise((resolve) => { goalStarted = resolve })
+  run.capabilities.setPathfinderGoal = async (goal) => {
+    run.capabilities.pathfinderGoalCalls.push(structuredClone(goal))
+    goalStarted()
+    await new Promise((resolve) => { releaseGoal = resolve })
+    return { status: 'set' }
+  }
+  const runner = new ScenarioRunner(run.options)
+  const starting = runner.start()
+  await goalStartedPromise
+  const cancelling = runner.cancel('异步取消')
+  releaseGoal()
+  await Promise.all([starting, cancelling])
+
+  assert.equal(run.events.filter((event) => event.status === 'succeeded').length, 0)
+  assert.equal(run.events.at(-1).status, 'cancelled')
+  assert.notEqual(runner.currentStepId, 'after')
+  assert.ok(run.capabilities.clearGoalCount >= 1)
 })
 
 test('Runner 长循环集中 tick 不创建动作级 timer 且结果载荷有界', async () => {

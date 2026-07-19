@@ -122,6 +122,18 @@ func TestActionResultService_FirstTerminalWinsAndLateEventsAreIdempotent(t *test
 	require.Equal(t, h.now.Add(1500*time.Millisecond), *stored.EndedAt)
 }
 
+func TestActionResultService_AcceptsAttackAssertionUnmet(t *testing.T) {
+	h := newBotActionResultHarness(t)
+	event := h.event("failed")
+	event.ErrorCode = ActionErrorAttackAssertionUnmet
+	event.Message = "可信攻击条件未满足"
+
+	result, err := h.service.Ingest(context.Background(), h.node.ID, h.session.UUID, event)
+	require.NoError(t, err)
+	require.Equal(t, ActionResultApplied, result.Decision)
+	require.Equal(t, ActionErrorAttackAssertionUnmet, h.reload(t).ErrorCode)
+}
+
 func TestActionResultService_TruncatesResultJSONWithRecognizableMetadata(t *testing.T) {
 	h := newBotActionResultHarness(t)
 	payload, err := json.Marshal(map[string]string{"blob": strings.Repeat("x", actionResultJSONLimit*2)})

@@ -85,7 +85,11 @@ func ScenarioCohortJSONMap(scenario *ScenarioV2) (map[string]string, error) {
 	}
 	out := make(map[string]string, len(scenario.Cohorts))
 	for _, cohort := range scenario.Cohorts {
-		raw, err := json.Marshal(cohort)
+		envelope := struct {
+			Seed     int64          `json:"seed"`
+			Scenario ScenarioCohort `json:"scenario"`
+		}{Seed: scenario.Seed, Scenario: cohort}
+		raw, err := json.Marshal(envelope)
 		if err != nil {
 			return nil, fmt.Errorf("序列化 cohort %s 失败: %w", cohort.Key, err)
 		}
