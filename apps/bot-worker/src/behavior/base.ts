@@ -39,6 +39,14 @@ export abstract class Behavior {
     }
   }
 
+  /** 释放与旧 Mineflayer Bot 关联的寻路器和重资源。 */
+  releaseMcBot(): void {
+    this.stop()
+    this.mcBot = null
+    this.mover = null
+    this.moverInitialized = false
+  }
+
   /** 每 250ms 调用一次。 */
   abstract tick(): Promise<void>
 

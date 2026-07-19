@@ -1,6 +1,7 @@
 import type { Behavior } from '../behavior/base.js'
+import { createScenarioAction } from '../scenario/actions.js'
 import { ScenarioRunner } from '../scenario/runner.js'
-import type { ScenarioBotCapabilities } from '../scenario/types.js'
+import type { ScenarioAction, ScenarioBotCapabilities, ScenarioStep } from '../scenario/types.js'
 import type {
   ActionEvent,
   ActionSignal,
@@ -18,6 +19,7 @@ import type {
 } from './types.js'
 
 const MAX_BATCH_SIZE = 50
+const MAX_SIGNAL_BATCH_SIZE = 100
 const DEFAULT_IDEMPOTENCY_TTL_MS = 60 * 60 * 1000
 const DEFAULT_IDEMPOTENCY_CACHE_SIZE = 1000
 
@@ -165,6 +167,8 @@ export class FleetController {
         this.signalActions(signal.requestId, signal.signals)
         return true
       }
+      case 'run-script':
+        return this.rejectScenarioScript(command as { botIds?: string[] })
       case 'get-fleet-snapshot': {
         const snapshot = command as GetFleetSnapshotCommand
         this.sendEvent({
@@ -242,18 +246,32 @@ export class FleetController {
   }
 
   /** 切换旧单 Bot 行为。 */
-  setBehavior(botId: string, behaviorType: string, target?: string, config?: unknown): boolean {
+  setBehavior(botId: string, behaviorType: string, target?: string, config?: unknown): 'changed' | 'missing' | 'fleet_managed' {
     const instance = this.bots.get(botId)
-    if (!instance) return false
+    if (!instance) return 'missing'
+    if (instance.fleetManaged && hasScenario(instance.config.scenario)) return 'fleet_managed'
     instance.behavior.stop()
     const next = this.createBehavior(botId, behaviorType, config ?? target)
     if (instance.mcBot) next.setMcBot(instance.mcBot as never)
     next.start()
     instance.behavior = next
+    return 'changed'
+  }
+
+  private rejectScenarioScript(command: { botIds?: string[] }): boolean {
+    const blocked = command.botIds?.find((botId) => {
+      const instance = this.bots.get(botId)
+      return instance?.fleetManaged === true && hasScenario(instance.config.scenario)
+    })
+    if (!blocked) return false
+    this.sendEvent({
+      evt: 'bot-error', botId: blocked, errorCode: 'fleet_managed',
+      error: 'Fleet 场景 Bot 不接受旧 run-script，请使用 Scenario 动作入口',
+    })
     return true
   }
 
-  /** 向旧单 Bot 发送聊天命令。 */
+  /** 仅通过 mcBot.chat 发送聊天，不驱动或修改 ScenarioRunner。 */
   sendBotCommand(botId: string, command: string): 'sent' | 'missing' | 'disconnected' {
     const instance = this.bots.get(botId)
     if (!instance) return 'missing'
@@ -387,10 +405,15 @@ export class FleetController {
   }
 
   private installInstance(config: BotConfig, fleetManaged: boolean): void {
-    const behavior = this.createBehavior(config.id, config.behavior || 'idle', config.behaviorConfig)
+    const legacy = legacyBehaviorSpec(config.scenario)
+    const behavior = this.createBehavior(
+      config.id,
+      (legacy?.behavior ?? config.behavior) || 'idle',
+      legacy?.config ?? legacy?.target ?? config.behaviorConfig
+    )
     behavior.start()
     const scenarioState = hasScenario(config.scenario) ? createScenarioCapabilityState(this.now) : null
-    const scenarioRunner = scenarioState ? this.createScenarioRunner(config, scenarioState) : null
+    const scenarioRunner = scenarioState ? this.createScenarioRunner(config, scenarioState, behavior) : null
     const instance: BotInstance = {
       config, fleetManaged, behavior, scenarioRunner, scenarioState,
       status: 'connecting', mcBot: null, connectTimer: null, eventCleanup: null,
@@ -502,7 +525,7 @@ export class FleetController {
       if (instance.scenarioState) instance.scenarioState.endReason = `kicked: ${reason}`
       this.emitBotState(botId, instance)
       this.sendEvent({ evt: 'bot-event', botId, type: 'kicked', data: { reason } })
-      if (instance.scenarioRunner) void instance.scenarioRunner.connectionEnded('kicked', this.now())
+      this.releaseDisconnectedResources(botId, instance, mcBot, 'kicked')
     }) as (...args: never[]) => void)
     bind('error', ((error: Error) => {
       if (this.bots.get(botId) !== instance) return
@@ -515,8 +538,34 @@ export class FleetController {
       instance.status = 'disconnected'
       if (instance.scenarioState) instance.scenarioState.endReason = 'end'
       this.emitBotState(botId, instance)
-      if (instance.scenarioRunner) void instance.scenarioRunner.connectionEnded('end', this.now())
+      this.releaseDisconnectedResources(botId, instance, mcBot, 'end')
     }) as (...args: never[]) => void)
+  }
+
+  private releaseDisconnectedResources(
+    botId: string,
+    instance: BotInstance,
+    mcBot: McBotLike,
+    reason: string
+  ): void {
+    if (this.bots.get(botId) !== instance || instance.mcBot !== mcBot) return
+    instance.eventCleanup?.()
+    instance.scenarioState?.capabilities.clearPathfinderGoal()
+    instance.behavior.stop()
+    instance.behavior.releaseMcBot?.()
+    const runner = instance.scenarioRunner
+    instance.scenarioRunner = null
+    instance.mcBot = null
+    if (instance.scenarioState) {
+      instance.scenarioState.mcBot = null
+      instance.scenarioState.pathfinderInit = null
+      instance.scenarioState.pathfinderGoals = null
+    }
+    if (runner) {
+      void runner.connectionEnded(reason, this.now())
+        .then(() => runner.dispose())
+        .catch((error) => this.sendEvent({ evt: 'bot-error', botId, error: String(error) }))
+    }
   }
 
   private async tickInstance(botId: string, instance: BotInstance, now: number): Promise<void> {
@@ -535,13 +584,17 @@ export class FleetController {
 
   private createScenarioRunner(
     config: BotConfig,
-    state: ScenarioCapabilityState
+    state: ScenarioCapabilityState,
+    behavior: Behavior
   ): ScenarioRunner {
     return new ScenarioRunner({
       botId: config.id, botName: config.name || config.id, username: config.username || config.name || config.id,
       runId: config.sessionId ?? '', generation: config.generation ?? 0, cohortKey: config.cohortKey ?? '',
       scenario: config.scenario, resumeStepId: config.resumeStepId,
       correlationSeed: config.correlationSeed, capabilities: state.capabilities,
+      actionFactory: (step) => step.type === 'legacy_behavior'
+        ? createLegacyBehaviorAction(step, behavior)
+        : createScenarioAction(step),
       emitActionEvent: (action) => this.emitActionEvent(action),
     })
   }
@@ -601,6 +654,13 @@ export class FleetController {
   }
 
   private signalActions(requestId: string, signals: ActionSignal[]): void {
+    if (signals.length > MAX_SIGNAL_BATCH_SIZE) {
+      const signalResults = signals.map((signal) => this.rejectedSignal(
+        signal.signalId, 'batch_limit_exceeded', '单批最多 100 条动作信号'
+      ))
+      this.sendEvent({ evt: 'signal-result', requestId, signalResults })
+      return
+    }
     const results = signals.map((signal) => this.routeSignal(signal))
     if (results.some(isSignalPromise)) {
       void Promise.all(results).then((signalResults) => {
@@ -640,6 +700,7 @@ export class FleetController {
       void instance.scenarioRunner.cancel(reason).then(() => instance.scenarioRunner?.dispose())
     }
     instance.behavior.stop()
+    instance.behavior.releaseMcBot?.()
     if (!instance.mcBot) return
     try {
       instance.mcBot.quit()
@@ -728,6 +789,52 @@ export class FleetController {
   ): SignalItemResult {
     return { signalId, accepted: false, skipped: true, status, errorCode, error }
   }
+}
+
+interface LegacyBehaviorSpec {
+  behavior: string
+  target?: string
+  config?: unknown
+}
+
+function legacyBehaviorSpec(input: unknown): LegacyBehaviorSpec | undefined {
+  let decoded = input
+  if (typeof decoded === 'string') {
+    try {
+      decoded = JSON.parse(decoded) as unknown
+    } catch {
+      return undefined
+    }
+  }
+  const envelope = isRecord(decoded) && isRecord(decoded.scenario) ? decoded.scenario : decoded
+  if (!isRecord(envelope) || !Array.isArray(envelope.steps)) return undefined
+  const step = envelope.steps.find((candidate) => isRecord(candidate) && candidate.type === 'legacy_behavior')
+  if (!isRecord(step) || typeof step.behavior !== 'string') return undefined
+  const target = typeof step.target === 'string' ? step.target : undefined
+  const config = step.behavior === 'custom' && isRecord(step.step) ? { steps: [step.step] } : undefined
+  return { behavior: step.behavior, target, config }
+}
+
+function createLegacyBehaviorAction(step: ScenarioStep, behavior: Behavior): ScenarioAction {
+  return {
+    async start() {
+      behavior.start()
+      return { state: 'running' }
+    },
+    async tick(context, now) {
+      await behavior.tick()
+      const durationMs = typeof step.durationMs === 'number' ? step.durationMs : 0
+      return now - context.startedAt >= durationMs
+        ? { state: 'succeeded', result: { behavior: behavior.name } }
+        : { state: 'running' }
+    },
+    async cancel() { behavior.stop() },
+    async dispose() { behavior.stop() },
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function hasScenario(value: unknown): boolean {

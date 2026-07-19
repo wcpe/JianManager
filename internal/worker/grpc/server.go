@@ -1015,6 +1015,11 @@ func legacyFleetMutationError(botID string) string {
 
 // SetBotBehavior 切换 Bot 行为模式。
 func (s *Server) SetBotBehavior(ctx context.Context, req *workerpb.SetBotBehaviorRequest) (*workerpb.SetBotBehaviorResponse, error) {
+	s.botOwnershipMu.Lock()
+	defer s.botOwnershipMu.Unlock()
+	if s.rejectLegacyFleetMutationLocked(req.BotUuid) {
+		return &workerpb.SetBotBehaviorResponse{Success: false, Error: legacyFleetMutationError(req.BotUuid)}, nil
+	}
 	if s.botMgr == nil {
 		return &workerpb.SetBotBehaviorResponse{Success: false, Error: "本节点未启用 Bot 能力"}, nil
 	}

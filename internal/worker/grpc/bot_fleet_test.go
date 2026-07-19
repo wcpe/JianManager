@@ -27,6 +27,7 @@ type fakeBotFleetManager struct {
 	signalCalls  int
 	apply        *bot.BotWorkerEvent
 	applyErr     error
+	applyConfigs []bot.BotConfig
 	applyStarted chan struct{}
 	applyRelease chan struct{}
 	stop         *bot.BotWorkerEvent
@@ -38,8 +39,9 @@ type fakeBotFleetManager struct {
 
 func (f *fakeBotFleetManager) CapacitySnapshot() bot.BotCapacitySnapshot { return f.capacity }
 func (f *fakeBotFleetManager) FleetSnapshot(string) []bot.BotState       { return f.bots }
-func (f *fakeBotFleetManager) ApplyBotBatch(context.Context, string, string, string, []bot.BotConfig) (*bot.BotWorkerEvent, error) {
+func (f *fakeBotFleetManager) ApplyBotBatch(_ context.Context, _, _, _ string, configs []bot.BotConfig) (*bot.BotWorkerEvent, error) {
 	f.applyCalls++
+	f.applyConfigs = append([]bot.BotConfig(nil), configs...)
 	if f.applyStarted != nil {
 		close(f.applyStarted)
 		<-f.applyRelease
@@ -133,6 +135,27 @@ func TestApplyBotBatchEnforcesLimitGenerationAndIdempotency(t *testing.T) {
 	}
 	_, err = srv.ApplyBotBatch(context.Background(), conflict)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+}
+
+func TestApplyBotBatchPreservesScenarioEnvelopeForFleetNode(t *testing.T) {
+	fake := &fakeBotFleetManager{
+		capacity: bot.BotCapacitySnapshot{Ready: true, MaxBots: 50, CapacityGeneration: 4},
+		apply: &bot.BotWorkerEvent{Evt: "batch-result", Results: []bot.BotItemResult{{BotID: "bot-envelope", Accepted: true}}},
+	}
+	srv := newBotFleetTestServer(fake)
+	assignment := validRunningAssignment("bot-envelope", 2)
+	assignment.ScenarioJson = `{"seed":42,"botOrdinal":7,"runDeadlineUnixMs":123456,"scenario":{"key":"legacy","percent":100,"steps":[{"id":"phase-01","type":"legacy_behavior","behavior":"follow","target":"Steve","durationMs":1000}]}}`
+	assignment.CohortKey = "legacy"
+
+	response, err := srv.ApplyBotBatch(context.Background(), &workerpb.ApplyBotBatchRequest{
+		BatchId: "batch-envelope", IdempotencyKey: "key-envelope", ExpectedCapacityGeneration: 4,
+		Assignments: []*workerpb.BotAssignment{assignment},
+	})
+
+	require.NoError(t, err)
+	require.True(t, response.Results[0].Accepted)
+	require.Len(t, fake.applyConfigs, 1)
+	require.JSONEq(t, assignment.ScenarioJson, string(fake.applyConfigs[0].Scenario))
 }
 
 func TestApplyBotBatchRejectsInvalidAssignmentsWithoutIPC(t *testing.T) {
@@ -346,6 +369,20 @@ func TestPlanBotBatchAllowsReplacementAtFullCapacityAndRejectsStaleGeneration(t 
 	require.Len(t, plan.createConfigs, 1)
 	require.Nil(t, plan.results[0])
 	require.Equal(t, "stale_generation", plan.results[1].ErrorCode)
+}
+
+func TestSetBotBehaviorRejectsFleetOwnershipButSendCommandRemainsChatOnly(t *testing.T) {
+	fake := &fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, WorkerEpoch: "epoch-owned", WorkerEpochGeneration: 9}}
+	srv := newBotFleetTestServer(fake)
+	srv.botMgr = bot.NewManager(bot.ManagerConfig{})
+	srv.botOwnership = map[string]botFleetOwnership{
+		"bot-owned": {workerEpoch: "epoch-owned", workerEpochGeneration: 9},
+	}
+
+	behavior, err := srv.SetBotBehavior(context.Background(), &workerpb.SetBotBehaviorRequest{BotUuid: "bot-owned", Behavior: "follow"})
+	require.NoError(t, err)
+	require.False(t, behavior.Success)
+	require.Contains(t, behavior.Error, "Fleet")
 }
 
 func TestSignalBotActionsMapsItemResults(t *testing.T) {

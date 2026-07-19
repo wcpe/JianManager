@@ -99,8 +99,13 @@ function setBehavior(
   target?: string,
   config?: BehaviorConfig
 ): void {
-  if (!fleet.setBehavior(botId, behaviorType, target, config)) {
+  const result = fleet.setBehavior(botId, behaviorType, target, config)
+  if (result === 'missing') {
     sendEvent({ evt: 'bot-error', botId, error: `Bot ${botId} 不存在` })
+    return
+  }
+  if (result === 'fleet_managed') {
+    sendEvent({ evt: 'bot-error', botId, errorCode: 'fleet_managed', error: `Bot ${botId} 由 Fleet 场景管理` })
     return
   }
   sendEvent({
