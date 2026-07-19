@@ -153,30 +153,39 @@ async function animationDurationMs(page: Page, selector: string): Promise<number
 
 async function armVisibleAnimationDurationProbe(page: Page, rootSelector: string, targetSelector: string): Promise<void> {
   await page.locator(rootSelector).evaluate((root, selector) => {
-    const probeRoot = root as HTMLElement & { __jmVisibleAnimationListener?: EventListener }
-    if (probeRoot.__jmVisibleAnimationListener) {
-      probeRoot.removeEventListener('animationstart', probeRoot.__jmVisibleAnimationListener)
-    }
+    const probeRoot = root as HTMLElement & { __jmVisibleAnimationObserver?: MutationObserver }
+    probeRoot.__jmVisibleAnimationObserver?.disconnect()
     probeRoot.dataset.observedAnimationDurationMs = '0'
-    const listener: EventListener = (event) => {
-      const target = event.target
-      if (!(target instanceof HTMLElement) || !target.matches(selector) || target.dataset.visible !== 'true') return
-      const rawDuration = getComputedStyle(target).animationDuration.split(',')[0] ?? '0s'
-      const durationMs = rawDuration.endsWith('ms') ? Number.parseFloat(rawDuration) : Number.parseFloat(rawDuration) * 1000
-      if (Number.isFinite(durationMs)) probeRoot.dataset.observedAnimationDurationMs = String(durationMs)
+
+    const sample = () => {
+      for (const target of probeRoot.querySelectorAll<HTMLElement>(selector)) {
+        if (target.dataset.visible !== 'true') continue
+        const rawDuration = getComputedStyle(target).animationDuration.split(',')[0] ?? '0s'
+        const durationMs = rawDuration.endsWith('ms') ? Number.parseFloat(rawDuration) : Number.parseFloat(rawDuration) * 1000
+        const observedDurationMs = Number.parseFloat(probeRoot.dataset.observedAnimationDurationMs ?? '0')
+        if (Number.isFinite(durationMs) && durationMs > observedDurationMs) {
+          probeRoot.dataset.observedAnimationDurationMs = String(durationMs)
+        }
+      }
     }
-    probeRoot.addEventListener('animationstart', listener)
-    probeRoot.__jmVisibleAnimationListener = listener
+
+    const observer = new MutationObserver(sample)
+    observer.observe(probeRoot, {
+      attributes: true,
+      attributeFilter: ['data-mode', 'data-visible'],
+      childList: true,
+      subtree: true,
+    })
+    probeRoot.__jmVisibleAnimationObserver = observer
+    sample()
   }, targetSelector)
 }
 
 async function readVisibleAnimationDurationProbe(page: Page, rootSelector: string): Promise<number> {
   return page.locator(rootSelector).evaluate((root) => {
-    const probeRoot = root as HTMLElement & { __jmVisibleAnimationListener?: EventListener }
-    if (probeRoot.__jmVisibleAnimationListener) {
-      probeRoot.removeEventListener('animationstart', probeRoot.__jmVisibleAnimationListener)
-      delete probeRoot.__jmVisibleAnimationListener
-    }
+    const probeRoot = root as HTMLElement & { __jmVisibleAnimationObserver?: MutationObserver }
+    probeRoot.__jmVisibleAnimationObserver?.disconnect()
+    delete probeRoot.__jmVisibleAnimationObserver
     return Number.parseFloat(probeRoot.dataset.observedAnimationDurationMs ?? '0')
   })
 }

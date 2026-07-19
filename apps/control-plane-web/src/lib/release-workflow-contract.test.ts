@@ -55,6 +55,7 @@ describe('发布工作流契约', () => {
 
   it('CI 将 E2E 分成四个隔离分片并保留统一门禁', () => {
     expect(ci).toContain('shard: [1, 2, 3, 4]')
+    expect(ci).toContain('name: Web E2E / Shard ${{ matrix.shard }} of 4')
     expect(ci).toContain('pnpm e2e --shard=${{ matrix.shard }}/4')
     expect(ci).toContain('name: web-e2e-test-results-${{ matrix.shard }}')
     expect(ci).toContain('needs: [web-static, web-e2e]')
