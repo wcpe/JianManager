@@ -214,19 +214,46 @@ async function findSocket() {
 }
 
 /**
- * TerminalPane FIX-B 回归：停机（STOPPED）实例打开终端必须呈现「实例未运行」静态占位、
- * 不挂载终端、不发起 WS（杜绝死循环刷断连）；运行中实例放行终端。
+ * TerminalPane FIX-B/FR-345 回归：停机（STOPPED）实例打开终端必须回放 DB 历史，
+ * 不挂载 xterm、不发起 WS（杜绝死循环刷断连）；运行中实例放行终端。
  * seed：id=1 RUNNING、id=2 STOPPED（见 mocks/handlers/domains/instance.ts）。
  */
 describe('TerminalPane（mock 假后端）', () => {
-  it('停机实例：回放历史日志（不挂载终端、不发起 WS）', async () => {
+  it('停机实例：按旧→新回放历史正文，重新挂载仍持久且不发起 WS', async () => {
     loginMockUser()
-    renderWithProviders(<TerminalPane instanceId={2} hideHeader />)
+    let logReads = 0
+    server.use(
+      http.get('*/api/v1/logs', ({ request }) => {
+        const url = new URL(request.url)
+        if (url.searchParams.get('instanceId') !== '2') return HttpResponse.json({ items: [], total: 0, page: 1, pageSize: 300 })
+        logReads += 1
+        // 后端契约为 time DESC（新→旧），StoppedLogsView 必须反转为终端阅读顺序（旧→新）。
+        return HttpResponse.json({
+          items: [
+            { id: 2, source: 'instance', level: 'info', instanceId: 2, instanceUuid: 'stopped-2', nodeId: 1, message: '[Server thread/INFO]: ThreadedAnvilChunkStorage: All dimensions are saved', time: '2026-07-18T12:00:02Z' },
+            { id: 1, source: 'instance', level: 'info', instanceId: 2, instanceUuid: 'stopped-2', nodeId: 1, message: '[Server thread/INFO]: Saving chunks for level minecraft:overworld', time: '2026-07-18T12:00:01Z' },
+          ],
+          total: 2,
+          page: 1,
+          pageSize: 300,
+        })
+      }),
+    )
 
-    // 停机态改回放 DB 历史日志（FR-345）：头部含「实例未运行（状态）」提示 + 「查看完整历史」链。
+    const firstMount = renderWithProviders(<TerminalPane instanceId={2} hideHeader />)
+
     expect(await screen.findByText(/实例未运行（STOPPED）/)).toBeInTheDocument()
-    expect(screen.getByText('查看完整历史')).toBeInTheDocument()
-    // 不挂载真实终端 → 不发起 WS → 不会刷「连接已断开」。
+    const oldLine = await screen.findByText('[Server thread/INFO]: Saving chunks for level minecraft:overworld')
+    const newLine = screen.getByText('[Server thread/INFO]: ThreadedAnvilChunkStorage: All dimensions are saved')
+    expect(oldLine.compareDocumentPosition(newLine) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(screen.getByRole('link', { name: '查看完整历史' })).toHaveAttribute('href', '/logs?instanceId=2')
+    expect(xtermHarness.instances).toHaveLength(0)
+    expect(wsHarness.sockets).toHaveLength(0)
+
+    firstMount.unmount()
+    renderWithProviders(<TerminalPane instanceId={2} hideHeader />)
+    expect(await screen.findByText('[Server thread/INFO]: Saving chunks for level minecraft:overworld')).toBeInTheDocument()
+    await waitFor(() => expect(logReads).toBeGreaterThanOrEqual(2))
     expect(xtermHarness.instances).toHaveLength(0)
     expect(wsHarness.sockets).toHaveLength(0)
   })
