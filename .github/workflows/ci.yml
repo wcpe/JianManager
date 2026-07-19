@@ -13,7 +13,7 @@
 #   的 web:lint / web:test / web:build / web:e2e 同配方，CI 直调底层命令不经 task（FR-287 spec §5 决策）。
 #
 # bot-quality：apps/bot-worker 质量门禁（npm 自管、不入 pnpm workspace，见 ADR-064）——
-#   npm ci + tsc --noEmit + eslint，与 Taskfile.yml 的 bot:lint 同配方；
+#   npm ci 后依次执行生产依赖审计、类型检查、lint 与构建；
 #   npm 缓存以 apps/bot-worker/package-lock.json 为 key。
 
 name: ci
@@ -31,7 +31,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
 
 jobs:
   web-quality:
@@ -123,9 +123,11 @@ jobs:
       - name: 安装依赖（npm 自管，不入 pnpm workspace）
         run: npm ci
 
-      - name: Lint（tsc + eslint，等价 task bot:lint）
+      - name: Bot Worker 生产依赖审计 / 类型检查 / Lint / 构建
         shell: bash
         run: |
           set -euo pipefail
-          npx tsc --noEmit
+          npm run audit:prod
+          npm run typecheck
           npm run lint
+          npm run build

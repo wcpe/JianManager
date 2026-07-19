@@ -7,12 +7,12 @@
 # 产物：control-plane / worker × linux/amd64 + windows/amd64 共 4 个二进制 + checksums.txt，
 # 命名 `<component>-<os>-<arch>[.exe]`（ADR-036 §1），sha256 校验清单（ADR-036 §2）。
 #
-# 内嵌：发布二进制内嵌全部可选资产——CP 内嵌前端 + 探针 jar + 客户端更新器两件套，
+# 内嵌：发布二进制内嵌全部可选资产——CP 内嵌前端 + Bot Worker + 探针 jar + 客户端更新器两件套，
 # Worker 内嵌 CFR 反编译器（ADR-036 §5）。go:embed 缺目录即编译失败，故 prepare-embeds 必须
 # 产出所有 embed 目录内容、任一步失败即 fail-fast。
 #
-# 版本注入：go build -ldflags 注入 internal/version.Version（ADR-036 §4）；正式=去前缀 tag，
-# 预发布=0.0.0-dev+<shortsha>。版本在 prepare-embeds 算一次、经 job output 下传，build/release 复用同值。
+# 版本注入：metadata job 读取 internal/version.Version 并校验 Git ref/tag；正式 tag `vX.Y.Z` 注入裸 `X.Y.Z`，
+# 开发构建沿用源码 `X.Y.Z-dev` 并附加 `+g<shortsha>`。后续 job 只消费同一份 metadata output。
 
 name: release
 
@@ -30,43 +30,40 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: '1.26'
-  NODE_VERSION: '20'
+  GO_VERSION: '1.26.2'
+  NODE_VERSION: '22'
   JAVA_VERSION: '21' # 探针需 JDK21；客户端更新器以 --release 8 在 JDK21 上构 Java8 字节码（无独立 toolchain 下载）
 
 jobs:
-  # ───────────────────────── prepare-embeds：一次性产出全部 go:embed 资产 ─────────────────────────
-  # 内嵌资产平台无关（jar / 前端静态文件），只构建一次跨 matrix 复用。顺带算发布版本经 output 下传。
-  prepare-embeds:
+  # ───────────────────────── metadata：统一解析源码版本、Git ref 与发布目标 ─────────────────────────
+  metadata:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.meta.outputs.version }} # 注入二进制的版本号
-      is_release: ${{ steps.meta.outputs.is_release }} # true=tag 正式发布，false=master 滚动预发布
-      release_tag: ${{ steps.meta.outputs.release_tag }} # 正式=vX.Y.Z，预发布=latest
+      version: ${{ steps.meta.outputs.version }}
+      is_release: ${{ steps.meta.outputs.is_release }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      publish_release: ${{ steps.meta.outputs.publish_release }}
+    steps:
+      - name: Checkout（读取源码版本与当前提交 tag）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 解析并校验发布元数据
+        id: meta
+        shell: bash
+        run: node scripts/release-metadata.mjs
+
+  # ───────────────────────── prepare-embeds：一次性产出全部 go:embed 资产 ─────────────────────────
+  # 内嵌资产平台无关（jar / 前端静态文件），只构建一次跨 matrix 复用。
+  prepare-embeds:
+    needs: metadata
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout（含子模块，embed-probe 需 third_party/ServerProbe）
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 0 # 取全历史，确保 CHANGELOG 与 tag 可读
-
-      - name: 解析触发类型 / 版本 / 目标 tag
-        id: meta
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            v="${GITHUB_REF#refs/tags/}"   # vX.Y.Z（带 v 前缀，作 tag 与注入版本）
-            echo "version=${v}" >> "$GITHUB_OUTPUT"
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-            echo "release_tag=${v}" >> "$GITHUB_OUTPUT"
-          else
-            v="0.0.0-dev+${GITHUB_SHA::7}" # 滚动预发布开发版（ADR-036 §4）
-            echo "version=${v}" >> "$GITHUB_OUTPUT"
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-            echo "release_tag=latest" >> "$GITHUB_OUTPUT"
-          fi
-          echo "解析得 version=${v}"
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -105,13 +102,27 @@ jobs:
           restore-keys: |
             js-${{ runner.os }}-
 
+      - name: Bot Worker 依赖与发布门禁 + 内嵌资产
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix apps/bot-worker ci
+          npm --prefix apps/bot-worker run audit:prod
+          npm --prefix apps/bot-worker run typecheck
+          npm --prefix apps/bot-worker run lint
+          npm --prefix apps/bot-worker run build
+          go run ./scripts/embed-botworker.go \
+            --src apps/bot-worker/dist \
+            --pkgjson apps/bot-worker/package.json \
+            --out internal/controlplane/embed/botworker \
+            --version "${{ needs.metadata.outputs.version }}"
+
       - name: 前端依赖与构建 + 许可清单（等价 make gen-licenses + build-web + embed-web，FR-283 pnpm workspace）
         shell: bash
         run: |
           set -euo pipefail
           corepack enable
           pnpm install --frozen-lockfile
-          npm --prefix apps/bot-worker ci
           node scripts/gen-licenses.mjs
           pnpm --filter control-plane-web build
           mkdir -p internal/controlplane/embed/dist
@@ -143,11 +154,15 @@ jobs:
           curl -fsSL -o internal/worker/embed/cfr/cfr.jar https://repo1.maven.org/maven2/org/benf/cfr/0.152/cfr-0.152.jar
           echo "f686e8f3ded377d7bc87d216a90e9e9512df4156e75b06c655a16648ae8765b2  internal/worker/embed/cfr/cfr.jar" | sha256sum -c -
 
-      - name: 上传 CP embed 产物（dist + probe + client-updater）
+      - name: 上传 CP embed 产物（dist + probe + client-updater + botworker）
         uses: actions/upload-artifact@v4
         with:
           name: embed-controlplane
-          path: internal/controlplane/embed/
+          path: |
+            internal/controlplane/embed/dist/
+            internal/controlplane/embed/probe/
+            internal/controlplane/embed/client-updater/
+            internal/controlplane/embed/botworker/
           retention-days: 1
           include-hidden-files: true # 保留各目录 .gitignore 占位，避免空目录被丢弃
 
@@ -216,7 +231,7 @@ jobs:
 
   # ───────────────────────── build：交叉编译 4 个二进制（matrix） ─────────────────────────
   build:
-    needs: [prepare-embeds, test]
+    needs: [metadata, prepare-embeds, test]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -252,7 +267,7 @@ jobs:
         shell: bash
         env:
           CGO_ENABLED: '0'
-          VERSION: ${{ needs.prepare-embeds.outputs.version }}
+          VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           set -euo pipefail
           LDFLAGS="-s -w -X github.com/wcpe/JianManager/internal/version.Version=${VERSION}"
@@ -269,7 +284,7 @@ jobs:
           GOOS: ${{ matrix.os }}
           GOARCH: ${{ matrix.arch }}
           CGO_ENABLED: '0'
-          VERSION: ${{ needs.prepare-embeds.outputs.version }}
+          VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -287,9 +302,54 @@ jobs:
           path: dist/*
           retention-days: 1
 
+  # ───────────────────────── smoke：原生执行四个发布二进制并核对版本 ─────────────────────────
+  smoke:
+    needs: [metadata, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, artifact: binaries-linux-amd64, binary: control-plane-linux-amd64 }
+          - { runner: ubuntu-latest, artifact: binaries-linux-amd64, binary: worker-linux-amd64 }
+          - { runner: windows-latest, artifact: binaries-windows-amd64, binary: control-plane-windows-amd64.exe }
+          - { runner: windows-latest, artifact: binaries-windows-amd64, binary: worker-windows-amd64.exe }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: 下载待验二进制
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist
+
+      - name: Linux 版本烟测
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          BINARY: ${{ matrix.binary }}
+          EXPECTED_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          chmod +x "dist/${BINARY}"
+          actual="$("./dist/${BINARY}" --version 2>version-stderr.txt)"
+          test ! -s version-stderr.txt
+          [[ "${actual}" == "${EXPECTED_VERSION}" ]]
+
+      - name: Windows 版本烟测
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          BINARY: ${{ matrix.binary }}
+          EXPECTED_VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          $actual = (& "./dist/$env:BINARY" --version 2> version-stderr.txt | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "二进制退出码异常：$LASTEXITCODE" }
+          if ((Get-Item version-stderr.txt).Length -ne 0) { throw "二进制向 stderr 输出了内容" }
+          if ($actual -ne $env:EXPECTED_VERSION) { throw "版本不一致：实际 $actual，期望 $env:EXPECTED_VERSION" }
+
   # ───────────────────────── release：汇总 + checksums + 发布 ─────────────────────────
   release:
-    needs: [prepare-embeds, build]
+    needs: [metadata, build, smoke]
+    if: needs.metadata.outputs.publish_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout（取 CHANGELOG + 提取脚本）
@@ -322,8 +382,8 @@ jobs:
         id: notes
         shell: bash
         env:
-          IS_RELEASE: ${{ needs.prepare-embeds.outputs.is_release }}
-          VERSION: ${{ needs.prepare-embeds.outputs.version }}
+          IS_RELEASE: ${{ needs.metadata.outputs.is_release }}
+          VERSION: ${{ needs.metadata.outputs.version }}
         run: |
           set -euo pipefail
           if [[ "${IS_RELEASE}" == "true" ]]; then
@@ -335,7 +395,7 @@ jobs:
           cat release-notes.md
 
       - name: 清空既有 latest 资产（仅预发布，确保只保留本次产物）
-        if: needs.prepare-embeds.outputs.is_release == 'false'
+        if: needs.metadata.outputs.is_release == 'false'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -345,17 +405,17 @@ jobs:
           gh release delete latest --cleanup-tag --yes 2>/dev/null || echo "无既有 latest release，跳过删除"
 
       - name: 发布正式 release（tag vX.Y.Z）
-        if: needs.prepare-embeds.outputs.is_release == 'true'
+        if: needs.metadata.outputs.is_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.prepare-embeds.outputs.release_tag }}
-          name: ${{ needs.prepare-embeds.outputs.release_tag }}
+          tag_name: ${{ needs.metadata.outputs.release_tag }}
+          name: ${{ needs.metadata.outputs.release_tag }}
           body_path: release-notes.md
           prerelease: false
           files: dist/*
 
       - name: 发布滚动预发布（latest）
-        if: needs.prepare-embeds.outputs.is_release == 'false'
+        if: needs.metadata.outputs.is_release == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
