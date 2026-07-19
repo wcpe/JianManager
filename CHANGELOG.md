@@ -9,7 +9,7 @@
 > 本段为 `v0.19.0` 开发版归档区（自 v0.18.0 之后累积）。
 
 ### 修复
-- **发布门禁去重与 E2E 分片（fix(ci)）**：CI 将 102 条 Playwright E2E 按文件拆为 4 个隔离 runner 并行执行，保留统一 `web-quality` 汇总门禁；发布工作流复用同提交 CI 结果，只保留依赖完整内嵌资产的 Go 构建/vet/测试，避免 dev、master、tag 对同一提交重复跑前端测试。同步移除可见步骤名中的需求编号，并升级官方 GitHub Actions 到 Node.js 24 运行时对应主版本，消除弃用警告。
+- **发布门禁去重与 E2E 分片（fix(ci)）**：CI 将 102 条 Playwright E2E 按文件拆为 4 个隔离 runner 并行执行，保留统一 `web-quality` 汇总门禁；瞬时失败重试一次，重试恢复记为 flaky 但不阻断，持续失败才红，并通过 GitHub reporter 直接标注失败用例。发布工作流复用同提交 CI 结果，只保留依赖完整内嵌资产的 Go 构建/vet/测试，避免 dev、master、tag 对同一提交重复跑前端测试。同步移除可见步骤名中的需求编号，并升级官方 GitHub Actions 到 Node.js 24 运行时对应主版本，消除弃用警告。
 
 ## 0.18.0（2026-07-19）
 

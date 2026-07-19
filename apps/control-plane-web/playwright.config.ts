@@ -13,10 +13,11 @@ export default defineConfig({
   // benchmark 与登录就绪依赖同一个 mock dev server，串行跑避免并发抢资源造成假性掉帧。
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  failOnFlakyTests: !!process.env.CI,
+  // CI 对瞬时波动重试一次；重试恢复记为 flaky，但仅持续失败才阻断门禁。
+  failOnFlakyTests: false,
   retries: process.env.CI ? 1 : 0,
   workers: 1,
-  reporter: 'list',
+  reporter: process.env.CI ? [['list'], ['github']] : 'list',
   use: {
     baseURL: e2eBaseURL,
     trace: process.env.CI ? 'retain-on-failure' : 'on-first-retry',

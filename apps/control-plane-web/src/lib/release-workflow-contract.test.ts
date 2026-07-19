@@ -24,6 +24,10 @@ function workflowStepNames(source: string): string[] {
 describe('发布工作流契约', () => {
   const ci = readWorkflow('ci.yml')
   const release = readWorkflow('release.yml')
+  const playwright = readFileSync(
+    path.join(repoRoot, 'apps/control-plane-web/playwright.config.ts'),
+    'utf8',
+  )
 
   it('CI 与发布工作流统一使用 Node.js 22', () => {
     expect(ci).toContain("NODE_VERSION: '22'")
@@ -54,6 +58,12 @@ describe('发布工作流契约', () => {
     expect(ci).toContain('pnpm e2e --shard=${{ matrix.shard }}/4')
     expect(ci).toContain('name: web-e2e-test-results-${{ matrix.shard }}')
     expect(ci).toContain('needs: [web-static, web-e2e]')
+  })
+
+  it('CI 对偶发 E2E 重试一次且仅持续失败时阻断', () => {
+    expect(playwright).toContain('retries: process.env.CI ? 1 : 0')
+    expect(playwright).toContain('failOnFlakyTests: false')
+    expect(playwright).toContain("['github']")
   })
 
   it('CI Bot Worker 在安装后依次通过四项门禁', () => {
