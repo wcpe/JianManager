@@ -15,7 +15,6 @@ const (
 
 var (
 	scenarioKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
-	templatePattern    = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
 	allowedTemplates   = map[string]struct{}{
 		"botName": {}, "botUuid": {}, "runId": {}, "cohortKey": {},
 		"correlationToken": {}, "roomKey": {},
@@ -86,11 +85,14 @@ func validateScenarioSteps(cohort *ScenarioCohort, cohortIndex int, allowLegacy 
 			return scenarioValidationError(stepPath+".id", "step id 必须在 cohort 内唯一")
 		}
 		seen[base.ID] = struct{}{}
-		if base.ObservationStep {
-			observationCount++
-		}
 		if err := validateScenarioAction(action, stepPath, allowLegacy); err != nil {
 			return err
+		}
+		if base.ObservationStep {
+			if action.Type() != ScenarioActionRoamInArea && action.Type() != ScenarioActionAttackUntil {
+				return scenarioValidationError(stepPath+".observationStep", "只允许 roam_in_area 或 attack_until 标记为 observationStep")
+			}
+			observationCount++
 		}
 	}
 	if observationCount != 1 {
@@ -393,13 +395,38 @@ func validateRadius(radius float64, path string) error {
 
 func validateActionTemplates(action ScenarioAction, basePath string) error {
 	for _, field := range scenarioActionTemplateFields(action, basePath) {
-		matches := templatePattern.FindAllStringSubmatch(field.value, -1)
-		for _, match := range matches {
-			name := strings.TrimSpace(match[1])
-			if _, ok := allowedTemplates[name]; !ok {
-				return scenarioValidationError(field.path, "包含未知模板变量 "+name)
-			}
+		if err := validateTemplateValue(field.value, field.path); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func validateTemplateValue(value, path string) error {
+	for offset := 0; offset < len(value); {
+		open := strings.Index(value[offset:], "{{")
+		close := strings.Index(value[offset:], "}}")
+		if close >= 0 && (open < 0 || close < open) {
+			return scenarioValidationError(path, "模板语法无效")
+		}
+		if open < 0 {
+			return nil
+		}
+		start := offset + open + 2
+		endOffset := strings.Index(value[start:], "}}")
+		if endOffset < 0 {
+			return scenarioValidationError(path, "模板语法无效")
+		}
+		end := start + endOffset
+		expression := value[start:end]
+		if strings.Contains(expression, "{{") || strings.TrimSpace(expression) == "" {
+			return scenarioValidationError(path, "模板语法无效")
+		}
+		name := strings.TrimSpace(expression)
+		if _, ok := allowedTemplates[name]; !ok {
+			return scenarioValidationError(path, "包含未知模板变量 "+name)
+		}
+		offset = end + 2
 	}
 	return nil
 }

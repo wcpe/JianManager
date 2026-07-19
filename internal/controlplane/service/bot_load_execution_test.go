@@ -365,7 +365,7 @@ func TestBotLoadExecutionStart_Creates500BotsAcrossTenBatches(t *testing.T) {
 
 func TestBotLoadExecutionStart_MaterializesStableCohortAndScenarioAssignments(t *testing.T) {
 	h := newBotLoadExecutionHarness(t, []int{10}, 10, nil)
-	rawScenario := `{"version":2,"seed":20260719,"cohorts":[{"key":"lobby","percent":20,"steps":[{"id":"lobby-observe","type":"wait","observationStep":true,"durationMs":1000}]},{"key":"combat","percent":80,"steps":[{"id":"combat-observe","type":"wait","observationStep":true,"durationMs":1000}]}]}`
+	rawScenario := `{"version":2,"seed":20260719,"cohorts":[{"key":"lobby","percent":20,"steps":[{"id":"lobby-observe","type":"roam_in_area","observationStep":true,"durationMs":1000,"area":{"type":"radius","center":{"x":0,"y":64,"z":0},"radius":2}}]},{"key":"combat","percent":80,"steps":[{"id":"combat-observe","type":"roam_in_area","observationStep":true,"durationMs":1000,"area":{"type":"radius","center":{"x":0,"y":64,"z":0},"radius":2}}]}]}`
 	scenario, err := ParseScenarioV2([]byte(rawScenario))
 	require.NoError(t, err)
 	snapshot, err := CanonicalScenarioSnapshot(scenario, false)

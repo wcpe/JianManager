@@ -381,7 +381,7 @@ func TestBotStressSession_CreateRejectsInvalidInput(t *testing.T) {
 	assert.Error(t, err)
 }
 
-const validScenarioV2JSON = `{"version":2,"seed":20260719,"cohorts":[{"key":"all","percent":100,"steps":[{"id":"observe","type":"wait","observationStep":true,"durationMs":1000}]}]}`
+const validScenarioV2JSON = `{"version":2,"seed":20260719,"cohorts":[{"key":"all","percent":100,"steps":[{"id":"observe","type":"roam_in_area","observationStep":true,"durationMs":1000,"area":{"type":"radius","center":{"x":0,"y":64,"z":0},"radius":2}}]}]}`
 
 const validScenarioV2YAML = `version: 2
 seed: 20260719
@@ -390,9 +390,13 @@ cohorts:
     percent: 100
     steps:
       - id: observe
-        type: wait
+        type: roam_in_area
         observationStep: true
         durationMs: 1000
+        area:
+          type: radius
+          center: {x: 0, y: 64, z: 0}
+          radius: 2
 `
 
 func TestBotStressSession_CreatePersistsCanonicalScenarioFromJSONAndYAML(t *testing.T) {
@@ -449,6 +453,23 @@ func TestBotStressSession_CreateV1BuildsSnapshotAndKeepsOriginalYAML(t *testing.
 	require.NoError(t, db.First(&row, created.ID).Error)
 	require.Equal(t, validStressOrchestrationYAML, row.OrchestrationYAML)
 	require.NotEmpty(t, row.ScenarioSnapshot)
+}
+
+func TestBotStressSession_CreateLegacyBehaviorWithoutContinuousActionKeepsFallback(t *testing.T) {
+	db := newBotStressSessionTestDB(t)
+	inst := createBotStressInstance(t, db)
+	svc := newBotStressSessionService(t, db)
+
+	created, err := svc.Create(CreateBotStressSessionRequest{
+		InstanceID: inst.ID, Count: 1, Behavior: "idle", NamePrefix: "legacy",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "idle", created.Behavior)
+	require.Nil(t, created.Scenario)
+
+	var row model.BotStressSession
+	require.NoError(t, db.First(&row, created.ID).Error)
+	require.Empty(t, row.ScenarioSnapshot)
 }
 
 func TestBotStressSession_CreateV1ConversionFailureFallsBackToOriginalFlow(t *testing.T) {

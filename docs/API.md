@@ -1314,7 +1314,13 @@
           "percent": 100,
           "steps": [
             { "id": "spawn", "type": "wait_spawn" },
-            { "id": "observe", "type": "wait", "observationStep": true, "durationMs": 60000 }
+            {
+              "id": "observe",
+              "type": "roam_in_area",
+              "observationStep": true,
+              "durationMs": 60000,
+              "area": { "type": "radius", "center": { "x": 0, "y": 64, "z": 0 }, "radius": 30 }
+            }
           ]
         }
       ]
@@ -1326,7 +1332,7 @@
   - `count`: 范围保持 `1..5000`，FR-274 真实验收固定使用 50。
   - `namePrefix`: 必填，启动时生成 Bot 名称前缀，形如 `load-001`。
   - `config`: 保持现有 Bot 连接配置 JSON。
-  - `scenario`: 可选；可直接提交 Scenario V2 JSON 对象，也可提交包含 JSON 或 YAML 的字符串。Control Plane 将两种输入解析为同一 DTO、执行同一 validator 并冻结规范 JSON snapshot。`scenario` 与 `orchestrationYaml` 不可同时提交。
+  - `scenario`: 可选；可直接提交 Scenario V2 JSON 对象，也可提交包含 JSON 或 YAML 的字符串。Control Plane 将两种输入规范为同一节点树，严格拒绝顶层、cohort、动作及嵌套结构中的未知字段，再解码到同一 DTO 并执行同一 validator；JSON/YAML 的同类字段错误返回相同叶子 `path`。每个 cohort 必须恰有一个 `roam_in_area` 或 `attack_until` 持续动作标记 `observationStep:true`。`legacy_behavior` 仅供 V1 内部转换，HTTP 新建 V2 不接受。`scenario` 与 `orchestrationYaml` 不可同时提交。
   - `behavior`: `scenario` 与 `orchestrationYaml` 都为空时必填；提交 Scenario V2 时响应中的 `behavior` 为 `scenario_v2`。
   - `orchestrationYaml`: FR-274/V1 兼容字段；非空时必须通过旧 YAML 编排校验，CP 会尽力转换为兼容 Scenario V2 snapshot，转换失败仍保留原编排行为。
 - **响应**: `201`
@@ -1345,7 +1351,7 @@
       "cohorts": [
         { "key": "all", "percent": 100, "steps": [
           { "id": "spawn", "type": "wait_spawn", "timeoutMs": 30000, "maxAttempts": 1, "retryBackoffMs": 0, "resumePolicy": "restart_step" },
-          { "id": "observe", "type": "wait", "observationStep": true, "timeoutMs": 3600000, "maxAttempts": 1, "retryBackoffMs": 0, "resumePolicy": "restart_step", "durationMs": 60000 }
+          { "id": "observe", "type": "roam_in_area", "observationStep": true, "timeoutMs": 3600000, "maxAttempts": 1, "retryBackoffMs": 0, "resumePolicy": "restart_step", "durationMs": 60000, "area": { "type": "radius", "center": { "x": 0, "y": 64, "z": 0 }, "radius": 30 }, "pauseMs": { "min": 0, "max": 0 }, "maxPathFailures": 3 }
         ] }
       ]
     },
@@ -1360,7 +1366,7 @@
   - `scenario` 返回 CP 冻结的规范化 Scenario V2；YAML 输入不会原样回显为场景正文。旧 `orchestrationYaml`/`orchestrationSummary` 字段继续按旧会话兼容返回。
 - **错误**:
   - 400 `INVALID_REQUEST`：参数缺失、数量越界、`scenario` 与 `orchestrationYaml` 同时提交、旧模式缺 `behavior`，或旧 `orchestrationYaml` 编排非法。
-  - 422 `BOT_LOAD_SCENARIO_INVALID`：Scenario V2 的 JSON/YAML 解析或语义校验失败；响应稳定携带字段路径与原因：
+  - 422 `BOT_LOAD_SCENARIO_INVALID`：Scenario V2 的 JSON/YAML 解析、未知字段、字段类型、模板语法或语义校验失败；响应稳定携带叶子字段路径与原因，同语义 JSON/YAML 使用相同 `path`：
     ```json
     {
       "error": "BOT_LOAD_SCENARIO_INVALID",

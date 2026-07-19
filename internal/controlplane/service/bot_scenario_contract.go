@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -288,18 +287,6 @@ func scenarioValidationError(path, message string) error {
 	return &ScenarioValidationError{Path: path, Message: message}
 }
 
-type scenarioJSONWire struct {
-	Version int                  `json:"version"`
-	Seed    *int64               `json:"seed"`
-	Cohorts []scenarioJSONCohort `json:"cohorts"`
-}
-
-type scenarioJSONCohort struct {
-	Key     string            `json:"key"`
-	Percent int               `json:"percent"`
-	Steps   []json.RawMessage `json:"steps"`
-}
-
 type scenarioYAMLWire struct {
 	Version int                  `yaml:"version"`
 	Seed    *int64               `yaml:"seed"`
@@ -327,13 +314,7 @@ func parseScenarioV2(raw []byte, allowLegacy bool) (*ScenarioV2, error) {
 	if len(raw) == 0 {
 		return nil, scenarioValidationError("$", "场景不能为空")
 	}
-	var scenario *ScenarioV2
-	var err error
-	if raw[0] == '{' || raw[0] == '[' {
-		scenario, err = parseScenarioJSON(raw)
-	} else {
-		scenario, err = parseScenarioYAML(raw)
-	}
+	scenario, err := decodeScenarioDocument(raw, allowLegacy)
 	if err != nil {
 		return nil, err
 	}
@@ -341,68 +322,6 @@ func parseScenarioV2(raw []byte, allowLegacy bool) (*ScenarioV2, error) {
 		return nil, err
 	}
 	return scenario, nil
-}
-
-func parseScenarioJSON(raw []byte) (*ScenarioV2, error) {
-	var wire scenarioJSONWire
-	if err := json.Unmarshal(raw, &wire); err != nil {
-		return nil, scenarioDecodeError("$", err)
-	}
-	scenario := &ScenarioV2{Version: wire.Version, Cohorts: make([]ScenarioCohort, len(wire.Cohorts))}
-	if wire.Seed != nil {
-		scenario.Seed = *wire.Seed
-		scenario.seedPresent = true
-	}
-	for cohortIndex, cohort := range wire.Cohorts {
-		scenario.Cohorts[cohortIndex] = ScenarioCohort{Key: cohort.Key, Percent: cohort.Percent, Steps: make([]ScenarioAction, len(cohort.Steps))}
-		for stepIndex, step := range cohort.Steps {
-			path := fmt.Sprintf("cohorts[%d].steps[%d]", cohortIndex, stepIndex)
-			action, err := decodeScenarioJSONAction(step, path)
-			if err != nil {
-				return nil, err
-			}
-			scenario.Cohorts[cohortIndex].Steps[stepIndex] = action
-		}
-	}
-	return scenario, nil
-}
-
-func parseScenarioYAML(raw []byte) (*ScenarioV2, error) {
-	var wire scenarioYAMLWire
-	if err := yaml.Unmarshal(raw, &wire); err != nil {
-		return nil, scenarioValidationError("$", "YAML 语法或字段类型无效")
-	}
-	scenario := &ScenarioV2{Version: wire.Version, Cohorts: make([]ScenarioCohort, len(wire.Cohorts))}
-	if wire.Seed != nil {
-		scenario.Seed = *wire.Seed
-		scenario.seedPresent = true
-	}
-	for cohortIndex, cohort := range wire.Cohorts {
-		scenario.Cohorts[cohortIndex] = ScenarioCohort{Key: cohort.Key, Percent: cohort.Percent, Steps: make([]ScenarioAction, len(cohort.Steps))}
-		for stepIndex := range cohort.Steps {
-			path := fmt.Sprintf("cohorts[%d].steps[%d]", cohortIndex, stepIndex)
-			action, err := decodeScenarioYAMLAction(&cohort.Steps[stepIndex], path)
-			if err != nil {
-				return nil, err
-			}
-			scenario.Cohorts[cohortIndex].Steps[stepIndex] = action
-		}
-	}
-	return scenario, nil
-}
-
-func decodeScenarioJSONAction(raw json.RawMessage, path string) (ScenarioAction, error) {
-	var discriminator struct {
-		Type ScenarioActionType `json:"type"`
-	}
-	if err := json.Unmarshal(raw, &discriminator); err != nil {
-		return ScenarioAction{}, scenarioDecodeError(path+".type", err)
-	}
-	action, target := newScenarioAction(discriminator.Type)
-	if err := json.Unmarshal(raw, target); err != nil {
-		return ScenarioAction{}, scenarioDecodeError(path, err)
-	}
-	return action, nil
 }
 
 func decodeScenarioYAMLAction(node *yaml.Node, path string) (ScenarioAction, error) {
@@ -458,19 +377,4 @@ func newScenarioAction(actionType ScenarioActionType) (ScenarioAction, any) {
 		value := &ScenarioActionBase{}
 		return ScenarioAction{Unknown: value}, value
 	}
-}
-
-func scenarioDecodeError(path string, err error) error {
-	var typeErr *json.UnmarshalTypeError
-	if errors.As(err, &typeErr) {
-		field := strings.TrimPrefix(typeErr.Field, ".")
-		if field != "" {
-			path += "." + field
-		}
-		if strings.Contains(typeErr.Value, "number 1e") {
-			return scenarioValidationError(path, "必须是有限数值")
-		}
-		return scenarioValidationError(path, "字段类型无效")
-	}
-	return scenarioValidationError(path, "JSON 语法或字段类型无效")
 }

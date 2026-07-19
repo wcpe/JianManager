@@ -257,7 +257,7 @@ func TestBotStressSessionScenario_CreateDetailAndValidationError(t *testing.T) {
 		_, _, _, ctx := setupBotLoadHTTP(t, 10)
 		sources := []any{
 			validBotLoadScenarioSource(),
-			"version: 2\nseed: 20260719\ncohorts:\n  - key: all\n    percent: 100\n    steps:\n      - id: observe\n        type: wait\n        observationStep: true\n        durationMs: 1000\n",
+			"version: 2\nseed: 20260719\ncohorts:\n  - key: all\n    percent: 100\n    steps:\n      - id: observe\n        type: roam_in_area\n        observationStep: true\n        durationMs: 1000\n        area:\n          type: radius\n          center: {x: 0, y: 64, z: 0}\n          radius: 2\n",
 		}
 		for index, source := range sources {
 			created := makeRequest(ctx.router, http.MethodPost, "/api/v1/bots/stress-sessions", map[string]any{
@@ -292,6 +292,52 @@ func TestBotStressSessionScenario_CreateDetailAndValidationError(t *testing.T) {
 	})
 }
 
+func TestBotStressSessionScenario_CreateUnknownFieldReturns422WithoutSideEffects(t *testing.T) {
+	tests := []struct {
+		name     string
+		scenario any
+	}{
+		{
+			name: "JSON",
+			scenario: map[string]any{
+				"version": 2, "seed": 7, "extra": true,
+				"cohorts": []any{
+					map[string]any{
+						"key": "all", "percent": 100,
+						"steps": []any{map[string]any{
+							"id": "observe", "type": "wait", "observationStep": true, "durationMs": 1000,
+						}},
+					},
+				},
+			},
+		},
+		{
+			name:     "YAML",
+			scenario: "version: 2\nseed: 7\nextra: true\ncohorts:\n  - key: all\n    percent: 100\n    steps:\n      - id: observe\n        type: wait\n        observationStep: true\n        durationMs: 1000\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, _, worker, ctx := setupBotLoadHTTP(t, 0)
+			created := makeRequest(ctx.router, http.MethodPost, "/api/v1/bots/stress-sessions", map[string]any{
+				"instanceId": ctx.instanceID, "count": 2, "namePrefix": "invalid", "scenario": test.scenario,
+			}, ctx.token)
+			require.Equal(t, http.StatusUnprocessableEntity, created.Code)
+			body := parseJSON(t, created)
+			require.Equal(t, "BOT_LOAD_SCENARIO_INVALID", body["error"])
+			details := body["details"].(map[string]any)
+			require.Equal(t, "extra", details["path"])
+			require.Equal(t, "未知字段", details["message"])
+			var sessionCount int64
+			require.NoError(t, db.Model(&model.BotStressSession{}).Count(&sessionCount).Error)
+			require.Zero(t, sessionCount)
+			capacityCalls, applyCalls := worker.counts()
+			require.Zero(t, capacityCalls)
+			require.Zero(t, applyCalls)
+		})
+	}
+}
+
 func TestBotLoadPreflight_InvalidScenarioReturns422BeforeCapacityAndWritesNothing(t *testing.T) {
 	db, _, worker, ctx := setupBotLoadHTTP(t, 0)
 	sessionID := createBotLoadSession(t, ctx, 2)
@@ -314,6 +360,29 @@ func TestBotLoadPreflight_InvalidScenarioReturns422BeforeCapacityAndWritesNothin
 	require.Empty(t, session.AllocationPlan)
 }
 
+func TestBotLoadPreflight_UnknownScenarioFieldReturns422BeforeCapacityAndWritesNothing(t *testing.T) {
+	db, _, worker, ctx := setupBotLoadHTTP(t, 0)
+	sessionID := createBotLoadSession(t, ctx, 2)
+	invalid := `{"version":2,"seed":7,"extra":true,"cohorts":[{"key":"all","percent":100,"steps":[{"id":"observe","type":"wait","observationStep":true,"durationMs":1000}]}]}`
+	require.NoError(t, db.Model(&model.BotStressSession{}).Where("id = ?", sessionID).Update("scenario_snapshot", invalid).Error)
+
+	response := makeRequest(ctx.router, http.MethodPost, "/api/v1/bots/stress-sessions/"+itoa(sessionID)+"/preflight", nil, ctx.token)
+	require.Equal(t, http.StatusUnprocessableEntity, response.Code)
+	body := parseJSON(t, response)
+	require.Equal(t, "BOT_LOAD_SCENARIO_INVALID", body["error"])
+	details := body["details"].(map[string]any)
+	require.Equal(t, "extra", details["path"])
+	require.Equal(t, "未知字段", details["message"])
+	capacityCalls, applyCalls := worker.counts()
+	require.Zero(t, capacityCalls)
+	require.Zero(t, applyCalls)
+	assertBotLoadStartHasNoRows(t, db, sessionID)
+
+	var session model.BotStressSession
+	require.NoError(t, db.First(&session, sessionID).Error)
+	require.Empty(t, session.AllocationPlan)
+}
+
 func validBotLoadScenarioSource() map[string]any {
 	return map[string]any{
 		"version": 2,
@@ -321,7 +390,8 @@ func validBotLoadScenarioSource() map[string]any {
 		"cohorts": []any{map[string]any{
 			"key": "all", "percent": 100,
 			"steps": []any{map[string]any{
-				"id": "observe", "type": "wait", "observationStep": true, "durationMs": 1000,
+				"id": "observe", "type": "roam_in_area", "observationStep": true, "durationMs": 1000,
+				"area": map[string]any{"type": "radius", "center": map[string]any{"x": 0, "y": 64, "z": 0}, "radius": 2},
 			}},
 		}},
 	}

@@ -532,12 +532,17 @@ func setBarrierScenario(t *testing.T, h *botActionResultHarness, timeout time.Du
 		seedPresent: true,
 		Cohorts: []ScenarioCohort{{
 			Key: "combat", Percent: 100,
-			Steps: []ScenarioAction{{Barrier: &BarrierAction{
-				ScenarioActionBase: ScenarioActionBase{
-					ID: "barrier-step", ActionType: ScenarioActionBarrier, ObservationStep: true, TimeoutMS: &timeoutMS,
-				},
-				Key: "ready", Release: release, TimeoutPolicy: policy,
-			}}},
+			Steps: []ScenarioAction{
+				{Barrier: &BarrierAction{
+					ScenarioActionBase: ScenarioActionBase{ID: "barrier-step", ActionType: ScenarioActionBarrier, TimeoutMS: &timeoutMS},
+					Key:                "ready", Release: release, TimeoutPolicy: policy,
+				}},
+				{RoamInArea: &RoamInAreaAction{
+					ScenarioActionBase: observedScenarioActionBase("observe", ScenarioActionRoamInArea),
+					DurationMS:         1000,
+					Area:               ScenarioArea{Type: "radius", Center: ScenarioPosition{}, Radius: 2},
+				}},
+			},
 		}},
 	}
 	snapshot, err := CanonicalScenarioSnapshot(scenario, false)

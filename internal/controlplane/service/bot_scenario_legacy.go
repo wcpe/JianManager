@@ -28,7 +28,9 @@ func ConvertStressOrchestrationToScenarioV2(raw string, seed int64) (*ScenarioV2
 	if len(steps) == 0 {
 		return nil, fmt.Errorf("%w: 旧编排未产生动作", ErrBotStressSessionInvalid)
 	}
-	steps[len(steps)-1].Base().ObservationStep = true
+	if err := markLegacyObservationStep(steps); err != nil {
+		return nil, err
+	}
 	scenario := newLegacyScenario(seed, steps)
 	if err := validateScenarioV2(scenario, true); err != nil {
 		return nil, err
@@ -47,12 +49,28 @@ func ConvertLegacyBehaviorToScenarioV2(behavior string, seed int64) (*ScenarioV2
 	if err != nil {
 		return nil, err
 	}
-	steps[len(steps)-1].Base().ObservationStep = true
+	if err := markLegacyObservationStep(steps); err != nil {
+		return nil, err
+	}
 	scenario := newLegacyScenario(seed, steps)
 	if err := validateScenarioV2(scenario, true); err != nil {
 		return nil, err
 	}
 	return scenario, nil
+}
+
+func markLegacyObservationStep(steps []ScenarioAction) error {
+	observationIndex := -1
+	for index := range steps {
+		if steps[index].Type() == ScenarioActionRoamInArea || steps[index].Type() == ScenarioActionAttackUntil {
+			observationIndex = index
+		}
+	}
+	if observationIndex < 0 {
+		return fmt.Errorf("%w: 旧行为没有可判定的持续观察动作", ErrBotStressSessionInvalid)
+	}
+	steps[observationIndex].Base().ObservationStep = true
+	return nil
 }
 
 func newLegacyScenario(seed int64, steps []ScenarioAction) *ScenarioV2 {

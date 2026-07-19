@@ -32,6 +32,7 @@
 - **发布编排器文件树定点增强：多级目录一次建 + 右键定点上传（FR-350，feat，增强 FR-191/250/261，免 spec 纯前端）**：①「新建文件夹」占位改名输入 `a/b/c` 原位展开整条层级；新增「新建多级目录」模态（多行每行一条路径、实时预览将建层级与非法行计数、全非法禁创建、右键目录打开则拼在该目录下；`..` 拒绝、已存在层级静默复用）。②目录右键「上传文件到此 / 上传文件夹到此」（后者 `webkitdirectory` 按 `webkitRelativePath` 保留内部结构拼前缀、zip 解包逐条拼前缀、解包失败 toast）。共享组件经可选 props 注入（`onUploadToDir` 省略即不渲染），CleanScopeEditor 等使用方无感。
 
 ### 修复
+- **Scenario V2 输入契约严格化（FR-352，2026-07-19）**：Control Plane 将 JSON/YAML 统一规范为节点树后按动作联合类型白名单拒绝顶层、cohort、通用动作及 area/pause/pos/selector/stop/release 等嵌套未知字段，字段类型错误稳定定位到同一叶子 path；模板拒绝未闭合、空变量、多余闭合与嵌套语法。每个 cohort 的 `observationStep` 仅允许唯一的 `roam_in_area`/`attack_until`，V1 转换缺少持续观察动作时回退旧编排而不冻结无效 snapshot，新建 V2 继续拒绝内部 `legacy_behavior`。
 - **Bot Fleet 落地前生命周期归真与所有权加固（FR-351，2026-07-19）**：收敛 CP 启动/Worker 重连后的活动订阅恢复与 snapshot→stream 世代隔离，修正低 epoch/空 baseline、stop accepted 与 runtime stopped 的竞态口径；Worker 补齐 child 世代、Fleet ownership/legacy 隔离和按世代失效的幂等缓存，并在 stdin IPC 阻塞或子进程退出时让 pending、WaitReady 与 Fleet stream 有界退出，避免幽灵在线、旧流覆写和跨接口越权。
 - **0 字节文件上传被拒致整批发布失败（fix，真机反馈：含 `.gitkeep`/空配置的整合包发布报「上传初始化参数非法: totalSize 须为正」弃单）**：分块上传 init 的 `totalSize <= 0` 一刀切把合法空文件当参数非法。init 放宽为仅拒负数，0 字节 0 分片经 complete 空流正常 ingest（空文件标准摘要 `e3b0c44…`，与单次上传同 CAS 逐字段一致）；前端零分片直达 complete、进度终值无 NaN；devmock 同语义放宽。
 - **测试基建目录移出 app 类型检查面（fix(web)，FR-346 收尾钓出）**：vitest setup 引入 `node:crypto` 桥接后 `tsc -b` 在 app 工程报 TS2591（react-app 预设不含 node 类型，且增量缓存曾掩盖）；`src/test` 为测试专属基建，与 `*.test` 文件同属 vitest 运行面，一并从 `tsconfig.app.json` 排除。
