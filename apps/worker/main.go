@@ -17,6 +17,7 @@ import (
 
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
+	"github.com/wcpe/JianManager/internal/version"
 	workercfg "github.com/wcpe/JianManager/internal/worker"
 	"github.com/wcpe/JianManager/internal/worker/artifactcache"
 	"github.com/wcpe/JianManager/internal/worker/bot"
@@ -29,9 +30,9 @@ import (
 	"github.com/wcpe/JianManager/internal/worker/heartbeat"
 	jdks "github.com/wcpe/JianManager/internal/worker/jdk"
 	"github.com/wcpe/JianManager/internal/worker/metrics"
+	"github.com/wcpe/JianManager/internal/worker/pkgmgr"
 	"github.com/wcpe/JianManager/internal/worker/process"
 	"github.com/wcpe/JianManager/internal/worker/register"
-	"github.com/wcpe/JianManager/internal/worker/pkgmgr"
 	wruntime "github.com/wcpe/JianManager/internal/worker/runtime"
 	"github.com/wcpe/JianManager/internal/worker/runtimescan"
 	"github.com/wcpe/JianManager/internal/worker/setup"
@@ -44,6 +45,10 @@ import (
 // 若以 `daemon` 子命令模式启动（由 daemonStrategy spawn），则运行 wrapper 而非 Worker 主进程。
 // 见 ADR-003: 守护进程 Wrapper 模式。
 func main() {
+	if version.Requested(os.Args[1:]) {
+		fmt.Println(version.Version)
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "daemon" {
 		runDaemonWrapper()
 		return

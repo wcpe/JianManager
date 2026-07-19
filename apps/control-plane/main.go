@@ -23,10 +23,15 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
 	"github.com/wcpe/JianManager/internal/platform/httpclient"
+	"github.com/wcpe/JianManager/internal/version"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 func main() {
+	if version.Requested(os.Args[1:]) {
+		fmt.Println(version.Version)
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "reset-password" {
 		runResetPassword(os.Args[2:])
 		return
