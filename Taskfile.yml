@@ -22,8 +22,8 @@ tasks:
     deps: [go:build, web:build]
 
   test:
-    desc: 全量测试（Go + 前端含 devmock 包）
-    deps: [go:test, web:test]
+    desc: 全量测试（Go + 前端含 devmock 包 + Bot Worker）
+    deps: [go:test, web:test, bot:test]
 
   lint:
     desc: 全量静态检查（go vet + 前端 tsc/eslint）
@@ -110,6 +110,12 @@ tasks:
     dir: apps/bot-worker
     cmds:
       - npm run build
+
+  bot:test:
+    desc: 运行 bot-worker Node 单元与 IPC 测试
+    dir: apps/bot-worker
+    cmds:
+      - npm test
 
   bot:lint:
     desc: bot-worker 类型检查 + eslint
