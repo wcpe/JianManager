@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -36,9 +37,10 @@ type Config struct {
 
 // Manager 管理托管 .npmrc 与 corepack 激活。runtimesRoot=<数据根>/opt/runtimes（含 nodejs-* 与 .npmrc）。
 type Manager struct {
-	runtimesRoot string // 托管运行时根：nodejs-* 子目录 + 托管 .npmrc/global 落此
-	configDir    string // .npmrc 落盘目录（默认 = runtimesRoot）
-	run          runner // PM 命令执行器（nil=真 exec；测试经 SetRunner 注入，FR-307）
+	runtimesRoot string     // 托管运行时根：nodejs-* 子目录 + 托管 .npmrc/global 落此
+	configDir    string     // .npmrc 落盘目录（默认 = runtimesRoot）
+	run          runner     // PM 命令执行器（nil=真 exec；测试经 SetRunner 注入，FR-307）
+	globalMu     sync.Mutex // 节点包根的 package.json 与 node_modules 操作必须串行
 }
 
 // NewManager 创建包管理器。runtimesRoot 为 <数据根>/opt/runtimes。

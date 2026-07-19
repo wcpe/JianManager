@@ -20,7 +20,7 @@ Bot Worker 是 Node.js 子进程，其 dist 已内嵌 Control Plane，Worker 注
 
 - Control Plane / Worker：对应平台的可执行文件即可运行，无需额外运行时（纯 Go 静态二进制，内置 SQLite）。
 - 运行 Minecraft 等游戏服：目标 Worker 机需要对应 JDK。现代 Paper（1.18+）需 Java 17/21——可在节点托管便携 JDK（见 §7），无需系统预装。
-- Bot 功能：Worker 机需要 Node.js 20+——可在节点「运行时」页一键安装托管 Node，无需系统预装（见 §6）。
+- Bot 功能：Worker 机需要 Node.js >=22.13.0——可在节点「运行时」页一键安装托管 Node，无需系统预装（见 §6）。
 - 数据库：默认 SQLite（零依赖）；生产可切 MySQL（见 §4）。
 
 ## 3. 快速部署（单机）
@@ -113,12 +113,12 @@ Worker 全部用环境变量配置（也可放 `worker.yml` 同名键）：
 
 ### Bot Worker（Node.js，自动下发）
 
-Bot 功能由 Node.js 子进程承载。bot-worker 的 dist 已内嵌 Control Plane 二进制（FR-308，见 ADR-070）：Worker 注册成功后经 gRPC（`FetchBotWorkerArchive`）自动拉取并物化到 `<数据根>/opt/bot-worker/`（sha256 校验 + 原子换入；指纹一致跳过；CP 不可达时回退本地已有副本，只告警不阻断启动）。**发布包部署无需手动准备 bot-worker 文件**，只需在 Worker 机备好两项运行时：
+Bot 功能由 Node.js 子进程承载。bot-worker 的 dist 已内嵌 Control Plane 二进制（FR-308，见 ADR-072；取代 ADR-070）：Worker 注册成功后经 gRPC（`FetchBotWorkerArchive`）自动拉取并物化到 `<数据根>/opt/bot-worker/`（sha256 校验 + 原子换入；指纹一致跳过；CP 不可达时回退本地已有副本，只告警不阻断启动）。**发布包部署无需手动准备 bot-worker 文件**，只需在 Worker 机备好两项运行时：
 
-1. **Node.js 20+**：推荐在节点「运行时」页一键安装托管 Node（FR-299）；Worker spawn 时优先用本机扫描到的最高版 Node，无候选回退 PATH 中的 `node`（FR-300）。
-2. **Bot 运行时依赖**（`mineflayer`、`mineflayer-pathfinder`）：不随归档分发，在节点「全局包管理」安装（FR-307）。缺装时 Bot 启动会返回明确的安装指引，不会裸崩。
+1. **Node.js >=22.13.0**：推荐在节点「运行时」页一键安装托管 Node 22（FR-299）；Worker spawn 时优先用本机扫描到的最高版 Node，无候选回退 PATH 中的 `node`（FR-300）。旧 Node 20 不再满足 bot-worker 当前运行时与工具链要求。
+2. **Bot 运行时依赖**（`mineflayer`、`mineflayer-pathfinder`）：不随归档分发，在节点「全局包管理」安装（FR-307）。该页面把依赖安装到 `<数据根>/opt/runtimes/global` 受控普通项目，npm 使用 `--prefix`、pnpm 使用 `--dir`，统一落 `global/node_modules` 并应用平台安全 overrides；它是节点共享依赖根，不是 npm/pnpm 真全局安装。缺装时 Bot 启动会返回明确的安装指引，不会裸崩。
 
-入口解析顺序：`JIANMANAGER_BOT_WORKER_PATH` 显式覆盖（指定后不再自愈下发）> 数据根自愈副本 > 仓库相对路径 `apps/bot-worker/dist/index.js`（旧布局 `bot-worker/dist/index.js` 兼容）。
+入口解析顺序：`JIANMANAGER_BOT_WORKER_PATH` 显式覆盖（指定后不再自愈下发）> 数据根自愈副本 > 仓库相对路径 `apps/bot-worker/dist/index.js`（旧布局 `bot-worker/dist/index.js` 兼容）。依赖链接仅在新 `<runtimes>/global/node_modules` 同时具备 mineflayer 与 mineflayer-pathfinder 后才切换；否则旧 `<runtimes>/global/lib/node_modules` 依赖完整时继续兼容。任一新包操作都会使用新受控根，确认两项 Bot 依赖均已安装且 Bot 正常后再人工清理旧目录。
 
 **仓库式部署回退（按源码运行）**：从仓库检出运行 Worker 时，可自行构建并显式指定入口：
 

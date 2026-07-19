@@ -9,7 +9,7 @@ FR-298~303 已建节点运行时库（JDK/Node.js 扫描、安装、聚合）。
 
 **FR-306 目标**（本 FR）：节点级包管理器偏好（corepack 激活 pnpm/yarn）+ 多 registry 配置的读写与落盘，作为 FR-307（全局包 UI）/FR-308（bot-worker 依赖装全局）的地基。
 
-**明确不做（YAGNI）**：per-project 包管理（用户拍板「worker 里只有全局包」）；npm 账号登录/publish；registry 健康探测（配了就用，失败在装包时报）。
+**明确不做（YAGNI）**：用户自定义的多项目包管理（节点只提供一个平台受控依赖根，见 ADR-072）；npm 账号登录/publish；registry 健康探测（配了就用，失败在装包时报）。
 
 ## 2. 需求
 
@@ -79,15 +79,15 @@ token 入库存明文（节点级配置，与 proxy.url 同密级），**API 出
 
 ## 6. FR-307（全局包可视化管理，依赖 FR-306，波2 施工）
 
-- **全局目录**：`<数据根>/opt/runtimes/global`（PM global prefix 指向；`npm i -g --prefix`/pnpm `--global-dir`/yarn 等价），与 .npmrc 同 userconfig。
-- **Worker RPC**：`ListGlobalPackages → [{name,version,latest?}]`（`<pm> ls -g --json` 解析）；`InstallGlobalPackage(name,version?)` / `RemoveGlobalPackage(name)` / `UpdateGlobalPackage(name)` —— 装/更新走**任务中心异步**（复用 FR-290 停滞看门狗 + FR-279 网络失败引导 + FR-291 语义），经 FR-306 的 PM+.npmrc。
+- **节点受控依赖根**：`<数据根>/opt/runtimes/global` 是平台独占管理的普通 Node 项目（ADR-072），`package.json` 原子合并并保留既有 dependencies/未知字段，统一落 `<root>/node_modules`；npm 用 `--prefix <root>`，pnpm 用 `--dir <root>`，不再使用真全局安装。平台注入定向 `overrides` / `pnpm.overrides` 收敛已知传递依赖安全漏洞；yarn 继续拒绝。
+- **Worker RPC**：`ListGlobalPackages → [{name,version,latest?}]`（npm `ls --json --depth=0 --prefix <root>` / pnpm `ls --json --depth=0 --dir <root>` 解析）；`InstallGlobalPackage(name,version?)` / `RemoveGlobalPackage(name)` / `UpdateGlobalPackage(name)` —— 装/更新走**任务中心异步**（复用 FR-290 停滞看门狗 + FR-279 网络失败引导 + FR-291 语义），经 FR-306 的 PM+.npmrc。
 - **CP 端点**：`GET/POST/DELETE /nodes/:id/global-packages`（+ update）；审计 `node.pkg.{install,remove,update}`（i18n 随身）。
 - **前端**：全局包管理页（列表+搜索+版本+可更新标记+增删改），走已配 registry。
 - **验收（真机）**：装 `mineflayer-pvp` 全局 → 列表可见（走 npmmirror）→ 更新 → 删除消失。
-- FR-308 消费：bot-worker 依赖即装为全局包，bot spawn 带 `NODE_PATH=<global>/node_modules`（FR-308 spec）。
+- FR-308 消费：bot-worker 依赖装入节点受控根，ESM 通过 dist 同级 `node_modules` 链接优先消费 `<global>/node_modules`；旧 `<global>/lib/node_modules` 仅作升级兼容候选，`NODE_PATH` 仅作 CJS 兜底（FR-308 spec / ADR-072）。依赖方向保持单向：`pkgmgr` 独立拥有项目根、package.json 与 PM 命令语义，不导入 `botdist`；`botdist` 只按约定路径消费安装结果。
 
 ## 7. 风险 / 待定
 
 - corepack `enable` 需写 node bin 目录——托管 Node 目录可写（我们装的），OK；若节点手动登记的外部 Node 只读则 corepack enable 可能失败，回报「PM 激活失败，请用 npm 或托管 Node」。
-- pnpm/yarn 的 global dir 与 .npmrc 尊重方式略有差异——FR-307 施工时按 PM 分派（本 FR 只落 .npmrc + corepack，不碰 global 安装）。
+- pnpm 与 npm 的项目根参数不同——FR-307 按 PM 分派为 npm `--prefix`、pnpm `--dir`；不再处理 global dir。yarn 因缺少本范围内一致且已验证的受控根语义继续明确拒绝。
 - proto/worker.proto 与并行会话（FR-281/304/305）同文件演进——RPC 追加文件尾段，整合时 make proto 重生成收敛。

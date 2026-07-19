@@ -60,8 +60,159 @@ func realRun(ctx context.Context, name string, args, env []string, onLine func(s
 	return out.Bytes(), cmd.Wait()
 }
 
-// GlobalDir 返回托管全局包目录（PM global prefix 指向，FR-307）。
+// GlobalDir 返回节点级受控包项目根（FR-307，见 ADR-072）。
 func (m *Manager) GlobalDir() string { return filepath.Join(m.runtimesRoot, "global") }
+
+var managedNPMOverrides = map[string]map[string]string{
+	"@azure/msal-node": {"uuid": "11.1.1"},
+	"yggdrasil":        {"uuid": "11.1.1"},
+}
+
+var managedPNPMOverrides = map[string]string{
+	"@azure/msal-node>uuid": "11.1.1",
+	"yggdrasil>uuid":        "11.1.1",
+}
+
+// ensurePackageRoot 原子创建或合并受控 package.json，保留依赖与未知字段。
+func (m *Manager) ensurePackageRoot() error {
+	root := m.GlobalDir()
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return fmt.Errorf("创建节点包根失败: %w", err)
+	}
+	path := filepath.Join(root, "package.json")
+	doc, err := readJSONObject(path)
+	if err != nil {
+		return fmt.Errorf("读取节点包根 package.json 失败: %w", err)
+	}
+	doc["private"] = json.RawMessage("true")
+	if err := mergeManagedNPMOverrides(doc); err != nil {
+		return err
+	}
+	pnpm, err := rawJSONObject(doc["pnpm"])
+	if err != nil {
+		return fmt.Errorf("合并 package.json 的 pnpm 字段失败: %w", err)
+	}
+	if err := mergeStringOverrides(pnpm, "overrides", managedPNPMOverrides); err != nil {
+		return err
+	}
+	pnpmRaw, err := json.Marshal(pnpm)
+	if err != nil {
+		return err
+	}
+	doc["pnpm"] = pnpmRaw
+	return writeJSONObjectAtomic(root, path, doc)
+}
+
+func readJSONObject(path string) (map[string]json.RawMessage, error) {
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return map[string]json.RawMessage{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return rawJSONObject(raw)
+}
+
+func rawJSONObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
+	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return map[string]json.RawMessage{}, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+	if obj == nil {
+		obj = map[string]json.RawMessage{}
+	}
+	return obj, nil
+}
+
+func mergeManagedNPMOverrides(doc map[string]json.RawMessage) error {
+	overrides, err := rawJSONObject(doc["overrides"])
+	if err != nil {
+		return fmt.Errorf("合并 package.json 的 overrides 字段失败: %w", err)
+	}
+	for parent, children := range managedNPMOverrides {
+		parentOverride, err := npmOverrideObject(overrides[parent])
+		if err != nil {
+			return fmt.Errorf("合并 npm override %s 失败: %w", parent, err)
+		}
+		if err := putStringValues(parentOverride, children); err != nil {
+			return err
+		}
+		overrides[parent], err = json.Marshal(parentOverride)
+		if err != nil {
+			return err
+		}
+	}
+	return putJSONObject(doc, "overrides", overrides)
+}
+
+func npmOverrideObject(raw json.RawMessage) (map[string]json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) > 0 && trimmed[0] == '"' {
+		return map[string]json.RawMessage{".": raw}, nil
+	}
+	return rawJSONObject(raw)
+}
+
+func mergeStringOverrides(doc map[string]json.RawMessage, field string, values map[string]string) error {
+	overrides, err := rawJSONObject(doc[field])
+	if err != nil {
+		return fmt.Errorf("合并 package.json 的 %s 字段失败: %w", field, err)
+	}
+	if err := putStringValues(overrides, values); err != nil {
+		return err
+	}
+	return putJSONObject(doc, field, overrides)
+}
+
+func putStringValues(doc map[string]json.RawMessage, values map[string]string) error {
+	for name, value := range values {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		doc[name] = raw
+	}
+	return nil
+}
+
+func putJSONObject(doc map[string]json.RawMessage, field string, value map[string]json.RawMessage) error {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	doc[field] = raw
+	return nil
+}
+
+func writeJSONObjectAtomic(dir, path string, doc map[string]json.RawMessage) error {
+	raw, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw = append(raw, '\n')
+	tmp, err := os.CreateTemp(dir, "package-*.json.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o644); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
 
 // SetRunner 注入命令执行器（仅测试）。
 func (m *Manager) SetRunner(r runner) { m.run = r }
@@ -79,14 +230,14 @@ var (
 	pkgVersionRe = regexp.MustCompile(`^[a-zA-Z0-9^~><=.x*+-]*$`)
 )
 
-// pmExecEnv 组装 PM 执行环境：托管 node bin 目录前置 PATH + 托管 .npmrc 作 userconfig +
-// pnpm 全局家目录。返回 (pm 可执行绝对路径, env, error)。
+// pmExecEnv 组装 PM 执行环境：托管 node bin 目录前置 PATH，并使用托管 .npmrc。
+// 返回 (pm 可执行绝对路径, env, error)。
 func (m *Manager) pmExecEnv(pm string) (string, []string, error) {
 	if err := validatePM(pm); err != nil {
 		return "", nil, err
 	}
 	if pm == "yarn" {
-		return "", nil, fmt.Errorf("yarn 的全局包管理暂不支持（corepack yarn 无全局安装语义），请切换 npm 或 pnpm")
+		return "", nil, fmt.Errorf("yarn 的节点受控包管理暂不支持，请切换 npm 或 pnpm")
 	}
 	nodeBin := m.findNodeBin()
 	if nodeBin == "" {
@@ -101,51 +252,45 @@ func (m *Manager) pmExecEnv(pm string) (string, []string, error) {
 		}
 		return "", nil, fmt.Errorf("%s 未激活（先在包管理器区选择 %s 保存以经 corepack 激活）", pm, pm)
 	}
-	if err := os.MkdirAll(m.GlobalDir(), 0o755); err != nil {
-		return "", nil, fmt.Errorf("创建全局包目录失败: %w", err)
+	if err := m.ensurePackageRoot(); err != nil {
+		return "", nil, err
 	}
 	env := append(os.Environ(),
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"NPM_CONFIG_USERCONFIG="+m.NpmrcPath(),
 	)
-	if pm == "pnpm" {
-		pnpmHome := filepath.Join(m.GlobalDir(), "pnpm")
-		if err := os.MkdirAll(pnpmHome, 0o755); err != nil {
-			return "", nil, fmt.Errorf("创建 pnpm 全局目录失败: %w", err)
-		}
-		env = append(env, "PNPM_HOME="+pnpmHome,
-			"PATH="+pnpmHome+string(os.PathListSeparator)+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	}
 	return pmPath, env, nil
 }
 
-// globalArgs 按 PM 返回把全局操作固定到托管目录的参数。
-func (m *Manager) globalArgs(pm string) []string {
+// projectArgs 按 PM 返回把本地操作固定到节点受控项目根的参数。
+func (m *Manager) projectArgs(pm string) []string {
 	if pm == "npm" {
-		return []string{"--global", "--prefix", m.GlobalDir()}
+		return []string{"--prefix", m.GlobalDir()}
 	}
-	return []string{"--global"} // pnpm 经 PNPM_HOME 定位
+	return []string{"--dir", m.GlobalDir()}
 }
 
-// ListGlobal 列出托管全局目录已装包，并 best-effort 标注可更新版本（FR-307）。
+// ListGlobal 列出节点受控项目已装包，并 best-effort 标注可更新版本（FR-307）。
 func (m *Manager) ListGlobal(ctx context.Context, pm string) ([]GlobalPackage, error) {
+	m.globalMu.Lock()
+	defer m.globalMu.Unlock()
+
 	pmPath, env, err := m.pmExecEnv(pm)
 	if err != nil {
 		return nil, err
 	}
-	args := append([]string{"ls", "--json", "--depth=0"}, m.globalArgs(pm)...)
+	args := append([]string{"ls", "--json", "--depth=0"}, m.projectArgs(pm)...)
 	out, runErr := m.runner()(ctx, pmPath, args, env, nil)
 	pkgs, parseErr := parseLsJSON(pm, out)
 	if parseErr != nil && runErr != nil {
-		// 全空全局目录：npm 对无 lib/node_modules 的 prefix 报 ENOENT 退出非 0——
-		// 视为「还没装过任何包」回空列表（真机复现：全新节点首次打开分区报错）。
+		// 兼容旧 npm 空目录现场：ls 可能报 ENOENT 退出非 0，视为尚未安装任何包。
 		if strings.Contains(string(out), "ENOENT") {
 			return []GlobalPackage{}, nil
 		}
 		return nil, fmt.Errorf("列出全局包失败: %v（%s）", runErr, firstLine(out))
 	}
 	// outdated best-effort：命令对「有可更新项」按惯例退出码非 0，只要 stdout 可解析就采纳。
-	oArgs := append([]string{"outdated", "--json"}, m.globalArgs(pm)...)
+	oArgs := append([]string{"outdated", "--json"}, m.projectArgs(pm)...)
 	if oOut, _ := m.runner()(ctx, pmPath, oArgs, env, nil); len(oOut) > 0 {
 		if latest := parseOutdatedJSON(oOut); len(latest) > 0 {
 			for i := range pkgs {
@@ -166,6 +311,9 @@ func (m *Manager) InstallGlobal(ctx context.Context, pm, name, version string, o
 	if version != "" && !pkgVersionRe.MatchString(version) {
 		return fmt.Errorf("非法版本: %q", version)
 	}
+	m.globalMu.Lock()
+	defer m.globalMu.Unlock()
+
 	pmPath, env, err := m.pmExecEnv(pm)
 	if err != nil {
 		return err
@@ -181,7 +329,7 @@ func (m *Manager) InstallGlobal(ctx context.Context, pm, name, version string, o
 	if pm == "pnpm" {
 		verb, extra = "add", nil
 	}
-	args := append(append([]string{verb, spec}, m.globalArgs(pm)...), extra...)
+	args := append(append([]string{verb, spec}, m.projectArgs(pm)...), extra...)
 	out, runErr := m.runner()(ctx, pmPath, args, env, onLine)
 	if runErr != nil {
 		return fmt.Errorf("安装失败: %v（%s）", runErr, firstLine(out))
@@ -194,6 +342,9 @@ func (m *Manager) RemoveGlobal(ctx context.Context, pm, name string) error {
 	if !pkgNameRe.MatchString(name) {
 		return fmt.Errorf("非法包名: %q", name)
 	}
+	m.globalMu.Lock()
+	defer m.globalMu.Unlock()
+
 	pmPath, env, err := m.pmExecEnv(pm)
 	if err != nil {
 		return err
@@ -202,7 +353,7 @@ func (m *Manager) RemoveGlobal(ctx context.Context, pm, name string) error {
 	if pm == "pnpm" {
 		verb = "remove"
 	}
-	args := append([]string{verb, name}, m.globalArgs(pm)...)
+	args := append([]string{verb, name}, m.projectArgs(pm)...)
 	out, runErr := m.runner()(ctx, pmPath, args, env, nil)
 	if runErr != nil {
 		return fmt.Errorf("卸载失败: %v（%s）", runErr, firstLine(out))

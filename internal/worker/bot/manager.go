@@ -86,8 +86,10 @@ type Manager struct {
 	prewarm   int
 	botWorker string        // bot-worker 脚本路径
 	nodeRes   *NodeResolver // node 可执行解析器（FR-300：托管/扫描 Node 优先，回退 PATH）
-	extraEnv  []string      // spawn 追加环境（FR-308：NODE_PATH 指向托管全局包，CJS 兜底）
-	// depsPrecheck spawn 前依赖预检（FR-308）：缺 mineflayer 时给可操作指引而非子进程裸崩。
+	extraEnv  []string      // spawn 追加环境（FR-308：NODE_PATH 仅作 CJS 兜底）
+	// prepareSpawn 在依赖预检前刷新受控 dist 的 ESM node_modules 链接。
+	prepareSpawn func(distDir string) error
+	// depsPrecheck spawn 前只按 ESM 可见路径检查依赖，避免裸全局根误放行。
 	depsPrecheck func(distDir string) error
 }
 
@@ -126,10 +128,11 @@ type ManagerConfig struct {
 	// NodeResolver 可注入的 node 解析器（测试/后续 CP 下发接入点）；
 	// nil 时按 NodePath + 本地扫描构造默认解析器。
 	NodeResolver *NodeResolver
-	// ExtraEnv spawn 时在继承环境上追加的变量（FR-308：NODE_PATH → 托管全局包）。
+	// ExtraEnv spawn 时在继承环境上追加的变量（FR-308：NODE_PATH 仅作 CJS 兜底）。
 	ExtraEnv []string
-	// DepsPrecheck spawn 前依赖预检（FR-308）；nil 时不预检（测试/旧行为）。
-	// 入参为当前入口脚本所在目录。
+	// PrepareSpawn 在依赖预检前准备当前入口目录；受控 dist 用它刷新 node_modules 链接。
+	PrepareSpawn func(distDir string) error
+	// DepsPrecheck spawn 前按 ESM 可见路径预检依赖；nil 时不预检（测试/旧行为）。
 	DepsPrecheck func(distDir string) error
 }
 
@@ -146,6 +149,7 @@ func NewManager(config ManagerConfig) *Manager {
 		botWorker:    config.BotWorkerPath,
 		nodeRes:      resolver,
 		extraEnv:     config.ExtraEnv,
+		prepareSpawn: config.PrepareSpawn,
 		depsPrecheck: config.DepsPrecheck,
 	}
 }
@@ -205,41 +209,55 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("Bot 管理器已在运行")
 	}
 
-	// 依赖预检（FR-308）：mineflayer 不随 dist 分发，缺装时在这里给指引，
-	// 而非让子进程以 ERR_MODULE_NOT_FOUND 裸崩、用户只能翻 stderr 取证。
+	distDir := filepath.Dir(m.botWorker)
+	if m.prepareSpawn != nil {
+		if err := m.prepareSpawn(distDir); err != nil {
+			return fmt.Errorf("准备 Bot Worker 运行时失败: %w", err)
+		}
+	}
+	// mineflayer 不随 dist 分发；链接刷新后再按 ESM 实际可见路径预检，
+	// 避免裸受控根完整但入口仍指向旧根时误放行。
 	if m.depsPrecheck != nil {
-		if err := m.depsPrecheck(filepath.Dir(m.botWorker)); err != nil {
+		if err := m.depsPrecheck(distDir); err != nil {
 			return err
 		}
 	}
-
-	ctx, m.cancel = context.WithCancel(ctx)
 
 	args := []string{m.botWorker}
 	if m.prewarm > 0 {
 		args = append(args, fmt.Sprintf("--prewarm=%d", m.prewarm))
 	}
 
-	// node 可执行解析（FR-300）：显式配置 > 本地扫描最高版 > PATH "node"，结果缓存。
-	res := m.nodeRes.Resolve()
-	stderrTail, err := m.spawnLocked(ctx, res.Path, args)
-	if err != nil {
-		// 缓存的解析可能已失效（托管 node 被删/移动）：重扫一次，路径不同才值得重试。
-		if retry := m.nodeRes.Refresh(); retry.Path != res.Path {
-			slog.Warn("Bot Worker 启动失败，重扫 node 后重试",
-				"error", err, "node", retry.Path, "nodeSource", retry.Source)
-			res = retry
-			stderrTail, err = m.spawnLocked(ctx, res.Path, args)
-		}
-	}
+	// 三类来源都先真实探测并强制最低版本；只有成功解析才缓存。
+	res, err := m.nodeRes.Resolve()
 	if err != nil {
 		return err
 	}
+	childCtx, cancel := context.WithCancel(ctx)
+	stderrTail, spawnErr := m.spawnLocked(childCtx, res.Path, args)
+	if spawnErr != nil {
+		// 探测与 spawn 间仍可能发生删除/移动；清缓存重扫后固定重试一次。
+		// PATH 来源文本可能仍是 "node"，但实际解析到的可执行已经变化，不能只比较字符串路径。
+		retry, refreshErr := m.nodeRes.Refresh()
+		if refreshErr != nil {
+			cancel()
+			return fmt.Errorf("%w；重扫 Node.js 失败: %v", spawnErr, refreshErr)
+		}
+		slog.Warn("Bot Worker 启动失败，重扫 Node.js 后重试",
+			"error", spawnErr, "node", retry.Path, "nodeVersion", retry.Version, "nodeSource", retry.Source)
+		res = retry
+		stderrTail, spawnErr = m.spawnLocked(childCtx, res.Path, args)
+	}
+	if spawnErr != nil {
+		cancel()
+		return spawnErr
+	}
 
+	m.cancel = cancel
 	m.running = true
 	m.waitDone = make(chan struct{})
 	slog.Info("Bot Worker 已启动",
-		"pid", m.cmd.Process.Pid, "node", res.Path, "nodeSource", res.Source)
+		"pid", m.cmd.Process.Pid, "node", res.Path, "nodeVersion", res.Version, "nodeSource", res.Source)
 
 	// 启动事件读取循环
 	go m.readLoop()

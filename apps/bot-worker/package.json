@@ -8,7 +8,11 @@
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "lint": "eslint src/",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "audit:prod": "npm audit --omit=dev --audit-level=moderate"
+  },
+  "engines": {
+    "node": ">=22.13.0"
   },
   "dependencies": {
     "mineflayer": "^4.37.1",
@@ -21,5 +25,13 @@
     "globals": "^17.7.0",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.64.0"
+  },
+  "overrides": {
+    "@azure/msal-node": {
+      "uuid": "11.1.1"
+    },
+    "yggdrasil": {
+      "uuid": "11.1.1"
+    }
   }
 }

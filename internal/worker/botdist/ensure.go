@@ -1,7 +1,6 @@
-// Package botdist 实现 bot-worker dist 的自愈下发（FR-308，见 ADR-070 修订 ADR-006）：
-// Worker 启动后经既有 CP gRPC 通道拉取内嵌归档，物化到 <dataroot>/opt/bot-worker/，
-// bot 能力不再依赖「工作目录恰好有 bot-worker/dist」的手工拷贝。运行时依赖
-// （mineflayer 等）不随归档分发，指向 FR-307 托管全局包目录（node_modules 链接 + NODE_PATH）。
+// Package botdist 实现 bot-worker dist 的自愈下发（FR-308，见 ADR-072）：
+// Worker 启动后经既有 CP gRPC 通道拉取内嵌归档，物化到 <dataroot>/opt/bot-worker/。
+// 运行时依赖不随归档分发，由 FR-307 节点受控项目根提供；ESM 经 node_modules 链接解析。
 package botdist
 
 import (

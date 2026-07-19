@@ -12,6 +12,8 @@
 
 理解系统现状看 [`../ARCHITECTURE.md`](../ARCHITECTURE.md)（永远是当前真貌的综合），ADR 只在追问「当初为什么」时按需翻；**当前架构 = 未被取代的活跃集**，被取代的归档不打扰。当前生效的关键决策速查表见 [`.claude/rules/decision-alignment.md`](../../.claude/rules/decision-alignment.md)。
 
+当前 Bot Worker 分发与节点依赖根决策见 [ADR-072](072-managed-node-package-root.md)；它完整取代 ADR-070，同时保留 CP 内嵌、自愈物化与 ESM 链接模型。
+
 ## 索引（最近新增）
 
 - [ADR-073](073-artifact-external-object-storage.md) 制品库外置对象存储与 302 预签名分发（FR-347，修订 ADR-011 存储节）

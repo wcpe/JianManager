@@ -325,11 +325,11 @@ func runWorker() {
 	slog.Info("节点制品缓存已启用", "dir", root.ArtifactCacheDir(), "maxBytes", cfg.ArtifactCache.MaxBytes)
 
 	// Bot 管理器：按需 spawn bot-worker(Node) 子进程，经 stdin/stdout IPC 管理 Mineflayer Bot。
-	// 入口脚本解析顺序（FR-308 见 ADR-070 修订 ADR-006；FR-286 迁移见 ADR-064）：
+	// 入口脚本解析顺序（FR-308 见 ADR-072；FR-286 迁移见 ADR-064）：
 	// JIANMANAGER_BOT_WORKER_PATH 显式覆盖 > 数据根自愈物化副本（注册后拉取，见下方
 	// botdist.Ensure）> apps/bot-worker/dist/index.js（仓库内直跑新布局）> 旧相对路径
 	// bot-worker/dist/index.js（存量部署把 bot-worker 平铺在安装目录，不因升级断 Bot 能力）。
-	// node 可执行经 FR-300 解析器选定：本地扫描最高版 Node（runtimescan 路径表）优先，无候选回退 PATH "node"。
+	// NodeResolver 对显式/托管/PATH 全部真实探测，强制 >=22.13.0；托管候选按完整版本排序。
 	botWorkerPath := os.Getenv("JIANMANAGER_BOT_WORKER_PATH")
 	botWorkerPathPinned := botWorkerPath != ""
 	if botWorkerPath == "" {
@@ -341,17 +341,24 @@ func runWorker() {
 			}
 		}
 	}
-	// mineflayer 等运行时依赖不随 dist 分发，指向 FR-307 托管全局包：NODE_PATH 兜底 CJS，
-	// spawn 前预检缺装给可操作指引（装依赖走节点『全局包管理』）。
+	// mineflayer 等运行时依赖不随 dist 分发。NODE_PATH 只兜底 CJS；ESM 由受控 dist
+	// 同级 node_modules 链接承载，且每次 spawn 前按新旧根完整性刷新后再预检。
 	globalNM := botdist.GlobalNodeModulesCandidates(runtimeMgr.RootDir())
-	// FR-300 解析器复用上面的运行时扫描器（含托管根 glob）：一键装的托管 Node 也可被选中。
+	managedBotWorkerDir := root.BotWorkerDir()
+	// FR-300/308：扫描只提供候选路径，NodeResolver 会逐个真实探测并强制 >=22.13.0。
 	botMgr := bot.NewManager(bot.ManagerConfig{
 		BotWorkerPath: botWorkerPath,
 		NodeResolver: bot.NewNodeResolver("", func() []runtimescan.Candidate {
 			return runtimeScanner.Scan([]string{runtimescan.TypeNodeJS})
 		}),
-		ExtraEnv:     []string{botdist.NodePathEnv(globalNM)},
-		DepsPrecheck: func(distDir string) error { return botdist.CheckDeps(distDir, globalNM) },
+		ExtraEnv: []string{botdist.NodePathEnv(globalNM)},
+		PrepareSpawn: func(distDir string) error {
+			if filepath.Clean(distDir) != filepath.Clean(managedBotWorkerDir) {
+				return nil
+			}
+			return botdist.RefreshNodeModulesLink(distDir, runtimeMgr.RootDir())
+		},
+		DepsPrecheck: botdist.CheckDeps,
 	})
 	defer botMgr.Stop()
 	workerServer.SetBotManager(botMgr)
@@ -529,7 +536,7 @@ func runWorker() {
 	// 节点身份就绪后崩溃快照上报可用（FR-313）：两条注册路径（setup 首注册 / 常规注册）在此汇合。
 	crashReporter.SetIdentity(nodeUUID, regResult.NodeSecret)
 
-	// bot-worker dist 自愈下发（FR-308，见 ADR-070）：注册成功即持身份从 CP 拉取内嵌归档，
+	// bot-worker dist 自愈下发（FR-308，见 ADR-072）：注册成功即持身份从 CP 拉取内嵌归档，
 	// 物化到数据根后切换 bot 入口路径。显式 JIANMANAGER_BOT_WORKER_PATH 时尊重覆盖不自愈；
 	// CP 未内嵌/拉取失败回退本地已有（物化副本或旧相对路径），只告警不阻断启动。
 	if !botWorkerPathPinned {

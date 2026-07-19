@@ -50,7 +50,7 @@ Worker Node (Go) × 20~100
 | 终端前端 | xterm.js |
 | 图表 | Recharts |
 | 编辑器 | CodeMirror 6 |
-| Bot 运行时 | Node.js 20+ + Mineflayer |
+| Bot 运行时 | Node.js >=22.13.0 + Mineflayer |
 | Bot IPC | stdin/stdout JSON 行协议 |
 | 国际化 | i18next |
 
@@ -183,7 +183,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
   - `Heartbeat` 负载除节点指标（CPU/内存/磁盘/累计网络字节/`load_avg1` 系统负载，FR-062）外携带 `instance_metrics`（每实例 ServerProbe 快照：TPS/MSPT/在线/堆/线程/CPU/uptime + 分世界负载，FR-060）；CP 收心跳经 `IngestHeartbeat` 落库为时序样本（node_cpu/mem/disk/net 速率/load）并据相邻累计字节算网络速率（Worker 不碰 DB）
   - `Heartbeat` 还加性携带 `tasks`（`TaskSnapshot`：task_id/state/progress/error/result/recent_log_lines，FR-183/ADR-040）——Worker 把运行中长任务（如 JDK 安装）的进度随心跳上报，CP 经 `TaskService.IngestSnapshots` upsert `Task` + 幂等追加 `TaskLog`，并在任务**首次进终态**时触发副作用（jdk_install 成功落 `NodeJDK` + 发成功站内信，失败发失败站内信）。日志行编码为 `<绝对序号>\t<正文>`，跨周期重叠窗口按绝对序号去重
   - `HeartbeatResponse` 加性携带 `ws_token_secret`（FR-275，见 ADR-061）：WS 令牌密钥每拍随心跳下发，Worker 比对「值变化」才热更新终端/插件桥校验并补写身份文件——CP 轮换密钥后 Worker 不重启即自愈（≤1 心跳周期）
-  - `FetchBotWorkerArchive`（FR-308，见 ADR-070；CP 侧实现，Worker 调用）：Worker 注册成功后凭 `node_uuid+node_secret`（与重注册同源校验）拉取 CP 内嵌 bot-worker dist 归档；请求携带本地 `known_sha256`，指纹一致 CP 回空归档省流；CP 未内嵌回 `success=false` + 原因（Worker 回退本地已有）。归档 ~25KB 单 unary 传输（64MiB 上限内，FR-305）
+  - `FetchBotWorkerArchive`（FR-308，见 ADR-072；CP 侧实现，Worker 调用）：Worker 注册成功后凭 `node_uuid+node_secret`（与重注册同源校验）拉取 CP 内嵌 bot-worker dist 归档；请求携带本地 `known_sha256`，指纹一致 CP 回空归档省流；CP 未内嵌回 `success=false` + 原因（Worker 回退本地已有）。归档 ~25KB 单 unary 传输（64MiB 上限内，FR-305）
   - `HeartbeatResponse` 加性携带 `proxy_url`/`proxy_no_proxy`/`proxy_generation`（出站代理可视化下发，FR-185/ADR-043）——CP 据「节点 custom ? 节点值 : 全局默认」算每节点**期望出站代理**，每拍随心跳响应下发；Worker 仅当 `proxy_generation`（期望代理配置的 FNV 哈希）变化时才 `httpclient.New` 重建出站持有者（`httpclient.Provider` 原子替换，避免每拍重建），新 client 注入到各下载点（JDK/CFR/自更新/服务端 jar）即时生效。真相源 = CP DB（`nodes.proxy_*`），Worker **不落盘**，重连/重启由后续心跳天然重发；下发为空回退本地 `worker.yml`/env。CP 自身出站代理由设置面板 `proxy.url`/`proxy.no_proxy`（settings DB 覆盖）管控、运行时重建，且作为各节点默认代理（优先级 settings DB > yaml > env）
 - 实例操作：CreateInstance, StartInstance, StopInstance, RestartInstance, KillInstance, SendCommand, GetInstanceStatus, ListInstances
   - `CreateInstance` 除 `start_command` 外携带 `stop_command`（优雅停止命令，CP 按实例角色派生：backend/universal=`stop`，proxy=`end`），由 daemon wrapper 在优雅停止时写入进程 stdin；并携带 `probe_port`（CP 分配的 ServerProbe 端口，daemon 模式透传到 wrapper→PID 记录，供 Worker 心跳自采与重启恢复，FR-060）；以及 `graceful_stop_timeout_seconds`（CP 从平台设置 `graceful_stop.timeout` 取生效值随启动下发，daemon 透传到 wrapper 做超时强杀兜底，FR-063；值在启动时定型，对设置变更后新启动的实例生效）。同 UUID 幂等重注册会刷新启动命令、JDK、环境变量与 autoRestart；运行中的 daemon 不被打断，旧 strategy 标记过期，正常 Stop→Start 或 Restart 前重建并采用最新规格（FR-233）。docker 模式（FR-078，ADR-019）额外携带 `image`（容器镜像引用）与 `port_mappings`（容器端口↔宿主端口，宿主端口来自 FR-032 端口池），Worker 启动容器前据 `image` 自动拉取缺失镜像
@@ -214,6 +214,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
   - `ScanRuntimes`（FR-298 节点运行时库）：按类型（jdk/nodejs）扫描节点**常见安装路径**发现运行时候选（`internal/worker/runtimescan`，路径表按 GOOS 内置：jdk=`/usr/lib/jvm/*`/`/opt/java*`/`/opt/jdk*`/sdkman 与 Windows `Program Files\Java|Eclipse Adoptium|Microsoft\jdk*`；nodejs=`/usr/local/bin/node`/`/usr/bin/node`/`/opt/node*/bin/node`/nvm 与 Windows `Program Files\nodejs`、`%APPDATA%\nvm`）。jdk 探测复用 `jdk.detectAt` 语义、nodejs 跑 `node --version` + `node -p process.arch`（arch 保留 nodejs 命名 x64/arm64）；路径不存在/探测失败**静默跳过**不阻断整体；托管根下候选标 `already_registered`，CP 侧再按 DB 已登记路径补标
   - `InstallRuntime` / `RemoveRuntime`（FR-299 Node.js 一键安装）：`InstallRuntime` **仅异步任务路径**（`task_id` 必填，语义同 InstallJDK 异步）——Worker 侧 `internal/worker/runtime` 安装器经 `<mirror>/index.json`（默认 `https://nodejs.org/dist`，镜像可配平台设置 `runtime.mirror.nodejs`）解析该 major 最新版本，下载便携归档（linux tar.gz / windows zip）解压到托管目录 `<数据根>/opt/runtimes/nodejs-<major>/`；下载复用 jdk 包导出的 `DownloadAndExtract` 基建（同一出站 client + 停滞看门狗 FR-290 + 网络失败引导 FR-279），残骸自愈完成标记 = node 可执行文件（`bin/node`|`node.exe`，FR-291），arch 用 nodejs 命名（x64/arm64，CP 按类型归一、未知 422，齐平 FR-289）。终态经心跳落 `node_runtimes`（managed=true）。`RemoveRuntime` 删除托管目录（归一顶层清理、拒根本身与根外路径，FR-292）
   - `GetPMConfig` / `SetPMConfig`（FR-306 节点包管理器）：PM 偏好（npm/pnpm/yarn，pnpm/yarn 经托管 Node 的 **corepack enable** 激活，`internal/worker/pkgmgr`）与多 registry 配置。registry 落节点**托管 .npmrc**（`<数据根>/opt/runtimes/.npmrc` 原子写；默认源/`@scope` 域源/`_authToken` 凭据行），后续 PM 操作（FR-307 全局包）经 `NPM_CONFIG_USERCONFIG` 指向它、不污染用户 `~/.npmrc`。偏好真相源 = CP `node_pm_configs`（Worker 不持久化偏好）；`GetPMConfig` 回读 .npmrc 时**凭据行不回传**；corepack 探测=托管 Node bin 下有无 corepack、PM 版本=`<pm> --version`
+  - `ListGlobalPackages` / `InstallGlobalPackage` / `RemoveGlobalPackage`（FR-307，见 ADR-072）：公开语义仍为节点级「全局包」，实现改为平台独占的普通项目根 `<数据根>/opt/runtimes/global`。Worker 原子合并 `package.json`，保留 dependencies/未知字段并写入 `private`、npm `overrides`、`pnpm.overrides` 安全约束；npm 全部本地操作带 `--prefix <root>`，pnpm 带 `--dir <root>`，yarn 继续拒绝。依赖统一落 `<root>/node_modules`，旧 `<root>/lib/node_modules` 仅作 Bot 升级兼容候选。
   - `InstallJDK` 携带 `mirror_base`（CP 从平台设置 `jdk.mirror.<vendor>` 取生效值后下发；Worker 用它构造下载 URL，使运行时配置的镜像源真生效，FR-033/FR-063；为空回退 Worker 本地 env/官方默认源）
   - `InstallJDK` 加性携带 `task_id`（FR-183/ADR-040）：非空时走**异步**——Worker 登记内存任务表、`go` 后台下载（带字节进度计数）、RPC 立即返回 `task_id`（不再阻塞最长 20min），进度/日志/终态经心跳 `tasks` 上报，CP 据终态落 `NodeJDK` + 发站内信；为空回退同步路径（向后兼容）
   - `InstallJDK` 加性携带 `version`（FR-178）：非空时 Worker 经 **foojay disco API** 按具体版本解析下载源；为空取该大版本最新 GA
@@ -958,7 +959,7 @@ bot-worker/src/
 
 Worker spawn bot-worker 的 node 可执行经解析策略选定（FR-300，`internal/worker/bot/noderesolver.go`）：显式配置（`ManagerConfig.NodePath`，V1 只留结构无配置面）> 节点本地扫描最高 major Node（复用 `runtimescan` node 路径表）> 回退 PATH `"node"`（保兼容）；解析一次缓存、spawn 失败重扫重试一次，路径与来源（explicit-config/managed-scan/path-fallback）打进 Bot 启动日志。
 
-**dist 分发与依赖（FR-308，见 ADR-070 修订 ADR-006）**：bot-worker dist 由构建期 `make embed-botworker` 打成确定性 tar.gz（含 `package.json` 保 ESM 语义）内嵌 CP；Worker 注册成功后经 unary RPC `FetchBotWorkerArchive`（`node_uuid+node_secret` 与重注册同源鉴权，指纹一致回空归档省流）自愈物化到 `<数据根>/opt/bot-worker/`（`internal/worker/botdist`，sha256 复核 + 临时目录 rename 原子换入）。入口解析顺序：`JIANMANAGER_BOT_WORKER_PATH` 显式覆盖（不自愈）> 数据根物化副本 > 旧相对路径 `bot-worker/dist/index.js`；CP 未内嵌/不可达回退本地已有，只告警不阻断启动。运行时依赖（mineflayer / mineflayer-pathfinder）不随归档分发，由 FR-307 托管全局包提供：自愈时在 dist 同级建 `node_modules` 链接 → 托管全局 node_modules（Windows junction / 其余 symlink），NODE_PATH 仅作 CJS 兜底；spawn 前预检缺装即返回「请到节点『全局包管理』安装 …」的可操作指引。
+**dist 分发与依赖（FR-308，见 ADR-072 取代 ADR-070 并继续修订 ADR-006）**：bot-worker dist 由构建期 `make embed-botworker` 打成确定性 tar.gz（含 `package.json` 保 ESM 语义）内嵌 CP；Worker 注册成功后经 unary RPC `FetchBotWorkerArchive`（`node_uuid+node_secret` 与重注册同源鉴权，指纹一致回空归档省流）自愈物化到 `<数据根>/opt/bot-worker/`（`internal/worker/botdist`，sha256 复核 + 临时目录 rename 原子换入）。入口解析顺序：`JIANMANAGER_BOT_WORKER_PATH` 显式覆盖（不自愈）> 数据根物化副本 > 旧相对路径 `bot-worker/dist/index.js`；CP 未内嵌/不可达回退本地已有，只告警不阻断启动。运行时要求 Node.js `>=22.13.0`；mineflayer / mineflayer-pathfinder 不随归档分发，由 FR-307 节点受控项目根 `<runtimes>/global` 提供。自愈时在 dist 同级建 `node_modules` 链接：新 `<global>/node_modules` 同时具备 mineflayer 与 mineflayer-pathfinder 时才优先，否则旧 `<global>/lib/node_modules` 依赖完整时继续兼容，两者都不完整时默认新根（Windows junction / 其余 symlink）并由预检报错；依赖预检要求两项依赖在同一根完整命中，`NODE_PATH` 候选固定新在前旧在后且仅作 CJS 兜底。
 
 `orchestrated` 是组合行为，不直接解析 YAML：它只消费 Control Plane 已规范化的 `behaviorConfig`，按阶段创建并切换既有行为类。`custom` 阶段继续复用现有步骤执行器字段，Go 侧把 YAML 的 `durationMs` 映射为 bot-worker 已支持的 `duration`，避免两端维护两套 YAML 语义。
 
@@ -1005,7 +1006,7 @@ data/
 ├── bin/              # 平台/辅助可执行
 ├── etc/              # 平台与节点配置；当前 OTA 不再生成 client-sign-key.pem 作为信任根，key_enc 主密钥可由 JIANMANAGER_CLIENT_KEY_ENC_SECRET 注入或自动生成持久化为 client-key-enc.key；CP 侧 WS 令牌密钥生产 autogen 持久化为 ws-token-secret.key（0600，FR-275/ADR-061，勿删——删除即轮换、已下发探针 token 失效）；Worker 侧 node-identity.json 含 wsTokenSecret
 ├── opt/jdks/         # 便携 JDK：<vendor>-<ver>/（取代旧的 <serversDir>/jdks）
-├── opt/runtimes/     # 便携非 JDK 运行时：nodejs-<major>/（FR-299 一键安装托管目录）
+├── opt/runtimes/     # 便携非 JDK 运行时：nodejs-<major>/；global/ 为节点受控包项目根（package.json + node_modules，ADR-072）
 ├── var/
 │   ├── servers/      # 服务器工作目录：<slug>-<shortid>/（系统分配）
 │   ├── index/        # 全文搜索倒排索引：<instance-uuid>/（Worker 本地派生，ADR-017）

@@ -2,6 +2,7 @@ package pkgmgr
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,7 +13,7 @@ import (
 func newGlobalTestManager(t *testing.T, fake runner) *Manager {
 	t.Helper()
 	root := t.TempDir()
-	bin := filepath.Join(root, "nodejs-22", "node-v22.0.0-fake", "bin")
+	bin := filepath.Join(root, "nodejs-22", "node-v22.13.0-fake", "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -97,10 +98,13 @@ func TestInstallGlobal_NpmArgsAndLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(gotArgs, " ")
-	for _, want := range []string{"install", "mineflayer@latest", "--global", "--prefix"} {
+	for _, want := range []string{"install", "mineflayer@latest", "--prefix", m.GlobalDir()} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("npm 参数缺 %q: %v", want, gotArgs)
 		}
+	}
+	if strings.Contains(joined, "--global") {
+		t.Fatalf("npm 不应再使用真全局参数: %v", gotArgs)
 	}
 	if len(lines) == 0 || lines[0] != "added 1 package" {
 		t.Fatalf("行日志回调未生效: %v", lines)
@@ -142,4 +146,114 @@ func TestListGlobal_EmptyPrefixTreatedAsEmpty(t *testing.T) {
 	if len(pkgs) != 0 {
 		t.Fatalf("应空列表，实际 %d", len(pkgs))
 	}
+}
+
+// TestEnsurePackageRoot_MergesWithoutDroppingFields 受控 package.json 合并保留依赖与未知字段。
+func TestEnsurePackageRoot_MergesWithoutDroppingFields(t *testing.T) {
+	m := NewManager(t.TempDir())
+	if err := os.MkdirAll(m.GlobalDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := `{"dependencies":{"mineflayer":"^4.37.1"},"custom":{"keep":true},"overrides":{"left-pad":"1.3.0","@azure/msal-node":"2.16.3"},"pnpm":{"neverBuiltDependencies":["x"],"overrides":{"custom":"2.0.0"}}}`
+	path := filepath.Join(m.GlobalDir(), "package.json")
+	if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ensurePackageRoot(); err != nil {
+		t.Fatal(err)
+	}
+	assertManagedPackageJSON(t, path)
+}
+
+func assertManagedPackageJSON(t *testing.T, path string) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc["private"] != true || doc["dependencies"].(map[string]any)["mineflayer"] != "^4.37.1" {
+		t.Fatalf("private 或 dependencies 未正确保留: %s", raw)
+	}
+	if doc["custom"].(map[string]any)["keep"] != true {
+		t.Fatalf("未知顶层字段丢失: %s", raw)
+	}
+	assertManagedOverrides(t, doc, raw)
+}
+
+func assertManagedOverrides(t *testing.T, doc map[string]any, raw []byte) {
+	t.Helper()
+	npm := doc["overrides"].(map[string]any)
+	azure := npm["@azure/msal-node"].(map[string]any)
+	yggdrasil := npm["yggdrasil"].(map[string]any)
+	if npm["left-pad"] != "1.3.0" || azure["."] != "2.16.3" || azure["uuid"] != "11.1.1" || yggdrasil["uuid"] != "11.1.1" {
+		t.Fatalf("npm overrides 合并不正确: %s", raw)
+	}
+	pnpm := doc["pnpm"].(map[string]any)
+	pnpmOverrides := pnpm["overrides"].(map[string]any)
+	neverBuilt := pnpm["neverBuiltDependencies"].([]any)
+	if len(neverBuilt) != 1 || neverBuilt[0] != "x" || pnpmOverrides["custom"] != "2.0.0" ||
+		pnpmOverrides["@azure/msal-node>uuid"] != "11.1.1" || pnpmOverrides["yggdrasil>uuid"] != "11.1.1" {
+		t.Fatalf("pnpm 字段或 overrides 合并不正确: %s", raw)
+	}
+}
+
+// TestGlobalCommandsUseManagedProjectRoot npm/pnpm 全部操作固定到受控项目根且不再使用真全局参数。
+func TestGlobalCommandsUseManagedProjectRoot(t *testing.T) {
+	for _, pm := range []string{"npm", "pnpm"} {
+		t.Run(pm, func(t *testing.T) {
+			var calls [][]string
+			fake := func(_ context.Context, _ string, args, _ []string, _ func(string)) ([]byte, error) {
+				calls = append(calls, append([]string(nil), args...))
+				if args[0] == "ls" && pm == "pnpm" {
+					return []byte(`[]`), nil
+				}
+				return []byte(`{}`), nil
+			}
+			m := newGlobalTestManager(t, fake)
+			if _, err := m.ListGlobal(context.Background(), pm); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.InstallGlobal(context.Background(), pm, "mineflayer", "", nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := m.RemoveGlobal(context.Background(), pm, "mineflayer"); err != nil {
+				t.Fatal(err)
+			}
+			assertProjectRootCalls(t, pm, m.GlobalDir(), calls)
+		})
+	}
+}
+
+func assertProjectRootCalls(t *testing.T, pm, root string, calls [][]string) {
+	t.Helper()
+	flag := "--prefix"
+	if pm == "pnpm" {
+		flag = "--dir"
+	}
+	for _, args := range calls {
+		joined := strings.Join(args, " ")
+		if !strings.Contains(joined, flag+" "+root) || strings.Contains(joined, "--global") {
+			t.Fatalf("%s 命令未固定到受控项目根: %v", pm, args)
+		}
+	}
+	verbs := strings.Join(flattenFirstArgs(calls), " ")
+	for _, want := range map[string][]string{"npm": {"ls", "outdated", "install", "uninstall"}, "pnpm": {"ls", "outdated", "add", "remove"}}[pm] {
+		if !strings.Contains(verbs, want) {
+			t.Fatalf("%s 命令缺少 %s: %v", pm, want, calls)
+		}
+	}
+}
+
+func flattenFirstArgs(calls [][]string) []string {
+	verbs := make([]string, 0, len(calls))
+	for _, args := range calls {
+		if len(args) > 0 {
+			verbs = append(verbs, args[0])
+		}
+	}
+	return verbs
 }

@@ -1,7 +1,7 @@
 # ADR-070: bot-worker dist 自愈下发与依赖解耦
 
 - **日期**: 2026-07-13
-- **状态**: accepted（修订 ADR-006：「Bot 必须经 Node.js 子进程 + stdin/stdout IPC」不变；修订其隐含前提「bot-worker dist 随仓库检出就位于工作目录」——dist 改为 CP 内嵌构建产物、Worker 经 gRPC 自愈拉取，运行时依赖改由 FR-307 托管全局包提供）
+- **状态**: superseded-by [ADR-072](072-managed-node-package-root.md)
 - **上下文**: FR-308。Worker 经一键安装独立部署（无仓库检出）时，`bot-worker/dist/index.js` 相对路径不存在，bot 能力整体不可用；即便手工拷 dist，mineflayer 等依赖也无处解析（bot-worker 为 ESM，`type: module`，NODE_PATH 对 ESM 无效），子进程以 `ERR_MODULE_NOT_FOUND` 裸崩、用户只能翻 stderr 取证。需要决策分发通道、物化布局、依赖解析三件事。
 - **决策**:
   1. **CP 内嵌 + gRPC 下发**：`make embed-botworker` 把 `bot-worker/dist` 打成**确定性 tar.gz**（路径排序、固定 mtime，同内容同指纹；~25KB）连同 `manifest.json`（version/sha256/size）注入 `internal/controlplane/embed/botworker/`（不入库，`.gitignore` 占位，未注入运行时优雅降级）。Worker 注册成功后持 `node_uuid+node_secret` 调新增 unary RPC `FetchBotWorkerArchive`（CP 侧实现，与重注册同源鉴权）拉取。**放弃 spec 初稿的「复用 worker-assets HTTP token」**：那是一次性 enroll 语义，无法支撑每次启动的常态自愈；gRPC 通道天然复用注册/心跳的鉴权与反向隧道（ADR-066），NAT 节点零额外暴露面，25KB 远低于 64MiB 单消息上限（FR-305），单 unary 足够。
