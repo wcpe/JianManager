@@ -18,26 +18,38 @@ import (
 )
 
 type fakeBotFleetManager struct {
-	capacity    bot.BotCapacitySnapshot
-	bots        []bot.BotState
-	applyCalls  int
-	stopCalls   int
-	signalCalls int
-	apply       *bot.BotWorkerEvent
-	applyErr    error
-	stop        *bot.BotWorkerEvent
-	signal      *bot.BotWorkerEvent
-	snapshot    *bot.BotWorkerEvent
+	capacity     bot.BotCapacitySnapshot
+	bots         []bot.BotState
+	applyCalls   int
+	stopCalls    int
+	signalCalls  int
+	apply        *bot.BotWorkerEvent
+	applyErr     error
+	applyStarted chan struct{}
+	applyRelease chan struct{}
+	stop         *bot.BotWorkerEvent
+	stopStarted  chan struct{}
+	stopRelease  chan struct{}
+	signal       *bot.BotWorkerEvent
+	snapshot     *bot.BotWorkerEvent
 }
 
 func (f *fakeBotFleetManager) CapacitySnapshot() bot.BotCapacitySnapshot { return f.capacity }
 func (f *fakeBotFleetManager) FleetSnapshot(string) []bot.BotState       { return f.bots }
 func (f *fakeBotFleetManager) ApplyBotBatch(context.Context, string, string, string, []bot.BotConfig) (*bot.BotWorkerEvent, error) {
 	f.applyCalls++
+	if f.applyStarted != nil {
+		close(f.applyStarted)
+		<-f.applyRelease
+	}
 	return f.apply, f.applyErr
 }
 func (f *fakeBotFleetManager) StopBotBatch(context.Context, string, []string, int64, string) (*bot.BotWorkerEvent, error) {
 	f.stopCalls++
+	if f.stopStarted != nil {
+		close(f.stopStarted)
+		<-f.stopRelease
+	}
 	if f.stop != nil {
 		return f.stop, nil
 	}
@@ -570,45 +582,257 @@ func TestFleetEventGenerationDropsQueuedOldChildEventsForNewSubscriber(t *testin
 	}
 }
 
-func TestLegacyBotRPCRejectsFleetManagedBotAndKeepsOrdinaryBotCompatible(t *testing.T) {
+func TestFleetOwnershipRejectsLegacyMutationWithoutRuntimeIdentity(t *testing.T) {
+	fake := &fakeBotFleetManager{
+		capacity: bot.BotCapacitySnapshot{Ready: true, MaxBots: 50, WorkerEpoch: "epoch-1", WorkerEpochGeneration: 1},
+		bots:     []bot.BotState{{ID: "fleet-bot", Status: "connected"}},
+		apply: &bot.BotWorkerEvent{Evt: "batch-result", Results: []bot.BotItemResult{{
+			BotID: "fleet-bot", Accepted: true, Status: "connecting",
+		}}},
+	}
+	srv := newBotFleetTestServer(fake)
+
+	response, err := srv.ApplyBotBatch(context.Background(), fleetRunningRequest("fleet-bot", "ownership"))
+	require.NoError(t, err)
+	require.True(t, response.Results[0].Accepted)
+
+	create, err := srv.CreateBot(context.Background(), &workerpb.CreateBotRequest{BotUuid: "fleet-bot"})
+	require.NoError(t, err)
+	require.False(t, create.Success)
+	require.Contains(t, create.Error, "Fleet RPC")
+	remove, err := srv.DeleteBot(context.Background(), &workerpb.DeleteBotRequest{BotUuid: "fleet-bot"})
+	require.NoError(t, err)
+	require.False(t, remove.Success)
+	require.Contains(t, remove.Error, "Fleet RPC")
+}
+
+func TestFleetOwnershipClearsOnlyAfterAcceptedStop(t *testing.T) {
+	fake := &fakeBotFleetManager{
+		capacity: bot.BotCapacitySnapshot{Ready: true, MaxBots: 50, WorkerEpoch: "epoch-1", WorkerEpochGeneration: 1},
+		apply: &bot.BotWorkerEvent{Evt: "batch-result", Results: []bot.BotItemResult{{
+			BotID: "fleet-bot", Accepted: true, Status: "connecting",
+		}}},
+	}
+	srv := newBotFleetTestServer(fake)
+	_, err := srv.ApplyBotBatch(context.Background(), fleetRunningRequest("fleet-bot", "running"))
+	require.NoError(t, err)
+
+	fake.bots = []bot.BotState{{ID: "fleet-bot", Status: "connected"}}
+	fake.stop = &bot.BotWorkerEvent{Evt: "batch-result", Results: []bot.BotItemResult{{
+		BotID: "fleet-bot", Accepted: true, Status: "stopped",
+	}}}
+	fake.stopStarted = make(chan struct{})
+	fake.stopRelease = make(chan struct{})
+	stopDone := make(chan error, 1)
+	go func() {
+		_, applyErr := srv.ApplyBotBatch(context.Background(), fleetStoppedRequest("fleet-bot", "stopping"))
+		stopDone <- applyErr
+	}()
+	<-fake.stopStarted
+
+	deleteDone := make(chan *workerpb.DeleteBotResponse, 1)
+	go func() {
+		response, _ := srv.DeleteBot(context.Background(), &workerpb.DeleteBotRequest{BotUuid: "fleet-bot"})
+		deleteDone <- response
+	}()
+	select {
+	case response := <-deleteDone:
+		t.Fatalf("Fleet stop 回执前 legacy DeleteBot 不得越过 ownership: %+v", response)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(fake.stopRelease)
+	require.NoError(t, <-stopDone)
+	select {
+	case response := <-deleteDone:
+		require.True(t, response.Success, "stop accepted 后 ownership 应清理")
+	case <-time.After(time.Second):
+		t.Fatal("stop accepted 后 legacy DeleteBot 未解除阻塞")
+	}
+}
+
+func TestFleetOwnershipHandlesRejectedAndAlreadyStoppedResults(t *testing.T) {
+	fake := &fakeBotFleetManager{
+		capacity: bot.BotCapacitySnapshot{Ready: true, MaxBots: 50, WorkerEpoch: "epoch-1", WorkerEpochGeneration: 1},
+		apply: &bot.BotWorkerEvent{Evt: "batch-result", Results: []bot.BotItemResult{{
+			BotID: "fleet-bot", Accepted: true,
+		}}},
+	}
+	srv := newBotFleetTestServer(fake)
+	_, err := srv.ApplyBotBatch(context.Background(), fleetRunningRequest("fleet-bot", "result-running"))
+	require.NoError(t, err)
+
+	fake.bots = []bot.BotState{{ID: "fleet-bot", Status: "connected"}}
+	fake.stop = &bot.BotWorkerEvent{Evt: "batch-result", Results: []bot.BotItemResult{{
+		BotID: "fleet-bot", Accepted: false, Status: "ephemeral_unavailable",
+	}}}
+	response, err := srv.ApplyBotBatch(context.Background(), fleetStoppedRequest("fleet-bot", "result-rejected"))
+	require.NoError(t, err)
+	require.False(t, response.Results[0].Accepted)
+	legacyDelete, err := srv.DeleteBot(context.Background(), &workerpb.DeleteBotRequest{BotUuid: "fleet-bot"})
+	require.NoError(t, err)
+	require.False(t, legacyDelete.Success, "停止未 accepted 时必须保留 ownership")
+
+	fake.bots = nil
+	response, err = srv.ApplyBotBatch(context.Background(), fleetStoppedRequest("fleet-bot", "result-already-stopped"))
+	require.NoError(t, err)
+	require.True(t, response.Results[0].Accepted)
+	require.Equal(t, "already_stopped", response.Results[0].ErrorCode)
+	legacyDelete, err = srv.DeleteBot(context.Background(), &workerpb.DeleteBotRequest{BotUuid: "fleet-bot"})
+	require.NoError(t, err)
+	require.True(t, legacyDelete.Success, "already_stopped accepted 后必须清理 ownership")
+}
+
+func TestFleetOwnershipPrunesOnEpochChangeAndRequiresReapply(t *testing.T) {
+	fake := &fakeBotFleetManager{
+		capacity: bot.BotCapacitySnapshot{Ready: true, MaxBots: 50, WorkerEpoch: "epoch-1", WorkerEpochGeneration: 1},
+		apply: &bot.BotWorkerEvent{Evt: "batch-result", Results: []bot.BotItemResult{{
+			BotID: "fleet-bot", Accepted: true,
+		}}},
+	}
+	srv := newBotFleetTestServer(fake)
+	_, err := srv.ApplyBotBatch(context.Background(), fleetRunningRequest("fleet-bot", "epoch-old"))
+	require.NoError(t, err)
+
+	fake.capacity.WorkerEpoch = "epoch-2"
+	fake.capacity.WorkerEpochGeneration = 2
+	legacyDelete, err := srv.DeleteBot(context.Background(), &workerpb.DeleteBotRequest{BotUuid: "fleet-bot"})
+	require.NoError(t, err)
+	require.True(t, legacyDelete.Success, "epoch 切换后旧 ownership 必须失效")
+
+	_, err = srv.ApplyBotBatch(context.Background(), fleetRunningRequest("fleet-bot", "epoch-new"))
+	require.NoError(t, err)
+	srv.dispatchBotEvent(&bot.BotWorkerEvent{
+		Evt: "worker-exit", WorkerEpoch: "epoch-1", WorkerEpochGeneration: 2,
+	})
+	legacyDelete, err = srv.DeleteBot(context.Background(), &workerpb.DeleteBotRequest{BotUuid: "fleet-bot"})
+	require.NoError(t, err)
+	require.False(t, legacyDelete.Success, "旧 epoch 的迟到退出不得清理新 child ownership")
+}
+
+func TestFleetApplySerializesConcurrentLegacyMutation(t *testing.T) {
+	for _, operation := range []string{"create", "delete"} {
+		t.Run(operation, func(t *testing.T) {
+			for range 100 {
+				fake := &fakeBotFleetManager{
+					capacity:     bot.BotCapacitySnapshot{Ready: true, MaxBots: 50, WorkerEpoch: "epoch-1", WorkerEpochGeneration: 1},
+					apply:        &bot.BotWorkerEvent{Evt: "batch-result", Results: []bot.BotItemResult{{BotID: "fleet-bot", Accepted: true}}},
+					applyStarted: make(chan struct{}),
+					applyRelease: make(chan struct{}),
+				}
+				srv := newBotFleetTestServer(fake)
+				applyDone := make(chan error, 1)
+				go func() {
+					_, err := srv.ApplyBotBatch(context.Background(), fleetRunningRequest("fleet-bot", "race"))
+					applyDone <- err
+				}()
+				<-fake.applyStarted
+
+				legacyDone := make(chan string, 1)
+				go func() {
+					if operation == "create" {
+						response, _ := srv.CreateBot(context.Background(), &workerpb.CreateBotRequest{BotUuid: "fleet-bot"})
+						legacyDone <- response.Error
+						return
+					}
+					response, _ := srv.DeleteBot(context.Background(), &workerpb.DeleteBotRequest{BotUuid: "fleet-bot"})
+					legacyDone <- response.Error
+				}()
+				select {
+				case result := <-legacyDone:
+					t.Fatalf("Apply accepted 前 legacy %s 越过同步边界: %q", operation, result)
+				case <-time.After(time.Millisecond):
+				}
+
+				close(fake.applyRelease)
+				require.NoError(t, <-applyDone)
+				select {
+				case result := <-legacyDone:
+					require.Contains(t, result, "Fleet RPC")
+				case <-time.After(time.Second):
+					t.Fatalf("legacy %s 未在 Apply 完成后返回", operation)
+				}
+			}
+		})
+	}
+}
+
+func TestFleetOwnershipClearsOnChildExitAndRequiresNewApply(t *testing.T) {
 	requireNodeForGRPCTest(t)
 	script := writeGRPCTestBotWorker(t, `
-console.log(JSON.stringify({evt:"worker-ready",workerEpoch:"epoch-1",workerEpochGeneration:1,maxBots:50,features:["fleet-v1"],capacityGeneration:1}));
-console.log(JSON.stringify({evt:"bot-state",bots:[
-  {id:"fleet-bot",status:"connected",sessionId:"session-1",generation:3,configHash:"hash-3",workerEpochGeneration:1,eventSeq:1},
-  {id:"legacy-bot",status:"connected",workerEpochGeneration:1,eventSeq:2}
-]}));
-setInterval(() => {}, 1000);
+const readline = require("node:readline");
+const generation = Number(process.argv.find((arg) => arg.startsWith("--worker-epoch-generation="))?.split("=")[1] || 0);
+console.log(JSON.stringify({evt:"worker-ready",workerEpoch:"epoch-" + generation,workerEpochGeneration:generation,maxBots:50,features:["fleet-v1"],capacityGeneration:generation}));
+const rl = readline.createInterface({input: process.stdin});
+rl.on("line", (line) => {
+  const command = JSON.parse(line);
+  if (command.cmd === "create-bots") {
+    if (command.requestId) {
+      console.log(JSON.stringify({evt:"batch-result",requestId:command.requestId,results:command.bots.map((item) => ({botId:item.id,accepted:true,status:"connecting"}))}));
+    }
+    console.log(JSON.stringify({evt:"bot-state",bots:command.bots.map((item, index) => ({id:item.id,status:"connected",workerEpochGeneration:generation,eventSeq:index + 1}))}));
+  }
+  if (command.cmd === "stop-bots" && command.requestId) {
+    console.log(JSON.stringify({evt:"batch-result",requestId:command.requestId,results:command.botIds.map((id) => ({botId:id,accepted:true,status:"stopped"}))}));
+  }
+});
 `)
 	mgr := bot.NewManager(bot.ManagerConfig{BotWorkerPath: script})
 	require.NoError(t, mgr.Start(context.Background()))
 	defer mgr.Stop()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	require.NoError(t, mgr.WaitReady(ctx))
-	require.Eventually(t, func() bool {
-		_, fleetOK := mgr.GetBot("fleet-bot")
-		_, legacyOK := mgr.GetBot("legacy-bot")
-		return fleetOK && legacyOK
-	}, time.Second, 10*time.Millisecond)
+	waitBotManagerReady(t, mgr)
 
 	srv := &Server{}
 	srv.SetBotManager(mgr)
-	fleetCreate, err := srv.CreateBot(context.Background(), &workerpb.CreateBotRequest{BotUuid: "fleet-bot"})
+	response, err := srv.ApplyBotBatch(context.Background(), fleetRunningRequest("fleet-bot", "epoch-1"))
 	require.NoError(t, err)
-	require.False(t, fleetCreate.Success)
-	require.Contains(t, fleetCreate.Error, "Fleet RPC")
+	require.True(t, response.Results[0].Accepted)
+	require.Eventually(t, func() bool {
+		state, ok := mgr.GetBot("fleet-bot")
+		return ok && state.SessionID == "" && state.Generation == 0 && state.ConfigHash == ""
+	}, time.Second, 10*time.Millisecond)
+
 	fleetDelete, err := srv.DeleteBot(context.Background(), &workerpb.DeleteBotRequest{BotUuid: "fleet-bot"})
 	require.NoError(t, err)
 	require.False(t, fleetDelete.Success)
-	require.Contains(t, fleetDelete.Error, "Fleet RPC")
 
-	legacyCreate, err := srv.CreateBot(context.Background(), &workerpb.CreateBotRequest{BotUuid: "legacy-bot"})
+	mgr.Stop()
+	require.NoError(t, mgr.Start(context.Background()))
+	waitBotManagerReady(t, mgr)
+	legacyCreate, err := srv.CreateBot(context.Background(), &workerpb.CreateBotRequest{BotUuid: "fleet-bot", Name: "普通 Bot"})
 	require.NoError(t, err)
-	require.True(t, legacyCreate.Success)
-	legacyDelete, err := srv.DeleteBot(context.Background(), &workerpb.DeleteBotRequest{BotUuid: "legacy-bot"})
+	require.True(t, legacyCreate.Success, legacyCreate.Error)
+	legacyDelete, err := srv.DeleteBot(context.Background(), &workerpb.DeleteBotRequest{BotUuid: "fleet-bot"})
 	require.NoError(t, err)
-	require.True(t, legacyDelete.Success)
+	require.True(t, legacyDelete.Success, legacyDelete.Error)
+
+	response, err = srv.ApplyBotBatch(context.Background(), fleetRunningRequest("fleet-bot", "epoch-2"))
+	require.NoError(t, err)
+	require.True(t, response.Results[0].Accepted)
+	fleetCreate, err := srv.CreateBot(context.Background(), &workerpb.CreateBotRequest{BotUuid: "fleet-bot"})
+	require.NoError(t, err)
+	require.False(t, fleetCreate.Success, "新 child 必须重新 Apply 后才恢复 Fleet ownership")
+}
+
+func waitBotManagerReady(t *testing.T, mgr *bot.Manager) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, mgr.WaitReady(ctx))
+}
+
+func fleetRunningRequest(botID, suffix string) *workerpb.ApplyBotBatchRequest {
+	return &workerpb.ApplyBotBatchRequest{
+		BatchId: "batch-" + suffix, IdempotencyKey: "key-" + suffix,
+		Assignments: []*workerpb.BotAssignment{validRunningAssignment(botID, 1)},
+	}
+}
+
+func fleetStoppedRequest(botID, suffix string) *workerpb.ApplyBotBatchRequest {
+	return &workerpb.ApplyBotBatchRequest{
+		BatchId: "batch-" + suffix, IdempotencyKey: "key-" + suffix,
+		Assignments: []*workerpb.BotAssignment{validStoppedAssignment(botID, 2)},
+	}
 }
 
 func requireNodeForGRPCTest(t *testing.T) {

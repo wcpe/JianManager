@@ -443,6 +443,7 @@ func (m *Manager) waitChild(cmd *exec.Cmd, done chan struct{}, stderrTail *tailB
 }
 
 func (m *Manager) invalidateRuntimeLocked(reason string, pendingErr error) (*BotWorkerEvent, EventCallback) {
+	epoch := m.capacity.WorkerEpoch
 	generation := m.capacity.WorkerEpochGeneration
 	m.running = false
 	m.stopping = false
@@ -464,7 +465,10 @@ func (m *Manager) invalidateRuntimeLocked(reason string, pendingErr error) (*Bot
 	m.failPendingLocked(pendingErr)
 	m.closeReadySignalLocked()
 
-	event := &BotWorkerEvent{Evt: "worker-exit", Error: reason, WorkerEpochGeneration: generation}
+	event := &BotWorkerEvent{
+		Evt: "worker-exit", Error: reason,
+		WorkerEpoch: epoch, WorkerEpochGeneration: generation,
+	}
 	m.dispatchTerminalEventLocked(event)
 	return event, m.onEvent
 }

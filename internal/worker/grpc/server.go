@@ -63,6 +63,10 @@ type Server struct {
 	botStartMu      sync.Mutex
 	botBatchMu      sync.Mutex
 	botBatchResults map[string]*botBatchCacheEntry
+	// botOwnershipMu 同时保护 Fleet ownership 账本并串行化 Fleet Apply 与 legacy mutation，
+	// 防止 legacy RPC 在 accepted 回执与 ownership 落账之间越过。
+	botOwnershipMu sync.Mutex
+	botOwnership   map[string]botFleetOwnership
 	// botEventMu 保护 Bot 事件订阅；Fleet 订阅额外登记，以便 worker 退出时只关闭新流。
 	botEventMu        sync.Mutex
 	botEventSubs      []chan *bot.BotWorkerEvent
@@ -147,6 +151,7 @@ func NewServer(manager *process.Manager, nodeUUID string, collector *metrics.Col
 		jdkMgr:          jdkMgr,
 		root:            root,
 		botBatchResults: make(map[string]*botBatchCacheEntry),
+		botOwnership:    make(map[string]botFleetOwnership),
 		searchIndexes:   make(map[string]*search.Index),
 		tasks:           taskreg.New(),
 	}
@@ -815,6 +820,7 @@ func (s *Server) SetBotManager(m *bot.Manager) {
 	s.botFleet = m
 	s.botEventMu.Unlock()
 	s.clearBotBatchCache()
+	s.clearBotOwnership("", 0)
 
 	if m == nil {
 		return
@@ -835,6 +841,7 @@ func (s *Server) SetBotManager(m *bot.Manager) {
 func (s *Server) dispatchBotEvent(event *bot.BotWorkerEvent) {
 	if event != nil && event.Evt == "worker-exit" {
 		s.clearBotBatchCache()
+		s.clearBotOwnership(event.WorkerEpoch, event.WorkerEpochGeneration)
 		s.dispatchBotWorkerExit(event)
 		return
 	}
@@ -922,10 +929,10 @@ func (s *Server) ensureBotManager() error {
 
 // CreateBot 创建并连接一个 Bot。
 func (s *Server) CreateBot(ctx context.Context, req *workerpb.CreateBotRequest) (*workerpb.CreateBotResponse, error) {
-	if s.botMgr != nil {
-		if state, exists := s.botMgr.GetBot(req.BotUuid); exists && isFleetManagedBot(state) {
-			return &workerpb.CreateBotResponse{Success: false, Error: legacyFleetMutationError(req.BotUuid)}, nil
-		}
+	s.botOwnershipMu.Lock()
+	defer s.botOwnershipMu.Unlock()
+	if s.rejectLegacyFleetMutationLocked(req.BotUuid) {
+		return &workerpb.CreateBotResponse{Success: false, Error: legacyFleetMutationError(req.BotUuid)}, nil
 	}
 	if err := s.ensureBotManager(); err != nil {
 		// 失败必须留 Worker 侧日志：此前只装进响应，Worker 日志零痕迹，
@@ -955,16 +962,29 @@ func (s *Server) CreateBot(ctx context.Context, req *workerpb.CreateBotRequest) 
 
 // DeleteBot 停止并删除 Bot。
 func (s *Server) DeleteBot(ctx context.Context, req *workerpb.DeleteBotRequest) (*workerpb.DeleteBotResponse, error) {
+	s.botOwnershipMu.Lock()
+	defer s.botOwnershipMu.Unlock()
+	if s.rejectLegacyFleetMutationLocked(req.BotUuid) {
+		return &workerpb.DeleteBotResponse{Success: false, Error: legacyFleetMutationError(req.BotUuid)}, nil
+	}
 	if s.botMgr == nil {
 		return &workerpb.DeleteBotResponse{Success: true}, nil
-	}
-	if state, exists := s.botMgr.GetBot(req.BotUuid); exists && isFleetManagedBot(state) {
-		return &workerpb.DeleteBotResponse{Success: false, Error: legacyFleetMutationError(req.BotUuid)}, nil
 	}
 	if err := s.botMgr.StopBots([]string{req.BotUuid}); err != nil {
 		return &workerpb.DeleteBotResponse{Success: false, Error: err.Error()}, nil
 	}
 	return &workerpb.DeleteBotResponse{Success: true}, nil
+}
+
+func (s *Server) rejectLegacyFleetMutationLocked(botID string) bool {
+	if s.isFleetOwnedBotLocked(botID) {
+		return true
+	}
+	if s.botMgr == nil {
+		return false
+	}
+	state, exists := s.botMgr.GetBot(botID)
+	return exists && isFleetManagedBot(state)
 }
 
 func isFleetManagedBot(state *bot.BotState) bool {

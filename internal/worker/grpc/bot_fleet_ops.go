@@ -47,6 +47,11 @@ type botBatchCacheEntry struct {
 	done                  chan struct{}
 }
 
+type botFleetOwnership struct {
+	workerEpoch           string
+	workerEpochGeneration int64
+}
+
 type botBatchDispatchPlan struct {
 	results       []*workerpb.ApplyBotBatchItemResult
 	createConfigs []bot.BotConfig
@@ -104,7 +109,11 @@ func (s *Server) ApplyBotBatch(ctx context.Context, req *workerpb.ApplyBotBatchR
 }
 
 func (s *Server) applyBotBatchOnce(ctx context.Context, req *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error) {
+	s.botOwnershipMu.Lock()
+	defer s.botOwnershipMu.Unlock()
+
 	capacity := s.botFleet.CapacitySnapshot()
+	s.pruneBotOwnershipLocked(capacity)
 	if req.ExpectedCapacityGeneration != 0 && req.ExpectedCapacityGeneration != capacity.CapacityGeneration {
 		return nil, status.Errorf(codes.FailedPrecondition, "Bot 容量世代已变化: expected=%d actual=%d", req.ExpectedCapacityGeneration, capacity.CapacityGeneration)
 	}
@@ -112,11 +121,13 @@ func (s *Server) applyBotBatchOnce(ctx context.Context, req *workerpb.ApplyBotBa
 	plan := planBotBatch(req.Assignments, capacity, s.botFleet.FleetSnapshot(""))
 	s.dispatchBotCreates(ctx, req, &plan)
 	s.dispatchBotStops(ctx, req, &plan)
+	currentCapacity := s.botFleet.CapacitySnapshot()
+	s.updateBotOwnershipLocked(req.Assignments, plan.results, capacity, currentCapacity)
 	return &workerpb.ApplyBotBatchResponse{
 		BatchId:            req.BatchId,
 		IdempotencyKey:     req.IdempotencyKey,
 		Results:            plan.results,
-		CapacityGeneration: s.botFleet.CapacitySnapshot().CapacityGeneration,
+		CapacityGeneration: currentCapacity.CapacityGeneration,
 	}, nil
 }
 
@@ -307,6 +318,70 @@ func stableBotBatchResponse(response *workerpb.ApplyBotBatchResponse) bool {
 
 func botBatchEntryMatchesCapacity(entry *botBatchCacheEntry, capacity bot.BotCapacitySnapshot) bool {
 	return entry.workerEpoch == capacity.WorkerEpoch && entry.workerEpochGeneration == capacity.WorkerEpochGeneration
+}
+
+func sameBotWorkerEpoch(left, right bot.BotCapacitySnapshot) bool {
+	return left.WorkerEpoch == right.WorkerEpoch && left.WorkerEpochGeneration == right.WorkerEpochGeneration
+}
+
+func (s *Server) updateBotOwnershipLocked(assignments []*workerpb.BotAssignment, results []*workerpb.ApplyBotBatchItemResult, started, current bot.BotCapacitySnapshot) {
+	if !sameBotWorkerEpoch(started, current) {
+		s.pruneBotOwnershipLocked(current)
+		return
+	}
+	if s.botOwnership == nil {
+		s.botOwnership = make(map[string]botFleetOwnership)
+	}
+	for index, assignment := range assignments {
+		if assignment == nil || index >= len(results) || results[index] == nil {
+			continue
+		}
+		result := results[index]
+		if assignment.DesiredState == "running" && result.Accepted {
+			s.botOwnership[assignment.BotUuid] = botFleetOwnership{
+				workerEpoch: current.WorkerEpoch, workerEpochGeneration: current.WorkerEpochGeneration,
+			}
+		}
+		if assignment.DesiredState == "stopped" && (result.Accepted || result.ErrorCode == "already_stopped") {
+			delete(s.botOwnership, assignment.BotUuid)
+		}
+	}
+}
+
+func (s *Server) pruneBotOwnershipLocked(capacity bot.BotCapacitySnapshot) {
+	for botID, ownership := range s.botOwnership {
+		if ownership.workerEpoch != capacity.WorkerEpoch || ownership.workerEpochGeneration != capacity.WorkerEpochGeneration {
+			delete(s.botOwnership, botID)
+		}
+	}
+}
+
+func (s *Server) isFleetOwnedBotLocked(botID string) bool {
+	if s.botFleet == nil {
+		return false
+	}
+	capacity := s.botFleet.CapacitySnapshot()
+	s.pruneBotOwnershipLocked(capacity)
+	_, owned := s.botOwnership[botID]
+	return owned
+}
+
+func (s *Server) clearBotOwnership(epoch string, generation int64) {
+	s.botOwnershipMu.Lock()
+	defer s.botOwnershipMu.Unlock()
+	if epoch == "" && generation == 0 {
+		clear(s.botOwnership)
+		return
+	}
+	for botID, ownership := range s.botOwnership {
+		if epoch != "" && ownership.workerEpoch != epoch {
+			continue
+		}
+		if generation != 0 && ownership.workerEpochGeneration != generation {
+			continue
+		}
+		delete(s.botOwnership, botID)
+	}
 }
 
 func (s *Server) clearBotBatchCache() {

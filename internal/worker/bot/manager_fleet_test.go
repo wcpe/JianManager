@@ -162,6 +162,8 @@ func TestManagerSignalAndSnapshotUseFrozenIPCNames(t *testing.T) {
 
 func TestManagerWorkerExitIsNotDroppedForBufferedSubscriber(t *testing.T) {
 	mgr := NewManager(ManagerConfig{})
+	mgr.capacity.WorkerEpoch = "epoch-exit"
+	mgr.capacity.WorkerEpochGeneration = 7
 	events, cancel := mgr.SubscribeEvents(1)
 	defer cancel()
 	mgr.handleEvent(&BotWorkerEvent{Evt: "bot-event", BotID: "bot-1"})
@@ -176,6 +178,8 @@ func TestManagerWorkerExitIsNotDroppedForBufferedSubscriber(t *testing.T) {
 	select {
 	case event := <-events:
 		require.Equal(t, "worker-exit", event.Evt)
+		require.Equal(t, "epoch-exit", event.WorkerEpoch)
+		require.EqualValues(t, 7, event.WorkerEpochGeneration)
 	case <-time.After(time.Second):
 		t.Fatal("订阅缓冲已满时仍必须收到 worker-exit")
 	}
