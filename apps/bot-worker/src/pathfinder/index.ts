@@ -14,6 +14,31 @@ import type { Pathfinder } from 'mineflayer-pathfinder'
 // 该崩溃会连带打挂整个 bot-worker（包括 idle 等不寻路的 Bot）。
 type Goals = typeof import('mineflayer-pathfinder').goals
 
+type PathfinderModuleShape = {
+  goals?: Goals
+  pathfinder?: typeof import('mineflayer-pathfinder').pathfinder
+  default?: {
+    goals?: Goals
+    pathfinder?: typeof import('mineflayer-pathfinder').pathfinder
+  }
+}
+
+/** 从 ESM 或 CommonJS dynamic import 形态解析 goals。 */
+export function resolvePathfinderGoals(module: unknown): Goals | null {
+  const candidate = module as PathfinderModuleShape
+  return candidate.goals ?? candidate.default?.goals ?? null
+}
+
+/** 判断 goals 是否为可用的非空导出对象。 */
+export function hasPathfinderGoals(goals: unknown): goals is Goals {
+  return goals !== null && typeof goals === 'object' && Object.keys(goals).length > 0
+}
+
+function resolvePathfinderPlugin(module: unknown): typeof import('mineflayer-pathfinder').pathfinder | null {
+  const candidate = module as PathfinderModuleShape
+  return candidate.pathfinder ?? candidate.default?.pathfinder ?? null
+}
+
 /** 寻路移动器，封装 pathfinder 的常用操作。 */
 export class PathfinderMover {
   private bot: Bot
@@ -29,10 +54,13 @@ export class PathfinderMover {
   async init(): Promise<void> {
     if (this.initialized) return
     try {
-      const pf = await import('mineflayer-pathfinder')
-      this.bot.loadPlugin(pf.pathfinder)
+      const module = await import('mineflayer-pathfinder')
+      const plugin = resolvePathfinderPlugin(module)
+      const goals = resolvePathfinderGoals(module)
+      if (!plugin || !hasPathfinderGoals(goals)) throw new Error('pathfinder 导出不完整')
+      this.bot.loadPlugin(plugin)
       this.pathfinder = this.bot.pathfinder
-      this.goals = pf.goals
+      this.goals = goals
       this.initialized = true
     } catch (err) {
       console.error(`[pathfinder] 初始化失败: ${err}`)
@@ -41,7 +69,7 @@ export class PathfinderMover {
 
   /** 是否已初始化。 */
   isReady(): boolean {
-    return this.initialized && this.pathfinder !== null && this.goals !== null
+    return this.initialized && this.pathfinder !== null && hasPathfinderGoals(this.goals)
   }
 
   /** 移动到指定坐标（进入 range 范围即视为到达）。 */

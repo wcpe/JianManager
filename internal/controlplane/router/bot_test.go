@@ -300,8 +300,8 @@ func TestBot_Batch_Validation(t *testing.T) {
 	}
 }
 
-// TestBot_Batch_SetBehavior_DBChange set-behavior 即使 Worker 未连接也改 DB 行为，Worker 委托计失败。
-func TestBot_Batch_SetBehavior_DBChange(t *testing.T) {
+// TestBot_Batch_SetBehavior_WorkerFailureKeepsDB set-behavior 委托失败时不得提前修改账本。
+func TestBot_Batch_SetBehavior_WorkerFailureKeepsDB(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)
 	token := getAdminToken(t, r)
@@ -319,13 +319,34 @@ func TestBot_Batch_SetBehavior_DBChange(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	m := parseJSON(t, w)
 	assert.Equal(t, float64(2), m["requested"])
-	// Worker 未连接 → 委托全部失败，但 DB 行为已更新
+	// Worker 未连接 → 委托全部失败，DB 行为保持原值。
 	assert.Equal(t, float64(2), m["failed"])
 	assert.Equal(t, float64(0), m["skipped"])
 
 	var b model.Bot
 	require.NoError(t, db.First(&b, id1).Error)
-	assert.Equal(t, "follow", b.Behavior)
+	assert.Equal(t, "idle", b.Behavior)
+}
+
+// TestBot_UpdateBehavior_FleetOwnedReturnsStableConflict Fleet Bot 通过旧行为接口更新时返回稳定冲突。
+func TestBot_UpdateBehavior_FleetOwnedReturnsStableConflict(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	createTestNode(t, db)
+	inst := createInstanceViaAPI(t, r, token, 1, createGroupViaAPI(t, r, token, "g"))
+	id := makeBot(t, db, inst, "fleet", model.BotStatusConnected, "idle")
+	loadBatchID := uint(1)
+	require.NoError(t, db.Model(&model.Bot{}).Where("id = ?", id).Update("load_batch_id", loadBatchID).Error)
+
+	w := makeRequest(r, "POST", "/api/v1/bots/"+itoa(id)+"/behavior", map[string]interface{}{"behavior": "guard"}, token)
+	require.Equal(t, http.StatusConflict, w.Code)
+	m := parseJSON(t, w)
+	assert.Equal(t, "BOT_FLEET_MANAGED", m["error"])
+
+	var bot model.Bot
+	require.NoError(t, db.First(&bot, id).Error)
+	assert.Equal(t, "idle", bot.Behavior)
 }
 
 // TestBot_Batch_Delete 批量删除：DB 行被软删，Worker 委托失败不阻塞删除。

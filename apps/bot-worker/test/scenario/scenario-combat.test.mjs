@@ -128,6 +128,23 @@ test('attack_until 仅用完整关联可信信号满足 any/all，不把 client 
   }
 })
 
+test('内部 legacy attack 在 duration 截止时成功且不改变公开 V2 规则', async () => {
+  const legacy = runnerOptions({
+    scenario: scenario([attackStep({
+      chase: false,
+      targetNotFoundTimeoutMs: 5_000,
+      legacyDurationSuccess: true,
+      stop: { durationMs: 1_000, successPolicy: 'any' },
+    })]),
+  })
+  const runner = new ScenarioRunner(legacy.options)
+  await runner.start()
+  legacy.capabilities.advance(1_000)
+  await runner.tick(legacy.capabilities.now())
+  assert.equal(legacy.events.at(-1).status, 'succeeded')
+  assert.equal(legacy.events.at(-1).errorCode, undefined)
+})
+
 test('attack_until 支持 probeEvent，duration 截止不自动成功且返回 ATTACK_ASSERTION_UNMET', async () => {
   const probe = runnerOptions({
     scenario: scenario([attackStep({ chase: false, stop: { durationMs: 5_000, probeEvent: 'boss_hit', successPolicy: 'all' } })]),

@@ -160,6 +160,7 @@ type AttackUntilAction struct {
 	Chase                   bool                   `json:"chase,omitempty" yaml:"chase,omitempty"`
 	Reacquire               bool                   `json:"reacquire,omitempty" yaml:"reacquire,omitempty"`
 	TargetNotFoundTimeoutMS int                    `json:"targetNotFoundTimeoutMs,omitempty" yaml:"targetNotFoundTimeoutMs,omitempty"`
+	LegacyDurationSuccess   bool                   `json:"legacyDurationSuccess,omitempty" yaml:"legacyDurationSuccess,omitempty"`
 }
 
 // WaitAction 等待固定时长。

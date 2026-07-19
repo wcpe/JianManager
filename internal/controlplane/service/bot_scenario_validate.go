@@ -93,7 +93,7 @@ func validateScenarioSteps(cohort *ScenarioCohort, cohortIndex int, allowLegacy 
 			return err
 		}
 		if base.ObservationStep {
-			if action.Type() != ScenarioActionRoamInArea && action.Type() != ScenarioActionAttackUntil {
+			if !isScenarioObservationAction(action, allowLegacy) {
 				return scenarioValidationError(stepPath+".observationStep", "只允许 roam_in_area 或 attack_until 标记为 observationStep")
 			}
 			observationCount++
@@ -103,6 +103,22 @@ func validateScenarioSteps(cohort *ScenarioCohort, cohortIndex int, allowLegacy 
 		return scenarioValidationError(path, "必须恰有一个 observationStep=true")
 	}
 	return validateRespawnReferences(cohort, cohortIndex, seen)
+}
+
+func isScenarioObservationAction(action *ScenarioAction, allowLegacy bool) bool {
+	if action.Type() == ScenarioActionRoamInArea || action.Type() == ScenarioActionAttackUntil {
+		return true
+	}
+	return allowLegacy && action.Type() == ScenarioActionLegacyBehavior && isLegacyContinuousBehavior(action.LegacyBehavior.Behavior)
+}
+
+func isLegacyContinuousBehavior(behavior string) bool {
+	switch behavior {
+	case "follow", "patrol", "guard", "roam":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateScenarioAction(action *ScenarioAction, path string, allowLegacy bool) error {
@@ -183,7 +199,7 @@ func defaultScenarioTimeout(actionType ScenarioActionType) int {
 		return 60_000
 	case ScenarioActionMoveToAndWait:
 		return 45_000
-	case ScenarioActionAttackUntil, ScenarioActionRoamInArea, ScenarioActionWait:
+	case ScenarioActionAttackUntil, ScenarioActionRoamInArea, ScenarioActionWait, ScenarioActionLegacyBehavior:
 		return maxScenarioTimeoutMS
 	default:
 		return 30_000
@@ -308,6 +324,9 @@ func validateEntitySelector(selector ScenarioEntitySelector, path string) error 
 }
 
 func validateAttackAction(action *AttackUntilAction, path string, allowLegacy bool) error {
+	if action.LegacyDurationSuccess && !allowLegacy {
+		return scenarioValidationError(path+".legacyDurationSuccess", "新建 V2 场景不允许内部兼容字段")
+	}
 	if err := validateEntitySelector(action.Selector, path+".selector"); err != nil {
 		return err
 	}

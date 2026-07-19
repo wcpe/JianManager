@@ -457,7 +457,7 @@ class AttackUntilAction extends BaseScenarioAction {
   }
 
   private finishAtDeadline(ctx: ScenarioActionContext): ActionTickResult {
-    return this.trustedSatisfied(ctx.step)
+    return ctx.step.legacyDurationSuccess === true || this.trustedSatisfied(ctx.step)
       ? succeeded(this.result())
       : failed('ATTACK_ASSERTION_UNMET', '攻击截止时可信条件未满足', this.result())
   }

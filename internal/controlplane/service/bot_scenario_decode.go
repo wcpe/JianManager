@@ -165,6 +165,9 @@ func scenarioActionFields(actionType ScenarioActionType, path string, allowLegac
 		extras = []string{"selector"}
 	case ScenarioActionAttackUntil:
 		extras = []string{"selector", "stop", "attackIntervalMs", "chase", "reacquire", "targetNotFoundTimeoutMs"}
+		if allowLegacy {
+			extras = append(extras, "legacyDurationSuccess")
+		}
 	case ScenarioActionWait:
 		extras = []string{"durationMs"}
 	case ScenarioActionRespawnAndRejoin:
@@ -395,7 +398,7 @@ func validateScenarioAttackNodes(fields map[string]*yaml.Node, path string) erro
 			return err
 		}
 	}
-	for _, name := range []string{"chase", "reacquire"} {
+	for _, name := range []string{"chase", "reacquire", "legacyDurationSuccess"} {
 		if err := validateScenarioBoolNode(fields[name], path+"."+name); err != nil {
 			return err
 		}

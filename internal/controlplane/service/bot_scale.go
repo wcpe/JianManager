@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -115,8 +116,9 @@ type BotBatchRequest struct {
 
 // BotBatchError 批量操作单条失败明细。
 type BotBatchError struct {
-	BotID uint   `json:"botId"`
-	Error string `json:"error"`
+	BotID     uint   `json:"botId"`
+	ErrorCode string `json:"errorCode,omitempty"`
+	Error     string `json:"error"`
 }
 
 // BotBatchResult 批量操作结果计数。
@@ -460,14 +462,17 @@ func (s *BotService) Batch(req BotBatchRequest, scopeIDs []uint, scope bool) (*B
 		return result, nil
 	}
 
-	// 先做 DB 侧状态变更（与既有单 Bot 操作语义一致：DB 变更不依赖 Worker 委托成功）
-	s.applyBatchDBChange(req, bots)
+	// set-behavior 必须在 Worker 成功后再落库；其他动作保持既有账本语义。
+	if req.Action != BotBatchSetBehavior {
+		s.applyBatchDBChange(req, bots)
+	}
 
 	// 有界并发委托，按 Bot 各自所属节点路由
 	var (
-		mu  sync.Mutex
-		wg  sync.WaitGroup
-		sem = make(chan struct{}, batchConcurrency)
+		mu                    sync.Mutex
+		wg                    sync.WaitGroup
+		sem                   = make(chan struct{}, batchConcurrency)
+		successfulBehaviorIDs []uint
 	)
 	for i := range bots {
 		bot := bots[i]
@@ -484,16 +489,40 @@ func (s *BotService) Batch(req BotBatchRequest, scopeIDs []uint, scope bool) (*B
 			if derr != nil {
 				result.Failed++
 				if len(result.Errors) < maxBatchErrors {
-					result.Errors = append(result.Errors, BotBatchError{BotID: bot.ID, Error: derr.Error()})
+					result.Errors = append(result.Errors, BotBatchError{
+						BotID: bot.ID, ErrorCode: botBatchErrorCode(derr), Error: derr.Error(),
+					})
 				}
 			} else {
 				result.Succeeded++
+				if req.Action == BotBatchSetBehavior {
+					successfulBehaviorIDs = append(successfulBehaviorIDs, bot.ID)
+				}
 			}
 		}()
 	}
 	wg.Wait()
+	if req.Action == BotBatchSetBehavior && len(successfulBehaviorIDs) > 0 {
+		if err := s.db.Model(&model.Bot{}).Where("id IN ?", successfulBehaviorIDs).Update("behavior", req.Behavior).Error; err != nil {
+			result.Succeeded -= len(successfulBehaviorIDs)
+			result.Failed += len(successfulBehaviorIDs)
+			for _, botID := range successfulBehaviorIDs {
+				if len(result.Errors) >= maxBatchErrors {
+					break
+				}
+				result.Errors = append(result.Errors, BotBatchError{BotID: botID, Error: err.Error()})
+			}
+		}
+	}
 
 	return result, nil
+}
+
+func botBatchErrorCode(err error) string {
+	if errors.Is(err, ErrBotFleetManaged) {
+		return BotFleetManagedErrorCode
+	}
+	return ""
 }
 
 // applyBatchDBChange 应用批量操作的 DB 侧变更（行为/状态/软删除）。
@@ -522,6 +551,9 @@ func (s *BotService) applyBatchDBChange(req BotBatchRequest, bots []model.Bot) {
 
 // delegateBatchOne 将单个 Bot 的批量动作委托到其所属 Worker（复用既有 per-bot RPC）。
 func (s *BotService) delegateBatchOne(req BotBatchRequest, bot *model.Bot) error {
+	if req.Action == BotBatchSetBehavior && isFleetOwnedBot(bot) {
+		return ErrBotFleetManaged
+	}
 	node, instance, err := s.resolver.Resolve(bot)
 	if err != nil {
 		return err

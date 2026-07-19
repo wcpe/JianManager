@@ -7,6 +7,7 @@
  */
 
 import { sendEvent } from '../index.js'
+import { resolvePathfinderGoals } from '../pathfinder/index.js'
 
 /** 脚本步骤。 */
 interface ScriptStep {
@@ -149,7 +150,9 @@ export class ScriptRunner {
           // 使用 pathfinder 或简单移动
           const pf = (mcBot as unknown as { pathfinder?: { setGoal: (g: unknown) => void } }).pathfinder
           if (pf) {
-            const { goals } = await import('mineflayer-pathfinder')
+            const module = await import('mineflayer-pathfinder')
+            const goals = resolvePathfinderGoals(module)
+            if (!goals) throw new Error('pathfinder goals 不可用')
             pf.setGoal(new goals.GoalBlock(step.pos.x, step.pos.y, step.pos.z))
           }
         }

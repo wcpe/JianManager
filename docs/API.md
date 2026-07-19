@@ -1230,11 +1230,12 @@
     "succeeded": 2,
     "failed": 1,
     "skipped": 0,
-    "errors": [ { "botId": 3, "error": "Worker node-x 未连接" } ]
+    "errors": [ { "botId": 3, "errorCode": "BOT_FLEET_MANAGED", "error": "Bot 由 Fleet 场景管理，禁止通过旧行为接口修改" } ]
   }
   ```
   - `skipped`：请求 `ids` 中越权/不存在被静默剔除的数量（存在性隐藏）
-  - `failed` 仅统计 Worker 委托结果；DB 侧变更按既有「失败记 warning 不阻塞」语义
+  - `set-behavior` 在任何 DB 写入前识别 Fleet-owned Bot（`loadBatchId` 或 `stressSessionId` 非空），逐项返回 `BOT_FLEET_MANAGED` 且不调用旧 SetBotBehavior RPC；混合批次只更新委托成功的 legacy Bot。
+  - `set-behavior` 仅在 Worker 委托成功后更新 DB；Worker 失败时行为账本保持原值。其他批量动作保持既有账本语义。
 - **错误**: 400 `INVALID_REQUEST`（action 非法 / 目标皆空 / set-behavior 缺 behavior / 超上限）；403 `FORBIDDEN`
 
 ### POST /api/v1/bots
@@ -1282,9 +1283,10 @@
 - **错误**: 403 `FORBIDDEN`；404 `NOT_FOUND`；503 `STREAM_UNAVAILABLE`
 
 ### POST /api/v1/bots/:id/behavior
-- **描述**: 切换 Bot 行为模式
-- **关联 FR**: FR-009
+- **描述**: 切换 legacy Bot 行为模式；Worker 委托成功后才更新 DB 行为账本
+- **关联 FR**: FR-009, FR-352
 - **请求**: `{ "behavior": "follow", "target": "PlayerName" }`
+- **错误**: 409 `BOT_FLEET_MANAGED`（Bot 的 `loadBatchId` 或 `stressSessionId` 非空，由 Fleet 场景账本管理，禁止旧行为接口修改）；500 `INTERNAL_ERROR`（Worker 委托或 DB 更新失败，DB 行为保持原值）
 
 ### POST /api/v1/bots/:id/command
 - **描述**: 向 Bot 下发聊天/控制命令（链路：CP → Worker SendBotCommand → bot-worker send-command IPC → Mineflayer chat）

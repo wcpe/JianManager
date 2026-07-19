@@ -62,7 +62,7 @@ func ConvertLegacyBehaviorToScenarioV2(behavior string, seed int64) (*ScenarioV2
 func markLegacyObservationStep(steps []ScenarioAction) error {
 	observationIndex := -1
 	for index := range steps {
-		if steps[index].Type() == ScenarioActionRoamInArea || steps[index].Type() == ScenarioActionAttackUntil {
+		if isScenarioObservationAction(&steps[index], true) {
 			observationIndex = index
 		}
 	}
@@ -87,7 +87,7 @@ func convertLegacyPhase(phase StressOrchestrationPhase, phaseIndex int) ([]Scena
 	case "idle", "wait":
 		return []ScenarioAction{newWaitScenarioAction(id, durationMS)}, nil
 	case "guard":
-		return []ScenarioAction{newLegacyGuardScenarioAction(id, durationMS)}, nil
+		return []ScenarioAction{newLegacyBehaviorScenarioAction(id, phase.Behavior, phase.Target, durationMS, nil)}, nil
 	case "custom":
 		return convertLegacyCustomPhase(phase, phaseIndex)
 	case "follow", "patrol", "roam":
@@ -187,14 +187,9 @@ func newLegacyAttackScenarioAction(id string, durationMS int) ScenarioAction {
 		Selector:           ScenarioEntitySelector{Kind: "hostile", Radius: 16, Priority: "nearest"},
 		Stop:               ScenarioAttackStop{DurationMS: max(1, durationMS), SuccessPolicy: "any"},
 		AttackIntervalMS:   1000, Chase: true, Reacquire: true,
+		LegacyDurationSuccess: true,
 	}
 	return ScenarioAction{AttackUntil: value}
-}
-
-func newLegacyGuardScenarioAction(id string, durationMS int) ScenarioAction {
-	value := newLegacyAttackScenarioAction(id, durationMS)
-	value.AttackUntil.Chase = false
-	return value
 }
 
 func newLegacyBehaviorScenarioAction(id, behavior, target string, durationMS int, step *StressOrchestrationStep) ScenarioAction {

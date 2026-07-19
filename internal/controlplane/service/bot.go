@@ -16,7 +16,12 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-var ErrBotNotFound = errors.New("Bot 不存在")
+const BotFleetManagedErrorCode = "BOT_FLEET_MANAGED"
+
+var (
+	ErrBotNotFound     = errors.New("Bot 不存在")
+	ErrBotFleetManaged = errors.New("Bot 由 Fleet 场景管理，禁止通过旧行为接口修改")
+)
 
 // botConnConfig 解析 Bot.Config(JSON)中的连接参数，用于向 Worker 下发 Mineflayer 连接目标。
 type botConnConfig struct {
@@ -177,16 +182,17 @@ func (s *BotService) UpdateBehavior(id uint, behavior string) error {
 	if err := s.db.First(&bot, id).Error; err != nil {
 		return ErrBotNotFound
 	}
-
-	if err := s.db.Model(&bot).Update("behavior", behavior).Error; err != nil {
+	if isFleetOwnedBot(&bot) {
+		return ErrBotFleetManaged
+	}
+	if err := s.delegateSetBehavior(&bot, behavior); err != nil {
 		return err
 	}
+	return s.db.Model(&bot).Update("behavior", behavior).Error
+}
 
-	if err := s.delegateSetBehavior(&bot, behavior); err != nil {
-		slog.Warn("委托 Worker 切换行为失败", "botID", id, "error", err)
-	}
-
-	return nil
+func isFleetOwnedBot(bot *model.Bot) bool {
+	return bot != nil && (bot.LoadBatchID != nil || bot.StressSessionID != nil)
 }
 
 // delegateCreateBot 委托 Worker 创建 Bot 连接。

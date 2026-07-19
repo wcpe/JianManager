@@ -259,9 +259,71 @@ test('V1 legacy_behavior 通过 Fleet adapter 复用旧行为与 custom 边界',
     assert.equal(legacyCall.name, behavior)
     assert.ok(legacyCall.ticks > 0)
     assert.ok(legacyCall.bound > 0)
-    if (legacyStep) assert.deepEqual(legacyCall.config, { steps: [legacyStep] })
-    assert.equal(actionEvents(harness.events, `legacy-${behavior}-${legacyStep?.type ?? 'behavior'}`).some((event) => event.action.errorCode === 'ACTION_INTERNAL_ERROR'), false)
+    if (legacyStep) {
+      assert.deepEqual(legacyCall.config, { steps: [legacyStep] })
+    } else {
+      assert.equal(legacyCall.config, target)
+    }
+    const events = actionEvents(harness.events, `legacy-${behavior}-${legacyStep?.type ?? 'behavior'}`)
+    assert.equal(events.some((event) => event.action.errorCode === 'ACTION_INTERNAL_ERROR'), false)
+    assert.equal(events[0].action.status, 'running')
+    assert.equal(events.at(-1).action.status, 'succeeded')
   }
+})
+
+test('V1 guard 复用旧行为目标且不再走 attack assertion', async () => {
+  const calls = []
+  const harness = createFleetHarness({
+    createBehavior: (_botId, name, config) => {
+      const call = { name, config, ticks: 0 }
+      calls.push(call)
+      return {
+        name,
+        start() {},
+        stop() {},
+        setMcBot() {},
+        async tick() { call.ticks++ },
+      }
+    },
+  })
+  harness.fleet.handleCommand({ cmd: 'create-bots', bots: [assignment('legacy-guard-target', {
+    cohortKey: 'legacy',
+    scenario: scenario([step('guard', 'legacy_behavior', {
+      observationStep: true, behavior: 'guard', target: '12,64,-3', durationMs: 1_000, timeoutMs: 2_000,
+    })], 'legacy'),
+  })] })
+  await harness.flush()
+  await harness.tick(2_000)
+
+  assert.equal(calls.at(-1).name, 'guard')
+  assert.equal(calls.at(-1).config, '12,64,-3')
+  assert.ok(calls.at(-1).ticks > 0)
+  const events = actionEvents(harness.events, 'legacy-guard-target')
+  assert.equal(events.at(-1).action.status, 'succeeded')
+  assert.equal(events.some((event) => event.action.errorCode === 'ATTACK_ASSERTION_UNMET'), false)
+})
+
+test('V1 转换 attack 标记经 assignment 在 duration 截止成功', async () => {
+  const harness = createFleetHarness()
+  harness.fleet.handleCommand({ cmd: 'create-bots', bots: [assignment('legacy-attack-duration', {
+    cohortKey: 'legacy',
+    scenario: scenario([step('attack', 'attack_until', {
+      observationStep: true,
+      legacyDurationSuccess: true,
+      selector: { kind: 'hostile', radius: 16, priority: 'nearest' },
+      stop: { durationMs: 1_000, successPolicy: 'any' },
+      attackIntervalMs: 1_000,
+      chase: true,
+      reacquire: true,
+      timeoutMs: 2_000,
+    })], 'legacy'),
+  })] })
+  await harness.flush()
+  await harness.tick(2_000)
+
+  const events = actionEvents(harness.events, 'legacy-attack-duration')
+  assert.equal(events.at(-1).action.status, 'succeeded')
+  assert.equal(events.at(-1).action.errorCode, undefined)
 })
 
 test('Fleet-managed Scenario Bot 拒绝旧 run-script 且 move 不覆盖 pathfinder', async () => {

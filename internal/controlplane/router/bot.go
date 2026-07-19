@@ -301,6 +301,10 @@ func (h *BotHandler) UpdateBehavior(c *gin.Context) {
 		return
 	}
 	if err := h.botSvc.UpdateBehavior(id, req.Behavior); err != nil {
+		if errors.Is(err, service.ErrBotFleetManaged) {
+			c.JSON(http.StatusConflict, gin.H{"error": service.BotFleetManagedErrorCode, "message": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR"})
 		return
 	}

@@ -143,6 +143,9 @@ phases:
   - durationSec: 10
     behavior: follow
     target: Steve
+  - durationSec: 10
+    behavior: guard
+    target: 1,64,2
   - durationSec: 20
     behavior: custom
     steps:
@@ -170,14 +173,22 @@ phases:
 	require.Equal(t, []ScenarioActionType{
 		ScenarioActionWait,
 		ScenarioActionLegacyBehavior,
+		ScenarioActionLegacyBehavior,
 		ScenarioActionSendCommand,
 		ScenarioActionWait,
 		ScenarioActionMoveToAndWait,
 		ScenarioActionAttackUntil,
 		ScenarioActionLegacyBehavior,
 	}, types)
-	require.True(t, scenario.Cohorts[0].Steps[5].Base().ObservationStep)
-	require.False(t, scenario.Cohorts[0].Steps[6].Base().ObservationStep)
+	require.Equal(t, "guard", scenario.Cohorts[0].Steps[2].LegacyBehavior.Behavior)
+	require.Equal(t, "1,64,2", scenario.Cohorts[0].Steps[2].LegacyBehavior.Target)
+	require.True(t, scenario.Cohorts[0].Steps[6].AttackUntil.LegacyDurationSuccess)
+	require.True(t, scenario.Cohorts[0].Steps[6].Base().ObservationStep)
+	require.False(t, scenario.Cohorts[0].Steps[7].Base().ObservationStep)
+
+	cohorts, err := ScenarioCohortJSONMap(scenario)
+	require.NoError(t, err)
+	require.Contains(t, cohorts["legacy"], `"legacyDurationSuccess":true`)
 
 	snapshot, err := json.Marshal(scenario)
 	require.NoError(t, err)
@@ -185,10 +196,34 @@ phases:
 	require.Contains(t, string(snapshot), `"behavior":"follow"`)
 }
 
-func TestConvertStressOrchestrationToScenarioV2_WithoutContinuousActionReturnsError(t *testing.T) {
-	raw := "phases:\n  - durationSec: 10\n    behavior: patrol\n    target: 0,64,0\n"
-	_, err := ConvertStressOrchestrationToScenarioV2(raw, 7)
-	require.Error(t, err)
+func TestConvertStressOrchestrationToScenarioV2_LegacyContinuousBehaviorsAreObservable(t *testing.T) {
+	for _, behavior := range []string{"follow", "patrol", "guard"} {
+		t.Run(behavior, func(t *testing.T) {
+			raw := "phases:\n  - durationSec: 10\n    behavior: " + behavior + "\n    target: 0,64,0\n"
+			scenario, err := ConvertStressOrchestrationToScenarioV2(raw, 7)
+			require.NoError(t, err)
+			require.True(t, scenario.Cohorts[0].Steps[0].Base().ObservationStep)
+			require.Equal(t, behavior, scenario.Cohorts[0].Steps[0].LegacyBehavior.Behavior)
+			require.Equal(t, "0,64,0", scenario.Cohorts[0].Steps[0].LegacyBehavior.Target)
+		})
+	}
+
+	scenario, err := ConvertLegacyBehaviorToScenarioV2("roam", 7)
+	require.NoError(t, err)
+	require.True(t, scenario.Cohorts[0].Steps[0].Base().ObservationStep)
+	require.Equal(t, "roam", scenario.Cohorts[0].Steps[0].LegacyBehavior.Behavior)
+}
+
+func TestParseScenarioV2_LegacyAttackDurationSuccessIsInternalOnly(t *testing.T) {
+	raw := scenarioJSONWithStep(`{"id":"attack","type":"attack_until","observationStep":true,"legacyDurationSuccess":true,"selector":{"kind":"hostile","radius":16},"stop":{"durationMs":1000},"attackIntervalMs":1000}`)
+	_, err := ParseScenarioV2([]byte(raw))
+	var validationErr *ScenarioValidationError
+	require.ErrorAs(t, err, &validationErr)
+	require.Equal(t, "cohorts[0].steps[0].legacyDurationSuccess", validationErr.Path)
+	require.Equal(t, "未知字段", validationErr.Message)
+
+	_, err = ParseScenarioSnapshot(raw)
+	require.NoError(t, err)
 }
 
 func TestParseScenarioV2_RejectsUnknownFieldsWithSameJSONAndYAMLPath(t *testing.T) {
