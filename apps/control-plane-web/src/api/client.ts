@@ -44,7 +44,7 @@ let refreshPromise: Promise<string> | null = null
 /** 用 refreshToken 换取新的 access/refresh 并落库，返回新的 accessToken。失败时抛错。 */
 function refreshTokens(): Promise<string> {
   if (refreshPromise) return refreshPromise
-  refreshPromise = (async () => {
+  const pending = (async () => {
     const refreshToken = localStorage.getItem('refreshToken')
     if (!refreshToken) {
       throw new Error('no refresh token')
@@ -56,8 +56,8 @@ function refreshTokens(): Promise<string> {
     useAuthStore.getState().loadFromStorage()
     return data.accessToken as string
   })()
-  // 无论成败都释放闸，便于下次重新刷新。
-  refreshPromise.finally(() => {
+  // 把清理链本身作为共享 Promise 返回，避免失败时产生无人消费的 finally 拒绝。
+  refreshPromise = pending.finally(() => {
     refreshPromise = null
   })
   return refreshPromise
