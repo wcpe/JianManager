@@ -17,6 +17,10 @@ function expectCommandsInOrder(source: string, commands: string[]): void {
   }
 }
 
+function workflowStepNames(source: string): string[] {
+  return [...source.matchAll(/^\s+- name:\s*(.+)$/gm)].map((match) => match[1])
+}
+
 describe('发布工作流契约', () => {
   const ci = readWorkflow('ci.yml')
   const release = readWorkflow('release.yml')
@@ -24,6 +28,32 @@ describe('发布工作流契约', () => {
   it('CI 与发布工作流统一使用 Node.js 22', () => {
     expect(ci).toContain("NODE_VERSION: '22'")
     expect(release).toContain("NODE_VERSION: '22'")
+  })
+
+  it('工作流使用 Node.js 24 运行时对应的官方 Action 主版本', () => {
+    expect(ci).toContain('actions/checkout@v7')
+    expect(ci).toContain('actions/cache@v6')
+    expect(ci).toContain('actions/setup-node@v7')
+    expect(ci).toContain('actions/upload-artifact@v7')
+    expect(release).toContain('actions/checkout@v7')
+    expect(release).toContain('actions/cache@v6')
+    expect(release).toContain('actions/setup-go@v7')
+    expect(release).toContain('actions/setup-java@v5')
+    expect(release).toContain('actions/setup-node@v7')
+    expect(release).toContain('actions/upload-artifact@v7')
+    expect(release).toContain('actions/download-artifact@v8')
+  })
+
+  it('可见步骤名称不携带需求编号', () => {
+    expect(workflowStepNames(ci).join('\n')).not.toMatch(/\bFR-\d+/)
+    expect(workflowStepNames(release).join('\n')).not.toMatch(/\bFR-\d+/)
+  })
+
+  it('CI 将 E2E 分成四个隔离分片并保留统一门禁', () => {
+    expect(ci).toContain('shard: [1, 2, 3, 4]')
+    expect(ci).toContain('pnpm e2e --shard=${{ matrix.shard }}/4')
+    expect(ci).toContain('name: web-e2e-test-results-${{ matrix.shard }}')
+    expect(ci).toContain('needs: [web-static, web-e2e]')
   })
 
   it('CI Bot Worker 在安装后依次通过四项门禁', () => {
@@ -53,10 +83,29 @@ describe('发布工作流契约', () => {
     expect(release).not.toContain('0.0.0-dev+')
   })
 
+  it('正式发布复用同提交 CI 结果且只保留 Go 门禁', () => {
+    const verifyCI = release.slice(
+      release.indexOf('  verify-ci:'),
+      release.indexOf('\n  prepare-embeds:'),
+    )
+
+    expect(verifyCI).toContain('gh run list')
+    expect(verifyCI).toContain('--workflow ci.yml')
+    expect(verifyCI).toContain('--commit "${GITHUB_SHA}"')
+    expect(verifyCI).toContain('gh run view')
+    expect(verifyCI).toContain('--json status,conclusion')
+    expect(release).toContain('\n  go-test:')
+    expect(release).toContain('go test ./...')
+    expect(release).not.toContain('pnpm exec vitest run')
+    expect(release).not.toContain('pnpm e2e')
+    expect(release).toContain('needs: [metadata, verify-ci]')
+    expect(release).toContain("if: needs.metadata.outputs.publish_release == 'true'")
+  })
+
   it('发布准备阶段通过 Bot Worker 门禁并生成内嵌资产', () => {
     const prepareEmbeds = release.slice(
       release.indexOf('  prepare-embeds:'),
-      release.indexOf('\n  test:'),
+      release.indexOf('\n  go-test:'),
     )
 
     expectCommandsInOrder(prepareEmbeds, [

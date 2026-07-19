@@ -1,16 +1,16 @@
-# 前端与 bot-worker 质量门禁（FR-212，见 ADR-047 决策 8 / spec §9）。
+# 前端与 bot-worker 质量门禁（见 ADR-047 决策 8 / spec §9）。
 #
 # 触发：pull_request + 非 master 分支 push —— 合并前 / 分支 push 即跑，把坏代码挡在合并前。
-#   master push 与 tag 的发布前门禁由 release.yml 的 test job 覆盖（已含 lint+vitest+build+E2E），本工作流不重复。
+#   release.yml 复用同提交的 CI 结果，不再重复执行前端质量门禁。
 #
-# 闸：前端 workspace 的 lint（tsc + eslint）+ vitest（全 workspace，含 devmock 包自检）+ build
-#   + Playwright E2E（mock 模式整站，无需真后端），任一失败 → job 失败 → check 红。
+# 闸：前端 workspace 的 lint（tsc + eslint）+ vitest（全 workspace，含 devmock 包自检）+ build，
+#   Playwright E2E 按文件分成四个独立 runner 并行执行；任一失败 → web-quality 失败 → check 红。
 #   仓库**分支保护**勾选 `web-quality` 为必需 check 即合并前硬挡
 #   （分支保护是仓库设置，CI 只提供 check；见 README.md「前端 mock 模式与测试」）。
 #
-# 路径与命令对齐 monorepo 真貌（FR-283/286/287）：前端已迁 apps/control-plane-web，pnpm workspace
-#   管理（pnpm 版本由根 package.json 的 packageManager 字段经 corepack 锁定）；各步骤与 Taskfile.yml
-#   的 web:lint / web:test / web:build / web:e2e 同配方，CI 直调底层命令不经 task（FR-287 spec §5 决策）。
+# 路径与命令对齐 monorepo 真貌：前端位于 apps/control-plane-web，由 pnpm workspace 管理；
+#   pnpm 版本由根 package.json 的 packageManager 字段经 corepack 锁定，各步骤与 Taskfile.yml
+#   的 web:lint / web:test / web:build / web:e2e 同配方，CI 直调底层命令不经 task。
 #
 # bot-quality：apps/bot-worker 质量门禁（npm 自管、不入 pnpm workspace，见 ADR-064）——
 #   npm ci 后依次执行生产依赖审计、类型检查、lint 与构建；
@@ -34,21 +34,21 @@ env:
   NODE_VERSION: '22'
 
 jobs:
-  web-quality:
+  web-static:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout（不需子模块，纯前端门禁）
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: 缓存 pnpm store
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.local/share/pnpm/store
           key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
@@ -79,22 +79,69 @@ jobs:
           pnpm --filter control-plane-web build
           pnpm --filter @jianmanager/ui-museum build
 
+  web-e2e:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Checkout（不需子模块，纯前端门禁）
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 缓存 pnpm store
+        uses: actions/cache@v6
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-
+
+      - name: 安装依赖（pnpm workspace）
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          pnpm install --frozen-lockfile
+
       - name: 安装 Playwright 浏览器
         working-directory: apps/control-plane-web
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: E2E（Playwright，mock 模式整站，等价 task web:e2e）
+      - name: E2E 分片 ${{ matrix.shard }}/4
         working-directory: apps/control-plane-web
-        run: pnpm e2e
+        run: pnpm e2e --shard=${{ matrix.shard }}/4
 
       - name: 上传 Playwright E2E 测试产物
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: web-e2e-test-results
+          name: web-e2e-test-results-${{ matrix.shard }}
           path: apps/control-plane-web/test-results
           if-no-files-found: ignore
           retention-days: 7
+
+  web-quality:
+    if: always()
+    needs: [web-static, web-e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - name: 汇总前端质量门禁
+        shell: bash
+        env:
+          STATIC_RESULT: ${{ needs.web-static.result }}
+          E2E_RESULT: ${{ needs.web-e2e.result }}
+        run: |
+          set -euo pipefail
+          [[ "${STATIC_RESULT}" == "success" ]]
+          [[ "${E2E_RESULT}" == "success" ]]
 
   bot-quality:
     runs-on: ubuntu-latest
@@ -103,17 +150,17 @@ jobs:
         working-directory: apps/bot-worker
     steps:
       - name: Checkout（不需子模块，纯 bot-worker 门禁）
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: false
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: 缓存 npm
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-${{ hashFiles('apps/bot-worker/package-lock.json') }}

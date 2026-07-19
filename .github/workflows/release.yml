@@ -22,6 +22,7 @@ on:
     tags: ['v*']
 
 permissions:
+  actions: read # 查询同提交 CI 结果，避免发布工作流重复跑前端测试
   contents: write # 发 release / 管 tag 需写权限（ADR-036 后果）
 
 concurrency:
@@ -45,7 +46,7 @@ jobs:
       publish_release: ${{ steps.meta.outputs.publish_release }}
     steps:
       - name: Checkout（读取源码版本与当前提交 tag）
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -54,36 +55,90 @@ jobs:
         shell: bash
         run: node scripts/release-metadata.mjs
 
+  # ───────────────────────── verify-ci：复用同提交 CI 门禁结果 ─────────────────────────
+  verify-ci:
+    needs: metadata
+    if: needs.metadata.outputs.publish_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: 等待同提交 CI 通过
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 1800))
+          run_id=""
+          while [[ -z "${run_id}" && ${SECONDS} -lt ${deadline} ]]; do
+            run_id="$(gh run list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --workflow ci.yml \
+              --commit "${GITHUB_SHA}" \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty')"
+            if [[ -z "${run_id}" ]]; then
+              echo "尚未找到同提交 CI，10 秒后重试"
+              sleep 10
+            fi
+          done
+          if [[ -z "${run_id}" ]]; then
+            echo "等待同提交 CI 超时：${GITHUB_SHA}" >&2
+            exit 1
+          fi
+          echo "等待 CI run ${run_id} 完成"
+          while [[ ${SECONDS} -lt ${deadline} ]]; do
+            state="$(gh run view "${run_id}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json status,conclusion \
+              --jq '[.status, .conclusion] | @tsv')"
+            IFS=$'\t' read -r status conclusion <<< "${state}"
+            if [[ "${status}" == "completed" ]]; then
+              if [[ "${conclusion}" == "success" ]]; then
+                echo "同提交 CI 已通过"
+                exit 0
+              fi
+              echo "同提交 CI 未通过：${conclusion}" >&2
+              exit 1
+            fi
+            echo "CI 当前状态：${status}，15 秒后重查"
+            sleep 15
+          done
+          echo "等待 CI 完成超时：${GITHUB_SHA}" >&2
+          exit 1
+
   # ───────────────────────── prepare-embeds：一次性产出全部 go:embed 资产 ─────────────────────────
   # 内嵌资产平台无关（jar / 前端静态文件），只构建一次跨 matrix 复用。
   prepare-embeds:
-    needs: metadata
+    needs: [metadata, verify-ci]
+    if: needs.metadata.outputs.publish_release == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout（含子模块，embed-probe 需 third_party/ServerProbe）
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Setup Java（JDK21）
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
 
       - name: 缓存 Gradle（探针 / 客户端更新器构建）
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches
@@ -93,7 +148,7 @@ jobs:
             gradle-${{ runner.os }}-
 
       - name: 缓存包管理器（pnpm store / bot-worker npm）
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.local/share/pnpm/store
@@ -117,7 +172,7 @@ jobs:
             --out internal/controlplane/embed/botworker \
             --version "${{ needs.metadata.outputs.version }}"
 
-      - name: 前端依赖与构建 + 许可清单（等价 make gen-licenses + build-web + embed-web，FR-283 pnpm workspace）
+      - name: 前端依赖与构建 + 许可清单（pnpm workspace）
         shell: bash
         run: |
           set -euo pipefail
@@ -155,7 +210,7 @@ jobs:
           echo "f686e8f3ded377d7bc87d216a90e9e9512df4156e75b06c655a16648ae8765b2  internal/worker/embed/cfr/cfr.jar" | sha256sum -c -
 
       - name: 上传 CP embed 产物（dist + probe + client-updater + botworker）
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: embed-controlplane
           path: |
@@ -167,43 +222,38 @@ jobs:
           include-hidden-files: true # 保留各目录 .gitignore 占位，避免空目录被丢弃
 
       - name: 上传 Worker embed 产物（cfr）
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: embed-worker
           path: internal/worker/embed/cfr/
           retention-days: 1
           include-hidden-files: true
 
-  # ───────────────────────── test：Go + 前端 编译/静态检查/单测（发布前门禁） ─────────────────────────
-  # 复用 prepare-embeds 产出的 embed（go:embed 需非空目录）；test 不过则 build/release 不执行。
-  test:
+  # ───────────────────────── go-test：Go 编译/静态检查/单测（发布前门禁） ─────────────────────────
+  # 前端与 Bot 门禁复用同提交 CI；此处只验证依赖完整 embed 的 Go 代码。
+  go-test:
     needs: prepare-embeds
     runs-on: ubuntu-latest
     steps:
       - name: Checkout（不需子模块源，只需下载的 embed 产物）
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
       - name: 还原 CP embed 产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: embed-controlplane
           path: internal/controlplane/embed/
 
       - name: 还原 Worker embed 产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: embed-worker
           path: internal/worker/embed/cfr/
@@ -216,22 +266,9 @@ jobs:
           go vet ./...
           go test ./...
 
-      - name: 前端 依赖 / lint / 单测 / 构建 / E2E（FR-283 pnpm workspace）
-        shell: bash
-        run: |
-          set -euo pipefail
-          corepack enable
-          pnpm install --frozen-lockfile
-          cd apps/control-plane-web
-          pnpm lint
-          pnpm exec vitest run
-          pnpm build
-          pnpm exec playwright install --with-deps chromium
-          pnpm e2e
-
   # ───────────────────────── build：交叉编译 4 个二进制（matrix） ─────────────────────────
   build:
-    needs: [metadata, prepare-embeds, test]
+    needs: [metadata, prepare-embeds, go-test]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -241,29 +278,29 @@ jobs:
           - { os: windows, arch: amd64, ext: '.exe' }
     steps:
       - name: Checkout（不需子模块源，只需下载的 embed 产物）
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: false
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
       - name: 还原 CP embed 产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: embed-controlplane
           path: internal/controlplane/embed/
 
       - name: 还原 Worker embed 产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: embed-worker
           path: internal/worker/embed/cfr/
 
-      - name: 注入 CP 内嵌 Worker 资产（FR-278/ADR-062，两平台 + manifest）
+      - name: 注入 CP 内嵌 Worker 资产（两平台 + manifest）
         shell: bash
         env:
           CGO_ENABLED: '0'
@@ -296,7 +333,7 @@ jobs:
           ls -l dist/
 
       - name: 上传二进制产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binaries-${{ matrix.os }}-${{ matrix.arch }}
           path: dist/*
@@ -316,7 +353,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - name: 下载待验二进制
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ matrix.artifact }}
           path: dist
@@ -353,17 +390,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout（取 CHANGELOG + 提取脚本）
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: false
 
       - name: Setup Node（跑 changelog-extract）
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: 下载全部二进制产物到 dist/
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: binaries-*
           path: dist
