@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,15 +90,15 @@ func TestApplyBotBatchEnforcesLimitGenerationAndIdempotency(t *testing.T) {
 
 	_, err = srv.ApplyBotBatch(context.Background(), &workerpb.ApplyBotBatchRequest{
 		BatchId: "batch-generation", IdempotencyKey: "key-generation", ExpectedCapacityGeneration: 3,
-		Assignments: []*workerpb.BotAssignment{{BotUuid: "bot-1"}},
+		Assignments: []*workerpb.BotAssignment{validRunningAssignment("bot-1", 1)},
 	})
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
 
 	req := &workerpb.ApplyBotBatchRequest{
 		BatchId: "batch-1", IdempotencyKey: "key-1", ExpectedCapacityGeneration: 4,
 		Assignments: []*workerpb.BotAssignment{
-			{BotUuid: "bot-1", Generation: 2, DesiredState: "running"},
-			{BotUuid: "bot-2", Generation: 2, DesiredState: "running"},
+			validRunningAssignment("bot-1", 2),
+			validRunningAssignment("bot-2", 2),
 		},
 	}
 	first, err := srv.ApplyBotBatch(context.Background(), req)
@@ -114,10 +115,96 @@ func TestApplyBotBatchEnforcesLimitGenerationAndIdempotency(t *testing.T) {
 
 	conflict := &workerpb.ApplyBotBatchRequest{
 		BatchId: "batch-1", IdempotencyKey: "key-1", ExpectedCapacityGeneration: 4,
-		Assignments: []*workerpb.BotAssignment{{BotUuid: "bot-2", Generation: 2, DesiredState: "running"}},
+		Assignments: []*workerpb.BotAssignment{validRunningAssignment("bot-2", 2)},
 	}
 	_, err = srv.ApplyBotBatch(context.Background(), conflict)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+}
+
+func TestApplyBotBatchRejectsInvalidAssignmentsWithoutIPC(t *testing.T) {
+	invalidAssignments := []*workerpb.BotAssignment{
+		nil,
+		{BotUuid: "bot-empty"},
+		func() *workerpb.BotAssignment {
+			assignment := validRunningAssignment("bot-session", 1)
+			assignment.SessionUuid = ""
+			return assignment
+		}(),
+		func() *workerpb.BotAssignment {
+			assignment := validRunningAssignment("bot-generation", 1)
+			assignment.Generation = 0
+			return assignment
+		}(),
+		func() *workerpb.BotAssignment {
+			assignment := validRunningAssignment("bot-hash-empty", 1)
+			assignment.ConfigHash = ""
+			return assignment
+		}(),
+		func() *workerpb.BotAssignment {
+			assignment := validRunningAssignment("bot-hash-format", 1)
+			assignment.ConfigHash = "not-a-sha256"
+			return assignment
+		}(),
+		func() *workerpb.BotAssignment {
+			assignment := validRunningAssignment("bot-state", 1)
+			assignment.DesiredState = ""
+			return assignment
+		}(),
+		func() *workerpb.BotAssignment {
+			assignment := validRunningAssignment("bot-instance", 1)
+			assignment.InstanceUuid = ""
+			return assignment
+		}(),
+		func() *workerpb.BotAssignment {
+			assignment := validRunningAssignment("bot-name", 1)
+			assignment.Name = ""
+			return assignment
+		}(),
+		func() *workerpb.BotAssignment {
+			assignment := validRunningAssignment("bot-host", 1)
+			assignment.Host = ""
+			return assignment
+		}(),
+		func() *workerpb.BotAssignment {
+			assignment := validRunningAssignment("bot-port", 1)
+			assignment.Port = 0
+			return assignment
+		}(),
+	}
+	fake := &fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, MaxBots: 50}}
+	srv := newBotFleetTestServer(fake)
+
+	response, err := srv.ApplyBotBatch(context.Background(), &workerpb.ApplyBotBatchRequest{
+		BatchId: "batch-invalid", IdempotencyKey: "key-invalid", Assignments: invalidAssignments,
+	})
+
+	require.NoError(t, err)
+	require.Len(t, response.Results, len(invalidAssignments))
+	for _, result := range response.Results {
+		require.False(t, result.Accepted)
+		require.True(t, result.Skipped)
+		require.Equal(t, botBatchStatusConflict, result.Status)
+		require.Equal(t, "invalid_assignment", result.ErrorCode)
+	}
+	require.Zero(t, fake.applyCalls)
+	require.Zero(t, fake.stopCalls)
+}
+
+func TestApplyBotBatchAllowsStoppedAssignmentWithoutConnectionFields(t *testing.T) {
+	fake := &fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, MaxBots: 50}}
+	srv := newBotFleetTestServer(fake)
+
+	response, err := srv.ApplyBotBatch(context.Background(), &workerpb.ApplyBotBatchRequest{
+		BatchId: "batch-stopped", IdempotencyKey: "key-stopped",
+		Assignments: []*workerpb.BotAssignment{validStoppedAssignment("bot-stopped", 2)},
+	})
+
+	require.NoError(t, err)
+	require.True(t, response.Results[0].Accepted)
+	require.True(t, response.Results[0].Skipped)
+	require.Equal(t, "already_stopped", response.Results[0].ErrorCode)
+	require.Zero(t, fake.applyCalls)
+	require.Zero(t, fake.stopCalls)
 }
 
 func TestApplyBotBatchDoesNotCacheTransientPrepareFailure(t *testing.T) {
@@ -129,7 +216,7 @@ func TestApplyBotBatchDoesNotCacheTransientPrepareFailure(t *testing.T) {
 	srv.botMgr = bot.NewManager(bot.ManagerConfig{BotWorkerPath: "unused.js", NodePath: "__missing_node_for_fleet_test__"})
 	req := &workerpb.ApplyBotBatchRequest{
 		BatchId: "batch-transient", IdempotencyKey: "key-transient",
-		Assignments: []*workerpb.BotAssignment{{BotUuid: "bot-1", Generation: 1, DesiredState: "running"}},
+		Assignments: []*workerpb.BotAssignment{validRunningAssignment("bot-1", 1)},
 	}
 
 	first, err := srv.ApplyBotBatch(context.Background(), req)
@@ -152,7 +239,7 @@ func TestApplyBotBatchDoesNotCacheTransientDispatchResult(t *testing.T) {
 	srv := newBotFleetTestServer(fake)
 	req := &workerpb.ApplyBotBatchRequest{
 		BatchId: "batch-dispatch", IdempotencyKey: "key-dispatch",
-		Assignments: []*workerpb.BotAssignment{{BotUuid: "bot-1", Generation: 1, DesiredState: "running"}},
+		Assignments: []*workerpb.BotAssignment{validRunningAssignment("bot-1", 1)},
 	}
 
 	first, err := srv.ApplyBotBatch(context.Background(), req)
@@ -175,7 +262,7 @@ func TestApplyBotBatchCacheIsInvalidatedByWorkerExitAndEpochChange(t *testing.T)
 	srv := newBotFleetTestServer(fake)
 	req := &workerpb.ApplyBotBatchRequest{
 		BatchId: "batch-epoch", IdempotencyKey: "key-epoch",
-		Assignments: []*workerpb.BotAssignment{{BotUuid: "bot-1", Generation: 1, DesiredState: "running"}},
+		Assignments: []*workerpb.BotAssignment{validRunningAssignment("bot-1", 1)},
 	}
 
 	_, err := srv.ApplyBotBatch(context.Background(), req)
@@ -203,7 +290,7 @@ func TestPlanBotBatchMissingStopIsStableAlreadyStopped(t *testing.T) {
 	srv := newBotFleetTestServer(fake)
 	req := &workerpb.ApplyBotBatchRequest{
 		BatchId: "batch-stop", IdempotencyKey: "key-stop",
-		Assignments: []*workerpb.BotAssignment{{BotUuid: "bot-missing", Generation: 2, DesiredState: "stopped"}},
+		Assignments: []*workerpb.BotAssignment{validStoppedAssignment("bot-missing", 2)},
 	}
 
 	first, err := srv.ApplyBotBatch(context.Background(), req)
@@ -233,9 +320,12 @@ func TestBotItemResultMapsAlreadyStoppedAsAccepted(t *testing.T) {
 func TestPlanBotBatchAllowsReplacementAtFullCapacityAndRejectsStaleGeneration(t *testing.T) {
 	capacity := bot.BotCapacitySnapshot{Ready: true, MaxBots: 1, ActiveBots: 1}
 	states := []bot.BotState{{ID: "bot-existing", Generation: 2, ConfigHash: "hash-2"}}
+	existingAssignment := validRunningAssignment("bot-existing", 3)
+	existingAssignment.ConfigHash = strings.Repeat("3", 64)
+	staleAssignment := validRunningAssignment("bot-stale", 1)
 	plan := planBotBatch([]*workerpb.BotAssignment{
-		{BotUuid: "bot-existing", Generation: 3, ConfigHash: "hash-3", DesiredState: "running"},
-		{BotUuid: "bot-stale", Generation: 1, DesiredState: "running"},
+		existingAssignment,
+		staleAssignment,
 	}, capacity, append(states, bot.BotState{ID: "bot-stale", Generation: 2}))
 
 	require.Equal(t, []int{0}, plan.createIndexes)
@@ -533,6 +623,21 @@ func writeGRPCTestBotWorker(t *testing.T, content string) string {
 	path := filepath.Join(t.TempDir(), "fake-bot-worker.js")
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 	return path
+}
+
+func validRunningAssignment(botID string, generation int64) *workerpb.BotAssignment {
+	return &workerpb.BotAssignment{
+		BotUuid: botID, InstanceUuid: "instance-1", SessionUuid: "session-1",
+		Generation: generation, DesiredState: "running", ConfigHash: strings.Repeat("a", 64),
+		Name: botID, Host: "127.0.0.1", Port: 25565,
+	}
+}
+
+func validStoppedAssignment(botID string, generation int64) *workerpb.BotAssignment {
+	return &workerpb.BotAssignment{
+		BotUuid: botID, SessionUuid: "session-1", Generation: generation,
+		DesiredState: "stopped", ConfigHash: strings.Repeat("b", 64),
+	}
 }
 
 func newBotFleetTestServer(f botFleetManager) *Server {

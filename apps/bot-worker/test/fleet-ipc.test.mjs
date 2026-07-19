@@ -448,6 +448,67 @@ test('旧 create/stop 不得覆盖或删除 Fleet-managed Bot', () => {
   assert.equal(controller.snapshots()[0].generation, 5)
 })
 
+test('Fleet envelope 在业务 identity 缺失时仍阻止 legacy create/stop 覆盖', () => {
+  const { controller, events, connections } = createHarness()
+  controller.handleCommand({
+    cmd: 'create-bots', requestId: 'minimal-request', batchId: 'minimal-batch',
+    idempotencyKey: 'minimal-key', bots: [{ id: 'minimal-managed' }],
+  })
+  assert.equal(connections.length, 1)
+
+  controller.handleCommand({
+    cmd: 'create-bots',
+    bots: [{ id: 'minimal-managed', name: 'legacy', host: '127.0.0.1', port: 25565 }],
+  })
+  controller.handleCommand({ cmd: 'stop-bots', botIds: ['minimal-managed'] })
+
+  assert.equal(connections.length, 1)
+  assert.equal(controller.metrics().activeBots, 1)
+  assert.equal(controller.snapshots()[0].id, 'minimal-managed')
+  assert.match(latest(events, 'bot-error').error, /Fleet RPC/)
+})
+
+test('高重复 legacy create/stop 不得越过 Fleet ownership 账本', async () => {
+  const { controller, connections } = createHarness()
+  controller.handleCommand({
+    cmd: 'create-bots', requestId: 'fleet-request-1', batchId: 'fleet-batch-1',
+    idempotencyKey: 'fleet-key-1', bots: [{ id: 'managed' }],
+  })
+
+  await Promise.all(Array.from({ length: 100 }, (_, index) => Promise.resolve().then(() => {
+    controller.handleCommand({
+      cmd: 'create-bots',
+      bots: [{ id: 'managed', name: `legacy-${index}`, host: '127.0.0.1', port: 25565 }],
+    })
+    controller.handleCommand({ cmd: 'stop-bots', botIds: ['managed'] })
+  })))
+
+  assert.equal(connections.length, 1)
+  assert.equal(controller.metrics().activeBots, 1)
+  assert.equal(controller.snapshots()[0].id, 'managed')
+})
+
+test('Fleet 高 generation 替换后仍保留 ownership', () => {
+  const { controller, connections } = createHarness()
+  controller.handleCommand({
+    cmd: 'create-bots', requestId: 'fleet-request-1', batchId: 'fleet-batch-1',
+    idempotencyKey: 'fleet-key-1', bots: [bot('managed', { generation: 8, configHash: 'hash-8' })],
+  })
+  controller.handleCommand({
+    cmd: 'create-bots', requestId: 'fleet-request-2', batchId: 'fleet-batch-2',
+    idempotencyKey: 'fleet-key-2', bots: [bot('managed', { generation: 9, configHash: 'hash-9' })],
+  })
+  controller.handleCommand({
+    cmd: 'create-bots',
+    bots: [{ id: 'managed', name: 'legacy', host: '127.0.0.1', port: 25565 }],
+  })
+  controller.handleCommand({ cmd: 'stop-bots', botIds: ['managed'] })
+
+  assert.equal(connections.length, 2)
+  assert.equal(controller.metrics().activeBots, 1)
+  assert.equal(controller.snapshots()[0].generation, 9)
+})
+
 test('snapshot 和 bot-state 携带冻结代际字段及单调 eventSeq', () => {
   const { controller, events, connections, clock } = createHarness()
   controller.handleCommand({ cmd: 'create-bots', bots: [bot('a')] })
