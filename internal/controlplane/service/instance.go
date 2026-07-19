@@ -1632,6 +1632,10 @@ func (s *InstanceService) GetInstanceEnv(id uint) (*InstanceEnvData, error) {
 		data.Note = "查找节点失败"
 		return data, nil
 	}
+	if node.Status != model.NodeStatusOnline {
+		data.Note = "节点离线，无法读取运行时环境"
+		return data, nil
+	}
 	client, ok := s.pool.Get(node.UUID)
 	if !ok {
 		data.Note = "节点未连接，无法读取运行时环境"
