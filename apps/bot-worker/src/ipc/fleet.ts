@@ -1,4 +1,6 @@
 import type { Behavior } from '../behavior/base.js'
+import { ScenarioRunner } from '../scenario/runner.js'
+import type { ScenarioBotCapabilities } from '../scenario/types.js'
 import type {
   ActionEvent,
   ActionSignal,
@@ -24,19 +26,28 @@ interface McBotLike {
   health: number
   food: number
   entity?: { position?: { x: number; y: number; z: number } }
+  pathfinder?: { setGoal(goal: null): void }
   on(event: string, listener: (...args: never[]) => void): unknown
   quit(): void
   chat(message: string): void
+}
+
+interface ScenarioCapabilityState {
+  spawned: boolean
+  endReason?: string
+  mcBot: McBotLike | null
+  capabilities: ScenarioBotCapabilities
 }
 
 interface BotInstance {
   config: BotConfig
   fleetManaged: boolean
   behavior: Behavior
+  scenarioRunner: ScenarioRunner | null
+  scenarioState: ScenarioCapabilityState | null
   status: string
   mcBot: McBotLike | null
   connectTimer: unknown | null
-  tickTimer: ReturnType<typeof setInterval> | null
 }
 
 interface CachedBatchResult {
@@ -64,6 +75,8 @@ export interface FleetControllerOptions {
   now?: () => number
   setTimeout?: (callback: () => void, delayMs: number) => unknown
   clearTimeout?: (timer: unknown) => void
+  setInterval?: (callback: () => void, intervalMs: number) => unknown
+  clearInterval?: (timer: unknown) => void
   idempotencyTtlMs?: number
   idempotencyCacheSize?: number
   signalRouter?: (signal: ActionSignal, config: BotConfig) => SignalItemResult
@@ -83,11 +96,15 @@ export class FleetController {
   private readonly now: () => number
   private readonly schedule: NonNullable<FleetControllerOptions['setTimeout']>
   private readonly cancelSchedule: NonNullable<FleetControllerOptions['clearTimeout']>
+  private readonly scheduleTick: NonNullable<FleetControllerOptions['setInterval']>
+  private readonly cancelTick: NonNullable<FleetControllerOptions['clearInterval']>
   private readonly idempotencyTtlMs: number
   private readonly idempotencyCacheSize: number
   private readonly signalRouter?: FleetControllerOptions['signalRouter']
   private readonly onBotStopped?: FleetControllerOptions['onBotStopped']
   private eventSeq = 0
+  private tickTimer: unknown | null = null
+  private tickInFlight = false
   private stopped = false
 
   constructor(options: FleetControllerOptions) {
@@ -100,6 +117,8 @@ export class FleetController {
     this.now = options.now ?? Date.now
     this.schedule = options.setTimeout ?? ((callback, delayMs) => setTimeout(callback, delayMs))
     this.cancelSchedule = options.clearTimeout ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>))
+    this.scheduleTick = options.setInterval ?? ((callback, intervalMs) => setInterval(callback, intervalMs))
+    this.cancelTick = options.clearInterval ?? ((timer) => clearInterval(timer as ReturnType<typeof setInterval>))
     this.idempotencyTtlMs = options.idempotencyTtlMs ?? DEFAULT_IDEMPOTENCY_TTL_MS
     this.idempotencyCacheSize = options.idempotencyCacheSize ?? DEFAULT_IDEMPOTENCY_CACHE_SIZE
     this.signalRouter = options.signalRouter
@@ -149,8 +168,9 @@ export class FleetController {
     }
   }
 
-  /** 路由场景引擎产生的冻结动作事件，不在本 FR 解释动作语义。 */
+  /** 路由场景引擎产生的冻结动作事件，并沿用 Fleet 统一事件序列。 */
   emitActionEvent(action: ActionEvent['action']): void {
+    this.eventSeq++
     this.sendEvent({ evt: 'action-event', action })
   }
 
@@ -175,6 +195,19 @@ export class FleetController {
       if (instance.status === 'connecting') connectingBots++
     }
     return { activeBots: this.bots.size, connectingBots, maxBots: this.maxBots }
+  }
+
+  /** 由单一集中 scheduler 驱动全部旧行为与 ScenarioRunner。 */
+  async tick(now = this.now()): Promise<void> {
+    if (this.tickInFlight || this.stopped) return
+    this.tickInFlight = true
+    try {
+      for (const [botId, instance] of this.bots) {
+        await this.tickInstance(botId, instance, now)
+      }
+    } finally {
+      this.tickInFlight = false
+    }
   }
 
   /** 返回当前全部 Bot 的完整运行快照。 */
@@ -214,8 +247,9 @@ export class FleetController {
   shutdown(): void {
     this.stopped = true
     for (const [botId, instance] of [...this.bots]) {
-      this.disposeInstance(botId, instance)
+      this.disposeInstance(botId, instance, 'Bot Worker 关闭')
     }
+    this.stopTickLoop()
     this.idempotencyCache.clear()
   }
 
@@ -302,7 +336,7 @@ export class FleetController {
     if (!existing && this.bots.size >= this.maxBots) {
       return this.rejected(config.id, 'capacity_insufficient', 'Bot Worker 容量不足', 'capacity_insufficient')
     }
-    if (existing) this.disposeInstance(config.id, existing)
+    if (existing) this.disposeInstance(config.id, existing, 'Bot assignment 已替换')
     try {
       this.installInstance(config, fleetManaged)
       return { botId: config.id, accepted: true, skipped: false, status: 'accepted' }
@@ -331,18 +365,18 @@ export class FleetController {
   private installInstance(config: BotConfig, fleetManaged: boolean): void {
     const behavior = this.createBehavior(config.id, config.behavior || 'idle', config.behaviorConfig)
     behavior.start()
+    const scenarioState = hasScenario(config.scenario) ? createScenarioCapabilityState(this.now) : null
+    const scenarioRunner = scenarioState ? this.createScenarioRunner(config, scenarioState) : null
     const instance: BotInstance = {
-      config,
-      fleetManaged,
-      behavior,
-      status: 'connecting',
-      mcBot: null,
-      connectTimer: null,
-      tickTimer: null,
+      config, fleetManaged, behavior, scenarioRunner, scenarioState,
+      status: 'connecting', mcBot: null, connectTimer: null,
     }
     this.bots.set(config.id, instance)
+    this.ensureTickLoop()
     this.emitBotState(config.id, instance)
-
+    if (scenarioRunner) {
+      void scenarioRunner.start().catch((error) => this.sendEvent({ evt: 'bot-error', botId: config.id, error: String(error) }))
+    }
     const connectAt = config.connectNotBeforeUnixMs ?? config.connectNotBefore ?? this.now()
     this.scheduleConnection(config.id, instance, connectAt)
   }
@@ -377,8 +411,9 @@ export class FleetController {
         return
       }
       instance.mcBot = mcBot
+      if (instance.scenarioState) instance.scenarioState.mcBot = mcBot
+      instance.behavior.setMcBot(mcBot as never)
       this.bindBotEvents(botId, instance, mcBot)
-      this.startBehaviorTicks(botId, instance, mcBot)
     } catch (error) {
       instance.status = 'error'
       this.emitBotState(botId, instance, { lastError: String(error), errorCode: 'connect_failed' })
@@ -390,8 +425,13 @@ export class FleetController {
     mcBot.on('spawn', (() => {
       if (this.bots.get(botId) !== instance) return
       instance.status = 'connected'
+      if (instance.scenarioState) {
+        instance.scenarioState.spawned = true
+        instance.scenarioState.endReason = undefined
+      }
       this.emitBotState(botId, instance)
       this.sendEvent({ evt: 'bot-event', botId, type: 'spawn', data: {} })
+      if (instance.scenarioRunner) void instance.scenarioRunner.tick(this.now())
     }) as (...args: never[]) => void)
     mcBot.on('chat', ((username: string, message: string) => {
       if (username === mcBot.username || this.bots.get(botId) !== instance) return
@@ -400,8 +440,10 @@ export class FleetController {
     mcBot.on('kicked', ((reason: string) => {
       if (this.bots.get(botId) !== instance) return
       instance.status = 'disconnected'
+      if (instance.scenarioState) instance.scenarioState.endReason = `kicked: ${reason}`
       this.emitBotState(botId, instance)
       this.sendEvent({ evt: 'bot-event', botId, type: 'kicked', data: { reason } })
+      if (instance.scenarioRunner) void instance.scenarioRunner.connectionEnded('kicked', this.now())
     }) as (...args: never[]) => void)
     mcBot.on('error', ((error: Error) => {
       if (this.bots.get(botId) !== instance) return
@@ -412,24 +454,49 @@ export class FleetController {
     mcBot.on('end', (() => {
       if (this.bots.get(botId) !== instance) return
       instance.status = 'disconnected'
+      if (instance.scenarioState) instance.scenarioState.endReason = 'end'
       this.emitBotState(botId, instance)
+      if (instance.scenarioRunner) void instance.scenarioRunner.connectionEnded('end', this.now())
     }) as (...args: never[]) => void)
   }
 
-  private startBehaviorTicks(botId: string, instance: BotInstance, mcBot: McBotLike): void {
-    instance.tickTimer = setInterval(() => {
-      if (this.bots.get(botId) !== instance) {
-        if (instance.tickTimer) clearInterval(instance.tickTimer)
-        instance.tickTimer = null
-        return
-      }
-      if (instance.status !== 'connected') return
-      instance.behavior.setMcBot(mcBot as never)
-      instance.behavior.tick().catch((error: Error) => {
-        this.sendEvent({ evt: 'bot-error', botId, error: error.message })
-      })
-    }, 250)
-    instance.tickTimer.unref?.()
+  private async tickInstance(botId: string, instance: BotInstance, now: number): Promise<void> {
+    if (this.bots.get(botId) !== instance) return
+    if (instance.scenarioRunner) {
+      await instance.scenarioRunner.tick(now)
+      return
+    }
+    if (instance.status !== 'connected') return
+    try {
+      await instance.behavior.tick()
+    } catch (error) {
+      this.sendEvent({ evt: 'bot-error', botId, error: String(error) })
+    }
+  }
+
+  private createScenarioRunner(
+    config: BotConfig,
+    state: ScenarioCapabilityState
+  ): ScenarioRunner {
+    return new ScenarioRunner({
+      botId: config.id, botName: config.name || config.id, username: config.username || config.name || config.id,
+      runId: config.sessionId ?? '', generation: config.generation ?? 0, cohortKey: config.cohortKey ?? '',
+      scenario: config.scenario, resumeStepId: config.resumeStepId,
+      correlationSeed: config.correlationSeed, capabilities: state.capabilities,
+      emitActionEvent: (action) => this.emitActionEvent(action),
+    })
+  }
+
+  private ensureTickLoop(): void {
+    if (this.tickTimer !== null || this.stopped) return
+    this.tickTimer = this.scheduleTick(() => { void this.tick(this.now()) }, 250)
+    ;(this.tickTimer as { unref?: () => void }).unref?.()
+  }
+
+  private stopTickLoop(): void {
+    if (this.tickTimer === null) return
+    this.cancelTick(this.tickTimer)
+    this.tickTimer = null
   }
 
   private stopBots(command: StopBotsCommand): void {
@@ -455,10 +522,11 @@ export class FleetController {
     if (this.isStaleStop(instance.config, command.generation)) {
       return this.rejected(botId, 'stale_generation', '停止 generation 已过期', 'stale')
     }
-    this.stopInstanceResources(instance)
+    this.stopInstanceResources(instance, command.reason ?? 'Bot 已停止')
     instance.status = 'stopped'
     this.emitBotState(botId, instance)
     this.bots.delete(botId)
+    if (this.bots.size === 0) this.stopTickLoop()
     this.onBotStopped?.({
       botId,
       generation: command.generation,
@@ -474,35 +542,41 @@ export class FleetController {
   }
 
   private signalActions(requestId: string, signals: ActionSignal[]): void {
-    const signalResults = signals.map((signal) => {
-      const instance = this.bots.get(signal.botId)
-      if (!instance) return this.rejectedSignal(signal.signalId, 'ephemeral_unavailable', 'Bot 不存在')
-      if (signal.generation !== 0 && instance.config.generation !== undefined && signal.generation !== instance.config.generation) {
-        return this.rejectedSignal(signal.signalId, 'generation_conflict', 'Bot generation 不匹配', 'conflict')
-      }
-      return this.signalRouter?.(signal, instance.config) ?? {
-        signalId: signal.signalId,
-        accepted: true,
-        skipped: false,
-        status: 'accepted',
-      }
-    })
-    this.sendEvent({ evt: 'signal-result', requestId, signalResults })
+    const results = signals.map((signal) => this.routeSignal(signal))
+    if (results.some(isSignalPromise)) {
+      void Promise.all(results).then((signalResults) => {
+        this.sendEvent({ evt: 'signal-result', requestId, signalResults })
+      })
+      return
+    }
+    this.sendEvent({ evt: 'signal-result', requestId, signalResults: results })
   }
 
-  private disposeInstance(botId: string, instance: BotInstance): void {
-    this.stopInstanceResources(instance)
+  private routeSignal(signal: ActionSignal): SignalItemResult | Promise<SignalItemResult> {
+    const instance = this.bots.get(signal.botId)
+    if (!instance) return this.rejectedSignal(signal.signalId, 'ephemeral_unavailable', 'Bot 不存在')
+    if (instance.scenarioRunner) return instance.scenarioRunner.signal(signal)
+    if (signal.generation !== 0 && instance.config.generation !== undefined && signal.generation !== instance.config.generation) {
+      return this.rejectedSignal(signal.signalId, 'generation_conflict', 'Bot generation 不匹配', 'conflict')
+    }
+    return this.signalRouter?.(signal, instance.config) ?? {
+      signalId: signal.signalId, accepted: true, skipped: false, status: 'accepted',
+    }
+  }
+
+  private disposeInstance(botId: string, instance: BotInstance, reason: string): void {
+    this.stopInstanceResources(instance, reason)
     this.bots.delete(botId)
+    if (this.bots.size === 0) this.stopTickLoop()
   }
 
-  private stopInstanceResources(instance: BotInstance): void {
+  private stopInstanceResources(instance: BotInstance, reason: string): void {
     if (instance.connectTimer !== null) {
       this.cancelSchedule(instance.connectTimer)
       instance.connectTimer = null
     }
-    if (instance.tickTimer) {
-      clearInterval(instance.tickTimer)
-      instance.tickTimer = null
+    if (instance.scenarioRunner) {
+      void instance.scenarioRunner.cancel(reason).then(() => instance.scenarioRunner?.dispose())
     }
     instance.behavior.stop()
     if (!instance.mcBot) return
@@ -512,6 +586,7 @@ export class FleetController {
       // 连接已经关闭时 quit 可能抛错，清理仍需继续。
     }
     instance.mcBot = null
+    if (instance.scenarioState) instance.scenarioState.mcBot = null
   }
 
   private snapshot(botId: string, instance: BotInstance): BotStateSnapshot {
@@ -526,7 +601,7 @@ export class FleetController {
       workerEpoch: this.workerEpoch,
       workerEpochGeneration: this.workerEpochGeneration,
       eventSeq: ++this.eventSeq,
-      currentStepId: instance.config.resumeStepId,
+      currentStepId: instance.scenarioRunner?.currentStepId ?? instance.config.resumeStepId,
       reconnectCount: 0,
       observedAt: this.now(),
     }
@@ -592,6 +667,35 @@ export class FleetController {
   ): SignalItemResult {
     return { signalId, accepted: false, skipped: true, status, errorCode, error }
   }
+}
+
+function hasScenario(value: unknown): boolean {
+  if (value === undefined || value === null) return false
+  if (typeof value === 'string') return value.trim() !== ''
+  return true
+}
+
+function createScenarioCapabilityState(now: () => number): ScenarioCapabilityState {
+  const state = {
+    spawned: false,
+    endReason: undefined,
+    mcBot: null,
+  } as ScenarioCapabilityState
+  state.capabilities = {
+    now,
+    isSpawned: () => state.spawned,
+    connectionEndReason: () => state.endReason,
+    chat: (message) => {
+      if (!state.mcBot) throw new Error('Bot 尚未连接，无法发送命令')
+      state.mcBot.chat(message)
+    },
+    clearPathfinderGoal: () => state.mcBot?.pathfinder?.setGoal(null),
+  }
+  return state
+}
+
+function isSignalPromise(value: SignalItemResult | Promise<SignalItemResult>): value is Promise<SignalItemResult> {
+  return value instanceof Promise
 }
 
 function sanitizeStopReason(reason?: string): string | undefined {
