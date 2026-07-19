@@ -200,6 +200,7 @@ func (s *ScenarioActionEventService) authoritativeBarrier(ctx context.Context, e
 	}
 	definition := BarrierDefinition{
 		Scope: scope, Release: action.Release, TimeoutPolicy: policy, Deadline: deadline,
+		TimeoutBudget: time.Duration(*action.TimeoutMS) * time.Millisecond,
 	}
 	return bot, scope, definition, "", nil
 }
@@ -249,8 +250,8 @@ func (s *ScenarioActionEventService) dispatchReady() {
 		return
 	}
 	for _, dispatch := range s.takeReadyDispatches() {
-		report := s.router.Route(dispatch.ctx, barrierReleaseInputs(dispatch.scope, dispatch.release))
-		s.barriers.CompleteRelease(dispatch.scope, report, s.barriers.clock.Now().UTC())
+		report := s.router.Route(dispatch.ctx, barrierSignalInputs(dispatch.scope, dispatch.release))
+		s.barriers.CompleteRelease(dispatch.scope, dispatch.release.SignalType, dispatch.release.ReleaseAtUnixMS, report, s.barriers.clock.Now().UTC())
 	}
 }
 
@@ -271,13 +272,17 @@ func (s *ScenarioActionEventService) takeReadyDispatches() []barrierSignalDispat
 	return dispatches
 }
 
-func barrierReleaseInputs(scope BarrierScope, release *BarrierRelease) []ActionSignalInput {
-	payload, _ := json.Marshal(map[string]any{"round": scope.Round, "releaseAtUnixMs": release.ReleaseAtUnixMS})
+func barrierSignalInputs(scope BarrierScope, release *BarrierRelease) []ActionSignalInput {
+	payloadField := "releaseAtUnixMs"
+	if release.SignalType == "barrier-fail" {
+		payloadField = "failAtUnixMs"
+	}
+	payload, _ := json.Marshal(map[string]any{"round": scope.Round, payloadField: release.ReleaseAtUnixMS})
 	inputs := make([]ActionSignalInput, 0, len(release.Pending))
 	for _, participant := range release.Pending {
 		inputs = append(inputs, ActionSignalInput{
 			RunID: scope.RunID, BotUUID: participant.BotUUID, ActionRunID: participant.ActionRunID,
-			CorrelationToken: participant.CorrelationToken, Type: "barrier-release", Payload: payload,
+			CorrelationToken: participant.CorrelationToken, Type: release.SignalType, Payload: payload,
 		})
 	}
 	return inputs
@@ -289,8 +294,8 @@ func (s *ScenarioActionEventService) RetryBarrierRelease(ctx context.Context, sc
 	if release == nil || len(release.Pending) == 0 {
 		return ActionSignalReport{}
 	}
-	report := s.router.Route(ctx, barrierReleaseInputs(scope, release))
-	s.barriers.CompleteRelease(scope, report, s.barriers.clock.Now().UTC())
+	report := s.router.Route(ctx, barrierSignalInputs(scope, release))
+	s.barriers.CompleteRelease(scope, release.SignalType, release.ReleaseAtUnixMS, report, s.barriers.clock.Now().UTC())
 	return report
 }
 

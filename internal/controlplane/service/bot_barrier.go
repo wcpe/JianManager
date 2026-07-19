@@ -31,6 +31,7 @@ type BarrierDefinition struct {
 	Release       ScenarioBarrierRelease
 	TimeoutPolicy string
 	Deadline      time.Time
+	TimeoutBudget time.Duration
 }
 
 // BarrierArrival 是单个 Bot 当前 generation 的屏障到达事件。
@@ -53,6 +54,7 @@ type BarrierParticipant struct {
 // BarrierRelease 是可重复投递且时间一致的屏障释放快照。
 type BarrierRelease struct {
 	Round           int64
+	SignalType      string
 	ReleaseAtUnixMS int64
 	Pending         []BarrierParticipant
 }
@@ -81,14 +83,17 @@ type BarrierResult struct {
 }
 
 type barrierState struct {
-	definition  BarrierDefinition
-	arrivals    map[string]BarrierParticipant
-	pending     map[string]BarrierParticipant
-	releasedAt  int64
-	timedOut    bool
-	dispatching bool
-	nextAttempt time.Time
-	backoff     time.Duration
+	definition      BarrierDefinition
+	arrivals        map[string]BarrierParticipant
+	pending         map[string]BarrierParticipant
+	releasedAt      int64
+	failureAt       int64
+	signalLead      time.Duration
+	timeoutPrepared bool
+	timedOut        bool
+	dispatching     bool
+	nextAttempt     time.Time
+	backoff         time.Duration
 }
 
 type barrierLoadCall struct {
@@ -173,6 +178,7 @@ func (c *BarrierCoordinator) finishBarrierLoad(definition BarrierDefinition, exp
 		if _, exists := c.states[definition.Scope]; !exists {
 			c.states[definition.Scope] = &barrierState{
 				definition: definition, arrivals: make(map[string]BarrierParticipant), pending: make(map[string]BarrierParticipant),
+				signalLead: barrierSignalLead(definition, c.clock.Now().UTC()),
 			}
 		}
 	}
@@ -186,6 +192,17 @@ func loadExpectedBots(ctx context.Context, fallback map[string]int64, loader fun
 		return fallback, nil
 	}
 	return loader(ctx)
+}
+
+func barrierSignalLead(definition BarrierDefinition, now time.Time) time.Duration {
+	budget := definition.TimeoutBudget
+	if budget <= 0 {
+		budget = definition.Deadline.Sub(now)
+	}
+	if budget <= 0 {
+		return 0
+	}
+	return min(barrierReleaseLead, budget/4)
 }
 
 func validateBarrierDefinition(definition BarrierDefinition) error {
@@ -234,7 +251,7 @@ func validateBarrierRelease(release ScenarioBarrierRelease, expected int) error 
 	return nil
 }
 
-// Arrive 按 Bot+generation 幂等计数；释放后重连仍返回同一 releaseAt。
+// Arrive 按 Bot+generation 幂等计数；释放或失败后重连仍复用同一绝对执行时间。
 func (c *BarrierCoordinator) Arrive(arrival BarrierArrival) BarrierResult {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -242,30 +259,62 @@ func (c *BarrierCoordinator) Arrive(arrival BarrierArrival) BarrierResult {
 	if state == nil {
 		return BarrierResult{Decision: BarrierUnknown}
 	}
+	if decision := validateBarrierArrival(state, arrival); decision != "" {
+		return c.result(state, decision)
+	}
+	return c.arriveLocked(state, arrival, c.clock.Now().UTC())
+}
+
+func validateBarrierArrival(state *barrierState, arrival BarrierArrival) BarrierDecision {
 	expectedGeneration, expected := state.definition.ExpectedBots[arrival.BotUUID]
 	if !expected {
-		return c.result(state, BarrierUnexpectedBot)
+		return BarrierUnexpectedBot
 	}
 	if arrival.Generation != expectedGeneration {
-		return c.result(state, BarrierStaleGeneration)
+		return BarrierStaleGeneration
 	}
+	return ""
+}
+
+func (c *BarrierCoordinator) arriveLocked(state *barrierState, arrival BarrierArrival, now time.Time) BarrierResult {
+	c.prepareTimeoutSignalLocked(state, now)
+	c.finalizeTimeoutLocked(state, now)
+	participant := participantFromArrival(arrival)
 	if state.timedOut {
+		c.rememberPostDecisionArrival(state, participant, now)
 		return c.result(state, BarrierTimedOut)
 	}
-	if state.releasedAt > 0 {
-		state.pending[arrival.BotUUID] = participantFromArrival(arrival)
-		state.nextAttempt = c.clock.Now().UTC()
+	if state.releasedAt > 0 && !state.timeoutPrepared {
+		c.rememberPostDecisionArrival(state, participant, now)
 		return c.result(state, BarrierAlreadyReleased)
 	}
 	if _, duplicate := state.arrivals[arrival.BotUUID]; duplicate {
+		state.arrivals[arrival.BotUUID] = participant
+		if state.signalType() != "" {
+			state.pending[arrival.BotUUID] = participant
+			state.nextAttempt = now
+		}
 		return c.result(state, BarrierDuplicate)
 	}
-	state.arrivals[arrival.BotUUID] = participantFromArrival(arrival)
+	state.arrivals[arrival.BotUUID] = participant
+	if state.failureAt > 0 || state.timeoutPrepared {
+		state.pending[arrival.BotUUID] = participant
+		state.nextAttempt = now
+	}
 	if len(state.arrivals) < barrierThreshold(state.definition) {
 		return c.result(state, BarrierWaiting)
 	}
-	c.release(state, c.clock.Now().UTC())
+	c.release(state, now)
 	return c.result(state, BarrierReleased)
+}
+
+func (c *BarrierCoordinator) rememberPostDecisionArrival(state *barrierState, participant BarrierParticipant, now time.Time) {
+	state.arrivals[participant.BotUUID] = participant
+	state.pending[participant.BotUUID] = participant
+	state.nextAttempt = now
+	if state.backoff <= 0 {
+		state.backoff = barrierRetryMin
+	}
 }
 
 func barrierThreshold(definition BarrierDefinition) int {
@@ -280,14 +329,27 @@ func barrierThreshold(definition BarrierDefinition) int {
 }
 
 func (c *BarrierCoordinator) release(state *barrierState, now time.Time) {
-	if state.releasedAt == 0 {
-		state.releasedAt = now.Add(barrierReleaseLead).UnixMilli()
+	if state.releasedAt == 0 || state.timeoutPrepared {
+		remaining := state.definition.Deadline.Sub(now)
+		if remaining < state.signalLead {
+			state.releasedAt = now.UnixMilli()
+		} else {
+			state.releasedAt = now.Add(min(state.signalLead, remaining)).UnixMilli()
+		}
 	}
+	state.failureAt = 0
+	state.timeoutPrepared = false
+	state.timedOut = false
+	c.resetPending(state)
+	state.nextAttempt = now
+	state.backoff = barrierRetryMin
+}
+
+func (c *BarrierCoordinator) resetPending(state *barrierState) {
+	clear(state.pending)
 	for botUUID, participant := range state.arrivals {
 		state.pending[botUUID] = participant
 	}
-	state.nextAttempt = now
-	state.backoff = barrierRetryMin
 }
 
 // CheckTimeout 使用注入时钟执行 fail 或 release-arrived 策略。
@@ -309,15 +371,54 @@ func (c *BarrierCoordinator) CheckTimeout(scope BarrierScope) BarrierResult {
 }
 
 func (c *BarrierCoordinator) checkTimeoutLocked(state *barrierState, now time.Time) BarrierDecision {
-	if state.releasedAt > 0 || state.timedOut || now.Before(state.definition.Deadline) {
+	if (state.releasedAt > 0 && !state.timeoutPrepared) || state.timedOut || now.Before(state.definition.Deadline) {
 		return ""
 	}
+	c.finalizeTimeoutLocked(state, now)
 	if state.definition.TimeoutPolicy == "release-arrived" {
-		c.release(state, now)
 		return BarrierReleasedOnTimeout
 	}
-	state.timedOut = true
 	return BarrierTimedOut
+}
+
+func (c *BarrierCoordinator) prepareTimeoutSignalLocked(state *barrierState, now time.Time) {
+	if state.releasedAt > 0 || state.failureAt > 0 || state.timedOut {
+		return
+	}
+	dispatchAt := state.definition.Deadline.Add(-state.signalLead)
+	if now.Before(dispatchAt) {
+		return
+	}
+	if state.definition.TimeoutPolicy == "release-arrived" {
+		state.releasedAt = state.definition.Deadline.UnixMilli()
+		state.timeoutPrepared = true
+	} else {
+		state.failureAt = state.definition.Deadline.UnixMilli()
+	}
+	c.resetPending(state)
+	state.nextAttempt = now
+	state.backoff = barrierRetryMin
+}
+
+func (c *BarrierCoordinator) finalizeTimeoutLocked(state *barrierState, now time.Time) {
+	if (state.releasedAt > 0 && !state.timeoutPrepared) || state.timedOut || now.Before(state.definition.Deadline) {
+		return
+	}
+	if state.timeoutPrepared {
+		state.timeoutPrepared = false
+		return
+	}
+	if state.definition.TimeoutPolicy == "release-arrived" {
+		state.releasedAt = state.definition.Deadline.UnixMilli()
+	} else {
+		state.failureAt = state.definition.Deadline.UnixMilli()
+		state.timedOut = true
+	}
+	c.resetPending(state)
+	state.nextAttempt = now
+	if state.backoff <= 0 {
+		state.backoff = barrierRetryMin
+	}
 }
 
 // TakeReady 集中扫描 deadline 与待投递项，并声明本轮锁外 RPC 所有权。
@@ -326,8 +427,9 @@ func (c *BarrierCoordinator) TakeReady(now time.Time) map[BarrierScope]*BarrierR
 	defer c.mu.Unlock()
 	ready := make(map[BarrierScope]*BarrierRelease)
 	for scope, state := range c.states {
-		c.checkTimeoutLocked(state, now)
-		if state.releasedAt == 0 || state.dispatching || len(state.pending) == 0 || now.Before(state.nextAttempt) {
+		c.prepareTimeoutSignalLocked(state, now)
+		c.finalizeTimeoutLocked(state, now)
+		if state.signalType() == "" || state.dispatching || len(state.pending) == 0 || now.Before(state.nextAttempt) {
 			continue
 		}
 		state.dispatching = true
@@ -336,12 +438,34 @@ func (c *BarrierCoordinator) TakeReady(now time.Time) map[BarrierScope]*BarrierR
 	return ready
 }
 
+func (state *barrierState) signalType() string {
+	if state.releasedAt > 0 {
+		return "barrier-release"
+	}
+	if state.failureAt > 0 {
+		return "barrier-fail"
+	}
+	return ""
+}
+
+func (state *barrierState) signalAt() int64 {
+	if state.releasedAt > 0 {
+		return state.releasedAt
+	}
+	return state.failureAt
+}
+
 // CompleteRelease 合并逐项回执，失败项保留并按有界退避重试。
-func (c *BarrierCoordinator) CompleteRelease(scope BarrierScope, report ActionSignalReport, now time.Time) {
+func (c *BarrierCoordinator) CompleteRelease(scope BarrierScope, signalType string, executeAt int64, report ActionSignalReport, now time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	state := c.states[scope]
 	if state == nil {
+		return
+	}
+	state.dispatching = false
+	if signalType != state.signalType() || executeAt != state.signalAt() {
+		state.nextAttempt = now
 		return
 	}
 	for _, item := range report.Items {
@@ -349,7 +473,6 @@ func (c *BarrierCoordinator) CompleteRelease(scope BarrierScope, report ActionSi
 			delete(state.pending, item.Input.BotUUID)
 		}
 	}
-	state.dispatching = false
 	if len(state.pending) == 0 {
 		return
 	}
@@ -374,7 +497,7 @@ func (c *BarrierCoordinator) PendingRelease(scope BarrierScope) *BarrierRelease 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	state := c.states[scope]
-	if state == nil || state.releasedAt == 0 {
+	if state == nil || state.signalType() == "" {
 		return nil
 	}
 	return releaseSnapshot(scope, state)
@@ -404,7 +527,7 @@ func releaseSnapshot(scope BarrierScope, state *barrierState) *BarrierRelease {
 	for _, botUUID := range botUUIDs {
 		pending = append(pending, state.pending[botUUID])
 	}
-	return &BarrierRelease{Round: scope.Round, ReleaseAtUnixMS: state.releasedAt, Pending: pending}
+	return &BarrierRelease{Round: scope.Round, SignalType: state.signalType(), ReleaseAtUnixMS: state.signalAt(), Pending: pending}
 }
 
 func (c *BarrierCoordinator) result(state *barrierState, decision BarrierDecision) BarrierResult {
@@ -444,7 +567,8 @@ func (c *BarrierCoordinator) ScheduledCount() int {
 	defer c.mu.Unlock()
 	count := 0
 	for _, state := range c.states {
-		if !state.timedOut && (state.releasedAt == 0 || len(state.pending) > 0 || state.dispatching) {
+		needsDeadline := state.releasedAt == 0 && !state.timedOut
+		if needsDeadline || len(state.pending) > 0 || state.dispatching {
 			count++
 		}
 	}

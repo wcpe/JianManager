@@ -38,7 +38,7 @@ func TestBarrierCoordinator_AllDuplicateLateReconnectAndGeneration(t *testing.T)
 
 	first := coordinator.Arrive(BarrierArrival{Scope: scope, BotUUID: "bot-a", Generation: 3, ActionRunID: "action-a", CorrelationToken: "token-a"})
 	require.Equal(t, BarrierWaiting, first.Decision)
-	duplicate := coordinator.Arrive(BarrierArrival{Scope: scope, BotUUID: "bot-a", Generation: 3, ActionRunID: "action-a", CorrelationToken: "token-a"})
+	duplicate := coordinator.Arrive(BarrierArrival{Scope: scope, BotUUID: "bot-a", Generation: 3, ActionRunID: "action-a-reconnect", CorrelationToken: "token-a-reconnect"})
 	require.Equal(t, BarrierDuplicate, duplicate.Decision)
 	stale := coordinator.Arrive(BarrierArrival{Scope: scope, BotUUID: "bot-b", Generation: 3, ActionRunID: "action-b", CorrelationToken: "token-b"})
 	require.Equal(t, BarrierStaleGeneration, stale.Decision)
@@ -49,6 +49,7 @@ func TestBarrierCoordinator_AllDuplicateLateReconnectAndGeneration(t *testing.T)
 	require.Equal(t, int64(1), released.Release.Round)
 	require.Equal(t, clock.now.Add(barrierReleaseLead).UnixMilli(), released.Release.ReleaseAtUnixMS)
 	require.Len(t, released.Release.Pending, 2)
+	require.Equal(t, "action-a-reconnect", released.Release.Pending[0].ActionRunID)
 
 	coordinator.MarkDelivered(scope, []string{"bot-a", "bot-b"})
 	reconnect := coordinator.Arrive(BarrierArrival{Scope: scope, BotUUID: "bot-a", Generation: 3, ActionRunID: "action-a", CorrelationToken: "token-a"})
@@ -88,6 +89,115 @@ func TestBarrierCoordinator_CountAndPercentCeil(t *testing.T) {
 	}
 }
 
+func TestBarrierCoordinator_FreezesFirstDeadlineAndNeverSchedulesPastIt(t *testing.T) {
+	start := time.Date(2026, 7, 19, 13, 0, 0, 0, time.UTC)
+	clock := &botLoadFakeClock{now: start}
+	coordinator := NewBarrierCoordinator(clock)
+	scope := BarrierScope{RunID: "run-deadline", CohortKey: "combat", BarrierKey: "ready", Round: 1}
+	expected := map[string]int64{"bot-000": 1, "bot-001": 1}
+	release := ScenarioBarrierRelease{Type: "all"}
+	require.NoError(t, coordinator.Ensure(BarrierDefinition{
+		Scope: scope, ExpectedBots: expected, Release: release, Deadline: start.Add(100 * time.Millisecond),
+	}))
+	require.NoError(t, coordinator.Ensure(BarrierDefinition{
+		Scope: scope, ExpectedBots: expected, Release: release, Deadline: start.Add(150 * time.Millisecond),
+	}))
+	require.Equal(t, BarrierWaiting, coordinator.Arrive(barrierTestArrival(scope, 0)).Decision)
+
+	clock.Advance(50 * time.Millisecond)
+	result := coordinator.Arrive(barrierTestArrival(scope, 1))
+	require.Equal(t, BarrierReleased, result.Decision)
+	require.NotNil(t, result.Release)
+	require.LessOrEqual(t, result.Release.ReleaseAtUnixMS, start.Add(100*time.Millisecond).UnixMilli())
+}
+
+func TestBarrierCoordinator_LastArrivalInsideLeadReleasesImmediately(t *testing.T) {
+	start := time.Date(2026, 7, 19, 13, 0, 0, 0, time.UTC)
+	clock := &botLoadFakeClock{now: start}
+	coordinator := NewBarrierCoordinator(clock)
+	scope := BarrierScope{RunID: "run-short", CohortKey: "combat", BarrierKey: "ready", Round: 1}
+	require.NoError(t, coordinator.Ensure(BarrierDefinition{
+		Scope: scope, ExpectedBots: map[string]int64{"bot-000": 1, "bot-001": 1},
+		Release: ScenarioBarrierRelease{Type: "all"}, Deadline: start.Add(100 * time.Millisecond),
+	}))
+	coordinator.Arrive(barrierTestArrival(scope, 0))
+	clock.Advance(90 * time.Millisecond)
+
+	result := coordinator.Arrive(barrierTestArrival(scope, 1))
+	require.Equal(t, BarrierReleased, result.Decision)
+	require.Equal(t, clock.now.UnixMilli(), result.Release.ReleaseAtUnixMS)
+}
+
+func TestBarrierCoordinator_PreSchedulesTimeoutSignalsBeforeUnifiedDeadline(t *testing.T) {
+	for _, policy := range []string{"fail", "release-arrived"} {
+		t.Run(policy, func(t *testing.T) {
+			start := time.Date(2026, 7, 19, 13, 0, 0, 0, time.UTC)
+			clock := &botLoadFakeClock{now: start}
+			coordinator := NewBarrierCoordinator(clock)
+			scope := BarrierScope{RunID: "run-pre-" + policy, CohortKey: "combat", BarrierKey: "ready", Round: 1}
+			require.NoError(t, coordinator.Ensure(BarrierDefinition{
+				Scope: scope, ExpectedBots: map[string]int64{"bot-000": 1, "bot-001": 1},
+				Release: ScenarioBarrierRelease{Type: "all"}, TimeoutPolicy: policy, Deadline: start.Add(100 * time.Millisecond),
+			}))
+			coordinator.Arrive(barrierTestArrival(scope, 0))
+
+			clock.Advance(75 * time.Millisecond)
+			ready := coordinator.TakeReady(clock.now)
+			require.Contains(t, ready, scope, "100ms timeout 应在截止前动态 lead 预投递")
+			require.Equal(t, start.Add(100*time.Millisecond).UnixMilli(), ready[scope].ReleaseAtUnixMS)
+		})
+	}
+}
+
+func TestBarrierCoordinator_ThresholdOverridesPreparedTimeoutReleaseImmediately(t *testing.T) {
+	start := time.Date(2026, 7, 19, 13, 0, 0, 0, time.UTC)
+	clock := &botLoadFakeClock{now: start}
+	coordinator := NewBarrierCoordinator(clock)
+	scope := BarrierScope{RunID: "run-prepared-release", CohortKey: "combat", BarrierKey: "ready", Round: 1}
+	require.NoError(t, coordinator.Ensure(BarrierDefinition{
+		Scope: scope, ExpectedBots: map[string]int64{"bot-000": 1, "bot-001": 1},
+		Release: ScenarioBarrierRelease{Type: "all"}, TimeoutPolicy: "release-arrived",
+		Deadline: start.Add(100 * time.Millisecond), TimeoutBudget: 100 * time.Millisecond,
+	}))
+	coordinator.Arrive(barrierTestArrival(scope, 0))
+	clock.Advance(75 * time.Millisecond)
+	prepared := coordinator.TakeReady(clock.now)[scope]
+	require.NotNil(t, prepared)
+	require.Equal(t, start.Add(100*time.Millisecond).UnixMilli(), prepared.ReleaseAtUnixMS)
+
+	clock.Advance(15 * time.Millisecond)
+	released := coordinator.Arrive(barrierTestArrival(scope, 1))
+	require.Equal(t, BarrierReleased, released.Decision)
+	require.Equal(t, clock.now.UnixMilli(), released.Release.ReleaseAtUnixMS)
+
+	coordinator.CompleteRelease(scope, prepared.SignalType, prepared.ReleaseAtUnixMS, ActionSignalReport{Items: []ActionSignalReceipt{{
+		Input: ActionSignalInput{BotUUID: "bot-000"}, Accepted: true,
+	}}}, clock.now)
+	pending := coordinator.PendingRelease(scope)
+	require.Equal(t, clock.now.UnixMilli(), pending.ReleaseAtUnixMS)
+	require.Len(t, pending.Pending, 2, "旧预调度回执不能误确认新的立即 releaseAt")
+}
+
+func TestBarrierCoordinator_FailLateArrivalGetsImmediateCorrelatedDispatch(t *testing.T) {
+	start := time.Date(2026, 7, 19, 13, 0, 0, 0, time.UTC)
+	clock := &botLoadFakeClock{now: start}
+	coordinator := NewBarrierCoordinator(clock)
+	scope := BarrierScope{RunID: "run-fail-late", CohortKey: "combat", BarrierKey: "ready", Round: 1}
+	require.NoError(t, coordinator.Ensure(BarrierDefinition{
+		Scope: scope, ExpectedBots: map[string]int64{"bot-000": 1, "bot-001": 1},
+		Release: ScenarioBarrierRelease{Type: "all"}, TimeoutPolicy: "fail", Deadline: start.Add(100 * time.Millisecond),
+	}))
+	coordinator.Arrive(barrierTestArrival(scope, 0))
+	clock.Advance(100 * time.Millisecond)
+	require.Equal(t, BarrierTimedOut, coordinator.CheckTimeout(scope).Decision)
+
+	late := coordinator.Arrive(barrierTestArrival(scope, 1))
+	require.Equal(t, BarrierTimedOut, late.Decision)
+	ready := coordinator.TakeReady(clock.now)
+	require.Contains(t, ready, scope)
+	require.Len(t, ready[scope].Pending, 2)
+}
+
 func TestBarrierCoordinator_TimeoutPoliciesAndStopCleanup(t *testing.T) {
 	for _, policy := range []string{"fail", "release-arrived"} {
 		t.Run(policy, func(t *testing.T) {
@@ -95,10 +205,10 @@ func TestBarrierCoordinator_TimeoutPoliciesAndStopCleanup(t *testing.T) {
 			coordinator := NewBarrierCoordinator(clock)
 			scope := BarrierScope{RunID: "run-" + policy, CohortKey: "combat", BarrierKey: "ready", Round: 1}
 			require.NoError(t, coordinator.Ensure(BarrierDefinition{
-				Scope: scope, ExpectedBots: map[string]int64{"bot-a": 1, "bot-b": 1},
+				Scope: scope, ExpectedBots: map[string]int64{"bot-000": 1, "bot-001": 1},
 				Release: ScenarioBarrierRelease{Type: "all"}, TimeoutPolicy: policy, Deadline: clock.now.Add(time.Second),
 			}))
-			coordinator.Arrive(BarrierArrival{Scope: scope, BotUUID: "bot-a", Generation: 1, ActionRunID: "action-a", CorrelationToken: "token-a"})
+			coordinator.Arrive(barrierTestArrival(scope, 0))
 			clock.Advance(2 * time.Second)
 			result := coordinator.CheckTimeout(scope)
 			if policy == "fail" {
@@ -241,6 +351,21 @@ func TestActionSignalRouter_PartialFailureCanRetryWithStableReceiptIdentity(t *t
 	require.True(t, second.Items[0].Skipped)
 	require.False(t, second.Items[0].Retriable)
 	require.Equal(t, first.Items[1].SignalID, second.Items[0].SignalID)
+}
+
+func TestActionSignalRouter_BarrierDecisionForTerminalActionIsIdempotentSkip(t *testing.T) {
+	router := NewActionSignalRouter(fakeWaitingActionFinder{waiting: map[string]*WaitingAction{}}, &fakeActionSignalClient{}, nil)
+	for _, signalType := range []string{"barrier-release", "barrier-fail"} {
+		input := ActionSignalInput{
+			RunID: "run", BotUUID: "bot-a", ActionRunID: "action-a", CorrelationToken: "token-a",
+			Type: signalType, Payload: []byte(`{"round":1}`),
+		}
+		report := router.Route(context.Background(), []ActionSignalInput{input})
+		require.Len(t, report.Items, 1)
+		require.True(t, report.Items[0].Skipped)
+		require.False(t, report.Items[0].Retriable)
+		require.Empty(t, report.Items[0].ErrorCode)
+	}
 }
 
 func TestActionSignalRouter_ReportsNodeCallFailureAsRetriable(t *testing.T) {
@@ -575,6 +700,60 @@ func TestScenarioActionEventService_FreezesExpectedSetOnlyOnFirstArrival(t *test
 	require.NoError(t, err)
 	_, err = events.Ingest(context.Background(), h.node.ID, h.session.UUID, second)
 	require.NoError(t, err)
+	require.Equal(t, int32(1), provider.calls.Load())
+}
+
+func TestScenarioActionEventService_FreezesFirstDeadlineAndFailsSlowArrivalImmediately(t *testing.T) {
+	h := newBotActionResultHarness(t)
+	setBarrierScenario(t, h, 100*time.Millisecond, ScenarioBarrierRelease{Type: "all"}, "fail")
+	botB := &model.Bot{
+		UUID: "bot-barrier-slow-b", InstanceID: h.bot.InstanceID, StressSessionID: &h.session.ID,
+		ExecutorNodeID: h.bot.ExecutorNodeID, Name: "load-002", Status: model.BotStatusConnected,
+		DesiredStateGeneration: 3, CohortKey: "combat", Config: `{}`, Behavior: "idle",
+	}
+	require.NoError(t, h.db.Create(botB).Error)
+	clock := &botLoadFakeClock{now: h.now}
+	provider := &countingBarrierExpectedBots{bots: map[string]int64{h.bot.UUID: 3, botB.UUID: 3}}
+	client := &fakeActionSignalClient{handler: acceptActionSignals}
+	barriers := NewBarrierCoordinator(clock)
+	events := NewScenarioActionEventService(h.service, barriers, NewActionSignalRouter(h.service, client, clock), provider)
+	t.Cleanup(events.Close)
+
+	first := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000415", testBarrierCorrelationTokenA, h.now)
+	first.ResultJson = mustBarrierPayload(t, authoritativeBarrierPayload(h.now, 100*time.Millisecond, ScenarioBarrierRelease{Type: "all"}, "fail"))
+	_, err := events.Ingest(context.Background(), h.node.ID, h.session.UUID, first)
+	require.NoError(t, err)
+
+	clock.Advance(100 * time.Millisecond)
+	events.dispatchReady()
+	require.Eventually(t, func() bool { return client.callCount(h.node.UUID) >= 1 }, time.Second, 10*time.Millisecond)
+
+	second := barrierActionEvent(botB.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000416", testBarrierCorrelationTokenB, clock.now)
+	second.ResultJson = mustBarrierPayload(t, authoritativeBarrierPayload(clock.now, 100*time.Millisecond, ScenarioBarrierRelease{Type: "all"}, "fail"))
+	second.ObservedAtUnixMs = clock.now.UnixMilli()
+	result, err := events.Ingest(context.Background(), h.node.ID, h.session.UUID, second)
+	require.NoError(t, err)
+	require.Contains(t, result.Diagnostic, string(BarrierTimedOut))
+	events.dispatchReady()
+
+	require.Eventually(t, func() bool {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		for _, call := range client.calls[h.node.UUID] {
+			for _, signal := range call {
+				if signal.BotUuid != botB.UUID || signal.Type != "barrier-fail" {
+					continue
+				}
+				var payload struct {
+					FailAtUnixMS int64 `json:"failAtUnixMs"`
+				}
+				if json.Unmarshal([]byte(signal.PayloadJson), &payload) == nil && payload.FailAtUnixMS == h.now.Add(100*time.Millisecond).UnixMilli() {
+					return true
+				}
+			}
+		}
+		return false
+	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, int32(1), provider.calls.Load())
 }
 

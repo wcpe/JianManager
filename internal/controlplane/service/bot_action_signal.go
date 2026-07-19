@@ -283,6 +283,11 @@ func (r *ActionSignalRouter) groupResolvedSignals(inputs []ActionSignalInput, in
 		if offset < len(waiting) {
 			resolved = waiting[offset]
 		}
+		if resolved == nil && isBarrierDecisionSignal(input.Type) {
+			report.Items[index].Status = ActionSignalSkipped
+			report.Items[index].Skipped = true
+			continue
+		}
 		if diagnostic := validateWaitingAction(input, resolved); diagnostic != "" {
 			report.Items[index].Status, report.Items[index].Error = ActionSignalRejected, diagnostic
 			continue
@@ -291,6 +296,10 @@ func (r *ActionSignalRouter) groupResolvedSignals(inputs []ActionSignalInput, in
 		groups[resolved.ExecutorNodeUUID] = append(groups[resolved.ExecutorNodeUUID], routedActionSignal{index: index, signal: signal})
 	}
 	return groups
+}
+
+func isBarrierDecisionSignal(signalType string) bool {
+	return signalType == "barrier-release" || signalType == "barrier-fail"
 }
 
 func validateWaitingAction(input ActionSignalInput, waiting *WaitingAction) string {

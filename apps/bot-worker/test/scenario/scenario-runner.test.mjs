@@ -87,6 +87,76 @@ test('Runner 对外部等待和屏障使用冻结超时错误码', async () => {
   }
 })
 
+test('Runner 在统一 deadline 同毫秒优先执行已预调度 barrier-release', async () => {
+  const run = runnerOptions({
+    scenario: scenario([step('barrier', 'barrier', {
+      key: 'ready', release: { type: 'all' }, timeoutPolicy: 'release-arrived', timeoutMs: 100,
+    })]),
+  })
+  const runner = new ScenarioRunner(run.options)
+  await runner.start()
+  const running = run.events[0]
+  run.capabilities.nowMs = 1_075
+  const receipt = await runner.signal({
+    signalId: 'release-at-deadline', botId: 'bot-1', sessionId: 'run-1', generation: 3,
+    actionRunId: running.actionRunId, stepId: running.stepId, correlationToken: running.correlationToken,
+    type: 'barrier-release', payload: { round: 1, releaseAtUnixMs: 1_100 },
+  })
+  assert.equal(receipt.accepted, true)
+
+  run.capabilities.nowMs = 1_100
+  await runner.tick(run.capabilities.now())
+  assert.equal(run.events.at(-1).status, 'succeeded')
+  assert.equal(run.events.some((event) => event.status === 'timed_out'), false)
+})
+
+test('Runner 在 deadline 同毫秒接受即时 barrier-release 而不先行超时', async () => {
+  const run = runnerOptions({
+    scenario: scenario([step('barrier', 'barrier', {
+      key: 'ready', release: { type: 'all' }, timeoutPolicy: 'fail', timeoutMs: 100,
+    })]),
+  })
+  const runner = new ScenarioRunner(run.options)
+  await runner.start()
+  const running = run.events[0]
+  run.capabilities.nowMs = 1_100
+  const receipt = await runner.signal({
+    signalId: 'release-immediate', botId: 'bot-1', sessionId: 'run-1', generation: 3,
+    actionRunId: running.actionRunId, stepId: running.stepId, correlationToken: running.correlationToken,
+    type: 'barrier-release', payload: { round: 1, releaseAtUnixMs: 1_100 },
+  }, run.capabilities.now())
+
+  assert.equal(receipt.accepted, true)
+  assert.equal(run.events.at(-1).status, 'succeeded')
+  assert.equal(run.events.some((event) => event.status === 'timed_out'), false)
+})
+
+test('Runner 预接收 barrier-fail 并在统一 deadline 产出 timed_out/BARRIER_TIMEOUT', async () => {
+  const run = runnerOptions({
+    scenario: scenario([step('barrier', 'barrier', {
+      key: 'ready', release: { type: 'all' }, timeoutPolicy: 'fail', timeoutMs: 100,
+    })]),
+  })
+  const runner = new ScenarioRunner(run.options)
+  await runner.start()
+  const running = run.events[0]
+  run.capabilities.nowMs = 1_075
+  const signal = {
+    signalId: 'fail-at-deadline', botId: 'bot-1', sessionId: 'run-1', generation: 3,
+    actionRunId: running.actionRunId, stepId: running.stepId, correlationToken: running.correlationToken,
+    type: 'barrier-fail', payload: { round: 1, failAtUnixMs: 1_100 },
+  }
+  const accepted = await runner.signal(signal)
+  const duplicate = await runner.signal(signal)
+  assert.equal(accepted.accepted, true)
+  assert.equal(duplicate.skipped, true)
+
+  run.capabilities.nowMs = 1_100
+  await runner.tick(run.capabilities.now())
+  assert.equal(run.events.at(-1).status, 'timed_out')
+  assert.equal(run.events.at(-1).errorCode, 'BARRIER_TIMEOUT')
+})
+
 test('Runner cancel/dispose 清理动作与 pathfinder 且不会重复终态', async () => {
   const calls = { cancel: 0, dispose: 0, token: null }
   const { options, capabilities, events } = runnerOptions({
@@ -214,12 +284,12 @@ test('Runner 长循环集中 tick 不创建动作级 timer 且结果载荷有界
   assert.ok(Buffer.byteLength(JSON.stringify(events[0].result)) <= 16 * 1024)
 })
 
-test('Runner 在 tick 调用动作前裁决 move/barrier 通用 step 截止时间', async () => {
+test('Runner 在 deadline 对普通动作超时并让 barrier 释放动作优先', async () => {
   const cases = [
     {
       name: 'move',
       step: step('move', 'move_to_and_wait', { pos: { x: 0, y: 64, z: 0 }, radius: 1, timeoutMs: 500 }),
-      errorCode: 'MOVE_TIMEOUT',
+      status: 'timed_out', errorCode: 'MOVE_TIMEOUT',
       prepare: async (run, runner) => {
         await runner.tick(run.capabilities.now())
         run.capabilities.advance(500)
@@ -228,7 +298,7 @@ test('Runner 在 tick 调用动作前裁决 move/barrier 通用 step 截止时�
     {
       name: 'barrier',
       step: step('barrier', 'barrier', { key: 'ready', release: { type: 'all' }, timeoutMs: 500 }),
-      errorCode: 'BARRIER_TIMEOUT',
+      status: 'succeeded', errorCode: undefined,
       prepare: async (run, runner) => {
         const running = run.events[0]
         run.capabilities.nowMs = 1_400
@@ -248,9 +318,9 @@ test('Runner 在 tick 调用动作前裁决 move/barrier 通用 step 截止时�
     await runner.start()
     await item.prepare(run, runner)
     await runner.tick(run.capabilities.now())
-    assert.equal(run.events.at(-1).status, 'timed_out', item.name)
+    assert.equal(run.events.at(-1).status, item.status, item.name)
     assert.equal(run.events.at(-1).errorCode, item.errorCode, item.name)
-    assert.equal(run.events.some((event) => event.status === 'succeeded'), false, item.name)
+    assert.equal(run.events.some((event) => event.status === 'succeeded'), item.status === 'succeeded', item.name)
   }
 })
 

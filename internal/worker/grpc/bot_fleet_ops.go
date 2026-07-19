@@ -25,12 +25,13 @@ const (
 	botBatchCacheLimit         = 1000
 	botBatchCacheTTL           = time.Hour
 	botFleetReliableQueueLimit = 1024
-	// 覆盖单节点 50 Bot × 100 step 的 waiting 与 terminal 两类关键状态。
-	botActionJournalLimit     = maxBotBatchSize * 100 * 2
-	botBatchStatusAccepted    = "accepted"
-	botBatchStatusConflict    = "conflict"
-	botBatchStatusCapacity    = "capacity_insufficient"
-	botBatchStatusUnavailable = "ephemeral_unavailable"
+	// 覆盖单节点 50 Bot × 100 step × 10 attempt 的合法 identity，并保留 20% 安全余量。
+	botActionJournalIdentityLimit = maxBotBatchSize * 100 * 10
+	botActionJournalLimit         = botActionJournalIdentityLimit * 6 / 5
+	botBatchStatusAccepted        = "accepted"
+	botBatchStatusConflict        = "conflict"
+	botBatchStatusCapacity        = "capacity_insufficient"
+	botBatchStatusUnavailable     = "ephemeral_unavailable"
 )
 
 type botFleetEventSubscriber struct {
@@ -195,15 +196,14 @@ func (s *Server) appendBotActionJournalLocked(event *bot.BotWorkerEvent, current
 	if !s.prepareBotActionJournalIdentityLocked(identity, phase) {
 		return
 	}
-	key := botActionJournalKey(identity, phase)
 	if s.botActionJournal == nil {
 		s.botActionJournal = make(map[string]botActionJournalEntry)
 	}
-	if _, exists := s.botActionJournal[key]; !exists && len(s.botActionJournal) >= botActionJournalLimit {
+	if _, exists := s.botActionJournal[identity]; !exists && len(s.botActionJournal) >= botActionJournalLimit {
 		s.evictBotActionJournalEntryLocked()
 	}
 	s.botActionJournalSequence++
-	s.botActionJournal[key] = botActionJournalEntry{
+	s.botActionJournal[identity] = botActionJournalEntry{
 		sequence: s.botActionJournalSequence, phase: phase, event: cloneBotActionWorkerEvent(event),
 	}
 }
@@ -212,23 +212,20 @@ func (s *Server) prepareBotActionJournalIdentityLocked(identity string, phase bo
 	if s.botActionJournal == nil {
 		return true
 	}
-	runningKey := botActionJournalKey(identity, botActionJournalRunning)
-	waitingKey := botActionJournalKey(identity, botActionJournalWaiting)
-	terminalKey := botActionJournalKey(identity, botActionJournalTerminal)
+	current, exists := s.botActionJournal[identity]
+	if !exists {
+		return true
+	}
 	switch phase {
 	case botActionJournalRunning:
-		_, waiting := s.botActionJournal[waitingKey]
-		_, terminal := s.botActionJournal[terminalKey]
-		return !waiting && !terminal
+		return current.phase == botActionJournalRunning
 	case botActionJournalWaiting:
-		if _, terminal := s.botActionJournal[terminalKey]; terminal {
-			return false
-		}
-		delete(s.botActionJournal, runningKey)
+		return current.phase != botActionJournalTerminal
 	case botActionJournalTerminal:
-		delete(s.botActionJournal, runningKey)
+		return current.phase != botActionJournalTerminal
+	default:
+		return false
 	}
-	return true
 }
 
 func (s *Server) alignBotActionJournalGenerationLocked(generation int64) {
@@ -300,11 +297,7 @@ func (s *Server) botActionJournalSize() int {
 }
 
 func botActionJournalIdentity(action *bot.ActionEvent) string {
-	return fmt.Sprintf("%s\x00%s\x00%d\x00%s\x00%s\x00%d\x00%s", action.SessionID, action.BotID, action.Generation, action.ActionRunID, action.StepID, action.Attempt, action.CorrelationToken)
-}
-
-func botActionJournalKey(identity string, phase botActionJournalPhase) string {
-	return fmt.Sprintf("%s\x00%d", identity, phase)
+	return fmt.Sprintf("%s\x00%s\x00%d\x00%s", action.SessionID, action.BotID, action.Generation, action.ActionRunID)
 }
 
 func classifyBotActionJournalPhase(action *bot.ActionEvent) botActionJournalPhase {

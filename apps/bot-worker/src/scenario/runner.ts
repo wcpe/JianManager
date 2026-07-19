@@ -183,14 +183,15 @@ export class ScenarioRunner {
     }
     const attempt = this.current
     const stepDeadlineReached = now >= attempt.context.deadline
-    if (stepDeadlineReached && !canResolveIntrinsicAtDeadline(attempt, now)) {
+    if (stepDeadlineReached && !canResolveAtDeadline(attempt, now)) {
       await this.timeoutAttempt(now)
       return
     }
     const result = await this.callAction(() => attempt.action.tick(attempt.context, now))
     if (this.current !== attempt || this.cancelToken.cancelled) return
     if (result.state !== 'running') {
-      await this.completeAttempt(result.state, result, now)
+      if (isBarrierTimeout(attempt, result)) await this.timeoutAttempt(now)
+      else await this.completeAttempt(result.state, result, now)
       return
     }
     if (stepDeadlineReached) await this.timeoutAttempt(now)
@@ -354,7 +355,7 @@ export class ScenarioRunner {
     const replay = this.signalHistory.get(signal.signalId)
     if (replay) return { ...replay, skipped: true }
     if (this.activeSignalIDs.has(signal.signalId)) return { ...acceptedSignal(signal.signalId), skipped: true }
-    if (this.current && this.deadlineReached(now)) {
+    if (this.current && this.deadlineReached(now) && !canAcceptBarrierDecision(this.current, signal, now, this.options.runDeadline)) {
       await this.timeoutAttempt(now)
       const receipt = skippedSignal(signal.signalId, 'action_not_waiting', '动作已超过截止时间')
       this.rememberSignal(receipt)
@@ -383,13 +384,20 @@ export class ScenarioRunner {
     }
     if (!this.current.action.signal) return skippedSignal(signal.signalId, 'signal_type_mismatch', '当前动作不接受信号')
     const attempt = this.current
-    const result = await this.callAction(() => attempt.action.signal!(attempt.context, signal))
+    let result = await this.callAction(() => attempt.action.signal!(attempt.context, signal))
     if (this.current !== attempt) return acceptedSignal(signal.signalId)
     if (this.cancelToken.cancelled) return skippedSignal(signal.signalId, 'action_not_waiting', '动作正在取消')
     if (!result.signalAccepted && result.state === 'running') {
       return skippedSignal(signal.signalId, 'signal_type_mismatch', result.message ?? '信号类型不匹配')
     }
-    if (result.state !== 'running') await this.completeAttempt(result.state, result, now)
+    if (result.signalAccepted && result.state === 'running' && attempt.step.type === 'barrier') {
+      const resolved = await this.callAction(() => attempt.action.tick(attempt.context, now))
+      result = { ...resolved, signalAccepted: true }
+    }
+    if (result.state !== 'running') {
+      if (isBarrierTimeout(attempt, result)) await this.timeoutAttempt(now)
+      else await this.completeAttempt(result.state, result, now)
+    }
     return acceptedSignal(signal.signalId)
   }
 
@@ -474,13 +482,30 @@ export class ScenarioRunner {
   }
 }
 
-function canResolveIntrinsicAtDeadline(attempt: CurrentAttempt, now: number): boolean {
+function canResolveAtDeadline(attempt: CurrentAttempt, now: number): boolean {
+  if (attempt.step.type === 'barrier') return true
   if (now !== attempt.context.deadline) return false
   const durationMs = intrinsicDurationMs(attempt.step)
   return durationMs !== undefined
     && durationMs > 0
     && durationMs <= attempt.step.timeoutMs
     && attempt.context.startedAt + durationMs <= now
+}
+
+function canAcceptBarrierDecision(
+  attempt: CurrentAttempt,
+  signal: ScenarioActionSignal,
+  now: number,
+  runDeadline?: number
+): boolean {
+  return attempt.step.type === 'barrier'
+    && (signal.type === 'barrier-release' || signal.type === 'barrier-fail')
+    && now >= attempt.context.deadline
+    && (runDeadline === undefined || now < runDeadline)
+}
+
+function isBarrierTimeout(attempt: CurrentAttempt, result: ScenarioActionResult): boolean {
+  return attempt.step.type === 'barrier' && result.errorCode === 'BARRIER_TIMEOUT'
 }
 
 function intrinsicDurationMs(step: ScenarioStep): number | undefined {
@@ -524,7 +549,7 @@ function terminalAssociationMismatch(terminal: TerminalAttempt, signal: Scenario
 
 function signalTypeMatches(step: ScenarioStep, signal: ScenarioActionSignal): boolean {
   if (signal.type === 'cancel') return true
-  if (step.type === 'barrier') return signal.type === 'barrier-release'
+  if (step.type === 'barrier') return signal.type === 'barrier-release' || signal.type === 'barrier-fail'
   const payload = signal.payload as Record<string, unknown> | undefined
   const eventType = signal.type === 'probe' ? payload?.eventType : signal.type
   if (step.type === 'wait_probe_event') return eventType === step.event

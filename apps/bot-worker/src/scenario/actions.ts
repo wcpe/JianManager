@@ -84,6 +84,7 @@ class WaitProbeEventAction extends BaseScenarioAction {
 
 class BarrierAction extends BaseScenarioAction {
   private releaseAtUnixMs: number | undefined
+  private failAtUnixMs: number | undefined
 
   async start(ctx: ScenarioActionContext): Promise<ActionStartResult> {
     if (typeof ctx.step.key !== 'string' || !isBarrierRelease(ctx.step.release)) return invalidStep('barrier 缺少 key 或 release')
@@ -91,18 +92,36 @@ class BarrierAction extends BaseScenarioAction {
   }
 
   async tick(_ctx: ScenarioActionContext, now: number): Promise<ActionTickResult> {
-    return this.releaseAtUnixMs !== undefined && now >= this.releaseAtUnixMs
-      ? succeeded({ releaseAtUnixMs: this.releaseAtUnixMs })
-      : running()
+    if (this.releaseAtUnixMs !== undefined && now >= this.releaseAtUnixMs) {
+      return succeeded({ releaseAtUnixMs: this.releaseAtUnixMs })
+    }
+    if (this.failAtUnixMs !== undefined && now >= this.failAtUnixMs) {
+      return failed('BARRIER_TIMEOUT', '屏障在统一截止时间未达到释放条件')
+    }
+    return running()
   }
 
   async signal(ctx: ScenarioActionContext, signal: ScenarioActionSignal): Promise<ActionTickResult> {
     const payload = recordValue(signal.payload)
-    if (signal.type !== 'barrier-release' || payload?.round !== ctx.attempt) return running(undefined, '屏障释放类型或 round 不匹配')
+    if (payload?.round !== ctx.attempt) return running(undefined, '屏障信号 round 不匹配')
+    if (signal.type === 'barrier-release') return this.acceptRelease(ctx, payload)
+    if (signal.type === 'barrier-fail') return this.acceptFailure(ctx, payload)
+    return running(undefined, '屏障信号类型不匹配')
+  }
+
+  private acceptRelease(ctx: ScenarioActionContext, payload: Record<string, unknown>): ActionTickResult {
     const releaseAt = numberField(payload.releaseAtUnixMs)
-    if (releaseAt === undefined) return running(undefined, '屏障释放时间无效')
+    if (releaseAt === undefined || releaseAt > ctx.deadline) return running(undefined, '屏障释放时间无效')
     this.releaseAtUnixMs = releaseAt
+    this.failAtUnixMs = undefined
     return { ...running({ releaseAtUnixMs: releaseAt }), signalAccepted: true }
+  }
+
+  private acceptFailure(ctx: ScenarioActionContext, payload: Record<string, unknown>): ActionTickResult {
+    const failAt = numberField(payload.failAtUnixMs)
+    if (failAt === undefined || failAt > ctx.deadline) return running(undefined, '屏障失败时间无效')
+    if (this.releaseAtUnixMs === undefined) this.failAtUnixMs = failAt
+    return { ...running({ failAtUnixMs: failAt }), signalAccepted: true }
   }
 }
 

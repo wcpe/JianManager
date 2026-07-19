@@ -630,15 +630,15 @@ func TestBotActionJournalCompressesRunningWaitingAndTerminal(t *testing.T) {
 	srv.dispatchBotEvent(grpcActionTestEvent("ordinary-terminal", "failed", nil))
 
 	replay := srv.botActionJournalSnapshot("run-1")
-	require.Len(t, replay, 4)
+	require.Len(t, replay, 3)
 	byAction := make(map[string][]*bot.ActionEvent)
 	for _, event := range replay {
 		byAction[event.Action.ActionRunID] = append(byAction[event.Action.ActionRunID], event.Action)
 	}
 	require.Len(t, byAction["ordinary-running"], 1)
 	require.Equal(t, "latest-running", byAction["ordinary-running"][0].Message)
-	require.Len(t, byAction["barrier"], 2, "barrier waiting 与 terminal 都必须保留")
-	require.Equal(t, []string{"running", "succeeded"}, []string{byAction["barrier"][0].Status, byAction["barrier"][1].Status})
+	require.Len(t, byAction["barrier"], 1, "terminal 应替代同 identity 的 waiting")
+	require.Equal(t, "succeeded", byAction["barrier"][0].Status)
 	require.Len(t, byAction["ordinary-terminal"], 1, "普通 terminal 应覆盖 running")
 	require.Equal(t, "failed", byAction["ordinary-terminal"][0].Status)
 }
@@ -672,7 +672,7 @@ func TestBotActionJournalReplaysAfterReliableQueueOverflow(t *testing.T) {
 
 func TestBotActionJournalCoversMaximumSingleNodeScenarioWindow(t *testing.T) {
 	srv := newBotFleetTestServer(&fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, WorkerEpochGeneration: 3}})
-	const actionCount = maxBotBatchSize * 100
+	const actionCount = maxBotBatchSize * 100 * 10
 	for index := range actionCount {
 		srv.dispatchBotEvent(grpcActionTestEvent(fmt.Sprintf("action-window-%04d", index), "succeeded", nil))
 	}
@@ -680,7 +680,7 @@ func TestBotActionJournalCoversMaximumSingleNodeScenarioWindow(t *testing.T) {
 	replay := srv.botActionJournalSnapshot("run-1")
 	require.Len(t, replay, actionCount)
 	require.Equal(t, "action-window-0000", replay[0].Action.ActionRunID)
-	require.Equal(t, "action-window-4999", replay[len(replay)-1].Action.ActionRunID)
+	require.Equal(t, "action-window-49999", replay[len(replay)-1].Action.ActionRunID)
 
 	stream := make(chan *bot.BotWorkerEvent, 1)
 	srv.addBotFleetEventSubscriber(stream, "run-1")
