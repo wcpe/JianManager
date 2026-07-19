@@ -41,7 +41,7 @@ JianManager 是面向中小型游戏服务器（以 Minecraft 为主）运营商
 > 标 `已交付` 是有门的：仅该 FR 的 spec 验收全过 + 测试 / 真机通过后，由 `sdd-release-version` 发版统一标 `已交付@vX.Y.Z`；开发中不得自标。false-done 走 `sdd-fix-bug` 归真，撤 / 推迟走 `sdd-rollback-change`。
 
 **活跃 FR 详细规格索引**（PRD 只留索引行，详情见 spec）：
-- FR-342~345（2026-07-16 迭代批：搭建损毁重建 / 实例系统级指标 / 环境变量管理 / 历史日志）→ FR-342 `docs/specs/provision-damaged-rebuild/`、FR-343 `docs/specs/instance-system-metrics/`、FR-344 `docs/specs/instance-env-vars/`、FR-345 `docs/specs/instance-log-history/`（均需 spec，开发中创建）
+- FR-342~345（2026-07-16 迭代批：搭建损毁重建 / 实例系统级指标 / 环境变量管理 / 历史日志）→ FR-342 `docs/specs/provision-damaged-rebuild/`、FR-343 `docs/specs/instance-system-metrics/`、FR-344 `docs/specs/instance-env-vars/`、FR-345 `docs/specs/instance-log-history/`（四项均已交付@v0.18.0）
 - FR-335~340（2026-07-15 验收分诊批二：规模化与全栈补缺）→ FR-335 `docs/specs/topology-scale/`、FR-336 `docs/specs/users-search-pagination/`、FR-337 `docs/specs/tasks-pagination/`、FR-338 `docs/specs/backup-storage-update/`、FR-339 `docs/specs/console-players-backup-segments/`、FR-340 `docs/specs/metrics-batch-series/`；随批一并做的前端消费 gap：节点页聚合（gap:FR-270）/实例列表可供性（gap:FR-235）/超级工作台虚拟化（gap:FR-167）/备份实例选择器 Combobox/端口表虚拟化
 - FR-313（进程级崩溃诊断链路：环形缓冲 + 退出码快照上报持久化 + 前端崩溃诊断面板）→ `docs/specs/crash-diagnostics/spec.md`（需 spec，开发中创建）
 - FR-314（实例启动同步预检：预检 RPC + 同步报错不进 STARTING）→ `docs/specs/start-preflight/spec.md`（需 spec，开发中创建）
