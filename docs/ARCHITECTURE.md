@@ -213,11 +213,11 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
   - `ListArchiveEntries`/`ReadArchiveEntry` 用 Go `archive/zip` **只读**列举/读取 jar/zip 内部条目（不起进程、零落盘，条目名经 zip-slip 校验，条目数/单条目字节有上限超出截断，内容嗅探 NUL 判二进制）；`DecompileClass` 经实例绑定 JDK（或系统候选 JDK / `JAVA_HOME` 兜底）**受控 exec** CFR 单 jar 把 `.class`/`.jar`（或 jar 内某 `.class` 抽临时文件）反编译为 Java 源码——CFR 仅静态分析字节码、不加载/运行目标代码，`context` 超时 + 输入体积上限 + 输出截断 + 失败/降级以 `success=false`+结构化 error 返回（不抛错）。CP 加性端点 `GET .../files/archive/entries`、`GET .../files/archive/read`（octet-stream + `X-Truncated`/`X-Binary` 头）、`POST .../files/decompile`，均复用文件「查看」级权限。CFR 分发：配置路径 > 内嵌（`make embed-cfr`，gitignore 不入库）> 数据根缓存 `var/tools/cfr-<ver>.jar` > Maven Central 按需下载（sha256 pin）
 - 终端：IssueTerminalToken
 - Bot 基础操作：CreateBot, DeleteBot, ListBots, SetBotBehavior, SendBotCommand, StreamBotEvents；Control Plane 统一经 `BotExecutorResolver` 路由到 `ExecutorNodeID ?? Instance.NodeID`，目标实例与实际执行节点可不同（ADR-074）。旧 `StreamBotEvents` 继续服务普通 Bot 兼容事件，但不是 Fleet runtime、批次 `connected_count` 或停止完成的真源
-- Bot Fleet（FR-351，加性协议）：`GetBotCapacity` 返回 ready/legacy/max/active/connecting、`capacity_generation`、worker epoch、bot-worker 版本/feature、RSS 与事件循环 p95；`ApplyBotBatch` 每批最多 50 个 assignment，携 `batch_id`、`idempotency_key`、期望容量世代并返回逐 Bot accepted/skipped/error 回执；`GetBotFleetSnapshot` 建立完整 runtime 基线；`StreamBotFleetEvents` 持续发送 `runtime_snapshot | action_event`；`SignalBotActions` 每次最多 100 个通用动作信号并逐项回执。`BotAssignment` 已加性铺设 `scenario_json`、`resume_step_id`、`connect_not_before_unix_ms` 与 `correlation_seed`，供后续场景/运行 FR 复用
+- Bot Fleet（FR-351/352，加性协议，见 [ADR-074](adr/074-bot-distributed-load.md)）：`GetBotCapacity` 返回 ready/legacy/max/active/connecting、`capacity_generation`、worker epoch、bot-worker 版本/feature、RSS 与事件循环 p95；`ApplyBotBatch` 每批最多 50 个 assignment，携 `batch_id`、`idempotency_key`、期望容量世代并返回逐 Bot accepted/skipped/error 回执；`GetBotFleetSnapshot` 建立完整 runtime 基线；`StreamBotFleetEvents` 持续发送 `runtime_snapshot | action_event`；`SignalBotActions` 每次最多 100 个通用动作信号并逐项回执。`BotAssignment.scenario_json` 承载 CP 已冻结的单 Bot 场景信封 `{seed,botOrdinal,scenario:{key,steps}}`，并与 `cohort_key`、`resume_step_id`、`connect_not_before_unix_ms`、`correlation_seed` 一并下发；Worker 与 Bot Worker 不解析 YAML、不重新分组
   - 每个 `sessionUUID + executor node` 只有一条活动订阅；首次订阅与每次断流重连都严格先取 snapshot baseline、再开 stream。订阅槽带独立 generation，旧流迟到事件在进入 runtime 协调器前丢弃，避免旧订阅覆盖新 baseline
   - 普通 stream 事件必须按 desired generation、configHash、Bot Worker epoch generation 与 eventSeq 单调前进；完整 baseline 仍校验执行节点、session、desired generation 与 configHash，但允许用当前子进程的较低 epoch 重置旧基线。空 snapshot 同样是有效完整基线：活动 Bot 缺失项收敛为 `disconnected`，已有停止意图时收敛为 `stopped`，并重算批次 `connected_count`
   - `capacityGeneration` 只在 max/features、Worker/Bot Worker epoch 或 admission ready/unavailable 等**容量语义**变化时递增；active/connecting 只是即时利用率快照，不单独使 planToken 失效
-  - `BotFleetEvent.action_event` 已由 CP `ActionResultService` 按执行节点、session、Bot 与 desired generation 强校验后写入 `bot_load_action_results`：actionRunId 幂等创建 running，首个终态条件更新胜出，重复/迟到事件不改账本；result JSON 最大 16KiB，超限改存带 `truncated/originalBytes/preview` 的可识别元数据。普通挥击事件不形成追加明细。ServerProbe MSPT p95 的计算/接真仍属于 FR-353
+  - `BotFleetEvent.action_event` 由 CP `ScenarioActionEventService` 接入，先经 `ActionResultService` 按执行节点、session、Bot 与 desired generation 强校验并写入 `bot_load_action_results`：actionRunId 幂等创建 running，首个终态条件更新胜出，重复/迟到事件不改账本；result JSON 最大 16KiB，超限改存带 `truncated/originalBytes/preview` 的可识别元数据。`barrier-arrived` 再进入 `BarrierCoordinator`，需要外部完成的动作由 `ActionSignalRouter` 经 `SignalBotActions` 投递。普通挥击事件不形成追加明细；真实 ServerProbe 事件来源与 MSPT p95 接真仍属于 FR-353
 - 探针部署：DeployServerProbe（CP 内嵌 ServerProbe jar + 生成的 config.yml + 运行库缓存 `libraries_zip` 经 gRPC 下发，FR-010/FR-114；见 ADR-014/016）。Worker 写入实例 `plugins/` 并把缓存包解压到实例根 `libraries/`，**在线更新**（FR-068）复用本 RPC 推最新内嵌 jar 与缓存（下次重启生效，可选推送并重启），经 `GET/POST /instances/:id/probe/update`
 - 插件桥（FR-065；见 ADR-016）：StreamPluginEvents (server stream，CP 订阅某实例/全部探针经反向 WS 上报的事件流 connected/disconnected/heartbeat/玩家事件)、SendPluginCommand（CP 经 Worker 向探针下发治理/查询指令）、QueryServerState（查询子服全状态骨架）。地基阶段真实承载 connected/disconnected/heartbeat 与通道层，业务事件/治理执行语义留 FR-066/067
   - **JBIS 业务事件汇聚上行（FR-122；见 ADR-027/028）**：同一条 StreamPluginEvents 流复用承载 `domain` 非空的业务域事件（PluginEvent 的 `domain`/`dedup_key`/`raw_json` 字段，Worker 透传不消费语义）。CP 侧 `PlayerEventService` 据 `domain` 分流：玩家/监控事件走在线名册 + SSE，业务事件交 `BusinessEventService` 按 (domain,dedup_key) 去重落 `business_events` 通用信封，经济域(`economy`)再解析信封维护 `economy_balance_mirrors`(node→zone 维度、seq 单调)+`economy_ledger_entries`(审计)。探针侧由 mce `PlayerEconomyChangeEvent`/`PlayerEconomyCatchupEvent` 折算上报（覆盖 web 后台/跨服一切余额变更），currencyId Int→identifier 折算保证跨服聚合不串味。CP 插件无关、只认信封
@@ -400,11 +400,11 @@ Node.js → Go (stdout, JSON 行):
   {"evt":"script-progress","scriptId":"s1","status":"running","progress":50}
 ```
 
-Fleet 同步命令均携 `requestId`，Worker Manager 维护有界 pending map 与超时/迟到回执清理；写入 stdin 不代表 accepted，必须收到 `batch-result`/`signal-result` 的逐项确认。同步写入和回执共用 deadline：若 stdin Encode 阻塞，Worker 会关闭管道、隔离并终止不健康 child，使 pending、`WaitReady` 与 Fleet stream 一并退出，而不是无限卡住 RPC。`create-bots` 的 assignment 可携 `connectNotBeforeUnixMs`（兼容 `connectNotBefore`），bot-worker 在到时前只登记 connecting 并以定时器门控真实 Mineflayer 连接；停止、重放与相同 idempotencyKey 均保持幂等。通用动作信号命令精确使用 `signal-actions`。
+Fleet 同步命令均携 `requestId`，Worker Manager 维护有界 pending map 与超时/迟到回执清理；写入 stdin 不代表 accepted，必须收到 `batch-result`/`signal-result` 的逐项确认。同步写入和回执共用 deadline：若 stdin Encode 阻塞，Worker 会关闭管道、隔离并终止不健康 child，使 pending、`WaitReady` 与 Fleet stream 一并退出，而不是无限卡住 RPC。`create-bots` 的 assignment 可携 `connectNotBeforeUnixMs`（兼容 `connectNotBefore`）以及规范化 `scenario` 信封；bot-worker 在到时前只登记 connecting 并以定时器门控真实 Mineflayer 连接。停止、重放与相同 idempotencyKey 均保持幂等。通用动作信号命令精确使用 `signal-actions`，信号与 `action-event` 均以 run/session、Bot、generation、actionRunId、stepId、correlationToken 强关联，避免错投、迟到或重复事件推进当前动作。
 
 Worker Manager 为每次 spawn 递增本地 child generation，并把 stdout reader、stdin writer、`WaitReady`、Bot runtime 缓存和退出事件绑定到该代；旧 reader/旧 `Wait` 的迟到结果不能冲掉新 child。子进程退出会清空 runtime/容量缓存、关闭就绪信号并让 `StreamBotFleetEvents` 以 unavailable 退出，后续 Fleet RPC 懒重拉新 child。Worker gRPC 层另维护按 Bot、worker epoch 与 child generation 绑定的 Fleet ownership 账本：Fleet Apply 与 legacy Create/Delete 串行，ownership 存在时旧接口不得越过 Fleet 修改；停止逐项 accepted 或 already-stopped 后才释放，子进程世代变化时旧 ownership 与幂等缓存失效，相同 idempotencyKey 必须在新 child 重新下发。普通 legacy Bot 与 Fleet Bot 因此在同一进程内隔离，旧 `StreamBotEvents` 不承担 Fleet 生命周期收敛。
 
-Bot 压测 YAML 编排（FR-274）保持单一解析点：Control Plane 接收 JSON 请求体中的 `orchestrationYaml`，负责 YAML 解析、语义校验、原文持久化与 `orchestrationSummary` 摘要生成；启动会话时将规范化后的阶段、循环、错峰和 custom steps 序列化进既有 gRPC `behavior_config` 字段，并把 Bot 行为置为 `orchestrated`。Worker Node 不解析 YAML，也不重建编排语义，只把 `behavior_config` 透传到 bot-worker 的 IPC `behaviorConfig`。bot-worker 的 `orchestrated` 行为按 `startDelayMs` 错峰启动、按阶段切换内部 `idle/follow/patrol/guard/custom` 行为，并通过 `bot-event` 上报 `orchestration-phase` 事件供真实环境验收确认。
+Bot 场景保持 **Control Plane 单点解析**（FR-274/352）：新会话的 `scenario` 可提交 Scenario V2 JSON 对象或 YAML/JSON 字符串，两种输入都解析为显式 Go DTO、走同一 validator，并冻结为规范 JSON `ScenarioSnapshot`。CP 按 seed 与稳定 Bot ordinal 确定性分配 cohort，把单 Bot `{seed,botOrdinal,scenario:{key,steps}}` 信封写入 Fleet assignment；Worker Node 只透传规范 JSON。旧 `orchestrationYaml` 与无编排 `behavior` 仍保留，CP 尽力转换为单 cohort V2 snapshot；转换失败时继续走原 `orchestrated`/legacy 行为，不覆盖原 YAML、不破坏既有会话。完整 Scenario V2 字段与动作语义见 [FR-352 规格](specs/bot-scenario-engine/spec.md)，跨节点执行边界见 [ADR-074](adr/074-bot-distributed-load.md)。
 
 #### 6.4.1 分布式压测预检与执行（FR-351 / ADR-074）
 
@@ -414,14 +414,17 @@ Bot 压测 YAML 编排（FR-274）保持单一解析点：Control Plane 接收 J
 - `POST .../:id/stop` 先持久化 stopped desired generation，再按实际执行节点分组、每 50 条异步停止并返回 202。响应与逐项 accepted 都只表示停止意图/命令已接受，不伪造 Bot runtime `stopped`；会话保持 `waiting_runtime`，直到 `StreamBotFleetEvents` 的 stopped/not-found 事件或完整 baseline 缺失项收敛确认真实退出，才将批次/会话标为 stopped。RPC 拒绝或归真失败保留错误态和可诊断原因，不伪报完成。
 - 旧 V1 会话仅在 count≤50、仍是旧字段形态且目标节点即时容量足够时，允许空 body start 由服务端内部生成单节点计划；旧配置可继续显式使用 `auth=offline`。只要出现 scenario/loadProfile/cohorts/executor pool 等 V2 专属字段，就不再属于 V1 兼容形态，缺 `planToken` 返回容量计划已变化并要求重新预检。
 
-#### 6.4.2 场景屏障与动作信号（FR-352）
+#### 6.4.2 场景执行、屏障与动作信号（FR-352）
 
-- `BarrierCoordinator` 以 `runId+stageIndex+cohortKey+barrierKey+round` 为内存作用域，首次进入冻结 Bot UUID 与当前 desired generation；后续断线、失败或停止视图不能缩小分母。到达按 Bot+generation 幂等，支持 all/count/percent（百分比向上取整）、统一 `releaseAtUnixMs`、超时 fail/release-arrived，以及运行停止后的显式清理。
-- `ActionSignalRouter` 只路由仍为 running 且 run/Bot/actionRunId/correlationToken/generation 完整匹配的动作，按当前 `ExecutorNodeID`（为空回退目标实例节点）分组调用既有 `SignalBotActions`。Worker 的 accepted/skipped/error 逐项保留；节点调用失败、缺失回执和单项错误均标为可重试，重试复用稳定 signalId。
+- **Bot Worker 执行器**：每个 Bot 至多一个 `ScenarioRunner`，由 FleetController 的单一集中 scheduler 与旧行为共同驱动，不为每 Bot 创建无界 interval。Runner 统一持有当前 step/attempt/deadline/cancel token/锁定实体，切步前 dispose 旧动作并清理 pathfinder goal 与 timer；终态只上报一次 `action-event`。
+- **动作能力**：Runner 已实现 `wait_spawn`、`roam_in_area`、`send_command`、`wait_probe_event`、`barrier`、`move_to_and_wait`、`find_entity`、`attack_until`、`wait`、`respawn_and_rejoin`。漫游目标由 seed+botOrdinal+stepId 确定性生成；移动需在半径内稳定后才推进；攻击支持锁敌、追击、节奏、重选与可信 damage/kill/窗口断言，截止未满足返回 `ATTACK_ASSERTION_UNMET`。真实 Mineflayer/pathfinder/服务端伤害证据仍须真机验证。
+- **动作结果口径**：复用 §6.1 已定义的 `ActionResultService` 账本，不另建平行事件流；终态错误码冻结为 `CONNECT_TIMEOUT`、`CONNECT_ENDED`、`PATHFINDER_UNAVAILABLE`、`PATH_NOT_FOUND`、`MOVE_TIMEOUT`、`TARGET_NOT_FOUND`、`ATTACK_ASSERTION_UNMET`、`PROBE_EVENT_TIMEOUT`、`BARRIER_TIMEOUT`、`ACTION_CANCELLED`、`ACTION_INTERNAL_ERROR`。
+- **屏障协调**：`BarrierCoordinator` 以 `runId+stageIndex+cohortKey+barrierKey+round` 为内存作用域，首次进入冻结 Bot UUID 与当前 desired generation；后续断线、失败或停止视图不能缩小分母。到达按 Bot+generation 幂等，支持 all/count/percent（百分比向上取整）、统一 `releaseAtUnixMs`、超时 fail/release-arrived，以及运行停止后的显式清理。
+- **信号路由**：`ActionSignalRouter` 只路由仍为 running 且 run/Bot/actionRunId/correlationToken/generation 完整匹配的动作，按当前 `ExecutorNodeID`（为空回退目标实例节点）分组调用既有 `SignalBotActions`。Worker 的 accepted/skipped/error 逐项保留；节点调用失败、缺失回执和单项错误均标为可重试，重试复用稳定 signalId。
 - `barrier-arrived` 使用既有 `BotActionEvent.result_json` 承载 stage/cohort/barrier/round/release/deadline，不修改 proto。达到阈值后发 `barrier-release`，载荷只含 round/releaseAtUnixMs；仅 accepted 或无错误 skipped 才从 pending delivery 移除，未送达项保留供重试，已释放 Bot 重连仍获得相同 releaseAt。
 - 内置纯数据预设 `tower-defense-core-v1` 生成 20% lobby（wait_spawn→roam observation）与 80% combat（wait_spawn→send_command→room_joined→barrier→game_started→move+area probe→attack observation）Scenario V2。固定随机种子、进房命令、主城/战斗坐标与半径、区域标识、怪物类型和锁敌半径均须由调用方参数提供，缺失返回 `params.*` path 错误，不内置具体服业务值。
 
-ServerProbe 仍只与目标实例**本机 Worker**通信（`/metrics` 回环抓取 + `/ws/plugin-bridge` 反向连接），不因 Bot 在其他 Worker 执行而跨节点直连；浏览器仍只访问 Control Plane。可信探针事件后续由 CP 关联目标实例后再路由，FR-351 不实现 FR-353 的探针事件适配或 FR-355 的 acceptance harness。
+ServerProbe 仍只与目标实例**本机 Worker**通信（`/metrics` 回环抓取 + `/ws/plugin-bridge` 反向连接），不因 Bot 在其他 Worker 执行而跨节点直连；浏览器仍只访问 Control Plane。真实 ServerProbe 场景事件与塔防插件适配由 FR-353 接入同一 `ActionSignalRouter`，FR-352 当前只完成 fake/自动化关联验证，不宣称真 MC、真实 pathfinder 或 500 Bot 场景通过。
 
 ### 6.5 客户端 OTA 公网分发端点（玩家 updater ↔ Control Plane，FR-087 / ADR-022/023）
 
@@ -990,10 +993,11 @@ web/
 ## 9. Bot Worker 架构
 
 ```
-bot-worker/src/
-  ipc/          # stdin/stdout JSON 行协议
+apps/bot-worker/src/
+  ipc/          # stdin/stdout JSON 行协议、FleetController 与集中 scheduler
   bot/          # Mineflayer 连接、重连、生命周期
-  behavior/     # 行为引擎 (Tick 250ms): follow, guard, patrol, idle, custom, orchestrated
+  behavior/     # 兼容行为引擎：follow, guard, patrol, idle, custom, orchestrated
+  scenario/     # ScenarioRunner、动作工厂、取消/重试/信号关联与场景能力适配
   script/       # 脚本执行器 + 进度上报
   debug/        # 交互式调试会话
   pathfinder/   # mineflayer-pathfinder 封装
@@ -1001,13 +1005,15 @@ bot-worker/src/
   health/       # 心跳检测
 ```
 
+Node 测试入口固定为 `apps/bot-worker/test/run-tests.mjs`：用内置 `node:test.run()` 递归收集 `test/**/*.test.mjs`，`npm test` 先 build 再运行全部测试，避免 Node 版本或 shell glob 差异漏测；FR-352 自动化基线为 69/69。
+
 默认准入容量仍为 **50 bots/worker**；FR-351 通过 Control Plane 将同一目标实例的 Bot 确定性分片到多个 Worker，而不是提高单 Bot Worker 默认容量。bot-worker 的 `worker-ready` 声明 `fleet-v1`、maxBots、worker epoch、worker epoch generation 与 capacityGeneration，heartbeat 上报 active/connecting、RSS 和事件循环 p95；runtime 的 generation/configHash/epoch/eventSeq 由 CP 归真，旧进程或乱序事件不得覆盖新 desired 状态。Bot Worker 内部只为 Fleet envelope 创建的 Bot 标记 `fleetManaged`，拒绝缺 requestId/generation 的 legacy stop 越权；停止先释放连接/行为/定时器并发出 stopped runtime，再从内存集合移除。
 
 Worker spawn bot-worker 的 node 可执行经解析策略选定（FR-300，`internal/worker/bot/noderesolver.go`）：显式配置（`ManagerConfig.NodePath`，V1 只留结构无配置面）> 节点本地扫描最高 major Node（复用 `runtimescan` node 路径表）> 回退 PATH `"node"`（保兼容）；解析一次缓存、spawn 失败重扫重试一次，路径与来源（explicit-config/managed-scan/path-fallback）打进 Bot 启动日志。
 
 **dist 分发与依赖（FR-308，见 ADR-072 取代 ADR-070 并继续修订 ADR-006）**：bot-worker dist 由构建期 `make embed-botworker` 打成确定性 tar.gz（含 `package.json` 保 ESM 语义）内嵌 CP；Worker 注册成功后经 unary RPC `FetchBotWorkerArchive`（`node_uuid+node_secret` 与重注册同源鉴权，指纹一致回空归档省流）自愈物化到 `<数据根>/opt/bot-worker/`（`internal/worker/botdist`，sha256 复核 + 临时目录 rename 原子换入）。入口解析顺序：`JIANMANAGER_BOT_WORKER_PATH` 显式覆盖（不自愈）> 数据根物化副本 > 旧相对路径 `bot-worker/dist/index.js`；CP 未内嵌/不可达回退本地已有，只告警不阻断启动。运行时要求 Node.js `>=22.13.0`；mineflayer / mineflayer-pathfinder 不随归档分发，由 FR-307 节点受控项目根 `<runtimes>/global` 提供。自愈时在 dist 同级建 `node_modules` 链接：新 `<global>/node_modules` 同时具备 mineflayer 与 mineflayer-pathfinder 时才优先，否则旧 `<global>/lib/node_modules` 依赖完整时继续兼容，两者都不完整时默认新根（Windows junction / 其余 symlink）并由预检报错；依赖预检要求两项依赖在同一根完整命中，`NODE_PATH` 候选固定新在前旧在后且仅作 CJS 兜底。
 
-`orchestrated` 是组合行为，不直接解析 YAML：它只消费 Control Plane 已规范化的 `behaviorConfig`，按阶段创建并切换既有行为类。`custom` 阶段继续复用现有步骤执行器字段，Go 侧把 YAML 的 `durationMs` 映射为 bot-worker 已支持的 `duration`，避免两端维护两套 YAML 语义。
+`orchestrated` 保留为 FR-274/V1 兼容组合行为，不直接解析 YAML：它只消费 Control Plane 已规范化的 `behaviorConfig`，按阶段创建并切换既有行为类。FR-352 的新会话走 `scenario` 目录下的 `ScenarioRunner`；旧 `orchestrationYaml`/behavior 可由 CP 转换为兼容 V2 snapshot，无法安全转换时仍回退原 `orchestrated`/legacy 路径，避免两端维护两套 YAML 语义并保持历史兼容。
 
 ## 10. 状态机
 
