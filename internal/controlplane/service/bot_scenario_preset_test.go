@@ -52,7 +52,7 @@ func TestBuildScenarioPreset_TowerDefenseCoreRequiresBusinessParametersWithPaths
 	seed := int64(1)
 	radius := 2.0
 	valid := TowerDefenseCorePresetParams{
-		Seed: &seed, JoinCommand: "/join", LobbyCenter: &ScenarioPosition{}, LobbyRadius: &radius,
+		Seed: &seed, JoinCommand: "/join {{correlationToken}}", LobbyCenter: &ScenarioPosition{}, LobbyRadius: &radius,
 		CombatPosition: &ScenarioPosition{}, CombatRadius: &radius, CombatAreaID: "area", MonsterTypes: []string{"zombie"}, AttackRadius: &radius,
 	}
 	tests := []struct {
@@ -62,6 +62,7 @@ func TestBuildScenarioPreset_TowerDefenseCoreRequiresBusinessParametersWithPaths
 	}{
 		{name: "seed", path: "params.seed", edit: func(p *TowerDefenseCorePresetParams) { p.Seed = nil }},
 		{name: "命令", path: "params.joinCommand", edit: func(p *TowerDefenseCorePresetParams) { p.JoinCommand = "" }},
+		{name: "命令缺少关联占位符", path: "params.joinCommand", edit: func(p *TowerDefenseCorePresetParams) { p.JoinCommand = "/join room-a" }},
 		{name: "主城坐标", path: "params.lobbyCenter", edit: func(p *TowerDefenseCorePresetParams) { p.LobbyCenter = nil }},
 		{name: "主城半径", path: "params.lobbyRadius", edit: func(p *TowerDefenseCorePresetParams) { p.LobbyRadius = nil }},
 		{name: "战斗坐标", path: "params.combatPosition", edit: func(p *TowerDefenseCorePresetParams) { p.CombatPosition = nil }},

@@ -98,6 +98,7 @@ func validateTowerDefensePresetParams(params TowerDefenseCorePresetParams) error
 	}{
 		{params.Seed == nil, "params.seed", "必须填写固定随机种子"},
 		{strings.TrimSpace(params.JoinCommand) == "", "params.joinCommand", "必须填写进房命令"},
+		{!strings.Contains(params.JoinCommand, "{{correlationToken}}"), "params.joinCommand", "必须包含 {{correlationToken}} 关联占位符"},
 		{params.LobbyCenter == nil, "params.lobbyCenter", "必须填写主城坐标"},
 		{params.LobbyRadius == nil, "params.lobbyRadius", "必须填写主城漫游半径"},
 		{params.CombatPosition == nil, "params.combatPosition", "必须填写战斗区域坐标"},

@@ -464,6 +464,9 @@ func (s *BotLoadExecutionService) materializeStart(ctx context.Context, prepared
 		if err := s.claimBotLoadStartState(tx, prepared.session.ID); err != nil {
 			return err
 		}
+		if err := refreshBotLoadStartedAt(tx, prepared.session); err != nil {
+			return err
+		}
 		batches, err := materializeBotLoadBatches(tx, prepared.session.ID, prepared.plan)
 		if err != nil {
 			return err
@@ -514,6 +517,21 @@ func (s *BotLoadExecutionService) claimBotLoadStartState(tx *gorm.DB, sessionID 
 		return fmt.Errorf("%w: 会话已收到停止意图", ErrBotLoadInvalidState)
 	}
 	return fmt.Errorf("%w: 会话状态已变化", ErrBotLoadInvalidState)
+}
+
+func refreshBotLoadStartedAt(tx *gorm.DB, session *model.BotStressSession) error {
+	var persisted struct {
+		StartedAt *time.Time
+	}
+	if err := tx.Model(&model.BotStressSession{}).Select("started_at").Where("id = ?", session.ID).Scan(&persisted).Error; err != nil {
+		return fmt.Errorf("读取 Bot 负载稳定开始时间失败: %w", err)
+	}
+	if persisted.StartedAt == nil {
+		return fmt.Errorf("读取 Bot 负载稳定开始时间失败: started_at 为空")
+	}
+	startedAt := persisted.StartedAt.UTC()
+	session.StartedAt = &startedAt
+	return nil
 }
 
 func materializeBotLoadBatches(tx *gorm.DB, sessionID uint, plan *BotLoadAllocationPlan) (map[int]model.BotLoadBatch, error) {
@@ -656,7 +674,7 @@ func buildRunningBotLoadAssignment(bot *model.Bot, session *model.BotStressSessi
 	if username == "" {
 		username = sanitizeMCUsername(bot.Name)
 	}
-	scenarioJSON = scenarioRuntimeJSON(scenarioJSON, botOrdinal)
+	scenarioJSON = scenarioRuntimeJSON(scenarioJSON, botOrdinal, botLoadScenarioRunDeadlineUnixMS(session))
 	return &workerpb.BotAssignment{
 		BotUuid: bot.UUID, InstanceUuid: instance.UUID, SessionUuid: session.UUID,
 		Generation: bot.DesiredStateGeneration, DesiredState: "running", ConfigHash: bot.ConfigHash,
@@ -667,24 +685,68 @@ func buildRunningBotLoadAssignment(bot *model.Bot, session *model.BotStressSessi
 	}
 }
 
-func scenarioRuntimeJSON(cohortJSON string, botOrdinal int) string {
+func scenarioRuntimeJSON(cohortJSON string, botOrdinal int, runDeadlineUnixMS int64) string {
 	if strings.TrimSpace(cohortJSON) == "" {
 		return cohortJSON
 	}
 	var envelope struct {
-		Seed       int64           `json:"seed"`
-		BotOrdinal int             `json:"botOrdinal"`
-		Scenario   json.RawMessage `json:"scenario"`
+		Seed              int64           `json:"seed"`
+		BotOrdinal        int             `json:"botOrdinal"`
+		RunDeadlineUnixMS int64           `json:"runDeadlineUnixMs,omitempty"`
+		Scenario          json.RawMessage `json:"scenario"`
 	}
 	if err := json.Unmarshal([]byte(cohortJSON), &envelope); err != nil || len(envelope.Scenario) == 0 {
 		return cohortJSON
 	}
 	envelope.BotOrdinal = botOrdinal
+	envelope.RunDeadlineUnixMS = runDeadlineUnixMS
 	raw, err := json.Marshal(envelope)
 	if err != nil {
 		return cohortJSON
 	}
 	return string(raw)
+}
+
+func botLoadScenarioRunDeadlineUnixMS(session *model.BotStressSession) int64 {
+	if session == nil || session.StartedAt == nil || strings.TrimSpace(session.ScenarioSnapshot) == "" {
+		return 0
+	}
+	scenario, err := ParseScenarioSnapshot(session.ScenarioSnapshot)
+	if err != nil {
+		return 0
+	}
+	durationMS := scenarioObservationDurationMS(scenario)
+	if durationMS <= 0 {
+		return 0
+	}
+	return session.StartedAt.UTC().Add(time.Duration(durationMS) * time.Millisecond).UnixMilli()
+}
+
+func scenarioObservationDurationMS(scenario *ScenarioV2) int {
+	durationMS := 0
+	if scenario == nil {
+		return durationMS
+	}
+	for _, cohort := range scenario.Cohorts {
+		for _, action := range cohort.Steps {
+			if action.Base() == nil || !action.Base().ObservationStep {
+				continue
+			}
+			durationMS = max(durationMS, scenarioActionDurationMS(action))
+		}
+	}
+	return durationMS
+}
+
+func scenarioActionDurationMS(action ScenarioAction) int {
+	switch action.Type() {
+	case ScenarioActionRoamInArea:
+		return action.RoamInArea.DurationMS
+	case ScenarioActionAttackUntil:
+		return action.AttackUntil.Stop.DurationMS
+	default:
+		return 0
+	}
 }
 
 func botLoadAssignmentConfigHash(assignment *workerpb.BotAssignment) string {

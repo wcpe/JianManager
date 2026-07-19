@@ -368,13 +368,20 @@ func TestBotLoadExecutionStart_MaterializesStableCohortAndScenarioAssignments(t 
 	rawScenario := `{"version":2,"seed":20260719,"cohorts":[{"key":"lobby","percent":20,"steps":[{"id":"lobby-observe","type":"roam_in_area","observationStep":true,"durationMs":1000,"area":{"type":"radius","center":{"x":0,"y":64,"z":0},"radius":2}}]},{"key":"combat","percent":80,"steps":[{"id":"combat-observe","type":"roam_in_area","observationStep":true,"durationMs":1000,"area":{"type":"radius","center":{"x":0,"y":64,"z":0},"radius":2}}]}]}`
 	scenario, err := ParseScenarioV2([]byte(rawScenario))
 	require.NoError(t, err)
-	snapshot, err := CanonicalScenarioSnapshot(scenario, false)
+	scenarioSnapshot, err := CanonicalScenarioSnapshot(scenario, false)
 	require.NoError(t, err)
-	require.NoError(t, h.db.Model(h.session).Update("scenario_snapshot", snapshot).Error)
-	h.session.ScenarioSnapshot = snapshot
+	existingStart := h.clock.Now().Add(-time.Minute).UTC()
+	require.NoError(t, h.db.Model(h.session).Updates(map[string]any{
+		"scenario_snapshot": scenarioSnapshot,
+		"started_at":       existingStart,
+	}).Error)
+	h.session.ScenarioSnapshot = scenarioSnapshot
+	h.session.StartedAt = &existingStart
 
-	_, err = h.service.Start(context.Background(), h.session.ID, h.token)
+	started, err := h.service.Start(context.Background(), h.session.ID, h.token)
 	require.NoError(t, err)
+	require.NotNil(t, started.StartedAt)
+	require.Equal(t, existingStart, started.StartedAt.UTC())
 	var bots []model.Bot
 	require.NoError(t, h.db.Where("stress_session_id = ?", h.session.ID).Order("id ASC").Find(&bots).Error)
 	require.Len(t, bots, 10)
@@ -388,14 +395,16 @@ func TestBotLoadExecutionStart_MaterializesStableCohortAndScenarioAssignments(t 
 	}
 	calls := h.dispatcher.Calls()
 	require.Len(t, calls, 1)
+	var runDeadlineUnixMS int64
 	for _, assignment := range calls[0].request.Assignments {
 		bot := byUUID[assignment.BotUuid]
 		require.Equal(t, bot.CohortKey, assignment.CohortKey)
 		require.NotEmpty(t, assignment.ScenarioJson)
 		var envelope struct {
-			Seed       int64 `json:"seed"`
-			BotOrdinal int   `json:"botOrdinal"`
-			Scenario   struct {
+			Seed              int64 `json:"seed"`
+			BotOrdinal        int   `json:"botOrdinal"`
+			RunDeadlineUnixMS int64 `json:"runDeadlineUnixMs"`
+			Scenario          struct {
 				Key   string            `json:"key"`
 				Steps []json.RawMessage `json:"steps"`
 			} `json:"scenario"`
@@ -404,6 +413,11 @@ func TestBotLoadExecutionStart_MaterializesStableCohortAndScenarioAssignments(t 
 		require.Equal(t, scenario.Seed, envelope.Seed)
 		require.Equal(t, botLoadOrdinalFromUUID(h.session.UUID, h.session.BotCount, assignment.BotUuid), envelope.BotOrdinal)
 		require.Greater(t, envelope.BotOrdinal, 0)
+		require.Greater(t, envelope.RunDeadlineUnixMS, existingStart.UnixMilli())
+		if runDeadlineUnixMS == 0 {
+			runDeadlineUnixMS = envelope.RunDeadlineUnixMS
+		}
+		require.Equal(t, runDeadlineUnixMS, envelope.RunDeadlineUnixMS)
 		require.Equal(t, bot.CohortKey, envelope.Scenario.Key)
 		require.NotEmpty(t, envelope.Scenario.Steps)
 		require.Equal(t, assignment.ConfigHash, botLoadAssignmentConfigHash(assignment))
