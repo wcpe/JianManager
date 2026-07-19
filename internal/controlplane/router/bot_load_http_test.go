@@ -272,6 +272,8 @@ func TestBotStressSessionScenario_CreateDetailAndValidationError(t *testing.T) {
 			detail := makeRequest(ctx.router, http.MethodGet, "/api/v1/bots/stress-sessions/"+itoa(uint(body["id"].(float64))), nil, ctx.token)
 			require.Equal(t, http.StatusOK, detail.Code)
 			require.Equal(t, scenario, parseJSON(t, detail)["scenario"])
+			require.NotContains(t, detail.Body.String(), "legacyDurationSuccess")
+			require.NotContains(t, detail.Body.String(), "legacy_behavior")
 		}
 	})
 

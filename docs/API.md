@@ -1365,7 +1365,7 @@
     "counts": { "total": 0, "byStatus": {} }
   }
   ```
-  - `scenario` 返回 CP 冻结的规范化 Scenario V2；YAML 输入不会原样回显为场景正文。旧 `orchestrationYaml`/`orchestrationSummary` 字段继续按旧会话兼容返回。
+  - `scenario` 仅返回公开可表达的规范化 Scenario V2；YAML 输入不会原样回显为场景正文。V1 转换 snapshot 仍由 CP 内部冻结并用于 assignment，但只要含 `legacy_behavior` 或其他兼容标记，对外响应即省略 `scenario`，避免内部字段泄漏；旧详情继续通过 `behavior`、`orchestrationYaml` 与 `orchestrationSummary` 提供可理解摘要。
 - **错误**:
   - 400 `INVALID_REQUEST`：参数缺失、数量越界、`scenario` 与 `orchestrationYaml` 同时提交、旧模式缺 `behavior`，或旧 `orchestrationYaml` 编排非法。
   - 422 `BOT_LOAD_SCENARIO_INVALID`：Scenario V2 的 JSON/YAML 解析、未知字段、字段类型、模板语法或语义校验失败；响应稳定携带叶子字段路径与原因，同语义 JSON/YAML 使用相同 `path`：
@@ -1415,7 +1415,7 @@
 - **描述**: 查询单个压测会话详情；V2 会话返回规范化 `scenario`，旧会话继续返回持久化 `orchestrationYaml`。
 - **关联 FR**: FR-042 / FR-274 / FR-352
 - **权限**: `bot:read`（按会话目标实例隔离）
-- **响应**: `200` 同创建响应；存在 `ScenarioSnapshot` 时 `scenario` 返回规范化 V2 对象。FR-351 起在已预检/启动的会话上加性返回 `allocations[]` 与 `batches[]` 摘要。`instanceId` 仍是被测目标，`batches[].executorNodeId` 才是实际发压节点；批次摘要为 `{ id, uuid, executorNodeId, ordinal, plannedCount, acceptedCount, connectedCount, failedCount, state, startedAt?, endedAt? }`，其中 `connectedCount` 只统计 Fleet runtime 已确认 connected 的 Bot
+- **响应**: `200` 同创建响应；公开 V2 snapshot 的 `scenario` 原样返回规范化对象，含 V1 内部兼容字段的 snapshot 不投影到 HTTP `scenario`，旧会话仍由 `behavior`/`orchestrationYaml`/`orchestrationSummary` 表达。FR-351 起在已预检/启动的会话上加性返回 `allocations[]` 与 `batches[]` 摘要。`instanceId` 仍是被测目标，`batches[].executorNodeId` 才是实际发压节点；批次摘要为 `{ id, uuid, executorNodeId, ordinal, plannedCount, acceptedCount, connectedCount, failedCount, state, startedAt?, endedAt? }`，其中 `connectedCount` 只统计 Fleet runtime 已确认 connected 的 Bot
 - **错误**:
   - 403 `FORBIDDEN`：无读取权限。
   - 404 `NOT_FOUND`：会话不存在或无权访问。

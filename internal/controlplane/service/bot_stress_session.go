@@ -543,13 +543,28 @@ func (s *BotStressSessionService) viewFromSession(sess model.BotStressSession) (
 		view.OrchestrationSummary = &summary
 	}
 	if strings.TrimSpace(sess.ScenarioSnapshot) != "" {
-		scenario, err := ParseScenarioSnapshot(sess.ScenarioSnapshot)
+		scenario, err := projectPublicScenario(sess.ScenarioSnapshot)
 		if err != nil {
 			return nil, err
 		}
 		view.Scenario = scenario
 	}
 	return view, nil
+}
+
+func projectPublicScenario(snapshot string) (*ScenarioV2, error) {
+	scenario, err := ParseScenarioSnapshot(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	for _, cohort := range scenario.Cohorts {
+		for _, action := range cohort.Steps {
+			if action.LegacyBehavior != nil || action.AttackUntil != nil && action.AttackUntil.LegacyDurationSuccess {
+				return nil, nil
+			}
+		}
+	}
+	return scenario, nil
 }
 
 func (s *BotStressSessionService) enrichBotLoadView(view *BotStressSessionView, session *model.BotStressSession) (*BotStressSessionView, error) {

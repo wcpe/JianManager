@@ -93,6 +93,27 @@ func TestBotStressSession_GetDetailReturnsOrchestration(t *testing.T) {
 	assert.Equal(t, float64(2), summary["phaseCount"])
 }
 
+func TestBotStressSession_GetLegacyDetailRedactsInternalScenarioFields(t *testing.T) {
+	_, _, _, ctx := setupBotLoadHTTP(t, 50)
+	legacyYAML := "phases:\n  - durationSec: 10\n    behavior: custom\n    steps:\n      - type: attack\n"
+	created := makeRequest(ctx.router, http.MethodPost, "/api/v1/bots/stress-sessions", map[string]interface{}{
+		"instanceId": ctx.instanceID, "count": 1, "namePrefix": "legacy", "orchestrationYaml": legacyYAML,
+	}, ctx.token)
+	require.Equalf(t, http.StatusCreated, created.Code, "创建 legacy 会话失败: %s", created.Body.String())
+	createdBody := parseJSON(t, created)
+	sessionID := uint(createdBody["id"].(float64))
+
+	detail := makeRequest(ctx.router, http.MethodGet, "/api/v1/bots/stress-sessions/"+itoa(sessionID), nil, ctx.token)
+	require.Equalf(t, http.StatusOK, detail.Code, "查询 legacy 会话失败: %s", detail.Body.String())
+	body := parseJSON(t, detail)
+	assert.NotContains(t, body, "scenario")
+	assert.Equal(t, "custom", body["behavior"])
+	assert.Equal(t, legacyYAML, body["orchestrationYaml"])
+	assert.Contains(t, body, "orchestrationSummary")
+	assert.NotContains(t, detail.Body.String(), "legacyDurationSuccess")
+	assert.NotContains(t, detail.Body.String(), "legacy_behavior")
+}
+
 func TestBotStressSession_CreateValidation(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

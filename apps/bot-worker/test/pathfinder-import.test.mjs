@@ -45,3 +45,20 @@ test('PathfinderMover 使用真实模块形态构造 GoalFollow', async () => {
   assert.equal(installedGoals.length, 1)
   assert.equal(installedGoals[0].constructor.name, 'GoalFollow')
 })
+
+test('真实 pathfinder 插件加载失败时保持未就绪供行为降级', async () => {
+  const bot = {
+    pathfinder: null,
+    loadPlugin() { throw new Error('模拟插件不可用') },
+  }
+  const mover = new PathfinderMover(bot)
+  const originalError = console.error
+  console.error = () => {}
+  try {
+    await mover.init()
+  } finally {
+    console.error = originalError
+  }
+
+  assert.equal(mover.isReady(), false)
+})

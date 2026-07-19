@@ -271,6 +271,97 @@ test('V1 legacy_behavior 通过 Fleet adapter 复用旧行为与 custom 边界',
   }
 })
 
+test('V1 多阶段 legacy adapter 按步骤切换独立行为并完整释放', async () => {
+  const calls = []
+  const harness = createFleetHarness({
+    createBehavior: (_botId, name, config) => {
+      const call = { name, config, ticks: 0, stopped: 0, released: 0, bound: 0 }
+      calls.push(call)
+      return {
+        name,
+        start() {},
+        stop() { call.stopped++ },
+        releaseMcBot() { call.released++; call.stopped++ },
+        setMcBot() { call.bound++ },
+        async tick() { call.ticks++ },
+      }
+    },
+  })
+  const interact = { type: 'interact', pos: { x: 1, y: 64, z: 1 } }
+  const useItem = { type: 'use_item' }
+  harness.fleet.handleCommand({ cmd: 'create-bots', requestId: 'multi-r', batchId: 'multi-b', idempotencyKey: 'multi-k', bots: [assignment('legacy-multi', {
+    cohortKey: 'legacy',
+    scenario: scenario([
+      step('follow', 'legacy_behavior', { behavior: 'follow', target: 'PlayerOne', durationMs: 100, timeoutMs: 500 }),
+      step('guard-a', 'legacy_behavior', { behavior: 'guard', target: '1,64,1', durationMs: 100, timeoutMs: 500 }),
+      step('patrol', 'legacy_behavior', { behavior: 'patrol', target: '0,64,0;10,64,0', durationMs: 100, timeoutMs: 500 }),
+      step('interact', 'legacy_behavior', { behavior: 'custom', durationMs: 100, step: interact, timeoutMs: 500 }),
+      step('use-item', 'legacy_behavior', { behavior: 'custom', durationMs: 100, step: useItem, timeoutMs: 500 }),
+      step('roam', 'legacy_behavior', { behavior: 'roam', durationMs: 100, timeoutMs: 500 }),
+      step('guard-b', 'legacy_behavior', { behavior: 'guard', target: '9,64,9', durationMs: 100, timeoutMs: 500 }),
+    ], 'legacy'),
+  })] })
+  await harness.flush()
+  for (const now of [1_100, 1_200, 1_300, 1_400, 1_500, 1_600, 1_700]) await harness.tick(now)
+
+  assert.deepEqual(calls.map(({ name, config }) => [name, config]), [
+    ['follow', 'PlayerOne'],
+    ['guard', '1,64,1'],
+    ['patrol', '0,64,0;10,64,0'],
+    ['custom', { steps: [interact] }],
+    ['custom', { steps: [useItem] }],
+    ['roam', undefined],
+    ['guard', '9,64,9'],
+  ])
+  assert.ok(calls.every((call) => call.bound === 1 && call.ticks > 0))
+  assert.ok(calls.every((call) => call.released === 1))
+  assert.equal(harness.intervals.length, 1)
+
+  harness.fleet.handleCommand({ cmd: 'stop-bots', requestId: 'multi-stop', botIds: ['legacy-multi'], generation: 3 })
+  await harness.flush()
+  assert.equal(harness.intervals.length, 0)
+  assert.equal(harness.bots[0].eventNames().reduce((total, name) => total + harness.bots[0].listenerCount(name), 0), 0)
+})
+
+test('V1 legacy retry 每次创建新行为且不串联上次状态', async () => {
+  const calls = []
+  const harness = createFleetHarness({
+    createBehavior: (_botId, name, config) => {
+      const call = { name, config, ticks: 0, released: 0, serial: calls.length + 1 }
+      calls.push(call)
+      return {
+        name,
+        start() {},
+        stop() {},
+        releaseMcBot() { call.released++ },
+        setMcBot() {},
+        async tick() {
+          call.ticks++
+          if (call.serial === 1) throw new Error('首次尝试失败')
+        },
+      }
+    },
+  })
+  harness.fleet.handleCommand({ cmd: 'create-bots', bots: [assignment('legacy-retry', {
+    cohortKey: 'legacy',
+    scenario: scenario([step('follow', 'legacy_behavior', {
+      behavior: 'follow', target: 'RetryTarget', durationMs: 100, timeoutMs: 500,
+      maxAttempts: 2, retryBackoffMs: 0,
+    })], 'legacy'),
+  })] })
+  await harness.flush()
+  await harness.tick(1_050)
+  await harness.tick(1_050)
+  await harness.tick(1_150)
+
+  assert.deepEqual(calls.map(({ name, config, ticks, released }) => ({ name, config, ticks, released })), [
+    { name: 'follow', config: 'RetryTarget', ticks: 1, released: 1 },
+    { name: 'follow', config: 'RetryTarget', ticks: 1, released: 1 },
+  ])
+  const events = actionEvents(harness.events, 'legacy-retry')
+  assert.deepEqual(events.filter((event) => event.action.status !== 'running').map((event) => event.action.status), ['failed', 'succeeded'])
+})
+
 test('V1 guard 复用旧行为目标且不再走 attack assertion', async () => {
   const calls = []
   const harness = createFleetHarness({

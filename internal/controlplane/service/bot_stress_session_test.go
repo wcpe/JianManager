@@ -446,13 +446,19 @@ func TestBotStressSession_CreateV1BuildsSnapshotAndKeepsOriginalYAML(t *testing.
 	})
 	require.NoError(t, err)
 	require.Equal(t, validStressOrchestrationYAML, created.OrchestrationYAML)
-	require.NotNil(t, created.Scenario)
-	require.Equal(t, "legacy", created.Scenario.Cohorts[0].Key)
+	require.Nil(t, created.Scenario)
 
 	var row model.BotStressSession
 	require.NoError(t, db.First(&row, created.ID).Error)
 	require.Equal(t, validStressOrchestrationYAML, row.OrchestrationYAML)
 	require.NotEmpty(t, row.ScenarioSnapshot)
+	stored, err := ParseScenarioSnapshot(row.ScenarioSnapshot)
+	require.NoError(t, err)
+	require.Equal(t, ScenarioActionLegacyBehavior, stored.Cohorts[0].Steps[1].Type())
+	assignments, cohortJSON, _, err := prepareBotLoadScenarioAssignments(&row)
+	require.NoError(t, err)
+	require.Len(t, assignments, row.BotCount)
+	require.Contains(t, cohortJSON["legacy"], `"type":"legacy_behavior"`)
 }
 
 func TestBotStressSession_CreateLegacyBehaviorWithoutContinuousActionKeepsFallback(t *testing.T) {
