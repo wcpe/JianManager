@@ -1383,7 +1383,7 @@
 - **描述**: 查询单个压测会话详情，返回持久化 YAML。
 - **关联 FR**: FR-042 / FR-274
 - **权限**: `bot:read`（按会话目标实例隔离）
-- **响应**: `200` 同创建响应；FR-351 起在已预检/启动的会话上加性返回 `allocations[]` 与 `batches[]` 摘要。`instanceId` 仍是被测目标，`batches[].executorNodeId` 才是实际发压节点
+- **响应**: `200` 同创建响应；FR-351 起在已预检/启动的会话上加性返回 `allocations[]` 与 `batches[]` 摘要。`instanceId` 仍是被测目标，`batches[].executorNodeId` 才是实际发压节点；批次摘要为 `{ id, uuid, executorNodeId, ordinal, plannedCount, acceptedCount, connectedCount, failedCount, state, startedAt?, endedAt? }`，其中 `connectedCount` 只统计 Fleet runtime 已确认 connected 的 Bot
 - **错误**:
   - 403 `FORBIDDEN`：无读取权限。
   - 404 `NOT_FOUND`：会话不存在或无权访问。
@@ -1446,10 +1446,10 @@
   ```
 - **响应**: `202 Accepted`，返回会话视图。新增字段为加性字段：
   - `allocations[]`: 服务端保存计划的只读摘要（执行节点、批次大小、连接时间门控）
-  - `batches[]`: `{ id, uuid, executorNodeId, ordinal, plannedCount, acceptedCount, failedCount, state, startedAt?, endedAt? }`
-  - 返回 202 仅表示事务已提交且后台派发已接受；不会等待 Worker accepted，更不会等待 Bot connected。accepted 只来自逐项批量回执，connected 只来自 Fleet runtime 事件
+  - `batches[]`: `{ id, uuid, executorNodeId, ordinal, plannedCount, acceptedCount, connectedCount, failedCount, state, startedAt?, endedAt? }`
+  - 返回 202 仅表示事务已提交且后台派发已接受；不会等待 Worker accepted，更不会等待 Bot connected。accepted 只来自逐项批量回执，`connectedCount` 只来自 Fleet runtime 事件并会由完整 baseline 重算
   - 响应不返回节点密钥、planToken 签名材料、数据库中的 allocation_plan 原文或批次内部错误明细
-- **V1 空 body 兼容**: 仅旧字段形态、尚无分布式计划且 `count<=50` 的 V1 会话，可在目标实例节点容量足够时由服务端内部预检并启动；V2/分布式会话缺 `planToken` 返回 409，禁止静默退回单节点
+- **V1 空 body 兼容**: 仅旧字段形态、尚无分布式计划且 `count<=50` 的 V1 会话，可在目标实例节点容量足够时由服务端内部预检并启动；旧连接配置允许显式 `auth=offline`。若配置含 `scenario`/`scenarioId`/`scenarioJson`、`loadProfile`、`cohorts`、`executorPool`/`executorPoolId`/`executorNodeIds` 等 V2 专属字段，则仍必须提供 `planToken`，缺失返回 409，禁止静默退回单节点
 - **错误**:
   - 400 `INVALID_REQUEST`：请求体/连接配置非法
   - 403 `FORBIDDEN`：缺少会话目标实例的 Bot 管理权限
@@ -1464,7 +1464,8 @@
 - **关联 FR**: FR-042 / FR-274 / FR-351
 - **权限**: `bot:manage`（按会话目标实例隔离）；写审计 `bot_load.run.stop`
 - **请求**（body 可空）: `{ "reason": "人工结束压测" }`，`reason` 最长 255 个字符
-- **响应**: `202 Accepted` 会话视图。它表示停止意图和后台任务已接受，不表示全部 Bot 已断开；逐项 accepted 后才把 Bot 写为 `stopped`。若存在未停止差距，批次保持 `failed`、会话进入 `error` 并保留可诊断原因，不伪报 stopped
+- **响应**: `202 Accepted` 会话视图。它表示停止意图和后台任务已接受，不表示全部 Bot 已断开；Worker 逐项 accepted 也只确认停止命令已接收，不会把 Bot runtime 伪写为 `stopped`。会话在 `waiting_runtime` 中等待 Fleet stopped/not-found 事件或完整 baseline 缺失项收敛，真实退出全部确认后才把批次/会话标为 stopped；RPC 拒绝或归真失败时保留 error 与可诊断原因
+- **不泄露**: 响应与审计不返回节点密钥、Bot 凭据、停止批次内部错误明细或其他敏感配置
 - **错误**: 400 `INVALID_REQUEST`（JSON 非法或 reason 超长）| 403 `FORBIDDEN` | 404 `NOT_FOUND` | 500 `INTERNAL_ERROR`
 
 ---
