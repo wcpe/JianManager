@@ -24,8 +24,7 @@ import {
   type ManifestFileLike,
   type TreeDir,
 } from '@/lib/client-publish-wizard'
-import { cn } from '@jianmanager/ui'
-import { ContextMenuSurface } from '@/components/ui/context-menu-surface'
+import { ContextMenuSurface, cn } from '@jianmanager/ui'
 
 // ── 颜色映射 ──────────────────────────────────────────────────────────
 

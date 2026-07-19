@@ -46,7 +46,7 @@ import {
   type TreeDir,
   type TreeFile,
 } from '@/lib/client-publish-wizard'
-import { cn } from '@jianmanager/ui'
+import { ContextMenuSurface, cn } from '@jianmanager/ui'
 import { Badge } from '@jianmanager/ui/components/badge'
 import { Button } from '@jianmanager/ui/components/button'
 import {
@@ -69,7 +69,6 @@ import {
   ScrollableDialogBody,
 } from '@jianmanager/ui/components/scrollable-dialog'
 import DangerConfirm from '@/components/DangerConfirm'
-import { ContextMenuSurface } from '@/components/ui/context-menu-surface'
 
 /** 平台「全部」哨兵（Radix Select 不允许空字符串值，回写时映射回 ""）。 */
 const PLATFORM_ALL = '__all__'

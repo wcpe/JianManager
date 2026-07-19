@@ -13,6 +13,7 @@ const firstWaveUi = [
   'button',
   'card',
   'checkbox',
+  'context-menu-surface',
   'dialog',
   'dropdown-menu',
   'field-label',
@@ -64,6 +65,7 @@ describe('@jianmanager/ui package boundary', () => {
 
     for (const exported of [
       'Button',
+      'ContextMenuSurface',
       'Panel',
       'StatCard',
       'StatusBadge',
