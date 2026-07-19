@@ -13,7 +13,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -143,25 +145,29 @@ type pendingRequestResult struct {
 // Manager Bot 管理器。
 // spawn 一个 Bot Worker 子进程，通过 stdin/stdout JSON 行协议通信。
 type Manager struct {
-	mu             sync.Mutex
-	cmd            *exec.Cmd
-	stdin          *json.Encoder
-	stdout         *bufio.Scanner
-	running        bool
-	cancel         context.CancelFunc
-	waitDone       chan struct{} // 本代子进程 Wait 归来即关闭（单一 waiter，Stop 复用）
-	bots           map[string]*BotState
-	onEvent        EventCallback
-	eventSubs      map[uint64]chan *BotWorkerEvent
-	nextSubID      uint64
-	pending        map[string]chan pendingRequestResult
-	requestTimeout time.Duration
-	capacity       BotCapacitySnapshot
-	readyCh        chan struct{}
-	prewarm        int
-	botWorker      string        // bot-worker 脚本路径
-	nodeRes        *NodeResolver // node 可执行解析器（FR-300：托管/扫描 Node 优先，回退 PATH）
-	extraEnv       []string      // spawn 追加环境（FR-308：NODE_PATH 仅作 CJS 兜底）
+	mu                     sync.Mutex
+	writeMu                sync.Mutex
+	cmd                    *exec.Cmd
+	stdin                  *json.Encoder
+	stdinPipe              io.Closer
+	stdout                 *bufio.Scanner
+	activeReaderGeneration int64
+	running                bool
+	stopping               bool
+	cancel                 context.CancelFunc
+	waitDone               chan struct{} // 本代子进程 Wait 归来即关闭（单一 waiter，Stop 复用）
+	bots                   map[string]*BotState
+	onEvent                EventCallback
+	eventSubs              map[uint64]chan *BotWorkerEvent
+	nextSubID              uint64
+	pending                map[string]chan pendingRequestResult
+	requestTimeout         time.Duration
+	capacity               BotCapacitySnapshot
+	readyCh                chan struct{}
+	prewarm                int
+	botWorker              string        // bot-worker 脚本路径
+	nodeRes                *NodeResolver // node 可执行解析器（FR-300：托管/扫描 Node 优先，回退 PATH）
+	extraEnv               []string      // spawn 追加环境（FR-308：NODE_PATH 仅作 CJS 兜底）
 	// prepareSpawn 在依赖预检前刷新受控 dist 的 ESM node_modules 链接。
 	prepareSpawn func(distDir string) error
 	// depsPrecheck spawn 前只按 ESM 可见路径检查依赖，避免裸全局根误放行。
@@ -355,12 +361,13 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	m.cancel = cancel
 	m.running = true
+	m.activeReaderGeneration = m.capacity.WorkerEpochGeneration
 	m.waitDone = make(chan struct{})
 	slog.Info("Bot Worker 已启动",
 		"pid", m.cmd.Process.Pid, "node", res.Path, "nodeVersion", res.Version, "nodeSource", res.Source)
 
-	// 启动事件读取循环；固定绑定本代 scanner，避免重拉覆盖字段后旧循环误读新代。
-	go m.readLoop(m.stdout)
+	// 启动事件读取循环；固定绑定本代 scanner 与本地世代，旧 reader 的迟到事件一律丢弃。
+	go m.readLoop(m.stdout, m.activeReaderGeneration)
 	// 单一 waiter：子进程退出（崩溃/被杀/正常）即归位 running=false，
 	// 使 ensureBotManager 懒重拉恢复生效；否则后续 IPC 全部写入死管道、Bot 永卡 connecting。
 	go m.waitChild(m.cmd, m.waitDone, stderrTail)
@@ -396,6 +403,7 @@ func (m *Manager) spawnLocked(ctx context.Context, nodePath string, args []strin
 
 	m.cmd = cmd
 	m.stdin = json.NewEncoder(stdin)
+	m.stdinPipe = stdin
 	m.stdout = bufio.NewScanner(stdout)
 	// 增大扫描缓冲区，避免长行被截断
 	m.stdout.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -405,56 +413,83 @@ func (m *Manager) spawnLocked(ctx context.Context, nodePath string, args []strin
 // waitChild 等待子进程退出并归位运行态（本代 cmd 的唯一 Wait 调用方）。
 func (m *Manager) waitChild(cmd *exec.Cmd, done chan struct{}, stderrTail *tailBuffer) {
 	err := cmd.Wait()
-	close(done)
 
 	m.mu.Lock()
 	// 代际守卫：仅当仍是本代子进程时归位，避免旧代 Wait 迟到冲掉重拉后的新状态。
 	current := m.cmd == cmd
 	wasRunning := m.running
+	wasStopping := m.stopping
+	var exitEvent *BotWorkerEvent
+	var cb EventCallback
 	if current {
-		wasReady := m.capacity.Ready
-		m.running = false
-		m.capacity.Ready = false
-		m.capacity.ActiveBots = 0
-		m.capacity.ConnectingBots = 0
-		m.capacity.UnavailableReason = "bot-worker 进程已退出"
-		m.capacity.ObservedAt = time.Now()
-		if wasReady {
-			m.bumpCapacityGenerationLocked(0)
-		}
-		m.failPendingLocked(fmt.Errorf("Bot Worker 进程已退出"))
+		exitEvent, cb = m.invalidateRuntimeLocked("bot-worker 进程已退出", fmt.Errorf("Bot Worker 进程已退出"))
+		m.cmd = nil
+		m.stdin = nil
+		m.stdinPipe = nil
+		m.stdout = nil
+		m.cancel = nil
 	}
 	m.mu.Unlock()
+	close(done)
 
-	if current && wasRunning {
+	if cb != nil {
+		cb(exitEvent)
+	}
+	if current && wasRunning && !wasStopping {
 		// 非 Stop 主动收束的退出（崩溃/自亡）：留取证日志。
 		slog.Error("Bot Worker 子进程意外退出，下次 Bot 操作将自动重拉",
 			"error", err, "stderrTail", stderrTail.String())
 	}
 }
 
+func (m *Manager) invalidateRuntimeLocked(reason string, pendingErr error) (*BotWorkerEvent, EventCallback) {
+	generation := m.capacity.WorkerEpochGeneration
+	m.running = false
+	m.stopping = false
+	m.activeReaderGeneration = 0
+	m.bots = make(map[string]*BotState)
+	m.capacity.Ready = false
+	m.capacity.Legacy = true
+	m.capacity.ActiveBots = 0
+	m.capacity.ConnectingBots = 0
+	m.capacity.WorkerEpoch = ""
+	m.capacity.BotWorkerVersion = ""
+	m.capacity.RSSBytes = 0
+	m.capacity.EventLoopP95Ms = 0
+	m.capacity.DroppedEvents = 0
+	m.capacity.Features = nil
+	m.capacity.UnavailableReason = reason
+	m.capacity.ObservedAt = time.Now()
+	m.bumpCapacityGenerationLocked(0)
+	m.failPendingLocked(pendingErr)
+
+	event := &BotWorkerEvent{Evt: "worker-exit", Error: reason, WorkerEpochGeneration: generation}
+	m.dispatchTerminalEventLocked(event)
+	return event, m.onEvent
+}
+
 // Stop 停止 Bot 管理器和 Bot Worker 子进程。
 func (m *Manager) Stop() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if !m.running {
+	if !m.running || m.stopping {
+		m.mu.Unlock()
 		return
 	}
+	m.stopping = true
+	cancel, done, cmd := m.cancel, m.waitDone, m.cmd
+	m.mu.Unlock()
 
-	m.running = false
-	if m.cancel != nil {
-		m.cancel()
+	if cancel != nil {
+		cancel()
 	}
-	done := m.waitDone
-
 	// 等待 waitChild（唯一 Wait 调用方）确认子进程退出，超时兜底强杀。
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		if m.cmd.Process != nil {
-			_ = m.cmd.Process.Kill()
+		if cmd != nil && cmd.Process != nil {
+			_ = cmd.Process.Kill()
 		}
+		<-done
 	}
 
 	slog.Info("Bot Worker 已停止")
@@ -467,16 +502,33 @@ func (m *Manager) IsRunning() bool {
 	return m.running
 }
 
+var errBotWriterReplaced = errors.New("Bot Worker stdin 已失效")
+
 // sendCommand 向 Bot Worker 发送命令。
 func (m *Manager) sendCommand(cmd interface{}) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if !m.running {
+	if !m.running || m.stdin == nil {
+		m.mu.Unlock()
 		return fmt.Errorf("Bot Worker 未运行")
 	}
+	generation, encoder, timeout := m.activeReaderGeneration, m.stdin, m.requestTimeout
+	m.mu.Unlock()
 
-	return m.stdin.Encode(cmd)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	writeDone := m.startWrite(generation, encoder, cmd)
+	select {
+	case err := <-writeDone:
+		return err
+	case <-timer.C:
+		if err, completed := pollWrite(writeDone); completed {
+			return err
+		}
+		err := fmt.Errorf("等待 Bot Worker stdin 写入超时")
+		m.isolateBlockedWriter(generation, encoder, err)
+		<-writeDone
+		return err
+	}
 }
 
 const maxPendingRequests = 1024
@@ -486,7 +538,7 @@ func (m *Manager) sendRequest(ctx context.Context, requestID string, cmd interfa
 		return nil, fmt.Errorf("requestId 不能为空")
 	}
 	m.mu.Lock()
-	if !m.running {
+	if !m.running || m.stdin == nil {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("Bot Worker 未运行")
 	}
@@ -500,31 +552,117 @@ func (m *Manager) sendRequest(ctx context.Context, requestID string, cmd interfa
 	}
 	resultCh := make(chan pendingRequestResult, 1)
 	m.pending[requestID] = resultCh
-	if err := m.stdin.Encode(cmd); err != nil {
-		delete(m.pending, requestID)
-		m.mu.Unlock()
-		return nil, err
-	}
-	timeout := m.requestTimeout
+	generation, encoder, timeout := m.activeReaderGeneration, m.stdin, m.requestTimeout
 	m.mu.Unlock()
 
+	// 超时必须先于 Encode 启动，阻塞管道写也受同一 deadline 约束。
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	writeDone := m.startWrite(generation, encoder, cmd)
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			if errors.Is(err, errBotWriterReplaced) {
+				select {
+				case result := <-resultCh:
+					return result.event, result.err
+				default:
+				}
+			}
+			m.removePendingRequest(requestID, resultCh)
+			if !errors.Is(err, errBotWriterReplaced) {
+				m.isolateBlockedWriter(generation, encoder, err)
+			}
+			return nil, fmt.Errorf("写入 Bot Worker stdin 失败: %w", err)
+		}
+	case <-ctx.Done():
+		m.removePendingRequest(requestID, resultCh)
+		if _, completed := pollWrite(writeDone); !completed {
+			m.isolateBlockedWriter(generation, encoder, ctx.Err())
+			<-writeDone
+		}
+		return nil, ctx.Err()
+	case <-timer.C:
+		m.removePendingRequest(requestID, resultCh)
+		if _, completed := pollWrite(writeDone); !completed {
+			err := fmt.Errorf("等待 Bot Worker stdin 写入超时: requestId=%s", requestID)
+			m.isolateBlockedWriter(generation, encoder, err)
+			<-writeDone
+			return nil, err
+		}
+		return nil, fmt.Errorf("等待 Bot Worker 回执超时: requestId=%s", requestID)
+	}
+
 	select {
 	case result := <-resultCh:
 		return result.event, result.err
 	case <-ctx.Done():
-		m.removePendingRequest(requestID)
+		m.removePendingRequest(requestID, resultCh)
 		return nil, ctx.Err()
 	case <-timer.C:
-		m.removePendingRequest(requestID)
+		m.removePendingRequest(requestID, resultCh)
 		return nil, fmt.Errorf("等待 Bot Worker 回执超时: requestId=%s", requestID)
 	}
 }
 
-func (m *Manager) removePendingRequest(requestID string) {
+func (m *Manager) startWrite(generation int64, encoder *json.Encoder, cmd interface{}) <-chan error {
+	done := make(chan error, 1)
+	go func() {
+		m.writeMu.Lock()
+		defer m.writeMu.Unlock()
+		m.mu.Lock()
+		current := m.running && m.activeReaderGeneration == generation && m.stdin == encoder
+		m.mu.Unlock()
+		if !current {
+			done <- errBotWriterReplaced
+			return
+		}
+		done <- encoder.Encode(cmd)
+	}()
+	return done
+}
+
+func pollWrite(done <-chan error) (error, bool) {
+	select {
+	case err := <-done:
+		return err, true
+	default:
+		return nil, false
+	}
+}
+
+func (m *Manager) isolateBlockedWriter(generation int64, encoder *json.Encoder, cause error) {
 	m.mu.Lock()
-	delete(m.pending, requestID)
+	if !m.running || m.activeReaderGeneration != generation || m.stdin != encoder {
+		m.mu.Unlock()
+		return
+	}
+	cmd, pipe, cancel := m.cmd, m.stdinPipe, m.cancel
+	pendingErr := fmt.Errorf("Bot Worker stdin 不可用: %w", cause)
+	exitEvent, cb := m.invalidateRuntimeLocked("bot-worker stdin 不可用", pendingErr)
+	m.cmd, m.stdin, m.stdinPipe, m.stdout, m.cancel = nil, nil, nil, nil, nil
+	m.mu.Unlock()
+
+	if pipe != nil {
+		_ = pipe.Close()
+	}
+	if cancel != nil {
+		cancel()
+	}
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
+	if cb != nil {
+		cb(exitEvent)
+	}
+	slog.Warn("Bot Worker stdin 阻塞，已隔离不健康子进程", "error", cause)
+}
+
+func (m *Manager) removePendingRequest(requestID string, waiter chan pendingRequestResult) {
+	m.mu.Lock()
+	if m.pending[requestID] == waiter {
+		delete(m.pending, requestID)
+	}
 	m.mu.Unlock()
 }
 
@@ -692,7 +830,7 @@ func (m *Manager) GetBot(botID string) (*BotState, bool) {
 }
 
 // readLoop 读取指定子进程世代的 Bot Worker stdout 事件。
-func (m *Manager) readLoop(scanner *bufio.Scanner) {
+func (m *Manager) readLoop(scanner *bufio.Scanner, sourceGeneration int64) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
@@ -704,68 +842,139 @@ func (m *Manager) readLoop(scanner *bufio.Scanner) {
 			slog.Warn("解析 Bot Worker 事件失败", "error", err, "line", line)
 			continue
 		}
-
-		m.handleEvent(&event)
+		m.handleReaderEvent(&event, scanner, sourceGeneration)
 	}
 
-	if err := scanner.Err(); err != nil {
+	m.mu.Lock()
+	current := m.stdout == scanner && m.activeReaderGeneration == sourceGeneration
+	m.mu.Unlock()
+	if err := scanner.Err(); err != nil && current {
 		slog.Error("Bot Worker stdout 读取错误", "error", err)
 	}
 }
 
-// handleEvent 处理 Bot Worker 事件。
+func (m *Manager) handleReaderEvent(event *BotWorkerEvent, scanner *bufio.Scanner, sourceGeneration int64) {
+	m.mu.Lock()
+	if m.stdout != scanner || m.activeReaderGeneration != sourceGeneration {
+		m.mu.Unlock()
+		return
+	}
+	cb, accepted := m.handleEventLocked(event, sourceGeneration)
+	m.mu.Unlock()
+	if accepted && cb != nil {
+		cb(event)
+	}
+}
+
+// handleEvent 处理测试注入或不绑定 reader 的 Bot Worker 事件。
 func (m *Manager) handleEvent(event *BotWorkerEvent) {
 	m.mu.Lock()
+	cb, accepted := m.handleEventLocked(event, 0)
+	m.mu.Unlock()
+	if accepted && cb != nil {
+		cb(event)
+	}
+}
+
+func (m *Manager) handleEventLocked(event *BotWorkerEvent, sourceGeneration int64) (EventCallback, bool) {
+	if event == nil {
+		return nil, false
+	}
+	if sourceGeneration > 0 && event.Evt == "worker-ready" &&
+		event.WorkerEpochGeneration != 0 && event.WorkerEpochGeneration != sourceGeneration {
+		return nil, false
+	}
 
 	switch event.Evt {
 	case "bot-state":
+		accepted := event.Bots[:0]
 		for i := range event.Bots {
-			m.mergeBotState(event.Bots[i])
+			if state, ok := m.mergeBotState(event.Bots[i], sourceGeneration); ok {
+				accepted = append(accepted, state)
+			}
+		}
+		event.Bots = accepted
+		if len(event.Bots) == 0 {
+			return nil, false
 		}
 	case "worker-ready":
-		m.applyWorkerReady(event)
+		m.applyWorkerReady(event, sourceGeneration)
 	case "heartbeat":
 		m.applyHeartbeat(event)
-	case "batch-result", "signal-result", "fleet-snapshot-result":
-		if waiter, ok := m.pending[event.RequestID]; ok {
-			delete(m.pending, event.RequestID)
-			waiter <- pendingRequestResult{event: event}
-		} else if event.RequestID != "" {
-			slog.Debug("收到已超时的 Bot Worker 回执", "requestId", event.RequestID, "event", event.Evt)
-		}
+	case "fleet-snapshot-result":
+		m.replaceFleetSnapshotLocked(event, sourceGeneration)
+		m.completePendingLocked(event)
+	case "batch-result", "signal-result":
+		m.completePendingLocked(event)
 	case "bot-event", "bot-error", "script-progress", "action-event":
 		// 事件直接转发给回调和订阅者。
 	}
 
 	cb := m.onEvent
 	m.dispatchEventLocked(event)
-	m.mu.Unlock()
+	return cb, true
+}
 
-	if cb != nil {
-		cb(event)
+func (m *Manager) completePendingLocked(event *BotWorkerEvent) {
+	if waiter, ok := m.pending[event.RequestID]; ok {
+		delete(m.pending, event.RequestID)
+		waiter <- pendingRequestResult{event: event}
+	} else if event.RequestID != "" {
+		slog.Debug("收到已超时的 Bot Worker 回执", "requestId", event.RequestID, "event", event.Evt)
 	}
 }
 
-func (m *Manager) mergeBotState(state BotState) {
+func (m *Manager) mergeBotState(state BotState, sourceGeneration int64) (BotState, bool) {
+	state, ok := m.normalizeBotState(state, sourceGeneration)
+	if !ok {
+		return BotState{}, false
+	}
+	existing, exists := m.bots[state.ID]
+	if exists && state.WorkerEpochGeneration < existing.WorkerEpochGeneration {
+		return BotState{}, false
+	}
+	if exists && state.WorkerEpochGeneration == existing.WorkerEpochGeneration &&
+		existing.EventSeq > 0 && state.EventSeq <= existing.EventSeq {
+		return BotState{}, false
+	}
+	if state.Status == "stopped" || state.Status == "not_found" {
+		delete(m.bots, state.ID)
+		return state, true
+	}
+	if !exists {
+		copyState := state
+		m.bots[state.ID] = &copyState
+		return state, true
+	}
+	mergeBotStateFields(existing, state)
+	return state, true
+}
+
+func (m *Manager) normalizeBotState(state BotState, sourceGeneration int64) (BotState, bool) {
+	if state.ID == "" {
+		return BotState{}, false
+	}
+	if sourceGeneration > 0 {
+		if state.WorkerEpochGeneration != 0 && state.WorkerEpochGeneration != sourceGeneration {
+			return BotState{}, false
+		}
+		state.WorkerEpochGeneration = sourceGeneration
+	} else if state.WorkerEpochGeneration == 0 {
+		state.WorkerEpochGeneration = m.capacity.WorkerEpochGeneration
+	}
+	if m.capacity.WorkerEpochGeneration > 0 && state.WorkerEpochGeneration < m.capacity.WorkerEpochGeneration {
+		return BotState{}, false
+	}
 	if state.WorkerEpoch == "" {
 		state.WorkerEpoch = m.capacity.WorkerEpoch
-	}
-	if state.WorkerEpochGeneration == 0 {
-		state.WorkerEpochGeneration = m.capacity.WorkerEpochGeneration
 	}
 	if state.ObservedAt == 0 {
 		state.ObservedAt = time.Now().UnixMilli()
 	}
-	if state.Status == "stopped" || state.Status == "not_found" {
-		delete(m.bots, state.ID)
-		return
-	}
-	existing, ok := m.bots[state.ID]
-	if !ok {
-		copyState := state
-		m.bots[state.ID] = &copyState
-		return
-	}
+	return state, true
+}
+
+func mergeBotStateFields(existing *BotState, state BotState) {
 	if state.Status != "" {
 		existing.Status = state.Status
 	}
@@ -795,9 +1004,7 @@ func (m *Manager) mergeBotState(state BotState) {
 	}
 	existing.WorkerEpoch = state.WorkerEpoch
 	existing.WorkerEpochGeneration = state.WorkerEpochGeneration
-	if state.EventSeq != 0 {
-		existing.EventSeq = state.EventSeq
-	}
+	existing.EventSeq = state.EventSeq
 	if state.CurrentStepID != "" {
 		existing.CurrentStepID = state.CurrentStepID
 	}
@@ -813,22 +1020,44 @@ func (m *Manager) mergeBotState(state BotState) {
 	existing.ObservedAt = state.ObservedAt
 }
 
-func (m *Manager) applyWorkerReady(event *BotWorkerEvent) {
+func (m *Manager) replaceFleetSnapshotLocked(event *BotWorkerEvent, sourceGeneration int64) {
+	next := make(map[string]*BotState, len(event.Bots))
+	accepted := event.Bots[:0]
+	for i := range event.Bots {
+		state, ok := m.normalizeBotState(event.Bots[i], sourceGeneration)
+		if !ok || state.Status == "stopped" || state.Status == "not_found" {
+			continue
+		}
+		copyState := state
+		next[state.ID] = &copyState
+		accepted = append(accepted, state)
+	}
+	m.bots = next
+	event.Bots = accepted
+}
+
+func (m *Manager) applyWorkerReady(event *BotWorkerEvent, sourceGeneration int64) {
 	legacy := !hasFeature(event.Features, "fleet-v1")
 	maxBots := m.capacity.MaxBots
 	if event.MaxBots > 0 {
 		maxBots = event.MaxBots
 	}
+	generation := event.WorkerEpochGeneration
+	if sourceGeneration > 0 {
+		generation = sourceGeneration
+	}
 	changed := !m.capacity.Ready || m.capacity.Legacy != legacy || m.capacity.MaxBots != maxBots ||
-		m.capacity.WorkerEpoch != event.WorkerEpoch || !slices.Equal(m.capacity.Features, event.Features)
+		m.capacity.WorkerEpoch != event.WorkerEpoch || m.capacity.WorkerEpochGeneration != generation ||
+		!slices.Equal(m.capacity.Features, event.Features)
 
 	m.capacity.Ready = true
 	m.capacity.Legacy = legacy
 	m.capacity.MaxBots = maxBots
 	m.capacity.WorkerEpoch = event.WorkerEpoch
-	if event.WorkerEpochGeneration > m.capacity.WorkerEpochGeneration {
-		m.capacity.WorkerEpochGeneration = event.WorkerEpochGeneration
+	if generation > m.capacity.WorkerEpochGeneration || sourceGeneration > 0 {
+		m.capacity.WorkerEpochGeneration = generation
 	}
+	event.WorkerEpochGeneration = m.capacity.WorkerEpochGeneration
 	m.capacity.BotWorkerVersion = event.BotWorkerVersion
 	m.capacity.Features = append([]string(nil), event.Features...)
 	m.capacity.ObservedAt = time.Now()
@@ -876,6 +1105,24 @@ func hasFeature(features []string, want string) bool {
 
 func (m *Manager) dispatchEventLocked(event *BotWorkerEvent) {
 	for _, ch := range m.eventSubs {
+		select {
+		case ch <- event:
+		default:
+		}
+	}
+}
+
+func (m *Manager) dispatchTerminalEventLocked(event *BotWorkerEvent) {
+	for _, ch := range m.eventSubs {
+		select {
+		case ch <- event:
+			continue
+		default:
+		}
+		select {
+		case <-ch:
+		default:
+		}
 		select {
 		case ch <- event:
 		default:

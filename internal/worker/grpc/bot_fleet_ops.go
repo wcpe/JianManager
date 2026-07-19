@@ -121,7 +121,7 @@ func (s *Server) GetBotFleetSnapshot(ctx context.Context, req *workerpb.GetBotFl
 		return nil, status.Errorf(codes.Unavailable, "获取 Bot fleet 快照失败: %v", err)
 	}
 	states := s.botFleet.FleetSnapshot(req.SessionUuid)
-	if event != nil && len(event.Bots) > 0 {
+	if event != nil {
 		states = filterBotStates(event.Bots, req.SessionUuid)
 	}
 	return fleetSnapshotResponse(states, s.botFleet.CapacitySnapshot()), nil
@@ -133,14 +133,17 @@ func (s *Server) StreamBotFleetEvents(req *workerpb.StreamBotFleetEventsRequest,
 		return status.Error(codes.Unavailable, err.Error())
 	}
 	ch := make(chan *bot.BotWorkerEvent, 256)
-	s.addBotEventSubscriber(ch)
+	s.addBotFleetEventSubscriber(ch)
 	defer s.removeBotEventSubscriber(ch)
 
 	for {
 		select {
 		case <-stream.Context().Done():
 			return stream.Context().Err()
-		case event := <-ch:
+		case event, ok := <-ch:
+			if !ok {
+				return status.Error(codes.Unavailable, "bot-worker 进程已退出，请重新订阅")
+			}
 			for _, fleetEvent := range botWorkerEventToFleetProto(event, req.SessionUuid) {
 				if err := stream.Send(fleetEvent); err != nil {
 					return err
@@ -152,8 +155,8 @@ func (s *Server) StreamBotFleetEvents(req *workerpb.StreamBotFleetEventsRequest,
 
 // SignalBotActions 批量投递通用动作信号，并返回逐信号回执。
 func (s *Server) SignalBotActions(ctx context.Context, req *workerpb.SignalBotActionsRequest) (*workerpb.SignalBotActionsResponse, error) {
-	if len(req.Signals) > maxBotActionSignals {
-		return nil, status.Errorf(codes.InvalidArgument, "单次动作信号不能超过 %d 个", maxBotActionSignals)
+	if err := validateBotActionSignals(req); err != nil {
+		return nil, err
 	}
 	if err := s.prepareBotFleet(ctx); err != nil {
 		return unavailableSignalResponse(req.Signals, err), nil
@@ -182,6 +185,26 @@ func (s *Server) prepareBotFleet(ctx context.Context) error {
 	}
 	if err := s.botMgr.WaitReady(ctx); err != nil {
 		return fmt.Errorf("等待 bot-worker 就绪失败: %w", err)
+	}
+	return nil
+}
+
+func validateBotActionSignals(req *workerpb.SignalBotActionsRequest) error {
+	if req == nil {
+		return status.Error(codes.InvalidArgument, "动作信号请求不能为空")
+	}
+	if len(req.Signals) > maxBotActionSignals {
+		return status.Errorf(codes.InvalidArgument, "单次动作信号不能超过 %d 个", maxBotActionSignals)
+	}
+	seen := make(map[string]struct{}, len(req.Signals))
+	for _, signal := range req.Signals {
+		if signal == nil || signal.SignalId == "" {
+			return status.Error(codes.InvalidArgument, "signalId 不能为空")
+		}
+		if _, exists := seen[signal.SignalId]; exists {
+			return status.Errorf(codes.InvalidArgument, "signalId 不能重复: %s", signal.SignalId)
+		}
+		seen[signal.SignalId] = struct{}{}
 	}
 	return nil
 }
@@ -601,15 +624,48 @@ func (s *Server) addBotEventSubscriber(ch chan *bot.BotWorkerEvent) {
 	s.botEventMu.Unlock()
 }
 
+func (s *Server) addBotFleetEventSubscriber(ch chan *bot.BotWorkerEvent) {
+	s.botEventMu.Lock()
+	s.botEventSubs = append(s.botEventSubs, ch)
+	if s.botFleetEventSubs == nil {
+		s.botFleetEventSubs = make(map[chan *bot.BotWorkerEvent]struct{})
+	}
+	s.botFleetEventSubs[ch] = struct{}{}
+	s.botEventMu.Unlock()
+
+	if s.botMgr != nil && !s.botMgr.IsRunning() {
+		s.closeBotFleetEventSubscriber(ch)
+	}
+}
+
+func (s *Server) closeBotFleetEventSubscriber(ch chan *bot.BotWorkerEvent) {
+	s.botEventMu.Lock()
+	_, fleet := s.botFleetEventSubs[ch]
+	removed := fleet && s.removeBotEventSubscriberLocked(ch)
+	s.botEventMu.Unlock()
+	if removed {
+		close(ch)
+	}
+}
+
 func (s *Server) removeBotEventSubscriber(ch chan *bot.BotWorkerEvent) {
 	s.botEventMu.Lock()
+	removed := s.removeBotEventSubscriberLocked(ch)
+	s.botEventMu.Unlock()
+	if removed {
+		close(ch)
+	}
+}
+
+func (s *Server) removeBotEventSubscriberLocked(ch chan *bot.BotWorkerEvent) bool {
+	delete(s.botFleetEventSubs, ch)
 	for i, subscriber := range s.botEventSubs {
 		if subscriber == ch {
 			s.botEventSubs = append(s.botEventSubs[:i], s.botEventSubs[i+1:]...)
-			break
+			return true
 		}
 	}
-	s.botEventMu.Unlock()
+	return false
 }
 
 func nextBotRequestID(prefix string) string {

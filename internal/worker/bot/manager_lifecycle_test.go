@@ -91,3 +91,49 @@ func TestManager_Stop_StillCleanShutdown(t *testing.T) {
 		t.Fatal("Stop 后应 running=false")
 	}
 }
+
+func TestManager_ChildExit_InvalidatesFleetRuntime(t *testing.T) {
+	requireNode(t)
+	script := writeScript(t, `
+console.log(JSON.stringify({evt:"worker-ready",workerEpoch:"epoch-1",workerEpochGeneration:1,maxBots:50,features:["fleet-v1"],capacityGeneration:7}));
+console.log(JSON.stringify({evt:"bot-state",bots:[{id:"ghost-bot",status:"connected",sessionId:"run-1",workerEpochGeneration:1,eventSeq:1}]}));
+console.log(JSON.stringify({evt:"heartbeat",activeBots:1,connectingBots:0,capacityGeneration:7}));
+setTimeout(() => process.exit(0), 100);
+`)
+
+	mgr := NewManager(ManagerConfig{BotWorkerPath: script})
+	if err := mgr.Start(context.Background()); err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if mgr.CapacitySnapshot().Ready && len(mgr.FleetSnapshot("")) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !mgr.CapacitySnapshot().Ready || len(mgr.FleetSnapshot("")) != 1 {
+		t.Fatal("测试子进程退出前未建立旧 Bot 运行态")
+	}
+	generationBeforeExit := mgr.CapacitySnapshot().CapacityGeneration
+
+	deadline = time.Now().Add(5 * time.Second)
+	for mgr.IsRunning() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if mgr.IsRunning() {
+		t.Fatal("子进程退出后 Manager 未归位")
+	}
+
+	capacity := mgr.CapacitySnapshot()
+	if capacity.Ready || capacity.ActiveBots != 0 || capacity.ConnectingBots != 0 {
+		t.Fatalf("子进程退出后容量运行态未清零: %+v", capacity)
+	}
+	if capacity.CapacityGeneration <= generationBeforeExit {
+		t.Fatalf("子进程退出应递增容量语义世代: before=%d after=%d", generationBeforeExit, capacity.CapacityGeneration)
+	}
+	if fleet := mgr.FleetSnapshot(""); len(fleet) != 0 {
+		t.Fatalf("子进程退出后仍保留幽灵 Bot: %+v", fleet)
+	}
+}

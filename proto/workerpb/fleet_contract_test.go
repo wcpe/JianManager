@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/wcpe/JianManager/proto/workerpb"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -45,9 +46,56 @@ func TestWorkerProto_FleetContractFrozen(t *testing.T) {
 	require.NotNil(t, fleetEvent)
 	require.Equal(t, 1, fleetEvent.Oneofs().Len())
 	require.Equal(t, protoreflect.Name("event"), fleetEvent.Oneofs().Get(0).Name())
+	eventOneof := fleetEvent.Oneofs().Get(0)
+	require.Equal(t, 2, eventOneof.Fields().Len())
+	require.Equal(t, protoreflect.Name("runtime_snapshot"), eventOneof.Fields().Get(0).Name())
+	require.Equal(t, protoreflect.FieldNumber(1), eventOneof.Fields().Get(0).Number())
+	require.Equal(t, protoreflect.Name("action_event"), eventOneof.Fields().Get(1).Name())
+	require.Equal(t, protoreflect.FieldNumber(2), eventOneof.Fields().Get(1).Number())
 
 	assertField(t, file, "InstanceMetricSample", "mspt_p95_millis")
 	assertField(t, file, "GetInstanceMetricsResponse", "mspt_p95_millis")
+}
+
+func TestWorkerProto_FleetOneofMarshalRoundTrip(t *testing.T) {
+	tests := []struct {
+		name  string
+		event *workerpb.BotFleetEvent
+		check func(*testing.T, *workerpb.BotFleetEvent)
+	}{
+		{
+			name: "runtime snapshot",
+			event: &workerpb.BotFleetEvent{Event: &workerpb.BotFleetEvent_RuntimeSnapshot{
+				RuntimeSnapshot: &workerpb.BotRuntimeSnapshot{BotUuid: "bot-1", EventSeq: 7},
+			}},
+			check: func(t *testing.T, got *workerpb.BotFleetEvent) {
+				require.IsType(t, &workerpb.BotFleetEvent_RuntimeSnapshot{}, got.Event)
+				require.Equal(t, "bot-1", got.GetRuntimeSnapshot().BotUuid)
+				require.EqualValues(t, 7, got.GetRuntimeSnapshot().EventSeq)
+			},
+		},
+		{
+			name: "action event",
+			event: &workerpb.BotFleetEvent{Event: &workerpb.BotFleetEvent_ActionEvent{
+				ActionEvent: &workerpb.BotActionEvent{BotUuid: "bot-2", StepId: "step-1"},
+			}},
+			check: func(t *testing.T, got *workerpb.BotFleetEvent) {
+				require.IsType(t, &workerpb.BotFleetEvent_ActionEvent{}, got.Event)
+				require.Equal(t, "bot-2", got.GetActionEvent().BotUuid)
+				require.Equal(t, "step-1", got.GetActionEvent().StepId)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := proto.Marshal(tt.event)
+			require.NoError(t, err)
+			var got workerpb.BotFleetEvent
+			require.NoError(t, proto.Unmarshal(payload, &got))
+			tt.check(t, &got)
+		})
+	}
 }
 
 func assertMessageFields(t *testing.T, file protoreflect.FileDescriptor, message string, fields []string) {

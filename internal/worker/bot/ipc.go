@@ -125,6 +125,7 @@ type SignalItemResult struct {
 	SignalID  string `json:"signalId"`
 	Accepted  bool   `json:"accepted"`
 	Skipped   bool   `json:"skipped"`
+	Status    string `json:"status,omitempty"`
 	ErrorCode string `json:"errorCode,omitempty"`
 	Error     string `json:"error,omitempty"`
 }

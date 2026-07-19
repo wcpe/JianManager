@@ -63,10 +63,11 @@ type Server struct {
 	botStartMu      sync.Mutex
 	botBatchMu      sync.Mutex
 	botBatchResults map[string]*botBatchCacheEntry
-	// botEventMu 保护 botEventSubs，StreamBotEvents 订阅/取消订阅时加锁。
-	botEventMu     sync.Mutex
-	botEventSubs   []chan *bot.BotWorkerEvent
-	botEventCancel func()
+	// botEventMu 保护 Bot 事件订阅；Fleet 订阅额外登记，以便 worker 退出时只关闭新流。
+	botEventMu        sync.Mutex
+	botEventSubs      []chan *bot.BotWorkerEvent
+	botFleetEventSubs map[chan *bot.BotWorkerEvent]struct{}
+	botEventCancel    func()
 
 	// eventMu 保护 eventSubs，StreamInstanceEvents 订阅/取消订阅时加锁。
 	eventMu   sync.Mutex
@@ -829,16 +830,44 @@ func (s *Server) SetBotManager(m *bot.Manager) {
 	}()
 }
 
-// dispatchBotEvent 把 bot-worker 事件非阻塞地扇出给所有 StreamBotEvents 订阅者。
+// dispatchBotEvent 把 bot-worker 事件非阻塞地扇出给所有 Bot 事件订阅者。
 func (s *Server) dispatchBotEvent(event *bot.BotWorkerEvent) {
+	if event != nil && event.Evt == "worker-exit" {
+		s.dispatchBotWorkerExit(event)
+		return
+	}
 	s.botEventMu.Lock()
 	defer s.botEventMu.Unlock()
 	for _, ch := range s.botEventSubs {
-		select {
-		case ch <- event:
-		default:
-			// 慢订阅者跳过本帧，避免阻塞 bot-worker stdout 读取循环。
+		dispatchBotEventNonBlocking(ch, event)
+	}
+}
+
+func (s *Server) dispatchBotWorkerExit(event *bot.BotWorkerEvent) {
+	s.botEventMu.Lock()
+	fleetSubscribers := make([]chan *bot.BotWorkerEvent, 0, len(s.botFleetEventSubs))
+	remaining := s.botEventSubs[:0]
+	for _, ch := range s.botEventSubs {
+		if _, fleet := s.botFleetEventSubs[ch]; fleet {
+			fleetSubscribers = append(fleetSubscribers, ch)
+			delete(s.botFleetEventSubs, ch)
+			continue
 		}
+		dispatchBotEventNonBlocking(ch, event)
+		remaining = append(remaining, ch)
+	}
+	s.botEventSubs = remaining
+	s.botEventMu.Unlock()
+	for _, ch := range fleetSubscribers {
+		close(ch)
+	}
+}
+
+func dispatchBotEventNonBlocking(ch chan *bot.BotWorkerEvent, event *bot.BotWorkerEvent) {
+	select {
+	case ch <- event:
+	default:
+		// 慢订阅者丢帧，不能反压 bot-worker stdout 读取循环。
 	}
 }
 
@@ -961,20 +990,8 @@ func (s *Server) StreamBotEvents(req *workerpb.StreamBotEventsRequest, stream wo
 
 	filter := req.BotUuid
 	ch := make(chan *bot.BotWorkerEvent, 128)
-	s.botEventMu.Lock()
-	s.botEventSubs = append(s.botEventSubs, ch)
-	s.botEventMu.Unlock()
-	defer func() {
-		s.botEventMu.Lock()
-		for i, sub := range s.botEventSubs {
-			if sub == ch {
-				s.botEventSubs = append(s.botEventSubs[:i], s.botEventSubs[i+1:]...)
-				break
-			}
-		}
-		s.botEventMu.Unlock()
-		close(ch)
-	}()
+	s.addBotEventSubscriber(ch)
+	defer s.removeBotEventSubscriber(ch)
 
 	slog.Info("StreamBotEvents 订阅开始", "botUuid", filter)
 	if err := s.sendBotStateSnapshot(filter, stream); err != nil {

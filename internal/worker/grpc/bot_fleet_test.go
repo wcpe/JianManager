@@ -14,11 +14,13 @@ import (
 )
 
 type fakeBotFleetManager struct {
-	capacity   bot.BotCapacitySnapshot
-	bots       []bot.BotState
-	applyCalls int
-	apply      *bot.BotWorkerEvent
-	signal     *bot.BotWorkerEvent
+	capacity    bot.BotCapacitySnapshot
+	bots        []bot.BotState
+	applyCalls  int
+	signalCalls int
+	apply       *bot.BotWorkerEvent
+	signal      *bot.BotWorkerEvent
+	snapshot    *bot.BotWorkerEvent
 }
 
 func (f *fakeBotFleetManager) CapacitySnapshot() bot.BotCapacitySnapshot { return f.capacity }
@@ -31,12 +33,16 @@ func (f *fakeBotFleetManager) StopBotBatch(context.Context, string, []string, in
 	return &bot.BotWorkerEvent{Evt: "batch-result"}, nil
 }
 func (f *fakeBotFleetManager) SignalActions(context.Context, string, []bot.ActionSignal) (*bot.BotWorkerEvent, error) {
+	f.signalCalls++
 	if f.signal != nil {
 		return f.signal, nil
 	}
 	return &bot.BotWorkerEvent{Evt: "signal-result"}, nil
 }
 func (f *fakeBotFleetManager) RequestFleetSnapshot(context.Context, string) (*bot.BotWorkerEvent, error) {
+	if f.snapshot != nil {
+		return f.snapshot, nil
+	}
 	return &bot.BotWorkerEvent{Evt: "fleet-snapshot-result", Bots: f.bots}, nil
 }
 
@@ -133,6 +139,41 @@ func TestSignalBotActionsMapsItemResults(t *testing.T) {
 	require.True(t, got.Results[0].Accepted)
 }
 
+func TestSignalBotActionsRejectsEmptyAndDuplicateSignalIDs(t *testing.T) {
+	tests := []struct {
+		name    string
+		signals []*workerpb.BotActionSignal
+	}{
+		{name: "空 signalId", signals: []*workerpb.BotActionSignal{{SignalId: ""}}},
+		{name: "重复 signalId", signals: []*workerpb.BotActionSignal{{SignalId: "same"}, {SignalId: "same"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := &fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true}}
+			srv := newBotFleetTestServer(fake)
+
+			_, err := srv.SignalBotActions(context.Background(), &workerpb.SignalBotActionsRequest{Signals: tt.signals})
+
+			require.Equal(t, codes.InvalidArgument, status.Code(err))
+			require.Zero(t, fake.signalCalls, "无效请求不得进入 IPC，避免 map 覆盖破坏逐项对应")
+		})
+	}
+}
+
+func TestGetBotFleetSnapshotTreatsEmptyWorkerSnapshotAsAuthoritative(t *testing.T) {
+	fake := &fakeBotFleetManager{
+		capacity: bot.BotCapacitySnapshot{Ready: true},
+		bots:     []bot.BotState{{ID: "ghost-bot", Status: "connected"}},
+		snapshot: &bot.BotWorkerEvent{Evt: "fleet-snapshot-result", Bots: []bot.BotState{}},
+	}
+	srv := newBotFleetTestServer(fake)
+
+	got, err := srv.GetBotFleetSnapshot(context.Background(), &workerpb.GetBotFleetSnapshotRequest{})
+
+	require.NoError(t, err)
+	require.Empty(t, got.Bots, "bot-worker 的空快照必须覆盖 Manager 旧缓存")
+}
+
 func TestGetBotFleetSnapshotMapsGenerationAndPosition(t *testing.T) {
 	fake := &fakeBotFleetManager{
 		capacity: bot.BotCapacitySnapshot{CapacityGeneration: 8},
@@ -188,6 +229,101 @@ func TestStreamBotFleetEventsFiltersAndCleansSubscriberOnCancel(t *testing.T) {
 		t.Fatal("未收到 Bot fleet runtime 事件")
 	}
 
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+	waitForBotEventSubscribers(t, srv, 0)
+}
+
+func TestAddBotFleetEventSubscriberAfterWorkerExitClosesImmediately(t *testing.T) {
+	srv := &Server{botMgr: bot.NewManager(bot.ManagerConfig{})}
+	ch := make(chan *bot.BotWorkerEvent, 1)
+
+	srv.addBotFleetEventSubscriber(ch)
+
+	_, ok := <-ch
+	require.False(t, ok)
+	waitForBotEventSubscribers(t, srv, 0)
+}
+
+func TestBotFleetSubscriberDoesNotMissConcurrentWorkerExit(t *testing.T) {
+	for range 100 {
+		srv := &Server{botMgr: bot.NewManager(bot.ManagerConfig{})}
+		ch := make(chan *bot.BotWorkerEvent, 1)
+		start := make(chan struct{})
+		done := make(chan struct{}, 2)
+		go func() {
+			<-start
+			srv.addBotFleetEventSubscriber(ch)
+			done <- struct{}{}
+		}()
+		go func() {
+			<-start
+			srv.dispatchBotEvent(&bot.BotWorkerEvent{Evt: "worker-exit"})
+			done <- struct{}{}
+		}()
+
+		close(start)
+		<-done
+		<-done
+		_, ok := <-ch
+		require.False(t, ok, "并发退出后 Fleet 订阅必须关闭")
+		waitForBotEventSubscribers(t, srv, 0)
+	}
+}
+
+func TestStreamBotFleetEventsReturnsUnavailableWhenWorkerExitsAndAllowsResubscribe(t *testing.T) {
+	fake := &fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true}}
+	srv := newBotFleetTestServer(fake)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &botFleetTestStream{ctx: ctx, events: make(chan *workerpb.BotFleetEvent, 1)}
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.StreamBotFleetEvents(&workerpb.StreamBotFleetEventsRequest{}, stream)
+	}()
+
+	waitForBotEventSubscribers(t, srv, 1)
+	srv.dispatchBotEvent(&bot.BotWorkerEvent{Evt: "worker-exit", Error: "bot-worker 进程已退出"})
+	select {
+	case err := <-done:
+		require.Equal(t, codes.Unavailable, status.Code(err))
+	case <-time.After(time.Second):
+		t.Fatal("bot-worker 退出后 Fleet stream 未终止")
+	}
+	waitForBotEventSubscribers(t, srv, 0)
+
+	nextCtx, nextCancel := context.WithCancel(context.Background())
+	nextStream := &botFleetTestStream{ctx: nextCtx, events: make(chan *workerpb.BotFleetEvent, 1)}
+	nextDone := make(chan error, 1)
+	go func() {
+		nextDone <- srv.StreamBotFleetEvents(&workerpb.StreamBotFleetEventsRequest{}, nextStream)
+	}()
+	waitForBotEventSubscribers(t, srv, 1)
+	nextCancel()
+	require.ErrorIs(t, <-nextDone, context.Canceled)
+	waitForBotEventSubscribers(t, srv, 0)
+}
+
+func TestWorkerExitDoesNotCloseLegacyBotEventStream(t *testing.T) {
+	srv := &Server{}
+	srv.SetBotManager(bot.NewManager(bot.ManagerConfig{}))
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := newBotEventsTestStream(ctx)
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.StreamBotEvents(&workerpb.StreamBotEventsRequest{BotUuid: "bot-1"}, stream)
+	}()
+
+	waitForBotEventSubscribers(t, srv, 1)
+	srv.dispatchBotEvent(&bot.BotWorkerEvent{Evt: "worker-exit", Error: "bot-worker 进程已退出"})
+	select {
+	case err := <-done:
+		t.Fatalf("旧 StreamBotEvents 不应因 worker-exit 退出: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	srv.dispatchBotEvent(&bot.BotWorkerEvent{Evt: "bot-event", BotID: "bot-1", Type: "chat"})
+	require.Equal(t, "bot-1", assertBotEventReceived(t, stream.events).BotUuid)
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 	waitForBotEventSubscribers(t, srv, 0)
