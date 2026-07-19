@@ -94,6 +94,7 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
   const node = nodes.find((n) => n.id === instance?.nodeId)
   const online = serverState?.state?.server?.onlinePlayers ?? metrics?.onlinePlayers ?? 0
   const maxPlayers = serverState?.state?.server?.maxPlayers ?? 200
+  const richMetricsAvailable = metrics?.probeAvailable ?? false
   const watchItems = useMemo(() => buildWatchItems({ status: instance?.status, metrics, probeConnected: serverState?.connected }), [instance?.status, metrics, serverState?.connected])
 
   if (!instance) {
@@ -206,9 +207,9 @@ export default function InstanceConsolePage({ instanceId }: InstanceConsolePageP
           <div className="mt-3 grid gap-2 md:grid-cols-3 xl:grid-cols-6">
             <MetaCell label={t('serverConsole.node')} value={node?.name ?? t('console.unknownNode', { id: instance.nodeId })} />
             <MetaCell label={t('serverConsole.port')} value={`:${instance.serverPort || '—'}`} mono />
-            <MetaCell label={t('serverConsole.online')} value={`${online}/${maxPlayers}`} mono />
-            <MetaCell label={t('serverConsole.tps')} value={formatNumber(metrics?.tps, 1)} mono tone={metrics?.tps != null && metrics.tps < 18 ? 'warn' : 'ok'} />
-            <MetaCell label={t('serverConsole.mspt')} value={`${formatNumber(metrics?.msptMillis, 0)}ms`} mono tone={metrics?.msptMillis != null && metrics.msptMillis > 50 ? 'danger' : 'ok'} />
+            <MetaCell label={t('serverConsole.online')} value={richMetricsAvailable ? `${online}/${maxPlayers}` : t('serverConsole.probeRequired')} mono />
+            <MetaCell label={t('serverConsole.tps')} value={richMetricsAvailable ? formatNumber(metrics?.tps, 1) : t('serverConsole.probeRequired')} mono tone={richMetricsAvailable ? (metrics?.tps != null && metrics.tps < 18 ? 'warn' : 'ok') : undefined} />
+            <MetaCell label={t('serverConsole.mspt')} value={richMetricsAvailable ? `${formatNumber(metrics?.msptMillis, 0)}ms` : t('serverConsole.probeRequired')} mono tone={richMetricsAvailable ? (metrics?.msptMillis != null && metrics.msptMillis > 50 ? 'danger' : 'ok') : undefined} />
             <MetaCell label={t('serverConsole.uptime')} value={formatUptime(metrics?.uptimeSeconds)} mono />
             <MetaCell label="UUID" value={instance.uuid.slice(0, 8)} mono />
           </div>
@@ -332,7 +333,7 @@ function OverviewPanel({
         <KpiCard icon={Gauge} label={t('serverConsole.cpu')} value={`${cpuPct}%`} progress={Math.min(100, cpuPct)} />
         <KpiCard icon={HardDrive} label={t('serverConsole.memory')} value={hasHeapMax ? `${memoryPct}%` : `${formatNumber(metrics?.memoryMb, 0)} MB`} sub={hasHeapMax ? `${formatNumber(metrics?.memoryMb, 0)} / ${formatNumber(metrics?.heapMaxMb, 0)} MB` : 'RSS'} progress={memoryPct} />
         <KpiCard icon={ActivityIcon} label={t('serverConsole.tps')} value={hasProbe ? formatNumber(metrics?.tps, 1) : t('serverConsole.probeRequired')} progress={hasProbe ? Math.min(100, ((metrics?.tps ?? 0) / 20) * 100) : 0} />
-        <KpiCard icon={Users} label={t('serverConsole.online')} value={`${online}/${maxPlayers}`} progress={maxPlayers > 0 ? (online / maxPlayers) * 100 : 0} />
+        <KpiCard icon={Users} label={t('serverConsole.online')} value={hasProbe ? `${online}/${maxPlayers}` : t('serverConsole.probeRequired')} progress={hasProbe && maxPlayers > 0 ? (online / maxPlayers) * 100 : 0} />
         <KpiCard icon={Layers} label={t('serverConsole.disk')} value={`${diskPct}%`} progress={diskPct} />
         <KpiCard icon={AlertTriangle} label={t('serverConsole.alerts')} value={String(alertCount)} danger={alertCount > 0} progress={alertCount > 0 ? 100 : 0} />
       </div>
@@ -346,7 +347,7 @@ function OverviewPanel({
       <div className="grid gap-3 xl:grid-cols-[1.2fr_1fr_0.9fr]">
         <section className="rounded-lg border bg-card p-3 shadow-soft">
           <h2 className="mb-2 text-sm font-semibold">{t('serverConsole.tps')} / {t('serverConsole.mspt')}</h2>
-          {tpsBars.length > 0 ? (
+          {hasProbe && tpsBars.length > 0 ? (
             <div className="grid h-44 grid-cols-24 items-end gap-1 rounded-md border bg-muted/40 p-2">
               {tpsBars.map((v, i) => (
                 <span key={i} className="rounded-t-sm bg-primary/75" style={{ height: `${v}%` }} />
@@ -477,8 +478,8 @@ function buildWatchItems({
   const items: string[] = []
   if (status === 'CRASHED') items.push('服务器处于崩溃状态，请检查启动日志')
   if (status === 'STARTING' || status === 'STOPPING') items.push('服务器处于过渡态，操作按钮已收敛')
-  if (metrics?.tps != null && metrics.tps < 18) items.push('TPS 低于 18，建议检查插件或实体数量')
-  if (metrics?.msptMillis != null && metrics.msptMillis > 50) items.push('MSPT 超过 50ms，主线程可能卡顿')
+  if (metrics?.probeAvailable && metrics.tps < 18) items.push('TPS 低于 18，建议检查插件或实体数量')
+  if (metrics?.probeAvailable && metrics.msptMillis > 50) items.push('MSPT 超过 50ms，主线程可能卡顿')
   if (metrics?.cpuPercent != null && metrics.cpuPercent > 85) items.push('CPU 使用率偏高')
   if (!probeConnected) items.push('ServerProbe 未连接，部分运行态数据不可用')
   return items
