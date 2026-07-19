@@ -58,11 +58,12 @@ func TestBotStressSession_Flow(t *testing.T) {
 
 	w = makeRequest(r, "POST", "/api/v1/bots/stress-sessions/"+itoa(sessionID)+"/stop", nil, token)
 	require.Equalf(t, http.StatusAccepted, w.Code, "停止压测会话失败: %s", w.Body.String())
-	stopped := parseJSON(t, w)
-	assert.Equal(t, "stopped", stopped["status"])
-	stoppedCounts := stopped["counts"].(map[string]interface{})
-	byStatus := stoppedCounts["byStatus"].(map[string]interface{})
-	assert.Equal(t, float64(2), byStatus[string(model.BotStatusStopped)])
+	stopping := parseJSON(t, w)
+	assert.Equal(t, "running", stopping["status"], "accepted 仅表示 Worker 接受停止命令")
+	stoppingCounts := stopping["counts"].(map[string]interface{})
+	byStatus := stoppingCounts["byStatus"].(map[string]interface{})
+	assert.Equal(t, float64(2), byStatus[string(model.BotStatusConnecting)])
+	assert.NotContains(t, byStatus, string(model.BotStatusStopped))
 }
 
 func TestBotStressSession_GetDetailReturnsOrchestration(t *testing.T) {

@@ -29,11 +29,13 @@ import (
 )
 
 type botLoadServiceBundle struct {
-	capacity     *service.BotLoadCapacityDirectory
-	reservations *service.BotLoadReservationStore
-	signer       *service.BotLoadPlanTokenSigner
-	preflight    *service.BotLoadPreflightService
-	execution    *service.BotLoadExecutionService
+	capacity      *service.BotLoadCapacityDirectory
+	reservations  *service.BotLoadReservationStore
+	signer        *service.BotLoadPlanTokenSigner
+	preflight     *service.BotLoadPreflightService
+	execution     *service.BotLoadExecutionService
+	coordinator   *service.BotFleetRuntimeCoordinator
+	subscriptions *service.BotFleetSubscriptionManager
 }
 
 // assembleBotLoadServices 创建进程级共享的容量目录、软预留、签名器与执行服务。
@@ -47,9 +49,14 @@ func assembleBotLoadServices(db *gorm.DB, pool *cpgrpc.ClientPool, stableSecret 
 	}
 	preflight := service.NewBotLoadPreflightService(db, capacity, reservations, signer, nil)
 	execution := service.NewGRPCBotLoadExecutionService(db, capacity, reservations, signer, pool, nil, nil)
+	coordinator := service.NewGRPCBotFleetRuntimeCoordinator(db, pool, nil, nil)
+	coordinator.SetSnapshotReconciler(execution)
+	coordinator.SetRuntimeObserver(execution)
+	subscriptions := service.NewBotFleetSubscriptionManager(coordinator)
+	execution.SetFleetSubscriptionManager(subscriptions)
 	return &botLoadServiceBundle{
 		capacity: capacity, reservations: reservations, signer: signer,
-		preflight: preflight, execution: execution,
+		preflight: preflight, execution: execution, coordinator: coordinator, subscriptions: subscriptions,
 	}, nil
 }
 
@@ -129,6 +136,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("初始化 Bot 分布式负载服务失败: %v", err)
 	}
+	defer botLoadSvcs.subscriptions.Close()
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
 	// 优雅关闭：停止接受新的后台 Worker 委托并等待在途异步状态回写收尾，避免泄漏 goroutine。
 	defer instanceSvc.Shutdown()

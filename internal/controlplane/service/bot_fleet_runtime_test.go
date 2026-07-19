@@ -26,6 +26,7 @@ type botFleetRuntimeHarness struct {
 	node    *model.Node
 	other   *model.Node
 	session *model.BotStressSession
+	batch   *model.BotLoadBatch
 	bot     *model.Bot
 	now     time.Time
 }
@@ -51,9 +52,14 @@ func newBotFleetRuntimeHarness(t *testing.T) *botFleetRuntimeHarness {
 	require.NoError(t, db.Create(instance).Error)
 	session := &model.BotStressSession{InstanceID: instance.ID, Name: "load", NamePrefix: "load", BotCount: 1}
 	require.NoError(t, db.Create(session).Error)
-	executorNodeID := node.ID
+	batch := &model.BotLoadBatch{
+		StressSessionID: session.ID, ExecutorNodeID: node.ID, Ordinal: 1, PlannedCount: 1,
+		State: model.BotLoadBatchRunning, IdempotencyKey: "fleet-runtime-test", ConnectStartAt: time.Now().UTC(),
+	}
+	require.NoError(t, db.Create(batch).Error)
+	executorNodeID, batchID := node.ID, batch.ID
 	bot := &model.Bot{
-		InstanceID: instance.ID, StressSessionID: &session.ID, ExecutorNodeID: &executorNodeID,
+		InstanceID: instance.ID, StressSessionID: &session.ID, ExecutorNodeID: &executorNodeID, LoadBatchID: &batchID,
 		Name: "load-001", Status: model.BotStatusPending, DesiredStateGeneration: 3,
 		ConfigHash: "desired-hash", CohortKey: "combat",
 	}
@@ -61,7 +67,7 @@ func newBotFleetRuntimeHarness(t *testing.T) *botFleetRuntimeHarness {
 	now := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
 	return &botFleetRuntimeHarness{
 		db: db, service: NewBotFleetRuntimeService(db, botFleetTestClock{now: now}),
-		node: node, other: other, session: session, bot: bot, now: now,
+		node: node, other: other, session: session, batch: batch, bot: bot, now: now,
 	}
 }
 
@@ -79,6 +85,13 @@ func (h *botFleetRuntimeHarness) reload(t *testing.T) model.Bot {
 	var bot model.Bot
 	require.NoError(t, h.db.First(&bot, h.bot.ID).Error)
 	return bot
+}
+
+func (h *botFleetRuntimeHarness) reloadBatch(t *testing.T) model.BotLoadBatch {
+	t.Helper()
+	var batch model.BotLoadBatch
+	require.NoError(t, h.db.First(&batch, h.batch.ID).Error)
+	return batch
 }
 
 func TestBotFleetRuntimeService_GenerationEpochAndSequenceGuards(t *testing.T) {
@@ -245,6 +258,7 @@ func TestBotFleetRuntimeService_ConcurrentUpdatesNeverRegress(t *testing.T) {
 	require.Equal(t, int64(1), loaded.LastEventSeq)
 	require.Equal(t, "epoch-6", loaded.WorkerEpoch)
 	require.Equal(t, model.BotStatusConnected, loaded.Status)
+	require.Equal(t, 1, h.reloadBatch(t).ConnectedCount)
 
 	var wg sync.WaitGroup
 	sequenceErrors := make(chan error, 2)
@@ -267,6 +281,55 @@ func TestBotFleetRuntimeService_ConcurrentUpdatesNeverRegress(t *testing.T) {
 	loaded = h.reload(t)
 	require.Equal(t, int64(6), loaded.WorkerEpochGeneration)
 	require.Equal(t, int64(9), loaded.LastEventSeq)
+	require.Equal(t, model.BotStatusDisconnected, loaded.Status)
+	require.Zero(t, h.reloadBatch(t).ConnectedCount)
+}
+
+func TestBotFleetRuntimeService_BaselineMayResetEpochButEventsMayNot(t *testing.T) {
+	h := newBotFleetRuntimeHarness(t)
+	require.NoError(t, h.db.Model(h.bot).Updates(map[string]any{
+		"worker_epoch": "old", "worker_epoch_generation": 5, "last_event_seq": 9,
+	}).Error)
+
+	lower := h.snapshot(3, 1, 1, "connected")
+	lower.WorkerEpoch = "restarted"
+	result, err := h.service.Ingest(context.Background(), h.node.ID, lower)
+	require.NoError(t, err)
+	require.Equal(t, BotFleetRuntimeIgnoredStaleEpoch, result.Decision)
+	require.Equal(t, int64(5), h.reload(t).WorkerEpochGeneration)
+
+	result, err = h.service.IngestBaseline(context.Background(), h.node.ID, lower)
+	require.NoError(t, err)
+	require.Equal(t, BotFleetRuntimeApplied, result.Decision)
+	loaded := h.reload(t)
+	require.Equal(t, int64(1), loaded.WorkerEpochGeneration)
+	require.Equal(t, int64(1), loaded.LastEventSeq)
+	require.Equal(t, "restarted", loaded.WorkerEpoch)
+}
+
+func TestBotFleetRuntimeService_ConnectedCountTracksTransitionsExactlyOnce(t *testing.T) {
+	h := newBotFleetRuntimeHarness(t)
+	ctx := context.Background()
+
+	for _, snapshot := range []*workerpb.BotRuntimeSnapshot{
+		h.snapshot(3, 1, 1, "connected"),
+		h.snapshot(3, 1, 1, "connected"),
+		h.snapshot(3, 1, 2, "connected"),
+	} {
+		_, err := h.service.Ingest(ctx, h.node.ID, snapshot)
+		require.NoError(t, err)
+	}
+	require.Equal(t, 1, h.reloadBatch(t).ConnectedCount)
+
+	for _, snapshot := range []*workerpb.BotRuntimeSnapshot{
+		h.snapshot(3, 1, 3, "disconnected"),
+		h.snapshot(3, 1, 3, "disconnected"),
+		h.snapshot(3, 1, 4, "stopped"),
+	} {
+		_, err := h.service.Ingest(ctx, h.node.ID, snapshot)
+		require.NoError(t, err)
+	}
+	require.Zero(t, h.reloadBatch(t).ConnectedCount)
 }
 
 type botFleetFakeStream struct {
@@ -409,6 +472,48 @@ func TestBotFleetRuntimeCoordinator_DisconnectSnapshotsBeforeReconnect(t *testin
 	require.Equal(t, model.BotStatusConnected, h.reload(t).Status)
 }
 
+func TestBotFleetRuntimeCoordinator_EmptySnapshotDisconnectsGhostRuntime(t *testing.T) {
+	h := newBotFleetRuntimeHarness(t)
+	require.NoError(t, h.db.Model(h.bot).Updates(map[string]any{
+		"status": model.BotStatusConnected, "worker_epoch_generation": 5, "last_event_seq": 9,
+	}).Error)
+	require.NoError(t, h.db.Model(h.batch).Updates(map[string]any{"planned_count": 2, "connected_count": 1}).Error)
+	executorNodeID, batchID := h.node.ID, h.batch.ID
+	ghost := &model.Bot{
+		InstanceID: h.bot.InstanceID, StressSessionID: &h.session.ID, ExecutorNodeID: &executorNodeID, LoadBatchID: &batchID,
+		Name: "load-002", Status: model.BotStatusConnecting, DesiredStateGeneration: 3, ConfigHash: "other-hash",
+	}
+	require.NoError(t, h.db.Create(ghost).Error)
+	client := &botFleetFakeClient{snapshot: &workerpb.GetBotFleetSnapshotResponse{ObservedAtUnixMs: h.now.UnixMilli()}}
+	coordinator := NewBotFleetRuntimeCoordinator(h.service, client, nil)
+
+	require.NoError(t, coordinator.RefreshSnapshot(context.Background(), h.node.ID, h.node.UUID, h.session.UUID))
+	var bots []model.Bot
+	require.NoError(t, h.db.Where("stress_session_id = ?", h.session.ID).Order("id ASC").Find(&bots).Error)
+	require.Len(t, bots, 2)
+	require.Equal(t, model.BotStatusDisconnected, bots[0].Status)
+	require.Equal(t, model.BotStatusDisconnected, bots[1].Status)
+	require.NotNil(t, bots[0].LastSeenAt)
+	require.NotNil(t, bots[1].LastSeenAt)
+	require.Zero(t, h.reloadBatch(t).ConnectedCount)
+}
+
+func TestBotFleetRuntimeCoordinator_BaselineRecountsConnectedLedger(t *testing.T) {
+	h := newBotFleetRuntimeHarness(t)
+	require.NoError(t, h.db.Model(h.bot).Updates(map[string]any{
+		"status": model.BotStatusConnected, "worker_epoch": "epoch-1", "worker_epoch_generation": 1, "last_event_seq": 1,
+	}).Error)
+	require.NoError(t, h.db.Model(h.batch).Update("connected_count", 7).Error)
+	baseline := h.snapshot(3, 1, 1, "connected")
+	baseline.WorkerEpoch = "epoch-1"
+	client := &botFleetFakeClient{snapshot: &workerpb.GetBotFleetSnapshotResponse{Bots: []*workerpb.BotRuntimeSnapshot{baseline}}}
+	coordinator := NewBotFleetRuntimeCoordinator(h.service, client, nil)
+
+	require.NoError(t, coordinator.RefreshSnapshot(context.Background(), h.node.ID, h.node.UUID, h.session.UUID))
+	require.Equal(t, model.BotStatusConnected, h.reload(t).Status)
+	require.Equal(t, 1, h.reloadBatch(t).ConnectedCount)
+}
+
 func TestBotFleetRuntimeCoordinator_ActionEventIsSafelyIgnored(t *testing.T) {
 	h := newBotFleetRuntimeHarness(t)
 	client := &botFleetFakeClient{}
@@ -422,4 +527,231 @@ func TestBotFleetRuntimeCoordinator_ActionEventIsSafelyIgnored(t *testing.T) {
 	require.Equal(t, BotFleetRuntimeIgnoredActionEvent, result.Decision)
 	require.Zero(t, client.snapshotCalls)
 	require.Equal(t, model.BotStatusPending, h.reload(t).Status)
+}
+
+type botFleetRuntimeObserverFunc func(context.Context, string) error
+
+func (f botFleetRuntimeObserverFunc) ReconcileBotFleetRuntimeState(ctx context.Context, sessionUUID string) error {
+	return f(ctx, sessionUUID)
+}
+
+type botFleetContextStream struct {
+	ctx     context.Context
+	started chan struct{}
+	once    sync.Once
+}
+
+func (s *botFleetContextStream) Recv() (*workerpb.BotFleetEvent, error) {
+	s.once.Do(func() { close(s.started) })
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+type botFleetSubscriptionClient struct {
+	mu            sync.Mutex
+	snapshot      *workerpb.GetBotFleetSnapshotResponse
+	operations    []string
+	snapshotCalls int
+	streamCalls   int
+	streams       []*botFleetContextStream
+}
+
+func (c *botFleetSubscriptionClient) GetBotFleetSnapshot(context.Context, string, string) (*workerpb.GetBotFleetSnapshotResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.snapshotCalls++
+	c.operations = append(c.operations, "snapshot")
+	return c.snapshot, nil
+}
+
+func (c *botFleetSubscriptionClient) StreamBotFleetEvents(ctx context.Context, _, _ string) (BotFleetRuntimeStream, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	stream := &botFleetContextStream{ctx: ctx, started: make(chan struct{})}
+	c.streamCalls++
+	c.operations = append(c.operations, "stream")
+	c.streams = append(c.streams, stream)
+	return stream, nil
+}
+
+func (c *botFleetSubscriptionClient) state() ([]string, int, int, []*botFleetContextStream) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.operations...), c.snapshotCalls, c.streamCalls, append([]*botFleetContextStream(nil), c.streams...)
+}
+
+type botFleetBlockedSnapshot struct {
+	started  chan struct{}
+	release  chan struct{}
+	response *workerpb.GetBotFleetSnapshotResponse
+}
+
+type botFleetSequencedSubscriptionClient struct {
+	mu        sync.Mutex
+	snapshots []*botFleetBlockedSnapshot
+	streams   []*botFleetContextStream
+}
+
+func (c *botFleetSequencedSubscriptionClient) GetBotFleetSnapshot(context.Context, string, string) (*workerpb.GetBotFleetSnapshotResponse, error) {
+	c.mu.Lock()
+	if len(c.snapshots) == 0 {
+		c.mu.Unlock()
+		return &workerpb.GetBotFleetSnapshotResponse{}, nil
+	}
+	snapshot := c.snapshots[0]
+	c.snapshots = c.snapshots[1:]
+	c.mu.Unlock()
+	close(snapshot.started)
+	<-snapshot.release
+	return snapshot.response, nil
+}
+
+func (c *botFleetSequencedSubscriptionClient) StreamBotFleetEvents(ctx context.Context, _, _ string) (BotFleetRuntimeStream, error) {
+	stream := &botFleetContextStream{ctx: ctx, started: make(chan struct{})}
+	c.mu.Lock()
+	c.streams = append(c.streams, stream)
+	c.mu.Unlock()
+	return stream, nil
+}
+
+func TestBotFleetSubscriptionManager_SnapshotBeforeStreamDeduplicatesAndCancels(t *testing.T) {
+	h := newBotFleetRuntimeHarness(t)
+	client := &botFleetSubscriptionClient{snapshot: &workerpb.GetBotFleetSnapshotResponse{
+		Bots: []*workerpb.BotRuntimeSnapshot{h.snapshot(3, 1, 1, "connecting")},
+	}}
+	coordinator := NewBotFleetRuntimeCoordinator(h.service, client, nil)
+	manager := NewBotFleetSubscriptionManager(coordinator)
+	t.Cleanup(manager.Close)
+	target := BotFleetSubscriptionTarget{NodeID: h.node.ID, NodeUUID: h.node.UUID, SessionUUID: h.session.UUID}
+
+	manager.Ensure(target)
+	manager.Ensure(target)
+	require.Eventually(t, func() bool {
+		operations, snapshots, streams, opened := client.state()
+		return snapshots == 1 && streams == 1 && len(opened) == 1 && len(operations) == 2
+	}, time.Second, 10*time.Millisecond)
+	operations, snapshots, streams, opened := client.state()
+	require.Equal(t, []string{"snapshot", "stream"}, operations)
+	require.Equal(t, 1, snapshots)
+	require.Equal(t, 1, streams)
+	<-opened[0].started
+
+	manager.StopSession(h.session.UUID)
+	require.Eventually(t, func() bool { return manager.activeSubscriptionCount() == 0 }, time.Second, 10*time.Millisecond)
+}
+
+func TestBotFleetSubscriptionManager_ObserverMayCancelWithoutSelfDeadlock(t *testing.T) {
+	h := newBotFleetRuntimeHarness(t)
+	coordinator := NewBotFleetRuntimeCoordinator(h.service, nil, nil)
+	manager := NewBotFleetSubscriptionManager(coordinator)
+	target := BotFleetSubscriptionTarget{NodeID: h.node.ID, NodeUUID: h.node.UUID, SessionUUID: h.session.UUID}
+	slot := manager.subscriptionSlot(target)
+	ctx, cancel := context.WithCancel(context.Background())
+	slot.gate.Lock()
+	slot.active = true
+	slot.generation = 1
+	slot.cancel = cancel
+	slot.gate.Unlock()
+	coordinator.SetRuntimeObserver(botFleetRuntimeObserverFunc(func(context.Context, string) error {
+		manager.StopSession(h.session.UUID)
+		return nil
+	}))
+	event := &workerpb.BotFleetEvent{Event: &workerpb.BotFleetEvent_RuntimeSnapshot{RuntimeSnapshot: h.snapshot(3, 1, 1, "stopped")}}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := manager.handleSubscriptionEvent(ctx, target, 1, event)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+		require.Zero(t, manager.activeSubscriptionCount())
+		manager.Close()
+	case <-time.After(time.Second):
+		t.Fatal("observer 取消订阅发生自锁")
+	}
+}
+
+func TestBotFleetSubscriptionManager_LateOldBaselineIsDiscardedBeforeApply(t *testing.T) {
+	h := newBotFleetRuntimeHarness(t)
+	require.NoError(t, h.db.Model(h.bot).Updates(map[string]any{
+		"status": model.BotStatusConnected, "worker_epoch": "initial", "worker_epoch_generation": 5, "last_event_seq": 9,
+	}).Error)
+	require.NoError(t, h.db.Model(h.batch).Update("connected_count", 1).Error)
+	late := h.snapshot(3, 6, 1, "disconnected")
+	late.WorkerEpoch = "late-old-baseline"
+	restart := h.snapshot(3, 1, 1, "connected")
+	restart.WorkerEpoch = "restart"
+	first := &botFleetBlockedSnapshot{started: make(chan struct{}), release: make(chan struct{}), response: &workerpb.GetBotFleetSnapshotResponse{Bots: []*workerpb.BotRuntimeSnapshot{late}}}
+	second := &botFleetBlockedSnapshot{started: make(chan struct{}), release: make(chan struct{}), response: &workerpb.GetBotFleetSnapshotResponse{Bots: []*workerpb.BotRuntimeSnapshot{restart}}}
+	client := &botFleetSequencedSubscriptionClient{snapshots: []*botFleetBlockedSnapshot{first, second}}
+	coordinator := NewBotFleetRuntimeCoordinator(h.service, client, nil)
+	manager := NewBotFleetSubscriptionManager(coordinator)
+	t.Cleanup(manager.Close)
+	target := BotFleetSubscriptionTarget{NodeID: h.node.ID, NodeUUID: h.node.UUID, SessionUUID: h.session.UUID}
+
+	manager.Ensure(target)
+	<-first.started
+	oldGeneration := manager.subscriptionGeneration(target)
+	manager.StopSession(h.session.UUID)
+	manager.Ensure(target)
+	<-second.started
+	require.Greater(t, manager.subscriptionGeneration(target), oldGeneration)
+
+	close(first.release)
+	require.Never(t, func() bool {
+		return h.reload(t).WorkerEpoch == "late-old-baseline"
+	}, 100*time.Millisecond, 10*time.Millisecond)
+	loaded := h.reload(t)
+	require.Equal(t, "initial", loaded.WorkerEpoch)
+	require.Equal(t, model.BotStatusConnected, loaded.Status)
+	require.Equal(t, 1, h.reloadBatch(t).ConnectedCount)
+
+	close(second.release)
+	require.Eventually(t, func() bool {
+		loaded = h.reload(t)
+		return loaded.WorkerEpochGeneration == 1 && loaded.WorkerEpoch == "restart"
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, model.BotStatusConnected, loaded.Status)
+	require.Equal(t, 1, h.reloadBatch(t).ConnectedCount)
+}
+
+func TestBotFleetSubscriptionManager_OldGenerationCannotOverwriteRestartBaseline(t *testing.T) {
+	h := newBotFleetRuntimeHarness(t)
+	require.NoError(t, h.db.Model(h.bot).Updates(map[string]any{
+		"status": model.BotStatusConnected, "worker_epoch": "old", "worker_epoch_generation": 5, "last_event_seq": 9,
+	}).Error)
+	require.NoError(t, h.db.Model(h.batch).Update("connected_count", 1).Error)
+	baseline := h.snapshot(3, 1, 1, "connected")
+	baseline.WorkerEpoch = "restart"
+	client := &botFleetSubscriptionClient{snapshot: &workerpb.GetBotFleetSnapshotResponse{Bots: []*workerpb.BotRuntimeSnapshot{baseline}}}
+	coordinator := NewBotFleetRuntimeCoordinator(h.service, client, nil)
+	manager := NewBotFleetSubscriptionManager(coordinator)
+	t.Cleanup(manager.Close)
+	target := BotFleetSubscriptionTarget{NodeID: h.node.ID, NodeUUID: h.node.UUID, SessionUUID: h.session.UUID}
+
+	manager.Ensure(target)
+	require.Eventually(t, func() bool { return h.reload(t).WorkerEpochGeneration == 1 }, time.Second, 10*time.Millisecond)
+	oldGeneration := manager.subscriptionGeneration(target)
+	manager.StopSession(h.session.UUID)
+	manager.Ensure(target)
+	require.Eventually(t, func() bool {
+		_, snapshots, streams, _ := client.state()
+		return snapshots == 2 && streams == 2
+	}, time.Second, 10*time.Millisecond)
+	require.Greater(t, manager.subscriptionGeneration(target), oldGeneration)
+
+	late := h.snapshot(3, 6, 1, "disconnected")
+	late.WorkerEpoch = "late-old-stream"
+	result, err := manager.handleSubscriptionEvent(context.Background(), target, oldGeneration, &workerpb.BotFleetEvent{
+		Event: &workerpb.BotFleetEvent_RuntimeSnapshot{RuntimeSnapshot: late},
+	})
+	require.NoError(t, err)
+	require.Equal(t, BotFleetRuntimeIgnoredStaleSubscription, result.Decision)
+	loaded := h.reload(t)
+	require.Equal(t, int64(1), loaded.WorkerEpochGeneration)
+	require.Equal(t, "restart", loaded.WorkerEpoch)
+	require.Equal(t, model.BotStatusConnected, loaded.Status)
+	require.Equal(t, 1, h.reloadBatch(t).ConnectedCount)
 }

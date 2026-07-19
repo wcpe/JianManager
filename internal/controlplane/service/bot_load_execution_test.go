@@ -86,6 +86,36 @@ func (botLoadImmediateRunner) Submit(task func()) error {
 	return nil
 }
 
+type botLoadExecutionSubscriptions struct {
+	mu      sync.Mutex
+	ensured []BotFleetSubscriptionTarget
+	stopped []string
+}
+
+func (s *botLoadExecutionSubscriptions) Ensure(target BotFleetSubscriptionTarget) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensured = append(s.ensured, target)
+}
+
+func (s *botLoadExecutionSubscriptions) StopSession(sessionUUID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopped = append(s.stopped, sessionUUID)
+}
+
+func (s *botLoadExecutionSubscriptions) Ensured() []BotFleetSubscriptionTarget {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]BotFleetSubscriptionTarget(nil), s.ensured...)
+}
+
+func (s *botLoadExecutionSubscriptions) Stopped() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.stopped...)
+}
+
 type botLoadQueuedRunner struct {
 	mu    sync.Mutex
 	tasks []func()
@@ -308,6 +338,21 @@ func TestBotLoadExecutionStart_Creates500BotsAcrossTenBatches(t *testing.T) {
 	}
 	_, reserved := h.reservations.Lease(h.session.ID)
 	require.False(t, reserved)
+}
+
+func TestBotLoadExecutionStart_EnsuresOneFleetSubscriptionPerExecutorNode(t *testing.T) {
+	h := newBotLoadExecutionHarness(t, []int{50, 50}, 100, nil)
+	subscriptions := &botLoadExecutionSubscriptions{}
+	h.service.SetFleetSubscriptionManager(subscriptions)
+
+	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
+	require.NoError(t, err)
+
+	targets := subscriptions.Ensured()
+	require.Len(t, targets, 2)
+	require.Equal(t, h.session.UUID, targets[0].SessionUUID)
+	require.Equal(t, h.session.UUID, targets[1].SessionUUID)
+	require.ElementsMatch(t, []uint{h.nodes[0].ID, h.nodes[1].ID}, []uint{targets[0].NodeID, targets[1].NodeID})
 }
 
 func TestBotLoadExecutionStart_InvalidPlansHaveZeroSideEffects(t *testing.T) {
@@ -544,7 +589,9 @@ func TestBotLoadExecutionStartStop_SerializesPerSessionWithoutBlockingOthers(t *
 	require.True(t, botLoadStopIntentRecorded(loadBotLoadSession(t, h.db, h.session.ID).LastError))
 
 	runner.RunAt(0)
-	require.Equal(t, model.BotStressSessionStopped, loadBotLoadSession(t, h.db, h.session.ID).Status)
+	stopping := loadBotLoadSession(t, h.db, h.session.ID)
+	require.NotEqual(t, model.BotStressSessionStopped, stopping.Status)
+	require.True(t, botLoadStopIntentRecorded(stopping.LastError))
 	seenStopped := false
 	for _, call := range h.dispatcher.Calls() {
 		for _, assignment := range call.request.Assignments {
@@ -635,21 +682,28 @@ func TestBotLoadExecutionStop_GroupsChunksAndDoesNotFakeUnreachableBots(t *testi
 	require.Equal(t, []int{20, 50}, chunks[h.nodes[0].UUID])
 	require.Equal(t, []int{50}, chunks[h.nodes[1].UUID])
 
-	var reachableStopped int64
-	require.NoError(t, h.db.Model(&model.Bot{}).Where("executor_node_id = ? AND status = ?", h.nodes[0].ID, model.BotStatusStopped).Count(&reachableStopped).Error)
-	require.Equal(t, int64(70), reachableStopped)
-	var unreachableStopped int64
-	require.NoError(t, h.db.Model(&model.Bot{}).Where("executor_node_id = ? AND status = ?", h.nodes[1].ID, model.BotStatusStopped).Count(&unreachableStopped).Error)
-	require.Zero(t, unreachableStopped)
+	var stopped int64
+	require.NoError(t, h.db.Model(&model.Bot{}).Where("status = ?", model.BotStatusStopped).Count(&stopped).Error)
+	require.Zero(t, stopped, "Worker accepted 只确认命令接收，不得伪造 runtime stopped")
+	var connecting int64
+	require.NoError(t, h.db.Model(&model.Bot{}).Where("status = ?", model.BotStatusConnecting).Count(&connecting).Error)
+	require.Equal(t, int64(120), connecting)
 	var unreachableGeneration int64
 	require.NoError(t, h.db.Model(&model.Bot{}).Where("executor_node_id = ?", h.nodes[1].ID).Select("desired_state_generation").Limit(1).Scan(&unreachableGeneration).Error)
 	require.Equal(t, int64(2), unreachableGeneration)
+	require.NotEqual(t, model.BotStressSessionStopped, session.Status)
+	require.True(t, botLoadStopIntentRecorded(session.LastError))
+	var failedBotCount int64
+	require.NoError(t, h.db.Model(&model.Bot{}).Where("executor_node_id = ? AND last_error <> ''", h.nodes[1].ID).Count(&failedBotCount).Error)
+	require.Equal(t, int64(50), failedBotCount)
+	require.NoError(t, h.db.Model(&model.Bot{}).Where("executor_node_id = ? AND last_error <> ''", h.nodes[0].ID).Count(&failedBotCount).Error)
+	require.Zero(t, failedBotCount, "重试只能选择仍有错误且未收束的 Bot")
 
 	failNode = false
 	beforeRetry := len(h.dispatcher.Calls())
 	session, err = h.service.Stop(context.Background(), h.session.ID)
 	require.NoError(t, err)
-	require.Equal(t, model.BotStressSessionStopped, session.Status)
+	require.NotEqual(t, model.BotStressSessionStopped, session.Status)
 	retryCalls := h.dispatcher.Calls()[beforeRetry:]
 	require.Len(t, retryCalls, 1)
 	require.Equal(t, unreachable, retryCalls[0].nodeUUID)
@@ -657,11 +711,19 @@ func TestBotLoadExecutionStop_GroupsChunksAndDoesNotFakeUnreachableBots(t *testi
 	for _, assignment := range retryCalls[0].request.Assignments {
 		require.Equal(t, int64(2), assignment.Generation)
 	}
+	require.NoError(t, h.db.Model(&model.Bot{}).Where("status = ?", model.BotStatusStopped).Count(&stopped).Error)
+	require.Zero(t, stopped)
+	require.Equal(t, "waiting_runtime", botLoadStopIntentState(session.LastError))
+	require.NoError(t, h.db.Model(&model.Bot{}).Where("last_error <> ''").Count(&failedBotCount).Error)
+	require.Zero(t, failedBotCount)
+	var failedBatchCount int64
+	require.NoError(t, h.db.Model(&model.BotLoadBatch{}).Where("state = ?", model.BotLoadBatchFailed).Count(&failedBatchCount).Error)
+	require.Zero(t, failedBatchCount)
 
-	beforeIdempotent := len(h.dispatcher.Calls())
+	beforeWaitingRetry := len(h.dispatcher.Calls())
 	_, err = h.service.Stop(context.Background(), h.session.ID)
 	require.NoError(t, err)
-	require.Equal(t, beforeIdempotent, len(h.dispatcher.Calls()))
+	require.Equal(t, beforeWaitingRetry, len(h.dispatcher.Calls()), "waiting_runtime 重复 Stop 不得重复 RPC")
 }
 
 func TestBotLoadExecutionStop_IncrementsExistingGenerationOnlyOnce(t *testing.T) {
@@ -686,6 +748,67 @@ func TestBotLoadExecutionStop_IncrementsExistingGenerationOnlyOnce(t *testing.T)
 	require.Equal(t, int64(8), loadBotLoadBot(t, h.db, bot.ID).DesiredStateGeneration)
 	secondStop := h.dispatcher.Calls()[2]
 	require.Equal(t, firstStop.request.IdempotencyKey, secondStop.request.IdempotencyKey)
+}
+
+func TestBotLoadExecutionStop_FleetStoppedFinalizesBatchAndSession(t *testing.T) {
+	h := newBotLoadExecutionHarness(t, []int{1}, 1, nil)
+	subscriptions := &botLoadExecutionSubscriptions{}
+	h.service.SetFleetSubscriptionManager(subscriptions)
+	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
+	require.NoError(t, err)
+
+	stopping, err := h.service.Stop(context.Background(), h.session.ID)
+	require.NoError(t, err)
+	require.NotEqual(t, model.BotStressSessionStopped, stopping.Status)
+	bot := loadBotLoadBot(t, h.db, 1)
+	require.Equal(t, model.BotStatusConnecting, bot.Status)
+
+	runtime := NewBotFleetRuntimeService(h.db, h.clock)
+	coordinator := NewBotFleetRuntimeCoordinator(runtime, nil, nil)
+	coordinator.SetRuntimeObserver(h.service)
+	event := &workerpb.BotFleetEvent{Event: &workerpb.BotFleetEvent_RuntimeSnapshot{RuntimeSnapshot: &workerpb.BotRuntimeSnapshot{
+		BotUuid: bot.UUID, SessionUuid: h.session.UUID, Generation: bot.DesiredStateGeneration,
+		ConfigHash: bot.ConfigHash, WorkerEpoch: "epoch-stop", WorkerEpochGeneration: 1,
+		EventSeq: 1, Status: "stopped", ObservedAtUnixMs: h.clock.Now().UnixMilli(),
+	}}}
+	result, err := coordinator.HandleEvent(context.Background(), h.nodes[0].ID, h.nodes[0].UUID, h.session.UUID, event)
+	require.NoError(t, err)
+	require.Equal(t, BotFleetRuntimeApplied, result.Decision)
+	require.Equal(t, model.BotStatusStopped, loadBotLoadBot(t, h.db, bot.ID).Status)
+
+	var batch model.BotLoadBatch
+	require.NoError(t, h.db.First(&batch).Error)
+	require.Equal(t, model.BotLoadBatchStopped, batch.State)
+	finished := loadBotLoadSession(t, h.db, h.session.ID)
+	require.Equal(t, model.BotStressSessionStopped, finished.Status)
+	require.NotNil(t, finished.EndedAt)
+	require.Equal(t, []string{h.session.UUID}, subscriptions.Stopped())
+}
+
+func TestBotLoadExecutionStop_EmptyBaselineFinalizesMissingRuntime(t *testing.T) {
+	h := newBotLoadExecutionHarness(t, []int{1}, 1, nil)
+	subscriptions := &botLoadExecutionSubscriptions{}
+	h.service.SetFleetSubscriptionManager(subscriptions)
+	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
+	require.NoError(t, err)
+	_, err = h.service.Stop(context.Background(), h.session.ID)
+	require.NoError(t, err)
+
+	client := &botFleetFakeClient{snapshot: &workerpb.GetBotFleetSnapshotResponse{ObservedAtUnixMs: h.clock.Now().UnixMilli()}}
+	runtime := NewBotFleetRuntimeService(h.db, h.clock)
+	coordinator := NewBotFleetRuntimeCoordinator(runtime, client, nil)
+	coordinator.SetRuntimeObserver(h.service)
+	require.NoError(t, coordinator.RefreshSnapshot(context.Background(), h.nodes[0].ID, h.nodes[0].UUID, h.session.UUID))
+
+	bot := loadBotLoadBot(t, h.db, 1)
+	require.Equal(t, model.BotStatusStopped, bot.Status)
+	var batch model.BotLoadBatch
+	require.NoError(t, h.db.First(&batch).Error)
+	require.Equal(t, model.BotLoadBatchStopped, batch.State)
+	finished := loadBotLoadSession(t, h.db, h.session.ID)
+	require.Equal(t, model.BotStressSessionStopped, finished.Status)
+	require.NotNil(t, finished.EndedAt)
+	require.Equal(t, []string{h.session.UUID}, subscriptions.Stopped())
 }
 
 func TestBotLoadExecutionReconcile_SnapshotConvergesPostRPCWriteFailure(t *testing.T) {
@@ -751,7 +874,26 @@ func TestBotLoadExecutionReconcile_DoesNotReplaceAcceptedLedgerFromRuntime(t *te
 	require.Len(t, h.dispatcher.Calls(), 1)
 }
 
-func TestBotLoadExecutionReconcile_CleansStaleRuntimeWithoutAutoRecovery(t *testing.T) {
+func TestBotLoadExecutionReconcile_GenerationAboveOneDoesNotImplyStopped(t *testing.T) {
+	h := newBotLoadExecutionHarness(t, []int{1}, 1, nil)
+	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
+	require.NoError(t, err)
+	bot := loadBotLoadBot(t, h.db, 1)
+	require.NoError(t, h.db.Model(&bot).Updates(map[string]any{
+		"desired_state_generation": 7, "status": model.BotStatusConnected,
+	}).Error)
+	before := len(h.dispatcher.Calls())
+	snapshot := &workerpb.GetBotFleetSnapshotResponse{Bots: []*workerpb.BotRuntimeSnapshot{{
+		BotUuid: bot.UUID, SessionUuid: h.session.UUID, Generation: 7,
+		ConfigHash: bot.ConfigHash, Status: "connected",
+	}}}
+
+	require.NoError(t, h.service.ReconcileBotFleetSnapshot(context.Background(), h.nodes[0].ID, h.nodes[0].UUID, h.session.UUID, snapshot))
+	require.Equal(t, before, len(h.dispatcher.Calls()))
+	require.Equal(t, model.BotStatusConnected, loadBotLoadBot(t, h.db, bot.ID).Status)
+}
+
+func TestBotLoadExecutionReconcile_OnlyStopsRuntimeMissingFromDesired(t *testing.T) {
 	runner := &botLoadQueuedRunner{}
 	h := newBotLoadExecutionHarness(t, []int{3}, 3, runner)
 	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
@@ -780,8 +922,7 @@ func TestBotLoadExecutionReconcile_CleansStaleRuntimeWithoutAutoRecovery(t *test
 		}
 	}
 	require.NotContains(t, assignments, bots[0].UUID)
-	require.Equal(t, "stopped", assignments[bots[1].UUID].DesiredState)
-	require.Equal(t, bots[1].DesiredStateGeneration, assignments[bots[1].UUID].Generation)
+	require.NotContains(t, assignments, bots[1].UUID, "已知 Bot 的 generation/config 差异只诊断，不由 FR-351 猜测 desired stopped")
 	require.NotContains(t, assignments, bots[2].UUID)
 	require.Equal(t, "stopped", assignments["extra-bot"].DesiredState)
 	require.Equal(t, int64(6), assignments["extra-bot"].Generation)

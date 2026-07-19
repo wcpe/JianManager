@@ -119,14 +119,15 @@ type botLoadSerialQueue struct {
 
 // BotLoadExecutionService 实现 FR-351 的 start、后台 dispatch、批量 stop 与基础 snapshot 收敛。
 type BotLoadExecutionService struct {
-	db           *gorm.DB
-	capacities   BotLoadCapacityRefresher
-	reservations *BotLoadReservationStore
-	signer       *BotLoadPlanTokenSigner
-	dispatcher   BotLoadBatchDispatcher
-	runner       BotLoadBackgroundRunner
-	clock        BotLoadClock
-	resolver     *BotExecutorResolver
+	db            *gorm.DB
+	capacities    BotLoadCapacityRefresher
+	reservations  *BotLoadReservationStore
+	signer        *BotLoadPlanTokenSigner
+	dispatcher    BotLoadBatchDispatcher
+	runner        BotLoadBackgroundRunner
+	clock         BotLoadClock
+	resolver      *BotExecutorResolver
+	subscriptions BotFleetSubscriptionController
 
 	startMu     sync.Mutex
 	taskMu      sync.Mutex
@@ -152,6 +153,19 @@ func NewGRPCBotLoadExecutionService(db *gorm.DB, capacities *BotLoadCapacityDire
 	return NewBotLoadExecutionService(db, capacities, reservations, signer, poolBotLoadBatchDispatcher{pool: pool}, runner, clock)
 }
 
+// SetFleetSubscriptionManager 注入进程级共享的 Fleet 订阅生命周期管理器。
+func (s *BotLoadExecutionService) SetFleetSubscriptionManager(subscriptions BotFleetSubscriptionController) {
+	s.subscriptions = subscriptions
+}
+
+// FleetSubscriptionManager 返回当前注入的 Fleet 订阅管理器。
+func (s *BotLoadExecutionService) FleetSubscriptionManager() BotFleetSubscriptionController {
+	if s == nil {
+		return nil
+	}
+	return s.subscriptions
+}
+
 // Start 校验服务端计划和即时容量，在单事务物化批次/Bot 后提交后台 dispatch。
 func (s *BotLoadExecutionService) Start(ctx context.Context, sessionID uint, planToken string) (*model.BotStressSession, error) {
 	prepared, err := s.prepareStart(ctx, sessionID, planToken)
@@ -167,12 +181,29 @@ func (s *BotLoadExecutionService) Start(ctx context.Context, sessionID uint, pla
 	if s.reservations != nil {
 		s.reservations.Release(sessionID)
 	}
+	s.ensureFleetSubscriptions(prepared)
 	if hasPlanned {
 		if err := s.submitLifecycle(sessionID, "start", func() { s.runDispatch(prepared) }); err != nil {
 			return nil, err
 		}
 	}
 	return s.loadSession(ctx, sessionID)
+}
+
+func (s *BotLoadExecutionService) ensureFleetSubscriptions(prepared *botLoadStartPreparation) {
+	if s.subscriptions == nil || prepared == nil || prepared.session == nil || prepared.plan == nil {
+		return
+	}
+	seen := make(map[uint]struct{}, len(prepared.plan.Allocations))
+	for _, allocation := range prepared.plan.Allocations {
+		if _, exists := seen[allocation.ExecutorNodeID]; exists {
+			continue
+		}
+		seen[allocation.ExecutorNodeID] = struct{}{}
+		s.subscriptions.Ensure(BotFleetSubscriptionTarget{
+			NodeID: allocation.ExecutorNodeID, NodeUUID: allocation.ExecutorNodeUUID, SessionUUID: prepared.session.UUID,
+		})
+	}
 }
 
 func (s *BotLoadExecutionService) prepareStart(ctx context.Context, sessionID uint, planToken string) (*botLoadStartPreparation, error) {
@@ -851,6 +882,13 @@ func (s *BotLoadExecutionService) Stop(ctx context.Context, sessionID uint, reas
 		}
 		return s.loadSession(ctx, sessionID)
 	}
+	session, err = s.loadSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if botLoadStopIntentState(session.LastError) == "waiting_runtime" {
+		return session, nil
+	}
 	if err := s.submitLifecycle(sessionID, "stop", func() { s.runStopDispatch(sessionID) }); err != nil {
 		return nil, err
 	}
@@ -898,10 +936,18 @@ func (s *BotLoadExecutionService) stopIntentRecorded(ctx context.Context, sessio
 }
 
 func botLoadStopIntentRecorded(lastError string) bool {
+	return botLoadStopIntentState(lastError) != ""
+}
+
+func botLoadStopIntentState(lastError string) string {
 	var value struct {
 		Operation string `json:"operation"`
+		State     string `json:"state"`
 	}
-	return json.Unmarshal([]byte(lastError), &value) == nil && value.Operation == "stop"
+	if json.Unmarshal([]byte(lastError), &value) != nil || value.Operation != "stop" {
+		return ""
+	}
+	return value.State
 }
 
 func botLoadStopSessionError(state, message string, reasons ...string) string {
@@ -919,7 +965,7 @@ func botLoadStopSessionError(state, message string, reasons ...string) string {
 	return string(raw)
 }
 
-// DispatchStop 按执行节点和 50 条上限下发停止，逐项 accepted 后才更新 runtime 展示状态。
+// DispatchStop 按执行节点和 50 条上限下发停止；accepted 只清派发错误，runtime 状态等待 Fleet 归真。
 func (s *BotLoadExecutionService) DispatchStop(ctx context.Context, sessionID uint) error {
 	session, err := s.loadSession(ctx, sessionID)
 	if err != nil {
@@ -954,9 +1000,17 @@ func (s *BotLoadExecutionService) runStopDispatch(sessionID uint) {
 }
 
 func (s *BotLoadExecutionService) loadStopGroups(ctx context.Context, sessionID uint) ([]botLoadStopGroup, error) {
+	var session model.BotStressSession
+	if err := s.db.WithContext(ctx).Select("id", "last_error").First(&session, sessionID).Error; err != nil {
+		return nil, fmt.Errorf("查询停止会话状态失败: %w", err)
+	}
 	var bots []model.Bot
-	if err := s.db.WithContext(ctx).Preload("Instance.Node").Preload("ExecutorNode").
-		Where("stress_session_id = ? AND status <> ?", sessionID, model.BotStatusStopped).Order("uuid ASC").Find(&bots).Error; err != nil {
+	query := s.db.WithContext(ctx).Preload("Instance.Node").Preload("ExecutorNode").
+		Where("stress_session_id = ? AND status <> ?", sessionID, model.BotStatusStopped)
+	if botLoadStopIntentState(session.LastError) == "failed" {
+		query = query.Where("last_error <> ''")
+	}
+	if err := query.Order("uuid ASC").Find(&bots).Error; err != nil {
 		return nil, fmt.Errorf("查询待停止 Bot 失败: %w", err)
 	}
 	byNode := make(map[uint]*botLoadStopGroup)
@@ -1027,7 +1081,7 @@ func (s *BotLoadExecutionService) persistStopBatchResult(ctx context.Context, it
 		for _, item := range items {
 			updates := map[string]any{"last_error": item.lastErr}
 			if item.accepted {
-				updates = map[string]any{"status": model.BotStatusStopped, "last_error": ""}
+				updates = map[string]any{"last_error": ""}
 			}
 			if err := tx.Model(&model.Bot{}).Where("id = ?", item.bot.ID).Updates(updates).Error; err != nil {
 				return fmt.Errorf("回写 Bot 停止逐项结果失败: %w", err)
@@ -1055,19 +1109,22 @@ func (s *BotLoadExecutionService) reconcileStoppedBatch(ctx context.Context, bat
 	if err := s.db.WithContext(ctx).Where("load_batch_id = ?", batch.ID).Find(&bots).Error; err != nil {
 		return fmt.Errorf("查询停止批次成员失败: %w", err)
 	}
-	failed, lastErr := 0, ""
+	remaining, lastErr := 0, ""
 	for _, bot := range bots {
 		if bot.Status == model.BotStatusStopped {
 			continue
 		}
-		failed++
-		if lastErr == "" {
+		remaining++
+		if lastErr == "" && bot.LastError != "" {
 			lastErr = bot.LastError
 		}
 	}
 	updates := map[string]any{"state": model.BotLoadBatchStopped, "last_error": "", "ended_at": s.clock.Now().UTC()}
-	if failed > 0 {
-		updates = map[string]any{"state": model.BotLoadBatchFailed, "last_error": lastErr, "failed_count": max(batch.FailedCount, failed), "ended_at": nil}
+	if remaining > 0 && lastErr == "" {
+		updates = map[string]any{"state": model.BotLoadBatchRunning, "last_error": "", "ended_at": nil}
+	}
+	if remaining > 0 && lastErr != "" {
+		updates = map[string]any{"state": model.BotLoadBatchFailed, "last_error": lastErr, "failed_count": max(batch.FailedCount, remaining), "ended_at": nil}
 	}
 	if err := s.db.WithContext(ctx).Model(batch).Updates(updates).Error; err != nil {
 		return fmt.Errorf("更新停止批次状态失败: %w", err)
@@ -1086,12 +1143,17 @@ func (s *BotLoadExecutionService) finishStopSession(ctx context.Context, session
 			continue
 		}
 		remaining++
-		if lastErr == "" {
+		if lastErr == "" && bot.LastError != "" {
 			lastErr = bot.LastError
 		}
 	}
 	updates := map[string]any{"status": model.BotStressSessionStopped, "last_error": "", "ended_at": s.clock.Now().UTC()}
-	if remaining > 0 {
+	if remaining > 0 && lastErr == "" {
+		updates = map[string]any{
+			"status": model.BotStressSessionRunning, "last_error": botLoadStopSessionError("waiting_runtime", ""), "ended_at": nil,
+		}
+	}
+	if remaining > 0 && lastErr != "" {
 		updates = map[string]any{
 			"status": model.BotStressSessionError, "last_error": botLoadStopSessionError("failed", lastErr), "ended_at": nil,
 		}
@@ -1102,7 +1164,36 @@ func (s *BotLoadExecutionService) finishStopSession(ctx context.Context, session
 	return nil
 }
 
-// ReconcileBotFleetSnapshot 以 CP generation/configHash 为真源，生成有界且幂等的基础 desired assignment。
+// ReconcileBotFleetRuntimeState 在可信 Fleet 更新后检查停止意图是否已经实际完成。
+func (s *BotLoadExecutionService) ReconcileBotFleetRuntimeState(ctx context.Context, sessionUUID string) error {
+	var session model.BotStressSession
+	if err := s.db.WithContext(ctx).Where("uuid = ?", sessionUUID).First(&session).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return fmt.Errorf("查询 Bot Fleet runtime 会话失败: %w", err)
+	}
+	if session.Status != model.BotStressSessionStopped && !botLoadStopIntentRecorded(session.LastError) {
+		return nil
+	}
+	if session.Status != model.BotStressSessionStopped {
+		if err := s.reconcileStoppedBatches(ctx, session.ID); err != nil {
+			return err
+		}
+		if err := s.finishStopSession(ctx, session.ID); err != nil {
+			return err
+		}
+		if err := s.db.WithContext(ctx).Select("status").First(&session, session.ID).Error; err != nil {
+			return err
+		}
+	}
+	if session.Status == model.BotStressSessionStopped && s.subscriptions != nil {
+		s.subscriptions.StopSession(sessionUUID)
+	}
+	return nil
+}
+
+// ReconcileBotFleetSnapshot 以 CP desired 真源清理额外 runtime，不实现 FR-354 自动恢复。
 func (s *BotLoadExecutionService) ReconcileBotFleetSnapshot(ctx context.Context, nodeID uint, nodeUUID, sessionUUID string, snapshot *workerpb.GetBotFleetSnapshotResponse) error {
 	if snapshot == nil {
 		return nil
@@ -1158,21 +1249,14 @@ func (s *BotLoadExecutionService) loadReconcileDesired(ctx context.Context, node
 }
 
 func desiredBotLoadReconcileItems(session *model.BotStressSession, bots []model.Bot, runtime map[string]*workerpb.BotRuntimeSnapshot) []botLoadReconcileItem {
-	items := make([]botLoadReconcileItem, 0)
+	if session == nil || (session.Status != model.BotStressSessionStopped && !botLoadStopIntentRecorded(session.LastError)) {
+		return nil
+	}
+	items := make([]botLoadReconcileItem, 0, len(bots))
 	for index := range bots {
 		bot := &bots[index]
-		observed := runtime[bot.UUID]
-		if bot.DesiredStateGeneration > 1 || bot.Status == model.BotStatusStopped {
-			if observed != nil {
-				items = append(items, stoppedBotLoadReconcileItem(bot, session.UUID, observed, botLoadReconcileStopped))
-			}
-			continue
-		}
-		if observed == nil {
-			continue
-		}
-		if observed.Generation != bot.DesiredStateGeneration || observed.ConfigHash != bot.ConfigHash {
-			items = append(items, stoppedBotLoadReconcileItem(bot, session.UUID, observed, botLoadReconcileCleanup))
+		if observed := runtime[bot.UUID]; observed != nil {
+			items = append(items, stoppedBotLoadReconcileItem(bot, session.UUID, observed, botLoadReconcileStopped))
 		}
 	}
 	return items
@@ -1266,12 +1350,10 @@ func persistBotLoadReconcileItem(tx *gorm.DB, item botLoadReconcileItem, result 
 	}
 	updates := map[string]any{}
 	switch {
-	case result.accepted && item.mode == botLoadReconcileStopped:
-		updates = map[string]any{"status": model.BotStatusStopped, "last_error": ""}
+	case result.accepted:
+		updates = map[string]any{"last_error": ""}
 	case !result.accepted:
 		updates = map[string]any{"last_error": result.lastErr}
-	default:
-		return nil
 	}
 	if err := tx.Model(&model.Bot{}).Where("id = ?", item.bot.ID).Updates(updates).Error; err != nil {
 		return fmt.Errorf("回写 snapshot reconcile 结果失败: %w", err)

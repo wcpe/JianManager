@@ -409,7 +409,7 @@ func TestBotLoadStop_ReasonAsyncFailureIdempotencyAndAudit(t *testing.T) {
 		assert.Contains(t, audit.Detail, `"reasonLength":4`)
 	})
 
-	t.Run("成功停止重复调用不重复RPC", func(t *testing.T) {
+	t.Run("停止命令已接受时重复调用不重复RPC", func(t *testing.T) {
 		_, _, worker, ctx := setupBotLoadHTTP(t, 50)
 		sessionID := createBotLoadSession(t, ctx, 2)
 		preflight := preflightBotLoadSession(t, ctx, sessionID, nil)
@@ -418,7 +418,7 @@ func TestBotLoadStop_ReasonAsyncFailureIdempotencyAndAudit(t *testing.T) {
 		for range 2 {
 			stop := makeRequest(ctx.router, http.MethodPost, "/api/v1/bots/stress-sessions/"+itoa(sessionID)+"/stop", nil, ctx.token)
 			require.Equal(t, http.StatusAccepted, stop.Code)
-			assert.Equal(t, "stopped", parseJSON(t, stop)["status"])
+			assert.NotEqual(t, "stopped", parseJSON(t, stop)["status"], "accepted 仅表示 Worker 接受停止命令")
 		}
 		_, applyCalls := worker.counts()
 		assert.Equal(t, 2, applyCalls, "一次 start + 一次 stop")
