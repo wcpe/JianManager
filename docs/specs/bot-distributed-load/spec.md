@@ -2,7 +2,7 @@
 
 > 状态：已审核（2026-07-18）　·　关联 PRD：FR-351（增强 FR-038/042/274）　·　计划分支：feature/fr-351-bot-distributed-load
 > 超级规格：`../bot-load-platform/super-spec.md`　·　HTTP API：`../bot-load-platform/api.md`
-> 架构决策：`ADR-074`（proposed，部分修订 ADR-006 的单 Worker 归属假设）
+> 架构决策：`ADR-074`（accepted，部分修订 ADR-006 的单 Worker 归属假设）
 
 ## 1. 背景与目标
 
