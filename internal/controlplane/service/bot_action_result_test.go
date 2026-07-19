@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +16,8 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
+
+var botActionResultDBSequence atomic.Uint64
 
 type botActionResultHarness struct {
 	db      *gorm.DB
@@ -26,7 +30,8 @@ type botActionResultHarness struct {
 
 func newBotActionResultHarness(t *testing.T) *botActionResultHarness {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	dsn := fmt.Sprintf("file:%s-%d?mode=memory&cache=shared", t.Name(), botActionResultDBSequence.Add(1))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
 		&model.Node{}, &model.Instance{}, &model.BotStressSession{},
@@ -187,6 +192,73 @@ func TestBotFleetRuntimeCoordinator_HandsActionEventToResultService(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, BotFleetRuntimeActionApplied, result.Decision)
 	require.Equal(t, model.BotLoadActionRunning, h.reload(t).Status)
+}
+
+func TestActionResultService_TerminalIdentityConflictsDoNotMutateRunningAction(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *botActionResultHarness, *workerpb.BotActionEvent) string
+	}{
+		{name: "步骤冲突", mutate: func(_ *testing.T, _ *botActionResultHarness, event *workerpb.BotActionEvent) string {
+			event.StepId = "other-step"
+			return event.SessionUuid
+		}},
+		{name: "尝试次数冲突", mutate: func(_ *testing.T, _ *botActionResultHarness, event *workerpb.BotActionEvent) string {
+			event.Attempt = 2
+			return event.SessionUuid
+		}},
+		{name: "关联令牌冲突", mutate: func(_ *testing.T, _ *botActionResultHarness, event *workerpb.BotActionEvent) string {
+			event.CorrelationToken = "other-token"
+			return event.SessionUuid
+		}},
+		{name: "Bot 冲突", mutate: func(t *testing.T, h *botActionResultHarness, event *workerpb.BotActionEvent) string {
+			other := createActionResultBot(t, h, h.session, "bot-other", "combat")
+			event.BotUuid = other.UUID
+			return event.SessionUuid
+		}},
+		{name: "运行冲突", mutate: func(t *testing.T, h *botActionResultHarness, event *workerpb.BotActionEvent) string {
+			otherSession := &model.BotStressSession{UUID: "run-other", InstanceID: h.bot.InstanceID, Name: "其他运行", NamePrefix: "other", BotCount: 1}
+			require.NoError(t, h.db.Create(otherSession).Error)
+			other := createActionResultBot(t, h, otherSession, "bot-other-run", "combat")
+			event.BotUuid, event.SessionUuid = other.UUID, otherSession.UUID
+			return otherSession.UUID
+		}},
+		{name: "分组冲突", mutate: func(t *testing.T, h *botActionResultHarness, event *workerpb.BotActionEvent) string {
+			require.NoError(t, h.db.Model(h.bot).Update("cohort_key", "lobby").Error)
+			h.bot.CohortKey = "lobby"
+			return event.SessionUuid
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newBotActionResultHarness(t)
+			require.NoError(t, ingestAction(t, h, h.event("running")))
+			terminal := h.event("failed")
+			terminal.ErrorCode = ActionErrorTargetNotFound
+			expectedSession := test.mutate(t, h, terminal)
+
+			result, err := h.service.Ingest(context.Background(), h.node.ID, expectedSession, terminal)
+			require.NoError(t, err)
+			require.Equal(t, ActionResultIgnoredIdentity, result.Decision)
+			stored := h.reload(t)
+			require.Equal(t, model.BotLoadActionRunning, stored.Status)
+			require.Equal(t, h.session.ID, stored.StressSessionID)
+			require.Equal(t, "wait-room", stored.StepID)
+			require.Equal(t, 1, stored.Attempt)
+			require.Equal(t, "token-352", stored.CorrelationToken)
+		})
+	}
+}
+
+func createActionResultBot(t *testing.T, h *botActionResultHarness, session *model.BotStressSession, botUUID, cohort string) *model.Bot {
+	t.Helper()
+	bot := &model.Bot{
+		UUID: botUUID, InstanceID: h.bot.InstanceID, StressSessionID: &session.ID,
+		ExecutorNodeID: h.bot.ExecutorNodeID, Name: botUUID, Status: model.BotStatusConnected,
+		DesiredStateGeneration: h.bot.DesiredStateGeneration, CohortKey: cohort, Config: `{}`, Behavior: "idle",
+	}
+	require.NoError(t, h.db.Create(bot).Error)
+	return bot
 }
 
 func ingestAction(t *testing.T, h *botActionResultHarness, event *workerpb.BotActionEvent) error {

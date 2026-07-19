@@ -5,8 +5,10 @@ import "strings"
 const TowerDefenseCorePresetKey = "tower-defense-core-v1"
 
 const (
-	towerDefenseObservationDurationMS = 3_600_000
-	towerDefenseAttackIntervalMS      = 600
+	towerDefenseObservationDurationMS    = 3_600_000
+	towerDefenseAttackIntervalMS         = 600
+	towerDefenseEvidenceWindowMS         = 30_000
+	towerDefenseMinDamageEventsPerWindow = 1
 )
 
 // TowerDefenseCorePresetParams 只承载用户环境相关的业务值，不提供命令、坐标或怪物默认值。
@@ -73,8 +75,11 @@ func towerDefenseCombatSteps(params TowerDefenseCorePresetParams) []ScenarioActi
 		{AttackUntil: &AttackUntilAction{
 			ScenarioActionBase: observedScenarioActionBase("combat-attack", ScenarioActionAttackUntil),
 			Selector:           ScenarioEntitySelector{Kind: "hostile", Types: append([]string(nil), params.MonsterTypes...), Radius: *params.AttackRadius, Priority: "nearest"},
-			Stop:               ScenarioAttackStop{DurationMS: towerDefenseObservationDurationMS, ProbeEvent: "damage", SuccessPolicy: "all"},
-			AttackIntervalMS:   towerDefenseAttackIntervalMS, Chase: true, Reacquire: true,
+			Stop: ScenarioAttackStop{
+				DurationMS: towerDefenseObservationDurationMS, ProbeEvent: "damage", SuccessPolicy: "all",
+				EvidenceWindowMS: towerDefenseEvidenceWindowMS, MinDamageEventsPerWindow: towerDefenseMinDamageEventsPerWindow,
+			},
+			AttackIntervalMS: towerDefenseAttackIntervalMS, Chase: true, Reacquire: true,
 		}},
 	}
 }

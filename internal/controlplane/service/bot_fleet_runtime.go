@@ -16,7 +16,11 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-const botFleetSnapshotDedupeLimit = 256
+const (
+	botFleetSnapshotDedupeLimit       = 256
+	botFleetActionDispatchConcurrency = 8
+	botFleetActionDispatchQueueSize   = 256
+)
 
 // BotFleetRuntimeDecision 表示一条 Fleet runtime 消息的结构化处理结果。
 type BotFleetRuntimeDecision string
@@ -34,6 +38,7 @@ const (
 	BotFleetRuntimeIgnoredConcurrentUpdate  BotFleetRuntimeDecision = "ignored_concurrent_update"
 	BotFleetRuntimeIgnoredInvalidStatus     BotFleetRuntimeDecision = "ignored_invalid_status"
 	BotFleetRuntimeActionApplied            BotFleetRuntimeDecision = "action_applied"
+	BotFleetRuntimeActionDispatched         BotFleetRuntimeDecision = "action_dispatched"
 	BotFleetRuntimeIgnoredActionEvent       BotFleetRuntimeDecision = "ignored_action_event"
 	BotFleetRuntimeIgnoredStaleSubscription BotFleetRuntimeDecision = "ignored_stale_subscription"
 )
@@ -743,6 +748,7 @@ type botFleetSubscriptionSlot struct {
 	generation uint64
 	active     bool
 	cancel     context.CancelFunc
+	applyDone  chan struct{}
 }
 
 // BotFleetSubscriptionManager 按 session/node 去重并维持 snapshot→stream 订阅顺序。
@@ -750,19 +756,58 @@ type BotFleetSubscriptionManager struct {
 	coordinator *BotFleetRuntimeCoordinator
 	rootCtx     context.Context
 	cancel      context.CancelFunc
+	actionQueue chan botFleetActionDispatch
 
-	mu     sync.Mutex
-	slots  map[string]*botFleetSubscriptionSlot
-	closed bool
-	wg     sync.WaitGroup
+	mu       sync.Mutex
+	slots    map[string]*botFleetSubscriptionSlot
+	closed   bool
+	wg       sync.WaitGroup
+	actionWG sync.WaitGroup
+}
+
+type botFleetActionDispatch struct {
+	ctx        context.Context
+	slot       *botFleetSubscriptionSlot
+	target     BotFleetSubscriptionTarget
+	generation uint64
+	event      *workerpb.BotFleetEvent
 }
 
 // NewBotFleetSubscriptionManager 创建进程级共享的 Fleet 订阅管理器。
 func NewBotFleetSubscriptionManager(coordinator *BotFleetRuntimeCoordinator) *BotFleetSubscriptionManager {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &BotFleetSubscriptionManager{
+	manager := &BotFleetSubscriptionManager{
 		coordinator: coordinator, rootCtx: ctx, cancel: cancel,
-		slots: make(map[string]*botFleetSubscriptionSlot),
+		actionQueue: make(chan botFleetActionDispatch, botFleetActionDispatchQueueSize),
+		slots:       make(map[string]*botFleetSubscriptionSlot),
+	}
+	manager.startActionDispatchers()
+	return manager
+}
+
+func (m *BotFleetSubscriptionManager) startActionDispatchers() {
+	for range botFleetActionDispatchConcurrency {
+		m.actionWG.Add(1)
+		go func() {
+			defer m.actionWG.Done()
+			for {
+				select {
+				case <-m.rootCtx.Done():
+					return
+				case dispatch := <-m.actionQueue:
+					m.handleDispatchedAction(dispatch)
+				}
+			}
+		}()
+	}
+}
+
+func (m *BotFleetSubscriptionManager) handleDispatchedAction(dispatch botFleetActionDispatch) {
+	if dispatch.ctx.Err() != nil || !m.subscriptionCurrent(dispatch.slot, dispatch.generation) {
+		return
+	}
+	if _, err := m.coordinator.HandleEvent(dispatch.ctx, dispatch.target.NodeID, dispatch.target.NodeUUID, dispatch.target.SessionUUID, dispatch.event); err != nil {
+		slog.Warn("Bot Fleet 动作事件处理失败", "nodeId", dispatch.target.NodeID, "sessionUuid", dispatch.target.SessionUUID, "error", err)
 	}
 }
 
@@ -782,6 +827,20 @@ func (m *BotFleetSubscriptionManager) Ensure(target BotFleetSubscriptionTarget) 
 	slot := m.subscriptionSlot(target)
 	if slot == nil {
 		return
+	}
+	slot.gate.Lock()
+	if slot.active {
+		slot.gate.Unlock()
+		return
+	}
+	previousApply := slot.applyDone
+	slot.gate.Unlock()
+	if previousApply != nil {
+		select {
+		case <-previousApply:
+		case <-m.rootCtx.Done():
+			return
+		}
 	}
 	slot.gate.Lock()
 	m.mu.Lock()
@@ -848,6 +907,7 @@ func (m *BotFleetSubscriptionManager) Close() {
 	if m.closed {
 		m.mu.Unlock()
 		m.wg.Wait()
+		m.actionWG.Wait()
 		return
 	}
 	m.closed = true
@@ -866,6 +926,7 @@ func (m *BotFleetSubscriptionManager) Close() {
 		slot.gate.Unlock()
 	}
 	m.wg.Wait()
+	m.actionWG.Wait()
 }
 
 func (m *BotFleetSubscriptionManager) subscriptionSlots() []*botFleetSubscriptionSlot {
@@ -911,17 +972,18 @@ func (m *BotFleetSubscriptionManager) openSubscription(ctx context.Context, slot
 	if err != nil {
 		return nil, err
 	}
-	slot.gate.Lock()
-	if ctx.Err() != nil || !subscriptionCurrentLocked(slot, generation) {
-		slot.gate.Unlock()
-		return nil, context.Canceled
-	}
-	if err := m.coordinator.applySnapshotState(ctx, target.NodeID, target.NodeUUID, target.SessionUUID, snapshot); err != nil {
-		slot.gate.Unlock()
+	if err := m.applySubscriptionSnapshot(ctx, slot, generation, target, snapshot); err != nil {
 		return nil, err
 	}
+	if ctx.Err() != nil || !m.subscriptionCurrent(slot, generation) {
+		return nil, context.Canceled
+	}
+	if m.coordinator.reconciler != nil {
+		if err := m.coordinator.reconciler.ReconcileBotFleetSnapshot(ctx, target.NodeID, target.NodeUUID, target.SessionUUID, snapshot); err != nil {
+			return nil, fmt.Errorf("协调 Bot FleetSnapshot desired 差异失败: %w", err)
+		}
+	}
 	stream, err := m.coordinator.OpenStream(ctx, target.NodeUUID, target.SessionUUID)
-	slot.gate.Unlock()
 	if err != nil {
 		return nil, err
 	}
@@ -929,6 +991,36 @@ func (m *BotFleetSubscriptionManager) openSubscription(ctx context.Context, slot
 		return nil, err
 	}
 	return stream, nil
+}
+
+func (m *BotFleetSubscriptionManager) applySubscriptionSnapshot(ctx context.Context, slot *botFleetSubscriptionSlot, generation uint64, target BotFleetSubscriptionTarget, snapshot *workerpb.GetBotFleetSnapshotResponse) error {
+	applyDone, ok := m.beginSnapshotApply(slot, generation)
+	if !ok || ctx.Err() != nil {
+		return context.Canceled
+	}
+	defer m.finishSnapshotApply(slot, applyDone)
+	return m.coordinator.applySnapshot(ctx, target.NodeID, target.SessionUUID, snapshot)
+}
+
+func (m *BotFleetSubscriptionManager) beginSnapshotApply(slot *botFleetSubscriptionSlot, generation uint64) (chan struct{}, bool) {
+	slot.gate.Lock()
+	defer slot.gate.Unlock()
+	if !subscriptionCurrentLocked(slot, generation) {
+		return nil, false
+	}
+	applyDone := make(chan struct{})
+	slot.applyDone = applyDone
+	return applyDone, true
+}
+
+func (m *BotFleetSubscriptionManager) finishSnapshotApply(slot *botFleetSubscriptionSlot, applyDone chan struct{}) {
+	slot.gate.Lock()
+	defer slot.gate.Unlock()
+	if slot.applyDone != applyDone {
+		return
+	}
+	slot.applyDone = nil
+	close(applyDone)
 }
 
 func (m *BotFleetSubscriptionManager) consumeSubscription(ctx context.Context, slot *botFleetSubscriptionSlot, generation uint64, stream BotFleetRuntimeStream) error {
@@ -954,17 +1046,22 @@ func (m *BotFleetSubscriptionManager) handleSubscriptionEvent(ctx context.Contex
 	if slot == nil {
 		return staleBotFleetSubscriptionResult(event), nil
 	}
-	slot.gate.Lock()
-	if !subscriptionCurrentLocked(slot, generation) {
-		slot.gate.Unlock()
+	if !m.subscriptionCurrent(slot, generation) {
 		return staleBotFleetSubscriptionResult(event), nil
 	}
-	result, observed, err := m.coordinator.handleEvent(ctx, target.NodeID, target.NodeUUID, target.SessionUUID, event, false)
-	slot.gate.Unlock()
-	if err != nil || !observed {
-		return result, err
+	if event != nil && event.GetActionEvent() != nil {
+		action := event.GetActionEvent()
+		dispatch := botFleetActionDispatch{ctx: ctx, slot: slot, target: target, generation: generation, event: event}
+		select {
+		case m.actionQueue <- dispatch:
+			return runtimeResult(BotFleetRuntimeActionDispatched, action.BotUuid, "action_event 已交给统一 Fleet 分流异步处理"), nil
+		case <-ctx.Done():
+			return staleBotFleetSubscriptionResult(event), ctx.Err()
+		case <-m.rootCtx.Done():
+			return staleBotFleetSubscriptionResult(event), m.rootCtx.Err()
+		}
 	}
-	return result, m.coordinator.observeRuntimeState(ctx, target.SessionUUID)
+	return m.coordinator.HandleEvent(ctx, target.NodeID, target.NodeUUID, target.SessionUUID, event)
 }
 
 func (m *BotFleetSubscriptionManager) advanceSubscriptionGeneration(slot *botFleetSubscriptionSlot, generation uint64) (uint64, bool) {

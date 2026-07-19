@@ -64,6 +64,7 @@ func assembleBotLoadServices(db *gorm.DB, pool *cpgrpc.ClientPool, stableSecret 
 	coordinator.SetRuntimeObserver(execution)
 	subscriptions := service.NewBotFleetSubscriptionManager(coordinator)
 	execution.SetFleetSubscriptionManager(subscriptions)
+	execution.SetScenarioRunLifecycle(scenarioEvents)
 	return &botLoadServiceBundle{
 		capacity: capacity, reservations: reservations, signer: signer,
 		preflight: preflight, execution: execution, actionResults: actionResults,

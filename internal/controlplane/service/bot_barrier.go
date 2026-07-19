@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"math"
 	"sort"
 	"strings"
@@ -8,7 +9,11 @@ import (
 	"time"
 )
 
-const barrierReleaseLead = 250 * time.Millisecond
+const (
+	barrierReleaseLead = 250 * time.Millisecond
+	barrierRetryMin    = 100 * time.Millisecond
+	barrierRetryMax    = 2 * time.Second
+)
 
 // BarrierScope 是屏障唯一作用域。
 type BarrierScope struct {
@@ -70,45 +75,161 @@ const (
 // BarrierResult 返回协调决策和可重试释放快照。
 type BarrierResult struct {
 	Decision BarrierDecision
+	Expected int
+	Arrived  int
 	Release  *BarrierRelease
 }
 
 type barrierState struct {
-	definition BarrierDefinition
-	arrivals   map[string]BarrierParticipant
-	pending    map[string]BarrierParticipant
-	releasedAt int64
-	timedOut   bool
+	definition  BarrierDefinition
+	arrivals    map[string]BarrierParticipant
+	pending     map[string]BarrierParticipant
+	releasedAt  int64
+	timedOut    bool
+	dispatching bool
+	nextAttempt time.Time
+	backoff     time.Duration
+}
+
+type barrierLoadCall struct {
+	done       chan struct{}
+	err        error
+	runVersion uint64
 }
 
 // BarrierCoordinator 在 CP 进程内维护显式运行生命周期的屏障状态。
 type BarrierCoordinator struct {
-	mu     sync.Mutex
-	clock  BotLoadClock
-	states map[BarrierScope]*barrierState
+	mu         sync.Mutex
+	clock      BotLoadClock
+	states     map[BarrierScope]*barrierState
+	loading    map[BarrierScope]*barrierLoadCall
+	runVersion map[string]uint64
 }
 
 // NewBarrierCoordinator 创建可注入时钟的内存屏障协调器。
 func NewBarrierCoordinator(clock BotLoadClock) *BarrierCoordinator {
-	return &BarrierCoordinator{clock: normalizeBotLoadClock(clock), states: make(map[BarrierScope]*barrierState)}
+	return &BarrierCoordinator{
+		clock: normalizeBotLoadClock(clock), states: make(map[BarrierScope]*barrierState),
+		loading: make(map[BarrierScope]*barrierLoadCall), runVersion: make(map[string]uint64),
+	}
 }
 
-// Ensure 仅在首次进入时冻结 expectedBotSet；后续同作用域调用不改变分母。
+// Ensure 兼容直接传入 expected set 的调用。
 func (c *BarrierCoordinator) Ensure(definition BarrierDefinition) error {
-	if err := validateBarrierDefinition(definition); err != nil {
-		return err
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, exists := c.states[definition.Scope]; exists {
-		return nil
-	}
-	definition.ExpectedBots = cloneExpectedBots(definition.ExpectedBots)
+	return c.EnsureLazy(context.Background(), definition, func(context.Context) (map[string]int64, error) {
+		return definition.ExpectedBots, nil
+	})
+}
+
+// EnsureLazy 锁外查询 expected set，并通过每作用域门闩保证仅首次查询。
+func (c *BarrierCoordinator) EnsureLazy(ctx context.Context, definition BarrierDefinition, loader func(context.Context) (map[string]int64, error)) error {
 	if definition.TimeoutPolicy == "" {
 		definition.TimeoutPolicy = "fail"
 	}
-	c.states[definition.Scope] = &barrierState{
-		definition: definition, arrivals: make(map[string]BarrierParticipant), pending: make(map[string]BarrierParticipant),
+	if err := validateBarrierDefinition(definition); err != nil {
+		return err
+	}
+	call, leader := c.beginBarrierLoad(definition.Scope)
+	if !leader {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-call.done:
+			return call.err
+		}
+	}
+	expected, err := loadExpectedBots(ctx, definition.ExpectedBots, loader)
+	if err == nil {
+		err = validateExpectedBots(definition.Release, expected)
+	}
+	c.finishBarrierLoad(definition, expected, call, err)
+	return call.err
+}
+
+func (c *BarrierCoordinator) beginBarrierLoad(scope BarrierScope) (*barrierLoadCall, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, exists := c.states[scope]; exists {
+		call := &barrierLoadCall{done: make(chan struct{})}
+		close(call.done)
+		return call, false
+	}
+	if call := c.loading[scope]; call != nil {
+		return call, false
+	}
+	call := &barrierLoadCall{done: make(chan struct{}), runVersion: c.runVersion[scope.RunID]}
+	c.loading[scope] = call
+	return call, true
+}
+
+func (c *BarrierCoordinator) finishBarrierLoad(definition BarrierDefinition, expected map[string]int64, call *barrierLoadCall, loadErr error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if loadErr == nil && call.runVersion != c.runVersion[definition.Scope.RunID] {
+		loadErr = context.Canceled
+	}
+	if loadErr == nil {
+		definition.ExpectedBots = cloneExpectedBots(expected)
+		if _, exists := c.states[definition.Scope]; !exists {
+			c.states[definition.Scope] = &barrierState{
+				definition: definition, arrivals: make(map[string]BarrierParticipant), pending: make(map[string]BarrierParticipant),
+			}
+		}
+	}
+	call.err = loadErr
+	delete(c.loading, definition.Scope)
+	close(call.done)
+}
+
+func loadExpectedBots(ctx context.Context, fallback map[string]int64, loader func(context.Context) (map[string]int64, error)) (map[string]int64, error) {
+	if loader == nil {
+		return fallback, nil
+	}
+	return loader(ctx)
+}
+
+func validateBarrierDefinition(definition BarrierDefinition) error {
+	scope := definition.Scope
+	if strings.TrimSpace(scope.RunID) == "" || strings.TrimSpace(scope.CohortKey) == "" || strings.TrimSpace(scope.BarrierKey) == "" || scope.StageIndex < 0 || scope.Round <= 0 {
+		return scenarioValidationError("barrier.scope", "屏障作用域不完整")
+	}
+	if definition.Deadline.IsZero() {
+		return scenarioValidationError("barrier.deadline", "截止时间不能为空")
+	}
+	if definition.TimeoutPolicy != "fail" && definition.TimeoutPolicy != "release-arrived" {
+		return scenarioValidationError("barrier.timeoutPolicy", "必须为 fail 或 release-arrived")
+	}
+	return validateBarrierRelease(definition.Release, 0)
+}
+
+func validateExpectedBots(release ScenarioBarrierRelease, expected map[string]int64) error {
+	if len(expected) == 0 {
+		return scenarioValidationError("barrier.expectedBotSet", "期望 Bot 集合不能为空")
+	}
+	for botUUID, generation := range expected {
+		if strings.TrimSpace(botUUID) == "" || generation <= 0 {
+			return scenarioValidationError("barrier.expectedBotSet", "Bot 或 generation 非法")
+		}
+	}
+	return validateBarrierRelease(release, len(expected))
+}
+
+func validateBarrierRelease(release ScenarioBarrierRelease, expected int) error {
+	switch release.Type {
+	case "all":
+		if release.Value != 0 {
+			return scenarioValidationError("barrier.release.value", "all 不接受 value")
+		}
+	case "count":
+		if release.Value < 1 || (expected > 0 && release.Value > expected) {
+			return scenarioValidationError("barrier.release.value", "必须在期望 Bot 数量范围内")
+		}
+	case "percent":
+		if release.Value < 1 || release.Value > 100 {
+			return scenarioValidationError("barrier.release.value", "必须在 1..100 之间")
+		}
+	default:
+		return scenarioValidationError("barrier.release.type", "必须为 all、count 或 percent")
 	}
 	return nil
 }
@@ -121,127 +242,30 @@ func (c *BarrierCoordinator) Arrive(arrival BarrierArrival) BarrierResult {
 	if state == nil {
 		return BarrierResult{Decision: BarrierUnknown}
 	}
-	if state.timedOut {
-		return BarrierResult{Decision: BarrierTimedOut}
-	}
-	if state.releasedAt > 0 {
-		return c.arriveAfterRelease(state, arrival)
-	}
 	expectedGeneration, expected := state.definition.ExpectedBots[arrival.BotUUID]
 	if !expected {
-		return BarrierResult{Decision: BarrierUnexpectedBot}
+		return c.result(state, BarrierUnexpectedBot)
 	}
 	if arrival.Generation != expectedGeneration {
-		return BarrierResult{Decision: BarrierStaleGeneration}
+		return c.result(state, BarrierStaleGeneration)
 	}
-	if existing, ok := state.arrivals[arrival.BotUUID]; ok && existing.Generation == arrival.Generation {
-		return BarrierResult{Decision: BarrierDuplicate}
+	if state.timedOut {
+		return c.result(state, BarrierTimedOut)
+	}
+	if state.releasedAt > 0 {
+		state.pending[arrival.BotUUID] = participantFromArrival(arrival)
+		state.nextAttempt = c.clock.Now().UTC()
+		return c.result(state, BarrierAlreadyReleased)
+	}
+	if _, duplicate := state.arrivals[arrival.BotUUID]; duplicate {
+		return c.result(state, BarrierDuplicate)
 	}
 	state.arrivals[arrival.BotUUID] = participantFromArrival(arrival)
 	if len(state.arrivals) < barrierThreshold(state.definition) {
-		return BarrierResult{Decision: BarrierWaiting}
+		return c.result(state, BarrierWaiting)
 	}
-	c.release(state, state.arrivals)
-	return BarrierResult{Decision: BarrierReleased, Release: releaseSnapshot(state)}
-}
-
-func (c *BarrierCoordinator) arriveAfterRelease(state *barrierState, arrival BarrierArrival) BarrierResult {
-	expectedGeneration, expected := state.definition.ExpectedBots[arrival.BotUUID]
-	if !expected {
-		return BarrierResult{Decision: BarrierUnexpectedBot}
-	}
-	if arrival.Generation != expectedGeneration {
-		return BarrierResult{Decision: BarrierStaleGeneration}
-	}
-	participant := participantFromArrival(arrival)
-	state.pending[arrival.BotUUID] = participant
-	return BarrierResult{Decision: BarrierAlreadyReleased, Release: releaseSnapshot(state)}
-}
-
-// CheckTimeout 使用注入时钟执行 fail 或 release-arrived 策略。
-func (c *BarrierCoordinator) CheckTimeout(scope BarrierScope) BarrierResult {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	state := c.states[scope]
-	if state == nil {
-		return BarrierResult{Decision: BarrierUnknown}
-	}
-	if state.releasedAt > 0 {
-		return BarrierResult{Decision: BarrierAlreadyReleased, Release: releaseSnapshot(state)}
-	}
-	if state.timedOut || c.clock.Now().Before(state.definition.Deadline) {
-		if state.timedOut {
-			return BarrierResult{Decision: BarrierTimedOut}
-		}
-		return BarrierResult{Decision: BarrierWaiting}
-	}
-	if state.definition.TimeoutPolicy == "release-arrived" {
-		c.release(state, state.arrivals)
-		return BarrierResult{Decision: BarrierReleasedOnTimeout, Release: releaseSnapshot(state)}
-	}
-	state.timedOut = true
-	return BarrierResult{Decision: BarrierTimedOut}
-}
-
-// PendingRelease 返回尚未由 Worker 确认接收的释放信号。
-func (c *BarrierCoordinator) PendingRelease(scope BarrierScope) *BarrierRelease {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	state := c.states[scope]
-	if state == nil || state.releasedAt == 0 {
-		return nil
-	}
-	return releaseSnapshot(state)
-}
-
-// MarkDelivered 只移除已确认 accepted/skipped 的 Bot；失败项继续保留供重试。
-func (c *BarrierCoordinator) MarkDelivered(scope BarrierScope, botUUIDs []string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	state := c.states[scope]
-	if state == nil {
-		return
-	}
-	for _, botUUID := range botUUIDs {
-		delete(state.pending, botUUID)
-	}
-}
-
-// StopRun 清理指定运行的全部屏障状态，不介入 FR-355 运行状态机。
-func (c *BarrierCoordinator) StopRun(runID string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for scope := range c.states {
-		if scope.RunID == runID {
-			delete(c.states, scope)
-		}
-	}
-}
-
-// Exists 仅用于生命周期协调和测试诊断。
-func (c *BarrierCoordinator) Exists(scope BarrierScope) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, exists := c.states[scope]
-	return exists
-}
-
-func (c *BarrierCoordinator) release(state *barrierState, participants map[string]BarrierParticipant) {
-	if state.releasedAt == 0 {
-		state.releasedAt = c.clock.Now().Add(barrierReleaseLead).UnixMilli()
-	}
-	for botUUID, participant := range participants {
-		state.pending[botUUID] = participant
-	}
-}
-
-func releaseSnapshot(state *barrierState) *BarrierRelease {
-	pending := make([]BarrierParticipant, 0, len(state.pending))
-	for _, participant := range state.pending {
-		pending = append(pending, participant)
-	}
-	sort.Slice(pending, func(i, j int) bool { return pending[i].BotUUID < pending[j].BotUUID })
-	return &BarrierRelease{Round: state.definition.Scope.Round, ReleaseAtUnixMS: state.releasedAt, Pending: pending}
+	c.release(state, c.clock.Now().UTC())
+	return c.result(state, BarrierReleased)
 }
 
 func barrierThreshold(definition BarrierDefinition) int {
@@ -255,44 +279,176 @@ func barrierThreshold(definition BarrierDefinition) int {
 	}
 }
 
-func validateBarrierDefinition(definition BarrierDefinition) error {
-	scope := definition.Scope
-	if strings.TrimSpace(scope.RunID) == "" || strings.TrimSpace(scope.CohortKey) == "" || strings.TrimSpace(scope.BarrierKey) == "" || scope.StageIndex < 0 || scope.Round <= 0 {
-		return scenarioValidationError("barrier.scope", "屏障作用域不完整")
+func (c *BarrierCoordinator) release(state *barrierState, now time.Time) {
+	if state.releasedAt == 0 {
+		state.releasedAt = now.Add(barrierReleaseLead).UnixMilli()
 	}
-	if len(definition.ExpectedBots) == 0 {
-		return scenarioValidationError("barrier.expectedBotSet", "期望 Bot 集合不能为空")
+	for botUUID, participant := range state.arrivals {
+		state.pending[botUUID] = participant
 	}
-	for botUUID, generation := range definition.ExpectedBots {
-		if strings.TrimSpace(botUUID) == "" || generation <= 0 {
-			return scenarioValidationError("barrier.expectedBotSet", "Bot 或 generation 非法")
-		}
-	}
-	if definition.Deadline.IsZero() {
-		return scenarioValidationError("barrier.deadline", "截止时间不能为空")
-	}
-	if definition.TimeoutPolicy != "" && definition.TimeoutPolicy != "fail" && definition.TimeoutPolicy != "release-arrived" {
-		return scenarioValidationError("barrier.timeoutPolicy", "必须为 fail 或 release-arrived")
-	}
-	return validateBarrierRelease(definition.Release, len(definition.ExpectedBots))
+	state.nextAttempt = now
+	state.backoff = barrierRetryMin
 }
 
-func validateBarrierRelease(release ScenarioBarrierRelease, expected int) error {
-	switch release.Type {
-	case "all":
-		return nil
-	case "count":
-		if release.Value < 1 || release.Value > expected {
-			return scenarioValidationError("barrier.release.value", "必须在期望 Bot 数量范围内")
-		}
-	case "percent":
-		if release.Value < 1 || release.Value > 100 {
-			return scenarioValidationError("barrier.release.value", "必须在 1..100 之间")
-		}
-	default:
-		return scenarioValidationError("barrier.release.type", "必须为 all、count 或 percent")
+// CheckTimeout 使用注入时钟执行 fail 或 release-arrived 策略。
+func (c *BarrierCoordinator) CheckTimeout(scope BarrierScope) BarrierResult {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state := c.states[scope]
+	if state == nil {
+		return BarrierResult{Decision: BarrierUnknown}
 	}
-	return nil
+	decision := c.checkTimeoutLocked(state, c.clock.Now().UTC())
+	if decision != "" {
+		return c.result(state, decision)
+	}
+	if state.releasedAt > 0 {
+		return c.result(state, BarrierAlreadyReleased)
+	}
+	return c.result(state, BarrierWaiting)
+}
+
+func (c *BarrierCoordinator) checkTimeoutLocked(state *barrierState, now time.Time) BarrierDecision {
+	if state.releasedAt > 0 || state.timedOut || now.Before(state.definition.Deadline) {
+		return ""
+	}
+	if state.definition.TimeoutPolicy == "release-arrived" {
+		c.release(state, now)
+		return BarrierReleasedOnTimeout
+	}
+	state.timedOut = true
+	return BarrierTimedOut
+}
+
+// TakeReady 集中扫描 deadline 与待投递项，并声明本轮锁外 RPC 所有权。
+func (c *BarrierCoordinator) TakeReady(now time.Time) map[BarrierScope]*BarrierRelease {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	ready := make(map[BarrierScope]*BarrierRelease)
+	for scope, state := range c.states {
+		c.checkTimeoutLocked(state, now)
+		if state.releasedAt == 0 || state.dispatching || len(state.pending) == 0 || now.Before(state.nextAttempt) {
+			continue
+		}
+		state.dispatching = true
+		ready[scope] = releaseSnapshot(scope, state)
+	}
+	return ready
+}
+
+// CompleteRelease 合并逐项回执，失败项保留并按有界退避重试。
+func (c *BarrierCoordinator) CompleteRelease(scope BarrierScope, report ActionSignalReport, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state := c.states[scope]
+	if state == nil {
+		return
+	}
+	for _, item := range report.Items {
+		if item.Accepted || (item.Skipped && item.ErrorCode == "") {
+			delete(state.pending, item.Input.BotUUID)
+		}
+	}
+	state.dispatching = false
+	if len(state.pending) == 0 {
+		return
+	}
+	state.nextAttempt = now.Add(state.backoff)
+	state.backoff = min(state.backoff*2, barrierRetryMax)
+}
+
+// Accepts 判断 Bot 与 generation 是否属于已冻结期望集合。
+func (c *BarrierCoordinator) Accepts(scope BarrierScope, botUUID string, generation int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state := c.states[scope]
+	if state == nil {
+		return false
+	}
+	expectedGeneration, exists := state.definition.ExpectedBots[botUUID]
+	return exists && expectedGeneration == generation
+}
+
+// PendingRelease 返回尚未由 Worker 确认接收的释放信号。
+func (c *BarrierCoordinator) PendingRelease(scope BarrierScope) *BarrierRelease {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state := c.states[scope]
+	if state == nil || state.releasedAt == 0 {
+		return nil
+	}
+	return releaseSnapshot(scope, state)
+}
+
+// MarkDelivered 兼容直接标记已确认 Bot 的调用。
+func (c *BarrierCoordinator) MarkDelivered(scope BarrierScope, botUUIDs []string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state := c.states[scope]
+	if state == nil {
+		return
+	}
+	for _, botUUID := range botUUIDs {
+		delete(state.pending, botUUID)
+	}
+	state.dispatching = false
+}
+
+func releaseSnapshot(scope BarrierScope, state *barrierState) *BarrierRelease {
+	botUUIDs := make([]string, 0, len(state.pending))
+	for botUUID := range state.pending {
+		botUUIDs = append(botUUIDs, botUUID)
+	}
+	sort.Strings(botUUIDs)
+	pending := make([]BarrierParticipant, 0, len(botUUIDs))
+	for _, botUUID := range botUUIDs {
+		pending = append(pending, state.pending[botUUID])
+	}
+	return &BarrierRelease{Round: scope.Round, ReleaseAtUnixMS: state.releasedAt, Pending: pending}
+}
+
+func (c *BarrierCoordinator) result(state *barrierState, decision BarrierDecision) BarrierResult {
+	result := BarrierResult{Decision: decision, Expected: len(state.definition.ExpectedBots), Arrived: len(state.arrivals)}
+	if state.releasedAt > 0 {
+		result.Release = releaseSnapshot(state.definition.Scope, state)
+	}
+	return result
+}
+
+// StopRun 清理指定运行的全部屏障状态并使在途懒加载失效。
+func (c *BarrierCoordinator) StopRun(runID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.runVersion[runID]++
+	for scope := range c.states {
+		if scope.RunID == runID {
+			delete(c.states, scope)
+		}
+	}
+}
+
+// Has 原子判断作用域是否已冻结。
+func (c *BarrierCoordinator) Has(scope BarrierScope) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, exists := c.states[scope]
+	return exists
+}
+
+// Exists 保留既有测试和诊断调用。
+func (c *BarrierCoordinator) Exists(scope BarrierScope) bool { return c.Has(scope) }
+
+// ScheduledCount 返回仍需 deadline 或投递处理的作用域数量。
+func (c *BarrierCoordinator) ScheduledCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	count := 0
+	for _, state := range c.states {
+		if !state.timedOut && (state.releasedAt == 0 || len(state.pending) > 0 || state.dispatching) {
+			count++
+		}
+	}
+	return count
 }
 
 func cloneExpectedBots(source map[string]int64) map[string]int64 {
@@ -304,5 +460,8 @@ func cloneExpectedBots(source map[string]int64) map[string]int64 {
 }
 
 func participantFromArrival(arrival BarrierArrival) BarrierParticipant {
-	return BarrierParticipant{BotUUID: arrival.BotUUID, Generation: arrival.Generation, ActionRunID: arrival.ActionRunID, CorrelationToken: arrival.CorrelationToken}
+	return BarrierParticipant{
+		BotUUID: arrival.BotUUID, Generation: arrival.Generation,
+		ActionRunID: arrival.ActionRunID, CorrelationToken: arrival.CorrelationToken,
+	}
 }

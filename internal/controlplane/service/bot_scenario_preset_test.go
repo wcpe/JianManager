@@ -34,6 +34,12 @@ func TestBuildScenarioPreset_TowerDefenseCoreProducesValidScenarioV2(t *testing.
 	require.True(t, scenario.Cohorts[1].Steps[6].Base().ObservationStep)
 	require.Equal(t, "area_arrived", scenario.Cohorts[1].Steps[5].MoveToAndWait.RequireProbeEvent)
 	require.Equal(t, []string{"zombie", "skeleton"}, scenario.Cohorts[1].Steps[6].AttackUntil.Selector.Types)
+	attackStop := scenario.Cohorts[1].Steps[6].AttackUntil.Stop
+	require.Equal(t, 30_000, attackStop.EvidenceWindowMS)
+	require.Equal(t, 1, attackStop.MinDamageEventsPerWindow)
+	require.Equal(t, towerDefenseObservationDurationMS, attackStop.DurationMS)
+	require.Equal(t, "damage", attackStop.ProbeEvent)
+	require.Equal(t, "all", attackStop.SuccessPolicy, "首次 damage 只满足探针条件，仍须覆盖全部证据窗")
 
 	raw, err := json.Marshal(scenario)
 	require.NoError(t, err)

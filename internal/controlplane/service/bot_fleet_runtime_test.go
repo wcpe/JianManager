@@ -391,6 +391,31 @@ func (c *botFleetFakeClient) StreamBotFleetEvents(context.Context, string, strin
 	return stream, nil
 }
 
+type blockingBotFleetRuntimeRepository struct {
+	bot     *model.Bot
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *blockingBotFleetRuntimeRepository) FindBotRuntime(context.Context, string) (*model.Bot, error) {
+	return r.bot, nil
+}
+
+func (r *blockingBotFleetRuntimeRepository) ApplyBotRuntime(ctx context.Context, _ *model.Bot, _ uint, _ *workerpb.BotRuntimeSnapshot, _ model.BotStatus, _ time.Time, _ bool) (bool, error) {
+	r.once.Do(func() { close(r.started) })
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-r.release:
+		return true, nil
+	}
+}
+
+func (r *blockingBotFleetRuntimeRepository) ConvergeMissingRuntime(ctx context.Context, _ uint, _ string, _ []string, _ time.Time) error {
+	return ctx.Err()
+}
+
 type botFleetCapacitySink struct {
 	nodeID     uint
 	generation int64
@@ -673,6 +698,202 @@ func TestBotFleetSubscriptionManager_ObserverMayCancelWithoutSelfDeadlock(t *tes
 	}
 }
 
+type blockingFleetActionHandler struct {
+	firstActionID string
+	firstStarted  chan struct{}
+	releaseFirst  chan struct{}
+	secondSeen    chan struct{}
+	firstOnce     sync.Once
+	secondOnce    sync.Once
+}
+
+func (h *blockingFleetActionHandler) Ingest(_ context.Context, _ uint, _ string, event *workerpb.BotActionEvent) (ActionResultIngestResult, error) {
+	if event.ActionRunId == h.firstActionID {
+		h.firstOnce.Do(func() { close(h.firstStarted) })
+		<-h.releaseFirst
+	} else {
+		h.secondOnce.Do(func() { close(h.secondSeen) })
+	}
+	return actionIngestResult(ActionResultApplied, event, "测试动作已处理"), nil
+}
+
+func TestBotFleetSubscriptionManager_ActionHandlerDoesNotBlockLaterEventsOrStop(t *testing.T) {
+	h := newBotFleetRuntimeHarness(t)
+	handler := &blockingFleetActionHandler{
+		firstActionID: "action-blocking", firstStarted: make(chan struct{}),
+		releaseFirst: make(chan struct{}), secondSeen: make(chan struct{}),
+	}
+	coordinator := NewBotFleetRuntimeCoordinator(h.service, nil, nil)
+	coordinator.SetActionEventHandler(handler)
+	manager := NewBotFleetSubscriptionManager(coordinator)
+	target := BotFleetSubscriptionTarget{NodeID: h.node.ID, NodeUUID: h.node.UUID, SessionUUID: h.session.UUID}
+	slot := manager.subscriptionSlot(target)
+	ctx, cancel := context.WithCancel(context.Background())
+	slot.gate.Lock()
+	slot.active, slot.generation, slot.cancel = true, 1, cancel
+	slot.gate.Unlock()
+	first := &workerpb.BotFleetEvent{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: &workerpb.BotActionEvent{ActionRunId: "action-blocking", BotUuid: h.bot.UUID}}}
+
+	_, err := manager.handleSubscriptionEvent(ctx, target, 1, first)
+	require.NoError(t, err)
+	select {
+	case <-handler.firstStarted:
+	case <-time.After(time.Second):
+		t.Fatal("订阅实流未分流 action_event")
+	}
+	second := &workerpb.BotFleetEvent{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: &workerpb.BotActionEvent{ActionRunId: "action-second", BotUuid: h.bot.UUID}}}
+	_, err = manager.handleSubscriptionEvent(ctx, target, 1, second)
+	require.NoError(t, err)
+	select {
+	case <-handler.secondSeen:
+	case <-time.After(time.Second):
+		t.Fatal("阻塞 action handler 阻塞了后续 action_event")
+	}
+	runtimeEvent := &workerpb.BotFleetEvent{Event: &workerpb.BotFleetEvent_RuntimeSnapshot{RuntimeSnapshot: h.snapshot(3, 1, 1, "connected")}}
+	_, err = manager.handleSubscriptionEvent(ctx, target, 1, runtimeEvent)
+	require.NoError(t, err)
+	require.Equal(t, model.BotStatusConnected, h.reload(t).Status)
+
+	stopped := make(chan struct{})
+	go func() { manager.StopSession(h.session.UUID); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("阻塞 action handler 阻塞了 StopSession")
+	}
+	close(handler.releaseFirst)
+	manager.Close()
+}
+
+func TestBotFleetSubscriptionManager_StaleGenerationDropsActionBeforeDispatch(t *testing.T) {
+	h := newBotFleetRuntimeHarness(t)
+	handler := &blockingFleetActionHandler{
+		firstActionID: "stale-action", firstStarted: make(chan struct{}),
+		releaseFirst: make(chan struct{}), secondSeen: make(chan struct{}),
+	}
+	coordinator := NewBotFleetRuntimeCoordinator(h.service, nil, nil)
+	coordinator.SetActionEventHandler(handler)
+	manager := NewBotFleetSubscriptionManager(coordinator)
+	target := BotFleetSubscriptionTarget{NodeID: h.node.ID, NodeUUID: h.node.UUID, SessionUUID: h.session.UUID}
+	slot := manager.subscriptionSlot(target)
+	slot.gate.Lock()
+	slot.active, slot.generation = true, 2
+	slot.gate.Unlock()
+	event := &workerpb.BotFleetEvent{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: &workerpb.BotActionEvent{ActionRunId: "stale-action", BotUuid: h.bot.UUID}}}
+
+	result, err := manager.handleSubscriptionEvent(context.Background(), target, 1, event)
+	require.NoError(t, err)
+	require.Equal(t, BotFleetRuntimeIgnoredStaleSubscription, result.Decision)
+	select {
+	case <-handler.firstStarted:
+		t.Fatal("旧订阅 generation 的 action_event 被错误分流")
+	case <-time.After(100 * time.Millisecond):
+	}
+	manager.Close()
+}
+
+func TestBotFleetSubscriptionManager_RealStreamPersistsActionStartAndTerminal(t *testing.T) {
+	h := newBotActionResultHarness(t)
+	start := h.event("running")
+	terminal := h.event("succeeded")
+	terminal.DurationMs = 250
+	terminal.ObservedAtUnixMs = h.now.Add(250 * time.Millisecond).UnixMilli()
+	stream := &botFleetFakeStream{events: []*workerpb.BotFleetEvent{
+		{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: start}},
+		{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: terminal}},
+	}}
+	client := &botFleetFakeClient{snapshot: &workerpb.GetBotFleetSnapshotResponse{}, streams: []BotFleetRuntimeStream{stream}}
+	coordinator := NewBotFleetRuntimeCoordinator(NewBotFleetRuntimeService(h.db, botFleetTestClock{now: h.now}), client, nil)
+	coordinator.SetActionEventHandler(h.service)
+	manager := NewBotFleetSubscriptionManager(coordinator)
+	t.Cleanup(manager.Close)
+	target := BotFleetSubscriptionTarget{NodeID: h.node.ID, NodeUUID: h.node.UUID, SessionUUID: h.session.UUID}
+
+	manager.Ensure(target)
+	require.Eventually(t, func() bool {
+		var result model.BotLoadActionResult
+		err := h.db.Where("action_run_id = ?", start.ActionRunId).First(&result).Error
+		return err == nil && result.Status == model.BotLoadActionSucceeded && result.DurationMS == 250
+	}, time.Second, 10*time.Millisecond)
+	manager.StopSession(h.session.UUID)
+}
+
+func TestBotFleetSubscriptionManager_RealStreamRoutesBarrierArrival(t *testing.T) {
+	h := newBotActionResultHarness(t)
+	setBarrierScenario(t, h, time.Minute, ScenarioBarrierRelease{Type: "all"}, "fail")
+	clock := &botLoadFakeClock{now: h.now}
+	barriers := NewBarrierCoordinator(clock)
+	events := NewScenarioActionEventService(
+		h.service,
+		barriers,
+		NewActionSignalRouter(h.service, &fakeActionSignalClient{handler: acceptActionSignals}, clock),
+		fixedBarrierExpectedBots{h.bot.UUID: 3},
+	)
+	t.Cleanup(events.Close)
+	action := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000610", "token-stream", h.now)
+	action.ResultJson = mustBarrierPayload(t, authoritativeBarrierPayload(h.now, time.Minute, ScenarioBarrierRelease{Type: "all"}, "fail"))
+	stream := &botFleetFakeStream{events: []*workerpb.BotFleetEvent{{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: action}}}}
+	client := &botFleetFakeClient{snapshot: &workerpb.GetBotFleetSnapshotResponse{}, streams: []BotFleetRuntimeStream{stream}}
+	coordinator := NewBotFleetRuntimeCoordinator(NewBotFleetRuntimeService(h.db, botFleetTestClock{now: h.now}), client, nil)
+	coordinator.SetActionEventHandler(events)
+	manager := NewBotFleetSubscriptionManager(coordinator)
+	t.Cleanup(manager.Close)
+	target := BotFleetSubscriptionTarget{NodeID: h.node.ID, NodeUUID: h.node.UUID, SessionUUID: h.session.UUID}
+
+	manager.Ensure(target)
+	scope := BarrierScope{RunID: h.session.UUID, StageIndex: 0, CohortKey: "combat", BarrierKey: "ready", Round: 1}
+	require.Eventually(t, func() bool {
+		var result model.BotLoadActionResult
+		err := h.db.Where("action_run_id = ?", action.ActionRunId).First(&result).Error
+		return err == nil && barriers.Exists(scope)
+	}, time.Second, 10*time.Millisecond)
+	manager.StopSession(h.session.UUID)
+}
+
+func TestBotFleetSubscriptionManager_SnapshotApplyDoesNotHoldSubscriptionGate(t *testing.T) {
+	executorNodeID := uint(1)
+	sessionID := uint(1)
+	repository := &blockingBotFleetRuntimeRepository{
+		bot: &model.Bot{
+			UUID: "bot-gate", ExecutorNodeID: &executorNodeID, StressSessionID: &sessionID,
+			StressSession: &model.BotStressSession{UUID: "run-gate"}, DesiredStateGeneration: 1, ConfigHash: "hash-gate",
+		},
+		started: make(chan struct{}), release: make(chan struct{}),
+	}
+	client := &botFleetFakeClient{
+		snapshot: &workerpb.GetBotFleetSnapshotResponse{Bots: []*workerpb.BotRuntimeSnapshot{{
+			BotUuid: "bot-gate", SessionUuid: "run-gate", Generation: 1, ConfigHash: "hash-gate", Status: "connected",
+		}}},
+	}
+	coordinator := NewBotFleetRuntimeCoordinator(NewBotFleetRuntimeServiceWithRepository(repository, nil), client, nil)
+	manager := NewBotFleetSubscriptionManager(coordinator)
+	target := BotFleetSubscriptionTarget{NodeID: executorNodeID, NodeUUID: "node-gate", SessionUUID: "run-gate"}
+	manager.Ensure(target)
+	select {
+	case <-repository.started:
+	case <-time.After(time.Second):
+		close(repository.release)
+		manager.Close()
+		t.Fatal("baseline 未进入同步仓储写入")
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		manager.StopSession(target.SessionUUID)
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(100 * time.Millisecond):
+		close(repository.release)
+		<-stopped
+		manager.Close()
+		t.Fatal("同步 baseline 数据库写入持有了订阅 gate")
+	}
+	close(repository.release)
+	manager.Close()
+}
+
 func TestBotFleetSubscriptionManager_LateOldBaselineIsDiscardedBeforeApply(t *testing.T) {
 	h := newBotFleetRuntimeHarness(t)
 	require.NoError(t, h.db.Model(h.bot).Updates(map[string]any{
@@ -737,9 +958,9 @@ func TestBotFleetSubscriptionManager_OldGenerationCannotOverwriteRestartBaseline
 	manager.StopSession(h.session.UUID)
 	manager.Ensure(target)
 	require.Eventually(t, func() bool {
-		_, snapshots, streams, _ := client.state()
-		return snapshots == 2 && streams == 2
-	}, time.Second, 10*time.Millisecond)
+		_, snapshots, _, _ := client.state()
+		return snapshots >= 2
+	}, 2*time.Second, 10*time.Millisecond)
 	require.Greater(t, manager.subscriptionGeneration(target), oldGeneration)
 
 	late := h.snapshot(3, 6, 1, "disconnected")

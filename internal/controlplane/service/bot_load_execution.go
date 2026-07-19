@@ -119,17 +119,23 @@ type botLoadSerialQueue struct {
 	identities map[string]struct{}
 }
 
+// ScenarioRunLifecycle 收束 FR-352 场景内存任务，不介入后续运行状态机字段。
+type ScenarioRunLifecycle interface {
+	StopRun(runID string)
+}
+
 // BotLoadExecutionService 实现 FR-351 的 start、后台 dispatch、批量 stop 与基础 snapshot 收敛。
 type BotLoadExecutionService struct {
-	db            *gorm.DB
-	capacities    BotLoadCapacityRefresher
-	reservations  *BotLoadReservationStore
-	signer        *BotLoadPlanTokenSigner
-	dispatcher    BotLoadBatchDispatcher
-	runner        BotLoadBackgroundRunner
-	clock         BotLoadClock
-	resolver      *BotExecutorResolver
-	subscriptions BotFleetSubscriptionController
+	db                *gorm.DB
+	capacities        BotLoadCapacityRefresher
+	reservations      *BotLoadReservationStore
+	signer            *BotLoadPlanTokenSigner
+	dispatcher        BotLoadBatchDispatcher
+	runner            BotLoadBackgroundRunner
+	clock             BotLoadClock
+	resolver          *BotExecutorResolver
+	subscriptions     BotFleetSubscriptionController
+	scenarioLifecycle ScenarioRunLifecycle
 
 	startMu     sync.Mutex
 	taskMu      sync.Mutex
@@ -166,6 +172,11 @@ func (s *BotLoadExecutionService) FleetSubscriptionManager() BotFleetSubscriptio
 		return nil
 	}
 	return s.subscriptions
+}
+
+// SetScenarioRunLifecycle 注入场景内存任务的唯一停止收束入口。
+func (s *BotLoadExecutionService) SetScenarioRunLifecycle(lifecycle ScenarioRunLifecycle) {
+	s.scenarioLifecycle = lifecycle
 }
 
 // RecoverFleetSubscriptions 从持久化活动批次恢复已连接节点的 Fleet 订阅，不重派任务或重建 Bot。
@@ -1015,9 +1026,12 @@ func (s *BotLoadExecutionService) Stop(ctx context.Context, sessionID uint, reas
 	if len(reasons) > 0 {
 		reason = reasons[0]
 	}
-	count, err := s.prepareStopIntent(ctx, sessionID, reason)
+	count, claimedStopIntent, err := s.prepareStopIntent(ctx, sessionID, reason)
 	if err != nil {
 		return nil, err
+	}
+	if claimedStopIntent && s.scenarioLifecycle != nil {
+		s.scenarioLifecycle.StopRun(session.UUID)
 	}
 	if count == 0 {
 		if err := s.finishStopSession(ctx, sessionID); err != nil {
@@ -1038,8 +1052,9 @@ func (s *BotLoadExecutionService) Stop(ctx context.Context, sessionID uint, reas
 	return s.loadSession(ctx, sessionID)
 }
 
-func (s *BotLoadExecutionService) prepareStopIntent(ctx context.Context, sessionID uint, reason string) (int64, error) {
+func (s *BotLoadExecutionService) prepareStopIntent(ctx context.Context, sessionID uint, reason string) (int64, bool, error) {
 	var count int64
+	claimedIntent := false
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var session model.BotStressSession
 		if err := tx.Select("id", "last_error").First(&session, sessionID).Error; err != nil {
@@ -1048,7 +1063,7 @@ func (s *BotLoadExecutionService) prepareStopIntent(ctx context.Context, session
 		if err := tx.Model(&model.Bot{}).Where("stress_session_id = ? AND status <> ?", sessionID, model.BotStatusStopped).Count(&count).Error; err != nil {
 			return err
 		}
-		if count == 0 || botLoadStopIntentRecorded(session.LastError) {
+		if botLoadStopIntentRecorded(session.LastError) {
 			return nil
 		}
 		intent := botLoadStopSessionError("dispatching", "", reason)
@@ -1061,13 +1076,17 @@ func (s *BotLoadExecutionService) prepareStopIntent(ctx context.Context, session
 		if claimed.RowsAffected == 0 {
 			return nil
 		}
+		claimedIntent = true
+		if count == 0 {
+			return nil
+		}
 		return tx.Model(&model.Bot{}).Where("stress_session_id = ? AND status <> ?", sessionID, model.BotStatusStopped).
 			Update("desired_state_generation", gorm.Expr("desired_state_generation + 1")).Error
 	})
 	if err != nil {
-		return 0, fmt.Errorf("保存 Bot stopped desired intent 失败: %w", err)
+		return 0, false, fmt.Errorf("保存 Bot stopped desired intent 失败: %w", err)
 	}
-	return count, nil
+	return count, claimedIntent, nil
 }
 
 func (s *BotLoadExecutionService) stopIntentRecorded(ctx context.Context, sessionID uint) (bool, error) {

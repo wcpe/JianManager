@@ -95,7 +95,7 @@ func (r *gormActionResultRepository) Start(ctx context.Context, result *model.Bo
 	if created.RowsAffected == 1 {
 		return ActionResultApplied, nil
 	}
-	return r.existingDecision(ctx, result.ActionRunID)
+	return r.existingDecision(ctx, result)
 }
 
 func (r *gormActionResultRepository) Finish(ctx context.Context, result *model.BotLoadActionResult) (ActionResultDecision, error) {
@@ -110,8 +110,8 @@ func (r *gormActionResultRepository) Finish(ctx context.Context, result *model.B
 		}).Create(&start).Error; err != nil {
 			return err
 		}
-		updated := tx.Model(&model.BotLoadActionResult{}).
-			Where("action_run_id = ? AND status = ?", result.ActionRunID, model.BotLoadActionRunning).
+		updated := actionResultIdentityQuery(tx.Model(&model.BotLoadActionResult{}), result).
+			Where("status = ?", model.BotLoadActionRunning).
 			Updates(map[string]any{
 				"status": result.Status, "error_code": result.ErrorCode, "message": result.Message,
 				"duration_ms": result.DurationMS, "correlation_token": result.CorrelationToken,
@@ -122,21 +122,45 @@ func (r *gormActionResultRepository) Finish(ctx context.Context, result *model.B
 		}
 		if updated.RowsAffected == 1 {
 			decision = ActionResultApplied
+			return nil
 		}
-		return nil
+		var classifyErr error
+		decision, classifyErr = existingActionResultDecision(tx, result)
+		return classifyErr
 	})
 	return decision, err
 }
 
-func (r *gormActionResultRepository) existingDecision(ctx context.Context, actionRunID string) (ActionResultDecision, error) {
+func (r *gormActionResultRepository) existingDecision(ctx context.Context, result *model.BotLoadActionResult) (ActionResultDecision, error) {
+	return existingActionResultDecision(r.db.WithContext(ctx), result)
+}
+
+func existingActionResultDecision(db *gorm.DB, expected *model.BotLoadActionResult) (ActionResultDecision, error) {
 	var existing model.BotLoadActionResult
-	if err := r.db.WithContext(ctx).Select("status").Where("action_run_id = ?", actionRunID).First(&existing).Error; err != nil {
+	if err := db.Where("action_run_id = ?", expected.ActionRunID).First(&existing).Error; err != nil {
 		return "", err
+	}
+	if !sameActionResultIdentity(&existing, expected) {
+		return ActionResultIgnoredIdentity, nil
 	}
 	if existing.Status == model.BotLoadActionRunning {
 		return ActionResultIgnoredDuplicate, nil
 	}
 	return ActionResultIgnoredTerminal, nil
+}
+
+func actionResultIdentityQuery(db *gorm.DB, result *model.BotLoadActionResult) *gorm.DB {
+	return db.Where(
+		"action_run_id = ? AND stress_session_id = ? AND bot_id = ? AND cohort_key = ? AND step_id = ? AND attempt = ? AND correlation_token = ?",
+		result.ActionRunID, result.StressSessionID, result.BotID, result.CohortKey, result.StepID, result.Attempt, result.CorrelationToken,
+	)
+}
+
+func sameActionResultIdentity(left, right *model.BotLoadActionResult) bool {
+	return left.ActionRunID == right.ActionRunID &&
+		left.StressSessionID == right.StressSessionID && left.BotID == right.BotID &&
+		left.CohortKey == right.CohortKey && left.StepID == right.StepID &&
+		left.Attempt == right.Attempt && left.CorrelationToken == right.CorrelationToken
 }
 
 func (r *gormActionResultRepository) FindWaiting(ctx context.Context, runID, botUUID, actionRunID, correlationToken string) (*WaitingAction, error) {

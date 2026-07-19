@@ -6,10 +6,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
+	"time"
 
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/proto/workerpb"
+)
+
+const (
+	actionSignalBatchSize  = 100
+	actionSignalRPCTimeout = 3 * time.Second
 )
 
 // WaitingActionFinder 提供强关联的运行中动作查询。
@@ -116,8 +123,16 @@ func (r *ActionSignalRouter) Route(ctx context.Context, inputs []ActionSignalInp
 		signal := actionSignalProto(input, waiting, report.Items[index].SignalID, r.clock.Now().UnixMilli())
 		groups[waiting.ExecutorNodeUUID] = append(groups[waiting.ExecutorNodeUUID], routedActionSignal{index: index, signal: signal})
 	}
-	for nodeUUID, signals := range groups {
-		r.routeGroup(ctx, nodeUUID, signals, &report)
+	nodeUUIDs := make([]string, 0, len(groups))
+	for nodeUUID := range groups {
+		nodeUUIDs = append(nodeUUIDs, nodeUUID)
+	}
+	sort.Strings(nodeUUIDs)
+	for _, nodeUUID := range nodeUUIDs {
+		signals := groups[nodeUUID]
+		for start := 0; start < len(signals); start += actionSignalBatchSize {
+			r.routeGroup(ctx, nodeUUID, signals[start:min(start+actionSignalBatchSize, len(signals))], &report)
+		}
 	}
 	return report
 }
@@ -155,7 +170,9 @@ func (r *ActionSignalRouter) routeGroup(ctx context.Context, nodeUUID string, ro
 	for _, item := range routed {
 		signals = append(signals, item.signal)
 	}
-	response, err := r.client.SignalBotActions(ctx, nodeUUID, &workerpb.SignalBotActionsRequest{Signals: signals})
+	rpcCtx, cancel := context.WithTimeout(ctx, actionSignalRPCTimeout)
+	defer cancel()
+	response, err := r.client.SignalBotActions(rpcCtx, nodeUUID, &workerpb.SignalBotActionsRequest{Signals: signals})
 	if err != nil {
 		for _, item := range routed {
 			markSignalFailure(&report.Items[item.index], "WORKER_UNAVAILABLE", err.Error())

@@ -122,6 +122,23 @@ func (s *botLoadExecutionSubscriptions) Stopped() []string {
 	return append([]string(nil), s.stopped...)
 }
 
+type botLoadExecutionScenarioLifecycle struct {
+	mu      sync.Mutex
+	stopped []string
+}
+
+func (s *botLoadExecutionScenarioLifecycle) StopRun(runID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopped = append(s.stopped, runID)
+}
+
+func (s *botLoadExecutionScenarioLifecycle) Stopped() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.stopped...)
+}
+
 type botLoadQueuedRunner struct {
 	mu    sync.Mutex
 	tasks []func()
@@ -940,16 +957,37 @@ func TestBotLoadExecutionStop_IncrementsExistingGenerationOnlyOnce(t *testing.T)
 	require.Equal(t, firstStop.request.IdempotencyKey, secondStop.request.IdempotencyKey)
 }
 
+func TestBotLoadExecutionPrepareStopIntent_ClaimsScenarioLifecycleOnce(t *testing.T) {
+	h := newBotLoadExecutionHarness(t, []int{1}, 1, nil)
+	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
+	require.NoError(t, err)
+
+	count, claimed, err := h.service.prepareStopIntent(context.Background(), h.session.ID, "测试停止")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+	require.True(t, claimed)
+	count, claimed, err = h.service.prepareStopIntent(context.Background(), h.session.ID, "重复停止")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), count)
+	require.False(t, claimed)
+}
+
 func TestBotLoadExecutionStop_FleetStoppedFinalizesBatchAndSession(t *testing.T) {
 	h := newBotLoadExecutionHarness(t, []int{1}, 1, nil)
 	subscriptions := &botLoadExecutionSubscriptions{}
+	lifecycle := &botLoadExecutionScenarioLifecycle{}
 	h.service.SetFleetSubscriptionManager(subscriptions)
+	h.service.SetScenarioRunLifecycle(lifecycle)
 	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
 	require.NoError(t, err)
 
 	stopping, err := h.service.Stop(context.Background(), h.session.ID)
 	require.NoError(t, err)
 	require.NotEqual(t, model.BotStressSessionStopped, stopping.Status)
+	require.Equal(t, []string{h.session.UUID}, lifecycle.Stopped(), "停止意图持久化后必须立即取消屏障调度")
+	_, err = h.service.Stop(context.Background(), h.session.ID)
+	require.NoError(t, err)
+	require.Equal(t, []string{h.session.UUID}, lifecycle.Stopped(), "重复停止不得重复收束场景生命周期")
 	bot := loadBotLoadBot(t, h.db, 1)
 	require.Equal(t, model.BotStatusConnecting, bot.Status)
 
