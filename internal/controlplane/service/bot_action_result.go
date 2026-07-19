@@ -61,11 +61,12 @@ type ActionResultIngestResult struct {
 
 // WaitingAction 是外部信号路由所需的运行中动作及当前 Bot 路由真源。
 type WaitingAction struct {
-	Result         model.BotLoadActionResult
-	Bot            model.Bot
-	SessionUUID    string
-	ExecutorNodeID uint
-	Generation     int64
+	Result           model.BotLoadActionResult
+	Bot              model.Bot
+	SessionUUID      string
+	ExecutorNodeID   uint
+	ExecutorNodeUUID string
+	Generation       int64
 }
 
 type actionResultRepository interface {
@@ -79,7 +80,7 @@ type gormActionResultRepository struct{ db *gorm.DB }
 
 func (r *gormActionResultRepository) FindBot(ctx context.Context, botUUID string) (*model.Bot, error) {
 	var bot model.Bot
-	err := r.db.WithContext(ctx).Preload("Instance").Preload("StressSession").Where("uuid = ?", botUUID).First(&bot).Error
+	err := r.db.WithContext(ctx).Preload("Instance.Node").Preload("ExecutorNode").Preload("StressSession").Where("uuid = ?", botUUID).First(&bot).Error
 	return &bot, err
 }
 
@@ -161,6 +162,11 @@ func waitingAction(result model.BotLoadActionResult, bot *model.Bot) *WaitingAct
 		waiting.SessionUUID = bot.StressSession.UUID
 	}
 	waiting.ExecutorNodeID = runtimeExecutorNodeID(bot)
+	if bot.ExecutorNode != nil {
+		waiting.ExecutorNodeUUID = bot.ExecutorNode.UUID
+	} else {
+		waiting.ExecutorNodeUUID = bot.Instance.Node.UUID
+	}
 	return waiting
 }
 

@@ -30,14 +30,17 @@ import (
 )
 
 type botLoadServiceBundle struct {
-	capacity      *service.BotLoadCapacityDirectory
-	reservations  *service.BotLoadReservationStore
-	signer        *service.BotLoadPlanTokenSigner
-	preflight     *service.BotLoadPreflightService
-	execution     *service.BotLoadExecutionService
-	actionResults *service.ActionResultService
-	coordinator   *service.BotFleetRuntimeCoordinator
-	subscriptions *service.BotFleetSubscriptionManager
+	capacity       *service.BotLoadCapacityDirectory
+	reservations   *service.BotLoadReservationStore
+	signer         *service.BotLoadPlanTokenSigner
+	preflight      *service.BotLoadPreflightService
+	execution      *service.BotLoadExecutionService
+	actionResults  *service.ActionResultService
+	barriers       *service.BarrierCoordinator
+	signalRouter   *service.ActionSignalRouter
+	scenarioEvents *service.ScenarioActionEventService
+	coordinator    *service.BotFleetRuntimeCoordinator
+	subscriptions  *service.BotFleetSubscriptionManager
 }
 
 // assembleBotLoadServices 创建进程级共享的容量目录、软预留、签名器与执行服务。
@@ -52,8 +55,11 @@ func assembleBotLoadServices(db *gorm.DB, pool *cpgrpc.ClientPool, stableSecret 
 	preflight := service.NewBotLoadPreflightService(db, capacity, reservations, signer, nil)
 	execution := service.NewGRPCBotLoadExecutionService(db, capacity, reservations, signer, pool, nil, nil)
 	actionResults := service.NewActionResultService(db, nil)
+	barriers := service.NewBarrierCoordinator(nil)
+	signalRouter := service.NewGRPCActionSignalRouter(actionResults, pool, nil)
+	scenarioEvents := service.NewGRPCScenarioActionEventService(db, actionResults, barriers, signalRouter)
 	coordinator := service.NewGRPCBotFleetRuntimeCoordinator(db, pool, nil, nil)
-	coordinator.SetActionEventHandler(actionResults)
+	coordinator.SetActionEventHandler(scenarioEvents)
 	coordinator.SetSnapshotReconciler(execution)
 	coordinator.SetRuntimeObserver(execution)
 	subscriptions := service.NewBotFleetSubscriptionManager(coordinator)
@@ -61,6 +67,7 @@ func assembleBotLoadServices(db *gorm.DB, pool *cpgrpc.ClientPool, stableSecret 
 	return &botLoadServiceBundle{
 		capacity: capacity, reservations: reservations, signer: signer,
 		preflight: preflight, execution: execution, actionResults: actionResults,
+		barriers: barriers, signalRouter: signalRouter, scenarioEvents: scenarioEvents,
 		coordinator: coordinator, subscriptions: subscriptions,
 	}, nil
 }
