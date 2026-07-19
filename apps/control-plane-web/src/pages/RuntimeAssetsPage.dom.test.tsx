@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
@@ -189,8 +189,9 @@ describe('RuntimeAssetsPage（mock 假后端）', () => {
 
     // 上传前进度条不显示；提交后（上传期间）进度区（role=status）出现，证明导入期间有进度反馈。
     expect(screen.queryByRole('status', { name: '上传进度' })).not.toBeInTheDocument()
-    await user.click(within(dialog).getByRole('button', { name: '导入制品' }))
-    expect(await screen.findByRole('status', { name: '上传进度' })).toBeInTheDocument()
+    // submit 同步先置 0% 进度；用 fireEvent 在请求完成前观察该瞬时状态，避免 await user.click 吞掉整个 mock 请求周期。
+    fireEvent.click(within(dialog).getByRole('button', { name: '导入制品' }))
+    expect(screen.getByRole('status', { name: '上传进度' })).toBeInTheDocument()
 
     // 成功后弹窗关闭，overview 联动刷新，新制品名出现在列表。
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
