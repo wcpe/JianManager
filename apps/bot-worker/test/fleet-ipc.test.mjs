@@ -144,6 +144,34 @@ test('create-bots 单项初始化失败不阻断同批其他 Bot', () => {
   assert.equal(connections.length, 1)
 })
 
+test('create-bots 瞬时失败不缓存且同 key 恢复后可成功', () => {
+  let fail = true
+  const { controller, events, connections } = createHarness(50, {
+    createBehavior: (_botId, name) => {
+      if (fail) throw new Error('瞬时初始化失败')
+      return {
+        name,
+        start() {},
+        stop() {},
+        setMcBot() {},
+        async tick() {},
+      }
+    },
+  })
+  const command = {
+    cmd: 'create-bots', requestId: 'transient-1', batchId: 'transient-batch',
+    idempotencyKey: 'transient-key', bots: [bot('recoverable')],
+  }
+
+  controller.handleCommand(command)
+  assert.equal(latest(events, 'batch-result').results[0].status, 'ephemeral_unavailable')
+  fail = false
+  controller.handleCommand({ ...command, requestId: 'transient-2' })
+
+  assert.equal(latest(events, 'batch-result').results[0].status, 'accepted')
+  assert.equal(connections.length, 1)
+})
+
 test('create-bots 幂等重放首次结果且不同载荷明确冲突', () => {
   const { controller, events, connections } = createHarness()
   const command = {
@@ -383,6 +411,41 @@ test('stop-bots 旧代不停止新 Bot，高代停止先发 stopped 再回执', 
   assert.equal(JSON.stringify(stoppedEvents).includes('token=不得外泄'), false)
   assert.deepEqual(diagnostics, [{ botId: 'a', generation: 6, reason: '调度收束 token=[已脱敏]' }])
   assert.equal(controller.metrics().activeBots, 0)
+})
+
+test('stop-bots 对不存在 Bot 返回稳定 already_stopped 成功', () => {
+  const { controller, events } = createHarness()
+
+  controller.handleCommand({
+    cmd: 'stop-bots', requestId: 'stop-missing', botIds: ['missing'], generation: 3,
+    reason: '重试停止',
+  })
+
+  assert.deepEqual(latest(events, 'batch-result').results[0], {
+    botId: 'missing', accepted: true, skipped: true, status: 'accepted',
+    errorCode: 'already_stopped',
+  })
+  assert.equal(latest(events, 'bot-state').bots[0].status, 'not_found')
+})
+
+test('旧 create/stop 不得覆盖或删除 Fleet-managed Bot', () => {
+  const { controller, events, connections } = createHarness()
+  controller.handleCommand({
+    cmd: 'create-bots', requestId: 'fleet-create', batchId: 'fleet-batch',
+    idempotencyKey: 'fleet-key', bots: [bot('managed', { generation: 5, configHash: 'fleet-hash' })],
+  })
+  const legacyConfig = {
+    id: 'managed', name: 'legacy-overwrite', host: '127.0.0.1', port: 25565,
+  }
+
+  controller.handleCommand({ cmd: 'create-bots', bots: [legacyConfig] })
+  assert.equal(connections.length, 1)
+  assert.equal(controller.snapshots()[0].generation, 5)
+  assert.match(latest(events, 'bot-error').error, /Fleet RPC/)
+
+  controller.handleCommand({ cmd: 'stop-bots', botIds: ['managed'] })
+  assert.equal(controller.metrics().activeBots, 1)
+  assert.equal(controller.snapshots()[0].generation, 5)
 })
 
 test('snapshot 和 bot-state 携带冻结代际字段及单调 eventSeq', () => {

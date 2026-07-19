@@ -2,6 +2,9 @@ package grpc
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -17,8 +20,11 @@ type fakeBotFleetManager struct {
 	capacity    bot.BotCapacitySnapshot
 	bots        []bot.BotState
 	applyCalls  int
+	stopCalls   int
 	signalCalls int
 	apply       *bot.BotWorkerEvent
+	applyErr    error
+	stop        *bot.BotWorkerEvent
 	signal      *bot.BotWorkerEvent
 	snapshot    *bot.BotWorkerEvent
 }
@@ -27,9 +33,13 @@ func (f *fakeBotFleetManager) CapacitySnapshot() bot.BotCapacitySnapshot { retur
 func (f *fakeBotFleetManager) FleetSnapshot(string) []bot.BotState       { return f.bots }
 func (f *fakeBotFleetManager) ApplyBotBatch(context.Context, string, string, string, []bot.BotConfig) (*bot.BotWorkerEvent, error) {
 	f.applyCalls++
-	return f.apply, nil
+	return f.apply, f.applyErr
 }
 func (f *fakeBotFleetManager) StopBotBatch(context.Context, string, []string, int64, string) (*bot.BotWorkerEvent, error) {
+	f.stopCalls++
+	if f.stop != nil {
+		return f.stop, nil
+	}
 	return &bot.BotWorkerEvent{Evt: "batch-result"}, nil
 }
 func (f *fakeBotFleetManager) SignalActions(context.Context, string, []bot.ActionSignal) (*bot.BotWorkerEvent, error) {
@@ -68,7 +78,7 @@ func TestApplyBotBatchEnforcesLimitGenerationAndIdempotency(t *testing.T) {
 		capacity: bot.BotCapacitySnapshot{Ready: true, MaxBots: 50, CapacityGeneration: 4},
 		apply: &bot.BotWorkerEvent{Evt: "batch-result", Results: []bot.BotItemResult{
 			{BotID: "bot-1", Accepted: true, Status: "connecting"},
-			{BotID: "bot-2", ErrorCode: "connect_rejected", Error: "连接被拒绝"},
+			{BotID: "bot-2", Skipped: true, Status: "conflict", ErrorCode: "connect_rejected", Error: "连接被拒绝"},
 		}},
 	}
 	srv := newBotFleetTestServer(fake)
@@ -108,6 +118,116 @@ func TestApplyBotBatchEnforcesLimitGenerationAndIdempotency(t *testing.T) {
 	}
 	_, err = srv.ApplyBotBatch(context.Background(), conflict)
 	require.Equal(t, codes.FailedPrecondition, status.Code(err))
+}
+
+func TestApplyBotBatchDoesNotCacheTransientPrepareFailure(t *testing.T) {
+	fake := &fakeBotFleetManager{
+		capacity: bot.BotCapacitySnapshot{Ready: true, MaxBots: 50, CapacityGeneration: 4, WorkerEpochGeneration: 1},
+		apply:    &bot.BotWorkerEvent{Evt: "batch-result", Results: []bot.BotItemResult{{BotID: "bot-1", Accepted: true}}},
+	}
+	srv := newBotFleetTestServer(fake)
+	srv.botMgr = bot.NewManager(bot.ManagerConfig{BotWorkerPath: "unused.js", NodePath: "__missing_node_for_fleet_test__"})
+	req := &workerpb.ApplyBotBatchRequest{
+		BatchId: "batch-transient", IdempotencyKey: "key-transient",
+		Assignments: []*workerpb.BotAssignment{{BotUuid: "bot-1", Generation: 1, DesiredState: "running"}},
+	}
+
+	first, err := srv.ApplyBotBatch(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, botBatchStatusUnavailable, first.Results[0].Status)
+	require.Zero(t, fake.applyCalls)
+
+	srv.botMgr = nil
+	second, err := srv.ApplyBotBatch(context.Background(), req)
+	require.NoError(t, err)
+	require.True(t, second.Results[0].Accepted)
+	require.Equal(t, 1, fake.applyCalls, "瞬时启动失败恢复后同 key 必须重新进入 IPC")
+}
+
+func TestApplyBotBatchDoesNotCacheTransientDispatchResult(t *testing.T) {
+	fake := &fakeBotFleetManager{
+		capacity: bot.BotCapacitySnapshot{Ready: true, MaxBots: 50, CapacityGeneration: 4, WorkerEpochGeneration: 1},
+		applyErr: context.DeadlineExceeded,
+	}
+	srv := newBotFleetTestServer(fake)
+	req := &workerpb.ApplyBotBatchRequest{
+		BatchId: "batch-dispatch", IdempotencyKey: "key-dispatch",
+		Assignments: []*workerpb.BotAssignment{{BotUuid: "bot-1", Generation: 1, DesiredState: "running"}},
+	}
+
+	first, err := srv.ApplyBotBatch(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, botBatchStatusUnavailable, first.Results[0].Status)
+
+	fake.applyErr = nil
+	fake.apply = &bot.BotWorkerEvent{Evt: "batch-result", Results: []bot.BotItemResult{{BotID: "bot-1", Accepted: true}}}
+	second, err := srv.ApplyBotBatch(context.Background(), req)
+	require.NoError(t, err)
+	require.True(t, second.Results[0].Accepted)
+	require.Equal(t, 2, fake.applyCalls, "瞬时 IPC 失败不得进入一小时结果缓存")
+}
+
+func TestApplyBotBatchCacheIsInvalidatedByWorkerExitAndEpochChange(t *testing.T) {
+	fake := &fakeBotFleetManager{
+		capacity: bot.BotCapacitySnapshot{Ready: true, MaxBots: 50, CapacityGeneration: 4, WorkerEpoch: "epoch-1", WorkerEpochGeneration: 1},
+		apply:    &bot.BotWorkerEvent{Evt: "batch-result", Results: []bot.BotItemResult{{BotID: "bot-1", Accepted: true}}},
+	}
+	srv := newBotFleetTestServer(fake)
+	req := &workerpb.ApplyBotBatchRequest{
+		BatchId: "batch-epoch", IdempotencyKey: "key-epoch",
+		Assignments: []*workerpb.BotAssignment{{BotUuid: "bot-1", Generation: 1, DesiredState: "running"}},
+	}
+
+	_, err := srv.ApplyBotBatch(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, 1, fake.applyCalls)
+
+	srv.dispatchBotEvent(&bot.BotWorkerEvent{Evt: "worker-exit", WorkerEpochGeneration: 1})
+	fake.capacity.WorkerEpoch = "epoch-2"
+	fake.capacity.WorkerEpochGeneration = 2
+	_, err = srv.ApplyBotBatch(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, 2, fake.applyCalls, "新 child 必须重新下发相同 idempotencyKey")
+
+	fake.capacity.WorkerEpoch = "epoch-3"
+	fake.capacity.WorkerEpochGeneration = 3
+	_, err = srv.ApplyBotBatch(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, 3, fake.applyCalls, "即使退出事件迟到，缓存条目的 epoch 也必须阻止跨代重放")
+}
+
+func TestPlanBotBatchMissingStopIsStableAlreadyStopped(t *testing.T) {
+	fake := &fakeBotFleetManager{
+		capacity: bot.BotCapacitySnapshot{Ready: true, MaxBots: 50, WorkerEpochGeneration: 1},
+	}
+	srv := newBotFleetTestServer(fake)
+	req := &workerpb.ApplyBotBatchRequest{
+		BatchId: "batch-stop", IdempotencyKey: "key-stop",
+		Assignments: []*workerpb.BotAssignment{{BotUuid: "bot-missing", Generation: 2, DesiredState: "stopped"}},
+	}
+
+	first, err := srv.ApplyBotBatch(context.Background(), req)
+	require.NoError(t, err)
+	require.True(t, first.Results[0].Accepted)
+	require.True(t, first.Results[0].Skipped)
+	require.Equal(t, "already_stopped", first.Results[0].ErrorCode)
+
+	fake.bots = []bot.BotState{{ID: "bot-missing", Generation: 2}}
+	second, err := srv.ApplyBotBatch(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	require.Zero(t, fake.stopCalls, "already_stopped 是可缓存的稳定成功")
+}
+
+func TestBotItemResultMapsAlreadyStoppedAsAccepted(t *testing.T) {
+	got := botItemResultToProto(bot.BotItemResult{
+		BotID: "bot-1", Accepted: true, Skipped: true, Status: "accepted", ErrorCode: "already_stopped",
+	})
+
+	require.True(t, got.Accepted)
+	require.True(t, got.Skipped)
+	require.Equal(t, botBatchStatusAccepted, got.Status)
+	require.Equal(t, "already_stopped", got.ErrorCode)
 }
 
 func TestPlanBotBatchAllowsReplacementAtFullCapacityAndRejectsStaleGeneration(t *testing.T) {
@@ -327,6 +447,92 @@ func TestWorkerExitDoesNotCloseLegacyBotEventStream(t *testing.T) {
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 	waitForBotEventSubscribers(t, srv, 0)
+}
+
+func TestFleetEventGenerationDropsQueuedOldChildEventsForNewSubscriber(t *testing.T) {
+	fake := &fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, WorkerEpochGeneration: 2}}
+	srv := newBotFleetTestServer(fake)
+	ch := make(chan *bot.BotWorkerEvent, 2)
+	srv.addBotFleetEventSubscriber(ch)
+	defer srv.removeBotEventSubscriber(ch)
+
+	srv.dispatchBotEvent(&bot.BotWorkerEvent{
+		Evt: "bot-state", WorkerEpochGeneration: 1,
+		Bots: []bot.BotState{{ID: "old-bot", WorkerEpochGeneration: 1}},
+	})
+	select {
+	case event := <-ch:
+		t.Fatalf("新订阅者不应收到旧 child 已排队事件: %+v", event)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	srv.dispatchBotEvent(&bot.BotWorkerEvent{Evt: "worker-exit", WorkerEpochGeneration: 1})
+	srv.dispatchBotEvent(&bot.BotWorkerEvent{
+		Evt: "bot-state", WorkerEpochGeneration: 2,
+		Bots: []bot.BotState{{ID: "current-bot", WorkerEpochGeneration: 2}},
+	})
+	select {
+	case event, ok := <-ch:
+		require.True(t, ok, "旧 child 的迟到退出不得关闭新代订阅者")
+		require.Equal(t, "current-bot", event.Bots[0].ID)
+	case <-time.After(time.Second):
+		t.Fatal("未收到当前 child 事件")
+	}
+}
+
+func TestLegacyBotRPCRejectsFleetManagedBotAndKeepsOrdinaryBotCompatible(t *testing.T) {
+	requireNodeForGRPCTest(t)
+	script := writeGRPCTestBotWorker(t, `
+console.log(JSON.stringify({evt:"worker-ready",workerEpoch:"epoch-1",workerEpochGeneration:1,maxBots:50,features:["fleet-v1"],capacityGeneration:1}));
+console.log(JSON.stringify({evt:"bot-state",bots:[
+  {id:"fleet-bot",status:"connected",sessionId:"session-1",generation:3,configHash:"hash-3",workerEpochGeneration:1,eventSeq:1},
+  {id:"legacy-bot",status:"connected",workerEpochGeneration:1,eventSeq:2}
+]}));
+setInterval(() => {}, 1000);
+`)
+	mgr := bot.NewManager(bot.ManagerConfig{BotWorkerPath: script})
+	require.NoError(t, mgr.Start(context.Background()))
+	defer mgr.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, mgr.WaitReady(ctx))
+	require.Eventually(t, func() bool {
+		_, fleetOK := mgr.GetBot("fleet-bot")
+		_, legacyOK := mgr.GetBot("legacy-bot")
+		return fleetOK && legacyOK
+	}, time.Second, 10*time.Millisecond)
+
+	srv := &Server{}
+	srv.SetBotManager(mgr)
+	fleetCreate, err := srv.CreateBot(context.Background(), &workerpb.CreateBotRequest{BotUuid: "fleet-bot"})
+	require.NoError(t, err)
+	require.False(t, fleetCreate.Success)
+	require.Contains(t, fleetCreate.Error, "Fleet RPC")
+	fleetDelete, err := srv.DeleteBot(context.Background(), &workerpb.DeleteBotRequest{BotUuid: "fleet-bot"})
+	require.NoError(t, err)
+	require.False(t, fleetDelete.Success)
+	require.Contains(t, fleetDelete.Error, "Fleet RPC")
+
+	legacyCreate, err := srv.CreateBot(context.Background(), &workerpb.CreateBotRequest{BotUuid: "legacy-bot"})
+	require.NoError(t, err)
+	require.True(t, legacyCreate.Success)
+	legacyDelete, err := srv.DeleteBot(context.Background(), &workerpb.DeleteBotRequest{BotUuid: "legacy-bot"})
+	require.NoError(t, err)
+	require.True(t, legacyDelete.Success)
+}
+
+func requireNodeForGRPCTest(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("测试环境无 node，跳过 Bot RPC 子进程测试")
+	}
+}
+
+func writeGRPCTestBotWorker(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "fake-bot-worker.js")
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	return path
 }
 
 func newBotFleetTestServer(f botFleetManager) *Server {

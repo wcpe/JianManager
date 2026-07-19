@@ -462,6 +462,7 @@ func (m *Manager) invalidateRuntimeLocked(reason string, pendingErr error) (*Bot
 	m.capacity.ObservedAt = time.Now()
 	m.bumpCapacityGenerationLocked(0)
 	m.failPendingLocked(pendingErr)
+	m.closeReadySignalLocked()
 
 	event := &BotWorkerEvent{Evt: "worker-exit", Error: reason, WorkerEpochGeneration: generation}
 	m.dispatchTerminalEventLocked(event)
@@ -787,13 +788,42 @@ func (m *Manager) WaitReady(ctx context.Context) error {
 		m.mu.Unlock()
 		return nil
 	}
+	if !m.running {
+		reason := m.capacity.UnavailableReason
+		m.mu.Unlock()
+		return fmt.Errorf("Bot Worker 未运行: %s", reason)
+	}
 	readyCh := m.readyCh
+	generation := m.capacity.WorkerEpochGeneration
 	m.mu.Unlock()
+
 	select {
 	case <-readyCh:
-		return nil
+		m.mu.Lock()
+		ready := m.running && m.capacity.Ready && m.capacity.WorkerEpochGeneration == generation
+		reason := m.capacity.UnavailableReason
+		currentGeneration := m.capacity.WorkerEpochGeneration
+		m.mu.Unlock()
+		if ready {
+			return nil
+		}
+		if currentGeneration != generation {
+			return fmt.Errorf("Bot Worker 世代已切换: expected=%d actual=%d", generation, currentGeneration)
+		}
+		return fmt.Errorf("Bot Worker 进程已退出: %s", reason)
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func (m *Manager) closeReadySignalLocked() {
+	if m.readyCh == nil {
+		return
+	}
+	select {
+	case <-m.readyCh:
+	default:
+		close(m.readyCh)
 	}
 }
 
@@ -883,6 +913,10 @@ func (m *Manager) handleEventLocked(event *BotWorkerEvent, sourceGeneration int6
 	if sourceGeneration > 0 && event.Evt == "worker-ready" &&
 		event.WorkerEpochGeneration != 0 && event.WorkerEpochGeneration != sourceGeneration {
 		return nil, false
+	}
+	if sourceGeneration > 0 {
+		// 本地 reader 世代覆盖 JSON 值，供 Server 在广播前隔离旧 child 已排队事件。
+		event.WorkerEpochGeneration = sourceGeneration
 	}
 
 	switch event.Evt {
@@ -1065,13 +1099,7 @@ func (m *Manager) applyWorkerReady(event *BotWorkerEvent, sourceGeneration int64
 	if changed {
 		m.bumpCapacityGenerationLocked(event.CapacityGeneration)
 	}
-	if m.readyCh != nil {
-		select {
-		case <-m.readyCh:
-		default:
-			close(m.readyCh)
-		}
-	}
+	m.closeReadySignalLocked()
 }
 
 func (m *Manager) applyHeartbeat(event *BotWorkerEvent) {

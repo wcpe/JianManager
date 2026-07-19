@@ -66,7 +66,7 @@ type Server struct {
 	// botEventMu 保护 Bot 事件订阅；Fleet 订阅额外登记，以便 worker 退出时只关闭新流。
 	botEventMu        sync.Mutex
 	botEventSubs      []chan *bot.BotWorkerEvent
-	botFleetEventSubs map[chan *bot.BotWorkerEvent]struct{}
+	botFleetEventSubs map[chan *bot.BotWorkerEvent]int64
 	botEventCancel    func()
 
 	// eventMu 保护 eventSubs，StreamInstanceEvents 订阅/取消订阅时加锁。
@@ -814,6 +814,7 @@ func (s *Server) SetBotManager(m *bot.Manager) {
 	s.botMgr = m
 	s.botFleet = m
 	s.botEventMu.Unlock()
+	s.clearBotBatchCache()
 
 	if m == nil {
 		return
@@ -833,27 +834,37 @@ func (s *Server) SetBotManager(m *bot.Manager) {
 // dispatchBotEvent 把 bot-worker 事件非阻塞地扇出给所有 Bot 事件订阅者。
 func (s *Server) dispatchBotEvent(event *bot.BotWorkerEvent) {
 	if event != nil && event.Evt == "worker-exit" {
+		s.clearBotBatchCache()
 		s.dispatchBotWorkerExit(event)
 		return
 	}
+	currentGeneration := s.currentBotWorkerGeneration()
 	s.botEventMu.Lock()
 	defer s.botEventMu.Unlock()
 	for _, ch := range s.botEventSubs {
+		if subscriberGeneration, fleet := s.botFleetEventSubs[ch]; fleet &&
+			!matchesBotWorkerGeneration(event, subscriberGeneration, currentGeneration) {
+			continue
+		}
 		dispatchBotEventNonBlocking(ch, event)
 	}
 }
 
 func (s *Server) dispatchBotWorkerExit(event *bot.BotWorkerEvent) {
+	sourceGeneration := event.WorkerEpochGeneration
 	s.botEventMu.Lock()
 	fleetSubscribers := make([]chan *bot.BotWorkerEvent, 0, len(s.botFleetEventSubs))
 	remaining := s.botEventSubs[:0]
 	for _, ch := range s.botEventSubs {
-		if _, fleet := s.botFleetEventSubs[ch]; fleet {
+		subscriberGeneration, fleet := s.botFleetEventSubs[ch]
+		if fleet && (sourceGeneration == 0 || subscriberGeneration == sourceGeneration) {
 			fleetSubscribers = append(fleetSubscribers, ch)
 			delete(s.botFleetEventSubs, ch)
 			continue
 		}
-		dispatchBotEventNonBlocking(ch, event)
+		if !fleet {
+			dispatchBotEventNonBlocking(ch, event)
+		}
 		remaining = append(remaining, ch)
 	}
 	s.botEventSubs = remaining
@@ -861,6 +872,20 @@ func (s *Server) dispatchBotWorkerExit(event *bot.BotWorkerEvent) {
 	for _, ch := range fleetSubscribers {
 		close(ch)
 	}
+}
+
+func (s *Server) currentBotWorkerGeneration() int64 {
+	if s.botFleet == nil {
+		return 0
+	}
+	return s.botFleet.CapacitySnapshot().WorkerEpochGeneration
+}
+
+func matchesBotWorkerGeneration(event *bot.BotWorkerEvent, subscriberGeneration, currentGeneration int64) bool {
+	if event == nil || event.WorkerEpochGeneration == 0 {
+		return true
+	}
+	return event.WorkerEpochGeneration == currentGeneration && event.WorkerEpochGeneration == subscriberGeneration
 }
 
 func dispatchBotEventNonBlocking(ch chan *bot.BotWorkerEvent, event *bot.BotWorkerEvent) {
@@ -897,6 +922,11 @@ func (s *Server) ensureBotManager() error {
 
 // CreateBot 创建并连接一个 Bot。
 func (s *Server) CreateBot(ctx context.Context, req *workerpb.CreateBotRequest) (*workerpb.CreateBotResponse, error) {
+	if s.botMgr != nil {
+		if state, exists := s.botMgr.GetBot(req.BotUuid); exists && isFleetManagedBot(state) {
+			return &workerpb.CreateBotResponse{Success: false, Error: legacyFleetMutationError(req.BotUuid)}, nil
+		}
+	}
 	if err := s.ensureBotManager(); err != nil {
 		// 失败必须留 Worker 侧日志：此前只装进响应，Worker 日志零痕迹，
 		// 真机排障（bot 依赖未装/node 缺失）两侧都看不到原因。
@@ -928,10 +958,21 @@ func (s *Server) DeleteBot(ctx context.Context, req *workerpb.DeleteBotRequest) 
 	if s.botMgr == nil {
 		return &workerpb.DeleteBotResponse{Success: true}, nil
 	}
+	if state, exists := s.botMgr.GetBot(req.BotUuid); exists && isFleetManagedBot(state) {
+		return &workerpb.DeleteBotResponse{Success: false, Error: legacyFleetMutationError(req.BotUuid)}, nil
+	}
 	if err := s.botMgr.StopBots([]string{req.BotUuid}); err != nil {
 		return &workerpb.DeleteBotResponse{Success: false, Error: err.Error()}, nil
 	}
 	return &workerpb.DeleteBotResponse{Success: true}, nil
+}
+
+func isFleetManagedBot(state *bot.BotState) bool {
+	return state != nil && (state.SessionID != "" || state.Generation > 0 || state.ConfigHash != "")
+}
+
+func legacyFleetMutationError(botID string) string {
+	return fmt.Sprintf("Bot %s 由 Fleet 管理，请使用 Fleet RPC 操作", botID)
 }
 
 // SetBotBehavior 切换 Bot 行为模式。

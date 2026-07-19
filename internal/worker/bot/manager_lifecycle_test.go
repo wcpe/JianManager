@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // 复现真机缺陷：bot-worker 子进程死亡后 Manager 未感知——running 卡在 true，
@@ -71,6 +73,32 @@ func TestManager_ChildExit_CanRestart(t *testing.T) {
 	if err := mgr.Start(context.Background()); err != nil {
 		t.Fatalf("子进程死亡后重拉 Start 失败: %v", err)
 	}
+	mgr.Stop()
+}
+
+func TestManager_WaitReadyReturnsWhenChildExitsAndNextGenerationCanSucceed(t *testing.T) {
+	requireNode(t)
+	exitScript := writeScript(t, `process.exit(0);`)
+	readyScript := writeScript(t, `
+console.log(JSON.stringify({evt:"worker-ready",workerEpoch:"epoch-next",workerEpochGeneration:2,maxBots:50,features:["fleet-v1"],capacityGeneration:1}));
+setInterval(() => {}, 1000);
+`)
+
+	mgr := NewManager(ManagerConfig{BotWorkerPath: exitScript})
+	require.NoError(t, mgr.Start(context.Background()))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	startedAt := time.Now()
+	err := mgr.WaitReady(ctx)
+	require.ErrorContains(t, err, "进程已退出")
+	require.Less(t, time.Since(startedAt), time.Second, "ready 前退出不应等待 context 超时")
+
+	mgr.SetBotWorkerPath(readyScript)
+	require.Eventually(t, func() bool { return !mgr.IsRunning() }, time.Second, 10*time.Millisecond)
+	require.NoError(t, mgr.Start(context.Background()))
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), time.Second)
+	defer readyCancel()
+	require.NoError(t, mgr.WaitReady(readyCtx))
 	mgr.Stop()
 }
 

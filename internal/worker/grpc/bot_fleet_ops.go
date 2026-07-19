@@ -37,11 +37,13 @@ type botFleetManager interface {
 }
 
 type botBatchCacheEntry struct {
-	payloadHash string
-	response    *workerpb.ApplyBotBatchResponse
-	err         error
-	createdAt   time.Time
-	done        chan struct{}
+	payloadHash           string
+	workerEpoch           string
+	workerEpochGeneration int64
+	response              *workerpb.ApplyBotBatchResponse
+	err                   error
+	createdAt             time.Time
+	done                  chan struct{}
 }
 
 type botBatchDispatchPlan struct {
@@ -67,11 +69,15 @@ func (s *Server) ApplyBotBatch(ctx context.Context, req *workerpb.ApplyBotBatchR
 	if err := validateBotBatchRequest(req); err != nil {
 		return nil, err
 	}
+	if err := s.prepareBotFleet(ctx); err != nil {
+		return unavailableBotBatchResponse(req, err), nil
+	}
 	payloadHash, err := botBatchPayloadHash(req)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "计算 Bot 批次摘要失败: %v", err)
 	}
-	entry, owner, err := s.beginBotBatch(ctx, req.IdempotencyKey, payloadHash)
+	capacity := s.botFleet.CapacitySnapshot()
+	entry, owner, err := s.beginBotBatch(ctx, req.IdempotencyKey, payloadHash, capacity)
 	if err != nil {
 		return nil, err
 	}
@@ -87,14 +93,16 @@ func (s *Server) ApplyBotBatch(ctx context.Context, req *workerpb.ApplyBotBatchR
 		s.abortBotBatch(req.IdempotencyKey, entry, applyErr)
 		return nil, applyErr
 	}
-	s.completeBotBatch(entry, response)
+	currentCapacity := s.botFleet.CapacitySnapshot()
+	if stableBotBatchResponse(response) && botBatchEntryMatchesCapacity(entry, currentCapacity) {
+		s.completeBotBatch(entry, response)
+	} else {
+		s.releaseBotBatch(req.IdempotencyKey, entry, response)
+	}
 	return cloneBotBatchResponse(response), nil
 }
 
 func (s *Server) applyBotBatchOnce(ctx context.Context, req *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error) {
-	if err := s.prepareBotFleet(ctx); err != nil {
-		return unavailableBotBatchResponse(req, err), nil
-	}
 	capacity := s.botFleet.CapacitySnapshot()
 	if req.ExpectedCapacityGeneration != 0 && req.ExpectedCapacityGeneration != capacity.CapacityGeneration {
 		return nil, status.Errorf(codes.FailedPrecondition, "Bot 容量世代已变化: expected=%d actual=%d", req.ExpectedCapacityGeneration, capacity.CapacityGeneration)
@@ -231,30 +239,37 @@ func botBatchPayloadHash(req *workerpb.ApplyBotBatchRequest) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
-func (s *Server) beginBotBatch(ctx context.Context, key, payloadHash string) (*botBatchCacheEntry, bool, error) {
+func (s *Server) beginBotBatch(ctx context.Context, key, payloadHash string, capacity bot.BotCapacitySnapshot) (*botBatchCacheEntry, bool, error) {
 	s.botBatchMu.Lock()
 	if s.botBatchResults == nil {
 		s.botBatchResults = make(map[string]*botBatchCacheEntry)
 	}
 	s.cleanupBotBatchCacheLocked(time.Now())
 	if entry, ok := s.botBatchResults[key]; ok {
-		if entry.payloadHash != payloadHash {
+		if entry.workerEpoch != capacity.WorkerEpoch || entry.workerEpochGeneration != capacity.WorkerEpochGeneration {
+			delete(s.botBatchResults, key)
+		} else {
+			if entry.payloadHash != payloadHash {
+				s.botBatchMu.Unlock()
+				return nil, false, status.Error(codes.FailedPrecondition, "相同 idempotencyKey 对应的 Bot 批次载荷不一致")
+			}
 			s.botBatchMu.Unlock()
-			return nil, false, status.Error(codes.FailedPrecondition, "相同 idempotencyKey 对应的 Bot 批次载荷不一致")
-		}
-		s.botBatchMu.Unlock()
-		select {
-		case <-entry.done:
-			return entry, false, nil
-		case <-ctx.Done():
-			return nil, false, ctx.Err()
+			select {
+			case <-entry.done:
+				return entry, false, nil
+			case <-ctx.Done():
+				return nil, false, ctx.Err()
+			}
 		}
 	}
 	if len(s.botBatchResults) >= botBatchCacheLimit {
 		s.botBatchMu.Unlock()
 		return nil, false, status.Error(codes.ResourceExhausted, "Bot 批次幂等缓存已满")
 	}
-	entry := &botBatchCacheEntry{payloadHash: payloadHash, createdAt: time.Now(), done: make(chan struct{})}
+	entry := &botBatchCacheEntry{
+		payloadHash: payloadHash, workerEpoch: capacity.WorkerEpoch,
+		workerEpochGeneration: capacity.WorkerEpochGeneration, createdAt: time.Now(), done: make(chan struct{}),
+	}
 	s.botBatchResults[key] = entry
 	s.botBatchMu.Unlock()
 	return entry, true, nil
@@ -264,6 +279,38 @@ func (s *Server) completeBotBatch(entry *botBatchCacheEntry, response *workerpb.
 	s.botBatchMu.Lock()
 	entry.response = cloneBotBatchResponse(response)
 	close(entry.done)
+	s.botBatchMu.Unlock()
+}
+
+func (s *Server) releaseBotBatch(key string, entry *botBatchCacheEntry, response *workerpb.ApplyBotBatchResponse) {
+	s.botBatchMu.Lock()
+	entry.response = cloneBotBatchResponse(response)
+	if s.botBatchResults[key] == entry {
+		delete(s.botBatchResults, key)
+	}
+	close(entry.done)
+	s.botBatchMu.Unlock()
+}
+
+func stableBotBatchResponse(response *workerpb.ApplyBotBatchResponse) bool {
+	if response == nil || len(response.Results) == 0 {
+		return false
+	}
+	for _, result := range response.Results {
+		if result == nil || result.Status == botBatchStatusUnavailable || result.Status == botBatchStatusCapacity {
+			return false
+		}
+	}
+	return true
+}
+
+func botBatchEntryMatchesCapacity(entry *botBatchCacheEntry, capacity bot.BotCapacitySnapshot) bool {
+	return entry.workerEpoch == capacity.WorkerEpoch && entry.workerEpochGeneration == capacity.WorkerEpochGeneration
+}
+
+func (s *Server) clearBotBatchCache() {
+	s.botBatchMu.Lock()
+	clear(s.botBatchResults)
 	s.botBatchMu.Unlock()
 }
 
@@ -365,7 +412,10 @@ func planBotAssignment(plan *botBatchDispatchPlan, index int, assignment *worker
 
 func planBotStop(plan *botBatchDispatchPlan, index int, assignment *workerpb.BotAssignment, exists bool, remaining int) int {
 	if !exists {
-		plan.results[index] = &workerpb.ApplyBotBatchItemResult{BotUuid: assignment.BotUuid, Accepted: true, Skipped: true, Status: botBatchStatusAccepted}
+		plan.results[index] = &workerpb.ApplyBotBatchItemResult{
+			BotUuid: assignment.BotUuid, Accepted: true, Skipped: true,
+			Status: botBatchStatusAccepted, ErrorCode: "already_stopped",
+		}
 		return remaining
 	}
 	plan.stopIndexes = append(plan.stopIndexes, index)
@@ -625,15 +675,20 @@ func (s *Server) addBotEventSubscriber(ch chan *bot.BotWorkerEvent) {
 }
 
 func (s *Server) addBotFleetEventSubscriber(ch chan *bot.BotWorkerEvent) {
+	generation := s.currentBotWorkerGeneration()
 	s.botEventMu.Lock()
 	s.botEventSubs = append(s.botEventSubs, ch)
 	if s.botFleetEventSubs == nil {
-		s.botFleetEventSubs = make(map[chan *bot.BotWorkerEvent]struct{})
+		s.botFleetEventSubs = make(map[chan *bot.BotWorkerEvent]int64)
 	}
-	s.botFleetEventSubs[ch] = struct{}{}
+	s.botFleetEventSubs[ch] = generation
 	s.botEventMu.Unlock()
 
-	if s.botMgr != nil && !s.botMgr.IsRunning() {
+	if s.botMgr == nil {
+		return
+	}
+	currentGeneration := s.currentBotWorkerGeneration()
+	if !s.botMgr.IsRunning() || currentGeneration != generation {
 		s.closeBotFleetEventSubscriber(ch)
 	}
 }

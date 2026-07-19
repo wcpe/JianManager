@@ -224,16 +224,21 @@ export class FleetController {
       if (replayed) return
     }
 
+    const legacy = !command.requestId && !command.batchId && !command.idempotencyKey
+      && command.bots.every((config) => !isFleetManagedConfig(config))
     const results = command.bots.length > MAX_BATCH_SIZE
       ? command.bots.map((config) => this.rejected(config.id, 'batch_limit_exceeded', '单批最多 50 个 Bot'))
-      : command.bots.map((config) => this.admit(config))
+      : command.bots.map((config) => this.admit(config, legacy))
 
     if (command.requestId) {
       this.sendBatchResult(command, results)
     } else if (results.some((item) => !item.accepted)) {
-      this.sendEvent({ evt: 'bot-error', error: '部分 Bot 未通过准入，请检查容量或批量大小' })
+      const conflict = results.find((item) => item.errorCode === 'fleet_managed')
+      this.sendEvent({ evt: 'bot-error', error: conflict?.error ?? '部分 Bot 未通过准入，请检查容量或批量大小' })
     }
-    if (command.idempotencyKey) this.rememberBatch(command, results)
+    if (command.idempotencyKey && results.every(isStableBatchResult)) {
+      this.rememberBatch(command, results)
+    }
   }
 
   private replayBatch(command: CreateBotsCommand): boolean {
@@ -285,9 +290,12 @@ export class FleetController {
     }
   }
 
-  private admit(config: BotConfig): BotItemResult {
+  private admit(config: BotConfig, legacy = false): BotItemResult {
     const existing = this.bots.get(config.id)
     if (existing) {
+      if (legacy && isFleetManagedConfig(existing.config)) {
+        return this.rejected(config.id, 'fleet_managed', 'Bot 由 Fleet 管理，请使用 Fleet RPC 操作', 'conflict')
+      }
       const decision = this.generationDecision(existing.config, config)
       if (decision) return decision
     }
@@ -427,6 +435,9 @@ export class FleetController {
     const results = command.botIds.map((botId) => this.stopBot(botId, command))
     if (command.requestId) {
       this.sendEvent({ evt: 'batch-result', requestId: command.requestId, results })
+    } else {
+      const conflict = results.find((item) => item.errorCode === 'fleet_managed')
+      if (conflict) this.sendEvent({ evt: 'bot-error', botId: conflict.botId, error: conflict.error })
     }
   }
 
@@ -434,7 +445,11 @@ export class FleetController {
     const instance = this.bots.get(botId)
     if (!instance) {
       this.emitMissingState(botId)
-      return this.rejected(botId, 'ephemeral_unavailable', 'Bot 不存在', 'ephemeral_unavailable')
+      return { botId, accepted: true, skipped: true, status: 'accepted', errorCode: 'already_stopped' }
+    }
+    const legacy = !command.requestId && command.generation === undefined
+    if (legacy && isFleetManagedConfig(instance.config)) {
+      return this.rejected(botId, 'fleet_managed', 'Bot 由 Fleet 管理，请使用 Fleet RPC 操作', 'conflict')
     }
     if (this.isStaleStop(instance.config, command.generation)) {
       return this.rejected(botId, 'stale_generation', '停止 generation 已过期', 'stale')
@@ -583,6 +598,14 @@ function sanitizeStopReason(reason?: string): string | undefined {
   return reason
     .replace(/\b(token|password|secret|authorization)\s*=\s*\S+/gi, '$1=[已脱敏]')
     .replace(/\bBearer\s+\S+/gi, 'Bearer [已脱敏]')
+}
+
+function isFleetManagedConfig(config: BotConfig): boolean {
+  return Boolean(config.sessionId || config.generation || config.configHash)
+}
+
+function isStableBatchResult(result: BotItemResult): boolean {
+  return result.status !== 'ephemeral_unavailable' && result.status !== 'capacity_insufficient'
 }
 
 function batchFingerprint(command: CreateBotsCommand): string {
