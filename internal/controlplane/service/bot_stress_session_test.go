@@ -380,3 +380,99 @@ func TestBotStressSession_CreateRejectsInvalidInput(t *testing.T) {
 	_, err = svc.Create(CreateBotStressSessionRequest{InstanceID: inst.ID, Count: 1, Behavior: "idle"})
 	assert.Error(t, err)
 }
+
+const validScenarioV2JSON = `{"version":2,"seed":20260719,"cohorts":[{"key":"all","percent":100,"steps":[{"id":"observe","type":"wait","observationStep":true,"durationMs":1000}]}]}`
+
+const validScenarioV2YAML = `version: 2
+seed: 20260719
+cohorts:
+  - key: all
+    percent: 100
+    steps:
+      - id: observe
+        type: wait
+        observationStep: true
+        durationMs: 1000
+`
+
+func TestBotStressSession_CreatePersistsCanonicalScenarioFromJSONAndYAML(t *testing.T) {
+	tests := []struct {
+		name     string
+		scenario json.RawMessage
+	}{
+		{name: "JSON 对象", scenario: json.RawMessage(validScenarioV2JSON)},
+		{name: "YAML 字符串", scenario: mustJSONRawString(t, validScenarioV2YAML)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db := newBotStressSessionTestDB(t)
+			inst := createBotStressInstance(t, db)
+			svc := newBotStressSessionService(t, db)
+
+			created, err := svc.Create(CreateBotStressSessionRequest{
+				InstanceID: inst.ID, Count: 2, NamePrefix: "scenario", Scenario: test.scenario,
+			})
+			require.NoError(t, err)
+			require.Equal(t, "scenario_v2", created.Behavior)
+			require.NotNil(t, created.Scenario)
+			require.Equal(t, int64(20260719), created.Scenario.Seed)
+
+			var row model.BotStressSession
+			require.NoError(t, db.First(&row, created.ID).Error)
+			stored, err := ParseScenarioSnapshot(row.ScenarioSnapshot)
+			require.NoError(t, err)
+			base := stored.Cohorts[0].Steps[0].Base()
+			require.Equal(t, 3_600_000, *base.TimeoutMS)
+			require.Equal(t, 1, *base.MaxAttempts)
+			detail, err := svc.Get(created.ID)
+			require.NoError(t, err)
+			require.NotNil(t, detail.Scenario)
+			require.Equal(t, "all", detail.Scenario.Cohorts[0].Key)
+		})
+	}
+}
+
+func TestBotStressSession_CreateV1BuildsSnapshotAndKeepsOriginalYAML(t *testing.T) {
+	db := newBotStressSessionTestDB(t)
+	inst := createBotStressInstance(t, db)
+	svc := newBotStressSessionService(t, db)
+
+	created, err := svc.Create(CreateBotStressSessionRequest{
+		InstanceID: inst.ID, Count: 2, NamePrefix: "legacy", OrchestrationYAML: validStressOrchestrationYAML,
+	})
+	require.NoError(t, err)
+	require.Equal(t, validStressOrchestrationYAML, created.OrchestrationYAML)
+	require.NotNil(t, created.Scenario)
+	require.Equal(t, "legacy", created.Scenario.Cohorts[0].Key)
+
+	var row model.BotStressSession
+	require.NoError(t, db.First(&row, created.ID).Error)
+	require.Equal(t, validStressOrchestrationYAML, row.OrchestrationYAML)
+	require.NotEmpty(t, row.ScenarioSnapshot)
+}
+
+func TestBotStressSession_CreateV1ConversionFailureFallsBackToOriginalFlow(t *testing.T) {
+	db := newBotStressSessionTestDB(t)
+	inst := createBotStressInstance(t, db)
+	svc := newBotStressSessionService(t, db)
+	raw := "phases:\n  - durationSec: 10\n    behavior: custom\n    steps: []\n"
+
+	created, err := svc.Create(CreateBotStressSessionRequest{
+		InstanceID: inst.ID, Count: 1, NamePrefix: "legacy", OrchestrationYAML: raw,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "custom", created.Behavior)
+	require.Equal(t, raw, created.OrchestrationYAML)
+	require.Nil(t, created.Scenario)
+
+	var row model.BotStressSession
+	require.NoError(t, db.First(&row, created.ID).Error)
+	require.Empty(t, row.ScenarioSnapshot)
+}
+
+func mustJSONRawString(t *testing.T, value string) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	require.NoError(t, err)
+	return raw
+}

@@ -346,6 +346,60 @@ func TestBotLoadExecutionStart_Creates500BotsAcrossTenBatches(t *testing.T) {
 	require.False(t, reserved)
 }
 
+func TestBotLoadExecutionStart_MaterializesStableCohortAndScenarioAssignments(t *testing.T) {
+	h := newBotLoadExecutionHarness(t, []int{10}, 10, nil)
+	rawScenario := `{"version":2,"seed":20260719,"cohorts":[{"key":"lobby","percent":20,"steps":[{"id":"lobby-observe","type":"wait","observationStep":true,"durationMs":1000}]},{"key":"combat","percent":80,"steps":[{"id":"combat-observe","type":"wait","observationStep":true,"durationMs":1000}]}]}`
+	scenario, err := ParseScenarioV2([]byte(rawScenario))
+	require.NoError(t, err)
+	snapshot, err := CanonicalScenarioSnapshot(scenario, false)
+	require.NoError(t, err)
+	require.NoError(t, h.db.Model(h.session).Update("scenario_snapshot", snapshot).Error)
+	h.session.ScenarioSnapshot = snapshot
+
+	_, err = h.service.Start(context.Background(), h.session.ID, h.token)
+	require.NoError(t, err)
+	var bots []model.Bot
+	require.NoError(t, h.db.Where("stress_session_id = ?", h.session.ID).Order("id ASC").Find(&bots).Error)
+	require.Len(t, bots, 10)
+	expected, err := AssignScenarioCohorts(scenario.Seed, 10, scenario.Cohorts)
+	require.NoError(t, err)
+
+	byUUID := make(map[string]model.Bot, len(bots))
+	for index, bot := range bots {
+		require.Equal(t, expected[index], bot.CohortKey)
+		byUUID[bot.UUID] = bot
+	}
+	calls := h.dispatcher.Calls()
+	require.Len(t, calls, 1)
+	for _, assignment := range calls[0].request.Assignments {
+		bot := byUUID[assignment.BotUuid]
+		require.Equal(t, bot.CohortKey, assignment.CohortKey)
+		require.NotEmpty(t, assignment.ScenarioJson)
+		var subtree struct {
+			Key   string            `json:"key"`
+			Steps []json.RawMessage `json:"steps"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(assignment.ScenarioJson), &subtree))
+		require.Equal(t, bot.CohortKey, subtree.Key)
+		require.NotEmpty(t, subtree.Steps)
+		require.Equal(t, assignment.ConfigHash, botLoadAssignmentConfigHash(assignment))
+		require.Equal(t, bot.ConfigHash, assignment.ConfigHash)
+	}
+
+	firstCohorts := make(map[string]string, len(bots))
+	for _, bot := range bots {
+		firstCohorts[bot.UUID] = bot.CohortKey
+	}
+	_, err = h.service.Start(context.Background(), h.session.ID, h.token)
+	require.NoError(t, err)
+	require.Len(t, h.dispatcher.Calls(), 1)
+	var replayed []model.Bot
+	require.NoError(t, h.db.Where("stress_session_id = ?", h.session.ID).Find(&replayed).Error)
+	for _, bot := range replayed {
+		require.Equal(t, firstCohorts[bot.UUID], bot.CohortKey)
+	}
+}
+
 func TestBotLoadExecutionStart_EnsuresOneFleetSubscriptionPerExecutorNode(t *testing.T) {
 	h := newBotLoadExecutionHarness(t, []int{50, 50}, 100, nil)
 	subscriptions := &botLoadExecutionSubscriptions{}

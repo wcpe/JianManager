@@ -51,6 +51,9 @@ func (s *BotLoadPreflightService) Preflight(ctx context.Context, session *model.
 	if err := s.validatePreflight(session, &input); err != nil {
 		return nil, err
 	}
+	if err := ValidateBotLoadScenarioForSession(session); err != nil {
+		return nil, err
+	}
 	capacitySnapshot, err := s.capacities.Snapshot(ctx, session.ID)
 	if err != nil {
 		return nil, err

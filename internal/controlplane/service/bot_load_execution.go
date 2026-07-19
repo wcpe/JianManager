@@ -77,10 +77,12 @@ type botLoadConnectionConfig struct {
 }
 
 type botLoadStartPreparation struct {
-	session  *model.BotStressSession
-	plan     *BotLoadAllocationPlan
-	config   botLoadConnectionConfig
-	hasBatch bool
+	session           *model.BotStressSession
+	plan              *BotLoadAllocationPlan
+	config            botLoadConnectionConfig
+	hasBatch          bool
+	cohortAssignments []string
+	cohortJSON        map[string]string
 }
 
 type botLoadDispatchItem struct {
@@ -277,6 +279,10 @@ func (s *BotLoadExecutionService) prepareStart(ctx context.Context, sessionID ui
 	if err != nil {
 		return nil, err
 	}
+	cohortAssignments, cohortJSON, err := prepareBotLoadScenarioAssignments(session)
+	if err != nil {
+		return nil, err
+	}
 	hasBatch, err := s.sessionHasBatches(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -284,7 +290,10 @@ func (s *BotLoadExecutionService) prepareStart(ctx context.Context, sessionID ui
 	if err := s.verifyStartCapacity(ctx, session, plan, planToken, hasBatch); err != nil {
 		return nil, err
 	}
-	return &botLoadStartPreparation{session: session, plan: plan, config: config, hasBatch: hasBatch}, nil
+	return &botLoadStartPreparation{
+		session: session, plan: plan, config: config, hasBatch: hasBatch,
+		cohortAssignments: cohortAssignments, cohortJSON: cohortJSON,
+	}, nil
 }
 
 func (s *BotLoadExecutionService) validateDependencies() error {
@@ -352,6 +361,25 @@ func parseBotLoadConnectionConfig(raw string) (botLoadConnectionConfig, error) {
 		return config, fmt.Errorf("%w: config.port 必须为 1..65535", ErrBotLoadConfigInvalid)
 	}
 	return config, nil
+}
+
+func prepareBotLoadScenarioAssignments(session *model.BotStressSession) ([]string, map[string]string, error) {
+	if session == nil || strings.TrimSpace(session.ScenarioSnapshot) == "" {
+		return nil, nil, nil
+	}
+	scenario, err := ParseScenarioSnapshot(session.ScenarioSnapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+	assignments, err := AssignScenarioCohorts(scenario.Seed, session.BotCount, scenario.Cohorts)
+	if err != nil {
+		return nil, nil, err
+	}
+	cohortJSON, err := ScenarioCohortJSONMap(scenario)
+	if err != nil {
+		return nil, nil, err
+	}
+	return assignments, cohortJSON, nil
 }
 
 func (s *BotLoadExecutionService) verifyStartCapacity(ctx context.Context, session *model.BotStressSession, plan *BotLoadAllocationPlan, token string, hasBatch bool) error {
@@ -542,14 +570,20 @@ func expectedBotLoadBots(prepared *botLoadStartPreparation, batches map[int]mode
 
 func newPlannedBotLoadBot(prepared *botLoadStartPreparation, batch model.BotLoadBatch, allocation BotLoadAllocation, globalIndex, localIndex int) model.Bot {
 	executorNodeID, batchID, sessionID := allocation.ExecutorNodeID, batch.ID, prepared.session.ID
+	cohortKey := ""
+	if globalIndex <= len(prepared.cohortAssignments) {
+		cohortKey = prepared.cohortAssignments[globalIndex-1]
+	}
 	bot := model.Bot{
 		UUID:       stableBotLoadUUID(fmt.Sprintf("%s|bot|%d", prepared.session.UUID, globalIndex)),
 		InstanceID: prepared.session.InstanceID, StressSessionID: &sessionID, ExecutorNodeID: &executorNodeID,
 		LoadBatchID: &batchID, Name: stableBotLoadBotName(prepared.session.NamePrefix, prepared.session.UUID, globalIndex),
 		Status: model.BotStatusPending, DesiredStateGeneration: 1, Config: prepared.session.Config,
-		Behavior: prepared.session.Behavior, WorkerID: allocation.ExecutorNodeUUID, CohortKey: "",
+		Behavior: prepared.session.Behavior, WorkerID: allocation.ExecutorNodeUUID, CohortKey: cohortKey,
 	}
-	assignment := buildRunningBotLoadAssignment(&bot, prepared.session, &prepared.session.Instance, prepared.config, allocation, localIndex)
+	assignment := buildRunningBotLoadAssignment(
+		&bot, prepared.session, &prepared.session.Instance, prepared.config, allocation, localIndex, prepared.cohortJSON[cohortKey],
+	)
 	bot.ConfigHash = botLoadAssignmentConfigHash(assignment)
 	return bot
 }
@@ -606,7 +640,7 @@ func equalUintPointers(left, right *uint) bool {
 	return *left == *right
 }
 
-func buildRunningBotLoadAssignment(bot *model.Bot, session *model.BotStressSession, instance *model.Instance, config botLoadConnectionConfig, allocation BotLoadAllocation, localIndex int) *workerpb.BotAssignment {
+func buildRunningBotLoadAssignment(bot *model.Bot, session *model.BotStressSession, instance *model.Instance, config botLoadConnectionConfig, allocation BotLoadAllocation, localIndex int, scenarioJSON string) *workerpb.BotAssignment {
 	username := config.Username
 	if username == "" {
 		username = sanitizeMCUsername(bot.Name)
@@ -615,7 +649,7 @@ func buildRunningBotLoadAssignment(bot *model.Bot, session *model.BotStressSessi
 		BotUuid: bot.UUID, InstanceUuid: instance.UUID, SessionUuid: session.UUID,
 		Generation: bot.DesiredStateGeneration, DesiredState: "running", ConfigHash: bot.ConfigHash,
 		Name: bot.Name, Host: config.Server, Port: int32(config.Port), Username: username,
-		Version: config.Version, Auth: config.Auth, CohortKey: bot.CohortKey,
+		Version: config.Version, Auth: config.Auth, CohortKey: bot.CohortKey, ScenarioJson: scenarioJSON,
 		ConnectNotBeforeUnixMs: allocation.ConnectStartAt.Add(time.Duration(localIndex*allocation.ConnectIntervalMS) * time.Millisecond).UnixMilli(),
 		CorrelationSeed:        stableBotLoadDigest(session.UUID + "|" + bot.UUID + "|correlation"),
 	}
@@ -704,7 +738,12 @@ func (s *BotLoadExecutionService) dispatchAllocation(ctx context.Context, sessio
 	if err != nil || stopped {
 		return err
 	}
-	request := buildStartBotLoadBatchRequest(session, plan, config, allocation, bots)
+	_, cohortJSON, err := prepareBotLoadScenarioAssignments(session)
+	if err != nil {
+		lastErr := structuredBotLoadError("SCENARIO_INVALID", "conflict", err.Error())
+		return s.failBotLoadBatchWithoutItems(ctx, batch, lastErr)
+	}
+	request := buildStartBotLoadBatchRequest(session, plan, config, allocation, bots, cohortJSON)
 	response, rpcErr := s.applyBotLoadBatch(ctx, allocation.ExecutorNodeUUID, request)
 	items := normalizeBotLoadDispatchItems(bots, request, response, rpcErr)
 	if err := s.persistStartBatchResult(ctx, batch, items); err != nil {
@@ -740,10 +779,12 @@ func (s *BotLoadExecutionService) loadBatchBots(ctx context.Context, batchID uin
 	return bots, nil
 }
 
-func buildStartBotLoadBatchRequest(session *model.BotStressSession, plan *BotLoadAllocationPlan, config botLoadConnectionConfig, allocation BotLoadAllocation, bots []model.Bot) *workerpb.ApplyBotBatchRequest {
+func buildStartBotLoadBatchRequest(session *model.BotStressSession, plan *BotLoadAllocationPlan, config botLoadConnectionConfig, allocation BotLoadAllocation, bots []model.Bot, cohortJSON map[string]string) *workerpb.ApplyBotBatchRequest {
 	assignments := make([]*workerpb.BotAssignment, 0, len(bots))
 	for index := range bots {
-		assignment := buildRunningBotLoadAssignment(&bots[index], session, &session.Instance, config, allocation, index)
+		assignment := buildRunningBotLoadAssignment(
+			&bots[index], session, &session.Instance, config, allocation, index, cohortJSON[bots[index].CohortKey],
+		)
 		assignment.ConfigHash = bots[index].ConfigHash
 		assignments = append(assignments, assignment)
 	}

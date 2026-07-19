@@ -252,6 +252,81 @@ func TestBotLoadPreflight_ValidationCapacityReadyAndAuditRedaction(t *testing.T)
 	})
 }
 
+func TestBotStressSessionScenario_CreateDetailAndValidationError(t *testing.T) {
+	t.Run("JSON 与 YAML source 保存规范 snapshot 并在详情返回", func(t *testing.T) {
+		_, _, _, ctx := setupBotLoadHTTP(t, 10)
+		sources := []any{
+			validBotLoadScenarioSource(),
+			"version: 2\nseed: 20260719\ncohorts:\n  - key: all\n    percent: 100\n    steps:\n      - id: observe\n        type: wait\n        observationStep: true\n        durationMs: 1000\n",
+		}
+		for index, source := range sources {
+			created := makeRequest(ctx.router, http.MethodPost, "/api/v1/bots/stress-sessions", map[string]any{
+				"instanceId": ctx.instanceID, "count": 2, "namePrefix": "scenario", "scenario": source,
+			}, ctx.token)
+			require.Equalf(t, http.StatusCreated, created.Code, "source=%d: %s", index, created.Body.String())
+			body := parseJSON(t, created)
+			require.Equal(t, "scenario_v2", body["behavior"])
+			scenario := body["scenario"].(map[string]any)
+			require.Equal(t, float64(20260719), scenario["seed"])
+
+			detail := makeRequest(ctx.router, http.MethodGet, "/api/v1/bots/stress-sessions/"+itoa(uint(body["id"].(float64))), nil, ctx.token)
+			require.Equal(t, http.StatusOK, detail.Code)
+			require.Equal(t, scenario, parseJSON(t, detail)["scenario"])
+		}
+	})
+
+	t.Run("非法场景返回422和稳定path message", func(t *testing.T) {
+		_, _, _, ctx := setupBotLoadHTTP(t, 10)
+		scenario := validBotLoadScenarioSource()
+		steps := scenario["cohorts"].([]any)[0].(map[string]any)["steps"].([]any)
+		steps[0].(map[string]any)["timeoutMs"] = 99
+		created := makeRequest(ctx.router, http.MethodPost, "/api/v1/bots/stress-sessions", map[string]any{
+			"instanceId": ctx.instanceID, "count": 2, "namePrefix": "invalid", "scenario": scenario,
+		}, ctx.token)
+		require.Equal(t, http.StatusUnprocessableEntity, created.Code)
+		body := parseJSON(t, created)
+		require.Equal(t, "BOT_LOAD_SCENARIO_INVALID", body["error"])
+		details := body["details"].(map[string]any)
+		require.Equal(t, "cohorts[0].steps[0].timeoutMs", details["path"])
+		require.Equal(t, "必须在 100..3600000 之间", details["message"])
+	})
+}
+
+func TestBotLoadPreflight_InvalidScenarioReturns422BeforeCapacityAndWritesNothing(t *testing.T) {
+	db, _, worker, ctx := setupBotLoadHTTP(t, 0)
+	sessionID := createBotLoadSession(t, ctx, 2)
+	invalid := `{"version":2,"seed":7,"cohorts":[{"key":"all","percent":100,"steps":[{"id":"observe","type":"wait","observationStep":true,"durationMs":1000,"timeoutMs":99}]}]}`
+	require.NoError(t, db.Model(&model.BotStressSession{}).Where("id = ?", sessionID).Update("scenario_snapshot", invalid).Error)
+
+	response := makeRequest(ctx.router, http.MethodPost, "/api/v1/bots/stress-sessions/"+itoa(sessionID)+"/preflight", nil, ctx.token)
+	require.Equal(t, http.StatusUnprocessableEntity, response.Code)
+	body := parseJSON(t, response)
+	require.Equal(t, "BOT_LOAD_SCENARIO_INVALID", body["error"])
+	details := body["details"].(map[string]any)
+	require.Equal(t, "cohorts[0].steps[0].timeoutMs", details["path"])
+	capacityCalls, applyCalls := worker.counts()
+	require.Zero(t, capacityCalls)
+	require.Zero(t, applyCalls)
+	assertBotLoadStartHasNoRows(t, db, sessionID)
+
+	var session model.BotStressSession
+	require.NoError(t, db.First(&session, sessionID).Error)
+	require.Empty(t, session.AllocationPlan)
+}
+
+func validBotLoadScenarioSource() map[string]any {
+	return map[string]any{
+		"version": 2,
+		"seed":    20260719,
+		"cohorts": []any{map[string]any{
+			"key": "all", "percent": 100,
+			"steps": []any{map[string]any{
+				"id": "observe", "type": "wait", "observationStep": true, "durationMs": 1000,
+			}},
+		}},
+	}
+}
+
 func TestBotLoadStart_TokenCompatibilityAndIdempotency(t *testing.T) {
 	t.Run("计划启动返回202且重复不重复派发", func(t *testing.T) {
 		db, _, worker, ctx := setupBotLoadHTTP(t, 50)

@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +38,7 @@ type CreateBotStressSessionRequest struct {
 	Behavior          string          `json:"behavior"`
 	NamePrefix        string          `json:"namePrefix"`
 	Config            json.RawMessage `json:"config"`
+	Scenario          json.RawMessage `json:"scenario"`
 	OrchestrationYAML string          `json:"orchestrationYaml"`
 }
 
@@ -69,6 +72,7 @@ type BotStressSessionView struct {
 	Behavior             string                         `json:"behavior"`
 	NamePrefix           string                         `json:"namePrefix"`
 	Config               json.RawMessage                `json:"config,omitempty"`
+	Scenario             *ScenarioV2                    `json:"scenario,omitempty"`
 	OrchestrationYAML    string                         `json:"orchestrationYaml,omitempty"`
 	OrchestrationSummary *BotStressOrchestrationSummary `json:"orchestrationSummary,omitempty"`
 	Status               model.BotStressSessionStatus   `json:"status"`
@@ -108,6 +112,10 @@ func (s *BotStressSessionService) Create(req CreateBotStressSessionRequest) (*Bo
 	if err != nil {
 		return nil, err
 	}
+	behavior, scenarioSnapshot, err := normalizeStressSessionScenario(req, behavior)
+	if err != nil {
+		return nil, err
+	}
 
 	sess := &model.BotStressSession{
 		InstanceID:           req.InstanceID,
@@ -118,6 +126,7 @@ func (s *BotStressSessionService) Create(req CreateBotStressSessionRequest) (*Bo
 		Config:               config,
 		OrchestrationYAML:    orchestrationYAMLForStore(req.OrchestrationYAML),
 		OrchestrationSummary: summaryJSON,
+		ScenarioSnapshot:     scenarioSnapshot,
 		Status:               model.BotStressSessionPending,
 	}
 	if err := s.db.Create(sess).Error; err != nil {
@@ -130,7 +139,11 @@ func (s *BotStressSessionService) validateCreateRequest(req CreateBotStressSessi
 	if req.InstanceID == 0 || req.Count < 1 || req.Count > maxBatchTargets || strings.TrimSpace(req.NamePrefix) == "" {
 		return ErrBotStressSessionInvalid
 	}
-	if strings.TrimSpace(req.OrchestrationYAML) == "" && strings.TrimSpace(req.Behavior) == "" {
+	hasScenario := hasScenarioSource(req.Scenario)
+	if hasScenario && strings.TrimSpace(req.OrchestrationYAML) != "" {
+		return ErrBotStressSessionInvalid
+	}
+	if !hasScenario && strings.TrimSpace(req.OrchestrationYAML) == "" && strings.TrimSpace(req.Behavior) == "" {
 		return ErrBotStressSessionInvalid
 	}
 	var inst model.Instance
@@ -156,6 +169,70 @@ func normalizeStressSessionOrchestration(behavior, orchestrationYAML string) (st
 		return "", "", fmt.Errorf("序列化压测会话编排摘要失败: %w", err)
 	}
 	return orchestration.Phases[0].Behavior, string(rawSummary), nil
+}
+
+func normalizeStressSessionScenario(req CreateBotStressSessionRequest, behavior string) (string, string, error) {
+	seed := legacyStressScenarioSeed(req)
+	if hasScenarioSource(req.Scenario) {
+		scenario, err := parseScenarioRequestSource(req.Scenario)
+		if err != nil {
+			return "", "", err
+		}
+		snapshot, err := CanonicalScenarioSnapshot(scenario, false)
+		return "scenario_v2", snapshot, err
+	}
+	if strings.TrimSpace(req.OrchestrationYAML) != "" {
+		scenario, err := ConvertStressOrchestrationToScenarioV2(req.OrchestrationYAML, seed)
+		if err != nil {
+			return behavior, "", nil
+		}
+		snapshot, err := CanonicalScenarioSnapshot(scenario, true)
+		if err != nil {
+			return behavior, "", nil
+		}
+		return behavior, snapshot, nil
+	}
+	scenario, err := ConvertLegacyBehaviorToScenarioV2(behavior, seed)
+	if err != nil {
+		return behavior, "", nil
+	}
+	snapshot, err := CanonicalScenarioSnapshot(scenario, true)
+	if err != nil {
+		return behavior, "", nil
+	}
+	return behavior, snapshot, nil
+}
+
+func hasScenarioSource(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed != "" && trimmed != "null"
+}
+
+func parseScenarioRequestSource(raw json.RawMessage) (*ScenarioV2, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if strings.HasPrefix(trimmed, `"`) {
+		var source string
+		if err := json.Unmarshal(raw, &source); err != nil {
+			return nil, scenarioValidationError("$", "scenario 字符串无效")
+		}
+		return ParseScenarioV2([]byte(source))
+	}
+	return ParseScenarioV2(raw)
+}
+
+func legacyStressScenarioSeed(req CreateBotStressSessionRequest) int64 {
+	value := fmt.Sprintf("%d|%d|%s|%s|%s", req.InstanceID, req.Count, strings.TrimSpace(req.NamePrefix), strings.TrimSpace(req.Behavior), req.OrchestrationYAML)
+	digest := sha256.Sum256([]byte(value))
+	return int64(binary.BigEndian.Uint64(digest[:8]))
+}
+
+// ValidateBotLoadScenarioForSession 在容量查询前校验已冻结场景；无 snapshot 的旧会话继续兼容。
+func ValidateBotLoadScenarioForSession(session *model.BotStressSession) error {
+	if session == nil || strings.TrimSpace(session.ScenarioSnapshot) == "" {
+		return nil
+	}
+	_, err := ParseScenarioSnapshot(session.ScenarioSnapshot)
+	return err
 }
 
 func orchestrationYAMLForStore(raw string) string {
@@ -202,7 +279,7 @@ func (s *BotStressSessionService) LoadForBotLoad(ctx context.Context, id uint) (
 
 // IsLegacyBotStressSession 判断是否为仅使用 V1 字段、尚未生成分布式计划的兼容会话。
 func IsLegacyBotStressSession(session *model.BotStressSession) bool {
-	if session == nil || session.BotCount < 1 || session.BotCount > maxBotLoadBatchSize {
+	if session == nil || session.BotCount < 1 || session.BotCount > maxBotLoadBatchSize || session.Behavior == "scenario_v2" {
 		return false
 	}
 	if strings.TrimSpace(session.AllocationPlan) != "" || !hasLegacyBotStressConfigShape(session.Config) {
@@ -464,6 +541,13 @@ func (s *BotStressSessionService) viewFromSession(sess model.BotStressSession) (
 			return nil, fmt.Errorf("解析压测会话编排摘要失败: %w", err)
 		}
 		view.OrchestrationSummary = &summary
+	}
+	if strings.TrimSpace(sess.ScenarioSnapshot) != "" {
+		scenario, err := ParseScenarioSnapshot(sess.ScenarioSnapshot)
+		if err != nil {
+			return nil, err
+		}
+		view.Scenario = scenario
 	}
 	return view, nil
 }

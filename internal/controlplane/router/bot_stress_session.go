@@ -440,7 +440,10 @@ func (e *botLoadHTTPError) Error() string { return e.message }
 
 func writeBotLoadError(c *gin.Context, err error) {
 	var responseErr *botLoadHTTPError
+	var scenarioErr *service.ScenarioValidationError
 	switch {
+	case errors.As(err, &scenarioErr):
+		writeBotScenarioValidationError(c, scenarioErr)
 	case errors.As(err, &responseErr):
 		c.JSON(responseErr.status, gin.H{"error": responseErr.code, "message": responseErr.message})
 	case errors.Is(err, service.ErrBotStressSessionNotFound):
@@ -461,7 +464,10 @@ func writeBotLoadError(c *gin.Context, err error) {
 }
 
 func writeBotStressSessionError(c *gin.Context, err error) {
+	var scenarioErr *service.ScenarioValidationError
 	switch {
+	case errors.As(err, &scenarioErr):
+		writeBotScenarioValidationError(c, scenarioErr)
 	case errors.Is(err, service.ErrBotStressSessionNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "压测会话不存在"})
 	case errors.Is(err, service.ErrBotStressSessionInvalid):
@@ -469,6 +475,14 @@ func writeBotStressSessionError(c *gin.Context, err error) {
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "压测会话操作失败"})
 	}
+}
+
+func writeBotScenarioValidationError(c *gin.Context, err *service.ScenarioValidationError) {
+	c.JSON(http.StatusUnprocessableEntity, gin.H{
+		"error":   service.BotLoadScenarioInvalidCode,
+		"message": "场景校验失败",
+		"details": gin.H{"path": err.Path, "message": err.Message},
+	})
 }
 
 // RegisterRoutes 注册压测会话路由。
