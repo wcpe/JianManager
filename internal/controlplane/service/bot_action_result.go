@@ -1,0 +1,346 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+
+	"github.com/wcpe/JianManager/internal/controlplane/model"
+	"github.com/wcpe/JianManager/proto/workerpb"
+)
+
+const actionResultJSONLimit = 16 * 1024
+
+const (
+	ActionErrorConnectTimeout        = "CONNECT_TIMEOUT"
+	ActionErrorConnectEnded          = "CONNECT_ENDED"
+	ActionErrorPathfinderUnavailable = "PATHFINDER_UNAVAILABLE"
+	ActionErrorPathNotFound          = "PATH_NOT_FOUND"
+	ActionErrorMoveTimeout           = "MOVE_TIMEOUT"
+	ActionErrorTargetNotFound        = "TARGET_NOT_FOUND"
+	ActionErrorProbeEventTimeout     = "PROBE_EVENT_TIMEOUT"
+	ActionErrorBarrierTimeout        = "BARRIER_TIMEOUT"
+	ActionErrorCancelled             = "ACTION_CANCELLED"
+	ActionErrorInternal              = "ACTION_INTERNAL_ERROR"
+)
+
+var actionErrorCodes = map[string]struct{}{
+	ActionErrorConnectTimeout: {}, ActionErrorConnectEnded: {},
+	ActionErrorPathfinderUnavailable: {}, ActionErrorPathNotFound: {},
+	ActionErrorMoveTimeout: {}, ActionErrorTargetNotFound: {},
+	ActionErrorProbeEventTimeout: {}, ActionErrorBarrierTimeout: {},
+	ActionErrorCancelled: {}, ActionErrorInternal: {},
+}
+
+// ActionResultDecision 表示动作事件对持久化账本的处理结果。
+type ActionResultDecision string
+
+const (
+	ActionResultApplied          ActionResultDecision = "applied"
+	ActionResultIgnoredDuplicate ActionResultDecision = "ignored_duplicate"
+	ActionResultIgnoredTerminal  ActionResultDecision = "ignored_terminal"
+	ActionResultIgnoredInvalid   ActionResultDecision = "ignored_invalid"
+	ActionResultIgnoredIdentity  ActionResultDecision = "ignored_identity"
+)
+
+// ActionResultIngestResult 包含动作事件的幂等处理结论与诊断。
+type ActionResultIngestResult struct {
+	Decision    ActionResultDecision
+	ActionRunID string
+	BotUUID     string
+	Diagnostic  string
+}
+
+// WaitingAction 是外部信号路由所需的运行中动作及当前 Bot 路由真源。
+type WaitingAction struct {
+	Result         model.BotLoadActionResult
+	Bot            model.Bot
+	SessionUUID    string
+	ExecutorNodeID uint
+	Generation     int64
+}
+
+type actionResultRepository interface {
+	FindBot(ctx context.Context, botUUID string) (*model.Bot, error)
+	Start(ctx context.Context, result *model.BotLoadActionResult) (ActionResultDecision, error)
+	Finish(ctx context.Context, result *model.BotLoadActionResult) (ActionResultDecision, error)
+	FindWaiting(ctx context.Context, runID, botUUID, actionRunID, correlationToken string) (*WaitingAction, error)
+}
+
+type gormActionResultRepository struct{ db *gorm.DB }
+
+func (r *gormActionResultRepository) FindBot(ctx context.Context, botUUID string) (*model.Bot, error) {
+	var bot model.Bot
+	err := r.db.WithContext(ctx).Preload("Instance").Preload("StressSession").Where("uuid = ?", botUUID).First(&bot).Error
+	return &bot, err
+}
+
+func (r *gormActionResultRepository) Start(ctx context.Context, result *model.BotLoadActionResult) (ActionResultDecision, error) {
+	created := r.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "action_run_id"}}, DoNothing: true,
+	}).Create(result)
+	if created.Error != nil {
+		return "", created.Error
+	}
+	if created.RowsAffected == 1 {
+		return ActionResultApplied, nil
+	}
+	return r.existingDecision(ctx, result.ActionRunID)
+}
+
+func (r *gormActionResultRepository) Finish(ctx context.Context, result *model.BotLoadActionResult) (ActionResultDecision, error) {
+	decision := ActionResultIgnoredTerminal
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		start := *result
+		start.Status = model.BotLoadActionRunning
+		start.ErrorCode, start.Message, start.ResultJSON = "", "", ""
+		start.DurationMS, start.EndedAt = 0, nil
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "action_run_id"}}, DoNothing: true,
+		}).Create(&start).Error; err != nil {
+			return err
+		}
+		updated := tx.Model(&model.BotLoadActionResult{}).
+			Where("action_run_id = ? AND status = ?", result.ActionRunID, model.BotLoadActionRunning).
+			Updates(map[string]any{
+				"status": result.Status, "error_code": result.ErrorCode, "message": result.Message,
+				"duration_ms": result.DurationMS, "correlation_token": result.CorrelationToken,
+				"ended_at": result.EndedAt, "result_json": result.ResultJSON,
+			})
+		if updated.Error != nil {
+			return updated.Error
+		}
+		if updated.RowsAffected == 1 {
+			decision = ActionResultApplied
+		}
+		return nil
+	})
+	return decision, err
+}
+
+func (r *gormActionResultRepository) existingDecision(ctx context.Context, actionRunID string) (ActionResultDecision, error) {
+	var existing model.BotLoadActionResult
+	if err := r.db.WithContext(ctx).Select("status").Where("action_run_id = ?", actionRunID).First(&existing).Error; err != nil {
+		return "", err
+	}
+	if existing.Status == model.BotLoadActionRunning {
+		return ActionResultIgnoredDuplicate, nil
+	}
+	return ActionResultIgnoredTerminal, nil
+}
+
+func (r *gormActionResultRepository) FindWaiting(ctx context.Context, runID, botUUID, actionRunID, correlationToken string) (*WaitingAction, error) {
+	var result model.BotLoadActionResult
+	sessionIDs := r.db.WithContext(ctx).Model(&model.BotStressSession{}).Select("id").Where("uuid = ?", runID)
+	botIDs := r.db.WithContext(ctx).Model(&model.Bot{}).Select("id").Where("uuid = ?", botUUID)
+	err := r.db.WithContext(ctx).
+		Where("stress_session_id IN (?) AND bot_id IN (?)", sessionIDs, botIDs).
+		Where("action_run_id = ? AND correlation_token = ? AND status = ?", actionRunID, correlationToken, model.BotLoadActionRunning).
+		First(&result).Error
+	if err != nil {
+		return nil, err
+	}
+	bot, err := r.FindBot(ctx, botUUID)
+	if err != nil {
+		return nil, err
+	}
+	return waitingAction(result, bot), nil
+}
+
+func waitingAction(result model.BotLoadActionResult, bot *model.Bot) *WaitingAction {
+	waiting := &WaitingAction{Result: result, Bot: *bot, Generation: bot.DesiredStateGeneration}
+	if bot.StressSession != nil {
+		waiting.SessionUUID = bot.StressSession.UUID
+	}
+	waiting.ExecutorNodeID = runtimeExecutorNodeID(bot)
+	return waiting
+}
+
+// ActionResultService 校验并持久化 FR-351 Fleet action_event，保证首终态胜出。
+type ActionResultService struct {
+	repository actionResultRepository
+	clock      BotLoadClock
+}
+
+// NewActionResultService 使用 GORM 账本创建动作结果服务。
+func NewActionResultService(db *gorm.DB, clock BotLoadClock) *ActionResultService {
+	return newActionResultService(&gormActionResultRepository{db: db}, clock)
+}
+
+func newActionResultService(repository actionResultRepository, clock BotLoadClock) *ActionResultService {
+	return &ActionResultService{repository: repository, clock: normalizeBotLoadClock(clock)}
+}
+
+// Ingest 校验执行节点、运行、Bot 与 generation 后幂等写入动作开始或首个终态。
+func (s *ActionResultService) Ingest(ctx context.Context, executorNodeID uint, expectedSessionUUID string, event *workerpb.BotActionEvent) (ActionResultIngestResult, error) {
+	status, diagnostic := validateActionEvent(event)
+	if diagnostic != "" {
+		return actionIngestResult(ActionResultIgnoredInvalid, event, diagnostic), nil
+	}
+	bot, err := s.repository.FindBot(ctx, event.BotUuid)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return actionIngestResult(ActionResultIgnoredIdentity, event, "Bot UUID 不存在"), nil
+		}
+		return ActionResultIngestResult{}, fmt.Errorf("查询动作事件 Bot 失败: %w", err)
+	}
+	if diagnostic = validateActionIdentity(bot, executorNodeID, expectedSessionUUID, event); diagnostic != "" {
+		return actionIngestResult(ActionResultIgnoredIdentity, event, diagnostic), nil
+	}
+	result := s.actionResult(bot, event, status)
+	var decision ActionResultDecision
+	if status == model.BotLoadActionRunning {
+		decision, err = s.repository.Start(ctx, result)
+	} else {
+		decision, err = s.repository.Finish(ctx, result)
+	}
+	if err != nil {
+		return ActionResultIngestResult{}, fmt.Errorf("持久化动作结果失败: %w", err)
+	}
+	return actionIngestResult(decision, event, "动作事件已幂等处理"), nil
+}
+
+// FindWaitingAction 强校验完整关联并返回当前执行节点和 generation。
+func (s *ActionResultService) FindWaitingAction(ctx context.Context, runID, botUUID, actionRunID, correlationToken string) (*WaitingAction, error) {
+	if strings.TrimSpace(runID) == "" || strings.TrimSpace(botUUID) == "" || strings.TrimSpace(actionRunID) == "" || strings.TrimSpace(correlationToken) == "" {
+		return nil, nil
+	}
+	waiting, err := s.repository.FindWaiting(ctx, runID, botUUID, actionRunID, correlationToken)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("查询等待动作失败: %w", err)
+	}
+	if waiting.SessionUUID != runID || waiting.Result.ActionRunID != actionRunID || waiting.Result.CorrelationToken != correlationToken || waiting.Bot.UUID != botUUID {
+		return nil, nil
+	}
+	return waiting, nil
+}
+
+func (s *ActionResultService) actionResult(bot *model.Bot, event *workerpb.BotActionEvent, status model.BotLoadActionResultStatus) *model.BotLoadActionResult {
+	observedAt := s.clock.Now().UTC()
+	if event.ObservedAtUnixMs > 0 {
+		observedAt = time.UnixMilli(event.ObservedAtUnixMs).UTC()
+	}
+	startedAt := observedAt
+	if status != model.BotLoadActionRunning && event.DurationMs > 0 {
+		startedAt = observedAt.Add(-time.Duration(event.DurationMs) * time.Millisecond)
+	}
+	result := &model.BotLoadActionResult{
+		StressSessionID: *bot.StressSessionID, BotID: bot.ID, CohortKey: bot.CohortKey,
+		StepID: event.StepId, ActionRunID: event.ActionRunId, Attempt: int(event.Attempt), Status: status,
+		ErrorCode: event.ErrorCode, Message: event.Message, DurationMS: event.DurationMs,
+		CorrelationToken: event.CorrelationToken, StartedAt: startedAt,
+	}
+	if status != model.BotLoadActionRunning {
+		result.EndedAt = &observedAt
+		result.ResultJSON = truncateActionResultJSON(event.ResultJson)
+	}
+	return result
+}
+
+func validateActionEvent(event *workerpb.BotActionEvent) (model.BotLoadActionResultStatus, string) {
+	if event == nil {
+		return "", "action_event 为空"
+	}
+	if strings.TrimSpace(event.BotUuid) == "" || strings.TrimSpace(event.SessionUuid) == "" || strings.TrimSpace(event.StepId) == "" {
+		return "", "action_event 缺少 Bot、运行或步骤标识"
+	}
+	if _, err := uuid.Parse(event.ActionRunId); err != nil {
+		return "", "actionRunId 不是有效 UUID"
+	}
+	if event.Generation <= 0 || event.Attempt <= 0 || event.DurationMs < 0 {
+		return "", "action_event generation、attempt 或 duration 非法"
+	}
+	status, ok := actionResultStatus(event.Status)
+	if !ok {
+		return "", "动作状态不在冻结枚举内"
+	}
+	if event.ErrorCode != "" {
+		if _, ok := actionErrorCodes[event.ErrorCode]; !ok {
+			return "", "动作错误码不在冻结枚举内"
+		}
+	}
+	if status != model.BotLoadActionRunning && status != model.BotLoadActionSucceeded && event.ErrorCode == "" {
+		return "", "失败终态必须携带冻结错误码"
+	}
+	if event.ResultJson != "" && !json.Valid([]byte(event.ResultJson)) {
+		return "", "resultJson 不是有效 JSON"
+	}
+	return status, ""
+}
+
+func validateActionIdentity(bot *model.Bot, executorNodeID uint, expectedSessionUUID string, event *workerpb.BotActionEvent) string {
+	if bot.StressSessionID == nil || bot.StressSession == nil {
+		return "Bot 不属于压测运行"
+	}
+	if runtimeExecutorNodeID(bot) != executorNodeID {
+		return "action_event 来源执行节点不匹配"
+	}
+	if event.SessionUuid != expectedSessionUUID || bot.StressSession.UUID != event.SessionUuid {
+		return "action_event 运行标识不匹配"
+	}
+	if bot.DesiredStateGeneration != event.Generation {
+		return "action_event generation 与当前 Bot 不匹配"
+	}
+	return ""
+}
+
+func actionResultStatus(status string) (model.BotLoadActionResultStatus, bool) {
+	switch model.BotLoadActionResultStatus(strings.ToLower(strings.TrimSpace(status))) {
+	case model.BotLoadActionRunning, model.BotLoadActionSucceeded, model.BotLoadActionFailed,
+		model.BotLoadActionTimedOut, model.BotLoadActionCancelled:
+		return model.BotLoadActionResultStatus(strings.ToLower(strings.TrimSpace(status))), true
+	default:
+		return "", false
+	}
+}
+
+func actionIngestResult(decision ActionResultDecision, event *workerpb.BotActionEvent, diagnostic string) ActionResultIngestResult {
+	result := ActionResultIngestResult{Decision: decision, Diagnostic: diagnostic}
+	if event != nil {
+		result.ActionRunID, result.BotUUID = event.ActionRunId, event.BotUuid
+	}
+	return result
+}
+
+func truncateActionResultJSON(raw string) string {
+	if len([]byte(raw)) <= actionResultJSONLimit {
+		return raw
+	}
+	preview := raw
+	for len(preview) > 0 {
+		preview = trimUTF8Bytes(preview, len([]byte(preview))-512)
+		encoded, _ := json.Marshal(map[string]any{
+			"truncated": true, "originalBytes": len([]byte(raw)), "preview": preview,
+		})
+		if len(encoded) <= actionResultJSONLimit {
+			return string(encoded)
+		}
+	}
+	encoded, _ := json.Marshal(map[string]any{"truncated": true, "originalBytes": len([]byte(raw))})
+	return string(encoded)
+}
+
+func trimUTF8Bytes(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(value) <= limit {
+		return value
+	}
+	value = value[:limit]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
+}

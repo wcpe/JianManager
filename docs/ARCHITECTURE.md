@@ -217,7 +217,7 @@ Protobuf 定义位于 `proto/worker.proto`，包含：
   - 每个 `sessionUUID + executor node` 只有一条活动订阅；首次订阅与每次断流重连都严格先取 snapshot baseline、再开 stream。订阅槽带独立 generation，旧流迟到事件在进入 runtime 协调器前丢弃，避免旧订阅覆盖新 baseline
   - 普通 stream 事件必须按 desired generation、configHash、Bot Worker epoch generation 与 eventSeq 单调前进；完整 baseline 仍校验执行节点、session、desired generation 与 configHash，但允许用当前子进程的较低 epoch 重置旧基线。空 snapshot 同样是有效完整基线：活动 Bot 缺失项收敛为 `disconnected`，已有停止意图时收敛为 `stopped`，并重算批次 `connected_count`
   - `capacityGeneration` 只在 max/features、Worker/Bot Worker epoch 或 admission ready/unavailable 等**容量语义**变化时递增；active/connecting 只是即时利用率快照，不单独使 planToken 失效
-  - `BotFleetEvent.action_event` 与 ServerProbe MSPT p95 的 `mspt_p95_millis` proto/心跳字段已加性铺设；FR-351 只提供协议承载，可信动作语义和 ServerProbe p95 计算/接真分别属于 FR-352/353，不在此宣称已完成
+  - `BotFleetEvent.action_event` 已由 CP `ActionResultService` 按执行节点、session、Bot 与 desired generation 强校验后写入 `bot_load_action_results`：actionRunId 幂等创建 running，首个终态条件更新胜出，重复/迟到事件不改账本；result JSON 最大 16KiB，超限改存带 `truncated/originalBytes/preview` 的可识别元数据。普通挥击事件不形成追加明细。ServerProbe MSPT p95 的计算/接真仍属于 FR-353
 - 探针部署：DeployServerProbe（CP 内嵌 ServerProbe jar + 生成的 config.yml + 运行库缓存 `libraries_zip` 经 gRPC 下发，FR-010/FR-114；见 ADR-014/016）。Worker 写入实例 `plugins/` 并把缓存包解压到实例根 `libraries/`，**在线更新**（FR-068）复用本 RPC 推最新内嵌 jar 与缓存（下次重启生效，可选推送并重启），经 `GET/POST /instances/:id/probe/update`
 - 插件桥（FR-065；见 ADR-016）：StreamPluginEvents (server stream，CP 订阅某实例/全部探针经反向 WS 上报的事件流 connected/disconnected/heartbeat/玩家事件)、SendPluginCommand（CP 经 Worker 向探针下发治理/查询指令）、QueryServerState（查询子服全状态骨架）。地基阶段真实承载 connected/disconnected/heartbeat 与通道层，业务事件/治理执行语义留 FR-066/067
   - **JBIS 业务事件汇聚上行（FR-122；见 ADR-027/028）**：同一条 StreamPluginEvents 流复用承载 `domain` 非空的业务域事件（PluginEvent 的 `domain`/`dedup_key`/`raw_json` 字段，Worker 透传不消费语义）。CP 侧 `PlayerEventService` 据 `domain` 分流：玩家/监控事件走在线名册 + SSE，业务事件交 `BusinessEventService` 按 (domain,dedup_key) 去重落 `business_events` 通用信封，经济域(`economy`)再解析信封维护 `economy_balance_mirrors`(node→zone 维度、seq 单调)+`economy_ledger_entries`(审计)。探针侧由 mce `PlayerEconomyChangeEvent`/`PlayerEconomyCatchupEvent` 折算上报（覆盖 web 后台/跨服一切余额变更），currencyId Int→identifier 折算保证跨服聚合不串味。CP 插件无关、只认信封
@@ -479,6 +479,7 @@ Instance ──1:N──▶ Backup / Schedule / Bot / BotStressSession
 Bot ──N:1──▶ Node (executor_node_id, 可空；为空回退目标 Instance.node_id)
 BotStressSession ──1:N──▶ BotLoadBatch ──1:N──▶ Bot
 BotStressSession ──1:N──▶ Bot (stress_session_id, 可空)
+BotStressSession / Bot ──1:N──▶ BotLoadActionResult (action_run_id 唯一)
 Backup ──N:1──▶ Backup (parent_id, 增量备份链, V2)
 Backup ──N:1──▶ BackupStorage (storage_id, 远程存储位置, V2)
 Instance(proxy) ──M:N──▶ Instance(backend)   # V2 ServerRegistration: alias/priority/forced_host
@@ -511,6 +512,7 @@ AlertRule ──N:M──▶ AlertChannel               # V2 channel_ids(JSON �
 | instance_crash_snapshots (FR-313) | instance_id(FK, INDEX), occurred_at, exit_code(无法获知=-1), signal(Unix 信号名；Windows/非信号退出为空), duration_ms, tail_output(TEXT, ≤200 行/64KB Worker 侧截取)（进程非正常退出现场；Worker 经 ReportCrashSnapshot 上报，写入同事务按实例滚动只留最近 5 条，删实例级联清） |
 | bot_stress_sessions | uuid, instance_id(FK), name, name_prefix, status(pending/running/stopped/error), bot_count, behavior, config(JSON), orchestration_yaml(TEXT), orchestration_summary(JSON), allocation_plan(TEXT，服务端保存的确定性分片正文；不由客户端回传), succeeded, failed, last_error, started_at, ended_at |
 | bot_load_batches (FR-351) | uuid, stress_session_id(FK), executor_node_id(FK), ordinal, planned_count/accepted_count/connected_count/failed_count, state(planned/dispatching/running/stopped/failed), idempotency_key, connect_start_at, connect_interval_ms, last_error, started_at, ended_at；UNIQUE(stress_session_id,ordinal)，单批 planned_count≤50 |
+| bot_load_action_results (FR-352) | stress_session_id(FK), bot_id(FK), cohort_key, step_id, action_run_id(UNIQUE), attempt, status(running/succeeded/failed/timed_out/cancelled), error_code(冻结枚举), message, duration_ms, correlation_token(INDEX), started_at, ended_at, result_json(≤16KiB，超限带截断元数据)；仅记录动作开始与首终态，不逐条追加普通挥击 |
 | bots | uuid, instance_id(FK，目标实例/权限归属), stress_session_id(FK，可空), executor_node_id(FK，可空；为空回退目标实例节点), load_batch_id(FK，可空), name, status, worker_epoch/worker_epoch_generation, last_event_seq, last_seen_at/connected_at, desired_state_generation, config_hash, cohort_key, last_error, config(JSON), behavior, worker_id(仅兼容展示) |
 | backups | uuid, instance_id(FK), name, file_path, file_size_mb, type(0/1), mode(0 全量/1 增量, V2), status(0/1/2/3), parent_id(FK self, 备份链, V2), manifest(JSON 文件清单, V2), storage_id(FK, V2), storage_key(远程对象键, V2), checksum/checksum_algo(归档完整性, FR-171) |
 | process_metric_snapshots | node_uuid, instance_uuid, pid, name, cpu_percent, rss_bytes, read_bytes_per_sec, write_bytes_per_sec, user, command_summary(截断脱敏), sampled_at（受管实例进程 TOPN 短期快照，按 48h TTL 清理，FR-170） |

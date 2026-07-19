@@ -165,7 +165,7 @@ const (
 	BotLoadActionCancelled BotLoadActionResultStatus = "cancelled"
 )
 
-// BotLoadActionResult 是 FR-352 动作结果持久化骨架，服务接线留后续提交。
+// BotLoadActionResult 持久化场景动作开始与首个终态。
 type BotLoadActionResult struct {
 	ID               uint                      `gorm:"primaryKey" json:"id"`
 	StressSessionID  uint                      `gorm:"not null;index" json:"stressSessionId"`

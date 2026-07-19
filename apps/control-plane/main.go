@@ -35,6 +35,7 @@ type botLoadServiceBundle struct {
 	signer        *service.BotLoadPlanTokenSigner
 	preflight     *service.BotLoadPreflightService
 	execution     *service.BotLoadExecutionService
+	actionResults *service.ActionResultService
 	coordinator   *service.BotFleetRuntimeCoordinator
 	subscriptions *service.BotFleetSubscriptionManager
 }
@@ -50,14 +51,17 @@ func assembleBotLoadServices(db *gorm.DB, pool *cpgrpc.ClientPool, stableSecret 
 	}
 	preflight := service.NewBotLoadPreflightService(db, capacity, reservations, signer, nil)
 	execution := service.NewGRPCBotLoadExecutionService(db, capacity, reservations, signer, pool, nil, nil)
+	actionResults := service.NewActionResultService(db, nil)
 	coordinator := service.NewGRPCBotFleetRuntimeCoordinator(db, pool, nil, nil)
+	coordinator.SetActionEventHandler(actionResults)
 	coordinator.SetSnapshotReconciler(execution)
 	coordinator.SetRuntimeObserver(execution)
 	subscriptions := service.NewBotFleetSubscriptionManager(coordinator)
 	execution.SetFleetSubscriptionManager(subscriptions)
 	return &botLoadServiceBundle{
 		capacity: capacity, reservations: reservations, signer: signer,
-		preflight: preflight, execution: execution, coordinator: coordinator, subscriptions: subscriptions,
+		preflight: preflight, execution: execution, actionResults: actionResults,
+		coordinator: coordinator, subscriptions: subscriptions,
 	}, nil
 }
 

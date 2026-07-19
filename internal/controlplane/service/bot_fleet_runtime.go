@@ -33,6 +33,7 @@ const (
 	BotFleetRuntimeIgnoredDuplicateEvent    BotFleetRuntimeDecision = "ignored_duplicate_event"
 	BotFleetRuntimeIgnoredConcurrentUpdate  BotFleetRuntimeDecision = "ignored_concurrent_update"
 	BotFleetRuntimeIgnoredInvalidStatus     BotFleetRuntimeDecision = "ignored_invalid_status"
+	BotFleetRuntimeActionApplied            BotFleetRuntimeDecision = "action_applied"
 	BotFleetRuntimeIgnoredActionEvent       BotFleetRuntimeDecision = "ignored_action_event"
 	BotFleetRuntimeIgnoredStaleSubscription BotFleetRuntimeDecision = "ignored_stale_subscription"
 )
@@ -388,6 +389,11 @@ type BotFleetRuntimeObserver interface {
 	ReconcileBotFleetRuntimeState(ctx context.Context, sessionUUID string) error
 }
 
+// BotFleetActionEventHandler 消费类型化动作事件，不让动作载荷污染 Bot runtime 账本。
+type BotFleetActionEventHandler interface {
+	Ingest(ctx context.Context, executorNodeID uint, expectedSessionUUID string, event *workerpb.BotActionEvent) (ActionResultIngestResult, error)
+}
+
 type poolBotFleetRuntimeClient struct{ pool *cpgrpc.ClientPool }
 
 func (c poolBotFleetRuntimeClient) GetBotFleetSnapshot(ctx context.Context, nodeUUID, sessionUUID string) (*workerpb.GetBotFleetSnapshotResponse, error) {
@@ -424,11 +430,12 @@ type botFleetSnapshotCall struct {
 
 // BotFleetRuntimeCoordinator 协调 runtime 流、完整快照和有界去重，不启动全局后台守护。
 type BotFleetRuntimeCoordinator struct {
-	ingester     *BotFleetRuntimeService
-	client       BotFleetRuntimeClient
-	capacitySink BotFleetCapacityGenerationSink
-	reconciler   BotFleetSnapshotReconciler
-	observer     BotFleetRuntimeObserver
+	ingester      *BotFleetRuntimeService
+	client        BotFleetRuntimeClient
+	capacitySink  BotFleetCapacityGenerationSink
+	reconciler    BotFleetSnapshotReconciler
+	observer      BotFleetRuntimeObserver
+	actionHandler BotFleetActionEventHandler
 
 	mu            sync.Mutex
 	snapshotCalls map[string]*botFleetSnapshotCall
@@ -453,6 +460,19 @@ func (c *BotFleetRuntimeCoordinator) SetRuntimeObserver(observer BotFleetRuntime
 	c.observer = observer
 }
 
+// SetActionEventHandler 注入动作结果账本与后续场景事件协调入口。
+func (c *BotFleetRuntimeCoordinator) SetActionEventHandler(handler BotFleetActionEventHandler) {
+	c.actionHandler = handler
+}
+
+// ActionEventHandler 返回当前装配的动作事件处理器。
+func (c *BotFleetRuntimeCoordinator) ActionEventHandler() BotFleetActionEventHandler {
+	if c == nil {
+		return nil
+	}
+	return c.actionHandler
+}
+
 // SnapshotReconciler 返回当前装配的 desired 协调器。
 func (c *BotFleetRuntimeCoordinator) SnapshotReconciler() BotFleetSnapshotReconciler {
 	if c == nil {
@@ -475,13 +495,30 @@ func NewGRPCBotFleetRuntimeCoordinator(db *gorm.DB, pool *cpgrpc.ClientPool, cap
 	return NewBotFleetRuntimeCoordinator(ingester, poolBotFleetRuntimeClient{pool: pool}, capacitySink)
 }
 
-// HandleEvent 只消费 runtime_snapshot；action_event 留给后续动作结果服务。
+// HandleEvent 将 runtime_snapshot 与 action_event 分流到各自账本。
 func (c *BotFleetRuntimeCoordinator) HandleEvent(ctx context.Context, nodeID uint, nodeUUID, sessionUUID string, event *workerpb.BotFleetEvent) (BotFleetRuntimeResult, error) {
+	if event != nil && event.GetActionEvent() != nil {
+		return c.handleActionEvent(ctx, nodeID, sessionUUID, event.GetActionEvent())
+	}
 	result, observed, err := c.handleEvent(ctx, nodeID, nodeUUID, sessionUUID, event, false)
 	if err != nil || !observed {
 		return result, err
 	}
 	return result, c.observeRuntimeState(ctx, sessionUUID)
+}
+
+func (c *BotFleetRuntimeCoordinator) handleActionEvent(ctx context.Context, nodeID uint, sessionUUID string, event *workerpb.BotActionEvent) (BotFleetRuntimeResult, error) {
+	if c.actionHandler == nil {
+		return ignoredFleetEventResult(&workerpb.BotFleetEvent{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: event}}), nil
+	}
+	result, err := c.actionHandler.Ingest(ctx, nodeID, sessionUUID, event)
+	if err != nil {
+		return BotFleetRuntimeResult{}, err
+	}
+	if result.Decision == ActionResultApplied {
+		return runtimeResult(BotFleetRuntimeActionApplied, result.BotUUID, result.Diagnostic), nil
+	}
+	return runtimeResult(BotFleetRuntimeIgnoredActionEvent, result.BotUUID, result.Diagnostic), nil
 }
 
 func (c *BotFleetRuntimeCoordinator) handleEvent(ctx context.Context, nodeID uint, nodeUUID, sessionUUID string, event *workerpb.BotFleetEvent, observeSnapshot bool) (BotFleetRuntimeResult, bool, error) {
