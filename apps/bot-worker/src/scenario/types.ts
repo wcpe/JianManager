@@ -50,6 +50,11 @@ export interface ScenarioBotCapabilities {
   clearPathfinderGoal(): void
 }
 
+export interface ScenarioCancelToken {
+  readonly cancelled: boolean
+  readonly reason?: string
+}
+
 export interface ScenarioActionContext {
   botId: string
   botName: string
@@ -63,6 +68,7 @@ export interface ScenarioActionContext {
   actionRunId: string
   startedAt: number
   deadline: number
+  cancelToken: ScenarioCancelToken
   capabilities: ScenarioBotCapabilities
   currentCorrelationToken(): string | undefined
   ensureCorrelationToken(): string

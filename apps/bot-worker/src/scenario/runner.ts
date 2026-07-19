@@ -67,6 +67,7 @@ export class ScenarioRunner {
   private retryAt: number | undefined
   private correlationToken: string | undefined
   private correlationCounter = 0
+  private readonly cancelToken = { cancelled: false, reason: undefined as string | undefined }
   private started = false
   private terminal = false
   private disposed = false
@@ -191,7 +192,8 @@ export class ScenarioRunner {
       botId: this.options.botId, botName: this.options.botName, username: this.options.username,
       runId: this.options.runId, generation: this.options.generation, cohortKey: this.options.cohortKey,
       stageIndex: this.options.stageIndex ?? 0, step, attempt: this.attempt, actionRunId,
-      startedAt: now, deadline: now + step.timeoutMs, capabilities: this.options.capabilities,
+      startedAt: now, deadline: now + step.timeoutMs, cancelToken: this.cancelToken,
+      capabilities: this.options.capabilities,
       currentCorrelationToken: () => this.correlationToken,
       ensureCorrelationToken: () => this.ensureCorrelationToken(),
       newCorrelationToken: () => this.newCorrelationToken(),
@@ -242,6 +244,8 @@ export class ScenarioRunner {
 
   private async cancelInternal(reason: string, now: number): Promise<void> {
     if (this.terminal || this.disposed) return
+    this.cancelToken.cancelled = true
+    this.cancelToken.reason = reason
     if (this.current) {
       await this.ignoreErrors(() => this.current!.action.cancel(this.current!.context, reason))
       this.emit('cancelled', {
@@ -264,6 +268,10 @@ export class ScenarioRunner {
 
   private async disposeInternal(): Promise<void> {
     if (this.disposed) return
+    if (!this.terminal) {
+      this.cancelToken.cancelled = true
+      this.cancelToken.reason = 'Runner 已释放'
+    }
     await this.cleanupCurrent()
     this.retryAt = undefined
     this.disposed = true

@@ -77,12 +77,15 @@ test('Runner 对外部等待和屏障使用冻结超时错误码', async () => {
 })
 
 test('Runner cancel/dispose 清理动作与 pathfinder 且不会重复终态', async () => {
-  const calls = { cancel: 0, dispose: 0 }
+  const calls = { cancel: 0, dispose: 0, token: null }
   const { options, capabilities, events } = runnerOptions({
     actionFactory: () => ({
       async start() { return { state: 'running' } },
       async tick() { return { state: 'running' } },
-      async cancel() { calls.cancel++ },
+      async cancel(context) {
+        calls.cancel++
+        calls.token = { ...context.cancelToken }
+      },
       async dispose() { calls.dispose++ },
     }),
   })
@@ -94,6 +97,7 @@ test('Runner cancel/dispose 清理动作与 pathfinder 且不会重复终态', a
   await runner.dispose()
 
   assert.equal(calls.cancel, 1)
+  assert.deepEqual(calls.token, { cancelled: true, reason: '用户停止' })
   assert.equal(calls.dispose, 1)
   assert.equal(capabilities.clearGoalCount, 1)
   assert.equal(events.filter((event) => event.status === 'cancelled').length, 1)
