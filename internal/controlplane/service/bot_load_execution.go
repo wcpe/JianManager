@@ -83,6 +83,7 @@ type botLoadStartPreparation struct {
 	hasBatch          bool
 	cohortAssignments []string
 	cohortJSON        map[string]string
+	cohortBudgetMS    map[string]int64
 }
 
 type botLoadDispatchItem struct {
@@ -290,7 +291,7 @@ func (s *BotLoadExecutionService) prepareStart(ctx context.Context, sessionID ui
 	if err != nil {
 		return nil, err
 	}
-	cohortAssignments, cohortJSON, err := prepareBotLoadScenarioAssignments(session)
+	cohortAssignments, cohortJSON, cohortBudgetMS, err := prepareBotLoadScenarioAssignments(session)
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +304,7 @@ func (s *BotLoadExecutionService) prepareStart(ctx context.Context, sessionID ui
 	}
 	return &botLoadStartPreparation{
 		session: session, plan: plan, config: config, hasBatch: hasBatch,
-		cohortAssignments: cohortAssignments, cohortJSON: cohortJSON,
+		cohortAssignments: cohortAssignments, cohortJSON: cohortJSON, cohortBudgetMS: cohortBudgetMS,
 	}, nil
 }
 
@@ -374,23 +375,27 @@ func parseBotLoadConnectionConfig(raw string) (botLoadConnectionConfig, error) {
 	return config, nil
 }
 
-func prepareBotLoadScenarioAssignments(session *model.BotStressSession) ([]string, map[string]string, error) {
+func prepareBotLoadScenarioAssignments(session *model.BotStressSession) ([]string, map[string]string, map[string]int64, error) {
 	if session == nil || strings.TrimSpace(session.ScenarioSnapshot) == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	scenario, err := ParseScenarioSnapshot(session.ScenarioSnapshot)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	assignments, err := AssignScenarioCohorts(scenario.Seed, session.BotCount, scenario.Cohorts)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	cohortJSON, err := ScenarioCohortJSONMap(scenario)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return assignments, cohortJSON, nil
+	cohortBudgetMS, err := scenarioCohortBudgetMSMap(scenario)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return assignments, cohortJSON, cohortBudgetMS, nil
 }
 
 func (s *BotLoadExecutionService) verifyStartCapacity(ctx context.Context, session *model.BotStressSession, plan *BotLoadAllocationPlan, token string, hasBatch bool) error {
@@ -591,13 +596,17 @@ func expectedBotLoadBots(prepared *botLoadStartPreparation, batches map[int]mode
 		firstOrdinal := botLoadAllocationFirstOrdinal(prepared.plan, allocation.Ordinal)
 		for localIndex := 0; localIndex < allocation.PlannedCount; localIndex++ {
 			botOrdinal := firstOrdinal + localIndex
-			bots = append(bots, newPlannedBotLoadBot(prepared, batch, allocation, botOrdinal, localIndex))
+			bot, err := newPlannedBotLoadBot(prepared, batch, allocation, botOrdinal, localIndex)
+			if err != nil {
+				return nil, err
+			}
+			bots = append(bots, bot)
 		}
 	}
 	return bots, nil
 }
 
-func newPlannedBotLoadBot(prepared *botLoadStartPreparation, batch model.BotLoadBatch, allocation BotLoadAllocation, botOrdinal, localIndex int) model.Bot {
+func newPlannedBotLoadBot(prepared *botLoadStartPreparation, batch model.BotLoadBatch, allocation BotLoadAllocation, botOrdinal, localIndex int) (model.Bot, error) {
 	executorNodeID, batchID, sessionID := allocation.ExecutorNodeID, batch.ID, prepared.session.ID
 	cohortKey := ""
 	if botOrdinal <= len(prepared.cohortAssignments) {
@@ -610,11 +619,15 @@ func newPlannedBotLoadBot(prepared *botLoadStartPreparation, batch model.BotLoad
 		Status: model.BotStatusPending, DesiredStateGeneration: 1, Config: prepared.session.Config,
 		Behavior: prepared.session.Behavior, WorkerID: allocation.ExecutorNodeUUID, CohortKey: cohortKey,
 	}
-	assignment := buildRunningBotLoadAssignment(
-		&bot, prepared.session, &prepared.session.Instance, prepared.config, allocation, localIndex, botOrdinal, prepared.cohortJSON[cohortKey],
+	assignment, err := buildRunningBotLoadAssignment(
+		&bot, prepared.session, &prepared.session.Instance, prepared.config, allocation, localIndex, botOrdinal,
+		prepared.cohortJSON[cohortKey], prepared.cohortBudgetMS[cohortKey],
 	)
+	if err != nil {
+		return model.Bot{}, err
+	}
 	bot.ConfigHash = botLoadAssignmentConfigHash(assignment)
-	return bot
+	return bot, nil
 }
 
 func stableBotLoadBotName(prefix, sessionUUID string, index int) string {
@@ -669,20 +682,25 @@ func equalUintPointers(left, right *uint) bool {
 	return *left == *right
 }
 
-func buildRunningBotLoadAssignment(bot *model.Bot, session *model.BotStressSession, instance *model.Instance, config botLoadConnectionConfig, allocation BotLoadAllocation, localIndex, botOrdinal int, scenarioJSON string) *workerpb.BotAssignment {
+func buildRunningBotLoadAssignment(bot *model.Bot, session *model.BotStressSession, instance *model.Instance, config botLoadConnectionConfig, allocation BotLoadAllocation, localIndex, botOrdinal int, scenarioJSON string, cohortBudgetMS int64) (*workerpb.BotAssignment, error) {
 	username := config.Username
 	if username == "" {
 		username = sanitizeMCUsername(bot.Name)
 	}
-	scenarioJSON = scenarioRuntimeJSON(scenarioJSON, botOrdinal, botLoadScenarioRunDeadlineUnixMS(session))
+	connectNotBefore := allocation.ConnectStartAt.Add(time.Duration(localIndex*allocation.ConnectIntervalMS) * time.Millisecond).UnixMilli()
+	runDeadline, err := botLoadScenarioRunDeadlineUnixMS(session, connectNotBefore, cohortBudgetMS)
+	if err != nil {
+		return nil, err
+	}
+	scenarioJSON = scenarioRuntimeJSON(scenarioJSON, botOrdinal, runDeadline)
 	return &workerpb.BotAssignment{
 		BotUuid: bot.UUID, InstanceUuid: instance.UUID, SessionUuid: session.UUID,
 		Generation: bot.DesiredStateGeneration, DesiredState: "running", ConfigHash: bot.ConfigHash,
 		Name: bot.Name, Host: config.Server, Port: int32(config.Port), Username: username,
 		Version: config.Version, Auth: config.Auth, CohortKey: bot.CohortKey, ScenarioJson: scenarioJSON,
-		ConnectNotBeforeUnixMs: allocation.ConnectStartAt.Add(time.Duration(localIndex*allocation.ConnectIntervalMS) * time.Millisecond).UnixMilli(),
+		ConnectNotBeforeUnixMs: connectNotBefore,
 		CorrelationSeed:        stableBotLoadDigest(session.UUID + "|" + bot.UUID + "|correlation"),
-	}
+	}, nil
 }
 
 func scenarioRuntimeJSON(cohortJSON string, botOrdinal int, runDeadlineUnixMS int64) string {
@@ -707,43 +725,129 @@ func scenarioRuntimeJSON(cohortJSON string, botOrdinal int, runDeadlineUnixMS in
 	return string(raw)
 }
 
-func botLoadScenarioRunDeadlineUnixMS(session *model.BotStressSession) int64 {
-	if session == nil || session.StartedAt == nil || strings.TrimSpace(session.ScenarioSnapshot) == "" {
-		return 0
+const maxScenarioBudgetMS = int64(^uint64(0) >> 1)
+
+func botLoadScenarioRunDeadlineUnixMS(session *model.BotStressSession, connectNotBefore, cohortBudgetMS int64) (int64, error) {
+	if cohortBudgetMS <= 0 {
+		return 0, nil
 	}
-	scenario, err := ParseScenarioSnapshot(session.ScenarioSnapshot)
-	if err != nil {
-		return 0
+	if session == nil || session.StartedAt == nil {
+		return 0, fmt.Errorf("计算场景截止时间失败: started_at 为空")
 	}
-	durationMS := scenarioObservationDurationMS(scenario)
-	if durationMS <= 0 {
-		return 0
+	baseline := session.StartedAt.UTC().UnixMilli()
+	if connectNotBefore > baseline {
+		baseline = connectNotBefore
 	}
-	return session.StartedAt.UTC().Add(time.Duration(durationMS) * time.Millisecond).UnixMilli()
+	if baseline > maxScenarioBudgetMS-cohortBudgetMS {
+		return 0, fmt.Errorf("计算场景截止时间失败: 毫秒时间戳溢出")
+	}
+	return baseline + cohortBudgetMS, nil
 }
 
-func scenarioObservationDurationMS(scenario *ScenarioV2) int {
-	durationMS := 0
-	if scenario == nil {
-		return durationMS
-	}
+func scenarioCohortBudgetMSMap(scenario *ScenarioV2) (map[string]int64, error) {
+	budgets := make(map[string]int64, len(scenario.Cohorts))
 	for _, cohort := range scenario.Cohorts {
-		for _, action := range cohort.Steps {
-			if action.Base() == nil || !action.Base().ObservationStep {
-				continue
-			}
-			durationMS = max(durationMS, scenarioActionDurationMS(action))
+		budget, err := scenarioCohortWorstCaseBudgetMS(cohort)
+		if err != nil {
+			return nil, fmt.Errorf("计算 cohort %s 场景预算失败: %w", cohort.Key, err)
+		}
+		budgets[cohort.Key] = budget
+	}
+	return budgets, nil
+}
+
+func scenarioCohortWorstCaseBudgetMS(cohort ScenarioCohort) (int64, error) {
+	stepBudgets := make([]int64, len(cohort.Steps))
+	stepIndexes := make(map[string]int, len(cohort.Steps))
+	var total int64
+	for index, action := range cohort.Steps {
+		budget, err := scenarioStepWorstCaseBudgetMS(action)
+		if err != nil {
+			return 0, err
+		}
+		stepBudgets[index], stepIndexes[action.Base().ID] = budget, index
+		total, err = addScenarioBudget(total, budget)
+		if err != nil {
+			return 0, err
 		}
 	}
-	return durationMS
+	for index, action := range cohort.Steps {
+		if action.RespawnAndRejoin == nil {
+			continue
+		}
+		entryIndex := stepIndexes[action.RespawnAndRejoin.EntryStepID]
+		if entryIndex > index {
+			continue
+		}
+		extra, err := repeatedScenarioSegmentBudget(stepBudgets[entryIndex:index+1], int64(*action.Base().MaxAttempts))
+		if err != nil {
+			return 0, err
+		}
+		total, err = addScenarioBudget(total, extra)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return total, nil
 }
 
-func scenarioActionDurationMS(action ScenarioAction) int {
+func scenarioStepWorstCaseBudgetMS(action ScenarioAction) (int64, error) {
+	base := action.Base()
+	if base == nil || base.TimeoutMS == nil || base.MaxAttempts == nil || base.RetryBackoffMS == nil {
+		return 0, fmt.Errorf("动作 %s 缺少规范化预算字段", action.Type())
+	}
+	attemptDuration := int64(*base.TimeoutMS)
+	if duration := scenarioActionDurationMS(action); duration > 0 && duration < attemptDuration {
+		attemptDuration = duration
+	}
+	attempts := int64(*base.MaxAttempts)
+	attemptBudget, err := multiplyScenarioBudget(attemptDuration, attempts)
+	if err != nil {
+		return 0, err
+	}
+	backoffBudget, err := multiplyScenarioBudget(int64(*base.RetryBackoffMS), attempts-1)
+	if err != nil {
+		return 0, err
+	}
+	return addScenarioBudget(attemptBudget, backoffBudget)
+}
+
+func repeatedScenarioSegmentBudget(stepBudgets []int64, repeats int64) (int64, error) {
+	var segment int64
+	var err error
+	for _, budget := range stepBudgets {
+		segment, err = addScenarioBudget(segment, budget)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return multiplyScenarioBudget(segment, repeats)
+}
+
+func addScenarioBudget(left, right int64) (int64, error) {
+	if left < 0 || right < 0 || left > maxScenarioBudgetMS-right {
+		return 0, fmt.Errorf("场景预算溢出")
+	}
+	return left + right, nil
+}
+
+func multiplyScenarioBudget(value, factor int64) (int64, error) {
+	if value < 0 || factor < 0 || (factor > 0 && value > maxScenarioBudgetMS/factor) {
+		return 0, fmt.Errorf("场景预算溢出")
+	}
+	return value * factor, nil
+}
+
+func scenarioActionDurationMS(action ScenarioAction) int64 {
 	switch action.Type() {
 	case ScenarioActionRoamInArea:
-		return action.RoamInArea.DurationMS
+		return int64(action.RoamInArea.DurationMS)
 	case ScenarioActionAttackUntil:
-		return action.AttackUntil.Stop.DurationMS
+		return int64(action.AttackUntil.Stop.DurationMS)
+	case ScenarioActionWait:
+		return int64(action.Wait.DurationMS)
+	case ScenarioActionLegacyBehavior:
+		return int64(action.LegacyBehavior.DurationMS)
 	default:
 		return 0
 	}
@@ -832,12 +936,16 @@ func (s *BotLoadExecutionService) dispatchAllocation(ctx context.Context, sessio
 	if err != nil || stopped {
 		return err
 	}
-	_, cohortJSON, err := prepareBotLoadScenarioAssignments(session)
+	_, cohortJSON, cohortBudgetMS, err := prepareBotLoadScenarioAssignments(session)
 	if err != nil {
 		lastErr := structuredBotLoadError("SCENARIO_INVALID", "conflict", err.Error())
 		return s.failBotLoadBatchWithoutItems(ctx, batch, lastErr)
 	}
-	request := buildStartBotLoadBatchRequest(session, plan, config, allocation, bots, cohortJSON)
+	request, err := buildStartBotLoadBatchRequest(session, plan, config, allocation, bots, cohortJSON, cohortBudgetMS)
+	if err != nil {
+		lastErr := structuredBotLoadError("SCENARIO_INVALID", "conflict", err.Error())
+		return s.failBotLoadBatchWithoutItems(ctx, batch, lastErr)
+	}
 	response, rpcErr := s.applyBotLoadBatch(ctx, allocation.ExecutorNodeUUID, request)
 	items := normalizeBotLoadDispatchItems(bots, request, response, rpcErr)
 	if err := s.persistStartBatchResult(ctx, batch, items); err != nil {
@@ -899,22 +1007,26 @@ func botLoadAllocationLocalIndex(plan *BotLoadAllocationPlan, allocationOrdinal,
 	return max(0, botOrdinal-botLoadAllocationFirstOrdinal(plan, allocationOrdinal))
 }
 
-func buildStartBotLoadBatchRequest(session *model.BotStressSession, plan *BotLoadAllocationPlan, config botLoadConnectionConfig, allocation BotLoadAllocation, bots []model.Bot, cohortJSON map[string]string) *workerpb.ApplyBotBatchRequest {
+func buildStartBotLoadBatchRequest(session *model.BotStressSession, plan *BotLoadAllocationPlan, config botLoadConnectionConfig, allocation BotLoadAllocation, bots []model.Bot, cohortJSON map[string]string, cohortBudgetMS map[string]int64) (*workerpb.ApplyBotBatchRequest, error) {
 	assignments := make([]*workerpb.BotAssignment, 0, len(bots))
 	ordinals := stableBotLoadOrdinals(session.UUID, plan.TargetBots)
 	for index := range bots {
 		botOrdinal := ordinals[bots[index].UUID]
 		localIndex := botLoadAllocationLocalIndex(plan, allocation.Ordinal, botOrdinal)
-		assignment := buildRunningBotLoadAssignment(
-			&bots[index], session, &session.Instance, config, allocation, localIndex, botOrdinal, cohortJSON[bots[index].CohortKey],
+		assignment, err := buildRunningBotLoadAssignment(
+			&bots[index], session, &session.Instance, config, allocation, localIndex, botOrdinal,
+			cohortJSON[bots[index].CohortKey], cohortBudgetMS[bots[index].CohortKey],
 		)
+		if err != nil {
+			return nil, err
+		}
 		assignment.ConfigHash = bots[index].ConfigHash
 		assignments = append(assignments, assignment)
 	}
 	return &workerpb.ApplyBotBatchRequest{
 		BatchId: allocation.BatchID, IdempotencyKey: allocation.IdempotencyKey,
 		ExpectedCapacityGeneration: botLoadPlanGeneration(plan, allocation.ExecutorNodeID), Assignments: assignments,
-	}
+	}, nil
 }
 
 func botLoadPlanGeneration(plan *BotLoadAllocationPlan, nodeID uint) int64 {

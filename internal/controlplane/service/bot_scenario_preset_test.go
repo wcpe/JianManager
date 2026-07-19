@@ -11,7 +11,7 @@ func TestBuildScenarioPreset_TowerDefenseCoreProducesValidScenarioV2(t *testing.
 	seed := int64(20260719)
 	lobbyRadius, combatRadius := 30.0, 2.0
 	scenario, err := BuildScenarioPreset(TowerDefenseCorePresetKey, TowerDefenseCorePresetParams{
-		Seed: &seed, JoinCommand: "/tower join {{roomKey}} {{correlationToken}}",
+		Seed: &seed, RoomKey: "room-1", JoinCommand: "/tower join {{roomKey}} {{correlationToken}}",
 		LobbyCenter: &ScenarioPosition{X: 10, Y: 64, Z: -5}, LobbyRadius: &lobbyRadius,
 		CombatPosition: &ScenarioPosition{X: 100, Y: 65, Z: 100}, CombatRadius: &combatRadius,
 		CombatAreaID: "combat-zone-a", MonsterTypes: []string{"zombie", "skeleton"}, AttackRadius: &lobbyRadius,
@@ -31,6 +31,8 @@ func TestBuildScenarioPreset_TowerDefenseCoreProducesValidScenarioV2(t *testing.
 		ScenarioActionBarrier, ScenarioActionWaitProbeEvent, ScenarioActionMoveToAndWait,
 		ScenarioActionAttackUntil,
 	}, actionTypes(scenario.Cohorts[1]))
+	require.Equal(t, "/tower join room-1 {{correlationToken}}", scenario.Cohorts[1].Steps[1].SendCommand.Command)
+	require.NotContains(t, scenario.Cohorts[1].Steps[1].SendCommand.Command, "{{roomKey}}")
 	require.True(t, scenario.Cohorts[1].Steps[6].Base().ObservationStep)
 	require.Equal(t, "area_arrived", scenario.Cohorts[1].Steps[5].MoveToAndWait.RequireProbeEvent)
 	require.Equal(t, []string{"zombie", "skeleton"}, scenario.Cohorts[1].Steps[6].AttackUntil.Selector.Types)
@@ -52,7 +54,7 @@ func TestBuildScenarioPreset_TowerDefenseCoreRequiresBusinessParametersWithPaths
 	seed := int64(1)
 	radius := 2.0
 	valid := TowerDefenseCorePresetParams{
-		Seed: &seed, JoinCommand: "/join {{correlationToken}}", LobbyCenter: &ScenarioPosition{}, LobbyRadius: &radius,
+		Seed: &seed, RoomKey: "room-a", JoinCommand: "/join {{roomKey}} {{correlationToken}}", LobbyCenter: &ScenarioPosition{}, LobbyRadius: &radius,
 		CombatPosition: &ScenarioPosition{}, CombatRadius: &radius, CombatAreaID: "area", MonsterTypes: []string{"zombie"}, AttackRadius: &radius,
 	}
 	tests := []struct {
@@ -61,8 +63,12 @@ func TestBuildScenarioPreset_TowerDefenseCoreRequiresBusinessParametersWithPaths
 		edit func(*TowerDefenseCorePresetParams)
 	}{
 		{name: "seed", path: "params.seed", edit: func(p *TowerDefenseCorePresetParams) { p.Seed = nil }},
+		{name: "房间标识", path: "params.roomKey", edit: func(p *TowerDefenseCorePresetParams) { p.RoomKey = "" }},
+		{name: "房间标识包含空白", path: "params.roomKey", edit: func(p *TowerDefenseCorePresetParams) { p.RoomKey = "room a" }},
+		{name: "房间标识包含模板", path: "params.roomKey", edit: func(p *TowerDefenseCorePresetParams) { p.RoomKey = "{{botName}}" }},
 		{name: "命令", path: "params.joinCommand", edit: func(p *TowerDefenseCorePresetParams) { p.JoinCommand = "" }},
-		{name: "命令缺少关联占位符", path: "params.joinCommand", edit: func(p *TowerDefenseCorePresetParams) { p.JoinCommand = "/join room-a" }},
+		{name: "命令缺少房间占位符", path: "params.joinCommand", edit: func(p *TowerDefenseCorePresetParams) { p.JoinCommand = "/join room-a {{correlationToken}}" }},
+		{name: "命令缺少关联占位符", path: "params.joinCommand", edit: func(p *TowerDefenseCorePresetParams) { p.JoinCommand = "/join {{roomKey}}" }},
 		{name: "主城坐标", path: "params.lobbyCenter", edit: func(p *TowerDefenseCorePresetParams) { p.LobbyCenter = nil }},
 		{name: "主城半径", path: "params.lobbyRadius", edit: func(p *TowerDefenseCorePresetParams) { p.LobbyRadius = nil }},
 		{name: "战斗坐标", path: "params.combatPosition", edit: func(p *TowerDefenseCorePresetParams) { p.CombatPosition = nil }},

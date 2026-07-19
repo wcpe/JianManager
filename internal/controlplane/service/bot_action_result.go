@@ -289,6 +289,12 @@ func validateActionEvent(event *workerpb.BotActionEvent) (model.BotLoadActionRes
 	if _, err := uuid.Parse(event.ActionRunId); err != nil {
 		return "", "actionRunId 不是有效 UUID"
 	}
+	if strings.TrimSpace(event.CorrelationToken) == "" {
+		return "", "correlationToken 不能为空"
+	}
+	if _, err := uuid.Parse(event.CorrelationToken); err != nil {
+		return "", "correlationToken 不是有效 UUID"
+	}
 	if event.Generation <= 0 || event.Attempt <= 0 || event.DurationMs < 0 {
 		return "", "action_event generation、attempt 或 duration 非法"
 	}

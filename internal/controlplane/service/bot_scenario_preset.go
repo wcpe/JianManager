@@ -1,6 +1,10 @@
 package service
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 const TowerDefenseCorePresetKey = "tower-defense-core-v1"
 
@@ -14,6 +18,7 @@ const (
 // TowerDefenseCorePresetParams 只承载用户环境相关的业务值，不提供命令、坐标或怪物默认值。
 type TowerDefenseCorePresetParams struct {
 	Seed           *int64
+	RoomKey        string
 	JoinCommand    string
 	LobbyCenter    *ScenarioPosition
 	LobbyRadius    *float64
@@ -32,6 +37,7 @@ func BuildScenarioPreset(key string, params TowerDefenseCorePresetParams) (*Scen
 	if err := validateTowerDefensePresetParams(params); err != nil {
 		return nil, err
 	}
+	params.JoinCommand = strings.ReplaceAll(params.JoinCommand, "{{roomKey}}", params.RoomKey)
 	scenario := &ScenarioV2{
 		Version: 2, Seed: *params.Seed, seedPresent: true,
 		Cohorts: []ScenarioCohort{
@@ -90,6 +96,18 @@ func observedScenarioActionBase(id string, actionType ScenarioActionType) Scenar
 	return base
 }
 
+func validTowerDefenseRoomKey(value string) bool {
+	if !utf8.ValidString(value) || utf8.RuneCountInString(value) < 1 || utf8.RuneCountInString(value) > 64 {
+		return false
+	}
+	if strings.Contains(value, "{{") || strings.Contains(value, "}}") {
+		return false
+	}
+	return !strings.ContainsFunc(value, func(r rune) bool {
+		return unicode.IsSpace(r) || unicode.IsControl(r)
+	})
+}
+
 func validateTowerDefensePresetParams(params TowerDefenseCorePresetParams) error {
 	checks := []struct {
 		missing bool
@@ -97,7 +115,9 @@ func validateTowerDefensePresetParams(params TowerDefenseCorePresetParams) error
 		message string
 	}{
 		{params.Seed == nil, "params.seed", "必须填写固定随机种子"},
+		{!validTowerDefenseRoomKey(params.RoomKey), "params.roomKey", "必须为 1..64 字符且不含空白、控制符或模板语法"},
 		{strings.TrimSpace(params.JoinCommand) == "", "params.joinCommand", "必须填写进房命令"},
+		{!strings.Contains(params.JoinCommand, "{{roomKey}}"), "params.joinCommand", "必须包含 {{roomKey}} 房间占位符"},
 		{!strings.Contains(params.JoinCommand, "{{correlationToken}}"), "params.joinCommand", "必须包含 {{correlationToken}} 关联占位符"},
 		{params.LobbyCenter == nil, "params.lobbyCenter", "必须填写主城坐标"},
 		{params.LobbyRadius == nil, "params.lobbyRadius", "必须填写主城漫游半径"},

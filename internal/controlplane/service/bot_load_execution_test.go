@@ -300,8 +300,29 @@ func encodeBotLoadAllocationPlan(plan BotLoadAllocationPlan) (string, error) {
 	return string(raw), err
 }
 
+func setBotLoadExecutionScenario(t *testing.T, h *botLoadExecutionHarness, raw string) *ScenarioV2 {
+	t.Helper()
+	scenario, err := ParseScenarioV2([]byte(raw))
+	require.NoError(t, err)
+	snapshot, err := CanonicalScenarioSnapshot(scenario, false)
+	require.NoError(t, err)
+	require.NoError(t, h.db.Model(h.session).Update("scenario_snapshot", snapshot).Error)
+	h.session.ScenarioSnapshot = snapshot
+	return scenario
+}
+
+func assignmentRunDeadlineUnixMS(t *testing.T, assignment *workerpb.BotAssignment) int64 {
+	t.Helper()
+	var envelope struct {
+		RunDeadlineUnixMS int64 `json:"runDeadlineUnixMs"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(assignment.ScenarioJson), &envelope))
+	return envelope.RunDeadlineUnixMS
+}
+
 func TestBotLoadExecutionStart_Creates500BotsAcrossTenBatches(t *testing.T) {
 	h := newBotLoadExecutionHarness(t, []int{50, 50, 50, 50, 50, 50, 50, 50, 50, 50}, 500, nil)
+	setBotLoadExecutionScenario(t, h, `{"version":2,"seed":20260719,"cohorts":[{"key":"all","percent":100,"steps":[{"id":"observe","type":"roam_in_area","observationStep":true,"durationMs":1000,"area":{"type":"radius","center":{"x":0,"y":64,"z":0},"radius":2}}]}]}`)
 
 	snapshot, err := h.service.Start(context.Background(), h.session.ID, h.token)
 	require.NoError(t, err)
@@ -337,7 +358,7 @@ func TestBotLoadExecutionStart_Creates500BotsAcrossTenBatches(t *testing.T) {
 		require.Equal(t, int64(1), bot.DesiredStateGeneration)
 		require.Len(t, bot.ConfigHash, 64)
 		require.Equal(t, h.session.Config, bot.Config)
-		require.Equal(t, "", bot.CohortKey)
+		require.Equal(t, "all", bot.CohortKey)
 		require.Equal(t, model.BotStatusConnecting, bot.Status)
 	}
 
@@ -357,6 +378,7 @@ func TestBotLoadExecutionStart_Creates500BotsAcrossTenBatches(t *testing.T) {
 			require.Equal(t, "offline", assignment.Auth)
 			require.Equal(t, h.session.UUID, assignment.SessionUuid)
 			require.NotEqual(t, "connected", assignment.DesiredState)
+			require.Equal(t, int64(1000), assignmentRunDeadlineUnixMS(t, assignment)-assignment.ConnectNotBeforeUnixMs)
 		}
 	}
 	_, reserved := h.reservations.Lease(h.session.ID)
@@ -373,7 +395,7 @@ func TestBotLoadExecutionStart_MaterializesStableCohortAndScenarioAssignments(t 
 	existingStart := h.clock.Now().Add(-time.Minute).UTC()
 	require.NoError(t, h.db.Model(h.session).Updates(map[string]any{
 		"scenario_snapshot": scenarioSnapshot,
-		"started_at":       existingStart,
+		"started_at":        existingStart,
 	}).Error)
 	h.session.ScenarioSnapshot = scenarioSnapshot
 	h.session.StartedAt = &existingStart
@@ -395,7 +417,6 @@ func TestBotLoadExecutionStart_MaterializesStableCohortAndScenarioAssignments(t 
 	}
 	calls := h.dispatcher.Calls()
 	require.Len(t, calls, 1)
-	var runDeadlineUnixMS int64
 	for _, assignment := range calls[0].request.Assignments {
 		bot := byUUID[assignment.BotUuid]
 		require.Equal(t, bot.CohortKey, assignment.CohortKey)
@@ -414,10 +435,7 @@ func TestBotLoadExecutionStart_MaterializesStableCohortAndScenarioAssignments(t 
 		require.Equal(t, botLoadOrdinalFromUUID(h.session.UUID, h.session.BotCount, assignment.BotUuid), envelope.BotOrdinal)
 		require.Greater(t, envelope.BotOrdinal, 0)
 		require.Greater(t, envelope.RunDeadlineUnixMS, existingStart.UnixMilli())
-		if runDeadlineUnixMS == 0 {
-			runDeadlineUnixMS = envelope.RunDeadlineUnixMS
-		}
-		require.Equal(t, runDeadlineUnixMS, envelope.RunDeadlineUnixMS)
+		require.Equal(t, int64(1000), envelope.RunDeadlineUnixMS-assignment.ConnectNotBeforeUnixMs)
 		require.Equal(t, bot.CohortKey, envelope.Scenario.Key)
 		require.NotEmpty(t, envelope.Scenario.Steps)
 		require.Equal(t, assignment.ConfigHash, botLoadAssignmentConfigHash(assignment))
@@ -436,6 +454,93 @@ func TestBotLoadExecutionStart_MaterializesStableCohortAndScenarioAssignments(t 
 	for _, bot := range replayed {
 		require.Equal(t, firstCohorts[bot.UUID], bot.CohortKey)
 	}
+
+	h.clock.Advance(30 * time.Minute)
+	loaded, err := h.service.loadSession(context.Background(), h.session.ID)
+	require.NoError(t, err)
+	var ordered []model.Bot
+	require.NoError(t, h.db.Where("stress_session_id = ?", h.session.ID).Order("id ASC").Find(&ordered).Error)
+	_, cohortJSON, cohortBudgets, err := prepareBotLoadScenarioAssignments(loaded)
+	require.NoError(t, err)
+	rebuilt, err := buildStartBotLoadBatchRequest(loaded, &h.plan, botLoadConnectionConfig{Server: "mc.example.test", Port: 25570, Auth: "offline", Version: "1.20.4"}, h.plan.Allocations[0], ordered, cohortJSON, cohortBudgets)
+	require.NoError(t, err)
+	firstByBot := make(map[string]*workerpb.BotAssignment, len(calls[0].request.Assignments))
+	for _, assignment := range calls[0].request.Assignments {
+		firstByBot[assignment.BotUuid] = assignment
+	}
+	for _, assignment := range rebuilt.Assignments {
+		require.Equal(t, firstByBot[assignment.BotUuid].ScenarioJson, assignment.ScenarioJson)
+		require.Equal(t, firstByBot[assignment.BotUuid].ConfigHash, assignment.ConfigHash)
+	}
+}
+
+func TestBotLoadExecutionStart_RunDeadlineCoversScheduleAndFullCohortBudget(t *testing.T) {
+	h := newBotLoadExecutionHarness(t, []int{50}, 50, nil)
+	setBotLoadExecutionScenario(t, h, `{"version":2,"seed":20260719,"cohorts":[{"key":"combat","percent":100,"steps":[{"id":"probe","type":"wait_probe_event","event":"room_ready","timeoutMs":1000,"maxAttempts":2,"retryBackoffMs":100},{"id":"barrier","type":"barrier","key":"ready","release":{"type":"all"},"timeoutMs":2000},{"id":"move","type":"move_to_and_wait","pos":{"x":10,"y":64,"z":10},"radius":2,"timeoutMs":3000,"maxAttempts":2,"retryBackoffMs":200},{"id":"observe","type":"roam_in_area","observationStep":true,"durationMs":4000,"timeoutMs":6000,"maxAttempts":2,"retryBackoffMs":300,"area":{"type":"radius","center":{"x":10,"y":64,"z":10},"radius":2}}]}]}`)
+	startedAt := h.clock.Now().Add(5 * time.Second).UTC()
+	require.NoError(t, h.db.Model(h.session).Update("started_at", startedAt).Error)
+	h.session.StartedAt = &startedAt
+
+	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
+	require.NoError(t, err)
+	calls := h.dispatcher.Calls()
+	require.Len(t, calls, 1)
+	require.Len(t, calls[0].request.Assignments, 50)
+	const cohortBudgetMS = int64(18_600)
+	for _, assignment := range calls[0].request.Assignments {
+		baseline := max(startedAt.UnixMilli(), assignment.ConnectNotBeforeUnixMs)
+		require.Equal(t, baseline+cohortBudgetMS, assignmentRunDeadlineUnixMS(t, assignment))
+	}
+	last := calls[0].request.Assignments[49]
+	require.Equal(t, h.plan.Allocations[0].ConnectStartAt.Add(49*200*time.Millisecond).UnixMilli(), last.ConnectNotBeforeUnixMs)
+	require.Equal(t, cohortBudgetMS, assignmentRunDeadlineUnixMS(t, last)-last.ConnectNotBeforeUnixMs)
+}
+
+func TestBotLoadScenarioBudget_TowerDefenseCoversLobbyAndCombat(t *testing.T) {
+	seed := int64(20260719)
+	lobbyRadius, combatRadius := 30.0, 2.0
+	scenario, err := BuildScenarioPreset(TowerDefenseCorePresetKey, TowerDefenseCorePresetParams{
+		Seed: &seed, RoomKey: "room-352", JoinCommand: "/tower join {{roomKey}} {{correlationToken}}",
+		LobbyCenter: &ScenarioPosition{X: 10, Y: 64, Z: -5}, LobbyRadius: &lobbyRadius,
+		CombatPosition: &ScenarioPosition{X: 100, Y: 65, Z: 100}, CombatRadius: &combatRadius,
+		CombatAreaID: "combat-zone-a", MonsterTypes: []string{"zombie"}, AttackRadius: &lobbyRadius,
+	})
+	require.NoError(t, err)
+
+	budgets, err := scenarioCohortBudgetMSMap(scenario)
+	require.NoError(t, err)
+	require.Equal(t, int64(3_630_000), budgets["lobby"])
+	require.Equal(t, int64(3_805_000), budgets["combat"])
+}
+
+func TestBotLoadScenarioBudget_UsesTimeoutOnceAndExpandsBoundedRespawn(t *testing.T) {
+	scenario, err := ParseScenarioV2([]byte(`{"version":2,"seed":1,"cohorts":[{"key":"all","percent":100,"steps":[{"id":"setup","type":"wait","durationMs":5000,"timeoutMs":1000,"maxAttempts":2,"retryBackoffMs":100},{"id":"rejoin","type":"respawn_and_rejoin","entryStepId":"setup","timeoutMs":200,"maxAttempts":2},{"id":"observe","type":"roam_in_area","observationStep":true,"durationMs":300,"timeoutMs":300,"area":{"type":"radius","center":{"x":0,"y":64,"z":0},"radius":2}}]}]}`))
+	require.NoError(t, err)
+
+	budgets, err := scenarioCohortBudgetMSMap(scenario)
+	require.NoError(t, err)
+	// setup 每次最多 2×1000+100，respawn 每次最多 2×200；回跳段再有界展开 2 次。
+	require.Equal(t, int64(7_800), budgets["all"])
+}
+
+func TestBotLoadScenarioRunDeadline_RejectsTimestampOverflow(t *testing.T) {
+	startedAt := time.UnixMilli(maxScenarioBudgetMS - 50).UTC()
+	deadline, err := botLoadScenarioRunDeadlineUnixMS(&model.BotStressSession{StartedAt: &startedAt}, 0, 100)
+	require.ErrorContains(t, err, "溢出")
+	require.Zero(t, deadline)
+}
+
+func TestBotLoadExecutionStart_RejectsInvalidScenarioSnapshotBeforeMaterialization(t *testing.T) {
+	h := newBotLoadExecutionHarness(t, []int{1}, 1, nil)
+	require.NoError(t, h.db.Model(h.session).Update("scenario_snapshot", "{").Error)
+	h.session.ScenarioSnapshot = "{"
+
+	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
+	require.Error(t, err)
+	require.Empty(t, h.dispatcher.Calls())
+	var count int64
+	require.NoError(t, h.db.Model(&model.Bot{}).Where("stress_session_id = ?", h.session.ID).Count(&count).Error)
+	require.Zero(t, count)
 }
 
 func TestBotLoadAllocationLocalIndex_UsesStableAllocationOrdinal(t *testing.T) {

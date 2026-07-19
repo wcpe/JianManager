@@ -169,7 +169,7 @@ export class ScenarioRunner {
 
   private async tickInternal(now: number): Promise<void> {
     if (!this.started || this.terminal || this.disposed) return
-    if (this.current && this.deadlineReached(now)) {
+    if (this.current && this.runDeadlineReached(now)) {
       await this.timeoutAttempt(now)
       return
     }
@@ -182,9 +182,18 @@ export class ScenarioRunner {
       return
     }
     const attempt = this.current
+    const stepDeadlineReached = now >= attempt.context.deadline
+    if (stepDeadlineReached && !canResolveIntrinsicAtDeadline(attempt, now)) {
+      await this.timeoutAttempt(now)
+      return
+    }
     const result = await this.callAction(() => attempt.action.tick(attempt.context, now))
     if (this.current !== attempt || this.cancelToken.cancelled) return
-    if (result.state !== 'running') await this.completeAttempt(result.state, result, now)
+    if (result.state !== 'running') {
+      await this.completeAttempt(result.state, result, now)
+      return
+    }
+    if (stepDeadlineReached) await this.timeoutAttempt(now)
   }
 
   private async startAttempt(now: number): Promise<void> {
@@ -463,6 +472,26 @@ export class ScenarioRunner {
       correlationToken: this.correlationToken,
     })
   }
+}
+
+function canResolveIntrinsicAtDeadline(attempt: CurrentAttempt, now: number): boolean {
+  if (now !== attempt.context.deadline) return false
+  const durationMs = intrinsicDurationMs(attempt.step)
+  return durationMs !== undefined
+    && durationMs > 0
+    && durationMs <= attempt.step.timeoutMs
+    && attempt.context.startedAt + durationMs <= now
+}
+
+function intrinsicDurationMs(step: ScenarioStep): number | undefined {
+  if (step.type === 'attack_until') {
+    const stop = step.stop
+    if (!stop || typeof stop !== 'object' || Array.isArray(stop)) return undefined
+    const durationMs = (stop as Record<string, unknown>).durationMs
+    return typeof durationMs === 'number' && Number.isFinite(durationMs) ? durationMs : undefined
+  }
+  if (step.type !== 'wait' && step.type !== 'roam_in_area' && step.type !== 'legacy_behavior') return undefined
+  return typeof step.durationMs === 'number' && Number.isFinite(step.durationMs) ? step.durationMs : undefined
 }
 
 function timeoutErrorCode(type: string): string {

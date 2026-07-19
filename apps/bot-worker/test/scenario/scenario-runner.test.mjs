@@ -214,7 +214,7 @@ test('Runner 长循环集中 tick 不创建动作级 timer 且结果载荷有界
   assert.ok(Buffer.byteLength(JSON.stringify(events[0].result)) <= 16 * 1024)
 })
 
-test('Runner 在 tick 调用动作前裁决 move/attack/barrier 截止时间', async () => {
+test('Runner 在 tick 调用动作前裁决 move/barrier 通用 step 截止时间', async () => {
   const cases = [
     {
       name: 'move',
@@ -224,16 +224,6 @@ test('Runner 在 tick 调用动作前裁决 move/attack/barrier 截止时间', a
         await runner.tick(run.capabilities.now())
         run.capabilities.advance(500)
       },
-    },
-    {
-      name: 'attack',
-      step: step('attack', 'attack_until', {
-        selector: { kind: 'hostile', radius: 16, priority: 'nearest' },
-        attackIntervalMs: 100, chase: false, reacquire: true,
-        stop: { durationMs: 100, damageAtLeast: 1, successPolicy: 'all' }, timeoutMs: 100,
-      }),
-      errorCode: 'ATTACK_ASSERTION_UNMET',
-      prepare: async (run) => { run.capabilities.advance(100) },
     },
     {
       name: 'barrier',
@@ -262,6 +252,84 @@ test('Runner 在 tick 调用动作前裁决 move/attack/barrier 截止时间', a
     assert.equal(run.events.at(-1).errorCode, item.errorCode, item.name)
     assert.equal(run.events.some((event) => event.status === 'succeeded'), false, item.name)
   }
+})
+
+test('Runner 允许 intrinsic duration 在同毫秒先于通用 step timeout 完成', async () => {
+  const cases = [
+    { step: step('wait', 'wait', { durationMs: 100, timeoutMs: 100 }), status: 'succeeded' },
+    {
+      step: step('roam', 'roam_in_area', {
+        durationMs: 100, timeoutMs: 100,
+        area: { type: 'radius', center: { x: 0, y: 64, z: 0 }, radius: 2 },
+        pauseMs: { min: 0, max: 0 }, maxPathFailures: 3,
+      }),
+      status: 'succeeded',
+    },
+    {
+      step: step('attack', 'attack_until', {
+        selector: { kind: 'hostile', radius: 16, priority: 'nearest' },
+        attackIntervalMs: 100, chase: false, reacquire: true,
+        stop: { durationMs: 100, damageAtLeast: 1, successPolicy: 'all' }, timeoutMs: 100,
+      }),
+      status: 'failed', errorCode: 'ATTACK_ASSERTION_UNMET',
+    },
+  ]
+
+  for (const item of cases) {
+    const run = runnerOptions({ scenario: scenario([item.step]) })
+    const runner = new ScenarioRunner(run.options)
+    await runner.start()
+    run.capabilities.advance(100)
+    await runner.tick(run.capabilities.now())
+
+    assert.equal(run.events.at(-1).status, item.status, item.step.type)
+    assert.equal(run.events.at(-1).errorCode, item.errorCode, item.step.type)
+    assert.equal(run.events.some((event) => event.status === 'timed_out'), false, item.step.type)
+  }
+
+  let ticks = 0
+  const legacy = step('legacy', 'legacy_behavior', { durationMs: 100, timeoutMs: 100 })
+  const run = runnerOptions({
+    scenario: scenario([legacy]),
+    actionFactory: () => ({
+      async start() { return { state: 'running' } },
+      async tick() { ticks++; return { state: 'succeeded' } },
+      async cancel() {},
+      async dispose() {},
+    }),
+  })
+  const runner = new ScenarioRunner(run.options)
+  await runner.start()
+  run.capabilities.advance(100)
+  await runner.tick(run.capabilities.now())
+  assert.equal(ticks, 1)
+  assert.equal(run.events.at(-1).status, 'succeeded')
+  assert.equal(run.events.some((event) => event.status === 'timed_out'), false)
+})
+
+test('Runner 在 run deadline 同毫秒先于 action tick 裁决且不重试', async () => {
+  let starts = 0
+  let ticks = 0
+  const run = runnerOptions({
+    runDeadline: 1_100,
+    scenario: scenario([step('wait', 'wait', { durationMs: 100, timeoutMs: 100, maxAttempts: 3, retryBackoffMs: 0 })]),
+    actionFactory: () => ({
+      async start() { starts++; return { state: 'running' } },
+      async tick() { ticks++; return { state: 'succeeded' } },
+      async cancel() {},
+      async dispose() {},
+    }),
+  })
+  const runner = new ScenarioRunner(run.options)
+  await runner.start()
+  run.capabilities.nowMs = 1_100
+  await runner.tick(run.capabilities.now())
+  await runner.tick(run.capabilities.now())
+
+  assert.equal(starts, 1)
+  assert.equal(ticks, 0)
+  assert.equal(run.events.at(-1).status, 'timed_out')
+  assert.equal(runner.isTerminal, true)
 })
 
 test('Runner 在 signal 调用动作前裁决 step/run deadline 并安全跳过迟到完整信号', async () => {

@@ -22,6 +22,26 @@ func TestParseScenarioV2_JSONAndYAMLReturnSameValidationPath(t *testing.T) {
 	}
 }
 
+func TestParseScenarioV2_RejectsUnboundRoomKeyWithSameJSONAndYAMLPath(t *testing.T) {
+	inputs := []string{
+		`{"version":2,"seed":7,"cohorts":[{"key":"all","percent":100,"steps":[{"id":"send","type":"send_command","command":"/join {{roomKey}} {{correlationToken}}"},{"id":"observe","type":"roam_in_area","observationStep":true,"durationMs":1000,"area":{"type":"radius","center":{"x":0,"y":64,"z":0},"radius":2}}]}]}`,
+		"version: 2\nseed: 7\ncohorts:\n  - key: all\n    percent: 100\n    steps:\n      - id: send\n        type: send_command\n        command: /join {{roomKey}} {{correlationToken}}\n      - id: observe\n        type: roam_in_area\n        observationStep: true\n        durationMs: 1000\n        area:\n          type: radius\n          center: {x: 0, y: 64, z: 0}\n          radius: 2\n",
+	}
+	for _, input := range inputs {
+		_, err := ParseScenarioV2([]byte(input))
+		var validationErr *ScenarioValidationError
+		require.ErrorAs(t, err, &validationErr)
+		require.Equal(t, "cohorts[0].steps[0].command", validationErr.Path)
+		require.Equal(t, "模板变量 roomKey 未绑定", validationErr.Message)
+	}
+}
+
+func TestParseScenarioV2_AllowsBoundRuntimeCorrelationToken(t *testing.T) {
+	raw := `{"version":2,"seed":7,"cohorts":[{"key":"all","percent":100,"steps":[{"id":"send","type":"send_command","command":"/join {{correlationToken}}"},{"id":"observe","type":"roam_in_area","observationStep":true,"durationMs":1000,"area":{"type":"radius","center":{"x":0,"y":64,"z":0},"radius":2}}]}]}`
+	_, err := ParseScenarioV2([]byte(raw))
+	require.NoError(t, err)
+}
+
 func TestParseScenarioV2_RejectsUnknownTemplateVariable(t *testing.T) {
 	raw := `{
 		"version":2,

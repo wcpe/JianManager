@@ -19,6 +19,11 @@ import (
 
 var botActionResultDBSequence atomic.Uint64
 
+const (
+	testActionCorrelationToken      = "00000000-0000-4000-8000-000000000352"
+	testOtherActionCorrelationToken = "00000000-0000-4000-8000-000000000353"
+)
+
 type botActionResultHarness struct {
 	db      *gorm.DB
 	service *ActionResultService
@@ -58,7 +63,7 @@ func (h *botActionResultHarness) event(status string) *workerpb.BotActionEvent {
 	return &workerpb.BotActionEvent{
 		BotUuid: h.bot.UUID, SessionUuid: h.session.UUID, Generation: h.bot.DesiredStateGeneration,
 		ActionRunId: "00000000-0000-0000-0000-000000000352", StepId: "wait-room", Attempt: 1,
-		Status: status, CorrelationToken: "token-352", ObservedAtUnixMs: h.now.UnixMilli(),
+		Status: status, CorrelationToken: testActionCorrelationToken, ObservedAtUnixMs: h.now.UnixMilli(),
 	}
 }
 
@@ -85,7 +90,7 @@ func TestActionResultService_StartUpsertsRunningWithoutDuplicating(t *testing.T)
 	require.Equal(t, h.bot.ID, stored.BotID)
 	require.Equal(t, "combat", stored.CohortKey)
 	require.Equal(t, "wait-room", stored.StepID)
-	require.Equal(t, "token-352", stored.CorrelationToken)
+	require.Equal(t, testActionCorrelationToken, stored.CorrelationToken)
 	require.Equal(t, h.now, stored.StartedAt)
 	var count int64
 	require.NoError(t, h.db.Model(&model.BotLoadActionResult{}).Count(&count).Error)
@@ -162,6 +167,29 @@ func TestActionResultService_TruncatesResultJSONWithRecognizableMetadata(t *test
 	require.NotEmpty(t, metadata.Preview)
 }
 
+func TestActionResultService_RejectsMissingOrInvalidCorrelationTokenBeforeStartOrFinish(t *testing.T) {
+	for _, status := range []string{"running", "succeeded"} {
+		for _, tokenCase := range []struct {
+			name  string
+			value string
+		}{{name: "空值"}, {name: "非法UUID", value: "not-a-uuid"}} {
+			t.Run(status+"/"+tokenCase.name, func(t *testing.T) {
+				h := newBotActionResultHarness(t)
+				event := h.event(status)
+				event.CorrelationToken = tokenCase.value
+
+				result, err := h.service.Ingest(context.Background(), h.node.ID, h.session.UUID, event)
+				require.NoError(t, err)
+				require.Equal(t, ActionResultIgnoredInvalid, result.Decision)
+				require.Contains(t, result.Diagnostic, "correlationToken")
+				var count int64
+				require.NoError(t, h.db.Model(&model.BotLoadActionResult{}).Count(&count).Error)
+				require.Zero(t, count)
+			})
+		}
+	}
+}
+
 func TestActionResultService_RejectsInvalidOrMismatchedEventsWithoutLedgerPollution(t *testing.T) {
 	h := newBotActionResultHarness(t)
 	tests := []*workerpb.BotActionEvent{
@@ -208,7 +236,7 @@ func TestActionResultService_TerminalIdentityConflictsDoNotMutateRunningAction(t
 			return event.SessionUuid
 		}},
 		{name: "关联令牌冲突", mutate: func(_ *testing.T, _ *botActionResultHarness, event *workerpb.BotActionEvent) string {
-			event.CorrelationToken = "other-token"
+			event.CorrelationToken = testOtherActionCorrelationToken
 			return event.SessionUuid
 		}},
 		{name: "Bot 冲突", mutate: func(t *testing.T, h *botActionResultHarness, event *workerpb.BotActionEvent) string {
@@ -245,7 +273,7 @@ func TestActionResultService_TerminalIdentityConflictsDoNotMutateRunningAction(t
 			require.Equal(t, h.session.ID, stored.StressSessionID)
 			require.Equal(t, "wait-room", stored.StepID)
 			require.Equal(t, 1, stored.Attempt)
-			require.Equal(t, "token-352", stored.CorrelationToken)
+			require.Equal(t, testActionCorrelationToken, stored.CorrelationToken)
 		})
 	}
 }

@@ -19,6 +19,10 @@ var (
 		"botName": {}, "botUuid": {}, "runId": {}, "cohortKey": {},
 		"correlationToken": {}, "roomKey": {},
 	}
+	boundRuntimeTemplates = map[string]struct{}{
+		"botName": {}, "botUuid": {}, "runId": {}, "cohortKey": {},
+		"correlationToken": {},
+	}
 )
 
 func validateScenarioV2(scenario *ScenarioV2, allowLegacy bool) error {
@@ -425,6 +429,9 @@ func validateTemplateValue(value, path string) error {
 		name := strings.TrimSpace(expression)
 		if _, ok := allowedTemplates[name]; !ok {
 			return scenarioValidationError(path, "包含未知模板变量 "+name)
+		}
+		if _, bound := boundRuntimeTemplates[name]; !bound {
+			return scenarioValidationError(path, "模板变量 "+name+" 未绑定")
 		}
 		offset = end + 2
 	}
