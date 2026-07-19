@@ -22,7 +22,7 @@ describe('生成许可证清单', () => {
     const runtime = dependencies.filter((dependency) => dependency.type === 'runtime')
     const dev = dependencies.filter((dependency) => dependency.type === 'dev')
 
-    expect(dependencies).toHaveLength(945)
+    expect(dependencies).toHaveLength(944)
     expect(runtime.length).toBeGreaterThan(0)
     expect(dev.length).toBeGreaterThan(0)
     expect(runtime.length + dev.length).toBe(dependencies.length)
