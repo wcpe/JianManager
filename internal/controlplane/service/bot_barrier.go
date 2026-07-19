@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	barrierReleaseLead = 250 * time.Millisecond
+	barrierReleaseLead = time.Second
 	barrierRetryMin    = 100 * time.Millisecond
 	barrierRetryMax    = 2 * time.Second
 )

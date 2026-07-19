@@ -8,20 +8,24 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
 const (
-	actionSignalBatchSize  = 100
-	actionSignalRPCTimeout = 3 * time.Second
+	actionSignalBatchSize             = 100
+	actionSignalWaitingQueryBatchSize = 500
+	actionSignalNodeConcurrency       = 16
+	actionSignalRPCTimeout            = 3 * time.Second
 )
 
-// WaitingActionFinder 提供强关联的运行中动作查询。
+// WaitingActionFinder 批量提供强关联的运行中动作查询。
 type WaitingActionFinder interface {
-	FindWaitingAction(ctx context.Context, runID, botUUID, actionRunID, correlationToken string) (*WaitingAction, error)
+	FindWaitingActions(ctx context.Context, inputs []ActionSignalInput) ([]*WaitingAction, error)
 }
 
 // ActionSignalClient 隔离 Worker 连接池，便于验证分组和部分失败。
@@ -37,6 +41,120 @@ type ActionSignalInput struct {
 	CorrelationToken string
 	Type             string
 	Payload          json.RawMessage
+}
+
+type waitingActionBatchRepository interface {
+	FindWaitingActions(ctx context.Context, inputs []ActionSignalInput) ([]*WaitingAction, error)
+}
+
+type waitingActionRow struct {
+	StressSessionID  uint   `gorm:"column:stress_session_id"`
+	BotID            uint   `gorm:"column:bot_id"`
+	CohortKey        string `gorm:"column:cohort_key"`
+	StepID           string `gorm:"column:step_id"`
+	ActionRunID      string `gorm:"column:action_run_id"`
+	Attempt          int    `gorm:"column:attempt"`
+	CorrelationToken string `gorm:"column:correlation_token"`
+	BotUUID          string `gorm:"column:bot_uuid"`
+	SessionUUID      string `gorm:"column:session_uuid"`
+	InstanceID       uint   `gorm:"column:instance_id"`
+	ExecutorNodeID   uint   `gorm:"column:executor_node_id"`
+	ExecutorNodeUUID string `gorm:"column:executor_node_uuid"`
+	Generation       int64  `gorm:"column:generation"`
+}
+
+// FindWaitingActions 批量读取动作账本与当前执行节点，避免逐 Bot preload。
+func (s *ActionResultService) FindWaitingActions(ctx context.Context, inputs []ActionSignalInput) ([]*WaitingAction, error) {
+	if repository, ok := s.repository.(waitingActionBatchRepository); ok {
+		return repository.FindWaitingActions(ctx, inputs)
+	}
+	waiting := make([]*WaitingAction, len(inputs))
+	for index, input := range inputs {
+		item, err := s.FindWaitingAction(ctx, input.RunID, input.BotUUID, input.ActionRunID, input.CorrelationToken)
+		if err != nil {
+			return nil, err
+		}
+		waiting[index] = item
+	}
+	return waiting, nil
+}
+
+func (r *gormActionResultRepository) FindWaitingActions(ctx context.Context, inputs []ActionSignalInput) ([]*WaitingAction, error) {
+	rows, err := r.findWaitingActionRows(ctx, inputs)
+	if err != nil {
+		return nil, err
+	}
+	byActionRunID := make(map[string]waitingActionRow, len(rows))
+	for _, row := range rows {
+		byActionRunID[row.ActionRunID] = row
+	}
+	waiting := make([]*WaitingAction, len(inputs))
+	for index, input := range inputs {
+		row, ok := byActionRunID[input.ActionRunID]
+		if ok && row.SessionUUID == input.RunID && row.BotUUID == input.BotUUID && row.CorrelationToken == input.CorrelationToken {
+			waiting[index] = waitingActionFromRow(row)
+		}
+	}
+	return waiting, nil
+}
+
+func (r *gormActionResultRepository) findWaitingActionRows(ctx context.Context, inputs []ActionSignalInput) ([]waitingActionRow, error) {
+	rows := make([]waitingActionRow, 0, len(inputs))
+	for start := 0; start < len(inputs); start += actionSignalWaitingQueryBatchSize {
+		end := min(start+actionSignalWaitingQueryBatchSize, len(inputs))
+		actionRunIDs := uniqueActionRunIDs(inputs[start:end])
+		var batch []waitingActionRow
+		err := r.db.WithContext(ctx).Table("bot_load_action_results AS action_results").
+			Select(`action_results.stress_session_id, action_results.bot_id, action_results.cohort_key,
+				action_results.step_id, action_results.action_run_id, action_results.attempt,
+				action_results.correlation_token, bots.uuid AS bot_uuid, sessions.uuid AS session_uuid,
+				bots.instance_id, COALESCE(executor_nodes.id, target_nodes.id) AS executor_node_id,
+				COALESCE(executor_nodes.uuid, target_nodes.uuid) AS executor_node_uuid,
+				bots.desired_state_generation AS generation`).
+			Joins("JOIN bots ON bots.id = action_results.bot_id AND bots.deleted_at IS NULL").
+			Joins("JOIN bot_stress_sessions AS sessions ON sessions.id = action_results.stress_session_id AND sessions.deleted_at IS NULL").
+			Joins("JOIN instances ON instances.id = bots.instance_id AND instances.deleted_at IS NULL").
+			Joins("JOIN nodes AS target_nodes ON target_nodes.id = instances.node_id AND target_nodes.deleted_at IS NULL").
+			Joins("LEFT JOIN nodes AS executor_nodes ON executor_nodes.id = bots.executor_node_id AND executor_nodes.deleted_at IS NULL").
+			Where("action_results.action_run_id IN ? AND action_results.status = ?", actionRunIDs, model.BotLoadActionRunning).
+			Scan(&batch).Error
+		if err != nil {
+			return nil, fmt.Errorf("批量查询等待动作失败: %w", err)
+		}
+		rows = append(rows, batch...)
+	}
+	return rows, nil
+}
+
+func uniqueActionRunIDs(inputs []ActionSignalInput) []string {
+	seen := make(map[string]struct{}, len(inputs))
+	ids := make([]string, 0, len(inputs))
+	for _, input := range inputs {
+		if _, ok := seen[input.ActionRunID]; ok {
+			continue
+		}
+		seen[input.ActionRunID] = struct{}{}
+		ids = append(ids, input.ActionRunID)
+	}
+	return ids
+}
+
+func waitingActionFromRow(row waitingActionRow) *WaitingAction {
+	stressSessionID, executorNodeID := row.StressSessionID, row.ExecutorNodeID
+	return &WaitingAction{
+		Result: model.BotLoadActionResult{
+			StressSessionID: row.StressSessionID, BotID: row.BotID, CohortKey: row.CohortKey,
+			StepID: row.StepID, ActionRunID: row.ActionRunID, Attempt: row.Attempt,
+			Status: model.BotLoadActionRunning, CorrelationToken: row.CorrelationToken,
+		},
+		Bot: model.Bot{
+			ID: row.BotID, UUID: row.BotUUID, InstanceID: row.InstanceID,
+			StressSessionID: &stressSessionID, ExecutorNodeID: &executorNodeID,
+			DesiredStateGeneration: row.Generation,
+		},
+		SessionUUID: row.SessionUUID, ExecutorNodeID: row.ExecutorNodeID,
+		ExecutorNodeUUID: row.ExecutorNodeUUID, Generation: row.Generation,
+	}
 }
 
 // ActionSignalStatus 是单项路由结论。
@@ -105,36 +223,84 @@ func NewGRPCActionSignalRouter(finder WaitingActionFinder, pool *cpgrpc.ClientPo
 	return NewActionSignalRouter(finder, poolActionSignalClient{pool: pool}, clock)
 }
 
-// Route 保持输入顺序返回逐项结果，并对合法项按执行节点分组。
+// Route 保持输入顺序返回逐项结果，并对合法项批量查询后按节点并发投递。
 func (r *ActionSignalRouter) Route(ctx context.Context, inputs []ActionSignalInput) ActionSignalReport {
+	report, indexes, valid := prepareSignalReport(inputs)
+	if len(valid) == 0 {
+		return report
+	}
+	if r.finder == nil || r.client == nil {
+		markLookupFailure(indexes, &report, "动作信号路由器未完整装配")
+		return report
+	}
+	waiting, err := r.finder.FindWaitingActions(ctx, valid)
+	if err != nil {
+		markLookupFailure(indexes, &report, err.Error())
+		return report
+	}
+	groups := r.groupResolvedSignals(valid, indexes, waiting, &report)
+	r.routeGroups(ctx, groups, &report)
+	return report
+}
+
+func prepareSignalReport(inputs []ActionSignalInput) (ActionSignalReport, []int, []ActionSignalInput) {
 	report := ActionSignalReport{Items: make([]ActionSignalReceipt, len(inputs))}
-	groups := make(map[string][]routedActionSignal)
+	indexes := make([]int, 0, len(inputs))
+	valid := make([]ActionSignalInput, 0, len(inputs))
 	for index, input := range inputs {
 		report.Items[index] = ActionSignalReceipt{Input: input, SignalID: stableActionSignalID(input)}
-		waiting, diagnostic, retriable := r.resolve(ctx, input)
-		if diagnostic != "" {
-			if retriable {
-				markSignalFailure(&report.Items[index], "LOOKUP_FAILED", diagnostic)
-			} else {
-				report.Items[index].Status, report.Items[index].Error = ActionSignalRejected, diagnostic
-			}
+		if diagnostic := validateActionSignalInput(input); diagnostic != "" {
+			report.Items[index].Status, report.Items[index].Error = ActionSignalRejected, diagnostic
 			continue
 		}
-		signal := actionSignalProto(input, waiting, report.Items[index].SignalID, r.clock.Now().UnixMilli())
-		groups[waiting.ExecutorNodeUUID] = append(groups[waiting.ExecutorNodeUUID], routedActionSignal{index: index, signal: signal})
+		indexes, valid = append(indexes, index), append(valid, input)
 	}
-	nodeUUIDs := make([]string, 0, len(groups))
-	for nodeUUID := range groups {
-		nodeUUIDs = append(nodeUUIDs, nodeUUID)
+	return report, indexes, valid
+}
+
+func validateActionSignalInput(input ActionSignalInput) string {
+	if strings.TrimSpace(input.RunID) == "" || strings.TrimSpace(input.BotUUID) == "" || strings.TrimSpace(input.ActionRunID) == "" || strings.TrimSpace(input.CorrelationToken) == "" || strings.TrimSpace(input.Type) == "" {
+		return "动作信号关联字段不完整"
 	}
-	sort.Strings(nodeUUIDs)
-	for _, nodeUUID := range nodeUUIDs {
-		signals := groups[nodeUUID]
-		for start := 0; start < len(signals); start += actionSignalBatchSize {
-			r.routeGroup(ctx, nodeUUID, signals[start:min(start+actionSignalBatchSize, len(signals))], &report)
+	if len(input.Payload) == 0 || !json.Valid(input.Payload) {
+		return "动作信号 payload 不是有效 JSON"
+	}
+	return ""
+}
+
+func markLookupFailure(indexes []int, report *ActionSignalReport, diagnostic string) {
+	for _, index := range indexes {
+		markSignalFailure(&report.Items[index], "LOOKUP_FAILED", diagnostic)
+	}
+}
+
+func (r *ActionSignalRouter) groupResolvedSignals(inputs []ActionSignalInput, indexes []int, waiting []*WaitingAction, report *ActionSignalReport) map[string][]routedActionSignal {
+	groups := make(map[string][]routedActionSignal)
+	observedAt := r.clock.Now().UnixMilli()
+	for offset, input := range inputs {
+		index := indexes[offset]
+		var resolved *WaitingAction
+		if offset < len(waiting) {
+			resolved = waiting[offset]
 		}
+		if diagnostic := validateWaitingAction(input, resolved); diagnostic != "" {
+			report.Items[index].Status, report.Items[index].Error = ActionSignalRejected, diagnostic
+			continue
+		}
+		signal := actionSignalProto(input, resolved, report.Items[index].SignalID, observedAt)
+		groups[resolved.ExecutorNodeUUID] = append(groups[resolved.ExecutorNodeUUID], routedActionSignal{index: index, signal: signal})
 	}
-	return report
+	return groups
+}
+
+func validateWaitingAction(input ActionSignalInput, waiting *WaitingAction) string {
+	if waiting == nil || waiting.Generation <= 0 || waiting.ExecutorNodeUUID == "" {
+		return "未找到完整关联的等待动作"
+	}
+	if waiting.Bot.DesiredStateGeneration != waiting.Generation || waiting.SessionUUID != input.RunID {
+		return "等待动作 generation 或运行关联已变化"
+	}
+	return ""
 }
 
 type routedActionSignal struct {
@@ -142,27 +308,35 @@ type routedActionSignal struct {
 	signal *workerpb.BotActionSignal
 }
 
-func (r *ActionSignalRouter) resolve(ctx context.Context, input ActionSignalInput) (*WaitingAction, string, bool) {
-	if r.finder == nil || r.client == nil {
-		return nil, "动作信号路由器未完整装配", true
+func (r *ActionSignalRouter) routeGroups(ctx context.Context, groups map[string][]routedActionSignal, report *ActionSignalReport) {
+	nodeUUIDs := make([]string, 0, len(groups))
+	for nodeUUID := range groups {
+		nodeUUIDs = append(nodeUUIDs, nodeUUID)
 	}
-	if strings.TrimSpace(input.RunID) == "" || strings.TrimSpace(input.BotUUID) == "" || strings.TrimSpace(input.ActionRunID) == "" || strings.TrimSpace(input.CorrelationToken) == "" || strings.TrimSpace(input.Type) == "" {
-		return nil, "动作信号关联字段不完整", false
+	sort.Strings(nodeUUIDs)
+	jobs := make(chan string, len(nodeUUIDs))
+	for _, nodeUUID := range nodeUUIDs {
+		jobs <- nodeUUID
 	}
-	if len(input.Payload) == 0 || !json.Valid(input.Payload) {
-		return nil, "动作信号 payload 不是有效 JSON", false
+	close(jobs)
+	var workers sync.WaitGroup
+	for range min(actionSignalNodeConcurrency, len(nodeUUIDs)) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for nodeUUID := range jobs {
+				r.routeNode(ctx, nodeUUID, groups[nodeUUID], report)
+			}
+		}()
 	}
-	waiting, err := r.finder.FindWaitingAction(ctx, input.RunID, input.BotUUID, input.ActionRunID, input.CorrelationToken)
-	if err != nil {
-		return nil, err.Error(), true
+	workers.Wait()
+}
+
+func (r *ActionSignalRouter) routeNode(ctx context.Context, nodeUUID string, signals []routedActionSignal, report *ActionSignalReport) {
+	for start := 0; start < len(signals); start += actionSignalBatchSize {
+		end := min(start+actionSignalBatchSize, len(signals))
+		r.routeGroup(ctx, nodeUUID, signals[start:end], report)
 	}
-	if waiting == nil || waiting.Generation <= 0 || waiting.ExecutorNodeUUID == "" {
-		return nil, "未找到完整关联的等待动作", false
-	}
-	if waiting.Bot.DesiredStateGeneration != waiting.Generation || waiting.SessionUUID != input.RunID {
-		return nil, "等待动作 generation 或运行关联已变化", false
-	}
-	return waiting, "", false
 }
 
 func (r *ActionSignalRouter) routeGroup(ctx context.Context, nodeUUID string, routed []routedActionSignal, report *ActionSignalReport) {

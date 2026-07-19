@@ -11,9 +11,15 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/proto/workerpb"
+)
+
+const (
+	testBarrierCorrelationTokenA = "00000000-0000-4000-8000-000000000410"
+	testBarrierCorrelationTokenB = "00000000-0000-4000-8000-000000000411"
 )
 
 func TestBarrierCoordinator_AllDuplicateLateReconnectAndGeneration(t *testing.T) {
@@ -113,8 +119,9 @@ func barrierTestArrival(scope BarrierScope, ordinal int) BarrierArrival {
 }
 
 type fakeWaitingActionFinder struct {
-	waiting map[string]*WaitingAction
-	err     error
+	waiting    map[string]*WaitingAction
+	err        error
+	batchCalls *atomic.Int32
 }
 
 func (f fakeWaitingActionFinder) FindWaitingAction(_ context.Context, runID, botUUID, actionRunID, token string) (*WaitingAction, error) {
@@ -122,6 +129,20 @@ func (f fakeWaitingActionFinder) FindWaitingAction(_ context.Context, runID, bot
 		return nil, f.err
 	}
 	return f.waiting[runID+"|"+botUUID+"|"+actionRunID+"|"+token], nil
+}
+
+func (f fakeWaitingActionFinder) FindWaitingActions(_ context.Context, inputs []ActionSignalInput) ([]*WaitingAction, error) {
+	if f.batchCalls != nil {
+		f.batchCalls.Add(1)
+	}
+	if f.err != nil {
+		return nil, f.err
+	}
+	waiting := make([]*WaitingAction, len(inputs))
+	for index, input := range inputs {
+		waiting[index] = f.waiting[input.RunID+"|"+input.BotUUID+"|"+input.ActionRunID+"|"+input.CorrelationToken]
+	}
+	return waiting, nil
 }
 
 type fakeActionSignalClient struct {
@@ -280,6 +301,185 @@ func TestActionSignalRouter_ChunksSameNodeAndBoundsRPCDeadline(t *testing.T) {
 	}
 }
 
+func TestActionSignalRouter_Routes500WithBoundedLookupQueriesAndOriginalOrder(t *testing.T) {
+	h := newBotActionResultHarness(t)
+	executorNodeID := h.node.ID
+	bots := make([]model.Bot, 0, 499)
+	for index := 1; index < 500; index++ {
+		bots = append(bots, model.Bot{
+			UUID: fmt.Sprintf("bot-%03d", index), InstanceID: h.bot.InstanceID, StressSessionID: &h.session.ID,
+			ExecutorNodeID: &executorNodeID, Name: fmt.Sprintf("load-%03d", index), Status: model.BotStatusConnected,
+			DesiredStateGeneration: 3, CohortKey: "combat", Config: `{}`, Behavior: "idle",
+		})
+	}
+	require.NoError(t, h.db.CreateInBatches(&bots, 100).Error)
+	allBots := append([]model.Bot{*h.bot}, bots...)
+	results := make([]model.BotLoadActionResult, 0, len(allBots))
+	inputs := make([]ActionSignalInput, 0, len(allBots))
+	for index, bot := range allBots {
+		actionRunID := fmt.Sprintf("action-%03d", index)
+		token := fmt.Sprintf("token-%03d", index)
+		results = append(results, model.BotLoadActionResult{
+			StressSessionID: h.session.ID, BotID: bot.ID, CohortKey: "combat", StepID: "wait",
+			ActionRunID: actionRunID, Attempt: 1, Status: model.BotLoadActionRunning,
+			CorrelationToken: token, StartedAt: h.now,
+		})
+		inputs = append(inputs, ActionSignalInput{
+			RunID: h.session.UUID, BotUUID: bot.UUID, ActionRunID: actionRunID,
+			CorrelationToken: token, Type: "probe", Payload: []byte(`{"eventType":"ready"}`),
+		})
+	}
+	require.NoError(t, h.db.CreateInBatches(&results, 100).Error)
+
+	var queryCount atomic.Int32
+	const callbackName = "test:count-action-signal-queries"
+	require.NoError(t, h.db.Callback().Query().Before("gorm:query").Register(callbackName, func(*gorm.DB) {
+		queryCount.Add(1)
+	}))
+	t.Cleanup(func() { _ = h.db.Callback().Query().Remove(callbackName) })
+	client := &fakeActionSignalClient{handler: func(_ context.Context, _ string, request *workerpb.SignalBotActionsRequest) (*workerpb.SignalBotActionsResponse, error) {
+		items := make([]*workerpb.SignalBotActionItemResult, 0, len(request.Signals))
+		for index := len(request.Signals) - 1; index >= 0; index-- {
+			items = append(items, &workerpb.SignalBotActionItemResult{SignalId: request.Signals[index].SignalId, Accepted: true})
+		}
+		return &workerpb.SignalBotActionsResponse{Results: items}, nil
+	}}
+
+	report := NewActionSignalRouter(h.service, client, nil).Route(context.Background(), inputs)
+
+	require.LessOrEqual(t, queryCount.Load(), int32(2), "500 Bot 等待动作查询不得退化为 N+1")
+	require.Equal(t, []int{100, 100, 100, 100, 100}, client.callSizes(h.node.UUID))
+	require.Len(t, report.Items, len(inputs))
+	for index, item := range report.Items {
+		require.Equal(t, inputs[index], item.Input)
+		require.Equal(t, stableActionSignalID(inputs[index]), item.SignalID)
+		require.True(t, item.Accepted)
+	}
+}
+
+func TestActionSignalRouter_TenNodesDoNotWaitForOneBlockedNode(t *testing.T) {
+	finder := fakeWaitingActionFinder{waiting: make(map[string]*WaitingAction, 10)}
+	inputs := make([]ActionSignalInput, 0, 10)
+	for index := 0; index < 10; index++ {
+		botUUID := fmt.Sprintf("bot-%02d", index)
+		actionRunID := fmt.Sprintf("action-%02d", index)
+		token := fmt.Sprintf("token-%02d", index)
+		nodeUUID := fmt.Sprintf("node-%02d", index)
+		finder.waiting["run|"+botUUID+"|"+actionRunID+"|"+token] = waitingActionFixture(botUUID, actionRunID, token, nodeUUID)
+		inputs = append(inputs, ActionSignalInput{RunID: "run", BotUUID: botUUID, ActionRunID: actionRunID, CorrelationToken: token, Type: "probe", Payload: []byte(`{}`)})
+	}
+	blocked := make(chan struct{})
+	blockedStarted := make(chan struct{})
+	fastCompleted := make(chan struct{})
+	var fastCount atomic.Int32
+	client := &fakeActionSignalClient{handler: func(_ context.Context, nodeUUID string, request *workerpb.SignalBotActionsRequest) (*workerpb.SignalBotActionsResponse, error) {
+		if nodeUUID == "node-00" {
+			close(blockedStarted)
+			<-blocked
+		} else if fastCount.Add(1) == 9 {
+			close(fastCompleted)
+		}
+		return acceptedSignalResponse(request), nil
+	}}
+	done := make(chan ActionSignalReport, 1)
+	go func() { done <- NewActionSignalRouter(finder, client, nil).Route(context.Background(), inputs) }()
+	<-blockedStarted
+	select {
+	case <-fastCompleted:
+	case <-time.After(500 * time.Millisecond):
+		close(blocked)
+		<-done
+		t.Fatal("一个阻塞节点延迟了其余九个节点")
+	}
+	close(blocked)
+	report := <-done
+	require.Len(t, report.Items, len(inputs))
+	for _, item := range report.Items {
+		require.True(t, item.Accepted)
+	}
+}
+
+func TestActionSignalRouter_BoundsCrossNodeConcurrency(t *testing.T) {
+	const expectedLimit = int32(16)
+	finder := fakeWaitingActionFinder{waiting: make(map[string]*WaitingAction, 20)}
+	inputs := make([]ActionSignalInput, 0, 20)
+	for index := 0; index < 20; index++ {
+		botUUID := fmt.Sprintf("bot-limit-%02d", index)
+		actionRunID := fmt.Sprintf("action-limit-%02d", index)
+		token := fmt.Sprintf("token-limit-%02d", index)
+		nodeUUID := fmt.Sprintf("node-limit-%02d", index)
+		finder.waiting["run|"+botUUID+"|"+actionRunID+"|"+token] = waitingActionFixture(botUUID, actionRunID, token, nodeUUID)
+		inputs = append(inputs, ActionSignalInput{RunID: "run", BotUUID: botUUID, ActionRunID: actionRunID, CorrelationToken: token, Type: "probe", Payload: []byte(`{}`)})
+	}
+	release := make(chan struct{})
+	reachedLimit := make(chan struct{})
+	var reachedOnce sync.Once
+	var active atomic.Int32
+	var maximum atomic.Int32
+	client := &fakeActionSignalClient{handler: func(_ context.Context, _ string, request *workerpb.SignalBotActionsRequest) (*workerpb.SignalBotActionsResponse, error) {
+		current := active.Add(1)
+		for current > maximum.Load() && !maximum.CompareAndSwap(maximum.Load(), current) {
+		}
+		if current == expectedLimit {
+			reachedOnce.Do(func() { close(reachedLimit) })
+		}
+		<-release
+		active.Add(-1)
+		return acceptedSignalResponse(request), nil
+	}}
+	done := make(chan ActionSignalReport, 1)
+	go func() { done <- NewActionSignalRouter(finder, client, nil).Route(context.Background(), inputs) }()
+	select {
+	case <-reachedLimit:
+	case <-time.After(time.Second):
+		close(release)
+		<-done
+		t.Fatal("跨节点调用未达到预期并发")
+	}
+	time.Sleep(50 * time.Millisecond)
+	require.Equal(t, expectedLimit, active.Load())
+	require.LessOrEqual(t, maximum.Load(), expectedLimit)
+	close(release)
+	report := <-done
+	for _, item := range report.Items {
+		require.True(t, item.Accepted)
+	}
+}
+
+func TestActionSignalRouter_ProvidesReasonableBarrierReleaseLead(t *testing.T) {
+	now := time.Date(2026, 7, 19, 13, 0, 0, 0, time.UTC)
+	input := ActionSignalInput{
+		RunID: "run", BotUUID: "bot-a", ActionRunID: "action-a", CorrelationToken: "token-a", Type: "barrier-release",
+		Payload: []byte(fmt.Sprintf(`{"round":1,"releaseAtUnixMs":%d}`, now.Add(barrierReleaseLead).UnixMilli())),
+	}
+	finder := fakeWaitingActionFinder{waiting: map[string]*WaitingAction{
+		"run|bot-a|action-a|token-a": waitingActionFixture("bot-a", "action-a", "token-a", "node-a"),
+	}}
+	payloads := make(chan string, 1)
+	client := &fakeActionSignalClient{handler: func(_ context.Context, _ string, request *workerpb.SignalBotActionsRequest) (*workerpb.SignalBotActionsResponse, error) {
+		payloads <- request.Signals[0].PayloadJson
+		return acceptedSignalResponse(request), nil
+	}}
+
+	report := NewActionSignalRouter(finder, client, &botLoadFakeClock{now: now}).Route(context.Background(), []ActionSignalInput{input})
+
+	var payload struct {
+		ReleaseAtUnixMS int64 `json:"releaseAtUnixMs"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(<-payloads), &payload))
+	require.Equal(t, now.Add(time.Second).UnixMilli(), payload.ReleaseAtUnixMS)
+	require.Equal(t, input, report.Items[0].Input)
+	require.Equal(t, stableActionSignalID(input), report.Items[0].SignalID)
+}
+
+func acceptedSignalResponse(request *workerpb.SignalBotActionsRequest) *workerpb.SignalBotActionsResponse {
+	results := make([]*workerpb.SignalBotActionItemResult, 0, len(request.Signals))
+	for _, signal := range request.Signals {
+		results = append(results, &workerpb.SignalBotActionItemResult{SignalId: signal.SignalId, Accepted: true})
+	}
+	return &workerpb.SignalBotActionsResponse{Results: results}
+}
+
 func waitingActionFixture(botUUID, actionRunID, token, nodeUUID string) *WaitingAction {
 	return &WaitingAction{
 		Result: model.BotLoadActionResult{ActionRunID: actionRunID, StepID: "wait", CorrelationToken: token, Status: model.BotLoadActionRunning},
@@ -336,7 +536,7 @@ func TestScenarioActionEventService_RejectsAuthoritativeBarrierPayloadTampering(
 			provider := &countingBarrierExpectedBots{bots: map[string]int64{h.bot.UUID: h.bot.DesiredStateGeneration}}
 			events := NewScenarioActionEventService(h.service, NewBarrierCoordinator(&botLoadFakeClock{now: h.now}), NewActionSignalRouter(h.service, &fakeActionSignalClient{}, nil), provider)
 			t.Cleanup(events.Close)
-			event := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000410", "token-a", h.now)
+			event := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000410", testBarrierCorrelationTokenA, h.now)
 			payload := authoritativeBarrierPayload(h.now, time.Minute, ScenarioBarrierRelease{Type: "all"}, "fail")
 			test.mutate(&payload)
 			raw, err := json.Marshal(payload)
@@ -369,8 +569,8 @@ func TestScenarioActionEventService_FreezesExpectedSetOnlyOnFirstArrival(t *test
 	events := NewScenarioActionEventService(h.service, NewBarrierCoordinator(&botLoadFakeClock{now: h.now}), NewActionSignalRouter(h.service, client, nil), provider)
 	t.Cleanup(events.Close)
 
-	first := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000411", "token-a", h.now)
-	second := barrierActionEvent(botB.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000412", "token-b", h.now)
+	first := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000411", testBarrierCorrelationTokenA, h.now)
+	second := barrierActionEvent(botB.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000412", testBarrierCorrelationTokenB, h.now)
 	_, err := events.Ingest(context.Background(), h.node.ID, h.session.UUID, first)
 	require.NoError(t, err)
 	_, err = events.Ingest(context.Background(), h.node.ID, h.session.UUID, second)
@@ -394,7 +594,7 @@ func TestScenarioActionEventService_SchedulerRetriesReleaseArrivedWithBoundedBac
 	barriers := NewBarrierCoordinator(nil)
 	events := NewScenarioActionEventService(h.service, barriers, NewActionSignalRouter(h.service, client, nil), provider)
 	t.Cleanup(events.Close)
-	event := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000413", "token-a", now)
+	event := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000413", testBarrierCorrelationTokenA, now)
 	event.ResultJson = mustBarrierPayload(t, authoritativeBarrierPayload(now, 100*time.Millisecond, ScenarioBarrierRelease{Type: "all"}, "release-arrived"))
 	event.ObservedAtUnixMs = now.UnixMilli()
 
@@ -427,7 +627,7 @@ func TestScenarioActionEventService_StopRunCancelsInFlightRelease(t *testing.T) 
 	events := NewScenarioActionEventService(h.service, barriers, NewActionSignalRouter(h.service, client, nil), fixedBarrierExpectedBots{h.bot.UUID: 3})
 	t.Cleanup(events.Close)
 	now := time.Now().UTC()
-	event := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000414", "token-a", now)
+	event := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000414", testBarrierCorrelationTokenA, now)
 	event.ResultJson = mustBarrierPayload(t, authoritativeBarrierPayload(now, time.Second, ScenarioBarrierRelease{Type: "all"}, "fail"))
 	event.ObservedAtUnixMs = now.UnixMilli()
 
@@ -485,8 +685,8 @@ func TestScenarioActionEventService_BarrierReleaseKeepsFailedDeliveriesForRetry(
 	coordinator.SetActionEventHandler(events)
 	scope := BarrierScope{RunID: h.session.UUID, StageIndex: 0, CohortKey: "combat", BarrierKey: "ready", Round: 1}
 
-	first := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000401", "token-a", h.now)
-	second := barrierActionEvent(botB.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000402", "token-b", h.now)
+	first := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000401", testBarrierCorrelationTokenA, h.now)
+	second := barrierActionEvent(botB.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000402", testBarrierCorrelationTokenB, h.now)
 	_, err := coordinator.HandleEvent(context.Background(), h.node.ID, h.node.UUID, h.session.UUID, &workerpb.BotFleetEvent{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: first}})
 	require.NoError(t, err)
 	require.Zero(t, client.callCount(h.node.UUID))
@@ -512,7 +712,7 @@ func TestScenarioActionEventService_RejectsInvalidBarrierBeforeWritingLedger(t *
 	barriers := NewBarrierCoordinator(clock)
 	events := NewScenarioActionEventService(h.service, barriers, NewActionSignalRouter(h.service, &fakeActionSignalClient{}, clock), fixedBarrierExpectedBots{h.bot.UUID: 3})
 	t.Cleanup(events.Close)
-	event := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000403", "token-a", h.now)
+	event := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000403", testBarrierCorrelationTokenA, h.now)
 	event.ResultJson = fmt.Sprintf(`{"type":"barrier-arrived","stageIndex":0,"cohortKey":"combat","barrierKey":"ready","round":1,"release":{"type":"percent","value":101},"timeoutPolicy":"fail","deadlineUnixMs":%d}`, h.now.Add(time.Minute).UnixMilli())
 
 	result, err := events.Ingest(context.Background(), h.node.ID, h.session.UUID, event)
@@ -521,6 +721,34 @@ func TestScenarioActionEventService_RejectsInvalidBarrierBeforeWritingLedger(t *
 	var count int64
 	require.NoError(t, h.db.Model(&model.BotLoadActionResult{}).Count(&count).Error)
 	require.Zero(t, count)
+}
+
+func TestScenarioActionEventService_RejectsMissingOrInvalidCorrelationTokenBeforeBarrierSideEffects(t *testing.T) {
+	for _, tokenCase := range []struct {
+		name  string
+		value string
+	}{{name: "空值"}, {name: "非法UUID", value: "not-a-uuid"}} {
+		t.Run(tokenCase.name, func(t *testing.T) {
+			h := newBotActionResultHarness(t)
+			setBarrierScenario(t, h, time.Minute, ScenarioBarrierRelease{Type: "all"}, "fail")
+			clock := &botLoadFakeClock{now: h.now}
+			barriers := NewBarrierCoordinator(clock)
+			provider := &countingBarrierExpectedBots{bots: map[string]int64{h.bot.UUID: 3}}
+			events := NewScenarioActionEventService(h.service, barriers, NewActionSignalRouter(h.service, &fakeActionSignalClient{}, clock), provider)
+			t.Cleanup(events.Close)
+			event := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000404", tokenCase.value, h.now)
+
+			result, err := events.Ingest(context.Background(), h.node.ID, h.session.UUID, event)
+			require.NoError(t, err)
+			require.Equal(t, ActionResultIgnoredInvalid, result.Decision)
+			require.Contains(t, result.Diagnostic, "correlationToken")
+			require.Zero(t, provider.calls.Load())
+			require.Zero(t, barriers.ScheduledCount())
+			var count int64
+			require.NoError(t, h.db.Model(&model.BotLoadActionResult{}).Count(&count).Error)
+			require.Zero(t, count)
+		})
+	}
 }
 
 func setBarrierScenario(t *testing.T, h *botActionResultHarness, timeout time.Duration, release ScenarioBarrierRelease, policy string) {
