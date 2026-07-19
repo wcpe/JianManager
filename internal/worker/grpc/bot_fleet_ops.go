@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,10 +25,12 @@ const (
 	botBatchCacheLimit         = 1000
 	botBatchCacheTTL           = time.Hour
 	botFleetReliableQueueLimit = 1024
-	botBatchStatusAccepted     = "accepted"
-	botBatchStatusConflict     = "conflict"
-	botBatchStatusCapacity     = "capacity_insufficient"
-	botBatchStatusUnavailable  = "ephemeral_unavailable"
+	// 覆盖单节点 50 Bot × 100 step 的 waiting 与 terminal 两类关键状态。
+	botActionJournalLimit     = maxBotBatchSize * 100 * 2
+	botBatchStatusAccepted    = "accepted"
+	botBatchStatusConflict    = "conflict"
+	botBatchStatusCapacity    = "capacity_insufficient"
+	botBatchStatusUnavailable = "ephemeral_unavailable"
 )
 
 type botFleetEventSubscriber struct {
@@ -38,14 +41,15 @@ type botFleetEventSubscriber struct {
 	done       chan struct{}
 	stopped    chan struct{}
 	stopOnce   sync.Once
+	replay     []*bot.BotWorkerEvent
 	queue      []*bot.BotWorkerEvent
 	limit      int
 	err        error
 }
 
-func newBotFleetEventSubscriber(out chan *bot.BotWorkerEvent, generation int64) *botFleetEventSubscriber {
+func newBotFleetEventSubscriberWithReplay(out chan *bot.BotWorkerEvent, generation int64, replay []*bot.BotWorkerEvent) *botFleetEventSubscriber {
 	subscriber := &botFleetEventSubscriber{
-		generation: generation, out: out, wake: make(chan struct{}, 1),
+		generation: generation, out: out, wake: make(chan struct{}, 1), replay: replay,
 		done: make(chan struct{}), stopped: make(chan struct{}), limit: botFleetReliableQueueLimit,
 	}
 	go subscriber.run()
@@ -76,6 +80,12 @@ func (s *botFleetEventSubscriber) run() {
 func (s *botFleetEventSubscriber) next() *bot.BotWorkerEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if len(s.replay) > 0 {
+		event := s.replay[0]
+		s.replay[0] = nil
+		s.replay = s.replay[1:]
+		return event
+	}
 	if len(s.queue) == 0 {
 		return nil
 	}
@@ -152,6 +162,188 @@ func (s *botFleetEventSubscriber) terminalError() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.err
+}
+
+type botActionJournalPhase uint8
+
+const (
+	botActionJournalRunning botActionJournalPhase = iota
+	botActionJournalTerminal
+	botActionJournalWaiting
+)
+
+type botActionJournalEntry struct {
+	sequence uint64
+	phase    botActionJournalPhase
+	event    *bot.BotWorkerEvent
+}
+
+func (s *Server) appendBotActionJournalLocked(event *bot.BotWorkerEvent, currentGeneration int64) {
+	if event == nil || event.Evt != "action-event" || event.Action == nil {
+		return
+	}
+	eventGeneration := event.WorkerEpochGeneration
+	if eventGeneration == 0 {
+		eventGeneration = currentGeneration
+	}
+	if currentGeneration > 0 && eventGeneration > 0 && eventGeneration != currentGeneration {
+		return
+	}
+	s.alignBotActionJournalGenerationLocked(eventGeneration)
+	identity := botActionJournalIdentity(event.Action)
+	phase := classifyBotActionJournalPhase(event.Action)
+	if !s.prepareBotActionJournalIdentityLocked(identity, phase) {
+		return
+	}
+	key := botActionJournalKey(identity, phase)
+	if s.botActionJournal == nil {
+		s.botActionJournal = make(map[string]botActionJournalEntry)
+	}
+	if _, exists := s.botActionJournal[key]; !exists && len(s.botActionJournal) >= botActionJournalLimit {
+		s.evictBotActionJournalEntryLocked()
+	}
+	s.botActionJournalSequence++
+	s.botActionJournal[key] = botActionJournalEntry{
+		sequence: s.botActionJournalSequence, phase: phase, event: cloneBotActionWorkerEvent(event),
+	}
+}
+
+func (s *Server) prepareBotActionJournalIdentityLocked(identity string, phase botActionJournalPhase) bool {
+	if s.botActionJournal == nil {
+		return true
+	}
+	runningKey := botActionJournalKey(identity, botActionJournalRunning)
+	waitingKey := botActionJournalKey(identity, botActionJournalWaiting)
+	terminalKey := botActionJournalKey(identity, botActionJournalTerminal)
+	switch phase {
+	case botActionJournalRunning:
+		_, waiting := s.botActionJournal[waitingKey]
+		_, terminal := s.botActionJournal[terminalKey]
+		return !waiting && !terminal
+	case botActionJournalWaiting:
+		if _, terminal := s.botActionJournal[terminalKey]; terminal {
+			return false
+		}
+		delete(s.botActionJournal, runningKey)
+	case botActionJournalTerminal:
+		delete(s.botActionJournal, runningKey)
+	}
+	return true
+}
+
+func (s *Server) alignBotActionJournalGenerationLocked(generation int64) {
+	if generation == 0 {
+		return
+	}
+	if s.botActionJournalGeneration != 0 && s.botActionJournalGeneration != generation {
+		s.clearBotActionJournalLocked()
+	}
+	s.botActionJournalGeneration = generation
+}
+
+func (s *Server) clearBotActionJournalLocked() {
+	s.botActionJournal = nil
+	s.botActionJournalSequence = 0
+	s.botActionJournalGeneration = 0
+}
+
+func (s *Server) evictBotActionJournalEntryLocked() {
+	victim := ""
+	victimPriority := int(^uint(0) >> 1)
+	var victimSequence uint64
+	for key, entry := range s.botActionJournal {
+		priority := botActionJournalEvictionPriority(entry.phase)
+		if victim == "" || priority < victimPriority || (priority == victimPriority && entry.sequence < victimSequence) {
+			victim, victimPriority, victimSequence = key, priority, entry.sequence
+		}
+	}
+	delete(s.botActionJournal, victim)
+}
+
+func botActionJournalEvictionPriority(phase botActionJournalPhase) int {
+	switch phase {
+	case botActionJournalRunning:
+		return 0
+	case botActionJournalTerminal:
+		return 1
+	default:
+		return 2
+	}
+}
+
+func (s *Server) botActionJournalReplayLocked(sessionID string) []*bot.BotWorkerEvent {
+	entries := make([]botActionJournalEntry, 0, len(s.botActionJournal))
+	for _, entry := range s.botActionJournal {
+		if sessionID != "" && entry.event.Action.SessionID != sessionID {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].sequence < entries[j].sequence })
+	replay := make([]*bot.BotWorkerEvent, 0, len(entries))
+	for _, entry := range entries {
+		replay = append(replay, cloneBotActionWorkerEvent(entry.event))
+	}
+	return replay
+}
+
+func (s *Server) botActionJournalSnapshot(sessionID string) []*bot.BotWorkerEvent {
+	s.botEventMu.Lock()
+	defer s.botEventMu.Unlock()
+	return s.botActionJournalReplayLocked(sessionID)
+}
+
+func (s *Server) botActionJournalSize() int {
+	s.botEventMu.Lock()
+	defer s.botEventMu.Unlock()
+	return len(s.botActionJournal)
+}
+
+func botActionJournalIdentity(action *bot.ActionEvent) string {
+	return fmt.Sprintf("%s\x00%s\x00%d\x00%s\x00%s\x00%d\x00%s", action.SessionID, action.BotID, action.Generation, action.ActionRunID, action.StepID, action.Attempt, action.CorrelationToken)
+}
+
+func botActionJournalKey(identity string, phase botActionJournalPhase) string {
+	return fmt.Sprintf("%s\x00%d", identity, phase)
+}
+
+func classifyBotActionJournalPhase(action *bot.ActionEvent) botActionJournalPhase {
+	if isTerminalBotActionStatus(action.Status) {
+		return botActionJournalTerminal
+	}
+	if action.Status == "waiting" || isBarrierArrivedAction(action.Result) {
+		return botActionJournalWaiting
+	}
+	return botActionJournalRunning
+}
+
+func isTerminalBotActionStatus(status string) bool {
+	switch status {
+	case "succeeded", "failed", "timed_out", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func isBarrierArrivedAction(result json.RawMessage) bool {
+	var value struct {
+		Type string `json:"type"`
+	}
+	return len(result) > 0 && json.Unmarshal(result, &value) == nil && value.Type == "barrier-arrived"
+}
+
+func cloneBotActionWorkerEvent(event *bot.BotWorkerEvent) *bot.BotWorkerEvent {
+	if event == nil {
+		return nil
+	}
+	cloned := *event
+	if event.Action != nil {
+		action := *event.Action
+		action.Result = append(json.RawMessage(nil), event.Action.Result...)
+		cloned.Action = &action
+	}
+	return &cloned
 }
 
 type botFleetManager interface {
@@ -279,7 +471,7 @@ func (s *Server) StreamBotFleetEvents(req *workerpb.StreamBotFleetEventsRequest,
 		return status.Error(codes.Unavailable, err.Error())
 	}
 	ch := make(chan *bot.BotWorkerEvent, 256)
-	subscriber := s.addBotFleetEventSubscriber(ch)
+	subscriber := s.addBotFleetEventSubscriber(ch, req.SessionUuid)
 	defer s.removeBotEventSubscriber(ch)
 
 	for {
@@ -935,10 +1127,15 @@ func (s *Server) addBotEventSubscriber(ch chan *bot.BotWorkerEvent) {
 	s.botEventMu.Unlock()
 }
 
-func (s *Server) addBotFleetEventSubscriber(ch chan *bot.BotWorkerEvent) *botFleetEventSubscriber {
+func (s *Server) addBotFleetEventSubscriber(ch chan *bot.BotWorkerEvent, sessionIDs ...string) *botFleetEventSubscriber {
 	generation := s.currentBotWorkerGeneration()
-	subscriber := newBotFleetEventSubscriber(ch, generation)
+	sessionID := ""
+	if len(sessionIDs) > 0 {
+		sessionID = sessionIDs[0]
+	}
 	s.botEventMu.Lock()
+	s.alignBotActionJournalGenerationLocked(generation)
+	subscriber := newBotFleetEventSubscriberWithReplay(ch, generation, s.botActionJournalReplayLocked(sessionID))
 	s.botEventSubs = append(s.botEventSubs, ch)
 	if s.botFleetEventSubs == nil {
 		s.botFleetEventSubs = make(map[chan *bot.BotWorkerEvent]*botFleetEventSubscriber)

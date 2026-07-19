@@ -74,6 +74,10 @@ type Server struct {
 	botEventSubs      []chan *bot.BotWorkerEvent
 	botFleetEventSubs map[chan *bot.BotWorkerEvent]*botFleetEventSubscriber
 	botEventCancel    func()
+	// action journal 仅在当前 Worker 进程内保留，不落盘；由 botEventMu 保护。
+	botActionJournal           map[string]botActionJournalEntry
+	botActionJournalSequence   uint64
+	botActionJournalGeneration int64
 
 	// eventMu 保护 eventSubs，StreamInstanceEvents 订阅/取消订阅时加锁。
 	eventMu   sync.Mutex
@@ -820,6 +824,7 @@ func (s *Server) SetBotManager(m *bot.Manager) {
 	}
 	s.botMgr = m
 	s.botFleet = m
+	s.clearBotActionJournalLocked()
 	s.botEventMu.Unlock()
 	s.clearBotBatchCache()
 	s.clearBotOwnership("", 0)
@@ -827,7 +832,8 @@ func (s *Server) SetBotManager(m *bot.Manager) {
 	if m == nil {
 		return
 	}
-	events, cancel := m.SubscribeEvents(128)
+	// Manager→gRPC 入口缓冲对齐 action journal 窗口，避免旧 4096 队列先于 journal 丢失关键状态。
+	events, cancel := m.SubscribeEvents(botActionJournalLimit)
 	s.botEventMu.Lock()
 	s.botEventCancel = cancel
 	s.botEventMu.Unlock()
@@ -849,6 +855,7 @@ func (s *Server) dispatchBotEvent(event *bot.BotWorkerEvent) {
 	}
 	currentGeneration := s.currentBotWorkerGeneration()
 	s.botEventMu.Lock()
+	s.appendBotActionJournalLocked(event, currentGeneration)
 	overflowed := make([]*botFleetEventSubscriber, 0)
 	remaining := s.botEventSubs[:0]
 	for _, ch := range s.botEventSubs {
@@ -877,6 +884,9 @@ func (s *Server) dispatchBotEvent(event *bot.BotWorkerEvent) {
 func (s *Server) dispatchBotWorkerExit(event *bot.BotWorkerEvent) {
 	sourceGeneration := event.WorkerEpochGeneration
 	s.botEventMu.Lock()
+	if sourceGeneration == 0 || s.botActionJournalGeneration == 0 || s.botActionJournalGeneration == sourceGeneration {
+		s.clearBotActionJournalLocked()
+	}
 	fleetSubscribers := make([]*botFleetEventSubscriber, 0, len(s.botFleetEventSubs))
 	remaining := s.botEventSubs[:0]
 	for _, ch := range s.botEventSubs {

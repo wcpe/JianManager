@@ -766,7 +766,6 @@ type BotFleetSubscriptionManager struct {
 }
 
 type botFleetActionDispatch struct {
-	ctx        context.Context
 	slot       *botFleetSubscriptionSlot
 	target     BotFleetSubscriptionTarget
 	generation uint64
@@ -803,10 +802,11 @@ func (m *BotFleetSubscriptionManager) startActionDispatchers() {
 }
 
 func (m *BotFleetSubscriptionManager) handleDispatchedAction(dispatch botFleetActionDispatch) {
-	if dispatch.ctx.Err() != nil || !m.subscriptionCurrent(dispatch.slot, dispatch.generation) {
+	// 已进入统一队列的 action-event 必须脱离旧订阅 context 排空；generation 只阻止旧流继续接收新事件。
+	if m.rootCtx.Err() != nil {
 		return
 	}
-	if _, err := m.coordinator.HandleEvent(dispatch.ctx, dispatch.target.NodeID, dispatch.target.NodeUUID, dispatch.target.SessionUUID, dispatch.event); err != nil {
+	if _, err := m.coordinator.HandleEvent(m.rootCtx, dispatch.target.NodeID, dispatch.target.NodeUUID, dispatch.target.SessionUUID, dispatch.event); err != nil {
 		slog.Warn("Bot Fleet 动作事件处理失败", "nodeId", dispatch.target.NodeID, "sessionUuid", dispatch.target.SessionUUID, "error", err)
 	}
 }
@@ -1051,7 +1051,7 @@ func (m *BotFleetSubscriptionManager) handleSubscriptionEvent(ctx context.Contex
 	}
 	if event != nil && event.GetActionEvent() != nil {
 		action := event.GetActionEvent()
-		dispatch := botFleetActionDispatch{ctx: ctx, slot: slot, target: target, generation: generation, event: event}
+		dispatch := botFleetActionDispatch{slot: slot, target: target, generation: generation, event: event}
 		select {
 		case m.actionQueue <- dispatch:
 			return runtimeResult(BotFleetRuntimeActionDispatched, action.BotUuid, "action_event 已交给统一 Fleet 分流异步处理"), nil

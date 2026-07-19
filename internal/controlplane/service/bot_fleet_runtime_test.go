@@ -765,6 +765,30 @@ func TestBotFleetSubscriptionManager_ActionHandlerDoesNotBlockLaterEventsOrStop(
 	manager.Close()
 }
 
+func TestBotFleetSubscriptionManager_AcceptedActionDrainsAcrossGenerationAdvance(t *testing.T) {
+	h := newBotActionResultHarness(t)
+	coordinator := NewBotFleetRuntimeCoordinator(NewBotFleetRuntimeService(h.db, botFleetTestClock{now: h.now}), nil, nil)
+	coordinator.SetActionEventHandler(h.service)
+	target := BotFleetSubscriptionTarget{NodeID: h.node.ID, NodeUUID: h.node.UUID, SessionUUID: h.session.UUID}
+	slot := &botFleetSubscriptionSlot{target: target, generation: 1, active: true}
+	manager := &BotFleetSubscriptionManager{
+		coordinator: coordinator, rootCtx: context.Background(), actionQueue: make(chan botFleetActionDispatch, 1),
+		slots: map[string]*botFleetSubscriptionSlot{botFleetSubscriptionKey(target): slot},
+	}
+	event := &workerpb.BotFleetEvent{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: h.event("running")}}
+	streamCtx, cancelStream := context.WithCancel(context.Background())
+
+	result, err := manager.handleSubscriptionEvent(streamCtx, target, 1, event)
+	require.NoError(t, err)
+	require.Equal(t, BotFleetRuntimeActionDispatched, result.Decision)
+	cancelStream()
+	slot.gate.Lock()
+	slot.generation = 2
+	slot.gate.Unlock()
+	manager.handleDispatchedAction(<-manager.actionQueue)
+	require.Equal(t, model.BotLoadActionRunning, h.reload(t).Status)
+}
+
 func TestBotFleetSubscriptionManager_StaleGenerationDropsActionBeforeDispatch(t *testing.T) {
 	h := newBotFleetRuntimeHarness(t)
 	handler := &blockingFleetActionHandler{
@@ -818,6 +842,38 @@ func TestBotFleetSubscriptionManager_RealStreamPersistsActionStartAndTerminal(t 
 	manager.StopSession(h.session.UUID)
 }
 
+func TestBotFleetSubscriptionManager_DisconnectReplayPersistsAcrossGenerationAdvance(t *testing.T) {
+	h := newBotActionResultHarness(t)
+	start := h.event("running")
+	terminal := h.event("succeeded")
+	terminal.DurationMs = 250
+	terminal.ObservedAtUnixMs = h.now.Add(250 * time.Millisecond).UnixMilli()
+	client := &botFleetFakeClient{
+		snapshot: &workerpb.GetBotFleetSnapshotResponse{},
+		streams: []BotFleetRuntimeStream{
+			&botFleetFakeStream{disconnect: io.EOF},
+			&botFleetFakeStream{events: []*workerpb.BotFleetEvent{
+				{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: start}},
+				{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: terminal}},
+			}, disconnect: io.EOF},
+		},
+	}
+	coordinator := NewBotFleetRuntimeCoordinator(NewBotFleetRuntimeService(h.db, botFleetTestClock{now: h.now}), client, nil)
+	coordinator.SetActionEventHandler(h.service)
+	manager := NewBotFleetSubscriptionManager(coordinator)
+	t.Cleanup(manager.Close)
+	target := BotFleetSubscriptionTarget{NodeID: h.node.ID, NodeUUID: h.node.UUID, SessionUUID: h.session.UUID}
+
+	manager.Ensure(target)
+	require.Eventually(t, func() bool {
+		var result model.BotLoadActionResult
+		err := h.db.Where("action_run_id = ?", start.ActionRunId).First(&result).Error
+		return err == nil && result.Status == model.BotLoadActionSucceeded && result.DurationMS == 250
+	}, 2*time.Second, 10*time.Millisecond)
+	require.GreaterOrEqual(t, manager.subscriptionGeneration(target), uint64(2))
+	manager.StopSession(h.session.UUID)
+}
+
 func TestBotFleetSubscriptionManager_RealStreamRoutesBarrierArrival(t *testing.T) {
 	h := newBotActionResultHarness(t)
 	setBarrierScenario(t, h, time.Minute, ScenarioBarrierRelease{Type: "all"}, "fail")
@@ -830,7 +886,7 @@ func TestBotFleetSubscriptionManager_RealStreamRoutesBarrierArrival(t *testing.T
 		fixedBarrierExpectedBots{h.bot.UUID: 3},
 	)
 	t.Cleanup(events.Close)
-	action := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000610", "token-stream", h.now)
+	action := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000610", testActionCorrelationToken, h.now)
 	action.ResultJson = mustBarrierPayload(t, authoritativeBarrierPayload(h.now, time.Minute, ScenarioBarrierRelease{Type: "all"}, "fail"))
 	stream := &botFleetFakeStream{events: []*workerpb.BotFleetEvent{{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: action}}}}
 	client := &botFleetFakeClient{snapshot: &workerpb.GetBotFleetSnapshotResponse{}, streams: []BotFleetRuntimeStream{stream}}

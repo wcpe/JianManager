@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -140,7 +141,7 @@ func TestApplyBotBatchEnforcesLimitGenerationAndIdempotency(t *testing.T) {
 func TestApplyBotBatchPreservesScenarioEnvelopeForFleetNode(t *testing.T) {
 	fake := &fakeBotFleetManager{
 		capacity: bot.BotCapacitySnapshot{Ready: true, MaxBots: 50, CapacityGeneration: 4},
-		apply: &bot.BotWorkerEvent{Evt: "batch-result", Results: []bot.BotItemResult{{BotID: "bot-envelope", Accepted: true}}},
+		apply:    &bot.BotWorkerEvent{Evt: "batch-result", Results: []bot.BotItemResult{{BotID: "bot-envelope", Accepted: true}}},
 	}
 	srv := newBotFleetTestServer(fake)
 	assignment := validRunningAssignment("bot-envelope", 2)
@@ -570,6 +571,186 @@ func TestDispatchBotEventClosesFleetSubscriberAtReliableQueueHardLimit(t *testin
 	require.Equal(t, codes.ResourceExhausted, status.Code(subscriber.terminalError()))
 	for range ch {
 	}
+}
+
+func TestStreamBotFleetEventsReplaysActionCreatedBetweenSnapshotAndSubscribe(t *testing.T) {
+	fake := &fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, WorkerEpochGeneration: 3}}
+	srv := newBotFleetTestServer(fake)
+	_, err := srv.GetBotFleetSnapshot(context.Background(), &workerpb.GetBotFleetSnapshotRequest{SessionUuid: "run-1"})
+	require.NoError(t, err)
+	srv.dispatchBotEvent(grpcActionTestEvent("action-gap", "succeeded", nil))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &botFleetTestStream{ctx: ctx, events: make(chan *workerpb.BotFleetEvent, 2)}
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.StreamBotFleetEvents(&workerpb.StreamBotFleetEventsRequest{SessionUuid: "run-1"}, stream)
+	}()
+
+	select {
+	case event := <-stream.events:
+		require.Equal(t, "action-gap", event.GetActionEvent().ActionRunId)
+	case <-time.After(time.Second):
+		t.Fatal("snapshot 与 subscribe 间产生的动作事件未补发")
+	}
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+}
+
+func TestBotActionJournalReplaysByLastReceiveSequence(t *testing.T) {
+	srv := newBotFleetTestServer(&fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, WorkerEpochGeneration: 3}})
+	first := grpcActionTestEvent("action-a", "running", nil)
+	first.Action.Message = "first"
+	srv.dispatchBotEvent(first)
+	srv.dispatchBotEvent(grpcActionTestEvent("action-b", "running", nil))
+	latest := grpcActionTestEvent("action-a", "running", nil)
+	latest.Action.Message = "latest"
+	srv.dispatchBotEvent(latest)
+
+	ch := make(chan *bot.BotWorkerEvent, 4)
+	srv.addBotFleetEventSubscriber(ch, "run-1")
+	defer srv.removeBotEventSubscriber(ch)
+
+	replayed := []string{(<-ch).Action.ActionRunID, (<-ch).Action.ActionRunID}
+	require.Equal(t, []string{"action-b", "action-a"}, replayed)
+	require.Equal(t, "latest", srv.botActionJournalSnapshot("run-1")[1].Action.Message)
+}
+
+func TestBotActionJournalCompressesRunningWaitingAndTerminal(t *testing.T) {
+	srv := newBotFleetTestServer(&fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, WorkerEpochGeneration: 3}})
+	srv.dispatchBotEvent(grpcActionTestEvent("ordinary-running", "running", nil))
+	latestRunning := grpcActionTestEvent("ordinary-running", "running", nil)
+	latestRunning.Action.Message = "latest-running"
+	srv.dispatchBotEvent(latestRunning)
+
+	srv.dispatchBotEvent(grpcActionTestEvent("barrier", "running", json.RawMessage(`{"type":"barrier-arrived","round":1}`)))
+	srv.dispatchBotEvent(grpcActionTestEvent("barrier", "succeeded", nil))
+
+	srv.dispatchBotEvent(grpcActionTestEvent("ordinary-terminal", "running", nil))
+	srv.dispatchBotEvent(grpcActionTestEvent("ordinary-terminal", "failed", nil))
+
+	replay := srv.botActionJournalSnapshot("run-1")
+	require.Len(t, replay, 4)
+	byAction := make(map[string][]*bot.ActionEvent)
+	for _, event := range replay {
+		byAction[event.Action.ActionRunID] = append(byAction[event.Action.ActionRunID], event.Action)
+	}
+	require.Len(t, byAction["ordinary-running"], 1)
+	require.Equal(t, "latest-running", byAction["ordinary-running"][0].Message)
+	require.Len(t, byAction["barrier"], 2, "barrier waiting 与 terminal 都必须保留")
+	require.Equal(t, []string{"running", "succeeded"}, []string{byAction["barrier"][0].Status, byAction["barrier"][1].Status})
+	require.Len(t, byAction["ordinary-terminal"], 1, "普通 terminal 应覆盖 running")
+	require.Equal(t, "failed", byAction["ordinary-terminal"][0].Status)
+}
+
+func TestBotActionJournalReplaysAfterReliableQueueOverflow(t *testing.T) {
+	fake := &fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, WorkerEpochGeneration: 3}}
+	srv := newBotFleetTestServer(fake)
+	slow := make(chan *bot.BotWorkerEvent, 1)
+	subscriber := srv.addBotFleetEventSubscriber(slow, "run-1")
+	for index := range botFleetReliableQueueLimit + 32 {
+		event := grpcActionTestEvent("action-overflow", "running", nil)
+		event.Action.Message = fmt.Sprintf("receive-%04d", index)
+		srv.dispatchBotEvent(event)
+	}
+	waitForBotEventSubscribers(t, srv, 0)
+	require.Equal(t, codes.ResourceExhausted, status.Code(subscriber.terminalError()))
+	for range slow {
+	}
+
+	reconnected := make(chan *bot.BotWorkerEvent, 2)
+	srv.addBotFleetEventSubscriber(reconnected, "run-1")
+	defer srv.removeBotEventSubscriber(reconnected)
+	select {
+	case replayed := <-reconnected:
+		require.Equal(t, "action-overflow", replayed.Action.ActionRunID)
+		require.Equal(t, fmt.Sprintf("receive-%04d", botFleetReliableQueueLimit+31), replayed.Action.Message)
+	case <-time.After(time.Second):
+		t.Fatal("可靠队列溢出重订阅后未从 journal 补发")
+	}
+}
+
+func TestBotActionJournalCoversMaximumSingleNodeScenarioWindow(t *testing.T) {
+	srv := newBotFleetTestServer(&fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, WorkerEpochGeneration: 3}})
+	const actionCount = maxBotBatchSize * 100
+	for index := range actionCount {
+		srv.dispatchBotEvent(grpcActionTestEvent(fmt.Sprintf("action-window-%04d", index), "succeeded", nil))
+	}
+
+	replay := srv.botActionJournalSnapshot("run-1")
+	require.Len(t, replay, actionCount)
+	require.Equal(t, "action-window-0000", replay[0].Action.ActionRunID)
+	require.Equal(t, "action-window-4999", replay[len(replay)-1].Action.ActionRunID)
+
+	stream := make(chan *bot.BotWorkerEvent, 1)
+	srv.addBotFleetEventSubscriber(stream, "run-1")
+	defer srv.removeBotEventSubscriber(stream)
+	for index := range actionCount {
+		select {
+		case event := <-stream:
+			require.Equal(t, fmt.Sprintf("action-window-%04d", index), event.Action.ActionRunID)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("第 %d 条 journal replay 超时", index)
+		}
+	}
+}
+
+func TestBotActionJournalReplayDoesNotConsumeLiveBacklog(t *testing.T) {
+	srv := newBotFleetTestServer(&fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, WorkerEpochGeneration: 3}})
+	const actionCount = maxBotBatchSize * 100
+	for index := range actionCount {
+		srv.dispatchBotEvent(grpcActionTestEvent(fmt.Sprintf("action-replay-%04d", index), "succeeded", nil))
+	}
+
+	stream := make(chan *bot.BotWorkerEvent, 1)
+	subscriber := srv.addBotFleetEventSubscriber(stream, "run-1")
+	defer srv.removeBotEventSubscriber(stream)
+	srv.dispatchBotEvent(grpcActionTestEvent("action-live", "succeeded", nil))
+
+	for index := range actionCount {
+		select {
+		case event := <-stream:
+			require.Equal(t, fmt.Sprintf("action-replay-%04d", index), event.Action.ActionRunID)
+		case <-time.After(5 * time.Second):
+			t.Fatalf("第 %d 条 journal replay 超时", index)
+		}
+	}
+	select {
+	case event := <-stream:
+		require.Equal(t, "action-live", event.Action.ActionRunID)
+	case <-time.After(time.Second):
+		t.Fatal("journal replay 占用了 1024 条 live backlog")
+	}
+	require.NoError(t, subscriber.terminalError())
+}
+
+func TestBotActionJournalIgnoresStaleWorkerExitAndClearsCurrentGeneration(t *testing.T) {
+	fake := &fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, WorkerEpochGeneration: 2}}
+	srv := newBotFleetTestServer(fake)
+	event := grpcActionTestEvent("action-current", "succeeded", nil)
+	event.WorkerEpochGeneration = 2
+	srv.dispatchBotEvent(event)
+	require.Len(t, srv.botActionJournalSnapshot("run-1"), 1)
+
+	srv.dispatchBotEvent(&bot.BotWorkerEvent{Evt: "worker-exit", WorkerEpochGeneration: 1})
+	require.Len(t, srv.botActionJournalSnapshot("run-1"), 1, "旧 child 的迟到退出不得清空当前代 journal")
+
+	srv.dispatchBotEvent(&bot.BotWorkerEvent{Evt: "worker-exit", WorkerEpochGeneration: 2})
+	require.Zero(t, srv.botActionJournalSize())
+}
+
+func TestBotActionJournalIsProcessLocalBoundedAndDoesNotSpawnPerEventGoroutine(t *testing.T) {
+	before := runtime.NumGoroutine()
+	srv := newBotFleetTestServer(&fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, WorkerEpochGeneration: 3}})
+	for index := range botActionJournalLimit + 256 {
+		srv.dispatchBotEvent(grpcActionTestEvent(fmt.Sprintf("action-bounded-%05d", index), "succeeded", nil))
+	}
+	require.Equal(t, botActionJournalLimit, srv.botActionJournalSize())
+	time.Sleep(20 * time.Millisecond)
+	require.LessOrEqual(t, runtime.NumGoroutine(), before+2, "journal append 不得为每个事件创建 goroutine")
+
+	fresh := newBotFleetTestServer(&fakeBotFleetManager{capacity: bot.BotCapacitySnapshot{Ready: true, WorkerEpochGeneration: 3}})
+	require.Zero(t, fresh.botActionJournalSize(), "journal 仅存于当前 Worker 进程内")
 }
 
 func grpcActionTestEvent(actionRunID, actionStatus string, result json.RawMessage) *bot.BotWorkerEvent {
