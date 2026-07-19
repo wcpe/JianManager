@@ -419,6 +419,7 @@ Bot 压测 YAML 编排（FR-274）保持单一解析点：Control Plane 接收 J
 - `BarrierCoordinator` 以 `runId+stageIndex+cohortKey+barrierKey+round` 为内存作用域，首次进入冻结 Bot UUID 与当前 desired generation；后续断线、失败或停止视图不能缩小分母。到达按 Bot+generation 幂等，支持 all/count/percent（百分比向上取整）、统一 `releaseAtUnixMs`、超时 fail/release-arrived，以及运行停止后的显式清理。
 - `ActionSignalRouter` 只路由仍为 running 且 run/Bot/actionRunId/correlationToken/generation 完整匹配的动作，按当前 `ExecutorNodeID`（为空回退目标实例节点）分组调用既有 `SignalBotActions`。Worker 的 accepted/skipped/error 逐项保留；节点调用失败、缺失回执和单项错误均标为可重试，重试复用稳定 signalId。
 - `barrier-arrived` 使用既有 `BotActionEvent.result_json` 承载 stage/cohort/barrier/round/release/deadline，不修改 proto。达到阈值后发 `barrier-release`，载荷只含 round/releaseAtUnixMs；仅 accepted 或无错误 skipped 才从 pending delivery 移除，未送达项保留供重试，已释放 Bot 重连仍获得相同 releaseAt。
+- 内置纯数据预设 `tower-defense-core-v1` 生成 20% lobby（wait_spawn→roam observation）与 80% combat（wait_spawn→send_command→room_joined→barrier→game_started→move+area probe→attack observation）Scenario V2。固定随机种子、进房命令、主城/战斗坐标与半径、区域标识、怪物类型和锁敌半径均须由调用方参数提供，缺失返回 `params.*` path 错误，不内置具体服业务值。
 
 ServerProbe 仍只与目标实例**本机 Worker**通信（`/metrics` 回环抓取 + `/ws/plugin-bridge` 反向连接），不因 Bot 在其他 Worker 执行而跨节点直连；浏览器仍只访问 Control Plane。可信探针事件后续由 CP 关联目标实例后再路由，FR-351 不实现 FR-353 的探针事件适配或 FR-355 的 acceptance harness。
 
