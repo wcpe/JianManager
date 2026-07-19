@@ -228,3 +228,32 @@ test('cancel 后攻击、追击与动作资源全部停止', async () => {
   assert.equal(run.capabilities.attackCalls.length, attacks)
   assert.equal(run.capabilities.clearGoalCount, 1)
 })
+
+test('长动作保留完整已接受 signalId，1001 和多千信号后重放首条不重复计数', async () => {
+  for (const count of [1_001, 3_000]) {
+    const run = runnerOptions({
+      scenario: scenario([attackStep({
+        chase: false, targetNotFoundTimeoutMs: 60_000,
+        stop: { durationMs: 60_000, damageAtLeast: count + 1, successPolicy: 'all' },
+        timeoutMs: 120_000,
+      })]),
+    })
+    const runner = new ScenarioRunner(run.options)
+    await runner.start()
+    const running = run.events[0]
+    let first
+    for (let index = 0; index < count; index++) {
+      const signal = signalFor(running, 'damage', { damage: 1 })
+      if (index === 0) first = signal
+      const receipt = await runner.signal(signal)
+      assert.equal(receipt.accepted, true)
+    }
+
+    const replay = await runner.signal(first)
+    assert.equal(replay.skipped, true)
+    assert.equal(run.events.some((event) => event.status === 'succeeded'), false)
+    await runner.signal(signalFor(running, 'damage', { damage: 1 }))
+    assert.equal(run.events.at(-1).status, 'succeeded')
+    assert.equal(run.events.at(-1).result.trustedDamage, count + 1)
+  }
+})

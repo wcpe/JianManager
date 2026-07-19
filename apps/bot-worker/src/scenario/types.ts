@@ -27,6 +27,7 @@ export interface ScenarioRuntime {
   percent: number
   seed?: number
   botOrdinal?: number
+  runDeadlineUnixMs?: number
   steps: ScenarioStep[]
 }
 
@@ -171,6 +172,7 @@ export function parseScenarioRuntime(input: unknown): ScenarioRuntime {
     percent: finiteNumber(value.percent, 100),
     seed: optionalFiniteNumber(envelope?.seed) ?? optionalFiniteNumber(value.seed),
     botOrdinal: optionalFiniteNumber(envelope?.botOrdinal) ?? optionalFiniteNumber(value.botOrdinal),
+    runDeadlineUnixMs: optionalFiniteNumber(envelope?.runDeadlineUnixMs) ?? optionalFiniteNumber(value.runDeadlineUnixMs),
     steps: value.steps.map((step, index) => parseStep(step, index)),
   }
 }

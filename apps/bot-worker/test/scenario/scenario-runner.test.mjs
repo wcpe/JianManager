@@ -211,5 +211,119 @@ test('Runner 长循环集中 tick 不创建动作级 timer 且结果载荷有界
   }
 
   assert.equal(events.length, 1)
-  assert.ok(JSON.stringify(events[0].result).length <= 16_384)
+  assert.ok(Buffer.byteLength(JSON.stringify(events[0].result)) <= 16 * 1024)
+})
+
+test('Runner 在 tick 调用动作前裁决 move/attack/barrier 截止时间', async () => {
+  const cases = [
+    {
+      name: 'move',
+      step: step('move', 'move_to_and_wait', { pos: { x: 0, y: 64, z: 0 }, radius: 1, timeoutMs: 500 }),
+      errorCode: 'MOVE_TIMEOUT',
+      prepare: async (run, runner) => {
+        await runner.tick(run.capabilities.now())
+        run.capabilities.advance(500)
+      },
+    },
+    {
+      name: 'attack',
+      step: step('attack', 'attack_until', {
+        selector: { kind: 'hostile', radius: 16, priority: 'nearest' },
+        attackIntervalMs: 100, chase: false, reacquire: true,
+        stop: { durationMs: 100, damageAtLeast: 1, successPolicy: 'all' }, timeoutMs: 100,
+      }),
+      errorCode: 'ATTACK_ASSERTION_UNMET',
+      prepare: async (run) => { run.capabilities.advance(100) },
+    },
+    {
+      name: 'barrier',
+      step: step('barrier', 'barrier', { key: 'ready', release: { type: 'all' }, timeoutMs: 500 }),
+      errorCode: 'BARRIER_TIMEOUT',
+      prepare: async (run, runner) => {
+        const running = run.events[0]
+        run.capabilities.nowMs = 1_400
+        await runner.signal({
+          signalId: 'release-before-deadline', botId: 'bot-1', sessionId: 'run-1', generation: 3,
+          actionRunId: running.actionRunId, stepId: running.stepId, correlationToken: running.correlationToken,
+          type: 'barrier-release', payload: { round: 1, releaseAtUnixMs: 1_500 },
+        })
+        run.capabilities.nowMs = 1_500
+      },
+    },
+  ]
+
+  for (const item of cases) {
+    const run = runnerOptions({ scenario: scenario([item.step]) })
+    const runner = new ScenarioRunner(run.options)
+    await runner.start()
+    await item.prepare(run, runner)
+    await runner.tick(run.capabilities.now())
+    assert.equal(run.events.at(-1).status, 'timed_out', item.name)
+    assert.equal(run.events.at(-1).errorCode, item.errorCode, item.name)
+    assert.equal(run.events.some((event) => event.status === 'succeeded'), false, item.name)
+  }
+})
+
+test('Runner 在 signal 调用动作前裁决 step/run deadline 并安全跳过迟到完整信号', async () => {
+  for (const useRunDeadline of [false, true]) {
+    const run = runnerOptions({
+      scenario: scenario([step('probe', 'wait_probe_event', { event: 'room_joined', timeoutMs: 1_000 })]),
+      runDeadline: useRunDeadline ? 1_100 : undefined,
+    })
+    const runner = new ScenarioRunner(run.options)
+    await runner.start()
+    const running = run.events[0]
+    run.capabilities.nowMs = useRunDeadline ? 1_100 : 2_000
+    const receipt = await runner.signal({
+      signalId: `late-${useRunDeadline}`, botId: 'bot-1', sessionId: 'run-1', generation: 3,
+      actionRunId: running.actionRunId, stepId: running.stepId, correlationToken: running.correlationToken,
+      type: 'probe', payload: { eventType: 'room_joined' },
+    }, run.capabilities.now())
+
+    assert.equal(receipt.accepted, false)
+    assert.equal(receipt.skipped, true)
+    assert.equal(run.events.at(-1).status, 'timed_out')
+    assert.equal(run.events.at(-1).errorCode, 'PROBE_EVENT_TIMEOUT')
+    assert.equal(run.events.some((event) => event.status === 'succeeded'), false)
+  }
+})
+
+test('Runner start 会拒绝已经过期的 runDeadline 且不调用动作 start', async () => {
+  let starts = 0
+  const run = runnerOptions({
+    runDeadline: 999,
+    actionFactory: () => ({
+      async start() { starts++; return { state: 'succeeded' } },
+      async tick() { return { state: 'succeeded' } },
+      async cancel() {},
+      async dispose() {},
+    }),
+  })
+  const runner = new ScenarioRunner(run.options)
+  await runner.start()
+
+  assert.equal(starts, 0)
+  assert.equal(run.events.at(-1).status, 'timed_out')
+  assert.equal(runner.isTerminal, true)
+})
+
+test('Runner 结果统一截断为 16KiB 并保留 UTF-8 安全 preview', async () => {
+  const original = { value: '汉'.repeat(10_000) }
+  const run = runnerOptions({
+    actionFactory: () => ({
+      async start() { return { state: 'succeeded', result: original } },
+      async tick() { return { state: 'running' } },
+      async cancel() {},
+      async dispose() {},
+    }),
+  })
+  const runner = new ScenarioRunner(run.options)
+  await runner.start()
+
+  const bounded = run.events.at(-1).result
+  assert.equal(bounded.truncated, true)
+  assert.equal(bounded.originalBytes, Buffer.byteLength(JSON.stringify(original)))
+  assert.equal(typeof bounded.preview, 'string')
+  assert.equal(bounded.preview.includes('\uFFFD'), false)
+  assert.ok(Buffer.byteLength(JSON.stringify(bounded)) <= 16 * 1024)
 })

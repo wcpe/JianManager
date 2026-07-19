@@ -45,7 +45,7 @@ test('wait 仅随集中时钟推进且不提前完成', async () => {
   assert.equal(events.at(-1).status, 'succeeded')
 })
 
-test('send_command 展开白名单变量并复用 correlationToken', async () => {
+test('send_command 展开白名单变量并复用 UUID correlationToken', async () => {
   const { options, capabilities, events } = runnerOptions({
     scenario: scenario([
       step('send', 'send_command', { command: '/join {{botName}} {{botUuid}} {{runId}} {{cohortKey}} {{correlationToken}}' }),
@@ -57,7 +57,30 @@ test('send_command 展开白名单变量并复用 correlationToken', async () =>
 
   assert.equal(capabilities.chats.length, 1)
   assert.match(capabilities.chats[0], /^\/join BotOne bot-1 run-1 combat /)
+  assert.match(events[1].correlationToken, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
   assert.equal(events[1].correlationToken, events[2].correlationToken)
+})
+
+test('send_command retry 生成新 UUID，同一 attempt 内保持 token 不变', async () => {
+  const run = runnerOptions({
+    scenario: scenario([step('send', 'send_command', {
+      command: '/join {{correlationToken}}', maxAttempts: 2, retryBackoffMs: 10,
+    })]),
+  })
+  run.capabilities.chatError = new Error('first failed')
+  const runner = new ScenarioRunner(run.options)
+  await runner.start()
+  const firstToken = run.events[0].correlationToken
+  run.capabilities.chatError = null
+  run.capabilities.advance(10)
+  await runner.tick(run.capabilities.now())
+  const secondRunning = run.events.findLast((event) => event.status === 'running')
+  const secondSucceeded = run.events.findLast((event) => event.status === 'succeeded')
+
+  assert.match(firstToken, /^[0-9a-f-]{36}$/i)
+  assert.match(secondRunning.correlationToken, /^[0-9a-f-]{36}$/i)
+  assert.notEqual(secondRunning.correlationToken, firstToken)
+  assert.equal(secondSucceeded.correlationToken, secondRunning.correlationToken)
 })
 
 test('send_command 对未知变量、缺值和 chat 异常统一结构化失败', async () => {

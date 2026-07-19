@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import type { ActionEvent } from '../ipc/types.js'
 import { createScenarioAction } from './actions.js'
 import {
@@ -14,9 +14,11 @@ import {
   type ScenarioStep,
 } from './types.js'
 
-const MAX_RESULT_BYTES = 12 * 1024
+const MAX_RESULT_BYTES = 16 * 1024
 const MAX_SIGNAL_HISTORY = 1000
 const MAX_TERMINAL_HISTORY = 100
+// 单动作最长 3_600_000ms，按最短信号节奏 100ms 推导活动 signalId 上限。
+const MAX_ACTIVE_SIGNAL_IDS = 36_000
 
 type ScenarioActionFactory = (step: ScenarioStep, context: ScenarioActionContext) => ScenarioAction
 
@@ -61,6 +63,7 @@ export class ScenarioRunner {
   private readonly actionFactory: ScenarioActionFactory
   private readonly nextActionRunId: () => string
   private readonly signalHistory = new Map<string, ScenarioSignalReceipt>()
+  private readonly activeSignalIDs = new Set<string>()
   private readonly terminalHistory = new Map<string, TerminalAttempt>()
   private operation = Promise.resolve()
   private current: CurrentAttempt | null = null
@@ -68,7 +71,6 @@ export class ScenarioRunner {
   private attempt = 0
   private retryAt: number | undefined
   private correlationToken: string | undefined
-  private correlationCounter = 0
   private lockedEntity: ScenarioEntityId | undefined
   private readonly rejoinCounts = new Map<string, number>()
   private readonly cancelToken = { cancelled: false, reason: undefined as string | undefined }
@@ -77,8 +79,10 @@ export class ScenarioRunner {
   private disposed = false
 
   constructor(options: ScenarioRunnerOptions) {
-    this.options = options
     this.runtime = parseScenarioRuntime(options.scenario)
+    this.options = options.runDeadline === undefined && this.runtime.runDeadlineUnixMs !== undefined
+      ? { ...options, runDeadline: this.runtime.runDeadlineUnixMs }
+      : options
     if (this.runtime.key !== options.cohortKey) throw new Error('Scenario cohortKey 与 assignment 不匹配')
     this.actionFactory = options.actionFactory ?? ((step) => createScenarioAction(step))
     this.nextActionRunId = options.nextActionRunId ?? randomUUID
@@ -135,6 +139,12 @@ export class ScenarioRunner {
       await this.rejectResume(now)
       return
     }
+    if (this.runDeadlineReached(now)) {
+      this.attempt = 1
+      await this.createCurrent(now)
+      await this.timeoutAttempt(now)
+      return
+    }
     await this.startAttempt(now)
   }
 
@@ -159,7 +169,11 @@ export class ScenarioRunner {
 
   private async tickInternal(now: number): Promise<void> {
     if (!this.started || this.terminal || this.disposed) return
-    if (this.options.runDeadline !== undefined && now >= this.options.runDeadline) {
+    if (this.current && this.deadlineReached(now)) {
+      await this.timeoutAttempt(now)
+      return
+    }
+    if (this.runDeadlineReached(now)) {
       await this.expireRun(now)
       return
     }
@@ -170,11 +184,7 @@ export class ScenarioRunner {
     const attempt = this.current
     const result = await this.callAction(() => attempt.action.tick(attempt.context, now))
     if (this.current !== attempt || this.cancelToken.cancelled) return
-    if (result.state !== 'running') {
-      await this.completeAttempt(result.state, result, now)
-      return
-    }
-    if (now >= attempt.context.deadline) await this.timeoutAttempt(now)
+    if (result.state !== 'running') await this.completeAttempt(result.state, result, now)
   }
 
   private async startAttempt(now: number): Promise<void> {
@@ -261,6 +271,14 @@ export class ScenarioRunner {
     return { status, result, jumpIndex }
   }
 
+  private deadlineReached(now: number): boolean {
+    return this.runDeadlineReached(now) || (this.current !== null && now >= this.current.context.deadline)
+  }
+
+  private runDeadlineReached(now: number): boolean {
+    return this.options.runDeadline !== undefined && now >= this.options.runDeadline
+  }
+
   private async expireRun(now: number): Promise<void> {
     this.cancelToken.cancelled = true
     this.cancelToken.reason = '运行总截止时间已到'
@@ -281,7 +299,7 @@ export class ScenarioRunner {
     this.rememberTerminal(this.current)
     const step = this.current.step
     await this.cleanupCurrent()
-    if (this.attempt < step.maxAttempts) {
+    if (!this.runDeadlineReached(now) && this.attempt < step.maxAttempts) {
       this.retryAt = now + step.retryBackoffMs
     } else {
       this.terminal = true
@@ -326,7 +344,21 @@ export class ScenarioRunner {
   private async signalInternal(signal: ScenarioActionSignal, now: number): Promise<ScenarioSignalReceipt> {
     const replay = this.signalHistory.get(signal.signalId)
     if (replay) return { ...replay, skipped: true }
+    if (this.activeSignalIDs.has(signal.signalId)) return { ...acceptedSignal(signal.signalId), skipped: true }
+    if (this.current && this.deadlineReached(now)) {
+      await this.timeoutAttempt(now)
+      const receipt = skippedSignal(signal.signalId, 'action_not_waiting', '动作已超过截止时间')
+      this.rememberSignal(receipt)
+      return receipt
+    }
+    if (this.current && this.activeSignalIDs.size >= MAX_ACTIVE_SIGNAL_IDS) {
+      const receipt = skippedSignal(signal.signalId, 'signal_history_exhausted', '活动动作信号去重容量已满')
+      this.rememberSignal(receipt)
+      return receipt
+    }
+    const attempt = this.current
     const receipt = await this.routeSignal(signal, now)
+    if (receipt.accepted && attempt !== null && this.current === attempt) this.activeSignalIDs.add(signal.signalId)
     this.rememberSignal(receipt)
     return receipt
   }
@@ -379,6 +411,7 @@ export class ScenarioRunner {
     const current = this.current
     if (!current) return
     this.current = null
+    this.activeSignalIDs.clear()
     await this.ignoreErrors(() => current.action.dispose())
     this.options.capabilities.clearPathfinderGoal()
   }
@@ -404,11 +437,7 @@ export class ScenarioRunner {
   }
 
   private newCorrelationToken(): string {
-    this.correlationCounter++
-    const seed = this.options.correlationSeed
-    this.correlationToken = seed
-      ? createHash('sha256').update(`${seed}|${this.correlationCounter}`).digest('hex')
-      : randomUUID()
+    this.correlationToken = randomUUID()
     return this.correlationToken
   }
 
@@ -494,11 +523,36 @@ function boundedResult(result: unknown): unknown {
   if (result === undefined) return undefined
   try {
     const raw = JSON.stringify(result)
-    if (Buffer.byteLength(raw) <= MAX_RESULT_BYTES) return result
-    return { truncated: true, originalBytes: Buffer.byteLength(raw) }
+    const originalBytes = Buffer.byteLength(raw)
+    if (originalBytes <= MAX_RESULT_BYTES) return result
+    return boundedPreview(raw, originalBytes)
   } catch {
-    return { truncated: true, reason: 'result 无法序列化' }
+    return { preview: '', truncated: true, originalBytes: 0, reason: 'result 无法序列化' }
   }
+}
+
+function boundedPreview(raw: string, originalBytes: number): unknown {
+  let low = 0
+  let high = originalBytes
+  let best = ''
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2)
+    const preview = truncateUTF8(raw, middle)
+    const candidate = { preview, truncated: true, originalBytes }
+    if (Buffer.byteLength(JSON.stringify(candidate)) <= MAX_RESULT_BYTES) {
+      best = preview
+      low = middle + 1
+    } else {
+      high = middle - 1
+    }
+  }
+  return { preview: best, truncated: true, originalBytes }
+}
+
+function truncateUTF8(value: string, maxBytes: number): string {
+  const bytes = Buffer.from(value)
+  if (bytes.length <= maxBytes) return value
+  return bytes.subarray(0, maxBytes).toString('utf8').replace(/\uFFFD+$/, '')
 }
 
 function deleteOldest<T>(entries: Map<string, T>): void {
