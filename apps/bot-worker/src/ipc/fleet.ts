@@ -31,6 +31,7 @@ interface McBotLike {
 
 interface BotInstance {
   config: BotConfig
+  fleetManaged: boolean
   behavior: Behavior
   status: string
   mcBot: McBotLike | null
@@ -224,11 +225,10 @@ export class FleetController {
       if (replayed) return
     }
 
-    const legacy = !command.requestId && !command.batchId && !command.idempotencyKey
-      && command.bots.every((config) => !isFleetManagedConfig(config))
+    const fleetManaged = isFleetCreateCommand(command)
     const results = command.bots.length > MAX_BATCH_SIZE
       ? command.bots.map((config) => this.rejected(config.id, 'batch_limit_exceeded', '单批最多 50 个 Bot'))
-      : command.bots.map((config) => this.admit(config, legacy))
+      : command.bots.map((config) => this.admit(config, fleetManaged))
 
     if (command.requestId) {
       this.sendBatchResult(command, results)
@@ -290,10 +290,10 @@ export class FleetController {
     }
   }
 
-  private admit(config: BotConfig, legacy = false): BotItemResult {
+  private admit(config: BotConfig, fleetManaged: boolean): BotItemResult {
     const existing = this.bots.get(config.id)
     if (existing) {
-      if (legacy && isFleetManagedConfig(existing.config)) {
+      if (!fleetManaged && existing.fleetManaged) {
         return this.rejected(config.id, 'fleet_managed', 'Bot 由 Fleet 管理，请使用 Fleet RPC 操作', 'conflict')
       }
       const decision = this.generationDecision(existing.config, config)
@@ -304,7 +304,7 @@ export class FleetController {
     }
     if (existing) this.disposeInstance(config.id, existing)
     try {
-      this.installInstance(config)
+      this.installInstance(config, fleetManaged)
       return { botId: config.id, accepted: true, skipped: false, status: 'accepted' }
     } catch (error) {
       return this.rejected(config.id, 'ephemeral_unavailable', String(error), 'ephemeral_unavailable')
@@ -328,11 +328,12 @@ export class FleetController {
     )
   }
 
-  private installInstance(config: BotConfig): void {
+  private installInstance(config: BotConfig, fleetManaged: boolean): void {
     const behavior = this.createBehavior(config.id, config.behavior || 'idle', config.behaviorConfig)
     behavior.start()
     const instance: BotInstance = {
       config,
+      fleetManaged,
       behavior,
       status: 'connecting',
       mcBot: null,
@@ -447,8 +448,8 @@ export class FleetController {
       this.emitMissingState(botId)
       return { botId, accepted: true, skipped: true, status: 'accepted', errorCode: 'already_stopped' }
     }
-    const legacy = !command.requestId && command.generation === undefined
-    if (legacy && isFleetManagedConfig(instance.config)) {
+    const incompleteFleetEnvelope = !command.requestId || command.generation === undefined
+    if (incompleteFleetEnvelope && instance.fleetManaged) {
       return this.rejected(botId, 'fleet_managed', 'Bot 由 Fleet 管理，请使用 Fleet RPC 操作', 'conflict')
     }
     if (this.isStaleStop(instance.config, command.generation)) {
@@ -600,8 +601,8 @@ function sanitizeStopReason(reason?: string): string | undefined {
     .replace(/\bBearer\s+\S+/gi, 'Bearer [已脱敏]')
 }
 
-function isFleetManagedConfig(config: BotConfig): boolean {
-  return Boolean(config.sessionId || config.generation || config.configHash)
+function isFleetCreateCommand(command: CreateBotsCommand): boolean {
+  return Boolean(command.requestId && command.batchId && command.idempotencyKey)
 }
 
 function isStableBatchResult(result: BotItemResult): boolean {

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -358,6 +359,62 @@ func oldestCompletedBotBatch(entries map[string]*botBatchCacheEntry) string {
 	return oldestKey
 }
 
+func validateBotAssignment(assignment *workerpb.BotAssignment) string {
+	if assignment == nil {
+		return "Bot assignment 不能为空"
+	}
+	if strings.TrimSpace(assignment.BotUuid) == "" {
+		return "botUuid 不能为空"
+	}
+	if strings.TrimSpace(assignment.SessionUuid) == "" {
+		return "sessionUuid 不能为空"
+	}
+	if assignment.Generation <= 0 {
+		return "generation 必须大于 0"
+	}
+	if !validBotConfigHash(assignment.ConfigHash) {
+		return "configHash 必须是 64 位十六进制 SHA-256 摘要"
+	}
+	if assignment.DesiredState == "stopped" {
+		return ""
+	}
+	if assignment.DesiredState != "running" {
+		return "desiredState 仅支持 running/stopped"
+	}
+	return validateRunningBotAssignment(assignment)
+}
+
+func validBotConfigHash(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func validateRunningBotAssignment(assignment *workerpb.BotAssignment) string {
+	if strings.TrimSpace(assignment.InstanceUuid) == "" {
+		return "running assignment 的 instanceUuid 不能为空"
+	}
+	if strings.TrimSpace(assignment.Name) == "" {
+		return "running assignment 的 name 不能为空"
+	}
+	if strings.TrimSpace(assignment.Host) == "" {
+		return "running assignment 的 host 不能为空"
+	}
+	if assignment.Port <= 0 || assignment.Port > 65535 {
+		return "running assignment 的 port 必须在 1-65535 范围内"
+	}
+	return ""
+}
+
+func assignmentBotID(assignment *workerpb.BotAssignment) string {
+	if assignment == nil {
+		return ""
+	}
+	return assignment.BotUuid
+}
+
 func planBotBatch(assignments []*workerpb.BotAssignment, capacity bot.BotCapacitySnapshot, states []bot.BotState) botBatchDispatchPlan {
 	plan := botBatchDispatchPlan{results: make([]*workerpb.ApplyBotBatchItemResult, len(assignments))}
 	existing := make(map[string]bot.BotState, len(states))
@@ -373,8 +430,8 @@ func planBotBatch(assignments []*workerpb.BotAssignment, capacity bot.BotCapacit
 }
 
 func planBotAssignment(plan *botBatchDispatchPlan, index int, assignment *workerpb.BotAssignment, existing map[string]bot.BotState, seen map[string]struct{}, capacity bot.BotCapacitySnapshot, remaining int) int {
-	if assignment == nil || assignment.BotUuid == "" {
-		plan.results[index] = conflictBotResult("", "bot_uuid_invalid", "botUuid 不能为空")
+	if message := validateBotAssignment(assignment); message != "" {
+		plan.results[index] = invalidBotAssignmentResult(assignmentBotID(assignment), message)
 		return remaining
 	}
 	if _, duplicate := seen[assignment.BotUuid]; duplicate {
@@ -393,10 +450,6 @@ func planBotAssignment(plan *botBatchDispatchPlan, index int, assignment *worker
 	}
 	if assignment.DesiredState == "stopped" {
 		return planBotStop(plan, index, assignment, exists, remaining)
-	}
-	if assignment.DesiredState != "" && assignment.DesiredState != "running" {
-		plan.results[index] = conflictBotResult(assignment.BotUuid, "desired_state_invalid", "desiredState 仅支持 running/stopped")
-		return remaining
 	}
 	if !exists && remaining <= 0 {
 		plan.results[index] = capacityBotResult(assignment.BotUuid)
@@ -503,6 +556,10 @@ func botItemResultToProto(result bot.BotItemResult) *workerpb.ApplyBotBatchItemR
 		BotUuid: result.BotID, Accepted: result.Accepted, Skipped: result.Skipped,
 		Status: statusValue, ErrorCode: result.ErrorCode, Error: result.Error,
 	}
+}
+
+func invalidBotAssignmentResult(botID, message string) *workerpb.ApplyBotBatchItemResult {
+	return conflictBotResult(botID, "invalid_assignment", message)
 }
 
 func conflictBotResult(botID, code, message string) *workerpb.ApplyBotBatchItemResult {
