@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 import { FleetController } from '../dist/ipc/fleet.js'
@@ -40,6 +41,7 @@ function createHarness(maxBots = 50, overrides = {}) {
   const events = []
   const connections = []
   const clock = new FakeClock()
+  const { eventObserver, ...controllerOverrides } = overrides
   const controller = new FleetController({
     maxBots,
     workerEpoch: 'epoch-1',
@@ -47,7 +49,11 @@ function createHarness(maxBots = 50, overrides = {}) {
     now: clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
-    sendEvent: (event) => events.push(structuredClone(event)),
+    sendEvent: (event) => {
+      const cloned = structuredClone(event)
+      events.push(cloned)
+      eventObserver?.(cloned)
+    },
     createBot: (options) => {
       const bot = new EventEmitter()
       bot.username = options.username
@@ -67,7 +73,7 @@ function createHarness(maxBots = 50, overrides = {}) {
       setMcBot() {},
       async tick() {},
     }),
-    ...overrides,
+    ...controllerOverrides,
   })
   return { controller, events, connections, clock }
 }
@@ -172,8 +178,94 @@ test('幂等缓存按上限淘汰，长期运行不会无界增长', () => {
     cmd: 'create-bots', requestId: 'request-2', batchId: 'batch-2',
     idempotencyKey: 'key-2', bots: [bot('b')],
   })
-  controller.handleCommand({ ...first, requestId: 'request-3' })
+  controller.handleCommand({
+    ...first,
+    requestId: 'request-3',
+    bots: [bot('a', { generation: 4, configHash: 'hash-a-4' })],
+  })
   assert.equal(connections.length, 3)
+})
+
+test('create-bots 在 gen4 后拒绝 gen3 且同 key 稳定重放 stale', () => {
+  const { controller, events, connections } = createHarness()
+  controller.handleCommand({
+    cmd: 'create-bots', requestId: 'gen4-request', batchId: 'gen4-batch',
+    idempotencyKey: 'gen4-key', bots: [bot('a', { generation: 4, configHash: 'hash-4' })],
+  })
+  const staleCommand = {
+    cmd: 'create-bots', requestId: 'gen3-request', batchId: 'gen3-batch',
+    idempotencyKey: 'gen3-key', bots: [bot('a', { generation: 3, configHash: 'hash-3' })],
+  }
+
+  controller.handleCommand(staleCommand)
+  const first = structuredClone(latest(events, 'batch-result').results[0])
+  assert.deepEqual(first, {
+    botId: 'a', accepted: false, skipped: true, status: 'stale',
+    errorCode: 'stale_generation', error: 'Bot generation 已过期',
+  })
+  assert.equal(connections.length, 1)
+  assert.equal(controller.snapshots()[0].generation, 4)
+
+  controller.handleCommand({ ...staleCommand, requestId: 'gen3-replay' })
+  assert.deepEqual(latest(events, 'batch-result').results[0], first)
+  assert.equal(connections.length, 1)
+})
+
+test('create-bots 同代同配置幂等跳过、同代异配置冲突且高代才替换', () => {
+  const { controller, events, connections } = createHarness()
+  controller.handleCommand({ cmd: 'create-bots', bots: [bot('a', { generation: 5, configHash: 'hash-5' })] })
+
+  controller.handleCommand({
+    cmd: 'create-bots', requestId: 'same-request', batchId: 'same-batch',
+    idempotencyKey: 'same-generation-key', bots: [bot('a', { generation: 5, configHash: 'hash-5' })],
+  })
+  assert.deepEqual(latest(events, 'batch-result').results[0], {
+    botId: 'a', accepted: true, skipped: true, status: 'accepted',
+  })
+  assert.equal(connections.length, 1)
+
+  const conflictCommand = {
+    cmd: 'create-bots', requestId: 'conflict-request', batchId: 'conflict-batch',
+    idempotencyKey: 'generation-conflict-key', bots: [bot('a', { generation: 5, configHash: 'other-hash' })],
+  }
+  controller.handleCommand(conflictCommand)
+  const conflict = structuredClone(latest(events, 'batch-result').results[0])
+  assert.deepEqual(conflict, {
+    botId: 'a', accepted: false, skipped: true, status: 'conflict',
+    errorCode: 'config_hash_conflict', error: '相同 generation 的 configHash 不一致',
+  })
+  controller.handleCommand({ ...conflictCommand, requestId: 'conflict-replay' })
+  assert.deepEqual(latest(events, 'batch-result').results[0], conflict)
+  assert.equal(connections.length, 1)
+
+  controller.handleCommand({
+    cmd: 'create-bots', requestId: 'higher-request', batchId: 'higher-batch',
+    idempotencyKey: 'higher-key', bots: [bot('a', { generation: 6, configHash: 'hash-6' })],
+  })
+  assert.equal(latest(events, 'batch-result').results[0].status, 'accepted')
+  assert.equal(connections.length, 2)
+  assert.equal(controller.snapshots()[0].generation, 6)
+})
+
+test('create-bots 并发不同 key 时旧 generation 不能覆盖新 generation', async () => {
+  const { controller, events, connections } = createHarness()
+  controller.handleCommand({ cmd: 'create-bots', bots: [bot('a', { generation: 2, configHash: 'hash-2' })] })
+
+  await Promise.all([
+    Promise.resolve().then(() => controller.handleCommand({
+      cmd: 'create-bots', requestId: 'concurrent-new', batchId: 'concurrent-new-batch',
+      idempotencyKey: 'concurrent-new-key', bots: [bot('a', { generation: 4, configHash: 'hash-4' })],
+    })),
+    Promise.resolve().then(() => controller.handleCommand({
+      cmd: 'create-bots', requestId: 'concurrent-old', batchId: 'concurrent-old-batch',
+      idempotencyKey: 'concurrent-old-key', bots: [bot('a', { generation: 3, configHash: 'hash-3' })],
+    })),
+  ])
+
+  assert.equal(connections.length, 2)
+  assert.equal(controller.snapshots()[0].generation, 4)
+  const stale = events.find((event) => event.evt === 'batch-result' && event.requestId === 'concurrent-old')
+  assert.equal(stale.results[0].status, 'stale')
 })
 
 test('action-event 路由骨架保留冻结动作字段', () => {
@@ -244,6 +336,55 @@ test('connectNotBefore 到点才连接，stop 和替换会取消旧定时器', (
   assert.equal(connections.length, 2)
 })
 
+test('stop-bots 旧代不停止新 Bot，高代停止先发 stopped 再回执', () => {
+  const diagnostics = []
+  let batchObservedAfterQuit = false
+  const { controller, events, connections } = createHarness(50, {
+    onBotStopped: (diagnostic) => diagnostics.push(diagnostic),
+    eventObserver: (event) => {
+      if (event.evt === 'batch-result' && event.requestId === 'stop-6') {
+        batchObservedAfterQuit = connections[0].bot.quitCount === 1
+      }
+    },
+  })
+  controller.handleCommand({ cmd: 'create-bots', bots: [bot('a', { generation: 5, configHash: 'hash-5' })] })
+
+  controller.handleCommand({
+    cmd: 'stop-bots', requestId: 'stop-4', botIds: ['a'], generation: 4,
+    reason: '旧指令 token=不得外泄',
+  })
+  assert.deepEqual(latest(events, 'batch-result').results[0], {
+    botId: 'a', accepted: false, skipped: true, status: 'stale',
+    errorCode: 'stale_generation', error: '停止 generation 已过期',
+  })
+  assert.equal(controller.metrics().activeBots, 1)
+  assert.equal(connections[0].bot.quitCount, 0)
+  assert.deepEqual(diagnostics, [])
+
+  const eventStart = events.length
+  controller.handleCommand({
+    cmd: 'stop-bots', requestId: 'stop-6', botIds: ['a'], generation: 6,
+    reason: '调度收束 token=不得外泄',
+  })
+  const stoppedEvents = events.slice(eventStart)
+  assert.equal(stoppedEvents[0].evt, 'bot-state')
+  assert.equal(stoppedEvents[0].bots[0].status, 'stopped')
+  assert.equal(stoppedEvents[0].bots[0].sessionId, 'session-1')
+  assert.equal(stoppedEvents[0].bots[0].generation, 5)
+  assert.equal(stoppedEvents[0].bots[0].configHash, 'hash-5')
+  assert.equal(stoppedEvents[0].bots[0].workerEpoch, 'epoch-1')
+  assert.equal(stoppedEvents[0].bots[0].workerEpochGeneration, 7)
+  assert.equal(typeof stoppedEvents[0].bots[0].eventSeq, 'number')
+  assert.equal(stoppedEvents[0].bots[0].observedAt, 1_000)
+  assert.equal(stoppedEvents[1].evt, 'batch-result')
+  assert.equal(stoppedEvents[1].requestId, 'stop-6')
+  assert.equal(stoppedEvents[1].results[0].status, 'accepted')
+  assert.equal(batchObservedAfterQuit, true)
+  assert.equal(JSON.stringify(stoppedEvents).includes('token=不得外泄'), false)
+  assert.deepEqual(diagnostics, [{ botId: 'a', generation: 6, reason: '调度收束 token=[已脱敏]' }])
+  assert.equal(controller.metrics().activeBots, 0)
+})
+
 test('snapshot 和 bot-state 携带冻结代际字段及单调 eventSeq', () => {
   const { controller, events, connections, clock } = createHarness()
   controller.handleCommand({ cmd: 'create-bots', bots: [bot('a')] })
@@ -267,6 +408,18 @@ test('snapshot 和 bot-state 携带冻结代际字段及单调 eventSeq', () => 
   assert.ok(result.bots[0].eventSeq > connected.eventSeq)
 })
 
+test('新进程 get-fleet-snapshot 明确返回空 bots', () => {
+  const { controller, events } = createHarness()
+
+  controller.handleCommand({ cmd: 'get-fleet-snapshot', requestId: 'empty-snapshot' })
+
+  assert.deepEqual(latest(events, 'fleet-snapshot-result'), {
+    evt: 'fleet-snapshot-result',
+    requestId: 'empty-snapshot',
+    bots: [],
+  })
+})
+
 test('signal-actions 使用冻结命令名并逐项回执', () => {
   const { controller, events } = createHarness()
   controller.handleCommand({ cmd: 'create-bots', bots: [bot('a')] })
@@ -283,6 +436,20 @@ test('signal-actions 使用冻结命令名并逐项回执', () => {
     'accepted', 'ephemeral_unavailable',
   ])
   assert.equal(controller.handleCommand({ cmd: 'signal-bot-actions' }), false)
+})
+
+test('Node IPC schema 与 Go 冻结 JSON 字段保持一致', () => {
+  const goIPC = readFileSync(new URL('../../../internal/worker/bot/ipc.go', import.meta.url), 'utf8')
+  const goManager = readFileSync(new URL('../../../internal/worker/bot/manager.go', import.meta.url), 'utf8')
+
+  assert.match(goManager, /SignalActionsCommand\{Cmd: "signal-actions"/)
+  assert.match(goIPC, /ConnectNotBefore\s+int64\s+`json:"connectNotBefore,omitempty"`/)
+  assert.doesNotMatch(goIPC, /json:"connectNotBeforeUnixMs/)
+  assert.match(goIPC, /type StopBotsCommand struct \{[\s\S]*Generation\s+int64\s+`json:"generation,omitempty"`[\s\S]*Reason\s+string\s+`json:"reason,omitempty"`/)
+  assert.match(goManager, /Results\s+\[\]BotItemResult\s+`json:"results,omitempty"`/)
+  assert.match(goManager, /SignalResults\s+\[\]SignalItemResult\s+`json:"signalResults,omitempty"`/)
+  assert.match(goManager, /Bots\s+\[\]BotState\s+`json:"bots,omitempty"`/)
+  assert.match(goIPC, /type SignalItemResult struct \{[\s\S]*Status\s+string\s+`json:"status,omitempty"`/)
 })
 
 test('旧 create/stop 消息继续工作且同步 stop 回显 requestId', () => {

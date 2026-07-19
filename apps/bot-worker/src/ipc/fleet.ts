@@ -46,6 +46,12 @@ interface CachedBatchResult {
   results: BotItemResult[]
 }
 
+interface StopDiagnostic {
+  botId: string
+  generation?: number
+  reason?: string
+}
+
 /** Fleet 控制器依赖，Mineflayer 和时钟均可替换以避免单元测试真实联网。 */
 export interface FleetControllerOptions {
   maxBots: number
@@ -60,7 +66,7 @@ export interface FleetControllerOptions {
   idempotencyTtlMs?: number
   idempotencyCacheSize?: number
   signalRouter?: (signal: ActionSignal, config: BotConfig) => SignalItemResult
-  onBotStopped?: () => void
+  onBotStopped?: (diagnostic: StopDiagnostic) => void
 }
 
 /** 管理 Fleet IPC 的批量准入、连接门控、快照与通用信号回执。 */
@@ -107,8 +113,7 @@ export class FleetController {
         return true
       }
       case 'stop-bots': {
-        const stop = command as StopBotsCommand
-        this.stopBots(stop.botIds, stop.requestId)
+        this.stopBots(command as StopBotsCommand)
         return true
       }
       case 'signal-actions': {
@@ -208,7 +213,7 @@ export class FleetController {
   shutdown(): void {
     this.stopped = true
     for (const [botId, instance] of [...this.bots]) {
-      this.disposeInstance(botId, instance, false)
+      this.disposeInstance(botId, instance)
     }
     this.idempotencyCache.clear()
   }
@@ -282,16 +287,37 @@ export class FleetController {
 
   private admit(config: BotConfig): BotItemResult {
     const existing = this.bots.get(config.id)
+    if (existing) {
+      const decision = this.generationDecision(existing.config, config)
+      if (decision) return decision
+    }
     if (!existing && this.bots.size >= this.maxBots) {
       return this.rejected(config.id, 'capacity_insufficient', 'Bot Worker 容量不足', 'capacity_insufficient')
     }
-    if (existing) this.disposeInstance(config.id, existing, false)
+    if (existing) this.disposeInstance(config.id, existing)
     try {
       this.installInstance(config)
       return { botId: config.id, accepted: true, skipped: false, status: 'accepted' }
     } catch (error) {
       return this.rejected(config.id, 'ephemeral_unavailable', String(error), 'ephemeral_unavailable')
     }
+  }
+
+  private generationDecision(current: BotConfig, incoming: BotConfig): BotItemResult | null {
+    if (current.generation === undefined || incoming.generation === undefined) return null
+    if (incoming.generation < current.generation) {
+      return this.rejected(incoming.id, 'stale_generation', 'Bot generation 已过期', 'stale')
+    }
+    if (incoming.generation > current.generation) return null
+    if (incoming.configHash === current.configHash) {
+      return { botId: incoming.id, accepted: true, skipped: true, status: 'accepted' }
+    }
+    return this.rejected(
+      incoming.id,
+      'config_hash_conflict',
+      '相同 generation 的 configHash 不一致',
+      'conflict'
+    )
   }
 
   private installInstance(config: BotConfig): void {
@@ -397,18 +423,38 @@ export class FleetController {
     instance.tickTimer.unref?.()
   }
 
-  private stopBots(botIds: string[], requestId?: string): void {
-    const results = botIds.map((botId) => {
-      const instance = this.bots.get(botId)
-      if (!instance) {
-        this.emitMissingState(botId)
-        return this.rejected(botId, 'ephemeral_unavailable', 'Bot 不存在', 'ephemeral_unavailable')
-      }
-      this.emitBotState(botId, instance, { status: 'stopped' })
-      this.disposeInstance(botId, instance, true)
-      return { botId, accepted: true, skipped: false, status: 'accepted' } satisfies BotItemResult
+  private stopBots(command: StopBotsCommand): void {
+    const results = command.botIds.map((botId) => this.stopBot(botId, command))
+    if (command.requestId) {
+      this.sendEvent({ evt: 'batch-result', requestId: command.requestId, results })
+    }
+  }
+
+  private stopBot(botId: string, command: StopBotsCommand): BotItemResult {
+    const instance = this.bots.get(botId)
+    if (!instance) {
+      this.emitMissingState(botId)
+      return this.rejected(botId, 'ephemeral_unavailable', 'Bot 不存在', 'ephemeral_unavailable')
+    }
+    if (this.isStaleStop(instance.config, command.generation)) {
+      return this.rejected(botId, 'stale_generation', '停止 generation 已过期', 'stale')
+    }
+    this.stopInstanceResources(instance)
+    instance.status = 'stopped'
+    this.emitBotState(botId, instance)
+    this.bots.delete(botId)
+    this.onBotStopped?.({
+      botId,
+      generation: command.generation,
+      reason: sanitizeStopReason(command.reason),
     })
-    if (requestId) this.sendEvent({ evt: 'batch-result', requestId, results })
+    return { botId, accepted: true, skipped: false, status: 'accepted' }
+  }
+
+  private isStaleStop(config: BotConfig, generation?: number): boolean {
+    return generation !== undefined
+      && config.generation !== undefined
+      && config.generation > generation
   }
 
   private signalActions(requestId: string, signals: ActionSignal[]): void {
@@ -428,7 +474,12 @@ export class FleetController {
     this.sendEvent({ evt: 'signal-result', requestId, signalResults })
   }
 
-  private disposeInstance(botId: string, instance: BotInstance, refillPrewarm: boolean): void {
+  private disposeInstance(botId: string, instance: BotInstance): void {
+    this.stopInstanceResources(instance)
+    this.bots.delete(botId)
+  }
+
+  private stopInstanceResources(instance: BotInstance): void {
     if (instance.connectTimer !== null) {
       this.cancelSchedule(instance.connectTimer)
       instance.connectTimer = null
@@ -437,17 +488,14 @@ export class FleetController {
       clearInterval(instance.tickTimer)
       instance.tickTimer = null
     }
-    this.bots.delete(botId)
     instance.behavior.stop()
-    if (instance.mcBot) {
-      try {
-        instance.mcBot.quit()
-      } catch {
-        // 连接已经关闭时 quit 可能抛错，清理仍需继续。
-      }
-      instance.mcBot = null
+    if (!instance.mcBot) return
+    try {
+      instance.mcBot.quit()
+    } catch {
+      // 连接已经关闭时 quit 可能抛错，清理仍需继续。
     }
-    if (refillPrewarm) this.onBotStopped?.()
+    instance.mcBot = null
   }
 
   private snapshot(botId: string, instance: BotInstance): BotStateSnapshot {
@@ -528,6 +576,13 @@ export class FleetController {
   ): SignalItemResult {
     return { signalId, accepted: false, skipped: true, status, errorCode, error }
   }
+}
+
+function sanitizeStopReason(reason?: string): string | undefined {
+  if (!reason) return reason
+  return reason
+    .replace(/\b(token|password|secret|authorization)\s*=\s*\S+/gi, '$1=[已脱敏]')
+    .replace(/\bBearer\s+\S+/gi, 'Bearer [已脱敏]')
 }
 
 function batchFingerprint(command: CreateBotsCommand): string {
