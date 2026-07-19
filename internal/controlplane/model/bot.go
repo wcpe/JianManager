@@ -88,6 +88,7 @@ type BotStressSession struct {
 	Config               string                 `gorm:"type:text" json:"config"`
 	OrchestrationYAML    string                 `gorm:"type:text" json:"orchestrationYaml,omitempty"`
 	OrchestrationSummary string                 `gorm:"type:text" json:"orchestrationSummary,omitempty"`
+	ScenarioSnapshot     string                 `gorm:"type:longtext" json:"scenarioSnapshot,omitempty"`
 	AllocationPlan       string                 `gorm:"type:text" json:"allocationPlan,omitempty"`
 	Succeeded            int                    `gorm:"default:0" json:"succeeded"`
 	Failed               int                    `gorm:"default:0" json:"failed"`
@@ -151,4 +152,39 @@ func (b *BotLoadBatch) BeforeCreate(tx *gorm.DB) error {
 		b.UUID = uuid.New().String()
 	}
 	return nil
+}
+
+// BotLoadActionResultStatus 是场景动作结果状态。
+type BotLoadActionResultStatus string
+
+const (
+	BotLoadActionRunning   BotLoadActionResultStatus = "running"
+	BotLoadActionSucceeded BotLoadActionResultStatus = "succeeded"
+	BotLoadActionFailed    BotLoadActionResultStatus = "failed"
+	BotLoadActionTimedOut  BotLoadActionResultStatus = "timed_out"
+	BotLoadActionCancelled BotLoadActionResultStatus = "cancelled"
+)
+
+// BotLoadActionResult 是 FR-352 动作结果持久化骨架，服务接线留后续提交。
+type BotLoadActionResult struct {
+	ID               uint                      `gorm:"primaryKey" json:"id"`
+	StressSessionID  uint                      `gorm:"not null;index" json:"stressSessionId"`
+	BotID            uint                      `gorm:"not null;index" json:"botId"`
+	CohortKey        string                    `gorm:"type:varchar(64);not null" json:"cohortKey"`
+	StepID           string                    `gorm:"type:varchar(64);not null" json:"stepId"`
+	ActionRunID      string                    `gorm:"type:char(36);not null;uniqueIndex" json:"actionRunId"`
+	Attempt          int                       `gorm:"not null" json:"attempt"`
+	Status           BotLoadActionResultStatus `gorm:"type:varchar(16);not null;index" json:"status"`
+	ErrorCode        string                    `gorm:"type:varchar(64)" json:"errorCode,omitempty"`
+	Message          string                    `gorm:"type:text" json:"message,omitempty"`
+	DurationMS       int64                     `gorm:"not null;default:0" json:"durationMs"`
+	CorrelationToken string                    `gorm:"type:varchar(128);index" json:"correlationToken,omitempty"`
+	StartedAt        time.Time                 `gorm:"not null" json:"startedAt"`
+	EndedAt          *time.Time                `json:"endedAt,omitempty"`
+	ResultJSON       string                    `gorm:"type:longtext" json:"resultJson,omitempty"`
+	CreatedAt        time.Time                 `json:"createdAt"`
+	UpdatedAt        time.Time                 `json:"updatedAt"`
+
+	StressSession BotStressSession `gorm:"foreignKey:StressSessionID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	Bot           Bot              `gorm:"foreignKey:BotID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 }

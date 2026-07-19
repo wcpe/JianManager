@@ -18,8 +18,11 @@ func TestBotLoadModels_AutoMigrateAndConstraints(t *testing.T) {
 		&model.Instance{},
 		&model.BotStressSession{},
 		&model.BotLoadBatch{},
+		&model.BotLoadActionResult{},
 		&model.Bot{},
 	))
+	require.True(t, db.Migrator().HasColumn(&model.BotStressSession{}, "scenario_snapshot"))
+	require.True(t, db.Migrator().HasTable(&model.BotLoadActionResult{}))
 
 	node := &model.Node{Name: "executor", Host: "127.0.0.1", Secret: "secret"}
 	require.NoError(t, db.Create(node).Error)

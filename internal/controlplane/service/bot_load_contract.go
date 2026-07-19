@@ -8,6 +8,7 @@ import (
 )
 
 const (
+	BotLoadScenarioInvalidCode      = "BOT_LOAD_SCENARIO_INVALID"
 	BotLoadCapacityChangedCode      = "BOT_LOAD_CAPACITY_CHANGED"
 	BotLoadCapacityInsufficientCode = "BOT_LOAD_CAPACITY_INSUFFICIENT"
 	BotLoadNodeUnavailableCode      = "BOT_LOAD_NODE_UNAVAILABLE"
