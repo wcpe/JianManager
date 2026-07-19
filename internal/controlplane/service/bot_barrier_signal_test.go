@@ -109,9 +109,15 @@ func barrierTestArrival(scope BarrierScope, ordinal int) BarrierArrival {
 	return BarrierArrival{Scope: scope, BotUUID: fmt.Sprintf("bot-%03d", ordinal), Generation: 1, ActionRunID: fmt.Sprintf("action-%03d", ordinal), CorrelationToken: fmt.Sprintf("token-%03d", ordinal)}
 }
 
-type fakeWaitingActionFinder struct{ waiting map[string]*WaitingAction }
+type fakeWaitingActionFinder struct {
+	waiting map[string]*WaitingAction
+	err     error
+}
 
 func (f fakeWaitingActionFinder) FindWaitingAction(_ context.Context, runID, botUUID, actionRunID, token string) (*WaitingAction, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	return f.waiting[runID+"|"+botUUID+"|"+actionRunID+"|"+token], nil
 }
 
@@ -202,6 +208,13 @@ func TestActionSignalRouter_ReportsNodeCallFailureAsRetriable(t *testing.T) {
 	require.Contains(t, report.Items[0].Error, "节点断开")
 }
 
+func TestActionSignalRouter_ReportsLookupFailureAsRetriable(t *testing.T) {
+	router := NewActionSignalRouter(fakeWaitingActionFinder{err: errors.New("数据库繁忙")}, &fakeActionSignalClient{}, &botLoadFakeClock{now: time.Now()})
+	report := router.Route(context.Background(), []ActionSignalInput{{RunID: "run", BotUUID: "bot-a", ActionRunID: "action-a", CorrelationToken: "token-a", Type: "probe", Payload: []byte(`{}`)}})
+	require.True(t, report.Items[0].Retriable)
+	require.Equal(t, "LOOKUP_FAILED", report.Items[0].ErrorCode)
+}
+
 func waitingActionFixture(botUUID, actionRunID, token, nodeUUID string) *WaitingAction {
 	return &WaitingAction{
 		Result: model.BotLoadActionResult{ActionRunID: actionRunID, StepID: "wait", CorrelationToken: token, Status: model.BotLoadActionRunning},
@@ -269,6 +282,22 @@ func TestScenarioActionEventService_BarrierReleaseKeepsFailedDeliveriesForRetry(
 	require.True(t, report.Items[0].Accepted)
 	require.Empty(t, barriers.PendingRelease(scope).Pending)
 	require.Equal(t, releaseAt, barriers.PendingRelease(scope).ReleaseAtUnixMS)
+}
+
+func TestScenarioActionEventService_RejectsInvalidBarrierBeforeWritingLedger(t *testing.T) {
+	h := newBotActionResultHarness(t)
+	clock := &botLoadFakeClock{now: h.now}
+	barriers := NewBarrierCoordinator(clock)
+	events := NewScenarioActionEventService(h.service, barriers, NewActionSignalRouter(h.service, &fakeActionSignalClient{}, clock), fixedBarrierExpectedBots{h.bot.UUID: 3})
+	event := barrierActionEvent(h.bot.UUID, h.session.UUID, "00000000-0000-0000-0000-000000000403", "token-a", h.now)
+	event.ResultJson = fmt.Sprintf(`{"type":"barrier-arrived","stageIndex":1,"cohortKey":"combat","barrierKey":"ready","round":1,"release":{"type":"percent","value":101},"deadlineUnixMs":%d}`, h.now.Add(time.Minute).UnixMilli())
+
+	result, err := events.Ingest(context.Background(), h.node.ID, h.session.UUID, event)
+	require.NoError(t, err)
+	require.Equal(t, ActionResultIgnoredInvalid, result.Decision)
+	var count int64
+	require.NoError(t, h.db.Model(&model.BotLoadActionResult{}).Count(&count).Error)
+	require.Zero(t, count)
 }
 
 func barrierActionEvent(botUUID, runID, actionRunID, token string, now time.Time) *workerpb.BotActionEvent {

@@ -76,21 +76,30 @@ func (s *ScenarioActionEventService) Ingest(ctx context.Context, executorNodeID 
 	if err != nil {
 		return actionIngestResult(ActionResultIgnoredInvalid, event, err.Error()), nil
 	}
-	result, err := s.results.Ingest(ctx, executorNodeID, expectedSessionUUID, event)
-	if err != nil || !isBarrier || result.Decision == ActionResultIgnoredInvalid || result.Decision == ActionResultIgnoredIdentity {
-		return result, err
+	if !isBarrier {
+		return s.results.Ingest(ctx, executorNodeID, expectedSessionUUID, event)
 	}
 	expected, err := s.expected.ExpectedBots(ctx, event.SessionUuid, payload.CohortKey)
 	if err != nil {
-		return result, fmt.Errorf("查询屏障期望 Bot 集合失败: %w", err)
+		return ActionResultIngestResult{}, fmt.Errorf("查询屏障期望 Bot 集合失败: %w", err)
 	}
 	scope := BarrierScope{RunID: event.SessionUuid, StageIndex: payload.StageIndex, CohortKey: payload.CohortKey, BarrierKey: payload.BarrierKey, Round: payload.Round}
 	definition := BarrierDefinition{
 		Scope: scope, ExpectedBots: expected, Release: payload.Release,
 		TimeoutPolicy: payload.TimeoutPolicy, Deadline: time.UnixMilli(payload.DeadlineUnixMS).UTC(),
 	}
-	if err := s.barriers.Ensure(definition); err != nil {
+	if err := validateBarrierDefinition(definition); err != nil {
 		return actionIngestResult(ActionResultIgnoredInvalid, event, err.Error()), nil
+	}
+	if expected[event.BotUuid] != event.Generation {
+		return actionIngestResult(ActionResultIgnoredIdentity, event, "barrier-arrived Bot 或 generation 不在冻结候选集合内"), nil
+	}
+	result, err := s.results.Ingest(ctx, executorNodeID, expectedSessionUUID, event)
+	if err != nil || result.Decision == ActionResultIgnoredInvalid || result.Decision == ActionResultIgnoredIdentity {
+		return result, err
+	}
+	if err := s.barriers.Ensure(definition); err != nil {
+		return ActionResultIngestResult{}, err
 	}
 	barrierResult := s.barriers.Arrive(BarrierArrival{
 		Scope: scope, BotUUID: event.BotUuid, Generation: event.Generation,

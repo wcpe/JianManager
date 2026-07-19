@@ -104,9 +104,13 @@ func (r *ActionSignalRouter) Route(ctx context.Context, inputs []ActionSignalInp
 	groups := make(map[string][]routedActionSignal)
 	for index, input := range inputs {
 		report.Items[index] = ActionSignalReceipt{Input: input, SignalID: stableActionSignalID(input)}
-		waiting, diagnostic := r.resolve(ctx, input)
+		waiting, diagnostic, retriable := r.resolve(ctx, input)
 		if diagnostic != "" {
-			report.Items[index].Status, report.Items[index].Error = ActionSignalRejected, diagnostic
+			if retriable {
+				markSignalFailure(&report.Items[index], "LOOKUP_FAILED", diagnostic)
+			} else {
+				report.Items[index].Status, report.Items[index].Error = ActionSignalRejected, diagnostic
+			}
 			continue
 		}
 		signal := actionSignalProto(input, waiting, report.Items[index].SignalID, r.clock.Now().UnixMilli())
@@ -123,27 +127,27 @@ type routedActionSignal struct {
 	signal *workerpb.BotActionSignal
 }
 
-func (r *ActionSignalRouter) resolve(ctx context.Context, input ActionSignalInput) (*WaitingAction, string) {
+func (r *ActionSignalRouter) resolve(ctx context.Context, input ActionSignalInput) (*WaitingAction, string, bool) {
 	if r.finder == nil || r.client == nil {
-		return nil, "动作信号路由器未完整装配"
+		return nil, "动作信号路由器未完整装配", true
 	}
 	if strings.TrimSpace(input.RunID) == "" || strings.TrimSpace(input.BotUUID) == "" || strings.TrimSpace(input.ActionRunID) == "" || strings.TrimSpace(input.CorrelationToken) == "" || strings.TrimSpace(input.Type) == "" {
-		return nil, "动作信号关联字段不完整"
+		return nil, "动作信号关联字段不完整", false
 	}
 	if len(input.Payload) == 0 || !json.Valid(input.Payload) {
-		return nil, "动作信号 payload 不是有效 JSON"
+		return nil, "动作信号 payload 不是有效 JSON", false
 	}
 	waiting, err := r.finder.FindWaitingAction(ctx, input.RunID, input.BotUUID, input.ActionRunID, input.CorrelationToken)
 	if err != nil {
-		return nil, err.Error()
+		return nil, err.Error(), true
 	}
 	if waiting == nil || waiting.Generation <= 0 || waiting.ExecutorNodeUUID == "" {
-		return nil, "未找到完整关联的等待动作"
+		return nil, "未找到完整关联的等待动作", false
 	}
 	if waiting.Bot.DesiredStateGeneration != waiting.Generation || waiting.SessionUUID != input.RunID {
-		return nil, "等待动作 generation 或运行关联已变化"
+		return nil, "等待动作 generation 或运行关联已变化", false
 	}
-	return waiting, ""
+	return waiting, "", false
 }
 
 func (r *ActionSignalRouter) routeGroup(ctx context.Context, nodeUUID string, routed []routedActionSignal, report *ActionSignalReport) {
