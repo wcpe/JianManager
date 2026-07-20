@@ -67,8 +67,9 @@ embed-probe:
 embed-client-updater:
 	cd client-updater && ./gradlew :wedge:jar :updater-core:jar
 	mkdir -p internal/controlplane/embed/client-updater
-	cp client-updater/wedge/build/libs/wedge-*.jar internal/controlplane/embed/client-updater/wedge.jar
-	cp client-updater/updater-core/build/libs/updater-core-*.jar internal/controlplane/embed/client-updater/updater-core.jar
+	cp client-updater/wedge/build/libs/wedge-*.jar internal/controlplane/embed/client-updater/wedge.jar || { echo "错误：客户端更新器楔子 jar 构建产物缺失" >&2; exit 1; }
+	cp client-updater/updater-core/build/libs/updater-core-*.jar internal/controlplane/embed/client-updater/updater-core.jar || { echo "错误：客户端 updater-core jar 构建产物缺失" >&2; exit 1; }
+	bash scripts/verify-client-updater-embed.sh internal/controlplane/embed/client-updater/wedge.jar internal/controlplane/embed/client-updater/updater-core.jar
 
 # 下载并校验 CFR 反编译器 jar 注入 Worker 内嵌目录（FR-075 反编译，可选；#14）。
 # 内容靠 SHA-256 pin 校验（不信传输通道，只信内容指纹）；版本/指纹与 decompiler/cfr.go 常量一致。

@@ -1071,7 +1071,7 @@ proxy:
 `.github/workflows/release.yml` 固定使用 Go 1.26.2、Node.js 22 与 JDK21，当前 job 链路为 `metadata → prepare-embeds → test → build → smoke → release`：
 
 - **metadata**：完整 checkout Git 历史后执行 `scripts/release-metadata.mjs`，读取 `internal/version/version.go` 并联合校验 Git ref、SHA 与精确 tag；统一输出 `version`、`release_tag`、`is_release`、`publish_release`，后续 job 不再各自推导版本。当前正式发布提交使用裸版本 `0.18.0`，对应 tag `v0.18.0`。正式 tag `vX.Y.Z` 要求源码同提交为裸 `X.Y.Z`，Git tag / Release 保留 `v`，二进制与内嵌资产注入裸 `X.Y.Z`；开发构建从源码 `X.Y.Z-dev` 派生为 `X.Y.Z-dev+g<7位sha>`。普通分支位于已打 tag 的裸版本提交时只验证、不重复发布 `latest`。
-- **prepare-embeds**：一次性构建平台无关资产并作为 artifact 复用。除前端、探针及离线依赖缓存、客户端更新器与 CFR 外，发布链路还对 `apps/bot-worker` 执行 `npm ci`、生产依赖审计、类型检查、lint、build，再以 metadata 版本打确定性归档内嵌 CP。发布版 CP 因而自带前端 + Bot Worker + 探针 + 客户端更新器；Worker 自带 CFR。Bot 构建使用 Node.js 22，节点执行时仍要求 Node.js `>=22.13.0`（ADR-072）。任一必需 embed 缺失即 fail-fast。
+- **prepare-embeds**：一次性构建平台无关资产并作为 artifact 复用。除前端、探针及离线依赖缓存、客户端更新器与 CFR 外，发布链路还对 `apps/bot-worker` 执行 `npm ci`、生产依赖审计、类型检查、lint、build，再以 metadata 版本打确定性归档内嵌 CP。发布版 CP 因而自带前端 + Bot Worker + 探针 + 客户端更新器；Worker 自带 CFR。Bot 构建使用 Node.js 22，节点执行时仍要求 Node.js `>=22.13.0`（ADR-072）。任一必需 embed 缺失即 fail-fast；客户端 `wedge.jar` 与 `updater-core.jar` 复制后另做非空硬校验，缺失或 0 字节均以中文错误终止发布。
 - **test**：还原同一批 embed 资产后运行 `go build ./...`、`go vet ./...`、`go test ./...`，以及前端 lint、vitest、生产构建和 Playwright E2E；门禁失败则不进入制品构建。
 - **build**：matrix 交叉编译 `linux/amd64` 与 `windows/amd64` 的 Control Plane / Worker 共 4 个最终二进制；构建 CP 前还注入同版本的两平台 Worker 与 manifest。全部二进制、Bot 归档和 Worker manifest 只消费 metadata 的同一 `version`。
 - **smoke**：四项矩阵逐一验证最终产物——两个 Linux 二进制在 `ubuntu-latest` 原生执行，两个 Windows `.exe` 在 `windows-latest` 原生执行；`--version` 必须退出码 0、stdout 严格等于 metadata 版本且 stderr 为空。`release` 直接依赖全部 smoke 成功。
