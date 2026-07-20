@@ -142,9 +142,9 @@ Mutation 成功精确 invalidate；容量 query 仅向导打开时 5 秒轮询�
 
 ### 3.7 错误与可访问性
 
-- path 级 422 错误映射到字段/动作卡并自动滚到首错。
+- path 级 422 错误映射到字段/命令步骤卡并自动滚到首错。
 - API 整体失败显示 ErrorState+重试，不伪装空列表。
-- Stepper 使用 `aria-current=step`；动作折叠有 aria-expanded；容量/百分比变化用礼貌 aria-live。
+- Stepper 使用 `aria-current=step`；命令步骤折叠有 aria-expanded；容量与计划变化用礼貌 aria-live。
 - 所有 Label htmlFor/id 对齐；颜色状态同时有文字/图标。
 - Dialog 使用共享 ScrollableDialog 壳，移动端可滚动。
 - 键盘可完成新增命令步骤、排序、切步骤、预检和启动。
