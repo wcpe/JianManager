@@ -145,14 +145,15 @@ type pendingRequestResult struct {
 const eventSubscriberQueueLimit = 4096
 
 type eventSubscriber struct {
-	mu       sync.Mutex
-	out      chan *BotWorkerEvent
-	wake     chan struct{}
-	done     chan struct{}
-	stopped  chan struct{}
-	stopOnce sync.Once
-	queue    []*BotWorkerEvent
-	limit    int
+	mu              sync.Mutex
+	out             chan *BotWorkerEvent
+	wake            chan struct{}
+	done            chan struct{}
+	stopped         chan struct{}
+	stopOnce        sync.Once
+	queue           []*BotWorkerEvent
+	limit           int
+	dropNonReliable bool // worker-exit 后丢弃尚未送出的 runtime 事件
 }
 
 func newEventSubscriber(buffer int) *eventSubscriber {
@@ -181,12 +182,25 @@ func (s *eventSubscriber) run() {
 				return
 			}
 		}
+		// 已取出但尚未送出的 runtime 事件，在 worker-exit 后必须丢弃，避免占满缓冲并挡住退出信号。
+		if s.shouldDropInFlight(event) {
+			continue
+		}
 		select {
 		case s.out <- event:
 		case <-s.done:
 			return
 		}
 	}
+}
+
+func (s *eventSubscriber) shouldDropInFlight(event *BotWorkerEvent) bool {
+	if isReliableBotEvent(event) {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dropNonReliable
 }
 
 func (s *eventSubscriber) next() *BotWorkerEvent {
@@ -213,6 +227,7 @@ func (s *eventSubscriber) enqueue(event *BotWorkerEvent) bool {
 		s.queue = append(bufferedReliable, s.queue...)
 	}
 	if event != nil && event.Evt == "worker-exit" {
+		s.dropNonReliable = true
 		s.dropQueuedRuntimeLocked()
 	}
 	accepted := s.enqueueLocked(event)

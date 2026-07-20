@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,11 +10,18 @@ import (
 )
 
 type botLoadFakeClock struct {
+	mu  sync.Mutex
 	now time.Time
 }
 
-func (c *botLoadFakeClock) Now() time.Time { return c.now }
+func (c *botLoadFakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
 func (c *botLoadFakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.now = c.now.Add(d)
 }
 

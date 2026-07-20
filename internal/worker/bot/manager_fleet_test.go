@@ -166,7 +166,11 @@ func TestManagerWorkerExitIsNotDroppedForBufferedSubscriber(t *testing.T) {
 	mgr.capacity.WorkerEpochGeneration = 7
 	events, cancel := mgr.SubscribeEvents(1)
 	defer cancel()
+	// 先塞满订阅缓冲，模拟慢消费者；worker-exit 必须仍可达。
 	mgr.handleEvent(&BotWorkerEvent{Evt: "bot-event", BotID: "bot-1"})
+	require.Eventually(t, func() bool {
+		return len(events) == 1
+	}, time.Second, time.Millisecond)
 
 	mgr.mu.Lock()
 	exitEvent, cb := mgr.invalidateRuntimeLocked("bot-worker 进程已退出", fmt.Errorf("Bot Worker 进程已退出"))
@@ -175,13 +179,20 @@ func TestManagerWorkerExitIsNotDroppedForBufferedSubscriber(t *testing.T) {
 		cb(exitEvent)
 	}
 
-	select {
-	case event := <-events:
-		require.Equal(t, "worker-exit", event.Evt)
-		require.Equal(t, "epoch-exit", event.WorkerEpoch)
-		require.EqualValues(t, 7, event.WorkerEpochGeneration)
-	case <-time.After(time.Second):
-		t.Fatal("订阅缓冲已满时仍必须收到 worker-exit")
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-events:
+			if event.Evt != "worker-exit" {
+				// 允许看到 worker-exit 前残留的 runtime 事件，但不能丢退出信号。
+				continue
+			}
+			require.Equal(t, "epoch-exit", event.WorkerEpoch)
+			require.EqualValues(t, 7, event.WorkerEpochGeneration)
+			return
+		case <-deadline:
+			t.Fatal("订阅缓冲已满时仍必须收到 worker-exit")
+		}
 	}
 }
 
