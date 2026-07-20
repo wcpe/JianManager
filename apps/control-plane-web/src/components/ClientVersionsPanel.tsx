@@ -24,6 +24,7 @@ import { scrollableDialogContentClass, ScrollableDialogBody } from '@jianmanager
 import DangerConfirm from '@/components/DangerConfirm'
 import ClientFileTree from '@/components/ClientFileTree'
 import FileBrowser from '@/components/file-browser/FileBrowser'
+import EmbeddedUpdaterSummary from '@/components/EmbeddedUpdaterSummary'
 import { clientDistSource, manifestFilesToDistFiles } from '@/components/file-browser/sources/clientDistSource'
 
 type ErrResp = { response?: { data?: { message?: string } } }
@@ -61,9 +62,12 @@ export default function ClientVersionsPanel({ channelId }: { channelId: string }
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <p className="text-sm text-muted-foreground max-w-2xl">
-          {t('clientVersions.subtitle', '历史版本仅管理台可见；玩家侧只拉取 latest。回滚以更高版本号重发旧内容，不会触发客户端防降级。')}
-        </p>
+        <div className="max-w-2xl space-y-1">
+          <p className="text-sm text-muted-foreground">
+            {t('clientVersions.subtitle', '历史版本仅管理台可见；玩家侧只拉取 latest。回滚以更高版本号重发旧内容，不会触发客户端防降级。')}
+          </p>
+          <EmbeddedUpdaterSummary />
+        </div>
         <Button onClick={() => navigate(`/client-channels/${encodeURIComponent(channelId)}/publish`)} className="shrink-0">
           <Upload className="size-4" /> {t('clientVersions.publish', '发布新版本')}
         </Button>

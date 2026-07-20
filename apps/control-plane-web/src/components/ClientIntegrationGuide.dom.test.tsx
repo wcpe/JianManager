@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
+import { mockInject } from '@jianmanager/devmock/inject'
 import ClientIntegrationGuide from './ClientIntegrationGuide'
 import ClientDistFlowGuide from './ClientDistFlowGuide'
 
@@ -19,6 +20,40 @@ describe('ClientIntegrationGuide（mock 假后端）', () => {
     expect(screen.queryByText(/signPublicKey/)).not.toBeInTheDocument()
     const dlBtns = screen.getAllByRole('button', { name: /下载 jm-updater\.json/ })
     expect(dlBtns.length).toBeGreaterThan(0)
+  })
+
+  it('展示内嵌版本、core 整数版本与两件套可用性和体积', async () => {
+    loginMockUser()
+    renderWithProviders(<ClientIntegrationGuide channelId="skyblock-s1" keys={[]} />)
+
+    const info = await screen.findByTestId('embedded-updater-info')
+    expect(info).toHaveTextContent('0.9.0')
+    expect(info).toHaveTextContent('core 整数版本')
+    expect(info).toHaveTextContent('3')
+    expect(info).toHaveTextContent('wedge.jar')
+    expect(info).toHaveTextContent('32.0 KB')
+    expect(info).toHaveTextContent('updater-core.jar')
+    expect(info).toHaveTextContent('1.0 MB')
+  })
+
+  it('楔子未内嵌时禁用下载并显示明确说明', async () => {
+    loginMockUser()
+    mockInject('get', '/client-dist/updater-jars', {
+      kind: 'status',
+      status: 200,
+      body: {
+        version: '0.9.0',
+        coreVersion: '3',
+        wedge: { available: false, size: 0 },
+        core: { available: false, size: 0 },
+      },
+    })
+    renderWithProviders(<ClientIntegrationGuide channelId="skyblock-s1" keys={[]} />)
+
+    const info = await screen.findByTestId('embedded-updater-info')
+    expect(screen.getByRole('button', { name: /wedge\.jar/ })).toBeDisabled()
+    expect(screen.getByRole('status')).toHaveTextContent('楔子未内嵌，当前无法下载')
+    expect(within(info).getAllByText(/不可用 · 0 B/)).toHaveLength(2)
   })
 
   it('未填入真实密钥时禁止下载配置文件', async () => {

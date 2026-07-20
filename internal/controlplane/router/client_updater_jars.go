@@ -27,9 +27,10 @@ func (h *ClientUpdaterJarsHandler) Info(c *gin.Context) {
 	wedge := cpembed.WedgeJar()
 	core := cpembed.UpdaterCoreJar()
 	c.JSON(http.StatusOK, gin.H{
-		"version": cpembed.ClientUpdaterEmbeddedVersion,
-		"wedge":   gin.H{"available": len(wedge) > 0, "size": len(wedge)},
-		"core":    gin.H{"available": len(core) > 0, "size": len(core)},
+		"version":     cpembed.ClientUpdaterEmbeddedVersion,
+		"coreVersion": cpembed.ClientUpdaterEmbeddedCoreVersion,
+		"wedge":       gin.H{"available": len(wedge) > 0, "size": len(wedge)},
+		"core":        gin.H{"available": len(core) > 0, "size": len(core)},
 	})
 }
 

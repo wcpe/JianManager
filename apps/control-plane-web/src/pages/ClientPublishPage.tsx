@@ -44,6 +44,7 @@ import DangerConfirm from '@/components/DangerConfirm'
 import FileExplorer from '@/components/FileExplorer'
 import CleanScopeEditor from '@/components/CleanScopeEditor'
 import FileBrowser from '@/components/file-browser/FileBrowser'
+import EmbeddedUpdaterSummary from '@/components/EmbeddedUpdaterSummary'
 import { localDraftSource } from '@/components/file-browser/sources/localDraftSource'
 
 type ErrResp = { response?: { data?: { message?: string } } }
@@ -525,6 +526,7 @@ export default function ClientPublishPage() {
           {t('clientVersions.wizardDesc', '拖入文件/文件夹本地暂存并编排（此时不上传），点「发布」才批量上传并发布。本期为未压缩（codec=none）发布。')}
         </p>
         <p className="text-xs text-muted-foreground font-mono">{channelId}</p>
+        <EmbeddedUpdaterSummary />
       </div>
 
       <PublishStepIndicator step={step} />

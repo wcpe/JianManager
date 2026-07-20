@@ -2917,9 +2917,12 @@
 - **说明**: 未知 `channelId` 返 200 空时序 + 零汇总（不 404，避免泄露频道存在性、便于前端统一空态）。machineId 客户端可伪造、不可信，仅统计近似（ADR-023）
 
 ### GET /api/v1/client-dist/updater-jars
-- **描述**: 内嵌客户端更新器 jar 的版本与可用性（FR-107 接入引导，供前端展示 + 禁用缺失下载）
-- **关联 FR**: FR-107 | **鉴权**: **JWT，平台管理员**
-- **响应** (200): `{ "version", "wedge": {"available", "size"}, "core": {"available", "size"} }`
+- **描述**: 内嵌客户端更新器 jar 的版本与可用性（FR-107/352 接入引导与版本页旁路摘要，供前端展示 + 禁用缺失下载）
+- **关联 FR**: FR-107、FR-352 | **鉴权**: **JWT，平台管理员**
+- **响应** (200): `{ "version": "0.1.0", "coreVersion": "1", "wedge": {"available": true, "size": 32768}, "core": {"available": true, "size": 1048576} }`
+  - `version`: 展示用语义版本串
+  - `coreVersion`: updater-core 单调整数版本，按字符串返回
+  - jar 未内嵌时对应 `available=false`、`size=0`
 
 ### GET /api/v1/client-dist/updater-jars/:component
 - **描述**: 下载内嵌更新器 jar（`component` ∈ `wedge` | `core`），供运营方接入（FR-107）。属管理面，走 JWT、不用拉取密钥

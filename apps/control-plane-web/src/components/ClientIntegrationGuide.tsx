@@ -106,10 +106,16 @@ export default function ClientIntegrationGuide({ channelId, keys }: { channelId:
           )}
         </p>
         {jars && (
-          <p className="text-xs text-muted-foreground">
-            {t('clientGuide.embeddedVersion', '内嵌更新器版本')}:{' '}
-            <span className="font-mono">{jars.version}</span>
-          </p>
+          <dl className="grid gap-x-4 gap-y-1 text-xs text-muted-foreground sm:grid-cols-[auto_1fr]" data-testid="embedded-updater-info">
+            <dt>{t('clientGuide.embeddedVersion', '内嵌更新器版本')}</dt>
+            <dd className="font-mono">{jars.version}</dd>
+            <dt>{t('clientGuide.embeddedCoreVersion', 'core 整数版本')}</dt>
+            <dd className="font-mono">{jars.coreVersion}</dd>
+            <dt>wedge.jar</dt>
+            <dd>{formatJarState(jars.wedge, t)}</dd>
+            <dt>updater-core.jar</dt>
+            <dd>{formatJarState(jars.core, t)}</dd>
+          </dl>
         )}
       </div>
 
@@ -131,8 +137,8 @@ export default function ClientIntegrationGuide({ channelId, keys }: { channelId:
             <Download className="size-4 mr-1" /> wedge.jar
           </Button>
           {jars && !jars.wedge.available && (
-            <span className="text-xs text-amber-600 self-center">
-              {t('clientGuide.notEmbedded', '楔子未内嵌（构建时需 make embed-client-updater）')}
+            <span className="text-xs text-amber-600 self-center" role="status">
+              {t('clientGuide.notEmbedded', '楔子未内嵌，当前无法下载（构建时需 make embed-client-updater）')}
             </span>
           )}
         </div>
@@ -231,6 +237,20 @@ export default function ClientIntegrationGuide({ channelId, keys }: { channelId:
 }
 
 /** 步骤区块：标题 + 内容。 */
+function formatJarState(
+  jar: { available: boolean; size: number },
+  t: (key: string, fallback: string, options?: Record<string, unknown>) => string,
+): string {
+  if (!jar.available) return t('clientGuide.jarUnavailable', '不可用 · 0 B')
+  return t('clientGuide.jarAvailable', '可用 · {{size}}', { size: formatBytes(jar.size) })
+}
+
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
 function Step({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="border rounded-lg p-4 space-y-2">

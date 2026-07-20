@@ -20,8 +20,9 @@ func TestClientUpdaterJars_Info(t *testing.T) {
 		t.Fatalf("Info 应 200，实 %d (%s)", w.Code, w.Body.String())
 	}
 	var resp struct {
-		Version string `json:"version"`
-		Wedge   struct {
+		Version     string `json:"version"`
+		CoreVersion string `json:"coreVersion"`
+		Wedge       struct {
 			Available bool `json:"available"`
 			Size      int  `json:"size"`
 		} `json:"wedge"`
@@ -35,6 +36,9 @@ func TestClientUpdaterJars_Info(t *testing.T) {
 	}
 	if resp.Version == "" {
 		t.Error("应返回内嵌版本号")
+	}
+	if resp.CoreVersion == "" {
+		t.Error("应返回内嵌 core 整数版本号")
 	}
 	// 可用时 size 必为正；不可用时 size 应为 0（结构自洽，不断言是否内嵌）。
 	if resp.Wedge.Available != (resp.Wedge.Size > 0) {

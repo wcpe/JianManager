@@ -2235,7 +2235,8 @@
     "cleanScopeExpand": "Expand",
     "cleanScopeCollapse": "Collapse",
     "reviewManagedDirs": "Auto-clean",
-    "reviewCleanExclude": "Never clean"
+    "reviewCleanExclude": "Never clean",
+    "embeddedUpdaterSummary": "Embedded updater v{{version}} · core {{coreVersion}}"
   },
   "clientPublish": {
     "backToChannel": "Back to Channel Workbench",
@@ -2296,9 +2297,12 @@
     "tab": "Integration Guide",
     "intro": "The wedge self-locates before the game starts, loads updater-core, fetches the manifest and verifies file SHA-256 values, incrementally updates client resources, then launches the game; on network failure or config error it always launches anyway (fail-static / fail-open) and never blocks startup. Follow the steps below to integrate the updater into your modpack and ship it to players.",
     "embeddedVersion": "Embedded updater version",
+    "embeddedCoreVersion": "Core integer version",
+    "jarAvailable": "Available · {{size}}",
+    "jarUnavailable": "Unavailable · 0 B",
     "step1Title": "① Download the wedge",
     "step1Desc": "Download only wedge.jar (~30KB). updater-core is no longer bundled — the wedge fetches it automatically from the API root endpoint on first launch.",
-    "notEmbedded": "Wedge not embedded (build needs `make embed-client-updater`)",
+    "notEmbedded": "Wedge is not embedded, so download is unavailable (build needs `make embed-client-updater`)",
     "step2Title": "② Place the files",
     "step2Desc": "Put wedge.jar and jm-updater.json into the jm-updater subfolder of the game directory:",
     "step3Title": "③ Configure jm-updater.json (channel-specific)",

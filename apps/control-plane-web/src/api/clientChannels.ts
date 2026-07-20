@@ -166,8 +166,10 @@ export function useRevealClientKey() {
 
 /** 内嵌客户端更新器 jar 的版本与可用性（FR-107 接入引导）。 */
 export interface UpdaterJarsInfo {
-  /** 内嵌更新器版本号（与 client-updater 构建同步）。 */
+  /** 内嵌更新器展示版本号（与 client-updater 构建同步）。 */
   version: string
+  /** 内嵌 updater-core 的单调整数版本号。 */
+  coreVersion: string
   wedge: { available: boolean; size: number }
   core: { available: boolean; size: number }
 }

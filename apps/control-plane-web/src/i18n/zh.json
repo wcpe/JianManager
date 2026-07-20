@@ -2214,7 +2214,8 @@
     "cleanScopeExpand": "展开",
     "cleanScopeCollapse": "折叠",
     "reviewManagedDirs": "自动清理",
-    "reviewCleanExclude": "永不清理"
+    "reviewCleanExclude": "永不清理",
+    "embeddedUpdaterSummary": "内嵌更新器 v{{version}} · core {{coreVersion}}"
   },
   "clientPublish": {
     "backToChannel": "返回频道工作台",
@@ -2275,9 +2276,12 @@
     "tab": "接入指引",
     "intro": "楔子在游戏启动前自定位、加载 updater-core、拉 manifest 并校验文件 SHA-256、增量更新客户端资源后放行游戏；断网兜底启动、异常兜底放行，绝不挡启动。按下面步骤把更新器接入整合包并下发玩家。",
     "embeddedVersion": "内嵌更新器版本",
+    "embeddedCoreVersion": "core 整数版本",
+    "jarAvailable": "可用 · {{size}}",
+    "jarUnavailable": "不可用 · 0 B",
     "step1Title": "① 下载楔子",
     "step1Desc": "只下载 wedge.jar（楔子，~30KB）。updater-core 不再随整合包附带——首次启动时楔子自动经 API 根 endpoint 拉取。",
-    "notEmbedded": "楔子未内嵌（构建时需 make embed-client-updater）",
+    "notEmbedded": "楔子未内嵌，当前无法下载（构建时需 make embed-client-updater）",
     "step2Title": "② 放置文件",
     "step2Desc": "把 wedge.jar 与 jm-updater.json 放进游戏目录的 jm-updater 子目录：",
     "step3Title": "③ 配置 jm-updater.json（本频道专属）",

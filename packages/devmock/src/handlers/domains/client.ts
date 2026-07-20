@@ -1205,6 +1205,7 @@ export const handlers = [
     if (denied) return denied
     return HttpResponse.json({
       version: '0.9.0',
+      coreVersion: '3',
       wedge: { available: true, size: 32_768 },
       core: { available: true, size: 1_048_576 },
     })

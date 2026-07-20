@@ -104,6 +104,7 @@ describe('ClientPublishPage（本地暂存 + 延迟批量上传，FR-250）', ()
     const { container } = renderWithProviders(<ClientPublishPage />, { route: CH })
     // 落区渲染出来（页面就绪）。
     expect(await screen.findByTestId('publish-dropzone')).toBeInTheDocument()
+    expect(await screen.findByTestId('embedded-updater-summary')).toHaveTextContent('内嵌更新器 v0.9.0 · core 3')
 
     await user.upload(addFilesInput(container), new File(['hello'], 'a.txt', { type: 'text/plain' }))
 
