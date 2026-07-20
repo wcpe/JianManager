@@ -1,6 +1,6 @@
 # 功能规格：楔子与 updater-core 本地诊断日志轮换压缩
 
-> 状态：草拟　·　关联 PRD：FR-353　·　分支：feature/fr-353-updater-log-rotate
+> 状态：开发中（JUnit 进程级真路径已验；Minecraft 端到端待确认）　·　关联 PRD：FR-353　·　分支：feature/fr-353-updater-log-rotate
 
 ## 1. 背景与目标
 
@@ -70,10 +70,10 @@ rotate(file):
 
 ## 4. 任务拆分
 
-- [ ] 楔子：轮换工具 + 接入 `WedgeLogger` + 单测
-- [ ] updater-core：轮换工具 + 接入 `Logger` + 单测
-- [ ]（可选）抽取同目录注释说明常量，避免魔法数无注释
-- [ ] 文档同步：PRD FR-353、CHANGELOG 末尾追加；client-updater README 若有日志说明则补一句
+- [x] 楔子：轮换工具 + 接入 `WedgeLogger` + 单测
+- [x] updater-core：轮换工具 + 接入 `Logger` + 单测
+- [x]（可选）抽取同目录注释说明常量，避免魔法数无注释
+- [x] 文档同步：PRD FR-353、CHANGELOG 末尾追加；client-updater README 若有日志说明则补一句
 
 ## 5. 验收标准
 

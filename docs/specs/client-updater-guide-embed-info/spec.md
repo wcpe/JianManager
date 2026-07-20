@@ -1,6 +1,6 @@
 # 功能规格：接入指引补齐内嵌更新器信息 + 版本面板旁路摘要
 
-> 状态：草拟　·　关联 PRD：FR-352　·　分支：feature/fr-352-guide-embed-info
+> 状态：开发中（自动化+mock 真浏览器已验）　·　关联 PRD：FR-352　·　分支：feature/fr-352-guide-embed-info
 
 ## 1. 背景与目标
 
@@ -57,12 +57,13 @@
 
 ## 4. 任务拆分
 
-- [ ] 后端：Info 增加 `coreVersion` + 单测断言字段存在
-- [ ] API.md + devmock 同步
-- [ ] 前端类型与 guide 完整展示 + 缺 jar 失败态
-- [ ] 版本面板 / 发布页旁路摘要
-- [ ] DOM / vitest 覆盖
-- [ ] 文档同步：PRD FR-352 状态、CHANGELOG 末尾追加、必要时 ARCHITECTURE 一句
+- [x] 后端：Info 增加 `coreVersion` + 单测断言字段存在
+- [x] API.md + devmock 同步
+- [x] 前端类型与 guide 完整展示 + 缺 jar 失败态
+- [x] 版本面板 / 发布页旁路摘要
+- [x] DOM / vitest 覆盖
+- [x] 文档同步：PRD FR-352 状态、CHANGELOG 末尾追加、必要时 ARCHITECTURE 一句
+- [x] Playwright mock 真浏览器：`e2e/fr352-guide-embed-info.spec.ts` + `.tmp/acceptance/FR-352/`
 
 ## 5. 验收标准
 
