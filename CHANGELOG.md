@@ -8,6 +8,9 @@
 
 > 本段为 `v0.19.0` 开发版归档区（自 v0.18.0 之后累积）。
 
+### 新增
+- **楔子与 updater-core 本地诊断日志轮换压缩（FR-353，feat，增强 FR-090，见 `docs/specs/updater-local-log-rotate/spec.md`）**：`wedge.log` 与 `updater.log` 在日志器打开前按 10 MiB 阈值或本地自然日跨日轮换，旧日志以时间戳命名并 gzip 压缩，各自仅保留最近 5 个归档；轮换、压缩或清理失败均 fail-open，日志不可写时继续降级运行，不阻断游戏启动。
+
 ### 修复
 - **发布门禁去重与 E2E 分片（fix(ci)）**：CI 将 102 条 Playwright E2E 按文件拆为 4 个隔离 runner 并行执行，分片 job 使用 `Web E2E / Shard N of 4` 标准名称并保留统一 `web-quality` 汇总门禁；瞬时失败重试一次，重试恢复记为 flaky 但不阻断，持续失败才红，并通过 GitHub reporter 直接标注失败用例。reduced-motion 进度反馈探针改用 MutationObserver 捕获子节点替换与属性变化，避免 GitHub runner 错过瞬时 `animationstart`。发布工作流复用同提交 CI 结果，只保留依赖完整内嵌资产的 Go 构建/vet/测试，避免 dev、master、tag 对同一提交重复跑前端测试。同步移除可见步骤名中的需求编号，并升级官方 GitHub Actions 到 Node.js 24 运行时对应主版本，消除弃用警告。
 - **正式发布强制内嵌客户端更新器两件套（FR-351）**：`make embed-client-updater` 与发布工作流在楔子或 updater-core jar 缺失、复制失败或 0 字节时以中文错误硬失败；本地开发未内嵌时仍保持可启动并返回 `JAR_NOT_EMBEDDED`。

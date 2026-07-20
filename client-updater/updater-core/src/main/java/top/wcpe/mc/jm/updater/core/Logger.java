@@ -33,6 +33,7 @@ final class Logger implements AutoCloseable {
             Path logDir = stateDir.resolve("logs");
             Files.createDirectories(logDir);
             Path logFile = logDir.resolve("updater.log");
+            LocalLogRotator.prepare(logFile);
             file = new PrintStream(Files.newOutputStream(logFile,
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND), true, "UTF-8");
         } catch (IOException | SecurityException e) {

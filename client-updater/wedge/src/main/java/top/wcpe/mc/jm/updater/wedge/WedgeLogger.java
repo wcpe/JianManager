@@ -37,7 +37,9 @@ final class WedgeLogger implements AutoCloseable {
             if (!logDir.isDirectory()) {
                 logDir.mkdirs();
             }
-            handler = new FileHandler(new File(logDir, "wedge.log").getAbsolutePath(), true);
+            File logFile = new File(logDir, "wedge.log");
+            LocalLogRotator.prepare(logFile);
+            handler = new FileHandler(logFile.getAbsolutePath(), true);
             handler.setEncoding("UTF-8");
             handler.setFormatter(FORMATTER);
             handler.setLevel(Level.ALL);
