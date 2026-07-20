@@ -19,7 +19,8 @@
 - Worker 内存保留本节点 desired assignment，bot-worker 崩溃后自动拉起并重放。
 - Worker 进程重启后由 CP 通过 fleet snapshot 做 reconcile。
 - CP 状态有新鲜度窗口；运行时消失/事件断流后 connected 必须归真 disconnected。
-- 恢复按动作 resumePolicy 处理；默认重启当前步骤，不盲续半个 pathfinder/attack。
+- 恢复按动作 resumePolicy 处理；默认重启当前步骤，不盲续半个动作路径。
+- 以 command_schedule checkpoint 记录命令发送与结果；默认不重发已成功命令。
 - 支持只重试失败 Bot 子集，幂等且不改变 cohort。
 - 所有 goroutine/timer/listener 在停止后释放。
 
@@ -108,15 +109,16 @@ CP `BotFleetReconciler` 由节点重连/心跳 generation 变化触发，另每 
 - 节点离线：统一 category EXECUTOR_OFFLINE，不逐 Bot 刷 500 条日志；聚合一条节点故障并批量更新。
 - Worker 重新出现后状态可恢复，历史 failure 仍保留供报告。
 
-### 3.8 动作恢复
+### 3.8 动作恢复与命令检查点
 
-CP 从最新未终态 action result 得到 current step：
+CP 从最新未终态 action result 和 `command_schedule` checkpoint 得到 current step：
 
-- restart_step：resumeStepId=当前 step，attempt+1；超过 maxAttempts 失败。
-- restart_scenario：从 cohort 第一步开始。
+- checkpoint 至少记录 botId、stepId、commandId、actionRunId、计划发送时间、发送状态与终态结果；已成功命令默认不重发。
+- restart_step：resumeStepId=当前 step，attempt+1，并生成新的 actionRunId；旧 actionRunId 的迟到结果不能完成新动作。
+- restart_scenario：从 cohort 第一步开始，但仍按 checkpoint 跳过已成功且声明幂等复用的命令。
 - fail：不重连场景，Bot runtime 可 connected，但动作标失败。
-- wait_probe_event 重启时生成新 actionRunId/correlationToken，旧迟到事件不能完成新动作。
 - barrier 重启后重新 arrived，同一个 Bot 只计一次当前 generation。
+- stop/cancel 后冻结调度并取消未发送命令；任何恢复、重连或迟到事件都不得继续发送命令。
 - run 总 deadline 不重置。
 
 ### 3.9 Retry failed
@@ -173,7 +175,7 @@ Bot Worker heartbeat 需真实上报：active/connecting、RSS、eventLoopP95、
 
 ## 6. 风险 / 待定
 
-- 精确恢复 pathfinder/实体对象不可行，按步骤幂等重启是明确取舍。
+- 精确恢复动作内部瞬时状态不可行，按步骤与命令检查点恢复是明确取舍。
 - Worker 内存 desired cache 在 Worker 重启后丢失，由 CP DB reconcile 恢复。
 - CP 单实例前提下 reconcile 锁为进程内；未来 CP HA 需分布式租约，范围外。
 - 目标服长期不可用时 Bot 会低频重试直到运行截止或人工停止，不永久停止 desired。
