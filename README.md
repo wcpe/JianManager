@@ -56,16 +56,30 @@ JianManager 是面向中小型游戏服务器运营团队的自托管管理平�
 
 ### 1. 启动面板（Control Plane）
 
-从 [Releases](https://github.com/wcpe/JianManager/releases/latest) 下载对应平台的 `control-plane` 二进制：
+**方式 A — 一键安装脚本（FR-355）**（自动识别 OS/arch，从 GitHub Releases 拉取）：
 
 ```bash
-# Linux
-curl -fsSLo control-plane https://github.com/wcpe/JianManager/releases/latest/download/control-plane-linux-amd64
-chmod +x control-plane && ./control-plane
-# Windows：下载 control-plane-windows-amd64.exe 双击或命令行运行
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-cp.sh | sh
+./control-plane
 ```
 
-浏览器打开 `http://<主机>:8080`，跟随首启引导创建管理员账号——零配置即可跑起来（数据默认落 `data/` 下的 SQLite）。
+```powershell
+# Windows PowerShell
+irm https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-cp.ps1 | iex
+.\control-plane.exe
+```
+
+**方式 B — 手动下载二进制**：
+
+```bash
+# Linux amd64
+curl -fsSLo control-plane https://github.com/wcpe/JianManager/releases/latest/download/control-plane-linux-amd64
+chmod +x control-plane && ./control-plane
+# Windows：下载 control-plane-windows-amd64.exe 后运行
+```
+
+浏览器打开 `http://<主机>:8080`，跟随首启引导创建管理员账号——零配置即可跑起来（数据默认落 `data/` 下的 SQLite）。生产请设置 `JIANMANAGER_JWT_SECRET`。完整说明见 [docs/DEPLOY.md](docs/DEPLOY.md) 与 [SECURITY.md](SECURITY.md)。
 
 ### 2. 添加节点（Worker）
 
@@ -75,7 +89,32 @@ chmod +x control-plane && ./control-plane
 
 **「实例 → 一键搭建」** 选择 Minecraft 版本与节点即可搭出 Paper 子服或 Velocity 代理；已有服务器目录则用 **「导入现有服务器」** 就地接管。
 
+### 界面预览
+
+> 下列截图来自前端 MSW mock 模式，仅作界面示意（非生产真机数据）。
+
+| 登录 | 首页总览 | 节点 |
+|:---:|:---:|:---:|
+| ![登录](docs/screenshots/login.jpg) | ![首页](docs/screenshots/dashboard.jpg) | ![节点](docs/screenshots/nodes.jpg) |
+
+| 实例列表 | 服务器控制台 |
+|:---:|:---:|
+| ![实例](docs/screenshots/instances.jpg) | ![控制台](docs/screenshots/console.jpg) |
+
 ### 其它部署方式
+
+<details>
+<summary><b>Docker Compose（FR-354）</b></summary>
+
+```bash
+make docker && make docker-up   # 构建镜像并起 CP + Worker
+# 浏览器 http://localhost:8080
+docker compose logs -f control-plane
+make docker-down
+```
+
+Worker 须使用环境变量 `JIANMANAGER_CONTROL_PLANE_GRPC`（compose 已写好）。数据卷、密钥与排障见 [docs/DEPLOY.md §11](docs/DEPLOY.md)。
+</details>
 
 <details>
 <summary><b>SSH 推送部署（推荐用于远程 Linux 主机）</b></summary>
@@ -90,15 +129,6 @@ JM_SSH_HOST=5.6.7.8 JM_CONTROL_PLANE=1.2.3.4:9100 JM_ENROLL_TOKEN=jmet_xxx scrip
 ```
 
 支持 root / 免密 sudo / 纯普通用户（user 级 systemd + linger）三种目标机形态，详见 [docs/DEPLOY.md](docs/DEPLOY.md)。
-</details>
-
-<details>
-<summary><b>Docker</b></summary>
-
-```bash
-make docker && make docker-up   # 构建镜像并起 CP + Worker
-docker compose logs -f
-```
 </details>
 
 <details>

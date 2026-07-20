@@ -1,4 +1,5 @@
-version: "3.8"
+# JianManager 本地 Compose（FR-354）：CP + 一个 Worker
+# 环境变量须与 Worker BindEnv 一致：JIANMANAGER_CONTROL_PLANE_GRPC / JIANMANAGER_NODE_NAME
 
 services:
   control-plane:
@@ -14,7 +15,7 @@ services:
       - JIANMANAGER_DATABASE_DRIVER=sqlite
       - JIANMANAGER_DATABASE_DSN=/app/data/jianmanager.db
       - JIANMANAGER_JWT_SECRET=${JIANMANAGER_JWT_SECRET:-dev-secret-change-me}
-      # CP↔Worker WS 令牌密钥（FR-275，见 ADR-061）：留空=生产自动生成持久化 + 注册自动下发 Worker；仅过渡兼容时显式设
+      # CP↔Worker WS 令牌密钥（FR-275，见 ADR-061）：留空=生产自动生成持久化 + 注册自动下发 Worker
       - JIANMANAGER_JWT_WS_SECRET=${JIANMANAGER_JWT_WS_SECRET:-}
     volumes:
       - cp-data:/app/data
@@ -24,19 +25,20 @@ services:
       context: .
       dockerfile: Dockerfile.worker
     ports:
-      - "9101:9101"   # gRPC
-      - "9102:9102"   # WS
+      - "9101:9101"   # gRPC（直拨回退）
+      - "9102:9102"   # WS（本机探针/直拨回退）
     environment:
       - JIANMANAGER_NODE_NAME=node-01
-      - JIANMANAGER_CONTROL_PLANE=control-plane:9100
+      - JIANMANAGER_CONTROL_PLANE_GRPC=control-plane:9100
       - JIANMANAGER_GRPC_PORT=9101
       - JIANMANAGER_WS_PORT=9102
-      - JIANMANAGER_NODE_SECRET=${JIANMANAGER_NODE_SECRET:-}
+      - JIANMANAGER_DATA_DIR=/app/data
+      - JIANMANAGER_ENROLL_TOKEN=${JIANMANAGER_ENROLL_TOKEN:-}
     volumes:
-      - worker-01-servers:/app/servers
+      - worker-01-data:/app/data
     depends_on:
       - control-plane
 
 volumes:
   cp-data:
-  worker-01-servers:
+  worker-01-data:

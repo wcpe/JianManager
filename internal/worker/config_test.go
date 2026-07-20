@@ -41,6 +41,14 @@ func TestLoad_EnvOverridesDefaults(t *testing.T) {
 	assert.Equal(t, 19101, cfg.GRPC.Port)
 }
 
+// TestLoad_ControlPlaneEnvAlias 旧键 JIANMANAGER_CONTROL_PLANE 与正式键等价（FR-354）。
+func TestLoad_ControlPlaneEnvAlias(t *testing.T) {
+	t.Setenv("JIANMANAGER_CONTROL_PLANE", "legacy-cp:9100")
+	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "legacy-cp:9100", cfg.ControlPlane)
+}
+
 // TestLoad_ArtifactCacheCap 节点制品缓存上限默认 0（不限），可经 env 覆盖（FR-178）。
 func TestLoad_ArtifactCacheCap(t *testing.T) {
 	cfg, err := Load(t.TempDir() + "/nonexistent.yaml")

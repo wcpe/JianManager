@@ -162,3 +162,71 @@ export JIANMANAGER_BOT_WORKER_PATH="$(pwd)/dist/index.js"
 ## 10. 多节点
 
 Control Plane 一台，Worker 多台：各 Worker 设相同 `JIANMANAGER_CONTROL_PLANE_GRPC`（指向同一 CP）、不同 `JIANMANAGER_NODE_NAME`；WS 令牌密钥经注册/心跳自动下发（FR-275），无需在各 Worker 同步 `JIANMANAGER_JWT_SECRET`。注册后在「节点」页统一可见、可分别调度实例。
+
+## 11. Docker Compose（FR-354）
+
+用仓库根目录的 `Dockerfile.control-plane`、`Dockerfile.worker` 与 `docker-compose.yml` 在本机构建并启动 **CP + 一个 Worker**（开发/试用；生产请改密钥并评估数据卷备份）。
+
+### 前置
+
+- Docker Engine + Compose v2（`docker compose version`）
+- 构建需拉取 Go/Node 基础镜像与依赖，首次较慢
+
+### 构建与启停
+
+```bash
+make docker       # docker compose build
+make docker-up    # docker compose up -d
+make docker-down  # docker compose down
+
+# 或直接
+docker compose build
+docker compose up -d
+docker compose logs -f control-plane
+```
+
+浏览器打开 `http://localhost:8080`：首次进入引导创建管理员，之后登录。
+
+### 环境变量要点
+
+| 变量 | 服务 | 说明 |
+|---|---|---|
+| `JIANMANAGER_JWT_SECRET` | control-plane | **生产必改**；compose 默认仅为开发占位 |
+| `JIANMANAGER_CONTROL_PLANE_GRPC` | worker | **正式键**，compose 内为 `control-plane:9100` |
+| `JIANMANAGER_NODE_NAME` | worker | 节点显示名 |
+| `JIANMANAGER_ENROLL_TOKEN` | worker | 可选；需要 enrollment 时经 host env 注入 |
+
+> 历史误写 `JIANMANAGER_CONTROL_PLANE`（无 `_GRPC` 后缀）在 Worker 侧仍作别名兼容（FR-354），新文档与 compose **只写** `JIANMANAGER_CONTROL_PLANE_GRPC`。
+
+### 数据卷
+
+- `cp-data` → CP 容器 `/app/data`（SQLite 等）
+- `worker-01-data` → Worker `/app/data`（数据根）
+
+`docker compose down` **不删**具名卷；清数据用 `docker compose down -v`。
+
+### 不做的范围
+
+不推 GHCR 官方镜像、不提供 Kubernetes 清单；实例「用 Docker 跑游戏服」见 ADR-019，与本节平台自身容器化部署无关。
+
+## 12. Control Plane 一键安装脚本（FR-355）
+
+从 GitHub Releases 下载面板二进制（**不做** systemd/Windows 服务化；完整运维见上文各节）。
+
+```bash
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-cp.sh | sh
+# 或
+sh scripts/install-cp.sh --install-dir /opt/jianmanager
+sh scripts/install-cp.sh --start
+```
+
+```powershell
+# Windows PowerShell
+irm https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-cp.ps1 | iex
+.\scripts\install-cp.ps1 -InstallDir C:\jianmanager
+```
+
+离线：`--binary` / `-Binary`。自定义基址：`--download-url` 或 `JIANMANAGER_CP_DOWNLOAD_URL`。
+
+Worker 仍推荐面板 **「节点 → 添加节点」** 生成的一键命令（见 §6 与 `scripts/install-worker.sh`）。

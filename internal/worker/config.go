@@ -155,7 +155,8 @@ func Load(path string) (*Config, error) {
 	v.AutomaticEnv()
 	// 显式绑定与历史 main.go 不同名的环境变量，保持向后兼容。
 	_ = v.BindEnv("name", "JIANMANAGER_NODE_NAME")
-	_ = v.BindEnv("control_plane", "JIANMANAGER_CONTROL_PLANE_GRPC")
+	// 正式键 CONTROL_PLANE_GRPC；别名 CONTROL_PLANE 兼容旧 compose/文档误写（FR-354）。
+	_ = v.BindEnv("control_plane", "JIANMANAGER_CONTROL_PLANE_GRPC", "JIANMANAGER_CONTROL_PLANE")
 	_ = v.BindEnv("data_dir", "JIANMANAGER_DATA_DIR")
 	_ = v.BindEnv("servers_dir", "JIANMANAGER_WORK_DIR")
 	_ = v.BindEnv("enroll_token", "JIANMANAGER_ENROLL_TOKEN")

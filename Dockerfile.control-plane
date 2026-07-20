@@ -5,9 +5,18 @@ WORKDIR /repo
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY apps/control-plane-web/package.json apps/control-plane-web/
 COPY packages/ui/package.json packages/ui/
+# workspace 共享包：tsconfig/eslint/devmock 为 tsc 与 mock 入口类型解析所需（FR-354）
+COPY packages/tsconfig/package.json packages/tsconfig/
+COPY packages/eslint-config/package.json packages/eslint-config/
+COPY packages/devmock/package.json packages/devmock/
 RUN corepack enable && pnpm install --frozen-lockfile --filter control-plane-web...
 COPY apps/control-plane-web/ apps/control-plane-web/
 COPY packages/ui/ packages/ui/
+COPY packages/tsconfig/ packages/tsconfig/
+COPY packages/eslint-config/ packages/eslint-config/
+COPY packages/devmock/ packages/devmock/
+# vite.config 读取 internal/version/version.go 作为前端版本真源（FR-288）
+COPY internal/version/version.go internal/version/version.go
 RUN pnpm --filter control-plane-web build
 
 # ---- Go 构建阶段（go.mod: go 1.26.x，镜像须 >= 该版本，否则 toolchain 报错）----

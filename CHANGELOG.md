@@ -9,6 +9,9 @@
 > 本段为 `v0.19.0` 开发版归档区（自 v0.18.0 之后累积）。
 
 ### 新增
+- **Docker Compose 部署可跑通（FR-354）**：修正 `docker-compose.yml` Worker 环境变量为 `JIANMANAGER_CONTROL_PLANE_GRPC`；兼容旧键 `JIANMANAGER_CONTROL_PLANE`；Worker 数据卷收口数据根；`Dockerfile.control-plane` 补齐 monorepo 构建上下文（tsconfig/eslint/devmock/`version.go`）；`docs/DEPLOY.md` §11。
+- **Control Plane 一键安装脚本（FR-355）**：`scripts/install-cp.sh` / `install-cp.ps1`（OS/arch 探测、Releases 下载、失败中文报错、可选 `--start`）；`INSTALL_CP_TEST=1` 资产名自检。
+- **对外部署文档与治理**：README 安装步骤 + MSW mock 界面截图（`docs/screenshots/*.jpg`）；根目录 `SECURITY.md`；治理戳记对账记录。
 - **楔子与 updater-core 本地诊断日志轮换压缩（FR-353，feat，增强 FR-090，见 `docs/specs/updater-local-log-rotate/spec.md`）**：`wedge.log` 与 `updater.log` 在日志器打开前按 10 MiB 阈值或本地自然日跨日轮换，旧日志以时间戳命名并 gzip 压缩，各自仅保留最近 5 个归档；轮换、压缩或清理失败均 fail-open，日志不可写时继续降级运行，不阻断游戏启动。
 
 ### 修复

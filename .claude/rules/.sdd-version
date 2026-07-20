@@ -3,7 +3,7 @@
 # 下次同步从此版本起做增量对账。
 
 synced_template_version: 0.1.0
-synced_at: 2026-07-14
+synced_at: 2026-07-21
 reconcile_mode: incremental   # 上游仍为 0.1.0，规则正文无增量；本轮为补缺失文档 + 文件名归一
 
 notes: |
@@ -20,3 +20,7 @@ notes: |
       修正 doc-evolution.md 中唯一小写引用。
   - 项目独有规则 doc-evolution.md / gate-{prd,sdd,api,merge}.md / ui-modals.md / versioning.md
     上游无对应，保留。
+  - 2026-07-21 对外部署批（sdd-sync-governance best-effort）：
+    * 上游 claude-rules 文件名已全覆盖；正文 DIFF 为项目定制超集，不整文件覆盖。
+    * 新增根目录 SECURITY.md（上游 skeleton 四节项目化）。
+    * 项目独有规则 doc-evolution/gate-*/ui-modals/versioning 保留。
