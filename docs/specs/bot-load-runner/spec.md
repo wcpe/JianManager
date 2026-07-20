@@ -1,24 +1,24 @@
 # 功能规格：压测运行状态机、三类负载曲线与自动判定
 
-> 状态：已审核（2026-07-18）　·　关联 PRD：FR-355　·　计划分支：feature/fr-355-bot-load-runner
+> 状态：已审核（2026-07-20）　·　关联 PRD：FR-359　·　计划分支：feature/fr-359-bot-load-runner
 > 超级规格：`../bot-load-platform/super-spec.md`　·　HTTP API：`../bot-load-platform/api.md`
-> 依赖：FR-351～354 已落协调分支
+> 依赖：FR-351/352 开发中，FR-358/354 仍为计划；FR-359 实现须等待其所需契约和恢复能力可用
 
 ## 1. 背景与目标
 
-FR-351～354 提供分布式 Bot、确定性场景和恢复能力，但尚缺少可复用模板、完整运行状态机、固定/阶梯/洪峰调度、时序指标、阈值判定、安全停止和正式报告。当前 BotStressSession 只有 pending/running/stopped/error 和查询时聚合，不能回答“最大稳定并发是多少、哪一层先过载、是否达到严格标准”。
+FR-351/352/354/358 规划提供分布式 Bot、确定性场景、通用命令编排和恢复能力；其中 FR-351/352 开发中、FR-354/358 尚未实现。平台仍缺少可复用模板、完整运行状态机、固定/阶梯/洪峰调度、时序指标、阈值判定、安全停止和正式报告。当前 BotStressSession 只有 pending/running/stopped/error 和查询时聚合，不能回答“最大稳定并发是多少、哪一层先过载、是否达到严格标准”。
 
-本 FR 将 BotStressSession 增强为压测运行账本，新增模板和聚合指标，驱动三类负载计划并自动形成 verdict/report。前端由 FR-356/357 消费，本 FR 先完成全部后端契约。
+本 FR 将 BotStressSession 增强为压测运行账本，新增模板和聚合指标，驱动三类负载计划并自动形成 verdict/report。前端由 FR-360/361 消费，本 FR 先完成全部后端契约。
 
 ## 2. 需求（要什么）
 
-- 场景模板与运行快照分离；运行不受后续模板编辑影响。
+- 命令压测模板与运行快照分离；运行不受后续模板编辑影响。模板冻结 `commandSchedule + loadProfile + thresholds`，Scenario V2 仅作为历史兼容运行分支。
 - 支持 stable、step、spike 三类 load profile。
 - 运行状态机覆盖预检、就绪、启动、运行、降级、停止、取消、完成和失败。
 - 启动/停止/取消为后台任务，不阻塞 HTTP。
 - 每 5 秒聚合一次连接、命令发送、调度完成、屏障和 Worker 健康指标，不逐 Bot 写时序。
 - 阈值 evaluator 持续判断，区分 verdict 阈值和安全停止阈值。
-- step 模式输出 maxStableBots；spike 模式输出连接/屏障/攻击峰值延迟。
+- step 模式输出 maxStableBots；spike 模式输出连接 latency、命令 schedule lag 与已配置屏障 release lag 的 p50/p95/p99。
 - 失败分类必须区分 target/executor/network/scenario/internal；Probe 不属于本 FR 的硬依赖。
 - 终态生成 JSON 报告和 CSV 导出，并明确报告仅反映 Bot 运行时与调度观测，不等同于目标游戏性能结论。
 - 提供会话级 SSE 聚合流、运行内 Bot/失败/指标分页 API。
@@ -27,26 +27,27 @@ FR-351～354 提供分布式 Bot、确定性场景和恢复能力，但尚缺少
 
 **范围内**：模板/运行/指标模型、状态机、profile runner、指标采集、阈值与安全停止、失败分类、报告、会话级 SSE、HTTP API/审计、自动化与真机验收。
 
-**不做**：定时任务、CI 门禁、云扩缩容、前端页面（FR-356/357）、CP HA、多租户、按每次普通攻击持久化原始时序。
+**不做**：定时任务、CI 门禁、云扩缩容、前端页面（FR-360/361）、CP HA、多租户、按每次普通攻击持久化原始时序。
 
 ## 3. 设计（怎么做）
 
 ### 3.1 模型
 
-实现超级规格分配给 FR-355 的字段/表：
+实现超级规格分配给 FR-359 的字段/表：
 
-- BotStressSession：TemplateID、LoadProfile、Thresholds、RunState、CurrentStage、Verdict、MaxStableBots、FailureSummary、ReportSummary，以及 ConnectedAt。
+- BotStressSession：复用 FR-358/共享地基已新增的 SchemaVersion 与 schemaVersion=1 联合序列化；本 FR 新增 TemplateID、LoadProfile、Thresholds、RunState、CurrentStage、Verdict、MaxStableBots、FailureSummary、ReportSummary。V2 列允许历史行 null，FR-359 新运行事务写 schemaVersion=2 并强制完整。
+- Bot：ConnectedAt（最近连接完成时间），不得误加到 BotStressSession。
 - BotLoadTemplate。
 - BotLoadMetricSample。
 - BotLoadRunEvent（append-only 关键运行事件，供历史事件链和 SSE 快照补偿）。
 
-模型 JSON 列在 service 边界用强类型 DTO 序列化；handler 不直接拼 map。AutoMigrate 加性，不改旧列。
+模型 JSON 列在 service 边界用强类型 DTO 序列化；handler 不直接拼 map。AutoMigrate 加性，不改旧列：现有会话保持 schemaVersion=1 和旧 status 真貌，不猜测 profile/verdict；部署时活动 V1 会话由兼容 runner 收束，不原地升级，只有新建运行使用 schemaVersion=2。
 
 ### 3.2 模板服务
 
 - CRUD 和分页搜索按共享 API。
-- Create/Update 同时校验 Scenario V2、LoadProfile、Thresholds。
-- 名称软删活跃唯一；若现有数据库不适合部分唯一索引，则 service 预检 + DB 普通复合索引，保持 SQLite/MySQL 兼容。
+- Create/Update 同时校验 `commandSchedule`、`loadProfile`、`thresholds`；Scenario V2 不进入新模板模型，仅作为历史运行联合的兼容分支。
+- V1 模板为个人所有权资源，createdBy 由服务端固定为当前用户；非管理员仅可读写自己的模板，平台管理员可管理全部。名称先 trim 且大小写敏感；持久层用 nullable `active_name_key=hex(SHA-256(UTF-8(trimmedName)))` 与唯一索引 `(created_by, active_name_key)` 保证活跃唯一，软删事务同时置 null，允许 SQLite/MySQL 软删后复用名称并由 DB 兜住并发竞态；唯一冲突映射 409。团队共享不在 V1。
 - 从模板创建运行时深拷贝快照；不保存 ExecutorNodeIds 到模板。
 - 模板不硬编码 Probe、塔防或其他具体游戏玩法；领域特定 preset 只能作为可选普通模板，不参与默认验收。
 
@@ -54,13 +55,14 @@ FR-351～354 提供分布式 Bot、确定性场景和恢复能力，但尚缺少
 
 实现纯状态机包，转换严格按超级规格 §7：
 
+- start 仅允许 ready；stop 在 starting/running/degraded 接受，在 stopping 幂等；cancel 在任一非终态接受，pending/preflighting/ready 直接经 cancelling 收束，stopping 可升级 cancelling，cancelling 幂等；终态上的 stop/cancel 返回 409。
 - handler 只调用 service intent；状态写入和副作用由 runner 管理。
 - 同一 run 只有一个 active runner；进程内锁 + DB conditional update 防重复 start。
 - CP 重启扫描非终态 run：
   - ready/pending 保持；
   - starting/running/degraded/stopping/cancelling 恢复 runner，并先执行 FR-354 reconcile；
-  - 无法恢复场景 snapshot 时 failed。
-- 状态变更写审计/结构化日志并发布不可丢 SSE 事件。
+  - 按运行冻结的判别联合恢复对应快照：`commandSchedule`、Scenario V2、`orchestrationYaml` 或 legacy behavior；当前分支所需快照缺失或非法时才 failed，不得把合法命令运行误判为缺少 Scenario snapshot。
+- 状态变更先持久化并写审计/结构化日志，再发布可丢的 SSE 增量；客户端通过 init 快照和历史 API 补偿，不把 broker 当可靠队列。
 
 ### 3.4 Profile Planner
 
@@ -81,8 +83,8 @@ FR-351～354 提供分布式 Bot、确定性场景和恢复能力，但尚缺少
 #### spike
 
 - targetBots 在 connectWindowSeconds 内均匀/分片生成 connectNotBefore。
-- 若配置 barrierKey，达到屏障条件后生成同一 releaseAt，要求 releaseWindowMs 内动作开始。
-- 分阶段记录 connect、barrier release、attack start 延迟 p50/p95/p99。
+- 若 profile 配置 `barrier:{key,releaseWindowMs}`，stageExpectedBotSet 为固定分母；Bot connected 后以 barrier 模式 Apply 命令计划，accepted 即 prepared/arrived。全部 arrived 可提前决策，否则在 connect window 结束后 60 秒的固定 prepare deadline 释放已 arrived 子集；CP 以 `ReleaseBotCommandSchedules` 下发共同 `releaseAt=决策时刻+2000ms`，未 prepared 项计 timedOut。首个基础 atMs=0 occurrence 在 releaseWindowMs 内 sent 才计 released；未配置时屏障指标为 `not_applicable`。
+- 分阶段记录 connect latency、command schedule lag、barrier release lag p50/p95/p99；只有显式历史 Scenario 分支才可附加攻击观测。
 - holdSeconds 后有序停止。
 
 ### 3.5 Runner 调度
@@ -127,13 +129,14 @@ type Evaluation struct {
 ```
 
 - runMaxTargetBots 在运行开始冻结；每个 stage 冻结 stageTargetBots/stageExpectedBotSet。step 首级100只以100为当前分母，后续250/500分别冻结新集合；失败/停止/重分配不得缩小当前级分母。
-- 每个可信断言步骤从当前 stageExpectedBotSet 冻结 expectedBotSet；未进入步骤、断线、超时者在窗口结束时计失败，不从分母移除。
-- stable 预热：连接成功率≥99%，且每个 cohort 进入 `observationStep:true` 的 Bot/该 cohort stageExpectedBotSet≥99%，两者连续60秒；ramp结束后10分钟内必须达到。step 每级差量派发后同样预热。
-- 观察窗每5秒采样；连接成功、命令发送成功、调度完成和屏障到达均按冻结 expectedBotSet 计算，窗口内最小值必须分别≥99%，不是累计平均。
+- 每个可信断言步骤从当前 stageExpectedBotSet 冻结 expectedBotSet；未进入步骤、断线、超时者在窗口结束时计失败，不从分母移除。此规则只作用于显式 Scenario V2 兼容分支。
+- stable/step 通用命令路径预热只要求连接成功率≥99% 连续60秒；不要求 cohort 或 `observationStep`。显式 Scenario V2 兼容分支若声明 `observationStep:true`，才额外按各 cohort 冻结集合计算进入率≥99%。ramp 或差量派发结束后10分钟内必须达到对应预热条件。
+- 观察窗每5秒采样。在线率和 Worker 健康始终适用；`commandSchedule.commands` 必须非空，因此命令发送率、调度完成率与 schedule lag 在通用命令路径始终适用；屏障指标只在 profile 配置 barrier 或显式 Scenario 含 barrier 时适用。
+- 不适用指标记为 `not_applicable` 并从 verdict 分母、最小值和样本覆盖率中排除，禁止按 0 计失败或按 100% 计成功。适用指标在冻结 expectedBotSet 上计算，窗口内最小值必须达到各自阈值，不使用累计平均。
 - `command_schedule` lag 以计划发送时间至实际发送时间计算，p95≤1秒；非预期 Worker/bot-worker crash 必须为0。
-- 样本覆盖率≥99%，连续缺样>30秒失败。
-- step 每级按同一公式；spike 额外计算连接、屏障释放和命令开始延迟。
-- percentile 纯函数用于连接、命令和调度延迟。
+- 适用样本覆盖率≥99%，连续缺样>30秒失败。
+- step 每级按同一公式；spike 额外计算连接 latency、命令 schedule lag 以及已配置屏障 release lag；三者均输出 p50/p95/p99，公式以共享 API 为准。
+- percentile 纯函数严格实现共享 API 的 nearest-rank；connect 只纳入成功 connected，schedule lag 只纳入 sent，barrier release lag 只纳入已释放且后续动作实际开始，failed/timedOut/cancelled 不进入 percentile，零样本固定为 null。
 - TPS、MSPT、房间、伤害等 legacy 指标不进入默认 Evaluation；缺失或未配置不得令默认 verdict 失败或 Pending。
 - safety 条件需连续 sustainSeconds，不因单点毛刺停止。
 - 非预期 WorkerEpochGeneration 增长/目标实例 crash snapshot 计 crash；正常 stop/计划内重启不计。
@@ -148,23 +151,23 @@ type Evaluation struct {
 - scenario：命令发送、调度、barrier、动作超时。
 - internal：DB/gRPC/状态机异常。
 
-为兼容历史报告可读取 legacy `probe` category，但新运行的默认判定不依赖或产生 Probe 专属失败。
+为兼容历史报告，读取到 legacy `probe` category 时统一归一为 `scenario`，并仅在附加元数据保留 `legacyCategory: "probe"`；新运行不得产生第六分类，默认判定也不依赖 Probe。
 
 错误码→category 用纯映射表；未知为 internal/UNKNOWN。FailureSummary 存计数，不存完整堆栈。
 
 ### 3.9 安全停止与终态
 
 - safety stop：runState→stopping，verdict=aborted，reason 写报告。
-- stop：完成当前 DB 事务后取消场景、批量停止 Bot，等待最多 60 秒；剩余差距入报告，不无限等待。
-- cancel：立即发取消/停止，等待最多 15 秒；终态 cancelled/aborted。
+- stop：完成当前 DB 事务后停止新计划，取消尚未发送的命令或兼容场景动作，再批量停止 Bot，等待最多 60 秒；剩余差距入报告，不无限等待。
+- cancel：先持久化 cancel intent，经 `CancelBotCommandSchedules` 取消未终态 occurrence 并立即停止 Bot，等待最多 15 秒；终态 cancelled/aborted。pending/preflighting/ready 没有已派发计划时不调用命令取消 RPC。
 - runner 内部不可恢复错误：failed/failed，但仍尽力停止 Bot并生成部分报告。
 - 终态生成 ReportSummary，发布 complete SSE。
 
 ### 3.10 报告
 
-JSON 报告按共享 API。CSV 至少包含两部分，以 `section` 列区分：summary/stage/failure/executor/action；UTF-8 BOM 便于 Excel。导出不临时重新扫描高频原始事件，只读 report summary + samples/action results。
+JSON 报告按共享 API。CSV 严格使用共享 API 冻结的单一 header 与 `summary|stage|verdict_reason|failure_summary|failure|executor|command|barrier|latency|legacy|disclaimer` section，遵守空值、RFC3339、RFC 4180、CRLF、UTF-8 BOM 和稳定排序规则。导出不临时重新扫描高频原始事件，只读 report summary + samples/action results。
 
-JSON、CSV 与 SSE complete 摘要必须携带免责声明：默认 verdict 只证明当前环境下 Bot 连接、命令发送、调度、屏障与 Worker 健康达到阈值，不代表目标游戏服容量、TPS/MSPT 或具体玩法正确性；可选 legacy 指标仅作附加观测。
+JSON、CSV 与 SSE complete 摘要必须携带免责声明：默认 verdict 只证明当前环境下 Bot 连接、命令发送、调度、已配置屏障与 Worker 健康达到阈值，不代表目标游戏服容量、TPS/MSPT 或具体玩法正确性；可选 legacy 指标仅作附加观测。
 
 ### 3.11 会话级 SSE
 
@@ -189,14 +192,14 @@ JSON、CSV 与 SSE complete 摘要必须携带免责声明：默认 verdict 只�
 - [ ] 测试先行：运行状态机所有合法/非法转换、CP 重启恢复。
 - [ ] 测试先行：stable/step/spike planner 和阶段推进。
 - [ ] 测试先行：percentile、rate 分母、Pending、连续 safety 窗口、失败分类。
-- [ ] Model/AutoMigrate（Template/Metric/RunEvent）+ TemplateService/Router。
+- [ ] Model/AutoMigrate（SchemaVersion/Template/Metric/RunEvent）+ TemplateService/Router；删除或私有隔离现有 preflight `Required=true/BOT_LOAD_PROBE_REQUIRED` dormant 分支，产品路径不得再引用。
 - [ ] RunCoordinator、runner registry、重启扫描、状态事件。
 - [ ] 指标聚合器/5秒样本/30天清理。
 - [ ] ThresholdEvaluator、安全停止、MaxStableBots。
 - [ ] ReportService JSON/CSV。
 - [ ] Run SSE broker + metrics/bots/failures/events历史投影/report APIs。
-- [ ] 新增固定 acceptance harness：`JM_BOT_LOAD_ACCEPTANCE=1 JM_BOT_LOAD_ENV=.tmp/bot-load-acceptance/environment.json go test -tags=botloadacceptance ./internal/e2e -run '^TestBotLoadAcceptance$' -count=1 -timeout=4h`；运行 60 分钟、500+ Bot，校验连接/命令发送/调度完成/屏障/Worker 健康各≥99%、schedule lag p95≤1s、crash=0，输出 passed/failed/blocked 机器可读证据；不要求 Probe 或塔防适配。
-- [ ] 扩展 devmock 后端契约，为 FR-356/357 提供动态运行模拟。
+- [ ] 新增固定 acceptance harness：`JM_BOT_LOAD_ACCEPTANCE=1 JM_BOT_LOAD_ENV=.tmp/bot-load-acceptance/environment.json go test -tags=botloadacceptance ./internal/e2e -run '^TestBotLoadAcceptance$' -count=1 -timeout=4h`；运行 60 分钟、500+ Bot，校验连接/命令发送/调度完成/Worker 健康及已配置屏障到达率各≥99%、schedule lag p95≤1s、crash=0，输出 passed/failed/blocked 机器可读证据；不要求 Probe 或塔防适配。
+- [ ] 扩展 devmock 后端契约，为 FR-360/361 提供动态运行模拟。
 - [ ] 文档同步：ARCHITECTURE、API、PRD 本 FR 状态、CHANGELOG、运维说明。
 
 ## 5. 验收标准
@@ -207,9 +210,9 @@ JSON、CSV 与 SSE complete 摘要必须携带免责声明：默认 verdict 只�
 - [ ] CP 重启后非终态 run 恢复且不重复创建 Bot/runner。
 - [ ] stable 计时从连接宽限完成后开始；step 差量升压并准确输出上一通过级；spike 窗口和 barrier 延迟统计正确。
 - [ ] 5秒采样不对每 Bot逐行写 DB；60分钟运行约 720 个 sample。
-- [ ] 固定测试向量锁定：预热起点、720样本窗口、固定分母、expectedBotSet、连接/命令发送/调度完成/屏障/Worker 健康各≥99%、schedule lag p95≤1s、缺样覆盖率和 crash=0。
+- [ ] 固定测试向量锁定：预热起点、720 样本窗口、固定分母、expectedBotSet；连接/命令发送/调度完成/Worker 健康始终各≥99%，仅已配置屏障的到达率≥99%，无屏障为 `not_applicable`；schedule lag p95≤1s、缺样覆盖率和 crash=0。
 - [ ] 阈值缺样本为 Pending，连续缺样/安全窗口触发失败或 safety，单点毛刺不触发。
-- [ ] p50/p95/p99 仅用于连接/动作延迟，固定向量结果准确。
+- [ ] 连接 latency、命令 schedule lag 与已配置屏障 release lag 的 p50/p95/p99 固定向量结果准确；不另造未定义的“发送延迟”。
 - [ ] 报告能区分 target/executor/network/scenario/internal，并携带免责声明；legacy 指标缺失不阻断默认 verdict。
 - [ ] SSE Last-Event-ID、慢消费者、快照补偿、终态关闭全覆盖。
 - [ ] JSON/CSV 报告字段一致，运行未终态返回 409。
@@ -219,7 +222,7 @@ JSON、CSV 与 SSE complete 摘要必须携带免责声明：默认 verdict 只�
 
 - [ ] stable：500+ 连续60分钟，严格阈值判 passed；人工制造阈值失败时判 failed/aborted 原因正确。
 - [ ] step：按 100→250→500→更高档推进，首次失败停止升压，maxStableBots 正确。
-- [ ] spike：500 Bot 在配置连接窗口内发起，屏障/攻击峰值 p50/p95/p99 可见。
+- [ ] spike：500 Bot 在配置连接窗口内发起，连接 latency、命令 schedule lag 与已配置屏障 release lag 的 p50/p95/p99 可见；攻击指标仅在显式历史 Scenario 兼容运行中作为附加观测。
 - [ ] 发压节点过载与目标服过载分别制造一次，分类正确。
 - [ ] 安全停止在危险持续窗口后有序收束，报告保留。
 - [ ] JSON/CSV 默认指标与真机运行证据一致；配置 legacy 适配器时，其附加指标独立核对且不改变默认 verdict。

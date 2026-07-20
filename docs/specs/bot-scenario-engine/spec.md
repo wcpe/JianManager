@@ -2,13 +2,13 @@
 
 > 状态：已审核（2026-07-18）　·　关联 PRD：FR-352（增强 FR-274）　·　计划分支：feature/fr-352-bot-scenario-engine
 > 超级规格：`../bot-load-platform/super-spec.md`　·　HTTP API：`../bot-load-platform/api.md`
-> 依赖：FR-351 已落协调分支
+> 依赖：FR-351 开发中；FR-352 实现与其已冻结的分布式契约协同，完成状态以 PRD 为准
 
 ## 1. 背景与目标
 
 FR-274 的 orchestrated 行为按时长切换 idle/follow/patrol/guard/custom，但不能可靠表达“等待登录→输入命令→确认进房→全部准备后同时开局→确认抵达→锁敌追击并持续平A”。现有 move 只设置 goal 不等待到达，custom attack 只执行一次或每 tick重找最近目标，命令也只有已发送事件。
 
-本 FR 建 V2 结构化场景和可验证动作状态机。Control Plane 负责 YAML/JSON 单点解析、校验、cohort 分配和外部协调；Bot Worker 负责本地 Mineflayer 动作；需要服务端事实的动作进入等待态，由后续 FR-353 的探针事件经 CP 信号完成。
+本 FR 建 V2 结构化场景和可验证动作状态机。Control Plane 负责 YAML/JSON 单点解析、校验、cohort 分配和外部协调；Bot Worker 负责本地 Mineflayer 动作；需要外部事实的动作进入等待态，只消费经 CP 路由的关联信号。本 FR 不实现信号数据源，当前规划中的 FR-358 也不负责 ServerProbe/ProbeEvent 接入；该数据源仅可由未来独立、可选的适配能力提供。
 
 ## 2. 需求（要什么）
 
@@ -26,13 +26,13 @@ FR-274 的 orchestrated 行为按时长切换 idle/follow/patrol/guard/custom，
 
 **范围内**：V2 schema/parser/validator、V1 转换、cohort 分配、CP barrier/外部等待协调、gRPC/IPC 信号使用、Bot Worker 动作引擎、动作结果持久化、塔防预设、自动化测试与文档。
 
-**不做**：ServerProbe/塔防插件发布事件（FR-353）、自动重连和进程恢复（FR-354）、负载曲线/verdict（FR-355）、UI（FR-356/357）、技能/放塔/商店/复杂背包、任意脚本表达式。
+**不做**：ServerProbe/塔防插件事件数据源（未来独立可选适配能力，不归当前 FR-358～361）、自动重连和进程恢复（FR-354）、负载曲线/verdict（FR-359）、UI（FR-360/361）、技能/放塔/商店/复杂背包、任意脚本表达式。
 
 ## 3. 设计（怎么做）
 
 ### 3.1 Scenario V2
 
-严格采用超级规格 §8。Go 内部定义显式 DTO，禁止 `map[string]any` 贯穿业务层；动作的可变参数可在解析后落各自结构体。YAML/JSON 都先解析到同一 DTO，再执行同一 validator。
+严格采用共享 `../bot-load-platform/api.md` §2.2 的 `BotLoadScenarioV2` / `BotLoadScenarioAction` 判别联合；超级规格 §8 仅属于 FR-358 的 command_schedule，不再作为 Scenario schema 真源。Go 内部定义显式 DTO，禁止 `map[string]any` 贯穿业务层；动作的可变参数可在解析后落各自结构体。YAML/JSON 都先解析到同一 DTO，再执行同一 validator。
 
 校验规则：
 
@@ -42,7 +42,7 @@ FR-274 的 orchestrated 行为按时长切换 idle/follow/patrol/guard/custom，
 - 每 cohort steps 1..100；step id 匹配同样规则并在 cohort 内唯一；用于可判定运行的 V2 场景每个 cohort 必须恰有一个持续动作标 `observationStep:true`。
 - timeoutMs 默认按动作给定，范围 100..3_600_000。
 - maxAttempts 默认 1，范围 1..10；retryBackoffMs 0..60_000。
-- 模板变量只允许超级规格白名单；发现未知 `{{...}}` 返回 path 级错误。
+- Scenario V2 模板变量只允许当前实现白名单：`botName`、`botUuid`、`runId`、`cohortKey`、`correlationToken`，内部塔防预设构建期还可绑定 `roomKey`；公开输入中的未知 `{{...}}` 返回 path 级错误。FR-358 `command_schedule` 的 `botOrdinal/actionRunId` 白名单是独立契约，不扩展 Scenario V2。
 - command 长度 1..256；禁止换行和 NUL，不禁止 `/`。
 - 坐标必须有限数值；radius 0.5..256。
 - attackIntervalMs 100..5000；entity types 最多 32；evidenceWindowMs 1000..300000，minDamageEventsPerWindow 1..100000；durationMs 必须覆盖至少一个完整 evidence window。
@@ -108,13 +108,13 @@ interface ScenarioAction {
 #### wait_probe_event
 
 - start 后发 waiting external action-event，不轮询网络。
-- 仅接受 runId/botId/actionRunId/correlationToken/eventType 全匹配的 signal。
+- 仅接受 runUuid(sessionUuid)/botUuid/actionRunId/correlationToken/eventType 全匹配的 signal；数字 runId 不进入 Fleet/SignalBotActions 身份字段。
 - 重复 signal 幂等；迟到 signal 只做诊断不改变已终态动作。
 
 #### barrier
 
 - Bot Worker 上报 barrier-arrived 后等待 CP `barrier-release`。
-- barrier 唯一作用域为 `runId+stageIndex+cohortKey+barrierKey+round`；进入 stage 时冻结 expectedBotSet，分母不因断线、失败、停止或重分配缩小。
+- barrier 唯一作用域为 `runUuid+stageIndex+cohortKey+barrierKey+round`；跨进程字段使用 proto `session_uuid`。进入 stage 时冻结 expectedBotSet，分母不因断线、失败、停止或重分配缩小。
 - CP BarrierCoordinator 维护冻结的期望集合、到达集合、释放状态和 deadline。
 - release type：all/count/percent；percent 按 ceil(expectedBotSet*value/100)。
 - 释放信号含 releaseAtUnixMs/round，Worker 在本地等到同一时间，允许 250ms 时钟误差。
@@ -140,7 +140,7 @@ interface ScenarioAction {
 - attackIntervalMs 控制普通攻击节奏，不按 250ms tick 无脑攻击。
 - 目标消失/死亡后按配置 reacquire；最大空窗超时失败 TARGET_NOT_FOUND。
 - stop 支持 durationMs（截止/覆盖时长）、damageAtLeast、killsAtLeast、probeEvent、evidenceWindowMs+minDamageEventsPerWindow；successPolicy=any|all 只作用于可信条件，durationMs 本身不属于成功条件。
-- Mineflayer attack 调用只计 clientAttackAttempts；可信 damage/kills 由 FR-353 signal 累加。
+- Mineflayer attack 调用只计 clientAttackAttempts；可信 damage/kills 仅由完整关联的外部 signal 累加。当前 FR-358 不提供该信号数据源，未来独立可选适配器可接入。
 - 截止时可信条件未满足则 `failed/ATTACK_ASSERTION_UNMET`，不新增 completed_unverified 状态。
 - 严格长稳塔防预设使用 durationMs=3600000、successPolicy=all、30秒 evidence window，每个完整窗口至少一条可信 damage/kill；首次伤害不能提前结束动作。
 - evidence window 以 CP 发出的 `observation-start` 信号统一对齐；运行观察窗结束时发 `observation-complete`，Runner 仅在全部窗口满足时 succeeded，否则 failed/ATTACK_ASSERTION_UNMET。
@@ -163,11 +163,11 @@ interface ScenarioAction {
 
 本 FR 基于 FR-351 已完成的 `SignalBotActions` gRPC→IPC 逐项回执层，实现通用 ActionSignalRouter，不实现探针事件来源：
 
-- 输入：runId、botUuid/actionRunId、correlationToken、type、payload。
+- 输入：runUuid（映射 proto `session_uuid`）、botUuid/actionRunId、correlationToken、type、payload；数字 runId 仅用于数据库/API 引用。
 - 查询等待中的 action result 和 Bot.ExecutorNodeID。
 - 按执行节点分组调用 SignalBotActions。
 - Bot Worker 校验 generation/actionRunId 后投递 Runner。
-- FR-353 将 ServerProbe 事件接入该 Router；FR-355 将 barrier/stop 接入。
+- barrier/stop 等平台内部信号由后续负载编排 FR 接入；ServerProbe/ProbeEvent 不归当前 FR-358～361 所有，仅允许未来独立可选适配器接入。
 
 ### 3.8 塔防预设
 
@@ -205,19 +205,22 @@ interface ScenarioAction {
 - [ ] 旧 orchestrationYaml 和旧无编排 behavior 回归全绿。
 - [ ] `npm test`、`task bot:test`、顶层 `task test` 均真实执行 bot-worker Node 单元/IPC/Fake-MC 测试并全绿；Go 相关 tests/race、bot-worker build/lint 全绿。
 
-### 真机
+### 真机（FR-352 必需）
 
-- [ ] Bot 在真实主城半径区域持续漫游，不越界、不原地抖动。
-- [ ] 命令进房后未收到 room_joined 时停在等待态；收到后继续。
-- [ ] 500 Bot 中达到屏障阈值后在 1 秒窗口内释放开局。
-- [ ] Bot 绕障到指定区域，确认抵达后才攻击。
-- [ ] Bot 锁定指定怪物、追击并按节奏持续平A；目标死亡后正确重选。
-- [ ] 死亡后重生/重进链路可恢复到战斗阶段。
+- [ ] Bot 在真实 MC 主城半径区域持续漫游，不越界、不原地抖动；`move_to_and_wait` 绕障并确认稳定抵达后才推进。
+- [ ] 通用 `send_command` 在真实连接中调用 `bot.chat`，同步抛错与未抛错结果符合 ADR-075；不要求服务端业务回执。
+- [ ] 500 Bot 使用不依赖业务插件的 Scenario V2 完成确定性 cohort、通用屏障和取消/超时链路，达到阈值后在 1 秒窗口内释放。
+- [ ] `find_entity/attack_until` 在真实实体环境中验证锁定、追击、攻击节奏、目标消失重选和取消；没有外部可信伤害信号时不得把 client attack 当成 damage/kills 成功证据。
+- [ ] `respawn_and_rejoin` 在不依赖房间插件的普通死亡/重生环境中按配置恢复入口，且不越过运行总截止时间。
+
+### 真机（可选 legacy，非 FR-352 交付门禁）
+
+仅当未来独立 ServerProbe/业务适配器实际提供关联信号时，附加验证 `room_joined`、`area_arrived`、可信 damage/kill、塔防开局和完整死亡重进业务链。缺少该数据源必须记为 `not_applicable`，不得阻塞 FR-352 完成。
 
 ## 6. 风险 / 待定
 
 - Mineflayer/pathfinder 在不同 MC 版本行为可能不同，真机必须覆盖目标版本。
 - 实体类型名由 Mineflayer registry 决定；模板校验只能做字符串边界，真实存在性在运行时判断。
 - barrier 依赖节点时钟；要求 NTP，同步误差验收≤250ms。
-- FR-353 未落前，probe 信号用 fake router 测试，整条真实链路必须待 FR-353 后联合验收。
+- probe 信号仅使用 fake router 验证关联、超时和幂等；真实 ServerProbe/ProbeEvent 数据源不属于当前 FR-358～361 验收范围，未来独立可选适配器落地后另行联合验收。
 - 不新增 YAML/状态机依赖，复用现有 yaml.v3 和项目代码。

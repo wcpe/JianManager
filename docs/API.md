@@ -1292,12 +1292,13 @@
 - **描述**: 向 Bot 下发聊天/控制命令（链路：CP → Worker SendBotCommand → bot-worker send-command IPC → Mineflayer chat）
 - **关联 FR**: FR-009
 - **请求**: `{ "command": "/tp 0 64 0" }`
-- **响应**: `200 { "message": "已发送" }`
-- **错误**: 400 `INVALID_REQUEST`（缺 command）；404 `NOT_FOUND`（Bot 不存在/无权访问）；503 `COMMAND_FAILED`（Worker 未连接/委托失败）
+- **响应**: `200 { "message": "已发送" }`；表示 Worker 已接受并写入 `send-command` IPC，不代表 Bot Worker 已调用 `bot.chat`，也不证明服务器接受、权限通过或产生业务效果
+- **错误**: 400 `INVALID_REQUEST`（缺 command）；404 `NOT_FOUND`（Bot 不存在/无权访问）；503 `COMMAND_FAILED`（Worker 未连接或 IPC 委托失败）。当前端点不等待 Bot Worker 执行回执，`bot.chat` 同步抛错不会回传到本次 HTTP 请求
 
 ### POST /api/v1/bots/stress-sessions
 - **描述**: 创建持久化 Bot 压测会话；FR-352 在原端点加性支持 Scenario V2，**不新增独立场景 HTTP endpoint**。
-- **关联 FR**: FR-042 / FR-274 / FR-352
+- **关联 FR**: FR-352
+- **历史来源**: FR-042 / FR-274（仅追溯原端点与旧编排，不表示当前所有权）
 - **权限**: `bot:manage`（资源级按目标实例隔离）
 - **兼容别名**: `POST /api/v1/bots/stress-test`
 - **请求**（Scenario V2 JSON 对象）:
@@ -1337,6 +1338,7 @@
   - `scenario`: 可选；可直接提交 Scenario V2 JSON 对象，也可提交包含 JSON 或 YAML 的字符串。Control Plane 将两种输入规范为同一节点树，严格拒绝顶层、cohort、动作及嵌套结构中的未知字段，再解码到同一 DTO 并执行同一 validator；JSON/YAML 的同类字段错误返回相同叶子 `path`。每个 cohort 必须恰有一个 `roam_in_area` 或 `attack_until` 持续动作标记 `observationStep:true`。`legacy_behavior` 仅供 V1 内部转换，HTTP 新建 V2 不接受。`scenario` 与 `orchestrationYaml` 不可同时提交。
   - `behavior`: `scenario` 与 `orchestrationYaml` 都为空时必填；提交 Scenario V2 时响应中的 `behavior` 为 `scenario_v2`。
   - `orchestrationYaml`: FR-274/V1 兼容字段；非空时必须通过旧 YAML 编排校验，CP 会尽力转换为兼容 Scenario V2 snapshot，转换失败仍保留原编排行为。
+- **当前边界**：本端点当前没有 `commandSchedule` 请求字段，也没有通用命令计划解析、校验或执行能力；调用方不得提交或依赖该字段。未来设计仅见 `docs/specs/bot-load-probe-events/api.md`，实际落地后才回写本正式 API。
 - **响应**: `201`
   ```json
   {
@@ -1380,7 +1382,8 @@
 
 ### GET /api/v1/bots/stress-sessions
 - **描述**: 分页列出压测会话，返回会话状态、关联 Bot 聚合计数和编排摘要。
-- **关联 FR**: FR-042 / FR-274
+- **关联 FR**: FR-352
+- **历史来源**: FR-042 / FR-274（仅追溯原列表能力，不表示当前所有权）
 - **权限**: `bot:read`（按可访问实例集合收敛）
 - **Query**: `?page=1&pageSize=20`
 - **响应**:
@@ -1413,7 +1416,8 @@
 
 ### GET /api/v1/bots/stress-sessions/:id
 - **描述**: 查询单个压测会话详情；V2 会话返回规范化 `scenario`，旧会话继续返回持久化 `orchestrationYaml`。
-- **关联 FR**: FR-042 / FR-274 / FR-352
+- **关联 FR**: FR-351 / FR-352
+- **历史来源**: FR-042 / FR-274（仅追溯原详情与旧编排，不表示当前所有权）
 - **权限**: `bot:read`（按会话目标实例隔离）
 - **响应**: `200` 同创建响应；公开 V2 snapshot 的 `scenario` 原样返回规范化对象，含 V1 内部兼容字段的 snapshot 不投影到 HTTP `scenario`，旧会话仍由 `behavior`/`orchestrationYaml`/`orchestrationSummary` 表达。FR-351 起在已预检/启动的会话上加性返回 `allocations[]` 与 `batches[]` 摘要。`instanceId` 仍是被测目标，`batches[].executorNodeId` 才是实际发压节点；批次摘要为 `{ id, uuid, executorNodeId, ordinal, plannedCount, acceptedCount, connectedCount, failedCount, state, startedAt?, endedAt? }`，其中 `connectedCount` 只统计 Fleet runtime 已确认 connected 的 Bot
 - **错误**:
@@ -1421,7 +1425,7 @@
   - 404 `NOT_FOUND`：会话不存在或无权访问。
 
 ### POST /api/v1/bots/stress-sessions/:id/preflight
-- **描述**: 为尚未启动或可重试的压测会话执行预检；先重新校验冻结的 ScenarioSnapshot，再生成跨 Worker 确定性分片、短期软预留和签名 `planToken`。场景非法时在容量查询、计划持久化与 Worker 下发之前失败
+- **描述**: 为尚未启动或可重试的压测会话执行预检；重新校验冻结的 ScenarioSnapshot 和执行节点容量，再生成跨 Worker 确定性分片、短期软预留和签名 `planToken`。预检不要求 ServerProbe，不验证连接配置、服务器接受、游戏服命令权限或业务效果；场景非法时在容量查询、计划持久化与 Worker 下发之前失败
 - **关联 FR**: FR-351 / FR-352
 - **权限**: `bot:manage`（按会话目标实例隔离）；写审计 `bot_load.run.preflight`，审计仅记录节点数量、目标数、ready 和 blocker code，不记录 planToken/计划正文
 - **请求**（body 可空）:
@@ -1457,20 +1461,28 @@
       }
     ],
     "nodeCapacities": [],
-    "probe": { "required": false, "connected": false, "instanceId": 1, "instanceUuid": "uuid" },
+    "probe": {
+      "required": false,
+      "connected": false,
+      "instanceId": 1,
+      "instanceUuid": "uuid"
+    },
     "estimatedDurationSeconds": 10,
     "warnings": [],
     "blockers": []
   }
   ```
-  - 容量不足、指定节点不可用或探针要求未满足时仍返回 200，`ready=false`、无 `planToken`，原因进入 `blockers[]`；容量 blocker code 为 `BOT_LOAD_CAPACITY_INSUFFICIENT`，节点 blocker code 为 `BOT_LOAD_NODE_UNAVAILABLE`
+  - 容量不足或指定节点不可用时仍返回 200，`ready=false`、无 `planToken`，原因进入 `blockers[]`；容量 blocker code 为 `BOT_LOAD_CAPACITY_INSUFFICIENT`，节点 blocker code 为 `BOT_LOAD_NODE_UNAVAILABLE`
+  - `probe` 是当前响应保留的兼容字段；通用预检固定按 `required=false` 解释，不执行 ServerProbe 连接校验，`connected=false` 或 ServerProbe 缺失均不形成 warning/blocker，也不改变 `ready`
+  - 当前 service 内仍保留一个仅测试/历史调用可触达的 `Required=true` dormant 分支及 `BOT_LOAD_PROBE_REQUIRED` 常量，但公开 handler 从不传 true，故不属于公开 API；FR-359 接入新 preflight 前必须删除或私有隔离该分支，禁止新调用复活 Probe 硬阻断
   - 单个 allocation 的 `plannedCount` 为 `1..50`；`planToken` 只作下一步 start 的不透明凭据，客户端不得解析、拼装或回传 allocation plan
   - 软预留位于 CP 内存、与 token 同期过期，不写数据库；CP 重启后 start 仍会即时快检
 - **错误**: 400 `INVALID_REQUEST` | 403 `FORBIDDEN` | 404 `NOT_FOUND` | 409 `BOT_LOAD_INVALID_STATE` | 422 `BOT_LOAD_SCENARIO_INVALID`（同创建端点的 `details.path/message`，且不产生 allocation plan） | 500 `INTERNAL_ERROR`
 
 ### POST /api/v1/bots/stress-sessions/:id/start
 - **描述**: 使用预检签发的 `planToken` 启动分布式压测会话。CP 校验服务端计划、容量世代与即时节点可用性，在单事务中创建/恢复批次和 Bot desired 记录，提交后异步 dispatch
-- **关联 FR**: FR-042 / FR-274 / FR-351
+- **关联 FR**: FR-351
+- **历史来源**: FR-042 / FR-274（仅追溯原启动入口，不表示当前所有权）
 - **权限**: `bot:manage`（按会话目标实例隔离）；写审计 `bot_load.run.start`
 - **请求**:
   ```json
@@ -1493,7 +1505,8 @@
 
 ### POST /api/v1/bots/stress-sessions/:id/stop
 - **描述**: 记录 stopped desired intent，并按 Bot 的实际执行节点分组、每批最多 50 条异步停止；可重复调用
-- **关联 FR**: FR-042 / FR-274 / FR-351
+- **关联 FR**: FR-351
+- **历史来源**: FR-042 / FR-274（仅追溯原停止入口，不表示当前所有权）
 - **权限**: `bot:manage`（按会话目标实例隔离）；写审计 `bot_load.run.stop`
 - **请求**（body 可空）: `{ "reason": "人工结束压测" }`，`reason` 最长 255 个字符
 - **响应**: `202 Accepted` 会话视图。它表示停止意图和后台任务已接受，不表示全部 Bot 已断开；Worker 逐项 accepted 也只确认停止命令已接收，不会把 Bot runtime 伪写为 `stopped`。会话在 `waiting_runtime` 中等待 Fleet stopped/not-found 事件或完整 baseline 缺失项收敛，真实退出全部确认后才把批次/会话标为 stopped；RPC 拒绝或归真失败时保留 error 与可诊断原因
@@ -1507,7 +1520,8 @@
 - **CP → Worker → Bot Worker**：`SignalBotActions` / IPC `signal-actions` 每批最多 100 条，信号携 `signalId/botUuid/sessionUuid/generation/actionRunId/stepId/type/correlationToken/payloadJson/observedAtUnixMs`，逐项返回 accepted/skipped/error。`ActionSignalRouter` 每 500 项批量查询等待动作，按节点最多 16 路并发、节点内每 100 项分块，只投递与当前 running 动作完整关联的信号；receipt 保持原输入顺序，重试复用稳定 `signalId`。屏障内部信号类型为 `barrier-release`（payload=`{round,releaseAtUnixMs}`）与 `barrier-fail`（payload=`{round,failAtUnixMs}`）；二者均复用既有字符串 `type`/JSON payload，不新增 proto 枚举或字段。CP 首次 scope 冻结唯一 deadline，并按 `min(1s, timeoutBudget/4, remaining)` 动态 lead 在 deadline 前投递；Bot Worker 对 deadline 同毫秒的已接收屏障动作优先于通用 timeout，`barrier-fail` 最终上报 `timed_out/BARRIER_TIMEOUT`。
 - **动作终态错误码**：`CONNECT_TIMEOUT`、`CONNECT_ENDED`、`PATHFINDER_UNAVAILABLE`、`PATH_NOT_FOUND`、`MOVE_TIMEOUT`、`TARGET_NOT_FOUND`、`ATTACK_ASSERTION_UNMET`、`PROBE_EVENT_TIMEOUT`、`BARRIER_TIMEOUT`、`ACTION_CANCELLED`、`ACTION_INTERNAL_ERROR`。其中 `ATTACK_ASSERTION_UNMET` 表示 `attack_until` 截止时可信伤害/击杀/事件或证据窗口断言未满足，不得记为成功。
 - **模板绑定边界**：`tower-defense-core-v1` 是内部纯数据预设，不构成新 HTTP 模板端点；调用方必须提供安全 `RoomKey`，构建期把 `{{roomKey}}` 烘焙进进房命令并保留运行期 `{{correlationToken}}`。通用 Scenario V2 当前没有 roomKey 值来源，因此提交未绑定 `{{roomKey}}` 返回 422 `BOT_LOAD_SCENARIO_INVALID`，而不是下发后才失败。
-- **真机边界**：真实 ServerProbe 事件来源由 FR-353 接入。FR-352 自动化完成不代表真 MC/pathfinder 或 500 Bot 真机通过。
+- **成功边界**：`send_command` 调用 `bot.chat` 且未同步抛错即为命令动作成功；调用前路由、IPC、参数处理失败或调用同步抛错仍为动作失败。ServerProbe/业务事件只可作为独立观测，不改变该结果。
+- **真机边界**：FR-352 自动化完成不代表真 MC/pathfinder 或 500 Bot 真机通过；通用 `command_schedule` 与集中调度扩展由 FR-358 规划实现。
 
 ---
 

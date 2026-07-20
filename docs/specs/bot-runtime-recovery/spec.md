@@ -2,7 +2,7 @@
 
 > 状态：已审核（2026-07-18）　·　关联 PRD：FR-354　·　计划分支：feature/fr-354-bot-runtime-recovery
 > 超级规格：`../bot-load-platform/super-spec.md`　·　HTTP API：`../bot-load-platform/api.md`
-> 依赖：FR-351 已落；按批次计划在 FR-352 后开工　·　可与 FR-353 并行
+> 依赖：FR-351/352 开发中；按批次计划须等待其所需契约可用　·　可与 FR-358 的非依赖部分并行
 
 ## 1. 背景与目标
 
@@ -26,20 +26,20 @@
 
 **范围内**：Bot 恢复字段、generation/epoch/seq、Node 侧自动重连、Worker desired cache/child restart、CP reconcile/freshness、retry-failed 后端、故障指标和测试。
 
-**不做**：跨 CP 高可用、精确恢复毫秒级阶段时间、永久离线节点的自动迁移（首版只在运行中可选择重新分配失败 Bot）、负载 verdict（FR-355）、恢复 UI（FR-357）。
+**不做**：跨 CP 高可用、精确恢复毫秒级阶段时间、永久离线节点的自动迁移（首版只在运行中可选择重新分配失败 Bot）、负载 verdict（FR-359）、恢复 UI（FR-361）。
 
 ## 3. 设计（怎么做）
 
 ### 3.1 数据与顺序
 
-实现超级规格分配给 FR-354 的 Bot 字段：DesiredState、Generation、WorkerEpoch、LastEventSeq、LastSeenAt、ReconnectCount。
+实现超级规格分配给 FR-354 的 Bot 字段：新增 DesiredState、ReconnectCount，并复用现有 WorkerEpoch、WorkerEpochGeneration、LastEventSeq、LastSeenAt、ConfigHash 与 `DesiredStateGeneration`。协议/IPC/proto 中的 `generation` 唯一映射数据库 `bots.desired_state_generation`，不得再新增 `generation` 列或第二套模型字段。
 
 状态接受规则：
 
 1. 每节点 Fleet 订阅在 CP 内有单调 `fleetSubscriptionGeneration`；旧订阅 handler 即使收到迟到事件也先丢弃。
 2. 新订阅建立后必须先用 GetBotFleetSnapshot 建 baseline；只有 baseline 可以在 Worker 进程重启时重置 workerEpochGeneration。
-3. incoming desired generation < DB generation：丢弃。
-4. incoming desired generation > DB generation：协议异常，记录 WARN 并触发 snapshot，不直接覆盖 desired。
+3. incoming protocol generation < DB DesiredStateGeneration：丢弃。
+4. incoming protocol generation > DB DesiredStateGeneration：协议异常，记录 WARN 并触发 snapshot，不直接覆盖 desired。
 5. baseline 后，incoming workerEpochGeneration < DB epoch generation：旧子进程迟到事件，丢弃。
 6. incoming workerEpochGeneration == DB epoch generation 且 eventSeq ≤ lastEventSeq：重复/乱序丢弃。
 7. incoming workerEpochGeneration > DB epoch generation：同 Worker 进程内新子进程世代，允许 eventSeq 从 1 开始。
@@ -48,9 +48,9 @@
 
 ### 3.2 Desired state 变更
 
-- AutoMigrate 后执行幂等 backfill：活动会话中 status=pending/connecting/connected/disconnected/error 的 Bot 回填 desired=running、generation=1；stopped/无活动会话回填 desired=stopped。backfill 可重复运行且不中断升级。
-- 创建/启动：DesiredState=running，Generation 从 1 开始。
-- stop/delete/配置或场景恢复入口变化：事务内 Generation+1。
+- AutoMigrate 只新增 desired_state/reconnect_count；现有 desired_state_generation 已默认 1，不新建 generation 列。幂等 backfill：活动会话中 status=pending/connecting/connected/disconnected/error 的 Bot 回填 desired=running；stopped/无活动会话回填 desired=stopped，仅当既有 DesiredStateGeneration≤0 时修正为1。backfill 可重复运行且不中断升级。
+- 创建/启动：DesiredState=running，DesiredStateGeneration 从 1 开始；下发协议字段名仍为 generation。
+- stop/delete/配置或场景恢复入口变化：事务内 DesiredStateGeneration+1。
 - RunState 与旧 Status、Bot DesiredState 在同一事务演进；兼容映射严格使用超级规格定义。
 - ApplyBotBatch assignment 必须带 generation。
 - Worker 为每 Bot 保存最高 generation；stale assignment 返回 skipped。
@@ -113,9 +113,9 @@ CP `BotFleetReconciler` 由节点重连/心跳 generation 变化触发，另每 
 
 CP 从最新未终态 action result 和 `command_schedule` checkpoint 得到 current step：
 
-- checkpoint 至少记录 botId、stepId、commandId、actionRunId、计划发送时间、发送状态与终态结果；已成功命令默认不重发。
-- restart_step：resumeStepId=当前 step，attempt+1，并生成新的 actionRunId；旧 actionRunId 的迟到结果不能完成新动作。
-- restart_scenario：从 cohort 第一步开始，但仍按 checkpoint 跳过已成功且声明幂等复用的命令。
+- checkpoint 稳定唯一键至少为 `runUuid + botUuid + stepId + commandId + occurrence`，记录最近 generation/scheduleRunId/actionRunId、nullable 计划/实际发送时间、最终 attempt、发送状态与终态结果；prepared 未 release 即取消时 plannedAt/sentAt 均为 null；已成功执行项默认不重发。
+- restart_step：resumeStepId=当前 step，attempt+1，并生成新的 scheduleRunId；每个未完成 occurrence 据此复算新的 actionRunId。旧 actionRunId 的迟到结果不能完成新动作，但 checkpoint 身份不随 actionRunId 改变。
+- restart_scenario：从 cohort 第一步开始；V1 不暴露 replay policy，固定按稳定 checkpoint 键跳过全部已 `sent` 的 commandId+occurrence，仅重放未终态项。
 - fail：不重连场景，Bot runtime 可 connected，但动作标失败。
 - barrier 重启后重新 arrived，同一个 Bot 只计一次当前 generation。
 - stop/cancel 后冻结调度并取消未发送命令；任何恢复、重连或迟到事件都不得继续发送命令。
@@ -125,7 +125,7 @@ CP 从最新未终态 action result 和 `command_schedule` checkpoint 得到 cur
 
 `retry-failed`：
 
-- 选择失败 Bot 后事务 Generation+1、DesiredState=running，清当前 LastError 但保留历史 ActionResult。
+- 选择失败 Bot 后事务 DesiredStateGeneration+1、DesiredState=running，协议继续下发为 generation，清当前 LastError 但保留历史 ActionResult。
 - 可选 fromStepId 必须属于该 cohort；未传按 resumePolicy。
 - 按 executor node 批量 Apply；原节点不可用时，首版可由 FR-351 allocator 在当前可用节点重新分配，更新 ExecutorNodeID/BatchID，但不改变 Bot UUID/Name/Cohort。
 - 同请求通过审计 requestId 幂等，重复调用不重复 generation+1。

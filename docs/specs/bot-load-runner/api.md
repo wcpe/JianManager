@@ -1,4 +1,4 @@
-# API：FR-355 压测运行与判定
+# API：FR-359 压测运行与判定
 
 > 权威完整定义：`../bot-load-platform/api.md`
 
@@ -23,7 +23,7 @@
 - GET `.../failures`
 - GET `.../events`（历史分页）
 - GET `.../report?format=json|csv`
-  - 报告必须包含免责声明：结果仅证明当前环境下 Bot 连接、命令调度与 Worker 运行状况，不代表目标游戏服容量、TPS/MSPT 或玩法正确性结论。
+  - 报告必须包含免责声明：默认 verdict 只证明当前环境下 Bot 连接、命令发送、调度、已配置屏障与 Worker 健康达到阈值；`bot.chat` 成功不证明服务器接受、权限通过或业务效果；TPS/MSPT、ServerProbe 和业务事件仅为附加观测。
 - GET SSE `.../stream`（实时聚合）
 
 历史与实时路径已冻结，禁止 handler 临时改名或使用内容协商复用同一路径。

@@ -10,4 +10,4 @@
 - ActionSignalRouter 使用 FR-351 SignalBotActions。
 - action-event 经 FR-351 StreamBotFleetEvents 上行。
 
-字段和动作类型严格使用超级规格 §8。
+字段和动作类型严格使用 `../bot-load-platform/api.md` §2.2 的 `BotLoadScenarioV2` / `BotLoadScenarioAction` 判别联合；超级规格 §8 是 FR-358 command_schedule，不是 Scenario schema。

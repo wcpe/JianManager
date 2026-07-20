@@ -1,8 +1,8 @@
 # 功能规格：压测命令模板与创建向导前端
 
-> 状态：已审核（2026-07-20）　·　关联 PRD：FR-356　·　计划分支：feature/fr-356-bot-load-wizard
+> 状态：已审核（2026-07-20）　·　关联 PRD：FR-360　·　计划分支：feature/fr-360-bot-load-wizard
 > 超级规格：`../bot-load-platform/super-spec.md`　·　HTTP API：`../bot-load-platform/api.md`
-> 依赖：FR-351/352/355 API 已落　·　可与 FR-357 并行
+> 依赖：FR-351/352 开发中、FR-359 共享 API 契约已冻结但实现仍为计划；FR-360 实现须等待所需 API 可用　·　可与 FR-361 的非依赖部分并行
 
 ## 1. 背景与目标
 
@@ -26,7 +26,7 @@
 
 **范围内**：导航/tab/路由、模板 CRUD UI、五步向导、结构化命令编排编辑、YAML 高级模式、容量与调度预检、API hooks/devmock/tests/i18n/a11y。
 
-**不做**：会话实时详情/图表/报告（FR-357）、后端语义改动、room/area/monster/tower 等玩法字段、ServerProbe 硬依赖、服务端权限/命令执行/业务效果验证、定时/CI 入口、在浏览器本地执行命令。
+**不做**：会话实时详情/图表/报告（FR-361）、后端语义改动、room/area/monster/tower 等玩法字段、ServerProbe 硬依赖、服务端权限/命令执行/业务效果验证、定时/CI 入口、在浏览器本地执行命令。
 
 ## 3. 设计（怎么做）
 
@@ -35,7 +35,7 @@
 保留 `BotsPage` 路由壳，内部按 URL `?tab=` 渲染：
 
 - fleet：复用现有 Bot 聚合/分组/批量管理。
-- sessions：运行列表、创建运行按钮、状态/类型/实例筛选；点击进入 `/bots/sessions/:id`（详情由 FR-357）。
+- sessions：运行列表、创建运行按钮、状态/类型/实例筛选；点击进入 `/bots/sessions/:id`（详情由 FR-361）。
 - templates：模板列表和编辑。
 
 `tab` 非法回退 fleet 并 replace URL；搜索/筛选也写 URL，刷新可恢复。
@@ -111,10 +111,10 @@ lib/bot-load/
 
 #### Step 5 阈值预检
 
-- 默认严格阈值一键恢复。
+- 默认严格阈值一键恢复，并显式编辑在线率、命令发送率、调度完成率、Worker 健康率、仅适用时的屏障到达率、schedule lag p95 与 crash 数；`minWorkerHealthRate` 默认 0.99。
 - verdict 与 safety stop 分区，危险阈值给解释。
 - 点击预检调用 API，展示 allocations 表、总容量、命令计划结构、warnings/blockers 和计划过期倒计时。
-- 预检只确认目标节点、连接配置、执行节点容量、命令计划、负载曲线和阈值是否可调度；不验证服务端权限、命令执行结果或预期业务效果。
+- 预检只确认目标实例作用域、执行节点容量、命令计划、负载曲线和阈值是否可调度；连接配置在创建运行快照时校验，不由 preflight 重复验证；也不验证命令执行结果或预期业务效果。
 - ServerProbe 或可选业务观测缺失不得使通用预检失败。
 - 任何前面字段变化立即作废 planToken。
 - ready=false 时启动按钮禁用并聚焦 blockers。
@@ -129,7 +129,7 @@ lib/bot-load/
 
 ### 3.6 API hooks
 
-FR-355 已在 `api/botLoad.ts` 落共享类型和运行基础 hooks；本 FR 只追加模板/向导 hooks，不重新定义类型：
+FR-359 共享 API 契约已冻结，但 `api/botLoad.ts` 的共享类型和运行基础 hooks 尚未实现；本 FR 在依赖可用后消费并追加模板/向导 hooks，不在页面内另定义一套类型：
 
 - useBotLoadNodes
 - useBotLoadTemplates/useBotLoadTemplate
@@ -162,7 +162,7 @@ Mutation 成功精确 invalidate；容量 query 仅向导打开时 5 秒轮询�
 - 模板 CRUD 有状态。
 - load-nodes 至少 12 节点，含 ready/legacy/offline/capacity不足。
 - preflight 可按目标数生成分片；支持注入 capacity/command-plan/422/503 错误，不以业务效果或 ServerProbe 状态作为 ready 条件。
-- start 返回运行并交 FR-357 动态模拟。
+- start 返回运行并交 FR-361 动态模拟。
 - 提供 5000 Bot seed 生成器，但默认测试只生成按需数量，避免每次 E2E 变慢。
 
 ## 4. 任务拆分

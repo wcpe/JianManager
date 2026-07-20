@@ -13,6 +13,8 @@
 - **Control Plane 一键安装脚本（FR-355）**：`scripts/install-cp.sh` / `install-cp.ps1`（OS/arch 探测、Releases 下载、失败中文报错、可选 `--start`）；`INSTALL_CP_TEST=1` 资产名自检。
 - **对外部署文档与治理**：README 安装步骤 + MSW mock 界面截图（`docs/screenshots/*.jpg`）；根目录 `SECURITY.md`；治理戳记对账记录。
 - **楔子与 updater-core 本地诊断日志轮换压缩（FR-353，feat，增强 FR-090，见 `docs/specs/updater-local-log-rotate/spec.md`）**：`wedge.log` 与 `updater.log` 在日志器打开前按 10 MiB 阈值或本地自然日跨日轮换，旧日志以时间戳命名并 gzip 压缩，各自仅保留最近 5 个归档；轮换、压缩或清理失败均 fail-open，日志不可写时继续降级运行，不阻断游戏启动。
+### 文档
+- **Bot 压测规格按 ADR-075 重定向（FR-351/352/354/358～361，纯文档）**：编排 `send_command` 动作的通用成功边界统一为 Bot Worker 调用 `bot.chat` 未同步抛错；现有单 Bot command HTTP 端点仍只确认 IPC 委托，不等待执行回执；不再将 ServerProbe、塔防插件、聊天文本、服务端接受、权限或业务效果作为通用命令编排、预检、默认 verdict、前端观测或验收的必需条件。FR-358 取代未实施的 FR-353，承接通用命令编排与本地集中调度；FR-359～361 取代未实施的 FR-355～357，默认指标、向导和报告改为围绕连接、命令发送、调度、屏障与 Worker 健康，TPS/MSPT 与业务事件仅为可选附加观测。本条不表示 FR-351/352/354/358～361 已交付，状态仍以 PRD 为准。
 
 ### 修复
 - **发布门禁去重与 E2E 分片（fix(ci)）**：CI 将 102 条 Playwright E2E 按文件拆为 4 个隔离 runner 并行执行，分片 job 使用 `Web E2E / Shard N of 4` 标准名称并保留统一 `web-quality` 汇总门禁；瞬时失败重试一次，重试恢复记为 flaky 但不阻断，持续失败才红，并通过 GitHub reporter 直接标注失败用例。reduced-motion 进度反馈探针改用 MutationObserver 捕获子节点替换与属性变化，避免 GitHub runner 错过瞬时 `animationstart`。发布工作流复用同提交 CI 结果，只保留依赖完整内嵌资产的 Go 构建/vet/测试，避免 dev、master、tag 对同一提交重复跑前端测试。同步移除可见步骤名中的需求编号，并升级官方 GitHub Actions 到 Node.js 24 运行时对应主版本，消除弃用警告。

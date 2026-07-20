@@ -1,9 +1,9 @@
 # 功能规格：实时命令压测观测、故障诊断与报告前端
 
-> 状态：已审核（2026-07-20）　·　关联 PRD：FR-357　·　计划分支：feature/fr-357-bot-load-observability
+> 状态：已审核（2026-07-20）　·　关联 PRD：FR-361　·　计划分支：feature/fr-361-bot-load-observability
 > 超级规格：`../bot-load-platform/super-spec.md`　·　HTTP API：`../bot-load-platform/api.md`
 > 命令成功边界：`../../adr/075-bot-command-orchestration.md`
-> 依赖：FR-355 API 已落　·　可与 FR-356 并行
+> 依赖：FR-359 共享 API 契约已冻结、实现仍为计划状态；FR-361 实现须等待其可用　·　可与 FR-360 的非依赖部分并行
 
 ## 1. 背景与目标
 
@@ -29,7 +29,7 @@
 
 **范围内**：详情路由/页面、SSE 管理、API hooks、图表、分页/虚拟化、失败重试、报告下载、devmock 动态运行、测试和文档。
 
-**不做**：模板/创建向导（FR-356）、后端状态机/指标语义、浏览器端重新计算正式 verdict、为每 Bot 常驻 SSE、原始网络包或逐条高频命令事件可视化。
+**不做**：模板/创建向导（FR-360）、后端状态机/指标语义、浏览器端重新计算正式 verdict、为每 Bot 常驻 SSE、原始网络包或逐条高频命令事件可视化。
 
 ## 3. 设计（怎么做）
 
@@ -70,7 +70,10 @@ SSE event 到达后：
 
 - run-state/counts/stage 更新内存快照并 invalidate 相关轻查询。
 - metric 只追加最近窗口（默认 15 分钟，最多 300 点）；完整历史仍查 HTTP。
+- command 更新命令计划进度和调度 lag 摘要，不保存逐 Bot 高频事件。
 - failure 增量更新摘要并 invalidate failures 首页面。
+- warning 追加最近警告并按 `code` 合并重复项。
+- history 按共享 `BotLoadRunEvent` 联合以 `eventId` 去重后插入 Events 首屏，并更新 actionRunId trace；其他聚合 SSE 不伪造成历史事件。
 - complete 设置 reportReady、关闭 SSE、刷新详情/报告摘要。
 
 单 run SSE、Bot/失败/事件分页与 report 接口保持现有契约；不得为 optional legacy 观测另建通用必需链路。
@@ -91,17 +94,17 @@ SSE event 到达后：
 
 - running/degraded：显示“有序停止”和“立即取消”；二者用共享确认 Dialog，说明差异。
 - stopping/cancelling：按钮 loading/禁重复。
-- completed/failed/cancelled：下载 JSON/CSV、复制为新运行（跳 FR-356 向导，带 template/run snapshot 参数）。
+- completed/failed/cancelled：下载 JSON/CSV、复制为新运行（跳 FR-360 向导，带 template/run snapshot 参数）。
 - verdict 使用文字+图标+语义色，不只颜色。
-- 运行时长前端按 startedAt 轻量 tick，但不写全局状态；终态用 endedAt 固定。
+- 运行时长前端按 startedAt 轻量 tick，但不写全局状态；终态使用 `endedAt ?? stoppedAt` 固定。V1 覆盖仅 stoppedAt，V2 断言 endedAt 与 stoppedAt 相等。
 
 ### 3.5 Overview
 
 - KPI：目标、已接受、在线、失败、在线率、命令发送成功/失败、当前阶段、运行时长。
 - ConnectionFunnel：planned→accepted→connecting→connected，显示每层转化率。
-- CommandPlanProgress：按命令步骤显示 planned/sent/failed，明确 sent 只表示 `bot.chat` 未同步抛错。
+- CommandPlanProgress：按命令步骤显示 planned/sent/failed/timedOut/cancelled，明确 sent 只表示 `bot.chat` 未同步抛错。
 - BarrierStatus：显示屏障等待、到达、释放和超时状态。
-- ThresholdVerdict：逐指标 expected/actual/pass/pending；正式结果完全使用后端 reasons，不在前端另算。
+- ThresholdVerdict：逐指标 expected/actual/pass/fail/pending/not_applicable；正式结果完全使用后端 `BotLoadVerdictReason.key/state`，以稳定 key 做中英 i18n，不解析 message、不在前端另算。
 - ExecutorDistribution：每节点 planned/active/error/health/RSS/eventLoop，点击带 node filter 跳 Bots/Failures。
 - 最近 warnings/failures 最多 10 条，并常驻展示命令发送成功免责声明。
 
@@ -111,7 +114,7 @@ SSE event 到达后：
 
 - 连接：online rate、connect latency p50/p95/p99。
 - 命令：调度 lag p50/p95/p99、发送成功/失败率；成功文案持续链接或展开 `bot.chat` 成功边界免责声明。
-- 屏障：等待数、到达数、释放/超时状态与阶段时间线。
+- 屏障：等待数、到达数、释放/超时状态、阶段时间线，以及已配置屏障的 release lag p50/p95/p99；未配置时不绘制该延迟。
 - 发压端：按节点 health/RSS/eventLoop/CPU/activeBots，可多选最多 6 节点，超过提示。
 - optional legacy：TPS、MSPT、在线玩家及 ServerProbe 扩展指标仅在有值时置于独立区域，不参与通用命令成功判定。
 - 时间范围：最近15m/1h/全程；分辨率由服务端返回。
@@ -128,17 +131,17 @@ SSE event 到达后：
 
 ### 3.8 失败诊断
 
-- 顶部分类卡 target/executor/network/command-plan/worker/internal；probe 仅作为 optional legacy 分类。
+- 顶部失败分类卡严格只有 `target/executor/network/scenario/internal`：命令计划、调度、屏障和兼容场景步骤归入 `scenario`，Worker/bot-worker 不可用归入 `executor`。Probe 数据只能作为失败明细旁的 optional legacy 观测徽标/字段，不是第六个 category，也不得进入分类筛选枚举。
 - 明细服务端分页；支持 errorCode/node/step/time。
-- FailureTraceDrawer 显示：Bot→Worker→命令步骤→调度/发送结果→错误→是否可重试；有可选业务观测时才追加 Probe event。
+- FailureTraceDrawer 显示：Bot→Worker→命令步骤或兼容 Scenario action→调度/发送/动作结果→错误→是否可重试；有可选业务观测时才追加 Probe event。
 - “重试当前项/选中项/当前筛选失败”调用 retry-failed；显示 requested/accepted/skipped/errors 明细，不只 toast 数量。
 - 重试成功跳 Bot tab 过滤相应 Bot；历史 failure 不删除。
 
 ### 3.9 Events
 
-只显示会话关键事件：run-state/stage/barrier/command-send/worker health/executor crash/safety stop。历史使用共享 API `GET /bots/stress-sessions/:id/events` 服务端分页，支持类型/Bot/节点/步骤/matchState/时间筛选；SSE 仅把实时新增插入首屏。高频命令发送事件显示聚合计数，不逐条刷屏；optional legacy Probe 事件独立标记。
+只显示共享 `BotLoadRunEventType` 定义的会话关键事件：`run-state/stage/barrier/scenario-action/command-schedule/command-send/worker-health/executor-crash/safety-stop/report-ready`。历史在 FR-359 落地后使用共享 API `GET /bots/stress-sessions/:id/events` 的 `BotLoadRunEventPage` 服务端分页，查询条件严格采用共享契约中的 `type/eventId/actionRunId/botUuid/executorNodeId/stepId/from/to/snapshotEventId`；第一页保存响应 `snapshotEventId`，后续页原样回传，刷新筛选才开启新窗口。SSE 仅消费完整 `history: BotLoadRunEvent` 并按 `eventId` 去重插入首屏，其他聚合事件只更新对应面板。成功命令发送事件显示 `mode:aggregate` 聚合计数，不逐条刷屏；failed/timed_out/cancelled 使用 `mode:item` 保留 action trace；显式 Scenario V2 的每个 actionRunId 终态使用 `scenario-action`，保证移动/攻击/等待步骤刷新后仍可下钻。barrier 事件展示 preparing/decision/release_dispatched/release_accepted/released/timed_out/cancelled 精确阶段；dispatched/accepted 明确标注“尚未调用 bot.chat”，分块 affectedBotUuids 只在下钻时展开。optional legacy Probe 数据只放事件顶层 `legacy` 元数据并独立标记。
 
-FailureTraceDrawer 以 actionRunId/eventId 查询同一历史投影，运行结束、刷新或 SSE 重连后仍可还原 Bot→Worker→命令步骤→调度/发送错误链，不要求 Probe Event。
+FailureTraceDrawer 以 actionRunId/eventId 查询同一历史投影，运行结束、刷新或 SSE 重连后仍可还原 Bot→Worker→命令步骤或兼容 Scenario action→调度/发送/动作错误链，不要求 Probe Event。
 
 ### 3.10 Config
 
@@ -176,7 +179,7 @@ FailureTraceDrawer 以 actionRunId/eventId 查询同一历史投影，运行结�
 - [ ] 路由/SessionPage 壳和 URL tab/filter。
 - [ ] API hooks：详情、metrics、bots、failures、events历史、retry、report、`/stream` SSE。
 - [ ] SessionHeader/Overview/Threshold/Funnel/命令计划/屏障/Executor。
-- [ ] Metrics 图表覆盖连接、命令发送、调度 lag p50/p95/p99、Worker 健康及 optional legacy 区域。
+- [ ] Metrics 图表覆盖连接 latency、命令发送结果、schedule lag p50/p95/p99、已配置屏障 release lag p50/p95/p99、Worker 健康及 optional legacy 区域。
 - [ ] Bot 明细分页/选择/详情 Drawer。
 - [ ] Failure 分类/Trace/重试结果明细，验证无 Probe 事件仍可还原失败链。
 - [ ] Events/Config/报告下载，页面与报告持续显示 `bot.chat` 成功边界免责声明。
@@ -196,7 +199,7 @@ FailureTraceDrawer 以 actionRunId/eventId 查询同一历史投影，运行结�
 - [ ] Overview verdict reasons 与 API逐项一致，前端不另算出冲突结论。
 - [ ] Bot/Failure 5000 数据下每次请求 pageSize≤100、首屏 DOM 数据行≤120、切换 tab 不额外创建 SSE，跨页筛选和重试范围准确。
 - [ ] retry-failed 展示逐项 errors，历史失败不被删除；失败链在无 Probe 事件时仍完整。
-- [ ] 图表单序列点数≤1200、null 不画0，连接与调度 lag p50/p95/p99 单位正确；TPS/MSPT/ServerProbe 缺失不报错，有值时仅显示在 optional legacy 区域。
+- [ ] 图表单序列点数≤1200、null 不画0，连接 latency、schedule lag 与已配置屏障 release lag 的 p50/p95/p99 单位正确；TPS/MSPT/ServerProbe 缺失不报错，有值时仅显示在 optional legacy 区域。
 - [ ] 页面及 JSON/CSV 报告持续显示 `bot.chat` 成功边界免责声明，文件名、内容类型、loading/error 正确。
 - [ ] 中英、暗亮、移动端、键盘、图表文字摘要和 aria 全绿。
 - [ ] 相关 typecheck/lint/vitest/Playwright 全绿，不新增依赖。
@@ -211,7 +214,7 @@ FailureTraceDrawer 以 actionRunId/eventId 查询同一历史投影，运行结�
 
 ## 6. 风险 / 待定
 
-- 事件历史 API 未单列；首版 events tab 使用 SSE ring + 已持久化关键结果组合，禁止另发明接口。
+- events tab 依赖 FR-359 规划的共享 `GET /bots/stress-sessions/:id/events`；该接口未落地前不得以 SSE ring 临时拼装替代，也不得另发明接口。
 - 浏览器性能瓶颈主要是图表和大表；限制点数/节点选择/DOM 行数，不用提高轮询频率解决。
 - 现有单 Bot SSE 可按需复用，但 Drawer 关闭必须释放。
 - 不新增虚拟列表、状态管理或图表依赖。

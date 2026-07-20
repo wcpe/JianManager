@@ -15,6 +15,6 @@
 - ApplyBotBatch
 - GetBotFleetSnapshot
 - StreamBotFleetEvents
-- SignalBotActions 通用 request/result 投递层
+- SignalBotActions：FR-352 Scenario 屏障/外部信号的 request/result 投递层；FR-358 命令计划、时间屏障释放与取消使用独立 `Apply/Release/CancelBotCommandSchedules` gRPC，再映射到独立 IPC
 
 本 FR 一次铺齐共享字段；具体结构严格使用超级规格 §9，禁止子分支另行改名。
