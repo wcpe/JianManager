@@ -1,6 +1,6 @@
 # 功能规格：Bot 发压节点池与分布式调度底座
 
-> 状态：已审核（2026-07-18）　·　关联 PRD：FR-351（增强 FR-038/042/274）　·　计划分支：feature/fr-351-bot-distributed-load
+> 状态：已审核（2026-07-18）　·　关联 PRD：FR-362（增强 FR-038/042/274）　·　计划分支：feature/fr-362-bot-distributed-load
 > 超级规格：`../bot-load-platform/super-spec.md`　·　HTTP API：`../bot-load-platform/api.md`
 > 架构决策：`ADR-074`（accepted，部分修订 ADR-006 的单 Worker 归属假设）
 
@@ -15,7 +15,7 @@
 - 目标实例与执行节点解耦，普通单 Bot 默认行为保持不变。
 - Worker 上报 Bot Worker 是否就绪、版本/能力、容量、活跃/连接中 Bot、RSS、事件循环延迟和进程世代。
 - CP 提供目标实例作用域的发压节点容量列表。
-- CP 对运行做预检：当前校验已冻结 Scenario 与执行节点容量，生成 allocation plan 和短期软预留；`probe` 仅保留 `required=false` 的兼容响应字段，不参与校验，load profile/thresholds 由后续 FR-359 扩展。
+- CP 对运行做预检：当前校验已冻结 Scenario 与执行节点容量，生成 allocation plan 和短期软预留；`probe` 仅保留 `required=false` 的兼容响应字段，不参与校验，load profile/thresholds 由后续 FR-370 扩展。
 - 分片算法必须确定性、可测试，单批不超过执行节点容量和 50 个 assignment。
 - 启动改为后台化，HTTP 立即返回 202；`accepted` 不得等同于 `connected`。
 - gRPC 批量应用 assignment，IPC 一次发送数组，禁止 500 次逐 Bot unary 创建。
@@ -26,7 +26,7 @@
 
 **范围内**：Bot/批次模型增量、容量 RPC、批量 Apply RPC、Worker/IPC 批量下发、容量目录、预检与分片、启动/停止后台化、权限/审计、API/文档/测试。
 
-**不做**：V2 场景动作（FR-352）、ServerProbe/ProbeEvent 数据源（未来独立可选适配能力，不归当前 FR-358～361）、重连与进程恢复（FR-354）、三类负载状态机和 verdict（FR-359）、前端向导和观测（FR-360/361）、提高单 Worker 默认容量、自动创建云节点。
+**不做**：V2 场景动作（FR-363）、ServerProbe/ProbeEvent 数据源（未来独立可选适配能力，不归当前 FR-369～372）、重连与进程恢复（FR-365）、三类负载状态机和 verdict（FR-370）、前端向导和观测（FR-371/372）、提高单 Worker 默认容量、自动创建云节点。
 
 ## 3. 设计（怎么做）
 
@@ -110,11 +110,11 @@ CP 容量目录：
 
 - `GetBotCapacity`
 - `ApplyBotBatch`
-- `GetBotFleetSnapshot`（本 FR 提供当前快照，FR-354 用于 reconcile）
+- `GetBotFleetSnapshot`（本 FR 提供当前快照，FR-365 用于 reconcile）
 - `StreamBotFleetEvents`（本 FR 接真持续状态流，CP 活动运行按执行节点订阅）
-- `SignalBotActions`（本 FR 完整实现 gRPC→IPC 通用投递和逐项回执；FR-352 提供/消费 Scenario 信号语义。旧 FR-353 已废弃；FR-358 command_schedule 使用独立命令 IPC，不复用本 RPC）
+- `SignalBotActions`（本 FR 完整实现 gRPC→IPC 通用投递和逐项回执；FR-363 提供/消费 Scenario 信号语义。旧 FR-364 已废弃；FR-369 command_schedule 使用独立命令 IPC，不复用本 RPC）
 
-FR-351 还在 proto 一次铺齐 assignment/runtime 的 sessionId、generation、configHash、workerEpochGeneration、eventSeq。若保留实例指标 `mspt_p95_millis` additive 字段，其所有权属于既有实例监控/未来 optional legacy 观测，不归 FR-358，也不参与通用命令 preflight、成功或默认 verdict；预铺字段不得被解释为本批次的数据源承诺。
+FR-362 还在 proto 一次铺齐 assignment/runtime 的 sessionId、generation、configHash、workerEpochGeneration、eventSeq。若保留实例指标 `mspt_p95_millis` additive 字段，其所有权属于既有实例监控/未来 optional legacy 观测，不归 FR-369，也不参与通用命令 preflight、成功或默认 verdict；预铺字段不得被解释为本批次的数据源承诺。
 
 `ApplyBotBatchRequest`：batchId、idempotencyKey、assignments。响应逐 assignment：accepted/status/errorCode/error。
 
@@ -132,7 +132,7 @@ Worker 幂等缓存：
 - `signal-actions/get-fleet-snapshot` 同样有 requestId 和 `signal-result/fleet-snapshot-result`。
 - BotConfig 扩展字段必须可选，旧单 Bot路径可继续构造旧字段。
 - Bot Worker `createBots` 容量判断改为按“新增 ID 数”计算；替换已有 Bot 不应在满容量时被错误拒绝。
-- 创建连接遵守 connectNotBefore；本 FR 只实现时间门控，复杂 stable/step/spike 由 FR-359 生成计划。
+- 创建连接遵守 connectNotBefore；本 FR 只实现时间门控，复杂 stable/step/spike 由 FR-370 生成计划。
 - 连接终态经 `bot-state`→Worker `StreamBotFleetEvents` 异步上报 CP；accepted 与 connected 严格分离。
 
 ### 3.8 统一执行节点路由
@@ -146,14 +146,14 @@ Worker 幂等缓存：
 3. 提交事务后启动后台 dispatch；HTTP 202。
 4. 每批调用 ApplyBotBatch；按逐 Bot 回执写 accepted/error。
 5. dispatch 失败只标该 batch failed 和 Bot error；其他批次继续。
-6. 所有批次派发结束后，兼容 Status 映射为 running；FR-359 接管细粒度状态。
-7. DB 写失败不发 RPC；RPC 成功后 DB 回写失败由 fleet snapshot/FR-354 reconcile 收束。
+6. 所有批次派发结束后，兼容 Status 映射为 running；FR-370 接管细粒度状态。
+7. DB 写失败不发 RPC；RPC 成功后 DB 回写失败由 fleet snapshot/FR-365 reconcile 收束。
 
 ### 3.10 停止流程
 
-- 将目标 Bot desired intent 视为 stopped（FR-354 字段尚未落前，本 FR用 batch state + Bot status 表达）。
+- 将目标 Bot desired intent 视为 stopped（FR-365 字段尚未落前，本 FR用 batch state + Bot status 表达）。
 - 按 executor node 聚合 bot UUID，一次 batch stop。
-- Worker 不可用时记录 batch lastError，Bot 不伪装 stopped；后续 FR-354 reconcile。
+- Worker 不可用时记录 batch lastError，Bot 不伪装 stopped；后续 FR-365 reconcile。
 - 旧 stop endpoint 保持幂等。
 
 ### 3.11 权限与审计
@@ -210,7 +210,7 @@ Worker 幂等缓存：
 - [x] stop 后可达 Worker 上 Bot 退出；会话/批次状态收敛。
 - [x] 人为关闭一个发压 Worker 时，其他批次/节点不伪造「全员成功」；API 可区分失败/缺口（缩比规模即可）。
 
-### 真机（可选满规模，不阻塞 FR-351 完成）
+### 真机（可选满规模，不阻塞 FR-362 完成）
 
 - [ ] ≥10 个新版 Worker botWorkerReady/max=50/available。
 - [ ] 预检 500 Bot 为 10+ 节点且每节点≤50；启动后真实在线 500 且与批次/snapshot 一致。
@@ -221,5 +221,5 @@ Worker 幂等缓存：
 - **满规模环境**：10 Worker / 500 真连为可选扩容验收；缩比门禁已用户确认，禁止用同进程 fake Worker 代替「≥2 真 Worker」门槛。
 - **容量超卖**：软预留不是分布式锁；start 二次快检和 Worker 实际 admission 是最终防线。
 - **节点选择公平性**：首版确定性轮转，不做成本/地域/网络质量智能调度。
-- **Proto 冲突**：本 FR 必须一次铺齐 FR-358/354 所需 fleet/signal 字段；后续发现缺口先回协调分支改超级规格，不允许并行分支各改 proto。
+- **Proto 冲突**：本 FR 必须一次铺齐 FR-369/365 所需 fleet/signal 字段；后续发现缺口先回协调分支改超级规格，不允许并行分支各改 proto。
 - **无新增依赖**：实现使用现有 Go/Node 能力；如需新依赖必须先获得用户确认。

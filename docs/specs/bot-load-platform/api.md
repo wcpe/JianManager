@@ -1,6 +1,6 @@
 # API 规格：500+ Bot 分布式命令压测平台
 
-> 状态：已审核（2026-07-20）　·　关联 FR：FR-351/352/354/358～361
+> 状态：已审核（2026-07-20）　·　关联 FR：FR-362/363/365/369～372
 > 基础路径：`/api/v1`　·　共享设计：`super-spec.md`　·　命令成功边界：`../../adr/075-bot-command-orchestration.md`
 > 所有 JSON 字段使用 camelCase；时间为 RFC3339；路径 ID 使用数字 ID，响应同时返回 UUID。
 
@@ -181,7 +181,7 @@ type BotLoadPreflightSnapshot =
 type BotLoadPreflightPlanned = BotLoadPreflightCurrent & { instanceId:number } & BotLoadPreflightSnapshot
 ```
 
-`planToken` 是短期计划标识，不是凭据；默认 60 秒过期。容量不足或节点不可用返回 200 且 `ready=false`；Scenario/命令计划、profile 或 thresholds 结构与语义非法返回对应 422，不进入 `ready=false` 响应。当前代码响应严格使用 `BotLoadPreflightCurrent`；`probe` 固定 `required=false`，不执行 ServerProbe 连接校验，`connected=false` 或数据源缺失不产生 warning/blocker，也不改变 `ready`。service 内 dormant `Required=true/BOT_LOAD_PROBE_REQUIRED` 分支不被公开 handler 调用，不属于契约；FR-359 实现前必须删除或收进不可被产品路径调用的 legacy 私有适配器。FR-358/359 落地后响应升级为 `BotLoadPreflightPlanned`，加性返回顶层 `instanceId` 和互斥的三类快照；当前客户端从运行详情取得目标实例，不得依赖 `probe.instanceId`。
+`planToken` 是短期计划标识，不是凭据；默认 60 秒过期。容量不足或节点不可用返回 200 且 `ready=false`；Scenario/命令计划、profile 或 thresholds 结构与语义非法返回对应 422，不进入 `ready=false` 响应。当前代码响应严格使用 `BotLoadPreflightCurrent`；`probe` 固定 `required=false`，不执行 ServerProbe 连接校验，`connected=false` 或数据源缺失不产生 warning/blocker，也不改变 `ready`。service 内 dormant `Required=true/BOT_LOAD_PROBE_REQUIRED` 分支不被公开 handler 调用，不属于契约；FR-370 实现前必须删除或收进不可被产品路径调用的 legacy 私有适配器。FR-369/370 落地后响应升级为 `BotLoadPreflightPlanned`，加性返回顶层 `instanceId` 和互斥的三类快照；当前客户端从运行详情取得目标实例，不得依赖 `probe.instanceId`。
 
 ### 2.4 负载与阈值
 
@@ -354,7 +354,7 @@ interface BotLoadReport {
 }
 ```
 
-FR-358/共享地基先加性新增 `schema_version`（NOT NULL DEFAULT 1）并启用 schemaVersion=1 联合序列化；现有行及 FR-358 commandSchedule 运行保持 1。FR-359 再新增 V2 列，新创建的 FR-359 运行事务写 2；FR-358 先行创建且带 command_schedule_snapshot 的会话仍为 schemaVersion=1，并由 legacy commandSchedule 分支与兼容 runner 真实表达，不伪造 FR-359 profile/verdict。V2 专属 DB 列为兼容历史行允许 null，但 service 对 schemaVersion=2 强制完整非空；不得把 schemaVersion=1 的旧 `status` 猜成 runState/verdict，也不得伪造 loadProfile/thresholds。部署时已存在的非终态 schemaVersion=1 会话继续由旧兼容 runner 收束，不原地升级；需要 V2 判定/报告时必须复制为新运行。列表/详情按 schemaVersion 判别联合序列化，报告仅为 schemaVersion=2 生成。
+FR-369/共享地基先加性新增 `schema_version`（NOT NULL DEFAULT 1）并启用 schemaVersion=1 联合序列化；现有行及 FR-369 commandSchedule 运行保持 1。FR-370 再新增 V2 列，新创建的 FR-370 运行事务写 2；FR-369 先行创建且带 command_schedule_snapshot 的会话仍为 schemaVersion=1，并由 legacy commandSchedule 分支与兼容 runner 真实表达，不伪造 FR-370 profile/verdict。V2 专属 DB 列为兼容历史行允许 null，但 service 对 schemaVersion=2 强制完整非空；不得把 schemaVersion=1 的旧 `status` 猜成 runState/verdict，也不得伪造 loadProfile/thresholds。部署时已存在的非终态 schemaVersion=1 会话继续由旧兼容 runner 收束，不原地升级；需要 V2 判定/报告时必须复制为新运行。列表/详情按 schemaVersion 判别联合序列化，报告仅为 schemaVersion=2 生成。
 
 时间兼容规则：数据库 `ended_at` 是唯一终止时间列。schemaVersion=1 响应只返回兼容字段 `stoppedAt=ended_at`，`endedAt` 省略；schemaVersion=2 终态响应同时返回 `endedAt` 与兼容别名 `stoppedAt`，两者必须完全相等，非终态两者均省略。V2 的旧 `status` 与 runState 同事务映射固定为：`pending|preflighting|ready|starting → pending`，`running|degraded|stopping|cancelling → running`，`completed|cancelled → stopped`，`failed → error`；禁止其他映射。
 
@@ -362,13 +362,13 @@ FR-358/共享地基先加性新增 `schema_version`（NOT NULL DEFAULT 1）并�
 
 每个运行及每个 stage 的 `verdictReasons` 必须按上述 key 稳定输出：在线、命令发送、调度完成、Worker 健康、schedule lag、crash、样本覆盖率和连续缺样始终出现；屏障未配置时仍输出 `barrier_arrival_rate + not_applicable`；safety key 仅在配置对应 safety 阈值或触发 safety stop 时出现。`worker_health_rate` 使用 `minWorkerHealthRate`；覆盖率不足先 pending、窗口关闭或连续缺样超 30 秒后 fail。`message` 仅作服务端回退文案，前端 i18n 必须以 `key/state` 为稳定键，不解析 message。
 
-FR-352 的公开 Scenario V2 创建、详情和执行契约保持可用；ADR-075 只修订 `send_command` 成功边界，不废弃场景引擎。FR-358～361 实现后，新命令模板和运行以 `commandSchedule` 为通用主字段，Scenario V2 继续作为显式兼容能力。
+FR-363 的公开 Scenario V2 创建、详情和执行契约保持可用；ADR-075 只修订 `send_command` 成功边界，不废弃场景引擎。FR-369～372 实现后，新命令模板和运行以 `commandSchedule` 为通用主字段，Scenario V2 继续作为显式兼容能力。
 
-## 3. 发压节点与预检（FR-351/359）
+## 3. 发压节点与预检（FR-362/370）
 
 ### GET `/bots/load-nodes`
 
-- **关联 FR**：FR-351
+- **关联 FR**：FR-362
 - **权限**：`bot:read`，并可访问 Query 指定的目标实例
 - **请求**：Query `instanceId:number` 必填
 - **响应 200**：`{items:BotLoadNodeCapacity[];totalCapacity:number;availableCapacity:number;updatedAt:string}`
@@ -376,30 +376,30 @@ FR-352 的公开 Scenario V2 创建、详情和执行契约保持可用；ADR-07
 
 ### POST `/bots/stress-sessions/:id/preflight`
 
-- **关联 FR**：FR-351；FR-358/359 加性扩展命令计划、profile、thresholds 校验
+- **关联 FR**：FR-362；FR-369/370 加性扩展命令计划、profile、thresholds 校验
 - **权限**：`bot:manage`，并可管理路径运行的目标实例
 - **请求**：`{executorNodeIds?:number[];connectRatePerSecondPerNode?:number}`；节点最多 256 个且去重，省略表示自动选择，速率范围 1..50
-- **响应 200**：当前代码为 `BotLoadPreflightCurrent`；FR-358/359 实现后的目标契约为 `BotLoadPreflightPlanned`。容量不足或候选节点不可用仍为 200、`ready=false`、原因在 `blockers[]`
+- **响应 200**：当前代码为 `BotLoadPreflightCurrent`；FR-369/370 实现后的目标契约为 `BotLoadPreflightPlanned`。容量不足或候选节点不可用仍为 200、`ready=false`、原因在 `blockers[]`
 - **副作用**：ready 时保存 allocation plan 并建立 60 秒软预留；不创建 Bot、不启动连接
 - **错误**：400 `INVALID_REQUEST`；401 `UNAUTHORIZED`；403 `FORBIDDEN`；404 `NOT_FOUND`；409 `BOT_LOAD_INVALID_STATE`；422 `BOT_LOAD_SCENARIO_INVALID|BOT_LOAD_PROFILE_INVALID|BOT_LOAD_THRESHOLDS_INVALID`；500 `INTERNAL_ERROR`
 
 ### POST `/bots/stress-sessions/:id/start`
 
-- **关联 FR**：FR-351/359
+- **关联 FR**：FR-362/370
 - **权限**：`bot:manage`，并可管理路径运行的目标实例
 - **请求**：`{planToken:string}`
 - **响应 202**：`BotLoadRun`；只表示事务提交且后台派发接受，不等待 accepted/connected
 - **幂等**：同一未失效 planToken 重放返回同一运行；创建 Bot/批次和后台任务后立即返回
-- **状态限制**：FR-359 目标状态机仅 `ready`；planToken 未过期且 capacity generation 未变化。当前 FR-351 的旧 V1 空 body/pending 内部预检仅按 §7 兼容，不放宽新状态机
+- **状态限制**：FR-370 目标状态机仅 `ready`；planToken 未过期且 capacity generation 未变化。当前 FR-362 的旧 V1 空 body/pending 内部预检仅按 §7 兼容，不放宽新状态机
 - **错误**：400 `INVALID_REQUEST`；401 `UNAUTHORIZED`；403 `FORBIDDEN`；404 `NOT_FOUND`；409 `BOT_LOAD_INVALID_STATE|BOT_LOAD_CAPACITY_CHANGED`；422 `BOT_LOAD_CAPACITY_INSUFFICIENT`；503 `BOT_LOAD_NODE_UNAVAILABLE`；500 `INTERNAL_ERROR`
 
-## 4. 模板与运行（FR-359/360）
+## 4. 模板与运行（FR-370/371）
 
 V1 模板是个人所有权资源，不绑定目标实例、不做团队共享。`createdBy` 由服务端取当前用户写入且不可由请求覆盖；名称先 trim，大小写敏感。持久层增加 nullable `active_name_key=hex(SHA-256(UTF-8(trimmedName)))`，建立数据库唯一索引 `(created_by, active_name_key)`：活跃行必须非 null，软删事务同时把该列置 null；SQLite/MySQL 均允许多条 null，从而允许软删后复用名称，并由数据库最终阻断并发同名创建/改名。唯一冲突映射 409 `BOT_LOAD_TEMPLATE_NAME_CONFLICT`，service 预检只用于友好提示。非平台管理员的 list/get/update/delete 只作用于自己的模板，无权访问统一返回 404；平台管理员可读取和管理全部模板并写审计。由模板创建运行还必须独立校验调用者可管理请求中的目标实例。团队/组织共享需未来新增显式 visibility/scope 契约，不得通过猜测实例权限实现。
 
 ### GET `/bots/load-templates`
 
-- **关联 FR**：FR-359/360
+- **关联 FR**：FR-370/371
 - **权限**：`bot:read`
 - **请求**：Query `page:number=1&pageSize:number=20&q?:string&tag?:string&ownerId?:number`，pageSize 1..100；ownerId 仅平台管理员可用；非管理员提交该参数返回 403 `FORBIDDEN`，省略时固定过滤当前用户
 - **响应 200**：`Page<BotLoadTemplate>`
@@ -407,7 +407,7 @@ V1 模板是个人所有权资源，不绑定目标实例、不做团队共享�
 
 ### POST `/bots/load-templates`
 
-- **关联 FR**：FR-359/360
+- **关联 FR**：FR-370/371
 - **权限**：`bot:manage`；创建者固定为当前用户
 - **请求**：`BotLoadTemplateInput`，不得提交 createdBy/ownerId
 - **响应 201**：`BotLoadTemplate`
@@ -415,7 +415,7 @@ V1 模板是个人所有权资源，不绑定目标实例、不做团队共享�
 
 ### GET `/bots/load-templates/:id`
 
-- **关联 FR**：FR-359/360
+- **关联 FR**：FR-370/371
 - **权限**：`bot:read`；仅创建者本人或平台管理员
 - **请求**：无 body
 - **响应 200**：`BotLoadTemplate`
@@ -423,7 +423,7 @@ V1 模板是个人所有权资源，不绑定目标实例、不做团队共享�
 
 ### PUT `/bots/load-templates/:id`
 
-- **关联 FR**：FR-359/360
+- **关联 FR**：FR-370/371
 - **权限**：`bot:manage`；仅创建者本人或平台管理员
 - **请求**：`BotLoadTemplateInput` 全量替换可编辑字段，createdBy 不可变
 - **响应 200**：更新后的 `BotLoadTemplate`
@@ -431,7 +431,7 @@ V1 模板是个人所有权资源，不绑定目标实例、不做团队共享�
 
 ### DELETE `/bots/load-templates/:id`
 
-- **关联 FR**：FR-359/360
+- **关联 FR**：FR-370/371
 - **权限**：`bot:manage`；仅创建者本人或平台管理员
 - **请求**：无 body
 - **响应 204**：空 body；软删模板，历史运行快照不变
@@ -439,7 +439,7 @@ V1 模板是个人所有权资源，不绑定目标实例、不做团队共享�
 
 ### POST `/bots/load-templates/:id/runs`
 
-- **关联 FR**：FR-359/360
+- **关联 FR**：FR-370/371
 - **权限**：`bot:manage`；模板须为本人所有或平台管理员可访问，并可管理请求中的目标实例
 - **请求**：
   ```ts
@@ -459,7 +459,7 @@ V2 连接配置只接受 server、port、auth=offline 和可选 version；拒绝
 
 ### POST `/bots/stress-sessions`
 
-- **关联 FR**：FR-352/358/359
+- **关联 FR**：FR-363/369/370
 - **权限**：`bot:manage`，并可管理请求中的目标实例
 - **请求**：
   ```ts
@@ -475,12 +475,12 @@ V2 连接配置只接受 server、port、auth=offline 和可选 version；拒绝
   )
   ```
 - **响应 201**：`BotLoadRun`
-- **规则**：`count` 与 profile 最大目标数一致；Scenario V2 继续由 FR-352 执行，commandSchedule 仅在 FR-358 落地后启用
+- **规则**：`count` 与 profile 最大目标数一致；Scenario V2 继续由 FR-363 执行，commandSchedule 仅在 FR-369 落地后启用
 - **错误**：400 `INVALID_REQUEST`；401 `UNAUTHORIZED`；403 `FORBIDDEN`；404 `NOT_FOUND`；422 `BOT_LOAD_SCENARIO_INVALID|BOT_LOAD_PROFILE_INVALID|BOT_LOAD_THRESHOLDS_INVALID`；500 `INTERNAL_ERROR`
 
 ### GET `/bots/stress-sessions`
 
-- **关联 FR**：FR-351/352/359/361
+- **关联 FR**：FR-362/363/370/372
 - **权限**：`bot:read`
 - **请求**：Query `page&pageSize&q&instanceId&runState&verdict&profileType&createdFrom&createdTo`，pageSize 1..100；runState/verdict/profileType 仅匹配 schemaVersion=2，schemaVersion=1 历史行只在未传这些筛选时返回
 - **响应 200**：`Page<BotLoadRunSummary>`；列表不返回完整 scenario/commandSchedule/orchestrationYaml、thresholds、allocations 或 batches。旧摘要字段 `count/behavior/orchestrationSummary/status/counts` 保留，完整冻结快照仅由详情端点返回
@@ -488,7 +488,7 @@ V2 连接配置只接受 server、port、auth=offline 和可选 version；拒绝
 
 ### GET `/bots/stress-sessions/:id`
 
-- **关联 FR**：FR-351/352/359/361
+- **关联 FR**：FR-362/363/370/372
 - **权限**：`bot:read`，并可访问运行的目标实例
 - **请求**：无 body
 - **响应 200**：`BotLoadRun` 完整冻结快照
@@ -496,7 +496,7 @@ V2 连接配置只接受 server、port、auth=offline 和可选 version；拒绝
 
 ### POST `/bots/stress-sessions/:id/stop`
 
-- **关联 FR**：FR-351/359
+- **关联 FR**：FR-362/370
 - **权限**：`bot:manage`，并可管理运行的目标实例
 - **请求**：`{reason?:string}`，reason 最长 255
 - **响应 202**：`BotLoadRun`；只表示有序停止 intent 已接受，最终目标为 completed
@@ -505,7 +505,7 @@ V2 连接配置只接受 server、port、auth=offline 和可选 version；拒绝
 
 ### POST `/bots/stress-sessions/:id/cancel`
 
-- **关联 FR**：FR-354/359
+- **关联 FR**：FR-365/370
 - **权限**：`bot:manage`，并可管理运行的目标实例
 - **请求**：`{reason?:string}`，reason 最长 255
 - **响应 202**：`BotLoadRun`；只表示尽快取消 intent 已接受，最终为 cancelled + aborted
@@ -514,18 +514,18 @@ V2 连接配置只接受 server、port、auth=offline 和可选 version；拒绝
 
 ### POST `/bots/stress-sessions/:id/retry-failed`
 
-- **关联 FR**：FR-354/359/361
+- **关联 FR**：FR-365/370/372
 - **权限**：`bot:manage`，并可管理运行的目标实例
 - **请求**：`{requestId:string;botUuids?:string[];errorCodes?:string[];fromStepId?:string}`；botUuids/errorCodes 均省略表示全部失败 Bot，requestId 为 UUID 幂等键
 - **响应 202**：`BotLoadRetryResult`
 - **状态限制**：`running|degraded`；fromStepId 必须属于冻结运行快照
 - **错误**：400 `INVALID_REQUEST`；401 `UNAUTHORIZED`；403 `FORBIDDEN`；404 `NOT_FOUND`；409 `BOT_LOAD_INVALID_STATE`；422 `BOT_LOAD_SCENARIO_INVALID`；500 `INTERNAL_ERROR`
 
-## 5. 指标、失败、事件和报告（FR-359/361）
+## 5. 指标、失败、事件和报告（FR-370/372）
 
 ### GET `/bots/stress-sessions/:id/metrics`
 
-- **关联 FR**：FR-359/361
+- **关联 FR**：FR-370/372
 - **权限**：`bot:read`，并可访问运行的目标实例
 - **请求**：Query `from?:string&to?:string&resolution:raw|15s|1m|5m`；默认运行全程与服务端自选分辨率
 - **响应 200**：`{items:BotLoadMetricPoint[];from:string;to:string;resolution:'raw'|'15s'|'1m'|'5m'}`，单响应默认不超过 1200 点
@@ -554,7 +554,7 @@ interface BotLoadMetricPoint {
 
 ### GET `/bots/stress-sessions/:id/bots`
 
-- **关联 FR**：FR-359/361
+- **关联 FR**：FR-370/372
 - **权限**：`bot:read`，并可访问运行的目标实例
 - **请求**：Query `page&pageSize&q&status&executorNodeId&stepId&errorCode`，pageSize 1..100
 - **响应 200**：`Page<BotLoadRunBot>`
@@ -562,7 +562,7 @@ interface BotLoadMetricPoint {
 
 ### GET `/bots/stress-sessions/:id/failures`
 
-- **关联 FR**：FR-359/361
+- **关联 FR**：FR-370/372
 - **权限**：`bot:read`，并可访问运行的目标实例
 - **请求**：Query `page&pageSize&category&errorCode&botUuid&executorNodeId&stepId&from&to`，pageSize 1..100
 - **响应 200**：`Page<BotLoadFailure>`
@@ -572,7 +572,7 @@ interface BotLoadMetricPoint {
 
 ### GET `/bots/stress-sessions/:id/events`
 
-- **关联 FR**：FR-359/361
+- **关联 FR**：FR-370/372
 - **权限**：`bot:read`，并可访问运行的目标实例
 - **请求**：Query `page&pageSize&type&eventId&actionRunId&botUuid&executorNodeId&stepId&from&to&snapshotEventId`，pageSize 1..100。第一页省略 snapshotEventId；后续页必须回传第一页响应值
 - **响应 200**：`BotLoadRunEventPage`
@@ -641,7 +641,7 @@ interface BotLoadRunEventPage {
 
 ### GET `/bots/stress-sessions/:id/report`
 
-- **关联 FR**：FR-359/361
+- **关联 FR**：FR-370/372
 - **权限**：`bot:read`，并可访问运行的目标实例；写审计 `bot_load.report.export`
 - **请求**：Query `format:'json'|'csv'` 必填
 - **响应 200**：format=json 时 `application/json` 的 `BotLoadReport` 且 `Content-Disposition: attachment; filename="bot-load-<runUuid>.json"`；format=csv 时 `text/csv; charset=utf-8` 且带 UTF-8 BOM，`Content-Disposition: attachment; filename="bot-load-<runUuid>.csv"`
@@ -673,11 +673,11 @@ section,run_uuid,stage_index,key,id,node_id,node_uuid,bot_uuid,command_id,status
 - 不存在/null 使用空字段，不写字面量 `null`；时间统一 RFC3339；布尔为 `true|false`；数字使用十进制点且不带本地化分组。`value_json` 使用 UTF-8 紧凑 canonical JSON：对象键按 Unicode code point 递归 ASC，数组保持权威报告的冻结顺序；生成报告时 allocations 按 ordinal、batches 按 ordinal/id、stages 按 stageIndex、failures 按 occurredAt/id、executors 按 nodeId/nodeUuid 先行稳定化。
 - 按 RFC 4180 转义逗号、双引号与换行，双引号写成两个双引号；记录分隔符固定 CRLF。文件最前为 UTF-8 BOM，header 仅出现一次；section 总顺序严格按上表。相同冻结报告必须生成字节完全一致的 CSV。
 
-## 6. 会话级 SSE（FR-361）
+## 6. 会话级 SSE（FR-372）
 
 ### GET `/bots/stress-sessions/:id/stream`
 
-- **关联 FR**：FR-359/361
+- **关联 FR**：FR-370/372
 - **权限**：`bot:read`，并可访问运行的目标实例
 - **请求**：Header `Last-Event-ID?:string`；无 body
 - **响应 200**：`text/event-stream`，支持 init 快照补偿、慢消费者断开和终态关闭
@@ -704,7 +704,7 @@ SSE 是可丢增量；持久化 run、metric 和 event 才是真源。只有 `hi
 
 - 原 `/bots/stress-test` 别名继续可用。
 - 旧 V1 单节点且 `count<=50` 可在空 body start 时内部预检；V2、500+ 或包含 commandSchedule/loadProfile/thresholds/executor pool 时缺 planToken 返回 409 并要求预检。
-- 新字段全部加性；公开 Scenario V2 继续按 FR-352 创建、读取和执行。当前契约不提供 ProbeEvent 持久化数据源；房间、区域或其他业务字段仅在未来独立适配器实际实现后作为 optional legacy 扩展返回。
+- 新字段全部加性；公开 Scenario V2 继续按 FR-363 创建、读取和执行。当前契约不提供 ProbeEvent 持久化数据源；房间、区域或其他业务字段仅在未来独立适配器实际实现后作为 optional legacy 扩展返回。
 - 审计 `bot_load.template.create/update/delete`、`bot_load.run.create/preflight/start/stop/cancel/retry_failed`、`bot_load.report.export`。
 
 ## 8. 不变的平台边界

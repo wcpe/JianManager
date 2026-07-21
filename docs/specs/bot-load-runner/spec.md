@@ -1,14 +1,14 @@
 # 功能规格：压测运行状态机、三类负载曲线与自动判定
 
-> 状态：已审核（2026-07-20）　·　关联 PRD：FR-359　·　计划分支：feature/fr-359-bot-load-runner
+> 状态：已审核（2026-07-20）　·　关联 PRD：FR-370　·　计划分支：feature/fr-370-bot-load-runner
 > 超级规格：`../bot-load-platform/super-spec.md`　·　HTTP API：`../bot-load-platform/api.md`
-> 依赖：FR-351/352 开发中，FR-358/354 仍为计划；FR-359 实现须等待其所需契约和恢复能力可用
+> 依赖：FR-362/363 开发中，FR-369/365 仍为计划；FR-370 实现须等待其所需契约和恢复能力可用
 
 ## 1. 背景与目标
 
-FR-351/352/354/358 规划提供分布式 Bot、确定性场景、通用命令编排和恢复能力；其中 FR-351/352 开发中、FR-354/358 尚未实现。平台仍缺少可复用模板、完整运行状态机、固定/阶梯/洪峰调度、时序指标、阈值判定、安全停止和正式报告。当前 BotStressSession 只有 pending/running/stopped/error 和查询时聚合，不能回答“最大稳定并发是多少、哪一层先过载、是否达到严格标准”。
+FR-362/363/365/369 规划提供分布式 Bot、确定性场景、通用命令编排和恢复能力；其中 FR-362/363 开发中、FR-365/369 尚未实现。平台仍缺少可复用模板、完整运行状态机、固定/阶梯/洪峰调度、时序指标、阈值判定、安全停止和正式报告。当前 BotStressSession 只有 pending/running/stopped/error 和查询时聚合，不能回答“最大稳定并发是多少、哪一层先过载、是否达到严格标准”。
 
-本 FR 将 BotStressSession 增强为压测运行账本，新增模板和聚合指标，驱动三类负载计划并自动形成 verdict/report。前端由 FR-360/361 消费，本 FR 先完成全部后端契约。
+本 FR 将 BotStressSession 增强为压测运行账本，新增模板和聚合指标，驱动三类负载计划并自动形成 verdict/report。前端由 FR-371/372 消费，本 FR 先完成全部后端契约。
 
 ## 2. 需求（要什么）
 
@@ -27,15 +27,15 @@ FR-351/352/354/358 规划提供分布式 Bot、确定性场景、通用命令编
 
 **范围内**：模板/运行/指标模型、状态机、profile runner、指标采集、阈值与安全停止、失败分类、报告、会话级 SSE、HTTP API/审计、自动化与真机验收。
 
-**不做**：定时任务、CI 门禁、云扩缩容、前端页面（FR-360/361）、CP HA、多租户、按每次普通攻击持久化原始时序。
+**不做**：定时任务、CI 门禁、云扩缩容、前端页面（FR-371/372）、CP HA、多租户、按每次普通攻击持久化原始时序。
 
 ## 3. 设计（怎么做）
 
 ### 3.1 模型
 
-实现超级规格分配给 FR-359 的字段/表：
+实现超级规格分配给 FR-370 的字段/表：
 
-- BotStressSession：复用 FR-358/共享地基已新增的 SchemaVersion 与 schemaVersion=1 联合序列化；本 FR 新增 TemplateID、LoadProfile、Thresholds、RunState、CurrentStage、Verdict、MaxStableBots、FailureSummary、ReportSummary。V2 列允许历史行 null，FR-359 新运行事务写 schemaVersion=2 并强制完整。
+- BotStressSession：复用 FR-369/共享地基已新增的 SchemaVersion 与 schemaVersion=1 联合序列化；本 FR 新增 TemplateID、LoadProfile、Thresholds、RunState、CurrentStage、Verdict、MaxStableBots、FailureSummary、ReportSummary。V2 列允许历史行 null，FR-370 新运行事务写 schemaVersion=2 并强制完整。
 - Bot：ConnectedAt（最近连接完成时间），不得误加到 BotStressSession。
 - BotLoadTemplate。
 - BotLoadMetricSample。
@@ -60,7 +60,7 @@ FR-351/352/354/358 规划提供分布式 Bot、确定性场景、通用命令编
 - 同一 run 只有一个 active runner；进程内锁 + DB conditional update 防重复 start。
 - CP 重启扫描非终态 run：
   - ready/pending 保持；
-  - starting/running/degraded/stopping/cancelling 恢复 runner，并先执行 FR-354 reconcile；
+  - starting/running/degraded/stopping/cancelling 恢复 runner，并先执行 FR-365 reconcile；
   - 按运行冻结的判别联合恢复对应快照：`commandSchedule`、Scenario V2、`orchestrationYaml` 或 legacy behavior；当前分支所需快照缺失或非法时才 failed，不得把合法命令运行误判为缺少 Scenario snapshot。
 - 状态变更先持久化并写审计/结构化日志，再发布可丢的 SSE 增量；客户端通过 init 快照和历史 API 补偿，不把 broker 当可靠队列。
 
@@ -199,7 +199,7 @@ JSON、CSV 与 SSE complete 摘要必须携带免责声明：默认 verdict 只�
 - [ ] ReportService JSON/CSV。
 - [ ] Run SSE broker + metrics/bots/failures/events历史投影/report APIs。
 - [ ] 新增固定 acceptance harness：`JM_BOT_LOAD_ACCEPTANCE=1 JM_BOT_LOAD_ENV=.tmp/bot-load-acceptance/environment.json go test -tags=botloadacceptance ./internal/e2e -run '^TestBotLoadAcceptance$' -count=1 -timeout=4h`；运行 60 分钟、500+ Bot，校验连接/命令发送/调度完成/Worker 健康及已配置屏障到达率各≥99%、schedule lag p95≤1s、crash=0，输出 passed/failed/blocked 机器可读证据；不要求 Probe 或塔防适配。
-- [ ] 扩展 devmock 后端契约，为 FR-360/361 提供动态运行模拟。
+- [ ] 扩展 devmock 后端契约，为 FR-371/372 提供动态运行模拟。
 - [ ] 文档同步：ARCHITECTURE、API、PRD 本 FR 状态、CHANGELOG、运维说明。
 
 ## 5. 验收标准
@@ -231,5 +231,5 @@ JSON、CSV 与 SSE complete 摘要必须携带免责声明：默认 verdict 只�
 
 - 500+ 真机指标需要足够 Worker 和目标测试服；没有环境不得把 mock 判为完成。
 - 现有 SQLite 在高并发下需避免每 Bot 高频事务，本设计用内存聚合+5秒单行采样；race/压力测试必须验证。
-- CP 重启恢复依赖 FR-354 desired-state；若 FR-354 仍 partial，本 FR 不得标 done。
+- CP 重启恢复依赖 FR-365 desired-state；若 FR-365 仍 partial，本 FR 不得标 done。
 - 不新增统计库/消息队列/图表依赖。

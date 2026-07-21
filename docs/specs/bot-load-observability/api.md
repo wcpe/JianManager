@@ -1,4 +1,4 @@
-# API：FR-361 压测观测前端
+# API：FR-372 压测观测前端
 
 > 权威完整定义：`../bot-load-platform/api.md`
 > 命令成功边界：`../../adr/075-bot-command-orchestration.md`

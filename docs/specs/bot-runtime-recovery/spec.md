@@ -1,8 +1,8 @@
 # 功能规格：Bot 长稳重连、进程恢复与状态归真
 
-> 状态：已审核（2026-07-18）　·　关联 PRD：FR-354　·　计划分支：feature/fr-354-bot-runtime-recovery
+> 状态：已审核（2026-07-18）　·　关联 PRD：FR-365　·　计划分支：feature/fr-365-bot-runtime-recovery
 > 超级规格：`../bot-load-platform/super-spec.md`　·　HTTP API：`../bot-load-platform/api.md`
-> 依赖：FR-351/352 开发中；按批次计划须等待其所需契约可用　·　可与 FR-358 的非依赖部分并行
+> 依赖：FR-362/363 开发中；按批次计划须等待其所需契约可用　·　可与 FR-369 的非依赖部分并行
 
 ## 1. 背景与目标
 
@@ -26,13 +26,13 @@
 
 **范围内**：Bot 恢复字段、generation/epoch/seq、Node 侧自动重连、Worker desired cache/child restart、CP reconcile/freshness、retry-failed 后端、故障指标和测试。
 
-**不做**：跨 CP 高可用、精确恢复毫秒级阶段时间、永久离线节点的自动迁移（首版只在运行中可选择重新分配失败 Bot）、负载 verdict（FR-359）、恢复 UI（FR-361）。
+**不做**：跨 CP 高可用、精确恢复毫秒级阶段时间、永久离线节点的自动迁移（首版只在运行中可选择重新分配失败 Bot）、负载 verdict（FR-370）、恢复 UI（FR-372）。
 
 ## 3. 设计（怎么做）
 
 ### 3.1 数据与顺序
 
-实现超级规格分配给 FR-354 的 Bot 字段：新增 DesiredState、ReconnectCount，并复用现有 WorkerEpoch、WorkerEpochGeneration、LastEventSeq、LastSeenAt、ConfigHash 与 `DesiredStateGeneration`。协议/IPC/proto 中的 `generation` 唯一映射数据库 `bots.desired_state_generation`，不得再新增 `generation` 列或第二套模型字段。
+实现超级规格分配给 FR-365 的 Bot 字段：新增 DesiredState、ReconnectCount，并复用现有 WorkerEpoch、WorkerEpochGeneration、LastEventSeq、LastSeenAt、ConfigHash 与 `DesiredStateGeneration`。协议/IPC/proto 中的 `generation` 唯一映射数据库 `bots.desired_state_generation`，不得再新增 `generation` 列或第二套模型字段。
 
 状态接受规则：
 
@@ -95,7 +95,7 @@ CP `BotFleetReconciler` 由节点重连/心跳 generation 变化触发，另每 
 
 ### 3.6 Fleet 事件订阅与快照补偿
 
-- CP 对每个含活动运行 Bot 的 ExecutorNode 建立一条 FR-351 `StreamBotFleetEvents`，按 node UUID 管理生命周期；目标实例节点与执行节点不同不影响订阅。
+- CP 对每个含活动运行 Bot 的 ExecutorNode 建立一条 FR-362 `StreamBotFleetEvents`，按 node UUID 管理生命周期；目标实例节点与执行节点不同不影响订阅。
 - 事件携 sessionId/generation/configHash/workerEpochGeneration/eventSeq/observedAt/currentStep/error。
 - 流断开：立即把该节点活动 Bot 标记为状态待确认，先调用 GetBotFleetSnapshot 补偿，再按退避重连流。
 - CP 重启：先从 DB 找活动 ExecutorNode，逐节点 snapshot，再开流；不依赖用户打开 Bot 页面触发。
@@ -127,7 +127,7 @@ CP 从最新未终态 action result 和 `command_schedule` checkpoint 得到 cur
 
 - 选择失败 Bot 后事务 DesiredStateGeneration+1、DesiredState=running，协议继续下发为 generation，清当前 LastError 但保留历史 ActionResult。
 - 可选 fromStepId 必须属于该 cohort；未传按 resumePolicy。
-- 按 executor node 批量 Apply；原节点不可用时，首版可由 FR-351 allocator 在当前可用节点重新分配，更新 ExecutorNodeID/BatchID，但不改变 Bot UUID/Name/Cohort。
+- 按 executor node 批量 Apply；原节点不可用时，首版可由 FR-362 allocator 在当前可用节点重新分配，更新 ExecutorNodeID/BatchID，但不改变 Bot UUID/Name/Cohort。
 - 同请求通过审计 requestId 幂等，重复调用不重复 generation+1。
 
 ### 3.10 资源与观测
@@ -143,7 +143,7 @@ Bot Worker heartbeat 需真实上报：active/connecting、RSS、eventLoopP95、
 ## 4. 任务拆分
 
 - [ ] 测试先行：generation/epochGeneration/seq/configHash 接受矩阵和状态新鲜度。
-- [ ] Model/AutoMigrate：FR-354 所属字段、索引和历史 desired-state 幂等 backfill。
+- [ ] Model/AutoMigrate：FR-365 所属字段、索引和历史 desired-state 幂等 backfill。
 - [ ] Bot Worker：ReconnectController、并发 semaphore、stop 取消、ScenarioRunner resume。
 - [ ] Worker：desired cache、子进程 crash circuit/restart/replay、fleet snapshot。
 - [ ] CP：每执行节点 FleetEvent 订阅、snapshot 补偿、BotFleetReconciler、节点锁、orphan 保护、stale 状态归真。

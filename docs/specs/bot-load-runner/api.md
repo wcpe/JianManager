@@ -1,4 +1,4 @@
-# API：FR-359 压测运行与判定
+# API：FR-370 压测运行与判定
 
 > 权威完整定义：`../bot-load-platform/api.md`
 

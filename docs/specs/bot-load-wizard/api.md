@@ -1,4 +1,4 @@
-# API：FR-360 压测模板与创建向导前端
+# API：FR-371 压测模板与创建向导前端
 
 > 权威完整定义：`../bot-load-platform/api.md`
 > 命令成功边界：`../../adr/075-bot-command-orchestration.md`

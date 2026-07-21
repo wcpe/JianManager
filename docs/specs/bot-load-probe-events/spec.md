@@ -1,7 +1,7 @@
 # 功能规格：通用Bot命令编排与调度扩展
 
-> 目录名 `bot-load-probe-events` 为历史沿用；本规格承接 FR-358，并按 ADR-075 取代未实施的旧 FR-353。
-> 状态：已审核　·　关联 PRD：FR-358（取代 FR-353，增强 FR-352/354）
+> 目录名 `bot-load-probe-events` 为历史沿用；本规格承接 FR-369，并按 ADR-075 取代未实施的旧 FR-364。
+> 状态：已审核　·　关联 PRD：FR-369（取代 FR-364，增强 FR-363/365）
 
 ## 1. 背景与目标
 
@@ -11,7 +11,7 @@
 
 ## 2. 需求
 
-- FR-358 定义“通用 Bot 命令编排与调度扩展”，取代旧 FR-353 的 ServerProbe 断言桥交付范围。
+- FR-369 定义“通用 Bot 命令编排与调度扩展”，取代旧 FR-364 的 ServerProbe 断言桥交付范围。
 - 支持 `command_schedule`：相对时间命令列表，以及 `repeat interval/count`、`duration`、`jitter`。
 - 由集中式 scheduler 负责排队、执行、取消、有限重试和结果聚合，避免每个命令各自创建不可管理的定时器。
 - `send_command` 调用 `bot.chat` 且未抛出异常即视为发送成功；不等待服务器回执，不验证业务效果。

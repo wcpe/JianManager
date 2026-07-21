@@ -1,9 +1,9 @@
 # 功能规格：实时命令压测观测、故障诊断与报告前端
 
-> 状态：已审核（2026-07-20）　·　关联 PRD：FR-361　·　计划分支：feature/fr-361-bot-load-observability
+> 状态：已审核（2026-07-20）　·　关联 PRD：FR-372　·　计划分支：feature/fr-372-bot-load-observability
 > 超级规格：`../bot-load-platform/super-spec.md`　·　HTTP API：`../bot-load-platform/api.md`
 > 命令成功边界：`../../adr/075-bot-command-orchestration.md`
-> 依赖：FR-359 共享 API 契约已冻结、实现仍为计划状态；FR-361 实现须等待其可用　·　可与 FR-360 的非依赖部分并行
+> 依赖：FR-370 共享 API 契约已冻结、实现仍为计划状态；FR-372 实现须等待其可用　·　可与 FR-371 的非依赖部分并行
 
 ## 1. 背景与目标
 
@@ -29,7 +29,7 @@
 
 **范围内**：详情路由/页面、SSE 管理、API hooks、图表、分页/虚拟化、失败重试、报告下载、devmock 动态运行、测试和文档。
 
-**不做**：模板/创建向导（FR-360）、后端状态机/指标语义、浏览器端重新计算正式 verdict、为每 Bot 常驻 SSE、原始网络包或逐条高频命令事件可视化。
+**不做**：模板/创建向导（FR-371）、后端状态机/指标语义、浏览器端重新计算正式 verdict、为每 Bot 常驻 SSE、原始网络包或逐条高频命令事件可视化。
 
 ## 3. 设计（怎么做）
 
@@ -94,7 +94,7 @@ SSE event 到达后：
 
 - running/degraded：显示“有序停止”和“立即取消”；二者用共享确认 Dialog，说明差异。
 - stopping/cancelling：按钮 loading/禁重复。
-- completed/failed/cancelled：下载 JSON/CSV、复制为新运行（跳 FR-360 向导，带 template/run snapshot 参数）。
+- completed/failed/cancelled：下载 JSON/CSV、复制为新运行（跳 FR-371 向导，带 template/run snapshot 参数）。
 - verdict 使用文字+图标+语义色，不只颜色。
 - 运行时长前端按 startedAt 轻量 tick，但不写全局状态；终态使用 `endedAt ?? stoppedAt` 固定。V1 覆盖仅 stoppedAt，V2 断言 endedAt 与 stoppedAt 相等。
 
@@ -139,7 +139,7 @@ SSE event 到达后：
 
 ### 3.9 Events
 
-只显示共享 `BotLoadRunEventType` 定义的会话关键事件：`run-state/stage/barrier/scenario-action/command-schedule/command-send/worker-health/executor-crash/safety-stop/report-ready`。历史在 FR-359 落地后使用共享 API `GET /bots/stress-sessions/:id/events` 的 `BotLoadRunEventPage` 服务端分页，查询条件严格采用共享契约中的 `type/eventId/actionRunId/botUuid/executorNodeId/stepId/from/to/snapshotEventId`；第一页保存响应 `snapshotEventId`，后续页原样回传，刷新筛选才开启新窗口。SSE 仅消费完整 `history: BotLoadRunEvent` 并按 `eventId` 去重插入首屏，其他聚合事件只更新对应面板。成功命令发送事件显示 `mode:aggregate` 聚合计数，不逐条刷屏；failed/timed_out/cancelled 使用 `mode:item` 保留 action trace；显式 Scenario V2 的每个 actionRunId 终态使用 `scenario-action`，保证移动/攻击/等待步骤刷新后仍可下钻。barrier 事件展示 preparing/decision/release_dispatched/release_accepted/released/timed_out/cancelled 精确阶段；dispatched/accepted 明确标注“尚未调用 bot.chat”，分块 affectedBotUuids 只在下钻时展开。optional legacy Probe 数据只放事件顶层 `legacy` 元数据并独立标记。
+只显示共享 `BotLoadRunEventType` 定义的会话关键事件：`run-state/stage/barrier/scenario-action/command-schedule/command-send/worker-health/executor-crash/safety-stop/report-ready`。历史在 FR-370 落地后使用共享 API `GET /bots/stress-sessions/:id/events` 的 `BotLoadRunEventPage` 服务端分页，查询条件严格采用共享契约中的 `type/eventId/actionRunId/botUuid/executorNodeId/stepId/from/to/snapshotEventId`；第一页保存响应 `snapshotEventId`，后续页原样回传，刷新筛选才开启新窗口。SSE 仅消费完整 `history: BotLoadRunEvent` 并按 `eventId` 去重插入首屏，其他聚合事件只更新对应面板。成功命令发送事件显示 `mode:aggregate` 聚合计数，不逐条刷屏；failed/timed_out/cancelled 使用 `mode:item` 保留 action trace；显式 Scenario V2 的每个 actionRunId 终态使用 `scenario-action`，保证移动/攻击/等待步骤刷新后仍可下钻。barrier 事件展示 preparing/decision/release_dispatched/release_accepted/released/timed_out/cancelled 精确阶段；dispatched/accepted 明确标注“尚未调用 bot.chat”，分块 affectedBotUuids 只在下钻时展开。optional legacy Probe 数据只放事件顶层 `legacy` 元数据并独立标记。
 
 FailureTraceDrawer 以 actionRunId/eventId 查询同一历史投影，运行结束、刷新或 SSE 重连后仍可还原 Bot→Worker→命令步骤或兼容 Scenario action→调度/发送/动作错误链，不要求 Probe Event。
 
@@ -214,7 +214,7 @@ FailureTraceDrawer 以 actionRunId/eventId 查询同一历史投影，运行结�
 
 ## 6. 风险 / 待定
 
-- events tab 依赖 FR-359 规划的共享 `GET /bots/stress-sessions/:id/events`；该接口未落地前不得以 SSE ring 临时拼装替代，也不得另发明接口。
+- events tab 依赖 FR-370 规划的共享 `GET /bots/stress-sessions/:id/events`；该接口未落地前不得以 SSE ring 临时拼装替代，也不得另发明接口。
 - 浏览器性能瓶颈主要是图表和大表；限制点数/节点选择/DOM 行数，不用提高轮询频率解决。
 - 现有单 Bot SSE 可按需复用，但 Drawer 关闭必须释放。
 - 不新增虚拟列表、状态管理或图表依赖。

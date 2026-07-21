@@ -1,12 +1,12 @@
 # 超级规格：500+ Bot 分布式命令压测平台
 
-> 状态：已审核（2026-07-20）　·　关联 PRD：FR-351/352/354/358～361　·　协调分支：feature/bot-load-testing
-> 子规格：FR-351 分布式调度 / FR-352 场景引擎兼容 / FR-358 命令编排 / FR-354 恢复归真 / FR-359 运行判定 / FR-360 创建向导 / FR-361 观测报告
+> 状态：已审核（2026-07-20）　·　关联 PRD：FR-362/363/365/369～372　·　协调分支：feature/bot-load-testing
+> 子规格：FR-362 分布式调度 / FR-363 场景引擎兼容 / FR-369 命令编排 / FR-365 恢复归真 / FR-370 运行判定 / FR-371 创建向导 / FR-372 观测报告
 > 架构决策：`ADR-074`（分布式拓扑）+ `ADR-075`（命令动作成功边界）
 
 ## 1. 背景与目标
 
-现有 Bot 平台已具备 Mineflayer 子进程、单 Bot 管理、压测会话、FR-274 YAML 编排，以及 FR-351/352 的分布式 Fleet 与 Scenario V2 地基。但 500+ Bot 运行仍缺少通用命令计划、长稳恢复、负载状态机、默认判定、创建向导和会话级观测闭环。
+现有 Bot 平台已具备 Mineflayer 子进程、单 Bot 管理、压测会话、FR-274 YAML 编排，以及 FR-362/363 的分布式 Fleet 与 Scenario V2 地基。但 500+ Bot 运行仍缺少通用命令计划、长稳恢复、负载状态机、默认判定、创建向导和会话级观测闭环。
 
 ADR-075 冻结通用命令动作成功边界：Bot Worker 调用 `bot.chat` 且未同步抛错即为命令发送成功。该结果不证明服务器接受或执行命令，不验证权限，也不证明产生预期业务效果。ServerProbe、塔防插件、聊天回显和业务事件均不得成为通用命令链路的必需依赖。
 
@@ -19,7 +19,7 @@ ADR-075 冻结通用命令动作成功边界：Bot Worker 调用 `bot.chat` 且�
 5. 建立重连、子进程恢复、Worker reconcile 和命令检查点恢复。
 6. 前端完成模板、预检、启动、实时观测、失败诊断和报告闭环。
 
-FR-352 已实现的移动、攻击、外部信号和塔防预设作为历史或可选场景兼容能力保留，但不再是新模板、默认运行、预检或通用交付验收的主路径。
+FR-363 已实现的移动、攻击、外部信号和塔防预设作为历史或可选场景兼容能力保留，但不再是新模板、默认运行、预检或通用交付验收的主路径。
 
 ## 2. 已确认决策
 
@@ -105,12 +105,12 @@ Control Plane 冻结绝对命令计划、分配执行节点并协调运行/取�
 
 | 字段 | 所属 FR | 语义 |
 |---|---|---|
-| executor_node_id / load_batch_id | FR-351 | 执行节点与分片批次 |
-| cohort_key | FR-352 | 兼容场景分组 |
-| desired_state / desired_state_generation | FR-354 | CP 期望状态及版本；协议字段 `generation` 映射现有 desired_state_generation，不新增 generation 列 |
-| worker_epoch / worker_epoch_generation / last_event_seq | FR-354 | 运行事件世代与顺序 |
-| config_hash / last_seen_at / reconnect_count | FR-354 | reconcile、新鲜度与恢复统计 |
-| connected_at | FR-359 | 最近连接完成时间 |
+| executor_node_id / load_batch_id | FR-362 | 执行节点与分片批次 |
+| cohort_key | FR-363 | 兼容场景分组 |
+| desired_state / desired_state_generation | FR-365 | CP 期望状态及版本；协议字段 `generation` 映射现有 desired_state_generation，不新增 generation 列 |
+| worker_epoch / worker_epoch_generation / last_event_seq | FR-365 | 运行事件世代与顺序 |
+| config_hash / last_seen_at / reconnect_count | FR-365 | reconcile、新鲜度与恢复统计 |
+| connected_at | FR-370 | 最近连接完成时间 |
 
 `InstanceID` 始终表示目标实例和权限归属；`ExecutorNodeID` 是运行 Mineflayer 的 Worker 路由真源。
 
@@ -118,22 +118,22 @@ Control Plane 冻结绝对命令计划、分配执行节点并协调运行/取�
 
 保持现有表名和 API 路径：
 
-- `schema_version`：FR-358/共享地基负责加性迁移、历史默认 1 和 schemaVersion=1 判别联合序列化，含 FR-358 commandSchedule 兼容运行；FR-359 新运行写 2。
-- `template_id`、`load_profile`、`thresholds`、`run_state`、`current_stage`、`verdict`、`max_stable_bots`、`failure_summary`、`report_summary`：FR-359。V2 专属列允许 schemaVersion=1 历史行 null，service 只对 schemaVersion=2 强制完整。
-- `allocation_plan`：FR-351。
-- `scenario_snapshot`：FR-352 历史兼容快照。
-- `command_schedule_snapshot`：FR-358 通用命令计划快照。
+- `schema_version`：FR-369/共享地基负责加性迁移、历史默认 1 和 schemaVersion=1 判别联合序列化，含 FR-369 commandSchedule 兼容运行；FR-370 新运行写 2。
+- `template_id`、`load_profile`、`thresholds`、`run_state`、`current_stage`、`verdict`、`max_stable_bots`、`failure_summary`、`report_summary`：FR-370。V2 专属列允许 schemaVersion=1 历史行 null，service 只对 schemaVersion=2 强制完整。
+- `allocation_plan`：FR-362。
+- `scenario_snapshot`：FR-363 历史兼容快照。
+- `command_schedule_snapshot`：FR-369 通用命令计划快照。
 
 旧 `status` 保留并与 `run_state` 同事务映射：pending/preflighting/ready/starting→pending，running/degraded/stopping/cancelling→running，completed/cancelled→stopped，failed→error。数据库 ended_at 是唯一终止时间；V1 只返回 stoppedAt 别名，V2 终态同时返回值相等的 endedAt/stoppedAt，非终态均省略。
 
 ### 6.3 运行表
 
-- `bot_load_batches`（FR-351）：分片、幂等键、计划数、接受数、连接数、失败数及批次状态。
-- `bot_load_templates`（FR-359）：名称、描述、命令计划、profile、thresholds、标签和创建者；不保存目标实例、执行节点或凭据。
-- `bot_load_action_results`（FR-352/358）：`run/bot/cohort/step/actionRunId/attempt/status/error/duration/result`；表内状态继续使用 `running/succeeded/failed/timed_out/cancelled`，通用命令的 IPC `sent` 映射为 `succeeded`，deadline 终态映射为 `timed_out`，并在 result 中保留 `status=sent/commandId/occurrence/scheduleRunId`。`sent` 固定表示 `bot.chat` 未同步抛错。
-- `bot_load_command_checkpoints`（FR-358/354）：稳定唯一键为 `runUuid/botUuid/stepId/commandId/occurrence`，在 Apply 前即物化并记录最近 `generation/scheduleRunId/actionRunId/plannedAt(nullable)/sentAt(nullable)/attempt/status/errorCode/endedAt`；correlationToken 与 jitterSeed 按 FR-358 API 从持久 scheduleRunId/botUuid/stepId 确定性复算，不另存随机值；恢复时默认跳过已 `sent` 执行项，新的 actionRunId 不改变 checkpoint 身份。
-- `bot_load_metric_samples`（FR-359）：每运行默认 5 秒一行，保存 Bot 计数、命令计数、调度 lag、屏障、执行节点健康及 nullable legacy 指标。
-- `bot_load_run_events`（FR-359）：append-only 保存 run-state、stage、barrier、scenario-action、command-schedule、command-send、worker-health、executor-crash、safety-stop、report-ready；不逐条持久化高频普通命令事件。
+- `bot_load_batches`（FR-362）：分片、幂等键、计划数、接受数、连接数、失败数及批次状态。
+- `bot_load_templates`（FR-370）：名称、描述、命令计划、profile、thresholds、标签和创建者；不保存目标实例、执行节点或凭据。
+- `bot_load_action_results`（FR-363/369）：`run/bot/cohort/step/actionRunId/attempt/status/error/duration/result`；表内状态继续使用 `running/succeeded/failed/timed_out/cancelled`，通用命令的 IPC `sent` 映射为 `succeeded`，deadline 终态映射为 `timed_out`，并在 result 中保留 `status=sent/commandId/occurrence/scheduleRunId`。`sent` 固定表示 `bot.chat` 未同步抛错。
+- `bot_load_command_checkpoints`（FR-369/365）：稳定唯一键为 `runUuid/botUuid/stepId/commandId/occurrence`，在 Apply 前即物化并记录最近 `generation/scheduleRunId/actionRunId/plannedAt(nullable)/sentAt(nullable)/attempt/status/errorCode/endedAt`；correlationToken 与 jitterSeed 按 FR-369 API 从持久 scheduleRunId/botUuid/stepId 确定性复算，不另存随机值；恢复时默认跳过已 `sent` 执行项，新的 actionRunId 不改变 checkpoint 身份。
+- `bot_load_metric_samples`（FR-370）：每运行默认 5 秒一行，保存 Bot 计数、命令计数、调度 lag、屏障、执行节点健康及 nullable legacy 指标。
+- `bot_load_run_events`（FR-370）：append-only 保存 run-state、stage、barrier、scenario-action、command-schedule、command-send、worker-health、executor-crash、safety-stop、report-ready；不逐条持久化高频普通命令事件。
 
 #### 6.3.1 可迁移数据库契约
 
@@ -205,9 +205,9 @@ Control Plane 冻结绝对命令计划、分配执行节点并协调运行/取�
 
 事件 id 自增且永不复用；同 actionRunId 终态投影用 UNIQUE(session,type,action_run_id)（action_run_id NULL 时不参与），barrier 分块/聚合事件依赖普通自增 id。run events 保留到会话删除，不使用 30 天 metric TTL。
 
-`bot_load_batches` 与 `bot_load_action_results` 沿 FR-351/352 现有列型和索引原地复用；FR-358 只扩充 ActionResult error allowlist/result JSON，不新建竞争动作表。
+`bot_load_batches` 与 `bot_load_action_results` 沿 FR-362/363 现有列型和索引原地复用；FR-369 只扩充 ActionResult error allowlist/result JSON，不新建竞争动作表。
 
-FR-352 的公开 Scenario/action result 与屏障信号继续作为当前能力；旧 ProbeEvent 持久化不属于 FR-352 当前数据契约。新通用命令运行不得依赖 ProbeEvent 建表、写入或消费。
+FR-363 的公开 Scenario/action result 与屏障信号继续作为当前能力；旧 ProbeEvent 持久化不属于 FR-363 当前数据契约。新通用命令运行不得依赖 ProbeEvent 建表、写入或消费。
 
 ## 7. 共享状态机
 
@@ -287,7 +287,7 @@ pending → scheduled → sent
 
 ## 9. 跨进程协议
 
-保留 FR-351/352 已新增的：
+保留 FR-362/363 已新增的：
 
 - `GetBotCapacity`
 - `ApplyBotBatch`
@@ -298,14 +298,14 @@ pending → scheduled → sent
 约束：
 
 - `ApplyBotBatch` 每批最多 50 个 assignment，幂等重放不重复连接。
-- FR-358 在 CP↔Worker 加性新增 `ApplyBotCommandSchedules`、`ReleaseBotCommandSchedules` 与 `CancelBotCommandSchedules` 三个批量 RPC，每批最多 100 个 Bot 项。Apply 下发 CP 已完成变量展开/actionRunId/jitter/文本复验的 occurrence plan、absolute/barrier 启动模式和已完成 occurrence 跳过集；Release 以共同绝对 releaseAt 启动 prepared 命令计划；Cancel 下发 CP 已持久化的 cancel intent 与未终态 occurrence 集。同步逐项结果固定为 `accepted|rejected|unknown`，异步 occurrence 终态仍只经 Fleet stream `action_event` 回传。
+- FR-369 在 CP↔Worker 加性新增 `ApplyBotCommandSchedules`、`ReleaseBotCommandSchedules` 与 `CancelBotCommandSchedules` 三个批量 RPC，每批最多 100 个 Bot 项。Apply 下发 CP 已完成变量展开/actionRunId/jitter/文本复验的 occurrence plan、absolute/barrier 启动模式和已完成 occurrence 跳过集；Release 以共同绝对 releaseAt 启动 prepared 命令计划；Cancel 下发 CP 已持久化的 cancel intent 与未终态 occurrence 集。同步逐项结果固定为 `accepted|rejected|unknown`，异步 occurrence 终态仍只经 Fleet stream `action_event` 回传。
 - Worker 不访问 CP 数据库。重启/reconcile 所需 checkpoint、skip/unresolved occurrence 必须由 CP 放入上述 RPC；不得扩展 `ApplyBotBatch` 偷渡命令计划，也不得令 Worker 自行猜测持久状态。
-- `SignalBotActions` 每次最多 100 项，仅用于 FR-352 屏障与兼容场景外部信号，不承载 FR-358 命令计划、命令取消或通用业务成功证明。
+- `SignalBotActions` 每次最多 100 项，仅用于 FR-363 屏障与兼容场景外部信号，不承载 FR-369 命令计划、命令取消或通用业务成功证明。
 - Fleet stream 按执行节点建立；断流先拉 snapshot 再重连。
 - 所有既有 Bot 操作统一按 `ExecutorNodeID`，为空才回退目标实例节点。
 - Worker/bot-worker 不解析 YAML；只接收 CP 冻结的规范快照和已调度命令。
 
-IPC 继续使用带 `requestId` 的 `create-bots`、`stop-bots`、`signal-actions`、`get-fleet-snapshot` 及对应 result。FR-358 在 CP↔Worker gRPC 加性定义 `ApplyBotCommandSchedules`/`ReleaseBotCommandSchedules`/`CancelBotCommandSchedules`，并在同一 stdin/stdout JSON 协议上加性定义 `command-schedule`、`command-schedule-accepted`、`command-schedule-release`、`command-schedule-release-result`、`command-schedule-result`、`command-schedule-cancel`、`command-schedule-cancel-result`；字段、幂等键、accepted 未知态、reconcile payload 和 `StreamBotFleetEvents.action_event` 映射以 `../bot-load-probe-events/api.md` 为准。不得新增进程边界或让 Bot Worker 访问 HTTP/gRPC。
+IPC 继续使用带 `requestId` 的 `create-bots`、`stop-bots`、`signal-actions`、`get-fleet-snapshot` 及对应 result。FR-369 在 CP↔Worker gRPC 加性定义 `ApplyBotCommandSchedules`/`ReleaseBotCommandSchedules`/`CancelBotCommandSchedules`，并在同一 stdin/stdout JSON 协议上加性定义 `command-schedule`、`command-schedule-accepted`、`command-schedule-release`、`command-schedule-release-result`、`command-schedule-result`、`command-schedule-cancel`、`command-schedule-cancel-result`；字段、幂等键、accepted 未知态、reconcile payload 和 `StreamBotFleetEvents.action_event` 映射以 `../bot-load-probe-events/api.md` 为准。不得新增进程边界或让 Bot Worker 访问 HTTP/gRPC。
 
 ## 10. 负载模式
 
@@ -415,20 +415,20 @@ preflight 只验证：
 
 | 区域 | 所有者 |
 |---|---|
-| Fleet gRPC、容量、批次与分片 | FR-351 |
-| Scenario V2 与历史动作兼容 | FR-352 |
-| command_schedule、Bot Worker 本地集中 scheduler、命令结果与变量白名单 | FR-358 |
-| generation、reconcile、重连与命令 checkpoint 恢复 | FR-354 |
-| run state、profile、metrics、thresholds、report、SSE 后端 | FR-359 |
-| 模板与五步向导 UI | FR-360 |
-| 会话详情、诊断、图表和报告 UI | FR-361 |
+| Fleet gRPC、容量、批次与分片 | FR-362 |
+| Scenario V2 与历史动作兼容 | FR-363 |
+| command_schedule、Bot Worker 本地集中 scheduler、命令结果与变量白名单 | FR-369 |
+| generation、reconcile、重连与命令 checkpoint 恢复 | FR-365 |
+| run state、profile、metrics、thresholds、report、SSE 后端 | FR-370 |
+| 模板与五步向导 UI | FR-371 |
+| 会话详情、诊断、图表和报告 UI | FR-372 |
 | PRD、ARCHITECTURE、API、CHANGELOG | 协调分支统一回写 |
 
 ## 17. 环境门与测试战略
 
 `.tmp/bot-load-acceptance/environment.json` 不入库。
 
-### 17.1 FR-351/352 当前交付门禁（缩比，2026-07-21 用户确认）
+### 17.1 FR-362/363 当前交付门禁（缩比，2026-07-21 用户确认）
 
 至少登记：
 
@@ -444,7 +444,7 @@ python .tmp/bot-load-acceptance/run_local_realpath.py
 
 证据：`.tmp/bot-load-acceptance/evidence/`（含 `local-realpath-report.*`、`REAL-ACCEPTANCE-SUMMARY.md`）。
 
-### 17.2 满规模 / FR-359 harness（可选，不阻塞 FR-351/352 缩比完成）
+### 17.2 满规模 / FR-370 harness（可选，不阻塞 FR-362/363 缩比完成）
 
 满规模登记 10+ Worker、500 Bot、时钟偏差≤250ms。唯一满规模入口（实现后）：
 
@@ -457,10 +457,10 @@ JM_BOT_LOAD_ACCEPTANCE=1 JM_BOT_LOAD_ENV=.tmp/bot-load-acceptance/environment.js
 ## 18. 实施依赖
 
 ```text
-FR-351 → FR-352 → (FR-358 ∥ FR-354) → FR-359 → (FR-360 ∥ FR-361)
+FR-362 → FR-363 → (FR-369 ∥ FR-365) → FR-370 → (FR-371 ∥ FR-372)
 ```
 
-FR-351/352：自动化 + **缩比真机门禁**（用户确认）后可完成本批；满规模 10×50/500 为可选扩容验收。FR-358～361 不因规格重定向而自动变为已实现或已交付。
+FR-362/363：自动化 + **缩比真机门禁**（用户确认）后可完成本批；满规模 10×50/500 为可选扩容验收。FR-369～372 不因规格重定向而自动变为已实现或已交付。
 
 ## 19. 明确不做
 

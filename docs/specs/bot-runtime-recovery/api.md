@@ -1,4 +1,4 @@
-# API：FR-354 Bot 恢复与归真
+# API：FR-365 Bot 恢复与归真
 
 > 权威请求/响应和错误：`../bot-load-platform/api.md`
 

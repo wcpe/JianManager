@@ -1,6 +1,6 @@
 # API：通用Bot命令编排与调度扩展
 
-> 目录名 `bot-load-probe-events` 为历史沿用；本 API 属于 FR-358“通用 Bot 命令编排与调度扩展”，并取代未实施的旧 FR-353 API 方向。
+> 目录名 `bot-load-probe-events` 为历史沿用；本 API 属于 FR-369“通用 Bot 命令编排与调度扩展”，并取代未实施的旧 FR-364 API 方向。
 
 ## 1. command_schedule
 
@@ -42,7 +42,7 @@ V1 重试策略不可配置：单执行项最多 3 次尝试；仅 `bot.chat` �
 
 ## 3. 计划中的 Control Plane ↔ Worker gRPC
 
-FR-358 必须在现有 WorkerService 上加性新增独立批量 RPC，不复用 `ApplyBotBatch` 或 `SignalBotActions`：
+FR-369 必须在现有 WorkerService 上加性新增独立批量 RPC，不复用 `ApplyBotBatch` 或 `SignalBotActions`：
 
 ```ts
 type CommandOccurrenceKey = {commandId:string;occurrence:number}
@@ -99,7 +99,7 @@ interface CancelBotCommandSchedulesResponse {
 - `start.mode='absolute'` 直接携带计划起点；`start.mode='barrier'` 只准备计划并等待独立 release，不启动 timer。`skipOccurrences` 由 CP 根据稳定 checkpoint 键生成，正常首次派发为空；恢复时必须列出全部已 `sent` 的 commandId+occurrence。新 scheduleRunId 会产生新 actionRunId，因此跳过集不得携带旧 actionRunId。Worker 原样传给 Bot Worker，列中项不得再次调用 `bot.chat`，也不得重复产生终态。
 - `ReleaseBotCommandSchedules` 只接受已 prepared 且 barrierKey 匹配的计划；releaseAt 是共同绝对起点，必须晚于当前时刻且早于 run deadline。重复 release 使用相同时间返回 accepted/alreadyReleased=true；同一计划用不同时间重放返回 rejected/COMMAND_SCHEDULE_REJECTED；未知态不伪造已释放。Worker/child 在 prepare 后重启导致状态丢失时，CP 先以相同 scheduleRunId/start.mode=barrier 重放 Apply，accepted 后再重放同一仍在未来的 releaseAt；releaseAt 已过则取消该计划并判 stage 失败，不把迟到释放改成当前时刻。
 - `CancelBotCommandSchedules` 的请求本身携带 CP 已持久化的 cancel intent、计划级 correlationToken 和未终态 occurrence 的 actionRunId/plannedAt；prepared 但尚未 release 的项 plannedAt 固定为 null，release 后必须为精确整数毫秒；Worker 不访问 CP 数据库。若活动 scheduler 存在则转发 cancel IPC；若 child 已重启、计划状态/tombstone 已丢失，则 Worker 以 `unresolvedOccurrences` 逐项合成唯一 `cancelled/ACTION_CANCELLED` Fleet action_event：`correlation_token` 使用请求值，`attempt=1`、`duration_ms=0`、`observed_at_unix_ms=合成时刻`，`result_json` 保留 scheduleRunId/commandId/occurrence/plannedAtUnixMs（可为 null）/status=cancelled，并返回 accepted、alreadyCancelled=true；空 unresolved 集直接幂等成功。只有既无活动计划、无 tombstone，且 CP 未提供可归真的 occurrence 时才 rejected；等待 child 回执超时且无法确定状态时返回 unknown。
-- 最终 occurrence 状态不放入同步 gRPC response，统一经既有 `StreamBotFleetEvents.action_event` 回传并由 ActionResultService/checkpoint 首终态幂等。`SignalBotActions` 只属于 FR-352 Scenario 屏障/外部信号。
+- 最终 occurrence 状态不放入同步 gRPC response，统一经既有 `StreamBotFleetEvents.action_event` 回传并由 ActionResultService/checkpoint 首终态幂等。`SignalBotActions` 只属于 FR-363 Scenario 屏障/外部信号。
 
 ### disposition 有界收敛
 
@@ -115,7 +115,7 @@ interface CancelBotCommandSchedulesResponse {
 
 ## 4. 计划中的 Worker ↔ Bot Worker IPC
 
-FR-358 新增的批量命令 IPC 与现有单 Bot `send-command` 分离；旧消息继续只确认 Go→Node stdin 写入，不追溯 `bot.chat` 结果。
+FR-369 新增的批量命令 IPC 与现有单 Bot `send-command` 分离；旧消息继续只确认 Go→Node stdin 写入，不追溯 `bot.chat` 结果。
 
 ### Go → Node：`command-schedule`
 
@@ -225,7 +225,7 @@ type CommandScheduleReleaseResult =
 
 - 仅 start.mode=barrier 且已 accepted/prepared 的计划可 release；barrierKey 必须匹配，releaseAt 必须晚于当前时刻并早于 run deadline。accepted 后以 releaseAt 作为 scheduleStartAtUnixMs，并按统一 jitter 算法一次性生成 plannedAt。
 - release 幂等键为 `runUuid + botUuid + generation + scheduleRunId`。相同 releaseAt 重放返回 accepted/alreadyReleased=true，不重建 timer；不同 releaseAt 冲突显式拒绝。未收到 result 时状态 unknown，Worker/CP 不伪造释放成功。
-- 该 release 只属于 FR-358 通用命令时间屏障，不使用 `SignalBotActions`；Scenario V2 仍使用自己的 barrier signal。
+- 该 release 只属于 FR-369 通用命令时间屏障，不使用 `SignalBotActions`；Scenario V2 仍使用自己的 barrier signal。
 
 ### Go → Node：`command-schedule-cancel`
 
@@ -242,7 +242,7 @@ type CommandScheduleCancelResult =
 
 - 取消幂等键为 `runUuid + botUuid + generation + scheduleRunId`。Bot Worker 释放 scheduler 资源后保留轻量取消 tombstone 30 分钟，且每 child 最多 10000 条、按完成时间 LRU 淘汰；保留期内重复请求返回 `accepted=true, alreadyCancelled=true`，不重复产生终态。
 - cancel-result 只确认取消 intent 已进入对应 Bot Worker scheduler，不表示所有 occurrence 已终态。尚未开始的执行项逐项发送 `command-schedule-result(status='cancelled', errorCode='ACTION_CANCELLED', attempt=1)`；正在执行的同步 `bot.chat` 不强制中断，其完成后不再启动后续项。
-- tombstone 不作为持久真源。Bot Worker child 重启或 tombstone 淘汰后，Worker 必须以 CP 已持久化的 cancel intent 与 occurrence checkpoint 为准：已终态项不重放，未终态项由 Worker 合成 cancelled 并可直接合成 `accepted=true, alreadyCancelled=true`；仅在 CP 无取消 intent 且 Bot Worker 无活动计划/tombstone 时返回 `accepted=false, COMMAND_SCHEDULE_REJECTED`。未收到 cancel-result 时状态未知，不立即伪造取消成功；运行 deadline/重连 reconcile 按 checkpoint 收敛。FR-358 取消不使用 `SignalBotActions`。
+- tombstone 不作为持久真源。Bot Worker child 重启或 tombstone 淘汰后，Worker 必须以 CP 已持久化的 cancel intent 与 occurrence checkpoint 为准：已终态项不重放，未终态项由 Worker 合成 cancelled 并可直接合成 `accepted=true, alreadyCancelled=true`；仅在 CP 无取消 intent 且 Bot Worker 无活动计划/tombstone 时返回 `accepted=false, COMMAND_SCHEDULE_REJECTED`。未收到 cancel-result 时状态未知，不立即伪造取消成功；运行 deadline/重连 reconcile 按 checkpoint 收敛。FR-369 取消不使用 `SignalBotActions`。
 
 ### 错误码、attempt 与前置失败
 
@@ -258,7 +258,7 @@ type CommandScheduleCancelResult =
 | stop/cancel 使执行项未发送 | `ACTION_CANCELLED` | 否 | Bot Worker；尚未 accepted 时由 CP/Worker 合成 |
 | 其他不可归类内部错误 | `ACTION_INTERNAL_ERROR` | 否 | 发现该错误的层 |
 
-- FR-358 实现时必须把上述 `COMMAND_*` 加入 ActionResultService 冻结 allowlist；未落地前正式当前 API 不宣称可产生这些码。
+- FR-369 实现时必须把上述 `COMMAND_*` 加入 ActionResultService 冻结 allowlist；未落地前正式当前 API 不宣称可产生这些码。
 - 所有终态 `attempt >= 1`：发送过时取最终尝试次数；发送前失败或取消统一取 1。`failed/timed_out/cancelled` 必须有非空 errorCode。
 - CP 从冻结 schedule 生成 occurrence plan，Worker/Bot Worker 从该 plan 校验全部 occurrence，并使用同一 actionRunId 公式。RPC 调用前的确定路由失败由 CP 逐项合成；Worker 在 Node accepted 前的确定失败逐项合成 Fleet 终态。accepted 后正常只由 Node 最终 result 产生终态；仅 disposition 有界收敛表规定的 operation deadline、release/cancel 失败路径允许 CP/Worker 合成。传输超时但接受状态不确定时不得提前合成，最终仍按 actionRunId 首终态胜出。
 
