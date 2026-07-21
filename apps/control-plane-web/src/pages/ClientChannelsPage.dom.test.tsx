@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { beforeAll, describe, it, expect } from 'vitest'
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
@@ -8,6 +8,17 @@ import { domainRoute, mockInject } from '@jianmanager/devmock/inject'
 import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import ClientChannelsPage from './ClientChannelsPage'
+
+beforeAll(() => {
+  if (!('ResizeObserver' in globalThis)) {
+    class RO {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = RO
+  }
+})
 
 /**
  * ClientChannelsPage 强断言（FR-210）：渲染 seed 频道 → 新建频道联动出现 → 注入 500 显错误态。
@@ -173,7 +184,7 @@ describe('ClientChannelsPage（mock 假后端）', () => {
         }),
       ),
     )
-    renderWithProviders(<ClientChannelsPage />, { route: '/client-channels?channel=skyblock-s1&tab=keys' })
+    renderWithProviders(<ClientChannelsPage />, { route: '/client-channels?channelId=skyblock-s1&ip=192.0.2.9&machineId=m-1&errCode=RATE_LIMITED&version=2&tab=stats' })
 
     const bar = await screen.findByTestId('channel-security-summary')
     expect(within(bar).getByText('安全摘要')).toBeInTheDocument()
@@ -182,6 +193,10 @@ describe('ClientChannelsPage（mock 假后端）', () => {
     expect(within(bar).getByText(/封禁 IP\s*1/)).toBeInTheDocument()
     expect(within(bar).getByText(/受限 Key\s*2/)).toBeInTheDocument()
     const link = within(bar).getByRole('link', { name: '打开安全中心' })
-    expect(link).toHaveAttribute('href', '/client-dist-security?channelId=skyblock-s1')
+    expect(screen.getByRole('tab', { name: '统计' })).toHaveAttribute('data-state', 'active')
+    expect(link).toHaveAttribute(
+      'href',
+      '/client-dist-security?channelId=skyblock-s1&ip=192.0.2.9&machineId=m-1&errCode=RATE_LIMITED&version=2&tab=logs',
+    )
   })
 })

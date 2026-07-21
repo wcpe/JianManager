@@ -84,6 +84,25 @@ describe('ProtectionCenterPage', () => {
     expect(within(table).getByText(/install-1/)).toBeInTheDocument()
   })
 
+  it('带 query 打开日志页时预填统一筛选并生成保留筛选的跨页链接', async () => {
+    loginPlatformAdmin()
+    renderWithProviders(<ProtectionCenterPage />, {
+      route: '/client-dist-security?channelId=skyblock-s1&ip=192.0.2.9&machineId=machine-1&errCode=RATE_SPIKE&version=3&tab=logs',
+    })
+
+    expect(await screen.findByDisplayValue('skyblock-s1')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('192.0.2.9')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('machine-1')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '打开分发监控' })).toHaveAttribute(
+      'href',
+      '/client-dist-monitor?channelId=skyblock-s1&ip=192.0.2.9&machineId=machine-1&errCode=RATE_SPIKE&version=3&tab=logs',
+    )
+    expect(screen.getByRole('link', { name: '打开频道工作台' })).toHaveAttribute(
+      'href',
+      '/client-channels?channelId=skyblock-s1&ip=192.0.2.9&machineId=machine-1&errCode=RATE_SPIKE&version=3&tab=stats',
+    )
+  })
+
   it('事件行封禁 IP 必须经 DangerConfirm 确认后才写入', async () => {
     loginPlatformAdmin()
     let writes = 0

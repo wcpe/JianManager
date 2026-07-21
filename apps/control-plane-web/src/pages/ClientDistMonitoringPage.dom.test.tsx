@@ -140,7 +140,27 @@ describe('ClientDistMonitoringPage（FR-265 四 Tab）', () => {
     expect(screen.queryByText('ARTIFACT_NOT_FOUND')).not.toBeInTheDocument()
   })
 
-  it('⑥ 非平台管理员：整页降级为权限提示，且不发起平台级统计请求', async () => {
+  it('⑥ 带 query 打开后预选频道与日志筛选，并生成保留筛选的跨页链接', async () => {
+    loginAs(ADMIN_TOKEN, 1)
+    renderWithProviders(<ClientDistMonitoringPage />, {
+      route: '/client-dist-monitor?channelId=skyblock-s1&ip=203.0.113.8&machineId=m-aaaa&errCode=INVALID_CLIENT_KEY&version=2&tab=logs',
+    })
+
+    expect(await screen.findByText('已联动过滤日志：')).toBeInTheDocument()
+    expect(screen.getByText('machine=m-aaaa')).toBeInTheDocument()
+    expect(screen.getByText('ip=203.0.113.8')).toBeInTheDocument()
+    expect(screen.getByText('errCode=INVALID_CLIENT_KEY')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '打开安全中心' })).toHaveAttribute(
+      'href',
+      '/client-dist-security?channelId=skyblock-s1&ip=203.0.113.8&machineId=m-aaaa&errCode=INVALID_CLIENT_KEY&version=2&tab=logs',
+    )
+    expect(screen.getByRole('link', { name: '打开频道工作台' })).toHaveAttribute(
+      'href',
+      '/client-channels?channelId=skyblock-s1&ip=203.0.113.8&machineId=m-aaaa&errCode=INVALID_CLIENT_KEY&version=2&tab=stats',
+    )
+  })
+
+  it('⑦ 非平台管理员：整页降级为权限提示，且不发起平台级统计请求', async () => {
     loginAs(MEMBER_TOKEN, 2)
     const statsRequests = countStatsRequests()
     try {
@@ -155,7 +175,7 @@ describe('ClientDistMonitoringPage（FR-265 四 Tab）', () => {
     }
   })
 
-  it('⑦ 端点错误：当前 Tab 降级为错误态、不崩溃', async () => {
+  it('⑧ 端点错误：当前 Tab 降级为错误态、不崩溃', async () => {
     loginAs(ADMIN_TOKEN, 1)
     mockInject('get', '/client-dist/stats', { kind: 'status', status: 500 })
     renderWithProviders(<ClientDistMonitoringPage />)

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { Activity, AlertTriangle, Clock, Download, RefreshCw, Search, Server, Users } from 'lucide-react'
 import { useClientChannels } from '@/api/clientChannels'
@@ -44,6 +45,7 @@ import {
   SelectValue,
 } from '@jianmanager/ui/components/select'
 import type { DistBucket } from '@/lib/platform-stats'
+import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist-query'
 import { useTabParam } from '@/lib/use-tab-param'
 import {
   KPI_I18N,
@@ -323,7 +325,7 @@ function MonitorTab({ realtime, errors, isError, onLink }: { realtime?: ClientDi
       </div>
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <TrendCard title={t('clientDistMonitor.requestRate24h')} series={requestSeries} valueFormatter={(v) => String(Math.round(v))} empty={t('clientDistMonitor.empty')} />
-        <DistPanel title={t('clientDistMonitor.topIps1h')} buckets={ipBuckets} empty={t('clientDistMonitor.empty')} />
+        <LinkableDistPanel title={t('clientDistMonitor.topIps1h')} buckets={ipBuckets} empty={t('clientDistMonitor.empty')} onPick={(ip) => onLink({ ip })} />
       </div>
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <LinkableDistPanel title={t('clientDistMonitor.errorTopN')} buckets={errorBuckets} empty={t('clientDistMonitor.noRecentErrors')} onPick={(errCode) => onLink({ errCode })} />
@@ -447,6 +449,9 @@ function LogsTab({ channelId, enabled, link, onClearLink }: { channelId?: string
 
 function LinkedFilterHint({ link }: { link: RuntimeLink }) {
   const { t } = useTranslation()
+  const [searchParams] = useSearchParams()
+  const securityHref = buildClientDistHref('/client-dist-security', searchParams, { tab: 'logs' })
+  const channelHref = buildClientDistHref('/client-channels', searchParams, { tab: 'stats' })
   return (
     <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
       <span>{t('clientDistMonitor.linkedFilter')}</span>
@@ -458,6 +463,8 @@ function LinkedFilterHint({ link }: { link: RuntimeLink }) {
       {link.lag !== undefined && <Badge variant="outline">lag={link.lag}</Badge>}
       {link.errCode && <Badge variant="outline" className="font-mono">errCode={link.errCode}</Badge>}
       {link.ip && <Badge variant="outline" className="font-mono">ip={link.ip}</Badge>}
+      <Link className="font-medium text-primary hover:underline" to={securityHref}>打开安全中心</Link>
+      <Link className="font-medium text-primary hover:underline" to={channelHref}>打开频道工作台</Link>
     </div>
   )
 }
@@ -663,14 +670,23 @@ function ErrorPanel({ title, message }: { title: string; message: string }) {
 
 export default function ClientDistMonitoringPage() {
   const { t } = useTranslation()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const query = readClientDistQuery(searchParams)
   const [range, setRange] = useState<MetricRange>('7d')
-  const [channel, setChannel] = useState<string>(ALL_CHANNELS)
   const [tab, setTab] = useTabParam<PageTab>('tab', 'statistics', ['statistics', 'monitor', 'logs', 'clients'])
-  const [runtimeLink, setRuntimeLink] = useState<RuntimeLink>({})
+  const [runtimeLinkExtra, setRuntimeLinkExtra] = useState<RuntimeLink>({})
+  const channel = query.channelId ?? ALL_CHANNELS
+  const runtimeLink: RuntimeLink = {
+    ...runtimeLinkExtra,
+    machineId: query.machineId,
+    version: query.version ? Number(query.version) : undefined,
+    errCode: query.errCode,
+    ip: query.ip,
+  }
 
   const isPlatformAdmin = useAuthStore((s) => s.role) === ROLE_PLATFORM_ADMIN
   const { data: channels } = useClientChannels()
-  const channelId = channel === ALL_CHANNELS ? undefined : channel
+  const channelId = query.channelId
   const statsQuery = useClientStats(channelId, toStatsDays(range), { enabled: isPlatformAdmin })
   const realtimeQuery = useClientDistRealtime({ channelId, enabled: isPlatformAdmin })
   const runtimeQuery = useClientRuntimeOverview({ channelId, range: toApiRange(range), enabled: isPlatformAdmin })
@@ -681,12 +697,33 @@ export default function ClientDistMonitoringPage() {
   })
 
   const openLogsWithLink = (link: RuntimeLink) => {
-    setRuntimeLink((prev) => ({ ...prev, ...link }))
-    setTab('logs')
+    setRuntimeLinkExtra((prev) => ({ ...prev, ...link }))
+    setSearchParams(updateClientDistQuery(searchParams, {
+      machineId: link.machineId,
+      version: link.version,
+      errCode: link.errCode,
+      ip: link.ip,
+      tab: 'logs',
+    }), { replace: true })
+  }
+
+  const clearRuntimeLink = () => {
+    setRuntimeLinkExtra({})
+    setSearchParams(updateClientDistQuery(searchParams, {
+      ip: null,
+      machineId: null,
+      errCode: null,
+      version: null,
+    }), { replace: true })
   }
 
   const channelPicker = (
-    <Select value={channel} onValueChange={setChannel}>
+    <Select
+      value={channel}
+      onValueChange={(value) => setSearchParams(updateClientDistQuery(searchParams, {
+        channelId: value === ALL_CHANNELS ? null : value,
+      }), { replace: true })}
+    >
       <SelectTrigger size="sm" className="w-44"><SelectValue /></SelectTrigger>
       <SelectContent>
         <SelectItem value={ALL_CHANNELS}>{t('clientDistMonitor.allChannels')}</SelectItem>
@@ -737,7 +774,7 @@ export default function ClientDistMonitoringPage() {
             />
           </TabsContent>
           <TabsContent value="logs" className="space-y-4">
-            <LogsTab channelId={channelId} enabled={isPlatformAdmin} link={runtimeLink} onClearLink={() => setRuntimeLink({})} />
+            <LogsTab channelId={channelId} enabled={isPlatformAdmin} link={runtimeLink} onClearLink={clearRuntimeLink} />
           </TabsContent>
           <TabsContent value="clients" className="space-y-4">
             <ClientsTab overview={runtimeQuery.data} isError={runtimeQuery.isError} onLink={openLogsWithLink} />

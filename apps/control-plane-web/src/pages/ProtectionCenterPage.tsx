@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react'
+import { Link, useSearchParams } from 'react-router'
 import { ShieldAlert, ShieldCheck, Ban, Gauge, RadioTower, UsersRound } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -42,6 +43,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/compon
 import { Textarea } from '@jianmanager/ui/components/textarea'
 import DangerConfirm from '@/components/DangerConfirm'
 import UntrustedFieldBadge from '@/components/UntrustedFieldBadge'
+import { buildClientDistHref, readClientDistQuery, updateClientDistQuery, type ClientDistQueryKey } from '@/lib/client-dist-query'
 import { useTabParam } from '@/lib/use-tab-param'
 import { maskInstallId, maskMachineId, maskPlayerName } from '@/lib/privacy-mask'
 import {
@@ -53,6 +55,18 @@ import {
 } from '@jianmanager/ui/components/dialog'
 
 const EMPTY = '—'
+
+type SecurityQueryPatch = Partial<Record<ClientDistQueryKey, string | null>>
+
+function useSecurityQuery() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  return {
+    query: readClientDistQuery(searchParams),
+    updateQuery: (patch: SecurityQueryPatch) => {
+      setSearchParams(updateClientDistQuery(searchParams, patch), { replace: true })
+    },
+  }
+}
 
 function fmtTime(iso?: string | null): string {
   if (!iso) return EMPTY
@@ -107,7 +121,16 @@ function KpiCard({ title, value, hint }: { title: string; value: string | number
   )
 }
 
-function RankList({ title, items }: { title: string; items: { subject: string; count: number; bytes?: number }[] }) {
+function RankList({
+  title,
+  items,
+  filterKey,
+}: {
+  title: string
+  items: { subject: string; count: number; bytes?: number }[]
+  filterKey?: 'ip' | 'channelId'
+}) {
+  const [searchParams] = useSearchParams()
   return (
     <Panel title={title}>
       {items.length === 0 ? (
@@ -116,7 +139,16 @@ function RankList({ title, items }: { title: string; items: { subject: string; c
         <ul className="space-y-2">
           {items.slice(0, 8).map((item) => (
             <li key={item.subject} className="flex items-center justify-between gap-3 rounded-md border bg-muted/25 px-3 py-2 text-sm">
-              <span className="min-w-0 truncate font-medium">{item.subject || EMPTY}</span>
+              {filterKey ? (
+                <Link
+                  className="min-w-0 truncate font-medium text-primary hover:underline"
+                  to={buildClientDistHref('/client-dist-monitor', searchParams, { [filterKey]: item.subject, tab: 'logs' })}
+                >
+                  {item.subject || EMPTY}
+                </Link>
+              ) : (
+                <span className="min-w-0 truncate font-medium">{item.subject || EMPTY}</span>
+              )}
               <span className="shrink-0 text-muted-foreground">
                 {item.count} 次{item.bytes ? ` · ${fmtBytes(item.bytes)}` : ''}
               </span>
@@ -144,9 +176,9 @@ function OverviewTab() {
         <KpiCard title="保护对象" value={`${overview?.throttledKeyCount ?? 0}/${overview?.protectedChannelCount ?? 0}`} hint="限速 key / 保护频道" />
       </div>
       <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
-        <RankList title="Top IP" items={overview?.topIps ?? []} />
+        <RankList title="Top IP" items={overview?.topIps ?? []} filterKey="ip" />
         <RankList title="Top Key" items={overview?.topKeys ?? []} />
-        <RankList title="Top Channel" items={overview?.topChannels ?? []} />
+        <RankList title="Top Channel" items={overview?.topChannels ?? []} filterKey="channelId" />
         <RankList title="Top 玩家名" items={overview?.topPlayers ?? []} />
       </div>
     </div>
@@ -164,17 +196,16 @@ const logTypeLabels: Record<ClientDistSecurityLogType | 'all', string> = {
 }
 
 function LogsTab() {
+  const { query, updateQuery } = useSecurityQuery()
   const [type, setType] = useState<ClientDistSecurityLogType | 'all'>('all')
-  const [channelId, setChannelId] = useState('')
-  const [machineId, setMachineId] = useState('')
   const [playerName, setPlayerName] = useState('')
-  const [ip, setIp] = useState('')
   const { data, isError, isLoading } = useClientDistSecurityLogs({
     type,
-    channelId: channelId || undefined,
-    machineId: machineId || undefined,
+    channelId: query.channelId,
+    machineId: query.machineId,
     playerName: playerName || undefined,
-    ip: ip || undefined,
+    ip: query.ip,
+    errCode: query.errCode,
     page: 1,
     pageSize: 100,
   })
@@ -192,10 +223,11 @@ function LogsTab() {
               ))}
             </SelectContent>
           </Select>
-          <Input className="w-36" placeholder="频道" value={channelId} onChange={(e) => setChannelId(e.target.value)} />
-          <Input className="w-40" placeholder="Machine ID" value={machineId} onChange={(e) => setMachineId(e.target.value)} />
+          <Input className="w-36" placeholder="频道" value={query.channelId ?? ''} onChange={(e) => updateQuery({ channelId: e.target.value || null })} />
+          <Input className="w-40" placeholder="Machine ID" value={query.machineId ?? ''} onChange={(e) => updateQuery({ machineId: e.target.value || null })} />
           <Input className="w-32" placeholder="玩家名" value={playerName} onChange={(e) => setPlayerName(e.target.value)} />
-          <Input className="w-36" placeholder="IP" value={ip} onChange={(e) => setIp(e.target.value)} />
+          <Input className="w-36" placeholder="IP" value={query.ip ?? ''} onChange={(e) => updateQuery({ ip: e.target.value || null })} />
+          <Input className="w-40" placeholder="错误码" value={query.errCode ?? ''} onChange={(e) => updateQuery({ errCode: e.target.value || null })} />
         </div>
       }
     >
@@ -243,18 +275,25 @@ function LogsTab() {
 }
 
 function EventsTab() {
-  const [ip, setIp] = useState('')
-  const [errCode, setErrCode] = useState('')
+  const { query, updateQuery } = useSecurityQuery()
   const [riskRule, setRiskRule] = useState('')
-  const { data, isError, isLoading } = useClientDistSecurityEvents({ ip: ip || undefined, errCode: errCode || undefined, riskRule: riskRule || undefined, limit: 200 })
+  const { data, isError, isLoading } = useClientDistSecurityEvents({
+    channelId: query.channelId,
+    ip: query.ip,
+    machineId: query.machineId,
+    errCode: query.errCode,
+    riskRule: riskRule || undefined,
+    limit: 200,
+  })
   const events = data ?? []
   return (
     <Panel
       title="异常请求分析"
       actions={
         <div className="flex flex-wrap gap-2">
-          <Input className="w-36" placeholder="IP" value={ip} onChange={(e) => setIp(e.target.value)} />
-          <Input className="w-40" placeholder="错误码" value={errCode} onChange={(e) => setErrCode(e.target.value)} />
+          <Input className="w-36" placeholder="频道" value={query.channelId ?? ''} onChange={(e) => updateQuery({ channelId: e.target.value || null })} />
+          <Input className="w-36" placeholder="IP" value={query.ip ?? ''} onChange={(e) => updateQuery({ ip: e.target.value || null })} />
+          <Input className="w-40" placeholder="错误码" value={query.errCode ?? ''} onChange={(e) => updateQuery({ errCode: e.target.value || null })} />
           <Input className="w-40" placeholder="风险规则" value={riskRule} onChange={(e) => setRiskRule(e.target.value)} />
         </div>
       }
@@ -286,9 +325,17 @@ function EventsTab() {
 }
 
 function EventRow({ event }: { event: ClientDistSecurityEvent }) {
+  const [searchParams] = useSearchParams()
   const [confirmOpen, setConfirmOpen] = useState(false)
   const blockIP = useBlockClientDistIP()
   const canBlock = Boolean(event.ip)
+  const monitorHref = buildClientDistHref('/client-dist-monitor', searchParams, {
+    channelId: event.channelId,
+    ip: event.ip,
+    machineId: event.machineId,
+    errCode: event.errCode,
+    tab: 'logs',
+  })
   return (
     <TableRow>
       <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{fmtTime(event.createdAt)}</TableCell>
@@ -312,6 +359,9 @@ function EventRow({ event }: { event: ClientDistSecurityEvent }) {
       <TableCell>
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs text-muted-foreground">{event.action || EMPTY}</span>
+          <Button asChild size="xs" variant="outline">
+            <Link to={monitorHref}>查看分发日志</Link>
+          </Button>
           {canBlock ? (
             <Button type="button" size="xs" variant="outline" className="text-status-danger" onClick={() => setConfirmOpen(true)}>
               封禁 IP
@@ -344,10 +394,16 @@ function EventRow({ event }: { event: ClientDistSecurityEvent }) {
 }
 
 function ProfilesTab() {
+  const { query, updateQuery } = useSecurityQuery()
   const [playerName, setPlayerName] = useState('')
-  const [channelId, setChannelId] = useState('')
   const [detailId, setDetailId] = useState<number | null>(null)
-  const { data, isError, isLoading } = useClientDistSecurityProfiles({ playerName: playerName || undefined, channelId: channelId || undefined, limit: 200 })
+  const { data, isError, isLoading } = useClientDistSecurityProfiles({
+    playerName: playerName || undefined,
+    channelId: query.channelId,
+    machineId: query.machineId,
+    ip: query.ip,
+    limit: 200,
+  })
   const profiles = data ?? []
   return (
     <div className="space-y-4">
@@ -357,7 +413,8 @@ function ProfilesTab() {
         actions={
           <div className="flex flex-wrap gap-2">
             <Input className="w-40" placeholder="玩家名" value={playerName} onChange={(e) => setPlayerName(e.target.value)} />
-            <Input className="w-40" placeholder="频道" value={channelId} onChange={(e) => setChannelId(e.target.value)} />
+            <Input className="w-40" placeholder="频道" value={query.channelId ?? ''} onChange={(e) => updateQuery({ channelId: e.target.value || null })} />
+            <Input className="w-40" placeholder="Machine ID" value={query.machineId ?? ''} onChange={(e) => updateQuery({ machineId: e.target.value || null })} />
           </div>
         }
       >
@@ -869,7 +926,10 @@ function GroupsTab() {
 }
 
 export default function ProtectionCenterPage() {
+  const [searchParams] = useSearchParams()
   const [tab, setTab] = useTabParam('tab', 'overview', ['overview', 'events', 'logs', 'profiles', 'ip', 'actions', 'players', 'groups'])
+  const monitorHref = buildClientDistHref('/client-dist-monitor', searchParams, { tab: 'logs' })
+  const channelHref = buildClientDistHref('/client-channels', searchParams, { tab: 'stats' })
   return (
     <div data-page="client-dist-security" className="jm-page-stack space-y-4">
       <div className="jm-page-header">
@@ -880,7 +940,11 @@ export default function ProtectionCenterPage() {
           </div>
           <p className="jm-page-subtitle">客户端分发安全总览、全量日志、画像剖析、封禁与降级管理。</p>
         </div>
-        <Badge variant="outline"><ShieldAlert className="size-3" /> FR-264</Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button asChild size="sm" variant="outline"><Link to={monitorHref}>打开分发监控</Link></Button>
+          <Button asChild size="sm" variant="outline"><Link to={channelHref}>打开频道工作台</Link></Button>
+          <Badge variant="outline"><ShieldAlert className="size-3" /> FR-264</Badge>
+        </div>
       </div>
       <Tabs value={tab} onValueChange={setTab} className="space-y-4">
         <TabsList className="jm-toolbar-surface flex h-auto w-full flex-wrap justify-start gap-1 p-1">

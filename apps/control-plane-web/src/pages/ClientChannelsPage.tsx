@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -34,6 +34,7 @@ import {
   type SecurityLevel,
 } from '@/api/clientDistSecurity'
 import { copyToClipboard } from '@/lib/clipboard'
+import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist-query'
 import { useTabParam } from '@/lib/use-tab-param'
 import {
   deriveReadiness,
@@ -90,18 +91,21 @@ export default function ClientChannelsPage() {
   const { t } = useTranslation()
   const { data: channels, isLoading } = useClientChannels()
   const [searchParams, setSearchParams] = useSearchParams()
-  // 支持从独立发布页（FR-191）返回时按 `?channel=&tab=` 还原到对应频道工作台版本 tab。
-  const [selected, setSelected] = useState<string | null>(() => searchParams.get('channel'))
+  // 兼容历史 `channel`，统一按 `channelId` 还原频道工作台。
+  const selected = readClientDistQuery(searchParams).channelId ?? null
   const [createOpen, setCreateOpen] = useState(false)
+
+  useEffect(() => {
+    const channelId = readClientDistQuery(searchParams).channelId
+    if (channelId && searchParams.has('channel') && !searchParams.has('channelId')) {
+      setSearchParams(updateClientDistQuery(searchParams, { channelId }), { replace: true })
+    }
+  }, [searchParams, setSearchParams])
 
   /** 返回频道列表：清状态与 URL 参数（避免刷新后又自动展开工作台）。 */
   const backToList = () => {
-    setSelected(null)
-    if (searchParams.has('channel') || searchParams.has('tab')) {
-      const next = new URLSearchParams(searchParams)
-      next.delete('channel')
-      next.delete('tab')
-      setSearchParams(next, { replace: true })
+    if (searchParams.has('channel') || searchParams.has('channelId') || searchParams.has('tab')) {
+      setSearchParams(updateClientDistQuery(searchParams, { channelId: null, tab: null }), { replace: true })
     }
   }
 
@@ -142,12 +146,24 @@ export default function ClientChannelsPage() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {list.map((ch: ClientChannel) => (
-            <ChannelCard key={ch.id} channel={ch} onOpen={() => setSelected(ch.channelId)} />
+            <ChannelCard
+              key={ch.id}
+              channel={ch}
+              onOpen={() => {
+                setSearchParams(updateClientDistQuery(searchParams, { channelId: ch.channelId }), { replace: true })
+              }}
+            />
           ))}
         </div>
       )}
 
-      <CreateChannelDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={(id) => setSelected(id)} />
+      <CreateChannelDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={(id) => {
+          setSearchParams(updateClientDistQuery(searchParams, { channelId: id }), { replace: true })
+        }}
+      />
     </div>
   )
 }
@@ -342,9 +358,10 @@ function riskBadgeVariant(level?: SecurityLevel): 'default' | 'secondary' | 'des
 /** 频道工作台安全摘要条（FR-358）：近窗风险与封禁/受限计数，链到安全中心。 */
 function ChannelSecuritySummaryBar({ channelId }: { channelId: string }) {
   const { t } = useTranslation()
+  const [searchParams] = useSearchParams()
   const { data, isError, isLoading } = useClientChannelSecuritySummary(channelId)
   const summary = data as ClientChannelSecuritySummary | undefined
-  const securityHref = `/client-dist-security?channelId=${encodeURIComponent(channelId)}`
+  const securityHref = buildClientDistHref('/client-dist-security', searchParams, { channelId, tab: 'logs' })
 
   return (
     <div

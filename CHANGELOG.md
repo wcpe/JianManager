@@ -17,6 +17,7 @@
 - **Control Plane 一键安装脚本（FR-355）**：`scripts/install-cp.sh` / `install-cp.ps1`（OS/arch 探测、Releases 下载、失败中文报错、可选 `--start`）；`INSTALL_CP_TEST=1` 资产名自检。
 - **对外部署文档与治理**：README 安装步骤 + MSW mock 界面截图（`docs/screenshots/*.jpg`）；根目录 `SECURITY.md`；治理戳记对账记录。
 - **楔子与 updater-core 本地诊断日志轮换压缩（FR-353，feat，增强 FR-090，见 `docs/specs/updater-local-log-rotate/spec.md`）**：`wedge.log` 与 `updater.log` 在日志器打开前按 10 MiB 阈值或本地自然日跨日轮换，旧日志以时间戳命名并 gzip 压缩，各自仅保留最近 5 个归档；轮换、压缩或清理失败均 fail-open，日志不可写时继续降级运行，不阻断游戏启动。
+- **分发三页跨页深链与统一筛选状态（FR-359，开发中）**：频道工作台、分发监控与安全中心统一透传 `channelId`/`ip`/`machineId`/`errCode`/`version`/`tab` 查询键；兼容历史 `channel`，页内筛选使用 replace 写回 URL，分布、榜单与事件深链保留当前筛选。
 ### 文档
 - **补齐待开发 FR 规格草稿（2026-07-21）**：落盘 FR-357/358/361/326 草拟 spec（`docs/specs/client-dist-stats-monitor-enrich`、`client-dist-security-ops-loop`、`client-dist-csv-export`、`instance-reverse-reconcile`）；FR-359 保持免 spec；Bot 压测批已有 spec 头与正文中的关联编号由旧批 351～361 顺延对齐 PRD 现号 362/363/365/369～372（目录名历史沿用不变）。
 - **Bot 压测规格按 ADR-075 重定向（FR-351/352/354/358～361，纯文档）**：编排 `send_command` 动作的通用成功边界统一为 Bot Worker 调用 `bot.chat` 未同步抛错；现有单 Bot command HTTP 端点仍只确认 IPC 委托，不等待执行回执；不再将 ServerProbe、塔防插件、聊天文本、服务端接受、权限或业务效果作为通用命令编排、预检、默认 verdict、前端观测或验收的必需条件。FR-358 取代未实施的 FR-353，承接通用命令编排与本地集中调度；FR-359～361 取代未实施的 FR-355～357，默认指标、向导和报告改为围绕连接、命令发送、调度、屏障与 Worker 健康，TPS/MSPT 与业务事件仅为可选附加观测。本条不表示 FR-351/352/354/358～361 已交付，状态仍以 PRD 为准。
