@@ -10,7 +10,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 )
 
-// ClientTelemetryService 客户端遥测落库与治理（FR-094，见 ADR-023）。
+// ClientTelemetryService 客户端遥测落库与治理（FR-094 / FR-360，见 ADR-023）。
 // 明细短保留 + 后台滚动清理；按 result 写时增量日聚合长保留。Record best-effort 弱一致、失败不阻塞客户端（202）。
 type ClientTelemetryService struct {
 	db            *gorm.DB
@@ -33,9 +33,15 @@ type ClientTelemetryInput struct {
 	Result      string
 	FromVersion int
 	ToVersion   int
+	CoreVersion string
 	OS          string
+	Arch        string
 	JavaVersion string
+	JavaVendor  string
 	Launcher    string
+	Locale      string
+	Timezone    string
+	MemoryTier  string
 	DurationMs  int64
 	BootSuccess bool
 	Error       string
@@ -51,6 +57,7 @@ func validTelemetryResult(r string) string {
 }
 
 // Record 落一条遥测明细 + 按 result 日聚合 upsert。best-effort（失败返回错误供调用方忽略）。
+// 旧客户端缺 FR-360 字段时对应列为空串，不 4xx。
 func (s *ClientTelemetryService) Record(e ClientTelemetryInput) error {
 	if s == nil {
 		return nil
@@ -62,8 +69,10 @@ func (s *ClientTelemetryService) Record(e ClientTelemetryInput) error {
 	now := time.Now().UTC()
 	row := &model.ClientTelemetry{
 		ChannelID: e.ChannelID, MachineID: e.MachineID, PlayerName: trunc(e.PlayerName, 32), IP: e.IP, Result: result,
-		FromVersion: e.FromVersion, ToVersion: e.ToVersion, OS: trunc(e.OS, 32),
-		JavaVersion: trunc(e.JavaVersion, 32), Launcher: trunc(e.Launcher, 32),
+		FromVersion: e.FromVersion, ToVersion: e.ToVersion,
+		CoreVersion: trunc(e.CoreVersion, 64), OS: trunc(e.OS, 32), Arch: trunc(e.Arch, 16),
+		JavaVersion: trunc(e.JavaVersion, 32), JavaVendor: trunc(e.JavaVendor, 64), Launcher: trunc(e.Launcher, 32),
+		Locale: trunc(e.Locale, 32), Timezone: trunc(e.Timezone, 64), MemoryTier: trunc(e.MemoryTier, 16),
 		DurationMs: e.DurationMs, BootSuccess: e.BootSuccess, Error: trunc(e.Error, 512), CreatedAt: now,
 	}
 	if err := s.db.Create(row).Error; err != nil {

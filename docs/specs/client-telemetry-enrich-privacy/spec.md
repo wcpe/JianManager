@@ -1,6 +1,6 @@
 # 功能规格：updater-core 遥测字段补齐与隐私契约
 
-> 状态：草拟　·　关联 PRD：FR-360　·　分支：feature/fr-360-telemetry-privacy  
+> 状态：开发中　·　关联 PRD：FR-360　·　分支：feature/fr-360-telemetry-privacy  
 > 增强：FR-094 / FR-264　·　相关：ADR-023、contract §4.3；若修订隐私边界可写 `docs/adr/XXXX-client-telemetry-privacy-fields.md`（占位号，落地时由主控分配）
 
 ## 1. 背景与目标

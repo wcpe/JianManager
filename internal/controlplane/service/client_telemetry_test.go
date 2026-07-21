@@ -44,6 +44,32 @@ func TestClientTelemetry_RecordAndDailyAggregate(t *testing.T) {
 	require.Equal(t, int64(1), fail.Count)
 }
 
+// TestClientTelemetry_RecordEnrichFields FR-360 新字段落库；旧客户端缺字段不失败。
+func TestClientTelemetry_RecordEnrichFields(t *testing.T) {
+	db := newTelemetryDB(t)
+	svc := NewClientTelemetryService(db)
+
+	require.NoError(t, svc.Record(ClientTelemetryInput{
+		ChannelID: "s1", Result: "success", CoreVersion: "1.2.3+abc", Arch: "amd64",
+		OS: "windows", JavaVendor: "Eclipse Adoptium", Locale: "zh-CN", Timezone: "Asia/Shanghai", MemoryTier: "le8g",
+	}))
+	var row model.ClientTelemetry
+	require.NoError(t, db.First(&row).Error)
+	require.Equal(t, "1.2.3+abc", row.CoreVersion)
+	require.Equal(t, "amd64", row.Arch)
+	require.Equal(t, "Eclipse Adoptium", row.JavaVendor)
+	require.Equal(t, "zh-CN", row.Locale)
+	require.Equal(t, "Asia/Shanghai", row.Timezone)
+	require.Equal(t, "le8g", row.MemoryTier)
+
+	// 旧 body：仅基础字段
+	require.NoError(t, svc.Record(ClientTelemetryInput{ChannelID: "s1", Result: "error"}))
+	var legacy model.ClientTelemetry
+	require.NoError(t, db.Where("result = ?", "error").First(&legacy).Error)
+	require.Equal(t, "", legacy.CoreVersion)
+	require.Equal(t, "", legacy.Arch)
+}
+
 // TestClientTelemetry_InvalidResultNormalized 非法 result 归一为 error（防脏数据）。
 func TestClientTelemetry_InvalidResultNormalized(t *testing.T) {
 	db := newTelemetryDB(t)

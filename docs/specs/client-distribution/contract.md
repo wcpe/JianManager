@@ -103,11 +103,14 @@ updater-core ──GET /manifest(latest,带 key+machineId)──→ JM 分发后
 - 403/404/416/429
 - 制品 = FR-045 制品库 `type=client-file`，`sha256` 即 `artifact.sha256`
 
-### 4.3 `POST /client-telemetry`（FR-094，已实装）
-- Headers：`X-Client-Key`、`X-Machine-Id`
-- Body：`{ channel, result: "success"|"fail-static"|"rolled-back"|"error", fromVersion, toVersion, os, javaVersion, launcher, durationMs, bootSuccess: bool, error?: string }`（`channel` 由客户端携带便于按频道聚合）
-- 202 Accepted（best-effort 落库、不阻塞客户端；隐私 opt-out：`jm-updater.json` `telemetry:false` 关闭，见 FR-094）
-- 服务端：`client_telemetry`（明细短保留）+ `client_telemetry_daily`（按 result 日聚合，供 FR-095）；挂 FR-096 L7 守卫
+### 4.3 `POST /client-telemetry`（FR-094 / FR-360，已实装）
+- Headers：`X-Client-Key`、`X-Machine-Id`（可附 `X-Install-Id` / `X-Player-Name`，兼容反查）
+- Body（缺字段不 4xx，旧客户端兼容）：
+  - **required / 运营必需**：`channel`, `result` (`success`|`fail-static`|`rolled-back`|`error`), `fromVersion`, `toVersion`, `coreVersion`, `os`, `arch`, `durationMs`, `bootSuccess`
+  - **diagnostic（可关/可脱敏，随 telemetry 总开关）**：`javaVersion`, `javaVendor`, `launcher`, `locale`, `timezone`, `memoryTier` (`le2g`|`le4g`|`le8g`|`gt8g`|`unknown`), `error?`
+- 202 Accepted（best-effort 落库、不阻塞客户端；隐私 opt-out：`jm-updater.json` `telemetry:false` 关闭，见 FR-094/FR-360）
+- 服务端：`client_telemetry`（明细短保留，含 FR-360 新列）+ `client_telemetry_daily`（仍仅按 result 日聚合，不按新维度打爆基数）；挂 FR-096 L7 守卫
+- 面板脱敏：`playerName`/`machineId`/`installId` 管理端展示截断（见 `privacy-mask`）；不上报精确堆字节/MAC/GPS
 
 ## 5. 鉴权与身份
 

@@ -118,7 +118,7 @@ public final class Core {
                 long toVersion = StateStore.load(stateDir).lastSeenVersion();
                 log.info("开始上报更新遥测 fromVersion=" + fromVersion + " toVersion=" + toVersion + " rc=" + rc);
                 transport.postTelemetry(
-                        Telemetry.build(channel, rc, fromVersion, toVersion, System.currentTimeMillis() - start));
+                        Telemetry.build(channel, rc, fromVersion, toVersion, System.currentTimeMillis() - start, coreVersion));
                 log.info("更新遥测上报已提交");
             } else {
                 log.info("跳过更新遥测 telemetryEnabled=" + telemetryEnabled + " rc=" + rc);

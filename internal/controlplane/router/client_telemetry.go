@@ -8,7 +8,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// ClientTelemetryHandler 客户端遥测上报端点（FR-094，见 ADR-023、contract §4.3）。
+// ClientTelemetryHandler 客户端遥测上报端点（FR-094 / FR-360，见 ADR-023、contract §4.3）。
 // 面向玩家公网：拉取密钥（X-Client-Key）鉴权 + X-Machine-Id；202 Accepted、best-effort 落库不阻塞。
 type ClientTelemetryHandler struct {
 	svc      *service.ClientTelemetryService
@@ -25,15 +25,21 @@ func NewClientTelemetryHandler(svc *service.ClientTelemetryService, channel *ser
 	return &ClientTelemetryHandler{svc: svc, channel: channel, security: sec}
 }
 
-// telemetryBody 遥测上报体（contract §4.3 + channel 由客户端携带便于按频道聚合）。
+// telemetryBody 遥测上报体（contract §4.3 + FR-360 字段；未知字段忽略；缺字段不 4xx）。
 type telemetryBody struct {
 	Channel     string `json:"channel"`
 	Result      string `json:"result"`
 	FromVersion int    `json:"fromVersion"`
 	ToVersion   int    `json:"toVersion"`
+	CoreVersion string `json:"coreVersion"`
 	OS          string `json:"os"`
+	Arch        string `json:"arch"`
 	JavaVersion string `json:"javaVersion"`
+	JavaVendor  string `json:"javaVendor"`
 	Launcher    string `json:"launcher"`
+	Locale      string `json:"locale"`
+	Timezone    string `json:"timezone"`
+	MemoryTier  string `json:"memoryTier"`
 	DurationMs  int64  `json:"durationMs"`
 	BootSuccess bool   `json:"bootSuccess"`
 	Error       string `json:"error"`
@@ -63,9 +69,15 @@ func (h *ClientTelemetryHandler) Post(c *gin.Context) {
 			Result:      body.Result,
 			FromVersion: body.FromVersion,
 			ToVersion:   body.ToVersion,
+			CoreVersion: body.CoreVersion,
 			OS:          body.OS,
+			Arch:        body.Arch,
 			JavaVersion: body.JavaVersion,
+			JavaVendor:  body.JavaVendor,
 			Launcher:    body.Launcher,
+			Locale:      body.Locale,
+			Timezone:    body.Timezone,
+			MemoryTier:  body.MemoryTier,
 			DurationMs:  body.DurationMs,
 			BootSuccess: body.BootSuccess,
 			Error:       body.Error,

@@ -3139,12 +3139,15 @@
 - **审计**: `client_updater_core.select`
 
 ### POST /api/v1/client-telemetry
-- **描述**: 客户端遥测上报（FR-094，contract §4.3）。**best-effort、202 不阻塞**；隐私可关在客户端
-- **关联 FR**: FR-094
+- **描述**: 客户端遥测上报（FR-094 / FR-360，contract §4.3）。**best-effort、202 不阻塞**；隐私可关在客户端（`telemetry:false` 整包不上报）
+- **关联 FR**: FR-094、FR-360
 - **鉴权**: **拉取密钥**（请求头 `X-Client-Key`，必，任一有效密钥）；`X-Machine-Id`（可但推荐）、`X-Install-Id`（可但推荐，用于关联安全画像）、`X-Player-Name`（兼容旧客户端，可选且不可信；为空时按 `channel + machineId + installId` 从安全画像补全）。**无 JWT**
-- **请求**: `{ "channel", "result"(success|fail-static|rolled-back|error), "fromVersion", "toVersion", "os", "javaVersion", "launcher", "durationMs", "bootSuccess", "error"? }`
+- **请求**（缺字段不 4xx；旧客户端兼容）:
+  - **required**：`channel`, `result`(success|fail-static|rolled-back|error), `fromVersion`, `toVersion`, `coreVersion`, `os`, `arch`, `durationMs`, `bootSuccess`
+  - **diagnostic**：`javaVersion`, `javaVendor`, `launcher`, `locale`, `timezone`, `memoryTier`(le2g|le4g|le8g|gt8g|unknown), `error`?
 - **响应** (202): 无体（落库失败不影响响应）
 - **错误**: 401 `INVALID_CLIENT_KEY`
+- **说明**: 明细表 `client_telemetry` 含 FR-360 新列；日聚合仍仅按 result，不按新维度打爆基数。管理端 `playerName`/`machineId`/`installId` 展示走脱敏（`privacy-mask`）。
 
 ---
 

@@ -41,6 +41,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/compon
 import { Textarea } from '@jianmanager/ui/components/textarea'
 import DangerConfirm from '@/components/DangerConfirm'
 import { useTabParam } from '@/lib/use-tab-param'
+import { maskInstallId, maskMachineId, maskPlayerName } from '@/lib/privacy-mask'
 
 const EMPTY = '—'
 
@@ -336,12 +337,21 @@ function ProfilesTab() {
               {profiles.map((profile) => (
                 <TableRow key={profile.id}>
                   <TableCell>
-                    <div className="font-medium">{profile.playerName || EMPTY}</div>
+                    <div className="font-medium" title={profile.playerName || undefined}>
+                      {maskPlayerName(profile.playerName) || EMPTY}
+                      {profile.playerName ? (
+                        <span className="ml-1 text-[10px] text-muted-foreground">不可信</span>
+                      ) : null}
+                    </div>
                     <div className="text-xs text-muted-foreground">{profile.channelId || EMPTY}</div>
                   </TableCell>
                   <TableCell className="max-w-56">
-                    <div className="truncate text-xs">machine: {profile.machineId || EMPTY}</div>
-                    <div className="truncate text-xs text-muted-foreground">install: {profile.installId || EMPTY}</div>
+                    <div className="truncate text-xs font-mono" title={profile.machineId || undefined}>
+                      machine: {maskMachineId(profile.machineId) || EMPTY}
+                    </div>
+                    <div className="truncate text-xs font-mono text-muted-foreground" title={profile.installId || undefined}>
+                      install: {maskInstallId(profile.installId) || EMPTY}
+                    </div>
                   </TableCell>
                   <TableCell>
                     <div>{profile.lastIp || EMPTY}</div>

@@ -705,7 +705,12 @@ func (s *ClientDistSecurityService) securityTelemetryLogs(f ClientDistSecurityLo
 	}
 	out := make([]ClientDistSecurityLogItem, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, ClientDistSecurityLogItem{ID: logID("telemetry", r.ID), Type: "telemetry", Title: "更新遥测", ChannelID: r.ChannelID, MachineID: r.MachineID, PlayerName: r.PlayerName, IP: r.IP, Status: r.Result, ErrCode: r.Error, CreatedAt: r.CreatedAt, Detail: map[string]any{"fromVersion": r.FromVersion, "toVersion": r.ToVersion, "os": r.OS, "javaVersion": r.JavaVersion, "launcher": r.Launcher, "durationMs": r.DurationMs, "bootSuccess": r.BootSuccess}})
+		out = append(out, ClientDistSecurityLogItem{ID: logID("telemetry", r.ID), Type: "telemetry", Title: "更新遥测", ChannelID: r.ChannelID, MachineID: r.MachineID, PlayerName: r.PlayerName, IP: r.IP, Status: r.Result, ErrCode: r.Error, CreatedAt: r.CreatedAt, Detail: map[string]any{
+			"fromVersion": r.FromVersion, "toVersion": r.ToVersion, "coreVersion": r.CoreVersion,
+			"os": r.OS, "arch": r.Arch, "javaVersion": r.JavaVersion, "javaVendor": r.JavaVendor,
+			"launcher": r.Launcher, "locale": r.Locale, "timezone": r.Timezone, "memoryTier": r.MemoryTier,
+			"durationMs": r.DurationMs, "bootSuccess": r.BootSuccess,
+		}})
 	}
 	return out, nil
 }
