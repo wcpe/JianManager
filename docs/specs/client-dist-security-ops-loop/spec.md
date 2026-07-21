@@ -1,6 +1,6 @@
 # 功能规格：安全中心研判处置闭环 + 频道安全摘要
 
-> 状态：草拟　·　关联 PRD：FR-358　·　分支：feature/fr-358-security-ops-loop  
+> 状态：已审　·　关联 PRD：FR-358　·　分支：feature/fr-358-security-ops-loop  
 > 增强：FR-096 / FR-264　·　建议依赖 FR-356（安全微标语义）；与 FR-357 可并行　·　脱敏复用 FR-360
 
 ## 1. 背景与目标

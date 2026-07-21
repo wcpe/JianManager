@@ -1,6 +1,6 @@
 # 功能规格：分发统计与监控信息加厚 + 分布钻取
 
-> 状态：草拟　·　关联 PRD：FR-357　·　分支：feature/fr-357-stats-monitor-enrich  
+> 状态：已审　·　关联 PRD：FR-357　·　分支：feature/fr-357-stats-monitor-enrich  
 > 增强：FR-095 / FR-218 / FR-219 / FR-249 / FR-265　·　依赖：**FR-356**（KPI 口径）　·　字段展示可渐进接入 FR-360
 
 ## 1. 背景与目标
