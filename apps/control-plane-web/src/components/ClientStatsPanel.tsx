@@ -61,6 +61,13 @@ export default function ClientStatsPanel({ channelId }: { channelId: string }) {
       points: (data?.downloads ?? []).map((d) => ({ ts: d.day, value: d.requests })),
     },
   ]
+  const bytesSeries: ChartSeries[] = [
+    {
+      key: 'bytes',
+      name: t('clientStats.downloadBytes', '下载字节'),
+      points: (data?.downloads ?? []).map((d) => ({ ts: d.day, value: d.bytes })),
+    },
+  ]
   const maxIpReq = Math.max(1, ...(data?.topIps ?? []).map((r) => r.count))
 
   // FR-356：共享 KPI 解析，禁止 stats.successRate（HTTP）冒充更新成功率。
@@ -89,8 +96,13 @@ export default function ClientStatsPanel({ channelId }: { channelId: string }) {
         </Select>
       </div>
 
-      {/* 数字卡：活跃客户端 / 更新成功率 / fail-static 率 / 回退率（FR-356 字典） */}
+      {/* 数字卡：FR-357 展示更新绝对数；率仍完全复用 FR-356 口径。 */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <StatCard label={t('clientStats.updateTotal', '更新总次数')} value={obs ? String(obs.summary.updateTotal) : '—'} />
+        <StatCard label={t('clientStats.updateSuccess', '更新成功')} value={obs ? String(obs.summary.updateSuccess) : '—'} />
+        <StatCard label={t('clientStats.updateFailStatic', 'fail-static')} value={obs ? String(obs.summary.updateFailStatic) : '—'} />
+        <StatCard label={t('clientStats.updateRolledBack', '已回退')} value={obs ? String(obs.summary.updateRolledBack) : '—'} />
+        <StatCard label={t('clientStats.updateError', '更新错误')} value={obs ? String(obs.summary.updateError) : '—'} />
         <StatCard
           label={t(KPI_I18N.activeClients, '活跃客户端')}
           value={String(active.value)}
@@ -101,15 +113,8 @@ export default function ClientStatsPanel({ channelId }: { channelId: string }) {
           value={formatKpiRate(updateRates.successRate)}
           hint={updateRates.source === 'none' ? t(KPI_I18N.rateUnavailable, '需遥测窗口') : undefined}
         />
-        <StatCard
-          label={t(KPI_I18N.updateFailStaticRate, 'fail-static 率')}
-          value={formatKpiRate(updateRates.failStaticRate)}
-          hint={t(KPI_I18N.updateFailStaticHint, '断网兜底启动')}
-        />
-        <StatCard
-          label={t(KPI_I18N.updateRollbackRate, '回退率')}
-          value={formatKpiRate(updateRates.rollbackRate)}
-        />
+        <StatCard label={t(KPI_I18N.updateFailStaticRate, 'fail-static 率')} value={formatKpiRate(updateRates.failStaticRate)} hint={t(KPI_I18N.updateFailStaticHint, '断网兜底启动')} />
+        <StatCard label={t(KPI_I18N.updateRollbackRate, '回退率')} value={formatKpiRate(updateRates.rollbackRate)} />
       </div>
 
       {/* 下载请求趋势（FR-095；标签语义=请求次数，非更新成功） */}
@@ -121,6 +126,13 @@ export default function ClientStatsPanel({ channelId }: { channelId: string }) {
             valueFormatter={(v) => String(Math.round(v))}
             emptyHint={t('clientStats.empty', '暂无数据')}
           />
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <h3 className="text-sm font-medium">{t('clientStats.downloadBytesTrend', '下载字节趋势')}</h3>
+        <div className="border rounded-lg p-3">
+          <TimeSeriesChart series={bytesSeries} valueFormatter={formatBytes} emptyHint={t('clientStats.empty', '暂无数据')} />
         </div>
       </section>
 

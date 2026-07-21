@@ -9,6 +9,8 @@ export interface ClientDistEvent {
   id: number
   channelId: string
   machineId: string
+  playerName?: string
+  coreVersion?: string
   ip: string
   /** manifest | artifact。 */
   kind: string
@@ -107,6 +109,30 @@ export interface ClientDistRealtime {
   topIps1h: StatsIP[]
 }
 
+export interface ClientDistErrorCount {
+  errCode: string
+  count: number
+}
+
+export interface ClientDistFailureSample {
+  id: number
+  time: string
+  channelId: string
+  kind: string
+  errCode: string
+  errReason: string
+  status: number
+  ip: string
+  machineId: string
+}
+
+export interface ClientDistErrorSummary {
+  from: string
+  to: string
+  topErrors: ClientDistErrorCount[]
+  samples: ClientDistFailureSample[]
+}
+
 /**
  * 客户端分发明细事件检索（FR-093/249 兼容旧端点）：**平台管理员**端点。
  * 非管理员经 `enabled=false` 不发起请求；403 快速失败不重试。
@@ -198,6 +224,22 @@ export function useClientDistEventDetail(id: number | null, enabled = true) {
       return data
     },
     enabled: enabled && !!id,
+    retry: false,
+  })
+}
+
+/** 查询错误码 TopN 与最近失败样例（FR-357）。 */
+export function useClientDistErrorSummary(params: { channelId?: string; range: string; enabled?: boolean }) {
+  const { channelId, range, enabled = true } = params
+  return useQuery({
+    queryKey: ['client-dist-error-summary', channelId ?? 'all', range],
+    queryFn: async () => {
+      const { data } = await api.get<ClientDistErrorSummary>('/client-dist/error-summary', {
+        params: compactParams({ channelId, range }),
+      })
+      return data
+    },
+    enabled,
     retry: false,
   })
 }

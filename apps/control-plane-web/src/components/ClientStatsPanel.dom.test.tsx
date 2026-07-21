@@ -31,11 +31,16 @@ describe('ClientStatsPanel（mock 假后端，FR-219/356）', () => {
     expect(screen.getByText('活跃客户端')).toBeInTheDocument()
     expect(screen.getByText('人次近似')).toBeInTheDocument()
 
-    // 更新成功率（91.7%）与 fail-static 率（2.8%）数字卡。
+    // 更新绝对数与率并列，且下载 bytes 有独立趋势。
+    expect(screen.getByText('更新总次数')).toBeInTheDocument()
+    expect(screen.getByText('360')).toBeInTheDocument()
+    expect(screen.getByText('更新成功')).toBeInTheDocument()
+    expect(screen.getByText('330')).toBeInTheDocument()
     expect(screen.getByText('更新成功率')).toBeInTheDocument()
     expect(screen.getByText('fail-static 率')).toBeInTheDocument()
     expect(screen.getByText('91.7%')).toBeInTheDocument()
     expect(screen.getByText('2.8%')).toBeInTheDocument()
+    expect(screen.getByText('下载字节趋势')).toBeInTheDocument()
 
     // 平台分布段落渲染并出现 Windows 行。
     expect(screen.getByText('平台分布')).toBeInTheDocument()

@@ -10,6 +10,7 @@
 
 ### 新增
 - **客户端分发 KPI 口径与共享语义（FR-356，开发中）**：前端 `lib/client-dist-kpi` 统一定义活跃客户端精确|近似、更新成功率/fail-static/回退率与请求成功率语义；频道统计 Tab 与分发监控统计 Tab 共用标签与脚注，禁止用 HTTP 请求成功率冒充更新成功率；API 文档补充 KPI 字典交叉说明。
+- **分发统计与监控信息加厚 + 分布钻取（FR-357，开发中）**：新增 `GET /client-dist/error-summary` 错误码 TopN/失败样例；监控 Tab 接错误摘要与失败样例；统计区补下载 bytes 趋势与 KPI 绝对数；分布/错误码可页内联动日志筛选；devmock 与 Go/vitest 覆盖。
 - **updater-core 遥测字段补齐与隐私契约（FR-360，开发中）**：遥测 body/落库补齐 `coreVersion`/`arch` 与 diagnostic 字段（javaVendor/locale/timezone/memoryTier）；安全日志详情带出新字段；管理端 `privacy-mask` 脱敏 machineId/installId/playerName；contract §4.3 与 API 同步；旧客户端缺字段仍 202。
 - **Docker Compose 部署可跑通（FR-354）**：修正 `docker-compose.yml` Worker 环境变量为 `JIANMANAGER_CONTROL_PLANE_GRPC`；兼容旧键 `JIANMANAGER_CONTROL_PLANE`；Worker 数据卷收口数据根；`Dockerfile.control-plane` 补齐 monorepo 构建上下文（tsconfig/eslint/devmock/`version.go`）；`docs/DEPLOY.md` §11。
 - **Control Plane 一键安装脚本（FR-355）**：`scripts/install-cp.sh` / `install-cp.ps1`（OS/arch 探测、Releases 下载、失败中文报错、可选 `--start`）；`INSTALL_CP_TEST=1` 资产名自检。

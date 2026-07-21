@@ -71,7 +71,8 @@ describe('ClientDistMonitoringPage（FR-265 四 Tab）', () => {
     expect(await screen.findByText('近 1h 错误')).toBeInTheDocument()
     expect(screen.getByText('近 24h 请求速率')).toBeInTheDocument()
     expect(screen.getByText('最近错误请求')).toBeInTheDocument()
-    expect(screen.getByText('INVALID_CLIENT_KEY')).toBeInTheDocument()
+    // 监控 Tab 同时展示最近错误与错误码 TopN，错误码可出现多次
+    expect(screen.getAllByText('INVALID_CLIENT_KEY').length).toBeGreaterThanOrEqual(1)
   })
 
   it('③ 日志 Tab：分页事件表出数，并可打开脱敏 Header 详情', async () => {
@@ -111,13 +112,35 @@ describe('ClientDistMonitoringPage（FR-265 四 Tab）', () => {
     expect(row).not.toBeNull()
     await user.click(within(row as HTMLElement).getByRole('button', { name: '看日志' }))
 
-    expect(await screen.findByText('已从客户端维度联动过滤日志：')).toBeInTheDocument()
+    expect(await screen.findByText('已联动过滤日志：')).toBeInTheDocument()
     expect(screen.getByText('machine=m-aaaa')).toBeInTheDocument()
     expect(screen.getByText('m-aaaa')).toBeInTheDocument()
     expect(screen.queryByText('m-bbbb')).not.toBeInTheDocument()
   })
 
-  it('⑤ 非平台管理员：整页降级为权限提示，且不发起平台级统计请求', async () => {
+  it('⑤ 错误码 TopN 可点击进入日志并按错误码过滤', async () => {
+    loginAs(ADMIN_TOKEN, 1)
+    const user = userEvent.setup()
+    renderWithProviders(<ClientDistMonitoringPage />)
+    await screen.findByText('请求成功率')
+
+    await user.click(screen.getByRole('tab', { name: /监控/ }))
+    const topErrors = await screen.findByText('错误码 Top 10')
+    const panel = topErrors.closest('[data-slot="panel"]') ?? topErrors.parentElement
+    expect(panel).not.toBeNull()
+    await user.click(within(panel as HTMLElement).getByRole('button', { name: /INVALID_CLIENT_KEY/ }))
+
+    expect(await screen.findByText('已联动过滤日志：')).toBeInTheDocument()
+    expect(screen.getByText('errCode=INVALID_CLIENT_KEY')).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '玩家名' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: 'Core 版本' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '字节' })).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '耗时' })).toBeInTheDocument()
+    expect(screen.getAllByText('INVALID_CLIENT_KEY').length).toBeGreaterThanOrEqual(1)
+    expect(screen.queryByText('ARTIFACT_NOT_FOUND')).not.toBeInTheDocument()
+  })
+
+  it('⑥ 非平台管理员：整页降级为权限提示，且不发起平台级统计请求', async () => {
     loginAs(MEMBER_TOKEN, 2)
     const statsRequests = countStatsRequests()
     try {
@@ -132,7 +155,7 @@ describe('ClientDistMonitoringPage（FR-265 四 Tab）', () => {
     }
   })
 
-  it('⑥ 端点错误：当前 Tab 降级为错误态、不崩溃', async () => {
+  it('⑦ 端点错误：当前 Tab 降级为错误态、不崩溃', async () => {
     loginAs(ADMIN_TOKEN, 1)
     mockInject('get', '/client-dist/stats', { kind: 'status', status: 500 })
     renderWithProviders(<ClientDistMonitoringPage />)

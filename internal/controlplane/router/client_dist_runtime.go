@@ -33,6 +33,7 @@ func NewClientDistRuntimeHandler(runtime *service.ClientRuntimeStateService, tra
 func (h *ClientDistRuntimeHandler) RegisterAdminRoutes(rg *gin.RouterGroup) {
 	rg.GET("/client-dist/clients", h.Clients)
 	rg.GET("/client-dist/realtime", h.Realtime)
+	rg.GET("/client-dist/error-summary", h.ErrorSummary)
 	rg.GET("/client-dist/events/search", h.SearchEvents)
 	rg.GET("/client-dist/events/:id", h.EventDetail)
 }
@@ -106,6 +107,28 @@ func (h *ClientDistRuntimeHandler) Realtime(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询分发实时状态失败"})
 		return
 	}
+	c.JSON(http.StatusOK, out)
+}
+
+// ErrorSummary 查询错误码 TopN 与失败样例（FR-357）。
+func (h *ClientDistRuntimeHandler) ErrorSummary(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	from, to, ok := parseObsRange(c)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "range 非法"})
+		return
+	}
+	out, err := h.tracking.ErrorSummary(service.ClientDistErrorSummaryQuery{
+		ChannelID: c.Query("channelId"), From: from, To: to,
+		TopN: parseIntDefault(c.Query("topN"), 10), SampleLimit: parseIntDefault(c.Query("sampleLimit"), 20),
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询错误摘要失败"})
+		return
+	}
+	h.recordAudit(c, "client_dist_error_summary.query", map[string]any{"channelId": c.Query("channelId"), "range": c.DefaultQuery("range", "7d")})
 	c.JSON(http.StatusOK, out)
 }
 

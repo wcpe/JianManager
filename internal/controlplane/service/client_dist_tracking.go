@@ -62,6 +62,8 @@ type ClientDistEventInput struct {
 // ClientDistEventDetail 单条分发请求详情（FR-265）。
 type ClientDistEventDetail struct {
 	model.ClientDistEvent
+	PlayerName     string            `json:"playerName"`
+	CoreVersion    string            `json:"coreVersion"`
 	RequestBody     string            `json:"requestBody"`
 	ResponseBody    string            `json:"responseBody"`
 	RequestHeaders  map[string]string `json:"requestHeaders"`
@@ -80,12 +82,61 @@ type ClientDistEventSearchFilter struct {
 	PageSize       int
 }
 
-// ClientDistEventPage 分页检索响应（FR-265）。
+// ClientDistEventView 分发事件与运行态诊断字段（FR-357，运行态字段为尽力关联）。
+type ClientDistEventView struct {
+	model.ClientDistEvent
+	PlayerName string `json:"playerName"`
+	CoreVersion string `json:"coreVersion"`
+}
+
+// ClientDistEventPage 分页检索响应（FR-265/357）。
 type ClientDistEventPage struct {
-	Items    []model.ClientDistEvent `json:"items"`
-	Page     int                     `json:"page"`
-	PageSize int                     `json:"pageSize"`
-	Total    int64                   `json:"total"`
+	Items    []ClientDistEventView `json:"items"`
+	Page     int                   `json:"page"`
+	PageSize int                   `json:"pageSize"`
+	Total    int64                 `json:"total"`
+}
+
+// ClientDistErrorSummaryQuery 错误摘要查询条件（FR-357）。
+type ClientDistErrorSummaryQuery struct {
+	ChannelID string
+	From      time.Time
+	To        time.Time
+	TopN      int
+	SampleLimit int
+}
+
+// ClientDistErrorCount 错误码聚合项。
+type ClientDistErrorCount struct {
+	ErrCode string `json:"errCode"`
+	Count   int64  `json:"count"`
+}
+
+type errorCountGroup struct {
+	ErrCode string
+	Status  int
+	Count   int64
+}
+
+// ClientDistFailureSample 最近失败样例，敏感维度在服务端脱敏。
+type ClientDistFailureSample struct {
+	ID        uint      `json:"id"`
+	Time      time.Time `json:"time"`
+	ChannelID string    `json:"channelId"`
+	Kind      string    `json:"kind"`
+	ErrCode   string    `json:"errCode"`
+	ErrReason string    `json:"errReason"`
+	Status    int       `json:"status"`
+	IP        string    `json:"ip"`
+	MachineID string    `json:"machineId"`
+}
+
+// ClientDistErrorSummary 错误码 TopN 与最近失败样例。
+type ClientDistErrorSummary struct {
+	From      time.Time                 `json:"from"`
+	To        time.Time                 `json:"to"`
+	TopErrors []ClientDistErrorCount    `json:"topErrors"`
+	Samples   []ClientDistFailureSample `json:"samples"`
 }
 
 // ClientDistRealtimeQuery 近实时查询参数（FR-265）。
@@ -234,11 +285,34 @@ func (s *ClientDistTrackingService) SearchEvents(f ClientDistEventSearchFilter) 
 	if err := q.Count(&total).Error; err != nil {
 		return nil, fmt.Errorf("统计分发明细失败: %w", err)
 	}
-	var items []model.ClientDistEvent
-	if err := q.Order("created_at DESC").Offset((page - 1) * size).Limit(size).Find(&items).Error; err != nil {
+	var events []model.ClientDistEvent
+	if err := q.Order("created_at DESC").Offset((page - 1) * size).Limit(size).Find(&events).Error; err != nil {
 		return nil, fmt.Errorf("检索分发明细失败: %w", err)
 	}
+	items, err := s.enrichEventViews(events)
+	if err != nil {
+		return nil, fmt.Errorf("关联分发运行态失败: %w", err)
+	}
 	return &ClientDistEventPage{Items: items, Page: page, PageSize: size, Total: total}, nil
+}
+
+// ErrorSummary 聚合错误码 TopN 与最近失败样例（FR-357）。
+func (s *ClientDistTrackingService) ErrorSummary(q ClientDistErrorSummaryQuery) (*ClientDistErrorSummary, error) {
+	topN, sampleLimit := normalizeErrorSummaryLimits(q.TopN, q.SampleLimit)
+	base := s.errorEventQuery(q)
+	var groups []errorCountGroup
+	if err := base.Session(&gorm.Session{}).Select("err_code, status, COUNT(*) AS count").Group("err_code, status").Scan(&groups).Error; err != nil {
+		return nil, fmt.Errorf("聚合分发错误码失败: %w", err)
+	}
+	counts := mergeErrorCounts(groups)
+	if len(counts) > topN {
+		counts = counts[:topN]
+	}
+	var events []model.ClientDistEvent
+	if err := base.Session(&gorm.Session{}).Order("created_at DESC").Limit(sampleLimit).Find(&events).Error; err != nil {
+		return nil, fmt.Errorf("查询分发失败样例失败: %w", err)
+	}
+	return &ClientDistErrorSummary{From: q.From, To: q.To, TopErrors: counts, Samples: failureSamples(events)}, nil
 }
 
 // GetEventDetail 返回单条明细与脱敏 header（FR-265）。
@@ -247,8 +321,14 @@ func (s *ClientDistTrackingService) GetEventDetail(id uint) (*ClientDistEventDet
 	if err := s.db.First(&ev, id).Error; err != nil {
 		return nil, err
 	}
+	views, err := s.enrichEventViews([]model.ClientDistEvent{ev})
+	if err != nil {
+		return nil, err
+	}
 	return &ClientDistEventDetail{
 		ClientDistEvent: ev,
+		PlayerName:      views[0].PlayerName,
+		CoreVersion:     views[0].CoreVersion,
 		RequestBody:     ev.RequestBody,
 		ResponseBody:    ev.ResponseBody,
 		RequestHeaders:  parseHeaderJSON(ev.RequestHeadersJSON),
@@ -327,6 +407,119 @@ func (s *ClientDistTrackingService) applyEventFilter(q *gorm.DB, f ClientDistEve
 		q = q.Where("created_at <= ?", *f.Until)
 	}
 	return q
+}
+
+func (s *ClientDistTrackingService) enrichEventViews(events []model.ClientDistEvent) ([]ClientDistEventView, error) {
+	items := make([]ClientDistEventView, len(events))
+	machines := make([]string, 0, len(events))
+	for i, event := range events {
+		items[i].ClientDistEvent = event
+		if event.MachineID != "" {
+			machines = append(machines, event.MachineID)
+		}
+	}
+	if len(machines) == 0 {
+		return items, nil
+	}
+	var states []model.ClientRuntimeState
+	if err := s.db.Where("machine_id IN ?", machines).Find(&states).Error; err != nil {
+		return nil, err
+	}
+	byIdentity := make(map[string]model.ClientRuntimeState, len(states))
+	for _, state := range states {
+		byIdentity[state.ChannelID+"\x00"+state.MachineID] = state
+	}
+	for i := range items {
+		state := byIdentity[items[i].ChannelID+"\x00"+items[i].MachineID]
+		items[i].PlayerName = state.PlayerName
+		items[i].CoreVersion = state.CoreVersion
+	}
+	return items, nil
+}
+
+func (s *ClientDistTrackingService) errorEventQuery(q ClientDistErrorSummaryQuery) *gorm.DB {
+	db := s.db.Model(&model.ClientDistEvent{}).Where("(status >= ? OR err_code != '')", 400)
+	if q.ChannelID != "" {
+		db = db.Where("channel_id = ?", q.ChannelID)
+	}
+	if !q.From.IsZero() {
+		db = db.Where("created_at >= ?", q.From)
+	}
+	if !q.To.IsZero() {
+		db = db.Where("created_at < ?", q.To)
+	}
+	return db
+}
+
+func normalizeErrorSummaryLimits(topN, samples int) (int, int) {
+	if topN <= 0 || topN > 50 {
+		topN = 10
+	}
+	if samples <= 0 || samples > 100 {
+		samples = 20
+	}
+	return topN, samples
+}
+
+func mergeErrorCounts(groups []errorCountGroup) []ClientDistErrorCount {
+	merged := make(map[string]int64, len(groups))
+	for _, group := range groups {
+		code := group.ErrCode
+		if code == "" {
+			code = fmt.Sprintf("HTTP_%d", group.Status)
+		}
+		merged[code] += group.Count
+	}
+	out := make([]ClientDistErrorCount, 0, len(merged))
+	for code, count := range merged {
+		out = append(out, ClientDistErrorCount{ErrCode: code, Count: count})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count == out[j].Count {
+			return out[i].ErrCode < out[j].ErrCode
+		}
+		return out[i].Count > out[j].Count
+	})
+	return out
+}
+
+func failureSamples(events []model.ClientDistEvent) []ClientDistFailureSample {
+	out := make([]ClientDistFailureSample, 0, len(events))
+	for _, event := range events {
+		code := event.ErrCode
+		if code == "" {
+			code = fmt.Sprintf("HTTP_%d", event.Status)
+		}
+		out = append(out, ClientDistFailureSample{
+			ID: event.ID, Time: event.CreatedAt, ChannelID: event.ChannelID, Kind: event.Kind,
+			ErrCode: code, ErrReason: event.ErrReason, Status: event.Status,
+			IP: maskEventIP(event.IP), MachineID: maskEventMachine(event.MachineID),
+		})
+	}
+	return out
+}
+
+func maskEventMachine(value string) string {
+	if value == "" {
+		return ""
+	}
+	if len(value) <= 10 {
+		return "***"
+	}
+	return value[:6] + "…" + value[len(value)-4:]
+}
+
+func maskEventIP(value string) string {
+	parts := strings.Split(value, ".")
+	if len(parts) == 4 {
+		parts[3] = "*"
+		return strings.Join(parts, ".")
+	}
+	parts = strings.Split(value, ":")
+	if len(parts) > 2 {
+		return strings.Join(parts[:2], ":") + ":*"
+	}
+	return value
 }
 
 func (s *ClientDistTrackingService) applyRuntimeFilters(q *gorm.DB, f ClientDistEventSearchFilter) *gorm.DB {

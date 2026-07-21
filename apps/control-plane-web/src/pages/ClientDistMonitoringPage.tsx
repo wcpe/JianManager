@@ -4,10 +4,12 @@ import { Activity, AlertTriangle, Clock, Download, RefreshCw, Search, Server, Us
 import { useClientChannels } from '@/api/clientChannels'
 import { useClientStats, type ClientDistStats, type StatsIP } from '@/api/clientStats'
 import {
+  useClientDistErrorSummary,
   useClientDistEventDetail,
   useClientDistEventSearch,
   useClientDistRealtime,
   type ClientDistEvent,
+  type ClientDistErrorSummary,
   type ClientDistEventDetail,
   type ClientDistRealtime,
 } from '@/api/clientDistEvents'
@@ -59,9 +61,12 @@ type PageTab = 'statistics' | 'monitor' | 'logs' | 'clients'
 type RuntimeLink = {
   machineId?: string
   runtimeVersion?: number
+  version?: number
   coreVersion?: string
   platform?: string
   lag?: number
+  errCode?: string
+  ip?: string
 }
 
 function toApiRange(r: MetricRange): string {
@@ -233,7 +238,7 @@ function targetOf(e: ClientDistEvent): string {
   return e.version > 0 ? `v${e.version}` : '—'
 }
 
-function StatisticsTab({ stats, isError, isLoading }: { stats?: ClientDistStats; isError: boolean; isLoading: boolean }) {
+function StatisticsTab({ stats, isError, isLoading, onLink }: { stats?: ClientDistStats; isError: boolean; isLoading: boolean; onLink: (link: RuntimeLink) => void }) {
   const { t } = useTranslation()
   // FR-356：统计 Tab 仅展示「请求侧」KPI；请求成功率≠更新成功率（后者在客户端 Tab / 频道统计）。
   const active = resolveActiveClients(null, stats)
@@ -244,6 +249,13 @@ function StatisticsTab({ stats, isError, isLoading }: { stats?: ClientDistStats;
       key: 'requests',
       name: t(KPI_I18N.downloadRequests, t('clientDistMonitor.totalRequests')),
       points: (stats?.downloads ?? []).map((p) => ({ ts: p.day, value: p.requests })),
+    },
+  ]
+  const bytesSeries: ChartSeries[] = [
+    {
+      key: 'bytes',
+      name: t(KPI_I18N.downloadBytes, t('clientDistMonitor.downloadBytes')),
+      points: (stats?.downloads ?? []).map((p) => ({ ts: p.day, value: p.bytes })),
     },
   ]
   const versionBuckets = distBuckets(stats?.versions ?? [], (v) => v.requests, (v) => `v${v.version}`)
@@ -276,17 +288,20 @@ function StatisticsTab({ stats, isError, isLoading }: { stats?: ClientDistStats;
           value={formatKpiRate(requestRates.failureRate, fmtRate(0))}
         />
       </div>
-      <TrendCard title={t(KPI_I18N.downloadTrend, t('clientDistMonitor.requestTrend'))} series={downloadSeries} valueFormatter={(v) => String(Math.round(v))} empty={isLoading ? t('common.loading') : t('clientDistMonitor.empty')} />
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <TrendCard title={t(KPI_I18N.downloadTrend, t('clientDistMonitor.requestTrend'))} series={downloadSeries} valueFormatter={(v) => String(Math.round(v))} empty={isLoading ? t('common.loading') : t('clientDistMonitor.empty')} />
+        <TrendCard title={t('clientDistMonitor.downloadBytesTrend')} series={bytesSeries} valueFormatter={fmtBytes} empty={isLoading ? t('common.loading') : t('clientDistMonitor.empty')} />
+      </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <DistPanel title={t('clientDistMonitor.versionDist')} buckets={versionBuckets} empty={t('clientDistMonitor.empty')} />
+        <LinkableDistPanel title={t('clientDistMonitor.versionDist')} buckets={versionBuckets} empty={t('clientDistMonitor.empty')} onPick={(key) => onLink({ version: Number(key.replace(/^v/, '')) })} />
         <DistPanel title={t('clientDistMonitor.resultDist')} buckets={resultBuckets} empty={t('clientDistMonitor.empty')} />
-        <DistPanel title={t('clientDistMonitor.topIps')} buckets={ipBuckets} empty={t('clientDistMonitor.empty')} />
+        <LinkableDistPanel title={t('clientDistMonitor.topIps')} buckets={ipBuckets} empty={t('clientDistMonitor.empty')} onPick={(ip) => onLink({ ip })} />
       </div>
     </div>
   )
 }
 
-function MonitorTab({ realtime, isError }: { realtime?: ClientDistRealtime; isError: boolean }) {
+function MonitorTab({ realtime, errors, isError, onLink }: { realtime?: ClientDistRealtime; errors?: ClientDistErrorSummary; isError: boolean; onLink: (link: RuntimeLink) => void }) {
   const { t } = useTranslation()
   const series = realtime?.requestRate24h ?? []
   const requestSeries: ChartSeries[] = [
@@ -295,6 +310,7 @@ function MonitorTab({ realtime, isError }: { realtime?: ClientDistRealtime; isEr
     { key: 'error', name: t('clientDistMonitor.errorRequests'), points: series.map((p) => ({ ts: p.ts, value: p.error })) },
   ]
   const ipBuckets = distBuckets(realtime?.topIps1h ?? [], (r: StatsIP) => r.count, (r: StatsIP) => r.ip || '—')
+  const errorBuckets = distBuckets(errors?.topErrors ?? [], (row) => row.count, (row) => row.errCode)
 
   if (isError) return <ErrorPanel title={t('clientDistMonitor.tabMonitor')} message={t('clientDistMonitor.loadError')} />
   return (
@@ -308,6 +324,12 @@ function MonitorTab({ realtime, isError }: { realtime?: ClientDistRealtime; isEr
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
         <TrendCard title={t('clientDistMonitor.requestRate24h')} series={requestSeries} valueFormatter={(v) => String(Math.round(v))} empty={t('clientDistMonitor.empty')} />
         <DistPanel title={t('clientDistMonitor.topIps1h')} buckets={ipBuckets} empty={t('clientDistMonitor.empty')} />
+      </div>
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        <LinkableDistPanel title={t('clientDistMonitor.errorTopN')} buckets={errorBuckets} empty={t('clientDistMonitor.noRecentErrors')} onPick={(errCode) => onLink({ errCode })} />
+        <Panel title={t('clientDistMonitor.failureSamples')}>
+          <FailureSampleTable rows={errors?.samples ?? []} onLink={onLink} />
+        </Panel>
       </div>
       <Panel title={t('clientDistMonitor.recentErrors')}>
         <RecentErrorTable rows={realtime?.recentErrors ?? []} />
@@ -345,6 +367,24 @@ function RecentErrorTable({ rows }: { rows: ClientDistRealtime['recentErrors'] }
           </TableRow>
         ))}
       </TableBody>
+    </Table>
+  )
+}
+
+function FailureSampleTable({ rows, onLink }: { rows: ClientDistErrorSummary['samples']; onLink: (link: RuntimeLink) => void }) {
+  const { t } = useTranslation()
+  if (rows.length === 0) return <p className="py-6 text-center text-sm text-muted-foreground">{t('clientDistMonitor.noRecentErrors')}</p>
+  return (
+    <Table>
+      <TableHeader><TableRow><TableHead>{t('clientDistMonitor.colTime')}</TableHead><TableHead>{t('clientDistMonitor.colChannel')}</TableHead><TableHead>{t('clientDistMonitor.colErrCode')}</TableHead><TableHead>{t('clientDistMonitor.colMachine')}</TableHead></TableRow></TableHeader>
+      <TableBody>{rows.map((row) => (
+        <TableRow key={row.id}>
+          <TableCell className="tabular-nums text-muted-foreground">{fmtTime(row.time)}</TableCell>
+          <TableCell>{row.channelId || '—'}</TableCell>
+          <TableCell><Button type="button" variant="link" size="xs" className="font-mono" onClick={() => onLink({ errCode: row.errCode })}>{row.errCode}</Button></TableCell>
+          <TableCell className="font-mono text-xs">{row.machineId || '—'}</TableCell>
+        </TableRow>
+      ))}</TableBody>
     </Table>
   )
 }
@@ -412,9 +452,12 @@ function LinkedFilterHint({ link }: { link: RuntimeLink }) {
       <span>{t('clientDistMonitor.linkedFilter')}</span>
       {link.machineId && <Badge variant="outline" className="font-mono">machine={link.machineId}</Badge>}
       {link.runtimeVersion !== undefined && <Badge variant="outline">version=v{link.runtimeVersion}</Badge>}
+      {link.version !== undefined && <Badge variant="outline">version=v{link.version}</Badge>}
       {link.coreVersion && <Badge variant="outline">core={link.coreVersion}</Badge>}
       {link.platform && <Badge variant="outline">platform={platformLabel(link.platform)}</Badge>}
       {link.lag !== undefined && <Badge variant="outline">lag={link.lag}</Badge>}
+      {link.errCode && <Badge variant="outline" className="font-mono">errCode={link.errCode}</Badge>}
+      {link.ip && <Badge variant="outline" className="font-mono">ip={link.ip}</Badge>}
     </div>
   )
 }
@@ -427,10 +470,14 @@ function EventTable({ events, onDetail }: { events: ClientDistEvent[]; onDetail:
         <TableRow>
           <TableHead>{t('clientDistMonitor.colTime')}</TableHead>
           <TableHead>{t('clientDistMonitor.colChannel')}</TableHead>
+          <TableHead>{t('clientDistMonitor.colPlayer', '玩家名')}</TableHead>
           <TableHead>{t('clientDistMonitor.colMachine')}</TableHead>
+          <TableHead>{t('clientDistMonitor.colCoreVersion', 'Core 版本')}</TableHead>
           <TableHead>{t('clientDistMonitor.colKind')}</TableHead>
           <TableHead>{t('clientDistMonitor.colTarget')}</TableHead>
           <TableHead>{t('clientDistMonitor.colIp')}</TableHead>
+          <TableHead>{t('clientDistMonitor.colBytes', '字节')}</TableHead>
+          <TableHead>{t('clientDistMonitor.colDuration', '耗时')}</TableHead>
           <TableHead>{t('clientDistMonitor.colStatus')}</TableHead>
           <TableHead>{t('clientDistMonitor.colResult')}</TableHead>
           <TableHead>{t('clientDistMonitor.colErrCode')}</TableHead>
@@ -442,10 +489,14 @@ function EventTable({ events, onDetail }: { events: ClientDistEvent[]; onDetail:
           <TableRow key={e.id}>
             <TableCell className="tabular-nums text-muted-foreground">{fmtTime(e.createdAt)}</TableCell>
             <TableCell>{e.channelId || '—'}</TableCell>
+            <TableCell className="text-xs">{e.playerName || '—'}</TableCell>
             <TableCell className="font-mono text-xs">{e.machineId || '—'}</TableCell>
+            <TableCell className="font-mono text-xs">{e.coreVersion || '—'}</TableCell>
             <TableCell>{kindLabel(e.kind, t)}</TableCell>
             <TableCell className="font-mono text-xs">{targetOf(e)}</TableCell>
             <TableCell className="tabular-nums">{e.ip || '—'}</TableCell>
+            <TableCell className="tabular-nums">{e.bytes}</TableCell>
+            <TableCell className="tabular-nums">{e.durationMs}ms</TableCell>
             <TableCell className="tabular-nums">{e.status}</TableCell>
             <TableCell><ResultBadge status={e.status} /></TableCell>
             <TableCell>{e.errCode ? <Badge variant="outline" className="font-mono text-xs">{e.errCode}</Badge> : <span className="text-muted-foreground">—</span>}</TableCell>
@@ -623,9 +674,14 @@ export default function ClientDistMonitoringPage() {
   const statsQuery = useClientStats(channelId, toStatsDays(range), { enabled: isPlatformAdmin })
   const realtimeQuery = useClientDistRealtime({ channelId, enabled: isPlatformAdmin })
   const runtimeQuery = useClientRuntimeOverview({ channelId, range: toApiRange(range), enabled: isPlatformAdmin })
+  const errorSummaryQuery = useClientDistErrorSummary({
+    channelId,
+    range: toApiRange(range),
+    enabled: isPlatformAdmin && (tab === 'monitor' || tab === 'statistics'),
+  })
 
   const openLogsWithLink = (link: RuntimeLink) => {
-    setRuntimeLink(link)
+    setRuntimeLink((prev) => ({ ...prev, ...link }))
     setTab('logs')
   }
 
@@ -665,10 +721,20 @@ export default function ClientDistMonitoringPage() {
             <TabsTrigger value="clients"><Users className="size-3.5" />{t('clientDistMonitor.tabClients')}</TabsTrigger>
           </TabsList>
           <TabsContent value="statistics" className="space-y-4">
-            <StatisticsTab stats={statsQuery.data} isError={statsQuery.isError} isLoading={statsQuery.isLoading} />
+            <StatisticsTab
+              stats={statsQuery.data}
+              isError={statsQuery.isError}
+              isLoading={statsQuery.isLoading}
+              onLink={openLogsWithLink}
+            />
           </TabsContent>
           <TabsContent value="monitor" className="space-y-4">
-            <MonitorTab realtime={realtimeQuery.data} isError={realtimeQuery.isError} />
+            <MonitorTab
+              realtime={realtimeQuery.data}
+              errors={errorSummaryQuery.data}
+              isError={realtimeQuery.isError || errorSummaryQuery.isError}
+              onLink={openLogsWithLink}
+            />
           </TabsContent>
           <TabsContent value="logs" className="space-y-4">
             <LogsTab channelId={channelId} enabled={isPlatformAdmin} link={runtimeLink} onClearLink={() => setRuntimeLink({})} />

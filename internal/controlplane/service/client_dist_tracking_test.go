@@ -220,4 +220,28 @@ func TestClientDistTracking_RealtimeOverview(t *testing.T) {
 	require.Equal(t, "1.1.1.1", out.TopIPs1h[0].IP)
 }
 
+func TestClientDistTracking_ErrorSummaryAndRuntimeFields(t *testing.T) {
+	db := newTrackingDB(t)
+	svc := NewClientDistTrackingService(db)
+	now := time.Date(2026, 7, 21, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, db.Create(&model.ClientRuntimeState{ChannelID: "ch1", MachineID: "machine-abcdef1234", PlayerName: "VeryLongPlayerNameForMask", CoreVersion: "3.2.1"}).Error)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: "ch1", MachineID: "machine-abcdef1234", IP: "203.0.113.9", Kind: "manifest", Status: 401, ErrCode: "INVALID_CLIENT_KEY", ErrReason: "拉取密钥无效", CreatedAt: now.Add(-time.Hour)}).Error)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: "ch1", MachineID: "other-machine", IP: "198.51.100.8", Kind: "artifact", Status: 404, CreatedAt: now.Add(-2 * time.Hour)}).Error)
+	require.NoError(t, db.Create(&model.ClientDistEvent{ChannelID: "ch1", MachineID: "semantic-failure", IP: "192.0.2.1", Kind: "manifest", Status: 200, ErrCode: "SEMANTIC_ERROR", CreatedAt: now.Add(-3 * time.Hour)}).Error)
+
+	summary, err := svc.ErrorSummary(ClientDistErrorSummaryQuery{ChannelID: "ch1", From: now.Add(-24 * time.Hour), To: now, TopN: 10, SampleLimit: 20})
+	require.NoError(t, err)
+	require.Len(t, summary.TopErrors, 3)
+	require.Equal(t, "HTTP_404", summary.TopErrors[0].ErrCode)
+	require.Len(t, summary.Samples, 3)
+	require.Equal(t, "203.0.113.*", summary.Samples[0].IP)
+	require.Equal(t, "machin…1234", summary.Samples[0].MachineID)
+
+	page, err := svc.SearchEvents(ClientDistEventSearchFilter{ClientDistEventFilter: ClientDistEventFilter{ChannelID: "ch1", ErrCode: "INVALID_CLIENT_KEY"}, Page: 1, PageSize: 10})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	require.Equal(t, "VeryLongPlayerNameForMask", page.Items[0].PlayerName)
+	require.Equal(t, "3.2.1", page.Items[0].CoreVersion)
+}
+
 func intPtr(n int) *int { return &n }

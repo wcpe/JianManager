@@ -157,6 +157,8 @@ interface MockDistEvent {
   id: number
   channelId: string
   machineId: string
+  playerName?: string
+  coreVersion?: string
   ip: string
   kind: string
   version: number
@@ -515,6 +517,36 @@ function buildObservability(channelId: string, range: string) {
   }
 }
 
+function buildErrorSummary(channelId: string) {
+  const rows = distEvents
+    .list((e) => (!channelId || e.channelId === channelId) && (e.status >= 400 || !!e.errCode))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  const counts = new Map<string, number>()
+  for (const row of rows) {
+    const code = row.errCode || `HTTP_${row.status}`
+    counts.set(code, (counts.get(code) ?? 0) + 1)
+  }
+  return {
+    from: '2026-06-21T00:00:00Z',
+    to: '2026-06-28T23:59:59Z',
+    topErrors: [...counts.entries()]
+      .map(([errCode, count]) => ({ errCode, count }))
+      .sort((a, b) => b.count - a.count || a.errCode.localeCompare(b.errCode))
+      .slice(0, 10),
+    samples: rows.slice(0, 20).map((row) => ({
+      id: row.id,
+      time: row.createdAt,
+      channelId: row.channelId,
+      kind: row.kind,
+      errCode: row.errCode || `HTTP_${row.status}`,
+      errReason: row.errReason ?? '',
+      status: row.status,
+      ip: row.ip.replace(/\.[^.]+$/, '.*'),
+      machineId: row.machineId.length > 10 ? `${row.machineId.slice(0, 6)}…${row.machineId.slice(-4)}` : '***',
+    })),
+  }
+}
+
 function buildRealtime(channelId: string) {
   const rows = distEvents.list((e) => !channelId || e.channelId === channelId)
   const summaryRows = rows.filter((e) => e.createdAt >= '2026-06-28T09:05:00Z')
@@ -630,7 +662,12 @@ function searchDistEvents(url: URL) {
     const machines = new Set(states.map((s) => s.machineId))
     rows = rows.filter((e) => machines.has(e.machineId))
   }
-  return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+  return rows
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .map((event) => {
+      const state = runtimeStates.find((s) => s.channelId === event.channelId && s.machineId === event.machineId)
+      return { ...event, playerName: state?.playerName ?? '', coreVersion: state?.coreVersion ?? '' }
+    })
 }
 
 export const handlers = [
@@ -1159,6 +1196,14 @@ export const handlers = [
     if (denied) return denied
     const url = new URL(info.request.url)
     return HttpResponse.json(buildRealtime(url.searchParams.get('channelId') ?? ''))
+  }),
+
+  // 错误码 TopN 与失败样例（FR-357）。
+  domainRoute('get', '/client-dist/error-summary', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    return HttpResponse.json(buildErrorSummary(url.searchParams.get('channelId') ?? ''))
   }),
 
   // 客户端运行态聚合（FR-265）：运行态 + client_telemetry 更新结果 mock。
