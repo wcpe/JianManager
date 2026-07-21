@@ -199,17 +199,26 @@ Worker 幂等缓存：
 - [ ] 旧单 Bot和 50 Bot V1 会话回归全绿。
 - [ ] `go test ./internal/controlplane/... ./internal/worker/...`、相关 `go test -race`、bot-worker tests、proto 生成检查全绿。
 
-### 真机
+### 真机（当前交付门禁 · 缩比，用户 2026-07-21 确认）
 
-- [ ] 至少 10 个新版 Worker 均显示 botWorkerReady/max=50/available。
-- [ ] 对同一目标实例预检 500 Bot，计划为 10 个以上节点且每节点≤50。
-- [ ] 启动后目标服真实在线人数达到 500，CP 数据库 Bot 行数、批次计数和 Worker snapshot 一致。
-- [ ] 人为关闭一个发压 Worker，其他批次继续；页面/API 能区分成功与失败节点，不误报 500/500。
-- [ ] stop 后所有可达 Worker Bot 退出；不可达节点明确保留差距供 FR-354 后续归真。
+> 与 FR-274 有界窗口同理：机制与跨节点语义必须真链路验证；满规模 10×50/500 改为可选扩容验收，不阻塞本 FR 完成。
+
+- [x] ≥2 个新版 Worker 均显示 `botWorkerReady` / `maxBots=50` / available（真进程，非同进程 fake Worker）。
+- [x] 对同一目标实例预检 **>50** Bot，计划跨 **≥2** 节点且每节点≤声明容量（例：51→50+1）。
+- [x] 启动后目标服真实在线人数达到缩比目标（≥6；跨节点预检后至少再证一档真实连接），CP 库 Bot 行数、批次计数与 Worker 侧状态一致，**禁止**仅以 DB 行数冒充在线。
+- [x] 容量不足时 preflight `ready=false`（例：仅 3 Worker 时 500 不误放行）。
+- [x] stop 后可达 Worker 上 Bot 退出；会话/批次状态收敛。
+- [x] 人为关闭一个发压 Worker 时，其他批次/节点不伪造「全员成功」；API 可区分失败/缺口（缩比规模即可）。
+
+### 真机（可选满规模，不阻塞 FR-351 完成）
+
+- [ ] ≥10 个新版 Worker botWorkerReady/max=50/available。
+- [ ] 预检 500 Bot 为 10+ 节点且每节点≤50；启动后真实在线 500 且与批次/snapshot 一致。
+- [ ] 满规模故障注入与 stop 全链路。
 
 ## 6. 风险 / 待定
 
-- **10 个 Worker 的真实环境**：没有足够真机时只能标 partial，不能用同进程 fake Worker 代替最终验收。
+- **满规模环境**：10 Worker / 500 真连为可选扩容验收；缩比门禁已用户确认，禁止用同进程 fake Worker 代替「≥2 真 Worker」门槛。
 - **容量超卖**：软预留不是分布式锁；start 二次快检和 Worker 实际 admission 是最终防线。
 - **节点选择公平性**：首版确定性轮转，不做成本/地域/网络质量智能调度。
 - **Proto 冲突**：本 FR 必须一次铺齐 FR-358/354 所需 fleet/signal 字段；后续发现缺口先回协调分支改超级规格，不允许并行分支各改 proto。

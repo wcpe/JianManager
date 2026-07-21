@@ -1158,6 +1158,81 @@ func TestBotLoadExecutionStop_EmptyBaselineFinalizesMissingRuntime(t *testing.T)
 	require.Equal(t, []string{h.session.UUID}, subscriptions.Stopped())
 }
 
+// TestBotLoadExecutionStop_DispatchAutoRefreshesEmptyBaseline 覆盖真机缺陷：
+// stop RPC accepted 后 Worker 不再推 runtime 事件时，必须主动空 baseline 才能让 counts 归零。
+func TestBotLoadExecutionStop_DispatchAutoRefreshesEmptyBaseline(t *testing.T) {
+	h := newBotLoadExecutionHarness(t, []int{2}, 2, nil)
+	subscriptions := &botLoadExecutionSubscriptions{}
+	h.service.SetFleetSubscriptionManager(subscriptions)
+
+	client := &botFleetFakeClient{snapshot: &workerpb.GetBotFleetSnapshotResponse{ObservedAtUnixMs: h.clock.Now().UnixMilli()}}
+	runtime := NewBotFleetRuntimeService(h.db, h.clock)
+	coordinator := NewBotFleetRuntimeCoordinator(runtime, client, nil)
+	coordinator.SetRuntimeObserver(h.service)
+	h.service.SetFleetSnapshotRefresher(coordinator)
+
+	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
+	require.NoError(t, err)
+	require.NoError(t, h.db.Model(&model.Bot{}).Where("stress_session_id = ?", h.session.ID).
+		Updates(map[string]any{"status": model.BotStatusConnected, "load_batch_id": 1}).Error)
+	require.NoError(t, h.db.Model(&model.BotLoadBatch{}).Where("stress_session_id = ?", h.session.ID).
+		Update("connected_count", 2).Error)
+
+	// 模拟 stop 已 accepted 但无任何 runtime 事件：仅靠 DispatchStop 内嵌的 baseline 刷新收敛。
+	finished, err := h.service.Stop(context.Background(), h.session.ID)
+	require.NoError(t, err)
+	require.Equal(t, model.BotStressSessionStopped, finished.Status)
+	require.NotNil(t, finished.EndedAt)
+
+	var stopped int64
+	require.NoError(t, h.db.Model(&model.Bot{}).Where("stress_session_id = ? AND status = ?", h.session.ID, model.BotStatusStopped).Count(&stopped).Error)
+	require.Equal(t, int64(2), stopped)
+	var connected int64
+	require.NoError(t, h.db.Model(&model.Bot{}).Where("stress_session_id = ? AND status = ?", h.session.ID, model.BotStatusConnected).Count(&connected).Error)
+	require.Zero(t, connected)
+	var batch model.BotLoadBatch
+	require.NoError(t, h.db.Where("stress_session_id = ?", h.session.ID).First(&batch).Error)
+	require.Equal(t, model.BotLoadBatchStopped, batch.State)
+	require.Zero(t, batch.ConnectedCount)
+	require.Equal(t, []string{h.session.UUID}, subscriptions.Stopped())
+}
+
+// TestBotLoadExecutionStop_WaitingRuntimeRetryRefreshesWithoutStopRPC 保证 waiting_runtime 重入只刷新不重复 stop RPC。
+func TestBotLoadExecutionStop_WaitingRuntimeRetryRefreshesWithoutStopRPC(t *testing.T) {
+	h := newBotLoadExecutionHarness(t, []int{1}, 1, nil)
+	client := &botFleetFakeClient{snapshot: &workerpb.GetBotFleetSnapshotResponse{ObservedAtUnixMs: h.clock.Now().UnixMilli()}}
+	runtime := NewBotFleetRuntimeService(h.db, h.clock)
+	coordinator := NewBotFleetRuntimeCoordinator(runtime, client, nil)
+	coordinator.SetRuntimeObserver(h.service)
+	h.service.SetFleetSnapshotRefresher(coordinator)
+
+	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
+	require.NoError(t, err)
+	// 第一次 stop：不注入 refresher 路径前半段用无事件留下 waiting_runtime。
+	h.service.SetFleetSnapshotRefresher(nil)
+	stopping, err := h.service.Stop(context.Background(), h.session.ID)
+	require.NoError(t, err)
+	require.Equal(t, "waiting_runtime", botLoadStopIntentState(stopping.LastError))
+	stopRPCCalls := 0
+	for _, call := range h.dispatcher.Calls() {
+		for _, assignment := range call.request.Assignments {
+			if assignment.DesiredState == "stopped" {
+				stopRPCCalls++
+			}
+		}
+	}
+	require.Equal(t, 1, stopRPCCalls)
+
+	// 重装 refresher 后再次 Stop：不得再发 stop RPC，但空 baseline 必须收束。
+	h.service.SetFleetSnapshotRefresher(coordinator)
+	before := len(h.dispatcher.Calls())
+	finished, err := h.service.Stop(context.Background(), h.session.ID)
+	require.NoError(t, err)
+	require.Equal(t, before, len(h.dispatcher.Calls()), "waiting_runtime 重入不得重复 stop RPC")
+	require.Equal(t, model.BotStressSessionStopped, finished.Status)
+	require.Equal(t, model.BotStatusStopped, loadBotLoadBot(t, h.db, 1).Status)
+}
+
 func TestBotLoadExecutionReconcile_SnapshotConvergesPostRPCWriteFailure(t *testing.T) {
 	runner := &botLoadQueuedRunner{}
 	h := newBotLoadExecutionHarness(t, []int{2}, 2, runner)

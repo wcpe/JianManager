@@ -426,20 +426,33 @@ preflight 只验证：
 
 ## 17. 环境门与测试战略
 
-`.tmp/bot-load-acceptance/environment.json` 不入库，至少登记：
+`.tmp/bot-load-acceptance/environment.json` 不入库。
 
-- 10+ Worker 的 nodeId、版本、隧道、bot-worker feature、maxBots 和容量。
-- 目标服地址、offline 连接配置、凭据环境变量名和证据目录。
-- 所有主机时钟偏差不超过 250ms。
-- 可选 legacy 适配器配置单独登记，不是通用环境必填项。
+### 17.1 FR-351/352 当前交付门禁（缩比，2026-07-21 用户确认）
 
-唯一真机入口：
+至少登记：
+
+- ≥2 真 Worker 的 nodeId、bot-worker 版本、`maxBots`、隧道/直拨可达性。
+- 目标服（或 e2e 同口径 fake-MC）地址、offline 配置、证据目录。
+- 缩比真连规模（默认 ≥6 connected；跨节点分片预检 ≥51 planned 且 ≥2 batch）。
+
+本地/CI 真链路入口（非 mock）：
+
+```bash
+python .tmp/bot-load-acceptance/run_local_realpath.py
+```
+
+证据：`.tmp/bot-load-acceptance/evidence/`（含 `local-realpath-report.*`、`REAL-ACCEPTANCE-SUMMARY.md`）。
+
+### 17.2 满规模 / FR-359 harness（可选，不阻塞 FR-351/352 缩比完成）
+
+满规模登记 10+ Worker、500 Bot、时钟偏差≤250ms。唯一满规模入口（实现后）：
 
 ```bash
 JM_BOT_LOAD_ACCEPTANCE=1 JM_BOT_LOAD_ENV=.tmp/bot-load-acceptance/environment.json go test -tags=botloadacceptance ./internal/e2e -run '^TestBotLoadAcceptance$' -count=1 -timeout=4h
 ```
 
-已启用但环境缺失时必须输出机器可读 `blocked`，不得静默 Skip。harness 依次运行 stable/step/spike、故障注入、报告下载，并验证连接、命令发送、调度、屏障、Worker 健康、schedule lag 和 crash。ServerProbe、塔防或 TPS/MSPT 只在显式启用 legacy 场景时附加验证。
+已启用但环境缺失时必须输出机器可读 `blocked`，不得静默 Skip。ServerProbe、塔防或 TPS/MSPT 只在显式启用 legacy 场景时附加验证。
 
 ## 18. 实施依赖
 
@@ -447,7 +460,7 @@ JM_BOT_LOAD_ACCEPTANCE=1 JM_BOT_LOAD_ENV=.tmp/bot-load-acceptance/environment.js
 FR-351 → FR-352 → (FR-358 ∥ FR-354) → FR-359 → (FR-360 ∥ FR-361)
 ```
 
-FR-351/352 当前自动化完成但仍待真机；FR-358～361 不因规格重定向而自动变为已实现或已交付。
+FR-351/352：自动化 + **缩比真机门禁**（用户确认）后可完成本批；满规模 10×50/500 为可选扩容验收。FR-358～361 不因规格重定向而自动变为已实现或已交付。
 
 ## 19. 明确不做
 

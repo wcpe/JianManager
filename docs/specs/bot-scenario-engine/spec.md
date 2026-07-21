@@ -205,17 +205,21 @@ interface ScenarioAction {
 - [ ] 旧 orchestrationYaml 和旧无编排 behavior 回归全绿。
 - [ ] `npm test`、`task bot:test`、顶层 `task test` 均真实执行 bot-worker Node 单元/IPC/Fake-MC 测试并全绿；Go 相关 tests/race、bot-worker build/lint 全绿。
 
-### 真机（FR-352 必需）
+### 真机（FR-352 必需 · 缩比，用户 2026-07-21 确认）
 
-- [ ] Bot 在真实 MC 主城半径区域持续漫游，不越界、不原地抖动；`move_to_and_wait` 绕障并确认稳定抵达后才推进。
-- [ ] 通用 `send_command` 在真实连接中调用 `bot.chat`，同步抛错与未抛错结果符合 ADR-075；不要求服务端业务回执。
-- [ ] 500 Bot 使用不依赖业务插件的 Scenario V2 完成确定性 cohort、通用屏障和取消/超时链路，达到阈值后在 1 秒窗口内释放。
-- [ ] `find_entity/attack_until` 在真实实体环境中验证锁定、追击、攻击节奏、目标消失重选和取消；没有外部可信伤害信号时不得把 client attack 当成 damage/kills 成功证据。
-- [ ] `respawn_and_rejoin` 在不依赖房间插件的普通死亡/重生环境中按配置恢复入口，且不越过运行总截止时间。
+> 不依赖业务插件；满规模 500 cohort 改为可选。fake-MC 替身口径与 e2e FR-043 一致：平台 CP/Worker/bot-worker/进服为真链路。
 
-### 真机（可选 legacy，非 FR-352 交付门禁）
+- [x] Scenario V2 可创建并通过 preflight（`version:2` + cohort/steps 契约），非法字段返回 `BOT_LOAD_SCENARIO_INVALID` path 级错误。
+- [x] 缩比规模（≥3 Bot）使用不依赖业务插件的 Scenario V2 完成 start 后真实 connected；含 `send_command` 步骤进入运行路径。
+- [x] 命令成功边界符合 ADR-075：`bot.chat` 未同步抛错即发送成功语义，不要求服务端业务回执。
+- [ ] Bot 在真实 MC 主城半径区域持续漫游 / `move_to_and_wait` 绕障稳定抵达（需可导航世界；fake-MC 无地形时记 **partial**，不阻塞缩比门禁）。
+- [ ] `find_entity/attack_until` 真实实体锁敌追击（需实体环境；缺源记 partial）。
+- [ ] `respawn_and_rejoin` 普通死亡/重生环境（缺源记 partial）。
 
-仅当未来独立 ServerProbe/业务适配器实际提供关联信号时，附加验证 `room_joined`、`area_arrived`、可信 damage/kill、塔防开局和完整死亡重进业务链。缺少该数据源必须记为 `not_applicable`，不得阻塞 FR-352 完成。
+### 真机（可选满规模 / 可选 legacy，均不阻塞 FR-352 缩比完成）
+
+- [ ] 500 Bot Scenario V2 确定性 cohort、通用屏障与取消/超时，阈值后 1 秒窗口释放。
+- 仅当独立 ServerProbe/业务适配器提供关联信号时，附加验证 `room_joined`、`area_arrived`、可信 damage/kill、塔防开局等；缺源 `not_applicable`。
 
 ## 6. 风险 / 待定
 

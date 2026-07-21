@@ -64,6 +64,8 @@ func assembleBotLoadServices(db *gorm.DB, pool *cpgrpc.ClientPool, stableSecret 
 	coordinator.SetRuntimeObserver(execution)
 	subscriptions := service.NewBotFleetSubscriptionManager(coordinator)
 	execution.SetFleetSubscriptionManager(subscriptions)
+	// stop 派发后主动 RefreshSnapshot，避免 Worker 无事件时面板 connected 不收敛。
+	execution.SetFleetSnapshotRefresher(coordinator)
 	execution.SetScenarioRunLifecycle(scenarioEvents)
 	return &botLoadServiceBundle{
 		capacity: capacity, reservations: reservations, signer: signer,

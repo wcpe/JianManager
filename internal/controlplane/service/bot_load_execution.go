@@ -125,6 +125,11 @@ type ScenarioRunLifecycle interface {
 	StopRun(runID string)
 }
 
+// BotFleetSnapshotRefresher 在 stop 派发后主动拉取完整 baseline，避免无 runtime 事件时账本卡死。
+type BotFleetSnapshotRefresher interface {
+	RefreshSnapshot(ctx context.Context, nodeID uint, nodeUUID, sessionUUID string) error
+}
+
 // BotLoadExecutionService 实现 FR-351 的 start、后台 dispatch、批量 stop 与基础 snapshot 收敛。
 type BotLoadExecutionService struct {
 	db                *gorm.DB
@@ -136,6 +141,7 @@ type BotLoadExecutionService struct {
 	clock             BotLoadClock
 	resolver          *BotExecutorResolver
 	subscriptions     BotFleetSubscriptionController
+	snapshotRefresh   BotFleetSnapshotRefresher
 	scenarioLifecycle ScenarioRunLifecycle
 
 	startMu     sync.Mutex
@@ -173,6 +179,11 @@ func (s *BotLoadExecutionService) FleetSubscriptionManager() BotFleetSubscriptio
 		return nil
 	}
 	return s.subscriptions
+}
+
+// SetFleetSnapshotRefresher 注入 stop 后主动 baseline 刷新入口（通常为共享 Fleet 协调器）。
+func (s *BotLoadExecutionService) SetFleetSnapshotRefresher(refresher BotFleetSnapshotRefresher) {
+	s.snapshotRefresh = refresher
 }
 
 // SetScenarioRunLifecycle 注入场景内存任务的唯一停止收束入口。
@@ -1217,8 +1228,12 @@ func (s *BotLoadExecutionService) Stop(ctx context.Context, sessionID uint, reas
 	if err != nil {
 		return nil, err
 	}
+	// waiting_runtime：禁止重复 stop RPC，但必须允许主动 baseline 刷新以收敛无事件账本。
 	if botLoadStopIntentState(session.LastError) == "waiting_runtime" {
-		return session, nil
+		if err := s.refreshStopRuntimeSnapshots(ctx, sessionID); err != nil {
+			slog.Warn("Bot 负载 waiting_runtime 主动刷新 baseline 失败", "runId", sessionID, "error", err)
+		}
+		return s.loadSession(ctx, sessionID)
 	}
 	if err := s.submitLifecycle(sessionID, "stop", func() { s.runStopDispatch(sessionID) }); err != nil {
 		return nil, err
@@ -1301,7 +1316,7 @@ func botLoadStopSessionError(state, message string, reasons ...string) string {
 	return string(raw)
 }
 
-// DispatchStop 按执行节点和 50 条上限下发停止；accepted 只清派发错误，runtime 状态等待 Fleet 归真。
+// DispatchStop 按执行节点和 50 条上限下发停止；accepted 只清派发错误，随后主动 baseline 刷新归真 runtime。
 func (s *BotLoadExecutionService) DispatchStop(ctx context.Context, sessionID uint) error {
 	session, err := s.loadSession(ctx, sessionID)
 	if err != nil {
@@ -1326,7 +1341,49 @@ func (s *BotLoadExecutionService) DispatchStop(ctx context.Context, sessionID ui
 	if err := s.finishStopSession(ctx, sessionID); err != nil {
 		writeErrors = append(writeErrors, err)
 	}
+	// stop RPC 不伪造 runtime；Worker 无后续事件时依赖主动空 baseline 收敛（真机 Paper 已空而面板不归零的根因）。
+	if err := s.refreshStopRuntimeSnapshots(ctx, sessionID); err != nil {
+		writeErrors = append(writeErrors, err)
+	}
 	return errors.Join(writeErrors...)
+}
+
+// refreshStopRuntimeSnapshots 对会话各执行节点拉取完整 Fleet baseline，触发缺失 runtime → stopped 收敛。
+func (s *BotLoadExecutionService) refreshStopRuntimeSnapshots(ctx context.Context, sessionID uint) error {
+	if s == nil || s.snapshotRefresh == nil {
+		return nil
+	}
+	targets, err := s.loadSessionExecutorNodes(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, target := range targets {
+		if target.NodeID == 0 || target.NodeUUID == "" || target.SessionUUID == "" {
+			continue
+		}
+		if err := s.snapshotRefresh.RefreshSnapshot(ctx, target.NodeID, target.NodeUUID, target.SessionUUID); err != nil {
+			slog.Warn("Bot 负载 stop 后刷新 Fleet baseline 失败", "runId", sessionID, "nodeId", target.NodeID, "error", err)
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// loadSessionExecutorNodes 列出会话批次涉及的执行节点（用于 stop 后 baseline 刷新）。
+func (s *BotLoadExecutionService) loadSessionExecutorNodes(ctx context.Context, sessionID uint) ([]BotFleetSubscriptionTarget, error) {
+	var targets []BotFleetSubscriptionTarget
+	err := s.db.WithContext(ctx).Model(&model.BotLoadBatch{}).
+		Select("DISTINCT bot_load_batches.executor_node_id AS node_id, nodes.uuid AS node_uuid, sessions.uuid AS session_uuid").
+		Joins("JOIN bot_stress_sessions AS sessions ON sessions.id = bot_load_batches.stress_session_id AND sessions.deleted_at IS NULL").
+		Joins("JOIN nodes ON nodes.id = bot_load_batches.executor_node_id AND nodes.deleted_at IS NULL").
+		Where("bot_load_batches.stress_session_id = ?", sessionID).
+		Order("nodes.uuid ASC").
+		Scan(&targets).Error
+	if err != nil {
+		return nil, fmt.Errorf("查询 stop baseline 执行节点失败: %w", err)
+	}
+	return targets, nil
 }
 
 func (s *BotLoadExecutionService) runStopDispatch(sessionID uint) {
