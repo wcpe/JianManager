@@ -42,6 +42,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
 import { Textarea } from '@jianmanager/ui/components/textarea'
 import DangerConfirm from '@/components/DangerConfirm'
+import ClientDistExportButton from '@/components/ClientDistExportButton'
 import UntrustedFieldBadge from '@/components/UntrustedFieldBadge'
 import { buildClientDistHref, readClientDistQuery, updateClientDistQuery, type ClientDistQueryKey } from '@/lib/client-dist-query'
 import { useTabParam } from '@/lib/use-tab-param'
@@ -226,8 +227,20 @@ function LogsTab() {
           <Input className="w-36" placeholder="频道" value={query.channelId ?? ''} onChange={(e) => updateQuery({ channelId: e.target.value || null })} />
           <Input className="w-40" placeholder="Machine ID" value={query.machineId ?? ''} onChange={(e) => updateQuery({ machineId: e.target.value || null })} />
           <Input className="w-32" placeholder="玩家名" value={playerName} onChange={(e) => setPlayerName(e.target.value)} />
-          <Input className="w-36" placeholder="IP" value={query.ip ?? ''} onChange={(e) => updateQuery({ ip: e.target.value || null })} />
+<Input className="w-36" placeholder="IP" value={query.ip ?? ''} onChange={(e) => updateQuery({ ip: e.target.value || null })} />
           <Input className="w-40" placeholder="错误码" value={query.errCode ?? ''} onChange={(e) => updateQuery({ errCode: e.target.value || null })} />
+          <ClientDistExportButton
+            kind="security-logs"
+            filters={{
+              range: '7d',
+              type: type === 'all' ? undefined : type,
+              channelId: query.channelId,
+              machineId: query.machineId,
+              playerName: playerName || undefined,
+              ip: query.ip,
+              errCode: query.errCode,
+            }}
+          />
         </div>
       }
     >

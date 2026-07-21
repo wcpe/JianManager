@@ -3340,6 +3340,13 @@
     "noResults": "No matches",
     "useCustom": "Use \"{{value}}\""
   },
+  "clientDistExport": {
+    "button": "Export CSV",
+    "exporting": "Exporting…",
+    "success": "CSV download started",
+    "failed": "Failed to export CSV",
+    "rateLimited": "Export is rate-limited. Please retry in one minute"
+  },
   "clientDistMonitor": {
     "title": "Client Distribution Observability",
     "subtitle": "Statistics/monitor/logs use distribution requests only; the Clients tab uses runtime state and update telemetry only.",

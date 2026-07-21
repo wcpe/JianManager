@@ -3340,6 +3340,13 @@
     "noResults": "无匹配项",
     "useCustom": "使用 \"{{value}}\""
   },
+  "clientDistExport": {
+    "button": "导出 CSV",
+    "exporting": "导出中…",
+    "success": "CSV 已开始下载",
+    "failed": "导出 CSV 失败",
+    "rateLimited": "导出过于频繁，请一分钟后重试"
+  },
   "clientDistMonitor": {
     "title": "客户端分发观测",
     "subtitle": "统计/监控/日志只看分发请求；客户端 Tab 只看运行态与更新遥测，避免两类数据相互污染。",

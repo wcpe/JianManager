@@ -97,8 +97,10 @@ type Services struct {
 	ClientDistSecurity *service.ClientDistSecurityService
 	// ClientDistObservability 分发观测时序底座（FR-217，见 ADR-049）。
 	ClientDistObservability *service.ClientDistObservabilityService
-	RuntimeAssets           *service.RuntimeAssetsService
-	EnrollToken             *service.EnrollTokenService
+	// ClientDistExport 分发统计与安全日志 CSV 导出（FR-361）。
+	ClientDistExport *service.ClientDistExportService
+	RuntimeAssets    *service.RuntimeAssetsService
+	EnrollToken      *service.EnrollTokenService
 	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
 	EnrollInstall EnrollInstallConfig
 	Storage       *service.StorageService
@@ -479,6 +481,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// 客户端分发运行态与请求近实时观测（FR-265）：客户端 Tab 独立使用运行态表，日志/实时只读分发事件。
 		if svcs.ClientRuntimeState != nil && svcs.ClientDistTracking != nil {
 			NewClientDistRuntimeHandler(svcs.ClientRuntimeState, svcs.ClientDistTracking, svcs.ClientChannel, svcs.Audit, svcs.ClientDistSecurity).RegisterAdminRoutes(admin)
+		}
+
+		// 分发统计、请求事件与安全日志 CSV 导出（FR-361）：平台管理员、每用户一分钟冷却、最多一万行。
+		if svcs.ClientDistExport != nil {
+			NewClientDistExportHandler(svcs.ClientDistExport, svcs.Audit).RegisterRoutes(admin)
 		}
 
 		// 客户端更新器接入引导：内嵌 wedge/updater-core jar 版本查询 + 下载（FR-107）。

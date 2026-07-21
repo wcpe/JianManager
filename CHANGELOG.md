@@ -13,6 +13,7 @@
 - **分发统计与监控信息加厚 + 分布钻取（FR-357，开发中）**：新增 `GET /client-dist/error-summary` 错误码 TopN/失败样例；监控 Tab 接错误摘要与失败样例；统计区补下载 bytes 趋势与 KPI 绝对数；分布/错误码可页内联动日志筛选；devmock 与 Go/vitest 覆盖。
 - **安全中心研判处置闭环 + 频道安全摘要（FR-358，开发中）**：画像详情全量字段/风险时间线；事件行「封禁 IP」+ DangerConfirm；`UntrustedFieldBadge` 不可信角标；`GET /client-channels/:id/security-summary` 与频道工作台安全摘要条深链安全中心；devmock/Go/vitest 覆盖。
 - **updater-core 遥测字段补齐与隐私契约（FR-360，开发中）**：遥测 body/落库补齐 `coreVersion`/`arch` 与 diagnostic 字段（javaVendor/locale/timezone/memoryTier）；安全日志详情带出新字段；管理端 `privacy-mask` 脱敏 machineId/installId/playerName；contract §4.3 与 API 同步；旧客户端缺字段仍 202。
+- **分发统计与安全日志 CSV 导出（FR-361，开发中）**：新增平台管理员 `GET /client-dist/export`，支持 KPI 汇总、分发事件与安全全量日志三类 CSV；当前页面筛选透传、UTF-8 BOM/camelCase 表头、服务端隐私脱敏、每用户一分钟限流、10000 行截断标记与 `client_dist.export.csv` 审计；分发监控和安全中心接入导出按钮，devmock 与 Go/Vitest 覆盖。
 - **Docker Compose 部署可跑通（FR-354）**：修正 `docker-compose.yml` Worker 环境变量为 `JIANMANAGER_CONTROL_PLANE_GRPC`；兼容旧键 `JIANMANAGER_CONTROL_PLANE`；Worker 数据卷收口数据根；`Dockerfile.control-plane` 补齐 monorepo 构建上下文（tsconfig/eslint/devmock/`version.go`）；`docs/DEPLOY.md` §11。
 - **Control Plane 一键安装脚本（FR-355）**：`scripts/install-cp.sh` / `install-cp.ps1`（OS/arch 探测、Releases 下载、失败中文报错、可选 `--start`）；`INSTALL_CP_TEST=1` 资产名自检。
 - **对外部署文档与治理**：README 安装步骤 + MSW mock 界面截图（`docs/screenshots/*.jpg`）；根目录 `SECURITY.md`；治理戳记对账记录。

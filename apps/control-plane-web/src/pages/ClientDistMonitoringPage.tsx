@@ -47,6 +47,7 @@ import {
 import type { DistBucket } from '@/lib/platform-stats'
 import { buildClientDistHref, readClientDistQuery, updateClientDistQuery } from '@/lib/client-dist-query'
 import { useTabParam } from '@/lib/use-tab-param'
+import ClientDistExportButton from '@/components/ClientDistExportButton'
 import {
   KPI_I18N,
   activeClientsHintKey,
@@ -391,7 +392,7 @@ function FailureSampleTable({ rows, onLink }: { rows: ClientDistErrorSummary['sa
   )
 }
 
-function LogsTab({ channelId, enabled, link, onClearLink }: { channelId?: string; enabled: boolean; link: RuntimeLink; onClearLink: () => void }) {
+function LogsTab({ channelId, range, enabled, link, onClearLink }: { channelId?: string; range: string; enabled: boolean; link: RuntimeLink; onClearLink: () => void }) {
   const { t } = useTranslation()
   const [outcome, setOutcome] = useState<string>(ALL)
   const [kind, setKind] = useState<string>(ALL)
@@ -426,6 +427,19 @@ function LogsTab({ channelId, enabled, link, onClearLink }: { channelId?: string
         </SelectContent>
       </Select>
       {hasLink && <Button type="button" variant="outline" size="sm" onClick={onClearLink}>{t('clientDistMonitor.clearLink')}</Button>}
+      <ClientDistExportButton
+        kind="dist-events"
+        filters={{
+          channelId,
+          range,
+          machineId: link.machineId,
+          version: link.version,
+          errCode: link.errCode,
+          ip: link.ip,
+          eventKind: kind === ALL ? undefined : (kind as 'manifest' | 'artifact'),
+          outcome: outcome === ALL ? undefined : outcome,
+        }}
+      />
     </div>
   )
 
@@ -742,6 +756,7 @@ export default function ClientDistMonitoringPage() {
         <div className="flex items-center gap-2">
           {isPlatformAdmin && channelPicker}
           {isPlatformAdmin && <RangePicker value={range} onChange={setRange} />}
+          {isPlatformAdmin && <ClientDistExportButton kind="stats-summary" filters={{ channelId, range: toApiRange(range) }} />}
         </div>
       </div>
 
@@ -774,7 +789,7 @@ export default function ClientDistMonitoringPage() {
             />
           </TabsContent>
           <TabsContent value="logs" className="space-y-4">
-            <LogsTab channelId={channelId} enabled={isPlatformAdmin} link={runtimeLink} onClearLink={clearRuntimeLink} />
+            <LogsTab channelId={channelId} range={toApiRange(range)} enabled={isPlatformAdmin} link={runtimeLink} onClearLink={clearRuntimeLink} />
           </TabsContent>
           <TabsContent value="clients" className="space-y-4">
             <ClientsTab overview={runtimeQuery.data} isError={runtimeQuery.isError} onLink={openLogsWithLink} />

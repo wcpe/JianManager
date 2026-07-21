@@ -3046,6 +3046,20 @@
 
 ---
 
+### GET /api/v1/client-dist/export
+- **描述**: 导出当前请求筛选窗口的 KPI 汇总、分发请求事件或安全全量日志 CSV（FR-361）。
+- **关联 FR**: FR-361、FR-356、FR-360 | **鉴权**: **JWT，平台管理员** | **审计**: `client_dist.export.csv`
+- **限流**: 按用户 ID（无则 IP）每分钟 1 次；超限返回 `429 RATE_LIMITED` 与 `Retry-After: 60`。
+- **查询参数**:
+  - `kind`（必填）：`stats-summary` | `dist-events` | `security-logs`。
+  - 通用筛选：`channelId`、`range`（`24h`/`7d`/`30d`，统计汇总另支持 `90d`/`180d`）、`days`、`from`/`to`（RFC3339）。
+  - 明细筛选：`errCode`、`outcome`（`success`|`failure`）、`ip`、`machineId`、`version`；分发事件另支持 `eventKind`（`manifest`|`artifact`）；安全日志另支持 `type`（`hello`|`risk`|`action`|`request`|`runtime`|`telemetry`）与 `playerName`。
+  - `dist-events` / `security-logs` 时间窗不得超过 30 天，超窗返回 400。
+- **响应** (200): `text/csv; charset=utf-8`；首字节 UTF-8 BOM，英文 camelCase 表头；文件名 `client-dist-{kind}-{yyyyMMddHHmmss}.csv`。
+- **截断**: 数据行最多 10000 行；有更多匹配数据时响应头 `X-Export-Truncated: true`，CSV 末行写 `truncated=true`。
+- **隐私**: `playerName` 最长展示 16 字符（前 15 字符 + `…`）；`machineId`/`installId` 为 `前6…后4`，过短为 `***`；不导出密钥明文、完整鉴权 Header 或敏感 request body。
+- **错误**: 400 `INVALID_REQUEST` | 403 `FORBIDDEN` | 429 `RATE_LIMITED` | 500 `INTERNAL_ERROR`。
+
 ### GET /api/v1/client-dist/stats
 - **描述**: 分发统计后台（FR-095）：只读聚合 FR-093/094/092 数据，按频道 + 时间窗
 - **关联 FR**: FR-095、FR-356 | **鉴权**: **JWT，平台管理员**

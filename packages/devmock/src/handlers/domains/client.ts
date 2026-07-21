@@ -1053,6 +1053,27 @@ export const handlers = [
     })
   }),
 
+  // 分发统计与安全日志 CSV 导出（FR-361）：按 kind 返回带 BOM 的最小假 CSV。
+  domainRoute('get', '/client-dist/export', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const kind = url.searchParams.get('kind') ?? ''
+    const csvByKind: Record<string, string> = {
+      'stats-summary': 'channelId,from,to,manifestPulls,artifactPulls,downloadBytes,activeMachines\nall,2026-06-21T00:00:00Z,2026-06-28T00:00:00Z,12,34,4096,3\n',
+      'dist-events': 'id,channelId,machineId,playerName,ip,kind,status,errCode,createdAt\n1,skyblock-s1,m-aaaa…aaaa,Alex,203.0.113.1,manifest,200,,2026-06-28T10:00:00Z\n',
+      'security-logs': 'id,type,title,channelId,machineId,installId,playerName,ip,status,errCode,createdAt,detail\nhello:1,hello,安全画像上报,skyblock-s1,m-aaaa…aaaa,instal…0001,Alex,203.0.113.1,accepted,,2026-06-28T10:00:00Z,{}\n',
+    }
+    const csv = csvByKind[kind]
+    if (!csv) return HttpResponse.json({ error: 'INVALID_REQUEST', message: 'kind 非法' }, { status: 400 })
+    return new HttpResponse(`\ufeff${csv}`, {
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="client-dist-${kind}-20260628100000.csv"`,
+      },
+    })
+  }),
+
   // 分发统计（FR-095）。
   domainRoute('get', '/client-dist/stats', (info) => {
     const denied = requireAuth(info)

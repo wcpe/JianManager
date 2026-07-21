@@ -356,6 +356,8 @@ func main() {
 	clientDistObsSvc := service.NewClientDistObservabilityService(db)
 	clientDistObsSvc.Start()
 	defer clientDistObsSvc.Stop()
+	// 分发统计、请求事件与安全日志 CSV 导出（FR-361）：复用观测语义，明细按批扫描。
+	clientDistExportSvc := service.NewClientDistExportService(db, clientDistObsSvc)
 	// 插件服务：上传先入制品库（type=plugin 去重）再经 file gRPC 部署到实例（FR-052）。
 	pluginSvc := service.NewPluginService(db, pool, assetSvc)
 	coreSvc := service.NewCoreService()
@@ -571,6 +573,7 @@ func main() {
 		ClientRuntimeState:      clientRuntimeStateSvc,
 		ClientDistSecurity:      clientDistSecuritySvc,
 		ClientDistObservability: clientDistObsSvc,
+		ClientDistExport:        clientDistExportSvc,
 		RuntimeAssets:           runtimeAssetsSvc,
 		EnrollToken:             enrollTokenSvc,
 		EnrollInstall: router.EnrollInstallConfig{
