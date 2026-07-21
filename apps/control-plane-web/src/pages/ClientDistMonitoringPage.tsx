@@ -43,6 +43,13 @@ import {
 } from '@jianmanager/ui/components/select'
 import type { DistBucket } from '@/lib/platform-stats'
 import { useTabParam } from '@/lib/use-tab-param'
+import {
+  KPI_I18N,
+  activeClientsHintKey,
+  formatKpiRate,
+  resolveActiveClients,
+  resolveRequestRates,
+} from '@/lib/client-dist-kpi'
 
 const ROLE_PLATFORM_ADMIN = 10
 const ALL_CHANNELS = '__all__'
@@ -228,10 +235,14 @@ function targetOf(e: ClientDistEvent): string {
 
 function StatisticsTab({ stats, isError, isLoading }: { stats?: ClientDistStats; isError: boolean; isLoading: boolean }) {
   const { t } = useTranslation()
+  // FR-356：统计 Tab 仅展示「请求侧」KPI；请求成功率≠更新成功率（后者在客户端 Tab / 频道统计）。
+  const active = resolveActiveClients(null, stats)
+  const requestRates = resolveRequestRates(stats)
+  const activeHintKey = activeClientsHintKey(active.exactness, active.source)
   const downloadSeries: ChartSeries[] = [
     {
       key: 'requests',
-      name: t('clientDistMonitor.totalRequests'),
+      name: t(KPI_I18N.downloadRequests, t('clientDistMonitor.totalRequests')),
       points: (stats?.downloads ?? []).map((p) => ({ ts: p.day, value: p.requests })),
     },
   ]
@@ -241,16 +252,31 @@ function StatisticsTab({ stats, isError, isLoading }: { stats?: ClientDistStats;
 
   if (isError) return <ErrorPanel title={t('clientDistMonitor.tabStatistics')} message={t('clientDistMonitor.loadError')} />
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-kpi-scope="client-dist-monitor-statistics">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        <StatCard icon={<Download className="size-3.5" />} label={t('clientDistMonitor.manifestPulls')} value={String(kindRequests(stats, 'manifest'))} />
-        <StatCard icon={<Download className="size-3.5" />} label={t('clientDistMonitor.artifactPulls')} value={String(kindRequests(stats, 'artifact'))} />
-        <StatCard icon={<Server className="size-3.5" />} label={t('clientDistMonitor.downloadBytes')} value={fmtBytes(totalBytes(stats))} />
-        <StatCard icon={<Users className="size-3.5" />} label={t('clientDistMonitor.activeClients')} value={String(stats?.activeMachines ?? 0)} sub={t('clientDistMonitor.fromRequests')} />
-        <StatCard icon={<Activity className="size-3.5" />} tone="success" label={t('clientDistMonitor.requestSuccessRate')} value={fmtRate(stats?.successRate ?? 0)} />
-        <StatCard icon={<AlertTriangle className="size-3.5" />} tone="warning" label={t('clientDistMonitor.requestFailureRate')} value={fmtRate(stats?.failureRate ?? 0)} />
+        <StatCard icon={<Download className="size-3.5" />} label={t(KPI_I18N.manifestPulls, t('clientDistMonitor.manifestPulls'))} value={String(kindRequests(stats, 'manifest'))} />
+        <StatCard icon={<Download className="size-3.5" />} label={t(KPI_I18N.artifactPulls, t('clientDistMonitor.artifactPulls'))} value={String(kindRequests(stats, 'artifact'))} />
+        <StatCard icon={<Server className="size-3.5" />} label={t(KPI_I18N.downloadBytes, t('clientDistMonitor.downloadBytes'))} value={fmtBytes(totalBytes(stats))} />
+        <StatCard
+          icon={<Users className="size-3.5" />}
+          label={t(KPI_I18N.activeClients, t('clientDistMonitor.activeClients'))}
+          value={String(active.value)}
+          sub={activeHintKey ? t(activeHintKey) : t('clientDistMonitor.fromRequests')}
+        />
+        <StatCard
+          icon={<Activity className="size-3.5" />}
+          tone="success"
+          label={t(KPI_I18N.requestSuccessRate, t('clientDistMonitor.requestSuccessRate'))}
+          value={formatKpiRate(requestRates.successRate, fmtRate(0))}
+        />
+        <StatCard
+          icon={<AlertTriangle className="size-3.5" />}
+          tone="warning"
+          label={t(KPI_I18N.requestFailureRate, t('clientDistMonitor.requestFailureRate'))}
+          value={formatKpiRate(requestRates.failureRate, fmtRate(0))}
+        />
       </div>
-      <TrendCard title={t('clientDistMonitor.requestTrend')} series={downloadSeries} valueFormatter={(v) => String(Math.round(v))} empty={isLoading ? t('common.loading') : t('clientDistMonitor.empty')} />
+      <TrendCard title={t(KPI_I18N.downloadTrend, t('clientDistMonitor.requestTrend'))} series={downloadSeries} valueFormatter={(v) => String(Math.round(v))} empty={isLoading ? t('common.loading') : t('clientDistMonitor.empty')} />
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <DistPanel title={t('clientDistMonitor.versionDist')} buckets={versionBuckets} empty={t('clientDistMonitor.empty')} />
         <DistPanel title={t('clientDistMonitor.resultDist')} buckets={resultBuckets} empty={t('clientDistMonitor.empty')} />
@@ -523,7 +549,7 @@ function ClientsTab({ overview, isError, onLink }: { overview?: ClientRuntimeOve
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard icon={<Clock className="size-3.5" />} label={t('clientDistMonitor.recentStarted')} value={String(overview?.summary.recentStarted ?? 0)} sub={t('clientDistMonitor.last5m')} />
         <StatCard icon={<Clock className="size-3.5" />} label={t('clientDistMonitor.todayStarted')} value={String(overview?.summary.todayStarted ?? 0)} />
-        <StatCard icon={<RefreshCw className="size-3.5" />} tone="success" label={t('clientDistMonitor.updateSuccessRate')} value={fmtRate(overview?.summary.updateSuccessRate ?? 0)} />
+        <StatCard icon={<RefreshCw className="size-3.5" />} tone="success" label={t(KPI_I18N.updateSuccessRate, t('clientDistMonitor.updateSuccessRate'))} value={fmtRate(overview?.summary.updateSuccessRate ?? 0)} />
         <StatCard icon={<AlertTriangle className="size-3.5" />} tone="warning" label={t('clientDistMonitor.updateFailureRate')} value={fmtRate(overview?.summary.updateFailureRate ?? 0)} />
       </div>
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">

@@ -3048,13 +3048,14 @@
 
 ### GET /api/v1/client-dist/stats
 - **描述**: 分发统计后台（FR-095）：只读聚合 FR-093/094/092 数据，按频道 + 时间窗
-- **关联 FR**: FR-095 | **鉴权**: **JWT，平台管理员**
+- **关联 FR**: FR-095、FR-356 | **鉴权**: **JWT，平台管理员**
 - **查询参数**: `channelId`（频道）、`days`（窗口天数，默认 30，上限 365）
-- **响应** (200): `{ "channelId", "days", "downloads":[{day,requests,bytes}], "versions":[{version,requests}], "results":[{result,count}], "successRate", "rollbackRate", "activeMachines", "topIps":[{ip,count}] }`
+- **响应** (200): `{ "channelId", "days", "downloads":[{day,requests,bytes}], "versions":[{version,requests}], "results":[{result,count}], "successRate", "failureRate", "rollbackRate", "activeMachines", "topIps":[{ip,count}] }`
+- **KPI 语义（FR-356）**: 本端点 `successRate`/`failureRate` 是 **HTTP 请求**成功率（`client_dist_events.status`），**不是**更新成功率；`activeMachines` 为近窗 machineId 去重，无 `activeMachinesExact` 标志，前端回退展示时不得标「精确去重」。更新侧率权威源见下方 observability `summary`。
 
 ### GET /api/v1/client-dist/observability
 - **描述**: 客户端分发**观测数据底座**（FR-217，见 ADR-049；FR-265 修订指标边界）：消费后台离线卷积的小时级时序快照 `client_dist_snapshots`（源 FR-093 events + FR-094 telemetry），返**跨频道/单频道**的时序 + 区间分布聚合 + 汇总标量。与 FR-095 `/client-dist/stats`（单频道按日看板）并存不替代——本端点服务观测·分发监控页的跨频道/平台时序
-- **关联 FR**: FR-217（消费方 FR-218/219）、FR-265 | **鉴权**: **JWT，平台管理员** | **审计**: `client_dist_observability.query`
+- **关联 FR**: FR-217（消费方 FR-218/219）、FR-265、FR-356 | **鉴权**: **JWT，平台管理员** | **审计**: `client_dist_observability.query`
 - **查询参数**: `channelId`（可，省略=**总**，跨频道合并含空频道桶）、`from`/`to`（可，RFC3339，同时给且 `to>from`）、`range`（可，无 from/to 时回退枚举 `24h`/`7d`/`30d`/`90d`/`180d`，默认 `7d`）
 - **响应** (200):
   ```
@@ -3072,6 +3073,7 @@
     "lagDist": [{ lag, count }]              // current_version - toVersion，按 lag 升序
   }
   ```
+- **KPI 语义（FR-356）**: `summary.successRate`/`failStaticRate`/`rollbackRate` 为 **更新遥测**率（`client_telemetry.result`，分母 `updateTotal`）；与 stats 的 HTTP 请求率严格区分。`activeMachines`+`activeMachinesExact` 为活跃客户端权威源。前端共享字典见 `apps/control-plane-web/src/lib/client-dist-kpi.ts` 与 `docs/specs/client-dist-kpi-semantics/spec.md`。
 - **错误**: 400 `INVALID_RANGE`（from/to 非法或 `to<=from`，或 range 非枚举）| 403 `FORBIDDEN`（非平台管理员）| 500 `INTERNAL_ERROR`
 - **说明**: 未知 `channelId` 返 200 空时序 + 零汇总（不 404，避免泄露频道存在性、便于前端统一空态）。machineId 客户端可伪造、不可信，仅统计近似（ADR-023）
 

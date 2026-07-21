@@ -1,6 +1,6 @@
 # 功能规格：客户端分发 KPI 口径与共享语义
 
-> 状态：草拟　·　关联 PRD：FR-356　·　分支：feature/fr-356-kpi-semantics  
+> 状态：开发中　·　关联 PRD：FR-356　·　分支：feature/fr-356-kpi-semantics  
 > 增强：FR-095 / FR-217 / FR-218 / FR-219 / FR-265　·　相关 ADR：ADR-023、ADR-049（只读引用，本 FR 不新开 ADR 除非推翻公式）
 
 ## 1. 背景与目标

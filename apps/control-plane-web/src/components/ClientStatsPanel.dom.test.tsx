@@ -6,12 +6,9 @@ import { mockInject } from '@jianmanager/devmock/inject'
 import ClientStatsPanel from './ClientStatsPanel'
 
 /**
- * ClientStatsPanel 强断言（FR-219）：复用 FR-217 观测端点扩充的维度都渲染出来——
- * 活跃客户端（含去重口径标注）/ 更新成功率 + fail-static 率 / 版本分布 + 滞后 / 平台分布。
- * 渲染前 loginMockUser() 让 requireAuth 放行；observability handler 提供 seed 数据。
- *
- * 下载趋势图（recharts）依赖 ResizeObserver 实测宽度，jsdom 无之 → 补桩使组件不崩；
- * 本测试只断言数字卡与分布条（不依赖容器尺寸），曲线像素不断言（同 MonitoringPage.dom.test）。
+ * ClientStatsPanel（FR-219 + FR-356）：
+ * - 观测可用时：活跃精确/近似脚注 + 更新成功率（遥测）
+ * - 观测失败时：活跃可回退 stats，但禁止用 HTTP 请求成功率冒充更新成功率
  */
 beforeAll(() => {
   if (!('ResizeObserver' in globalThis)) {
@@ -23,7 +20,7 @@ beforeAll(() => {
     ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = RO
   }
 })
-describe('ClientStatsPanel（mock 假后端，FR-219）', () => {
+describe('ClientStatsPanel（mock 假后端，FR-219/356）', () => {
   it('渲染观测扩充的统计维度（活跃客户端/成功率/fail-static/平台/滞后）', async () => {
     loginMockUser()
     renderWithProviders(<ClientStatsPanel channelId="skyblock-s1" />)
@@ -35,6 +32,7 @@ describe('ClientStatsPanel（mock 假后端，FR-219）', () => {
     expect(screen.getByText('人次近似')).toBeInTheDocument()
 
     // 更新成功率（91.7%）与 fail-static 率（2.8%）数字卡。
+    expect(screen.getByText('更新成功率')).toBeInTheDocument()
     expect(screen.getByText('fail-static 率')).toBeInTheDocument()
     expect(screen.getByText('91.7%')).toBeInTheDocument()
     expect(screen.getByText('2.8%')).toBeInTheDocument()
@@ -48,14 +46,19 @@ describe('ClientStatsPanel（mock 假后端，FR-219）', () => {
     expect(screen.getByText('已最新')).toBeInTheDocument()
   })
 
-  it('观测端点 500 → 回退 FR-095 看板维度，不崩溃', async () => {
+  it('观测端点 500 → 活跃回退 stats，更新率不冒充请求成功率', async () => {
     loginMockUser()
     mockInject('get', '/client-dist/observability', { kind: 'status', status: 500 })
     renderWithProviders(<ClientStatsPanel channelId="skyblock-s1" />)
 
-    // FR-095 stats 仍可用：活跃机器码回退值与请求成功率出现。
+    // FR-095 stats 仍可用：活跃机器码回退值。
     await waitFor(() => expect(screen.getByText('3')).toBeInTheDocument())
-    expect(screen.getByText('66.7%')).toBeInTheDocument()
+    expect(screen.getByText('活跃客户端')).toBeInTheDocument()
+    expect(screen.getByText('来自请求明细')).toBeInTheDocument()
+    // FR-356：stats.successRate 是 HTTP 请求率，不得显示为更新成功率数字。
+    expect(screen.queryByText('66.7%')).not.toBeInTheDocument()
+    expect(screen.getByText('更新成功率')).toBeInTheDocument()
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1)
     // 来源 IP（FR-095）段落仍渲染。
     expect(screen.getByText('来源 IP（Top 10）')).toBeInTheDocument()
   })

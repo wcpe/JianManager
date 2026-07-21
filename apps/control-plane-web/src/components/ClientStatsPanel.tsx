@@ -8,6 +8,13 @@ import {
   type ObservabilityVersionDist,
   type ObservabilityLagDist,
 } from '@/api/clientDistObservability'
+import {
+  KPI_I18N,
+  activeClientsHintKey,
+  formatKpiRate,
+  resolveActiveClients,
+  resolveUpdateRates,
+} from '@/lib/client-dist-kpi'
 import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui'
 import {
   Select,
@@ -36,9 +43,8 @@ function platformLabel(os: string): string {
 }
 
 /**
- * 客户端分发统计看板（FR-095 + FR-217/FR-219，见 ADR-023/ADR-049）。
- * 在 FR-095 单频道按日看板（下载趋势 / 来源 IP）之上，复用 FR-217 观测时序底座扩充维度：
- * 活跃客户端（去重含精确/近似标注）、版本分布与滞后占比、更新成功率/fail-static 率、平台分布。
+ * 客户端分发统计看板（FR-095 + FR-217/FR-219 + FR-356，见 ADR-023/ADR-049）。
+ * KPI 口径统一走 `lib/client-dist-kpi`：更新率只信 observability；活跃回退 stats 时不谎报精确去重。
  * i18n（FR-016）+ 暗/亮色（FR-026，图表用主题 token）。
  */
 export default function ClientStatsPanel({ channelId }: { channelId: string }) {
@@ -51,23 +57,22 @@ export default function ClientStatsPanel({ channelId }: { channelId: string }) {
   const downloadSeries: ChartSeries[] = [
     {
       key: 'requests',
-      name: t('clientStats.downloads', '下载量'),
+      name: t(KPI_I18N.downloadRequests, '下载请求数'),
       points: (data?.downloads ?? []).map((d) => ({ ts: d.day, value: d.requests })),
     },
   ]
   const maxIpReq = Math.max(1, ...(data?.topIps ?? []).map((r) => r.count))
-  const pct = (r: number) => `${(r * 100).toFixed(1)}%`
 
-  // 观测维度派生（FR-219）：活跃客户端取观测精确去重，回退 FR-095 机器码计数。
-  const summary = obs?.summary
-  const activeClients = summary?.activeMachines ?? data?.activeMachines ?? 0
-  const activeExact = summary?.activeMachinesExact
+  // FR-356：共享 KPI 解析，禁止 stats.successRate（HTTP）冒充更新成功率。
+  const active = resolveActiveClients(obs?.summary, data)
+  const updateRates = resolveUpdateRates(obs?.summary)
+  const activeHintKey = activeClientsHintKey(active.exactness, active.source)
   const versionDist = obs?.versionDist ?? []
   const platformDist = obs?.platformDist ?? []
   const lagDist = obs?.lagDist ?? []
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-kpi-scope="client-stats-panel">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <p className="text-sm text-muted-foreground max-w-2xl">
           {t('clientStats.subtitle', '分发统计（来自拉取追踪与遥测聚合）。机器码不可信，仅作统计维度。')}
@@ -84,37 +89,32 @@ export default function ClientStatsPanel({ channelId }: { channelId: string }) {
         </Select>
       </div>
 
-      {/* 数字卡：活跃客户端（去重）/ 更新成功率 / fail-static 率 / 回退率 */}
+      {/* 数字卡：活跃客户端 / 更新成功率 / fail-static 率 / 回退率（FR-356 字典） */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <StatCard
-          label={t('clientStats.activeClients', '活跃客户端')}
-          value={String(activeClients)}
-          hint={
-            activeExact === undefined
-              ? undefined
-              : activeExact
-                ? t('clientStats.activeExact', '精确去重')
-                : t('clientStats.activeApprox', '人次近似')
-          }
+          label={t(KPI_I18N.activeClients, '活跃客户端')}
+          value={String(active.value)}
+          hint={activeHintKey ? t(activeHintKey) : undefined}
         />
         <StatCard
-          label={t('clientStats.successRate', '更新成功率')}
-          value={summary ? pct(summary.successRate) : data ? pct(data.successRate) : '-'}
+          label={t(KPI_I18N.updateSuccessRate, '更新成功率')}
+          value={formatKpiRate(updateRates.successRate)}
+          hint={updateRates.source === 'none' ? t(KPI_I18N.rateUnavailable, '需遥测窗口') : undefined}
         />
         <StatCard
-          label={t('clientStats.failStaticRate', 'fail-static 率')}
-          value={summary ? pct(summary.failStaticRate) : '-'}
-          hint={t('clientStats.failStaticHint', '断网兜底启动')}
+          label={t(KPI_I18N.updateFailStaticRate, 'fail-static 率')}
+          value={formatKpiRate(updateRates.failStaticRate)}
+          hint={t(KPI_I18N.updateFailStaticHint, '断网兜底启动')}
         />
         <StatCard
-          label={t('clientStats.rollbackRate', '回退率')}
-          value={summary ? pct(summary.rollbackRate) : data ? pct(data.rollbackRate) : '-'}
+          label={t(KPI_I18N.updateRollbackRate, '回退率')}
+          value={formatKpiRate(updateRates.rollbackRate)}
         />
       </div>
 
-      {/* 下载趋势（FR-095） */}
+      {/* 下载请求趋势（FR-095；标签语义=请求次数，非更新成功） */}
       <section className="space-y-2">
-        <h3 className="text-sm font-medium">{t('clientStats.downloadTrend', '下载量趋势')}</h3>
+        <h3 className="text-sm font-medium">{t(KPI_I18N.downloadTrend, '下载请求趋势')}</h3>
         <div className="border rounded-lg p-3">
           <TimeSeriesChart
             series={downloadSeries}
