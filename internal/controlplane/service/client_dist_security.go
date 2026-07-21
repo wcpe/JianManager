@@ -199,7 +199,7 @@ func (s *ClientDistSecurityService) RecordRiskEvent(code, channelID, machineID, 
 	return s.db.Create(ev).Error
 }
 
-func (s *ClientDistSecurityService) BlockIP(ip, reason string, ttl time.Duration, createdBy uint) (*model.ClientProtectionAction, error) {
+func (s *ClientDistSecurityService) BlockIP(ip, channelID, reason string, ttl time.Duration, createdBy uint) (*model.ClientProtectionAction, error) {
 	if net.ParseIP(ip) == nil {
 		return nil, fmt.Errorf("非法 IP")
 	}
@@ -207,7 +207,7 @@ func (s *ClientDistSecurityService) BlockIP(ip, reason string, ttl time.Duration
 	if ttl <= 0 {
 		expires = time.Now().Add(time.Hour)
 	}
-	a := &model.ClientProtectionAction{TargetType: "ip", TargetValue: ip, Action: "temp_block", Status: "active", Reason: reason, Auto: createdBy == 0, ExpiresAt: &expires, CreatedBy: createdBy}
+	a := &model.ClientProtectionAction{TargetType: "ip", TargetValue: ip, ChannelID: channelID, Action: "temp_block", Status: "active", Reason: reason, Auto: createdBy == 0, ExpiresAt: &expires, CreatedBy: createdBy}
 	return a, s.db.Create(a).Error
 }
 
@@ -246,19 +246,22 @@ func (s *ClientDistSecurityService) SetKeyState(keyID uint, state, note string) 
 }
 
 func (s *ClientDistSecurityService) SetChannelProtection(channelID, mode string) error {
-	mode = normalizedProtectionMode(mode)
-	if mode == "" {
+	requestedMode := strings.TrimSpace(mode)
+	if normalizedProtectionMode(requestedMode) == "" {
 		return fmt.Errorf("非法频道保护模式")
 	}
+	if requestedMode == "" {
+		requestedMode = ClientChannelModeNormal
+	}
 	now := time.Now()
-	res := s.db.Model(&model.ClientChannel{}).Where("channel_id = ?", channelID).Updates(map[string]any{"protection_mode": mode, "protection_updated_at": &now})
+	res := s.db.Model(&model.ClientChannel{}).Where("channel_id = ?", channelID).Updates(map[string]any{"protection_mode": requestedMode, "protection_updated_at": &now})
 	if res.Error != nil {
 		return res.Error
 	}
 	if res.RowsAffected == 0 {
 		return ErrChannelNotFound
 	}
-	return s.db.Create(&model.ClientProtectionAction{TargetType: "channel", TargetValue: channelID, ChannelID: channelID, Action: "channel_protection", Status: "active", Reason: mode, CreatedAt: now, UpdatedAt: now}).Error
+	return s.db.Create(&model.ClientProtectionAction{TargetType: "channel", TargetValue: channelID, ChannelID: channelID, Action: "channel_protection", Status: "active", Reason: requestedMode, CreatedAt: now, UpdatedAt: now}).Error
 }
 
 func (s *ClientDistSecurityService) ChannelProtectionMode(channelID string) (string, error) {
@@ -400,6 +403,24 @@ type SecurityRankItem struct {
 	RiskScore int64  `json:"riskScore,omitempty"`
 }
 
+// ClientChannelSecuritySummary 是频道工作台使用的近窗安全摘要。
+type ClientChannelSecuritySummary struct {
+	ChannelID          string `json:"channelId"`
+	RiskLevel          string `json:"riskLevel"`
+	AbnormalRequests   int64  `json:"abnormalRequests"`
+	BlockedIPCount     int64  `json:"blockedIpCount"`
+	RestrictedKeyCount int64  `json:"restrictedKeyCount"`
+	ProtectionMode     string `json:"protectionMode"`
+	WindowMinutes      int    `json:"windowMinutes"`
+}
+
+// ClientSecurityProfileDetail 在画像字段之外补充风险与保护动作时间线。
+type ClientSecurityProfileDetail struct {
+	model.ClientSecurityProfile
+	RecentEvents      []model.ClientSecurityRiskEvent `json:"recentEvents"`
+	ProtectionActions []model.ClientProtectionAction  `json:"protectionActions"`
+}
+
 type ClientDistIPAnalysis struct {
 	IP              string    `json:"ip"`
 	RequestCount    int64     `json:"requestCount"`
@@ -528,6 +549,80 @@ func (s *ClientDistSecurityService) ListProfiles() ([]model.ClientSecurityProfil
 	var p []model.ClientSecurityProfile
 	return p, s.db.Order("last_seen DESC").Limit(200).Find(&p).Error
 }
+
+func (s *ClientDistSecurityService) ProfileDetail(id uint) (*ClientSecurityProfileDetail, error) {
+	var profile model.ClientSecurityProfile
+	if err := s.db.First(&profile, id).Error; err != nil {
+		return nil, err
+	}
+	var events []model.ClientSecurityRiskEvent
+	if err := s.db.Where("channel_id = ? AND (machine_id = ? OR install_id = ?)", profile.ChannelID, profile.MachineID, profile.InstallID).Order("created_at DESC").Limit(100).Find(&events).Error; err != nil {
+		return nil, err
+	}
+	var actions []model.ClientProtectionAction
+	keyID := strconv.FormatUint(uint64(profile.KeyID), 10)
+	where := "channel_id = ? OR (target_type = ? AND target_value = ?) OR (target_type = ? AND target_value = ?) OR (target_type = ? AND target_value = ?)"
+	args := []any{profile.ChannelID, "channel", profile.ChannelID, "key", keyID, "ip", profile.LastIP}
+	if err := s.db.Where(where, args...).Order("created_at DESC").Limit(100).Find(&actions).Error; err != nil {
+		return nil, err
+	}
+	return &ClientSecurityProfileDetail{ClientSecurityProfile: profile, RecentEvents: events, ProtectionActions: actions}, nil
+}
+
+func (s *ClientDistSecurityService) ChannelSummary(channelID string, window time.Duration) (*ClientChannelSecuritySummary, error) {
+	if window <= 0 {
+		window = time.Hour
+	}
+	var channel model.ClientChannel
+	if err := s.db.Select("protection_mode").Where("channel_id = ?", channelID).First(&channel).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrChannelNotFound
+		}
+		return nil, err
+	}
+	mode := strings.TrimSpace(channel.ProtectionMode)
+	if mode == "" {
+		mode = ClientChannelModeNormal
+	}
+	out := &ClientChannelSecuritySummary{ChannelID: channelID, RiskLevel: "info", ProtectionMode: mode, WindowMinutes: int(window.Minutes())}
+	if err := s.fillChannelSummary(out, time.Now().Add(-window)); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *ClientDistSecurityService) fillChannelSummary(out *ClientChannelSecuritySummary, since time.Time) error {
+	var events []model.ClientSecurityRiskEvent
+	if err := s.db.Select("severity").Where("channel_id = ? AND created_at >= ?", out.ChannelID, since).Find(&events).Error; err != nil {
+		return err
+	}
+	out.AbnormalRequests = int64(len(events))
+	for _, event := range events {
+		if securityLevelRank(event.Severity) > securityLevelRank(out.RiskLevel) {
+			out.RiskLevel = event.Severity
+		}
+	}
+	now := time.Now()
+	if err := s.db.Model(&model.ClientProtectionAction{}).Where("channel_id = ? AND target_type = ? AND action IN ? AND status = ? AND (expires_at IS NULL OR expires_at > ?)", out.ChannelID, "ip", []string{"temp_block", "ip_temp_block"}, "active", now).Count(&out.BlockedIPCount).Error; err != nil {
+		return err
+	}
+	states := []string{ClientKeyStateThrottled, ClientKeyStateSuspended, ClientKeyStateRevoked}
+	return s.db.Model(&model.ClientPullKey{}).Where("channel_id = ? AND security_state IN ?", out.ChannelID, states).Count(&out.RestrictedKeyCount).Error
+}
+
+func securityLevelRank(level string) int {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "critical":
+		return 4
+	case "high":
+		return 3
+	case "warn", "warning", "medium":
+		return 2
+	default:
+		return 1
+	}
+}
+
 func (s *ClientDistSecurityService) ListRiskEvents() ([]model.ClientSecurityRiskEvent, error) {
 	var e []model.ClientSecurityRiskEvent
 	return e, s.db.Order("created_at DESC").Limit(200).Find(&e).Error

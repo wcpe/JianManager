@@ -11,6 +11,7 @@ import {
   useClientDistSecurityEvents,
   useClientDistSecurityLogs,
   useClientDistSecurityOverview,
+  useClientDistSecurityProfile,
   useClientDistSecurityProfiles,
   useClientSecurityGroups,
   useCreateClientSecurityGroup,
@@ -40,8 +41,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
 import { Textarea } from '@jianmanager/ui/components/textarea'
 import DangerConfirm from '@/components/DangerConfirm'
+import UntrustedFieldBadge from '@/components/UntrustedFieldBadge'
 import { useTabParam } from '@/lib/use-tab-param'
 import { maskInstallId, maskMachineId, maskPlayerName } from '@/lib/privacy-mask'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@jianmanager/ui/components/dialog'
 
 const EMPTY = '—'
 
@@ -277,13 +286,19 @@ function EventsTab() {
 }
 
 function EventRow({ event }: { event: ClientDistSecurityEvent }) {
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const blockIP = useBlockClientDistIP()
+  const canBlock = Boolean(event.ip)
   return (
     <TableRow>
       <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{fmtTime(event.createdAt)}</TableCell>
       <TableCell><Badge variant={levelVariant(event.severity)}>{event.severity}</Badge></TableCell>
       <TableCell>
         <div className="font-medium">{event.ip || EMPTY}</div>
-        <div className="text-xs text-muted-foreground">{event.playerName || EMPTY}</div>
+        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+          <span>{maskPlayerName(event.playerName) || EMPTY}</span>
+          {event.playerName ? <UntrustedFieldBadge /> : null}
+        </div>
       </TableCell>
       <TableCell>
         <div>{event.channelId || EMPTY}</div>
@@ -294,7 +309,36 @@ function EventRow({ event }: { event: ClientDistSecurityEvent }) {
         <div>{event.ruleCode || EMPTY}</div>
         <div className="text-xs text-muted-foreground">{event.errCode || event.status || EMPTY}</div>
       </TableCell>
-      <TableCell>{event.action || EMPTY}</TableCell>
+      <TableCell>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted-foreground">{event.action || EMPTY}</span>
+          {canBlock ? (
+            <Button type="button" size="xs" variant="outline" className="text-status-danger" onClick={() => setConfirmOpen(true)}>
+              封禁 IP
+            </Button>
+          ) : null}
+        </div>
+        <DangerConfirm
+          open={confirmOpen}
+          title={`临时封禁 IP ${event.ip}`}
+          description="将对该 IP 施加临时封禁，确认后立即生效；可在「封禁与降级」中取消。"
+          confirmLabel="确认封禁"
+          pending={blockIP.isPending}
+          onConfirm={() => {
+            blockIP.mutate(
+              { ip: event.ip, channelId: event.channelId || undefined, reason: event.reason || '事件行一键封禁', durationMinutes: 30 },
+              {
+                onSuccess: () => {
+                  toast.success('已提交 IP 临时封禁')
+                  setConfirmOpen(false)
+                },
+                onError: () => toast.error('IP 封禁失败'),
+              },
+            )
+          }}
+          onCancel={() => setConfirmOpen(false)}
+        />
+      </TableCell>
     </TableRow>
   )
 }
@@ -302,6 +346,7 @@ function EventRow({ event }: { event: ClientDistSecurityEvent }) {
 function ProfilesTab() {
   const [playerName, setPlayerName] = useState('')
   const [channelId, setChannelId] = useState('')
+  const [detailId, setDetailId] = useState<number | null>(null)
   const { data, isError, isLoading } = useClientDistSecurityProfiles({ playerName: playerName || undefined, channelId: channelId || undefined, limit: 200 })
   const profiles = data ?? []
   return (
@@ -331,17 +376,16 @@ function ProfilesTab() {
                 <TableHead>版本</TableHead>
                 <TableHead>风险</TableHead>
                 <TableHead>最近出现</TableHead>
+                <TableHead className="text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {profiles.map((profile) => (
                 <TableRow key={profile.id}>
                   <TableCell>
-                    <div className="font-medium" title={profile.playerName || undefined}>
-                      {maskPlayerName(profile.playerName) || EMPTY}
-                      {profile.playerName ? (
-                        <span className="ml-1 text-[10px] text-muted-foreground">不可信</span>
-                      ) : null}
+                    <div className="flex items-center gap-1 font-medium" title={profile.playerName || undefined}>
+                      <span>{maskPlayerName(profile.playerName) || EMPTY}</span>
+                      {profile.playerName ? <UntrustedFieldBadge /> : null}
                     </div>
                     <div className="text-xs text-muted-foreground">{profile.channelId || EMPTY}</div>
                   </TableCell>
@@ -369,13 +413,106 @@ function ProfilesTab() {
                     <Badge variant={levelVariant(profile.riskLevel)}>{profile.riskLevel || 'info'} · {profile.riskScore}</Badge>
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{fmtTime(profile.lastSeen)}</TableCell>
+                  <TableCell className="text-right">
+                    <Button type="button" size="xs" variant="outline" onClick={() => setDetailId(profile.id)}>
+                      查看详情
+                    </Button>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         )}
       </Panel>
+      <ProfileDetailDialog id={detailId} open={detailId !== null} onOpenChange={(open) => !open && setDetailId(null)} />
     </div>
+  )
+}
+
+function ProfileDetailDialog({ id, open, onOpenChange }: { id: number | null; open: boolean; onOpenChange: (open: boolean) => void }) {
+  const { data, isLoading, isError } = useClientDistSecurityProfile(id)
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>客户端画像详情</DialogTitle>
+          <DialogDescription>全量环境字段与风险时间线；玩家名 / 机器码不可信，仅供研判。</DialogDescription>
+        </DialogHeader>
+        {isError ? <EmptyState text="加载画像详情失败。" /> : null}
+        {isLoading ? <EmptyState text="加载中…" /> : null}
+        {data ? (
+          <div className="space-y-4 text-sm">
+            <div className="grid grid-cols-2 gap-2 rounded-lg border p-3 text-xs">
+              <div>
+                <div className="text-muted-foreground">玩家</div>
+                <div className="flex items-center gap-1 font-medium">
+                  <span>{maskPlayerName(data.playerName) || EMPTY}</span>
+                  {data.playerName ? <UntrustedFieldBadge /> : null}
+                </div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">频道</div>
+                <div>{data.channelId || EMPTY}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">机器码</div>
+                <div className="font-mono" title={data.machineId || undefined}>{maskMachineId(data.machineId) || EMPTY}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Install</div>
+                <div className="font-mono" title={data.installId || undefined}>{maskInstallId(data.installId) || EMPTY}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Java</div>
+                <div>
+                  <span>{data.javaVendor || EMPTY}</span>
+                  {data.javaVersion ? <span className="ml-1">{data.javaVersion}</span> : null}
+                </div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">时区 / Locale</div>
+                <div>
+                  <span>{data.timezone || EMPTY}</span>
+                  <span className="mx-1">·</span>
+                  <span>{data.locale || EMPTY}</span>
+                </div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Core / Wedge</div>
+                <div>{data.coreVersion || EMPTY} / {data.wedgeVersion || EMPTY}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">内存档</div>
+                <div>{data.memoryTier || EMPTY}</div>
+              </div>
+            </div>
+            <div>
+              <div className="mb-2 text-xs font-medium text-muted-foreground">风险时间线</div>
+              <ul className="space-y-2">
+                {(data.recentEvents ?? []).map((ev) => (
+                  <li key={`ev-${ev.id}`} className="rounded border px-3 py-2 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-mono">{ev.ruleCode || EMPTY}</span>
+                      <Badge variant={levelVariant(ev.severity)}>{ev.severity}</Badge>
+                    </div>
+                    <div className="mt-1 text-muted-foreground">{ev.reason || EMPTY} · {fmtTime(ev.createdAt)}</div>
+                  </li>
+                ))}
+                {(data.protectionActions ?? []).map((act) => (
+                  <li key={`act-${act.id}`} className="rounded border px-3 py-2 text-xs">
+                    <div className="font-mono">{act.action || EMPTY}</div>
+                    <div className="mt-1 text-muted-foreground">{act.reason || EMPTY} · {fmtTime(act.createdAt)}</div>
+                  </li>
+                ))}
+                {(data.recentEvents ?? []).length === 0 && (data.protectionActions ?? []).length === 0 ? (
+                  <li className="text-xs text-muted-foreground">暂无时间线条目</li>
+                ) : null}
+              </ul>
+            </div>
+          </div>
+        ) : null}
+      </DialogContent>
+    </Dialog>
   )
 }
 

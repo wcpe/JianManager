@@ -86,6 +86,17 @@ export interface ClientDistSecurityProfile {
 
 export interface ClientDistSecurityProfileDetail extends ClientDistSecurityProfile {
   recentEvents: ClientDistSecurityEvent[]
+  protectionActions: ClientProtectionAction[]
+}
+
+export interface ClientChannelSecuritySummary {
+  channelId: string
+  riskLevel: SecurityLevel
+  abnormalRequests: number
+  blockedIpCount: number
+  restrictedKeyCount: number
+  protectionMode: string
+  windowMinutes: number
 }
 
 export interface ClientDistIpAnalysis {
@@ -192,6 +203,7 @@ export interface ClientDistSecurityListParams {
 
 export interface BlockIPRequest {
   ip: string
+  channelId?: string
   reason: string
   durationMinutes: number
 }
@@ -225,6 +237,15 @@ export function useClientDistSecurityOverview() {
   return useQuery({
     queryKey: [...securityKey, 'overview'],
     queryFn: async () => (await api.get<ClientDistSecurityOverview>('/client-dist/security/overview')).data,
+    retry: false,
+  })
+}
+
+export function useClientChannelSecuritySummary(channelId: string) {
+  return useQuery({
+    queryKey: [...securityKey, 'channel-summary', channelId],
+    queryFn: async () => (await api.get<ClientChannelSecuritySummary>(`/client-channels/${channelId}/security-summary`)).data,
+    enabled: channelId !== '',
     retry: false,
   })
 }

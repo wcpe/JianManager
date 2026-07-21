@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent } from 'react'
-import { useSearchParams } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
@@ -13,6 +13,7 @@ import {
   KeyRound,
   Pencil,
   Plus,
+  ShieldAlert,
 } from 'lucide-react'
 import {
   useClientChannels,
@@ -27,6 +28,11 @@ import {
   type ClientPullKey,
   type ClientKeyWithSecret,
 } from '@/api/clientChannels'
+import {
+  useClientChannelSecuritySummary,
+  type ClientChannelSecuritySummary,
+  type SecurityLevel,
+} from '@/api/clientDistSecurity'
 import { copyToClipboard } from '@/lib/clipboard'
 import { useTabParam } from '@/lib/use-tab-param'
 import {
@@ -327,6 +333,65 @@ function CreateChannelDialog({
  * 频道工作台：顶部就绪度步骤器（状态由 keyCount/currentVersion 推导）+
  * 密钥 / 版本 / 统计 / 接入指引 分段。取代原 ChannelDetail，全程模态化。
  */
+function riskBadgeVariant(level?: SecurityLevel): 'default' | 'secondary' | 'destructive' | 'outline' {
+  if (level === 'critical' || level === 'high') return 'destructive'
+  if (level === 'warn') return 'default'
+  return 'secondary'
+}
+
+/** 频道工作台安全摘要条（FR-358）：近窗风险与封禁/受限计数，链到安全中心。 */
+function ChannelSecuritySummaryBar({ channelId }: { channelId: string }) {
+  const { t } = useTranslation()
+  const { data, isError, isLoading } = useClientChannelSecuritySummary(channelId)
+  const summary = data as ClientChannelSecuritySummary | undefined
+  const securityHref = `/client-dist-security?channelId=${encodeURIComponent(channelId)}`
+
+  return (
+    <div
+      data-testid="channel-security-summary"
+      className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-2"
+    >
+      <div className="flex min-w-0 flex-wrap items-center gap-3 text-sm">
+        <div className="flex items-center gap-1.5 font-medium">
+          <ShieldAlert className="size-4 text-muted-foreground" />
+          <span>{t('clientChannels.securitySummary', '安全摘要')}</span>
+        </div>
+        {isError ? (
+          <span className="text-xs text-muted-foreground">{t('clientChannels.securitySummaryUnavailable', '安全摘要暂不可用')}</span>
+        ) : isLoading || !summary ? (
+          <span className="text-xs text-muted-foreground">{t('common.loading', '加载中…')}</span>
+        ) : (
+          <>
+            <Badge variant={riskBadgeVariant(summary.riskLevel)}>{summary.riskLevel || 'info'}</Badge>
+            <span className="text-xs text-muted-foreground">
+              {t('clientChannels.securityAbnormal', '近窗异常')} {summary.abnormalRequests}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {t('clientChannels.securityBlockedIp', '封禁 IP')} {summary.blockedIpCount}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {t('clientChannels.securityRestrictedKey', '受限 Key')} {summary.restrictedKeyCount}
+            </span>
+            {summary.protectionMode ? (
+              <span className="text-xs text-muted-foreground">
+                {t('clientChannels.securityProtectionMode', '防护')} {summary.protectionMode}
+              </span>
+            ) : null}
+            {summary.windowMinutes ? (
+              <span className="text-xs text-muted-foreground">
+                {t('clientChannels.securityWindow', '窗口')} {summary.windowMinutes}m
+              </span>
+            ) : null}
+          </>
+        )}
+      </div>
+      <Button asChild size="sm" variant="outline">
+        <Link to={securityHref}>{t('clientChannels.openSecurityCenter', '打开安全中心')}</Link>
+      </Button>
+    </div>
+  )
+}
+
 function ChannelWorkbench({
   channelId,
   onBack,
@@ -385,6 +450,8 @@ function ChannelWorkbench({
           {t('clientChannels.deleteChannel', '删除频道')}
         </button>
       </div>
+
+      <ChannelSecuritySummaryBar channelId={channelId} />
 
       <ReadinessStepper
         steps={steps}

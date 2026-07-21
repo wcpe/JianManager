@@ -191,6 +191,52 @@ func TestClientSecurityAnalysisEndpoints_ReturnAggregates(t *testing.T) {
 	}
 }
 
+func TestClientSecuritySummaryAndWriteAuth(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	adminToken := getAdminToken(t, r)
+	_ = createChannelAndKey(t, r, adminToken, "s1")
+	memberToken := getMemberToken(t, r, "security-member", "password123")
+
+	summary := makeRequest(r, "GET", "/api/v1/client-channels/s1/security-summary", nil, adminToken)
+	if summary.Code != http.StatusOK {
+		t.Fatalf("频道安全摘要应 200，实际 %d %s", summary.Code, summary.Body.String())
+	}
+	for _, request := range []struct {
+		method string
+		path   string
+		body   map[string]any
+	}{
+		{"POST", "/api/v1/client-dist/security/ip-blocks", map[string]any{"ip": "192.0.2.9", "durationMinutes": 30}},
+		{"POST", "/api/v1/client-dist/security/keys/1/state", map[string]any{"state": "observe"}},
+		{"PUT", "/api/v1/client-dist/security/channels/s1/protection", map[string]any{"mode": "queue"}},
+	} {
+		w := makeRequest(r, request.method, request.path, request.body, memberToken)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("普通成员写操作应 403，%s %s 实际 %d", request.method, request.path, w.Code)
+		}
+	}
+}
+
+func TestClientSecurityProfileDetail(t *testing.T) {
+	db := setupTestDB(t)
+	r, _ := setupClientDistRouter(t, db)
+	token := getAdminToken(t, r)
+	now := time.Now()
+	profile := model.ClientSecurityProfile{ChannelID: "s1", MachineID: "machine-abcdef", InstallID: "install-abcdef", PlayerName: "Alex", FirstSeen: now, LastSeen: now}
+	if err := db.Create(&profile).Error; err != nil {
+		t.Fatalf("写入画像失败: %v", err)
+	}
+
+	w := makeRequest(r, "GET", "/api/v1/client-dist/security/profiles/"+strconv.Itoa(int(profile.ID)), nil, token)
+	if w.Code != http.StatusOK {
+		t.Fatalf("画像详情应 200，实际 %d %s", w.Code, w.Body.String())
+	}
+	if detail := parseJSON(t, w); detail["machineId"] != "machine-abcdef" {
+		t.Fatalf("画像详情字段不符: %+v", detail)
+	}
+}
+
 func TestClientSecurityArtifactAuthorization_SelectedCoreOnly(t *testing.T) {
 	db := setupTestDB(t)
 	r, versionSvc := setupClientDistRouter(t, db)

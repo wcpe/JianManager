@@ -1124,6 +1124,64 @@ export const handlers = [
     return HttpResponse.json(runtimeStates.list().map((s) => ({ id: s.id, channelId: s.channelId, machineId: s.machineId, installId: `install-${s.id}`, playerName: s.playerName, keyId: 1, keyPrefix: 'jmck_ab12', firstSeen: s.firstSeenAt, lastSeen: s.lastHeartbeatAt, lastIp: s.ip, userAgent: 'JM-Updater/1.0', coreVersion: s.coreVersion, wedgeVersion: '1', manifestVersion: s.localVersion, os: s.platform, osVersion: '', arch: 'amd64', javaVendor: 'Temurin', javaVersion: s.javaVersion, javaArch: 'amd64', launcher: s.launcher, locale: 'zh-CN', timezone: 'Asia/Shanghai', memoryTier: '4-8g', riskScore: 0, riskLevel: 'info', protectionState: 'normal', labels: [], createdAt: s.createdAt, updatedAt: s.updatedAt })))
   }),
 
+  // 画像详情（FR-358）：列表行点开后拉全量字段 + 时间线
+  domainRoute('get', '/client-dist/security/profiles/:id', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const s = runtimeStates.find((row) => row.id === id)
+    if (!s) return HttpResponse.json({ error: 'PROFILE_NOT_FOUND' }, { status: 404 })
+    return HttpResponse.json({
+      id: s.id,
+      channelId: s.channelId,
+      machineId: s.machineId,
+      installId: `install-${s.id}`,
+      playerName: s.playerName,
+      keyId: 1,
+      keyPrefix: 'jmck_ab12',
+      firstSeen: s.firstSeenAt,
+      lastSeen: s.lastHeartbeatAt,
+      lastIp: s.ip,
+      userAgent: 'JM-Updater/1.0',
+      coreVersion: s.coreVersion,
+      wedgeVersion: '1',
+      manifestVersion: s.localVersion,
+      os: s.platform,
+      osVersion: '',
+      arch: 'amd64',
+      javaVendor: 'Temurin',
+      javaVersion: s.javaVersion,
+      javaArch: 'amd64',
+      launcher: s.launcher,
+      locale: 'zh-CN',
+      timezone: 'Asia/Shanghai',
+      memoryTier: '4-8g',
+      riskScore: 0,
+      riskLevel: 'info',
+      protectionState: 'normal',
+      labels: [],
+      createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
+      recentEvents: [],
+      protectionActions: [],
+    })
+  }),
+
+  domainRoute('get', '/client-channels/:id/security-summary', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const channelId = String(info.params.id)
+    return HttpResponse.json({
+      channelId,
+      riskLevel: 'info',
+      abnormalRequests: 0,
+      blockedIpCount: 0,
+      restrictedKeyCount: 0,
+      protectionMode: '',
+      windowMinutes: 60,
+    })
+  }),
+
   domainRoute('get', '/client-dist/security/ip-analysis', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied

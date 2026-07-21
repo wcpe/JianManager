@@ -8,17 +8,24 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+
 	"github.com/wcpe/JianManager/internal/controlplane/middleware"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
 type ClientSecurityHandler struct {
-	svc *service.ClientDistSecurityService
+	svc   *service.ClientDistSecurityService
+	audit *service.AuditService
 }
 
-func NewClientSecurityHandler(svc *service.ClientDistSecurityService) *ClientSecurityHandler {
-	return &ClientSecurityHandler{svc: svc}
+func NewClientSecurityHandler(svc *service.ClientDistSecurityService, audit ...*service.AuditService) *ClientSecurityHandler {
+	handler := &ClientSecurityHandler{svc: svc}
+	if len(audit) > 0 {
+		handler.audit = audit[0]
+	}
+	return handler
 }
 
 func (h *ClientSecurityHandler) Hello(c *gin.Context) {
@@ -72,6 +79,43 @@ func (h *ClientSecurityHandler) Profiles(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, out)
 }
+
+func (h *ClientSecurityHandler) Profile(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		return
+	}
+	out, err := h.svc.ProfileDetail(id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "PROFILE_NOT_FOUND", "message": "画像不存在"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (h *ClientSecurityHandler) ChannelSummary(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	out, err := h.svc.ChannelSummary(c.Param("id"), time.Hour)
+	if errors.Is(err, service.ErrChannelNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "CHANNEL_NOT_FOUND", "message": "频道不存在"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
 func (h *ClientSecurityHandler) Events(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
 		return
@@ -109,6 +153,7 @@ func (h *ClientSecurityHandler) Logs(c *gin.Context) {
 
 type ipBlockRequest struct {
 	IP              string `json:"ip"`
+	ChannelID       string `json:"channelId"`
 	Reason          string `json:"reason"`
 	TTLSeconds      int    `json:"ttlSeconds"`
 	DurationMinutes int    `json:"durationMinutes"`
@@ -129,11 +174,12 @@ func (h *ClientSecurityHandler) BlockIP(c *gin.Context) {
 	if ttl <= 0 && body.DurationMinutes > 0 {
 		ttl = time.Duration(body.DurationMinutes) * time.Minute
 	}
-	a, err := h.svc.BlockIP(body.IP, body.Reason, ttl, createdBy)
+	a, err := h.svc.BlockIP(body.IP, body.ChannelID, body.Reason, ttl, createdBy)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
 		return
 	}
+	h.recordAction(c, "client_dist_security.ip_block", "ip", body.IP, body)
 	c.JSON(http.StatusCreated, a)
 }
 func (h *ClientSecurityHandler) CancelAction(c *gin.Context) {
@@ -177,6 +223,7 @@ func (h *ClientSecurityHandler) SetKeyState(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
 		return
 	}
+	h.recordAction(c, "client_dist_security.key_state", "client_key", strconv.FormatUint(uint64(id), 10), body)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -202,6 +249,7 @@ func (h *ClientSecurityHandler) SetChannelProtection(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
 		return
 	}
+	h.recordAction(c, "client_dist_security.channel_protection", "client_channel", c.Param("id"), body)
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -354,12 +402,13 @@ func (h *ClientSecurityHandler) RegisterConsumerRoutes(rg *gin.RouterGroup) {
 	rg.POST("/client-security/hello", h.Hello)
 }
 func (h *ClientSecurityHandler) RegisterAdminRoutes(rg *gin.RouterGroup) {
+	rg.GET("/client-channels/:id/security-summary", h.ChannelSummary)
 	sec := rg.Group("/client-dist/security")
 	sec.GET("/overview", h.Overview)
 	sec.GET("/events", h.Events)
 	sec.GET("/logs", h.Logs)
 	sec.GET("/profiles", h.Profiles)
-	sec.GET("/profiles/:id", h.StubOK)
+	sec.GET("/profiles/:id", h.Profile)
 	sec.GET("/ip-analysis", h.IPAnalysis)
 	sec.GET("/player-analysis", h.PlayerAnalysis)
 	sec.GET("/actions", h.Actions)
@@ -375,6 +424,14 @@ func (h *ClientSecurityHandler) RegisterAdminRoutes(rg *gin.RouterGroup) {
 	sec.PUT("/channels/:id/protection", h.SetChannelProtection)
 
 	sec.DELETE("/channels/:id/protection", h.ClearChannelProtection)
+}
+
+func (h *ClientSecurityHandler) recordAction(c *gin.Context, action, targetType, targetID string, detail any) {
+	if h.audit == nil {
+		return
+	}
+	raw, _ := json.Marshal(detail)
+	_ = h.audit.Record(getUserID(c), action, targetType, targetID, string(raw), c.ClientIP())
 }
 
 func respondSecurityAuthErr(c *gin.Context, svc *service.ClientDistSecurityService, err error) string {

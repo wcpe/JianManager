@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { renderWithProviders } from '@/test/render'
 import { loginMockUser } from '@/test/auth'
-import { mockInject } from '@jianmanager/devmock/inject'
+import { domainRoute, mockInject } from '@jianmanager/devmock/inject'
 import { server } from '@jianmanager/devmock/server'
 import { API } from '@jianmanager/devmock/api'
 import ClientChannelsPage from './ClientChannelsPage'
@@ -156,5 +156,32 @@ describe('ClientChannelsPage（mock 假后端）', () => {
     )
     // seed 频道不应出现（请求被注入为 500）。
     expect(screen.queryByText('空岛一区')).not.toBeInTheDocument()
+  })
+
+  it('频道工作台展示安全摘要并链到安全中心', async () => {
+    loginMockUser()
+    server.use(
+      domainRoute('get', '/client-channels/:id/security-summary', () =>
+        HttpResponse.json({
+          channelId: 'skyblock-s1',
+          riskLevel: 'warn',
+          abnormalRequests: 3,
+          blockedIpCount: 1,
+          restrictedKeyCount: 2,
+          protectionMode: 'throttle',
+          windowMinutes: 60,
+        }),
+      ),
+    )
+    renderWithProviders(<ClientChannelsPage />, { route: '/client-channels?channel=skyblock-s1&tab=keys' })
+
+    const bar = await screen.findByTestId('channel-security-summary')
+    expect(within(bar).getByText('安全摘要')).toBeInTheDocument()
+    expect(await within(bar).findByText('warn')).toBeInTheDocument()
+    expect(within(bar).getByText(/近窗异常\s*3/)).toBeInTheDocument()
+    expect(within(bar).getByText(/封禁 IP\s*1/)).toBeInTheDocument()
+    expect(within(bar).getByText(/受限 Key\s*2/)).toBeInTheDocument()
+    const link = within(bar).getByRole('link', { name: '打开安全中心' })
+    expect(link).toHaveAttribute('href', '/client-dist-security?channelId=skyblock-s1')
   })
 })

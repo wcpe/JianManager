@@ -16,6 +16,9 @@ func newSecurityLogDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
+		&model.ClientChannel{},
+		&model.ClientPullKey{},
+		&model.ClientSecurityProfile{},
 		&model.ClientSecurityHello{},
 		&model.ClientSecurityRiskEvent{},
 		&model.ClientProtectionAction{},
@@ -51,6 +54,44 @@ func TestClientDistSecurity_SearchLogsMergesAllTypes(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, filtered.Total)
 	require.Equal(t, "Alex", filtered.Items[0].PlayerName)
+}
+
+func TestClientDistSecurity_ChannelSummaryUsesWindowAndChannel(t *testing.T) {
+	db := newSecurityLogDB(t)
+	svc := NewClientDistSecurityService(db, nil, nil)
+	now := time.Now()
+	require.NoError(t, db.Create(&model.ClientChannel{ChannelID: "s1", Name: "一区", ProtectionMode: "queue"}).Error)
+	require.NoError(t, db.Create(&model.ClientPullKey{ChannelID: "s1", Name: "受限", KeyHash: "hash-1", KeyPrefix: "key-1", SecurityState: ClientKeyStateThrottled}).Error)
+	expiresAt := now.Add(time.Hour)
+	require.NoError(t, db.Create(&model.ClientProtectionAction{TargetType: "ip", TargetValue: "192.0.2.1", ChannelID: "s1", Action: "temp_block", Status: "active", ExpiresAt: &expiresAt}).Error)
+	require.NoError(t, db.Create(&model.ClientSecurityRiskEvent{ChannelID: "s1", Severity: "high", CreatedAt: now.Add(-10 * time.Minute)}).Error)
+	require.NoError(t, db.Create(&model.ClientSecurityRiskEvent{ChannelID: "s1", Severity: "critical", CreatedAt: now.Add(-2 * time.Hour)}).Error)
+	require.NoError(t, db.Create(&model.ClientSecurityRiskEvent{ChannelID: "s2", Severity: "critical", CreatedAt: now}).Error)
+
+	out, err := svc.ChannelSummary("s1", time.Hour)
+	require.NoError(t, err)
+	require.Equal(t, "high", out.RiskLevel)
+	require.EqualValues(t, 1, out.AbnormalRequests)
+	require.EqualValues(t, 1, out.BlockedIPCount)
+	require.EqualValues(t, 1, out.RestrictedKeyCount)
+	require.Equal(t, "queue", out.ProtectionMode)
+}
+
+func TestClientDistSecurity_ProfileDetailIncludesTimeline(t *testing.T) {
+	db := newSecurityLogDB(t)
+	svc := NewClientDistSecurityService(db, nil, nil)
+	now := time.Now()
+	profile := model.ClientSecurityProfile{ChannelID: "s1", MachineID: "machine-abcdef", InstallID: "install-abcdef", PlayerName: "Alex", KeyID: 7, OS: "Windows", Arch: "amd64", JavaVendor: "Temurin", Locale: "zh-CN", Timezone: "Asia/Shanghai", MemoryTier: "8-16g", CoreVersion: "2.1.0", FirstSeen: now.Add(-time.Hour), LastSeen: now}
+	require.NoError(t, db.Create(&profile).Error)
+	require.NoError(t, db.Create(&model.ClientSecurityRiskEvent{ChannelID: "s1", MachineID: profile.MachineID, InstallID: profile.InstallID, RuleCode: "RISK_A", CreatedAt: now.Add(-time.Minute)}).Error)
+	require.NoError(t, db.Create(&model.ClientProtectionAction{TargetType: "key", TargetValue: "7", ChannelID: "s1", Action: "key_state", Status: "active", CreatedAt: now.Add(-2 * time.Minute)}).Error)
+
+	out, err := svc.ProfileDetail(profile.ID)
+	require.NoError(t, err)
+	require.Equal(t, "Temurin", out.JavaVendor)
+	require.Len(t, out.RecentEvents, 1)
+	require.Len(t, out.ProtectionActions, 1)
+	require.Equal(t, "RISK_A", out.RecentEvents[0].RuleCode)
 }
 
 func logTypes(items []ClientDistSecurityLogItem) []string {

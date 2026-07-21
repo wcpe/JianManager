@@ -156,7 +156,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			NewClientDistRuntimeHandler(svcs.ClientRuntimeState, svcs.ClientDistTracking, svcs.ClientChannel, svcs.Audit, svcs.ClientDistSecurity).RegisterConsumerRoutes(consumerGroup)
 		}
 		if svcs.ClientDistSecurity != nil {
-			NewClientSecurityHandler(svcs.ClientDistSecurity).RegisterConsumerRoutes(consumerGroup)
+			NewClientSecurityHandler(svcs.ClientDistSecurity, svcs.Audit).RegisterConsumerRoutes(consumerGroup)
 		}
 	}
 
@@ -455,7 +455,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 
 		// 客户端分发安全防护（FR-264）：画像、风险事件、处置与保护模式。限平台管理员。
 		if svcs.ClientDistSecurity != nil {
-			NewClientSecurityHandler(svcs.ClientDistSecurity).RegisterAdminRoutes(admin)
+			NewClientSecurityHandler(svcs.ClientDistSecurity, svcs.Audit).RegisterAdminRoutes(admin)
 		}
 
 		// 客户端分发端点 L7 防护：IP 黑白名单规则管理 + 防护拦截计数（FR-096 / ADR-023）。限平台管理员。
