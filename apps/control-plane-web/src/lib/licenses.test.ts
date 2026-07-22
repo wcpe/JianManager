@@ -22,7 +22,8 @@ describe('生成许可证清单', () => {
     const runtime = dependencies.filter((dependency) => dependency.type === 'runtime')
     const dev = dependencies.filter((dependency) => dependency.type === 'dev')
 
-    expect(dependencies).toHaveLength(944)
+    // 条数随 gen-licenses 扫描结果浮动（如纳入 ServerProbe 后会涨）；只锁结构与防截断下界，不写死精确值。
+    expect(dependencies.length).toBeGreaterThanOrEqual(900)
     expect(runtime.length).toBeGreaterThan(0)
     expect(dev.length).toBeGreaterThan(0)
     expect(runtime.length + dev.length).toBe(dependencies.length)
