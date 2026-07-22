@@ -2,10 +2,10 @@ import { test, expect } from '@playwright/test'
 import { login } from './helpers'
 
 /**
- * FR-352 接入指引内嵌更新器信息 + 版本/发布页旁路摘要 · mock 真浏览器验收。
- * 证据截图：.tmp/acceptance/FR-352/
+ * 接入指引内嵌更新器信息 + 版本页旁路摘要 · mock 真浏览器（通用能力验收）。
+ * 证据截图：.tmp/acceptance/client-updater-guide/
  */
-test('FR-352 guide 展示 coreVersion/available/size 且版本页有旁路摘要', async ({ page }) => {
+test('接入指引展示 coreVersion/available/size 且版本页有旁路摘要', async ({ page }) => {
   await login(page)
 
   // 工作台 query 键为 channel/tab（非 path 参数）
@@ -21,7 +21,7 @@ test('FR-352 guide 展示 coreVersion/available/size 且版本页有旁路摘要
   await expect(page.getByRole('button', { name: /wedge\.jar/i })).toBeEnabled()
 
   await page.screenshot({
-    path: '../../.tmp/acceptance/FR-352/guide-embed-info.png',
+    path: '../../.tmp/acceptance/client-updater-guide/guide-embed-info.png',
     fullPage: true,
   })
 
@@ -29,7 +29,7 @@ test('FR-352 guide 展示 coreVersion/available/size 且版本页有旁路摘要
   await page.getByRole('tab', { name: /版本/ }).first().click()
   await expect(page.getByText(/内嵌更新器/)).toBeVisible({ timeout: 15_000 })
   await page.screenshot({
-    path: '../../.tmp/acceptance/FR-352/versions-summary.png',
+    path: '../../.tmp/acceptance/client-updater-guide/versions-summary.png',
     fullPage: true,
   })
 })
