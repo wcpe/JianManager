@@ -91,8 +91,7 @@ DIST_LDFLAGS = -s -w -X github.com/wcpe/JianManager/internal/version.Version=$(V
 
 # 发布前探针内嵌门禁：目录内须有 ServerProbe.jar（本地曾 make embed-probe 即可；CI 应用缓存或显式构建）。
 ensure-probe-embed:
-	@test -f internal/controlplane/embed/probe/ServerProbe.jar || \
-		(echo "error: 缺少 internal/controlplane/embed/probe/ServerProbe.jar —— 请先 make embed-probe，否则发布包无法 OTA 推送探针" >&2; exit 1)
+	@test -f internal/controlplane/embed/probe/ServerProbe.jar || (echo "error: missing ServerProbe.jar; run make embed-probe first" >&2; exit 1)
 
 # 全量发布构建：前端 + 内嵌资产先行（含两阶段 Worker 内嵌，ADR-062），再交叉编译四个二进制。
 dist: gen-licenses build-web embed-web embed-install-scripts ensure-probe-embed embed-botworker embed-worker dist-bin
