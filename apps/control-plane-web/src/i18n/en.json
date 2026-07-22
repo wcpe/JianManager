@@ -737,6 +737,7 @@
   "probe": {
     "title": "ServerProbe Update",
     "connected": "Probe connected",
+    "metricsActive": "Probe running (metrics channel)",
     "disconnected": "Probe not connected",
     "embeddedVersion": "Embedded version",
     "offlineCache": "Offline dependency cache",
@@ -745,7 +746,8 @@
     "lastPushed": "Last pushed",
     "update": "Update probe",
     "updateRestart": "Update & restart",
-    "notEmbedded": "No embedded probe jar in this build (run make embed-probe to bundle one)",
+    "notEmbedded": "No embedded probe jar in this build (OTA push unavailable; rebuild CP after make embed-probe)",
+    "notEmbeddedButRunning": "This CP build has no embedded probe jar, so OTA push is unavailable; the in-instance probe is already running (metrics channel works). Console TPS/logs are unaffected",
     "installHint": "Probe is not connected. Push the embedded probe first, or choose \"Update & restart\" to make it effective immediately.",
     "updatedPending": "Probe pushed; takes effect on next restart",
     "updatedRestarted": "Probe pushed, instance restarting",

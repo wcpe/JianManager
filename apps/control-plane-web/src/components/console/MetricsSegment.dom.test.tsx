@@ -45,11 +45,69 @@ describe('MetricsSegment（mock 假后端）', () => {
         lastPushedAt: null,
       },
     })
+    // 指标通道也不可用时才标「未连接」（避免 metrics.probeAvailable 默认真把状态盖住）。
+    mockInject('get', '/instances/:id/metrics', {
+      kind: 'status',
+      status: 200,
+      body: {
+        tps: 20,
+        onlinePlayers: 0,
+        memoryMb: 512,
+        msptMillis: 2,
+        threads: 40,
+        cpuPercent: 5,
+        heapMaxMb: 1024,
+        uptimeSeconds: 60,
+        worlds: [],
+        probeAvailable: false,
+      },
+    })
     renderWithProviders(<MetricsSegment instanceUuid="inst-1" instanceId={1} />)
 
     expect(await screen.findByText('探针未连接')).toBeInTheDocument()
     expect(screen.getByText(/可先推送内嵌探针/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '更新并重启' })).toBeEnabled()
+  })
+
+  it('F2：桥未连但 metrics.probeAvailable 时显示运行中，未内嵌不掩盖运行态', async () => {
+    mockInject('get', '/instances/:id/probe/update', {
+      kind: 'status',
+      status: 200,
+      body: {
+        instanceId: 1,
+        instanceUuid: 'inst-1',
+        probeConnected: false,
+        embeddedVersion: '0.1.0',
+        embeddedFingerprint: '',
+        embeddedAvailable: false,
+        librariesAvailable: false,
+        librariesBytes: 0,
+        librariesShortSha: '',
+        lastPushedAt: null,
+      },
+    })
+    mockInject('get', '/instances/:id/metrics', {
+      kind: 'status',
+      status: 200,
+      body: {
+        tps: 20,
+        onlinePlayers: 0,
+        memoryMb: 560,
+        msptMillis: 1,
+        threads: 50,
+        cpuPercent: 2,
+        heapMaxMb: 2048,
+        uptimeSeconds: 86400,
+        worlds: [],
+        probeAvailable: true,
+      },
+    })
+    renderWithProviders(<MetricsSegment instanceUuid="inst-1" instanceId={1} />)
+
+    expect(await screen.findByText('探针运行中（指标通道）')).toBeInTheDocument()
+    expect(screen.getByText(/无法 OTA 推送/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '更新探针' })).toBeDisabled()
+    expect(screen.queryByText('探针未连接')).not.toBeInTheDocument()
   })
 
   it('当前 TPS/MSPT/CPU 按阈值标记危险态', async () => {

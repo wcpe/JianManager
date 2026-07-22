@@ -20,16 +20,35 @@ function formatProbeCacheBytes(bytes: number) {
 /**
  * 探针在线更新卡（FR-068/FR-114）：展示探针连接状态 + 内嵌最新版本 + 离线依赖缓存 + 上次推送时间，
  * 「更新探针」推送内嵌 jar（下次重启生效），「更新并重启」推送后立即重启实例生效。
+ *
+ * 连接态分两路（真机 F2 修正）：
+ * - 插件桥 WS 名册（st.probeConnected）：玩家事件/业务写依赖
+ * - 运行时 metrics.probeAvailable：Worker 抓 /metrics 成功即视为探针在跑（控制台 TPS 同源）
+ * 二者任一为真 → 展示「运行中」；仅桥连成功 → 「已连接」；否则「未连接」。
+ * 「未内嵌 jar」只影响 OTA 推送按钮，不得掩盖「探针已在实例内运行」的事实。
  */
 function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
   const { t } = useTranslation()
   const { data: inst } = useInstance(instanceId)
   const { data: st } = useProbeUpdateStatus(instanceId)
+  const isRunning = inst?.status === 'RUNNING'
+  // 与 HealthStrip 同钩：RUNNING 时拉实时指标，读 probeAvailable（与 TPS 同源，不依赖插件桥）。
+  const { data: metrics } = useInstanceMetrics(instanceId, isRunning)
   const update = useUpdateProbe(instanceId)
   // ServerProbe 是 Bukkit 插件，代理端（BungeeCord/Waterfall/Velocity）无法加载：
   // 代理实例不渲染探针卡（后端同有守卫），避免「更新探针必失败」的陷阱按钮。
   if (inst?.role === 'proxy') return null
   if (!st) return null
+
+  const bridgeConnected = !!st.probeConnected
+  const metricsActive = !!metrics?.probeAvailable
+  const probeRunning = bridgeConnected || metricsActive
+  const statusLabel = bridgeConnected
+    ? t('probe.connected')
+    : metricsActive
+      ? t('probe.metricsActive')
+      : t('probe.disconnected')
+
   const doUpdate = (restart: boolean) =>
     update.mutate(restart, {
       onSuccess: (r) => toast.success(r.restarted ? t('probe.updatedRestarted') : t('probe.updatedPending')),
@@ -42,8 +61,8 @@ function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
   return (
     <Panel title={t('probe.title')}>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 p-2 text-xs">
-        <span className={st.probeConnected ? 'font-medium text-green-600 dark:text-green-400' : 'text-muted-foreground'}>
-          {st.probeConnected ? t('probe.connected') : t('probe.disconnected')}
+        <span className={probeRunning ? 'font-medium text-green-600 dark:text-green-400' : 'text-muted-foreground'}>
+          {statusLabel}
         </span>
         <span className="text-muted-foreground">
           {t('probe.embeddedVersion')}: {st.embeddedAvailable ? st.embeddedVersion || '—' : 'N/A'}
@@ -67,8 +86,12 @@ function ProbeUpdateCard({ instanceId }: { instanceId: number }) {
           </Button>
         </div>
       </div>
-      {!st.embeddedAvailable && <div className="px-2 pb-2 text-xs text-muted-foreground">{t('probe.notEmbedded')}</div>}
-      {!st.probeConnected && st.embeddedAvailable && (
+      {!st.embeddedAvailable && (
+        <div className="px-2 pb-2 text-xs text-muted-foreground">
+          {probeRunning ? t('probe.notEmbeddedButRunning') : t('probe.notEmbedded')}
+        </div>
+      )}
+      {!probeRunning && st.embeddedAvailable && (
         <div className="mx-2 mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
           {t('probe.installHint')}
         </div>

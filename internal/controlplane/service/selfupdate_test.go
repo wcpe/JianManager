@@ -55,10 +55,40 @@ func TestVersionDiffers(t *testing.T) {
 		{"0.8.0", "0.8.0", false},
 		{"v0.8.0", "0.8.0", false}, // v 前缀归一
 		{"0.7.0", "", false},       // 空最新版本不视为有更新
+		// 预发布后缀剥离后同核视为「相同」（0.18.0-dev ≡ 0.18.0）
+		{"0.18.0-dev", "0.18.0", false},
+		{"0.18.0-dev", "v0.18.0", false},
 	}
 	for _, c := range cases {
 		if got := versionDiffers(c.cur, c.latest); got != c.want {
 			t.Fatalf("versionDiffers(%q,%q)=%v 期望 %v", c.cur, c.latest, got, c.want)
+		}
+	}
+}
+
+// TestVersionIsUpgrade 可升级判定：仅 latest 严格高于 current 才为 true（防 F1 降级误报）。
+func TestVersionIsUpgrade(t *testing.T) {
+	cases := []struct {
+		cur, latest string
+		want        bool
+	}{
+		{"0.17.0", "0.18.0", true},
+		{"0.17.0-dev", "v0.18.0", true},
+		{"0.18.0", "0.18.0", false},
+		{"0.18.0-dev", "0.18.0", false}, // 同核：dev 不算「可升」
+		// 真机 F1：当前 0.18.0（或缓存里的 0.17.0-dev 被刷成 0.18.0 后）对 latest=v0.16.0 绝不可升
+		{"0.18.0", "v0.16.0", false},
+		{"0.17.0-dev", "v0.16.0", false},
+		{"0.16.0", "v0.16.0", false},
+		{"0.15.0", "v0.16.0", true},
+		{"1.2", "1.2.0", false},
+		{"1.2", "1.2.1", true},
+		{"", "0.1.0", true}, // 空当前 + 有 latest：可升
+		{"0.1.0", "", false},
+	}
+	for _, c := range cases {
+		if got := versionIsUpgrade(c.cur, c.latest); got != c.want {
+			t.Fatalf("versionIsUpgrade(%q,%q)=%v 期望 %v", c.cur, c.latest, got, c.want)
 		}
 	}
 }
@@ -114,10 +144,11 @@ func TestCheckUpdate_NotConfigured(t *testing.T) {
 func TestCheckUpdate_WithFeed_CPUpdateAvailable(t *testing.T) {
 	db := newSelfUpdateTestDB(t)
 	svc := NewSelfUpdateService(db, cpgrpc.NewClientPool(), SelfUpdateConfig{FeedURL: "https://x"}, nil)
-	// 注入 feed 桩：声明一个更高版本 + CP 本平台制品。
+	// 注入 feed 桩：声明一个严格更高的版本 + CP 本平台制品。
+	// 注意：不可用 version+"-next"（normalize 后同核，versionIsUpgrade=false）。
 	svc.feedFetcher = func(_ context.Context) (*Feed, error) {
 		return &Feed{
-			Version: version.Version + "-next",
+			Version: "99.0.0",
 			Artifacts: []FeedArtifact{
 				{Component: ComponentControlPlane, OS: runtime.GOOS, Arch: runtime.GOARCH, URL: "u", SHA256: "s"},
 			},
@@ -134,6 +165,24 @@ func TestCheckUpdate_WithFeed_CPUpdateAvailable(t *testing.T) {
 	if !res.ControlPlane.UpdateAvailable {
 		t.Fatal("更高版本 + 有制品应提示 CP 有更新")
 	}
+}
+
+// TestCheckUpdate_WithFeed_DoesNotOfferDowngrade feed 低于当前时 UpdateAvailable 必须为 false（F1）。
+func TestCheckUpdate_WithFeed_DoesNotOfferDowngrade(t *testing.T) {
+	svc := NewSelfUpdateService(newSelfUpdateTestDB(t), cpgrpc.NewClientPool(), SelfUpdateConfig{FeedURL: "https://x"}, nil)
+	svc.feedFetcher = func(_ context.Context) (*Feed, error) {
+		return &Feed{
+			Version: "0.1.0",
+			Artifacts: []FeedArtifact{
+				{Component: ComponentControlPlane, OS: runtime.GOOS, Arch: runtime.GOARCH, URL: "u", SHA256: "s"},
+			},
+		}, nil
+	}
+	res, err := svc.CheckUpdate(context.Background())
+	require.NoError(t, err)
+	require.True(t, res.ControlPlane.ArtifactAvailable)
+	require.False(t, res.ControlPlane.UpdateAvailable,
+		"current=%s latest=0.1.0 不得标可升级", version.Version)
 }
 
 func TestUpgradeControlPlane_AlreadyLatest(t *testing.T) {
@@ -153,10 +202,31 @@ func TestUpgradeControlPlane_AlreadyLatest(t *testing.T) {
 	}
 }
 
+// TestUpgradeControlPlane_RejectsDowngrade feed 低于当前时拒绝执行升级（F1 门闸）。
+func TestUpgradeControlPlane_RejectsDowngrade(t *testing.T) {
+	svc := NewSelfUpdateService(newSelfUpdateTestDB(t), cpgrpc.NewClientPool(), SelfUpdateConfig{FeedURL: "https://x"}, nil)
+	svc.feedFetcher = func(_ context.Context) (*Feed, error) {
+		return &Feed{
+			Version: "0.1.0",
+			Artifacts: []FeedArtifact{
+				{Component: ComponentControlPlane, OS: runtime.GOOS, Arch: runtime.GOARCH, URL: "u", SHA256: "s"},
+			},
+		}, nil
+	}
+	// 若误走下载桩，测试应失败——降级必须在门闸处拦截。
+	svc.cpUpgradeFn = func(_ *FeedArtifact) error {
+		t.Fatal("降级路径不得调用 cpUpgradeFn")
+		return nil
+	}
+	_, _, err := svc.UpgradeControlPlane(context.Background(), "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "拒绝降级")
+}
+
 func TestUpgradeControlPlane_NoArtifact(t *testing.T) {
 	svc := NewSelfUpdateService(newSelfUpdateTestDB(t), cpgrpc.NewClientPool(), SelfUpdateConfig{FeedURL: "https://x"}, nil)
 	svc.feedFetcher = func(_ context.Context) (*Feed, error) {
-		return &Feed{Version: version.Version + "-next", Artifacts: nil}, nil // 无任何制品
+		return &Feed{Version: "99.0.0", Artifacts: nil}, nil // 无任何制品
 	}
 	_, _, err := svc.UpgradeControlPlane(context.Background(), "")
 	if !errors.Is(err, ErrUpdateNoArtifact) {

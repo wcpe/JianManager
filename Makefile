@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-probe embed-cfr embed-client-updater embed-worker embed-botworker gen-licenses docker dist dist-bin
+.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-probe ensure-probe-embed embed-cfr embed-client-updater embed-worker embed-botworker gen-licenses docker dist dist-bin
 
 # Windows 原生终端（PowerShell/cmd）下 GNU make 默认用 cmd.exe 执行 recipe，而本文件 recipe
 # 全为 POSIX 命令（mkdir -p / cp -r / sed …），cmd 下会报「命令语法不正确」。检测到
@@ -83,12 +83,19 @@ embed-cfr:
 # 纯 Go（SQLite 用 glebarez 纯 Go 驱动、无 CGO）+ CGO_ENABLED=0，任意宿主（含 Windows）可交叉编译全平台产物。
 # 命名与版本注入与 CI 同式：dist/<组件>-<os>-<arch>[.exe]，-X internal/version.Version（ADR-036）。
 # VERSION 默认读 internal/version/version.go 当前值，可覆盖：make dist VERSION=1.0.0。
-# 注：probe / client-updater 内嵌 jar 已入库随 checkout 就位；如需重建用 embed-probe / embed-client-updater。
+# 注：probe jar / libraries zip 被 .gitignore，不入库；发布前须 ensure-probe-embed 或 make embed-probe，
+# 否则 CP 无 OTA 探针包（运行中实例探针仍可工作，但「更新探针」按钮不可用，真机 F2）。
+# client-updater 内嵌物另见 embed-client-updater。
 VERSION ?= $(shell sed -n 's/^var Version = "\(.*\)"/\1/p' internal/version/version.go)
 DIST_LDFLAGS = -s -w -X github.com/wcpe/JianManager/internal/version.Version=$(VERSION)
 
+# 发布前探针内嵌门禁：目录内须有 ServerProbe.jar（本地曾 make embed-probe 即可；CI 应用缓存或显式构建）。
+ensure-probe-embed:
+	@test -f internal/controlplane/embed/probe/ServerProbe.jar || \
+		(echo "error: 缺少 internal/controlplane/embed/probe/ServerProbe.jar —— 请先 make embed-probe，否则发布包无法 OTA 推送探针" >&2; exit 1)
+
 # 全量发布构建：前端 + 内嵌资产先行（含两阶段 Worker 内嵌，ADR-062），再交叉编译四个二进制。
-dist: gen-licenses build-web embed-web embed-install-scripts embed-botworker embed-worker dist-bin
+dist: gen-licenses build-web embed-web embed-install-scripts ensure-probe-embed embed-botworker embed-worker dist-bin
 
 # 打包 bot-worker dist 注入 CP 内嵌目录（FR-308/ADR-070）：Worker 经 gRPC 自愈拉取，
 # bot 能力不再依赖手工拷贝 dist。产物不入库（目录 .gitignore 占位）；

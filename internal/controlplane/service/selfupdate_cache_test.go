@@ -5,6 +5,7 @@ import (
 	"errors"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -130,4 +131,52 @@ func TestRefreshCheck_Unconfigured(t *testing.T) {
 	if !got.Cached || got.CheckedAt == nil {
 		t.Fatal("未配源的成功检查同样应写缓存并标 cached=true")
 	}
+}
+
+// TestCachedCheck_RefreshesStaleLocalVersion 复现 F1：库里缓存了旧 currentVersion（0.17.0-dev）
+// 与更低的 latestVersion（v0.16.0）且 updateAvailable=true；读缓存时必须：
+//  1) 用本进程 version.Version 覆盖 CP currentVersion；
+//  2) 按 versionIsUpgrade 重算，禁止把更低 feed 标成可升级。
+func TestCachedCheck_RefreshesStaleLocalVersion(t *testing.T) {
+	db := newCacheTestDB(t)
+	svc := NewSelfUpdateService(db, cpgrpc.NewClientPool(), SelfUpdateConfig{GitHubRepo: "wcpe/JianManager"}, nil)
+
+	// 直接写入「7 天前」的脏缓存（与真机 self_update_check_caches 形态一致）。
+	stale := CheckResult{
+		Configured:    true,
+		LatestVersion: "v0.16.0",
+		Source:        "github:wcpe/JianManager@stable",
+		ControlPlane: ComponentStatus{
+			Online:            true,
+			CurrentVersion:    "0.17.0-dev",
+			OS:                "linux",
+			Arch:              "amd64",
+			UpdateAvailable:   true, // 脏：把降级当升级
+			ArtifactAvailable: true,
+		},
+		Nodes: []ComponentStatus{
+			{
+				NodeID: 1, Name: "node-main", Online: true,
+				CurrentVersion: "0.17.0-dev", OS: "linux", Arch: "amd64",
+				UpdateAvailable: true, ArtifactAvailable: true,
+			},
+		},
+	}
+	require.NoError(t, svc.persistCheckCache(&stale, time.Now().UTC().Add(-7*24*time.Hour)))
+
+	got, err := svc.CachedCheck(context.Background())
+	require.NoError(t, err)
+	require.True(t, got.Cached)
+	// 本机版本必须是进程真值，不是缓存里的 0.17.0-dev。
+	require.Equal(t, version.Version, got.ControlPlane.CurrentVersion,
+		"CachedCheck 必须用 version.Version 覆盖缓存中的 CP 当前版本")
+	// latest 仍来自缓存（用户需点「检查更新」才 live）。
+	require.Equal(t, "v0.16.0", got.LatestVersion)
+	// 0.18.0（或当前 version）对 v0.16.0 不可升。
+	require.False(t, got.ControlPlane.UpdateAvailable,
+		"current=%s latest=v0.16.0 不得标可升级", version.Version)
+	// 节点侧按缓存 current 与 latest 重算后也应为 false。
+	require.Len(t, got.Nodes, 1)
+	require.False(t, got.Nodes[0].UpdateAvailable,
+		"节点 0.17.0-dev → v0.16.0 不得标可升级")
 }

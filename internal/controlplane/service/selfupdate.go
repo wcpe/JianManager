@@ -228,13 +228,91 @@ func SelectArtifact(feed *Feed, component, goos, goarch string) (*FeedArtifact, 
 	return nil, false
 }
 
-// versionDiffers 报告 current 与 latest 是否不同（视为「有更新」）。
-// 采用「字符串不等即有更新」的保守语义：版本号格式多样（含/不含 v 前缀、预发布后缀），
-// 简单不等判定足够驱动「是否提示升级」，真正是否升级由运营手动确认（不自动放量）。
+// versionDiffers 报告 current 与 latest 规范化后是否不同（用于「是否同一版本」校验，
+// 如 feed 版本与指定 wantVersion 是否一致）。不表示「可升级」——可升级请用 versionIsUpgrade。
 func versionDiffers(current, latest string) bool {
-	c := strings.TrimSpace(strings.TrimPrefix(current, "v"))
-	l := strings.TrimSpace(strings.TrimPrefix(latest, "v"))
+	c := normalizeVersionCore(current)
+	l := normalizeVersionCore(latest)
 	return l != "" && c != l
+}
+
+// normalizeVersionCore 去掉首尾空白、可选 v 前缀，并剥离首个「-」后的预发布/构建后缀。
+// 例：v0.18.0-dev → 0.18.0；0.17.0-dev+abc → 0.17.0。空串返回空。
+func normalizeVersionCore(v string) string {
+	s := strings.TrimSpace(v)
+	s = strings.TrimPrefix(s, "v")
+	s = strings.TrimPrefix(s, "V")
+	if i := strings.IndexByte(s, '-'); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.IndexByte(s, '+'); i >= 0 {
+		s = s[:i]
+	}
+	return s
+}
+
+// versionIsUpgrade 报告 latest 是否严格高于 current（仅在「可升级」提示与升级门闸使用）。
+// 比较语义：
+//  1. 先对双方做 normalizeVersionCore（去 v 前缀与 -dev 等后缀），再按「点分数字」逐段比较；
+//  2. 段数不足右侧补 0（1.2 与 1.2.0 等价）；
+//  3. 任一方无法解析为数字段时回退到「规范化后字符串不等」——避免把 0.18.0 提示成可升到 v0.16.0。
+// 真机 F1：缓存里 current=0.17.0-dev、latest=v0.16.0 曾被 versionDiffers 误标「可升级」（实际是降级）。
+func versionIsUpgrade(current, latest string) bool {
+	c := normalizeVersionCore(current)
+	l := normalizeVersionCore(latest)
+	if l == "" || c == l {
+		return false
+	}
+	cp, cok := parseVersionParts(c)
+	lp, lok := parseVersionParts(l)
+	if !cok || !lok {
+		// 解析失败时保守：仅当字符串不同且 latest 非空时视为「可能有更新」（与旧 versionDiffers 对齐），
+		// 但两侧都能解析时绝不会走这里，故降级误报已被挡住。
+		return c != l
+	}
+	n := len(cp)
+	if len(lp) > n {
+		n = len(lp)
+	}
+	for i := 0; i < n; i++ {
+		var a, b int
+		if i < len(cp) {
+			a = cp[i]
+		}
+		if i < len(lp) {
+			b = lp[i]
+		}
+		if b > a {
+			return true
+		}
+		if b < a {
+			return false
+		}
+	}
+	return false
+}
+
+// parseVersionParts 把 "1.2.3" 拆成 [1,2,3]；任一段非数字返回 ok=false。
+func parseVersionParts(v string) ([]int, bool) {
+	if v == "" {
+		return nil, false
+	}
+	segs := strings.Split(v, ".")
+	out := make([]int, 0, len(segs))
+	for _, s := range segs {
+		if s == "" {
+			return nil, false
+		}
+		n := 0
+		for _, ch := range s {
+			if ch < '0' || ch > '9' {
+				return nil, false
+			}
+			n = n*10 + int(ch-'0')
+		}
+		out = append(out, n)
+	}
+	return out, true
 }
 
 // ComponentStatus 是检查更新里单个组件（CP 或某节点）的版本对比结果。
@@ -301,8 +379,9 @@ func (s *SelfUpdateService) CheckUpdate(ctx context.Context) (*CheckResult, erro
 			res.ControlPlane.ArtifactAvailable = true
 			_ = art
 		}
+		// 仅「feed 严格高于当前」才标可升级，避免 0.18.0 被 v0.16.0 误标为可升（F1 降级误报）。
 		res.ControlPlane.UpdateAvailable = res.ControlPlane.ArtifactAvailable &&
-			versionDiffers(version.Version, feed.Version)
+			versionIsUpgrade(version.Version, feed.Version)
 	}
 
 	// 各节点对比。
@@ -339,7 +418,7 @@ func (s *SelfUpdateService) CheckUpdate(ctx context.Context) (*CheckResult, erro
 				st.ArtifactAvailable = true
 			}
 			st.UpdateAvailable = st.Online && st.ArtifactAvailable &&
-				st.CurrentVersion != "" && versionDiffers(st.CurrentVersion, feed.Version)
+				st.CurrentVersion != "" && versionIsUpgrade(st.CurrentVersion, feed.Version)
 		}
 		res.Nodes = append(res.Nodes, st)
 	}
@@ -349,6 +428,10 @@ func (s *SelfUpdateService) CheckUpdate(ctx context.Context) (*CheckResult, erro
 // CachedCheck 返回服务端缓存的「上次成功检查结果」（FR-186），不触发任何 live 网络调用，毫秒级返回。
 // 进系统更新页直接读此即时回显；缓存空时返回 Cached=false 的结果（带当前 configured/CP 当前版本），
 // 让前端据此后台触发一次 RefreshCheck。反序列化兼容旧 blob：缺字段自然降级（见 spec §6）。
+//
+// 读缓存时始终用本进程 version.Version 覆盖 controlPlane.currentVersion，并按 versionIsUpgrade
+// 重算 UpdateAvailable——避免「二进制已升到 0.18.0，但 7 天前的缓存仍写 0.17.0-dev / 可升到 v0.16.0」
+// 这种 F1 展示漂移（缓存只担保 latestVersion/notes/source 与节点列表快照）。
 func (s *SelfUpdateService) CachedCheck(ctx context.Context) (*CheckResult, error) {
 	var row model.SelfUpdateCheckCache
 	err := s.db.First(&row, model.SelfUpdateCheckCacheID).Error
@@ -368,7 +451,40 @@ func (s *SelfUpdateService) CachedCheck(ctx context.Context) (*CheckResult, erro
 	res.Cached = true
 	checkedAt := row.CheckedAt
 	res.CheckedAt = &checkedAt
+	s.refreshLocalVersionsInCheckResult(&res)
 	return &res, nil
+}
+
+// refreshLocalVersionsInCheckResult 用本进程真值覆盖缓存里会过期的本机字段：
+// CP currentVersion / OS / Arch / BackupVersion / UpdateAvailable。
+// latestVersion、notes、source、节点列表仍来自缓存（需用户点「检查更新」才 live 刷新）。
+func (s *SelfUpdateService) refreshLocalVersionsInCheckResult(res *CheckResult) {
+	if res == nil {
+		return
+	}
+	res.ControlPlane.CurrentVersion = version.Version
+	res.ControlPlane.OS = runtime.GOOS
+	res.ControlPlane.Arch = runtime.GOARCH
+	res.ControlPlane.Online = true
+	if meta, ok := selfupdate.BackupInfo(selfupdate.ComponentControlPlane, s.root); ok {
+		res.ControlPlane.BackupVersion = meta.Version
+	} else {
+		res.ControlPlane.BackupVersion = ""
+	}
+	// 有制品且 feed 严格更高才标可升级；latest 为空（未检查/未配源）则不可升。
+	res.ControlPlane.UpdateAvailable = res.ControlPlane.ArtifactAvailable &&
+		versionIsUpgrade(version.Version, res.LatestVersion)
+	// 节点侧无 live 版本真源时，至少按缓存里的 currentVersion 与 latest 重算 UpdateAvailable，
+	// 避免旧缓存把「current 已高于 latest」仍标成可升级。
+	for i := range res.Nodes {
+		n := &res.Nodes[i]
+		if n.CurrentVersion == "" || res.LatestVersion == "" {
+			n.UpdateAvailable = false
+			continue
+		}
+		n.UpdateAvailable = n.Online && n.ArtifactAvailable &&
+			versionIsUpgrade(n.CurrentVersion, res.LatestVersion)
+	}
 }
 
 // emptyCachedResult 构造无缓存时的最小结果：仅当前是否配置 + 更新源标识 + CP 本机当前版本，Cached=false。
@@ -451,8 +567,13 @@ func (s *SelfUpdateService) UpgradeControlPlane(ctx context.Context, wantVersion
 	if err != nil {
 		return from, "", err
 	}
+	// 已是同一核心版本：拒绝（含 0.18.0 vs v0.18.0、0.18.0-dev vs 0.18.0 等同核）。
 	if !versionDiffers(from, feed.Version) {
 		return from, feed.Version, ErrUpdateAlreadyLatest
+	}
+	// feed 不严格高于当前：拒绝降级/旁路（真机 F1：stable latest=v0.16.0 时不应把 0.18.0「升级」下去）。
+	if !versionIsUpgrade(from, feed.Version) {
+		return from, feed.Version, fmt.Errorf("更新源版本 %s 不高于当前 %s，拒绝降级", feed.Version, from)
 	}
 
 	if s.cpUpgradeFn != nil {

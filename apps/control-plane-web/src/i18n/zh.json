@@ -714,6 +714,7 @@
   "probe": {
     "title": "ServerProbe 探针更新",
     "connected": "探针已连接",
+    "metricsActive": "探针运行中（指标通道）",
     "disconnected": "探针未连接",
     "embeddedVersion": "内嵌版本",
     "offlineCache": "离线依赖缓存",
@@ -722,7 +723,8 @@
     "lastPushed": "上次推送",
     "update": "更新探针",
     "updateRestart": "更新并重启",
-    "notEmbedded": "本次构建未内嵌探针 jar（运行 make embed-probe 可捆绑）",
+    "notEmbedded": "本次构建未内嵌探针 jar（OTA 推送不可用；运行 make embed-probe 后重新构建 CP 可捆绑）",
+    "notEmbeddedButRunning": "本次 CP 构建未内嵌探针 jar，无法 OTA 推送；实例内探针已在跑（指标通道可用），控制台 TPS/日志不受影响",
     "installHint": "探针未连接。可先推送内嵌探针，若需要立即生效请选择「更新并重启」。",
     "updatedPending": "探针已推送，下次重启生效",
     "updatedRestarted": "探针已推送，实例重启中",
