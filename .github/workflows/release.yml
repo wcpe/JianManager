@@ -3,6 +3,8 @@
 # 触发：
 #   - push 到 master              → 滚动预发布：覆盖固定 tag `latest`（prerelease，FR-182），说明取 CHANGELOG [Unreleased]。
 #   - push tag `v*`（如 v0.11.0）  → 正式发布：建 release `vX.Y.Z`（非 prerelease），说明取该版本段。
+# 硬门禁：正式 tag 对应提交必须已在 origin/master 历史上（release-metadata.mjs 校验）。
+#   禁止从 feature/release/* 等非主干 tip 直接打 tag 出正式版。
 #
 # 产物：control-plane / worker × linux/amd64 + windows/amd64 共 4 个二进制 + checksums.txt，
 # 命名 `<component>-<os>-<arch>[.exe]`（ADR-036 §1），sha256 校验清单（ADR-036 §2）。
@@ -50,7 +52,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 解析并校验发布元数据
+      - name: 确保可解析 origin/master（正式 tag 祖先校验）
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin master:refs/remotes/origin/master
+          git rev-parse --verify origin/master
+
+      - name: 解析并校验发布元数据（正式 tag 须在 master 上）
         id: meta
         shell: bash
         run: node scripts/release-metadata.mjs

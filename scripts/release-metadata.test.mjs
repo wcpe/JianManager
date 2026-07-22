@@ -15,6 +15,7 @@ test('正式 tag 分离 release 名称与二进制裸版本', () => {
       sha: 'abcdef0123456789',
       sourceVersion: '0.18.0',
       exactTags: ['v0.18.0'],
+      onMaster: true,
     }),
     {
       version: '0.18.0',
@@ -32,8 +33,41 @@ test('正式 tag 与源码裸版本不一致时拒绝发布', () => {
       sha: 'abcdef0123456789',
       sourceVersion: '0.18.1',
       exactTags: ['v0.18.0'],
+      onMaster: true,
     }),
     /源码版本.*tag/,
+  )
+})
+
+test('正式 tag 不在 master 历史上时拒绝发布', () => {
+  assert.throws(
+    () => resolveReleaseMetadata({
+      ref: 'refs/tags/v0.19.0',
+      sha: 'deadbeefcafebabe',
+      sourceVersion: '0.19.0',
+      exactTags: ['v0.19.0'],
+      onMaster: false,
+    }),
+    /不在 master 历史上/,
+  )
+})
+
+test('assertFormalTagCommitOnMaster 在 merge-base 失败时拒绝', async () => {
+  const { assertFormalTagCommitOnMaster } = await import('./release-metadata.mjs')
+  assert.throws(
+    () => assertFormalTagCommitOnMaster('deadbeef', {
+      masterRefs: ['origin/master'],
+      runGit: (args) => {
+        if (args[0] === 'rev-parse') return 'ok\n'
+        if (args[0] === 'merge-base') {
+          const err = new Error('not ancestor')
+          err.status = 1
+          throw err
+        }
+        return ''
+      },
+    }),
+    /不在 origin\/master 历史上|禁止从非 master/,
   )
 })
 

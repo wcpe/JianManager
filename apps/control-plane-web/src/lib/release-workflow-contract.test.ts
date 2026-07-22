@@ -89,6 +89,9 @@ describe('发布工作流契约', () => {
     expect(metadata).toContain('version: ${{ steps.meta.outputs.version }}')
     expect(metadata).toContain('release_tag: ${{ steps.meta.outputs.release_tag }}')
     expect(metadata).toContain('publish_release: ${{ steps.meta.outputs.publish_release }}')
+    // 正式 tag 须能校验 origin/master 祖先（禁止 feature/release 分支直接发正式版）
+    expect(metadata).toContain('origin/master')
+    expect(metadata).toContain('正式 tag 须在 master 上')
     expect(release).toContain('needs: metadata')
     expect(release).toContain('${{ needs.metadata.outputs.version }}')
     expect(release).not.toContain('0.0.0-dev+')
