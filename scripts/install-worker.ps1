@@ -33,9 +33,10 @@ function Install-JianManagerWorker {
         [string]$Name = "",
         # 本地已拷贝的 Worker 二进制路径（离线/内网兜底，跳过下载）。
         [string]$Binary = "",
-        # Worker 二进制下载基址/地址（可选）。面板一键命令默认传入 CP-local 地址；
-        # 脚本直接运行时回退 GitHub Releases latest（ADR-036 产物命名契约：worker-<os>-<arch>.exe）。
-        [string]$DownloadUrl = "https://github.com/wcpe/jianmanager/releases/latest/download",
+        # Worker 二进制下载基址/地址（可选）。也可用环境变量 JIANMANAGER_WORKER_DOWNLOAD_URL 指向镜像。
+        # 面板一键命令默认传入 CP-local 地址；脚本直接运行时回退 GitHub Releases latest
+        # （ADR-036 产物命名契约：worker-<os>-<arch>.exe）。
+        [string]$DownloadUrl = $(if ($env:JIANMANAGER_WORKER_DOWNLOAD_URL) { $env:JIANMANAGER_WORKER_DOWNLOAD_URL } else { "https://github.com/wcpe/JianManager/releases/latest/download" }),
         # 安装目录（默认 C:\JianManager）。
         [string]$InstallDir = "C:\JianManager",
         # 数据根目录（默认 <InstallDir>\data）。
@@ -77,18 +78,34 @@ function Install-JianManagerWorker {
     $binPath = Join-Path $InstallDir "jianmanager-worker.exe"
 
     # Test-CompleteBinary 判定路径是否为「完整」Worker 二进制：存在 + 非空。
-    # 命中即视为已就绪、可跳过下载（用户拍板③：当前目录已有完整二进制则跳过下载）。
+    # 命中即视为已就绪、可跳过下载（安装目录/工作目录已有文件时绝不联网）。
     function Test-CompleteBinary([string]$p) {
         return (Test-Path -LiteralPath $p -PathType Leaf) -and ((Get-Item -LiteralPath $p).Length -gt 0)
     }
 
-    # 下载阶段：取 Worker 二进制（安装目录已有完整二进制则跳过）。
+    # Find-LocalWorkerCandidate：安装目录与当前工作目录下的常见文件名（slim/离线场景）。
+    function Find-LocalWorkerCandidate {
+        $candidates = @(
+            $binPath,
+            (Join-Path $InstallDir "worker-windows-$arch.exe"),
+            (Join-Path $InstallDir "jianmanager-worker.exe"),
+            (Join-Path (Get-Location) "worker-windows-$arch.exe"),
+            (Join-Path (Get-Location) "jianmanager-worker.exe"),
+            (Join-Path (Get-Location) "worker.exe")
+        )
+        foreach ($c in $candidates) {
+            if (Test-CompleteBinary $c) { return $c }
+        }
+        return $null
+    }
+
+    # 下载阶段优先级：-SkipDownload → -Binary → 本机已有 → 镜像/DownloadUrl。
     Write-Host "[2/4] 准备 Worker 二进制"
     if ($SkipDownload) {
         if (Test-CompleteBinary $binPath) {
             Write-Host "      -SkipDownload：已存在完整二进制，跳过下载 ($binPath)"
         } else {
-            throw "-SkipDownload 但安装目录无完整二进制: $binPath（请先 -DownloadOnly 下载，或用 -Binary 指向已有二进制）"
+            throw "-SkipDownload 但安装目录无完整二进制: $binPath（请先 -DownloadOnly 下载，或用 -Binary 指向已有二进制，或把 worker 放到安装目录）"
         }
     } elseif ($Binary) {
         # 显式 -Binary：若它本身就是目标路径且已完整，免拷贝。
@@ -103,8 +120,14 @@ function Install-JianManagerWorker {
             Copy-Item -Force -Path $Binary -Destination $binPath
         }
     } elseif (Test-CompleteBinary $binPath) {
-        # 安装目录已有完整二进制（前一次 -DownloadOnly 或手动拷贝）→ 跳过下载。
-        Write-Host "      已存在完整二进制，跳过下载 ($binPath)"
+        Write-Host "      安装目录已有完整二进制，跳过下载 ($binPath)"
+    } elseif ($localSrc = Find-LocalWorkerCandidate) {
+        if ($localSrc -eq $binPath) {
+            Write-Host "      已存在完整二进制，跳过下载 ($binPath)"
+        } else {
+            Write-Host "      使用本机已有 Worker（不下载）: $localSrc -> $binPath"
+            Copy-Item -Force -Path $localSrc -Destination $binPath
+        }
     } elseif ($DownloadUrl) {
         $url = $DownloadUrl
         $url = $url.Replace("{os}", "windows").Replace("{arch}", $arch)
@@ -112,10 +135,10 @@ function Install-JianManagerWorker {
         if (($url -notlike "*worker-*") -and ($url -notlike "*/worker-assets/*/worker*")) {
             $url = $url.TrimEnd("/") + "/worker-windows-$arch.exe"
         }
-        Write-Host "      下载: $url"
+        Write-Host "      本机无 Worker，从镜像/源下载: $url"
         Invoke-WebRequest -Uri $url -OutFile $binPath -UseBasicParsing
     } else {
-        throw "未提供 -Binary 也未提供 -DownloadUrl，无法获取 Worker 二进制（内网/离线请先拷贝二进制并用 -Binary 指向它）"
+        throw "本机无 Worker，且未提供 -DownloadUrl / JIANMANAGER_WORKER_DOWNLOAD_URL（可将 worker-windows-$arch.exe 放到安装目录或当前目录，或用 -Binary / 镜像基址）"
     }
 
     if ($DownloadOnly) {

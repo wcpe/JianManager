@@ -6,8 +6,10 @@
 # 硬门禁：正式 tag 对应提交必须已在 origin/master 历史上（release-metadata.mjs 校验）。
 #   禁止从 feature/release/* 等非主干 tip 直接打 tag 出正式版。
 #
-# 产物：control-plane / worker × linux/amd64 + windows/amd64 共 4 个二进制 + checksums.txt，
-# 命名 `<component>-<os>-<arch>[.exe]`（ADR-036 §1），sha256 校验清单（ADR-036 §2）。
+# 产物：
+#   - control-plane（full，内嵌双平台 Worker）/ control-plane-slim（不内嵌 Worker，探针仍内嵌）
+#   - worker × linux/amd64 + windows/amd64
+#   共 6 个二进制 + checksums.txt；命名 `<component>[-slim]-<os>-<arch>[.exe]`（ADR-036 §1 扩展 slim 档）。
 #
 # 内嵌：发布二进制内嵌全部可选资产——CP 内嵌前端 + Bot Worker + 探针 jar + 客户端更新器两件套，
 # Worker 内嵌 CFR 反编译器（ADR-036 §5）。go:embed 缺目录即编译失败，故 prepare-embeds 必须
@@ -318,7 +320,7 @@ jobs:
           name: embed-worker
           path: internal/worker/embed/cfr/
 
-      - name: 注入 CP 内嵌 Worker 资产（两平台 + manifest）
+      - name: 注入 CP 内嵌 Worker 资产（两平台 + manifest，full 档）
         shell: bash
         env:
           CGO_ENABLED: '0'
@@ -333,7 +335,7 @@ jobs:
             -o internal/controlplane/embed/worker/worker-linux-amd64 ./apps/worker
           go run ./scripts/embed-worker-manifest.go --dir internal/controlplane/embed/worker --version "${VERSION}"
 
-      - name: 交叉编译 control-plane 与 worker（ldflags 注入版本）
+      - name: 交叉编译 control-plane（full）与 worker
         shell: bash
         env:
           GOOS: ${{ matrix.os }}
@@ -348,6 +350,22 @@ jobs:
             -o "dist/control-plane-${GOOS}-${GOARCH}${{ matrix.ext }}" ./apps/control-plane
           go build -trimpath -ldflags "${LDFLAGS}" \
             -o "dist/worker-${GOOS}-${GOARCH}${{ matrix.ext }}" ./apps/worker
+          ls -l dist/
+
+      - name: 交叉编译 control-plane-slim（清除 Worker 内嵌后重编）
+        shell: bash
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: '0'
+          VERSION: ${{ needs.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          # 仅删内嵌 Worker 字节，保留 .gitignore；探针/前端/botworker 仍在
+          find internal/controlplane/embed/worker -type f ! -name '.gitignore' -delete
+          LDFLAGS="-s -w -X github.com/wcpe/JianManager/internal/version.Version=${VERSION}"
+          go build -trimpath -ldflags "${LDFLAGS}" \
+            -o "dist/control-plane-slim-${GOOS}-${GOARCH}${{ matrix.ext }}" ./apps/control-plane
           ls -l dist/
 
       - name: 上传二进制产物
@@ -365,8 +383,10 @@ jobs:
       matrix:
         include:
           - { runner: ubuntu-latest, artifact: binaries-linux-amd64, binary: control-plane-linux-amd64 }
+          - { runner: ubuntu-latest, artifact: binaries-linux-amd64, binary: control-plane-slim-linux-amd64 }
           - { runner: ubuntu-latest, artifact: binaries-linux-amd64, binary: worker-linux-amd64 }
           - { runner: windows-latest, artifact: binaries-windows-amd64, binary: control-plane-windows-amd64.exe }
+          - { runner: windows-latest, artifact: binaries-windows-amd64, binary: control-plane-slim-windows-amd64.exe }
           - { runner: windows-latest, artifact: binaries-windows-amd64, binary: worker-windows-amd64.exe }
     runs-on: ${{ matrix.runner }}
     steps:

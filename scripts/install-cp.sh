@@ -13,6 +13,9 @@ INSTALL_DIR="."
 BINARY=""
 SKIP_DOWNLOAD="0"
 DO_START="0"
+# 产物档位：full=内嵌 Worker 的完整 CP；slim=不内嵌 Worker（探针仍内嵌），体积更小。
+# 也可用环境变量 JIANMANAGER_CP_VARIANT=slim|full。
+VARIANT="${JIANMANAGER_CP_VARIANT:-full}"
 
 usage() {
     cat <<'USAGE'
@@ -20,14 +23,16 @@ usage() {
 
 可选:
   --install-dir <dir>   安装目录（默认当前目录 .）
-  --download-url <url>  下载基址（默认 GitHub Releases latest）
+  --download-url <url>  下载基址（默认 GitHub Releases latest；可指向镜像）
+  --variant <full|slim> 产物档位（默认 full；slim=不内嵌 Worker，探针仍内嵌）
   --binary <path>       使用本地已有二进制（跳过下载）
   --skip-download       跳过下载，使用安装目录内 control-plane
   --start               安装后前台启动（默认只打印启动命令）
   -h, --help            显示本帮助
 
 环境变量:
-  JIANMANAGER_CP_DOWNLOAD_URL  覆盖默认下载基址
+  JIANMANAGER_CP_DOWNLOAD_URL  覆盖默认下载基址（镜像）
+  JIANMANAGER_CP_VARIANT       full|slim（同 --variant）
 USAGE
 }
 
@@ -36,21 +41,28 @@ die() {
     exit 1
 }
 
-# 资产文件名：control-plane-<os>-<arch>[.exe]
+# 资产文件名：
+#   full → control-plane-<os>-<arch>[.exe]
+#   slim → control-plane-slim-<os>-<arch>[.exe]
 # INSTALL_CP_TEST=1 时仅打印映射表自检结果。
 asset_name() {
     os="$1"
     arch="$2"
+    variant="$3"
+    prefix="control-plane"
+    if [ "$variant" = "slim" ]; then
+        prefix="control-plane-slim"
+    fi
     case "$os" in
         linux|darwin) ;;
-        windows) echo "control-plane-windows-${arch}.exe"; return ;;
+        windows) echo "${prefix}-windows-${arch}.exe"; return ;;
         *) die "不支持的操作系统: $os（支持 linux/darwin/windows）" ;;
     esac
     case "$arch" in
         amd64|arm64) ;;
         *) die "不支持的架构: $arch（支持 amd64/arm64）" ;;
     esac
-    echo "control-plane-${os}-${arch}"
+    echo "${prefix}-${os}-${arch}"
 }
 
 detect_os() {
@@ -75,18 +87,20 @@ detect_arch() {
 if [ "${INSTALL_CP_TEST:-}" = "1" ]; then
     fail=0
     check() {
-        got=$(asset_name "$1" "$2")
-        if [ "$got" != "$3" ]; then
-            echo "FAIL asset_name($1,$2)=${got} want $3" >&2
+        got=$(asset_name "$1" "$2" "$3")
+        if [ "$got" != "$4" ]; then
+            echo "FAIL asset_name($1,$2,$3)=${got} want $4" >&2
             fail=1
         else
-            echo "OK   $3"
+            echo "OK   $4"
         fi
     }
-    check linux amd64 control-plane-linux-amd64
-    check linux arm64 control-plane-linux-arm64
-    check darwin arm64 control-plane-darwin-arm64
-    check windows amd64 control-plane-windows-amd64.exe
+    check linux amd64 full control-plane-linux-amd64
+    check linux amd64 slim control-plane-slim-linux-amd64
+    check linux arm64 full control-plane-linux-arm64
+    check darwin arm64 full control-plane-darwin-arm64
+    check windows amd64 full control-plane-windows-amd64.exe
+    check windows amd64 slim control-plane-slim-windows-amd64.exe
     [ "$fail" -eq 0 ] || exit 1
     exit 0
 fi
@@ -95,6 +109,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --install-dir) INSTALL_DIR="$2"; shift 2 ;;
         --download-url) DOWNLOAD_URL="$2"; shift 2 ;;
+        --variant) VARIANT="$2"; shift 2 ;;
         --binary) BINARY="$2"; shift 2 ;;
         --skip-download) SKIP_DOWNLOAD="1"; shift ;;
         --start) DO_START="1"; shift ;;
@@ -103,9 +118,14 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+case "$VARIANT" in
+    full|slim) : ;;
+    *) die "--variant 仅支持 full|slim（收到: $VARIANT）" ;;
+esac
+
 OS=$(detect_os)
 ARCH=$(detect_arch)
-ASSET=$(asset_name "$OS" "$ARCH")
+ASSET=$(asset_name "$OS" "$ARCH" "$VARIANT")
 
 mkdir -p "$INSTALL_DIR"
 INSTALL_DIR=$(CDPATH= cd -- "$INSTALL_DIR" && pwd)

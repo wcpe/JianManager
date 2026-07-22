@@ -27,9 +27,11 @@ CONTROL_PLANE=""        # CP gRPC 地址 host:port（上线阶段必填）
 TOKEN="${JIANMANAGER_ENROLL_TOKEN:-}"  # enrollment token 明文（上线阶段必填；可经 env 传入避免出现在命令行，FR-277）
 NODE_NAME=""            # 节点名（可选，留空由 Worker/CP 预设名生效）
 BINARY=""               # 本地已拷贝的 Worker 二进制路径（离线/内网兜底，跳过下载）
-# Worker 二进制下载地址（可选）。面板一键命令默认传入 CP-local 地址；脚本直接运行时回退
-# GitHub Releases latest（ADR-036 产物命名契约：worker-<os>-<arch>[.exe]）。
-DOWNLOAD_URL="https://github.com/wcpe/jianmanager/releases/latest/download"
+# Worker 二进制下载地址（可选）。优先级见下载阶段注释。
+# 环境变量 JIANMANAGER_WORKER_DOWNLOAD_URL 可指向镜像/内网基址（优先于下方默认 GitHub）。
+# 面板一键命令通常传入 CP-local worker-assets；脚本直接运行时回退 GitHub Releases
+# （ADR-036 产物命名：worker-<os>-<arch>[.exe]）。
+DOWNLOAD_URL="${JIANMANAGER_WORKER_DOWNLOAD_URL:-https://github.com/wcpe/JianManager/releases/latest/download}"
 INSTALL_DIR="/opt/jianmanager"   # 安装目录
 DATA_DIR=""             # 数据根（缺省 <install-dir>/data）
 GRPC_PORT="9101"        # Worker gRPC 端口
@@ -50,7 +52,8 @@ usage() {
 可选:
   --name <node>            节点名（留空由 Worker/CP 预设名生效）
   --binary <path>          本地 Worker 二进制路径（离线/内网，跳过下载）
-  --download-url <url>     Worker 二进制下载基址/地址（面板默认 CP-local）
+  --download-url <url>     Worker 下载基址或完整 URL（镜像/内网/CP-local；也可用
+                           环境变量 JIANMANAGER_WORKER_DOWNLOAD_URL）
   --install-dir <dir>      安装目录（默认 /opt/jianmanager）
   --data-dir <dir>         数据根目录（默认 <install-dir>/data）
   --grpc-port <port>       Worker gRPC 端口（默认 9101）
@@ -61,6 +64,11 @@ usage() {
   --download-only          只下载/准备二进制，不上线
   --skip-download          跳过下载，直接用安装目录已有二进制上线
   -h, --help               显示本帮助
+
+取二进制优先级（未 --binary / --skip-download 时）:
+  1) 安装目录已有完整 jianmanager-worker
+  2) 当前工作目录下的 worker 候选文件（见脚本内 LOCAL_WORKER_CANDIDATES）
+  3) --download-url / JIANMANAGER_WORKER_DOWNLOAD_URL / GitHub Releases
 USAGE
 }
 
@@ -130,21 +138,48 @@ echo "[1/4] 平台: $OS/$ARCH，安装目录: $INSTALL_DIR，数据根: $DATA_DI
 mkdir -p "$INSTALL_DIR" "$DATA_DIR"
 BIN_PATH="$INSTALL_DIR/jianmanager-worker"
 
-# has_complete_binary 判定指定路径是否为「完整」Worker 二进制：存在 + 非空 + 可执行。
-# 命中即视为已就绪、可跳过下载（用户拍板③：当前目录已有完整二进制则跳过下载）。
+# has_complete_binary 判定指定路径是否为「完整」Worker 二进制：存在 + 非空。
+# 命中即视为已就绪、可跳过下载（安装目录/工作目录已有文件时绝不联网）。
+# 可执行位在取用后统一 chmod，避免用户拷贝后未 +x 被误判为「不完整」。
 has_complete_binary() {
     p="$1"
-    [ -f "$p" ] && [ -s "$p" ] && [ -x "$p" ]
+    [ -f "$p" ] && [ -s "$p" ]
 }
 
-# ---- 下载阶段：取 Worker 二进制（安装目录已有完整二进制则跳过）----
+# find_local_worker_candidate 在「当前工作目录」与「安装目录」查找常见 Worker 文件名。
+# 用于 slim CP / 离线场景：运维把 release 里的 worker-linux-amd64 解到同目录再装节点。
+# 返回首个命中的绝对/相对路径；无命中打印空串。
+find_local_worker_candidate() {
+    # 顺序：安装目录内正式名 → 安装目录 ADR-036 名 → 当前目录同名 → 当前目录 ADR-036 名
+    set -- \
+        "$BIN_PATH" \
+        "$INSTALL_DIR/worker-${OS}-${ARCH}" \
+        "$INSTALL_DIR/jianmanager-worker" \
+        "./worker-${OS}-${ARCH}" \
+        "./jianmanager-worker" \
+        "./worker" \
+        "worker-${OS}-${ARCH}" \
+        "jianmanager-worker"
+    for c in "$@"; do
+        if has_complete_binary "$c"; then
+            # 规范化为可 cp 的路径
+            echo "$c"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ---- 下载阶段：取 Worker 二进制 ----
+# 优先级：--skip-download → --binary → 安装目录/工作目录已有完整文件 → 镜像/下载 URL。
+# 精简版 CP（不内嵌 Worker）场景下，本机已有 worker 时绝不会去下载。
 echo "[2/4] 准备 Worker 二进制"
 if [ "$SKIP_DOWNLOAD" = "1" ]; then
     if has_complete_binary "$BIN_PATH"; then
         echo "      --skip-download：已存在完整二进制，跳过下载 ($BIN_PATH)"
     else
         echo "错误: --skip-download 但安装目录无完整二进制: $BIN_PATH" >&2
-        echo "      请先 --download-only 下载，或用 --binary 指向已有二进制。" >&2
+        echo "      请先 --download-only 下载，或用 --binary 指向已有二进制，或把 worker 放到安装目录。" >&2
         exit 1
     fi
 elif [ -n "$BINARY" ]; then
@@ -158,7 +193,15 @@ elif [ -n "$BINARY" ]; then
     fi
 elif has_complete_binary "$BIN_PATH"; then
     # 安装目录已有完整二进制（前一次 --download-only 或手动拷贝）→ 跳过下载。
-    echo "      已存在完整二进制，跳过下载 ($BIN_PATH)"
+    echo "      安装目录已有完整二进制，跳过下载 ($BIN_PATH)"
+elif local_src=$(find_local_worker_candidate); then
+    # 工作目录 / 安装目录下的 ADR-036 命名产物 → 拷入正式路径，仍不联网。
+    if [ "$local_src" = "$BIN_PATH" ]; then
+        echo "      已存在完整二进制，跳过下载 ($BIN_PATH)"
+    else
+        echo "      使用本机已有 Worker（不下载）: $local_src -> $BIN_PATH"
+        cp -f "$local_src" "$BIN_PATH"
+    fi
 elif [ -n "$DOWNLOAD_URL" ]; then
     url="$DOWNLOAD_URL"
     case "$url" in
@@ -171,7 +214,7 @@ elif [ -n "$DOWNLOAD_URL" ]; then
         */) url="${url}worker-${OS}-${ARCH}" ;;
         *) url="${url}/worker-${OS}-${ARCH}" ;;
     esac
-    echo "      下载: $url"
+    echo "      本机无 Worker，从镜像/源下载: $url"
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL "$url" -o "$BIN_PATH"
     elif command -v wget >/dev/null 2>&1; then
@@ -180,8 +223,8 @@ elif [ -n "$DOWNLOAD_URL" ]; then
         echo "错误: 需要 curl 或 wget 下载二进制" >&2; exit 1
     fi
 else
-    echo "错误: 未提供 --binary 也未提供 --download-url，无法获取 Worker 二进制" >&2
-    echo "      内网/离线请先拷贝二进制并用 --binary 指向它。" >&2
+    echo "错误: 本机无 Worker，且未提供 --download-url / JIANMANAGER_WORKER_DOWNLOAD_URL" >&2
+    echo "      可将 worker-${OS}-${ARCH} 放到安装目录或当前目录，或用 --binary / 镜像基址。" >&2
     exit 1
 fi
 chmod +x "$BIN_PATH"

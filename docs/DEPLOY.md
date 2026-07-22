@@ -213,20 +213,41 @@ docker compose logs -f control-plane
 
 从 GitHub Releases 下载面板二进制（**不做** systemd/Windows 服务化；完整运维见上文各节）。
 
+### 产物档位（full / slim）
+
+| 档位 | 资产名示例 | 内嵌 Worker | 内嵌探针 | 体积（约） | 适用 |
+|---|---|---|---|---|---|
+| **full**（默认） | `control-plane-linux-amd64` | 是（双平台） | 是 | ~100MB+ | 离线/一键装节点、不想另下 Worker |
+| **slim** | `control-plane-slim-linux-amd64` | **否** | 是 | 约减 40MB+ | 已有本机 Worker / 镜像源；体积敏感 |
+
+本地构建：`make dist-full`（或 `make dist`）/ `make dist-slim` / `make dist-all`。  
+探针在两档均为必嵌（`ensure-probe-embed`）。
+
 ```bash
-# Linux / macOS
+# Linux / macOS — 完整版（默认）
 curl -fsSL https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-cp.sh | sh
-# 或
-sh scripts/install-cp.sh --install-dir /opt/jianmanager
+# 精简版
+sh scripts/install-cp.sh --variant slim --install-dir /opt/jianmanager
+# 镜像基址
+JIANMANAGER_CP_DOWNLOAD_URL=https://mirror.example/jm/releases/latest/download \
+  sh scripts/install-cp.sh --variant slim
 sh scripts/install-cp.sh --start
 ```
 
 ```powershell
 # Windows PowerShell
 irm https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-cp.ps1 | iex
-.\scripts\install-cp.ps1 -InstallDir C:\jianmanager
+.\scripts\install-cp.ps1 -Variant slim -InstallDir C:\jianmanager
 ```
 
 离线：`--binary` / `-Binary`。自定义基址：`--download-url` 或 `JIANMANAGER_CP_DOWNLOAD_URL`。
 
-Worker 仍推荐面板 **「节点 → 添加节点」** 生成的一键命令（见 §6 与 `scripts/install-worker.sh`）。
+### Worker 安装取二进制优先级
+
+`scripts/install-worker.sh` / `install-worker.ps1`（面板「添加节点」一键命令同源）：
+
+1. **安装目录已有**完整 `jianmanager-worker`（或当前目录的 `worker-<os>-<arch>` 等候选）→ **不下载**  
+2. 显式 `--binary` / `-Binary`  
+3. 否则 `--download-url` / `JIANMANAGER_WORKER_DOWNLOAD_URL`（镜像）或默认 GitHub / 面板传入的 CP-local 地址  
+
+精简版 CP 场景：把 release 里的 `worker-linux-amd64` 与 CP 放在同一目录，再跑安装脚本，不会去外网拉 Worker。

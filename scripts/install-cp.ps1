@@ -7,7 +7,10 @@
 [CmdletBinding()]
 param(
     [string]$InstallDir = ".",
-    [string]$DownloadUrl = "https://github.com/wcpe/JianManager/releases/latest/download",
+    [string]$DownloadUrl = $(if ($env:JIANMANAGER_CP_DOWNLOAD_URL) { $env:JIANMANAGER_CP_DOWNLOAD_URL } else { "https://github.com/wcpe/JianManager/releases/latest/download" }),
+    # full=内嵌 Worker；slim=不内嵌 Worker（探针仍内嵌）。也可用环境变量 JIANMANAGER_CP_VARIANT。
+    [ValidateSet("full", "slim")]
+    [string]$Variant = $(if ($env:JIANMANAGER_CP_VARIANT -eq "slim") { "slim" } else { "full" }),
     [string]$Binary = "",
     [switch]$SkipDownload,
     [switch]$Start
@@ -19,7 +22,7 @@ function Write-ErrCn([string]$msg) {
     Write-Error "错误: $msg"
 }
 
-$asset = "control-plane-windows-amd64.exe"
+$asset = if ($Variant -eq "slim") { "control-plane-slim-windows-amd64.exe" } else { "control-plane-windows-amd64.exe" }
 $InstallDir = (New-Item -ItemType Directory -Force -Path $InstallDir).FullName
 $target = Join-Path $InstallDir "control-plane.exe"
 

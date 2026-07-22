@@ -1,4 +1,4 @@
-.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-probe ensure-probe-embed embed-cfr embed-client-updater embed-worker embed-botworker gen-licenses docker dist dist-bin
+.PHONY: build build-cp build-worker build-jmctl build-web build-bot dev-cp dev-web lint vet test e2e clean proto embed-web embed-install-scripts embed-probe ensure-probe-embed embed-cfr embed-client-updater embed-worker clear-worker-embed embed-botworker gen-licenses docker dist dist-bin dist-full dist-slim dist-all dist-bin-full dist-bin-slim dist-prep
 
 # Windows 原生终端（PowerShell/cmd）下 GNU make 默认用 cmd.exe 执行 recipe，而本文件 recipe
 # 全为 POSIX 命令（mkdir -p / cp -r / sed …），cmd 下会报「命令语法不正确」。检测到
@@ -90,11 +90,9 @@ VERSION ?= $(shell sed -n 's/^var Version = "\(.*\)"/\1/p' internal/version/vers
 DIST_LDFLAGS = -s -w -X github.com/wcpe/JianManager/internal/version.Version=$(VERSION)
 
 # 发布前探针内嵌门禁：目录内须有 ServerProbe.jar（本地曾 make embed-probe 即可；CI 应用缓存或显式构建）。
+# 探针在 full/slim 两档均为必选（OTA 推送与建服自动部署依赖）。
 ensure-probe-embed:
 	@test -f internal/controlplane/embed/probe/ServerProbe.jar || (echo "error: missing ServerProbe.jar; run make embed-probe first" >&2; exit 1)
-
-# 全量发布构建：前端 + 内嵌资产先行（含两阶段 Worker 内嵌，ADR-062），再交叉编译四个二进制。
-dist: gen-licenses build-web embed-web embed-install-scripts ensure-probe-embed embed-botworker embed-worker dist-bin
 
 # 打包 bot-worker dist 注入 CP 内嵌目录（FR-308/ADR-070）：Worker 经 gRPC 自愈拉取，
 # bot 能力不再依赖手工拷贝 dist。产物不入库（目录 .gitignore 占位）；
@@ -111,13 +109,46 @@ embed-worker:
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o internal/controlplane/embed/worker/worker-linux-amd64 ./apps/worker
 	go run ./scripts/embed-worker-manifest.go --dir internal/controlplane/embed/worker --version $(VERSION)
 
-# 仅交叉编译二进制（内嵌资产已就绪时的快速重编）。
-dist-bin:
+# 清除 CP 内嵌 Worker 字节（仅留 .gitignore），供 slim 档构建。go:embed 空目录仍可编译，运行时降级「未内嵌」。
+clear-worker-embed:
+	@mkdir -p internal/controlplane/embed/worker
+	@find internal/controlplane/embed/worker -type f ! -name '.gitignore' -delete 2>/dev/null || true
+	@test -f internal/controlplane/embed/worker/.gitignore || printf '%s\n' '*' '!.gitignore' > internal/controlplane/embed/worker/.gitignore
+
+# 两档共用的前端/探针/botworker 等内嵌（不含 Worker 内嵌）。
+dist-prep: gen-licenses build-web embed-web embed-install-scripts ensure-probe-embed embed-botworker
+
+# dist 默认 = 完整版（兼容旧习惯）：CP 内嵌双平台 Worker + 探针。
+dist: dist-full
+
+# 完整版：~100MB+ CP，节点安装/升级可优先从 CP 内嵌物化，无需外网拉 Worker。
+dist-full: dist-prep embed-worker dist-bin-full
+
+# 精简版：CP 不内嵌 Worker（体积约减 40MB+），探针仍必嵌；Worker 走独立产物或本机已有文件/镜像。
+dist-slim: dist-prep clear-worker-embed dist-bin-slim
+
+# 一次产出 full + slim CP 与独立 worker（先 full 再 slim，避免 embed 目录互相污染）。
+dist-all: dist-full dist-slim
+
+# 完整版二进制命名（ADR-036）：control-plane / worker × linux|windows amd64。
+dist-bin-full:
 	mkdir -p dist
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/control-plane-windows-amd64.exe ./apps/control-plane
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/worker-windows-amd64.exe ./apps/worker
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/control-plane-linux-amd64 ./apps/control-plane
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/worker-linux-amd64 ./apps/worker
+
+# 精简版仅多出 control-plane-slim-*；独立 worker 与 full 共用命名（同一 worker 二进制）。
+# 若已跑过 dist-full，worker 已在 dist/；此处仍重编 worker 以支持「只 make dist-slim」。
+dist-bin-slim:
+	mkdir -p dist
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/control-plane-slim-windows-amd64.exe ./apps/control-plane
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/worker-windows-amd64.exe ./apps/worker
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/control-plane-slim-linux-amd64 ./apps/control-plane
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "$(DIST_LDFLAGS)" -o dist/worker-linux-amd64 ./apps/worker
+
+# 兼容旧目标名：dist-bin = 完整版四件套。
+dist-bin: dist-bin-full
 
 # 构建 Bot Worker
 build-bot:

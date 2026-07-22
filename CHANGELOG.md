@@ -19,10 +19,13 @@
 - **对外部署文档与治理**：README 安装步骤 + MSW mock 界面截图（`docs/screenshots/*.jpg`）；根目录 `SECURITY.md`；治理戳记对账记录。
 - **楔子与 updater-core 本地诊断日志轮换压缩（FR-353，feat，增强 FR-090，见 `docs/specs/updater-local-log-rotate/spec.md`）**：`wedge.log` 与 `updater.log` 在日志器打开前按 10 MiB 阈值或本地自然日跨日轮换，旧日志以时间戳命名并 gzip 压缩，各自仅保留最近 5 个归档；轮换、压缩或清理失败均 fail-open，日志不可写时继续降级运行，不阻断游戏启动。
 - **分发三页跨页深链与统一筛选状态（FR-359，开发中）**：频道工作台、分发监控与安全中心统一透传 `channelId`/`ip`/`machineId`/`errCode`/`version`/`tab` 查询键；兼容历史 `channel`，页内筛选使用 replace 写回 URL，分布、榜单与事件深链保留当前筛选。
+- **Control Plane 双档发布产物 full / slim（build）**：`make dist-full`（默认 `make dist`）内嵌双平台 Worker + 探针；`make dist-slim` 不内嵌 Worker（探针仍必嵌，`ensure-probe-embed`），产出 `control-plane-slim-<os>-<arch>`；`make dist-all` 一次两档。release 工作流同步上传 slim。安装脚本 `install-cp.sh/.ps1` 支持 `--variant slim` / `-Variant slim` 与 `JIANMANAGER_CP_VARIANT`。
+- **Worker 安装本机优先与镜像基址（install-worker）**：取二进制顺序为安装目录/工作目录已有完整文件 → `--binary` → `JIANMANAGER_WORKER_DOWNLOAD_URL` / `--download-url` 镜像 → 默认 GitHub；本机有 worker 时绝不联网下载。
 ### 文档
 - **补齐待开发 FR 规格草稿（2026-07-21）**：落盘 FR-357/358/361/326 草拟 spec（`docs/specs/client-dist-stats-monitor-enrich`、`client-dist-security-ops-loop`、`client-dist-csv-export`、`instance-reverse-reconcile`）；FR-359 保持免 spec；Bot 压测批已有 spec 头与正文中的关联编号由旧批 351～361 顺延对齐 PRD 现号 362/363/365/369～372（目录名历史沿用不变）。
 - **Bot 压测规格按 ADR-075 重定向（FR-351/352/354/358～361，纯文档）**：编排 `send_command` 动作的通用成功边界统一为 Bot Worker 调用 `bot.chat` 未同步抛错；现有单 Bot command HTTP 端点仍只确认 IPC 委托，不等待执行回执；不再将 ServerProbe、塔防插件、聊天文本、服务端接受、权限或业务效果作为通用命令编排、预检、默认 verdict、前端观测或验收的必需条件。FR-358 取代未实施的 FR-353，承接通用命令编排与本地集中调度；FR-359～361 取代未实施的 FR-355～357，默认指标、向导和报告改为围绕连接、命令发送、调度、屏障与 Worker 健康，TPS/MSPT 与业务事件仅为可选附加观测。本条不表示 FR-351/352/354/358～361 已交付，状态仍以 PRD 为准。
 - **FR-351/352 缩比真机门禁（用户 2026-07-21 确认）**：交付门禁由「10 Worker / 500 真连」改为缩比真链路——≥2 真 Worker、>50 跨节点分片预检、缩比真实 connected、容量不足拒绝、stop 与关 Worker 不误报全员成功；满规模 10×50/500 记为可选扩容。证据见 `.tmp/bot-load-acceptance/evidence/`（`verdict: passed_scaled`）；PRD/spec §真机与 super-spec §17 已同步。不宣称 500 满规模或 60 分钟长稳已验；FR-354/358～361 仍为计划态。
+- **DEPLOY 双档产物与 Worker 安装优先级**：`docs/DEPLOY.md` §12 补充 full/slim 表与 install-worker 本机优先/镜像说明。
 
 ### 修复
 - **系统更新页缓存陈旧版本与降级误报（F1，fix(selfupdate)）**：`CachedCheck` 读库缓存时强制用本进程 `version.Version` 覆盖 CP `currentVersion`，并按点分数字严格比较（`versionIsUpgrade`）重算 `updateAvailable`——禁止把更低 feed（如 stable `v0.16.0`）标成可升级；`UpgradeControlPlane` 同步拒绝降级。复现测：脏缓存 `0.17.0-dev`+`v0.16.0` 读出后须显示本机真版本且不可升。
