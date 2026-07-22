@@ -226,6 +226,8 @@ docker compose logs -f control-plane
 ```bash
 # Linux / macOS — 完整版（默认）
 curl -fsSL https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-cp.sh | sh
+# 或指定安装目录
+sh scripts/install-cp.sh --install-dir /opt/jianmanager
 # 精简版
 sh scripts/install-cp.sh --variant slim --install-dir /opt/jianmanager
 # 镜像基址
@@ -237,6 +239,7 @@ sh scripts/install-cp.sh --start
 ```powershell
 # Windows PowerShell
 irm https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-cp.ps1 | iex
+.\scripts\install-cp.ps1 -InstallDir C:\jianmanager
 .\scripts\install-cp.ps1 -Variant slim -InstallDir C:\jianmanager
 ```
 
@@ -251,3 +254,5 @@ irm https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-cp.ps
 3. 否则 `--download-url` / `JIANMANAGER_WORKER_DOWNLOAD_URL`（镜像）或默认 GitHub / 面板传入的 CP-local 地址  
 
 精简版 CP 场景：把 release 里的 `worker-linux-amd64` 与 CP 放在同一目录，再跑安装脚本，不会去外网拉 Worker。
+
+Worker 仍推荐面板 **「节点 → 添加节点」** 生成的一键命令（见 §6）。

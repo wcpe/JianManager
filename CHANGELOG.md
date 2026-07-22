@@ -30,6 +30,8 @@
 ### 修复
 - **系统更新页缓存陈旧版本与降级误报（F1，fix(selfupdate)）**：`CachedCheck` 读库缓存时强制用本进程 `version.Version` 覆盖 CP `currentVersion`，并按点分数字严格比较（`versionIsUpgrade`）重算 `updateAvailable`——禁止把更低 feed（如 stable `v0.16.0`）标成可升级；`UpgradeControlPlane` 同步拒绝降级。复现测：脏缓存 `0.17.0-dev`+`v0.16.0` 读出后须显示本机真版本且不可升。
 - **探针更新卡混淆「未内嵌」与「未运行」（F2，fix(web/probe)）**：连接态合并插件桥 WS 与 `metrics.probeAvailable`；桥未连但指标通道可用时显示「探针运行中」；未内嵌 jar 仅禁用 OTA 按钮，并用 `notEmbeddedButRunning` 文案说明实例内探针仍可用。`make dist` 增加 `ensure-probe-embed` 门禁，缺 `ServerProbe.jar` 时硬失败。
+
+### 修复
 - **分发统计空态三类可区分（FR-357 验收补缺）**：`client-dist-kpi` 解析无流量 / 未开遥测 / 窗外；频道统计与监控统计顶栏提示 + i18n + 单测/DOM。
 - **安全中心事件行一键改 key 态与频道防护（FR-358 验收补缺）**：事件行补「改 key 态」「频道防护」，均经 DangerConfirm；默认 throttled / retry_after，可在封禁与降级页撤销；DOM 覆盖确认后才写入。
 - **Bot 压测面板 stop 后 connected 不收敛（fix(bot-load)，2026-07-21）**：FR-351 stop 原先只发 `desired=stopped` RPC、故意不假写 runtime，收束完全依赖 Worker 后续事件；真机 Paper 已空但无 runtime 事件时，多会话账本会叠出 200+ 在线且 stop 不归零。现于 `DispatchStop` 末与 `waiting_runtime` 重入时对各执行节点主动 `RefreshSnapshot`（空 baseline 走既有 `ConvergeMissingRuntime→stopped`），不重复 stop RPC、不伪造 runtime；装配 `SetFleetSnapshotRefresher(coordinator)`。单测覆盖自动 baseline 与 waiting_runtime 重入。

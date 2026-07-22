@@ -5,6 +5,7 @@
 # 用法示例：
 #   curl -fsSL https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-cp.sh | sh
 #   sh install-cp.sh --install-dir /opt/jianmanager --start
+#   sh install-cp.sh --variant slim
 set -eu
 
 REPO_DEFAULT="wcpe/JianManager"
@@ -143,7 +144,7 @@ elif [ "$SKIP_DOWNLOAD" = "1" ]; then
     echo "跳过下载，使用已有 $TARGET"
 else
     URL="${DOWNLOAD_URL%/}/$ASSET"
-    echo "下载 Control Plane: $URL"
+    echo "下载 Control Plane ($VARIANT): $URL"
     tmp="${TARGET}.tmp.$$"
     if command -v curl >/dev/null 2>&1; then
         if ! curl -fL --retry 3 --connect-timeout 15 -o "$tmp" "$URL"; then

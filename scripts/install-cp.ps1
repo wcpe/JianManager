@@ -1,8 +1,9 @@
 # JianManager Control Plane 一键下载（Windows PowerShell）。
-# 见 FR-355：从 GitHub Releases 拉取 control-plane-windows-amd64.exe；不做服务化。
+# 见 FR-355：从 GitHub Releases 拉取 control-plane[-slim]-windows-amd64.exe；不做服务化。
 # 用法:
 #   irm https://raw.githubusercontent.com/wcpe/JianManager/dev/scripts/install-cp.ps1 | iex
 #   .\install-cp.ps1 -InstallDir C:\jianmanager -Start
+#   .\install-cp.ps1 -Variant slim
 
 [CmdletBinding()]
 param(
@@ -37,7 +38,7 @@ elseif ($SkipDownload) {
 }
 else {
     $url = "$($DownloadUrl.TrimEnd('/'))/$asset"
-    Write-Host "下载 Control Plane: $url"
+    Write-Host "下载 Control Plane ($Variant): $url"
     $tmp = "$target.tmp"
     try {
         Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
