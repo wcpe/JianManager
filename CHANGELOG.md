@@ -6,38 +6,40 @@
 
 ## [Unreleased]
 
-> 本段为 `v0.19.0` 开发版归档区（自 v0.18.0 之后累积）。
+> 本段为 `v0.20.0` 开发版归档区（自 v0.19.0 之后累积）。
+
+## 0.19.0（2026-07-23）
+
+> 本版交付客户端分发观测/安全闭环、Bot Fleet 分布式压测底座、Docker/一键安装、CP full/slim 双档产物，以及系统更新与探针展示修复。CI 全绿；正式 tag 须落在 master 历史。
 
 ### 新增
-- **客户端分发 KPI 口径与共享语义（FR-356，开发中）**：前端 `lib/client-dist-kpi` 统一定义活跃客户端精确|近似、更新成功率/fail-static/回退率与请求成功率语义；频道统计 Tab 与分发监控统计 Tab 共用标签与脚注，禁止用 HTTP 请求成功率冒充更新成功率；API 文档补充 KPI 字典交叉说明。
-- **分发统计与监控信息加厚 + 分布钻取（FR-357，开发中）**：新增 `GET /client-dist/error-summary` 错误码 TopN/失败样例；监控 Tab 接错误摘要与失败样例；统计区补下载 bytes 趋势与 KPI 绝对数；分布/错误码可页内联动日志筛选；devmock 与 Go/vitest 覆盖。
-- **安全中心研判处置闭环 + 频道安全摘要（FR-358，开发中）**：画像详情全量字段/风险时间线；事件行「封禁 IP」+ DangerConfirm；`UntrustedFieldBadge` 不可信角标；`GET /client-channels/:id/security-summary` 与频道工作台安全摘要条深链安全中心；devmock/Go/vitest 覆盖。
-- **updater-core 遥测字段补齐与隐私契约（FR-360，开发中）**：遥测 body/落库补齐 `coreVersion`/`arch` 与 diagnostic 字段（javaVendor/locale/timezone/memoryTier）；安全日志详情带出新字段；管理端 `privacy-mask` 脱敏 machineId/installId/playerName；contract §4.3 与 API 同步；旧客户端缺字段仍 202。
-- **分发统计与安全日志 CSV 导出（FR-361，开发中）**：新增平台管理员 `GET /client-dist/export`，支持 KPI 汇总、分发事件与安全全量日志三类 CSV；当前页面筛选透传、UTF-8 BOM/camelCase 表头、服务端隐私脱敏、每用户一分钟限流、10000 行截断标记与 `client_dist.export.csv` 审计；分发监控和安全中心接入导出按钮，devmock 与 Go/Vitest 覆盖。
-- **Docker Compose 部署可跑通（FR-354）**：修正 `docker-compose.yml` Worker 环境变量为 `JIANMANAGER_CONTROL_PLANE_GRPC`；兼容旧键 `JIANMANAGER_CONTROL_PLANE`；Worker 数据卷收口数据根；`Dockerfile.control-plane` 补齐 monorepo 构建上下文（tsconfig/eslint/devmock/`version.go`）；`docs/DEPLOY.md` §11。
-- **Control Plane 一键安装脚本（FR-355）**：`scripts/install-cp.sh` / `install-cp.ps1`（OS/arch 探测、Releases 下载、失败中文报错、可选 `--start`）；`INSTALL_CP_TEST=1` 资产名自检。
-- **对外部署文档与治理**：README 安装步骤 + MSW mock 界面截图（`docs/screenshots/*.jpg`）；根目录 `SECURITY.md`；治理戳记对账记录。
-- **楔子与 updater-core 本地诊断日志轮换压缩（FR-353，feat，增强 FR-090，见 `docs/specs/updater-local-log-rotate/spec.md`）**：`wedge.log` 与 `updater.log` 在日志器打开前按 10 MiB 阈值或本地自然日跨日轮换，旧日志以时间戳命名并 gzip 压缩，各自仅保留最近 5 个归档；轮换、压缩或清理失败均 fail-open，日志不可写时继续降级运行，不阻断游戏启动。
-- **分发三页跨页深链与统一筛选状态（FR-359，开发中）**：频道工作台、分发监控与安全中心统一透传 `channelId`/`ip`/`machineId`/`errCode`/`version`/`tab` 查询键；兼容历史 `channel`，页内筛选使用 replace 写回 URL，分布、榜单与事件深链保留当前筛选。
-- **Control Plane 双档发布产物 full / slim（build）**：`make dist-full`（默认 `make dist`）内嵌双平台 Worker + 探针；`make dist-slim` 不内嵌 Worker（探针仍必嵌，`ensure-probe-embed`），产出 `control-plane-slim-<os>-<arch>`；`make dist-all` 一次两档。release 工作流同步上传 slim。安装脚本 `install-cp.sh/.ps1` 支持 `--variant slim` / `-Variant slim` 与 `JIANMANAGER_CP_VARIANT`。
-- **Worker 安装本机优先与镜像基址（install-worker）**：取二进制顺序为安装目录/工作目录已有完整文件 → `--binary` → `JIANMANAGER_WORKER_DOWNLOAD_URL` / `--download-url` 镜像 → 默认 GitHub；本机有 worker 时绝不联网下载。
+- **客户端分发 KPI 口径与共享语义（FR-356）**：前端 `lib/client-dist-kpi` 统一定义活跃客户端精确|近似、更新成功率/fail-static/回退率与请求成功率语义；频道统计 Tab 与分发监控统计 Tab 共用标签与脚注。
+- **分发统计与监控信息加厚 + 分布钻取（FR-357）**：`GET /client-dist/error-summary`；监控 Tab 错误摘要与失败样例；统计区下载 bytes 趋势与 KPI 绝对数；分布/错误码联动日志筛选；空态三类可区分。
+- **安全中心研判处置闭环 + 频道安全摘要（FR-358）**：画像详情/风险时间线；事件行封禁 IP、改 key 态、频道防护（DangerConfirm）；`GET /client-channels/:id/security-summary` 与工作台安全摘要条。
+- **分发三页跨页深链与统一筛选状态（FR-359）**：`channelId`/`ip`/`machineId`/`errCode`/`version`/`tab` 在频道工作台、分发监控、安全中心互通。
+- **updater-core 遥测字段补齐与隐私契约（FR-360）**：遥测补齐 coreVersion/arch 与 diagnostic 字段；管理端 `privacy-mask` 脱敏。
+- **分发统计与安全日志 CSV 导出（FR-361）**：平台管理员 `GET /client-dist/export`；UTF-8 BOM、脱敏、限流与审计。
+- **Docker Compose 部署可跑通（FR-354）**：compose env 与 Worker 配置键对齐；`docs/DEPLOY.md` §11。
+- **Control Plane 一键安装脚本（FR-355）**：`scripts/install-cp.sh` / `install-cp.ps1`；支持 full/slim 与镜像基址。
+- **Control Plane 双档发布产物 full / slim（build）**：`make dist-full`（默认）内嵌双平台 Worker + 探针；`make dist-slim` 不内嵌 Worker（探针必嵌）；release 工作流同步上传 slim。
+- **Worker 安装本机优先与镜像基址（install-worker）**：安装目录/工作目录已有完整二进制绝不联网；支持 `JIANMANAGER_WORKER_DOWNLOAD_URL`。
+- **楔子与 updater-core 本地诊断日志轮换压缩（FR-353）**：按 10 MiB/跨日轮换 gzip，保留 5 档；fail-open。
+- **发版强制内嵌客户端更新器两件套（FR-351）**：缺 wedge/updater-core 时 `embed-client-updater` / release 硬失败。
+- **接入指引与版本页内嵌更新器信息（FR-352）**：guide/版本旁路展示内嵌版本与可用态。
+- **Bot 发压节点池与分布式调度底座（FR-362，ADR-074）**：目标实例与发压 Worker 解耦；容量预检、跨节点分片、批量启停；缩比真机门禁已过。
+- **可验证 Bot 场景引擎与塔防预设（FR-363）**：Scenario V2 契约屏障与动作；缩比真连/契约已过。
+- **对外部署文档与治理**：README 安装步骤 + 截图；根目录 `SECURITY.md`。
+
 ### 文档
-- **补齐待开发 FR 规格草稿（2026-07-21）**：落盘 FR-357/358/361/326 草拟 spec（`docs/specs/client-dist-stats-monitor-enrich`、`client-dist-security-ops-loop`、`client-dist-csv-export`、`instance-reverse-reconcile`）；FR-359 保持免 spec；Bot 压测批已有 spec 头与正文中的关联编号由旧批 351～361 顺延对齐 PRD 现号 362/363/365/369～372（目录名历史沿用不变）。
-- **Bot 压测规格按 ADR-075 重定向（FR-351/352/354/358～361，纯文档）**：编排 `send_command` 动作的通用成功边界统一为 Bot Worker 调用 `bot.chat` 未同步抛错；现有单 Bot command HTTP 端点仍只确认 IPC 委托，不等待执行回执；不再将 ServerProbe、塔防插件、聊天文本、服务端接受、权限或业务效果作为通用命令编排、预检、默认 verdict、前端观测或验收的必需条件。FR-358 取代未实施的 FR-353，承接通用命令编排与本地集中调度；FR-359～361 取代未实施的 FR-355～357，默认指标、向导和报告改为围绕连接、命令发送、调度、屏障与 Worker 健康，TPS/MSPT 与业务事件仅为可选附加观测。本条不表示 FR-351/352/354/358～361 已交付，状态仍以 PRD 为准。
-- **FR-351/352 缩比真机门禁（用户 2026-07-21 确认）**：交付门禁由「10 Worker / 500 真连」改为缩比真链路——≥2 真 Worker、>50 跨节点分片预检、缩比真实 connected、容量不足拒绝、stop 与关 Worker 不误报全员成功；满规模 10×50/500 记为可选扩容。证据见 `.tmp/bot-load-acceptance/evidence/`（`verdict: passed_scaled`）；PRD/spec §真机与 super-spec §17 已同步。不宣称 500 满规模或 60 分钟长稳已验；FR-354/358～361 仍为计划态。
-- **DEPLOY 双档产物与 Worker 安装优先级**：`docs/DEPLOY.md` §12 补充 full/slim 表与 install-worker 本机优先/镜像说明。
+- Bot 压测规格按 ADR-075 重定向（FR-369～372 计划态取代未实施的 FR-364/366～368）。
+- 补齐 FR-357/358/361/326 等规格草稿；DEPLOY §12 full/slim 与 Worker 安装优先级。
 
 ### 修复
-- **系统更新页缓存陈旧版本与降级误报（F1，fix(selfupdate)）**：`CachedCheck` 读库缓存时强制用本进程 `version.Version` 覆盖 CP `currentVersion`，并按点分数字严格比较（`versionIsUpgrade`）重算 `updateAvailable`——禁止把更低 feed（如 stable `v0.16.0`）标成可升级；`UpgradeControlPlane` 同步拒绝降级。复现测：脏缓存 `0.17.0-dev`+`v0.16.0` 读出后须显示本机真版本且不可升。
-- **探针更新卡混淆「未内嵌」与「未运行」（F2，fix(web/probe)）**：连接态合并插件桥 WS 与 `metrics.probeAvailable`；桥未连但指标通道可用时显示「探针运行中」；未内嵌 jar 仅禁用 OTA 按钮，并用 `notEmbeddedButRunning` 文案说明实例内探针仍可用。`make dist` 增加 `ensure-probe-embed` 门禁，缺 `ServerProbe.jar` 时硬失败。
-
-### 修复
-- **分发统计空态三类可区分（FR-357 验收补缺）**：`client-dist-kpi` 解析无流量 / 未开遥测 / 窗外；频道统计与监控统计顶栏提示 + i18n + 单测/DOM。
-- **安全中心事件行一键改 key 态与频道防护（FR-358 验收补缺）**：事件行补「改 key 态」「频道防护」，均经 DangerConfirm；默认 throttled / retry_after，可在封禁与降级页撤销；DOM 覆盖确认后才写入。
-- **Bot 压测面板 stop 后 connected 不收敛（fix(bot-load)，2026-07-21）**：FR-351 stop 原先只发 `desired=stopped` RPC、故意不假写 runtime，收束完全依赖 Worker 后续事件；真机 Paper 已空但无 runtime 事件时，多会话账本会叠出 200+ 在线且 stop 不归零。现于 `DispatchStop` 末与 `waiting_runtime` 重入时对各执行节点主动 `RefreshSnapshot`（空 baseline 走既有 `ConvergeMissingRuntime→stopped`），不重复 stop RPC、不伪造 runtime；装配 `SetFleetSnapshotRefresher(coordinator)`。单测覆盖自动 baseline 与 waiting_runtime 重入。
-- **发布门禁去重与 E2E 分片（fix(ci)）**：CI 将 102 条 Playwright E2E 按文件拆为 4 个隔离 runner 并行执行，分片 job 使用 `Web E2E / Shard N of 4` 标准名称并保留统一 `web-quality` 汇总门禁；瞬时失败重试一次，重试恢复记为 flaky 但不阻断，持续失败才红，并通过 GitHub reporter 直接标注失败用例。reduced-motion 进度反馈探针改用 MutationObserver 捕获子节点替换与属性变化，避免 GitHub runner 错过瞬时 `animationstart`。发布工作流复用同提交 CI 结果，只保留依赖完整内嵌资产的 Go 构建/vet/测试，避免 dev、master、tag 对同一提交重复跑前端测试。同步移除可见步骤名中的需求编号，并升级官方 GitHub Actions 到 Node.js 24 运行时对应主版本，消除弃用警告。
-- **正式发布强制内嵌客户端更新器两件套（FR-351）**：`make embed-client-updater` 与发布工作流在楔子或 updater-core jar 缺失、复制失败或 0 字节时以中文错误硬失败；本地开发未内嵌时仍保持可启动并返回 `JAR_NOT_EMBEDDED`。
-- **Fleet 退出事件与测试时钟竞态（fix(bot)，2026-07-21）**：缓冲满时丢弃 in-flight runtime 保证 `worker-exit` 必达；假时钟加锁消除屏障调度 race。
+- **系统更新页缓存陈旧版本与降级误报（F1）**：`CachedCheck` 强制用本机 version 覆盖陈旧 currentVersion；`versionIsUpgrade` 禁止把更低 feed 标成可升级；升级门闸拒绝降级。
+- **探针更新卡混淆「未内嵌」与「未运行」（F2）**：合并插件桥与 metrics 通道；未内嵌仅禁 OTA；`ensure-probe-embed` 门禁。
+- **正式 tag 必须在 master 历史上才允许发版**：`release-metadata` master 祖先校验。
+- Bot 压测 stop 后 connected 不收敛；Fleet 退出事件与测试时钟竞态。
+- 发布门禁去重与 E2E 四片并行；CI/web-quality 与 monorepo 路径对齐。
 
 ## 0.18.0（2026-07-19）
 
