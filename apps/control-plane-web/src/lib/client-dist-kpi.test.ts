@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   activeClientsHintKey,
+  clientDistEmptyI18nKey,
   formatKpiRate,
   resolveActiveClients,
+  resolveClientDistEmptyKind,
   resolveRequestRates,
   resolveUpdateRates,
 } from './client-dist-kpi'
@@ -49,5 +51,29 @@ describe('client-dist-kpi（FR-356）', () => {
   it('resolveRequestRates：仅 stats HTTP 率', () => {
     const r = resolveRequestRates({ successRate: 0.667, failureRate: 0.333, activeMachines: 3 })
     expect(r).toEqual({ successRate: 0.667, failureRate: 0.333, source: 'stats' })
+  })
+
+  it('resolveClientDistEmptyKind：区分无流量 / 未开遥测 / 窗外', () => {
+    expect(resolveClientDistEmptyKind({ loading: true, requestCount: 0, updateTotal: 0 })).toBe('none')
+    expect(resolveClientDistEmptyKind({ requestCount: 0, updateTotal: 0 })).toBe('no_traffic')
+    expect(resolveClientDistEmptyKind({ requestCount: 10, updateTotal: 0 })).toBe('no_telemetry')
+    expect(
+      resolveClientDistEmptyKind({
+        requestCount: 10,
+        updateTotal: 5,
+        active: { value: 12, exactness: 'approx', source: 'observability' },
+      }),
+    ).toBe('out_of_window')
+    expect(
+      resolveClientDistEmptyKind({
+        requestCount: 10,
+        updateTotal: 5,
+        active: { value: 12, exactness: 'exact', source: 'observability' },
+      }),
+    ).toBe('none')
+    expect(clientDistEmptyI18nKey('no_traffic')).toBe('clientStats.emptyNoTraffic')
+    expect(clientDistEmptyI18nKey('no_telemetry')).toBe('clientStats.emptyNoTelemetry')
+    expect(clientDistEmptyI18nKey('out_of_window')).toBe('clientStats.emptyOutOfWindow')
+    expect(clientDistEmptyI18nKey('none')).toBeNull()
   })
 })

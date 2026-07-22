@@ -51,8 +51,10 @@ import ClientDistExportButton from '@/components/ClientDistExportButton'
 import {
   KPI_I18N,
   activeClientsHintKey,
+  clientDistEmptyI18nKey,
   formatKpiRate,
   resolveActiveClients,
+  resolveClientDistEmptyKind,
   resolveRequestRates,
 } from '@/lib/client-dist-kpi'
 
@@ -247,6 +249,15 @@ function StatisticsTab({ stats, isError, isLoading, onLink }: { stats?: ClientDi
   const active = resolveActiveClients(null, stats)
   const requestRates = resolveRequestRates(stats)
   const activeHintKey = activeClientsHintKey(active.exactness, active.source)
+  const requestCount = (stats?.downloads ?? []).reduce((sum, d) => sum + d.requests, 0)
+  // 统计 Tab 无更新侧数据：0 请求 → 无流量；有请求时不在此页判「未开遥测」（见频道统计 / 客户端 Tab）。
+  const emptyKind = resolveClientDistEmptyKind({
+    loading: isLoading,
+    requestCount,
+    updateTotal: requestCount > 0 ? 1 : 0,
+    active,
+  })
+  const emptyKey = clientDistEmptyI18nKey(emptyKind)
   const downloadSeries: ChartSeries[] = [
     {
       key: 'requests',
@@ -268,6 +279,11 @@ function StatisticsTab({ stats, isError, isLoading, onLink }: { stats?: ClientDi
   if (isError) return <ErrorPanel title={t('clientDistMonitor.tabStatistics')} message={t('clientDistMonitor.loadError')} />
   return (
     <div className="space-y-4" data-kpi-scope="client-dist-monitor-statistics">
+      {emptyKey ? (
+        <p data-testid="monitor-stats-empty-kind" data-empty-kind={emptyKind} className="rounded-md border border-dashed border-border/80 bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+          {t(emptyKey)}
+        </p>
+      ) : null}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <StatCard icon={<Download className="size-3.5" />} label={t(KPI_I18N.manifestPulls, t('clientDistMonitor.manifestPulls'))} value={String(kindRequests(stats, 'manifest'))} />
         <StatCard icon={<Download className="size-3.5" />} label={t(KPI_I18N.artifactPulls, t('clientDistMonitor.artifactPulls'))} value={String(kindRequests(stats, 'artifact'))} />

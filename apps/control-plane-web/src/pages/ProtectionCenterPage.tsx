@@ -337,11 +337,17 @@ function EventsTab() {
   )
 }
 
+type EventRowConfirm = 'block-ip' | 'key-state' | 'channel-protection' | null
+
 function EventRow({ event }: { event: ClientDistSecurityEvent }) {
   const [searchParams] = useSearchParams()
-  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [confirm, setConfirm] = useState<EventRowConfirm>(null)
   const blockIP = useBlockClientDistIP()
+  const setKeyState = useSetClientDistKeyState()
+  const setProtection = useSetClientDistChannelProtection()
   const canBlock = Boolean(event.ip)
+  const canKey = event.keyId != null && Number(event.keyId) > 0
+  const canProtect = Boolean(event.channelId)
   const monitorHref = buildClientDistHref('/client-dist-monitor', searchParams, {
     channelId: event.channelId,
     ip: event.ip,
@@ -349,6 +355,7 @@ function EventRow({ event }: { event: ClientDistSecurityEvent }) {
     errCode: event.errCode,
     tab: 'logs',
   })
+  const pending = blockIP.isPending || setKeyState.isPending || setProtection.isPending
   return (
     <TableRow>
       <TableCell className="whitespace-nowrap text-xs text-muted-foreground">{fmtTime(event.createdAt)}</TableCell>
@@ -376,30 +383,90 @@ function EventRow({ event }: { event: ClientDistSecurityEvent }) {
             <Link to={monitorHref}>查看分发日志</Link>
           </Button>
           {canBlock ? (
-            <Button type="button" size="xs" variant="outline" className="text-status-danger" onClick={() => setConfirmOpen(true)}>
+            <Button type="button" size="xs" variant="outline" className="text-status-danger" onClick={() => setConfirm('block-ip')}>
               封禁 IP
+            </Button>
+          ) : null}
+          {canKey ? (
+            <Button type="button" size="xs" variant="outline" onClick={() => setConfirm('key-state')}>
+              改 key 态
+            </Button>
+          ) : null}
+          {canProtect ? (
+            <Button type="button" size="xs" variant="outline" onClick={() => setConfirm('channel-protection')}>
+              频道防护
             </Button>
           ) : null}
         </div>
         <DangerConfirm
-          open={confirmOpen}
+          open={confirm === 'block-ip'}
           title={`临时封禁 IP ${event.ip}`}
           description="将对该 IP 施加临时封禁，确认后立即生效；可在「封禁与降级」中取消。"
           confirmLabel="确认封禁"
-          pending={blockIP.isPending}
+          pending={pending}
           onConfirm={() => {
             blockIP.mutate(
               { ip: event.ip, channelId: event.channelId || undefined, reason: event.reason || '事件行一键封禁', durationMinutes: 30 },
               {
                 onSuccess: () => {
                   toast.success('已提交 IP 临时封禁')
-                  setConfirmOpen(false)
+                  setConfirm(null)
                 },
                 onError: () => toast.error('IP 封禁失败'),
               },
             )
           }}
-          onCancel={() => setConfirmOpen(false)}
+          onCancel={() => setConfirm(null)}
+        />
+        <DangerConfirm
+          open={confirm === 'key-state'}
+          title={`将 Key #${event.keyId} 设为限速（throttled）`}
+          description="事件行快捷处置：把该拉取密钥设为 throttled。可在「封禁与降级」中改回 normal 或其它状态。"
+          confirmLabel="确认改 key 态"
+          pending={pending}
+          onConfirm={() => {
+            setKeyState.mutate(
+              {
+                keyId: String(event.keyId),
+                body: { state: 'throttled', reason: event.reason || '事件行一键改 key 态' },
+              },
+              {
+                onSuccess: () => {
+                  toast.success('已提交 key 状态调整')
+                  setConfirm(null)
+                },
+                onError: () => toast.error('key 状态调整失败'),
+              },
+            )
+          }}
+          onCancel={() => setConfirm(null)}
+        />
+        <DangerConfirm
+          open={confirm === 'channel-protection'}
+          title={`对频道 ${event.channelId} 开启 Retry-After 防护`}
+          description="事件行快捷处置：对该频道开启 retry_after 保护（默认 60 秒）。可在「封禁与降级」中调整或关闭。"
+          confirmLabel="确认频道防护"
+          pending={pending}
+          onConfirm={() => {
+            setProtection.mutate(
+              {
+                channelId: event.channelId,
+                body: {
+                  mode: 'retry_after',
+                  reason: event.reason || '事件行一键频道防护',
+                  retryAfterSeconds: 60,
+                },
+              },
+              {
+                onSuccess: () => {
+                  toast.success('已提交频道保护')
+                  setConfirm(null)
+                },
+                onError: () => toast.error('频道保护提交失败'),
+              },
+            )
+          }}
+          onCancel={() => setConfirm(null)}
         />
       </TableCell>
     </TableRow>

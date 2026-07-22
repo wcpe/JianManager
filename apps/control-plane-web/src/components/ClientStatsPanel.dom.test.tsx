@@ -67,4 +67,12 @@ describe('ClientStatsPanel（mock 假后端，FR-219/356）', () => {
     // 来源 IP（FR-095）段落仍渲染。
     expect(screen.getByText('来源 IP（Top 10）')).toBeInTheDocument()
   })
+
+  it('默认 30d 窗外近似时展示「窗外」空态提示', async () => {
+    loginMockUser()
+    renderWithProviders(<ClientStatsPanel channelId="skyblock-s1" />)
+    const banner = await screen.findByTestId('client-stats-empty-kind')
+    expect(banner).toHaveAttribute('data-empty-kind', 'out_of_window')
+    expect(banner).toHaveTextContent(/窗外|精确去重不可用|人次近似/)
+  })
 })

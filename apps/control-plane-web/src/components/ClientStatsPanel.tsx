@@ -11,8 +11,10 @@ import {
 import {
   KPI_I18N,
   activeClientsHintKey,
+  clientDistEmptyI18nKey,
   formatKpiRate,
   resolveActiveClients,
+  resolveClientDistEmptyKind,
   resolveUpdateRates,
 } from '@/lib/client-dist-kpi'
 import { TimeSeriesChart, type ChartSeries } from '@jianmanager/ui'
@@ -77,6 +79,14 @@ export default function ClientStatsPanel({ channelId }: { channelId: string }) {
   const versionDist = obs?.versionDist ?? []
   const platformDist = obs?.platformDist ?? []
   const lagDist = obs?.lagDist ?? []
+  const requestCount = (data?.downloads ?? []).reduce((sum, d) => sum + d.requests, 0)
+  const emptyKind = resolveClientDistEmptyKind({
+    loading: isLoading || obsLoading,
+    requestCount,
+    updateTotal: obs?.summary.updateTotal ?? 0,
+    active,
+  })
+  const emptyKey = clientDistEmptyI18nKey(emptyKind)
 
   return (
     <div className="space-y-6" data-kpi-scope="client-stats-panel">
@@ -95,6 +105,16 @@ export default function ClientStatsPanel({ channelId }: { channelId: string }) {
           </SelectContent>
         </Select>
       </div>
+
+      {emptyKey ? (
+        <p
+          data-testid="client-stats-empty-kind"
+          data-empty-kind={emptyKind}
+          className="rounded-md border border-dashed border-border/80 bg-muted/30 px-3 py-2 text-sm text-muted-foreground"
+        >
+          {t(emptyKey)}
+        </p>
+      ) : null}
 
       {/* 数字卡：FR-357 展示更新绝对数；率仍完全复用 FR-356 口径。 */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">

@@ -132,6 +132,51 @@ export function activeClientsHintKey(exactness: ActiveExactness, source: Resolve
   return null
 }
 
+/**
+ * 空态三类（FR-357）：
+ * - no_traffic：窗口内无请求且无更新/遥测
+ * - no_telemetry：有请求流量但更新侧全空（未开遥测或未上报）
+ * - out_of_window：有活跃但仅近似去重（明细窗外）
+ * - none：有数据且不需要顶栏空态提示
+ */
+export type ClientDistEmptyKind = 'no_traffic' | 'no_telemetry' | 'out_of_window' | 'none'
+
+export interface EmptyStateSignals {
+  /** 请求侧：下载/manifest/artifact 次数合计 */
+  requestCount?: number | null
+  /** 更新侧：updateTotal（遥测） */
+  updateTotal?: number | null
+  /** 活跃客户端解析结果 */
+  active?: Pick<ResolvedActiveClients, 'value' | 'exactness' | 'source'> | null
+  /** 是否仍在加载（加载中不展示空态） */
+  loading?: boolean
+}
+
+/** 解析空态类别；loading 时返回 none。 */
+export function resolveClientDistEmptyKind(signals: EmptyStateSignals): ClientDistEmptyKind {
+  if (signals.loading) return 'none'
+  const requests = Math.max(0, Number(signals.requestCount ?? 0) || 0)
+  const updates = Math.max(0, Number(signals.updateTotal ?? 0) || 0)
+  const active = signals.active
+
+  if (requests === 0 && updates === 0) {
+    // 活跃>0 但无请求/更新：通常是窗外近似残留，优先窗外提示
+    if (active && active.value > 0 && active.exactness === 'approx') return 'out_of_window'
+    return 'no_traffic'
+  }
+  if (requests > 0 && updates === 0) return 'no_telemetry'
+  if (active && active.exactness === 'approx' && active.source === 'observability') return 'out_of_window'
+  return 'none'
+}
+
+/** 空态 i18n key（clientStats / clientDistMonitor 可共用文案键）。 */
+export function clientDistEmptyI18nKey(kind: ClientDistEmptyKind): string | null {
+  if (kind === 'no_traffic') return 'clientStats.emptyNoTraffic'
+  if (kind === 'no_telemetry') return 'clientStats.emptyNoTelemetry'
+  if (kind === 'out_of_window') return 'clientStats.emptyOutOfWindow'
+  return null
+}
+
 function finiteOrNull(n: number | undefined): number | null {
   return typeof n === 'number' && Number.isFinite(n) ? n : null
 }

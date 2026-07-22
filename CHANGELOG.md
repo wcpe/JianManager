@@ -25,6 +25,8 @@
 - **FR-351/352 缩比真机门禁（用户 2026-07-21 确认）**：交付门禁由「10 Worker / 500 真连」改为缩比真链路——≥2 真 Worker、>50 跨节点分片预检、缩比真实 connected、容量不足拒绝、stop 与关 Worker 不误报全员成功；满规模 10×50/500 记为可选扩容。证据见 `.tmp/bot-load-acceptance/evidence/`（`verdict: passed_scaled`）；PRD/spec §真机与 super-spec §17 已同步。不宣称 500 满规模或 60 分钟长稳已验；FR-354/358～361 仍为计划态。
 
 ### 修复
+- **分发统计空态三类可区分（FR-357 验收补缺）**：`client-dist-kpi` 解析无流量 / 未开遥测 / 窗外；频道统计与监控统计顶栏提示 + i18n + 单测/DOM。
+- **安全中心事件行一键改 key 态与频道防护（FR-358 验收补缺）**：事件行补「改 key 态」「频道防护」，均经 DangerConfirm；默认 throttled / retry_after，可在封禁与降级页撤销；DOM 覆盖确认后才写入。
 - **Bot 压测面板 stop 后 connected 不收敛（fix(bot-load)，2026-07-21）**：FR-351 stop 原先只发 `desired=stopped` RPC、故意不假写 runtime，收束完全依赖 Worker 后续事件；真机 Paper 已空但无 runtime 事件时，多会话账本会叠出 200+ 在线且 stop 不归零。现于 `DispatchStop` 末与 `waiting_runtime` 重入时对各执行节点主动 `RefreshSnapshot`（空 baseline 走既有 `ConvergeMissingRuntime→stopped`），不重复 stop RPC、不伪造 runtime；装配 `SetFleetSnapshotRefresher(coordinator)`。单测覆盖自动 baseline 与 waiting_runtime 重入。
 - **发布门禁去重与 E2E 分片（fix(ci)）**：CI 将 102 条 Playwright E2E 按文件拆为 4 个隔离 runner 并行执行，分片 job 使用 `Web E2E / Shard N of 4` 标准名称并保留统一 `web-quality` 汇总门禁；瞬时失败重试一次，重试恢复记为 flaky 但不阻断，持续失败才红，并通过 GitHub reporter 直接标注失败用例。reduced-motion 进度反馈探针改用 MutationObserver 捕获子节点替换与属性变化，避免 GitHub runner 错过瞬时 `animationstart`。发布工作流复用同提交 CI 结果，只保留依赖完整内嵌资产的 Go 构建/vet/测试，避免 dev、master、tag 对同一提交重复跑前端测试。同步移除可见步骤名中的需求编号，并升级官方 GitHub Actions 到 Node.js 24 运行时对应主版本，消除弃用警告。
 - **正式发布强制内嵌客户端更新器两件套（FR-351）**：`make embed-client-updater` 与发布工作流在楔子或 updater-core jar 缺失、复制失败或 0 字节时以中文错误硬失败；本地开发未内嵌时仍保持可启动并返回 `JAR_NOT_EMBEDDED`。

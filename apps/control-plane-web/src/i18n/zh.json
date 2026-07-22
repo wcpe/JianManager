@@ -2288,7 +2288,10 @@
     "ip": "IP",
     "requestCount": "请求数",
     "totalBytes": "窗口内流量合计：",
-    "empty": "暂无数据"
+    "empty": "暂无数据",
+    "emptyNoTraffic": "当前窗口内无分发请求与更新上报（无流量）。",
+    "emptyNoTelemetry": "窗口内有拉取请求，但无更新遥测——可能客户端未开启 telemetry 或尚未上报。",
+    "emptyOutOfWindow": "时间窗超出明细保留范围，活跃客户端为人次近似，精确去重不可用（窗外）。"
   },
   "clientGuide": {
     "tab": "接入指引",

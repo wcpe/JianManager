@@ -142,6 +142,57 @@ describe('ProtectionCenterPage', () => {
     expect(writes).toBe(1)
   })
 
+  it('事件行改 key 态与频道防护须经 DangerConfirm 后才写入', async () => {
+    loginPlatformAdmin()
+    let keyWrites = 0
+    let protectionWrites = 0
+    server.use(
+      domainRoute('get', '/client-dist/security/events', () => HttpResponse.json([{
+        id: 2,
+        subjectType: 'client',
+        subjectValue: 'install-b',
+        channelId: 'skyblock-s1',
+        machineId: 'machine-xyz',
+        installId: 'install-xyz',
+        playerName: 'Steve',
+        ip: '198.51.100.7',
+        keyId: 9,
+        ruleCode: 'RATE_SPIKE',
+        severity: 'high',
+        scoreDelta: 2,
+        action: 'observe',
+        reason: '请求异常',
+        endpoint: '/manifest',
+        status: 429,
+        createdAt: '2026-07-02T13:00:00Z',
+      }])),
+      domainRoute('post', '/client-dist/security/keys/:keyId/state', () => {
+        keyWrites += 1
+        return HttpResponse.json({ id: 11 }, { status: 201 })
+      }),
+      domainRoute('put', '/client-dist/security/channels/:channelId/protection', () => {
+        protectionWrites += 1
+        return HttpResponse.json({ id: 12 }, { status: 200 })
+      }),
+    )
+    const user = userEvent.setup()
+    renderWithProviders(<ProtectionCenterPage />, { route: '/client-dist-security?tab=events' })
+
+    await user.click(await screen.findByRole('button', { name: '改 key 态' }))
+    const keyDialog = await screen.findByRole('dialog')
+    expect(within(keyDialog).getByText(/设为限速/)).toBeInTheDocument()
+    expect(keyWrites).toBe(0)
+    await user.click(within(keyDialog).getByRole('button', { name: '确认改 key 态' }))
+    expect(keyWrites).toBe(1)
+
+    await user.click(await screen.findByRole('button', { name: '频道防护' }))
+    const protDialog = await screen.findByRole('dialog')
+    expect(within(protDialog).getByText(/Retry-After 防护/)).toBeInTheDocument()
+    expect(protectionWrites).toBe(0)
+    await user.click(within(protDialog).getByRole('button', { name: '确认频道防护' }))
+    expect(protectionWrites).toBe(1)
+  })
+
   it('画像详情展示脱敏字段、环境信息与风险时间线', async () => {
     loginMockUser('admin')
     const profile = {
