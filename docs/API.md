@@ -1529,10 +1529,20 @@
 - **不泄露**: 响应与审计不返回节点密钥、Bot 凭据、停止批次内部错误明细或其他敏感配置
 - **错误**: 400 `INVALID_REQUEST`（JSON 非法或 reason 超长）| 403 `FORBIDDEN` | 404 `NOT_FOUND` | 500 `INTERNAL_ERROR`
 
+### POST /api/v1/bots/stress-sessions/:id/retry-failed
+- **描述**: 只重试失败 Bot 子集；事务内 `desired_state=running` 且 `desired_state_generation+1`，清当前 `last_error`，按执行节点批量 `ApplyBotBatch`；不改变 Bot UUID/Name/cohort
+- **关联 FR**: FR-365（HTTP 所有权）；响应形态供 FR-370/372 消费
+- **权限**: `bot:manage`（按会话目标实例隔离）；写审计 `bot_load.run.retry_failed`（含 `requestId` 幂等键）
+- **状态限制**: 会话 `running`（V1 兼容 status）；已记录 stop intent 或终态返回 409
+- **请求**: `{ "requestId": "<UUID>", "botUuids"?: string[], "errorCodes"?: string[], "fromStepId"?: string }`；`botUuids`/`errorCodes` 均省略表示全部失败 Bot；`requestId` 为审计幂等键，重复调用不重复 generation+1
+- **响应**: `202 Accepted` `{ "requested": number, "accepted": number, "skipped": number, "errors": [{ "botUuid"?: string, "errorCode": string, "message": string }] }`
+- **不泄露**: 审计 detail 不含凭据/节点密钥
+- **错误**: 400 `INVALID_REQUEST`（requestId 非法等）| 403 `FORBIDDEN` | 404 `NOT_FOUND` | 409 `BOT_LOAD_INVALID_STATE` | 500 `INTERNAL_ERROR`
+
 ### FR-352 内部场景契约（非 HTTP endpoint）
 
 - **CP → Worker `BotAssignment`**：`cohort_key` 固定该 Bot 的分组；`scenario_json` 为规范信封 `{ "seed": int64, "botOrdinal": int, "runDeadlineUnixMs": int64, "scenario": { "key": string, "steps": [...] } }`。`botOrdinal` 按会话与 Bot UUID 稳定恢复，重试/重放不重新抽 cohort；`runDeadlineUnixMs` 以该 Bot 冻结的 `max(session.startedAt, connectNotBefore)` 加所属 cohort 完整有界场景预算计算，覆盖所有前置 step、重试/退避和完整 observation。该信封参与 `config_hash`，Worker/Bot Worker 不解析 YAML。
-- **Bot Worker → Worker → CP**：Node IPC `action-event` 映射到 `StreamBotFleetEvents.action_event`，携 `botUuid/sessionUuid/generation/actionRunId/stepId/attempt/status/errorCode/message/correlationToken/resultJson/durationMs/observedAtUnixMs`。V2 `correlationToken` 必须非空且为 UUID；非法 start、finish、barrier 不落账。CP `ActionResultService` 按执行节点、会话、Bot 与 desired generation 强校验，以 `actionRunId` 幂等写 running 和首个终态。Worker 在当前进程内维护 60,000 条上限的有界压缩 action journal：按 action identity 只保留最新 running/waiting 或首个 terminal，terminal 替代非终态，覆盖 50 Bot × 100 step × 10 attempt 的 50,000 合法 identities 并保留 20% 余量；新 Fleet 订阅按接收序号 replay 后再接 live。该 journal 不落盘，Worker 进程重启恢复属于 FR-354。
+- **Bot Worker → Worker → CP**：Node IPC `action-event` 映射到 `StreamBotFleetEvents.action_event`，携 `botUuid/sessionUuid/generation/actionRunId/stepId/attempt/status/errorCode/message/correlationToken/resultJson/durationMs/observedAtUnixMs`。V2 `correlationToken` 必须非空且为 UUID；非法 start、finish、barrier 不落账。CP `ActionResultService` 按执行节点、会话、Bot 与 desired generation 强校验，以 `actionRunId` 幂等写 running 和首个终态。Worker 在当前进程内维护 60,000 条上限的有界压缩 action journal：按 action identity 只保留最新 running/waiting 或首个 terminal，terminal 替代非终态，覆盖 50 Bot × 100 step × 10 attempt 的 50,000 合法 identities 并保留 20% 余量；新 Fleet 订阅按接收序号 replay 后再接 live。该 journal 不落盘；Worker 进程重启后 Bot 集合由 CP desired-state reconcile 恢复（FR-365）。
 - **CP → Worker → Bot Worker**：`SignalBotActions` / IPC `signal-actions` 每批最多 100 条，信号携 `signalId/botUuid/sessionUuid/generation/actionRunId/stepId/type/correlationToken/payloadJson/observedAtUnixMs`，逐项返回 accepted/skipped/error。`ActionSignalRouter` 每 500 项批量查询等待动作，按节点最多 16 路并发、节点内每 100 项分块，只投递与当前 running 动作完整关联的信号；receipt 保持原输入顺序，重试复用稳定 `signalId`。屏障内部信号类型为 `barrier-release`（payload=`{round,releaseAtUnixMs}`）与 `barrier-fail`（payload=`{round,failAtUnixMs}`）；二者均复用既有字符串 `type`/JSON payload，不新增 proto 枚举或字段。CP 首次 scope 冻结唯一 deadline，并按 `min(1s, timeoutBudget/4, remaining)` 动态 lead 在 deadline 前投递；Bot Worker 对 deadline 同毫秒的已接收屏障动作优先于通用 timeout，`barrier-fail` 最终上报 `timed_out/BARRIER_TIMEOUT`。
 - **动作终态错误码**：`CONNECT_TIMEOUT`、`CONNECT_ENDED`、`PATHFINDER_UNAVAILABLE`、`PATH_NOT_FOUND`、`MOVE_TIMEOUT`、`TARGET_NOT_FOUND`、`ATTACK_ASSERTION_UNMET`、`PROBE_EVENT_TIMEOUT`、`BARRIER_TIMEOUT`、`ACTION_CANCELLED`、`ACTION_INTERNAL_ERROR`。其中 `ATTACK_ASSERTION_UNMET` 表示 `attack_until` 截止时可信伤害/击杀/事件或证据窗口断言未满足，不得记为成功。
 - **模板绑定边界**：`tower-defense-core-v1` 是内部纯数据预设，不构成新 HTTP 模板端点；调用方必须提供安全 `RoomKey`，构建期把 `{{roomKey}}` 烘焙进进房命令并保留运行期 `{{correlationToken}}`。通用 Scenario V2 当前没有 roomKey 值来源，因此提交未绑定 `{{roomKey}}` 返回 422 `BOT_LOAD_SCENARIO_INVALID`，而不是下发后才失败。

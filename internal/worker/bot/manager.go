@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -321,6 +322,13 @@ func isReliableBotEvent(event *BotWorkerEvent) bool {
 	return event != nil && (event.Evt == "action-event" || event.Evt == "worker-exit")
 }
 
+// desiredAssignment 是本节点内存中的 Bot 期望 assignment（FR-365，Worker 重启后丢失由 CP reconcile）。
+type desiredAssignment struct {
+	Config       BotConfig
+	DesiredState string // running/stopped
+	Generation   int64
+}
+
 // Manager Bot 管理器。
 // spawn 一个 Bot Worker 子进程，通过 stdin/stdout JSON 行协议通信。
 type Manager struct {
@@ -336,7 +344,9 @@ type Manager struct {
 	cancel                 context.CancelFunc
 	waitDone               chan struct{} // 本代子进程 Wait 归来即关闭（单一 waiter，Stop 复用）
 	bots                   map[string]*BotState
-	onEvent                EventCallback
+	// desired 本节点期望 Bot 集合；bot-worker 崩溃后据此重放（FR-365）。
+	desired map[string]*desiredAssignment
+	onEvent EventCallback
 	eventSubs              map[uint64]*eventSubscriber
 	nextSubID              uint64
 	pending                map[string]chan pendingRequestResult
@@ -351,7 +361,24 @@ type Manager struct {
 	prepareSpawn func(distDir string) error
 	// depsPrecheck spawn 前只按 ESM 可见路径检查依赖，避免裸全局根误放行。
 	depsPrecheck func(distDir string) error
+	// 崩溃自动恢复：连续 5 次/5 分钟开路 60 秒（FR-365）。
+	crashTimes      []time.Time
+	circuitOpenUntil time.Time
+	autoRestarting   bool
+	// startFn 可注入，便于测试崩溃重放而不真实 spawn。
+	startFn func(ctx context.Context) error
+	// rootCtx 供后台自动重拉使用；Stop 时取消。
+	rootCtx    context.Context
+	rootCancel context.CancelFunc
 }
+
+// 崩溃熔断参数（FR-365）。
+const (
+	botWorkerCrashWindow       = 5 * time.Minute
+	botWorkerCrashThreshold    = 5
+	botWorkerCircuitOpenPeriod = 60 * time.Second
+	botWorkerReplayBatchSize   = 50
+)
 
 // stderrTailLimit 子进程 stderr 尾巴保留上限（崩溃取证用，防无界增长）。
 const stderrTailLimit = 4 * 1024
@@ -408,8 +435,10 @@ func NewManager(config ManagerConfig) *Manager {
 	if requestTimeout <= 0 {
 		requestTimeout = 10 * time.Second
 	}
-	return &Manager{
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+	m := &Manager{
 		bots:           make(map[string]*BotState),
+		desired:        make(map[string]*desiredAssignment),
 		eventSubs:      make(map[uint64]*eventSubscriber),
 		pending:        make(map[string]chan pendingRequestResult),
 		requestTimeout: requestTimeout,
@@ -428,7 +457,11 @@ func NewManager(config ManagerConfig) *Manager {
 		extraEnv:     config.ExtraEnv,
 		prepareSpawn: config.PrepareSpawn,
 		depsPrecheck: config.DepsPrecheck,
+		rootCtx:      rootCtx,
+		rootCancel:   rootCancel,
 	}
+	m.startFn = m.Start
+	return m
 }
 
 // SetBotWorkerPath 运行时更新 bot-worker 入口脚本路径（FR-308：自愈下发完成后切到数据根物化副本）。
@@ -603,13 +636,20 @@ func (m *Manager) waitChild(cmd *exec.Cmd, done chan struct{}, stderrTail *tailB
 	wasStopping := m.stopping
 	var exitEvent *BotWorkerEvent
 	var cb EventCallback
+	var shouldAutoRestart bool
 	if current {
+		// 崩溃前把 desired running 的内存 runtime 标 disconnected，避免幽灵 connected。
+		m.markDesiredDisconnectedLocked("worker-crashed")
 		exitEvent, cb = m.invalidateRuntimeLocked("bot-worker 进程已退出", fmt.Errorf("Bot Worker 进程已退出"))
 		m.cmd = nil
 		m.stdin = nil
 		m.stdinPipe = nil
 		m.stdout = nil
 		m.cancel = nil
+		shouldAutoRestart = wasRunning && !wasStopping && m.hasDesiredRunningLocked()
+		if shouldAutoRestart {
+			m.recordCrashLocked()
+		}
 	}
 	m.mu.Unlock()
 	close(done)
@@ -618,10 +658,189 @@ func (m *Manager) waitChild(cmd *exec.Cmd, done chan struct{}, stderrTail *tailB
 		cb(exitEvent)
 	}
 	if current && wasRunning && !wasStopping {
-		// 非 Stop 主动收束的退出（崩溃/自亡）：留取证日志。
-		slog.Error("Bot Worker 子进程意外退出，下次 Bot 操作将自动重拉",
-			"error", err, "stderrTail", stderrTail.String())
+		// 非 Stop 主动收束的退出（崩溃/自亡）：留取证日志，并尝试自动重拉+重放。
+		slog.Error("Bot Worker 子进程意外退出",
+			"error", err, "stderrTail", stderrTail.String(), "autoRestart", shouldAutoRestart)
+		if shouldAutoRestart {
+			m.scheduleAutoRestart()
+		}
 	}
+}
+
+// markDesiredDisconnectedLocked 将 desired running Bot 的本地 runtime 标为 disconnected。
+func (m *Manager) markDesiredDisconnectedLocked(errorCode string) {
+	for botID, assignment := range m.desired {
+		if assignment == nil || assignment.DesiredState != "running" {
+			continue
+		}
+		state, ok := m.bots[botID]
+		if !ok {
+			copyState := BotState{
+				ID: botID, Status: "disconnected", Name: assignment.Config.Name,
+				SessionID: assignment.Config.SessionID, Generation: assignment.Generation,
+				ConfigHash: assignment.Config.ConfigHash, ErrorCode: errorCode,
+				LastError: "bot-worker 子进程崩溃", ObservedAt: time.Now().UnixMilli(),
+			}
+			m.bots[botID] = &copyState
+			continue
+		}
+		state.Status = "disconnected"
+		state.ErrorCode = errorCode
+		state.LastError = "bot-worker 子进程崩溃"
+		state.ObservedAt = time.Now().UnixMilli()
+	}
+}
+
+func (m *Manager) hasDesiredRunningLocked() bool {
+	for _, item := range m.desired {
+		if item != nil && item.DesiredState == "running" {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manager) recordCrashLocked() {
+	now := time.Now()
+	m.crashTimes = append(m.crashTimes, now)
+	// 仅保留窗口内记录。
+	cutoff := now.Add(-botWorkerCrashWindow)
+	kept := m.crashTimes[:0]
+	for _, ts := range m.crashTimes {
+		if ts.After(cutoff) {
+			kept = append(kept, ts)
+		}
+	}
+	m.crashTimes = kept
+	if len(m.crashTimes) >= botWorkerCrashThreshold {
+		m.circuitOpenUntil = now.Add(botWorkerCircuitOpenPeriod)
+		m.capacity.UnavailableReason = "bot-worker 连续崩溃，熔断开启"
+		slog.Error("Bot Worker 连续崩溃触发熔断",
+			"count", len(m.crashTimes), "openFor", botWorkerCircuitOpenPeriod)
+	}
+}
+
+// scheduleAutoRestart 在后台按退避重拉 bot-worker 并重放 desired running。
+func (m *Manager) scheduleAutoRestart() {
+	m.mu.Lock()
+	if m.autoRestarting || m.stopping {
+		m.mu.Unlock()
+		return
+	}
+	m.autoRestarting = true
+	rootCtx := m.rootCtx
+	m.mu.Unlock()
+
+	go func() {
+		defer func() {
+			m.mu.Lock()
+			m.autoRestarting = false
+			m.mu.Unlock()
+		}()
+		m.runAutoRestart(rootCtx)
+	}()
+}
+
+func (m *Manager) runAutoRestart(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for attempt := 0; attempt < 8; attempt++ {
+		if ctx.Err() != nil {
+			return
+		}
+		m.mu.Lock()
+		stopping := m.stopping
+		openUntil := m.circuitOpenUntil
+		m.mu.Unlock()
+		if stopping {
+			return
+		}
+		if !openUntil.IsZero() {
+			wait := time.Until(openUntil)
+			if wait > 0 {
+				slog.Warn("Bot Worker 熔断中，等待后重试", "wait", wait)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(wait):
+				}
+			}
+		}
+		// 指数退避启动：0.5s,1s,2s... 上限 30s（首次 attempt=0 立即）。
+		if attempt > 0 {
+			delay := time.Duration(1<<min(attempt-1, 5)) * 500 * time.Millisecond
+			if delay > 30*time.Second {
+				delay = 30 * time.Second
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+		}
+		start := m.startFn
+		if start == nil {
+			start = m.Start
+		}
+		if err := start(ctx); err != nil {
+			// 已在运行时视为可继续等 ready。
+			if !strings.Contains(err.Error(), "已在运行") {
+				slog.Warn("自动重拉 Bot Worker 失败", "attempt", attempt+1, "error", err)
+				continue
+			}
+		}
+		readyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		readyErr := m.WaitReady(readyCtx)
+		cancel()
+		if readyErr != nil {
+			slog.Warn("自动重拉后等待 worker-ready 失败", "error", readyErr)
+			continue
+		}
+		if err := m.replayDesiredRunning(ctx); err != nil {
+			slog.Warn("重放 desired Bot 失败", "error", err)
+			// 重放失败仍结束本轮；后续 CP reconcile 可补偿。
+		}
+		return
+	}
+	slog.Error("Bot Worker 自动重拉达到次数上限，等待 CP reconcile 或人工介入")
+}
+
+// replayDesiredRunning 按 batch≤50 重放 desired running，idempotencyKey=replay:<epoch>:<batch>。
+func (m *Manager) replayDesiredRunning(ctx context.Context) error {
+	m.mu.Lock()
+	configs := make([]BotConfig, 0, len(m.desired))
+	for _, item := range m.desired {
+		if item == nil || item.DesiredState != "running" {
+			continue
+		}
+		configs = append(configs, item.Config)
+	}
+	epoch := m.capacity.WorkerEpoch
+	if epoch == "" {
+		epoch = fmt.Sprintf("gen-%d", m.capacity.WorkerEpochGeneration)
+	}
+	m.mu.Unlock()
+	if len(configs) == 0 {
+		return nil
+	}
+	sort.Slice(configs, func(i, j int) bool { return configs[i].ID < configs[j].ID })
+	var errs []error
+	for start := 0; start < len(configs); start += botWorkerReplayBatchSize {
+		end := min(start+botWorkerReplayBatchSize, len(configs))
+		chunk := configs[start:end]
+		batchOrdinal := start/botWorkerReplayBatchSize + 1
+		requestID := fmt.Sprintf("replay-%s-%d", epoch, batchOrdinal)
+		idempotencyKey := fmt.Sprintf("replay:%s:%d", epoch, batchOrdinal)
+		batchID := fmt.Sprintf("replay-batch-%s-%d", epoch, batchOrdinal)
+		if _, err := m.sendRequest(ctx, requestID, CreateBotsCommand{
+			Cmd: "create-bots", RequestID: requestID, BatchID: batchID,
+			IdempotencyKey: idempotencyKey, Bots: chunk,
+		}); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (m *Manager) invalidateRuntimeLocked(reason string, pendingErr error) (*BotWorkerEvent, EventCallback) {
@@ -658,6 +877,10 @@ func (m *Manager) invalidateRuntimeLocked(reason string, pendingErr error) (*Bot
 // Stop 停止 Bot 管理器和 Bot Worker 子进程。
 func (m *Manager) Stop() {
 	m.mu.Lock()
+	if m.rootCancel != nil {
+		// 取消后台自动重拉，防止 stop 后复活。
+		m.rootCancel()
+	}
 	if !m.running || m.stopping {
 		m.mu.Unlock()
 		return
@@ -867,19 +1090,90 @@ func (m *Manager) PendingRequestCount() int {
 	return len(m.pending)
 }
 
-// ApplyBotBatch 发送单次 create-bots 并等待 batch-result。
+// ApplyBotBatch 先按 generation 更新 desired，再发送 create-bots 并等待 batch-result（FR-365）。
 func (m *Manager) ApplyBotBatch(ctx context.Context, requestID, batchID, idempotencyKey string, configs []BotConfig) (*BotWorkerEvent, error) {
+	m.rememberDesiredRunning(configs)
 	return m.sendRequest(ctx, requestID, CreateBotsCommand{
 		Cmd: "create-bots", RequestID: requestID, BatchID: batchID,
 		IdempotencyKey: idempotencyKey, Bots: configs,
 	})
 }
 
-// StopBotBatch 发送 stop-bots 并等待逐项 batch-result。
+// StopBotBatch 先把 desired 标 stopped，再发送 stop-bots（FR-365）。
 func (m *Manager) StopBotBatch(ctx context.Context, requestID string, botIDs []string, generation int64, reason string) (*BotWorkerEvent, error) {
+	m.rememberDesiredStopped(botIDs, generation)
 	return m.sendRequest(ctx, requestID, StopBotsCommand{
 		Cmd: "stop-bots", RequestID: requestID, BotIds: botIDs, Generation: generation, Reason: reason,
 	})
+}
+
+// rememberDesiredRunning 仅保留更高 generation 的 running assignment。
+func (m *Manager) rememberDesiredRunning(configs []BotConfig) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.desired == nil {
+		m.desired = make(map[string]*desiredAssignment)
+	}
+	for _, config := range configs {
+		if config.ID == "" {
+			continue
+		}
+		if existing, ok := m.desired[config.ID]; ok && existing.Generation > config.Generation {
+			continue
+		}
+		copyConfig := config
+		m.desired[config.ID] = &desiredAssignment{
+			Config: copyConfig, DesiredState: "running", Generation: config.Generation,
+		}
+	}
+}
+
+// rememberDesiredStopped 将指定 Bot 标为 stopped；generation 更旧时忽略。
+func (m *Manager) rememberDesiredStopped(botIDs []string, generation int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.desired == nil {
+		m.desired = make(map[string]*desiredAssignment)
+	}
+	for _, botID := range botIDs {
+		if botID == "" {
+			continue
+		}
+		if existing, ok := m.desired[botID]; ok {
+			if generation > 0 && existing.Generation > generation {
+				continue
+			}
+			existing.DesiredState = "stopped"
+			if generation > existing.Generation {
+				existing.Generation = generation
+			}
+			continue
+		}
+		m.desired[botID] = &desiredAssignment{
+			Config: BotConfig{ID: botID, Generation: generation}, DesiredState: "stopped", Generation: generation,
+		}
+	}
+}
+
+// DesiredSnapshot 返回当前内存 desired 的副本（测试/诊断）。
+func (m *Manager) DesiredSnapshot() map[string]desiredAssignment {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]desiredAssignment, len(m.desired))
+	for id, item := range m.desired {
+		if item == nil {
+			continue
+		}
+		out[id] = *item
+	}
+	return out
+}
+
+// CircuitOpen 报告崩溃熔断是否开启。
+func (m *Manager) CircuitOpen() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return !m.circuitOpenUntil.IsZero() && time.Now().Before(m.circuitOpenUntil)
 }
 
 // SignalActions 投递通用外部动作信号并等待 signal-result。

@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// BotStatus Bot 状态。
+// BotStatus Bot 运行时状态（runtime 真源由 Worker/Bot Worker 上报）。
 type BotStatus string
 
 const (
@@ -17,6 +17,14 @@ const (
 	BotStatusDisconnected BotStatus = "disconnected"
 	BotStatusError        BotStatus = "error"
 	BotStatusStopped      BotStatus = "stopped"
+)
+
+// BotDesiredState 是 CP 对 Bot 的期望状态（desired-state 真源，FR-365）。
+type BotDesiredState string
+
+const (
+	BotDesiredRunning BotDesiredState = "running"
+	BotDesiredStopped BotDesiredState = "stopped"
 )
 
 // Bot Mineflayer Bot。
@@ -29,14 +37,18 @@ type Bot struct {
 	LoadBatchID            *uint      `gorm:"index" json:"loadBatchId,omitempty"`
 	Name                   string     `gorm:"type:varchar(128);not null" json:"name"`
 	Status                 BotStatus  `gorm:"type:varchar(32);default:pending" json:"status"`
-	WorkerEpoch            string     `gorm:"type:varchar(36);not null;default:''" json:"workerEpoch"`
-	WorkerEpochGeneration  int64      `gorm:"not null;default:0" json:"workerEpochGeneration"`
-	LastEventSeq           int64      `gorm:"not null;default:0" json:"lastEventSeq"`
-	LastSeenAt             *time.Time `json:"lastSeenAt,omitempty"`
-	ConnectedAt            *time.Time `json:"connectedAt,omitempty"`
-	DesiredStateGeneration int64      `gorm:"not null;default:1;index:idx_bots_executor_generation,priority:2" json:"desiredStateGeneration"`
-	ConfigHash             string     `gorm:"type:char(64);not null;default:''" json:"configHash"`
-	CohortKey              string     `gorm:"type:varchar(64);not null;default:''" json:"cohortKey"`
+	// DesiredState 是 CP 对 Bot 的期望运行态（running/stopped），与 runtime Status 分离（FR-365）。
+	DesiredState           BotDesiredState `gorm:"type:varchar(16);not null;default:stopped;index" json:"desiredState"`
+	WorkerEpoch            string          `gorm:"type:varchar(36);not null;default:''" json:"workerEpoch"`
+	WorkerEpochGeneration  int64           `gorm:"not null;default:0" json:"workerEpochGeneration"`
+	LastEventSeq           int64           `gorm:"not null;default:0" json:"lastEventSeq"`
+	LastSeenAt             *time.Time      `json:"lastSeenAt,omitempty"`
+	ConnectedAt            *time.Time      `json:"connectedAt,omitempty"`
+	DesiredStateGeneration int64           `gorm:"not null;default:1;index:idx_bots_executor_generation,priority:2" json:"desiredStateGeneration"`
+	ConfigHash             string          `gorm:"type:char(64);not null;default:''" json:"configHash"`
+	// ReconnectCount 累计成功触发的自动重连次数，服务端恢复后不清零（FR-365）。
+	ReconnectCount int    `gorm:"not null;default:0" json:"reconnectCount"`
+	CohortKey      string `gorm:"type:varchar(64);not null;default:''" json:"cohortKey"`
 	// LastError 最近一次委托 Worker 失败的原因（如 bot-worker 依赖未装、节点未连）。
 	// 委托成功即清空；status=error 时前端据此显示可操作指引，杜绝「创建 201 但永远 pending 零反馈」。
 	LastError string         `gorm:"type:text" json:"lastError,omitempty"`

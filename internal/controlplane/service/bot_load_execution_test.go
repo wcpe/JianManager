@@ -1279,12 +1279,19 @@ func TestBotLoadExecutionReconcile_DoesNotReplaceAcceptedLedgerFromRuntime(t *te
 	require.NoError(t, err)
 	var bots []model.Bot
 	require.NoError(t, h.db.Order("name ASC").Find(&bots).Error)
+	// 完整 snapshot：两 Bot 均在，generation/config 一致 → 不额外 Apply；账本 accepted 不被 runtime 覆盖。
 	snapshot := &workerpb.GetBotFleetSnapshotResponse{
 		CapacityGeneration: h.plan.CapacityGenerations[0].CapacityGeneration,
-		Bots: []*workerpb.BotRuntimeSnapshot{{
-			BotUuid: bots[0].UUID, SessionUuid: h.session.UUID, Generation: bots[0].DesiredStateGeneration,
-			ConfigHash: bots[0].ConfigHash, Status: "connecting",
-		}},
+		Bots: []*workerpb.BotRuntimeSnapshot{
+			{
+				BotUuid: bots[0].UUID, SessionUuid: h.session.UUID, Generation: bots[0].DesiredStateGeneration,
+				ConfigHash: bots[0].ConfigHash, Status: "connecting",
+			},
+			{
+				BotUuid: bots[1].UUID, SessionUuid: h.session.UUID, Generation: bots[1].DesiredStateGeneration,
+				ConfigHash: bots[1].ConfigHash, Status: "connecting",
+			},
+		},
 	}
 
 	require.NoError(t, h.service.ReconcileBotFleetSnapshot(context.Background(), h.nodes[0].ID, h.nodes[0].UUID, h.session.UUID, snapshot))
@@ -1324,6 +1331,7 @@ func TestBotLoadExecutionReconcile_OnlyStopsRuntimeMissingFromDesired(t *testing
 	require.NoError(t, h.db.Order("name ASC").Find(&bots).Error)
 	require.Len(t, bots, 3)
 
+	// FR-365：一致 running 不重派；generation 漂移/缺失则下发 running；orphan 下发 stopped。
 	snapshot := &workerpb.GetBotFleetSnapshotResponse{
 		CapacityGeneration: h.plan.CapacityGenerations[0].CapacityGeneration,
 		Bots: []*workerpb.BotRuntimeSnapshot{
@@ -1343,9 +1351,11 @@ func TestBotLoadExecutionReconcile_OnlyStopsRuntimeMissingFromDesired(t *testing
 			assignments[assignment.BotUuid] = assignment
 		}
 	}
-	require.NotContains(t, assignments, bots[0].UUID)
-	require.NotContains(t, assignments, bots[1].UUID, "已知 Bot 的 generation/config 差异只诊断，不由 FR-351 猜测 desired stopped")
-	require.NotContains(t, assignments, bots[2].UUID)
+	require.NotContains(t, assignments, bots[0].UUID, "generation/config 一致不得重派")
+	require.Contains(t, assignments, bots[1].UUID, "generation 漂移应重放 desired running")
+	require.Equal(t, "running", assignments[bots[1].UUID].DesiredState)
+	require.Contains(t, assignments, bots[2].UUID, "snapshot 缺失的 desired running 应创建")
+	require.Equal(t, "running", assignments[bots[2].UUID].DesiredState)
 	require.Equal(t, "stopped", assignments["extra-bot"].DesiredState)
 	require.Equal(t, int64(6), assignments["extra-bot"].Generation)
 }

@@ -41,6 +41,7 @@ type botLoadServiceBundle struct {
 	scenarioEvents *service.ScenarioActionEventService
 	coordinator    *service.BotFleetRuntimeCoordinator
 	subscriptions  *service.BotFleetSubscriptionManager
+	freshness      *service.BotFreshnessSweeper
 }
 
 // assembleBotLoadServices 创建进程级共享的容量目录、软预留、签名器与执行服务。
@@ -67,11 +68,15 @@ func assembleBotLoadServices(db *gorm.DB, pool *cpgrpc.ClientPool, stableSecret 
 	// stop 派发后主动 RefreshSnapshot，避免 Worker 无事件时面板 connected 不收敛。
 	execution.SetFleetSnapshotRefresher(coordinator)
 	execution.SetScenarioRunLifecycle(scenarioEvents)
+	// FR-365：状态新鲜度巡检，将幽灵 connected 收敛为 disconnected/error。
+	freshnessSvc := service.NewBotFreshnessService(db, nil)
+	freshness := service.NewBotFreshnessSweeper(freshnessSvc)
+	freshness.Start()
 	return &botLoadServiceBundle{
 		capacity: capacity, reservations: reservations, signer: signer,
 		preflight: preflight, execution: execution, actionResults: actionResults,
 		barriers: barriers, signalRouter: signalRouter, scenarioEvents: scenarioEvents,
-		coordinator: coordinator, subscriptions: subscriptions,
+		coordinator: coordinator, subscriptions: subscriptions, freshness: freshness,
 	}, nil
 }
 
@@ -173,6 +178,9 @@ func main() {
 		log.Fatalf("初始化 Bot 分布式负载服务失败: %v", err)
 	}
 	defer botLoadSvcs.subscriptions.Close()
+	if botLoadSvcs.freshness != nil {
+		defer botLoadSvcs.freshness.Stop()
+	}
 	instanceSvc := service.NewInstanceService(db, groupSvc, pool)
 	// 优雅关闭：停止接受新的后台 Worker 委托并等待在途异步状态回写收尾，避免泄漏 goroutine。
 	defer instanceSvc.Shutdown()

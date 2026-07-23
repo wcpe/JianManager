@@ -10,6 +10,8 @@
 
 ### 新增
 - **CP↔Worker 实例反向对账（FR-326，ADR-079）**：心跳 `instances` 加性 `pid`；CP `OrphanRuntimeTracker` 发现 Worker 有、CP 无记录的无主运行时（宽限默认 10m、`auto_dispose` 默认 false）；`DisposeOrphanRuntime` 清 Worker 运行态；管理员 `GET/POST /orphan-runtimes`；设置键 `instance_reverse_reconcile.*`。不重建 CP 实例、不改写正向对账。
+- **CP↔Worker 实例反向对账（FR-326，ADR-078）**：心跳 `instances` 加性 `pid`；CP `OrphanRuntimeTracker` 发现 Worker 有、CP 无记录的无主运行时（宽限默认 10m、`auto_dispose` 默认 false）；`DisposeOrphanRuntime` 清 Worker 运行态；管理员 `GET/POST /orphan-runtimes`；设置键 `instance_reverse_reconcile.*`。不重建 CP 实例、不改写正向对账。
+- **Bot 长稳重连、进程恢复与状态归真（FR-365）**：`bots.desired_state`/`reconnect_count` 与 generation/epoch/seq/configHash 归真；Bot Worker 指数退避+抖动自动重连与 connecting 信号量；Worker 内存 desired 缓存、子进程崩溃熔断/重拉/重放；CP Fleet snapshot reconcile 创建缺失/停止 orphan、10s/90s 新鲜度巡检；`POST .../retry-failed` 后端幂等。自动化测试覆盖接受矩阵、重连/信号量、desired 重放、reconcile 与 retry；真机批量踢出/杀 bot-worker/重启 Worker 待验收。
 
 ## 0.19.0（2026-07-23）
 

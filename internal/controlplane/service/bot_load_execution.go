@@ -100,6 +100,7 @@ type botLoadStopGroup struct {
 type botLoadReconcileMode string
 
 const (
+	botLoadReconcileRunning botLoadReconcileMode = "running"
 	botLoadReconcileStopped botLoadReconcileMode = "stopped"
 	botLoadReconcileCleanup botLoadReconcileMode = "cleanup"
 )
@@ -627,8 +628,8 @@ func newPlannedBotLoadBot(prepared *botLoadStartPreparation, batch model.BotLoad
 		UUID:       stableBotLoadUUID(fmt.Sprintf("%s|bot|%d", prepared.session.UUID, botOrdinal)),
 		InstanceID: prepared.session.InstanceID, StressSessionID: &sessionID, ExecutorNodeID: &executorNodeID,
 		LoadBatchID: &batchID, Name: stableBotLoadBotName(prepared.session.NamePrefix, prepared.session.UUID, botOrdinal),
-		Status: model.BotStatusPending, DesiredStateGeneration: 1, Config: prepared.session.Config,
-		Behavior: prepared.session.Behavior, WorkerID: allocation.ExecutorNodeUUID, CohortKey: cohortKey,
+		Status: model.BotStatusPending, DesiredState: model.BotDesiredRunning, DesiredStateGeneration: 1,
+		Config: prepared.session.Config, Behavior: prepared.session.Behavior, WorkerID: allocation.ExecutorNodeUUID, CohortKey: cohortKey,
 	}
 	assignment, err := buildRunningBotLoadAssignment(
 		&bot, prepared.session, &prepared.session.Instance, prepared.config, allocation, localIndex, botOrdinal,
@@ -1270,7 +1271,10 @@ func (s *BotLoadExecutionService) prepareStopIntent(ctx context.Context, session
 			return nil
 		}
 		return tx.Model(&model.Bot{}).Where("stress_session_id = ? AND status <> ?", sessionID, model.BotStatusStopped).
-			Update("desired_state_generation", gorm.Expr("desired_state_generation + 1")).Error
+			Updates(map[string]any{
+				"desired_state":            model.BotDesiredStopped,
+				"desired_state_generation": gorm.Expr("desired_state_generation + 1"),
+			}).Error
 	})
 	if err != nil {
 		return 0, false, fmt.Errorf("保存 Bot stopped desired intent 失败: %w", err)
@@ -1586,7 +1590,7 @@ func (s *BotLoadExecutionService) ReconcileBotFleetRuntimeState(ctx context.Cont
 	return nil
 }
 
-// ReconcileBotFleetSnapshot 以 CP desired 真源清理额外 runtime，不实现 FR-354 自动恢复。
+// ReconcileBotFleetSnapshot 以 CP desired 真源创建缺失、停止多余、修正配置（FR-365）。
 func (s *BotLoadExecutionService) ReconcileBotFleetSnapshot(ctx context.Context, nodeID uint, nodeUUID, sessionUUID string, snapshot *workerpb.GetBotFleetSnapshotResponse) error {
 	if snapshot == nil {
 		return nil
@@ -1617,13 +1621,89 @@ func (s *BotLoadExecutionService) buildBotLoadReconcileItems(ctx context.Context
 			byUUID[runtime.BotUuid] = runtime
 		}
 	}
-	items := desiredBotLoadReconcileItems(session, bots, byUUID)
+	items, err := s.desiredBotLoadReconcileItems(ctx, session, bots, byUUID)
+	if err != nil {
+		return nil, err
+	}
 	for _, runtime := range snapshot.Bots {
-		if runtime != nil && !containsBotLoadBot(bots, runtime.BotUuid) {
+		// orphan 保护：仅处理 sessionId 属于本会话的 runtime，未知外部进程不碰。
+		if runtime != nil && runtime.SessionUuid == sessionUUID && !containsBotLoadBot(bots, runtime.BotUuid) {
 			items = append(items, extraBotLoadReconcileItem(runtime))
 		}
 	}
 	return items, nil
+}
+
+// desiredBotLoadReconcileItems 按 desired_state 生成 running 缺失/配置漂移与 stopped 清理项（FR-365）。
+func (s *BotLoadExecutionService) desiredBotLoadReconcileItems(ctx context.Context, session *model.BotStressSession, bots []model.Bot, runtime map[string]*workerpb.BotRuntimeSnapshot) ([]botLoadReconcileItem, error) {
+	if session == nil {
+		return nil, nil
+	}
+	stopping := session.Status == model.BotStressSessionStopped || botLoadStopIntentRecorded(session.LastError)
+	items := make([]botLoadReconcileItem, 0, len(bots))
+	for index := range bots {
+		bot := &bots[index]
+		observed := runtime[bot.UUID]
+		desired := bot.DesiredState
+		if desired == "" {
+			// 兼容未 backfill 的历史行：stop intent 或终态会话视为 stopped，其余活动视为 running。
+			if stopping || bot.Status == model.BotStatusStopped {
+				desired = model.BotDesiredStopped
+			} else {
+				desired = model.BotDesiredRunning
+			}
+		}
+		switch desired {
+		case model.BotDesiredStopped:
+			if observed != nil {
+				items = append(items, stoppedBotLoadReconcileItem(bot, session.UUID, observed, botLoadReconcileStopped))
+			}
+		case model.BotDesiredRunning:
+			if stopping {
+				if observed != nil {
+					items = append(items, stoppedBotLoadReconcileItem(bot, session.UUID, observed, botLoadReconcileStopped))
+				}
+				continue
+			}
+			if observed == nil || observed.Generation != bot.DesiredStateGeneration || observed.ConfigHash != bot.ConfigHash {
+				assignment, err := s.rebuildRunningAssignment(ctx, session, bot)
+				if err != nil {
+					return nil, err
+				}
+				if assignment != nil {
+					items = append(items, botLoadReconcileItem{assignment: assignment, bot: bot, mode: botLoadReconcileRunning})
+				}
+			}
+		}
+	}
+	return items, nil
+}
+
+// rebuildRunningAssignment 从 DB Bot 重建 running assignment，供 reconcile 创建缺失或修正漂移。
+func (s *BotLoadExecutionService) rebuildRunningAssignment(ctx context.Context, session *model.BotStressSession, bot *model.Bot) (*workerpb.BotAssignment, error) {
+	if session == nil || bot == nil {
+		return nil, nil
+	}
+	var instance model.Instance
+	if err := s.db.WithContext(ctx).First(&instance, session.InstanceID).Error; err != nil {
+		return nil, fmt.Errorf("查询 reconcile 目标实例失败: %w", err)
+	}
+	config, err := parseBotLoadConnectionConfig(session.Config)
+	if err != nil {
+		return nil, fmt.Errorf("解析 reconcile 连接配置失败: %w", err)
+	}
+	username := config.Username
+	if username == "" {
+		username = sanitizeMCUsername(bot.Name)
+	}
+	return &workerpb.BotAssignment{
+		BotUuid: bot.UUID, InstanceUuid: instance.UUID, SessionUuid: session.UUID,
+		Generation: bot.DesiredStateGeneration, DesiredState: "running", ConfigHash: bot.ConfigHash,
+		Name: bot.Name, Host: config.Server, Port: int32(config.Port), Username: username,
+		Version: config.Version, Auth: config.Auth, CohortKey: bot.CohortKey,
+		ConnectNotBeforeUnixMs: time.Now().UTC().UnixMilli(),
+		CorrelationSeed:        stableBotLoadDigest(session.UUID + "|" + bot.UUID + "|correlation"),
+	}, nil
 }
 
 func (s *BotLoadExecutionService) loadReconcileDesired(ctx context.Context, nodeID uint, sessionUUID string) (*model.BotStressSession, []model.Bot, error) {
@@ -1639,20 +1719,6 @@ func (s *BotLoadExecutionService) loadReconcileDesired(ctx context.Context, node
 		return nil, nil, fmt.Errorf("查询 snapshot desired Bot 失败: %w", err)
 	}
 	return &session, bots, nil
-}
-
-func desiredBotLoadReconcileItems(session *model.BotStressSession, bots []model.Bot, runtime map[string]*workerpb.BotRuntimeSnapshot) []botLoadReconcileItem {
-	if session == nil || (session.Status != model.BotStressSessionStopped && !botLoadStopIntentRecorded(session.LastError)) {
-		return nil
-	}
-	items := make([]botLoadReconcileItem, 0, len(bots))
-	for index := range bots {
-		bot := &bots[index]
-		if observed := runtime[bot.UUID]; observed != nil {
-			items = append(items, stoppedBotLoadReconcileItem(bot, session.UUID, observed, botLoadReconcileStopped))
-		}
-	}
-	return items
 }
 
 func stoppedBotLoadReconcileItem(bot *model.Bot, sessionUUID string, observed *workerpb.BotRuntimeSnapshot, mode botLoadReconcileMode) botLoadReconcileItem {

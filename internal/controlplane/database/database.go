@@ -203,7 +203,72 @@ func AutoMigrate(db *gorm.DB) error {
 
 	// 节点名活跃唯一约束（见 ADR-039，修复 BUG-A）：先对存量重名活跃节点去重，再建部分唯一索引。
 	// 必须在 AutoMigrate 建表后执行（依赖 nodes 表与 deleted_at 列存在）。
-	return migrateNodeNameUnique(db)
+	if err := migrateNodeNameUnique(db); err != nil {
+		return err
+	}
+	// FR-365：幂等回填 bots.desired_state / desired_state_generation。
+	return backfillBotDesiredState(db)
+}
+
+// backfillBotDesiredState 将历史 Bot 的 desired_state 按活动会话与 runtime status 回填（FR-365）。
+// 活动会话中 status=pending/connecting/connected/disconnected/error → running；
+// stopped 或无活动会话 → stopped；DesiredStateGeneration≤0 时修正为 1。可重复运行。
+func backfillBotDesiredState(db *gorm.DB) error {
+	if !db.Migrator().HasTable("bots") || !db.Migrator().HasColumn(&model.Bot{}, "DesiredState") {
+		return nil
+	}
+	// 活动会话：status 非 stopped 且未软删；Bot 未软删。
+	activeStatuses := []model.BotStatus{
+		model.BotStatusPending, model.BotStatusConnecting, model.BotStatusConnected,
+		model.BotStatusDisconnected, model.BotStatusError,
+	}
+	// 有活动会话且 runtime 未停 → desired=running。
+	if err := db.Exec(`
+		UPDATE bots SET desired_state = ?
+		WHERE deleted_at IS NULL
+		  AND (desired_state = '' OR desired_state IS NULL OR desired_state = ?)
+		  AND status IN (?,?,?,?,?)
+		  AND stress_session_id IS NOT NULL
+		  AND stress_session_id IN (
+		    SELECT id FROM bot_stress_sessions
+		    WHERE deleted_at IS NULL AND status <> ?
+		  )
+	`, model.BotDesiredRunning, model.BotDesiredStopped,
+		model.BotStatusPending, model.BotStatusConnecting, model.BotStatusConnected,
+		model.BotStatusDisconnected, model.BotStatusError,
+		model.BotStressSessionStopped,
+	).Error; err != nil {
+		// SQLite/MySQL 对空串/NULL 兼容差异：回退到 GORM 条件更新。
+		if err := backfillBotDesiredStateGORM(db, activeStatuses); err != nil {
+			return fmt.Errorf("回填 Bot desired_state 失败: %w", err)
+		}
+	}
+	// 其余仍为空或默认 stopped 的行保持 stopped；generation ≤0 修正为 1。
+	if err := db.Model(&model.Bot{}).
+		Where("deleted_at IS NULL AND desired_state_generation <= 0").
+		Update("desired_state_generation", 1).Error; err != nil {
+		return fmt.Errorf("回填 Bot desired_state_generation 失败: %w", err)
+	}
+	return nil
+}
+
+// backfillBotDesiredStateGORM 在原生 SQL 不兼容时用 GORM 幂等回填。
+func backfillBotDesiredStateGORM(db *gorm.DB, activeStatuses []model.BotStatus) error {
+	var activeSessionIDs []uint
+	if err := db.Model(&model.BotStressSession{}).
+		Where("deleted_at IS NULL AND status <> ?", model.BotStressSessionStopped).
+		Pluck("id", &activeSessionIDs).Error; err != nil {
+		return err
+	}
+	if len(activeSessionIDs) == 0 {
+		return nil
+	}
+	return db.Model(&model.Bot{}).
+		Where("deleted_at IS NULL").
+		Where("stress_session_id IN ?", activeSessionIDs).
+		Where("status IN ?", activeStatuses).
+		Where("desired_state = ? OR desired_state = ''", model.BotDesiredStopped).
+		Update("desired_state", model.BotDesiredRunning).Error
 }
 
 // nodeNameUniqueIndexName 节点名活跃唯一索引名（仅约束 deleted_at IS NULL 的活跃行）。

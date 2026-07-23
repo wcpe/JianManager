@@ -22,6 +22,11 @@ const MAX_BATCH_SIZE = 50
 const MAX_SIGNAL_BATCH_SIZE = 100
 const DEFAULT_IDEMPOTENCY_TTL_MS = 60 * 60 * 1000
 const DEFAULT_IDEMPOTENCY_CACHE_SIZE = 1000
+/** 自动重连：base=1s、max=60s、jitter=20%；连续失败 ≥10 次后固定 max delay（FR-365）。 */
+const RECONNECT_BASE_MS = 1_000
+const RECONNECT_MAX_MS = 60_000
+const RECONNECT_JITTER_RATIO = 0.2
+const RECONNECT_DEGRADED_ATTEMPTS = 10
 
 interface McEntityLike {
   id: string | number
@@ -67,12 +72,19 @@ interface ScenarioCapabilityState {
 interface BotInstance {
   config: BotConfig
   fleetManaged: boolean
+  /** desired running 时断线自动重连；stop 后为 false，禁止复活。 */
+  desiredRunning: boolean
   behavior: Behavior | null
   scenarioRunner: ScenarioRunner | null
   scenarioState: ScenarioCapabilityState | null
   status: string
   mcBot: McBotLike | null
   connectTimer: unknown | null
+  reconnectTimer: unknown | null
+  reconnectCount: number
+  consecutiveFailures: number
+  /** 持有进程级连接信号量时为 true，释放时必须归还。 */
+  holdingConnectSlot: boolean
   eventCleanup: (() => void) | null
 }
 
@@ -105,11 +117,15 @@ export interface FleetControllerOptions {
   clearInterval?: (timer: unknown) => void
   idempotencyTtlMs?: number
   idempotencyCacheSize?: number
+  /** 进程级同时 connecting 上限；默认 min(10, maxBots/5)，至少 1。 */
+  maxConcurrentConnecting?: number
+  /** 可注入抖动 [0,1)，测试可固定为 0。 */
+  random?: () => number
   signalRouter?: (signal: ActionSignal, config: BotConfig) => SignalItemResult
   onBotStopped?: (diagnostic: StopDiagnostic) => void
 }
 
-/** 管理 Fleet IPC 的批量准入、连接门控、快照与通用信号回执。 */
+/** 管理 Fleet IPC 的批量准入、连接门控、自动重连、快照与通用信号回执。 */
 export class FleetController {
   private readonly bots = new Map<string, BotInstance>()
   private readonly idempotencyCache = new Map<string, CachedBatchResult>()
@@ -126,12 +142,18 @@ export class FleetController {
   private readonly cancelTick: NonNullable<FleetControllerOptions['clearInterval']>
   private readonly idempotencyTtlMs: number
   private readonly idempotencyCacheSize: number
+  private readonly maxConcurrentConnecting: number
+  private readonly random: () => number
   private readonly signalRouter?: FleetControllerOptions['signalRouter']
   private readonly onBotStopped?: FleetControllerOptions['onBotStopped']
   private eventSeq = 0
   private tickTimer: unknown | null = null
   private tickInFlight = false
   private stopped = false
+  /** 当前占用的 connecting 信号量。 */
+  private connectingSlots = 0
+  /** 等待信号量的重连队列（FIFO）。 */
+  private readonly connectWaiters: string[] = []
 
   constructor(options: FleetControllerOptions) {
     this.maxBots = options.maxBots
@@ -147,6 +169,9 @@ export class FleetController {
     this.cancelTick = options.clearInterval ?? ((timer) => clearInterval(timer as ReturnType<typeof setInterval>))
     this.idempotencyTtlMs = options.idempotencyTtlMs ?? DEFAULT_IDEMPOTENCY_TTL_MS
     this.idempotencyCacheSize = options.idempotencyCacheSize ?? DEFAULT_IDEMPOTENCY_CACHE_SIZE
+    this.maxConcurrentConnecting = options.maxConcurrentConnecting
+      ?? Math.max(1, Math.min(10, Math.floor(options.maxBots / 5) || 1))
+    this.random = options.random ?? Math.random
     this.signalRouter = options.signalRouter
     this.onBotStopped = options.onBotStopped
   }
@@ -285,14 +310,25 @@ export class FleetController {
     return this.bots.get(botId)?.mcBot ?? null
   }
 
-  /** 停止全部连接并取消尚未触发的连接定时器。 */
+  /** 停止全部连接并取消尚未触发的连接/重连定时器。 */
   shutdown(): void {
     this.stopped = true
+    this.connectWaiters.length = 0
     for (const [botId, instance] of [...this.bots]) {
       this.disposeInstance(botId, instance, 'Bot Worker 关闭')
     }
+    this.connectingSlots = 0
     this.stopTickLoop()
     this.idempotencyCache.clear()
+  }
+
+  /** 测试/诊断：当前 connecting 信号量占用与上限。 */
+  connectSemaphore(): { used: number; max: number; waiting: number } {
+    return {
+      used: this.connectingSlots,
+      max: this.maxConcurrentConnecting,
+      waiting: this.connectWaiters.length,
+    }
   }
 
   private createBots(command: CreateBotsCommand): void {
@@ -413,8 +449,9 @@ export class FleetController {
     )
     behavior?.start()
     const instance: BotInstance = {
-      config, fleetManaged, behavior, scenarioRunner: null, scenarioState,
-      status: 'connecting', mcBot: null, connectTimer: null, eventCleanup: null,
+      config, fleetManaged, desiredRunning: true, behavior, scenarioRunner: null, scenarioState,
+      status: 'connecting', mcBot: null, connectTimer: null, reconnectTimer: null,
+      reconnectCount: 0, consecutiveFailures: 0, holdingConnectSlot: false, eventCleanup: null,
     }
     if (scenarioState) instance.scenarioRunner = this.createScenarioRunner(config, scenarioState, instance)
     this.bots.set(config.id, instance)
@@ -430,15 +467,56 @@ export class FleetController {
   private scheduleConnection(botId: string, instance: BotInstance, connectAt: number): void {
     const remaining = connectAt - this.now()
     if (remaining <= 0) {
-      this.connectBot(botId, instance)
+      this.tryAcquireConnectAndSpawn(botId, instance)
       return
     }
     const delay = Math.min(remaining, 2_147_483_647)
     instance.connectTimer = this.schedule(() => {
       instance.connectTimer = null
-      if (this.stopped || this.bots.get(botId) !== instance) return
+      if (this.stopped || this.bots.get(botId) !== instance || !instance.desiredRunning) return
       this.scheduleConnection(botId, instance, connectAt)
     }, delay)
+  }
+
+  /** 进程级 semaphore：限制同时 connecting，默认 min(10, maxBots/5)。 */
+  private tryAcquireConnectAndSpawn(botId: string, instance: BotInstance): void {
+    if (this.stopped || this.bots.get(botId) !== instance || !instance.desiredRunning) return
+    if (instance.mcBot || instance.status === 'connected') return
+    if (instance.holdingConnectSlot) {
+      this.connectBot(botId, instance)
+      return
+    }
+    if (this.connectingSlots >= this.maxConcurrentConnecting) {
+      if (!this.connectWaiters.includes(botId)) this.connectWaiters.push(botId)
+      return
+    }
+    this.connectingSlots++
+    instance.holdingConnectSlot = true
+    instance.status = 'connecting'
+    this.emitBotState(botId, instance)
+    this.connectBot(botId, instance)
+  }
+
+  private releaseConnectSlot(instance: BotInstance): void {
+    if (!instance.holdingConnectSlot) return
+    instance.holdingConnectSlot = false
+    this.connectingSlots = Math.max(0, this.connectingSlots - 1)
+    this.drainConnectWaiters()
+  }
+
+  private drainConnectWaiters(): void {
+    while (this.connectingSlots < this.maxConcurrentConnecting && this.connectWaiters.length > 0) {
+      const botId = this.connectWaiters.shift()
+      if (!botId) break
+      const instance = this.bots.get(botId)
+      if (!instance || !instance.desiredRunning || instance.mcBot || instance.status === 'connected') continue
+      this.tryAcquireConnectAndSpawn(botId, instance)
+    }
+  }
+
+  private removeConnectWaiter(botId: string): void {
+    const index = this.connectWaiters.indexOf(botId)
+    if (index >= 0) this.connectWaiters.splice(index, 1)
   }
 
   private connectBot(botId: string, instance: BotInstance): void {
@@ -452,11 +530,14 @@ export class FleetController {
         auth: config.auth,
         hideErrors: true,
       })
-      if (this.bots.get(botId) !== instance) {
-        mcBot.quit()
+      if (this.bots.get(botId) !== instance || !instance.desiredRunning) {
+        try { mcBot.quit() } catch { /* 已取消 */ }
+        this.releaseConnectSlot(instance)
         return
       }
       instance.mcBot = mcBot
+      // createBot 返回即表示登录已发起：释放信号量允许下一批，避免卡在 await spawn。
+      this.releaseConnectSlot(instance)
       if (instance.scenarioState) {
         instance.scenarioState.mcBot = mcBot
         instance.scenarioState.pathfinderInit = null
@@ -465,9 +546,11 @@ export class FleetController {
       instance.behavior?.setMcBot(mcBot as never)
       this.bindBotEvents(botId, instance, mcBot)
     } catch (error) {
+      this.releaseConnectSlot(instance)
       instance.status = 'error'
       this.emitBotState(botId, instance, { lastError: String(error), errorCode: 'connect_failed' })
       this.sendEvent({ evt: 'bot-error', botId, error: String(error) })
+      this.scheduleReconnect(botId, instance, 'connect_failed')
     }
   }
 
@@ -488,6 +571,8 @@ export class FleetController {
     bind('spawn', (() => {
       if (this.bots.get(botId) !== instance) return
       instance.status = 'connected'
+      // 成功 spawn 清连续失败计数，累计 reconnectCount 保留。
+      instance.consecutiveFailures = 0
       if (instance.scenarioState) {
         instance.scenarioState.spawned = true
         instance.scenarioState.dead = false
@@ -531,6 +616,10 @@ export class FleetController {
       instance.status = 'error'
       this.emitBotState(botId, instance, { lastError: error.message, errorCode: 'connection_error' })
       this.sendEvent({ evt: 'bot-error', botId, error: error.message })
+      // error 后通常会 end；若仅 error 无 end，也触发重连路径。
+      if (instance.mcBot === mcBot) {
+        this.releaseDisconnectedResources(botId, instance, mcBot, 'error')
+      }
     }) as (...args: never[]) => void)
     bind('end', (() => {
       if (this.bots.get(botId) !== instance) return
@@ -549,10 +638,12 @@ export class FleetController {
   ): void {
     if (this.bots.get(botId) !== instance || instance.mcBot !== mcBot) return
     instance.eventCleanup?.()
+    instance.eventCleanup = null
     instance.scenarioState?.capabilities.clearPathfinderGoal()
     const runner = instance.scenarioRunner
     instance.scenarioRunner = null
     instance.mcBot = null
+    this.releaseConnectSlot(instance)
     if (instance.scenarioState) {
       instance.scenarioState.mcBot = null
       instance.scenarioState.pathfinderInit = null
@@ -565,6 +656,65 @@ export class FleetController {
     } else {
       this.releaseBehavior(instance)
     }
+    // 非人工 stop 且 desired running：指数退避自动重连。
+    this.scheduleReconnect(botId, instance, reason)
+  }
+
+  /**
+   * ReconnectController：kicked/end/error 且 desiredRunning 时调度重连。
+   * delay = min(base*2^attempt, max) + jitter；≥10 次后固定 max delay。
+   */
+  private scheduleReconnect(botId: string, instance: BotInstance, reason: string): void {
+    if (this.stopped || !instance.desiredRunning || this.bots.get(botId) !== instance) return
+    if (instance.reconnectTimer !== null || instance.connectTimer !== null) return
+    if (instance.mcBot) return
+    instance.consecutiveFailures++
+    instance.reconnectCount++
+    const delay = this.reconnectDelayMs(instance.consecutiveFailures)
+    instance.status = 'disconnected'
+    this.emitBotState(botId, instance, {
+      lastError: `重连排队: ${reason}`,
+      errorCode: 'reconnecting',
+    })
+    instance.reconnectTimer = this.schedule(() => {
+      instance.reconnectTimer = null
+      if (this.stopped || this.bots.get(botId) !== instance || !instance.desiredRunning) return
+      this.resumeAfterReconnect(botId, instance)
+    }, delay)
+  }
+
+  private reconnectDelayMs(consecutiveFailures: number): number {
+    const attempt = Math.max(0, consecutiveFailures - 1)
+    const base = consecutiveFailures >= RECONNECT_DEGRADED_ATTEMPTS
+      ? RECONNECT_MAX_MS
+      : Math.min(RECONNECT_BASE_MS * (2 ** attempt), RECONNECT_MAX_MS)
+    const jitter = base * RECONNECT_JITTER_RATIO * this.random()
+    return Math.floor(base + jitter)
+  }
+
+  /** 重连前按 resumeStepId 重建 ScenarioRunner，再走连接 semaphore。 */
+  private resumeAfterReconnect(botId: string, instance: BotInstance): void {
+    if (hasScenario(instance.config.scenario) && !instance.scenarioRunner) {
+      const state = instance.scenarioState ?? createScenarioCapabilityState(this.now)
+      instance.scenarioState = state
+      // CP 下发的 resumeStepId 优先；否则沿用 config 内既有值。
+      instance.scenarioRunner = this.createScenarioRunner(instance.config, state, instance)
+      void instance.scenarioRunner.start().catch((error) => {
+        this.sendEvent({ evt: 'bot-error', botId, error: String(error) })
+      })
+    }
+    instance.status = 'connecting'
+    this.emitBotState(botId, instance)
+    this.tryAcquireConnectAndSpawn(botId, instance)
+  }
+
+  private cancelReconnect(instance: BotInstance, botId: string): void {
+    if (instance.reconnectTimer !== null) {
+      this.cancelSchedule(instance.reconnectTimer)
+      instance.reconnectTimer = null
+    }
+    this.removeConnectWaiter(botId)
+    this.releaseConnectSlot(instance)
   }
 
   private async tickInstance(botId: string, instance: BotInstance, now: number): Promise<void> {
@@ -646,6 +796,9 @@ export class FleetController {
     if (this.isStaleStop(instance.config, command.generation)) {
       return this.rejected(botId, 'stale_generation', '停止 generation 已过期', 'stale')
     }
+    // 人工 stop：先清 desired，取消 pending reconnect，禁止复活。
+    instance.desiredRunning = false
+    this.cancelReconnect(instance, botId)
     this.stopInstanceResources(instance, command.reason ?? 'Bot 已停止')
     instance.status = 'stopped'
     this.emitBotState(botId, instance)
@@ -696,6 +849,8 @@ export class FleetController {
   }
 
   private disposeInstance(botId: string, instance: BotInstance, reason: string): void {
+    instance.desiredRunning = false
+    this.cancelReconnect(instance, botId)
     this.stopInstanceResources(instance, reason)
     this.bots.delete(botId)
     if (this.bots.size === 0) this.stopTickLoop()
@@ -706,7 +861,13 @@ export class FleetController {
       this.cancelSchedule(instance.connectTimer)
       instance.connectTimer = null
     }
+    if (instance.reconnectTimer !== null) {
+      this.cancelSchedule(instance.reconnectTimer)
+      instance.reconnectTimer = null
+    }
+    this.releaseConnectSlot(instance)
     instance.eventCleanup?.()
+    instance.eventCleanup = null
     const runner = instance.scenarioRunner
     instance.scenarioRunner = null
     if (runner) {
@@ -746,7 +907,7 @@ export class FleetController {
       workerEpochGeneration: this.workerEpochGeneration,
       eventSeq: ++this.eventSeq,
       currentStepId: instance.scenarioRunner?.currentStepId ?? instance.config.resumeStepId,
-      reconnectCount: 0,
+      reconnectCount: instance.reconnectCount,
       observedAt: this.now(),
     }
     if (instance.mcBot && instance.status === 'connected') {

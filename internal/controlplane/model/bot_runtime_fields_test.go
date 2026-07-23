@@ -35,6 +35,8 @@ func TestBotRuntimeFields_AutoMigrateDefaultsAndRelations(t *testing.T) {
 	var loaded model.Bot
 	require.NoError(t, db.Preload("StressSession").Preload("ExecutorNode").First(&loaded, bot.ID).Error)
 	require.Equal(t, int64(1), loaded.DesiredStateGeneration)
+	require.Equal(t, model.BotDesiredStopped, loaded.DesiredState)
+	require.Zero(t, loaded.ReconnectCount)
 	require.Zero(t, loaded.WorkerEpochGeneration)
 	require.Zero(t, loaded.LastEventSeq)
 	require.Empty(t, loaded.WorkerEpoch)
@@ -87,6 +89,8 @@ func TestBotRuntimeFields_AutoMigrateKeepsLegacyRows(t *testing.T) {
 	require.NoError(t, db.Where("uuid = ?", "legacy-bot").First(&loaded).Error)
 	require.Equal(t, model.BotStatusConnected, loaded.Status)
 	require.Equal(t, int64(1), loaded.DesiredStateGeneration)
+	require.Equal(t, model.BotDesiredStopped, loaded.DesiredState)
+	require.Zero(t, loaded.ReconnectCount)
 	require.Zero(t, loaded.WorkerEpochGeneration)
 	require.Zero(t, loaded.LastEventSeq)
 	require.Nil(t, loaded.LastSeenAt)

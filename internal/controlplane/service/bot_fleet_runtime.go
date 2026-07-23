@@ -201,6 +201,8 @@ func runtimeUpdateValues(snapshot *workerpb.BotRuntimeSnapshot, status model.Bot
 		"status": status, "last_error": snapshot.LastError,
 		"worker_epoch": snapshot.WorkerEpoch, "worker_epoch_generation": snapshot.WorkerEpochGeneration,
 		"last_event_seq": snapshot.EventSeq,
+		// 仅在 runtime 上报更大值时上调，避免迟到事件回退累计重连次数。
+		"reconnect_count": gorm.Expr("CASE WHEN reconnect_count < ? THEN ? ELSE reconnect_count END", snapshot.ReconnectCount, snapshot.ReconnectCount),
 		"last_seen_at": gorm.Expr(
 			"CASE WHEN last_seen_at IS NULL OR last_seen_at < ? THEN ? ELSE last_seen_at END",
 			observedAt, observedAt,

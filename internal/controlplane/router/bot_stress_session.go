@@ -247,6 +247,35 @@ func (h *BotStressSessionHandler) Stop(c *gin.Context) {
 	c.JSON(http.StatusAccepted, view)
 }
 
+// RetryFailed 只重试失败 Bot 子集；requestId 审计幂等（FR-365）。
+func (h *BotStressSessionHandler) RetryFailed(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if h.execution == nil {
+		c.JSON(http.StatusNotImplemented, gin.H{"error": "NOT_IMPLEMENTED", "message": "分布式执行服务未装配"})
+		return
+	}
+	if _, ok := h.loadManagedSession(c, id); !ok {
+		return
+	}
+	var req service.BotLoadRetryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "请求参数错误"})
+		return
+	}
+	result, err := h.execution.RetryFailed(c.Request.Context(), id, req)
+	h.recordRunAudit(c, "bot_load.run.retry_failed", id, gin.H{
+		"requestId": req.RequestID, "botUuidCount": len(req.BotUUIDs), "errorCodeCount": len(req.ErrorCodes),
+	}, err)
+	if err != nil {
+		writeBotLoadError(c, err)
+		return
+	}
+	c.JSON(http.StatusAccepted, result)
+}
+
 func (h *BotStressSessionHandler) preflightLegacySession(c *gin.Context, session *model.BotStressSession) (string, error) {
 	result, err := h.preflight.Preflight(c.Request.Context(), session, service.BotLoadPreflightInput{
 		TargetBots: session.BotCount, ExecutorNodeIDs: []uint{session.Instance.NodeID},
@@ -459,6 +488,11 @@ func writeBotLoadError(c *gin.Context, err error) {
 	case errors.Is(err, service.ErrBotLoadPreflightInvalid), errors.Is(err, service.ErrBotLoadConfigInvalid):
 		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
 	default:
+		// botLoadValidationError 等参数错误映射 400。
+		if err != nil && (strings.Contains(err.Error(), "requestId") || strings.Contains(err.Error(), "不能为空") || strings.Contains(err.Error(), "必须是")) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "Bot 负载操作失败"})
 	}
 }
@@ -498,5 +532,8 @@ func (h *BotStressSessionHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		}
 		sessions.POST("/:id/start", h.Start)
 		sessions.POST("/:id/stop", h.Stop)
+		if h.execution != nil {
+			sessions.POST("/:id/retry-failed", h.RetryFailed)
+		}
 	}
 }
