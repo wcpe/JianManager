@@ -14,6 +14,7 @@
 - **Bot 长稳重连、进程恢复与状态归真（FR-365）**：`bots.desired_state`/`reconnect_count` 与 generation/epoch/seq/configHash 归真；Bot Worker 指数退避+抖动自动重连与 connecting 信号量；Worker 内存 desired 缓存、子进程崩溃熔断/重拉/重放；CP Fleet snapshot reconcile 创建缺失/停止 orphan、10s/90s 新鲜度巡检；`POST .../retry-failed` 后端幂等。自动化测试覆盖接受矩阵、重连/信号量、desired 重放、reconcile 与 retry；真机批量踢出/杀 bot-worker/重启 Worker 待验收。
 - **通用 Bot 命令编排与调度扩展（FR-369，partial）**：CP 侧 `Normalize/Finalize` 冻结 occurrence plan（jitter/actionRunId/模板展开）；Worker gRPC `Apply/Release/CancelBotCommandSchedules` + Bot Worker 集中 `CommandScheduler`（absolute/barrier、取消幂等、bot.chat 固定 3 次重试）；IPC `command-schedule*` 同步回执与 `command-schedule-result` 异步终态。未交付：CP 完整物化/checkpoint、真机验收、occurrence 经 ActionResult 通路完整接线。
 - **通用命令压测运行状态机与模板地基（FR-370，partial）**：模型 Template/Metric/RunEvent + Session V2；状态机/profile/evaluator；`BotLoadTemplateService` CRUD + `POST /bots/load-templates*` HTTP；`BotLoadRunIntentService`；进程内 `BotLoadRunCoordinator` 登记/stop/cancel；终态 JSON/CSV 报告 service。未交付：5s 指标聚合全链路、SSE 聚合流、报告 HTTP 端点、Runner 与 FR-369 Apply 主路径完整接线、真机。
+- **通用命令压测模板与创建向导前端（FR-371，partial）**：`/bots` URL 可寻址 tab（fleet/sessions/templates）；`api/botLoad` 模板/节点/预检/启动 hooks；模板列表 CRUD + TemplateDialog；五步 `BotLoadWizard`（目标/连接/命令编排/负载曲线/阈值预检）与 CommandPlanEditor/LoadProfile/Threshold/CapacityPlan；lib 纯函数单测与中英 `botsLoad` i18n；devmock 扩展 load-templates/load-nodes/preflight。未交付：Playwright E2E、5000 Mock 性能断言、fleet 提取为独立文件、真机验收与 a11y 全量矩阵。
 
 ## 0.19.0（2026-07-23）
 

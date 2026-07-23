@@ -57,7 +57,59 @@ interface OrchestrationSummary {
   behaviors: string[]
 }
 
+/** FR-371 压测模板行。 */
+interface BotLoadTemplateRow {
+  id: number
+  uuid: string
+  name: string
+  description: string
+  commandSchedule: {
+    commands: Array<{ id: string; atMs: number; command: string; repeat?: { intervalMs: number; count: number } }>
+    durationMs: number
+    jitterMs?: number
+  }
+  loadProfile: Record<string, unknown>
+  thresholds: Record<string, unknown>
+  tags: string[]
+  createdBy: number
+  createdAt: string
+  updatedAt: string
+  /** 软删标记。 */
+  deleted?: boolean
+}
+
+/** FR-371 运行预检计划（mock 内存）。 */
+interface PreflightPlan {
+  planToken: string
+  expiresAt: string
+  runId: number
+  targetBots: number
+  executorNodeIds: number[]
+}
+
 const NOW = '2026-06-28T00:00:00Z'
+const DEFAULT_SCHEDULE = {
+  commands: [
+    { id: 'cmd-hello', atMs: 0, command: 'hello {{botName}}' },
+    { id: 'cmd-status', atMs: 5000, command: 'status {{botOrdinal}}', repeat: { intervalMs: 10000, count: 3 } },
+    { id: 'cmd-ping', atMs: 15000, command: 'ping' },
+  ],
+  durationMs: 60000,
+  jitterMs: 0,
+}
+const DEFAULT_PROFILE = { type: 'stable', targetBots: 50, rampUpSeconds: 30, durationSeconds: 300 }
+const DEFAULT_THRESHOLDS = {
+  minOnlineRate: 0.95,
+  minCommandSentRate: 0.9,
+  minScheduleCompletionRate: 0.9,
+  minWorkerHealthRate: 0.99,
+  minBarrierArrivalRate: 0.95,
+  maxScheduleLagP95Ms: 5000,
+  maxProcessCrashes: 0,
+}
+
+/** mock 预检计划：runId → plan。 */
+const preflightPlans = new Map<number, PreflightPlan>()
 const encoder = new TextEncoder()
 const botEventControllers = new Map<number, Set<ReadableStreamDefaultController<Uint8Array>>>()
 
@@ -86,9 +138,78 @@ const bots = db<BotRow>('bots', () => [
 
 const stressSessions = db<BotStressSessionRow>('botStressSessions', () => [])
 
+const loadTemplates = db<BotLoadTemplateRow>('botLoadTemplates', () => [
+  {
+    id: 1,
+    uuid: 'tpl-cmd-orch-v1',
+    name: 'command-orchestration-v1',
+    description: '通用命令编排预设：有序命令、间隔与重复',
+    commandSchedule: DEFAULT_SCHEDULE,
+    loadProfile: DEFAULT_PROFILE,
+    thresholds: DEFAULT_THRESHOLDS,
+    tags: ['preset', 'command'],
+    createdBy: 1,
+    createdAt: NOW,
+    updatedAt: NOW,
+  },
+  {
+    id: 2,
+    uuid: 'tpl-spike-demo',
+    name: 'Spike 100 示例',
+    description: '尖峰连接演示模板',
+    commandSchedule: DEFAULT_SCHEDULE,
+    loadProfile: {
+      type: 'spike',
+      targetBots: 100,
+      connectWindowSeconds: 30,
+      holdSeconds: 120,
+      barrier: { key: 'wave-1', releaseWindowMs: 5000 },
+    },
+    thresholds: DEFAULT_THRESHOLDS,
+    tags: ['spike', 'demo'],
+    createdBy: 1,
+    createdAt: NOW,
+    updatedAt: NOW,
+  },
+])
+
+/** 12 个发压节点：ready / legacy / offline / 容量不足 混合。 */
+function seedLoadNodes(instanceId: number) {
+  const items = []
+  for (let i = 1; i <= 12; i++) {
+    const legacy = i === 10
+    const offline = i === 11
+    const lowCap = i === 12
+    const maxBots = lowCap ? 5 : legacy ? 20 : 80
+    const activeBots = offline ? 0 : i % 3
+    const reservedBots = offline ? 0 : 2
+    const availableBots = offline || legacy ? 0 : Math.max(0, maxBots - activeBots - reservedBots)
+    items.push({
+      nodeId: i,
+      nodeUuid: `ln-${i}`,
+      nodeName: `发压节点-${i}`,
+      online: !offline,
+      tunnelConnected: !offline && i !== 9,
+      botWorkerReady: !offline && !legacy,
+      legacy,
+      maxBots,
+      activeBots,
+      reservedBots,
+      availableBots,
+      capacityGeneration: 1 + (instanceId % 3),
+      botWorkerVersion: legacy ? '0.9.0' : '1.2.0',
+      lastHeartbeatAt: offline ? undefined : NOW,
+      unavailableReason: offline ? 'offline' : legacy ? 'legacy_worker' : lowCap ? undefined : undefined,
+    })
+  }
+  return items
+}
+
 export function seed(): void {
   bots.seed()
   stressSessions.seed()
+  loadTemplates.seed()
+  preflightPlans.clear()
 }
 
 /** 列表 / summary 共用的多维筛选（与 BotListParams 维度一致）。 */
@@ -261,31 +382,60 @@ export const handlers = [
     const body = (await info.request.json()) as {
       instanceId: number
       count: number
-      behavior: string
+      name?: string
+      behavior?: string
       namePrefix: string
       config?: Record<string, unknown>
       orchestrationYaml?: string
+      commandSchedule?: BotLoadTemplateRow['commandSchedule']
+      loadProfile?: Record<string, unknown>
+      thresholds?: Record<string, unknown>
+      executorNodeIds?: number[]
     }
     const orchestrationSummary = summarizeOrchestration(body.orchestrationYaml)
-    if (!body.instanceId || body.count < 1 || (!body.behavior && !orchestrationSummary) || !body.namePrefix) {
+    const hasCommandSchedule = !!body.commandSchedule?.commands?.length
+    if (!body.instanceId || body.count < 1 || (!body.behavior && !orchestrationSummary && !hasCommandSchedule) || !body.namePrefix) {
       return HttpResponse.json({ error: 'INVALID_REQUEST', message: '参数错误' }, { status: 400 })
     }
+    const cmdSummary: OrchestrationSummary | undefined = hasCommandSchedule
+      ? {
+          enabled: true,
+          loop: false,
+          staggerMs: 0,
+          phaseCount: body.commandSchedule!.commands.length,
+          durationSec: Math.ceil(body.commandSchedule!.durationMs / 1000),
+          behaviors: ['command'],
+        }
+      : orchestrationSummary
     const row = stressSessions.insert({
       uuid: `stress-${Date.now()}`,
       instanceId: body.instanceId,
       count: body.count,
-      behavior: body.behavior || orchestrationSummary?.behaviors[0] || 'idle',
+      behavior: body.behavior || cmdSummary?.behaviors[0] || 'idle',
       namePrefix: body.namePrefix,
       config: body.config,
       orchestrationYaml: body.orchestrationYaml,
-      orchestrationSummary,
+      orchestrationSummary: cmdSummary,
       status: 'pending',
       startedAt: null,
       stoppedAt: null,
-      createdAt: NOW,
-      updatedAt: NOW,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     })
-    return HttpResponse.json({ ...row, counts: stressCounts(row.id) }, { status: 201 })
+    return HttpResponse.json(
+      {
+        ...row,
+        name: body.name || row.namePrefix,
+        schemaVersion: hasCommandSchedule ? 2 : 1,
+        commandSchedule: body.commandSchedule,
+        loadProfile: body.loadProfile,
+        thresholds: body.thresholds,
+        targetBots: body.count,
+        runState: 'pending',
+        counts: stressCounts(row.id),
+      },
+      { status: 201 },
+    )
   }),
 
   domainRoute('get', '/bots/stress-sessions/:id', (info) => {
@@ -297,12 +447,36 @@ export const handlers = [
     return HttpResponse.json({ ...row, counts: stressCounts(id) })
   }),
 
-  domainRoute('post', '/bots/stress-sessions/:id/start', (info) => {
+  domainRoute('post', '/bots/stress-sessions/:id/start', async (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
     const id = Number(info.params.id)
     const row = stressSessions.get(id)
     if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
+
+    // FR-371：若带 planToken 则校验预检计划；旧 V1 空 body 仍兼容直接启动。
+    let body: { planToken?: string } = {}
+    try {
+      body = (await info.request.json()) as { planToken?: string }
+    } catch {
+      body = {}
+    }
+    if (body.planToken) {
+      const plan = preflightPlans.get(id)
+      if (!plan || plan.planToken !== body.planToken) {
+        return HttpResponse.json(
+          { error: 'BOT_LOAD_INVALID_STATE', message: 'planToken 无效或已过期，请重新预检' },
+          { status: 409 },
+        )
+      }
+      if (Date.parse(plan.expiresAt) <= Date.now()) {
+        return HttpResponse.json(
+          { error: 'BOT_LOAD_INVALID_STATE', message: 'planToken 已过期，请重新预检' },
+          { status: 409 },
+        )
+      }
+    }
+
     const existing = bots.list((b) => b.stressSessionId === id)
     if (existing.length === 0) {
       for (let i = 1; i <= row.count; i++) {
@@ -324,7 +498,300 @@ export const handlers = [
       for (const b of existing) bots.update(b.id, { status: 'connecting' })
     }
     const updated = stressSessions.update(id, { status: 'running', startedAt: NOW, stoppedAt: null })!
-    return HttpResponse.json({ ...updated, counts: stressCounts(id) })
+    preflightPlans.delete(id)
+    return HttpResponse.json({ ...updated, counts: stressCounts(id) }, { status: body.planToken ? 202 : 200 })
+  }),
+
+  // ─── FR-371 load-nodes / load-templates / preflight ───
+
+  domainRoute('get', '/bots/load-nodes', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const instanceId = Number(url.searchParams.get('instanceId'))
+    if (!instanceId) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: 'instanceId 必填' }, { status: 400 })
+    }
+    const items = seedLoadNodes(instanceId)
+    const totalCapacity = items.reduce((s, n) => s + n.maxBots, 0)
+    const availableCapacity = items.reduce((s, n) => s + n.availableBots, 0)
+    return HttpResponse.json({
+      items,
+      totalCapacity,
+      availableCapacity,
+      updatedAt: new Date().toISOString(),
+    })
+  }),
+
+  domainRoute('get', '/bots/load-templates', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const url = new URL(info.request.url)
+    const page = Math.max(1, Number(url.searchParams.get('page') ?? 1) || 1)
+    const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get('pageSize') ?? 20) || 20))
+    const q = url.searchParams.get('q')?.toLowerCase()
+    const tag = url.searchParams.get('tag')
+    let rows = loadTemplates.list((t) => !t.deleted)
+    if (q) {
+      rows = rows.filter(
+        (t) => t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q),
+      )
+    }
+    if (tag) rows = rows.filter((t) => t.tags.includes(tag))
+    const start = (page - 1) * pageSize
+    return HttpResponse.json({
+      items: rows.slice(start, start + pageSize),
+      total: rows.length,
+      page,
+      pageSize,
+    })
+  }),
+
+  domainRoute('post', '/bots/load-templates', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json()) as Omit<BotLoadTemplateRow, 'id' | 'uuid' | 'createdBy' | 'createdAt' | 'updatedAt' | 'deleted'>
+    if (!body.name?.trim()) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: 'name 必填' }, { status: 400 })
+    }
+    const name = body.name.trim()
+    if (loadTemplates.find((t) => !t.deleted && t.name === name && t.createdBy === 1)) {
+      return HttpResponse.json(
+        { error: 'BOT_LOAD_TEMPLATE_NAME_CONFLICT', message: '模板名称冲突' },
+        { status: 409 },
+      )
+    }
+    if (!body.commandSchedule?.commands?.length) {
+      return HttpResponse.json(
+        { error: 'BOT_LOAD_SCENARIO_INVALID', message: '命令计划不能为空', details: { path: 'commandSchedule.commands', message: '至少 1 条' } },
+        { status: 422 },
+      )
+    }
+    const row = loadTemplates.insert({
+      uuid: `tpl-${Date.now()}`,
+      name,
+      description: body.description ?? '',
+      commandSchedule: body.commandSchedule,
+      loadProfile: body.loadProfile ?? DEFAULT_PROFILE,
+      thresholds: body.thresholds ?? DEFAULT_THRESHOLDS,
+      tags: body.tags ?? [],
+      createdBy: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+    return HttpResponse.json(row, { status: 201 })
+  }),
+
+  domainRoute('get', '/bots/load-templates/:id', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const row = loadTemplates.get(Number(info.params.id))
+    if (!row || row.deleted) return HttpResponse.json({ error: 'NOT_FOUND', message: '模板不存在' }, { status: 404 })
+    return HttpResponse.json(row)
+  }),
+
+  domainRoute('put', '/bots/load-templates/:id', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const existing = loadTemplates.get(id)
+    if (!existing || existing.deleted) {
+      return HttpResponse.json({ error: 'NOT_FOUND', message: '模板不存在' }, { status: 404 })
+    }
+    const body = (await info.request.json()) as Partial<BotLoadTemplateRow>
+    const name = (body.name ?? existing.name).trim()
+    if (
+      loadTemplates.find((t) => !t.deleted && t.id !== id && t.name === name && t.createdBy === existing.createdBy)
+    ) {
+      return HttpResponse.json(
+        { error: 'BOT_LOAD_TEMPLATE_NAME_CONFLICT', message: '模板名称冲突' },
+        { status: 409 },
+      )
+    }
+    const updated = loadTemplates.update(id, {
+      name,
+      description: body.description ?? existing.description,
+      commandSchedule: body.commandSchedule ?? existing.commandSchedule,
+      loadProfile: body.loadProfile ?? existing.loadProfile,
+      thresholds: body.thresholds ?? existing.thresholds,
+      tags: body.tags ?? existing.tags,
+      updatedAt: new Date().toISOString(),
+    })!
+    return HttpResponse.json(updated)
+  }),
+
+  domainRoute('delete', '/bots/load-templates/:id', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const existing = loadTemplates.get(id)
+    if (!existing || existing.deleted) {
+      return HttpResponse.json({ error: 'NOT_FOUND', message: '模板不存在' }, { status: 404 })
+    }
+    loadTemplates.update(id, { deleted: true, updatedAt: new Date().toISOString() })
+    return new HttpResponse(null, { status: 204 })
+  }),
+
+  domainRoute('post', '/bots/load-templates/:id/runs', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const tpl = loadTemplates.get(Number(info.params.id))
+    if (!tpl || tpl.deleted) {
+      return HttpResponse.json({ error: 'NOT_FOUND', message: '模板不存在' }, { status: 404 })
+    }
+    const body = (await info.request.json()) as {
+      instanceId: number
+      name: string
+      namePrefix: string
+      config?: Record<string, unknown>
+      executorNodeIds?: number[]
+      commandScheduleOverride?: BotLoadTemplateRow['commandSchedule'] | null
+      loadProfileOverride?: Record<string, unknown> | null
+      thresholdsOverride?: Record<string, unknown> | null
+    }
+    if (!body.instanceId || !body.namePrefix) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '参数错误' }, { status: 400 })
+    }
+    const profile = (body.loadProfileOverride ?? tpl.loadProfile) as { type?: string; targetBots?: number; stages?: Array<{ targetBots: number }> }
+    const count =
+      profile.type === 'step' && profile.stages?.length
+        ? Math.max(...profile.stages.map((s) => s.targetBots))
+        : Number(profile.targetBots) || 50
+    const row = stressSessions.insert({
+      uuid: `stress-${Date.now()}`,
+      instanceId: body.instanceId,
+      count,
+      behavior: 'orchestrated',
+      namePrefix: body.namePrefix,
+      config: body.config,
+      orchestrationYaml: undefined,
+      orchestrationSummary: {
+        enabled: true,
+        loop: false,
+        staggerMs: 0,
+        phaseCount: (body.commandScheduleOverride ?? tpl.commandSchedule).commands.length,
+        durationSec: Math.ceil((body.commandScheduleOverride ?? tpl.commandSchedule).durationMs / 1000),
+        behaviors: ['command'],
+      },
+      status: 'pending',
+      startedAt: null,
+      stoppedAt: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+    return HttpResponse.json(
+      {
+        ...row,
+        schemaVersion: 2,
+        name: body.name || tpl.name,
+        targetBots: count,
+        runState: 'pending',
+        templateId: tpl.id,
+        commandSchedule: body.commandScheduleOverride ?? tpl.commandSchedule,
+        loadProfile: body.loadProfileOverride ?? tpl.loadProfile,
+        thresholds: body.thresholdsOverride ?? tpl.thresholds,
+        counts: stressCounts(row.id),
+      },
+      { status: 201 },
+    )
+  }),
+
+  domainRoute('post', '/bots/stress-sessions/:id/preflight', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const row = stressSessions.get(id)
+    if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
+    if (row.status !== 'pending' && row.status !== 'ready') {
+      return HttpResponse.json(
+        { error: 'BOT_LOAD_INVALID_STATE', message: '当前状态不可预检' },
+        { status: 409 },
+      )
+    }
+    let body: { executorNodeIds?: number[]; connectRatePerSecondPerNode?: number } = {}
+    try {
+      body = (await info.request.json()) as typeof body
+    } catch {
+      body = {}
+    }
+
+    const nodes = seedLoadNodes(row.instanceId)
+    const candidates = (body.executorNodeIds?.length
+      ? nodes.filter((n) => body.executorNodeIds!.includes(n.nodeId))
+      : nodes.filter((n) => n.online && n.botWorkerReady && !n.legacy && n.availableBots > 0))
+
+    const totalAvailable = candidates.reduce((s, n) => s + n.availableBots, 0)
+    const targetBots = row.count
+    const blockers: Array<{ code: string; message: string; nodeId?: number }> = []
+    const warnings: Array<{ code: string; message: string }> = []
+
+    for (const n of nodes) {
+      if (n.legacy) warnings.push({ code: 'LEGACY_NODE', message: `${n.nodeName} 为 legacy，不参与 500+ 预检` })
+      if (!n.online) warnings.push({ code: 'NODE_OFFLINE', message: `${n.nodeName} 离线` })
+    }
+    if (totalAvailable < targetBots) {
+      blockers.push({
+        code: 'CAPACITY_INSUFFICIENT',
+        message: `可用容量 ${totalAvailable} < 目标 ${targetBots}`,
+      })
+    }
+
+    const ready = blockers.length === 0
+    const planToken = ready ? `plan-${id}-${Date.now()}` : undefined
+    const expiresAt = ready ? new Date(Date.now() + 60_000).toISOString() : undefined
+    const allocations = []
+    if (ready) {
+      let remaining = targetBots
+      let ordinal = 0
+      for (const n of candidates) {
+        if (remaining <= 0) break
+        const planned = Math.min(n.availableBots, remaining)
+        allocations.push({
+          batchId: `batch-${id}-${ordinal}`,
+          ordinal,
+          executorNodeId: n.nodeId,
+          executorNodeUuid: n.nodeUuid,
+          executorNodeName: n.nodeName,
+          plannedCount: planned,
+          connectStartAt: new Date().toISOString(),
+          connectIntervalMs: 50,
+          idempotencyKey: `idem-${id}-${n.nodeId}`,
+        })
+        remaining -= planned
+        ordinal++
+      }
+      preflightPlans.set(id, {
+        planToken: planToken!,
+        expiresAt: expiresAt!,
+        runId: id,
+        targetBots,
+        executorNodeIds: allocations.map((a) => a.executorNodeId),
+      })
+      stressSessions.update(id, { status: 'ready', updatedAt: new Date().toISOString() })
+    }
+
+    return HttpResponse.json({
+      runId: id,
+      runUuid: row.uuid,
+      ready,
+      planToken,
+      expiresAt,
+      targetBots,
+      totalAvailable,
+      allocations,
+      nodeCapacities: nodes,
+      probe: {
+        required: false as const,
+        connected: false,
+        instanceId: row.instanceId,
+        instanceUuid: `i-${row.instanceId}`,
+        message: 'ServerProbe 非必需',
+      },
+      estimatedDurationSeconds: 330,
+      warnings,
+      blockers,
+      instanceId: row.instanceId,
+    })
   }),
 
   domainRoute('post', '/bots/stress-sessions/:id/stop', (info) => {

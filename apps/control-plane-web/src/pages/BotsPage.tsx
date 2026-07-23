@@ -9,23 +9,23 @@ import {
   useBotSummary,
   useBotBatch,
   useCreateBot,
-  useBotStressSessions,
-  useBotStressSession,
   useCreateBotStressSession,
-  useStartBotStressSession,
-  useStopBotStressSession,
   useSendBotCommand,
   type BotInfo,
   type BotRealtimeEvent,
   type BotSummaryGroup,
   type BotBatchAction,
   type BotListParams,
-  type BotStressSessionCounts,
-  type BotStressOrchestrationSummary,
 } from '@/api/bots'
 import { useInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { useDebounced } from '@/lib/use-debounced'
+import { useTabParam } from '@/lib/use-tab-param'
+import { BOTS_TABS, type BotsTab } from '@/lib/bot-load/url-state'
+import BotLoadSessionsTab from '@/pages/bots/BotLoadSessionsTab'
+import BotLoadTemplatesTab from '@/pages/bots/BotLoadTemplatesTab'
+import BotLoadWizard from '@/components/bot-load/BotLoadWizard'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@jianmanager/ui/components/tabs'
 import {
   statusCounts,
   toListParams,
@@ -104,11 +104,55 @@ phases:
 `
 
 /**
- * 全局 Bot 管理页（FR-040 / ADR-009）。
- * 聚合优先、永不全量铺开：页顶概览卡片 + 分组总览（默认按实例），每组一行（实例/节点/健康条/总数/批量），
- * 展开才分页窥视该组首页 Bot；批量经 useBotBatch 按筛选委托；「在控制台打开」回到控制台工作区。
+ * 全局 Bot 管理页（FR-040 / ADR-009 + FR-371）。
+ * URL 可寻址 tab：fleet / sessions / templates；旧链接默认 fleet。
+ * 舰队 tab 保持聚合优先、永不全量铺开；会话与模板由 FR-371 承接，详情页由 FR-372。
  */
 export default function BotsPage() {
+  const { t } = useTranslation()
+  const [tab, setTab] = useTabParam<BotsTab>('tab', 'fleet', BOTS_TABS)
+  const [showWizard, setShowWizard] = useState(false)
+
+  return (
+    <div>
+      <div className="mb-4 flex items-center justify-between">
+        <h1 className="text-2xl font-bold">{t('bots.title')}</h1>
+        <div className="flex gap-2">
+          {(tab === 'sessions' || tab === 'templates') && (
+            <Button variant="outline" onClick={() => setShowWizard(true)}>
+              {t('botsLoad.createRun')}
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <Tabs value={tab} onValueChange={setTab} className="w-full">
+        <TabsList className="mb-4">
+          <TabsTrigger value="fleet">{t('botsLoad.tabFleet')}</TabsTrigger>
+          <TabsTrigger value="sessions">{t('botsLoad.tabSessions')}</TabsTrigger>
+          <TabsTrigger value="templates">{t('botsLoad.tabTemplates')}</TabsTrigger>
+        </TabsList>
+        <TabsContent value="fleet">
+          <BotFleetTab />
+        </TabsContent>
+        <TabsContent value="sessions">
+          <BotLoadSessionsTab />
+        </TabsContent>
+        <TabsContent value="templates">
+          <BotLoadTemplatesTab />
+        </TabsContent>
+      </Tabs>
+
+      <BotLoadWizard open={showWizard} onOpenChange={setShowWizard} />
+    </div>
+  )
+}
+
+/**
+ * 舰队 tab：聚合优先、永不全量铺开（FR-040 行为保持）。
+ * 页顶概览 + 分组总览；展开才分页窥视；批量经 useBotBatch 委托。
+ */
+function BotFleetTab() {
   const { t } = useTranslation()
   const [showCreate, setShowCreate] = useState(false)
   const [showStress, setShowStress] = useState(false)
@@ -156,16 +200,13 @@ export default function BotsPage() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-2xl font-bold">{t('bots.title')}</h1>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setShowStress(true)}>
-            {t('bots.stressTest')}
-          </Button>
-          <Button onClick={() => setShowCreate(true)}>
-            <Plus className="size-4" /> {t('bots.createBot')}
-          </Button>
-        </div>
+      <div className="mb-3 flex justify-end gap-2">
+        <Button variant="outline" onClick={() => setShowStress(true)}>
+          {t('bots.stressTest')}
+        </Button>
+        <Button onClick={() => setShowCreate(true)}>
+          <Plus className="size-4" /> {t('bots.createBot')}
+        </Button>
       </div>
 
       <SummaryCards
@@ -188,8 +229,6 @@ export default function BotsPage() {
         view={view}
         onView={setView}
       />
-
-      <StressSessionsPanel />
 
       {/* key=groupBy：维度切换时重挂 GroupOverview，自然复位其展开/选择状态（避免 effect 内 setState） */}
       <GroupOverview
@@ -365,202 +404,6 @@ function Toolbar({
         />
       </div>
     </div>
-  )
-}
-
-/** 压测会话列表：展示持久化会话状态，并提供启动/停止编排入口。 */
-function StressSessionsPanel() {
-  const { t } = useTranslation()
-  const [page, setPage] = useState(1)
-  const [detailSessionId, setDetailSessionId] = useState<number | null>(null)
-  const pageSize = 10
-  const sessions = useBotStressSessions({ page, pageSize })
-  const startSession = useStartBotStressSession()
-  const stopSession = useStopBotStressSession()
-  const items = sessions.data?.items ?? []
-  const total = sessions.data?.total ?? 0
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
-
-  if (items.length === 0 && !sessions.isLoading) return null
-
-  const run = (kind: 'start' | 'stop', id: number) => {
-    const mutation = kind === 'start' ? startSession : stopSession
-    mutation.mutate(id, {
-      onError: () => toast.error(t('bots.stressActionFailed')),
-    })
-  }
-
-  return (
-    <div className="mb-3 rounded-lg border bg-card">
-      <div className="flex items-center justify-between border-b px-3 py-2">
-        <h2 className="text-sm font-semibold">{t('bots.stressSessions')}</h2>
-        <span className="text-xs text-muted-foreground">{t('bots.stressSessionCount', { count: items.length })}</span>
-      </div>
-      <div className="overflow-x-auto">
-        <Table>
-          <TableHeader className="bg-muted/40">
-            <TableRow>
-              <TableHead>{t('bots.namePrefix')}</TableHead>
-              <TableHead>{t('bots.instance')}</TableHead>
-              <TableHead>{t('bots.status')}</TableHead>
-              <TableHead className="text-right">{t('bots.count')}</TableHead>
-              <TableHead>{t('bots.orchestrationSummary')}</TableHead>
-              <TableHead className="text-right">{t('bots.statusDistribution')}</TableHead>
-              <TableHead className="text-right">{t('bots.actions')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {items.map((session) => (
-              <TableRow key={session.id}>
-                <TableCell className="font-medium">{session.namePrefix}</TableCell>
-                <TableCell>{session.instanceId}</TableCell>
-                <TableCell>{t(`bots.stressStatus_${session.status}`, session.status)}</TableCell>
-                <TableCell className="text-right tabular-nums">
-                  {session.counts.total}/{session.count}
-                </TableCell>
-                <TableCell className="text-xs text-muted-foreground">
-                  {formatOrchestrationSummary(session.orchestrationSummary, t)}
-                </TableCell>
-                <TableCell>
-                  <StressStatusDistribution counts={session.counts} />
-                </TableCell>
-                <TableCell>
-                  <div className="flex justify-end gap-1">
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      disabled={session.status !== 'pending' || startSession.isPending}
-                      onClick={() => run('start', session.id)}
-                    >
-                      {t('bots.startSession')}
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      disabled={session.status === 'stopped' || stopSession.isPending}
-                      onClick={() => run('stop', session.id)}
-                    >
-                      {t('bots.stopSession')}
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      disabled={!session.orchestrationSummary?.enabled}
-                      onClick={() => setDetailSessionId(session.id)}
-                    >
-                      {t('bots.viewOrchestration')}
-                    </Button>
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-      <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
-        <span>{t('bots.totalCount', { count: total })}</span>
-        <div className="flex items-center gap-2">
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={page <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-          >
-            {t('bots.prevPage')}
-          </Button>
-          <span>{t('bots.pageOf', { page, totalPages })}</span>
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={page >= totalPages}
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-          >
-            {t('bots.nextPage')}
-          </Button>
-        </div>
-      </div>
-      <StressSessionDetailDialog
-        sessionId={detailSessionId}
-        onOpenChange={(open) => {
-          if (!open) setDetailSessionId(null)
-        }}
-      />
-    </div>
-  )
-}
-
-function StressStatusDistribution({ counts }: { counts: BotStressSessionCounts }) {
-  const { t } = useTranslation()
-  const entries = Object.entries(counts.byStatus).filter(([, count]) => count > 0)
-  if (entries.length === 0) {
-    return <span className="block text-right text-xs text-muted-foreground">—</span>
-  }
-  return (
-    <div className="flex flex-wrap justify-end gap-1">
-      {entries.map(([status, count]) => (
-        <span key={status} className="rounded border px-1.5 py-0.5 text-xs">
-          {t(`bots.status_${status}`, status)} {count}
-        </span>
-      ))}
-    </div>
-  )
-}
-
-function formatOrchestrationSummary(
-  summary: BotStressOrchestrationSummary | undefined,
-  t: ReturnType<typeof useTranslation>['t'],
-) {
-  if (!summary?.enabled) return t('bots.orchestrationNotConfigured')
-  return [
-    t('bots.orchestrationPhaseCount', { count: summary.phaseCount }),
-    summary.loop ? t('bots.orchestrationLoop') : t('bots.orchestrationNoLoop'),
-    t('bots.orchestrationDurationSec', { seconds: summary.durationSec }),
-    summary.behaviors.join('/'),
-  ].join(' · ')
-}
-
-function StressSessionDetailDialog({
-  sessionId,
-  onOpenChange,
-}: {
-  sessionId: number | null
-  onOpenChange: (open: boolean) => void
-}) {
-  const { t } = useTranslation()
-  const open = sessionId !== null
-  const { data: session, isLoading } = useBotStressSession(sessionId)
-  const connected = session?.counts.byStatus.connected ?? 0
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className={`${scrollableDialogContentClass} sm:max-w-2xl`}>
-        <DialogHeader>
-          <DialogTitle>{t('bots.viewOrchestration')}</DialogTitle>
-        </DialogHeader>
-        <ScrollableDialogBody className="space-y-4 py-1">
-          {isLoading && <p className="text-sm text-muted-foreground">{t('common.loading')}</p>}
-          {session && (
-            <>
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                <BotMetric label={t('bots.status')} value={t(`bots.stressStatus_${session.status}`, session.status)} />
-                <BotMetric label={t('bots.count')} value={`${session.counts.total}/${session.count}`} />
-                <BotMetric label={t('bots.connected')} value={String(connected)} />
-                <BotMetric
-                  label={t('bots.orchestrationSummary')}
-                  value={formatOrchestrationSummary(session.orchestrationSummary, t)}
-                />
-              </div>
-              <div className="space-y-2">
-                <FieldLabel>{t('bots.orchestrationYaml')}</FieldLabel>
-                <pre className="max-h-96 overflow-auto rounded-md border bg-muted/30 p-3 text-xs leading-5 whitespace-pre-wrap">
-                  {session.orchestrationYaml || t('bots.orchestrationNotConfigured')}
-                </pre>
-              </div>
-            </>
-          )}
-        </ScrollableDialogBody>
-      </DialogContent>
-    </Dialog>
   )
 }
 
