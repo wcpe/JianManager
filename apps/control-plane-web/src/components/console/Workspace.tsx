@@ -20,6 +20,7 @@ const BackupsPage = lazy(() => import('@/pages/BackupsPage'))
 const BackupStoragesPage = lazy(() => import('@/pages/BackupStoragesPage'))
 const ArtifactStoragesPage = lazy(() => import('@/pages/ArtifactStoragesPage'))
 const BotsPage = lazy(() => import('@/pages/BotsPage'))
+const BotLoadSessionPage = lazy(() => import('@/pages/BotLoadSessionPage'))
 const AuditPage = lazy(() => import('@/pages/AuditPage'))
 const TemplatesPage = lazy(() => import('@/pages/TemplatesPage'))
 const RuntimeAssetsPage = lazy(() => import('@/pages/RuntimeAssetsPage'))
@@ -107,6 +108,8 @@ export default function Workspace() {
             <Route path="networks/topology" element={<NetworksPage />} />
             <Route path="players" element={<PlayersPage />} />
             <Route path="bots" element={<BotsPage />} />
+            {/* FR-372 压测运行详情（会话级观测） */}
+            <Route path="bots/sessions/:id" element={<BotLoadSessionPage />} />
             <Route path="alerts" element={<AlertsPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="groups" element={<GroupsPage />} />

@@ -38,14 +38,34 @@ interface BotStressSessionRow {
   count: number
   behavior: string
   namePrefix: string
+  name?: string
   config?: Record<string, unknown>
   orchestrationYaml?: string
   orchestrationSummary?: OrchestrationSummary
   status: string
   startedAt?: string | null
   stoppedAt?: string | null
+  endedAt?: string | null
   createdAt: string
   updatedAt: string
+  /** FR-370/372：1=legacy，2=命令压测 V2 */
+  schemaVersion?: number
+  runState?: string
+  verdict?: string
+  currentStage?: number
+  targetBots?: number
+  maxStableBots?: number
+  templateId?: number
+  loadProfile?: Record<string, unknown>
+  thresholds?: Record<string, unknown>
+  loadCounts?: Record<string, number>
+  commandCounts?: Record<string, Record<string, number>>
+  barrier?: Record<string, number>
+  failureSummary?: Record<string, number>
+  verdictReasons?: Array<Record<string, unknown>>
+  allocations?: Array<Record<string, unknown>>
+  commandSchedule?: Record<string, unknown>
+  instanceName?: string
 }
 
 interface OrchestrationSummary {
@@ -136,7 +156,107 @@ const bots = db<BotRow>('bots', () => [
   bot({ id: 3, instanceId: 2, nodeId: 2, name: 'PatrolBot', status: 'error', behavior: 'patrol', config: { server: '127.0.0.1', port: 25566, auth: 'offline' } }),
 ])
 
-const stressSessions = db<BotStressSessionRow>('botStressSessions', () => [])
+const DISCLAIMER =
+  '命令发送成功仅表示 Bot Worker 调用 bot.chat 时未同步抛错，不证明服务器接受、权限校验通过或产生预期业务效果。'
+
+/** FR-372 演示用 V2 运行中会话（mock 可演示详情 + SSE）。 */
+function seedV2RunningSession(): BotStressSessionRow {
+  const targetBots = 100
+  return {
+    id: 100,
+    uuid: 'stress-demo-v2-100',
+    instanceId: 1,
+    instanceName: '生存服',
+    count: targetBots,
+    behavior: 'command',
+    namePrefix: 'load',
+    name: '演示压测·stable·100',
+    config: { server: '127.0.0.1', port: 25565, auth: 'offline' },
+    status: 'running',
+    schemaVersion: 2,
+    runState: 'running',
+    verdict: 'pending',
+    currentStage: 0,
+    targetBots,
+    maxStableBots: 0,
+    templateId: 1,
+    startedAt: NOW,
+    stoppedAt: null,
+    endedAt: null,
+    createdAt: NOW,
+    updatedAt: NOW,
+    loadProfile: { type: 'stable', targetBots, rampUpSeconds: 30, durationSeconds: 300 },
+    thresholds: {
+      minOnlineRate: 0.99,
+      minCommandSentRate: 0.99,
+      minScheduleCompletionRate: 0.99,
+      minWorkerHealthRate: 0.99,
+      minBarrierArrivalRate: 0.99,
+      maxScheduleLagP95Ms: 1000,
+      maxProcessCrashes: 0,
+    },
+    loadCounts: {
+      planned: targetBots,
+      accepted: 98,
+      connecting: 5,
+      connected: 90,
+      disconnected: 2,
+      failed: 3,
+      stopped: 0,
+    },
+    commandCounts: {
+      cmd_welcome: { planned: 100, sent: 88, failed: 2, timedOut: 0, cancelled: 0 },
+      cmd_ping: { planned: 200, sent: 120, failed: 5, timedOut: 1, cancelled: 0 },
+    },
+    barrier: { waiting: 0, arrived: 0, released: 0, timedOut: 0 },
+    failureSummary: { target: 1, executor: 0, network: 1, scenario: 3, internal: 0 },
+    verdictReasons: [
+      { key: 'online_rate', state: 'pending', expected: 0.99, actual: 0.9, unit: 'ratio', message: '采样中' },
+      { key: 'command_sent_rate', state: 'pending', expected: 0.99, actual: 0.88, unit: 'ratio', message: '采样中' },
+      { key: 'schedule_completion_rate', state: 'pending', expected: 0.99, unit: 'ratio', message: '采样中' },
+      { key: 'worker_health_rate', state: 'pass', expected: 0.99, actual: 1, unit: 'ratio', message: '健康' },
+      { key: 'barrier_arrival_rate', state: 'not_applicable', message: '未配置屏障' },
+      { key: 'schedule_lag_p95_ms', state: 'pending', expected: 1000, actual: 120, unit: 'ms', message: '采样中' },
+      { key: 'process_crashes', state: 'pass', expected: 0, actual: 0, unit: 'count', message: '无崩溃' },
+      { key: 'sample_coverage_rate', state: 'pending', unit: 'ratio', message: '采样中' },
+      { key: 'consecutive_sample_gap_seconds', state: 'pass', expected: 30, actual: 0, unit: 'seconds', message: '正常' },
+    ],
+    allocations: [
+      {
+        batchId: 'batch-1',
+        ordinal: 0,
+        executorNodeId: 1,
+        executorNodeUuid: 'node-uuid-1',
+        executorNodeName: '主节点',
+        plannedCount: 60,
+        connectStartAt: NOW,
+        connectIntervalMs: 50,
+        idempotencyKey: 'idem-1',
+      },
+      {
+        batchId: 'batch-2',
+        ordinal: 1,
+        executorNodeId: 2,
+        executorNodeUuid: 'node-uuid-2',
+        executorNodeName: '边缘节点',
+        plannedCount: 40,
+        connectStartAt: NOW,
+        connectIntervalMs: 50,
+        idempotencyKey: 'idem-2',
+      },
+    ],
+    commandSchedule: {
+      durationMs: 300000,
+      jitterMs: 0,
+      commands: [
+        { id: 'cmd_welcome', atMs: 0, command: '/say hello {{botName}}' },
+        { id: 'cmd_ping', atMs: 1000, command: '/ping', repeat: { intervalMs: 5000, count: 2 } },
+      ],
+    },
+  }
+}
+
+const stressSessions = db<BotStressSessionRow>('botStressSessions', () => [seedV2RunningSession()])
 
 const loadTemplates = db<BotLoadTemplateRow>('botLoadTemplates', () => [
   {
@@ -211,6 +331,52 @@ export function seed(): void {
   loadTemplates.seed()
   preflightPlans.clear()
 }
+
+/** 序列化为前端 BotLoadRun（V2 完整 / V1 兼容）。 */
+export function serializeStressSession(row: BotStressSessionRow, counts: { total: number; byStatus: Record<string, number> }) {
+  if (row.schemaVersion === 2) {
+    const loadCounts = row.loadCounts ?? {
+      planned: row.targetBots ?? row.count,
+      accepted: 0,
+      connecting: 0,
+      connected: counts.byStatus.connected ?? 0,
+      disconnected: 0,
+      failed: counts.byStatus.error ?? counts.byStatus.failed ?? 0,
+      stopped: counts.byStatus.stopped ?? 0,
+    }
+    return {
+      ...row,
+      schemaVersion: 2 as const,
+      name: row.name ?? row.namePrefix,
+      counts: {
+        total: counts.total || loadCounts.planned,
+        byStatus: {
+          connected: loadCounts.connected,
+          connecting: loadCounts.connecting,
+          failed: loadCounts.failed,
+          stopped: loadCounts.stopped,
+          disconnected: loadCounts.disconnected,
+        },
+      },
+      batches: (row.allocations ?? []).map((a, i) => ({
+        id: i + 1,
+        uuid: String(a.batchId ?? `b-${i}`),
+        executorNodeId: a.executorNodeId,
+        ordinal: a.ordinal ?? i,
+        plannedCount: a.plannedCount ?? 0,
+        acceptedCount: Math.floor(Number(a.plannedCount ?? 0) * 0.98),
+        connectedCount: Math.floor(Number(a.plannedCount ?? 0) * 0.9),
+        failedCount: 1,
+        state: row.runState === 'running' ? 'running' : row.status,
+        startedAt: row.startedAt ?? undefined,
+      })),
+      disclaimer: DISCLAIMER,
+    }
+  }
+  return { ...row, schemaVersion: 1 as const, counts }
+}
+
+export { stressSessions, DISCLAIMER }
 
 /** 列表 / summary 共用的多维筛选（与 BotListParams 维度一致）。 */
 function filtered(url: URL): BotRow[] {
@@ -369,7 +535,22 @@ export const handlers = [
     const rows = stressSessions.list()
     const start = (page - 1) * pageSize
     return HttpResponse.json({
-      items: rows.slice(start, start + pageSize).map((row) => ({ ...row, counts: stressCounts(row.id) })),
+      items: rows.slice(start, start + pageSize).map((row) => {
+        const counts = stressCounts(row.id)
+        const full = serializeStressSession(row, counts)
+        // 列表摘要：去掉大字段
+        const { commandSchedule, thresholds, allocations, verdictReasons, ...summary } = full as Record<string, unknown> & {
+          commandSchedule?: unknown
+          thresholds?: unknown
+          allocations?: unknown
+          verdictReasons?: unknown
+        }
+        return {
+          ...summary,
+          snapshotKind: row.schemaVersion === 2 ? 'commandSchedule' : 'legacy',
+          profileType: row.loadProfile && typeof row.loadProfile === 'object' ? (row.loadProfile as { type?: string }).type : undefined,
+        }
+      }),
       total: rows.length,
       page,
       pageSize,
@@ -444,7 +625,7 @@ export const handlers = [
     const id = Number(info.params.id)
     const row = stressSessions.get(id)
     if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
-    return HttpResponse.json({ ...row, counts: stressCounts(id) })
+    return HttpResponse.json(serializeStressSession(row, stressCounts(id)))
   }),
 
   domainRoute('post', '/bots/stress-sessions/:id/start', async (info) => {
@@ -800,11 +981,427 @@ export const handlers = [
     const id = Number(info.params.id)
     const row = stressSessions.get(id)
     if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
+    if (row.schemaVersion === 2) {
+      const rs = row.runState ?? ''
+      if (rs === 'stopping') {
+        return HttpResponse.json(serializeStressSession(row, stressCounts(id)), { status: 202 })
+      }
+      if (!['starting', 'running', 'degraded'].includes(rs)) {
+        return HttpResponse.json({ error: 'BOT_LOAD_INVALID_STATE', message: '当前状态不可停止' }, { status: 409 })
+      }
+      const updated = stressSessions.update(id, {
+        runState: 'stopping',
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+      })!
+      return HttpResponse.json(serializeStressSession(updated, stressCounts(id)), { status: 202 })
+    }
     for (const b of bots.list((bot) => bot.stressSessionId === id)) {
       bots.update(b.id, { status: 'stopped' })
     }
     const updated = stressSessions.update(id, { status: 'stopped', stoppedAt: NOW })!
     return HttpResponse.json({ ...updated, counts: stressCounts(id) })
+  }),
+
+  // ── FR-372 观测子资源（简化 mock，可演示详情页）──────────────────────────
+
+  domainRoute('post', '/bots/stress-sessions/:id/cancel', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const row = stressSessions.get(id)
+    if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
+    if (row.schemaVersion === 2) {
+      const rs = row.runState ?? ''
+      if (rs === 'cancelling') {
+        return HttpResponse.json(serializeStressSession(row, stressCounts(id)), { status: 202 })
+      }
+      if (['completed', 'failed', 'cancelled'].includes(rs)) {
+        return HttpResponse.json({ error: 'BOT_LOAD_INVALID_STATE', message: '当前状态不可取消' }, { status: 409 })
+      }
+      const updated = stressSessions.update(id, {
+        runState: 'cancelling',
+        status: 'running',
+        updatedAt: new Date().toISOString(),
+      })!
+      return HttpResponse.json(serializeStressSession(updated, stressCounts(id)), { status: 202 })
+    }
+    return HttpResponse.json({ error: 'BOT_LOAD_INVALID_STATE', message: '仅 V2 运行支持 cancel' }, { status: 409 })
+  }),
+
+  domainRoute('post', '/bots/stress-sessions/:id/retry-failed', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const row = stressSessions.get(id)
+    if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
+    const body = (await info.request.json().catch(() => ({}))) as {
+      requestId?: string
+      botUuids?: string[]
+      errorCodes?: string[]
+      fromStepId?: string
+    }
+    if (!body.requestId) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '缺 requestId' }, { status: 400 })
+    }
+    const rs = row.runState ?? row.status
+    if (row.schemaVersion === 2 && !['running', 'degraded'].includes(rs)) {
+      return HttpResponse.json({ error: 'BOT_LOAD_INVALID_STATE', message: '仅运行中可重试失败' }, { status: 409 })
+    }
+    const requested = body.botUuids?.length ?? 3
+    return HttpResponse.json(
+      {
+        requested,
+        accepted: Math.max(0, requested - 1),
+        skipped: requested > 0 ? 1 : 0,
+        errors: requested > 0 ? [{ botUuid: body.botUuids?.[0], errorCode: 'RETRY_SKIP', message: '演示跳过一项' }] : [],
+      },
+      { status: 202 },
+    )
+  }),
+
+  domainRoute('get', '/bots/stress-sessions/:id/metrics', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const row = stressSessions.get(id)
+    if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
+    const url = new URL(info.request.url)
+    const resolution = (url.searchParams.get('resolution') || '15s') as string
+    const base = Date.parse(row.startedAt || NOW) || Date.parse(NOW)
+    const items = Array.from({ length: 12 }, (_, i) => {
+      const ts = new Date(base + i * 15_000).toISOString()
+      const connected = Math.min(row.targetBots ?? row.count, 70 + i * 2)
+      const planned = row.targetBots ?? row.count
+      return {
+        timestamp: ts,
+        stageIndex: row.currentStage ?? 0,
+        counts: { planned, accepted: planned - 2, connecting: 5, connected, failed: 3, onlineRate: connected / planned },
+        command: { planned: 300, sent: 80 + i * 8, failed: 2 + (i % 2), timedOut: 0, cancelled: 0 },
+        barrier: { waiting: 0, arrived: 0, released: 0, timedOut: 0 },
+        executor: [
+          { nodeId: 1, activeBots: Math.floor(connected * 0.6), rssBytes: 256 * 1024 * 1024 + i * 1024, eventLoopP95Ms: 8 + i, cpuPercent: 12 + i, health: 'ok' },
+          { nodeId: 2, activeBots: Math.floor(connected * 0.4), rssBytes: 180 * 1024 * 1024, eventLoopP95Ms: 10, cpuPercent: 9, health: 'ok' },
+        ],
+        latency: {
+          connectP50Ms: 40 + i,
+          connectP95Ms: 120 + i * 2,
+          connectP99Ms: 200 + i * 3,
+          scheduleLagP50Ms: 20 + i,
+          scheduleLagP95Ms: 80 + i,
+          scheduleLagP99Ms: 150 + i * 2,
+          barrierReleaseLagP50Ms: null,
+          barrierReleaseLagP95Ms: null,
+          barrierReleaseLagP99Ms: null,
+        },
+        errors: { scenario: 2, network: 1 },
+      }
+    })
+    return HttpResponse.json({
+      items,
+      from: items[0]?.timestamp ?? NOW,
+      to: items[items.length - 1]?.timestamp ?? NOW,
+      resolution: ['raw', '15s', '1m', '5m'].includes(resolution) ? resolution : '15s',
+    })
+  }),
+
+  domainRoute('get', '/bots/stress-sessions/:id/bots', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const row = stressSessions.get(id)
+    if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
+    const url = new URL(info.request.url)
+    const page = Math.max(1, Number(url.searchParams.get('page') ?? 1) || 1)
+    const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get('pageSize') ?? 50) || 50))
+    const q = url.searchParams.get('q')?.toLowerCase()
+    const status = url.searchParams.get('status') || undefined
+    const node = url.searchParams.get('executorNodeId') || undefined
+    const total = Math.min(row.targetBots ?? row.count, 500)
+    const all = Array.from({ length: total }, (_, i) => {
+      const n = i + 1
+      const st = n % 17 === 0 ? 'error' : n % 5 === 0 ? 'connecting' : 'connected'
+      return {
+        id: 10_000 + n,
+        uuid: `run-${id}-bot-${String(n).padStart(4, '0')}`,
+        name: `${row.namePrefix}-${String(n).padStart(3, '0')}`,
+        status: st,
+        executorNodeId: n % 2 === 0 ? 2 : 1,
+        stepId: n % 3 === 0 ? 'cmd_ping' : 'cmd_welcome',
+        commandId: n % 3 === 0 ? 'cmd_ping' : 'cmd_welcome',
+        reconnectCount: n % 11 === 0 ? 1 : 0,
+        lastSeenAt: NOW,
+        lastError: st === 'error' ? 'CONN_RESET' : undefined,
+      }
+    }).filter((b) => {
+      if (q && !b.name.toLowerCase().includes(q) && !b.uuid.includes(q)) return false
+      if (status && b.status !== status) return false
+      if (node && String(b.executorNodeId) !== String(node)) return false
+      return true
+    })
+    const start = (page - 1) * pageSize
+    return HttpResponse.json({ items: all.slice(start, start + pageSize), total: all.length, page, pageSize })
+  }),
+
+  domainRoute('get', '/bots/stress-sessions/:id/failures', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const row = stressSessions.get(id)
+    if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
+    const url = new URL(info.request.url)
+    const page = Math.max(1, Number(url.searchParams.get('page') ?? 1) || 1)
+    const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get('pageSize') ?? 50) || 50))
+    const category = url.searchParams.get('category') || undefined
+    const seed = [
+      { id: `f-${id}-1`, category: 'scenario', errorCode: 'CMD_SEND_FAIL', botUuid: `run-${id}-bot-0017`, message: 'bot.chat 同步抛错', stepId: 'cmd_ping', commandId: 'cmd_ping', executorNodeId: 1, retryable: true },
+      { id: `f-${id}-2`, category: 'network', errorCode: 'CONN_RESET', botUuid: `run-${id}-bot-0034`, message: '连接被重置', executorNodeId: 2, retryable: true },
+      { id: `f-${id}-3`, category: 'target', errorCode: 'AUTH_DENIED', botUuid: `run-${id}-bot-0051`, message: '目标服拒绝登录', executorNodeId: 1, retryable: false },
+      { id: `f-${id}-4`, category: 'executor', errorCode: 'WORKER_BUSY', botUuid: `run-${id}-bot-0068`, message: '执行端队列满', executorNodeId: 2, retryable: true },
+      { id: `f-${id}-5`, category: 'internal', errorCode: 'COORD_BUG', message: '协调器内部错误（无 bot）', retryable: false },
+    ]
+    const items = seed
+      .filter((f) => !category || f.category === category)
+      .map((f) => ({
+        ...f,
+        runUuid: row.uuid,
+        actionRunId: f.botUuid ? `act-${f.id}` : undefined,
+        occurredAt: NOW,
+      }))
+    const start = (page - 1) * pageSize
+    return HttpResponse.json({ items: items.slice(start, start + pageSize), total: items.length, page, pageSize })
+  }),
+
+  domainRoute('get', '/bots/stress-sessions/:id/events', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const row = stressSessions.get(id)
+    if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
+    const url = new URL(info.request.url)
+    const page = Math.max(1, Number(url.searchParams.get('page') ?? 1) || 1)
+    const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get('pageSize') ?? 50) || 50))
+    const type = url.searchParams.get('type') || undefined
+    const snapshotEventId = url.searchParams.get('snapshotEventId') || '100'
+    const base = [
+      { eventId: '100', type: 'run-state', payload: { runState: row.runState ?? 'running', previousRunState: 'starting' } },
+      { eventId: '99', type: 'stage', payload: { stageIndex: row.currentStage ?? 0, targetBots: row.targetBots ?? row.count, state: 'holding' } },
+      {
+        eventId: '98',
+        type: 'command-send',
+        stepId: 'cmd_welcome',
+        payload: { mode: 'aggregate', windowStart: NOW, windowEnd: NOW, planned: 100, sent: 88, failed: 2, timedOut: 0, cancelled: 0, lagP95Ms: 45 },
+      },
+      {
+        eventId: '97',
+        type: 'command-send',
+        stepId: 'cmd_ping',
+        actionRunId: 'act-f-1',
+        botUuid: `run-${id}-bot-0017`,
+        commandId: 'cmd_ping',
+        payload: { mode: 'item', occurrence: 0, attempt: 1, status: 'failed', lagMs: 12, errorCode: 'CMD_SEND_FAIL', message: 'bot.chat 同步抛错' },
+      },
+      {
+        eventId: '96',
+        type: 'worker-health',
+        executorNodeId: 1,
+        payload: { health: 'ok', activeBots: 54, rssBytes: 260_000_000, eventLoopP95Ms: 9, cpuPercent: 14 },
+      },
+    ]
+    const filtered = base
+      .filter((e) => !type || e.type === type)
+      .filter((e) => Number(e.eventId) <= Number(snapshotEventId || '100'))
+      .map((e) => ({
+        ...e,
+        runId: id,
+        runUuid: row.uuid,
+        timestamp: NOW,
+      }))
+    const start = (page - 1) * pageSize
+    return HttpResponse.json({
+      items: filtered.slice(start, start + pageSize),
+      total: filtered.length,
+      page,
+      pageSize,
+      snapshotEventId: page === 1 ? '100' : snapshotEventId,
+    })
+  }),
+
+  domainRoute('get', '/bots/stress-sessions/:id/report', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const row = stressSessions.get(id)
+    if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
+    const rs = row.runState ?? row.status
+    if (row.schemaVersion === 2 && !['completed', 'failed', 'cancelled'].includes(rs)) {
+      return HttpResponse.json({ error: 'BOT_LOAD_REPORT_NOT_READY', message: '运行未终态' }, { status: 409 })
+    }
+    const url = new URL(info.request.url)
+    const format = url.searchParams.get('format')
+    if (format !== 'json' && format !== 'csv') {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: 'format 须为 json|csv' }, { status: 400 })
+    }
+    const run = serializeStressSession(row, stressCounts(id))
+    if (format === 'csv') {
+      const bom = '\uFEFF'
+      const header =
+        'section,run_uuid,stage_index,key,id,node_id,node_uuid,bot_uuid,command_id,status,verdict,reason_state,expected,actual,unit,count,planned,sent,failed,timed_out,cancelled,p50_ms,p95_ms,p99_ms,started_at,ended_at,occurred_at,error_code,message,value_json\r\n'
+      const body =
+        `summary,${row.uuid},,run,,,,,,,${rs},${row.verdict ?? ''},,,,,${row.maxStableBots ?? 0},,,,,,,,,,,,,,\r\n` +
+        `disclaimer,${row.uuid},,disclaimer,,,,,,,,,,,,,,,,,,,,,,,,${JSON.stringify(DISCLAIMER).replaceAll('"', '""')},\r\n`
+      return new HttpResponse(bom + header + body, {
+        headers: {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="bot-load-${row.uuid}.csv"`,
+        },
+      })
+    }
+    const report = {
+      run,
+      stages: [{ stageIndex: 0, targetBots: row.targetBots ?? row.count, state: rs, verdict: row.verdict ?? 'pending', verdictReasons: row.verdictReasons ?? [] }],
+      verdictReasons: row.verdictReasons ?? [],
+      maxStableBots: row.maxStableBots ?? 0,
+      latency: {
+        connectP50Ms: 45,
+        connectP95Ms: 120,
+        connectP99Ms: 200,
+        scheduleLagP50Ms: 25,
+        scheduleLagP95Ms: 90,
+        scheduleLagP99Ms: 160,
+        barrierReleaseLagP50Ms: null,
+        barrierReleaseLagP95Ms: null,
+        barrierReleaseLagP99Ms: null,
+      },
+      failures: {
+        summary: { target: 1, executor: 1, network: 1, scenario: 1, internal: 1 },
+        items: [],
+      },
+      executors: [
+        { nodeId: 1, nodeUuid: 'node-uuid-1', health: 'ok', peakActiveBots: 60 },
+        { nodeId: 2, nodeUuid: 'node-uuid-2', health: 'ok', peakActiveBots: 40 },
+      ],
+      commands: row.commandCounts ?? {},
+      barriers: {},
+      disclaimer: DISCLAIMER,
+    }
+    return HttpResponse.json(report, {
+      headers: { 'Content-Disposition': `attachment; filename="bot-load-${row.uuid}.json"` },
+    })
+  }),
+
+  /** 简化会话 SSE：发 init + 少量增量后保持心跳；终态发 complete 并结束。 */
+  domainRoute('get', '/bots/stress-sessions/:id/stream', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number(info.params.id)
+    const row = stressSessions.get(id)
+    if (!row) return HttpResponse.json({ error: 'NOT_FOUND', message: '压测会话不存在' }, { status: 404 })
+
+    let closed = false
+    let tick = 0
+    let timer: ReturnType<typeof setInterval> | null = null
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const send = (event: string, data: unknown, eventId?: string) => {
+          if (closed) return
+          const idLine = eventId ? `id: ${eventId}\n` : ''
+          controller.enqueue(
+            encoder.encode(`${idLine}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+          )
+        }
+        const run = serializeStressSession(row, stressCounts(id))
+        send('init', { run, lastEventId: '0' }, '0')
+        if (['completed', 'failed', 'cancelled'].includes(row.runState ?? '')) {
+          send(
+            'complete',
+            {
+              runState: row.runState,
+              verdict: row.verdict ?? 'pending',
+              verdictReasons: row.verdictReasons ?? [],
+              reportReady: true,
+              disclaimer: DISCLAIMER,
+              timestamp: new Date().toISOString(),
+            },
+            'done',
+          )
+          controller.close()
+          return
+        }
+        // 轻量增量：每 2s 推 counts/metric；约 6 次后仅心跳注释。
+        timer = setInterval(() => {
+          if (closed) return
+          tick += 1
+          const latest = stressSessions.get(id) ?? row
+          if (['completed', 'failed', 'cancelled'].includes(latest.runState ?? '')) {
+            send(
+              'complete',
+              {
+                runState: latest.runState,
+                verdict: latest.verdict ?? 'pending',
+                verdictReasons: latest.verdictReasons ?? [],
+                reportReady: true,
+                disclaimer: DISCLAIMER,
+                timestamp: new Date().toISOString(),
+              },
+              `c-${tick}`,
+            )
+            if (timer) clearInterval(timer)
+            controller.close()
+            return
+          }
+          if (tick <= 6) {
+            const lc = { ...(latest.loadCounts ?? {}), connected: Math.min((latest.targetBots ?? 100), 90 + tick) }
+            send(
+              'counts',
+              {
+                counts: lc,
+                commandCounts: latest.commandCounts ?? {},
+                barrier: latest.barrier ?? { waiting: 0, arrived: 0, released: 0, timedOut: 0 },
+                timestamp: new Date().toISOString(),
+              },
+              `cnt-${tick}`,
+            )
+            send(
+              'metric',
+              {
+                timestamp: new Date().toISOString(),
+                stageIndex: latest.currentStage ?? 0,
+                counts: lc,
+                command: { planned: 300, sent: 120 + tick * 5, failed: 5, timedOut: 1, cancelled: 0 },
+                barrier: latest.barrier ?? {},
+                executor: [
+                  { nodeId: 1, activeBots: 54 + tick, rssBytes: 260_000_000, eventLoopP95Ms: 9, cpuPercent: 14, health: 'ok' },
+                  { nodeId: 2, activeBots: 36, rssBytes: 180_000_000, eventLoopP95Ms: 11, cpuPercent: 10, health: 'ok' },
+                ],
+                latency: {
+                  connectP50Ms: 42,
+                  connectP95Ms: 118,
+                  connectP99Ms: 190,
+                  scheduleLagP50Ms: 22,
+                  scheduleLagP95Ms: 85,
+                  scheduleLagP99Ms: 140,
+                  barrierReleaseLagP50Ms: null,
+                  barrierReleaseLagP95Ms: null,
+                  barrierReleaseLagP99Ms: null,
+                },
+                errors: {},
+              },
+              `m-${tick}`,
+            )
+          } else {
+            controller.enqueue(encoder.encode(`: heartbeat ${tick}\n\n`))
+          }
+        }, 2000)
+      },
+      cancel() {
+        closed = true
+        if (timer) clearInterval(timer)
+      },
+    })
+    return new HttpResponse(stream, {
+      headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
+    })
   }),
 
   domainRoute('get', '/bots/:id/events', (info) => {
