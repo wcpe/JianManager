@@ -132,6 +132,10 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.BotLoadActionResult{},
 		// FR-369 命令编排 occurrence checkpoint。
 		&model.BotLoadCommandCheckpoint{},
+		// FR-370 压测模板、5 秒聚合样本与 append-only 运行事件。
+		&model.BotLoadTemplate{},
+		&model.BotLoadMetricSample{},
+		&model.BotLoadRunEvent{},
 		&model.Bot{},
 		&model.BanRecord{},
 		&model.AlertRule{},

@@ -77,7 +77,7 @@ func (b *Bot) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-// BotStressSessionStatus 压测会话状态。
+// BotStressSessionStatus 压测会话状态（V1 兼容列；V2 与 run_state 同事务映射）。
 type BotStressSessionStatus string
 
 const (
@@ -85,6 +85,33 @@ const (
 	BotStressSessionRunning BotStressSessionStatus = "running"
 	BotStressSessionStopped BotStressSessionStatus = "stopped"
 	BotStressSessionError   BotStressSessionStatus = "error"
+)
+
+// BotLoadRunState 是 FR-370 运行状态机枚举。
+type BotLoadRunState string
+
+const (
+	BotLoadRunPending      BotLoadRunState = "pending"
+	BotLoadRunPreflighting BotLoadRunState = "preflighting"
+	BotLoadRunReady        BotLoadRunState = "ready"
+	BotLoadRunStarting     BotLoadRunState = "starting"
+	BotLoadRunRunning      BotLoadRunState = "running"
+	BotLoadRunDegraded     BotLoadRunState = "degraded"
+	BotLoadRunStopping     BotLoadRunState = "stopping"
+	BotLoadRunCancelling   BotLoadRunState = "cancelling"
+	BotLoadRunCompleted    BotLoadRunState = "completed"
+	BotLoadRunFailed       BotLoadRunState = "failed"
+	BotLoadRunCancelled    BotLoadRunState = "cancelled"
+)
+
+// BotLoadVerdict 是运行判定结果。
+type BotLoadVerdict string
+
+const (
+	BotLoadVerdictPending BotLoadVerdict = "pending"
+	BotLoadVerdictPassed  BotLoadVerdict = "passed"
+	BotLoadVerdictFailed  BotLoadVerdict = "failed"
+	BotLoadVerdictAborted BotLoadVerdict = "aborted"
 )
 
 // BotStressSession Bot 压测会话。
@@ -104,6 +131,16 @@ type BotStressSession struct {
 	CommandScheduleSnap   string                 `gorm:"type:longtext" json:"commandScheduleSnapshot,omitempty"`
 	AllocationPlan        string                 `gorm:"type:text" json:"allocationPlan,omitempty"`
 	SchemaVersion         int                    `gorm:"type:smallint;not null;default:1;index" json:"schemaVersion"`
+	// FR-370 V2 专属列：schemaVersion=1 历史行允许 null，schemaVersion=2 由 service 强制完整。
+	TemplateID            *uint                  `gorm:"index" json:"templateId,omitempty"`
+	LoadProfile           string                 `gorm:"type:longtext" json:"loadProfile,omitempty"`
+	Thresholds            string                 `gorm:"type:longtext" json:"thresholds,omitempty"`
+	RunState              *BotLoadRunState       `gorm:"type:varchar(32);index" json:"runState,omitempty"`
+	CurrentStage          *int                   `json:"currentStage,omitempty"`
+	Verdict               *BotLoadVerdict        `gorm:"type:varchar(16);index" json:"verdict,omitempty"`
+	MaxStableBots         *int                   `json:"maxStableBots,omitempty"`
+	FailureSummary        string                 `gorm:"type:longtext" json:"failureSummary,omitempty"`
+	ReportSummary         string                 `gorm:"type:longtext" json:"reportSummary,omitempty"`
 	Succeeded             int                    `gorm:"default:0" json:"succeeded"`
 	Failed                int                    `gorm:"default:0" json:"failed"`
 	LastError             string                 `gorm:"type:text" json:"lastError,omitempty"`
@@ -113,7 +150,8 @@ type BotStressSession struct {
 	UpdatedAt             time.Time              `json:"updatedAt"`
 	DeletedAt             gorm.DeletedAt         `gorm:"index" json:"-"`
 
-	Instance Instance `gorm:"foreignKey:InstanceID" json:"instance,omitempty"`
+	Instance Instance         `gorm:"foreignKey:InstanceID" json:"instance,omitempty"`
+	Template *BotLoadTemplate `gorm:"foreignKey:TemplateID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
 }
 
 // BeforeCreate 创建前自动生成 UUID。
