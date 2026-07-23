@@ -271,7 +271,9 @@ export default function FileList({
                       <span className="flex min-w-0 flex-1 items-center gap-1 truncate">
                         <span className="truncate">{f.name}</span>
                         {f.writable === false && (
-                          <Lock className="size-3 shrink-0 text-muted-foreground" title={t('files.notWritable')} />
+                          <span title={t('files.notWritable')} className="inline-flex shrink-0">
+                            <Lock className="size-3 text-muted-foreground" aria-hidden />
+                          </span>
                         )}
                       </span>
                       {viewMode === 'details' && (
