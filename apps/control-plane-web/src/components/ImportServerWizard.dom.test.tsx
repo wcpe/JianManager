@@ -36,6 +36,21 @@ vi.mock('@/api/nodes', () => ({
 vi.mock('@/api/jdks', () => ({
   useNodeJDKs: () => ({ data: [] }),
 }))
+const checkNodePathAccess = vi.fn(async () => ({
+  exists: true,
+  isDir: true,
+  readable: true,
+  writable: true,
+}))
+const chmodNodePath = vi.fn(async () => ({ modeOctal: '0755' }))
+vi.mock('@/api/nodeRuntime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/api/nodeRuntime')>()
+  return {
+    ...actual,
+    checkNodePathAccess: (...args: unknown[]) => checkNodePathAccess(...args),
+    chmodNodePath: (...args: unknown[]) => chmodNodePath(...args),
+  }
+})
 vi.mock('@/components/DirectoryPicker', () => ({
   __esModule: true,
   default: ({ onPick }: { onPick: (p: string) => void }) => (
@@ -48,9 +63,46 @@ import ImportServerWizard from './ImportServerWizard'
 beforeEach(() => {
   inspectMutate.mockClear()
   importMutate.mockClear()
+  checkNodePathAccess.mockClear()
+  chmodNodePath.mockClear()
+  checkNodePathAccess.mockResolvedValue({
+    exists: true,
+    isDir: true,
+    readable: true,
+    writable: true,
+  })
 })
 
-describe('ImportServerWizard（FR-302）', () => {
+describe('ImportServerWizard（FR-302 / FR-374）', () => {
+  it('手输绝对路径触发探测（FR-374）', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<ImportServerWizard open onClose={vi.fn()} initialNodeId={1} />)
+    const input = await screen.findByLabelText(/绝对路径|Absolute path/i)
+    await user.clear(input)
+    await user.type(input, '/home/wxys233/server')
+    await user.click(screen.getByRole('button', { name: /探测|Inspect/i }))
+    expect(inspectMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeId: 1, path: '/home/wxys233/server' }),
+      expect.anything(),
+    )
+  })
+
+  it('权限失败展示诊断区（FR-374）', async () => {
+    inspectMutate.mockImplementationOnce((_vars: unknown, opts?: { onError?: (e: Error) => void }) => {
+      opts?.onError?.(
+        Object.assign(new Error('permission denied'), {
+          response: { data: { message: '没有权限读取该目录（Worker 用户无法列出内容）' } },
+        }),
+      )
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<ImportServerWizard open onClose={vi.fn()} initialNodeId={1} />)
+    await user.click(await screen.findByRole('button', { name: 'pick-dir' }))
+    expect(await screen.findByTestId('import-perm-error')).toBeInTheDocument()
+    expect(screen.getByText(/没有权限读取该目录/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /尝试修复权限|Try fix/i })).toBeInTheDocument()
+  })
+
   it('探测→模式二选一→提交，携带所选 mode 与 jarPath', async () => {
     const user = userEvent.setup()
     renderWithProviders(<ImportServerWizard open onClose={vi.fn()} initialNodeId={1} />)

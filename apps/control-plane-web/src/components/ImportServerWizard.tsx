@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
-import { HardDriveDownload, MapPin, Truck } from 'lucide-react'
+import { HardDriveDownload, MapPin, Truck, ShieldAlert } from 'lucide-react'
 import { useNodes } from '@/api/nodes'
 import { useNodeJDKs } from '@/api/jdks'
 import {
@@ -10,7 +10,9 @@ import {
   useImportServer,
   type ImportInspectResult,
 } from '@/api/importServer'
+import { checkNodePathAccess, chmodNodePath } from '@/api/nodeRuntime'
 import DirectoryPicker from '@/components/DirectoryPicker'
+import DangerConfirm from '@/components/DangerConfirm'
 import {
   Dialog,
   DialogContent,
@@ -24,6 +26,7 @@ import { Combobox, type ComboboxOption } from '@jianmanager/ui/components/combob
 import { Checkbox } from '@jianmanager/ui/components/checkbox'
 import { FieldLabel } from '@jianmanager/ui/components/field-label'
 import { Button } from '@jianmanager/ui/components/button'
+import { joinAbsPath, isPermissionErrorMessage } from '@/components/import-server-path'
 
 interface ImportServerWizardProps {
   open: boolean
@@ -48,9 +51,8 @@ function dirBaseName(path: string): string {
 }
 
 /**
- * 导入现有服务器向导（FR-302，见 ADR-069）：选目录 → 探测结果（jar 单选 / JDK 勾选 /
- * 端口 eula 展示）→ 模式二选一（就地接管 / 搬进托管区，含后果说明）→ 名称/内存/JDK → 提交跳实例页。
- * 模态承载 + 内容自适应（ui-modals 纪律，scrollable-dialog 壳）。
+ * 导入现有服务器向导（FR-302 + FR-374）：选目录/手输绝对路径 → 探测 → 模式 → 配置 → 提交。
+ * FR-374：权限失败诊断与尝试修复、就地写预检阻断。
  */
 export default function ImportServerWizard({ open, onClose, initialNodeId }: ImportServerWizardProps) {
   const { t } = useTranslation()
@@ -60,6 +62,7 @@ export default function ImportServerWizard({ open, onClose, initialNodeId }: Imp
   const [step, setStep] = useState<Step>('dir')
   const [nodeId, setNodeId] = useState(initialNodeId ? String(initialNodeId) : '')
   const [path, setPath] = useState('')
+  const [pathDraft, setPathDraft] = useState('')
   const [result, setResult] = useState<ImportInspectResult | null>(null)
   const [jarPath, setJarPath] = useState('')
   const [jdkPaths, setJdkPaths] = useState<string[]>([])
@@ -67,6 +70,14 @@ export default function ImportServerWizard({ open, onClose, initialNodeId }: Imp
   const [name, setName] = useState('')
   const [memoryMb, setMemoryMb] = useState('2048')
   const [jdkId, setJdkId] = useState('')
+  /** FR-374：最近一次权限/预检失败文案（内联展示）。 */
+  const [permError, setPermError] = useState('')
+  /** FR-374：就地写预检是否未通过。 */
+  const [writePrecheckFailed, setWritePrecheckFailed] = useState(false)
+  const [precheckHint, setPrecheckHint] = useState('')
+  const [chmodOpen, setChmodOpen] = useState(false)
+  const [chmodBusy, setChmodBusy] = useState(false)
+  const [precheckBusy, setPrecheckBusy] = useState(false)
 
   const { data: jdks } = useNodeJDKs(nodeId ? Number(nodeId) : 0)
   const inspect = useInspectImportDir()
@@ -84,6 +95,7 @@ export default function ImportServerWizard({ open, onClose, initialNodeId }: Imp
     setStep('dir')
     setNodeId(initialNodeId ? String(initialNodeId) : '')
     setPath('')
+    setPathDraft('')
     setResult(null)
     setJarPath('')
     setJdkPaths([])
@@ -91,6 +103,10 @@ export default function ImportServerWizard({ open, onClose, initialNodeId }: Imp
     setName('')
     setMemoryMb('2048')
     setJdkId('')
+    setPermError('')
+    setWritePrecheckFailed(false)
+    setPrecheckHint('')
+    setChmodOpen(false)
     inspect.reset()
   }
 
@@ -99,29 +115,106 @@ export default function ImportServerWizard({ open, onClose, initialNodeId }: Imp
     reset()
   }
 
+  /** FR-374：就地模式写预检（根目录 + server.properties）。 */
+  const runWritePrecheck = async (root: string, res: ImportInspectResult) => {
+    if (!nodeId) return
+    setPrecheckBusy(true)
+    setWritePrecheckFailed(false)
+    setPrecheckHint('')
+    try {
+      const rootAccess = await checkNodePathAccess(Number(nodeId), root)
+      if (!rootAccess.readable) {
+        setWritePrecheckFailed(true)
+        setPrecheckHint(rootAccess.reason || t('importServer.precheckNotReadable'))
+        return
+      }
+      // 预检时默认按就地假设；migrate 在 mode 步再放宽
+      if (!rootAccess.writable) {
+        setWritePrecheckFailed(true)
+        setPrecheckHint(rootAccess.reason || t('importServer.precheckNotWritable'))
+        return
+      }
+      if (res.propsFound) {
+        const propsPath = joinAbsPath(root, 'server.properties')
+        const fa = await checkNodePathAccess(Number(nodeId), propsPath)
+        if (fa.exists && !fa.writable) {
+          setWritePrecheckFailed(true)
+          setPrecheckHint(fa.reason || t('importServer.precheckPropsNotWritable'))
+          return
+        }
+      }
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        (err as Error)?.message ||
+        t('importServer.precheckFailed')
+      setWritePrecheckFailed(true)
+      setPrecheckHint(msg)
+    } finally {
+      setPrecheckBusy(false)
+    }
+  }
+
   const runInspect = (picked: string) => {
-    setPath(picked)
+    const target = picked.trim()
+    if (!target || !nodeId) return
+    setPath(target)
+    setPathDraft(target)
+    setPermError('')
+    setWritePrecheckFailed(false)
+    setPrecheckHint('')
     inspect.mutate(
-      { nodeId: Number(nodeId), path: picked },
+      { nodeId: Number(nodeId), path: target },
       {
         onSuccess: (res) => {
           setResult(res)
           setJarPath(res.jars[0]?.path ?? '')
           setJdkPaths([])
-          if (!name) setName(dirBaseName(picked))
+          if (!name) setName(dirBaseName(target))
           setStep('inspect')
+          void runWritePrecheck(target, res)
         },
         onError: (err: Error & { response?: { data?: { message?: string } } }) => {
-          toast.error(err.response?.data?.message || t('importServer.inspectFailed'))
+          const msg = err.response?.data?.message || t('importServer.inspectFailed')
+          setPermError(msg)
+          toast.error(msg)
         },
       },
     )
   }
 
+  const tryFixPerm = async () => {
+    if (!nodeId || !pathDraft.trim()) return
+    setChmodBusy(true)
+    try {
+      await chmodNodePath(Number(nodeId), pathDraft.trim())
+      toast.success(t('importServer.fixOk'))
+      setChmodOpen(false)
+      setPermError('')
+      runInspect(pathDraft.trim())
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        (err as Error)?.message ||
+        t('importServer.fixFailed')
+      toast.error(msg)
+      setPermError(msg)
+    } finally {
+      setChmodBusy(false)
+    }
+  }
+
   const toggleJdk = (p: string) =>
     setJdkPaths((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]))
 
+  /** 就地且写预检失败时禁止提交。migrate 不要求源可写。 */
+  const submitBlocked = mode === 'in_place' && writePrecheckFailed
+
   const submit = () => {
+    if (submitBlocked) {
+      toast.error(precheckHint || t('importServer.precheckBlocked'))
+      return
+    }
     importServer.mutate(
       {
         nodeId: Number(nodeId),
@@ -155,6 +248,8 @@ export default function ImportServerWizard({ open, onClose, initialNodeId }: Imp
     config: t('importServer.stepConfig'),
   }
 
+  const showPermActions = !!permError && isPermissionErrorMessage(permError)
+
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) close() }}>
       <DialogContent
@@ -179,26 +274,87 @@ export default function ImportServerWizard({ open, onClose, initialNodeId }: Imp
                   <Combobox
                     options={nodeOptions}
                     value={nodeId}
-                    onChange={(v) => { setNodeId(v); setPath('') }}
+                    onChange={(v) => { setNodeId(v); setPath(''); setPathDraft(''); setPermError('') }}
                     allowCustom={false}
                     placeholder={t('importServer.selectNode')}
                   />
                 </div>
               </div>
               {nodeId ? (
-                <div>
-                  <FieldLabel>{t('importServer.dirLabel')}</FieldLabel>
-                  <div className="mt-1">
-                    <DirectoryPicker
-                      key={nodeId}
-                      nodeId={Number(nodeId)}
-                      onPick={runInspect}
-                      onCancel={close}
-                    />
+                <div className="space-y-2">
+                  <div>
+                    <FieldLabel>{t('importServer.pathInputLabel')}</FieldLabel>
+                    <div className="mt-1 flex gap-2">
+                      <input
+                        value={pathDraft}
+                        onChange={(e) => setPathDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault()
+                            runInspect(pathDraft)
+                          }
+                        }}
+                        className="min-w-0 flex-1 rounded-md border bg-background px-3 py-2 font-mono text-xs"
+                        placeholder={t('importServer.pathPlaceholder')}
+                        aria-label={t('importServer.pathInputLabel')}
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={!pathDraft.trim() || inspect.isPending}
+                        onClick={() => runInspect(pathDraft)}
+                      >
+                        {t('importServer.pathProbe')}
+                      </Button>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">{t('importServer.pathHint')}</p>
                   </div>
-                  {inspect.isPending && (
-                    <p className="mt-1 text-xs text-muted-foreground">{t('importServer.inspecting')}</p>
+
+                  {permError && (
+                    <div
+                      className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs"
+                      role="alert"
+                      data-testid="import-perm-error"
+                    >
+                      <p className="flex items-start gap-1.5 text-destructive">
+                        <ShieldAlert className="mt-0.5 size-3.5 shrink-0" />
+                        <span>{permError}</span>
+                      </p>
+                      {showPermActions && (
+                        <div className="flex flex-wrap gap-2">
+                          <Button type="button" size="sm" variant="outline" onClick={() => setChmodOpen(true)}>
+                            {t('importServer.tryFixPerm')}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              setMode('migrate')
+                              toast.message(t('importServer.switchMigrateHint'))
+                            }}
+                          >
+                            {t('importServer.suggestMigrate')}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
                   )}
+
+                  <div>
+                    <FieldLabel>{t('importServer.dirLabel')}</FieldLabel>
+                    <div className="mt-1">
+                      <DirectoryPicker
+                        key={nodeId}
+                        nodeId={Number(nodeId)}
+                        onPick={runInspect}
+                        onCancel={close}
+                      />
+                    </div>
+                    {inspect.isPending && (
+                      <p className="mt-1 text-xs text-muted-foreground">{t('importServer.inspecting')}</p>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <p className="text-xs text-muted-foreground">{t('importServer.selectNodeFirst')}</p>
@@ -209,6 +365,40 @@ export default function ImportServerWizard({ open, onClose, initialNodeId }: Imp
           {step === 'inspect' && result && (
             <>
               <p className="break-all rounded bg-muted/40 px-2 py-1 font-mono text-xs" title={path}>{path}</p>
+
+              {(writePrecheckFailed || precheckBusy) && (
+                <div
+                  className="space-y-2 rounded-md border border-yellow-600/40 bg-yellow-500/5 p-2 text-xs"
+                  data-testid="import-write-precheck"
+                >
+                  {precheckBusy ? (
+                    <p className="text-muted-foreground">{t('importServer.prechecking')}</p>
+                  ) : (
+                    <>
+                      <p className="text-yellow-700 dark:text-yellow-500">
+                        {precheckHint || t('importServer.precheckBlocked')}
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        <Button type="button" size="sm" variant="outline" onClick={() => setChmodOpen(true)}>
+                          {t('importServer.tryFixPerm')}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() => {
+                            setMode('migrate')
+                            setWritePrecheckFailed(false)
+                            toast.message(t('importServer.switchMigrateHint'))
+                          }}
+                        >
+                          {t('importServer.suggestMigrate')}
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
 
               <div>
                 <FieldLabel required>{t('importServer.jarSection')}</FieldLabel>
@@ -303,6 +493,11 @@ export default function ImportServerWizard({ open, onClose, initialNodeId }: Imp
                   </span>
                 </label>
               ))}
+              {mode === 'in_place' && writePrecheckFailed && (
+                <p className="text-xs text-destructive" data-testid="import-inplace-blocked">
+                  {t('importServer.precheckBlocked')}
+                </p>
+              )}
             </div>
           )}
 
@@ -346,6 +541,9 @@ export default function ImportServerWizard({ open, onClose, initialNodeId }: Imp
               <p className="rounded bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground">
                 {mode === 'in_place' ? t('importServer.modeInPlaceDesc') : t('importServer.modeMigrateDesc')}
               </p>
+              {submitBlocked && (
+                <p className="text-xs text-destructive">{t('importServer.precheckBlocked')}</p>
+              )}
             </>
           )}
         </ScrollableDialogBody>
@@ -366,7 +564,10 @@ export default function ImportServerWizard({ open, onClose, initialNodeId }: Imp
           {(step === 'inspect' || step === 'mode') && (
             <Button
               type="button"
-              disabled={step === 'inspect' && !jarPath}
+              disabled={
+                (step === 'inspect' && !jarPath) ||
+                (step === 'mode' && mode === 'in_place' && writePrecheckFailed)
+              }
               onClick={() => setStep(step === 'inspect' ? 'mode' : 'config')}
             >
               {t('importServer.next')}
@@ -375,7 +576,7 @@ export default function ImportServerWizard({ open, onClose, initialNodeId }: Imp
           {step === 'config' && (
             <Button
               type="button"
-              disabled={importServer.isPending || !name.trim() || !jarPath}
+              disabled={importServer.isPending || !name.trim() || !jarPath || submitBlocked}
               onClick={submit}
             >
               {importServer.isPending ? t('importServer.importing') : t('importServer.submit')}
@@ -383,6 +584,16 @@ export default function ImportServerWizard({ open, onClose, initialNodeId }: Imp
           )}
         </DialogFooter>
       </DialogContent>
+
+      <DangerConfirm
+        open={chmodOpen}
+        onCancel={() => setChmodOpen(false)}
+        title={t('importServer.tryFixPerm')}
+        description={t('importServer.fixConfirmDesc', { path: pathDraft || path })}
+        confirmLabel={t('importServer.tryFixPerm')}
+        pending={chmodBusy}
+        onConfirm={() => { void tryFixPerm() }}
+      />
     </Dialog>
   )
 }
