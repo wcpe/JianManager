@@ -915,10 +915,26 @@
 ## 文件管理
 
 ### GET /api/v1/instances/:id/files
-- **描述**: 文件列表
-- **关联 FR**: FR-008
+- **描述**: 文件列表（FR-373 条目加性字段：`modeOctal`/`modeString`/`readable`/`writable`/`owner`/`group`，相对 Worker 进程用户）
+- **关联 FR**: FR-008 / FR-373
 - **权限**: `instance.file`
 - **Query**: `?path=/plugins`
+- **响应元素**: `{ "name", "isDir", "size", "modTime", "modeOctal?", "modeString?", "readable", "writable", "owner?", "group?" }`
+
+### POST /api/v1/instances/:id/files/check-access
+- **描述**: 写前/打开前权限探测（相对 Worker 进程用户；不改文件）
+- **关联 FR**: FR-373
+- **权限**: 可读实例
+- **请求**: `{ "path": "server.properties" }`
+- **响应 200**: `{ "exists", "isDir", "readable", "writable", "modeOctal?", "modeString?", "owner?", "group?", "reason?" }`
+
+### POST /api/v1/instances/:id/files/chmod
+- **描述**: 单 path 非递归 chmod；`mode` 省略=在现有权限上保证属主可读写（目录含 x）。不 chown、不递归
+- **关联 FR**: FR-373
+- **权限**: 可管理实例
+- **请求**: `{ "path": "server.properties", "mode?": "0644" }`
+- **响应 200**: `{ "message": "已修改权限", "modeOctal": "0644" }`
+- **审计**: `file.chmod`
 
 ### GET /api/v1/instances/:id/files/read
 - **描述**: 读取文件内容（在线编辑器用；Worker `ReadFile` 带 10MiB 编辑器护栏，超限截断——下载文件请用 `download` 端点，不受此上限）
@@ -2223,11 +2239,23 @@
 - **错误码**: `400 INVALID_REQUEST`（缺 vendor）；`502 WORKER_ERROR`（foojay 不可达，前端降级为手填版本）
 
 #### GET /api/v1/nodes/:id/browse?path=
-- **描述**: 只读列出节点上某绝对路径下的子目录（JDK 路径登记目录选择器）。`path` 为空时返回起点（Windows 盘符 / Unix 根）；只列目录、防穿越。
-- **关联 FR**: FR-178
+- **描述**: 只读列出节点上某绝对路径下的子目录（JDK 路径登记目录选择器）。`path` 为空时返回起点（Windows 盘符 / Unix 根）；只列目录、防穿越。FR-373：`dirs[]` 加性含 `modeOctal`/`modeString`/`readable`/`writable`/`owner`/`group`；目录本身不可读时返回业务错误（中文诊断），不空列表冒充。
+- **关联 FR**: FR-178 / FR-373
 - **权限**: 平台管理员
-- **响应**: `{ "path": "/opt", "parent": "/", "dirs": [{ "name": "jdks", "path": "/opt/jdks" }] }`
-- **错误码**: `503 NODE_OFFLINE`；`502 WORKER_ERROR`（路径不可访问/非目录/相对路径）
+- **响应**: `{ "path": "/opt", "parent": "/", "dirs": [{ "name": "jdks", "path": "/opt/jdks", "readable": true, "writable": true, "modeOctal?": "0755" }] }`
+- **错误码**: `503 NODE_OFFLINE`；`502 WORKER_ERROR`（路径不可访问/非目录/相对路径/无权限）
+
+#### POST /api/v1/nodes/:id/fs/check-access
+- **描述**: 节点绝对路径权限探测（导入/选目录场景，FR-373）
+- **权限**: 平台管理员
+- **请求**: `{ "path": "/home/user/server" }`
+- **响应**: 同实例 `check-access` 形状
+
+#### POST /api/v1/nodes/:id/fs/chmod
+- **描述**: 节点绝对路径单 path 非递归 chmod（FR-373）；语义同实例 chmod
+- **权限**: 平台管理员
+- **请求**: `{ "path": "/home/user/server", "mode?": "0755" }`
+- **审计**: `node.fs.chmod`
 
 ### 节点运行时库（FR-298）
 
