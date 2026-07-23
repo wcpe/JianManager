@@ -1,7 +1,7 @@
 # ADR-077: mcp-bridge 作为 Agent 协议前端
 
 - **日期**: 2026-07-23
-- **状态**: proposed（随 FR-386 落地转 accepted）
+- **状态**: accepted（随 FR-386 开发落地）
 - **上下文**: IDE agent 需要 MCP；策略必须在 CP（ADR-076），且保持「单二进制起步」心智、不增常驻监听面。
 
 ## 决策

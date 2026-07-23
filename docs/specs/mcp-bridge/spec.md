@@ -1,6 +1,6 @@
 # 功能规格：mcp-bridge 独立进程
 
-> 状态：草拟（并行前置）　·　关联 PRD：FR-386　·　依赖：FR-384　·　ADR：077
+> 状态：开发中　·　关联 PRD：FR-386　·　依赖：FR-384　·　ADR：077
 
 ## 1. 背景与目标
 
@@ -30,11 +30,11 @@
 
 ## 4. 任务拆分
 
-- [ ] 脚手架 + stdio MCP 循环
-- [ ] tools/list 与 tools/call 映射
-- [ ] 错误结构
-- [ ] 单测（mock CP）
-- [ ] 构建目标 + README Agent 接入节草稿
+- [x] 脚手架 + stdio MCP 循环
+- [x] tools/list 与 tools/call 映射
+- [x] 错误结构
+- [x] 单测（mock CP）
+- [ ] 构建目标 + README Agent 接入节草稿（发版前补）
 
 ## 5. 验收标准
 
