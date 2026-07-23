@@ -85,6 +85,8 @@ func (c *Client) doJSON(method, path string, query url.Values) ([]byte, error) {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	req.Header.Set("Accept", "application/json")
+	// FR-390：默认自报客户端，便于 CP 调用流水区分 jmagent / curl / mcp。
+	req.Header.Set("X-JM-Agent-Client", "jmagent")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

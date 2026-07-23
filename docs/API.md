@@ -3260,14 +3260,35 @@ Agent 使用独立 Bearer Token（明文前缀 `jmat_`），与人类 JWT 分离
 - **错误**: 400 | 403
 
 ### GET /api/v1/agent/tokens
-- **描述**: 列出 Agent Token 元数据（无明文）
-- **关联 FR**: FR-384
+- **描述**: 列出 Agent Token 元数据（无明文）；含 `lastUsedAt` 与 `callCount24h`（近 24h 调用次数，FR-390）
+- **关联 FR**: FR-384 / FR-390
 - **权限**: 平台管理员 JWT
+- **响应** (200): `[{ "id", "name", "tokenPrefix", "scopedInstanceIds", "scopedNodeIds", "writeAllowlist", "expiresAt", "revoked", "lastUsedAt", "createdAt", "createdBy", "callCount24h" }, ...]`
 
 ### DELETE /api/v1/agent/tokens/:id
 - **描述**: 吊销 Agent Token（立即失效）
 - **关联 FR**: FR-384
 - **权限**: 平台管理员 JWT
+
+### GET /api/v1/agent/call-logs
+- **描述**: 分页查询 Agent 调用流水（读+写 Ops；日后 MCP tool 同表）
+- **关联 FR**: FR-390
+- **权限**: 平台管理员 JWT
+- **查询参数**:
+  | 参数 | 类型 | 说明 |
+  |---|---|---|
+  | tokenId | uint | 按 Token 过滤 |
+  | action | string | 如 `agent.whoami`、`agent.instance_start` |
+  | client | string | `mcp` \| `jmagent` \| `curl` \| `unknown` |
+  | success | bool | `true` / `false` |
+  | from | string | RFC3339 或 `YYYY-MM-DD` |
+  | to | string | RFC3339 或 `YYYY-MM-DD` |
+  | page | int | 默认 1 |
+  | pageSize | int | 默认 50，上限 200 |
+- **响应** (200): `{ "items": [...], "total", "page", "pageSize" }`；`items[]` 字段含 `tokenId`、`tokenName`、`action`、`client`、`transport`、`targetType`、`targetId`、`success`、`error`、`latencyMs`、`ip`、`createdAt`
+- **排序**: `created_at DESC, id DESC`
+- **错误**: 400 参数无效 | 403 非平台管理员
+- **客户端约定**: 请求头 `X-JM-Agent-Client: jmagent|mcp|curl`（长度 ≤32，未知/非法归 `unknown`）；`jmagent` CLI 默认发送 `jmagent`。仅**成功鉴权后**记流水；401 不刷库；策略 403 记 `success=false`。默认保留 14 天（启动时清理过期行）。
 
 ### GET /api/v1/agent/whoami
 - **描述**: 查询当前 Agent 身份与 scope / 写白名单
@@ -3275,6 +3296,7 @@ Agent 使用独立 Bearer Token（明文前缀 `jmat_`），与人类 JWT 分离
 - **权限**: Agent Token（`Authorization: Bearer jmat_...`）
 - **响应** (200): `{ "kind":"agent", "name":"...", "tokenId":1, "scopedInstanceIds":[], "scopedNodeIds":[], "writeAllowlist":[] }`
 - **错误**: 401 Token 无效/吊销/过期
+- **流水**: 成功鉴权后记 `agent.whoami`（FR-390）
 
 ### GET /api/v1/agent/nodes
 - **描述**: 列出 scope 内节点

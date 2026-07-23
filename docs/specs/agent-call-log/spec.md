@@ -1,6 +1,6 @@
 # 功能规格：Agent 调用流水与 Token 活跃
 
-> 状态：草拟（并行前置，待审核）　·　关联 PRD：FR-390　·　依赖：FR-384　·　关联：FR-389（client=mcp）、FR-385（client=jmagent）
+> 状态：开发中（spec 已审，实现中）　·　关联 PRD：FR-390　·　依赖：FR-384　·　关联 ADR：076　·　关联：FR-389（client=mcp）、FR-385（client=jmagent）
 
 ## 1. 背景与目标
 
@@ -75,13 +75,13 @@
 
 ## 4. 任务拆分
 
-- [ ] model + AutoMigrate + 保留清理
-- [ ] Record/List/Count24h service + 单测
-- [ ] Agent Ops 全路径接入流水（读+写+403）
-- [ ] Token 列表 API 附 `callCount24h` + 确认 `lastUsedAt` JSON
-- [ ] 查询 API + 单测过滤/分页
-- [ ] 文档：API.md、PRD FR-390→开发中；为 jmagent header 预留契约（实现可在 385/392）
-- [ ] **真机**：远程 jmagent whoami +（若 389 已合）MCP tool 各至少 1 条流水，client 可区分
+- [x] model + AutoMigrate + 保留清理
+- [x] Record/List/Count24h service + 单测
+- [x] Agent Ops 全路径接入流水（读+写+403）
+- [x] Token 列表 API 附 `callCount24h` + 确认 `lastUsedAt` JSON
+- [x] 查询 API + 单测过滤/分页
+- [x] 文档：API.md、PRD FR-390→开发中；jmagent 默认 `X-JM-Agent-Client: jmagent`
+- [ ] **真机**：远程 jmagent whoami +（若 389 已合）MCP tool 各至少 1 条流水，client 可区分（本 worktree：集成测覆盖 List/Count/client；远程标待真机验）
 
 ## 5. 验收标准
 

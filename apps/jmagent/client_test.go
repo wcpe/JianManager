@@ -19,12 +19,13 @@ func newTestClient(ts *httptest.Server, token string) *Client {
 	return c
 }
 
-// TestClient_WhoamiSuccess 成功路径：Bearer 头正确，JSON 原样返回。
+// TestClient_WhoamiSuccess 成功路径：Bearer 头正确，默认带 X-JM-Agent-Client，JSON 原样返回。
 func TestClient_WhoamiSuccess(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "/api/v1/agent/whoami", r.URL.Path)
 		assert.Equal(t, "Bearer jmat_test_token", r.Header.Get("Authorization"))
+		assert.Equal(t, "jmagent", r.Header.Get("X-JM-Agent-Client"))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"kind":              "agent",

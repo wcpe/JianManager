@@ -185,6 +185,8 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 		ImportServer:      service.NewImportServerService(db, pool, instanceSvc),
 		// Agent Token 策略真源（FR-384/388）：测试路由需挂 agent 管理/运维面。
 		AgentToken: service.NewAgentTokenService(db),
+		// Agent 调用流水（FR-390）：Ops 读+写记流水；Token 列表 callCount24h。
+		AgentCallLog: service.NewAgentCallLogService(db),
 	}
 	// CP 内嵌 MCP（FR-389）：测试挂载会话管理器（小并发便于超限用例）。
 	agentTok := svcs.AgentToken

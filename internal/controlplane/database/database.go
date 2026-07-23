@@ -112,8 +112,10 @@ func AutoMigrate(db *gorm.DB) error {
 		// 节点包管理器与 registry 配置（FR-306，节点单例）。
 		&model.NodePMConfig{},
 		&model.NodeEnrollToken{},
-		// Agent 专用令牌（FR-384，见 ADR-079）：与人类 JWT 分离，scope + 写白名单。
+		// Agent 专用令牌（FR-384，见 ADR-076）：与人类 JWT 分离，scope + 写白名单。
 		&model.AgentToken{},
+		// Agent 调用流水（FR-390，见 ADR-076）：读+写 Ops 与日后 MCP tool。
+		&model.AgentCallLog{},
 		&model.Instance{},
 		&model.GroupInstance{},
 		// 实例组织分组树（FR-165，见 ADR-033）：自引用邻接表 + 实例 M:N，

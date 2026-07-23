@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -13,15 +14,16 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 )
 
-// AgentTokenHandler 管理员面：Agent Token 颁发/列表/吊销（JWT + 平台管理员）。
+// AgentTokenHandler 管理员面：Agent Token 颁发/列表/吊销 + 调用流水查询（JWT + 平台管理员）。
 type AgentTokenHandler struct {
-	svc   *service.AgentTokenService
-	audit *service.AuditService
+	svc     *service.AgentTokenService
+	audit   *service.AuditService
+	callLog *service.AgentCallLogService
 }
 
-// NewAgentTokenHandler 创建处理器。
-func NewAgentTokenHandler(svc *service.AgentTokenService, audit *service.AuditService) *AgentTokenHandler {
-	return &AgentTokenHandler{svc: svc, audit: audit}
+// NewAgentTokenHandler 创建处理器（callLog 可为 nil，则列表无 callCount24h、无 call-logs 路由）。
+func NewAgentTokenHandler(svc *service.AgentTokenService, audit *service.AuditService, callLog *service.AgentCallLogService) *AgentTokenHandler {
+	return &AgentTokenHandler{svc: svc, audit: audit, callLog: callLog}
 }
 
 // RegisterAdminRoutes 挂到 JWT protected + 平台管理员组。
@@ -30,6 +32,8 @@ func (h *AgentTokenHandler) RegisterAdminRoutes(rg *gin.RouterGroup) {
 	g.POST("", h.Issue)
 	g.GET("", h.List)
 	g.DELETE("/:id", h.Revoke)
+	// 调用流水查询（FR-390）
+	rg.GET("/agent/call-logs", h.ListCallLogs)
 }
 
 type issueAgentTokenRequest struct {
@@ -38,6 +42,12 @@ type issueAgentTokenRequest struct {
 	ScopedNodeIDs     []uint   `json:"scopedNodeIds"`
 	WriteAllowlist    []string `json:"writeAllowlist"`
 	TTLDays           int      `json:"ttlDays"`
+}
+
+// agentTokenListItem Token 列表项：元数据 + 24h 调用次数（FR-390）。
+type agentTokenListItem struct {
+	model.AgentToken
+	CallCount24h int64 `json:"callCount24h"`
 }
 
 // Issue POST /api/v1/agent/tokens
@@ -74,13 +84,31 @@ func (h *AgentTokenHandler) Issue(c *gin.Context) {
 }
 
 // List GET /api/v1/agent/tokens
+// 响应含 lastUsedAt（模型字段）与 callCount24h（24h 聚合，FR-390）。
 func (h *AgentTokenHandler) List(c *gin.Context) {
 	list, err := h.svc.List()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
 		return
 	}
-	c.JSON(http.StatusOK, list)
+	ids := make([]uint, 0, len(list))
+	for i := range list {
+		ids = append(ids, list[i].ID)
+	}
+	counts := map[uint]int64{}
+	if h.callLog != nil {
+		if m, err := h.callLog.Count24hMap(ids); err == nil {
+			counts = m
+		}
+	}
+	out := make([]agentTokenListItem, 0, len(list))
+	for _, tok := range list {
+		out = append(out, agentTokenListItem{
+			AgentToken:   tok,
+			CallCount24h: counts[tok.ID],
+		})
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // Revoke DELETE /api/v1/agent/tokens/:id
@@ -106,17 +134,96 @@ func (h *AgentTokenHandler) Revoke(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// ListCallLogs GET /api/v1/agent/call-logs
+// 查询参数：tokenId、action、client、success、from、to、page、pageSize。
+func (h *AgentTokenHandler) ListCallLogs(c *gin.Context) {
+	if h.callLog == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "调用流水未启用"})
+		return
+	}
+	filter := service.AgentCallLogFilter{
+		Page:     queryInt(c, "page", 1),
+		PageSize: queryInt(c, "pageSize", 50),
+	}
+	if v := c.Query("tokenId"); v != "" {
+		id, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "BAD_REQUEST", "message": "tokenId 无效"})
+			return
+		}
+		tid := uint(id)
+		filter.TokenID = &tid
+	}
+	if v := c.Query("action"); v != "" {
+		filter.Action = &v
+	}
+	if v := c.Query("client"); v != "" {
+		filter.Client = &v
+	}
+	if v := c.Query("success"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "BAD_REQUEST", "message": "success 须为 true/false"})
+			return
+		}
+		filter.Success = &b
+	}
+	if v := c.Query("from"); v != "" {
+		t, err := parseQueryTime(v)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "BAD_REQUEST", "message": "from 时间格式无效"})
+			return
+		}
+		filter.From = &t
+	}
+	if v := c.Query("to"); v != "" {
+		t, err := parseQueryTime(v)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "BAD_REQUEST", "message": "to 时间格式无效"})
+			return
+		}
+		filter.To = &t
+	}
+	page, err := h.callLog.List(filter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询调用流水失败"})
+		return
+	}
+	c.JSON(http.StatusOK, page)
+}
+
+func queryInt(c *gin.Context, key string, def int) int {
+	v := c.Query(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+func parseQueryTime(v string) (time.Time, error) {
+	// 支持 RFC3339 与日期 YYYY-MM-DD
+	if t, err := time.Parse(time.RFC3339, v); err == nil {
+		return t, nil
+	}
+	return time.ParseInLocation("2006-01-02", v, time.Local)
+}
+
 // AgentOpsHandler Agent 运维面（Bearer Agent Token）。
 type AgentOpsHandler struct {
 	agentSvc    *service.AgentTokenService
 	instanceSvc *service.InstanceService
 	nodeSvc     *service.NodeService
 	audit       *service.AuditService
+	callLog     *service.AgentCallLogService
 }
 
-// NewAgentOpsHandler 创建运维处理器。
-func NewAgentOpsHandler(agent *service.AgentTokenService, inst *service.InstanceService, node *service.NodeService, audit *service.AuditService) *AgentOpsHandler {
-	return &AgentOpsHandler{agentSvc: agent, instanceSvc: inst, nodeSvc: node, audit: audit}
+// NewAgentOpsHandler 创建运维处理器（callLog 可为 nil，则不记流水）。
+func NewAgentOpsHandler(agent *service.AgentTokenService, inst *service.InstanceService, node *service.NodeService, audit *service.AuditService, callLog *service.AgentCallLogService) *AgentOpsHandler {
+	return &AgentOpsHandler{agentSvc: agent, instanceSvc: inst, nodeSvc: node, audit: audit, callLog: callLog}
 }
 
 // RegisterOpsRoutes 挂在已通过 AgentAuth 的组上。
@@ -150,6 +257,26 @@ func (h *AgentOpsHandler) auditAgent(c *gin.Context, p *service.AgentPrincipal, 
 	_ = h.audit.RecordResult(p.TokenID, action, targetType, targetID, string(detail), c.ClientIP(), ok, errMsg)
 }
 
+// recordCall 写入 agent 调用流水（读+写+403）；失败只 WARN 不阻断。仅成功鉴权后调用。
+func (h *AgentOpsHandler) recordCall(c *gin.Context, p *service.AgentPrincipal, action, targetType, targetID string, success bool, errMsg string) {
+	if h.callLog == nil || p == nil {
+		return
+	}
+	h.callLog.RecordSafe(service.AgentCallRecord{
+		TokenID:    p.TokenID,
+		TokenName:  p.Name,
+		Action:     action,
+		Client:     middleware.GetAgentClient(c),
+		Transport:  "http",
+		TargetType: targetType,
+		TargetID:   targetID,
+		Success:    success,
+		Error:      errMsg,
+		LatencyMs:  middleware.AgentCallLatencyMs(c),
+		IP:         c.ClientIP(),
+	})
+}
+
 // Whoami GET /api/v1/agent/whoami
 func (h *AgentOpsHandler) Whoami(c *gin.Context) {
 	p := h.principal(c)
@@ -158,9 +285,11 @@ func (h *AgentOpsHandler) Whoami(c *gin.Context) {
 		return
 	}
 	if err := service.ResolveAction(p, service.AgentActionWhoami, 0, 0); err != nil {
+		h.recordCall(c, p, service.AgentActionWhoami, "", "", false, "forbidden")
 		h.forbid(c, "操作被拒绝")
 		return
 	}
+	h.recordCall(c, p, service.AgentActionWhoami, "", "", true, "")
 	c.JSON(http.StatusOK, gin.H{
 		"kind":              "agent",
 		"name":              p.Name,
@@ -179,6 +308,7 @@ func (h *AgentOpsHandler) ListNodes(c *gin.Context) {
 		return
 	}
 	if err := service.ResolveAction(p, service.AgentActionListNodes, 0, 0); err != nil {
+		h.recordCall(c, p, service.AgentActionListNodes, "node", "", false, "forbidden")
 		h.forbid(c, "无节点 scope 或操作被拒绝")
 		return
 	}
@@ -190,6 +320,7 @@ func (h *AgentOpsHandler) ListNodes(c *gin.Context) {
 		}
 		out = append(out, *n)
 	}
+	h.recordCall(c, p, service.AgentActionListNodes, "node", "", true, "")
 	c.JSON(http.StatusOK, out)
 }
 
@@ -201,6 +332,7 @@ func (h *AgentOpsHandler) ListInstances(c *gin.Context) {
 		return
 	}
 	if err := service.ResolveAction(p, service.AgentActionListInstances, 0, 0); err != nil {
+		h.recordCall(c, p, service.AgentActionListInstances, "instance", "", false, "forbidden")
 		h.forbid(c, "无实例 scope 或操作被拒绝")
 		return
 	}
@@ -218,6 +350,7 @@ func (h *AgentOpsHandler) ListInstances(c *gin.Context) {
 		}
 		out = append(out, *inst)
 	}
+	h.recordCall(c, p, service.AgentActionListInstances, "instance", "", true, "")
 	c.JSON(http.StatusOK, out)
 }
 
@@ -234,14 +367,17 @@ func (h *AgentOpsHandler) GetInstance(c *gin.Context) {
 		return
 	}
 	if err := service.ResolveAction(p, service.AgentActionGetInstance, uint(id), 0); err != nil {
+		h.recordCall(c, p, service.AgentActionGetInstance, "instance", c.Param("id"), false, "forbidden")
 		h.forbid(c, "实例不在 scope 或操作被拒绝")
 		return
 	}
 	inst, err := h.instanceSvc.GetByID(uint(id))
 	if err != nil {
+		h.recordCall(c, p, service.AgentActionGetInstance, "instance", c.Param("id"), false, "not_found")
 		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
 		return
 	}
+	h.recordCall(c, p, service.AgentActionGetInstance, "instance", c.Param("id"), true, "")
 	c.JSON(http.StatusOK, inst)
 }
 
@@ -258,14 +394,17 @@ func (h *AgentOpsHandler) GetMetrics(c *gin.Context) {
 		return
 	}
 	if err := service.ResolveAction(p, service.AgentActionGetInstanceMetrics, uint(id), 0); err != nil {
+		h.recordCall(c, p, service.AgentActionGetInstanceMetrics, "instance", c.Param("id"), false, "forbidden")
 		h.forbid(c, "实例不在 scope 或操作被拒绝")
 		return
 	}
 	m, err := h.instanceSvc.GetMetrics(uint(id))
 	if err != nil {
+		h.recordCall(c, p, service.AgentActionGetInstanceMetrics, "instance", c.Param("id"), false, err.Error())
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询指标失败"})
 		return
 	}
+	h.recordCall(c, p, service.AgentActionGetInstanceMetrics, "instance", c.Param("id"), true, "")
 	c.JSON(http.StatusOK, m)
 }
 
@@ -282,15 +421,18 @@ func (h *AgentOpsHandler) lifecycle(c *gin.Context, action string, fn func(uint)
 	}
 	if err := service.ResolveAction(p, action, uint(id), 0); err != nil {
 		h.auditAgent(c, p, action, "instance", c.Param("id"), false, "forbidden")
+		h.recordCall(c, p, action, "instance", c.Param("id"), false, "forbidden")
 		h.forbid(c, "写白名单/scope 不足或硬拒绝")
 		return
 	}
 	if err := fn(uint(id)); err != nil {
 		h.auditAgent(c, p, action, "instance", c.Param("id"), false, err.Error())
+		h.recordCall(c, p, action, "instance", c.Param("id"), false, err.Error())
 		c.JSON(http.StatusConflict, gin.H{"error": "CONFLICT", "message": err.Error()})
 		return
 	}
 	h.auditAgent(c, p, action, "instance", c.Param("id"), true, "")
+	h.recordCall(c, p, action, "instance", c.Param("id"), true, "")
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -322,15 +464,18 @@ func (h *AgentOpsHandler) maintenance(c *gin.Context, action string, enabled boo
 	}
 	if err := service.ResolveAction(p, action, 0, uint(id)); err != nil {
 		h.auditAgent(c, p, action, "node", c.Param("id"), false, "forbidden")
+		h.recordCall(c, p, action, "node", c.Param("id"), false, "forbidden")
 		h.forbid(c, "写白名单/scope 不足或硬拒绝")
 		return
 	}
 	if _, err := h.nodeSvc.SetMaintenance(uint(id), enabled); err != nil {
 		h.auditAgent(c, p, action, "node", c.Param("id"), false, err.Error())
+		h.recordCall(c, p, action, "node", c.Param("id"), false, err.Error())
 		c.JSON(http.StatusConflict, gin.H{"error": "CONFLICT", "message": err.Error()})
 		return
 	}
 	h.auditAgent(c, p, action, "node", c.Param("id"), true, "")
+	h.recordCall(c, p, action, "node", c.Param("id"), true, "")
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 

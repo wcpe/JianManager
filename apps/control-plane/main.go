@@ -246,8 +246,15 @@ func main() {
 	// 节点 enrollment token（一键安装 / 傻瓜部署，FR-080，见 ADR-020）：
 	// 一次性、限时的新节点准入凭据，落库只存哈希、明文签发时一次性返回。
 	enrollTokenSvc := service.NewEnrollTokenService(db)
-	// Agent 专用令牌 + 策略引擎（FR-384，见 ADR-079）：与人类 JWT 分离，默认只读 + 写白名单 + scope。
+	// Agent 专用令牌 + 策略引擎（FR-384，见 ADR-076）：与人类 JWT 分离，默认只读 + 写白名单 + scope。
 	agentTokenSvc := service.NewAgentTokenService(db)
+	// Agent 调用流水（FR-390，见 ADR-076）：读+写 Ops；默认保留 14 天；供 MCP 复用 Record。
+	agentCallLogSvc := service.NewAgentCallLogService(db)
+	if n, err := agentCallLogSvc.PurgeExpired(); err != nil {
+		log.Printf("[WARN] 清理过期 agent 调用流水失败: %v", err)
+	} else if n > 0 {
+		log.Printf("[INFO] 已清理过期 agent 调用流水 %d 条", n)
+	}
 	// CP 内嵌 MCP 网关（FR-389，见 ADR-077）：Streamable HTTP + SSE，会话内存可运维。
 	mcpSessions := mcp.NewSessionManager(mcp.Config{
 		IdleTimeout:         cfg.MCP.IdleTimeout,
@@ -611,6 +618,7 @@ func main() {
 		RuntimeAssets:           runtimeAssetsSvc,
 		EnrollToken:             enrollTokenSvc,
 		AgentToken:              agentTokenSvc,
+		AgentCallLog:            agentCallLogSvc,
 		MCP:                     mcpHandler,
 		EnrollInstall: router.EnrollInstallConfig{
 			AdvertiseGRPC: cfg.Enroll.AdvertiseGRPC,

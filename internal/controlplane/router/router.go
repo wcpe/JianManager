@@ -106,8 +106,10 @@ type Services struct {
 	ClientDistExport *service.ClientDistExportService
 	RuntimeAssets *service.RuntimeAssetsService
 	EnrollToken   *service.EnrollTokenService
-	// AgentToken Agent 专用令牌 + 策略引擎（FR-384，见 ADR-079）；nil 时 agent 端点关闭。
+	// AgentToken Agent 专用令牌 + 策略引擎（FR-384，见 ADR-076）；nil 时 agent 端点关闭。
 	AgentToken *service.AgentTokenService
+	// AgentCallLog Agent 调用流水（FR-390，见 ADR-076）；nil 时不记流水、无 call-logs/count。
+	AgentCallLog *service.AgentCallLogService
 	// MCP 内嵌 MCP 网关（FR-389，见 ADR-077）；nil 时 /api/v1/mcp 与会话管理关闭。
 	MCP *mcp.Handler
 	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
@@ -516,9 +518,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			enrollTokenHandler := NewEnrollTokenHandler(svcs.EnrollToken, svcs.Audit, svcs.EnrollInstall, svcs.SelfUpdate)
 			enrollTokenHandler.RegisterRoutes(admin)
 		}
-		// Agent Token 管理（FR-384，见 ADR-079）：颁发/列表/吊销，限平台管理员；明文仅创建响应返回。
+		// Agent Token 管理（FR-384，见 ADR-076）：颁发/列表/吊销，限平台管理员；明文仅创建响应返回。
+		// FR-390：列表附 callCount24h；GET /agent/call-logs 查询调用流水。
 		if svcs.AgentToken != nil {
-			NewAgentTokenHandler(svcs.AgentToken, svcs.Audit).RegisterAdminRoutes(admin)
+			NewAgentTokenHandler(svcs.AgentToken, svcs.Audit, svcs.AgentCallLog).RegisterAdminRoutes(admin)
 		}
 		// MCP 会话运维（FR-389）：列表/踢线，限平台管理员 JWT。
 		if svcs.MCP != nil {
@@ -550,7 +553,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			}
 			c.Next()
 		})
-		NewAgentOpsHandler(svcs.AgentToken, svcs.Instance, svcs.Node, svcs.Audit).RegisterOpsRoutes(agentGroup)
+		NewAgentOpsHandler(svcs.AgentToken, svcs.Instance, svcs.Node, svcs.Audit, svcs.AgentCallLog).RegisterOpsRoutes(agentGroup)
 	}
 
 	// CP 内嵌 MCP 网关（FR-389 / ADR-077）：Streamable HTTP + SSE；仅 Agent Token。
