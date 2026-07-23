@@ -26,7 +26,8 @@ interface FileTreeProps {
   /** 点击目录回调。 */
   onSelectDir: (dir: string) => void
   /** 把某路径拖放到某目录回调（树内移动）。 */
-  onDropMove: (targetDir: string) => void
+  /** FR-377：第二参 dataTransfer 供跨窗解析条目。 */
+  onDropMove: (targetDir: string, dt?: DataTransfer) => void
   /** 外部刷新信号变化时，重置树（增删改后）。 */
   refreshKey: number
 }
@@ -194,7 +195,7 @@ export default function FileTree({
           onDrop={(e) => {
             e.preventDefault()
             setDragOver(null)
-            onDropMove(node.path)
+            onDropMove(node.path, e.dataTransfer)
           }}
         >
           <span
