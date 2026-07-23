@@ -70,7 +70,9 @@ describe('StoragePage（mock 假后端）', () => {
       expect(within(cacheRow as HTMLElement).getByText('0 B')).toBeInTheDocument()
       expect(within(cacheRow as HTMLElement).getByText('0')).toBeInTheDocument()
     })
-    expect(await screen.findByText('该目录为空')).toBeInTheDocument()
+    // FR-378：refreshKey 重拉后目录折叠，再展开 cache 应为空且无旧文件
+    await user.click(screen.getByRole('button', { name: 'cache' }))
+    expect(await screen.findByText(/该目录为空|空目录/)).toBeInTheDocument()
     expect(screen.queryByText('tmp-build.log')).not.toBeInTheDocument()
   })
 

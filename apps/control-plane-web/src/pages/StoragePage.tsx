@@ -1,10 +1,8 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
-  ChevronRight,
   Folder,
-  File as FileIcon,
   HardDrive,
   RefreshCw,
   Snowflake,
@@ -14,7 +12,6 @@ import { useQueryClient } from '@tanstack/react-query'
 
 import {
   useStorageOverview,
-  useStorageFiles,
   clearStorageCache,
   type DirUsage,
   type StorageOverview,
@@ -25,12 +22,13 @@ import { Button } from '@jianmanager/ui/components/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@jianmanager/ui/components/table'
 import { cn } from '@jianmanager/ui'
 import DangerConfirm from '@/components/DangerConfirm'
+import UnifiedExplorerShell from '@/components/file-browser/UnifiedExplorerShell'
+import { storageBrowseCapability } from '@/components/file-browser/capability'
+import { storageFileSource } from '@/components/file-browser/sources/storageSource'
 import {
   formatBytes,
   deriveArchive,
   sortDirsByUsage,
-  buildCrumbs,
-  joinStoragePath,
 } from './storage-view'
 
 /** 平台管理员角色值（与后端 model.RolePlatformAdmin 对齐）。 */
@@ -48,6 +46,9 @@ export default function StoragePage() {
   const { t } = useTranslation()
   const role = useAuthStore((s) => s.role)
   const { data, isLoading, isError } = useStorageOverview()
+  // FR-378：FileBrowser 不走 react-query，清理 cache 后靠 refreshKey 重拉树。
+  const [browseRefreshKey, setBrowseRefreshKey] = useState(0)
+  const bumpBrowse = () => setBrowseRefreshKey((k) => k + 1)
 
   if (role !== ROLE_PLATFORM_ADMIN) {
     return <p className="text-muted-foreground">{t('storage.adminOnly')}</p>
@@ -73,9 +74,9 @@ export default function StoragePage() {
       </div>
 
       <OverviewSection data={data} />
-      <DirUsageSection data={data} />
+      <DirUsageSection data={data} onCacheCleared={bumpBrowse} />
       <ArchiveSection data={data} />
-      <BrowserSection />
+      <BrowserSection refreshKey={browseRefreshKey} onRefresh={bumpBrowse} />
     </div>
   )
 }
@@ -124,7 +125,13 @@ function OverviewSection({ data }: { data: StorageOverview }) {
 
 /* ============================ FHS 子目录占用 ============================ */
 
-function DirUsageSection({ data }: { data: StorageOverview }) {
+function DirUsageSection({
+  data,
+  onCacheCleared,
+}: {
+  data: StorageOverview
+  onCacheCleared?: () => void
+}) {
   const { t } = useTranslation()
   const dirs = sortDirsByUsage(data.dirs)
 
@@ -142,7 +149,7 @@ function DirUsageSection({ data }: { data: StorageOverview }) {
         </TableHeader>
         <TableBody>
           {dirs.map((d) => (
-            <DirRow key={d.path} dir={d} />
+            <DirRow key={d.path} dir={d} onCacheCleared={onCacheCleared} />
           ))}
         </TableBody>
       </Table>
@@ -150,7 +157,7 @@ function DirUsageSection({ data }: { data: StorageOverview }) {
   )
 }
 
-function DirRow({ dir }: { dir: DirUsage }) {
+function DirRow({ dir, onCacheCleared }: { dir: DirUsage; onCacheCleared?: () => void }) {
   const { t } = useTranslation()
   // 用途标注键由后端给出（artifacts/jdks/...），i18n 缺键回退到原始键。
   const labelText = t(`storage.dirNames.${dir.label}`, { defaultValue: dir.label })
@@ -177,14 +184,26 @@ function DirRow({ dir }: { dir: DirUsage }) {
       <TableCell className="text-right tabular-nums">{formatBytes(dir.size)}</TableCell>
       <TableCell className="text-right tabular-nums">{dir.fileCount}</TableCell>
       <TableCell className="text-right">
-        {dir.clearable ? <ClearCacheButton size={dir.size} fileCount={dir.fileCount} /> : <span className="text-muted-foreground/40">—</span>}
+        {dir.clearable ? (
+          <ClearCacheButton size={dir.size} fileCount={dir.fileCount} onCleared={onCacheCleared} />
+        ) : (
+          <span className="text-muted-foreground/40">—</span>
+        )}
       </TableCell>
     </TableRow>
   )
 }
 
 /** cache 受控清理按钮 + 二次确认（FR-059，平台范围）。 */
-function ClearCacheButton({ size, fileCount }: { size: number; fileCount: number }) {
+function ClearCacheButton({
+  size,
+  fileCount,
+  onCleared,
+}: {
+  size: number
+  fileCount: number
+  onCleared?: () => void
+}) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const [confirming, setConfirming] = useState(false)
@@ -197,9 +216,10 @@ function ClearCacheButton({ size, fileCount }: { size: number; fileCount: number
     try {
       const removed = await clearStorageCache()
       toast.success(t('storage.cacheCleared', { count: removed }))
-      // 清理后占用变化，刷新概览。
+      // 清理后占用变化，刷新概览；并通知浏览壳重拉（FR-378 FileBrowser）。
       qc.invalidateQueries({ queryKey: ['storage', 'overview'] })
       qc.invalidateQueries({ queryKey: ['storage', 'files'] })
+      onCleared?.()
     } catch {
       toast.error(t('storage.clearFailed'))
     } finally {
@@ -288,14 +308,22 @@ function ArchiveSection({ data }: { data: StorageOverview }) {
 /* ============================ 只读文件浏览 ============================ */
 
 /**
- * 数据根只读浏览：面包屑 + 目录直接子项列表。仅下钻目录，不读文件内容
- * （守 CP 只读边界，避免敏感配置经此页泄露）。走 /storage/files?path=。
+ * 数据根浏览（FR-378）：经 UnifiedExplorerShell + storage FileBrowserSource，
+ * 与实例/分发共享只读浏览器壳；cache 清理仍在页级 DangerConfirm。
  */
-function BrowserSection() {
+function BrowserSection({
+  refreshKey,
+  onRefresh,
+}: {
+  refreshKey: number
+  onRefresh: () => void
+}) {
   const { t } = useTranslation()
-  const [path, setPath] = useState('')
-  const { data: entries, isLoading, isError, refetch, isFetching } = useStorageFiles(path)
-  const crumbs = buildCrumbs(path, t('storage.dataRoot'))
+  const source = useMemo(
+    () => storageFileSource({ noPreview: t('storage.noContentPreview') }),
+    [t],
+  )
+  const cap = useMemo(() => storageBrowseCapability(), [])
 
   return (
     <Panel
@@ -305,76 +333,20 @@ function BrowserSection() {
           variant="ghost"
           size="icon-xs"
           className="text-muted-foreground"
-          onClick={() => void refetch()}
-          disabled={isFetching}
+          onClick={onRefresh}
           aria-label={t('storage.refresh')}
         >
-          <RefreshCw className={cn('size-3.5', isFetching && 'animate-spin')} />
+          <RefreshCw className="size-3.5" />
         </Button>
       }
       bodyClassName="p-0"
     >
-      {/* 面包屑导航 */}
-      <div className="flex flex-wrap items-center gap-0.5 border-b px-3 py-1.5 text-xs">
-        {crumbs.map((c, i) => (
-          <span key={c.path} className="inline-flex items-center">
-            {i > 0 && <ChevronRight className="size-3 text-muted-foreground/50" />}
-            <button
-              type="button"
-              onClick={() => setPath(c.path)}
-              className={cn(
-                'rounded px-1 py-0.5 hover:bg-accent/60',
-                i === crumbs.length - 1 ? 'font-medium text-foreground' : 'text-muted-foreground',
-              )}
-            >
-              {c.name}
-            </button>
-          </span>
-        ))}
-      </div>
-
-      {isLoading ? (
-        <p className="px-3 py-8 text-center text-sm text-muted-foreground">{t('common.loading')}</p>
-      ) : isError ? (
-        <p className="px-3 py-8 text-center text-sm text-destructive">{t('storage.browseFailed')}</p>
-      ) : !entries || entries.length === 0 ? (
-        <p className="px-3 py-8 text-center text-sm text-muted-foreground">{t('storage.emptyDir')}</p>
-      ) : (
-        <Table className="text-xs">
-          <TableHeader className="bg-muted/40">
-            <TableRow>
-              <TableHead>{t('storage.name')}</TableHead>
-              <TableHead className="text-right">{t('storage.size')}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {entries.map((e) => (
-              <TableRow key={e.name}>
-                <TableCell>
-                  {e.isDir ? (
-                    <button
-                      type="button"
-                      onClick={() => setPath(joinStoragePath(path, e.name))}
-                      className="inline-flex items-center gap-1.5 text-foreground hover:underline"
-                    >
-                      <Folder className="size-3.5 shrink-0 text-status-info" />
-                      {e.name}
-                    </button>
-                  ) : (
-                    <span className="inline-flex items-center gap-1.5">
-                      <FileIcon className="size-3.5 shrink-0 text-muted-foreground" />
-                      {e.name}
-                    </span>
-                  )}
-                </TableCell>
-                <TableCell className="text-right tabular-nums text-muted-foreground">
-                  {e.isDir ? '—' : formatBytes(e.size)}
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      )}
+      <UnifiedExplorerShell
+        capability={cap}
+        source={source}
+        refreshKey={refreshKey}
+        className="min-h-[360px]"
+      />
     </Panel>
   )
 }
