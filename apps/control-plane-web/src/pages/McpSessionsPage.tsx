@@ -81,6 +81,9 @@ export default function McpSessionsPage() {
           <code className="break-all font-mono text-xs">{base}</code>
         </div>
         <p>{t('mcpSessions.endpointHint')}</p>
+        <p className="text-xs">{t('mcpSessions.endpointHintSse')}</p>
+        <p className="text-xs">{t('mcpSessions.authNote')}</p>
+        <p className="text-xs">{t('mcpSessions.protocolVersion')}</p>
         {cfg && (
           <p className="text-xs">
             {t('mcpSessions.timeouts', {
@@ -121,7 +124,11 @@ export default function McpSessionsPage() {
                     <div className="font-medium">{s.tokenName || `Token #${s.tokenId}`}</div>
                     <code className="font-mono text-[11px] text-muted-foreground">{s.tokenPrefix}…</code>
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{s.transport || '—'}</TableCell>
+                  <TableCell className="text-xs">
+                    {s.transport
+                      ? t(`agentCallLogs.transports.${s.transport}`, { defaultValue: s.transport })
+                      : '—'}
+                  </TableCell>
                   <TableCell className="font-mono text-xs">{s.clientIP || '—'}</TableCell>
                   <TableCell className="whitespace-nowrap text-xs tabular-nums">
                     {s.connectedAt ? new Date(s.connectedAt).toLocaleString() : '—'}

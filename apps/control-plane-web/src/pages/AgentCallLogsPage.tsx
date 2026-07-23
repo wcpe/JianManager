@@ -126,7 +126,7 @@ export default function AgentCallLogsPage() {
             <SelectItem value={SENTINEL_ALL}>{t('agentCallLogs.allClients')}</SelectItem>
             {['mcp', 'jmagent', 'curl', 'unknown'].map((c) => (
               <SelectItem key={c} value={c}>
-                {c}
+                {t(`agentCallLogs.clients.${c}`, { defaultValue: c })}
               </SelectItem>
             ))}
           </SelectContent>
@@ -199,7 +199,17 @@ export default function AgentCallLogsPage() {
                     <div className="font-medium">{row.tokenName || `#${row.tokenId}`}</div>
                   </TableCell>
                   <TableCell>
-                    <code className="font-mono text-[11px]">{row.action}</code>
+                    {(() => {
+                      const label = t(`audit.actions.${row.action}`, { defaultValue: row.action })
+                      return label === row.action ? (
+                        <code className="font-mono text-[11px]">{row.action}</code>
+                      ) : (
+                        <div className="min-w-0">
+                          <div className="truncate text-xs">{label}</div>
+                          <code className="font-mono text-[10px] text-muted-foreground">{row.action}</code>
+                        </div>
+                      )
+                    })()}
                     {(row.targetType || row.targetId) && (
                       <div className="text-[10px] text-muted-foreground">
                         {row.targetType}
@@ -207,8 +217,14 @@ export default function AgentCallLogsPage() {
                       </div>
                     )}
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{row.client}</TableCell>
-                  <TableCell className="font-mono text-xs">{row.transport || '—'}</TableCell>
+                  <TableCell className="text-xs">
+                    {t(`agentCallLogs.clients.${row.client}`, { defaultValue: row.client })}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {row.transport
+                      ? t(`agentCallLogs.transports.${row.transport}`, { defaultValue: row.transport })
+                      : '—'}
+                  </TableCell>
                   <TableCell>
                     <Badge variant={row.success ? 'default' : 'destructive'} className="text-[10px]">
                       {row.success ? t('agentCallLogs.success') : t('agentCallLogs.failed')}

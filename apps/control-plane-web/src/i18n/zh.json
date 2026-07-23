@@ -2710,7 +2710,23 @@
       "instance.import": "导入现有服务器",
       "node.pm.config": "配置节点包管理器",
       "node.pkg.install": "安装全局包",
-      "node.pkg.remove": "卸载全局包"
+      "node.pkg.remove": "卸载全局包",
+      "agent.whoami": "Agent 身份查询",
+      "agent.list_nodes": "Agent 列出节点",
+      "agent.list_instances": "Agent 列出实例",
+      "agent.get_instance": "Agent 查询实例",
+      "agent.get_instance_metrics": "Agent 查询实例指标",
+      "agent.get_instance_logs": "Agent 查询实例日志",
+      "agent.instance_start": "Agent 启动实例",
+      "agent.instance_stop": "Agent 停止实例",
+      "agent.instance_restart": "Agent 重启实例",
+      "agent.node_maintenance_enter": "Agent 进入节点维护",
+      "agent.node_maintenance_leave": "Agent 退出节点维护",
+      "agent.token.create": "签发 Agent Token",
+      "agent.token.revoke": "吊销 Agent Token",
+      "mcp.session.open": "MCP 会话建立",
+      "mcp.session.close": "MCP 会话关闭",
+      "mcp.session.kick": "MCP 会话踢线"
     },
     "failed": "失败",
     "errorContent": "错误内容"
@@ -2880,7 +2896,7 @@
     "copyUrl": "复制 MCP URL",
     "openLogs": "调用流水",
     "endpoint": "MCP 端点",
-    "endpointHint": "IDE / 远程客户端使用 Streamable HTTP：POST 此 URL 完成 initialize，后续请求带 Authorization: Bearer jmat_… 与 Mcp-Session-Id。",
+    "endpointHint": "IDE / 远程客户端使用 Streamable HTTP：向此 URL 发送 POST 完成 initialize；后续请求需带 Authorization: Bearer jmat_… 与 Mcp-Session-Id 响应头/请求头。",
     "timeouts": "空闲超时 {{idle}} · 绝对超时 {{absolute}} · 全局并发 {{global}} · 每 Token {{perToken}}",
     "empty": "当前无活跃 MCP 会话",
     "loadFailed": "加载会话失败",
@@ -2897,7 +2913,10 @@
       "lastActivity": "最近活动",
       "lastTool": "最近 tool",
       "actions": "操作"
-    }
+    },
+    "endpointHintSse": "SSE 兼容：GET /api/v1/mcp/sse 建立会话，再 POST /api/v1/mcp/message?sessionId=… 发送 JSON-RPC。",
+    "authNote": "鉴权仅接受 Agent Token（jmat_ 前缀），人类 JWT 不能打开 MCP 会话。",
+    "protocolVersion": "协议版本 2024-11-05（JSON-RPC 2.0 子集）。"
   },
   "agentCallLogs": {
     "title": "Agent 调用流水",
@@ -2926,6 +2945,17 @@
       "result": "结果",
       "latency": "耗时",
       "ip": "IP"
+    },
+    "clients": {
+      "mcp": "MCP",
+      "jmagent": "jmagent CLI",
+      "curl": "curl/HTTP",
+      "unknown": "未知客户端"
+    },
+    "transports": {
+      "streamable_http": "Streamable HTTP",
+      "sse": "SSE",
+      "http": "HTTP"
     }
   },
   "systemUpdate": {
@@ -3890,7 +3920,6 @@
     "saveRunOk": "运行已保存（#{{id}}）",
     "saveRunFailed": "保存运行失败"
   },
-
   "botLoad": {
     "disclaimer": "命令发送成功仅表示 Bot Worker 调用 bot.chat 时未同步抛错，不证明服务器接受、权限校验通过或产生预期业务效果。",
     "backToBots": "返回 Bot 管理",

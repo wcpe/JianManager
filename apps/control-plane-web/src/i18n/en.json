@@ -2731,7 +2731,23 @@
       "instance.import": "Import existing server",
       "node.pm.config": "Configure node package manager",
       "node.pkg.install": "Install global package",
-      "node.pkg.remove": "Remove global package"
+      "node.pkg.remove": "Remove global package",
+      "agent.whoami": "Agent whoami",
+      "agent.list_nodes": "Agent list nodes",
+      "agent.list_instances": "Agent list instances",
+      "agent.get_instance": "Agent get instance",
+      "agent.get_instance_metrics": "Agent get instance metrics",
+      "agent.get_instance_logs": "Agent get instance logs",
+      "agent.instance_start": "Agent start instance",
+      "agent.instance_stop": "Agent stop instance",
+      "agent.instance_restart": "Agent restart instance",
+      "agent.node_maintenance_enter": "Agent enter node maintenance",
+      "agent.node_maintenance_leave": "Agent leave node maintenance",
+      "agent.token.create": "Issue Agent Token",
+      "agent.token.revoke": "Revoke Agent Token",
+      "mcp.session.open": "MCP session open",
+      "mcp.session.close": "MCP session close",
+      "mcp.session.kick": "MCP session kick"
     },
     "failed": "Failed",
     "errorContent": "Error"
@@ -2901,7 +2917,7 @@
     "copyUrl": "Copy MCP URL",
     "openLogs": "Call logs",
     "endpoint": "MCP endpoint",
-    "endpointHint": "Remote clients use Streamable HTTP: POST this URL to initialize, then send Authorization: Bearer jmat_… and Mcp-Session-Id on subsequent requests.",
+    "endpointHint": "Remote clients use Streamable HTTP: POST this URL to initialize; subsequent requests require Authorization: Bearer jmat_… and the Mcp-Session-Id header.",
     "timeouts": "Idle {{idle}} · Absolute {{absolute}} · Global {{global}} · Per token {{perToken}}",
     "empty": "No active MCP sessions",
     "loadFailed": "Failed to load sessions",
@@ -2918,7 +2934,10 @@
       "lastActivity": "Last activity",
       "lastTool": "Last tool",
       "actions": "Actions"
-    }
+    },
+    "endpointHintSse": "SSE compatibility: GET /api/v1/mcp/sse to open a session, then POST /api/v1/mcp/message?sessionId=… with JSON-RPC.",
+    "authNote": "Only Agent Tokens (jmat_ prefix) are accepted; human JWTs cannot open MCP sessions.",
+    "protocolVersion": "Protocol version 2024-11-05 (JSON-RPC 2.0 subset)."
   },
   "agentCallLogs": {
     "title": "Agent Call Logs",
@@ -2947,6 +2966,17 @@
       "result": "Result",
       "latency": "Latency",
       "ip": "IP"
+    },
+    "clients": {
+      "mcp": "MCP",
+      "jmagent": "jmagent CLI",
+      "curl": "curl/HTTP",
+      "unknown": "Unknown"
+    },
+    "transports": {
+      "streamable_http": "Streamable HTTP",
+      "sse": "SSE",
+      "http": "HTTP"
     }
   },
   "systemUpdate": {
@@ -3890,7 +3920,6 @@
     "saveRunOk": "Run saved (#{{id}})",
     "saveRunFailed": "Failed to save run"
   },
-
   "botLoad": {
     "disclaimer": "Command send success only means Bot Worker called bot.chat without a synchronous error; it does not prove server acceptance, permission checks, or intended business effects.",
     "backToBots": "Back to Bots",
