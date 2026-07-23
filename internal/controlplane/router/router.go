@@ -50,6 +50,8 @@ type Services struct {
 	BotLoadCapacity  *service.BotLoadCapacityDirectory
 	BotLoadPreflight *service.BotLoadPreflightService
 	BotLoadExecution *service.BotLoadExecutionService
+	// BotLoadTemplate 命令压测模板（FR-370）；nil 时 /bots/load-templates 关闭。
+	BotLoadTemplate *service.BotLoadTemplateService
 	Alert            *service.AlertService
 	AlertChannel     *service.AlertChannelService
 	Schedule         *service.ScheduleService
@@ -253,6 +255,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		// Bot 分布式容量静态路由必须先于 /bots/:id 注册，且复用进程级 CapacityDirectory。
 		if svcs.BotLoadCapacity != nil {
 			NewBotLoadHandler(svcs.BotLoadCapacity, svcs.Instance, svcs.Authz).RegisterRoutes(protected)
+		}
+		// FR-370 模板静态路由也须先于 /bots/:id。
+		if svcs.BotLoadTemplate != nil {
+			NewBotLoadTemplateHandler(svcs.BotLoadTemplate, svcs.Authz).RegisterRoutes(protected)
 		}
 		if svcs.BotStressSession != nil {
 			botStressSessionHandler := NewBotStressSessionHandler(

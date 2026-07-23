@@ -210,6 +210,8 @@ func main() {
 	configSvc := service.NewConfigService(db, pool)
 	botSvc := service.NewBotService(db, pool)
 	botStressSessionSvc := service.NewBotStressSessionService(db, botSvc)
+	// FR-370 命令压测模板服务。
+	botLoadTemplateSvc := service.NewBotLoadTemplateService(db)
 	alertSvc := service.NewAlertService(db)
 	alertChannelSvc := service.NewAlertChannelService(db)
 	scheduleSvc := service.NewScheduleService(db)
@@ -552,6 +554,7 @@ func main() {
 		BotLoadCapacity:         botLoadSvcs.capacity,
 		BotLoadPreflight:        botLoadSvcs.preflight,
 		BotLoadExecution:        botLoadSvcs.execution,
+		BotLoadTemplate:         botLoadTemplateSvc,
 		Alert:                   alertSvc,
 		AlertChannel:            alertChannelSvc,
 		Schedule:                scheduleSvc,
