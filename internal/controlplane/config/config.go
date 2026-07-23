@@ -60,9 +60,23 @@ type Config struct {
 	ClientDist  ClientDistConfig  `mapstructure:"client_dist"`
 	Enroll      EnrollConfig      `mapstructure:"enroll"`
 	Update      UpdateConfig      `mapstructure:"update"`
+	// MCP 内嵌 MCP 网关会话限制（FR-389，见 ADR-077）。
+	MCP MCPConfig `mapstructure:"mcp"`
 	// Proxy CP 出站代理配置（FR-174，见 ADR-037）：自更新 feed/二进制、服务端 jar 等
 	// 出站下载经此代理。url 留空=直连（沿用环境变量代理）。与各 Worker 各自独立配置。
 	Proxy httpclient.Config `mapstructure:"proxy"`
+}
+
+// MCPConfig 内嵌 MCP 会话与并发（FR-389）。
+type MCPConfig struct {
+	// IdleTimeout 空闲超时（默认 30m）。
+	IdleTimeout time.Duration `mapstructure:"idle_timeout"`
+	// AbsoluteTimeout 绝对超时（默认 24h）。
+	AbsoluteTimeout time.Duration `mapstructure:"absolute_timeout"`
+	// MaxGlobalSessions 全局并发会话上限（默认 32）。
+	MaxGlobalSessions int `mapstructure:"max_global_sessions"`
+	// MaxSessionsPerToken 每 Token 并发上限（默认 4）。
+	MaxSessionsPerToken int `mapstructure:"max_sessions_per_token"`
 }
 
 // UpdateConfig 面板自更新（CP/Worker 二进制在线升级）配置（FR-081，GitHub 源见 FR-175/ADR-036 §7）。
@@ -218,6 +232,11 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("update.feed_url", "")
 	v.SetDefault("update.binary_base_url", "")
 	v.SetDefault("update.allow_insecure", false)
+	// 内嵌 MCP 网关（FR-389）：空闲 30m、绝对 24h、全局 32、每 Token 4。
+	v.SetDefault("mcp.idle_timeout", "30m")
+	v.SetDefault("mcp.absolute_timeout", "24h")
+	v.SetDefault("mcp.max_global_sessions", 32)
+	v.SetDefault("mcp.max_sessions_per_token", 4)
 	// 出站代理（FR-174，见 ADR-037）：默认空（直连/沿用环境变量代理），不破坏现状。
 	v.SetDefault("proxy.url", "")
 	v.SetDefault("proxy.no_proxy", "")

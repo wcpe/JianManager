@@ -1,6 +1,6 @@
 # 功能规格：CP 内嵌 MCP 长连接服务
 
-> 状态：草拟（并行前置，待审核）　·　关联 PRD：FR-389　·　依赖：FR-384　·　ADR：改写 077　·　取代：FR-386
+> 状态：开发中　·　关联 PRD：FR-389　·　依赖：FR-384　·　ADR：改写 077　·　取代：FR-386
 
 ## 1. 背景与目标
 
@@ -75,13 +75,13 @@ initialize(auth) → Authenticate → 检查并发 → 创建 session → tools/
 
 ## 4. 任务拆分
 
-- [ ] 改写 ADR-077 + 本 spec 状态开发中
-- [ ] 会话管理器：创建/踢线/超时/并发 + 单测
-- [ ] Streamable HTTP MCP 端点 + tools 映射 + 单测（mock service）
-- [ ] SSE 兼容端点 + 单测
-- [ ] 管理员 sessions list/kick API + 单测
-- [ ] 接入 router / 配置项（超时、并发）
-- [ ] 文档：API.md、ARCHITECTURE 一节、PRD FR-389→开发中
+- [x] 改写 ADR-077 + 本 spec 状态开发中
+- [x] 会话管理器：创建/踢线/超时/并发 + 单测
+- [x] Streamable HTTP MCP 端点 + tools 映射 + 单测（mock service）
+- [x] SSE 兼容端点 + 单测（路由已挂；传输与 streamable 共享会话表）
+- [x] 管理员 sessions list/kick API + 单测
+- [x] 接入 router / 配置项（超时、并发）
+- [x] 文档：API.md、ARCHITECTURE 一节、PRD FR-389→开发中
 - [ ] **真机**：远程持 Token 完成 initialize + tools/list + 一次 tool call；踢线后失败
 
 ## 5. 验收标准

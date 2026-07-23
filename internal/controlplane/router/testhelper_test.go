@@ -24,6 +24,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/config"
 	"github.com/wcpe/JianManager/internal/controlplane/database"
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/mcp"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
 	"github.com/wcpe/JianManager/internal/platform/dataroot"
@@ -185,6 +186,20 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 		// Agent Token 策略真源（FR-384/388）：测试路由需挂 agent 管理/运维面。
 		AgentToken: service.NewAgentTokenService(db),
 	}
+	// CP 内嵌 MCP（FR-389）：测试挂载会话管理器（小并发便于超限用例）。
+	agentTok := svcs.AgentToken
+	logSvc := svcs.Log
+	sess := mcp.NewSessionManager(mcp.Config{
+		IdleTimeout:         time.Hour,
+		AbsoluteTimeout:     24 * time.Hour,
+		MaxGlobalSessions:   32,
+		MaxSessionsPerToken: 4,
+	})
+	svcs.MCP = mcp.NewHandler(sess, agentTok, mcp.ToolDeps{
+		Instance: instanceSvc,
+		Node:     nodeSvc,
+		Log:      logSvc,
+	}, svcs.Audit)
 	return Setup(svcs, jwtCfg.Secret)
 }
 

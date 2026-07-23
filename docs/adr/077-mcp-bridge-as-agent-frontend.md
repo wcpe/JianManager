@@ -1,26 +1,33 @@
-# ADR-077: mcp-bridge 作为 Agent 协议前端
+# ADR-077: CP 内嵌 MCP 网关（取代 stdio mcp-bridge）
 
 - **日期**: 2026-07-23
-- **状态**: accepted（随 FR-386 开发落地）
-- **上下文**: IDE agent 需要 MCP；策略必须在 CP（ADR-076），且保持「单二进制起步」心智、不增常驻监听面。
+- **状态**: accepted（随 FR-389 开发落地；supersedes 原「stdio 独立 bridge」决策）
+- **上下文**: 远程 IDE / 运维需要可长连的 MCP，且会话可运维（可见、可踢、有超时）。首版独立进程 `apps/mcp-bridge`（FR-386 / 原 ADR-077：stdio 协议适配）无法支撑会话运维与远程 Streamable HTTP/SSE。策略仍须 100% 落在 CP（ADR-076）。
 
 ## 决策
 
-1. **独立进程** `apps/mcp-bridge`（Go），默认 **stdio** MCP。
-2. 仅作 **protocol adapter**：持 Token 调 CP Agent API，不二次实现 scope/写白名单。
-3. **不**默认暴露 SSE/HTTP MCP 端口；远程场景由 IDE 配置经 HTTPS 访问 CP。
-4. 工具集与 `jm-agent` 子集对齐；硬拒绝操作不注册为 tool。
+1. **在 Control Plane 内嵌 MCP 网关**（模块 `internal/controlplane/mcp/`），暴露：
+   - Streamable HTTP 主路径：`POST/GET /api/v1/mcp`
+   - SSE 兼容：`GET /api/v1/mcp/sse` + `POST /api/v1/mcp/message`
+2. **鉴权**：仅 Agent Token（`jmat_`）；复用 `middleware.AgentAuth` / `AgentTokenService.Authenticate`。人类 JWT **不得**充当 MCP 会话凭证。
+3. **协议适配 only**：工具调用内部只调既有 service / `ResolveAction`，**禁止**在 MCP 层复制 scope / 写白名单 / 硬拒绝策略。
+4. **工具集**与 jm-agent / Agent Ops 对齐；硬拒绝面操作**不注册**为 tool。
+5. **会话内存可运维**：sessionId、token 元数据、IP、传输类型、连接/活动时间、最近 tool、空闲/绝对超时；全局与每 Token 并发上限；管理员 JWT API 列表 / 踢线。
+6. **FR-386 stdio mcp-bridge**：标记废弃；删除 `apps/mcp-bridge` 属 **FR-392**（本 ADR 不强制本批删仓，但不得再作为推荐接入路径）。
 
 ## 理由
 
-- 与 CP 解耦便于单独升级 MCP SDK。
-- stdio 符合本机 IDE 接入习惯；无新增网络攻击面。
+- 会话列表/踢线/超时需要与 CP 进程同址的内存态与管理员面；独立 stdio 进程无法自然提供。
+- Streamable HTTP/SSE 是 MCP 远程推荐传输；CP 已有 HTTPS + Agent Token，无需新增常驻监听二进制。
+- 策略仍唯一落在 CP（ADR-076），避免 curl 与 MCP 分叉。
 
 ## 后果
 
-- 新发布物 mcp-bridge；依赖 FR-384 API 与 ADR-076。
-- 若未来要远程 MCP 端口，须另开 ADR 评估暴露面。
+- 新增配置项：空闲/绝对超时、全局/每 Token 并发（默认 30m / 24h / 32 / 4）。
+- CP 重启会话全丢：文档写明，可接受（单进程内存，HA 粘滞不在本期）。
+- FR-386 文档与发布物路径由 FR-392 清理；FR-388 矩阵入口改为 CP-MCP。
+- 依赖：若引入官方 MCP Go SDK 须单独审批；MVP 允许最小 JSON-RPC over HTTP 自实现。
 
 ## 关系
 
-- ADR-076、FR-386、FR-385（工具集对齐）。
+- ADR-076（策略真源）、FR-389（本决策落地）、FR-390（调用流水可选）、FR-392（删除 mcp-bridge）、FR-386（废弃）。

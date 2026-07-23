@@ -20,6 +20,7 @@ import (
 	"github.com/wcpe/JianManager/internal/controlplane/database"
 	cpembed "github.com/wcpe/JianManager/internal/controlplane/embed"
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
+	"github.com/wcpe/JianManager/internal/controlplane/mcp"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/router"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
@@ -247,6 +248,20 @@ func main() {
 	enrollTokenSvc := service.NewEnrollTokenService(db)
 	// Agent 专用令牌 + 策略引擎（FR-384，见 ADR-079）：与人类 JWT 分离，默认只读 + 写白名单 + scope。
 	agentTokenSvc := service.NewAgentTokenService(db)
+	// CP 内嵌 MCP 网关（FR-389，见 ADR-077）：Streamable HTTP + SSE，会话内存可运维。
+	mcpSessions := mcp.NewSessionManager(mcp.Config{
+		IdleTimeout:         cfg.MCP.IdleTimeout,
+		AbsoluteTimeout:     cfg.MCP.AbsoluteTimeout,
+		MaxGlobalSessions:   cfg.MCP.MaxGlobalSessions,
+		MaxSessionsPerToken: cfg.MCP.MaxSessionsPerToken,
+	})
+	mcpSessions.Start()
+	defer mcpSessions.Stop()
+	mcpHandler := mcp.NewHandler(mcpSessions, agentTokenSvc, mcp.ToolDeps{
+		Instance: instanceSvc,
+		Node:     nodeSvc,
+		Log:      logSvc,
+	}, auditSvc)
 	// 平台存储资源管理器（FR-083）：CP 侧数据根 FHS 只读浏览 + 占用统计 + cache 受控清理。
 	storageSvc := service.NewStorageService(db, root)
 	// 数据库资源管理器只读浏览（FR-084）：CP 独有数据源，仅平台管理员；只读 + 敏感列脱敏。
@@ -596,6 +611,7 @@ func main() {
 		RuntimeAssets:           runtimeAssetsSvc,
 		EnrollToken:             enrollTokenSvc,
 		AgentToken:              agentTokenSvc,
+		MCP:                     mcpHandler,
 		EnrollInstall: router.EnrollInstallConfig{
 			AdvertiseGRPC: cfg.Enroll.AdvertiseGRPC,
 			GRPCPort:      cfg.GRPC.Port,

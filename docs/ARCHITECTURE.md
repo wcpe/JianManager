@@ -13,13 +13,14 @@
     ▼
 Control Plane (Go 单二进制)
     ├── 跨 Worker Bot 调度与 desired-state 真源（FR-351/ADR-074）
-    ├── Agent 策略真源（FR-384~388 / ADR-079）：jmat_* Token + 写白名单 + scope + 硬拒绝
+    ├── Agent 策略真源（FR-384~388 / ADR-076）：jmat_* Token + 写白名单 + scope + 硬拒绝
+    ├── 内嵌 MCP 网关（FR-389 / ADR-077）：Streamable HTTP + SSE，`/api/v1/mcp`，会话内存可运维
     │ gRPC —— 指令优先经 Worker 主动建立的「反向隧道」下发（Worker 零入站，FR-281/ADR-066）；
     │         无隧道（老 Worker / 重建窗口）回退 CP 直拨 worker gRPC 端口
     ▲
     │ HTTPS + Bearer jmat_*（与人类 JWT 物理同端口、语义分离）
     ├── jmagent CLI（FR-385，脚本/CI）
-    └── mcp-bridge（FR-386，stdio MCP → 同上 Agent API；不持策略，ADR-077）
+    └── mcp-bridge（FR-386，stdio；**废弃推荐路径**，删除属 FR-392；新接入用 CP `/api/v1/mcp`）
     ▼
 Worker Node (Go) × 20~100
     ├── 游戏服进程管理 (direct/daemon/docker)
@@ -47,7 +48,8 @@ Worker Node (Go) × 20~100
 | 客户端 | 语言 | 职责 |
 |---|---|---|
 | jmagent | Go 独立二进制 | 经 CP Agent API 的脚本/CI 入口（FR-385） |
-| mcp-bridge | Go 独立二进制 | stdio MCP 协议适配 → 同一 Agent API（FR-386 / ADR-077） |
+| IDE / MCP 客户端 | 任意 | 经 CP 内嵌 MCP（`/api/v1/mcp`，FR-389 / ADR-077）持 jmat_ 长连 |
+| mcp-bridge | Go 独立二进制 | 旧 stdio 适配（FR-386，废弃；FR-392 删除） |
 | jmctl | Go 独立二进制 | 本机紧急直连 daemon（FR-184 / ADR-041）；**不是** Agent 日常面 |
 
 ## 3. 技术栈
@@ -97,7 +99,8 @@ internal/controlplane/
   database/                      # GORM 初始化、迁移与数据根解析
   middleware/                    # JWT、Agent Token、访问上下文、审计、限流、分发防护
   model/                         # 用户/组/节点/实例、agent_tokens、指标、任务、通知、客户端分发、业务事件等模型
-  router/                        # REST API：实例/节点/终端/文件/Bot/监控/客户端分发/业务域/agent 等
+  mcp/                           # 内嵌 MCP 网关（FR-389）：会话管理、JSON-RPC、Streamable HTTP/SSE、tools 映射
+  router/                        # REST API：实例/节点/终端/文件/Bot/监控/客户端分发/业务域/agent/mcp 等
   service/                       # 领域服务；含 agent_token 策略引擎、terminal_proxy、business_events、client_*、metric/log/task/notification/selfupdate
   grpc/{pool,handler}.go         # Worker 连接池、注册/心跳/流式事件控制面
   embed/{static,probe,install_scripts,client_updater}.go # 前端、探针、安装脚本与客户端更新器内嵌
@@ -135,23 +138,24 @@ apps/jmctl/       # 紧急 daemon CLI（FR-184）
 - 节点管理：限平台管理员
 - 配额：创建实例时校验 `MaxInstances`/`MaxBots`/`MaxStorageMB`（0 表示不限）；`GET /groups/:id/quota` 返回用量
 
-### 4.1.1 Agent 接入与策略真源（FR-384~388 / ADR-079/077）
+### 4.1.1 Agent 接入与策略真源（FR-384~388 / ADR-076/077）
 
 Agent（IDE / 脚本 / CI）**不复用人类 JWT**，使用专用 Token（明文前缀 `jmat_`，库内只存 SHA-256）。
 
 ```
 平台管理员 JWT
     │ POST /api/v1/agent/tokens 签发（明文仅一次）
+    │ GET/DELETE /api/v1/agent/mcp/sessions 会话运维
     ▼
 agent_tokens 表（scope 实例/节点 + write_allowlist + 过期/吊销）
     │
     │ Bearer jmat_* → middleware.AgentAuth + ResolveAction
     ▼
-Agent 运维 API（/api/v1/agent/*）
-    ▲
-    ├── jmagent（CLI）
-    ├── mcp-bridge（stdio MCP tools → 同一 HTTP）
-    └── curl / 任意 HTTP 客户端
+Agent 运维 API（/api/v1/agent/*）  +  内嵌 MCP（/api/v1/mcp）
+    ▲                                    ▲
+    ├── jmagent（CLI）                   │ tools → 同一 ResolveAction / service
+    ├── curl / 任意 HTTP 客户端          │ 会话：内存 SessionManager（空闲/绝对超时、并发上限）
+    └── （废弃）mcp-bridge stdio         │ 传输：Streamable HTTP 主 + SSE 兼容
 ```
 
 **策略（CP 唯一真源，入口不得本地发明）**：
@@ -162,7 +166,9 @@ Agent 运维 API（/api/v1/agent/*）
 | 写白名单 MVP | `instance.life`（start/stop/restart，**无 kill**）、`node.maintenance`（enter/leave） |
 | 资源 scope | 实例 ID / 节点 ID 白名单；越界 403 |
 | 硬拒绝 | 用户/组/权限、平台设置、DB 浏览、自更新、删节点/实例、kill、制品/密钥、审计删除等 |
-| 错误 | 401 无效/吊销/过期；403 策略拒绝（非 5xx 静默） |
+| 错误 | 401 无效/吊销/过期；403 策略拒绝（非 5xx 静默）；MCP tool 策略拒绝 → HTTP 200 + `isError=true` + 中文 |
+
+**内嵌 MCP（FR-389 / ADR-077）**：模块 `internal/controlplane/mcp/`；配置 `mcp.idle_timeout`（默认 30m）、`absolute_timeout`（24h）、`max_global_sessions`（32）、`max_sessions_per_token`（4）。CP 重启会话全丢（可接受）。人类 JWT 不能充当 MCP 会话凭证。
 
 **与 jmctl 的边界**：jmctl 绕开 CP、直连本机 daemon（故障应急）；Agent 面**必须**经 CP，以便鉴权、scope、审计 `actor_kind=agent`。契约与可证门禁见 `docs/specs/agent-safety-gate/contract.md` 与 CI job `agent-gate`（FR-388）。本机冒烟证据见 `.tmp/acceptance-agent-smoke-2026-07-23.md`。
 

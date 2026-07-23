@@ -3303,6 +3303,65 @@ Agent 使用独立 Bearer Token（明文前缀 `jmat_`），与人类 JWT 分离
 | 401 | UNAUTHORIZED | 缺 Token / 非 jmat_ / 无效 / 吊销 / 过期 |
 | 403 | FORBIDDEN | scope 外、写白名单外、硬拒绝、空 scope list |
 
+---
+
+## CP 内嵌 MCP（FR-389 / ADR-077）
+
+Control Plane 内嵌 MCP 网关（最小 JSON-RPC over HTTP，无第三方 MCP SDK）。**路径写死**：
+
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/api/v1/mcp` | POST | Streamable HTTP 主路径：`initialize` 创建会话；后续带 `Mcp-Session-Id` 发 JSON-RPC（`tools/list`、`tools/call`、`ping` 等） |
+| `/api/v1/mcp` | GET | 需 `Mcp-Session-Id`：返回会话元数据（保活） |
+| `/api/v1/mcp` | DELETE | 客户端结束会话（需 `Mcp-Session-Id`） |
+| `/api/v1/mcp/sse` | GET | SSE 兼容：建立 SSE 会话，推送 `endpoint` 事件 |
+| `/api/v1/mcp/message` | POST | SSE 配套消息口：`?sessionId=` 或 `Mcp-Session-Id`；响应经 SSE 推送 |
+
+- **鉴权**：仅 Agent Token（`Authorization: Bearer jmat_...`）。人类 JWT **不能**建立 MCP 会话（401）。
+- **会话响应头**：`Mcp-Session-Id: mcps_<hex>`
+- **工具集**（硬拒绝面不注册）：`agent_whoami`、`agent_list_nodes`、`agent_list_instances`、`agent_get_instance`、`agent_get_instance_metrics`、`agent_get_instance_logs`、`instance_start`、`instance_stop`、`instance_restart`、`node_maintenance_enter`、`node_maintenance_leave`
+- **策略**：tool 内部走 `ResolveAction` + 既有 Instance/Node/Log service；策略拒绝 → HTTP **200** + MCP `result.isError=true` + 中文 message（**不得 5xx**）
+- **并发/超时**（配置 `mcp.*`，默认空闲 30m / 绝对 24h / 全局 32 / 每 Token 4）：超限 HTTP **429**，中文 `message`
+- **会话生命周期**：CP 重启全丢（内存）；空闲/绝对超时或管理员踢线后 context 取消
+
+### GET /api/v1/agent/mcp/sessions
+- **描述**: 列出当前内存中的 MCP 会话
+- **关联 FR**: FR-389
+- **权限**: 平台管理员 JWT
+- **响应** (200):
+  ```json
+  {
+    "sessions": [
+      {
+        "sessionId": "mcps_...",
+        "tokenId": 1,
+        "tokenName": "ci",
+        "tokenPrefix": "jmat_ab12",
+        "clientIP": "1.2.3.4",
+        "transport": "streamable_http",
+        "connectedAt": "...",
+        "lastActivityAt": "...",
+        "lastTool": "agent_whoami",
+        "idleTimeout": "30m0s",
+        "absoluteTimeout": "24h0m0s"
+      }
+    ],
+    "config": {
+      "idleTimeout": "30m0s",
+      "absoluteTimeout": "24h0m0s",
+      "maxGlobalSessions": 32,
+      "maxSessionsPerToken": 4
+    }
+  }
+  ```
+
+### DELETE /api/v1/agent/mcp/sessions/:id
+- **描述**: 强制踢线指定 MCP 会话（取消 context，进行中 tool call 失败）
+- **关联 FR**: FR-389
+- **权限**: 平台管理员 JWT
+- **响应** (200): `{ "ok": true }`
+- **错误**: 404 会话不存在
+- **审计**: `mcp.session.kick`
 
 ## 错误码
 

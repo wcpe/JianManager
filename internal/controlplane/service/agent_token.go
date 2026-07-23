@@ -128,6 +128,8 @@ func IsAgentHardDeny(action string) bool {
 type AgentPrincipal struct {
 	TokenID           uint
 	Name              string
+	// TokenPrefix 明文前缀（如 jmat_ab12），供 MCP 会话列表展示；不泄露全文。
+	TokenPrefix       string
 	ScopedInstanceIDs []uint
 	ScopedNodeIDs     []uint
 	WriteAllowlist    []string
@@ -329,6 +331,7 @@ func principalFromToken(tok *model.AgentToken) (*AgentPrincipal, error) {
 	return &AgentPrincipal{
 		TokenID:           tok.ID,
 		Name:              tok.Name,
+		TokenPrefix:       tok.TokenPrefix,
 		ScopedInstanceIDs: instIDs,
 		ScopedNodeIDs:     nodeIDs,
 		WriteAllowlist:    allow,

@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/wcpe/JianManager/internal/controlplane/embed"
+	"github.com/wcpe/JianManager/internal/controlplane/mcp"
 	"github.com/wcpe/JianManager/internal/controlplane/middleware"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/internal/controlplane/service"
@@ -107,6 +108,8 @@ type Services struct {
 	EnrollToken   *service.EnrollTokenService
 	// AgentToken Agent 专用令牌 + 策略引擎（FR-384，见 ADR-079）；nil 时 agent 端点关闭。
 	AgentToken *service.AgentTokenService
+	// MCP 内嵌 MCP 网关（FR-389，见 ADR-077）；nil 时 /api/v1/mcp 与会话管理关闭。
+	MCP *mcp.Handler
 	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
 	EnrollInstall EnrollInstallConfig
 	Storage       *service.StorageService
@@ -517,6 +520,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		if svcs.AgentToken != nil {
 			NewAgentTokenHandler(svcs.AgentToken, svcs.Audit).RegisterAdminRoutes(admin)
 		}
+		// MCP 会话运维（FR-389）：列表/踢线，限平台管理员 JWT。
+		if svcs.MCP != nil {
+			svcs.MCP.RegisterAdminRoutes(admin)
+		}
 		// 数据库资源管理器只读浏览（FR-084）：CP 独有数据源，仅平台管理员；只读 + 敏感列脱敏。
 		if svcs.DBBrowse != nil {
 			dbBrowseHandler := NewDBBrowseHandler(svcs.DBBrowse)
@@ -544,6 +551,20 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			c.Next()
 		})
 		NewAgentOpsHandler(svcs.AgentToken, svcs.Instance, svcs.Node, svcs.Audit).RegisterOpsRoutes(agentGroup)
+	}
+
+	// CP 内嵌 MCP 网关（FR-389 / ADR-077）：Streamable HTTP + SSE；仅 Agent Token。
+	if svcs.MCP != nil && svcs.AgentToken != nil {
+		mcpGroup := api.Group("/mcp")
+		mcpGroup.Use(middleware.AgentAuth(svcs.AgentToken))
+		mcpGroup.Use(func(c *gin.Context) {
+			if middleware.GetAgentPrincipal(c) == nil {
+				c.AbortWithStatusJSON(401, gin.H{"error": "UNAUTHORIZED", "message": "需要有效的 Agent Token（jmat_ 前缀）"})
+				return
+			}
+			c.Next()
+		})
+		svcs.MCP.RegisterMCPRoutes(mcpGroup)
 	}
 
 	// Worker 一键安装脚本匿名静态端点（FR-080，见 ADR-020 §2）：一键命令 `curl <cp>/install-worker.sh | sh`
