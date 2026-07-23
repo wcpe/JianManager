@@ -99,8 +99,10 @@ type Services struct {
 	ClientDistObservability *service.ClientDistObservabilityService
 	// ClientDistExport 分发统计与安全日志 CSV 导出（FR-361）。
 	ClientDistExport *service.ClientDistExportService
-	RuntimeAssets    *service.RuntimeAssetsService
-	EnrollToken      *service.EnrollTokenService
+	RuntimeAssets *service.RuntimeAssetsService
+	EnrollToken   *service.EnrollTokenService
+	// AgentToken Agent 专用令牌 + 策略引擎（FR-384，见 ADR-076）；nil 时 agent 端点关闭。
+	AgentToken *service.AgentTokenService
 	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
 	EnrollInstall EnrollInstallConfig
 	Storage       *service.StorageService
@@ -498,6 +500,10 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			enrollTokenHandler := NewEnrollTokenHandler(svcs.EnrollToken, svcs.Audit, svcs.EnrollInstall, svcs.SelfUpdate)
 			enrollTokenHandler.RegisterRoutes(admin)
 		}
+		// Agent Token 管理（FR-384，见 ADR-076）：颁发/列表/吊销，限平台管理员；明文仅创建响应返回。
+		if svcs.AgentToken != nil {
+			NewAgentTokenHandler(svcs.AgentToken, svcs.Audit).RegisterAdminRoutes(admin)
+		}
 		// 数据库资源管理器只读浏览（FR-084）：CP 独有数据源，仅平台管理员；只读 + 敏感列脱敏。
 		if svcs.DBBrowse != nil {
 			dbBrowseHandler := NewDBBrowseHandler(svcs.DBBrowse)
@@ -510,6 +516,21 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			selfUpdateHandler := NewSelfUpdateHandler(svcs.SelfUpdate, svcs.Audit)
 			selfUpdateHandler.RegisterRoutes(admin)
 		}
+	}
+
+	// Agent 运维面（FR-384）：Bearer Agent Token（jmat_*），不走人类 JWT；策略在 CP 唯一真源。
+	if svcs.AgentToken != nil && svcs.Instance != nil && svcs.Node != nil {
+		agentGroup := api.Group("")
+		agentGroup.Use(middleware.AgentAuth(svcs.AgentToken))
+		// 要求已注入 agent principal，否则 401（拒绝纯 JWT 误入此组的写路径混用）
+		agentGroup.Use(func(c *gin.Context) {
+			if middleware.GetAgentPrincipal(c) == nil {
+				c.AbortWithStatusJSON(401, gin.H{"error": "UNAUTHORIZED", "message": "需要有效的 Agent Token（jmat_ 前缀）"})
+				return
+			}
+			c.Next()
+		})
+		NewAgentOpsHandler(svcs.AgentToken, svcs.Instance, svcs.Node, svcs.Audit).RegisterOpsRoutes(agentGroup)
 	}
 
 	// Worker 一键安装脚本匿名静态端点（FR-080，见 ADR-020 §2）：一键命令 `curl <cp>/install-worker.sh | sh`

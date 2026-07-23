@@ -235,6 +235,8 @@ func main() {
 	// 节点 enrollment token（一键安装 / 傻瓜部署，FR-080，见 ADR-020）：
 	// 一次性、限时的新节点准入凭据，落库只存哈希、明文签发时一次性返回。
 	enrollTokenSvc := service.NewEnrollTokenService(db)
+	// Agent 专用令牌 + 策略引擎（FR-384，见 ADR-076）：与人类 JWT 分离，默认只读 + 写白名单 + scope。
+	agentTokenSvc := service.NewAgentTokenService(db)
 	// 平台存储资源管理器（FR-083）：CP 侧数据根 FHS 只读浏览 + 占用统计 + cache 受控清理。
 	storageSvc := service.NewStorageService(db, root)
 	// 数据库资源管理器只读浏览（FR-084）：CP 独有数据源，仅平台管理员；只读 + 敏感列脱敏。
@@ -576,6 +578,7 @@ func main() {
 		ClientDistExport:        clientDistExportSvc,
 		RuntimeAssets:           runtimeAssetsSvc,
 		EnrollToken:             enrollTokenSvc,
+		AgentToken:              agentTokenSvc,
 		EnrollInstall: router.EnrollInstallConfig{
 			AdvertiseGRPC: cfg.Enroll.AdvertiseGRPC,
 			GRPCPort:      cfg.GRPC.Port,
