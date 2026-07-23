@@ -9,11 +9,17 @@
 ```
 浏览器 (React SPA, go:embed 嵌入 Control Plane)
     │ HTTP REST /api/v1/*  +  WS /ws/terminal（终端经 CP 中转，浏览器不直连 Worker）
+    │ JWT 人类会话
     ▼
 Control Plane (Go 单二进制)
     ├── 跨 Worker Bot 调度与 desired-state 真源（FR-351/ADR-074）
+    ├── Agent 策略真源（FR-384~388 / ADR-076）：jmat_* Token + 写白名单 + scope + 硬拒绝
     │ gRPC —— 指令优先经 Worker 主动建立的「反向隧道」下发（Worker 零入站，FR-281/ADR-066）；
     │         无隧道（老 Worker / 重建窗口）回退 CP 直拨 worker gRPC 端口
+    ▲
+    │ HTTPS + Bearer jmat_*（与人类 JWT 物理同端口、语义分离）
+    ├── jmagent CLI（FR-385，脚本/CI）
+    └── mcp-bridge（FR-386，stdio MCP → 同上 Agent API；不持策略，ADR-077）
     ▼
 Worker Node (Go) × 20~100
     ├── 游戏服进程管理 (direct/daemon/docker)
@@ -24,15 +30,25 @@ Worker Node (Go) × 20~100
     └── 指标采集（ServerProbe /metrics）
         ▲ HTTP GET /metrics (本机回环抓取)  +  ◀ 反向 WS (探针桥, 治理/事件通道)
         └── ServerProbe 探针 jar (运行于游戏服 JVM, FR-010 监控见 ADR-014, 治理桥见 ADR-016)
+
+本机紧急（与 Agent 正交）：jmctl → daemon socket（FR-184/ADR-041；无 CP、无 jmat_）
 ```
 
 ## 2. 三进程模型
 
 | 进程 | 语言 | 部署 | 职责 |
 |---|---|---|---|
-| Control Plane | Go | 1 个实例 | API、认证、跨 Worker 调度与 desired-state 真源、gRPC 客户端池（隧道优先/直拨回退）、终端 WS 中转、前端静态文件 |
+| Control Plane | Go | 1 个实例 | API、人类 JWT + Agent Token 鉴权、跨 Worker 调度与 desired-state 真源、gRPC 客户端池（隧道优先/直拨回退）、终端 WS 中转、前端静态文件 |
 | Worker Node | Go | 20-100 个实例 | gRPC 服务端 + 反向隧道客户端、进程管理、Docker 管理、Bot 容量/runtime 真源、WS 终端服务（本机桥/回退） |
 | Bot Worker | Node.js | 由 Worker 按需 spawn | Mineflayer 连接、行为引擎、寻路、脚本执行；仅经 stdin/stdout JSON IPC 受管 |
+
+旁路客户端（非常驻服务进程，不改三进程模型）：
+
+| 客户端 | 语言 | 职责 |
+|---|---|---|
+| jmagent | Go 独立二进制 | 经 CP Agent API 的脚本/CI 入口（FR-385） |
+| mcp-bridge | Go 独立二进制 | stdio MCP 协议适配 → 同一 Agent API（FR-386 / ADR-077） |
+| jmctl | Go 独立二进制 | 本机紧急直连 daemon（FR-184 / ADR-041）；**不是** Agent 日常面 |
 
 ## 3. 技术栈
 
@@ -79,12 +95,20 @@ cmd/control-plane/main.go
 internal/controlplane/
   config/                        # control-plane.yml 与环境变量覆盖
   database/                      # GORM 初始化、迁移与数据根解析
-  middleware/                    # JWT、访问上下文、审计、限流、分发防护
-  model/                         # 用户/组/节点/实例、指标、任务、通知、客户端分发、业务事件等模型
-  router/                        # REST API：实例/节点/终端/文件/Bot/监控/客户端分发/业务域等
-  service/                       # 领域服务；含 terminal_proxy、business_events、client_*、metric/log/task/notification/selfupdate
+  middleware/                    # JWT、Agent Token、访问上下文、审计、限流、分发防护
+  model/                         # 用户/组/节点/实例、agent_tokens、指标、任务、通知、客户端分发、业务事件等模型
+  router/                        # REST API：实例/节点/终端/文件/Bot/监控/客户端分发/业务域/agent 等
+  service/                       # 领域服务；含 agent_token 策略引擎、terminal_proxy、business_events、client_*、metric/log/task/notification/selfupdate
   grpc/{pool,handler}.go         # Worker 连接池、注册/心跳/流式事件控制面
   embed/{static,probe,install_scripts,client_updater}.go # 前端、探针、安装脚本与客户端更新器内嵌
+```
+
+旁路二进制（monorepo `apps/`）：
+
+```
+apps/jmagent/     # Agent CLI（FR-385）
+apps/mcp-bridge/  # MCP stdio 适配（FR-386）
+apps/jmctl/       # 紧急 daemon CLI（FR-184）
 ```
 
 ### 4.1 权限模型（RBAC）
@@ -100,7 +124,7 @@ internal/controlplane/
 
 **权限节点**（`service/authz.go`）：`user:*`、`group:*`、`node:*`、`instance:*`、`file:*`、`terminal:access`、`bot:*`。
 
-**授权链路**：
+**授权链路（人类 JWT）**：
 1. `middleware.JWTAuth` → 解析 JWT，写入 `userId/role`
 2. `middleware.LoadAccess` → 调用 `AuthzService.LoadUserAccess` 加载用户的组成员关系（管理组/所属组集合），写入 `access` 上下文
 3. 处理器内调用 `AuthzService.CanAccessInstance/CanManageGroup/CanAccessBot` 做资源级隔离判断；平台管理员全量放行
@@ -110,6 +134,37 @@ internal/controlplane/
 - 跨组隔离：组 A 成员不能读写组 B 的实例/文件/终端/Bot；未授权访问返回 404（避免泄露存在性）
 - 节点管理：限平台管理员
 - 配额：创建实例时校验 `MaxInstances`/`MaxBots`/`MaxStorageMB`（0 表示不限）；`GET /groups/:id/quota` 返回用量
+
+### 4.1.1 Agent 接入与策略真源（FR-384~388 / ADR-076/077）
+
+Agent（IDE / 脚本 / CI）**不复用人类 JWT**，使用专用 Token（明文前缀 `jmat_`，库内只存 SHA-256）。
+
+```
+平台管理员 JWT
+    │ POST /api/v1/agent/tokens 签发（明文仅一次）
+    ▼
+agent_tokens 表（scope 实例/节点 + write_allowlist + 过期/吊销）
+    │
+    │ Bearer jmat_* → middleware.AgentAuth + ResolveAction
+    ▼
+Agent 运维 API（/api/v1/agent/*）
+    ▲
+    ├── jmagent（CLI）
+    ├── mcp-bridge（stdio MCP tools → 同一 HTTP）
+    └── curl / 任意 HTTP 客户端
+```
+
+**策略（CP 唯一真源，入口不得本地发明）**：
+
+| 层 | 规则 |
+|---|---|
+| 默认 | 只读（列表/状态/指标等，仍受 scope 收敛） |
+| 写白名单 MVP | `instance.life`（start/stop/restart，**无 kill**）、`node.maintenance`（enter/leave） |
+| 资源 scope | 实例 ID / 节点 ID 白名单；越界 403 |
+| 硬拒绝 | 用户/组/权限、平台设置、DB 浏览、自更新、删节点/实例、kill、制品/密钥、审计删除等 |
+| 错误 | 401 无效/吊销/过期；403 策略拒绝（非 5xx 静默） |
+
+**与 jmctl 的边界**：jmctl 绕开 CP、直连本机 daemon（故障应急）；Agent 面**必须**经 CP，以便鉴权、scope、审计 `actor_kind=agent`。契约与可证门禁见 `docs/specs/agent-safety-gate/contract.md` 与 CI job `agent-gate`（FR-388）。本机冒烟证据见 `.tmp/acceptance-agent-smoke-2026-07-23.md`。
 
 ### 4.2 Bot 目标实例与执行节点（FR-351 / ADR-074）
 
