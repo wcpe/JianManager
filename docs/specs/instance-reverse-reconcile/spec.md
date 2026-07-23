@@ -1,7 +1,8 @@
 # 功能规格：CP↔Worker 实例反向对账
 
-> 状态：草拟　·　关联 PRD：FR-326　·　分支：feature/fr-326-instance-reverse-reconcile  
-> 增强：FR-310 孤儿评估缺口 (b)　·　相关：ADR-003 守护链路；正向对账（心跳真源置 STOPPED）已有
+> 状态：已审核（2026-07-23）　·　关联 PRD：FR-326　·　分支：feature/fr-326-instance-reverse-reconcile  
+> 增强：FR-310 孤儿评估缺口 (b)　·　相关：ADR-003 守护链路；正向对账（心跳真源置 STOPPED）已有  
+> 并行计划：`.tmp/parallel-plan-2026-07-23.md`（与 FR-365/369 第一批并行；ADR 若新增用占位 `XXXX`）
 
 ## 1. 背景与目标
 
