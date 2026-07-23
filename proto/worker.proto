@@ -159,6 +159,10 @@ service WorkerService {
   rpc CloneWorkDir(CloneWorkDirRequest) returns (CloneWorkDirResponse);
   // RemoveInstance 移除实例注册并删除其工作目录与派生索引（CP 删除实例时真清理，兑现「所有数据将被删除」）。
   rpc RemoveInstance(RemoveInstanceRequest) returns (RemoveInstanceResponse);
+  // DisposeOrphanRuntime 处置无主运行时（FR-326）：CP 反向对账发现 Worker 有、CP 无记录的实例后下发。
+  // Worker 停进程树并清理本地运行态元数据（PID/sock/注册表），不删工作目录、不重建 CP 记录。
+  // 老 Worker 返回 Unimplemented，CP 记日志不崩（向后兼容）。
+  rpc DisposeOrphanRuntime(DisposeOrphanRuntimeRequest) returns (DisposeOrphanRuntimeResponse);
 
   // === Docker 镜像管理（FR-078，见 ADR-019）===
 
@@ -342,6 +346,20 @@ message TaskSnapshot {
 message InstanceState {
   string instance_uuid = 1;
   string state = 2; // STOPPED, STARTING, RUNNING, STOPPING, CRASHED
+  // pid 受管实例根进程 PID（可选，FR-326 反向对账诊断；0/缺省=未知或未运行）。
+  // 老 Worker 不上报本字段（零值），老 CP 忽略；不改变正向对账语义。
+  int32 pid = 3;
+}
+
+// DisposeOrphanRuntimeRequest CP 请求 Worker 清理无主运行时（FR-326）。
+message DisposeOrphanRuntimeRequest {
+  string instance_uuid = 1;
+}
+
+// DisposeOrphanRuntimeResponse 处置结果。
+message DisposeOrphanRuntimeResponse {
+  bool success = 1;
+  string error = 2;
 }
 
 // InstanceMetricSample 心跳负载里携带的每实例 ServerProbe 指标快照（FR-060 时序留存）。

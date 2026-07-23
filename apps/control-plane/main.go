@@ -235,7 +235,7 @@ func main() {
 	// 节点 enrollment token（一键安装 / 傻瓜部署，FR-080，见 ADR-020）：
 	// 一次性、限时的新节点准入凭据，落库只存哈希、明文签发时一次性返回。
 	enrollTokenSvc := service.NewEnrollTokenService(db)
-	// Agent 专用令牌 + 策略引擎（FR-384，见 ADR-076）：与人类 JWT 分离，默认只读 + 写白名单 + scope。
+	// Agent 专用令牌 + 策略引擎（FR-384，见 ADR-079）：与人类 JWT 分离，默认只读 + 写白名单 + scope。
 	agentTokenSvc := service.NewAgentTokenService(db)
 	// 平台存储资源管理器（FR-083）：CP 侧数据根 FHS 只读浏览 + 占用统计 + cache 受控清理。
 	storageSvc := service.NewStorageService(db, root)
@@ -473,6 +473,11 @@ func main() {
 	backupSvc.Start()
 	defer backupSvc.Stop()
 
+	// 实例反向对账（FR-326）：Worker 心跳在管清单 vs CP instances，无主运行时宽限/列表/手动或自动处置。
+	// 默认 auto_dispose=false；配置经 platform_settings 白名单键即时生效。
+	orphanRuntimeSvc := service.NewOrphanRuntimeTracker(db, settingsSvc, pool)
+	orphanRuntimeSvc.SetAudit(auditSvc)
+
 	// 出站代理可视化配置（FR-185，见 ADR-043）：
 	//   - settings 保存 proxy.* 后重建 CP 出站持有者（优先级 settings DB > yaml > env）；
 	//   - 启动时若 DB 已有代理覆盖，按当前生效代理重建一次（保证重启后覆盖仍生效）；
@@ -562,6 +567,7 @@ func main() {
 		Log:                     logSvc,
 		Metric:                  metricSvc,
 		Settings:                settingsSvc,
+		OrphanRuntime:           orphanRuntimeSvc,
 		ProbeUpdate:             probeUpdateSvc,
 		ClientChannel:           clientChannelSvc,
 		ClientVersion:           clientVersionSvc,
@@ -629,6 +635,8 @@ func main() {
 	grpcHandler.SetMetricIngester(metricSvc)
 	// 心跳负载里的运行中任务快照汇聚落库 + 终态副作用（落 NodeJDK / 发站内信，FR-183，见 ADR-040）。
 	grpcHandler.SetTaskIngester(taskSvc)
+	// 心跳反向对账：Worker 有、CP 无记录的无主运行时（FR-326）。
+	grpcHandler.SetOrphanRuntimeIngester(orphanRuntimeSvc)
 	// 注入 enrollment token 校验器（FR-080，见 ADR-020）：新节点首次注册必须凭有效一次性 token，
 	// 老节点（name 命中）重注册不强制 token，避免在网节点重启掉线。
 	grpcHandler.SetEnrollmentValidator(enrollTokenSvc)

@@ -8,6 +8,9 @@
 
 > 本段为 `v0.20.0` 开发版归档区（自 v0.19.0 之后累积）。
 
+### 新增
+- **CP↔Worker 实例反向对账（FR-326，ADR-079）**：心跳 `instances` 加性 `pid`；CP `OrphanRuntimeTracker` 发现 Worker 有、CP 无记录的无主运行时（宽限默认 10m、`auto_dispose` 默认 false）；`DisposeOrphanRuntime` 清 Worker 运行态；管理员 `GET/POST /orphan-runtimes`；设置键 `instance_reverse_reconcile.*`。不重建 CP 实例、不改写正向对账。
+
 ## 0.19.0（2026-07-23）
 
 > 本版交付客户端分发观测/安全闭环、Bot Fleet 分布式压测底座、Docker/一键安装、CP full/slim 双档产物，以及系统更新与探针展示修复。CI 全绿；正式 tag 须落在 master 历史。

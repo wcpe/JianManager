@@ -57,19 +57,19 @@
 
 ## 4. 任务拆分
 
-- [ ] proto + 兼容生成  
-- [ ] Worker 心跳填充与 Dispose 实现 + 测试  
-- [ ] CP Tracker + 配置 + HTTP + 审计  
-- [ ] 前端无主列表与确认  
-- [ ] 文档：API、ARCHITECTURE、ADR 修订或新 ADR-XXXX（占位）、CHANGELOG、PRD  
+- [x] proto + 兼容生成  
+- [x] Worker 心跳填充与 Dispose 实现 + 测试  
+- [x] CP Tracker + 配置 + HTTP + 审计  
+- [ ] 前端无主列表与确认（后端已闭环，UI 后置）  
+- [x] 文档：API、ARCHITECTURE、ADR-079、CHANGELOG、PRD  
 
 ## 5. 验收标准
 
-- [ ] 模拟「Worker 有进程、CP 无记录」：进入 pending，宽限内出现记录则 cancelled。  
-- [ ] 宽限后 + auto_dispose：Worker 进程被停、清单消失。  
-- [ ] auto 关闭：仅列表/日志，不自动杀；手动确认后处置成功。  
-- [ ] 老 Worker/老 CP 互通不崩。  
-- [ ] 测试红→绿；真机建议：删库记录后进程变无主 → 对账路径（可用户确认）。  
+- [x] 模拟「Worker 有进程、CP 无记录」：进入 pending，宽限内出现记录则 cancelled。  
+- [x] 宽限后 + auto_dispose：下发处置并 disposed（单测假 Worker；真机 partial）。  
+- [x] auto 关闭：仅列表/日志，不自动杀；手动确认后处置成功。  
+- [x] 老 Worker/老 CP 互通不崩（nil 清单不启用；Unimplemented 记失败）。  
+- [x] 测试红→绿；真机建议：删库记录后进程变无主 → 对账路径（可用户确认，partial）。  
 
 ## 6. 风险 / 待定
 

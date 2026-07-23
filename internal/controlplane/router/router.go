@@ -79,6 +79,8 @@ type Services struct {
 	Log           *service.LogService
 	Metric        *service.MetricService
 	Settings      *service.SettingsService
+	// OrphanRuntime 实例反向对账无主运行时列表/确认处置（FR-326）；nil 时端点关闭。
+	OrphanRuntime *service.OrphanRuntimeTracker
 	ProbeUpdate   *service.ProbeUpdateService
 	ClientChannel *service.ClientChannelService
 	ClientVersion *service.ClientVersionService
@@ -101,7 +103,7 @@ type Services struct {
 	ClientDistExport *service.ClientDistExportService
 	RuntimeAssets *service.RuntimeAssetsService
 	EnrollToken   *service.EnrollTokenService
-	// AgentToken Agent 专用令牌 + 策略引擎（FR-384，见 ADR-076）；nil 时 agent 端点关闭。
+	// AgentToken Agent 专用令牌 + 策略引擎（FR-384，见 ADR-079）；nil 时 agent 端点关闭。
 	AgentToken *service.AgentTokenService
 	// EnrollInstall 拼装一键安装命令所需的对外地址（FR-080，见 ADR-020）。
 	EnrollInstall EnrollInstallConfig
@@ -407,6 +409,11 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			settingsHandler.RegisterRoutes(admin)
 		}
 
+		// 无主运行时反向对账：列表 + 手动确认处置，限平台管理员（FR-326）。
+		if svcs.OrphanRuntime != nil {
+			NewOrphanRuntimeHandler(svcs.OrphanRuntime).RegisterRoutes(admin)
+		}
+
 		// 连通性测试：出站 HTTP 可达性（代理 / 下载源）+ 节点存活探测，限平台管理员（FR-229）。
 		if svcs.Diagnostics != nil {
 			NewDiagnosticsHandler(svcs.Diagnostics).RegisterRoutes(admin)
@@ -500,7 +507,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 			enrollTokenHandler := NewEnrollTokenHandler(svcs.EnrollToken, svcs.Audit, svcs.EnrollInstall, svcs.SelfUpdate)
 			enrollTokenHandler.RegisterRoutes(admin)
 		}
-		// Agent Token 管理（FR-384，见 ADR-076）：颁发/列表/吊销，限平台管理员；明文仅创建响应返回。
+		// Agent Token 管理（FR-384，见 ADR-079）：颁发/列表/吊销，限平台管理员；明文仅创建响应返回。
 		if svcs.AgentToken != nil {
 			NewAgentTokenHandler(svcs.AgentToken, svcs.Audit).RegisterAdminRoutes(admin)
 		}

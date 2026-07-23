@@ -112,7 +112,7 @@ func AutoMigrate(db *gorm.DB) error {
 		// 节点包管理器与 registry 配置（FR-306，节点单例）。
 		&model.NodePMConfig{},
 		&model.NodeEnrollToken{},
-		// Agent 专用令牌（FR-384，见 ADR-076）：与人类 JWT 分离，scope + 写白名单。
+		// Agent 专用令牌（FR-384，见 ADR-079）：与人类 JWT 分离，scope + 写白名单。
 		&model.AgentToken{},
 		&model.Instance{},
 		&model.GroupInstance{},
@@ -122,6 +122,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.InstanceGroupMember{},
 		// 实例崩溃快照（FR-313）：进程非正常退出现场留存，每实例滚动保留最近 5 条。
 		&model.InstanceCrashSnapshot{},
+		// 无主运行时反向对账跟踪（FR-326）：Worker 有、CP 无记录的实例宽限/处置状态。
+		&model.OrphanRuntime{},
 		&model.ServerRegistration{},
 		&model.Network{},
 		&model.NetworkMember{},

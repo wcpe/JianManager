@@ -63,6 +63,12 @@ type NodeProxyResolver interface {
 
 // ControlPlaneHandler Control Plane 侧的 gRPC 处理器。
 // 处理来自 Worker Node 的 Register 和 Heartbeat 请求。
+// OrphanRuntimeIngester 心跳反向对账入口（FR-326）；由 service.OrphanRuntimeTracker 实现。
+// 声明在 grpc 包避免 controlplane/grpc → service 循环依赖。
+type OrphanRuntimeIngester interface {
+	ObserveHeartbeat(nodeUUID string, reported []*workerpb.InstanceState)
+}
+
 type ControlPlaneHandler struct {
 	workerpb.WorkerServiceServer
 	db              *gorm.DB
@@ -73,6 +79,7 @@ type ControlPlaneHandler struct {
 	enroll          EnrollmentValidator    // enrollment token 校验消费（nil 时退化为 FR-004 自助注册）
 	proxy           NodeProxyResolver      // 节点期望代理解析（nil 时心跳响应不携带代理，FR-185）
 	wsTokenSecret   string                 // CP↔Worker WS 令牌密钥（空时注册/心跳响应不携带，FR-275）
+	orphans         OrphanRuntimeIngester  // 反向对账（nil 时不启用，FR-326）
 }
 
 // NewControlPlaneHandler 创建处理器。
@@ -107,6 +114,12 @@ func (h *ControlPlaneHandler) SetEnrollmentValidator(v EnrollmentValidator) {
 // 变化运行时重建出站 client；不注入则心跳响应不带代理（退化为 Worker 仅用本地 yaml/env，向后兼容）。
 func (h *ControlPlaneHandler) SetNodeProxyResolver(r NodeProxyResolver) {
 	h.proxy = r
+}
+
+// SetOrphanRuntimeIngester 注入实例反向对账跟踪器（FR-326）。
+// 注入后每拍心跳在正向对账之后观察 Worker 在管清单；不注入则反向对账关闭（向后兼容/测试默认）。
+func (h *ControlPlaneHandler) SetOrphanRuntimeIngester(o OrphanRuntimeIngester) {
+	h.orphans = o
 }
 
 // SetWSTokenSecret 注入 CP↔Worker WS 令牌密钥（FR-275，见 ADR-061）。
@@ -384,6 +397,12 @@ func (h *ControlPlaneHandler) Heartbeat(stream workerpb.WorkerService_HeartbeatS
 		// 同步实例状态并对账（即使 Worker 上报空也要对账：
 		// Worker 重启未恢复某实例时，DB 会永远卡在 RUNNING 致所有生命周期操作 422）。
 		h.syncInstanceStates(req.NodeUuid, req.Instances)
+
+		// 反向对账（FR-326）：Worker 有、CP 无记录的无主运行时跟踪/宽限/自动处置。
+		// 在正向对账之后执行；不改写正向语义。nil 注入=关闭。
+		if h.orphans != nil {
+			h.orphans.ObserveHeartbeat(req.NodeUuid, req.Instances)
+		}
 
 		// 心跳负载落库为时序样本（节点指标 + 每实例 ServerProbe 快照，FR-060）。
 		// 失败不影响心跳本身（节点当前值已更新），仅记录告警。

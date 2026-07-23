@@ -39,6 +39,10 @@ const (
 	SettingKeyProxyURL = "proxy.url"
 	// SettingKeyProxyNoProxy CP/全局默认出站代理的免代理列表（逗号分隔，语义同 NO_PROXY，FR-185）。
 	SettingKeyProxyNoProxy = "proxy.no_proxy"
+	// SettingKeyOrphanGracePeriod 无主运行时宽限期（Go duration，FR-326）。默认 10m；首次发现后观察期内若 CP 又有记录则取消。
+	SettingKeyOrphanGracePeriod = "instance_reverse_reconcile.grace_period"
+	// SettingKeyOrphanAutoDispose 宽限后是否自动下发处置（true|false，FR-326）。默认 false：只列表/日志，管理员手动确认。
+	SettingKeyOrphanAutoDispose = "instance_reverse_reconcile.auto_dispose"
 )
 
 var (
@@ -175,6 +179,9 @@ func (s *SettingsService) Get() (*SettingsView, error) {
 		// proxy.url 标 sensitive：含凭据时回显脱敏（仅展示 scheme://host:port），不外泄明文密码。
 		s.proxyURLItem(overrides),
 		s.editableItem(SettingKeyProxyNoProxy, s.defaultValue(SettingKeyProxyNoProxy), overrides, true),
+		// 实例反向对账护栏（FR-326）：宽限期与自动处置开关；读侧即时生效（下一次心跳观察即用）。
+		s.editableItem(SettingKeyOrphanGracePeriod, s.defaultValue(SettingKeyOrphanGracePeriod), overrides, true),
+		s.editableItem(SettingKeyOrphanAutoDispose, s.defaultValue(SettingKeyOrphanAutoDispose), overrides, true),
 	}
 
 	readOnly := []SettingItem{
@@ -307,6 +314,10 @@ func (s *SettingsService) defaultValue(key string) string {
 		return s.cfg.Proxy.URL
 	case SettingKeyProxyNoProxy:
 		return s.cfg.Proxy.NoProxy
+	case SettingKeyOrphanGracePeriod:
+		return "10m"
+	case SettingKeyOrphanAutoDispose:
+		return "false"
 	}
 	return ""
 }
@@ -369,7 +380,8 @@ func isWritableSettingKey(key string) bool {
 		SettingKeyJDKMirrorTemurin, SettingKeyJDKMirrorCorretto, SettingKeyJDKMirrorZulu,
 		SettingKeyRuntimeMirrorNodeJS,
 		SettingKeyGracefulStopTimeout, SettingKeyBackupRetentionDays,
-		SettingKeyProxyURL, SettingKeyProxyNoProxy:
+		SettingKeyProxyURL, SettingKeyProxyNoProxy,
+		SettingKeyOrphanGracePeriod, SettingKeyOrphanAutoDispose:
 		return true
 	}
 	return false
@@ -408,6 +420,15 @@ func validateSettingValue(key, val string) error {
 			if _, err := httpclient.New(httpclient.Config{URL: val}); err != nil {
 				return fmt.Errorf("%w: 代理地址非法（%v）", ErrSettingValueInvalid, err)
 			}
+		}
+	case SettingKeyOrphanGracePeriod:
+		d, err := time.ParseDuration(val)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("%w: 无主运行时宽限期须为正的 Go duration（如 10m）", ErrSettingValueInvalid)
+		}
+	case SettingKeyOrphanAutoDispose:
+		if val != "true" && val != "false" {
+			return fmt.Errorf("%w: 自动处置须为 true|false", ErrSettingValueInvalid)
 		}
 	}
 	return nil

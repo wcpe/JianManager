@@ -79,6 +79,7 @@ const (
 	WorkerService_DeployServerProbe_FullMethodName      = "/worker.WorkerService/DeployServerProbe"
 	WorkerService_CloneWorkDir_FullMethodName           = "/worker.WorkerService/CloneWorkDir"
 	WorkerService_RemoveInstance_FullMethodName         = "/worker.WorkerService/RemoveInstance"
+	WorkerService_DisposeOrphanRuntime_FullMethodName   = "/worker.WorkerService/DisposeOrphanRuntime"
 	WorkerService_ListImages_FullMethodName             = "/worker.WorkerService/ListImages"
 	WorkerService_PullImage_FullMethodName              = "/worker.WorkerService/PullImage"
 	WorkerService_RemoveImage_FullMethodName            = "/worker.WorkerService/RemoveImage"
@@ -255,6 +256,10 @@ type WorkerServiceClient interface {
 	CloneWorkDir(ctx context.Context, in *CloneWorkDirRequest, opts ...grpc.CallOption) (*CloneWorkDirResponse, error)
 	// RemoveInstance 移除实例注册并删除其工作目录与派生索引（CP 删除实例时真清理，兑现「所有数据将被删除」）。
 	RemoveInstance(ctx context.Context, in *RemoveInstanceRequest, opts ...grpc.CallOption) (*RemoveInstanceResponse, error)
+	// DisposeOrphanRuntime 处置无主运行时（FR-326）：CP 反向对账发现 Worker 有、CP 无记录的实例后下发。
+	// Worker 停进程树并清理本地运行态元数据（PID/sock/注册表），不删工作目录、不重建 CP 记录。
+	// 老 Worker 返回 Unimplemented，CP 记日志不崩（向后兼容）。
+	DisposeOrphanRuntime(ctx context.Context, in *DisposeOrphanRuntimeRequest, opts ...grpc.CallOption) (*DisposeOrphanRuntimeResponse, error)
 	// ListImages 列出 Worker 本机 Docker 镜像。
 	ListImages(ctx context.Context, in *ListImagesRequest, opts ...grpc.CallOption) (*ListImagesResponse, error)
 	// PullImage 从 registry 拉取镜像到 Worker 本机（建实例选镜像前置）。
@@ -965,6 +970,16 @@ func (c *workerServiceClient) RemoveInstance(ctx context.Context, in *RemoveInst
 	return out, nil
 }
 
+func (c *workerServiceClient) DisposeOrphanRuntime(ctx context.Context, in *DisposeOrphanRuntimeRequest, opts ...grpc.CallOption) (*DisposeOrphanRuntimeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DisposeOrphanRuntimeResponse)
+	err := c.cc.Invoke(ctx, WorkerService_DisposeOrphanRuntime_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) ListImages(ctx context.Context, in *ListImagesRequest, opts ...grpc.CallOption) (*ListImagesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListImagesResponse)
@@ -1412,6 +1427,10 @@ type WorkerServiceServer interface {
 	CloneWorkDir(context.Context, *CloneWorkDirRequest) (*CloneWorkDirResponse, error)
 	// RemoveInstance 移除实例注册并删除其工作目录与派生索引（CP 删除实例时真清理，兑现「所有数据将被删除」）。
 	RemoveInstance(context.Context, *RemoveInstanceRequest) (*RemoveInstanceResponse, error)
+	// DisposeOrphanRuntime 处置无主运行时（FR-326）：CP 反向对账发现 Worker 有、CP 无记录的实例后下发。
+	// Worker 停进程树并清理本地运行态元数据（PID/sock/注册表），不删工作目录、不重建 CP 记录。
+	// 老 Worker 返回 Unimplemented，CP 记日志不崩（向后兼容）。
+	DisposeOrphanRuntime(context.Context, *DisposeOrphanRuntimeRequest) (*DisposeOrphanRuntimeResponse, error)
 	// ListImages 列出 Worker 本机 Docker 镜像。
 	ListImages(context.Context, *ListImagesRequest) (*ListImagesResponse, error)
 	// PullImage 从 registry 拉取镜像到 Worker 本机（建实例选镜像前置）。
@@ -1668,6 +1687,9 @@ func (UnimplementedWorkerServiceServer) CloneWorkDir(context.Context, *CloneWork
 }
 func (UnimplementedWorkerServiceServer) RemoveInstance(context.Context, *RemoveInstanceRequest) (*RemoveInstanceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveInstance not implemented")
+}
+func (UnimplementedWorkerServiceServer) DisposeOrphanRuntime(context.Context, *DisposeOrphanRuntimeRequest) (*DisposeOrphanRuntimeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DisposeOrphanRuntime not implemented")
 }
 func (UnimplementedWorkerServiceServer) ListImages(context.Context, *ListImagesRequest) (*ListImagesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListImages not implemented")
@@ -2808,6 +2830,24 @@ func _WorkerService_RemoveInstance_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_DisposeOrphanRuntime_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DisposeOrphanRuntimeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).DisposeOrphanRuntime(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_DisposeOrphanRuntime_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).DisposeOrphanRuntime(ctx, req.(*DisposeOrphanRuntimeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_ListImages_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListImagesRequest)
 	if err := dec(in); err != nil {
@@ -3488,6 +3528,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RemoveInstance",
 			Handler:    _WorkerService_RemoveInstance_Handler,
+		},
+		{
+			MethodName: "DisposeOrphanRuntime",
+			Handler:    _WorkerService_DisposeOrphanRuntime_Handler,
 		},
 		{
 			MethodName: "ListImages",

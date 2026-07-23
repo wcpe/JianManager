@@ -164,10 +164,15 @@ func (h *Heartbeat) sendHeartbeat() error {
 	// 附加实例状态快照 + 每实例 ServerProbe 富指标快照（FR-060 时序留存）
 	if h.instanceProvider != nil {
 		states := h.instanceProvider.GetAllInstanceStates()
+		// 显式空切片（非 nil）：新 Worker 无在管实例时仍启用反向对账「清单已空」语义（FR-326）；
+		// 老路径 instanceProvider==nil 才保持 Instances=nil，CP 不启用反向对账。
+		req.Instances = make([]*workerpb.InstanceState, 0, len(states))
 		for _, s := range states {
+			// pid 可选字段（FR-326）：供 CP 反向对账诊断；老 CP 忽略，零值兼容。
 			req.Instances = append(req.Instances, &workerpb.InstanceState{
 				InstanceUuid: s.UUID,
 				State:        s.State,
+				Pid:          int32(s.PID),
 			})
 		}
 		req.InstanceMetrics = collectInstanceMetrics(states)

@@ -2521,7 +2521,9 @@
       { "key": "graceful_stop.timeout", "value": "30s", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": false },
       { "key": "backup.retention_days", "value": "14", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": false },
       { "key": "proxy.url", "value": "http://127.0.0.1:7890", "editable": true, "sensitive": true, "overridden": true, "effectiveImmediately": true },
-      { "key": "proxy.no_proxy", "value": "localhost,10.0.0.0/8", "editable": true, "sensitive": false, "overridden": true, "effectiveImmediately": true }
+      { "key": "proxy.no_proxy", "value": "localhost,10.0.0.0/8", "editable": true, "sensitive": false, "overridden": true, "effectiveImmediately": true },
+      { "key": "instance_reverse_reconcile.grace_period", "value": "10m", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": true },
+      { "key": "instance_reverse_reconcile.auto_dispose", "value": "false", "editable": true, "sensitive": false, "overridden": false, "effectiveImmediately": true }
     ],
     "readOnly": [
       { "key": "server.port", "value": "8080", "editable": false, "sensitive": false, "overridden": false, "effectiveImmediately": false },
@@ -2534,8 +2536,8 @@
 - **描述**: 写入一批白名单配置覆盖。非白名单键或值不合法时整体拒绝（422）且不落库；成功后返回更新后的最新视图。设置页按外观、日志、运行时、网络、备份、安全 / 系统共 **6 类**展示；是否立即改变 CP 行为以每项 `effectiveImmediately` 与下列生效链路为准，不能泛化为所有白名单项无条件热生效
 - **权限**: 平台管理员
 - **关联 FR**: FR-063
-- **可写白名单键**: `log.level`（debug|info|warn|error）、`debug.mode`（true|false）、`jdk.mirror.temurin` / `jdk.mirror.corretto` / `jdk.mirror.zulu`、`runtime.mirror.nodejs`（FR-299）、`graceful_stop.timeout`（Go duration 文本）、`backup.retention_days`（非负整数）、`proxy.url`（network 类，敏感，FR-185）、`proxy.no_proxy`（network 类，FR-185）
-- **各项生效方式**（FR-063 / FR-185 / FR-225）：
+- **可写白名单键**: `log.level`（debug|info|warn|error）、`debug.mode`（true|false）、`jdk.mirror.temurin` / `jdk.mirror.corretto` / `jdk.mirror.zulu`、`runtime.mirror.nodejs`（FR-299）、`graceful_stop.timeout`（Go duration 文本）、`backup.retention_days`（非负整数）、`proxy.url`（network 类，敏感，FR-185）、`proxy.no_proxy`（network 类，FR-185）、`instance_reverse_reconcile.grace_period` / `instance_reverse_reconcile.auto_dispose`（FR-326）
+- **各项生效方式**（FR-063 / FR-185 / FR-225 / FR-326）：
   - `log.level`：`effectiveImmediately=true`，落库即在 CP 内切换（slog LevelVar）
   - `debug.mode`：`effectiveImmediately=true`，开启时切换 CP 日志与 Gin debug 模式；关闭时恢复 `log.level` 基线与 Gin release 模式
   - `jdk.mirror.*`：安装 JDK 时 CP 取生效值经 `InstallJDK.mirror_base` 下发 Worker，影响下载源
@@ -2543,7 +2545,36 @@
   - `graceful_stop.timeout`：启动实例时 CP 取生效值经 `CreateInstance.graceful_stop_timeout_seconds` 下发 Worker→wrapper；对设置变更后**新启动**的实例生效，已运行实例保留启动时的值
   - `backup.retention_days`：CP 后台巡检（约每小时一轮）裁剪 `createdAt` 早于 N 天的备份；`≤0` 不裁剪；被未超期增量子链引用的全量基跳过以保链可恢复
   - `proxy.url` / `proxy.no_proxy`（FR-185/ADR-043）：`effectiveImmediately=true`，落库即重建 CP 出站持有者（CP 自身下载立即走新代理）；`proxy.url` 敏感，回显脱敏（含凭据时仅 `scheme://host:port`），非法地址（非 http/https/socks5 / 不可解析）整体拒绝（422）。此全局值同时作为各节点默认代理（节点页可覆盖），优先级 settings DB > control-plane.yml > env
+  - `instance_reverse_reconcile.grace_period`（FR-326）：`effectiveImmediately=true`，正 Go duration（默认 `10m`）；无主运行时首次发现后观察期，期内 CP 又有实例记录则取消
+  - `instance_reverse_reconcile.auto_dispose`（FR-326）：`effectiveImmediately=true`，`true|false`（**默认 false**）；宽限后是否自动下发 `DisposeOrphanRuntime`，关则仅列表/日志，管理员手动确认
 - **请求**: `{ "values": { "log.level": "debug", "backup.retention_days": "30" } }`
+
+---
+
+## 无主运行时反向对账（FR-326）
+
+> Worker 心跳 `instances` 清单与 CP `instances` 表比对：Worker 有、CP 无记录（含软删视为无）→ 记 `orphan_runtimes`；宽限期默认 10m、**默认不自动杀**。处置只清 Worker 运行态（Kill + 注册移除 + PID/sock），**不删工作目录、不重建 CP 实例**。见 ADR-079、`docs/specs/instance-reverse-reconcile/spec.md`。
+
+### GET /api/v1/orphan-runtimes
+- **描述**: 列出无主运行时跟踪记录
+- **权限**: 平台管理员
+- **关联 FR**: FR-326
+- **查询**:
+  - `status`：可选 `pending` / `confirmed` / `disposed` / `cancelled`（指定时忽略 activeOnly）
+  - `activeOnly`：默认 `true`（仅 pending+confirmed）；`0`/`false` 返回含终态
+  - `limit`：默认 100
+- **响应** (200): `{ "items": [ { "uuid", "nodeUuid", "instanceUuid", "workerState", "workerPid", "status", "firstSeenAt", "lastSeenAt", "disposedAt?", "disposeMode?", "lastError?" } ] }`
+
+### GET /api/v1/orphan-runtimes/:uuid
+- **描述**: 单条无主运行时详情
+- **权限**: 平台管理员
+- **错误**: 404 `ORPHAN_RUNTIME_NOT_FOUND`
+
+### POST /api/v1/orphan-runtimes/:uuid/dispose
+- **描述**: 管理员手动确认处置：CP 经 gRPC 调 Worker `DisposeOrphanRuntime`，成功后状态 `disposed`、`disposeMode=manual`；写审计 `orphan_runtime.dispose_manual`
+- **权限**: 平台管理员
+- **响应** (200): 更新后的记录
+- **错误**: 404 `ORPHAN_RUNTIME_NOT_FOUND` | 409 `ORPHAN_RUNTIME_NOT_ACTIVE`（已 disposed/cancelled）| 503 `NODE_OFFLINE` | 502 `DISPOSE_FAILED`（含老 Worker Unimplemented）
 
 ---
 

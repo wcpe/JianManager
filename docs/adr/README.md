@@ -17,6 +17,7 @@
 ## 索引（最近新增）
 
 - [ADR-078](078-explorer-cross-window-clipboard-dnd.md) 资源管理器跨窗剪贴板与拖放总线（FR-377）
+- [ADR-079](079-instance-reverse-reconcile.md) CP↔Worker 实例反向对账（FR-326：无主运行时宽限+默认不自动杀）
 - [ADR-075](075-bot-command-orchestration.md) Bot 命令编排与动作成功边界（仅取代 ADR-074 的业务成功真源部分）
 - [ADR-074](074-bot-distributed-load.md) Bot 目标实例与执行节点解耦，采用 Control Plane 分布式调度（FR-351～357，部分修订 ADR-006）
 - [ADR-073](073-artifact-external-object-storage.md) 制品库外置对象存储与 302 预签名分发（FR-347，修订 ADR-011 存储节）

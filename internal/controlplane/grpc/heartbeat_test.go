@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -194,4 +195,53 @@ func TestOfflineDetector_MarksStaleNodeOffline(t *testing.T) {
 	var freshFromDB model.Node
 	require.NoError(t, db.Where("uuid = ?", freshNode.UUID).First(&freshFromDB).Error)
 	require.Equal(t, model.NodeStatusOnline, freshFromDB.Status)
+}
+
+// orphanObserveSpy 记录反向对账入口调用（FR-326），不落库。
+type orphanObserveSpy struct {
+	nodes []string
+	sizes []int
+}
+
+func (s *orphanObserveSpy) ObserveHeartbeat(nodeUUID string, reported []*workerpb.InstanceState) {
+	s.nodes = append(s.nodes, nodeUUID)
+	s.sizes = append(s.sizes, len(reported))
+}
+
+// TestHeartbeat_InvokesOrphanReverseReconcile 正向对账之后注入的反向对账观察被调用；
+// 未注入时心跳仍成功（兼容/测试默认）。
+func TestHeartbeat_InvokesOrphanReverseReconcile(t *testing.T) {
+	h, db := newHeartbeatHandler(t)
+	node := seedHeartbeatNode(t, db, model.NodeStatusOnline, time.Now())
+	spy := &orphanObserveSpy{}
+	h.SetOrphanRuntimeIngester(spy)
+
+	stream := newHeartbeatTestStream(ctxWithHeartbeatSecret("node-secret-ok"), &workerpb.HeartbeatRequest{
+		NodeUuid: node.UUID,
+		Instances: []*workerpb.InstanceState{
+			{InstanceUuid: "ghost", State: "RUNNING", Pid: 99},
+		},
+	})
+	require.True(t, errors.Is(h.Heartbeat(stream), io.EOF))
+	require.Equal(t, []string{node.UUID}, spy.nodes)
+	require.Equal(t, []int{1}, spy.sizes)
+
+	// 未注入：旧行为不崩（同一测试用独立 handler，避免与固定 node UUID 冲突）。
+	h2, db2 := newHeartbeatHandlerWithoutSharedName(t)
+	n2 := seedHeartbeatNode(t, db2, model.NodeStatusOnline, time.Now())
+	stream2 := newHeartbeatTestStream(ctxWithHeartbeatSecret("node-secret-ok"), &workerpb.HeartbeatRequest{
+		NodeUuid: n2.UUID,
+	})
+	require.True(t, errors.Is(h2.Heartbeat(stream2), io.EOF))
+}
+
+// newHeartbeatHandlerWithoutSharedName 用唯一 DSN，避免同测试内多次 newHeartbeatHandler 撞 shared memory。
+func newHeartbeatHandlerWithoutSharedName(t *testing.T) (*cpgrpc.ControlPlaneHandler, *gorm.DB) {
+	t.Helper()
+	dsn := "file:" + t.Name() + "-orphan-no-ingester?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.NodeEnrollToken{}, &model.Instance{}))
+	h := cpgrpc.NewControlPlaneHandler(db, cpgrpc.NewClientPool())
+	return h, db
 }
