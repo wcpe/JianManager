@@ -30,6 +30,19 @@
 - **可验证 Bot 场景引擎与塔防预设（FR-363）**：Scenario V2 契约屏障与动作；缩比真连/契约已过。
 - **对外部署文档与治理**：README 安装步骤 + 截图；根目录 `SECURITY.md`。
 
+- **客户端分发 KPI 口径与共享语义（FR-356，开发中）**：前端 `lib/client-dist-kpi` 统一定义活跃客户端精确|近似、更新成功率/fail-static/回退率与请求成功率语义；频道统计 Tab 与分发监控统计 Tab 共用标签与脚注，禁止用 HTTP 请求成功率冒充更新成功率；API 文档补充 KPI 字典交叉说明。
+- **分发统计与监控信息加厚 + 分布钻取（FR-357，开发中）**：新增 `GET /client-dist/error-summary` 错误码 TopN/失败样例；监控 Tab 接错误摘要与失败样例；统计区补下载 bytes 趋势与 KPI 绝对数；分布/错误码可页内联动日志筛选；devmock 与 Go/vitest 覆盖。
+- **安全中心研判处置闭环 + 频道安全摘要（FR-358，开发中）**：画像详情全量字段/风险时间线；事件行「封禁 IP」+ DangerConfirm；`UntrustedFieldBadge` 不可信角标；`GET /client-channels/:id/security-summary` 与频道工作台安全摘要条深链安全中心；devmock/Go/vitest 覆盖。
+- **updater-core 遥测字段补齐与隐私契约（FR-360，开发中）**：遥测 body/落库补齐 `coreVersion`/`arch` 与 diagnostic 字段（javaVendor/locale/timezone/memoryTier）；安全日志详情带出新字段；管理端 `privacy-mask` 脱敏 machineId/installId/playerName；contract §4.3 与 API 同步；旧客户端缺字段仍 202。
+- **分发统计与安全日志 CSV 导出（FR-361，开发中）**：新增平台管理员 `GET /client-dist/export`，支持 KPI 汇总、分发事件与安全全量日志三类 CSV；当前页面筛选透传、UTF-8 BOM/camelCase 表头、服务端隐私脱敏、每用户一分钟限流、10000 行截断标记与 `client_dist.export.csv` 审计；分发监控和安全中心接入导出按钮，devmock 与 Go/Vitest 覆盖。
+- **Docker Compose 部署可跑通（FR-354）**：修正 `docker-compose.yml` Worker 环境变量为 `JIANMANAGER_CONTROL_PLANE_GRPC`；兼容旧键 `JIANMANAGER_CONTROL_PLANE`；Worker 数据卷收口数据根；`Dockerfile.control-plane` 补齐 monorepo 构建上下文（tsconfig/eslint/devmock/`version.go`）；`docs/DEPLOY.md` §11。
+- **Control Plane 一键安装脚本（FR-355）**：`scripts/install-cp.sh` / `install-cp.ps1`（OS/arch 探测、Releases 下载、失败中文报错、可选 `--start`）；`INSTALL_CP_TEST=1` 资产名自检。
+- **对外部署文档与治理**：README 安装步骤 + MSW mock 界面截图（`docs/screenshots/*.jpg`）；根目录 `SECURITY.md`；治理戳记对账记录。
+- **楔子与 updater-core 本地诊断日志轮换压缩（FR-353，feat，增强 FR-090，见 `docs/specs/updater-local-log-rotate/spec.md`）**：`wedge.log` 与 `updater.log` 在日志器打开前按 10 MiB 阈值或本地自然日跨日轮换，旧日志以时间戳命名并 gzip 压缩，各自仅保留最近 5 个归档；轮换、压缩或清理失败均 fail-open，日志不可写时继续降级运行，不阻断游戏启动。
+- **分发三页跨页深链与统一筛选状态（FR-359，开发中）**：频道工作台、分发监控与安全中心统一透传 `channelId`/`ip`/`machineId`/`errCode`/`version`/`tab` 查询键；兼容历史 `channel`，页内筛选使用 replace 写回 URL，分布、榜单与事件深链保留当前筛选。
+- **Control Plane 双档发布产物 full / slim（build）**：`make dist-full`（默认 `make dist`）内嵌双平台 Worker + 探针；`make dist-slim` 不内嵌 Worker（探针仍必嵌，`ensure-probe-embed`），产出 `control-plane-slim-<os>-<arch>`；`make dist-all` 一次两档。release 工作流同步上传 slim。安装脚本 `install-cp.sh/.ps1` 支持 `--variant slim` / `-Variant slim` 与 `JIANMANAGER_CP_VARIANT`。
+- **Worker 安装本机优先与镜像基址（install-worker）**：取二进制顺序为安装目录/工作目录已有完整文件 → `--binary` → `JIANMANAGER_WORKER_DOWNLOAD_URL` / `--download-url` 镜像 → 默认 GitHub；本机有 worker 时绝不联网下载。
+- **jm-agent 管理 CLI（FR-385，开发中）**：新增独立二进制 `apps/jmagent/`，经 CP HTTPS + Agent Token（`--token`/`JM_AGENT_TOKEN`，`--cp-url`/`JM_AGENT_CP`）调用 FR-384 运维 API；子命令 whoami / list nodes|instances / instance status|metrics|start|stop|restart / node maintenance enter|leave；`--output json|text`；403 中文 stderr + 非零退出；Token 不落盘、不链 gRPC/DB/Worker。
 ### 文档
 - Bot 压测规格按 ADR-075 重定向（FR-369～372 计划态取代未实施的 FR-364/366～368）。
 - 补齐 FR-357/358/361/326 等规格草稿；DEPLOY §12 full/slim 与 Worker 安装优先级。
