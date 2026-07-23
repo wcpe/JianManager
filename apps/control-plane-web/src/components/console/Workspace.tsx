@@ -9,6 +9,7 @@ const MonitoringPage = lazy(() => import('@/pages/MonitoringPage'))
 const NodesPage = lazy(() => import('@/pages/NodesPage'))
 const InstancesPage = lazy(() => import('@/pages/InstancesPage'))
 const InstanceDetailPage = lazy(() => import('@/pages/InstanceDetailPage'))
+const InstanceFilesPage = lazy(() => import('@/pages/InstanceFilesPage'))
 const InstanceWizardPage = lazy(() => import('@/pages/InstanceWizardPage'))
 const NetworksPage = lazy(() => import('@/pages/NetworksPage'))
 const PlayersPage = lazy(() => import('@/pages/PlayersPage'))
@@ -100,6 +101,8 @@ export default function Workspace() {
             <Route path="instances" element={<InstancesPage />} />
             <Route path="instances/new" element={<InstanceWizardPage />} />
             <Route path="instances/:id" element={<InstanceDetailPage />} />
+            {/* FR-376：文件深链（浏览器新标签）；不并入 instances-console 热缓存 key */}
+            <Route path="instances/:id/files" element={<InstanceFilesPage />} />
             <Route path="networks" element={<NetworksPage />} />
             <Route path="networks/topology" element={<NetworksPage />} />
             <Route path="players" element={<PlayersPage />} />
