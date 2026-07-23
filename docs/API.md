@@ -3165,6 +3165,75 @@
 
 ---
 
+---
+
+## Agent 接入（FR-384 / FR-388）
+
+Agent 使用独立 Bearer Token（明文前缀 `jmat_`），与人类 JWT 分离。策略真源在 CP（默认只读 + 写白名单 + 实例/节点 scope + 硬拒绝面）。  
+契约表见 `docs/specs/agent-safety-gate/contract.md`。
+
+### POST /api/v1/agent/tokens
+- **描述**: 签发 Agent Token（明文仅此响应返回一次）
+- **关联 FR**: FR-384
+- **权限**: 平台管理员 JWT
+- **请求**:
+  ```json
+  {
+    "name": "ci",
+    "scopedInstanceIds": [1],
+    "scopedNodeIds": [1],
+    "writeAllowlist": ["instance.life", "node.maintenance"],
+    "ttlDays": 90
+  }
+  ```
+- **响应** (201): `{ "token": { ...元数据 }, "plaintext": "jmat_..." }`
+- **错误**: 400 | 403
+
+### GET /api/v1/agent/tokens
+- **描述**: 列出 Agent Token 元数据（无明文）
+- **关联 FR**: FR-384
+- **权限**: 平台管理员 JWT
+
+### DELETE /api/v1/agent/tokens/:id
+- **描述**: 吊销 Agent Token（立即失效）
+- **关联 FR**: FR-384
+- **权限**: 平台管理员 JWT
+
+### GET /api/v1/agent/whoami
+- **描述**: 查询当前 Agent 身份与 scope / 写白名单
+- **关联 FR**: FR-384 / FR-388
+- **权限**: Agent Token（`Authorization: Bearer jmat_...`）
+- **响应** (200): `{ "kind":"agent", "name":"...", "tokenId":1, "scopedInstanceIds":[], "scopedNodeIds":[], "writeAllowlist":[] }`
+- **错误**: 401 Token 无效/吊销/过期
+
+### GET /api/v1/agent/nodes
+- **描述**: 列出 scope 内节点
+- **权限**: Agent Token；节点 scope 须非空，否则 403
+
+### GET /api/v1/agent/instances
+- **描述**: 列出 scope 内实例；可选 `?nodeId=`
+- **权限**: Agent Token；实例 scope 须非空，否则 403
+
+### GET /api/v1/agent/instances/:id
+### GET /api/v1/agent/instances/:id/metrics
+- **描述**: 实例详情 / 指标（须在实例 scope 内）
+- **错误**: 403 越权 | 404 不存在
+
+### POST /api/v1/agent/instances/:id/start|stop|restart
+- **描述**: 实例生命周期（写白名单 `instance.life` + 实例 scope）
+- **错误**: 403 写白名单/scope 不足；kill **永不**对 agent 开放
+
+### POST /api/v1/agent/nodes/:id/maintenance/enter|leave
+- **描述**: 节点维护模式（写白名单 `node.maintenance` + 节点 scope）
+- **错误**: 403
+
+### 策略错误码（Agent）
+| HTTP | error | 含义 |
+|---|---|---|
+| 401 | UNAUTHORIZED | 缺 Token / 非 jmat_ / 无效 / 吊销 / 过期 |
+| 403 | FORBIDDEN | scope 外、写白名单外、硬拒绝、空 scope list |
+
+
 ## 错误码
 
 | HTTP | 含义 |

@@ -32,6 +32,7 @@
 
 - **mcp-bridge 独立进程（FR-386，开发中）**：新增 `apps/mcp-bridge` Go 二进制，默认 stdio MCP（JSON-RPC 2.0 轻量子集，无第三方 MCP SDK）；持 `JM_AGENT_TOKEN`/`JM_AGENT_CP`（或 `--token`/`--cp-url`）调用 FR-384 Agent 运维 API；工具集 `agent_whoami`/`agent_list_nodes`/`agent_list_instances`/`agent_get_instance`/`agent_get_instance_metrics`/`instance_start|stop|restart`/`node_maintenance_enter|leave`；硬拒绝面不注册 tool；CP 403 → MCP `isError=true` + 中文 message；不链 gRPC/DB/Worker、无独立监听端口；单测 mock HTTP。
 - **Agent Token 管理 UI（FR-387，开发中）**：平台管理 → 管理员侧栏「Agent Token」页；列表展示 name/前缀/scope 摘要/写白名单/有效期/状态；新建支持实例/节点多选或 ID 输入、写白名单多选（默认 `instance.life`+`node.maintenance`）、TTL；创建成功一次性展示明文 + 复制 `JM_AGENT_TOKEN=…` / `jm-agent` 示例；吊销走 DangerConfirm（平台管理员 scope）；非管理员路由守卫 + 页内 403。消费 FR-384 `POST/GET/DELETE /api/v1/agent/tokens`。
+- **Agent 入口可证安全闸（FR-388，开发中）**：导出 `AgentOpsContract`/`AgentHardDenyList` 契约；`router` 集成测覆盖 scope 外、写白名单外、硬拒绝、吊销/过期、空 scope、并发 403 与契约矩阵（规模 ≥30）；契约文档 `docs/specs/agent-safety-gate/contract.md`；`docs/API.md` Agent 专节；CI job `agent-gate`。
 - **客户端分发 KPI 口径与共享语义（FR-356，开发中）**：前端 `lib/client-dist-kpi` 统一定义活跃客户端精确|近似、更新成功率/fail-static/回退率与请求成功率语义；频道统计 Tab 与分发监控统计 Tab 共用标签与脚注，禁止用 HTTP 请求成功率冒充更新成功率；API 文档补充 KPI 字典交叉说明。
 - **分发统计与监控信息加厚 + 分布钻取（FR-357，开发中）**：新增 `GET /client-dist/error-summary` 错误码 TopN/失败样例；监控 Tab 接错误摘要与失败样例；统计区补下载 bytes 趋势与 KPI 绝对数；分布/错误码可页内联动日志筛选；devmock 与 Go/vitest 覆盖。
 - **安全中心研判处置闭环 + 频道安全摘要（FR-358，开发中）**：画像详情全量字段/风险时间线；事件行「封禁 IP」+ DangerConfirm；`UntrustedFieldBadge` 不可信角标；`GET /client-channels/:id/security-summary` 与频道工作台安全摘要条深链安全中心；devmock/Go/vitest 覆盖。

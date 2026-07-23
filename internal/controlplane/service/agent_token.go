@@ -75,6 +75,55 @@ var agentHardDeny = map[string]struct{}{
 	"settings.write": {}, "db.query": {}, "system.update": {},
 }
 
+// AgentOpsAction 运维面可暴露的 action 契约行（FR-388）。
+type AgentOpsAction struct {
+	// Action 策略引擎动作名。
+	Action string
+	// Method HTTP 方法。
+	Method string
+	// PathTemplate 路径模板（:id 占位）。
+	PathTemplate string
+	// Kind read|write。
+	Kind string
+	// WriteAllow 写动作所需白名单项；读为空。
+	WriteAllow string
+	// Scope instance|node|none。
+	Scope string
+	// HTTPDeny 策略拒绝时期望的 HTTP 状态（运维面统一 403）。
+	HTTPDeny int
+}
+
+// AgentOpsContract 返回 CLI/MCP/curl 共享的运维 action 契约表。
+func AgentOpsContract() []AgentOpsAction {
+	return []AgentOpsAction{
+		{Action: AgentActionWhoami, Method: "GET", PathTemplate: "/api/v1/agent/whoami", Kind: "read", Scope: "none", HTTPDeny: 403},
+		{Action: AgentActionListNodes, Method: "GET", PathTemplate: "/api/v1/agent/nodes", Kind: "read", Scope: "node", HTTPDeny: 403},
+		{Action: AgentActionListInstances, Method: "GET", PathTemplate: "/api/v1/agent/instances", Kind: "read", Scope: "instance", HTTPDeny: 403},
+		{Action: AgentActionGetInstance, Method: "GET", PathTemplate: "/api/v1/agent/instances/:id", Kind: "read", Scope: "instance", HTTPDeny: 403},
+		{Action: AgentActionGetInstanceMetrics, Method: "GET", PathTemplate: "/api/v1/agent/instances/:id/metrics", Kind: "read", Scope: "instance", HTTPDeny: 403},
+		{Action: AgentActionInstanceStart, Method: "POST", PathTemplate: "/api/v1/agent/instances/:id/start", Kind: "write", WriteAllow: AgentWriteInstanceLife, Scope: "instance", HTTPDeny: 403},
+		{Action: AgentActionInstanceStop, Method: "POST", PathTemplate: "/api/v1/agent/instances/:id/stop", Kind: "write", WriteAllow: AgentWriteInstanceLife, Scope: "instance", HTTPDeny: 403},
+		{Action: AgentActionInstanceRestart, Method: "POST", PathTemplate: "/api/v1/agent/instances/:id/restart", Kind: "write", WriteAllow: AgentWriteInstanceLife, Scope: "instance", HTTPDeny: 403},
+		{Action: AgentActionNodeMaintenanceEnter, Method: "POST", PathTemplate: "/api/v1/agent/nodes/:id/maintenance/enter", Kind: "write", WriteAllow: AgentWriteNodeMaintenance, Scope: "node", HTTPDeny: 403},
+		{Action: AgentActionNodeMaintenanceLeave, Method: "POST", PathTemplate: "/api/v1/agent/nodes/:id/maintenance/leave", Kind: "write", WriteAllow: AgentWriteNodeMaintenance, Scope: "node", HTTPDeny: 403},
+	}
+}
+
+// AgentHardDenyList 返回硬拒绝 action 列表（排序无关，供契约/测试枚举）。
+func AgentHardDenyList() []string {
+	out := make([]string, 0, len(agentHardDeny))
+	for k := range agentHardDeny {
+		out = append(out, k)
+	}
+	return out
+}
+
+// IsAgentHardDeny 判断 action 是否在硬拒绝集合。
+func IsAgentHardDeny(action string) bool {
+	_, ok := agentHardDeny[action]
+	return ok
+}
+
 // AgentPrincipal 鉴权后注入上下文的 agent 主体。
 type AgentPrincipal struct {
 	TokenID           uint

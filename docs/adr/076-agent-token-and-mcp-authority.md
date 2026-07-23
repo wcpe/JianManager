@@ -1,7 +1,7 @@
 # ADR-076: Agent Token 与 CP 唯一策略真源
 
 - **日期**: 2026-07-23
-- **状态**: proposed（随 FR-384 落地转 accepted）
+- **状态**: accepted
 - **上下文**: 需要 AI/脚本/CI 操控后台，且危险权限默认拒绝、资源可 scope、与紧急 CLI（ADR-041）区分。
 
 ## 决策

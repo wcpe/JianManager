@@ -182,6 +182,8 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 		ServerState:       service.NewServerStateService(db, pool),
 		CrashSnapshot:     service.NewCrashSnapshotService(db),
 		ImportServer:      service.NewImportServerService(db, pool, instanceSvc),
+		// Agent Token 策略真源（FR-384/388）：测试路由需挂 agent 管理/运维面。
+		AgentToken: service.NewAgentTokenService(db),
 	}
 	return Setup(svcs, jwtCfg.Secret)
 }

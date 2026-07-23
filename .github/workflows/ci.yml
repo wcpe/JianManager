@@ -179,3 +179,26 @@ jobs:
           npm run typecheck
           npm run lint
           npm run build
+
+  # Agent 可证安全闸（FR-388）：策略契约 + 运维面 HTTP 矩阵 + jmagent/mcp-bridge 单测。
+  # 不替代全量 go test ./...（release 仍跑）；本 job 在 PR/分支 push 快速拦截 agent 策略回归。
+  agent-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.2'
+
+      - name: Agent 策略与入口闸（≥30 断言规模）
+        shell: bash
+        run: |
+          set -euo pipefail
+          go test ./internal/controlplane/service/ -run 'AgentToken|AgentGate' -count=1
+          go test ./internal/controlplane/router/ -run AgentGate -count=1
+          go test ./apps/jmagent/... ./apps/mcp-bridge/... -count=1
