@@ -12,6 +12,7 @@ import {
   FileClock,
   GitBranch,
   HardDrive,
+  KeyRound,
   Layers,
   LayoutDashboard,
   LayoutGrid,
@@ -153,6 +154,7 @@ export function navGroupsForRole(role: number | null): NavGroup[] {
               children: [
                 { to: '/database', labelKey: 'nav.database', icon: Database },
                 { to: '/system-update', labelKey: 'nav.systemUpdate', icon: RefreshCw },
+                { to: '/agent-tokens', labelKey: 'nav.agentTokens', icon: KeyRound },
               ],
             },
           ],

@@ -11,6 +11,7 @@ describe('consoleTitleKey', () => {
     expect(consoleTitleKey('/nodes')).toBe('nav.nodes')
     expect(consoleTitleKey('/instances')).toBe('nav.allInstances')
     expect(consoleTitleKey('/system-update')).toBe('nav.systemUpdate')
+    expect(consoleTitleKey('/agent-tokens')).toBe('nav.agentTokens')
     expect(consoleTitleKey('/client-channels')).toBe('nav.clientChannels')
   })
 

@@ -60,11 +60,14 @@ describe('console nav config', () => {
 
     expect(operatorTargets).not.toContain('/database')
     expect(operatorTargets).not.toContain('/system-update')
+    expect(operatorTargets).not.toContain('/agent-tokens')
     expect(adminTargets).toContain('/database')
     expect(adminTargets).toContain('/system-update')
+    expect(adminTargets).toContain('/agent-tokens')
     expect(adminSection?.children.map((item) => [item.labelKey, item.to])).toEqual([
       ['nav.database', '/database'],
       ['nav.systemUpdate', '/system-update'],
+      ['nav.agentTokens', '/agent-tokens'],
     ])
   })
 })

@@ -456,6 +456,7 @@
     "storage": "存储",
     "database": "数据库",
     "systemUpdate": "系统更新",
+    "agentTokens": "Agent Token",
     "platform": "平台",
     "cluster": "集群",
     "superWorkbench": "超级工作台",
@@ -2738,6 +2739,81 @@
     "next": "下一页",
     "sensitiveColumn": "敏感列",
     "forbidden": "仅平台管理员可访问"
+  },
+  "agentTokens": {
+    "title": "Agent Token",
+    "subtitle": "为 AI 助手 / 脚本 / CI 签发受限令牌。明文仅创建时显示一次；scope 与写白名单由 CP 强制。",
+    "forbidden": "仅平台管理员可访问",
+    "create": "新建 Token",
+    "createTitle": "签发 Agent Token",
+    "createDesc": "指定名称、可访问实例/节点、写操作白名单与有效期。创建后明文仅显示一次。",
+    "createSubmit": "签发",
+    "createSuccess": "Token 已签发，请立即复制保存",
+    "createFailed": "签发失败",
+    "empty": "暂无 Agent Token，点击右上角新建",
+    "loadFailed": "加载 Token 列表失败",
+    "col": {
+      "name": "名称",
+      "prefix": "前缀",
+      "scope": "Scope",
+      "write": "写白名单",
+      "expires": "有效期",
+      "status": "状态"
+    },
+    "scope": {
+      "instances": "实例",
+      "nodes": "节点",
+      "none": "未授权任何资源"
+    },
+    "write": {
+      "instanceLife": "实例生命周期（启停/重启）",
+      "nodeMaintenance": "节点维护态",
+      "none": "仅只读"
+    },
+    "status": {
+      "active": "有效",
+      "expired": "已过期",
+      "revoked": "已吊销"
+    },
+    "revoke": "吊销",
+    "revokeTitle": "吊销 Agent Token",
+    "revokeDesc": "吊销后「{{name}}」立即失效，持有该 Token 的 CLI/MCP 将无法再调用。请输入名称确认。",
+    "revokeSuccess": "已吊销",
+    "revokeFailed": "吊销失败",
+    "field": {
+      "name": "名称",
+      "namePlaceholder": "如：ci-prod-ops / cursor-dev",
+      "instances": "实例 Scope",
+      "instancesHint": "勾选可访问实例，或在下方手动输入 ID（逗号/空格分隔）。空 = 未授权任何实例。",
+      "instanceIds": "实例 ID 输入",
+      "noInstances": "暂无实例",
+      "nodes": "节点 Scope",
+      "nodesHint": "勾选可访问节点，或在下方手动输入 ID。空 = 未授权任何节点。",
+      "nodeIds": "节点 ID 输入",
+      "noNodes": "暂无节点",
+      "idsPlaceholder": "也可手动输入 ID，如 1,2,3",
+      "writeAllowlist": "写操作白名单",
+      "writeHint": "默认允许实例生命周期与节点维护态；取消勾选即只读。硬拒绝面永不对 agent 开放。",
+      "ttlDays": "有效天数",
+      "ttlHint": "默认 90 天，上限 365 天"
+    },
+    "validation": {
+      "nameRequired": "请填写名称",
+      "ttlInvalid": "有效天数须为正整数",
+      "ttlMax": "有效天数上限 365"
+    },
+    "revealTitle": "Token 已签发 — 请立即保存",
+    "revealDesc": "「{{name}}」的明文仅显示这一次，关闭后无法再查看。",
+    "revealWarning": "请妥善保管。不要提交到 git、不要写入公开文档。泄露后请立即吊销。",
+    "reveal": {
+      "plaintext": "明文 Token",
+      "env": "环境变量",
+      "cli": "jm-agent 示例"
+    },
+    "revealDone": "我已保存",
+    "copy": "复制",
+    "copied": "已复制到剪贴板",
+    "copyFailed": "复制失败，请手动选择复制"
   },
   "systemUpdate": {
     "title": "系统更新",

@@ -30,6 +30,7 @@ const SEGMENT_TITLE_KEYS: Record<string, string> = {
   settings: 'nav.systemSettings',
   database: 'nav.database',
   'system-update': 'nav.systemUpdate',
+  'agent-tokens': 'nav.agentTokens',
   licenses: 'licenses.title',
 }
 

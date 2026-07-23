@@ -456,6 +456,7 @@
     "storage": "Storage",
     "database": "Database",
     "systemUpdate": "System Update",
+    "agentTokens": "Agent Token",
     "platform": "Platform",
     "cluster": "Cluster",
     "superWorkbench": "Super Workbench",
@@ -2759,6 +2760,81 @@
     "next": "Next",
     "sensitiveColumn": "Sensitive",
     "forbidden": "Platform admins only"
+  },
+  "agentTokens": {
+    "title": "Agent Token",
+    "subtitle": "Issue scoped tokens for AI assistants / scripts / CI. Plaintext is shown only once at creation; scope and write allowlist are enforced by CP.",
+    "forbidden": "Platform admins only",
+    "create": "New Token",
+    "createTitle": "Issue Agent Token",
+    "createDesc": "Set name, instance/node scope, write allowlist and TTL. Plaintext is shown only once after creation.",
+    "createSubmit": "Issue",
+    "createSuccess": "Token issued — copy and store it now",
+    "createFailed": "Failed to issue token",
+    "empty": "No Agent Tokens yet. Click New Token to create one.",
+    "loadFailed": "Failed to load token list",
+    "col": {
+      "name": "Name",
+      "prefix": "Prefix",
+      "scope": "Scope",
+      "write": "Write allowlist",
+      "expires": "Expires",
+      "status": "Status"
+    },
+    "scope": {
+      "instances": "Instances",
+      "nodes": "Nodes",
+      "none": "No resources authorized"
+    },
+    "write": {
+      "instanceLife": "Instance lifecycle (start/stop/restart)",
+      "nodeMaintenance": "Node maintenance",
+      "none": "Read-only"
+    },
+    "status": {
+      "active": "Active",
+      "expired": "Expired",
+      "revoked": "Revoked"
+    },
+    "revoke": "Revoke",
+    "revokeTitle": "Revoke Agent Token",
+    "revokeDesc": "After revoke, \"{{name}}\" becomes invalid immediately. Type the name to confirm.",
+    "revokeSuccess": "Revoked",
+    "revokeFailed": "Failed to revoke",
+    "field": {
+      "name": "Name",
+      "namePlaceholder": "e.g. ci-prod-ops / cursor-dev",
+      "instances": "Instance scope",
+      "instancesHint": "Select instances or type IDs below (comma/space separated). Empty = no instances authorized.",
+      "instanceIds": "Instance ID input",
+      "noInstances": "No instances",
+      "nodes": "Node scope",
+      "nodesHint": "Select nodes or type IDs below. Empty = no nodes authorized.",
+      "nodeIds": "Node ID input",
+      "noNodes": "No nodes",
+      "idsPlaceholder": "Or type IDs, e.g. 1,2,3",
+      "writeAllowlist": "Write allowlist",
+      "writeHint": "Default allows instance lifecycle and node maintenance; uncheck for read-only. Hard-deny surface is never open to agents.",
+      "ttlDays": "TTL (days)",
+      "ttlHint": "Default 90 days, max 365"
+    },
+    "validation": {
+      "nameRequired": "Name is required",
+      "ttlInvalid": "TTL must be a positive integer",
+      "ttlMax": "TTL max is 365 days"
+    },
+    "revealTitle": "Token issued — save it now",
+    "revealDesc": "Plaintext for \"{{name}}\" is shown only this once and cannot be retrieved later.",
+    "revealWarning": "Store it securely. Do not commit to git or paste into public docs. Revoke immediately if leaked.",
+    "reveal": {
+      "plaintext": "Plaintext token",
+      "env": "Environment variable",
+      "cli": "jm-agent example"
+    },
+    "revealDone": "I have saved it",
+    "copy": "Copy",
+    "copied": "Copied to clipboard",
+    "copyFailed": "Copy failed — select and copy manually"
   },
   "systemUpdate": {
     "title": "System Update",

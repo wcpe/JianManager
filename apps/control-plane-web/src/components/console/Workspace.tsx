@@ -33,6 +33,7 @@ const ProtectionCenterPage = lazy(() => import('@/pages/ProtectionCenterPage'))
 const ClientPublishPage = lazy(() => import('@/pages/ClientPublishPage'))
 const DatabasePage = lazy(() => import('@/pages/DatabasePage'))
 const SystemUpdatePage = lazy(() => import('@/pages/SystemUpdatePage'))
+const AgentTokensPage = lazy(() => import('@/pages/AgentTokensPage'))
 const LicensesPage = lazy(() => import('@/pages/LicensesPage'))
 const TasksPage = lazy(() => import('@/pages/TasksPage'))
 const NotificationCenterPage = lazy(() => import('@/pages/NotificationCenterPage'))
@@ -134,6 +135,7 @@ export default function Workspace() {
             <Route path="settings" element={<SettingsPage />} />
             <Route path="database" element={<RequirePlatformAdmin><DatabasePage /></RequirePlatformAdmin>} />
             <Route path="system-update" element={<RequirePlatformAdmin><SystemUpdatePage /></RequirePlatformAdmin>} />
+            <Route path="agent-tokens" element={<RequirePlatformAdmin><AgentTokensPage /></RequirePlatformAdmin>} />
             <Route path="licenses" element={<RequirePlatformAdmin><LicensesPage /></RequirePlatformAdmin>} />
             <Route path="*" element={<WorkspaceEmpty />} />
           </Routes>
