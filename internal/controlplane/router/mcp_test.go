@@ -113,7 +113,7 @@ func TestMCP_InitializeAndToolsList(t *testing.T) {
 }
 
 func TestMCP_ToolsCall_Whoami(t *testing.T) {
-	_, r, _, plain, _ := setupMCP(t)
+	db, r, adminJWT, plain, _ := setupMCP(t)
 	w := mcpPOST(t, r, "/api/v1/mcp", plain, "", map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "initialize",
 	})
@@ -137,6 +137,21 @@ func TestMCP_ToolsCall_Whoami(t *testing.T) {
 	assert.False(t, resp.Result.IsError)
 	require.NotEmpty(t, resp.Result.Content)
 	assert.Contains(t, resp.Result.Content[0].Text, "mcp-test")
+
+	// FR-390：MCP tool 应记 client=mcp 流水；initialize 记 session.open
+	var openN, whoamiN int64
+	require.NoError(t, db.Model(&model.AgentCallLog{}).Where("action = ? AND client = ?", "mcp.session.open", "mcp").Count(&openN).Error)
+	require.NoError(t, db.Model(&model.AgentCallLog{}).Where("action = ? AND client = ?", "agent.whoami", "mcp").Count(&whoamiN).Error)
+	assert.GreaterOrEqual(t, openN, int64(1), "应有会话 open 流水")
+	assert.GreaterOrEqual(t, whoamiN, int64(1), "应有 agent.whoami 流水")
+
+	// 管理端 call-logs 可查到 mcp 客户端
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/agent/call-logs?client=mcp", nil)
+	req.Header.Set("Authorization", "Bearer "+adminJWT)
+	lw := httptest.NewRecorder()
+	r.ServeHTTP(lw, req)
+	require.Equal(t, http.StatusOK, lw.Code, lw.Body.String())
+	assert.Contains(t, lw.Body.String(), "agent.whoami")
 }
 
 func TestMCP_AdminListAndKick(t *testing.T) {

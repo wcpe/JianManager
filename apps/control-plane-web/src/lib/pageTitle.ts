@@ -31,6 +31,8 @@ const SEGMENT_TITLE_KEYS: Record<string, string> = {
   database: 'nav.database',
   'system-update': 'nav.systemUpdate',
   'agent-tokens': 'nav.agentTokens',
+  'mcp-sessions': 'nav.mcpSessions',
+  'agent-call-logs': 'nav.agentCallLogs',
   licenses: 'licenses.title',
 }
 

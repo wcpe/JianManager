@@ -12,6 +12,8 @@ describe('consoleTitleKey', () => {
     expect(consoleTitleKey('/instances')).toBe('nav.allInstances')
     expect(consoleTitleKey('/system-update')).toBe('nav.systemUpdate')
     expect(consoleTitleKey('/agent-tokens')).toBe('nav.agentTokens')
+    expect(consoleTitleKey('/mcp-sessions')).toBe('nav.mcpSessions')
+    expect(consoleTitleKey('/agent-call-logs')).toBe('nav.agentCallLogs')
     expect(consoleTitleKey('/client-channels')).toBe('nav.clientChannels')
   })
 

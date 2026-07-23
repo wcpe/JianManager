@@ -52,22 +52,59 @@ describe('console nav config', () => {
     )
   })
 
-  it('adds database and system update only for platform administrators', () => {
+  it('平台管理按业务域分节：身份与权限 / 审计与设置 拆分', () => {
+    const platform = NAV_GROUPS.find((item) => item.key === 'platformManagement')
+    const sectionKeys = platform?.sections?.map((s) => s.labelKey) ?? []
+    expect(sectionKeys).toEqual([
+      'nav.contentDistribution',
+      'nav.storageRuntime',
+      'nav.taskNotification',
+      'nav.identityAccess',
+      'nav.auditSettings',
+    ])
+    // 非管理员看不到 Agent / 系统维护
+    expect(sectionKeys).not.toContain('nav.agentAccess')
+    expect(sectionKeys).not.toContain('nav.systemMaintenance')
+  })
+
+  it('平台管理员追加 Agent 接入 + 系统维护两节；业务路由 URL 不变', () => {
     const operatorTargets = flatNavItems(1).map((item) => item.to)
     const adminTargets = flatNavItems(10).map((item) => item.to)
     const adminGroup = navGroupsForRole(10).find((item) => item.key === 'platformManagement')
-    const adminSection = adminGroup?.sections?.find((section) => section.labelKey === 'nav.admin')
+    const agentSection = adminGroup?.sections?.find((section) => section.labelKey === 'nav.agentAccess')
+    const maintSection = adminGroup?.sections?.find((section) => section.labelKey === 'nav.systemMaintenance')
 
     expect(operatorTargets).not.toContain('/database')
     expect(operatorTargets).not.toContain('/system-update')
     expect(operatorTargets).not.toContain('/agent-tokens')
+    expect(operatorTargets).not.toContain('/mcp-sessions')
+    expect(operatorTargets).not.toContain('/agent-call-logs')
+
     expect(adminTargets).toContain('/database')
     expect(adminTargets).toContain('/system-update')
     expect(adminTargets).toContain('/agent-tokens')
-    expect(adminSection?.children.map((item) => [item.labelKey, item.to])).toEqual([
+    expect(adminTargets).toContain('/mcp-sessions')
+    expect(adminTargets).toContain('/agent-call-logs')
+
+    expect(agentSection?.children.map((item) => [item.labelKey, item.to])).toEqual([
+      ['nav.agentTokens', '/agent-tokens'],
+      ['nav.mcpSessions', '/mcp-sessions'],
+      ['nav.agentCallLogs', '/agent-call-logs'],
+    ])
+    expect(maintSection?.children.map((item) => [item.labelKey, item.to])).toEqual([
       ['nav.database', '/database'],
       ['nav.systemUpdate', '/system-update'],
-      ['nav.agentTokens', '/agent-tokens'],
+    ])
+
+    // 分节顺序：业务五节 + 管理员两节
+    expect(adminGroup?.sections?.map((s) => s.labelKey)).toEqual([
+      'nav.contentDistribution',
+      'nav.storageRuntime',
+      'nav.taskNotification',
+      'nav.identityAccess',
+      'nav.auditSettings',
+      'nav.agentAccess',
+      'nav.systemMaintenance',
     ])
   })
 })

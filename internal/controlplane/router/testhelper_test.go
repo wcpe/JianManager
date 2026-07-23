@@ -201,7 +201,7 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 		Instance: instanceSvc,
 		Node:     nodeSvc,
 		Log:      logSvc,
-	}, svcs.Audit)
+	}, svcs.Audit, svcs.AgentCallLog)
 	return Setup(svcs, jwtCfg.Secret)
 }
 

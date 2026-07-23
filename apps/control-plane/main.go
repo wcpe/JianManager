@@ -268,7 +268,7 @@ func main() {
 		Instance: instanceSvc,
 		Node:     nodeSvc,
 		Log:      logSvc,
-	}, auditSvc)
+	}, auditSvc, agentCallLogSvc)
 	// 平台存储资源管理器（FR-083）：CP 侧数据根 FHS 只读浏览 + 占用统计 + cache 受控清理。
 	storageSvc := service.NewStorageService(db, root)
 	// 数据库资源管理器只读浏览（FR-084）：CP 独有数据源，仅平台管理员；只读 + 敏感列脱敏。

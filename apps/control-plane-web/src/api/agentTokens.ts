@@ -26,6 +26,8 @@ export interface AgentTokenRaw {
   lastUsedAt?: string | null
   createdAt: string
   createdBy: number
+  /** 近 24h 调用次数（FR-390）。 */
+  callCount24h?: number
 }
 
 /** 前端规范化后的 Token 元数据（无明文）。 */
@@ -41,6 +43,7 @@ export interface AgentTokenInfo {
   lastUsedAt?: string | null
   createdAt: string
   createdBy: number
+  callCount24h: number
 }
 
 /** POST 签发请求体。 */
@@ -89,6 +92,7 @@ export function parseStringList(value: string | string[] | null | undefined): st
 
 /** 规范化列表项。 */
 export function normalizeAgentToken(raw: AgentTokenRaw): AgentTokenInfo {
+  const n = Number(raw.callCount24h)
   return {
     id: raw.id,
     name: raw.name,
@@ -101,6 +105,7 @@ export function normalizeAgentToken(raw: AgentTokenRaw): AgentTokenInfo {
     lastUsedAt: raw.lastUsedAt,
     createdAt: raw.createdAt,
     createdBy: raw.createdBy,
+    callCount24h: Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0,
   }
 }
 

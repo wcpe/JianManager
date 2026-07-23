@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { Copy, KeyRound, Plus } from 'lucide-react'
 import { useAuthStore } from '@/stores/auth'
@@ -12,6 +13,7 @@ import {
   WRITE_ALLOWLIST_OPTIONS,
   type AgentTokenInfo,
 } from '@/api/agentTokens'
+import { mcpBaseUrl } from '@/api/agentObservability'
 import { useInstances } from '@/api/instances'
 import { useNodes } from '@/api/nodes'
 import { copyToClipboard } from '@/lib/clipboard'
@@ -165,9 +167,17 @@ export default function AgentTokensPage() {
           <h1 className="jm-page-title">{t('agentTokens.title')}</h1>
           <p className="jm-page-subtitle">{t('agentTokens.subtitle')}</p>
         </div>
-        <Button onClick={() => setShowCreate(true)}>
-          <Plus className="size-4" /> {t('agentTokens.create')}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/mcp-sessions">{t('agentTokens.openSessions')}</Link>
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link to="/agent-call-logs">{t('agentTokens.openLogs')}</Link>
+          </Button>
+          <Button onClick={() => setShowCreate(true)}>
+            <Plus className="size-4" /> {t('agentTokens.create')}
+          </Button>
+        </div>
       </div>
 
       {listQ.isLoading ? (
@@ -192,6 +202,8 @@ export default function AgentTokensPage() {
                 <TableHead>{t('agentTokens.col.scope')}</TableHead>
                 <TableHead>{t('agentTokens.col.write')}</TableHead>
                 <TableHead>{t('agentTokens.col.expires')}</TableHead>
+                <TableHead>{t('agentTokens.col.lastUsed')}</TableHead>
+                <TableHead>{t('agentTokens.col.callCount24h')}</TableHead>
                 <TableHead>{t('agentTokens.col.status')}</TableHead>
                 <TableHead className="w-28 text-right">{t('common.actions')}</TableHead>
               </TableRow>
@@ -219,6 +231,10 @@ export default function AgentTokensPage() {
                     <TableCell className="whitespace-nowrap text-xs tabular-nums">
                       {tok.expiresAt ? new Date(tok.expiresAt).toLocaleString() : '—'}
                     </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
+                      {tok.lastUsedAt ? new Date(tok.lastUsedAt).toLocaleString() : '—'}
+                    </TableCell>
+                    <TableCell className="tabular-nums text-xs">{tok.callCount24h ?? 0}</TableCell>
                     <TableCell>
                       <StatusBadge
                         level={statusLevel(status)}
@@ -516,6 +532,7 @@ function PlaintextRevealDialog({
     () => `jm-agent --token ${plaintext} whoami`,
     [plaintext],
   )
+  const mcpUrl = useMemo(() => mcpBaseUrl(), [])
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
@@ -533,6 +550,13 @@ function PlaintextRevealDialog({
             <div className="flex items-start gap-2 rounded-md border bg-muted/50 p-2">
               <code className="flex-1 break-all font-mono text-xs leading-relaxed">{plaintext}</code>
               <CopyButton text={plaintext} label={t('agentTokens.copy')} />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <div className="text-xs font-medium text-muted-foreground">{t('agentTokens.mcpUrl')}</div>
+            <div className="flex items-start gap-2 rounded-md border bg-muted/50 p-2">
+              <code className="flex-1 break-all font-mono text-xs leading-relaxed">{mcpUrl}</code>
+              <CopyButton text={mcpUrl} label={t('agentTokens.copy')} />
             </div>
           </div>
           <div className="space-y-1">

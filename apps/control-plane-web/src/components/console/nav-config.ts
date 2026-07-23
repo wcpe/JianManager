@@ -5,6 +5,7 @@ import {
   Bell,
   Bot,
   Box,
+  Cable,
   Clapperboard,
   CloudUpload,
   Database,
@@ -52,7 +53,9 @@ export interface NavSection {
 }
 
 /**
- * 高密度控制台导航 IA（FR-268 / ADR-055）：平台首页 / 服务器 / 群组网络 / 观测 / 平台管理。
+ * 高密度控制台导航 IA（FR-268 / ADR-055 + FR-391 观测入口）：
+ * 顶层：平台首页 / 服务器 / 群组网络 / 观测 / 平台管理。
+ * 平台管理用「业务域分节」控制长度；平台管理员另见 Agent 接入、系统维护两节。
  * 侧栏只放跨服务器或平台级入口；单服操作仍统一收进服务器控制台。
  */
 export const NAV_GROUPS: NavGroup[] = [
@@ -96,6 +99,7 @@ export const NAV_GROUPS: NavGroup[] = [
     icon: Settings,
     sections: [
       {
+        // 模板 / 客户端频道 / 分发安全
         labelKey: 'nav.contentDistribution',
         children: [
           { to: '/templates', labelKey: 'nav.templates', icon: LayoutTemplate },
@@ -104,6 +108,7 @@ export const NAV_GROUPS: NavGroup[] = [
         ],
       },
       {
+        // 运行时资产、平台存储、制品/备份存储与备份任务
         labelKey: 'nav.storageRuntime',
         children: [
           { to: '/runtime-assets', labelKey: 'nav.runtimeAssets', icon: Layers },
@@ -122,10 +127,17 @@ export const NAV_GROUPS: NavGroup[] = [
         ],
       },
       {
-        labelKey: 'nav.accountAudit',
+        // 用户 / 组：身份面，与审计日志拆开，减轻「账户与审计」一节过长
+        labelKey: 'nav.identityAccess',
         children: [
           { to: '/users', labelKey: 'nav.users', icon: User },
           { to: '/groups', labelKey: 'nav.groups', icon: UsersRound },
+        ],
+      },
+      {
+        // 审计日志 + 系统设置 + 开源许可
+        labelKey: 'nav.auditSettings',
+        children: [
           { to: '/audit', labelKey: 'nav.audit', icon: FileClock },
           { to: '/settings', labelKey: 'nav.systemSettings', icon: Settings2 },
           { to: '/licenses', labelKey: 'licenses.entry', icon: Scale },
@@ -139,7 +151,30 @@ export const NAV_GROUPS: NavGroup[] = [
 const ROLE_PLATFORM_ADMIN = 10
 
 /**
- * 按角色裁剪导航：平台管理员在「平台管理」域追加「管理员」小节。
+ * 平台管理员专属分节（追加在「平台管理」末尾，不混进业务分节）。
+ * - Agent 接入：Token / MCP 会话 / 调用流水（FR-384~391）
+ * - 系统维护：库浏览 / 面板自更新
+ */
+const PLATFORM_ADMIN_SECTIONS: NavSection[] = [
+  {
+    labelKey: 'nav.agentAccess',
+    children: [
+      { to: '/agent-tokens', labelKey: 'nav.agentTokens', icon: KeyRound },
+      { to: '/mcp-sessions', labelKey: 'nav.mcpSessions', icon: Cable },
+      { to: '/agent-call-logs', labelKey: 'nav.agentCallLogs', icon: ScrollText },
+    ],
+  },
+  {
+    labelKey: 'nav.systemMaintenance',
+    children: [
+      { to: '/database', labelKey: 'nav.database', icon: Database },
+      { to: '/system-update', labelKey: 'nav.systemUpdate', icon: RefreshCw },
+    ],
+  },
+]
+
+/**
+ * 按角色裁剪导航：平台管理员在「平台管理」末尾追加 Agent 接入 + 系统维护两节。
  */
 export function navGroupsForRole(role: number | null): NavGroup[] {
   if (role !== ROLE_PLATFORM_ADMIN) return NAV_GROUPS
@@ -147,17 +182,7 @@ export function navGroupsForRole(role: number | null): NavGroup[] {
     g.key === 'platformManagement' && g.sections
       ? {
           ...g,
-          sections: [
-            ...g.sections,
-            {
-              labelKey: 'nav.admin',
-              children: [
-                { to: '/database', labelKey: 'nav.database', icon: Database },
-                { to: '/system-update', labelKey: 'nav.systemUpdate', icon: RefreshCw },
-                { to: '/agent-tokens', labelKey: 'nav.agentTokens', icon: KeyRound },
-              ],
-            },
-          ],
+          sections: [...g.sections, ...PLATFORM_ADMIN_SECTIONS],
         }
       : g,
   )

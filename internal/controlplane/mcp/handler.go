@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,11 +22,13 @@ type Handler struct {
 	deps     ToolDeps
 	// audit 可选；踢线写审计。
 	audit *service.AuditService
+	// callLog 可选；tools/call 与会话 open/close/kick 记 FR-390 流水。
+	callLog *service.AgentCallLogService
 }
 
-// NewHandler 创建 MCP 处理器。
-func NewHandler(sessions *SessionManager, agent *service.AgentTokenService, deps ToolDeps, audit *service.AuditService) *Handler {
-	return &Handler{sessions: sessions, agent: agent, deps: deps, audit: audit}
+// NewHandler 创建 MCP 处理器。callLog 可为 nil（不记流水）。
+func NewHandler(sessions *SessionManager, agent *service.AgentTokenService, deps ToolDeps, audit *service.AuditService, callLog *service.AgentCallLogService) *Handler {
+	return &Handler{sessions: sessions, agent: agent, deps: deps, audit: audit, callLog: callLog}
 }
 
 // Sessions 返回会话管理器（管理员 API 用）。
@@ -96,6 +99,7 @@ func (h *Handler) HandleStreamablePOST(c *gin.Context) {
 			h.writeSessionLimit(c, err)
 			return
 		}
+		h.recordSessionEvent(s, "mcp.session.open", c.ClientIP(), true, "")
 		c.Header(HeaderSessionID, s.ID)
 		if !req.IsNotification() {
 			writeRPC(c, newResult(req.ID, initializeResult()))
@@ -180,6 +184,7 @@ func (h *Handler) HandleSessionDELETE(c *gin.Context) {
 		return
 	}
 	_ = h.sessions.Kick(sessionID, "客户端关闭")
+	h.recordSessionEvent(s, "mcp.session.close", c.ClientIP(), true, "客户端关闭")
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
@@ -201,6 +206,7 @@ func (h *Handler) HandleSSE(c *gin.Context) {
 		h.writeSessionLimit(c, err)
 		return
 	}
+	h.recordSessionEvent(s, "mcp.session.open", c.ClientIP(), true, "")
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -327,6 +333,11 @@ func (h *Handler) AdminKickSession(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "BAD_REQUEST", "message": "id 无效"})
 		return
 	}
+	// 踢线前取快照用于流水（Kick 后会话不可再 Get）
+	var snap *Session
+	if s, err := h.sessions.Get(id); err == nil {
+		snap = s
+	}
 	if err := h.sessions.Kick(id, "管理员踢线"); err != nil {
 		if errors.Is(err, ErrSessionNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "MCP 会话不存在"})
@@ -340,6 +351,9 @@ func (h *Handler) AdminKickSession(c *gin.Context) {
 		uid, _ := c.Get("userId")
 		userID, _ := uid.(uint)
 		_ = h.audit.RecordResult(userID, "mcp.session.kick", "mcp_session", id, "", c.ClientIP(), true, "")
+	}
+	if snap != nil {
+		h.recordSessionEvent(snap, "mcp.session.kick", c.ClientIP(), true, "管理员踢线")
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
@@ -399,8 +413,107 @@ func (h *Handler) handleToolsCall(s *Session, req RPCRequest) RPCResponse {
 		params.Arguments = map[string]any{}
 	}
 	_ = h.sessions.Touch(s.ID, params.Name)
+	start := time.Now()
 	result := CallTool(s.Context(), h.deps, s.Principal, params.Name, params.Arguments)
+	h.recordToolCall(s, params.Name, params.Arguments, result, time.Since(start))
 	return newResult(req.ID, result)
+}
+
+// toolActionMap MCP tool 名 → Agent action 名（与 Ops/流水对齐）。
+var toolActionMap = map[string]string{
+	"agent_whoami":              service.AgentActionWhoami,
+	"agent_list_nodes":          service.AgentActionListNodes,
+	"agent_list_instances":      service.AgentActionListInstances,
+	"agent_get_instance":        service.AgentActionGetInstance,
+	"agent_get_instance_metrics": service.AgentActionGetInstanceMetrics,
+	"agent_get_instance_logs":   service.AgentActionGetInstanceLogs,
+	"instance_start":            service.AgentActionInstanceStart,
+	"instance_stop":             service.AgentActionInstanceStop,
+	"instance_restart":          service.AgentActionInstanceRestart,
+	"node_maintenance_enter":    service.AgentActionNodeMaintenanceEnter,
+	"node_maintenance_leave":    service.AgentActionNodeMaintenanceLeave,
+}
+
+func (h *Handler) recordToolCall(s *Session, toolName string, args map[string]any, result ToolResult, d time.Duration) {
+	if h == nil || h.callLog == nil || s == nil || s.Principal == nil {
+		return
+	}
+	action := toolActionMap[toolName]
+	if action == "" {
+		action = "mcp.tool." + toolName
+	}
+	targetType, targetID := toolTarget(toolName, args)
+	errMsg := ""
+	if result.IsError {
+		if len(result.Content) > 0 {
+			errMsg = result.Content[0].Text
+		} else {
+			errMsg = "tool error"
+		}
+	}
+	ms := d.Milliseconds()
+	if ms < 0 {
+		ms = 0
+	}
+	h.callLog.RecordSafe(service.AgentCallRecord{
+		TokenID:    s.Principal.TokenID,
+		TokenName:  s.Principal.Name,
+		Action:     action,
+		Client:     service.AgentClientMCP,
+		Transport:  s.Transport,
+		TargetType: targetType,
+		TargetID:   targetID,
+		Success:    !result.IsError,
+		Error:      errMsg,
+		LatencyMs:  uint(ms),
+		IP:         s.ClientIP,
+	})
+}
+
+func toolTarget(toolName string, args map[string]any) (targetType, targetID string) {
+	if args == nil {
+		return "", ""
+	}
+	id, err := toUint(args["id"])
+	if err != nil {
+		return "", ""
+	}
+	switch toolName {
+	case "agent_get_instance", "agent_get_instance_metrics", "agent_get_instance_logs",
+		"instance_start", "instance_stop", "instance_restart":
+		return "instance", strconv.FormatUint(uint64(id), 10)
+	case "node_maintenance_enter", "node_maintenance_leave":
+		return "node", strconv.FormatUint(uint64(id), 10)
+	default:
+		return "", ""
+	}
+}
+
+func (h *Handler) recordSessionEvent(s *Session, action, ip string, success bool, errMsg string) {
+	if h == nil || h.callLog == nil || s == nil {
+		return
+	}
+	tokenID := s.TokenID
+	tokenName := s.TokenName
+	if s.Principal != nil {
+		tokenID = s.Principal.TokenID
+		tokenName = s.Principal.Name
+	}
+	if ip == "" {
+		ip = s.ClientIP
+	}
+	h.callLog.RecordSafe(service.AgentCallRecord{
+		TokenID:    tokenID,
+		TokenName:  tokenName,
+		Action:     action,
+		Client:     service.AgentClientMCP,
+		Transport:  s.Transport,
+		TargetType: "mcp_session",
+		TargetID:   s.ID,
+		Success:    success,
+		Error:      errMsg,
+		IP:         ip,
+	})
 }
 
 func (h *Handler) writeSessionLimit(c *gin.Context, err error) {

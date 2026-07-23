@@ -2,14 +2,17 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, useLocation } from 'react-router'
 import {
+  Bell,
   Boxes,
   Check,
   ChevronDown,
   ChevronRight,
+  KeyRound,
   Languages,
   PanelLeftOpen,
   Scale,
   ShieldCheck,
+  UsersRound,
   Wrench,
   type LucideIcon,
 } from 'lucide-react'
@@ -34,7 +37,12 @@ import { navGroupsForRole, type NavGroup, type NavSection } from './nav-config'
 const SECTION_ICON: Record<string, LucideIcon> = {
   'nav.contentDistribution': Wrench,
   'nav.storageRuntime': Boxes,
-  'nav.taskNotification': ShieldCheck,
+  'nav.taskNotification': Bell,
+  'nav.identityAccess': UsersRound,
+  'nav.auditSettings': ShieldCheck,
+  'nav.agentAccess': KeyRound,
+  'nav.systemMaintenance': Wrench,
+  // 兼容旧 key（若测试/外部仍引用）
   'nav.accountAudit': ShieldCheck,
   'nav.admin': Wrench,
 }
