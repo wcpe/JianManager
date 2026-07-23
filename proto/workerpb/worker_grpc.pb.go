@@ -40,6 +40,8 @@ const (
 	WorkerService_WriteFile_FullMethodName              = "/worker.WorkerService/WriteFile"
 	WorkerService_DeleteFile_FullMethodName             = "/worker.WorkerService/DeleteFile"
 	WorkerService_RenameFile_FullMethodName             = "/worker.WorkerService/RenameFile"
+	WorkerService_CheckPathAccess_FullMethodName        = "/worker.WorkerService/CheckPathAccess"
+	WorkerService_ChmodPath_FullMethodName              = "/worker.WorkerService/ChmodPath"
 	WorkerService_DownloadArchive_FullMethodName        = "/worker.WorkerService/DownloadArchive"
 	WorkerService_DownloadFile_FullMethodName           = "/worker.WorkerService/DownloadFile"
 	WorkerService_UploadFile_FullMethodName             = "/worker.WorkerService/UploadFile"
@@ -161,6 +163,12 @@ type WorkerServiceClient interface {
 	DeleteFile(ctx context.Context, in *DeleteFileRequest, opts ...grpc.CallOption) (*DeleteFileResponse, error)
 	// RenameFile 重命名文件。
 	RenameFile(ctx context.Context, in *RenameFileRequest, opts ...grpc.CallOption) (*RenameFileResponse, error)
+	// CheckPathAccess 探测路径可读/可写（相对 Worker 进程用户，FR-373）。
+	// instance_uuid 非空：path 为实例工作目录相对路径；为空：path 须为节点绝对路径（与 BrowseDir 同语义）。
+	CheckPathAccess(ctx context.Context, in *CheckPathAccessRequest, opts ...grpc.CallOption) (*CheckPathAccessResponse, error)
+	// ChmodPath 对单 path 做非递归 chmod（FR-373；不 chown、不递归）。
+	// instance_uuid 非空：实例相对路径；为空：节点绝对路径。mode 空=保证属主可读写（目录含 x）。
+	ChmodPath(ctx context.Context, in *ChmodPathRequest, opts ...grpc.CallOption) (*ChmodPathResponse, error)
 	// DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（FR-070 批量下载）。
 	DownloadArchive(ctx context.Context, in *DownloadArchiveRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadArchiveChunk], error)
 	// DownloadFile 单文件分块流式下载（原样字节，不打包）。
@@ -540,6 +548,26 @@ func (c *workerServiceClient) RenameFile(ctx context.Context, in *RenameFileRequ
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RenameFileResponse)
 	err := c.cc.Invoke(ctx, WorkerService_RenameFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) CheckPathAccess(ctx context.Context, in *CheckPathAccessRequest, opts ...grpc.CallOption) (*CheckPathAccessResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CheckPathAccessResponse)
+	err := c.cc.Invoke(ctx, WorkerService_CheckPathAccess_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ChmodPath(ctx context.Context, in *ChmodPathRequest, opts ...grpc.CallOption) (*ChmodPathResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ChmodPathResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ChmodPath_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1292,6 +1320,12 @@ type WorkerServiceServer interface {
 	DeleteFile(context.Context, *DeleteFileRequest) (*DeleteFileResponse, error)
 	// RenameFile 重命名文件。
 	RenameFile(context.Context, *RenameFileRequest) (*RenameFileResponse, error)
+	// CheckPathAccess 探测路径可读/可写（相对 Worker 进程用户，FR-373）。
+	// instance_uuid 非空：path 为实例工作目录相对路径；为空：path 须为节点绝对路径（与 BrowseDir 同语义）。
+	CheckPathAccess(context.Context, *CheckPathAccessRequest) (*CheckPathAccessResponse, error)
+	// ChmodPath 对单 path 做非递归 chmod（FR-373；不 chown、不递归）。
+	// instance_uuid 非空：实例相对路径；为空：节点绝对路径。mode 空=保证属主可读写（目录含 x）。
+	ChmodPath(context.Context, *ChmodPathRequest) (*ChmodPathResponse, error)
 	// DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（FR-070 批量下载）。
 	DownloadArchive(*DownloadArchiveRequest, grpc.ServerStreamingServer[DownloadArchiveChunk]) error
 	// DownloadFile 单文件分块流式下载（原样字节，不打包）。
@@ -1517,6 +1551,12 @@ func (UnimplementedWorkerServiceServer) DeleteFile(context.Context, *DeleteFileR
 }
 func (UnimplementedWorkerServiceServer) RenameFile(context.Context, *RenameFileRequest) (*RenameFileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RenameFile not implemented")
+}
+func (UnimplementedWorkerServiceServer) CheckPathAccess(context.Context, *CheckPathAccessRequest) (*CheckPathAccessResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CheckPathAccess not implemented")
+}
+func (UnimplementedWorkerServiceServer) ChmodPath(context.Context, *ChmodPathRequest) (*ChmodPathResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ChmodPath not implemented")
 }
 func (UnimplementedWorkerServiceServer) DownloadArchive(*DownloadArchiveRequest, grpc.ServerStreamingServer[DownloadArchiveChunk]) error {
 	return status.Error(codes.Unimplemented, "method DownloadArchive not implemented")
@@ -2087,6 +2127,42 @@ func _WorkerService_RenameFile_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(WorkerServiceServer).RenameFile(ctx, req.(*RenameFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_CheckPathAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckPathAccessRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).CheckPathAccess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_CheckPathAccess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).CheckPathAccess(ctx, req.(*CheckPathAccessRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_ChmodPath_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ChmodPathRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ChmodPath(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ChmodPath_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ChmodPath(ctx, req.(*ChmodPathRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -3268,6 +3344,14 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RenameFile",
 			Handler:    _WorkerService_RenameFile_Handler,
+		},
+		{
+			MethodName: "CheckPathAccess",
+			Handler:    _WorkerService_CheckPathAccess_Handler,
+		},
+		{
+			MethodName: "ChmodPath",
+			Handler:    _WorkerService_ChmodPath_Handler,
 		},
 		{
 			MethodName: "SearchFiles",

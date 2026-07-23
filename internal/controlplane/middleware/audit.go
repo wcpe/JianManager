@@ -195,6 +195,10 @@ func determineAction(method, path string) string {
 		return "group.delete"
 	case method == "POST" && strings.Contains(path, "/files/write"):
 		return "file.write"
+	case method == "POST" && strings.Contains(path, "/files/chmod"):
+		return "file.chmod"
+	case method == "POST" && strings.Contains(path, "/fs/chmod"):
+		return "node.fs.chmod"
 	case method == "DELETE" && strings.Contains(path, "/files"):
 		return "file.delete"
 	case method == "POST" && strings.Contains(path, "/nodes") && strings.HasSuffix(path, "/maintenance"):

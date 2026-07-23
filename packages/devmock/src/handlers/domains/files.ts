@@ -96,12 +96,23 @@ function isDirectChild(path: string, dir: string): boolean {
   return !path.slice(dir.length + 1).includes('/')
 }
 
-/** 把文件树投影为某目录的直接子项列表（对齐 service.FileInfo，目录在前再按名排序）。 */
+/** 把文件树投影为某目录的直接子项列表（对齐 service.FileInfo，目录在前再按名排序；FR-373 权限字段默认全开）。 */
 function listDir(instanceId: number, dir: string) {
   const norm = dir.replace(/^\/+|\/+$/g, '')
   return files
     .list((f) => f.instanceId === instanceId && isDirectChild(f.path, norm))
-    .map((f) => ({ name: f.path.split('/').pop() ?? f.path, isDir: f.isDir, size: f.size, modTime: f.modTime }))
+    .map((f) => ({
+      name: f.path.split('/').pop() ?? f.path,
+      isDir: f.isDir,
+      size: f.size,
+      modTime: f.modTime,
+      modeOctal: f.isDir ? '0755' : '0644',
+      modeString: f.isDir ? 'rwxr-xr-x' : 'rw-r--r--',
+      readable: true,
+      writable: true,
+      owner: 'mock',
+      group: 'mock',
+    }))
     .sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1))
 }
 
@@ -158,6 +169,50 @@ export const handlers = [
     if (denied) return denied
     const instanceId = Number((info.params as { id: string }).id)
     return HttpResponse.json(listDir(instanceId, queryPath(info.request)))
+  }),
+
+  // ---- 写前权限探测（POST /instances/:id/files/check-access，FR-373）----
+  domainRoute('post', '/instances/:id/files/check-access', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const instanceId = Number((info.params as { id: string }).id)
+    const body = (await info.request.json().catch(() => ({}))) as { path?: string }
+    const path = (body.path ?? '').replace(/^\/+|\/+$/g, '')
+    if (!path) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '缺少 path' }, { status: 400 })
+    }
+    const target = getNode(instanceId, path)
+    if (!target) {
+      return HttpResponse.json({
+        exists: false,
+        isDir: false,
+        readable: false,
+        writable: false,
+        reason: '路径不存在',
+      })
+    }
+    return HttpResponse.json({
+      exists: true,
+      isDir: target.isDir,
+      readable: true,
+      writable: true,
+      modeOctal: target.isDir ? '0755' : '0644',
+      modeString: target.isDir ? 'rwxr-xr-x' : 'rw-r--r--',
+      owner: 'mock',
+      group: 'mock',
+    })
+  }),
+
+  // ---- 单 path chmod（POST /instances/:id/files/chmod，FR-373；mock 仅回显）----
+  domainRoute('post', '/instances/:id/files/chmod', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const body = (await info.request.json().catch(() => ({}))) as { path?: string; mode?: string }
+    if (!body.path) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '缺少 path' }, { status: 400 })
+    }
+    const modeOctal = body.mode?.replace(/^0o/, '') || '0644'
+    return HttpResponse.json({ message: '已修改权限', modeOctal: modeOctal.padStart(4, '0') })
   }),
 
   // ---- 读取文件文本（GET /instances/:id/files/read?path=）----

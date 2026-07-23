@@ -36,12 +36,31 @@ func NewFileService(db *gorm.DB, pool *grpc.ClientPool) *FileService {
 	return &FileService{db: db, pool: pool}
 }
 
-// FileInfo 文件信息。
+// FileInfo 文件信息（FR-373：含权限元数据，加性字段）。
 type FileInfo struct {
-	Name    string `json:"name"`
-	IsDir   bool   `json:"isDir"`
-	Size    int64  `json:"size"`
-	ModTime int64  `json:"modTime"`
+	Name       string `json:"name"`
+	IsDir      bool   `json:"isDir"`
+	Size       int64  `json:"size"`
+	ModTime    int64  `json:"modTime"`
+	ModeOctal  string `json:"modeOctal,omitempty"`
+	ModeString string `json:"modeString,omitempty"`
+	Readable   bool   `json:"readable"`
+	Writable   bool   `json:"writable"`
+	Owner      string `json:"owner,omitempty"`
+	Group      string `json:"group,omitempty"`
+}
+
+// PathAccess 写前/浏览前权限探测结果（FR-373）。
+type PathAccess struct {
+	Exists     bool   `json:"exists"`
+	IsDir      bool   `json:"isDir"`
+	Readable   bool   `json:"readable"`
+	Writable   bool   `json:"writable"`
+	ModeOctal  string `json:"modeOctal,omitempty"`
+	ModeString string `json:"modeString,omitempty"`
+	Owner      string `json:"owner,omitempty"`
+	Group      string `json:"group,omitempty"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 // ListFiles 列出实例工作目录下的文件。
@@ -74,13 +93,86 @@ func (s *FileService) ListFiles(instanceID uint, path string) ([]FileInfo, error
 	files := make([]FileInfo, len(resp.Files))
 	for i, f := range resp.Files {
 		files[i] = FileInfo{
-			Name:    f.Name,
-			IsDir:   f.IsDir,
-			Size:    f.Size,
-			ModTime: f.ModTime,
+			Name:       f.Name,
+			IsDir:      f.IsDir,
+			Size:       f.Size,
+			ModTime:    f.ModTime,
+			ModeOctal:  f.ModeOctal,
+			ModeString: f.ModeString,
+			Readable:   f.Readable,
+			Writable:   f.Writable,
+			Owner:      f.Owner,
+			Group:      f.Group,
 		}
 	}
 	return files, nil
+}
+
+// CheckPathAccess 探测实例内路径可读/可写（FR-373）。
+func (s *FileService) CheckPathAccess(instanceID uint, path string) (*PathAccess, error) {
+	if err := validatePath(path); err != nil {
+		return nil, err
+	}
+	instance, node, err := s.getInstanceAndNode(instanceID)
+	if err != nil {
+		return nil, err
+	}
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return nil, ErrNodeNotConnected
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := client.Worker.CheckPathAccess(ctx, &workerpb.CheckPathAccessRequest{
+		InstanceUuid: instance.UUID,
+		Path:         path,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("权限探测失败: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("%s", resp.Error)
+	}
+	return &PathAccess{
+		Exists:     resp.Exists,
+		IsDir:      resp.IsDir,
+		Readable:   resp.Readable,
+		Writable:   resp.Writable,
+		ModeOctal:  resp.ModeOctal,
+		ModeString: resp.ModeString,
+		Owner:      resp.Owner,
+		Group:      resp.Group,
+		Reason:     resp.Reason,
+	}, nil
+}
+
+// ChmodPath 实例内单 path 非递归 chmod（FR-373）。mode 空=保证属主可读写。
+func (s *FileService) ChmodPath(instanceID uint, path, mode string) (string, error) {
+	if err := validatePath(path); err != nil {
+		return "", err
+	}
+	instance, node, err := s.getInstanceAndNode(instanceID)
+	if err != nil {
+		return "", err
+	}
+	client, ok := s.pool.Get(node.UUID)
+	if !ok {
+		return "", ErrNodeNotConnected
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := client.Worker.ChmodPath(ctx, &workerpb.ChmodPathRequest{
+		InstanceUuid: instance.UUID,
+		Path:         path,
+		Mode:         mode,
+	})
+	if err != nil {
+		return "", fmt.Errorf("修改权限失败: %w", err)
+	}
+	if !resp.Success {
+		return "", fmt.Errorf("%s", resp.Error)
+	}
+	return resp.ModeOctal, nil
 }
 
 // ReadFile 读取文件内容。

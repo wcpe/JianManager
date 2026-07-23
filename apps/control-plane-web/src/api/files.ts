@@ -1,12 +1,57 @@
 import { useQuery } from '@tanstack/react-query'
 import api from '@/api/client'
 
-/** 文件/目录信息（与后端 service.FileInfo 对应，FR-008）。 */
+/** 文件/目录信息（与后端 service.FileInfo 对应，FR-008；FR-373 权限元数据加性）。 */
 export interface FileInfo {
   name: string
   isDir: boolean
   size: number
   modTime: number
+  /** 八进制权限串，如 "0644"（Windows 可空）。 */
+  modeOctal?: string
+  /** rwx 展示串，如 "rw-r--r--"（Windows 可空）。 */
+  modeString?: string
+  /** 相对 Worker 进程用户是否可读。 */
+  readable?: boolean
+  /** 相对 Worker 进程用户是否可写。 */
+  writable?: boolean
+  owner?: string
+  group?: string
+}
+
+/** 写前/浏览前权限探测结果（FR-373）。 */
+export interface PathAccess {
+  exists: boolean
+  isDir: boolean
+  readable: boolean
+  writable: boolean
+  modeOctal?: string
+  modeString?: string
+  owner?: string
+  group?: string
+  reason?: string
+}
+
+/** 探测实例内路径可读/可写（FR-373）。 */
+export async function checkFileAccess(instanceId: number, path: string): Promise<PathAccess> {
+  const { data } = await api.post<PathAccess>(`/instances/${instanceId}/files/check-access`, { path })
+  return data
+}
+
+/**
+ * 单 path 非递归 chmod（FR-373）。
+ * mode 省略时由 Worker 保证属主可读写（目录含 x）。
+ */
+export async function chmodFile(
+  instanceId: number,
+  path: string,
+  mode?: string,
+): Promise<{ modeOctal: string }> {
+  const { data } = await api.post<{ message: string; modeOctal: string }>(
+    `/instances/${instanceId}/files/chmod`,
+    { path, mode },
+  )
+  return { modeOctal: data.modeOctal }
 }
 
 /** 列出某目录内容（FR-008）。空 path 为工作目录根。 */

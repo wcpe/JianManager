@@ -31,10 +31,48 @@ export interface JDKCatalogPackage {
   latest: boolean
 }
 
-/** 目录浏览中的一个子目录项（FR-178 目录选择器）。 */
+/** 目录浏览中的一个子目录项（FR-178 目录选择器；FR-373 权限元数据加性）。 */
 export interface BrowseDirEntry {
   name: string
   path: string
+  modeOctal?: string
+  modeString?: string
+  readable?: boolean
+  writable?: boolean
+  owner?: string
+  group?: string
+}
+
+/** 节点绝对路径权限探测结果（FR-373，与实例 PathAccess 同形）。 */
+export interface NodePathAccess {
+  exists: boolean
+  isDir: boolean
+  readable: boolean
+  writable: boolean
+  modeOctal?: string
+  modeString?: string
+  owner?: string
+  group?: string
+  reason?: string
+}
+
+/** 探测节点绝对路径可读/可写（平台管理员，FR-373）。 */
+export async function checkNodePathAccess(nodeId: number, path: string): Promise<NodePathAccess> {
+  const { data } = await api.post<NodePathAccess>(`/nodes/${nodeId}/fs/check-access`, { path })
+  return data
+}
+
+/** 节点绝对路径单 path 非递归 chmod（平台管理员，FR-373）。 */
+export async function chmodNodePath(
+  nodeId: number,
+  path: string,
+  mode?: string,
+): Promise<{ modeOctal: string }> {
+  const { data } = await api.post<{ message: string; modeOctal: string }>(
+    `/nodes/${nodeId}/fs/chmod`,
+    { path, mode },
+  )
+  return { modeOctal: data.modeOctal }
 }
 
 /** 目录浏览结果（FR-178）。 */

@@ -816,10 +816,63 @@ export const handlers = [
       path,
       parent: path ? '/opt' : '',
       dirs: [
-        { name: 'jdks', path: '/opt/jdks' },
-        { name: 'instances', path: '/opt/instances' },
+        {
+          name: 'jdks',
+          path: '/opt/jdks',
+          modeOctal: '0755',
+          modeString: 'rwxr-xr-x',
+          readable: true,
+          writable: true,
+          owner: 'mock',
+          group: 'mock',
+        },
+        {
+          name: 'instances',
+          path: '/opt/instances',
+          modeOctal: '0755',
+          modeString: 'rwxr-xr-x',
+          readable: true,
+          writable: true,
+          owner: 'mock',
+          group: 'mock',
+        },
       ],
     })
+  }),
+
+  // FR-373 节点路径权限探测 / chmod（平台管理员）
+  domainRoute('post', '/nodes/:id/fs/check-access', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const admin = requirePlatformAdmin(info)
+    if (admin) return admin
+    const body = (await info.request.json().catch(() => ({}))) as { path?: string }
+    if (!body.path) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '缺少 path' }, { status: 400 })
+    }
+    return HttpResponse.json({
+      exists: true,
+      isDir: true,
+      readable: true,
+      writable: true,
+      modeOctal: '0755',
+      modeString: 'rwxr-xr-x',
+      owner: 'mock',
+      group: 'mock',
+    })
+  }),
+
+  domainRoute('post', '/nodes/:id/fs/chmod', async (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const admin = requirePlatformAdmin(info)
+    if (admin) return admin
+    const body = (await info.request.json().catch(() => ({}))) as { path?: string; mode?: string }
+    if (!body.path) {
+      return HttpResponse.json({ error: 'INVALID_REQUEST', message: '缺少 path' }, { status: 400 })
+    }
+    const modeOctal = (body.mode?.replace(/^0o/, '') || '0755').padStart(4, '0')
+    return HttpResponse.json({ message: '已修改权限', modeOctal })
   }),
 
   /* ===================== 节点运行时库（FR-298） ===================== */

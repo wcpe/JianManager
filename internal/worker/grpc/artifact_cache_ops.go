@@ -109,21 +109,25 @@ func (s *Server) BrowseDir(_ context.Context, req *workerpb.BrowseDirRequest) (*
 	}
 	st, err := os.Stat(clean)
 	if err != nil {
-		return &workerpb.BrowseDirResponse{Success: false, Error: fmt.Sprintf("无法访问: %v", err)}, nil
+		return &workerpb.BrowseDirResponse{Success: false, Error: formatPermError("访问", err)}, nil
 	}
 	if !st.IsDir() {
 		return &workerpb.BrowseDirResponse{Success: false, Error: "不是目录"}, nil
 	}
 	entries, err := os.ReadDir(clean)
 	if err != nil {
-		return &workerpb.BrowseDirResponse{Success: false, Error: fmt.Sprintf("读取目录失败: %v", err)}, nil
+		// FR-373：不可读目录不得空列表冒充，须中文诊断
+		return &workerpb.BrowseDirResponse{Success: false, Error: formatPermError("读取目录", err)}, nil
 	}
 	dirs := make([]*workerpb.BrowseDirEntry, 0, len(entries))
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		dirs = append(dirs, &workerpb.BrowseDirEntry{Name: e.Name(), Path: filepath.Join(clean, e.Name())})
+		child := filepath.Join(clean, e.Name())
+		be := &workerpb.BrowseDirEntry{Name: e.Name(), Path: child}
+		fillBrowseDirEntryPerm(be, child)
+		dirs = append(dirs, be)
 	}
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name < dirs[j].Name })
 

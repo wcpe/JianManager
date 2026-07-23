@@ -55,6 +55,12 @@ service WorkerService {
   rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
   // RenameFile 重命名文件。
   rpc RenameFile(RenameFileRequest) returns (RenameFileResponse);
+  // CheckPathAccess 探测路径可读/可写（相对 Worker 进程用户，FR-373）。
+  // instance_uuid 非空：path 为实例工作目录相对路径；为空：path 须为节点绝对路径（与 BrowseDir 同语义）。
+  rpc CheckPathAccess(CheckPathAccessRequest) returns (CheckPathAccessResponse);
+  // ChmodPath 对单 path 做非递归 chmod（FR-373；不 chown、不递归）。
+  // instance_uuid 非空：实例相对路径；为空：节点绝对路径。mode 空=保证属主可读写（目录含 x）。
+  rpc ChmodPath(ChmodPathRequest) returns (ChmodPathResponse);
   // DownloadArchive 把选中的文件/目录（目录递归）即时打包为 zip 并分块流式返回（FR-070 批量下载）。
   rpc DownloadArchive(DownloadArchiveRequest) returns (stream DownloadArchiveChunk);
   // DownloadFile 单文件分块流式下载（原样字节，不打包）。
@@ -538,6 +544,46 @@ message FileInfo {
   bool is_dir = 2;
   int64 size = 3;
   int64 mod_time = 4;
+  // FR-373 权限元数据（加性；相对 Worker 进程用户）。
+  string mode_octal = 5;   // 如 "0644"，Windows 可空
+  string mode_string = 6;  // 如 "rw-r--r--"，Windows 可空
+  bool readable = 7;
+  bool writable = 8;
+  string owner = 9;        // 可空
+  string group = 10;       // 可空
+}
+
+// CheckPathAccessRequest 写前/浏览前权限探测（FR-373）。
+message CheckPathAccessRequest {
+  string instance_uuid = 1; // 空=节点绝对路径模式
+  string path = 2;
+}
+
+message CheckPathAccessResponse {
+  bool success = 1;
+  string error = 2;
+  bool exists = 3;
+  bool is_dir = 4;
+  bool readable = 5;
+  bool writable = 6;
+  string mode_octal = 7;
+  string mode_string = 8;
+  string owner = 9;
+  string group = 10;
+  string reason = 11; // 中文诊断
+}
+
+// ChmodPathRequest 单 path 非递归 chmod（FR-373）。
+message ChmodPathRequest {
+  string instance_uuid = 1;
+  string path = 2;
+  string mode = 3; // 可选八进制如 "0644"；空=保证 u+rw（目录 u+rwx）
+}
+
+message ChmodPathResponse {
+  bool success = 1;
+  string error = 2;
+  string mode_octal = 3; // 修改后
 }
 
 message ReadFileRequest {
@@ -1053,6 +1099,13 @@ message BrowseDirRequest {
 message BrowseDirEntry {
   string name = 1; // 目录名（basename）
   string path = 2; // 绝对路径
+  // FR-373 权限元数据（加性）。
+  string mode_octal = 3;
+  string mode_string = 4;
+  bool readable = 5;
+  bool writable = 6;
+  string owner = 7;
+  string group = 8;
 }
 
 message BrowseDirResponse {

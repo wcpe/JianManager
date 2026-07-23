@@ -53,10 +53,16 @@ type JDKCatalogPackage struct {
 	Latest       bool   `json:"latest"`
 }
 
-// BrowseDirEntry 一个子目录项。
+// BrowseDirEntry 一个子目录项（FR-373：含权限元数据）。
 type BrowseDirEntry struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	ModeOctal  string `json:"modeOctal,omitempty"`
+	ModeString string `json:"modeString,omitempty"`
+	Readable   bool   `json:"readable"`
+	Writable   bool   `json:"writable"`
+	Owner      string `json:"owner,omitempty"`
+	Group      string `json:"group,omitempty"`
 }
 
 // BrowseDirView 目录浏览结果。
@@ -231,7 +237,62 @@ func (s *NodeRuntimeService) BrowseDir(nodeID uint, path string) (*BrowseDirView
 	}
 	view := &BrowseDirView{Path: resp.Path, Parent: resp.Parent}
 	for _, d := range resp.Dirs {
-		view.Dirs = append(view.Dirs, BrowseDirEntry{Name: d.Name, Path: d.Path})
+		view.Dirs = append(view.Dirs, BrowseDirEntry{
+			Name:       d.Name,
+			Path:       d.Path,
+			ModeOctal:  d.ModeOctal,
+			ModeString: d.ModeString,
+			Readable:   d.Readable,
+			Writable:   d.Writable,
+			Owner:      d.Owner,
+			Group:      d.Group,
+		})
 	}
 	return view, nil
+}
+
+// CheckNodePathAccess 节点绝对路径权限探测（FR-373，导入/BrowseDir 场景）。
+func (s *NodeRuntimeService) CheckNodePathAccess(nodeID uint, path string) (*PathAccess, error) {
+	client, err := s.nodeClient(nodeID)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	resp, err := client.Worker.CheckPathAccess(ctx, &workerpb.CheckPathAccessRequest{Path: path})
+	if err != nil {
+		return nil, fmt.Errorf("权限探测失败: %w", err)
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("%s", resp.Error)
+	}
+	return &PathAccess{
+		Exists:     resp.Exists,
+		IsDir:      resp.IsDir,
+		Readable:   resp.Readable,
+		Writable:   resp.Writable,
+		ModeOctal:  resp.ModeOctal,
+		ModeString: resp.ModeString,
+		Owner:      resp.Owner,
+		Group:      resp.Group,
+		Reason:     resp.Reason,
+	}, nil
+}
+
+// ChmodNodePath 节点绝对路径单 path 非递归 chmod（FR-373）。
+func (s *NodeRuntimeService) ChmodNodePath(nodeID uint, path, mode string) (string, error) {
+	client, err := s.nodeClient(nodeID)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	resp, err := client.Worker.ChmodPath(ctx, &workerpb.ChmodPathRequest{Path: path, Mode: mode})
+	if err != nil {
+		return "", fmt.Errorf("修改权限失败: %w", err)
+	}
+	if !resp.Success {
+		return "", fmt.Errorf("%s", resp.Error)
+	}
+	return resp.ModeOctal, nil
 }

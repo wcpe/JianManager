@@ -175,6 +175,58 @@ func (h *NodeRuntimeHandler) BrowseDir(c *gin.Context) {
 	c.JSON(http.StatusOK, view)
 }
 
+// CheckFSAccess POST /nodes/:id/fs/check-access — 节点绝对路径权限探测（FR-373）。
+func (h *NodeRuntimeHandler) CheckFSAccess(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	nodeID, err := parseUintParam(c, "id")
+	if err != nil {
+		return
+	}
+	var req struct {
+		Path string `json:"path" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少 path"})
+		return
+	}
+	access, err := h.svc.CheckNodePathAccess(nodeID, req.Path)
+	if err != nil {
+		h.writeRuntimeErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, access)
+}
+
+// ChmodFS POST /nodes/:id/fs/chmod — 节点绝对路径单 path 非递归 chmod（FR-373）。
+func (h *NodeRuntimeHandler) ChmodFS(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	nodeID, err := parseUintParam(c, "id")
+	if err != nil {
+		return
+	}
+	var req struct {
+		Path string `json:"path" binding:"required"`
+		Mode string `json:"mode"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少 path"})
+		return
+	}
+	modeOctal, err := h.svc.ChmodNodePath(nodeID, req.Path, req.Mode)
+	if err != nil {
+		h.writeRuntimeErr(c, err)
+		return
+	}
+	h.recordAudit(c, "node.fs.chmod", c.Param("id"), map[string]any{
+		"nodeId": nodeID, "path": req.Path, "mode": req.Mode, "modeOctal": modeOctal,
+	})
+	c.JSON(http.StatusOK, gin.H{"message": "已修改权限", "modeOctal": modeOctal})
+}
+
 // RegisterRoutes 注册节点运行时路由（FR-178）。
 func (h *NodeRuntimeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	ac := rg.Group("/nodes/:id/artifact-cache")
@@ -185,4 +237,7 @@ func (h *NodeRuntimeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 
 	rg.GET("/nodes/:id/jdk/catalog", h.JDKCatalog)
 	rg.GET("/nodes/:id/browse", h.BrowseDir)
+	// FR-373 节点路径权限（加性）。
+	rg.POST("/nodes/:id/fs/check-access", h.CheckFSAccess)
+	rg.POST("/nodes/:id/fs/chmod", h.ChmodFS)
 }

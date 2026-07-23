@@ -9,7 +9,7 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// ListFiles 列出实例工作目录下的文件。
+// ListFiles 列出实例工作目录下的文件（FR-373：附权限元数据）。
 func (s *Server) ListFiles(ctx context.Context, req *workerpb.ListFilesRequest) (*workerpb.ListFilesResponse, error) {
 	inst, exists := s.manager.GetInstance(req.InstanceUuid)
 	if !exists {
@@ -17,23 +17,28 @@ func (s *Server) ListFiles(ctx context.Context, req *workerpb.ListFilesRequest) 
 	}
 
 	dir := filepath.Join(inst.WorkDir, req.Path)
+	if err := validatePath(inst.WorkDir, dir); err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, fmt.Errorf("读取目录失败: %w", err)
+		return nil, fmt.Errorf("%s", formatPermError("读取目录", err))
 	}
 
-	files := make([]*workerpb.FileInfo, len(entries))
-	for i, entry := range entries {
+	files := make([]*workerpb.FileInfo, 0, len(entries))
+	for _, entry := range entries {
 		info, err := entry.Info()
 		if err != nil {
 			continue
 		}
-		files[i] = &workerpb.FileInfo{
+		fi := &workerpb.FileInfo{
 			Name:    entry.Name(),
 			IsDir:   entry.IsDir(),
 			Size:    info.Size(),
 			ModTime: info.ModTime().Unix(),
 		}
+		fillFileInfoPerm(fi, filepath.Join(dir, entry.Name()))
+		files = append(files, fi)
 	}
 
 	return &workerpb.ListFilesResponse{Files: files}, nil
@@ -53,7 +58,7 @@ func (s *Server) ReadFile(ctx context.Context, req *workerpb.ReadFileRequest) (*
 
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("读取文件失败: %w", err)
+		return nil, fmt.Errorf("%s", formatPermError("读取", err))
 	}
 
 	const maxSize = 10 * 1024 * 1024
@@ -82,7 +87,7 @@ func (s *Server) WriteFile(ctx context.Context, req *workerpb.WriteFileRequest) 
 	}
 
 	if err := os.WriteFile(path, req.Content, 0644); err != nil {
-		return &workerpb.WriteFileResponse{Success: false, Error: fmt.Sprintf("写入文件失败: %v", err)}, nil
+		return &workerpb.WriteFileResponse{Success: false, Error: formatPermError("写文件", err)}, nil
 	}
 
 	return &workerpb.WriteFileResponse{Success: true}, nil

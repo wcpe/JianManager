@@ -634,6 +634,57 @@ func (h *FileHandler) Rollback(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"versionId": versionID})
 }
 
+// CheckAccess POST /instances/:id/files/check-access — 写前权限探测（FR-373）。
+func (h *FileHandler) CheckAccess(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !canAccessInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	var req struct {
+		Path string `json:"path" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少 path"})
+		return
+	}
+	access, err := h.fileSvc.CheckPathAccess(id, req.Path)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, access)
+}
+
+// Chmod POST /instances/:id/files/chmod — 单 path 非递归 chmod（FR-373）。
+func (h *FileHandler) Chmod(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !canManageInstance(c, h.authz, id) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "实例不存在"})
+		return
+	}
+	var req struct {
+		Path string `json:"path" binding:"required"`
+		Mode string `json:"mode"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "缺少 path"})
+		return
+	}
+	modeOctal, err := h.fileSvc.ChmodPath(id, req.Path, req.Mode)
+	if err != nil {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "已修改权限", "modeOctal": modeOctal})
+}
+
 // RegisterRoutes 注册文件路由。
 func (h *FileHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	files := rg.Group("/instances/:id/files")
@@ -657,5 +708,8 @@ func (h *FileHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		files.GET("/versions", h.Versions)
 		files.GET("/diff", h.FileDiff)
 		files.POST("/rollback", h.Rollback)
+		// FR-373 权限探测与单 path chmod（加性追加）。
+		files.POST("/check-access", h.CheckAccess)
+		files.POST("/chmod", h.Chmod)
 	}
 }
