@@ -346,6 +346,10 @@ type botFleetManager interface {
 	StopBotBatch(context.Context, string, []string, int64, string) (*bot.BotWorkerEvent, error)
 	SignalActions(context.Context, string, []bot.ActionSignal) (*bot.BotWorkerEvent, error)
 	RequestFleetSnapshot(context.Context, string) (*bot.BotWorkerEvent, error)
+	// FR-369 通用命令编排 IPC（partial：同步回执；occurrence 终态仍走 action-event 通路）。
+	ApplyCommandSchedule(ctx context.Context, ipcRequestID string, cmd bot.CommandScheduleCommand, deadline time.Duration) (*bot.BotWorkerEvent, error)
+	ReleaseCommandSchedule(ctx context.Context, ipcRequestID string, cmd bot.CommandScheduleReleaseCommand, deadline time.Duration) (*bot.BotWorkerEvent, error)
+	CancelCommandSchedule(ctx context.Context, ipcRequestID string, cmd bot.CommandScheduleCancelCommand, deadline time.Duration) (*bot.BotWorkerEvent, error)
 }
 
 type botBatchCacheEntry struct {
@@ -1046,6 +1050,16 @@ func botWorkerEventToFleetProto(event *bot.BotWorkerEvent, sessionID string) []*
 		}
 		return []*workerpb.BotFleetEvent{{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: actionEventToProto(event.Action)}}}
 	}
+	if event.Evt == "command-schedule-result" && len(event.Data) > 0 {
+		payload, err := commandScheduleResultFromEvent(event)
+		if err != nil {
+			return nil
+		}
+		if sessionID != "" && payload.SessionUuid != sessionID {
+			return nil
+		}
+		return []*workerpb.BotFleetEvent{{Event: &workerpb.BotFleetEvent_ActionEvent{ActionEvent: payload}}}
+	}
 	if event.Evt != "bot-state" {
 		return nil
 	}
@@ -1057,6 +1071,85 @@ func botWorkerEventToFleetProto(event *bot.BotWorkerEvent, sessionID string) []*
 		results = append(results, &workerpb.BotFleetEvent{Event: &workerpb.BotFleetEvent_RuntimeSnapshot{RuntimeSnapshot: botStateToRuntimeProto(&event.Bots[i])}})
 	}
 	return results
+}
+
+// commandScheduleResultFromEvent 把 Bot Worker command-schedule-result 映射为既有 BotActionEvent。
+func commandScheduleResultFromEvent(event *bot.BotWorkerEvent) (*workerpb.BotActionEvent, error) {
+	if len(event.Data) == 0 {
+		return nil, fmt.Errorf("command-schedule-result 缺少 data")
+	}
+	var payload bot.CommandScheduleResultPayload
+	if err := json.Unmarshal(event.Data, &payload); err != nil {
+		return nil, err
+	}
+	if payload.ActionRunID == "" {
+		return nil, fmt.Errorf("command-schedule-result actionRunId 缺失")
+	}
+	status, message, errorCode := mapCommandScheduleStatus(payload.Status, payload.ErrorCode, payload.Message)
+	resultJSON := buildCommandScheduleResultJSON(payload)
+	generation := payload.Generation
+	if generation <= 0 {
+		generation = 1
+	}
+	return &workerpb.BotActionEvent{
+		BotUuid:         payload.BotUUID,
+		SessionUuid:     payload.RunUUID,
+		Generation:      generation,
+		ActionRunId:     payload.ActionRunID,
+		StepId:          payload.StepID,
+		Attempt:         int32(payload.Attempt),
+		Status:          status,
+		ErrorCode:       errorCode,
+		Message:         message,
+		CorrelationToken: payload.CorrelationToken,
+		ResultJson:      resultJSON,
+		DurationMs:      payload.DurationMs,
+		ObservedAtUnixMs: payload.ObservedAtUnixMs,
+	}, nil
+}
+
+func mapCommandScheduleStatus(status, errorCode, message string) (string, string, string) {
+	switch status {
+	case "sent":
+		return "succeeded", "", ""
+	case "failed":
+		if errorCode == "" {
+			errorCode = "COMMAND_SEND_FAILED"
+		}
+		return "failed", message, errorCode
+	case "timed_out":
+		return "timed_out", message, "COMMAND_DEADLINE_EXCEEDED"
+	case "cancelled":
+		if errorCode == "" {
+			errorCode = "ACTION_CANCELLED"
+		}
+		return "cancelled", message, errorCode
+	default:
+		return "failed", message, errorCode
+	}
+}
+
+func buildCommandScheduleResultJSON(payload bot.CommandScheduleResultPayload) string {
+	envelope := map[string]interface{}{
+		"scheduleRunId":    payload.ScheduleRunID,
+		"commandId":        payload.CommandID,
+		"occurrence":       payload.Occurrence,
+		"plannedAtUnixMs":  payload.PlannedAtUnixMs,
+		"sentAtUnixMs":     payload.SentAtUnixMs,
+		"status":           payload.Status,
+		"attemptErrors":    payload.AttemptErrors,
+	}
+	if payload.ErrorCode != "" {
+		envelope["errorCode"] = payload.ErrorCode
+	}
+	if payload.Message != "" {
+		envelope["message"] = payload.Message
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
 }
 
 func actionEventToProto(event *bot.ActionEvent) *workerpb.BotActionEvent {

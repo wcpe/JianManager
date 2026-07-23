@@ -19,94 +19,97 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	WorkerService_Register_FullMethodName               = "/worker.WorkerService/Register"
-	WorkerService_Heartbeat_FullMethodName              = "/worker.WorkerService/Heartbeat"
-	WorkerService_FetchBotWorkerArchive_FullMethodName  = "/worker.WorkerService/FetchBotWorkerArchive"
-	WorkerService_ReportCrashSnapshot_FullMethodName    = "/worker.WorkerService/ReportCrashSnapshot"
-	WorkerService_CreateInstance_FullMethodName         = "/worker.WorkerService/CreateInstance"
-	WorkerService_ResyncInstances_FullMethodName        = "/worker.WorkerService/ResyncInstances"
-	WorkerService_StartInstance_FullMethodName          = "/worker.WorkerService/StartInstance"
-	WorkerService_StopInstance_FullMethodName           = "/worker.WorkerService/StopInstance"
-	WorkerService_RestartInstance_FullMethodName        = "/worker.WorkerService/RestartInstance"
-	WorkerService_KillInstance_FullMethodName           = "/worker.WorkerService/KillInstance"
-	WorkerService_PreflightStartInstance_FullMethodName = "/worker.WorkerService/PreflightStartInstance"
-	WorkerService_SendCommand_FullMethodName            = "/worker.WorkerService/SendCommand"
-	WorkerService_GetInstanceStatus_FullMethodName      = "/worker.WorkerService/GetInstanceStatus"
-	WorkerService_ListInstances_FullMethodName          = "/worker.WorkerService/ListInstances"
-	WorkerService_StreamInstanceEvents_FullMethodName   = "/worker.WorkerService/StreamInstanceEvents"
-	WorkerService_IssueTerminalToken_FullMethodName     = "/worker.WorkerService/IssueTerminalToken"
-	WorkerService_ListFiles_FullMethodName              = "/worker.WorkerService/ListFiles"
-	WorkerService_ReadFile_FullMethodName               = "/worker.WorkerService/ReadFile"
-	WorkerService_WriteFile_FullMethodName              = "/worker.WorkerService/WriteFile"
-	WorkerService_DeleteFile_FullMethodName             = "/worker.WorkerService/DeleteFile"
-	WorkerService_RenameFile_FullMethodName             = "/worker.WorkerService/RenameFile"
-	WorkerService_CheckPathAccess_FullMethodName        = "/worker.WorkerService/CheckPathAccess"
-	WorkerService_ChmodPath_FullMethodName              = "/worker.WorkerService/ChmodPath"
-	WorkerService_DownloadArchive_FullMethodName        = "/worker.WorkerService/DownloadArchive"
-	WorkerService_DownloadFile_FullMethodName           = "/worker.WorkerService/DownloadFile"
-	WorkerService_UploadFile_FullMethodName             = "/worker.WorkerService/UploadFile"
-	WorkerService_SearchFiles_FullMethodName            = "/worker.WorkerService/SearchFiles"
-	WorkerService_ListArchiveEntries_FullMethodName     = "/worker.WorkerService/ListArchiveEntries"
-	WorkerService_ReadArchiveEntry_FullMethodName       = "/worker.WorkerService/ReadArchiveEntry"
-	WorkerService_DecompileClass_FullMethodName         = "/worker.WorkerService/DecompileClass"
-	WorkerService_ListConfigFiles_FullMethodName        = "/worker.WorkerService/ListConfigFiles"
-	WorkerService_ReadConfig_FullMethodName             = "/worker.WorkerService/ReadConfig"
-	WorkerService_WriteConfig_FullMethodName            = "/worker.WorkerService/WriteConfig"
-	WorkerService_ValidateConfig_FullMethodName         = "/worker.WorkerService/ValidateConfig"
-	WorkerService_GetNodeMetrics_FullMethodName         = "/worker.WorkerService/GetNodeMetrics"
-	WorkerService_GetInstanceMetrics_FullMethodName     = "/worker.WorkerService/GetInstanceMetrics"
-	WorkerService_GetInstanceEnv_FullMethodName         = "/worker.WorkerService/GetInstanceEnv"
-	WorkerService_ListJDKs_FullMethodName               = "/worker.WorkerService/ListJDKs"
-	WorkerService_InstallJDK_FullMethodName             = "/worker.WorkerService/InstallJDK"
-	WorkerService_RemoveJDK_FullMethodName              = "/worker.WorkerService/RemoveJDK"
-	WorkerService_JDKCatalog_FullMethodName             = "/worker.WorkerService/JDKCatalog"
-	WorkerService_ProbeJDK_FullMethodName               = "/worker.WorkerService/ProbeJDK"
-	WorkerService_ScanRuntimes_FullMethodName           = "/worker.WorkerService/ScanRuntimes"
-	WorkerService_InstallRuntime_FullMethodName         = "/worker.WorkerService/InstallRuntime"
-	WorkerService_RemoveRuntime_FullMethodName          = "/worker.WorkerService/RemoveRuntime"
-	WorkerService_GetPMConfig_FullMethodName            = "/worker.WorkerService/GetPMConfig"
-	WorkerService_SetPMConfig_FullMethodName            = "/worker.WorkerService/SetPMConfig"
-	WorkerService_ListGlobalPackages_FullMethodName     = "/worker.WorkerService/ListGlobalPackages"
-	WorkerService_InstallGlobalPackage_FullMethodName   = "/worker.WorkerService/InstallGlobalPackage"
-	WorkerService_RemoveGlobalPackage_FullMethodName    = "/worker.WorkerService/RemoveGlobalPackage"
-	WorkerService_DownloadCore_FullMethodName           = "/worker.WorkerService/DownloadCore"
-	WorkerService_InstallForgeServer_FullMethodName     = "/worker.WorkerService/InstallForgeServer"
-	WorkerService_ListArtifactCache_FullMethodName      = "/worker.WorkerService/ListArtifactCache"
-	WorkerService_EvictArtifactCache_FullMethodName     = "/worker.WorkerService/EvictArtifactCache"
-	WorkerService_ClearArtifactCache_FullMethodName     = "/worker.WorkerService/ClearArtifactCache"
-	WorkerService_SetArtifactCacheCap_FullMethodName    = "/worker.WorkerService/SetArtifactCacheCap"
-	WorkerService_BrowseDir_FullMethodName              = "/worker.WorkerService/BrowseDir"
-	WorkerService_DeployServerProbe_FullMethodName      = "/worker.WorkerService/DeployServerProbe"
-	WorkerService_CloneWorkDir_FullMethodName           = "/worker.WorkerService/CloneWorkDir"
-	WorkerService_RemoveInstance_FullMethodName         = "/worker.WorkerService/RemoveInstance"
-	WorkerService_DisposeOrphanRuntime_FullMethodName   = "/worker.WorkerService/DisposeOrphanRuntime"
-	WorkerService_ListImages_FullMethodName             = "/worker.WorkerService/ListImages"
-	WorkerService_PullImage_FullMethodName              = "/worker.WorkerService/PullImage"
-	WorkerService_RemoveImage_FullMethodName            = "/worker.WorkerService/RemoveImage"
-	WorkerService_CreateBackup_FullMethodName           = "/worker.WorkerService/CreateBackup"
-	WorkerService_RestoreBackup_FullMethodName          = "/worker.WorkerService/RestoreBackup"
-	WorkerService_TestStorageBackend_FullMethodName     = "/worker.WorkerService/TestStorageBackend"
-	WorkerService_CreateBot_FullMethodName              = "/worker.WorkerService/CreateBot"
-	WorkerService_DeleteBot_FullMethodName              = "/worker.WorkerService/DeleteBot"
-	WorkerService_ListBots_FullMethodName               = "/worker.WorkerService/ListBots"
-	WorkerService_SetBotBehavior_FullMethodName         = "/worker.WorkerService/SetBotBehavior"
-	WorkerService_SendBotCommand_FullMethodName         = "/worker.WorkerService/SendBotCommand"
-	WorkerService_RunBotScript_FullMethodName           = "/worker.WorkerService/RunBotScript"
-	WorkerService_StreamBotEvents_FullMethodName        = "/worker.WorkerService/StreamBotEvents"
-	WorkerService_GetBotCapacity_FullMethodName         = "/worker.WorkerService/GetBotCapacity"
-	WorkerService_ApplyBotBatch_FullMethodName          = "/worker.WorkerService/ApplyBotBatch"
-	WorkerService_GetBotFleetSnapshot_FullMethodName    = "/worker.WorkerService/GetBotFleetSnapshot"
-	WorkerService_StreamBotFleetEvents_FullMethodName   = "/worker.WorkerService/StreamBotFleetEvents"
-	WorkerService_SignalBotActions_FullMethodName       = "/worker.WorkerService/SignalBotActions"
-	WorkerService_StreamPluginEvents_FullMethodName     = "/worker.WorkerService/StreamPluginEvents"
-	WorkerService_SendPluginCommand_FullMethodName      = "/worker.WorkerService/SendPluginCommand"
-	WorkerService_QueryServerState_FullMethodName       = "/worker.WorkerService/QueryServerState"
-	WorkerService_GetVersion_FullMethodName             = "/worker.WorkerService/GetVersion"
-	WorkerService_CheckDocker_FullMethodName            = "/worker.WorkerService/CheckDocker"
-	WorkerService_UpgradeWorker_FullMethodName          = "/worker.WorkerService/UpgradeWorker"
-	WorkerService_TerminalSession_FullMethodName        = "/worker.WorkerService/TerminalSession"
-	WorkerService_InspectServerDir_FullMethodName       = "/worker.WorkerService/InspectServerDir"
-	WorkerService_ImportServerDir_FullMethodName        = "/worker.WorkerService/ImportServerDir"
+	WorkerService_Register_FullMethodName                   = "/worker.WorkerService/Register"
+	WorkerService_Heartbeat_FullMethodName                  = "/worker.WorkerService/Heartbeat"
+	WorkerService_FetchBotWorkerArchive_FullMethodName      = "/worker.WorkerService/FetchBotWorkerArchive"
+	WorkerService_ReportCrashSnapshot_FullMethodName        = "/worker.WorkerService/ReportCrashSnapshot"
+	WorkerService_CreateInstance_FullMethodName             = "/worker.WorkerService/CreateInstance"
+	WorkerService_ResyncInstances_FullMethodName            = "/worker.WorkerService/ResyncInstances"
+	WorkerService_StartInstance_FullMethodName              = "/worker.WorkerService/StartInstance"
+	WorkerService_StopInstance_FullMethodName               = "/worker.WorkerService/StopInstance"
+	WorkerService_RestartInstance_FullMethodName            = "/worker.WorkerService/RestartInstance"
+	WorkerService_KillInstance_FullMethodName               = "/worker.WorkerService/KillInstance"
+	WorkerService_PreflightStartInstance_FullMethodName     = "/worker.WorkerService/PreflightStartInstance"
+	WorkerService_SendCommand_FullMethodName                = "/worker.WorkerService/SendCommand"
+	WorkerService_GetInstanceStatus_FullMethodName          = "/worker.WorkerService/GetInstanceStatus"
+	WorkerService_ListInstances_FullMethodName              = "/worker.WorkerService/ListInstances"
+	WorkerService_StreamInstanceEvents_FullMethodName       = "/worker.WorkerService/StreamInstanceEvents"
+	WorkerService_IssueTerminalToken_FullMethodName         = "/worker.WorkerService/IssueTerminalToken"
+	WorkerService_ListFiles_FullMethodName                  = "/worker.WorkerService/ListFiles"
+	WorkerService_ReadFile_FullMethodName                   = "/worker.WorkerService/ReadFile"
+	WorkerService_WriteFile_FullMethodName                  = "/worker.WorkerService/WriteFile"
+	WorkerService_DeleteFile_FullMethodName                 = "/worker.WorkerService/DeleteFile"
+	WorkerService_RenameFile_FullMethodName                 = "/worker.WorkerService/RenameFile"
+	WorkerService_CheckPathAccess_FullMethodName            = "/worker.WorkerService/CheckPathAccess"
+	WorkerService_ChmodPath_FullMethodName                  = "/worker.WorkerService/ChmodPath"
+	WorkerService_DownloadArchive_FullMethodName            = "/worker.WorkerService/DownloadArchive"
+	WorkerService_DownloadFile_FullMethodName               = "/worker.WorkerService/DownloadFile"
+	WorkerService_UploadFile_FullMethodName                 = "/worker.WorkerService/UploadFile"
+	WorkerService_SearchFiles_FullMethodName                = "/worker.WorkerService/SearchFiles"
+	WorkerService_ListArchiveEntries_FullMethodName         = "/worker.WorkerService/ListArchiveEntries"
+	WorkerService_ReadArchiveEntry_FullMethodName           = "/worker.WorkerService/ReadArchiveEntry"
+	WorkerService_DecompileClass_FullMethodName             = "/worker.WorkerService/DecompileClass"
+	WorkerService_ListConfigFiles_FullMethodName            = "/worker.WorkerService/ListConfigFiles"
+	WorkerService_ReadConfig_FullMethodName                 = "/worker.WorkerService/ReadConfig"
+	WorkerService_WriteConfig_FullMethodName                = "/worker.WorkerService/WriteConfig"
+	WorkerService_ValidateConfig_FullMethodName             = "/worker.WorkerService/ValidateConfig"
+	WorkerService_GetNodeMetrics_FullMethodName             = "/worker.WorkerService/GetNodeMetrics"
+	WorkerService_GetInstanceMetrics_FullMethodName         = "/worker.WorkerService/GetInstanceMetrics"
+	WorkerService_GetInstanceEnv_FullMethodName             = "/worker.WorkerService/GetInstanceEnv"
+	WorkerService_ListJDKs_FullMethodName                   = "/worker.WorkerService/ListJDKs"
+	WorkerService_InstallJDK_FullMethodName                 = "/worker.WorkerService/InstallJDK"
+	WorkerService_RemoveJDK_FullMethodName                  = "/worker.WorkerService/RemoveJDK"
+	WorkerService_JDKCatalog_FullMethodName                 = "/worker.WorkerService/JDKCatalog"
+	WorkerService_ProbeJDK_FullMethodName                   = "/worker.WorkerService/ProbeJDK"
+	WorkerService_ScanRuntimes_FullMethodName               = "/worker.WorkerService/ScanRuntimes"
+	WorkerService_InstallRuntime_FullMethodName             = "/worker.WorkerService/InstallRuntime"
+	WorkerService_RemoveRuntime_FullMethodName              = "/worker.WorkerService/RemoveRuntime"
+	WorkerService_GetPMConfig_FullMethodName                = "/worker.WorkerService/GetPMConfig"
+	WorkerService_SetPMConfig_FullMethodName                = "/worker.WorkerService/SetPMConfig"
+	WorkerService_ListGlobalPackages_FullMethodName         = "/worker.WorkerService/ListGlobalPackages"
+	WorkerService_InstallGlobalPackage_FullMethodName       = "/worker.WorkerService/InstallGlobalPackage"
+	WorkerService_RemoveGlobalPackage_FullMethodName        = "/worker.WorkerService/RemoveGlobalPackage"
+	WorkerService_DownloadCore_FullMethodName               = "/worker.WorkerService/DownloadCore"
+	WorkerService_InstallForgeServer_FullMethodName         = "/worker.WorkerService/InstallForgeServer"
+	WorkerService_ListArtifactCache_FullMethodName          = "/worker.WorkerService/ListArtifactCache"
+	WorkerService_EvictArtifactCache_FullMethodName         = "/worker.WorkerService/EvictArtifactCache"
+	WorkerService_ClearArtifactCache_FullMethodName         = "/worker.WorkerService/ClearArtifactCache"
+	WorkerService_SetArtifactCacheCap_FullMethodName        = "/worker.WorkerService/SetArtifactCacheCap"
+	WorkerService_BrowseDir_FullMethodName                  = "/worker.WorkerService/BrowseDir"
+	WorkerService_DeployServerProbe_FullMethodName          = "/worker.WorkerService/DeployServerProbe"
+	WorkerService_CloneWorkDir_FullMethodName               = "/worker.WorkerService/CloneWorkDir"
+	WorkerService_RemoveInstance_FullMethodName             = "/worker.WorkerService/RemoveInstance"
+	WorkerService_DisposeOrphanRuntime_FullMethodName       = "/worker.WorkerService/DisposeOrphanRuntime"
+	WorkerService_ListImages_FullMethodName                 = "/worker.WorkerService/ListImages"
+	WorkerService_PullImage_FullMethodName                  = "/worker.WorkerService/PullImage"
+	WorkerService_RemoveImage_FullMethodName                = "/worker.WorkerService/RemoveImage"
+	WorkerService_CreateBackup_FullMethodName               = "/worker.WorkerService/CreateBackup"
+	WorkerService_RestoreBackup_FullMethodName              = "/worker.WorkerService/RestoreBackup"
+	WorkerService_TestStorageBackend_FullMethodName         = "/worker.WorkerService/TestStorageBackend"
+	WorkerService_CreateBot_FullMethodName                  = "/worker.WorkerService/CreateBot"
+	WorkerService_DeleteBot_FullMethodName                  = "/worker.WorkerService/DeleteBot"
+	WorkerService_ListBots_FullMethodName                   = "/worker.WorkerService/ListBots"
+	WorkerService_SetBotBehavior_FullMethodName             = "/worker.WorkerService/SetBotBehavior"
+	WorkerService_SendBotCommand_FullMethodName             = "/worker.WorkerService/SendBotCommand"
+	WorkerService_RunBotScript_FullMethodName               = "/worker.WorkerService/RunBotScript"
+	WorkerService_StreamBotEvents_FullMethodName            = "/worker.WorkerService/StreamBotEvents"
+	WorkerService_GetBotCapacity_FullMethodName             = "/worker.WorkerService/GetBotCapacity"
+	WorkerService_ApplyBotBatch_FullMethodName              = "/worker.WorkerService/ApplyBotBatch"
+	WorkerService_GetBotFleetSnapshot_FullMethodName        = "/worker.WorkerService/GetBotFleetSnapshot"
+	WorkerService_StreamBotFleetEvents_FullMethodName       = "/worker.WorkerService/StreamBotFleetEvents"
+	WorkerService_SignalBotActions_FullMethodName           = "/worker.WorkerService/SignalBotActions"
+	WorkerService_ApplyBotCommandSchedules_FullMethodName   = "/worker.WorkerService/ApplyBotCommandSchedules"
+	WorkerService_ReleaseBotCommandSchedules_FullMethodName = "/worker.WorkerService/ReleaseBotCommandSchedules"
+	WorkerService_CancelBotCommandSchedules_FullMethodName  = "/worker.WorkerService/CancelBotCommandSchedules"
+	WorkerService_StreamPluginEvents_FullMethodName         = "/worker.WorkerService/StreamPluginEvents"
+	WorkerService_SendPluginCommand_FullMethodName          = "/worker.WorkerService/SendPluginCommand"
+	WorkerService_QueryServerState_FullMethodName           = "/worker.WorkerService/QueryServerState"
+	WorkerService_GetVersion_FullMethodName                 = "/worker.WorkerService/GetVersion"
+	WorkerService_CheckDocker_FullMethodName                = "/worker.WorkerService/CheckDocker"
+	WorkerService_UpgradeWorker_FullMethodName              = "/worker.WorkerService/UpgradeWorker"
+	WorkerService_TerminalSession_FullMethodName            = "/worker.WorkerService/TerminalSession"
+	WorkerService_InspectServerDir_FullMethodName           = "/worker.WorkerService/InspectServerDir"
+	WorkerService_ImportServerDir_FullMethodName            = "/worker.WorkerService/ImportServerDir"
 )
 
 // WorkerServiceClient is the client API for WorkerService service.
@@ -298,6 +301,12 @@ type WorkerServiceClient interface {
 	StreamBotFleetEvents(ctx context.Context, in *StreamBotFleetEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BotFleetEvent], error)
 	// SignalBotActions 批量投递最多 100 个外部动作信号，并返回逐项回执（FR-351）。
 	SignalBotActions(ctx context.Context, in *SignalBotActionsRequest, opts ...grpc.CallOption) (*SignalBotActionsResponse, error)
+	// ApplyBotCommandSchedules 下发 CP 已展开 occurrence plan；absolute/barrier 启动模式与 skip 集。
+	ApplyBotCommandSchedules(ctx context.Context, in *ApplyBotCommandSchedulesRequest, opts ...grpc.CallOption) (*ApplyBotCommandSchedulesResponse, error)
+	// ReleaseBotCommandSchedules 以共同 releaseAt 启动 prepared 命令计划。
+	ReleaseBotCommandSchedules(ctx context.Context, in *ReleaseBotCommandSchedulesRequest, opts ...grpc.CallOption) (*ReleaseBotCommandSchedulesResponse, error)
+	// CancelBotCommandSchedules 下发 CP 已持久化的 cancel intent 与未终态 occurrence 集。
+	CancelBotCommandSchedules(ctx context.Context, in *CancelBotCommandSchedulesRequest, opts ...grpc.CallOption) (*CancelBotCommandSchedulesResponse, error)
 	// StreamPluginEvents 订阅某实例（或全部）探针经反向 WS 上报的事件流（connected/disconnected/玩家事件…）。
 	StreamPluginEvents(ctx context.Context, in *StreamPluginEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PluginEvent], error)
 	// SendPluginCommand CP 经 Worker 向探针下发治理/查询指令（踢/封/白名单/在线列表…）。
@@ -1178,6 +1187,36 @@ func (c *workerServiceClient) SignalBotActions(ctx context.Context, in *SignalBo
 	return out, nil
 }
 
+func (c *workerServiceClient) ApplyBotCommandSchedules(ctx context.Context, in *ApplyBotCommandSchedulesRequest, opts ...grpc.CallOption) (*ApplyBotCommandSchedulesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplyBotCommandSchedulesResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ApplyBotCommandSchedules_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) ReleaseBotCommandSchedules(ctx context.Context, in *ReleaseBotCommandSchedulesRequest, opts ...grpc.CallOption) (*ReleaseBotCommandSchedulesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReleaseBotCommandSchedulesResponse)
+	err := c.cc.Invoke(ctx, WorkerService_ReleaseBotCommandSchedules_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerServiceClient) CancelBotCommandSchedules(ctx context.Context, in *CancelBotCommandSchedulesRequest, opts ...grpc.CallOption) (*CancelBotCommandSchedulesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CancelBotCommandSchedulesResponse)
+	err := c.cc.Invoke(ctx, WorkerService_CancelBotCommandSchedules_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) StreamPluginEvents(ctx context.Context, in *StreamPluginEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PluginEvent], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[7], WorkerService_StreamPluginEvents_FullMethodName, cOpts...)
@@ -1469,6 +1508,12 @@ type WorkerServiceServer interface {
 	StreamBotFleetEvents(*StreamBotFleetEventsRequest, grpc.ServerStreamingServer[BotFleetEvent]) error
 	// SignalBotActions 批量投递最多 100 个外部动作信号，并返回逐项回执（FR-351）。
 	SignalBotActions(context.Context, *SignalBotActionsRequest) (*SignalBotActionsResponse, error)
+	// ApplyBotCommandSchedules 下发 CP 已展开 occurrence plan；absolute/barrier 启动模式与 skip 集。
+	ApplyBotCommandSchedules(context.Context, *ApplyBotCommandSchedulesRequest) (*ApplyBotCommandSchedulesResponse, error)
+	// ReleaseBotCommandSchedules 以共同 releaseAt 启动 prepared 命令计划。
+	ReleaseBotCommandSchedules(context.Context, *ReleaseBotCommandSchedulesRequest) (*ReleaseBotCommandSchedulesResponse, error)
+	// CancelBotCommandSchedules 下发 CP 已持久化的 cancel intent 与未终态 occurrence 集。
+	CancelBotCommandSchedules(context.Context, *CancelBotCommandSchedulesRequest) (*CancelBotCommandSchedulesResponse, error)
 	// StreamPluginEvents 订阅某实例（或全部）探针经反向 WS 上报的事件流（connected/disconnected/玩家事件…）。
 	StreamPluginEvents(*StreamPluginEventsRequest, grpc.ServerStreamingServer[PluginEvent]) error
 	// SendPluginCommand CP 经 Worker 向探针下发治理/查询指令（踢/封/白名单/在线列表…）。
@@ -1744,6 +1789,15 @@ func (UnimplementedWorkerServiceServer) StreamBotFleetEvents(*StreamBotFleetEven
 }
 func (UnimplementedWorkerServiceServer) SignalBotActions(context.Context, *SignalBotActionsRequest) (*SignalBotActionsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SignalBotActions not implemented")
+}
+func (UnimplementedWorkerServiceServer) ApplyBotCommandSchedules(context.Context, *ApplyBotCommandSchedulesRequest) (*ApplyBotCommandSchedulesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyBotCommandSchedules not implemented")
+}
+func (UnimplementedWorkerServiceServer) ReleaseBotCommandSchedules(context.Context, *ReleaseBotCommandSchedulesRequest) (*ReleaseBotCommandSchedulesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReleaseBotCommandSchedules not implemented")
+}
+func (UnimplementedWorkerServiceServer) CancelBotCommandSchedules(context.Context, *CancelBotCommandSchedulesRequest) (*CancelBotCommandSchedulesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CancelBotCommandSchedules not implemented")
 }
 func (UnimplementedWorkerServiceServer) StreamPluginEvents(*StreamPluginEventsRequest, grpc.ServerStreamingServer[PluginEvent]) error {
 	return status.Error(codes.Unimplemented, "method StreamPluginEvents not implemented")
@@ -3158,6 +3212,60 @@ func _WorkerService_SignalBotActions_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_ApplyBotCommandSchedules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyBotCommandSchedulesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ApplyBotCommandSchedules(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ApplyBotCommandSchedules_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ApplyBotCommandSchedules(ctx, req.(*ApplyBotCommandSchedulesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_ReleaseBotCommandSchedules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReleaseBotCommandSchedulesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).ReleaseBotCommandSchedules(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_ReleaseBotCommandSchedules_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).ReleaseBotCommandSchedules(ctx, req.(*ReleaseBotCommandSchedulesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerService_CancelBotCommandSchedules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelBotCommandSchedulesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).CancelBotCommandSchedules(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_CancelBotCommandSchedules_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).CancelBotCommandSchedules(ctx, req.(*CancelBotCommandSchedulesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_StreamPluginEvents_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(StreamPluginEventsRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -3596,6 +3704,18 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SignalBotActions",
 			Handler:    _WorkerService_SignalBotActions_Handler,
+		},
+		{
+			MethodName: "ApplyBotCommandSchedules",
+			Handler:    _WorkerService_ApplyBotCommandSchedules_Handler,
+		},
+		{
+			MethodName: "ReleaseBotCommandSchedules",
+			Handler:    _WorkerService_ReleaseBotCommandSchedules_Handler,
+		},
+		{
+			MethodName: "CancelBotCommandSchedules",
+			Handler:    _WorkerService_CancelBotCommandSchedules_Handler,
 		},
 		{
 			MethodName: "SendPluginCommand",

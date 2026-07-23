@@ -19,6 +19,9 @@ export type IpcCommand =
   | SendBotCommand
   | RunScriptCommand
   | StopScriptCommand
+  | CommandScheduleCommand
+  | CommandScheduleReleaseCommand
+  | CommandScheduleCancelCommand
 
 /** 批量创建 Bot；requestId 缺省时兼容旧单 Bot 调用。 */
 export interface CreateBotsCommand {
@@ -237,4 +240,139 @@ export interface ActionEvent {
     durationMs?: number
     observedAt: number
   }
+}
+
+/** FR-369 单 occurrence 计划。 */
+export interface CommandScheduleOccurrence {
+  commandId: string
+  occurrence: number
+  commandDeclarationIndex: number
+  baseAtMs: number
+  jitterOffsetMs: number
+  actionRunId: string
+  command: string
+}
+
+/** FR-369 occurrence 跳过/取消引用键。 */
+export interface CommandOccurrenceKey {
+  commandId: string
+  occurrence: number
+}
+
+/** FR-369 冻结的命令计划。 */
+export interface CommandSchedulePlan {
+  durationMs: number
+  jitterMs: number
+  occurrences: CommandScheduleOccurrence[]
+}
+
+/** FR-369 Worker → Bot Worker：下发计划。 */
+export interface CommandScheduleCommand {
+  cmd: 'command-schedule'
+  requestId: string
+  runId: string
+  runUuid: string
+  botUuid: string
+  generation: number
+  stepId: string
+  scheduleRunId: string
+  correlationToken: string
+  startMode: 'absolute' | 'barrier'
+  scheduleStartAtUnixMs?: number
+  barrierKey?: string
+  runDeadlineUnixMs: number
+  jitterSeed: string
+  plan: CommandSchedulePlan
+  skipOccurrences: CommandOccurrenceKey[]
+}
+
+/** FR-369 Worker → Bot Worker：barrier 释放。 */
+export interface CommandScheduleReleaseCommand {
+  cmd: 'command-schedule-release'
+  requestId: string
+  runUuid: string
+  botUuid: string
+  generation: number
+  stepId: string
+  scheduleRunId: string
+  barrierKey: string
+  releaseAtUnixMs: number
+}
+
+/** FR-369 Worker → Bot Worker：取消计划。 */
+export interface CommandScheduleCancelCommand {
+  cmd: 'command-schedule-cancel'
+  requestId: string
+  runUuid: string
+  botUuid: string
+  generation: number
+  stepId: string
+  scheduleRunId: string
+  reason: string
+  correlationToken?: string
+}
+
+/** command-schedule-accepted 同步回执。 */
+export interface CommandScheduleAcceptedEvent {
+  evt: 'command-schedule-accepted'
+  requestId: string
+  scheduleRunId: string
+  accepted: boolean
+  errorCode?: string
+  error?: string
+}
+
+/** command-schedule-release-result 同步回执。 */
+export interface CommandScheduleReleaseResultEvent {
+  evt: 'command-schedule-release-result'
+  requestId: string
+  scheduleRunId: string
+  accepted: boolean
+  alreadyReleased?: boolean
+  errorCode?: string
+  error?: string
+}
+
+/** command-schedule-cancel-result 同步回执。 */
+export interface CommandScheduleCancelResultEvent {
+  evt: 'command-schedule-cancel-result'
+  requestId: string
+  scheduleRunId: string
+  accepted: boolean
+  alreadyCancelled?: boolean
+  errorCode?: string
+  error?: string
+}
+
+/** command-schedule-result 异步 occurrence 终态。 */
+export interface CommandAttemptError {
+  attempt: number
+  errorCode: string
+  message: string
+  observedAtUnixMs: number
+}
+
+export type CommandScheduleResultStatus = 'sent' | 'failed' | 'timed_out' | 'cancelled'
+
+export interface CommandScheduleResultEvent {
+  evt: 'command-schedule-result'
+  runId: string
+  runUuid: string
+  botUuid: string
+  generation: number
+  stepId: string
+  scheduleRunId: string
+  actionRunId: string
+  correlationToken: string
+  commandId: string
+  occurrence: number
+  attempt: number
+  durationMs: number
+  observedAtUnixMs: number
+  status: CommandScheduleResultStatus
+  plannedAtUnixMs: number | null
+  sentAtUnixMs: number | null
+  errorCode?: string
+  message?: string
+  attemptErrors: CommandAttemptError[]
 }

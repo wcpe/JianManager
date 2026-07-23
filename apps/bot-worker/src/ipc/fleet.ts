@@ -310,7 +310,18 @@ export class FleetController {
     return this.bots.get(botId)?.mcBot ?? null
   }
 
+/** 通过 Bot UUID 查找 Mineflayer 实例（FR-369 命令编排使用）。 */
+  getBotByUuid(botUuid: string): McBotLike | null {
+    for (const instance of this.bots.values()) {
+      if (instance.config.id === botUuid || instance.config.id.toLowerCase() === botUuid.toLowerCase()) {
+        return instance.mcBot ?? null
+      }
+    }
+    return null
+  }
+
   /** 停止全部连接并取消尚未触发的连接/重连定时器。 */
+
   shutdown(): void {
     this.stopped = true
     this.connectWaiters.length = 0

@@ -211,6 +211,19 @@ service WorkerService {
   // SignalBotActions 批量投递最多 100 个外部动作信号，并返回逐项回执（FR-351）。
   rpc SignalBotActions(SignalBotActionsRequest) returns (SignalBotActionsResponse);
 
+  // === 通用 Bot 命令编排（FR-369，ADR-075）===
+  //
+  // 与 SignalBotActions / ApplyBotBatch 互不影响；仅承载命令计划、时间屏障与取消。
+  // 每批最多 100 个 Bot 项；逐项结果固定 accepted|rejected|unknown；occurrence 终态
+  // 仍只经 StreamBotFleetEvents.action_event 回传。
+
+  // ApplyBotCommandSchedules 下发 CP 已展开 occurrence plan；absolute/barrier 启动模式与 skip 集。
+  rpc ApplyBotCommandSchedules(ApplyBotCommandSchedulesRequest) returns (ApplyBotCommandSchedulesResponse);
+  // ReleaseBotCommandSchedules 以共同 releaseAt 启动 prepared 命令计划。
+  rpc ReleaseBotCommandSchedules(ReleaseBotCommandSchedulesRequest) returns (ReleaseBotCommandSchedulesResponse);
+  // CancelBotCommandSchedules 下发 CP 已持久化的 cancel intent 与未终态 occurrence 集。
+  rpc CancelBotCommandSchedules(CancelBotCommandSchedulesRequest) returns (CancelBotCommandSchedulesResponse);
+
   // === 插件桥（ServerProbe 反向 WS ↔ Worker，FR-065，见 ADR-016）===
   //
   // 一次铺齐桥的全面：下游 FR-066（玩家事件）/FR-067（治理迁移+退 RCON）/FR-068（在线更新）
@@ -1824,4 +1837,130 @@ message SignalBotActionItemResult {
 
 message SignalBotActionsResponse {
   repeated SignalBotActionItemResult results = 1;
+}
+
+// === FR-369 通用 Bot 命令编排 ===
+
+message CommandOccurrenceKey {
+  string command_id = 1;
+  int32 occurrence = 2;
+}
+
+message CommandOccurrenceRef {
+  string command_id = 1;
+  int32 occurrence = 2;
+  string action_run_id = 3;
+  int64 planned_at_unix_ms = 4;
+}
+
+message AppliedCommandOccurrence {
+  string command_id = 1;
+  int32 occurrence = 2;
+  int32 command_declaration_index = 3;
+  int64 base_at_ms = 4;
+  int64 jitter_offset_ms = 5;
+  string action_run_id = 6;
+  string command = 7;
+}
+
+message AppliedCommandOccurrencePlan {
+  int64 duration_ms = 1;
+  int64 jitter_ms = 2;
+  repeated AppliedCommandOccurrence occurrences = 3;
+}
+
+message ApplyBotCommandScheduleItem {
+  int64 run_id = 1;
+  string run_uuid = 2;
+  string bot_uuid = 3;
+  int64 generation = 4;
+  string step_id = 5;
+  string schedule_run_id = 6;
+  string correlation_token = 7;
+  // start.mode == "absolute" 时 schedule_start_at_unix_ms 必须填写，barrier_key 留空；
+  // start.mode == "barrier" 时 barrier_key 必须填写，schedule_start_at_unix_ms 留空。
+  string start_mode = 8;
+  int64 schedule_start_at_unix_ms = 9;
+  string barrier_key = 10;
+  int64 run_deadline_unix_ms = 11;
+  string jitter_seed = 12;
+  AppliedCommandOccurrencePlan plan = 13;
+  repeated CommandOccurrenceKey skip_occurrences = 14;
+}
+
+message ApplyBotCommandScheduleItemResult {
+  string bot_uuid = 1;
+  string schedule_run_id = 2;
+  string disposition = 3; // accepted|rejected|unknown
+  string error_code = 4;
+  string error = 5;
+}
+
+message ApplyBotCommandSchedulesRequest {
+  string request_id = 1;
+  repeated ApplyBotCommandScheduleItem items = 2;
+}
+
+message ApplyBotCommandSchedulesResponse {
+  string request_id = 1;
+  repeated ApplyBotCommandScheduleItemResult results = 2;
+}
+
+message ReleaseBotCommandScheduleItem {
+  string run_uuid = 1;
+  string bot_uuid = 2;
+  int64 generation = 3;
+  string step_id = 4;
+  string schedule_run_id = 5;
+  string barrier_key = 6;
+  int64 release_at_unix_ms = 7;
+}
+
+message ReleaseBotCommandScheduleItemResult {
+  string bot_uuid = 1;
+  string schedule_run_id = 2;
+  string disposition = 3; // accepted|rejected|unknown
+  bool already_released = 4;
+  string error_code = 5;
+  string error = 6;
+}
+
+message ReleaseBotCommandSchedulesRequest {
+  string request_id = 1;
+  repeated ReleaseBotCommandScheduleItem items = 2;
+}
+
+message ReleaseBotCommandSchedulesResponse {
+  string request_id = 1;
+  repeated ReleaseBotCommandScheduleItemResult results = 2;
+}
+
+message CancelBotCommandScheduleItem {
+  string run_uuid = 1;
+  string bot_uuid = 2;
+  int64 generation = 3;
+  string step_id = 4;
+  string schedule_run_id = 5;
+  string correlation_token = 6;
+  string reason = 7;
+  repeated CommandOccurrenceRef unresolved_occurrences = 8;
+}
+
+message CancelBotCommandScheduleItemResult {
+  string bot_uuid = 1;
+  string schedule_run_id = 2;
+  string disposition = 3; // accepted|rejected|unknown
+  bool already_cancelled = 4;
+  string error_code = 5;
+  string error = 6;
+}
+
+message CancelBotCommandSchedulesRequest {
+  string request_id = 1;
+  repeated CancelBotCommandScheduleItem items = 2;
+}
+
+message CancelBotCommandSchedulesResponse {
+  string request_id = 1;
+  repeated CancelBotCommandScheduleItemResult results = 2;
 }

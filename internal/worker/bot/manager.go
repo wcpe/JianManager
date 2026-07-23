@@ -112,6 +112,12 @@ type BotWorkerEvent struct {
 	Bots                  []BotState         `json:"bots,omitempty"`
 	Results               []BotItemResult    `json:"results,omitempty"`
 	SignalResults         []SignalItemResult `json:"signalResults,omitempty"`
+	CommandResults        []CommandScheduleItemResult `json:"commandResults,omitempty"`
+	ScheduleRunID         string             `json:"scheduleRunId,omitempty"`
+	Accepted              bool               `json:"accepted,omitempty"`
+	AlreadyReleased       bool               `json:"alreadyReleased,omitempty"`
+	AlreadyCancelled      bool               `json:"alreadyCancelled,omitempty"`
+	ErrorCode             string             `json:"errorCode,omitempty"`
 	Action                *ActionEvent       `json:"action,omitempty"`
 	BotID                 string             `json:"botId,omitempty"`
 	Type                  string             `json:"type,omitempty"`
@@ -122,6 +128,8 @@ type BotWorkerEvent struct {
 	Total                 int                `json:"total,omitempty"`
 	Status                string             `json:"status,omitempty"`
 	Step                  string             `json:"step,omitempty"`
+	// FR-369 command-schedule-result 异步 occurrence 终态。
+	CommandResult *CommandScheduleResultPayload `json:"commandScheduleResult,omitempty"`
 	WorkerEpoch           string             `json:"workerEpoch,omitempty"`
 	WorkerEpochGeneration int64              `json:"workerEpochGeneration,omitempty"`
 	BotWorkerVersion      string             `json:"botWorkerVersion,omitempty"`
@@ -133,6 +141,37 @@ type BotWorkerEvent struct {
 	EventLoopP95Ms        float64            `json:"eventLoopP95Ms,omitempty"`
 	DroppedEvents         int64              `json:"droppedEvents,omitempty"`
 	CapacityGeneration    int64              `json:"capacityGeneration,omitempty"`
+}
+
+// CommandScheduleResultPayload 是 Bot Worker 异步 command-schedule-result 事件载荷。
+type CommandScheduleResultPayload struct {
+	RunID            string                  `json:"runId"`
+	RunUUID          string                  `json:"runUuid"`
+	BotUUID          string                  `json:"botUuid"`
+	Generation       int64                   `json:"generation"`
+	StepID           string                  `json:"stepId"`
+	ScheduleRunID    string                  `json:"scheduleRunId"`
+	ActionRunID      string                  `json:"actionRunId"`
+	CorrelationToken string                  `json:"correlationToken"`
+	CommandID        string                  `json:"commandId"`
+	Occurrence       int                     `json:"occurrence"`
+	Attempt          int                     `json:"attempt"`
+	DurationMs       int64                   `json:"durationMs"`
+	ObservedAtUnixMs int64                   `json:"observedAtUnixMs"`
+	Status           string                  `json:"status"`
+	PlannedAtUnixMs  int64                   `json:"plannedAtUnixMs"`
+	SentAtUnixMs     *int64                  `json:"sentAtUnixMs,omitempty"`
+	ErrorCode        string                  `json:"errorCode,omitempty"`
+	Message          string                  `json:"message,omitempty"`
+	AttemptErrors    []CommandAttemptError   `json:"attemptErrors,omitempty"`
+}
+
+// CommandAttemptError 是单次失败尝试的摘要，最多保留 2 条。
+type CommandAttemptError struct {
+	Attempt          int    `json:"attempt"`
+	ErrorCode        string `json:"errorCode"`
+	Message          string `json:"message"`
+	ObservedAtUnixMs int64  `json:"observedAtUnixMs"`
 }
 
 // EventCallback 事件回调函数。
@@ -943,7 +982,7 @@ func (m *Manager) sendCommand(cmd interface{}) error {
 
 const maxPendingRequests = 1024
 
-func (m *Manager) sendRequest(ctx context.Context, requestID string, cmd interface{}) (*BotWorkerEvent, error) {
+func (m *Manager) sendRequest(ctx context.Context, requestID string, cmd interface{}, customDeadline ...time.Duration) (*BotWorkerEvent, error) {
 	if requestID == "" {
 		return nil, fmt.Errorf("requestId 不能为空")
 	}
@@ -963,6 +1002,9 @@ func (m *Manager) sendRequest(ctx context.Context, requestID string, cmd interfa
 	resultCh := make(chan pendingRequestResult, 1)
 	m.pending[requestID] = resultCh
 	generation, encoder, timeout := m.activeReaderGeneration, m.stdin, m.requestTimeout
+	if len(customDeadline) > 0 && customDeadline[0] > 0 {
+		timeout = customDeadline[0]
+	}
 	m.mu.Unlock()
 
 	// 超时必须先于 Encode 启动，阻塞管道写也受同一 deadline 约束。
@@ -1179,6 +1221,24 @@ func (m *Manager) CircuitOpen() bool {
 // SignalActions 投递通用外部动作信号并等待 signal-result。
 func (m *Manager) SignalActions(ctx context.Context, requestID string, signals []ActionSignal) (*BotWorkerEvent, error) {
 	return m.sendRequest(ctx, requestID, SignalActionsCommand{Cmd: "signal-actions", RequestID: requestID, Signals: signals})
+}
+
+// ApplyCommandSchedule 下发 command-schedule 并等待 command-schedule-accepted。
+func (m *Manager) ApplyCommandSchedule(ctx context.Context, requestID string, cmd CommandScheduleCommand, deadline time.Duration) (*BotWorkerEvent, error) {
+	cmd.RequestID = requestID
+	return m.sendRequest(ctx, requestID, cmd, deadline)
+}
+
+// ReleaseCommandSchedule 下发 command-schedule-release 并等待 command-schedule-release-result。
+func (m *Manager) ReleaseCommandSchedule(ctx context.Context, requestID string, cmd CommandScheduleReleaseCommand, deadline time.Duration) (*BotWorkerEvent, error) {
+	cmd.RequestID = requestID
+	return m.sendRequest(ctx, requestID, cmd, deadline)
+}
+
+// CancelCommandSchedule 下发 command-schedule-cancel 并等待 command-schedule-cancel-result。
+func (m *Manager) CancelCommandSchedule(ctx context.Context, requestID string, cmd CommandScheduleCancelCommand, deadline time.Duration) (*BotWorkerEvent, error) {
+	cmd.RequestID = requestID
+	return m.sendRequest(ctx, requestID, cmd, deadline)
 }
 
 // RequestFleetSnapshot 请求 bot-worker 返回当前全部 Bot 快照。
@@ -1418,7 +1478,10 @@ func (m *Manager) handleEventLocked(event *BotWorkerEvent, sourceGeneration int6
 	case "fleet-snapshot-result":
 		m.replaceFleetSnapshotLocked(event, sourceGeneration)
 		m.completePendingLocked(event)
-	case "batch-result", "signal-result":
+	case "batch-result", "signal-result",
+		"command-schedule-accepted",
+		"command-schedule-release-result",
+		"command-schedule-cancel-result":
 		m.completePendingLocked(event)
 	case "bot-event", "bot-error", "script-progress", "action-event":
 		// 事件直接转发给回调和订阅者。

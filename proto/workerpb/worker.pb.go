@@ -13668,6 +13668,1176 @@ func (x *SignalBotActionsResponse) GetResults() []*SignalBotActionItemResult {
 	return nil
 }
 
+type CommandOccurrenceKey struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	CommandId     string                 `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	Occurrence    int32                  `protobuf:"varint,2,opt,name=occurrence,proto3" json:"occurrence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CommandOccurrenceKey) Reset() {
+	*x = CommandOccurrenceKey{}
+	mi := &file_proto_worker_proto_msgTypes[205]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommandOccurrenceKey) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommandOccurrenceKey) ProtoMessage() {}
+
+func (x *CommandOccurrenceKey) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[205]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommandOccurrenceKey.ProtoReflect.Descriptor instead.
+func (*CommandOccurrenceKey) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{205}
+}
+
+func (x *CommandOccurrenceKey) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *CommandOccurrenceKey) GetOccurrence() int32 {
+	if x != nil {
+		return x.Occurrence
+	}
+	return 0
+}
+
+type CommandOccurrenceRef struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	CommandId       string                 `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	Occurrence      int32                  `protobuf:"varint,2,opt,name=occurrence,proto3" json:"occurrence,omitempty"`
+	ActionRunId     string                 `protobuf:"bytes,3,opt,name=action_run_id,json=actionRunId,proto3" json:"action_run_id,omitempty"`
+	PlannedAtUnixMs int64                  `protobuf:"varint,4,opt,name=planned_at_unix_ms,json=plannedAtUnixMs,proto3" json:"planned_at_unix_ms,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *CommandOccurrenceRef) Reset() {
+	*x = CommandOccurrenceRef{}
+	mi := &file_proto_worker_proto_msgTypes[206]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CommandOccurrenceRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CommandOccurrenceRef) ProtoMessage() {}
+
+func (x *CommandOccurrenceRef) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[206]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CommandOccurrenceRef.ProtoReflect.Descriptor instead.
+func (*CommandOccurrenceRef) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{206}
+}
+
+func (x *CommandOccurrenceRef) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *CommandOccurrenceRef) GetOccurrence() int32 {
+	if x != nil {
+		return x.Occurrence
+	}
+	return 0
+}
+
+func (x *CommandOccurrenceRef) GetActionRunId() string {
+	if x != nil {
+		return x.ActionRunId
+	}
+	return ""
+}
+
+func (x *CommandOccurrenceRef) GetPlannedAtUnixMs() int64 {
+	if x != nil {
+		return x.PlannedAtUnixMs
+	}
+	return 0
+}
+
+type AppliedCommandOccurrence struct {
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	CommandId               string                 `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	Occurrence              int32                  `protobuf:"varint,2,opt,name=occurrence,proto3" json:"occurrence,omitempty"`
+	CommandDeclarationIndex int32                  `protobuf:"varint,3,opt,name=command_declaration_index,json=commandDeclarationIndex,proto3" json:"command_declaration_index,omitempty"`
+	BaseAtMs                int64                  `protobuf:"varint,4,opt,name=base_at_ms,json=baseAtMs,proto3" json:"base_at_ms,omitempty"`
+	JitterOffsetMs          int64                  `protobuf:"varint,5,opt,name=jitter_offset_ms,json=jitterOffsetMs,proto3" json:"jitter_offset_ms,omitempty"`
+	ActionRunId             string                 `protobuf:"bytes,6,opt,name=action_run_id,json=actionRunId,proto3" json:"action_run_id,omitempty"`
+	Command                 string                 `protobuf:"bytes,7,opt,name=command,proto3" json:"command,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *AppliedCommandOccurrence) Reset() {
+	*x = AppliedCommandOccurrence{}
+	mi := &file_proto_worker_proto_msgTypes[207]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AppliedCommandOccurrence) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AppliedCommandOccurrence) ProtoMessage() {}
+
+func (x *AppliedCommandOccurrence) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[207]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AppliedCommandOccurrence.ProtoReflect.Descriptor instead.
+func (*AppliedCommandOccurrence) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{207}
+}
+
+func (x *AppliedCommandOccurrence) GetCommandId() string {
+	if x != nil {
+		return x.CommandId
+	}
+	return ""
+}
+
+func (x *AppliedCommandOccurrence) GetOccurrence() int32 {
+	if x != nil {
+		return x.Occurrence
+	}
+	return 0
+}
+
+func (x *AppliedCommandOccurrence) GetCommandDeclarationIndex() int32 {
+	if x != nil {
+		return x.CommandDeclarationIndex
+	}
+	return 0
+}
+
+func (x *AppliedCommandOccurrence) GetBaseAtMs() int64 {
+	if x != nil {
+		return x.BaseAtMs
+	}
+	return 0
+}
+
+func (x *AppliedCommandOccurrence) GetJitterOffsetMs() int64 {
+	if x != nil {
+		return x.JitterOffsetMs
+	}
+	return 0
+}
+
+func (x *AppliedCommandOccurrence) GetActionRunId() string {
+	if x != nil {
+		return x.ActionRunId
+	}
+	return ""
+}
+
+func (x *AppliedCommandOccurrence) GetCommand() string {
+	if x != nil {
+		return x.Command
+	}
+	return ""
+}
+
+type AppliedCommandOccurrencePlan struct {
+	state         protoimpl.MessageState      `protogen:"open.v1"`
+	DurationMs    int64                       `protobuf:"varint,1,opt,name=duration_ms,json=durationMs,proto3" json:"duration_ms,omitempty"`
+	JitterMs      int64                       `protobuf:"varint,2,opt,name=jitter_ms,json=jitterMs,proto3" json:"jitter_ms,omitempty"`
+	Occurrences   []*AppliedCommandOccurrence `protobuf:"bytes,3,rep,name=occurrences,proto3" json:"occurrences,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AppliedCommandOccurrencePlan) Reset() {
+	*x = AppliedCommandOccurrencePlan{}
+	mi := &file_proto_worker_proto_msgTypes[208]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AppliedCommandOccurrencePlan) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AppliedCommandOccurrencePlan) ProtoMessage() {}
+
+func (x *AppliedCommandOccurrencePlan) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[208]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AppliedCommandOccurrencePlan.ProtoReflect.Descriptor instead.
+func (*AppliedCommandOccurrencePlan) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{208}
+}
+
+func (x *AppliedCommandOccurrencePlan) GetDurationMs() int64 {
+	if x != nil {
+		return x.DurationMs
+	}
+	return 0
+}
+
+func (x *AppliedCommandOccurrencePlan) GetJitterMs() int64 {
+	if x != nil {
+		return x.JitterMs
+	}
+	return 0
+}
+
+func (x *AppliedCommandOccurrencePlan) GetOccurrences() []*AppliedCommandOccurrence {
+	if x != nil {
+		return x.Occurrences
+	}
+	return nil
+}
+
+type ApplyBotCommandScheduleItem struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	RunId            int64                  `protobuf:"varint,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	RunUuid          string                 `protobuf:"bytes,2,opt,name=run_uuid,json=runUuid,proto3" json:"run_uuid,omitempty"`
+	BotUuid          string                 `protobuf:"bytes,3,opt,name=bot_uuid,json=botUuid,proto3" json:"bot_uuid,omitempty"`
+	Generation       int64                  `protobuf:"varint,4,opt,name=generation,proto3" json:"generation,omitempty"`
+	StepId           string                 `protobuf:"bytes,5,opt,name=step_id,json=stepId,proto3" json:"step_id,omitempty"`
+	ScheduleRunId    string                 `protobuf:"bytes,6,opt,name=schedule_run_id,json=scheduleRunId,proto3" json:"schedule_run_id,omitempty"`
+	CorrelationToken string                 `protobuf:"bytes,7,opt,name=correlation_token,json=correlationToken,proto3" json:"correlation_token,omitempty"`
+	// start.mode == "absolute" 时 schedule_start_at_unix_ms 必须填写，barrier_key 留空；
+	// start.mode == "barrier" 时 barrier_key 必须填写，schedule_start_at_unix_ms 留空。
+	StartMode             string                        `protobuf:"bytes,8,opt,name=start_mode,json=startMode,proto3" json:"start_mode,omitempty"`
+	ScheduleStartAtUnixMs int64                         `protobuf:"varint,9,opt,name=schedule_start_at_unix_ms,json=scheduleStartAtUnixMs,proto3" json:"schedule_start_at_unix_ms,omitempty"`
+	BarrierKey            string                        `protobuf:"bytes,10,opt,name=barrier_key,json=barrierKey,proto3" json:"barrier_key,omitempty"`
+	RunDeadlineUnixMs     int64                         `protobuf:"varint,11,opt,name=run_deadline_unix_ms,json=runDeadlineUnixMs,proto3" json:"run_deadline_unix_ms,omitempty"`
+	JitterSeed            string                        `protobuf:"bytes,12,opt,name=jitter_seed,json=jitterSeed,proto3" json:"jitter_seed,omitempty"`
+	Plan                  *AppliedCommandOccurrencePlan `protobuf:"bytes,13,opt,name=plan,proto3" json:"plan,omitempty"`
+	SkipOccurrences       []*CommandOccurrenceKey       `protobuf:"bytes,14,rep,name=skip_occurrences,json=skipOccurrences,proto3" json:"skip_occurrences,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *ApplyBotCommandScheduleItem) Reset() {
+	*x = ApplyBotCommandScheduleItem{}
+	mi := &file_proto_worker_proto_msgTypes[209]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyBotCommandScheduleItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyBotCommandScheduleItem) ProtoMessage() {}
+
+func (x *ApplyBotCommandScheduleItem) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[209]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyBotCommandScheduleItem.ProtoReflect.Descriptor instead.
+func (*ApplyBotCommandScheduleItem) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{209}
+}
+
+func (x *ApplyBotCommandScheduleItem) GetRunId() int64 {
+	if x != nil {
+		return x.RunId
+	}
+	return 0
+}
+
+func (x *ApplyBotCommandScheduleItem) GetRunUuid() string {
+	if x != nil {
+		return x.RunUuid
+	}
+	return ""
+}
+
+func (x *ApplyBotCommandScheduleItem) GetBotUuid() string {
+	if x != nil {
+		return x.BotUuid
+	}
+	return ""
+}
+
+func (x *ApplyBotCommandScheduleItem) GetGeneration() int64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *ApplyBotCommandScheduleItem) GetStepId() string {
+	if x != nil {
+		return x.StepId
+	}
+	return ""
+}
+
+func (x *ApplyBotCommandScheduleItem) GetScheduleRunId() string {
+	if x != nil {
+		return x.ScheduleRunId
+	}
+	return ""
+}
+
+func (x *ApplyBotCommandScheduleItem) GetCorrelationToken() string {
+	if x != nil {
+		return x.CorrelationToken
+	}
+	return ""
+}
+
+func (x *ApplyBotCommandScheduleItem) GetStartMode() string {
+	if x != nil {
+		return x.StartMode
+	}
+	return ""
+}
+
+func (x *ApplyBotCommandScheduleItem) GetScheduleStartAtUnixMs() int64 {
+	if x != nil {
+		return x.ScheduleStartAtUnixMs
+	}
+	return 0
+}
+
+func (x *ApplyBotCommandScheduleItem) GetBarrierKey() string {
+	if x != nil {
+		return x.BarrierKey
+	}
+	return ""
+}
+
+func (x *ApplyBotCommandScheduleItem) GetRunDeadlineUnixMs() int64 {
+	if x != nil {
+		return x.RunDeadlineUnixMs
+	}
+	return 0
+}
+
+func (x *ApplyBotCommandScheduleItem) GetJitterSeed() string {
+	if x != nil {
+		return x.JitterSeed
+	}
+	return ""
+}
+
+func (x *ApplyBotCommandScheduleItem) GetPlan() *AppliedCommandOccurrencePlan {
+	if x != nil {
+		return x.Plan
+	}
+	return nil
+}
+
+func (x *ApplyBotCommandScheduleItem) GetSkipOccurrences() []*CommandOccurrenceKey {
+	if x != nil {
+		return x.SkipOccurrences
+	}
+	return nil
+}
+
+type ApplyBotCommandScheduleItemResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BotUuid       string                 `protobuf:"bytes,1,opt,name=bot_uuid,json=botUuid,proto3" json:"bot_uuid,omitempty"`
+	ScheduleRunId string                 `protobuf:"bytes,2,opt,name=schedule_run_id,json=scheduleRunId,proto3" json:"schedule_run_id,omitempty"`
+	Disposition   string                 `protobuf:"bytes,3,opt,name=disposition,proto3" json:"disposition,omitempty"` // accepted|rejected|unknown
+	ErrorCode     string                 `protobuf:"bytes,4,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	Error         string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyBotCommandScheduleItemResult) Reset() {
+	*x = ApplyBotCommandScheduleItemResult{}
+	mi := &file_proto_worker_proto_msgTypes[210]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyBotCommandScheduleItemResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyBotCommandScheduleItemResult) ProtoMessage() {}
+
+func (x *ApplyBotCommandScheduleItemResult) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[210]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyBotCommandScheduleItemResult.ProtoReflect.Descriptor instead.
+func (*ApplyBotCommandScheduleItemResult) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{210}
+}
+
+func (x *ApplyBotCommandScheduleItemResult) GetBotUuid() string {
+	if x != nil {
+		return x.BotUuid
+	}
+	return ""
+}
+
+func (x *ApplyBotCommandScheduleItemResult) GetScheduleRunId() string {
+	if x != nil {
+		return x.ScheduleRunId
+	}
+	return ""
+}
+
+func (x *ApplyBotCommandScheduleItemResult) GetDisposition() string {
+	if x != nil {
+		return x.Disposition
+	}
+	return ""
+}
+
+func (x *ApplyBotCommandScheduleItemResult) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *ApplyBotCommandScheduleItemResult) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type ApplyBotCommandSchedulesRequest struct {
+	state         protoimpl.MessageState         `protogen:"open.v1"`
+	RequestId     string                         `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Items         []*ApplyBotCommandScheduleItem `protobuf:"bytes,2,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyBotCommandSchedulesRequest) Reset() {
+	*x = ApplyBotCommandSchedulesRequest{}
+	mi := &file_proto_worker_proto_msgTypes[211]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyBotCommandSchedulesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyBotCommandSchedulesRequest) ProtoMessage() {}
+
+func (x *ApplyBotCommandSchedulesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[211]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyBotCommandSchedulesRequest.ProtoReflect.Descriptor instead.
+func (*ApplyBotCommandSchedulesRequest) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{211}
+}
+
+func (x *ApplyBotCommandSchedulesRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ApplyBotCommandSchedulesRequest) GetItems() []*ApplyBotCommandScheduleItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+type ApplyBotCommandSchedulesResponse struct {
+	state         protoimpl.MessageState               `protogen:"open.v1"`
+	RequestId     string                               `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Results       []*ApplyBotCommandScheduleItemResult `protobuf:"bytes,2,rep,name=results,proto3" json:"results,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyBotCommandSchedulesResponse) Reset() {
+	*x = ApplyBotCommandSchedulesResponse{}
+	mi := &file_proto_worker_proto_msgTypes[212]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyBotCommandSchedulesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyBotCommandSchedulesResponse) ProtoMessage() {}
+
+func (x *ApplyBotCommandSchedulesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[212]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyBotCommandSchedulesResponse.ProtoReflect.Descriptor instead.
+func (*ApplyBotCommandSchedulesResponse) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{212}
+}
+
+func (x *ApplyBotCommandSchedulesResponse) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ApplyBotCommandSchedulesResponse) GetResults() []*ApplyBotCommandScheduleItemResult {
+	if x != nil {
+		return x.Results
+	}
+	return nil
+}
+
+type ReleaseBotCommandScheduleItem struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	RunUuid         string                 `protobuf:"bytes,1,opt,name=run_uuid,json=runUuid,proto3" json:"run_uuid,omitempty"`
+	BotUuid         string                 `protobuf:"bytes,2,opt,name=bot_uuid,json=botUuid,proto3" json:"bot_uuid,omitempty"`
+	Generation      int64                  `protobuf:"varint,3,opt,name=generation,proto3" json:"generation,omitempty"`
+	StepId          string                 `protobuf:"bytes,4,opt,name=step_id,json=stepId,proto3" json:"step_id,omitempty"`
+	ScheduleRunId   string                 `protobuf:"bytes,5,opt,name=schedule_run_id,json=scheduleRunId,proto3" json:"schedule_run_id,omitempty"`
+	BarrierKey      string                 `protobuf:"bytes,6,opt,name=barrier_key,json=barrierKey,proto3" json:"barrier_key,omitempty"`
+	ReleaseAtUnixMs int64                  `protobuf:"varint,7,opt,name=release_at_unix_ms,json=releaseAtUnixMs,proto3" json:"release_at_unix_ms,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ReleaseBotCommandScheduleItem) Reset() {
+	*x = ReleaseBotCommandScheduleItem{}
+	mi := &file_proto_worker_proto_msgTypes[213]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseBotCommandScheduleItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseBotCommandScheduleItem) ProtoMessage() {}
+
+func (x *ReleaseBotCommandScheduleItem) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[213]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseBotCommandScheduleItem.ProtoReflect.Descriptor instead.
+func (*ReleaseBotCommandScheduleItem) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{213}
+}
+
+func (x *ReleaseBotCommandScheduleItem) GetRunUuid() string {
+	if x != nil {
+		return x.RunUuid
+	}
+	return ""
+}
+
+func (x *ReleaseBotCommandScheduleItem) GetBotUuid() string {
+	if x != nil {
+		return x.BotUuid
+	}
+	return ""
+}
+
+func (x *ReleaseBotCommandScheduleItem) GetGeneration() int64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *ReleaseBotCommandScheduleItem) GetStepId() string {
+	if x != nil {
+		return x.StepId
+	}
+	return ""
+}
+
+func (x *ReleaseBotCommandScheduleItem) GetScheduleRunId() string {
+	if x != nil {
+		return x.ScheduleRunId
+	}
+	return ""
+}
+
+func (x *ReleaseBotCommandScheduleItem) GetBarrierKey() string {
+	if x != nil {
+		return x.BarrierKey
+	}
+	return ""
+}
+
+func (x *ReleaseBotCommandScheduleItem) GetReleaseAtUnixMs() int64 {
+	if x != nil {
+		return x.ReleaseAtUnixMs
+	}
+	return 0
+}
+
+type ReleaseBotCommandScheduleItemResult struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	BotUuid         string                 `protobuf:"bytes,1,opt,name=bot_uuid,json=botUuid,proto3" json:"bot_uuid,omitempty"`
+	ScheduleRunId   string                 `protobuf:"bytes,2,opt,name=schedule_run_id,json=scheduleRunId,proto3" json:"schedule_run_id,omitempty"`
+	Disposition     string                 `protobuf:"bytes,3,opt,name=disposition,proto3" json:"disposition,omitempty"` // accepted|rejected|unknown
+	AlreadyReleased bool                   `protobuf:"varint,4,opt,name=already_released,json=alreadyReleased,proto3" json:"already_released,omitempty"`
+	ErrorCode       string                 `protobuf:"bytes,5,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	Error           string                 `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ReleaseBotCommandScheduleItemResult) Reset() {
+	*x = ReleaseBotCommandScheduleItemResult{}
+	mi := &file_proto_worker_proto_msgTypes[214]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseBotCommandScheduleItemResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseBotCommandScheduleItemResult) ProtoMessage() {}
+
+func (x *ReleaseBotCommandScheduleItemResult) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[214]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseBotCommandScheduleItemResult.ProtoReflect.Descriptor instead.
+func (*ReleaseBotCommandScheduleItemResult) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{214}
+}
+
+func (x *ReleaseBotCommandScheduleItemResult) GetBotUuid() string {
+	if x != nil {
+		return x.BotUuid
+	}
+	return ""
+}
+
+func (x *ReleaseBotCommandScheduleItemResult) GetScheduleRunId() string {
+	if x != nil {
+		return x.ScheduleRunId
+	}
+	return ""
+}
+
+func (x *ReleaseBotCommandScheduleItemResult) GetDisposition() string {
+	if x != nil {
+		return x.Disposition
+	}
+	return ""
+}
+
+func (x *ReleaseBotCommandScheduleItemResult) GetAlreadyReleased() bool {
+	if x != nil {
+		return x.AlreadyReleased
+	}
+	return false
+}
+
+func (x *ReleaseBotCommandScheduleItemResult) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *ReleaseBotCommandScheduleItemResult) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type ReleaseBotCommandSchedulesRequest struct {
+	state         protoimpl.MessageState           `protogen:"open.v1"`
+	RequestId     string                           `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Items         []*ReleaseBotCommandScheduleItem `protobuf:"bytes,2,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReleaseBotCommandSchedulesRequest) Reset() {
+	*x = ReleaseBotCommandSchedulesRequest{}
+	mi := &file_proto_worker_proto_msgTypes[215]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseBotCommandSchedulesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseBotCommandSchedulesRequest) ProtoMessage() {}
+
+func (x *ReleaseBotCommandSchedulesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[215]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseBotCommandSchedulesRequest.ProtoReflect.Descriptor instead.
+func (*ReleaseBotCommandSchedulesRequest) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{215}
+}
+
+func (x *ReleaseBotCommandSchedulesRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ReleaseBotCommandSchedulesRequest) GetItems() []*ReleaseBotCommandScheduleItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+type ReleaseBotCommandSchedulesResponse struct {
+	state         protoimpl.MessageState                 `protogen:"open.v1"`
+	RequestId     string                                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Results       []*ReleaseBotCommandScheduleItemResult `protobuf:"bytes,2,rep,name=results,proto3" json:"results,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReleaseBotCommandSchedulesResponse) Reset() {
+	*x = ReleaseBotCommandSchedulesResponse{}
+	mi := &file_proto_worker_proto_msgTypes[216]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReleaseBotCommandSchedulesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReleaseBotCommandSchedulesResponse) ProtoMessage() {}
+
+func (x *ReleaseBotCommandSchedulesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[216]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReleaseBotCommandSchedulesResponse.ProtoReflect.Descriptor instead.
+func (*ReleaseBotCommandSchedulesResponse) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{216}
+}
+
+func (x *ReleaseBotCommandSchedulesResponse) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *ReleaseBotCommandSchedulesResponse) GetResults() []*ReleaseBotCommandScheduleItemResult {
+	if x != nil {
+		return x.Results
+	}
+	return nil
+}
+
+type CancelBotCommandScheduleItem struct {
+	state                 protoimpl.MessageState  `protogen:"open.v1"`
+	RunUuid               string                  `protobuf:"bytes,1,opt,name=run_uuid,json=runUuid,proto3" json:"run_uuid,omitempty"`
+	BotUuid               string                  `protobuf:"bytes,2,opt,name=bot_uuid,json=botUuid,proto3" json:"bot_uuid,omitempty"`
+	Generation            int64                   `protobuf:"varint,3,opt,name=generation,proto3" json:"generation,omitempty"`
+	StepId                string                  `protobuf:"bytes,4,opt,name=step_id,json=stepId,proto3" json:"step_id,omitempty"`
+	ScheduleRunId         string                  `protobuf:"bytes,5,opt,name=schedule_run_id,json=scheduleRunId,proto3" json:"schedule_run_id,omitempty"`
+	CorrelationToken      string                  `protobuf:"bytes,6,opt,name=correlation_token,json=correlationToken,proto3" json:"correlation_token,omitempty"`
+	Reason                string                  `protobuf:"bytes,7,opt,name=reason,proto3" json:"reason,omitempty"`
+	UnresolvedOccurrences []*CommandOccurrenceRef `protobuf:"bytes,8,rep,name=unresolved_occurrences,json=unresolvedOccurrences,proto3" json:"unresolved_occurrences,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *CancelBotCommandScheduleItem) Reset() {
+	*x = CancelBotCommandScheduleItem{}
+	mi := &file_proto_worker_proto_msgTypes[217]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelBotCommandScheduleItem) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelBotCommandScheduleItem) ProtoMessage() {}
+
+func (x *CancelBotCommandScheduleItem) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[217]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelBotCommandScheduleItem.ProtoReflect.Descriptor instead.
+func (*CancelBotCommandScheduleItem) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{217}
+}
+
+func (x *CancelBotCommandScheduleItem) GetRunUuid() string {
+	if x != nil {
+		return x.RunUuid
+	}
+	return ""
+}
+
+func (x *CancelBotCommandScheduleItem) GetBotUuid() string {
+	if x != nil {
+		return x.BotUuid
+	}
+	return ""
+}
+
+func (x *CancelBotCommandScheduleItem) GetGeneration() int64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *CancelBotCommandScheduleItem) GetStepId() string {
+	if x != nil {
+		return x.StepId
+	}
+	return ""
+}
+
+func (x *CancelBotCommandScheduleItem) GetScheduleRunId() string {
+	if x != nil {
+		return x.ScheduleRunId
+	}
+	return ""
+}
+
+func (x *CancelBotCommandScheduleItem) GetCorrelationToken() string {
+	if x != nil {
+		return x.CorrelationToken
+	}
+	return ""
+}
+
+func (x *CancelBotCommandScheduleItem) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
+func (x *CancelBotCommandScheduleItem) GetUnresolvedOccurrences() []*CommandOccurrenceRef {
+	if x != nil {
+		return x.UnresolvedOccurrences
+	}
+	return nil
+}
+
+type CancelBotCommandScheduleItemResult struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	BotUuid          string                 `protobuf:"bytes,1,opt,name=bot_uuid,json=botUuid,proto3" json:"bot_uuid,omitempty"`
+	ScheduleRunId    string                 `protobuf:"bytes,2,opt,name=schedule_run_id,json=scheduleRunId,proto3" json:"schedule_run_id,omitempty"`
+	Disposition      string                 `protobuf:"bytes,3,opt,name=disposition,proto3" json:"disposition,omitempty"` // accepted|rejected|unknown
+	AlreadyCancelled bool                   `protobuf:"varint,4,opt,name=already_cancelled,json=alreadyCancelled,proto3" json:"already_cancelled,omitempty"`
+	ErrorCode        string                 `protobuf:"bytes,5,opt,name=error_code,json=errorCode,proto3" json:"error_code,omitempty"`
+	Error            string                 `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *CancelBotCommandScheduleItemResult) Reset() {
+	*x = CancelBotCommandScheduleItemResult{}
+	mi := &file_proto_worker_proto_msgTypes[218]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelBotCommandScheduleItemResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelBotCommandScheduleItemResult) ProtoMessage() {}
+
+func (x *CancelBotCommandScheduleItemResult) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[218]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelBotCommandScheduleItemResult.ProtoReflect.Descriptor instead.
+func (*CancelBotCommandScheduleItemResult) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{218}
+}
+
+func (x *CancelBotCommandScheduleItemResult) GetBotUuid() string {
+	if x != nil {
+		return x.BotUuid
+	}
+	return ""
+}
+
+func (x *CancelBotCommandScheduleItemResult) GetScheduleRunId() string {
+	if x != nil {
+		return x.ScheduleRunId
+	}
+	return ""
+}
+
+func (x *CancelBotCommandScheduleItemResult) GetDisposition() string {
+	if x != nil {
+		return x.Disposition
+	}
+	return ""
+}
+
+func (x *CancelBotCommandScheduleItemResult) GetAlreadyCancelled() bool {
+	if x != nil {
+		return x.AlreadyCancelled
+	}
+	return false
+}
+
+func (x *CancelBotCommandScheduleItemResult) GetErrorCode() string {
+	if x != nil {
+		return x.ErrorCode
+	}
+	return ""
+}
+
+func (x *CancelBotCommandScheduleItemResult) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type CancelBotCommandSchedulesRequest struct {
+	state         protoimpl.MessageState          `protogen:"open.v1"`
+	RequestId     string                          `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Items         []*CancelBotCommandScheduleItem `protobuf:"bytes,2,rep,name=items,proto3" json:"items,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CancelBotCommandSchedulesRequest) Reset() {
+	*x = CancelBotCommandSchedulesRequest{}
+	mi := &file_proto_worker_proto_msgTypes[219]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelBotCommandSchedulesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelBotCommandSchedulesRequest) ProtoMessage() {}
+
+func (x *CancelBotCommandSchedulesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[219]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelBotCommandSchedulesRequest.ProtoReflect.Descriptor instead.
+func (*CancelBotCommandSchedulesRequest) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{219}
+}
+
+func (x *CancelBotCommandSchedulesRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *CancelBotCommandSchedulesRequest) GetItems() []*CancelBotCommandScheduleItem {
+	if x != nil {
+		return x.Items
+	}
+	return nil
+}
+
+type CancelBotCommandSchedulesResponse struct {
+	state         protoimpl.MessageState                `protogen:"open.v1"`
+	RequestId     string                                `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	Results       []*CancelBotCommandScheduleItemResult `protobuf:"bytes,2,rep,name=results,proto3" json:"results,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CancelBotCommandSchedulesResponse) Reset() {
+	*x = CancelBotCommandSchedulesResponse{}
+	mi := &file_proto_worker_proto_msgTypes[220]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelBotCommandSchedulesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelBotCommandSchedulesResponse) ProtoMessage() {}
+
+func (x *CancelBotCommandSchedulesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_worker_proto_msgTypes[220]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelBotCommandSchedulesResponse.ProtoReflect.Descriptor instead.
+func (*CancelBotCommandSchedulesResponse) Descriptor() ([]byte, []int) {
+	return file_proto_worker_proto_rawDescGZIP(), []int{220}
+}
+
+func (x *CancelBotCommandSchedulesResponse) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *CancelBotCommandSchedulesResponse) GetResults() []*CancelBotCommandScheduleItemResult {
+	if x != nil {
+		return x.Results
+	}
+	return nil
+}
+
 var File_proto_worker_proto protoreflect.FileDescriptor
 
 const file_proto_worker_proto_rawDesc = "" +
@@ -14761,7 +15931,128 @@ const file_proto_worker_proto_rawDesc = "" +
 	"error_code\x18\x04 \x01(\tR\terrorCode\x12\x14\n" +
 	"\x05error\x18\x05 \x01(\tR\x05error\"W\n" +
 	"\x18SignalBotActionsResponse\x12;\n" +
-	"\aresults\x18\x01 \x03(\v2!.worker.SignalBotActionItemResultR\aresults2\xca6\n" +
+	"\aresults\x18\x01 \x03(\v2!.worker.SignalBotActionItemResultR\aresults\"U\n" +
+	"\x14CommandOccurrenceKey\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x1e\n" +
+	"\n" +
+	"occurrence\x18\x02 \x01(\x05R\n" +
+	"occurrence\"\xa6\x01\n" +
+	"\x14CommandOccurrenceRef\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x1e\n" +
+	"\n" +
+	"occurrence\x18\x02 \x01(\x05R\n" +
+	"occurrence\x12\"\n" +
+	"\raction_run_id\x18\x03 \x01(\tR\vactionRunId\x12+\n" +
+	"\x12planned_at_unix_ms\x18\x04 \x01(\x03R\x0fplannedAtUnixMs\"\x9b\x02\n" +
+	"\x18AppliedCommandOccurrence\x12\x1d\n" +
+	"\n" +
+	"command_id\x18\x01 \x01(\tR\tcommandId\x12\x1e\n" +
+	"\n" +
+	"occurrence\x18\x02 \x01(\x05R\n" +
+	"occurrence\x12:\n" +
+	"\x19command_declaration_index\x18\x03 \x01(\x05R\x17commandDeclarationIndex\x12\x1c\n" +
+	"\n" +
+	"base_at_ms\x18\x04 \x01(\x03R\bbaseAtMs\x12(\n" +
+	"\x10jitter_offset_ms\x18\x05 \x01(\x03R\x0ejitterOffsetMs\x12\"\n" +
+	"\raction_run_id\x18\x06 \x01(\tR\vactionRunId\x12\x18\n" +
+	"\acommand\x18\a \x01(\tR\acommand\"\xa0\x01\n" +
+	"\x1cAppliedCommandOccurrencePlan\x12\x1f\n" +
+	"\vduration_ms\x18\x01 \x01(\x03R\n" +
+	"durationMs\x12\x1b\n" +
+	"\tjitter_ms\x18\x02 \x01(\x03R\bjitterMs\x12B\n" +
+	"\voccurrences\x18\x03 \x03(\v2 .worker.AppliedCommandOccurrenceR\voccurrences\"\xc7\x04\n" +
+	"\x1bApplyBotCommandScheduleItem\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\x03R\x05runId\x12\x19\n" +
+	"\brun_uuid\x18\x02 \x01(\tR\arunUuid\x12\x19\n" +
+	"\bbot_uuid\x18\x03 \x01(\tR\abotUuid\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x04 \x01(\x03R\n" +
+	"generation\x12\x17\n" +
+	"\astep_id\x18\x05 \x01(\tR\x06stepId\x12&\n" +
+	"\x0fschedule_run_id\x18\x06 \x01(\tR\rscheduleRunId\x12+\n" +
+	"\x11correlation_token\x18\a \x01(\tR\x10correlationToken\x12\x1d\n" +
+	"\n" +
+	"start_mode\x18\b \x01(\tR\tstartMode\x128\n" +
+	"\x19schedule_start_at_unix_ms\x18\t \x01(\x03R\x15scheduleStartAtUnixMs\x12\x1f\n" +
+	"\vbarrier_key\x18\n" +
+	" \x01(\tR\n" +
+	"barrierKey\x12/\n" +
+	"\x14run_deadline_unix_ms\x18\v \x01(\x03R\x11runDeadlineUnixMs\x12\x1f\n" +
+	"\vjitter_seed\x18\f \x01(\tR\n" +
+	"jitterSeed\x128\n" +
+	"\x04plan\x18\r \x01(\v2$.worker.AppliedCommandOccurrencePlanR\x04plan\x12G\n" +
+	"\x10skip_occurrences\x18\x0e \x03(\v2\x1c.worker.CommandOccurrenceKeyR\x0fskipOccurrences\"\xbd\x01\n" +
+	"!ApplyBotCommandScheduleItemResult\x12\x19\n" +
+	"\bbot_uuid\x18\x01 \x01(\tR\abotUuid\x12&\n" +
+	"\x0fschedule_run_id\x18\x02 \x01(\tR\rscheduleRunId\x12 \n" +
+	"\vdisposition\x18\x03 \x01(\tR\vdisposition\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\x04 \x01(\tR\terrorCode\x12\x14\n" +
+	"\x05error\x18\x05 \x01(\tR\x05error\"{\n" +
+	"\x1fApplyBotCommandSchedulesRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x129\n" +
+	"\x05items\x18\x02 \x03(\v2#.worker.ApplyBotCommandScheduleItemR\x05items\"\x86\x01\n" +
+	" ApplyBotCommandSchedulesResponse\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12C\n" +
+	"\aresults\x18\x02 \x03(\v2).worker.ApplyBotCommandScheduleItemResultR\aresults\"\x84\x02\n" +
+	"\x1dReleaseBotCommandScheduleItem\x12\x19\n" +
+	"\brun_uuid\x18\x01 \x01(\tR\arunUuid\x12\x19\n" +
+	"\bbot_uuid\x18\x02 \x01(\tR\abotUuid\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x03 \x01(\x03R\n" +
+	"generation\x12\x17\n" +
+	"\astep_id\x18\x04 \x01(\tR\x06stepId\x12&\n" +
+	"\x0fschedule_run_id\x18\x05 \x01(\tR\rscheduleRunId\x12\x1f\n" +
+	"\vbarrier_key\x18\x06 \x01(\tR\n" +
+	"barrierKey\x12+\n" +
+	"\x12release_at_unix_ms\x18\a \x01(\x03R\x0freleaseAtUnixMs\"\xea\x01\n" +
+	"#ReleaseBotCommandScheduleItemResult\x12\x19\n" +
+	"\bbot_uuid\x18\x01 \x01(\tR\abotUuid\x12&\n" +
+	"\x0fschedule_run_id\x18\x02 \x01(\tR\rscheduleRunId\x12 \n" +
+	"\vdisposition\x18\x03 \x01(\tR\vdisposition\x12)\n" +
+	"\x10already_released\x18\x04 \x01(\bR\x0falreadyReleased\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\x05 \x01(\tR\terrorCode\x12\x14\n" +
+	"\x05error\x18\x06 \x01(\tR\x05error\"\x7f\n" +
+	"!ReleaseBotCommandSchedulesRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12;\n" +
+	"\x05items\x18\x02 \x03(\v2%.worker.ReleaseBotCommandScheduleItemR\x05items\"\x8a\x01\n" +
+	"\"ReleaseBotCommandSchedulesResponse\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12E\n" +
+	"\aresults\x18\x02 \x03(\v2+.worker.ReleaseBotCommandScheduleItemResultR\aresults\"\xcf\x02\n" +
+	"\x1cCancelBotCommandScheduleItem\x12\x19\n" +
+	"\brun_uuid\x18\x01 \x01(\tR\arunUuid\x12\x19\n" +
+	"\bbot_uuid\x18\x02 \x01(\tR\abotUuid\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x03 \x01(\x03R\n" +
+	"generation\x12\x17\n" +
+	"\astep_id\x18\x04 \x01(\tR\x06stepId\x12&\n" +
+	"\x0fschedule_run_id\x18\x05 \x01(\tR\rscheduleRunId\x12+\n" +
+	"\x11correlation_token\x18\x06 \x01(\tR\x10correlationToken\x12\x16\n" +
+	"\x06reason\x18\a \x01(\tR\x06reason\x12S\n" +
+	"\x16unresolved_occurrences\x18\b \x03(\v2\x1c.worker.CommandOccurrenceRefR\x15unresolvedOccurrences\"\xeb\x01\n" +
+	"\"CancelBotCommandScheduleItemResult\x12\x19\n" +
+	"\bbot_uuid\x18\x01 \x01(\tR\abotUuid\x12&\n" +
+	"\x0fschedule_run_id\x18\x02 \x01(\tR\rscheduleRunId\x12 \n" +
+	"\vdisposition\x18\x03 \x01(\tR\vdisposition\x12+\n" +
+	"\x11already_cancelled\x18\x04 \x01(\bR\x10alreadyCancelled\x12\x1d\n" +
+	"\n" +
+	"error_code\x18\x05 \x01(\tR\terrorCode\x12\x14\n" +
+	"\x05error\x18\x06 \x01(\tR\x05error\"}\n" +
+	" CancelBotCommandSchedulesRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12:\n" +
+	"\x05items\x18\x02 \x03(\v2$.worker.CancelBotCommandScheduleItemR\x05items\"\x88\x01\n" +
+	"!CancelBotCommandSchedulesResponse\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12D\n" +
+	"\aresults\x18\x02 \x03(\v2*.worker.CancelBotCommandScheduleItemResultR\aresults2\xa09\n" +
 	"\rWorkerService\x12=\n" +
 	"\bRegister\x12\x17.worker.RegisterRequest\x1a\x18.worker.RegisterResponse\x12D\n" +
 	"\tHeartbeat\x12\x18.worker.HeartbeatRequest\x1a\x19.worker.HeartbeatResponse(\x010\x01\x12d\n" +
@@ -14848,7 +16139,10 @@ const file_proto_worker_proto_rawDesc = "" +
 	"\rApplyBotBatch\x12\x1c.worker.ApplyBotBatchRequest\x1a\x1d.worker.ApplyBotBatchResponse\x12^\n" +
 	"\x13GetBotFleetSnapshot\x12\".worker.GetBotFleetSnapshotRequest\x1a#.worker.GetBotFleetSnapshotResponse\x12T\n" +
 	"\x14StreamBotFleetEvents\x12#.worker.StreamBotFleetEventsRequest\x1a\x15.worker.BotFleetEvent0\x01\x12U\n" +
-	"\x10SignalBotActions\x12\x1f.worker.SignalBotActionsRequest\x1a .worker.SignalBotActionsResponse\x12N\n" +
+	"\x10SignalBotActions\x12\x1f.worker.SignalBotActionsRequest\x1a .worker.SignalBotActionsResponse\x12m\n" +
+	"\x18ApplyBotCommandSchedules\x12'.worker.ApplyBotCommandSchedulesRequest\x1a(.worker.ApplyBotCommandSchedulesResponse\x12s\n" +
+	"\x1aReleaseBotCommandSchedules\x12).worker.ReleaseBotCommandSchedulesRequest\x1a*.worker.ReleaseBotCommandSchedulesResponse\x12p\n" +
+	"\x19CancelBotCommandSchedules\x12(.worker.CancelBotCommandSchedulesRequest\x1a).worker.CancelBotCommandSchedulesResponse\x12N\n" +
 	"\x12StreamPluginEvents\x12!.worker.StreamPluginEventsRequest\x1a\x13.worker.PluginEvent0\x01\x12X\n" +
 	"\x11SendPluginCommand\x12 .worker.SendPluginCommandRequest\x1a!.worker.SendPluginCommandResponse\x12U\n" +
 	"\x10QueryServerState\x12\x1f.worker.QueryServerStateRequest\x1a .worker.QueryServerStateResponse\x12C\n" +
@@ -14872,215 +16166,231 @@ func file_proto_worker_proto_rawDescGZIP() []byte {
 	return file_proto_worker_proto_rawDescData
 }
 
-var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 207)
+var file_proto_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 223)
 var file_proto_worker_proto_goTypes = []any{
-	(*RegisterRequest)(nil),               // 0: worker.RegisterRequest
-	(*RegisterResponse)(nil),              // 1: worker.RegisterResponse
-	(*ReportCrashSnapshotRequest)(nil),    // 2: worker.ReportCrashSnapshotRequest
-	(*ReportCrashSnapshotResponse)(nil),   // 3: worker.ReportCrashSnapshotResponse
-	(*FetchBotWorkerArchiveRequest)(nil),  // 4: worker.FetchBotWorkerArchiveRequest
-	(*FetchBotWorkerArchiveResponse)(nil), // 5: worker.FetchBotWorkerArchiveResponse
-	(*HeartbeatRequest)(nil),              // 6: worker.HeartbeatRequest
-	(*TaskSnapshot)(nil),                  // 7: worker.TaskSnapshot
-	(*InstanceState)(nil),                 // 8: worker.InstanceState
-	(*DisposeOrphanRuntimeRequest)(nil),   // 9: worker.DisposeOrphanRuntimeRequest
-	(*DisposeOrphanRuntimeResponse)(nil),  // 10: worker.DisposeOrphanRuntimeResponse
-	(*InstanceMetricSample)(nil),          // 11: worker.InstanceMetricSample
-	(*ProcessMetricSample)(nil),           // 12: worker.ProcessMetricSample
-	(*HeartbeatResponse)(nil),             // 13: worker.HeartbeatResponse
-	(*CreateInstanceRequest)(nil),         // 14: worker.CreateInstanceRequest
-	(*PortMapping)(nil),                   // 15: worker.PortMapping
-	(*CreateInstanceResponse)(nil),        // 16: worker.CreateInstanceResponse
-	(*ResyncInstancesRequest)(nil),        // 17: worker.ResyncInstancesRequest
-	(*ResyncInstancesResponse)(nil),       // 18: worker.ResyncInstancesResponse
-	(*InstanceActionRequest)(nil),         // 19: worker.InstanceActionRequest
-	(*InstanceActionResponse)(nil),        // 20: worker.InstanceActionResponse
-	(*SendCommandRequest)(nil),            // 21: worker.SendCommandRequest
-	(*SendCommandResponse)(nil),           // 22: worker.SendCommandResponse
-	(*GetInstanceStatusResponse)(nil),     // 23: worker.GetInstanceStatusResponse
-	(*ListInstancesRequest)(nil),          // 24: worker.ListInstancesRequest
-	(*ListInstancesResponse)(nil),         // 25: worker.ListInstancesResponse
-	(*InstanceInfo)(nil),                  // 26: worker.InstanceInfo
-	(*StreamInstanceEventsRequest)(nil),   // 27: worker.StreamInstanceEventsRequest
-	(*InstanceEvent)(nil),                 // 28: worker.InstanceEvent
-	(*IssueTerminalTokenRequest)(nil),     // 29: worker.IssueTerminalTokenRequest
-	(*IssueTerminalTokenResponse)(nil),    // 30: worker.IssueTerminalTokenResponse
-	(*ListFilesRequest)(nil),              // 31: worker.ListFilesRequest
-	(*ListFilesResponse)(nil),             // 32: worker.ListFilesResponse
-	(*FileInfo)(nil),                      // 33: worker.FileInfo
-	(*CheckPathAccessRequest)(nil),        // 34: worker.CheckPathAccessRequest
-	(*CheckPathAccessResponse)(nil),       // 35: worker.CheckPathAccessResponse
-	(*ChmodPathRequest)(nil),              // 36: worker.ChmodPathRequest
-	(*ChmodPathResponse)(nil),             // 37: worker.ChmodPathResponse
-	(*ReadFileRequest)(nil),               // 38: worker.ReadFileRequest
-	(*ReadFileResponse)(nil),              // 39: worker.ReadFileResponse
-	(*WriteFileRequest)(nil),              // 40: worker.WriteFileRequest
-	(*WriteFileResponse)(nil),             // 41: worker.WriteFileResponse
-	(*DeleteFileRequest)(nil),             // 42: worker.DeleteFileRequest
-	(*DeleteFileResponse)(nil),            // 43: worker.DeleteFileResponse
-	(*RenameFileRequest)(nil),             // 44: worker.RenameFileRequest
-	(*RenameFileResponse)(nil),            // 45: worker.RenameFileResponse
-	(*DownloadArchiveRequest)(nil),        // 46: worker.DownloadArchiveRequest
-	(*DownloadArchiveChunk)(nil),          // 47: worker.DownloadArchiveChunk
-	(*DownloadFileRequest)(nil),           // 48: worker.DownloadFileRequest
-	(*DownloadFileChunk)(nil),             // 49: worker.DownloadFileChunk
-	(*UploadFileChunk)(nil),               // 50: worker.UploadFileChunk
-	(*UploadFileResponse)(nil),            // 51: worker.UploadFileResponse
-	(*SearchFilesRequest)(nil),            // 52: worker.SearchFilesRequest
-	(*SearchHit)(nil),                     // 53: worker.SearchHit
-	(*SearchFilesResponse)(nil),           // 54: worker.SearchFilesResponse
-	(*ListConfigFilesRequest)(nil),        // 55: worker.ListConfigFilesRequest
-	(*ConfigFileInfo)(nil),                // 56: worker.ConfigFileInfo
-	(*ListConfigFilesResponse)(nil),       // 57: worker.ListConfigFilesResponse
-	(*ConfigField)(nil),                   // 58: worker.ConfigField
-	(*ValidationIssue)(nil),               // 59: worker.ValidationIssue
-	(*ConfigValidationResult)(nil),        // 60: worker.ConfigValidationResult
-	(*ReadConfigRequest)(nil),             // 61: worker.ReadConfigRequest
-	(*ReadConfigResponse)(nil),            // 62: worker.ReadConfigResponse
-	(*WriteConfigRequest)(nil),            // 63: worker.WriteConfigRequest
-	(*WriteConfigResponse)(nil),           // 64: worker.WriteConfigResponse
-	(*ValidateConfigRequest)(nil),         // 65: worker.ValidateConfigRequest
-	(*ValidateConfigResponse)(nil),        // 66: worker.ValidateConfigResponse
-	(*DiffConfigRequest)(nil),             // 67: worker.DiffConfigRequest
-	(*DiffConfigResponse)(nil),            // 68: worker.DiffConfigResponse
-	(*GetNodeMetricsRequest)(nil),         // 69: worker.GetNodeMetricsRequest
-	(*GetNodeMetricsResponse)(nil),        // 70: worker.GetNodeMetricsResponse
-	(*GetInstanceMetricsRequest)(nil),     // 71: worker.GetInstanceMetricsRequest
-	(*GetInstanceMetricsResponse)(nil),    // 72: worker.GetInstanceMetricsResponse
-	(*WorldMetric)(nil),                   // 73: worker.WorldMetric
-	(*GetInstanceEnvRequest)(nil),         // 74: worker.GetInstanceEnvRequest
-	(*GetInstanceEnvResponse)(nil),        // 75: worker.GetInstanceEnvResponse
-	(*CreateBotRequest)(nil),              // 76: worker.CreateBotRequest
-	(*CreateBotResponse)(nil),             // 77: worker.CreateBotResponse
-	(*DeleteBotRequest)(nil),              // 78: worker.DeleteBotRequest
-	(*DeleteBotResponse)(nil),             // 79: worker.DeleteBotResponse
-	(*ListBotsRequest)(nil),               // 80: worker.ListBotsRequest
-	(*ListBotsResponse)(nil),              // 81: worker.ListBotsResponse
-	(*BotInfo)(nil),                       // 82: worker.BotInfo
-	(*SetBotBehaviorRequest)(nil),         // 83: worker.SetBotBehaviorRequest
-	(*SetBotBehaviorResponse)(nil),        // 84: worker.SetBotBehaviorResponse
-	(*SendBotCommandRequest)(nil),         // 85: worker.SendBotCommandRequest
-	(*SendBotCommandResponse)(nil),        // 86: worker.SendBotCommandResponse
-	(*RunBotScriptRequest)(nil),           // 87: worker.RunBotScriptRequest
-	(*RunBotScriptResponse)(nil),          // 88: worker.RunBotScriptResponse
-	(*StreamBotEventsRequest)(nil),        // 89: worker.StreamBotEventsRequest
-	(*BotEvent)(nil),                      // 90: worker.BotEvent
-	(*ListJDKsRequest)(nil),               // 91: worker.ListJDKsRequest
-	(*JDKInfo)(nil),                       // 92: worker.JDKInfo
-	(*ListJDKsResponse)(nil),              // 93: worker.ListJDKsResponse
-	(*InstallJDKRequest)(nil),             // 94: worker.InstallJDKRequest
-	(*JDKCatalogRequest)(nil),             // 95: worker.JDKCatalogRequest
-	(*JDKCatalogPackage)(nil),             // 96: worker.JDKCatalogPackage
-	(*JDKCatalogResponse)(nil),            // 97: worker.JDKCatalogResponse
-	(*InstallJDKResponse)(nil),            // 98: worker.InstallJDKResponse
-	(*RemoveJDKRequest)(nil),              // 99: worker.RemoveJDKRequest
-	(*RemoveJDKResponse)(nil),             // 100: worker.RemoveJDKResponse
-	(*DownloadCoreRequest)(nil),           // 101: worker.DownloadCoreRequest
-	(*DownloadCoreResponse)(nil),          // 102: worker.DownloadCoreResponse
-	(*InstallForgeServerRequest)(nil),     // 103: worker.InstallForgeServerRequest
-	(*InstallForgeServerResponse)(nil),    // 104: worker.InstallForgeServerResponse
-	(*ArtifactCacheItem)(nil),             // 105: worker.ArtifactCacheItem
-	(*ListArtifactCacheRequest)(nil),      // 106: worker.ListArtifactCacheRequest
-	(*ListArtifactCacheResponse)(nil),     // 107: worker.ListArtifactCacheResponse
-	(*EvictArtifactCacheRequest)(nil),     // 108: worker.EvictArtifactCacheRequest
-	(*EvictArtifactCacheResponse)(nil),    // 109: worker.EvictArtifactCacheResponse
-	(*ClearArtifactCacheRequest)(nil),     // 110: worker.ClearArtifactCacheRequest
-	(*ClearArtifactCacheResponse)(nil),    // 111: worker.ClearArtifactCacheResponse
-	(*SetArtifactCacheCapRequest)(nil),    // 112: worker.SetArtifactCacheCapRequest
-	(*SetArtifactCacheCapResponse)(nil),   // 113: worker.SetArtifactCacheCapResponse
-	(*BrowseDirRequest)(nil),              // 114: worker.BrowseDirRequest
-	(*BrowseDirEntry)(nil),                // 115: worker.BrowseDirEntry
-	(*BrowseDirResponse)(nil),             // 116: worker.BrowseDirResponse
-	(*ProbeJDKRequest)(nil),               // 117: worker.ProbeJDKRequest
-	(*ProbeJDKResponse)(nil),              // 118: worker.ProbeJDKResponse
-	(*ScanRuntimesRequest)(nil),           // 119: worker.ScanRuntimesRequest
-	(*RuntimeCandidate)(nil),              // 120: worker.RuntimeCandidate
-	(*ScanRuntimesResponse)(nil),          // 121: worker.ScanRuntimesResponse
-	(*InstallRuntimeRequest)(nil),         // 122: worker.InstallRuntimeRequest
-	(*InstallRuntimeResponse)(nil),        // 123: worker.InstallRuntimeResponse
-	(*RemoveRuntimeRequest)(nil),          // 124: worker.RemoveRuntimeRequest
-	(*RemoveRuntimeResponse)(nil),         // 125: worker.RemoveRuntimeResponse
-	(*PMRegistry)(nil),                    // 126: worker.PMRegistry
-	(*GetPMConfigRequest)(nil),            // 127: worker.GetPMConfigRequest
-	(*GetPMConfigResponse)(nil),           // 128: worker.GetPMConfigResponse
-	(*SetPMConfigRequest)(nil),            // 129: worker.SetPMConfigRequest
-	(*SetPMConfigResponse)(nil),           // 130: worker.SetPMConfigResponse
-	(*GlobalPackage)(nil),                 // 131: worker.GlobalPackage
-	(*ListGlobalPackagesRequest)(nil),     // 132: worker.ListGlobalPackagesRequest
-	(*ListGlobalPackagesResponse)(nil),    // 133: worker.ListGlobalPackagesResponse
-	(*InstallGlobalPackageRequest)(nil),   // 134: worker.InstallGlobalPackageRequest
-	(*InstallGlobalPackageResponse)(nil),  // 135: worker.InstallGlobalPackageResponse
-	(*RemoveGlobalPackageRequest)(nil),    // 136: worker.RemoveGlobalPackageRequest
-	(*RemoveGlobalPackageResponse)(nil),   // 137: worker.RemoveGlobalPackageResponse
-	(*DeployServerProbeRequest)(nil),      // 138: worker.DeployServerProbeRequest
-	(*DeployServerProbeResponse)(nil),     // 139: worker.DeployServerProbeResponse
-	(*CloneWorkDirRequest)(nil),           // 140: worker.CloneWorkDirRequest
-	(*CloneWorkDirResponse)(nil),          // 141: worker.CloneWorkDirResponse
-	(*RemoveInstanceRequest)(nil),         // 142: worker.RemoveInstanceRequest
-	(*RemoveInstanceResponse)(nil),        // 143: worker.RemoveInstanceResponse
-	(*ListImagesRequest)(nil),             // 144: worker.ListImagesRequest
-	(*ImageInfo)(nil),                     // 145: worker.ImageInfo
-	(*ListImagesResponse)(nil),            // 146: worker.ListImagesResponse
-	(*PullImageRequest)(nil),              // 147: worker.PullImageRequest
-	(*PullImageResponse)(nil),             // 148: worker.PullImageResponse
-	(*RemoveImageRequest)(nil),            // 149: worker.RemoveImageRequest
-	(*RemoveImageResponse)(nil),           // 150: worker.RemoveImageResponse
-	(*StorageBackendSpec)(nil),            // 151: worker.StorageBackendSpec
-	(*BackupManifestEntry)(nil),           // 152: worker.BackupManifestEntry
-	(*CreateBackupRequest)(nil),           // 153: worker.CreateBackupRequest
-	(*CreateBackupResponse)(nil),          // 154: worker.CreateBackupResponse
-	(*RestoreBackupRequest)(nil),          // 155: worker.RestoreBackupRequest
-	(*RestoreBackupResponse)(nil),         // 156: worker.RestoreBackupResponse
-	(*TestStorageBackendRequest)(nil),     // 157: worker.TestStorageBackendRequest
-	(*TestStorageBackendResponse)(nil),    // 158: worker.TestStorageBackendResponse
-	(*StreamPluginEventsRequest)(nil),     // 159: worker.StreamPluginEventsRequest
-	(*PluginEvent)(nil),                   // 160: worker.PluginEvent
-	(*PluginCommand)(nil),                 // 161: worker.PluginCommand
-	(*SendPluginCommandRequest)(nil),      // 162: worker.SendPluginCommandRequest
-	(*SendPluginCommandResponse)(nil),     // 163: worker.SendPluginCommandResponse
-	(*QueryServerStateRequest)(nil),       // 164: worker.QueryServerStateRequest
-	(*QueryServerStateResponse)(nil),      // 165: worker.QueryServerStateResponse
-	(*GetVersionRequest)(nil),             // 166: worker.GetVersionRequest
-	(*GetVersionResponse)(nil),            // 167: worker.GetVersionResponse
-	(*CheckDockerRequest)(nil),            // 168: worker.CheckDockerRequest
-	(*CheckDockerResponse)(nil),           // 169: worker.CheckDockerResponse
-	(*UpgradeWorkerRequest)(nil),          // 170: worker.UpgradeWorkerRequest
-	(*UpgradeWorkerResponse)(nil),         // 171: worker.UpgradeWorkerResponse
-	(*ListArchiveEntriesRequest)(nil),     // 172: worker.ListArchiveEntriesRequest
-	(*ArchiveEntry)(nil),                  // 173: worker.ArchiveEntry
-	(*ListArchiveEntriesResponse)(nil),    // 174: worker.ListArchiveEntriesResponse
-	(*ReadArchiveEntryRequest)(nil),       // 175: worker.ReadArchiveEntryRequest
-	(*ReadArchiveEntryResponse)(nil),      // 176: worker.ReadArchiveEntryResponse
-	(*DecompileClassRequest)(nil),         // 177: worker.DecompileClassRequest
-	(*DecompileClassResponse)(nil),        // 178: worker.DecompileClassResponse
-	(*TerminalFrame)(nil),                 // 179: worker.TerminalFrame
-	(*TerminalOpen)(nil),                  // 180: worker.TerminalOpen
-	(*TerminalWSFrame)(nil),               // 181: worker.TerminalWSFrame
-	(*InspectServerDirRequest)(nil),       // 182: worker.InspectServerDirRequest
-	(*ImportJarCandidate)(nil),            // 183: worker.ImportJarCandidate
-	(*ImportJdkCandidate)(nil),            // 184: worker.ImportJdkCandidate
-	(*InspectServerDirResponse)(nil),      // 185: worker.InspectServerDirResponse
-	(*ImportServerDirRequest)(nil),        // 186: worker.ImportServerDirRequest
-	(*ImportServerDirResponse)(nil),       // 187: worker.ImportServerDirResponse
-	(*GetBotCapacityRequest)(nil),         // 188: worker.GetBotCapacityRequest
-	(*GetBotCapacityResponse)(nil),        // 189: worker.GetBotCapacityResponse
-	(*BotAssignment)(nil),                 // 190: worker.BotAssignment
-	(*ApplyBotBatchRequest)(nil),          // 191: worker.ApplyBotBatchRequest
-	(*ApplyBotBatchItemResult)(nil),       // 192: worker.ApplyBotBatchItemResult
-	(*ApplyBotBatchResponse)(nil),         // 193: worker.ApplyBotBatchResponse
-	(*GetBotFleetSnapshotRequest)(nil),    // 194: worker.GetBotFleetSnapshotRequest
-	(*BotPosition)(nil),                   // 195: worker.BotPosition
-	(*BotRuntimeSnapshot)(nil),            // 196: worker.BotRuntimeSnapshot
-	(*GetBotFleetSnapshotResponse)(nil),   // 197: worker.GetBotFleetSnapshotResponse
-	(*StreamBotFleetEventsRequest)(nil),   // 198: worker.StreamBotFleetEventsRequest
-	(*BotActionEvent)(nil),                // 199: worker.BotActionEvent
-	(*BotFleetEvent)(nil),                 // 200: worker.BotFleetEvent
-	(*BotActionSignal)(nil),               // 201: worker.BotActionSignal
-	(*SignalBotActionsRequest)(nil),       // 202: worker.SignalBotActionsRequest
-	(*SignalBotActionItemResult)(nil),     // 203: worker.SignalBotActionItemResult
-	(*SignalBotActionsResponse)(nil),      // 204: worker.SignalBotActionsResponse
-	nil,                                   // 205: worker.CreateInstanceRequest.EnvVarsEntry
-	nil,                                   // 206: worker.GetInstanceEnvResponse.EnvEntry
+	(*RegisterRequest)(nil),                     // 0: worker.RegisterRequest
+	(*RegisterResponse)(nil),                    // 1: worker.RegisterResponse
+	(*ReportCrashSnapshotRequest)(nil),          // 2: worker.ReportCrashSnapshotRequest
+	(*ReportCrashSnapshotResponse)(nil),         // 3: worker.ReportCrashSnapshotResponse
+	(*FetchBotWorkerArchiveRequest)(nil),        // 4: worker.FetchBotWorkerArchiveRequest
+	(*FetchBotWorkerArchiveResponse)(nil),       // 5: worker.FetchBotWorkerArchiveResponse
+	(*HeartbeatRequest)(nil),                    // 6: worker.HeartbeatRequest
+	(*TaskSnapshot)(nil),                        // 7: worker.TaskSnapshot
+	(*InstanceState)(nil),                       // 8: worker.InstanceState
+	(*DisposeOrphanRuntimeRequest)(nil),         // 9: worker.DisposeOrphanRuntimeRequest
+	(*DisposeOrphanRuntimeResponse)(nil),        // 10: worker.DisposeOrphanRuntimeResponse
+	(*InstanceMetricSample)(nil),                // 11: worker.InstanceMetricSample
+	(*ProcessMetricSample)(nil),                 // 12: worker.ProcessMetricSample
+	(*HeartbeatResponse)(nil),                   // 13: worker.HeartbeatResponse
+	(*CreateInstanceRequest)(nil),               // 14: worker.CreateInstanceRequest
+	(*PortMapping)(nil),                         // 15: worker.PortMapping
+	(*CreateInstanceResponse)(nil),              // 16: worker.CreateInstanceResponse
+	(*ResyncInstancesRequest)(nil),              // 17: worker.ResyncInstancesRequest
+	(*ResyncInstancesResponse)(nil),             // 18: worker.ResyncInstancesResponse
+	(*InstanceActionRequest)(nil),               // 19: worker.InstanceActionRequest
+	(*InstanceActionResponse)(nil),              // 20: worker.InstanceActionResponse
+	(*SendCommandRequest)(nil),                  // 21: worker.SendCommandRequest
+	(*SendCommandResponse)(nil),                 // 22: worker.SendCommandResponse
+	(*GetInstanceStatusResponse)(nil),           // 23: worker.GetInstanceStatusResponse
+	(*ListInstancesRequest)(nil),                // 24: worker.ListInstancesRequest
+	(*ListInstancesResponse)(nil),               // 25: worker.ListInstancesResponse
+	(*InstanceInfo)(nil),                        // 26: worker.InstanceInfo
+	(*StreamInstanceEventsRequest)(nil),         // 27: worker.StreamInstanceEventsRequest
+	(*InstanceEvent)(nil),                       // 28: worker.InstanceEvent
+	(*IssueTerminalTokenRequest)(nil),           // 29: worker.IssueTerminalTokenRequest
+	(*IssueTerminalTokenResponse)(nil),          // 30: worker.IssueTerminalTokenResponse
+	(*ListFilesRequest)(nil),                    // 31: worker.ListFilesRequest
+	(*ListFilesResponse)(nil),                   // 32: worker.ListFilesResponse
+	(*FileInfo)(nil),                            // 33: worker.FileInfo
+	(*CheckPathAccessRequest)(nil),              // 34: worker.CheckPathAccessRequest
+	(*CheckPathAccessResponse)(nil),             // 35: worker.CheckPathAccessResponse
+	(*ChmodPathRequest)(nil),                    // 36: worker.ChmodPathRequest
+	(*ChmodPathResponse)(nil),                   // 37: worker.ChmodPathResponse
+	(*ReadFileRequest)(nil),                     // 38: worker.ReadFileRequest
+	(*ReadFileResponse)(nil),                    // 39: worker.ReadFileResponse
+	(*WriteFileRequest)(nil),                    // 40: worker.WriteFileRequest
+	(*WriteFileResponse)(nil),                   // 41: worker.WriteFileResponse
+	(*DeleteFileRequest)(nil),                   // 42: worker.DeleteFileRequest
+	(*DeleteFileResponse)(nil),                  // 43: worker.DeleteFileResponse
+	(*RenameFileRequest)(nil),                   // 44: worker.RenameFileRequest
+	(*RenameFileResponse)(nil),                  // 45: worker.RenameFileResponse
+	(*DownloadArchiveRequest)(nil),              // 46: worker.DownloadArchiveRequest
+	(*DownloadArchiveChunk)(nil),                // 47: worker.DownloadArchiveChunk
+	(*DownloadFileRequest)(nil),                 // 48: worker.DownloadFileRequest
+	(*DownloadFileChunk)(nil),                   // 49: worker.DownloadFileChunk
+	(*UploadFileChunk)(nil),                     // 50: worker.UploadFileChunk
+	(*UploadFileResponse)(nil),                  // 51: worker.UploadFileResponse
+	(*SearchFilesRequest)(nil),                  // 52: worker.SearchFilesRequest
+	(*SearchHit)(nil),                           // 53: worker.SearchHit
+	(*SearchFilesResponse)(nil),                 // 54: worker.SearchFilesResponse
+	(*ListConfigFilesRequest)(nil),              // 55: worker.ListConfigFilesRequest
+	(*ConfigFileInfo)(nil),                      // 56: worker.ConfigFileInfo
+	(*ListConfigFilesResponse)(nil),             // 57: worker.ListConfigFilesResponse
+	(*ConfigField)(nil),                         // 58: worker.ConfigField
+	(*ValidationIssue)(nil),                     // 59: worker.ValidationIssue
+	(*ConfigValidationResult)(nil),              // 60: worker.ConfigValidationResult
+	(*ReadConfigRequest)(nil),                   // 61: worker.ReadConfigRequest
+	(*ReadConfigResponse)(nil),                  // 62: worker.ReadConfigResponse
+	(*WriteConfigRequest)(nil),                  // 63: worker.WriteConfigRequest
+	(*WriteConfigResponse)(nil),                 // 64: worker.WriteConfigResponse
+	(*ValidateConfigRequest)(nil),               // 65: worker.ValidateConfigRequest
+	(*ValidateConfigResponse)(nil),              // 66: worker.ValidateConfigResponse
+	(*DiffConfigRequest)(nil),                   // 67: worker.DiffConfigRequest
+	(*DiffConfigResponse)(nil),                  // 68: worker.DiffConfigResponse
+	(*GetNodeMetricsRequest)(nil),               // 69: worker.GetNodeMetricsRequest
+	(*GetNodeMetricsResponse)(nil),              // 70: worker.GetNodeMetricsResponse
+	(*GetInstanceMetricsRequest)(nil),           // 71: worker.GetInstanceMetricsRequest
+	(*GetInstanceMetricsResponse)(nil),          // 72: worker.GetInstanceMetricsResponse
+	(*WorldMetric)(nil),                         // 73: worker.WorldMetric
+	(*GetInstanceEnvRequest)(nil),               // 74: worker.GetInstanceEnvRequest
+	(*GetInstanceEnvResponse)(nil),              // 75: worker.GetInstanceEnvResponse
+	(*CreateBotRequest)(nil),                    // 76: worker.CreateBotRequest
+	(*CreateBotResponse)(nil),                   // 77: worker.CreateBotResponse
+	(*DeleteBotRequest)(nil),                    // 78: worker.DeleteBotRequest
+	(*DeleteBotResponse)(nil),                   // 79: worker.DeleteBotResponse
+	(*ListBotsRequest)(nil),                     // 80: worker.ListBotsRequest
+	(*ListBotsResponse)(nil),                    // 81: worker.ListBotsResponse
+	(*BotInfo)(nil),                             // 82: worker.BotInfo
+	(*SetBotBehaviorRequest)(nil),               // 83: worker.SetBotBehaviorRequest
+	(*SetBotBehaviorResponse)(nil),              // 84: worker.SetBotBehaviorResponse
+	(*SendBotCommandRequest)(nil),               // 85: worker.SendBotCommandRequest
+	(*SendBotCommandResponse)(nil),              // 86: worker.SendBotCommandResponse
+	(*RunBotScriptRequest)(nil),                 // 87: worker.RunBotScriptRequest
+	(*RunBotScriptResponse)(nil),                // 88: worker.RunBotScriptResponse
+	(*StreamBotEventsRequest)(nil),              // 89: worker.StreamBotEventsRequest
+	(*BotEvent)(nil),                            // 90: worker.BotEvent
+	(*ListJDKsRequest)(nil),                     // 91: worker.ListJDKsRequest
+	(*JDKInfo)(nil),                             // 92: worker.JDKInfo
+	(*ListJDKsResponse)(nil),                    // 93: worker.ListJDKsResponse
+	(*InstallJDKRequest)(nil),                   // 94: worker.InstallJDKRequest
+	(*JDKCatalogRequest)(nil),                   // 95: worker.JDKCatalogRequest
+	(*JDKCatalogPackage)(nil),                   // 96: worker.JDKCatalogPackage
+	(*JDKCatalogResponse)(nil),                  // 97: worker.JDKCatalogResponse
+	(*InstallJDKResponse)(nil),                  // 98: worker.InstallJDKResponse
+	(*RemoveJDKRequest)(nil),                    // 99: worker.RemoveJDKRequest
+	(*RemoveJDKResponse)(nil),                   // 100: worker.RemoveJDKResponse
+	(*DownloadCoreRequest)(nil),                 // 101: worker.DownloadCoreRequest
+	(*DownloadCoreResponse)(nil),                // 102: worker.DownloadCoreResponse
+	(*InstallForgeServerRequest)(nil),           // 103: worker.InstallForgeServerRequest
+	(*InstallForgeServerResponse)(nil),          // 104: worker.InstallForgeServerResponse
+	(*ArtifactCacheItem)(nil),                   // 105: worker.ArtifactCacheItem
+	(*ListArtifactCacheRequest)(nil),            // 106: worker.ListArtifactCacheRequest
+	(*ListArtifactCacheResponse)(nil),           // 107: worker.ListArtifactCacheResponse
+	(*EvictArtifactCacheRequest)(nil),           // 108: worker.EvictArtifactCacheRequest
+	(*EvictArtifactCacheResponse)(nil),          // 109: worker.EvictArtifactCacheResponse
+	(*ClearArtifactCacheRequest)(nil),           // 110: worker.ClearArtifactCacheRequest
+	(*ClearArtifactCacheResponse)(nil),          // 111: worker.ClearArtifactCacheResponse
+	(*SetArtifactCacheCapRequest)(nil),          // 112: worker.SetArtifactCacheCapRequest
+	(*SetArtifactCacheCapResponse)(nil),         // 113: worker.SetArtifactCacheCapResponse
+	(*BrowseDirRequest)(nil),                    // 114: worker.BrowseDirRequest
+	(*BrowseDirEntry)(nil),                      // 115: worker.BrowseDirEntry
+	(*BrowseDirResponse)(nil),                   // 116: worker.BrowseDirResponse
+	(*ProbeJDKRequest)(nil),                     // 117: worker.ProbeJDKRequest
+	(*ProbeJDKResponse)(nil),                    // 118: worker.ProbeJDKResponse
+	(*ScanRuntimesRequest)(nil),                 // 119: worker.ScanRuntimesRequest
+	(*RuntimeCandidate)(nil),                    // 120: worker.RuntimeCandidate
+	(*ScanRuntimesResponse)(nil),                // 121: worker.ScanRuntimesResponse
+	(*InstallRuntimeRequest)(nil),               // 122: worker.InstallRuntimeRequest
+	(*InstallRuntimeResponse)(nil),              // 123: worker.InstallRuntimeResponse
+	(*RemoveRuntimeRequest)(nil),                // 124: worker.RemoveRuntimeRequest
+	(*RemoveRuntimeResponse)(nil),               // 125: worker.RemoveRuntimeResponse
+	(*PMRegistry)(nil),                          // 126: worker.PMRegistry
+	(*GetPMConfigRequest)(nil),                  // 127: worker.GetPMConfigRequest
+	(*GetPMConfigResponse)(nil),                 // 128: worker.GetPMConfigResponse
+	(*SetPMConfigRequest)(nil),                  // 129: worker.SetPMConfigRequest
+	(*SetPMConfigResponse)(nil),                 // 130: worker.SetPMConfigResponse
+	(*GlobalPackage)(nil),                       // 131: worker.GlobalPackage
+	(*ListGlobalPackagesRequest)(nil),           // 132: worker.ListGlobalPackagesRequest
+	(*ListGlobalPackagesResponse)(nil),          // 133: worker.ListGlobalPackagesResponse
+	(*InstallGlobalPackageRequest)(nil),         // 134: worker.InstallGlobalPackageRequest
+	(*InstallGlobalPackageResponse)(nil),        // 135: worker.InstallGlobalPackageResponse
+	(*RemoveGlobalPackageRequest)(nil),          // 136: worker.RemoveGlobalPackageRequest
+	(*RemoveGlobalPackageResponse)(nil),         // 137: worker.RemoveGlobalPackageResponse
+	(*DeployServerProbeRequest)(nil),            // 138: worker.DeployServerProbeRequest
+	(*DeployServerProbeResponse)(nil),           // 139: worker.DeployServerProbeResponse
+	(*CloneWorkDirRequest)(nil),                 // 140: worker.CloneWorkDirRequest
+	(*CloneWorkDirResponse)(nil),                // 141: worker.CloneWorkDirResponse
+	(*RemoveInstanceRequest)(nil),               // 142: worker.RemoveInstanceRequest
+	(*RemoveInstanceResponse)(nil),              // 143: worker.RemoveInstanceResponse
+	(*ListImagesRequest)(nil),                   // 144: worker.ListImagesRequest
+	(*ImageInfo)(nil),                           // 145: worker.ImageInfo
+	(*ListImagesResponse)(nil),                  // 146: worker.ListImagesResponse
+	(*PullImageRequest)(nil),                    // 147: worker.PullImageRequest
+	(*PullImageResponse)(nil),                   // 148: worker.PullImageResponse
+	(*RemoveImageRequest)(nil),                  // 149: worker.RemoveImageRequest
+	(*RemoveImageResponse)(nil),                 // 150: worker.RemoveImageResponse
+	(*StorageBackendSpec)(nil),                  // 151: worker.StorageBackendSpec
+	(*BackupManifestEntry)(nil),                 // 152: worker.BackupManifestEntry
+	(*CreateBackupRequest)(nil),                 // 153: worker.CreateBackupRequest
+	(*CreateBackupResponse)(nil),                // 154: worker.CreateBackupResponse
+	(*RestoreBackupRequest)(nil),                // 155: worker.RestoreBackupRequest
+	(*RestoreBackupResponse)(nil),               // 156: worker.RestoreBackupResponse
+	(*TestStorageBackendRequest)(nil),           // 157: worker.TestStorageBackendRequest
+	(*TestStorageBackendResponse)(nil),          // 158: worker.TestStorageBackendResponse
+	(*StreamPluginEventsRequest)(nil),           // 159: worker.StreamPluginEventsRequest
+	(*PluginEvent)(nil),                         // 160: worker.PluginEvent
+	(*PluginCommand)(nil),                       // 161: worker.PluginCommand
+	(*SendPluginCommandRequest)(nil),            // 162: worker.SendPluginCommandRequest
+	(*SendPluginCommandResponse)(nil),           // 163: worker.SendPluginCommandResponse
+	(*QueryServerStateRequest)(nil),             // 164: worker.QueryServerStateRequest
+	(*QueryServerStateResponse)(nil),            // 165: worker.QueryServerStateResponse
+	(*GetVersionRequest)(nil),                   // 166: worker.GetVersionRequest
+	(*GetVersionResponse)(nil),                  // 167: worker.GetVersionResponse
+	(*CheckDockerRequest)(nil),                  // 168: worker.CheckDockerRequest
+	(*CheckDockerResponse)(nil),                 // 169: worker.CheckDockerResponse
+	(*UpgradeWorkerRequest)(nil),                // 170: worker.UpgradeWorkerRequest
+	(*UpgradeWorkerResponse)(nil),               // 171: worker.UpgradeWorkerResponse
+	(*ListArchiveEntriesRequest)(nil),           // 172: worker.ListArchiveEntriesRequest
+	(*ArchiveEntry)(nil),                        // 173: worker.ArchiveEntry
+	(*ListArchiveEntriesResponse)(nil),          // 174: worker.ListArchiveEntriesResponse
+	(*ReadArchiveEntryRequest)(nil),             // 175: worker.ReadArchiveEntryRequest
+	(*ReadArchiveEntryResponse)(nil),            // 176: worker.ReadArchiveEntryResponse
+	(*DecompileClassRequest)(nil),               // 177: worker.DecompileClassRequest
+	(*DecompileClassResponse)(nil),              // 178: worker.DecompileClassResponse
+	(*TerminalFrame)(nil),                       // 179: worker.TerminalFrame
+	(*TerminalOpen)(nil),                        // 180: worker.TerminalOpen
+	(*TerminalWSFrame)(nil),                     // 181: worker.TerminalWSFrame
+	(*InspectServerDirRequest)(nil),             // 182: worker.InspectServerDirRequest
+	(*ImportJarCandidate)(nil),                  // 183: worker.ImportJarCandidate
+	(*ImportJdkCandidate)(nil),                  // 184: worker.ImportJdkCandidate
+	(*InspectServerDirResponse)(nil),            // 185: worker.InspectServerDirResponse
+	(*ImportServerDirRequest)(nil),              // 186: worker.ImportServerDirRequest
+	(*ImportServerDirResponse)(nil),             // 187: worker.ImportServerDirResponse
+	(*GetBotCapacityRequest)(nil),               // 188: worker.GetBotCapacityRequest
+	(*GetBotCapacityResponse)(nil),              // 189: worker.GetBotCapacityResponse
+	(*BotAssignment)(nil),                       // 190: worker.BotAssignment
+	(*ApplyBotBatchRequest)(nil),                // 191: worker.ApplyBotBatchRequest
+	(*ApplyBotBatchItemResult)(nil),             // 192: worker.ApplyBotBatchItemResult
+	(*ApplyBotBatchResponse)(nil),               // 193: worker.ApplyBotBatchResponse
+	(*GetBotFleetSnapshotRequest)(nil),          // 194: worker.GetBotFleetSnapshotRequest
+	(*BotPosition)(nil),                         // 195: worker.BotPosition
+	(*BotRuntimeSnapshot)(nil),                  // 196: worker.BotRuntimeSnapshot
+	(*GetBotFleetSnapshotResponse)(nil),         // 197: worker.GetBotFleetSnapshotResponse
+	(*StreamBotFleetEventsRequest)(nil),         // 198: worker.StreamBotFleetEventsRequest
+	(*BotActionEvent)(nil),                      // 199: worker.BotActionEvent
+	(*BotFleetEvent)(nil),                       // 200: worker.BotFleetEvent
+	(*BotActionSignal)(nil),                     // 201: worker.BotActionSignal
+	(*SignalBotActionsRequest)(nil),             // 202: worker.SignalBotActionsRequest
+	(*SignalBotActionItemResult)(nil),           // 203: worker.SignalBotActionItemResult
+	(*SignalBotActionsResponse)(nil),            // 204: worker.SignalBotActionsResponse
+	(*CommandOccurrenceKey)(nil),                // 205: worker.CommandOccurrenceKey
+	(*CommandOccurrenceRef)(nil),                // 206: worker.CommandOccurrenceRef
+	(*AppliedCommandOccurrence)(nil),            // 207: worker.AppliedCommandOccurrence
+	(*AppliedCommandOccurrencePlan)(nil),        // 208: worker.AppliedCommandOccurrencePlan
+	(*ApplyBotCommandScheduleItem)(nil),         // 209: worker.ApplyBotCommandScheduleItem
+	(*ApplyBotCommandScheduleItemResult)(nil),   // 210: worker.ApplyBotCommandScheduleItemResult
+	(*ApplyBotCommandSchedulesRequest)(nil),     // 211: worker.ApplyBotCommandSchedulesRequest
+	(*ApplyBotCommandSchedulesResponse)(nil),    // 212: worker.ApplyBotCommandSchedulesResponse
+	(*ReleaseBotCommandScheduleItem)(nil),       // 213: worker.ReleaseBotCommandScheduleItem
+	(*ReleaseBotCommandScheduleItemResult)(nil), // 214: worker.ReleaseBotCommandScheduleItemResult
+	(*ReleaseBotCommandSchedulesRequest)(nil),   // 215: worker.ReleaseBotCommandSchedulesRequest
+	(*ReleaseBotCommandSchedulesResponse)(nil),  // 216: worker.ReleaseBotCommandSchedulesResponse
+	(*CancelBotCommandScheduleItem)(nil),        // 217: worker.CancelBotCommandScheduleItem
+	(*CancelBotCommandScheduleItemResult)(nil),  // 218: worker.CancelBotCommandScheduleItemResult
+	(*CancelBotCommandSchedulesRequest)(nil),    // 219: worker.CancelBotCommandSchedulesRequest
+	(*CancelBotCommandSchedulesResponse)(nil),   // 220: worker.CancelBotCommandSchedulesResponse
+	nil, // 221: worker.CreateInstanceRequest.EnvVarsEntry
+	nil, // 222: worker.GetInstanceEnvResponse.EnvEntry
 }
 var file_proto_worker_proto_depIdxs = []int32{
 	8,   // 0: worker.HeartbeatRequest.instances:type_name -> worker.InstanceState
@@ -15088,7 +16398,7 @@ var file_proto_worker_proto_depIdxs = []int32{
 	7,   // 2: worker.HeartbeatRequest.tasks:type_name -> worker.TaskSnapshot
 	12,  // 3: worker.HeartbeatRequest.process_metrics:type_name -> worker.ProcessMetricSample
 	73,  // 4: worker.InstanceMetricSample.worlds:type_name -> worker.WorldMetric
-	205, // 5: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
+	221, // 5: worker.CreateInstanceRequest.env_vars:type_name -> worker.CreateInstanceRequest.EnvVarsEntry
 	15,  // 6: worker.CreateInstanceRequest.port_mappings:type_name -> worker.PortMapping
 	14,  // 7: worker.ResyncInstancesRequest.instances:type_name -> worker.CreateInstanceRequest
 	26,  // 8: worker.ListInstancesResponse.instances:type_name -> worker.InstanceInfo
@@ -15102,7 +16412,7 @@ var file_proto_worker_proto_depIdxs = []int32{
 	60,  // 16: worker.WriteConfigResponse.validation:type_name -> worker.ConfigValidationResult
 	60,  // 17: worker.ValidateConfigResponse.validation:type_name -> worker.ConfigValidationResult
 	73,  // 18: worker.GetInstanceMetricsResponse.worlds:type_name -> worker.WorldMetric
-	206, // 19: worker.GetInstanceEnvResponse.env:type_name -> worker.GetInstanceEnvResponse.EnvEntry
+	222, // 19: worker.GetInstanceEnvResponse.env:type_name -> worker.GetInstanceEnvResponse.EnvEntry
 	82,  // 20: worker.ListBotsResponse.bots:type_name -> worker.BotInfo
 	92,  // 21: worker.ListJDKsResponse.jdks:type_name -> worker.JDKInfo
 	96,  // 22: worker.JDKCatalogResponse.packages:type_name -> worker.JDKCatalogPackage
@@ -15133,187 +16443,203 @@ var file_proto_worker_proto_depIdxs = []int32{
 	199, // 47: worker.BotFleetEvent.action_event:type_name -> worker.BotActionEvent
 	201, // 48: worker.SignalBotActionsRequest.signals:type_name -> worker.BotActionSignal
 	203, // 49: worker.SignalBotActionsResponse.results:type_name -> worker.SignalBotActionItemResult
-	0,   // 50: worker.WorkerService.Register:input_type -> worker.RegisterRequest
-	6,   // 51: worker.WorkerService.Heartbeat:input_type -> worker.HeartbeatRequest
-	4,   // 52: worker.WorkerService.FetchBotWorkerArchive:input_type -> worker.FetchBotWorkerArchiveRequest
-	2,   // 53: worker.WorkerService.ReportCrashSnapshot:input_type -> worker.ReportCrashSnapshotRequest
-	14,  // 54: worker.WorkerService.CreateInstance:input_type -> worker.CreateInstanceRequest
-	17,  // 55: worker.WorkerService.ResyncInstances:input_type -> worker.ResyncInstancesRequest
-	19,  // 56: worker.WorkerService.StartInstance:input_type -> worker.InstanceActionRequest
-	19,  // 57: worker.WorkerService.StopInstance:input_type -> worker.InstanceActionRequest
-	19,  // 58: worker.WorkerService.RestartInstance:input_type -> worker.InstanceActionRequest
-	19,  // 59: worker.WorkerService.KillInstance:input_type -> worker.InstanceActionRequest
-	19,  // 60: worker.WorkerService.PreflightStartInstance:input_type -> worker.InstanceActionRequest
-	21,  // 61: worker.WorkerService.SendCommand:input_type -> worker.SendCommandRequest
-	19,  // 62: worker.WorkerService.GetInstanceStatus:input_type -> worker.InstanceActionRequest
-	24,  // 63: worker.WorkerService.ListInstances:input_type -> worker.ListInstancesRequest
-	27,  // 64: worker.WorkerService.StreamInstanceEvents:input_type -> worker.StreamInstanceEventsRequest
-	29,  // 65: worker.WorkerService.IssueTerminalToken:input_type -> worker.IssueTerminalTokenRequest
-	31,  // 66: worker.WorkerService.ListFiles:input_type -> worker.ListFilesRequest
-	38,  // 67: worker.WorkerService.ReadFile:input_type -> worker.ReadFileRequest
-	40,  // 68: worker.WorkerService.WriteFile:input_type -> worker.WriteFileRequest
-	42,  // 69: worker.WorkerService.DeleteFile:input_type -> worker.DeleteFileRequest
-	44,  // 70: worker.WorkerService.RenameFile:input_type -> worker.RenameFileRequest
-	34,  // 71: worker.WorkerService.CheckPathAccess:input_type -> worker.CheckPathAccessRequest
-	36,  // 72: worker.WorkerService.ChmodPath:input_type -> worker.ChmodPathRequest
-	46,  // 73: worker.WorkerService.DownloadArchive:input_type -> worker.DownloadArchiveRequest
-	48,  // 74: worker.WorkerService.DownloadFile:input_type -> worker.DownloadFileRequest
-	50,  // 75: worker.WorkerService.UploadFile:input_type -> worker.UploadFileChunk
-	52,  // 76: worker.WorkerService.SearchFiles:input_type -> worker.SearchFilesRequest
-	172, // 77: worker.WorkerService.ListArchiveEntries:input_type -> worker.ListArchiveEntriesRequest
-	175, // 78: worker.WorkerService.ReadArchiveEntry:input_type -> worker.ReadArchiveEntryRequest
-	177, // 79: worker.WorkerService.DecompileClass:input_type -> worker.DecompileClassRequest
-	55,  // 80: worker.WorkerService.ListConfigFiles:input_type -> worker.ListConfigFilesRequest
-	61,  // 81: worker.WorkerService.ReadConfig:input_type -> worker.ReadConfigRequest
-	63,  // 82: worker.WorkerService.WriteConfig:input_type -> worker.WriteConfigRequest
-	65,  // 83: worker.WorkerService.ValidateConfig:input_type -> worker.ValidateConfigRequest
-	69,  // 84: worker.WorkerService.GetNodeMetrics:input_type -> worker.GetNodeMetricsRequest
-	71,  // 85: worker.WorkerService.GetInstanceMetrics:input_type -> worker.GetInstanceMetricsRequest
-	74,  // 86: worker.WorkerService.GetInstanceEnv:input_type -> worker.GetInstanceEnvRequest
-	91,  // 87: worker.WorkerService.ListJDKs:input_type -> worker.ListJDKsRequest
-	94,  // 88: worker.WorkerService.InstallJDK:input_type -> worker.InstallJDKRequest
-	99,  // 89: worker.WorkerService.RemoveJDK:input_type -> worker.RemoveJDKRequest
-	95,  // 90: worker.WorkerService.JDKCatalog:input_type -> worker.JDKCatalogRequest
-	117, // 91: worker.WorkerService.ProbeJDK:input_type -> worker.ProbeJDKRequest
-	119, // 92: worker.WorkerService.ScanRuntimes:input_type -> worker.ScanRuntimesRequest
-	122, // 93: worker.WorkerService.InstallRuntime:input_type -> worker.InstallRuntimeRequest
-	124, // 94: worker.WorkerService.RemoveRuntime:input_type -> worker.RemoveRuntimeRequest
-	127, // 95: worker.WorkerService.GetPMConfig:input_type -> worker.GetPMConfigRequest
-	129, // 96: worker.WorkerService.SetPMConfig:input_type -> worker.SetPMConfigRequest
-	132, // 97: worker.WorkerService.ListGlobalPackages:input_type -> worker.ListGlobalPackagesRequest
-	134, // 98: worker.WorkerService.InstallGlobalPackage:input_type -> worker.InstallGlobalPackageRequest
-	136, // 99: worker.WorkerService.RemoveGlobalPackage:input_type -> worker.RemoveGlobalPackageRequest
-	101, // 100: worker.WorkerService.DownloadCore:input_type -> worker.DownloadCoreRequest
-	103, // 101: worker.WorkerService.InstallForgeServer:input_type -> worker.InstallForgeServerRequest
-	106, // 102: worker.WorkerService.ListArtifactCache:input_type -> worker.ListArtifactCacheRequest
-	108, // 103: worker.WorkerService.EvictArtifactCache:input_type -> worker.EvictArtifactCacheRequest
-	110, // 104: worker.WorkerService.ClearArtifactCache:input_type -> worker.ClearArtifactCacheRequest
-	112, // 105: worker.WorkerService.SetArtifactCacheCap:input_type -> worker.SetArtifactCacheCapRequest
-	114, // 106: worker.WorkerService.BrowseDir:input_type -> worker.BrowseDirRequest
-	138, // 107: worker.WorkerService.DeployServerProbe:input_type -> worker.DeployServerProbeRequest
-	140, // 108: worker.WorkerService.CloneWorkDir:input_type -> worker.CloneWorkDirRequest
-	142, // 109: worker.WorkerService.RemoveInstance:input_type -> worker.RemoveInstanceRequest
-	9,   // 110: worker.WorkerService.DisposeOrphanRuntime:input_type -> worker.DisposeOrphanRuntimeRequest
-	144, // 111: worker.WorkerService.ListImages:input_type -> worker.ListImagesRequest
-	147, // 112: worker.WorkerService.PullImage:input_type -> worker.PullImageRequest
-	149, // 113: worker.WorkerService.RemoveImage:input_type -> worker.RemoveImageRequest
-	153, // 114: worker.WorkerService.CreateBackup:input_type -> worker.CreateBackupRequest
-	155, // 115: worker.WorkerService.RestoreBackup:input_type -> worker.RestoreBackupRequest
-	157, // 116: worker.WorkerService.TestStorageBackend:input_type -> worker.TestStorageBackendRequest
-	76,  // 117: worker.WorkerService.CreateBot:input_type -> worker.CreateBotRequest
-	78,  // 118: worker.WorkerService.DeleteBot:input_type -> worker.DeleteBotRequest
-	80,  // 119: worker.WorkerService.ListBots:input_type -> worker.ListBotsRequest
-	83,  // 120: worker.WorkerService.SetBotBehavior:input_type -> worker.SetBotBehaviorRequest
-	85,  // 121: worker.WorkerService.SendBotCommand:input_type -> worker.SendBotCommandRequest
-	87,  // 122: worker.WorkerService.RunBotScript:input_type -> worker.RunBotScriptRequest
-	89,  // 123: worker.WorkerService.StreamBotEvents:input_type -> worker.StreamBotEventsRequest
-	188, // 124: worker.WorkerService.GetBotCapacity:input_type -> worker.GetBotCapacityRequest
-	191, // 125: worker.WorkerService.ApplyBotBatch:input_type -> worker.ApplyBotBatchRequest
-	194, // 126: worker.WorkerService.GetBotFleetSnapshot:input_type -> worker.GetBotFleetSnapshotRequest
-	198, // 127: worker.WorkerService.StreamBotFleetEvents:input_type -> worker.StreamBotFleetEventsRequest
-	202, // 128: worker.WorkerService.SignalBotActions:input_type -> worker.SignalBotActionsRequest
-	159, // 129: worker.WorkerService.StreamPluginEvents:input_type -> worker.StreamPluginEventsRequest
-	162, // 130: worker.WorkerService.SendPluginCommand:input_type -> worker.SendPluginCommandRequest
-	164, // 131: worker.WorkerService.QueryServerState:input_type -> worker.QueryServerStateRequest
-	166, // 132: worker.WorkerService.GetVersion:input_type -> worker.GetVersionRequest
-	168, // 133: worker.WorkerService.CheckDocker:input_type -> worker.CheckDockerRequest
-	170, // 134: worker.WorkerService.UpgradeWorker:input_type -> worker.UpgradeWorkerRequest
-	179, // 135: worker.WorkerService.TerminalSession:input_type -> worker.TerminalFrame
-	182, // 136: worker.WorkerService.InspectServerDir:input_type -> worker.InspectServerDirRequest
-	186, // 137: worker.WorkerService.ImportServerDir:input_type -> worker.ImportServerDirRequest
-	1,   // 138: worker.WorkerService.Register:output_type -> worker.RegisterResponse
-	13,  // 139: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
-	5,   // 140: worker.WorkerService.FetchBotWorkerArchive:output_type -> worker.FetchBotWorkerArchiveResponse
-	3,   // 141: worker.WorkerService.ReportCrashSnapshot:output_type -> worker.ReportCrashSnapshotResponse
-	16,  // 142: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
-	18,  // 143: worker.WorkerService.ResyncInstances:output_type -> worker.ResyncInstancesResponse
-	20,  // 144: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
-	20,  // 145: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
-	20,  // 146: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
-	20,  // 147: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
-	20,  // 148: worker.WorkerService.PreflightStartInstance:output_type -> worker.InstanceActionResponse
-	22,  // 149: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
-	23,  // 150: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
-	25,  // 151: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
-	28,  // 152: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
-	30,  // 153: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
-	32,  // 154: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
-	39,  // 155: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
-	41,  // 156: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
-	43,  // 157: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
-	45,  // 158: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
-	35,  // 159: worker.WorkerService.CheckPathAccess:output_type -> worker.CheckPathAccessResponse
-	37,  // 160: worker.WorkerService.ChmodPath:output_type -> worker.ChmodPathResponse
-	47,  // 161: worker.WorkerService.DownloadArchive:output_type -> worker.DownloadArchiveChunk
-	49,  // 162: worker.WorkerService.DownloadFile:output_type -> worker.DownloadFileChunk
-	51,  // 163: worker.WorkerService.UploadFile:output_type -> worker.UploadFileResponse
-	54,  // 164: worker.WorkerService.SearchFiles:output_type -> worker.SearchFilesResponse
-	174, // 165: worker.WorkerService.ListArchiveEntries:output_type -> worker.ListArchiveEntriesResponse
-	176, // 166: worker.WorkerService.ReadArchiveEntry:output_type -> worker.ReadArchiveEntryResponse
-	178, // 167: worker.WorkerService.DecompileClass:output_type -> worker.DecompileClassResponse
-	57,  // 168: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
-	62,  // 169: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
-	64,  // 170: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
-	66,  // 171: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
-	70,  // 172: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
-	72,  // 173: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
-	75,  // 174: worker.WorkerService.GetInstanceEnv:output_type -> worker.GetInstanceEnvResponse
-	93,  // 175: worker.WorkerService.ListJDKs:output_type -> worker.ListJDKsResponse
-	98,  // 176: worker.WorkerService.InstallJDK:output_type -> worker.InstallJDKResponse
-	100, // 177: worker.WorkerService.RemoveJDK:output_type -> worker.RemoveJDKResponse
-	97,  // 178: worker.WorkerService.JDKCatalog:output_type -> worker.JDKCatalogResponse
-	118, // 179: worker.WorkerService.ProbeJDK:output_type -> worker.ProbeJDKResponse
-	121, // 180: worker.WorkerService.ScanRuntimes:output_type -> worker.ScanRuntimesResponse
-	123, // 181: worker.WorkerService.InstallRuntime:output_type -> worker.InstallRuntimeResponse
-	125, // 182: worker.WorkerService.RemoveRuntime:output_type -> worker.RemoveRuntimeResponse
-	128, // 183: worker.WorkerService.GetPMConfig:output_type -> worker.GetPMConfigResponse
-	130, // 184: worker.WorkerService.SetPMConfig:output_type -> worker.SetPMConfigResponse
-	133, // 185: worker.WorkerService.ListGlobalPackages:output_type -> worker.ListGlobalPackagesResponse
-	135, // 186: worker.WorkerService.InstallGlobalPackage:output_type -> worker.InstallGlobalPackageResponse
-	137, // 187: worker.WorkerService.RemoveGlobalPackage:output_type -> worker.RemoveGlobalPackageResponse
-	102, // 188: worker.WorkerService.DownloadCore:output_type -> worker.DownloadCoreResponse
-	104, // 189: worker.WorkerService.InstallForgeServer:output_type -> worker.InstallForgeServerResponse
-	107, // 190: worker.WorkerService.ListArtifactCache:output_type -> worker.ListArtifactCacheResponse
-	109, // 191: worker.WorkerService.EvictArtifactCache:output_type -> worker.EvictArtifactCacheResponse
-	111, // 192: worker.WorkerService.ClearArtifactCache:output_type -> worker.ClearArtifactCacheResponse
-	113, // 193: worker.WorkerService.SetArtifactCacheCap:output_type -> worker.SetArtifactCacheCapResponse
-	116, // 194: worker.WorkerService.BrowseDir:output_type -> worker.BrowseDirResponse
-	139, // 195: worker.WorkerService.DeployServerProbe:output_type -> worker.DeployServerProbeResponse
-	141, // 196: worker.WorkerService.CloneWorkDir:output_type -> worker.CloneWorkDirResponse
-	143, // 197: worker.WorkerService.RemoveInstance:output_type -> worker.RemoveInstanceResponse
-	10,  // 198: worker.WorkerService.DisposeOrphanRuntime:output_type -> worker.DisposeOrphanRuntimeResponse
-	146, // 199: worker.WorkerService.ListImages:output_type -> worker.ListImagesResponse
-	148, // 200: worker.WorkerService.PullImage:output_type -> worker.PullImageResponse
-	150, // 201: worker.WorkerService.RemoveImage:output_type -> worker.RemoveImageResponse
-	154, // 202: worker.WorkerService.CreateBackup:output_type -> worker.CreateBackupResponse
-	156, // 203: worker.WorkerService.RestoreBackup:output_type -> worker.RestoreBackupResponse
-	158, // 204: worker.WorkerService.TestStorageBackend:output_type -> worker.TestStorageBackendResponse
-	77,  // 205: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
-	79,  // 206: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
-	81,  // 207: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
-	84,  // 208: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
-	86,  // 209: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
-	88,  // 210: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
-	90,  // 211: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
-	189, // 212: worker.WorkerService.GetBotCapacity:output_type -> worker.GetBotCapacityResponse
-	193, // 213: worker.WorkerService.ApplyBotBatch:output_type -> worker.ApplyBotBatchResponse
-	197, // 214: worker.WorkerService.GetBotFleetSnapshot:output_type -> worker.GetBotFleetSnapshotResponse
-	200, // 215: worker.WorkerService.StreamBotFleetEvents:output_type -> worker.BotFleetEvent
-	204, // 216: worker.WorkerService.SignalBotActions:output_type -> worker.SignalBotActionsResponse
-	160, // 217: worker.WorkerService.StreamPluginEvents:output_type -> worker.PluginEvent
-	163, // 218: worker.WorkerService.SendPluginCommand:output_type -> worker.SendPluginCommandResponse
-	165, // 219: worker.WorkerService.QueryServerState:output_type -> worker.QueryServerStateResponse
-	167, // 220: worker.WorkerService.GetVersion:output_type -> worker.GetVersionResponse
-	169, // 221: worker.WorkerService.CheckDocker:output_type -> worker.CheckDockerResponse
-	171, // 222: worker.WorkerService.UpgradeWorker:output_type -> worker.UpgradeWorkerResponse
-	179, // 223: worker.WorkerService.TerminalSession:output_type -> worker.TerminalFrame
-	185, // 224: worker.WorkerService.InspectServerDir:output_type -> worker.InspectServerDirResponse
-	187, // 225: worker.WorkerService.ImportServerDir:output_type -> worker.ImportServerDirResponse
-	138, // [138:226] is the sub-list for method output_type
-	50,  // [50:138] is the sub-list for method input_type
-	50,  // [50:50] is the sub-list for extension type_name
-	50,  // [50:50] is the sub-list for extension extendee
-	0,   // [0:50] is the sub-list for field type_name
+	207, // 50: worker.AppliedCommandOccurrencePlan.occurrences:type_name -> worker.AppliedCommandOccurrence
+	208, // 51: worker.ApplyBotCommandScheduleItem.plan:type_name -> worker.AppliedCommandOccurrencePlan
+	205, // 52: worker.ApplyBotCommandScheduleItem.skip_occurrences:type_name -> worker.CommandOccurrenceKey
+	209, // 53: worker.ApplyBotCommandSchedulesRequest.items:type_name -> worker.ApplyBotCommandScheduleItem
+	210, // 54: worker.ApplyBotCommandSchedulesResponse.results:type_name -> worker.ApplyBotCommandScheduleItemResult
+	213, // 55: worker.ReleaseBotCommandSchedulesRequest.items:type_name -> worker.ReleaseBotCommandScheduleItem
+	214, // 56: worker.ReleaseBotCommandSchedulesResponse.results:type_name -> worker.ReleaseBotCommandScheduleItemResult
+	206, // 57: worker.CancelBotCommandScheduleItem.unresolved_occurrences:type_name -> worker.CommandOccurrenceRef
+	217, // 58: worker.CancelBotCommandSchedulesRequest.items:type_name -> worker.CancelBotCommandScheduleItem
+	218, // 59: worker.CancelBotCommandSchedulesResponse.results:type_name -> worker.CancelBotCommandScheduleItemResult
+	0,   // 60: worker.WorkerService.Register:input_type -> worker.RegisterRequest
+	6,   // 61: worker.WorkerService.Heartbeat:input_type -> worker.HeartbeatRequest
+	4,   // 62: worker.WorkerService.FetchBotWorkerArchive:input_type -> worker.FetchBotWorkerArchiveRequest
+	2,   // 63: worker.WorkerService.ReportCrashSnapshot:input_type -> worker.ReportCrashSnapshotRequest
+	14,  // 64: worker.WorkerService.CreateInstance:input_type -> worker.CreateInstanceRequest
+	17,  // 65: worker.WorkerService.ResyncInstances:input_type -> worker.ResyncInstancesRequest
+	19,  // 66: worker.WorkerService.StartInstance:input_type -> worker.InstanceActionRequest
+	19,  // 67: worker.WorkerService.StopInstance:input_type -> worker.InstanceActionRequest
+	19,  // 68: worker.WorkerService.RestartInstance:input_type -> worker.InstanceActionRequest
+	19,  // 69: worker.WorkerService.KillInstance:input_type -> worker.InstanceActionRequest
+	19,  // 70: worker.WorkerService.PreflightStartInstance:input_type -> worker.InstanceActionRequest
+	21,  // 71: worker.WorkerService.SendCommand:input_type -> worker.SendCommandRequest
+	19,  // 72: worker.WorkerService.GetInstanceStatus:input_type -> worker.InstanceActionRequest
+	24,  // 73: worker.WorkerService.ListInstances:input_type -> worker.ListInstancesRequest
+	27,  // 74: worker.WorkerService.StreamInstanceEvents:input_type -> worker.StreamInstanceEventsRequest
+	29,  // 75: worker.WorkerService.IssueTerminalToken:input_type -> worker.IssueTerminalTokenRequest
+	31,  // 76: worker.WorkerService.ListFiles:input_type -> worker.ListFilesRequest
+	38,  // 77: worker.WorkerService.ReadFile:input_type -> worker.ReadFileRequest
+	40,  // 78: worker.WorkerService.WriteFile:input_type -> worker.WriteFileRequest
+	42,  // 79: worker.WorkerService.DeleteFile:input_type -> worker.DeleteFileRequest
+	44,  // 80: worker.WorkerService.RenameFile:input_type -> worker.RenameFileRequest
+	34,  // 81: worker.WorkerService.CheckPathAccess:input_type -> worker.CheckPathAccessRequest
+	36,  // 82: worker.WorkerService.ChmodPath:input_type -> worker.ChmodPathRequest
+	46,  // 83: worker.WorkerService.DownloadArchive:input_type -> worker.DownloadArchiveRequest
+	48,  // 84: worker.WorkerService.DownloadFile:input_type -> worker.DownloadFileRequest
+	50,  // 85: worker.WorkerService.UploadFile:input_type -> worker.UploadFileChunk
+	52,  // 86: worker.WorkerService.SearchFiles:input_type -> worker.SearchFilesRequest
+	172, // 87: worker.WorkerService.ListArchiveEntries:input_type -> worker.ListArchiveEntriesRequest
+	175, // 88: worker.WorkerService.ReadArchiveEntry:input_type -> worker.ReadArchiveEntryRequest
+	177, // 89: worker.WorkerService.DecompileClass:input_type -> worker.DecompileClassRequest
+	55,  // 90: worker.WorkerService.ListConfigFiles:input_type -> worker.ListConfigFilesRequest
+	61,  // 91: worker.WorkerService.ReadConfig:input_type -> worker.ReadConfigRequest
+	63,  // 92: worker.WorkerService.WriteConfig:input_type -> worker.WriteConfigRequest
+	65,  // 93: worker.WorkerService.ValidateConfig:input_type -> worker.ValidateConfigRequest
+	69,  // 94: worker.WorkerService.GetNodeMetrics:input_type -> worker.GetNodeMetricsRequest
+	71,  // 95: worker.WorkerService.GetInstanceMetrics:input_type -> worker.GetInstanceMetricsRequest
+	74,  // 96: worker.WorkerService.GetInstanceEnv:input_type -> worker.GetInstanceEnvRequest
+	91,  // 97: worker.WorkerService.ListJDKs:input_type -> worker.ListJDKsRequest
+	94,  // 98: worker.WorkerService.InstallJDK:input_type -> worker.InstallJDKRequest
+	99,  // 99: worker.WorkerService.RemoveJDK:input_type -> worker.RemoveJDKRequest
+	95,  // 100: worker.WorkerService.JDKCatalog:input_type -> worker.JDKCatalogRequest
+	117, // 101: worker.WorkerService.ProbeJDK:input_type -> worker.ProbeJDKRequest
+	119, // 102: worker.WorkerService.ScanRuntimes:input_type -> worker.ScanRuntimesRequest
+	122, // 103: worker.WorkerService.InstallRuntime:input_type -> worker.InstallRuntimeRequest
+	124, // 104: worker.WorkerService.RemoveRuntime:input_type -> worker.RemoveRuntimeRequest
+	127, // 105: worker.WorkerService.GetPMConfig:input_type -> worker.GetPMConfigRequest
+	129, // 106: worker.WorkerService.SetPMConfig:input_type -> worker.SetPMConfigRequest
+	132, // 107: worker.WorkerService.ListGlobalPackages:input_type -> worker.ListGlobalPackagesRequest
+	134, // 108: worker.WorkerService.InstallGlobalPackage:input_type -> worker.InstallGlobalPackageRequest
+	136, // 109: worker.WorkerService.RemoveGlobalPackage:input_type -> worker.RemoveGlobalPackageRequest
+	101, // 110: worker.WorkerService.DownloadCore:input_type -> worker.DownloadCoreRequest
+	103, // 111: worker.WorkerService.InstallForgeServer:input_type -> worker.InstallForgeServerRequest
+	106, // 112: worker.WorkerService.ListArtifactCache:input_type -> worker.ListArtifactCacheRequest
+	108, // 113: worker.WorkerService.EvictArtifactCache:input_type -> worker.EvictArtifactCacheRequest
+	110, // 114: worker.WorkerService.ClearArtifactCache:input_type -> worker.ClearArtifactCacheRequest
+	112, // 115: worker.WorkerService.SetArtifactCacheCap:input_type -> worker.SetArtifactCacheCapRequest
+	114, // 116: worker.WorkerService.BrowseDir:input_type -> worker.BrowseDirRequest
+	138, // 117: worker.WorkerService.DeployServerProbe:input_type -> worker.DeployServerProbeRequest
+	140, // 118: worker.WorkerService.CloneWorkDir:input_type -> worker.CloneWorkDirRequest
+	142, // 119: worker.WorkerService.RemoveInstance:input_type -> worker.RemoveInstanceRequest
+	9,   // 120: worker.WorkerService.DisposeOrphanRuntime:input_type -> worker.DisposeOrphanRuntimeRequest
+	144, // 121: worker.WorkerService.ListImages:input_type -> worker.ListImagesRequest
+	147, // 122: worker.WorkerService.PullImage:input_type -> worker.PullImageRequest
+	149, // 123: worker.WorkerService.RemoveImage:input_type -> worker.RemoveImageRequest
+	153, // 124: worker.WorkerService.CreateBackup:input_type -> worker.CreateBackupRequest
+	155, // 125: worker.WorkerService.RestoreBackup:input_type -> worker.RestoreBackupRequest
+	157, // 126: worker.WorkerService.TestStorageBackend:input_type -> worker.TestStorageBackendRequest
+	76,  // 127: worker.WorkerService.CreateBot:input_type -> worker.CreateBotRequest
+	78,  // 128: worker.WorkerService.DeleteBot:input_type -> worker.DeleteBotRequest
+	80,  // 129: worker.WorkerService.ListBots:input_type -> worker.ListBotsRequest
+	83,  // 130: worker.WorkerService.SetBotBehavior:input_type -> worker.SetBotBehaviorRequest
+	85,  // 131: worker.WorkerService.SendBotCommand:input_type -> worker.SendBotCommandRequest
+	87,  // 132: worker.WorkerService.RunBotScript:input_type -> worker.RunBotScriptRequest
+	89,  // 133: worker.WorkerService.StreamBotEvents:input_type -> worker.StreamBotEventsRequest
+	188, // 134: worker.WorkerService.GetBotCapacity:input_type -> worker.GetBotCapacityRequest
+	191, // 135: worker.WorkerService.ApplyBotBatch:input_type -> worker.ApplyBotBatchRequest
+	194, // 136: worker.WorkerService.GetBotFleetSnapshot:input_type -> worker.GetBotFleetSnapshotRequest
+	198, // 137: worker.WorkerService.StreamBotFleetEvents:input_type -> worker.StreamBotFleetEventsRequest
+	202, // 138: worker.WorkerService.SignalBotActions:input_type -> worker.SignalBotActionsRequest
+	211, // 139: worker.WorkerService.ApplyBotCommandSchedules:input_type -> worker.ApplyBotCommandSchedulesRequest
+	215, // 140: worker.WorkerService.ReleaseBotCommandSchedules:input_type -> worker.ReleaseBotCommandSchedulesRequest
+	219, // 141: worker.WorkerService.CancelBotCommandSchedules:input_type -> worker.CancelBotCommandSchedulesRequest
+	159, // 142: worker.WorkerService.StreamPluginEvents:input_type -> worker.StreamPluginEventsRequest
+	162, // 143: worker.WorkerService.SendPluginCommand:input_type -> worker.SendPluginCommandRequest
+	164, // 144: worker.WorkerService.QueryServerState:input_type -> worker.QueryServerStateRequest
+	166, // 145: worker.WorkerService.GetVersion:input_type -> worker.GetVersionRequest
+	168, // 146: worker.WorkerService.CheckDocker:input_type -> worker.CheckDockerRequest
+	170, // 147: worker.WorkerService.UpgradeWorker:input_type -> worker.UpgradeWorkerRequest
+	179, // 148: worker.WorkerService.TerminalSession:input_type -> worker.TerminalFrame
+	182, // 149: worker.WorkerService.InspectServerDir:input_type -> worker.InspectServerDirRequest
+	186, // 150: worker.WorkerService.ImportServerDir:input_type -> worker.ImportServerDirRequest
+	1,   // 151: worker.WorkerService.Register:output_type -> worker.RegisterResponse
+	13,  // 152: worker.WorkerService.Heartbeat:output_type -> worker.HeartbeatResponse
+	5,   // 153: worker.WorkerService.FetchBotWorkerArchive:output_type -> worker.FetchBotWorkerArchiveResponse
+	3,   // 154: worker.WorkerService.ReportCrashSnapshot:output_type -> worker.ReportCrashSnapshotResponse
+	16,  // 155: worker.WorkerService.CreateInstance:output_type -> worker.CreateInstanceResponse
+	18,  // 156: worker.WorkerService.ResyncInstances:output_type -> worker.ResyncInstancesResponse
+	20,  // 157: worker.WorkerService.StartInstance:output_type -> worker.InstanceActionResponse
+	20,  // 158: worker.WorkerService.StopInstance:output_type -> worker.InstanceActionResponse
+	20,  // 159: worker.WorkerService.RestartInstance:output_type -> worker.InstanceActionResponse
+	20,  // 160: worker.WorkerService.KillInstance:output_type -> worker.InstanceActionResponse
+	20,  // 161: worker.WorkerService.PreflightStartInstance:output_type -> worker.InstanceActionResponse
+	22,  // 162: worker.WorkerService.SendCommand:output_type -> worker.SendCommandResponse
+	23,  // 163: worker.WorkerService.GetInstanceStatus:output_type -> worker.GetInstanceStatusResponse
+	25,  // 164: worker.WorkerService.ListInstances:output_type -> worker.ListInstancesResponse
+	28,  // 165: worker.WorkerService.StreamInstanceEvents:output_type -> worker.InstanceEvent
+	30,  // 166: worker.WorkerService.IssueTerminalToken:output_type -> worker.IssueTerminalTokenResponse
+	32,  // 167: worker.WorkerService.ListFiles:output_type -> worker.ListFilesResponse
+	39,  // 168: worker.WorkerService.ReadFile:output_type -> worker.ReadFileResponse
+	41,  // 169: worker.WorkerService.WriteFile:output_type -> worker.WriteFileResponse
+	43,  // 170: worker.WorkerService.DeleteFile:output_type -> worker.DeleteFileResponse
+	45,  // 171: worker.WorkerService.RenameFile:output_type -> worker.RenameFileResponse
+	35,  // 172: worker.WorkerService.CheckPathAccess:output_type -> worker.CheckPathAccessResponse
+	37,  // 173: worker.WorkerService.ChmodPath:output_type -> worker.ChmodPathResponse
+	47,  // 174: worker.WorkerService.DownloadArchive:output_type -> worker.DownloadArchiveChunk
+	49,  // 175: worker.WorkerService.DownloadFile:output_type -> worker.DownloadFileChunk
+	51,  // 176: worker.WorkerService.UploadFile:output_type -> worker.UploadFileResponse
+	54,  // 177: worker.WorkerService.SearchFiles:output_type -> worker.SearchFilesResponse
+	174, // 178: worker.WorkerService.ListArchiveEntries:output_type -> worker.ListArchiveEntriesResponse
+	176, // 179: worker.WorkerService.ReadArchiveEntry:output_type -> worker.ReadArchiveEntryResponse
+	178, // 180: worker.WorkerService.DecompileClass:output_type -> worker.DecompileClassResponse
+	57,  // 181: worker.WorkerService.ListConfigFiles:output_type -> worker.ListConfigFilesResponse
+	62,  // 182: worker.WorkerService.ReadConfig:output_type -> worker.ReadConfigResponse
+	64,  // 183: worker.WorkerService.WriteConfig:output_type -> worker.WriteConfigResponse
+	66,  // 184: worker.WorkerService.ValidateConfig:output_type -> worker.ValidateConfigResponse
+	70,  // 185: worker.WorkerService.GetNodeMetrics:output_type -> worker.GetNodeMetricsResponse
+	72,  // 186: worker.WorkerService.GetInstanceMetrics:output_type -> worker.GetInstanceMetricsResponse
+	75,  // 187: worker.WorkerService.GetInstanceEnv:output_type -> worker.GetInstanceEnvResponse
+	93,  // 188: worker.WorkerService.ListJDKs:output_type -> worker.ListJDKsResponse
+	98,  // 189: worker.WorkerService.InstallJDK:output_type -> worker.InstallJDKResponse
+	100, // 190: worker.WorkerService.RemoveJDK:output_type -> worker.RemoveJDKResponse
+	97,  // 191: worker.WorkerService.JDKCatalog:output_type -> worker.JDKCatalogResponse
+	118, // 192: worker.WorkerService.ProbeJDK:output_type -> worker.ProbeJDKResponse
+	121, // 193: worker.WorkerService.ScanRuntimes:output_type -> worker.ScanRuntimesResponse
+	123, // 194: worker.WorkerService.InstallRuntime:output_type -> worker.InstallRuntimeResponse
+	125, // 195: worker.WorkerService.RemoveRuntime:output_type -> worker.RemoveRuntimeResponse
+	128, // 196: worker.WorkerService.GetPMConfig:output_type -> worker.GetPMConfigResponse
+	130, // 197: worker.WorkerService.SetPMConfig:output_type -> worker.SetPMConfigResponse
+	133, // 198: worker.WorkerService.ListGlobalPackages:output_type -> worker.ListGlobalPackagesResponse
+	135, // 199: worker.WorkerService.InstallGlobalPackage:output_type -> worker.InstallGlobalPackageResponse
+	137, // 200: worker.WorkerService.RemoveGlobalPackage:output_type -> worker.RemoveGlobalPackageResponse
+	102, // 201: worker.WorkerService.DownloadCore:output_type -> worker.DownloadCoreResponse
+	104, // 202: worker.WorkerService.InstallForgeServer:output_type -> worker.InstallForgeServerResponse
+	107, // 203: worker.WorkerService.ListArtifactCache:output_type -> worker.ListArtifactCacheResponse
+	109, // 204: worker.WorkerService.EvictArtifactCache:output_type -> worker.EvictArtifactCacheResponse
+	111, // 205: worker.WorkerService.ClearArtifactCache:output_type -> worker.ClearArtifactCacheResponse
+	113, // 206: worker.WorkerService.SetArtifactCacheCap:output_type -> worker.SetArtifactCacheCapResponse
+	116, // 207: worker.WorkerService.BrowseDir:output_type -> worker.BrowseDirResponse
+	139, // 208: worker.WorkerService.DeployServerProbe:output_type -> worker.DeployServerProbeResponse
+	141, // 209: worker.WorkerService.CloneWorkDir:output_type -> worker.CloneWorkDirResponse
+	143, // 210: worker.WorkerService.RemoveInstance:output_type -> worker.RemoveInstanceResponse
+	10,  // 211: worker.WorkerService.DisposeOrphanRuntime:output_type -> worker.DisposeOrphanRuntimeResponse
+	146, // 212: worker.WorkerService.ListImages:output_type -> worker.ListImagesResponse
+	148, // 213: worker.WorkerService.PullImage:output_type -> worker.PullImageResponse
+	150, // 214: worker.WorkerService.RemoveImage:output_type -> worker.RemoveImageResponse
+	154, // 215: worker.WorkerService.CreateBackup:output_type -> worker.CreateBackupResponse
+	156, // 216: worker.WorkerService.RestoreBackup:output_type -> worker.RestoreBackupResponse
+	158, // 217: worker.WorkerService.TestStorageBackend:output_type -> worker.TestStorageBackendResponse
+	77,  // 218: worker.WorkerService.CreateBot:output_type -> worker.CreateBotResponse
+	79,  // 219: worker.WorkerService.DeleteBot:output_type -> worker.DeleteBotResponse
+	81,  // 220: worker.WorkerService.ListBots:output_type -> worker.ListBotsResponse
+	84,  // 221: worker.WorkerService.SetBotBehavior:output_type -> worker.SetBotBehaviorResponse
+	86,  // 222: worker.WorkerService.SendBotCommand:output_type -> worker.SendBotCommandResponse
+	88,  // 223: worker.WorkerService.RunBotScript:output_type -> worker.RunBotScriptResponse
+	90,  // 224: worker.WorkerService.StreamBotEvents:output_type -> worker.BotEvent
+	189, // 225: worker.WorkerService.GetBotCapacity:output_type -> worker.GetBotCapacityResponse
+	193, // 226: worker.WorkerService.ApplyBotBatch:output_type -> worker.ApplyBotBatchResponse
+	197, // 227: worker.WorkerService.GetBotFleetSnapshot:output_type -> worker.GetBotFleetSnapshotResponse
+	200, // 228: worker.WorkerService.StreamBotFleetEvents:output_type -> worker.BotFleetEvent
+	204, // 229: worker.WorkerService.SignalBotActions:output_type -> worker.SignalBotActionsResponse
+	212, // 230: worker.WorkerService.ApplyBotCommandSchedules:output_type -> worker.ApplyBotCommandSchedulesResponse
+	216, // 231: worker.WorkerService.ReleaseBotCommandSchedules:output_type -> worker.ReleaseBotCommandSchedulesResponse
+	220, // 232: worker.WorkerService.CancelBotCommandSchedules:output_type -> worker.CancelBotCommandSchedulesResponse
+	160, // 233: worker.WorkerService.StreamPluginEvents:output_type -> worker.PluginEvent
+	163, // 234: worker.WorkerService.SendPluginCommand:output_type -> worker.SendPluginCommandResponse
+	165, // 235: worker.WorkerService.QueryServerState:output_type -> worker.QueryServerStateResponse
+	167, // 236: worker.WorkerService.GetVersion:output_type -> worker.GetVersionResponse
+	169, // 237: worker.WorkerService.CheckDocker:output_type -> worker.CheckDockerResponse
+	171, // 238: worker.WorkerService.UpgradeWorker:output_type -> worker.UpgradeWorkerResponse
+	179, // 239: worker.WorkerService.TerminalSession:output_type -> worker.TerminalFrame
+	185, // 240: worker.WorkerService.InspectServerDir:output_type -> worker.InspectServerDirResponse
+	187, // 241: worker.WorkerService.ImportServerDir:output_type -> worker.ImportServerDirResponse
+	151, // [151:242] is the sub-list for method output_type
+	60,  // [60:151] is the sub-list for method input_type
+	60,  // [60:60] is the sub-list for extension type_name
+	60,  // [60:60] is the sub-list for extension extendee
+	0,   // [0:60] is the sub-list for field type_name
 }
 
 func init() { file_proto_worker_proto_init() }
@@ -15335,7 +16661,7 @@ func file_proto_worker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_worker_proto_rawDesc), len(file_proto_worker_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   207,
+			NumMessages:   223,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

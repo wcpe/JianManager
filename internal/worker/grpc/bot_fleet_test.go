@@ -21,21 +21,25 @@ import (
 )
 
 type fakeBotFleetManager struct {
-	capacity     bot.BotCapacitySnapshot
-	bots         []bot.BotState
-	applyCalls   int
-	stopCalls    int
-	signalCalls  int
-	apply        *bot.BotWorkerEvent
-	applyErr     error
-	applyConfigs []bot.BotConfig
-	applyStarted chan struct{}
-	applyRelease chan struct{}
-	stop         *bot.BotWorkerEvent
-	stopStarted  chan struct{}
-	stopRelease  chan struct{}
-	signal       *bot.BotWorkerEvent
-	snapshot     *bot.BotWorkerEvent
+	capacity       bot.BotCapacitySnapshot
+	bots           []bot.BotState
+	applyCalls     int
+	stopCalls      int
+	signalCalls    int
+	apply          *bot.BotWorkerEvent
+	applyErr       error
+	applyConfigs   []bot.BotConfig
+	applyStarted   chan struct{}
+	applyRelease   chan struct{}
+	stop           *bot.BotWorkerEvent
+	stopStarted    chan struct{}
+	stopRelease    chan struct{}
+	signal         *bot.BotWorkerEvent
+	snapshot       *bot.BotWorkerEvent
+	release        *bot.BotWorkerEvent
+	releaseErr     error
+	cancel         *bot.BotWorkerEvent
+	cancelErr      error
 }
 
 func (f *fakeBotFleetManager) CapacitySnapshot() bot.BotCapacitySnapshot { return f.capacity }
@@ -72,6 +76,28 @@ func (f *fakeBotFleetManager) RequestFleetSnapshot(context.Context, string) (*bo
 		return f.snapshot, nil
 	}
 	return &bot.BotWorkerEvent{Evt: "fleet-snapshot-result", Bots: f.bots}, nil
+}
+
+func (f *fakeBotFleetManager) ApplyCommandSchedule(context.Context, string, bot.CommandScheduleCommand, time.Duration) (*bot.BotWorkerEvent, error) {
+	if f.applyErr != nil {
+		return nil, f.applyErr
+	}
+	if f.apply != nil {
+		return f.apply, nil
+	}
+	return &bot.BotWorkerEvent{Evt: "command-schedule-accepted", Accepted: true}, nil
+}
+func (f *fakeBotFleetManager) ReleaseCommandSchedule(context.Context, string, bot.CommandScheduleReleaseCommand, time.Duration) (*bot.BotWorkerEvent, error) {
+	if f.release != nil {
+		return f.release, f.releaseErr
+	}
+	return &bot.BotWorkerEvent{Evt: "command-schedule-release-result", Accepted: true}, nil
+}
+func (f *fakeBotFleetManager) CancelCommandSchedule(context.Context, string, bot.CommandScheduleCancelCommand, time.Duration) (*bot.BotWorkerEvent, error) {
+	if f.cancel != nil {
+		return f.cancel, f.cancelErr
+	}
+	return &bot.BotWorkerEvent{Evt: "command-schedule-cancel-result", Accepted: true}, nil
 }
 
 func TestGetBotCapacityMapsFleetSnapshot(t *testing.T) {

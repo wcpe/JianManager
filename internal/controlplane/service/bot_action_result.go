@@ -39,6 +39,11 @@ var actionErrorCodes = map[string]struct{}{
 	ActionErrorMoveTimeout: {}, ActionErrorTargetNotFound: {}, ActionErrorAttackAssertionUnmet: {},
 	ActionErrorProbeEventTimeout: {}, ActionErrorBarrierTimeout: {},
 	ActionErrorCancelled: {}, ActionErrorInternal: {},
+	// FR-369 通用命令编排新增的错误码。
+	CommandErrorRouteFailed: {}, CommandErrorIPCFailed: {},
+	CommandErrorArgumentInvalid: {}, CommandErrorRuntimeUnavailable: {},
+	CommandErrorScheduleRejected: {}, CommandErrorDeadlineExceeded: {},
+	CommandErrorSendFailed: {},
 }
 
 // ActionResultDecision 表示动作事件对持久化账本的处理结果。

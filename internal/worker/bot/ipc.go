@@ -130,6 +130,86 @@ type SignalItemResult struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// CommandScheduleOccurrence 是 plan 中冻结后的 occurrence（与 CP 端一致）。
+type CommandScheduleOccurrence struct {
+	CommandID             string `json:"commandId"`
+	Occurrence            int    `json:"occurrence"`
+	CommandDeclarationIdx int    `json:"commandDeclarationIndex"`
+	BaseAtMS              int64  `json:"baseAtMs"`
+	JitterOffsetMS        int64  `json:"jitterOffsetMs"`
+	ActionRunID           string `json:"actionRunId"`
+	Command               string `json:"command"`
+}
+
+// CommandOccurrenceKey skip/cancel 引用键。
+type CommandOccurrenceKey struct {
+	CommandID  string `json:"commandId"`
+	Occurrence int    `json:"occurrence"`
+}
+
+// CommandSchedulePlan 命令计划冻结 plan。
+type CommandSchedulePlan struct {
+	DurationMS  int64                     `json:"durationMs"`
+	JitterMS    int64                     `json:"jitterMs"`
+	Occurrences []CommandScheduleOccurrence `json:"occurrences"`
+}
+
+// CommandScheduleCommand FR-369 命令计划准备（Worker → Bot Worker）。
+type CommandScheduleCommand struct {
+	Cmd                   string              `json:"cmd"`
+	RequestID             string              `json:"requestId"`
+	RunID                 string              `json:"runId"`
+	RunUUID               string              `json:"runUuid"`
+	BotUUID               string              `json:"botUuid"`
+	Generation            int64               `json:"generation"`
+	StepID                string              `json:"stepId"`
+	ScheduleRunID         string              `json:"scheduleRunId"`
+	CorrelationToken      string              `json:"correlationToken"`
+	StartMode             string              `json:"startMode"`
+	ScheduleStartAtUnixMs int64               `json:"scheduleStartAtUnixMs"`
+	BarrierKey            string              `json:"barrierKey"`
+	RunDeadlineUnixMs     int64               `json:"runDeadlineUnixMs"`
+	JitterSeed            string              `json:"jitterSeed"`
+	Plan                  CommandSchedulePlan `json:"plan"`
+	SkipOccurrences       []CommandOccurrenceKey `json:"skipOccurrences"`
+}
+
+// CommandScheduleReleaseCommand FR-369 release barrier 命令计划。
+type CommandScheduleReleaseCommand struct {
+	Cmd             string `json:"cmd"`
+	RequestID       string `json:"requestId"`
+	RunUUID         string `json:"runUuid"`
+	BotUUID         string `json:"botUuid"`
+	Generation      int64  `json:"generation"`
+	StepID          string `json:"stepId"`
+	ScheduleRunID   string `json:"scheduleRunId"`
+	BarrierKey      string `json:"barrierKey"`
+	ReleaseAtUnixMs int64  `json:"releaseAtUnixMs"`
+}
+
+// CommandScheduleCancelCommand FR-369 cancel 命令计划。
+type CommandScheduleCancelCommand struct {
+	Cmd             string `json:"cmd"`
+	RequestID       string `json:"requestId"`
+	RunUUID         string `json:"runUuid"`
+	BotUUID         string `json:"botUuid"`
+	Generation      int64  `json:"generation"`
+	StepID          string `json:"stepId"`
+	ScheduleRunID   string `json:"scheduleRunId"`
+	Reason          string `json:"reason"`
+	CorrelationToken string `json:"correlationToken"`
+}
+
+// CommandScheduleItemResult command-schedule-* result 共用字段。
+type CommandScheduleItemResult struct {
+	ScheduleRunID    string `json:"scheduleRunId"`
+	Accepted         bool   `json:"accepted"`
+	AlreadyReleased  bool   `json:"alreadyReleased,omitempty"`
+	AlreadyCancelled bool   `json:"alreadyCancelled,omitempty"`
+	ErrorCode        string `json:"errorCode,omitempty"`
+	Error            string `json:"error,omitempty"`
+}
+
 // ScriptStep 脚本步骤。
 type ScriptStep struct {
 	Action   string `json:"action"`

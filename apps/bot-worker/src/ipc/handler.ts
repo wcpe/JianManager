@@ -8,11 +8,18 @@ import { createBot } from 'mineflayer'
 import { sendEvent } from '../index.js'
 import { createBehavior } from '../behavior/index.js'
 import { ScriptRunner } from '../script/index.js'
+import { CommandScheduler } from '../scheduler/command-schedule.js'
 import { PrewarmPool } from '../state/prewarm.js'
 import { StateReporter } from '../state/index.js'
 import { HealthCheck } from '../health/index.js'
 import { FleetController } from './fleet.js'
-import type { BehaviorConfig, IpcCommand } from './types.js'
+import type {
+  BehaviorConfig,
+  CommandScheduleCancelCommand,
+  CommandScheduleCommand,
+  CommandScheduleReleaseCommand,
+  IpcCommand,
+} from './types.js'
 
 const MAX_BOTS = 50
 const BOT_WORKER_VERSION = '0.4.0'
@@ -39,6 +46,20 @@ const fleet = new FleetController({
 const healthCheck = new HealthCheck({
   intervalMs: 10000,
   fleetHeartbeat: (eventLoopP95Ms) => fleet.heartbeat(eventLoopP95Ms),
+})
+
+// FR-369 通用命令编排：集中 scheduler；bot.chat 经 fleet 已连接实例派发。
+const commandScheduler = new CommandScheduler({
+  getBot: (botUuid) => fleet.getBotByUuid(botUuid) ?? fleet.getBot(botUuid),
+  chat: (bot, command) => {
+    bot.chat(command)
+  },
+  sendEvent: (event) => sendEvent(event),
+  logger: {
+    warn(message, context) {
+      sendEvent({ evt: 'bot-error', error: message, data: context })
+    },
+  },
 })
 
 /** 初始化周期状态与心跳上报。 */
@@ -75,6 +96,15 @@ export function handleCommand(command: IpcCommand): void {
     case 'stop-script':
       scriptRunner.stop()
       break
+    case 'command-schedule':
+      handleCommandSchedule(command)
+      break
+    case 'command-schedule-release':
+      handleCommandScheduleRelease(command)
+      break
+    case 'command-schedule-cancel':
+      handleCommandScheduleCancel(command)
+      break
     default:
       sendEvent({ evt: 'bot-error', error: `未知命令: ${(command as { cmd: string }).cmd}` })
   }
@@ -90,7 +120,77 @@ export function shutdown(): void {
   stateReporter.stop()
   healthCheck.stop()
   scriptRunner.stop()
+  commandScheduler.shutdown()
   fleet.shutdown()
+}
+
+/** FR-369：下发命令计划（同步回执 command-schedule-accepted）。 */
+function handleCommandSchedule(command: CommandScheduleCommand): void {
+  const result = commandScheduler.apply(command)
+  if (result.ok) {
+    sendEvent({
+      evt: 'command-schedule-accepted',
+      requestId: command.requestId,
+      scheduleRunId: command.scheduleRunId,
+      accepted: true,
+      alreadyCancelled: result.alreadyCancelled,
+    })
+    return
+  }
+  sendEvent({
+    evt: 'command-schedule-accepted',
+    requestId: command.requestId,
+    scheduleRunId: command.scheduleRunId,
+    accepted: false,
+    errorCode: result.errorCode,
+    error: result.error,
+  })
+}
+
+/** FR-369：barrier release（同步回执 command-schedule-release-result）。 */
+function handleCommandScheduleRelease(command: CommandScheduleReleaseCommand): void {
+  const result = commandScheduler.release(command)
+  if (result.ok) {
+    sendEvent({
+      evt: 'command-schedule-release-result',
+      requestId: command.requestId,
+      scheduleRunId: command.scheduleRunId,
+      accepted: true,
+      alreadyReleased: result.alreadyReleased,
+    })
+    return
+  }
+  sendEvent({
+    evt: 'command-schedule-release-result',
+    requestId: command.requestId,
+    scheduleRunId: command.scheduleRunId,
+    accepted: false,
+    errorCode: result.errorCode,
+    error: result.error,
+  })
+}
+
+/** FR-369：取消计划（同步回执 command-schedule-cancel-result）。 */
+function handleCommandScheduleCancel(command: CommandScheduleCancelCommand): void {
+  const result = commandScheduler.cancel(command)
+  if (result.ok) {
+    sendEvent({
+      evt: 'command-schedule-cancel-result',
+      requestId: command.requestId,
+      scheduleRunId: command.scheduleRunId,
+      accepted: true,
+      alreadyCancelled: result.alreadyCancelled,
+    })
+    return
+  }
+  sendEvent({
+    evt: 'command-schedule-cancel-result',
+    requestId: command.requestId,
+    scheduleRunId: command.scheduleRunId,
+    accepted: false,
+    errorCode: result.errorCode,
+    error: result.error,
+  })
 }
 
 function setBehavior(

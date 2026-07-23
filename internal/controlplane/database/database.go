@@ -130,6 +130,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.BotStressSession{},
 		&model.BotLoadBatch{},
 		&model.BotLoadActionResult{},
+		// FR-369 命令编排 occurrence checkpoint。
+		&model.BotLoadCommandCheckpoint{},
 		&model.Bot{},
 		&model.BanRecord{},
 		&model.AlertRule{},
