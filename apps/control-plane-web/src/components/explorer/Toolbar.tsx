@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   FilePlus,
@@ -11,6 +11,11 @@ import {
   XSquare,
   ChevronRight,
   Search,
+  ArrowLeft,
+  ArrowRight,
+  LayoutList,
+  List,
+  LayoutGrid,
 } from 'lucide-react'
 import { Button } from '@jianmanager/ui/components/button'
 import {
@@ -20,11 +25,17 @@ import {
   DropdownMenuItem,
 } from '@jianmanager/ui/components/dropdown-menu'
 import { breadcrumbs } from './paths'
+import type { FileViewMode } from './file-sort'
+import { cn } from '@jianmanager/ui'
 
 interface ToolbarProps {
   currentDir: string
   selectedCount: number
   canPaste: boolean
+  canBack?: boolean
+  canForward?: boolean
+  onBack?: () => void
+  onForward?: () => void
   onNavigate: (dir: string) => void
   onNewFile: () => void
   onNewFolder: () => void
@@ -34,17 +45,21 @@ interface ToolbarProps {
   onPaste: () => void
   onSelectAll: () => void
   onClearSelection: () => void
-  /** 切换搜索面板（FR-074）。 */
   onToggleSearch: () => void
-  /** 搜索面板是否激活（按钮高亮态）。 */
   searchActive: boolean
+  viewMode?: FileViewMode
+  onViewModeChange?: (mode: FileViewMode) => void
 }
 
-/** 资源管理器工具栏（FR-070）：面包屑 + 新建/上传/下载/删除/粘贴/全选。 */
+/** 资源管理器工具栏（FR-070 + FR-375）：后退前进 + 地址栏 + 面包屑 + 操作 + 视图。 */
 export default function Toolbar({
   currentDir,
   selectedCount,
   canPaste,
+  canBack = false,
+  canForward = false,
+  onBack,
+  onForward,
   onNavigate,
   onNewFile,
   onNewFolder,
@@ -56,13 +71,95 @@ export default function Toolbar({
   onClearSelection,
   onToggleSearch,
   searchActive,
+  viewMode = 'details',
+  onViewModeChange,
 }: ToolbarProps) {
   const { t } = useTranslation()
   const uploadRef = useRef<HTMLInputElement>(null)
   const crumbs = breadcrumbs(currentDir)
+  const [addr, setAddr] = useState(currentDir)
+  const addrFocused = useRef(false)
+  useEffect(() => {
+    if (!addrFocused.current) setAddr(currentDir)
+  }, [currentDir])
+
+  const submitAddr = (e: FormEvent) => {
+    e.preventDefault()
+    const next = addr.replace(/^\/+|\/+$/g, '').replace(/\\/g, '/')
+    onNavigate(next)
+  }
 
   return (
-    <div className="flex flex-col gap-1 border-b bg-muted/30 px-2 py-1.5">
+    <div className="flex shrink-0 flex-col gap-1 border-b bg-muted/30 px-2 py-1.5">
+      {/* FR-375：后退 / 前进 / 地址栏 */}
+      <div className="flex items-center gap-1">
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-7 w-7 p-0"
+          disabled={!canBack}
+          title={t('files.navBack')}
+          aria-label={t('files.navBack')}
+          onClick={onBack}
+        >
+          <ArrowLeft className="size-3.5" />
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-7 w-7 p-0"
+          disabled={!canForward}
+          title={t('files.navForward')}
+          aria-label={t('files.navForward')}
+          onClick={onForward}
+        >
+          <ArrowRight className="size-3.5" />
+        </Button>
+        <form onSubmit={submitAddr} className="min-w-0 flex-1">
+          <input
+            data-addr-bar="1"
+            value={addr}
+            onChange={(e) => setAddr(e.target.value)}
+            onFocus={() => { addrFocused.current = true }}
+            onBlur={() => {
+              addrFocused.current = false
+              setAddr(currentDir)
+            }}
+            className="h-7 w-full rounded-md border bg-background px-2 font-mono text-xs"
+            aria-label={t('files.addressBar')}
+            placeholder="/"
+          />
+        </form>
+        {onViewModeChange && (
+          <div className="flex shrink-0 items-center rounded-md border p-0.5">
+            {(
+              [
+                { m: 'details' as const, icon: LayoutList, label: t('files.viewDetails') },
+                { m: 'list' as const, icon: List, label: t('files.viewList') },
+                { m: 'icons' as const, icon: LayoutGrid, label: t('files.viewIcons') },
+              ] as const
+            ).map(({ m, icon: Icon, label }) => (
+              <button
+                key={m}
+                type="button"
+                title={label}
+                aria-label={label}
+                aria-pressed={viewMode === m}
+                className={cn(
+                  'rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground',
+                  viewMode === m && 'bg-accent text-foreground',
+                )}
+                onClick={() => onViewModeChange(m)}
+              >
+                <Icon className="size-3.5" />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* 面包屑 */}
       <div className="flex items-center gap-0.5 overflow-x-auto text-xs text-muted-foreground">
         <button className="rounded px-1 hover:bg-accent hover:text-foreground" onClick={() => onNavigate('')}>
@@ -110,11 +207,29 @@ export default function Toolbar({
           multiple
           className="hidden"
           onChange={(e) => {
-            if (e.target.files && e.target.files.length > 0) onUpload(e.target.files)
-            if (uploadRef.current) uploadRef.current.value = ''
+            if (e.target.files?.length) onUpload(e.target.files)
+            e.target.value = ''
           }}
         />
 
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 gap-1 px-2 text-xs"
+          disabled={selectedCount === 0}
+          onClick={onDownloadSelected}
+        >
+          <Download className="size-3.5" /> {t('files.download')}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 gap-1 px-2 text-xs"
+          disabled={selectedCount === 0}
+          onClick={onDeleteSelected}
+        >
+          <Trash2 className="size-3.5" /> {t('files.delete')}
+        </Button>
         <Button
           size="sm"
           variant="outline"
@@ -124,47 +239,26 @@ export default function Toolbar({
         >
           <ClipboardPaste className="size-3.5" /> {t('files.paste')}
         </Button>
-
+        <Button size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs" onClick={onSelectAll}>
+          <CheckSquare className="size-3.5" /> {t('files.selectAll')}
+        </Button>
         <Button
           size="sm"
-          variant={searchActive ? 'default' : 'outline'}
+          variant="ghost"
+          className="h-7 gap-1 px-2 text-xs"
+          disabled={selectedCount === 0}
+          onClick={onClearSelection}
+        >
+          <XSquare className="size-3.5" /> {t('files.clear')}
+        </Button>
+        <Button
+          size="sm"
+          variant={searchActive ? 'secondary' : 'ghost'}
           className="h-7 gap-1 px-2 text-xs"
           onClick={onToggleSearch}
         >
           <Search className="size-3.5" /> {t('search.title')}
         </Button>
-
-        <div className="mx-1 h-4 w-px bg-border" />
-
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 gap-1 px-2 text-xs"
-          disabled={selectedCount === 0}
-          onClick={onDownloadSelected}
-        >
-          <Download className="size-3.5" /> {t('files.downloadZip')}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 gap-1 px-2 text-xs text-destructive"
-          disabled={selectedCount === 0}
-          onClick={onDeleteSelected}
-        >
-          <Trash2 className="size-3.5" /> {t('files.delete')}
-        </Button>
-
-        <div className="mx-1 h-4 w-px bg-border" />
-
-        <Button size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs" onClick={onSelectAll}>
-          <CheckSquare className="size-3.5" /> {t('files.selectAll')}
-        </Button>
-        {selectedCount > 0 && (
-          <Button size="sm" variant="ghost" className="h-7 gap-1 px-2 text-xs" onClick={onClearSelection}>
-            <XSquare className="size-3.5" /> {t('files.clear')} ({selectedCount})
-          </Button>
-        )}
       </div>
     </div>
   )

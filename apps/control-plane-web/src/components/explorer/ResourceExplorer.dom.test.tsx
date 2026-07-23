@@ -105,7 +105,8 @@ describe('ResourceExplorer（mock 假后端）', () => {
 
     await user.dblClick(await screen.findByText('large.log'))
     expect(await screen.findByText(/文件过大/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '下载' })).toBeInTheDocument()
+    // 预览区与工具栏各有「下载」：断言至少存在可点的预览下载入口
+    expect(screen.getAllByRole('button', { name: '下载' }).length).toBeGreaterThanOrEqual(1)
 
     await user.dblClick(await screen.findByText('icon.png'))
     expect(await screen.findByText(/二进制文件/)).toBeInTheDocument()
@@ -179,6 +180,89 @@ describe('ResourceExplorer（mock 假后端）', () => {
     await waitFor(() => expect(screen.getByText('注入的模拟错误')).toBeInTheDocument())
     // 列表未渲染出种子文件（确认是错误态而非正常态）。
     expect(screen.queryByText('server.properties')).not.toBeInTheDocument()
+  })
+
+  it('FR-375：地址栏 / 后退前进 / 三视图 / 权限列', async () => {
+    loginMockUser()
+    const user = userEvent.setup()
+    server.use(
+      http.get(API('/instances/:id/files'), ({ request }) => {
+        const path = new URL(request.url).searchParams.get('path') ?? ''
+        if (path === 'plugins') {
+          return HttpResponse.json([
+            {
+              name: 'config.yml',
+              isDir: false,
+              size: 128,
+              modTime: 1_700_000_000,
+              modeString: 'rw-r--r--',
+              writable: true,
+              readable: true,
+            },
+          ])
+        }
+        return HttpResponse.json([
+          {
+            name: 'plugins',
+            isDir: true,
+            size: 0,
+            modTime: 1_700_000_000,
+            modeString: 'rwxr-xr-x',
+            writable: true,
+            readable: true,
+          },
+          {
+            name: 'locked.txt',
+            isDir: false,
+            size: 10,
+            modTime: 1_700_000_001,
+            modeString: 'r--r--r--',
+            writable: false,
+            readable: true,
+          },
+          {
+            name: 'server.properties',
+            isDir: false,
+            size: 100,
+            modTime: 1_700_000_002,
+            modeString: 'rw-r--r--',
+            writable: true,
+            readable: true,
+          },
+        ])
+      }),
+    )
+    renderWithProviders(<ResourceExplorer instanceId={1} />)
+
+    expect(await screen.findByTestId('resource-explorer')).toBeInTheDocument()
+    const root = screen.getByTestId('resource-explorer')
+    expect(root.className).toMatch(/overflow-hidden/)
+    expect(root.className).toMatch(/h-full|min-h/)
+
+    // 权限列与只读锁标
+    expect(await screen.findByText('权限')).toBeInTheDocument()
+    expect(await screen.findByText('locked.txt')).toBeInTheDocument()
+    expect(screen.getByTitle('不可写')).toBeInTheDocument()
+
+    // 地址栏跳转
+    const addr = screen.getByLabelText('地址栏')
+    await user.clear(addr)
+    await user.type(addr, 'plugins{Enter}')
+    expect(await screen.findByText('config.yml')).toBeInTheDocument()
+
+    // 后退回根
+    const back = screen.getByRole('button', { name: '后退' })
+    expect(back).not.toBeDisabled()
+    await user.click(back)
+    expect(await screen.findByText('locked.txt')).toBeInTheDocument()
+
+    // 三视图切换
+    await user.click(screen.getByRole('button', { name: '大图标' }))
+    expect(screen.getByRole('button', { name: '大图标' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: '列表' }))
+    expect(screen.getByRole('button', { name: '列表' })).toHaveAttribute('aria-pressed', 'true')
+    await user.click(screen.getByRole('button', { name: '详细信息' }))
+    expect(screen.getByRole('button', { name: '详细信息' })).toHaveAttribute('aria-pressed', 'true')
   })
 })
 

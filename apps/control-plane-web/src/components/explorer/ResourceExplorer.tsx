@@ -22,6 +22,8 @@ import {
   uploadFile,
   downloadFile,
   downloadArchive,
+  checkFileAccess,
+  chmodFile,
   type FileInfo,
 } from '@/api/files'
 import { reportInstanceDraft } from '@/lib/console-draft-registry'
@@ -51,8 +53,36 @@ import {
   type ClipboardEntry,
   type PasteOp,
 } from './clipboard'
+import {
+  setBusClipboard,
+  getBusClipboard,
+  clearBusClipboard,
+  toClipboard,
+  subscribeBusClipboard,
+  writeDragToDataTransfer,
+  readDragFromDataTransfer,
+  setDragPayload,
+} from './explorer-clipboard-bus'
 import { joinPath, baseName, isValidName } from './paths'
 import { needsDiscardConfirm } from './discard-guard'
+import {
+  emptyNavHistory,
+  navPush,
+  navBack,
+  navForward,
+  canNavBack,
+  canNavForward,
+} from './nav-history'
+import {
+  loadSortState,
+  saveSortState,
+  loadViewMode,
+  saveViewMode,
+  sortFiles,
+  type FileSortState,
+  type FileViewMode,
+} from './file-sort'
+
 
 /**
  * 配置增强能力（FR-071）。注入后资源管理器在「配置」语义下复用：
@@ -103,6 +133,12 @@ export interface ConfigCapabilities {
  * 传入 `config`（FR-071）时叠加配置语义：打开文件改用配置编辑器、左栏插收藏/发现、历史走配置版本抽屉；
  * 不传时行为与 FR-070 完全一致。
  */
+export interface ExplorerContextInfo {
+  dir: string
+  file?: string
+  dirty: boolean
+}
+
 interface ResourceExplorerProps {
   /** 实例 ID。 */
   instanceId: number
@@ -110,6 +146,17 @@ interface ResourceExplorerProps {
   config?: ConfigCapabilities
   /** 允许外部打开指定相对路径文件（收藏/发现面板点选）。 */
   openPathRef?: (open: (path: string) => void) => void
+  /** FR-376：挂载时初始目录（相对工作目录，空=根）。 */
+  initialDir?: string
+  /** FR-376：挂载后打开的文件相对路径。 */
+  initialFile?: string
+  /** FR-376：目录/打开文件/脏态变化回传（多标签标题与草稿）。 */
+  onContextChange?: (ctx: ExplorerContextInfo) => void
+  /**
+   * FR-376：草稿登记 key 后缀（默认 resource-file）；多标签时用 resource-tab:${id}，
+   * 避免同实例多 Explorer 互相覆盖草稿登记。
+   */
+  draftKey?: string
 }
 
 /** 打开的编辑文件状态。 */
@@ -251,27 +298,63 @@ function BatchOperationNotice({
   )
 }
 
-export default function ResourceExplorer({ instanceId, config, openPathRef }: ResourceExplorerProps) {
+export default function ResourceExplorer({
+  instanceId,
+  config,
+  openPathRef,
+  initialDir = '',
+  initialFile,
+  onContextChange,
+  draftKey = 'resource-file',
+}: ResourceExplorerProps) {
   const { t } = useTranslation()
   const qc = useQueryClient()
   const configMode = config != null
 
-  // 当前目录（相对工作目录，空串=根）。
-  const [currentDir, setCurrentDir] = useState('')
+  // 当前目录（相对工作目录，空串=根）+ FR-375 导航/排序/视图。
+  const [nav, setNav] = useState(() => emptyNavHistory(initialDir))
+  const currentDir = nav.current
   const [files, setFiles] = useState<FileInfo[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [fileSort, setFileSort] = useState<FileSortState>(() => loadSortState())
+  const [viewMode, setViewMode] = useState<FileViewMode>(() => loadViewMode())
+  const explorerRootRef = useRef<HTMLDivElement>(null)
+
 
   // 树刷新信号（增删改后递增以重置树缓存）。
   const [treeRefresh, setTreeRefresh] = useState(0)
 
-  // 选中态 + 剪贴板。
+  // 选中态 + 剪贴板（FR-377：真源为实例级总线，本地 state 仅为订阅镜像）。
   const [selection, setSelection] = useState<SelectionState>(emptySelection)
-  const [clipboard, setClipboard] = useState<Clipboard | null>(null)
+  const explorerSourceId = useRef(`re-${instanceId}-${Math.random().toString(36).slice(2, 9)}`).current
+  const [clipboard, setClipboardLocal] = useState<Clipboard | null>(() =>
+    toClipboard(getBusClipboard(instanceId)),
+  )
+  useEffect(() => {
+    setClipboardLocal(toClipboard(getBusClipboard(instanceId)))
+    return subscribeBusClipboard(instanceId, (bus) => {
+      setClipboardLocal(toClipboard(bus))
+    })
+  }, [instanceId])
+  const setClipboard = useCallback(
+    (next: Clipboard | null) => {
+      if (!next || next.entries.length === 0) {
+        clearBusClipboard(instanceId, explorerSourceId)
+        setClipboardLocal(null)
+        return
+      }
+      const bus = setBusClipboard(instanceId, next.mode, next.entries, explorerSourceId)
+      setClipboardLocal(toClipboard(bus))
+    },
+    [instanceId, explorerSourceId],
+  )
   const [batchOperation, setBatchOperation] = useState<BatchOperationState | null>(null)
 
   // 编辑器打开的文件。
   const [openFile, setOpenFile] = useState<OpenFile | null>(null)
+  /** FR-375：当前打开文件相对 Worker 是否可写（null=未知/探测中）。 */
+  const [openFileWritable, setOpenFileWritable] = useState<boolean | null>(null)
   const [blockedPreview, setBlockedPreview] = useState<BlockedPreview | null>(null)
   // 始终持最新 openFile，供事件回调读「未保存」态而不必把 openFile 列入各 useCallback 依赖。
   const openFileRef = useRef<OpenFile | null>(null)
@@ -317,8 +400,8 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
   const [deleteTargets, setDeleteTargets] = useState<string[] | null>(null)
   const [versionFor, setVersionFor] = useState<string | null>(null)
 
-  // 有序文件名（shift 范围选择 / 全选基于此）。
-  const orderedNames = useMemo(() => files.map((f) => f.name), [files])
+  // 有序文件名（shift 范围选择 / 全选基于此；与列表展示排序一致，FR-375）。
+  const orderedNames = useMemo(() => sortFiles(files, fileSort).map((f) => f.name), [files, fileSort])
   const existingNames = useMemo(() => new Set(orderedNames), [orderedNames])
 
   /** 拉取某目录内容并复位选中/错误。 */
@@ -347,11 +430,77 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
     void loadDir(currentDir)
   }, [loadDir, currentDir, treeRefresh])
 
-  /** 切换目录（清空选中）。 */
+  /** 切换目录：推导航历史并清空选中（FR-375）。 */
   const navigate = useCallback((dir: string) => {
-    setCurrentDir(dir)
+    setNav((s) => navPush(s, dir))
     setSelection(emptySelection())
   }, [])
+
+  const goBack = useCallback(() => {
+    setNav((s) => {
+      if (!canNavBack(s)) return s
+      return navBack(s)
+    })
+    setSelection(emptySelection())
+  }, [])
+
+  const goForward = useCallback(() => {
+    setNav((s) => {
+      if (!canNavForward(s)) return s
+      return navForward(s)
+    })
+    setSelection(emptySelection())
+  }, [])
+
+  // FR-375：鼠标侧键后退/前进（button 3/4）
+  useEffect(() => {
+    const el = explorerRootRef.current
+    if (!el) return
+    const onUp = (e: MouseEvent) => {
+      if (e.button === 3) {
+        e.preventDefault()
+        goBack()
+      } else if (e.button === 4) {
+        e.preventDefault()
+        goForward()
+      }
+    }
+    const onDown = (e: MouseEvent) => {
+      if (e.button === 3 || e.button === 4) e.preventDefault()
+    }
+    el.addEventListener('mouseup', onUp)
+    el.addEventListener('mousedown', onDown)
+    return () => {
+      el.removeEventListener('mouseup', onUp)
+      el.removeEventListener('mousedown', onDown)
+    }
+  }, [goBack, goForward])
+
+  // FR-375：有历史时拦截浏览器后退
+  useEffect(() => {
+    const onPop = () => {
+      setNav((s) => {
+        if (!canNavBack(s)) return s
+        window.history.pushState({ jmExplorer: 1 }, '')
+        return navBack(s)
+      })
+      setSelection(emptySelection())
+    }
+    window.history.pushState({ jmExplorer: 1 }, '')
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+
+  const changeViewMode = useCallback((mode: FileViewMode) => {
+    setViewMode(mode)
+    saveViewMode(mode)
+  }, [])
+
+  const changeSort = useCallback((s: FileSortState) => {
+    setFileSort(s)
+    saveSortState(s)
+  }, [])
+
 
   /** 整目录刷新（增删改后调用）：刷新列表 + 重置树。 */
   const refreshAll = useCallback(() => {
@@ -376,24 +525,51 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
 
   // ---- 打开（双击 / 收藏·发现面板点选）----
   // 配置模式下编辑器自行读取内容（走配置端点），故只记录打开路径，不预读。
+  const refreshOpenWritable = useCallback(
+    async (path: string) => {
+      try {
+        const a = await checkFileAccess(instanceId, path)
+        setOpenFileWritable(a.writable)
+      } catch {
+        setOpenFileWritable(null)
+      }
+    },
+    [instanceId],
+  )
+
+  const tryFixOpenFilePerm = useCallback(async () => {
+    const f = openFileRef.current
+    if (!f) return
+    try {
+      await chmodFile(instanceId, f.path)
+      toast.success(t('files.tryFixPerm'))
+      await refreshOpenWritable(f.path)
+    } catch (err: unknown) {
+      toast.error(errorMessage(err) || t('files.saveFailed'))
+    }
+  }, [instanceId, refreshOpenWritable, t])
+
   const openByPathNow = useCallback(
     async (path: string, name: string) => {
       // 打开文本编辑器即关闭归档/反编译视图（右栏互斥）。
       setArchiveFor(null)
       setDecompileFor(null)
       setBlockedPreview(null)
+      setOpenFileWritable(null)
       if (configMode) {
         setOpenFile({ path, name, saved: '', draft: '' })
+        void refreshOpenWritable(path)
         return
       }
       try {
         const content = await readFileContent(instanceId, path)
         setOpenFile({ path, name, saved: content, draft: content })
+        void refreshOpenWritable(path)
       } catch {
         toast.error(t('files.loadFailed'))
       }
     },
-    [configMode, instanceId, t],
+    [configMode, instanceId, refreshOpenWritable, t],
   )
   const openByPath = useCallback(
     (path: string, name: string) => {
@@ -472,6 +648,26 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
       void openByPath(path, name)
     })
   }, [openPathRef, openByPath])
+
+  // FR-376：深链/新标签 initialFile 仅挂载时打开一次。
+  const initialFileOpened = useRef(false)
+  useEffect(() => {
+    if (initialFileOpened.current || !initialFile) return
+    initialFileOpened.current = true
+    const name = initialFile.split('/').pop() || initialFile
+    void openByPathNow(initialFile, name)
+  }, [initialFile, openByPathNow])
+
+  // FR-376：上下文回传（标签标题 / 脏态）；回调用 ref，避免父组件未 memo 时空转。
+  const onContextChangeRef = useRef(onContextChange)
+  onContextChangeRef.current = onContextChange
+  useEffect(() => {
+    onContextChangeRef.current?.({
+      dir: currentDir,
+      file: openFile?.path,
+      dirty: openFile !== null && openFile.draft !== openFile.saved,
+    })
+  }, [currentDir, openFile])
 
   // ---- 归档浏览 / 反编译（FR-075）----
   // 三类右栏内容（文本编辑器 / 归档浏览 / 反编译）互斥：打开一个即关闭其余。
@@ -718,7 +914,12 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
       })
       if (clipboard.mode === 'cut') {
         const failedPaths = new Set(failures.map((failure) => failure.path))
-        setClipboard(failures.length > 0 ? cutEntries(clipboard.entries.filter((entry) => failedPaths.has(entry.path))) : null)
+        // FR-377：完整成功则清空总线，避免幽灵剪切
+        setClipboard(
+          failures.length > 0
+            ? cutEntries(clipboard.entries.filter((entry) => failedPaths.has(entry.path)))
+            : null,
+        )
       }
       if (failures.length === 0) toast.success(t('files.pasteSuccess'))
       else if (failures.length < plan.ops.length) toast.warning(t('files.pastePartialFailed'))
@@ -729,29 +930,31 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
   )
 
   // 拖拽源：记录被拖动的文件名集合（拖单个未选中项时仅拖该项）。
+  // FR-377：同时写入 dataTransfer MIME + 总线 drag payload，供跨 Explorer 放置。
   const [dragName, setDragName] = useState<string | null>(null)
   const onDragStartItem = useCallback(
-    (name: string) => {
+    (name: string, dt: DataTransfer) => {
       // 拖动已选中项时移动整个选区；否则仅移动该项。
       setDragName(name)
+      let names: string[]
       if (!selection.selected.has(name)) {
         setSelection(clickSelect(emptySelection(), name, orderedNames))
+        names = [name]
+      } else {
+        names = [...selection.selected]
       }
+      writeDragToDataTransfer(dt, instanceId, entriesFor(names))
     },
-    [selection, orderedNames],
+    [selection, orderedNames, instanceId, entriesFor],
   )
-  const onDropMove = useCallback(
-    (targetDir: string) => {
-      if (dragName === null) return
-      const names = selection.selected.has(dragName) ? [...selection.selected] : [dragName]
-      setDragName(null)
-      // 树内拖拽 = 剪切到目标目录（move）。直接构造一次性剪贴板执行。
-      const clip = cutEntries(entriesFor(names))
+  const runMoveEntries = useCallback(
+    (entries: ClipboardEntry[], targetDir: string) => {
+      const clip = cutEntries(entries)
       void (async () => {
         let existing: Set<string>
         try {
-          const entries = await fetchFileList(instanceId, targetDir)
-          existing = new Set(entries.map((e) => e.name))
+          const list = await fetchFileList(instanceId, targetDir)
+          existing = new Set(list.map((e) => e.name))
         } catch {
           existing = new Set()
         }
@@ -766,10 +969,36 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
         if (failures.length === 0) toast.success(t('files.moveSuccess'))
         else if (failures.length < plan.ops.length) toast.warning(t('files.movePartialFailed'))
         else toast.error(t('files.moveFailed'))
+        setDragPayload(null)
         refreshAll()
       })()
     },
-    [dragName, selection, entriesFor, instanceId, refreshAll, runFileOps, t],
+    [instanceId, refreshAll, runFileOps, t],
+  )
+  const onDropMove = useCallback(
+    (targetDir: string, dt?: DataTransfer) => {
+      // FR-377：优先跨窗 MIME / 总线 payload，其次本组件 dragName
+      const remote = readDragFromDataTransfer(dt ?? null, instanceId)
+      if (remote && remote.length > 0) {
+        setDragName(null)
+        runMoveEntries(remote, targetDir)
+        return
+      }
+      if (dragName === null) return
+      const names = selection.selected.has(dragName) ? [...selection.selected] : [dragName]
+      setDragName(null)
+      runMoveEntries(entriesFor(names), targetDir)
+    },
+    [dragName, selection, entriesFor, instanceId, runMoveEntries],
+  )
+  /** 列表区放置：资源条目 → 移入 currentDir */
+  const onDropEntriesToCurrent = useCallback(
+    (dt: DataTransfer) => {
+      const remote = readDragFromDataTransfer(dt, instanceId)
+      if (!remote || remote.length === 0) return
+      runMoveEntries(remote, currentDir)
+    },
+    [instanceId, currentDir, runMoveEntries],
   )
 
   const dirty = openFile !== null && openFile.draft !== openFile.saved
@@ -777,16 +1006,21 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
   // FR-296 淘汰偏好：文本编辑器脏态登记到实例草稿注册表——热缓存宿主据此优先淘汰
   // 无草稿实例、被迫淘汰带草稿者时 toast 警示。故意无 effect 清理：Activity 隐藏会卸
   // effects 但草稿 DOM 状态仍在；真卸载由宿主 clearInstanceDrafts 统一清签。
+  // FR-376：多标签用 draftKey 区分，避免互相覆盖。
   useEffect(() => {
-    reportInstanceDraft(instanceId, 'resource-file', dirty)
-  }, [dirty, instanceId])
+    reportInstanceDraft(instanceId, draftKey, dirty)
+  }, [dirty, instanceId, draftKey])
 
   return (
-    <div className="flex h-[600px] overflow-hidden rounded-lg border">
-      {/* 左：收藏/发现（配置模式）+ 目录树 */}
+    <div
+      ref={explorerRootRef}
+      className="flex h-full min-h-[480px] max-h-full overflow-hidden rounded-lg border"
+      data-testid="resource-explorer"
+    >
+      {/* 左：收藏/发现（配置模式）+ 目录树（滚动隔离 FR-375） */}
       <div className="flex w-56 shrink-0 flex-col overflow-hidden border-r bg-muted/20">
         {config?.sidebarExtra}
-        <div className="min-h-0 flex-1 overflow-auto p-1">
+        <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-1">
           <FileTree
             instanceId={instanceId}
             currentDir={currentDir}
@@ -798,11 +1032,15 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
       </div>
 
       {/* 右：工具栏 + 内容/编辑器 */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <Toolbar
           currentDir={currentDir}
           selectedCount={selection.selected.size}
           canPaste={clipboard !== null && clipboard.entries.length > 0}
+          canBack={canNavBack(nav)}
+          canForward={canNavForward(nav)}
+          onBack={goBack}
+          onForward={goForward}
           onNavigate={navigate}
           onNewFile={() => setPrompt({ kind: 'newFile', initial: '' })}
           onNewFolder={() => setPrompt({ kind: 'newFolder', initial: '' })}
@@ -814,16 +1052,18 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
           onClearSelection={onClearSelection}
           onToggleSearch={() => setSearchOpen((v) => !v)}
           searchActive={searchOpen}
+          viewMode={viewMode}
+          onViewModeChange={changeViewMode}
         />
 
         <BatchOperationNotice state={batchOperation} onDismiss={() => setBatchOperation(null)} />
 
-        <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
           {/* 目录内容列表 / 搜索面板。打开归档/反编译查看器时**整列收起**——目录树仍在左栏可导航，
               查看器（ArchiveViewer flex-1 / DecompileViewer flex-1）占满右栏，避免树｜列表｜查看器三栏挤（FR-111）。
               打开文本编辑器时与编辑器并排 w-1/2（编辑场景需对照文件列表，保留）。 */}
           {!archiveFor && !decompileFor && (
-            <div className={openFile || blockedPreview ? 'flex w-1/2 flex-col border-r' : 'flex flex-1 flex-col'}>
+            <div className={openFile || blockedPreview ? 'flex w-1/2 min-h-0 flex-col overflow-hidden border-r' : 'flex min-h-0 flex-1 flex-col overflow-hidden'}>
               {searchOpen ? (
                 <SearchPanel
                   instanceId={instanceId}
@@ -840,6 +1080,7 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
                   onOpen={openEntry}
                   onDragStartItem={onDragStartItem}
                   onDropUpload={handleUpload}
+                  onDropEntries={onDropEntriesToCurrent}
                   onRename={(name) => setPrompt({ kind: 'rename', initial: name, oldName: name })}
                   onDelete={(name) => setDeleteTargets([joinPath(currentDir, name)])}
                   onDownload={downloadSingle}
@@ -847,6 +1088,9 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
                   onCopy={() => copySelection(selectedNames.length ? selectedNames : [])}
                   onOpenArchive={openArchive}
                   onDecompile={openDecompile}
+                  sort={fileSort}
+                  onSortChange={changeSort}
+                  viewMode={viewMode}
                 />
               )}
             </div>
@@ -870,14 +1114,30 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
                 })}
               </div>
             ) : (
-              <div className="flex w-1/2 min-w-0 flex-col">
-                <div className="flex items-center justify-between border-b bg-muted/30 px-2 py-1 text-sm">
+              <div className="flex w-1/2 min-w-0 min-h-0 flex-col overflow-hidden">
+                <div className="flex shrink-0 items-center justify-between border-b bg-muted/30 px-2 py-1 text-sm">
                   <span className="truncate font-medium">
                     {openFile.name}
                     {dirty && <span className="ml-1 text-amber-500">•</span>}
+                    {openFileWritable === false && (
+                      <span className="ml-2 text-xs text-muted-foreground">({t('files.readOnly')})</span>
+                    )}
+                    {openFileWritable === true && (
+                      <span className="ml-2 text-xs text-muted-foreground">({t('files.writable')})</span>
+                    )}
                   </span>
                   <div className="flex items-center gap-1">
                     <EditorShortcutsHelp />
+                    {openFileWritable === false && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 gap-1 px-2 text-xs"
+                        onClick={() => void tryFixOpenFilePerm()}
+                      >
+                        {t('files.tryFixPerm')}
+                      </Button>
+                    )}
                     <Button
                       size="sm"
                       variant="ghost"
@@ -890,7 +1150,7 @@ export default function ResourceExplorer({ instanceId, config, openPathRef }: Re
                       size="sm"
                       variant="outline"
                       className="h-7 gap-1 px-2 text-xs"
-                      disabled={!dirty || saving}
+                      disabled={!dirty || saving || openFileWritable === false}
                       onClick={() => void saveOpenFile()}
                     >
                       {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}{' '}

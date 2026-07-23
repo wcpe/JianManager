@@ -43,8 +43,9 @@ export default function WorkspaceCardBody({ instanceId, type, persistTerminal = 
     case 'resource':
       // 资源卡=文件+配置合一：管理视图复用 ConfigExplorer（ResourceExplorer + config 能力，FR-130），
       // 浏览视图用共享 FileBrowser（FR-213）；二者并存，能力不减。
+      // FR-375：外层 overflow-hidden，滚动收口在资源管理器内部，避免滚轮带动整页。
       return (
-        <div className="h-full overflow-auto p-3">
+        <div className="flex h-full min-h-0 flex-col overflow-hidden p-3">
           <InstanceResourceCard instanceId={instanceId} />
         </div>
       )
