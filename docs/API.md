@@ -191,13 +191,35 @@
 - **审计**: `node.drain`
 
 ### DELETE /api/v1/nodes/:id
-- **描述**: 主动下线节点：解除注册并保留记录（软删除），复连需重新注册。节点在线时拒绝（422，`force` 亦无效）。名下仍有实例时 409 拒绝并随响应列出实例（FR-309 守卫，防删节点留孤儿实例致其终端/操作全 404）；离线节点可 `?force=true` 显式级联软删名下实例的平台记录（含组/群组服/群组成员关联行），**不清理远端文件**（节点离线无法委托 Worker，实例文件留在节点机器上）
-- **关联 FR**: FR-004, FR-048, FR-309
+- **描述**: 主动下线节点：解除注册并保留记录（软删除），复连需重新注册。节点在线时拒绝（422，`force` 亦无效）。名下仍有实例时 409 拒绝并随响应列出实例（FR-309 守卫，防删节点留孤儿实例致其终端/操作全 404）；离线节点可 `?force=true` 显式级联软删名下实例的平台记录（含组/群组服/群组成员关联行），**不清理远端文件**（节点离线无法委托 Worker，实例文件留在节点机器上）。下线成功后主列表不可见，归档列表可见（FR-393）
+- **关联 FR**: FR-004, FR-048, FR-309, FR-393
 - **权限**: 平台管理员（危险操作，前端二次确认；强制级联另有独立输入名称确认）
 - **参数**: `force`（query，可选 bool）：离线节点显式级联删除名下实例记录
 - **响应**: `{ message, instancesPurged }`（非级联时 `instancesPurged=0`）
 - **错误码**: `409 NODE_HAS_INSTANCES`（名下有实例且未 force，响应含 `instances: [{ id, name, status }]`）、`422 BUSINESS_ERROR`（在线节点 / 节点不存在）、`400 INVALID_REQUEST`（force 参数非法）
 - **审计**: `node.delete`
+
+### GET /api/v1/nodes/archived
+- **描述**: 已下线（软删）节点列表，按 `deleted_at` 倒序；主列表 `GET /nodes` 仍仅活跃节点
+- **关联 FR**: FR-393
+- **权限**: 平台管理员
+- **响应** (200): `[{ id, uuid, name, host, grpcPort, wsPort, status, os, arch, cpuCores, memoryMb, diskTotalMb, maintenance, lastHeartbeat, createdAt, updatedAt, deletedAt }]`（不含 secret；空列表 `[]`）
+
+### GET /api/v1/nodes/archived/:id
+- **描述**: 单个归档节点详情
+- **关联 FR**: FR-393
+- **权限**: 平台管理员
+- **响应** (200): 同上单对象
+- **错误**: `404 NOT_FOUND`（非归档或不存在）
+
+### DELETE /api/v1/nodes/archived/:id
+- **描述**: 彻底清理归档节点：硬删库记录；名下仍有实例记录（含下线时软删残留）未 `force` 时 409；`force=true` 同事务 Unscoped 硬删实例平台记录及关联行，**不清理远端文件**。活跃（未软删）节点调本接口 422
+- **关联 FR**: FR-394
+- **权限**: 平台管理员（危险操作，前端 DangerConfirm 输入节点名）
+- **参数**: `force`（query，可选 bool）
+- **响应** (200): `{ "message": "已清理", "instancesPurged": 0 }`
+- **错误**: `404 NOT_FOUND` / `409 NODE_HAS_INSTANCES` / `422 BUSINESS_ERROR`（未下线）/ `400 INVALID_REQUEST`
+- **审计**: `node.purge`
 
 ### GET /api/v1/nodes/repair/suspects
 - **描述**: 列出疑似被串改/重名的节点（只读诊断）。信号：名字带迁移去重后缀 `-dup-<id>`（曾因重名被自动改名）、或仍存在同名活跃节点组。修复重名覆盖 BUG-A 的存量数据排查入口

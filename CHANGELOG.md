@@ -9,6 +9,7 @@
 > 本段为 `v0.20.0` 开发版归档区（自 v0.19.0 之后累积）。
 
 ### 新增
+- **节点离线归档与彻底清理（FR-393/394，开发中）**：`GET /nodes/archived`、`GET /nodes/archived/:id` 列出/查看软删下线节点；`DELETE /nodes/archived/:id?force=` 硬删库记录（有实例须 force 级联实例平台记录，不碰远端文件，审计 `node.purge`）；NodesPage `活跃|归档`（`?view=`）+ 清理 DangerConfirm；devmock 归档样例 `gamma-archived`。单测/router/DOM 绿。**待真机** compose 1CP+1Worker 下线→归档→清理闭环。
 - **CP 内嵌 MCP 长连接服务（FR-389，开发中）**：Control Plane 内嵌 Streamable HTTP（`POST/GET/DELETE /api/v1/mcp`）+ SSE 兼容（`GET /api/v1/mcp/sse`、`POST /api/v1/mcp/message`）；鉴权仅 Agent Token（`jmat_`）；工具集与 jm-agent 对齐（含 `agent_get_instance_logs`），硬拒绝不注册；策略走 `ResolveAction`（拒绝 → HTTP 200 + `isError` + 中文）；内存会话可运维（列表/踢线/空闲 30m/绝对 24h/全局 32/每 Token 4，可配置）；管理员 `GET/DELETE /api/v1/agent/mcp/sessions`；改写 ADR-077 为「CP 内嵌 MCP 网关」；stdio `apps/mcp-bridge` 不删（FR-392）。单测：会话并发/超时/踢线/鉴权/tools/list。**待真机验**远程 HTTPS 全路径。
 - **Agent 调用流水与 Token 活跃（FR-390，ADR-076）**：表 `agent_call_logs` + `AgentCallLogService`（Record/List/Count24h/PurgeExpired，默认保留 14 天）；`/api/v1/agent/*` Ops 读+写在成功鉴权后记流水（403 记 `success=false`，401 不刷库）；解析 `X-JM-Agent-Client`（mcp|jmagent|curl|unknown）；管理员 `GET /api/v1/agent/call-logs` 过滤分页；Token 列表附 `lastUsedAt`+`callCount24h`；`jmagent` 默认发 `X-JM-Agent-Client: jmagent`。不替代写操作既有 audit；**MCP tools/call 与 session open/close/kick 已挂 `Record`（client=mcp）**。
 - **Agent 观测 UI（FR-391，开发中）**：平台管理 → MCP 会话页（`/mcp-sessions` 列表/踢线/超时说明/复制 MCP URL）+ 调用流水页（`/agent-call-logs` 按 token/action/client/成败筛选分页）+ Token 列表「最近使用 / 24h 调用」+ 签发弹窗复制 MCP 端点；中英 i18n。审计页 action 前缀筛选沿用既有。
