@@ -67,6 +67,25 @@ describe('NodesPage（mock 假后端）', () => {
     expect(screen.getAllByText('10.0.0.11').length).toBeGreaterThan(0) // alpha host：列表 + 详情
   })
 
+  it('切换归档视图可见 gamma-archived，清理确认文案明示不清理远端文件（FR-393/394）', async () => {
+    loginPlatformAdmin()
+    stubInstances()
+    const user = userEvent.setup()
+    // 直接深链归档视图，避免依赖点击后 URL 同步时序。
+    renderWithProviders(<NodesPage />, { route: '/nodes?view=archive' })
+
+    // 列表 + 详情都会渲染名称，用 getAllByText。
+    expect((await screen.findAllByText('gamma-archived')).length).toBeGreaterThan(0)
+    // 默认选中归档首项 → 详情出清理按钮。
+    const purgeBtn = await screen.findByRole('button', { name: '清理' })
+    await user.click(purgeBtn)
+    // DangerConfirm 描述须明示不清理远端/机器上文件。
+    await waitFor(() => {
+      const text = document.body.textContent ?? ''
+      expect(text).toMatch(/不会清理节点机器上的任何文件|不会清理/)
+    })
+  })
+
   it('对节点进入维护后，列表联动出现「维护」标记', async () => {
     loginMockUser()
     stubInstances()

@@ -171,6 +171,7 @@ export interface NodeDeleteResult {
  * 主动下线节点：解除注册并保留记录（FR-048）。
  * FR-309：名下有实例回 409 NODE_HAS_INSTANCES（含实例清单）；离线节点可 force 级联
  * 删除实例平台记录（不清理远端文件），故成功后同时失效实例列表。
+ * FR-393：下线后进归档，故一并失效 archived-nodes。
  */
 export function useDeleteNode() {
   const qc = useQueryClient()
@@ -179,6 +180,66 @@ export function useDeleteNode() {
       api.delete<NodeDeleteResult>(`/nodes/${id}`, force ? { params: { force: true } } : undefined),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['nodes'] })
+      qc.invalidateQueries({ queryKey: ['archived-nodes'] })
+      qc.invalidateQueries({ queryKey: ['instances'] })
+    },
+  })
+}
+
+/** 归档节点（已软删，FR-393）：活跃 NodeInfo 摘要 + deletedAt。 */
+export interface ArchivedNode {
+  id: number
+  uuid: string
+  name: string
+  host: string
+  grpcPort: number
+  wsPort: number
+  status: number
+  maintenance: boolean
+  os: string
+  arch: string
+  cpuCores: number
+  memoryMb: number
+  lastHeartbeat: string | null
+  createdAt: string
+  updatedAt?: string
+  /** 下线（软删）时间，RFC3339。 */
+  deletedAt: string
+}
+
+/** 归档清理结果（FR-394）：硬删节点记录；force 时含级联实例数。 */
+export interface NodePurgeResult {
+  message: string
+  instancesPurged: number
+}
+
+/** 列出已下线（软删）节点，按 deletedAt 倒序（FR-393）。 */
+export function useArchivedNodes(options?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ['archived-nodes'],
+    queryFn: async () => {
+      const { data } = await api.get<ArchivedNode[]>('/nodes/archived')
+      return data
+    },
+    enabled: options?.enabled,
+  })
+}
+
+/**
+ * 彻底清理归档节点：仅已软删行生效；force 级联硬删名下实例平台记录，不碰远端文件（FR-394）。
+ * 成功后失效 nodes / archived-nodes / instances。
+ */
+export function usePurgeArchivedNode() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, force }: { id: number; force?: boolean }) =>
+      api.delete<NodePurgeResult>(
+        `/nodes/archived/${id}`,
+        force ? { params: { force: true } } : undefined,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['nodes'] })
+      qc.invalidateQueries({ queryKey: ['archived-nodes'] })
       qc.invalidateQueries({ queryKey: ['instances'] })
     },
   })

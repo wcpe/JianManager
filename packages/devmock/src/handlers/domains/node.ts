@@ -11,7 +11,7 @@ import { db } from '@jianmanager/devmock/db'
  * 各在本模块顶层带 seedFn 唯一声明。
  */
 
-/** 假后端节点（字段同 web/src/api/nodes.ts NodeInfo）。 */
+/** 假后端节点（字段同 web/src/api/nodes.ts NodeInfo；deletedAt 仅归档行有值，FR-393）。 */
 interface MockNode {
   id: number
   uuid: string
@@ -36,6 +36,8 @@ interface MockNode {
   loadAvg1: number
   lastHeartbeat: string | null
   createdAt: string
+  /** 软删下线时间（FR-393）；有值=归档行，主列表不可见。 */
+  deletedAt?: string | null
   /** Worker 二进制当前版本（自更新对比用，非 NodeInfo 字段、不外泄到 /nodes）。 */
   workerVersion: string
   /** 升级前备份版本（FR-182），空=无备份。 */
@@ -226,6 +228,33 @@ const nodes = db<MockNode>('nodes', () => [
     lastHeartbeat: null,
     createdAt: NOW,
     workerVersion: '0.10.0',
+  },
+  // 已下线归档样例（FR-393）：主列表不可见，归档分段可见。
+  {
+    id: 3,
+    uuid: 'node-gamma',
+    name: 'gamma-archived',
+    host: '10.0.0.13',
+    grpcPort: 9100,
+    wsPort: 9200,
+    status: 0,
+    maintenance: false,
+    tunnelConnected: false,
+    os: 'linux',
+    arch: 'amd64',
+    cpuCores: 2,
+    memoryMb: 8192,
+    diskTotalMb: 128000,
+    cpuUsage: 0,
+    memoryUsage: 0,
+    diskUsage: 0,
+    networkBytesSent: 0,
+    networkBytesRecv: 0,
+    loadAvg1: 0,
+    lastHeartbeat: null,
+    createdAt: '2026-06-01T08:00:00Z',
+    deletedAt: '2026-07-20T12:00:00Z',
+    workerVersion: '0.9.0',
   },
 ])
 
@@ -419,12 +448,26 @@ const workerAssets = db<MockWorkerAsset>('worker-assets', () => [
   },
 ])
 
-/** 一个 NodeInfo 视图（剔除 mock 内部字段 workerVersion/backupVersion）。 */
+/** 是否已软删归档（FR-393）。 */
+function isArchived(n: MockNode): boolean {
+  return !!n.deletedAt
+}
+
+/** 一个 NodeInfo 视图（剔除 mock 内部字段；活跃列表不带 deletedAt）。 */
 function toNodeInfo(n: MockNode) {
+  const { workerVersion: _w, backupVersion: _b, deletedAt: _d, ...info } = n
+  void _w
+  void _b
+  void _d
+  return info
+}
+
+/** 归档节点视图（FR-393）：公开字段 + deletedAt。 */
+function toArchivedNode(n: MockNode) {
   const { workerVersion: _w, backupVersion: _b, ...info } = n
   void _w
   void _b
-  return info
+  return { ...info, deletedAt: n.deletedAt ?? '' }
 }
 
 function workerAssetId(os: string, arch: string) {
@@ -543,11 +586,65 @@ export const handlers = [
       : HttpResponse.json({ error: 'NODE_OFFLINE', message: '节点未连接' }, { status: 503 })
   }),
 
-  /* ===================== nodes（FR-048 / FR-080 / FR-185） ===================== */
+  /* ===================== nodes（FR-048 / FR-080 / FR-185 / FR-393 / FR-394） ===================== */
+  // 归档路由必须先于 /nodes/:id，避免 "archived" 被解析为 id。
+  domainRoute('get', '/nodes/archived', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const list = nodes
+      .list()
+      .filter(isArchived)
+      .sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)))
+    return HttpResponse.json(list.map(toArchivedNode))
+  }),
+
+  domainRoute('get', '/nodes/archived/:id', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number((info.params as { id: string }).id)
+    const n = nodes.get(id)
+    if (!n || !isArchived(n)) {
+      return HttpResponse.json({ error: 'NOT_FOUND', message: '归档节点不存在' }, { status: 404 })
+    }
+    return HttpResponse.json(toArchivedNode(n))
+  }),
+
+  domainRoute('delete', '/nodes/archived/:id', (info) => {
+    const denied = requireAuth(info)
+    if (denied) return denied
+    const id = Number((info.params as { id: string }).id)
+    const n = nodes.get(id)
+    if (!n) return HttpResponse.json({ error: 'NOT_FOUND', message: '归档节点不存在' }, { status: 404 })
+    // 活跃节点误调清理 → 422，请先下线。
+    if (!isArchived(n)) {
+      return HttpResponse.json(
+        { error: 'BUSINESS_ERROR', message: '请先下线再清理' },
+        { status: 422 },
+      )
+    }
+    const force = new URL(info.request.url).searchParams.get('force') === 'true'
+    const instances = db<{ id: number; nodeId: number; name: string; status: string }>('instances')
+    const owned = instances.list().filter((i) => i.nodeId === id)
+    if (owned.length > 0 && !force) {
+      return HttpResponse.json(
+        {
+          error: 'NODE_HAS_INSTANCES',
+          message: `节点名下仍有 ${owned.length} 个实例记录，请先确认后强制清理`,
+          instances: owned.map((i) => ({ id: i.id, name: i.name, status: i.status })),
+        },
+        { status: 409 },
+      )
+    }
+    for (const i of owned) instances.remove(i.id)
+    nodes.remove(id)
+    return HttpResponse.json({ message: '已清理', instancesPurged: owned.length })
+  }),
+
   domainRoute('get', '/nodes', (info) => {
     const denied = requireAuth(info)
     if (denied) return denied
-    return HttpResponse.json(nodes.list().map(toNodeInfo))
+    // 主列表仅活跃（未软删）节点，对齐 GORM 默认（FR-393）。
+    return HttpResponse.json(nodes.list().filter((n) => !isArchived(n)).map(toNodeInfo))
   }),
 
   domainRoute('get', '/nodes/:id', (info) => {
@@ -555,7 +652,9 @@ export const handlers = [
     if (denied) return denied
     const id = Number((info.params as { id: string }).id)
     const n = nodes.get(id)
-    if (!n) return HttpResponse.json({ error: 'NOT_FOUND', message: '节点不存在' }, { status: 404 })
+    if (!n || isArchived(n)) {
+      return HttpResponse.json({ error: 'NOT_FOUND', message: '节点不存在' }, { status: 404 })
+    }
     return HttpResponse.json(toNodeInfo(n))
   }),
 
@@ -564,6 +663,10 @@ export const handlers = [
     if (denied) return denied
     const id = Number((info.params as { id: string }).id)
     const { enabled } = (await info.request.json()) as { enabled: boolean }
+    const cur = nodes.get(id)
+    if (!cur || isArchived(cur)) {
+      return HttpResponse.json({ error: 'NOT_FOUND', message: '节点不存在' }, { status: 404 })
+    }
     const n = nodes.update(id, { maintenance: enabled })
     if (!n) return HttpResponse.json({ error: 'NOT_FOUND', message: '节点不存在' }, { status: 404 })
     return HttpResponse.json(toNodeInfo(n))
@@ -574,7 +677,9 @@ export const handlers = [
     if (denied) return denied
     const id = Number((info.params as { id: string }).id)
     const n = nodes.get(id)
-    if (!n) return HttpResponse.json({ error: 'NOT_FOUND', message: '节点不存在' }, { status: 404 })
+    if (!n || isArchived(n)) {
+      return HttpResponse.json({ error: 'NOT_FOUND', message: '节点不存在' }, { status: 404 })
+    }
     return HttpResponse.json({ stoppedCount: 0, stopped: [], failed: [] })
   }),
 
@@ -583,9 +688,12 @@ export const handlers = [
     if (denied) return denied
     const id = Number((info.params as { id: string }).id)
     const n = nodes.get(id)
-    if (!n) return HttpResponse.json({ error: 'NOT_FOUND', message: '节点不存在' }, { status: 404 })
+    // 已归档或不存在：按活跃下线语义 404。
+    if (!n || isArchived(n)) {
+      return HttpResponse.json({ error: 'NOT_FOUND', message: '节点不存在' }, { status: 404 })
+    }
     // FR-309 实例守卫（对齐真后端）：在线一律拒；名下有实例且未 force → 409 携清单；
-    // 离线 + force=true → 级联删除实例记录（mock 中直接移除）。
+    // 离线 + force=true → 级联删除实例记录；节点软删进归档（FR-393）。
     if (n.status === 1) {
       return HttpResponse.json({ error: 'BUSINESS_ERROR', message: '不能删除在线节点' }, { status: 422 })
     }
@@ -603,7 +711,7 @@ export const handlers = [
       )
     }
     for (const i of owned) instances.remove(i.id)
-    nodes.remove(id)
+    nodes.update(id, { deletedAt: new Date().toISOString(), status: 0 })
     return HttpResponse.json({ message: '已下线', instancesPurged: owned.length })
   }),
 

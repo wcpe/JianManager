@@ -15,7 +15,10 @@ import {
   useSetNodeMaintenance,
   useDrainNode,
   useDeleteNode,
+  useArchivedNodes,
+  usePurgeArchivedNode,
   type NodeInfo,
+  type ArchivedNode,
   type NodeDeleteBlockedInstance,
 } from '@/api/nodes'
 import { useInstanceAggregate, useInstanceSearch } from '@/api/instances'
@@ -85,6 +88,16 @@ type PendingAction = { kind: 'drain' | 'delete'; node: NodeInfo }
 /** 节点下线被实例守卫 409 拒绝的上下文（FR-309）：节点 + 名下实例清单。 */
 type DeleteConflict = { node: NodeInfo; instances: NodeDeleteBlockedInstance[] }
 
+/** 归档清理被实例守卫 409 拒绝的上下文（FR-394）。 */
+type PurgeConflict = { node: ArchivedNode; instances: NodeDeleteBlockedInstance[] }
+
+/** 页面级视图：活跃 | 归档（FR-393，URL `?view=` 可寻址，默认 active）。 */
+type NodesView = 'active' | 'archive'
+
+function readNodesView(searchParams: URLSearchParams): NodesView {
+  return searchParams.get('view') === 'archive' ? 'archive' : 'active'
+}
+
 /**
  * 节点下线被实例守卫拒绝的清单模态（FR-309）：列出名下实例（名称 + 状态）；
  * 离线节点额外提供「强制下线」入口（级联删平台记录、明示不清理远端文件）。
@@ -138,6 +151,59 @@ function NodeDeleteBlockedDialog({
           {offline && (
             <Button variant="destructive" onClick={onForce}>{t('nodes.forceDelete')}</Button>
           )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * 归档清理被实例守卫拒绝的清单模态（FR-394）：列出名下实例记录；
+ * 提供「强制清理」入口（级联硬删平台记录、明示不清理远端文件）。
+ */
+function NodePurgeBlockedDialog({
+  conflict,
+  onClose,
+  onForce,
+}: {
+  conflict: PurgeConflict | null
+  onClose: () => void
+  onForce: () => void
+}) {
+  const { t } = useTranslation()
+  const statusText = (status: string) => {
+    const keys: Record<string, string> = {
+      STOPPED: 'instances.stopped',
+      STARTING: 'instances.starting',
+      RUNNING: 'instances.running',
+      STOPPING: 'instances.stopping',
+      CRASHED: 'instances.crashed',
+    }
+    return keys[status] ? t(keys[status]) : status
+  }
+  return (
+    <Dialog open={conflict !== null} onOpenChange={(v: boolean) => { if (!v) onClose() }}>
+      <DialogContent className={scrollableDialogContentClass}>
+        <DialogHeader>
+          <DialogTitle>{t('nodes.purgeBlockedTitle')}</DialogTitle>
+          <DialogDescription>
+            {t('nodes.purgeBlockedDesc', { name: conflict?.node.name, count: conflict?.instances.length })}
+          </DialogDescription>
+        </DialogHeader>
+        <ScrollableDialogBody className="space-y-1.5">
+          {(conflict?.instances ?? []).map((inst) => (
+            <div key={inst.id} className="flex items-center justify-between gap-2 rounded-md border px-3 py-1.5 text-sm">
+              <span className="min-w-0 truncate" title={inst.name}>{inst.name}</span>
+              <Badge variant="outline" className="shrink-0 text-[11px] text-muted-foreground">
+                {statusText(inst.status)}
+              </Badge>
+            </div>
+          ))}
+          <p className="pt-1 text-xs text-muted-foreground">{t('nodes.purgeBlockedForceHint')}</p>
+        </ScrollableDialogBody>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
+          <Button variant="destructive" onClick={onForce}>{t('nodes.forcePurge')}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -450,14 +516,22 @@ function NodeRailIcon({
 
 export default function NodesPage() {
   const { t } = useTranslation()
-  const { data: nodes, isLoading } = useNodes({ refetchInterval: 30_000 })
+  // 选中节点与激活分段均入 URL（FR-128 可寻址）：`?node=<id>` 深链（命令面板 FR-241 跳转携带）、
+  // `?tab=<DetailTab>` 激活分段（默认 overview 省略）；`?view=active|archive` 页面视图（FR-393）。
+  const [searchParams, setSearchParams] = useSearchParams()
+  const view = readNodesView(searchParams)
+  const isArchive = view === 'archive'
+  const { data: nodes, isLoading } = useNodes({
+    refetchInterval: 30_000,
+    enabled: !isArchive,
+  })
+  const { data: archivedNodes, isLoading: archivedLoading } = useArchivedNodes({
+    enabled: isArchive,
+  })
   // 各节点实例数走服务端聚合（FR-247/FR-270）：byNode 每节点计数已在服务端算好，
   // 本页不再全量拉取实例再前端归并。
   const { data: aggregate } = useInstanceAggregate()
 
-  // 选中节点与激活分段均入 URL（FR-128 可寻址）：`?node=<id>` 深链（命令面板 FR-241 跳转携带）、
-  // `?tab=<DetailTab>` 激活分段（默认 overview 省略）。直接从 searchParams 派生，浏览器前进/后退自动生效。
-  const [searchParams, setSearchParams] = useSearchParams()
   const selectedId = (() => {
     const n = Number(searchParams.get('node'))
     return Number.isFinite(n) && n > 0 ? n : null
@@ -468,13 +542,27 @@ export default function NodesPage() {
   // FR-309：下线被实例守卫 409 拒绝 → 清单模态；离线节点走强制下线需再过一道输入名称确认。
   const [conflict, setConflict] = useState<DeleteConflict | null>(null)
   const [forcePending, setForcePending] = useState<DeleteConflict | null>(null)
+  // FR-394：归档清理确认 / 实例守卫 / force 确认。
+  const [purgeTarget, setPurgeTarget] = useState<ArchivedNode | null>(null)
+  const [purgeConflict, setPurgeConflict] = useState<PurgeConflict | null>(null)
+  const [forcePurgePending, setForcePurgePending] = useState<PurgeConflict | null>(null)
   const [addOpen, setAddOpen] = useState(false)
 
-  // 选中节点写入 URL（保留当前 tab 等其它参数）。
+  // 选中节点写入 URL（保留当前 tab/view 等其它参数）。
   const setSelectedId = (id: number) => {
     const next = new URLSearchParams(searchParams)
     next.set('node', String(id))
     setSearchParams(next)
+  }
+  // 切换活跃/归档视图（FR-393）；切视图时清 node/tab，避免跨视图幽灵选中。
+  const setView = (next: NodesView) => {
+    const params = new URLSearchParams(searchParams)
+    if (next === 'active') params.delete('view')
+    else params.set('view', 'archive')
+    params.delete('node')
+    params.delete('tab')
+    setSearchParams(params)
+    setQuery('')
   }
   // 切换激活分段写入 URL（默认 overview 省略，保持链接简洁）。
   const setTab = (next: DetailTab) => {
@@ -489,6 +577,7 @@ export default function NodesPage() {
   const setMaintenance = useSetNodeMaintenance()
   const drain = useDrainNode()
   const del = useDeleteNode()
+  const purge = usePurgeArchivedNode()
 
   // 集群汇总（FR-144）：在线/离线/维护计数 + 在线节点资源水位均值。
   const summary = useMemo(() => summarizeNodes(nodes ?? []), [nodes])
@@ -500,16 +589,30 @@ export default function NodesPage() {
   }, [aggregate])
 
   const filtered = useMemo(() => filterNodes(nodes ?? [], query), [nodes, query])
+  const filteredArchived = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const list = archivedNodes ?? []
+    if (!q) return list
+    return list.filter((n) => n.name.toLowerCase().includes(q) || n.host.toLowerCase().includes(q))
+  }, [archivedNodes, query])
   // 有效选中（FR-232 进入默认选第一个 + FR-177 幽灵选中回退）：基于搜索后的 filtered 派生——
   // 未显式选中/选中项不在筛选结果内 → 回退筛选结果第一个；搜索无匹配 → null（右栏落空态，不留旧详情）。
   // 派生而非用 effect 同步 state（避免 set-state-in-effect 级联；selectedId 仍保留用户最后点选）。
   const effectiveSelectedId = useMemo(() => {
-    if (filtered.length === 0) return null
-    if (selectedId !== null && filtered.some((n) => n.id === selectedId)) return selectedId
-    return filtered[0].id
-  }, [filtered, selectedId])
+    const pool = isArchive ? filteredArchived : filtered
+    if (pool.length === 0) return null
+    if (selectedId !== null && pool.some((n) => n.id === selectedId)) return selectedId
+    return pool[0].id
+  }, [filtered, filteredArchived, isArchive, selectedId])
   // 选中节点解析为实时列表对象（节点下线→回退第一个，右栏随轮询刷新而非陈旧快照）。
-  const selected = useMemo(() => resolveSelectedNode(filtered, effectiveSelectedId), [filtered, effectiveSelectedId])
+  const selected = useMemo(
+    () => (isArchive ? null : resolveSelectedNode(filtered, effectiveSelectedId)),
+    [filtered, effectiveSelectedId, isArchive],
+  )
+  const selectedArchived = useMemo(() => {
+    if (!isArchive || effectiveSelectedId === null) return null
+    return filteredArchived.find((n) => n.id === effectiveSelectedId) ?? null
+  }, [filteredArchived, effectiveSelectedId, isArchive])
 
   const toggleCollapsed = () => {
     setCollapsed((c) => {
@@ -585,12 +688,47 @@ export default function NodesPage() {
     })
   }
 
+  // FR-394：归档清理（无 force）；409 → 实例清单 → force DangerConfirm。
+  const confirmPurge = () => {
+    if (!purgeTarget) return
+    const node = purgeTarget
+    setPurgeTarget(null)
+    purge.mutate(
+      { id: node.id },
+      {
+        onSuccess: () => toast.success(t('nodes.purged')),
+        onError: (e: Error & { response?: { status?: number; data?: { error?: string; message?: string; instances?: NodeDeleteBlockedInstance[] } } }) => {
+          if (e?.response?.status === 409 && e.response.data?.error === 'NODE_HAS_INSTANCES') {
+            setPurgeConflict({ node, instances: e.response.data.instances ?? [] })
+            return
+          }
+          toast.error(e?.response?.data?.message || t('common.error'))
+        },
+      },
+    )
+  }
+
+  const confirmForcePurge = () => {
+    if (!forcePurgePending) return
+    const { node } = forcePurgePending
+    setForcePurgePending(null)
+    purge.mutate(
+      { id: node.id, force: true },
+      {
+        onSuccess: (res) => toast.success(t('nodes.forcePurged', { count: res.data.instancesPurged })),
+        onError: (e: Error & { response?: { data?: { message?: string } } }) =>
+          toast.error(e?.response?.data?.message || t('common.error')),
+      },
+    )
+  }
+
   const summaryChips: SummaryChip[] = [
     { key: 'online', label: t('nodes.online'), count: summary.online, level: 'success', breathing: summary.online > 0 },
     { key: 'offline', label: t('nodes.offline'), count: summary.offline, level: 'danger' },
     { key: 'maintenance', label: t('nodes.maintenance'), count: summary.maintenance, level: 'warning' },
   ]
   const gauge = (pct: number | null) => (pct === null ? '--' : `${pct.toFixed(0)}%`)
+  const listLoading = isArchive ? archivedLoading : isLoading
 
   return (
     <div data-page="nodes" className="jm-page-stack flex h-auto min-h-0 flex-col gap-3 lg:h-[calc(100vh-8.25rem)] lg:flex-row">
@@ -613,14 +751,32 @@ export default function NodesPage() {
               <ChevronsRight className="size-4" />
             </button>
             <div className="flex min-h-0 flex-1 flex-col items-center gap-1.5 overflow-y-auto scrollbar-none">
-              {filtered.map((node) => (
-                <NodeRailIcon
-                  key={node.id}
-                  node={node}
-                  selected={node.id === effectiveSelectedId}
-                  onSelect={() => setSelectedId(node.id)}
-                />
-              ))}
+              {isArchive
+                ? filteredArchived.map((node) => (
+                    <button
+                      key={node.id}
+                      type="button"
+                      onClick={() => setSelectedId(node.id)}
+                      title={node.name}
+                      aria-label={node.name}
+                      className={cn(
+                        'grid size-9 place-items-center rounded-lg border text-xs font-semibold transition-colors',
+                        node.id === effectiveSelectedId
+                          ? 'border-primary/40 bg-primary/10 text-primary'
+                          : 'border-transparent text-muted-foreground hover:bg-accent/60',
+                      )}
+                    >
+                      {node.name.slice(0, 1).toUpperCase()}
+                    </button>
+                  ))
+                : filtered.map((node) => (
+                    <NodeRailIcon
+                      key={node.id}
+                      node={node}
+                      selected={node.id === effectiveSelectedId}
+                      onSelect={() => setSelectedId(node.id)}
+                    />
+                  ))}
             </div>
           </div>
         ) : (
@@ -638,13 +794,38 @@ export default function NodesPage() {
                   <ChevronsLeft className="size-4" />
                 </button>
               </div>
-              {/* 集群汇总头：状态计数 chip + CPU/内存/磁盘聚合水位（复用 summarizeNodes，FR-144） */}
-              <SummaryChips chips={summaryChips} />
-              <div className="grid grid-cols-3 gap-1.5">
-                <StatCard label={t('nodes.cpu')} value={gauge(summary.cpuPct)} bar={summary.cpuPct !== null ? { value: summary.cpuPct, level: resourceLevel(summary.cpuPct) } : undefined} />
-                <StatCard label={t('nodes.memory')} value={gauge(summary.memPct)} bar={summary.memPct !== null ? { value: summary.memPct, level: resourceLevel(summary.memPct) } : undefined} />
-                <StatCard label={t('nodes.disk')} value={gauge(summary.diskPct)} bar={summary.diskPct !== null ? { value: summary.diskPct, level: resourceLevel(summary.diskPct) } : undefined} />
+              {/* 活跃 | 归档 页面级分段（FR-393，URL ?view=） */}
+              <div className="inline-flex w-full rounded-md border p-0.5" role="tablist" aria-label={t('nodes.title')}>
+                {([
+                  ['active', 'nodes.viewActive'],
+                  ['archive', 'nodes.viewArchive'],
+                ] as const).map(([k, labelKey]) => (
+                  <button
+                    key={k}
+                    type="button"
+                    role="tab"
+                    aria-selected={view === k}
+                    onClick={() => setView(k)}
+                    className={cn(
+                      'flex-1 rounded px-2 py-1 text-xs transition-colors',
+                      view === k ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {t(labelKey)}
+                  </button>
+                ))}
               </div>
+              {!isArchive && (
+                <>
+                  {/* 集群汇总头：状态计数 chip + CPU/内存/磁盘聚合水位（复用 summarizeNodes，FR-144） */}
+                  <SummaryChips chips={summaryChips} />
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <StatCard label={t('nodes.cpu')} value={gauge(summary.cpuPct)} bar={summary.cpuPct !== null ? { value: summary.cpuPct, level: resourceLevel(summary.cpuPct) } : undefined} />
+                    <StatCard label={t('nodes.memory')} value={gauge(summary.memPct)} bar={summary.memPct !== null ? { value: summary.memPct, level: resourceLevel(summary.memPct) } : undefined} />
+                    <StatCard label={t('nodes.disk')} value={gauge(summary.diskPct)} bar={summary.diskPct !== null ? { value: summary.diskPct, level: resourceLevel(summary.diskPct) } : undefined} />
+                  </div>
+                </>
+              )}
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
@@ -655,13 +836,30 @@ export default function NodesPage() {
                   aria-label={t('nodes.searchPlaceholder')}
                 />
               </div>
-              <Button size="sm" className="w-full" onClick={() => setAddOpen(true)}>
-                <Plus className="size-4" /> {t('nodes.enroll.addNode')}
-              </Button>
+              {!isArchive && (
+                <Button size="sm" className="w-full" onClick={() => setAddOpen(true)}>
+                  <Plus className="size-4" /> {t('nodes.enroll.addNode')}
+                </Button>
+              )}
             </div>
             <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
-              {isLoading ? (
+              {listLoading ? (
                 <p className="px-2 py-4 text-sm text-muted-foreground">{t('common.loading')}</p>
+              ) : isArchive ? (
+                (archivedNodes?.length ?? 0) === 0 ? (
+                  <p className="px-2 py-4 text-sm text-muted-foreground">{t('nodes.archivedEmpty')}</p>
+                ) : filteredArchived.length === 0 ? (
+                  <p className="px-2 py-4 text-sm text-muted-foreground">{t('nodes.searchEmpty')}</p>
+                ) : (
+                  filteredArchived.map((node) => (
+                    <ArchivedNodeListRow
+                      key={node.id}
+                      node={node}
+                      selected={node.id === effectiveSelectedId}
+                      onSelect={() => setSelectedId(node.id)}
+                    />
+                  ))
+                )
               ) : (nodes?.length ?? 0) === 0 ? (
                 <p className="px-2 py-4 text-sm text-muted-foreground">{t('nodes.empty')}</p>
               ) : filtered.length === 0 ? (
@@ -682,9 +880,25 @@ export default function NodesPage() {
         )}
       </aside>
 
-      {/* 右栏：选中节点详情（身份/操作/仪表 + 分段） */}
+      {/* 右栏：活跃详情 / 归档只读详情（FR-393） */}
       <section className="min-h-0 min-w-0 flex-1 overflow-y-auto">
-        {selected ? (
+        {isArchive ? (
+          selectedArchived ? (
+            <ArchivedNodeDetailPane
+              key={selectedArchived.id}
+              node={selectedArchived}
+              onPurge={() => setPurgeTarget(selectedArchived)}
+              purging={purge.isPending}
+            />
+          ) : (
+            <div className="grid h-full place-items-center rounded-lg border border-dashed bg-card/50 shadow-soft">
+              <div className="flex flex-col items-center gap-2 text-center text-muted-foreground">
+                <Server className="size-8 opacity-40" />
+                <p className="text-sm">{t('nodes.archiveSelectHint')}</p>
+              </div>
+            </div>
+          )
+        ) : selected ? (
           <NodeDetailPane
             key={selected.id}
             node={selected}
@@ -751,6 +965,122 @@ export default function NodesPage() {
         onConfirm={confirmMaintenance}
         onCancel={() => setMaintenanceTarget(null)}
       />
+      {/* FR-394：归档清理确认 + 实例守卫 + force 确认（文案明示不清理远端文件）。 */}
+      <DangerConfirm
+        open={purgeTarget !== null}
+        title={t('nodes.purgeConfirmTitle')}
+        description={t('nodes.purgeConfirmDesc', { name: purgeTarget?.name })}
+        confirmLabel={t('nodes.purge')}
+        confirmText={purgeTarget?.name}
+        scope="platform"
+        pending={purge.isPending}
+        onConfirm={confirmPurge}
+        onCancel={() => setPurgeTarget(null)}
+      />
+      <NodePurgeBlockedDialog
+        conflict={purgeConflict}
+        onClose={() => setPurgeConflict(null)}
+        onForce={() => {
+          setForcePurgePending(purgeConflict)
+          setPurgeConflict(null)
+        }}
+      />
+      <DangerConfirm
+        open={forcePurgePending !== null}
+        title={t('nodes.forcePurgeConfirmTitle')}
+        description={t('nodes.forcePurgeConfirmDesc', {
+          name: forcePurgePending?.node.name,
+          count: forcePurgePending?.instances.length,
+        })}
+        confirmLabel={t('nodes.forcePurge')}
+        confirmText={forcePurgePending?.node.name}
+        scope="platform"
+        pending={purge.isPending}
+        onConfirm={confirmForcePurge}
+        onCancel={() => setForcePurgePending(null)}
+      />
+    </div>
+  )
+}
+
+/** 归档列表行：名称 / host / 下线时间（FR-393）。 */
+function ArchivedNodeListRow({
+  node,
+  selected,
+  onSelect,
+}: {
+  node: ArchivedNode
+  selected: boolean
+  onSelect: () => void
+}) {
+  const { t } = useTranslation()
+  const when = node.deletedAt ? new Date(node.deletedAt).toLocaleString() : '--'
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        'flex w-full flex-col gap-0.5 rounded-lg border px-3 py-2 text-left transition-colors',
+        selected ? 'border-primary/40 bg-primary/5' : 'border-transparent hover:bg-accent/50',
+      )}
+    >
+      <span className="truncate text-sm font-medium" title={node.name}>{node.name}</span>
+      <span className="truncate text-xs text-muted-foreground" title={node.host}>{node.host}</span>
+      <span className="truncate text-[11px] text-muted-foreground">
+        {t('nodes.deletedAt')}: {when}
+      </span>
+    </button>
+  )
+}
+
+/** 归档只读详情 + 清理按钮（FR-393/394）。 */
+function ArchivedNodeDetailPane({
+  node,
+  onPurge,
+  purging,
+}: {
+  node: ArchivedNode
+  onPurge: () => void
+  purging: boolean
+}) {
+  const { t } = useTranslation()
+  const when = node.deletedAt ? new Date(node.deletedAt).toLocaleString() : '--'
+  const rows: { label: string; value: React.ReactNode }[] = [
+    { label: t('nodes.ip'), value: node.host },
+    { label: t('nodes.system'), value: `${node.os || '--'} ${node.arch || ''}`.trim() },
+    { label: t('nodes.cpuCores'), value: node.cpuCores > 0 ? node.cpuCores : '--' },
+    { label: t('nodes.deletedAt'), value: when },
+    { label: 'UUID', value: <span className="font-mono text-xs break-all">{node.uuid}</span> },
+  ]
+  return (
+    <div className="space-y-3">
+      <Panel bodyClassName="p-4">
+        <div className="flex items-start gap-3">
+          <span className={cn('flex size-11 shrink-0 items-center justify-center rounded-xl', toneChipClass('neutral'))}>
+            <Server className="size-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="truncate text-base font-semibold" title={node.name}>{node.name}</h2>
+              <Badge variant="outline">{t('nodes.viewArchive')}</Badge>
+            </div>
+            <p className="mt-0.5 truncate text-sm text-muted-foreground">{node.host}</p>
+          </div>
+          <Button variant="destructive" size="sm" onClick={onPurge} disabled={purging}>
+            {t('nodes.purge')}
+          </Button>
+        </div>
+      </Panel>
+      <Panel title={t('nodes.overviewSection')}>
+        <dl className="grid gap-2 sm:grid-cols-2">
+          {rows.map((r) => (
+            <div key={r.label} className="rounded-md border px-3 py-2">
+              <dt className="text-[11px] text-muted-foreground">{r.label}</dt>
+              <dd className="mt-0.5 text-sm">{r.value}</dd>
+            </div>
+          ))}
+        </dl>
+      </Panel>
     </div>
   )
 }
