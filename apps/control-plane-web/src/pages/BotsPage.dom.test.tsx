@@ -137,6 +137,7 @@ describe('BotsPage（mock 假后端）', () => {
   it('⑤ 创建并启动压测会话，展示聚合状态分布', async () => {
     loginMockUser()
     stubCrossDomain()
+    // FR-371 后会话列表在「压测会话」tab；舰队「压测」仍可创建，创建后切 tab 验收列表。
     renderWithProviders(<BotsPage />, { route: '/bots' })
 
     await userEvent.click(await screen.findByRole('button', { name: '压测' }))
@@ -147,6 +148,8 @@ describe('BotsPage（mock 假后端）', () => {
     await userEvent.type(within(dialog).getByLabelText('总数'), '2')
     await userEvent.click(within(dialog).getByRole('button', { name: /^创建$/ }))
 
+    // 切到压测会话 tab 查看列表
+    await userEvent.click(await screen.findByRole('tab', { name: '压测会话' }))
     const prefix = await screen.findByText('stress')
     const row = prefix.closest('tr') as HTMLElement
     expect(within(row).getByText('等待中')).toBeInTheDocument()
@@ -176,7 +179,7 @@ describe('BotsPage（mock 假后端）', () => {
     expect(yaml.value).toContain('behavior: patrol')
   })
 
-  it('⑦ 创建 YAML 压测会话会提交编排并展示摘要与详情', async () => {
+  it('⑦ 创建 YAML 压测会话会提交编排并在会话列表展示', async () => {
     loginMockUser()
     stubCrossDomain()
     let payload: Record<string, unknown> | undefined
@@ -218,32 +221,6 @@ describe('BotsPage（mock 假后端）', () => {
           pageSize: 20,
         }),
       ),
-      http.get(API('/bots/stress-sessions/99'), () =>
-        HttpResponse.json({
-          id: 99,
-          uuid: 'stress-yaml-99',
-          instanceId: 1,
-          count: 20,
-          behavior: 'idle',
-          namePrefix: 'stress',
-          config: { server: '127.0.0.1', port: 25565, auth: 'offline' },
-          orchestrationYaml: payload?.orchestrationYaml,
-          orchestrationSummary: {
-            enabled: true,
-            loop: true,
-            staggerMs: 500,
-            phaseCount: 4,
-            durationSec: 330,
-            behaviors: ['idle', 'patrol', 'guard', 'custom'],
-          },
-          status: 'pending',
-          startedAt: null,
-          stoppedAt: null,
-          createdAt: '2026-06-28T00:00:00Z',
-          updatedAt: '2026-06-28T00:00:00Z',
-          counts: { total: 0, byStatus: {} },
-        }),
-      ),
     )
 
     renderWithProviders(<BotsPage />, { route: '/bots' })
@@ -255,13 +232,13 @@ describe('BotsPage（mock 假后端）', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: /^创建$/ }))
 
     await waitFor(() => expect(payload?.orchestrationYaml).toContain('phases:'))
-    const row = (await screen.findByText('stress')).closest('tr') as HTMLElement
-    expect(within(row).getByText('4 阶段 · 循环 · 330s · idle/patrol/guard/custom')).toBeInTheDocument()
+    expect(payload?.orchestrationYaml).toContain('behavior: patrol')
+    expect(payload?.namePrefix).toBe('stress')
 
-    await userEvent.click(within(row).getByRole('button', { name: '查看编排' }))
-    const detail = await screen.findByRole('dialog')
-    expect(within(detail).getByText('YAML 编排')).toBeInTheDocument()
-    expect(within(detail).getByText(/staggerMs: 500/)).toBeInTheDocument()
-    expect(within(detail).getByText(/behavior: custom/)).toBeInTheDocument()
+    // 列表在 sessions tab；编排详情已迁详情页，本测验收提交载荷 + 列表行
+    await userEvent.click(await screen.findByRole('tab', { name: '压测会话' }))
+    const row = (await screen.findByText('stress')).closest('tr') as HTMLElement
+    expect(within(row).getByText('等待中')).toBeInTheDocument()
+    expect(within(row).getByRole('button', { name: '启动' })).toBeInTheDocument()
   })
 })
