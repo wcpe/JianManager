@@ -170,6 +170,88 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已下线", "instancesPurged": result.InstancesPurged})
 }
 
+// ListArchived 已下线（软删）节点列表（FR-393，仅平台管理员）。
+func (h *NodeHandler) ListArchived(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	nodes, err := h.nodeSvc.ListArchived()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询归档节点失败"})
+		return
+	}
+	c.JSON(http.StatusOK, nodes)
+}
+
+// GetArchived 单个归档节点详情（FR-393，仅平台管理员）。
+func (h *NodeHandler) GetArchived(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	node, err := h.nodeSvc.GetArchived(id)
+	if err != nil {
+		if errors.Is(err, service.ErrNodeNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "归档节点不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
+		return
+	}
+	c.JSON(http.StatusOK, node)
+}
+
+// PurgeArchived 彻底清理归档节点（FR-394，硬删库记录，不清理远端文件）。
+func (h *NodeHandler) PurgeArchived(c *gin.Context) {
+	if !requirePlatformAdmin(c) {
+		return
+	}
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	force := false
+	if raw := c.Query("force"); raw != "" {
+		force, err = strconv.ParseBool(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "force 参数格式错误"})
+			return
+		}
+	}
+
+	result, err := h.nodeSvc.Purge(id, force)
+	if err != nil {
+		var hasInst *service.NodeHasInstancesError
+		if errors.As(err, &hasInst) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":     "NODE_HAS_INSTANCES",
+				"message":   err.Error(),
+				"instances": hasInst.Instances,
+			})
+			return
+		}
+		if errors.Is(err, service.ErrNodeNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "归档节点不存在"})
+			return
+		}
+		if errors.Is(err, service.ErrNodeNotArchived) {
+			c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+			return
+		}
+		c.JSON(http.StatusUnprocessableEntity, gin.H{"error": "BUSINESS_ERROR", "message": err.Error()})
+		return
+	}
+
+	h.recordRepairAudit(c, "node.purge", strconv.FormatUint(uint64(id), 10), map[string]any{
+		"force":           force,
+		"instancesPurged": result.InstancesPurged,
+	})
+	c.JSON(http.StatusOK, gin.H{"message": "已清理", "instancesPurged": result.InstancesPurged})
+}
+
 // Metrics 返回节点实时指标快照（仅平台管理员）。
 func (h *NodeHandler) Metrics(c *gin.Context) {
 	if !requirePlatformAdmin(c) {
@@ -322,6 +404,10 @@ func (h *NodeHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		// 坏节点修复（见 ADR-039 §2）：诊断只读 + 破坏性修复（二次确认 + 审计）。
 		// 静态段 repair 须在 /:id 之前注册，避免被 :id 通配吞掉。
 		nodes.GET("/repair/suspects", h.Suspects)
+		// 归档列表/详情/清理（FR-393/394）：静态段 archived 须在 /:id 之前。
+		nodes.GET("/archived", h.ListArchived)
+		nodes.GET("/archived/:id", h.GetArchived)
+		nodes.DELETE("/archived/:id", h.PurgeArchived)
 		nodes.GET("/:id", h.Get)
 		nodes.GET("/:id/metrics", h.Metrics)
 		nodes.GET("/:id/orphans", h.Orphans)

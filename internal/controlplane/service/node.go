@@ -19,6 +19,8 @@ var (
 	ErrNodeNotFound = errors.New("节点不存在")
 	// ErrNodeInMaintenance 目标节点处于维护模式，拒绝新实例调度。参见 FR-048。
 	ErrNodeInMaintenance = errors.New("节点处于维护模式，已拒绝新实例调度")
+	// ErrNodeNotArchived 目标节点未下线（非软删归档），拒绝彻底清理。参见 FR-394。
+	ErrNodeNotArchived = errors.New("节点未下线，请先下线再清理")
 )
 
 // NodeService 节点管理服务。
@@ -371,6 +373,126 @@ func (s *NodeService) Delete(id uint, force bool) (*NodeDeleteResult, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("删除节点失败: %w", err)
+	}
+	return result, nil
+}
+
+// ArchivedNode 归档节点对外视图（FR-393）：公开字段 + deletedAt，不含 secret。
+type ArchivedNode struct {
+	ID              uint              `json:"id"`
+	UUID            string            `json:"uuid"`
+	Name            string            `json:"name"`
+	Host            string            `json:"host"`
+	GRPCPort        int               `json:"grpcPort"`
+	WSPort          int               `json:"wsPort"`
+	Status          model.NodeStatus  `json:"status"`
+	OS              string            `json:"os"`
+	Arch            string            `json:"arch"`
+	CPUCores        int               `json:"cpuCores"`
+	MemoryMB        int64             `json:"memoryMb"`
+	DiskTotalMB     int64             `json:"diskTotalMb"`
+	Maintenance     bool              `json:"maintenance"`
+	LastHeartbeat   *time.Time        `json:"lastHeartbeat"`
+	CreatedAt       time.Time         `json:"createdAt"`
+	UpdatedAt       time.Time         `json:"updatedAt"`
+	DeletedAt       time.Time         `json:"deletedAt"`
+}
+
+// toArchivedNode 将软删 Node 映射为归档 DTO。
+func toArchivedNode(n *model.Node) ArchivedNode {
+	out := ArchivedNode{
+		ID: n.ID, UUID: n.UUID, Name: n.Name, Host: n.Host,
+		GRPCPort: n.GRPCPort, WSPort: n.WSPort, Status: n.Status,
+		OS: n.OS, Arch: n.Arch, CPUCores: n.CPUCores, MemoryMB: n.MemoryMB,
+		DiskTotalMB: n.DiskTotalMB, Maintenance: n.Maintenance,
+		LastHeartbeat: n.LastHeartbeat, CreatedAt: n.CreatedAt, UpdatedAt: n.UpdatedAt,
+	}
+	if n.DeletedAt.Valid {
+		out.DeletedAt = n.DeletedAt.Time
+	}
+	return out
+}
+
+// ListArchived 返回已软删下线节点（FR-393），按 deleted_at 倒序；空列表非 nil。
+func (s *NodeService) ListArchived() ([]ArchivedNode, error) {
+	var nodes []model.Node
+	if err := s.db.Unscoped().Where("deleted_at IS NOT NULL").
+		Order("deleted_at DESC").Find(&nodes).Error; err != nil {
+		return nil, fmt.Errorf("查询归档节点失败: %w", err)
+	}
+	out := make([]ArchivedNode, 0, len(nodes))
+	for i := range nodes {
+		out = append(out, toArchivedNode(&nodes[i]))
+	}
+	return out, nil
+}
+
+// GetArchived 按 ID 取单个归档节点；非归档或不存在 → ErrNodeNotFound（FR-393）。
+func (s *NodeService) GetArchived(id uint) (*ArchivedNode, error) {
+	var node model.Node
+	if err := s.db.Unscoped().Where("id = ? AND deleted_at IS NOT NULL", id).
+		First(&node).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNodeNotFound
+		}
+		return nil, fmt.Errorf("查询归档节点失败: %w", err)
+	}
+	a := toArchivedNode(&node)
+	return &a, nil
+}
+
+// Purge 彻底清理归档节点（FR-394）：硬删库记录；有实例须 force 级联硬删实例平台记录，
+// 不清理远端文件。活跃（未软删）节点返回 ErrNodeNotArchived。
+func (s *NodeService) Purge(id uint, force bool) (*NodeDeleteResult, error) {
+	var node model.Node
+	if err := s.db.Unscoped().Where("id = ?", id).First(&node).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNodeNotFound
+		}
+		return nil, fmt.Errorf("查询节点失败: %w", err)
+	}
+	if !node.DeletedAt.Valid {
+		return nil, ErrNodeNotArchived
+	}
+
+	// 含已软删实例（下线 force 后仍挂 node_id）。
+	var instances []model.Instance
+	if err := s.db.Unscoped().Where("node_id = ?", id).Find(&instances).Error; err != nil {
+		return nil, fmt.Errorf("查询节点实例失败: %w", err)
+	}
+	if len(instances) > 0 && !force {
+		briefs := make([]NodeInstanceBrief, 0, len(instances))
+		for _, inst := range instances {
+			briefs = append(briefs, NodeInstanceBrief{ID: inst.ID, Name: inst.Name, Status: inst.Status})
+		}
+		return nil, &NodeHasInstancesError{Instances: briefs}
+	}
+
+	result := &NodeDeleteResult{}
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if len(instances) > 0 {
+			ids := make([]uint, 0, len(instances))
+			for _, inst := range instances {
+				ids = append(ids, inst.ID)
+			}
+			if err := tx.Where("instance_id IN ?", ids).Delete(&model.GroupInstance{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("proxy_id IN ? OR backend_id IN ?", ids, ids).Delete(&model.ServerRegistration{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("instance_id IN ?", ids).Delete(&model.NetworkMember{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Unscoped().Where("node_id = ?", id).Delete(&model.Instance{}).Error; err != nil {
+				return err
+			}
+			result.InstancesPurged = len(ids)
+		}
+		return tx.Unscoped().Delete(&model.Node{}, id).Error
+	})
+	if err != nil {
+		return nil, fmt.Errorf("清理归档节点失败: %w", err)
 	}
 	return result, nil
 }

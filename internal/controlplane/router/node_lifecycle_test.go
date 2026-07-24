@@ -116,6 +116,116 @@ func TestNode_Delete_ForceInvalidValue(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// TestNode_Archived_ListAndGet 下线后主列表消失、归档列表可见（FR-393）。
+func TestNode_Archived_ListAndGet(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	require.NoError(t, db.Model(&model.Node{}).Where("id = ?", node.ID).Update("status", model.NodeStatusOffline).Error)
+
+	w := makeRequest(r, "DELETE", "/api/v1/nodes/"+itoa(node.ID), nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// 主列表无此节点。
+	w = makeRequest(r, "GET", "/api/v1/nodes", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	active := parseJSONArray(t, w)
+	for _, item := range active {
+		m := item.(map[string]interface{})
+		assert.NotEqual(t, float64(node.ID), m["id"])
+	}
+
+	// 归档列表可见。
+	w = makeRequest(r, "GET", "/api/v1/nodes/archived", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	archived := parseJSONArray(t, w)
+	require.NotEmpty(t, archived)
+	found := false
+	for _, item := range archived {
+		m := item.(map[string]interface{})
+		if m["id"] == float64(node.ID) {
+			found = true
+			assert.NotEmpty(t, m["deletedAt"])
+			assert.Equal(t, node.Name, m["name"])
+		}
+	}
+	require.True(t, found)
+
+	// 归档详情。
+	w = makeRequest(r, "GET", "/api/v1/nodes/archived/"+itoa(node.ID), nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	body := parseJSON(t, w)
+	assert.Equal(t, float64(node.ID), body["id"])
+	assert.NotEmpty(t, body["deletedAt"])
+}
+
+// TestNode_Purge_HardDelete 归档清理后双侧不可见（FR-394）。
+func TestNode_Purge_HardDelete(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	require.NoError(t, db.Model(&model.Node{}).Where("id = ?", node.ID).Update("status", model.NodeStatusOffline).Error)
+	w := makeRequest(r, "DELETE", "/api/v1/nodes/"+itoa(node.ID), nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	w = makeRequest(r, "DELETE", "/api/v1/nodes/archived/"+itoa(node.ID), nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "已清理", parseJSON(t, w)["message"])
+
+	w = makeRequest(r, "GET", "/api/v1/nodes/archived/"+itoa(node.ID), nil, token)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+	w = makeRequest(r, "GET", "/api/v1/nodes/"+itoa(node.ID), nil, token)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	var count int64
+	db.Unscoped().Model(&model.Node{}).Where("id = ?", node.ID).Count(&count)
+	assert.Zero(t, count)
+}
+
+// TestNode_Purge_ActiveRejected 未下线节点不可清理（FR-394）。
+func TestNode_Purge_ActiveRejected(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	require.NoError(t, db.Model(&model.Node{}).Where("id = ?", node.ID).Update("status", model.NodeStatusOffline).Error)
+
+	w := makeRequest(r, "DELETE", "/api/v1/nodes/archived/"+itoa(node.ID), nil, token)
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+}
+
+// TestNode_Purge_WithInstances_Force 有实例须 force 级联硬删（FR-394）。
+func TestNode_Purge_WithInstances_Force(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	node := createTestNode(t, db)
+	require.NoError(t, db.Model(&model.Node{}).Where("id = ?", node.ID).Update("status", model.NodeStatusOffline).Error)
+	inst := &model.Instance{
+		NodeID: node.ID, Name: "left-over", Type: model.InstanceTypeGeneric,
+		ProcessType: model.ProcessTypeDirect, StartCommand: "x", Status: model.InstanceStatusStopped,
+	}
+	require.NoError(t, db.Create(inst).Error)
+	// 下线 force 软删节点+实例。
+	w := makeRequest(r, "DELETE", "/api/v1/nodes/"+itoa(node.ID)+"?force=true", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// 未 force 清理 → 409。
+	w = makeRequest(r, "DELETE", "/api/v1/nodes/archived/"+itoa(node.ID), nil, token)
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Equal(t, "NODE_HAS_INSTANCES", parseJSON(t, w)["error"])
+
+	w = makeRequest(r, "DELETE", "/api/v1/nodes/archived/"+itoa(node.ID)+"?force=true", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, float64(1), parseJSON(t, w)["instancesPurged"])
+
+	var count int64
+	db.Unscoped().Model(&model.Instance{}).Where("node_id = ?", node.ID).Count(&count)
+	assert.Zero(t, count)
+}
+
 // TestNode_Delete_NotFound 删除不存在的节点返回错误。
 func TestNode_Delete_NotFound(t *testing.T) {
 	db := setupTestDB(t)

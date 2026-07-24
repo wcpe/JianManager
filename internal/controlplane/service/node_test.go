@@ -14,10 +14,12 @@ import (
 	"github.com/wcpe/JianManager/proto/workerpb"
 )
 
-// newNodeTestDB 为节点服务测试准备内存库（FR-048）。
+// newNodeTestDB 为节点服务测试准备隔离内存库（FR-048）。
+// 每测独立 DSN，避免 file::memory:?cache=shared 跨测串库。
 func newNodeTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{})
+	dsn := "file:node-" + t.Name() + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(
 		&model.Node{},
@@ -334,6 +336,139 @@ func TestNodeService_Delete_OnlineForceStillRejected(t *testing.T) {
 	db.Model(&model.Node{}).Where("id = ?", node.ID).Count(&count)
 	require.Equal(t, int64(1), count)
 	db.Model(&model.Instance{}).Where("id = ?", inst.ID).Count(&count)
+	require.Equal(t, int64(1), count)
+}
+
+// ListArchived（FR-393）：仅返回已软删节点；活跃节点不出现；按 deleted_at 倒序。
+func TestNodeService_ListArchived_OnlySoftDeleted(t *testing.T) {
+	db := newNodeTestDB(t)
+	svc := NewNodeService(db)
+	active := newTestNode(t, db, "active")
+	offline := newTestNode(t, db, "archived-a")
+	require.NoError(t, db.Model(offline).Update("status", model.NodeStatusOffline).Error)
+	_, err := svc.Delete(offline.ID, false)
+	require.NoError(t, err)
+	offline2 := newTestNode(t, db, "archived-b")
+	require.NoError(t, db.Model(offline2).Update("status", model.NodeStatusOffline).Error)
+	_, err = svc.Delete(offline2.ID, false)
+	require.NoError(t, err)
+
+	list, err := svc.ListArchived()
+	require.NoError(t, err)
+	require.Len(t, list, 2)
+	// 后下线的在前（deleted_at 倒序）。
+	require.Equal(t, offline2.ID, list[0].ID)
+	require.Equal(t, offline.ID, list[1].ID)
+	require.False(t, list[0].DeletedAt.IsZero())
+	// 活跃节点不在归档。
+	for _, n := range list {
+		require.NotEqual(t, active.ID, n.ID)
+	}
+	// 主列表仍仅活跃。
+	activeList, err := svc.List()
+	require.NoError(t, err)
+	require.Len(t, activeList, 1)
+	require.Equal(t, active.ID, activeList[0].ID)
+}
+
+// GetArchived（FR-393）：仅软删行可取；活跃或不存在 → ErrNodeNotFound。
+func TestNodeService_GetArchived(t *testing.T) {
+	db := newNodeTestDB(t)
+	svc := NewNodeService(db)
+	active := newTestNode(t, db, "active")
+	offline := newTestNode(t, db, "gone")
+	require.NoError(t, db.Model(offline).Update("status", model.NodeStatusOffline).Error)
+	_, err := svc.Delete(offline.ID, false)
+	require.NoError(t, err)
+
+	got, err := svc.GetArchived(offline.ID)
+	require.NoError(t, err)
+	require.Equal(t, offline.ID, got.ID)
+	require.False(t, got.DeletedAt.IsZero())
+
+	_, err = svc.GetArchived(active.ID)
+	require.ErrorIs(t, err, ErrNodeNotFound)
+	_, err = svc.GetArchived(999)
+	require.ErrorIs(t, err, ErrNodeNotFound)
+}
+
+// Purge（FR-394）：无实例硬删后 Unscoped 不可见。
+func TestNodeService_Purge_HardDeletesArchived(t *testing.T) {
+	db := newNodeTestDB(t)
+	svc := NewNodeService(db)
+	node := newTestNode(t, db, "gone")
+	require.NoError(t, db.Model(node).Update("status", model.NodeStatusOffline).Error)
+	_, err := svc.Delete(node.ID, false)
+	require.NoError(t, err)
+
+	result, err := svc.Purge(node.ID, false)
+	require.NoError(t, err)
+	require.Zero(t, result.InstancesPurged)
+
+	var total int64
+	db.Unscoped().Model(&model.Node{}).Where("id = ?", node.ID).Count(&total)
+	require.Zero(t, total)
+	list, err := svc.ListArchived()
+	require.NoError(t, err)
+	require.Empty(t, list)
+}
+
+// Purge 有残留实例未 force → 409 型错误；force 后级联硬删实例与关联。
+func TestNodeService_Purge_ForceCascadesInstances(t *testing.T) {
+	db := newNodeTestDB(t)
+	svc := NewNodeService(db)
+	node := newTestNode(t, db, "gone")
+	other := newTestNode(t, db, "other")
+	require.NoError(t, db.Model(node).Update("status", model.NodeStatusOffline).Error)
+
+	inst1 := &model.Instance{NodeID: node.ID, Name: "i1", Type: model.InstanceTypeGeneric, ProcessType: model.ProcessTypeDirect, StartCommand: "x", Status: model.InstanceStatusStopped}
+	inst2 := &model.Instance{NodeID: node.ID, Name: "i2", Type: model.InstanceTypeGeneric, ProcessType: model.ProcessTypeDirect, StartCommand: "x", Status: model.InstanceStatusCrashed}
+	otherInst := &model.Instance{NodeID: other.ID, Name: "other", Type: model.InstanceTypeGeneric, ProcessType: model.ProcessTypeDirect, StartCommand: "x", Status: model.InstanceStatusStopped}
+	require.NoError(t, db.Create(inst1).Error)
+	require.NoError(t, db.Create(inst2).Error)
+	require.NoError(t, db.Create(otherInst).Error)
+	require.NoError(t, db.Create(&model.GroupInstance{GroupID: 1, InstanceID: inst1.ID}).Error)
+	require.NoError(t, db.Create(&model.ServerRegistration{ProxyID: inst1.ID, BackendID: inst2.ID, Alias: "b1"}).Error)
+	require.NoError(t, db.Create(&model.NetworkMember{NetworkID: 1, InstanceID: inst2.ID}).Error)
+
+	// 下线时 force 软删节点+实例（归档后实例仍挂 node_id，Unscoped 可见）。
+	_, err := svc.Delete(node.ID, true)
+	require.NoError(t, err)
+
+	_, err = svc.Purge(node.ID, false)
+	require.Error(t, err)
+	var hasInst *NodeHasInstancesError
+	require.ErrorAs(t, err, &hasInst)
+	require.Len(t, hasInst.Instances, 2)
+
+	result, err := svc.Purge(node.ID, true)
+	require.NoError(t, err)
+	require.Equal(t, 2, result.InstancesPurged)
+
+	var count int64
+	db.Unscoped().Model(&model.Node{}).Where("id = ?", node.ID).Count(&count)
+	require.Zero(t, count)
+	db.Unscoped().Model(&model.Instance{}).Where("node_id = ?", node.ID).Count(&count)
+	require.Zero(t, count)
+	db.Model(&model.GroupInstance{}).Where("instance_id = ?", inst1.ID).Count(&count)
+	require.Zero(t, count)
+	db.Model(&model.Instance{}).Where("id = ?", otherInst.ID).Count(&count)
+	require.Equal(t, int64(1), count)
+}
+
+// Purge 活跃节点拒绝（须先下线进归档）。
+func TestNodeService_Purge_ActiveRejected(t *testing.T) {
+	db := newNodeTestDB(t)
+	svc := NewNodeService(db)
+	node := newTestNode(t, db, "live")
+	// 即便离线但未软删，也非归档。
+	require.NoError(t, db.Model(node).Update("status", model.NodeStatusOffline).Error)
+
+	_, err := svc.Purge(node.ID, false)
+	require.ErrorIs(t, err, ErrNodeNotArchived)
+
+	var count int64
+	db.Model(&model.Node{}).Where("id = ?", node.ID).Count(&count)
 	require.Equal(t, int64(1), count)
 }
 
