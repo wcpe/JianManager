@@ -209,7 +209,8 @@ export default function ExplorerTabHost({
     : dockedTabs[0]?.id
 
   return (
-    <div className="flex h-full min-h-0 flex-col" data-testid="explorer-tab-host">
+    // min-h：停靠 pane 为 absolute，不撑开父级；控制台资源卡等祖先未给满高时避免高度塌成 0（真机 FR-378）
+    <div className="flex h-full min-h-[480px] flex-col" data-testid="explorer-tab-host">
       {/* 标签条：仅非浮动签 */}
       <div className="flex shrink-0 items-center gap-1 border-b bg-muted/20 px-1 py-1">
         <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto">
@@ -277,8 +278,8 @@ export default function ExplorerTabHost({
         </Button>
       </div>
 
-      {/* 停靠内容区 + 各标签 Explorer（浮动的用 fixed） */}
-      <div className="relative min-h-0 flex-1">
+      {/* 停靠内容区 + 各标签 Explorer（浮动的用 fixed）；min-h 与 absolute 子级配套，避免 flex 链塌缩 */}
+      <div className="relative min-h-[440px] flex-1">
         {state.tabs.map((tab, index) => {
           const floated = tab.floated
           const geom = geoms[tab.id] ?? defaultGeom(index)
