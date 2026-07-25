@@ -432,7 +432,7 @@
 - **错误**: 404 会话不存在；409 `BOT_LOAD_REPORT_NOT_READY` 未终态；400 非法 format
 
 ### GET /api/v1/bots/stress-sessions/:id/stream
-- **描述**: 压测会话最小 SSE 聚合流（FR-370）：`event: connected` 后周期 `event: snapshot`（状态/counts/免责声明）。非完整 5s 指标聚合，供观测页真连
+- **描述**: 压测会话 SSE（FR-370/372）。握手 `event: connected` 后推送契约帧：`init`（`{run,lastEventId}`）、周期 `counts`（及 `run-state`）、有新样本时 `metric`、终态 `complete`（含 `reportReady`/`disclaimer`）。兼容旧客户端仍发 `connected`；完整 history 投影后续迭代
 - **关联 FR**: FR-370 / FR-372
 - **权限**: 同 report
 - **响应**: `text/event-stream`

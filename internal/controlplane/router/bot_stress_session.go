@@ -626,7 +626,7 @@ func (h *BotStressSessionHandler) Report(c *gin.Context) {
 	}
 }
 
-// Stream 最小会话 SSE（FR-370）：周期推送会话摘要，供观测页真连；非完整指标聚合。
+// Stream 会话 SSE（FR-370/372）：对齐前端 init/counts/metric/complete。
 func (h *BotStressSessionHandler) Stream(c *gin.Context) {
 	id, err := parseID(c)
 	if err != nil {
@@ -654,6 +654,7 @@ func (h *BotStressSessionHandler) Stream(c *gin.Context) {
 		return true
 	}
 
+	// 兼容旧客户端：仍发 connected 握手帧。
 	if !writeSSE("connected", gin.H{"sessionId": id, "ts": time.Now().UTC().UnixMilli()}) {
 		return
 	}
@@ -661,8 +662,9 @@ func (h *BotStressSessionHandler) Stream(c *gin.Context) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	ctx := c.Request.Context()
-	// 首帧立即推一次 snapshot。
-	if !h.writeSessionStreamSnapshot(c, id, writeSSE) {
+	var lastMetricTS string
+	// 首帧立即推 init + counts（+ metric 若有）。
+	if done := h.writeSessionStreamAligned(c, id, writeSSE, &lastMetricTS, true); done {
 		return
 	}
 	for {
@@ -670,11 +672,91 @@ func (h *BotStressSessionHandler) Stream(c *gin.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if !h.writeSessionStreamSnapshot(c, id, writeSSE) {
+			if done := h.writeSessionStreamAligned(c, id, writeSSE, &lastMetricTS, false); done {
 				return
 			}
 		}
 	}
+}
+
+// writeSessionStreamAligned 推送契约帧；返回 true 表示应关闭流（终态 complete 或硬错误）。
+func (h *BotStressSessionHandler) writeSessionStreamAligned(c *gin.Context, id uint, writeSSE func(string, any) bool, lastMetricTS *string, first bool) bool {
+	view, err := h.svc.Get(id)
+	if err != nil {
+		if errors.Is(err, service.ErrBotStressSessionNotFound) {
+			_ = writeSSE("error", gin.H{"error": "NOT_FOUND", "message": "压测会话不存在"})
+			return true
+		}
+		slog.Debug("压测 SSE 读取会话失败", "id", id, "err", err)
+		return false
+	}
+
+	// 无 metrics 采样器时退回旧 snapshot，避免空指针。
+	if h.metrics == nil {
+		return !h.writeSessionStreamSnapshot(c, id, writeSSE)
+	}
+
+	snap, err := h.metrics.ProjectStreamSnapshot(c.Request.Context(), id, view)
+	if err != nil {
+		slog.Debug("压测 SSE 投影失败", "id", id, "err", err)
+		return false
+	}
+	ts := snap.Timestamp.UTC().Format(time.RFC3339Nano)
+
+	if first {
+		if !writeSSE("init", gin.H{
+			"run":         snap.Run,
+			"lastEventId": "0",
+		}) {
+			return true
+		}
+	} else if snap.RunState != "" {
+		// 周期同步 run-state，便于前端状态条刷新。
+		if !writeSSE("run-state", gin.H{
+			"runState":       snap.RunState,
+			"verdict":        snap.Verdict,
+			"verdictReasons": []any{},
+			"currentStage":   snap.CurrentStage,
+			"timestamp":      ts,
+		}) {
+			return true
+		}
+	}
+
+	if !writeSSE("counts", gin.H{
+		"counts":        snap.LoadCounts,
+		"commandCounts": map[string]any{"command-schedule": snap.CommandTotal},
+		"barrier":       snap.Barrier,
+		"timestamp":     ts,
+	}) {
+		return true
+	}
+
+	if snap.Metric != nil {
+		metricTS := snap.Metric.Timestamp.UTC().Format(time.RFC3339Nano)
+		if lastMetricTS == nil || *lastMetricTS != metricTS {
+			if !writeSSE("metric", service.MetricPointSSEPayload(*snap.Metric)) {
+				return true
+			}
+			if lastMetricTS != nil {
+				*lastMetricTS = metricTS
+			}
+		}
+	}
+
+	if snap.Terminal {
+		payload := gin.H{
+			"runState":       snap.RunState,
+			"verdict":        snap.Verdict,
+			"verdictReasons": []any{},
+			"reportReady":    snap.ReportReady,
+			"disclaimer":     "命令发送成功仅表示 bot.chat 未同步抛错，不证明服务器接受或业务效果。",
+			"timestamp":      ts,
+		}
+		_ = writeSSE("complete", payload)
+		return true
+	}
+	return false
 }
 
 func (h *BotStressSessionHandler) writeSessionStreamSnapshot(c *gin.Context, id uint, writeSSE func(string, any) bool) bool {

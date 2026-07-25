@@ -119,15 +119,10 @@ func TestBotStressSession_ReportAndStream(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "runId")
 	assert.Contains(t, w.Body.String(), sess.UUID)
 
-	// SSE：读到 connected + snapshot 即可（短超时客户端）
+	// SSE：读到 connected + init + counts（终态还会 complete）
 	req, err := http.NewRequest(http.MethodGet, "/api/v1/bots/stress-sessions/"+itoa(sess.ID)+"/stream", nil)
 	require.NoError(t, err)
 	req.Header.Set("Authorization", "Bearer "+token)
-	// 使用 httptest recorder 只能看到缓冲；直接调 handler 经 makeRequest 不适合长连接。
-	// 这里用短读：gin 测试引擎 ServeHTTP 会跑到 ctx cancel——用带 cancel 的 context 不方便。
-	// 改为断言路由存在且 200 + Content-Type event-stream（首包写入后客户端断开由测试侧不读完）。
-	// 简化：用 makeRequest 会阻塞到超时；改用自定义 recorder + 立即 cancel 不可行。
-	// 采用：启动 goroutine 读 body 前几字节。
 	rec := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
@@ -137,7 +132,8 @@ func TestBotStressSession_ReportAndStream(t *testing.T) {
 	// 等首包
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(rec.Body.String(), "event: connected") && strings.Contains(rec.Body.String(), "event: snapshot") {
+		body := rec.Body.String()
+		if strings.Contains(body, "event: init") && strings.Contains(body, "event: counts") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -145,8 +141,10 @@ func TestBotStressSession_ReportAndStream(t *testing.T) {
 	body := rec.Body.String()
 	assert.Contains(t, rec.Header().Get("Content-Type"), "text/event-stream")
 	assert.Contains(t, body, "event: connected")
-	assert.Contains(t, body, "event: snapshot")
-	assert.Contains(t, body, `"sessionId":`)
+	assert.Contains(t, body, "event: init")
+	assert.Contains(t, body, "event: counts")
+	assert.Contains(t, body, "event: complete")
+	assert.Contains(t, body, `"runState":"completed"`)
 	// 取消请求上下文：关闭底层连接不可直接，进程级测试结束即可。
 	_ = done
 }
