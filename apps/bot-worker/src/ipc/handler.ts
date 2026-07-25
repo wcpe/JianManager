@@ -21,7 +21,7 @@ import type {
   IpcCommand,
 } from './types.js'
 
-const MAX_BOTS = 50
+const MAX_BOTS = Number.parseInt(process.env.JM_BOT_WORKER_MAX_BOTS || '50', 10) || 50
 const BOT_WORKER_VERSION = '0.4.0'
 
 const prewarmPool = new PrewarmPool({ count: 0, maxPoolSize: MAX_BOTS })
