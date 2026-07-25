@@ -85,7 +85,7 @@ func TestBotStressSession_ReportAndStream(t *testing.T) {
 		InstanceID: inst, Name: "report-run", NamePrefix: "r", BotCount: 3,
 		Status: model.BotStressSessionStopped, SchemaVersion: 2,
 		RunState: &runState, Verdict: &verdict, MaxStableBots: &maxStable,
-		Config: `{"server":"127.0.0.1","port":25565}`,
+		Config:         `{"server":"127.0.0.1","port":25565}`,
 		FailureSummary: `{"command_send_failed":1}`,
 		ReportSummary:  "ok",
 	}
@@ -149,6 +149,40 @@ func TestBotStressSession_ReportAndStream(t *testing.T) {
 	assert.Contains(t, body, `"sessionId":`)
 	// 取消请求上下文：关闭底层连接不可直接，进程级测试结束即可。
 	_ = done
+}
+
+// TestBotStressSession_Metrics FR-370：5s 样本可读。
+func TestBotStressSession_Metrics(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	createTestNode(t, db)
+	inst := createInstanceViaAPI(t, r, token, 1, createGroupViaAPI(t, r, token, "g-metric"))
+	runState := model.BotLoadRunRunning
+	stage := 0
+	sess := &model.BotStressSession{
+		InstanceID: inst, Name: "metric-run", NamePrefix: "m", BotCount: 1,
+		Status: model.BotStressSessionRunning, SchemaVersion: 2, RunState: &runState, CurrentStage: &stage,
+		Config: `{"server":"127.0.0.1","port":25565}`,
+	}
+	require.NoError(t, db.Create(sess).Error)
+	ts := time.Date(2026, 7, 25, 5, 0, 0, 0, time.UTC)
+	require.NoError(t, db.Create(&model.BotLoadMetricSample{
+		StressSessionID: sess.ID, SampledAt: ts, StageIndex: 0,
+		CountsJSON: `{"planned":1,"total":1,"connected":1}`, CommandJSON: `{"sent":1}`,
+		BarrierJSON: `{}`, ExecutorJSON: `[]`, LatencyJSON: `{}`, ErrorsJSON: `{}`,
+	}).Error)
+
+	w := makeRequest(r, "GET", "/api/v1/bots/stress-sessions/"+itoa(sess.ID)+"/metrics?resolution=raw", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	body := parseJSON(t, w)
+	assert.Equal(t, "raw", body["resolution"])
+	items, ok := body["items"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, items, 1)
+	first := items[0].(map[string]interface{})
+	counts := first["counts"].(map[string]interface{})
+	assert.Equal(t, float64(1), counts["connected"])
 }
 
 func TestBotStressSession_GetDetailReturnsOrchestration(t *testing.T) {

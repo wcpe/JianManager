@@ -437,6 +437,14 @@
 - **权限**: 同 report
 - **响应**: `text/event-stream`
 
+### GET /api/v1/bots/stress-sessions/:id/metrics
+- **描述**: 读取压测会话 5s 聚合指标样本（FR-370）。样本由 CP 后台 `BotLoadMetricSampler` 写入 `bot_load_metric_samples`（Bot 状态计数 + 命令 checkpoint 计数）；首版延迟百分位/targetLegacy 多为 null/空
+- **关联 FR**: FR-370 / FR-372
+- **权限**: 同 report
+- **Query**: `from?`/`to?`（RFC3339）；`resolution=raw|15s|1m|5m`（默认 raw）；响应最多约 1200 点
+- **响应**: `{ items:[{timestamp,stageIndex,counts,command,barrier,executor,latency,errors,targetLegacy?}], from, to, resolution }`
+- **错误**: 400 非法时间；404 会话不存在或功能未启用
+
 ### POST /api/v1/instances/:id/stop
 - **描述**: 停止实例
 - **关联 FR**: FR-005

@@ -25,13 +25,15 @@ type BotStressSessionHandler struct {
 	preflight *service.BotLoadPreflightService
 	execution *service.BotLoadExecutionService
 	report    *service.BotLoadReportService
+	metrics   *service.BotLoadMetricSampler
 	audit     *service.AuditService
 }
 
 // NewBotStressSessionHandler 创建 Bot 压测会话路由处理器。
 // report 可为 nil：此时 report/stream 端点返回 404 功能未启用。
-func NewBotStressSessionHandler(svc *service.BotStressSessionService, authz *service.AuthzService, preflight *service.BotLoadPreflightService, execution *service.BotLoadExecutionService, report *service.BotLoadReportService, audit *service.AuditService) *BotStressSessionHandler {
-	return &BotStressSessionHandler{svc: svc, authz: authz, preflight: preflight, execution: execution, report: report, audit: audit}
+// metrics 可为 nil：此时 metrics 端点返回 404。
+func NewBotStressSessionHandler(svc *service.BotStressSessionService, authz *service.AuthzService, preflight *service.BotLoadPreflightService, execution *service.BotLoadExecutionService, report *service.BotLoadReportService, metrics *service.BotLoadMetricSampler, audit *service.AuditService) *BotStressSessionHandler {
+	return &BotStressSessionHandler{svc: svc, authz: authz, preflight: preflight, execution: execution, report: report, metrics: metrics, audit: audit}
 }
 
 // Create 创建压测会话。
@@ -539,10 +541,53 @@ func (h *BotStressSessionHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		if h.execution != nil {
 			sessions.POST("/:id/retry-failed", h.RetryFailed)
 		}
-		// FR-370：终态报告 + 最小 SSE 聚合流（路径固定，禁止内容协商复用）。
+		// FR-370：终态报告 + 最小 SSE 聚合流 + 指标样本（路径固定，禁止内容协商复用）。
 		sessions.GET("/:id/report", h.Report)
 		sessions.GET("/:id/stream", h.Stream)
+		sessions.GET("/:id/metrics", h.Metrics)
 	}
+}
+
+// Metrics 读取 5s 聚合指标样本（FR-370）：?from&to&resolution=raw|15s|1m|5m。
+func (h *BotStressSessionHandler) Metrics(c *gin.Context) {
+	if h.metrics == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "指标功能未启用"})
+		return
+	}
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !h.canReadSession(c, id) {
+		return
+	}
+	var fromPtr, toPtr *time.Time
+	if raw := strings.TrimSpace(c.Query("from")); raw != "" {
+		t, pErr := time.Parse(time.RFC3339, raw)
+		if pErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "from 须为 RFC3339"})
+			return
+		}
+		fromPtr = &t
+	}
+	if raw := strings.TrimSpace(c.Query("to")); raw != "" {
+		t, pErr := time.Parse(time.RFC3339, raw)
+		if pErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "to 须为 RFC3339"})
+			return
+		}
+		toPtr = &t
+	}
+	res, err := h.metrics.ListMetrics(c.Request.Context(), id, fromPtr, toPtr, c.Query("resolution"))
+	if err != nil {
+		if errors.Is(err, service.ErrBotStressSessionNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "压测会话不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询指标失败"})
+		return
+	}
+	c.JSON(http.StatusOK, res)
 }
 
 // Report 导出终态运行报告（FR-370）：?format=json|csv，默认 json。
@@ -643,12 +688,12 @@ func (h *BotStressSessionHandler) writeSessionStreamSnapshot(c *gin.Context, id 
 		return true // 瞬时失败不关流
 	}
 	payload := gin.H{
-		"sessionId": view.ID,
-		"uuid":      view.UUID,
-		"status":    view.Status,
-		"botCount":  view.Count,
-		"counts":    view.Counts,
-		"ts":        time.Now().UTC().UnixMilli(),
+		"sessionId":  view.ID,
+		"uuid":       view.UUID,
+		"status":     view.Status,
+		"botCount":   view.Count,
+		"counts":     view.Counts,
+		"ts":         time.Now().UTC().UnixMilli(),
 		"disclaimer": "命令发送成功仅表示 bot.chat 未同步抛错，不证明服务器接受或业务效果。",
 	}
 	return writeSSE("snapshot", payload)

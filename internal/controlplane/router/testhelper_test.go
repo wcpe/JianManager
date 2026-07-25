@@ -162,6 +162,7 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 		BotLoadPreflight:  botLoadPreflight,
 		BotLoadExecution:  botLoadExecution,
 		BotLoadReport:     service.NewBotLoadReportService(db),
+		BotLoadMetrics:    service.NewBotLoadMetricSampler(db, nil),
 		Alert:             service.NewAlertService(db),
 		AlertChannel:      service.NewAlertChannelService(db),
 		Schedule:          service.NewScheduleService(db),

@@ -213,6 +213,10 @@ func main() {
 	botStressSessionSvc := service.NewBotStressSessionService(db, botSvc)
 	// FR-370 命令压测模板服务。
 	botLoadTemplateSvc := service.NewBotLoadTemplateService(db)
+	// FR-370 5s 指标采样器（后台循环；Stop 在进程退出前调用）。
+	botLoadMetricSampler := service.NewBotLoadMetricSampler(db, nil)
+	botLoadMetricSampler.Start()
+	defer botLoadMetricSampler.Stop()
 	alertSvc := service.NewAlertService(db)
 	alertChannelSvc := service.NewAlertChannelService(db)
 	scheduleSvc := service.NewScheduleService(db)
@@ -578,6 +582,7 @@ func main() {
 		BotLoadExecution:        botLoadSvcs.execution,
 		BotLoadTemplate:         botLoadTemplateSvc,
 		BotLoadReport:           service.NewBotLoadReportService(db),
+		BotLoadMetrics:          botLoadMetricSampler,
 		Alert:                   alertSvc,
 		AlertChannel:            alertChannelSvc,
 		Schedule:                scheduleSvc,

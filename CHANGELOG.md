@@ -9,6 +9,7 @@
 > 本段为 `v0.20.0` 开发版归档区（自 v0.19.0 之后累积）。
 
 ### 新增
+- **压测 5s 指标采样 + metrics 读 API（FR-370，增量）**：进程内 `BotLoadMetricSampler` 每 5s 对 running/degraded 会话聚合 Bot 状态与命令 checkpoint 计数并幂等写入 `bot_load_metric_samples`；`GET /bots/stress-sessions/:id/metrics?resolution=raw|15s|1m|5m` 返回最多 1200 点。单测覆盖双窗采样与 router 读路径。延迟百分位/targetLegacy/SSE metric 帧后续迭代。
 - **压测会话报告 HTTP + 最小 SSE（FR-370，增量）**：`GET /bots/stress-sessions/:id/report?format=json|csv`（终态导出，复用 BotLoadReportService）与 `GET .../stream`（connected + 周期 snapshot）；未终态 409 `BOT_LOAD_REPORT_NOT_READY`。router 测覆盖报告与 SSE 首帧。
 - **通用 Bot 命令编排 Stop Cancel + ActionResult 终态回写（FR-369，增量）**：压测 stop 在 `ApplyBotBatch` 前对未终态 checkpoint 下发 `CancelBotCommandSchedules`（reason=`session_stop`）并本地标 `cancelled`；Fleet `action_event` 首终态 applied 后按 `actionRunId` 回写 checkpoint（succeeded→sent，failed/timed_out/cancelled→对应终态）。单测覆盖 stop 取消 2 Bot 与 terminal→checkpoint 同步。
 - **通用 Bot 命令编排 Apply 主路径接线（FR-369，增量）**：压测 start 在 `ApplyBotBatch` accepted 后，对带 `CommandScheduleSnap` 的会话按 Bot Finalize occurrence plan、物化 checkpoint，并经 `ApplyBotCommandSchedules`（absolute）下发 Worker；无快照旧会话 no-op。单测覆盖 500 Bot 派发后 schedule 项数与 checkpoint 行数。
@@ -20,9 +21,9 @@
 - **CP↔Worker 实例反向对账（FR-326，ADR-078）**：心跳 `instances` 加性 `pid`；CP `OrphanRuntimeTracker` 发现 Worker 有、CP 无记录的无主运行时（宽限默认 10m、`auto_dispose` 默认 false）；`DisposeOrphanRuntime` 清 Worker 运行态；管理员 `GET/POST /orphan-runtimes`；设置键 `instance_reverse_reconcile.*`。不重建 CP 实例、不改写正向对账。
 - **Bot 长稳重连、进程恢复与状态归真（FR-365）**：`bots.desired_state`/`reconnect_count` 与 generation/epoch/seq/configHash 归真；Bot Worker 指数退避+抖动自动重连与 connecting 信号量；Worker 内存 desired 缓存、子进程崩溃熔断/重拉/重放；CP Fleet snapshot reconcile 创建缺失/停止 orphan、10s/90s 新鲜度巡检；`POST .../retry-failed` 后端幂等。自动化测试覆盖接受矩阵、重连/信号量、desired 重放、reconcile 与 retry；真机批量踢出/杀 bot-worker/重启 Worker 待验收。
 - **通用 Bot 命令编排与调度扩展（FR-369，partial）**：CP 侧 `Normalize/Finalize` 冻结 occurrence plan（jitter/actionRunId/模板展开）；Worker gRPC `Apply/Release/CancelBotCommandSchedules` + Bot Worker 集中 `CommandScheduler`（absolute/barrier、取消幂等、bot.chat 固定 3 次重试）；IPC `command-schedule*` 同步回执与 `command-schedule-result` 异步终态。已接线：start Apply 物化/下发、stop Cancel、ActionResult 终态回写 checkpoint。未交付：真机缩比发命令验收、occurrence 观测全链路。
-- **通用命令压测运行状态机与模板地基（FR-370，partial）**：模型 Template/Metric/RunEvent + Session V2；状态机/profile/evaluator；`BotLoadTemplateService` CRUD + `POST /bots/load-templates*` HTTP；`BotLoadRunIntentService`；进程内 `BotLoadRunCoordinator` 登记/stop/cancel；终态 JSON/CSV 报告 service + 报告 HTTP/最小 SSE。未交付：5s 指标聚合全链路、前端接真 SSE、真机。
+- **通用命令压测运行状态机与模板地基（FR-370，partial）**：模型 Template/Metric/RunEvent + Session V2；状态机/profile/evaluator；`BotLoadTemplateService` CRUD + `POST /bots/load-templates*` HTTP；`BotLoadRunIntentService`；进程内 `BotLoadRunCoordinator` 登记/stop/cancel；终态 JSON/CSV 报告 service + 报告 HTTP/最小 SSE；**5s MetricSampler + GET metrics**。未交付：延迟百分位/targetLegacy 全量、SSE 与前端 init/counts/metric 帧对齐、failures/events 投影、真机。
 - **通用命令压测模板与创建向导前端（FR-371，partial）**：`/bots` URL 可寻址 tab（fleet/sessions/templates）；`api/botLoad` 模板/节点/预检/启动 hooks；模板列表 CRUD + TemplateDialog；五步 `BotLoadWizard`（目标/连接/命令编排/负载曲线/阈值预检）与 CommandPlanEditor/LoadProfile/Threshold/CapacityPlan；lib 纯函数单测与中英 `botsLoad` i18n；devmock 扩展 load-templates/load-nodes/preflight。未交付：Playwright E2E、5000 Mock 性能断言、fleet 提取为独立文件、真机验收与 a11y 全量矩阵。
-- **通用命令压测实时观测前端壳（FR-372，partial）**：路由 `/bots/sessions/:id` + 六 tab 骨架（overview/bots/metrics/failures/events/config）；会话级 SSE 客户端（Last-Event-ID/退避/单例引用计数）；Header 停止/取消/报告下载与常驻 `bot.chat` 成功边界免责声明；devmock V2 演示会话与 stream/metrics/bots/failures/events/report/retry。未交付：完整图表/虚拟化性能门禁、Playwright 真流、后端 SSE/报告 HTTP 真链路、a11y 全量验收。
+- **通用命令压测实时观测前端壳（FR-372，partial）**：路由 `/bots/sessions/:id` + 六 tab 骨架（overview/bots/metrics/failures/events/config）；会话级 SSE 客户端（Last-Event-ID/退避/单例引用计数）；Header 停止/取消/报告下载与常驻 `bot.chat` 成功边界免责声明；devmock V2 演示会话与 stream/metrics/bots/failures/events/report/retry。未交付：完整图表/虚拟化性能门禁、Playwright 真流、后端 SSE 帧与前端契约全量对齐、a11y 全量验收。
 
 ## 0.19.0（2026-07-23）
 

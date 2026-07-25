@@ -55,11 +55,13 @@ type Services struct {
 	BotLoadTemplate *service.BotLoadTemplateService
 	// BotLoadReport 压测终态报告（FR-370）；nil 时 report/stream 关闭。
 	BotLoadReport *service.BotLoadReportService
-	Alert            *service.AlertService
-	AlertChannel     *service.AlertChannelService
-	Schedule         *service.ScheduleService
-	Backup           *service.BackupService
-	BackupStorage    *service.BackupStorageService
+	// BotLoadMetrics 5s 指标采样与查询（FR-370）；nil 时 metrics 关闭。
+	BotLoadMetrics *service.BotLoadMetricSampler
+	Alert          *service.AlertService
+	AlertChannel   *service.AlertChannelService
+	Schedule       *service.ScheduleService
+	Backup         *service.BackupService
+	BackupStorage  *service.BackupStorageService
 	// ArtifactStorage 制品存储渠道（FR-347，见 ADR-073）：client-file 外置对象存储配置；
 	// nil 时渠道端点关闭（上传恒本地）。
 	ArtifactStorage *service.ArtifactStorageChannelService
@@ -78,12 +80,12 @@ type Services struct {
 	Proxy             *service.ProxyService
 	Clone             *service.CloneService
 	// ImportServer 导入现有服务器（FR-302，见 ADR-069）；nil 时导入端点关闭。
-	ImportServer  *service.ImportServerService
-	Registration  *service.RegistrationService
-	Network       *service.NetworkService
-	Log           *service.LogService
-	Metric        *service.MetricService
-	Settings      *service.SettingsService
+	ImportServer *service.ImportServerService
+	Registration *service.RegistrationService
+	Network      *service.NetworkService
+	Log          *service.LogService
+	Metric       *service.MetricService
+	Settings     *service.SettingsService
 	// OrphanRuntime 实例反向对账无主运行时列表/确认处置（FR-326）；nil 时端点关闭。
 	OrphanRuntime *service.OrphanRuntimeTracker
 	ProbeUpdate   *service.ProbeUpdateService
@@ -106,8 +108,8 @@ type Services struct {
 	ClientDistObservability *service.ClientDistObservabilityService
 	// ClientDistExport 分发统计与安全日志 CSV 导出（FR-361）。
 	ClientDistExport *service.ClientDistExportService
-	RuntimeAssets *service.RuntimeAssetsService
-	EnrollToken   *service.EnrollTokenService
+	RuntimeAssets    *service.RuntimeAssetsService
+	EnrollToken      *service.EnrollTokenService
 	// AgentToken Agent 专用令牌 + 策略引擎（FR-384，见 ADR-076）；nil 时 agent 端点关闭。
 	AgentToken *service.AgentTokenService
 	// AgentCallLog Agent 调用流水（FR-390，见 ADR-076）；nil 时不记流水、无 call-logs/count。
@@ -269,7 +271,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		}
 		if svcs.BotStressSession != nil {
 			botStressSessionHandler := NewBotStressSessionHandler(
-				svcs.BotStressSession, svcs.Authz, svcs.BotLoadPreflight, svcs.BotLoadExecution, svcs.BotLoadReport, svcs.Audit,
+				svcs.BotStressSession, svcs.Authz, svcs.BotLoadPreflight, svcs.BotLoadExecution, svcs.BotLoadReport, svcs.BotLoadMetrics, svcs.Audit,
 			)
 			botStressSessionHandler.RegisterRoutes(protected)
 		}
