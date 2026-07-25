@@ -9,6 +9,7 @@
 > 本段为 `v0.20.0` 开发版归档区（自 v0.19.0 之后累积）。
 
 ### 新增
+- **退役 mcp-bridge 独立进程（FR-392）**：删除 `apps/mcp-bridge/`（10 文件）及 CI `agent-gate` job 中测试引用；Agent 入口统一为 CP 内嵌 MCP（FR-389 Streamable HTTP/SSE）。刷新 FR-388 安全闸契约表第三入口表述（mcp-bridge → CP 内嵌 MCP）；ARCHITECTURE/PRD 标记退役。`jmagent` 全局发送 `X-JM-Agent-Client: jmagent` 已在 FR-385 落地。
 - **压测 5s 指标采样 + metrics 读 API（FR-370，增量）**：进程内 `BotLoadMetricSampler` 每 5s 对 running/degraded 会话聚合 Bot 状态与命令 checkpoint 计数并幂等写入 `bot_load_metric_samples`；`GET /bots/stress-sessions/:id/metrics?resolution=raw|15s|1m|5m` 返回最多 1200 点。单测覆盖双窗采样与 router 读路径。延迟百分位/targetLegacy/SSE metric 帧后续迭代。
 - **压测 failures/events/bots 投影 API + history SSE + stop 写事件（FR-370/372，增量）**：`GET .../bots` 分页会话 Bot；`GET .../failures` 从 action/checkpoint 终态投影五类分类；`GET .../events` 读 `bot_load_run_events` 并以 `snapshotEventId` 稳定分页；SSE 周期推送 `history` 帧（按 eventId 去重增量）；schemaVersion=2 会话 stop 经 V2 `AcceptStop` 写 `run-state` 事件、终态收敛写 completed/failed。单测覆盖投影 service、router bots/history/failures/events 与 stop 事件写入。
 - **压测会话 SSE 帧对齐前端契约（FR-370/372，增量）**：`/stream` 在 `connected` 后推送 `init`/`counts`/`metric`/`complete`（及周期 `run-state`），与观测页 `session-store` 对齐；终态关闭流。单测覆盖终态 init+counts+complete。

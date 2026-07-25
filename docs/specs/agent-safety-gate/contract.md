@@ -1,7 +1,7 @@
 # Agent 入口策略契约表（FR-388）
 
 > 真源：`service.AgentOpsContract()` / `service.AgentHardDenyList()`。  
-> 三入口：`curl`（本表 HTTP）↔ `jmagent` CLI ↔ `mcp-bridge` tools。
+> 三入口：`curl`（本表 HTTP）↔ `jmagent` CLI ↔ CP 内嵌 MCP（Streamable HTTP/SSE，FR-389）。
 
 ## 1. 运维面 action（默认可对 agent 暴露）
 

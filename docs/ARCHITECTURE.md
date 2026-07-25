@@ -20,7 +20,7 @@ Control Plane (Go 单二进制)
     ▲
     │ HTTPS + Bearer jmat_*（与人类 JWT 物理同端口、语义分离）
     ├── jmagent CLI（FR-385，脚本/CI）
-    └── mcp-bridge（FR-386，stdio；**废弃推荐路径**，删除属 FR-392；新接入用 CP `/api/v1/mcp`）
+    └── ~~mcp-bridge~~（FR-386，**已退役@FR-392**；新接入用 CP `/api/v1/mcp`）
     ▼
 Worker Node (Go) × 20~100
     ├── 游戏服进程管理 (direct/daemon/docker)
@@ -49,7 +49,7 @@ Worker Node (Go) × 20~100
 |---|---|---|
 | jmagent | Go 独立二进制 | 经 CP Agent API 的脚本/CI 入口（FR-385） |
 | IDE / MCP 客户端 | 任意 | 经 CP 内嵌 MCP（`/api/v1/mcp`，FR-389 / ADR-077）持 jmat_ 长连 |
-| mcp-bridge | Go 独立二进制 | 旧 stdio 适配（FR-386，废弃；FR-392 删除） |
+| ~~mcp-bridge~~ | ~~Go 独立二进制~~ | ~~旧 stdio 适配（FR-386，已退役@FR-392）~~ |
 | jmctl | Go 独立二进制 | 本机紧急直连 daemon（FR-184 / ADR-041）；**不是** Agent 日常面 |
 
 ## 3. 技术栈
@@ -110,7 +110,7 @@ internal/controlplane/
 
 ```
 apps/jmagent/     # Agent CLI（FR-385）
-apps/mcp-bridge/  # MCP stdio 适配（FR-386）
+# apps/mcp-bridge/  # 已退役（FR-392）；MCP 改 CP 内嵌 /api/v1/mcp
 apps/jmctl/       # 紧急 daemon CLI（FR-184）
 ```
 
@@ -155,7 +155,7 @@ Agent 运维 API（/api/v1/agent/*）  +  内嵌 MCP（/api/v1/mcp）
     ▲                                    ▲
     ├── jmagent（CLI）                   │ tools → 同一 ResolveAction / service
     ├── curl / 任意 HTTP 客户端          │ 会话：内存 SessionManager（空闲/绝对超时、并发上限）
-    └── （废弃）mcp-bridge stdio         │ 传输：Streamable HTTP 主 + SSE 兼容
+    └── ~~（已退役 FR-392）mcp-bridge stdio~~  │ 传输：Streamable HTTP 主 + SSE 兼容
 ```
 
 **策略（CP 唯一真源，入口不得本地发明）**：
