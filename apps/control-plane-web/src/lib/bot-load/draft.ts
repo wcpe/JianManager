@@ -155,8 +155,8 @@ const DRAFT_PREFIX = 'jm.bot-load.wizard.draft.'
 /** 将草稿存入 sessionStorage（不含 planToken）。 */
 export function saveDraftToSession(key: string, draft: BotLoadWizardDraft): void {
   try {
-    const { planToken: _p, planExpiresAt: _e, ...rest } = draft
-    sessionStorage.setItem(DRAFT_PREFIX + key, JSON.stringify({ ...rest, planToken: null, planExpiresAt: null }))
+    const rest = { ...draft, planToken: null, planExpiresAt: null }
+    sessionStorage.setItem(DRAFT_PREFIX + key, JSON.stringify(rest))
   } catch {
     // 忽略配额错误
   }

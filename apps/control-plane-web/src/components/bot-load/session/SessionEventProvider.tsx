@@ -1,6 +1,7 @@
 /**
  * 会话级 SSE Provider：单 run 一条连接，tab 切换不重建。
  */
+/* eslint-disable react-refresh/only-export-components -- 同文件导出 Provider + useSessionEvents hook 是既定契约 */
 import {
   createContext,
   useCallback,
@@ -59,6 +60,7 @@ export function SessionEventProvider({
   // 快照刷新时合并（不覆盖 live metrics/warnings）。
   useEffect(() => {
     if (!snapshot) return
+    /* eslint-disable react-hooks/set-state-in-effect -- HTTP 快照到达时合并 live.run，属外部系统同步 */
     setLive((prev) => ({
       ...prev,
       run: mergeRun(prev.run, snapshot),
@@ -66,6 +68,7 @@ export function SessionEventProvider({
     if (isTerminalRunState(snapshot.runState)) {
       terminalRef.current = true
     }
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [snapshot])
 
   const onEvent = useCallback(

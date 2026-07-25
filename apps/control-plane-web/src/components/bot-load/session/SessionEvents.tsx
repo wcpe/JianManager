@@ -31,6 +31,7 @@ export function SessionEvents({ runId }: { runId: number | string }) {
 
   useEffect(() => {
     if (page === 1 && query.data?.snapshotEventId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 首屏分页锚点随查询结果固定一次
       setSnapshotEventId(query.data.snapshotEventId)
     }
   }, [page, query.data?.snapshotEventId])

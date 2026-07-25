@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- 纯函数 parseIdInput/mergeIds/formatScopeSummary 与 DOM 测同文件导出 */
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router'
@@ -336,6 +337,7 @@ function CreateAgentTokenDialog({
   // 每次打开重置表单（父组件改 open 时 Radix 不一定触发 onOpenChange）。
   useEffect(() => {
     if (!open) return
+    /* eslint-disable react-hooks/set-state-in-effect -- 弹窗打开瞬间一次性清空，属合法同步 */
     setName('')
     setSelectedInst([])
     setSelectedNode([])
@@ -343,6 +345,7 @@ function CreateAgentTokenDialog({
     setNodeIdsText('')
     setWriteAllow([...DEFAULT_WRITE_ALLOWLIST])
     setTtlDays('90')
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [open])
 
   const handleOpenChange = (next: boolean) => {

@@ -89,6 +89,7 @@ export default function BotLoadWizard({ open, onOpenChange, template }: BotLoadW
   // 打开/换模板时重置草稿
   useEffect(() => {
     if (!open) return
+    /* eslint-disable react-hooks/set-state-in-effect -- 弹窗打开/换模板时一次性重置，属合法同步 */
     dispatch({
       type: 'reset',
       draft: template
@@ -103,6 +104,7 @@ export default function BotLoadWizard({ open, onOpenChange, template }: BotLoadW
     })
     setPreflightResult(null)
     setError('')
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [open, template])
 
   const nodesQuery = useBotLoadNodes(draft.instanceId, open && draft.instanceId !== null)
@@ -152,6 +154,7 @@ export default function BotLoadWizard({ open, onOpenChange, template }: BotLoadW
 
   const ensureRun = async (): Promise<number> => {
     if (draft.runId) return draft.runId
+    // eslint-disable-next-line react-hooks/purity -- 仅在用户提交路径生成默认名，非 render 期
     const name = draft.name.trim() || `run-${Date.now()}`
     const base = {
       instanceId: draft.instanceId!,

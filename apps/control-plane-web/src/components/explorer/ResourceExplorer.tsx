@@ -327,15 +327,20 @@ export default function ResourceExplorer({
 
   // 选中态 + 剪贴板（FR-377：真源为实例级总线，本地 state 仅为订阅镜像）。
   const [selection, setSelection] = useState<SelectionState>(emptySelection)
-  const explorerSourceId = useRef(`re-${instanceId}-${Math.random().toString(36).slice(2, 9)}`).current
+  const explorerSourceId = useRef(
+    // eslint-disable-next-line react-hooks/purity -- 实例级总线 sourceId 仅挂载一次生成
+    `re-${instanceId}-${Math.random().toString(36).slice(2, 9)}`,
+  ).current
   const [clipboard, setClipboardLocal] = useState<Clipboard | null>(() =>
     toClipboard(getBusClipboard(instanceId)),
   )
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- 订阅实例级剪贴板总线镜像，属外部系统同步 */
     setClipboardLocal(toClipboard(getBusClipboard(instanceId)))
     return subscribeBusClipboard(instanceId, (bus) => {
       setClipboardLocal(toClipboard(bus))
     })
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [instanceId])
   const setClipboard = useCallback(
     (next: Clipboard | null) => {
@@ -660,6 +665,8 @@ export default function ResourceExplorer({
 
   // FR-376：上下文回传（标签标题 / 脏态）；回调用 ref，避免父组件未 memo 时空转。
   const onContextChangeRef = useRef(onContextChange)
+  // 渲染期写入 ref.current 是 React 官方「最新回调」模式；不读 current 参与 JSX。
+  // eslint-disable-next-line react-hooks/refs -- 仅同步最新回调指针，不读 ref 做渲染决策
   onContextChangeRef.current = onContextChange
   useEffect(() => {
     onContextChangeRef.current?.({

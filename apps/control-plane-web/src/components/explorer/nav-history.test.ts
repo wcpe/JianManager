@@ -23,7 +23,7 @@ describe('nav-history（FR-375）', () => {
   })
 
   it('同路径 push 不改栈', () => {
-    let s = emptyNavHistory('a')
+    const s = emptyNavHistory('a')
     const next = navPush(s, 'a')
     expect(next).toBe(s)
   })

@@ -8,6 +8,8 @@ export interface FieldError {
 
 const CMD_ID_RE = /^[A-Za-z0-9._-]+$/
 const BARRIER_KEY_RE = /^[A-Za-z0-9._-]+$/
+// 故意匹配控制字符以拒绝命令/屏障 key 中的不可见字符。
+// eslint-disable-next-line no-control-regex -- 产品规则要求拒绝 C0/DEL
 const CONTROL_CHAR_RE = /[\u0000-\u001F\u007F]/
 
 function isInt(n: number): boolean {

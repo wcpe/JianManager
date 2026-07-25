@@ -57,6 +57,7 @@ export default function TemplateDialog({
 
   useEffect(() => {
     if (!open) return
+    /* eslint-disable react-hooks/set-state-in-effect -- 弹窗打开时一次性回填/清空表单，属合法同步 */
     if (mode === 'edit' && template) {
       setName(template.name)
       setDescription(template.description)
@@ -80,6 +81,7 @@ export default function TemplateDialog({
       setThresholds({ ...DEFAULT_STRICT_THRESHOLDS })
     }
     setError('')
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [open, mode, template, t])
 
   const submit = (e: FormEvent) => {

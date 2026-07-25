@@ -89,9 +89,7 @@ export function closeTab(state: ExplorerTabsState, id: string): ExplorerTabsStat
   const tabs = state.tabs.filter((t) => t.id !== id)
   let activeId = state.activeId
   if (activeId === id) {
-    const neighbor = state.tabs[idx + 1] ?? state.tabs[idx - 1]
-    activeId = neighbor && neighbor.id !== id ? neighbor.id : tabs[0].id
-    // neighbor 可能是被删的；取过滤后邻位
+    // 取过滤后邻位（原 idx 对应下一签，否则前一签）
     activeId = tabs[Math.min(idx, tabs.length - 1)]?.id ?? tabs[0].id
   }
   return { tabs, activeId }

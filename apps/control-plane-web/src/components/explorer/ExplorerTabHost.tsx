@@ -182,11 +182,12 @@ export default function ExplorerTabHost({
     })
   }, [])
 
-  const onPointerUp = useCallback(() => {
+  // 具名函数声明可自引用 removeEventListener，且不触发 hooks 对 useCallback 自引用的 immutability 误报。
+  function endDrag() {
     dragRef.current = null
     window.removeEventListener('pointermove', onPointerMove)
-    window.removeEventListener('pointerup', onPointerUp)
-  }, [onPointerMove])
+    window.removeEventListener('pointerup', endDrag)
+  }
 
   const startDrag = (id: string, mode: 'move' | 'resize', e: ReactPointerEvent) => {
     e.preventDefault()
@@ -200,7 +201,7 @@ export default function ExplorerTabHost({
       orig,
     }
     window.addEventListener('pointermove', onPointerMove)
-    window.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointerup', endDrag)
   }
 
   const dockedTabs = state.tabs.filter((t) => !t.floated)

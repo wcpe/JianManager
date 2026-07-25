@@ -103,12 +103,7 @@ export interface CommandSchedulerOptions {
 export type CommandSchedulerEmit =
   | { kind: 'result'; event: CommandScheduleResultEvent }
 
-export declare interface CommandScheduler {
-  on(event: 'emit', listener: (payload: CommandSchedulerEmit) => void): this
-  emit(event: 'emit', payload: CommandSchedulerEmit): boolean
-  off(event: 'emit', listener: (payload: CommandSchedulerEmit) => void): this
-}
-
+/** 结果经构造注入的 sendEvent 上报；EventEmitter 仅保留内部扩展点，不做 class/interface 合并声明。 */
 export class CommandScheduler extends EventEmitter {
   private readonly schedules = new Map<string, ScheduleEntry>()
   private readonly tombstone = new Map<string, number>()
