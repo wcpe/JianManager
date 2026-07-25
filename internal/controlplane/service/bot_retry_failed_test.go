@@ -19,6 +19,10 @@ type retryFakeDispatcher struct {
 	last  *workerpb.ApplyBotBatchRequest
 }
 
+func (d *retryFakeDispatcher) ApplyBotCommandSchedules(context.Context, string, *workerpb.ApplyBotCommandSchedulesRequest) (*workerpb.ApplyBotCommandSchedulesResponse, error) {
+	return &workerpb.ApplyBotCommandSchedulesResponse{}, nil
+}
+
 func (d *retryFakeDispatcher) ApplyBotBatch(_ context.Context, _ string, request *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error) {
 	d.calls++
 	d.last = request

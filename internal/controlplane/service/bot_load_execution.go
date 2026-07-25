@@ -16,6 +16,8 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/google/uuid"
+
 	cpgrpc "github.com/wcpe/JianManager/internal/controlplane/grpc"
 	"github.com/wcpe/JianManager/internal/controlplane/model"
 	"github.com/wcpe/JianManager/proto/workerpb"
@@ -36,8 +38,10 @@ type BotLoadCapacityRefresher interface {
 }
 
 // BotLoadBatchDispatcher 隔离连接池和 proto client，便于测试逐批编排。
+// FR-369：加性支持命令计划 Apply（与 Bot 批同节点下发）。
 type BotLoadBatchDispatcher interface {
 	ApplyBotBatch(ctx context.Context, nodeUUID string, request *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error)
+	ApplyBotCommandSchedules(ctx context.Context, nodeUUID string, request *workerpb.ApplyBotCommandSchedulesRequest) (*workerpb.ApplyBotCommandSchedulesResponse, error)
 }
 
 // BotLoadBackgroundRunner 提交有界后台任务；测试可注入同步或排队实现。
@@ -65,6 +69,17 @@ func (d poolBotLoadBatchDispatcher) ApplyBotBatch(ctx context.Context, nodeUUID 
 		return nil, errBotLoadWorkerMissing
 	}
 	return client.Worker.ApplyBotBatch(ctx, request)
+}
+
+func (d poolBotLoadBatchDispatcher) ApplyBotCommandSchedules(ctx context.Context, nodeUUID string, request *workerpb.ApplyBotCommandSchedulesRequest) (*workerpb.ApplyBotCommandSchedulesResponse, error) {
+	if d.pool == nil {
+		return nil, errBotLoadWorkerMissing
+	}
+	client, ok := d.pool.Get(nodeUUID)
+	if !ok || client.Worker == nil {
+		return nil, errBotLoadWorkerMissing
+	}
+	return client.Worker.ApplyBotCommandSchedules(ctx, request)
 }
 
 type botLoadConnectionConfig struct {
@@ -964,6 +979,11 @@ func (s *BotLoadExecutionService) dispatchAllocation(ctx context.Context, sessio
 		slog.Error("Bot 负载 RPC 成功后数据库回写失败", "runId", session.ID, "batchId", batch.UUID, "error", err)
 		return err
 	}
+	// FR-369：Bot 批 accepted 后下发命令编排 plan（无快照则跳过，兼容旧会话）。
+	if err := s.applyCommandSchedulesAfterBatch(ctx, session, allocation.ExecutorNodeUUID, items); err != nil {
+		slog.Error("Bot 命令编排下发失败", "runId", session.ID, "batchId", batch.UUID, "error", err)
+		// 不回滚 Bot 批：连接已 accepted；编排失败记日志，后续可由恢复路径重放。
+	}
 	return nil
 }
 
@@ -1054,6 +1074,157 @@ func (s *BotLoadExecutionService) applyBotLoadBatch(ctx context.Context, nodeUUI
 	rpcCtx, cancel := context.WithTimeout(ctx, botLoadApplyTimeout)
 	defer cancel()
 	return s.dispatcher.ApplyBotBatch(rpcCtx, nodeUUID, request)
+}
+
+// applyCommandSchedulesAfterBatch 对批次内 accepted 的 Bot 下发 FR-369 命令计划（absolute 模式）。
+// 会话无 CommandScheduleSnap 时 no-op；单 Bot Finalize/RPC 失败不阻断其余 Bot。
+func (s *BotLoadExecutionService) applyCommandSchedulesAfterBatch(ctx context.Context, session *model.BotStressSession, nodeUUID string, items []botLoadDispatchItem) error {
+	if session == nil || strings.TrimSpace(session.CommandScheduleSnap) == "" {
+		return nil
+	}
+	basePlan, err := parseSessionCommandSchedulePlan(session.CommandScheduleSnap)
+	if err != nil {
+		return fmt.Errorf("解析会话命令计划失败: %w", err)
+	}
+	accepted := make([]botLoadDispatchItem, 0, len(items))
+	for _, it := range items {
+		if it.accepted {
+			accepted = append(accepted, it)
+		}
+	}
+	if len(accepted) == 0 {
+		return nil
+	}
+
+	now := s.clock.Now().UTC()
+	// 略延后作 absolute 起点，避免 Worker 收到时已过期。
+	startAt := now.Add(2 * time.Second).UnixMilli()
+	deadline := startAt + basePlan.DurationMS + 60_000
+	if deadline <= startAt {
+		deadline = startAt + 60_000
+	}
+
+	checkpoints := NewBotLoadCommandCheckpointService(s.db)
+	reqItems := make([]*workerpb.ApplyBotCommandScheduleItem, 0, len(accepted))
+	for _, it := range accepted {
+		bot := it.bot
+		planCopy := cloneCommandSchedulePlan(basePlan)
+		scheduleRunID := uuid.New().String()
+		stepID := commandScheduleDefaultStepID
+		jitterSeed := NewCommandScheduleJitterSeed(scheduleRunID, bot.UUID)
+		corr, err := ComputeScheduleCorrelationToken(scheduleRunID, bot.UUID, stepID)
+		if err != nil {
+			slog.Error("计算 correlationToken 失败", "botUuid", bot.UUID, "error", err)
+			continue
+		}
+		tplCtx := CommandScheduleTemplateContext{
+			BotName:          bot.Name,
+			BotOrdinal:       fmt.Sprintf("%d", botLoadOrdinalFromUUID(session.UUID, session.BotCount, bot.UUID)),
+			CohortKey:        bot.CohortKey,
+			RunID:            fmt.Sprintf("%d", session.ID),
+			CorrelationToken: corr,
+		}
+		if err := FinalizeCommandSchedulePlan(planCopy, scheduleRunID, jitterSeed, stepID, bot.UUID, tplCtx, nil); err != nil {
+			slog.Error("Finalize 命令计划失败", "botUuid", bot.UUID, "error", err)
+			continue
+		}
+		if err := checkpoints.EnsureOccurrences(ctx, session.ID, session.UUID, bot.UUID, stepID, scheduleRunID, corr, bot.DesiredStateGeneration, planCopy.Occurrences, nil); err != nil {
+			slog.Error("物化命令 checkpoint 失败", "botUuid", bot.UUID, "error", err)
+			continue
+		}
+		reqItems = append(reqItems, &workerpb.ApplyBotCommandScheduleItem{
+			RunId:                  int64(session.ID),
+			RunUuid:                session.UUID,
+			BotUuid:                bot.UUID,
+			Generation:             bot.DesiredStateGeneration,
+			StepId:                 stepID,
+			ScheduleRunId:          scheduleRunID,
+			CorrelationToken:       corr,
+			StartMode:              "absolute",
+			ScheduleStartAtUnixMs:  startAt,
+			RunDeadlineUnixMs:      deadline,
+			JitterSeed:             jitterSeed,
+			Plan:                   commandSchedulePlanToProto(planCopy),
+		})
+	}
+	if len(reqItems) == 0 {
+		return nil
+	}
+	req := &workerpb.ApplyBotCommandSchedulesRequest{
+		RequestId: uuid.New().String(),
+		Items:     reqItems,
+	}
+	rpcCtx, cancel := context.WithTimeout(ctx, botLoadApplyTimeout)
+	defer cancel()
+	resp, err := s.dispatcher.ApplyBotCommandSchedules(rpcCtx, nodeUUID, req)
+	if err != nil {
+		return fmt.Errorf("ApplyBotCommandSchedules RPC 失败: %w", err)
+	}
+	if resp == nil {
+		return fmt.Errorf("ApplyBotCommandSchedules 空响应")
+	}
+	// 仅记录 rejected；终态仍走 Fleet action_event。
+	for _, r := range resp.Results {
+		if r == nil {
+			continue
+		}
+		if strings.EqualFold(r.Disposition, "accepted") {
+			continue
+		}
+		slog.Warn("命令计划项未 accepted", "botUuid", r.BotUuid, "scheduleRunId", r.ScheduleRunId, "disposition", r.Disposition, "errorCode", r.ErrorCode, "error", r.Error)
+	}
+	return nil
+}
+
+func parseSessionCommandSchedulePlan(snap string) (*CommandSchedulePlan, error) {
+	var input CommandScheduleInput
+	if err := json.Unmarshal([]byte(snap), &input); err != nil {
+		return nil, err
+	}
+	return NormalizeCommandSchedule(&input)
+}
+
+func cloneCommandSchedulePlan(src *CommandSchedulePlan) *CommandSchedulePlan {
+	if src == nil {
+		return nil
+	}
+	out := &CommandSchedulePlan{
+		DurationMS:  src.DurationMS,
+		JitterMS:    src.JitterMS,
+		Occurrences: make([]CommandScheduleOccurrence, len(src.Occurrences)),
+	}
+	for i := range src.Occurrences {
+		out.Occurrences[i] = src.Occurrences[i]
+		// Normalize 后 RawTemplate 在 Command 空时仍可能在 RawTemplate。
+		if out.Occurrences[i].RawTemplate == "" && out.Occurrences[i].Command != "" {
+			out.Occurrences[i].RawTemplate = out.Occurrences[i].Command
+			out.Occurrences[i].Command = ""
+		}
+	}
+	return out
+}
+
+func commandSchedulePlanToProto(plan *CommandSchedulePlan) *workerpb.AppliedCommandOccurrencePlan {
+	if plan == nil {
+		return nil
+	}
+	occs := make([]*workerpb.AppliedCommandOccurrence, 0, len(plan.Occurrences))
+	for _, o := range plan.Occurrences {
+		occs = append(occs, &workerpb.AppliedCommandOccurrence{
+			CommandId:                o.CommandID,
+			Occurrence:               int32(o.Occurrence),
+			CommandDeclarationIndex:  int32(o.CommandDeclarationIdx),
+			BaseAtMs:                 o.BaseAtMS,
+			JitterOffsetMs:           o.JitterOffsetMS,
+			ActionRunId:              o.ActionRunID,
+			Command:                  o.Command,
+		})
+	}
+	return &workerpb.AppliedCommandOccurrencePlan{
+		DurationMs:  plan.DurationMS,
+		JitterMs:    plan.JitterMS,
+		Occurrences: occs,
+	}
 }
 
 func normalizeBotLoadDispatchItems(bots []model.Bot, request *workerpb.ApplyBotBatchRequest, response *workerpb.ApplyBotBatchResponse, rpcErr error) []botLoadDispatchItem {

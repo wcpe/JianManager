@@ -51,7 +51,15 @@ type botLoadExecutionDispatchCall struct {
 type botLoadExecutionDispatcher struct {
 	mu      sync.Mutex
 	calls   []botLoadExecutionDispatchCall
-	handler func(string, *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error)
+	// scheduleCalls 记录 FR-369 ApplyBotCommandSchedules 调用。
+	scheduleCalls []botLoadScheduleDispatchCall
+	handler       func(string, *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error)
+	scheduleHandler func(string, *workerpb.ApplyBotCommandSchedulesRequest) (*workerpb.ApplyBotCommandSchedulesResponse, error)
+}
+
+type botLoadScheduleDispatchCall struct {
+	nodeUUID string
+	request  *workerpb.ApplyBotCommandSchedulesRequest
 }
 
 func (d *botLoadExecutionDispatcher) ApplyBotBatch(_ context.Context, nodeUUID string, request *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error) {
@@ -65,10 +73,36 @@ func (d *botLoadExecutionDispatcher) ApplyBotBatch(_ context.Context, nodeUUID s
 	return acceptedBotLoadBatchResponse(request), nil
 }
 
+func (d *botLoadExecutionDispatcher) ApplyBotCommandSchedules(_ context.Context, nodeUUID string, request *workerpb.ApplyBotCommandSchedulesRequest) (*workerpb.ApplyBotCommandSchedulesResponse, error) {
+	d.mu.Lock()
+	d.scheduleCalls = append(d.scheduleCalls, botLoadScheduleDispatchCall{
+		nodeUUID: nodeUUID,
+		request:  proto.Clone(request).(*workerpb.ApplyBotCommandSchedulesRequest),
+	})
+	handler := d.scheduleHandler
+	d.mu.Unlock()
+	if handler != nil {
+		return handler(nodeUUID, request)
+	}
+	results := make([]*workerpb.ApplyBotCommandScheduleItemResult, 0, len(request.Items))
+	for _, item := range request.Items {
+		results = append(results, &workerpb.ApplyBotCommandScheduleItemResult{
+			BotUuid: item.BotUuid, ScheduleRunId: item.ScheduleRunId, Disposition: "accepted",
+		})
+	}
+	return &workerpb.ApplyBotCommandSchedulesResponse{RequestId: request.RequestId, Results: results}, nil
+}
+
 func (d *botLoadExecutionDispatcher) Calls() []botLoadExecutionDispatchCall {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return append([]botLoadExecutionDispatchCall(nil), d.calls...)
+}
+
+func (d *botLoadExecutionDispatcher) ScheduleCalls() []botLoadScheduleDispatchCall {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]botLoadScheduleDispatchCall(nil), d.scheduleCalls...)
 }
 
 func acceptedBotLoadBatchResponse(request *workerpb.ApplyBotBatchRequest) *workerpb.ApplyBotBatchResponse {
@@ -203,7 +237,7 @@ func newBotLoadExecutionHarness(t *testing.T, capacities []int, target int, runn
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(8)
 	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
-	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.BotStressSession{}, &model.BotLoadBatch{}, &model.Bot{}))
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.BotStressSession{}, &model.BotLoadBatch{}, &model.Bot{}, &model.BotLoadCommandCheckpoint{}))
 
 	nodes := make([]model.Node, 0, len(capacities))
 	nodeCapacities := make([]BotLoadNodeCapacity, 0, len(capacities))
@@ -221,10 +255,13 @@ func newBotLoadExecutionHarness(t *testing.T, capacities []int, target int, runn
 	}
 	instance := &model.Instance{NodeID: nodes[0].ID, Name: "target", Type: model.InstanceTypeMinecraftJava, ProcessType: model.ProcessTypeDirect, WorkDir: "var/servers/target", StartCommand: "java", ServerPort: 25570}
 	require.NoError(t, db.Create(instance).Error)
+	// 默认附带 FR-369 命令计划快照，验证 start 派发后会 ApplyBotCommandSchedules。
+	scheduleSnap := `{"commands":[{"id":"say-ready","atMs":0,"command":"/say ready {{botName}}"}],"durationMs":3000,"jitterMs":0}`
 	session := &model.BotStressSession{
 		InstanceID: instance.ID, Name: "distributed-load", NamePrefix: "load", BotCount: target,
 		Status: model.BotStressSessionPending, Behavior: "idle",
 		Config: `{"server":"mc.example.test","port":25570,"auth":"offline","version":"1.20.4"}`,
+		CommandScheduleSnap: scheduleSnap,
 	}
 	require.NoError(t, db.Create(session).Error)
 
@@ -383,6 +420,29 @@ func TestBotLoadExecutionStart_Creates500BotsAcrossTenBatches(t *testing.T) {
 	}
 	_, reserved := h.reservations.Lease(h.session.ID)
 	require.False(t, reserved)
+
+	// FR-369：每个 accepted Bot 应触发一次命令计划 Apply（可按节点批量）。
+	schedCalls := h.dispatcher.ScheduleCalls()
+	require.NotEmpty(t, schedCalls)
+	totalSchedItems := 0
+	for _, sc := range schedCalls {
+		require.NotEmpty(t, sc.request.Items)
+		for _, item := range sc.request.Items {
+			require.Equal(t, "absolute", item.StartMode)
+			require.NotEmpty(t, item.ScheduleRunId)
+			require.NotEmpty(t, item.CorrelationToken)
+			require.NotNil(t, item.Plan)
+			require.NotEmpty(t, item.Plan.Occurrences)
+			require.Contains(t, item.Plan.Occurrences[0].Command, "/say ready")
+			require.Greater(t, item.ScheduleStartAtUnixMs, int64(0))
+			require.Greater(t, item.RunDeadlineUnixMs, item.ScheduleStartAtUnixMs)
+		}
+		totalSchedItems += len(sc.request.Items)
+	}
+	require.Equal(t, 500, totalSchedItems)
+	var ckCount int64
+	require.NoError(t, h.db.Model(&model.BotLoadCommandCheckpoint{}).Count(&ckCount).Error)
+	require.Equal(t, int64(500), ckCount) // 每 bot 1 occurrence
 }
 
 func TestBotLoadExecutionStart_MaterializesStableCohortAndScenarioAssignments(t *testing.T) {

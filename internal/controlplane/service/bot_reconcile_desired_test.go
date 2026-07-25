@@ -17,6 +17,10 @@ type reconcileFakeDispatcher struct {
 	requests []*workerpb.ApplyBotBatchRequest
 }
 
+func (d *reconcileFakeDispatcher) ApplyBotCommandSchedules(context.Context, string, *workerpb.ApplyBotCommandSchedulesRequest) (*workerpb.ApplyBotCommandSchedulesResponse, error) {
+	return &workerpb.ApplyBotCommandSchedulesResponse{}, nil
+}
+
 func (d *reconcileFakeDispatcher) ApplyBotBatch(_ context.Context, _ string, request *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error) {
 	d.requests = append(d.requests, request)
 	results := make([]*workerpb.ApplyBotBatchItemResult, 0, len(request.Assignments))
