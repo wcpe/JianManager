@@ -53,6 +53,8 @@ type Services struct {
 	BotLoadExecution *service.BotLoadExecutionService
 	// BotLoadTemplate 命令压测模板（FR-370）；nil 时 /bots/load-templates 关闭。
 	BotLoadTemplate *service.BotLoadTemplateService
+	// BotLoadReport 压测终态报告（FR-370）；nil 时 report/stream 关闭。
+	BotLoadReport *service.BotLoadReportService
 	Alert            *service.AlertService
 	AlertChannel     *service.AlertChannelService
 	Schedule         *service.ScheduleService
@@ -267,7 +269,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		}
 		if svcs.BotStressSession != nil {
 			botStressSessionHandler := NewBotStressSessionHandler(
-				svcs.BotStressSession, svcs.Authz, svcs.BotLoadPreflight, svcs.BotLoadExecution, svcs.Audit,
+				svcs.BotStressSession, svcs.Authz, svcs.BotLoadPreflight, svcs.BotLoadExecution, svcs.BotLoadReport, svcs.Audit,
 			)
 			botStressSessionHandler.RegisterRoutes(protected)
 		}

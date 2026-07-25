@@ -423,6 +423,20 @@
 - **权限**: `instance.operate`
 - **错误**: 409 `NODE_OFFLINE`（节点未连接，预检无法执行）；422 `PREFLIGHT_FAILED`（预检未通过，带具体原因）；422 `INVALID_TRANSITION`（状态机拒绝 / 长操作在途「实例正在搭建中（核心下载未完成）…/导入中（目录搬迁未完成）…/克隆中（工作目录复制未完成）…」/ 内存水位不足）
 
+### GET /api/v1/bots/stress-sessions/:id/report
+- **描述**: 导出压测终态报告（FR-370）。仅 `schemaVersion=2` 且 `runState` 为终态时可导出；含 `bot.chat` 成功边界免责声明
+- **关联 FR**: FR-370
+- **权限**: `bot.read` 且可访问该会话所属实例
+- **Query**: `format=json|csv`（默认 `json`）
+- **响应**: JSON 报告对象，或 `text/csv` 附件
+- **错误**: 404 会话不存在；409 `BOT_LOAD_REPORT_NOT_READY` 未终态；400 非法 format
+
+### GET /api/v1/bots/stress-sessions/:id/stream
+- **描述**: 压测会话最小 SSE 聚合流（FR-370）：`event: connected` 后周期 `event: snapshot`（状态/counts/免责声明）。非完整 5s 指标聚合，供观测页真连
+- **关联 FR**: FR-370 / FR-372
+- **权限**: 同 report
+- **响应**: `text/event-stream`
+
 ### POST /api/v1/instances/:id/stop
 - **描述**: 停止实例
 - **关联 FR**: FR-005

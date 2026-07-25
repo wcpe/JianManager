@@ -577,6 +577,7 @@ func main() {
 		BotLoadPreflight:        botLoadSvcs.preflight,
 		BotLoadExecution:        botLoadSvcs.execution,
 		BotLoadTemplate:         botLoadTemplateSvc,
+		BotLoadReport:           service.NewBotLoadReportService(db),
 		Alert:                   alertSvc,
 		AlertChannel:            alertChannelSvc,
 		Schedule:                scheduleSvc,

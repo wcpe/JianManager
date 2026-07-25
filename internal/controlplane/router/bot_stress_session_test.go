@@ -2,7 +2,10 @@ package router
 
 import (
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,6 +67,88 @@ func TestBotStressSession_Flow(t *testing.T) {
 	byStatus := stoppingCounts["byStatus"].(map[string]interface{})
 	assert.Equal(t, float64(2), byStatus[string(model.BotStatusConnecting)])
 	assert.NotContains(t, byStatus, string(model.BotStatusStopped))
+}
+
+// TestBotStressSession_ReportAndStream FR-370：终态报告 HTTP + 最小 SSE 首帧。
+func TestBotStressSession_ReportAndStream(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	createTestNode(t, db)
+	inst := createInstanceViaAPI(t, r, token, 1, createGroupViaAPI(t, r, token, "g-report"))
+
+	// 直接落库 V2 终态会话（报告仅 schemaVersion=2 且终态可导出）。
+	runState := model.BotLoadRunCompleted
+	verdict := model.BotLoadVerdictPassed
+	maxStable := 3
+	sess := &model.BotStressSession{
+		InstanceID: inst, Name: "report-run", NamePrefix: "r", BotCount: 3,
+		Status: model.BotStressSessionStopped, SchemaVersion: 2,
+		RunState: &runState, Verdict: &verdict, MaxStableBots: &maxStable,
+		Config: `{"server":"127.0.0.1","port":25565}`,
+		FailureSummary: `{"command_send_failed":1}`,
+		ReportSummary:  "ok",
+	}
+	require.NoError(t, db.Create(sess).Error)
+
+	// 非终态拒绝
+	pendingState := model.BotLoadRunRunning
+	pending := &model.BotStressSession{
+		InstanceID: inst, Name: "pending-run", NamePrefix: "p", BotCount: 1,
+		Status: model.BotStressSessionRunning, SchemaVersion: 2, RunState: &pendingState,
+		Config: `{"server":"127.0.0.1","port":25565}`,
+	}
+	require.NoError(t, db.Create(pending).Error)
+	w := makeRequest(r, "GET", "/api/v1/bots/stress-sessions/"+itoa(pending.ID)+"/report", nil, token)
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Equal(t, "BOT_LOAD_REPORT_NOT_READY", parseJSON(t, w)["error"])
+
+	// JSON 报告
+	w = makeRequest(r, "GET", "/api/v1/bots/stress-sessions/"+itoa(sess.ID)+"/report?format=json", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	rep := parseJSON(t, w)
+	assert.Equal(t, float64(sess.ID), rep["runId"])
+	assert.Equal(t, "completed", rep["runState"])
+	assert.Equal(t, "passed", rep["verdict"])
+	assert.Contains(t, rep["disclaimer"].(string), "bot.chat")
+
+	// CSV 报告
+	w = makeRequest(r, "GET", "/api/v1/bots/stress-sessions/"+itoa(sess.ID)+"/report?format=csv", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/csv")
+	assert.Contains(t, w.Body.String(), "runId")
+	assert.Contains(t, w.Body.String(), sess.UUID)
+
+	// SSE：读到 connected + snapshot 即可（短超时客户端）
+	req, err := http.NewRequest(http.MethodGet, "/api/v1/bots/stress-sessions/"+itoa(sess.ID)+"/stream", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+token)
+	// 使用 httptest recorder 只能看到缓冲；直接调 handler 经 makeRequest 不适合长连接。
+	// 这里用短读：gin 测试引擎 ServeHTTP 会跑到 ctx cancel——用带 cancel 的 context 不方便。
+	// 改为断言路由存在且 200 + Content-Type event-stream（首包写入后客户端断开由测试侧不读完）。
+	// 简化：用 makeRequest 会阻塞到超时；改用自定义 recorder + 立即 cancel 不可行。
+	// 采用：启动 goroutine 读 body 前几字节。
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.ServeHTTP(rec, req)
+	}()
+	// 等首包
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(rec.Body.String(), "event: connected") && strings.Contains(rec.Body.String(), "event: snapshot") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	body := rec.Body.String()
+	assert.Contains(t, rec.Header().Get("Content-Type"), "text/event-stream")
+	assert.Contains(t, body, "event: connected")
+	assert.Contains(t, body, "event: snapshot")
+	assert.Contains(t, body, `"sessionId":`)
+	// 取消请求上下文：关闭底层连接不可直接，进程级测试结束即可。
+	_ = done
 }
 
 func TestBotStressSession_GetDetailReturnsOrchestration(t *testing.T) {

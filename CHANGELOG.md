@@ -9,6 +9,7 @@
 > 本段为 `v0.20.0` 开发版归档区（自 v0.19.0 之后累积）。
 
 ### 新增
+- **压测会话报告 HTTP + 最小 SSE（FR-370，增量）**：`GET /bots/stress-sessions/:id/report?format=json|csv`（终态导出，复用 BotLoadReportService）与 `GET .../stream`（connected + 周期 snapshot）；未终态 409 `BOT_LOAD_REPORT_NOT_READY`。router 测覆盖报告与 SSE 首帧。
 - **通用 Bot 命令编排 Apply 主路径接线（FR-369，增量）**：压测 start 在 `ApplyBotBatch` accepted 后，对带 `CommandScheduleSnap` 的会话按 Bot Finalize occurrence plan、物化 checkpoint，并经 `ApplyBotCommandSchedules`（absolute）下发 Worker；无快照旧会话 no-op。单测覆盖 500 Bot 派发后 schedule 项数与 checkpoint 行数。
 - **节点离线归档与彻底清理（FR-393/394，开发中）**：`GET /nodes/archived`、`GET /nodes/archived/:id` 列出/查看软删下线节点；`DELETE /nodes/archived/:id?force=` 硬删库记录（有实例须 force 级联实例平台记录，不碰远端文件，审计 `node.purge`）；NodesPage `活跃|归档`（`?view=`）+ 清理 DangerConfirm；devmock 归档样例 `gamma-archived`。单测/router/DOM 绿。**待真机** compose 1CP+1Worker 下线→归档→清理闭环。
 - **CP 内嵌 MCP 长连接服务（FR-389，开发中）**：Control Plane 内嵌 Streamable HTTP（`POST/GET/DELETE /api/v1/mcp`）+ SSE 兼容（`GET /api/v1/mcp/sse`、`POST /api/v1/mcp/message`）；鉴权仅 Agent Token（`jmat_`）；工具集与 jm-agent 对齐（含 `agent_get_instance_logs`），硬拒绝不注册；策略走 `ResolveAction`（拒绝 → HTTP 200 + `isError` + 中文）；内存会话可运维（列表/踢线/空闲 30m/绝对 24h/全局 32/每 Token 4，可配置）；管理员 `GET/DELETE /api/v1/agent/mcp/sessions`；改写 ADR-077 为「CP 内嵌 MCP 网关」；stdio `apps/mcp-bridge` 不删（FR-392）。单测：会话并发/超时/踢线/鉴权/tools/list。**待真机验**远程 HTTPS 全路径。

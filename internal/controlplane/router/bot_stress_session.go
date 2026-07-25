@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
@@ -22,12 +24,14 @@ type BotStressSessionHandler struct {
 	authz     *service.AuthzService
 	preflight *service.BotLoadPreflightService
 	execution *service.BotLoadExecutionService
+	report    *service.BotLoadReportService
 	audit     *service.AuditService
 }
 
 // NewBotStressSessionHandler 创建 Bot 压测会话路由处理器。
-func NewBotStressSessionHandler(svc *service.BotStressSessionService, authz *service.AuthzService, preflight *service.BotLoadPreflightService, execution *service.BotLoadExecutionService, audit *service.AuditService) *BotStressSessionHandler {
-	return &BotStressSessionHandler{svc: svc, authz: authz, preflight: preflight, execution: execution, audit: audit}
+// report 可为 nil：此时 report/stream 端点返回 404 功能未启用。
+func NewBotStressSessionHandler(svc *service.BotStressSessionService, authz *service.AuthzService, preflight *service.BotLoadPreflightService, execution *service.BotLoadExecutionService, report *service.BotLoadReportService, audit *service.AuditService) *BotStressSessionHandler {
+	return &BotStressSessionHandler{svc: svc, authz: authz, preflight: preflight, execution: execution, report: report, audit: audit}
 }
 
 // Create 创建压测会话。
@@ -535,5 +539,131 @@ func (h *BotStressSessionHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		if h.execution != nil {
 			sessions.POST("/:id/retry-failed", h.RetryFailed)
 		}
+		// FR-370：终态报告 + 最小 SSE 聚合流（路径固定，禁止内容协商复用）。
+		sessions.GET("/:id/report", h.Report)
+		sessions.GET("/:id/stream", h.Stream)
+	}
+}
+
+// Report 导出终态运行报告（FR-370）：?format=json|csv，默认 json。
+func (h *BotStressSessionHandler) Report(c *gin.Context) {
+	if h.report == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "报告功能未启用"})
+		return
+	}
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !h.canReadSession(c, id) {
+		return
+	}
+	format := strings.ToLower(strings.TrimSpace(c.DefaultQuery("format", "json")))
+	switch format {
+	case "json", "":
+		rep, err := h.report.BuildJSON(id)
+		if err != nil {
+			writeBotLoadReportError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, rep)
+	case "csv":
+		raw, err := h.report.BuildCSV(id)
+		if err != nil {
+			writeBotLoadReportError(c, err)
+			return
+		}
+		c.Header("Content-Type", "text/csv; charset=utf-8")
+		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="bot-load-report-%d.csv"`, id))
+		c.Data(http.StatusOK, "text/csv; charset=utf-8", raw)
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "format 仅支持 json 或 csv"})
+	}
+}
+
+// Stream 最小会话 SSE（FR-370）：周期推送会话摘要，供观测页真连；非完整指标聚合。
+func (h *BotStressSessionHandler) Stream(c *gin.Context) {
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !h.canReadSession(c, id) {
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Status(http.StatusOK)
+
+	writeSSE := func(event string, payload any) bool {
+		raw, mErr := json.Marshal(payload)
+		if mErr != nil {
+			return false
+		}
+		if _, wErr := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, raw); wErr != nil {
+			return false
+		}
+		c.Writer.Flush()
+		return true
+	}
+
+	if !writeSSE("connected", gin.H{"sessionId": id, "ts": time.Now().UTC().UnixMilli()}) {
+		return
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	ctx := c.Request.Context()
+	// 首帧立即推一次 snapshot。
+	if !h.writeSessionStreamSnapshot(c, id, writeSSE) {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if !h.writeSessionStreamSnapshot(c, id, writeSSE) {
+				return
+			}
+		}
+	}
+}
+
+func (h *BotStressSessionHandler) writeSessionStreamSnapshot(c *gin.Context, id uint, writeSSE func(string, any) bool) bool {
+	view, err := h.svc.Get(id)
+	if err != nil {
+		if errors.Is(err, service.ErrBotStressSessionNotFound) {
+			_ = writeSSE("error", gin.H{"error": "NOT_FOUND", "message": "压测会话不存在"})
+			return false
+		}
+		slog.Debug("压测 SSE 读取会话失败", "id", id, "err", err)
+		return true // 瞬时失败不关流
+	}
+	payload := gin.H{
+		"sessionId": view.ID,
+		"uuid":      view.UUID,
+		"status":    view.Status,
+		"botCount":  view.Count,
+		"counts":    view.Counts,
+		"ts":        time.Now().UTC().UnixMilli(),
+		"disclaimer": "命令发送成功仅表示 bot.chat 未同步抛错，不证明服务器接受或业务效果。",
+	}
+	return writeSSE("snapshot", payload)
+}
+
+func writeBotLoadReportError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrBotStressSessionNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "压测会话不存在"})
+	case errors.Is(err, service.ErrBotLoadReportNotReady):
+		c.JSON(http.StatusConflict, gin.H{
+			"error":   service.BotLoadReportNotReadyCode,
+			"message": "运行未终态，报告尚未就绪",
+		})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "导出报告失败"})
 	}
 }
