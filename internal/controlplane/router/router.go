@@ -57,11 +57,13 @@ type Services struct {
 	BotLoadReport *service.BotLoadReportService
 	// BotLoadMetrics 5s 指标采样与查询（FR-370）；nil 时 metrics 关闭。
 	BotLoadMetrics *service.BotLoadMetricSampler
-	Alert          *service.AlertService
-	AlertChannel   *service.AlertChannelService
-	Schedule       *service.ScheduleService
-	Backup         *service.BackupService
-	BackupStorage  *service.BackupStorageService
+	// BotLoadProjection failures/events 投影（FR-370）；nil 时对应端点关闭。
+	BotLoadProjection *service.BotLoadProjectionService
+	Alert             *service.AlertService
+	AlertChannel      *service.AlertChannelService
+	Schedule          *service.ScheduleService
+	Backup            *service.BackupService
+	BackupStorage     *service.BackupStorageService
 	// ArtifactStorage 制品存储渠道（FR-347，见 ADR-073）：client-file 外置对象存储配置；
 	// nil 时渠道端点关闭（上传恒本地）。
 	ArtifactStorage *service.ArtifactStorageChannelService
@@ -271,7 +273,7 @@ func Setup(svcs *Services, jwtSecret string) *gin.Engine {
 		}
 		if svcs.BotStressSession != nil {
 			botStressSessionHandler := NewBotStressSessionHandler(
-				svcs.BotStressSession, svcs.Authz, svcs.BotLoadPreflight, svcs.BotLoadExecution, svcs.BotLoadReport, svcs.BotLoadMetrics, svcs.Audit,
+				svcs.BotStressSession, svcs.Authz, svcs.BotLoadPreflight, svcs.BotLoadExecution, svcs.BotLoadReport, svcs.BotLoadMetrics, svcs.BotLoadProjection, svcs.Audit,
 			)
 			botStressSessionHandler.RegisterRoutes(protected)
 		}

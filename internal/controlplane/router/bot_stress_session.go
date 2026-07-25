@@ -20,20 +20,22 @@ import (
 
 // BotStressSessionHandler Bot 压测会话路由处理器。
 type BotStressSessionHandler struct {
-	svc       *service.BotStressSessionService
-	authz     *service.AuthzService
-	preflight *service.BotLoadPreflightService
-	execution *service.BotLoadExecutionService
-	report    *service.BotLoadReportService
-	metrics   *service.BotLoadMetricSampler
-	audit     *service.AuditService
+	svc        *service.BotStressSessionService
+	authz      *service.AuthzService
+	preflight  *service.BotLoadPreflightService
+	execution  *service.BotLoadExecutionService
+	report     *service.BotLoadReportService
+	metrics    *service.BotLoadMetricSampler
+	projection *service.BotLoadProjectionService
+	audit      *service.AuditService
 }
 
 // NewBotStressSessionHandler 创建 Bot 压测会话路由处理器。
 // report 可为 nil：此时 report/stream 端点返回 404 功能未启用。
 // metrics 可为 nil：此时 metrics 端点返回 404。
-func NewBotStressSessionHandler(svc *service.BotStressSessionService, authz *service.AuthzService, preflight *service.BotLoadPreflightService, execution *service.BotLoadExecutionService, report *service.BotLoadReportService, metrics *service.BotLoadMetricSampler, audit *service.AuditService) *BotStressSessionHandler {
-	return &BotStressSessionHandler{svc: svc, authz: authz, preflight: preflight, execution: execution, report: report, metrics: metrics, audit: audit}
+// projection 可为 nil：此时 failures/events 端点返回 404。
+func NewBotStressSessionHandler(svc *service.BotStressSessionService, authz *service.AuthzService, preflight *service.BotLoadPreflightService, execution *service.BotLoadExecutionService, report *service.BotLoadReportService, metrics *service.BotLoadMetricSampler, projection *service.BotLoadProjectionService, audit *service.AuditService) *BotStressSessionHandler {
+	return &BotStressSessionHandler{svc: svc, authz: authz, preflight: preflight, execution: execution, report: report, metrics: metrics, projection: projection, audit: audit}
 }
 
 // Create 创建压测会话。
@@ -541,10 +543,129 @@ func (h *BotStressSessionHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		if h.execution != nil {
 			sessions.POST("/:id/retry-failed", h.RetryFailed)
 		}
-		// FR-370：终态报告 + 最小 SSE 聚合流 + 指标样本（路径固定，禁止内容协商复用）。
+		// FR-370：终态报告 + SSE + 指标 + failures/events 投影。
 		sessions.GET("/:id/report", h.Report)
 		sessions.GET("/:id/stream", h.Stream)
 		sessions.GET("/:id/metrics", h.Metrics)
+		sessions.GET("/:id/failures", h.Failures)
+		sessions.GET("/:id/events", h.Events)
+	}
+}
+
+// Failures 投影会话失败项（FR-370）。
+func (h *BotStressSessionHandler) Failures(c *gin.Context) {
+	if h.projection == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "失败投影未启用"})
+		return
+	}
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !h.canReadSession(c, id) {
+		return
+	}
+	q := service.ListFailuresQuery{
+		Page: parseQueryInt(c, "page", 1), PageSize: parseQueryInt(c, "pageSize", 20),
+		Category: c.Query("category"), ErrorCode: c.Query("errorCode"),
+		BotUUID: c.Query("botUuid"), StepID: c.Query("stepId"),
+	}
+	if raw := strings.TrimSpace(c.Query("executorNodeId")); raw != "" {
+		if n, pErr := strconv.ParseUint(raw, 10, 64); pErr == nil {
+			u := uint(n)
+			q.ExecutorNodeID = &u
+		}
+	}
+	if from, to, ok := parseOptionalTimeRange(c); !ok {
+		return
+	} else {
+		q.From, q.To = from, to
+	}
+	res, err := h.projection.ListFailures(c.Request.Context(), id, q)
+	if err != nil {
+		writeBotLoadProjectionError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+// Events 投影运行历史事件（FR-370）。
+func (h *BotStressSessionHandler) Events(c *gin.Context) {
+	if h.projection == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "事件投影未启用"})
+		return
+	}
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !h.canReadSession(c, id) {
+		return
+	}
+	q := service.ListEventsQuery{
+		Page: parseQueryInt(c, "page", 1), PageSize: parseQueryInt(c, "pageSize", 20),
+		Type: c.Query("type"), EventID: c.Query("eventId"), ActionRunID: c.Query("actionRunId"),
+		BotUUID: c.Query("botUuid"), StepID: c.Query("stepId"), SnapshotEventID: c.Query("snapshotEventId"),
+	}
+	if raw := strings.TrimSpace(c.Query("executorNodeId")); raw != "" {
+		if n, pErr := strconv.ParseUint(raw, 10, 64); pErr == nil {
+			u := uint(n)
+			q.ExecutorNodeID = &u
+		}
+	}
+	if from, to, ok := parseOptionalTimeRange(c); !ok {
+		return
+	} else {
+		q.From, q.To = from, to
+	}
+	res, err := h.projection.ListEvents(c.Request.Context(), id, q)
+	if err != nil {
+		writeBotLoadProjectionError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+func parseQueryInt(c *gin.Context, key string, def int) int {
+	raw := strings.TrimSpace(c.Query(key))
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+func parseOptionalTimeRange(c *gin.Context) (from, to *time.Time, ok bool) {
+	if raw := strings.TrimSpace(c.Query("from")); raw != "" {
+		t, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "from 须为 RFC3339"})
+			return nil, nil, false
+		}
+		from = &t
+	}
+	if raw := strings.TrimSpace(c.Query("to")); raw != "" {
+		t, err := time.Parse(time.RFC3339, raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": "to 须为 RFC3339"})
+			return nil, nil, false
+		}
+		to = &t
+	}
+	return from, to, true
+}
+
+func writeBotLoadProjectionError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, service.ErrBotStressSessionNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "压测会话不存在"})
+	case errors.Is(err, service.ErrBotStressSessionInvalid):
+		c.JSON(http.StatusBadRequest, gin.H{"error": "INVALID_REQUEST", "message": err.Error()})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "INTERNAL_ERROR", "message": "查询失败"})
 	}
 }
 

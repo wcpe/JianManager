@@ -217,6 +217,8 @@ func main() {
 	botLoadMetricSampler := service.NewBotLoadMetricSampler(db, nil)
 	botLoadMetricSampler.Start()
 	defer botLoadMetricSampler.Stop()
+	// FR-370 failures/events 投影（读路径，无后台循环）。
+	botLoadProjectionSvc := service.NewBotLoadProjectionService(db)
 	alertSvc := service.NewAlertService(db)
 	alertChannelSvc := service.NewAlertChannelService(db)
 	scheduleSvc := service.NewScheduleService(db)
@@ -583,6 +585,7 @@ func main() {
 		BotLoadTemplate:         botLoadTemplateSvc,
 		BotLoadReport:           service.NewBotLoadReportService(db),
 		BotLoadMetrics:          botLoadMetricSampler,
+		BotLoadProjection:       botLoadProjectionSvc,
 		Alert:                   alertSvc,
 		AlertChannel:            alertChannelSvc,
 		Schedule:                scheduleSvc,

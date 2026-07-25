@@ -183,6 +183,53 @@ func TestBotStressSession_Metrics(t *testing.T) {
 	assert.Equal(t, float64(1), counts["connected"])
 }
 
+// TestBotStressSession_FailuresAndEvents FR-370：失败/事件投影端点。
+func TestBotStressSession_FailuresAndEvents(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	createTestNode(t, db)
+	inst := createInstanceViaAPI(t, r, token, 1, createGroupViaAPI(t, r, token, "g-proj"))
+	runState := model.BotLoadRunRunning
+	sess := &model.BotStressSession{
+		InstanceID: inst, Name: "proj-run", NamePrefix: "p", BotCount: 1,
+		Status: model.BotStressSessionRunning, SchemaVersion: 2, RunState: &runState,
+		Config: `{"server":"127.0.0.1","port":25565}`,
+	}
+	require.NoError(t, db.Create(sess).Error)
+	bot := &model.Bot{
+		UUID: "bot-proj-http", InstanceID: inst, StressSessionID: &sess.ID,
+		Name: "b1", Status: model.BotStatusError, Config: `{}`, Behavior: "idle",
+	}
+	require.NoError(t, db.Create(bot).Error)
+	ended := time.Date(2026, 7, 25, 8, 0, 0, 0, time.UTC)
+	require.NoError(t, db.Create(&model.BotLoadActionResult{
+		StressSessionID: sess.ID, BotID: bot.ID, CohortKey: "all", StepID: "s1",
+		ActionRunID: "00000000-0000-4000-8000-0000000000c1", Attempt: 1,
+		Status: model.BotLoadActionFailed, ErrorCode: "ACTION_TARGET_NOT_FOUND", Message: "x",
+		StartedAt: ended, EndedAt: &ended,
+	}).Error)
+	require.NoError(t, db.Create(&model.BotLoadRunEvent{
+		StressSessionID: sess.ID, RunUUID: sess.UUID, Type: model.BotLoadRunEventRunState,
+		OccurredAt: ended, PayloadJSON: `{"runState":"running"}`,
+	}).Error)
+
+	w := makeRequest(r, "GET", "/api/v1/bots/stress-sessions/"+itoa(sess.ID)+"/failures", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	fb := parseJSON(t, w)
+	assert.Equal(t, float64(1), fb["total"])
+	items := fb["items"].([]interface{})
+	require.Len(t, items, 1)
+	assert.Equal(t, "target", items[0].(map[string]interface{})["category"])
+
+	w = makeRequest(r, "GET", "/api/v1/bots/stress-sessions/"+itoa(sess.ID)+"/events", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	eb := parseJSON(t, w)
+	assert.Equal(t, float64(1), eb["total"])
+	assert.NotEqual(t, "0", eb["snapshotEventId"])
+	assert.Equal(t, "run-state", eb["items"].([]interface{})[0].(map[string]interface{})["type"])
+}
+
 func TestBotStressSession_GetDetailReturnsOrchestration(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

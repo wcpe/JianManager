@@ -445,6 +445,20 @@
 - **响应**: `{ items:[{timestamp,stageIndex,counts,command,barrier,executor,latency,errors,targetLegacy?}], from, to, resolution }`
 - **错误**: 400 非法时间；404 会话不存在或功能未启用
 
+### GET /api/v1/bots/stress-sessions/:id/failures
+- **描述**: 投影会话失败项（FR-370）。数据源：`bot_load_action_results` 失败终态 + `bot_load_command_checkpoints` 失败/超时/取消；分类走 `ClassifyBotLoadError` 五类固定枚举
+- **关联 FR**: FR-370 / FR-372
+- **权限**: 同 report
+- **Query**: `page`/`pageSize`(1..100)、`category`、`errorCode`、`botUuid`、`executorNodeId`、`stepId`、`from`/`to`(RFC3339)
+- **响应**: `{ items:[{id,runUuid,botUuid?,executorNodeId?,actionRunId?,stepId?,commandId?,category,legacyCategory?,errorCode,message,retryable,occurredAt}], total, page, pageSize }`
+
+### GET /api/v1/bots/stress-sessions/:id/events
+- **描述**: 投影 append-only 运行事件（FR-370）。读 `bot_load_run_events`；`eventId` 为行 id 十进制字符串；第一页冻结 `snapshotEventId=MAX(id)`，后续页须回传以保持窗口稳定
+- **关联 FR**: FR-370 / FR-372
+- **权限**: 同 report
+- **Query**: `page`/`pageSize`、`type`、`eventId`、`actionRunId`、`botUuid`、`executorNodeId`、`stepId`、`from`/`to`、`snapshotEventId`
+- **响应**: `{ items:[{eventId,runId,runUuid,timestamp,type,stageIndex?,actionRunId?,botUuid?,executorNodeId?,stepId?,payload,legacy?}], total, page, pageSize, snapshotEventId }`
+
 ### POST /api/v1/instances/:id/stop
 - **描述**: 停止实例
 - **关联 FR**: FR-005
