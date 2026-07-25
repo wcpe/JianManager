@@ -230,6 +230,74 @@ func TestBotStressSession_FailuresAndEvents(t *testing.T) {
 	assert.Equal(t, "run-state", eb["items"].([]interface{})[0].(map[string]interface{})["type"])
 }
 
+// TestBotStressSession_Bots FR-370：bots 列表投影。
+func TestBotStressSession_Bots(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	createTestNode(t, db)
+	inst := createInstanceViaAPI(t, r, token, 1, createGroupViaAPI(t, r, token, "g-bots"))
+	sess := &model.BotStressSession{
+		InstanceID: inst, Name: "bots-run", NamePrefix: "b", BotCount: 1,
+		Status: model.BotStressSessionRunning, SchemaVersion: 2,
+		Config: `{"server":"127.0.0.1","port":25565}`,
+	}
+	require.NoError(t, db.Create(sess).Error)
+	require.NoError(t, db.Create(&model.Bot{
+		UUID: "bot-list-1", InstanceID: inst, StressSessionID: &sess.ID,
+		Name: "b-001", Status: model.BotStatusConnected, Config: `{}`, Behavior: "idle",
+	}).Error)
+
+	w := makeRequest(r, "GET", "/api/v1/bots/stress-sessions/"+itoa(sess.ID)+"/bots", nil, token)
+	require.Equal(t, http.StatusOK, w.Code)
+	body := parseJSON(t, w)
+	assert.Equal(t, float64(1), body["total"])
+	items := body["items"].([]interface{})
+	require.Len(t, items, 1)
+	assert.Equal(t, "connected", items[0].(map[string]interface{})["status"])
+}
+
+// TestBotStressSession_StreamHistoryAndEvents FR-370：SSE 推送 history 帧（run_events 投影）。
+func TestBotStressSession_StreamHistoryAndEvents(t *testing.T) {
+	db := setupTestDB(t)
+	r := setupTestRouter(db)
+	token := getAdminToken(t, r)
+	createTestNode(t, db)
+	inst := createInstanceViaAPI(t, r, token, 1, createGroupViaAPI(t, r, token, "g-hist"))
+	runState := model.BotLoadRunRunning
+	sess := &model.BotStressSession{
+		InstanceID: inst, Name: "hist-run", NamePrefix: "h", BotCount: 1,
+		Status: model.BotStressSessionRunning, SchemaVersion: 2, RunState: &runState,
+		Config: `{"server":"127.0.0.1","port":25565}`,
+	}
+	require.NoError(t, db.Create(sess).Error)
+	require.NoError(t, db.Create(&model.BotLoadRunEvent{
+		StressSessionID: sess.ID, RunUUID: sess.UUID, Type: model.BotLoadRunEventRunState,
+		OccurredAt: time.Now().UTC(), PayloadJSON: `{"runState":"running"}`,
+	}).Error)
+
+	req, err := http.NewRequest(http.MethodGet, "/api/v1/bots/stress-sessions/"+itoa(sess.ID)+"/stream", nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.ServeHTTP(rec, req)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(rec.Body.String(), "event: history") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	body := rec.Body.String()
+	assert.Contains(t, body, "event: history")
+	assert.Contains(t, body, `"type":"run-state"`)
+	_ = done
+}
+
 func TestBotStressSession_GetDetailReturnsOrchestration(t *testing.T) {
 	db := setupTestDB(t)
 	r := setupTestRouter(db)

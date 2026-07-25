@@ -132,6 +132,7 @@ func setupTestRouterWithPool(db *gorm.DB, pool *cpgrpc.ClientPool) *gin.Engine {
 	botLoadSigner, _ := service.NewBotLoadPlanTokenSigner(planSecret, nil)
 	botLoadPreflight := service.NewBotLoadPreflightService(db, botLoadCapacity, botLoadReservations, botLoadSigner, nil)
 	botLoadExecution := service.NewGRPCBotLoadExecutionService(db, botLoadCapacity, botLoadReservations, botLoadSigner, pool, testImmediateBotLoadRunner{}, nil)
+	botLoadExecution.SetRunIntentService(service.NewBotLoadRunIntentService(db))
 	// 运行时资产聚合 + 强制刷新（FR-301）：注入 JDK 同步器，令 refresh 端点可测
 	//（配合 SetWorkerClientForTest 注入 fake Worker）。
 	runtimeAssetsSvc := service.NewRuntimeAssetsService(db)

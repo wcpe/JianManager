@@ -91,3 +91,44 @@ func TestBotLoadProjection_ListFailuresAndEvents(t *testing.T) {
 	require.Equal(t, events.SnapshotEventID, page2.SnapshotEventID)
 	require.Len(t, page2.Items, 1)
 }
+
+func TestBotLoadProjection_ListBotsAndRecent(t *testing.T) {
+	db := openProjectionDB(t)
+	node := &model.Node{UUID: "n-b", Name: "n", Host: "127.0.0.1", Secret: "s"}
+	require.NoError(t, db.Create(node).Error)
+	inst := &model.Instance{NodeID: node.ID, UUID: "i-b", Name: "i", WorkDir: t.TempDir(), Status: model.InstanceStatusRunning}
+	require.NoError(t, db.Create(inst).Error)
+	sess := &model.BotStressSession{
+		UUID: "run-bots", InstanceID: inst.ID, Name: "b", NamePrefix: "b", BotCount: 2,
+		SchemaVersion: 2, Status: model.BotStressSessionRunning,
+	}
+	require.NoError(t, db.Create(sess).Error)
+	exec := node.ID
+	for i := range 2 {
+		require.NoError(t, db.Create(&model.Bot{
+			UUID: "bot-b-" + string(rune('a'+i)), InstanceID: inst.ID, StressSessionID: &sess.ID,
+			ExecutorNodeID: &exec, Name: "b-" + string(rune('1'+i)), Status: model.BotStatusConnected,
+			Config: `{}`, Behavior: "idle",
+		}).Error)
+	}
+	require.NoError(t, db.Create(&model.BotLoadRunEvent{
+		StressSessionID: sess.ID, RunUUID: sess.UUID, Type: model.BotLoadRunEventRunState,
+		OccurredAt: time.Now().UTC(), PayloadJSON: `{"runState":"running"}`,
+	}).Error)
+
+	svc := NewBotLoadProjectionService(db)
+	bots, err := svc.ListBots(context.Background(), sess.ID, ListBotsQuery{Page: 1, PageSize: 10})
+	require.NoError(t, err)
+	require.Equal(t, int64(2), bots.Total)
+	require.Len(t, bots.Items, 2)
+	require.Equal(t, "connected", bots.Items[0].Status)
+
+	filtered, err := svc.ListBots(context.Background(), sess.ID, ListBotsQuery{Page: 1, PageSize: 10, Status: "connected"})
+	require.NoError(t, err)
+	require.Equal(t, int64(2), filtered.Total)
+
+	recent, err := svc.RecentEvents(context.Background(), sess.ID, 5)
+	require.NoError(t, err)
+	require.Len(t, recent, 1)
+	require.Equal(t, model.BotLoadRunEventRunState, recent[0].Type)
+}

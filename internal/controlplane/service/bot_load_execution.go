@@ -171,6 +171,8 @@ type BotLoadExecutionService struct {
 	subscriptions     BotFleetSubscriptionController
 	snapshotRefresh   BotFleetSnapshotRefresher
 	scenarioLifecycle ScenarioRunLifecycle
+	// intents 可选：schemaVersion=2 会话 stop 时走 V2 状态机并写 bot_load_run_events。
+	intents *BotLoadRunIntentService
 
 	startMu     sync.Mutex
 	taskMu      sync.Mutex
@@ -217,6 +219,29 @@ func (s *BotLoadExecutionService) SetFleetSnapshotRefresher(refresher BotFleetSn
 // SetScenarioRunLifecycle 注入场景内存任务的唯一停止收束入口。
 func (s *BotLoadExecutionService) SetScenarioRunLifecycle(lifecycle ScenarioRunLifecycle) {
 	s.scenarioLifecycle = lifecycle
+}
+
+// SetRunIntentService 注入 V2 运行状态机服务，使 stop 能为 schemaVersion=2 会话写 run_events。
+func (s *BotLoadExecutionService) SetRunIntentService(intents *BotLoadRunIntentService) {
+	s.intents = intents
+}
+
+// recordRunEvent 在事务内追加一条 bot_load_run_events（幂等：同 actionRunId+type 只写一次）。
+func (s *BotLoadExecutionService) recordRunEvent(ctx context.Context, sessionID uint, runUUID string, eventType model.BotLoadRunEventType, payload map[string]any) {
+	if s == nil || s.db == nil || runUUID == "" {
+		return
+	}
+	payloadJSON, err := EncodeJSON(payload)
+	if err != nil {
+		return
+	}
+	ev := &model.BotLoadRunEvent{
+		StressSessionID: sessionID, RunUUID: runUUID, Type: eventType,
+		OccurredAt: s.clock.Now().UTC(), PayloadJSON: payloadJSON,
+	}
+	if err := s.db.WithContext(ctx).Create(ev).Error; err != nil {
+		slog.Debug("写入运行事件失败", "runId", sessionID, "type", eventType, "error", err)
+	}
 }
 
 // RecoverFleetSubscriptions 从持久化活动批次恢复已连接节点的 Fleet 订阅，不重派任务或重建 Bot。
@@ -1399,8 +1424,16 @@ func (s *BotLoadExecutionService) Stop(ctx context.Context, sessionID uint, reas
 	if err != nil {
 		return nil, err
 	}
-	if claimedStopIntent && s.scenarioLifecycle != nil {
-		s.scenarioLifecycle.StopRun(session.UUID)
+	if claimedStopIntent {
+		// 为 schemaVersion=2 会话走 V2 状态机并写 run-state 事件（stop intent 落库）。
+		if s.intents != nil && session.SchemaVersion == 2 {
+			if _, intentErr := s.intents.AcceptStop(ctx, sessionID, reason); intentErr != nil {
+				slog.Debug("V2 stop intent 写事件失败（非致命）", "runId", sessionID, "error", intentErr)
+			}
+		}
+		if s.scenarioLifecycle != nil {
+			s.scenarioLifecycle.StopRun(session.UUID)
+		}
 	}
 	if count == 0 {
 		if err := s.finishStopSession(ctx, sessionID); err != nil {
@@ -1803,6 +1836,10 @@ func (s *BotLoadExecutionService) reconcileStoppedBatch(ctx context.Context, bat
 }
 
 func (s *BotLoadExecutionService) finishStopSession(ctx context.Context, sessionID uint) error {
+	var session model.BotStressSession
+	if err := s.db.WithContext(ctx).Select("id", "uuid", "schema_version", "run_state", "verdict").First(&session, sessionID).Error; err != nil {
+		return fmt.Errorf("查询停止会话失败: %w", err)
+	}
 	var bots []model.Bot
 	if err := s.db.WithContext(ctx).Where("stress_session_id = ?", sessionID).Find(&bots).Error; err != nil {
 		return fmt.Errorf("查询停止会话 Bot 状态失败: %w", err)
@@ -1830,6 +1867,16 @@ func (s *BotLoadExecutionService) finishStopSession(ctx context.Context, session
 	}
 	if err := s.db.WithContext(ctx).Model(&model.BotStressSession{}).Where("id = ?", sessionID).Updates(updates).Error; err != nil {
 		return fmt.Errorf("更新 Bot 停止会话状态失败: %w", err)
+	}
+	// 终态收敛时补写 V2 run-state 事件（completed/failed）。
+	if session.SchemaVersion == 2 && s.intents != nil {
+		terminalState := model.BotLoadRunCompleted
+		if updates["status"] == model.BotStressSessionError {
+			terminalState = model.BotLoadRunFailed
+		}
+		if _, intentErr := s.intents.ApplyIntent(ctx, sessionID, BotLoadIntentComplete, "bots_stopped"); intentErr != nil {
+			slog.Debug("V2 终态 intent 写事件失败（非致命）", "runId", sessionID, "state", terminalState, "error", intentErr)
+		}
 	}
 	return nil
 }

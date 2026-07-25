@@ -69,6 +69,8 @@ func assembleBotLoadServices(db *gorm.DB, pool *cpgrpc.ClientPool, stableSecret 
 	// stop 派发后主动 RefreshSnapshot，避免 Worker 无事件时面板 connected 不收敛。
 	execution.SetFleetSnapshotRefresher(coordinator)
 	execution.SetScenarioRunLifecycle(scenarioEvents)
+	// FR-370 V2 运行状态机：stop/complete 写 bot_load_run_events。
+	execution.SetRunIntentService(service.NewBotLoadRunIntentService(db))
 	// FR-365：状态新鲜度巡检，将幽灵 connected 收敛为 disconnected/error。
 	freshnessSvc := service.NewBotFreshnessService(db, nil)
 	freshness := service.NewBotFreshnessSweeper(freshnessSvc)

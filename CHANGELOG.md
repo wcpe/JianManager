@@ -10,7 +10,7 @@
 
 ### 新增
 - **压测 5s 指标采样 + metrics 读 API（FR-370，增量）**：进程内 `BotLoadMetricSampler` 每 5s 对 running/degraded 会话聚合 Bot 状态与命令 checkpoint 计数并幂等写入 `bot_load_metric_samples`；`GET /bots/stress-sessions/:id/metrics?resolution=raw|15s|1m|5m` 返回最多 1200 点。单测覆盖双窗采样与 router 读路径。延迟百分位/targetLegacy/SSE metric 帧后续迭代。
-- **压测 failures/events 投影 API（FR-370，增量）**：`GET .../failures` 从 action 终态失败 + command checkpoint 失败投影五类分类项；`GET .../events` 读 `bot_load_run_events` 并以 `snapshotEventId` 稳定分页。单测覆盖 service 与 router。
+- **压测 failures/events/bots 投影 API + history SSE + stop 写事件（FR-370/372，增量）**：`GET .../bots` 分页会话 Bot；`GET .../failures` 从 action/checkpoint 终态投影五类分类；`GET .../events` 读 `bot_load_run_events` 并以 `snapshotEventId` 稳定分页；SSE 周期推送 `history` 帧（按 eventId 去重增量）；schemaVersion=2 会话 stop 经 V2 `AcceptStop` 写 `run-state` 事件、终态收敛写 completed/failed。单测覆盖投影 service、router bots/history/failures/events 与 stop 事件写入。
 - **压测会话 SSE 帧对齐前端契约（FR-370/372，增量）**：`/stream` 在 `connected` 后推送 `init`/`counts`/`metric`/`complete`（及周期 `run-state`），与观测页 `session-store` 对齐；终态关闭流。单测覆盖终态 init+counts+complete。
 - **压测会话报告 HTTP + 最小 SSE（FR-370，增量）**：`GET /bots/stress-sessions/:id/report?format=json|csv`（终态导出，复用 BotLoadReportService）与 `GET .../stream`；未终态 409 `BOT_LOAD_REPORT_NOT_READY`。router 测覆盖报告与 SSE 首帧。
 - **通用 Bot 命令编排 Stop Cancel + ActionResult 终态回写（FR-369，增量）**：压测 stop 在 `ApplyBotBatch` 前对未终态 checkpoint 下发 `CancelBotCommandSchedules`（reason=`session_stop`）并本地标 `cancelled`；Fleet `action_event` 首终态 applied 后按 `actionRunId` 回写 checkpoint（succeeded→sent，failed/timed_out/cancelled→对应终态）。单测覆盖 stop 取消 2 Bot 与 terminal→checkpoint 同步。

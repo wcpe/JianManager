@@ -543,13 +543,45 @@ func (h *BotStressSessionHandler) RegisterRoutes(rg *gin.RouterGroup) {
 		if h.execution != nil {
 			sessions.POST("/:id/retry-failed", h.RetryFailed)
 		}
-		// FR-370：终态报告 + SSE + 指标 + failures/events 投影。
+		// FR-370：终态报告 + SSE + 指标 + bots/failures/events 投影。
 		sessions.GET("/:id/report", h.Report)
 		sessions.GET("/:id/stream", h.Stream)
 		sessions.GET("/:id/metrics", h.Metrics)
+		sessions.GET("/:id/bots", h.Bots)
 		sessions.GET("/:id/failures", h.Failures)
 		sessions.GET("/:id/events", h.Events)
 	}
+}
+
+// Bots 投影会话关联 Bot 列表（FR-370）。
+func (h *BotStressSessionHandler) Bots(c *gin.Context) {
+	if h.projection == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "NOT_FOUND", "message": "Bot 投影未启用"})
+		return
+	}
+	id, err := parseID(c)
+	if err != nil {
+		return
+	}
+	if !h.canReadSession(c, id) {
+		return
+	}
+	q := service.ListBotsQuery{
+		Page: parseQueryInt(c, "page", 1), PageSize: parseQueryInt(c, "pageSize", 20),
+		Q: c.Query("q"), Status: c.Query("status"), StepID: c.Query("stepId"), ErrorCode: c.Query("errorCode"),
+	}
+	if raw := strings.TrimSpace(c.Query("executorNodeId")); raw != "" {
+		if n, pErr := strconv.ParseUint(raw, 10, 64); pErr == nil {
+			u := uint(n)
+			q.ExecutorNodeID = &u
+		}
+	}
+	res, perr := h.projection.ListBots(c.Request.Context(), id, q)
+	if perr != nil {
+		writeBotLoadProjectionError(c, perr)
+		return
+	}
+	c.JSON(http.StatusOK, res)
 }
 
 // Failures 投影会话失败项（FR-370）。
@@ -784,10 +816,13 @@ func (h *BotStressSessionHandler) Stream(c *gin.Context) {
 	defer ticker.Stop()
 	ctx := c.Request.Context()
 	var lastMetricTS string
+	var lastHistoryID uint
 	// 首帧立即推 init + counts（+ metric 若有）。
 	if done := h.writeSessionStreamAligned(c, id, writeSSE, &lastMetricTS, true); done {
 		return
 	}
+	// 首帧也推送已有 history（init 之后）。
+	lastHistoryID = h.pushHistoryFrames(c, id, writeSSE, lastHistoryID)
 	for {
 		select {
 		case <-ctx.Done():
@@ -796,8 +831,46 @@ func (h *BotStressSessionHandler) Stream(c *gin.Context) {
 			if done := h.writeSessionStreamAligned(c, id, writeSSE, &lastMetricTS, false); done {
 				return
 			}
+			lastHistoryID = h.pushHistoryFrames(c, id, writeSSE, lastHistoryID)
 		}
 	}
+}
+
+// pushHistoryFrames 推送 id > lastID 的运行事件为 history 帧，返回新的最大 eventId。
+func (h *BotStressSessionHandler) pushHistoryFrames(c *gin.Context, id uint, writeSSE func(string, any) bool, lastID uint) uint {
+	if h.projection == nil {
+		return lastID
+	}
+	events, err := h.projection.RecentEvents(c.Request.Context(), id, 50)
+	if err != nil || len(events) == 0 {
+		return lastID
+	}
+	// RecentEvents 按 id DESC 返回；反转后按 id 升序推送，便于前端追加。
+	maxID := lastID
+	pending := make([]model.BotLoadRunEvent, 0, len(events))
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].ID <= lastID {
+			continue
+		}
+		pending = append(pending, events[i])
+	}
+	for _, ev := range pending {
+		frame := gin.H{
+			"eventId":   strconv.FormatUint(uint64(ev.ID), 10),
+			"runId":     id,
+			"runUuid":   ev.RunUUID,
+			"timestamp": ev.OccurredAt.UTC().Format(time.RFC3339Nano),
+			"type":      string(ev.Type),
+			"payload":   json.RawMessage(ev.PayloadJSON),
+		}
+		if !writeSSE("history", frame) {
+			return maxID
+		}
+		if ev.ID > maxID {
+			maxID = ev.ID
+		}
+	}
+	return maxID
 }
 
 // writeSessionStreamAligned 推送契约帧；返回 true 表示应关闭流（终态 complete 或硬错误）。

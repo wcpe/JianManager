@@ -432,7 +432,7 @@
 - **错误**: 404 会话不存在；409 `BOT_LOAD_REPORT_NOT_READY` 未终态；400 非法 format
 
 ### GET /api/v1/bots/stress-sessions/:id/stream
-- **描述**: 压测会话 SSE（FR-370/372）。握手 `event: connected` 后推送契约帧：`init`（`{run,lastEventId}`）、周期 `counts`（及 `run-state`）、有新样本时 `metric`、终态 `complete`（含 `reportReady`/`disclaimer`）。兼容旧客户端仍发 `connected`；完整 history 投影后续迭代
+- **描述**: 压测会话 SSE（FR-370/372）。握手 `event: connected` 后推送契约帧：`init`（`{run,lastEventId}`）、周期 `counts`（及 `run-state`）、有新样本时 `metric`、有新事件时 `history`（按 eventId 去重增量推送，前端可安全追加 Events 列表）、终态 `complete`（含 `reportReady`/`disclaimer`）。兼容旧客户端仍发 `connected`
 - **关联 FR**: FR-370 / FR-372
 - **权限**: 同 report
 - **响应**: `text/event-stream`
@@ -444,6 +444,13 @@
 - **Query**: `from?`/`to?`（RFC3339）；`resolution=raw|15s|1m|5m`（默认 raw）；响应最多约 1200 点
 - **响应**: `{ items:[{timestamp,stageIndex,counts,command,barrier,executor,latency,errors,targetLegacy?}], from, to, resolution }`
 - **错误**: 400 非法时间；404 会话不存在或功能未启用
+
+### GET /api/v1/bots/stress-sessions/:id/bots
+- **描述**: 投影会话关联 Bot 列表（FR-370）。读 `bots` 表；支持状态/关键字筛选
+- **关联 FR**: FR-370 / FR-372
+- **权限**: 同 report
+- **Query**: `page`/`pageSize`(1..100)、`q`(name/uuid)、`status`、`executorNodeId`、`stepId`
+- **响应**: `{ items:[{id,uuid,name,status,executorNodeId?,stepId?,commandId?,reconnectCount,lastSeenAt?,lastError?}], total, page, pageSize }`
 
 ### GET /api/v1/bots/stress-sessions/:id/failures
 - **描述**: 投影会话失败项（FR-370）。数据源：`bot_load_action_results` 失败终态 + `bot_load_command_checkpoints` 失败/超时/取消；分类走 `ClassifyBotLoadError` 五类固定枚举

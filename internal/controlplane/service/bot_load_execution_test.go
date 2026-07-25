@@ -266,7 +266,7 @@ func newBotLoadExecutionHarness(t *testing.T, capacities []int, target int, runn
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(8)
 	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
-	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.BotStressSession{}, &model.BotLoadBatch{}, &model.Bot{}, &model.BotLoadCommandCheckpoint{}))
+	require.NoError(t, db.AutoMigrate(&model.Node{}, &model.Instance{}, &model.BotStressSession{}, &model.BotLoadBatch{}, &model.Bot{}, &model.BotLoadCommandCheckpoint{}, &model.BotLoadRunEvent{}))
 
 	nodes := make([]model.Node, 0, len(capacities))
 	nodeCapacities := make([]BotLoadNodeCapacity, 0, len(capacities))
@@ -477,6 +477,10 @@ func TestBotLoadExecutionStart_Creates500BotsAcrossTenBatches(t *testing.T) {
 // TestBotLoadExecutionStop_CancelsOpenCommandSchedules FR-369：stop 对未终态 checkpoint 下发 Cancel。
 func TestBotLoadExecutionStop_CancelsOpenCommandSchedules(t *testing.T) {
 	h := newBotLoadExecutionHarness(t, []int{2}, 2, nil)
+	// 注入 V2 intent，使 stop 写 bot_load_run_events。
+	h.service.SetRunIntentService(NewBotLoadRunIntentService(h.db))
+	runState := model.BotLoadRunRunning
+	require.NoError(t, h.db.Model(h.session).Updates(map[string]any{"schema_version": 2, "run_state": runState}).Error)
 	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
 	require.NoError(t, err)
 	require.NotEmpty(t, h.dispatcher.ScheduleCalls())
@@ -507,6 +511,12 @@ func TestBotLoadExecutionStop_CancelsOpenCommandSchedules(t *testing.T) {
 	require.NoError(t, h.db.Model(&model.BotLoadCommandCheckpoint{}).
 		Where("status = ?", model.BotLoadCommandCheckpointCancelled).Count(&cancelled).Error)
 	require.Equal(t, int64(2), cancelled)
+
+	// FR-370：stop 应通过 V2 intent 写入 run-state 事件。
+	var eventCount int64
+	require.NoError(t, h.db.Model(&model.BotLoadRunEvent{}).
+		Where("stress_session_id = ?", h.session.ID).Count(&eventCount).Error)
+	require.GreaterOrEqual(t, eventCount, int64(1), "stop 应写 bot_load_run_events")
 }
 
 func TestBotLoadExecutionStart_MaterializesStableCohortAndScenarioAssignments(t *testing.T) {

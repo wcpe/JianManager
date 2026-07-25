@@ -396,3 +396,102 @@ func isRetryableError(code string) bool {
 		return false
 	}
 }
+
+// BotLoadRunBotView 与规格/前端 BotLoadRunBot 对齐。
+type BotLoadRunBotView struct {
+	ID             uint   `json:"id"`
+	UUID           string `json:"uuid"`
+	Name           string `json:"name"`
+	Status         string `json:"status"`
+	ExecutorNodeID *uint  `json:"executorNodeId,omitempty"`
+	StepID         string `json:"stepId,omitempty"`
+	CommandID      string `json:"commandId,omitempty"`
+	ReconnectCount int    `json:"reconnectCount"`
+	LastSeenAt     string `json:"lastSeenAt,omitempty"`
+	LastError      string `json:"lastError,omitempty"`
+}
+
+// BotLoadBotListResult bots 分页。
+type BotLoadBotListResult struct {
+	Items    []BotLoadRunBotView `json:"items"`
+	Total    int64               `json:"total"`
+	Page     int                 `json:"page"`
+	PageSize int                 `json:"pageSize"`
+}
+
+// ListBotsQuery bots 列表筛选。
+type ListBotsQuery struct {
+	Page           int
+	PageSize       int
+	Q              string
+	Status         string
+	ExecutorNodeID *uint
+	StepID         string
+	ErrorCode      string
+}
+
+// ListBots 投影会话关联 Bot 列表（FR-370/372）。
+func (s *BotLoadProjectionService) ListBots(ctx context.Context, sessionID uint, q ListBotsQuery) (*BotLoadBotListResult, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("投影服务未初始化")
+	}
+	var sess model.BotStressSession
+	if err := s.db.WithContext(ctx).First(&sess, sessionID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrBotStressSessionNotFound
+		}
+		return nil, err
+	}
+	page, pageSize := normalizeProjectionPage(q.Page, q.PageSize)
+	base := s.db.WithContext(ctx).Model(&model.Bot{}).Where("stress_session_id = ?", sessionID)
+	if q.Q != "" {
+		like := "%" + q.Q + "%"
+		base = base.Where("name LIKE ? OR uuid LIKE ?", like, like)
+	}
+	if q.Status != "" {
+		base = base.Where("status = ?", q.Status)
+	}
+	if q.ExecutorNodeID != nil {
+		base = base.Where("executor_node_id = ?", *q.ExecutorNodeID)
+	}
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, fmt.Errorf("统计运行 Bot 失败: %w", err)
+	}
+	var rows []model.Bot
+	if err := base.Order("id ASC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("查询运行 Bot 失败: %w", err)
+	}
+	items := make([]BotLoadRunBotView, 0, len(rows))
+	for _, b := range rows {
+		v := BotLoadRunBotView{
+			ID: b.ID, UUID: b.UUID, Name: b.Name, Status: string(b.Status),
+			ExecutorNodeID: b.ExecutorNodeID, ReconnectCount: b.ReconnectCount,
+			LastError: b.LastError,
+		}
+		if b.LastSeenAt != nil {
+			v.LastSeenAt = b.LastSeenAt.UTC().Format(time.RFC3339Nano)
+		}
+		items = append(items, v)
+	}
+	return &BotLoadBotListResult{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
+}
+
+// RecentEvents 读取会话最近 N 条事件（按 id DESC），供 SSE history 增量推送。
+func (s *BotLoadProjectionService) RecentEvents(ctx context.Context, sessionID uint, limit int) ([]model.BotLoadRunEvent, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("投影服务未初始化")
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	var rows []model.BotLoadRunEvent
+	if err := s.db.WithContext(ctx).
+		Where("stress_session_id = ?", sessionID).
+		Order("id DESC").
+		Limit(limit).
+		Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("查询最近事件失败: %w", err)
+	}
+	return rows, nil
+}
