@@ -6,30 +6,31 @@
 
 ## [Unreleased]
 
-> 本段为 `v0.20.0` 开发版归档区（自 v0.19.0 之后累积）。
+> 下个版本开发窗口；正式发版时将本段整理为新版本段。
+
+## 0.20.0（2026-07-25）
+
+> 本版交付：文件资源管理器权限/多窗壳、Agent Token + CP 内嵌 MCP 与调用观测、Bot 命令压测平台（编排/运行/向导/观测）、实例反向对账、节点离线归档清理；退役 mcp-bridge。CI 在 `b029216` 全绿（agent-gate/web-static/bot-quality/web-quality/E2E×4）。已知残余：FR-365 error 态不自动回 connected；FR-369/370 单 Worker 不宣称 500 全员 connected 与 60min harness 满跑。
 
 ### 新增
-- **退役 mcp-bridge 独立进程（FR-392）**：删除 `apps/mcp-bridge/`（10 文件）及 CI `agent-gate` job 中测试引用；Agent 入口统一为 CP 内嵌 MCP（FR-389 Streamable HTTP/SSE）。刷新 FR-388 安全闸契约表第三入口表述（mcp-bridge → CP 内嵌 MCP）；ARCHITECTURE/PRD 标记退役。`jmagent` 全局发送 `X-JM-Agent-Client: jmagent` 已在 FR-385 落地。
-- **压测 5s 指标采样 + metrics 读 API（FR-370，增量）**：进程内 `BotLoadMetricSampler` 每 5s 对 running/degraded 会话聚合 Bot 状态与命令 checkpoint 计数并幂等写入 `bot_load_metric_samples`；`GET /bots/stress-sessions/:id/metrics?resolution=raw|15s|1m|5m` 返回最多 1200 点。单测覆盖双窗采样与 router 读路径。延迟百分位/targetLegacy/SSE metric 帧后续迭代。
-- **压测 failures/events/bots 投影 API + history SSE + stop 写事件（FR-370/372，增量）**：`GET .../bots` 分页会话 Bot；`GET .../failures` 从 action/checkpoint 终态投影五类分类；`GET .../events` 读 `bot_load_run_events` 并以 `snapshotEventId` 稳定分页；SSE 周期推送 `history` 帧（按 eventId 去重增量）；schemaVersion=2 会话 stop 经 V2 `AcceptStop` 写 `run-state` 事件、终态收敛写 completed/failed。单测覆盖投影 service、router bots/history/failures/events 与 stop 事件写入。
-- **压测会话 SSE 帧对齐前端契约（FR-370/372，增量）**：`/stream` 在 `connected` 后推送 `init`/`counts`/`metric`/`complete`（及周期 `run-state`），与观测页 `session-store` 对齐；终态关闭流。单测覆盖终态 init+counts+complete。
-- **压测会话报告 HTTP + 最小 SSE（FR-370，增量）**：`GET /bots/stress-sessions/:id/report?format=json|csv`（终态导出，复用 BotLoadReportService）与 `GET .../stream`；未终态 409 `BOT_LOAD_REPORT_NOT_READY`。router 测覆盖报告与 SSE 首帧。
-- **通用 Bot 命令编排 Stop Cancel + ActionResult 终态回写（FR-369，增量）**：压测 stop 在 `ApplyBotBatch` 前对未终态 checkpoint 下发 `CancelBotCommandSchedules`（reason=`session_stop`）并本地标 `cancelled`；Fleet `action_event` 首终态 applied 后按 `actionRunId` 回写 checkpoint（succeeded→sent，failed/timed_out/cancelled→对应终态）。单测覆盖 stop 取消 2 Bot 与 terminal→checkpoint 同步。
-- **通用 Bot 命令编排 Apply 主路径接线（FR-369，增量）**：压测 start 在 `ApplyBotBatch` accepted 后，对带 `CommandScheduleSnap` 的会话按 Bot Finalize occurrence plan、物化 checkpoint，并经 `ApplyBotCommandSchedules`（absolute）下发 Worker；无快照旧会话 no-op。单测覆盖 500 Bot 派发后 schedule 项数与 checkpoint 行数。
-- **节点离线归档与彻底清理（FR-393/394，开发中）**：`GET /nodes/archived`、`GET /nodes/archived/:id` 列出/查看软删下线节点；`DELETE /nodes/archived/:id?force=` 硬删库记录（有实例须 force 级联实例平台记录，不碰远端文件，审计 `node.purge`）；NodesPage `活跃|归档`（`?view=`）+ 清理 DangerConfirm；devmock 归档样例 `gamma-archived`。单测/router/DOM 绿。**待真机** compose 1CP+1Worker 下线→归档→清理闭环。
-- **CP 内嵌 MCP 长连接服务（FR-389，开发中）**：Control Plane 内嵌 Streamable HTTP（`POST/GET/DELETE /api/v1/mcp`）+ SSE 兼容（`GET /api/v1/mcp/sse`、`POST /api/v1/mcp/message`）；鉴权仅 Agent Token（`jmat_`）；工具集与 jm-agent 对齐（含 `agent_get_instance_logs`），硬拒绝不注册；策略走 `ResolveAction`（拒绝 → HTTP 200 + `isError` + 中文）；内存会话可运维（列表/踢线/空闲 30m/绝对 24h/全局 32/每 Token 4，可配置）；管理员 `GET/DELETE /api/v1/agent/mcp/sessions`；改写 ADR-077 为「CP 内嵌 MCP 网关」；stdio `apps/mcp-bridge` 不删（FR-392）。单测：会话并发/超时/踢线/鉴权/tools/list。**待真机验**远程 HTTPS 全路径。
-- **Agent 调用流水与 Token 活跃（FR-390，ADR-076）**：表 `agent_call_logs` + `AgentCallLogService`（Record/List/Count24h/PurgeExpired，默认保留 14 天）；`/api/v1/agent/*` Ops 读+写在成功鉴权后记流水（403 记 `success=false`，401 不刷库）；解析 `X-JM-Agent-Client`（mcp|jmagent|curl|unknown）；管理员 `GET/api/v1/agent/call-logs` 过滤分页；Token 列表附 `lastUsedAt`+`callCount24h`；`jmagent` 默认发 `X-JM-Agent-Client: jmagent`。不替代写操作既有 audit；**MCP tools/call 与 session open/close/kick 已挂 `Record`（client=mcp）**。
-- **Agent 观测 UI（FR-391，开发中）**：平台管理 → MCP 会话页（`/mcp-sessions` 列表/踢线/超时说明/复制 MCP URL）+ 调用流水页（`/agent-call-logs` 按 token/action/client/成败筛选分页）+ Token 列表「最近使用 / 24h 调用」+ 签发弹窗复制 MCP 端点；中英 i18n。审计页 action 前缀筛选沿用既有。
-- **CP↔Worker 实例反向对账（FR-326，ADR-079）**：心跳 `instances` 加性 `pid`；CP `OrphanRuntimeTracker` 发现 Worker 有、CP 无记录的无主运行时（宽限默认 10m、`auto_dispose` 默认 false）；`DisposeOrphanRuntime` 清 Worker 运行态；管理员 `GET/POST /orphan-runtimes`；设置键 `instance_reverse_reconcile.*`。不重建 CP 实例、不改写正向对账。
-- **CP↔Worker 实例反向对账（FR-326，ADR-078）**：心跳 `instances` 加性 `pid`；CP `OrphanRuntimeTracker` 发现 Worker 有、CP 无记录的无主运行时（宽限默认 10m、`auto_dispose` 默认 false）；`DisposeOrphanRuntime` 清 Worker 运行态；管理员 `GET/POST /orphan-runtimes`；设置键 `instance_reverse_reconcile.*`。不重建 CP 实例、不改写正向对账。
-- **Bot 长稳重连、进程恢复与状态归真（FR-365）**：`bots.desired_state`/`reconnect_count` 与 generation/epoch/seq/configHash 归真；Bot Worker 指数退避+抖动自动重连与 connecting 信号量；Worker 内存 desired 缓存、子进程崩溃熔断/重拉/重放；CP Fleet snapshot reconcile 创建缺失/停止 orphan、10s/90s 新鲜度巡检；`POST .../retry-failed` 后端幂等。自动化测试覆盖接受矩阵、重连/信号量、desired 重放、reconcile 与 retry；真机批量踢出/杀 bot-worker/重启 Worker 待验收。
-- **通用 Bot 命令编排与调度扩展（FR-369，partial）**：CP 侧 `Normalize/Finalize` 冻结 occurrence plan（jitter/actionRunId/模板展开）；Worker gRPC `Apply/Release/CancelBotCommandSchedules` + Bot Worker 集中 `CommandScheduler`（absolute/barrier、取消幂等、bot.chat 固定 3 次重试）；IPC `command-schedule*` 同步回执与 `command-schedule-result` 异步终态。已接线：start Apply 物化/下发、stop Cancel、ActionResult 终态回写 checkpoint。未交付：occurrence 观测全链路（真机 Node 已解阻）。
-- **通用命令压测运行状态机与模板地基（FR-370，partial）**：模型 Template/Metric/RunEvent + Session V2；状态机/profile/evaluator；`BotLoadTemplateService` CRUD + `POST /bots/load-templates*` HTTP；`BotLoadRunIntentService`；进程内 `BotLoadRunCoordinator` 登记/stop/cancel；终态 JSON/CSV 报告 service + 报告 HTTP；**5s MetricSampler + GET metrics**；**SSE init/counts/metric/complete 对齐**；**failures/events 投影 API**。未交付：延迟百分位/targetLegacy 全量、history SSE 帧、bots 列表投影。
-- **通用命令压测模板与创建向导前端（FR-371，partial）**：`/bots` URL 可寻址 tab（fleet/sessions/templates）；`api/botLoad` 模板/节点/预检/启动 hooks；模板列表 CRUD + TemplateDialog；五步 `BotLoadWizard`（目标/连接/命令编排/负载曲线/阈值预检）与 CommandPlanEditor/LoadProfile/Threshold/CapacityPlan；lib 纯函数单测与中英 `botsLoad` i18n；devmock 扩展 load-templates/load-nodes/preflight。未交付：Playwright E2E、5000 Mock 性能断言、fleet 提取为独立文件、真机验收与 a11y 全量矩阵。
-- **通用命令压测实时观测前端壳（FR-372，partial）**：路由 `/bots/sessions/:id` + 六 tab 骨架（overview/bots/metrics/failures/events/config）；会话级 SSE 客户端；Header 停止/取消/报告下载与常驻 `bot.chat` 成功边界免责声明；devmock V2 演示；**后端 stream/metrics/failures/events 已可真连**。未交付：完整图表/虚拟化性能门禁、Playwright 真流、history 帧、a11y 全量验收。
+- **文件权限底座与资源管理器批次（FR-373～378）**：`ListFiles`/`BrowseDir` 权限元数据、写前可写探测、非递归 chmod；导入手输路径与权限引导；单窗 Windows 对齐（地址栏/历史/侧键/三视图/权限列）；主区多标签+浮动窗+深链；跨窗剪贴板总线与 DnD；`UnifiedExplorerShell` + Capability 接入实例/存储等场景。
+- **Agent Token 与安全闸（FR-384/385/387/388）**：`agent_tokens` + 策略真源（scope/写白名单/硬拒绝）；`jmagent` CLI；Token 管理 UI；契约表 CLI↔CP-MCP↔curl + CI `agent-gate`（≥30 断言）。
+- **CP 内嵌 MCP + 调用观测（FR-389/390/391）**：Streamable HTTP/SSE MCP（`/api/v1/mcp*`）；会话列表/踢线/超时与并发上限；`agent_call_logs` + Token `lastUsedAt`/24h 次数；MCP 会话页与调用流水页。
+- **退役 mcp-bridge（FR-392）**：删除 `apps/mcp-bridge/` 与 CI 引用；入口统一为 CP 内嵌 MCP；刷新 FR-388 三入口表述。
+- **Bot 长稳恢复（FR-365）**：desired_state/reconnect_count 与 generation 归真；bot-worker 崩溃自启与 desired 重放；Fleet reconcile 与新鲜度巡检；`retry-failed`。真机：杀 bot-worker/重启 Worker 恢复 OK；残余 error 态需手动 retry。
+- **通用命令编排（FR-369）**：`command_schedule` occurrence plan、Apply/Cancel gRPC、checkpoint 物化与 ActionResult 回写。真机：2 Bot start/stop/cancel；500 物化 + 10×50 批次（单 Worker connecting 信号量限制全员 connected）。
+- **压测运行/模板/观测（FR-370/371/372）**：模板/状态机/协调器/报告；5s metrics + SSE init/counts/metric/complete；failures/events/bots 投影与 history 帧；五步向导与会话详情壳；Playwright mock E2E；`botloadacceptance` harness 源码。残余：未跑满 500×60min harness。
+- **实例反向对账（FR-326）**：心跳加性 pid；孤儿检测/宽限/手动 dispose；真机闭环通过。
+- **节点离线归档与清理（FR-393/394）**：归档列表/详情；硬删清理（force 级联实例记录、不碰远端文件）；真机下线→归档→清理通过。
 
 ### 修复
-- **Worker Alpine 镜像缺 musl Node 导致 LEGACY_WORKER（FR-369 真机）**：`Dockerfile.worker` 运行基座 `alpine:3.20`→`3.21` 并 `apk add nodejs`（v22.23.0，满足 bot-worker ≥22.13）。3.20 仅有 Node 20，且 data 目录 glibc 官方 Node 在 musl 上无法 exec（fcntl64），preflight 恒 `LEGACY_WORKER`。真机替换 `jianmanager-worker:online` 后 botWorkerReady=true，2 Bot 压测 start/stop 与 checkpoint cancel 闭环。
+- **Worker Alpine musl Node（FR-369 真机）**：`Dockerfile.worker` `alpine:3.21` + 内置 `nodejs` v22.23.0，解阻 `LEGACY_WORKER` 与 Bot Fleet preflight。
+- **CI agent-gate 干净检出缺 embed/dist**：入库占位 `index.html` + `.gitignore`，对齐 botworker/worker 占位模式。
+- **web-static / bot-quality ESLint 阻断**：react-hooks purity/set-state-in-effect/refs 与 CommandScheduler 声明合并。
+
+### 文档
+- PRD 本批 FR 标 `已交付@v0.20.0`（含残余备注）；FR-386/364/366～368 已废弃表述保持。
+- Agent/MCP、节点归档、压测平台规格与 API 随实现同步。
 
 ## 0.19.0（2026-07-23）
 
