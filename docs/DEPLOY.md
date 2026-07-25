@@ -167,6 +167,8 @@ Control Plane 一台，Worker 多台：各 Worker 设相同 `JIANMANAGER_CONTROL
 
 用仓库根目录的 `Dockerfile.control-plane`、`Dockerfile.worker` 与 `docker-compose.yml` 在本机构建并启动 **CP + 一个 Worker**（开发/试用；生产请改密钥并评估数据卷备份）。
 
+> **Worker 运行时基座**：`Dockerfile.worker` 使用 **Alpine 3.21**，镜像内预装 **musl Node.js ≥22.13**（主仓 `nodejs`，构建时校验 `node -v`）与 `openjdk21-jre`。Bot Fleet / FR-369 依赖 PATH 或托管扫描拿到可执行 Node；勿在 Alpine Worker 上仅挂载 glibc 官方 Node 二进制（会 `fcntl64`/无法 exec，容量侧表现为 `LEGACY_WORKER`）。
+
 ### 前置
 
 - Docker Engine + Compose v2（`docker compose version`）
