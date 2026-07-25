@@ -38,10 +38,11 @@ type BotLoadCapacityRefresher interface {
 }
 
 // BotLoadBatchDispatcher 隔离连接池和 proto client，便于测试逐批编排。
-// FR-369：加性支持命令计划 Apply（与 Bot 批同节点下发）。
+// FR-369：加性支持命令计划 Apply/Cancel（与 Bot 批同节点下发）。
 type BotLoadBatchDispatcher interface {
 	ApplyBotBatch(ctx context.Context, nodeUUID string, request *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error)
 	ApplyBotCommandSchedules(ctx context.Context, nodeUUID string, request *workerpb.ApplyBotCommandSchedulesRequest) (*workerpb.ApplyBotCommandSchedulesResponse, error)
+	CancelBotCommandSchedules(ctx context.Context, nodeUUID string, request *workerpb.CancelBotCommandSchedulesRequest) (*workerpb.CancelBotCommandSchedulesResponse, error)
 }
 
 // BotLoadBackgroundRunner 提交有界后台任务；测试可注入同步或排队实现。
@@ -80,6 +81,17 @@ func (d poolBotLoadBatchDispatcher) ApplyBotCommandSchedules(ctx context.Context
 		return nil, errBotLoadWorkerMissing
 	}
 	return client.Worker.ApplyBotCommandSchedules(ctx, request)
+}
+
+func (d poolBotLoadBatchDispatcher) CancelBotCommandSchedules(ctx context.Context, nodeUUID string, request *workerpb.CancelBotCommandSchedulesRequest) (*workerpb.CancelBotCommandSchedulesResponse, error) {
+	if d.pool == nil {
+		return nil, errBotLoadWorkerMissing
+	}
+	client, ok := d.pool.Get(nodeUUID)
+	if !ok || client.Worker == nil {
+		return nil, errBotLoadWorkerMissing
+	}
+	return client.Worker.CancelBotCommandSchedules(ctx, request)
 }
 
 type botLoadConnectionConfig struct {
@@ -1133,18 +1145,18 @@ func (s *BotLoadExecutionService) applyCommandSchedulesAfterBatch(ctx context.Co
 			continue
 		}
 		reqItems = append(reqItems, &workerpb.ApplyBotCommandScheduleItem{
-			RunId:                  int64(session.ID),
-			RunUuid:                session.UUID,
-			BotUuid:                bot.UUID,
-			Generation:             bot.DesiredStateGeneration,
-			StepId:                 stepID,
-			ScheduleRunId:          scheduleRunID,
-			CorrelationToken:       corr,
-			StartMode:              "absolute",
-			ScheduleStartAtUnixMs:  startAt,
-			RunDeadlineUnixMs:      deadline,
-			JitterSeed:             jitterSeed,
-			Plan:                   commandSchedulePlanToProto(planCopy),
+			RunId:                 int64(session.ID),
+			RunUuid:               session.UUID,
+			BotUuid:               bot.UUID,
+			Generation:            bot.DesiredStateGeneration,
+			StepId:                stepID,
+			ScheduleRunId:         scheduleRunID,
+			CorrelationToken:      corr,
+			StartMode:             "absolute",
+			ScheduleStartAtUnixMs: startAt,
+			RunDeadlineUnixMs:     deadline,
+			JitterSeed:            jitterSeed,
+			Plan:                  commandSchedulePlanToProto(planCopy),
 		})
 	}
 	if len(reqItems) == 0 {
@@ -1211,13 +1223,13 @@ func commandSchedulePlanToProto(plan *CommandSchedulePlan) *workerpb.AppliedComm
 	occs := make([]*workerpb.AppliedCommandOccurrence, 0, len(plan.Occurrences))
 	for _, o := range plan.Occurrences {
 		occs = append(occs, &workerpb.AppliedCommandOccurrence{
-			CommandId:                o.CommandID,
-			Occurrence:               int32(o.Occurrence),
-			CommandDeclarationIndex:  int32(o.CommandDeclarationIdx),
-			BaseAtMs:                 o.BaseAtMS,
-			JitterOffsetMs:           o.JitterOffsetMS,
-			ActionRunId:              o.ActionRunID,
-			Command:                  o.Command,
+			CommandId:               o.CommandID,
+			Occurrence:              int32(o.Occurrence),
+			CommandDeclarationIndex: int32(o.CommandDeclarationIdx),
+			BaseAtMs:                o.BaseAtMS,
+			JitterOffsetMs:          o.JitterOffsetMS,
+			ActionRunId:             o.ActionRunID,
+			Command:                 o.Command,
 		})
 	}
 	return &workerpb.AppliedCommandOccurrencePlan{
@@ -1611,12 +1623,102 @@ func sortedBotLoadStopGroups(byNode map[uint]*botLoadStopGroup) []botLoadStopGro
 }
 
 func (s *BotLoadExecutionService) dispatchStopChunk(ctx context.Context, session *model.BotStressSession, node model.Node, bots []model.Bot) error {
+	// FR-369：先取消未终态命令计划，再下发 Bot stopped 批。
+	if err := s.cancelCommandSchedulesForBots(ctx, session, node.UUID, bots); err != nil {
+		slog.Error("Bot 命令编排取消失败", "runId", session.ID, "nodeId", node.ID, "error", err)
+	}
 	request := buildStopBotLoadBatchRequest(session, node, bots)
 	response, rpcErr := s.applyBotLoadBatch(ctx, node.UUID, request)
 	items := normalizeBotLoadDispatchItems(bots, request, response, rpcErr)
 	if err := s.persistStopBatchResult(ctx, items); err != nil {
 		slog.Error("Bot 负载停止 RPC 后数据库回写失败", "runId", session.ID, "nodeId", node.ID, "error", err)
 		return err
+	}
+	return nil
+}
+
+// cancelCommandSchedulesForBots 按 checkpoint 中未终态 scheduleRun 下发 Cancel（幂等）。
+func (s *BotLoadExecutionService) cancelCommandSchedulesForBots(ctx context.Context, session *model.BotStressSession, nodeUUID string, bots []model.Bot) error {
+	if session == nil || len(bots) == 0 {
+		return nil
+	}
+	botUUIDs := make([]string, 0, len(bots))
+	botByUUID := make(map[string]model.Bot, len(bots))
+	for _, b := range bots {
+		botUUIDs = append(botUUIDs, b.UUID)
+		botByUUID[b.UUID] = b
+	}
+	// 未终态：prepared/scheduled（sent 已不可取消覆盖当前 chat，但后续 occurrence 仍由 Worker 按 cancel 收敛）
+	openStatuses := []model.BotLoadCommandCheckpointStatus{
+		model.BotLoadCommandCheckpointPrepared,
+		model.BotLoadCommandCheckpointScheduled,
+	}
+	var rows []model.BotLoadCommandCheckpoint
+	if err := s.db.WithContext(ctx).
+		Where("run_uuid = ? AND bot_uuid IN ? AND status IN ?", session.UUID, botUUIDs, openStatuses).
+		Find(&rows).Error; err != nil {
+		return fmt.Errorf("查询未终态命令 checkpoint 失败: %w", err)
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	// scheduleRunId + bot 聚合 unresolved occurrences
+	type key struct{ bot, schedule, step string }
+	groups := map[key][]model.BotLoadCommandCheckpoint{}
+	for _, row := range rows {
+		k := key{bot: row.BotUUID, schedule: row.ScheduleRunID, step: row.StepID}
+		groups[k] = append(groups[k], row)
+	}
+	items := make([]*workerpb.CancelBotCommandScheduleItem, 0, len(groups))
+	for k, occs := range groups {
+		bot, ok := botByUUID[k.bot]
+		if !ok {
+			continue
+		}
+		corr, err := ComputeScheduleCorrelationToken(k.schedule, k.bot, k.step)
+		if err != nil {
+			corr = ""
+		}
+		refs := make([]*workerpb.CommandOccurrenceRef, 0, len(occs))
+		for _, o := range occs {
+			refs = append(refs, &workerpb.CommandOccurrenceRef{
+				CommandId:   o.CommandID,
+				Occurrence:  int32(o.Occurrence),
+				ActionRunId: o.ActionRunID,
+			})
+		}
+		items = append(items, &workerpb.CancelBotCommandScheduleItem{
+			RunUuid:               session.UUID,
+			BotUuid:               k.bot,
+			Generation:            bot.DesiredStateGeneration,
+			StepId:                k.step,
+			ScheduleRunId:         k.schedule,
+			CorrelationToken:      corr,
+			Reason:                "session_stop",
+			UnresolvedOccurrences: refs,
+		})
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	req := &workerpb.CancelBotCommandSchedulesRequest{
+		RequestId: uuid.New().String(),
+		Items:     items,
+	}
+	rpcCtx, cancel := context.WithTimeout(ctx, botLoadApplyTimeout)
+	defer cancel()
+	resp, err := s.dispatcher.CancelBotCommandSchedules(rpcCtx, nodeUUID, req)
+	if err != nil {
+		return fmt.Errorf("CancelBotCommandSchedules RPC 失败: %w", err)
+	}
+	if resp == nil {
+		return fmt.Errorf("CancelBotCommandSchedules 空响应")
+	}
+	// 本地将仍 open 的 checkpoint 标 cancelled（Worker 异步终态仍可再写，幂等）
+	ck := NewBotLoadCommandCheckpointService(s.db)
+	for _, row := range rows {
+		_ = ck.MarkFailed(ctx, row.RunUUID, row.BotUUID, row.StepID, row.CommandID, row.Occurrence,
+			model.BotLoadCommandCheckpointCancelled, row.Attempt, ActionErrorCancelled)
 	}
 	return nil
 }

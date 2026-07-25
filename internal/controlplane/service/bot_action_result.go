@@ -204,15 +204,17 @@ func waitingAction(result model.BotLoadActionResult, bot *model.Bot) *WaitingAct
 type ActionResultService struct {
 	repository actionResultRepository
 	clock      BotLoadClock
+	// db 可选：用于 FR-369 命令 checkpoint 回写；nil 时跳过。
+	db *gorm.DB
 }
 
 // NewActionResultService 使用 GORM 账本创建动作结果服务。
 func NewActionResultService(db *gorm.DB, clock BotLoadClock) *ActionResultService {
-	return newActionResultService(&gormActionResultRepository{db: db}, clock)
+	return newActionResultService(&gormActionResultRepository{db: db}, clock, db)
 }
 
-func newActionResultService(repository actionResultRepository, clock BotLoadClock) *ActionResultService {
-	return &ActionResultService{repository: repository, clock: normalizeBotLoadClock(clock)}
+func newActionResultService(repository actionResultRepository, clock BotLoadClock, db *gorm.DB) *ActionResultService {
+	return &ActionResultService{repository: repository, clock: normalizeBotLoadClock(clock), db: db}
 }
 
 // Ingest 校验执行节点、运行、Bot 与 generation 后幂等写入动作开始或首个终态。
@@ -241,7 +243,45 @@ func (s *ActionResultService) Ingest(ctx context.Context, executorNodeID uint, e
 	if err != nil {
 		return ActionResultIngestResult{}, fmt.Errorf("持久化动作结果失败: %w", err)
 	}
+	// FR-369：命令编排终态回写 checkpoint（仅 applied 的终态；duplicate/invalid 跳过）。
+	if decision == ActionResultApplied && status != model.BotLoadActionRunning {
+		s.syncCommandCheckpoint(ctx, bot, event, status)
+	}
 	return actionIngestResult(decision, event, "动作事件已幂等处理"), nil
+}
+
+// syncCommandCheckpoint 将 Fleet action 终态映射到 bot_load_command_checkpoints。
+func (s *ActionResultService) syncCommandCheckpoint(ctx context.Context, bot *model.Bot, event *workerpb.BotActionEvent, status model.BotLoadActionResultStatus) {
+	if s == nil || s.db == nil || bot == nil || event == nil {
+		return
+	}
+	if event.StepId != commandScheduleDefaultStepID && !strings.HasPrefix(event.StepId, "command-schedule") {
+		return
+	}
+	// 按 actionRunId 定位 occurrence 行
+	var row model.BotLoadCommandCheckpoint
+	err := s.db.WithContext(ctx).Where("action_run_id = ?", event.ActionRunId).First(&row).Error
+	if err != nil {
+		return
+	}
+	ck := NewBotLoadCommandCheckpointService(s.db)
+	attempt := int(event.Attempt)
+	if attempt <= 0 {
+		attempt = row.Attempt
+	}
+	switch status {
+	case model.BotLoadActionSucceeded:
+		_ = ck.MarkSent(ctx, row.RunUUID, row.BotUUID, row.StepID, row.CommandID, row.Occurrence, attempt, event.ObservedAtUnixMs)
+	case model.BotLoadActionFailed:
+		_ = ck.MarkFailed(ctx, row.RunUUID, row.BotUUID, row.StepID, row.CommandID, row.Occurrence,
+			model.BotLoadCommandCheckpointFailed, attempt, event.ErrorCode)
+	case model.BotLoadActionTimedOut:
+		_ = ck.MarkFailed(ctx, row.RunUUID, row.BotUUID, row.StepID, row.CommandID, row.Occurrence,
+			model.BotLoadCommandCheckpointTimedOut, attempt, event.ErrorCode)
+	case model.BotLoadActionCancelled:
+		_ = ck.MarkFailed(ctx, row.RunUUID, row.BotUUID, row.StepID, row.CommandID, row.Occurrence,
+			model.BotLoadCommandCheckpointCancelled, attempt, event.ErrorCode)
+	}
 }
 
 // FindWaitingAction 强校验完整关联并返回当前执行节点和 generation。

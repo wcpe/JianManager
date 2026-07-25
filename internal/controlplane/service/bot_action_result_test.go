@@ -41,6 +41,7 @@ func newBotActionResultHarness(t *testing.T) *botActionResultHarness {
 	require.NoError(t, db.AutoMigrate(
 		&model.Node{}, &model.Instance{}, &model.BotStressSession{},
 		&model.BotLoadBatch{}, &model.Bot{}, &model.BotLoadActionResult{},
+		&model.BotLoadCommandCheckpoint{},
 	))
 	node := &model.Node{UUID: "node-action", Name: "动作节点", Host: "127.0.0.1", Secret: "secret"}
 	require.NoError(t, db.Create(node).Error)
@@ -95,6 +96,43 @@ func TestActionResultService_StartUpsertsRunningWithoutDuplicating(t *testing.T)
 	var count int64
 	require.NoError(t, h.db.Model(&model.BotLoadActionResult{}).Count(&count).Error)
 	require.Equal(t, int64(1), count)
+}
+
+// TestActionResultService_SyncsCommandCheckpointOnTerminal FR-369：命令编排终态回写 checkpoint。
+func TestActionResultService_SyncsCommandCheckpointOnTerminal(t *testing.T) {
+	h := newBotActionResultHarness(t)
+	actionRunID := "00000000-0000-0000-0000-000000000352"
+	// 预置 prepared checkpoint，actionRunId 与 event 对齐。
+	require.NoError(t, h.db.Create(&model.BotLoadCommandCheckpoint{
+		StressSessionID: h.session.ID,
+		RunUUID:         h.session.UUID,
+		BotUUID:         h.bot.UUID,
+		StepID:          commandScheduleDefaultStepID,
+		CommandID:       "say-ready",
+		Occurrence:      0,
+		Generation:      h.bot.DesiredStateGeneration,
+		ScheduleRunID:   "00000000-0000-4000-8000-000000000001",
+		ActionRunID:     actionRunID,
+		Status:          model.BotLoadCommandCheckpointPrepared,
+	}).Error)
+
+	runningEvt := h.event("running")
+	runningEvt.StepId = commandScheduleDefaultStepID
+	runningRes, err := h.service.Ingest(context.Background(), h.node.ID, h.session.UUID, runningEvt)
+	require.NoError(t, err)
+	require.Equal(t, ActionResultApplied, runningRes.Decision, runningRes.Diagnostic)
+
+	evt := h.event("succeeded")
+	evt.StepId = commandScheduleDefaultStepID
+	evt.ActionRunId = actionRunID
+	res, err := h.service.Ingest(context.Background(), h.node.ID, h.session.UUID, evt)
+	require.NoError(t, err)
+	require.Equal(t, ActionResultApplied, res.Decision, res.Diagnostic)
+
+	var ck model.BotLoadCommandCheckpoint
+	require.NoError(t, h.db.Where("action_run_id = ?", actionRunID).First(&ck).Error)
+	require.Equal(t, model.BotLoadCommandCheckpointSent, ck.Status)
+	require.NotNil(t, ck.SentAtUnixMs)
 }
 
 func TestActionResultService_FirstTerminalWinsAndLateEventsAreIdempotent(t *testing.T) {

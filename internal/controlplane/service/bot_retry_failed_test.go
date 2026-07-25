@@ -23,6 +23,10 @@ func (d *retryFakeDispatcher) ApplyBotCommandSchedules(context.Context, string, 
 	return &workerpb.ApplyBotCommandSchedulesResponse{}, nil
 }
 
+func (d *retryFakeDispatcher) CancelBotCommandSchedules(context.Context, string, *workerpb.CancelBotCommandSchedulesRequest) (*workerpb.CancelBotCommandSchedulesResponse, error) {
+	return &workerpb.CancelBotCommandSchedulesResponse{}, nil
+}
+
 func (d *retryFakeDispatcher) ApplyBotBatch(_ context.Context, _ string, request *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error) {
 	d.calls++
 	d.last = request

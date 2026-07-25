@@ -49,17 +49,24 @@ type botLoadExecutionDispatchCall struct {
 }
 
 type botLoadExecutionDispatcher struct {
-	mu      sync.Mutex
-	calls   []botLoadExecutionDispatchCall
+	mu    sync.Mutex
+	calls []botLoadExecutionDispatchCall
 	// scheduleCalls 记录 FR-369 ApplyBotCommandSchedules 调用。
 	scheduleCalls []botLoadScheduleDispatchCall
-	handler       func(string, *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error)
+	// cancelCalls 记录 FR-369 CancelBotCommandSchedules 调用。
+	cancelCalls     []botLoadCancelDispatchCall
+	handler         func(string, *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error)
 	scheduleHandler func(string, *workerpb.ApplyBotCommandSchedulesRequest) (*workerpb.ApplyBotCommandSchedulesResponse, error)
 }
 
 type botLoadScheduleDispatchCall struct {
 	nodeUUID string
 	request  *workerpb.ApplyBotCommandSchedulesRequest
+}
+
+type botLoadCancelDispatchCall struct {
+	nodeUUID string
+	request  *workerpb.CancelBotCommandSchedulesRequest
 }
 
 func (d *botLoadExecutionDispatcher) ApplyBotBatch(_ context.Context, nodeUUID string, request *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error) {
@@ -93,6 +100,22 @@ func (d *botLoadExecutionDispatcher) ApplyBotCommandSchedules(_ context.Context,
 	return &workerpb.ApplyBotCommandSchedulesResponse{RequestId: request.RequestId, Results: results}, nil
 }
 
+func (d *botLoadExecutionDispatcher) CancelBotCommandSchedules(_ context.Context, nodeUUID string, request *workerpb.CancelBotCommandSchedulesRequest) (*workerpb.CancelBotCommandSchedulesResponse, error) {
+	d.mu.Lock()
+	d.cancelCalls = append(d.cancelCalls, botLoadCancelDispatchCall{
+		nodeUUID: nodeUUID,
+		request:  proto.Clone(request).(*workerpb.CancelBotCommandSchedulesRequest),
+	})
+	d.mu.Unlock()
+	results := make([]*workerpb.CancelBotCommandScheduleItemResult, 0, len(request.Items))
+	for _, item := range request.Items {
+		results = append(results, &workerpb.CancelBotCommandScheduleItemResult{
+			BotUuid: item.BotUuid, ScheduleRunId: item.ScheduleRunId, Disposition: "accepted",
+		})
+	}
+	return &workerpb.CancelBotCommandSchedulesResponse{RequestId: request.RequestId, Results: results}, nil
+}
+
 func (d *botLoadExecutionDispatcher) Calls() []botLoadExecutionDispatchCall {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -103,6 +126,12 @@ func (d *botLoadExecutionDispatcher) ScheduleCalls() []botLoadScheduleDispatchCa
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return append([]botLoadScheduleDispatchCall(nil), d.scheduleCalls...)
+}
+
+func (d *botLoadExecutionDispatcher) CancelCalls() []botLoadCancelDispatchCall {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]botLoadCancelDispatchCall(nil), d.cancelCalls...)
 }
 
 func acceptedBotLoadBatchResponse(request *workerpb.ApplyBotBatchRequest) *workerpb.ApplyBotBatchResponse {
@@ -260,7 +289,7 @@ func newBotLoadExecutionHarness(t *testing.T, capacities []int, target int, runn
 	session := &model.BotStressSession{
 		InstanceID: instance.ID, Name: "distributed-load", NamePrefix: "load", BotCount: target,
 		Status: model.BotStressSessionPending, Behavior: "idle",
-		Config: `{"server":"mc.example.test","port":25570,"auth":"offline","version":"1.20.4"}`,
+		Config:              `{"server":"mc.example.test","port":25570,"auth":"offline","version":"1.20.4"}`,
 		CommandScheduleSnap: scheduleSnap,
 	}
 	require.NoError(t, db.Create(session).Error)
@@ -443,6 +472,41 @@ func TestBotLoadExecutionStart_Creates500BotsAcrossTenBatches(t *testing.T) {
 	var ckCount int64
 	require.NoError(t, h.db.Model(&model.BotLoadCommandCheckpoint{}).Count(&ckCount).Error)
 	require.Equal(t, int64(500), ckCount) // 每 bot 1 occurrence
+}
+
+// TestBotLoadExecutionStop_CancelsOpenCommandSchedules FR-369：stop 对未终态 checkpoint 下发 Cancel。
+func TestBotLoadExecutionStop_CancelsOpenCommandSchedules(t *testing.T) {
+	h := newBotLoadExecutionHarness(t, []int{2}, 2, nil)
+	_, err := h.service.Start(context.Background(), h.session.ID, h.token)
+	require.NoError(t, err)
+	require.NotEmpty(t, h.dispatcher.ScheduleCalls())
+
+	var open int64
+	require.NoError(t, h.db.Model(&model.BotLoadCommandCheckpoint{}).
+		Where("status = ?", model.BotLoadCommandCheckpointPrepared).Count(&open).Error)
+	require.Equal(t, int64(2), open)
+
+	_, err = h.service.Stop(context.Background(), h.session.ID, "测试取消编排")
+	require.NoError(t, err)
+
+	// 同步 runner 默认立即执行 stop dispatch
+	cancels := h.dispatcher.CancelCalls()
+	require.NotEmpty(t, cancels)
+	totalItems := 0
+	for _, c := range cancels {
+		for _, item := range c.request.Items {
+			require.Equal(t, "session_stop", item.Reason)
+			require.NotEmpty(t, item.ScheduleRunId)
+			require.NotEmpty(t, item.UnresolvedOccurrences)
+			totalItems++
+		}
+	}
+	require.Equal(t, 2, totalItems)
+
+	var cancelled int64
+	require.NoError(t, h.db.Model(&model.BotLoadCommandCheckpoint{}).
+		Where("status = ?", model.BotLoadCommandCheckpointCancelled).Count(&cancelled).Error)
+	require.Equal(t, int64(2), cancelled)
 }
 
 func TestBotLoadExecutionStart_MaterializesStableCohortAndScenarioAssignments(t *testing.T) {

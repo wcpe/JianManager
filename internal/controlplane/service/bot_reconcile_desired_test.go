@@ -21,6 +21,10 @@ func (d *reconcileFakeDispatcher) ApplyBotCommandSchedules(context.Context, stri
 	return &workerpb.ApplyBotCommandSchedulesResponse{}, nil
 }
 
+func (d *reconcileFakeDispatcher) CancelBotCommandSchedules(context.Context, string, *workerpb.CancelBotCommandSchedulesRequest) (*workerpb.CancelBotCommandSchedulesResponse, error) {
+	return &workerpb.CancelBotCommandSchedulesResponse{}, nil
+}
+
 func (d *reconcileFakeDispatcher) ApplyBotBatch(_ context.Context, _ string, request *workerpb.ApplyBotBatchRequest) (*workerpb.ApplyBotBatchResponse, error) {
 	d.requests = append(d.requests, request)
 	results := make([]*workerpb.ApplyBotBatchItemResult, 0, len(request.Assignments))
