@@ -27,6 +27,20 @@
   - 内容运维读（FR-397，`instance.read`）：`file_list`、`file_check_access`、`file_read_text`、`file_versions`、`file_diff`、`config_discover`、`config_read`、`config_cross_check`、`config_versions`、`config_diff`、`plugin_list`
   - 内容运维写（FR-397，`instance.content` / `instance.configure`）：`file_write_text`、`file_rename`、`file_chmod`、`file_rollback`、`file_issue_transfer_ticket`、`config_write_text`、`config_write_fields`、`config_rollback`、`plugin_deploy_from_asset`、`plugin_toggle`
   - 内容运维破坏性（FR-397，须精确确认参数）：`file_delete`（`confirmPath`）、`plugin_delete`（`confirmName`）
+- **Bot 舰队与压测编排（FR-398 追加，全部 `V1Allowed=false`、不进 HTTP 契约投影）**：
+
+    | 域 | 工具 | capability |
+    |---|---|---|
+    | 普通 Bot | `bot_list`、`bot_get` | `bot.read` |
+    | 普通 Bot | `bot_create`、`bot_set_behavior`、`bot_send_command`、`bot_delete`（需 `confirmBotName`） | `bot.manage` |
+    | 压测模板 | `loadtest_template_list`、`loadtest_template_get` | `bot.read` |
+    | 压测模板 | `loadtest_template_create`、`loadtest_template_update`、`loadtest_template_delete`（需 `confirmTemplateName`） | `bot.load` |
+    | 运行编排 | `loadtest_run_list`、`loadtest_run_get`、`loadtest_node_capacity` | `bot.read` |
+    | 运行编排 | `loadtest_run_create`、`loadtest_run_preflight`、`loadtest_run_start`、`loadtest_run_stop`、`loadtest_run_retry_failed` | `bot.load` |
+    | 观测报告 | `loadtest_run_bots`、`loadtest_run_failures`、`loadtest_run_events`、`loadtest_run_report` | `bot.read` |
+    | 观测报告 | `loadtest_run_metrics` | `observability.read` |
+
+    这些工具引入 `bot` / `botrun` 两个资源类型：授权均由 CP 数据库解析归属，运行类操作在目标实例之外还要逐一校验 executor 节点（启动方向任一越界整体拒绝，停止方向执行但列出越界节点）。`planToken` 对 MCP 完全不透明（不解析、不重签、不缓存）；`bot_send_command` 的成功语义严格限定为「已发送（`bot.chat` 调用成功）」（ADR-075）；模板按平台级视角管理（ADR-080 附注）。SSE 流式观测不开放，用分页轮询代替。
 - tool 调用内部 **只调 CP 本地 service / 统一 action 授权器**，不二次实现 scope/写白名单/capability
 - **会话运维（内存）**：
   - 字段：sessionId、tokenId、tokenName、tokenPrefix、clientIP、transport（`streamable_http`|`sse`）、connectedAt、lastActivityAt、lastTool、idleTimeout、absoluteTimeout

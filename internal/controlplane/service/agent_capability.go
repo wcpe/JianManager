@@ -33,6 +33,9 @@ const (
 	AgentResourceNone     = "none"
 	AgentResourceNode     = "node"
 	AgentResourceInstance = "instance"
+	// FR-398：Bot 与压测运行资源；授权均回落到所属实例（botrun 另叠加 executor 节点校验）。
+	AgentResourceBot    = "bot"
+	AgentResourceBotRun = "botrun"
 
 	AgentOperationRead        = "read"
 	AgentOperationWrite       = "write"
@@ -179,6 +182,46 @@ func init() {
 	}
 }
 
+// botDomainActions 是 FR-398 新增 action 的紧凑声明：action → (capability, resource, operation)。
+// 全部 V1Allowed=false、HTTPInContract=false，故不逐条重复这两个字段。
+var botDomainActions = []AgentActionDescriptor{
+	{Action: AgentActionBotList, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+	{Action: AgentActionBotGet, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBot, Operation: AgentOperationRead},
+	{Action: AgentActionBotCreate, V2Capability: AgentCapabilityBotManage, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionBotSetBehavior, V2Capability: AgentCapabilityBotManage, ResourceType: AgentResourceBot, Operation: AgentOperationWrite},
+	{Action: AgentActionBotSendCommand, V2Capability: AgentCapabilityBotManage, ResourceType: AgentResourceBot, Operation: AgentOperationWrite},
+	{Action: AgentActionBotDelete, V2Capability: AgentCapabilityBotManage, ResourceType: AgentResourceBot, Operation: AgentOperationDestructive},
+
+	// 模板不绑定实例：ResourceType=none，仅由 capability 把关（ADR-080 附注：持 bot.load 管理全部模板）。
+	{Action: AgentActionLoadTestTemplateList, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
+	{Action: AgentActionLoadTestTemplateGet, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceNone, Operation: AgentOperationRead},
+	{Action: AgentActionLoadTestTemplateCreate, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceNone, Operation: AgentOperationWrite},
+	{Action: AgentActionLoadTestTemplateUpdate, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceNone, Operation: AgentOperationWrite},
+	{Action: AgentActionLoadTestTemplateDelete, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceNone, Operation: AgentOperationDestructive},
+
+	{Action: AgentActionLoadTestRunCreate, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceInstance, Operation: AgentOperationWrite},
+	{Action: AgentActionLoadTestRunList, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceInstance, Operation: AgentOperationRead},
+	{Action: AgentActionLoadTestRunGet, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead},
+	{Action: AgentActionLoadTestNodeCapacity, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceNode, Operation: AgentOperationRead},
+	{Action: AgentActionLoadTestRunPreflight, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceBotRun, Operation: AgentOperationWrite},
+	{Action: AgentActionLoadTestRunStart, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceBotRun, Operation: AgentOperationWrite},
+	{Action: AgentActionLoadTestRunStop, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceBotRun, Operation: AgentOperationWrite},
+	{Action: AgentActionLoadTestRunRetryFailed, V2Capability: AgentCapabilityBotLoad, ResourceType: AgentResourceBotRun, Operation: AgentOperationWrite},
+
+	{Action: AgentActionLoadTestRunBots, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead},
+	{Action: AgentActionLoadTestRunFailures, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead},
+	{Action: AgentActionLoadTestRunEvents, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead},
+	{Action: AgentActionLoadTestRunMetrics, V2Capability: AgentCapabilityObservabilityRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead},
+	{Action: AgentActionLoadTestRunReport, V2Capability: AgentCapabilityBotRead, ResourceType: AgentResourceBotRun, Operation: AgentOperationRead},
+}
+
+// init 把 FR-398 的 Bot 域 action 追加进唯一真源目录，保持 catalog 的追加式演进。
+func init() {
+	for _, d := range botDomainActions {
+		agentActionCatalog[d.Action] = d
+	}
+}
+
 // init 追加 FR-397 内容运维 action（文件/配置/插件/传输票据）。
 // 全部 V1Allowed=false、MCP 专属（无 HTTP 契约投影），资源恒为 instance。
 func init() {
@@ -312,7 +355,8 @@ func principalHasPotentialScope(p *AgentPrincipal, resourceType string) bool {
 		return true
 	case AgentResourceNode:
 		return len(p.ScopedNodeIDs) > 0
-	case AgentResourceInstance:
+	case AgentResourceInstance, AgentResourceBot, AgentResourceBotRun:
+		// bot/botrun 的可发现性复用实例分支：目标最终都回落到所属实例。
 		if len(p.ScopedInstanceIDs) > 0 {
 			return true
 		}
@@ -389,7 +433,9 @@ func Authorize(p *AgentPrincipal, action string, target AgentTrustedTarget) (Age
 		if !principalCanAccessNode(p, nodeID) {
 			return AgentAuthorization{}, ErrAgentForbidden
 		}
-	case AgentResourceInstance:
+	case AgentResourceInstance, AgentResourceBot, AgentResourceBotRun:
+		// bot/botrun 由 AuthorizeBotAction/AuthorizeBotRunAction 从 CP 数据解析出所属实例后传入；
+		// executor 节点的逐一校验在那两个方法内追加，此处只做实例归属判断。
 		if target.InstanceID == 0 {
 			return AgentAuthorization{}, ErrAgentForbidden
 		}

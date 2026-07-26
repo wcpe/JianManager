@@ -12,6 +12,7 @@
 - **MCP 节点与实例全生命周期强类型工具（FR-396）**：在 FR-395 策略闸内开放节点详情/指标/Docker 探测/排空/归档清理，以及实例搜索/环境/崩溃快照/创建搭建/导入克隆/重建/配置更新/命令/批量/强杀/删除；MCP 直接复用 CP service，不经本机 HTTP 回环；破坏性操作要求独立 destructive 能力 + 服务端精确确认参数；生命周期写操作派发前锁内重验归属；toolSpec 增加 Exec 注册表与 RequiresConfirm 机制，按域拆分 tools_node/instance/provision。
 - **Agent 能力策略 v2 与节点继承实例作用域（FR-395）**：`agent_tokens` 增加 `policy_version`/`capabilities`；V1 写白名单精确兼容且不启用节点继承；V2 固定 capability 分组，节点 scope 单向覆盖当前与未来实例；统一 action 目录驱动 HTTP/MCP；`tools/list` 按能力动态裁剪，`tools/call` 可信目标最终授权；生命周期派发前锁内重验归属；调用流水新增 `capability`（V2 能力 / V1 `legacy.*`）；Token 管理 UI 默认签发 V2 并展示策略版本与能力。ADR-080 accepted；ADR-076/077 部分修订。
 - **MCP 文件、配置与插件运维强类型工具（FR-397）**：在 FR-395 策略闸内开放文件目录/元数据/文本读写/权限预检与 chmod/移动删除/版本 diff 回滚、配置发现与字段写入/校验/历史、以及从既有制品 assetId 部署与启停删除插件；控制与数据分离——MCP 只承载 512KiB 内文本，二进制与大文件改签发短时单用途传输票据走 `/api/v1/agent-transfer` 流式数据面（HMAC 签名 + 5 分钟 TTL + 一次性消费 + 消费时实时重验 Token 与实例归属 + 绑定方向/路径/实例，端点不接受任何外部路径参数）；删除类操作要求精确确认参数；沿用路径越界防护、改前快照与 Worker 原子落盘。
+- **MCP Bot 舰队与压测编排全工具（FR-398）**：新增 `bot`/`botrun` 资源类型与 24 个 MCP 工具（普通 Bot 管理、压测模板 CRUD、运行编排、观测与报告），复用既有 service 不复制策略；运行类操作双重校验目标实例与全部 executor 节点（启动方向任一越界整体拒绝，停止方向执行但列出越界节点）；`planToken` 对 MCP 完全不透明；`bot_send_command` 成功语义严格限定为「已发送（`bot.chat` 调用成功）」（ADR-075）；删除类操作要求精确名称确认；明细分页上限 100、CSV 报告超 512KiB 返回摘要引导。ADR-080 追加模板平台级所有权附注。
 
 ## 0.20.0（2026-07-25）
 

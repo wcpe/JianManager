@@ -50,6 +50,16 @@ type ToolDeps struct {
 	Config      *service.ConfigService
 	Plugin      *service.PluginService
 	Transfer    *service.AgentTransferTicketService
+	// FR-398：Bot 舰队与压测编排；任一为 nil 时对应工具返回中文「服务不可用」。
+	Bot           *service.BotService
+	LoadTemplate  *service.BotLoadTemplateService
+	StressSession *service.BotStressSessionService
+	Preflight     *service.BotLoadPreflightService
+	Execution     BotLoadExecutor
+	Projection    *service.BotLoadProjectionService
+	Report        *service.BotLoadReportService
+	Capacity      service.BotLoadCapacityProvider
+	Metrics       *service.BotLoadMetricSampler
 }
 
 // toolExec 工具执行器：参数已校验过会话，action 已从 catalog 解析。
@@ -183,6 +193,13 @@ func init() {
 	allToolSpecs = append(allToolSpecs, fileToolSpecs...)
 	allToolSpecs = append(allToolSpecs, configToolSpecs...)
 	allToolSpecs = append(allToolSpecs, pluginToolSpecs...)
+}
+
+// init 追加 FR-398 Bot 舰队与压测编排工具，保持 allToolSpecs 的追加式演进。
+func init() {
+	allToolSpecs = append(allToolSpecs, botToolSpecs()...)
+	allToolSpecs = append(allToolSpecs, loadTestToolSpecs()...)
+	allToolSpecs = append(allToolSpecs, loadTestQueryToolSpecs()...)
 }
 
 // RegisteredTools 返回全量工具目录（硬拒绝面与永久禁区永不出现）。
@@ -410,6 +427,10 @@ func CallTool(ctx context.Context, deps ToolDeps, p *service.AgentPrincipal, nam
 		return callMaintenance(deps, p, action, args, false)
 
 	default:
+		// FR-398：Bot 舰队与压测编排域由独立执行器分发。
+		if exec, ok := botDomainExec(name); ok {
+			return exec(ctx, deps, p, action, args)
+		}
 		// FR-396+：扩展工具走注册表 Exec，CallTool 骨架统一处理确认参数。
 		return callRegisteredTool(ctx, deps, p, name, action, args)
 	}

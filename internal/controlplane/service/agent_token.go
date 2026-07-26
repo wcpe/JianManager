@@ -87,6 +87,36 @@ const (
 	AgentActionPluginToggle          = "agent.plugin_toggle"
 	AgentActionPluginDelete          = "agent.plugin_delete"
 
+	// FR-398：普通 Bot 舰队 action（resource=bot）。
+	AgentActionBotList        = "agent.bot_list"
+	AgentActionBotGet         = "agent.bot_get"
+	AgentActionBotCreate      = "agent.bot_create"
+	AgentActionBotSetBehavior = "agent.bot_set_behavior"
+	AgentActionBotSendCommand = "agent.bot_send_command"
+	AgentActionBotDelete      = "agent.bot_delete"
+
+	// FR-398：压测模板 action（resource=none，平台级视角，见 ADR-080 附注）。
+	AgentActionLoadTestTemplateList   = "agent.loadtest_template_list"
+	AgentActionLoadTestTemplateGet    = "agent.loadtest_template_get"
+	AgentActionLoadTestTemplateCreate = "agent.loadtest_template_create"
+	AgentActionLoadTestTemplateUpdate = "agent.loadtest_template_update"
+	AgentActionLoadTestTemplateDelete = "agent.loadtest_template_delete"
+
+	// FR-398：压测运行编排与观测 action（resource=botrun）。
+	AgentActionLoadTestRunCreate      = "agent.loadtest_run_create"
+	AgentActionLoadTestRunList        = "agent.loadtest_run_list"
+	AgentActionLoadTestRunGet         = "agent.loadtest_run_get"
+	AgentActionLoadTestNodeCapacity   = "agent.loadtest_node_capacity"
+	AgentActionLoadTestRunPreflight   = "agent.loadtest_run_preflight"
+	AgentActionLoadTestRunStart       = "agent.loadtest_run_start"
+	AgentActionLoadTestRunStop        = "agent.loadtest_run_stop"
+	AgentActionLoadTestRunRetryFailed = "agent.loadtest_run_retry_failed"
+	AgentActionLoadTestRunBots        = "agent.loadtest_run_bots"
+	AgentActionLoadTestRunFailures    = "agent.loadtest_run_failures"
+	AgentActionLoadTestRunEvents      = "agent.loadtest_run_events"
+	AgentActionLoadTestRunMetrics     = "agent.loadtest_run_metrics"
+	AgentActionLoadTestRunReport      = "agent.loadtest_run_report"
+
 	// 硬拒绝示例 action（永不对 agent 开放；ResolveAction 显式 deny）
 	AgentHardDenyUserWrite      = "user.write"
 	AgentHardDenyGroupWrite     = "group.write"

@@ -221,6 +221,8 @@ func main() {
 	defer botLoadMetricSampler.Stop()
 	// FR-370 failures/events 投影（读路径，无后台循环）。
 	botLoadProjectionSvc := service.NewBotLoadProjectionService(db)
+	// FR-370 终态报告导出；FR-398 起同时供 MCP 工具复用。
+	botLoadReportSvc := service.NewBotLoadReportService(db)
 	alertSvc := service.NewAlertService(db)
 	alertChannelSvc := service.NewAlertChannelService(db)
 	scheduleSvc := service.NewScheduleService(db)
@@ -279,7 +281,7 @@ func main() {
 	})
 	mcpSessions.Start()
 	defer mcpSessions.Stop()
-	// mcpHandler 延后到 FR-396 依赖服务就绪后构造（ToolDeps 按值传递）。
+	// mcpHandler 延后到 FR-396/397/398 依赖服务就绪后构造（ToolDeps 按值传递）。
 	// 平台存储资源管理器（FR-083）：CP 侧数据根 FHS 只读浏览 + 占用统计 + cache 受控清理。
 	storageSvc := service.NewStorageService(db, root)
 	// 数据库资源管理器只读浏览（FR-084）：CP 独有数据源，仅平台管理员；只读 + 敏感列脱敏。
@@ -491,7 +493,7 @@ func main() {
 	importServerSvc.SetTaskService(taskSvc)
 	cloneSvc.SetTaskService(taskSvc)
 	backupSvc.SetTaskService(taskSvc)
-	// MCP 工具依赖在此装配：ToolDeps 按值传递，须等 FR-396/397 依赖服务全部就绪。
+	// MCP 工具依赖在此装配：ToolDeps 按值传递，须等 FR-396/397/398 依赖服务全部就绪。
 	mcpHandler := mcp.NewHandler(mcpSessions, agentTokenSvc, mcp.ToolDeps{
 		Instance:  instanceSvc,
 		Node:      nodeSvc,
@@ -510,6 +512,16 @@ func main() {
 		Config:      configSvc,
 		Plugin:      pluginSvc,
 		Transfer:    agentTransferSvc,
+		// FR-398：Bot 舰队与压测编排复用管理面同一批 service 实例，不另建策略副本。
+		Bot:           botSvc,
+		LoadTemplate:  botLoadTemplateSvc,
+		StressSession: botStressSessionSvc,
+		Preflight:     botLoadSvcs.preflight,
+		Execution:     botLoadSvcs.execution,
+		Projection:    botLoadProjectionSvc,
+		Report:        botLoadReportSvc,
+		Capacity:      botLoadSvcs.capacity,
+		Metrics:       botLoadMetricSampler,
 	}, auditSvc, agentCallLogSvc)
 	// 制品存量迁移（FR-348）：渠道间搬运后台任务（先改记录再删源，幂等续跑）。
 	// RecoverOrphans 清扫 CP 重启滞留的非终态迁移任务，保证在途判定即真相。
@@ -608,7 +620,7 @@ func main() {
 		BotLoadPreflight:        botLoadSvcs.preflight,
 		BotLoadExecution:        botLoadSvcs.execution,
 		BotLoadTemplate:         botLoadTemplateSvc,
-		BotLoadReport:           service.NewBotLoadReportService(db),
+		BotLoadReport:           botLoadReportSvc,
 		BotLoadMetrics:          botLoadMetricSampler,
 		BotLoadProjection:       botLoadProjectionSvc,
 		Alert:                   alertSvc,

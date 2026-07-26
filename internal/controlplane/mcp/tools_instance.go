@@ -327,13 +327,6 @@ func execInstanceDelete(_ context.Context, deps ToolDeps, p *service.AgentPrinci
 	return toolOK(map[string]any{"ok": true})
 }
 
-func stringArg(args map[string]any, key string) string {
-	if v, ok := args[key].(string); ok {
-		return v
-	}
-	return ""
-}
-
 func normalizePage(args map[string]any) (page, pageSize int) {
 	page, pageSize = 1, 20
 	if v, ok := args["page"]; ok {

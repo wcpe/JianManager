@@ -31,8 +31,8 @@ func TestRegisteredTools_Set(t *testing.T) {
 		"node_maintenance_enter",
 		"node_maintenance_leave",
 	}
-	// FR-396/397 起工具集加性扩展：只断言既有 11 个仍在，不强制总数。
-	// 内容运维域另有专门契约测试。
+	// FR-396/397/398 起工具集加性扩展：只断言既有 11 个仍在，不强制总数。
+	// 各扩展域另有专门契约测试。
 	assert.GreaterOrEqual(t, len(tools), len(want))
 	for _, n := range want {
 		assert.True(t, names[n], "应注册 %s", n)
@@ -103,7 +103,7 @@ func TestToolsForPrincipal_V1FullWriteShowsAllLegacyTools(t *testing.T) {
 		WriteAllowlist:    []string{service.AgentWriteInstanceLife, service.AgentWriteNodeMaintenance},
 	}
 	// V1 只能看到兼容解释器允许的 action（V1Allowed=true）；
-	// FR-396 起新增的工具一律 V1Allowed=false，V1 Token 不得因工具集扩容而扩权。
+	// FR-396/397/398 起新增工具一律 V1Allowed=false，V1 Token 不得因工具集扩容而扩权。
 	want := 0
 	for _, spec := range allToolSpecs {
 		d, ok := service.DescribeAgentAction(spec.Action)

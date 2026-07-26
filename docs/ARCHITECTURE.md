@@ -180,6 +180,18 @@ Agent 运维 API（/api/v1/agent/*）  +  内嵌 MCP（/api/v1/mcp）
 
 **Agent 流式传输票据（FR-397）**：MCP 不承载大文件字节。Agent 经 `file_issue_transfer_ticket` 换取票据，再走 `PUT/GET /api/v1/agent-transfer/{upload,download}` 数据面（复用 FR-304 流式链路，CP 内存 O(chunk)，Worker 原子落盘）。票据为 HMAC-SHA256 签名（密钥自服务端主密钥域分离派生，与 Bot 计划令牌互不通用）、5 分钟 TTL、一次性消费，正文绑定 tokenId/instanceId/direction/path；消费时实时重验 Token 未吊销与实例归属。端点挂公开组（票据即凭据）且**不接受任何路径/实例参数**——授权上下文全部取自票据 claims，故无参数注入面；失效的所有形态归一为同一句 403 中文，不泄露内部状态。
 
+**MCP Bot 舰队与压测编排（FR-398）**：`tools_bot.go` / `tools_loadtest.go` / `tools_loadtest_query.go` 开放普通 Bot 管理、压测模板 CRUD、运行编排与观测报告共 24 个工具，全部 `V1Allowed=false`、不进 HTTP 契约投影，复用管理面同一批 service 实例（不复制策略、不新增执行路径）。关键约束：
+
+| 约束 | 落点 |
+|---|---|
+| 新资源类型 | `AgentResourceBot`（回落 Bot 所属实例）与 `AgentResourceBotRun`（目标实例 + executor 节点集合）；归属一律由 `AuthorizeBotAction` / `AuthorizeBotRunAction` 从 CP 数据库解析，不采信客户端传入的 instanceId/nodeId |
+| 双重 scope | 运行类操作同时校验目标实例与**每一个** executor 节点；启动方向（preflight/start/retry）任一越界即整体拒绝、不静默缩减，停止方向仍执行但在 `outOfScopeExecutorNodeIds` 中列出越界节点 |
+| planToken 不透明 | MCP 不解析、不重签、不缓存，只把预检返回的字符串原样回传给 `loadtest_run_start`；过期或容量世代变化由 service 中文错误原样返回并引导重新预检 |
+| 命令成功边界 | `bot_send_command` 的返回文本与工具描述均只声明「已发送（`bot.chat` 调用成功）」，不宣称服务器已接受或业务已生效（ADR-075） |
+| 危险确认 | `bot_delete` / `loadtest_template_delete` 要求 `confirmBotName` / `confirmTemplateName` 精确等于真实名称 |
+| 模板所有权 | Agent 以平台级视角操作模板（等价 `isAdmin=true`、`userID=0`）：持 `bot.load` 即可管理全部模板，见 ADR-080 附注 |
+| 体量护栏 | 明细分页沿用 `normalizeProjectionPage`（默认 20、上限 100）；CSV 报告超 512KiB 只返回摘要与分页引导，不截断正文；SSE 流不开放，流式观测用轮询代替 |
+
 **与 jmctl 的边界**：jmctl 绕开 CP、直连本机 daemon（故障应急）；Agent 面**必须**经 CP，以便鉴权、scope、审计 `actor_kind=agent`。契约与可证门禁见 `docs/specs/agent-safety-gate/contract.md` 与 CI job `agent-gate`（FR-388 / FR-395）。本机冒烟证据见 `.tmp/acceptance-agent-smoke-2026-07-23.md`。
 
 ### 4.2 Bot 目标实例与执行节点（FR-351 / ADR-074）

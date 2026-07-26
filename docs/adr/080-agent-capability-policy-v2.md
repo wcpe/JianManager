@@ -84,3 +84,13 @@
 - **Amends**: ADR-077；MCP 工具集改为 action 目录投影并按 Token 动态裁剪，协议层仍不复制策略。
 - **Depends on**: FR-384、FR-389、FR-390。
 - **Enables**: FR-396、FR-397、FR-398、FR-399。
+
+## 附注：压测模板的所有权语义（FR-398）
+
+`BotLoadTemplateService` 的 CRUD 以 `userID` + `isAdmin` 判断所有权，但 Agent Token 不是用户，需要显式定型：
+
+- **Agent 的模板操作以平台级视角执行**（等价 `isAdmin=true`、`userID=0`）。持有 `bot.load` 即可管理全部压测模板，包含管理台用户创建的模板。
+- 理由：Token 的授权边界已由 capability 与 scope 完整表达，再叠加一层用户所有权会产生「Agent 创建的模板归属于谁」的悖论，并使模板在人机之间不可共享——而模板本身不绑定实例，也就没有可继承的 scope 归属。
+- 因此模板类 action 的 `ResourceType` 保持 `none`，只由 capability 把关，不引入新的资源类型。
+- 代偿护栏：`loadtest_template_delete` 要求 `confirmTemplateName` 精确等于目标模板名称，弥补无所有权隔离带来的误删风险。
+- 该决策不排除未来做隔离：若需要「Agent 专属模板命名空间」或按 Token 隔离可见性，另开 FR 处理，届时本附注被替换而非默默漂移。

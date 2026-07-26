@@ -202,12 +202,4 @@ func instancePathSchema(pathDesc string, pathRequired bool, extra map[string]any
 	return map[string]any{"type": "object", "properties": props, "required": req}
 }
 
-// stringProp 生成字符串属性描述。
-func stringProp(desc string) map[string]any {
-	return map[string]any{"type": "string", "description": desc}
-}
-
-// numberProp 生成数值属性描述。
-func numberProp(desc string) map[string]any {
-	return map[string]any{"type": "number", "description": desc}
-}
+// stringProp/numberProp 定义见 tools_bot_schema.go（FR-396/397/398 共享 schema 小工具）。
